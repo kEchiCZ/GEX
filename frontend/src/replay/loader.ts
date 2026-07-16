@@ -115,14 +115,25 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
     staleAge[index] = Math.max(staleAge[index], Number(staleColumn?.get(row) ?? 0) || 0)
   }
 
-  // Heatmap vrstvy: OI mód, normalizace p99 dne (SPEC 4.3)
-  const denominator = Math.max(quantile99(callOi), quantile99(putOi), 1e-9)
+  // Heatmap vrstvy: OI mód, normalizace p99 dne (SPEC 4.3).
+  // Když OI zatím nedorazilo (ADR-0001: 588 dodává jen ráno), fallback na volume,
+  // aby heatmapa nebyla prázdná — UI dostane alert `oi_missing` z enginu.
+  const oiDenominator = Math.max(quantile99(callOi), quantile99(putOi))
+  const useVolumeFallback = oiDenominator <= 0
+  const callSource = useVolumeFallback ? volumeByCell.C : callOi
+  const putSource = useVolumeFallback ? volumeByCell.P : putOi
+  const denominator = Math.max(
+    useVolumeFallback
+      ? Math.max(quantile99(volumeByCell.C), quantile99(volumeByCell.P))
+      : oiDenominator,
+    1e-9,
+  )
   const grid: HeatmapGrid = {
     minutes,
     strikes,
     layers: {
-      call: Float32Array.from(callOi, (value) => Math.min(1, value / denominator)),
-      put: Float32Array.from(putOi, (value) => Math.min(1, value / denominator)),
+      call: Float32Array.from(callSource, (value) => Math.min(1, value / denominator)),
+      put: Float32Array.from(putSource, (value) => Math.min(1, value / denominator)),
     },
     staleAge,
   }

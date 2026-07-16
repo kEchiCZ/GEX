@@ -9,7 +9,7 @@
 | # | Bod | Výsledek |
 |---|---|---|
 | 1 | tradingClass ES weeklies | `reqSecDefOptParams` vrátil 24 chainů. Vzor: **E{týden}{A–E}** = denní weeklies po–čt + pátek dle týdne (např. E3D = čtvrtek 3. týdne), **EW{týden}** = páteční weekly, **EW** = EOM, **ES** = kvartální. Příklad nejbližších: E3D→20260716, EW3→20260717, E3A→20260720, E3B→20260721, E4C→20260722. |
-| 2 | OI přes generic tick 588 na FOP | **Intraday nechodí** — 60 s čekání na ATM C i P bez hodnoty (`futuresOpenInterest` = NaN). Nutný fallback dle SPEC 3.5: ranní/EOD snapshot. Ověření chování mimo RTH a přesný mechanismus fallbacku proběhne v issue #9 (OIArchiver). |
+| 2 | OI přes generic tick 588 na FOP | **Intraday nechodí vůbec** — držená subskripce 150 s na 6 kontraktech přes 3 expirace bez jediné hodnoty (ověřeno 2026-07-16 ~17:00 UTC); historical `OPTION_OPEN_INTEREST` pro FOP končí timeoutem. CME publikuje OI 1× denně brzy ráno — engine proto zkouší denní archiv opakovaně (à 30 min) a při úplném selhání posílá alert `oi_missing`; frontend do té doby staví heatmapu z volume. **Ověřit ranní okno (cca 10–12 UTC)** — pokud 588 nedodá ani ráno, jde o limitaci subskripce/účtu a bude potřeba zvážit jiný zdroj OI. |
 | 3 | Souběžné tick-by-tick streamy | **5** — šestý `reqTickByTickData` vrátil error 10190 („Max number of tick-by-tick requests has been reached"). |
 | 4 | Market data lines | **≥ 150** — 150 souběžných `reqMktData` bez error 101; skutečný strop nedosažen (líný horní odhad postačuje pro návrh). |
 

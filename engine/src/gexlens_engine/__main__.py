@@ -91,14 +91,32 @@ async def main() -> None:
     oi_repository = OIEodRepository(db)
     await asyncio.to_thread(oi_repository.ensure_schema)
 
-    # Ranní OI archiv (jednou za den; idempotentní upsert)
-    today = dt.datetime.now(dt.UTC).date()
-    if today not in oi_repository.days("ES"):
-        archiver = OIArchiver(oi_repository, IbOIFetcher(ib, streamer), settings)
+    archiver = OIArchiver(oi_repository, IbOIFetcher(ib, streamer), settings)
+
+    async def try_archive_oi() -> bool:
+        """Pokus o denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2)."""
+        today = dt.datetime.now(dt.UTC).date()
+        if today in oi_repository.days("ES"):
+            return True
         result = await archiver.archive_day(contracts, today)
         logger.info(
             "OI archiv %s: %d zapsáno, %d chybí", today, result.written, len(result.missing)
         )
+        if result.written == 0:
+            await publisher.publish(
+                "alerts",
+                {
+                    "kind": "oi_missing",
+                    "symbol": "ES",
+                    "message": "OI z IBKR nedorazilo — GEX/OI vrstvy zatím bez OI, "
+                    "další pokus za 30 min (CME publikuje OI ráno)",
+                    "ts": dt.datetime.now(dt.UTC).timestamp(),
+                },
+            )
+            return False
+        return True
+
+    oi_available = await try_archive_oi()
 
     runtime = EngineRuntime(
         settings=settings,
@@ -130,10 +148,18 @@ async def main() -> None:
 
     retention = RetentionJob(settings)
     last_purge_date: dt.date | None = None
+    cycles_since_oi_attempt = 0
 
     while True:
         cycle_start = asyncio.get_running_loop().time()
         now = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
+
+        # OI retry: každých ~30 min, dokud denní archiv nedorazí (CME publikuje ráno)
+        if not oi_available:
+            cycles_since_oi_attempt += 1
+            if cycles_since_oi_attempt >= 30:
+                cycles_since_oi_attempt = 0
+                oi_available = await try_archive_oi()
         current_spot = fut_ticker.last if fut_ticker.last == fut_ticker.last else spot
         # Auto-rozšíření denní obálky (ADR-0002)
         expansion = discovery.maybe_expand(info, band, current_spot)
