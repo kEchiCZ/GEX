@@ -1,0 +1,79 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`marching squares najde hranici kolem vrcholu 1`] = `
+[
+  [
+    0.5,
+    1,
+    1,
+    0.5,
+  ],
+  [
+    1,
+    0.5,
+    2,
+    0.5,
+  ],
+  [
+    2,
+    0.5,
+    2.5,
+    1,
+  ],
+  [
+    0.5,
+    1,
+    0.5,
+    2,
+  ],
+  [
+    2.5,
+    1,
+    2.5,
+    2,
+  ],
+  [
+    0.5,
+    2,
+    1,
+    2.5,
+  ],
+  [
+    1,
+    2.5,
+    2,
+    2.5,
+  ],
+  [
+    2,
+    2.5,
+    2.5,
+    2,
+  ],
+]
+`;
+
+exports[`vizuální regresní snapshoty > blobs (gaussovský kernel) 1`] = `
+[
+  "0e8470b2 0e8470b2 0e8470b2 0e8470b2 0e8470b2 426b6462",
+  "11403785 11403785 11403785 11403785 11403785 11403785",
+  "4116187c 4116187c 4116187c 4116187c 4116187c 4116187c",
+  "871b239d 871b239d 871b239d 871b239d 871b239d 871b239d",
+]
+`;
+
+exports[`vizuální regresní snapshoty > gradient call+put vrstvy 1`] = `
+[
+  "12b499e5 12b499e5 12b499e5 12b499e5 12b499e5 5a92897e",
+  "08504466 08504466 08504466 08504466 08504466 08504466",
+  "450e124d 450e124d 450e124d 450e124d 450e124d 450e124d",
+  "b82430cc b82430cc b82430cc b82430cc b82430cc b82430cc",
+]
+`;
+
+exports[`vizuální regresní snapshoty > signed vrstva (Vol±/OI±All) 1`] = `
+[
+  "18bea0ff e62d3cff 18000000 185f5080",
+  "189880cc b82430cc 18262033 2e090c33",
+]
+`;
