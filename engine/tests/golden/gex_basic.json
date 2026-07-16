@@ -1,0 +1,37 @@
+{
+  "description": "Ručně spočtený golden dataset GEX (SPEC 4.1). ES: M=50, spot=7600, pct_factor = 7600^2 * 0.01 = 577600. Např. strike 7590 C: 0.008*1200*50 = 480.0; P: 0.0095*2000*50 = 950.0; Net = 480 - 950 = -470; Net_1pct = -470 * 577600 = -271472000.",
+  "spot": 7600.0,
+  "multiplier": 50.0,
+  "options": [
+    { "strike": 7590.0, "right": "C", "gamma": 0.008, "oi": 1200.0 },
+    { "strike": 7590.0, "right": "P", "gamma": 0.0095, "oi": 2000.0 },
+    { "strike": 7600.0, "right": "C", "gamma": 0.0107, "oi": 1500.0 },
+    { "strike": 7600.0, "right": "P", "gamma": 0.0106, "oi": 1800.0 },
+    { "strike": 7610.0, "right": "C", "gamma": 0.009, "oi": 2500.0 },
+    { "strike": 7610.0, "right": "P", "gamma": 0.0075, "oi": 900.0 }
+  ],
+  "expected": {
+    "per_strike": {
+      "7590.0": {
+        "call_gex_1pt": 480.0,
+        "put_gex_1pt": 950.0,
+        "net_gex_1pt": -470.0,
+        "net_gex_1pct": -271472000.0
+      },
+      "7600.0": {
+        "call_gex_1pt": 802.5,
+        "put_gex_1pt": 954.0,
+        "net_gex_1pt": -151.5,
+        "net_gex_1pct": -87506400.0
+      },
+      "7610.0": {
+        "call_gex_1pt": 1125.0,
+        "put_gex_1pt": 337.5,
+        "net_gex_1pt": 787.5,
+        "net_gex_1pct": 454860000.0
+      }
+    },
+    "total_gex_1pt": 166.0,
+    "total_gex_1pct": 95881600.0
+  }
+}
