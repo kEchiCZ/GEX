@@ -252,6 +252,16 @@ body {
   pointer-events: none;
 }
 
+.playback-bar input[type='range'] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.live-chip.active {
+  color: var(--up);
+  border-color: var(--up);
+}
+
 .chart-area {
   flex: 1;
   display: flex;
