@@ -38,8 +38,10 @@ class Settings(BaseSettings):
 
     # Opční řetězec a rotační scheduler (SPEC 3.2, 3.3)
     strike_range_points: float = Field(default=200.0, gt=0)
-    # Auto-rozšíření pásma, když se spot přiblíží k okraji na < tento podíl šířky
+    # Auto-rozšíření obálky, když se spot přiblíží k okraji na < tento podíl šířky
     strike_range_expand_threshold: float = Field(default=0.25, gt=0, lt=1)
+    # Strop šířky denní obálky strikes (ADR-0002); při dosažení se obálka posouvá
+    strike_range_max_points: float = Field(default=800.0, gt=0)
     batch_size: int = Field(default=80, ge=1)
     batch_timeout_s: float = Field(default=4.0, gt=0)
     # Křídla řetězce se sweepují každý k-tý cyklus (ATM±atm_sweep_width každý cyklus)
@@ -67,6 +69,10 @@ class Settings(BaseSettings):
     def _validate_backoff(self) -> "Settings":
         if self.reconnect_backoff_max_s < self.reconnect_backoff_base_s:
             raise ValueError("reconnect_backoff_max_s musí být ≥ reconnect_backoff_base_s")
+        if self.strike_range_max_points < 2 * self.strike_range_points:
+            raise ValueError(
+                "strike_range_max_points musí být ≥ 2× strike_range_points (výchozí obálka)"
+            )
         return self
 
     @property

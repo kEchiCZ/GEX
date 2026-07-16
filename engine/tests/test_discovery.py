@@ -1,6 +1,7 @@
 """Testy ChainDiscovery (issue #6) nad MockIB: expirace, pásmo strikes, auto-rozšíření."""
 
 import pytest
+from pydantic import ValidationError
 
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import (
@@ -101,18 +102,54 @@ def test_should_expand_near_edge_only() -> None:
     assert should_expand(band, spot=7430.0, threshold=0.25)
 
 
-async def test_maybe_expand_recenters_and_grows() -> None:
+async def test_maybe_expand_grows_near_edge_and_keeps_wings() -> None:
+    """ADR-0002 v2: prodlužuje se jen aktivní okraj — křídla se neztrácejí."""
+    client = MockIB(option_chains=es_chains())
+    discovery = ChainDiscovery(client, Settings())
+    info = ExpiryInfo("E3D", "20260716", "CME", "50", tuple(ES_STRIKES))
+
+    band = discovery.initial_band(info, spot=7600.0)  # obálka 7400–7800
+    unchanged = discovery.maybe_expand(info, band, spot=7600.0)
+    assert unchanged.expanded is False
+    assert unchanged.band == band
+
+    result = discovery.maybe_expand(info, band, spot=7770.0)  # blízko horního okraje
+    assert result.expanded is True
+    assert result.capped is False
+    assert result.band.high == 7970.0  # spot + 200
+    assert result.band.low == 7400.0  # dolní křídlo zůstává!
+    assert not should_expand(result.band, spot=7770.0, threshold=0.25)
+
+
+async def test_maybe_expand_lower_edge_keeps_upper_wing() -> None:
     client = MockIB(option_chains=es_chains())
     discovery = ChainDiscovery(client, Settings())
     info = ExpiryInfo("E3D", "20260716", "CME", "50", tuple(ES_STRIKES))
 
     band = discovery.initial_band(info, spot=7600.0)
-    unchanged = discovery.maybe_expand(info, band, spot=7600.0)
-    assert unchanged == band
+    result = discovery.maybe_expand(info, band, spot=7430.0)
 
-    expanded = discovery.maybe_expand(info, band, spot=7770.0)
-    assert expanded.center == 7770.0  # recentrováno na aktuální spot (ADR-0002)
-    assert expanded.range_points == 300.0  # 200 × 1.5
-    assert expanded.strikes[0] >= 7470.0
-    assert expanded.strikes[-1] <= 8070.0
-    assert not should_expand(expanded, spot=7770.0, threshold=0.25)
+    assert result.band.low == 7230.0  # spot − 200
+    assert result.band.high == 7800.0  # horní křídlo zůstává
+
+
+async def test_maybe_expand_caps_width_and_slides_active_edge() -> None:
+    """Strop šířky: obálka se posouvá za spotem, vzdálený okraj se obětuje (capped)."""
+    client = MockIB(option_chains=es_chains())
+    settings = Settings(strike_range_points=200.0, strike_range_max_points=500.0)
+    discovery = ChainDiscovery(client, settings)
+    info = ExpiryInfo("E3D", "20260716", "CME", "50", tuple(ES_STRIKES))
+
+    band = discovery.initial_band(info, spot=7600.0)  # 7400–7800 (šířka 400)
+    first = discovery.maybe_expand(info, band, spot=7770.0)  # → 7400–7970 (šířka 570 > 500)
+
+    assert first.expanded is True
+    assert first.capped is True
+    assert first.band.high == 7970.0  # aktivní okraj sleduje spot
+    assert first.band.low == 7470.0  # dolní okraj dotažen na strop šířky
+    assert first.band.width == 500.0
+
+
+def test_settings_reject_max_width_below_default_envelope() -> None:
+    with pytest.raises(ValidationError, match="strike_range_max_points"):
+        Settings(strike_range_points=200.0, strike_range_max_points=300.0)
