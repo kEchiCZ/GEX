@@ -48,22 +48,23 @@ class IBClientLike(Protocol):
     Testy používají `gexlens_engine.ibkr.mock.MockIB` (CLAUDE.md: CI nikdy proti live API).
     """
 
-    # Jména metod záměrně kopírují camelCase API ib_async
-    async def connectAsync(
+    # Jména metod záměrně kopírují camelCase API ib_async; návratové typy jsou
+    # záměrně volné (object/Awaitable), aby protokol strukturálně seděl na IB
+    def connectAsync(
         self,
         host: str,
         port: int,
         clientId: int,
         timeout: float,
-    ) -> object: ...
+    ) -> Awaitable[object]: ...
 
-    def disconnect(self) -> None: ...
+    def disconnect(self) -> object: ...
 
     def isConnected(self) -> bool: ...
 
     def reqMarketDataType(self, marketDataType: int) -> None: ...
 
-    async def reqCurrentTimeAsync(self) -> object: ...
+    def reqCurrentTimeAsync(self) -> Awaitable[object]: ...
 
 
 StatusCallback = Callable[[StatusEvent], None]

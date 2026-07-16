@@ -17,6 +17,7 @@ dist/
 
 # Data (Parquet snapshoty, ticky, derived — retence řeší engine)
 data/
+data-live/
 
 # Prostředí a secrets
 .env

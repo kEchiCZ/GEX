@@ -6,7 +6,7 @@ auto-rozšíření pásma je zdůvodněna v docs/adr/0002-strike-band-expansion.
 """
 
 import logging
-from collections.abc import Collection, Sequence
+from collections.abc import Awaitable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -107,13 +107,13 @@ class OptionChainLike(Protocol):
 class ChainClientLike(Protocol):
     """Minimální rozhraní klienta pro discovery (mock: gexlens_engine.ibkr.mock.MockIB)."""
 
-    async def reqSecDefOptParamsAsync(
+    def reqSecDefOptParamsAsync(
         self,
         underlyingSymbol: str,
         futFopExchange: str,
         underlyingSecType: str,
         underlyingConId: int,
-    ) -> Sequence[OptionChainLike]: ...
+    ) -> Awaitable[Sequence[OptionChainLike]]: ...
 
 
 def option_sec_type(underlying_sec_type: str) -> str:

@@ -1,0 +1,73 @@
+# GEXLens — jeden příkaz start (SPEC kap. 8): docker compose up --build
+#
+# Pozn.: PostgreSQL je publikovaný na hostitelský port 55432 (na vývojovém PC
+# běží nativní PG na 5432 i 5433 — viz komentář v issue #30). Engine se
+# připojuje na TWS/Gateway běžící NA HOSTITELI přes host.docker.internal.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: gexlens
+      POSTGRES_PASSWORD: gexlens
+      POSTGRES_DB: gexlens
+    ports:
+      - "55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gexlens"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+    command: uvicorn gexlens_api.main:app --host 0.0.0.0 --port 8000
+    environment:
+      GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:gexlens@postgres:5432/gexlens
+      GEXLENS_DATA_DIR: /app/data
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  engine:
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+    command: python -m gexlens_engine
+    environment:
+      # TWS/IB Gateway běží na hostiteli (Windows/Mac Docker Desktop)
+      GEXLENS_IBKR_HOST: host.docker.internal
+      GEXLENS_IBKR_PORT: ${GEXLENS_IBKR_PORT:-7496}
+      GEXLENS_IBKR_CLIENT_ID: ${GEXLENS_IBKR_CLIENT_ID:-1}
+      GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:gexlens@postgres:5432/gexlens
+      GEXLENS_DATA_DIR: /app/data
+      GEXLENS_API_BASE: http://api:8000
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        VITE_API_BASE: http://127.0.0.1:8000
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

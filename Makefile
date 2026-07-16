@@ -14,12 +14,16 @@ test-python:
 test-frontend:
 	cd frontend && npm ci && npm run lint && npm run format && npm test && npm run build
 
-# Dev běh (plný docker compose provoz přijde v M5 — issue Packaging)
+# Jeden příkaz start (SPEC kap. 8): engine + api + frontend + PostgreSQL
+run:
+	docker compose up --build
+
+# Dev běh bez Dockeru
 run-api:
 	uv run --package gexlens-api uvicorn gexlens_api.main:app --reload --port 8000
 
 run-frontend:
 	cd frontend && npm run dev
 
-run:
-	$(MAKE) run-api & $(MAKE) run-frontend
+run-engine:
+	uv run python -m gexlens_engine
