@@ -135,6 +135,22 @@ export function AppStateProvider({
     return () => live.close()
   }, [socket, appendLog])
 
+  // Počáteční stav pipeline hned z REST — WS push chodí až s dalším cyklem enginu (~60 s)
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${API_BASE}/status`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: PipelineStatus | null) => {
+        if (!cancelled && payload) setStatus(payload)
+      })
+      .catch(() => {
+        // API neběží — zůstává offline stav
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     fetch(`${API_BASE}/instruments/${symbol}/expiries`)
