@@ -45,7 +45,13 @@ export function Sidebar({ watchlist = [] }: { watchlist?: WatchlistEntry[] }) {
               ))}
               <li>
                 {/* Uživatelský manuál (wiki) — statické HTML servírované aplikací */}
-                <a className="nav-item nav-link" href="/manual/" target="_blank" rel="noreferrer">
+                {/* explicitní index.html — funguje v nginx i ve Vite dev serveru */}
+                <a
+                  className="nav-item nav-link"
+                  href="/manual/index.html"
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   Manuál
                 </a>
               </li>

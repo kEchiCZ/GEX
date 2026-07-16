@@ -142,7 +142,7 @@ test('sidebar obsahuje odkaz na uživatelský manuál (wiki)', () => {
   mockApi()
   renderApp()
   const link = screen.getByRole('link', { name: 'Manuál' }) as HTMLAnchorElement
-  expect(link.getAttribute('href')).toBe('/manual/')
+  expect(link.getAttribute('href')).toBe('/manual/index.html')
   expect(link.target).toBe('_blank')
 })
 

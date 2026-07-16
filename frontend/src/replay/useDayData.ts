@@ -16,6 +16,8 @@ export interface DayData {
   profileByMinute: ProfileRow[][] | null // demo má jediný statický profil
   demoProfileRows: ProfileRow[] | null
   spotSeries: (number | null)[]
+  /** Popisky časové osy (HH:MM lokálního času) per minuta. */
+  minuteLabels: string[]
 }
 
 function demoDay(): DayData {
@@ -25,6 +27,13 @@ function demoDay(): DayData {
     const bar = overlays.price?.find((item) => item.minuteIdx === minuteIdx)
     return bar ? bar.close : null
   })
+  // Demo den simuluje RTH 9:30–16:00 (390 minut)
+  const minuteLabels = Array.from({ length: grid.minutes }, (_, minuteIdx) => {
+    const total = 9 * 60 + 30 + minuteIdx
+    const hours = Math.floor(total / 60)
+    const mins = total % 60
+    return `${hours}:${String(mins).padStart(2, '0')}`
+  })
   return {
     source: 'demo',
     grid,
@@ -33,6 +42,7 @@ function demoDay(): DayData {
     profileByMinute: null,
     demoProfileRows: demoProfile(grid),
     spotSeries,
+    minuteLabels,
   }
 }
 
@@ -41,6 +51,12 @@ function replayToDay(day: ReplayDay): DayData {
   for (const bar of day.overlays.price ?? []) {
     spotSeries[bar.minuteIdx] = bar.close
   }
+  const minuteLabels = day.minutes.map((iso) => {
+    const parsed = new Date(iso)
+    return Number.isNaN(parsed.getTime())
+      ? iso
+      : parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  })
   return {
     source: 'replay',
     grid: day.grid,
@@ -49,6 +65,7 @@ function replayToDay(day: ReplayDay): DayData {
     profileByMinute: day.profileByMinute,
     demoProfileRows: null,
     spotSeries,
+    minuteLabels,
   }
 }
 
