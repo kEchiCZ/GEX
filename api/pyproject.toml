@@ -1,0 +1,16 @@
+[project]
+name = "gexlens-api"
+version = "0.1.0"
+description = "API server GEXLens — FastAPI + WebSocket (SPEC kap. 6)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gexlens_api"]

@@ -13,3 +13,26 @@ Python 3.12 + ib_async (engine) · FastAPI + WebSocket (API) · PostgreSQL + Par
 ## Než začneš
 
 Co je potřeba nainstalovat, nastavit a kam se přihlásit (TWS/IB Gateway, market data subscriptions, Docker, …) popisuje issue **„Setup uživatelského prostředí"** v GitHub Issues.
+
+## Vývoj
+
+Prerekvizity: [uv](https://docs.astral.sh/uv/) (stáhne si Python 3.12 sám), Node.js ≥ 20.
+
+Linux/macOS/Git Bash: `make test` (lint + testy všeho), `make run-api`, `make run-frontend`.
+
+Windows (PowerShell) ekvivalenty:
+
+```powershell
+# Python (engine + api)
+uv sync --all-packages
+uv run ruff check .
+uv run mypy engine/src engine/tests api/src api/tests
+uv run pytest
+
+# Frontend
+cd frontend; npm ci; npm run lint; npm test; npm run build
+
+# Dev servery
+uv run --package gexlens-api uvicorn gexlens_api.main:app --reload --port 8000
+cd frontend; npm run dev
+```
