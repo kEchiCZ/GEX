@@ -34,6 +34,26 @@ def test_internal_status_updates_and_broadcasts(client: TestClient) -> None:
     assert payload["greeks_complete"] == 300
 
 
+def test_cors_allows_local_frontend(client: TestClient) -> None:
+    """Frontend na :8080/:5173 musí dostat CORS hlavičky (jinak prohlížeč fetch blokne)."""
+    response = client.get("/instruments", headers={"Origin": "http://127.0.0.1:8080"})
+    assert response.headers.get("access-control-allow-origin") == "http://127.0.0.1:8080"
+
+    preflight = client.options(
+        "/settings/theme",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "PUT",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+    # Cizí origin hlavičku nedostane (vše zůstává na localhostu)
+    foreign = client.get("/instruments", headers={"Origin": "http://evil.example"})
+    assert "access-control-allow-origin" not in foreign.headers
+
+
 def test_internal_publish_routes_to_channel(client: TestClient) -> None:
     with client.websocket_connect("/ws/live") as ws:
         ws.send_json({"action": "subscribe", "channels": ["price.ES"]})

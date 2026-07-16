@@ -14,6 +14,7 @@ from typing import Annotated
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from gexlens_api.alerts import AlertEngine
@@ -70,6 +71,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     alert_engine = AlertEngine(live_hub)
 
     app = FastAPI(title="GEXLens API")
+    # Frontend běží na jiném lokálním portu (nginx :8080, Vite dev :5173) —
+    # bez CORS hlaviček prohlížeč fetche blokuje. Vše zůstává na localhostu
+    # (SPEC kap. 8: žádný vzdálený přístup).
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.status_store = status_store
     app.state.live_hub = live_hub
     app.state.meta_repository = meta_repository
