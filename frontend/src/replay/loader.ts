@@ -1,0 +1,230 @@
+/** Načtení denního replay balíku (SPEC kap. 6 /replay) a příprava dat v paměti.
+
+Balík se stahuje JEDNOU; přetáčení dne je pak čisté krájení polí v paměti
+(AC issue #27: žádný fetch per frame). Snapshot matice chodí jako base64
+Arrow IPC stream — dekóduje ji apache-arrow.
+*/
+import { tableFromIPC } from 'apache-arrow'
+import { API_BASE } from '../config'
+import type { PanelSeries } from '../components/BottomPanels'
+import type { HeatmapGrid } from '../heatmap/grid'
+import type { LevelLine, OverlayData, PriceBar } from '../heatmap/overlays'
+import type { ProfileRow } from '../profile/bars'
+
+export interface ReplayDay {
+  symbol: string
+  expiry: string
+  date: string
+  minutes: string[] // ISO timestampy minut (osa X)
+  grid: HeatmapGrid // celý den (OI vrstvy normalizované p99)
+  overlays: OverlayData // celý den
+  panels: PanelSeries // celý den
+  /** Profilové řádky per minuta (předpočítané — krájení bez přepočtu). */
+  profileByMinute: ProfileRow[][]
+}
+
+interface ReplayBundle {
+  symbol: string
+  expiry: string
+  date: string
+  snapshots_arrow_base64: string
+  levels: Array<Record<string, unknown>>
+  flow: Array<Record<string, unknown>>
+  bars: Array<Record<string, unknown>>
+}
+
+export async function fetchReplay(
+  symbol: string,
+  expiry: string,
+  date: string,
+): Promise<ReplayDay> {
+  const response = await fetch(`${API_BASE}/replay/${symbol}/${expiry}/${date}`)
+  if (!response.ok) {
+    throw new Error(`Replay ${symbol}/${expiry}/${date} selhal: HTTP ${response.status}`)
+  }
+  const bundle = (await response.json()) as ReplayBundle
+  return buildReplayDay(bundle)
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
+}
+
+function quantile99(values: Float32Array): number {
+  const sorted = Array.from(values).sort((a, b) => a - b)
+  if (sorted.length === 0) return 0
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(0.99 * sorted.length) - 1))]
+}
+
+/** Sestaví den v paměti z /replay balíku (exportováno kvůli testům). */
+export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
+  const table = tableFromIPC(base64ToBytes(bundle.snapshots_arrow_base64))
+
+  const tsColumn = table.getChild('ts_min')
+  const strikeColumn = table.getChild('strike')
+  const rightColumn = table.getChild('right')
+  const volumeColumn = table.getChild('volume')
+  const oiColumn = table.getChild('oi')
+  const deltaColumn = table.getChild('delta')
+  const staleColumn = table.getChild('stale_age')
+  if (!tsColumn || !strikeColumn || !rightColumn) {
+    throw new Error('Replay balík: snapshot tabulka nemá očekávané sloupce')
+  }
+
+  // Osy: minuty a strikes
+  const minuteKeys: string[] = []
+  const minuteIndex = new Map<string, number>()
+  const strikeSet = new Set<number>()
+  const rowCount = table.numRows
+  for (let row = 0; row < rowCount; row += 1) {
+    const ts = String(tsColumn.get(row))
+    if (!minuteIndex.has(ts)) {
+      minuteIndex.set(ts, minuteKeys.length)
+      minuteKeys.push(ts)
+    }
+    strikeSet.add(Number(strikeColumn.get(row)))
+  }
+  const strikes = [...strikeSet].sort((a, b) => a - b)
+  const strikeIndex = new Map(strikes.map((strike, index) => [strike, index]))
+  const minutes = minuteKeys.length
+  const size = minutes * strikes.length
+
+  const callOi = new Float32Array(size)
+  const putOi = new Float32Array(size)
+  const staleAge = new Float32Array(size)
+  const volumeByCell = { C: new Float32Array(size), P: new Float32Array(size) }
+  const deltaByCell = { C: new Float32Array(size), P: new Float32Array(size) }
+
+  for (let row = 0; row < rowCount; row += 1) {
+    const minuteIdx = minuteIndex.get(String(tsColumn.get(row)))!
+    const strikeIdx = strikeIndex.get(Number(strikeColumn.get(row)))!
+    const index = strikeIdx * minutes + minuteIdx
+    const right = String(rightColumn.get(row)) as 'C' | 'P'
+    const oi = Number(oiColumn?.get(row) ?? 0) || 0
+    const volume = Number(volumeColumn?.get(row) ?? 0) || 0
+    const delta = Number(deltaColumn?.get(row) ?? 0) || 0
+    if (right === 'C') callOi[index] = oi
+    else putOi[index] = oi
+    volumeByCell[right][index] = volume
+    deltaByCell[right][index] = delta
+    staleAge[index] = Math.max(staleAge[index], Number(staleColumn?.get(row) ?? 0) || 0)
+  }
+
+  // Heatmap vrstvy: OI mód, normalizace p99 dne (SPEC 4.3)
+  const denominator = Math.max(quantile99(callOi), quantile99(putOi), 1e-9)
+  const grid: HeatmapGrid = {
+    minutes,
+    strikes,
+    layers: {
+      call: Float32Array.from(callOi, (value) => Math.min(1, value / denominator)),
+      put: Float32Array.from(putOi, (value) => Math.min(1, value / denominator)),
+    },
+    staleAge,
+  }
+
+  // Overlaye: cena z barů, levels z derived
+  const price: PriceBar[] = []
+  let previousClose = Number.NaN
+  for (const bar of bundle.bars) {
+    const ts = String(bar.ts_min)
+    const minuteIdx = minuteIndex.get(ts)
+    const close = Number(bar.close)
+    if (minuteIdx !== undefined && Number.isFinite(close)) {
+      price.push({ minuteIdx, close, up: !(close < previousClose) })
+      previousClose = close
+    }
+  }
+  const levelSeries = (key: string): (number | null)[] => {
+    const series: (number | null)[] = Array.from({ length: minutes }, () => null)
+    for (const row of bundle.levels) {
+      const minuteIdx = minuteIndex.get(String(row.ts_min))
+      if (minuteIdx === undefined) continue
+      const value = row[key]
+      series[minuteIdx] = typeof value === 'number' ? value : null
+    }
+    return series
+  }
+  const levels: LevelLine[] = [
+    { name: 'flip', color: '#e8c14b', series: levelSeries('flip') },
+    { name: 'centroid', color: '#9d7be8', series: levelSeries('centroid') },
+  ]
+  const walls: LevelLine[] = [
+    { name: 'call_wall', color: '#3ecf8e', series: levelSeries('call_wall') },
+    { name: 'put_wall', color: '#f0616d', series: levelSeries('put_wall') },
+  ]
+  const overlays: OverlayData = {
+    price,
+    levels,
+    walls,
+    sessions: [],
+    timestamp: minuteKeys.at(-1) ?? bundle.date,
+  }
+
+  // Spodní panely: Vol z barů, OptVol z minutových přírůstků, CumΔ z flow
+  const vol = Array.from({ length: minutes }, () => 0)
+  for (const bar of bundle.bars) {
+    const minuteIdx = minuteIndex.get(String(bar.ts_min))
+    if (minuteIdx !== undefined) vol[minuteIdx] = Number(bar.volume) || 0
+  }
+  const optVolCall = optVolSeries(volumeByCell.C, minutes, strikes.length)
+  const optVolPut = optVolSeries(volumeByCell.P, minutes, strikes.length)
+  const cumDelta = Array.from({ length: minutes }, () => 0)
+  for (const row of bundle.flow) {
+    const minuteIdx = minuteIndex.get(String(row.ts_min))
+    if (minuteIdx !== undefined) cumDelta[minuteIdx] = Number(row.cum_delta) || 0
+  }
+
+  // Strike profil per minuta (combined varianta, w=1 — SPEC 4.6)
+  const profileByMinute: ProfileRow[][] = []
+  for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
+    const spotAtMinute = price.find((bar) => bar.minuteIdx === minuteIdx)?.close ?? Number.NaN
+    profileByMinute.push(
+      strikes.map((strike, strikeIdx) => {
+        const index = strikeIdx * minutes + minuteIdx
+        const callAbsDelta = Math.abs(deltaByCell.C[index])
+        const putAbsDelta = Math.abs(deltaByCell.P[index])
+        return {
+          strike,
+          callVolComponent: volumeByCell.C[index] * callAbsDelta,
+          callOiComponent: callOi[index] * callAbsDelta,
+          putVolComponent: volumeByCell.P[index] * putAbsDelta,
+          putOiComponent: putOi[index] * putAbsDelta,
+          callVolume: volumeByCell.C[index],
+          putVolume: volumeByCell.P[index],
+          callOi: callOi[index],
+          putOi: putOi[index],
+          distanceFromSpot: Number.isFinite(spotAtMinute) ? strike - spotAtMinute : 0,
+        }
+      }),
+    )
+  }
+
+  return {
+    symbol: bundle.symbol,
+    expiry: bundle.expiry,
+    date: bundle.date,
+    minutes: minuteKeys,
+    grid,
+    overlays,
+    panels: { vol, optVolCall, optVolPut, cumDelta },
+    profileByMinute,
+  }
+}
+
+/** OptVol per minuta: Σ kladných přírůstků kumulativního volume přes strikes. */
+function optVolSeries(volume: Float32Array, minutes: number, strikeCount: number): number[] {
+  const series = Array.from({ length: minutes }, () => 0)
+  for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
+    for (let minuteIdx = 1; minuteIdx < minutes; minuteIdx += 1) {
+      const index = strikeIdx * minutes + minuteIdx
+      const increment = volume[index] - volume[index - 1]
+      if (increment > 0) series[minuteIdx] += increment
+    }
+  }
+  return series
+}

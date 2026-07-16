@@ -1,4 +1,4 @@
-/** Kořenový layout aplikace (SPEC 7.1) s canvas heatmapou a overlayi (SPEC 7.2). */
+/** Kořenový layout aplikace (SPEC 7.1) s heatmapou, overlayi a playbackem (SPEC 7.3). */
 import { useMemo, useState } from 'react'
 import './App.css'
 import { TimeframeRow, TogglesRow } from './components/ControlRows'
@@ -7,9 +7,12 @@ import { InstrumentHeader } from './components/InstrumentHeader'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
 import { BottomPanels } from './components/BottomPanels'
+import { PlaybackBar } from './components/PlaybackBar'
 import { StrikeProfile } from './components/StrikeProfile'
-import { demoGrid, demoOverlays, demoPanels, demoProfile } from './heatmap/demo'
 import { visibleOverlays } from './heatmap/overlays'
+import { sliceGrid, sliceOverlays, slicePanels } from './replay/slice'
+import { useDayData } from './replay/useDayData'
+import { usePlayback } from './replay/usePlayback'
 import { AppStateProvider, useAppState } from './state/AppState'
 import { CrosshairProvider } from './state/Crosshair'
 import type { ContoursMode } from './heatmap/contours'
@@ -17,15 +20,44 @@ import type { HeatmapStyle } from './heatmap/render'
 import type { LiveSocket } from './api/ws'
 
 function ChartArea() {
-  const { toggles } = useAppState()
+  const { toggles, symbol, selectedExpiry } = useAppState()
   const [style, setStyle] = useState<HeatmapStyle>('gradient')
   const [contours, setContours] = useState<ContoursMode>('off')
-  // Demo data do zapojení replay/live feedu (issue #27)
-  const grid = useMemo(() => demoGrid(), [])
-  const allOverlays = useMemo(() => demoOverlays(grid), [grid])
-  const profileRows = useMemo(() => demoProfile(grid), [grid])
-  const panelSeries = useMemo(() => demoPanels(grid.minutes), [grid])
-  const spot = allOverlays.price?.at(-1)?.close ?? null
+
+  // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame)
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const day = useDayData(symbol, selectedExpiry, today)
+  const playback = usePlayback(day.grid.minutes)
+
+  // Přetáčení = synchronní krájení všech panelů v paměti
+  const grid = useMemo(
+    () => (playback.isLive ? day.grid : sliceGrid(day.grid, playback.position)),
+    [day.grid, playback.isLive, playback.position],
+  )
+  const panelSeries = useMemo(
+    () => (playback.isLive ? day.panels : slicePanels(day.panels, playback.position)),
+    [day.panels, playback.isLive, playback.position],
+  )
+  const allOverlays = useMemo(
+    () => (playback.isLive ? day.overlays : sliceOverlays(day.overlays, playback.position)),
+    [day.overlays, playback.isLive, playback.position],
+  )
+  const profileRows = useMemo(() => {
+    if (day.profileByMinute) {
+      const index = Math.min(playback.position, day.profileByMinute.length - 1)
+      return day.profileByMinute[index] ?? []
+    }
+    return day.demoProfileRows ?? []
+  }, [day, playback.position])
+  const spot = useMemo(() => {
+    const start = Math.min(playback.position, day.spotSeries.length - 1)
+    for (let index = start; index >= 0; index -= 1) {
+      const value = day.spotSeries[index]
+      if (value !== null) return value
+    }
+    return null
+  }, [day.spotSeries, playback.position])
+
   // Overlay přepínače odpovídají checkboxům (AC issue #24)
   const overlays = useMemo(
     () =>
@@ -58,6 +90,9 @@ function ChartArea() {
             <option value="all">All</option>
           </select>
         </label>
+        <span className="muted" data-testid="data-source">
+          {day.source === 'replay' ? `replay ${today}` : 'demo data'}
+        </span>
       </div>
       <div className="chart-row">
         <div className="chart-column">
@@ -68,6 +103,7 @@ function ChartArea() {
             data={panelSeries}
             visible={{ vol: toggles.vol, optVol: toggles.optVol, delta: toggles.delta }}
           />
+          <PlaybackBar playback={playback} />
         </div>
         <StrikeProfile rows={profileRows} spot={spot} />
       </div>
