@@ -262,6 +262,131 @@ body {
   border-color: var(--up);
 }
 
+/* ── Light téma (přepínané živě přes data-theme) ─────────── */
+.app[data-theme='light'] {
+  --bg: #f4f6f9;
+  --bg-panel: #ffffff;
+  --bg-chip: #e9edf2;
+  --border: #c9d1dc;
+  --text: #22262e;
+  --text-muted: #66707f;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ── Provozní obrazovky (SPEC 7.5) ───────────────────────── */
+.dashboard {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 14px;
+  padding: 16px;
+  overflow: auto;
+}
+
+.dashboard-card {
+  width: 220px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dashboard-card header {
+  display: flex;
+  justify-content: space-between;
+}
+
+.card-price {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.console,
+.settings {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.console h2,
+.settings h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+}
+
+.console label,
+.settings label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+  color: var(--text-muted);
+}
+
+.console input,
+.settings input,
+.settings select,
+.settings textarea {
+  background: var(--bg-chip);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.console-log ol {
+  margin: 0;
+  padding-left: 18px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  max-height: 45vh;
+  overflow: auto;
+}
+
+.bell-wrap {
+  position: relative;
+  margin-left: auto;
+}
+
+.bell-wrap .bell {
+  margin-left: 0;
+}
+
+.alerts-dropdown {
+  position: absolute;
+  right: 0;
+  top: 36px;
+  width: 320px;
+  max-height: 300px;
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  z-index: 10;
+}
+
+.alerts-dropdown ol {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+}
+
+.nav-item.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .chart-area {
   flex: 1;
   display: flex;
