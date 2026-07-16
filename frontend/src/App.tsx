@@ -1,14 +1,17 @@
-/** Kořenový layout aplikace (SPEC 7.1) s heatmapou, overlayi a playbackem (SPEC 7.3). */
+/** Kořenový layout aplikace (SPEC 7.1) s obrazovkami Graf / Dashboard / Console / Settings. */
 import { useMemo, useState } from 'react'
 import './App.css'
 import { useAnnotations } from './annotations/useAnnotations'
 import { TimeframeRow, TogglesRow } from './components/ControlRows'
+import { Console } from './components/Console'
+import { Dashboard } from './components/Dashboard'
 import { Heatmap } from './components/Heatmap'
 import { InstrumentHeader } from './components/InstrumentHeader'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
 import { BottomPanels } from './components/BottomPanels'
 import { PlaybackBar } from './components/PlaybackBar'
+import { SettingsView } from './components/SettingsView'
 import { StrikeProfile } from './components/StrikeProfile'
 import { visibleOverlays } from './heatmap/overlays'
 import { sliceGrid, sliceOverlays, slicePanels } from './replay/slice'
@@ -29,8 +32,18 @@ const ANNOTATION_TOOLS: Array<{ tool: ActiveTool; label: string }> = [
   { tool: 'eraser', label: 'Guma' },
 ]
 
-function ChartArea() {
-  const { toggles, symbol, selectedExpiry } = useAppState()
+/** Poslední ne-null hodnota řady do pozice (spot, walls pro dashboard). */
+function lastValue(series: (number | null)[] | undefined, position: number): number | null {
+  if (!series) return null
+  for (let index = Math.min(position, series.length - 1); index >= 0; index -= 1) {
+    const value = series[index]
+    if (value !== null) return value
+  }
+  return null
+}
+
+function MainContent() {
+  const { toggles, symbol, selectedExpiry, view } = useAppState()
   const [style, setStyle] = useState<HeatmapStyle>('gradient')
   const [contours, setContours] = useState<ContoursMode>('off')
   const [annotationTool, setAnnotationTool] = useState<ActiveTool>(null)
@@ -63,14 +76,10 @@ function ChartArea() {
     }
     return day.demoProfileRows ?? []
   }, [day, playback.position])
-  const spot = useMemo(() => {
-    const start = Math.min(playback.position, day.spotSeries.length - 1)
-    for (let index = start; index >= 0; index -= 1) {
-      const value = day.spotSeries[index]
-      if (value !== null) return value
-    }
-    return null
-  }, [day.spotSeries, playback.position])
+  const spot = useMemo(
+    () => lastValue(day.spotSeries, playback.position),
+    [day.spotSeries, playback.position],
+  )
 
   // Overlay přepínače odpovídají checkboxům (AC issue #24)
   const overlays = useMemo(
@@ -83,8 +92,29 @@ function ChartArea() {
     [allOverlays, toggles.gexLevels, toggles.sessions, toggles.dynGex],
   )
 
+  if (view === 'dashboard') {
+    return (
+      <Dashboard
+        profileRows={profileRows}
+        spot={spot}
+        callWall={lastValue(
+          day.overlays.walls?.find((line) => line.name === 'call_wall')?.series,
+          playback.position,
+        )}
+        putWall={lastValue(
+          day.overlays.walls?.find((line) => line.name === 'put_wall')?.series,
+          playback.position,
+        )}
+      />
+    )
+  }
+  if (view === 'console') return <Console />
+  if (view === 'settings') return <SettingsView />
+
   return (
     <>
+      <TimeframeRow />
+      <TogglesRow />
       <div className="row heatmap-controls" role="toolbar" aria-label="Heatmapa nastavení">
         <label className="toggle">
           Styl
@@ -151,20 +181,25 @@ function ChartArea() {
   )
 }
 
+function Shell() {
+  const { theme } = useAppState()
+  return (
+    <div className="app" data-theme={theme}>
+      <Sidebar watchlist={[{ symbol: 'ES', changePct: null }]} />
+      <div className="main-column">
+        <InstrumentHeader />
+        <MainContent />
+        <StatusBar />
+      </div>
+    </div>
+  )
+}
+
 export default function App({ socket }: { socket?: LiveSocket }) {
   return (
     <AppStateProvider socket={socket}>
       <CrosshairProvider>
-        <div className="app">
-          <Sidebar watchlist={[{ symbol: 'ES', changePct: null }]} />
-          <div className="main-column">
-            <InstrumentHeader />
-            <TimeframeRow />
-            <TogglesRow />
-            <ChartArea />
-            <StatusBar />
-          </div>
-        </div>
+        <Shell />
       </CrosshairProvider>
     </AppStateProvider>
   )

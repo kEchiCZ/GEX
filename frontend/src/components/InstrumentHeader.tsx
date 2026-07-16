@@ -1,16 +1,25 @@
-/** Hlavička instrumentu (SPEC 7.1): ticker, last + změna, expirace, Live indikátor, zvonek. */
+/** Hlavička instrumentu (SPEC 7.1): ticker, last + změna, expirace, Live, notifikace. */
+import { useState } from 'react'
 import { useAppState } from '../state/AppState'
 
 export function InstrumentHeader({
   lastPrice,
   changePct,
-  alertCount = 0,
 }: {
   lastPrice?: number
   changePct?: number
-  alertCount?: number
 }) {
-  const { symbol, expiries, selectedExpiry, setSelectedExpiry, status } = useAppState()
+  const {
+    symbol,
+    expiries,
+    selectedExpiry,
+    setSelectedExpiry,
+    status,
+    alerts,
+    unreadAlerts,
+    markAlertsRead,
+  } = useAppState()
+  const [alertsOpen, setAlertsOpen] = useState(false)
   const live = status.engine === 'online'
 
   return (
@@ -46,9 +55,30 @@ export function InstrumentHeader({
       <span className={live ? 'live-indicator live' : 'live-indicator stale'} role="status">
         {live ? '● Live' : '○ Offline'}
       </span>
-      <button className="bell" aria-label={`Notifikace (${alertCount})`}>
-        🔔{alertCount > 0 && <span className="badge">{alertCount}</span>}
-      </button>
+      <div className="bell-wrap">
+        <button
+          className="bell"
+          aria-label={`Notifikace (${unreadAlerts})`}
+          onClick={() => {
+            setAlertsOpen((open) => !open)
+            markAlertsRead()
+          }}
+        >
+          🔔{unreadAlerts > 0 && <span className="badge">{unreadAlerts}</span>}
+        </button>
+        {alertsOpen && (
+          <div className="alerts-dropdown" role="dialog" aria-label="Historie alertů">
+            {alerts.length === 0 && <p className="muted">Žádné alerty</p>}
+            <ol>
+              {[...alerts].reverse().map((alert, index) => (
+                <li key={index}>
+                  <span className="muted">[{alert.kind}]</span> {alert.message}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+      </div>
     </header>
   )
 }

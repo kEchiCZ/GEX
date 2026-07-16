@@ -1,5 +1,5 @@
-/** Globální stav aplikace: pipeline status z WS, instrument, expirace, přepínače. */
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+/** Globální stav aplikace: pipeline status z WS, view, téma, alerty, přepínače. */
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { LiveSocket } from '../api/ws'
 import { API_BASE, WS_URL } from '../config'
@@ -15,7 +15,15 @@ export interface PipelineStatus {
   disk_usage_bytes?: number
   disk_limit_bytes?: number
   last_tick_ts?: string
+  news_available?: boolean
   updated_at?: number | null
+}
+
+export interface AlertMessage {
+  kind: string
+  symbol: string
+  message: string
+  ts: number
 }
 
 export interface Toggles {
@@ -29,6 +37,9 @@ export interface Toggles {
   news: boolean
 }
 
+export type AppView = 'chart' | 'dashboard' | 'console' | 'settings'
+export type Theme = 'dark' | 'light'
+
 interface AppState {
   status: PipelineStatus
   symbol: string
@@ -41,9 +52,20 @@ interface AppState {
   setInterval: (value: '1m' | '5m' | '15m') => void
   toggles: Toggles
   setToggle: (key: keyof Toggles, value: boolean) => void
+  view: AppView
+  setView: (view: AppView) => void
+  theme: Theme
+  setTheme: (theme: Theme) => void
+  alerts: AlertMessage[]
+  unreadAlerts: number
+  markAlertsRead: () => void
+  consoleLog: string[]
 }
 
 const AppStateContext = createContext<AppState | null>(null)
+
+const LOG_LIMIT = 200
+const ALERTS_LIMIT = 50
 
 export function AppStateProvider({
   children,
@@ -60,6 +82,11 @@ export function AppStateProvider({
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
   const [timeframe, setTimeframe] = useState<'intraday' | 'daily'>('intraday')
   const [interval, setInterval] = useState<'1m' | '5m' | '15m'>('1m')
+  const [view, setView] = useState<AppView>('chart')
+  const [theme, setTheme] = useState<Theme>('dark')
+  const [alerts, setAlerts] = useState<AlertMessage[]>([])
+  const [unreadAlerts, setUnreadAlerts] = useState(0)
+  const [consoleLog, setConsoleLog] = useState<string[]>([])
   const [toggles, setToggles] = useState<Toggles>({
     dynGex: true,
     gexLevels: true,
@@ -71,12 +98,29 @@ export function AppStateProvider({
     news: false,
   })
 
+  const appendLog = useCallback((line: string) => {
+    const stamp = new Date().toLocaleTimeString()
+    setConsoleLog((previous) => [...previous.slice(-(LOG_LIMIT - 1)), `[${stamp}] ${line}`])
+  }, [])
+
   useEffect(() => {
     const live = socket ?? new LiveSocket(WS_URL)
-    live.subscribe('status', (data) => setStatus(data as unknown as PipelineStatus))
+    live.subscribe('status', (data) => {
+      setStatus(data as unknown as PipelineStatus)
+      const record = data as Record<string, unknown>
+      appendLog(
+        `status: engine=${String(record.engine)} connection=${String(record.connection ?? '—')}`,
+      )
+    })
+    live.subscribe('alerts', (data) => {
+      const alert = data as unknown as AlertMessage
+      setAlerts((previous) => [...previous.slice(-(ALERTS_LIMIT - 1)), alert])
+      setUnreadAlerts((previous) => previous + 1)
+      appendLog(`alert [${alert.kind}] ${alert.message}`)
+    })
     live.connect()
     return () => live.close()
-  }, [socket])
+  }, [socket, appendLog])
 
   useEffect(() => {
     let cancelled = false
@@ -109,8 +153,29 @@ export function AppStateProvider({
       setInterval,
       toggles,
       setToggle: (key, val) => setToggles((prev) => ({ ...prev, [key]: val })),
+      view,
+      setView,
+      theme,
+      setTheme,
+      alerts,
+      unreadAlerts,
+      markAlertsRead: () => setUnreadAlerts(0),
+      consoleLog,
     }),
-    [status, symbol, expiries, selectedExpiry, timeframe, interval, toggles],
+    [
+      status,
+      symbol,
+      expiries,
+      selectedExpiry,
+      timeframe,
+      interval,
+      toggles,
+      view,
+      theme,
+      alerts,
+      unreadAlerts,
+      consoleLog,
+    ],
   )
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>

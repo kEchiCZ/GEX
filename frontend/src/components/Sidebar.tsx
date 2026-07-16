@@ -1,8 +1,15 @@
-/** Sbalitelný levý sidebar (SPEC 7.1): navigace, watchlist, verze. */
+/** Sbalitelný levý sidebar (SPEC 7.1): navigace obrazovek, watchlist, téma, verze. */
 import { useState } from 'react'
 import { APP_VERSION } from '../config'
+import { useAppState } from '../state/AppState'
+import type { AppView } from '../state/AppState'
 
-const NAV_ITEMS = ['Dashboard', 'Watchlist', 'IBKR Console', 'Theme', 'Settings'] as const
+const NAV_ITEMS: Array<{ view: AppView; label: string }> = [
+  { view: 'chart', label: 'Graf' },
+  { view: 'dashboard', label: 'Dashboard' },
+  { view: 'console', label: 'IBKR Console' },
+  { view: 'settings', label: 'Settings' },
+]
 
 export interface WatchlistEntry {
   symbol: string
@@ -11,6 +18,7 @@ export interface WatchlistEntry {
 
 export function Sidebar({ watchlist = [] }: { watchlist?: WatchlistEntry[] }) {
   const [collapsed, setCollapsed] = useState(false)
+  const { view, setView, theme, setTheme } = useAppState()
 
   return (
     <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'} aria-expanded={!collapsed}>
@@ -26,10 +34,23 @@ export function Sidebar({ watchlist = [] }: { watchlist?: WatchlistEntry[] }) {
           <nav aria-label="Hlavní navigace">
             <ul>
               {NAV_ITEMS.map((item) => (
-                <li key={item}>
-                  <button className="nav-item">{item}</button>
+                <li key={item.view}>
+                  <button
+                    className={view === item.view ? 'nav-item active' : 'nav-item'}
+                    onClick={() => setView(item.view)}
+                  >
+                    {item.label}
+                  </button>
                 </li>
               ))}
+              <li>
+                <button
+                  className="nav-item"
+                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                >
+                  Theme: {theme === 'dark' ? 'Dark' : 'Light'}
+                </button>
+              </li>
             </ul>
           </nav>
           <section className="watchlist" aria-label="Watchlist">
