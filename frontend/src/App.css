@@ -220,6 +220,23 @@ body {
   align-items: center;
   justify-content: center;
   min-height: 0;
+  overflow: hidden;
+}
+
+.heatmap-canvas {
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+.heatmap-controls select {
+  background: var(--bg-chip);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px;
+  margin-left: 6px;
 }
 
 .placeholder {
