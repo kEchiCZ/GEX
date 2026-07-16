@@ -44,6 +44,12 @@ export function Sidebar({ watchlist = [] }: { watchlist?: WatchlistEntry[] }) {
                 </li>
               ))}
               <li>
+                {/* Uživatelský manuál (wiki) — statické HTML servírované aplikací */}
+                <a className="nav-item nav-link" href="/manual/" target="_blank" rel="noreferrer">
+                  Manuál
+                </a>
+              </li>
+              <li>
                 <button
                   className="nav-item"
                   onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}

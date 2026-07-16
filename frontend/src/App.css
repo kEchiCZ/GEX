@@ -387,6 +387,11 @@ body {
   color: var(--accent);
 }
 
+.nav-link {
+  display: block;
+  text-decoration: none;
+}
+
 .chart-area {
   flex: 1;
   display: flex;

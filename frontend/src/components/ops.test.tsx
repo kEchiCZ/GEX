@@ -138,6 +138,14 @@ test('konzole loguje události ze status kanálu a reconnect zapisuje požadavek
   })
 })
 
+test('sidebar obsahuje odkaz na uživatelský manuál (wiki)', () => {
+  mockApi()
+  renderApp()
+  const link = screen.getByRole('link', { name: 'Manuál' }) as HTMLAnchorElement
+  expect(link.getAttribute('href')).toBe('/manual/')
+  expect(link.target).toBe('_blank')
+})
+
 test('přepnutí tématu v sidebaru funguje také (Theme tlačítko)', () => {
   mockApi()
   renderApp()
