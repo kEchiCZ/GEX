@@ -6,8 +6,9 @@ import { Heatmap } from './components/Heatmap'
 import { InstrumentHeader } from './components/InstrumentHeader'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
+import { BottomPanels } from './components/BottomPanels'
 import { StrikeProfile } from './components/StrikeProfile'
-import { demoGrid, demoOverlays, demoProfile } from './heatmap/demo'
+import { demoGrid, demoOverlays, demoPanels, demoProfile } from './heatmap/demo'
 import { visibleOverlays } from './heatmap/overlays'
 import { AppStateProvider, useAppState } from './state/AppState'
 import { CrosshairProvider } from './state/Crosshair'
@@ -23,6 +24,7 @@ function ChartArea() {
   const grid = useMemo(() => demoGrid(), [])
   const allOverlays = useMemo(() => demoOverlays(grid), [grid])
   const profileRows = useMemo(() => demoProfile(grid), [grid])
+  const panelSeries = useMemo(() => demoPanels(grid.minutes), [grid])
   const spot = allOverlays.price?.at(-1)?.close ?? null
   // Overlay přepínače odpovídají checkboxům (AC issue #24)
   const overlays = useMemo(
@@ -58,9 +60,15 @@ function ChartArea() {
         </label>
       </div>
       <div className="chart-row">
-        <main className="chart-area" aria-label="Heatmapa">
-          <Heatmap grid={grid} style={style} contours={contours} overlays={overlays} />
-        </main>
+        <div className="chart-column">
+          <main className="chart-area" aria-label="Heatmapa">
+            <Heatmap grid={grid} style={style} contours={contours} overlays={overlays} />
+          </main>
+          <BottomPanels
+            data={panelSeries}
+            visible={{ vol: toggles.vol, optVol: toggles.optVol, delta: toggles.delta }}
+          />
+        </div>
         <StrikeProfile rows={profileRows} spot={spot} />
       </div>
     </>
