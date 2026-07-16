@@ -72,10 +72,11 @@ export function Sidebar() {
   }
 
   // Aktivní symbol vždy viditelný, i když (ještě) není ve watchlistu
-  const rows: Array<{ id: number | null; symbol: string }> =
-    watchlist.some((item) => item.symbol === activeSymbol) || watchlist.length === 0
-      ? watchlist
-      : [{ id: null, symbol: activeSymbol }, ...watchlist]
+  const rows: Array<{ id: number | null; symbol: string }> = watchlist.some(
+    (item) => item.symbol === activeSymbol,
+  )
+    ? watchlist
+    : [{ id: null, symbol: activeSymbol }, ...watchlist]
 
   return (
     <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'} aria-expanded={!collapsed}>
