@@ -4,14 +4,16 @@ Server jen čte, co engine zapsal; /status vrací poslední stav pushnutý engin
 do StatusStore. Bind na localhost řeší uvicorn konfigurace (SPEC kap. 8).
 """
 
+import asyncio
 import base64
+import contextlib
 import datetime as dt
 import math
 from collections.abc import Callable
 from typing import Annotated
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
 from gexlens_api.data import DataRepository, PartitionNotFoundError
@@ -24,6 +26,7 @@ from gexlens_api.heatmap import (
     normalization_denominator,
     to_arrow_bytes,
 )
+from gexlens_api.live import LiveHub
 from gexlens_api.status import StatusStore
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
@@ -59,8 +62,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repository = DataRepository(settings)
     status_store = StatusStore()
 
+    live_hub = LiveHub()
+
     app = FastAPI(title="GEXLens API")
     app.state.status_store = status_store
+    app.state.live_hub = live_hub
 
     @app.exception_handler(PartitionNotFoundError)
     async def partition_not_found(_request: object, exc: PartitionNotFoundError) -> JSONResponse:
@@ -210,6 +216,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             except PartitionNotFoundError:
                 bundle[key] = []  # část dne může chybět (např. bez flow) — balík drží tvar
         return bundle
+
+    @app.websocket("/ws/live")
+    async def ws_live(websocket: WebSocket) -> None:
+        """Live push kanálů (SPEC kap. 6): subscribe/unsubscribe protokol zprávami."""
+        await websocket.accept()
+        subscriber_id, queue = live_hub.register()
+
+        async def sender() -> None:
+            while True:
+                await websocket.send_json(await queue.get())
+
+        sender_task = asyncio.create_task(sender())
+        try:
+            while True:
+                request = await websocket.receive_json()
+                action = request.get("action")
+                channels = request.get("channels", [])
+                if action == "subscribe":
+                    subscribed = live_hub.subscribe(subscriber_id, channels)
+                    await websocket.send_json(
+                        {"type": "ack", "action": "subscribe", "channels": sorted(subscribed)}
+                    )
+                elif action == "unsubscribe":
+                    subscribed = live_hub.unsubscribe(subscriber_id, channels)
+                    await websocket.send_json(
+                        {"type": "ack", "action": "unsubscribe", "channels": sorted(subscribed)}
+                    )
+                else:
+                    await websocket.send_json(
+                        {"type": "error", "detail": f"Neznámá akce: {action!r}"}
+                    )
+        except WebSocketDisconnect:
+            pass
+        finally:
+            sender_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sender_task
+            live_hub.unregister(subscriber_id)
 
     return app
 
