@@ -183,12 +183,18 @@ version = "0.1.0"
 source = { editable = "api" }
 dependencies = [
     { name = "fastapi" },
+    { name = "gexlens-engine" },
+    { name = "pandas" },
+    { name = "pyarrow" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "gexlens-engine", editable = "engine" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "pyarrow", specifier = ">=18" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 
