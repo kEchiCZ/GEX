@@ -5,7 +5,9 @@ description = "Datový engine GEXLens — IBKR připojení, storage, výpočty (
 requires-python = ">=3.12"
 dependencies = [
     "ib-async>=2.0",
+    "psycopg[binary]>=3.2",
     "pydantic-settings>=2.7",
+    "sqlalchemy>=2.0",
 ]
 
 [build-system]
