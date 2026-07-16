@@ -1,4 +1,5 @@
 /** Syntetický demo grid + overlaye, dokud není zapojený replay/live feed (issue #27). */
+import type { ProfileRow } from '../profile/bars'
 import type { HeatmapGrid } from './grid'
 import type { OverlayData, PriceBar } from './overlays'
 
@@ -22,6 +23,26 @@ export function demoGrid(minutes = 390, strikeCount = 60): HeatmapGrid {
     }
   }
   return { minutes, strikes, layers: { call, put }, staleAge }
+}
+
+export function demoProfile(grid: HeatmapGrid): ProfileRow[] {
+  const middle = grid.strikes[Math.floor(grid.strikes.length / 2)]
+  return grid.strikes.map((strike, index) => {
+    const callWeight = Math.exp(-(((index - 42) / 8) ** 2))
+    const putWeight = Math.exp(-(((index - 18) / 8) ** 2))
+    return {
+      strike,
+      callVolComponent: 40 * callWeight,
+      callOiComponent: 25 * callWeight,
+      putVolComponent: 35 * putWeight,
+      putOiComponent: 30 * putWeight,
+      callVolume: Math.round(400 * callWeight),
+      putVolume: Math.round(350 * putWeight),
+      callOi: Math.round(2000 * callWeight),
+      putOi: Math.round(2400 * putWeight),
+      distanceFromSpot: strike - middle,
+    }
+  })
 }
 
 export function demoOverlays(grid: HeatmapGrid): OverlayData {
