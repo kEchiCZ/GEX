@@ -46,6 +46,21 @@ export async function fetchReplay(
   return buildReplayDay(bundle)
 }
 
+/** Kanonický klíč minuty: Arrow vrací timestamp jako epoch (ms), JSON jako ISO string. */
+function canonicalTs(value: unknown): string {
+  if (typeof value === 'number' || typeof value === 'bigint') {
+    return new Date(Number(value)).toISOString()
+  }
+  if (value instanceof Date) return value.toISOString()
+  const text = String(value)
+  const asNumber = Number(text)
+  if (Number.isFinite(asNumber) && !text.includes('-')) {
+    return new Date(asNumber).toISOString()
+  }
+  const parsed = new Date(text)
+  return Number.isNaN(parsed.getTime()) ? text : parsed.toISOString()
+}
+
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64)
   const bytes = new Uint8Array(binary.length)
@@ -82,7 +97,7 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
   const strikeSet = new Set<number>()
   const rowCount = table.numRows
   for (let row = 0; row < rowCount; row += 1) {
-    const ts = String(tsColumn.get(row))
+    const ts = canonicalTs(tsColumn.get(row))
     if (!minuteIndex.has(ts)) {
       minuteIndex.set(ts, minuteKeys.length)
       minuteKeys.push(ts)
@@ -101,7 +116,7 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
   const deltaByCell = { C: new Float32Array(size), P: new Float32Array(size) }
 
   for (let row = 0; row < rowCount; row += 1) {
-    const minuteIdx = minuteIndex.get(String(tsColumn.get(row)))!
+    const minuteIdx = minuteIndex.get(canonicalTs(tsColumn.get(row)))!
     const strikeIdx = strikeIndex.get(Number(strikeColumn.get(row)))!
     const index = strikeIdx * minutes + minuteIdx
     const right = String(rightColumn.get(row)) as 'C' | 'P'
@@ -142,7 +157,7 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
   const price: PriceBar[] = []
   let previousClose = Number.NaN
   for (const bar of bundle.bars) {
-    const ts = String(bar.ts_min)
+    const ts = canonicalTs(bar.ts_min)
     const minuteIdx = minuteIndex.get(ts)
     const close = Number(bar.close)
     if (minuteIdx !== undefined && Number.isFinite(close)) {
@@ -163,7 +178,7 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
   const levelSeries = (key: string): (number | null)[] => {
     const series: (number | null)[] = Array.from({ length: minutes }, () => null)
     for (const row of bundle.levels) {
-      const minuteIdx = minuteIndex.get(String(row.ts_min))
+      const minuteIdx = minuteIndex.get(canonicalTs(row.ts_min))
       if (minuteIdx === undefined) continue
       const value = row[key]
       series[minuteIdx] = typeof value === 'number' ? value : null
@@ -189,14 +204,14 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
   // Spodní panely: Vol z barů, OptVol z minutových přírůstků, CumΔ z flow
   const vol = Array.from({ length: minutes }, () => 0)
   for (const bar of bundle.bars) {
-    const minuteIdx = minuteIndex.get(String(bar.ts_min))
+    const minuteIdx = minuteIndex.get(canonicalTs(bar.ts_min))
     if (minuteIdx !== undefined) vol[minuteIdx] = Number(bar.volume) || 0
   }
   const optVolCall = optVolSeries(volumeByCell.C, minutes, strikes.length)
   const optVolPut = optVolSeries(volumeByCell.P, minutes, strikes.length)
   const cumDelta = Array.from({ length: minutes }, () => 0)
   for (const row of bundle.flow) {
-    const minuteIdx = minuteIndex.get(String(row.ts_min))
+    const minuteIdx = minuteIndex.get(canonicalTs(row.ts_min))
     if (minuteIdx !== undefined) cumDelta[minuteIdx] = Number(row.cum_delta) || 0
   }
 
