@@ -5,17 +5,17 @@ Discovery je čistě popisná vrstva — vrací specifikace kontraktů; kvalifik
 auto-rozšíření pásma je zdůvodněna v docs/adr/0002-strike-band-expansion.md.
 """
 
+import logging
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
 from gexlens_engine.config import Settings
 
+logger = logging.getLogger(__name__)
+
 # Mapování secType podkladu → secType opce (SPEC 3.2: ES futures → FOP, akcie/indexy → OPT)
 _OPTION_SEC_TYPE = {"FUT": "FOP", "STK": "OPT", "IND": "OPT"}
-
-# Růst pásma při auto-rozšíření (ADR-0002)
-EXPANSION_GROWTH = 1.5
 
 
 @dataclass(frozen=True)
@@ -41,19 +41,30 @@ class ExpiryInfo:
 
 @dataclass(frozen=True)
 class StrikeBand:
-    """Pásmo strikes ±range_points bodů od centru (SPEC 3.2)."""
+    """Pásmo strikes jako denní obálka [low, high] (SPEC 3.2, ADR-0002).
+
+    Obálka se během dne nikdy nezužuje ani neposouvá — jen roste; reset na
+    spot ± strike_range_points dělá volající na začátku obchodního dne.
+    """
 
     strikes: tuple[float, ...]
-    center: float
-    range_points: float
+    low: float
+    high: float
 
     @property
-    def low(self) -> float:
-        return self.center - self.range_points
+    def width(self) -> float:
+        return self.high - self.low
 
-    @property
-    def high(self) -> float:
-        return self.center + self.range_points
+
+@dataclass(frozen=True)
+class BandExpansion:
+    """Výsledek auto-rozšíření: nová obálka + co se stalo (pro UI/alerty)."""
+
+    band: StrikeBand
+    expanded: bool
+    # Strop šířky dosažen — obálka se posouvá za spotem a vzdálený okraj se
+    # obětuje; jediný moment, kdy se křídlo ztrácí (alert do UI)
+    capped: bool
 
 
 @dataclass(frozen=True)
@@ -114,16 +125,20 @@ def option_sec_type(underlying_sec_type: str) -> str:
         ) from exc
 
 
+def band_between(strikes: Collection[float], low: float, high: float) -> StrikeBand:
+    """Obálka [low, high] se strikes, které do ní padají."""
+    chosen = tuple(k for k in sorted(strikes) if low <= k <= high)
+    return StrikeBand(strikes=chosen, low=low, high=high)
+
+
 def select_band(strikes: Collection[float], spot: float, range_points: float) -> StrikeBand:
-    """Vybere strikes v pásmu spot ± range_points, centrované na aktuální spot."""
-    chosen = tuple(k for k in sorted(strikes) if spot - range_points <= k <= spot + range_points)
-    return StrikeBand(strikes=chosen, center=spot, range_points=range_points)
+    """Výchozí denní obálka: spot ± range_points (reset na začátku obchodního dne)."""
+    return band_between(strikes, spot - range_points, spot + range_points)
 
 
 def should_expand(band: StrikeBand, spot: float, threshold: float) -> bool:
-    """True, pokud se spot přiblížil k okraji pásma na méně než threshold × šířka pásma."""
-    width = band.high - band.low
-    return (spot - band.low) < threshold * width or (band.high - spot) < threshold * width
+    """True, pokud se spot přiblížil k okraji obálky na méně než threshold × šířka."""
+    return (spot - band.low) < threshold * band.width or (band.high - spot) < threshold * band.width
 
 
 def build_contracts(
@@ -188,12 +203,38 @@ class ChainDiscovery:
     def initial_band(self, info: ExpiryInfo, spot: float) -> StrikeBand:
         return select_band(info.strikes, spot, self._settings.strike_range_points)
 
-    def maybe_expand(self, info: ExpiryInfo, band: StrikeBand, spot: float) -> StrikeBand:
-        """Auto-rozšíření pásma (SPEC 3.2, ADR-0002).
+    def maybe_expand(self, info: ExpiryInfo, band: StrikeBand, spot: float) -> BandExpansion:
+        """Auto-rozšíření obálky (SPEC 3.2, ADR-0002: grow-only).
 
-        Když se spot přiblíží k okraji na < threshold šířky pásma, pásmo se
-        recentruje na aktuální spot a rozšíří o EXPANSION_GROWTH.
+        Když se spot přiblíží k okraji na < threshold šířky, prodlouží se JEN
+        ten okraj, ke kterému se blíží (na spot ± strike_range_points) — druhá
+        strana zůstává a křídla se neztrácejí. Šířku omezuje
+        strike_range_max_points: při dosažení stropu se obálka posouvá za
+        spotem a vzdálený okraj se obětuje (capped=True → alert do UI).
         """
-        if should_expand(band, spot, self._settings.strike_range_expand_threshold):
-            return select_band(info.strikes, spot, band.range_points * EXPANSION_GROWTH)
-        return band
+        if not should_expand(band, spot, self._settings.strike_range_expand_threshold):
+            return BandExpansion(band=band, expanded=False, capped=False)
+
+        reach = self._settings.strike_range_points
+        low = min(band.low, spot - reach)
+        high = max(band.high, spot + reach)
+
+        capped = False
+        max_width = self._settings.strike_range_max_points
+        if high - low > max_width:
+            capped = True
+            # Posouvá se jen aktivní okraj — druhý se dotáhne na strop šířky
+            if spot + reach > band.high:
+                low = high - max_width
+            else:
+                high = low + max_width
+            logger.warning(
+                "Obálka strikes dosáhla stropu %g b — posouvám a obětuji vzdálený okraj "
+                "(nová obálka %g–%g)",
+                max_width,
+                low,
+                high,
+            )
+
+        new_band = band_between(info.strikes, low, high)
+        return BandExpansion(band=new_band, expanded=True, capped=capped)

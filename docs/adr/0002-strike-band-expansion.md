@@ -1,35 +1,45 @@
 # ADR-0002: Politika auto-rozšíření pásma strikes
 
-**Stav:** proposed (needs-decision) · **Datum:** 2026-07-16 · **Souvisí:** SPEC 3.2, issue #6
+**Stav:** accepted (v2, schváleno Romanem 2026-07-16) · **Souvisí:** SPEC 3.2, issue #6
 
 ## Kontext
 
 SPEC 3.2 požaduje pásmo strikes ±X bodů od spotu „s automatickým rozšířením, pokud se
-spot přiblíží k okraji na < 25 % pásma", ale nedefinuje, JAK se pásmo rozšíří
-(faktor růstu, recentrování). CLAUDE.md pravidlo 6: nerozhodovat mlčky.
+spot přiblíží k okraji na < 25 % pásma", ale nedefinuje JAK. První verze tohoto ADR
+(recentrování na spot + růst 1.5×) měla slabinu: při trendovém dni pásmo „odjelo"
+se spotem a vzdálené křídlo (např. put wall, který trader sleduje) z pásma vypadlo.
 
-## Rozhodnutí
+## Rozhodnutí (v2 — grow-only obálka)
 
-Při splnění podmínky rozšíření (vzdálenost spotu k okraji < `strike_range_expand_threshold`
-× šířka pásma) se pásmo:
+Pásmo je **denní obálka `[low, high]`, která se nikdy nezužuje ani neposouvá — jen roste**:
 
-1. **recentruje na aktuální spot** — trend pokračuje častěji, než se obrací, a centrované
-   pásmo maximalizuje užitečnou šířku na obě strany;
-2. **rozšíří o faktor 1.5** (`EXPANSION_GROWTH`) — jeden skok stačí, aby spot nebyl
-   okamžitě znovu u okraje, a růst není tak agresivní, aby zbytečně žral market data lines.
+1. **Výchozí obálka** na začátku obchodního dne: spot ± `strike_range_points` (±200 b).
+2. Když se spot přiblíží k okraji na < `strike_range_expand_threshold` × šířka (25 %),
+   **prodlouží se jen ten okraj, ke kterému se spot blíží**: na `spot ± strike_range_points`.
+   Druhá strana zůstává — **křídla se nikdy neztrácejí**.
+3. **Reset na session start**: obálka roste jen v rámci dne (odpovídá dennímu zobrazení
+   heatmapy); nový den začíná znovu od spot ± 200.
+4. **Strop šířky** `strike_range_max_points` (default 800 b, tj. 2× výchozí šířka)
+   jako pojistka proti runaway trendu: při dosažení se obálka posouvá za spotem
+   a vzdálený okraj se obětuje — jediný moment ztráty křídla, reportovaný jako
+   `capped=True` (alert do UI).
 
-Pásmo se nikdy samo nezužuje — zúžení je jen ruční změnou `GEXLENS_STRIKE_RANGE_POINTS`.
+## Proč je to prakticky zadarmo
 
-## Alternativy zvážené
+Scheduler (#7) sweepuje ATM ± 30 každý cyklus a křídla jen každý k-tý cyklus —
+širší obálka prodlužuje pouze občasný sweep křídel. Market data lines se nedotkne
+(dávka zůstává 80; účet má ověřeno ≥ 150, ADR-0001). Sweep čas hlídá metrika
+`sweep_duration`.
 
-- **Posun beze změny šířky** — levnější na subskripce, ale při trendovém dni vede
-  k opakovaným posunům a ztrátě křídla, které trader sleduje.
-- **Fixní přírůstek (+50 b)** — nezávislý na aktuální šířce, u širokých pásem prakticky
-  bez efektu.
+## Alternativy zamítnuté
+
+- **Recenter + růst 1.5× (v1)** — ztrácí vzdálené křídlo při trendu.
+- **Posun beze změny šířky** — opakované posuny, křídlo mizí průběžně.
+- **Recenter + zamrzlá data vypadlých strikes** — křídlo by zůstalo viditelné, ale stale;
+  horší než ho poctivě sweepovat.
 
 ## Důsledky
 
-- Po rozšíření vzroste počet kontraktů sweepu (~1.5×) → delší cyklus; lines limit
-  (ADR-0001: ≥ 150) není ohrožen, sweep čas hlídá metrika `sweep_duration` (#7).
-- Rozhodnutí lze revidovat bez dopadu na API — politika je izolovaná v
-  `ChainDiscovery.maybe_expand` + konstantě `EXPANSION_GROWTH`.
+- API: `StrikeBand` je `[low, high]` obálka; `maybe_expand` vrací `BandExpansion`
+  (band, expanded, capped) — capped je vstup pro alert engine.
+- Politika je izolovaná v `ChainDiscovery.maybe_expand`; revize nemění volající kód.
