@@ -16,6 +16,8 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 
+from gexlens_api.alerts import AlertEngine
+from gexlens_api.crud import build_router
 from gexlens_api.data import DataRepository, PartitionNotFoundError
 from gexlens_api.heatmap import (
     ARROW_MEDIA_TYPE,
@@ -27,6 +29,7 @@ from gexlens_api.heatmap import (
     to_arrow_bytes,
 )
 from gexlens_api.live import LiveHub
+from gexlens_api.meta_repo import MetaRepository
 from gexlens_api.status import StatusStore
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
@@ -63,10 +66,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     status_store = StatusStore()
 
     live_hub = LiveHub()
+    meta_repository = MetaRepository(settings)
+    alert_engine = AlertEngine(live_hub)
 
     app = FastAPI(title="GEXLens API")
     app.state.status_store = status_store
     app.state.live_hub = live_hub
+    app.state.meta_repository = meta_repository
+    app.state.alert_engine = alert_engine
+    app.include_router(build_router(meta_repository))
 
     @app.exception_handler(PartitionNotFoundError)
     async def partition_not_found(_request: object, exc: PartitionNotFoundError) -> JSONResponse:
