@@ -1,0 +1,22 @@
+{
+  "description": "Ručně spočtený golden dataset CumΔ (SPEC 4.5). M=50. Tick větev (známé buy/sell rozdělení): BUY 2 × call Δ=0.5 → +1*2*0.5*50 = +50; SELL 1 × call Δ=0.5 → -25; BUY 3 × put Δ=-0.5 → +1*3*(-0.5)*50 = -75; UNKNOWN 5 → 0. CumΔ_tick = 50-25-75 = -50. Bar větev: call Δ=0.4: bar1 vol=100 (první, bez přírůstku), bar2 vol=130 last=10.3 bid=10.0 ask=10.4 (mid 10.2, last>mid → +1): +1*30*0.4*50 = +600; bar3 vol=150 last=10.0 (mid 10.2 → -1): -1*20*0.4*50 = -400. CumΔ_bar = +200.",
+  "multiplier": 50.0,
+  "tick_branch": {
+    "trades": [
+      { "right": "C", "delta": 0.5, "size": 2.0, "side": "buy", "expected_flow": 50.0 },
+      { "right": "C", "delta": 0.5, "size": 1.0, "side": "sell", "expected_flow": -25.0 },
+      { "right": "P", "delta": -0.5, "size": 3.0, "side": "buy", "expected_flow": -75.0 },
+      { "right": "C", "delta": 0.5, "size": 5.0, "side": "unknown", "expected_flow": 0.0 }
+    ],
+    "expected_cum_delta": -50.0
+  },
+  "bar_branch": {
+    "delta": 0.4,
+    "bars": [
+      { "volume": 100.0, "last": 10.2, "bid": 10.0, "ask": 10.4, "expected_flow": 0.0 },
+      { "volume": 130.0, "last": 10.3, "bid": 10.0, "ask": 10.4, "expected_flow": 600.0 },
+      { "volume": 150.0, "last": 10.0, "bid": 10.0, "ask": 10.4, "expected_flow": -400.0 }
+    ],
+    "expected_cum_delta": 200.0
+  }
+}
