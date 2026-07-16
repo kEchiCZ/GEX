@@ -51,6 +51,18 @@ TICKS_SCHEMA = pa.schema(
     ]
 )
 
+# 1min bary podkladu (pro cenový overlay, spot v OTM/ITM módech a replay)
+BARS_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("open", pa.float64()),
+        ("high", pa.float64()),
+        ("low", pa.float64()),
+        ("close", pa.float64()),
+        ("volume", pa.float64()),
+    ]
+)
+
 # Řada flowΔ/CumΔ (SPEC 4.5/5.1: derived/)
 FLOW_SCHEMA = pa.schema(
     [
@@ -91,6 +103,28 @@ class SnapshotRow:
     vega: float | None
     oi: float | None
     stale_age: float
+
+
+class BarLike(Protocol):
+    """Strukturální podoba ibkr.underlying.Bar (storage nezávisí na ibkr vrstvě)."""
+
+    @property
+    def ts(self) -> dt.datetime: ...
+
+    @property
+    def open(self) -> float: ...
+
+    @property
+    def high(self) -> float: ...
+
+    @property
+    def low(self) -> float: ...
+
+    @property
+    def close(self) -> float: ...
+
+    @property
+    def volume(self) -> float: ...
 
 
 class FlowRowLike(Protocol):
@@ -212,6 +246,24 @@ class SnapshotWriter:
         )
         buffer = self._buffer(path, LEVELS_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_bars(self, symbol: str, day: dt.date, bars: Sequence[BarLike]) -> Path:
+        """Přidá 1min bary podkladu do partice derived/{sym}/bars/{date}.parquet."""
+        path = self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
+        buffer = self._buffer(path, BARS_SCHEMA)
+        return buffer.append_and_write(
+            [
+                {
+                    "ts_min": bar.ts,
+                    "open": bar.open,
+                    "high": bar.high,
+                    "low": bar.low,
+                    "close": bar.close,
+                    "volume": bar.volume,
+                }
+                for bar in bars
+            ]
+        )
 
     def write_flow(self, symbol: str, day: dt.date, rows: Sequence[FlowRowLike]) -> Path:
         """Přidá flowΔ/CumΔ minuty do partice derived/{sym}/flow/{date}.parquet."""

@@ -1,11 +1,272 @@
-"""Vstupní bod API serveru GEXLens."""
+"""API server GEXLens (SPEC kap. 6): REST endpoints nad uloženými particemi.
 
-from fastapi import FastAPI
+Server jen čte, co engine zapsal; /status vrací poslední stav pushnutý enginem
+do StatusStore. Bind na localhost řeší uvicorn konfigurace (SPEC kap. 8).
+"""
 
-app = FastAPI(title="GEXLens API")
+import base64
+import datetime as dt
+import math
+from collections.abc import Callable
+from typing import Annotated
+
+import pandas as pd
+from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
+
+from gexlens_api.data import DataRepository, PartitionNotFoundError
+from gexlens_api.heatmap import (
+    ARROW_MEDIA_TYPE,
+    MissingSpotSeriesError,
+    apply_scale_matrix,
+    frame_to_arrow_bytes,
+    mode_matrices,
+    normalization_denominator,
+    to_arrow_bytes,
+)
+from gexlens_api.status import StatusStore
+from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
+from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
+from gexlens_engine.config import Settings, load_settings
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    """Liveness check pro monitoring a smoke testy."""
-    return {"status": "ok"}
+def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
+    """DataFrame → JSON-friendly records (NaN → None, timestamps → ISO)."""
+    records: list[dict[str, object]] = []
+    for row in frame.to_dict(orient="records"):
+        clean: dict[str, object] = {}
+        for key, value in row.items():
+            if isinstance(value, float) and math.isnan(value):
+                clean[key] = None
+            elif isinstance(value, pd.Timestamp):
+                clean[key] = value.isoformat()
+            else:
+                clean[key] = value
+        records.append(clean)
+    return records
+
+
+def _parse_enum[E](enum_cls: type[E], value: str, label: str) -> E:
+    try:
+        return enum_cls(value)  # type: ignore[call-arg]
+    except ValueError as exc:
+        valid = ", ".join(item.value for item in enum_cls)  # type: ignore[attr-defined]
+        raise HTTPException(422, f"Neplatný {label}: {value!r} (platné: {valid})") from exc
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings if settings is not None else load_settings()
+    repository = DataRepository(settings)
+    status_store = StatusStore()
+
+    app = FastAPI(title="GEXLens API")
+    app.state.status_store = status_store
+
+    @app.exception_handler(PartitionNotFoundError)
+    async def partition_not_found(_request: object, exc: PartitionNotFoundError) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": f"Denní partice neexistuje: {exc}"})
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        """Liveness check pro monitoring a smoke testy."""
+        return {"status": "ok"}
+
+    @app.get("/status")
+    def status() -> dict[str, object]:
+        """Agregovaný stav pipeline (SPEC 3.7): greeks progress, repair, lines, disk."""
+        return status_store.snapshot()
+
+    @app.get("/instruments")
+    def instruments() -> dict[str, list[str]]:
+        return {"instruments": repository.list_symbols()}
+
+    @app.get("/instruments/{symbol}/expiries")
+    def expiries(symbol: str) -> dict[str, list[str]]:
+        found = repository.list_expiries(symbol)
+        if not found:
+            raise HTTPException(404, f"Instrument {symbol!r} nemá žádná data")
+        return {"expiries": found}
+
+    @app.get("/snapshots/{symbol}/{expiry}")
+    def snapshots(
+        symbol: str,
+        expiry: str,
+        date: dt.date,
+        mode: str = "oi",
+        scale: str = "linear",
+        norm: str = "p99",
+        raw: bool = False,
+        from_ts: Annotated[dt.datetime | None, Query(alias="from")] = None,
+        to_ts: Annotated[dt.datetime | None, Query(alias="to")] = None,
+    ) -> Response:
+        """Heatmap matice dne v Arrow IPC streamu (binárně pro výkon, SPEC kap. 6)."""
+        frame = repository.snapshots(symbol, expiry, date)
+        if from_ts is not None:
+            frame = frame[frame["ts_min"] >= from_ts]
+        if to_ts is not None:
+            frame = frame[frame["ts_min"] <= to_ts]
+        if frame.empty:
+            raise HTTPException(404, "Zvolené okno neobsahuje žádné snapshoty")
+        if raw:
+            return Response(frame_to_arrow_bytes(frame), media_type=ARROW_MEDIA_TYPE)
+
+        heatmap_mode = _parse_enum(HeatmapMode, mode, "mode")
+        heatmap_scale = _parse_enum(HeatmapScale, scale, "scale")
+        spot_series = _spot_series(repository, symbol, date)
+        try:
+            layers = mode_matrices(frame, heatmap_mode, spot_series)
+        except MissingSpotSeriesError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        layers = {
+            name: apply_scale_matrix(matrix, heatmap_scale) for name, matrix in layers.items()
+        }
+        denominator = normalization_denominator(layers, norm)
+        if denominator > 0:
+            layers = {name: matrix / denominator for name, matrix in layers.items()}
+        return Response(to_arrow_bytes(layers), media_type=ARROW_MEDIA_TYPE)
+
+    @app.get("/levels/{symbol}/{expiry}")
+    def levels(symbol: str, expiry: str, date: dt.date) -> dict[str, object]:
+        """Časové řady flip/walls/centroid (SPEC 4.2)."""
+        return {"levels": _records(repository.levels(symbol, expiry, date))}
+
+    @app.get("/profile/{symbol}/{expiry}")
+    def profile(
+        symbol: str,
+        expiry: str,
+        date: dt.date,
+        ts: dt.datetime,
+        variant: str = "combined",
+        oi_weight: float = 1.0,
+        spot: float | None = None,
+    ) -> dict[str, object]:
+        """Strike profil k okamžiku ts (SPEC 4.6): poslední snapshot ≤ ts."""
+        profile_variant = _parse_enum(ProfileVariant, variant, "variant")
+        frame = repository.snapshots(symbol, expiry, date)
+        eligible = frame[frame["ts_min"] <= ts]
+        if eligible.empty:
+            raise HTTPException(404, f"Před {ts.isoformat()} není žádný snapshot")
+        minute = eligible["ts_min"].max()
+        rows = eligible[eligible["ts_min"] == minute].dropna(subset=["delta"])
+
+        if spot is None:
+            spot = _spot_at(repository, symbol, date, ts)
+        if spot is None:
+            raise HTTPException(
+                422, "Chybí spot: dodej ?spot= nebo ulož bary podkladu (derived/bars)"
+            )
+        inputs = [
+            ProfileInput(
+                strike=float(row.strike),
+                right=str(row.right),
+                volume=float(row.volume) if not math.isnan(row.volume) else 0.0,
+                oi=float(row.oi) if not math.isnan(row.oi) else 0.0,
+                delta=float(row.delta),
+            )
+            for row in rows.itertuples()
+        ]
+        result = compute_profile(inputs, profile_variant, spot, oi_weight=oi_weight)
+        return {
+            "ts": minute.isoformat(),
+            "spot": spot,
+            "variant": profile_variant.value,
+            "profile": [vars(item) for item in result],
+        }
+
+    @app.get("/flow/{symbol}")
+    def flow(symbol: str, date: dt.date) -> dict[str, object]:
+        """Řady Vol (podklad), OptVol (opce) a CumΔ pro spodní panely (SPEC kap. 6)."""
+        flow_records = _records(repository.flow(symbol, date))
+        return {
+            "flow": flow_records,
+            "opt_vol": _opt_vol_series(repository, symbol, date),
+            "vol": _underlying_vol_series(repository, symbol, date),
+        }
+
+    @app.get("/replay/{symbol}/{expiry}/{date}")
+    def replay(symbol: str, expiry: str, date: dt.date) -> dict[str, object]:
+        """Kompletní denní balík pro playback (SPEC kap. 6).
+
+        Snapshot matice jde surová (base64 Arrow) — klient přepíná módy/škály
+        lokálně bez dalších requestů (latence < 100 ms, SPEC kap. 8).
+        """
+        snapshots_frame = repository.snapshots(symbol, expiry, date)
+        bundle: dict[str, object] = {
+            "symbol": symbol,
+            "expiry": expiry,
+            "date": date.isoformat(),
+            "snapshots_arrow_base64": base64.b64encode(
+                frame_to_arrow_bytes(snapshots_frame)
+            ).decode("ascii"),
+        }
+        readers: list[tuple[str, Callable[[], pd.DataFrame]]] = [
+            ("levels", lambda: repository.levels(symbol, expiry, date)),
+            ("flow", lambda: repository.flow(symbol, date)),
+            ("bars", lambda: repository.bars(symbol, date)),
+        ]
+        for key, reader in readers:
+            try:
+                bundle[key] = _records(reader())
+            except PartitionNotFoundError:
+                bundle[key] = []  # část dne může chybět (např. bez flow) — balík drží tvar
+        return bundle
+
+    return app
+
+
+def _spot_series(repository: DataRepository, symbol: str, day: dt.date) -> pd.Series | None:
+    try:
+        bars = repository.bars(symbol, day)
+    except PartitionNotFoundError:
+        return None
+    return bars.set_index("ts_min")["close"]
+
+
+def _spot_at(
+    repository: DataRepository, symbol: str, day: dt.date, ts: dt.datetime
+) -> float | None:
+    series = _spot_series(repository, symbol, day)
+    if series is None:
+        return None
+    eligible = series[series.index <= ts]
+    if eligible.empty:
+        return None
+    return float(eligible.iloc[-1])
+
+
+def _opt_vol_series(
+    repository: DataRepository, symbol: str, day: dt.date
+) -> list[dict[str, object]]:
+    """OptVol per minuta: součet minutových přírůstků kumulativního volume přes expirace."""
+    total: pd.Series | None = None
+    for expiry in repository.list_expiries(symbol):
+        try:
+            frame = repository.snapshots(symbol, expiry, day)
+        except PartitionNotFoundError:
+            continue
+        per_contract = frame.pivot_table(
+            index="ts_min", columns=["strike", "right"], values="volume", aggfunc="last"
+        )
+        increments = per_contract.diff().clip(lower=0.0)
+        increments.iloc[0] = 0.0  # první minuta nemá přírůstek
+        series = increments.sum(axis=1)
+        total = series if total is None else total.add(series, fill_value=0.0)
+    if total is None:
+        return []
+    return [{"ts_min": ts.isoformat(), "opt_vol": float(value)} for ts, value in total.items()]
+
+
+def _underlying_vol_series(
+    repository: DataRepository, symbol: str, day: dt.date
+) -> list[dict[str, object]]:
+    try:
+        bars = repository.bars(symbol, day)
+    except PartitionNotFoundError:
+        return []
+    return [
+        {"ts_min": row["ts_min"], "vol": row["volume"]}
+        for row in _records(bars[["ts_min", "volume"]])
+    ]
+
+
+app = create_app()

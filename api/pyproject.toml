@@ -5,8 +5,14 @@ description = "API server GEXLens — FastAPI + WebSocket (SPEC kap. 6)"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
+    "gexlens-engine",
+    "pandas>=2.2",
+    "pyarrow>=18",
     "uvicorn[standard]>=0.32",
 ]
+
+[tool.uv.sources]
+gexlens-engine = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
