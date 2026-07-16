@@ -8,5 +8,6 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true, // testing-library auto-cleanup mezi testy
+    setupFiles: ['src/test/setup.ts'],
   },
 })
