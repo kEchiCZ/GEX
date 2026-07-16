@@ -12,6 +12,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Protocol
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -50,6 +51,15 @@ TICKS_SCHEMA = pa.schema(
     ]
 )
 
+# Řada flowΔ/CumΔ (SPEC 4.5/5.1: derived/)
+FLOW_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("flow_delta", pa.float64()),
+        ("cum_delta", pa.float64()),
+    ]
+)
+
 # Časová řada levels (SPEC 4.2/5.1: derived/ — replay je nečte znovu z raw dat)
 LEVELS_SCHEMA = pa.schema(
     [
@@ -81,6 +91,19 @@ class SnapshotRow:
     vega: float | None
     oi: float | None
     stale_age: float
+
+
+class FlowRowLike(Protocol):
+    """Strukturální podoba compute.cumdelta.FlowRow (storage nezávisí na compute)."""
+
+    @property
+    def ts_min(self) -> dt.datetime: ...
+
+    @property
+    def flow_delta(self) -> float: ...
+
+    @property
+    def cum_delta(self) -> float: ...
 
 
 @dataclass(frozen=True)
@@ -189,6 +212,17 @@ class SnapshotWriter:
         )
         buffer = self._buffer(path, LEVELS_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_flow(self, symbol: str, day: dt.date, rows: Sequence[FlowRowLike]) -> Path:
+        """Přidá flowΔ/CumΔ minuty do partice derived/{sym}/flow/{date}.parquet."""
+        path = self._settings.derived_dir / symbol / "flow" / f"{day.isoformat()}.parquet"
+        buffer = self._buffer(path, FLOW_SCHEMA)
+        return buffer.append_and_write(
+            [
+                {"ts_min": row.ts_min, "flow_delta": row.flow_delta, "cum_delta": row.cum_delta}
+                for row in rows
+            ]
+        )
 
     def _buffer(self, path: Path, schema: pa.Schema) -> _PartitionBuffer:
         buffer = self._buffers.get(path)
