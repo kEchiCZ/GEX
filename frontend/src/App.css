@@ -467,6 +467,11 @@ body {
   pointer-events: none;
 }
 
+.opacity-slider {
+  width: 90px;
+  accent-color: var(--accent);
+}
+
 .heatmap-controls select {
   background: var(--bg-chip);
   color: var(--text);

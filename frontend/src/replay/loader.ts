@@ -135,7 +135,17 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
     const minuteIdx = minuteIndex.get(ts)
     const close = Number(bar.close)
     if (minuteIdx !== undefined && Number.isFinite(close)) {
-      price.push({ minuteIdx, close, up: !(close < previousClose) })
+      const open = Number(bar.open)
+      const high = Number(bar.high)
+      const low = Number(bar.low)
+      price.push({
+        minuteIdx,
+        close,
+        up: !(close < previousClose),
+        open: Number.isFinite(open) ? open : undefined,
+        high: Number.isFinite(high) ? high : undefined,
+        low: Number.isFinite(low) ? low : undefined,
+      })
       previousClose = close
     }
   }
