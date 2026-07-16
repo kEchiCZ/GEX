@@ -1,9 +1,9 @@
-/** Canvas heatmapa (SPEC 7.2): Gradient/Blobs, contours, pan/zoom při 60 fps.
+/** Canvas heatmapa s overlayi (SPEC 7.2): Gradient/Blobs, contours, pan/zoom,
+cenová křivka, sessions, levels/walls linie, crosshair + tooltip.
 
 Data se překreslují do offscreen bitmapy jen při změně gridu/stylu; pan/zoom
-je pouhé drawImage s transformací (GPU akcelerované) — proto drží 60 fps
-i pro 180 × 1440. Bilineární interpolaci Gradient stylu dělá canvas
-image smoothing při zvětšení bitmapy.
+i overlaye kreslí hotový bitmap + vektory nad ním — 60 fps drží GPU drawImage.
+Crosshair je sdílený kontext (SPEC: synchronizace se spodními panely a profilem).
 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { contourLevels, marchingSquares } from '../heatmap/contours'
@@ -11,6 +11,9 @@ import type { ContoursMode } from '../heatmap/contours'
 import { gaussianBlur, renderGrid } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
+import { fractionalRow, pricePolyline } from '../heatmap/overlays'
+import type { OverlayData } from '../heatmap/overlays'
+import { useCrosshair } from '../state/Crosshair'
 
 interface ViewTransform {
   offsetX: number
@@ -18,31 +21,61 @@ interface ViewTransform {
   zoom: number
 }
 
+const UP_COLOR = '#3ecf8e'
+const DOWN_COLOR = '#f0616d'
+const LEVEL_DEFAULT_COLOR = '#e8c14b'
+
 export function Heatmap({
   grid,
   style,
   contours,
+  overlays = {},
 }: {
   grid: HeatmapGrid
   style: HeatmapStyle
   contours: ContoursMode
+  overlays?: OverlayData
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const overlayRef = useRef<HTMLCanvasElement>(null)
   const offscreenRef = useRef<HTMLCanvasElement | null>(null)
   const [view, setView] = useState<ViewTransform>({ offsetX: 0, offsetY: 0, zoom: 1 })
   const dragRef = useRef<{ x: number; y: number } | null>(null)
+  const { position: crosshair, setPosition: setCrosshair } = useCrosshair()
 
-  // Kontury se počítají nad vyhlazeným polem dominantní vrstvy (SPEC 7.2)
+  const strikeCount = grid.strikes.length
+
   const contourSegments = useMemo(() => {
     if (contours === 'off') return []
     const field = grid.layers.signed ?? grid.layers.call ?? grid.layers.put
     if (!field) return []
-    const smoothed = gaussianBlur(field, grid.minutes, grid.strikes.length)
+    const smoothed = gaussianBlur(field, grid.minutes, strikeCount)
     const magnitudes = Float32Array.from(smoothed, Math.abs)
     return contourLevels(magnitudes, contours).flatMap((level) =>
-      marchingSquares(magnitudes, grid.minutes, grid.strikes.length, level),
+      marchingSquares(magnitudes, grid.minutes, strikeCount, level),
     )
-  }, [grid, contours])
+  }, [grid, contours, strikeCount])
+
+  /** Převod dat → obrazovka (sdílený pro data i overlay canvas). */
+  const mapping = useCallback(
+    (canvas: HTMLCanvasElement) => {
+      const scaleX = (canvas.width / grid.minutes) * view.zoom
+      const scaleY = (canvas.height / strikeCount) * view.zoom
+      return {
+        scaleX,
+        scaleY,
+        minuteToX: (minuteIdx: number) => (minuteIdx + 0.5) * scaleX + view.offsetX,
+        rowToY: (row: number) => (strikeCount - 1 - row + 0.5) * scaleY + view.offsetY,
+        screenToCell: (x: number, y: number) => {
+          const minuteIdx = Math.floor((x - view.offsetX) / scaleX)
+          const rowFromTop = Math.floor((y - view.offsetY) / scaleY)
+          const strikeIdx = strikeCount - 1 - rowFromTop
+          return { minuteIdx, strikeIdx }
+        },
+      }
+    },
+    [grid.minutes, strikeCount, view],
+  )
 
   // 1) Data → offscreen bitmapa (jen při změně dat/stylu)
   useEffect(() => {
@@ -51,48 +84,154 @@ export function Heatmap({
     offscreen.width = buffer.width
     offscreen.height = buffer.height
     const context = offscreen.getContext('2d')
-    if (!context) return // jsdom v testech — kreslení přeskočíme
+    if (!context) return // jsdom v testech
     context.putImageData(new ImageData(buffer.data, buffer.width, buffer.height), 0, 0)
     offscreenRef.current = offscreen
-    draw()
+    drawData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grid, style])
 
-  // 2) Bitmapa → viditelný canvas s pan/zoom transformací (každý pohyb)
-  const draw = useCallback(() => {
+  // 2) Bitmapa → viditelný canvas (pan/zoom)
+  const drawData = useCallback(() => {
     const canvas = canvasRef.current
     const offscreen = offscreenRef.current
     if (!canvas || !offscreen) return
     const context = canvas.getContext('2d')
     if (!context) return
-    const { width, height } = canvas
-    context.clearRect(0, 0, width, height)
+    context.clearRect(0, 0, canvas.width, canvas.height)
     context.imageSmoothingEnabled = true // bilineární interpolace Gradient stylu
-    const scaleX = (width / offscreen.width) * view.zoom
-    const scaleY = (height / offscreen.height) * view.zoom
+    const scaleX = (canvas.width / offscreen.width) * view.zoom
+    const scaleY = (canvas.height / offscreen.height) * view.zoom
     context.setTransform(scaleX, 0, 0, scaleY, view.offsetX, view.offsetY)
     context.drawImage(offscreen, 0, 0)
+    context.setTransform(1, 0, 0, 1, 0, 0)
+  }, [view])
 
+  // 3) Overlay canvas: kontury, cena, sessions, levels/walls, crosshair, timestamp
+  const drawOverlay = useCallback(() => {
+    const canvas = overlayRef.current
+    if (!canvas) return
+    const context = canvas.getContext('2d')
+    if (!context) return
+    const { minuteToX, rowToY, scaleX, scaleY } = mapping(canvas)
+    context.clearRect(0, 0, canvas.width, canvas.height)
+
+    // Kontury (bílé přerušované, SPEC 7.2)
     if (contourSegments.length > 0) {
-      // Souřadnice segmentů jsou v buňkách vzestupně podle striku → převrátit osu Y
-      context.strokeStyle = 'rgba(255, 255, 255, 0.8)'
-      context.setLineDash([4 / scaleX, 3 / scaleX])
-      context.lineWidth = 1 / scaleX
-      const flipY = (y: number) => offscreen.height - 1 - y
+      context.strokeStyle = 'rgba(255,255,255,0.8)'
+      context.setLineDash([4, 3])
+      context.lineWidth = 1
       context.beginPath()
       for (const [x1, y1, x2, y2] of contourSegments) {
-        context.moveTo(x1, flipY(y1))
-        context.lineTo(x2, flipY(y2))
+        context.moveTo(minuteToX(x1 - 0.5), rowToY(y1))
+        context.lineTo(minuteToX(x2 - 0.5), rowToY(y2))
       }
       context.stroke()
       context.setLineDash([])
     }
-    context.setTransform(1, 0, 0, 1, 0, 0)
-  }, [view, contourSegments])
+
+    // Sessions markery (svislé čáry s popisky)
+    for (const session of overlays.sessions ?? []) {
+      const x = minuteToX(session.minuteIdx) - 0.5 * scaleX
+      context.strokeStyle = 'rgba(125,133,150,0.6)'
+      context.setLineDash([6, 4])
+      context.beginPath()
+      context.moveTo(x, 0)
+      context.lineTo(x, canvas.height)
+      context.stroke()
+      context.setLineDash([])
+      context.fillStyle = 'rgba(125,133,150,0.9)'
+      context.font = '11px sans-serif'
+      context.fillText(session.label, x + 4, 12)
+    }
+
+    // Levels a walls linie (dle módu; barva per linie)
+    for (const line of [...(overlays.levels ?? []), ...(overlays.walls ?? [])]) {
+      context.strokeStyle = line.color || LEVEL_DEFAULT_COLOR
+      context.lineWidth = 1.5
+      context.beginPath()
+      let pen = false
+      line.series.forEach((value, minuteIdx) => {
+        const row = value === null ? null : fractionalRow(grid.strikes, value)
+        if (row === null) {
+          pen = false
+          return
+        }
+        const x = minuteToX(minuteIdx)
+        const y = rowToY(row)
+        if (pen) context.lineTo(x, y)
+        else context.moveTo(x, y)
+        pen = true
+      })
+      context.stroke()
+    }
+
+    // 1m cenová křivka s tick barvami + značka aktuální ceny na pravé ose
+    const points = pricePolyline(overlays.price ?? [], grid.strikes)
+    for (let index = 1; index < points.length; index += 1) {
+      const previous = points[index - 1]
+      const current = points[index]
+      context.strokeStyle = current.up ? UP_COLOR : DOWN_COLOR
+      context.lineWidth = 1.5
+      context.beginPath()
+      context.moveTo(minuteToX(previous.minuteIdx), rowToY(previous.row))
+      context.lineTo(minuteToX(current.minuteIdx), rowToY(current.row))
+      context.stroke()
+    }
+    const lastPoint = points.at(-1)
+    if (lastPoint) {
+      const y = rowToY(lastPoint.row)
+      context.strokeStyle = lastPoint.up ? UP_COLOR : DOWN_COLOR
+      context.setLineDash([2, 3])
+      context.beginPath()
+      context.moveTo(0, y)
+      context.lineTo(canvas.width, y)
+      context.stroke()
+      context.setLineDash([])
+      const price = overlays.price?.at(-1)?.close
+      if (price !== undefined) {
+        context.fillStyle = lastPoint.up ? UP_COLOR : DOWN_COLOR
+        context.fillRect(canvas.width - 56, y - 9, 56, 18)
+        context.fillStyle = '#12151c'
+        context.font = 'bold 11px sans-serif'
+        context.fillText(price.toFixed(2), canvas.width - 52, y + 4)
+      }
+    }
+
+    // Crosshair synchronizovaný napříč panely
+    if (crosshair) {
+      const row = grid.strikes.indexOf(crosshair.strike)
+      if (row >= 0) {
+        const x = minuteToX(crosshair.minuteIdx)
+        const y = rowToY(row)
+        context.strokeStyle = 'rgba(215,220,230,0.55)'
+        context.lineWidth = 1
+        context.beginPath()
+        context.moveTo(x, 0)
+        context.lineTo(x, canvas.height)
+        context.moveTo(0, y)
+        context.lineTo(canvas.width, y)
+        context.stroke()
+        context.strokeStyle = 'rgba(215,220,230,0.9)'
+        context.strokeRect(x - 0.5 * scaleX, y - 0.5 * scaleY, scaleX, scaleY)
+      }
+    }
+
+    // Timestamp dat (SPEC 7.2)
+    if (overlays.timestamp) {
+      context.fillStyle = 'rgba(125,133,150,0.9)'
+      context.font = '11px sans-serif'
+      context.fillText(overlays.timestamp, canvas.width - 150, canvas.height - 8)
+    }
+  }, [mapping, contourSegments, overlays, grid.strikes, crosshair])
 
   useEffect(() => {
-    draw()
-  }, [draw])
+    drawData()
+  }, [drawData])
+
+  useEffect(() => {
+    drawOverlay()
+  }, [drawOverlay])
 
   const onWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
     const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
@@ -108,33 +247,69 @@ export function Heatmap({
   }
 
   const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!dragRef.current) return
-    const deltaX = event.clientX - dragRef.current.x
-    const deltaY = event.clientY - dragRef.current.y
-    dragRef.current = { x: event.clientX, y: event.clientY }
-    setView((previous) => ({
-      ...previous,
-      offsetX: previous.offsetX + deltaX,
-      offsetY: previous.offsetY + deltaY,
-    }))
+    const canvas = overlayRef.current
+    if (dragRef.current) {
+      const deltaX = event.clientX - dragRef.current.x
+      const deltaY = event.clientY - dragRef.current.y
+      dragRef.current = { x: event.clientX, y: event.clientY }
+      setView((previous) => ({
+        ...previous,
+        offsetX: previous.offsetX + deltaX,
+        offsetY: previous.offsetY + deltaY,
+      }))
+      return
+    }
+    if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const cssScale = rect.width > 0 ? canvas.width / rect.width : 1
+    const x = (event.clientX - rect.left) * cssScale
+    const y = (event.clientY - rect.top) * cssScale
+    const { minuteIdx, strikeIdx } = mapping(canvas).screenToCell(x, y)
+    if (minuteIdx >= 0 && minuteIdx < grid.minutes && strikeIdx >= 0 && strikeIdx < strikeCount) {
+      setCrosshair({ minuteIdx, strike: grid.strikes[strikeIdx] })
+    } else {
+      setCrosshair(null)
+    }
   }
 
   const onPointerUp = () => {
     dragRef.current = null
   }
 
+  // Tooltip buňky (čas, strike, hodnoty metrik)
+  const tooltip = useMemo(() => {
+    if (!crosshair) return null
+    const strikeIdx = grid.strikes.indexOf(crosshair.strike)
+    if (strikeIdx < 0) return null
+    const index = strikeIdx * grid.minutes + crosshair.minuteIdx
+    const parts: string[] = [`min ${crosshair.minuteIdx}`, `strike ${crosshair.strike}`]
+    if (grid.layers.call) parts.push(`call ${grid.layers.call[index].toFixed(2)}`)
+    if (grid.layers.put) parts.push(`put ${grid.layers.put[index].toFixed(2)}`)
+    if (grid.layers.signed) parts.push(`± ${grid.layers.signed[index].toFixed(2)}`)
+    return parts.join(' · ')
+  }, [crosshair, grid])
+
   return (
-    <canvas
-      ref={canvasRef}
-      className="heatmap-canvas"
-      width={1200}
-      height={640}
-      role="img"
-      aria-label="GEX heatmapa"
-      onWheel={onWheel}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-    />
+    <div className="heatmap-stack">
+      <canvas ref={canvasRef} className="heatmap-canvas" width={1200} height={640} />
+      <canvas
+        ref={overlayRef}
+        className="heatmap-overlay"
+        width={1200}
+        height={640}
+        role="img"
+        aria-label="GEX heatmapa"
+        onWheel={onWheel}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerLeave={() => setCrosshair(null)}
+      />
+      {tooltip && (
+        <div className="heatmap-tooltip" role="tooltip">
+          {tooltip}
+        </div>
+      )}
+    </div>
   )
 }

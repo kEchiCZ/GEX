@@ -1,5 +1,6 @@
-/** Syntetický demo grid, dokud není zapojený replay/live feed (issue #27). */
+/** Syntetický demo grid + overlaye, dokud není zapojený replay/live feed (issue #27). */
 import type { HeatmapGrid } from './grid'
+import type { OverlayData, PriceBar } from './overlays'
 
 export function demoGrid(minutes = 390, strikeCount = 60): HeatmapGrid {
   const strikes = Array.from({ length: strikeCount }, (_, index) => 7400 + index * 5)
@@ -21,4 +22,31 @@ export function demoGrid(minutes = 390, strikeCount = 60): HeatmapGrid {
     }
   }
   return { minutes, strikes, layers: { call, put }, staleAge }
+}
+
+export function demoOverlays(grid: HeatmapGrid): OverlayData {
+  const price: PriceBar[] = []
+  let previousClose = 0
+  for (let minuteIdx = 0; minuteIdx < grid.minutes; minuteIdx += 1) {
+    const middle = grid.strikes[Math.floor(grid.strikes.length / 2)]
+    const close = middle + Math.sin(minuteIdx / 45) * 40 + Math.sin(minuteIdx / 7) * 6
+    price.push({ minuteIdx, close, up: close >= previousClose })
+    previousClose = close
+  }
+  const flip = price.map((bar) => bar.close - 12 + Math.sin(bar.minuteIdx / 60) * 5)
+  const callWall = price.map((bar) => bar.close + 55)
+  const putWall = price.map((bar) => bar.close - 60)
+  return {
+    price,
+    timestamp: 'demo data',
+    sessions: [
+      { minuteIdx: 60, label: 'London' },
+      { minuteIdx: 210, label: 'New York' },
+    ],
+    levels: [{ name: 'flip', color: '#e8c14b', series: flip }],
+    walls: [
+      { name: 'call_wall', color: '#3ecf8e', series: callWall },
+      { name: 'put_wall', color: '#f0616d', series: putWall },
+    ],
+  }
 }
