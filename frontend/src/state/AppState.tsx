@@ -67,6 +67,19 @@ const AppStateContext = createContext<AppState | null>(null)
 const LOG_LIMIT = 200
 const ALERTS_LIMIT = 50
 
+const VIEWS: readonly AppView[] = ['chart', 'dashboard', 'console', 'settings']
+
+/** Deep-link: počáteční obrazovka a téma z URL (?view=dashboard&theme=light). */
+function initialFromUrl(): { view: AppView; theme: Theme } {
+  const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
+  const view = params?.get('view')
+  const theme = params?.get('theme')
+  return {
+    view: VIEWS.includes(view as AppView) ? (view as AppView) : 'chart',
+    theme: theme === 'light' ? 'light' : 'dark',
+  }
+}
+
 export function AppStateProvider({
   children,
   socket,
@@ -82,8 +95,8 @@ export function AppStateProvider({
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
   const [timeframe, setTimeframe] = useState<'intraday' | 'daily'>('intraday')
   const [interval, setInterval] = useState<'1m' | '5m' | '15m'>('1m')
-  const [view, setView] = useState<AppView>('chart')
-  const [theme, setTheme] = useState<Theme>('dark')
+  const [view, setView] = useState<AppView>(() => initialFromUrl().view)
+  const [theme, setTheme] = useState<Theme>(() => initialFromUrl().theme)
   const [alerts, setAlerts] = useState<AlertMessage[]>([])
   const [unreadAlerts, setUnreadAlerts] = useState(0)
   const [consoleLog, setConsoleLog] = useState<string[]>([])
