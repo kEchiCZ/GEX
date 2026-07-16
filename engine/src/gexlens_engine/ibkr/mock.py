@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from gexlens_engine.ibkr.discovery import OptionContractSpec
+from gexlens_engine.ibkr.hotzone import HotZoneClientLike, StreamLimitError
 from gexlens_engine.ibkr.scheduler import QuoteSnapshot
 
 
@@ -140,3 +141,27 @@ class MockQuoteStreamer:
             )
         finally:
             self._concurrent -= 1
+
+
+class MockHotZoneClient(HotZoneClientLike):
+    """Mock tick-by-tick klienta pro HotZoneCollector.
+
+    `stream_limit` simuluje tvrdý limit účtu — subskripce nad limit vyhodí
+    StreamLimitError (obdoba TWS error 10190).
+    """
+
+    def __init__(self, *, stream_limit: int | None = None) -> None:
+        self.stream_limit = stream_limit
+        self.active: set[OptionContractSpec] = set()
+        self.subscribe_calls: list[OptionContractSpec] = []
+        self.unsubscribe_calls: list[OptionContractSpec] = []
+
+    async def subscribe_ticks(self, spec: OptionContractSpec) -> None:
+        self.subscribe_calls.append(spec)
+        if self.stream_limit is not None and len(self.active) >= self.stream_limit:
+            raise StreamLimitError("mock: error 10190 — max tick-by-tick requests reached")
+        self.active.add(spec)
+
+    async def unsubscribe_ticks(self, spec: OptionContractSpec) -> None:
+        self.unsubscribe_calls.append(spec)
+        self.active.discard(spec)
