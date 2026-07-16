@@ -120,6 +120,24 @@ def test_instruments_and_expiries(client: TestClient) -> None:
     assert client.get("/instruments/SPY/expiries").status_code == 404
 
 
+def test_days_listing(settings: Settings) -> None:
+    """Daily pohled: seznam uložených dnů s expirací per den, seřazený dle data."""
+    writer = SnapshotWriter(settings)
+    other_day = dt.date(2026, 7, 17)
+    writer.write_minute("ES", "20260717", other_day, snapshot_rows(0))
+    # Duplicitní den ve druhé expiraci — vyhrává nejbližší (nejmenší) expirace
+    writer.write_minute("ES", "20260718", other_day, snapshot_rows(0))
+    client = TestClient(create_app(settings))
+
+    assert client.get("/instruments/ES/days").json() == {
+        "days": [
+            {"date": "2026-07-16", "expiry": "20260716"},
+            {"date": "2026-07-17", "expiry": "20260717"},
+        ]
+    }
+    assert client.get("/instruments/SPY/days").status_code == 404
+
+
 def test_snapshots_arrow_matrix_oi_mode(client: TestClient) -> None:
     response = client.get(
         "/snapshots/ES/20260716", params={"date": DAY.isoformat(), "mode": "oi", "norm": "max"}

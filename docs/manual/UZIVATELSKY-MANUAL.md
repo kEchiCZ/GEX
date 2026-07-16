@@ -94,9 +94,9 @@ Obrazovka se skládá z (shora dolů, zleva doprava):
 
 | Prvek | Popis |
 |---|---|
-| **Sidebar (vlevo)** | Přepínání obrazovek (Graf / Dashboard / IBKR Console / Settings), přepínač tématu Dark/Light, watchlist, verze. Tlačítkem « se sbalí. |
+| **Sidebar (vlevo)** | Přepínání obrazovek (Graf / Dashboard / IBKR Console / Settings), přepínač tématu Dark/Light, **editovatelný watchlist** (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový), verze. Tlačítkem « se sbalí. |
 | **Hlavička** | Ticker a název instrumentu, poslední cena, **selektor expirace** (tradingClass + datum), indikátor ● Live / ○ Offline, zvonek notifikací. |
-| **Řádek timeframe** | Intraday/Daily a rozlišení 1m/5m/15m. |
+| **Řádek timeframe** | **Intraday/Daily** a rozlišení **1m, 2m, 3m, 5m, 10m, 15m, 30m, 45m, 1h, 2h, 3h, 4h, 1d**. Intraday agreguje minutová data do zvolených košů (svíčky OHLC, objemy se sčítají); Daily zobrazí sloupec za každý uložený den (roste s historií, max 14 dní). |
 | **Řádek přepínačů** | Checkboxy vrstev: **Dyn GEX** (walls linie), **GEX Levels** (flip/centroid), **Sessions** (markery seancí), **Vol / Opt Vol / Delta** (spodní panely), **Vol + OI Δ**, **News**. Co odškrtneš, zmizí — layout se přeskládá. |
 | **Lišta grafu** | Styl heatmapy (Gradient/Blobs), Contours (Off/Major/All), **Cena** (Křivka/Svíčky) + **Viditelnost**, nástroje anotací + barva, indikátor zdroje dat (live/replay/demo). |
 | **Heatmapa** | Hlavní plocha — viz kapitola 5. |
@@ -111,13 +111,19 @@ Obrazovka se skládá z (shora dolů, zleva doprava):
 
 Heatmapa zobrazuje matici **čas (osa X) × strike (osa Y)**. Každá buňka je jedna minuta jednoho striku; intenzita barvy odpovídá hodnotě zvolené metriky. **Teal/zelená = call strana, červená = put strana.**
 
-### Ovládání myší
+### Ovládání myší (styl TradingView)
 
 | Akce | Efekt |
 |---|---|
-| Kolečko | Zoom (1×–16×) |
-| Tažení | Posun (pan) |
+| Kolečko nad plochou | Zoom obou os **ukotvený ke kurzoru** (bod pod myší zůstává na místě) |
+| Kolečko nad pruhem osy | Zoom **jen dané osy** (levý okraj = osa strikes, spodní okraj = osa času) |
+| Tažení za pruh osy Y (levý okraj) | Roztahování/stahování cenové osy — zvětší/zmenší svíčky svisle |
+| Tažení za pruh osy X (spodní okraj) | Roztahování/stahování časové osy — zvětší/zmenší svíčky vodorovně (kotva u pravého okraje: poslední svíčka drží pozici) |
+| Tažení v ploše | Posun (pan) |
+| **Dvojklik** nebo tlačítko **⟲** (pravý horní roh) | **Reset zobrazení** na výchozí pohled |
 | Pohyb myší | Crosshair — svislá/vodorovná linka synchronizovaná se strike profilem i spodními panely + tooltip buňky (minuta, strike, hodnoty call/put) |
+
+Spodní panely (Vol / Opt Vol / Cum Δ) **sledují časovou osu heatmapy** — při posunu či zoomu osy X se roztahují synchronně.
 
 ### Styl vykreslení
 

@@ -119,3 +119,23 @@ test('pohyb v panelu nastaví minutu crosshairu; linka se kreslí ve všech pane
     expect(Number(line.getAttribute('x1'))).toBe(250)
   }
 })
+
+test('panely respektují pan/zoom časové osy hlavního grafu (prop time)', () => {
+  render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={DATA}
+        visible={{ vol: true, optVol: false, delta: false }}
+        width={400}
+        time={{ offsetX: 40, zoomX: 2 }}
+      />
+      <Reader />
+    </CrosshairProvider>,
+  )
+  const svg = screen.getByLabelText('Vol panel').querySelector('svg')!
+  // Obsah je v transformované skupině — stejné mapování jako heatmapa
+  expect(svg.querySelector('g')?.getAttribute('transform')).toBe('translate(40 0) scale(2 1)')
+  // Inverze ukazatele: x=250 → base (250-40)/2 = 105 → minuta 1 (krok 100)
+  fireEvent.pointerMove(svg, { clientX: 250, clientY: 40 })
+  expect(screen.getByTestId('reader').textContent).toBe('1')
+})

@@ -26,6 +26,22 @@ class DataRepository:
     def list_expiries(self, symbol: str) -> list[str]:
         return self._list_dirs(self._settings.snapshots_dir / symbol)
 
+    def list_days(self, symbol: str) -> list[dict[str, str]]:
+        """Uložené dny napříč expiracemi (Daily pohled) — den nese svou expiraci.
+
+        0DTE řetěz: každý den má typicky vlastní expiraci; při více expiracích
+        se stejným dnem vyhrává nejbližší (nejmenší) expirace.
+        """
+        by_date: dict[str, str] = {}
+        for expiry in self.list_expiries(symbol):
+            expiry_dir = self._settings.snapshots_dir / symbol / expiry
+            for partition in expiry_dir.glob("*.parquet"):
+                day = partition.stem
+                current = by_date.get(day)
+                if current is None or expiry < current:
+                    by_date[day] = expiry
+        return [{"date": day, "expiry": by_date[day]} for day in sorted(by_date)]
+
     def snapshots(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
         path = self._settings.snapshots_dir / symbol / expiry / f"{day.isoformat()}.parquet"
         return self._read(path)

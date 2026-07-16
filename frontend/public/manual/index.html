@@ -1,813 +1,538 @@
-<!doctype html>
-<html lang="cs">
-  <head>
-    <meta charset="utf-8" />
-    <title>GEXLens - Uzivatelsky manual</title>
-    <style>
-      body {
-        font-family: 'Segoe UI', system-ui, sans-serif;
-        max-width: 860px;
-        margin: 0 auto;
-        padding: 24px 32px;
-        color: #1c2430;
-        line-height: 1.55;
-      }
-      h1 {
-        border-bottom: 3px solid #14b8a6;
-        padding-bottom: 8px;
-      }
-      h2 {
-        border-bottom: 1px solid #d6dde6;
-        padding-bottom: 4px;
-        margin-top: 2em;
-      }
-      code {
-        background: #eef1f5;
-        padding: 1px 5px;
-        border-radius: 4px;
-        font-size: 0.92em;
-      }
-      pre {
-        background: #f5f7fa;
-        border: 1px solid #d6dde6;
-        border-radius: 8px;
-        padding: 12px;
-        overflow-x: auto;
-      }
-      pre code {
-        background: none;
-        padding: 0;
-      }
-      table {
-        border-collapse: collapse;
-        width: 100%;
-        margin: 12px 0;
-      }
-      th,
-      td {
-        border: 1px solid #c9d2dd;
-        padding: 6px 10px;
-        text-align: left;
-        vertical-align: top;
-      }
-      th {
-        background: #eef1f5;
-      }
-      img {
-        max-width: 100%;
-        border: 1px solid #c9d2dd;
-        border-radius: 6px;
-        margin: 8px 0;
-      }
-      blockquote {
-        border-left: 4px solid #14b8a6;
-        margin: 12px 0;
-        padding: 4px 14px;
-        background: #f0faf8;
-      }
-      a {
-        color: #0d8f85;
-      }
-      @media print {
-        body {
-          max-width: none;
-        }
-        h2 {
-          page-break-after: avoid;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <h1>GEXLens — Uživatelský manuál</h1>
-    <p><em>Verze 1.0 · červenec 2026 · pro aplikaci GEXLens v0.1</em></p>
-    <p>
-      GEXLens je aplikace pro intradenní tradery ES (E-mini S&amp;P 500) futures opcí. Vizualizuje
-      <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je
-      zero-gamma flip, kde jsou call/put walls — a jak se to všechno vyvíjí v čase. Jediným zdrojem
-      dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); žádná data
-      neodcházejí mimo tvůj počítač.
-    </p>
-    <hr />
-    <h2>Obsah</h2>
-    <ol>
-      <li><a href="#1-co-aplikace-um%C3%AD">Co aplikace umí</a></li>
-      <li>
-        <a href="#2-co-pot%C5%99ebuje%C5%A1-p%C5%99ed-prvn%C3%ADm-spu%C5%A1t%C4%9Bn%C3%ADm"
-          >Co potřebuješ před prvním spuštěním</a
-        >
-      </li>
-      <li>
-        <a href="#3-spu%C5%A1t%C4%9Bn%C3%AD-a-vypnut%C3%AD-aplikace">Spuštění a vypnutí aplikace</a>
-      </li>
-      <li><a href="#4-hlavn%C3%AD-obrazovka--graf">Hlavní obrazovka — Graf</a></li>
-      <li><a href="#5-heatmapa-podrobn%C4%9B">Heatmapa podrobně</a></li>
-      <li>
-        <a href="#6-cenov%C3%A1-vrstva--k%C5%99ivka-a-sv%C3%AD%C4%8Dky"
-          >Cenová vrstva — křivka a svíčky</a
-        >
-      </li>
-      <li><a href="#7-strike-profil-prav%C3%BD-panel">Strike profil (pravý panel)</a></li>
-      <li>
-        <a href="#8-spodn%C3%AD-panely--vol-opt-vol-cum-%CE%B4"
-          >Spodní panely — Vol, Opt Vol, Cum Δ</a
-        >
-      </li>
-      <li>
-        <a href="#9-playback--p%C5%99ehr%C3%A1v%C3%A1n%C3%AD-dne">Playback — přehrávání dne</a>
-      </li>
-      <li><a href="#10-anotace--kreslen%C3%AD-do-grafu">Anotace — kreslení do grafu</a></li>
-      <li><a href="#11-dashboard">Dashboard</a></li>
-      <li><a href="#12-ibkr-console">IBKR Console</a></li>
-      <li><a href="#13-settings">Settings</a></li>
-      <li><a href="#14-notifikace-a-alerty">Notifikace a alerty</a></li>
-      <li>
-        <a href="#15-stavov%C3%A1-li%C5%A1ta--co-znamenaj%C3%AD-%C3%BAdaje"
-          >Stavová lišta — co znamenají údaje</a
-        >
-      </li>
-      <li><a href="#16-deep-linky">Deep-linky</a></li>
-      <li><a href="#17-%C5%99e%C5%A1en%C3%AD-pot%C3%AD%C5%BE%C3%AD">Řešení potíží</a></li>
-      <li><a href="#18-slovn%C3%AD%C4%8Dek-pojm%C5%AF">Slovníček pojmů</a></li>
-    </ol>
-    <hr />
-    <h2>1. Co aplikace umí</h2>
-    <ul>
-      <li>
-        <strong>Heatmapa čas × strike</strong> — barevná mapa opčního positioningu přes celý
-        obchodní den. Zelená (teal) = call strana, červená = put strana. Sedm přepínatelných metrik
-        (OI, volume OTM/ITM, kombinace…).
-      </li>
-      <li>
-        <strong>GEX úrovně</strong> — automaticky počítaný <strong>flip</strong> (zero-gamma),
-        <strong>call wall</strong>, <strong>put wall</strong> a <strong>centroid</strong>,
-        vykreslované jako linie přímo v heatmapě a průběžně přepočítávané každou minutu.
-      </li>
-      <li>
-        <strong>Živý tok</strong> — kumulativní delta flow (Cum Δ) s klasifikací agresora: kdo
-        tlačí, jestli kupci nebo prodejci.
-      </li>
-      <li>
-        <strong>Replay</strong> — slider přetočí celý den zpět a přehraje vývoj positioningu
-        rychlostí 1×/5×/20×.
-      </li>
-      <li>
-        <strong>Anotace</strong> — šipky, linie a kreslení od ruky přímo do grafu; uložené k
-        instrumentu a dni, přežijí restart.
-      </li>
-      <li>
-        <strong>Dashboard, IBKR Console, Settings</strong> — provozní obrazovky pro přehled,
-        diagnostiku a konfiguraci.
-      </li>
-    </ul>
-    <p><img src="img/graf.png" alt="Hlavní obrazovka" /></p>
-    <hr />
-    <h2>2. Co potřebuješ před prvním spuštěním</h2>
-    <p>
-      Kompletní checklist je v GitHub issue
-      <a href="https://github.com/kEchiCZ/GEX/issues/1">#1 — Setup uživatelského prostředí</a>.
-      Stručně:
-    </p>
-    <ol>
-      <li>
-        <strong>Účet u Interactive Brokers</strong> s aktivní market data subskripcí
-        <strong>CME Real-Time – North America</strong> (levná L1 varianta za ~1.55 USD/měs. stačí —
-        ověřeno).
-      </li>
-      <li>
-        <strong>TWS nebo IB Gateway</strong> nainstalované, přihlášené a se zapnutým API:
-        <ul>
-          <li>
-            <em>Edit → Global Configuration → API → Settings</em> → ✅
-            <strong>Enable ActiveX and Socket Clients</strong>
-          </li>
-          <li>Socket port <strong>7496</strong> (live) / <strong>7497</strong> (paper)</li>
-          <li>Do <em>Trusted IPs</em> přidej <code>127.0.0.1</code></li>
-          <li><em>Read-Only API</em> nech zapnuté — GEXLens nikdy neobchoduje, jen čte data</li>
-        </ul>
-      </li>
-      <li><strong>Docker Desktop</strong> (na Windows s WSL2 backendem).</li>
-    </ol>
-    <blockquote>
-      <p>
-        ⚠️ <strong>Jedno přihlášení na username:</strong> když se stejným IBKR loginem přihlásíš
-        jinde (mobil, druhé PC), TWS na tomto počítači spadne a aplikace ztratí data. Po návratu se
-        stačí v TWS znovu přihlásit — aplikace se připojí sama.
-      </p>
-    </blockquote>
-    <hr />
-    <h2>3. Spuštění a vypnutí aplikace</h2>
-    <h3>Ikonou na ploše (doporučeno)</h3>
-    <p>
-      Poklepej na ikonu <strong>GEXLens</strong> na ploše. Skript spustí všechny služby na pozadí a
-      otevře prohlížeč na adrese aplikace. První start po vypnutí počítače trvá ~30–60 s.
-    </p>
-    <h3>Ručně (PowerShell)</h3>
-    <pre><code class="language-powershell">cd &quot;D:\Documents\Visual Studio Code\GEX&quot;
+<!doctype html><html lang="cs"><head><meta charset="utf-8"><title>GEXLens - Uzivatelsky manual</title><style>
+  body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 860px;
+         margin: 0 auto; padding: 24px 32px; color: #1c2430; line-height: 1.55; }
+  h1 { border-bottom: 3px solid #14b8a6; padding-bottom: 8px; }
+  h2 { border-bottom: 1px solid #d6dde6; padding-bottom: 4px; margin-top: 2em; }
+  code { background: #eef1f5; padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
+  pre { background: #f5f7fa; border: 1px solid #d6dde6; border-radius: 8px;
+        padding: 12px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th, td { border: 1px solid #c9d2dd; padding: 6px 10px; text-align: left;
+           vertical-align: top; }
+  th { background: #eef1f5; }
+  img { max-width: 100%; border: 1px solid #c9d2dd; border-radius: 6px; margin: 8px 0; }
+  blockquote { border-left: 4px solid #14b8a6; margin: 12px 0; padding: 4px 14px;
+               background: #f0faf8; }
+  a { color: #0d8f85; }
+  @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
+</style></head><body><h1>GEXLens — Uživatelský manuál</h1>
+<p><em>Verze 1.0 · červenec 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p>GEXLens je aplikace pro intradenní tradery ES (E-mini S&amp;P 500) futures opcí. Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.</p>
+<hr>
+<h2>Obsah</h2>
+<ol>
+<li><a href="#1-co-aplikace-um%C3%AD">Co aplikace umí</a></li>
+<li><a href="#2-co-pot%C5%99ebuje%C5%A1-p%C5%99ed-prvn%C3%ADm-spu%C5%A1t%C4%9Bn%C3%ADm">Co potřebuješ před prvním spuštěním</a></li>
+<li><a href="#3-spu%C5%A1t%C4%9Bn%C3%AD-a-vypnut%C3%AD-aplikace">Spuštění a vypnutí aplikace</a></li>
+<li><a href="#4-hlavn%C3%AD-obrazovka--graf">Hlavní obrazovka — Graf</a></li>
+<li><a href="#5-heatmapa-podrobn%C4%9B">Heatmapa podrobně</a></li>
+<li><a href="#6-cenov%C3%A1-vrstva--k%C5%99ivka-a-sv%C3%AD%C4%8Dky">Cenová vrstva — křivka a svíčky</a></li>
+<li><a href="#7-strike-profil-prav%C3%BD-panel">Strike profil (pravý panel)</a></li>
+<li><a href="#8-spodn%C3%AD-panely--vol-opt-vol-cum-%CE%B4">Spodní panely — Vol, Opt Vol, Cum Δ</a></li>
+<li><a href="#9-playback--p%C5%99ehr%C3%A1v%C3%A1n%C3%AD-dne">Playback — přehrávání dne</a></li>
+<li><a href="#10-anotace--kreslen%C3%AD-do-grafu">Anotace — kreslení do grafu</a></li>
+<li><a href="#11-dashboard">Dashboard</a></li>
+<li><a href="#12-ibkr-console">IBKR Console</a></li>
+<li><a href="#13-settings">Settings</a></li>
+<li><a href="#14-notifikace-a-alerty">Notifikace a alerty</a></li>
+<li><a href="#15-stavov%C3%A1-li%C5%A1ta--co-znamenaj%C3%AD-%C3%BAdaje">Stavová lišta — co znamenají údaje</a></li>
+<li><a href="#16-deep-linky">Deep-linky</a></li>
+<li><a href="#17-%C5%99e%C5%A1en%C3%AD-pot%C3%AD%C5%BE%C3%AD">Řešení potíží</a></li>
+<li><a href="#18-slovn%C3%AD%C4%8Dek-pojm%C5%AF">Slovníček pojmů</a></li>
+</ol>
+<hr>
+<h2>1. Co aplikace umí</h2>
+<ul>
+<li><strong>Heatmapa čas × strike</strong> — barevná mapa opčního positioningu přes celý obchodní den. Zelená (teal) = call strana, červená = put strana. Sedm přepínatelných metrik (OI, volume OTM/ITM, kombinace…).</li>
+<li><strong>GEX úrovně</strong> — automaticky počítaný <strong>flip</strong> (zero-gamma), <strong>call wall</strong>, <strong>put wall</strong> a <strong>centroid</strong>, vykreslované jako linie přímo v heatmapě a průběžně přepočítávané každou minutu.</li>
+<li><strong>Živý tok</strong> — kumulativní delta flow (Cum Δ) s klasifikací agresora: kdo tlačí, jestli kupci nebo prodejci.</li>
+<li><strong>Replay</strong> — slider přetočí celý den zpět a přehraje vývoj positioningu rychlostí 1×/5×/20×.</li>
+<li><strong>Anotace</strong> — šipky, linie a kreslení od ruky přímo do grafu; uložené k instrumentu a dni, přežijí restart.</li>
+<li><strong>Dashboard, IBKR Console, Settings</strong> — provozní obrazovky pro přehled, diagnostiku a konfiguraci.</li>
+</ul>
+<p><img src="img/graf.png" alt="Hlavní obrazovka"></p>
+<hr>
+<h2>2. Co potřebuješ před prvním spuštěním</h2>
+<p>Kompletní checklist je v GitHub issue <a href="https://github.com/kEchiCZ/GEX/issues/1">#1 — Setup uživatelského prostředí</a>. Stručně:</p>
+<ol>
+<li><strong>Účet u Interactive Brokers</strong> s aktivní market data subskripcí <strong>CME Real-Time – North America</strong> (levná L1 varianta za ~1.55 USD/měs. stačí — ověřeno).</li>
+<li><strong>TWS nebo IB Gateway</strong> nainstalované, přihlášené a se zapnutým API:<ul>
+<li><em>Edit → Global Configuration → API → Settings</em> → ✅ <strong>Enable ActiveX and Socket Clients</strong></li>
+<li>Socket port <strong>7496</strong> (live) / <strong>7497</strong> (paper)</li>
+<li>Do <em>Trusted IPs</em> přidej <code>127.0.0.1</code></li>
+<li><em>Read-Only API</em> nech zapnuté — GEXLens nikdy neobchoduje, jen čte data</li>
+</ul>
+</li>
+<li><strong>Docker Desktop</strong> (na Windows s WSL2 backendem).</li>
+</ol>
+<blockquote>
+<p>⚠️ <strong>Jedno přihlášení na username:</strong> když se stejným IBKR loginem přihlásíš jinde (mobil, druhé PC), TWS na tomto počítači spadne a aplikace ztratí data. Po návratu se stačí v TWS znovu přihlásit — aplikace se připojí sama.</p>
+</blockquote>
+<hr>
+<h2>3. Spuštění a vypnutí aplikace</h2>
+<h3>Ikonou na ploše (doporučeno)</h3>
+<p>Poklepej na ikonu <strong>GEXLens</strong> na ploše. Skript spustí všechny služby na pozadí a otevře prohlížeč na adrese aplikace. První start po vypnutí počítače trvá ~30–60 s.</p>
+<h3>Ručně (PowerShell)</h3>
+<pre><code class="language-powershell">cd &quot;D:\Documents\Visual Studio Code\GEX&quot;
 docker compose up -d        # start na pozadí
 # prohlížeč: http://127.0.0.1:8080
 </code></pre>
-    <h3>Vypnutí</h3>
-    <pre><code class="language-powershell">docker compose stop         # zastaví služby (data zůstávají)
+<h3>Vypnutí</h3>
+<pre><code class="language-powershell">docker compose stop         # zastaví služby (data zůstávají)
 </code></pre>
-    <p>
-      Aplikaci můžeš nechat běžet trvale — engine sbírá data, jen když běží a je přihlášené TWS;
-      mimo seance prostě čeká.
-    </p>
-    <h3>Pořadí při startu dne</h3>
-    <ol>
-      <li>Zapni/přihlas <strong>TWS</strong> (nebo IB Gateway)</li>
-      <li>Spusť <strong>GEXLens</strong> (pokud neběží)</li>
-      <li>
-        Do minuty se ve stavové liště objeví <code>IBKR: connected</code> a začnou přibývat data
-      </li>
-    </ol>
-    <hr />
-    <h2>4. Hlavní obrazovka — Graf</h2>
-    <p>Obrazovka se skládá z (shora dolů, zleva doprava):</p>
-    <table>
-      <thead>
-        <tr>
-          <th>Prvek</th>
-          <th>Popis</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><strong>Sidebar (vlevo)</strong></td>
-          <td>
-            Přepínání obrazovek (Graf / Dashboard / IBKR Console / Settings), přepínač tématu
-            Dark/Light, watchlist, verze. Tlačítkem « se sbalí.
-          </td>
-        </tr>
-        <tr>
-          <td><strong>Hlavička</strong></td>
-          <td>
-            Ticker a název instrumentu, poslední cena,
-            <strong>selektor expirace</strong> (tradingClass + datum), indikátor ● Live / ○ Offline,
-            zvonek notifikací.
-          </td>
-        </tr>
-        <tr>
-          <td><strong>Řádek timeframe</strong></td>
-          <td>Intraday/Daily a rozlišení 1m/5m/15m.</td>
-        </tr>
-        <tr>
-          <td><strong>Řádek přepínačů</strong></td>
-          <td>
-            Checkboxy vrstev: <strong>Dyn GEX</strong> (walls linie),
-            <strong>GEX Levels</strong> (flip/centroid), <strong>Sessions</strong> (markery seancí),
-            <strong>Vol / Opt Vol / Delta</strong> (spodní panely), <strong>Vol + OI Δ</strong>,
-            <strong>News</strong>. Co odškrtneš, zmizí — layout se přeskládá.
-          </td>
-        </tr>
-        <tr>
-          <td><strong>Lišta grafu</strong></td>
-          <td>
-            Styl heatmapy (Gradient/Blobs), Contours (Off/Major/All),
-            <strong>Cena</strong> (Křivka/Svíčky) + <strong>Viditelnost</strong>, nástroje anotací +
-            barva, indikátor zdroje dat (live/replay/demo).
-          </td>
-        </tr>
-        <tr>
-          <td><strong>Heatmapa</strong></td>
-          <td>Hlavní plocha — viz kapitola 5.</td>
-        </tr>
-        <tr>
-          <td><strong>Strike profil</strong></td>
-          <td>Pravý panel — viz kapitola 7.</td>
-        </tr>
-        <tr>
-          <td><strong>Spodní panely</strong></td>
-          <td>Vol / Opt Vol / Cum Δ — viz kapitola 8.</td>
-        </tr>
-        <tr>
-          <td><strong>Playback lišta</strong></td>
-          <td>Slider dne, ▶, rychlosti, návrat na Live — viz kapitola 9.</td>
-        </tr>
-        <tr>
-          <td><strong>Stavová lišta</strong></td>
-          <td>Zdraví datové pipeline — viz kapitola 15.</td>
-        </tr>
-      </tbody>
-    </table>
-    <hr />
-    <h2>5. Heatmapa podrobně</h2>
-    <p>
-      Heatmapa zobrazuje matici <strong>čas (osa X) × strike (osa Y)</strong>. Každá buňka je jedna
-      minuta jednoho striku; intenzita barvy odpovídá hodnotě zvolené metriky.
-      <strong>Teal/zelená = call strana, červená = put strana.</strong>
-    </p>
-    <h3>Ovládání myší</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>Akce</th>
-          <th>Efekt</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Kolečko</td>
-          <td>Zoom (1×–16×)</td>
-        </tr>
-        <tr>
-          <td>Tažení</td>
-          <td>Posun (pan)</td>
-        </tr>
-        <tr>
-          <td>Pohyb myší</td>
-          <td>
-            Crosshair — svislá/vodorovná linka synchronizovaná se strike profilem i spodními panely
-            + tooltip buňky (minuta, strike, hodnoty call/put)
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <h3>Styl vykreslení</h3>
-    <ul>
-      <li><strong>Gradient</strong> — hladké bilineární přechody (výchozí)</li>
-      <li>
-        <strong>Blobs</strong> — gaussovské „bubliny“ kolem koncentrací; zvýrazní ohniska
-        positioningu
-      </li>
-    </ul>
-    <h3>Contours (izolinie)</h3>
-    <p>Bílé přerušované vrstevnice nad vyhlazeným polem:</p>
-    <ul>
-      <li><strong>Off</strong> — vypnuto</li>
-      <li><strong>Major</strong> — dvě úrovně (p75 a p90) — jen hlavní koncentrace</li>
-      <li><strong>All</strong> — pět úrovní — detailní tvar</li>
-    </ul>
-    <h3>Linie v heatmapě (overlaye)</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>Linie</th>
-          <th>Barva</th>
-          <th>Zapíná</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><strong>Flip (zero-gamma)</strong></td>
-          <td>žlutá</td>
-          <td>GEX Levels</td>
-        </tr>
-        <tr>
-          <td><strong>Centroid (HVL)</strong></td>
-          <td>fialová</td>
-          <td>GEX Levels</td>
-        </tr>
-        <tr>
-          <td><strong>Call wall</strong></td>
-          <td>zelená</td>
-          <td>Dyn GEX</td>
-        </tr>
-        <tr>
-          <td><strong>Put wall</strong></td>
-          <td>červená</td>
-          <td>Dyn GEX</td>
-        </tr>
-        <tr>
-          <td><strong>Sessions markery</strong></td>
-          <td>šedé svislé</td>
-          <td>Sessions</td>
-        </tr>
-        <tr>
-          <td><strong>Cenová vrstva</strong></td>
-          <td>zelená/červená</td>
-          <td>vždy (viz kap. 6)</td>
-        </tr>
-      </tbody>
-    </table>
-    <p>
-      Vpravo na ose je <strong>štítek aktuální ceny</strong>; v pravém dolním rohu
-      <strong>timestamp</strong> posledních dat.
-    </p>
-    <h3>Stale buňky</h3>
-    <p>
-      Pokud se některý strike nepodařilo obnovit (výpadek dat), jeho buňky jsou
-      <strong>vyšedlé s nižší sytostí</strong> — poznáš tak stará data od živých. Souhrn běží ve
-      stavové liště (<code>Repair: retrying N…</code>).
-    </p>
-    <hr />
-    <h2>6. Cenová vrstva — křivka a svíčky</h2>
-    <p>V liště grafu volbou <strong>Cena</strong>:</p>
-    <ul>
-      <li>
-        <strong>Křivka</strong> (výchozí) — spojitá 1m linie zbarvená podle směru ticku (zelená
-        nahoru, červená dolů). V husté heatmapě nejčitelnější.
-      </li>
-      <li>
-        <strong>Svíčky</strong> — plnohodnotné 1m OHLC svíčky (knot high–low, tělo open–close).
-      </li>
-    </ul>
-    <p>
-      Posuvníkem <strong>Viditelnost</strong> (10–100 %) cenovou vrstvu zeslabíš, aby nepřebíjela
-      heatmapu pod ní — užitečné hlavně u svíček.
-      <strong>Štítek aktuální ceny zůstává vždy plně viditelný.</strong>
-    </p>
-    <p><img src="img/svicky.png" alt="Svíčkový režim" /></p>
-    <hr />
-    <h2>7. Strike profil (pravý panel)</h2>
-    <p>
-      Horizontální skládané pruhy pro každý strike (stejná osa strikes jako heatmapa, nejvyšší
-      nahoře):
-    </p>
-    <ul>
-      <li><strong>Call doprava (teal), put doleva (červená)</strong> od symetrické osy</li>
-      <li>
-        Každý pruh má dvě složky odlišené sytostí: <strong>Vol</strong> (sytá) a
-        <strong>OI Δ</strong> (světlejší)
-      </li>
-      <li><strong>Žlutá přerušovaná linka</strong> = aktuální cena</li>
-      <li>Tlačítka <strong>1× / 2× / 4×</strong> zvětšují měřítko pruhů</li>
-      <li>
-        Najetí myší na řádek zvýrazní strike v celé aplikaci (crosshair) a dole zobrazí
-        <strong>tooltip</strong>: OI call/put, Vol call/put, vzdálenost od spotu
-      </li>
-    </ul>
-    <p>
-      Čteš z něj na první pohled, <strong>kde sedí dominantní call a put koncentrace</strong> —
-      typicky walls.
-    </p>
-    <hr />
-    <h2>8. Spodní panely — Vol, Opt Vol, Cum Δ</h2>
-    <p>
-      Tři panely se <strong>sdílenou časovou osou</strong> s heatmapou. Každý zvlášť vypneš
-      checkboxem v horní liště (Vol / Opt Vol / Delta).
-    </p>
-    <table>
-      <thead>
-        <tr>
-          <th>Panel</th>
-          <th>Co ukazuje</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><strong>Vol</strong></td>
-          <td>Minutový objem podkladu (ES futures) — šedé sloupce</td>
-        </tr>
-        <tr>
-          <td><strong>Opt Vol</strong></td>
-          <td>
-            Minutový objem opcí, <strong>barevně call (teal) / put (červená)</strong> vedle sebe
-          </td>
-        </tr>
-        <tr>
-          <td><strong>Cum Δ</strong></td>
-          <td>
-            Kumulativní delta flow jako plocha
-            <strong>nad nulou (zelená) / pod nulou (červená)</strong>. Roste = agresivní kupci call
-            delty / prodejci put delty; klesá = opačně. Počítá se s plnou klasifikací agresora
-            (tick-by-tick v hot zóně, midpoint test jinde) a resetuje se na začátku dne.
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <p>Pohyb myší v kterémkoli panelu hýbe crosshairem ve všech panelech i heatmapě.</p>
-    <hr />
-    <h2>9. Playback — přehrávání dne</h2>
-    <p>Lišta pod panely:</p>
-    <ul>
-      <li>
-        <strong>Slider</strong> — táhni kamkoli v dni; heatmapa, strike profil i spodní panely se
-        <strong>synchronně přetočí</strong> k danému okamžiku
-      </li>
-      <li>
-        <strong>▶ / ⏸</strong> — automatické přehrávání; rychlosti
-        <strong>1× / 5× / 20×</strong> (1× = 2 minuty dne za sekundu)
-      </li>
-      <li>
-        <strong>● Live</strong> — skok zpět na aktuální okamžik; přehrávání na konci dne se zastaví
-        samo
-      </li>
-    </ul>
-    <p>Celý den je po načtení v paměti — přetáčení je okamžité, bez čekání na server.</p>
-    <hr />
-    <h2>10. Anotace — kreslení do grafu</h2>
-    <p>V liště grafu vyber nástroj:</p>
-    <table>
-      <thead>
-        <tr>
-          <th>Nástroj</th>
-          <th>Použití</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><strong>Kurzor</strong></td>
-          <td>Běžný režim (pan/zoom/crosshair)</td>
-        </tr>
-        <tr>
-          <td><strong>Šipka</strong></td>
-          <td>Táhni od–do; šipka s hlavičkou</td>
-        </tr>
-        <tr>
-          <td><strong>Linie</strong></td>
-          <td>Táhni od–do; rovná čára</td>
-        </tr>
-        <tr>
-          <td><strong>Freehand</strong></td>
-          <td>Kresli od ruky</td>
-        </tr>
-        <tr>
-          <td><strong>Guma</strong></td>
-          <td>Klikni poblíž anotace — smaže ji</td>
-        </tr>
-      </tbody>
-    </table>
-    <p>
-      Vedle nástrojů je <strong>výběr barvy</strong>. Anotace jsou ukotvené k
-      <strong>času a striku</strong> (ne k pixelům) — drží na svém místě při zoomu, panu i
-      přetáčení, <strong>přežijí restart aplikace</strong> a jsou uložené zvlášť pro každý
-      instrument a den.
-    </p>
-    <hr />
-    <h2>11. Dashboard</h2>
-    <p>
-      Karty instrumentů z watchlistu: aktuální cena, stav dat (● live / offline),
-      <strong>mini NetGEX profil</strong> (zelené/červené sloupečky = čistý positioning po stricích)
-      a vzdálenosti k call/put wall. Slouží jako rychlý přehled, když sleduješ víc instrumentů.
-    </p>
-    <p><img src="img/dashboard.png" alt="Dashboard" /></p>
-    <hr />
-    <h2>12. IBKR Console</h2>
-    <p>Diagnostická obrazovka:</p>
-    <ul>
-      <li>
-        <strong>Připojení</strong> — host/port/client ID, tlačítko
-        <strong>Reconnect</strong> (vyžádá znovupřipojení enginu), aktuální stav spojení
-      </li>
-      <li>
-        <strong>Subskripce</strong> — průběh Greeks (X/Y), velikost repair fronty, vytížení market
-        data lines
-      </li>
-      <li><strong>Log</strong> — chronologický záznam událostí (změny stavu spojení, alerty)</li>
-    </ul>
-    <p>Sem se podívej jako první, když něco nevypadá dobře.</p>
-    <p><img src="img/console.png" alt="IBKR Console" /></p>
-    <hr />
-    <h2>13. Settings</h2>
-    <p>
-      Změny se <strong>ukládají okamžitě</strong> (bez tlačítka Uložit) a engine si je průběžně
-      přebírá:
-    </p>
-    <table>
-      <thead>
-        <tr>
-          <th>Sekce</th>
-          <th>Položky</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><strong>IBKR</strong></td>
-          <td>Host, port (7496 live / 7497 paper), client ID</td>
-        </tr>
-        <tr>
-          <td><strong>Engine</strong></td>
-          <td>
-            Rozsah strikes (± body od spotu), velikost dávky subskripcí, šířka hot zóny, retence dat
-            (dny), disk limit (GB)
-          </td>
-        </tr>
-        <tr>
-          <td><strong>Vzhled</strong></td>
-          <td>Téma <strong>Dark/Light</strong> (přepne se ihned), jazyk</td>
-        </tr>
-        <tr>
-          <td><strong>Seance</strong></td>
-          <td>Seznam sessions markerů pro heatmapu (JSON)</td>
-        </tr>
-      </tbody>
-    </table>
-    <p><img src="img/settings.png" alt="Settings" /></p>
-    <p>Light téma:</p>
-    <p><img src="img/light.png" alt="Light téma" /></p>
-    <hr />
-    <h2>14. Notifikace a alerty</h2>
-    <p>
-      <strong>Zvonek</strong> v hlavičce ukazuje badge s počtem nepřečtených alertů; kliknutím
-      otevřeš historii (otevření badge vynuluje). Alerty chodí i za běhu do IBKR Console logu.
-    </p>
-    <p>Druhy alertů:</p>
-    <table>
-      <thead>
-        <tr>
-          <th>Alert</th>
-          <th>Kdy</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Cena × úroveň</td>
-          <td>Cena protne flip nebo wall</td>
-        </tr>
-        <tr>
-          <td>Cum Δ skok</td>
-          <td>Skok kumulativní delty o nastavený práh</td>
-        </tr>
-        <tr>
-          <td>Dominantní strike</td>
-          <td>Změna striku s největší koncentrací</td>
-        </tr>
-        <tr>
-          <td>Výpadek spojení</td>
-          <td>TWS/Gateway nedostupné</td>
-        </tr>
-        <tr>
-          <td>Disk limit</td>
-          <td>Překročen limit místa na disku</td>
-        </tr>
-        <tr>
-          <td><strong>OI nedorazilo</strong></td>
-          <td>
-            IBKR nedodalo Open Interest — GEX vrstvy jedou dočasně z volume (viz Řešení potíží)
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <hr />
-    <h2>15. Stavová lišta — co znamenají údaje</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Údaj</th>
-          <th>Význam</th>
-          <th>V pořádku</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><code>Greeks X/Y</code></td>
-          <td>Kolik kontraktů řetězce má kompletní data (bid/ask/volume/Greeks)</td>
-          <td>X = Y</td>
-        </tr>
-        <tr>
-          <td><code>Repair: retrying N…</code></td>
-          <td>Kontrakty čekající na opakované načtení</td>
-          <td>Nezobrazuje se, nebo malé N</td>
-        </tr>
-        <tr>
-          <td><code>Lines NN %</code></td>
-          <td>Vytížení market data lines účtu</td>
-          <td>&lt; 100 %</td>
-        </tr>
-        <tr>
-          <td><code>Disk X / Y</code></td>
-          <td>Obsazení disku daty / limit</td>
-          <td>X &lt; Y</td>
-        </tr>
-        <tr>
-          <td><code>IBKR: connected :7496</code></td>
-          <td>Stav spojení + port</td>
-          <td>connected</td>
-        </tr>
-        <tr>
-          <td><code>● Live HH:MM</code> / <code>Stale</code></td>
-          <td>Čas posledních dat</td>
-          <td>● Live, čas se hýbe</td>
-        </tr>
-      </tbody>
-    </table>
-    <hr />
-    <h2>16. Deep-linky</h2>
-    <p>Aplikaci lze otevřít rovnou v konkrétním stavu pomocí URL parametrů:</p>
-    <pre><code>http://127.0.0.1:8080/?view=dashboard          # obrazovka: chart | dashboard | console | settings
+<p>Aplikaci můžeš nechat běžet trvale — engine sbírá data, jen když běží a je přihlášené TWS; mimo seance prostě čeká.</p>
+<h3>Pořadí při startu dne</h3>
+<ol>
+<li>Zapni/přihlas <strong>TWS</strong> (nebo IB Gateway)</li>
+<li>Spusť <strong>GEXLens</strong> (pokud neběží)</li>
+<li>Do minuty se ve stavové liště objeví <code>IBKR: connected</code> a začnou přibývat data</li>
+</ol>
+<hr>
+<h2>4. Hlavní obrazovka — Graf</h2>
+<p>Obrazovka se skládá z (shora dolů, zleva doprava):</p>
+<table>
+<thead>
+<tr>
+<th>Prvek</th>
+<th>Popis</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Sidebar (vlevo)</strong></td>
+<td>Přepínání obrazovek (Graf / Dashboard / IBKR Console / Settings), přepínač tématu Dark/Light, <strong>editovatelný watchlist</strong> (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový), verze. Tlačítkem « se sbalí.</td>
+</tr>
+<tr>
+<td><strong>Hlavička</strong></td>
+<td>Ticker a název instrumentu, poslední cena, <strong>selektor expirace</strong> (tradingClass + datum), indikátor ● Live / ○ Offline, zvonek notifikací.</td>
+</tr>
+<tr>
+<td><strong>Řádek timeframe</strong></td>
+<td><strong>Intraday/Daily</strong> a rozlišení <strong>1m, 2m, 3m, 5m, 10m, 15m, 30m, 45m, 1h, 2h, 3h, 4h, 1d</strong>. Intraday agreguje minutová data do zvolených košů (svíčky OHLC, objemy se sčítají); Daily zobrazí sloupec za každý uložený den (roste s historií, max 14 dní).</td>
+</tr>
+<tr>
+<td><strong>Řádek přepínačů</strong></td>
+<td>Checkboxy vrstev: <strong>Dyn GEX</strong> (walls linie), <strong>GEX Levels</strong> (flip/centroid), <strong>Sessions</strong> (markery seancí), <strong>Vol / Opt Vol / Delta</strong> (spodní panely), <strong>Vol + OI Δ</strong>, <strong>News</strong>. Co odškrtneš, zmizí — layout se přeskládá.</td>
+</tr>
+<tr>
+<td><strong>Lišta grafu</strong></td>
+<td>Styl heatmapy (Gradient/Blobs), Contours (Off/Major/All), <strong>Cena</strong> (Křivka/Svíčky) + <strong>Viditelnost</strong>, nástroje anotací + barva, indikátor zdroje dat (live/replay/demo).</td>
+</tr>
+<tr>
+<td><strong>Heatmapa</strong></td>
+<td>Hlavní plocha — viz kapitola 5.</td>
+</tr>
+<tr>
+<td><strong>Strike profil</strong></td>
+<td>Pravý panel — viz kapitola 7.</td>
+</tr>
+<tr>
+<td><strong>Spodní panely</strong></td>
+<td>Vol / Opt Vol / Cum Δ — viz kapitola 8.</td>
+</tr>
+<tr>
+<td><strong>Playback lišta</strong></td>
+<td>Slider dne, ▶, rychlosti, návrat na Live — viz kapitola 9.</td>
+</tr>
+<tr>
+<td><strong>Stavová lišta</strong></td>
+<td>Zdraví datové pipeline — viz kapitola 15.</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>5. Heatmapa podrobně</h2>
+<p>Heatmapa zobrazuje matici <strong>čas (osa X) × strike (osa Y)</strong>. Každá buňka je jedna minuta jednoho striku; intenzita barvy odpovídá hodnotě zvolené metriky. <strong>Teal/zelená = call strana, červená = put strana.</strong></p>
+<h3>Ovládání myší (styl TradingView)</h3>
+<table>
+<thead>
+<tr>
+<th>Akce</th>
+<th>Efekt</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Kolečko nad plochou</td>
+<td>Zoom obou os <strong>ukotvený ke kurzoru</strong> (bod pod myší zůstává na místě)</td>
+</tr>
+<tr>
+<td>Kolečko nad pruhem osy</td>
+<td>Zoom <strong>jen dané osy</strong> (levý okraj = osa strikes, spodní okraj = osa času)</td>
+</tr>
+<tr>
+<td>Tažení za pruh osy Y (levý okraj)</td>
+<td>Roztahování/stahování cenové osy — zvětší/zmenší svíčky svisle</td>
+</tr>
+<tr>
+<td>Tažení za pruh osy X (spodní okraj)</td>
+<td>Roztahování/stahování časové osy — zvětší/zmenší svíčky vodorovně (kotva u pravého okraje: poslední svíčka drží pozici)</td>
+</tr>
+<tr>
+<td>Tažení v ploše</td>
+<td>Posun (pan)</td>
+</tr>
+<tr>
+<td><strong>Dvojklik</strong> nebo tlačítko <strong>⟲</strong> (pravý horní roh)</td>
+<td><strong>Reset zobrazení</strong> na výchozí pohled</td>
+</tr>
+<tr>
+<td>Pohyb myší</td>
+<td>Crosshair — svislá/vodorovná linka synchronizovaná se strike profilem i spodními panely + tooltip buňky (minuta, strike, hodnoty call/put)</td>
+</tr>
+</tbody></table>
+<p>Spodní panely (Vol / Opt Vol / Cum Δ) <strong>sledují časovou osu heatmapy</strong> — při posunu či zoomu osy X se roztahují synchronně.</p>
+<h3>Styl vykreslení</h3>
+<ul>
+<li><strong>Gradient</strong> — hladké bilineární přechody (výchozí)</li>
+<li><strong>Blobs</strong> — gaussovské „bubliny“ kolem koncentrací; zvýrazní ohniska positioningu</li>
+</ul>
+<h3>Contours (izolinie)</h3>
+<p>Bílé přerušované vrstevnice nad vyhlazeným polem:</p>
+<ul>
+<li><strong>Off</strong> — vypnuto</li>
+<li><strong>Major</strong> — dvě úrovně (p75 a p90) — jen hlavní koncentrace</li>
+<li><strong>All</strong> — pět úrovní — detailní tvar</li>
+</ul>
+<h3>Linie v heatmapě (overlaye)</h3>
+<table>
+<thead>
+<tr>
+<th>Linie</th>
+<th>Barva</th>
+<th>Zapíná</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Flip (zero-gamma)</strong></td>
+<td>žlutá</td>
+<td>GEX Levels</td>
+</tr>
+<tr>
+<td><strong>Centroid (HVL)</strong></td>
+<td>fialová</td>
+<td>GEX Levels</td>
+</tr>
+<tr>
+<td><strong>Call wall</strong></td>
+<td>zelená</td>
+<td>Dyn GEX</td>
+</tr>
+<tr>
+<td><strong>Put wall</strong></td>
+<td>červená</td>
+<td>Dyn GEX</td>
+</tr>
+<tr>
+<td><strong>Sessions markery</strong></td>
+<td>šedé svislé</td>
+<td>Sessions</td>
+</tr>
+<tr>
+<td><strong>Cenová vrstva</strong></td>
+<td>zelená/červená</td>
+<td>vždy (viz kap. 6)</td>
+</tr>
+</tbody></table>
+<p>Vpravo na ose je <strong>štítek aktuální ceny</strong>; v pravém dolním rohu <strong>timestamp</strong> posledních dat.</p>
+<h3>Stale buňky</h3>
+<p>Pokud se některý strike nepodařilo obnovit (výpadek dat), jeho buňky jsou <strong>vyšedlé s nižší sytostí</strong> — poznáš tak stará data od živých. Souhrn běží ve stavové liště (<code>Repair: retrying N…</code>).</p>
+<hr>
+<h2>6. Cenová vrstva — křivka a svíčky</h2>
+<p>V liště grafu volbou <strong>Cena</strong>:</p>
+<ul>
+<li><strong>Křivka</strong> (výchozí) — spojitá 1m linie zbarvená podle směru ticku (zelená nahoru, červená dolů). V husté heatmapě nejčitelnější.</li>
+<li><strong>Svíčky</strong> — plnohodnotné 1m OHLC svíčky (knot high–low, tělo open–close).</li>
+</ul>
+<p>Posuvníkem <strong>Viditelnost</strong> (10–100 %) cenovou vrstvu zeslabíš, aby nepřebíjela heatmapu pod ní — užitečné hlavně u svíček. <strong>Štítek aktuální ceny zůstává vždy plně viditelný.</strong></p>
+<p><img src="img/svicky.png" alt="Svíčkový režim"></p>
+<hr>
+<h2>7. Strike profil (pravý panel)</h2>
+<p>Horizontální skládané pruhy pro každý strike (stejná osa strikes jako heatmapa, nejvyšší nahoře):</p>
+<ul>
+<li><strong>Call doprava (teal), put doleva (červená)</strong> od symetrické osy</li>
+<li>Každý pruh má dvě složky odlišené sytostí: <strong>Vol</strong> (sytá) a <strong>OI Δ</strong> (světlejší)</li>
+<li><strong>Žlutá přerušovaná linka</strong> = aktuální cena</li>
+<li>Tlačítka <strong>1× / 2× / 4×</strong> zvětšují měřítko pruhů</li>
+<li>Najetí myší na řádek zvýrazní strike v celé aplikaci (crosshair) a dole zobrazí <strong>tooltip</strong>: OI call/put, Vol call/put, vzdálenost od spotu</li>
+</ul>
+<p>Čteš z něj na první pohled, <strong>kde sedí dominantní call a put koncentrace</strong> — typicky walls.</p>
+<hr>
+<h2>8. Spodní panely — Vol, Opt Vol, Cum Δ</h2>
+<p>Tři panely se <strong>sdílenou časovou osou</strong> s heatmapou. Každý zvlášť vypneš checkboxem v horní liště (Vol / Opt Vol / Delta).</p>
+<table>
+<thead>
+<tr>
+<th>Panel</th>
+<th>Co ukazuje</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Vol</strong></td>
+<td>Minutový objem podkladu (ES futures) — šedé sloupce</td>
+</tr>
+<tr>
+<td><strong>Opt Vol</strong></td>
+<td>Minutový objem opcí, <strong>barevně call (teal) / put (červená)</strong> vedle sebe</td>
+</tr>
+<tr>
+<td><strong>Cum Δ</strong></td>
+<td>Kumulativní delta flow jako plocha <strong>nad nulou (zelená) / pod nulou (červená)</strong>. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Počítá se s plnou klasifikací agresora (tick-by-tick v hot zóně, midpoint test jinde) a resetuje se na začátku dne.</td>
+</tr>
+</tbody></table>
+<p>Pohyb myší v kterémkoli panelu hýbe crosshairem ve všech panelech i heatmapě.</p>
+<hr>
+<h2>9. Playback — přehrávání dne</h2>
+<p>Lišta pod panely:</p>
+<ul>
+<li><strong>Slider</strong> — táhni kamkoli v dni; heatmapa, strike profil i spodní panely se <strong>synchronně přetočí</strong> k danému okamžiku</li>
+<li><strong>▶ / ⏸</strong> — automatické přehrávání; rychlosti <strong>1× / 5× / 20×</strong> (1× = 2 minuty dne za sekundu)</li>
+<li><strong>● Live</strong> — skok zpět na aktuální okamžik; přehrávání na konci dne se zastaví samo</li>
+</ul>
+<p>Celý den je po načtení v paměti — přetáčení je okamžité, bez čekání na server.</p>
+<hr>
+<h2>10. Anotace — kreslení do grafu</h2>
+<p>V liště grafu vyber nástroj:</p>
+<table>
+<thead>
+<tr>
+<th>Nástroj</th>
+<th>Použití</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Kurzor</strong></td>
+<td>Běžný režim (pan/zoom/crosshair)</td>
+</tr>
+<tr>
+<td><strong>Šipka</strong></td>
+<td>Táhni od–do; šipka s hlavičkou</td>
+</tr>
+<tr>
+<td><strong>Linie</strong></td>
+<td>Táhni od–do; rovná čára</td>
+</tr>
+<tr>
+<td><strong>Freehand</strong></td>
+<td>Kresli od ruky</td>
+</tr>
+<tr>
+<td><strong>Guma</strong></td>
+<td>Klikni poblíž anotace — smaže ji</td>
+</tr>
+</tbody></table>
+<p>Vedle nástrojů je <strong>výběr barvy</strong>. Anotace jsou ukotvené k <strong>času a striku</strong> (ne k pixelům) — drží na svém místě při zoomu, panu i přetáčení, <strong>přežijí restart aplikace</strong> a jsou uložené zvlášť pro každý instrument a den.</p>
+<hr>
+<h2>11. Dashboard</h2>
+<p>Karty instrumentů z watchlistu: aktuální cena, stav dat (● live / offline), <strong>mini NetGEX profil</strong> (zelené/červené sloupečky = čistý positioning po stricích) a vzdálenosti k call/put wall. Slouží jako rychlý přehled, když sleduješ víc instrumentů.</p>
+<p><img src="img/dashboard.png" alt="Dashboard"></p>
+<hr>
+<h2>12. IBKR Console</h2>
+<p>Diagnostická obrazovka:</p>
+<ul>
+<li><strong>Připojení</strong> — host/port/client ID, tlačítko <strong>Reconnect</strong> (vyžádá znovupřipojení enginu), aktuální stav spojení</li>
+<li><strong>Subskripce</strong> — průběh Greeks (X/Y), velikost repair fronty, vytížení market data lines</li>
+<li><strong>Log</strong> — chronologický záznam událostí (změny stavu spojení, alerty)</li>
+</ul>
+<p>Sem se podívej jako první, když něco nevypadá dobře.</p>
+<p><img src="img/console.png" alt="IBKR Console"></p>
+<hr>
+<h2>13. Settings</h2>
+<p>Změny se <strong>ukládají okamžitě</strong> (bez tlačítka Uložit) a engine si je průběžně přebírá:</p>
+<table>
+<thead>
+<tr>
+<th>Sekce</th>
+<th>Položky</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>IBKR</strong></td>
+<td>Host, port (7496 live / 7497 paper), client ID</td>
+</tr>
+<tr>
+<td><strong>Engine</strong></td>
+<td>Rozsah strikes (± body od spotu), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB)</td>
+</tr>
+<tr>
+<td><strong>Vzhled</strong></td>
+<td>Téma <strong>Dark/Light</strong> (přepne se ihned), jazyk</td>
+</tr>
+<tr>
+<td><strong>Seance</strong></td>
+<td>Seznam sessions markerů pro heatmapu (JSON)</td>
+</tr>
+</tbody></table>
+<p><img src="img/settings.png" alt="Settings"></p>
+<p>Light téma:</p>
+<p><img src="img/light.png" alt="Light téma"></p>
+<hr>
+<h2>14. Notifikace a alerty</h2>
+<p><strong>Zvonek</strong> v hlavičce ukazuje badge s počtem nepřečtených alertů; kliknutím otevřeš historii (otevření badge vynuluje). Alerty chodí i za běhu do IBKR Console logu.</p>
+<p>Druhy alertů:</p>
+<table>
+<thead>
+<tr>
+<th>Alert</th>
+<th>Kdy</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Cena × úroveň</td>
+<td>Cena protne flip nebo wall</td>
+</tr>
+<tr>
+<td>Cum Δ skok</td>
+<td>Skok kumulativní delty o nastavený práh</td>
+</tr>
+<tr>
+<td>Dominantní strike</td>
+<td>Změna striku s největší koncentrací</td>
+</tr>
+<tr>
+<td>Výpadek spojení</td>
+<td>TWS/Gateway nedostupné</td>
+</tr>
+<tr>
+<td>Disk limit</td>
+<td>Překročen limit místa na disku</td>
+</tr>
+<tr>
+<td><strong>OI nedorazilo</strong></td>
+<td>IBKR nedodalo Open Interest — GEX vrstvy jedou dočasně z volume (viz Řešení potíží)</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>15. Stavová lišta — co znamenají údaje</h2>
+<table>
+<thead>
+<tr>
+<th>Údaj</th>
+<th>Význam</th>
+<th>V pořádku</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Greeks X/Y</code></td>
+<td>Kolik kontraktů řetězce má kompletní data (bid/ask/volume/Greeks)</td>
+<td>X = Y</td>
+</tr>
+<tr>
+<td><code>Repair: retrying N…</code></td>
+<td>Kontrakty čekající na opakované načtení</td>
+<td>Nezobrazuje se, nebo malé N</td>
+</tr>
+<tr>
+<td><code>Lines NN %</code></td>
+<td>Vytížení market data lines účtu</td>
+<td>&lt; 100 %</td>
+</tr>
+<tr>
+<td><code>Disk X / Y</code></td>
+<td>Obsazení disku daty / limit</td>
+<td>X &lt; Y</td>
+</tr>
+<tr>
+<td><code>IBKR: connected :7496</code></td>
+<td>Stav spojení + port</td>
+<td>connected</td>
+</tr>
+<tr>
+<td><code>● Live HH:MM</code> / <code>Stale</code></td>
+<td>Čas posledních dat</td>
+<td>● Live, čas se hýbe</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>16. Deep-linky</h2>
+<p>Aplikaci lze otevřít rovnou v konkrétním stavu pomocí URL parametrů:</p>
+<pre><code>http://127.0.0.1:8080/?view=dashboard          # obrazovka: chart | dashboard | console | settings
 http://127.0.0.1:8080/?theme=light             # téma
 http://127.0.0.1:8080/?price=candles&amp;opacity=60  # svíčky s viditelností 60 %
 </code></pre>
-    <p>Parametry lze kombinovat.</p>
-    <hr />
-    <h2>17. Řešení potíží</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Příznak</th>
-          <th>Příčina a řešení</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Stavová lišta <code>IBKR: offline</code></td>
-          <td>
-            TWS neběží / není přihlášené / vypnuté API / špatný port. Zkontroluj TWS, pak IBKR
-            Console → Reconnect.
-          </td>
-        </tr>
-        <tr>
-          <td>Alert „delayed market data“</td>
-          <td>Chybí live subskripce CME v Client Portal (viz kap. 2).</td>
-        </tr>
-        <tr>
-          <td><code>Stale</code> místo <code>● Live</code></td>
-          <td>
-            Data se přestala hýbat — obvykle výpadek TWS↔IB (v TWS bývá hláška o connectivity).
-            Vyřeší se samo, případně re-login TWS.
-          </td>
-        </tr>
-        <tr>
-          <td>Lišta grafu ukazuje „demo data“</td>
-          <td>
-            Aplikace se nedostala k API / žádná data pro dnešek. Zkontroluj, že služby běží (<code
-              >docker compose ps</code
-            >) a engine je online.
-          </td>
-        </tr>
-        <tr>
-          <td><strong>Alert „OI nedorazilo“</strong></td>
-          <td>
-            IBKR dodává Open Interest pro ES opce jen jednou denně (ráno, po publikaci CME). Do té
-            doby heatmapa jede z volume a GEX úrovně mohou být ploché. Engine to zkouší každých 30
-            minut sám — není třeba nic dělat.
-          </td>
-        </tr>
-        <tr>
-          <td>Prázdná heatmapa</td>
-          <td>
-            Mimo obchodní hodiny nevznikají nové snapshoty — použij playback pro přehrání posledního
-            dne.
-          </td>
-        </tr>
-        <tr>
-          <td>TWS spadlo po přihlášení na mobilu</td>
-          <td>Limit jednoho přihlášení IBKR. Znovu se přihlas v TWS; aplikace se sama připojí.</td>
-        </tr>
-        <tr>
-          <td>Aplikace nejde otevřít (:8080)</td>
-          <td>
-            <code>docker compose up -d</code> v adresáři projektu; první start po rebootu chvíli
-            trvá.
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <hr />
-    <h2>18. Slovníček pojmů</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Pojem</th>
-          <th>Význam</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><strong>GEX</strong> (Gamma Exposure)</td>
-          <td>
-            Odhad, kolik dolarů musí dealeři hedgeovat na 1 bod pohybu podkladu. Kladný = dealeři
-            tlumí pohyb, záporný = zesilují.
-          </td>
-        </tr>
-        <tr>
-          <td><strong>Flip (zero-gamma)</strong></td>
-          <td>
-            Cena, kde kumulativní NetGEX prochází nulou — hranice mezi režimem komprese a expanze
-            volatility.
-          </td>
-        </tr>
-        <tr>
-          <td><strong>Call wall / Put wall</strong></td>
-          <td>
-            Strike s největší kladnou/zápornou koncentrací NetGEX nad/pod spotem — typicky funguje
-            jako rezistence/support/magnet.
-          </td>
-        </tr>
-        <tr>
-          <td><strong>Centroid (HVL)</strong></td>
-          <td>Vážené těžiště</td>
-        </tr>
-        <tr>
-          <td><strong>OI (Open Interest)</strong></td>
-          <td>Počet otevřených kontraktů; mění se jednou denně.</td>
-        </tr>
-        <tr>
-          <td><strong>Cum Δ</strong></td>
-          <td>
-            Kumulativní delta flow — součet (směr obchodu × velikost × delta × multiplikátor) přes
-            den.
-          </td>
-        </tr>
-        <tr>
-          <td><strong>Hot zóna</strong></td>
-          <td>Pásmo ATM strikes sledované tick-by-tick pro přesnou klasifikaci agresora.</td>
-        </tr>
-        <tr>
-          <td><strong>Stale</strong></td>
-          <td>Data starší než 5 minut — vizuálně odlišená.</td>
-        </tr>
-      </tbody>
-    </table>
-    <hr />
-    <p>
-      <em
-        >GEXLens · dokumentace je součástí repozitáře
-        <a href="https://github.com/kEchiCZ/GEX">kEchiCZ/GEX</a>. Technický manuál pro správce a
-        vývojáře: <code>docs/manual/ADMIN-MANUAL.md</code>.</em
-      >
-    </p>
-  </body>
-</html>
+<p>Parametry lze kombinovat.</p>
+<hr>
+<h2>17. Řešení potíží</h2>
+<table>
+<thead>
+<tr>
+<th>Příznak</th>
+<th>Příčina a řešení</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Stavová lišta <code>IBKR: offline</code></td>
+<td>TWS neběží / není přihlášené / vypnuté API / špatný port. Zkontroluj TWS, pak IBKR Console → Reconnect.</td>
+</tr>
+<tr>
+<td>Alert „delayed market data“</td>
+<td>Chybí live subskripce CME v Client Portal (viz kap. 2).</td>
+</tr>
+<tr>
+<td><code>Stale</code> místo <code>● Live</code></td>
+<td>Data se přestala hýbat — obvykle výpadek TWS↔IB (v TWS bývá hláška o connectivity). Vyřeší se samo, případně re-login TWS.</td>
+</tr>
+<tr>
+<td>Lišta grafu ukazuje „demo data“</td>
+<td>Aplikace se nedostala k API / žádná data pro dnešek. Zkontroluj, že služby běží (<code>docker compose ps</code>) a engine je online.</td>
+</tr>
+<tr>
+<td><strong>Alert „OI nedorazilo“</strong></td>
+<td>IBKR dodává Open Interest pro ES opce jen jednou denně (ráno, po publikaci CME). Do té doby heatmapa jede z volume a GEX úrovně mohou být ploché. Engine to zkouší každých 30 minut sám — není třeba nic dělat.</td>
+</tr>
+<tr>
+<td>Prázdná heatmapa</td>
+<td>Mimo obchodní hodiny nevznikají nové snapshoty — použij playback pro přehrání posledního dne.</td>
+</tr>
+<tr>
+<td>TWS spadlo po přihlášení na mobilu</td>
+<td>Limit jednoho přihlášení IBKR. Znovu se přihlas v TWS; aplikace se sama připojí.</td>
+</tr>
+<tr>
+<td>Aplikace nejde otevřít (:8080)</td>
+<td><code>docker compose up -d</code> v adresáři projektu; první start po rebootu chvíli trvá.</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>18. Slovníček pojmů</h2>
+<table>
+<thead>
+<tr>
+<th>Pojem</th>
+<th>Význam</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>GEX</strong> (Gamma Exposure)</td>
+<td>Odhad, kolik dolarů musí dealeři hedgeovat na 1 bod pohybu podkladu. Kladný = dealeři tlumí pohyb, záporný = zesilují.</td>
+</tr>
+<tr>
+<td><strong>Flip (zero-gamma)</strong></td>
+<td>Cena, kde kumulativní NetGEX prochází nulou — hranice mezi režimem komprese a expanze volatility.</td>
+</tr>
+<tr>
+<td><strong>Call wall / Put wall</strong></td>
+<td>Strike s největší kladnou/zápornou koncentrací NetGEX nad/pod spotem — typicky funguje jako rezistence/support/magnet.</td>
+</tr>
+<tr>
+<td><strong>Centroid (HVL)</strong></td>
+<td>Vážené těžiště</td>
+</tr>
+<tr>
+<td><strong>OI (Open Interest)</strong></td>
+<td>Počet otevřených kontraktů; mění se jednou denně.</td>
+</tr>
+<tr>
+<td><strong>Cum Δ</strong></td>
+<td>Kumulativní delta flow — součet (směr obchodu × velikost × delta × multiplikátor) přes den.</td>
+</tr>
+<tr>
+<td><strong>Hot zóna</strong></td>
+<td>Pásmo ATM strikes sledované tick-by-tick pro přesnou klasifikaci agresora.</td>
+</tr>
+<tr>
+<td><strong>Stale</strong></td>
+<td>Data starší než 5 minut — vizuálně odlišená.</td>
+</tr>
+</tbody></table>
+<hr>
+<p><em>GEXLens · dokumentace je součástí repozitáře <a href="https://github.com/kEchiCZ/GEX">kEchiCZ/GEX</a>. Technický manuál pro správce a vývojáře: <code>docs/manual/ADMIN-MANUAL.md</code>.</em></p>
+</body></html>

@@ -15,10 +15,13 @@ import { SettingsView } from './components/SettingsView'
 import { StrikeProfile } from './components/StrikeProfile'
 import { visibleOverlays } from './heatmap/overlays'
 import type { PriceStyle } from './heatmap/overlays'
+import { DEFAULT_VIEW } from './heatmap/view'
+import type { ViewTransform } from './heatmap/view'
+import { aggregateDay } from './replay/aggregate'
 import { sliceGrid, sliceOverlays, slicePanels } from './replay/slice'
 import { useDayData } from './replay/useDayData'
 import { usePlayback } from './replay/usePlayback'
-import { AppStateProvider, useAppState } from './state/AppState'
+import { AppStateProvider, INTERVAL_MINUTES, useAppState } from './state/AppState'
 import { CrosshairProvider } from './state/Crosshair'
 import type { ActiveTool } from './annotations/model'
 import type { ContoursMode } from './heatmap/contours'
@@ -44,7 +47,7 @@ function lastValue(series: (number | null)[] | undefined, position: number): num
 }
 
 function MainContent() {
-  const { toggles, symbol, selectedExpiry, view } = useAppState()
+  const { toggles, symbol, selectedExpiry, view, timeframe, interval } = useAppState()
   const [style, setStyle] = useState<HeatmapStyle>('gradient')
   const [contours, setContours] = useState<ContoursMode>('off')
   const [annotationTool, setAnnotationTool] = useState<ActiveTool>(null)
@@ -60,8 +63,13 @@ function MainContent() {
 
   // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame)
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
-  const day = useDayData(symbol, selectedExpiry, today)
+  const rawDay = useDayData(symbol, selectedExpiry, today, timeframe)
+  // Timeframe: agregace 1m dat do košů v paměti (Daily má sloupec = den, koše se nepoužijí)
+  const bucketMinutes = timeframe === 'daily' ? 1 : INTERVAL_MINUTES[interval]
+  const day = useMemo(() => aggregateDay(rawDay, bucketMinutes), [rawDay, bucketMinutes])
   const playback = usePlayback(day.grid.minutes)
+  // Pohled grafu (pan/zoom os) — sdílený heatmapou a spodními panely (společná osa X)
+  const [chartView, setChartView] = useState<ViewTransform>(DEFAULT_VIEW)
   // Anotace: persistence per instrument + den (SPEC 7.4)
   const annotationsState = useAnnotations(symbol, today)
 
@@ -202,11 +210,14 @@ function MainContent() {
               annotationColor={annotationColor}
               onAnnotationCreate={(payload) => void annotationsState.create(payload)}
               onAnnotationErase={(id) => void annotationsState.erase(id)}
+              view={chartView}
+              onViewChange={setChartView}
             />
           </main>
           <BottomPanels
             data={panelSeries}
             visible={{ vol: toggles.vol, optVol: toggles.optVol, delta: toggles.delta }}
+            time={{ offsetX: chartView.offsetX, zoomX: chartView.zoomX }}
           />
           <PlaybackBar playback={playback} />
         </div>
@@ -220,7 +231,7 @@ function Shell() {
   const { theme } = useAppState()
   return (
     <div className="app" data-theme={theme}>
-      <Sidebar watchlist={[{ symbol: 'ES', changePct: null }]} />
+      <Sidebar />
       <div className="main-column">
         <InstrumentHeader />
         <MainContent />

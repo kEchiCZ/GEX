@@ -13,6 +13,8 @@ import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
 import { candleGeometry, fractionalRow, pricePolyline, tickIndices } from '../heatmap/overlays'
 import type { OverlayData, PriceStyle } from '../heatmap/overlays'
+import { DEFAULT_VIEW, axisZoneAt, zoomAxis, zoomBoth } from '../heatmap/view'
+import type { AxisZone, ViewTransform } from '../heatmap/view'
 import { nearestAnnotationId } from '../annotations/model'
 import type {
   ActiveTool,
@@ -22,12 +24,6 @@ import type {
   StoredAnnotation,
 } from '../annotations/model'
 import { useCrosshair } from '../state/Crosshair'
-
-interface ViewTransform {
-  offsetX: number
-  offsetY: number
-  zoom: number
-}
 
 const UP_COLOR = '#3ecf8e'
 const DOWN_COLOR = '#f0616d'
@@ -46,6 +42,8 @@ export function Heatmap({
   annotationColor = '#e8c14b',
   onAnnotationCreate,
   onAnnotationErase,
+  view: controlledView,
+  onViewChange,
 }: {
   grid: HeatmapGrid
   style: HeatmapStyle
@@ -61,12 +59,26 @@ export function Heatmap({
   annotationColor?: string
   onAnnotationCreate?: (payload: AnnotationPayload) => void
   onAnnotationErase?: (id: number) => void
+  /** Řízený pohled (pan/zoom os) — sdílení časové osy se spodními panely. */
+  view?: ViewTransform
+  onViewChange?: (view: ViewTransform) => void
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const offscreenRef = useRef<HTMLCanvasElement | null>(null)
-  const [view, setView] = useState<ViewTransform>({ offsetX: 0, offsetY: 0, zoom: 1 })
-  const dragRef = useRef<{ x: number; y: number } | null>(null)
+  const [internalView, setInternalView] = useState<ViewTransform>(DEFAULT_VIEW)
+  // Řízený vs. vlastní pohled: rodič může sdílet transformaci se spodními panely
+  const view = controlledView ?? internalView
+  const setView = useCallback(
+    (updater: (previous: ViewTransform) => ViewTransform) => {
+      if (onViewChange) onViewChange(updater(controlledView ?? DEFAULT_VIEW))
+      else setInternalView(updater)
+    },
+    [onViewChange, controlledView],
+  )
+  // Tažení: pan plochy, nebo roztahování jedné osy (TradingView styl)
+  const dragRef = useRef<{ x: number; y: number; mode: 'pan' | 'scale-x' | 'scale-y' } | null>(null)
+  const [axisHover, setAxisHover] = useState<AxisZone>(null)
   const [draft, setDraft] = useState<AnnotationPoint[] | null>(null)
   const { position: crosshair, setPosition: setCrosshair } = useCrosshair()
 
@@ -86,8 +98,8 @@ export function Heatmap({
   /** Převod dat → obrazovka (sdílený pro data i overlay canvas). */
   const mapping = useCallback(
     (canvas: HTMLCanvasElement) => {
-      const scaleX = (canvas.width / grid.minutes) * view.zoom
-      const scaleY = (canvas.height / strikeCount) * view.zoom
+      const scaleX = (canvas.width / grid.minutes) * view.zoomX
+      const scaleY = (canvas.height / strikeCount) * view.zoomY
       return {
         scaleX,
         scaleY,
@@ -140,8 +152,8 @@ export function Heatmap({
     if (!context) return
     context.clearRect(0, 0, canvas.width, canvas.height)
     context.imageSmoothingEnabled = true // bilineární interpolace Gradient stylu
-    const scaleX = (canvas.width / offscreen.width) * view.zoom
-    const scaleY = (canvas.height / offscreen.height) * view.zoom
+    const scaleX = (canvas.width / offscreen.width) * view.zoomX
+    const scaleY = (canvas.height / offscreen.height) * view.zoomY
     context.setTransform(scaleX, 0, 0, scaleY, view.offsetX, view.offsetY)
     context.drawImage(offscreen, 0, 0)
     context.setTransform(1, 0, 0, 1, 0, 0)
@@ -374,22 +386,44 @@ export function Heatmap({
     drawOverlay()
   }, [drawOverlay])
 
-  const onWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
-    const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
-    setView((previous) => ({
-      ...previous,
-      zoom: Math.min(16, Math.max(1, previous.zoom * factor)),
-    }))
-  }
-
-  const eventDataPoint = (event: React.PointerEvent<HTMLCanvasElement>): AnnotationPoint | null => {
+  /** Souřadnice události v pixelech canvasu (korekce CSS škálování). */
+  const canvasPoint = (event: {
+    clientX: number
+    clientY: number
+  }): { x: number; y: number; canvas: HTMLCanvasElement } | null => {
     const canvas = overlayRef.current
     if (!canvas) return null
     const rect = canvas.getBoundingClientRect()
-    const cssScale = rect.width > 0 ? canvas.width / rect.width : 1
-    const x = (event.clientX - rect.left) * cssScale
-    const y = (event.clientY - rect.top) * cssScale
-    return mapping(canvas).screenToDataPoint(x, y)
+    // Osy X a Y se škálují nezávisle — CSS box nemusí držet poměr stran canvasu
+    const scaleX = rect.width > 0 ? canvas.width / rect.width : 1
+    const scaleY = rect.height > 0 ? canvas.height / rect.height : 1
+    return {
+      x: (event.clientX - rect.left) * scaleX,
+      y: (event.clientY - rect.top) * scaleY,
+      canvas,
+    }
+  }
+
+  // Kolečko: zoom ukotvený ke kurzoru; nad pruhem osy jen daná osa (TradingView styl)
+  const onWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
+    const point = canvasPoint(event)
+    if (!point) return
+    const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
+    const zone = axisZoneAt(point.x, point.y, point.canvas.height)
+    setView((previous) =>
+      zone === 'x'
+        ? zoomAxis(previous, 'x', factor, point.x)
+        : zone === 'y'
+          ? zoomAxis(previous, 'y', factor, point.y)
+          : zoomBoth(previous, factor, point.x, point.y),
+    )
+  }
+
+  const resetView = () => setView(() => DEFAULT_VIEW)
+
+  const eventDataPoint = (event: React.PointerEvent<HTMLCanvasElement>): AnnotationPoint | null => {
+    const point = canvasPoint(event)
+    return point ? mapping(point.canvas).screenToDataPoint(point.x, point.y) : null
   }
 
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -409,7 +443,14 @@ export function Heatmap({
       event.currentTarget.setPointerCapture(event.pointerId)
       return
     }
-    dragRef.current = { x: event.clientX, y: event.clientY }
+    // Tažení za pruh osy = roztahování/stahování dané osy; jinde pan plochy
+    const point = canvasPoint(event)
+    const zone = point ? axisZoneAt(point.x, point.y, point.canvas.height) : null
+    dragRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      mode: zone === 'x' ? 'scale-x' : zone === 'y' ? 'scale-y' : 'pan',
+    }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
@@ -430,19 +471,29 @@ export function Heatmap({
     if (dragRef.current) {
       const deltaX = event.clientX - dragRef.current.x
       const deltaY = event.clientY - dragRef.current.y
-      dragRef.current = { x: event.clientX, y: event.clientY }
-      setView((previous) => ({
-        ...previous,
-        offsetX: previous.offsetX + deltaX,
-        offsetY: previous.offsetY + deltaY,
-      }))
+      const mode = dragRef.current.mode
+      dragRef.current = { x: event.clientX, y: event.clientY, mode }
+      if (mode === 'scale-x') {
+        // Kotva = pravý okraj: poslední svíčka drží pozici, historie se roztahuje
+        const factor = Math.exp(deltaX * 0.005)
+        setView((previous) => zoomAxis(previous, 'x', factor, canvas?.width ?? 1200))
+      } else if (mode === 'scale-y') {
+        const factor = Math.exp(-deltaY * 0.005)
+        setView((previous) => zoomAxis(previous, 'y', factor, (canvas?.height ?? 640) / 2))
+      } else {
+        setView((previous) => ({
+          ...previous,
+          offsetX: previous.offsetX + deltaX,
+          offsetY: previous.offsetY + deltaY,
+        }))
+      }
       return
     }
     if (!canvas) return
-    const rect = canvas.getBoundingClientRect()
-    const cssScale = rect.width > 0 ? canvas.width / rect.width : 1
-    const x = (event.clientX - rect.left) * cssScale
-    const y = (event.clientY - rect.top) * cssScale
+    const point = canvasPoint(event)
+    if (!point) return
+    const { x, y } = point
+    setAxisHover(axisZoneAt(x, y, canvas.height))
     const { minuteIdx, strikeIdx } = mapping(canvas).screenToCell(x, y)
     if (minuteIdx >= 0 && minuteIdx < grid.minutes && strikeIdx >= 0 && strikeIdx < strikeCount) {
       setCrosshair({ minuteIdx, strike: grid.strikes[strikeIdx] })
@@ -486,12 +537,28 @@ export function Heatmap({
         height={640}
         role="img"
         aria-label="GEX heatmapa"
+        style={{
+          cursor: axisHover === 'x' ? 'ew-resize' : axisHover === 'y' ? 'ns-resize' : undefined,
+        }}
         onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerLeave={() => setCrosshair(null)}
+        onPointerLeave={() => {
+          setCrosshair(null)
+          setAxisHover(null)
+        }}
+        onDoubleClick={resetView}
       />
+      <button
+        type="button"
+        className="chip heatmap-reset"
+        aria-label="Reset zobrazení"
+        title="Reset zobrazení (nebo dvojklik do grafu)"
+        onClick={resetView}
+      >
+        ⟲
+      </button>
       {tooltip && (
         <div className="heatmap-tooltip" role="tooltip">
           {tooltip}
