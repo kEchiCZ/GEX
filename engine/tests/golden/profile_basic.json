@@ -1,0 +1,33 @@
+{
+  "description": "Ručně spočtený golden dataset strike profilu (SPEC 4.6), w=0.5, spot=7595. 7590: call_vol = 40*0.6 = 24; call_oi = 0.5*100*0.6 = 30; put_vol = 10*0.4 = 4; put_oi = 0.5*200*0.4 = 40 → combined net = 54-44 = 10, vol net = 20, oiΔ net = -10. 7600: call_vol = 20*0.5 = 10; call_oi = 0.5*150*0.5 = 37.5; put_vol = 60*0.5 = 30; put_oi = 0.5*120*0.5 = 30 → combined net = 47.5-60 = -12.5, vol net = -20, oiΔ net = 7.5.",
+  "spot": 7595.0,
+  "oi_weight": 0.5,
+  "inputs": [
+    { "strike": 7590.0, "right": "C", "volume": 40.0, "oi": 100.0, "delta": 0.6 },
+    { "strike": 7590.0, "right": "P", "volume": 10.0, "oi": 200.0, "delta": -0.4 },
+    { "strike": 7600.0, "right": "C", "volume": 20.0, "oi": 150.0, "delta": 0.5 },
+    { "strike": 7600.0, "right": "P", "volume": 60.0, "oi": 120.0, "delta": -0.5 }
+  ],
+  "expected": {
+    "7590.0": {
+      "call_vol_component": 24.0,
+      "call_oi_component": 30.0,
+      "put_vol_component": 4.0,
+      "put_oi_component": 40.0,
+      "net_combined": 10.0,
+      "net_vol": 20.0,
+      "net_oi_delta": -10.0,
+      "distance_from_spot": -5.0
+    },
+    "7600.0": {
+      "call_vol_component": 10.0,
+      "call_oi_component": 37.5,
+      "put_vol_component": 30.0,
+      "put_oi_component": 30.0,
+      "net_combined": -12.5,
+      "net_vol": -20.0,
+      "net_oi_delta": 7.5,
+      "distance_from_spot": 5.0
+    }
+  }
+}
