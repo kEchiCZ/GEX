@@ -1,0 +1,30 @@
+{
+  "description": "Ručně spočtený golden dataset levels (SPEC 4.2). Kumulativní NetGEX od nejnižšího striku: 7500:-800, 7550:-1200, 7600:-1000, 7650:-100, 7700:+400 → nulový průchod mezi 7650 a 7700: flip = 7650 + 100*50/500 = 7660. Call wall = argmax nad spotem 7620: max(900@7650, 500@7700) = 7650. Put wall = argmin pod spotem: min(-800@7500, -400@7550, 200@7600) = 7500. Centroid = (7500*800 + 7550*400 + 7600*200 + 7650*900 + 7700*500) / 2800 = 21275000/2800 = 7598.2142857142855. Total = 400.",
+  "spot": 7620.0,
+  "net_by_strike": {
+    "7500.0": -800.0,
+    "7550.0": -400.0,
+    "7600.0": 200.0,
+    "7650.0": 900.0,
+    "7700.0": 500.0
+  },
+  "expected": {
+    "flip": 7660.0,
+    "call_wall": 7650.0,
+    "put_wall": 7500.0,
+    "centroid": 7598.2142857142855,
+    "total_gex": 400.0
+  },
+  "edge_all_positive": {
+    "description": "AC: celý profil kladný → kumulativní řada nulou neprojde, flip neexistuje. Centroid = (7550*100 + 7600*300 + 7650*250)/650 = 4947500/650 = 7611.538461538462.",
+    "spot": 7600.0,
+    "net_by_strike": { "7550.0": 100.0, "7600.0": 300.0, "7650.0": 250.0 },
+    "expected": {
+      "flip": null,
+      "call_wall": 7650.0,
+      "put_wall": 7550.0,
+      "centroid": 7611.538461538462,
+      "total_gex": 650.0
+    }
+  }
+}

@@ -50,6 +50,18 @@ TICKS_SCHEMA = pa.schema(
     ]
 )
 
+# Časová řada levels (SPEC 4.2/5.1: derived/ — replay je nečte znovu z raw dat)
+LEVELS_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("flip", pa.float64()),
+        ("call_wall", pa.float64()),
+        ("put_wall", pa.float64()),
+        ("centroid", pa.float64()),
+        ("total_gex", pa.float64()),
+    ]
+)
+
 
 @dataclass(frozen=True)
 class SnapshotRow:
@@ -69,6 +81,18 @@ class SnapshotRow:
     vega: float | None
     oi: float | None
     stale_age: float
+
+
+@dataclass(frozen=True)
+class LevelsRow:
+    """Levels jedné minuty pro časovou řadu v derived/ (SPEC 4.2)."""
+
+    ts_min: dt.datetime
+    flip: float | None
+    call_wall: float | None
+    put_wall: float | None
+    centroid: float | None
+    total_gex: float
 
 
 @dataclass(frozen=True)
@@ -151,6 +175,20 @@ class SnapshotWriter:
             for tick in ticks
         ]
         return buffer.append_and_write(rows)
+
+    def write_levels(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[LevelsRow]
+    ) -> Path:
+        """Přidá levels minuty do partice derived/{sym}/{expiry}/levels/{date}.parquet.
+
+        Typ řady je adresář (ne prefix v názvu), aby RetentionJob uměl z názvu
+        souboru přečíst datum partice.
+        """
+        path = (
+            self._settings.derived_dir / symbol / expiry / "levels" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, LEVELS_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
 
     def _buffer(self, path: Path, schema: pa.Schema) -> _PartitionBuffer:
         buffer = self._buffers.get(path)
