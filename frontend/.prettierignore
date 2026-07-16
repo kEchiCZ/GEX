@@ -1,3 +1,5 @@
 node_modules
 dist
 package-lock.json
+# Generováno scripts/build-manual.ps1 (marked) — neformátovat ručně
+public/manual/index.html
