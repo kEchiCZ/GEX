@@ -1,8 +1,9 @@
 """Vstupní bod enginu: `python -m gexlens_engine` (SPEC kap. 8, headless u IB Gateway).
 
-Sestaví produkční závislosti (ib_async, PostgreSQL, Parquet, HTTP publisher),
-objeví řetězec a spustí minutovou smyčku. Ranní OI archiv se doplní při startu,
-noční retention purge běží podle konfigurovaného času.
+Sestaví produkční závislosti (ib_async, PostgreSQL, Parquet, HTTP publisher)
+a spustí multi-instrument orchestrátor (ADR-0003): cílová sada podkladů =
+GEXLENS_SYMBOLS + watchlist z DB, pipeline per instrument, sweepy sekvenčně.
+Ranní OI archiv se doplňuje per instrument, noční retention purge běží globálně.
 """
 
 import asyncio
@@ -11,24 +12,155 @@ import logging
 import os
 import sys
 
-from ib_async import IB, Future
+from ib_async import IB, Contract, Future
 from sqlalchemy import create_engine
 
 from gexlens_engine.adapters import HttpPublisher, IbOIFetcher, IbQuoteStreamer
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
-from gexlens_engine.config import ConfigError, load_settings
+from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.ibkr.connection import ConnectionManager, ConnectionState
 from gexlens_engine.ibkr.discovery import ChainDiscovery, Underlying, build_contracts
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler
 from gexlens_engine.ibkr.underlying import Bar, RealTimeBarAggregator
-from gexlens_engine.runtime import EngineRuntime
+from gexlens_engine.instruments import (
+    SETUP_RETRY_CYCLES,
+    InstrumentPipeline,
+    InstrumentSetupError,
+    WatchlistReader,
+    aggregate_status,
+    gather_metrics,
+    merge_symbols,
+    parse_multiplier,
+    plan_instruments,
+    read_watchlist,
+)
+from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter
 from gexlens_engine.storage.retention import RetentionJob
 
 logger = logging.getLogger("gexlens.engine")
 
-ES_MULTIPLIER = 50.0
+# Hlavní US futures burzy — filtr discovery podkladu (QBALGO apod. vynecháváme)
+FUTURES_EXCHANGES = ("CME", "CBOT", "NYMEX", "COMEX")
+
+
+async def _resolve_front_future(ib: IB, symbol: str) -> Contract:
+    """Front futures kontrakt podkladu; timeout + omezený retry (sec-def farm výpadky)."""
+    for attempt in range(3):
+        try:
+            details = await asyncio.wait_for(
+                ib.reqContractDetailsAsync(Future(symbol, exchange="")), timeout=30.0
+            )
+        except TimeoutError:
+            logger.warning("Discovery %s timeout (pokus %d/3)", symbol, attempt + 1)
+            details = []
+        contracts = [
+            d.contract
+            for d in details
+            if d.contract is not None and d.contract.exchange in FUTURES_EXCHANGES
+        ]
+        if contracts:
+            contracts.sort(key=lambda c: c.lastTradeDateOrContractMonth)
+            return contracts[0]
+        await asyncio.sleep(5)
+    raise InstrumentSetupError(
+        f"{symbol}: podklad nenalezen jako futures na {'/'.join(FUTURES_EXCHANGES)} "
+        "(podporovány jsou futures opce — ADR-0003)"
+    )
+
+
+async def create_pipeline(
+    ib: IB,
+    settings: Settings,
+    publisher: PublisherLike,
+    writer: SnapshotWriter,
+    oi_repository: OIEodRepository,
+    symbol: str,
+) -> InstrumentPipeline:
+    """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
+    front = await _resolve_front_future(ib, symbol)
+    multiplier = parse_multiplier(front.multiplier)
+
+    fut_ticker = ib.reqMktData(front, "", False, False)
+    await asyncio.sleep(3)
+    spot = fut_ticker.last if fut_ticker.last == fut_ticker.last else fut_ticker.marketPrice()
+    if spot != spot:
+        ib.cancelMktData(front)
+        raise InstrumentSetupError(f"{symbol}: nedorazila cena podkladu (subskripce dat?)")
+
+    discovery = ChainDiscovery(ib, settings)
+    underlying = Underlying(
+        symbol=symbol, sec_type="FUT", exchange=front.exchange, con_id=front.conId
+    )
+    infos = await discovery.discover(underlying)
+    if not infos:
+        ib.cancelMktData(front)
+        raise InstrumentSetupError(f"{symbol}: žádný FOP řetězec na {front.exchange}")
+    info = infos[0]
+    band = discovery.initial_band(info, spot)
+    contracts = build_contracts(underlying, info, band)
+    logger.info(
+        "Řetězec %s %s %s: %d kontraktů, spot %.2f, multiplikátor %g",
+        symbol,
+        info.trading_class,
+        info.expiry,
+        len(contracts),
+        spot,
+        multiplier,
+    )
+
+    streamer = IbQuoteStreamer(ib)
+    runtime = EngineRuntime(
+        settings=settings,
+        scheduler=SubscriptionScheduler(streamer, settings),
+        writer=writer,
+        oi_repository=oi_repository,
+        publisher=publisher,
+        symbol=symbol,
+        expiry=info.expiry,
+        multiplier=multiplier,
+        contracts=contracts,
+        cum_delta=CumDeltaTracker(multiplier=multiplier),
+        push_status=False,  # agregovaný status pushuje orchestrátor
+    )
+
+    # Bary podkladu: 5s realtime bary → 1min agregace
+    minute_bars: list[Bar] = []
+    aggregator = RealTimeBarAggregator(minute_bars.append)
+    rt_bars = ib.reqRealTimeBars(front, 5, "TRADES", False)
+    rt_bars.updateEvent += lambda bars, has_new: aggregator.add_5s_bar(
+        Bar(
+            ts=bars[-1].time,
+            open=bars[-1].open_,
+            high=bars[-1].high,
+            low=bars[-1].low,
+            close=bars[-1].close,
+            volume=float(bars[-1].volume),
+        )
+    )
+
+    def on_stop() -> None:
+        ib.cancelMktData(front)
+        ib.cancelRealTimeBars(rt_bars)
+
+    pipeline = InstrumentPipeline(
+        symbol=symbol,
+        settings=settings,
+        publisher=publisher,
+        discovery=discovery,
+        info=info,
+        band=band,
+        runtime=runtime,
+        archiver=OIArchiver(oi_repository, IbOIFetcher(ib, streamer), settings),
+        oi_repository=oi_repository,
+        ticker=fut_ticker,
+        minute_bars=minute_bars,
+        on_stop=on_stop,
+        spot=spot,
+    )
+    pipeline.oi_available = await pipeline.try_archive_oi(dt.datetime.now(dt.UTC).date())
+    return pipeline
 
 
 async def main() -> None:
@@ -47,142 +179,77 @@ async def main() -> None:
     while manager.state is not ConnectionState.CONNECTED:
         await asyncio.sleep(0.5)
 
-    # Discovery: front ES future → nejbližší expirace → kontrakty denní obálky.
-    # Sec-def farm může být po výpadku TWS↔IB chvíli nedostupná → timeout + retry
-    # (SPEC kap. 8: odolnost — start nesmí viset donekonečna).
-    while True:
-        try:
-            details = await asyncio.wait_for(
-                ib.reqContractDetailsAsync(Future("ES", exchange="CME")), timeout=30.0
-            )
-            if details:
-                break
-            logger.warning("Discovery vrátila prázdný výsledek — zkusím znovu za 10 s")
-        except TimeoutError:
-            logger.warning("Discovery timeout (sec-def farm nedostupná?) — retry za 10 s")
-        await asyncio.sleep(10)
-    futures = sorted(
-        (d.contract for d in details if d.contract is not None),
-        key=lambda c: c.lastTradeDateOrContractMonth,
-    )
-    front = futures[0]
-    fut_ticker = ib.reqMktData(front, "", False, False)
-    await asyncio.sleep(3)
-    spot = fut_ticker.last if fut_ticker.last == fut_ticker.last else fut_ticker.marketPrice()
-
-    discovery = ChainDiscovery(ib, settings)
-    underlying = Underlying(symbol="ES", sec_type="FUT", exchange="CME", con_id=front.conId)
-    infos = await discovery.discover(underlying)
-    info = infos[0]
-    band = discovery.initial_band(info, spot)
-    contracts = build_contracts(underlying, info, band)
-    logger.info(
-        "Řetězec %s %s: %d kontraktů, spot %.2f",
-        info.trading_class,
-        info.expiry,
-        len(contracts),
-        spot,
-    )
-
-    streamer = IbQuoteStreamer(ib)
-    scheduler = SubscriptionScheduler(streamer, settings)
     writer = SnapshotWriter(settings)
     db = create_engine(settings.database_url)
     oi_repository = OIEodRepository(db)
     await asyncio.to_thread(oi_repository.ensure_schema)
-
-    archiver = OIArchiver(oi_repository, IbOIFetcher(ib, streamer), settings)
-
-    async def try_archive_oi() -> bool:
-        """Pokus o denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2)."""
-        today = dt.datetime.now(dt.UTC).date()
-        if today in oi_repository.days("ES"):
-            return True
-        result = await archiver.archive_day(contracts, today)
-        logger.info(
-            "OI archiv %s: %d zapsáno, %d chybí", today, result.written, len(result.missing)
-        )
-        if result.written == 0:
-            await publisher.publish(
-                "alerts",
-                {
-                    "kind": "oi_missing",
-                    "symbol": "ES",
-                    "message": "OI z IBKR nedorazilo — GEX/OI vrstvy zatím bez OI, "
-                    "další pokus za 30 min (CME publikuje OI ráno)",
-                    "ts": dt.datetime.now(dt.UTC).timestamp(),
-                },
-            )
-            return False
-        return True
-
-    oi_available = await try_archive_oi()
-
-    runtime = EngineRuntime(
-        settings=settings,
-        scheduler=scheduler,
-        writer=writer,
-        oi_repository=oi_repository,
-        publisher=publisher,
-        symbol="ES",
-        expiry=info.expiry,
-        multiplier=ES_MULTIPLIER,
-        contracts=contracts,
-        cum_delta=CumDeltaTracker(multiplier=ES_MULTIPLIER),
-    )
-
-    # Bary podkladu: 5s realtime bary → 1min agregace
-    minute_bars: list[Bar] = []
-    aggregator = RealTimeBarAggregator(minute_bars.append)
-    rt_bars = ib.reqRealTimeBars(front, 5, "TRADES", False)
-    rt_bars.updateEvent += lambda bars, has_new: aggregator.add_5s_bar(
-        Bar(
-            ts=bars[-1].time,
-            open=bars[-1].open_,
-            high=bars[-1].high,
-            low=bars[-1].low,
-            close=bars[-1].close,
-            volume=float(bars[-1].volume),
-        )
-    )
+    watchlist_reader = WatchlistReader(db)
+    await asyncio.to_thread(watchlist_reader.ensure_schema)
 
     retention = RetentionJob(settings)
     last_purge_date: dt.date | None = None
-    cycles_since_oi_attempt = 0
+
+    pipelines: dict[str, InstrumentPipeline] = {}
+    # Symboly po selhaném setupu: cooldown v cyklech do dalšího pokusu
+    setup_cooldown: dict[str, int] = {}
+    desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
+    cycle = 0
 
     while True:
         cycle_start = asyncio.get_running_loop().time()
         now = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
 
-        # OI retry: každých ~30 min, dokud denní archiv nedorazí (CME publikuje ráno)
-        if not oi_available:
-            cycles_since_oi_attempt += 1
-            if cycles_since_oi_attempt >= 30:
-                cycles_since_oi_attempt = 0
-                oi_available = await try_archive_oi()
-        current_spot = fut_ticker.last if fut_ticker.last == fut_ticker.last else spot
-        # Auto-rozšíření denní obálky (ADR-0002)
-        expansion = discovery.maybe_expand(info, band, current_spot)
-        if expansion.expanded:
-            band = expansion.band
-            contracts = build_contracts(underlying, info, band)
-            runtime.contracts = contracts
-            if expansion.capped:
+        # Watchlist se čte každý k-tý cyklus (uživatel přidal/odebral ticker v UI)
+        if cycle % settings.watchlist_poll_cycles == 0:
+            desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
+
+        for symbol in list(setup_cooldown):
+            setup_cooldown[symbol] -= 1
+            if setup_cooldown[symbol] <= 0:
+                del setup_cooldown[symbol]
+        eligible = [symbol for symbol in desired if symbol not in setup_cooldown]
+
+        plan = plan_instruments(pipelines.keys(), eligible, settings.max_instruments)
+        for symbol in plan.stop:
+            logger.info("Zastavuji pipeline %s (odebráno z watchlistu)", symbol)
+            pipelines.pop(symbol).stop()
+        for symbol in plan.start:
+            try:
+                pipelines[symbol] = await create_pipeline(
+                    ib, settings, publisher, writer, oi_repository, symbol
+                )
+            except InstrumentSetupError as exc:
+                setup_cooldown[symbol] = SETUP_RETRY_CYCLES
+                logger.warning("Setup %s selhal: %s", symbol, exc)
                 await publisher.publish(
                     "alerts",
                     {
-                        "kind": "band_capped",
-                        "symbol": "ES",
-                        "message": "Obálka strikes na stropu — vzdálený okraj se posouvá",
+                        "kind": "instrument_error",
+                        "symbol": symbol,
+                        "message": str(exc),
                         "ts": now.timestamp(),
                     },
                 )
-        bars_to_write = list(minute_bars)
-        minute_bars.clear()
-        try:
-            await runtime.run_cycle(now, current_spot, bars_to_write)
-        except Exception:
-            logger.exception("Cyklus selhal — pokračuji dalším (SPEC kap. 8: odolnost)")
+            except Exception:
+                setup_cooldown[symbol] = SETUP_RETRY_CYCLES
+                logger.exception("Setup %s selhal neočekávaně — cooldown", symbol)
+        if plan.skipped:
+            logger.warning(
+                "Nad strop max_instruments=%d: %s neběží",
+                settings.max_instruments,
+                ",".join(plan.skipped),
+            )
+
+        # Sekvenční minutové cykly všech instrumentů + agregovaný status
+        results = await gather_metrics(list(pipelines.values()), now)
+        if results:
+            await publisher.status(
+                engine="online",
+                connection="connected",
+                port=settings.ibkr_port,
+                last_tick_ts=now.isoformat(),
+                **aggregate_status(results),
+            )
 
         # Noční purge (jednou po konfigurovaném čase)
         if (
@@ -202,6 +269,7 @@ async def main() -> None:
                     },
                 )
 
+        cycle += 1
         elapsed = asyncio.get_running_loop().time() - cycle_start
         await asyncio.sleep(max(1.0, 60.0 - elapsed))
 

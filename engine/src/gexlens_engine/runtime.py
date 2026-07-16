@@ -19,7 +19,7 @@ from gexlens_engine.compute.gex import GexEngine, GexInput
 from gexlens_engine.compute.levels import compute_levels
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
-from gexlens_engine.ibkr.scheduler import SubscriptionScheduler
+from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.parquet_store import LevelsRow, SnapshotRow, SnapshotWriter
@@ -62,13 +62,17 @@ class EngineRuntime:
     contracts: Sequence[OptionContractSpec]
     gex_engine: GexEngine = field(default_factory=GexEngine)
     cum_delta: CumDeltaTracker | None = None
+    # Multi-instrument orchestrátor pushuje agregovaný status sám (ADR-0003)
+    push_status: bool = True
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
             self.cum_delta = CumDeltaTracker(multiplier=self.multiplier)
 
-    async def run_cycle(self, ts_min: dt.datetime, spot: float, bars: Sequence[Bar]) -> None:
-        """Jeden kompletní minutový cyklus (volaný smyčkou nebo testem)."""
+    async def run_cycle(
+        self, ts_min: dt.datetime, spot: float, bars: Sequence[Bar]
+    ) -> SweepMetrics:
+        """Jeden kompletní minutový cyklus (volaný smyčkou nebo testem); vrací metriky sweepu."""
         day = ts_min.date()
         metrics = await self.scheduler.sweep(self.contracts, spot)
         quotes = self.scheduler.quotes()
@@ -142,16 +146,17 @@ class EngineRuntime:
             await asyncio.to_thread(self.writer.write_bars, self.symbol, day, bars)
 
         # 5) Push do API: stav pipeline + live kanály
-        await self.publisher.status(
-            engine="online",
-            connection="connected",
-            port=self.settings.ibkr_port,
-            greeks_complete=metrics.greeks_complete,
-            greeks_total=metrics.total,
-            repair_count=metrics.stale_count,
-            lines_utilization=metrics.lines_utilization,
-            last_tick_ts=ts_min.isoformat(),
-        )
+        if self.push_status:
+            await self.publisher.status(
+                engine="online",
+                connection="connected",
+                port=self.settings.ibkr_port,
+                greeks_complete=metrics.greeks_complete,
+                greeks_total=metrics.total,
+                repair_count=metrics.stale_count,
+                lines_utilization=metrics.lines_utilization,
+                last_tick_ts=ts_min.isoformat(),
+            )
         await self.publisher.publish(
             f"levels.{self.symbol}.{self.expiry}",
             {
@@ -177,10 +182,12 @@ class EngineRuntime:
                 f"price.{self.symbol}", {"ts": last_bar.ts.isoformat(), "last": last_bar.close}
             )
         logger.info(
-            "Cyklus %s: %d snapshotů, greeks %d/%d, sweep %.1fs",
+            "Cyklus %s %s: %d snapshotů, greeks %d/%d, sweep %.1fs",
+            self.symbol,
             ts_min.isoformat(),
             len(rows),
             metrics.greeks_complete,
             metrics.total,
             metrics.sweep_duration_s,
         )
+        return metrics

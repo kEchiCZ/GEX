@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     reconnect_backoff_base_s: float = Field(default=2.0, gt=0)
     reconnect_backoff_max_s: float = Field(default=60.0, gt=0)
 
+    # Instrumenty (ADR-0003): základní sada futures podkladů; watchlist z DB se přidává za běhu
+    symbols: str = "ES"
+    # Strop souběžně běžících instrumentů (market data lines rozpočet, ADR-0001/0003)
+    max_instruments: int = Field(default=3, ge=1)
+    # Watchlist z DB se čte každý k-tý minutový cyklus
+    watchlist_poll_cycles: int = Field(default=5, ge=1)
+
     # Opční řetězec a rotační scheduler (SPEC 3.2, 3.3)
     strike_range_points: float = Field(default=200.0, gt=0)
     # Auto-rozšíření obálky, když se spot přiblíží k okraji na < tento podíl šířky
@@ -73,7 +80,19 @@ class Settings(BaseSettings):
             raise ValueError(
                 "strike_range_max_points musí být ≥ 2× strike_range_points (výchozí obálka)"
             )
+        if not self.symbol_list:
+            raise ValueError("symbols nesmí být prázdný seznam (alespoň jeden podklad)")
         return self
+
+    @property
+    def symbol_list(self) -> list[str]:
+        """Základní sada podkladů z GEXLENS_SYMBOLS (čárkami oddělený seznam)."""
+        seen: list[str] = []
+        for raw in self.symbols.split(","):
+            symbol = raw.strip().upper()
+            if symbol and symbol not in seen:
+                seen.append(symbol)
+        return seen
 
     @property
     def snapshots_dir(self) -> Path:
