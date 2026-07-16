@@ -32,7 +32,9 @@ test('vykreslí kompletní layout (SPEC 7.1)', async () => {
   expect(screen.getByLabelText('Přepínače vizualizace')).toBeDefined()
   expect(screen.getByLabelText('Stav pipeline')).toBeDefined()
   expect(screen.getByText('Dyn GEX')).toBeDefined()
-  expect(screen.getByText('Vol + OI Δ')).toBeDefined()
+  // "Vol + OI Δ" je v přepínačích i v hlavičce strike profilu
+  expect(screen.getAllByText('Vol + OI Δ').length).toBeGreaterThan(0)
+  expect(screen.getByLabelText('Strike profil')).toBeDefined()
 
   // Expirace načtené z REST
   expect(await screen.findByRole('option', { name: '20260716' })).toBeDefined()

@@ -214,6 +214,12 @@ body {
 }
 
 /* ── Hlavní plocha a stavová lišta ───────────────────────── */
+.chart-row {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
 .chart-area {
   flex: 1;
   display: flex;
@@ -221,6 +227,45 @@ body {
   justify-content: center;
   min-height: 0;
   overflow: hidden;
+}
+
+.strike-profile {
+  position: relative;
+  width: 260px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+}
+
+.profile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.profile-header .chip {
+  padding: 2px 7px;
+  margin-left: 4px;
+  font-size: 11px;
+}
+
+.profile-tooltip {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: rgba(26, 30, 40, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
 }
 
 .heatmap-stack {
