@@ -4,7 +4,8 @@ import type { ReactNode } from 'react'
 
 export interface CrosshairPosition {
   minuteIdx: number
-  strike: number
+  /** null = pozice přišla z panelu, který zná jen časovou osu (spodní panely). */
+  strike: number | null
 }
 
 interface CrosshairState {

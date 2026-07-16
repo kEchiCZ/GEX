@@ -45,6 +45,28 @@ export function demoProfile(grid: HeatmapGrid): ProfileRow[] {
   })
 }
 
+export function demoPanels(minutes: number): {
+  vol: number[]
+  optVolCall: number[]
+  optVolPut: number[]
+  cumDelta: number[]
+} {
+  const vol: number[] = []
+  const optVolCall: number[] = []
+  const optVolPut: number[] = []
+  const cumDelta: number[] = []
+  let cum = 0
+  for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
+    const activity = 1 + Math.exp(-(((minuteIdx - 30) / 25) ** 2)) * 3
+    vol.push(Math.round(800 * activity * (0.7 + 0.3 * Math.abs(Math.sin(minuteIdx / 9)))))
+    optVolCall.push(Math.round(120 * activity * (0.6 + 0.4 * Math.abs(Math.sin(minuteIdx / 5)))))
+    optVolPut.push(Math.round(110 * activity * (0.6 + 0.4 * Math.abs(Math.cos(minuteIdx / 6)))))
+    cum += Math.sin(minuteIdx / 40) * 90 + Math.sin(minuteIdx / 11) * 35
+    cumDelta.push(Math.round(cum))
+  }
+  return { vol, optVolCall, optVolPut, cumDelta }
+}
+
 export function demoOverlays(grid: HeatmapGrid): OverlayData {
   const price: PriceBar[] = []
   let previousClose = 0

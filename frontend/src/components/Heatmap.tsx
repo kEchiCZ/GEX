@@ -198,22 +198,24 @@ export function Heatmap({
       }
     }
 
-    // Crosshair synchronizovaný napříč panely
+    // Crosshair synchronizovaný napříč panely (bez striku jen svislá čára)
     if (crosshair) {
-      const row = grid.strikes.indexOf(crosshair.strike)
+      const x = minuteToX(crosshair.minuteIdx)
+      context.strokeStyle = 'rgba(215,220,230,0.55)'
+      context.lineWidth = 1
+      context.beginPath()
+      context.moveTo(x, 0)
+      context.lineTo(x, canvas.height)
+      const row = crosshair.strike === null ? -1 : grid.strikes.indexOf(crosshair.strike)
       if (row >= 0) {
-        const x = minuteToX(crosshair.minuteIdx)
         const y = rowToY(row)
-        context.strokeStyle = 'rgba(215,220,230,0.55)'
-        context.lineWidth = 1
-        context.beginPath()
-        context.moveTo(x, 0)
-        context.lineTo(x, canvas.height)
         context.moveTo(0, y)
         context.lineTo(canvas.width, y)
         context.stroke()
         context.strokeStyle = 'rgba(215,220,230,0.9)'
         context.strokeRect(x - 0.5 * scaleX, y - 0.5 * scaleY, scaleX, scaleY)
+      } else {
+        context.stroke()
       }
     }
 
@@ -279,6 +281,7 @@ export function Heatmap({
   // Tooltip buňky (čas, strike, hodnoty metrik)
   const tooltip = useMemo(() => {
     if (!crosshair) return null
+    if (crosshair.strike === null) return null
     const strikeIdx = grid.strikes.indexOf(crosshair.strike)
     if (strikeIdx < 0) return null
     const index = strikeIdx * grid.minutes + crosshair.minuteIdx
