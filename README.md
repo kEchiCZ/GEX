@@ -3,7 +3,11 @@
 Vizualizace opčního positioningu (GEX/OI/Vol heatmapa) nad ES futures opcemi. Jediný datový zdroj: **Interactive Brokers TWS/Gateway API**.
 
 - **Zadání / zdroj pravdy:** [docs/SPEC.md](docs/SPEC.md) (v2.0) · ADR v [docs/adr/](docs/adr/)
+- **Uživatelský manuál:** [docs/manual/UZIVATELSKY-MANUAL.md](docs/manual/UZIVATELSKY-MANUAL.md) ([PDF](docs/manual/UZIVATELSKY-MANUAL.pdf)) — dostupný i v aplikaci (sidebar → Manuál)
+- **Manuál pro správce a vývojáře:** [docs/manual/ADMIN-MANUAL.md](docs/manual/ADMIN-MANUAL.md) ([PDF](docs/manual/ADMIN-MANUAL.pdf))
 - **Instrukce pro vývoj (Claude Code):** [CLAUDE.md](CLAUDE.md)
+
+Na Windows lze aplikaci spouštět zástupcem na ploše (cíl: `scripts/start-gexlens.cmd`, ikona `assets/gexlens.ico`). Manuály se regenerují skriptem `scripts/build-manual.ps1` (MD → in-app wiki HTML + PDF).
 
 ## Architektura
 
