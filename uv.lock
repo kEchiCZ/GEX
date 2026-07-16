@@ -203,6 +203,7 @@ name = "gexlens-engine"
 version = "0.1.0"
 source = { editable = "engine" }
 dependencies = [
+    { name = "httpx" },
     { name = "ib-async" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pyarrow" },
@@ -212,6 +213,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.28" },
     { name = "ib-async", specifier = ">=2.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pyarrow", specifier = ">=18" },

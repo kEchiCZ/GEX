@@ -90,6 +90,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Agregovaný stav pipeline (SPEC 3.7): greeks progress, repair, lines, disk."""
         return status_store.snapshot()
 
+    # Interní ingest z enginu (API bindí na localhost — SPEC kap. 8 bezpečnost)
+    @app.post("/internal/status")
+    def internal_status(fields: dict[str, object]) -> dict[str, str]:
+        status_store.update(**fields)
+        live_hub.publish("status", status_store.snapshot())
+        return {"status": "ok"}
+
+    @app.post("/internal/publish")
+    def internal_publish(message: dict[str, object]) -> dict[str, int]:
+        channel = message.get("channel")
+        data = message.get("data")
+        if not isinstance(channel, str) or not isinstance(data, dict):
+            raise HTTPException(422, "Očekávám {channel: str, data: object}")
+        return {"delivered": live_hub.publish(channel, data)}
+
     @app.get("/instruments")
     def instruments() -> dict[str, list[str]]:
         return {"instruments": repository.list_symbols()}
