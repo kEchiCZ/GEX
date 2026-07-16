@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Datový engine GEXLens — IBKR připojení, storage, výpočty (SPEC kap. 3–5)"
 requires-python = ">=3.12"
 dependencies = [
+    "ib-async>=2.0",
     "pydantic-settings>=2.7",
 ]
 

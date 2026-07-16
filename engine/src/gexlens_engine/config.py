@@ -6,7 +6,7 @@ Engine s nevalidní konfigurací odmítá nastartovat: `load_settings` vyhodí
 
 from pathlib import Path
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     ibkr_client_id: int = Field(default=1, ge=0)
     # 1 = live; delayed data (3) engine za běhu odmítne (SPEC 3.1)
     market_data_type: int = Field(default=1, ge=1, le=4)
+    connect_timeout_s: float = Field(default=10.0, gt=0)
+    # Exponenciální backoff reconnectu 2 → 60 s (SPEC 3.1)
+    reconnect_backoff_base_s: float = Field(default=2.0, gt=0)
+    reconnect_backoff_max_s: float = Field(default=60.0, gt=0)
 
     # Opční řetězec a rotační scheduler (SPEC 3.2, 3.3)
     strike_range_points: float = Field(default=200.0, gt=0)
@@ -48,6 +52,12 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     retention_days: int = Field(default=14, ge=1)
     disk_limit_gb: float = Field(default=2.0, gt=0)
+
+    @model_validator(mode="after")
+    def _validate_backoff(self) -> "Settings":
+        if self.reconnect_backoff_max_s < self.reconnect_backoff_base_s:
+            raise ValueError("reconnect_backoff_max_s musí být ≥ reconnect_backoff_base_s")
+        return self
 
     @property
     def snapshots_dir(self) -> Path:
@@ -73,7 +83,8 @@ def load_settings() -> Settings:
     except ValidationError as exc:
         rows = []
         for err in exc.errors():
-            var = "GEXLENS_" + "_".join(str(part) for part in err["loc"]).upper()
+            loc = "_".join(str(part) for part in err["loc"])
+            var = f"GEXLENS_{loc.upper()}" if loc else "(kombinace hodnot)"
             rows.append(f"  {var}: {err['msg']} (zadáno: {err.get('input')!r})")
         raise ConfigError(
             "Nevalidní konfigurace enginu (.env / proměnné prostředí):\n" + "\n".join(rows)
