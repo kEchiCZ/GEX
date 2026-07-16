@@ -4,6 +4,7 @@ Engine s nevalidní konfigurací odmítá nastartovat: `load_settings` vyhodí
 `ConfigError` se srozumitelným výpisem všech chybných položek.
 """
 
+import datetime as dt
 from pathlib import Path
 
 from pydantic import Field, ValidationError, model_validator
@@ -59,6 +60,8 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     retention_days: int = Field(default=14, ge=1)
     disk_limit_gb: float = Field(default=2.0, gt=0)
+    # Čas nočního purge jobu (UTC, po zavření US seance)
+    retention_purge_time_utc: dt.time = dt.time(21, 30)
 
     @model_validator(mode="after")
     def _validate_backoff(self) -> "Settings":
