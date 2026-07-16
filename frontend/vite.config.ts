@@ -7,5 +7,6 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
+    globals: true, // testing-library auto-cleanup mezi testy
   },
 })

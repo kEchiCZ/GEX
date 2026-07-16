@@ -1,0 +1,239 @@
+/* Layout GEXLens (SPEC 7.1) — dark theme, responzivní od 1280px. */
+:root {
+  --bg: #12151c;
+  --bg-panel: #1a1e28;
+  --bg-chip: #232936;
+  --border: #2c3342;
+  --text: #d7dce6;
+  --text-muted: #7d8596;
+  --accent: #38b2ac;
+  --up: #3ecf8e;
+  --down: #f0616d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+}
+
+.app {
+  display: flex;
+  height: 100vh;
+  min-width: 1280px;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  padding: 8px;
+  gap: 12px;
+}
+
+.sidebar.collapsed {
+  width: 40px;
+}
+
+.sidebar-toggle {
+  align-self: flex-end;
+}
+
+.sidebar ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nav-item,
+.sidebar-toggle,
+.chip,
+.bell {
+  background: var(--bg-chip);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.nav-item:hover,
+.chip:hover {
+  border-color: var(--accent);
+}
+
+.watchlist h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+}
+
+.watchlist-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 2px;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* ── Hlavní sloupec ──────────────────────────────────────── */
+.main-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.instrument-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 14px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.ticker {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.instrument-price .last {
+  font-size: 18px;
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.change-up {
+  color: var(--up);
+}
+
+.change-down {
+  color: var(--down);
+}
+
+.expiry-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+.expiry-select select {
+  background: var(--bg-chip);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.live-indicator.live {
+  color: var(--up);
+}
+
+.live-indicator.stale {
+  color: var(--text-muted);
+}
+
+.bell {
+  position: relative;
+  margin-left: auto;
+}
+
+.badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: var(--down);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 10px;
+  padding: 1px 5px;
+}
+
+/* ── Řádky ovládání ──────────────────────────────────────── */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chip.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.separator {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.toggle input {
+  accent-color: var(--accent);
+}
+
+/* ── Hlavní plocha a stavová lišta ───────────────────────── */
+.chart-area {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.placeholder {
+  font-size: 16px;
+}
+
+.status-bar {
+  display: flex;
+  gap: 18px;
+  padding: 5px 14px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow-x: auto;
+}
