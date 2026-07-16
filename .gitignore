@@ -1,0 +1,27 @@
+# Původní zadávací balík (obsah zkopírován do docs/, scripts/, CLAUDE.md)
+gexlens-bootstrap/
+gexlens-SPEC-v2.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+
+# Data (Parquet snapshoty, ticky, derived — retence řeší engine)
+data/
+
+# Prostředí a secrets
+.env
+!.env.example
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
