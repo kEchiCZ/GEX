@@ -1,0 +1,17 @@
+{
+  "description": "Referenční den pro e2e smoke (issue #31). Deterministický mock: 3 strikes (7595/7600/7605) × C/P, 5 minut, spot 7600. Kotace: bid=10, ask=10.5, last=10.4 (nad midem → midpoint sign +1), gamma=0.01, delta=±0.5, volume kumulativně (m+1)×base (call base 20, put base 10). OI archiv: C = 1000/1100/1200, P = 1400/1150/700. Ruční výpočty: NetGEX(K) = 0.01·(OI_C−OI_P)·50 → −200 / −25 / +250; kumulativně −200/−225/+25 → flip = 7600 + 225·5/250 = 7604.5; call wall 7605, put wall 7595, TotalGEX = 25. CumΔ: od 2. minuty flowΔ = 3 strikes × (20·0.5 + 10·(−0.5)) × 50 = 750/min → po 5 minutách 4×750 = 3000.",
+  "minutes": 5,
+  "strikes": [7595.0, 7600.0, 7605.0],
+  "spot": 7600.0,
+  "oi_call": { "7595.0": 1000.0, "7600.0": 1100.0, "7605.0": 1200.0 },
+  "oi_put": { "7595.0": 1400.0, "7600.0": 1150.0, "7605.0": 700.0 },
+  "expected": {
+    "snapshot_rows": 30,
+    "flip": 7604.5,
+    "call_wall": 7605.0,
+    "put_wall": 7595.0,
+    "total_gex": 25.0,
+    "flow_delta_per_minute": 750.0,
+    "cum_delta_final": 3000.0
+  }
+}
