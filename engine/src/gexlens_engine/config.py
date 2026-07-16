@@ -41,8 +41,13 @@ class Settings(BaseSettings):
     strike_range_expand_threshold: float = Field(default=0.25, gt=0, lt=1)
     batch_size: int = Field(default=80, ge=1)
     batch_timeout_s: float = Field(default=4.0, gt=0)
-    # Křídla řetězce se sweepují každý k-tý cyklus (ATM±30 každý cyklus)
+    # Křídla řetězce se sweepují každý k-tý cyklus (ATM±atm_sweep_width každý cyklus)
     wings_sweep_every: int = Field(default=3, ge=1)
+    atm_sweep_width: int = Field(default=30, ge=1)
+    # Max pokusů repair fronty na kontrakt za sweep, pak stale označení
+    repair_max_attempts: int = Field(default=3, ge=1)
+    # Kapacita market data lines účtu (ADR-0001: naměřeno ≥ 150; default konzervativní)
+    market_data_lines: int = Field(default=100, ge=1)
 
     # Hot zóna (SPEC 3.4; limit streamů naměřen v ADR-0001)
     hot_zone_width: int = Field(default=15, ge=1)

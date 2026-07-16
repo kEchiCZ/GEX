@@ -8,6 +8,9 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from gexlens_engine.ibkr.discovery import OptionContractSpec
+from gexlens_engine.ibkr.scheduler import QuoteSnapshot
+
 
 @dataclass
 class MockOptionChain:
@@ -85,3 +88,55 @@ class MockIB:
     def drop_connection(self) -> None:
         """Simulace výpadku TWS (kill) — spojení zmizí bez rozloučení."""
         self._connected = False
+
+
+class MockQuoteStreamer:
+    """Mock zdroje kotací pro SubscriptionScheduler.
+
+    `fail_first` určuje, kolik prvních pokusů daného kontraktu vrátí nekompletní
+    data (None); `always_fail` kontrakty nedodají data nikdy. `delay_s` simuluje
+    latenci subskripce.
+    """
+
+    def __init__(
+        self,
+        *,
+        fail_first: dict[OptionContractSpec, int] | None = None,
+        always_fail: set[OptionContractSpec] | None = None,
+        delay_s: float = 0.0,
+    ) -> None:
+        self.fail_first = dict(fail_first or {})
+        self.always_fail = set(always_fail or ())
+        self.delay_s = delay_s
+        self.fetch_calls: list[OptionContractSpec] = []
+        self.max_concurrent = 0
+        self._concurrent = 0
+        self._attempts: dict[OptionContractSpec, int] = {}
+
+    async def fetch_quote(self, spec: OptionContractSpec, timeout_s: float) -> QuoteSnapshot | None:
+        self.fetch_calls.append(spec)
+        self._concurrent += 1
+        self.max_concurrent = max(self.max_concurrent, self._concurrent)
+        try:
+            if self.delay_s:
+                await asyncio.sleep(min(self.delay_s, timeout_s))
+            else:
+                await asyncio.sleep(0)  # předání řízení, ať se dávka reálně prokládá
+            if spec in self.always_fail:
+                return None
+            attempt = self._attempts[spec] = self._attempts.get(spec, 0) + 1
+            if attempt <= self.fail_first.get(spec, 0):
+                return None
+            return QuoteSnapshot(
+                bid=10.0,
+                ask=10.5,
+                last=10.25,
+                volume=100.0,
+                iv=0.15,
+                delta=0.5 if spec.right == "C" else -0.5,
+                gamma=0.01,
+                theta=-0.5,
+                vega=1.2,
+            )
+        finally:
+            self._concurrent -= 1
