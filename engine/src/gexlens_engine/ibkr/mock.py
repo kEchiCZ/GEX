@@ -5,12 +5,20 @@ selhání connectu a zamrzlý heartbeat.
 """
 
 import asyncio
+import datetime as dt
+import time
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.hotzone import HotZoneClientLike, StreamLimitError
 from gexlens_engine.ibkr.scheduler import QuoteSnapshot
+from gexlens_engine.ibkr.underlying import Bar
+
+
+class PacingViolationError(RuntimeError):
+    """Mock obdoba IBKR pacing violation (error 162/420)."""
 
 
 @dataclass
@@ -178,3 +186,46 @@ class MockOIFetcher:
         self.fetch_calls.append(spec)
         await asyncio.sleep(0)
         return self.values.get(spec)
+
+
+class MockHistoricalClient:
+    """Mock historical dat s tvrdou simulací IBKR pacing limitů.
+
+    Každý request nad `max_requests` v klouzavém okně `window_s` vyhodí
+    PacingViolationError — přesně to, čemu má PacingGuard zabránit.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_requests: int = 60,
+        window_s: float = 600.0,
+        bars_per_day: int = 3,
+    ) -> None:
+        self.max_requests = max_requests
+        self.window_s = window_s
+        self.bars_per_day = bars_per_day
+        self.calls: list[tuple[str, dt.date]] = []
+        self._request_times: deque[float] = deque()
+
+    async def fetch_day_bars(self, symbol: str, day: dt.date) -> Sequence[Bar]:
+        now = time.monotonic()
+        while self._request_times and now - self._request_times[0] >= self.window_s:
+            self._request_times.popleft()
+        if len(self._request_times) >= self.max_requests:
+            raise PacingViolationError("mock: historical pacing violation")
+        self._request_times.append(now)
+        self.calls.append((symbol, day))
+        await asyncio.sleep(0)
+        start = dt.datetime.combine(day, dt.time(13, 30), tzinfo=dt.UTC)
+        return [
+            Bar(
+                ts=start + dt.timedelta(minutes=i),
+                open=100.0 + i,
+                high=101.0 + i,
+                low=99.0 + i,
+                close=100.5 + i,
+                volume=10.0,
+            )
+            for i in range(self.bars_per_day)
+        ]
