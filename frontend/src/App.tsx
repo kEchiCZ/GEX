@@ -194,6 +194,7 @@ function MainContent() {
               style={style}
               contours={contours}
               overlays={overlays}
+              minuteLabels={day.minuteLabels}
               priceStyle={priceStyle}
               priceOpacity={priceOpacity}
               annotations={annotationsState.annotations}

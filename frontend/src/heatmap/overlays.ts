@@ -51,6 +51,17 @@ export function visibleOverlays(data: OverlayData, toggles: OverlayToggles): Ove
   }
 }
 
+/** Indexy pro popisky osy: každý k-tý tak, aby rozestup na obrazovce byl ≥ minSpacingPx. */
+export function tickIndices(count: number, stepPx: number, minSpacingPx: number): number[] {
+  if (count <= 0 || stepPx <= 0) return []
+  const every = Math.max(1, Math.ceil(minSpacingPx / stepPx))
+  const indices: number[] = []
+  for (let index = 0; index < count; index += every) {
+    indices.push(index)
+  }
+  return indices
+}
+
 /** Interpolovaná řádková pozice hodnoty (strike/cena) v ose strikes; index 0 = nejnižší. */
 export function fractionalRow(strikes: number[], value: number): number | null {
   if (strikes.length === 0) return null

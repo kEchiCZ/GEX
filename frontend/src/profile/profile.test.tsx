@@ -85,6 +85,16 @@ test('call pruhy jdou doprava od osy, put doleva; nejvyšší strike nahoře', (
   )
 })
 
+test('panel má popisky strikes u levého okraje', () => {
+  renderPanel()
+  const labels = screen
+    .getByLabelText('Skládané pruhy strike profilu')
+    .querySelectorAll('[data-part="strike-label"]')
+  const texts = [...labels].map((node) => node.textContent)
+  expect(texts).toContain('7600')
+  expect(texts).toContain('7590')
+})
+
 test('cenová linka je vykreslená na interpolované pozici spotu', () => {
   renderPanel()
   const line = screen.getByTestId('profile-price-line')

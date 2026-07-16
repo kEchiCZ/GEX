@@ -4,10 +4,19 @@ import { expect, test } from 'vitest'
 import { Heatmap } from '../components/Heatmap'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
 import { demoGrid } from './demo'
-import { fractionalRow, pricePolyline, visibleOverlays } from './overlays'
+import { fractionalRow, pricePolyline, tickIndices, visibleOverlays } from './overlays'
 import type { OverlayData } from './overlays'
 
 // ── Čisté helpery ──────────────────────────────────────────────────
+
+test('tickIndices vybírá popisky s minimálním rozestupem', () => {
+  // 100 položek, krok 3 px, minimálně 30 px → každá 10.
+  expect(tickIndices(100, 3, 30)).toEqual([0, 10, 20, 30, 40, 50, 60, 70, 80, 90])
+  // Dost místa → každá položka
+  expect(tickIndices(5, 50, 30)).toEqual([0, 1, 2, 3, 4])
+  expect(tickIndices(0, 10, 30)).toEqual([])
+  expect(tickIndices(10, 0, 30)).toEqual([])
+})
 
 test('fractionalRow interpoluje mezi strikes a ořezává okraje', () => {
   const strikes = [7590, 7595, 7600]

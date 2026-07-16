@@ -11,7 +11,7 @@ import type { ContoursMode } from '../heatmap/contours'
 import { gaussianBlur, renderGrid } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
-import { candleGeometry, fractionalRow, pricePolyline } from '../heatmap/overlays'
+import { candleGeometry, fractionalRow, pricePolyline, tickIndices } from '../heatmap/overlays'
 import type { OverlayData, PriceStyle } from '../heatmap/overlays'
 import { nearestAnnotationId } from '../annotations/model'
 import type {
@@ -38,6 +38,7 @@ export function Heatmap({
   style,
   contours,
   overlays = {},
+  minuteLabels = [],
   priceStyle = 'line',
   priceOpacity = 1,
   annotations = [],
@@ -50,6 +51,8 @@ export function Heatmap({
   style: HeatmapStyle
   contours: ContoursMode
   overlays?: OverlayData
+  /** Popisky časové osy (HH:MM) per minuta — osa X dole. */
+  minuteLabels?: string[]
   priceStyle?: PriceStyle
   /** Viditelnost cenové vrstvy nad heatmapou (0–1). */
   priceOpacity?: number
@@ -316,11 +319,35 @@ export function Heatmap({
       drawAnnotation(annotationTool, annotationColor, draft)
     }
 
+    // Popisky os (kreslené naposled, ať jsou nad daty)
+    context.font = '11px sans-serif'
+    // Osa Y: strikes u levého okraje
+    for (const row of tickIndices(strikeCount, scaleY, 26)) {
+      const y = rowToY(row)
+      if (y < 8 || y > canvas.height - 20) continue
+      const label = String(grid.strikes[row])
+      context.fillStyle = 'rgba(18,21,28,0.75)'
+      context.fillRect(2, y - 8, context.measureText(label).width + 8, 15)
+      context.fillStyle = 'rgba(180,188,202,0.95)'
+      context.fillText(label, 6, y + 4)
+    }
+    // Osa X: čas u spodního okraje
+    for (const minuteIdx of tickIndices(grid.minutes, scaleX, 88)) {
+      const x = minuteToX(minuteIdx)
+      if (x < 24 || x > canvas.width - 44) continue
+      const label = minuteLabels[minuteIdx] ?? `m${minuteIdx}`
+      const width = context.measureText(label).width
+      context.fillStyle = 'rgba(18,21,28,0.75)'
+      context.fillRect(x - width / 2 - 4, canvas.height - 19, width + 8, 15)
+      context.fillStyle = 'rgba(180,188,202,0.95)'
+      context.fillText(label, x - width / 2, canvas.height - 7)
+    }
+
     // Timestamp dat (SPEC 7.2)
     if (overlays.timestamp) {
       context.fillStyle = 'rgba(125,133,150,0.9)'
       context.font = '11px sans-serif'
-      context.fillText(overlays.timestamp, canvas.width - 150, canvas.height - 8)
+      context.fillText(overlays.timestamp, canvas.width - 150, canvas.height - 26)
     }
   }, [
     mapping,
@@ -334,6 +361,9 @@ export function Heatmap({
     annotationColor,
     priceStyle,
     priceOpacity,
+    minuteLabels,
+    strikeCount,
+    grid.minutes,
   ])
 
   useEffect(() => {

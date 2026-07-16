@@ -78,6 +78,23 @@ export function StrikeProfile({
       >
         {/* symetrická osa */}
         <line x1={halfWidth} y1={0} x2={halfWidth} y2={height} stroke="#2c3342" />
+        {/* popisky strikes (každý k-tý, ať se nepřekrývají) */}
+        {ordered.map((row, index) => {
+          const labelEvery = Math.max(1, Math.ceil(16 / Math.max(1, rowHeight)))
+          if (index % labelEvery !== 0) return null
+          return (
+            <text
+              key={`label-${row.strike}`}
+              x={4}
+              y={index * rowHeight + rowHeight / 2 + 3}
+              fontSize={10}
+              fill="#7d8596"
+              data-part="strike-label"
+            >
+              {row.strike}
+            </text>
+          )
+        })}
         {ordered.map((row, index) => {
           const bar = geometry.get(row.strike)
           if (!bar) return null
