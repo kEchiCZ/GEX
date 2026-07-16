@@ -1,6 +1,7 @@
 /** Kořenový layout aplikace (SPEC 7.1) s heatmapou, overlayi a playbackem (SPEC 7.3). */
 import { useMemo, useState } from 'react'
 import './App.css'
+import { useAnnotations } from './annotations/useAnnotations'
 import { TimeframeRow, TogglesRow } from './components/ControlRows'
 import { Heatmap } from './components/Heatmap'
 import { InstrumentHeader } from './components/InstrumentHeader'
@@ -15,19 +16,32 @@ import { useDayData } from './replay/useDayData'
 import { usePlayback } from './replay/usePlayback'
 import { AppStateProvider, useAppState } from './state/AppState'
 import { CrosshairProvider } from './state/Crosshair'
+import type { ActiveTool } from './annotations/model'
 import type { ContoursMode } from './heatmap/contours'
 import type { HeatmapStyle } from './heatmap/render'
 import type { LiveSocket } from './api/ws'
+
+const ANNOTATION_TOOLS: Array<{ tool: ActiveTool; label: string }> = [
+  { tool: null, label: 'Kurzor' },
+  { tool: 'arrow', label: 'Šipka' },
+  { tool: 'line', label: 'Linie' },
+  { tool: 'freehand', label: 'Freehand' },
+  { tool: 'eraser', label: 'Guma' },
+]
 
 function ChartArea() {
   const { toggles, symbol, selectedExpiry } = useAppState()
   const [style, setStyle] = useState<HeatmapStyle>('gradient')
   const [contours, setContours] = useState<ContoursMode>('off')
+  const [annotationTool, setAnnotationTool] = useState<ActiveTool>(null)
+  const [annotationColor, setAnnotationColor] = useState('#e8c14b')
 
   // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame)
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const day = useDayData(symbol, selectedExpiry, today)
   const playback = usePlayback(day.grid.minutes)
+  // Anotace: persistence per instrument + den (SPEC 7.4)
+  const annotationsState = useAnnotations(symbol, today)
 
   // Přetáčení = synchronní krájení všech panelů v paměti
   const grid = useMemo(
@@ -90,6 +104,22 @@ function ChartArea() {
             <option value="all">All</option>
           </select>
         </label>
+        <span className="separator" />
+        {ANNOTATION_TOOLS.map(({ tool, label }) => (
+          <button
+            key={label}
+            className={annotationTool === tool ? 'chip active' : 'chip'}
+            onClick={() => setAnnotationTool(tool)}
+          >
+            {label}
+          </button>
+        ))}
+        <input
+          type="color"
+          aria-label="Barva anotace"
+          value={annotationColor}
+          onChange={(event) => setAnnotationColor(event.target.value)}
+        />
         <span className="muted" data-testid="data-source">
           {day.source === 'replay' ? `replay ${today}` : 'demo data'}
         </span>
@@ -97,7 +127,17 @@ function ChartArea() {
       <div className="chart-row">
         <div className="chart-column">
           <main className="chart-area" aria-label="Heatmapa">
-            <Heatmap grid={grid} style={style} contours={contours} overlays={overlays} />
+            <Heatmap
+              grid={grid}
+              style={style}
+              contours={contours}
+              overlays={overlays}
+              annotations={annotationsState.annotations}
+              annotationTool={annotationTool}
+              annotationColor={annotationColor}
+              onAnnotationCreate={(payload) => void annotationsState.create(payload)}
+              onAnnotationErase={(id) => void annotationsState.erase(id)}
+            />
           </main>
           <BottomPanels
             data={panelSeries}

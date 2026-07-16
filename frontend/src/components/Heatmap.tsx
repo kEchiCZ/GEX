@@ -13,6 +13,14 @@ import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
 import { fractionalRow, pricePolyline } from '../heatmap/overlays'
 import type { OverlayData } from '../heatmap/overlays'
+import { nearestAnnotationId } from '../annotations/model'
+import type {
+  ActiveTool,
+  AnnotationPayload,
+  AnnotationPoint,
+  AnnotationTool,
+  StoredAnnotation,
+} from '../annotations/model'
 import { useCrosshair } from '../state/Crosshair'
 
 interface ViewTransform {
@@ -30,17 +38,28 @@ export function Heatmap({
   style,
   contours,
   overlays = {},
+  annotations = [],
+  annotationTool = null,
+  annotationColor = '#e8c14b',
+  onAnnotationCreate,
+  onAnnotationErase,
 }: {
   grid: HeatmapGrid
   style: HeatmapStyle
   contours: ContoursMode
   overlays?: OverlayData
+  annotations?: StoredAnnotation[]
+  annotationTool?: ActiveTool
+  annotationColor?: string
+  onAnnotationCreate?: (payload: AnnotationPayload) => void
+  onAnnotationErase?: (id: number) => void
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const offscreenRef = useRef<HTMLCanvasElement | null>(null)
   const [view, setView] = useState<ViewTransform>({ offsetX: 0, offsetY: 0, zoom: 1 })
   const dragRef = useRef<{ x: number; y: number } | null>(null)
+  const [draft, setDraft] = useState<AnnotationPoint[] | null>(null)
   const { position: crosshair, setPosition: setCrosshair } = useCrosshair()
 
   const strikeCount = grid.strikes.length
@@ -72,9 +91,22 @@ export function Heatmap({
           const strikeIdx = strikeCount - 1 - rowFromTop
           return { minuteIdx, strikeIdx }
         },
+        // Anotace: spojité datové souřadnice (čas × strike, ne pixely — SPEC 7.4)
+        screenToDataPoint: (x: number, y: number): AnnotationPoint => {
+          const minute = (x - view.offsetX) / scaleX - 0.5
+          const row = strikeCount - 1 - ((y - view.offsetY) / scaleY - 0.5)
+          const clamped = Math.min(strikeCount - 1, Math.max(0, row))
+          const lowIdx = Math.min(strikeCount - 2, Math.max(0, Math.floor(clamped)))
+          const fraction = clamped - lowIdx
+          const strike =
+            strikeCount > 1
+              ? grid.strikes[lowIdx] + fraction * (grid.strikes[lowIdx + 1] - grid.strikes[lowIdx])
+              : (grid.strikes[0] ?? 0)
+          return { minute, strike }
+        },
       }
     },
-    [grid.minutes, strikeCount, view],
+    [grid.minutes, grid.strikes, strikeCount, view],
   )
 
   // 1) Data → offscreen bitmapa (jen při změně dat/stylu)
@@ -219,13 +251,60 @@ export function Heatmap({
       }
     }
 
+    // Anotace (SPEC 7.4): kreslené v datových souřadnicích, škálují se s pan/zoom
+    const drawAnnotation = (tool: AnnotationTool, color: string, points: AnnotationPoint[]) => {
+      if (points.length < 2) return
+      context.strokeStyle = color
+      context.lineWidth = 2
+      context.beginPath()
+      points.forEach((point, index) => {
+        const px = minuteToX(point.minute)
+        const py = rowToY(fractionalRow(grid.strikes, point.strike) ?? 0)
+        if (index === 0) context.moveTo(px, py)
+        else context.lineTo(px, py)
+      })
+      context.stroke()
+      if (tool === 'arrow') {
+        const from = points[0]
+        const to = points[points.length - 1]
+        const x1 = minuteToX(from.minute)
+        const y1 = rowToY(fractionalRow(grid.strikes, from.strike) ?? 0)
+        const x2 = minuteToX(to.minute)
+        const y2 = rowToY(fractionalRow(grid.strikes, to.strike) ?? 0)
+        const angle = Math.atan2(y2 - y1, x2 - x1)
+        const head = 10
+        context.beginPath()
+        context.moveTo(x2, y2)
+        context.lineTo(x2 - head * Math.cos(angle - 0.5), y2 - head * Math.sin(angle - 0.5))
+        context.moveTo(x2, y2)
+        context.lineTo(x2 - head * Math.cos(angle + 0.5), y2 - head * Math.sin(angle + 0.5))
+        context.stroke()
+      }
+    }
+    for (const annotation of annotations) {
+      drawAnnotation(annotation.payload.tool, annotation.payload.color, annotation.payload.points)
+    }
+    if (draft && annotationTool && annotationTool !== 'eraser') {
+      drawAnnotation(annotationTool, annotationColor, draft)
+    }
+
     // Timestamp dat (SPEC 7.2)
     if (overlays.timestamp) {
       context.fillStyle = 'rgba(125,133,150,0.9)'
       context.font = '11px sans-serif'
       context.fillText(overlays.timestamp, canvas.width - 150, canvas.height - 8)
     }
-  }, [mapping, contourSegments, overlays, grid.strikes, crosshair])
+  }, [
+    mapping,
+    contourSegments,
+    overlays,
+    grid.strikes,
+    crosshair,
+    annotations,
+    draft,
+    annotationTool,
+    annotationColor,
+  ])
 
   useEffect(() => {
     drawData()
@@ -243,13 +322,51 @@ export function Heatmap({
     }))
   }
 
+  const eventDataPoint = (event: React.PointerEvent<HTMLCanvasElement>): AnnotationPoint | null => {
+    const canvas = overlayRef.current
+    if (!canvas) return null
+    const rect = canvas.getBoundingClientRect()
+    const cssScale = rect.width > 0 ? canvas.width / rect.width : 1
+    const x = (event.clientX - rect.left) * cssScale
+    const y = (event.clientY - rect.top) * cssScale
+    return mapping(canvas).screenToDataPoint(x, y)
+  }
+
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (annotationTool === 'eraser') {
+      const point = eventDataPoint(event)
+      if (point && onAnnotationErase) {
+        // Tolerance gumy: ~5 minut a 2 strike kroky
+        const strikeStep = strikeCount > 1 ? Math.abs(grid.strikes[1] - grid.strikes[0]) : 1
+        const target = nearestAnnotationId(annotations, point, 5, 2 * strikeStep)
+        if (target !== null) onAnnotationErase(target)
+      }
+      return
+    }
+    if (annotationTool) {
+      const point = eventDataPoint(event)
+      if (point) setDraft([point, point])
+      event.currentTarget.setPointerCapture(event.pointerId)
+      return
+    }
     dragRef.current = { x: event.clientX, y: event.clientY }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = overlayRef.current
+    if (draft && annotationTool && annotationTool !== 'eraser') {
+      const point = eventDataPoint(event)
+      if (point) {
+        setDraft(
+          (previous) =>
+            annotationTool === 'freehand'
+              ? [...(previous ?? []), point]
+              : [previous?.[0] ?? point, point], // šipka/linie: start + aktuální konec
+        )
+      }
+      return
+    }
     if (dragRef.current) {
       const deltaX = event.clientX - dragRef.current.x
       const deltaY = event.clientY - dragRef.current.y
@@ -275,6 +392,13 @@ export function Heatmap({
   }
 
   const onPointerUp = () => {
+    if (draft && annotationTool && annotationTool !== 'eraser') {
+      if (onAnnotationCreate && draft.length >= 2) {
+        onAnnotationCreate({ tool: annotationTool, color: annotationColor, points: draft })
+      }
+      setDraft(null)
+      return
+    }
     dragRef.current = null
   }
 
