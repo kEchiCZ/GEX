@@ -14,6 +14,7 @@ import { PlaybackBar } from './components/PlaybackBar'
 import { SettingsView } from './components/SettingsView'
 import { StrikeProfile } from './components/StrikeProfile'
 import { visibleOverlays } from './heatmap/overlays'
+import type { PriceStyle } from './heatmap/overlays'
 import { sliceGrid, sliceOverlays, slicePanels } from './replay/slice'
 import { useDayData } from './replay/useDayData'
 import { usePlayback } from './replay/usePlayback'
@@ -48,6 +49,14 @@ function MainContent() {
   const [contours, setContours] = useState<ContoursMode>('off')
   const [annotationTool, setAnnotationTool] = useState<ActiveTool>(null)
   const [annotationColor, setAnnotationColor] = useState('#e8c14b')
+  // Deep-link: ?price=candles&opacity=60 (i pro automatizované snímky)
+  const [priceStyle, setPriceStyle] = useState<PriceStyle>(() =>
+    new URLSearchParams(window.location.search).get('price') === 'candles' ? 'candles' : 'line',
+  )
+  const [priceOpacity, setPriceOpacity] = useState(() => {
+    const raw = Number(new URLSearchParams(window.location.search).get('opacity'))
+    return Number.isFinite(raw) && raw >= 10 && raw <= 100 ? raw / 100 : 1
+  })
 
   // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame)
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
@@ -134,6 +143,29 @@ function MainContent() {
             <option value="all">All</option>
           </select>
         </label>
+        <label className="toggle">
+          Cena
+          <select
+            value={priceStyle}
+            onChange={(event) => setPriceStyle(event.target.value as PriceStyle)}
+            aria-label="Styl ceny"
+          >
+            <option value="line">Křivka</option>
+            <option value="candles">Svíčky</option>
+          </select>
+        </label>
+        <label className="toggle">
+          Viditelnost
+          <input
+            type="range"
+            min={10}
+            max={100}
+            value={Math.round(priceOpacity * 100)}
+            onChange={(event) => setPriceOpacity(Number(event.target.value) / 100)}
+            aria-label="Viditelnost ceny"
+            className="opacity-slider"
+          />
+        </label>
         <span className="separator" />
         {ANNOTATION_TOOLS.map(({ tool, label }) => (
           <button
@@ -162,6 +194,8 @@ function MainContent() {
               style={style}
               contours={contours}
               overlays={overlays}
+              priceStyle={priceStyle}
+              priceOpacity={priceOpacity}
               annotations={annotationsState.annotations}
               annotationTool={annotationTool}
               annotationColor={annotationColor}

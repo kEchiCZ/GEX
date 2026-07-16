@@ -73,7 +73,16 @@ export function demoOverlays(grid: HeatmapGrid): OverlayData {
   for (let minuteIdx = 0; minuteIdx < grid.minutes; minuteIdx += 1) {
     const middle = grid.strikes[Math.floor(grid.strikes.length / 2)]
     const close = middle + Math.sin(minuteIdx / 45) * 40 + Math.sin(minuteIdx / 7) * 6
-    price.push({ minuteIdx, close, up: close >= previousClose })
+    const open = minuteIdx === 0 ? close : previousClose
+    const wiggle = 2 + Math.abs(Math.sin(minuteIdx / 3)) * 3
+    price.push({
+      minuteIdx,
+      close,
+      up: close >= previousClose,
+      open,
+      high: Math.max(open, close) + wiggle,
+      low: Math.min(open, close) - wiggle,
+    })
     previousClose = close
   }
   const flip = price.map((bar) => bar.close - 12 + Math.sin(bar.minuteIdx / 60) * 5)

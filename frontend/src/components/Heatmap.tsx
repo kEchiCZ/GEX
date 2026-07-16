@@ -11,8 +11,8 @@ import type { ContoursMode } from '../heatmap/contours'
 import { gaussianBlur, renderGrid } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
-import { fractionalRow, pricePolyline } from '../heatmap/overlays'
-import type { OverlayData } from '../heatmap/overlays'
+import { candleGeometry, fractionalRow, pricePolyline } from '../heatmap/overlays'
+import type { OverlayData, PriceStyle } from '../heatmap/overlays'
 import { nearestAnnotationId } from '../annotations/model'
 import type {
   ActiveTool,
@@ -38,6 +38,8 @@ export function Heatmap({
   style,
   contours,
   overlays = {},
+  priceStyle = 'line',
+  priceOpacity = 1,
   annotations = [],
   annotationTool = null,
   annotationColor = '#e8c14b',
@@ -48,6 +50,9 @@ export function Heatmap({
   style: HeatmapStyle
   contours: ContoursMode
   overlays?: OverlayData
+  priceStyle?: PriceStyle
+  /** Viditelnost cenové vrstvy nad heatmapou (0–1). */
+  priceOpacity?: number
   annotations?: StoredAnnotation[]
   annotationTool?: ActiveTool
   annotationColor?: string
@@ -198,18 +203,41 @@ export function Heatmap({
       context.stroke()
     }
 
-    // 1m cenová křivka s tick barvami + značka aktuální ceny na pravé ose
+    // 1m cena: křivka s tick barvami, nebo svíčky (přepínač + viditelnost)
     const points = pricePolyline(overlays.price ?? [], grid.strikes)
-    for (let index = 1; index < points.length; index += 1) {
-      const previous = points[index - 1]
-      const current = points[index]
-      context.strokeStyle = current.up ? UP_COLOR : DOWN_COLOR
-      context.lineWidth = 1.5
-      context.beginPath()
-      context.moveTo(minuteToX(previous.minuteIdx), rowToY(previous.row))
-      context.lineTo(minuteToX(current.minuteIdx), rowToY(current.row))
-      context.stroke()
+    context.globalAlpha = Math.min(1, Math.max(0, priceOpacity))
+    if (priceStyle === 'candles') {
+      const candles = candleGeometry(overlays.price ?? [], grid.strikes)
+      const bodyWidth = Math.max(2, scaleX * 0.6)
+      for (const candle of candles) {
+        const x = minuteToX(candle.minuteIdx)
+        const color = candle.up ? UP_COLOR : DOWN_COLOR
+        // Knot high–low
+        context.strokeStyle = color
+        context.lineWidth = Math.max(1, scaleX * 0.1)
+        context.beginPath()
+        context.moveTo(x, rowToY(candle.highRow))
+        context.lineTo(x, rowToY(candle.lowRow))
+        context.stroke()
+        // Tělo open–close (rowToY klesá s rostoucím řádkem → top = vyšší řádek)
+        const topY = rowToY(Math.max(candle.openRow, candle.closeRow))
+        const bottomY = rowToY(Math.min(candle.openRow, candle.closeRow))
+        context.fillStyle = color
+        context.fillRect(x - bodyWidth / 2, topY, bodyWidth, Math.max(1, bottomY - topY))
+      }
+    } else {
+      for (let index = 1; index < points.length; index += 1) {
+        const previous = points[index - 1]
+        const current = points[index]
+        context.strokeStyle = current.up ? UP_COLOR : DOWN_COLOR
+        context.lineWidth = 1.5
+        context.beginPath()
+        context.moveTo(minuteToX(previous.minuteIdx), rowToY(previous.row))
+        context.lineTo(minuteToX(current.minuteIdx), rowToY(current.row))
+        context.stroke()
+      }
     }
+    context.globalAlpha = 1 // značka aktuální ceny zůstává plně viditelná
     const lastPoint = points.at(-1)
     if (lastPoint) {
       const y = rowToY(lastPoint.row)
@@ -304,6 +332,8 @@ export function Heatmap({
     draft,
     annotationTool,
     annotationColor,
+    priceStyle,
+    priceOpacity,
   ])
 
   useEffect(() => {

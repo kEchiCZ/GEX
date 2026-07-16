@@ -5,7 +5,14 @@ export interface PriceBar {
   close: number
   /** Směr ticku vůči předchozí minutě (barva úseku křivky). */
   up: boolean
+  /** OHLC pro svíčkový režim (volitelné — bez nich se bar kreslí jen v křivce). */
+  open?: number
+  high?: number
+  low?: number
 }
+
+/** Styl vykreslení ceny nad heatmapou. */
+export type PriceStyle = 'line' | 'candles'
 
 export interface SessionMarker {
   minuteIdx: number
@@ -76,4 +83,36 @@ export function pricePolyline(bars: PriceBar[], strikes: number[]): PolylinePoin
     }
   }
   return points
+}
+
+export interface CandleGeometry {
+  minuteIdx: number
+  openRow: number
+  closeRow: number
+  highRow: number
+  lowRow: number
+  /** Zelená/červená svíčka podle open vs. close. */
+  up: boolean
+}
+
+/** Svíčky → řádkové souřadnice; bary bez kompletního OHLC se přeskakují. */
+export function candleGeometry(bars: PriceBar[], strikes: number[]): CandleGeometry[] {
+  const candles: CandleGeometry[] = []
+  for (const bar of bars) {
+    if (bar.open === undefined || bar.high === undefined || bar.low === undefined) continue
+    const openRow = fractionalRow(strikes, bar.open)
+    const closeRow = fractionalRow(strikes, bar.close)
+    const highRow = fractionalRow(strikes, bar.high)
+    const lowRow = fractionalRow(strikes, bar.low)
+    if (openRow === null || closeRow === null || highRow === null || lowRow === null) continue
+    candles.push({
+      minuteIdx: bar.minuteIdx,
+      openRow,
+      closeRow,
+      highRow,
+      lowRow,
+      up: bar.close >= bar.open,
+    })
+  }
+  return candles
 }
