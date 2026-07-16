@@ -165,3 +165,16 @@ class MockHotZoneClient(HotZoneClientLike):
     async def unsubscribe_ticks(self, spec: OptionContractSpec) -> None:
         self.unsubscribe_calls.append(spec)
         self.active.discard(spec)
+
+
+class MockOIFetcher:
+    """Mock zdroje OI pro OIArchiver: hodnoty per kontrakt, chybějící vrací None."""
+
+    def __init__(self, values: dict[OptionContractSpec, float] | None = None) -> None:
+        self.values = dict(values or {})
+        self.fetch_calls: list[OptionContractSpec] = []
+
+    async def fetch_oi(self, spec: OptionContractSpec, timeout_s: float) -> float | None:
+        self.fetch_calls.append(spec)
+        await asyncio.sleep(0)
+        return self.values.get(spec)

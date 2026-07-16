@@ -9,6 +9,22 @@ on:
 jobs:
   python:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gexlens
+          POSTGRES_PASSWORD: gexlens
+          POSTGRES_DB: gexlens
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gexlens"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      GEXLENS_TEST_PG_DSN: postgresql+psycopg://gexlens:gexlens@localhost:5432/gexlens
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
