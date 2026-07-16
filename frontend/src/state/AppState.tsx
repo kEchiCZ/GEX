@@ -40,16 +40,52 @@ export interface Toggles {
 export type AppView = 'chart' | 'dashboard' | 'console' | 'settings'
 export type Theme = 'dark' | 'light'
 
+/** Intraday timeframy — agregace 1m dat do košů (SPEC 7.1, TradingView sada). */
+export const INTERVALS = [
+  '1m',
+  '2m',
+  '3m',
+  '5m',
+  '10m',
+  '15m',
+  '30m',
+  '45m',
+  '1h',
+  '2h',
+  '3h',
+  '4h',
+  '1d',
+] as const
+export type Interval = (typeof INTERVALS)[number]
+
+export const INTERVAL_MINUTES: Record<Interval, number> = {
+  '1m': 1,
+  '2m': 2,
+  '3m': 3,
+  '5m': 5,
+  '10m': 10,
+  '15m': 15,
+  '30m': 30,
+  '45m': 45,
+  '1h': 60,
+  '2h': 120,
+  '3h': 180,
+  '4h': 240,
+  '1d': 1440,
+}
+
 interface AppState {
   status: PipelineStatus
   symbol: string
+  /** Přepnutí aktivního tickeru (z watchlistu v sidebaru). */
+  setSymbol: (symbol: string) => void
   expiries: string[]
   selectedExpiry: string | null
   setSelectedExpiry: (expiry: string) => void
   timeframe: 'intraday' | 'daily'
   setTimeframe: (value: 'intraday' | 'daily') => void
-  interval: '1m' | '5m' | '15m'
-  setInterval: (value: '1m' | '5m' | '15m') => void
+  interval: Interval
+  setInterval: (value: Interval) => void
   toggles: Toggles
   setToggle: (key: keyof Toggles, value: boolean) => void
   view: AppView
@@ -83,7 +119,7 @@ function initialFromUrl(): { view: AppView; theme: Theme } {
 export function AppStateProvider({
   children,
   socket,
-  symbol = 'ES',
+  symbol: initialSymbol = 'ES',
 }: {
   children: ReactNode
   /** Testovatelnost: injektovaný LiveSocket místo výchozího. */
@@ -91,10 +127,11 @@ export function AppStateProvider({
   symbol?: string
 }) {
   const [status, setStatus] = useState<PipelineStatus>({ engine: 'offline' })
+  const [symbol, setSymbol] = useState(initialSymbol)
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
   const [timeframe, setTimeframe] = useState<'intraday' | 'daily'>('intraday')
-  const [interval, setInterval] = useState<'1m' | '5m' | '15m'>('1m')
+  const [interval, setInterval] = useState<Interval>('1m')
   const [view, setView] = useState<AppView>(() => initialFromUrl().view)
   const [theme, setTheme] = useState<Theme>(() => initialFromUrl().theme)
   const [alerts, setAlerts] = useState<AlertMessage[]>([])
@@ -162,7 +199,10 @@ export function AppStateProvider({
       })
       .catch(() => {
         // API neběží — hlavička ukáže placeholder, status bar offline stav
-        if (!cancelled) setExpiries([])
+        if (!cancelled) {
+          setExpiries([])
+          setSelectedExpiry(null)
+        }
       })
     return () => {
       cancelled = true
@@ -173,6 +213,7 @@ export function AppStateProvider({
     () => ({
       status,
       symbol,
+      setSymbol,
       expiries,
       selectedExpiry,
       setSelectedExpiry,

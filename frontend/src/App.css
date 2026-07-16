@@ -96,7 +96,59 @@ body {
 .watchlist-row {
   display: flex;
   justify-content: space-between;
-  padding: 4px 2px;
+  align-items: center;
+  padding: 2px;
+}
+
+.watchlist-symbol {
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 4px;
+  flex: 1;
+  text-align: left;
+}
+
+.watchlist-symbol:hover {
+  color: var(--accent);
+}
+
+.watchlist-symbol.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.watchlist-remove {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 14px;
+}
+
+.watchlist-remove:hover {
+  color: #f0616d;
+}
+
+.watchlist-add {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.watchlist-add input {
+  min-width: 0;
+  flex: 1;
+  background: var(--bg-raised, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12px;
 }
 
 .sidebar-footer {
@@ -457,6 +509,17 @@ body {
 .heatmap-overlay {
   cursor: grab;
   touch-action: none;
+}
+
+.heatmap-reset {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  opacity: 0.75;
+}
+
+.heatmap-reset:hover {
+  opacity: 1;
 }
 
 .heatmap-tooltip {

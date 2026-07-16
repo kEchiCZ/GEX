@@ -126,6 +126,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(404, f"Instrument {symbol!r} nemá žádná data")
         return {"expiries": found}
 
+    @app.get("/instruments/{symbol}/days")
+    def days(symbol: str) -> dict[str, list[dict[str, str]]]:
+        """Uložené dny (Daily pohled) — každý den se svou expirací (0DTE řetěz)."""
+        found = repository.list_days(symbol)
+        if not found:
+            raise HTTPException(404, f"Instrument {symbol!r} nemá žádná data")
+        return {"days": found}
+
     @app.get("/snapshots/{symbol}/{expiry}")
     def snapshots(
         symbol: str,

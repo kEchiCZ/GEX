@@ -1,5 +1,5 @@
 /** Řádky timeframe a přepínačů vizualizace (SPEC 7.1). */
-import { useAppState } from '../state/AppState'
+import { INTERVALS, useAppState } from '../state/AppState'
 import type { Toggles } from '../state/AppState'
 
 const TOGGLE_LABELS: Record<keyof Toggles, string> = {
@@ -27,11 +27,13 @@ export function TimeframeRow() {
         </button>
       ))}
       <span className="separator" />
-      {(['1m', '5m', '15m'] as const).map((value) => (
+      {INTERVALS.map((value) => (
         <button
           key={value}
           className={interval === value ? 'chip active' : 'chip'}
           onClick={() => setInterval(value)}
+          disabled={timeframe === 'daily'} // Daily: sloupec = den, intraday koše nedávají smysl
+          title={timeframe === 'daily' ? 'V režimu Daily je sloupec vždy 1 den' : undefined}
         >
           {value}
         </button>

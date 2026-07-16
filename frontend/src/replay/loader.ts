@@ -33,6 +33,21 @@ interface ReplayBundle {
   bars: Array<Record<string, unknown>>
 }
 
+export interface DayListing {
+  date: string
+  expiry: string
+}
+
+/** Seznam uložených dnů instrumentu (pro Daily pohled) — s expirací per den. */
+export async function fetchDays(symbol: string): Promise<DayListing[]> {
+  const response = await fetch(`${API_BASE}/instruments/${symbol}/days`)
+  if (!response.ok) {
+    throw new Error(`Seznam dnů ${symbol} selhal: HTTP ${response.status}`)
+  }
+  const payload = (await response.json()) as { days: DayListing[] }
+  return payload.days
+}
+
 export async function fetchReplay(
   symbol: string,
   expiry: string,

@@ -99,6 +99,18 @@ test('crosshair z heatmapy se propaguje do jiného panelu přes kontext', () => 
   expect(reader.textContent).toBe('none')
 })
 
+test('heatmapa má reset zobrazení (tlačítko i dvojklik neshodí render)', () => {
+  const grid = demoGrid(100, 10)
+  render(
+    <CrosshairProvider>
+      <Heatmap grid={grid} style="gradient" contours="off" />
+    </CrosshairProvider>,
+  )
+  const reset = screen.getByRole('button', { name: 'Reset zobrazení' })
+  fireEvent.click(reset)
+  fireEvent.doubleClick(screen.getByRole('img', { name: 'GEX heatmapa' }))
+})
+
 test('tooltip buňky zobrazuje hodnoty vrstev', () => {
   const grid = demoGrid(100, 10)
   render(
