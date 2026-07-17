@@ -152,7 +152,13 @@ export function AppStateProvider({
   const [alerts, setAlerts] = useState<AlertMessage[]>([])
   const [unreadAlerts, setUnreadAlerts] = useState(0)
   const [consoleLog, setConsoleLog] = useState<string[]>([])
-  const [priceInfo, setPriceInfo] = useState<PriceInfo>({ last: null, changePct: null })
+  const [priceInfo, setPriceInfoState] = useState<PriceInfo>({ last: null, changePct: null })
+  // Bail-out na stejné hodnoty — pojistka proti render smyčce při nestabilních identitách
+  const setPriceInfo = useCallback((info: PriceInfo) => {
+    setPriceInfoState((previous) =>
+      previous.last === info.last && previous.changePct === info.changePct ? previous : info,
+    )
+  }, [])
   const [toggles, setToggles] = useState<Toggles>({
     dynGex: true,
     gexLevels: true,
