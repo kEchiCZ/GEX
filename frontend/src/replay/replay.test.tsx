@@ -156,6 +156,10 @@ test('buildReplayDay dekóduje Arrow snapshoty a poskládá den', () => {
       { ts_min: '2026-07-16T15:00:00Z', close: 7600.5, volume: 1000 },
       { ts_min: '2026-07-16T15:01:00Z', close: 7601.5, volume: 1200 },
     ],
+    oi_prev: [
+      { strike: 7600, right: 'C', oi: 80 },
+      { strike: 7600, right: 'P', oi: 250 },
+    ],
   })
 
   expect(day.minutes).toHaveLength(2)
@@ -170,6 +174,10 @@ test('buildReplayDay dekóduje Arrow snapshoty a poskládá den', () => {
   expect(day.panels.vol).toEqual([1000, 1200])
   // Levels řada: minuta 0 hodnota, minuta 1 null
   expect(day.overlays.levels?.[0].series).toEqual([7595, null])
+  // ΔOI vs. včera: dnešní OI (C 100, P 200) − včerejší (C 80, P 250)
+  const row = day.profileByMinute[0][0]
+  expect(row.callOiChange).toBe(20)
+  expect(row.putOiChange).toBe(-50)
   // Profil per minuta: combined komponenty s |delta| vahou
   expect(day.profileByMinute[1][0].callVolComponent).toBeCloseTo(30 * 0.5)
   expect(day.profileByMinute[1][0].putOiComponent).toBeCloseTo(200 * 0.4)

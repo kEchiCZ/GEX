@@ -110,6 +110,21 @@ def test_clamp_strike_range() -> None:
     assert clamp_strike_range({"x": 1}, settings) is None
 
 
+def test_oi_prev_day_queries(tmp_path: Path) -> None:
+    """ΔOI vs. včera: poslední archivovaný den před datem + hodnoty daného dne."""
+    repository = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
+    repository.ensure_schema()
+    day1, day2 = dt.date(2026, 7, 16), dt.date(2026, 7, 17)
+    repository.upsert_many([OIRecord("ES", "20260717", 7500.0, "P", day1, 100.0)])
+    repository.upsert_many([OIRecord("ES", "20260717", 7500.0, "P", day2, 150.0)])
+
+    assert repository.latest_day_before("ES", "20260717", day2) == day1
+    assert repository.latest_day_before("ES", "20260717", day1) is None
+    values = repository.values_for("ES", "20260717", day1)
+    assert len(values) == 1
+    assert values[0].strike == 7500.0 and values[0].right == "P" and values[0].oi == 100.0
+
+
 # ── Pipeline nad mocky ─────────────────────────────────────────────
 
 

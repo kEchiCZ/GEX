@@ -12,6 +12,9 @@ export interface ProfileRow {
   callOi: number
   putOi: number
   distanceFromSpot: number
+  /** Změna OI proti předchozímu archivovanému dni (null = srovnání není k dispozici). */
+  callOiChange?: number | null
+  putOiChange?: number | null
 }
 
 export interface BarGeometry {

@@ -23,6 +23,7 @@ from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import (
     ChainDiscovery,
     ExpiryInfo,
+    OptionContractSpec,
     StrikeBand,
     Underlying,
     build_contracts,
@@ -177,13 +178,16 @@ class InstrumentPipeline:
     on_stop: Callable[[], None] = lambda: None
     spot: float = 0.0
     oi_available: bool = False
+    # OI archiv pokrývá i další expirace (ΔOI vs. včera); None = jen aktivní řetěz
+    archive_contracts: Sequence[OptionContractSpec] | None = None
     _cycles_since_oi: int = field(default=0, repr=False)
 
     async def try_archive_oi(self, today: dt.date) -> bool:
         """Denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2)."""
         if today in self.oi_repository.days(self.symbol):
             return True
-        result = await self.archiver.archive_day(self.runtime.contracts, today)
+        contracts = self.archive_contracts or self.runtime.contracts
+        result = await self.archiver.archive_day(contracts, today)
         logger.info(
             "OI archiv %s %s: %d zapsáno, %d chybí",
             self.symbol,

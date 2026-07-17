@@ -137,6 +137,13 @@ async def create_pipeline(
     info = infos[0]
     band = discovery.initial_band(info, spot)
     contracts = build_contracts(underlying, info, band)
+    # OI archiv pokrývá N nejbližších expirací — ΔOI vs. včera potřebuje stejný
+    # kontrakt archivovaný ve dvou dnech (0DTE řetěz jinak srovnání nemá)
+    archive_contracts = [
+        spec
+        for extra in infos[: settings.oi_archive_expiries]
+        for spec in build_contracts(underlying, extra, discovery.initial_band(extra, spot))
+    ]
     logger.info(
         "Řetězec %s %s %s: %d kontraktů, spot %.2f, multiplikátor %g",
         symbol,
@@ -183,6 +190,7 @@ async def create_pipeline(
         minute_bars=minute_bars,
         on_stop=on_stop,
         spot=spot,
+        archive_contracts=archive_contracts,
     )
 
     async def resubscribe() -> None:

@@ -35,6 +35,7 @@ from gexlens_api.status import StatusStore
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
 from gexlens_engine.config import Settings, load_settings
+from gexlens_engine.storage.oi_archive import OIEodRepository
 
 
 def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
@@ -69,6 +70,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     live_hub = LiveHub()
     meta_repository = MetaRepository(settings)
     alert_engine = AlertEngine(live_hub)
+    # OI archiv (PG, lazy) — ΔOI vs. předchozí den v /replay balíku
+    oi_repository_ref: list[OIEodRepository] = []
+
+    def oi_repository() -> OIEodRepository:
+        if not oi_repository_ref:
+            oi_repository_ref.append(OIEodRepository(meta_repository.engine()))
+        return oi_repository_ref[0]
 
     app = FastAPI(title="GEXLens API")
     # Frontend běží na jiném lokálním portu (nginx :8080, Vite dev :5173) —
@@ -256,6 +264,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 bundle[key] = _records(reader())
             except PartitionNotFoundError:
                 bundle[key] = []  # část dne může chybět (např. bez flow) — balík drží tvar
+        # ΔOI vs. předchozí den: poslední archivovaný den téže expirace před `date`
+        bundle["oi_prev"] = []
+        try:
+            repo = oi_repository()
+            previous = repo.latest_day_before(symbol, expiry, date)
+            if previous is not None:
+                bundle["oi_prev"] = [
+                    {"strike": record.strike, "right": record.right, "oi": record.oi}
+                    for record in repo.values_for(symbol, expiry, previous)
+                ]
+                bundle["oi_prev_date"] = previous.isoformat()
+        except Exception:
+            # OI archiv nedostupný (např. čerstvá DB) — balík drží tvar bez ΔOI
+            bundle["oi_prev"] = []
         return bundle
 
     @app.websocket("/ws/live")

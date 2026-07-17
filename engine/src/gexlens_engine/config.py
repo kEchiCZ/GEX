@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     max_instruments: int = Field(default=3, ge=1)
     # Watchlist z DB se čte každý k-tý minutový cyklus
     watchlist_poll_cycles: int = Field(default=5, ge=1)
+    # Ranní OI archiv pokrývá N nejbližších expirací (ΔOI vs. včera potřebuje
+    # stejný kontrakt archivovaný ve dvou dnech — 0DTE řetěz jinak srovnání nemá)
+    oi_archive_expiries: int = Field(default=5, ge=1)
 
     # Opční řetězec a rotační scheduler (SPEC 3.2, 3.3)
     strike_range_points: float = Field(default=200.0, gt=0)

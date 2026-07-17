@@ -118,6 +118,31 @@ class OIEodRepository:
         with self._engine.connect() as conn:
             return [row.date for row in conn.execute(stmt)]
 
+    def latest_day_before(self, symbol: str, expiry: str, day: dt.date) -> dt.date | None:
+        """Poslední archivovaný den dané expirace před `day` (základ pro ΔOI)."""
+        stmt = select(func.max(oi_eod_table.c.date)).where(
+            oi_eod_table.c.symbol == symbol,
+            oi_eod_table.c.expiry == expiry,
+            oi_eod_table.c.date < day,
+        )
+        with self._engine.connect() as conn:
+            result = conn.execute(stmt).scalar_one_or_none()
+        return result
+
+    def values_for(self, symbol: str, expiry: str, day: dt.date) -> list[OIRecord]:
+        """Všechny OI záznamy expirace pro daný den (ΔOI vs. předchozí den)."""
+        stmt = select(oi_eod_table.c.strike, oi_eod_table.c.right, oi_eod_table.c.oi).where(
+            oi_eod_table.c.symbol == symbol,
+            oi_eod_table.c.expiry == expiry,
+            oi_eod_table.c.date == day,
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            OIRecord(symbol, expiry, float(row.strike), str(row.right), day, float(row.oi))
+            for row in rows
+        ]
+
     def count_for_day(self, symbol: str, day: dt.date) -> int:
         stmt = (
             select(func.count())

@@ -69,7 +69,10 @@ def snapshot_rows(minute: int) -> list[SnapshotRow]:
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    s = Settings(data_dir=tmp_path)
+    s = Settings(
+        data_dir=tmp_path,
+        database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}",
+    )
     writer = SnapshotWriter(s)
     for minute in range(MINUTES):
         writer.write_minute("ES", "20260716", DAY, snapshot_rows(minute))
@@ -244,6 +247,31 @@ def test_replay_bundle(client: TestClient) -> None:
     assert len(payload["bars"]) == MINUTES
     raw = read_arrow(base64.b64decode(payload["snapshots_arrow_base64"]))
     assert len(raw) == MINUTES * len(STRIKES) * 2  # surová data pro lokální přepínání módů
+    assert payload["oi_prev"] == []  # bez archivu předchozího dne balík drží tvar
+
+
+def test_replay_bundle_oi_prev(settings: Settings) -> None:
+    """ΔOI vs. včera: /replay nese OI téže expirace z předchozího archivovaného dne."""
+    from sqlalchemy import create_engine as sa_create_engine
+
+    from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
+
+    oi_repo = OIEodRepository(sa_create_engine(settings.database_url))
+    oi_repo.ensure_schema()
+    previous_day = DAY - dt.timedelta(days=1)
+    oi_repo.upsert_many(
+        [
+            OIRecord("ES", "20260716", 7600.0, "P", previous_day, 1234.0),
+            OIRecord("ES", "20260716", 7600.0, "C", previous_day, 456.0),
+        ]
+    )
+    client = TestClient(create_app(settings))
+
+    payload = client.get(f"/replay/ES/20260716/{DAY.isoformat()}").json()
+    assert payload["oi_prev_date"] == previous_day.isoformat()
+    by_key = {(row["strike"], row["right"]): row["oi"] for row in payload["oi_prev"]}
+    assert by_key[(7600.0, "P")] == 1234.0
+    assert by_key[(7600.0, "C")] == 456.0
 
 
 def test_status_store(client: TestClient) -> None:
