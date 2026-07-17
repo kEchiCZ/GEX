@@ -75,6 +75,25 @@ test('přepnutí timeframe agreguje den — mění se rozsah playbacku', () => {
   expect(slider().max).toBe('6') // ceil(390/60)=7 košů
   fireEvent.click(screen.getByRole('button', { name: '1m' }))
   expect(slider().max).toBe('389')
+  // Live pozice zůstává live — přepnutí tam a zpět nesmí „ztratit den"
+  expect(slider().value).toBe('389')
+})
+
+test('playback: ne-live pozice se při změně timeframe mapuje proporcionálně', () => {
+  mockApi()
+  renderApp()
+  const slider = () => screen.getByLabelText('Pozice dne') as HTMLInputElement
+  fireEvent.change(slider(), { target: { value: '195' } }) // polovina dne na 1m
+  fireEvent.click(screen.getByRole('button', { name: '1h' }))
+  expect(slider().value).toBe('3') // ~polovina ze 7 košů
+  fireEvent.click(screen.getByRole('button', { name: '1m' }))
+  expect(Number(slider().value)).toBeGreaterThan(150) // zpět ~doprostřed, ne na začátek
+})
+
+test('demo zdroj dat ukazuje zřetelný banner', () => {
+  mockApi()
+  renderApp()
+  expect(screen.getByText(/Demo data — pro ES/)).toBeDefined()
 })
 
 test('Daily režim: stáhne seznam dnů a zakáže intraday koše', async () => {

@@ -27,9 +27,17 @@ export function usePlayback(minuteCount: number): Playback {
   const [speed, setSpeed] = useState<PlaybackSpeed>(1)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Nový den / delší data → drž se na live konci, pokud jsme tam byli
+  // Změna rozsahu (timeframe, nový den): live pozice zůstává live, jinak se
+  // pozice mapuje proporcionálně — přepnutí 1m → 1h → 1m nesmí „ztratit den"
+  const previousLastRef = useRef(lastIndex)
   useEffect(() => {
-    setPosition((previous) => (previous >= lastIndex ? lastIndex : previous))
+    const previousLast = previousLastRef.current
+    previousLastRef.current = lastIndex
+    setPosition((previous) => {
+      if (previous >= previousLast) return lastIndex // byli jsme na live konci
+      if (previousLast <= 0) return lastIndex
+      return Math.min(lastIndex, Math.round((previous / previousLast) * lastIndex))
+    })
   }, [lastIndex])
 
   useEffect(() => {

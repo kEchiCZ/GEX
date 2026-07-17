@@ -51,6 +51,7 @@ export function Heatmap({
   onAnnotationErase,
   view: controlledView,
   onViewChange,
+  homeView = DEFAULT_VIEW,
 }: {
   grid: HeatmapGrid
   style: HeatmapStyle
@@ -69,6 +70,8 @@ export function Heatmap({
   /** Řízený pohled (pan/zoom os) — sdílení časové osy se spodními panely. */
   view?: ViewTransform
   onViewChange?: (view: ViewTransform) => void
+  /** Výchozí pohled pro reset (⟲/dvojklik) — např. fit na cenové pásmo dne. */
+  homeView?: ViewTransform
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -455,7 +458,7 @@ export function Heatmap({
     )
   }
 
-  const resetView = () => setView(() => DEFAULT_VIEW)
+  const resetView = () => setView(() => homeView)
 
   const eventDataPoint = (event: React.PointerEvent<HTMLCanvasElement>): AnnotationPoint | null => {
     const point = canvasPoint(event)

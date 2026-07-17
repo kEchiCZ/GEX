@@ -44,6 +44,43 @@ export function zoomBoth(
   return zoomAxis(zoomAxis(view, 'x', factor, anchorX), 'y', factor, anchorY)
 }
 
+/** Výchozí pohled dne: osa Y napasovaná na cenové pásmo (TradingView auto-fit).
+
+Denní obálka strikes je široká (stovky bodů), zatímco cena se hýbe v úzkém
+pásmu — bez fitu jsou svíčky zploštělé. Fit namapuje [min low, max high]
+s odsazením na 10–90 % výšky canvasu; heatmapa zůstává zarovnaná (jen zoomY
+a offsetY, osa X se nemění).
+*/
+export function fitPriceView(
+  strikes: number[],
+  priceLow: number | null,
+  priceHigh: number | null,
+  canvasHeight = 640,
+): ViewTransform {
+  if (strikes.length < 2 || priceLow === null || priceHigh === null || priceHigh < priceLow) {
+    return DEFAULT_VIEW
+  }
+  const step = canvasHeight / strikes.length
+  const rowOf = (value: number): number => {
+    // Interpolovaná pozice hodnoty v ose strikes (index 0 = nejnižší strike)
+    const last = strikes.length - 1
+    if (value <= strikes[0]) return 0
+    if (value >= strikes[last]) return last
+    for (let index = 0; index < last; index += 1) {
+      if (value >= strikes[index] && value <= strikes[index + 1]) {
+        return index + (value - strikes[index]) / (strikes[index + 1] - strikes[index])
+      }
+    }
+    return last
+  }
+  const yTop = (strikes.length - 1 - rowOf(priceHigh) + 0.5) * step
+  const yBottom = (strikes.length - 1 - rowOf(priceLow) + 0.5) * step
+  const span = yBottom - yTop
+  if (span <= 0) return DEFAULT_VIEW
+  const zoomY = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, (0.8 * canvasHeight) / span))
+  return { ...DEFAULT_VIEW, zoomY, offsetY: 0.1 * canvasHeight - yTop * zoomY }
+}
+
 /** Zóna interakce podle pozice kurzoru: levý pruh = osa Y, spodní pruh = osa X. */
 export type AxisZone = 'x' | 'y' | null
 
