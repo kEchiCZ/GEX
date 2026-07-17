@@ -32,6 +32,8 @@ function sampleDay(): DayData {
       optVolCall: [1, 2, 3, 4],
       optVolPut: [4, 3, 2, 1],
       cumDelta: [5, -5, 10, 20],
+      deltaFlowCall: [1, 1, 2, 2],
+      deltaFlowPut: [2, 2, 1, 1],
     },
     profileByMinute: [[], [], [], []],
     demoProfileRows: null,
@@ -101,7 +103,14 @@ test('buildDailyDay: sloupec = den, denní OHLC svíčka a součty', () => {
       levels: [{ name: 'flip', color: '#fff', series: [101, 102] }],
       walls: [],
     },
-    panels: { vol: [10, 20], optVolCall: [1, 2], optVolPut: [3, 4], cumDelta: [5, 15] },
+    panels: {
+      vol: [10, 20],
+      optVolCall: [1, 2],
+      optVolPut: [3, 4],
+      cumDelta: [5, 15],
+      deltaFlowCall: [1, 2],
+      deltaFlowPut: [2, 1],
+    },
     profileByMinute: [[], []],
   }
   const dayB: ReplayDay = {

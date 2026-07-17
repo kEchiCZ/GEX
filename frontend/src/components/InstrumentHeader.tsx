@@ -1,5 +1,6 @@
 /** Hlavička instrumentu (SPEC 7.1): ticker, last + změna, expirace, Live, notifikace. */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { expiryCountdown, expiryKind } from '../instrument/expiry'
 import { useAppState } from '../state/AppState'
 
 /** Zobrazovací názvy běžných futures podkladů (jinak jen ticker). */
@@ -31,6 +32,14 @@ export function InstrumentHeader({
   } = useAppState()
   const [alertsOpen, setAlertsOpen] = useState(false)
   const live = status.engine === 'online'
+  // Odpočet do expirace se obnovuje po minutě (velké expirace = velké OI, Moodix workflow)
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60_000)
+    return () => clearInterval(timer)
+  }, [])
+  const kind = selectedExpiry ? expiryKind(selectedExpiry) : null
+  const countdown = selectedExpiry ? expiryCountdown(selectedExpiry, now) : null
 
   return (
     <header className="instrument-header">
@@ -62,6 +71,12 @@ export function InstrumentHeader({
           ))}
         </select>
       </label>
+      {kind && (
+        <span className="muted expiry-meta" data-testid="expiry-meta">
+          {kind}
+          {countdown && ` · expiruje ${countdown}`}
+        </span>
+      )}
       <span className={live ? 'live-indicator live' : 'live-indicator stale'} role="status">
         {live ? '● Live' : '○ Offline'}
       </span>

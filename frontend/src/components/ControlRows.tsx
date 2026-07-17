@@ -9,6 +9,7 @@ const TOGGLE_LABELS: Record<keyof Toggles, string> = {
   vol: 'Vol',
   optVol: 'Opt Vol',
   delta: 'Delta',
+  deltaFlow: 'Δ Flow C/P',
   volOiDelta: 'Vol + OI Δ',
   news: 'News',
 }

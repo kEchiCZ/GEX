@@ -219,6 +219,9 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
   }
   const optVolCall = optVolSeries(volumeByCell.C, minutes, strikes.length)
   const optVolPut = optVolSeries(volumeByCell.P, minutes, strikes.length)
+  // Δ Flow: delta-vážený tok per strana — čtení „obchody na call/put straně" (Moodix)
+  const deltaFlowCall = deltaFlowSeries(volumeByCell.C, deltaByCell.C, minutes, strikes.length)
+  const deltaFlowPut = deltaFlowSeries(volumeByCell.P, deltaByCell.P, minutes, strikes.length)
   const cumDelta = Array.from({ length: minutes }, () => 0)
   for (const row of bundle.flow) {
     const minuteIdx = minuteIndex.get(canonicalTs(row.ts_min))
@@ -258,9 +261,27 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
     grid,
     raw,
     overlays,
-    panels: { vol, optVolCall, optVolPut, cumDelta },
+    panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut },
     profileByMinute,
   }
+}
+
+/** Δ Flow per minuta: Σ přes strikes |delta| × kladný přírůstek volume (SPEC 4.6 váhy). */
+function deltaFlowSeries(
+  volume: Float32Array,
+  delta: Float32Array,
+  minutes: number,
+  strikeCount: number,
+): number[] {
+  const series = Array.from({ length: minutes }, () => 0)
+  for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
+    for (let minuteIdx = 1; minuteIdx < minutes; minuteIdx += 1) {
+      const index = strikeIdx * minutes + minuteIdx
+      const increment = volume[index] - volume[index - 1]
+      if (increment > 0) series[minuteIdx] += increment * Math.abs(delta[index])
+    }
+  }
+  return series
 }
 
 /** OptVol per minuta: Σ kladných přírůstků kumulativního volume přes strikes. */

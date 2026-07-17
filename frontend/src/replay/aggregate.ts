@@ -153,6 +153,8 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
       optVolCall: sumSeries(day.panels.optVolCall, bucketMinutes, buckets),
       optVolPut: sumSeries(day.panels.optVolPut, bucketMinutes, buckets),
       cumDelta: lastSeries(day.panels.cumDelta, bucketMinutes, buckets),
+      deltaFlowCall: sumSeries(day.panels.deltaFlowCall, bucketMinutes, buckets),
+      deltaFlowPut: sumSeries(day.panels.deltaFlowPut, bucketMinutes, buckets),
     },
     profileByMinute,
     demoProfileRows: day.demoProfileRows,

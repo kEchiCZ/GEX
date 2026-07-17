@@ -14,6 +14,8 @@ const DATA: PanelSeries = {
   optVolCall: [10, 20, 40, 30],
   optVolPut: [15, 5, 25, 35],
   cumDelta: [50, -100, 200, -50],
+  deltaFlowCall: [5, 10, 20, 15],
+  deltaFlowPut: [7, 2, 12, 17],
 }
 
 beforeEach(() => {
@@ -42,7 +44,7 @@ test('cumDeltaAreas dělí plochu nad/pod nulou', () => {
 
 // ── Panely: sdílená osa, C/P barvy, plochy ─────────────────────────
 
-function renderPanels(visible = { vol: true, optVol: true, delta: true }) {
+function renderPanels(visible = { vol: true, optVol: true, delta: true, deltaFlow: false }) {
   return render(
     <CrosshairProvider>
       <BottomPanels data={DATA} visible={visible} width={400} />
@@ -68,7 +70,11 @@ test('vypnutí panelu přeskládá layout (AC)', () => {
 
   rerender(
     <CrosshairProvider>
-      <BottomPanels data={DATA} visible={{ vol: false, optVol: true, delta: true }} width={400} />
+      <BottomPanels
+        data={DATA}
+        visible={{ vol: false, optVol: true, delta: true, deltaFlow: false }}
+        width={400}
+      />
     </CrosshairProvider>,
   )
   expect(screen.queryByLabelText('Vol panel')).toBeNull()
@@ -76,10 +82,29 @@ test('vypnutí panelu přeskládá layout (AC)', () => {
 
   rerender(
     <CrosshairProvider>
-      <BottomPanels data={DATA} visible={{ vol: false, optVol: false, delta: false }} width={400} />
+      <BottomPanels
+        data={DATA}
+        visible={{ vol: false, optVol: false, delta: false, deltaFlow: false }}
+        width={400}
+      />
     </CrosshairProvider>,
   )
   expect(screen.queryByLabelText('Spodní panely')).toBeNull() // nic nezbylo
+})
+
+test('Δ Flow panel: C/P delta-vážené sloupce, zapíná se checkboxem', () => {
+  render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={DATA}
+        visible={{ vol: false, optVol: false, delta: false, deltaFlow: true }}
+        width={400}
+      />
+    </CrosshairProvider>,
+  )
+  const panel = screen.getByLabelText('Δ Flow panel')
+  expect(panel.querySelectorAll('[data-part="deltaflow-call"]')).toHaveLength(4)
+  expect(panel.querySelectorAll('[data-part="deltaflow-put"]')).toHaveLength(4)
 })
 
 test('checkboxy v horní liště řídí panely (integrace přes App)', async () => {
@@ -104,7 +129,11 @@ function Reader() {
 test('pohyb v panelu nastaví minutu crosshairu; linka se kreslí ve všech panelech', () => {
   render(
     <CrosshairProvider>
-      <BottomPanels data={DATA} visible={{ vol: true, optVol: true, delta: true }} width={400} />
+      <BottomPanels
+        data={DATA}
+        visible={{ vol: true, optVol: true, delta: true, deltaFlow: false }}
+        width={400}
+      />
       <Reader />
     </CrosshairProvider>,
   )
@@ -125,7 +154,7 @@ test('panely respektují pan/zoom časové osy hlavního grafu (prop time)', () 
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: false, delta: false }}
+        visible={{ vol: true, optVol: false, delta: false, deltaFlow: false }}
         width={400}
         time={{ offsetX: 40, zoomX: 2 }}
       />
