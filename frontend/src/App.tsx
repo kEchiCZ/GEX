@@ -68,9 +68,9 @@ function MainContent() {
   // Tažitelný předěl mezi grafem a pravým panelem (graf se přizpůsobí sám)
   const [profileWidth, setProfileWidth] = useState(260)
   const dividerDragRef = useRef<{ x: number; width: number } | null>(null)
-  // Deep-link: ?price=candles&opacity=60 (i pro automatizované snímky)
+  // Deep-link: ?price=line&opacity=60 (i pro automatizované snímky); default svíčky
   const [priceStyle, setPriceStyle] = useState<PriceStyle>(() =>
-    new URLSearchParams(window.location.search).get('price') === 'candles' ? 'candles' : 'line',
+    new URLSearchParams(window.location.search).get('price') === 'line' ? 'line' : 'candles',
   )
   const [priceOpacity, setPriceOpacity] = useState(() => {
     const raw = Number(new URLSearchParams(window.location.search).get('opacity'))
