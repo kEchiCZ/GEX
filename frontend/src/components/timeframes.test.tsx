@@ -134,6 +134,26 @@ test('hlavička ukazuje poslední cenu a denní změnu z dat dne', () => {
   ).not.toBeNull()
 })
 
+test('předěl mezi grafem a pravým panelem mění šířku profilu tažením', () => {
+  mockApi()
+  renderApp()
+  const divider = screen.getByRole('separator', { name: 'Šířka pravého panelu' })
+  const profileSvg = () =>
+    screen.getByRole('img', { name: 'Skládané pruhy strike profilu' }) as unknown as SVGSVGElement
+  expect(profileSvg().getAttribute('width')).toBe('260')
+
+  fireEvent.pointerDown(divider, { clientX: 1000, pointerId: 1 })
+  fireEvent.pointerMove(divider, { clientX: 900, pointerId: 1 }) // tažení doleva → širší panel
+  fireEvent.pointerUp(divider, { pointerId: 1 })
+  expect(profileSvg().getAttribute('width')).toBe('360')
+
+  // Meze: nejde zmenšit pod 180
+  fireEvent.pointerDown(divider, { clientX: 500, pointerId: 1 })
+  fireEvent.pointerMove(divider, { clientX: 2000, pointerId: 1 })
+  fireEvent.pointerUp(divider, { pointerId: 1 })
+  expect(profileSvg().getAttribute('width')).toBe('180')
+})
+
 test('watchlist: kliknutí přepne ticker, přidání volá POST', async () => {
   const fetchMock = mockApi()
   renderApp()
