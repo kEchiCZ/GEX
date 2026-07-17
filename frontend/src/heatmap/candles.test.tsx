@@ -55,9 +55,9 @@ test('přepínač Křivka/Svíčky a posuvník viditelnosti fungují', () => {
   render(<App socket={socket} />)
 
   const styleSelect = screen.getByLabelText('Styl ceny') as HTMLSelectElement
-  expect(styleSelect.value).toBe('line') // default křivka (SPEC/Moodix)
-  fireEvent.change(styleSelect, { target: { value: 'candles' } })
-  expect(styleSelect.value).toBe('candles')
+  expect(styleSelect.value).toBe('candles') // default svíčky (požadavek uživatele)
+  fireEvent.change(styleSelect, { target: { value: 'line' } })
+  expect(styleSelect.value).toBe('line')
 
   const slider = screen.getByLabelText('Viditelnost ceny') as HTMLInputElement
   expect(slider.value).toBe('100')
