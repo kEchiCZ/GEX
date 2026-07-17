@@ -26,6 +26,12 @@ export interface ProfileYView {
 
 const ROW_GAP = 1
 
+/** Změna se znaménkem (+120 / −45) pro ΔOI tooltip. */
+function formatSigned(value: number): string {
+  const rounded = Math.round(value)
+  return rounded > 0 ? `+${rounded}` : String(rounded)
+}
+
 const COLORS = {
   callVol: '#14b8a6',
   callOi: 'rgba(20, 184, 166, 0.45)',
@@ -213,6 +219,12 @@ export function StrikeProfile({
           <span>
             Vol C/P: {hovered.callVolume.toFixed(0)} / {hovered.putVolume.toFixed(0)}
           </span>
+          {hovered.callOiChange != null && hovered.putOiChange != null && (
+            <span data-testid="oi-change">
+              ΔOI vs. včera C/P: {formatSigned(hovered.callOiChange)} /{' '}
+              {formatSigned(hovered.putOiChange)}
+            </span>
+          )}
           <span>Δ od spotu: {hovered.distanceFromSpot.toFixed(1)}</span>
         </div>
       )}

@@ -50,6 +50,10 @@ class MetaRepository:
                 meta_metadata.create_all(self._engine)
             return self._engine
 
+    def engine(self) -> Engine:
+        """Sdílený DB engine (lazy) — např. pro čtení OI archivu v /replay."""
+        return self._db()
+
     # ── watchlist ──────────────────────────────────────────────────
 
     def watchlist(self) -> list[dict[str, Any]]:

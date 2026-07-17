@@ -36,6 +36,8 @@ interface ReplayBundle {
   levels: Array<Record<string, unknown>>
   flow: Array<Record<string, unknown>>
   bars: Array<Record<string, unknown>>
+  /** OI téže expirace z předchozího archivovaného dne (ΔOI vs. včera). */
+  oi_prev?: Array<{ strike: number; right: string; oi: number }>
 }
 
 export interface DayListing {
@@ -228,6 +230,15 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
     if (minuteIdx !== undefined) cumDelta[minuteIdx] = Number(row.cum_delta) || 0
   }
 
+  // ΔOI vs. předchozí archivovaný den téže expirace (null = není srovnání)
+  const prevOi = new Map<string, number>()
+  for (const row of bundle.oi_prev ?? []) {
+    prevOi.set(`${row.strike}|${row.right}`, Number(row.oi) || 0)
+  }
+  const totalOiToday =
+    callOi.reduce((sum, value) => sum + value, 0) + putOi.reduce((sum, value) => sum + value, 0)
+  const oiChangeReady = prevOi.size > 0 && totalOiToday > 0
+
   // Strike profil per minuta (combined varianta, w=1 — SPEC 4.6)
   const profileByMinute: ProfileRow[][] = []
   for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
@@ -248,6 +259,8 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
           callOi: callOi[index],
           putOi: putOi[index],
           distanceFromSpot: Number.isFinite(spotAtMinute) ? strike - spotAtMinute : 0,
+          callOiChange: oiChangeReady ? callOi[index] - (prevOi.get(`${strike}|C`) ?? 0) : null,
+          putOiChange: oiChangeReady ? putOi[index] - (prevOi.get(`${strike}|P`) ?? 0) : null,
         }
       }),
     )
