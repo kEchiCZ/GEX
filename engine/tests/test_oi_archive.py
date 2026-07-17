@@ -71,6 +71,15 @@ async def test_rerun_same_day_is_idempotent_upsert(repository: OIEodRepository) 
 
     assert repository.count_for_day("ES", DAY_1) == 6
     assert repository.get_oi("ES", DAY_1, specs[0].strike, specs[0].right) == 750.0
+    # Multi-expirační archiv (ΔOI): expiry filtr vrací hodnotu správného řetězu
+    repository.upsert_many(
+        [OIRecord("ES", "20990101", specs[0].strike, specs[0].right, DAY_1, 111.0)]
+    )
+    assert (
+        repository.get_oi("ES", DAY_1, specs[0].strike, specs[0].right, expiry="20990101") == 111.0
+    )
+    # Bez filtru se bere nejbližší expirace (deterministicky, žádný MultipleResultsFound)
+    assert repository.get_oi("ES", DAY_1, specs[0].strike, specs[0].right) == 750.0
 
 
 async def test_missing_oi_reported_not_written(repository: OIEodRepository) -> None:

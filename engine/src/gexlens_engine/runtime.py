@@ -88,7 +88,12 @@ class EngineRuntime:
             if cached is None:
                 continue
             snapshot = cached.snapshot
-            oi = self.oi_repository.get_oi(spec.symbol, day, spec.strike, spec.right) or 0.0
+            oi = (
+                self.oi_repository.get_oi(
+                    spec.symbol, day, spec.strike, spec.right, expiry=spec.expiry
+                )
+                or 0.0
+            )
             rows.append(
                 SnapshotRow(
                     ts_min=ts_min,
