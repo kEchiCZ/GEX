@@ -25,7 +25,7 @@ import {
   tickIndices,
 } from '../heatmap/overlays'
 import type { OverlayData, PriceStyle } from '../heatmap/overlays'
-import { DEFAULT_VIEW, axisZoneAt, zoomAxis, zoomBoth } from '../heatmap/view'
+import { DEFAULT_VIEW, axisZoneAt, fitPriceView, zoomAxis, zoomBoth } from '../heatmap/view'
 import type { AxisZone, ViewTransform } from '../heatmap/view'
 import { nearestAnnotationId } from '../annotations/model'
 import type {
@@ -56,7 +56,7 @@ export function Heatmap({
   onAnnotationErase,
   view: controlledView,
   onViewChange,
-  homeView = DEFAULT_VIEW,
+  fitRange = null,
 }: {
   grid: HeatmapGrid
   style: HeatmapStyle
@@ -75,8 +75,8 @@ export function Heatmap({
   /** Řízený pohled (pan/zoom os) — sdílení časové osy se spodními panely. */
   view?: ViewTransform
   onViewChange?: (view: ViewTransform) => void
-  /** Výchozí pohled pro reset (⟲/dvojklik) — např. fit na cenové pásmo dne. */
-  homeView?: ViewTransform
+  /** Cenové pásmo dne pro auto-fit osy Y (výchozí pohled i cíl resetu). */
+  fitRange?: { low: number; high: number } | null
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -96,6 +96,17 @@ export function Heatmap({
     },
     [onViewChange, controlledView],
   )
+  // Výchozí pohled: fit cenového pásma na skutečnou výšku canvasu (hi-DPI, resize)
+  const homeView = useMemo(
+    () =>
+      fitRange ? fitPriceView(grid.strikes, fitRange.low, fitRange.high, logicalH) : DEFAULT_VIEW,
+    [fitRange, grid.strikes, logicalH],
+  )
+  // Nový dataset / cenové pásmo → automaticky napasovat pohled
+  useEffect(() => {
+    setView(() => homeView)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [homeView])
   // Tažení: pan plochy, nebo roztahování jedné osy (TradingView styl)
   const dragRef = useRef<{ x: number; y: number; mode: 'pan' | 'scale-x' | 'scale-y' } | null>(null)
   const [axisHover, setAxisHover] = useState<AxisZone>(null)
