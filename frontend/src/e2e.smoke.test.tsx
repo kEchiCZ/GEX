@@ -1,5 +1,5 @@
 /** E2E render smoke (issue #31): App nad /replay balíkem — engine→storage→API→frontend. */
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { tableFromArrays, tableToIPC } from 'apache-arrow'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from './App'
@@ -87,11 +87,14 @@ test('App vyrenderuje celý den z /replay balíku (heatmapa, profil, panely, pla
   // Data source se přepne z demo na replay (jediný fetch balíku)
   await waitFor(() => expect(screen.getByTestId('data-source').textContent).toContain('replay'))
 
-  // Heatmapa + profil + spodní panely + playback nad reálným balíkem
+  // Heatmapa + profil + spodní panely nad reálným balíkem
   expect(screen.getByLabelText('Heatmapa')).toBeDefined()
   expect(screen.getByTestId('profile-row-7600')).toBeDefined()
   expect(screen.getByLabelText('Vol panel')).toBeDefined()
   expect(screen.getByLabelText('Cum Δ panel')).toBeDefined()
+  // Replay lišta je defaultně skrytá (vždy live) — zobrazí se tlačítkem
+  expect(screen.queryByLabelText('Pozice dne')).toBeNull()
+  fireEvent.click(screen.getByLabelText('Replay ovládání'))
   const slider = screen.getByLabelText('Pozice dne') as HTMLInputElement
   expect(slider.max).toBe('2') // 3 minuty dne
 })
