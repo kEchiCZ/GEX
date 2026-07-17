@@ -11,7 +11,6 @@ import { barGeometry } from '../profile/bars'
 import type { ProfileRow } from '../profile/bars'
 import { useCrosshair } from '../state/Crosshair'
 
-const PANEL_WIDTH = 260
 const ROW_GAP = 1
 
 const COLORS = {
@@ -25,10 +24,13 @@ export function StrikeProfile({
   rows,
   spot,
   height = 640,
+  width = 260,
 }: {
   rows: ProfileRow[]
   spot: number | null
   height?: number
+  /** Šířka panelu — tažitelný předěl v App ji mění za běhu. */
+  width?: number
 }) {
   const [zoom, setZoom] = useState<1 | 2 | 4>(1)
   const { position: crosshair, setPosition: setCrosshair } = useCrosshair()
@@ -37,7 +39,7 @@ export function StrikeProfile({
   const ordered = useMemo(() => [...rows].sort((a, b) => b.strike - a.strike), [rows])
   const strikesAscending = useMemo(() => ordered.map((row) => row.strike).reverse(), [ordered])
   const rowHeight = ordered.length > 0 ? height / ordered.length : 0
-  const halfWidth = PANEL_WIDTH / 2
+  const halfWidth = width / 2
   const geometry = useMemo(
     () => new Map(barGeometry(ordered, halfWidth, zoom).map((bar) => [bar.strike, bar])),
     [ordered, halfWidth, zoom],
@@ -54,7 +56,7 @@ export function StrikeProfile({
     : null
 
   return (
-    <aside className="strike-profile" aria-label="Strike profil">
+    <aside className="strike-profile" aria-label="Strike profil" style={{ width }}>
       <div className="profile-header">
         <span className="muted">Vol + OI Δ</span>
         <div role="toolbar" aria-label="Zoom profilu">
@@ -70,7 +72,7 @@ export function StrikeProfile({
         </div>
       </div>
       <svg
-        width={PANEL_WIDTH}
+        width={width}
         height={height}
         role="img"
         aria-label="Skládané pruhy strike profilu"
@@ -111,13 +113,7 @@ export function StrikeProfile({
               }
             >
               {highlighted && (
-                <rect
-                  x={0}
-                  y={y}
-                  width={PANEL_WIDTH}
-                  height={barHeight}
-                  fill="rgba(215,220,230,0.08)"
-                />
+                <rect x={0} y={y} width={width} height={barHeight} fill="rgba(215,220,230,0.08)" />
               )}
               {/* call: doprava — Vol sytě, OI Δ světleji (skládané) */}
               <rect
@@ -161,7 +157,7 @@ export function StrikeProfile({
           <line
             x1={0}
             y1={spotY}
-            x2={PANEL_WIDTH}
+            x2={width}
             y2={spotY}
             stroke="#e8c14b"
             strokeDasharray="4 3"

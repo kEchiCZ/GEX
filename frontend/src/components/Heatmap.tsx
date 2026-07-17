@@ -4,8 +4,13 @@ cenová křivka, sessions, levels/walls linie, crosshair + tooltip.
 Data se překreslují do offscreen bitmapy jen při změně gridu/stylu; pan/zoom
 i overlaye kreslí hotový bitmap + vektory nad ním — 60 fps drží GPU drawImage.
 Crosshair je sdílený kontext (SPEC: synchronizace se spodními panely a profilem).
+
+Rozlišení canvasu sleduje zobrazenou velikost × devicePixelRatio (hi-DPI):
+kreslí se v logických CSS pixelech přes setTransform(dpr), takže popisky os
+jsou ostré i na velkých monitorech. Souřadnice událostí = CSS pixely.
 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useElementSize } from '../hooks/useElementSize'
 import { contourLevels, marchingSquares } from '../heatmap/contours'
 import type { ContoursMode } from '../heatmap/contours'
 import { gaussianBlur, renderGrid } from '../heatmap/render'
@@ -76,6 +81,11 @@ export function Heatmap({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   const offscreenRef = useRef<HTMLCanvasElement | null>(null)
+  // Logická plocha = zobrazená velikost v CSS px; raster = × devicePixelRatio
+  const { ref: stackRef, size } = useElementSize<HTMLDivElement>({ width: 1200, height: 640 })
+  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio ?? 1) : 1
+  const logicalW = size.width
+  const logicalH = size.height
   const [internalView, setInternalView] = useState<ViewTransform>(DEFAULT_VIEW)
   // Řízený vs. vlastní pohled: rodič může sdílet transformaci se spodními panely
   const view = controlledView ?? internalView
@@ -105,39 +115,36 @@ export function Heatmap({
     )
   }, [grid, contours, strikeCount])
 
-  /** Převod dat → obrazovka (sdílený pro data i overlay canvas). */
-  const mapping = useCallback(
-    (canvas: HTMLCanvasElement) => {
-      const scaleX = (canvas.width / grid.minutes) * view.zoomX
-      const scaleY = (canvas.height / strikeCount) * view.zoomY
-      return {
-        scaleX,
-        scaleY,
-        minuteToX: (minuteIdx: number) => (minuteIdx + 0.5) * scaleX + view.offsetX,
-        rowToY: (row: number) => (strikeCount - 1 - row + 0.5) * scaleY + view.offsetY,
-        screenToCell: (x: number, y: number) => {
-          const minuteIdx = Math.floor((x - view.offsetX) / scaleX)
-          const rowFromTop = Math.floor((y - view.offsetY) / scaleY)
-          const strikeIdx = strikeCount - 1 - rowFromTop
-          return { minuteIdx, strikeIdx }
-        },
-        // Anotace: spojité datové souřadnice (čas × strike, ne pixely — SPEC 7.4)
-        screenToDataPoint: (x: number, y: number): AnnotationPoint => {
-          const minute = (x - view.offsetX) / scaleX - 0.5
-          const row = strikeCount - 1 - ((y - view.offsetY) / scaleY - 0.5)
-          const clamped = Math.min(strikeCount - 1, Math.max(0, row))
-          const lowIdx = Math.min(strikeCount - 2, Math.max(0, Math.floor(clamped)))
-          const fraction = clamped - lowIdx
-          const strike =
-            strikeCount > 1
-              ? grid.strikes[lowIdx] + fraction * (grid.strikes[lowIdx + 1] - grid.strikes[lowIdx])
-              : (grid.strikes[0] ?? 0)
-          return { minute, strike }
-        },
-      }
-    },
-    [grid.minutes, grid.strikes, strikeCount, view],
-  )
+  /** Převod dat → obrazovka v logických CSS px (sdílený pro data i overlay canvas). */
+  const mapping = useCallback(() => {
+    const scaleX = (logicalW / grid.minutes) * view.zoomX
+    const scaleY = (logicalH / strikeCount) * view.zoomY
+    return {
+      scaleX,
+      scaleY,
+      minuteToX: (minuteIdx: number) => (minuteIdx + 0.5) * scaleX + view.offsetX,
+      rowToY: (row: number) => (strikeCount - 1 - row + 0.5) * scaleY + view.offsetY,
+      screenToCell: (x: number, y: number) => {
+        const minuteIdx = Math.floor((x - view.offsetX) / scaleX)
+        const rowFromTop = Math.floor((y - view.offsetY) / scaleY)
+        const strikeIdx = strikeCount - 1 - rowFromTop
+        return { minuteIdx, strikeIdx }
+      },
+      // Anotace: spojité datové souřadnice (čas × strike, ne pixely — SPEC 7.4)
+      screenToDataPoint: (x: number, y: number): AnnotationPoint => {
+        const minute = (x - view.offsetX) / scaleX - 0.5
+        const row = strikeCount - 1 - ((y - view.offsetY) / scaleY - 0.5)
+        const clamped = Math.min(strikeCount - 1, Math.max(0, row))
+        const lowIdx = Math.min(strikeCount - 2, Math.max(0, Math.floor(clamped)))
+        const fraction = clamped - lowIdx
+        const strike =
+          strikeCount > 1
+            ? grid.strikes[lowIdx] + fraction * (grid.strikes[lowIdx + 1] - grid.strikes[lowIdx])
+            : (grid.strikes[0] ?? 0)
+        return { minute, strike }
+      },
+    }
+  }, [grid.minutes, grid.strikes, strikeCount, view, logicalW, logicalH])
 
   // 1) Data → offscreen bitmapa (jen při změně dat/stylu)
   useEffect(() => {
@@ -160,14 +167,15 @@ export function Heatmap({
     if (!canvas || !offscreen) return
     const context = canvas.getContext('2d')
     if (!context) return
+    context.setTransform(1, 0, 0, 1, 0, 0)
     context.clearRect(0, 0, canvas.width, canvas.height)
     context.imageSmoothingEnabled = true // bilineární interpolace Gradient stylu
-    const scaleX = (canvas.width / offscreen.width) * view.zoomX
-    const scaleY = (canvas.height / offscreen.height) * view.zoomY
-    context.setTransform(scaleX, 0, 0, scaleY, view.offsetX, view.offsetY)
+    const scaleX = (logicalW / offscreen.width) * view.zoomX
+    const scaleY = (logicalH / offscreen.height) * view.zoomY
+    context.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, dpr * view.offsetX, dpr * view.offsetY)
     context.drawImage(offscreen, 0, 0)
     context.setTransform(1, 0, 0, 1, 0, 0)
-  }, [view])
+  }, [view, logicalW, logicalH, dpr])
 
   // 3) Overlay canvas: kontury, cena, sessions, levels/walls, crosshair, timestamp
   const drawOverlay = useCallback(() => {
@@ -175,8 +183,10 @@ export function Heatmap({
     if (!canvas) return
     const context = canvas.getContext('2d')
     if (!context) return
-    const { minuteToX, rowToY, scaleX, scaleY } = mapping(canvas)
-    context.clearRect(0, 0, canvas.width, canvas.height)
+    const { minuteToX, rowToY, scaleX, scaleY } = mapping()
+    // Kreslení v logických CSS px; raster je dpr× větší → ostré popisky (hi-DPI)
+    context.setTransform(dpr, 0, 0, dpr, 0, 0)
+    context.clearRect(0, 0, logicalW, logicalH)
 
     // Kontury (bílé přerušované, SPEC 7.2)
     if (contourSegments.length > 0) {
@@ -199,7 +209,7 @@ export function Heatmap({
       context.setLineDash([6, 4])
       context.beginPath()
       context.moveTo(x, 0)
-      context.lineTo(x, canvas.height)
+      context.lineTo(x, logicalH)
       context.stroke()
       context.setLineDash([])
       context.fillStyle = 'rgba(125,133,150,0.9)'
@@ -245,7 +255,7 @@ export function Heatmap({
       context.setLineDash([6, 5])
       context.beginPath()
       context.moveTo(0, y)
-      context.lineTo(canvas.width, y)
+      context.lineTo(logicalW, y)
       context.stroke()
       context.setLineDash([])
       const label = formatLevel(value)
@@ -299,16 +309,16 @@ export function Heatmap({
       context.setLineDash([2, 3])
       context.beginPath()
       context.moveTo(0, y)
-      context.lineTo(canvas.width, y)
+      context.lineTo(logicalW, y)
       context.stroke()
       context.setLineDash([])
       const price = overlays.price?.at(-1)?.close
       if (price !== undefined) {
         context.fillStyle = lastPoint.up ? UP_COLOR : DOWN_COLOR
-        context.fillRect(canvas.width - 56, y - 9, 56, 18)
+        context.fillRect(logicalW - 56, y - 9, 56, 18)
         context.fillStyle = '#12151c'
         context.font = 'bold 11px sans-serif'
-        context.fillText(price.toFixed(2), canvas.width - 52, y + 4)
+        context.fillText(price.toFixed(2), logicalW - 52, y + 4)
       }
     }
 
@@ -319,12 +329,12 @@ export function Heatmap({
       context.lineWidth = 1
       context.beginPath()
       context.moveTo(x, 0)
-      context.lineTo(x, canvas.height)
+      context.lineTo(x, logicalH)
       const row = crosshair.strike === null ? -1 : grid.strikes.indexOf(crosshair.strike)
       if (row >= 0) {
         const y = rowToY(row)
         context.moveTo(0, y)
-        context.lineTo(canvas.width, y)
+        context.lineTo(logicalW, y)
         context.stroke()
         context.strokeStyle = 'rgba(215,220,230,0.9)'
         context.strokeRect(x - 0.5 * scaleX, y - 0.5 * scaleY, scaleX, scaleY)
@@ -375,7 +385,7 @@ export function Heatmap({
     // Osa Y: strikes u levého okraje
     for (const row of tickIndices(strikeCount, scaleY, 26)) {
       const y = rowToY(row)
-      if (y < 8 || y > canvas.height - 20) continue
+      if (y < 8 || y > logicalH - 20) continue
       const label = String(grid.strikes[row])
       context.fillStyle = 'rgba(18,21,28,0.75)'
       context.fillRect(2, y - 8, context.measureText(label).width + 8, 15)
@@ -385,20 +395,20 @@ export function Heatmap({
     // Osa X: čas u spodního okraje
     for (const minuteIdx of tickIndices(grid.minutes, scaleX, 88)) {
       const x = minuteToX(minuteIdx)
-      if (x < 24 || x > canvas.width - 44) continue
+      if (x < 24 || x > logicalW - 44) continue
       const label = minuteLabels[minuteIdx] ?? `m${minuteIdx}`
       const width = context.measureText(label).width
       context.fillStyle = 'rgba(18,21,28,0.75)'
-      context.fillRect(x - width / 2 - 4, canvas.height - 19, width + 8, 15)
+      context.fillRect(x - width / 2 - 4, logicalH - 19, width + 8, 15)
       context.fillStyle = 'rgba(180,188,202,0.95)'
-      context.fillText(label, x - width / 2, canvas.height - 7)
+      context.fillText(label, x - width / 2, logicalH - 7)
     }
 
     // Timestamp dat (SPEC 7.2)
     if (overlays.timestamp) {
       context.fillStyle = 'rgba(125,133,150,0.9)'
       context.font = '11px sans-serif'
-      context.fillText(overlays.timestamp, canvas.width - 150, canvas.height - 26)
+      context.fillText(overlays.timestamp, logicalW - 150, logicalH - 26)
     }
   }, [
     mapping,
@@ -415,6 +425,9 @@ export function Heatmap({
     minuteLabels,
     strikeCount,
     grid.minutes,
+    logicalW,
+    logicalH,
+    dpr,
   ])
 
   useEffect(() => {
@@ -425,22 +438,15 @@ export function Heatmap({
     drawOverlay()
   }, [drawOverlay])
 
-  /** Souřadnice události v pixelech canvasu (korekce CSS škálování). */
+  /** Souřadnice události v logických CSS px (raster i mapping sdílí stejný prostor). */
   const canvasPoint = (event: {
     clientX: number
     clientY: number
-  }): { x: number; y: number; canvas: HTMLCanvasElement } | null => {
+  }): { x: number; y: number } | null => {
     const canvas = overlayRef.current
     if (!canvas) return null
     const rect = canvas.getBoundingClientRect()
-    // Osy X a Y se škálují nezávisle — CSS box nemusí držet poměr stran canvasu
-    const scaleX = rect.width > 0 ? canvas.width / rect.width : 1
-    const scaleY = rect.height > 0 ? canvas.height / rect.height : 1
-    return {
-      x: (event.clientX - rect.left) * scaleX,
-      y: (event.clientY - rect.top) * scaleY,
-      canvas,
-    }
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top }
   }
 
   // Kolečko: zoom ukotvený ke kurzoru; nad pruhem osy jen daná osa (TradingView styl)
@@ -448,7 +454,7 @@ export function Heatmap({
     const point = canvasPoint(event)
     if (!point) return
     const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
-    const zone = axisZoneAt(point.x, point.y, point.canvas.height)
+    const zone = axisZoneAt(point.x, point.y, logicalH)
     setView((previous) =>
       zone === 'x'
         ? zoomAxis(previous, 'x', factor, point.x)
@@ -462,7 +468,7 @@ export function Heatmap({
 
   const eventDataPoint = (event: React.PointerEvent<HTMLCanvasElement>): AnnotationPoint | null => {
     const point = canvasPoint(event)
-    return point ? mapping(point.canvas).screenToDataPoint(point.x, point.y) : null
+    return point ? mapping().screenToDataPoint(point.x, point.y) : null
   }
 
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -484,7 +490,7 @@ export function Heatmap({
     }
     // Tažení za pruh osy = roztahování/stahování dané osy; jinde pan plochy
     const point = canvasPoint(event)
-    const zone = point ? axisZoneAt(point.x, point.y, point.canvas.height) : null
+    const zone = point ? axisZoneAt(point.x, point.y, logicalH) : null
     dragRef.current = {
       x: event.clientX,
       y: event.clientY,
@@ -515,10 +521,10 @@ export function Heatmap({
       if (mode === 'scale-x') {
         // Kotva = pravý okraj: poslední svíčka drží pozici, historie se roztahuje
         const factor = Math.exp(deltaX * 0.005)
-        setView((previous) => zoomAxis(previous, 'x', factor, canvas?.width ?? 1200))
+        setView((previous) => zoomAxis(previous, 'x', factor, logicalW))
       } else if (mode === 'scale-y') {
         const factor = Math.exp(-deltaY * 0.005)
-        setView((previous) => zoomAxis(previous, 'y', factor, (canvas?.height ?? 640) / 2))
+        setView((previous) => zoomAxis(previous, 'y', factor, logicalH / 2))
       } else {
         setView((previous) => ({
           ...previous,
@@ -532,8 +538,8 @@ export function Heatmap({
     const point = canvasPoint(event)
     if (!point) return
     const { x, y } = point
-    setAxisHover(axisZoneAt(x, y, canvas.height))
-    const { minuteIdx, strikeIdx } = mapping(canvas).screenToCell(x, y)
+    setAxisHover(axisZoneAt(x, y, logicalH))
+    const { minuteIdx, strikeIdx } = mapping().screenToCell(x, y)
     if (minuteIdx >= 0 && minuteIdx < grid.minutes && strikeIdx >= 0 && strikeIdx < strikeCount) {
       setCrosshair({ minuteIdx, strike: grid.strikes[strikeIdx] })
     } else {
@@ -567,13 +573,18 @@ export function Heatmap({
   }, [crosshair, grid])
 
   return (
-    <div className="heatmap-stack">
-      <canvas ref={canvasRef} className="heatmap-canvas" width={1200} height={640} />
+    <div className="heatmap-stack" ref={stackRef}>
+      <canvas
+        ref={canvasRef}
+        className="heatmap-canvas"
+        width={Math.round(logicalW * dpr)}
+        height={Math.round(logicalH * dpr)}
+      />
       <canvas
         ref={overlayRef}
         className="heatmap-overlay"
-        width={1200}
-        height={640}
+        width={Math.round(logicalW * dpr)}
+        height={Math.round(logicalH * dpr)}
         role="img"
         aria-label="GEX heatmapa"
         style={{

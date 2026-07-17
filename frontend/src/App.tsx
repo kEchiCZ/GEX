@@ -1,5 +1,5 @@
 /** Kořenový layout aplikace (SPEC 7.1) s obrazovkami Graf / Dashboard / Console / Settings. */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { useAnnotations } from './annotations/useAnnotations'
 import { TimeframeRow, TogglesRow } from './components/ControlRows'
@@ -65,6 +65,9 @@ function MainContent() {
   const [wallsMode, setWallsMode] = useState<WallsMode>('off')
   const [annotationTool, setAnnotationTool] = useState<ActiveTool>(null)
   const [annotationColor, setAnnotationColor] = useState('#e8c14b')
+  // Tažitelný předěl mezi grafem a pravým panelem (graf se přizpůsobí sám)
+  const [profileWidth, setProfileWidth] = useState(260)
+  const dividerDragRef = useRef<{ x: number; width: number } | null>(null)
   // Deep-link: ?price=candles&opacity=60 (i pro automatizované snímky)
   const [priceStyle, setPriceStyle] = useState<PriceStyle>(() =>
     new URLSearchParams(window.location.search).get('price') === 'candles' ? 'candles' : 'line',
@@ -361,7 +364,27 @@ function MainContent() {
           />
           <PlaybackBar playback={playback} />
         </div>
-        <StrikeProfile rows={profileRows} spot={spot} />
+        <div
+          className="panel-divider"
+          role="separator"
+          aria-label="Šířka pravého panelu"
+          aria-orientation="vertical"
+          onPointerDown={(event) => {
+            dividerDragRef.current = { x: event.clientX, width: profileWidth }
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }}
+          onPointerMove={(event) => {
+            const drag = dividerDragRef.current
+            if (!drag) return
+            // Tažení doleva panel rozšiřuje; meze drží použitelnost obou stran
+            const next = drag.width + (drag.x - event.clientX)
+            setProfileWidth(Math.min(640, Math.max(180, Math.round(next))))
+          }}
+          onPointerUp={() => {
+            dividerDragRef.current = null
+          }}
+        />
+        <StrikeProfile rows={profileRows} spot={spot} width={profileWidth} />
       </div>
     </>
   )
