@@ -9,7 +9,7 @@
 | # | Bod | Výsledek |
 |---|---|---|
 | 1 | tradingClass ES weeklies | `reqSecDefOptParams` vrátil 24 chainů. Vzor: **E{týden}{A–E}** = denní weeklies po–čt + pátek dle týdne (např. E3D = čtvrtek 3. týdne), **EW{týden}** = páteční weekly, **EW** = EOM, **ES** = kvartální. Příklad nejbližších: E3D→20260716, EW3→20260717, E3A→20260720, E3B→20260721, E4C→20260722. |
-| 2 | OI přes generic tick 588 na FOP | **Intraday nechodí vůbec** — držená subskripce 150 s na 6 kontraktech přes 3 expirace bez jediné hodnoty (ověřeno 2026-07-16 ~17:00 UTC); historical `OPTION_OPEN_INTEREST` pro FOP končí timeoutem. CME publikuje OI 1× denně brzy ráno — engine proto zkouší denní archiv opakovaně (à 30 min) a při úplném selhání posílá alert `oi_missing`; frontend do té doby staví heatmapu z volume. **Ověřit ranní okno (cca 10–12 UTC)** — pokud 588 nedodá ani ráno, jde o limitaci subskripce/účtu a bude potřeba zvážit jiný zdroj OI. |
+| 2 | OI přes generic tick 588 na FOP | **Tick 588 nechodí vůbec** (intraday ani v ranním okně — ověřeno 2026-07-16 17:00 UTC a průběžně do 2026-07-17 10:20 UTC); historical `OPTION_OPEN_INTEREST` pro FOP končí timeoutem. **ŘEŠENÍ (2026-07-17 10:25 UTC, issue #65): generic tick 101 (call/put OI) na FOP funguje** — živá sonda na EW3 P7500 vrátila `putOpenInterest=5645` do ~20 s (`callOpenInterest` druhé strany je validní 0.0 → hodnota se musí číst podle strany kontraktu). `IbOIFetcher` proto používá tick 101 pro OPT i FOP. Engine dál zkouší denní archiv à 30 min a při selhání posílá alert `oi_missing`; frontend do té doby staví heatmapu z volume. |
 | 3 | Souběžné tick-by-tick streamy | **5** — šestý `reqTickByTickData` vrátil error 10190 („Max number of tick-by-tick requests has been reached"). |
 | 4 | Market data lines | **≥ 150** — 150 souběžných `reqMktData` bez error 101; skutečný strop nedosažen (líný horní odhad postačuje pro návrh). |
 
@@ -19,7 +19,7 @@ Vedlejší potvrzení: live top-of-book i modelové Greeks (`tickOptionComputati
 
 - `GEXLENS_TICK_BY_TICK_MAX_STREAMS=5` — HotZoneCollector (issue #8) musí hot zónu degradovat z cílové šířky ATM±15 na počet pokrytelný 5 streamy (efektivně ~ATM±1 × C/P) a stav reportovat do UI (SPEC 3.4 s degradací počítá). Zbytek hot zóny klasifikuje CumΔ přes 1min midpoint test (SPEC 4.5, větev „zbytek řetězce"). Uživatel může limit zvýšit dokoupením IBKR Quote Booster packů — pak stačí zvednout env proměnnou.
 - `GEXLENS_BATCH_SIZE=80` — bezpečně pod ověřenými ≥150 lines; ponechává rezervu pro trvalé streamy hot zóny a podkladu.
-- OIArchiver (issue #9) použije primárně ranní `reqMktData` snapshot; tick 588 jen jako oportunistický zdroj, nikdy jako jediný.
+- OIArchiver (issue #9) použije primárně ranní `reqMktData` snapshot s generic tickem **101** (funguje pro OPT i FOP; 588 na FOP nedodává — viz bod 2).
 
 ## Důsledky
 

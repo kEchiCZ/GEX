@@ -94,7 +94,13 @@ class IbQuoteStreamer:
 
 
 class IbOIFetcher:
-    """OIFetcherLike: FOP tick 588, OPT tick 101; ranní snapshot (ADR-0001 fallback)."""
+    """OIFetcherLike: generic tick 101 (call/put OI) — funguje pro OPT i FOP.
+
+    Tick 588 (futures OI) na FOP kontraktech nedodává nic (změřeno živě,
+    issue #65/ADR-0001); tick 101 vrací callOpenInterest/putOpenInterest.
+    Hodnota se čte podle strany kontraktu — druhá strana bývá validní 0.0
+    a nesmí se zaměnit.
+    """
 
     def __init__(self, ib: IB, streamer: IbQuoteStreamer) -> None:
         self._ib = ib
@@ -104,19 +110,18 @@ class IbOIFetcher:
         contract = await self._streamer._contract(spec)  # sdílená kvalifikační cache
         if contract is None:
             return None
-        generic = "588" if spec.sec_type == "FOP" else "101"
-        ticker = self._ib.reqMktData(contract, generic, False, False)
+        ticker = self._ib.reqMktData(contract, "101", False, False)
         try:
             deadline = asyncio.get_running_loop().time() + timeout_s
             while asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(0.25)
-                for value in (
-                    ticker.futuresOpenInterest,
-                    getattr(ticker, "callOpenInterest", None),
-                    getattr(ticker, "putOpenInterest", None),
-                ):
-                    if _valid(value):
-                        return float(value)  # type: ignore[arg-type]
+                value = (
+                    getattr(ticker, "callOpenInterest", None)
+                    if spec.right == "C"
+                    else getattr(ticker, "putOpenInterest", None)
+                )
+                if _valid(value):
+                    return float(value)  # type: ignore[arg-type]
             return None
         finally:
             self._ib.cancelMktData(contract)
