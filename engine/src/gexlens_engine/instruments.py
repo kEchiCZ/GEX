@@ -45,6 +45,21 @@ class InstrumentSetupError(RuntimeError):
     """Instrument nejde nastartovat (neznámý symbol, chybí FOP řetězec, …)."""
 
 
+def expiry_expired(expiry: str, today: dt.date) -> bool:
+    """True, když expirace (YYYYMMDD) už proběhla — pipeline se musí překlopit.
+
+    0DTE řetěz: po vypršení denní expirace by sweep běžel nad mrtvými kontrakty;
+    orchestrátor pipeline zastaví a další cyklus ji založí znovu (discovery
+    vybere novou nejbližší expiraci). Nečitelný formát → False (nerozbíjet běh).
+    """
+    try:
+        expiry_date = dt.datetime.strptime(expiry, "%Y%m%d").date()
+    except ValueError:
+        logger.warning("Nečitelná expirace %r — roll se přeskakuje", expiry)
+        return False
+    return expiry_date < today
+
+
 class TickerLike(Protocol):
     """Minimální podoba ib_async.Ticker pro čtení spotu podkladu."""
 
