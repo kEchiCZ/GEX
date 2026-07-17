@@ -11,7 +11,13 @@ import type { ContoursMode } from '../heatmap/contours'
 import { gaussianBlur, renderGrid } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
-import { candleGeometry, fractionalRow, pricePolyline, tickIndices } from '../heatmap/overlays'
+import {
+  candleGeometry,
+  fractionalRow,
+  lastLevelValue,
+  pricePolyline,
+  tickIndices,
+} from '../heatmap/overlays'
 import type { OverlayData, PriceStyle } from '../heatmap/overlays'
 import { DEFAULT_VIEW, axisZoneAt, zoomAxis, zoomBoth } from '../heatmap/view'
 import type { AxisZone, ViewTransform } from '../heatmap/view'
@@ -197,10 +203,12 @@ export function Heatmap({
       context.fillText(session.label, x + 4, 12)
     }
 
-    // Levels a walls linie (dle módu; barva per linie)
-    for (const line of [...(overlays.levels ?? []), ...(overlays.walls ?? [])]) {
+    // Levels a walls linie (dle módu; barva per linie, volitelné čárkování)
+    const levelLines = [...(overlays.levels ?? []), ...(overlays.walls ?? [])]
+    for (const line of levelLines) {
       context.strokeStyle = line.color || LEVEL_DEFAULT_COLOR
       context.lineWidth = 1.5
+      if (line.dash) context.setLineDash(line.dash)
       context.beginPath()
       let pen = false
       line.series.forEach((value, minuteIdx) => {
@@ -216,7 +224,34 @@ export function Heatmap({
         pen = true
       })
       context.stroke()
+      context.setLineDash([])
     }
+
+    // Horizontální projekce úrovní přes celou šířku s cenovkou (Moodix styl).
+    // Jen pojmenované úrovně (flip/walls/centroid/max pain) — počítané walls řady ne.
+    context.font = 'bold 10px sans-serif'
+    for (const line of levelLines) {
+      if (line.name.startsWith('walls:')) continue
+      const value = lastLevelValue(line.series)
+      const row = value === null ? null : fractionalRow(grid.strikes, value)
+      if (value === null || row === null) continue
+      const y = rowToY(row)
+      context.strokeStyle = line.color || LEVEL_DEFAULT_COLOR
+      context.lineWidth = 1
+      context.setLineDash([6, 5])
+      context.beginPath()
+      context.moveTo(0, y)
+      context.lineTo(canvas.width, y)
+      context.stroke()
+      context.setLineDash([])
+      const label = String(value)
+      const width = context.measureText(label).width + 8
+      context.fillStyle = line.color || LEVEL_DEFAULT_COLOR
+      context.fillRect(46, y - 8, width, 15)
+      context.fillStyle = '#12151c'
+      context.fillText(label, 50, y + 4)
+    }
+    context.font = '11px sans-serif'
 
     // 1m cena: křivka s tick barvami, nebo svíčky (přepínač + viditelnost)
     const points = pricePolyline(overlays.price ?? [], grid.strikes)

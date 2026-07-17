@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { PanelSeries } from '../components/BottomPanels'
 import { demoGrid, demoOverlays, demoPanels, demoProfile } from '../heatmap/demo'
 import type { HeatmapGrid } from '../heatmap/grid'
+import type { RawDay } from '../heatmap/modes'
 import type { OverlayData } from '../heatmap/overlays'
 import type { ProfileRow } from '../profile/bars'
 import { buildDailyDay } from './daily'
@@ -19,6 +20,8 @@ const DAILY_MAX_DAYS = 14
 export interface DayData {
   source: 'replay' | 'demo'
   grid: HeatmapGrid
+  /** Surová snapshot matice (přepínání módů/škál) — jen intraday replay. */
+  raw: RawDay | null
   overlays: OverlayData
   panels: PanelSeries
   profileByMinute: ProfileRow[][] | null // demo má jediný statický profil
@@ -45,6 +48,7 @@ function demoDay(): DayData {
   return {
     source: 'demo',
     grid,
+    raw: null,
     overlays,
     panels: demoPanels(grid.minutes),
     profileByMinute: null,
@@ -68,6 +72,7 @@ function replayToDay(day: ReplayDay): DayData {
   return {
     source: 'replay',
     grid: day.grid,
+    raw: day.raw,
     overlays: day.overlays,
     panels: day.panels,
     profileByMinute: day.profileByMinute,

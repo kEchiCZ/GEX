@@ -40,6 +40,12 @@ export interface Toggles {
 export type AppView = 'chart' | 'dashboard' | 'console' | 'settings'
 export type Theme = 'dark' | 'light'
 
+/** Poslední cena + denní změna (hlavička; plní MainContent z denních dat). */
+export interface PriceInfo {
+  last: number | null
+  changePct: number | null
+}
+
 /** Intraday timeframy — agregace 1m dat do košů (SPEC 7.1, TradingView sada). */
 export const INTERVALS = [
   '1m',
@@ -96,6 +102,8 @@ interface AppState {
   unreadAlerts: number
   markAlertsRead: () => void
   consoleLog: string[]
+  priceInfo: PriceInfo
+  setPriceInfo: (info: PriceInfo) => void
 }
 
 const AppStateContext = createContext<AppState | null>(null)
@@ -137,6 +145,7 @@ export function AppStateProvider({
   const [alerts, setAlerts] = useState<AlertMessage[]>([])
   const [unreadAlerts, setUnreadAlerts] = useState(0)
   const [consoleLog, setConsoleLog] = useState<string[]>([])
+  const [priceInfo, setPriceInfo] = useState<PriceInfo>({ last: null, changePct: null })
   const [toggles, setToggles] = useState<Toggles>({
     dynGex: true,
     gexLevels: true,
@@ -231,6 +240,8 @@ export function AppStateProvider({
       unreadAlerts,
       markAlertsRead: () => setUnreadAlerts(0),
       consoleLog,
+      priceInfo,
+      setPriceInfo,
     }),
     [
       status,
@@ -245,6 +256,7 @@ export function AppStateProvider({
       alerts,
       unreadAlerts,
       consoleLog,
+      priceInfo,
     ],
   )
 

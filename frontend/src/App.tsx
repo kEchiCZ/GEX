@@ -1,5 +1,5 @@
 /** Kořenový layout aplikace (SPEC 7.1) s obrazovkami Graf / Dashboard / Console / Settings. */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { useAnnotations } from './annotations/useAnnotations'
 import { TimeframeRow, TogglesRow } from './components/ControlRows'
@@ -13,10 +13,20 @@ import { BottomPanels } from './components/BottomPanels'
 import { PlaybackBar } from './components/PlaybackBar'
 import { SettingsView } from './components/SettingsView'
 import { StrikeProfile } from './components/StrikeProfile'
+import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
+import type { HeatmapMode, HeatmapScale } from './heatmap/modes'
 import { visibleOverlays } from './heatmap/overlays'
-import type { PriceStyle } from './heatmap/overlays'
+import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { DEFAULT_VIEW } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
+import {
+  WALLS_MODES,
+  centerSeries,
+  peakSeries,
+  ridgeTracks,
+  smoothSeries,
+} from './heatmap/wallsModes'
+import type { WallsMode } from './heatmap/wallsModes'
 import { aggregateDay } from './replay/aggregate'
 import { sliceGrid, sliceOverlays, slicePanels } from './replay/slice'
 import { useDayData } from './replay/useDayData'
@@ -47,9 +57,12 @@ function lastValue(series: (number | null)[] | undefined, position: number): num
 }
 
 function MainContent() {
-  const { toggles, symbol, selectedExpiry, view, timeframe, interval } = useAppState()
+  const { toggles, symbol, selectedExpiry, view, timeframe, interval, setPriceInfo } = useAppState()
   const [style, setStyle] = useState<HeatmapStyle>('gradient')
   const [contours, setContours] = useState<ContoursMode>('off')
+  const [mode, setMode] = useState<HeatmapMode>('oi')
+  const [heatScale, setHeatScale] = useState<HeatmapScale>('linear')
+  const [wallsMode, setWallsMode] = useState<WallsMode>('off')
   const [annotationTool, setAnnotationTool] = useState<ActiveTool>(null)
   const [annotationColor, setAnnotationColor] = useState('#e8c14b')
   // Deep-link: ?price=candles&opacity=60 (i pro automatizované snímky)
@@ -64,9 +77,25 @@ function MainContent() {
   // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame)
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const rawDay = useDayData(symbol, selectedExpiry, today, timeframe)
+  // Heatmap mód/škála: čistý přepočet ze surové matice (SPEC 4.3, bez fetch)
+  const modeDay = useMemo(() => {
+    if (!rawDay.raw || (mode === 'oi' && heatScale === 'linear')) return rawDay
+    return { ...rawDay, grid: buildModeGrid(rawDay.raw, mode, heatScale) }
+  }, [rawDay, mode, heatScale])
   // Timeframe: agregace 1m dat do košů v paměti (Daily má sloupec = den, koše se nepoužijí)
   const bucketMinutes = timeframe === 'daily' ? 1 : INTERVAL_MINUTES[interval]
-  const day = useMemo(() => aggregateDay(rawDay, bucketMinutes), [rawDay, bucketMinutes])
+  const day = useMemo(() => aggregateDay(modeDay, bucketMinutes), [modeDay, bucketMinutes])
+
+  // Hlavička: poslední cena + denní změna vs. otevření dne
+  useEffect(() => {
+    const spots = day.spotSeries.filter((value): value is number => value !== null)
+    const last = spots.at(-1) ?? null
+    const open = spots[0] ?? null
+    setPriceInfo({
+      last,
+      changePct: last !== null && open !== null && open !== 0 ? ((last - open) / open) * 100 : null,
+    })
+  }, [day.spotSeries, setPriceInfo])
   const playback = usePlayback(day.grid.minutes)
   // Pohled grafu (pan/zoom os) — sdílený heatmapou a spodními panely (společná osa X)
   const [chartView, setChartView] = useState<ViewTransform>(DEFAULT_VIEW)
@@ -99,7 +128,7 @@ function MainContent() {
   )
 
   // Overlay přepínače odpovídají checkboxům (AC issue #24)
-  const overlays = useMemo(
+  const baseOverlays = useMemo(
     () =>
       visibleOverlays(allOverlays, {
         gexLevels: toggles.gexLevels,
@@ -107,6 +136,50 @@ function MainContent() {
         dynGex: toggles.dynGex,
       }),
     [allOverlays, toggles.gexLevels, toggles.sessions, toggles.dynGex],
+  )
+
+  // Walls módy (SPEC 4.4): bílé čárkované linie počítané z aktuální vrstvy gridu
+  const computedWalls = useMemo<LevelLine[]>(() => {
+    if (wallsMode === 'off') return []
+    const white = 'rgba(255,255,255,0.85)'
+    const dash = [4, 3]
+    if (wallsMode === 'flip') {
+      const flip = allOverlays.levels?.find((line) => line.name === 'flip')
+      return flip ? [{ name: 'walls:flip', color: white, dash, series: flip.series }] : []
+    }
+    const { minutes, strikes, layers } = grid
+    // Signed vrstva se dělí na kladnou (call) a zápornou (put) stranu
+    const callLayer =
+      layers.call ??
+      (layers.signed ? Float32Array.from(layers.signed, (v) => Math.max(0, v)) : null)
+    const putLayer =
+      layers.put ??
+      (layers.signed ? Float32Array.from(layers.signed, (v) => Math.max(0, -v)) : null)
+    if (!callLayer || !putLayer) return []
+    if (wallsMode === 'ridge') {
+      const magnitude = Float32Array.from(callLayer, (v, i) => v + putLayer[i])
+      return ridgeTracks(magnitude, minutes, strikes)
+        .filter((track) => track.length >= 2) // osamocený bod není hřeben
+        .map((track, index) => {
+          const series: (number | null)[] = Array.from({ length: minutes }, () => null)
+          for (const point of track) series[point.minuteIdx] = point.strike
+          return { name: `walls:ridge-${index}`, color: white, dash, series }
+        })
+    }
+    const seriesOf = (layer: Float32Array): (number | null)[] => {
+      if (wallsMode === 'peak') return peakSeries(layer, minutes, strikes)
+      if (wallsMode === 'center') return centerSeries(layer, minutes, strikes)
+      return smoothSeries(peakSeries(layer, minutes, strikes))
+    }
+    return [
+      { name: 'walls:call', color: white, dash, series: seriesOf(callLayer) },
+      { name: 'walls:put', color: white, dash, series: seriesOf(putLayer) },
+    ]
+  }, [wallsMode, grid, allOverlays.levels])
+
+  const overlays = useMemo(
+    () => ({ ...baseOverlays, walls: [...(baseOverlays.walls ?? []), ...computedWalls] }),
+    [baseOverlays, computedWalls],
   )
 
   if (view === 'dashboard') {
@@ -133,6 +206,51 @@ function MainContent() {
       <TimeframeRow />
       <TogglesRow />
       <div className="row heatmap-controls" role="toolbar" aria-label="Heatmapa nastavení">
+        <label className="toggle">
+          Mode
+          <select
+            value={mode}
+            onChange={(event) => setMode(event.target.value as HeatmapMode)}
+            disabled={!rawDay.raw}
+            title={rawDay.raw ? undefined : 'Módy jsou dostupné jen nad intraday replay daty'}
+            aria-label="Heatmap mód"
+          >
+            {HEATMAP_MODES.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="toggle">
+          Scale
+          <select
+            value={heatScale}
+            onChange={(event) => setHeatScale(event.target.value as HeatmapScale)}
+            disabled={!rawDay.raw}
+            aria-label="Škála heatmapy"
+          >
+            {HEATMAP_SCALES.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="toggle">
+          Walls
+          <select
+            value={wallsMode}
+            onChange={(event) => setWallsMode(event.target.value as WallsMode)}
+            aria-label="Walls mód"
+          >
+            {WALLS_MODES.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="toggle">
           Styl
           <select value={style} onChange={(event) => setStyle(event.target.value as HeatmapStyle)}>
@@ -228,12 +346,15 @@ function MainContent() {
 }
 
 function Shell() {
-  const { theme } = useAppState()
+  const { theme, priceInfo } = useAppState()
   return (
     <div className="app" data-theme={theme}>
       <Sidebar />
       <div className="main-column">
-        <InstrumentHeader />
+        <InstrumentHeader
+          lastPrice={priceInfo.last ?? undefined}
+          changePct={priceInfo.changePct ?? undefined}
+        />
         <MainContent />
         <StatusBar />
       </div>
