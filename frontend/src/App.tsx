@@ -65,6 +65,8 @@ function MainContent() {
   const [wallsMode, setWallsMode] = useState<WallsMode>('off')
   const [annotationTool, setAnnotationTool] = useState<ActiveTool>(null)
   const [annotationColor, setAnnotationColor] = useState('#e8c14b')
+  // Replay lišta je skrytá — aplikace jede defaultně live (přání uživatele)
+  const [showReplay, setShowReplay] = useState(false)
   // Tažitelný předěl mezi grafem a pravým panelem (graf se přizpůsobí sám)
   const [profileWidth, setProfileWidth] = useState(260)
   const dividerDragRef = useRef<{ x: number; width: number } | null>(null)
@@ -325,6 +327,17 @@ function MainContent() {
         <span className="muted" data-testid="data-source">
           {day.source === 'replay' ? `replay ${today}` : 'demo data'}
         </span>
+        <button
+          className={showReplay ? 'chip active' : 'chip'}
+          aria-label="Replay ovládání"
+          title="Zobrazit/skrýt přehrávání dne (skryté = vždy live)"
+          onClick={() => {
+            if (showReplay) playback.goLive() // zavření vrací graf na live
+            setShowReplay((value) => !value)
+          }}
+        >
+          ⏮ Replay
+        </button>
       </div>
       <div className="chart-row">
         <div className="chart-column">
@@ -360,7 +373,7 @@ function MainContent() {
             visible={{ vol: toggles.vol, optVol: toggles.optVol, delta: toggles.delta }}
             time={{ offsetX: chartView.offsetX, zoomX: chartView.zoomX }}
           />
-          <PlaybackBar playback={playback} />
+          {showReplay && <PlaybackBar playback={playback} />}
         </div>
         <div
           className="panel-divider"

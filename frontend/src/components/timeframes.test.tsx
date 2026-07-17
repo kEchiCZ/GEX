@@ -66,6 +66,7 @@ test('timeframe řádek nabízí celou sadu 1m–1d', () => {
 test('přepnutí timeframe agreguje den — mění se rozsah playbacku', () => {
   mockApi()
   renderApp()
+  fireEvent.click(screen.getByLabelText('Replay ovládání')) // lišta je defaultně skrytá
   const slider = () => screen.getByLabelText('Pozice dne') as HTMLInputElement
   // Demo den má 390 minut → 1m: lastIndex 389
   expect(slider().max).toBe('389')
@@ -82,12 +83,28 @@ test('přepnutí timeframe agreguje den — mění se rozsah playbacku', () => {
 test('playback: ne-live pozice se při změně timeframe mapuje proporcionálně', () => {
   mockApi()
   renderApp()
+  fireEvent.click(screen.getByLabelText('Replay ovládání'))
   const slider = () => screen.getByLabelText('Pozice dne') as HTMLInputElement
   fireEvent.change(slider(), { target: { value: '195' } }) // polovina dne na 1m
   fireEvent.click(screen.getByRole('button', { name: '1h' }))
   expect(slider().value).toBe('3') // ~polovina ze 7 košů
   fireEvent.click(screen.getByRole('button', { name: '1m' }))
   expect(Number(slider().value)).toBeGreaterThan(150) // zpět ~doprostřed, ne na začátek
+})
+
+test('replay lišta je defaultně skrytá (vždy live) a zavření vrací na live', () => {
+  mockApi()
+  renderApp()
+  expect(screen.queryByLabelText('Pozice dne')).toBeNull()
+  const toggle = screen.getByLabelText('Replay ovládání')
+  fireEvent.click(toggle)
+  const slider = screen.getByLabelText('Pozice dne') as HTMLInputElement
+  fireEvent.change(slider, { target: { value: '100' } }) // přetočení do minulosti
+  expect(slider.value).toBe('100')
+  fireEvent.click(toggle) // zavření → skrytí + návrat na live
+  expect(screen.queryByLabelText('Pozice dne')).toBeNull()
+  fireEvent.click(toggle)
+  expect((screen.getByLabelText('Pozice dne') as HTMLInputElement).value).toBe('389')
 })
 
 test('demo zdroj dat ukazuje zřetelný banner', () => {
