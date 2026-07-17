@@ -500,12 +500,27 @@ body {
   background: var(--accent);
 }
 
+/* Hlavička jako překryv — svg profilu začíná na stejné výšce jako canvas
+   heatmapy, jinak by sdílená osa Y byla posunutá o výšku hlavičky */
 .profile-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 4px 8px;
+  background: rgba(26, 30, 40, 0.85);
   border-bottom: 1px solid var(--border);
+}
+
+/* Tělo profilu vyplní celý panel; svg se sdílenou osou se ořezává */
+.profile-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .profile-header .chip {

@@ -57,6 +57,7 @@ export function Heatmap({
   view: controlledView,
   onViewChange,
   fitRange = null,
+  onLogicalSizeChange,
 }: {
   grid: HeatmapGrid
   style: HeatmapStyle
@@ -77,6 +78,8 @@ export function Heatmap({
   onViewChange?: (view: ViewTransform) => void
   /** Cenové pásmo dne pro auto-fit osy Y (výchozí pohled i cíl resetu). */
   fitRange?: { low: number; high: number } | null
+  /** Hlášení logické velikosti (CSS px) — pravý profil sdílí Y měřítko. */
+  onLogicalSizeChange?: (size: { width: number; height: number }) => void
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -96,6 +99,9 @@ export function Heatmap({
     },
     [onViewChange, controlledView],
   )
+  useEffect(() => {
+    onLogicalSizeChange?.(size)
+  }, [size, onLogicalSizeChange])
   // Výchozí pohled: fit cenového pásma na skutečnou výšku canvasu (hi-DPI, resize)
   const homeView = useMemo(
     () =>

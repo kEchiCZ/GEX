@@ -68,6 +68,8 @@ function MainContent() {
   // Tažitelný předěl mezi grafem a pravým panelem (graf se přizpůsobí sám)
   const [profileWidth, setProfileWidth] = useState(260)
   const dividerDragRef = useRef<{ x: number; width: number } | null>(null)
+  // Logická velikost heatmapy — pravý profil sdílí její Y měřítko
+  const [heatSize, setHeatSize] = useState({ width: 1200, height: 640 })
   // Deep-link: ?price=line&opacity=60 (i pro automatizované snímky); default svíčky
   const [priceStyle, setPriceStyle] = useState<PriceStyle>(() =>
     new URLSearchParams(window.location.search).get('price') === 'line' ? 'line' : 'candles',
@@ -343,6 +345,7 @@ function MainContent() {
               view={chartView}
               onViewChange={setChartView}
               fitRange={fitRange}
+              onLogicalSizeChange={setHeatSize}
             />
             {day.source === 'demo' && (
               <div className="demo-banner" role="status">
@@ -379,7 +382,16 @@ function MainContent() {
             dividerDragRef.current = null
           }}
         />
-        <StrikeProfile rows={profileRows} spot={spot} width={profileWidth} />
+        <StrikeProfile
+          rows={profileRows}
+          spot={spot}
+          width={profileWidth}
+          yView={{
+            offsetY: chartView.offsetY,
+            zoomY: chartView.zoomY,
+            baseHeight: heatSize.height,
+          }}
+        />
       </div>
     </>
   )
