@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockOIFetcher
-from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
+from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository, OIRecord
 
 DAY_1 = dt.date(2026, 7, 15)
 DAY_2 = dt.date(2026, 7, 16)
@@ -70,6 +70,15 @@ async def test_rerun_same_day_is_idempotent_upsert(repository: OIEodRepository) 
     await archiver_updated.archive_day(specs, DAY_1)
 
     assert repository.count_for_day("ES", DAY_1) == 6
+    assert repository.get_oi("ES", DAY_1, specs[0].strike, specs[0].right) == 750.0
+    # Multi-expirační archiv (ΔOI): expiry filtr vrací hodnotu správného řetězu
+    repository.upsert_many(
+        [OIRecord("ES", "20990101", specs[0].strike, specs[0].right, DAY_1, 111.0)]
+    )
+    assert (
+        repository.get_oi("ES", DAY_1, specs[0].strike, specs[0].right, expiry="20990101") == 111.0
+    )
+    # Bez filtru se bere nejbližší expirace (deterministicky, žádný MultipleResultsFound)
     assert repository.get_oi("ES", DAY_1, specs[0].strike, specs[0].right) == 750.0
 
 

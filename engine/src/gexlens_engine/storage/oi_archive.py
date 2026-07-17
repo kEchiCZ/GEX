@@ -152,13 +152,21 @@ class OIEodRepository:
         with self._engine.connect() as conn:
             return int(conn.execute(stmt).scalar_one())
 
-    def get_oi(self, symbol: str, day: dt.date, strike: float, right: str) -> float | None:
+    def get_oi(
+        self, symbol: str, day: dt.date, strike: float, right: str, expiry: str | None = None
+    ) -> float | None:
+        """OI kontraktu pro daný den; expiry filtr je nutný — archiv od zavedení
+        ΔOI drží týž den pro více expirací a bez filtru by dotaz našel víc řádků.
+        Bez expiry (starší volání v testech) se bere nejbližší expirace."""
         stmt = select(oi_eod_table.c.oi).where(
             oi_eod_table.c.symbol == symbol,
             oi_eod_table.c.date == day,
             oi_eod_table.c.strike == strike,
             oi_eod_table.c.right == right,
         )
+        if expiry is not None:
+            stmt = stmt.where(oi_eod_table.c.expiry == expiry)
+        stmt = stmt.order_by(oi_eod_table.c.expiry).limit(1)
         with self._engine.connect() as conn:
             result = conn.execute(stmt).scalar_one_or_none()
             return float(result) if result is not None else None
