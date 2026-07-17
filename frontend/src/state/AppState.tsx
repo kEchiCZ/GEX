@@ -113,6 +113,13 @@ const ALERTS_LIMIT = 50
 
 const VIEWS: readonly AppView[] = ['chart', 'dashboard', 'console', 'settings']
 
+/** Výchozí expirace: dnešní (0DTE řetěz), jinak nejnovější — první dir může být včerejšek. */
+export function defaultExpiry(expiries: string[]): string | null {
+  if (expiries.length === 0) return null
+  const today = new Date().toISOString().slice(0, 10).replaceAll('-', '')
+  return expiries.includes(today) ? today : (expiries.at(-1) ?? null)
+}
+
 /** Deep-link: počáteční obrazovka a téma z URL (?view=dashboard&theme=light). */
 function initialFromUrl(): { view: AppView; theme: Theme } {
   const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
@@ -204,7 +211,7 @@ export function AppStateProvider({
       .then((payload: { expiries: string[] }) => {
         if (cancelled) return
         setExpiries(payload.expiries)
-        setSelectedExpiry(payload.expiries[0] ?? null)
+        setSelectedExpiry(defaultExpiry(payload.expiries))
       })
       .catch(() => {
         // API neběží — hlavička ukáže placeholder, status bar offline stav

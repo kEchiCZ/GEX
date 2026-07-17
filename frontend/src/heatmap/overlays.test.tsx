@@ -4,7 +4,7 @@ import { expect, test } from 'vitest'
 import { Heatmap } from '../components/Heatmap'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
 import { demoGrid } from './demo'
-import { fractionalRow, pricePolyline, tickIndices, visibleOverlays } from './overlays'
+import { formatLevel, fractionalRow, pricePolyline, tickIndices, visibleOverlays } from './overlays'
 import type { OverlayData } from './overlays'
 
 // ── Čisté helpery ──────────────────────────────────────────────────
@@ -16,6 +16,12 @@ test('tickIndices vybírá popisky s minimálním rozestupem', () => {
   expect(tickIndices(5, 50, 30)).toEqual([0, 1, 2, 3, 4])
   expect(tickIndices(0, 10, 30)).toEqual([])
   expect(tickIndices(10, 0, 30)).toEqual([])
+})
+
+test('formatLevel: cenovka bez plovoucího šumu', () => {
+  expect(formatLevel(7628.166920999555)).toBe('7628.17')
+  expect(formatLevel(7600)).toBe('7600')
+  expect(formatLevel(7581.5)).toBe('7581.5')
 })
 
 test('fractionalRow interpoluje mezi strikes a ořezává okraje', () => {

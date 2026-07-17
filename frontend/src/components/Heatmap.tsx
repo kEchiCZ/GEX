@@ -13,6 +13,7 @@ import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
 import {
   candleGeometry,
+  formatLevel,
   fractionalRow,
   lastLevelValue,
   pricePolyline,
@@ -244,7 +245,7 @@ export function Heatmap({
       context.lineTo(canvas.width, y)
       context.stroke()
       context.setLineDash([])
-      const label = String(value)
+      const label = formatLevel(value)
       const width = context.measureText(label).width + 8
       context.fillStyle = line.color || LEVEL_DEFAULT_COLOR
       context.fillRect(46, y - 8, width, 15)
