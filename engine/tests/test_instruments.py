@@ -28,7 +28,7 @@ from gexlens_engine.instruments import (
     plan_instruments,
 )
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
-from gexlens_engine.storage.meta import watchlist_table
+from gexlens_engine.storage.meta import settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository, OIRecord
 from gexlens_engine.storage.parquet_store import SnapshotWriter
 
@@ -86,11 +86,28 @@ def test_watchlist_reader_roundtrip(tmp_path: Path) -> None:
     reader = WatchlistReader(db)
     reader.ensure_schema()
     assert reader.symbols() == []  # prázdná tabulka, žádná chyba
+    assert reader.setting("strike_range_points") is None
 
     with db.begin() as conn:
         conn.execute(insert(watchlist_table).values(symbol="ES"))
         conn.execute(insert(watchlist_table).values(symbol="NQ"))
+        conn.execute(insert(settings_table).values(key="strike_range_points", value=400))
     assert reader.symbols() == ["ES", "NQ"]
+    assert reader.setting("strike_range_points") == 400
+
+
+def test_clamp_strike_range() -> None:
+    from gexlens_engine.instruments import clamp_strike_range
+
+    settings = Settings(data_dir=Path("data"))  # default 200, max 800
+    assert clamp_strike_range(400, settings) == 400.0
+    assert clamp_strike_range("300", settings) == 300.0
+    assert clamp_strike_range(10, settings) == 50.0  # spodní mez
+    assert clamp_strike_range(9999, settings) == 400.0  # strop max/2
+    assert clamp_strike_range(200, settings) is None  # beze změny
+    assert clamp_strike_range("nesmysl", settings) is None
+    assert clamp_strike_range(True, settings) is None
+    assert clamp_strike_range({"x": 1}, settings) is None
 
 
 # ── Pipeline nad mocky ─────────────────────────────────────────────

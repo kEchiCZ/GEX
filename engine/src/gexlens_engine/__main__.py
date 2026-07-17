@@ -28,6 +28,7 @@ from gexlens_engine.instruments import (
     InstrumentSetupError,
     WatchlistReader,
     aggregate_status,
+    clamp_strike_range,
     expiry_expired,
     gather_metrics,
     merge_symbols,
@@ -241,6 +242,18 @@ async def main() -> None:
         # Watchlist se čte každý k-tý cyklus (uživatel přidal/odebral ticker v UI)
         if cycle % settings.watchlist_poll_cycles == 0:
             desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
+            # Runtime šířka pásma strikes ze Settings UI (vidět vzdálená křídla)
+            override = await asyncio.to_thread(watchlist_reader.setting, "strike_range_points")
+            new_range = clamp_strike_range(override, settings) if override is not None else None
+            if new_range is not None:
+                logger.info(
+                    "Runtime změna rozsahu strikes: %g → %g bodů — pipeline se překlopí",
+                    settings.strike_range_points,
+                    new_range,
+                )
+                settings.strike_range_points = new_range
+                for symbol in list(pipelines):
+                    pipelines.pop(symbol).stop()
 
         # Denní roll expirace (0DTE): vypršelou pipeline zastavit — plán ji založí
         # znovu a discovery vybere novou nejbližší expiraci

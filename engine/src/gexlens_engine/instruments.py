@@ -30,7 +30,7 @@ from gexlens_engine.ibkr.discovery import (
 from gexlens_engine.ibkr.scheduler import SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
-from gexlens_engine.storage.meta import meta_metadata, watchlist_table
+from gexlens_engine.storage.meta import meta_metadata, settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 
 logger = logging.getLogger(__name__)
@@ -129,6 +129,30 @@ class WatchlistReader:
                 select(watchlist_table.c.symbol).order_by(watchlist_table.c.id)
             ).fetchall()
         return [str(row[0]) for row in rows]
+
+    def setting(self, key: str) -> object | None:
+        """Runtime hodnota ze settings tabulky (UI ukládá přes PUT /settings)."""
+        with self._db.connect() as conn:
+            row = conn.execute(
+                select(settings_table.c.value).where(settings_table.c.key == key)
+            ).fetchone()
+        return None if row is None else row[0]
+
+
+def clamp_strike_range(value: object, settings: Settings) -> float | None:
+    """Validní nová šířka pásma z runtime nastavení; None = beze změny/nevalidní.
+
+    Meze: minimálně 50 bodů (smysluplné pásmo), maximálně polovina
+    strike_range_max_points (invariant konfigurace: max ≥ 2× šířka).
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        points = float(value)
+    except ValueError:
+        return None
+    clamped = min(max(points, 50.0), settings.strike_range_max_points / 2)
+    return None if clamped == settings.strike_range_points else clamped
 
 
 @dataclass
