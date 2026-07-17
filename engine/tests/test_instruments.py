@@ -52,6 +52,16 @@ def test_merge_symbols_dedupe_uppercase_base_first() -> None:
     assert merge_symbols([], ["es"]) == ["ES"]
 
 
+def test_expiry_expired_roll() -> None:
+    from gexlens_engine.instruments import expiry_expired
+
+    today = dt.date(2026, 7, 18)
+    assert expiry_expired("20260717", today) is True  # včerejší 0DTE → roll
+    assert expiry_expired("20260718", today) is False  # dnešní žije
+    assert expiry_expired("20260720", today) is False
+    assert expiry_expired("nesmysl", today) is False  # nečitelný formát neshazuje běh
+
+
 def test_plan_instruments_start_stop_and_cap() -> None:
     plan = plan_instruments(running=["ES", "NQ"], desired=["ES", "CL"], max_instruments=3)
     assert plan.start == ["CL"]

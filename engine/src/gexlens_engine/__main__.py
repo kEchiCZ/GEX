@@ -28,6 +28,7 @@ from gexlens_engine.instruments import (
     InstrumentSetupError,
     WatchlistReader,
     aggregate_status,
+    expiry_expired,
     gather_metrics,
     merge_symbols,
     parse_multiplier,
@@ -240,6 +241,17 @@ async def main() -> None:
         # Watchlist se čte každý k-tý cyklus (uživatel přidal/odebral ticker v UI)
         if cycle % settings.watchlist_poll_cycles == 0:
             desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
+
+        # Denní roll expirace (0DTE): vypršelou pipeline zastavit — plán ji založí
+        # znovu a discovery vybere novou nejbližší expiraci
+        for symbol in list(pipelines):
+            if expiry_expired(pipelines[symbol].runtime.expiry, now.date()):
+                logger.info(
+                    "Expirace %s pipeline %s vypršela — roll na novou",
+                    pipelines[symbol].runtime.expiry,
+                    symbol,
+                )
+                pipelines.pop(symbol).stop()
 
         for symbol in list(setup_cooldown):
             setup_cooldown[symbol] -= 1
