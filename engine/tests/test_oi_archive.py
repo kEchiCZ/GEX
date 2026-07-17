@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockOIFetcher
-from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
+from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository, OIRecord
 
 DAY_1 = dt.date(2026, 7, 15)
 DAY_2 = dt.date(2026, 7, 16)
