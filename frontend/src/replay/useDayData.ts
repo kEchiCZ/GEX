@@ -138,6 +138,9 @@ export function useDayData(
     }
   }, [symbol, timeframe])
 
+  // Stabilní identita výsledku: bez memoizace by každý render vyrobil nový
+  // objekt a efekty závislé na datech (např. cena v hlavičce) by se točily
+  const replayDay = useMemo(() => (replay ? replayToDay(replay) : null), [replay])
   if (timeframe === 'daily') return daily ?? fallback
-  return replay ? replayToDay(replay) : fallback
+  return replayDay ?? fallback
 }
