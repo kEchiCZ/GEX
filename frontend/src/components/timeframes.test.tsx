@@ -85,6 +85,29 @@ test('Daily režim: stáhne seznam dnů a zakáže intraday koše', async () => 
   expect((screen.getByRole('button', { name: '5m' }) as HTMLButtonElement).disabled).toBe(false)
 })
 
+test('Mode/Scale selecty jsou nad demo daty zakázané; Walls select přepíná bez pádu', () => {
+  mockApi()
+  renderApp()
+  // Demo data nemají surovou matici → módy/škály nejde přepínat
+  expect((screen.getByLabelText('Heatmap mód') as HTMLSelectElement).disabled).toBe(true)
+  expect((screen.getByLabelText('Škála heatmapy') as HTMLSelectElement).disabled).toBe(true)
+  const walls = screen.getByLabelText('Walls mód') as HTMLSelectElement
+  expect(walls.disabled).toBe(false)
+  fireEvent.change(walls, { target: { value: 'peak' } })
+  fireEvent.change(walls, { target: { value: 'ridge' } })
+  fireEvent.change(walls, { target: { value: 'off' } })
+})
+
+test('hlavička ukazuje poslední cenu a denní změnu z dat dne', () => {
+  mockApi()
+  renderApp()
+  const last = document.querySelector('.instrument-price .last')
+  expect(last?.textContent).not.toBe('—')
+  expect(
+    document.querySelector('.instrument-price .change-up, .instrument-price .change-down'),
+  ).not.toBeNull()
+})
+
 test('watchlist: kliknutí přepne ticker, přidání volá POST', async () => {
   const fetchMock = mockApi()
   renderApp()

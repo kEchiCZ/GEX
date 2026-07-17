@@ -19,6 +19,7 @@ function sampleDay(): DayData {
   return {
     source: 'replay',
     grid: { minutes: 4, strikes: [100, 105], layers: { call, put }, staleAge: null },
+    raw: null,
     overlays: {
       price,
       levels: [{ name: 'flip', color: '#fff', series: [100, null, null, 102] }],
@@ -76,6 +77,16 @@ test('buildDailyDay: sloupec = den, denní OHLC svíčka a součty', () => {
     expiry: '20260715',
     date: '2026-07-15',
     minutes: ['a', 'b'],
+    raw: {
+      minutes: 2,
+      strikes: [100],
+      callOi: Float32Array.from([1, 1]),
+      putOi: Float32Array.from([1, 1]),
+      callVolume: Float32Array.from([0, 0]),
+      putVolume: Float32Array.from([0, 0]),
+      spotSeries: [102, 105],
+      staleAge: null,
+    },
     grid: {
       minutes: 2,
       strikes: [100],

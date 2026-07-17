@@ -2,6 +2,16 @@
 import { useState } from 'react'
 import { useAppState } from '../state/AppState'
 
+/** Zobrazovací názvy běžných futures podkladů (jinak jen ticker). */
+const SYMBOL_NAMES: Record<string, string> = {
+  ES: 'E-mini S&P 500',
+  NQ: 'E-mini Nasdaq-100',
+  RTY: 'E-mini Russell 2000',
+  YM: 'E-mini Dow',
+  CL: 'Crude Oil',
+  GC: 'Gold',
+}
+
 export function InstrumentHeader({
   lastPrice,
   changePct,
@@ -26,7 +36,7 @@ export function InstrumentHeader({
     <header className="instrument-header">
       <div className="instrument-title">
         <span className="ticker">{symbol}</span>
-        <span className="name muted">E-mini S&amp;P 500</span>
+        <span className="name muted">{SYMBOL_NAMES[symbol] ?? ''}</span>
       </div>
       <div className="instrument-price">
         <span className="last">{lastPrice !== undefined ? lastPrice.toFixed(2) : '—'}</span>

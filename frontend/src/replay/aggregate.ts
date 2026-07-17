@@ -146,6 +146,7 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
   return {
     source: day.source,
     grid,
+    raw: day.raw, // surová 1m matice se nese dál (módy se aplikují před agregací)
     overlays: aggregateOverlays(day.overlays, bucketMinutes, buckets),
     panels: {
       vol: sumSeries(day.panels.vol, bucketMinutes, buckets),

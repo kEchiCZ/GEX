@@ -20,9 +20,20 @@ export interface SessionMarker {
 }
 
 export interface LevelLine {
-  name: string // flip | call_wall | put_wall | centroid
+  name: string // flip | call_wall | put_wall | centroid | max_pain | walls:*
   color: string
   series: (number | null)[] // hodnota (strike) per minuta
+  /** Vzor čárkování (canvas setLineDash); bez něj plná čára. */
+  dash?: number[]
+}
+
+/** Poslední ne-null hodnota řady — horizontální projekce úrovně (Moodix styl). */
+export function lastLevelValue(series: (number | null)[]): number | null {
+  for (let index = series.length - 1; index >= 0; index -= 1) {
+    const value = series[index]
+    if (value !== null && value !== undefined) return value
+  }
+  return null
 }
 
 export interface OverlayData {

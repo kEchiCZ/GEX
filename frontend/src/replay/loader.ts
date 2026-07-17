@@ -8,6 +8,9 @@ import { tableFromIPC } from 'apache-arrow'
 import { API_BASE } from '../config'
 import type { PanelSeries } from '../components/BottomPanels'
 import type { HeatmapGrid } from '../heatmap/grid'
+import { buildModeGrid } from '../heatmap/modes'
+import type { RawDay } from '../heatmap/modes'
+import { maxPainSeries } from '../heatmap/maxpain'
 import type { LevelLine, OverlayData, PriceBar } from '../heatmap/overlays'
 import type { ProfileRow } from '../profile/bars'
 
@@ -16,7 +19,9 @@ export interface ReplayDay {
   expiry: string
   date: string
   minutes: string[] // ISO timestampy minut (osa X)
-  grid: HeatmapGrid // celý den (OI vrstvy normalizované p99)
+  grid: HeatmapGrid // celý den (výchozí OI mód, normalizace p99)
+  /** Surová snapshot matice — přepínání módů/škál lokálně (SPEC 4.3). */
+  raw: RawDay
   overlays: OverlayData // celý den
   panels: PanelSeries // celý den
   /** Profilové řádky per minuta (předpočítané — krájení bez přepočtu). */
@@ -85,12 +90,6 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes
 }
 
-function quantile99(values: Float32Array): number {
-  const sorted = Array.from(values).sort((a, b) => a - b)
-  if (sorted.length === 0) return 0
-  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(0.99 * sorted.length) - 1))]
-}
-
 /** Sestaví den v paměti z /replay balíku (exportováno kvůli testům). */
 export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
   const table = tableFromIPC(base64ToBytes(bundle.snapshots_arrow_base64))
@@ -145,29 +144,6 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
     staleAge[index] = Math.max(staleAge[index], Number(staleColumn?.get(row) ?? 0) || 0)
   }
 
-  // Heatmap vrstvy: OI mód, normalizace p99 dne (SPEC 4.3).
-  // Když OI zatím nedorazilo (ADR-0001: 588 dodává jen ráno), fallback na volume,
-  // aby heatmapa nebyla prázdná — UI dostane alert `oi_missing` z enginu.
-  const oiDenominator = Math.max(quantile99(callOi), quantile99(putOi))
-  const useVolumeFallback = oiDenominator <= 0
-  const callSource = useVolumeFallback ? volumeByCell.C : callOi
-  const putSource = useVolumeFallback ? volumeByCell.P : putOi
-  const denominator = Math.max(
-    useVolumeFallback
-      ? Math.max(quantile99(volumeByCell.C), quantile99(volumeByCell.P))
-      : oiDenominator,
-    1e-9,
-  )
-  const grid: HeatmapGrid = {
-    minutes,
-    strikes,
-    layers: {
-      call: Float32Array.from(callSource, (value) => Math.min(1, value / denominator)),
-      put: Float32Array.from(putSource, (value) => Math.min(1, value / denominator)),
-    },
-    staleAge,
-  }
-
   // Overlaye: cena z barů, levels z derived
   const price: PriceBar[] = []
   let previousClose = Number.NaN
@@ -200,9 +176,28 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
     }
     return series
   }
+  // Surová matice + výchozí grid (OI mód; volume fallback řeší buildModeGrid)
+  const spotSeries: (number | null)[] = Array.from({ length: minutes }, () => null)
+  for (const bar of price) {
+    spotSeries[bar.minuteIdx] = bar.close
+  }
+  const raw: RawDay = {
+    minutes,
+    strikes,
+    callOi,
+    putOi,
+    callVolume: volumeByCell.C,
+    putVolume: volumeByCell.P,
+    spotSeries,
+    staleAge,
+  }
+  const grid = buildModeGrid(raw, 'oi', 'linear')
+
   const levels: LevelLine[] = [
     { name: 'flip', color: '#e8c14b', series: levelSeries('flip') },
     { name: 'centroid', color: '#9d7be8', series: levelSeries('centroid') },
+    // Max Pain z OI (klient-side; bez OI je řada null a linie se nekreslí)
+    { name: 'max_pain', color: '#d24bd2', series: maxPainSeries(raw) },
   ]
   const walls: LevelLine[] = [
     { name: 'call_wall', color: '#3ecf8e', series: levelSeries('call_wall') },
@@ -261,6 +256,7 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
     date: bundle.date,
     minutes: minuteKeys,
     grid,
+    raw,
     overlays,
     panels: { vol, optVolCall, optVolPut, cumDelta },
     profileByMinute,

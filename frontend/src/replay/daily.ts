@@ -106,6 +106,7 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
   return {
     source: 'replay',
     grid,
+    raw: null, // Daily skládá dny — módy/škály se přepínají jen intraday
     overlays: {
       price,
       levels: toLines(['flip', 'centroid']),
