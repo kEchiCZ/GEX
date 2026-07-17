@@ -18,12 +18,16 @@ export interface PanelSeries {
   optVolCall: number[]
   optVolPut: number[]
   cumDelta: number[]
+  /** Delta-vážený opční tok per strana (|Δ| × přírůstek volume) — čtení C/P aktivity. */
+  deltaFlowCall: number[]
+  deltaFlowPut: number[]
 }
 
 export interface PanelsVisible {
   vol: boolean
   optVol: boolean
   delta: boolean
+  deltaFlow: boolean
 }
 
 /** Časová část transformace hlavního grafu (sdílená osa X). */
@@ -159,6 +163,50 @@ export function BottomPanels({
               <rect
                 key={`p${index}`}
                 data-part="optvol-put"
+                x={(index + 0.5) * step}
+                y={PANEL_HEIGHT - height}
+                width={barWidth / 2}
+                height={height}
+                fill={COLORS.put}
+              />
+            ))}
+            <CrosshairLine x={pointer.crosshairX} height={PANEL_HEIGHT} />
+          </g>
+        </svg>
+      </section>,
+    )
+  }
+
+  if (visible.deltaFlow) {
+    const callHeights = barHeights(data.deltaFlowCall, PANEL_HEIGHT - 4)
+    const putHeights = barHeights(data.deltaFlowPut, PANEL_HEIGHT - 4)
+    panels.push(
+      <section key="deltaflow" className="bottom-panel" aria-label="Δ Flow panel">
+        <span className="panel-title muted">Δ Flow C/P</span>
+        <svg
+          width={width}
+          height={PANEL_HEIGHT}
+          viewBox={`0 0 ${width} ${PANEL_HEIGHT}`}
+          preserveAspectRatio="none"
+          onPointerMove={pointer.onPointerMove}
+          onPointerLeave={pointer.clear}
+        >
+          <g transform={transform}>
+            {callHeights.map((height, index) => (
+              <rect
+                key={`c${index}`}
+                data-part="deltaflow-call"
+                x={(index + 0.5) * step - barWidth / 2}
+                y={PANEL_HEIGHT - height}
+                width={barWidth / 2}
+                height={height}
+                fill={COLORS.call}
+              />
+            ))}
+            {putHeights.map((height, index) => (
+              <rect
+                key={`p${index}`}
+                data-part="deltaflow-put"
                 x={(index + 0.5) * step}
                 y={PANEL_HEIGHT - height}
                 width={barWidth / 2}

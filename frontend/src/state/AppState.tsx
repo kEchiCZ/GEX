@@ -33,6 +33,7 @@ export interface Toggles {
   vol: boolean
   optVol: boolean
   delta: boolean
+  deltaFlow: boolean
   volOiDelta: boolean
   news: boolean
 }
@@ -166,6 +167,7 @@ export function AppStateProvider({
     vol: true,
     optVol: true,
     delta: true,
+    deltaFlow: false,
     volOiDelta: true,
     news: false,
   })

@@ -50,11 +50,15 @@ export function demoPanels(minutes: number): {
   optVolCall: number[]
   optVolPut: number[]
   cumDelta: number[]
+  deltaFlowCall: number[]
+  deltaFlowPut: number[]
 } {
   const vol: number[] = []
   const optVolCall: number[] = []
   const optVolPut: number[] = []
   const cumDelta: number[] = []
+  const deltaFlowCall: number[] = []
+  const deltaFlowPut: number[] = []
   let cum = 0
   for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
     const activity = 1 + Math.exp(-(((minuteIdx - 30) / 25) ** 2)) * 3
@@ -63,8 +67,11 @@ export function demoPanels(minutes: number): {
     optVolPut.push(Math.round(110 * activity * (0.6 + 0.4 * Math.abs(Math.cos(minuteIdx / 6)))))
     cum += Math.sin(minuteIdx / 40) * 90 + Math.sin(minuteIdx / 11) * 35
     cumDelta.push(Math.round(cum))
+    // Δ Flow ≈ opční tok vážený deltou (v demu zjednodušeně polovina OptVol)
+    deltaFlowCall.push(Math.round(optVolCall[minuteIdx] * 0.5))
+    deltaFlowPut.push(Math.round(optVolPut[minuteIdx] * 0.45))
   }
-  return { vol, optVolCall, optVolPut, cumDelta }
+  return { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut }
 }
 
 export function demoOverlays(grid: HeatmapGrid): OverlayData {

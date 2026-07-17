@@ -370,7 +370,12 @@ function MainContent() {
           </main>
           <BottomPanels
             data={panelSeries}
-            visible={{ vol: toggles.vol, optVol: toggles.optVol, delta: toggles.delta }}
+            visible={{
+              vol: toggles.vol,
+              optVol: toggles.optVol,
+              delta: toggles.delta,
+              deltaFlow: toggles.deltaFlow,
+            }}
             time={{ offsetX: chartView.offsetX, zoomX: chartView.zoomX }}
           />
           {showReplay && <PlaybackBar playback={playback} />}

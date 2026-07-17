@@ -26,7 +26,14 @@ test('sliceGrid vynuluje buňky po pozici, osy zůstávají', () => {
 test('sliceSeries a slicePanels drží délku (stabilní osa X)', () => {
   expect(sliceSeries([1, 2, 3, 4], 1)).toEqual([1, 2, 0, 0])
   const panels = slicePanels(
-    { vol: [1, 2, 3], optVolCall: [1, 1, 1], optVolPut: [2, 2, 2], cumDelta: [5, -5, 9] },
+    {
+      vol: [1, 2, 3],
+      optVolCall: [1, 1, 1],
+      optVolPut: [2, 2, 2],
+      cumDelta: [5, -5, 9],
+      deltaFlowCall: [1, 2, 3],
+      deltaFlowPut: [3, 2, 1],
+    },
     0,
   )
   expect(panels.vol).toEqual([1, 0, 0])

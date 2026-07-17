@@ -51,5 +51,7 @@ export function slicePanels(full: PanelSeries, position: number): PanelSeries {
     optVolCall: sliceSeries(full.optVolCall, position),
     optVolPut: sliceSeries(full.optVolPut, position),
     cumDelta: sliceSeries(full.cumDelta, position),
+    deltaFlowCall: sliceSeries(full.deltaFlowCall, position),
+    deltaFlowPut: sliceSeries(full.deltaFlowPut, position),
   }
 }

@@ -53,6 +53,8 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
   const optVolCall = Array.from({ length: columns }, () => 0)
   const optVolPut = Array.from({ length: columns }, () => 0)
   const cumDelta = Array.from({ length: columns }, () => 0)
+  const deltaFlowCall = Array.from({ length: columns }, () => 0)
+  const deltaFlowPut = Array.from({ length: columns }, () => 0)
   const price: PriceBar[] = []
   const spotSeries: (number | null)[] = Array.from({ length: columns }, () => null)
   const profileByMinute: ProfileRow[][] = []
@@ -73,6 +75,8 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
     optVolCall[dayIdx] = day.panels.optVolCall.reduce((sum, value) => sum + value, 0)
     optVolPut[dayIdx] = day.panels.optVolPut.reduce((sum, value) => sum + value, 0)
     cumDelta[dayIdx] = day.panels.cumDelta.at(-1) ?? 0
+    deltaFlowCall[dayIdx] = day.panels.deltaFlowCall.reduce((sum, value) => sum + value, 0)
+    deltaFlowPut[dayIdx] = day.panels.deltaFlowPut.reduce((sum, value) => sum + value, 0)
 
     const bar = dailyBar(dayIdx, day.overlays.price ?? [], previousClose)
     if (bar) {
@@ -114,7 +118,7 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
       sessions: [],
       timestamp: days.at(-1)?.date ?? '',
     },
-    panels: { vol, optVolCall, optVolPut, cumDelta },
+    panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut },
     profileByMinute,
     demoProfileRows: null,
     spotSeries,
