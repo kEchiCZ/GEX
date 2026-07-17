@@ -17,7 +17,7 @@ import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
 import type { HeatmapMode, HeatmapScale } from './heatmap/modes'
 import { visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
-import { DEFAULT_VIEW } from './heatmap/view'
+import { DEFAULT_VIEW, fitPriceView } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
 import {
   WALLS_MODES,
@@ -99,6 +99,20 @@ function MainContent() {
   const playback = usePlayback(day.grid.minutes)
   // Pohled grafu (pan/zoom os) — sdílený heatmapou a spodními panely (společná osa X)
   const [chartView, setChartView] = useState<ViewTransform>(DEFAULT_VIEW)
+  // Auto-fit osy Y na cenové pásmo dne (svíčky nejsou zploštělé přes celou obálku)
+  const homeView = useMemo(() => {
+    const bars = day.overlays.price ?? []
+    const lows = bars.map((bar) => bar.low ?? bar.close)
+    const highs = bars.map((bar) => bar.high ?? bar.close)
+    return fitPriceView(
+      day.grid.strikes,
+      lows.length > 0 ? Math.min(...lows) : null,
+      highs.length > 0 ? Math.max(...highs) : null,
+    )
+  }, [day.overlays.price, day.grid.strikes])
+  useEffect(() => {
+    setChartView(homeView) // nový dataset / timeframe → napasovaný výchozí pohled
+  }, [homeView])
   // Anotace: persistence per instrument + den (SPEC 7.4)
   const annotationsState = useAnnotations(symbol, today)
 
@@ -330,7 +344,15 @@ function MainContent() {
               onAnnotationErase={(id) => void annotationsState.erase(id)}
               view={chartView}
               onViewChange={setChartView}
+              homeView={homeView}
             />
+            {day.source === 'demo' && (
+              <div className="demo-banner" role="status">
+                Demo data — pro {symbol} zatím nejsou uložená živá data.
+                {timeframe === 'intraday' &&
+                  ' Engine začne sbírat do ~5 minut po přidání do watchlistu.'}
+              </div>
+            )}
           </main>
           <BottomPanels
             data={panelSeries}

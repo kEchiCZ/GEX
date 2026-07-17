@@ -98,20 +98,25 @@ export function useDayData(
     setDaily(null)
   }, [symbol, expiry, date])
 
+  const [retry, setRetry] = useState(0)
+
   useEffect(() => {
     if (!expiry || timeframe !== 'intraday') return
     let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
     fetchReplay(symbol, expiry, date)
       .then((day) => {
         if (!cancelled && day.grid.minutes > 0) setReplay(day)
       })
       .catch(() => {
-        // API neběží nebo den neexistuje — zůstává demo dataset
+        // Den (zatím) neexistuje — např. čerstvě přidaný ticker; zkusit znovu za 30 s
+        if (!cancelled) timer = setTimeout(() => setRetry((n) => n + 1), 30_000)
       })
     return () => {
       cancelled = true
+      if (timer !== null) clearTimeout(timer)
     }
-  }, [symbol, expiry, date, timeframe])
+  }, [symbol, expiry, date, timeframe, retry])
 
   useEffect(() => {
     if (timeframe !== 'daily') return

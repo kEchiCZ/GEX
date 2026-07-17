@@ -29,10 +29,16 @@ body {
   font-size: 14px;
 }
 
+html,
+body {
+  overflow: hidden; /* vše se vejde na obrazovku — žádné posuvníky stránky */
+}
+
 .app {
   display: flex;
   height: 100vh;
-  min-width: 1280px;
+  width: 100vw;
+  overflow: hidden;
 }
 
 .muted {
@@ -237,6 +243,7 @@ body {
 .row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap; /* užší okno: chipy se zalomí místo horizontálního scrollu */
   gap: 8px;
   padding: 6px 14px;
   border-bottom: 1px solid var(--border);
@@ -445,12 +452,29 @@ body {
 }
 
 .chart-area {
+  position: relative;
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 0;
   overflow: hidden;
+}
+
+.demo-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(232, 193, 75, 0.14);
+  border: 1px solid rgba(232, 193, 75, 0.55);
+  color: #e8c14b;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  pointer-events: none;
+  max-width: 80%;
+  text-align: center;
 }
 
 .strike-profile {

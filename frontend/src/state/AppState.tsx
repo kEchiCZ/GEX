@@ -210,26 +210,35 @@ export function AppStateProvider({
     }
   }, [])
 
+  const [expiryRetry, setExpiryRetry] = useState(0)
   useEffect(() => {
     let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    // Čerstvě přidaný ticker nemusí mít ještě data — bez expirací zkoušet à 30 s
+    const scheduleRetry = () => {
+      timer = setTimeout(() => setExpiryRetry((n) => n + 1), 30_000)
+    }
     fetch(`${API_BASE}/instruments/${symbol}/expiries`)
       .then((response) => (response.ok ? response.json() : { expiries: [] }))
       .then((payload: { expiries: string[] }) => {
         if (cancelled) return
         setExpiries(payload.expiries)
         setSelectedExpiry(defaultExpiry(payload.expiries))
+        if (payload.expiries.length === 0) scheduleRetry()
       })
       .catch(() => {
         // API neběží — hlavička ukáže placeholder, status bar offline stav
         if (!cancelled) {
           setExpiries([])
           setSelectedExpiry(null)
+          scheduleRetry()
         }
       })
     return () => {
       cancelled = true
+      if (timer !== null) clearTimeout(timer)
     }
-  }, [symbol])
+  }, [symbol, expiryRetry])
 
   const value = useMemo<AppState>(
     () => ({
