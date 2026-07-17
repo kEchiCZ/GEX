@@ -4,7 +4,7 @@ import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
-import { INTERVALS } from '../state/AppState'
+import { INTERVALS, defaultExpiry } from '../state/AppState'
 
 function mockApi() {
   const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
@@ -46,6 +46,13 @@ function renderApp() {
 beforeEach(() => {
   FakeWebSocket.reset()
   vi.restoreAllMocks()
+})
+
+test('defaultExpiry: dnešní expirace má přednost, jinak nejnovější', () => {
+  const today = new Date().toISOString().slice(0, 10).replaceAll('-', '')
+  expect(defaultExpiry(['20250101', today, '20991231'])).toBe(today)
+  expect(defaultExpiry(['20250101', '20250102'])).toBe('20250102')
+  expect(defaultExpiry([])).toBeNull()
 })
 
 test('timeframe řádek nabízí celou sadu 1m–1d', () => {

@@ -27,6 +27,11 @@ export interface LevelLine {
   dash?: number[]
 }
 
+/** Cenovka úrovně: zaokrouhlení na 2 desetinná místa bez koncových nul. */
+export function formatLevel(value: number): string {
+  return String(Math.round(value * 100) / 100)
+}
+
 /** Poslední ne-null hodnota řady — horizontální projekce úrovně (Moodix styl). */
 export function lastLevelValue(series: (number | null)[]): number | null {
   for (let index = series.length - 1; index >= 0; index -= 1) {
