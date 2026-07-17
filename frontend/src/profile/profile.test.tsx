@@ -102,6 +102,25 @@ test('cenová linka je vykreslená na interpolované pozici spotu', () => {
   expect(Number(line.getAttribute('y1'))).toBeCloseTo(100, 0)
 })
 
+test('yView: pruhy i cenová linka sledují Y transformaci hlavního grafu', () => {
+  render(
+    <CrosshairProvider>
+      <StrikeProfile
+        rows={rows()}
+        spot={7595}
+        height={200}
+        yView={{ offsetY: 100, zoomY: 2, baseHeight: 200 }}
+      />
+    </CrosshairProvider>,
+  )
+  // scaleY = (200/2)·2 = 200; řádek 0 (7600) má střed 0.5·200 + 100 = 200
+  const callVol = screen.getByTestId('profile-row-7600').querySelector('[data-part="call-vol"]')!
+  const barHeight = Number(callVol.getAttribute('height'))
+  expect(Number(callVol.getAttribute('y'))).toBeCloseTo(200 - barHeight / 2, 1)
+  // spot 7595 → vzestupný řádek 0.5 → (2−1−0.5+0.5)·200 + 100 = 300 (jako heatmap rowToY)
+  expect(Number(screen.getByTestId('profile-price-line').getAttribute('y1'))).toBeCloseTo(300, 1)
+})
+
 test('zoom přepínače mění šířku pruhů', () => {
   renderPanel()
   const width = () =>
