@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     # Exponenciální backoff reconnectu 2 → 60 s (SPEC 3.1)
     reconnect_backoff_base_s: float = Field(default=2.0, gt=0)
     reconnect_backoff_max_s: float = Field(default=60.0, gt=0)
+    # Heartbeat spojení: interval a timeout odpovědi TWS. Timeout musí snést
+    # zpoždění během sweep dávek (80 souběžných subskripcí) — 5 s bylo málo
+    # a spojení se zbytečně recyklovalo
+    heartbeat_interval_s: float = Field(default=30.0, gt=0)
+    heartbeat_timeout_s: float = Field(default=15.0, gt=0)
 
     # Instrumenty (ADR-0003): základní sada futures podkladů; watchlist z DB se přidává za běhu
     symbols: str = "ES"

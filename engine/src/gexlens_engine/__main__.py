@@ -12,7 +12,7 @@ import logging
 import os
 import sys
 
-from ib_async import IB, Contract, Future
+from ib_async import IB, Contract, Future, RealTimeBarList, Ticker
 from sqlalchemy import create_engine
 
 from gexlens_engine.adapters import HttpPublisher, IbOIFetcher, IbQuoteStreamer
@@ -72,6 +72,7 @@ async def _resolve_front_future(ib: IB, symbol: str) -> Contract:
 
 async def create_pipeline(
     ib: IB,
+    manager: ConnectionManager,
     settings: Settings,
     publisher: PublisherLike,
     writer: SnapshotWriter,
@@ -82,7 +83,41 @@ async def create_pipeline(
     front = await _resolve_front_future(ib, symbol)
     multiplier = parse_multiplier(front.multiplier)
 
-    fut_ticker = ib.reqMktData(front, "", False, False)
+    # Bary podkladu: 5s realtime bary → 1min agregace
+    minute_bars: list[Bar] = []
+    aggregator = RealTimeBarAggregator(minute_bars.append)
+
+    def on_bar_update(bars: RealTimeBarList, has_new: bool) -> None:
+        latest = bars[-1]
+        aggregator.add_5s_bar(
+            Bar(
+                ts=latest.time,
+                open=latest.open_,
+                high=latest.high,
+                low=latest.low,
+                close=latest.close,
+                volume=float(latest.volume),
+            )
+        )
+
+    stopped = False
+    rt_bars: RealTimeBarList | None = None
+
+    def subscribe_underlying() -> Ticker:
+        """Trvalé subskripce podkladu — při startu a po každém reconnectu.
+
+        Reconnect zahazuje serverové subskripce; rotační sweep opcí se obnoví
+        sám dalším cyklem, ale spot ticker a realtime bary jsou trvalé a bez
+        obnovy by po prvním výpadku zamrzly (spot) a přestaly chodit (bary).
+        """
+        nonlocal rt_bars
+        ticker = ib.reqMktData(front, "", False, False)
+        bars_list = ib.reqRealTimeBars(front, 5, "TRADES", False)
+        bars_list.updateEvent += on_bar_update
+        rt_bars = bars_list
+        return ticker
+
+    fut_ticker = subscribe_underlying()
     await asyncio.sleep(3)
     spot = fut_ticker.last if fut_ticker.last == fut_ticker.last else fut_ticker.marketPrice()
     if spot != spot:
@@ -125,24 +160,12 @@ async def create_pipeline(
         push_status=False,  # agregovaný status pushuje orchestrátor
     )
 
-    # Bary podkladu: 5s realtime bary → 1min agregace
-    minute_bars: list[Bar] = []
-    aggregator = RealTimeBarAggregator(minute_bars.append)
-    rt_bars = ib.reqRealTimeBars(front, 5, "TRADES", False)
-    rt_bars.updateEvent += lambda bars, has_new: aggregator.add_5s_bar(
-        Bar(
-            ts=bars[-1].time,
-            open=bars[-1].open_,
-            high=bars[-1].high,
-            low=bars[-1].low,
-            close=bars[-1].close,
-            volume=float(bars[-1].volume),
-        )
-    )
-
     def on_stop() -> None:
+        nonlocal stopped
+        stopped = True
         ib.cancelMktData(front)
-        ib.cancelRealTimeBars(rt_bars)
+        if rt_bars is not None:
+            ib.cancelRealTimeBars(rt_bars)
 
     pipeline = InstrumentPipeline(
         symbol=symbol,
@@ -159,6 +182,16 @@ async def create_pipeline(
         on_stop=on_stop,
         spot=spot,
     )
+
+    async def resubscribe() -> None:
+        """Po reconnectu obnoví trvalé subskripce podkladu (spot + realtime bary)."""
+        if stopped:
+            return
+        pipeline.ticker = subscribe_underlying()
+        logger.info("Obnoveny subskripce podkladu %s po reconnectu", symbol)
+
+    manager.on_resubscribe(resubscribe)
+
     pipeline.oi_available = await pipeline.try_archive_oi(dt.datetime.now(dt.UTC).date())
     return pipeline
 
@@ -174,7 +207,12 @@ async def main() -> None:
     api_base = os.environ.get("GEXLENS_API_BASE", "http://127.0.0.1:8000")
     publisher = HttpPublisher(api_base)
     ib = IB()
-    manager = ConnectionManager(ib, settings)
+    manager = ConnectionManager(
+        ib,
+        settings,
+        heartbeat_interval_s=settings.heartbeat_interval_s,
+        heartbeat_timeout_s=settings.heartbeat_timeout_s,
+    )
     await manager.start()
     while manager.state is not ConnectionState.CONNECTED:
         await asyncio.sleep(0.5)
@@ -216,7 +254,7 @@ async def main() -> None:
         for symbol in plan.start:
             try:
                 pipelines[symbol] = await create_pipeline(
-                    ib, settings, publisher, writer, oi_repository, symbol
+                    ib, manager, settings, publisher, writer, oi_repository, symbol
                 )
             except InstrumentSetupError as exc:
                 setup_cooldown[symbol] = SETUP_RETRY_CYCLES
