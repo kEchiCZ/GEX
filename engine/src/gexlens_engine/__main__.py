@@ -121,7 +121,16 @@ async def create_pipeline(
 
     fut_ticker = subscribe_underlying()
     await asyncio.sleep(3)
-    spot = fut_ticker.last if fut_ticker.last == fut_ticker.last else fut_ticker.marketPrice()
+    # Spot: live cena → marketPrice → poslední závěrečná (víkend/zavřený trh,
+    # jinak by pipeline nešla založit mimo obchodní hodiny)
+    spot = next(
+        (
+            value
+            for value in (fut_ticker.last, fut_ticker.marketPrice(), fut_ticker.close)
+            if value == value
+        ),
+        float("nan"),
+    )
     if spot != spot:
         ib.cancelMktData(front)
         raise InstrumentSetupError(f"{symbol}: nedorazila cena podkladu (subskripce dat?)")
