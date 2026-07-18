@@ -185,6 +185,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Časové řady flip/walls/centroid (SPEC 4.2)."""
         return {"levels": _records(repository.levels(symbol, expiry, date))}
 
+    @app.get("/profile/{symbol}/aggregate")
+    def profile_aggregate(symbol: str, date: dt.date) -> dict[str, object]:
+        """Souhrnný strike profil přes všechny expirace dne (Σ pohled v UI).
+
+        Z poslední zapsané minuty každé expirace se sečtou OI/volume (a jejich
+        delta-vážené komponenty) per strike a strana — celkové zdi bez ohledu
+        na to, ve kterém řetězu pozice sedí.
+        """
+        totals: dict[tuple[float, str], dict[str, float]] = {}
+        expiries_used: list[str] = []
+        for expiry in repository.list_expiries(symbol):
+            try:
+                frame = repository.snapshots(symbol, expiry, date)
+            except PartitionNotFoundError:
+                continue
+            if frame.empty:
+                continue
+            last = frame[frame["ts_min"] == frame["ts_min"].max()]
+            expiries_used.append(expiry)
+            for row in last.itertuples():
+                key = (float(row.strike), str(row.right))
+                bucket = totals.setdefault(
+                    key, {"volume": 0.0, "oi": 0.0, "vol_component": 0.0, "oi_component": 0.0}
+                )
+                delta = abs(float(row.delta)) if row.delta == row.delta else 0.0
+                volume = float(row.volume) if row.volume == row.volume else 0.0
+                oi = float(row.oi) if row.oi == row.oi else 0.0
+                bucket["volume"] += volume
+                bucket["oi"] += oi
+                bucket["vol_component"] += volume * delta
+                bucket["oi_component"] += oi * delta
+        strikes = sorted({strike for strike, _ in totals})
+        rows = []
+        for strike in strikes:
+            call = totals.get((strike, "C"), {})
+            put = totals.get((strike, "P"), {})
+            rows.append(
+                {
+                    "strike": strike,
+                    "callVolComponent": call.get("vol_component", 0.0),
+                    "callOiComponent": call.get("oi_component", 0.0),
+                    "putVolComponent": put.get("vol_component", 0.0),
+                    "putOiComponent": put.get("oi_component", 0.0),
+                    "callVolume": call.get("volume", 0.0),
+                    "putVolume": put.get("volume", 0.0),
+                    "callOi": call.get("oi", 0.0),
+                    "putOi": put.get("oi", 0.0),
+                }
+            )
+        return {"symbol": symbol, "date": date.isoformat(), "expiries": expiries_used, "rows": rows}
+
     @app.get("/profile/{symbol}/{expiry}")
     def profile(
         symbol: str,

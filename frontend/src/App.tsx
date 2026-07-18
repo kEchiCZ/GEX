@@ -29,6 +29,7 @@ import {
 import type { WallsMode } from './heatmap/wallsModes'
 import { aggregateDay } from './replay/aggregate'
 import { sliceGrid, sliceOverlays, slicePanels } from './replay/slice'
+import { useAggregateProfile } from './replay/useAggregateProfile'
 import { useDayData } from './replay/useDayData'
 import { usePlayback } from './replay/usePlayback'
 import { AppStateProvider, INTERVAL_MINUTES, useAppState } from './state/AppState'
@@ -142,6 +143,15 @@ function MainContent() {
     () => lastValue(day.spotSeries, playback.position),
     [day.spotSeries, playback.position],
   )
+  // Σ souhrn přes expirace v pravém profilu (Kooperovo čtení celkového positioningu)
+  const [aggregateOn, setAggregateOn] = useState(false)
+  const aggregateRows = useAggregateProfile(
+    symbol,
+    today,
+    aggregateOn && day.source === 'replay',
+    spot,
+  )
+  const displayedProfileRows = aggregateOn && aggregateRows ? aggregateRows : profileRows
 
   // Overlay přepínače odpovídají checkboxům (AC issue #24)
   const baseOverlays = useMemo(
@@ -401,7 +411,7 @@ function MainContent() {
           }}
         />
         <StrikeProfile
-          rows={profileRows}
+          rows={displayedProfileRows}
           spot={spot}
           width={profileWidth}
           yView={{
@@ -409,6 +419,8 @@ function MainContent() {
             zoomY: chartView.zoomY,
             baseHeight: heatSize.height,
           }}
+          aggregate={day.source === 'replay' ? aggregateOn : null}
+          onAggregateToggle={() => setAggregateOn((value) => !value)}
         />
       </div>
     </>
