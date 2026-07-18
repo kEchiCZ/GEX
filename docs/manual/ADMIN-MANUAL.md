@@ -113,6 +113,13 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_MARKET_DATA_TYPE` | 1 | 1=live; delayed engine odmítá |
 | `GEXLENS_CONNECT_TIMEOUT_S` | 10 | |
 | `GEXLENS_RECONNECT_BACKOFF_BASE_S` / `_MAX_S` | 2 / 60 | Exponenciální reconnect |
+| `GEXLENS_HEARTBEAT_INTERVAL_S` / `_TIMEOUT_S` | 30 / 15 | Heartbeat spojení; agresivnější hodnoty vedly k falešným reconnectům během sweep dávek |
+| `GEXLENS_SYMBOLS` | ES | Základní sada futures podkladů (čárkami); watchlist z DB se přidává za běhu (ADR-0003) |
+| `GEXLENS_MAX_INSTRUMENTS` | 3 | Strop souběžných instrumentů (rozpočet market data lines) |
+| `GEXLENS_WATCHLIST_POLL_CYCLES` | 5 | Watchlist + runtime nastavení (strike_range_points) se čtou z DB každý k-tý cyklus |
+| `GEXLENS_OI_ARCHIVE_EXPIRIES` | 5 | Ranní OI archiv pokrývá N nejbližších expirací (základ ΔOI vs. včera) |
+| `GEXLENS_SWEEP_NEXT_EXPIRY` | true | Sekundární sweep následující expirace (positioning příští seance) |
+| `GEXLENS_NEXT_EXPIRY_SWEEP_EVERY` | 3 | Kadence sekundárního sweepu (každá k-tá minuta) |
 | `GEXLENS_STRIKE_RANGE_POINTS` | 200 | Výchozí denní obálka spot ± X (ADR-0002) |
 | `GEXLENS_STRIKE_RANGE_EXPAND_THRESHOLD` | 0.25 | Rozšíření při přiblížení k okraji |
 | `GEXLENS_STRIKE_RANGE_MAX_POINTS` | 800 | Strop šířky obálky (≥ 2× base) |
@@ -144,9 +151,15 @@ Minutový cyklus (`runtime.EngineRuntime.run_cycle`):
 5. **Bary podkladu** — 5s reqRealTimeBars agregované na 1min → `derived/bars`.
 6. **Push do API** — `/internal/status` + kanály `levels.*`, `flow.*`, `price.*`.
 
-Další joby: **OI archiv** při startu + retry à 30 min dokud den nemá data (alert `oi_missing` při selhání); **auto-rozšíření obálky strikes** (grow-only, capped → alert); **noční retention purge** po `RETENTION_PURGE_TIME_UTC`.
+### Multi-instrument orchestrátor (ADR-0003)
 
-Odolnost: ConnectionManager watchdog (heartbeat + exponenciální reconnect + plná resubskripce), discovery s timeoutem a retry (sec-def farm výpadky), výjimka v cyklu nikdy neshodí smyčku, pacing guard historical requestů (≤60/10 min, dedup, priorita).
+`__main__` řídí **pipeline per podklad** (`instruments.InstrumentPipeline`): cílová sada = `GEXLENS_SYMBOLS` ∪ watchlist z DB (poll à `WATCHLIST_POLL_CYCLES`). Sweepy instrumentů běží **sekvenčně** — špička market data lines je vždy jedna dávka. Multiplikátor a burza se čtou z contract details. Ne-futures symbol → alert `instrument_error` + cooldown 30 cyklů. Pád cyklu jednoho instrumentu neshodí ostatní; status se agreguje (součty Greeks/repair, pole `symbols`).
+
+Každá pipeline navíc drží **sekundární runtime následující expirace** (`secondary=True`): sweep v kadenci `NEXT_EXPIRY_SWEEP_EVERY`, zapisuje jen snapshots + levels své expirace (flow/bary patří výhradně aktivnímu řetězu — soubory jsou per symbol).
+
+Další joby: **OI archiv** při startu + retry à 30 min dokud den nemá data (alert `oi_missing`); pokrývá `OI_ARCHIVE_EXPIRIES` nejbližších expirací — základ ΔOI vs. včera. **POZOR: OI se čte přes generic tick 101 i pro FOP** (tick 588 na FOP nedodává nikdy — ADR-0001 v3; hodnota se čte podle strany kontraktu, opačná strana je validní 0.0). **Auto-rozšíření obálky strikes** (grow-only, capped → alert) + runtime změna `strike_range_points` ze Settings UI (překlopí pipeline). **Denní roll expirace**: vypršelá pipeline se zastaví a další cyklus založí novou s čerstvou discovery (bezobslužný přechod přes víkend). **Noční retention purge** po `RETENTION_PURGE_TIME_UTC`.
+
+Odolnost: ConnectionManager watchdog (heartbeat 30/15 s + exponenciální reconnect + plná resubskripce — **vč. spot tickeru a realtime barů podkladu** přes `on_resubscribe`), spot fallback last → marketPrice → close (start i o víkendu), discovery s timeoutem a retry (sec-def farm výpadky), výjimka v cyklu nikdy neshodí smyčku, pacing guard historical requestů (≤60/10 min, dedup, priorita).
 
 ## 6. Datové formáty a persistence
 
@@ -179,11 +192,13 @@ Interaktivní dokumentace: `http://127.0.0.1:8000/docs` (OpenAPI).
 |---|---|
 | `GET /health`, `GET /status` | Liveness; agregovaný stav pipeline |
 | `GET /instruments`, `GET /instruments/{sym}/expiries` | Dostupné symboly/expirace (ze storage) |
+| `GET /instruments/{sym}/days` | Uložené dny s expirací per den (Daily pohled) |
+| `GET /profile/{sym}/aggregate?date` | Σ profil: OI/volume sečtené přes všechny expirace dne per strike (registrováno PŘED /profile/{sym}/{expiry}) |
 | `GET /snapshots/{sym}/{expiry}?date&mode&scale&norm&from&to&raw` | Heatmap matice jako **Arrow IPC stream**; `raw=true` = surová partice |
 | `GET /levels/{sym}/{expiry}?date` | Časová řada flip/walls/centroid |
 | `GET /profile/{sym}/{expiry}?date&ts&variant&oi_weight&spot` | Strike profil k okamžiku |
 | `GET /flow/{sym}?date` | CumΔ + OptVol + Vol řady |
-| `GET /replay/{sym}/{expiry}/{date}` | Kompletní denní balík (levels/flow/bars JSON + snapshoty base64 Arrow) |
+| `GET /replay/{sym}/{expiry}/{date}` | Kompletní denní balík (levels/flow/bars JSON + snapshoty base64 Arrow + `oi_prev` pro ΔOI vs. včera) |
 | CRUD `/watchlist`, `/alerts`, `/annotations?symbol&date`, `/settings` | PostgreSQL persistence |
 | `POST /internal/status`, `POST /internal/publish` | **Ingest z enginu** (nechráněné — API bindí jen na localhost) |
 
@@ -232,16 +247,17 @@ Z [ADR-0001](../adr/0001-ibkr-account-limits.md) (měřeno živě na účtu):
 |---|---|---|
 | Tick-by-tick streamy | **5** | Hot zóna degraduje z ATM±15 na ~ATM±1; zbytek klasifikuje midpoint test. Rozšíření = IBKR Quote Booster. |
 | Market data lines | ≥ 150 | Dávka 80 má rezervu |
-| **FOP OI (tick 588)** | **intraday nechodí vůbec** | GEX bez OI do ranního CME okna; mitigace: retry à 30 min + alert + volume fallback heatmapy. **Otevřené: issue #65** — ověřit ranní okno; případně rozhodnout alternativu. |
+| **FOP OI** | **tick 588 nedodává nikdy; tick 101 funguje** | **VYŘEŠENO (issue #65, ADR-0001 v3):** `IbOIFetcher` používá generic tick 101 pro OPT i FOP a čte hodnotu podle strany kontraktu (opačná strana = validní 0.0). Retry à 30 min + volume fallback zůstávají jako pojistka. |
 
-[ADR-0002](../adr/0002-strike-band-expansion.md): obálka strikes je grow-only (křídla se neztrácejí), strop šířky s alertem.
+[ADR-0002](../adr/0002-strike-band-expansion.md): obálka strikes je grow-only (křídla se neztrácejí), strop šířky s alertem. [ADR-0003](../adr/0003-multi-instrument.md): multi-instrument orchestrace řízená watchlistem.
 
 ## 12. Diagnostika a údržba
 
 | Situace | Postup |
 |---|---|
 | Engine offline | `docker compose logs engine` — hledej stav ConnectionManageru; ověř TWS (API zapnuté, port, Trusted IP). Warning 2110/2103 = výpadek TWS↔IB, vyřeší se sám. |
-| Prázdné GEX/walls | Zkontroluj `oi_eod` pro dnešek: `docker compose exec postgres psql -U gexlens -c "select date, count(*) from oi_eod group by 1 order by 1 desc limit 5"` — pokud dnešek chybí, viz issue #65. |
+| Prázdné GEX/walls | Zkontroluj `oi_eod` pro dnešek: `docker compose exec postgres psql -U gexlens -c "select date, count(*) from oi_eod group by 1 order by 1 desc limit 5"` — pokud dnešek chybí, engine archiv opakuje à 30 min (CME publikuje OI ráno). |
+| Ticker z watchlistu nesbírá | `docker compose logs engine | grep Setup` — ne-futures symbol nebo chybějící subskripce burzy (NYMEX/COMEX pro CL/GC); cooldown 30 min mezi pokusy. |
 | Vysoké `Repair` / `Stale` | Konkrétní kontrakty bez dat — často nelikvidní křídla; zvyš `BATCH_TIMEOUT_S` nebo zmenši obálku. |
 | Disk roste | Retention běží nočně; ručně: smaž staré partice v `./data` (nikdy `oi_eod`). |
 | Reset prostředí | `docker compose down`, smaž `./data` (přijdeš o 14denní okno, ne o OI archiv ve volume `pgdata`), `docker compose up -d --build`. |

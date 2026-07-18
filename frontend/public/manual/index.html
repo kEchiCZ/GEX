@@ -17,8 +17,8 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.0 · červenec 2026 · pro aplikaci GEXLens v0.1</em></p>
-<p>GEXLens je aplikace pro intradenní tradery ES (E-mini S&amp;P 500) futures opcí. Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.</p>
+<p><em>Verze 1.2 · červenec 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
 <ol>
@@ -44,10 +44,13 @@
 <hr>
 <h2>1. Co aplikace umí</h2>
 <ul>
-<li><strong>Heatmapa čas × strike</strong> — barevná mapa opčního positioningu přes celý obchodní den. Zelená (teal) = call strana, červená = put strana. Sedm přepínatelných metrik (OI, volume OTM/ITM, kombinace…).</li>
-<li><strong>GEX úrovně</strong> — automaticky počítaný <strong>flip</strong> (zero-gamma), <strong>call wall</strong>, <strong>put wall</strong> a <strong>centroid</strong>, vykreslované jako linie přímo v heatmapě a průběžně přepočítávané každou minutu.</li>
-<li><strong>Živý tok</strong> — kumulativní delta flow (Cum Δ) s klasifikací agresora: kdo tlačí, jestli kupci nebo prodejci.</li>
-<li><strong>Replay</strong> — slider přetočí celý den zpět a přehraje vývoj positioningu rychlostí 1×/5×/20×.</li>
+<li><strong>Heatmapa čas × strike</strong> — barevná mapa opčního positioningu přes celý obchodní den. Zelená (teal) = call strana, červená = put strana. Sedm přepínatelných metrik (<strong>Mode</strong>: OI, Vol OTM/ITM, Vol ±, OI+OTM, OI−ITM, OI±All) a čtyři škály (<strong>Scale</strong>: Linear, √, Log, Pow⅓).</li>
+<li><strong>GEX úrovně</strong> — automaticky počítaný <strong>flip</strong> (zero-gamma), <strong>call wall</strong>, <strong>put wall</strong>, <strong>centroid</strong> a <strong>Max Pain</strong>, vykreslované jako časové linie i horizontální úrovně s cenovkami, přepočítávané každou minutu. Volitelné <strong>Walls</strong> módy (Peak/Center/Smooth/Flip/Ridge).</li>
+<li><strong>Multi-instrument</strong> — watchlist v sidebaru: přidej ticker (ES, NQ, RTY…) a engine ho začne sbírat; kliknutím přepínáš celou aplikaci.</li>
+<li><strong>Více expirací najednou</strong> — vedle aktivního řetězu se sbírá i následující expirace (čtení positioningu příští seance) a pravý profil umí <strong>Σ souhrn přes expirace</strong>.</li>
+<li><strong>Živý tok</strong> — kumulativní delta flow (Cum Δ) s klasifikací agresora + <strong>Δ Flow C/P</strong> (tok zvlášť za call/put stranu).</li>
+<li><strong>ΔOI vs. včera</strong> — kde přes noc přibyly/ubyly otevřené pozice (tooltip profilu).</li>
+<li><strong>Replay</strong> — skrytý za tlačítkem ⏮ Replay; slider přehraje vývoj dne rychlostí 1×/5×/20×. Aplikace defaultně jede vždy live.</li>
 <li><strong>Anotace</strong> — šipky, linie a kreslení od ruky přímo do grafu; uložené k instrumentu a dni, přežijí restart.</li>
 <li><strong>Dashboard, IBKR Console, Settings</strong> — provozní obrazovky pro přehled, diagnostiku a konfiguraci.</li>
 </ul>
@@ -104,7 +107,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Hlavička</strong></td>
-<td>Ticker a název instrumentu, poslední cena, <strong>selektor expirace</strong> (tradingClass + datum), indikátor ● Live / ○ Offline, zvonek notifikací.</td>
+<td>Ticker a název instrumentu, <strong>poslední cena + denní změna v %</strong>, <strong>selektor expirace</strong> s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h&quot; — velké expirace nesou velké OI. V selektoru najdeš i <strong>následující expiraci</strong> (sbírá se souběžně — čtení positioningu příští seance). Indikátor ● Live / ○ Offline, zvonek notifikací.</td>
 </tr>
 <tr>
 <td><strong>Řádek timeframe</strong></td>
@@ -112,11 +115,11 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Řádek přepínačů</strong></td>
-<td>Checkboxy vrstev: <strong>Dyn GEX</strong> (walls linie), <strong>GEX Levels</strong> (flip/centroid), <strong>Sessions</strong> (markery seancí), <strong>Vol / Opt Vol / Delta</strong> (spodní panely), <strong>Vol + OI Δ</strong>, <strong>News</strong>. Co odškrtneš, zmizí — layout se přeskládá.</td>
+<td>Checkboxy vrstev: <strong>Dyn GEX</strong> (walls linie), <strong>GEX Levels</strong> (flip/centroid/Max Pain), <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol / Opt Vol / Delta / Δ Flow C/P</strong> (spodní panely), <strong>Vol + OI Δ</strong>, <strong>News</strong>. Co odškrtneš, zmizí — layout se přeskládá.</td>
 </tr>
 <tr>
 <td><strong>Lišta grafu</strong></td>
-<td>Styl heatmapy (Gradient/Blobs), Contours (Off/Major/All), <strong>Cena</strong> (Křivka/Svíčky) + <strong>Viditelnost</strong>, nástroje anotací + barva, indikátor zdroje dat (live/replay/demo).</td>
+<td><strong>Mode</strong> (7 metrik heatmapy), <strong>Scale</strong> (Linear/√/Log/Pow⅓), <strong>Walls</strong> (Off/Peak/Center/Smooth/Flip/Ridge), Styl (Gradient/Blobs), Contours (Off/Major/All), <strong>Cena</strong> (Svíčky/Křivka) + <strong>Viditelnost</strong>, nástroje anotací + barva, indikátor zdroje dat, tlačítko <strong>⏮ Replay</strong>.</td>
 </tr>
 <tr>
 <td><strong>Heatmapa</strong></td>
@@ -124,15 +127,15 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Strike profil</strong></td>
-<td>Pravý panel — viz kapitola 7.</td>
+<td>Pravý panel; <strong>předěl mezi grafem a panelem jde táhnout</strong> (kurzor ↔) — viz kapitola 7.</td>
 </tr>
 <tr>
 <td><strong>Spodní panely</strong></td>
-<td>Vol / Opt Vol / Cum Δ — viz kapitola 8.</td>
+<td>Vol / Opt Vol / Δ Flow / Cum Δ — viz kapitola 8.</td>
 </tr>
 <tr>
 <td><strong>Playback lišta</strong></td>
-<td>Slider dne, ▶, rychlosti, návrat na Live — viz kapitola 9.</td>
+<td>Defaultně skrytá (aplikace jede vždy live) — zobrazí ji tlačítko <strong>⏮ Replay</strong>; viz kapitola 9.</td>
 </tr>
 <tr>
 <td><strong>Stavová lišta</strong></td>
@@ -180,6 +183,54 @@ docker compose up -d        # start na pozadí
 </tr>
 </tbody></table>
 <p>Spodní panely (Vol / Opt Vol / Cum Δ) <strong>sledují časovou osu heatmapy</strong> — při posunu či zoomu osy X se roztahují synchronně.</p>
+<h3>Mode — sedm metrik heatmapy</h3>
+<p>Select <strong>Mode</strong> přepíná, co buňky zobrazují (přepočet je okamžitý, bez čekání na server; dostupné nad živými/replay daty):</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Co ukazuje</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>OI</strong></td>
+<td>Open interest per strike (výchozí). Dokud ranní OI nedorazí, automaticky se použije volume.</td>
+</tr>
+<tr>
+<td><strong>Vol OTM</strong></td>
+<td>Volume jen OTM opcí (call nad spotem, put pod spotem) — čerstvá spekulace/zajištění</td>
+</tr>
+<tr>
+<td><strong>Vol ITM</strong></td>
+<td>Volume ITM opcí</td>
+</tr>
+<tr>
+<td><strong>Vol ±</strong></td>
+<td>Rozdíl call − put volume (zeleno-červená divergenční mapa)</td>
+</tr>
+<tr>
+<td><strong>OI+OTM</strong></td>
+<td>Vážená kombinace OI (60 %) a OTM volume (40 %) — „kde sedí i kde se dnes hraje&quot;</td>
+</tr>
+<tr>
+<td><strong>OI−ITM</strong></td>
+<td>OI očištěné o ITM volume</td>
+</tr>
+<tr>
+<td><strong>OI±All</strong></td>
+<td>Rozdíl call − put OI (divergenční)</td>
+</tr>
+</tbody></table>
+<p>Select <strong>Scale</strong> mění škálu hodnot: <strong>Linear</strong>, <strong>√</strong> (zvýrazní slabší), <strong>Log</strong>, <strong>Pow⅓</strong>. Znaménko se zachovává.</p>
+<h3>Walls — detekce zdí</h3>
+<p>Select <strong>Walls</strong> kreslí bílé čárkované linie počítané z právě zobrazené vrstvy:</p>
+<ul>
+<li><strong>Peak</strong> — strike s maximem metriky per minuta (call i put strana)</li>
+<li><strong>Center</strong> — vážené těžiště per minuta</li>
+<li><strong>Smooth</strong> — vyhlazený Peak (EMA 15 minut)</li>
+<li><strong>Flip</strong> — kopie zero-gamma řady</li>
+<li><strong>Ridge</strong> — souběžné hřebeny koncentrací (víc zdí najednou, s filtrem šumu)</li>
+</ul>
 <h3>Styl vykreslení</h3>
 <ul>
 <li><strong>Gradient</strong> — hladké bilineární přechody (výchozí)</li>
@@ -212,6 +263,11 @@ docker compose up -d        # start na pozadí
 <td>GEX Levels</td>
 </tr>
 <tr>
+<td><strong>Max Pain</strong></td>
+<td>magenta</td>
+<td>GEX Levels (počítá se z OI)</td>
+</tr>
+<tr>
 <td><strong>Call wall</strong></td>
 <td>zelená</td>
 <td>Dyn GEX</td>
@@ -222,8 +278,13 @@ docker compose up -d        # start na pozadí
 <td>Dyn GEX</td>
 </tr>
 <tr>
+<td><strong>Walls módy</strong></td>
+<td>bílé čárkované</td>
+<td>select Walls</td>
+</tr>
+<tr>
 <td><strong>Sessions markery</strong></td>
-<td>šedé svislé</td>
+<td>šedé svislé (Tokio, Londýn, US Open…)</td>
 <td>Sessions</td>
 </tr>
 <tr>
@@ -232,27 +293,31 @@ docker compose up -d        # start na pozadí
 <td>vždy (viz kap. 6)</td>
 </tr>
 </tbody></table>
-<p>Vpravo na ose je <strong>štítek aktuální ceny</strong>; v pravém dolním rohu <strong>timestamp</strong> posledních dat.</p>
+<p>Každá úroveň se navíc promítá jako <strong>horizontální čárkovaná linka přes celou šířku s barevnou cenovkou</strong> u levého okraje (poslední známá hodnota) — na první pohled vidíš, kde úrovně právě leží. Vpravo na ose je <strong>štítek aktuální ceny</strong>; v pravém dolním rohu <strong>timestamp</strong> posledních dat.</p>
 <h3>Stale buňky</h3>
 <p>Pokud se některý strike nepodařilo obnovit (výpadek dat), jeho buňky jsou <strong>vyšedlé s nižší sytostí</strong> — poznáš tak stará data od živých. Souhrn běží ve stavové liště (<code>Repair: retrying N…</code>).</p>
 <hr>
 <h2>6. Cenová vrstva — křivka a svíčky</h2>
 <p>V liště grafu volbou <strong>Cena</strong>:</p>
 <ul>
-<li><strong>Křivka</strong> (výchozí) — spojitá 1m linie zbarvená podle směru ticku (zelená nahoru, červená dolů). V husté heatmapě nejčitelnější.</li>
-<li><strong>Svíčky</strong> — plnohodnotné 1m OHLC svíčky (knot high–low, tělo open–close).</li>
+<li><strong>Svíčky</strong> (výchozí) — plnohodnotné OHLC svíčky (knot high–low, tělo open–close) v rozlišení zvoleného timeframe.</li>
+<li><strong>Křivka</strong> — spojitá linie zbarvená podle směru ticku (zelená nahoru, červená dolů).</li>
 </ul>
+<p>Graf se při načtení <strong>automaticky napasuje na cenové pásmo dne</strong> (svíčky vyplní výšku); okolní zóny heatmapy dosáhneš tažením/kolečkem za osu Y, reset vrací napasovaný pohled.</p>
 <p>Posuvníkem <strong>Viditelnost</strong> (10–100 %) cenovou vrstvu zeslabíš, aby nepřebíjela heatmapu pod ní — užitečné hlavně u svíček. <strong>Štítek aktuální ceny zůstává vždy plně viditelný.</strong></p>
 <p><img src="img/svicky.png" alt="Svíčkový režim"></p>
 <hr>
 <h2>7. Strike profil (pravý panel)</h2>
-<p>Horizontální skládané pruhy pro každý strike (stejná osa strikes jako heatmapa, nejvyšší nahoře):</p>
+<p>Horizontální skládané pruhy pro každý strike, <strong>na stejné výškové ose jako heatmapa</strong> — strike v profilu je vždy na stejné úrovni obrazovky jako v grafu a při zoomu/posunu osy Y se hýbou synchronně:</p>
 <ul>
-<li><strong>Call doprava (teal), put doleva (červená)</strong> od symetrické osy</li>
+<li><strong>Call doprava (teal), put doleva (červená)</strong> od symetrické osy; popisky <strong>Put/Call</strong> nahoře</li>
 <li>Každý pruh má dvě složky odlišené sytostí: <strong>Vol</strong> (sytá) a <strong>OI Δ</strong> (světlejší)</li>
+<li>Dole <strong>osa množství</strong> (Δ-vážené kontrakty, formát „5k&quot;) — vidíš, jak velké zdi reálně jsou; měřítko reaguje na zoom</li>
 <li><strong>Žlutá přerušovaná linka</strong> = aktuální cena</li>
 <li>Tlačítka <strong>1× / 2× / 4×</strong> zvětšují měřítko pruhů</li>
-<li>Najetí myší na řádek zvýrazní strike v celé aplikaci (crosshair) a dole zobrazí <strong>tooltip</strong>: OI call/put, Vol call/put, vzdálenost od spotu</li>
+<li>Tlačítko <strong>Σ</strong> = souhrn přes všechny sbírané expirace tohoto instrumentu (pondělní + úterní řetěz…). Hlavička se změní na „Σ expirací&quot;; heatmapa zůstává u zvolené expirace. Celkový positioning bez přepínání.</li>
+<li>Najetí myší na řádek zvýrazní strike v celé aplikaci (crosshair) a dole zobrazí <strong>tooltip</strong>: OI call/put, Vol call/put, <strong>ΔOI vs. včera C/P</strong> (kde přes noc přibyly/ubyly pozice; jen per expirace, v Σ režimu se neukazuje), vzdálenost od spotu</li>
+<li><strong>Šířku panelu změníš tažením předělu</strong> mezi grafem a panelem (kurzor ↔, rozsah 180–640 px)</li>
 </ul>
 <p>Čteš z něj na první pohled, <strong>kde sedí dominantní call a put koncentrace</strong> — typicky walls.</p>
 <hr>
@@ -267,11 +332,15 @@ docker compose up -d        # start na pozadí
 </thead>
 <tbody><tr>
 <td><strong>Vol</strong></td>
-<td>Minutový objem podkladu (ES futures) — šedé sloupce</td>
+<td>Minutový objem podkladu (futures) — šedé sloupce</td>
 </tr>
 <tr>
 <td><strong>Opt Vol</strong></td>
 <td>Minutový objem opcí, <strong>barevně call (teal) / put (červená)</strong> vedle sebe</td>
+</tr>
+<tr>
+<td><strong>Δ Flow C/P</strong></td>
+<td>Delta-vážený opční tok zvlášť za call a put stranu (|Δ| × přírůstek volume). Z něj čteš, <strong>na které straně se právě obchoduje</strong> — např. „uzavírání callů&quot; = call sloupce slábnou. Default vypnutý (checkbox Δ Flow C/P).</td>
 </tr>
 <tr>
 <td><strong>Cum Δ</strong></td>
@@ -281,13 +350,14 @@ docker compose up -d        # start na pozadí
 <p>Pohyb myší v kterémkoli panelu hýbe crosshairem ve všech panelech i heatmapě.</p>
 <hr>
 <h2>9. Playback — přehrávání dne</h2>
-<p>Lišta pod panely:</p>
+<p><strong>Aplikace defaultně jede vždy live</strong> — replay lišta je skrytá, aby nerušila. Zobrazíš ji tlačítkem <strong>⏮ Replay</strong> v liště grafu:</p>
 <ul>
 <li><strong>Slider</strong> — táhni kamkoli v dni; heatmapa, strike profil i spodní panely se <strong>synchronně přetočí</strong> k danému okamžiku</li>
 <li><strong>▶ / ⏸</strong> — automatické přehrávání; rychlosti <strong>1× / 5× / 20×</strong> (1× = 2 minuty dne za sekundu)</li>
 <li><strong>● Live</strong> — skok zpět na aktuální okamžik; přehrávání na konci dne se zastaví samo</li>
+<li><strong>Zavření lišty</strong> (druhý klik na ⏮ Replay) graf automaticky vrátí na live</li>
 </ul>
-<p>Celý den je po načtení v paměti — přetáčení je okamžité, bez čekání na server.</p>
+<p>Celý den je po načtení v paměti — přetáčení je okamžité, bez čekání na server. Při přepnutí timeframe zůstává live pozice live a rozehraný replay se přemapuje proporcionálně.</p>
 <hr>
 <h2>10. Anotace — kreslení do grafu</h2>
 <p>V liště grafu vyber nástroj:</p>
@@ -350,7 +420,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Engine</strong></td>
-<td>Rozsah strikes (± body od spotu), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB)</td>
+<td><strong>Rozsah strikes (± body od spotu)</strong> — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB)</td>
 </tr>
 <tr>
 <td><strong>Vzhled</strong></td>
@@ -358,7 +428,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Seance</strong></td>
-<td>Seznam sessions markerů pro heatmapu (JSON)</td>
+<td>Historické pole (JSON) — markery seancí se nově generují <strong>automaticky</strong> z časů světových burz; checkbox Sessions v grafu</td>
 </tr>
 </tbody></table>
 <p><img src="img/settings.png" alt="Settings"></p>
@@ -398,6 +468,14 @@ docker compose up -d        # start na pozadí
 <tr>
 <td><strong>OI nedorazilo</strong></td>
 <td>IBKR nedodalo Open Interest — GEX vrstvy jedou dočasně z volume (viz Řešení potíží)</td>
+</tr>
+<tr>
+<td><strong>Instrument nejde spustit</strong></td>
+<td>Ticker z watchlistu není futures s opčním řetězem (např. akcie) — engine to zkusí znovu za 30 minut</td>
+</tr>
+<tr>
+<td>Obálka na stropu</td>
+<td>Pásmo strikes dosáhlo maxima šířky — vzdálený okraj se posouvá za cenou</td>
 </tr>
 </tbody></table>
 <hr>
@@ -446,7 +524,7 @@ docker compose up -d        # start na pozadí
 <p>Aplikaci lze otevřít rovnou v konkrétním stavu pomocí URL parametrů:</p>
 <pre><code>http://127.0.0.1:8080/?view=dashboard          # obrazovka: chart | dashboard | console | settings
 http://127.0.0.1:8080/?theme=light             # téma
-http://127.0.0.1:8080/?price=candles&amp;opacity=60  # svíčky s viditelností 60 %
+http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelností 60 % (default jsou svíčky)
 </code></pre>
 <p>Parametry lze kombinovat.</p>
 <hr>
@@ -517,8 +595,20 @@ http://127.0.0.1:8080/?price=candles&amp;opacity=60  # svíčky s viditelností 
 <td>Vážené těžiště</td>
 </tr>
 <tr>
+<td><strong>Max Pain</strong></td>
+<td>Strike, kde by při expiraci vypršelo nejméně hodnoty opcí — trh k němu v expiracích často „přišpendlí&quot; (pinning).</td>
+</tr>
+<tr>
 <td><strong>OI (Open Interest)</strong></td>
-<td>Počet otevřených kontraktů; mění se jednou denně.</td>
+<td>Počet otevřených kontraktů; mění se jednou denně (CME publikuje ráno).</td>
+</tr>
+<tr>
+<td><strong>ΔOI vs. včera</strong></td>
+<td>Změna OI proti předchozímu dni — kde přes noc vznikly/zanikly pozice.</td>
+</tr>
+<tr>
+<td><strong>Δ Flow C/P</strong></td>
+<td>Delta-vážený opční tok zvlášť za call/put stranu — na které straně se právě obchoduje.</td>
 </tr>
 <tr>
 <td><strong>Cum Δ</strong></td>
