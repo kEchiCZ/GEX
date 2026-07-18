@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     # běží v nižší kadenci — každý k-tý minutový cyklus
     sweep_next_expiry: bool = True
     next_expiry_sweep_every: int = Field(default=3, ge=1)
+    # Setup detektor (ADR-0004) — obchodní analýzy s auto-vyhodnocováním
+    setups_enabled: bool = True
 
     # Opční řetězec a rotační scheduler (SPEC 3.2, 3.3)
     strike_range_points: float = Field(default=200.0, gt=0)

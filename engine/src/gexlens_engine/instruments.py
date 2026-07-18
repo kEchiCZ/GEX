@@ -31,6 +31,7 @@ from gexlens_engine.ibkr.discovery import (
 from gexlens_engine.ibkr.scheduler import SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
+from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.meta import meta_metadata, settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 
@@ -182,6 +183,8 @@ class InstrumentPipeline:
     archive_contracts: Sequence[OptionContractSpec] | None = None
     # Sekundární runtime následující expirace (čtení positioningu příští seance)
     next_runtime: EngineRuntime | None = None
+    # Setup detektor (ADR-0004) — None = vypnuto
+    setup_engine: SetupEngine | None = None
     _cycles_since_oi: int = field(default=0, repr=False)
     _minute_count: int = field(default=0, repr=False)
 
@@ -254,6 +257,13 @@ class InstrumentPipeline:
         bars = list(self.minute_bars)
         self.minute_bars.clear()
         metrics = await self.runtime.run_cycle(now, spot, bars)
+
+        # Setup detektor (ADR-0004) — jeho pád nesmí shodit sběr dat
+        if self.setup_engine is not None:
+            try:
+                await self.setup_engine.on_minute(now, spot, bars, self.runtime)
+            except Exception:
+                logger.exception("Setup detektor %s selhal — pokračuji", self.symbol)
 
         # Následující expirace v nižší kadenci; její pád nesmí shodit aktivní řetěz
         if (

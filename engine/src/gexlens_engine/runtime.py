@@ -22,7 +22,12 @@ from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.oi_archive import OIEodRepository
-from gexlens_engine.storage.parquet_store import LevelsRow, SnapshotRow, SnapshotWriter
+from gexlens_engine.storage.parquet_store import (
+    FlowRowLike,
+    LevelsRow,
+    SnapshotRow,
+    SnapshotWriter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +72,9 @@ class EngineRuntime:
     # Sekundární řetěz (následující expirace): jen snapshots + levels —
     # flow/CumΔ a bary podkladu patří výhradně aktivní expiraci (per-symbol soubory)
     secondary: bool = False
+    # Poslední spočtené hodnoty cyklu — čte je SetupEngine (ADR-0004)
+    last_levels: LevelsRow | None = field(default=None, init=False)
+    last_flow: FlowRowLike | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
@@ -145,6 +153,7 @@ class EngineRuntime:
         await asyncio.to_thread(
             self.writer.write_levels, self.symbol, self.expiry, day, [levels_row]
         )
+        self.last_levels = levels_row
 
         # 3) FlowΔ/CumΔ minuta + 4) bary podkladu — jen aktivní expirace
         # (soubory jsou per symbol; sekundární řetěz by je duplikoval)
@@ -170,6 +179,7 @@ class EngineRuntime:
             )
             return metrics
         flow_row = tracker.close_minute(ts_min)
+        self.last_flow = flow_row
         await asyncio.to_thread(self.writer.write_flow, self.symbol, day, [flow_row])
 
         if bars:

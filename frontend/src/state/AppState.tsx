@@ -38,7 +38,7 @@ export interface Toggles {
   news: boolean
 }
 
-export type AppView = 'chart' | 'dashboard' | 'console' | 'settings'
+export type AppView = 'chart' | 'dashboard' | 'setups' | 'console' | 'settings'
 export type Theme = 'dark' | 'light'
 
 /** Poslední cena + denní změna (hlavička; plní MainContent z denních dat). */
@@ -105,6 +105,8 @@ interface AppState {
   consoleLog: string[]
   priceInfo: PriceInfo
   setPriceInfo: (info: PriceInfo) => void
+  /** Verze setupů — WS kanál setups.* ji zvedá, konzumenti přenačítají REST. */
+  setupsVersion: number
 }
 
 const AppStateContext = createContext<AppState | null>(null)
@@ -112,7 +114,7 @@ const AppStateContext = createContext<AppState | null>(null)
 const LOG_LIMIT = 200
 const ALERTS_LIMIT = 50
 
-const VIEWS: readonly AppView[] = ['chart', 'dashboard', 'console', 'settings']
+const VIEWS: readonly AppView[] = ['chart', 'dashboard', 'setups', 'console', 'settings']
 
 /** Výchozí expirace: dnešní (0DTE řetěz), jinak nejnovější — první dir může být včerejšek. */
 export function defaultExpiry(expiries: string[]): string | null {
@@ -153,6 +155,7 @@ export function AppStateProvider({
   const [alerts, setAlerts] = useState<AlertMessage[]>([])
   const [unreadAlerts, setUnreadAlerts] = useState(0)
   const [consoleLog, setConsoleLog] = useState<string[]>([])
+  const [setupsVersion, setSetupsVersion] = useState(0)
   const [priceInfo, setPriceInfoState] = useState<PriceInfo>({ last: null, changePct: null })
   // Bail-out na stejné hodnoty — pojistka proti render smyčce při nestabilních identitách
   const setPriceInfo = useCallback((info: PriceInfo) => {
@@ -191,6 +194,9 @@ export function AppStateProvider({
       setAlerts((previous) => [...previous.slice(-(ALERTS_LIMIT - 1)), alert])
       setUnreadAlerts((previous) => previous + 1)
       appendLog(`alert [${alert.kind}] ${alert.message}`)
+    })
+    live.subscribe('setups.*', () => {
+      setSetupsVersion((previous) => previous + 1)
     })
     live.connect()
     return () => live.close()
@@ -266,6 +272,7 @@ export function AppStateProvider({
       consoleLog,
       priceInfo,
       setPriceInfo,
+      setupsVersion,
     }),
     [
       status,
@@ -281,6 +288,7 @@ export function AppStateProvider({
       unreadAlerts,
       consoleLog,
       priceInfo,
+      setupsVersion,
     ],
   )
 

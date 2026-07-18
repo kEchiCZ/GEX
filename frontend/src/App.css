@@ -616,3 +616,174 @@ body {
   white-space: nowrap;
   overflow-x: auto;
 }
+
+/* Setup detektor (ADR-0004): karta aktivního setupu nad grafem + obrazovka historie */
+.setup-cards {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 280px;
+  z-index: 5;
+}
+
+.setup-card {
+  background: rgba(26, 30, 40, 0.94);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.setup-card.long {
+  border-left-color: #3fbf6f;
+}
+
+.setup-card.short {
+  border-left-color: #e05563;
+}
+
+.setup-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.setup-card-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+}
+
+.setup-card-levels {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.setup-card-levels .entry {
+  color: #4da3ff;
+}
+
+.setup-card-levels .target {
+  color: #3fbf6f;
+}
+
+.setup-card-levels .stop {
+  color: #e05563;
+}
+
+.setup-card-meta {
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
+.setup-card-reason {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.setups-view {
+  padding: 14px 18px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.setups-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.setups-summary h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.setups-table-wrap {
+  overflow-x: auto;
+}
+
+.setups-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.setups-table th,
+.setups-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 5px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.setups-table td.long {
+  color: #3fbf6f;
+}
+
+.setups-table td.short {
+  color: #e05563;
+}
+
+.setups-table .r-positive {
+  color: #3fbf6f;
+}
+
+.setups-table .r-negative {
+  color: #e05563;
+}
+
+.setup-status {
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 11px;
+  background: var(--bg-chip);
+}
+
+.setup-status.active {
+  background: rgba(77, 163, 255, 0.25);
+}
+
+.setup-status.closed_target {
+  background: rgba(63, 191, 111, 0.25);
+}
+
+.setup-status.closed_stop {
+  background: rgba(224, 85, 99, 0.25);
+}
+
+.setup-review {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.setup-review input {
+  background: var(--bg-chip);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  width: 160px;
+  font-size: 11px;
+}
+
+.setups-disclaimer {
+  margin-top: 12px;
+  font-size: 11px;
+}
