@@ -64,6 +64,9 @@ class EngineRuntime:
     cum_delta: CumDeltaTracker | None = None
     # Multi-instrument orchestrátor pushuje agregovaný status sám (ADR-0003)
     push_status: bool = True
+    # Sekundární řetěz (následující expirace): jen snapshots + levels —
+    # flow/CumΔ a bary podkladu patří výhradně aktivní expiraci (per-symbol soubory)
+    secondary: bool = False
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
@@ -116,14 +119,15 @@ class EngineRuntime:
                 GexInput(strike=spec.strike, right=spec.right, gamma=snapshot.gamma, oi=oi)
             )
             # CumΔ bar větev (hot zóna má vlastní tick větev přes on_trade)
-            tracker.add_bar(
-                spec,
-                cumulative_volume=snapshot.volume,
-                last=snapshot.last,
-                bid=snapshot.bid,
-                ask=snapshot.ask,
-                delta=snapshot.delta,
-            )
+            if not self.secondary:
+                tracker.add_bar(
+                    spec,
+                    cumulative_volume=snapshot.volume,
+                    last=snapshot.last,
+                    bid=snapshot.bid,
+                    ask=snapshot.ask,
+                    delta=snapshot.delta,
+                )
         if rows:
             await asyncio.to_thread(self.writer.write_minute, self.symbol, self.expiry, day, rows)
 
@@ -142,11 +146,32 @@ class EngineRuntime:
             self.writer.write_levels, self.symbol, self.expiry, day, [levels_row]
         )
 
-        # 3) FlowΔ/CumΔ minuta
+        # 3) FlowΔ/CumΔ minuta + 4) bary podkladu — jen aktivní expirace
+        # (soubory jsou per symbol; sekundární řetěz by je duplikoval)
+        if self.secondary:
+            await self.publisher.publish(
+                f"levels.{self.symbol}.{self.expiry}",
+                {
+                    "ts_min": ts_min.isoformat(),
+                    "flip": levels.flip,
+                    "call_wall": levels.call_wall,
+                    "put_wall": levels.put_wall,
+                    "centroid": levels.centroid,
+                    "total_gex": levels.total_gex,
+                },
+            )
+            logger.info(
+                "Cyklus %s %s (sekundární): %d snapshotů, greeks %d/%d",
+                self.symbol,
+                self.expiry,
+                len(rows),
+                metrics.greeks_complete,
+                metrics.total,
+            )
+            return metrics
         flow_row = tracker.close_minute(ts_min)
         await asyncio.to_thread(self.writer.write_flow, self.symbol, day, [flow_row])
 
-        # 4) Bary podkladu
         if bars:
             await asyncio.to_thread(self.writer.write_bars, self.symbol, day, bars)
 

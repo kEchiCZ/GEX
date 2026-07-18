@@ -180,7 +180,10 @@ class InstrumentPipeline:
     oi_available: bool = False
     # OI archiv pokrývá i další expirace (ΔOI vs. včera); None = jen aktivní řetěz
     archive_contracts: Sequence[OptionContractSpec] | None = None
+    # Sekundární runtime následující expirace (čtení positioningu příští seance)
+    next_runtime: EngineRuntime | None = None
     _cycles_since_oi: int = field(default=0, repr=False)
+    _minute_count: int = field(default=0, repr=False)
 
     async def try_archive_oi(self, today: dt.date) -> bool:
         """Denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2)."""
@@ -250,7 +253,23 @@ class InstrumentPipeline:
 
         bars = list(self.minute_bars)
         self.minute_bars.clear()
-        return await self.runtime.run_cycle(now, spot, bars)
+        metrics = await self.runtime.run_cycle(now, spot, bars)
+
+        # Následující expirace v nižší kadenci; její pád nesmí shodit aktivní řetěz
+        if (
+            self.next_runtime is not None
+            and self._minute_count % self.settings.next_expiry_sweep_every == 0
+        ):
+            try:
+                await self.next_runtime.run_cycle(now, spot, [])
+            except Exception:
+                logger.exception(
+                    "Sekundární cyklus %s %s selhal — pokračuji",
+                    self.symbol,
+                    self.next_runtime.expiry,
+                )
+        self._minute_count += 1
+        return metrics
 
     def stop(self) -> None:
         """Odhlášení market dat podkladu (kontrakty řetězce rotuje scheduler sám)."""
