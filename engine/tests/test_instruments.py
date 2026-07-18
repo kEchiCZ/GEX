@@ -256,6 +256,56 @@ async def test_pipeline_failure_does_not_stop_others(
     assert status["greeks_total"] == 6  # jen zdravý instrument
 
 
+async def test_next_expiry_secondary_runtime(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """Sekundární řetěz: snapshots+levels své expirace, žádný flow/bary, kadence 1/k."""
+    settings, writer, repository, publisher = env
+    settings.next_expiry_sweep_every = 2
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+
+    next_info = ExpiryInfo(
+        trading_class="EW1",
+        expiry="20260720",
+        exchange="CME",
+        multiplier="50",
+        strikes=(7590.0, 7600.0, 7610.0),
+    )
+    underlying = Underlying(symbol="ES", sec_type="FUT", exchange="CME", con_id=1)
+    next_band = select_band(next_info.strikes, 7600.0, settings.strike_range_points)
+    pipeline.next_runtime = EngineRuntime(
+        settings=settings,
+        scheduler=SubscriptionScheduler(MockQuoteStreamer(), settings),
+        writer=writer,
+        oi_repository=repository,
+        publisher=publisher,
+        symbol="ES",
+        expiry=next_info.expiry,
+        multiplier=50.0,
+        contracts=build_contracts(underlying, next_info, next_band),
+        push_status=False,
+        secondary=True,
+    )
+
+    for minute in range(3):  # kadence 1/2 → sekundární běží v minutách 0 a 2
+        await pipeline.run_minute(TS + dt.timedelta(minutes=minute))
+
+    day = TS.date().isoformat()
+    primary = pd.read_parquet(settings.snapshots_dir / "ES" / "20260717" / f"{day}.parquet")
+    secondary = pd.read_parquet(settings.snapshots_dir / "ES" / "20260720" / f"{day}.parquet")
+    assert len(primary) == 18  # 3 minuty × 6 kontraktů
+    assert len(secondary) == 12  # 2 běhy × 6 kontraktů
+    levels_next = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260720" / "levels" / f"{day}.parquet"
+    )
+    assert len(levels_next) == 2
+    # Flow patří jen aktivní expiraci — 3 řádky (žádná duplikace sekundárním během)
+    flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{day}.parquet")
+    assert len(flow) == 3
+    channels = [channel for channel, _ in publisher.messages]
+    assert "levels.ES.20260720" in channels
+
+
 async def test_oi_missing_alert_and_retry_counter(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:

@@ -155,6 +155,37 @@ async def create_pipeline(
     )
 
     streamer = IbQuoteStreamer(ib)
+    # Následující expirace (čtení positioningu příští seance): sekundární runtime
+    # sweepuje v nižší kadenci, píše jen snapshots + levels své expirace
+    next_runtime: EngineRuntime | None = None
+    if settings.sweep_next_expiry and len(infos) > 1:
+        next_info = infos[1]
+        next_contracts = build_contracts(
+            underlying, next_info, discovery.initial_band(next_info, spot)
+        )
+        next_runtime = EngineRuntime(
+            settings=settings,
+            scheduler=SubscriptionScheduler(streamer, settings),
+            writer=writer,
+            oi_repository=oi_repository,
+            publisher=publisher,
+            symbol=symbol,
+            expiry=next_info.expiry,
+            multiplier=multiplier,
+            contracts=next_contracts,
+            cum_delta=CumDeltaTracker(multiplier=multiplier),
+            push_status=False,
+            secondary=True,
+        )
+        logger.info(
+            "Sekundární řetěz %s %s %s: %d kontraktů (kadence 1/%d)",
+            symbol,
+            next_info.trading_class,
+            next_info.expiry,
+            len(next_contracts),
+            settings.next_expiry_sweep_every,
+        )
+
     runtime = EngineRuntime(
         settings=settings,
         scheduler=SubscriptionScheduler(streamer, settings),
@@ -191,6 +222,7 @@ async def create_pipeline(
         on_stop=on_stop,
         spot=spot,
         archive_contracts=archive_contracts,
+        next_runtime=next_runtime,
     )
 
     async def resubscribe() -> None:
