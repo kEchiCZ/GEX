@@ -135,6 +135,18 @@ test('zoom přepínače mění šířku pruhů', () => {
   expect(width()).toBeCloseTo(base * 2, 1)
 })
 
+test('osa množství: hodnoty stran, Put/Call popisky a vliv zoomu', () => {
+  renderPanel() // maxSide fixture = 60 (put strana 40+20)
+  const panel = () => screen.getByLabelText('Skládané pruhy strike profilu')
+  const ticks = () =>
+    [...panel().querySelectorAll('[data-part="amount-tick"]')].map((node) => node.textContent)
+  expect(ticks()).toEqual(['60', '30', '0', '30', '60'])
+  expect(panel().textContent).toContain('Put')
+  expect(panel().textContent).toContain('Call')
+  fireEvent.click(screen.getByRole('button', { name: '2×' })) // zoom → plná šířka = polovina
+  expect(ticks()).toEqual(['30', '15', '0', '15', '30'])
+})
+
 // ── Crosshair sync + tooltip ───────────────────────────────────────
 
 function CrosshairReader() {

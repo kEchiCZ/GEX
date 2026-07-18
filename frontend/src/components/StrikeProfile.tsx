@@ -12,7 +12,7 @@ grafu se pruhy hýbou synchronně. Bez `yView` (testy) platí legacy rozložení
 import { useMemo, useState } from 'react'
 import { useElementSize } from '../hooks/useElementSize'
 import { fractionalRow } from '../heatmap/overlays'
-import { barGeometry } from '../profile/bars'
+import { barGeometry, formatAmount, maxComponentSide } from '../profile/bars'
 import type { ProfileRow } from '../profile/bars'
 import { useCrosshair } from '../state/Crosshair'
 
@@ -81,6 +81,8 @@ export function StrikeProfile({
     () => new Map(barGeometry(ordered, halfWidth, zoom).map((bar) => [bar.strike, bar])),
     [ordered, halfWidth, zoom],
   )
+  // Osa množství: plná šířka strany = maxSide/zoom (Δ-vážené kontrakty)
+  const axisFull = ordered.length > 0 ? maxComponentSide(ordered) / zoom : 0
 
   const spotRow = spot === null ? null : fractionalRow(strikesAscending, spot)
   const spotY =
@@ -196,6 +198,36 @@ export function StrikeProfile({
               </g>
             )
           })}
+          {/* Osa množství (Δ-vážené kontrakty) + strany Put/Call — dole nad okrajem */}
+          {axisFull > 0 && (
+            <g data-part="amount-axis" fontSize={9} fill="#7d8596">
+              <text x={6} y={12} fill="#ef4444">
+                Put
+              </text>
+              <text x={width - 26} y={12} fill="#14b8a6">
+                Call
+              </text>
+              {(
+                [
+                  { x: 2, value: axisFull, anchor: 'start' },
+                  { x: halfWidth / 2, value: axisFull / 2, anchor: 'middle' },
+                  { x: halfWidth, value: 0, anchor: 'middle' },
+                  { x: halfWidth + halfWidth / 2, value: axisFull / 2, anchor: 'middle' },
+                  { x: width - 2, value: axisFull, anchor: 'end' },
+                ] as Array<{ x: number; value: number; anchor: 'start' | 'middle' | 'end' }>
+              ).map((tick, index) => (
+                <text
+                  key={index}
+                  x={tick.x}
+                  y={svgHeight - 4}
+                  textAnchor={tick.anchor}
+                  data-part="amount-tick"
+                >
+                  {formatAmount(tick.value)}
+                </text>
+              ))}
+            </g>
+          )}
           {/* cenová linka */}
           {spotY !== null && (
             <line

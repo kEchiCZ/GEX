@@ -10,6 +10,7 @@ import type { HeatmapGrid } from '../heatmap/grid'
 import type { RawDay } from '../heatmap/modes'
 import type { OverlayData } from '../heatmap/overlays'
 import type { ProfileRow } from '../profile/bars'
+import { autoSessions } from '../instrument/sessions'
 import { buildDailyDay } from './daily'
 import { fetchDays, fetchReplay } from './loader'
 import type { ReplayDay } from './loader'
@@ -73,7 +74,8 @@ function replayToDay(day: ReplayDay): DayData {
     source: 'replay',
     grid: day.grid,
     raw: day.raw,
-    overlays: day.overlays,
+    // Seance markery se generují automaticky z časů minut (pevné UTC časy burz)
+    overlays: { ...day.overlays, sessions: autoSessions(day.minutes) },
     panels: day.panels,
     profileByMinute: day.profileByMinute,
     demoProfileRows: null,
