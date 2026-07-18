@@ -26,9 +26,9 @@ export interface BarGeometry {
   putOiWidth: number
 }
 
-/** Šířky pruhů: normalizace největší celkovou stranou, zoom násobí, ořez na halfWidth. */
-export function barGeometry(rows: ProfileRow[], halfWidth: number, zoom: number): BarGeometry[] {
-  const maxSide = Math.max(
+/** Největší celková strana (Vol+OI komponenty) — základ měřítka pruhů i osy. */
+export function maxComponentSide(rows: ProfileRow[]): number {
+  return Math.max(
     1e-9,
     ...rows.map((row) =>
       Math.max(
@@ -37,6 +37,20 @@ export function barGeometry(rows: ProfileRow[], halfWidth: number, zoom: number)
       ),
     ),
   )
+}
+
+/** Kompaktní formát množství pro osu profilu (1 234 → „1.2k"). */
+export function formatAmount(value: number): string {
+  if (value >= 1000) {
+    const k = value / 1000
+    return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}k`
+  }
+  return String(Math.round(value))
+}
+
+/** Šířky pruhů: normalizace největší celkovou stranou, zoom násobí, ořez na halfWidth. */
+export function barGeometry(rows: ProfileRow[], halfWidth: number, zoom: number): BarGeometry[] {
+  const maxSide = maxComponentSide(rows)
   const scale = (halfWidth / maxSide) * zoom
   const clamp = (value: number) => Math.min(halfWidth, value * scale)
   return rows.map((row) => {
