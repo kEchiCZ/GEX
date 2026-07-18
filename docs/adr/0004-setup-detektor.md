@@ -86,11 +86,24 @@ kandidát (podmínky kontextu) → AKTIVNÍ (trigger splněn, zapsán + alert)
   kontextem (gamma režim, typ expirace). Obrazovka Statistiky: win-rate,
   expectancy (R), MFE/MAE distribuce per šablona.
 
+## Ruční hodnocení uživatelem (Fáze 1)
+
+Vedle automatického vyhodnocení (target/stop) může uživatel každý uzavřený
+setup ručně ohodnotit: **👍 / 👎 + volitelná poznámka** („vyšlo přesně podle
+predikce", „trefa, ale entry moc brzo"…). Hodnocení se ukládá k setupu
+(`user_rating`, `user_note`) a zobrazuje v historii vedle automatického
+výsledku. **Nevstupuje do automatické kalibrace confidence** — je to
+kvalitativní vrstva pro revizi šablon: při ladění pravidel uvidíme vedle
+čísel i subjektivní pohled tradera (např. setup skončil na stop, ale
+uživatel ho hodnotí kladně, protože logika byla správná a stop jen těsný).
+
 ## Schéma a rozhraní
 
 - **PG `setups`**: id, symbol, expiry, template, direction, created_ts, entry,
   target, stop, confidence, context (JSON), status, closed_ts, outcome_r,
-  mfe, mae. Bez delete API.
+  mfe, mae, **user_rating** (null/+1/−1), **user_note** (text). Bez delete API.
+- **API navíc**: `PATCH /setups/{id}/review` — zápis hodnocení a poznámky
+  (jediná mutace, kterou setup připouští; predikce samotná je neměnná).
 - **Engine**: `compute/setups.py` (čisté funkce: kontext → kandidáti → trigger)
   volané po `run_cycle` aktivní expirace; golden testy na scénářích ze 17. 7.
 - **API**: `GET /setups?symbol&date&status`, WS kanál `setups.{symbol}`.
