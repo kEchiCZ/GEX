@@ -37,9 +37,11 @@ from gexlens_engine.instruments import (
     read_watchlist,
 )
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
+from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter
 from gexlens_engine.storage.retention import RetentionJob
+from gexlens_engine.storage.setups_store import SetupsRepository
 
 logger = logging.getLogger("gexlens.engine")
 
@@ -80,6 +82,7 @@ async def create_pipeline(
     writer: SnapshotWriter,
     oi_repository: OIEodRepository,
     symbol: str,
+    setups_repository: SetupsRepository | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
     front = await _resolve_front_future(ib, symbol)
@@ -232,6 +235,16 @@ async def create_pipeline(
         spot=spot,
         archive_contracts=archive_contracts,
         next_runtime=next_runtime,
+        setup_engine=(
+            SetupEngine(
+                symbol=symbol,
+                repository=setups_repository,
+                oi_repository=oi_repository,
+                publisher=publisher,
+            )
+            if setups_repository is not None
+            else None
+        ),
     )
 
     async def resubscribe() -> None:
@@ -274,6 +287,10 @@ async def main() -> None:
     await asyncio.to_thread(oi_repository.ensure_schema)
     watchlist_reader = WatchlistReader(db)
     await asyncio.to_thread(watchlist_reader.ensure_schema)
+    setups_repository: SetupsRepository | None = None
+    if settings.setups_enabled:
+        setups_repository = SetupsRepository(db)
+        await asyncio.to_thread(setups_repository.ensure_schema)
 
     retention = RetentionJob(settings)
     last_purge_date: dt.date | None = None
@@ -328,7 +345,14 @@ async def main() -> None:
         for symbol in plan.start:
             try:
                 pipelines[symbol] = await create_pipeline(
-                    ib, manager, settings, publisher, writer, oi_repository, symbol
+                    ib,
+                    manager,
+                    settings,
+                    publisher,
+                    writer,
+                    oi_repository,
+                    symbol,
+                    setups_repository=setups_repository,
                 )
             except InstrumentSetupError as exc:
                 setup_cooldown[symbol] = SETUP_RETRY_CYCLES

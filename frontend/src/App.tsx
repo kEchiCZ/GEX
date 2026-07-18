@@ -12,7 +12,10 @@ import { StatusBar } from './components/StatusBar'
 import { BottomPanels } from './components/BottomPanels'
 import { PlaybackBar } from './components/PlaybackBar'
 import { SettingsView } from './components/SettingsView'
+import { SetupCard } from './components/SetupCard'
+import { SetupsView } from './components/SetupsView'
 import { StrikeProfile } from './components/StrikeProfile'
+import { useSetups } from './hooks/useSetups'
 import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
 import type { HeatmapMode, HeatmapScale } from './heatmap/modes'
 import { visibleOverlays } from './heatmap/overlays'
@@ -143,6 +146,30 @@ function MainContent() {
     () => lastValue(day.spotSeries, playback.position),
     [day.spotSeries, playback.position],
   )
+  // Aktivní setupy (ADR-0004): karta nad grafem + úrovně entry/cíl/stop v heatmapě
+  const { setups } = useSetups()
+  const [dismissedSetups, setDismissedSetups] = useState<number[]>([])
+  const activeSetups = useMemo(
+    () =>
+      setups.filter((setup) => setup.status === 'active' && !dismissedSetups.includes(setup.id)),
+    [setups, dismissedSetups],
+  )
+  const setupLines = useMemo<LevelLine[]>(() => {
+    const minutes = grid.minutes
+    if (minutes === 0) return []
+    const line = (name: string, color: string, value: number): LevelLine => {
+      // Jen poslední minuta nese hodnotu — kreslí se horizontální projekce s cenovkou
+      const series: (number | null)[] = Array.from({ length: minutes }, () => null)
+      series[minutes - 1] = value
+      return { name, color, series, dash: [6, 5] }
+    }
+    return activeSetups.flatMap((setup) => [
+      line(`setup-entry-${setup.id}`, 'rgba(77,163,255,0.9)', setup.entry),
+      line(`setup-target-${setup.id}`, 'rgba(63,191,111,0.9)', setup.target),
+      line(`setup-stop-${setup.id}`, 'rgba(224,85,99,0.9)', setup.stop),
+    ])
+  }, [activeSetups, grid.minutes])
+
   // Σ souhrn přes expirace v pravém profilu (Kooperovo čtení celkového positioningu)
   const [aggregateOn, setAggregateOn] = useState(false)
   const aggregateRows = useAggregateProfile(
@@ -204,8 +231,12 @@ function MainContent() {
   }, [wallsMode, grid, allOverlays.levels])
 
   const overlays = useMemo(
-    () => ({ ...baseOverlays, walls: [...(baseOverlays.walls ?? []), ...computedWalls] }),
-    [baseOverlays, computedWalls],
+    () => ({
+      ...baseOverlays,
+      walls: [...(baseOverlays.walls ?? []), ...computedWalls],
+      levels: [...(baseOverlays.levels ?? []), ...setupLines],
+    }),
+    [baseOverlays, computedWalls, setupLines],
   )
 
   if (view === 'dashboard') {
@@ -224,6 +255,7 @@ function MainContent() {
       />
     )
   }
+  if (view === 'setups') return <SetupsView />
   if (view === 'console') return <Console />
   if (view === 'settings') return <SettingsView />
 
@@ -369,6 +401,10 @@ function MainContent() {
               onViewChange={setChartView}
               fitRange={fitRange}
               onLogicalSizeChange={setHeatSize}
+            />
+            <SetupCard
+              setups={activeSetups}
+              onDismiss={(id) => setDismissedSetups((previous) => [...previous, id])}
             />
             {day.source === 'demo' && (
               <div className="demo-banner" role="status">

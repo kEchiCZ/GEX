@@ -36,6 +36,7 @@ from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
 from gexlens_engine.config import Settings, load_settings
 from gexlens_engine.storage.oi_archive import OIEodRepository
+from gexlens_engine.storage.setups_store import SetupsRepository
 
 
 def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
@@ -77,6 +78,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not oi_repository_ref:
             oi_repository_ref.append(OIEodRepository(meta_repository.engine()))
         return oi_repository_ref[0]
+
+    setups_repository_ref: list[SetupsRepository] = []
+
+    def setups_repository() -> SetupsRepository:
+        if not setups_repository_ref:
+            repo = SetupsRepository(meta_repository.engine())
+            repo.ensure_schema()
+            setups_repository_ref.append(repo)
+        return setups_repository_ref[0]
 
     app = FastAPI(title="GEXLens API")
     # Frontend běží na jiném lokálním portu (nginx :8080, Vite dev :5173) —
@@ -184,6 +194,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def levels(symbol: str, expiry: str, date: dt.date) -> dict[str, object]:
         """Časové řady flip/walls/centroid (SPEC 4.2)."""
         return {"levels": _records(repository.levels(symbol, expiry, date))}
+
+    @app.get("/setups/{symbol}")
+    def setups_list(
+        symbol: str, date: dt.date | None = None, status: str | None = None
+    ) -> dict[str, object]:
+        """Historie setupů (ADR-0004): analýzy s automatickým vyhodnocením."""
+        try:
+            rows = setups_repository().list_for(symbol, date=date, status=status)
+        except Exception:
+            rows = []  # DB nedostupná — UI drží tvar
+        return {"symbol": symbol, "setups": rows}
+
+    @app.patch("/setups/{symbol}/{setup_id}/review")
+    def setups_review(symbol: str, setup_id: int, payload: dict[str, object]) -> dict[str, str]:
+        """Ruční hodnocení setupu (jediná povolená mutace; predikce je neměnná)."""
+        rating = payload.get("rating")
+        note = payload.get("note")
+        if rating is not None and rating not in (1, -1):
+            raise HTTPException(422, "rating musí být 1, -1 nebo null")
+        if note is not None and not isinstance(note, str):
+            raise HTTPException(422, "note musí být text")
+        if not setups_repository().review(
+            setup_id, rating if isinstance(rating, int) else None, note
+        ):
+            raise HTTPException(404, f"Setup {setup_id} neexistuje")
+        return {"status": "ok"}
 
     @app.get("/profile/{symbol}/aggregate")
     def profile_aggregate(symbol: str, date: dt.date) -> dict[str, object]:

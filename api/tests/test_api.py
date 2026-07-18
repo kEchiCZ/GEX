@@ -291,6 +291,52 @@ def test_profile_aggregate_sums_expiries(settings: Settings) -> None:
     assert rows[7590.0]["callVolume"] == 50.0
 
 
+def test_setups_list_and_review(settings: Settings) -> None:
+    """Setupy (ADR-0004): výpis historie a ruční hodnocení; predikce je jinak neměnná."""
+    from sqlalchemy import create_engine as sa_create_engine
+
+    from gexlens_engine.storage.setups_store import SetupsRepository
+
+    repo = SetupsRepository(sa_create_engine(settings.database_url))
+    repo.ensure_schema()
+    setup_id = repo.create(
+        symbol="ES",
+        expiry="20260716",
+        template="failed_break",
+        direction="long",
+        created_ts=dt.datetime.combine(DAY, dt.time(15, 0), tzinfo=dt.UTC),
+        entry=7501.0,
+        target=7515.0,
+        stop=7472.0,
+        confidence=55,
+        reason="Neúspěšný průraz 7500 dolů a reclaim — spring.",
+        context={"level": 7500.0},
+    )
+    client = TestClient(create_app(settings))
+
+    payload = client.get(f"/setups/ES?date={DAY.isoformat()}").json()
+    assert len(payload["setups"]) == 1
+    row = payload["setups"][0]
+    assert row["id"] == setup_id
+    assert row["template"] == "failed_break"
+    assert row["status"] == "active"
+    assert client.get("/setups/ES?status=closed_target").json()["setups"] == []
+    assert client.get("/setups/NQ").json()["setups"] == []
+
+    assert (
+        client.patch(
+            f"/setups/ES/{setup_id}/review", json={"rating": 1, "note": "vyšlo dle predikce"}
+        ).status_code
+        == 200
+    )
+    reviewed = client.get("/setups/ES").json()["setups"][0]
+    assert reviewed["user_rating"] == 1
+    assert reviewed["user_note"] == "vyšlo dle predikce"
+
+    assert client.patch("/setups/ES/99999/review", json={"rating": 1}).status_code == 404
+    assert client.patch(f"/setups/ES/{setup_id}/review", json={"rating": 5}).status_code == 422
+
+
 def test_status_store(client: TestClient) -> None:
     assert client.get("/status").json()["engine"] == "offline"
     client.app.state.status_store.update(engine="online", greeks_complete=350, greeks_total=360)  # type: ignore[attr-defined]
