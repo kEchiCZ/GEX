@@ -274,6 +274,23 @@ def test_replay_bundle_oi_prev(settings: Settings) -> None:
     assert by_key[(7600.0, "C")] == 456.0
 
 
+def test_profile_aggregate_sums_expiries(settings: Settings) -> None:
+    """Σ profil: OI/volume se sčítají přes všechny expirace dne per strike a strana."""
+    writer = SnapshotWriter(settings)
+    writer.write_minute("ES", "20260717", DAY, snapshot_rows(0))  # druhá expirace, stejné hodnoty
+    client = TestClient(create_app(settings))
+
+    payload = client.get(f"/profile/ES/aggregate?date={DAY.isoformat()}").json()
+    assert sorted(payload["expiries"]) == ["20260716", "20260717"]
+    rows = {row["strike"]: row for row in payload["rows"]}
+    # Fixture: strike 7590 (i=0) má call OI 100/expiraci; poslední minuta obou expirací
+    # se liší (základní má 3 minuty, druhá 1) — OI je konstantní, volume z poslední minuty
+    assert rows[7590.0]["callOi"] == 200.0  # 100 + 100 přes dvě expirace
+    assert rows[7590.0]["putOi"] == 300.0  # 150 + 150
+    # Volume: základní expirace poslední minuta (m=2): 10*3*1+5=35; druhá (m=0): 10*1*1+5=15
+    assert rows[7590.0]["callVolume"] == 50.0
+
+
 def test_status_store(client: TestClient) -> None:
     assert client.get("/status").json()["engine"] == "offline"
     client.app.state.status_store.update(engine="online", greeks_complete=350, greeks_total=360)  # type: ignore[attr-defined]

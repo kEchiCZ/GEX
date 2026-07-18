@@ -45,6 +45,8 @@ export function StrikeProfile({
   height = 640,
   width = 260,
   yView = null,
+  aggregate = null,
+  onAggregateToggle,
 }: {
   rows: ProfileRow[]
   spot: number | null
@@ -53,6 +55,9 @@ export function StrikeProfile({
   width?: number
   /** Sdílená Y transformace s heatmapou; null = vlastní statické rozložení. */
   yView?: ProfileYView | null
+  /** Σ souhrn přes expirace: null = přepínač skrytý, jinak stav zapnuto/vypnuto. */
+  aggregate?: boolean | null
+  onAggregateToggle?: () => void
 }) {
   const [zoom, setZoom] = useState<1 | 2 | 4>(1)
   const { position: crosshair, setPosition: setCrosshair } = useCrosshair()
@@ -97,8 +102,18 @@ export function StrikeProfile({
   return (
     <aside className="strike-profile" aria-label="Strike profil" style={{ width }}>
       <div className="profile-header">
-        <span className="muted">Vol + OI Δ</span>
+        <span className="muted">{aggregate ? 'Vol + OI Δ · Σ expirací' : 'Vol + OI Δ'}</span>
         <div role="toolbar" aria-label="Zoom profilu">
+          {aggregate !== null && (
+            <button
+              className={aggregate ? 'chip active' : 'chip'}
+              onClick={onAggregateToggle}
+              aria-label="Souhrn přes expirace"
+              title="Σ = součet OI + volume přes všechny sbírané expirace"
+            >
+              Σ
+            </button>
+          )}
           {([1, 2, 4] as const).map((value) => (
             <button
               key={value}

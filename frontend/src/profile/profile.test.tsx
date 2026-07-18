@@ -1,6 +1,6 @@
 /** Testy strike profil panelu (issue #25): geometrie, orientace, zoom, crosshair sync. */
 import { fireEvent, render, screen } from '@testing-library/react'
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import { StrikeProfile } from '../components/StrikeProfile'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
 import { barGeometry } from './bars'
@@ -145,6 +145,43 @@ test('osa množství: hodnoty stran, Put/Call popisky a vliv zoomu', () => {
   expect(panel().textContent).toContain('Call')
   fireEvent.click(screen.getByRole('button', { name: '2×' })) // zoom → plná šířka = polovina
   expect(ticks()).toEqual(['30', '15', '0', '15', '30'])
+})
+
+test('Σ přepínač: viditelný jen s aggregate prop, mění hlavičku a volá callback', () => {
+  const onToggle = vi.fn()
+  const { rerender } = render(
+    <CrosshairProvider>
+      <StrikeProfile
+        rows={rows()}
+        spot={7595}
+        height={200}
+        aggregate={false}
+        onAggregateToggle={onToggle}
+      />
+    </CrosshairProvider>,
+  )
+  fireEvent.click(screen.getByLabelText('Souhrn přes expirace'))
+  expect(onToggle).toHaveBeenCalledOnce()
+
+  rerender(
+    <CrosshairProvider>
+      <StrikeProfile
+        rows={rows()}
+        spot={7595}
+        height={200}
+        aggregate={true}
+        onAggregateToggle={onToggle}
+      />
+    </CrosshairProvider>,
+  )
+  expect(screen.getByText('Vol + OI Δ · Σ expirací')).toBeDefined()
+
+  rerender(
+    <CrosshairProvider>
+      <StrikeProfile rows={rows()} spot={7595} height={200} aggregate={null} />
+    </CrosshairProvider>,
+  )
+  expect(screen.queryByLabelText('Souhrn přes expirace')).toBeNull() // demo data — bez Σ
 })
 
 // ── Crosshair sync + tooltip ───────────────────────────────────────
