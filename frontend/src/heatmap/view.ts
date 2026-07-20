@@ -13,6 +13,26 @@ export const DEFAULT_VIEW: ViewTransform = { offsetX: 0, offsetY: 0, zoomX: 1, z
 export const ZOOM_MIN = 0.2
 export const ZOOM_MAX = 32
 
+/** Strop základní šířky koše v px — málo dat se neroztahuje na celou šířku (TradingView). */
+export const BUCKET_MAX_PX = 12
+/** Odsazení posledního koše od pravého okraje ve výchozím pohledu. */
+export const TIME_RIGHT_MARGIN_PX = 60
+
+/** Základní šířka jednoho time-bucketu v px (zoomX = 1): fit-to-width, nejvýš BUCKET_MAX_PX.
+
+Plný den dat vyplní šířku jako dřív; po startu s pár minutami dostane svíčka
+fixní šířku místo roztažení přes celý canvas.
+*/
+export function baseBucketPx(minutes: number, canvasWidth: number): number {
+  return Math.min(canvasWidth / Math.max(1, minutes), BUCKET_MAX_PX)
+}
+
+/** Výchozí offsetX: data užší než canvas se ukotví k pravému okraji s odsazením. */
+export function homeOffsetX(minutes: number, canvasWidth: number): number {
+  const plotWidth = minutes * baseBucketPx(minutes, canvasWidth)
+  return Math.max(0, canvasWidth - TIME_RIGHT_MARGIN_PX - plotWidth)
+}
+
 function clampZoom(value: number): number {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value))
 }

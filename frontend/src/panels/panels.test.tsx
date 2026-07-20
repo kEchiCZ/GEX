@@ -119,6 +119,19 @@ test('checkboxy v horní liště řídí panely (integrace přes App)', async ()
   expect(screen.getByLabelText('Opt Vol panel')).toBeDefined() // ostatní zůstávají
 })
 
+test('málo košů se neroztahuje na šířku — ukotvení k pravému okraji (issue #102)', () => {
+  const socket = new LiveSocket('ws://test/ws/live', {
+    webSocketFactory: (url) => new FakeWebSocket(url),
+  })
+  render(<App socket={socket} />)
+  const volGroup = () => screen.getByLabelText('Vol panel').querySelector('g')!
+  // 1m: demo den 390 minut vyplní šířku → fit-to-width beze změny (offset 0)
+  expect(volGroup().getAttribute('transform')).toBe('translate(0 0) scale(1 1)')
+  // 1h: 7 košů × 12 px (strop) → data u pravého okraje: 1200 − 60 − 7×12 = 1056
+  fireEvent.click(screen.getByRole('button', { name: '1h' }))
+  expect(volGroup().getAttribute('transform')).toBe('translate(1056 0) scale(1 1)')
+})
+
 // ── Crosshair sdílený s heatmapou ──────────────────────────────────
 
 function Reader() {
@@ -138,14 +151,14 @@ test('pohyb v panelu nastaví minutu crosshairu; linka se kreslí ve všech pane
     </CrosshairProvider>,
   )
   const volSvg = screen.getByLabelText('Vol panel').querySelector('svg')!
-  // šířka 400, 4 minuty → krok 100; x=250 → minuta 2
-  fireEvent.pointerMove(volSvg, { clientX: 250, clientY: 40 })
+  // 4 minuty → krok zastropovaný na 12 px (BUCKET_MAX_PX); x=30 → minuta 2
+  fireEvent.pointerMove(volSvg, { clientX: 30, clientY: 40 })
 
   expect(screen.getByTestId('reader').textContent).toBe('2')
   const lines = screen.getAllByTestId('panel-crosshair')
   expect(lines).toHaveLength(3) // sdílená osa X — linka ve všech panelech
   for (const line of lines) {
-    expect(Number(line.getAttribute('x1'))).toBe(250)
+    expect(Number(line.getAttribute('x1'))).toBe(30) // (2+0.5) × 12
   }
 })
 
@@ -164,7 +177,7 @@ test('panely respektují pan/zoom časové osy hlavního grafu (prop time)', () 
   const svg = screen.getByLabelText('Vol panel').querySelector('svg')!
   // Obsah je v transformované skupině — stejné mapování jako heatmapa
   expect(svg.querySelector('g')?.getAttribute('transform')).toBe('translate(40 0) scale(2 1)')
-  // Inverze ukazatele: x=250 → base (250-40)/2 = 105 → minuta 1 (krok 100)
-  fireEvent.pointerMove(svg, { clientX: 250, clientY: 40 })
+  // Inverze ukazatele: x=76 → base (76-40)/2 = 18 → minuta 1 (krok 12)
+  fireEvent.pointerMove(svg, { clientX: 76, clientY: 40 })
   expect(screen.getByTestId('reader').textContent).toBe('1')
 })

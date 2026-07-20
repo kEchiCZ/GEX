@@ -25,7 +25,15 @@ import {
   tickIndices,
 } from '../heatmap/overlays'
 import type { OverlayData, PriceStyle } from '../heatmap/overlays'
-import { DEFAULT_VIEW, axisZoneAt, fitPriceView, zoomAxis, zoomBoth } from '../heatmap/view'
+import {
+  DEFAULT_VIEW,
+  axisZoneAt,
+  baseBucketPx,
+  fitPriceView,
+  homeOffsetX,
+  zoomAxis,
+  zoomBoth,
+} from '../heatmap/view'
 import type { AxisZone, ViewTransform } from '../heatmap/view'
 import { nearestAnnotationId } from '../annotations/model'
 import type {
@@ -102,12 +110,14 @@ export function Heatmap({
   useEffect(() => {
     onLogicalSizeChange?.(size)
   }, [size, onLogicalSizeChange])
-  // Výchozí pohled: fit cenového pásma na skutečnou výšku canvasu (hi-DPI, resize)
-  const homeView = useMemo(
-    () =>
-      fitRange ? fitPriceView(grid.strikes, fitRange.low, fitRange.high, logicalH) : DEFAULT_VIEW,
-    [fitRange, grid.strikes, logicalH],
-  )
+  // Výchozí pohled: fit cenového pásma na skutečnou výšku canvasu (hi-DPI, resize);
+  // osa X ukotvená k pravému okraji, když data nevyplní šířku (TradingView styl)
+  const homeView = useMemo(() => {
+    const base = fitRange
+      ? fitPriceView(grid.strikes, fitRange.low, fitRange.high, logicalH)
+      : DEFAULT_VIEW
+    return { ...base, offsetX: homeOffsetX(grid.minutes, logicalW) }
+  }, [fitRange, grid.strikes, grid.minutes, logicalH, logicalW])
   // Nový dataset / cenové pásmo → automaticky napasovat pohled
   useEffect(() => {
     setView(() => homeView)
@@ -134,7 +144,7 @@ export function Heatmap({
 
   /** Převod dat → obrazovka v logických CSS px (sdílený pro data i overlay canvas). */
   const mapping = useCallback(() => {
-    const scaleX = (logicalW / grid.minutes) * view.zoomX
+    const scaleX = baseBucketPx(grid.minutes, logicalW) * view.zoomX
     const scaleY = (logicalH / strikeCount) * view.zoomY
     return {
       scaleX,
@@ -187,7 +197,7 @@ export function Heatmap({
     context.setTransform(1, 0, 0, 1, 0, 0)
     context.clearRect(0, 0, canvas.width, canvas.height)
     context.imageSmoothingEnabled = true // bilineární interpolace Gradient stylu
-    const scaleX = (logicalW / offscreen.width) * view.zoomX
+    const scaleX = baseBucketPx(offscreen.width, logicalW) * view.zoomX
     const scaleY = (logicalH / offscreen.height) * view.zoomY
     context.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, dpr * view.offsetX, dpr * view.offsetY)
     context.drawImage(offscreen, 0, 0)

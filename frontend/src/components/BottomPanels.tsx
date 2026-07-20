@@ -10,6 +10,7 @@ počítá v základním měřítku a transformuje <g>, takže crosshair i sloupc
 pod heatmapou pixel-přesně. SVG má viewBox + preserveAspectRatio="none" —
 CSS roztažení škáluje obsah stejně jako canvas heatmapy.
 */
+import { baseBucketPx } from '../heatmap/view'
 import { barHeights, cumDeltaAreas } from '../panels/geometry'
 import { useCrosshair } from '../state/Crosshair'
 
@@ -49,7 +50,7 @@ const COLORS = {
 
 function usePanelPointer(minutes: number, width: number, time: TimeTransform) {
   const { position, setPosition } = useCrosshair()
-  const step = width / Math.max(1, minutes)
+  const step = baseBucketPx(minutes, width)
   const onPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
     const rect = event.currentTarget.getBoundingClientRect()
     const cssScale = rect.width > 0 ? width / rect.width : 1
@@ -96,7 +97,8 @@ export function BottomPanels({
 }) {
   const minutes = data.vol.length
   const pointer = usePanelPointer(minutes, width, time)
-  const step = width / Math.max(1, minutes)
+  // Stejné základní měřítko jako heatmapa — málo dat se neroztahuje na šířku
+  const step = baseBucketPx(minutes, width)
   const barWidth = Math.max(0.5, step * 0.8)
   const transform = `translate(${time.offsetX} 0) scale(${time.zoomX} 1)`
 
@@ -222,7 +224,7 @@ export function BottomPanels({
   }
 
   if (visible.delta) {
-    const areas = cumDeltaAreas(data.cumDelta, width, PANEL_HEIGHT)
+    const areas = cumDeltaAreas(data.cumDelta, minutes * step, PANEL_HEIGHT)
     panels.push(
       <section key="cumdelta" className="bottom-panel" aria-label="Cum Δ panel">
         <span className="panel-title muted">Cum Δ</span>
