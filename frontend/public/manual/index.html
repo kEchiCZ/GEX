@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.2 · červenec 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.3 · červenec 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -166,6 +166,10 @@ docker compose up -d        # start na pozadí
 <td>Roztahování/stahování cenové osy — zvětší/zmenší svíčky svisle</td>
 </tr>
 <tr>
+<td>Tažení / kolečko na <strong>pravém panelu</strong> (profil)</td>
+<td><strong>Ovládá stejnou cenovou osu Y</strong> jako levý okraj — táhni svisle nebo kolečkuj přímo nad profilem (kurzor ↕)</td>
+</tr>
+<tr>
 <td>Tažení za pruh osy X (spodní okraj)</td>
 <td>Roztahování/stahování časové osy — zvětší/zmenší svíčky vodorovně (kotva u pravého okraje: poslední svíčka drží pozici)</td>
 </tr>
@@ -179,9 +183,11 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td>Pohyb myší</td>
-<td>Crosshair — svislá/vodorovná linka synchronizovaná se strike profilem i spodními panely + tooltip buňky (minuta, strike, hodnoty call/put)</td>
+<td>Crosshair — svislá linka snapnutá na svíčku, vodorovná sleduje kurzor; synchronizovaný se strike profilem i spodními panely + tooltip buňky (minuta, strike, hodnoty call/put)</td>
 </tr>
 </tbody></table>
+<p>Crosshair navíc ukazuje <strong>osové štítky jako TradingView</strong>: dole na ose X <strong>datum + čas</strong> pod svislou linkou, vpravo na ose Y <strong>cenu</strong> na úrovni kurzoru. Cena je zaokrouhlená na <strong>minimální tick instrumentu</strong> (ES/NQ = 0,25) — mezi 7530,00 a 7530,25 tedy nic není. Crosshair <strong>zůstává viditelný i mimo svíce</strong> — když posuneš graf a jedeš myší přes prázdnou/budoucí plochu, nezmizí.</p>
+<p><strong>Pohled se nesmýká sám.</strong> Graf se automaticky napasuje (fit na cenové pásmo + ukotvení historie) <strong>jen při změně datasetu</strong> — jiný symbol, expirace, timeframe nebo den. Resize pravého panelu, živý přírůstek minut ani úprava os <strong>tvůj pan/zoom nepřepíšou</strong>. Kdykoli se vrátíš na napasovaný pohled dvojklikem nebo tlačítkem ⟲.</p>
 <p>Spodní panely (Vol / Opt Vol / Cum Δ) <strong>sledují časovou osu heatmapy</strong> — při posunu či zoomu osy X se roztahují synchronně.</p>
 <h3>Mode — sedm metrik heatmapy</h3>
 <p>Select <strong>Mode</strong> přepíná, co buňky zobrazují (přepočet je okamžitý, bez čekání na server; dostupné nad živými/replay daty):</p>
@@ -303,7 +309,7 @@ docker compose up -d        # start na pozadí
 <li><strong>Svíčky</strong> (výchozí) — plnohodnotné OHLC svíčky (knot high–low, tělo open–close) v rozlišení zvoleného timeframe.</li>
 <li><strong>Křivka</strong> — spojitá linie zbarvená podle směru ticku (zelená nahoru, červená dolů).</li>
 </ul>
-<p>Graf se při načtení <strong>automaticky napasuje na cenové pásmo dne</strong> (svíčky vyplní výšku); okolní zóny heatmapy dosáhneš tažením/kolečkem za osu Y, reset vrací napasovaný pohled.</p>
+<p>Graf se při načtení <strong>automaticky napasuje na cenové pásmo dne</strong> (svíčky vyplní výšku); okolní zóny heatmapy dosáhneš tažením/kolečkem za osu Y, reset vrací napasovaný pohled. Po startu s <strong>málem dat</strong> (ráno) mají svíčky <strong>fixní šířku</strong> ukotvenou k pravému okraji — neroztahují se přes celý graf jako dřív.</p>
 <p>Posuvníkem <strong>Viditelnost</strong> (10–100 %) cenovou vrstvu zeslabíš, aby nepřebíjela heatmapu pod ní — užitečné hlavně u svíček. <strong>Štítek aktuální ceny zůstává vždy plně viditelný.</strong></p>
 <p><img src="img/svicky.png" alt="Svíčkový režim"></p>
 <hr>
@@ -312,12 +318,15 @@ docker compose up -d        # start na pozadí
 <ul>
 <li><strong>Call doprava (teal), put doleva (červená)</strong> od symetrické osy; popisky <strong>Put/Call</strong> nahoře</li>
 <li>Každý pruh má dvě složky odlišené sytostí: <strong>Vol</strong> (sytá) a <strong>OI Δ</strong> (světlejší)</li>
+<li>U konce pruhů jsou <strong>číselné hodnoty</strong> (Δ-vážené kontrakty) — na každém k-tém řádku, ať se nepřekrývají. Pruhy končí kousek před okrajem, takže nepřetékají mimo panel.</li>
 <li>Dole <strong>osa množství</strong> (Δ-vážené kontrakty, formát „5k&quot;) — vidíš, jak velké zdi reálně jsou; měřítko reaguje na zoom</li>
 <li><strong>Žlutá přerušovaná linka</strong> = aktuální cena</li>
+<li>Tlačítko <strong>Rel / Abs</strong> přepíná měřítko: <strong>Rel</strong> = normalizace na největší pruh ve výřezu (výchozí), <strong>Abs</strong> = zaokrouhlený „hezký&quot; strop (kulaté hodnoty na ose, stabilnější délky pruhů mezi snímky)</li>
 <li>Tlačítka <strong>1× / 2× / 4×</strong> zvětšují měřítko pruhů</li>
 <li>Tlačítko <strong>Σ</strong> = souhrn přes všechny sbírané expirace tohoto instrumentu (pondělní + úterní řetěz…). Hlavička se změní na „Σ expirací&quot;; heatmapa zůstává u zvolené expirace. Celkový positioning bez přepínání.</li>
 <li>Najetí myší na řádek zvýrazní strike v celé aplikaci (crosshair) a dole zobrazí <strong>tooltip</strong>: OI call/put, Vol call/put, <strong>ΔOI vs. včera C/P</strong> (kde přes noc přibyly/ubyly pozice; jen per expirace, v Σ režimu se neukazuje), vzdálenost od spotu</li>
-<li><strong>Šířku panelu změníš tažením předělu</strong> mezi grafem a panelem (kurzor ↔, rozsah 180–640 px)</li>
+<li><strong>Šířku panelu změníš tažením předělu</strong> mezi grafem a panelem (kurzor ↔). Panel jde roztáhnout hodně doleva (až ~360 px zbyde na graf), aby byla vidět celá délka pruhu i s číslem.</li>
+<li><strong>Profilem ovládáš i cenovou osu Y grafu</strong> — tažení svisle nebo kolečko nad profilem stlačuje/roztahuje ceny stejně jako levý okraj heatmapy (kurzor ↕).</li>
 </ul>
 <p>Čteš z něj na první pohled, <strong>kde sedí dominantní call a put koncentrace</strong> — typicky walls.</p>
 <hr>
@@ -347,7 +356,11 @@ docker compose up -d        # start na pozadí
 <td>Kumulativní delta flow jako plocha <strong>nad nulou (zelená) / pod nulou (červená)</strong>. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Počítá se s plnou klasifikací agresora (tick-by-tick v hot zóně, midpoint test jinde) a resetuje se na začátku dne.</td>
 </tr>
 </tbody></table>
-<p>Pohyb myší v kterémkoli panelu hýbe crosshairem ve všech panelech i heatmapě.</p>
+<p>Pohyb myší v kterémkoli panelu hýbe crosshairem ve všech panelech i heatmapě. Při najetí navíc uvidíš <strong>hodnoty ukazatele</strong>:</p>
+<ul>
+<li><strong>vpravo nahoře</strong> hodnotu pro <strong>minutu pod crosshairem</strong> (Opt Vol a Δ Flow zvlášť C/P);</li>
+<li><strong>vpravo na ose Y</strong> hodnotu podle <strong>výškové úrovně kurzoru</strong> (ne max daného času) + <strong>vodorovnou crosshair linku</strong> na té úrovni. U Cum Δ je škála znaménková kolem nuly.</li>
+</ul>
 <hr>
 <h2>9. Playback — přehrávání dne</h2>
 <p><strong>Aplikace defaultně jede vždy live</strong> — replay lišta je skrytá, aby nerušila. Zobrazíš ji tlačítkem <strong>⏮ Replay</strong> v liště grafu:</p>
@@ -437,6 +450,7 @@ docker compose up -d        # start na pozadí
 <hr>
 <h2>14. Notifikace a alerty</h2>
 <p><strong>Zvonek</strong> v hlavičce ukazuje badge s počtem nepřečtených alertů; kliknutím otevřeš historii (otevření badge vynuluje). Alerty chodí i za běhu do IBKR Console logu.</p>
+<p>Zvonek je <strong>globální — sbírá alerty napříč všemi instrumenty</strong> ve watchlistu, ne jen z toho na grafu. Proto je u každého alertu <strong>datum + čas</strong> notifikace a <strong>symbol instrumentu</strong> (např. <code>[NQ · setup]</code>). Naproti tomu <strong>karty a linie setupů přímo v grafu jsou jen pro instrument, který máš zobrazený.</strong></p>
 <p>Druhy alertů:</p>
 <table>
 <thead>
@@ -477,7 +491,13 @@ docker compose up -d        # start na pozadí
 <td>Obálka na stropu</td>
 <td>Pásmo strikes dosáhlo maxima šířky — vzdálený okraj se posouvá za cenou</td>
 </tr>
+<tr>
+<td><strong>Nový setup</strong></td>
+<td>Detektor našel obchodní setup (odraz od zdi / neúspěšný průraz / Max Pain pin / gamma momentum)</td>
+</tr>
 </tbody></table>
+<h3>Setupy</h3>
+<p>Když detektor najde setup, přijde alert <strong>Nový setup</strong> a nad grafem se ukáže <strong>karta setupu</strong> pro daný instrument: směr (LONG/SHORT), šablona, <strong>datum a čas vzniku</strong> (kdy se splnily podmínky), úrovně <strong>Entry / Cíl / Stop</strong>, RRR a důvěra, plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce <strong>Setupy</strong> v sidebaru.</p>
 <hr>
 <h2>15. Stavová lišta — co znamenají údaje</h2>
 <table>
