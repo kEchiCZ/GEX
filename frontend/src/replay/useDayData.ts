@@ -18,6 +18,9 @@ import type { ReplayDay } from './loader'
 /** Daily pohled: strop stažených dnů (retence snapshotů je 14 dní, R4). */
 const DAILY_MAX_DAYS = 14
 
+/** Interval živého přenačtení intraday balíku (sladěno s minutovým cyklem enginu). */
+const LIVE_REFETCH_MS = 60_000
+
 export interface DayData {
   source: 'replay' | 'demo'
   grid: HeatmapGrid
@@ -101,6 +104,14 @@ export function useDayData(
   }, [symbol, expiry, date])
 
   const [retry, setRetry] = useState(0)
+  // Živé přenačtení: tik každou minutu vynutí refetch balíku (engine dál produkuje data).
+  // Bezpečné vůči pohledu — auto-fit se drží na resetKey (viz Heatmap #118), refetch ho neresetuje.
+  const [liveTick, setLiveTick] = useState(0)
+  useEffect(() => {
+    if (timeframe !== 'intraday') return
+    const id = setInterval(() => setLiveTick((n) => n + 1), LIVE_REFETCH_MS)
+    return () => clearInterval(id)
+  }, [timeframe])
 
   useEffect(() => {
     if (!expiry || timeframe !== 'intraday') return
@@ -108,6 +119,7 @@ export function useDayData(
     let timer: ReturnType<typeof setTimeout> | null = null
     fetchReplay(symbol, expiry, date)
       .then((day) => {
+        // Prázdný den (0 minut) nesmí přepsat poslední živý stav při přechodném výpadku
         if (!cancelled && day.grid.minutes > 0) setReplay(day)
       })
       .catch(() => {
@@ -118,7 +130,7 @@ export function useDayData(
       cancelled = true
       if (timer !== null) clearTimeout(timer)
     }
-  }, [symbol, expiry, date, timeframe, retry])
+  }, [symbol, expiry, date, timeframe, retry, liveTick])
 
   useEffect(() => {
     if (timeframe !== 'daily') return
