@@ -9,7 +9,7 @@ import type { LiveSocket, ChannelData } from '../api/ws'
 import { demoGrid, demoOverlays, demoPanels, demoProfile } from '../heatmap/demo'
 import type { HeatmapGrid } from '../heatmap/grid'
 import type { RawDay } from '../heatmap/modes'
-import type { OverlayData } from '../heatmap/overlays'
+import type { OverlayData, PriceBar } from '../heatmap/overlays'
 import type { ProfileRow } from '../profile/bars'
 import { autoSessions } from '../instrument/sessions'
 import { buildDailyDay } from './daily'
@@ -38,6 +38,43 @@ function minuteKey(value: unknown): string {
 
 function numOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** Rozdělaná svíčka aktuální (neuzavřené) minuty z živého spotu (#128). */
+interface FormingBar {
+  minuteIso: string
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
+/** Čas na začátek minuty (UTC) — sladí spot ts s klíči minut (ts_min). */
+function floorMinuteIso(value: unknown): string {
+  const date = new Date(String(value))
+  if (Number.isNaN(date.getTime())) return String(value)
+  date.setUTCSeconds(0, 0)
+  return date.toISOString()
+}
+
+/** Přidá rozdělanou svíčku na náběžnou hranu (jen je-li její minuta za posledními daty). */
+function withForming(day: ReplayDay, forming: FormingBar | null): ReplayDay {
+  if (!forming) return day
+  const lastMinute = day.minutes.at(-1)
+  if (lastMinute !== undefined && forming.minuteIso <= lastMinute) return day // už uzavřená minuta
+  const bar: PriceBar = {
+    minuteIdx: day.grid.minutes, // jeden koš za posledním uzavřeným → náběžná hrana
+    open: forming.open,
+    high: forming.high,
+    low: forming.low,
+    close: forming.close,
+    up: forming.close >= forming.open,
+  }
+  return {
+    ...day,
+    minutes: [...day.minutes, forming.minuteIso],
+    overlays: { ...day.overlays, price: [...(day.overlays.price ?? []), bar] },
+  }
 }
 
 export interface DayData {
@@ -116,12 +153,20 @@ export function useDayData(
   const fallback = useMemo(() => demoDay(), [])
   const [inputs, setInputs] = useState<ReplayInputs | null>(null)
   const [daily, setDaily] = useState<DayData | null>(null)
+  // Živý spot (#128): rozdělaná svíčka aktuální minuty (aktualizuje se sub-sekundově)
+  const [forming, setForming] = useState<FormingBar | null>(null)
 
   // Změna instrumentu/expirace: starý dataset nesmí přežít (jiný symbol → demo/nový fetch)
   useEffect(() => {
     setInputs(null)
     setDaily(null)
+    setForming(null)
   }, [symbol, expiry, date])
+
+  // Jakmile se rozdělaná minuta uzavře (dorazí její snapshot), přestává být rozdělaná
+  useEffect(() => {
+    if (forming && inputs?.minutes.includes(forming.minuteIso)) setForming(null)
+  }, [inputs, forming])
 
   const [retry, setRetry] = useState(0)
   // Hodinová pojistka: plný refetch srovná mezery / OI archiv / stale opravy (#127).
@@ -228,15 +273,33 @@ export function useDayData(
       part(minuteKey(data.ts_min)).flow = { cum_delta: Number(data.cum_delta) || 0 }
       scheduleFlush()
     }
+    // Živý spot (#128): rozdělaná svíčka aktuální minuty — jen overlay, bez přepočtu gridu
+    const onSpot = (data: ChannelData) => {
+      const price = Number(data.price)
+      if (!Number.isFinite(price)) return
+      const minuteIso = floorMinuteIso(data.ts)
+      setForming((prev) =>
+        prev && prev.minuteIso === minuteIso
+          ? {
+              ...prev,
+              high: Math.max(prev.high, price),
+              low: Math.min(prev.low, price),
+              close: price,
+            }
+          : { minuteIso, open: price, high: price, low: price, close: price },
+      )
+    }
 
     const snapshotCh = `snapshot.${symbol}.${expiry}`
     const priceCh = `price.${symbol}`
     const levelsCh = `levels.${symbol}.${expiry}`
     const flowCh = `flow.${symbol}`
+    const spotCh = `spot.${symbol}`
     socket.subscribe(snapshotCh, onSnapshot)
     socket.subscribe(priceCh, onPrice)
     socket.subscribe(levelsCh, onLevels)
     socket.subscribe(flowCh, onFlow)
+    socket.subscribe(spotCh, onSpot)
     // Reconnect: dofetchni celý balík (mohli jsme zmeškat minuty)
     const offReconnect = socket.onReconnect(() => setReconcileTick((n) => n + 1))
     return () => {
@@ -245,6 +308,7 @@ export function useDayData(
       socket.unsubscribe(priceCh, onPrice)
       socket.unsubscribe(levelsCh, onLevels)
       socket.unsubscribe(flowCh, onFlow)
+      socket.unsubscribe(spotCh, onSpot)
       offReconnect()
     }
   }, [symbol, expiry, timeframe, socket])
@@ -274,11 +338,11 @@ export function useDayData(
     }
   }, [symbol, timeframe])
 
-  // Stabilní identita výsledku: bez memoizace by každý render vyrobil nový
-  // objekt a efekty závislé na datech (např. cena v hlavičce) by se točily
+  // Grid se skládá jen při změně dat (drahé); rozdělaná svíčka je levná vrstva nad ním.
+  const baseReplay = useMemo(() => (inputs ? assembleReplayDay(inputs) : null), [inputs])
   const replayDay = useMemo(
-    () => (inputs ? replayToDay(assembleReplayDay(inputs)) : null),
-    [inputs],
+    () => (baseReplay ? replayToDay(withForming(baseReplay, forming)) : null),
+    [baseReplay, forming],
   )
   if (timeframe === 'daily') return daily ?? fallback
   return replayDay ?? fallback
