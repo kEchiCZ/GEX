@@ -311,6 +311,16 @@ body {
   pointer-events: none;
 }
 
+.panel-value {
+  position: absolute;
+  top: 2px;
+  right: 8px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  pointer-events: none;
+}
+
 .playback-bar input[type='range'] {
   flex: 1;
   accent-color: var(--accent);

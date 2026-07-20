@@ -48,6 +48,9 @@ import { useCrosshair } from '../state/Crosshair'
 const UP_COLOR = '#3ecf8e'
 const DOWN_COLOR = '#f0616d'
 const LEVEL_DEFAULT_COLOR = '#e8c14b'
+// Osové labely crosshairu (TradingView styl): tmavý box, světlý text
+const AXIS_LABEL_BG = '#363c4a'
+const AXIS_LABEL_FG = '#e6e9ef'
 
 export function Heatmap({
   grid,
@@ -66,6 +69,7 @@ export function Heatmap({
   onViewChange,
   fitRange = null,
   onLogicalSizeChange,
+  dateLabel,
 }: {
   grid: HeatmapGrid
   style: HeatmapStyle
@@ -88,6 +92,8 @@ export function Heatmap({
   fitRange?: { low: number; high: number } | null
   /** Hlášení logické velikosti (CSS px) — pravý profil sdílí Y měřítko. */
   onLogicalSizeChange?: (size: { width: number; height: number }) => void
+  /** Datum grafu (intraday) — prefix časového labelu crosshairu na ose X. */
+  dateLabel?: string
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -127,6 +133,8 @@ export function Heatmap({
   const dragRef = useRef<{ x: number; y: number; mode: 'pan' | 'scale-x' | 'scale-y' } | null>(null)
   const [axisHover, setAxisHover] = useState<AxisZone>(null)
   const [draft, setDraft] = useState<AnnotationPoint[] | null>(null)
+  // Surová pozice kurzoru (CSS px) — osové labely crosshairu (cena na Y je spojitá)
+  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null)
   const { position: crosshair, setPosition: setCrosshair } = useCrosshair()
 
   const strikeCount = grid.strikes.length
@@ -210,7 +218,7 @@ export function Heatmap({
     if (!canvas) return
     const context = canvas.getContext('2d')
     if (!context) return
-    const { minuteToX, rowToY, scaleX, scaleY } = mapping()
+    const { minuteToX, rowToY, scaleX, scaleY, screenToDataPoint } = mapping()
     // Kreslení v logických CSS px; raster je dpr× větší → ostré popisky (hi-DPI)
     context.setTransform(dpr, 0, 0, dpr, 0, 0)
     context.clearRect(0, 0, logicalW, logicalH)
@@ -354,19 +362,24 @@ export function Heatmap({
       const x = minuteToX(crosshair.minuteIdx)
       context.strokeStyle = 'rgba(215,220,230,0.55)'
       context.lineWidth = 1
+      // Svislá linka snapnutá na svíčku (bar)
       context.beginPath()
       context.moveTo(x, 0)
       context.lineTo(x, logicalH)
+      context.stroke()
+      // Vodorovná linka sleduje kurzor (spojitá cena) — jen při najetí na plochu grafu
+      if (pointer) {
+        context.beginPath()
+        context.moveTo(0, pointer.y)
+        context.lineTo(logicalW, pointer.y)
+        context.stroke()
+      }
+      // Zvýraznění buňky pod kurzorem (snapnutý strike)
       const row = crosshair.strike === null ? -1 : grid.strikes.indexOf(crosshair.strike)
       if (row >= 0) {
         const y = rowToY(row)
-        context.moveTo(0, y)
-        context.lineTo(logicalW, y)
-        context.stroke()
         context.strokeStyle = 'rgba(215,220,230,0.9)'
         context.strokeRect(x - 0.5 * scaleX, y - 0.5 * scaleY, scaleX, scaleY)
-      } else {
-        context.stroke()
       }
     }
 
@@ -437,6 +450,33 @@ export function Heatmap({
       context.font = '11px sans-serif'
       context.fillText(overlays.timestamp, logicalW - 150, logicalH - 26)
     }
+
+    // Osové labely crosshairu (TradingView styl) — kreslené naposled, nad vším
+    if (crosshair) {
+      context.font = 'bold 11px sans-serif'
+      // Osa X (dole): datum + čas pod svislou linkou
+      const timeLabel = `${dateLabel ? `${dateLabel} ` : ''}${minuteLabels[crosshair.minuteIdx] ?? ''}`.trim()
+      if (timeLabel) {
+        const x = minuteToX(crosshair.minuteIdx)
+        const width = context.measureText(timeLabel).width + 12
+        const boxX = Math.min(logicalW - width, Math.max(0, x - width / 2))
+        context.fillStyle = AXIS_LABEL_BG
+        context.fillRect(boxX, logicalH - 18, width, 16)
+        context.fillStyle = AXIS_LABEL_FG
+        context.fillText(timeLabel, boxX + 6, logicalH - 6)
+      }
+      // Osa Y (vpravo): spojitá cena na úrovni kurzoru
+      if (pointer) {
+        const price = screenToDataPoint(pointer.x, pointer.y).strike
+        const priceLabel = price.toFixed(2)
+        const width = context.measureText(priceLabel).width + 12
+        const boxY = Math.min(logicalH - 8, Math.max(8, pointer.y))
+        context.fillStyle = AXIS_LABEL_BG
+        context.fillRect(logicalW - width, boxY - 8, width, 16)
+        context.fillStyle = AXIS_LABEL_FG
+        context.fillText(priceLabel, logicalW - width + 6, boxY + 4)
+      }
+    }
   }, [
     mapping,
     contourSegments,
@@ -455,6 +495,8 @@ export function Heatmap({
     logicalW,
     logicalH,
     dpr,
+    pointer,
+    dateLabel,
   ])
 
   useEffect(() => {
@@ -569,8 +611,10 @@ export function Heatmap({
     const { minuteIdx, strikeIdx } = mapping().screenToCell(x, y)
     if (minuteIdx >= 0 && minuteIdx < grid.minutes && strikeIdx >= 0 && strikeIdx < strikeCount) {
       setCrosshair({ minuteIdx, strike: grid.strikes[strikeIdx] })
+      setPointer({ x, y })
     } else {
       setCrosshair(null)
+      setPointer(null)
     }
   }
 
@@ -624,6 +668,7 @@ export function Heatmap({
         onPointerLeave={() => {
           setCrosshair(null)
           setAxisHover(null)
+          setPointer(null)
         }}
         onDoubleClick={resetView}
       />

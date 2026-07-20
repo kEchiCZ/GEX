@@ -40,6 +40,19 @@ export interface TimeTransform {
 const IDENTITY_TIME: TimeTransform = { offsetX: 0, zoomX: 1 }
 
 const PANEL_HEIGHT = 84
+
+const fmtInt = (value: number): string => Math.round(value).toLocaleString('cs-CZ')
+const fmtSigned = (value: number): string =>
+  (value > 0 ? '+' : '') + Math.round(value).toLocaleString('cs-CZ')
+
+/** Hodnota ukazatele vpravo nahoře (HTML overlay — SVG by text roztáhl). */
+function PanelValue({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="panel-value" data-testid="panel-value">
+      {children}
+    </span>
+  )
+}
 const COLORS = {
   vol: '#7d8596',
   call: '#14b8a6',
@@ -97,6 +110,10 @@ export function BottomPanels({
 }) {
   const minutes = data.vol.length
   const pointer = usePanelPointer(minutes, width, time)
+  const { position } = useCrosshair()
+  // Index pod crosshairem (sdílený napříč panely) — hodnoty vpravo nahoře
+  const idx =
+    position && position.minuteIdx >= 0 && position.minuteIdx < minutes ? position.minuteIdx : null
   // Stejné základní měřítko jako heatmapa — málo dat se neroztahuje na šířku
   const step = baseBucketPx(minutes, width)
   const barWidth = Math.max(0.5, step * 0.8)
@@ -109,6 +126,7 @@ export function BottomPanels({
     panels.push(
       <section key="vol" className="bottom-panel" aria-label="Vol panel">
         <span className="panel-title muted">Vol</span>
+        {idx !== null && <PanelValue>{fmtInt(data.vol[idx])}</PanelValue>}
         <svg
           width={width}
           height={PANEL_HEIGHT}
@@ -141,6 +159,13 @@ export function BottomPanels({
     panels.push(
       <section key="optvol" className="bottom-panel" aria-label="Opt Vol panel">
         <span className="panel-title muted">Opt Vol</span>
+        {idx !== null && (
+          <PanelValue>
+            <span style={{ color: COLORS.call }}>C {fmtInt(data.optVolCall[idx])}</span>
+            {' / '}
+            <span style={{ color: COLORS.put }}>P {fmtInt(data.optVolPut[idx])}</span>
+          </PanelValue>
+        )}
         <svg
           width={width}
           height={PANEL_HEIGHT}
@@ -185,6 +210,13 @@ export function BottomPanels({
     panels.push(
       <section key="deltaflow" className="bottom-panel" aria-label="Δ Flow panel">
         <span className="panel-title muted">Δ Flow C/P</span>
+        {idx !== null && (
+          <PanelValue>
+            <span style={{ color: COLORS.call }}>C {fmtInt(data.deltaFlowCall[idx])}</span>
+            {' / '}
+            <span style={{ color: COLORS.put }}>P {fmtInt(data.deltaFlowPut[idx])}</span>
+          </PanelValue>
+        )}
         <svg
           width={width}
           height={PANEL_HEIGHT}
@@ -228,6 +260,7 @@ export function BottomPanels({
     panels.push(
       <section key="cumdelta" className="bottom-panel" aria-label="Cum Δ panel">
         <span className="panel-title muted">Cum Δ</span>
+        {idx !== null && <PanelValue>{fmtSigned(data.cumDelta[idx])}</PanelValue>}
         <svg
           width={width}
           height={PANEL_HEIGHT}

@@ -132,6 +132,33 @@ test('málo košů se neroztahuje na šířku — ukotvení k pravému okraji (i
   expect(volGroup().getAttribute('transform')).toBe('translate(1056 0) scale(1 1)')
 })
 
+test('crosshair ukazuje hodnoty ukazatelů vpravo (issue #104)', () => {
+  render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={DATA}
+        visible={{ vol: true, optVol: true, delta: true, deltaFlow: true }}
+        width={400}
+      />
+    </CrosshairProvider>,
+  )
+  // Bez crosshairu se hodnoty neukazují
+  expect(screen.queryAllByTestId('panel-value')).toHaveLength(0)
+  const volSvg = screen.getByLabelText('Vol panel').querySelector('svg')!
+  fireEvent.pointerMove(volSvg, { clientX: 30, clientY: 40 }) // krok 12 px → minuta 2
+  // vol[2]=400, cumDelta[2]=200(+), optVol C40/P25, deltaFlow C20/P12
+  expect(screen.getByLabelText('Vol panel').querySelector('.panel-value')!.textContent).toBe('400')
+  expect(screen.getByLabelText('Cum Δ panel').querySelector('.panel-value')!.textContent).toBe(
+    '+200',
+  )
+  const opt = screen.getByLabelText('Opt Vol panel').querySelector('.panel-value')!
+  expect(opt.textContent).toContain('C 40')
+  expect(opt.textContent).toContain('P 25')
+  const flow = screen.getByLabelText('Δ Flow panel').querySelector('.panel-value')!
+  expect(flow.textContent).toContain('C 20')
+  expect(flow.textContent).toContain('P 12')
+})
+
 // ── Crosshair sdílený s heatmapou ──────────────────────────────────
 
 function Reader() {
