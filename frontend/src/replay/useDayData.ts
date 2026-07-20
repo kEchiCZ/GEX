@@ -207,22 +207,24 @@ export function useDayData(
       if (flushTimer !== null) return
       flushTimer = setTimeout(() => {
         flushTimer = null
-        const ready = [...pending.entries()]
-          .filter(([, part]) => part.rows) // snapshot je autoritativní řez minuty
-          .sort(([a], [b]) => (a < b ? -1 : 1))
-        if (ready.length === 0) return
+        if (pending.size === 0) return
         setInputs((prev) => {
           if (!prev) return prev
           let next = prev
-          for (const [ts, part] of ready) {
-            next = appendMinute(next, {
-              tsIso: ts,
-              rows: part.rows ?? [],
-              bar: part.bar,
-              levels: part.levels,
-              flow: part.flow,
-            })
-            pending.delete(ts)
+          for (const ts of [...pending.keys()].sort((a, b) => (a < b ? -1 : 1))) {
+            const partial = pending.get(ts)!
+            // Aplikuj minutu, když má snapshot řez (nová/aktualizace mřížky) NEBO už existuje
+            // (dorazil jen bar/levels/flow k uzavřené minutě — jinak by svíčka chyběla, #133).
+            if (partial.rows || next.minutes.includes(ts)) {
+              next = appendMinute(next, {
+                tsIso: ts,
+                rows: partial.rows ?? [],
+                bar: partial.bar,
+                levels: partial.levels,
+                flow: partial.flow,
+              })
+              pending.delete(ts)
+            }
           }
           return next
         })

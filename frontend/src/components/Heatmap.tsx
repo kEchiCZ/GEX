@@ -605,8 +605,9 @@ export function Heatmap({
       const mode = dragRef.current.mode
       dragRef.current = { x: event.clientX, y: event.clientY, mode }
       if (mode === 'scale-x') {
-        // Kotva = pravý okraj: poslední svíčka drží pozici, historie se roztahuje
-        const factor = Math.exp(deltaX * 0.005)
+        // Kotva = pravý okraj: poslední svíčka drží pozici. Doleva = roztáhnout,
+        // doprava = zmenšit (jako osa Y nahoru = roztáhnout) — obrácené znaménko.
+        const factor = Math.exp(-deltaX * 0.005)
         setView((previous) => zoomAxis(previous, 'x', factor, logicalW))
       } else if (mode === 'scale-y') {
         const factor = Math.exp(-deltaY * 0.005)
