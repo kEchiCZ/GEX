@@ -35,6 +35,7 @@ import {
   zoomBoth,
 } from '../heatmap/view'
 import type { AxisZone, ViewTransform } from '../heatmap/view'
+import { snapToTick, tickDecimals } from '../instrument/tick'
 import { nearestAnnotationId } from '../annotations/model'
 import type {
   ActiveTool,
@@ -73,6 +74,7 @@ export function Heatmap({
   onLogicalSizeChange,
   dateLabel,
   resetKey,
+  priceTick = 0.25,
 }: {
   grid: HeatmapGrid
   style: HeatmapStyle
@@ -99,6 +101,8 @@ export function Heatmap({
   dateLabel?: string
   /** Identita datasetu (symbol/expirace/timeframe/den) — auto-fit se provede jen při její změně. */
   resetKey?: string | number
+  /** Min cenový tick instrumentu — crosshair cena na ose Y se na něj zaokrouhlí. */
+  priceTick?: number
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -477,10 +481,10 @@ export function Heatmap({
         context.fillStyle = AXIS_LABEL_FG
         context.fillText(timeLabel, boxX + 6, logicalH - 6)
       }
-      // Osa Y (vpravo): spojitá cena na úrovni kurzoru
+      // Osa Y (vpravo): cena na úrovni kurzoru, zaokrouhlená na tick instrumentu
       if (pointer) {
-        const price = screenToDataPoint(pointer.x, pointer.y).strike
-        const priceLabel = price.toFixed(2)
+        const raw = screenToDataPoint(pointer.x, pointer.y).strike
+        const priceLabel = snapToTick(raw, priceTick).toFixed(tickDecimals(priceTick))
         const width = context.measureText(priceLabel).width + 12
         const boxY = Math.min(logicalH - 8, Math.max(8, pointer.y))
         context.fillStyle = AXIS_LABEL_BG
@@ -509,6 +513,7 @@ export function Heatmap({
     dpr,
     pointer,
     dateLabel,
+    priceTick,
   ])
 
   useEffect(() => {
