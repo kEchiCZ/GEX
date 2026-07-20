@@ -321,6 +321,21 @@ body {
   pointer-events: none;
 }
 
+/* Hodnota na pravé ose Y dle výškové úrovně kurzoru (TradingView styl) */
+.panel-axis-value {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  padding: 0 4px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  background: #363c4a;
+  color: #e6e9ef;
+  border-radius: 2px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .playback-bar input[type='range'] {
   flex: 1;
   accent-color: var(--accent);

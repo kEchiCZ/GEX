@@ -10,8 +10,9 @@ počítá v základním měřítku a transformuje <g>, takže crosshair i sloupc
 pod heatmapou pixel-přesně. SVG má viewBox + preserveAspectRatio="none" —
 CSS roztažení škáluje obsah stejně jako canvas heatmapy.
 */
+import { useState } from 'react'
 import { baseBucketPx } from '../heatmap/view'
-import { barHeights, cumDeltaAreas } from '../panels/geometry'
+import { barHeights, cumDeltaAreas, seriesPeak } from '../panels/geometry'
 import { useCrosshair } from '../state/Crosshair'
 
 export interface PanelSeries {
@@ -49,6 +50,15 @@ const fmtSigned = (value: number): string =>
 function PanelValue({ children }: { children: React.ReactNode }) {
   return (
     <span className="panel-value" data-testid="panel-value">
+      {children}
+    </span>
+  )
+}
+
+/** Hodnota na pravé ose Y dle výškové úrovně kurzoru (HTML overlay). */
+function PanelAxisValue({ y, children }: { y: number; children: React.ReactNode }) {
+  return (
+    <span className="panel-axis-value" style={{ top: `${y}px` }} data-testid="panel-axis-value">
       {children}
     </span>
   )
@@ -114,26 +124,56 @@ export function BottomPanels({
   // Index pod crosshairem (sdílený napříč panely) — hodnoty vpravo nahoře
   const idx =
     position && position.minuteIdx >= 0 && position.minuteIdx < minutes ? position.minuteIdx : null
+  // Výšková úroveň kurzoru v konkrétním panelu — hodnota na pravé ose Y
+  const [hoverY, setHoverY] = useState<{ key: string; y: number } | null>(null)
   // Stejné základní měřítko jako heatmapa — málo dat se neroztahuje na šířku
   const step = baseBucketPx(minutes, width)
   const barWidth = Math.max(0.5, step * 0.8)
   const transform = `translate(${time.offsetX} 0) scale(${time.zoomX} 1)`
 
+  // Vrcholy pro škály os Y; Opt Vol a Δ Flow sdílí škálu C/P (jednoznačná osa)
+  const volPeak = seriesPeak(data.vol)
+  const optPeak = Math.max(seriesPeak(data.optVolCall), seriesPeak(data.optVolPut))
+  const flowPeak = Math.max(seriesPeak(data.deltaFlowCall), seriesPeak(data.deltaFlowPut))
+  const cumPeak = seriesPeak(data.cumDelta)
+
+  // Pohyb v panelu: crosshair (osa X) + výšková úroveň (osa Y) pro daný panel
+  const handleMove = (key: string) => (event: React.PointerEvent<SVGSVGElement>) => {
+    pointer.onPointerMove(event)
+    const rect = event.currentTarget.getBoundingClientRect()
+    const cssScale = rect.height > 0 ? PANEL_HEIGHT / rect.height : 1
+    setHoverY({ key, y: (event.clientY - rect.top) * cssScale })
+  }
+  const handleLeave = () => {
+    pointer.clear()
+    setHoverY(null)
+  }
+  /** Hodnota na ose Y podle výšky kurzoru (signed = symetrická škála kolem nuly). */
+  const axisValue = (key: string, peak: number, signed: boolean): React.ReactNode => {
+    if (!hoverY || hoverY.key !== key) return null
+    const y = Math.min(PANEL_HEIGHT, Math.max(0, hoverY.y))
+    const value = signed
+      ? ((PANEL_HEIGHT / 2 - y) / (PANEL_HEIGHT / 2)) * peak
+      : ((PANEL_HEIGHT - y) / (PANEL_HEIGHT - 4)) * peak
+    return <PanelAxisValue y={y}>{signed ? fmtSigned(value) : fmtInt(value)}</PanelAxisValue>
+  }
+
   const panels: React.ReactNode[] = []
 
   if (visible.vol) {
-    const heights = barHeights(data.vol, PANEL_HEIGHT - 4)
+    const heights = barHeights(data.vol, PANEL_HEIGHT - 4, volPeak)
     panels.push(
       <section key="vol" className="bottom-panel" aria-label="Vol panel">
         <span className="panel-title muted">Vol</span>
         {idx !== null && <PanelValue>{fmtInt(data.vol[idx])}</PanelValue>}
+        {axisValue('vol', volPeak, false)}
         <svg
           width={width}
           height={PANEL_HEIGHT}
           viewBox={`0 0 ${width} ${PANEL_HEIGHT}`}
           preserveAspectRatio="none"
-          onPointerMove={pointer.onPointerMove}
-          onPointerLeave={pointer.clear}
+          onPointerMove={handleMove('vol')}
+          onPointerLeave={handleLeave}
         >
           <g transform={transform}>
             {heights.map((height, index) => (
@@ -154,8 +194,8 @@ export function BottomPanels({
   }
 
   if (visible.optVol) {
-    const callHeights = barHeights(data.optVolCall, PANEL_HEIGHT - 4)
-    const putHeights = barHeights(data.optVolPut, PANEL_HEIGHT - 4)
+    const callHeights = barHeights(data.optVolCall, PANEL_HEIGHT - 4, optPeak)
+    const putHeights = barHeights(data.optVolPut, PANEL_HEIGHT - 4, optPeak)
     panels.push(
       <section key="optvol" className="bottom-panel" aria-label="Opt Vol panel">
         <span className="panel-title muted">Opt Vol</span>
@@ -166,13 +206,14 @@ export function BottomPanels({
             <span style={{ color: COLORS.put }}>P {fmtInt(data.optVolPut[idx])}</span>
           </PanelValue>
         )}
+        {axisValue('optvol', optPeak, false)}
         <svg
           width={width}
           height={PANEL_HEIGHT}
           viewBox={`0 0 ${width} ${PANEL_HEIGHT}`}
           preserveAspectRatio="none"
-          onPointerMove={pointer.onPointerMove}
-          onPointerLeave={pointer.clear}
+          onPointerMove={handleMove('optvol')}
+          onPointerLeave={handleLeave}
         >
           <g transform={transform}>
             {callHeights.map((height, index) => (
@@ -205,8 +246,8 @@ export function BottomPanels({
   }
 
   if (visible.deltaFlow) {
-    const callHeights = barHeights(data.deltaFlowCall, PANEL_HEIGHT - 4)
-    const putHeights = barHeights(data.deltaFlowPut, PANEL_HEIGHT - 4)
+    const callHeights = barHeights(data.deltaFlowCall, PANEL_HEIGHT - 4, flowPeak)
+    const putHeights = barHeights(data.deltaFlowPut, PANEL_HEIGHT - 4, flowPeak)
     panels.push(
       <section key="deltaflow" className="bottom-panel" aria-label="Δ Flow panel">
         <span className="panel-title muted">Δ Flow C/P</span>
@@ -217,13 +258,14 @@ export function BottomPanels({
             <span style={{ color: COLORS.put }}>P {fmtInt(data.deltaFlowPut[idx])}</span>
           </PanelValue>
         )}
+        {axisValue('deltaflow', flowPeak, false)}
         <svg
           width={width}
           height={PANEL_HEIGHT}
           viewBox={`0 0 ${width} ${PANEL_HEIGHT}`}
           preserveAspectRatio="none"
-          onPointerMove={pointer.onPointerMove}
-          onPointerLeave={pointer.clear}
+          onPointerMove={handleMove('deltaflow')}
+          onPointerLeave={handleLeave}
         >
           <g transform={transform}>
             {callHeights.map((height, index) => (
@@ -261,13 +303,14 @@ export function BottomPanels({
       <section key="cumdelta" className="bottom-panel" aria-label="Cum Δ panel">
         <span className="panel-title muted">Cum Δ</span>
         {idx !== null && <PanelValue>{fmtSigned(data.cumDelta[idx])}</PanelValue>}
+        {axisValue('cumdelta', cumPeak, true)}
         <svg
           width={width}
           height={PANEL_HEIGHT}
           viewBox={`0 0 ${width} ${PANEL_HEIGHT}`}
           preserveAspectRatio="none"
-          onPointerMove={pointer.onPointerMove}
-          onPointerLeave={pointer.clear}
+          onPointerMove={handleMove('cumdelta')}
+          onPointerLeave={handleLeave}
         >
           <line
             x1={0}
