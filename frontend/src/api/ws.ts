@@ -19,8 +19,10 @@ export interface LiveSocketOptions {
 
 export class LiveSocket {
   private handlers = new Map<string, Set<ChannelHandler>>()
+  private reconnectHandlers = new Set<() => void>()
   private ws: WebSocketLike | null = null
   private closedByUser = false
+  private opened = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
@@ -40,6 +42,11 @@ export class LiveSocket {
       if (channels.length > 0) {
         ws.send(JSON.stringify({ action: 'subscribe', channels }))
       }
+      // Re-connect (ne první open): konzumenti si dofetchnou, co mohli zmeškat
+      if (this.opened) {
+        for (const handler of this.reconnectHandlers) handler()
+      }
+      this.opened = true
     }
     ws.onmessage = (event) => {
       const message = JSON.parse(event.data) as { channel?: string; data?: ChannelData }
@@ -71,6 +78,20 @@ export class LiveSocket {
     if (isNew && this.ws) {
       this.ws.send(JSON.stringify({ action: 'subscribe', channels: [channel] }))
     }
+  }
+
+  /** Odhlásí konkrétní handler; server subskripci nerušíme (jen lokální routing). */
+  unsubscribe(channel: string, handler: ChannelHandler): void {
+    const set = this.handlers.get(channel)
+    if (!set) return
+    set.delete(handler)
+    if (set.size === 0) this.handlers.delete(channel)
+  }
+
+  /** Registruje callback volaný po RE-connectu (ne prvním připojení); vrací odhlášení. */
+  onReconnect(handler: () => void): () => void {
+    this.reconnectHandlers.add(handler)
+    return () => this.reconnectHandlers.delete(handler)
   }
 
   close(): void {

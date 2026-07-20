@@ -107,6 +107,8 @@ interface AppState {
   setPriceInfo: (info: PriceInfo) => void
   /** Verze setupů — WS kanál setups.* ji zvedá, konzumenti přenačítají REST. */
   setupsVersion: number
+  /** Sdílený WS klient — živý append intraday grafu (useDayData). */
+  socket: LiveSocket
 }
 
 const AppStateContext = createContext<AppState | null>(null)
@@ -145,6 +147,8 @@ export function AppStateProvider({
   symbol?: string
 }) {
   const [status, setStatus] = useState<PipelineStatus>({ engine: 'offline' })
+  // Jediná stabilní instance WS klienta — sdílená přes context (useDayData ji odebírá)
+  const [live] = useState(() => socket ?? new LiveSocket(WS_URL))
   const [symbol, setSymbol] = useState(initialSymbol)
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
@@ -181,7 +185,6 @@ export function AppStateProvider({
   }, [])
 
   useEffect(() => {
-    const live = socket ?? new LiveSocket(WS_URL)
     live.subscribe('status', (data) => {
       setStatus(data as unknown as PipelineStatus)
       const record = data as Record<string, unknown>
@@ -200,7 +203,7 @@ export function AppStateProvider({
     })
     live.connect()
     return () => live.close()
-  }, [socket, appendLog])
+  }, [live, appendLog])
 
   // Počáteční stav pipeline hned z REST — WS push chodí až s dalším cyklem enginu (~60 s)
   useEffect(() => {
@@ -273,6 +276,7 @@ export function AppStateProvider({
       priceInfo,
       setPriceInfo,
       setupsVersion,
+      socket: live,
     }),
     [
       status,
@@ -288,7 +292,9 @@ export function AppStateProvider({
       unreadAlerts,
       consoleLog,
       priceInfo,
+      setPriceInfo,
       setupsVersion,
+      live,
     ],
   )
 

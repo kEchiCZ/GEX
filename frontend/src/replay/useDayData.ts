@@ -5,6 +5,7 @@ každý den má vlastní expiraci — 0DTE řetěz).
 */
 import { useEffect, useMemo, useState } from 'react'
 import type { PanelSeries } from '../components/BottomPanels'
+import type { LiveSocket, ChannelData } from '../api/ws'
 import { demoGrid, demoOverlays, demoPanels, demoProfile } from '../heatmap/demo'
 import type { HeatmapGrid } from '../heatmap/grid'
 import type { RawDay } from '../heatmap/modes'
@@ -12,14 +13,32 @@ import type { OverlayData } from '../heatmap/overlays'
 import type { ProfileRow } from '../profile/bars'
 import { autoSessions } from '../instrument/sessions'
 import { buildDailyDay } from './daily'
-import { fetchDays, fetchReplay } from './loader'
-import type { ReplayDay } from './loader'
+import {
+  appendMinute,
+  assembleReplayDay,
+  fetchDays,
+  fetchReplay,
+  fetchReplayInputs,
+} from './loader'
+import type { LiveMinute, LiveMinuteRow, ReplayDay, ReplayInputs } from './loader'
 
 /** Daily pohled: strop stažených dnů (retence snapshotů je 14 dní, R4). */
 const DAILY_MAX_DAYS = 14
 
-/** Interval živého přenačtení intraday balíku (sladěno s minutovým cyklem enginu). */
-const LIVE_REFETCH_MS = 60_000
+/** Plný refetch balíku je jen HODINOVÁ pojistka — živě jede append z WS kanálů (#127). */
+const LIVE_RECONCILE_MS = 3_600_000
+/** Debounce sběru WS kanálů jedné minuty (engine je pošle v rámci ~1 s). */
+const APPEND_DEBOUNCE_MS = 400
+
+/** Kanonický klíč minuty — sjednotí `ts`/`ts_min` napříč kanály (ISO s .000Z). */
+function minuteKey(value: unknown): string {
+  const date = new Date(String(value))
+  return Number.isNaN(date.getTime()) ? String(value) : date.toISOString()
+}
+
+function numOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
 
 export interface DayData {
   source: 'replay' | 'demo'
@@ -91,36 +110,37 @@ export function useDayData(
   symbol: string,
   expiry: string | null,
   date: string,
-  timeframe: 'intraday' | 'daily' = 'intraday',
+  timeframe: 'intraday' | 'daily',
+  socket?: LiveSocket,
 ): DayData {
   const fallback = useMemo(() => demoDay(), [])
-  const [replay, setReplay] = useState<ReplayDay | null>(null)
+  const [inputs, setInputs] = useState<ReplayInputs | null>(null)
   const [daily, setDaily] = useState<DayData | null>(null)
 
   // Změna instrumentu/expirace: starý dataset nesmí přežít (jiný symbol → demo/nový fetch)
   useEffect(() => {
-    setReplay(null)
+    setInputs(null)
     setDaily(null)
   }, [symbol, expiry, date])
 
   const [retry, setRetry] = useState(0)
-  // Živé přenačtení: tik každou minutu vynutí refetch balíku (engine dál produkuje data).
-  // Bezpečné vůči pohledu — auto-fit se drží na resetKey (viz Heatmap #118), refetch ho neresetuje.
-  const [liveTick, setLiveTick] = useState(0)
+  // Hodinová pojistka: plný refetch srovná mezery / OI archiv / stale opravy (#127).
+  const [reconcileTick, setReconcileTick] = useState(0)
   useEffect(() => {
     if (timeframe !== 'intraday') return
-    const id = setInterval(() => setLiveTick((n) => n + 1), LIVE_REFETCH_MS)
+    const id = setInterval(() => setReconcileTick((n) => n + 1), LIVE_RECONCILE_MS)
     return () => clearInterval(id)
   }, [timeframe])
 
+  // Úvodní / rekonciliační fetch celého balíku
   useEffect(() => {
     if (!expiry || timeframe !== 'intraday') return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
-    fetchReplay(symbol, expiry, date)
-      .then((day) => {
+    fetchReplayInputs(symbol, expiry, date)
+      .then((loaded) => {
         // Prázdný den (0 minut) nesmí přepsat poslední živý stav při přechodném výpadku
-        if (!cancelled && day.grid.minutes > 0) setReplay(day)
+        if (!cancelled && loaded.minutes.length > 0) setInputs(loaded)
       })
       .catch(() => {
         // Den (zatím) neexistuje — např. čerstvě přidaný ticker; zkusit znovu za 30 s
@@ -130,7 +150,104 @@ export function useDayData(
       cancelled = true
       if (timer !== null) clearTimeout(timer)
     }
-  }, [symbol, expiry, date, timeframe, retry, liveTick])
+  }, [symbol, expiry, date, timeframe, retry, reconcileTick])
+
+  // Živý append z WS kanálů (#127): snapshot/price/levels/flow → jedna minuta
+  useEffect(() => {
+    if (!socket || !expiry || timeframe !== 'intraday') return
+    const pending = new Map<string, Partial<LiveMinute>>()
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+    const scheduleFlush = () => {
+      if (flushTimer !== null) return
+      flushTimer = setTimeout(() => {
+        flushTimer = null
+        const ready = [...pending.entries()]
+          .filter(([, part]) => part.rows) // snapshot je autoritativní řez minuty
+          .sort(([a], [b]) => (a < b ? -1 : 1))
+        if (ready.length === 0) return
+        setInputs((prev) => {
+          if (!prev) return prev
+          let next = prev
+          for (const [ts, part] of ready) {
+            next = appendMinute(next, {
+              tsIso: ts,
+              rows: part.rows ?? [],
+              bar: part.bar,
+              levels: part.levels,
+              flow: part.flow,
+            })
+            pending.delete(ts)
+          }
+          return next
+        })
+      }, APPEND_DEBOUNCE_MS)
+    }
+    const part = (ts: string): Partial<LiveMinute> => {
+      const existing = pending.get(ts)
+      if (existing) return existing
+      const fresh: Partial<LiveMinute> = {}
+      pending.set(ts, fresh)
+      return fresh
+    }
+
+    const onSnapshot = (data: ChannelData) => {
+      const raw = Array.isArray(data.rows) ? (data.rows as Record<string, unknown>[]) : []
+      part(minuteKey(data.ts_min)).rows = raw.map((row): LiveMinuteRow => ({
+        strike: Number(row.strike),
+        right: String(row.right) === 'C' ? 'C' : 'P',
+        oi: Number(row.oi) || 0,
+        volume: Number(row.volume) || 0,
+        delta: Number(row.delta) || 0,
+        stale_age: Number(row.stale_age) || 0,
+      }))
+      scheduleFlush()
+    }
+    const onPrice = (data: ChannelData) => {
+      const close = Number(data.close)
+      if (!Number.isFinite(close)) return
+      part(minuteKey(data.ts)).bar = {
+        open: Number(data.open),
+        high: Number(data.high),
+        low: Number(data.low),
+        close,
+        volume: Number(data.volume) || 0,
+      }
+      scheduleFlush()
+    }
+    const onLevels = (data: ChannelData) => {
+      part(minuteKey(data.ts_min)).levels = {
+        flip: numOrNull(data.flip),
+        centroid: numOrNull(data.centroid),
+        call_wall: numOrNull(data.call_wall),
+        put_wall: numOrNull(data.put_wall),
+      }
+      scheduleFlush()
+    }
+    const onFlow = (data: ChannelData) => {
+      part(minuteKey(data.ts_min)).flow = { cum_delta: Number(data.cum_delta) || 0 }
+      scheduleFlush()
+    }
+
+    const snapshotCh = `snapshot.${symbol}.${expiry}`
+    const priceCh = `price.${symbol}`
+    const levelsCh = `levels.${symbol}.${expiry}`
+    const flowCh = `flow.${symbol}`
+    socket.subscribe(snapshotCh, onSnapshot)
+    socket.subscribe(priceCh, onPrice)
+    socket.subscribe(levelsCh, onLevels)
+    socket.subscribe(flowCh, onFlow)
+    // Reconnect: dofetchni celý balík (mohli jsme zmeškat minuty)
+    const offReconnect = socket.onReconnect(() => setReconcileTick((n) => n + 1))
+    return () => {
+      if (flushTimer !== null) clearTimeout(flushTimer)
+      socket.unsubscribe(snapshotCh, onSnapshot)
+      socket.unsubscribe(priceCh, onPrice)
+      socket.unsubscribe(levelsCh, onLevels)
+      socket.unsubscribe(flowCh, onFlow)
+      offReconnect()
+    }
+  }, [symbol, expiry, timeframe, socket])
 
   useEffect(() => {
     if (timeframe !== 'daily') return
@@ -159,7 +276,10 @@ export function useDayData(
 
   // Stabilní identita výsledku: bez memoizace by každý render vyrobil nový
   // objekt a efekty závislé na datech (např. cena v hlavičce) by se točily
-  const replayDay = useMemo(() => (replay ? replayToDay(replay) : null), [replay])
+  const replayDay = useMemo(
+    () => (inputs ? replayToDay(assembleReplayDay(inputs)) : null),
+    [inputs],
+  )
   if (timeframe === 'daily') return daily ?? fallback
   return replayDay ?? fallback
 }
