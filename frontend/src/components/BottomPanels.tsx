@@ -158,6 +158,22 @@ export function BottomPanels({
       : ((PANEL_HEIGHT - y) / (PANEL_HEIGHT - 4)) * peak
     return <PanelAxisValue y={y}>{signed ? fmtSigned(value) : fmtInt(value)}</PanelAxisValue>
   }
+  /** Vodorovná crosshair linka na úrovni kurzoru (jen v najetém panelu, mimo transform). */
+  const axisLineH = (key: string): React.ReactNode => {
+    if (!hoverY || hoverY.key !== key) return null
+    const y = Math.min(PANEL_HEIGHT, Math.max(0, hoverY.y))
+    return (
+      <line
+        x1={0}
+        y1={y}
+        x2={width}
+        y2={y}
+        stroke="rgba(215,220,230,0.55)"
+        vectorEffect="non-scaling-stroke"
+        data-testid="panel-crosshair-h"
+      />
+    )
+  }
 
   const panels: React.ReactNode[] = []
 
@@ -189,6 +205,7 @@ export function BottomPanels({
             ))}
             <CrosshairLine x={pointer.crosshairX} height={PANEL_HEIGHT} />
           </g>
+          {axisLineH('vol')}
         </svg>
       </section>,
     )
@@ -241,6 +258,7 @@ export function BottomPanels({
             ))}
             <CrosshairLine x={pointer.crosshairX} height={PANEL_HEIGHT} />
           </g>
+          {axisLineH('optvol')}
         </svg>
       </section>,
     )
@@ -293,6 +311,7 @@ export function BottomPanels({
             ))}
             <CrosshairLine x={pointer.crosshairX} height={PANEL_HEIGHT} />
           </g>
+          {axisLineH('deltaflow')}
         </svg>
       </section>,
     )
@@ -326,6 +345,7 @@ export function BottomPanels({
             <polygon points={areas.negative} fill={COLORS.negative} data-part="cumdelta-negative" />
             <CrosshairLine x={pointer.crosshairX} height={PANEL_HEIGHT} />
           </g>
+          {axisLineH('cumdelta')}
         </svg>
       </section>,
     )
