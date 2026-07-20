@@ -105,6 +105,21 @@ test('crosshair z heatmapy se propaguje do jiného panelu přes kontext', () => 
   expect(reader.textContent).toBe('none')
 })
 
+test('crosshair drží i mimo svíce (prázdná/budoucí plocha) — issue #109', () => {
+  const grid = demoGrid(100, 10) // canvas 1200×640, krok 12 px → data končí na 1200 px
+  render(
+    <CrosshairProvider>
+      <Heatmap grid={grid} style="gradient" contours="off" />
+      <CrosshairReader />
+    </CrosshairProvider>,
+  )
+  const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
+  // x=1300 je za posledním barem (minuta ~108, mimo 100) — crosshair nesmí zmizet
+  fireEvent.pointerMove(overlay, { clientX: 1300, clientY: 66 })
+  expect(screen.getByTestId('crosshair-reader').textContent).not.toBe('none')
+  expect(screen.getByTestId('crosshair-reader').textContent).toMatch(/^108@/)
+})
+
 test('heatmapa má reset zobrazení (tlačítko i dvojklik neshodí render)', () => {
   const grid = demoGrid(100, 10)
   render(
