@@ -81,8 +81,9 @@ function usePanelPointer(minutes: number, width: number, time: TimeTransform) {
     // Inverzní transformace časové osy — stejné mapování jako heatmapa
     const baseX = (x - time.offsetX) / time.zoomX
     const minuteIdx = Math.floor(baseX / step)
-    if (minuteIdx >= 0 && minuteIdx < minutes) {
-      // Panel zná jen časovou osu — strike z předchozí pozice zůstává
+    // Crosshair drží i mimo data (budoucí/prázdná plocha po posunu) — bez horní meze;
+    // panel zná jen časovou osu, strike z předchozí pozice zůstává
+    if (minuteIdx >= 0) {
       setPosition({ minuteIdx, strike: position?.strike ?? null })
     }
   }

@@ -159,6 +159,26 @@ test('crosshair ukazuje hodnoty ukazatelů vpravo (issue #104)', () => {
   expect(flow.textContent).toContain('P 12')
 })
 
+test('crosshair drží i mimo data (posun grafu do budoucna) — issue #109', () => {
+  render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={DATA}
+        visible={{ vol: true, optVol: true, delta: true, deltaFlow: false }}
+        width={400}
+      />
+      <Reader />
+    </CrosshairProvider>,
+  )
+  const volSvg = screen.getByLabelText('Vol panel').querySelector('svg')!
+  // 4 minuty, krok 12 px → data končí na 48 px; x=200 je daleko v budoucnu
+  fireEvent.pointerMove(volSvg, { clientX: 200, clientY: 40 })
+  expect(screen.getByTestId('reader').textContent).toBe('16') // crosshair drží, minuta mimo rozsah
+  expect(screen.getAllByTestId('panel-crosshair').length).toBeGreaterThan(0) // linka i v panelech
+  // Vpravo nahoře se mimo data hodnota neukazuje
+  expect(screen.getByLabelText('Vol panel').querySelector('.panel-value')).toBeNull()
+})
+
 test('panel: hodnota na pravé ose Y podle výšky kurzoru (issue #107)', () => {
   render(
     <CrosshairProvider>

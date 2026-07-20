@@ -374,9 +374,10 @@ export function Heatmap({
         context.lineTo(logicalW, pointer.y)
         context.stroke()
       }
-      // Zvýraznění buňky pod kurzorem (snapnutý strike)
+      // Zvýraznění buňky pod kurzorem (jen nad daty — mimo svíce se nekreslí)
+      const inRangeMinute = crosshair.minuteIdx >= 0 && crosshair.minuteIdx < grid.minutes
       const row = crosshair.strike === null ? -1 : grid.strikes.indexOf(crosshair.strike)
-      if (row >= 0) {
+      if (inRangeMinute && row >= 0) {
         const y = rowToY(row)
         context.strokeStyle = 'rgba(215,220,230,0.9)'
         context.strokeRect(x - 0.5 * scaleX, y - 0.5 * scaleY, scaleX, scaleY)
@@ -454,9 +455,9 @@ export function Heatmap({
     // Osové labely crosshairu (TradingView styl) — kreslené naposled, nad vším
     if (crosshair) {
       context.font = 'bold 11px sans-serif'
-      // Osa X (dole): datum + čas pod svislou linkou
-      const timeLabel =
-        `${dateLabel ? `${dateLabel} ` : ''}${minuteLabels[crosshair.minuteIdx] ?? ''}`.trim()
+      // Osa X (dole): datum + čas pod svislou linkou (jen nad daty — mimo svíce bez času)
+      const timeStr = minuteLabels[crosshair.minuteIdx]
+      const timeLabel = timeStr ? `${dateLabel ? `${dateLabel} ` : ''}${timeStr}`.trim() : ''
       if (timeLabel) {
         const x = minuteToX(crosshair.minuteIdx)
         const width = context.measureText(timeLabel).width + 12
@@ -610,13 +611,11 @@ export function Heatmap({
     const { x, y } = point
     setAxisHover(axisZoneAt(x, y, logicalH))
     const { minuteIdx, strikeIdx } = mapping().screenToCell(x, y)
-    if (minuteIdx >= 0 && minuteIdx < grid.minutes && strikeIdx >= 0 && strikeIdx < strikeCount) {
-      setCrosshair({ minuteIdx, strike: grid.strikes[strikeIdx] })
-      setPointer({ x, y })
-    } else {
-      setCrosshair(null)
-      setPointer(null)
-    }
+    // Crosshair drží i mimo svíce (prázdná/budoucí plocha po posunu) — nesnapuje
+    // se na neexistující bar; strike je null mimo cenové pásmo, minuta smí být mimo rozsah.
+    const strike = strikeIdx >= 0 && strikeIdx < strikeCount ? grid.strikes[strikeIdx] : null
+    setCrosshair({ minuteIdx, strike })
+    setPointer({ x, y })
   }
 
   const onPointerUp = () => {
@@ -634,6 +633,8 @@ export function Heatmap({
   const tooltip = useMemo(() => {
     if (!crosshair) return null
     if (crosshair.strike === null) return null
+    // Mimo rozsah minut (prázdná/budoucí plocha) tooltip nemá data — jen crosshair
+    if (crosshair.minuteIdx < 0 || crosshair.minuteIdx >= grid.minutes) return null
     const strikeIdx = grid.strikes.indexOf(crosshair.strike)
     if (strikeIdx < 0) return null
     const index = strikeIdx * grid.minutes + crosshair.minuteIdx
