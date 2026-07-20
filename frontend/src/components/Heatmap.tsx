@@ -322,31 +322,42 @@ export function Heatmap({
     if (priceStyle === 'candles') {
       const candles = candleGeometry(overlays.price ?? [], grid.strikes)
       const bodyWidth = Math.max(2, scaleX * 0.6)
-      for (const candle of candles) {
-        const x = minuteToX(candle.minuteIdx)
-        const color = candle.up ? UP_COLOR : DOWN_COLOR
-        // Knot high–low
+      // Knoty i těla dávkově po barvě (2 tahy místo N) — jinak N stroke()/snímek
+      // dusí hlavní vlákno při živém spotu (překreslení 5×/s). SPEC 7.2 výkon.
+      context.lineWidth = Math.max(1, scaleX * 0.1)
+      for (const up of [true, false]) {
+        const color = up ? UP_COLOR : DOWN_COLOR
         context.strokeStyle = color
-        context.lineWidth = Math.max(1, scaleX * 0.1)
         context.beginPath()
-        context.moveTo(x, rowToY(candle.highRow))
-        context.lineTo(x, rowToY(candle.lowRow))
+        for (const candle of candles) {
+          if (candle.up !== up) continue
+          const x = minuteToX(candle.minuteIdx)
+          context.moveTo(x, rowToY(candle.highRow))
+          context.lineTo(x, rowToY(candle.lowRow))
+        }
         context.stroke()
-        // Tělo open–close (rowToY klesá s rostoucím řádkem → top = vyšší řádek)
-        const topY = rowToY(Math.max(candle.openRow, candle.closeRow))
-        const bottomY = rowToY(Math.min(candle.openRow, candle.closeRow))
         context.fillStyle = color
-        context.fillRect(x - bodyWidth / 2, topY, bodyWidth, Math.max(1, bottomY - topY))
+        for (const candle of candles) {
+          if (candle.up !== up) continue
+          const x = minuteToX(candle.minuteIdx)
+          const topY = rowToY(Math.max(candle.openRow, candle.closeRow))
+          const bottomY = rowToY(Math.min(candle.openRow, candle.closeRow))
+          context.fillRect(x - bodyWidth / 2, topY, bodyWidth, Math.max(1, bottomY - topY))
+        }
       }
     } else {
-      for (let index = 1; index < points.length; index += 1) {
-        const previous = points[index - 1]
-        const current = points[index]
-        context.strokeStyle = current.up ? UP_COLOR : DOWN_COLOR
-        context.lineWidth = 1.5
+      // Segmenty dávkově po barvě ticku (2 tahy místo N)
+      context.lineWidth = 1.5
+      for (const up of [true, false]) {
+        context.strokeStyle = up ? UP_COLOR : DOWN_COLOR
         context.beginPath()
-        context.moveTo(minuteToX(previous.minuteIdx), rowToY(previous.row))
-        context.lineTo(minuteToX(current.minuteIdx), rowToY(current.row))
+        for (let index = 1; index < points.length; index += 1) {
+          const current = points[index]
+          if (current.up !== up) continue
+          const previous = points[index - 1]
+          context.moveTo(minuteToX(previous.minuteIdx), rowToY(previous.row))
+          context.lineTo(minuteToX(current.minuteIdx), rowToY(current.row))
+        }
         context.stroke()
       }
     }
