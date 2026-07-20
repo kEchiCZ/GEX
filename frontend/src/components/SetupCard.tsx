@@ -3,6 +3,14 @@ import { setupRrr, templateLabel } from '../api/setups'
 import type { SetupRow } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
 
+/** Čas vzniku setupu (ISO) → lokální HH:MM; prázdné, když chybí/nevalidní. */
+function setupClock(iso: string): string {
+  const date = new Date(iso)
+  return Number.isNaN(date.getTime())
+    ? ''
+    : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
 export function SetupCard({
   setups,
   onDismiss,
@@ -18,6 +26,9 @@ export function SetupCard({
           <div className="setup-card-head">
             <strong>
               {setup.direction === 'long' ? 'LONG' : 'SHORT'} · {templateLabel(setup.template)}
+              {setupClock(setup.created_ts) && (
+                <time className="setup-card-time muted"> · {setupClock(setup.created_ts)}</time>
+              )}
             </strong>
             <button
               className="setup-card-dismiss"

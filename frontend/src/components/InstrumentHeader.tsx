@@ -3,6 +3,12 @@ import { useEffect, useState } from 'react'
 import { expiryCountdown, expiryKind } from '../instrument/expiry'
 import { useAppState } from '../state/AppState'
 
+/** Čas alertu (unix s) → lokální HH:MM; prázdné, když ts chybí/nevalidní. */
+function alertClock(ts: number): string {
+  if (!Number.isFinite(ts)) return ''
+  return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
 /** Zobrazovací názvy běžných futures podkladů (jinak jen ticker). */
 const SYMBOL_NAMES: Record<string, string> = {
   ES: 'E-mini S&P 500',
@@ -95,11 +101,15 @@ export function InstrumentHeader({
           <div className="alerts-dropdown" role="dialog" aria-label="Historie alertů">
             {alerts.length === 0 && <p className="muted">Žádné alerty</p>}
             <ol>
-              {[...alerts].reverse().map((alert, index) => (
-                <li key={index}>
-                  <span className="muted">[{alert.kind}]</span> {alert.message}
-                </li>
-              ))}
+              {[...alerts].reverse().map((alert, index) => {
+                const clock = alertClock(alert.ts)
+                return (
+                  <li key={index}>
+                    {clock && <time className="alert-time muted">{clock}</time>}
+                    <span className="muted">[{alert.kind}]</span> {alert.message}
+                  </li>
+                )
+              })}
             </ol>
           </div>
         )}
