@@ -473,6 +473,7 @@ body {
 
 .setup-card-time {
   font-weight: normal;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 

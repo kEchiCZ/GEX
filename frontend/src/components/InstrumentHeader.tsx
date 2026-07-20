@@ -3,10 +3,16 @@ import { useEffect, useState } from 'react'
 import { expiryCountdown, expiryKind } from '../instrument/expiry'
 import { useAppState } from '../state/AppState'
 
-/** Čas alertu (unix s) → lokální HH:MM; prázdné, když ts chybí/nevalidní. */
-function alertClock(ts: number): string {
+/** Čas alertu (unix s) → lokální datum + čas; prázdné, když ts chybí/nevalidní. */
+function alertTimestamp(ts: number): string {
   if (!Number.isFinite(ts)) return ''
-  return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return new Date(ts * 1000).toLocaleString([], {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 /** Zobrazovací názvy běžných futures podkladů (jinak jen ticker). */
@@ -102,11 +108,13 @@ export function InstrumentHeader({
             {alerts.length === 0 && <p className="muted">Žádné alerty</p>}
             <ol>
               {[...alerts].reverse().map((alert, index) => {
-                const clock = alertClock(alert.ts)
+                const stamp = alertTimestamp(alert.ts)
+                // Zvoneček je globální (napříč instrumenty) → u alertu i symbol
+                const tag = [alert.symbol, alert.kind].filter(Boolean).join(' · ')
                 return (
                   <li key={index}>
-                    {clock && <time className="alert-time muted">{clock}</time>}
-                    <span className="muted">[{alert.kind}]</span> {alert.message}
+                    {stamp && <time className="alert-time muted">{stamp}</time>}
+                    <span className="muted">[{tag}]</span> {alert.message}
                   </li>
                 )
               })}

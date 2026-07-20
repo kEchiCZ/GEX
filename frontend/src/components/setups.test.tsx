@@ -101,9 +101,10 @@ test('aktivní setup: karta nad grafem s úrovněmi a skrytím', async () => {
   expect(screen.getByText('Entry 7501')).toBeDefined()
   expect(screen.getByText('Cíl 7515')).toBeDefined()
   expect(screen.getByText('Stop 7472')).toBeDefined()
-  // Čas vzniku setupu (created_ts) v kartě (HH:MM v lokální zóně — issue #113)
+  // Čas vzniku setupu (created_ts) v kartě: datum + čas v lokální zóně (issue #113/#115)
   const cardTime = screen.getByLabelText('Aktivní setupy').querySelector('.setup-card-time')
-  expect(cardTime?.textContent).toMatch(/\d{1,2}:\d{2}/)
+  expect(cardTime?.textContent).toMatch(/\d{4}/) // rok = je tam datum
+  expect(cardTime?.textContent).toMatch(/\d{1,2}:\d{2}/) // i čas
 
   fireEvent.click(screen.getByRole('button', { name: 'Skrýt setup 7' }))
   expect(screen.queryByLabelText('Aktivní setupy')).toBeNull()
@@ -125,7 +126,11 @@ test('alert ve zvonečku ukazuje čas notifikace (issue #113)', async () => {
   fireEvent.click(await screen.findByRole('button', { name: /Notifikace/ }))
   const time = document.querySelector('.alert-time')
   expect(time).not.toBeNull()
-  expect(time!.textContent).toMatch(/\d{1,2}:\d{2}/)
+  expect(time!.textContent).toMatch(/\d{4}/) // datum
+  expect(time!.textContent).toMatch(/\d{1,2}:\d{2}/) // čas
+  // Globální zvoneček → u alertu i symbol instrumentu
+  const dropdown = screen.getByRole('dialog', { name: 'Historie alertů' })
+  expect(dropdown.textContent).toContain('ES')
 })
 
 test('WS událost setups.* přenačte setupy', async () => {
