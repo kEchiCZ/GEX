@@ -91,6 +91,24 @@ async def test_one_cycle_produces_full_day_artifacts(
     assert "levels.ES.20260716" in channels
     assert "flow.ES" in channels
     assert "price.ES" in channels
+    assert "snapshot.ES.20260716" in channels
+
+    # price kanál nese plnou OHLC (#127), ne jen close
+    price_data = next(data for channel, data in publisher.messages if channel == "price.ES")
+    assert price_data["open"] == 7599.0
+    assert price_data["high"] == 7601.0
+    assert price_data["low"] == 7598.0
+    assert price_data["close"] == SPOT
+    assert price_data["volume"] == 1200.0
+
+    # snapshot kanál nese per-strike řez minuty (#127)
+    snap_data = next(
+        data for channel, data in publisher.messages if channel == "snapshot.ES.20260716"
+    )
+    snap_rows = snap_data["rows"]
+    assert isinstance(snap_rows, list) and len(snap_rows) == 6
+    assert set(snap_rows[0]) >= {"strike", "right", "oi", "volume", "delta", "stale_age"}
+    assert snap_rows[0]["oi"] == 1000.0
 
 
 async def test_second_cycle_appends_and_accumulates(

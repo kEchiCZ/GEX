@@ -138,6 +138,25 @@ class EngineRuntime:
                 )
         if rows:
             await asyncio.to_thread(self.writer.write_minute, self.symbol, self.expiry, day, rows)
+            # Inkrementální řez minuty pro živý append heatmapy (#127) — jen pole nutná
+            # pro frontend grid/profil; jede pro aktivní i sekundární řetěz
+            await self.publisher.publish(
+                f"snapshot.{self.symbol}.{self.expiry}",
+                {
+                    "ts_min": ts_min.isoformat(),
+                    "rows": [
+                        {
+                            "strike": row.strike,
+                            "right": row.right,
+                            "oi": row.oi,
+                            "volume": row.volume,
+                            "delta": row.delta,
+                            "stale_age": row.stale_age,
+                        }
+                        for row in rows
+                    ],
+                },
+            )
 
         # 2) GEX + levels
         gex = self.gex_engine.compute(gex_inputs, spot=spot, multiplier=self.multiplier)
@@ -218,8 +237,19 @@ class EngineRuntime:
         )
         if bars:
             last_bar = bars[-1]
+            # Plná OHLC nové minuty (#127) — frontend vykreslí svíčku, ne jen linku.
+            # `last` ponecháno kvůli zpětné kompatibilitě starších konzumentů.
             await self.publisher.publish(
-                f"price.{self.symbol}", {"ts": last_bar.ts.isoformat(), "last": last_bar.close}
+                f"price.{self.symbol}",
+                {
+                    "ts": last_bar.ts.isoformat(),
+                    "open": last_bar.open,
+                    "high": last_bar.high,
+                    "low": last_bar.low,
+                    "close": last_bar.close,
+                    "volume": last_bar.volume,
+                    "last": last_bar.close,
+                },
             )
         logger.info(
             "Cyklus %s %s: %d snapshotů, greeks %d/%d, sweep %.1fs",

@@ -38,6 +38,7 @@ from gexlens_engine.instruments import (
 )
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
+from gexlens_engine.spot_stream import SpotStreamer
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter
 from gexlens_engine.storage.retention import RetentionJob
@@ -107,6 +108,23 @@ async def create_pipeline(
 
     stopped = False
     rt_bars: RealTimeBarList | None = None
+    loop = asyncio.get_running_loop()
+    # Živý spot (#128): throttlovaný publish spot.{symbol} z ticker.updateEvent (~5 Hz)
+    spot_streamer = SpotStreamer(publisher, symbol)
+
+    def on_spot_tick(ticker: Ticker) -> None:
+        if stopped:
+            return
+        price = ticker.last if ticker.last == ticker.last else ticker.marketPrice()
+        published = spot_streamer.sample(price, loop.time())
+        if published is None:
+            return
+        loop.create_task(
+            publisher.publish(
+                f"spot.{symbol}",
+                {"ts": dt.datetime.now(dt.UTC).isoformat(), "price": published},
+            )
+        )
 
     def subscribe_underlying() -> Ticker:
         """Trvalé subskripce podkladu — při startu a po každém reconnectu.
@@ -117,6 +135,7 @@ async def create_pipeline(
         """
         nonlocal rt_bars
         ticker = ib.reqMktData(front, "", False, False)
+        ticker.updateEvent += on_spot_tick
         bars_list = ib.reqRealTimeBars(front, 5, "TRADES", False)
         bars_list.updateEvent += on_bar_update
         rt_bars = bars_list
@@ -215,6 +234,7 @@ async def create_pipeline(
     def on_stop() -> None:
         nonlocal stopped
         stopped = True
+        spot_streamer.stop()
         ib.cancelMktData(front)
         if rt_bars is not None:
             ib.cancelRealTimeBars(rt_bars)
