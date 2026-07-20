@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import { StrikeProfile } from '../components/StrikeProfile'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
-import { barGeometry } from './bars'
+import { barGeometry, niceCeil } from './bars'
 import type { ProfileRow } from './bars'
 
 function rows(): ProfileRow[] {
@@ -51,6 +51,15 @@ test('barGeometry normalizuje největší stranou a zoom násobí šířky', () 
   // ořez: skládaný pruh nikdy nepřeteče polovinu panelu
   const clipped = barGeometry(rows(), 130, 4).find((bar) => bar.strike === 7590)!
   expect(clipped.putVolWidth + clipped.putOiWidth).toBeLessThanOrEqual(130)
+})
+
+test('niceCeil zaokrouhluje na 1/2/5×10^n (absolutní škála)', () => {
+  expect(niceCeil(60)).toBe(100)
+  expect(niceCeil(12)).toBe(20)
+  expect(niceCeil(3)).toBe(5)
+  expect(niceCeil(500)).toBe(500)
+  expect(niceCeil(1)).toBe(1)
+  expect(niceCeil(0)).toBe(1)
 })
 
 // ── Render a orientace (AC: rozložení a orientace dle Moodix) ─────
@@ -167,6 +176,26 @@ test('bez onYViewChange profil Y osu neupravuje (legacy)', () => {
   fireEvent.pointerDown(svg, { clientY: 100, pointerId: 1 })
   fireEvent.pointerMove(svg, { clientY: 60, pointerId: 1 })
   expect(svg).toBeDefined()
+})
+
+test('přepínač Abs/Rel: absolutní škála zaokrouhlí osu (issue #120)', () => {
+  renderPanel()
+  const panel = () => screen.getByLabelText('Skládané pruhy strike profilu')
+  const ticks = () =>
+    [...panel().querySelectorAll('[data-part="amount-tick"]')].map((node) => node.textContent)
+  expect(ticks()).toEqual(['60', '30', '0', '30', '60']) // Rel = max ve výřezu (60)
+  fireEvent.click(screen.getByLabelText('Absolutní / relativní škála'))
+  expect(ticks()).toEqual(['100', '50', '0', '50', '100']) // Abs = niceCeil(60) = 100
+})
+
+test('číselné popisky hodnot u pruhů (issue #120)', () => {
+  renderPanel()
+  const panel = screen.getByLabelText('Skládané pruhy strike profilu')
+  const callVals = [...panel.querySelectorAll('[data-part="value-call"]')].map((n) => n.textContent)
+  const putVals = [...panel.querySelectorAll('[data-part="value-put"]')].map((n) => n.textContent)
+  // 7600: call 30+15=45, put 10+5=15 ; 7590: call 10+5=15, put 40+20=60
+  expect(callVals).toContain('45')
+  expect(putVals).toContain('60')
 })
 
 test('zoom přepínače mění šířku pruhů', () => {

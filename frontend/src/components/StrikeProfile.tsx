@@ -14,7 +14,7 @@ import { useElementSize } from '../hooks/useElementSize'
 import { zoomAxis } from '../heatmap/view'
 import type { ViewTransform } from '../heatmap/view'
 import { fractionalRow } from '../heatmap/overlays'
-import { barGeometry, formatAmount, maxComponentSide } from '../profile/bars'
+import { barGeometry, formatAmount, maxComponentSide, niceCeil } from '../profile/bars'
 import type { ProfileRow } from '../profile/bars'
 import { useCrosshair } from '../state/Crosshair'
 
@@ -27,6 +27,8 @@ export interface ProfileYView {
 }
 
 const ROW_GAP = 1
+// Rezerva na každé straně pro číselný popisek hodnoty — pruhy nekončí až u okraje
+const LABEL_SPACE = 40
 
 /** Změna se znaménkem (+120 / −45) pro ΔOI tooltip. */
 function formatSigned(value: number): string {
@@ -65,6 +67,7 @@ export function StrikeProfile({
   onAggregateToggle?: () => void
 }) {
   const [zoom, setZoom] = useState<1 | 2 | 4>(1)
+  const [scaleMode, setScaleMode] = useState<'rel' | 'abs'>('rel')
   const { position: crosshair, setPosition: setCrosshair } = useCrosshair()
   // Se sdílenou osou svg vyplní celý panel (řádky mimo výřez se přirozeně oříznou)
   const { ref: bodyRef, size: bodySize } = useElementSize<HTMLDivElement>({
@@ -115,12 +118,19 @@ export function StrikeProfile({
     dragYRef.current = null
   }
   const halfWidth = width / 2
+  // Pruhy končí LABEL_SPACE před okrajem — nepřetékají a je místo na číslo
+  const barHalf = Math.max(10, halfWidth - LABEL_SPACE)
+  // Referenční strana měřítka: Rel = max ve výřezu, Abs = zaokrouhlený „nice" strop
+  const maxSide = ordered.length > 0 ? maxComponentSide(ordered) : 0
+  const scaleMax = scaleMode === 'abs' ? niceCeil(maxSide) : maxSide
   const geometry = useMemo(
-    () => new Map(barGeometry(ordered, halfWidth, zoom).map((bar) => [bar.strike, bar])),
-    [ordered, halfWidth, zoom],
+    () => new Map(barGeometry(ordered, barHalf, zoom, scaleMax).map((bar) => [bar.strike, bar])),
+    [ordered, barHalf, zoom, scaleMax],
   )
-  // Osa množství: plná šířka strany = maxSide/zoom (Δ-vážené kontrakty)
-  const axisFull = ordered.length > 0 ? maxComponentSide(ordered) / zoom : 0
+  // Osa množství: plná strana = scaleMax/zoom (Δ-vážené kontrakty)
+  const axisFull = ordered.length > 0 ? scaleMax / zoom : 0
+  // Popisky (strike i hodnoty) jen na každém k-tém řádku, ať se nepřekrývají
+  const labelEvery = Math.max(1, Math.ceil(16 / Math.max(1, rowHeight)))
 
   const spotRow = spot === null ? null : fractionalRow(strikesAscending, spot)
   const spotY =
@@ -147,6 +157,14 @@ export function StrikeProfile({
               Σ
             </button>
           )}
+          <button
+            className={scaleMode === 'abs' ? 'chip active' : 'chip'}
+            onClick={() => setScaleMode((mode) => (mode === 'abs' ? 'rel' : 'abs'))}
+            aria-label="Absolutní / relativní škála"
+            title="Rel = normalizace na max ve výřezu; Abs = zaokrouhlený strop (kulaté hodnoty)"
+          >
+            {scaleMode === 'abs' ? 'Abs' : 'Rel'}
+          </button>
           {([1, 2, 4] as const).map((value) => (
             <button
               key={value}
@@ -175,7 +193,6 @@ export function StrikeProfile({
           <line x1={halfWidth} y1={0} x2={halfWidth} y2={svgHeight} stroke="#2c3342" />
           {/* popisky strikes (každý k-tý, ať se nepřekrývají) */}
           {ordered.map((row, index) => {
-            const labelEvery = Math.max(1, Math.ceil(16 / Math.max(1, rowHeight)))
             if (index % labelEvery !== 0) return null
             return (
               <text
@@ -248,6 +265,31 @@ export function StrikeProfile({
                   fill={COLORS.putOi}
                   data-part="put-oi"
                 />
+                {/* Číselné hodnoty (Δ-vážené kontrakty) u konce pruhů — každý k-tý řádek */}
+                {index % labelEvery === 0 && row.callVolComponent + row.callOiComponent > 0 && (
+                  <text
+                    x={halfWidth + bar.callVolWidth + bar.callOiWidth + 3}
+                    y={rowCenterY(index) + 3}
+                    fontSize={9}
+                    fill={COLORS.callVol}
+                    textAnchor="start"
+                    data-part="value-call"
+                  >
+                    {formatAmount(row.callVolComponent + row.callOiComponent)}
+                  </text>
+                )}
+                {index % labelEvery === 0 && row.putVolComponent + row.putOiComponent > 0 && (
+                  <text
+                    x={halfWidth - bar.putVolWidth - bar.putOiWidth - 3}
+                    y={rowCenterY(index) + 3}
+                    fontSize={9}
+                    fill={COLORS.putVol}
+                    textAnchor="end"
+                    data-part="value-put"
+                  >
+                    {formatAmount(row.putVolComponent + row.putOiComponent)}
+                  </text>
+                )}
               </g>
             )
           })}
@@ -262,11 +304,11 @@ export function StrikeProfile({
               </text>
               {(
                 [
-                  { x: 2, value: axisFull, anchor: 'start' },
-                  { x: halfWidth / 2, value: axisFull / 2, anchor: 'middle' },
+                  { x: halfWidth - barHalf, value: axisFull, anchor: 'start' },
+                  { x: halfWidth - barHalf / 2, value: axisFull / 2, anchor: 'middle' },
                   { x: halfWidth, value: 0, anchor: 'middle' },
-                  { x: halfWidth + halfWidth / 2, value: axisFull / 2, anchor: 'middle' },
-                  { x: width - 2, value: axisFull, anchor: 'end' },
+                  { x: halfWidth + barHalf / 2, value: axisFull / 2, anchor: 'middle' },
+                  { x: halfWidth + barHalf, value: axisFull, anchor: 'end' },
                 ] as Array<{ x: number; value: number; anchor: 'start' | 'middle' | 'end' }>
               ).map((tick, index) => (
                 <text
