@@ -22,6 +22,7 @@ import { visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { DEFAULT_VIEW } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
+import { priceTick } from './instrument/tick'
 import {
   WALLS_MODES,
   centerSeries,
@@ -405,6 +406,7 @@ function MainContent() {
                 timeframe === 'intraday' ? today.split('-').reverse().join('.') : undefined
               }
               resetKey={`${symbol}|${selectedExpiry}|${timeframe}|${interval}|${today}`}
+              priceTick={priceTick(symbol)}
             />
             <SetupCard
               setups={activeSetups}
