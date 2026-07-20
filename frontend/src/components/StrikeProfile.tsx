@@ -9,8 +9,10 @@ S `yView` panel používá stejnou Y transformaci jako heatmapa (offsetY, zoomY 
 její výškou) — strike je v obou na stejné obrazovkové úrovni a při zoomu/panu
 grafu se pruhy hýbou synchronně. Bez `yView` (testy) platí legacy rozložení.
 */
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useElementSize } from '../hooks/useElementSize'
+import { zoomAxis } from '../heatmap/view'
+import type { ViewTransform } from '../heatmap/view'
 import { fractionalRow } from '../heatmap/overlays'
 import { barGeometry, formatAmount, maxComponentSide } from '../profile/bars'
 import type { ProfileRow } from '../profile/bars'
@@ -45,6 +47,7 @@ export function StrikeProfile({
   height = 640,
   width = 260,
   yView = null,
+  onYViewChange,
   aggregate = null,
   onAggregateToggle,
 }: {
@@ -55,6 +58,8 @@ export function StrikeProfile({
   width?: number
   /** Sdílená Y transformace s heatmapou; null = vlastní statické rozložení. */
   yView?: ProfileYView | null
+  /** Úprava Y osy grafu tažením/kolečkem na profilu (jako levá osa heatmapy). */
+  onYViewChange?: (next: { offsetY: number; zoomY: number }) => void
   /** Σ souhrn přes expirace: null = přepínač skrytý, jinak stav zapnuto/vypnuto. */
   aggregate?: boolean | null
   onAggregateToggle?: () => void
@@ -81,6 +86,34 @@ export function StrikeProfile({
   const offsetY = yView?.offsetY ?? 0
   /** Střed řádku i (descending pořadí) — shodný vzorec s heatmap rowToY. */
   const rowCenterY = (index: number): number => (index + 0.5) * rowHeight + offsetY
+
+  // Úprava Y osy grafu tažením/kolečkem na profilu (stejná matematika jako heatmap osa)
+  const dragYRef = useRef<number | null>(null)
+  const yInteractive = Boolean(yView && onYViewChange)
+  const yBase = (): ViewTransform => ({ offsetX: 0, offsetY, zoomX: 1, zoomY: yView?.zoomY ?? 1 })
+  const applyY = (next: ViewTransform) =>
+    onYViewChange?.({ offsetY: next.offsetY, zoomY: next.zoomY })
+  const onProfileWheel = (event: React.WheelEvent<SVGSVGElement>) => {
+    if (!yInteractive) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
+    applyY(zoomAxis(yBase(), 'y', factor, event.clientY - rect.top))
+  }
+  const onProfilePointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (!yInteractive) return
+    dragYRef.current = event.clientY
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  const onProfilePointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (dragYRef.current === null || !yInteractive) return
+    const deltaY = event.clientY - dragYRef.current
+    dragYRef.current = event.clientY
+    // Kotva = střed (jako scale-y na levé ose): stlačení/roztažení cenové osy
+    applyY(zoomAxis(yBase(), 'y', Math.exp(-deltaY * 0.005), (yView?.baseHeight ?? 0) / 2))
+  }
+  const onProfilePointerUp = () => {
+    dragYRef.current = null
+  }
   const halfWidth = width / 2
   const geometry = useMemo(
     () => new Map(barGeometry(ordered, halfWidth, zoom).map((bar) => [bar.strike, bar])),
@@ -131,6 +164,11 @@ export function StrikeProfile({
           height={svgHeight}
           role="img"
           aria-label="Skládané pruhy strike profilu"
+          style={{ cursor: yInteractive ? 'ns-resize' : undefined }}
+          onWheel={onProfileWheel}
+          onPointerDown={onProfilePointerDown}
+          onPointerMove={onProfilePointerMove}
+          onPointerUp={onProfilePointerUp}
           onPointerLeave={() => setCrosshair(null)}
         >
           {/* symetrická osa */}

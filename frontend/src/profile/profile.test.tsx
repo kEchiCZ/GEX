@@ -121,6 +121,54 @@ test('yView: pruhy i cenová linka sledují Y transformaci hlavního grafu', () 
   expect(Number(screen.getByTestId('profile-price-line').getAttribute('y1'))).toBeCloseTo(300, 1)
 })
 
+test('drag i kolečko na profilu upravují Y osu grafu (issue #116)', () => {
+  const changes: Array<{ offsetY: number; zoomY: number }> = []
+  render(
+    <CrosshairProvider>
+      <StrikeProfile
+        rows={rows()}
+        spot={7595}
+        height={200}
+        yView={{ offsetY: 0, zoomY: 1, baseHeight: 200 }}
+        onYViewChange={(next) => changes.push(next)}
+      />
+    </CrosshairProvider>,
+  )
+  const svg = screen.getByLabelText('Skládané pruhy strike profilu')
+  // Kolečko nahoru → zoom Y in (zoomY > 1)
+  fireEvent.wheel(svg, { deltaY: -100 })
+  expect(changes.at(-1)!.zoomY).toBeGreaterThan(1)
+  // Tažení nahoru (deltaY < 0) → roztažení cenové osy (zoomY roste)
+  changes.length = 0
+  fireEvent.pointerDown(svg, { clientY: 100, pointerId: 1 })
+  fireEvent.pointerMove(svg, { clientY: 60, pointerId: 1 })
+  expect(changes.at(-1)!.zoomY).toBeGreaterThan(1)
+  fireEvent.pointerUp(svg, { pointerId: 1 })
+  // Bez tažení (jen pohyb) se Y osa nemění
+  changes.length = 0
+  fireEvent.pointerMove(svg, { clientY: 40, pointerId: 1 })
+  expect(changes).toHaveLength(0)
+})
+
+test('bez onYViewChange profil Y osu neupravuje (legacy)', () => {
+  render(
+    <CrosshairProvider>
+      <StrikeProfile
+        rows={rows()}
+        spot={7595}
+        height={200}
+        yView={{ offsetY: 0, zoomY: 1, baseHeight: 200 }}
+      />
+    </CrosshairProvider>,
+  )
+  const svg = screen.getByLabelText('Skládané pruhy strike profilu')
+  // Nesmí spadnout ani nic nevolat — jen ověříme, že interakce projde bez chyby
+  fireEvent.wheel(svg, { deltaY: -100 })
+  fireEvent.pointerDown(svg, { clientY: 100, pointerId: 1 })
+  fireEvent.pointerMove(svg, { clientY: 60, pointerId: 1 })
+  expect(svg).toBeDefined()
+})
+
 test('zoom přepínače mění šířku pruhů', () => {
   renderPanel()
   const width = () =>
