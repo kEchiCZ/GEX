@@ -459,6 +459,9 @@ function MainContent() {
             zoomY: chartView.zoomY,
             baseHeight: heatSize.height,
           }}
+          onYViewChange={(next) =>
+            setChartView((view) => ({ ...view, offsetY: next.offsetY, zoomY: next.zoomY }))
+          }
           aggregate={day.source === 'replay' ? aggregateOn : null}
           onAggregateToggle={() => setAggregateOn((value) => !value)}
         />
