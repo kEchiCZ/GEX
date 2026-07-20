@@ -401,6 +401,7 @@ function MainContent() {
               onViewChange={setChartView}
               fitRange={fitRange}
               onLogicalSizeChange={setHeatSize}
+              dateLabel={timeframe === 'intraday' ? today.split('-').reverse().join('.') : undefined}
             />
             <SetupCard
               setups={activeSetups}
