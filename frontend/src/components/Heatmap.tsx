@@ -49,6 +49,18 @@ import { useCrosshair } from '../state/Crosshair'
 const UP_COLOR = '#3ecf8e'
 const DOWN_COLOR = '#f0616d'
 const LEVEL_DEFAULT_COLOR = '#e8c14b'
+
+// measureText nutí layout — cache šířky per font|text (osy překreslujeme 5×/s při živém spotu)
+const textWidthCache = new Map<string, number>()
+function measuredWidth(context: CanvasRenderingContext2D, text: string): number {
+  const key = `${context.font}|${text}`
+  let width = textWidthCache.get(key)
+  if (width === undefined) {
+    width = context.measureText(text).width
+    textWidthCache.set(key, width)
+  }
+  return width
+}
 // Sentinel: pohled ještě nebyl fitnut (liší se od každého resetKey včetně undefined)
 const UNFITTED = Symbol('unfitted')
 // Osové labely crosshairu (TradingView styl): tmavý box, světlý text
@@ -308,7 +320,7 @@ export function Heatmap({
       context.stroke()
       context.setLineDash([])
       const label = formatLevel(value)
-      const width = context.measureText(label).width + 8
+      const width = measuredWidth(context, label) + 8
       context.fillStyle = line.color || LEVEL_DEFAULT_COLOR
       context.fillRect(46, y - 8, width, 15)
       context.fillStyle = '#12151c'
@@ -336,14 +348,17 @@ export function Heatmap({
           context.lineTo(x, rowToY(candle.lowRow))
         }
         context.stroke()
+        // Těla také jedním fill (rect path) místo N fillRect
         context.fillStyle = color
+        context.beginPath()
         for (const candle of candles) {
           if (candle.up !== up) continue
           const x = minuteToX(candle.minuteIdx)
           const topY = rowToY(Math.max(candle.openRow, candle.closeRow))
           const bottomY = rowToY(Math.min(candle.openRow, candle.closeRow))
-          context.fillRect(x - bodyWidth / 2, topY, bodyWidth, Math.max(1, bottomY - topY))
+          context.rect(x - bodyWidth / 2, topY, bodyWidth, Math.max(1, bottomY - topY))
         }
+        context.fill()
       }
     } else {
       // Segmenty dávkově po barvě ticku (2 tahy místo N)
@@ -454,7 +469,7 @@ export function Heatmap({
       if (y < 8 || y > logicalH - 20) continue
       const label = String(grid.strikes[row])
       context.fillStyle = 'rgba(18,21,28,0.75)'
-      context.fillRect(2, y - 8, context.measureText(label).width + 8, 15)
+      context.fillRect(2, y - 8, measuredWidth(context, label) + 8, 15)
       context.fillStyle = 'rgba(180,188,202,0.95)'
       context.fillText(label, 6, y + 4)
     }
@@ -463,7 +478,7 @@ export function Heatmap({
       const x = minuteToX(minuteIdx)
       if (x < 24 || x > logicalW - 44) continue
       const label = minuteLabels[minuteIdx] ?? `m${minuteIdx}`
-      const width = context.measureText(label).width
+      const width = measuredWidth(context, label)
       context.fillStyle = 'rgba(18,21,28,0.75)'
       context.fillRect(x - width / 2 - 4, logicalH - 19, width + 8, 15)
       context.fillStyle = 'rgba(180,188,202,0.95)'
@@ -485,7 +500,7 @@ export function Heatmap({
       const timeLabel = timeStr ? `${dateLabel ? `${dateLabel} ` : ''}${timeStr}`.trim() : ''
       if (timeLabel) {
         const x = minuteToX(crosshair.minuteIdx)
-        const width = context.measureText(timeLabel).width + 12
+        const width = measuredWidth(context, timeLabel) + 12
         const boxX = Math.min(logicalW - width, Math.max(0, x - width / 2))
         context.fillStyle = AXIS_LABEL_BG
         context.fillRect(boxX, logicalH - 18, width, 16)
@@ -496,7 +511,7 @@ export function Heatmap({
       if (pointer) {
         const raw = screenToDataPoint(pointer.x, pointer.y).strike
         const priceLabel = snapToTick(raw, priceTick).toFixed(tickDecimals(priceTick))
-        const width = context.measureText(priceLabel).width + 12
+        const width = measuredWidth(context, priceLabel) + 12
         const boxY = Math.min(logicalH - 8, Math.max(8, pointer.y))
         context.fillStyle = AXIS_LABEL_BG
         context.fillRect(logicalW - width, boxY - 8, width, 16)
