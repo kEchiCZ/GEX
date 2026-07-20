@@ -3,6 +3,8 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { expect, test } from 'vitest'
 import { Heatmap } from '../components/Heatmap'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
+import { DEFAULT_VIEW } from './view'
+import type { ViewTransform } from './view'
 import { demoGrid } from './demo'
 import { formatLevel, fractionalRow, pricePolyline, tickIndices, visibleOverlays } from './overlays'
 import type { OverlayData } from './overlays'
@@ -118,6 +120,36 @@ test('crosshair drží i mimo svíce (prázdná/budoucí plocha) — issue #109'
   fireEvent.pointerMove(overlay, { clientX: 1300, clientY: 66 })
   expect(screen.getByTestId('crosshair-reader').textContent).not.toBe('none')
   expect(screen.getByTestId('crosshair-reader').textContent).toMatch(/^108@/)
+})
+
+test('auto-fit jen při změně datasetu (resetKey), ne při živém růstu/resize — issue #118', () => {
+  const calls: ViewTransform[] = []
+  const onViewChange = (view: ViewTransform) => calls.push(view)
+  const fitRange = { low: 7400, high: 7445 }
+  const draw = (grid: ReturnType<typeof demoGrid>, resetKey: string) => (
+    <CrosshairProvider>
+      <Heatmap
+        grid={grid}
+        style="gradient"
+        contours="off"
+        fitRange={fitRange}
+        view={DEFAULT_VIEW}
+        onViewChange={onViewChange}
+        resetKey={resetKey}
+      />
+    </CrosshairProvider>
+  )
+  const { rerender } = render(draw(demoGrid(100, 10), 'ES|e|intraday|1m|d'))
+  const afterInitial = calls.length
+  expect(afterInitial).toBeGreaterThan(0) // úvodní fit proběhl
+
+  // Živý přírůstek minuty (stejný dataset) → žádný nový fit, pohled se nepřepíše
+  rerender(draw(demoGrid(101, 10), 'ES|e|intraday|1m|d'))
+  expect(calls.length).toBe(afterInitial)
+
+  // Změna timeframe (jiný resetKey) → refit
+  rerender(draw(demoGrid(20, 10), 'ES|e|intraday|5m|d'))
+  expect(calls.length).toBeGreaterThan(afterInitial)
 })
 
 test('heatmapa má reset zobrazení (tlačítko i dvojklik neshodí render)', () => {

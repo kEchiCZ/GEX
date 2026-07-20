@@ -48,6 +48,8 @@ import { useCrosshair } from '../state/Crosshair'
 const UP_COLOR = '#3ecf8e'
 const DOWN_COLOR = '#f0616d'
 const LEVEL_DEFAULT_COLOR = '#e8c14b'
+// Sentinel: pohled ještě nebyl fitnut (liší se od každého resetKey včetně undefined)
+const UNFITTED = Symbol('unfitted')
 // Osové labely crosshairu (TradingView styl): tmavý box, světlý text
 const AXIS_LABEL_BG = '#363c4a'
 const AXIS_LABEL_FG = '#e6e9ef'
@@ -70,6 +72,7 @@ export function Heatmap({
   fitRange = null,
   onLogicalSizeChange,
   dateLabel,
+  resetKey,
 }: {
   grid: HeatmapGrid
   style: HeatmapStyle
@@ -94,6 +97,8 @@ export function Heatmap({
   onLogicalSizeChange?: (size: { width: number; height: number }) => void
   /** Datum grafu (intraday) — prefix časového labelu crosshairu na ose X. */
   dateLabel?: string
+  /** Identita datasetu (symbol/expirace/timeframe/den) — auto-fit se provede jen při její změně. */
+  resetKey?: string | number
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -124,11 +129,16 @@ export function Heatmap({
       : DEFAULT_VIEW
     return { ...base, offsetX: homeOffsetX(grid.minutes, logicalW) }
   }, [fitRange, grid.strikes, grid.minutes, logicalH, logicalW])
-  // Nový dataset / cenové pásmo → automaticky napasovat pohled
+  // Auto-fit jen JEDNOU na dataset (resetKey = symbol/expirace/timeframe/den).
+  // Resize pravého panelu, živý přírůstek minut ani úprava os pohled neresetují —
+  // uživatelův pan/zoom tak zůstává zachovaný a X se neukotvuje samo doprava.
+  const fittedKeyRef = useRef<string | number | undefined | symbol>(UNFITTED)
   useEffect(() => {
+    if (fittedKeyRef.current === resetKey) return
+    if (!fitRange) return // počkej na reálná data (cenové pásmo dne)
+    fittedKeyRef.current = resetKey
     setView(() => homeView)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [homeView])
+  }, [resetKey, fitRange, homeView, setView])
   // Tažení: pan plochy, nebo roztahování jedné osy (TradingView styl)
   const dragRef = useRef<{ x: number; y: number; mode: 'pan' | 'scale-x' | 'scale-y' } | null>(null)
   const [axisHover, setAxisHover] = useState<AxisZone>(null)

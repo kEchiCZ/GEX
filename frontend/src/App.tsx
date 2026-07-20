@@ -404,6 +404,7 @@ function MainContent() {
               dateLabel={
                 timeframe === 'intraday' ? today.split('-').reverse().join('.') : undefined
               }
+              resetKey={`${symbol}|${selectedExpiry}|${timeframe}|${interval}|${today}`}
             />
             <SetupCard
               setups={activeSetups}
@@ -442,9 +443,11 @@ function MainContent() {
           onPointerMove={(event) => {
             const drag = dividerDragRef.current
             if (!drag) return
-            // Tažení doleva panel rozšiřuje; meze drží použitelnost obou stran
+            // Tažení doleva panel rozšiřuje; horní mez nechá jen ~360 px na graf
             const next = drag.width + (drag.x - event.clientX)
-            setProfileWidth(Math.min(640, Math.max(180, Math.round(next))))
+            const maxWidth =
+              typeof window !== 'undefined' ? Math.max(640, window.innerWidth - 360) : 640
+            setProfileWidth(Math.min(maxWidth, Math.max(180, Math.round(next))))
           }}
           onPointerUp={() => {
             dividerDragRef.current = null
