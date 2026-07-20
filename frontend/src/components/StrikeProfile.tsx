@@ -9,7 +9,7 @@ S `yView` panel používá stejnou Y transformaci jako heatmapa (offsetY, zoomY 
 její výškou) — strike je v obou na stejné obrazovkové úrovni a při zoomu/panu
 grafu se pruhy hýbou synchronně. Bez `yView` (testy) platí legacy rozložení.
 */
-import { useMemo, useRef, useState } from 'react'
+import { memo, useMemo, useRef, useState } from 'react'
 import { useElementSize } from '../hooks/useElementSize'
 import { zoomAxis } from '../heatmap/view'
 import type { ViewTransform } from '../heatmap/view'
@@ -43,7 +43,7 @@ const COLORS = {
   putOi: 'rgba(239, 68, 68, 0.45)',
 }
 
-export function StrikeProfile({
+function StrikeProfileBase({
   rows,
   spot,
   height = 640,
@@ -358,3 +358,6 @@ export function StrikeProfile({
     </aside>
   )
 }
+
+// Memoizace: živý spot překresluje jen graf, ne tento SVG profil
+export const StrikeProfile = memo(StrikeProfileBase)

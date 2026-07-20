@@ -10,7 +10,7 @@ počítá v základním měřítku a transformuje <g>, takže crosshair i sloupc
 pod heatmapou pixel-přesně. SVG má viewBox + preserveAspectRatio="none" —
 CSS roztažení škáluje obsah stejně jako canvas heatmapy.
 */
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { baseBucketPx } from '../heatmap/view'
 import { barHeights, cumDeltaAreas, seriesPeak } from '../panels/geometry'
 import { useCrosshair } from '../state/Crosshair'
@@ -107,7 +107,7 @@ function CrosshairLine({ x, height }: { x: number | null; height: number }) {
   )
 }
 
-export function BottomPanels({
+function BottomPanelsBase({
   data,
   visible,
   width = 1200,
@@ -358,3 +358,6 @@ export function BottomPanels({
     </div>
   )
 }
+
+// Memoizace: živý spot (rozdělaná svíčka) překresluje jen graf, ne tyto SVG panely
+export const BottomPanels = memo(BottomPanelsBase)
