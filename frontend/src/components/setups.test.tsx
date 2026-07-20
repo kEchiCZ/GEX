@@ -101,9 +101,31 @@ test('aktivní setup: karta nad grafem s úrovněmi a skrytím', async () => {
   expect(screen.getByText('Entry 7501')).toBeDefined()
   expect(screen.getByText('Cíl 7515')).toBeDefined()
   expect(screen.getByText('Stop 7472')).toBeDefined()
+  // Čas vzniku setupu (created_ts) v kartě (HH:MM v lokální zóně — issue #113)
+  const cardTime = screen.getByLabelText('Aktivní setupy').querySelector('.setup-card-time')
+  expect(cardTime?.textContent).toMatch(/\d{1,2}:\d{2}/)
 
   fireEvent.click(screen.getByRole('button', { name: 'Skrýt setup 7' }))
   expect(screen.queryByLabelText('Aktivní setupy')).toBeNull()
+})
+
+test('alert ve zvonečku ukazuje čas notifikace (issue #113)', async () => {
+  mockApi([])
+  renderApp()
+  const ws = FakeWebSocket.latest()
+  act(() => {
+    ws.open()
+    ws.push('alerts', {
+      kind: 'setup',
+      symbol: 'ES',
+      message: 'Nový setup SHORT (failed_break): entry 29094, cíl 28780, stop 29109.8',
+      ts: 1784301720,
+    })
+  })
+  fireEvent.click(await screen.findByRole('button', { name: /Notifikace/ }))
+  const time = document.querySelector('.alert-time')
+  expect(time).not.toBeNull()
+  expect(time!.textContent).toMatch(/\d{1,2}:\d{2}/)
 })
 
 test('WS událost setups.* přenačte setupy', async () => {

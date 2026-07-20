@@ -466,6 +466,16 @@ body {
   font-size: 12px;
 }
 
+.alert-time {
+  margin-right: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.setup-card-time {
+  font-weight: normal;
+  font-variant-numeric: tabular-nums;
+}
+
 .nav-item.active {
   border-color: var(--accent);
   color: var(--accent);
