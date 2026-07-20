@@ -167,6 +167,44 @@ test('živý spot přidá rozdělanou svíčku na náběžnou hranu a uzavře ji
   expect(result.current.grid.minutes).toBe(2)
 })
 
+test('bar dorazí v jiném flushi než snapshot — svíčka se přesto objeví (#133)', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+
+  // Snapshot minuty 15:01 (bez baru) → mřížka roste, svíčka pro tu minutu zatím není
+  await act(async () => {
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: '2026-07-16T15:01:00Z',
+      rows: [{ strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 }],
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  expect(result.current.grid.minutes).toBe(2)
+  expect(result.current.overlays.price!.filter((b) => b.minuteIdx === 1)).toHaveLength(0)
+
+  // Bar téže minuty dorazí až v dalším flushi → musí se aplikovat na existující minutu
+  await act(async () => {
+    socket.emit('price.ES', {
+      ts: '2026-07-16T15:01:00Z',
+      open: 7601,
+      high: 7605,
+      low: 7600,
+      close: 7602,
+      volume: 1300,
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  const candle = result.current.overlays.price!.filter((b) => b.minuteIdx === 1)
+  expect(candle).toHaveLength(1) // svíčka se objevila, nezmizela
+  expect(candle[0].close).toBe(7602)
+})
+
 test('daily režim nepoužívá intraday live fetch', async () => {
   vi.mocked(fetchDays).mockResolvedValue([])
   renderHook(() => useDayData('ES', '20260716', '2026-07-16', 'daily', makeSocket()))
