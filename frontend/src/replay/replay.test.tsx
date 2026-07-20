@@ -4,7 +4,8 @@ import { tableFromArrays, tableToIPC } from 'apache-arrow'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { PlaybackBar } from '../components/PlaybackBar'
 import { demoGrid } from '../heatmap/demo'
-import { buildReplayDay } from './loader'
+import { appendMinute, assembleReplayDay, buildReplayDay, decodeBundle } from './loader'
+import type { LiveMinute, ReplayDay } from './loader'
 import { sliceGrid, sliceOverlays, slicePanels, sliceSeries } from './slice'
 import { usePlayback, TICK_MS } from './usePlayback'
 import type { OverlayData } from '../heatmap/overlays'
@@ -182,4 +183,137 @@ test('buildReplayDay dekóduje Arrow snapshoty a poskládá den', () => {
   expect(day.profileByMinute[1][0].callVolComponent).toBeCloseTo(30 * 0.5)
   expect(day.profileByMinute[1][0].putOiComponent).toBeCloseTo(200 * 0.4)
   expect(day.profileByMinute[1][0].distanceFromSpot).toBeCloseTo(7600 - 7601.5)
+})
+
+// ── Inkrementální append (#127): append == plný build ───────────────
+
+type Cell = {
+  ts: string
+  strike: number
+  right: 'C' | 'P'
+  volume: number
+  oi: number
+  delta: number
+}
+
+const M0 = '2026-07-16T15:00:00Z'
+const M1 = '2026-07-16T15:01:00Z'
+const CELLS: Cell[] = [
+  { ts: M0, strike: 7600, right: 'C', volume: 10, oi: 100, delta: 0.5 },
+  { ts: M0, strike: 7600, right: 'P', volume: 5, oi: 200, delta: -0.4 },
+  { ts: M0, strike: 7610, right: 'C', volume: 8, oi: 80, delta: 0.4 },
+  { ts: M0, strike: 7610, right: 'P', volume: 3, oi: 90, delta: -0.3 },
+  { ts: M1, strike: 7600, right: 'C', volume: 30, oi: 100, delta: 0.5 },
+  { ts: M1, strike: 7600, right: 'P', volume: 12, oi: 200, delta: -0.4 },
+  { ts: M1, strike: 7610, right: 'C', volume: 20, oi: 80, delta: 0.45 },
+  { ts: M1, strike: 7610, right: 'P', volume: 6, oi: 90, delta: -0.3 },
+]
+const BARS = [
+  { ts_min: M0, open: 7600, high: 7601, low: 7599, close: 7600.5, volume: 1000 },
+  { ts_min: M1, open: 7600.5, high: 7603, low: 7600, close: 7602, volume: 1300 },
+]
+const LEVELS = [
+  { ts_min: M0, flip: 7595, centroid: 7598, call_wall: 7650, put_wall: 7500 },
+  { ts_min: M1, flip: 7596, centroid: 7599, call_wall: 7655, put_wall: 7505 },
+]
+const FLOW = [
+  { ts_min: M0, flow_delta: 50, cum_delta: 50 },
+  { ts_min: M1, flow_delta: -20, cum_delta: 30 },
+]
+
+function bundleFor(cells: Cell[], bars: typeof BARS, levels: typeof LEVELS, flow: typeof FLOW) {
+  const table = tableFromArrays({
+    ts_min: cells.map((c) => c.ts),
+    strike: Float64Array.from(cells.map((c) => c.strike)),
+    right: cells.map((c) => c.right),
+    volume: Float64Array.from(cells.map((c) => c.volume)),
+    oi: Float64Array.from(cells.map((c) => c.oi)),
+    delta: Float64Array.from(cells.map((c) => c.delta)),
+    stale_age: Float64Array.from(cells.map(() => 0)),
+  })
+  return {
+    symbol: 'ES',
+    expiry: '20260716',
+    date: '2026-07-16',
+    snapshots_arrow_base64: btoa(String.fromCharCode(...tableToIPC(table, 'stream'))),
+    levels,
+    flow,
+    bars,
+  }
+}
+
+/** Porovnatelný tvar dne (typed arrays → obyčejná pole). */
+function normalize(day: ReplayDay) {
+  return {
+    minutes: day.minutes,
+    strikes: day.raw.strikes,
+    call: Array.from(day.grid.layers.call ?? []),
+    put: Array.from(day.grid.layers.put ?? []),
+    signed: Array.from(day.grid.layers.signed ?? []),
+    callOi: Array.from(day.raw.callOi),
+    putOi: Array.from(day.raw.putOi),
+    panels: day.panels,
+    price: day.overlays.price,
+    levels: day.overlays.levels,
+    walls: day.overlays.walls,
+    profile: day.profileByMinute,
+  }
+}
+
+test('appendMinute dá identický výsledek jako plný build (#127)', () => {
+  const full = buildReplayDay(bundleFor(CELLS, BARS, LEVELS, FLOW))
+
+  const firstMinute = decodeBundle(
+    bundleFor(
+      CELLS.filter((c) => c.ts === M0),
+      [BARS[0]],
+      [LEVELS[0]],
+      [FLOW[0]],
+    ),
+  )
+  const secondMinute: LiveMinute = {
+    tsIso: M1,
+    rows: CELLS.filter((c) => c.ts === M1).map((c) => ({
+      strike: c.strike,
+      right: c.right,
+      oi: c.oi,
+      volume: c.volume,
+      delta: c.delta,
+    })),
+    bar: { open: 7600.5, high: 7603, low: 7600, close: 7602, volume: 1300 },
+    levels: { flip: 7596, centroid: 7599, call_wall: 7655, put_wall: 7505 },
+    flow: { cum_delta: 30 },
+  }
+  const incremental = assembleReplayDay(appendMinute(firstMinute, secondMinute))
+
+  expect(normalize(incremental)).toEqual(normalize(full))
+})
+
+test('appendMinute přidá nový strike (posun osy) beze ztráty starých buněk (#127)', () => {
+  const firstMinute = decodeBundle(
+    bundleFor(
+      CELLS.filter((c) => c.ts === M0),
+      [BARS[0]],
+      [LEVELS[0]],
+      [FLOW[0]],
+    ),
+  )
+  // Nová minuta přinese strike 7620 navíc → osa strikes se rozšíří
+  const withNewStrike: LiveMinute = {
+    tsIso: M1,
+    rows: [
+      { strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 },
+      { strike: 7620, right: 'C', oi: 40, volume: 15, delta: 0.6 },
+    ],
+    bar: { close: 7602, volume: 1300 },
+  }
+  const inputs = appendMinute(firstMinute, withNewStrike)
+  expect(inputs.strikes).toEqual([7600, 7610, 7620])
+  expect(inputs.minutes).toHaveLength(2)
+  const day = assembleReplayDay(inputs)
+  // Stará buňka 7610 C v minutě 0 zůstala (strikeIdx 1, minuteIdx 0)
+  const idx7610m0 = 1 * 2 + 0
+  expect(day.raw.callOi[idx7610m0]).toBe(80)
+  // Nový strike 7620 C v minutě 1 (strikeIdx 2, minuteIdx 1)
+  expect(day.raw.callOi[2 * 2 + 1]).toBe(40)
 })

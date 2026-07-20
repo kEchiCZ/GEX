@@ -62,7 +62,8 @@ function lastValue(series: (number | null)[] | undefined, position: number): num
 }
 
 function MainContent() {
-  const { toggles, symbol, selectedExpiry, view, timeframe, interval, setPriceInfo } = useAppState()
+  const { toggles, symbol, selectedExpiry, view, timeframe, interval, setPriceInfo, socket } =
+    useAppState()
   const [style, setStyle] = useState<HeatmapStyle>('gradient')
   const [contours, setContours] = useState<ContoursMode>('off')
   const [mode, setMode] = useState<HeatmapMode>('oi')
@@ -88,7 +89,7 @@ function MainContent() {
 
   // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame)
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
-  const rawDay = useDayData(symbol, selectedExpiry, today, timeframe)
+  const rawDay = useDayData(symbol, selectedExpiry, today, timeframe, socket)
   // Heatmap mód/škála: čistý přepočet ze surové matice (SPEC 4.3, bez fetch)
   const modeDay = useMemo(() => {
     if (!rawDay.raw || (mode === 'oi' && heatScale === 'linear')) return rawDay

@@ -1,8 +1,13 @@
 /** Načtení denního replay balíku (SPEC kap. 6 /replay) a příprava dat v paměti.
 
-Balík se stahuje JEDNOU; přetáčení dne je pak čisté krájení polí v paměti
+Balík se stahuje při načtení; přetáčení dne je pak čisté krájení polí v paměti
 (AC issue #27: žádný fetch per frame). Snapshot matice chodí jako base64
 Arrow IPC stream — dekóduje ji apache-arrow.
+
+Živý provoz (#127): místo přenačítání celého balíku každou minutu se z WS kanálů
+připojuje JEN nová minuta — `decodeBundle` → `ReplayInputs`, `appendMinute` přidá
+minutu, `assembleReplayDay` z inputs poskládá `ReplayDay`. `buildReplayDay` je
+složení obou (drží zpětně kompatibilní API i testy).
 */
 import { tableFromIPC } from 'apache-arrow'
 import { API_BASE } from '../config'
@@ -26,6 +31,67 @@ export interface ReplayDay {
   panels: PanelSeries // celý den
   /** Profilové řádky per minuta (předpočítané — krájení bez přepočtu). */
   profileByMinute: ProfileRow[][]
+}
+
+const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall'] as const
+
+interface BarInput {
+  tsIso: string
+  open?: number
+  high?: number
+  low?: number
+  close: number
+  volume: number
+}
+interface LevelsInput {
+  tsIso: string
+  values: Record<string, number | null>
+}
+interface FlowInput {
+  tsIso: string
+  cum_delta: number
+}
+interface OiPrevInput {
+  strike: number
+  right: string
+  oi: number
+}
+
+/** Rozložený vstup dne — matice per-strike + řádky barů/levels/flow. Roste přes append. */
+export interface ReplayInputs {
+  symbol: string
+  expiry: string
+  date: string
+  minutes: string[]
+  strikes: number[]
+  callOi: Float32Array
+  putOi: Float32Array
+  callVolume: Float32Array
+  putVolume: Float32Array
+  callDelta: Float32Array
+  putDelta: Float32Array
+  staleAge: Float32Array
+  bars: BarInput[]
+  levels: LevelsInput[]
+  flow: FlowInput[]
+  oiPrev: OiPrevInput[]
+}
+
+/** Jedna živá minuta z WS kanálů (#127) — snapshot řez + volitelně bar/levels/flow. */
+export interface LiveMinuteRow {
+  strike: number
+  right: 'C' | 'P'
+  oi: number
+  volume: number
+  delta: number
+  stale_age?: number
+}
+export interface LiveMinute {
+  tsIso: string
+  rows: LiveMinuteRow[]
+  bar?: { open?: number; high?: number; low?: number; close: number; volume?: number }
+  levels?: Record<string, number | null>
+  flow?: { cum_delta: number }
 }
 
 interface ReplayBundle {
@@ -55,17 +121,29 @@ export async function fetchDays(symbol: string): Promise<DayListing[]> {
   return payload.days
 }
 
+async function fetchBundle(symbol: string, expiry: string, date: string): Promise<ReplayBundle> {
+  const response = await fetch(`${API_BASE}/replay/${symbol}/${expiry}/${date}`)
+  if (!response.ok) {
+    throw new Error(`Replay ${symbol}/${expiry}/${date} selhal: HTTP ${response.status}`)
+  }
+  return (await response.json()) as ReplayBundle
+}
+
 export async function fetchReplay(
   symbol: string,
   expiry: string,
   date: string,
 ): Promise<ReplayDay> {
-  const response = await fetch(`${API_BASE}/replay/${symbol}/${expiry}/${date}`)
-  if (!response.ok) {
-    throw new Error(`Replay ${symbol}/${expiry}/${date} selhal: HTTP ${response.status}`)
-  }
-  const bundle = (await response.json()) as ReplayBundle
-  return buildReplayDay(bundle)
+  return assembleReplayDay(decodeBundle(await fetchBundle(symbol, expiry, date)))
+}
+
+/** Rozložený vstup dne z /replay (pro živý append). */
+export async function fetchReplayInputs(
+  symbol: string,
+  expiry: string,
+  date: string,
+): Promise<ReplayInputs> {
+  return decodeBundle(await fetchBundle(symbol, expiry, date))
 }
 
 /** Kanonický klíč minuty: Arrow vrací timestamp jako epoch (ms), JSON jako ISO string. */
@@ -92,10 +170,13 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes
 }
 
-/** Sestaví den v paměti z /replay balíku (exportováno kvůli testům). */
-export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
-  const table = tableFromIPC(base64ToBytes(bundle.snapshots_arrow_base64))
+function numOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
 
+/** Dekóduje /replay balík na rozložený vstup (Arrow matice + řádky barů/levels/flow). */
+export function decodeBundle(bundle: ReplayBundle): ReplayInputs {
+  const table = tableFromIPC(base64ToBytes(bundle.snapshots_arrow_base64))
   const tsColumn = table.getChild('ts_min')
   const strikeColumn = table.getChild('strike')
   const rightColumn = table.getChild('right')
@@ -107,7 +188,6 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
     throw new Error('Replay balík: snapshot tabulka nemá očekávané sloupce')
   }
 
-  // Osy: minuty a strikes
   const minuteKeys: string[] = []
   const minuteIndex = new Map<string, number>()
   const strikeSet = new Set<number>()
@@ -127,9 +207,11 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
 
   const callOi = new Float32Array(size)
   const putOi = new Float32Array(size)
+  const callVolume = new Float32Array(size)
+  const putVolume = new Float32Array(size)
+  const callDelta = new Float32Array(size)
+  const putDelta = new Float32Array(size)
   const staleAge = new Float32Array(size)
-  const volumeByCell = { C: new Float32Array(size), P: new Float32Array(size) }
-  const deltaByCell = { C: new Float32Array(size), P: new Float32Array(size) }
 
   for (let row = 0; row < rowCount; row += 1) {
     const minuteIdx = minuteIndex.get(canonicalTs(tsColumn.get(row)))!
@@ -139,66 +221,208 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
     const oi = Number(oiColumn?.get(row) ?? 0) || 0
     const volume = Number(volumeColumn?.get(row) ?? 0) || 0
     const delta = Number(deltaColumn?.get(row) ?? 0) || 0
-    if (right === 'C') callOi[index] = oi
-    else putOi[index] = oi
-    volumeByCell[right][index] = volume
-    deltaByCell[right][index] = delta
+    if (right === 'C') {
+      callOi[index] = oi
+      callVolume[index] = volume
+      callDelta[index] = delta
+    } else {
+      putOi[index] = oi
+      putVolume[index] = volume
+      putDelta[index] = delta
+    }
     staleAge[index] = Math.max(staleAge[index], Number(staleColumn?.get(row) ?? 0) || 0)
   }
 
-  // Overlaye: cena z barů, levels z derived
+  const bars: BarInput[] = bundle.bars.map((bar) => {
+    const open = Number(bar.open)
+    const high = Number(bar.high)
+    const low = Number(bar.low)
+    return {
+      tsIso: canonicalTs(bar.ts_min),
+      close: Number(bar.close),
+      volume: Number(bar.volume) || 0,
+      open: Number.isFinite(open) ? open : undefined,
+      high: Number.isFinite(high) ? high : undefined,
+      low: Number.isFinite(low) ? low : undefined,
+    }
+  })
+  const levels: LevelsInput[] = bundle.levels.map((row) => ({
+    tsIso: canonicalTs(row.ts_min),
+    values: Object.fromEntries(LEVEL_KEYS.map((key) => [key, numOrNull(row[key])])),
+  }))
+  const flow: FlowInput[] = bundle.flow.map((row) => ({
+    tsIso: canonicalTs(row.ts_min),
+    cum_delta: Number(row.cum_delta) || 0,
+  }))
+
+  return {
+    symbol: bundle.symbol,
+    expiry: bundle.expiry,
+    date: bundle.date,
+    minutes: minuteKeys,
+    strikes,
+    callOi,
+    putOi,
+    callVolume,
+    putVolume,
+    callDelta,
+    putDelta,
+    staleAge,
+    bars,
+    levels,
+    flow,
+    oiPrev: (bundle.oi_prev ?? []).map((row) => ({
+      strike: Number(row.strike),
+      right: String(row.right),
+      oi: Number(row.oi) || 0,
+    })),
+  }
+}
+
+function upsertRow<T extends { tsIso: string }>(rows: T[], row: T): T[] {
+  const idx = rows.findIndex((existing) => existing.tsIso === row.tsIso)
+  if (idx === -1) return [...rows, row]
+  const copy = rows.slice()
+  copy[idx] = row
+  return copy
+}
+
+/** Připojí (nebo přepíše poslední) minutu do rozloženého vstupu — realokuje matice. */
+export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayInputs {
+  const tsIso = canonicalTs(minute.tsIso)
+  const existingIdx = inputs.minutes.indexOf(tsIso)
+  const isAppend = existingIdx === -1
+  const oldMinutes = inputs.minutes.length
+  const newMinutes = isAppend ? [...inputs.minutes, tsIso] : inputs.minutes
+  const newMinuteCount = newMinutes.length
+  const targetMinute = isAppend ? oldMinutes : existingIdx
+
+  const strikeSet = new Set(inputs.strikes)
+  for (const row of minute.rows) strikeSet.add(row.strike)
+  const strikesChanged = strikeSet.size !== inputs.strikes.length
+  const newStrikes = strikesChanged ? [...strikeSet].sort((a, b) => a - b) : inputs.strikes
+  const strikeCount = newStrikes.length
+  const newStrikeIndex = new Map(newStrikes.map((strike, index) => [strike, index]))
+
+  const size = strikeCount * newMinuteCount
+  const callOi = new Float32Array(size)
+  const putOi = new Float32Array(size)
+  const callVolume = new Float32Array(size)
+  const putVolume = new Float32Array(size)
+  const callDelta = new Float32Array(size)
+  const putDelta = new Float32Array(size)
+  const staleAge = new Float32Array(size)
+
+  // Přenos starých buněk na nový stride (minutes je násobitel řádku, viz grid.ts)
+  for (let oldStrikeIdx = 0; oldStrikeIdx < inputs.strikes.length; oldStrikeIdx += 1) {
+    const newStrikeIdx = newStrikeIndex.get(inputs.strikes[oldStrikeIdx])!
+    for (let minuteIdx = 0; minuteIdx < oldMinutes; minuteIdx += 1) {
+      const from = oldStrikeIdx * oldMinutes + minuteIdx
+      const to = newStrikeIdx * newMinuteCount + minuteIdx
+      callOi[to] = inputs.callOi[from]
+      putOi[to] = inputs.putOi[from]
+      callVolume[to] = inputs.callVolume[from]
+      putVolume[to] = inputs.putVolume[from]
+      callDelta[to] = inputs.callDelta[from]
+      putDelta[to] = inputs.putDelta[from]
+      staleAge[to] = inputs.staleAge[from]
+    }
+  }
+  // Nová minuta ze snapshot řezu
+  for (const row of minute.rows) {
+    const to = newStrikeIndex.get(row.strike)! * newMinuteCount + targetMinute
+    if (row.right === 'C') {
+      callOi[to] = row.oi
+      callVolume[to] = row.volume
+      callDelta[to] = row.delta
+    } else {
+      putOi[to] = row.oi
+      putVolume[to] = row.volume
+      putDelta[to] = row.delta
+    }
+    staleAge[to] = Math.max(staleAge[to], row.stale_age ?? 0)
+  }
+
+  const bars = minute.bar
+    ? upsertRow(inputs.bars, { tsIso, ...minute.bar, volume: minute.bar.volume ?? 0 })
+    : inputs.bars
+  const levels = minute.levels
+    ? upsertRow(inputs.levels, {
+        tsIso,
+        values: Object.fromEntries(LEVEL_KEYS.map((key) => [key, minute.levels?.[key] ?? null])),
+      })
+    : inputs.levels
+  const flow = minute.flow
+    ? upsertRow(inputs.flow, { tsIso, cum_delta: minute.flow.cum_delta })
+    : inputs.flow
+
+  return {
+    ...inputs,
+    minutes: newMinutes,
+    strikes: newStrikes,
+    callOi,
+    putOi,
+    callVolume,
+    putVolume,
+    callDelta,
+    putDelta,
+    staleAge,
+    bars,
+    levels,
+    flow,
+  }
+}
+
+/** Poskládá `ReplayDay` (grid/overlays/panels/profil) z rozloženého vstupu. */
+export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
+  const { strikes } = inputs
+  const minuteKeys = inputs.minutes
+  const minutes = minuteKeys.length
+  const minuteIndex = new Map(minuteKeys.map((ts, index) => [ts, index]))
+
+  // Overlaye: cena z barů
   const price: PriceBar[] = []
   let previousClose = Number.NaN
-  for (const bar of bundle.bars) {
-    const ts = canonicalTs(bar.ts_min)
-    const minuteIdx = minuteIndex.get(ts)
-    const close = Number(bar.close)
-    if (minuteIdx !== undefined && Number.isFinite(close)) {
-      const open = Number(bar.open)
-      const high = Number(bar.high)
-      const low = Number(bar.low)
+  for (const bar of inputs.bars) {
+    const minuteIdx = minuteIndex.get(bar.tsIso)
+    if (minuteIdx !== undefined && Number.isFinite(bar.close)) {
       price.push({
         minuteIdx,
-        close,
-        up: !(close < previousClose),
-        open: Number.isFinite(open) ? open : undefined,
-        high: Number.isFinite(high) ? high : undefined,
-        low: Number.isFinite(low) ? low : undefined,
+        close: bar.close,
+        up: !(bar.close < previousClose),
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
       })
-      previousClose = close
+      previousClose = bar.close
     }
   }
   const levelSeries = (key: string): (number | null)[] => {
     const series: (number | null)[] = Array.from({ length: minutes }, () => null)
-    for (const row of bundle.levels) {
-      const minuteIdx = minuteIndex.get(canonicalTs(row.ts_min))
-      if (minuteIdx === undefined) continue
-      const value = row[key]
-      series[minuteIdx] = typeof value === 'number' ? value : null
+    for (const row of inputs.levels) {
+      const minuteIdx = minuteIndex.get(row.tsIso)
+      if (minuteIdx !== undefined) series[minuteIdx] = row.values[key] ?? null
     }
     return series
   }
-  // Surová matice + výchozí grid (OI mód; volume fallback řeší buildModeGrid)
+
   const spotSeries: (number | null)[] = Array.from({ length: minutes }, () => null)
-  for (const bar of price) {
-    spotSeries[bar.minuteIdx] = bar.close
-  }
+  for (const bar of price) spotSeries[bar.minuteIdx] = bar.close
   const raw: RawDay = {
     minutes,
     strikes,
-    callOi,
-    putOi,
-    callVolume: volumeByCell.C,
-    putVolume: volumeByCell.P,
+    callOi: inputs.callOi,
+    putOi: inputs.putOi,
+    callVolume: inputs.callVolume,
+    putVolume: inputs.putVolume,
     spotSeries,
-    staleAge,
+    staleAge: inputs.staleAge,
   }
   const grid = buildModeGrid(raw, 'oi', 'linear')
 
   const levels: LevelLine[] = [
     { name: 'flip', color: '#e8c14b', series: levelSeries('flip') },
     { name: 'centroid', color: '#9d7be8', series: levelSeries('centroid') },
-    // Max Pain z OI (klient-side; bez OI je řada null a linie se nekreslí)
     { name: 'max_pain', color: '#d24bd2', series: maxPainSeries(raw) },
   ]
   const walls: LevelLine[] = [
@@ -210,66 +434,71 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
     levels,
     walls,
     sessions: [],
-    timestamp: minuteKeys.at(-1) ?? bundle.date,
+    timestamp: minuteKeys.at(-1) ?? inputs.date,
   }
 
-  // Spodní panely: Vol z barů, OptVol z minutových přírůstků, CumΔ z flow
   const vol = Array.from({ length: minutes }, () => 0)
-  for (const bar of bundle.bars) {
-    const minuteIdx = minuteIndex.get(canonicalTs(bar.ts_min))
-    if (minuteIdx !== undefined) vol[minuteIdx] = Number(bar.volume) || 0
+  for (const bar of inputs.bars) {
+    const minuteIdx = minuteIndex.get(bar.tsIso)
+    if (minuteIdx !== undefined) vol[minuteIdx] = bar.volume
   }
-  const optVolCall = optVolSeries(volumeByCell.C, minutes, strikes.length)
-  const optVolPut = optVolSeries(volumeByCell.P, minutes, strikes.length)
-  // Δ Flow: delta-vážený tok per strana — čtení „obchody na call/put straně" (Moodix)
-  const deltaFlowCall = deltaFlowSeries(volumeByCell.C, deltaByCell.C, minutes, strikes.length)
-  const deltaFlowPut = deltaFlowSeries(volumeByCell.P, deltaByCell.P, minutes, strikes.length)
+  const optVolCall = optVolSeries(inputs.callVolume, minutes, strikes.length)
+  const optVolPut = optVolSeries(inputs.putVolume, minutes, strikes.length)
+  const deltaFlowCall = deltaFlowSeries(
+    inputs.callVolume,
+    inputs.callDelta,
+    minutes,
+    strikes.length,
+  )
+  const deltaFlowPut = deltaFlowSeries(inputs.putVolume, inputs.putDelta, minutes, strikes.length)
   const cumDelta = Array.from({ length: minutes }, () => 0)
-  for (const row of bundle.flow) {
-    const minuteIdx = minuteIndex.get(canonicalTs(row.ts_min))
-    if (minuteIdx !== undefined) cumDelta[minuteIdx] = Number(row.cum_delta) || 0
+  for (const row of inputs.flow) {
+    const minuteIdx = minuteIndex.get(row.tsIso)
+    if (minuteIdx !== undefined) cumDelta[minuteIdx] = row.cum_delta
   }
 
   // ΔOI vs. předchozí archivovaný den téže expirace (null = není srovnání)
   const prevOi = new Map<string, number>()
-  for (const row of bundle.oi_prev ?? []) {
-    prevOi.set(`${row.strike}|${row.right}`, Number(row.oi) || 0)
-  }
+  for (const row of inputs.oiPrev) prevOi.set(`${row.strike}|${row.right}`, row.oi)
   const totalOiToday =
-    callOi.reduce((sum, value) => sum + value, 0) + putOi.reduce((sum, value) => sum + value, 0)
+    inputs.callOi.reduce((sum, value) => sum + value, 0) +
+    inputs.putOi.reduce((sum, value) => sum + value, 0)
   const oiChangeReady = prevOi.size > 0 && totalOiToday > 0
 
-  // Strike profil per minuta (combined varianta, w=1 — SPEC 4.6)
   const profileByMinute: ProfileRow[][] = []
   for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
     const spotAtMinute = price.find((bar) => bar.minuteIdx === minuteIdx)?.close ?? Number.NaN
     profileByMinute.push(
       strikes.map((strike, strikeIdx) => {
         const index = strikeIdx * minutes + minuteIdx
-        const callAbsDelta = Math.abs(deltaByCell.C[index])
-        const putAbsDelta = Math.abs(deltaByCell.P[index])
+        const callAbsDelta = Math.abs(inputs.callDelta[index])
+        const putAbsDelta = Math.abs(inputs.putDelta[index])
         return {
           strike,
-          callVolComponent: volumeByCell.C[index] * callAbsDelta,
-          callOiComponent: callOi[index] * callAbsDelta,
-          putVolComponent: volumeByCell.P[index] * putAbsDelta,
-          putOiComponent: putOi[index] * putAbsDelta,
-          callVolume: volumeByCell.C[index],
-          putVolume: volumeByCell.P[index],
-          callOi: callOi[index],
-          putOi: putOi[index],
+          callVolComponent: inputs.callVolume[index] * callAbsDelta,
+          callOiComponent: inputs.callOi[index] * callAbsDelta,
+          putVolComponent: inputs.putVolume[index] * putAbsDelta,
+          putOiComponent: inputs.putOi[index] * putAbsDelta,
+          callVolume: inputs.callVolume[index],
+          putVolume: inputs.putVolume[index],
+          callOi: inputs.callOi[index],
+          putOi: inputs.putOi[index],
           distanceFromSpot: Number.isFinite(spotAtMinute) ? strike - spotAtMinute : 0,
-          callOiChange: oiChangeReady ? callOi[index] - (prevOi.get(`${strike}|C`) ?? 0) : null,
-          putOiChange: oiChangeReady ? putOi[index] - (prevOi.get(`${strike}|P`) ?? 0) : null,
+          callOiChange: oiChangeReady
+            ? inputs.callOi[index] - (prevOi.get(`${strike}|C`) ?? 0)
+            : null,
+          putOiChange: oiChangeReady
+            ? inputs.putOi[index] - (prevOi.get(`${strike}|P`) ?? 0)
+            : null,
         }
       }),
     )
   }
 
   return {
-    symbol: bundle.symbol,
-    expiry: bundle.expiry,
-    date: bundle.date,
+    symbol: inputs.symbol,
+    expiry: inputs.expiry,
+    date: inputs.date,
     minutes: minuteKeys,
     grid,
     raw,
@@ -277,6 +506,11 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
     panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut },
     profileByMinute,
   }
+}
+
+/** Sestaví den v paměti z /replay balíku (exportováno kvůli testům). */
+export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
+  return assembleReplayDay(decodeBundle(bundle))
 }
 
 /** Δ Flow per minuta: Σ přes strikes |delta| × kladný přírůstek volume (SPEC 4.6 váhy). */

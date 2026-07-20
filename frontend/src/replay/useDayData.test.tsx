@@ -1,37 +1,59 @@
-/** Testy živého přenačítání intraday dat (issue #125). */
+/** Testy živého intraday: WS append minut (#127) + hodinová pojistka refetch. */
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import type { LiveSocket } from '../api/ws'
 import { useDayData } from './useDayData'
-import { fetchDays, fetchReplay } from './loader'
-import type { ReplayDay } from './loader'
+import { fetchDays, fetchReplay, fetchReplayInputs } from './loader'
+import type { ReplayInputs } from './loader'
 
-vi.mock('./loader', () => ({
-  fetchReplay: vi.fn(),
-  fetchDays: vi.fn(),
-}))
+vi.mock('./loader', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./loader')>()
+  return { ...actual, fetchReplayInputs: vi.fn(), fetchReplay: vi.fn(), fetchDays: vi.fn() }
+})
 
-function makeDay(minutes: number): ReplayDay {
+/** Minimální vstup: 1 strike × 1 minuta. */
+function makeInputs(): ReplayInputs {
   return {
-    symbol: 'NQ',
-    expiry: '20260720',
-    date: '2026-07-20',
-    grid: { minutes, strikes: [1], layers: {} },
-    raw: null,
-    overlays: { price: [] },
-    panels: {
-      vol: [],
-      optVolCall: [],
-      optVolPut: [],
-      cumDelta: [],
-      deltaFlowCall: [],
-      deltaFlowPut: [],
+    symbol: 'ES',
+    expiry: '20260716',
+    date: '2026-07-16',
+    minutes: ['2026-07-16T15:00:00.000Z'],
+    strikes: [7600],
+    callOi: new Float32Array([100]),
+    putOi: new Float32Array([200]),
+    callVolume: new Float32Array([10]),
+    putVolume: new Float32Array([5]),
+    callDelta: new Float32Array([0.5]),
+    putDelta: new Float32Array([-0.4]),
+    staleAge: new Float32Array([0]),
+    bars: [{ tsIso: '2026-07-16T15:00:00.000Z', close: 7600.5, volume: 1000 }],
+    levels: [],
+    flow: [],
+    oiPrev: [],
+  }
+}
+
+type FakeSocket = LiveSocket & { emit: (channel: string, data: unknown) => void }
+
+function makeSocket(): FakeSocket {
+  const handlers = new Map<string, Set<(data: unknown) => void>>()
+  const socket = {
+    subscribe: (channel: string, handler: (data: unknown) => void) => {
+      let set = handlers.get(channel)
+      if (!set) {
+        set = new Set()
+        handlers.set(channel, set)
+      }
+      set.add(handler)
     },
-    profileByMinute: [],
-    minutes: Array.from(
-      { length: minutes },
-      (_, i) => `2026-07-20T${String(9 + i).padStart(2, '0')}:00:00Z`,
-    ),
-  } as unknown as ReplayDay
+    unsubscribe: (channel: string, handler: (data: unknown) => void) =>
+      handlers.get(channel)?.delete(handler),
+    onReconnect: () => () => {},
+    connect: () => {},
+    close: () => {},
+    emit: (channel: string, data: unknown) => handlers.get(channel)?.forEach((h) => h(data)),
+  }
+  return socket as unknown as FakeSocket
 }
 
 beforeEach(() => vi.useFakeTimers())
@@ -40,27 +62,65 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-test('intraday: /replay se přenačítá živě à 60 s (issue #125)', async () => {
-  vi.mocked(fetchReplay).mockResolvedValue(makeDay(5))
-  renderHook(() => useDayData('NQ', '20260720', '2026-07-20', 'intraday'))
-  expect(fetchReplay).toHaveBeenCalledTimes(1) // úvodní fetch při načtení
+test('WS snapshot+price přidá novou minutu (append, ne refetch) — issue #127', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0) // úvodní fetch
+  })
+  expect(result.current.grid.minutes).toBe(1)
+  expect(fetchReplayInputs).toHaveBeenCalledTimes(1)
 
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(60_000)
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: '2026-07-16T15:01:00Z',
+      rows: [
+        { strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 },
+        { strike: 7600, right: 'P', oi: 200, volume: 12, delta: -0.4 },
+      ],
+    })
+    socket.emit('price.ES', {
+      ts: '2026-07-16T15:01:00Z',
+      open: 7600.5,
+      high: 7603,
+      low: 7600,
+      close: 7602,
+      volume: 1300,
+    })
+    await vi.advanceTimersByTimeAsync(500) // debounce flush
   })
-  expect(fetchReplay).toHaveBeenCalledTimes(2) // po minutě znovu
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(60_000)
-  })
-  expect(fetchReplay).toHaveBeenCalledTimes(3)
+  expect(result.current.grid.minutes).toBe(2) // minuta přibyla appendem
+  expect(fetchReplayInputs).toHaveBeenCalledTimes(1) // bez dalšího refetche
 })
 
-test('daily: žádné živé přenačítání intraday balíku', async () => {
-  vi.mocked(fetchDays).mockResolvedValue([])
-  renderHook(() => useDayData('NQ', '20260720', '2026-07-20', 'daily'))
+test('plný refetch je hodinová pojistka, ne každou minutu — issue #127', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  renderHook(() => useDayData('ES', '20260716', '2026-07-16', 'intraday', makeSocket()))
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(180_000)
+    await vi.advanceTimersByTimeAsync(0)
   })
+  expect(fetchReplayInputs).toHaveBeenCalledTimes(1)
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(120_000) // 2 minuty → žádný refetch
+  })
+  expect(fetchReplayInputs).toHaveBeenCalledTimes(1)
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_600_000) // hodina → pojistný refetch
+  })
+  expect(fetchReplayInputs).toHaveBeenCalledTimes(2)
+})
+
+test('daily režim nepoužívá intraday live fetch', async () => {
+  vi.mocked(fetchDays).mockResolvedValue([])
+  renderHook(() => useDayData('ES', '20260716', '2026-07-16', 'daily', makeSocket()))
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_600_000)
+  })
+  expect(fetchReplayInputs).not.toHaveBeenCalled()
   expect(fetchReplay).not.toHaveBeenCalled()
 })
