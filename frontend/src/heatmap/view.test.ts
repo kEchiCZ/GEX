@@ -1,11 +1,15 @@
 /** Testy transformace pohledu: zoom kolem kotvy, meze, zóny os. */
 import { expect, test } from 'vitest'
 import {
+  BUCKET_MAX_PX,
   DEFAULT_VIEW,
+  TIME_RIGHT_MARGIN_PX,
   ZOOM_MAX,
   ZOOM_MIN,
   axisZoneAt,
+  baseBucketPx,
   fitPriceView,
+  homeOffsetX,
   zoomAxis,
   zoomBoth,
 } from './view'
@@ -58,6 +62,28 @@ test('fitPriceView bez ceny nebo strikes vrací výchozí pohled', () => {
   expect(fitPriceView([], 100, 110)).toEqual(DEFAULT_VIEW)
   expect(fitPriceView([100, 110], null, null)).toEqual(DEFAULT_VIEW)
   expect(fitPriceView([100, 110], 120, 105)).toEqual(DEFAULT_VIEW)
+})
+
+test('baseBucketPx: plný den fituje na šířku, málo dat drží strop šířky koše', () => {
+  // Plný den (1380 minut na 1200 px) → fit-to-width jako dřív
+  expect(baseBucketPx(1380, 1200)).toBeCloseTo(1200 / 1380)
+  // Málo dat (8 minut) → strop, žádné roztažení na celou šířku
+  expect(baseBucketPx(8, 1200)).toBe(BUCKET_MAX_PX)
+  // Hranice: přesně na stropu se nic nemění
+  expect(baseBucketPx(100, 100 * BUCKET_MAX_PX)).toBe(BUCKET_MAX_PX)
+  // Nula minut nedělí nulou
+  expect(baseBucketPx(0, 1200)).toBe(BUCKET_MAX_PX)
+})
+
+test('homeOffsetX ukotví málo dat k pravému okraji s odsazením', () => {
+  const minutes = 8
+  const offset = homeOffsetX(minutes, 1200)
+  // Pravý okraj posledního koše = šířka − odsazení
+  expect(offset + minutes * BUCKET_MAX_PX).toBe(1200 - TIME_RIGHT_MARGIN_PX)
+  // Data vyplňující šířku → žádný posun (fit-to-width beze změny)
+  expect(homeOffsetX(1380, 1200)).toBe(0)
+  // Téměř plná šířka: offset nejde do záporu (levý okraj zůstává viditelný)
+  expect(homeOffsetX(99, 100 * BUCKET_MAX_PX)).toBe(0)
 })
 
 test('axisZoneAt: levý pruh = osa Y, spodní pruh = osa X, jinak plocha', () => {

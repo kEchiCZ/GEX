@@ -422,6 +422,7 @@ function MainContent() {
               delta: toggles.delta,
               deltaFlow: toggles.deltaFlow,
             }}
+            width={heatSize.width}
             time={{ offsetX: chartView.offsetX, zoomX: chartView.zoomX }}
           />
           {showReplay && <PlaybackBar playback={playback} />}
