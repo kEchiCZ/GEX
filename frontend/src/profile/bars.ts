@@ -48,9 +48,25 @@ export function formatAmount(value: number): string {
   return String(Math.round(value))
 }
 
-/** Šířky pruhů: normalizace největší celkovou stranou, zoom násobí, ořez na halfWidth. */
-export function barGeometry(rows: ProfileRow[], halfWidth: number, zoom: number): BarGeometry[] {
-  const maxSide = maxComponentSide(rows)
+/** Zaokrouhlení nahoru na „hezký" násobek (1/2/5 × 10^n) — absolutní škála os. */
+export function niceCeil(value: number): number {
+  if (value <= 0) return 1
+  const exponent = Math.floor(Math.log10(value))
+  const base = 10 ** exponent
+  const fraction = value / base
+  const nice = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10
+  return nice * base
+}
+
+/** Šířky pruhů: normalizace referenční stranou (`scaleMax`, default max ve výřezu),
+ * zoom násobí, ořez na halfWidth. */
+export function barGeometry(
+  rows: ProfileRow[],
+  halfWidth: number,
+  zoom: number,
+  scaleMax?: number,
+): BarGeometry[] {
+  const maxSide = scaleMax ?? maxComponentSide(rows)
   const scale = (halfWidth / maxSide) * zoom
   const clamp = (value: number) => Math.min(halfWidth, value * scale)
   return rows.map((row) => {
