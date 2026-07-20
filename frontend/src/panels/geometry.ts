@@ -1,9 +1,17 @@
 /** Geometrie spodních panelů (SPEC 7.3) — čisté helpery pro SVG. */
 
-/** Výšky sloupců normalizované maximem řady (0..maxHeight). */
-export function barHeights(values: number[], maxHeight: number): number[] {
-  const peak = Math.max(1e-9, ...values.map((value) => Math.abs(value)))
-  return values.map((value) => (Math.abs(value) / peak) * maxHeight)
+/** Vrchol (max |hodnota|) řady pro normalizaci; 1e-9 chrání před dělením nulou. */
+export function seriesPeak(values: number[]): number {
+  return Math.max(1e-9, ...values.map((value) => Math.abs(value)))
+}
+
+/** Výšky sloupců normalizované vrcholem (0..maxHeight).
+ *
+ * `peak` lze předat explicitně (sdílená škála pro C/P), jinak se bere vrchol řady.
+ */
+export function barHeights(values: number[], maxHeight: number, peak?: number): number[] {
+  const normalizer = peak ?? seriesPeak(values)
+  return values.map((value) => (Math.abs(value) / normalizer) * maxHeight)
 }
 
 export interface CumDeltaGeometry {

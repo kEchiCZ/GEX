@@ -159,6 +159,41 @@ test('crosshair ukazuje hodnoty ukazatelů vpravo (issue #104)', () => {
   expect(flow.textContent).toContain('P 12')
 })
 
+test('panel: hodnota na pravé ose Y podle výšky kurzoru (issue #107)', () => {
+  render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={DATA}
+        visible={{ vol: true, optVol: false, delta: true, deltaFlow: false }}
+        width={400}
+      />
+    </CrosshairProvider>,
+  )
+  const volSvg = screen.getByLabelText('Vol panel').querySelector('svg')!
+  // volPeak=400, výška panelu 84, škála 0..80; y=44 → ((84−44)/80)×400 = 200
+  fireEvent.pointerMove(volSvg, { clientX: 30, clientY: 44 })
+  // Vpravo nahoře zůstává hodnota minuty (vol[2]=400), osa Y dává úroveň (200)
+  expect(screen.getByLabelText('Vol panel').querySelector('.panel-value')!.textContent).toBe('400')
+  expect(screen.getByLabelText('Vol panel').querySelector('.panel-axis-value')!.textContent).toBe(
+    '200',
+  )
+  // Osová hodnota jen v najetém panelu
+  expect(screen.getByLabelText('Cum Δ panel').querySelector('.panel-axis-value')).toBeNull()
+
+  // Cum Δ: symetrická škála kolem nuly (cumPeak=200); y=63 → ((42−63)/42)×200 = −100
+  const cumSvg = screen.getByLabelText('Cum Δ panel').querySelector('svg')!
+  fireEvent.pointerMove(cumSvg, { clientX: 30, clientY: 63 })
+  expect(screen.getByLabelText('Cum Δ panel').querySelector('.panel-axis-value')!.textContent).toBe(
+    '-100',
+  )
+  // Přechod panelu přesune osovou hodnotu (Vol už ji nemá)
+  expect(screen.getByLabelText('Vol panel').querySelector('.panel-axis-value')).toBeNull()
+
+  // Opuštění panelu osovou hodnotu skryje
+  fireEvent.pointerLeave(cumSvg)
+  expect(screen.getByLabelText('Cum Δ panel').querySelector('.panel-axis-value')).toBeNull()
+})
+
 // ── Crosshair sdílený s heatmapou ──────────────────────────────────
 
 function Reader() {
