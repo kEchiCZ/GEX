@@ -455,7 +455,8 @@ export function Heatmap({
     if (crosshair) {
       context.font = 'bold 11px sans-serif'
       // Osa X (dole): datum + čas pod svislou linkou
-      const timeLabel = `${dateLabel ? `${dateLabel} ` : ''}${minuteLabels[crosshair.minuteIdx] ?? ''}`.trim()
+      const timeLabel =
+        `${dateLabel ? `${dateLabel} ` : ''}${minuteLabels[crosshair.minuteIdx] ?? ''}`.trim()
       if (timeLabel) {
         const x = minuteToX(crosshair.minuteIdx)
         const width = context.measureText(timeLabel).width + 12
