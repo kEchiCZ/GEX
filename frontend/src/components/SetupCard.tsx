@@ -1,4 +1,5 @@
 /** Karta aktivního setupu nad grafem (ADR-0004): entry/cíl/stop, RRR, zdůvodnění. */
+import { memo } from 'react'
 import { setupRrr, templateLabel } from '../api/setups'
 import type { SetupRow } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
@@ -17,7 +18,7 @@ function setupTimestamp(iso: string): string {
       })
 }
 
-export function SetupCard({
+function SetupCardBase({
   setups,
   onDismiss,
 }: {
@@ -59,3 +60,5 @@ export function SetupCard({
     </div>
   )
 }
+
+export const SetupCard = memo(SetupCardBase)

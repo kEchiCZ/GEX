@@ -1,5 +1,5 @@
 /** Kořenový layout aplikace (SPEC 7.1) s obrazovkami Graf / Dashboard / Console / Settings. */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { useAnnotations } from './annotations/useAnnotations'
 import { TimeframeRow, TogglesRow } from './components/ControlRows'
@@ -147,6 +147,34 @@ function MainContent() {
   const spot = useMemo(
     () => lastValue(day.spotSeries, playback.position),
     [day.spotSeries, playback.position],
+  )
+  // Stabilní props pro těžké (memoizované) děti — živý spot mění jen graf, ne panely/profil
+  const panelsVisible = useMemo(
+    () => ({
+      vol: toggles.vol,
+      optVol: toggles.optVol,
+      delta: toggles.delta,
+      deltaFlow: toggles.deltaFlow,
+    }),
+    [toggles.vol, toggles.optVol, toggles.delta, toggles.deltaFlow],
+  )
+  const panelTime = useMemo(
+    () => ({ offsetX: chartView.offsetX, zoomX: chartView.zoomX }),
+    [chartView.offsetX, chartView.zoomX],
+  )
+  const profileYView = useMemo(
+    () => ({ offsetY: chartView.offsetY, zoomY: chartView.zoomY, baseHeight: heatSize.height }),
+    [chartView.offsetY, chartView.zoomY, heatSize.height],
+  )
+  const handleYViewChange = useCallback(
+    (next: { offsetY: number; zoomY: number }) =>
+      setChartView((view) => ({ ...view, offsetY: next.offsetY, zoomY: next.zoomY })),
+    [],
+  )
+  const handleAggregateToggle = useCallback(() => setAggregateOn((value) => !value), [])
+  const handleDismissSetup = useCallback(
+    (id: number) => setDismissedSetups((previous) => [...previous, id]),
+    [],
   )
   // Aktivní setupy (ADR-0004): karta nad grafem + úrovně entry/cíl/stop v heatmapě
   const { setups } = useSetups()
@@ -409,10 +437,7 @@ function MainContent() {
               resetKey={`${symbol}|${selectedExpiry}|${timeframe}|${interval}|${today}`}
               priceTick={priceTick(symbol)}
             />
-            <SetupCard
-              setups={activeSetups}
-              onDismiss={(id) => setDismissedSetups((previous) => [...previous, id])}
-            />
+            <SetupCard setups={activeSetups} onDismiss={handleDismissSetup} />
             {day.source === 'demo' && (
               <div className="demo-banner" role="status">
                 Demo data — pro {symbol} zatím nejsou uložená živá data.
@@ -423,14 +448,9 @@ function MainContent() {
           </main>
           <BottomPanels
             data={panelSeries}
-            visible={{
-              vol: toggles.vol,
-              optVol: toggles.optVol,
-              delta: toggles.delta,
-              deltaFlow: toggles.deltaFlow,
-            }}
+            visible={panelsVisible}
             width={heatSize.width}
-            time={{ offsetX: chartView.offsetX, zoomX: chartView.zoomX }}
+            time={panelTime}
           />
           {showReplay && <PlaybackBar playback={playback} />}
         </div>
@@ -460,16 +480,10 @@ function MainContent() {
           rows={displayedProfileRows}
           spot={spot}
           width={profileWidth}
-          yView={{
-            offsetY: chartView.offsetY,
-            zoomY: chartView.zoomY,
-            baseHeight: heatSize.height,
-          }}
-          onYViewChange={(next) =>
-            setChartView((view) => ({ ...view, offsetY: next.offsetY, zoomY: next.zoomY }))
-          }
+          yView={profileYView}
+          onYViewChange={handleYViewChange}
           aggregate={day.source === 'replay' ? aggregateOn : null}
-          onAggregateToggle={() => setAggregateOn((value) => !value)}
+          onAggregateToggle={handleAggregateToggle}
         />
       </div>
     </>
