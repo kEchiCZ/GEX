@@ -197,8 +197,15 @@ test('panel: hodnota na pravé ose Y podle výšky kurzoru (issue #107)', () => 
   expect(screen.getByLabelText('Vol panel').querySelector('.panel-axis-value')!.textContent).toBe(
     '200',
   )
-  // Osová hodnota jen v najetém panelu
+  // Vodorovná crosshair linka na úrovni kurzoru v najetém panelu
+  expect(
+    screen.getByLabelText('Vol panel').querySelector('[data-testid="panel-crosshair-h"]'),
+  ).not.toBeNull()
+  // Osová hodnota i vodorovná linka jen v najetém panelu
   expect(screen.getByLabelText('Cum Δ panel').querySelector('.panel-axis-value')).toBeNull()
+  expect(
+    screen.getByLabelText('Cum Δ panel').querySelector('[data-testid="panel-crosshair-h"]'),
+  ).toBeNull()
 
   // Cum Δ: symetrická škála kolem nuly (cumPeak=200); y=63 → ((42−63)/42)×200 = −100
   const cumSvg = screen.getByLabelText('Cum Δ panel').querySelector('svg')!
