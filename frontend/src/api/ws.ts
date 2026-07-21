@@ -23,6 +23,8 @@ export class LiveSocket {
   private ws: WebSocketLike | null = null
   private closedByUser = false
   private opened = false
+  /** Socket je OPEN — `this.ws` existuje už během CONNECTING, kdy `send` vyhazuje (#146). */
+  private isOpen = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
@@ -38,6 +40,7 @@ export class LiveSocket {
     const ws = factory(this.url)
     this.ws = ws
     ws.onopen = () => {
+      this.isOpen = true
       const channels = [...this.handlers.keys()]
       if (channels.length > 0) {
         ws.send(JSON.stringify({ action: 'subscribe', channels }))
@@ -62,6 +65,7 @@ export class LiveSocket {
       }
     }
     ws.onclose = () => {
+      this.isOpen = false
       if (this.closedByUser) return
       this.reconnectTimer = setTimeout(() => this.connect(), this.options.reconnectDelayMs ?? 2000)
     }
@@ -75,7 +79,9 @@ export class LiveSocket {
       this.handlers.set(channel, set)
     }
     set.add(handler)
-    if (isNew && this.ws) {
+    // Jen nad otevřeným socketem — během CONNECTING by `send` vyhodil InvalidStateError
+    // a shodil React strom (#146). Kanály zaregistrované dřív pošle hromadně `onopen`.
+    if (isNew && this.ws && this.isOpen) {
       this.ws.send(JSON.stringify({ action: 'subscribe', channels: [channel] }))
     }
   }

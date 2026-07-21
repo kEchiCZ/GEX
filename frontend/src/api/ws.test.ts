@@ -25,6 +25,40 @@ test('po otevření pošle subscribe se všemi kanály', () => {
   })
 })
 
+test('subscribe během CONNECTING nevyhodí a kanál se pošle po otevření (#146)', () => {
+  const socket = makeSocket()
+  socket.connect() // socket existuje, ale je teprve CONNECTING
+  // Tohle v produkci shazovalo celý React strom InvalidStateError
+  expect(() => socket.subscribe('snapshot.ES.20260716', () => {})).not.toThrow()
+  expect(FakeWebSocket.latest().sent).toHaveLength(0)
+
+  FakeWebSocket.latest().open()
+  expect(JSON.parse(FakeWebSocket.latest().sent[0])).toEqual({
+    action: 'subscribe',
+    channels: ['snapshot.ES.20260716'],
+  })
+})
+
+test('subscribe nad otevřeným socketem pošle kanál hned', () => {
+  const socket = makeSocket()
+  socket.connect()
+  FakeWebSocket.latest().open()
+  socket.subscribe('spot.ES', () => {})
+  expect(JSON.parse(FakeWebSocket.latest().sent.at(-1)!)).toEqual({
+    action: 'subscribe',
+    channels: ['spot.ES'],
+  })
+})
+
+test('po výpadku spojení se subscribe nepokouší posílat do zavřeného socketu (#146)', () => {
+  const socket = makeSocket()
+  socket.connect()
+  const ws = FakeWebSocket.latest()
+  ws.open()
+  ws.onclose?.() // výpadek serveru — socket už není OPEN
+  expect(() => socket.subscribe('flow.ES', () => {})).not.toThrow()
+})
+
 test('routuje zprávy podle kanálu včetně wildcard', () => {
   const socket = makeSocket()
   const statusData: unknown[] = []
