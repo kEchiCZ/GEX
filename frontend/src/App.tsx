@@ -159,16 +159,19 @@ function MainContent() {
     [day.grid, playback.isLive, playback.position],
   )
   // Projekce heatmapy do settle (ADR-0006): poslední naměřený sloupec držený
-  // konstantní. Jen intraday — Daily má sloupec = den, tam nedává smysl.
+  // konstantní. Jen intraday a jen LIVE — Daily má sloupec = den; při přetáčení
+  // by se projektoval vynulovaný sloupec za pozicí slice (#156).
   const projectedGrid = useMemo(() => {
-    if (!toggles.projection || timeframe !== 'intraday' || !selectedExpiry) return grid
+    if (!toggles.projection || timeframe !== 'intraday' || !selectedExpiry || !playback.isLive) {
+      return grid
+    }
     const extra = projectionLength(
       day.lastMinuteIso ?? undefined,
       expirySettleUtc(selectedExpiry),
       bucketMinutes,
     )
     return projectGrid(grid, extra)
-  }, [grid, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes])
+  }, [grid, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, playback.isLive]) // prettier-ignore
   const projectionExtra = projectedGrid.minutes - (projectedGrid.dataMinutes ?? projectedGrid.minutes) // prettier-ignore
   const chartLabels = useMemo(
     () =>

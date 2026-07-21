@@ -28,6 +28,8 @@ test('projectionLength: počet minut do settle, ořezaný stropem', () => {
   expect(projectionLength('2026-07-21T19:30:00Z', settle, 5)).toBe(6)
   // Strop pro vzdálenou expiraci
   expect(projectionLength('2026-07-01T00:00:00Z', settle)).toBe(PROJECTION_MAX_MINUTES)
+  // Strop je v minutách reálného času — na 5m timeframe tedy 288 košů, ne 1440 (#156)
+  expect(projectionLength('2026-07-01T00:00:00Z', settle, 5)).toBe(PROJECTION_MAX_MINUTES / 5)
   // Bez dat nebo bez settle se neprojektuje
   expect(projectionLength(undefined, settle)).toBe(0)
   expect(projectionLength('2026-07-21T19:30:00Z', null)).toBe(0)
@@ -65,19 +67,31 @@ test('projectGrid bez rozšíření vrací tentýž objekt (stabilní identita)'
 test('renderGrid kreslí projekci sníženou sytostí, data beze změny', () => {
   const projected = projectGrid(grid(), 2)
   const buffer = renderGrid(projected, 'gradient')
-  const alphaAt = (x: number, y: number) => buffer.data[(y * buffer.width + x) * 4 + 3]
+  const alpha = (source: { width: number; data: Uint8ClampedArray }, x: number, y: number) =>
+    source.data[(y * source.width + x) * 4 + 3]
 
-  // Řádek 0 = nejvyšší strike (index 1): data končí sloupcem 2, projekce 3–4.
-  // Projekce drží tutéž hodnotu, takže rozdíl v alfě je čistě sytostí projekce.
-  const lastData = alphaAt(2, 0)
-  const firstProjected = alphaAt(3, 0)
+  // Řádek 0 = nejvyšší strike (index 1): data končí sloupcem 2 (stale buňka),
+  // projekce 3–4. Stáří se do projekce nepřenáší (#156), takže projekce
+  // odpovídá FRESH hodnotě téhož sloupce × PROJECTION_ALPHA.
+  const noStale: HeatmapGrid = { ...grid(), staleAge: null }
+  const freshBuffer = renderGrid(projectGrid(noStale, 2), 'gradient')
+  const freshLast = alpha(freshBuffer, 2, 0)
+  const lastData = alpha(buffer, 2, 0)
   expect(lastData).toBeGreaterThan(0)
-  expect(firstProjected).toBe(Math.round(lastData * PROJECTION_ALPHA))
-  expect(alphaAt(4, 0)).toBe(firstProjected) // projekce je plochá
+  expect(lastData).toBeLessThan(freshLast) // naměřená stale buňka zůstává ztlumená
+  const firstProjected = alpha(buffer, 3, 0)
+  expect(firstProjected).toBe(Math.round(freshLast * PROJECTION_ALPHA))
+  expect(alpha(buffer, 4, 0)).toBe(firstProjected) // projekce je plochá
 
   // Bez projekce se alfa naměřené části nemění
   const plain = renderGrid(grid(), 'gradient')
-  expect(plain.data[(0 * plain.width + 2) * 4 + 3]).toBe(lastData)
+  expect(alpha(plain, 2, 0)).toBe(lastData)
+})
+
+test('projectGrid: stáří buněk se do projekce nepřenáší (#156)', () => {
+  const projected = projectGrid(grid(), 2)
+  // Strike 1 (řádky 5–9): data [0, 0, 900], projekce [0, 0]
+  expect(Array.from(projected.staleAge!.slice(5, 10))).toEqual([0, 0, 900, 0, 0])
 })
 
 test('projectionLabels navazují na poslední naměřenou minutu', () => {

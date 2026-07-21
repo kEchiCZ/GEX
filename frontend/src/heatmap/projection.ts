@@ -12,10 +12,12 @@ graf netvrdil, že vpravo jsou naměřené hodnoty (viz `render.ts`).
 import { dataMinutesOf } from './grid'
 import type { HeatmapGrid } from './grid'
 
-/** Strop projekce — vzdálená expirace by jinak roztáhla osu do absurdna. */
+/** Strop projekce v MINUTÁCH reálného času — vzdálená expirace by jinak
+roztáhla osu do absurdna. Ořezává se před přepočtem na koše, aby strop
+znamenal stejný časový úsek na každém timeframe (#156). */
 export const PROJECTION_MAX_MINUTES = 24 * 60
 
-/** Kolik minut zbývá od poslední naměřené minuty do settle; 0 = neprojektovat. */
+/** Kolik košů zbývá od poslední naměřené minuty do settle; 0 = neprojektovat. */
 export function projectionLength(
   lastMinuteIso: string | undefined,
   settle: Date | null,
@@ -26,8 +28,8 @@ export function projectionLength(
   if (Number.isNaN(last.getTime())) return 0
   const remainingMinutes = (settle.getTime() - last.getTime()) / 60_000
   if (remainingMinutes <= 0) return 0
-  const buckets = Math.floor(remainingMinutes / Math.max(1, bucketMinutes))
-  return Math.max(0, Math.min(PROJECTION_MAX_MINUTES, buckets))
+  const capped = Math.min(PROJECTION_MAX_MINUTES, remainingMinutes)
+  return Math.floor(capped / Math.max(1, bucketMinutes))
 }
 
 /** Rozšíří grid o `extra` sloupců zopakováním posledního naměřeného sloupce.
@@ -53,6 +55,17 @@ export function projectGrid(grid: HeatmapGrid, extra: number): HeatmapGrid {
     return result
   }
 
+  // Stáří se NEprojektuje — projekce není „stará data", je to předpoklad;
+  // projekční sloupce mají stáří 0, i když poslední naměřená minuta stale je (#156)
+  const extendStale = (layer: Float32Array): Float32Array => {
+    const result = new Float32Array(total * strikeCount)
+    for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
+      const from = strikeIdx * grid.minutes
+      result.set(layer.subarray(from, from + dataMinutes), strikeIdx * total)
+    }
+    return result
+  }
+
   return {
     minutes: total,
     dataMinutes,
@@ -62,8 +75,7 @@ export function projectGrid(grid: HeatmapGrid, extra: number): HeatmapGrid {
       put: extend(grid.layers.put),
       signed: extend(grid.layers.signed),
     },
-    // Stáří se neprojektuje — projekce není „stará data", je to předpoklad
-    staleAge: grid.staleAge ? (extend(grid.staleAge) ?? null) : null,
+    staleAge: grid.staleAge ? extendStale(grid.staleAge) : null,
   }
 }
 
