@@ -1,4 +1,5 @@
 /** Testy živého intraday: WS append minut (#127) + hodinová pojistka refetch. */
+import { StrictMode } from 'react'
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { LiveSocket } from '../api/ws'
@@ -203,6 +204,87 @@ test('bar dorazí v jiném flushi než snapshot — svíčka se přesto objeví 
   const candle = result.current.overlays.price!.filter((b) => b.minuteIdx === 1)
   expect(candle).toHaveLength(1) // svíčka se objevila, nezmizela
   expect(candle[0].close).toBe(7602)
+})
+
+test('StrictMode: uzavřená minuta se neztratí dvojím během updateru (#143)', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(
+    () => useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+    { wrapper: StrictMode },
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(result.current.grid.minutes).toBe(1)
+
+  await act(async () => {
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: '2026-07-16T15:01:00Z',
+      rows: [{ strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 }],
+    })
+    socket.emit('price.ES', {
+      ts: '2026-07-16T15:01:00Z',
+      open: 7600.5,
+      high: 7603,
+      low: 7600,
+      close: 7602,
+      volume: 1300,
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  // Updater se ve StrictMode volá dvakrát — minuta i její svíčka musí přežít oba průběhy
+  expect(result.current.grid.minutes).toBe(2)
+  expect(result.current.overlays.price!.filter((bar) => bar.minuteIdx === 1)).toHaveLength(1)
+})
+
+test('uzavřená minuta bez baru drží svíčku ze spotu, dokud bar nedorazí (#143)', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+
+  // Spot v rozdělané minutě 15:01
+  await act(async () => {
+    socket.emit('spot.ES', { ts: '2026-07-16T15:01:20Z', price: 7602 })
+    socket.emit('spot.ES', { ts: '2026-07-16T15:01:50Z', price: 7605 })
+  })
+  expect(result.current.overlays.price!.at(-1)!.minuteIdx).toBe(1)
+
+  // Minuta se uzavře snapshotem, ale bar z price kanálu (zatím) nedorazil —
+  // svíčka nesmí zmizet, jinak v grafu chybí předchozí svíce (#143)
+  await act(async () => {
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: '2026-07-16T15:01:00Z',
+      rows: [{ strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 }],
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  expect(result.current.grid.minutes).toBe(2)
+  const fallback = result.current.overlays.price!.filter((bar) => bar.minuteIdx === 1)
+  expect(fallback).toHaveLength(1)
+  expect(fallback[0].high).toBe(7605)
+
+  // Skutečný bar dorazí později → nahradí spot zálohu (jediná svíčka, hodnoty z baru)
+  await act(async () => {
+    socket.emit('price.ES', {
+      ts: '2026-07-16T15:01:00Z',
+      open: 7601,
+      high: 7606,
+      low: 7600,
+      close: 7603,
+      volume: 1300,
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  const real = result.current.overlays.price!.filter((bar) => bar.minuteIdx === 1)
+  expect(real).toHaveLength(1)
+  expect(real[0].close).toBe(7603)
+  expect(real[0].high).toBe(7606)
 })
 
 test('daily režim nepoužívá intraday live fetch', async () => {

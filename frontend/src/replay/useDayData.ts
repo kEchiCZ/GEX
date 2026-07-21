@@ -3,7 +3,7 @@
 Timeframe 'daily' skládá sloupec za každý uložený den (seznam z /instruments/…/days,
 každý den má vlastní expiraci — 0DTE řetěz).
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PanelSeries } from '../components/BottomPanels'
 import type { LiveSocket, ChannelData } from '../api/ws'
 import { demoGrid, demoOverlays, demoPanels, demoProfile } from '../heatmap/demo'
@@ -40,14 +40,18 @@ function numOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-/** Rozdělaná svíčka aktuální (neuzavřené) minuty z živého spotu (#128). */
-interface FormingBar {
+/** Svíčka odvozená ze živého spotu (#128): rozdělaná minuta, nebo záloha uzavřené
+minuty, které ještě nedorazil skutečný bar z price kanálu (#143). */
+interface SpotBar {
   minuteIso: string
   open: number
   high: number
   low: number
   close: number
 }
+
+/** Strop držených spot svíček — starší minuty už reálný bar buď mají, nebo je srovná reconcile. */
+const SPOT_BARS_KEEP = 10
 
 /** Čas na začátek minuty (UTC) — sladí spot ts s klíči minut (ts_min). */
 function floorMinuteIso(value: unknown): string {
@@ -57,23 +61,46 @@ function floorMinuteIso(value: unknown): string {
   return date.toISOString()
 }
 
-/** Přidá rozdělanou svíčku na náběžnou hranu (jen je-li její minuta za posledními daty). */
-function withForming(day: ReplayDay, forming: FormingBar | null): ReplayDay {
-  if (!forming) return day
-  const lastMinute = day.minutes.at(-1)
-  if (lastMinute !== undefined && forming.minuteIso <= lastMinute) return day // už uzavřená minuta
-  const bar: PriceBar = {
-    minuteIdx: day.grid.minutes, // jeden koš za posledním uzavřeným → náběžná hrana
-    open: forming.open,
-    high: forming.high,
-    low: forming.low,
-    close: forming.close,
-    up: forming.close >= forming.open,
+function toPriceBar(spot: SpotBar, minuteIdx: number): PriceBar {
+  return {
+    minuteIdx,
+    open: spot.open,
+    high: spot.high,
+    low: spot.low,
+    close: spot.close,
+    up: spot.close >= spot.open,
   }
+}
+
+/** Doplní svíčky ze živého spotu (#128, #143): rozdělané minuty na náběžnou hranu
+a záložní bary uzavřených minut, kterým (zatím) chybí skutečný bar z price kanálu —
+předchozí svíčka tak nezmizí, když se rámec opozdí nebo ztratí. */
+function withSpotBars(day: ReplayDay, spotBars: SpotBar[]): ReplayDay {
+  if (spotBars.length === 0) return day
+  const minuteIndex = new Map(day.minutes.map((iso, index) => [iso, index]))
+  const covered = new Set((day.overlays.price ?? []).map((bar) => bar.minuteIdx))
+  const lastMinute = day.minutes.at(-1)
+  const extraBars: PriceBar[] = []
+  const extraMinutes: string[] = []
+  for (const spot of [...spotBars].sort((a, b) => (a.minuteIso < b.minuteIso ? -1 : 1))) {
+    const existingIdx = minuteIndex.get(spot.minuteIso)
+    if (existingIdx !== undefined) {
+      // Uzavřená minuta bez skutečného baru → záložní svíčka ze spotu
+      if (!covered.has(existingIdx)) extraBars.push(toPriceBar(spot, existingIdx))
+    } else if (lastMinute === undefined || spot.minuteIso > lastMinute) {
+      // Minuta za posledními daty (rozdělaná, nebo čeká na snapshot) → náběžná hrana
+      extraBars.push(toPriceBar(spot, day.grid.minutes + extraMinutes.length))
+      extraMinutes.push(spot.minuteIso)
+    }
+  }
+  if (extraBars.length === 0) return day
+  const price = [...(day.overlays.price ?? []), ...extraBars].sort(
+    (a, b) => a.minuteIdx - b.minuteIdx,
+  )
   return {
     ...day,
-    minutes: [...day.minutes, forming.minuteIso],
-    overlays: { ...day.overlays, price: [...(day.overlays.price ?? []), bar] },
+    minutes: [...day.minutes, ...extraMinutes],
+    overlays: { ...day.overlays, price },
   }
 }
 
@@ -152,21 +179,31 @@ export function useDayData(
 ): DayData {
   const fallback = useMemo(() => demoDay(), [])
   const [inputs, setInputs] = useState<ReplayInputs | null>(null)
+  // Zrcadlo inputs pro rozhodování ve flushi mimo setState updater (#143: updater musí být čistý)
+  const inputsRef = useRef<ReplayInputs | null>(null)
+  useEffect(() => {
+    inputsRef.current = inputs
+  }, [inputs])
   const [daily, setDaily] = useState<DayData | null>(null)
-  // Živý spot (#128): rozdělaná svíčka aktuální minuty (aktualizuje se sub-sekundově)
-  const [forming, setForming] = useState<FormingBar | null>(null)
+  // Živý spot (#128, #143): rozdělaná svíčka aktuální minuty + záložní bary minut bez skutečného baru
+  const [spotBars, setSpotBars] = useState<SpotBar[]>([])
 
   // Změna instrumentu/expirace: starý dataset nesmí přežít (jiný symbol → demo/nový fetch)
   useEffect(() => {
     setInputs(null)
     setDaily(null)
-    setForming(null)
+    setSpotBars([])
   }, [symbol, expiry, date])
 
-  // Jakmile se rozdělaná minuta uzavře (dorazí její snapshot), přestává být rozdělaná
+  // Jakmile pro minutu dorazí skutečný bar (price kanál), spot záloha končí.
+  // Pouhý snapshot minuty nestačí — jinak by svíčka do příchodu baru chyběla (#143).
   useEffect(() => {
-    if (forming && inputs?.minutes.includes(forming.minuteIso)) setForming(null)
-  }, [inputs, forming])
+    if (spotBars.length === 0 || !inputs) return
+    const withBar = new Set(inputs.bars.map((bar) => bar.tsIso))
+    if (spotBars.some((spot) => withBar.has(spot.minuteIso))) {
+      setSpotBars((previous) => previous.filter((spot) => !withBar.has(spot.minuteIso)))
+    }
+  }, [inputs, spotBars])
 
   const [retry, setRetry] = useState(0)
   // Hodinová pojistka: plný refetch srovná mezery / OI archiv / stale opravy (#127).
@@ -208,24 +245,34 @@ export function useDayData(
       flushTimer = setTimeout(() => {
         flushTimer = null
         if (pending.size === 0) return
+        const current = inputsRef.current
+        if (!current) return // balík ještě nedorazil — minuty počkají na další flush
+        // Výběr minut i úklid `pending` MUSÍ být mimo setState updater: ten React
+        // ve StrictMode volá dvakrát a druhý průběh by už minutu v `pending` nenašel,
+        // takže by ji zahodil (chybějící svíčka i sloupec gridu, #143).
+        const applied: LiveMinute[] = []
+        const known = new Set(current.minutes)
+        for (const ts of [...pending.keys()].sort((a, b) => (a < b ? -1 : 1))) {
+          const partial = pending.get(ts)!
+          // Aplikuj minutu, když má snapshot řez (nová/aktualizace mřížky) NEBO už existuje
+          // (dorazil jen bar/levels/flow k uzavřené minutě — jinak by svíčka chyběla, #133).
+          if (partial.rows || known.has(ts)) {
+            applied.push({
+              tsIso: ts,
+              rows: partial.rows ?? [],
+              bar: partial.bar,
+              levels: partial.levels,
+              flow: partial.flow,
+            })
+            pending.delete(ts)
+            known.add(ts)
+          }
+        }
+        if (applied.length === 0) return
         setInputs((prev) => {
           if (!prev) return prev
           let next = prev
-          for (const ts of [...pending.keys()].sort((a, b) => (a < b ? -1 : 1))) {
-            const partial = pending.get(ts)!
-            // Aplikuj minutu, když má snapshot řez (nová/aktualizace mřížky) NEBO už existuje
-            // (dorazil jen bar/levels/flow k uzavřené minutě — jinak by svíčka chyběla, #133).
-            if (partial.rows || next.minutes.includes(ts)) {
-              next = appendMinute(next, {
-                tsIso: ts,
-                rows: partial.rows ?? [],
-                bar: partial.bar,
-                levels: partial.levels,
-                flow: partial.flow,
-              })
-              pending.delete(ts)
-            }
-          }
+          for (const minute of applied) next = appendMinute(next, minute)
           return next
         })
       }, APPEND_DEBOUNCE_MS)
@@ -275,21 +322,32 @@ export function useDayData(
       part(minuteKey(data.ts_min)).flow = { cum_delta: Number(data.cum_delta) || 0 }
       scheduleFlush()
     }
-    // Živý spot (#128): rozdělaná svíčka aktuální minuty — jen overlay, bez přepočtu gridu
+    // Živý spot (#128): svíčky odvozené ze spotu — jen overlay, bez přepočtu gridu.
+    // Minuty se drží i po uzavření, dokud pro ně nedorazí skutečný bar (#143).
     const onSpot = (data: ChannelData) => {
       const price = Number(data.price)
       if (!Number.isFinite(price)) return
       const minuteIso = floorMinuteIso(data.ts)
-      setForming((prev) =>
-        prev && prev.minuteIso === minuteIso
-          ? {
-              ...prev,
-              high: Math.max(prev.high, price),
-              low: Math.min(prev.low, price),
-              close: price,
-            }
-          : { minuteIso, open: price, high: price, low: price, close: price },
-      )
+      setSpotBars((previous) => {
+        const index = previous.findIndex((spot) => spot.minuteIso === minuteIso)
+        if (index === -1) {
+          const fresh: SpotBar = { minuteIso, open: price, high: price, low: price, close: price }
+          return [...previous, fresh].slice(-SPOT_BARS_KEEP)
+        }
+        const existing = previous[index]
+        // Tick beze změny OHLC nesmí přerenderovat graf (spot chodí 5×/s)
+        if (existing.close === price && price <= existing.high && price >= existing.low) {
+          return previous
+        }
+        const next = previous.slice()
+        next[index] = {
+          ...existing,
+          high: Math.max(existing.high, price),
+          low: Math.min(existing.low, price),
+          close: price,
+        }
+        return next
+      })
     }
 
     const snapshotCh = `snapshot.${symbol}.${expiry}`
@@ -340,11 +398,11 @@ export function useDayData(
     }
   }, [symbol, timeframe])
 
-  // Grid se skládá jen při změně dat (drahé); rozdělaná svíčka je levná vrstva nad ním.
+  // Grid se skládá jen při změně dat (drahé); spot svíčky jsou levná vrstva nad ním.
   const baseReplay = useMemo(() => (inputs ? assembleReplayDay(inputs) : null), [inputs])
   const replayDay = useMemo(
-    () => (baseReplay ? replayToDay(withForming(baseReplay, forming)) : null),
-    [baseReplay, forming],
+    () => (baseReplay ? replayToDay(withSpotBars(baseReplay, spotBars)) : null),
+    [baseReplay, spotBars],
   )
   if (timeframe === 'daily') return daily ?? fallback
   return replayDay ?? fallback
