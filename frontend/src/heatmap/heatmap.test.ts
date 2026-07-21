@@ -108,6 +108,53 @@ test('stale buňka se liší od stejné hodnoty bez stale', () => {
   expect(buffer.data[stale + 3]).toBeLessThan(buffer.data[fresh + 3])
 })
 
+test('skalární smyčka renderGrid dává stejné pixely jako helpery z color.ts (#142)', () => {
+  // renderGrid má barvy inlinované ve skalárech kvůli výkonu; tento test hlídá,
+  // že se matematika nerozešla s referenčními helpery (call+put i signed, se stale).
+  const minutes = 23
+  const strikeCount = 17
+  const size = minutes * strikeCount
+  const pseudo = (seed: number, index: number) => ((index * seed) % 211) / 210
+  const build = (signedLayer: boolean): HeatmapGrid => {
+    const staleAge = new Float32Array(size)
+    for (let index = 0; index < size; index += 1) staleAge[index] = index % 5 === 0 ? 900 : 0
+    if (signedLayer) {
+      const signed = new Float32Array(size)
+      for (let index = 0; index < size; index += 1) signed[index] = pseudo(97, index) * 2 - 1
+      return { minutes, strikes: Array.from({ length: strikeCount }, (_, i) => i), layers: { signed }, staleAge } // prettier-ignore
+    }
+    const call = new Float32Array(size)
+    const put = new Float32Array(size)
+    for (let index = 0; index < size; index += 1) {
+      call[index] = pseudo(53, index)
+      put[index] = pseudo(89, index)
+    }
+    return { minutes, strikes: Array.from({ length: strikeCount }, (_, i) => i), layers: { call, put }, staleAge } // prettier-ignore
+  }
+
+  for (const signedLayer of [false, true]) {
+    const grid = build(signedLayer)
+    const buffer = renderGrid(grid, 'gradient')
+    for (let y = 0; y < strikeCount; y += 1) {
+      const strikeIdx = strikeCount - 1 - y
+      for (let x = 0; x < minutes; x += 1) {
+        const index = strikeIdx * minutes + x
+        let expected = grid.layers.signed
+          ? signedColor(grid.layers.signed[index])
+          : blend(blend([0, 0, 0, 0], callColor(grid.layers.call![index])), putColor(grid.layers.put![index])) // prettier-ignore
+        if (grid.staleAge![index] > 300) expected = applyStale(expected)
+        const offset = (y * minutes + x) * 4
+        expect([
+          buffer.data[offset],
+          buffer.data[offset + 1],
+          buffer.data[offset + 2],
+          buffer.data[offset + 3],
+        ]).toEqual(expected)
+      }
+    }
+  }
+})
+
 // ── Gaussovské rozmazání ───────────────────────────────────────────
 
 test('gaussianBlur má maximum ve zdroji a rozprostírá energii', () => {

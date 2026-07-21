@@ -188,11 +188,13 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
       : null,
   }
 
-  const profileByMinute = day.profileByMinute
-    ? Array.from(
-        { length: buckets },
-        (_, bucketIdx) => day.profileByMinute![bucketEnd(bucketIdx, bucketMinutes, minutes)] ?? [],
-      )
+  // Koš přebírá profil své poslední minuty — jen přemapování indexu, bez materializace (#142)
+  const source = day.profileByMinute
+  const profileByMinute = source
+    ? {
+        length: buckets,
+        rowsAt: (bucketIdx: number) => source.rowsAt(bucketEnd(bucketIdx, bucketMinutes, minutes)),
+      }
     : null
 
   return {

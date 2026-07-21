@@ -5,6 +5,7 @@ Skládá se z denních /replay balíků — každý den přispívá stavem posle
 snapshotů (14 dní, R4).
 */
 import type { DayData } from './useDayData'
+import { profileSourceOf } from './loader'
 import type { ReplayDay } from './loader'
 import type { HeatmapGrid } from '../heatmap/grid'
 import type { LevelLine, PriceBar } from '../heatmap/overlays'
@@ -84,7 +85,7 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
       previousClose = bar.close
       spotSeries[dayIdx] = bar.close
     }
-    profileByMinute.push(day.profileByMinute.at(-1) ?? [])
+    profileByMinute.push(day.profileByMinute.rowsAt(day.profileByMinute.length - 1))
 
     for (const line of [...(day.overlays.levels ?? []), ...(day.overlays.walls ?? [])]) {
       if (!lineSeries.has(line.name)) {
@@ -119,7 +120,7 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
       timestamp: days.at(-1)?.date ?? '',
     },
     panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut },
-    profileByMinute,
+    profileByMinute: profileSourceOf(profileByMinute),
     demoProfileRows: null,
     spotSeries,
     minuteLabels: days.map((day) => dayLabel(day.date)),

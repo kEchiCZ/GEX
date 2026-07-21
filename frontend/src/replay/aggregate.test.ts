@@ -2,6 +2,7 @@
 import { expect, test } from 'vitest'
 import { aggregateBars, aggregateDay, aggregateLive } from './aggregate'
 import { buildDailyDay, dayLabel } from './daily'
+import { profileSourceOf } from './loader'
 import type { DayData } from './useDayData'
 import type { ReplayDay } from './loader'
 import type { PriceBar } from '../heatmap/overlays'
@@ -35,7 +36,7 @@ function sampleDay(): DayData {
       deltaFlowCall: [1, 1, 2, 2],
       deltaFlowPut: [2, 2, 1, 1],
     },
-    profileByMinute: [[], [], [], []],
+    profileByMinute: profileSourceOf([[], [], [], []]),
     demoProfileRows: null,
     spotSeries: [101, 104, 96, 97],
     minuteLabels: ['9:30', '9:31', '9:32', '9:33'],
@@ -150,7 +151,7 @@ test('buildDailyDay: sloupec = den, denní OHLC svíčka a součty', () => {
       deltaFlowCall: [1, 2],
       deltaFlowPut: [2, 1],
     },
-    profileByMinute: [[], []],
+    profileByMinute: profileSourceOf([[], []]),
   }
   const dayB: ReplayDay = {
     ...dayA,

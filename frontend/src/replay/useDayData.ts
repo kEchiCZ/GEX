@@ -20,7 +20,7 @@ import {
   fetchReplay,
   fetchReplayInputs,
 } from './loader'
-import type { LiveMinute, LiveMinuteRow, ReplayDay, ReplayInputs } from './loader'
+import type { LiveMinute, LiveMinuteRow, ProfileSource, ReplayDay, ReplayInputs } from './loader'
 
 /** Daily pohled: strop stažených dnů (retence snapshotů je 14 dní, R4). */
 const DAILY_MAX_DAYS = 14
@@ -72,12 +72,24 @@ function toPriceBar(spot: SpotBar, minuteIdx: number): PriceBar {
   }
 }
 
-/** Popisek minuty na časové ose (lokální HH:MM). */
+/** Popisek minuty na časové ose (lokální HH:MM).
+
+Formátovač se drží jeden sdílený a hotové popisky se cachují per ISO: `toLocaleTimeString`
+staví nový `Intl.DateTimeFormat` při každém volání a přepočítával se celý den při každém
+appendu minuty — přes 120 minut to byla většina nákladu skládání dne (#142). */
+const MINUTE_FORMATTER = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
+const minuteLabelCache = new Map<string, string>()
+/** Strop cache — přes noc/přepínání dnů by jinak rostla bez omezení. */
+const MINUTE_LABEL_CACHE_MAX = 5000
+
 function minuteLabel(iso: string): string {
+  const cached = minuteLabelCache.get(iso)
+  if (cached !== undefined) return cached
   const parsed = new Date(iso)
-  return Number.isNaN(parsed.getTime())
-    ? iso
-    : parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  const label = Number.isNaN(parsed.getTime()) ? iso : MINUTE_FORMATTER.format(parsed)
+  if (minuteLabelCache.size >= MINUTE_LABEL_CACHE_MAX) minuteLabelCache.clear()
+  minuteLabelCache.set(iso, label)
+  return label
 }
 
 /** Živá (dynamická) vrstva ceny — vše, co se mění sub-sekundově ze spot kanálu.
@@ -123,7 +135,7 @@ export interface DayData {
   raw: RawDay | null
   overlays: OverlayData
   panels: PanelSeries
-  profileByMinute: ProfileRow[][] | null // demo má jediný statický profil
+  profileByMinute: ProfileSource | null // demo má jediný statický profil
   demoProfileRows: ProfileRow[] | null
   spotSeries: (number | null)[]
   /** Popisky časové osy (HH:MM lokálního času) per minuta. */
