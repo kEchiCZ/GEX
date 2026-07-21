@@ -204,8 +204,17 @@ function numOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-/** Dekóduje /replay balík na rozložený vstup (Arrow matice + řádky barů/levels/flow). */
-export function decodeBundle(bundle: ReplayBundle): ReplayInputs {
+/** Klíč aktuální wall-clock minuty (UTC) — detekce rozdělané minuty v bundle (#158). */
+function currentMinuteIso(now: Date): string {
+  const minute = new Date(now)
+  minute.setUTCSeconds(0, 0)
+  return minute.toISOString()
+}
+
+/** Dekóduje /replay balík na rozložený vstup (Arrow matice + řádky barů/levels/flow).
+
+`now` je injektovatelný kvůli testům; default = skutečný čas. */
+export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): ReplayInputs {
   const table = tableFromIPC(base64ToBytes(bundle.snapshots_arrow_base64))
   const tsColumn = table.getChild('ts_min')
   const strikeColumn = table.getChild('strike')
@@ -263,20 +272,24 @@ export function decodeBundle(bundle: ReplayBundle): ReplayInputs {
     staleAge[index] = Math.max(staleAge[index], Number(staleColumn?.get(row) ?? 0) || 0)
   }
 
+  // Parquet finalitu nenese (ADR-0005), ale bar AKTUÁLNÍ wall-clock minuty je
+  // s jistotou provizorní (engine ho upsertuje v :54 rozdělané minuty). Bez
+  // označení by po refreshi uprostřed minuty svíčka zmrzla až do dalšího cyklu,
+  // přestože spot ticky tečou hned — provizorní minutě spot svíčka přebírá (#158).
+  const liveMinuteIso = currentMinuteIso(now)
   const bars: BarInput[] = bundle.bars.map((bar) => {
     const open = Number(bar.open)
     const high = Number(bar.high)
     const low = Number(bar.low)
+    const tsIso = canonicalTs(bar.ts_min)
     return {
-      tsIso: canonicalTs(bar.ts_min),
+      tsIso,
       close: Number(bar.close),
       volume: Number(bar.volume) || 0,
       open: Number.isFinite(open) ? open : undefined,
       high: Number.isFinite(high) ? high : undefined,
       low: Number.isFinite(low) ? low : undefined,
-      // Parquet finalitu nenese (ADR-0005) — po znovunačtení stránky stejně žádná
-      // živá svíčka pro tu minutu neexistuje, takže se bar bere jako platný
-      final: true,
+      final: tsIso !== liveMinuteIso,
     }
   })
   const levels: LevelsInput[] = bundle.levels.map((row) => ({

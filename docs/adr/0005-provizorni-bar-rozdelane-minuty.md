@@ -61,9 +61,12 @@ nahradí finálním barem téže minuty.
    frontend by svíčku vykreslil dvakrát.
 4. **Schéma Parquet se nemění.** `final` se posílá jen po WS, do `BARS_SCHEMA`
    nepřibývá — přidání sloupce by rozbilo čtení už existujících denních partic
-   (`pq.read_table(..., schema=...)`). Bar v REST balíku se považuje za finální;
-   po znovunačtení stránky na tom nezáleží, protože klient stejně žádnou
-   živou svíčku pro tu minutu nemá.
+   (`pq.read_table(..., schema=...)`). Bar v REST balíku se považuje za finální
+   — s jednou výjimkou (#158): bar **aktuální wall-clock minuty** klient označí
+   za provizorní sám, protože je s jistotou rozdělaný (engine ho upsertuje
+   v :54 probíhající minuty) a spot ticky po znovunačtení stránky tečou hned;
+   bez označení by svíčka zmrzla až do dalšího cyklu. Pro starší minuty žádná
+   lepší informace neexistuje a berou se jako finální.
 5. **Přednost živého spotu na klientovi.** Frontend zahazuje záložní spot
    svíčku minuty až ve chvíli, kdy pro ni dorazí **finální** bar. Provizorní bar
    ji nezruší, takže rozdělaná svíčka zůstává živá (aktualizuje se 5×/s) i

@@ -293,6 +293,21 @@ test('appendMinute dá identický výsledek jako plný build (#127)', () => {
   expect(normalize(incremental)).toEqual(normalize(full))
 })
 
+test('bar aktuální wall-clock minuty je po dekódování bundle provizorní (#158)', () => {
+  const bundle = bundleFor(CELLS, BARS, LEVELS, FLOW)
+  // Reload uprostřed minuty M1: bar M1 je s jistotou rozdělaný → provizorní,
+  // spot svíčka ho smí přebíjet; starší minuty zůstávají finální
+  const during = decodeBundle(bundle, new Date('2026-07-16T15:01:31Z'))
+  expect(during.bars.map((bar) => bar.final)).toEqual([true, false])
+  const day = assembleReplayDay(during)
+  expect(day.provisionalMinutes).toEqual([1])
+
+  // Reload po uzavření minuty (jiná wall-clock minuta) → všechny bary finální
+  const after = decodeBundle(bundle, new Date('2026-07-16T15:02:10Z'))
+  expect(after.bars.map((bar) => bar.final)).toEqual([true, true])
+  expect(assembleReplayDay(after).provisionalMinutes).toEqual([])
+})
+
 test('append == plný build přes 120 minut s rozšiřující se strike osou (#157)', () => {
   // Dlouhá sekvence z review #132: strike osa náhodně roste oběma směry,
   // řezy mají díry — append musí dát identický den jako plný build,
