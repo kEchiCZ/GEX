@@ -142,6 +142,35 @@ def test_new_writer_continues_existing_partition(tmp_path: Path) -> None:
     assert len(frame) == 4  # obě minuty, žádná ztráta po "restartu"
 
 
+def test_restart_mid_day_replaces_provisional_bar(tmp_path: Path) -> None:
+    """ADR-0005 + restart: nový writer po pádu nahradí provizorní bar finálním (#157).
+
+    Upsert podle ts_min musí fungovat i přes hranici procesu — `_ensure_loaded`
+    načte partici včetně provizorního řádku a finální bar ho nahradí, nezdvojí.
+    """
+    settings = Settings(data_dir=tmp_path)
+    ts = dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
+
+    # Proces 1: finální bar 14:59 + provizorní 15:00, pak "spadne"
+    writer_before = SnapshotWriter(settings)
+    earlier = Bar(
+        ts=ts - dt.timedelta(minutes=1), open=99.0, high=100.0, low=98.0, close=99.5, volume=500.0
+    )
+    provisional = Bar(ts=ts, open=100.0, high=102.0, low=99.0, close=101.0, volume=300.0)
+    writer_before.write_bars("ES", DAY, [earlier])
+    path = writer_before.write_bars("ES", DAY, [provisional])
+    assert len(pd.read_parquet(path)) == 2
+
+    # Proces 2 (restart): finální bar téže minuty nahradí provizorní řádek
+    final = Bar(ts=ts, open=100.0, high=105.0, low=98.0, close=104.0, volume=1200.0)
+    path = SnapshotWriter(settings).write_bars("ES", DAY, [final])
+
+    frame = pd.read_parquet(path).sort_values("ts_min")
+    assert len(frame) == 2  # jedna minuta = jeden řádek i přes restart
+    assert list(frame["close"]) == [99.5, 104.0]
+    assert list(frame["volume"]) == [500.0, 1200.0]
+
+
 def test_no_partial_files_after_simulated_crash(writer: SnapshotWriter, tmp_path: Path) -> None:
     """AC: žádné částečné soubory po kill -9 — osiřelý .tmp se ignoruje a uklidí."""
     path = writer.write_minute("ES", "20260716", DAY, snapshot_rows(0, [7600.0]))
