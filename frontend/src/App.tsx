@@ -167,7 +167,7 @@ function MainContent() {
   const profileRows = useMemo(() => {
     if (day.profileByMinute) {
       const index = Math.min(playback.position, day.profileByMinute.length - 1)
-      return day.profileByMinute[index] ?? []
+      return day.profileByMinute.rowsAt(index)
     }
     return day.demoProfileRows ?? []
   }, [day, playback.position])

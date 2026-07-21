@@ -19,6 +19,23 @@ import { maxPainSeries } from '../heatmap/maxpain'
 import type { LevelLine, OverlayData, PriceBar } from '../heatmap/overlays'
 import type { ProfileRow } from '../profile/bars'
 
+/** Profilové řádky per minuta počítané LÍNĚ (#142).
+
+Zobrazuje se vždy jen jedna minuta, ale předpočítání celého dne alokovalo
+`minuty × strikes` objektů při každém appendu — po `maxPain` a popiscích os to byl
+největší zbylý náklad uzavření minuty (a držel desítky MB). Řádky se proto počítají
+na vyžádání a cachují per minuta. */
+export interface ProfileSource {
+  readonly length: number
+  /** Řádky dané minuty; mimo rozsah prázdné pole. */
+  rowsAt(minuteIdx: number): ProfileRow[]
+}
+
+/** Obalí hotová data (Daily pohled, testy) do `ProfileSource`. */
+export function profileSourceOf(rows: ProfileRow[][]): ProfileSource {
+  return { length: rows.length, rowsAt: (minuteIdx) => rows[minuteIdx] ?? [] }
+}
+
 export interface ReplayDay {
   symbol: string
   expiry: string
@@ -29,8 +46,8 @@ export interface ReplayDay {
   raw: RawDay
   overlays: OverlayData // celý den
   panels: PanelSeries // celý den
-  /** Profilové řádky per minuta (předpočítané — krájení bez přepočtu). */
-  profileByMinute: ProfileRow[][]
+  /** Profilové řádky per minuta (líné — krájení bez přepočtu celého dne). */
+  profileByMinute: ProfileSource
 }
 
 const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall'] as const
@@ -465,11 +482,16 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     inputs.putOi.reduce((sum, value) => sum + value, 0)
   const oiChangeReady = prevOi.size > 0 && totalOiToday > 0
 
-  const profileByMinute: ProfileRow[][] = []
-  for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
-    const spotAtMinute = price.find((bar) => bar.minuteIdx === minuteIdx)?.close ?? Number.NaN
-    profileByMinute.push(
-      strikes.map((strike, strikeIdx) => {
+  // Řádky profilu se počítají až při dotazu na konkrétní minutu a cachují se (#142)
+  const profileCache = new Map<number, ProfileRow[]>()
+  const profileByMinute: ProfileSource = {
+    length: minutes,
+    rowsAt(minuteIdx: number): ProfileRow[] {
+      if (minuteIdx < 0 || minuteIdx >= minutes) return []
+      const cached = profileCache.get(minuteIdx)
+      if (cached) return cached
+      const spotAtMinute = price.find((bar) => bar.minuteIdx === minuteIdx)?.close ?? Number.NaN
+      const rows = strikes.map((strike, strikeIdx) => {
         const index = strikeIdx * minutes + minuteIdx
         const callAbsDelta = Math.abs(inputs.callDelta[index])
         const putAbsDelta = Math.abs(inputs.putDelta[index])
@@ -491,8 +513,10 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
             ? inputs.putOi[index] - (prevOi.get(`${strike}|P`) ?? 0)
             : null,
         }
-      }),
-    )
+      })
+      profileCache.set(minuteIdx, rows)
+      return rows
+    },
   }
 
   return {

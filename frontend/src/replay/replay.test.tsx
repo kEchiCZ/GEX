@@ -176,13 +176,13 @@ test('buildReplayDay dekóduje Arrow snapshoty a poskládá den', () => {
   // Levels řada: minuta 0 hodnota, minuta 1 null
   expect(day.overlays.levels?.[0].series).toEqual([7595, null])
   // ΔOI vs. včera: dnešní OI (C 100, P 200) − včerejší (C 80, P 250)
-  const row = day.profileByMinute[0][0]
+  const row = day.profileByMinute.rowsAt(0)[0]
   expect(row.callOiChange).toBe(20)
   expect(row.putOiChange).toBe(-50)
   // Profil per minuta: combined komponenty s |delta| vahou
-  expect(day.profileByMinute[1][0].callVolComponent).toBeCloseTo(30 * 0.5)
-  expect(day.profileByMinute[1][0].putOiComponent).toBeCloseTo(200 * 0.4)
-  expect(day.profileByMinute[1][0].distanceFromSpot).toBeCloseTo(7600 - 7601.5)
+  expect(day.profileByMinute.rowsAt(1)[0].callVolComponent).toBeCloseTo(30 * 0.5)
+  expect(day.profileByMinute.rowsAt(1)[0].putOiComponent).toBeCloseTo(200 * 0.4)
+  expect(day.profileByMinute.rowsAt(1)[0].distanceFromSpot).toBeCloseTo(7600 - 7601.5)
 })
 
 // ── Inkrementální append (#127): append == plný build ───────────────
@@ -256,7 +256,10 @@ function normalize(day: ReplayDay) {
     price: day.overlays.price,
     levels: day.overlays.levels,
     walls: day.overlays.walls,
-    profile: day.profileByMinute,
+    // Líný profil (#142) se pro porovnání zmaterializuje přes všechny minuty
+    profile: Array.from({ length: day.profileByMinute.length }, (_, minuteIdx) =>
+      day.profileByMinute.rowsAt(minuteIdx),
+    ),
   }
 }
 

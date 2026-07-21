@@ -25,6 +25,26 @@ test('p99Denominator: p99 absolutních hodnot', () => {
   expect(p99Denominator(Float32Array.from([]))).toBe(0)
 })
 
+test('p99Denominator (quickselect) se shoduje s plným tříděním (#142)', () => {
+  // Referenční implementace: celé pořadí, stejný index kvantilu
+  const reference = (values: Float32Array): number => {
+    const sorted = Array.from(values, Math.abs).sort((a, b) => a - b)
+    return sorted[Math.max(0, Math.ceil(0.99 * sorted.length) - 1)]
+  }
+  const cases: Float32Array[] = [
+    Float32Array.from([7]), // jediný prvek
+    Float32Array.from([5, 5, 5, 5]), // samé duplicity (past quickselectu)
+    Float32Array.from({ length: 300 }, () => 0), // samé nuly
+    Float32Array.from({ length: 1000 }, (_, i) => i), // rostoucí
+    Float32Array.from({ length: 1000 }, (_, i) => -i), // klesající záporné
+    Float32Array.from({ length: 999 }, (_, i) => ((i * 7919) % 1013) - 500), // pseudonáhodné
+    Float32Array.from({ length: 500 }, (_, i) => (i % 7 === 0 ? 1e6 : (i % 13) - 6)), // odlehlé
+  ]
+  for (const values of cases) {
+    expect(p99Denominator(values)).toBe(reference(values))
+  }
+})
+
 test('OI mód: vrstvy normalizované společným p99', () => {
   const grid = buildModeGrid(raw(), 'oi', 'linear')
   // denom = max(p99 call 300, p99 put 400) = 400
@@ -113,6 +133,57 @@ test('maxPain: symetrické OI → prostřední strike (ručně spočteno)', () =
       () => 10,
     ),
   ).toBe(100)
+})
+
+test('maxPainAt (prefixové součty) se shoduje s naivní O(strikes²) verzí (#142)', () => {
+  // Naivní referenční implementace přesně podle definice cost(S)
+  const reference = (
+    strikes: number[],
+    callOi: (i: number) => number,
+    putOi: (i: number) => number,
+  ): number | null => {
+    let totalOi = 0
+    for (let i = 0; i < strikes.length; i += 1) totalOi += callOi(i) + putOi(i)
+    if (totalOi <= 0) return null
+    let best: number | null = null
+    let bestCost = Infinity
+    for (const settle of strikes) {
+      let cost = 0
+      for (let i = 0; i < strikes.length; i += 1) {
+        cost += callOi(i) * Math.max(0, settle - strikes[i])
+        cost += putOi(i) * Math.max(0, strikes[i] - settle)
+      }
+      if (cost < bestCost) {
+        bestCost = cost
+        best = settle
+      }
+    }
+    return best
+  }
+
+  const strikes = Array.from({ length: 64 }, (_, i) => 7000 + i * 5)
+  const scenarios: Array<[string, (i: number) => number, (i: number) => number]> = [
+    ['ploché OI (remízy)', () => 10, () => 10],
+    ['bez OI', () => 0, () => 0],
+    ['jen cally', (i) => (i % 3) + 1, () => 0],
+    ['jen puty', () => 0, (i) => (i % 5) + 1],
+    ['pseudonáhodné', (i) => (i * 7919) % 900, (i) => (i * 6271) % 700],
+    ['špička uprostřed', (i) => (i === 32 ? 5000 : 3), (i) => (i === 32 ? 4000 : 2)],
+    ['rostoucí vs. klesající', (i) => i * 11, (i) => (63 - i) * 13],
+  ]
+  for (const [label, callOi, putOi] of scenarios) {
+    expect(maxPainAt(strikes, callOi, putOi), label).toBe(reference(strikes, callOi, putOi))
+  }
+})
+
+test('maxPainAt: neseřazené strikes selžou hlasitě, ne tichým špatným výsledkem (#142)', () => {
+  expect(() =>
+    maxPainAt(
+      [100, 90, 110],
+      () => 10,
+      () => 10,
+    ),
+  ).toThrow(/vzestupně/)
 })
 
 test('maxPainSeries: bez OI je řada null', () => {
