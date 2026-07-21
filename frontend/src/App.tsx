@@ -18,6 +18,8 @@ import { StrikeProfile } from './components/StrikeProfile'
 import { useSetups } from './hooks/useSetups'
 import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
 import type { HeatmapMode, HeatmapScale } from './heatmap/modes'
+import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
+import { expirySettleUtc } from './instrument/expiry'
 import { visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { DEFAULT_VIEW } from './heatmap/view'
@@ -34,7 +36,7 @@ import type { WallsMode } from './heatmap/wallsModes'
 import { aggregateDay, aggregateLive } from './replay/aggregate'
 import { sliceGrid, sliceOverlays, slicePanels } from './replay/slice'
 import { useAggregateProfile } from './replay/useAggregateProfile'
-import { EMPTY_LIVE, useDayData } from './replay/useDayData'
+import { EMPTY_LIVE, minuteLabel, useDayData } from './replay/useDayData'
 import { usePlayback } from './replay/usePlayback'
 import { AppStateProvider, INTERVAL_MINUTES, useAppState } from './state/AppState'
 import { CrosshairProvider } from './state/Crosshair'
@@ -155,6 +157,33 @@ function MainContent() {
   const grid = useMemo(
     () => (playback.isLive ? day.grid : sliceGrid(day.grid, playback.position)),
     [day.grid, playback.isLive, playback.position],
+  )
+  // Projekce heatmapy do settle (ADR-0006): poslední naměřený sloupec držený
+  // konstantní. Jen intraday — Daily má sloupec = den, tam nedává smysl.
+  const projectedGrid = useMemo(() => {
+    if (!toggles.projection || timeframe !== 'intraday' || !selectedExpiry) return grid
+    const extra = projectionLength(
+      day.lastMinuteIso ?? undefined,
+      expirySettleUtc(selectedExpiry),
+      bucketMinutes,
+    )
+    return projectGrid(grid, extra)
+  }, [grid, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes])
+  const projectionExtra = projectedGrid.minutes - (projectedGrid.dataMinutes ?? projectedGrid.minutes) // prettier-ignore
+  const chartLabels = useMemo(
+    () =>
+      projectionExtra <= 0
+        ? day.minuteLabels
+        : [
+            ...day.minuteLabels,
+            ...projectionLabels(
+              day.lastMinuteIso ?? undefined,
+              projectionExtra,
+              bucketMinutes,
+              minuteLabel,
+            ),
+          ],
+    [day.minuteLabels, day.lastMinuteIso, projectionExtra, bucketMinutes],
   )
   const panelSeries = useMemo(
     () => (playback.isLive ? day.panels : slicePanels(day.panels, playback.position)),
@@ -442,13 +471,13 @@ function MainContent() {
         <div className="chart-column">
           <main className="chart-area" aria-label="Heatmapa">
             <Heatmap
-              grid={grid}
+              grid={projectedGrid}
               style={style}
               contours={contours}
               overlays={overlays}
               liveBars={liveOverlay.bars}
               liveLabels={liveOverlay.labels}
-              minuteLabels={day.minuteLabels}
+              minuteLabels={chartLabels}
               priceStyle={priceStyle}
               priceOpacity={priceOpacity}
               annotations={annotationsState.annotations}
@@ -480,6 +509,9 @@ function MainContent() {
             visible={panelsVisible}
             width={heatSize.width}
             time={panelTime}
+            // Shodné měřítko osy X s heatmapou i při projekci (ADR-0006) —
+            // panely samy kreslí dál jen naměřená data
+            totalMinutes={projectedGrid.minutes}
           />
           {showReplay && <PlaybackBar playback={playback} />}
         </div>

@@ -8,7 +8,11 @@ PixelBuffer je vlastní typ (ne ImageData), aby šel testovat v Node bez canvasu
 */
 
 import { STALE_THRESHOLD_S } from './color'
+import { dataMinutesOf } from './grid'
 import type { HeatmapGrid } from './grid'
+
+/** Sytost projektované části (ADR-0006) — musí být na první pohled odlišná od dat. */
+export const PROJECTION_ALPHA = 0.45
 
 export type HeatmapStyle = 'gradient' | 'blobs'
 
@@ -76,12 +80,14 @@ export function renderGrid(grid: HeatmapGrid, style: HeatmapStyle): PixelBuffer 
   const put = layerOf(grid.layers.put)
   const signed = layerOf(grid.layers.signed)
   const staleAge = grid.staleAge
+  const dataMinutes = dataMinutesOf(grid)
 
   const buffer = new Uint8ClampedArray(width * height * 4)
   for (let y = 0; y < height; y += 1) {
     const strikeIdx = height - 1 - y // obrazovka: nahoře nejvyšší strike
     for (let x = 0; x < width; x += 1) {
       const index = strikeIdx * width + x
+      const projected = x >= dataMinutes
       let r = 0
       let g = 0
       let b = 0
@@ -142,6 +148,9 @@ export function renderGrid(grid: HeatmapGrid, style: HeatmapStyle): PixelBuffer 
         b = Math.round(b * 0.35 + gray * 0.65)
         a = Math.round(a * 0.55)
       }
+      // Projekce (ADR-0006): stejná barva, nižší sytost — ať je hned poznat,
+      // že vpravo nejsou naměřená data, ale předpoklad „OI se nezmění"
+      if (projected) a = Math.round(a * PROJECTION_ALPHA)
       const offset = (y * width + x) * 4
       buffer[offset] = r
       buffer[offset + 1] = g

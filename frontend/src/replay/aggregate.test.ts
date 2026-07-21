@@ -40,6 +40,7 @@ function sampleDay(): DayData {
     demoProfileRows: null,
     spotSeries: [101, 104, 96, 97],
     minuteLabels: ['9:30', '9:31', '9:32', '9:33'],
+    lastMinuteIso: '2026-07-16T15:03:00.000Z',
   }
 }
 

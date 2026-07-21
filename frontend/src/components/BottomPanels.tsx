@@ -112,15 +112,20 @@ function BottomPanelsBase({
   visible,
   width = 1200,
   time = IDENTITY_TIME,
+  totalMinutes,
 }: {
   data: PanelSeries
   visible: PanelsVisible
   width?: number
   /** Pan/zoom osy X hlavního grafu — panely se roztahují synchronně. */
   time?: TimeTransform
+  /** Počet sloupců osy X heatmapy včetně projekce (ADR-0006). Panely kreslí
+  jen svá data, ale měřítko musí být shodné, jinak se časové osy rozjedou. */
+  totalMinutes?: number
 }) {
   const minutes = data.vol.length
-  const pointer = usePanelPointer(minutes, width, time)
+  const axisMinutes = Math.max(minutes, totalMinutes ?? minutes)
+  const pointer = usePanelPointer(axisMinutes, width, time)
   const { position } = useCrosshair()
   // Index pod crosshairem (sdílený napříč panely) — hodnoty vpravo nahoře
   const idx =
@@ -128,7 +133,7 @@ function BottomPanelsBase({
   // Výšková úroveň kurzoru v konkrétním panelu — hodnota na pravé ose Y
   const [hoverY, setHoverY] = useState<{ key: string; y: number } | null>(null)
   // Stejné základní měřítko jako heatmapa — málo dat se neroztahuje na šířku
-  const step = baseBucketPx(minutes, width)
+  const step = baseBucketPx(axisMinutes, width)
   const barWidth = Math.max(0.5, step * 0.8)
   const transform = `translate(${time.offsetX} 0) scale(${time.zoomX} 1)`
 

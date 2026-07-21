@@ -124,5 +124,6 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
     demoProfileRows: null,
     spotSeries,
     minuteLabels: days.map((day) => dayLabel(day.date)),
+    lastMinuteIso: null, // Daily pohled se neprojektuje (sloupec = den)
   }
 }

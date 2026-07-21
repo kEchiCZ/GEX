@@ -20,15 +20,21 @@ test('markery se umístí na správné minuty a mimo rozsah se vynechají', () =
 
 test('celodenní data mají plnou sadu, prázdná žádnou', () => {
   const keys = minutes('2026-07-17T00:00:00Z', 21 * 60)
-  const labels = autoSessions(keys).map((m) => m.label)
-  expect(labels).toEqual([
-    'Tokio',
-    'Tokio Cl',
-    'Londýn',
+  const markers = autoSessions(keys)
+  // Seance padnoucí na tutéž minutu se slučují do jednoho popisku (ADR-0006)
+  expect(markers.map((m) => m.label)).toEqual([
+    'Sydney · Tokio',
+    'Šanghaj',
+    'Indie',
+    'Sydney Cl · Tokio Cl',
+    'Šanghaj Cl · Frankfurt · Londýn',
+    'Indie Cl',
     'US Pre',
     'US Open',
-    'Londýn Cl',
+    'Frankfurt Cl · Londýn Cl',
     'US Close',
   ])
+  // Markery jsou seřazené v čase a sedí na správných minutách
+  expect(markers.map((m) => m.minuteIdx)).toEqual([0, 90, 225, 360, 420, 600, 720, 810, 930, 1200])
   expect(autoSessions([])).toEqual([])
 })

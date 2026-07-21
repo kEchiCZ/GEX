@@ -35,6 +35,8 @@ export interface Toggles {
   delta: boolean
   deltaFlow: boolean
   volOiDelta: boolean
+  /** Projekce heatmapy do settle (ADR-0006) — jen intraday. */
+  projection: boolean
   news: boolean
 }
 
@@ -176,6 +178,7 @@ export function AppStateProvider({
     delta: true,
     deltaFlow: false,
     volOiDelta: true,
+    projection: true,
     news: false,
   })
 
