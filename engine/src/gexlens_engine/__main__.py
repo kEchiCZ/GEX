@@ -251,6 +251,7 @@ async def create_pipeline(
         oi_repository=oi_repository,
         ticker=fut_ticker,
         minute_bars=minute_bars,
+        forming_bar=lambda: aggregator.current,
         on_stop=on_stop,
         spot=spot,
         archive_contracts=archive_contracts,

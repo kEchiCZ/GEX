@@ -110,7 +110,13 @@ export const EMPTY_LIVE: LiveOverlay = { bars: [], labels: [] }
 function splitSpotBars(day: ReplayDay, spotBars: SpotBar[]): LiveOverlay {
   if (spotBars.length === 0) return EMPTY_LIVE
   const minuteIndex = new Map(day.minutes.map((iso, index) => [iso, index]))
-  const covered = new Set((day.overlays.price ?? []).map((bar) => bar.minuteIdx))
+  // Provizorní bar (ADR-0005) minutu nepokrývá — rozdělaná svíčka ze spotu je živější
+  const provisional = new Set(day.provisionalMinutes)
+  const covered = new Set(
+    (day.overlays.price ?? [])
+      .map((bar) => bar.minuteIdx)
+      .filter((minuteIdx) => !provisional.has(minuteIdx)),
+  )
   const lastMinute = day.minutes.at(-1)
   const bars: PriceBar[] = []
   const labels: string[] = []
@@ -220,13 +226,16 @@ export function useDayData(
     setSpotBars([])
   }, [symbol, expiry, date])
 
-  // Jakmile pro minutu dorazí skutečný bar (price kanál), spot záloha končí.
+  // Jakmile pro minutu dorazí FINÁLNÍ bar (price kanál), spot záloha končí.
   // Pouhý snapshot minuty nestačí — jinak by svíčka do příchodu baru chyběla (#143).
+  // Provizorní bar ji taky neruší, aby rozdělaná minuta zůstala živá (ADR-0005).
   useEffect(() => {
     if (spotBars.length === 0 || !inputs) return
-    const withBar = new Set(inputs.bars.map((bar) => bar.tsIso))
-    if (spotBars.some((spot) => withBar.has(spot.minuteIso))) {
-      setSpotBars((previous) => previous.filter((spot) => !withBar.has(spot.minuteIso)))
+    const withFinalBar = new Set(
+      inputs.bars.filter((bar) => bar.final !== false).map((bar) => bar.tsIso),
+    )
+    if (spotBars.some((spot) => withFinalBar.has(spot.minuteIso))) {
+      setSpotBars((previous) => previous.filter((spot) => !withFinalBar.has(spot.minuteIso)))
     }
   }, [inputs, spotBars])
 
@@ -331,6 +340,8 @@ export function useDayData(
         low: Number(data.low),
         close,
         volume: Number(data.volume) || 0,
+        // Starší engine pole neposílá — chybějící hodnota znamená finální bar (ADR-0005)
+        final: data.final !== false,
       }
       scheduleFlush()
     }

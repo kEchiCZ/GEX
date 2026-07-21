@@ -46,6 +46,11 @@ class RealTimeBarAggregator:
         self._on_minute_bar = on_minute_bar
         self._current: Bar | None = None
 
+    @property
+    def current(self) -> Bar | None:
+        """Rozdělaná (dosud neuzavřená) minuta — zdroj provizorního baru, ADR-0005."""
+        return self._current
+
     def add_5s_bar(self, bar: Bar) -> None:
         minute_start = bar.ts.replace(second=0, microsecond=0)
         current = self._current

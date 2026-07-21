@@ -48,6 +48,9 @@ export interface ReplayDay {
   panels: PanelSeries // celý den
   /** Profilové řádky per minuta (líné — krájení bez přepočtu celého dne). */
   profileByMinute: ProfileSource
+  /** `minuteIdx` minut, jejichž bar je zatím provizorní (ADR-0005). Živá svíčka
+  ze spotu je pro ně přesnější, takže jim v grafu ustupuje až finální bar. */
+  provisionalMinutes: number[]
 }
 
 const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall'] as const
@@ -59,6 +62,8 @@ interface BarInput {
   low?: number
   close: number
   volume: number
+  /** `false` = provizorní bar rozdělané minuty (ADR-0005); chybí-li, bere se jako finální. */
+  final?: boolean
 }
 interface LevelsInput {
   tsIso: string
@@ -106,7 +111,15 @@ export interface LiveMinuteRow {
 export interface LiveMinute {
   tsIso: string
   rows: LiveMinuteRow[]
-  bar?: { open?: number; high?: number; low?: number; close: number; volume?: number }
+  bar?: {
+    open?: number
+    high?: number
+    low?: number
+    close: number
+    volume?: number
+    /** `false` = provizorní bar rozdělané minuty (ADR-0005). */
+    final?: boolean
+  }
   levels?: Record<string, number | null>
   flow?: { cum_delta: number }
 }
@@ -261,6 +274,9 @@ export function decodeBundle(bundle: ReplayBundle): ReplayInputs {
       open: Number.isFinite(open) ? open : undefined,
       high: Number.isFinite(high) ? high : undefined,
       low: Number.isFinite(low) ? low : undefined,
+      // Parquet finalitu nenese (ADR-0005) — po znovunačtení stránky stejně žádná
+      // živá svíčka pro tu minutu neexistuje, takže se bar bere jako platný
+      final: true,
     }
   })
   const levels: LevelsInput[] = bundle.levels.map((row) => ({
@@ -399,6 +415,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
 
   // Overlaye: cena z barů
   const price: PriceBar[] = []
+  const provisionalMinutes: number[] = []
   let previousClose = Number.NaN
   for (const bar of inputs.bars) {
     const minuteIdx = minuteIndex.get(bar.tsIso)
@@ -411,6 +428,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
         high: bar.high,
         low: bar.low,
       })
+      if (bar.final === false) provisionalMinutes.push(minuteIdx)
       previousClose = bar.close
     }
   }
@@ -529,6 +547,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     overlays,
     panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut },
     profileByMinute,
+    provisionalMinutes,
   }
 }
 
