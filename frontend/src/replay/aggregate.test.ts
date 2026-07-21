@@ -1,6 +1,6 @@
 /** Testy agregace timeframů: OHLC skládání, součty vs. poslední hodnoty, popisky. */
 import { expect, test } from 'vitest'
-import { aggregateBars, aggregateDay } from './aggregate'
+import { aggregateBars, aggregateDay, aggregateLive } from './aggregate'
 import { buildDailyDay, dayLabel } from './daily'
 import type { DayData } from './useDayData'
 import type { ReplayDay } from './loader'
@@ -49,6 +49,45 @@ test('aggregateBars skládá OHLC koše (open první, close poslední, high/low 
   expect(bars[1]).toMatchObject({ minuteIdx: 1, open: 104, high: 104, low: 95, close: 97 })
   expect(bars[0].up).toBe(true) // první koš: close ≥ open
   expect(bars[1].up).toBe(false) // 97 < 104 (close předchozího koše)
+})
+
+test('aggregateLive: 1m timeframe nechá živou vrstvu beze změny (#141)', () => {
+  const live = {
+    bars: [{ minuteIdx: 4, open: 97, high: 99, low: 96, close: 98, up: true }],
+    labels: ['9:34'],
+  }
+  expect(aggregateLive(live, 1, 4, [])).toBe(live) // stabilní identita
+})
+
+test('aggregateLive: rozdělaná minuta splyne s košem uzavřených minut (#141)', () => {
+  // 2m koše nad 4 uzavřenými minutami → koše 0 (min 0–1) a 1 (min 2–3).
+  // Rozdělaná minuta 4 patří do koše 2 (nový, prázdný).
+  const statik = aggregateBars(sampleDay().overlays.price!, 2)
+  const live = {
+    bars: [{ minuteIdx: 4, open: 97, high: 110, low: 90, close: 108, up: true }],
+    labels: ['9:34'],
+  }
+  const merged = aggregateLive(live, 2, 4, statik)
+  expect(merged.bars).toHaveLength(1)
+  expect(merged.bars[0]).toMatchObject({ minuteIdx: 2, open: 97, high: 110, low: 90, close: 108 })
+  expect(merged.labels).toEqual(['9:34']) // koš 2 je za koncem gridu (buckets = 2)
+})
+
+test('aggregateLive: živá minuta uvnitř rozpracovaného koše přebírá jeho open a extrémy (#141)', () => {
+  // 4m koš nad 3 uzavřenými minutami (0–2) → koš 0. Rozdělaná minuta 3 padá do TÉHOŽ koše.
+  const closed = sampleDay().overlays.price!.slice(0, 3)
+  const statik = aggregateBars(closed, 4)
+  expect(statik[0]).toMatchObject({ minuteIdx: 0, open: 100, high: 105, low: 95, close: 96 })
+  const live = {
+    bars: [{ minuteIdx: 3, open: 96, high: 99, low: 93, close: 94, up: false }],
+    labels: ['9:33'],
+  }
+  const merged = aggregateLive(live, 4, 3, statik)
+  expect(merged.bars).toHaveLength(1)
+  // open z uzavřené části koše, extrémy přes obě části, close z živého ticku
+  expect(merged.bars[0]).toMatchObject({ minuteIdx: 0, open: 100, high: 105, low: 93, close: 94 })
+  expect(merged.bars[0].up).toBe(false) // 94 < 100
+  expect(merged.labels).toHaveLength(0) // koš 0 je uvnitř gridu, popisek už existuje
 })
 
 test('aggregateDay: kumulativní vrstvy berou poslední minutu koše, Vol se sčítá', () => {

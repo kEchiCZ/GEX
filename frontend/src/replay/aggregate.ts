@@ -4,7 +4,7 @@ Zdrojová 1m data jsou v kumulativní sémantice (OI/volume per buňka = stav v 
 takže hodnota koše = poslední minuta koše; přírůstkové řady (Vol, OptVol) se sčítají,
 cena se skládá do OHLC. Timeframe se tedy přepíná bez dalšího fetch.
 */
-import type { DayData } from './useDayData'
+import type { DayData, LiveOverlay } from './useDayData'
 import type { HeatmapGrid } from '../heatmap/grid'
 import type { LevelLine, OverlayData, PriceBar } from '../heatmap/overlays'
 
@@ -93,6 +93,58 @@ export function aggregateBars(bars: PriceBar[], bucketMinutes: number): PriceBar
     previousClose = close
   }
   return result
+}
+
+/** Živá vrstva (#141) do timeframe košů: rozdělaná svíčka splyne s košem, do kterého
+její minuta patří — včetně už uzavřených minut téhož koše (`staticBars`). Volající
+pak musí statickou svíčku toho koše vynechat, jinak by se kreslila dvakrát.
+
+`gridMinutes` je počet minut PŘED agregací (kvůli mapování popisků náběžné hrany). */
+export function aggregateLive(
+  live: LiveOverlay,
+  bucketMinutes: number,
+  gridMinutes: number,
+  staticBars: PriceBar[],
+): LiveOverlay {
+  if (bucketMinutes <= 1 || live.bars.length === 0) return live
+  const buckets = Math.max(1, Math.ceil(gridMinutes / bucketMinutes))
+  const staticByBucket = new Map(staticBars.map((bar) => [bar.minuteIdx, bar]))
+  const byBucket = new Map<number, PriceBar[]>()
+  for (const bar of live.bars) {
+    const bucketIdx = Math.floor(bar.minuteIdx / bucketMinutes)
+    const group = byBucket.get(bucketIdx)
+    if (group) group.push(bar)
+    else byBucket.set(bucketIdx, [bar])
+  }
+  const bars: PriceBar[] = []
+  const labels: string[] = []
+  for (const bucketIdx of [...byBucket.keys()].sort((a, b) => a - b)) {
+    const group = byBucket.get(bucketIdx)!.sort((a, b) => a.minuteIdx - b.minuteIdx)
+    const base = staticByBucket.get(bucketIdx) // uzavřené minuty téhož koše
+    const first = group[0]
+    const last = group[group.length - 1]
+    const open = base?.open ?? base?.close ?? first.open ?? first.close
+    const close = last.close
+    const highs = group.map((bar) => bar.high ?? bar.close)
+    const lows = group.map((bar) => bar.low ?? bar.close)
+    if (base) {
+      highs.push(base.high ?? base.close)
+      lows.push(base.low ?? base.close)
+    }
+    bars.push({
+      minuteIdx: bucketIdx,
+      open,
+      close,
+      high: Math.max(...highs),
+      low: Math.min(...lows),
+      up: close >= open,
+    })
+    // Popisek potřebují jen koše za koncem gridu (náběžná hrana)
+    if (bucketIdx >= buckets) {
+      labels[bucketIdx - buckets] = live.labels[first.minuteIdx - gridMinutes] ?? ''
+    }
+  }
+  return { bars, labels }
 }
 
 function aggregateOverlays(

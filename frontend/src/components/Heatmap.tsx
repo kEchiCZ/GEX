@@ -24,7 +24,7 @@ import {
   pricePolyline,
   tickIndices,
 } from '../heatmap/overlays'
-import type { OverlayData, PriceStyle } from '../heatmap/overlays'
+import type { OverlayData, PriceBar, PriceStyle } from '../heatmap/overlays'
 import {
   DEFAULT_VIEW,
   axisZoneAt,
@@ -72,6 +72,8 @@ export function Heatmap({
   style,
   contours,
   overlays = {},
+  liveBars = [],
+  liveLabels = [],
   minuteLabels = [],
   priceStyle = 'line',
   priceOpacity = 1,
@@ -92,6 +94,10 @@ export function Heatmap({
   style: HeatmapStyle
   contours: ContoursMode
   overlays?: OverlayData
+  /** Živé svíčky ze spot kanálu — kreslí se na dynamickou vrstvu (#141). */
+  liveBars?: PriceBar[]
+  /** Popisky minut za koncem gridu; index = `minuteIdx - grid.minutes`. */
+  liveLabels?: string[]
   /** Popisky časové osy (HH:MM) per minuta — osa X dole. */
   minuteLabels?: string[]
   priceStyle?: PriceStyle
@@ -118,6 +124,8 @@ export function Heatmap({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
+  // Dynamická vrstva (#141): crosshair + živé svíčky — překresluje se 5×/s, ale je levná
+  const dynamicRef = useRef<HTMLCanvasElement>(null)
   const offscreenRef = useRef<HTMLCanvasElement | null>(null)
   // Logická plocha = zobrazená velikost v CSS px; raster = × devicePixelRatio
   const { ref: stackRef, size } = useElementSize<HTMLDivElement>({ width: 1200, height: 640 })
@@ -238,13 +246,15 @@ export function Heatmap({
     context.setTransform(1, 0, 0, 1, 0, 0)
   }, [view, logicalW, logicalH, dpr])
 
-  // 3) Overlay canvas: kontury, cena, sessions, levels/walls, crosshair, timestamp
-  const drawOverlay = useCallback(() => {
+  // 3) STATICKÁ overlay vrstva: kontury, uzavřené svíčky, sessions, levels/walls,
+  // anotace, popisky os, timestamp. Překresluje se jen při změně dat/pohledu — NE
+  // při spot ticku ani pohybu crosshairu (#141).
+  const drawStatic = useCallback(() => {
     const canvas = overlayRef.current
     if (!canvas) return
     const context = canvas.getContext('2d')
     if (!context) return
-    const { minuteToX, rowToY, scaleX, scaleY, screenToDataPoint } = mapping()
+    const { minuteToX, rowToY, scaleX, scaleY } = mapping()
     // Kreslení v logických CSS px; raster je dpr× větší → ostré popisky (hi-DPI)
     context.setTransform(dpr, 0, 0, dpr, 0, 0)
     context.clearRect(0, 0, logicalW, logicalH)
@@ -376,53 +386,7 @@ export function Heatmap({
         context.stroke()
       }
     }
-    context.globalAlpha = 1 // značka aktuální ceny zůstává plně viditelná
-    const lastPoint = points.at(-1)
-    if (lastPoint) {
-      const y = rowToY(lastPoint.row)
-      context.strokeStyle = lastPoint.up ? UP_COLOR : DOWN_COLOR
-      context.setLineDash([2, 3])
-      context.beginPath()
-      context.moveTo(0, y)
-      context.lineTo(logicalW, y)
-      context.stroke()
-      context.setLineDash([])
-      const price = overlays.price?.at(-1)?.close
-      if (price !== undefined) {
-        context.fillStyle = lastPoint.up ? UP_COLOR : DOWN_COLOR
-        context.fillRect(logicalW - 56, y - 9, 56, 18)
-        context.fillStyle = '#12151c'
-        context.font = 'bold 11px sans-serif'
-        context.fillText(price.toFixed(2), logicalW - 52, y + 4)
-      }
-    }
-
-    // Crosshair synchronizovaný napříč panely (bez striku jen svislá čára)
-    if (crosshair) {
-      const x = minuteToX(crosshair.minuteIdx)
-      context.strokeStyle = 'rgba(215,220,230,0.55)'
-      context.lineWidth = 1
-      // Svislá linka snapnutá na svíčku (bar)
-      context.beginPath()
-      context.moveTo(x, 0)
-      context.lineTo(x, logicalH)
-      context.stroke()
-      // Vodorovná linka sleduje kurzor (spojitá cena) — jen při najetí na plochu grafu
-      if (pointer) {
-        context.beginPath()
-        context.moveTo(0, pointer.y)
-        context.lineTo(logicalW, pointer.y)
-        context.stroke()
-      }
-      // Zvýraznění buňky pod kurzorem (jen nad daty — mimo svíce se nekreslí)
-      const inRangeMinute = crosshair.minuteIdx >= 0 && crosshair.minuteIdx < grid.minutes
-      const row = crosshair.strike === null ? -1 : grid.strikes.indexOf(crosshair.strike)
-      if (inRangeMinute && row >= 0) {
-        const y = rowToY(row)
-        context.strokeStyle = 'rgba(215,220,230,0.9)'
-        context.strokeRect(x - 0.5 * scaleX, y - 0.5 * scaleY, scaleX, scaleY)
-      }
-    }
+    context.globalAlpha = 1
 
     // Anotace (SPEC 7.4): kreslené v datových souřadnicích, škálují se s pan/zoom
     const drawAnnotation = (tool: AnnotationTool, color: string, points: AnnotationPoint[]) => {
@@ -491,15 +455,128 @@ export function Heatmap({
       context.font = '11px sans-serif'
       context.fillText(overlays.timestamp, logicalW - 150, logicalH - 26)
     }
+  }, [
+    mapping,
+    contourSegments,
+    overlays,
+    grid.strikes,
+    annotations,
+    draft,
+    annotationTool,
+    annotationColor,
+    priceStyle,
+    priceOpacity,
+    minuteLabels,
+    strikeCount,
+    grid.minutes,
+    logicalW,
+    logicalH,
+    dpr,
+  ])
 
-    // Osové labely crosshairu (TradingView styl) — kreslené naposled, nad vším
+  // 4) DYNAMICKÁ overlay vrstva (#141): živé svíčky ze spotu, značka aktuální ceny
+  // a crosshair. Jen pár čar a jedna svíčka — překreslení 5×/s hlavní vlákno neblokuje.
+  const drawDynamic = useCallback(() => {
+    const canvas = dynamicRef.current
+    if (!canvas) return
+    const context = canvas.getContext('2d')
+    if (!context) return
+    const { minuteToX, rowToY, scaleX, scaleY, screenToDataPoint } = mapping()
+    context.setTransform(dpr, 0, 0, dpr, 0, 0)
+    context.clearRect(0, 0, logicalW, logicalH)
+
+    // Živé svíčky: navazují na poslední uzavřenou (u křivky kvůli spojitosti úseku)
+    const closedBars = overlays.price ?? []
+    const lastClosed = closedBars.at(-1)
+    context.globalAlpha = Math.min(1, Math.max(0, priceOpacity))
+    if (liveBars.length > 0) {
+      if (priceStyle === 'candles') {
+        const bodyWidth = Math.max(2, scaleX * 0.6)
+        context.lineWidth = Math.max(1, scaleX * 0.1)
+        for (const candle of candleGeometry(liveBars, grid.strikes)) {
+          const color = candle.up ? UP_COLOR : DOWN_COLOR
+          const x = minuteToX(candle.minuteIdx)
+          context.strokeStyle = color
+          context.beginPath()
+          context.moveTo(x, rowToY(candle.highRow))
+          context.lineTo(x, rowToY(candle.lowRow))
+          context.stroke()
+          const topY = rowToY(Math.max(candle.openRow, candle.closeRow))
+          const bottomY = rowToY(Math.min(candle.openRow, candle.closeRow))
+          context.fillStyle = color
+          context.fillRect(x - bodyWidth / 2, topY, bodyWidth, Math.max(1, bottomY - topY))
+        }
+      } else {
+        const joined = lastClosed ? [lastClosed, ...liveBars] : liveBars
+        const points = pricePolyline(joined, grid.strikes)
+        context.lineWidth = 1.5
+        for (let index = 1; index < points.length; index += 1) {
+          const current = points[index]
+          const previous = points[index - 1]
+          context.strokeStyle = current.up ? UP_COLOR : DOWN_COLOR
+          context.beginPath()
+          context.moveTo(minuteToX(previous.minuteIdx), rowToY(previous.row))
+          context.lineTo(minuteToX(current.minuteIdx), rowToY(current.row))
+          context.stroke()
+        }
+      }
+    }
+    context.globalAlpha = 1 // značka aktuální ceny zůstává plně viditelná
+
+    // Značka aktuální ceny: živý bar má přednost před poslední uzavřenou minutou
+    const lastBar = liveBars.at(-1) ?? lastClosed
+    const lastRow = lastBar ? fractionalRow(grid.strikes, lastBar.close) : null
+    if (lastBar && lastRow !== null) {
+      const y = rowToY(lastRow)
+      const color = lastBar.up ? UP_COLOR : DOWN_COLOR
+      context.strokeStyle = color
+      context.lineWidth = 1
+      context.setLineDash([2, 3])
+      context.beginPath()
+      context.moveTo(0, y)
+      context.lineTo(logicalW, y)
+      context.stroke()
+      context.setLineDash([])
+      context.fillStyle = color
+      context.fillRect(logicalW - 56, y - 9, 56, 18)
+      context.fillStyle = '#12151c'
+      context.font = 'bold 11px sans-serif'
+      context.fillText(lastBar.close.toFixed(2), logicalW - 52, y + 4)
+    }
+
+    // Crosshair synchronizovaný napříč panely (bez striku jen svislá čára)
     if (crosshair) {
+      const x = minuteToX(crosshair.minuteIdx)
+      context.strokeStyle = 'rgba(215,220,230,0.55)'
+      context.lineWidth = 1
+      // Svislá linka snapnutá na svíčku (bar)
+      context.beginPath()
+      context.moveTo(x, 0)
+      context.lineTo(x, logicalH)
+      context.stroke()
+      // Vodorovná linka sleduje kurzor (spojitá cena) — jen při najetí na plochu grafu
+      if (pointer) {
+        context.beginPath()
+        context.moveTo(0, pointer.y)
+        context.lineTo(logicalW, pointer.y)
+        context.stroke()
+      }
+      // Zvýraznění buňky pod kurzorem (jen nad daty — mimo svíce se nekreslí)
+      const inRangeMinute = crosshair.minuteIdx >= 0 && crosshair.minuteIdx < grid.minutes
+      const row = crosshair.strike === null ? -1 : grid.strikes.indexOf(crosshair.strike)
+      if (inRangeMinute && row >= 0) {
+        const y = rowToY(row)
+        context.strokeStyle = 'rgba(215,220,230,0.9)'
+        context.strokeRect(x - 0.5 * scaleX, y - 0.5 * scaleY, scaleX, scaleY)
+      }
+
+      // Osové labely crosshairu (TradingView styl) — kreslené naposled, nad vším
       context.font = 'bold 11px sans-serif'
       // Osa X (dole): datum + čas pod svislou linkou (jen nad daty — mimo svíce bez času)
-      const timeStr = minuteLabels[crosshair.minuteIdx]
+      const timeStr =
+        minuteLabels[crosshair.minuteIdx] ?? liveLabels[crosshair.minuteIdx - grid.minutes]
       const timeLabel = timeStr ? `${dateLabel ? `${dateLabel} ` : ''}${timeStr}`.trim() : ''
       if (timeLabel) {
-        const x = minuteToX(crosshair.minuteIdx)
         const width = measuredWidth(context, timeLabel) + 12
         const boxX = Math.min(logicalW - width, Math.max(0, x - width / 2))
         context.fillStyle = AXIS_LABEL_BG
@@ -521,25 +598,21 @@ export function Heatmap({
     }
   }, [
     mapping,
-    contourSegments,
-    overlays,
+    overlays.price,
+    liveBars,
+    liveLabels,
     grid.strikes,
+    grid.minutes,
     crosshair,
-    annotations,
-    draft,
-    annotationTool,
-    annotationColor,
+    pointer,
     priceStyle,
     priceOpacity,
     minuteLabels,
-    strikeCount,
-    grid.minutes,
+    dateLabel,
+    priceTick,
     logicalW,
     logicalH,
     dpr,
-    pointer,
-    dateLabel,
-    priceTick,
   ])
 
   useEffect(() => {
@@ -547,8 +620,12 @@ export function Heatmap({
   }, [drawData])
 
   useEffect(() => {
-    drawOverlay()
-  }, [drawOverlay])
+    drawStatic()
+  }, [drawStatic])
+
+  useEffect(() => {
+    drawDynamic()
+  }, [drawDynamic])
 
   /** Souřadnice události v logických CSS px (raster i mapping sdílí stejný prostor). */
   const canvasPoint = (event: {
@@ -715,6 +792,13 @@ export function Heatmap({
           setPointer(null)
         }}
         onDoubleClick={resetView}
+      />
+      <canvas
+        ref={dynamicRef}
+        className="heatmap-dynamic"
+        width={Math.round(logicalW * dpr)}
+        height={Math.round(logicalH * dpr)}
+        aria-hidden="true"
       />
       <button
         type="button"
