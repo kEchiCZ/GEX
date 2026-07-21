@@ -3,3 +3,6 @@ dist
 package-lock.json
 # Generováno scripts/build-manual.ps1 (marked) — neformátovat ručně
 public/manual/index.html
+# Playwright artefakty (#154)
+test-results
+playwright-report
