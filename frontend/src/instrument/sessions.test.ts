@@ -38,3 +38,16 @@ test('celodenní data mají plnou sadu, prázdná žádnou', () => {
   expect(markers.map((m) => m.minuteIdx)).toEqual([0, 90, 225, 360, 420, 600, 720, 810, 930, 1200])
   expect(autoSessions([])).toEqual([])
 })
+
+test('mimo letní čas se US a evropské seance posouvají o hodinu později (#159)', () => {
+  // 15. 1. 2026: US i EU standardní čas → uložené letní časy +1 h; Asie beze změny
+  const keys = minutes('2026-01-15T00:00:00Z', 22 * 60)
+  const byLabel = new Map(autoSessions(keys).map((m) => [m.label, m.minuteIdx]))
+  expect(byLabel.get('US Open')).toBe(14 * 60 + 30) // 13:30 EDT času → 14:30 UTC v zimě
+  expect(byLabel.get('US Close')).toBe(21 * 60)
+  // Frankfurt/Londýn v zimě 8:00 — v létě splývaly se Šanghaj Cl (7:00), v zimě už ne
+  expect(byLabel.get('Šanghaj Cl')).toBe(7 * 60)
+  expect(byLabel.get('Frankfurt · Londýn')).toBe(8 * 60)
+  expect(byLabel.get('Frankfurt Cl · Londýn Cl')).toBe(16 * 60 + 30)
+  expect(byLabel.get('Indie')).toBe(3 * 60 + 45) // bez DST, beze změny
+})

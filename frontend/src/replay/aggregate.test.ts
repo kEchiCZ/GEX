@@ -92,6 +92,18 @@ test('aggregateLive: živá minuta uvnitř rozpracovaného koše přebírá jeho
   expect(merged.labels).toHaveLength(0) // koš 0 je uvnitř gridu, popisek už existuje
 })
 
+test('aggregateLive: barva koše se řídí close předchozího koše, ne vlastním open (#159)', () => {
+  const statik = aggregateBars(sampleDay().overlays.price!, 2) // koš 1 zavírá na 97
+  const live = {
+    bars: [{ minuteIdx: 4, open: 100, high: 101, low: 94, close: 98, up: false }],
+    labels: ['9:34'],
+  }
+  const merged = aggregateLive(live, 2, 4, statik)
+  // close 98 < open 100, ale >= close předchozího koše (97) → zelená,
+  // stejně jako ji po uzavření obarví aggregateBars
+  expect(merged.bars[0].up).toBe(true)
+})
+
 test('aggregateDay: kumulativní vrstvy berou poslední minutu koše, Vol se sčítá', () => {
   const day = aggregateDay(sampleDay(), 2)
   expect(day.grid.minutes).toBe(2)

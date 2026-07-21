@@ -50,8 +50,10 @@ interface SpotBar {
   close: number
 }
 
-/** Strop držených spot svíček — starší minuty už reálný bar buď mají, nebo je srovná reconcile. */
-const SPOT_BARS_KEEP = 10
+/** Strop držených spot svíček — jen pojistka proti neomezenému růstu; minuty
+s finálním barem uklízí efekt níž. Při výpadku SAMOTNÉHO price kanálu (WS drží,
+reconnect-refetch nenastane) drží zálohy až hodinu do rekonciliace (#159). */
+const SPOT_BARS_KEEP = 60
 
 /** Čas na začátek minuty (UTC) — sladí spot ts s klíči minut (ts_min). */
 function floorMinuteIso(value: unknown): string {
@@ -61,14 +63,16 @@ function floorMinuteIso(value: unknown): string {
   return date.toISOString()
 }
 
-function toPriceBar(spot: SpotBar, minuteIdx: number): PriceBar {
+function toPriceBar(spot: SpotBar, minuteIdx: number, previousClose: number): PriceBar {
   return {
     minuteIdx,
     open: spot.open,
     high: spot.high,
     low: spot.low,
     close: spot.close,
-    up: spot.close >= spot.open,
+    // Stejná sémantika jako statické bary: směr vůči close předchozí svíčky,
+    // bez ní vůči vlastnímu open (#159) — jinak živá svíčka po uzavření mění barvu
+    up: Number.isNaN(previousClose) ? spot.close >= spot.open : !(spot.close < previousClose),
   }
 }
 
@@ -118,16 +122,27 @@ function splitSpotBars(day: ReplayDay, spotBars: SpotBar[]): LiveOverlay {
       .filter((minuteIdx) => !provisional.has(minuteIdx)),
   )
   const lastMinute = day.minutes.at(-1)
+  // Close nejbližší statické svíčky PŘED danou minutou (směr/barva svíčky, #159)
+  const priceBars = day.overlays.price ?? []
+  const closeBefore = (minuteIdx: number): number => {
+    for (let index = priceBars.length - 1; index >= 0; index -= 1) {
+      if (priceBars[index].minuteIdx < minuteIdx) return priceBars[index].close
+    }
+    return Number.NaN
+  }
   const bars: PriceBar[] = []
   const labels: string[] = []
   for (const spot of [...spotBars].sort((a, b) => (a.minuteIso < b.minuteIso ? -1 : 1))) {
     const existingIdx = minuteIndex.get(spot.minuteIso)
     if (existingIdx !== undefined) {
       // Uzavřená minuta bez skutečného baru → záložní svíčka ze spotu
-      if (!covered.has(existingIdx)) bars.push(toPriceBar(spot, existingIdx))
+      if (!covered.has(existingIdx)) {
+        bars.push(toPriceBar(spot, existingIdx, bars.at(-1)?.close ?? closeBefore(existingIdx)))
+      }
     } else if (lastMinute === undefined || spot.minuteIso > lastMinute) {
       // Minuta za posledními daty (rozdělaná, nebo čeká na snapshot) → náběžná hrana
-      bars.push(toPriceBar(spot, day.grid.minutes + labels.length))
+      const minuteIdx = day.grid.minutes + labels.length
+      bars.push(toPriceBar(spot, minuteIdx, bars.at(-1)?.close ?? closeBefore(minuteIdx)))
       labels.push(minuteLabel(spot.minuteIso))
     }
   }
