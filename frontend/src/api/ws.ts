@@ -34,12 +34,27 @@ export class LiveSocket {
 
   connect(): void {
     this.closedByUser = false
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+    // Opakovaný connect (StrictMode remount) nesmí nechat starý socket žít.
+    // Odkaz se pouští PŘED close(): onclose může dorazit synchronně i asynchronně
+    // a identity guard níž ho pak v obou případech odfiltruje (#153)
+    const previous = this.ws
+    this.ws = null
+    previous?.close()
+    this.isOpen = false
     const factory =
       this.options.webSocketFactory ??
       ((url: string) => new WebSocket(url) as unknown as WebSocketLike)
     const ws = factory(this.url)
     this.ws = ws
+    // Callbacky hlídají identitu socketu: prohlížeč doručuje onopen/onclose
+    // asynchronně, takže po close()+connect() můžou dorazit od UŽ NAHRAZENÉHO
+    // socketu — bez guardu rozjedou reconnect smyčku a duplicitní dispatch (#153)
     ws.onopen = () => {
+      if (this.ws !== ws) return
       this.isOpen = true
       const channels = [...this.handlers.keys()]
       if (channels.length > 0) {
@@ -52,6 +67,7 @@ export class LiveSocket {
       this.opened = true
     }
     ws.onmessage = (event) => {
+      if (this.ws !== ws) return
       const message = JSON.parse(event.data) as { channel?: string; data?: ChannelData }
       if (!message.channel || message.data === undefined) return // ack/error rámce
       for (const handler of this.handlers.get(message.channel) ?? []) {
@@ -65,6 +81,7 @@ export class LiveSocket {
       }
     }
     ws.onclose = () => {
+      if (this.ws !== ws) return
       this.isOpen = false
       if (this.closedByUser) return
       this.reconnectTimer = setTimeout(() => this.connect(), this.options.reconnectDelayMs ?? 2000)
