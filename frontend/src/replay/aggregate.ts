@@ -131,13 +131,16 @@ export function aggregateLive(
       highs.push(base.high ?? base.close)
       lows.push(base.low ?? base.close)
     }
+    // Směr vůči close předchozího koše (živého, jinak statického) — stejná
+    // sémantika jako aggregateBars, ať koš po uzavření nemění barvu (#159)
+    const previousClose = bars.at(-1)?.close ?? staticByBucket.get(bucketIdx - 1)?.close
     bars.push({
       minuteIdx: bucketIdx,
       open,
       close,
       high: Math.max(...highs),
       low: Math.min(...lows),
-      up: close >= open,
+      up: previousClose === undefined ? close >= open : !(close < previousClose),
     })
     // Popisek potřebují jen koše za koncem gridu (náběžná hrana)
     if (bucketIdx >= buckets) {

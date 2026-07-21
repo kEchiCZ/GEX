@@ -43,8 +43,10 @@ dostává `totalMinutes` pro měřítko a kreslí dál jen svá data.
 ## Jemnější seance
 
 `WORLD_SESSIONS` se rozšiřuje ze 7 na 14 markerů (Sydney, Tokio, Šanghaj, Indie,
-Frankfurt, Londýn, US — otevření i zavření). Časy zůstávají pevné v UTC bez DST
-korekcí, jak stanoví dosavadní modul (jde o orientaci, ne o burzovní kalendář).
+Frankfurt, Londýn, US — otevření i zavření). Časy byly původně pevné v UTC bez
+DST korekcí; po review #132 dostaly US a evropské seance aproximaci DST po
+celých dnech UTC (#159) — mimo letní čas se posouvají o hodinu později, asijské
+zůstávají pevné (jde o orientaci, ne o burzovní kalendář).
 
 Markery, které padnou na tutéž minutu, se slučují do jednoho popisku
 (`Frankfurt · Londýn`), aby se texty nepřekrývaly; sousední markery se střídají
