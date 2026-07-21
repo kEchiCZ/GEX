@@ -172,9 +172,21 @@ class _PartitionBuffer:
         self._rows: list[dict[str, object]] = []
         self._loaded = False
 
-    def append_and_write(self, rows: Sequence[dict[str, object]]) -> Path:
+    def append_and_write(self, rows: Sequence[dict[str, object]], key: str | None = None) -> Path:
+        """Přidá řádky a přepíše partici; s `key` nahradí řádky téhož klíče (upsert).
+
+        Upsert potřebují bary podkladu: provizorní bar rozdělané minuty se příštím
+        cyklem nahrazuje finálním a slepý append by nechal dva řádky téže minuty
+        (ADR-0005).
+        """
         self._ensure_loaded()
+        if key is not None:
+            incoming = {row[key] for row in rows}
+            if incoming:
+                self._rows = [row for row in self._rows if row[key] not in incoming]
         self._rows.extend(rows)
+        if key is not None:
+            self._rows.sort(key=lambda row: row[key])  # type: ignore[arg-type,return-value]
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._cleanup_stale_tmp()
         table = pa.Table.from_pylist(self._rows, schema=self._schema)
@@ -248,7 +260,11 @@ class SnapshotWriter:
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_bars(self, symbol: str, day: dt.date, bars: Sequence[BarLike]) -> Path:
-        """Přidá 1min bary podkladu do partice derived/{sym}/bars/{date}.parquet."""
+        """Zapíše 1min bary podkladu do partice derived/{sym}/bars/{date}.parquet.
+
+        Upsert podle `ts_min`: provizorní bar rozdělané minuty (ADR-0005) se
+        příštím cyklem nahradí finálním, ne zdvojí.
+        """
         path = self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
         buffer = self._buffer(path, BARS_SCHEMA)
         return buffer.append_and_write(
@@ -262,7 +278,8 @@ class SnapshotWriter:
                     "volume": bar.volume,
                 }
                 for bar in bars
-            ]
+            ],
+            key="ts_min",
         )
 
     def write_flow(self, symbol: str, day: dt.date, rows: Sequence[FlowRowLike]) -> Path:

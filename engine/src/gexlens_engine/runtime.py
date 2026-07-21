@@ -81,9 +81,17 @@ class EngineRuntime:
             self.cum_delta = CumDeltaTracker(multiplier=self.multiplier)
 
     async def run_cycle(
-        self, ts_min: dt.datetime, spot: float, bars: Sequence[Bar]
+        self,
+        ts_min: dt.datetime,
+        spot: float,
+        bars: Sequence[Bar],
+        forming_bar: Bar | None = None,
     ) -> SweepMetrics:
-        """Jeden kompletní minutový cyklus (volaný smyčkou nebo testem); vrací metriky sweepu."""
+        """Jeden kompletní minutový cyklus (volaný smyčkou nebo testem); vrací metriky sweepu.
+
+        `forming_bar` je rozdělaná agregace minuty `ts_min` (ADR-0005) — publikuje se
+        i zapisuje jako provizorní, aby nejnovější sloupec mřížky měl svíčku hned.
+        """
         day = ts_min.date()
         metrics = await self.scheduler.sweep(self.contracts, spot)
         quotes = self.scheduler.quotes()
@@ -203,6 +211,11 @@ class EngineRuntime:
 
         if bars:
             await asyncio.to_thread(self.writer.write_bars, self.symbol, day, bars)
+        # Provizorní bar rozdělané minuty (ADR-0005) — zapisuje se až po finálních,
+        # aby ho jejich upsert nepřepsal; patří-li jiné minutě, ignoruje se.
+        provisional = forming_bar if forming_bar is not None and forming_bar.ts == ts_min else None
+        if provisional is not None:
+            await asyncio.to_thread(self.writer.write_bars, self.symbol, day, [provisional])
 
         # 5) Push do API: stav pipeline + live kanály
         if self.push_status:
@@ -235,22 +248,29 @@ class EngineRuntime:
                 "cum_delta": flow_row.cum_delta,
             },
         )
-        if bars:
-            last_bar = bars[-1]
-            # Plná OHLC nové minuty (#127) — frontend vykreslí svíčku, ne jen linku.
-            # `last` ponecháno kvůli zpětné kompatibilitě starších konzumentů.
+
+        # Plná OHLC minuty (#127) — frontend vykreslí svíčku, ne jen linku.
+        # `last` ponecháno kvůli zpětné kompatibilitě starších konzumentů.
+        async def publish_bar(bar: Bar, *, final: bool) -> None:
             await self.publisher.publish(
                 f"price.{self.symbol}",
                 {
-                    "ts": last_bar.ts.isoformat(),
-                    "open": last_bar.open,
-                    "high": last_bar.high,
-                    "low": last_bar.low,
-                    "close": last_bar.close,
-                    "volume": last_bar.volume,
-                    "last": last_bar.close,
+                    "ts": bar.ts.isoformat(),
+                    "open": bar.open,
+                    "high": bar.high,
+                    "low": bar.low,
+                    "close": bar.close,
+                    "volume": bar.volume,
+                    "last": bar.close,
+                    # ADR-0005: rozdělaná minuta vs. uzavřený bar
+                    "final": final,
                 },
             )
+
+        if bars:
+            await publish_bar(bars[-1], final=True)
+        if provisional is not None:
+            await publish_bar(provisional, final=False)
         logger.info(
             "Cyklus %s %s: %d snapshotů, greeks %d/%d, sweep %.1fs",
             self.symbol,

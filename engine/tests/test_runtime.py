@@ -100,6 +100,7 @@ async def test_one_cycle_produces_full_day_artifacts(
     assert price_data["low"] == 7598.0
     assert price_data["close"] == SPOT
     assert price_data["volume"] == 1200.0
+    assert price_data["final"] is True  # uzavřený bar (ADR-0005)
 
     # snapshot kanál nese per-strike řez minuty (#127)
     snap_data = next(
@@ -109,6 +110,74 @@ async def test_one_cycle_produces_full_day_artifacts(
     assert isinstance(snap_rows, list) and len(snap_rows) == 6
     assert set(snap_rows[0]) >= {"strike", "right", "oi", "volume", "delta", "stale_age"}
     assert snap_rows[0]["oi"] == 1000.0
+
+
+async def test_forming_bar_published_and_written_as_provisional(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """ADR-0005: rozdělaná minuta má svíčku hned, ne až po dalším cyklu."""
+    engine_runtime, publisher, settings = runtime
+    # Cyklus minuty TS: uzavřený bar patří PŘEDCHOZÍ minutě, rozdělaný té aktuální
+    closed = Bar(ts=TS - dt.timedelta(minutes=1), open=7590.0, high=7595.0, low=7589.0,
+                 close=7594.0, volume=800.0)  # fmt: skip
+    forming = Bar(ts=TS, open=7594.0, high=7602.0, low=7593.0, close=SPOT, volume=310.0)
+
+    await engine_runtime.run_cycle(TS, SPOT, [closed], forming)
+
+    prices = [data for channel, data in publisher.messages if channel == "price.ES"]
+    assert len(prices) == 2
+    assert prices[0]["ts"] == (TS - dt.timedelta(minutes=1)).isoformat()
+    assert prices[0]["final"] is True
+    assert prices[1]["ts"] == TS.isoformat()
+    assert prices[1]["final"] is False
+    assert prices[1]["close"] == SPOT
+
+    # Obě minuty jsou i v partici, aby je dostal REST balík po refreshi
+    day = TS.date().isoformat()
+    bars = pd.read_parquet(settings.derived_dir / "ES" / "bars" / f"{day}.parquet")
+    assert len(bars) == 2
+    assert list(bars.sort_values("ts_min")["close"]) == [7594.0, SPOT]
+
+
+async def test_final_bar_replaces_provisional_without_duplicate(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """ADR-0005: upsert podle ts_min — jedna minuta = jeden řádek."""
+    engine_runtime, _publisher, settings = runtime
+    provisional = Bar(ts=TS, open=7594.0, high=7602.0, low=7593.0, close=7598.0, volume=310.0)
+    await engine_runtime.run_cycle(TS, SPOT, [], provisional)
+
+    day = TS.date().isoformat()
+    path = settings.derived_dir / "ES" / "bars" / f"{day}.parquet"
+    assert len(pd.read_parquet(path)) == 1
+
+    # Další cyklus doručí finální bar téže minuty + rozdělanou další minutu
+    final = Bar(ts=TS, open=7594.0, high=7605.0, low=7590.0, close=7601.0, volume=1250.0)
+    next_forming = Bar(
+        ts=TS + dt.timedelta(minutes=1), open=7601.0, high=7603.0, low=7600.0,
+        close=7602.0, volume=120.0,
+    )  # fmt: skip
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=1), SPOT, [final], next_forming)
+
+    bars = pd.read_parquet(path).sort_values("ts_min")
+    assert len(bars) == 2  # žádný duplikát minuty TS
+    assert list(bars["close"]) == [7601.0, 7602.0]  # provizorní nahrazen finálním
+    assert list(bars["volume"]) == [1250.0, 120.0]
+
+
+async def test_forming_bar_of_other_minute_is_ignored(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """ADR-0005: raději žádná svíčka než svíčka pod cizím časem."""
+    engine_runtime, publisher, settings = runtime
+    stale_forming = Bar(
+        ts=TS - dt.timedelta(minutes=3), open=1.0, high=2.0, low=0.5, close=1.5, volume=9.0
+    )
+    await engine_runtime.run_cycle(TS, SPOT, [], stale_forming)
+
+    assert [data for channel, data in publisher.messages if channel == "price.ES"] == []
+    day = TS.date().isoformat()
+    assert not (settings.derived_dir / "ES" / "bars" / f"{day}.parquet").exists()
 
 
 async def test_second_cycle_appends_and_accumulates(

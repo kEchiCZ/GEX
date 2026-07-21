@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from gexlens_engine.config import Settings
+from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.parquet_store import SnapshotRow, SnapshotWriter, TickRecord
 
 DAY = dt.date(2026, 7, 16)
@@ -107,6 +108,27 @@ def test_appends_accumulate_within_day(writer: SnapshotWriter) -> None:
     assert len(frame_1) == 2
     assert len(frame_2) == 4
     assert frame_2["ts_min"].nunique() == 2
+
+
+def test_bars_upsert_by_minute(writer: SnapshotWriter) -> None:
+    """ADR-0005: provizorní bar minuty nahradí finální, nezdvojí se."""
+    ts = dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
+    provisional = Bar(ts=ts, open=100.0, high=102.0, low=99.0, close=101.0, volume=300.0)
+    path = writer.write_bars("ES", DAY, [provisional])
+    assert len(pd.read_parquet(path)) == 1
+
+    final = Bar(ts=ts, open=100.0, high=105.0, low=98.0, close=104.0, volume=1200.0)
+    later = Bar(
+        ts=ts + dt.timedelta(minutes=1), open=104.0, high=106.0, low=103.0,
+        close=105.0, volume=200.0,
+    )  # fmt: skip
+    writer.write_bars("ES", DAY, [final])
+    path = writer.write_bars("ES", DAY, [later])
+
+    frame = pd.read_parquet(path).sort_values("ts_min")
+    assert len(frame) == 2  # jedna minuta = jeden řádek
+    assert list(frame["close"]) == [104.0, 105.0]
+    assert list(frame["volume"]) == [1200.0, 200.0]
 
 
 def test_new_writer_continues_existing_partition(tmp_path: Path) -> None:

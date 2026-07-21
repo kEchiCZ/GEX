@@ -176,6 +176,8 @@ class InstrumentPipeline:
     oi_repository: OIEodRepository
     ticker: TickerLike
     minute_bars: list[Bar]
+    # Rozdělaná minuta z agregátoru 5s barů (ADR-0005); None = zdroj ji neposkytuje
+    forming_bar: Callable[[], Bar | None] = lambda: None
     on_stop: Callable[[], None] = lambda: None
     spot: float = 0.0
     oi_available: bool = False
@@ -256,7 +258,7 @@ class InstrumentPipeline:
 
         bars = list(self.minute_bars)
         self.minute_bars.clear()
-        metrics = await self.runtime.run_cycle(now, spot, bars)
+        metrics = await self.runtime.run_cycle(now, spot, bars, self.forming_bar())
 
         # Setup detektor (ADR-0004) — jeho pád nesmí shodit sběr dat
         if self.setup_engine is not None:

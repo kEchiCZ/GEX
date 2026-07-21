@@ -319,6 +319,97 @@ test('uzavřená minuta bez baru drží svíčku ze spotu, dokud bar nedorazí (
   expect(result.current.live.bars).toHaveLength(0) // záloha zanikla
 })
 
+test('provizorní bar zaplní minutu, ale nezastaví živou svíčku (ADR-0005)', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+
+  // Spot běží v rozdělané minutě 15:01
+  await act(async () => {
+    socket.emit('spot.ES', { ts: '2026-07-16T15:01:20Z', price: 7602 })
+  })
+  expect(result.current.live.bars.at(-1)!.minuteIdx).toBe(1)
+
+  // Engine pošle snapshot 15:01 + PROVIZORNÍ bar téže minuty (final: false)
+  await act(async () => {
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: '2026-07-16T15:01:00Z',
+      rows: [{ strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 }],
+    })
+    socket.emit('price.ES', {
+      ts: '2026-07-16T15:01:00Z',
+      open: 7601,
+      high: 7604,
+      low: 7600,
+      close: 7603,
+      volume: 900,
+      final: false,
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  // Minuta má bar (přežije refresh), ale spot svíčka ji dál přebíjí — je živější
+  expect(result.current.day.overlays.price!.some((bar) => bar.minuteIdx === 1)).toBe(true)
+  expect(result.current.live.bars.some((bar) => bar.minuteIdx === 1)).toBe(true)
+
+  // Další spot tick se pořád propisuje
+  await act(async () => {
+    socket.emit('spot.ES', { ts: '2026-07-16T15:01:50Z', price: 7609 })
+  })
+  expect(result.current.live.bars.find((bar) => bar.minuteIdx === 1)!.high).toBe(7609)
+
+  // Finální bar minutu uzavře → spot záloha zaniká
+  await act(async () => {
+    socket.emit('price.ES', {
+      ts: '2026-07-16T15:01:00Z',
+      open: 7601,
+      high: 7610,
+      low: 7600,
+      close: 7607,
+      volume: 1300,
+      final: true,
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  expect(result.current.live.bars.some((bar) => bar.minuteIdx === 1)).toBe(false)
+  const closed = result.current.day.overlays.price!.filter((bar) => bar.minuteIdx === 1)
+  expect(closed).toHaveLength(1)
+  expect(closed[0].close).toBe(7607)
+})
+
+test('bar bez pole final se bere jako finální (starší engine)', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  await act(async () => {
+    socket.emit('spot.ES', { ts: '2026-07-16T15:01:20Z', price: 7602 })
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: '2026-07-16T15:01:00Z',
+      rows: [{ strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 }],
+    })
+    socket.emit('price.ES', {
+      ts: '2026-07-16T15:01:00Z',
+      open: 7601,
+      high: 7605,
+      low: 7600,
+      close: 7602,
+      volume: 1300,
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  expect(result.current.live.bars.some((bar) => bar.minuteIdx === 1)).toBe(false)
+  expect(result.current.day.overlays.price!.filter((b) => b.minuteIdx === 1)).toHaveLength(1)
+})
+
 test('daily režim nepoužívá intraday live fetch', async () => {
   vi.mocked(fetchDays).mockResolvedValue([])
   renderHook(() => useDayData('ES', '20260716', '2026-07-16', 'daily', makeSocket()))
