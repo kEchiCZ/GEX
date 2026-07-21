@@ -5,6 +5,8 @@ export class FakeWebSocket {
 
   sent: string[] = []
   closed = false
+  /** Odpovídá readyState === OPEN; před otevřením `send` vyhazuje jako prohlížeč (#146). */
+  opened = false
   onopen: (() => void) | null = null
   onmessage: ((event: { data: string }) => void) | null = null
   onclose: (() => void) | null = null
@@ -24,15 +26,20 @@ export class FakeWebSocket {
   }
 
   send(payload: string): void {
+    if (!this.opened) {
+      throw new Error("Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.")
+    }
     this.sent.push(payload)
   }
 
   close(): void {
     this.closed = true
+    this.opened = false
     this.onclose?.()
   }
 
   open(): void {
+    this.opened = true // musí platit dřív, než onopen odešle subscribe rámec
     this.onopen?.()
   }
 
