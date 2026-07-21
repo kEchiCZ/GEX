@@ -72,36 +72,48 @@ function toPriceBar(spot: SpotBar, minuteIdx: number): PriceBar {
   }
 }
 
-/** Doplní svíčky ze živého spotu (#128, #143): rozdělané minuty na náběžnou hranu
-a záložní bary uzavřených minut, kterým (zatím) chybí skutečný bar z price kanálu —
-předchozí svíčka tak nezmizí, když se rámec opozdí nebo ztratí. */
-function withSpotBars(day: ReplayDay, spotBars: SpotBar[]): ReplayDay {
-  if (spotBars.length === 0) return day
+/** Popisek minuty na časové ose (lokální HH:MM). */
+function minuteLabel(iso: string): string {
+  const parsed = new Date(iso)
+  return Number.isNaN(parsed.getTime())
+    ? iso
+    : parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+/** Živá (dynamická) vrstva ceny — vše, co se mění sub-sekundově ze spot kanálu.
+Drží se MIMO `DayData`, aby statická data zůstala identitou stabilní i při 5 ticích/s
+a nepřekreslovala statickou vrstvu overlaye (#141). */
+export interface LiveOverlay {
+  /** Svíčky ze spotu, které nejsou v `overlays.price` — rozdělaná minuta + zálohy (#143). */
+  bars: PriceBar[]
+  /** Popisky minut za koncem gridu; index = `minuteIdx - grid.minutes`. */
+  labels: string[]
+}
+
+/** Sdílená prázdná vrstva — stabilní identita pro dny bez živého spotu. */
+export const EMPTY_LIVE: LiveOverlay = { bars: [], labels: [] }
+
+/** Rozdělí spot svíčky na živou vrstvu: zálohy uzavřených minut bez skutečného baru
+(#143) a rozdělané minuty za koncem gridu (náběžná hrana, #128). */
+function splitSpotBars(day: ReplayDay, spotBars: SpotBar[]): LiveOverlay {
+  if (spotBars.length === 0) return EMPTY_LIVE
   const minuteIndex = new Map(day.minutes.map((iso, index) => [iso, index]))
   const covered = new Set((day.overlays.price ?? []).map((bar) => bar.minuteIdx))
   const lastMinute = day.minutes.at(-1)
-  const extraBars: PriceBar[] = []
-  const extraMinutes: string[] = []
+  const bars: PriceBar[] = []
+  const labels: string[] = []
   for (const spot of [...spotBars].sort((a, b) => (a.minuteIso < b.minuteIso ? -1 : 1))) {
     const existingIdx = minuteIndex.get(spot.minuteIso)
     if (existingIdx !== undefined) {
       // Uzavřená minuta bez skutečného baru → záložní svíčka ze spotu
-      if (!covered.has(existingIdx)) extraBars.push(toPriceBar(spot, existingIdx))
+      if (!covered.has(existingIdx)) bars.push(toPriceBar(spot, existingIdx))
     } else if (lastMinute === undefined || spot.minuteIso > lastMinute) {
       // Minuta za posledními daty (rozdělaná, nebo čeká na snapshot) → náběžná hrana
-      extraBars.push(toPriceBar(spot, day.grid.minutes + extraMinutes.length))
-      extraMinutes.push(spot.minuteIso)
+      bars.push(toPriceBar(spot, day.grid.minutes + labels.length))
+      labels.push(minuteLabel(spot.minuteIso))
     }
   }
-  if (extraBars.length === 0) return day
-  const price = [...(day.overlays.price ?? []), ...extraBars].sort(
-    (a, b) => a.minuteIdx - b.minuteIdx,
-  )
-  return {
-    ...day,
-    minutes: [...day.minutes, ...extraMinutes],
-    overlays: { ...day.overlays, price },
-  }
+  return bars.length === 0 ? EMPTY_LIVE : { bars, labels }
 }
 
 export interface DayData {
@@ -150,12 +162,7 @@ function replayToDay(day: ReplayDay): DayData {
   for (const bar of day.overlays.price ?? []) {
     spotSeries[bar.minuteIdx] = bar.close
   }
-  const minuteLabels = day.minutes.map((iso) => {
-    const parsed = new Date(iso)
-    return Number.isNaN(parsed.getTime())
-      ? iso
-      : parsed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  })
+  const minuteLabels = day.minutes.map(minuteLabel)
   return {
     source: 'replay',
     grid: day.grid,
@@ -170,13 +177,19 @@ function replayToDay(day: ReplayDay): DayData {
   }
 }
 
+/** Denní data rozdělená na statickou (`day`) a živou (`live`) část — viz #141. */
+export interface DayFeed {
+  day: DayData
+  live: LiveOverlay
+}
+
 export function useDayData(
   symbol: string,
   expiry: string | null,
   date: string,
   timeframe: 'intraday' | 'daily',
   socket?: LiveSocket,
-): DayData {
+): DayFeed {
   const fallback = useMemo(() => demoDay(), [])
   const [inputs, setInputs] = useState<ReplayInputs | null>(null)
   // Zrcadlo inputs pro rozhodování ve flushi mimo setState updater (#143: updater musí být čistý)
@@ -398,12 +411,14 @@ export function useDayData(
     }
   }, [symbol, timeframe])
 
-  // Grid se skládá jen při změně dat (drahé); spot svíčky jsou levná vrstva nad ním.
+  // Grid se skládá jen při změně dat (drahé). Statický den je identitou stabilní
+  // napříč spot ticky — živé svíčky jdou zvlášť v `live` (#141).
   const baseReplay = useMemo(() => (inputs ? assembleReplayDay(inputs) : null), [inputs])
-  const replayDay = useMemo(
-    () => (baseReplay ? replayToDay(withSpotBars(baseReplay, spotBars)) : null),
+  const replayDay = useMemo(() => (baseReplay ? replayToDay(baseReplay) : null), [baseReplay])
+  const live = useMemo(
+    () => (baseReplay ? splitSpotBars(baseReplay, spotBars) : EMPTY_LIVE),
     [baseReplay, spotBars],
   )
-  if (timeframe === 'daily') return daily ?? fallback
-  return replayDay ?? fallback
+  if (timeframe === 'daily') return { day: daily ?? fallback, live: EMPTY_LIVE }
+  return { day: replayDay ?? fallback, live: replayDay ? live : EMPTY_LIVE }
 }

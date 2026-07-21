@@ -72,7 +72,7 @@ test('WS snapshot+price přidá novou minutu (append, ne refetch) — issue #127
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0) // úvodní fetch
   })
-  expect(result.current.grid.minutes).toBe(1)
+  expect(result.current.day.grid.minutes).toBe(1)
   expect(fetchReplayInputs).toHaveBeenCalledTimes(1)
 
   await act(async () => {
@@ -93,7 +93,7 @@ test('WS snapshot+price přidá novou minutu (append, ne refetch) — issue #127
     })
     await vi.advanceTimersByTimeAsync(500) // debounce flush
   })
-  expect(result.current.grid.minutes).toBe(2) // minuta přibyla appendem
+  expect(result.current.day.grid.minutes).toBe(2) // minuta přibyla appendem
   expect(fetchReplayInputs).toHaveBeenCalledTimes(1) // bez dalšího refetche
 })
 
@@ -125,31 +125,35 @@ test('živý spot přidá rozdělanou svíčku na náběžnou hranu a uzavře ji
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0)
   })
-  const baseLen = result.current.overlays.price?.length ?? 0
-  expect(result.current.grid.minutes).toBe(1)
+  const staticPrice = result.current.day.overlays.price!
+  expect(result.current.day.grid.minutes).toBe(1)
+  expect(result.current.live.bars).toHaveLength(0)
 
-  // spot v nové (neuzavřené) minutě 15:01 → rozdělaná svíčka navíc
+  // spot v nové (neuzavřené) minutě 15:01 → rozdělaná svíčka v ŽIVÉ vrstvě (#141)
   await act(async () => {
     socket.emit('spot.ES', { ts: '2026-07-16T15:01:30Z', price: 7602 })
   })
-  let price = result.current.overlays.price!
-  expect(price.length).toBe(baseLen + 1)
-  expect(price.at(-1)!.minuteIdx).toBe(1) // náběžná hrana = grid.minutes
-  expect(price.at(-1)!.open).toBe(7602)
-  expect(price.at(-1)!.close).toBe(7602)
+  let live = result.current.live.bars
+  expect(live).toHaveLength(1)
+  expect(live[0].minuteIdx).toBe(1) // náběžná hrana = grid.minutes
+  expect(live[0].open).toBe(7602)
+  expect(live[0].close).toBe(7602)
+  // Statická data se spot tickem nesmí dotknout — jinak by se překreslila statická vrstva
+  expect(result.current.day.overlays.price).toBe(staticPrice)
 
   // další ticky téže minuty: aktualizují high/low/close, žádná další svíčka
   await act(async () => {
     socket.emit('spot.ES', { ts: '2026-07-16T15:01:45Z', price: 7605 })
     socket.emit('spot.ES', { ts: '2026-07-16T15:01:50Z', price: 7601 })
   })
-  price = result.current.overlays.price!
-  expect(price.length).toBe(baseLen + 1)
-  expect(price.at(-1)!.high).toBe(7605)
-  expect(price.at(-1)!.low).toBe(7601)
-  expect(price.at(-1)!.close).toBe(7601)
+  live = result.current.live.bars
+  expect(live).toHaveLength(1)
+  expect(live[0].high).toBe(7605)
+  expect(live[0].low).toBe(7601)
+  expect(live[0].close).toBe(7601)
+  expect(result.current.day.overlays.price).toBe(staticPrice)
 
-  // minuta se uzavře (snapshot+price) → rozdělaná svíčka zmizí, minuta je v gridu
+  // minuta se uzavře (snapshot+price) → svíčka přechází do statické vrstvy
   await act(async () => {
     socket.emit('snapshot.ES.20260716', {
       ts_min: '2026-07-16T15:01:00Z',
@@ -165,7 +169,33 @@ test('živý spot přidá rozdělanou svíčku na náběžnou hranu a uzavře ji
     })
     await vi.advanceTimersByTimeAsync(500)
   })
-  expect(result.current.grid.minutes).toBe(2)
+  expect(result.current.day.grid.minutes).toBe(2)
+  expect(result.current.live.bars).toHaveLength(0)
+  expect(result.current.day.overlays.price!.filter((bar) => bar.minuteIdx === 1)).toHaveLength(1)
+})
+
+test('statická data drží identitu napříč spot ticky — dynamická vrstva (#141)', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  const day = result.current.day
+
+  await act(async () => {
+    socket.emit('spot.ES', { ts: '2026-07-16T15:01:10Z', price: 7602 })
+    socket.emit('spot.ES', { ts: '2026-07-16T15:01:20Z', price: 7607 })
+    socket.emit('spot.ES', { ts: '2026-07-16T15:01:30Z', price: 7599 })
+  })
+  // Celý statický den (grid, overlays, panely, popisky os) musí zůstat TOTOŽNÝ objekt —
+  // na tom stojí memoizace statické vrstvy overlaye v Heatmapě (#141).
+  expect(result.current.day).toBe(day)
+  expect(result.current.live.bars).toHaveLength(1)
+  expect(result.current.live.bars[0].close).toBe(7599)
+  expect(result.current.live.labels).toHaveLength(1)
 })
 
 test('bar dorazí v jiném flushi než snapshot — svíčka se přesto objeví (#133)', async () => {
@@ -186,8 +216,8 @@ test('bar dorazí v jiném flushi než snapshot — svíčka se přesto objeví 
     })
     await vi.advanceTimersByTimeAsync(500)
   })
-  expect(result.current.grid.minutes).toBe(2)
-  expect(result.current.overlays.price!.filter((b) => b.minuteIdx === 1)).toHaveLength(0)
+  expect(result.current.day.grid.minutes).toBe(2)
+  expect(result.current.day.overlays.price!.filter((b) => b.minuteIdx === 1)).toHaveLength(0)
 
   // Bar téže minuty dorazí až v dalším flushi → musí se aplikovat na existující minutu
   await act(async () => {
@@ -201,7 +231,7 @@ test('bar dorazí v jiném flushi než snapshot — svíčka se přesto objeví 
     })
     await vi.advanceTimersByTimeAsync(500)
   })
-  const candle = result.current.overlays.price!.filter((b) => b.minuteIdx === 1)
+  const candle = result.current.day.overlays.price!.filter((b) => b.minuteIdx === 1)
   expect(candle).toHaveLength(1) // svíčka se objevila, nezmizela
   expect(candle[0].close).toBe(7602)
 })
@@ -216,7 +246,7 @@ test('StrictMode: uzavřená minuta se neztratí dvojím během updateru (#143)'
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0)
   })
-  expect(result.current.grid.minutes).toBe(1)
+  expect(result.current.day.grid.minutes).toBe(1)
 
   await act(async () => {
     socket.emit('snapshot.ES.20260716', {
@@ -234,8 +264,8 @@ test('StrictMode: uzavřená minuta se neztratí dvojím během updateru (#143)'
     await vi.advanceTimersByTimeAsync(500)
   })
   // Updater se ve StrictMode volá dvakrát — minuta i její svíčka musí přežít oba průběhy
-  expect(result.current.grid.minutes).toBe(2)
-  expect(result.current.overlays.price!.filter((bar) => bar.minuteIdx === 1)).toHaveLength(1)
+  expect(result.current.day.grid.minutes).toBe(2)
+  expect(result.current.day.overlays.price!.filter((bar) => bar.minuteIdx === 1)).toHaveLength(1)
 })
 
 test('uzavřená minuta bez baru drží svíčku ze spotu, dokud bar nedorazí (#143)', async () => {
@@ -253,7 +283,7 @@ test('uzavřená minuta bez baru drží svíčku ze spotu, dokud bar nedorazí (
     socket.emit('spot.ES', { ts: '2026-07-16T15:01:20Z', price: 7602 })
     socket.emit('spot.ES', { ts: '2026-07-16T15:01:50Z', price: 7605 })
   })
-  expect(result.current.overlays.price!.at(-1)!.minuteIdx).toBe(1)
+  expect(result.current.live.bars.at(-1)!.minuteIdx).toBe(1)
 
   // Minuta se uzavře snapshotem, ale bar z price kanálu (zatím) nedorazil —
   // svíčka nesmí zmizet, jinak v grafu chybí předchozí svíce (#143)
@@ -264,8 +294,9 @@ test('uzavřená minuta bez baru drží svíčku ze spotu, dokud bar nedorazí (
     })
     await vi.advanceTimersByTimeAsync(500)
   })
-  expect(result.current.grid.minutes).toBe(2)
-  const fallback = result.current.overlays.price!.filter((bar) => bar.minuteIdx === 1)
+  expect(result.current.day.grid.minutes).toBe(2)
+  expect(result.current.day.overlays.price!.filter((bar) => bar.minuteIdx === 1)).toHaveLength(0)
+  const fallback = result.current.live.bars.filter((bar) => bar.minuteIdx === 1)
   expect(fallback).toHaveLength(1)
   expect(fallback[0].high).toBe(7605)
 
@@ -281,10 +312,11 @@ test('uzavřená minuta bez baru drží svíčku ze spotu, dokud bar nedorazí (
     })
     await vi.advanceTimersByTimeAsync(500)
   })
-  const real = result.current.overlays.price!.filter((bar) => bar.minuteIdx === 1)
+  const real = result.current.day.overlays.price!.filter((bar) => bar.minuteIdx === 1)
   expect(real).toHaveLength(1)
   expect(real[0].close).toBe(7603)
   expect(real[0].high).toBe(7606)
+  expect(result.current.live.bars).toHaveLength(0) // záloha zanikla
 })
 
 test('daily režim nepoužívá intraday live fetch', async () => {

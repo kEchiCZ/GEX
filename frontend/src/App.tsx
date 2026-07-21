@@ -31,10 +31,10 @@ import {
   smoothSeries,
 } from './heatmap/wallsModes'
 import type { WallsMode } from './heatmap/wallsModes'
-import { aggregateDay } from './replay/aggregate'
+import { aggregateDay, aggregateLive } from './replay/aggregate'
 import { sliceGrid, sliceOverlays, slicePanels } from './replay/slice'
 import { useAggregateProfile } from './replay/useAggregateProfile'
-import { useDayData } from './replay/useDayData'
+import { EMPTY_LIVE, useDayData } from './replay/useDayData'
 import { usePlayback } from './replay/usePlayback'
 import { AppStateProvider, INTERVAL_MINUTES, useAppState } from './state/AppState'
 import { CrosshairProvider } from './state/Crosshair'
@@ -87,9 +87,10 @@ function MainContent() {
     return Number.isFinite(raw) && raw >= 10 && raw <= 100 ? raw / 100 : 1
   })
 
-  // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame)
+  // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame).
+  // `rawDay` je identitou stabilní napříč spot ticky, živá cena jde zvlášť v `live` (#141).
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
-  const rawDay = useDayData(symbol, selectedExpiry, today, timeframe, socket)
+  const { day: rawDay, live } = useDayData(symbol, selectedExpiry, today, timeframe, socket)
   // Heatmap mód/škála: čistý přepočet ze surové matice (SPEC 4.3, bez fetch)
   const modeDay = useMemo(() => {
     if (!rawDay.raw || (mode === 'oi' && heatScale === 'linear')) return rawDay
@@ -99,17 +100,43 @@ function MainContent() {
   const bucketMinutes = timeframe === 'daily' ? 1 : INTERVAL_MINUTES[interval]
   const day = useMemo(() => aggregateDay(modeDay, bucketMinutes), [modeDay, bucketMinutes])
 
-  // Hlavička: poslední cena + denní změna vs. otevření dne
+  const playback = usePlayback(day.grid.minutes)
+  // Živá vrstva (#141): svíčky ze spot kanálu agregované do stejných košů jako den.
+  // Při přetáčení (ne-live) živá cena do grafu nepatří.
+  const liveOverlay = useMemo(
+    () =>
+      playback.isLive
+        ? aggregateLive(live, bucketMinutes, modeDay.grid.minutes, day.overlays.price ?? [])
+        : EMPTY_LIVE,
+    [live, bucketMinutes, modeDay.grid.minutes, day.overlays.price, playback.isLive],
+  )
+  // Koše, které živá vrstva přebírá — jejich statická svíčka se vynechá (jinak dvojí kresba).
+  // Klíč je primitivní: mění se jednou za koš, ne s každým tickem.
+  const liveBucketKey = liveOverlay.bars.map((bar) => bar.minuteIdx).join(',')
+  const staticPrice = useMemo(() => {
+    const price = day.overlays.price
+    if (!price || liveBucketKey === '') return price
+    const taken = new Set(liveBucketKey.split(',').map(Number))
+    return price.some((bar) => taken.has(bar.minuteIdx))
+      ? price.filter((bar) => !taken.has(bar.minuteIdx))
+      : price
+  }, [day.overlays.price, liveBucketKey])
+  const staticOverlays = useMemo(
+    () =>
+      staticPrice === day.overlays.price ? day.overlays : { ...day.overlays, price: staticPrice },
+    [day.overlays, staticPrice],
+  )
+
+  // Hlavička: poslední cena + denní změna vs. otevření dne (živá cena má přednost)
   useEffect(() => {
     const spots = day.spotSeries.filter((value): value is number => value !== null)
-    const last = spots.at(-1) ?? null
+    const last = liveOverlay.bars.at(-1)?.close ?? spots.at(-1) ?? null
     const open = spots[0] ?? null
     setPriceInfo({
       last,
       changePct: last !== null && open !== null && open !== 0 ? ((last - open) / open) * 100 : null,
     })
-  }, [day.spotSeries, setPriceInfo])
-  const playback = usePlayback(day.grid.minutes)
+  }, [day.spotSeries, liveOverlay.bars, setPriceInfo])
   // Pohled grafu (pan/zoom os) — sdílený heatmapou a spodními panely (společná osa X)
   const [chartView, setChartView] = useState<ViewTransform>(DEFAULT_VIEW)
   // Cenové pásmo dne pro auto-fit osy Y (fit počítá Heatmap se svou skutečnou výškou)
@@ -134,8 +161,8 @@ function MainContent() {
     [day.panels, playback.isLive, playback.position],
   )
   const allOverlays = useMemo(
-    () => (playback.isLive ? day.overlays : sliceOverlays(day.overlays, playback.position)),
-    [day.overlays, playback.isLive, playback.position],
+    () => (playback.isLive ? staticOverlays : sliceOverlays(staticOverlays, playback.position)),
+    [staticOverlays, playback.isLive, playback.position],
   )
   const profileRows = useMemo(() => {
     if (day.profileByMinute) {
@@ -145,8 +172,8 @@ function MainContent() {
     return day.demoProfileRows ?? []
   }, [day, playback.position])
   const spot = useMemo(
-    () => lastValue(day.spotSeries, playback.position),
-    [day.spotSeries, playback.position],
+    () => liveOverlay.bars.at(-1)?.close ?? lastValue(day.spotSeries, playback.position),
+    [liveOverlay.bars, day.spotSeries, playback.position],
   )
   // Stabilní props pro těžké (memoizované) děti — živý spot mění jen graf, ne panely/profil
   const panelsVisible = useMemo(
@@ -419,6 +446,8 @@ function MainContent() {
               style={style}
               contours={contours}
               overlays={overlays}
+              liveBars={liveOverlay.bars}
+              liveLabels={liveOverlay.labels}
               minuteLabels={day.minuteLabels}
               priceStyle={priceStyle}
               priceOpacity={priceOpacity}

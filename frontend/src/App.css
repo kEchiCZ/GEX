@@ -587,7 +587,8 @@ body {
 }
 
 .heatmap-canvas,
-.heatmap-overlay {
+.heatmap-overlay,
+.heatmap-dynamic {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -597,6 +598,11 @@ body {
 .heatmap-overlay {
   cursor: grab;
   touch-action: none;
+}
+
+/* Dynamická vrstva leží nad statickou, ale události patří overlayi pod ní (#141) */
+.heatmap-dynamic {
+  pointer-events: none;
 }
 
 .heatmap-reset {
