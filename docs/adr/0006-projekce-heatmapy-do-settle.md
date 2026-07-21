@@ -56,8 +56,21 @@ ve dvou řádcích.
   projekce — proto je odlišení sytostí zásadní.
 - `HeatmapGrid.dataMinutes` je nové povinné pole; konzumenti, kteří potřebují
   „kolik je skutečných dat", musí sáhnout po něm, ne po `minutes`.
-- Walls módy počítané z gridu se přes projekci protáhnou (plochý pokračující
-  tvar) — je to důsledek předpokladu z bodu 3, ne samostatné rozhodnutí.
+- Walls módy se počítají **jen z naměřené části** gridu (před projekcí) a
+  jejich linie končí na předělu — projekce nekreslí žádné „zdi" v budoucnu.
+  (Původní znění ADR tvrdilo opak; kód to od začátku dělal bezpečněji a po
+  review #132 je autoritativní tohle znění, viz #156.) Horizontální projekce
+  pojmenovaných úrovní s cenovkou přes celou šířku zůstává.
+
+## Upřesnění po review #132 (#156)
+
+- **Stáří buněk se do projekce nepřenáší** — projekce není „stará data", je to
+  předpoklad; projekční sloupce mají stáří 0, i když poslední naměřená minuta
+  stale je.
+- **Strop `PROJECTION_MAX_MINUTES` je v minutách reálného času** a ořezává se
+  před přepočtem na koše — na každém timeframe znamená stejný časový úsek.
+- **Při přetáčení (mimo live) se neprojektuje** — slice nuluje buňky za pozicí
+  a projekce by držela vynulovaný sloupec.
 
 ## Ověření
 
