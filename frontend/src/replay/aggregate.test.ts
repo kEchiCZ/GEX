@@ -152,6 +152,7 @@ test('buildDailyDay: sloupec = den, denní OHLC svíčka a součty', () => {
       deltaFlowPut: [2, 1],
     },
     profileByMinute: profileSourceOf([[], []]),
+    provisionalMinutes: [],
   }
   const dayB: ReplayDay = {
     ...dayA,
