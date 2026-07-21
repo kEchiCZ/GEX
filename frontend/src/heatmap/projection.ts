@@ -45,15 +45,10 @@ export function projectGrid(grid: HeatmapGrid, extra: number): HeatmapGrid {
     for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
       const from = strikeIdx * grid.minutes
       const to = strikeIdx * total
-      // Naměřená část beze změny
-      for (let minuteIdx = 0; minuteIdx < dataMinutes; minuteIdx += 1) {
-        result[to + minuteIdx] = layer[from + minuteIdx]
-      }
-      // Projekce = poslední naměřený sloupec držený konstantní
-      const held = layer[from + dataMinutes - 1]
-      for (let minuteIdx = dataMinutes; minuteIdx < total; minuteIdx += 1) {
-        result[to + minuteIdx] = held
-      }
+      // Naměřená část beze změny; projekce = poslední naměřený sloupec
+      // držený konstantní (řádek je v bufferu souvislý → set + fill, #155)
+      result.set(layer.subarray(from, from + dataMinutes), to)
+      result.fill(layer[from + dataMinutes - 1], to + dataMinutes, to + total)
     }
     return result
   }

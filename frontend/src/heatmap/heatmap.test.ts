@@ -4,7 +4,8 @@ import { applyStale, blend, callColor, putColor, signedColor } from './color'
 import { contourLevels, marchingSquares, quantile } from './contours'
 import { buildGrid, cellIndex } from './grid'
 import { demoGrid } from './demo'
-import { gaussianBlur, renderGrid } from './render'
+import { PROJECTION_ALPHA, gaussianBlur, renderGrid } from './render'
+import { projectGrid } from './projection'
 import type { HeatmapGrid } from './grid'
 import type { PixelBuffer } from './render'
 
@@ -155,7 +156,74 @@ test('skalární smyčka renderGrid dává stejné pixely jako helpery z color.t
   }
 })
 
+test('renderGrid nad projekcí: výplň řádků je byte-identická s plným výpočtem (#155)', () => {
+  // Projekční sloupce se nepočítají per pixel, ale kopírují (copyWithin) —
+  // tento test hlídá shodu s referenčním per-pixel výpočtem přes helpery
+  // z color.ts včetně stale, PROJECTION_ALPHA a rozmazání u Blobs.
+  const dataMinutes = 21
+  const extra = 30
+  const strikeCount = 13
+  const size = dataMinutes * strikeCount
+  const pseudo = (seed: number, index: number) => ((index * seed) % 211) / 210
+  const call = new Float32Array(size)
+  const put = new Float32Array(size)
+  const staleAge = new Float32Array(size)
+  for (let index = 0; index < size; index += 1) {
+    call[index] = pseudo(53, index)
+    put[index] = pseudo(89, index)
+    staleAge[index] = index % 7 === 0 ? 900 : 0
+  }
+  const grid: HeatmapGrid = {
+    minutes: dataMinutes,
+    strikes: Array.from({ length: strikeCount }, (_, i) => i),
+    layers: { call, put },
+    staleAge,
+  }
+  const projected = projectGrid(grid, extra)
+  const total = projected.minutes
+
+  for (const style of ['gradient', 'blobs'] as const) {
+    const buffer = renderGrid(projected, style)
+    // Reference: plné rozmazání BEZ zkratky pro konstantní sloupce
+    const layerRef = (values: Float32Array): Float32Array =>
+      style === 'blobs' ? gaussianBlur(values, total, strikeCount) : values
+    const callRef = layerRef(projected.layers.call!)
+    const putRef = layerRef(projected.layers.put!)
+    for (let y = 0; y < strikeCount; y += 1) {
+      const strikeIdx = strikeCount - 1 - y
+      for (let x = 0; x < total; x += 1) {
+        const index = strikeIdx * total + x
+        let expected = blend(blend([0, 0, 0, 0], callColor(callRef[index])), putColor(putRef[index])) // prettier-ignore
+        if (projected.staleAge![index] > 300) expected = applyStale(expected)
+        if (x >= dataMinutes) expected = [expected[0], expected[1], expected[2], Math.round(expected[3] * PROJECTION_ALPHA)] // prettier-ignore
+        const offset = (y * total + x) * 4
+        expect(
+          [buffer.data[offset], buffer.data[offset + 1], buffer.data[offset + 2], buffer.data[offset + 3]], // prettier-ignore
+          `style=${style} x=${x} y=${y}`,
+        ).toEqual(expected)
+      }
+    }
+  }
+})
+
 // ── Gaussovské rozmazání ───────────────────────────────────────────
+
+test('gaussianBlur s hintem konstantních sloupců == plná konvoluce (#155)', () => {
+  const width = 40
+  const height = 9
+  const constantFromX = 11
+  const field = new Float32Array(width * height)
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      // Data část pseudonáhodná, od constantFromX konstantní (jako projekce)
+      const value = x < constantFromX ? ((x * 31 + y * 17) % 97) / 96 : ((y * 13) % 7) / 6
+      field[y * width + x] = value
+    }
+  }
+  const full = gaussianBlur(field, width, height)
+  const hinted = gaussianBlur(field, width, height, 2, constantFromX)
+  expect(Array.from(hinted)).toEqual(Array.from(full))
+})
 
 test('gaussianBlur má maximum ve zdroji a rozprostírá energii', () => {
   const field = new Float32Array(25)
