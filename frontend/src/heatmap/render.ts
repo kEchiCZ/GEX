@@ -22,12 +22,18 @@ export interface PixelBuffer {
   data: Uint8ClampedArray
 }
 
-/** Gaussovské rozmazání pole (separabilní kernel) — základ Blobs stylu. */
+/** Gaussovské rozmazání pole (separabilní kernel) — základ Blobs stylu.
+
+`constantFromX`: sloupce >= tohoto indexu jsou ve VSTUPU identické (projekce
+drží poslední naměřený sloupec, ADR-0006). Výstup je pak konstantní podél x
+od `constantFromX + radius` — spočítá se jednou a zbytek řádku se vyplní,
+místo plné konvoluce přes stovky projekčních sloupců (#155). */
 export function gaussianBlur(
   field: Float32Array,
   width: number,
   height: number,
   radius = 2,
+  constantFromX = width,
 ): Float32Array {
   const sigma = radius / 1.5
   const kernel: number[] = []
@@ -39,27 +45,34 @@ export function gaussianBlur(
   }
   for (let i = 0; i < kernel.length; i += 1) kernel[i] /= kernelSum
 
+  // Od tohoto sloupce je výstup obou průchodů podél x konstantní
+  const cut = Math.min(width, Math.max(0, constantFromX) + radius + 1)
+
   const horizontal = new Float32Array(field.length)
   for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
+    const row = y * width
+    for (let x = 0; x < cut; x += 1) {
       let acc = 0
       for (let k = -radius; k <= radius; k += 1) {
         const sx = Math.min(width - 1, Math.max(0, x + k))
-        acc += field[y * width + sx] * kernel[k + radius]
+        acc += field[row + sx] * kernel[k + radius]
       }
-      horizontal[y * width + x] = acc
+      horizontal[row + x] = acc
     }
+    if (cut < width) horizontal.fill(horizontal[row + cut - 1], row + cut, row + width)
   }
   const result = new Float32Array(field.length)
   for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
+    const row = y * width
+    for (let x = 0; x < cut; x += 1) {
       let acc = 0
       for (let k = -radius; k <= radius; k += 1) {
         const sy = Math.min(height - 1, Math.max(0, y + k))
         acc += horizontal[sy * width + x] * kernel[k + radius]
       }
-      result[y * width + x] = acc
+      result[row + x] = acc
     }
+    if (cut < width) result.fill(result[row + cut - 1], row + cut, row + width)
   }
   return result
 }
@@ -73,19 +86,33 @@ překreslení (#142). Matematika je s nimi shodná — hlídá to test proti `ca
 export function renderGrid(grid: HeatmapGrid, style: HeatmapStyle): PixelBuffer {
   const width = grid.minutes
   const height = grid.strikes.length
+  const dataMinutes = dataMinutesOf(grid)
+  const blurRadius = 2
   const layerOf = (values?: Float32Array): Float32Array | undefined =>
-    values && style === 'blobs' ? gaussianBlur(values, width, height) : values
+    values && style === 'blobs'
+      ? gaussianBlur(values, width, height, blurRadius, dataMinutes)
+      : values
 
   const call = layerOf(grid.layers.call)
   const put = layerOf(grid.layers.put)
   const signed = layerOf(grid.layers.signed)
   const staleAge = grid.staleAge
-  const dataMinutes = dataMinutesOf(grid)
+
+  // Projekce drží poslední naměřený sloupec konstantní (ADR-0006), takže od
+  // `fillFrom` je celý řádek bufferu identický — pixel se spočítá jednou a
+  // zbytek řádku se zkopíruje. Bez toho projekce násobila náklad překreslení
+  // 5–10× (ráno: 120 naměřených vs. ~1300 projekčních sloupců, #155).
+  // U Blobs sahá rozmazání přes hranici dat ještě `blurRadius` sloupců.
+  const fillFrom =
+    dataMinutes < width
+      ? Math.min(width - 1, dataMinutes + (style === 'blobs' ? blurRadius : 0))
+      : width
 
   const buffer = new Uint8ClampedArray(width * height * 4)
   for (let y = 0; y < height; y += 1) {
     const strikeIdx = height - 1 - y // obrazovka: nahoře nejvyšší strike
-    for (let x = 0; x < width; x += 1) {
+    const computeTo = Math.min(width, fillFrom + 1)
+    for (let x = 0; x < computeTo; x += 1) {
       const index = strikeIdx * width + x
       const projected = x >= dataMinutes
       let r = 0
@@ -156,6 +183,17 @@ export function renderGrid(grid: HeatmapGrid, style: HeatmapStyle): PixelBuffer 
       buffer[offset + 1] = g
       buffer[offset + 2] = b
       buffer[offset + 3] = a
+    }
+    // Zbytek řádku = kopie pixelu na `fillFrom` (exponenciální zdvojování)
+    if (computeTo < width) {
+      const rowOffset = (y * width + fillFrom) * 4
+      const rowLength = (width - fillFrom) * 4
+      let filled = 4
+      while (filled < rowLength) {
+        const chunk = Math.min(filled, rowLength - filled)
+        buffer.copyWithin(rowOffset + filled, rowOffset, rowOffset + chunk)
+        filled += chunk
+      }
     }
   }
   return { width, height, data: buffer }
