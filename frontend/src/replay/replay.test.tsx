@@ -256,6 +256,7 @@ function normalize(day: ReplayDay) {
     price: day.overlays.price,
     levels: day.overlays.levels,
     walls: day.overlays.walls,
+    provisionalMinutes: day.provisionalMinutes,
     // Líný profil (#142) se pro porovnání zmaterializuje přes všechny minuty
     profile: Array.from({ length: day.profileByMinute.length }, (_, minuteIdx) =>
       day.profileByMinute.rowsAt(minuteIdx),
@@ -289,6 +290,106 @@ test('appendMinute dá identický výsledek jako plný build (#127)', () => {
   }
   const incremental = assembleReplayDay(appendMinute(firstMinute, secondMinute))
 
+  expect(normalize(incremental)).toEqual(normalize(full))
+})
+
+test('append == plný build přes 120 minut s rozšiřující se strike osou (#157)', () => {
+  // Dlouhá sekvence z review #132: strike osa náhodně roste oběma směry,
+  // řezy mají díry — append musí dát identický den jako plný build,
+  // včetně panels, profilu a provisionalMinutes.
+  let seed = 0x132132
+  const random = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff
+    return seed / 0x7fffffff
+  }
+  const minutes = 120
+  const isoOf = (minuteIdx: number) =>
+    new Date(Date.UTC(2026, 6, 16, 13, 30 + minuteIdx)).toISOString()
+  // btoa přes spread by na velkém Arrow IPC přetekl stack — skládat po chunkách
+  const base64Of = (bytes: Uint8Array): string => {
+    let binary = ''
+    for (let index = 0; index < bytes.length; index += 8192) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + 8192))
+    }
+    return btoa(binary)
+  }
+
+  let low = 7600
+  let high = 7620
+  const allCells: Cell[] = []
+  const perMinute: Array<{ ts: string; rows: Cell[] }> = []
+  const bars: typeof BARS = []
+  const levels: typeof LEVELS = []
+  const flow: typeof FLOW = []
+  let cumDelta = 0
+  for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
+    const ts = isoOf(minuteIdx)
+    if (random() < 0.15) low -= 5
+    if (random() < 0.15) high += 5
+    const rows: Cell[] = []
+    for (let strike = low; strike <= high; strike += 5) {
+      for (const right of ['C', 'P'] as const) {
+        if (random() < 0.1) continue // díra v řezu
+        rows.push({
+          ts,
+          strike,
+          right,
+          volume: Math.floor(random() * 500),
+          oi: Math.floor(random() * 10000),
+          delta: (right === 'C' ? 1 : -1) * random(),
+        })
+      }
+    }
+    const close = 7610 + Math.round((random() - 0.5) * 20)
+    cumDelta += Math.round((random() - 0.5) * 100)
+    allCells.push(...rows)
+    bars.push({ ts_min: ts, open: close - 1, high: close + 2, low: close - 3, close, volume: 100 + minuteIdx }) // prettier-ignore
+    levels.push({ ts_min: ts, flip: 7600, centroid: 7605, call_wall: high, put_wall: low })
+    flow.push({ ts_min: ts, flow_delta: 0, cum_delta: cumDelta })
+    perMinute.push({ ts, rows })
+  }
+
+  const bundleOf = (cells: Cell[], b: typeof BARS, l: typeof LEVELS, f: typeof FLOW) => {
+    const table = tableFromArrays({
+      ts_min: cells.map((c) => c.ts),
+      strike: Float64Array.from(cells.map((c) => c.strike)),
+      right: cells.map((c) => c.right),
+      volume: Float64Array.from(cells.map((c) => c.volume)),
+      oi: Float64Array.from(cells.map((c) => c.oi)),
+      delta: Float64Array.from(cells.map((c) => c.delta)),
+      stale_age: Float64Array.from(cells.map(() => 0)),
+    })
+    return {
+      symbol: 'ES',
+      expiry: '20260716',
+      date: '2026-07-16',
+      snapshots_arrow_base64: base64Of(tableToIPC(table, 'stream')),
+      levels: l,
+      flow: f,
+      bars: b,
+    }
+  }
+
+  const full = buildReplayDay(bundleOf(allCells, bars, levels, flow))
+
+  let inputs = decodeBundle(bundleOf(perMinute[0].rows, [bars[0]], [levels[0]], [flow[0]]))
+  for (let minuteIdx = 1; minuteIdx < minutes; minuteIdx += 1) {
+    const bar = bars[minuteIdx]
+    inputs = appendMinute(inputs, {
+      tsIso: perMinute[minuteIdx].ts,
+      rows: perMinute[minuteIdx].rows.map((c) => ({
+        strike: c.strike,
+        right: c.right,
+        oi: c.oi,
+        volume: c.volume,
+        delta: c.delta,
+      })),
+      bar: { open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume, final: true }, // prettier-ignore
+      levels: levels[minuteIdx] as unknown as Record<string, number | null>,
+      flow: { cum_delta: flow[minuteIdx].cum_delta },
+    })
+  }
+  const incremental = assembleReplayDay(inputs)
   expect(normalize(incremental)).toEqual(normalize(full))
 })
 
