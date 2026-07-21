@@ -9,5 +9,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true, // testing-library auto-cleanup mezi testy
     setupFiles: ['src/test/setup.ts'],
+    // Jen jednotkové testy v src — e2e/*.spec.ts patří Playwrightu (#154)
+    include: ['src/**/*.test.{ts,tsx}'],
   },
 })

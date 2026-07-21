@@ -53,3 +53,7 @@ jobs:
       - run: npm run format
       - run: npm test
       - run: npm run build
+      # Smoke PRODUKČNÍHO bundlu (#154): build se dosud jen stavěl, nikdy nespustil —
+      # runtime chyba viditelná jen v produkci (#146, bílá stránka) by prošla
+      - run: npx playwright install --with-deps chromium
+      - run: npm run smoke
