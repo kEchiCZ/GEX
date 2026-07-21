@@ -82,7 +82,7 @@ const minuteLabelCache = new Map<string, string>()
 /** Strop cache — přes noc/přepínání dnů by jinak rostla bez omezení. */
 const MINUTE_LABEL_CACHE_MAX = 5000
 
-function minuteLabel(iso: string): string {
+export function minuteLabel(iso: string): string {
   const cached = minuteLabelCache.get(iso)
   if (cached !== undefined) return cached
   const parsed = new Date(iso)
@@ -146,6 +146,8 @@ export interface DayData {
   spotSeries: (number | null)[]
   /** Popisky časové osy (HH:MM lokálního času) per minuta. */
   minuteLabels: string[]
+  /** ISO čas poslední naměřené minuty — horizont projekce (ADR-0006). */
+  lastMinuteIso: string | null
 }
 
 function demoDay(): DayData {
@@ -172,6 +174,7 @@ function demoDay(): DayData {
     demoProfileRows: demoProfile(grid),
     spotSeries,
     minuteLabels,
+    lastMinuteIso: null, // demo den není ukotvený v čase → bez projekce
   }
 }
 
@@ -192,6 +195,7 @@ function replayToDay(day: ReplayDay): DayData {
     demoProfileRows: null,
     spotSeries,
     minuteLabels,
+    lastMinuteIso: day.minutes.at(-1) ?? null,
   }
 }
 

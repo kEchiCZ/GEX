@@ -11,6 +11,7 @@ const TOGGLE_LABELS: Record<keyof Toggles, string> = {
   delta: 'Delta',
   deltaFlow: 'Δ Flow C/P',
   volOiDelta: 'Vol + OI Δ',
+  projection: 'Projekce',
   news: 'News',
 }
 

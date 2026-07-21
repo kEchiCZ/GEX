@@ -7,14 +7,22 @@ export interface HeatmapLayers {
 }
 
 export interface HeatmapGrid {
-  /** Počet minut (šířka, osa X). */
+  /** Počet sloupců celkem (šířka, osa X) — včetně případné projekce. */
   minutes: number
+  /** Kolik prvních sloupců je NAMĚŘENÝCH; zbytek je projekce do settle (ADR-0006).
+  Chybí-li, celý grid jsou data. Playback, panely a profil se řídí tímto číslem. */
+  dataMinutes?: number
   /** Strikes vzestupně (výška, osa Y — index 0 = nejnižší strike). */
   strikes: number[]
   /** Hodnoty vrstev normalizované na 0..1 (signed −1..1); index = strikeIdx * minutes + minuteIdx. */
   layers: HeatmapLayers
   /** Stáří dat buňky v sekundách (stale > STALE_THRESHOLD_S se kreslí odlišně), nebo null. */
   staleAge: Float32Array | null
+}
+
+/** Počet naměřených minut gridu (bez projekce). */
+export function dataMinutesOf(grid: HeatmapGrid): number {
+  return grid.dataMinutes ?? grid.minutes
 }
 
 export function cellIndex(

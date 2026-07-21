@@ -217,5 +217,6 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
       { length: buckets },
       (_, bucketIdx) => day.minuteLabels[bucketIdx * bucketMinutes] ?? '',
     ),
+    lastMinuteIso: day.lastMinuteIso,
   }
 }

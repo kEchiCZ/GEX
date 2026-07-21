@@ -273,8 +273,10 @@ export function Heatmap({
       context.setLineDash([])
     }
 
-    // Sessions markery (svislé čáry s popisky)
-    for (const session of overlays.sessions ?? []) {
+    // Sessions markery (svislé čáry s popisky); sousední se střídají ve dvou
+    // řádcích, aby se popisky hustých seancí nepřekrývaly
+    context.font = '11px sans-serif'
+    ;(overlays.sessions ?? []).forEach((session, order) => {
       const x = minuteToX(session.minuteIdx) - 0.5 * scaleX
       context.strokeStyle = 'rgba(125,133,150,0.6)'
       context.setLineDash([6, 4])
@@ -284,8 +286,23 @@ export function Heatmap({
       context.stroke()
       context.setLineDash([])
       context.fillStyle = 'rgba(125,133,150,0.9)'
-      context.font = '11px sans-serif'
-      context.fillText(session.label, x + 4, 12)
+      context.fillText(session.label, x + 4, order % 2 === 0 ? 12 : 25)
+    })
+
+    // Předěl mezi naměřenými daty a projekcí (ADR-0006)
+    const dataMinutes = grid.dataMinutes ?? grid.minutes
+    if (dataMinutes < grid.minutes) {
+      const x = minuteToX(dataMinutes) - 0.5 * scaleX
+      context.strokeStyle = 'rgba(215,220,230,0.5)'
+      context.lineWidth = 1
+      context.setLineDash([3, 3])
+      context.beginPath()
+      context.moveTo(x, 0)
+      context.lineTo(x, logicalH)
+      context.stroke()
+      context.setLineDash([])
+      context.fillStyle = 'rgba(180,188,202,0.8)'
+      context.fillText('projekce →', x + 5, logicalH - 26)
     }
 
     // Levels a walls linie (dle módu; barva per linie, volitelné čárkování)
@@ -757,7 +774,11 @@ export function Heatmap({
     const strikeIdx = grid.strikes.indexOf(crosshair.strike)
     if (strikeIdx < 0) return null
     const index = strikeIdx * grid.minutes + crosshair.minuteIdx
-    const parts: string[] = [`min ${crosshair.minuteIdx}`, `strike ${crosshair.strike}`]
+    const projected = crosshair.minuteIdx >= (grid.dataMinutes ?? grid.minutes)
+    const parts: string[] = [
+      projected ? 'projekce' : `min ${crosshair.minuteIdx}`,
+      `strike ${crosshair.strike}`,
+    ]
     if (grid.layers.call) parts.push(`call ${grid.layers.call[index].toFixed(2)}`)
     if (grid.layers.put) parts.push(`put ${grid.layers.put[index].toFixed(2)}`)
     if (grid.layers.signed) parts.push(`± ${grid.layers.signed[index].toFixed(2)}`)
