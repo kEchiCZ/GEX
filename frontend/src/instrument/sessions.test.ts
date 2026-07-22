@@ -1,6 +1,6 @@
 /** Testy automatických seance markerů (pevné UTC časy, jen uvnitř rozsahu dat). */
 import { expect, test } from 'vitest'
-import { autoSessions } from './sessions'
+import { autoSessions, projectedSessions } from './sessions'
 
 function minutes(startIso: string, count: number): string[] {
   const start = new Date(startIso).getTime()
@@ -37,6 +37,29 @@ test('celodenní data mají plnou sadu, prázdná žádnou', () => {
   // Markery jsou seřazené v čase a sedí na správných minutách
   expect(markers.map((m) => m.minuteIdx)).toEqual([0, 90, 225, 360, 420, 600, 720, 810, 930, 1200])
   expect(autoSessions([])).toEqual([])
+})
+
+test('projectedSessions: budoucí seance v projektované zóně (#195)', () => {
+  const settle = new Date('2026-07-22T20:00:00Z')
+  // Poslední naměřená minuta 09:00 UTC, 1m koše, 540 datových sloupců
+  const markers = projectedSessions('2026-07-22T09:00:00Z', settle, 1, 540)
+  const byLabel = new Map(markers.map((m) => [m.label, m.minuteIdx]))
+  // Koš 540+k pokrývá čas 09:00 + (k+1) min (shodně s projectionLabels)
+  expect(byLabel.get('Indie Cl')).toBe(540 + 59) // 10:00
+  expect(byLabel.get('US Pre')).toBe(540 + 179) // 12:00 (letní čas)
+  expect(byLabel.get('US Open')).toBe(540 + 269) // 13:30
+  expect(byLabel.get('Frankfurt Cl · Londýn Cl')).toBe(540 + 389) // 15:30, sloučené
+  expect(byLabel.get('US Close')).toBe(540 + 659) // 20:00 == settle, včetně
+  // Seance z minulosti (Londýn 7:00) se do projekce nekreslí
+  expect([...byLabel.keys()].join()).not.toContain('Šanghaj')
+
+  // 5m koše: index = ceil(minut/5) − 1
+  const coarse = projectedSessions('2026-07-22T09:00:00Z', settle, 5, 108)
+  expect(coarse.find((m) => m.label === 'US Open')?.minuteIdx).toBe(108 + Math.ceil(270 / 5) - 1)
+
+  // Bez settle / nevalidní čas → nic
+  expect(projectedSessions('2026-07-22T09:00:00Z', null, 1, 540)).toEqual([])
+  expect(projectedSessions('rozbité', settle, 1, 540)).toEqual([])
 })
 
 test('mimo letní čas se US a evropské seance posouvají o hodinu později (#159)', () => {
