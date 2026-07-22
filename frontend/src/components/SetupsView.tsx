@@ -4,7 +4,7 @@ Predikce jsou neměnné — jediná mutace je rating (+1/−1) a poznámka; hodn
 je kvalitativní vrstva a nevstupuje do automatické kalibrace confidence.
 */
 import { useState } from 'react'
-import { STATUS_LABELS, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import { ACCOUNT_START_USD, STATUS_LABELS, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
 import type { SetupRow } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
 import { useSetups } from '../hooks/useSetups'
@@ -81,8 +81,10 @@ export function SetupsView() {
   // P/L v USD na 1 kontrakt (#185) — CME hodnota bodu instrumentu
   const pointUsd = pointValue(symbol)
   const totalPnl = closed.reduce((sum, row) => sum + (setupPnlUsd(row, pointUsd) ?? 0), 0)
-  // Σ % vůči notional (#189) — bez skládání, jako Σ R
-  const totalPct = closed.reduce((sum, row) => sum + (setupPnlPct(row) ?? 0), 0)
+  // % P/L vůči startovnímu účtu 5 000 $ na ticker (#191) — s fixní bází je
+  // součet procent setupů roven celkovému zhodnocení účtu
+  const totalPct = (totalPnl / ACCOUNT_START_USD) * 100
+  const averageR = closed.length > 0 ? totalR / closed.length : 0
   const pnlClass = totalPnl >= 0 ? 'r-positive' : 'r-negative'
 
   return (
@@ -107,9 +109,9 @@ export function SetupsView() {
           </span>
         </div>
         <div className="stat">
-          <span className="stat-label muted">Σ R</span>
-          <span className={`stat-value ${totalR >= 0 ? 'r-positive' : 'r-negative'}`}>
-            {closed.length > 0 ? `${totalR >= 0 ? '+' : ''}${totalR.toFixed(1)}` : '—'}
+          <span className="stat-label muted">Ø R</span>
+          <span className={`stat-value ${averageR >= 0 ? 'r-positive' : 'r-negative'}`}>
+            {closed.length > 0 ? `${averageR >= 0 ? '+' : ''}${averageR.toFixed(2)}` : '—'}
           </span>
         </div>
         <div className="stat">
@@ -119,7 +121,7 @@ export function SetupsView() {
           </span>
         </div>
         <div className="stat">
-          <span className="stat-label muted">Σ % notional</span>
+          <span className="stat-label muted">% P/L (účet 5k)</span>
           <span className={`stat-value ${pnlClass}`} data-testid="setups-total-pct">
             {closed.length > 0 ? formatPct(totalPct) : '—'}
           </span>
@@ -154,7 +156,7 @@ export function SetupsView() {
             <tbody>
               {setups.map((row) => {
                 const pnl = setupPnlUsd(row, pointUsd)
-                const pct = setupPnlPct(row)
+                const pct = setupPnlPct(row, pointUsd)
                 return (
                   <tr key={row.id} title={row.reason}>
                     <td>{formatTs(row.created_ts)}</td>
