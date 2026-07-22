@@ -19,6 +19,25 @@ export function priceTick(symbol: string): number {
   return PRICE_TICKS[symbol] ?? 0.25
 }
 
+/** Dolarová hodnota 1 bodu na 1 kontrakt (CME multiplikátory, #185). */
+const POINT_VALUES: Record<string, number> = {
+  ES: 50,
+  MES: 5,
+  NQ: 20,
+  MNQ: 2,
+  RTY: 50,
+  M2K: 5,
+  YM: 5,
+  MYM: 0.5,
+  CL: 1000,
+  GC: 100,
+}
+
+/** Hodnota bodu daného symbolu v USD (default 50 — indexové E-mini). */
+export function pointValue(symbol: string): number {
+  return POINT_VALUES[symbol] ?? 50
+}
+
 /** Zaokrouhlení ceny na nejbližší tick (crosshair na ose Y nemá jemnější rozlišení). */
 export function snapToTick(price: number, tick: number): number {
   if (tick <= 0) return price

@@ -46,6 +46,25 @@ export function setupRrr(row: Pick<SetupRow, 'entry' | 'target' | 'stop'>): numb
   return risk > 0 ? Math.abs(row.target - row.entry) / risk : 0
 }
 
+/** P/L uzavřeného setupu v USD na 1 KONTRAKT (#185).
+
+`outcome_r` je výsledek v násobcích rizika; riziko v bodech = |entry − stop|,
+takže P/L body = outcome_r × riziko a dolary přes hodnotu bodu instrumentu.
+Platí i pro timeout (engine počítá outcome_r z exit ceny). */
+export function setupPnlUsd(
+  row: Pick<SetupRow, 'entry' | 'stop' | 'outcome_r'>,
+  pointValueUsd: number,
+): number | null {
+  if (row.outcome_r === null) return null
+  return row.outcome_r * Math.abs(row.entry - row.stop) * pointValueUsd
+}
+
+/** Formát P/L se znaménkem („+512.50 $" / „−250 $"). */
+export function formatPnlUsd(value: number): string {
+  const rounded = Math.round(value * 100) / 100
+  return `${rounded > 0 ? '+' : ''}${rounded} $`
+}
+
 export async function fetchSetups(symbol: string): Promise<SetupRow[]> {
   const response = await fetch(`${API_BASE}/setups/${symbol}`)
   if (!response.ok) return []

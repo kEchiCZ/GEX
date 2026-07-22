@@ -4,10 +4,11 @@ Predikce jsou neměnné — jediná mutace je rating (+1/−1) a poznámka; hodn
 je kvalitativní vrstva a nevstupuje do automatické kalibrace confidence.
 */
 import { useState } from 'react'
-import { STATUS_LABELS, reviewSetup, setupRrr, templateLabel } from '../api/setups'
+import { STATUS_LABELS, formatPnlUsd, reviewSetup, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
 import type { SetupRow } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
 import { useSetups } from '../hooks/useSetups'
+import { pointValue } from '../instrument/tick'
 import { useAppState } from '../state/AppState'
 
 function formatTs(iso: string | null): string {
@@ -77,6 +78,9 @@ export function SetupsView() {
   const closed = setups.filter((row) => row.status !== 'active')
   const wins = closed.filter((row) => (row.outcome_r ?? 0) > 0).length
   const totalR = closed.reduce((sum, row) => sum + (row.outcome_r ?? 0), 0)
+  // P/L v USD na 1 kontrakt (#185) — CME hodnota bodu instrumentu
+  const pointUsd = pointValue(symbol)
+  const totalPnl = closed.reduce((sum, row) => sum + (setupPnlUsd(row, pointUsd) ?? 0), 0)
 
   return (
     <section className="setups-view" aria-label="Setupy">
@@ -87,6 +91,18 @@ export function SetupsView() {
           uzavřených
           {closed.length > 0 &&
             ` · úspěšnost ${Math.round((wins / closed.length) * 100)} % · Σ ${totalR.toFixed(1)} R`}
+          {closed.length > 0 && (
+            <>
+              {' · Σ '}
+              <span
+                className={totalPnl >= 0 ? 'r-positive' : 'r-negative'}
+                data-testid="setups-total-pnl"
+              >
+                {formatPnlUsd(totalPnl)}
+              </span>
+              {' (1 kontrakt)'}
+            </>
+          )}
         </span>
       </header>
       {setups.length === 0 && (
@@ -109,36 +125,45 @@ export function SetupsView() {
                 <th>RRR</th>
                 <th>Důvěra</th>
                 <th>Stav</th>
+                <th>Uzavřeno</th>
                 <th>R</th>
+                <th>P/L (1 ks)</th>
                 <th>Hodnocení</th>
               </tr>
             </thead>
             <tbody>
-              {setups.map((row) => (
-                <tr key={row.id} title={row.reason}>
-                  <td>{formatTs(row.created_ts)}</td>
-                  <td>{templateLabel(row.template)}</td>
-                  <td className={row.direction}>{row.direction === 'long' ? 'LONG' : 'SHORT'}</td>
-                  <td>{formatLevel(row.entry)}</td>
-                  <td>{formatLevel(row.target)}</td>
-                  <td>{formatLevel(row.stop)}</td>
-                  <td>{setupRrr(row).toFixed(1)}</td>
-                  <td>{row.confidence} %</td>
-                  <td>
-                    <span className={`setup-status ${row.status}`}>
-                      {STATUS_LABELS[row.status] ?? row.status}
-                    </span>
-                  </td>
-                  <td className={(row.outcome_r ?? 0) >= 0 ? 'r-positive' : 'r-negative'}>
-                    {row.outcome_r === null
-                      ? '—'
-                      : `${row.outcome_r >= 0 ? '+' : ''}${row.outcome_r.toFixed(2)}`}
-                  </td>
-                  <td>
-                    <ReviewCell row={row} symbol={symbol} onSaved={refresh} />
-                  </td>
-                </tr>
-              ))}
+              {setups.map((row) => {
+                const pnl = setupPnlUsd(row, pointUsd)
+                return (
+                  <tr key={row.id} title={row.reason}>
+                    <td>{formatTs(row.created_ts)}</td>
+                    <td>{templateLabel(row.template)}</td>
+                    <td className={row.direction}>{row.direction === 'long' ? 'LONG' : 'SHORT'}</td>
+                    <td>{formatLevel(row.entry)}</td>
+                    <td>{formatLevel(row.target)}</td>
+                    <td>{formatLevel(row.stop)}</td>
+                    <td>{setupRrr(row).toFixed(1)}</td>
+                    <td>{row.confidence} %</td>
+                    <td>
+                      <span className={`setup-status ${row.status}`}>
+                        {STATUS_LABELS[row.status] ?? row.status}
+                      </span>
+                    </td>
+                    <td data-part="closed-ts">{formatTs(row.closed_ts)}</td>
+                    <td className={(row.outcome_r ?? 0) >= 0 ? 'r-positive' : 'r-negative'}>
+                      {row.outcome_r === null
+                        ? '—'
+                        : `${row.outcome_r >= 0 ? '+' : ''}${row.outcome_r.toFixed(2)}`}
+                    </td>
+                    <td className={(pnl ?? 0) >= 0 ? 'r-positive' : 'r-negative'} data-part="pnl">
+                      {pnl === null ? '—' : formatPnlUsd(pnl)}
+                    </td>
+                    <td>
+                      <ReviewCell row={row} symbol={symbol} onSaved={refresh} />
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

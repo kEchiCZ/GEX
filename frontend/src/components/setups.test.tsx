@@ -2,7 +2,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
-import { setupRrr } from '../api/setups'
+import { formatPnlUsd, setupPnlUsd, setupRrr } from '../api/setups'
+import { pointValue } from '../instrument/tick'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
 
@@ -68,6 +69,20 @@ test('výpočet RRR ze setupu', () => {
   expect(setupRrr({ entry: 7501, target: 7515, stop: 7501 })).toBe(0)
 })
 
+test('P/L setupu v USD na 1 kontrakt (#185)', () => {
+  // riziko 29 bodů, outcome +0.48 R → 13.92 bodu × 50 $ (ES) = 696 $
+  expect(setupPnlUsd({ entry: 7501, stop: 7472, outcome_r: 0.48 }, pointValue('ES'))).toBeCloseTo(
+    696,
+  )
+  // plný stop = −1 R → −29 bodů × 20 $ (NQ) = −580 $
+  expect(setupPnlUsd({ entry: 7501, stop: 7472, outcome_r: -1 }, pointValue('NQ'))).toBeCloseTo(
+    -580,
+  )
+  expect(setupPnlUsd({ entry: 7501, stop: 7472, outcome_r: null }, 50)).toBeNull()
+  expect(formatPnlUsd(696)).toBe('+696 $')
+  expect(formatPnlUsd(-580.125)).toBe('-580.12 $') // Math.round půlí k +∞
+})
+
 test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
   const fetchMock = mockApi([SETUP_ROW])
   renderApp()
@@ -77,6 +92,13 @@ test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
   expect(screen.getByText('+0.48')).toBeDefined()
   // 'Cíl' je hlavička sloupce i badge stavu — badge přidává druhý výskyt
   expect(screen.getAllByText('Cíl').length).toBe(2)
+  // Čas uzavření a P/L v USD na 1 kontrakt (#185): 0.48 R × 29 b × 50 $ = 696 $
+  const closedCell = document.querySelector('[data-part="closed-ts"]')
+  expect(closedCell?.textContent).toMatch(/\d{1,2}:\d{2}/) // closed_ts se zobrazuje
+  expect(document.querySelector('[data-part="pnl"]')?.textContent).toBe('+696 $')
+  // Celkový P/L instrumentu v hlavičce
+  expect(screen.getByTestId('setups-total-pnl').textContent).toBe('+696 $')
+  expect(screen.getByText(/1 kontrakt/)).toBeDefined()
 
   // Ruční hodnocení: 👍 pošle PATCH na /setups/ES/7/review
   fireEvent.click(screen.getByRole('button', { name: 'Setup 7 vyšel' }))
