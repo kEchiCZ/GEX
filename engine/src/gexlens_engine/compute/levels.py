@@ -55,15 +55,22 @@ def _flip(strikes: list[float], nets: list[float], spot: float) -> float | None:
     if not strikes:
         return None
     cumulative = list(itertools.accumulate(nets))
+    # Vodicí nuly NEJSOU průchod: okrajové strikes pásma bývají prázdné, takže
+    # kumulativní řada začíná na nule — starý kód to bral jako nulový průchod
+    # a flip pak skákal na okraj pásma (#197). Průchody se hledají až od první
+    # nenulové hodnoty; celý nulový profil flip nemá.
+    first_nonzero = next((i for i, value in enumerate(cumulative) if value != 0.0), None)
+    if first_nonzero is None:
+        return None
     crossings: list[float] = []
-    for i in range(len(strikes) - 1):
+    for i in range(first_nonzero, len(strikes) - 1):
         c1, c2 = cumulative[i], cumulative[i + 1]
         if c1 == 0.0:
             crossings.append(strikes[i])
         elif (c1 < 0.0 < c2) or (c2 < 0.0 < c1):
             k1, k2 = strikes[i], strikes[i + 1]
             crossings.append(k1 + (0.0 - c1) * (k2 - k1) / (c2 - c1))
-    if cumulative[-1] == 0.0:
+    if cumulative[-1] == 0.0 and len(strikes) - 1 > first_nonzero:
         crossings.append(strikes[-1])
     if not crossings:
         return None

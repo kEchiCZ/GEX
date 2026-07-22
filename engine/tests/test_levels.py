@@ -76,6 +76,24 @@ def test_multiple_crossings_pick_nearest_to_spot() -> None:
     assert near_high.flip == pytest.approx(7575.0)
 
 
+def test_flip_ignores_leading_zero_strikes() -> None:
+    """#197: prázdné okrajové strikes nejsou nulový průchod — flip neskáče na okraj pásma."""
+    # Vodicí nuly + celý kladný profil → žádný skutečný průchod → None
+    # (starý kód vracel 7340 = okraj pásma, v grafu žluté svislé sloupy)
+    all_positive = compute_levels(
+        {7340.0: 0.0, 7350.0: 0.0, 7400.0: 100.0, 7500.0: 200.0}, spot=7450.0
+    )
+    assert all_positive.flip is None
+
+    # Vodicí nuly + skutečný průchod → interpolace jako dřív, okraj se neplete
+    real_crossing = compute_levels({7340.0: 0.0, 7400.0: -100.0, 7500.0: 150.0}, spot=7450.0)
+    assert real_crossing.flip == pytest.approx(7400.0 + (100.0 / 150.0) * 100.0)
+
+    # Celý nulový profil flip nemá (dřív vracel první strike)
+    zero = compute_levels({7500.0: 0.0, 7550.0: 0.0}, spot=7500.0)
+    assert zero.flip is None
+
+
 def test_walls_none_when_spot_outside_profile() -> None:
     profile = {7500.0: 100.0, 7550.0: -50.0}
     below_all = compute_levels(profile, spot=7400.0)

@@ -156,6 +156,22 @@ export function resolveSecondaryWalls(walls: LevelLine[], enabled: boolean): Lev
   return result
 }
 
+/** Práh skoku úrovně v STRIKE KROCÍCH — větší skok linii přeruší (#197). */
+export const LEVEL_JUMP_MAX_STEPS = 10
+
+/** Skok úrovně mezi sousedními minutami větší než práh (#197).
+
+Flip může mít víc skutečných nulových průchodů a mezi nimi přeskakovat —
+svislá spojnice přes celý graf je vizuální šum, mezera je čitelnější. */
+export function isLevelJump(previous: number, current: number, strikeStep: number): boolean {
+  return strikeStep > 0 && Math.abs(current - previous) > LEVEL_JUMP_MAX_STEPS * strikeStep
+}
+
+/** Linie, které se při velkém skoku přerušují (flip; zdi řeší párování ADR-0008). */
+export function breaksOnJump(name: string): boolean {
+  return name === 'flip' || name === 'walls:flip'
+}
+
 /** Indexy pro popisky osy: každý k-tý tak, aby rozestup na obrazovce byl ≥ minSpacingPx. */
 export function tickIndices(count: number, stepPx: number, minSpacingPx: number): number[] {
   if (count <= 0 || stepPx <= 0) return []
