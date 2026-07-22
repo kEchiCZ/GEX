@@ -160,6 +160,49 @@ test('yView: pruhy i cenová linka sledují Y transformaci hlavního grafu', () 
   expect(Number(screen.getByTestId('profile-price-line').getAttribute('y1'))).toBeCloseTo(300, 1)
 })
 
+test('sdílená osa (#213): řádky se kotví k strikes heatmapy, ne k vlastnímu pořadí', () => {
+  // Σ souhrn: řádky 7590/7600, ale osa grafu má 4 strikes 7585..7615 (krok 10)
+  render(
+    <CrosshairProvider>
+      <StrikeProfile
+        rows={rows()}
+        spot={7595}
+        height={200}
+        yView={{ offsetY: 0, zoomY: 1, baseHeight: 200 }}
+        axisStrikes={[7585, 7595, 7605, 7615]}
+      />
+    </CrosshairProvider>,
+  )
+  // rowHeight = 200/4 = 50; strike 7600 je na vzestupném zlomku 1.5
+  // → y střed = (4−1−1.5+0.5)·50 = 100 (bez kotvení by vyšel 25)
+  const callVol = screen.getByTestId('profile-row-7600').querySelector('[data-part="call-vol"]')!
+  const barHeight = Number(callVol.getAttribute('height'))
+  expect(Number(callVol.getAttribute('y'))).toBeCloseTo(100 - barHeight / 2, 1)
+  // spot 7595 sedí přesně na strike ose: (4−1−1+0.5)·50 = 125 — shodně s heatmapou
+  expect(Number(screen.getByTestId('profile-price-line').getAttribute('y1'))).toBeCloseTo(125, 1)
+})
+
+test('sdílená osa (#213): řádek mimo obálku osy se nekreslí (nevrší se na kraji)', () => {
+  render(
+    <CrosshairProvider>
+      <StrikeProfile
+        rows={rows()}
+        spot={null}
+        height={200}
+        yView={{ offsetY: 0, zoomY: 1, baseHeight: 200 }}
+        axisStrikes={[7600, 7625]} // 7590 je pod obálkou → skip
+      />
+    </CrosshairProvider>,
+  )
+  expect(screen.queryByTestId('profile-row-7590')).toBeNull()
+  expect(screen.getByTestId('profile-row-7600')).toBeDefined()
+})
+
+test('cenová linka je šedá — žlutá patří flipům (#213)', () => {
+  renderPanel()
+  expect(screen.getByTestId('profile-price-line').getAttribute('stroke')).toBe('#d7dce6')
+})
+
 test('popisky hodnot se nikdy nepřekrývají se strike popisky ani okrajem (#181)', () => {
   renderPanel() // šířka 260, halfWidth 130, barHalf 90; max strana = put 7590 (60)
   const panel = screen.getByLabelText('Skládané pruhy strike profilu')
