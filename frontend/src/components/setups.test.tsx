@@ -83,12 +83,13 @@ test('P/L setupu v USD na 1 kontrakt (#185)', () => {
   expect(formatPnlUsd(-580.125)).toBe('-580.12 $') // Math.round půlí k +∞
 })
 
-test('P/L v % notional == procentní pohyb ceny (#189)', () => {
-  // 0.48 R × 29 b = 13.92 b na entry 7501 → +0.1856 % (…× 50 $ / 375 050 $ dává totéž)
-  expect(setupPnlPct({ entry: 7501, stop: 7472, outcome_r: 0.48 })).toBeCloseTo(0.18557, 4)
-  expect(setupPnlPct({ entry: 7501, stop: 7472, outcome_r: null })).toBeNull()
-  expect(setupPnlPct({ entry: 0, stop: 10, outcome_r: 1 })).toBeNull()
-  expect(formatPct(0.18557)).toBe('+0.19 %')
+test('P/L v % startovního účtu 5 000 $ na ticker (#191)', () => {
+  // 0.48 R × 29 b × 50 $ = 696 $ na účtu 5 000 $ → +13.92 %
+  expect(setupPnlPct({ entry: 7501, stop: 7472, outcome_r: 0.48 }, pointValue('ES'))).toBeCloseTo(
+    13.92,
+  )
+  expect(setupPnlPct({ entry: 7501, stop: 7472, outcome_r: null }, 50)).toBeNull()
+  expect(formatPct(13.92)).toBe('+13.92 %')
   expect(formatPct(-1.5)).toBe('-1.50 %')
 })
 
@@ -98,19 +99,22 @@ test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Setupy' }))
   expect(await screen.findByText('Neúspěšný průraz')).toBeDefined()
-  expect(screen.getByText('+0.48')).toBeDefined()
+  // '+0.48' je v R sloupci tabulky i v dlaždici Ø R (jediný uzavřený setup)
+  expect(screen.getAllByText('+0.48').length).toBe(2)
   // 'Cíl' je hlavička sloupce i badge stavu — badge přidává druhý výskyt
   expect(screen.getAllByText('Cíl').length).toBe(2)
   // Čas uzavření a P/L v USD na 1 kontrakt (#185): 0.48 R × 29 b × 50 $ = 696 $
   const closedCell = document.querySelector('[data-part="closed-ts"]')
   expect(closedCell?.textContent).toMatch(/\d{1,2}:\d{2}/) // closed_ts se zobrazuje
-  // P/L buňka nese dolary i % notional (#189)
+  // P/L buňka nese dolary i % účtu 5 000 $ (#191)
   expect(document.querySelector('[data-part="pnl"]')?.textContent).toContain('+696 $')
-  expect(document.querySelector('[data-part="pnl"]')?.textContent).toContain('+0.19 %')
-  // Zvýrazněné souhrnné statistiky (#189)
+  expect(document.querySelector('[data-part="pnl"]')?.textContent).toContain('+13.92 %')
+  // Zvýrazněné souhrnné statistiky (#189/#191): Ø R, Σ P/L, % P/L vůči účtu
   expect(screen.getByTestId('setups-total-pnl').textContent).toBe('+696 $')
-  expect(screen.getByTestId('setups-total-pct').textContent).toBe('+0.19 %')
+  expect(screen.getByTestId('setups-total-pct').textContent).toBe('+13.92 %')
+  expect(screen.getByText('Ø R')).toBeDefined()
   expect(screen.getByText(/1 kontrakt/)).toBeDefined()
+  expect(screen.getByText(/účet 5k/)).toBeDefined()
 
   // Ruční hodnocení: 👍 pošle PATCH na /setups/ES/7/review
   fireEvent.click(screen.getByRole('button', { name: 'Setup 7 vyšel' }))

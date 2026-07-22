@@ -65,14 +65,19 @@ export function formatPnlUsd(value: number): string {
   return `${rounded > 0 ? '+' : ''}${rounded} $`
 }
 
-/** P/L setupu v % NOTIONAL hodnoty kontraktu (#189).
+/** Startovní kapitál účtu na jeden ticker (#191, zadání uživatele) — báze procent. */
+export const ACCOUNT_START_USD = 5000
 
-Notional = entry × hodnota bodu, takže procento je zároveň procentní pohyb
-ceny: outcome_r × riziko (body) / entry. Margin brokera neznáme — notional
-je jediná objektivní báze; počítá se s 1 kontraktem. */
-export function setupPnlPct(row: Pick<SetupRow, 'entry' | 'stop' | 'outcome_r'>): number | null {
-  if (row.outcome_r === null || row.entry === 0) return null
-  return ((row.outcome_r * Math.abs(row.entry - row.stop)) / row.entry) * 100
+/** P/L setupu v % startovního účtu (#191): pnl $ / 5 000 $ na ticker.
+
+S fixní bází je součet procent setupů roven celkovému zhodnocení účtu. */
+export function setupPnlPct(
+  row: Pick<SetupRow, 'entry' | 'stop' | 'outcome_r'>,
+  pointValueUsd: number,
+): number | null {
+  const pnl = setupPnlUsd(row, pointValueUsd)
+  if (pnl === null) return null
+  return (pnl / ACCOUNT_START_USD) * 100
 }
 
 /** Formát procenta se znaménkem („+0.19 %"). */
