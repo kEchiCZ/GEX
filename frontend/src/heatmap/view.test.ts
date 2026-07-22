@@ -8,11 +8,36 @@ import {
   ZOOM_MIN,
   axisZoneAt,
   baseBucketPx,
+  compensateView,
   fitPriceView,
   homeOffsetX,
   zoomAxis,
   zoomBoth,
 } from './view'
+
+test('compensateView: obsah se při změně velikosti plátna nehýbe (#171)', () => {
+  const view = { offsetX: 40, offsetY: -12, zoomX: 1.7, zoomY: 3.1 }
+  const minutes = 300
+  const strikeCount = 80
+  const before = { width: 1200, height: 640 }
+  const after = { width: 900, height: 820 } // užší graf (širší profil), vyšší (nižší panely)
+  const next = compensateView(view, minutes, before, after)
+
+  // Pixelová pozice buňky (vzorce z Heatmap mapping) je před i po změně stejná
+  const xBefore = (10 + 0.5) * baseBucketPx(minutes, before.width) * view.zoomX + view.offsetX
+  const xAfter = (10 + 0.5) * baseBucketPx(minutes, after.width) * next.zoomX + next.offsetX
+  expect(xAfter).toBeCloseTo(xBefore, 9)
+  const yBefore = (5 + 0.5) * (before.height / strikeCount) * view.zoomY + view.offsetY
+  const yAfter = (5 + 0.5) * (after.height / strikeCount) * next.zoomY + next.offsetY
+  expect(yAfter).toBeCloseTo(yBefore, 9)
+
+  // Stejná velikost → identický objekt (stabilní identita pro memoizaci)
+  expect(compensateView(view, minutes, before, before)).toBe(view)
+  // Málo dat pod stropem BUCKET_MAX_PX: base je 12 px při obou šířkách → beze změny
+  expect(compensateView(view, 20, before, after).zoomX).toBe(view.zoomX)
+  // Degenerované rozměry se ignorují
+  expect(compensateView(view, minutes, { width: 0, height: 0 }, after)).toBe(view)
+})
 
 test('zoomAxis drží bod pod kotvou na místě', () => {
   const view = { offsetX: 10, offsetY: 0, zoomX: 2, zoomY: 1 }
