@@ -206,10 +206,37 @@ class OIArchiver:
                             oi=oi,
                         )
                     )
-        await asyncio.to_thread(self._repository.upsert_many, records)
+        # Dedupe přes klíč archivu (#215): některé podklady (MES) mají víc
+        # tradingClass sérií se STEJNOU expirací a klíč tradingClass nenese —
+        # duplicitní klíč v jedné dávce shodí upsert (CardinalityViolation).
+        # OI sérií se sčítá = celkový open interest na striku.
+        merged: dict[tuple[str, str, float, str], OIRecord] = {}
+        for record in records:
+            key = (record.symbol, record.expiry, record.strike, record.right)
+            existing = merged.get(key)
+            merged[key] = (
+                record
+                if existing is None
+                else OIRecord(
+                    symbol=record.symbol,
+                    expiry=record.expiry,
+                    strike=record.strike,
+                    right=record.right,
+                    day=record.day,
+                    oi=existing.oi + record.oi,
+                )
+            )
+        deduped = list(merged.values())
+        if len(deduped) < len(records):
+            logger.info(
+                "OI archivace %s: %d duplicitních sérií sloučeno (Σ OI per strike)",
+                day,
+                len(records) - len(deduped),
+            )
+        await asyncio.to_thread(self._repository.upsert_many, deduped)
         if missing:
             logger.warning("OI archivace %s: %d kontraktů bez OI", day, len(missing))
-        return ArchiveResult(written=len(records), missing=tuple(missing))
+        return ArchiveResult(written=len(deduped), missing=tuple(missing))
 
     async def _fetch_one(self, spec: OptionContractSpec) -> float | None:
         try:

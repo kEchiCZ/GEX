@@ -195,7 +195,24 @@ class InstrumentPipeline:
         if today in self.oi_repository.days(self.symbol):
             return True
         contracts = self.archive_contracts or self.runtime.contracts
-        result = await self.archiver.archive_day(contracts, today)
+        try:
+            result = await self.archiver.archive_day(contracts, today)
+        except Exception:
+            # Selhání archivace nesmí zabít pipeline (#215: MES CardinalityViolation
+            # shodil celý řetěz do cooldownu) — sběr běží dál s volume fallbackem,
+            # retry po OI_RETRY_CYCLES cyklech
+            logger.exception("OI archivace %s selhala — pokračuje se bez OI", self.symbol)
+            await self.publisher.publish(
+                "alerts",
+                {
+                    "kind": "oi_missing",
+                    "symbol": self.symbol,
+                    "message": f"OI archivace {self.symbol} selhala — GEX/OI vrstvy zatím "
+                    "bez OI, další pokus za 30 min (detail v logu enginu)",
+                    "ts": dt.datetime.now(dt.UTC).timestamp(),
+                },
+            )
+            return False
         logger.info(
             "OI archiv %s %s: %d zapsáno, %d chybí",
             self.symbol,
