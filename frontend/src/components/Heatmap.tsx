@@ -9,7 +9,7 @@ Rozlišení canvasu sleduje zobrazenou velikost × devicePixelRatio (hi-DPI):
 kreslí se v logických CSS pixelech přes setTransform(dpr), takže popisky os
 jsou ostré i na velkých monitorech. Souřadnice událostí = CSS pixely.
 */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useElementSize } from '../hooks/useElementSize'
 import { contourLevels, marchingSquares } from '../heatmap/contours'
 import type { ContoursMode } from '../heatmap/contours'
@@ -148,9 +148,11 @@ export function Heatmap({
   }, [size, onLogicalSizeChange])
   // Změna velikosti plátna (předěly panelů, resize okna) nesmí hýbat obsahem:
   // base měřítko závisí na rozměrech, proto se zoom kompenzuje tak, aby
-  // pixelové pozice buněk zůstaly — uživatel si graf srovná sám (#171)
+  // pixelové pozice buněk zůstaly — uživatel si graf srovná sám (#171).
+  // useLayoutEffect: kompenzace se aplikuje PŘED paintem, jinak prohlížeč
+  // stihne vykreslit snímek s novou velikostí a starým zoomem (#173)
   const previousSizeRef = useRef<{ width: number; height: number } | null>(null)
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previous = previousSizeRef.current
     previousSizeRef.current = { width: logicalW, height: logicalH }
     if (!previous || (previous.width === logicalW && previous.height === logicalH)) return
@@ -647,15 +649,17 @@ export function Heatmap({
     dpr,
   ])
 
-  useEffect(() => {
+  // useLayoutEffect: změna width/height atributu canvas vyčistí — překreslení
+  // musí proběhnout před paintem, jinak při tažení předělů problikává (#173)
+  useLayoutEffect(() => {
     drawData()
   }, [drawData])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     drawStatic()
   }, [drawStatic])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     drawDynamic()
   }, [drawDynamic])
 
@@ -802,11 +806,14 @@ export function Heatmap({
 
   return (
     <div className="heatmap-stack" ref={stackRef}>
+      {/* Explicitní px rozměry (ne CSS 100 %): při tažení předělů se starý
+      raster nesmí na mezisnímek roztáhnout — ořízne ho overflow stacku (#173) */}
       <canvas
         ref={canvasRef}
         className="heatmap-canvas"
         width={Math.round(logicalW * dpr)}
         height={Math.round(logicalH * dpr)}
+        style={{ width: logicalW, height: logicalH }}
       />
       <canvas
         ref={overlayRef}
@@ -816,6 +823,8 @@ export function Heatmap({
         role="img"
         aria-label="GEX heatmapa"
         style={{
+          width: logicalW,
+          height: logicalH,
           cursor: axisHover === 'x' ? 'ew-resize' : axisHover === 'y' ? 'ns-resize' : undefined,
         }}
         onWheel={onWheel}
@@ -834,6 +843,7 @@ export function Heatmap({
         className="heatmap-dynamic"
         width={Math.round(logicalW * dpr)}
         height={Math.round(logicalH * dpr)}
+        style={{ width: logicalW, height: logicalH }}
         aria-hidden="true"
       />
       <button
