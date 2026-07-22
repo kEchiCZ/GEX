@@ -16,6 +16,7 @@ import { SetupCard } from './components/SetupCard'
 import { SetupsView } from './components/SetupsView'
 import { StrikeProfile } from './components/StrikeProfile'
 import { useSetups } from './hooks/useSetups'
+import { buildGexGrid, projectGexField } from './heatmap/gexmode'
 import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
 import type { HeatmapMode, HeatmapScale } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
@@ -136,6 +137,18 @@ function MainContent() {
   const { day: rawDay, live } = useDayData(symbol, selectedExpiry, today, timeframe, socket)
   // Heatmap mód/škála: čistý přepočet ze surové matice (SPEC 4.3, bez fetch)
   const modeDay = useMemo(() => {
+    // Dyn GEX (ADR-0009 fáze 2): grid z historie profilů, ne ze snapshot matice.
+    // Bez profilů (demo, Daily, starší den) zůstává výchozí OI pohled.
+    if (mode === 'dyn_gex') {
+      if (!rawDay.gexProfile || rawDay.gexProfile.every((row) => row === null)) return rawDay
+      const built = buildGexGrid(
+        rawDay.gexProfile,
+        rawDay.grid.strikes,
+        rawDay.grid.minutes,
+        heatScale,
+      )
+      return { ...rawDay, grid: built }
+    }
     if (!rawDay.raw || (mode === 'oi' && heatScale === 'linear')) return rawDay
     return { ...rawDay, grid: buildModeGrid(rawDay.raw, mode, heatScale) }
   }, [rawDay, mode, heatScale])
@@ -211,8 +224,17 @@ function MainContent() {
       expirySettleUtc(selectedExpiry),
       bucketMinutes,
     )
+    // Dyn GEX: projekční zóna nese modelované budoucí sloupce (ADR-0009 fáze 2)
+    if (mode === 'dyn_gex' && rawDay.gexProfile) {
+      return projectGexField(grid, extra, day.gexField, {
+        profiles: rawDay.gexProfile,
+        lastMinuteIso: day.lastMinuteIso,
+        bucketMinutes,
+        scale: heatScale,
+      })
+    }
     return projectGrid(grid, extra)
-  }, [grid, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, playback.isLive]) // prettier-ignore
+  }, [grid, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, playback.isLive, mode, heatScale, day.gexField, rawDay.gexProfile]) // prettier-ignore
   const projectionExtra = projectedGrid.minutes - (projectedGrid.dataMinutes ?? projectedGrid.minutes) // prettier-ignore
   const chartLabels = useMemo(
     () =>

@@ -14,6 +14,9 @@ export interface HeatmapGrid {
   dataMinutes?: number
   /** Strikes vzestupně (výška, osa Y — index 0 = nejnižší strike). */
   strikes: number[]
+  /** Projekční sloupce NEJSOU konstantní (Dyn GEX pole, ADR-0009 fáze 2) —
+  render nesmí použít zkratku „zkopíruj poslední naměřený sloupec". */
+  projectionDynamic?: boolean
   /** Hodnoty vrstev normalizované na 0..1 (signed −1..1); index = strikeIdx * minutes + minuteIdx. */
   layers: HeatmapLayers
   /** Stáří dat buňky v sekundách (stale > STALE_THRESHOLD_S se kreslí odlišně), nebo null. */

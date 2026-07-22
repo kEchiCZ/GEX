@@ -44,6 +44,19 @@ export interface GexProfileRow {
   values: number[]
 }
 
+/** Modelované Dyn GEX pole (ADR-0009 fáze 2): budoucí sloupce s klesajícím τ.
+Sloupec `k` odpovídá času colStart + k·colStepMin minut; drží se jen poslední stav. */
+export interface GexFieldRow {
+  tsIso: string
+  gridStart: number
+  gridStep: number
+  colStartIso: string
+  colStepMin: number
+  colCount: number
+  /** Sloupce za sebou: values[colIdx · gridLen + i], gridLen = values.length / colCount. */
+  values: number[]
+}
+
 export interface ReplayDay {
   symbol: string
   expiry: string
@@ -61,6 +74,8 @@ export interface ReplayDay {
   provisionalMinutes: number[]
   /** Dyn GEX profil per minuta (ADR-0009); null = minuta profil nemá. */
   gexProfile: (GexProfileRow | null)[]
+  /** Modelované pole budoucích sloupců (ADR-0009 fáze 2); null = bez pole. */
+  gexField: GexFieldRow | null
 }
 
 const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2'] as const // prettier-ignore
@@ -108,6 +123,8 @@ export interface ReplayInputs {
   flow: FlowInput[]
   oiPrev: OiPrevInput[]
   gexProfile: GexProfileRow[]
+  /** Modelované pole (ADR-0009 fáze 2) — jen poslední stav, starší se zahazuje. */
+  gexField: GexFieldRow | null
 }
 
 /** Jedna živá minuta z WS kanálů (#127) — snapshot řez + volitelně bar/levels/flow. */
@@ -135,6 +152,15 @@ export interface LiveMinute {
   flow?: { cum_delta: number }
   /** Dyn GEX profil minuty z WS kanálu gexprofile.* (ADR-0009). */
   gexProfile?: { grid_start: number; grid_step: number; values: number[] }
+  /** Modelované pole z WS kanálu gexfield.* (ADR-0009 fáze 2). */
+  gexField?: {
+    grid_start: number
+    grid_step: number
+    col_start: string
+    col_step_min: number
+    col_count: number
+    values: number[]
+  }
 }
 
 interface ReplayBundle {
@@ -147,6 +173,8 @@ interface ReplayBundle {
   levels2?: Array<Record<string, unknown>>
   /** Dyn GEX profily (ADR-0009, #203) — starší API pole neposílá. */
   gexprofile?: Array<Record<string, unknown>>
+  /** Modelované pole (ADR-0009 fáze 2) — starší API klíč neposílá. */
+  gexfield?: Array<Record<string, unknown>>
   flow: Array<Record<string, unknown>>
   bars: Array<Record<string, unknown>>
   /** OI téže expirace z předchozího archivovaného dne (ΔOI vs. včera). */
@@ -344,6 +372,24 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     }))
     .filter((row) => row.values.length > 0 && Number.isFinite(row.gridStart))
 
+  // Modelované pole (ADR-0009 fáze 2) — partice drží jen poslední stav
+  const fieldRaw = (bundle.gexfield ?? []).at(-1)
+  const fieldValues =
+    fieldRaw && Array.isArray(fieldRaw.values) ? (fieldRaw.values as number[]).map(Number) : []
+  const fieldColCount = fieldRaw ? Number(fieldRaw.col_count) : 0
+  const gexField: GexFieldRow | null =
+    fieldRaw && fieldColCount > 0 && fieldValues.length % fieldColCount === 0 && fieldValues.length > 0 // prettier-ignore
+      ? {
+          tsIso: canonicalTs(fieldRaw.ts_min),
+          gridStart: Number(fieldRaw.grid_start),
+          gridStep: Number(fieldRaw.grid_step),
+          colStartIso: canonicalTs(fieldRaw.col_start),
+          colStepMin: Number(fieldRaw.col_step_min),
+          colCount: fieldColCount,
+          values: fieldValues,
+        }
+      : null
+
   return {
     symbol: bundle.symbol,
     expiry: bundle.expiry,
@@ -366,6 +412,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
       oi: Number(row.oi) || 0,
     })),
     gexProfile,
+    gexField,
   }
 }
 
@@ -453,6 +500,18 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
         values: minute.gexProfile.values,
       })
     : inputs.gexProfile
+  // Modelované pole: nová minuta prostě nahradí staré (jen poslední stav)
+  const gexField = minute.gexField
+    ? {
+        tsIso,
+        gridStart: minute.gexField.grid_start,
+        gridStep: minute.gexField.grid_step,
+        colStartIso: minute.gexField.col_start,
+        colStepMin: minute.gexField.col_step_min,
+        colCount: minute.gexField.col_count,
+        values: minute.gexField.values,
+      }
+    : inputs.gexField
 
   return {
     ...inputs,
@@ -469,6 +528,7 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     levels,
     flow,
     gexProfile,
+    gexField,
   }
 }
 
@@ -626,6 +686,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     profileByMinute,
     provisionalMinutes,
     gexProfile,
+    gexField: inputs.gexField,
   }
 }
 

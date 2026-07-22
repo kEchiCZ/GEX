@@ -433,6 +433,54 @@ test('Dyn GEX profil: decode z bundle + WS append per minuta (ADR-0009)', () => 
   expect(legacy.gexProfile.every((row) => row === null)).toBe(true)
 })
 
+test('Dyn GEX pole: decode z bundle + WS nahrazuje starší stav (ADR-0009 fáze 2)', () => {
+  const withField = {
+    ...bundleFor(CELLS, BARS, LEVELS, FLOW),
+    gexfield: [
+      {
+        ts_min: M0,
+        grid_start: 7600,
+        grid_step: 5,
+        col_start: M1,
+        col_step_min: 10,
+        col_count: 2,
+        values: [1, 2, 3, 4], // 2 sloupce × mřížka délky 2
+      },
+    ],
+  }
+  const day = assembleReplayDay(decodeBundle(withField))
+  expect(day.gexField).toMatchObject({
+    gridStart: 7600,
+    colStepMin: 10,
+    colCount: 2,
+    values: [1, 2, 3, 4],
+  })
+
+  // WS append: nová minuta pole prostě nahradí (drží se jen poslední stav)
+  const appended = appendMinute(decodeBundle(withField), {
+    tsIso: M1,
+    rows: [],
+    gexField: {
+      grid_start: 7595,
+      grid_step: 5,
+      col_start: M1,
+      col_step_min: 10,
+      col_count: 1,
+      values: [9, 8],
+    },
+  })
+  expect(appended.gexField).toMatchObject({ gridStart: 7595, colCount: 1, values: [9, 8] })
+
+  // Nekonzistentní pole (délka nedělitelná počtem sloupců) se zahodí
+  const broken = {
+    ...bundleFor(CELLS, BARS, LEVELS, FLOW),
+    gexfield: [{ ts_min: M0, grid_start: 7600, grid_step: 5, col_start: M1, col_step_min: 10, col_count: 3, values: [1, 2, 3, 4] }], // prettier-ignore
+  }
+  expect(decodeBundle(broken).gexField).toBeNull()
+  // Starší API bez klíče gexfield → null, nic nepadá
+  expect(decodeBundle(bundleFor(CELLS, BARS, LEVELS, FLOW)).gexField).toBeNull()
+})
+
 test('appendMinute přidá nový strike (posun osy) beze ztráty starých buněk (#127)', () => {
   const firstMinute = decodeBundle(
     bundleFor(

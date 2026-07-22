@@ -108,6 +108,20 @@ async def test_one_cycle_produces_full_day_artifacts(
         settings.derived_dir / "ES" / "20260716" / "gexprofile" / f"{day}.parquet"
     )
     assert len(gexprofile) == 1
+    # Modelované pole (ADR-0009 fáze 2): kanál + partice jen s posledním stavem
+    assert "gexfield.ES.20260716" in channels
+    gexfield_data = next(
+        data for channel, data in publisher.messages if channel == "gexfield.ES.20260716"
+    )
+    field_values = gexfield_data["values"]
+    field_cols = gexfield_data["col_count"]
+    assert isinstance(field_values, list) and field_values
+    assert isinstance(field_cols, int) and field_cols > 0
+    assert len(field_values) % field_cols == 0  # sloupce za sebou, celé násobky mřížky
+    gexfield = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "gexfield" / f"{day}.parquet"
+    )
+    assert len(gexfield) == 1  # jen poslední stav (replace_and_write)
 
     # price kanál nese plnou OHLC (#127), ne jen close
     price_data = next(data for channel, data in publisher.messages if channel == "price.ES")

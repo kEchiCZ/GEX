@@ -42,6 +42,7 @@ function sampleDay(): DayData {
     minuteLabels: ['9:30', '9:31', '9:32', '9:33'],
     lastMinuteIso: '2026-07-16T15:03:00.000Z',
     gexProfile: null,
+    gexField: null,
   }
 }
 
@@ -168,6 +169,7 @@ test('buildDailyDay: sloupec = den, denní OHLC svíčka a součty', () => {
     profileByMinute: profileSourceOf([[], []]),
     provisionalMinutes: [],
     gexProfile: [null, null],
+    gexField: null,
   }
   const dayB: ReplayDay = {
     ...dayA,

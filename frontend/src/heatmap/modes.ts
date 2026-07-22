@@ -15,8 +15,11 @@ export const HEATMAP_MODES = [
   { value: 'oi_plus_otm', label: 'OI+OTM' },
   { value: 'oi_minus_itm', label: 'OI−ITM' },
   { value: 'oi_signed_all', label: 'OI±All' },
+  { value: 'dyn_gex', label: 'Dyn GEX' },
 ] as const
 export type HeatmapMode = (typeof HEATMAP_MODES)[number]['value']
+/** Módy počítané ze surové snapshot matice — Dyn GEX má vlastní stavbu (gexmode.ts). */
+export type MeasuredHeatmapMode = Exclude<HeatmapMode, 'dyn_gex'>
 
 export const HEATMAP_SCALES = [
   { value: 'linear', label: 'Linear' },
@@ -43,7 +46,7 @@ export interface RawDay {
 const OI_WEIGHT = 0.6
 const VOL_WEIGHT = 0.4
 
-function copysignTransform(value: number, scale: HeatmapScale): number {
+export function copysignTransform(value: number, scale: HeatmapScale): number {
   const magnitude = Math.abs(value)
   const sign = value < 0 ? -1 : 1
   if (scale === 'sqrt') return sign * Math.sqrt(magnitude)
@@ -104,7 +107,11 @@ function filledSpots(spotSeries: (number | null)[], minutes: number): (number | 
 }
 
 /** Sestaví grid vrstvy pro daný mód a škálu (čistá funkce — testy proti enginu). */
-export function buildModeGrid(raw: RawDay, mode: HeatmapMode, scale: HeatmapScale): HeatmapGrid {
+export function buildModeGrid(
+  raw: RawDay,
+  mode: MeasuredHeatmapMode,
+  scale: HeatmapScale,
+): HeatmapGrid {
   const { minutes, strikes } = raw
   const size = minutes * strikes.length
   const spots = filledSpots(raw.spotSeries, minutes)

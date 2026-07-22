@@ -28,9 +28,30 @@ měřená mapa z principu zodpovědět neumí.
    - Frontend: křivka v pravém profilu (sdílená osa Y) — kladná část doprava
      (zelená, tlumení), záporná doleva (červená, akcelerace), průchod nulou =
      dynamický flip. Přepínatelná chipem, persistováno (ADR-0007).
-4. **Fáze 2 (navazující):** 2D pole jako heatmap mód — minulé sloupce ze
-   uložených profilů (poctivé: tehdejší IV/OI), budoucí sloupce modelem
-   z posledního snapshotu s klesajícím τ. Není součástí této fáze.
+4. **Fáze 2 (implementováno 2026-07-22):** 2D pole jako heatmap mód „Dyn GEX"
+   vedle stávajících módů (OI, Vol OTM, …).
+   - **Minulé sloupce** = uložená historie 1D profilů (poctivé: tehdejší
+     IV/OI/τ); minuty bez profilu se forward-fillují, hodnoty se vzorkují
+     na cenách strikes lineární interpolací mřížky.
+   - **Budoucí sloupce** = nová řada `gexfield`: engine 1×/min spočítá pole
+     z POSLEDNÍHO snapshotu s klesajícím τ (sloupce po 10 min, strop 24 h
+     = PROJECTION_MAX_MINUTES frontendu; numpy vektorizace). Partice
+     `derived/{sym}/{exp}/gexfield/{den}.parquet` drží JEN poslední stav
+     (replace, ne append) — „co model kdy tvrdil" se nearchivuje, poctivá
+     je jen historie profilů. WS kanál `gexfield.{symbol}.{expiry}`,
+     bundle klíč `gexfield`.
+   - **Kreslí se do projekční zóny** (ADR-0006): ztlumení + svislý předěl
+     zdarma signalizují „model, ne měření". Bez pole (starší engine,
+     výpadek) spadne mód na konstantní projekci. Render musí u dynamické
+     projekce vypnout zkratku „zkopíruj poslední sloupec" (`projectionDynamic`).
+   - **Normalizace:** obě části sdílejí jmenovatel p99 naměřené části,
+     aby projekce nepřebila minulost jinou škálou; škály Linear/√/Log/Pow⅓
+     platí i pro tento mód.
+   - **Playback:** přetáčení ukazuje jen naměřenou historii profilů
+     (projekce se při přetáčení nekreslí, shodně s ADR-0006) — model je
+     nástroj pohledu dopředu „od teď".
+   - **Přejmenování:** přepínač overlay zdí se historicky jmenoval
+     „Dyn GEX", ale ukazuje zdi — přejmenován na „Zdi", název patří módu.
 
 ## Vědomé limity modelu (zobrazit v UI nápovědě)
 

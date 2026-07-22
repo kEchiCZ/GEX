@@ -87,10 +87,13 @@ export function renderGrid(grid: HeatmapGrid, style: HeatmapStyle): PixelBuffer 
   const width = grid.minutes
   const height = grid.strikes.length
   const dataMinutes = dataMinutesOf(grid)
+  // Dyn GEX pole (ADR-0009 fáze 2) má v projekci proměnlivé sloupce — zkratky
+  // „konstantní projekce" (blur cut, kopírování řádku) se musí vypnout
+  const constantProjection = !grid.projectionDynamic
   const blurRadius = 2
   const layerOf = (values?: Float32Array): Float32Array | undefined =>
     values && style === 'blobs'
-      ? gaussianBlur(values, width, height, blurRadius, dataMinutes)
+      ? gaussianBlur(values, width, height, blurRadius, constantProjection ? dataMinutes : width)
       : values
 
   const call = layerOf(grid.layers.call)
@@ -104,7 +107,7 @@ export function renderGrid(grid: HeatmapGrid, style: HeatmapStyle): PixelBuffer 
   // 5–10× (ráno: 120 naměřených vs. ~1300 projekčních sloupců, #155).
   // U Blobs sahá rozmazání přes hranici dat ještě `blurRadius` sloupců.
   const fillFrom =
-    dataMinutes < width
+    dataMinutes < width && constantProjection
       ? Math.min(width - 1, dataMinutes + (style === 'blobs' ? blurRadius : 0))
       : width
 

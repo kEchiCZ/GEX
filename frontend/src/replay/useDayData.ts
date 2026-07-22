@@ -20,7 +20,7 @@ import {
   fetchReplay,
   fetchReplayInputs,
 } from './loader'
-import type { GexProfileRow, LiveMinute, LiveMinuteRow, ProfileSource, ReplayDay, ReplayInputs } from './loader' // prettier-ignore
+import type { GexFieldRow, GexProfileRow, LiveMinute, LiveMinuteRow, ProfileSource, ReplayDay, ReplayInputs } from './loader' // prettier-ignore
 
 /** Daily pohled: strop stažených dnů (retence snapshotů je 14 dní, R4). */
 const DAILY_MAX_DAYS = 14
@@ -165,6 +165,8 @@ export interface DayData {
   lastMinuteIso: string | null
   /** Dyn GEX profil per minuta/koš (ADR-0009); null = bez profilů. */
   gexProfile: (GexProfileRow | null)[] | null
+  /** Modelované pole budoucích sloupců (ADR-0009 fáze 2); null = bez pole. */
+  gexField: GexFieldRow | null
 }
 
 function demoDay(): DayData {
@@ -193,6 +195,7 @@ function demoDay(): DayData {
     minuteLabels,
     lastMinuteIso: null, // demo den není ukotvený v čase → bez projekce
     gexProfile: null,
+    gexField: null,
   }
 }
 
@@ -215,6 +218,7 @@ function replayToDay(day: ReplayDay): DayData {
     minuteLabels,
     lastMinuteIso: day.minutes.at(-1) ?? null,
     gexProfile: day.gexProfile,
+    gexField: day.gexField,
   }
 }
 
@@ -321,6 +325,7 @@ export function useDayData(
               levels: partial.levels,
               flow: partial.flow,
               gexProfile: partial.gexProfile,
+              gexField: partial.gexField,
             })
             pending.delete(ts)
             known.add(ts)
@@ -395,6 +400,20 @@ export function useDayData(
       }
       scheduleFlush()
     }
+    // Modelované pole (ADR-0009 fáze 2) — jen poslední stav, starší se zahazuje
+    const onGexField = (data: ChannelData) => {
+      const colCount = Number(data.col_count)
+      if (!Array.isArray(data.values) || !Number.isFinite(colCount) || colCount <= 0) return
+      part(minuteKey(data.ts_min)).gexField = {
+        grid_start: Number(data.grid_start),
+        grid_step: Number(data.grid_step),
+        col_start: String(data.col_start),
+        col_step_min: Number(data.col_step_min),
+        col_count: colCount,
+        values: (data.values as unknown[]).map(Number),
+      }
+      scheduleFlush()
+    }
     // Živý spot (#128): svíčky odvozené ze spotu — jen overlay, bez přepočtu gridu.
     // Minuty se drží i po uzavření, dokud pro ně nedorazí skutečný bar (#143).
     const onSpot = (data: ChannelData) => {
@@ -429,12 +448,14 @@ export function useDayData(
     const flowCh = `flow.${symbol}`
     const spotCh = `spot.${symbol}`
     const gexProfileCh = `gexprofile.${symbol}.${expiry}`
+    const gexFieldCh = `gexfield.${symbol}.${expiry}`
     socket.subscribe(snapshotCh, onSnapshot)
     socket.subscribe(priceCh, onPrice)
     socket.subscribe(levelsCh, onLevels)
     socket.subscribe(flowCh, onFlow)
     socket.subscribe(spotCh, onSpot)
     socket.subscribe(gexProfileCh, onGexProfile)
+    socket.subscribe(gexFieldCh, onGexField)
     // Reconnect: dofetchni celý balík (mohli jsme zmeškat minuty)
     const offReconnect = socket.onReconnect(() => setReconcileTick((n) => n + 1))
     return () => {
@@ -445,6 +466,7 @@ export function useDayData(
       socket.unsubscribe(flowCh, onFlow)
       socket.unsubscribe(spotCh, onSpot)
       socket.unsubscribe(gexProfileCh, onGexProfile)
+      socket.unsubscribe(gexFieldCh, onGexField)
       offReconnect()
     }
   }, [symbol, expiry, timeframe, socket])
