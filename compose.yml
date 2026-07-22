@@ -49,6 +49,10 @@ services:
       GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:gexlens@postgres:5432/gexlens
       GEXLENS_DATA_DIR: /app/data
       GEXLENS_API_BASE: http://api:8000
+      # Základ symbolů a strop souběžných instrumentů jdou ladit z .env (#215:
+      # výchozí strop 3 = ES+NQ+MES; pro MNQ je potřeba 4)
+      GEXLENS_SYMBOLS: ${GEXLENS_SYMBOLS:-ES}
+      GEXLENS_MAX_INSTRUMENTS: ${GEXLENS_MAX_INSTRUMENTS:-3}
     volumes:
       - ./data:/app/data
     depends_on:
