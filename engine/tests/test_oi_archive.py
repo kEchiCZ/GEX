@@ -82,6 +82,41 @@ async def test_rerun_same_day_is_idempotent_upsert(repository: OIEodRepository) 
     assert repository.get_oi("ES", DAY_1, specs[0].strike, specs[0].right) == 750.0
 
 
+async def test_duplicate_series_merged_by_sum(repository: OIEodRepository) -> None:
+    """#215 (MES): dvě tradingClass série téhož (expiry, strike, right) se sloučí Σ OI.
+
+    Bez dedupe by duplicitní klíč v jedné dávce shodil PG upsert
+    (CardinalityViolation) a s ním celý pipeline symbolu."""
+    base = OptionContractSpec(
+        symbol="MES",
+        sec_type="FOP",
+        expiry="20260722",
+        strike=7500.0,
+        right="C",
+        exchange="CME",
+        trading_class="MS4C",
+        multiplier="5",
+    )
+    twin = OptionContractSpec(
+        symbol="MES",
+        sec_type="FOP",
+        expiry="20260722",
+        strike=7500.0,
+        right="C",
+        exchange="CME",
+        trading_class="EX4C",  # jiná série, stejný klíč archivu
+        multiplier="5",
+    )
+    fetcher = MockOIFetcher({base: 100.0, twin: 50.0})
+    archiver = OIArchiver(repository, fetcher, Settings())
+
+    result = await archiver.archive_day([base, twin], DAY_1)
+
+    assert result.written == 1  # jeden řádek po sloučení
+    assert repository.count_for_day("MES", DAY_1) == 1
+    assert repository.get_oi("MES", DAY_1, 7500.0, "C") == 150.0  # Σ obou sérií
+
+
 async def test_missing_oi_reported_not_written(repository: OIEodRepository) -> None:
     specs = contracts()
     values = {spec: 100.0 for spec in specs[:4]}  # poslední 2 kontrakty OI nedodají

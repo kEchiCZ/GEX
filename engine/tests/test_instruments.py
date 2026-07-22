@@ -318,3 +318,24 @@ async def test_oi_missing_alert_and_retry_counter(
     alerts = [data for channel, data in publisher.messages if channel == "alerts"]
     assert alerts and alerts[-1]["kind"] == "oi_missing"
     assert alerts[-1]["symbol"] == "CL"
+
+
+async def test_archive_failure_does_not_kill_pipeline(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#215 (MES): výjimka z archivace → alert + False, žádné probublání do cooldownu."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("MES", 7500.0, settings, writer, repository, publisher)
+
+    class ExplodingArchiver:
+        async def archive_day(self, contracts: object, day: dt.date) -> object:
+            raise RuntimeError("mock: CardinalityViolation")
+
+    pipeline.archiver = ExplodingArchiver()  # type: ignore[assignment]
+
+    ok = await pipeline.try_archive_oi(dt.date(2026, 7, 18))
+
+    assert ok is False  # pipeline žije dál, retry po OI_RETRY_CYCLES
+    alerts = [data for channel, data in publisher.messages if channel == "alerts"]
+    assert alerts and alerts[-1]["kind"] == "oi_missing"
+    assert alerts[-1]["symbol"] == "MES"
