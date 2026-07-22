@@ -26,6 +26,8 @@ test('vykreslí kompletní layout (SPEC 7.1)', async () => {
   makeApp()
 
   expect(screen.getAllByText('ES').length).toBeGreaterThan(0) // ticker + watchlist
+  // Watchlist ukazuje TWS symbol předního kontraktu v závorce (#189)
+  expect(screen.getByText(/\(ES[HMUZ]\d\)/)).toBeDefined()
   expect(screen.getByLabelText('Hlavní navigace')).toBeDefined()
   expect(screen.getByLabelText('Watchlist')).toBeDefined()
   expect(screen.getByLabelText('Timeframe')).toBeDefined()

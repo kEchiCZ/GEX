@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
-import { formatPnlUsd, setupPnlUsd, setupRrr } from '../api/setups'
+import { formatPct, formatPnlUsd, setupPnlPct, setupPnlUsd, setupRrr } from '../api/setups'
 import { pointValue } from '../instrument/tick'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
@@ -83,6 +83,15 @@ test('P/L setupu v USD na 1 kontrakt (#185)', () => {
   expect(formatPnlUsd(-580.125)).toBe('-580.12 $') // Math.round půlí k +∞
 })
 
+test('P/L v % notional == procentní pohyb ceny (#189)', () => {
+  // 0.48 R × 29 b = 13.92 b na entry 7501 → +0.1856 % (…× 50 $ / 375 050 $ dává totéž)
+  expect(setupPnlPct({ entry: 7501, stop: 7472, outcome_r: 0.48 })).toBeCloseTo(0.18557, 4)
+  expect(setupPnlPct({ entry: 7501, stop: 7472, outcome_r: null })).toBeNull()
+  expect(setupPnlPct({ entry: 0, stop: 10, outcome_r: 1 })).toBeNull()
+  expect(formatPct(0.18557)).toBe('+0.19 %')
+  expect(formatPct(-1.5)).toBe('-1.50 %')
+})
+
 test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
   const fetchMock = mockApi([SETUP_ROW])
   renderApp()
@@ -95,9 +104,12 @@ test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
   // Čas uzavření a P/L v USD na 1 kontrakt (#185): 0.48 R × 29 b × 50 $ = 696 $
   const closedCell = document.querySelector('[data-part="closed-ts"]')
   expect(closedCell?.textContent).toMatch(/\d{1,2}:\d{2}/) // closed_ts se zobrazuje
-  expect(document.querySelector('[data-part="pnl"]')?.textContent).toBe('+696 $')
-  // Celkový P/L instrumentu v hlavičce
+  // P/L buňka nese dolary i % notional (#189)
+  expect(document.querySelector('[data-part="pnl"]')?.textContent).toContain('+696 $')
+  expect(document.querySelector('[data-part="pnl"]')?.textContent).toContain('+0.19 %')
+  // Zvýrazněné souhrnné statistiky (#189)
   expect(screen.getByTestId('setups-total-pnl').textContent).toBe('+696 $')
+  expect(screen.getByTestId('setups-total-pct').textContent).toBe('+0.19 %')
   expect(screen.getByText(/1 kontrakt/)).toBeDefined()
 
   // Ruční hodnocení: 👍 pošle PATCH na /setups/ES/7/review

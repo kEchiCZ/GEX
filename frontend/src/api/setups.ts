@@ -65,6 +65,21 @@ export function formatPnlUsd(value: number): string {
   return `${rounded > 0 ? '+' : ''}${rounded} $`
 }
 
+/** P/L setupu v % NOTIONAL hodnoty kontraktu (#189).
+
+Notional = entry × hodnota bodu, takže procento je zároveň procentní pohyb
+ceny: outcome_r × riziko (body) / entry. Margin brokera neznáme — notional
+je jediná objektivní báze; počítá se s 1 kontraktem. */
+export function setupPnlPct(row: Pick<SetupRow, 'entry' | 'stop' | 'outcome_r'>): number | null {
+  if (row.outcome_r === null || row.entry === 0) return null
+  return ((row.outcome_r * Math.abs(row.entry - row.stop)) / row.entry) * 100
+}
+
+/** Formát procenta se znaménkem („+0.19 %"). */
+export function formatPct(value: number): string {
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)} %`
+}
+
 export async function fetchSetups(symbol: string): Promise<SetupRow[]> {
   const response = await fetch(`${API_BASE}/setups/${symbol}`)
   if (!response.ok) return []
