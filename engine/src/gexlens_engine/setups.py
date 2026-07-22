@@ -193,6 +193,8 @@ class SetupEngine:
                 "alerts",
                 {
                     "kind": "setup",
+                    # Proklik ve zvonečku (#186): výsledek vede na stránku Setupy
+                    "event": "closed",
                     "symbol": self.symbol,
                     "message": f"Setup #{item.stored.id} uzavřen: {label}, "
                     f"výsledek {result:+.2f} R",
@@ -254,6 +256,8 @@ class SetupEngine:
                 "alerts",
                 {
                     "kind": "setup",
+                    # Proklik ve zvonečku (#186): nový setup vede na graf instrumentu
+                    "event": "created",
                     "symbol": self.symbol,
                     "message": f"Nový setup {side} ({template}): entry {candidate.entry:g}, "
                     f"cíl {candidate.target:g}, stop {candidate.stop:g} "

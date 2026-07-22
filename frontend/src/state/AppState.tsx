@@ -25,6 +25,8 @@ export interface AlertMessage {
   symbol: string
   message: string
   ts: number
+  /** Setup alerty (#186): 'created' → proklik na graf, 'closed' → na Setupy. */
+  event?: string
 }
 
 export interface Toggles {

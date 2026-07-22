@@ -155,6 +155,40 @@ test('alert ve zvonečku ukazuje čas notifikace (issue #113)', async () => {
   expect(dropdown.textContent).toContain('ES')
 })
 
+test('setup alerty ve zvonečku proklikávají na graf / na Setupy (#186)', async () => {
+  mockApi([])
+  renderApp()
+  const ws = FakeWebSocket.latest()
+  act(() => {
+    ws.open()
+    ws.push('alerts', {
+      kind: 'setup',
+      event: 'created',
+      symbol: 'NQ',
+      message: 'Nový setup LONG (wall_bounce): entry 23000, cíl 23060, stop 22970',
+      ts: 1752822000,
+    })
+    ws.push('alerts', {
+      kind: 'setup',
+      event: 'closed',
+      symbol: 'NQ',
+      message: 'Setup #5 uzavřen: cíl zasažen, výsledek +2.00 R',
+      ts: 1752823000,
+    })
+  })
+
+  // Výsledek setupu → stránka Setupy daného instrumentu (vyhodnocení)
+  fireEvent.click(screen.getByRole('button', { name: /Notifikace/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Otevřít vyhodnocení setupů NQ' }))
+  expect(await screen.findByRole('heading', { name: 'Setupy — NQ' })).toBeDefined()
+
+  // Nový setup → graf instrumentu (karta + entry/cíl/stop linie)
+  fireEvent.click(screen.getByRole('button', { name: /Notifikace/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Otevřít graf NQ' }))
+  expect(await screen.findByTestId('data-source')).toBeDefined()
+  expect(screen.queryByRole('heading', { name: /Setupy —/ })).toBeNull()
+})
+
 test('WS událost setups.* přenačte setupy', async () => {
   const fetchMock = mockApi([])
   renderApp()
