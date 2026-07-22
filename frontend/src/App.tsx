@@ -104,6 +104,13 @@ function MainContent() {
     clampedNumber(180, 2000),
   )
   const dividerDragRef = useRef<{ x: number; width: number } | null>(null)
+  // Tažitelný vodorovný předěl nad spodními panely — sdílená výška všech (#169)
+  const [panelHeight, setPanelHeight] = usePersistentState(
+    'panelHeight',
+    84,
+    clampedNumber(50, 320),
+  )
+  const panelDragRef = useRef<{ y: number; height: number } | null>(null)
   // Logická velikost heatmapy — pravý profil sdílí její Y měřítko
   const [heatSize, setHeatSize] = useState({ width: 1200, height: 640 })
   // Deep-link: ?price=line&opacity=60 (i pro automatizované snímky) přebíjí uložený stav
@@ -540,6 +547,28 @@ function MainContent() {
               </div>
             )}
           </main>
+          {(toggles.vol || toggles.optVol || toggles.delta || toggles.deltaFlow) && (
+            <div
+              className="panel-divider-h"
+              role="separator"
+              aria-label="Výška spodních panelů"
+              aria-orientation="horizontal"
+              onPointerDown={(event) => {
+                panelDragRef.current = { y: event.clientY, height: panelHeight }
+                event.currentTarget.setPointerCapture(event.pointerId)
+              }}
+              onPointerMove={(event) => {
+                const drag = panelDragRef.current
+                if (!drag) return
+                // Tažení nahoru panely zvětšuje (předěl sedí nad nimi)
+                const next = drag.height + (drag.y - event.clientY)
+                setPanelHeight(Math.min(320, Math.max(50, Math.round(next))))
+              }}
+              onPointerUp={() => {
+                panelDragRef.current = null
+              }}
+            />
+          )}
           <BottomPanels
             data={panelSeries}
             visible={panelsVisible}
@@ -548,6 +577,7 @@ function MainContent() {
             // Shodné měřítko osy X s heatmapou i při projekci (ADR-0006) —
             // panely samy kreslí dál jen naměřená data
             totalMinutes={projectedGrid.minutes}
+            height={panelHeight}
           />
           {showReplay && <PlaybackBar playback={playback} />}
         </div>

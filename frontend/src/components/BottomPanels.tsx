@@ -12,7 +12,7 @@ CSS roztažení škáluje obsah stejně jako canvas heatmapy.
 */
 import { memo, useState } from 'react'
 import { baseBucketPx } from '../heatmap/view'
-import { barHeights, cumDeltaAreas, seriesPeak } from '../panels/geometry'
+import { CUM_DELTA_PAD, barHeights, cumDeltaAreas, seriesPeak } from '../panels/geometry'
 import { useCrosshair } from '../state/Crosshair'
 
 export interface PanelSeries {
@@ -40,7 +40,7 @@ export interface TimeTransform {
 
 const IDENTITY_TIME: TimeTransform = { offsetX: 0, zoomX: 1 }
 
-const PANEL_HEIGHT = 84
+const DEFAULT_height = 84
 
 const fmtInt = (value: number): string => Math.round(value).toLocaleString('cs-CZ')
 const fmtSigned = (value: number): string =>
@@ -113,6 +113,7 @@ function BottomPanelsBase({
   width = 1200,
   time = IDENTITY_TIME,
   totalMinutes,
+  height = DEFAULT_height,
 }: {
   data: PanelSeries
   visible: PanelsVisible
@@ -122,6 +123,8 @@ function BottomPanelsBase({
   /** Počet sloupců osy X heatmapy včetně projekce (ADR-0006). Panely kreslí
   jen svá data, ale měřítko musí být shodné, jinak se časové osy rozjedou. */
   totalMinutes?: number
+  /** Výška jednoho panelu — tažitelný předěl v App ji mění za běhu (#169). */
+  height?: number
 }) {
   const minutes = data.vol.length
   const axisMinutes = Math.max(minutes, totalMinutes ?? minutes)
@@ -147,26 +150,27 @@ function BottomPanelsBase({
   const handleMove = (key: string) => (event: React.PointerEvent<SVGSVGElement>) => {
     pointer.onPointerMove(event)
     const rect = event.currentTarget.getBoundingClientRect()
-    const cssScale = rect.height > 0 ? PANEL_HEIGHT / rect.height : 1
+    const cssScale = rect.height > 0 ? height / rect.height : 1
     setHoverY({ key, y: (event.clientY - rect.top) * cssScale })
   }
   const handleLeave = () => {
     pointer.clear()
     setHoverY(null)
   }
-  /** Hodnota na ose Y podle výšky kurzoru (signed = symetrická škála kolem nuly). */
+  /** Hodnota na ose Y podle výšky kurzoru (signed = symetrická škála kolem nuly,
+  se stejnou rezervou od okrajů jako plocha Cum Δ). */
   const axisValue = (key: string, peak: number, signed: boolean): React.ReactNode => {
     if (!hoverY || hoverY.key !== key) return null
-    const y = Math.min(PANEL_HEIGHT, Math.max(0, hoverY.y))
+    const y = Math.min(height, Math.max(0, hoverY.y))
     const value = signed
-      ? ((PANEL_HEIGHT / 2 - y) / (PANEL_HEIGHT / 2)) * peak
-      : ((PANEL_HEIGHT - y) / (PANEL_HEIGHT - 4)) * peak
+      ? ((height / 2 - y) / Math.max(1, height / 2 - CUM_DELTA_PAD)) * peak
+      : ((height - y) / (height - 4)) * peak
     return <PanelAxisValue y={y}>{signed ? fmtSigned(value) : fmtInt(value)}</PanelAxisValue>
   }
   /** Vodorovná crosshair linka na úrovni kurzoru (jen v najetém panelu, mimo transform). */
   const axisLineH = (key: string): React.ReactNode => {
     if (!hoverY || hoverY.key !== key) return null
-    const y = Math.min(PANEL_HEIGHT, Math.max(0, hoverY.y))
+    const y = Math.min(height, Math.max(0, hoverY.y))
     return (
       <line
         x1={0}
@@ -183,7 +187,7 @@ function BottomPanelsBase({
   const panels: React.ReactNode[] = []
 
   if (visible.vol) {
-    const heights = barHeights(data.vol, PANEL_HEIGHT - 4, volPeak)
+    const heights = barHeights(data.vol, height - 4, volPeak)
     panels.push(
       <section key="vol" className="bottom-panel" aria-label="Vol panel">
         <span className="panel-title muted">Vol</span>
@@ -191,24 +195,24 @@ function BottomPanelsBase({
         {axisValue('vol', volPeak, false)}
         <svg
           width={width}
-          height={PANEL_HEIGHT}
-          viewBox={`0 0 ${width} ${PANEL_HEIGHT}`}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
           onPointerMove={handleMove('vol')}
           onPointerLeave={handleLeave}
         >
           <g transform={transform}>
-            {heights.map((height, index) => (
+            {heights.map((barHeight, index) => (
               <rect
                 key={index}
                 x={(index + 0.5) * step - barWidth / 2}
-                y={PANEL_HEIGHT - height}
+                y={height - barHeight}
                 width={barWidth}
-                height={height}
+                height={barHeight}
                 fill={COLORS.vol}
               />
             ))}
-            <CrosshairLine x={pointer.crosshairX} height={PANEL_HEIGHT} />
+            <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('vol')}
         </svg>
@@ -217,8 +221,8 @@ function BottomPanelsBase({
   }
 
   if (visible.optVol) {
-    const callHeights = barHeights(data.optVolCall, PANEL_HEIGHT - 4, optPeak)
-    const putHeights = barHeights(data.optVolPut, PANEL_HEIGHT - 4, optPeak)
+    const callHeights = barHeights(data.optVolCall, height - 4, optPeak)
+    const putHeights = barHeights(data.optVolPut, height - 4, optPeak)
     panels.push(
       <section key="optvol" className="bottom-panel" aria-label="Opt Vol panel">
         <span className="panel-title muted">Opt Vol</span>
@@ -232,36 +236,36 @@ function BottomPanelsBase({
         {axisValue('optvol', optPeak, false)}
         <svg
           width={width}
-          height={PANEL_HEIGHT}
-          viewBox={`0 0 ${width} ${PANEL_HEIGHT}`}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
           onPointerMove={handleMove('optvol')}
           onPointerLeave={handleLeave}
         >
           <g transform={transform}>
-            {callHeights.map((height, index) => (
+            {callHeights.map((barHeight, index) => (
               <rect
                 key={`c${index}`}
                 data-part="optvol-call"
                 x={(index + 0.5) * step - barWidth / 2}
-                y={PANEL_HEIGHT - height}
+                y={height - barHeight}
                 width={barWidth / 2}
-                height={height}
+                height={barHeight}
                 fill={COLORS.call}
               />
             ))}
-            {putHeights.map((height, index) => (
+            {putHeights.map((barHeight, index) => (
               <rect
                 key={`p${index}`}
                 data-part="optvol-put"
                 x={(index + 0.5) * step}
-                y={PANEL_HEIGHT - height}
+                y={height - barHeight}
                 width={barWidth / 2}
-                height={height}
+                height={barHeight}
                 fill={COLORS.put}
               />
             ))}
-            <CrosshairLine x={pointer.crosshairX} height={PANEL_HEIGHT} />
+            <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('optvol')}
         </svg>
@@ -270,8 +274,8 @@ function BottomPanelsBase({
   }
 
   if (visible.deltaFlow) {
-    const callHeights = barHeights(data.deltaFlowCall, PANEL_HEIGHT - 4, flowPeak)
-    const putHeights = barHeights(data.deltaFlowPut, PANEL_HEIGHT - 4, flowPeak)
+    const callHeights = barHeights(data.deltaFlowCall, height - 4, flowPeak)
+    const putHeights = barHeights(data.deltaFlowPut, height - 4, flowPeak)
     panels.push(
       <section key="deltaflow" className="bottom-panel" aria-label="Δ Flow panel">
         <span className="panel-title muted">Δ Flow C/P</span>
@@ -285,36 +289,36 @@ function BottomPanelsBase({
         {axisValue('deltaflow', flowPeak, false)}
         <svg
           width={width}
-          height={PANEL_HEIGHT}
-          viewBox={`0 0 ${width} ${PANEL_HEIGHT}`}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
           onPointerMove={handleMove('deltaflow')}
           onPointerLeave={handleLeave}
         >
           <g transform={transform}>
-            {callHeights.map((height, index) => (
+            {callHeights.map((barHeight, index) => (
               <rect
                 key={`c${index}`}
                 data-part="deltaflow-call"
                 x={(index + 0.5) * step - barWidth / 2}
-                y={PANEL_HEIGHT - height}
+                y={height - barHeight}
                 width={barWidth / 2}
-                height={height}
+                height={barHeight}
                 fill={COLORS.call}
               />
             ))}
-            {putHeights.map((height, index) => (
+            {putHeights.map((barHeight, index) => (
               <rect
                 key={`p${index}`}
                 data-part="deltaflow-put"
                 x={(index + 0.5) * step}
-                y={PANEL_HEIGHT - height}
+                y={height - barHeight}
                 width={barWidth / 2}
-                height={height}
+                height={barHeight}
                 fill={COLORS.put}
               />
             ))}
-            <CrosshairLine x={pointer.crosshairX} height={PANEL_HEIGHT} />
+            <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('deltaflow')}
         </svg>
@@ -323,7 +327,7 @@ function BottomPanelsBase({
   }
 
   if (visible.delta) {
-    const areas = cumDeltaAreas(data.cumDelta, minutes * step, PANEL_HEIGHT)
+    const areas = cumDeltaAreas(data.cumDelta, minutes * step, height)
     panels.push(
       <section key="cumdelta" className="bottom-panel" aria-label="Cum Δ panel">
         <span className="panel-title muted">Cum Δ</span>
@@ -331,8 +335,8 @@ function BottomPanelsBase({
         {axisValue('cumdelta', cumPeak, true)}
         <svg
           width={width}
-          height={PANEL_HEIGHT}
-          viewBox={`0 0 ${width} ${PANEL_HEIGHT}`}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
           onPointerMove={handleMove('cumdelta')}
           onPointerLeave={handleLeave}
@@ -348,7 +352,7 @@ function BottomPanelsBase({
           <g transform={transform}>
             <polygon points={areas.positive} fill={COLORS.positive} data-part="cumdelta-positive" />
             <polygon points={areas.negative} fill={COLORS.negative} data-part="cumdelta-negative" />
-            <CrosshairLine x={pointer.crosshairX} height={PANEL_HEIGHT} />
+            <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('cumdelta')}
         </svg>

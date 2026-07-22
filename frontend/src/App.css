@@ -536,6 +536,20 @@ body {
   background: var(--accent);
 }
 
+/* Vodorovný předěl nad spodními panely — tažením mění jejich výšku (#169) */
+.panel-divider-h {
+  height: 6px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  background: var(--border);
+  touch-action: none;
+}
+
+.panel-divider-h:hover,
+.panel-divider-h:active {
+  background: var(--accent);
+}
+
 /* Hlavička jako překryv — svg profilu začíná na stejné výšce jako canvas
    heatmapy, jinak by sdílená osa Y byla posunutá o výšku hlavičky */
 .profile-header {
