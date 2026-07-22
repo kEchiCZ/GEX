@@ -84,6 +84,17 @@ LEVELS_SCHEMA = pa.schema(
     ]
 )
 
+# Sekundární zdi (ADR-0008, #92) — VLASTNÍ řada, ne sloupce v LEVELS_SCHEMA:
+# přidání sloupce by rozbilo čtení existujících denních partic
+# (pq.read_table(..., schema=...)), stejné omezení jako u barů v ADR-0005
+LEVELS2_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("call_wall_2", pa.float64()),
+        ("put_wall_2", pa.float64()),
+    ]
+)
+
 
 @dataclass(frozen=True)
 class SnapshotRow:
@@ -150,6 +161,15 @@ class LevelsRow:
     put_wall: float | None
     centroid: float | None
     total_gex: float
+
+
+@dataclass(frozen=True)
+class Levels2Row:
+    """Sekundární zdi jedné minuty (ADR-0008, #92) — None = druhá zeď není."""
+
+    ts_min: dt.datetime
+    call_wall_2: float | None
+    put_wall_2: float | None
 
 
 @dataclass(frozen=True)
@@ -257,6 +277,16 @@ class SnapshotWriter:
             self._settings.derived_dir / symbol / expiry / "levels" / f"{day.isoformat()}.parquet"
         )
         buffer = self._buffer(path, LEVELS_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_levels2(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[Levels2Row]
+    ) -> Path:
+        """Přidá sekundární zdi minuty do partice derived/{sym}/{exp}/levels2 (ADR-0008)."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "levels2" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, LEVELS2_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_bars(self, symbol: str, day: dt.date, bars: Sequence[BarLike]) -> Path:

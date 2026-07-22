@@ -24,6 +24,7 @@ from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.parquet_store import (
     FlowRowLike,
+    Levels2Row,
     LevelsRow,
     SnapshotRow,
     SnapshotWriter,
@@ -180,6 +181,15 @@ class EngineRuntime:
         await asyncio.to_thread(
             self.writer.write_levels, self.symbol, self.expiry, day, [levels_row]
         )
+        # Sekundární zdi (ADR-0008) — vlastní řada, ať se nemění LEVELS_SCHEMA
+        levels2_row = Levels2Row(
+            ts_min=ts_min,
+            call_wall_2=levels.call_wall_2,
+            put_wall_2=levels.put_wall_2,
+        )
+        await asyncio.to_thread(
+            self.writer.write_levels2, self.symbol, self.expiry, day, [levels2_row]
+        )
         self.last_levels = levels_row
 
         # 3) FlowΔ/CumΔ minuta + 4) bary podkladu — jen aktivní expirace
@@ -194,6 +204,9 @@ class EngineRuntime:
                     "put_wall": levels.put_wall,
                     "centroid": levels.centroid,
                     "total_gex": levels.total_gex,
+                    # Sekundární zdi (ADR-0008) — aditivní pole, starší klienti ignorují
+                    "call_wall_2": levels.call_wall_2,
+                    "put_wall_2": levels.put_wall_2,
                 },
             )
             logger.info(
@@ -238,6 +251,9 @@ class EngineRuntime:
                 "put_wall": levels.put_wall,
                 "centroid": levels.centroid,
                 "total_gex": levels.total_gex,
+                # Sekundární zdi (ADR-0008) — aditivní pole, starší klienti ignorují
+                "call_wall_2": levels.call_wall_2,
+                "put_wall_2": levels.put_wall_2,
             },
         )
         await self.publisher.publish(

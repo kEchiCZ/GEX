@@ -6,8 +6,8 @@ import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
 import { DEFAULT_VIEW } from './view'
 import type { ViewTransform } from './view'
 import { demoGrid } from './demo'
-import { formatLevel, fractionalRow, pricePolyline, tickIndices, visibleOverlays } from './overlays'
-import type { OverlayData } from './overlays'
+import { formatLevel, fractionalRow, pairWallSeries, pricePolyline, resolveSecondaryWalls, tickIndices, visibleOverlays } from './overlays' // prettier-ignore
+import type { LevelLine, OverlayData } from './overlays'
 
 // ── Čisté helpery ──────────────────────────────────────────────────
 
@@ -24,6 +24,51 @@ test('formatLevel: cenovka bez plovoucího šumu', () => {
   expect(formatLevel(7628.166920999555)).toBe('7628.17')
   expect(formatLevel(7600)).toBe('7600')
   expect(formatLevel(7581.5)).toBe('7581.5')
+})
+
+test('pairWallSeries: přeskakující zeď → dvě úrovňově stabilní linie (ADR-0008, #92)', () => {
+  // Reálný případ 17. 7.: primární put wall alternoval 7450 ↔ 7500,
+  // sekundární je vždy ta druhá — spárováno po úrovních žádná linie neskáče
+  const primary = [7450, 7500, 7450, 7500, 7450]
+  const secondary = [7500, 7450, 7500, 7450, 7500]
+  const paired = pairWallSeries(primary, secondary)
+  expect(paired.upper).toEqual([7500, 7500, 7500, 7500, 7500])
+  expect(paired.lower).toEqual([7450, 7450, 7450, 7450, 7450])
+  expect(paired.primaryIsUpper).toBe(false) // poslední primární (7450) leží dole
+
+  // Minuty s jediným kandidátem PO té, co byly vidět obě zdi: hodnota jde na
+  // linii s bližší poslední hodnotou — linie zůstávají úrovňově stabilní
+  const mixed = pairWallSeries([7500, 7450, 7500, 7450], [7450, null, null, 7500])
+  expect(mixed.upper).toEqual([7500, null, 7500, 7500])
+  expect(mixed.lower).toEqual([7450, 7450, null, 7450])
+
+  const empty = pairWallSeries([null, null], [null, null])
+  expect(empty.upper).toEqual([null, null])
+  expect(empty.lower).toEqual([null, null])
+})
+
+test('resolveSecondaryWalls: zapnuto páruje, vypnuto vrací dnešní chování (ADR-0008)', () => {
+  const walls: LevelLine[] = [
+    { name: 'put_wall', color: '#f0616d', series: [7450, 7500, 7450] },
+    { name: 'put_wall_2', color: 'x', dash: [2, 3], series: [7500, 7450, 7500] },
+    { name: 'call_wall', color: '#3ecf8e', series: [7650, 7650, 7650] },
+    { name: 'call_wall_2', color: 'y', dash: [2, 3], series: [null, null, null] },
+  ]
+  const on = resolveSecondaryWalls(walls, true)
+  // put pár se spáruje: primární styl na linii s poslední primární hodnotou (7450 dole)
+  const primaryPut = on.find((line) => line.name === 'put_wall')!
+  expect(primaryPut.series).toEqual([7450, 7450, 7450])
+  const altPut = on.find((line) => line.name === 'walls:put_wall_2')!
+  expect(altPut.series).toEqual([7500, 7500, 7500])
+  expect(altPut.dash).toEqual([2, 3])
+  // call bez sekundárních hodnot zůstává jedna linie beze změny
+  expect(on.find((line) => line.name === 'call_wall')!.series).toEqual([7650, 7650, 7650])
+  expect(on.some((line) => line.name === 'walls:call_wall_2')).toBe(false)
+
+  // Vypnuto: _2 linie zmizí, primární se nemění (včetně přeskakování)
+  const off = resolveSecondaryWalls(walls, false)
+  expect(off.map((line) => line.name)).toEqual(['put_wall', 'call_wall'])
+  expect(off[0].series).toEqual([7450, 7500, 7450])
 })
 
 test('fractionalRow interpoluje mezi strikes a ořezává okraje', () => {

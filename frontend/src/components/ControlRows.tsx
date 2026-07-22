@@ -4,6 +4,7 @@ import type { Toggles } from '../state/AppState'
 
 const TOGGLE_LABELS: Record<keyof Toggles, string> = {
   dynGex: 'Dyn GEX',
+  secondaryWall: '2. zeď',
   gexLevels: 'GEX Levels',
   sessions: 'Sessions',
   vol: 'Vol',

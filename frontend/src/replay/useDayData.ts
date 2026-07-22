@@ -370,6 +370,9 @@ export function useDayData(
         centroid: numOrNull(data.centroid),
         call_wall: numOrNull(data.call_wall),
         put_wall: numOrNull(data.put_wall),
+        // Sekundární zdi (ADR-0008) — starší engine pole neposílá → null
+        call_wall_2: numOrNull(data.call_wall_2),
+        put_wall_2: numOrNull(data.put_wall_2),
       }
       scheduleFlush()
     }

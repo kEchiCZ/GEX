@@ -29,6 +29,8 @@ export interface AlertMessage {
 
 export interface Toggles {
   dynGex: boolean
+  /** Sekundární zeď (ADR-0008, #92): dvě rovnocenné koncentrace jako dvě linie. */
+  secondaryWall: boolean
   gexLevels: boolean
   sessions: boolean
   vol: boolean
@@ -145,6 +147,7 @@ function initialFromUrl(): { view: AppView; theme: Theme | null } {
 /** Výchozí stav přepínačů (persistuje se jako celek, ADR-0007). */
 const DEFAULT_TOGGLES: Toggles = {
   dynGex: true,
+  secondaryWall: true,
   gexLevels: true,
   sessions: false,
   vol: true,

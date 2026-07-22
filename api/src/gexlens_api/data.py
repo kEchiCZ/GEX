@@ -52,6 +52,13 @@ class DataRepository:
         )
         return self._read(path)
 
+    def levels2(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """Sekundární zdi (ADR-0008, #92) — vlastní řada vedle levels."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "levels2" / f"{day.isoformat()}.parquet"
+        )
+        return self._read(path)
+
     def flow(self, symbol: str, day: dt.date) -> pd.DataFrame:
         path = self._settings.derived_dir / symbol / "flow" / f"{day.isoformat()}.parquet"
         return self._read(path)
