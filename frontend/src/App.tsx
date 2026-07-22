@@ -626,6 +626,17 @@ function MainContent() {
 
 function Shell() {
   const { theme, priceInfo } = useAppState()
+  // Zoom stránky (Ctrl+kolečko / pinch na touchpadu chodí jako ctrl+wheel) nesmí
+  // zvětšovat UI aplikace — zoomovat smí jen graf a s ním svázané osy (#179).
+  // React onWheel handlery grafu/profilu běží dál; klávesové Ctrl +/− zůstává
+  // jako přístupová pojistka (to prohlížeč zablokovat nedá).
+  useEffect(() => {
+    const blockPageZoom = (event: WheelEvent) => {
+      if (event.ctrlKey) event.preventDefault()
+    }
+    window.addEventListener('wheel', blockPageZoom, { passive: false })
+    return () => window.removeEventListener('wheel', blockPageZoom)
+  }, [])
   return (
     <div className="app" data-theme={theme}>
       <Sidebar />
