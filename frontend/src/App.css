@@ -598,15 +598,19 @@ body {
   position: relative;
   width: 100%;
   height: 100%;
+  /* Při tažení předělů drží canvasy staré px rozměry, než doběhne měření —
+     přesah se ořízne místo roztažení rastru (#173) */
+  overflow: hidden;
 }
 
+/* Rozměry canvasů řídí inline px styly z Heatmap (#173) — CSS 100 % by při
+   změně layoutu na mezisnímek roztáhlo starý raster (mikropohyb obsahu) */
 .heatmap-canvas,
 .heatmap-overlay,
 .heatmap-dynamic {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  top: 0;
+  left: 0;
 }
 
 .heatmap-overlay {
