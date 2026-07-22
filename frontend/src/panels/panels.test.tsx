@@ -32,14 +32,17 @@ test('barHeights normalizuje maximem', () => {
   expect(barHeights([100, 200, 400], 80)).toEqual([20, 40, 80])
 })
 
-test('cumDeltaAreas dělí plochu nad/pod nulou', () => {
+test('cumDeltaAreas dělí plochu nad/pod nulou a drží rezervu od okrajů (#169)', () => {
   const areas = cumDeltaAreas([100, -100], 200, 80)
   expect(areas.zeroY).toBe(40)
-  // Kladná plocha: první bod nad nulou (y=0), druhý na nule
-  expect(areas.positive).toContain('50,0')
+  // Extrém končí CUM_DELTA_PAD (6 px) od okraje — trendující řada nesmí „jet po hraně"
+  expect(areas.positive).toContain('50,6')
   expect(areas.positive).toContain('150,40')
-  // Záporná plocha: druhý bod pod nulou (y=80)
-  expect(areas.negative).toContain('150,80')
+  expect(areas.negative).toContain('150,74')
+  // Explicitní pad = 0 dá původní chování až k okrajům
+  const edge = cumDeltaAreas([100, -100], 200, 80, 0)
+  expect(edge.positive).toContain('50,0')
+  expect(edge.negative).toContain('150,80')
 })
 
 // ── Panely: sdílená osa, C/P barvy, plochy ─────────────────────────
@@ -117,6 +120,48 @@ test('checkboxy v horní liště řídí panely (integrace přes App)', async ()
   fireEvent.click(screen.getByLabelText('Vol'))
   expect(screen.queryByLabelText('Vol panel')).toBeNull()
   expect(screen.getByLabelText('Opt Vol panel')).toBeDefined() // ostatní zůstávají
+})
+
+test('panely respektují výšku z props (#169)', () => {
+  render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={DATA}
+        visible={{ vol: true, optVol: false, delta: true, deltaFlow: false }}
+        width={400}
+        height={160}
+      />
+    </CrosshairProvider>,
+  )
+  const volSvg = screen.getByLabelText('Vol panel').querySelector('svg')!
+  expect(volSvg.getAttribute('height')).toBe('160')
+  expect(volSvg.getAttribute('viewBox')).toBe('0 0 400 160')
+  // Cum Δ nulová linka sedí ve středu nové výšky
+  const zero = screen.getByTestId('cumdelta-zero')
+  expect(zero.getAttribute('y1')).toBe('80')
+})
+
+test('vodorovný předěl mění výšku spodních panelů tažením (#169)', () => {
+  const socket = new LiveSocket('ws://test/ws/live', {
+    webSocketFactory: (url) => new FakeWebSocket(url),
+  })
+  render(<App socket={socket} />)
+  const divider = screen.getByRole('separator', { name: 'Výška spodních panelů' })
+  const volSvg = () => screen.getByLabelText('Vol panel').querySelector('svg')!
+  expect(volSvg().getAttribute('height')).toBe('84')
+
+  fireEvent.pointerDown(divider, { clientY: 600, pointerId: 1 })
+  fireEvent.pointerMove(divider, { clientY: 540, pointerId: 1 }) // tažení nahoru → vyšší panely
+  fireEvent.pointerUp(divider, { pointerId: 1 })
+  expect(volSvg().getAttribute('height')).toBe('144')
+
+  // Meze: nejde stáhnout pod 50
+  fireEvent.pointerDown(divider, { clientY: 300, pointerId: 1 })
+  fireEvent.pointerMove(divider, { clientY: 900, pointerId: 1 })
+  fireEvent.pointerUp(divider, { pointerId: 1 })
+  expect(volSvg().getAttribute('height')).toBe('50')
+  // Výška se persistuje (ADR-0007)
+  expect(window.localStorage.getItem('gexlens.panelHeight')).toBe('50')
 })
 
 test('málo košů se neroztahuje na šířku — ukotvení k pravému okraji (issue #102)', () => {
@@ -207,9 +252,10 @@ test('panel: hodnota na pravé ose Y podle výšky kurzoru (issue #107)', () => 
     screen.getByLabelText('Cum Δ panel').querySelector('[data-testid="panel-crosshair-h"]'),
   ).toBeNull()
 
-  // Cum Δ: symetrická škála kolem nuly (cumPeak=200); y=63 → ((42−63)/42)×200 = −100
+  // Cum Δ: symetrická škála kolem nuly s rezervou CUM_DELTA_PAD (#169);
+  // cumPeak=200, škála (42−6)=36 px na peak; y=60 → ((42−60)/36)×200 = −100
   const cumSvg = screen.getByLabelText('Cum Δ panel').querySelector('svg')!
-  fireEvent.pointerMove(cumSvg, { clientX: 30, clientY: 63 })
+  fireEvent.pointerMove(cumSvg, { clientX: 30, clientY: 60 })
   expect(screen.getByLabelText('Cum Δ panel').querySelector('.panel-axis-value')!.textContent).toBe(
     '-100',
   )

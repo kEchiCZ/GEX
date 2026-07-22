@@ -12,7 +12,7 @@ výchozí přepínače), což uživatele nutilo nastavení opakovat.
    Klíče s prefixem `gexlens.` (např. `gexlens.interval`, `gexlens.toggles`).
 2. **Co se persistuje:** timeframe (Intraday/Daily), interval (1m…1d), mód/škála/
    walls/styl/contours heatmapy, styl a viditelnost ceny, přepínače (Toggles jako
-   celek), téma, aktivní symbol, šířka pravého panelu.
+   celek), téma, aktivní symbol, šířka pravého panelu, výška spodních panelů (#169).
 3. **Co se NEpersistuje:** obrazovka (`view` — řídí ji URL deep-link, výchozí je
    vždy Graf), stav replay lišty, anotační nástroj, pan/zoom pohledu (ten se
    odvíjí od dat dne a auto-fitu).
