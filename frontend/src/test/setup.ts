@@ -1,4 +1,9 @@
-/** Vitest setup: jsdom polyfilly. */
+/** Vitest setup: jsdom polyfilly + izolace localStorage. */
+import { beforeEach } from 'vitest'
+
+// Persistence UI voleb (ADR-0007) jinak prosakuje mezi testy v jednom souboru —
+// jsdom drží localStorage po celý běh souboru
+beforeEach(() => window.localStorage.clear())
 
 // jsdom neimplementuje PointerEvent — bez něj fireEvent.pointerMove nenese souřadnice
 if (typeof window !== 'undefined' && window.PointerEvent === undefined) {
