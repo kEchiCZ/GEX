@@ -671,6 +671,7 @@ function MainContent() {
           aggregate={day.source === 'replay' ? aggregateOn : null}
           onAggregateToggle={handleAggregateToggle}
           gexProfile={gexProfileRow}
+          axisStrikes={day.grid.strikes}
         />
       </div>
     </>

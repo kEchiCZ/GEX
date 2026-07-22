@@ -62,6 +62,7 @@ function StrikeProfileBase({
   aggregate = null,
   onAggregateToggle,
   gexProfile = null,
+  axisStrikes = null,
 }: {
   rows: ProfileRow[]
   spot: number | null
@@ -77,6 +78,10 @@ function StrikeProfileBase({
   onAggregateToggle?: () => void
   /** Dyn GEX profil aktuální minuty (ADR-0009); null = vrstva nedostupná. */
   gexProfile?: GexProfileRow | null
+  /** Strikes HEATMAPY vzestupně — sdílená osa Y (#213). Řádky panelu (Σ souhrn
+  = sjednocení expirací) můžou mít jinou sadu než graf; bez kotvení k této ose
+  by se cenové osy obou panelů rozjely. Null = osa z vlastních řádků (legacy). */
+  axisStrikes?: number[] | null
 }) {
   const [zoom, setZoom] = useState<1 | 2 | 4>(1)
   const [scaleMode, setScaleMode] = useState<'rel' | 'abs'>('rel')
@@ -95,16 +100,17 @@ function StrikeProfileBase({
   // Nejvyšší strike nahoře — stejná orientace jako heatmapa
   const ordered = useMemo(() => [...rows].sort((a, b) => b.strike - a.strike), [rows])
   const strikesAscending = useMemo(() => ordered.map((row) => row.strike).reverse(), [ordered])
+  // Osa Y (#213): se sdíleným pohledem VŽDY strikes heatmapy — vlastní řádky
+  // (Σ souhrn přes expirace) můžou mít jinou sadu/počet a osa by se rozjela
+  const axis = yView && axisStrikes && axisStrikes.length > 0 ? axisStrikes : strikesAscending
   // Krok řádku: se sdílenou osou přesně kopíruje heatmapu (baseHeight/n × zoomY)
   const rowHeight =
-    ordered.length > 0
+    axis.length > 0
       ? yView
-        ? (yView.baseHeight / ordered.length) * yView.zoomY
-        : height / ordered.length
+        ? (yView.baseHeight / axis.length) * yView.zoomY
+        : height / axis.length
       : 0
   const offsetY = yView?.offsetY ?? 0
-  /** Střed řádku i (descending pořadí) — shodný vzorec s heatmap rowToY. */
-  const rowCenterY = (index: number): number => (index + 0.5) * rowHeight + offsetY
 
   // Úprava Y osy grafu tažením/kolečkem na profilu (stejná matematika jako heatmap
   // osa) — jen nad pruhem s hodnotami strikes, zbytek panelu osu nehýbe (#181)
@@ -155,11 +161,17 @@ function StrikeProfileBase({
   // Popisky (strike i hodnoty) jen na každém k-tém řádku, ať se nepřekrývají
   const labelEvery = Math.max(1, Math.ceil(16 / Math.max(1, rowHeight)))
 
-  /** Cena → Y v souřadnicích profilu (shodné s heatmap rowToY). */
+  /** Cena → Y v souřadnicích profilu (shodné s heatmap rowToY, osa = `axis`). */
   const priceToY = (price: number): number | null => {
-    const row = fractionalRow(strikesAscending, price)
-    if (row === null || ordered.length === 0) return null
-    return (ordered.length - 1 - row + 0.5) * rowHeight + offsetY
+    const row = fractionalRow(axis, price)
+    if (row === null || axis.length === 0) return null
+    return (axis.length - 1 - row + 0.5) * rowHeight + offsetY
+  }
+  /** Střed řádku pro strike — mimo obálku osy null (fractionalRow by přilepil
+  hodnotu na kraj a Σ řádky cizí expirace by se vršily na okrajích). */
+  const strikeCenterY = (strike: number): number | null => {
+    if (axis.length === 0 || strike < axis[0] || strike > axis[axis.length - 1]) return null
+    return priceToY(strike)
   }
   const spotY = spot === null ? null : priceToY(spot)
 
@@ -172,9 +184,9 @@ function StrikeProfileBase({
       halfWidth,
       Math.max(10, halfWidth - LABEL_SPACE) * 0.95,
     )
-    // priceToY závisí na rowHeight/offsetY — pokryto závislostmi níže
+    // priceToY závisí na axis/rowHeight/offsetY — pokryto závislostmi níže
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gexOn, gexProfile, ordered, rowHeight, offsetY, halfWidth])
+  }, [gexOn, gexProfile, ordered, axis, rowHeight, offsetY, halfWidth])
 
   const hovered = crosshair
     ? (ordered.find((row) => row.strike === crosshair.strike) ?? null)
@@ -245,11 +257,13 @@ function StrikeProfileBase({
           {/* popisky strikes (každý k-tý, ať se nepřekrývají) */}
           {ordered.map((row, index) => {
             if (index % labelEvery !== 0) return null
+            const centerY = strikeCenterY(row.strike)
+            if (centerY === null) return null
             return (
               <text
                 key={`label-${row.strike}`}
                 x={4}
-                y={rowCenterY(index) + 3}
+                y={centerY + 3}
                 fontSize={10}
                 fill="#7d8596"
                 data-part="strike-label"
@@ -260,9 +274,10 @@ function StrikeProfileBase({
           })}
           {ordered.map((row, index) => {
             const bar = geometry.get(row.strike)
-            if (!bar) return null
+            const centerY = strikeCenterY(row.strike)
+            if (!bar || centerY === null) return null
             const barHeight = Math.max(1, rowHeight - ROW_GAP)
-            const y = rowCenterY(index) - barHeight / 2
+            const y = centerY - barHeight / 2
             const highlighted = crosshair?.strike === row.strike
             // Kolizní logika popisků hodnot (#181): když se číslo nevejde vedle
             // pruhu (put by zasáhl do strike popisků, call za pravý okraj),
@@ -329,7 +344,7 @@ function StrikeProfileBase({
                 {index % labelEvery === 0 && row.callVolComponent + row.callOiComponent > 0 && (
                   <text
                     x={callOutside ? callEnd + 3 : callEnd - 3}
-                    y={rowCenterY(index) + 3}
+                    y={centerY + 3}
                     fontSize={9}
                     fill={callOutside ? COLORS.callVol : '#12151c'}
                     textAnchor={callOutside ? 'start' : 'end'}
@@ -341,7 +356,7 @@ function StrikeProfileBase({
                 {index % labelEvery === 0 && row.putVolComponent + row.putOiComponent > 0 && (
                   <text
                     x={putOutside ? putEnd - 3 : putEnd + 3}
-                    y={rowCenterY(index) + 3}
+                    y={centerY + 3}
                     fontSize={9}
                     fill={putOutside ? COLORS.putVol : '#12151c'}
                     textAnchor={putOutside ? 'end' : 'start'}
@@ -419,14 +434,14 @@ function StrikeProfileBase({
               )}
             </g>
           )}
-          {/* cenová linka */}
+          {/* cenová linka — neutrální šedá, žlutá patří flipům (#213) */}
           {spotY !== null && (
             <line
               x1={0}
               y1={spotY}
               x2={width}
               y2={spotY}
-              stroke="#e8c14b"
+              stroke="#d7dce6"
               strokeDasharray="4 3"
               data-testid="profile-price-line"
             />
