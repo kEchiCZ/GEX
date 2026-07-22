@@ -290,10 +290,11 @@ export function Heatmap({
       context.setLineDash([])
     }
 
-    // Sessions markery (svislé čáry s popisky); sousední se střídají ve dvou
-    // řádcích, aby se popisky hustých seancí nepřekrývaly
+    // Sessions markery (svislé čáry s popisky): všechny popisky zarovnané
+    // v JEDNOM horním řádku; víc seancí na téže minutě se vypisuje pod sebe
+    // (svislý sloupec u markeru), ne do dlouhého řádku „A · B · C" (#193)
     context.font = '11px sans-serif'
-    ;(overlays.sessions ?? []).forEach((session, order) => {
+    for (const session of overlays.sessions ?? []) {
       const x = minuteToX(session.minuteIdx) - 0.5 * scaleX
       context.strokeStyle = 'rgba(125,133,150,0.6)'
       context.setLineDash([6, 4])
@@ -303,8 +304,10 @@ export function Heatmap({
       context.stroke()
       context.setLineDash([])
       context.fillStyle = 'rgba(125,133,150,0.9)'
-      context.fillText(session.label, x + 4, order % 2 === 0 ? 12 : 25)
-    })
+      session.label.split(' · ').forEach((label, row) => {
+        context.fillText(label, x + 4, 12 + row * 13)
+      })
+    }
 
     // Předěl mezi naměřenými daty a projekcí (ADR-0006)
     const dataMinutes = grid.dataMinutes ?? grid.minutes
