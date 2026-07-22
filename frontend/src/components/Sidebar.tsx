@@ -5,6 +5,7 @@ přepne aktivní ticker celé aplikace (graf, expirace, dashboard).
 */
 import { useEffect, useState } from 'react'
 import { API_BASE, APP_VERSION } from '../config'
+import { frontContractCode } from '../instrument/expiry'
 import { useAppState } from '../state/AppState'
 import type { AppView } from '../state/AppState'
 
@@ -128,29 +129,38 @@ export function Sidebar() {
             <h2>Watchlist</h2>
             {rows.length === 0 && <p className="muted">Prázdný</p>}
             <ul>
-              {rows.map((entry) => (
-                <li key={entry.symbol} className="watchlist-row">
-                  <button
-                    className={
-                      entry.symbol === activeSymbol ? 'watchlist-symbol active' : 'watchlist-symbol'
-                    }
-                    onClick={() => setSymbol(entry.symbol)}
-                    aria-label={`Přepnout na ${entry.symbol}`}
-                  >
-                    {entry.symbol}
-                  </button>
-                  {entry.id !== null && (
+              {rows.map((entry) => {
+                // TWS lokální symbol předního kontraktu (#189) — zadáním do
+                // Interactive Brokers najdeš stejný graf (ES → ESU6)
+                const twsCode = frontContractCode(entry.symbol, new Date())
+                return (
+                  <li key={entry.symbol} className="watchlist-row">
                     <button
-                      className="watchlist-remove"
-                      aria-label={`Odebrat ${entry.symbol}`}
-                      title="Odebrat z watchlistu"
-                      onClick={() => void removeSymbol(entry as WatchlistItem)}
+                      className={
+                        entry.symbol === activeSymbol
+                          ? 'watchlist-symbol active'
+                          : 'watchlist-symbol'
+                      }
+                      onClick={() => setSymbol(entry.symbol)}
+                      aria-label={`Přepnout na ${entry.symbol}`}
+                      title={twsCode ? `TWS: ${twsCode}` : undefined}
                     >
-                      ×
+                      {entry.symbol}
+                      {twsCode && <span className="muted tws-code"> ({twsCode})</span>}
                     </button>
-                  )}
-                </li>
-              ))}
+                    {entry.id !== null && (
+                      <button
+                        className="watchlist-remove"
+                        aria-label={`Odebrat ${entry.symbol}`}
+                        title="Odebrat z watchlistu"
+                        onClick={() => void removeSymbol(entry as WatchlistItem)}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
             <form
               className="watchlist-add"

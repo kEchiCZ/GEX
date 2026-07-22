@@ -795,6 +795,38 @@ body {
   font-size: 16px;
 }
 
+/* Zvýrazněné souhrnné statistiky (#189) — dlaždice s velkými hodnotami */
+.setups-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.setups-stats .stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 14px;
+  min-width: 92px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.setups-stats .stat-label {
+  font-size: 11px;
+}
+
+.setups-stats .stat-value {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.pnl-pct {
+  font-size: 11px;
+}
+
 .setups-table-wrap {
   overflow-x: auto;
 }

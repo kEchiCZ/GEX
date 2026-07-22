@@ -1,5 +1,18 @@
 /** Testy klasifikace expirací a odpočtu (kalendářní pravidla CME řetězu). */
 import { expect, test } from 'vitest'
+import { frontContractCode } from './expiry'
+
+test('frontContractCode: TWS symbol předního kvartálního kontraktu (#189)', () => {
+  // Červenec 2026 → září (3. pátek 18. 9. 2026 je v budoucnu) → ESU6
+  expect(frontContractCode('ES', new Date('2026-07-22T09:00:00Z'))).toBe('ESU6')
+  expect(frontContractCode('NQ', new Date('2026-07-22T09:00:00Z'))).toBe('NQU6')
+  // V den zářijové expirace se kód přepne na prosinec
+  expect(frontContractCode('ES', new Date('2026-09-18T10:00:00Z'))).toBe('ESZ6')
+  // Po prosincové expiraci (18. 12. 2026) → březen dalšího roku
+  expect(frontContractCode('ES', new Date('2026-12-20T00:00:00Z'))).toBe('ESH7')
+  // Nekvartální produkt (měsíční cyklus) neodhadujeme
+  expect(frontContractCode('CL', new Date('2026-07-22T09:00:00Z'))).toBeNull()
+})
 import { expiryCountdown, expiryKind } from './expiry'
 
 test('expiryKind: 3. pátek = měsíční, v kvartálních měsících kvartální', () => {

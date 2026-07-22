@@ -49,6 +49,35 @@ export function expirySettleUtc(expiry: string): Date | null {
   return date
 }
 
+/** Měsíční kódy kvartálního cyklu futures (CME): bře H, čvn M, zář U, pro Z. */
+const QUARTER_CODES: Record<number, string> = { 2: 'H', 5: 'M', 8: 'U', 11: 'Z' }
+/** Kořeny s kvartálním cyklem — pro jiné produkty (CL měsíční…) kód neodhadujeme. */
+const QUARTERLY_ROOTS = new Set(['ES', 'MES', 'NQ', 'MNQ', 'RTY', 'M2K', 'YM', 'MYM'])
+
+function thirdFridayUtc(year: number, month: number): Date {
+  const firstDay = new Date(Date.UTC(year, month, 1)).getUTCDay()
+  return new Date(Date.UTC(year, month, 1 + ((5 - firstDay + 7) % 7) + 14))
+}
+
+/** TWS lokální symbol předního kvartálního kontraktu („ES" → „ESU6", #189).
+
+Přední kontrakt = nejbližší kvartální měsíc, jehož expirace (3. pátek) je
+v budoucnu; v den expirace se kód přepne na další kontrakt (futures se stejně
+rolují dřív). Jen orientační pomůcka pro vyhledání grafu v TWS. */
+export function frontContractCode(symbol: string, now: Date): string | null {
+  if (!QUARTERLY_ROOTS.has(symbol)) return null
+  for (let offset = 0; offset < 15; offset += 1) {
+    const month = (now.getUTCMonth() + offset) % 12
+    const year = now.getUTCFullYear() + Math.floor((now.getUTCMonth() + offset) / 12)
+    const code = QUARTER_CODES[month]
+    if (!code) continue
+    if (now.getTime() < thirdFridayUtc(year, month).getTime()) {
+      return `${symbol}${code}${year % 10}`
+    }
+  }
+  return null
+}
+
 /** Lidský odpočet do expirace („≈ za 5 h 42 m"); null = už expirováno/nečitelné. */
 export function expiryCountdown(expiry: string, now: Date): string | null {
   const settle = expirySettleUtc(expiry)
