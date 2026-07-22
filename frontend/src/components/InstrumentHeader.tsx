@@ -34,6 +34,7 @@ export function InstrumentHeader({
 }) {
   const {
     symbol,
+    setSymbol,
     expiries,
     selectedExpiry,
     setSelectedExpiry,
@@ -41,6 +42,7 @@ export function InstrumentHeader({
     alerts,
     unreadAlerts,
     markAlertsRead,
+    setView,
   } = useAppState()
   const [alertsOpen, setAlertsOpen] = useState(false)
   const live = status.engine === 'online'
@@ -111,10 +113,46 @@ export function InstrumentHeader({
                 const stamp = alertTimestamp(alert.ts)
                 // Zvoneček je globální (napříč instrumenty) → u alertu i symbol
                 const tag = [alert.symbol, alert.kind].filter(Boolean).join(' · ')
-                return (
-                  <li key={index}>
+                // Setup alerty jsou proklikávací (#186): nový setup → graf
+                // instrumentu (karta + linie), výsledek → stránka Setupy.
+                // Alerty od staršího enginu bez `event` rozliší text zprávy.
+                const isSetup = alert.kind === 'setup' && alert.symbol !== ''
+                const isResult =
+                  alert.event === 'closed' ||
+                  (alert.event === undefined && alert.message.includes('uzavřen'))
+                const content = (
+                  <>
                     {stamp && <time className="alert-time muted">{stamp}</time>}
                     <span className="muted">[{tag}]</span> {alert.message}
+                  </>
+                )
+                return (
+                  <li key={index}>
+                    {isSetup ? (
+                      <button
+                        type="button"
+                        className="alert-link"
+                        aria-label={
+                          isResult
+                            ? `Otevřít vyhodnocení setupů ${alert.symbol}`
+                            : `Otevřít graf ${alert.symbol}`
+                        }
+                        title={
+                          isResult
+                            ? `Otevřít vyhodnocení setupů ${alert.symbol}`
+                            : `Otevřít graf ${alert.symbol}`
+                        }
+                        onClick={() => {
+                          setSymbol(alert.symbol)
+                          setView(isResult ? 'setups' : 'chart')
+                          setAlertsOpen(false)
+                        }}
+                      >
+                        {content}
+                      </button>
+                    ) : (
+                      content
+                    )}
                   </li>
                 )
               })}

@@ -281,6 +281,8 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
 
     created_alerts = [d for ch, d in publisher.messages if ch == "alerts"]
     assert any("Nový setup LONG" in str(a["message"]) for a in created_alerts)
+    # Proklik ve zvonečku (#186): nový setup nese event=created
+    assert any(a.get("event") == "created" for a in created_alerts)
     assert any(ch == "setups.ES" for ch, _ in publisher.messages)
 
     # Další minuta zasáhne cíl 7515 → closed_target s kladným R
@@ -288,6 +290,9 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
         TS + dt.timedelta(minutes=3), 7516, [bar(7501, 7516, 7500, 7516)], runtime
     )
     assert repository.active_for("ES") == []
+    # Výsledek nese event=closed (#186)
+    closed_alerts = [d for ch, d in publisher.messages if ch == "alerts"]
+    assert any(a.get("event") == "closed" and "uzavřen" in str(a["message"]) for a in closed_alerts)
     rows = repository.list_for("ES")
     assert rows[0]["status"] == "closed_target"
     assert rows[0]["outcome_r"] == pytest.approx(14 / 29, rel=1e-3)
