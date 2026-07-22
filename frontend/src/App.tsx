@@ -560,8 +560,15 @@ function MainContent() {
               onPointerMove={(event) => {
                 const drag = panelDragRef.current
                 if (!drag) return
-                // Tažení nahoru panely zvětšuje (předěl sedí nad nimi)
-                const next = drag.height + (drag.y - event.clientY)
+                // Tažení nahoru panely zvětšuje (předěl sedí nad nimi). Delta myši
+                // se dělí počtem viditelných panelů — mění se výška KAŽDÉHO z nich,
+                // takže hrana bloku jinak utíká N× rychleji než kurzor (#177)
+                const visibleCount = Math.max(
+                  1,
+                  [toggles.vol, toggles.optVol, toggles.delta, toggles.deltaFlow].filter(Boolean)
+                    .length,
+                )
+                const next = drag.height + (drag.y - event.clientY) / visibleCount
                 setPanelHeight(Math.min(320, Math.max(50, Math.round(next))))
               }}
               onPointerUp={() => {
