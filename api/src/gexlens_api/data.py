@@ -59,6 +59,17 @@ class DataRepository:
         )
         return self._read(path)
 
+    def gexprofile(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """Dyn GEX profil per minuta (ADR-0009, #203)."""
+        path = (
+            self._settings.derived_dir
+            / symbol
+            / expiry
+            / "gexprofile"
+            / f"{day.isoformat()}.parquet"
+        )
+        return self._read(path)
+
     def flow(self, symbol: str, day: dt.date) -> pd.DataFrame:
         path = self._settings.derived_dir / symbol / "flow" / f"{day.isoformat()}.parquet"
         return self._read(path)

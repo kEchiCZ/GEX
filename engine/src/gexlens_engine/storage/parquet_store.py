@@ -84,6 +84,17 @@ LEVELS_SCHEMA = pa.schema(
     ]
 )
 
+# Dyn GEX profil (ADR-0009, #203): NetGEX přes cenovou mřížku per minuta —
+# historie profilů je zároveň levý (naměřený) díl budoucího 2D pole
+GEXPROFILE_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("grid_start", pa.float64()),
+        ("grid_step", pa.float64()),
+        ("values", pa.list_(pa.float64())),
+    ]
+)
+
 # Sekundární zdi (ADR-0008, #92) — VLASTNÍ řada, ne sloupce v LEVELS_SCHEMA:
 # přidání sloupce by rozbilo čtení existujících denních partic
 # (pq.read_table(..., schema=...)), stejné omezení jako u barů v ADR-0005
@@ -170,6 +181,16 @@ class Levels2Row:
     ts_min: dt.datetime
     call_wall_2: float | None
     put_wall_2: float | None
+
+
+@dataclass(frozen=True)
+class GexProfileRow:
+    """Dyn GEX profil jedné minuty (ADR-0009): NetGEX $/bod na cenové mřížce."""
+
+    ts_min: dt.datetime
+    grid_start: float
+    grid_step: float
+    values: list[float]
 
 
 @dataclass(frozen=True)
@@ -287,6 +308,20 @@ class SnapshotWriter:
             self._settings.derived_dir / symbol / expiry / "levels2" / f"{day.isoformat()}.parquet"
         )
         buffer = self._buffer(path, LEVELS2_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_gexprofile(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[GexProfileRow]
+    ) -> Path:
+        """Přidá Dyn GEX profil minuty do derived/{sym}/{exp}/gexprofile (ADR-0009)."""
+        path = (
+            self._settings.derived_dir
+            / symbol
+            / expiry
+            / "gexprofile"
+            / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, GEXPROFILE_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_bars(self, symbol: str, day: dt.date, bars: Sequence[BarLike]) -> Path:

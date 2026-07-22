@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import { StrikeProfile } from '../components/StrikeProfile'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
-import { barGeometry, niceCeil } from './bars'
+import { barGeometry, gexCurvePaths, niceCeil } from './bars'
 import type { ProfileRow } from './bars'
 
 function rows(): ProfileRow[] {
@@ -51,6 +51,36 @@ test('barGeometry normalizuje největší stranou a zoom násobí šířky', () 
   // ořez: skládaný pruh nikdy nepřeteče polovinu panelu
   const clipped = barGeometry(rows(), 130, 4).find((bar) => bar.strike === 7590)!
   expect(clipped.putVolWidth + clipped.putOiWidth).toBeLessThanOrEqual(130)
+})
+
+test('gexCurvePaths: kladná doprava, záporná doleva, flip interpolovaný (ADR-0009)', () => {
+  const row = { gridStart: 100, gridStep: 1, values: [4, 2, -2, -4] }
+  const paths = gexCurvePaths(row, (price) => price, 50, 25) // priceToY = identita
+  // max |v| = 4 → x = 50 + (v/4)·25
+  expect(paths.positive).toBe('M75.0,100.0L62.5,101.0')
+  expect(paths.negative).toBe('M37.5,102.0L25.0,103.0')
+  // Průchod nulou mezi 101 (v=2) a 102 (v=−2) → cena 101.5
+  expect(paths.flipYs).toEqual([101.5])
+})
+
+test('Dyn GEX křivka v profilu: chip přepíná vrstvu (ADR-0009)', () => {
+  render(
+    <CrosshairProvider>
+      <StrikeProfile
+        rows={rows()}
+        spot={7595}
+        height={200}
+        gexProfile={{ tsIso: 't', gridStart: 7590, gridStep: 5, values: [100, -50, 80] }}
+      />
+    </CrosshairProvider>,
+  )
+  const panel = screen.getByLabelText('Skládané pruhy strike profilu')
+  expect(panel.querySelector('[data-part="gex-positive"]')).not.toBeNull()
+  expect(panel.querySelector('[data-part="gex-negative"]')).not.toBeNull()
+  expect(panel.querySelectorAll('[data-part="gex-flip"]').length).toBeGreaterThan(0)
+  // Chip vypne vrstvu (persistuje se dle ADR-0007)
+  fireEvent.click(screen.getByRole('button', { name: 'Dyn GEX profil' }))
+  expect(panel.querySelector('[data-part="gex-curve"]')).toBeNull()
 })
 
 test('niceCeil zaokrouhluje na 1/2/5×10^n (absolutní škála)', () => {

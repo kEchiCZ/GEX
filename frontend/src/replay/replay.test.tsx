@@ -408,6 +408,31 @@ test('append == plný build přes 120 minut s rozšiřující se strike osou (#1
   expect(normalize(incremental)).toEqual(normalize(full))
 })
 
+test('Dyn GEX profil: decode z bundle + WS append per minuta (ADR-0009)', () => {
+  const withProfile = {
+    ...bundleFor(CELLS, BARS, LEVELS, FLOW),
+    gexprofile: [{ ts_min: M0, grid_start: 7600, grid_step: 5, values: [10.5, -3.5] }],
+  }
+  const inputs = decodeBundle(withProfile)
+  expect(inputs.gexProfile).toHaveLength(1)
+  const day = assembleReplayDay(inputs)
+  expect(day.gexProfile[0]).toMatchObject({ gridStart: 7600, gridStep: 5, values: [10.5, -3.5] })
+  expect(day.gexProfile[1]).toBeNull() // druhá minuta profil nemá
+
+  // WS append doplní profil druhé minuty (upsert dle tsIso)
+  const appended = appendMinute(inputs, {
+    tsIso: M1,
+    rows: [],
+    gexProfile: { grid_start: 7595, grid_step: 5, values: [1, 2, 3] },
+  })
+  const day2 = assembleReplayDay(appended)
+  expect(day2.gexProfile[1]).toMatchObject({ gridStart: 7595, values: [1, 2, 3] })
+
+  // Starší API bez klíče gexprofile → prázdné pole, nic nepadá
+  const legacy = assembleReplayDay(decodeBundle(bundleFor(CELLS, BARS, LEVELS, FLOW)))
+  expect(legacy.gexProfile.every((row) => row === null)).toBe(true)
+})
+
 test('appendMinute přidá nový strike (posun osy) beze ztráty starých buněk (#127)', () => {
   const firstMinute = decodeBundle(
     bundleFor(

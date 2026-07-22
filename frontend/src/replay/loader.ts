@@ -36,6 +36,14 @@ export function profileSourceOf(rows: ProfileRow[][]): ProfileSource {
   return { length: rows.length, rowsAt: (minuteIdx) => rows[minuteIdx] ?? [] }
 }
 
+/** Dyn GEX profil minuty (ADR-0009, #203): NetGEX $/bod na cenové mřížce. */
+export interface GexProfileRow {
+  tsIso: string
+  gridStart: number
+  gridStep: number
+  values: number[]
+}
+
 export interface ReplayDay {
   symbol: string
   expiry: string
@@ -51,6 +59,8 @@ export interface ReplayDay {
   /** `minuteIdx` minut, jejichž bar je zatím provizorní (ADR-0005). Živá svíčka
   ze spotu je pro ně přesnější, takže jim v grafu ustupuje až finální bar. */
   provisionalMinutes: number[]
+  /** Dyn GEX profil per minuta (ADR-0009); null = minuta profil nemá. */
+  gexProfile: (GexProfileRow | null)[]
 }
 
 const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2'] as const // prettier-ignore
@@ -97,6 +107,7 @@ export interface ReplayInputs {
   levels: LevelsInput[]
   flow: FlowInput[]
   oiPrev: OiPrevInput[]
+  gexProfile: GexProfileRow[]
 }
 
 /** Jedna živá minuta z WS kanálů (#127) — snapshot řez + volitelně bar/levels/flow. */
@@ -122,6 +133,8 @@ export interface LiveMinute {
   }
   levels?: Record<string, number | null>
   flow?: { cum_delta: number }
+  /** Dyn GEX profil minuty z WS kanálu gexprofile.* (ADR-0009). */
+  gexProfile?: { grid_start: number; grid_step: number; values: number[] }
 }
 
 interface ReplayBundle {
@@ -132,6 +145,8 @@ interface ReplayBundle {
   levels: Array<Record<string, unknown>>
   /** Sekundární zdi (ADR-0008, #92) — starší API pole neposílá. */
   levels2?: Array<Record<string, unknown>>
+  /** Dyn GEX profily (ADR-0009, #203) — starší API pole neposílá. */
+  gexprofile?: Array<Record<string, unknown>>
   flow: Array<Record<string, unknown>>
   bars: Array<Record<string, unknown>>
   /** OI téže expirace z předchozího archivovaného dne (ΔOI vs. včera). */
@@ -319,6 +334,16 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     cum_delta: Number(row.cum_delta) || 0,
   }))
 
+  // Dyn GEX profily (ADR-0009) — starší API klíč neposílá
+  const gexProfile: GexProfileRow[] = (bundle.gexprofile ?? [])
+    .map((row) => ({
+      tsIso: canonicalTs(row.ts_min),
+      gridStart: Number(row.grid_start),
+      gridStep: Number(row.grid_step),
+      values: Array.isArray(row.values) ? (row.values as number[]).map(Number) : [],
+    }))
+    .filter((row) => row.values.length > 0 && Number.isFinite(row.gridStart))
+
   return {
     symbol: bundle.symbol,
     expiry: bundle.expiry,
@@ -340,6 +365,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
       right: String(row.right),
       oi: Number(row.oi) || 0,
     })),
+    gexProfile,
   }
 }
 
@@ -419,6 +445,14 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   const flow = minute.flow
     ? upsertRow(inputs.flow, { tsIso, cum_delta: minute.flow.cum_delta })
     : inputs.flow
+  const gexProfile = minute.gexProfile
+    ? upsertRow(inputs.gexProfile, {
+        tsIso,
+        gridStart: minute.gexProfile.grid_start,
+        gridStep: minute.gexProfile.grid_step,
+        values: minute.gexProfile.values,
+      })
+    : inputs.gexProfile
 
   return {
     ...inputs,
@@ -434,6 +468,7 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     bars,
     levels,
     flow,
+    gexProfile,
   }
 }
 
@@ -572,6 +607,13 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     },
   }
 
+  // Dyn GEX profil per minuta (ADR-0009) — sparse pole indexované minuteIdx
+  const gexProfile: (GexProfileRow | null)[] = Array.from({ length: minutes }, () => null)
+  for (const row of inputs.gexProfile) {
+    const minuteIdx = minuteIndex.get(row.tsIso)
+    if (minuteIdx !== undefined) gexProfile[minuteIdx] = row
+  }
+
   return {
     symbol: inputs.symbol,
     expiry: inputs.expiry,
@@ -583,6 +625,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut },
     profileByMinute,
     provisionalMinutes,
+    gexProfile,
   }
 }
 
