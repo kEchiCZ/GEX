@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react'
 import { LiveSocket } from '../api/ws'
 import { API_BASE, WS_URL } from '../config'
+import { mergedBooleans, oneOf, shortString, usePersistentState } from './persist'
 
 export interface PipelineStatus {
   engine: string
@@ -127,15 +128,32 @@ export function defaultExpiry(expiries: string[]): string | null {
   return expiries.includes(today) ? today : (expiries.at(-1) ?? null)
 }
 
-/** Deep-link: počáteční obrazovka a téma z URL (?view=dashboard&theme=light). */
-function initialFromUrl(): { view: AppView; theme: Theme } {
+/** Deep-link: počáteční obrazovka a téma z URL (?view=dashboard&theme=light).
+
+Téma z URL má přednost před uloženou volbou (ADR-0007) — automatizované
+snímky musí dostat deterministický vzhled. */
+function initialFromUrl(): { view: AppView; theme: Theme | null } {
   const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
   const view = params?.get('view')
   const theme = params?.get('theme')
   return {
     view: VIEWS.includes(view as AppView) ? (view as AppView) : 'chart',
-    theme: theme === 'light' ? 'light' : 'dark',
+    theme: theme === 'light' ? 'light' : theme === 'dark' ? 'dark' : null,
   }
+}
+
+/** Výchozí stav přepínačů (persistuje se jako celek, ADR-0007). */
+const DEFAULT_TOGGLES: Toggles = {
+  dynGex: true,
+  gexLevels: true,
+  sessions: false,
+  vol: true,
+  optVol: true,
+  delta: true,
+  deltaFlow: false,
+  volOiDelta: true,
+  projection: true,
+  news: false,
 }
 
 export function AppStateProvider({
@@ -151,13 +169,23 @@ export function AppStateProvider({
   const [status, setStatus] = useState<PipelineStatus>({ engine: 'offline' })
   // Jediná stabilní instance WS klienta — sdílená přes context (useDayData ji odebírá)
   const [live] = useState(() => socket ?? new LiveSocket(WS_URL))
-  const [symbol, setSymbol] = useState(initialSymbol)
+  // Poslední volby uživatele přežívají refresh (ADR-0007, #167); URL má přednost
+  const [symbol, setSymbol] = usePersistentState('symbol', initialSymbol, shortString())
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
-  const [timeframe, setTimeframe] = useState<'intraday' | 'daily'>('intraday')
-  const [interval, setInterval] = useState<Interval>('1m')
+  const [timeframe, setTimeframe] = usePersistentState<'intraday' | 'daily'>(
+    'timeframe',
+    'intraday',
+    oneOf(['intraday', 'daily']),
+  )
+  const [interval, setInterval] = usePersistentState<Interval>('interval', '1m', oneOf(INTERVALS))
   const [view, setView] = useState<AppView>(() => initialFromUrl().view)
-  const [theme, setTheme] = useState<Theme>(() => initialFromUrl().theme)
+  const [theme, setTheme] = usePersistentState<Theme>(
+    'theme',
+    'dark',
+    oneOf(['dark', 'light']),
+    initialFromUrl().theme,
+  )
   const [alerts, setAlerts] = useState<AlertMessage[]>([])
   const [unreadAlerts, setUnreadAlerts] = useState(0)
   const [consoleLog, setConsoleLog] = useState<string[]>([])
@@ -169,18 +197,11 @@ export function AppStateProvider({
       previous.last === info.last && previous.changePct === info.changePct ? previous : info,
     )
   }, [])
-  const [toggles, setToggles] = useState<Toggles>({
-    dynGex: true,
-    gexLevels: true,
-    sessions: false,
-    vol: true,
-    optVol: true,
-    delta: true,
-    deltaFlow: false,
-    volOiDelta: true,
-    projection: true,
-    news: false,
-  })
+  const [toggles, setToggles] = usePersistentState<Toggles>(
+    'toggles',
+    DEFAULT_TOGGLES,
+    mergedBooleans<Toggles>(),
+  )
 
   const appendLog = useCallback((line: string) => {
     const stamp = new Date().toLocaleTimeString()
@@ -284,6 +305,13 @@ export function AppStateProvider({
     [
       status,
       symbol,
+      // Settery z usePersistentState jsou stabilní useState settery — lint to
+      // přes vlastní hook nevidí, proto jsou v deps (nic nepřepočítávají)
+      setSymbol,
+      setTimeframe,
+      setInterval,
+      setTheme,
+      setToggles,
       expiries,
       selectedExpiry,
       timeframe,

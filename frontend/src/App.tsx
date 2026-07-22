@@ -40,6 +40,7 @@ import { EMPTY_LIVE, minuteLabel, useDayData } from './replay/useDayData'
 import { usePlayback } from './replay/usePlayback'
 import { AppStateProvider, INTERVAL_MINUTES, useAppState } from './state/AppState'
 import { CrosshairProvider } from './state/Crosshair'
+import { clampedNumber, oneOf, usePersistentState } from './state/persist'
 import type { ActiveTool } from './annotations/model'
 import type { ContoursMode } from './heatmap/contours'
 import type { HeatmapStyle } from './heatmap/render'
@@ -66,28 +67,60 @@ function lastValue(series: (number | null)[] | undefined, position: number): num
 function MainContent() {
   const { toggles, symbol, selectedExpiry, view, timeframe, interval, setPriceInfo, socket } =
     useAppState()
-  const [style, setStyle] = useState<HeatmapStyle>('gradient')
-  const [contours, setContours] = useState<ContoursMode>('off')
-  const [mode, setMode] = useState<HeatmapMode>('oi')
-  const [heatScale, setHeatScale] = useState<HeatmapScale>('linear')
-  const [wallsMode, setWallsMode] = useState<WallsMode>('off')
+  // Volby grafu přežívají refresh (ADR-0007, #167); URL deep-link má přednost
+  const [style, setStyle] = usePersistentState<HeatmapStyle>(
+    'style',
+    'gradient',
+    oneOf(['gradient', 'blobs']),
+  )
+  const [contours, setContours] = usePersistentState<ContoursMode>(
+    'contours',
+    'off',
+    oneOf(['off', 'major', 'all']),
+  )
+  const [mode, setMode] = usePersistentState<HeatmapMode>(
+    'mode',
+    'oi',
+    oneOf(HEATMAP_MODES.map((item) => item.value)),
+  )
+  const [heatScale, setHeatScale] = usePersistentState<HeatmapScale>(
+    'scale',
+    'linear',
+    oneOf(HEATMAP_SCALES.map((item) => item.value)),
+  )
+  const [wallsMode, setWallsMode] = usePersistentState<WallsMode>(
+    'walls',
+    'off',
+    oneOf(WALLS_MODES.map((item) => item.value)),
+  )
   const [annotationTool, setAnnotationTool] = useState<ActiveTool>(null)
   const [annotationColor, setAnnotationColor] = useState('#e8c14b')
   // Replay lišta je skrytá — aplikace jede defaultně live (přání uživatele)
   const [showReplay, setShowReplay] = useState(false)
   // Tažitelný předěl mezi grafem a pravým panelem (graf se přizpůsobí sám)
-  const [profileWidth, setProfileWidth] = useState(260)
+  const [profileWidth, setProfileWidth] = usePersistentState(
+    'profileWidth',
+    260,
+    clampedNumber(180, 2000),
+  )
   const dividerDragRef = useRef<{ x: number; width: number } | null>(null)
   // Logická velikost heatmapy — pravý profil sdílí její Y měřítko
   const [heatSize, setHeatSize] = useState({ width: 1200, height: 640 })
-  // Deep-link: ?price=line&opacity=60 (i pro automatizované snímky); default svíčky
-  const [priceStyle, setPriceStyle] = useState<PriceStyle>(() =>
-    new URLSearchParams(window.location.search).get('price') === 'line' ? 'line' : 'candles',
+  // Deep-link: ?price=line&opacity=60 (i pro automatizované snímky) přebíjí uložený stav
+  const urlParams = new URLSearchParams(window.location.search)
+  const urlOpacity = Number(urlParams.get('opacity'))
+  const [priceStyle, setPriceStyle] = usePersistentState<PriceStyle>(
+    'priceStyle',
+    'candles',
+    oneOf(['line', 'candles']),
+    urlParams.get('price') === 'line' ? 'line' : null,
   )
-  const [priceOpacity, setPriceOpacity] = useState(() => {
-    const raw = Number(new URLSearchParams(window.location.search).get('opacity'))
-    return Number.isFinite(raw) && raw >= 10 && raw <= 100 ? raw / 100 : 1
-  })
+  const [priceOpacity, setPriceOpacity] = usePersistentState(
+    'priceOpacity',
+    1,
+    clampedNumber(0.1, 1),
+    Number.isFinite(urlOpacity) && urlOpacity >= 10 && urlOpacity <= 100 ? urlOpacity / 100 : null,
+  )
 
   // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame).
   // `rawDay` je identitou stabilní napříč spot ticky, živá cena jde zvlášť v `live` (#141).
