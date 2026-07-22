@@ -6,7 +6,7 @@ import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
 import { DEFAULT_VIEW } from './view'
 import type { ViewTransform } from './view'
 import { demoGrid } from './demo'
-import { formatLevel, fractionalRow, pairWallSeries, pricePolyline, resolveSecondaryWalls, tickIndices, visibleOverlays } from './overlays' // prettier-ignore
+import { breaksOnJump, formatLevel, fractionalRow, isLevelJump, pairWallSeries, pricePolyline, resolveSecondaryWalls, tickIndices, visibleOverlays } from './overlays' // prettier-ignore
 import type { LevelLine, OverlayData } from './overlays'
 
 // ── Čisté helpery ──────────────────────────────────────────────────
@@ -69,6 +69,18 @@ test('resolveSecondaryWalls: zapnuto páruje, vypnuto vrací dnešní chování 
   const off = resolveSecondaryWalls(walls, false)
   expect(off.map((line) => line.name)).toEqual(['put_wall', 'call_wall'])
   expect(off[0].series).toEqual([7450, 7500, 7450])
+})
+
+test('isLevelJump/breaksOnJump: flip se při velkém skoku přerušuje (#197)', () => {
+  // Práh 10 kroků × strike krok 5 = 50 bodů
+  expect(isLevelJump(7577, 7650, 5)).toBe(true) // 73 b > 50 → mezera
+  expect(isLevelJump(7577, 7600, 5)).toBe(false) // 23 b → spojené
+  expect(isLevelJump(7577, 7340, 5)).toBe(true) // skok na okraj pásma
+  expect(isLevelJump(7577, 7650, 0)).toBe(false) // bez kroku (1 strike) neřešíme
+  expect(breaksOnJump('flip')).toBe(true)
+  expect(breaksOnJump('walls:flip')).toBe(true)
+  expect(breaksOnJump('call_wall')).toBe(false) // zdi řeší párování (ADR-0008)
+  expect(breaksOnJump('centroid')).toBe(false)
 })
 
 test('fractionalRow interpoluje mezi strikes a ořezává okraje', () => {

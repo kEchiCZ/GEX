@@ -17,9 +17,11 @@ import { gaussianBlur, renderGrid } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
 import {
+  breaksOnJump,
   candleGeometry,
   formatLevel,
   fractionalRow,
+  isLevelJump,
   lastLevelValue,
   pricePolyline,
   tickIndices,
@@ -327,23 +329,32 @@ export function Heatmap({
 
     // Levels a walls linie (dle módu; barva per linie, volitelné čárkování)
     const levelLines = [...(overlays.levels ?? []), ...(overlays.walls ?? [])]
+    const strikeStep = strikeCount > 1 ? Math.abs(grid.strikes[1] - grid.strikes[0]) : 0
     for (const line of levelLines) {
       context.strokeStyle = line.color || LEVEL_DEFAULT_COLOR
       context.lineWidth = 1.5
       if (line.dash) context.setLineDash(line.dash)
       context.beginPath()
       let pen = false
+      let lastValue: number | null = null
       line.series.forEach((value, minuteIdx) => {
         const row = value === null ? null : fractionalRow(grid.strikes, value)
-        if (row === null) {
+        if (row === null || value === null) {
           pen = false
+          lastValue = null
           return
+        }
+        // Flip s více nulovými průchody přeskakuje — svislou spojnici přes
+        // celý graf nahrazuje mezera (#197)
+        if (pen && lastValue !== null && breaksOnJump(line.name)) {
+          if (isLevelJump(lastValue, value, strikeStep)) pen = false
         }
         const x = minuteToX(minuteIdx)
         const y = rowToY(row)
         if (pen) context.lineTo(x, y)
         else context.moveTo(x, y)
         pen = true
+        lastValue = value
       })
       context.stroke()
       context.setLineDash([])
