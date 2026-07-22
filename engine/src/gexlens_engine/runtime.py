@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.gex import GexEngine, GexInput
+from gexlens_engine.compute.gexfield import ProfileContract, gamma_profile
 from gexlens_engine.compute.levels import compute_levels
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
@@ -24,6 +25,7 @@ from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.parquet_store import (
     FlowRowLike,
+    GexProfileRow,
     Levels2Row,
     LevelsRow,
     SnapshotRow,
@@ -103,6 +105,7 @@ class EngineRuntime:
         # 1) Snapshot řádky (OI z ranního archivu — tick 588 intraday nechodí, ADR-0001)
         rows: list[SnapshotRow] = []
         gex_inputs: list[GexInput] = []
+        profile_contracts: list[ProfileContract] = []
         for spec in self.contracts:
             cached = quotes.get(spec)
             if cached is None:
@@ -134,6 +137,15 @@ class EngineRuntime:
             )
             gex_inputs.append(
                 GexInput(strike=spec.strike, right=spec.right, gamma=snapshot.gamma, oi=oi)
+            )
+            # Dyn GEX profil (ADR-0009): BS gamma nad uloženou IV per kontrakt
+            profile_contracts.append(
+                ProfileContract(
+                    strike=spec.strike,
+                    right=spec.right,
+                    iv=snapshot.iv or 0.0,
+                    oi=oi,
+                )
             )
             # CumΔ bar větev (hot zóna má vlastní tick větev přes on_trade)
             if not self.secondary:
@@ -191,6 +203,44 @@ class EngineRuntime:
             self.writer.write_levels2, self.symbol, self.expiry, day, [levels2_row]
         )
         self.last_levels = levels_row
+
+        # Dyn GEX profil (ADR-0009, #203): NetGEX přes cenovou mřížku obálky —
+        # historie profilů je zároveň naměřený díl budoucího 2D pole
+        strikes_sorted = sorted({spec.strike for spec in self.contracts})
+        if len(strikes_sorted) >= 2 and profile_contracts:
+            strike_step = min(
+                b - a for a, b in zip(strikes_sorted, strikes_sorted[1:], strict=False) if b > a
+            )
+            settle = dt.datetime.strptime(self.expiry, "%Y%m%d").replace(
+                hour=20, minute=0, tzinfo=dt.UTC
+            )
+            profile = gamma_profile(
+                profile_contracts,
+                ts_min=ts_min,
+                settle=settle,
+                grid_start=strikes_sorted[0],
+                grid_stop=strikes_sorted[-1],
+                grid_step=strike_step / 2.0,
+                multiplier=self.multiplier,
+            )
+            profile_row = GexProfileRow(
+                ts_min=ts_min,
+                grid_start=profile.grid_start,
+                grid_step=profile.grid_step,
+                values=[round(value, 1) for value in profile.values],
+            )
+            await asyncio.to_thread(
+                self.writer.write_gexprofile, self.symbol, self.expiry, day, [profile_row]
+            )
+            await self.publisher.publish(
+                f"gexprofile.{self.symbol}.{self.expiry}",
+                {
+                    "ts_min": ts_min.isoformat(),
+                    "grid_start": profile_row.grid_start,
+                    "grid_step": profile_row.grid_step,
+                    "values": profile_row.values,
+                },
+            )
 
         # 3) FlowΔ/CumΔ minuta + 4) bary podkladu — jen aktivní expirace
         # (soubory jsou per symbol; sekundární řetěz by je duplikoval)

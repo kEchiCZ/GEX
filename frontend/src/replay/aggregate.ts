@@ -215,6 +215,17 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
     },
     profileByMinute,
     demoProfileRows: day.demoProfileRows,
+    // Koš přebírá Dyn GEX profil poslední minuty s daty (ADR-0009)
+    gexProfile: day.gexProfile
+      ? Array.from({ length: buckets }, (_, bucketIdx) => {
+          const end = bucketEnd(bucketIdx, bucketMinutes, minutes)
+          for (let minuteIdx = end; minuteIdx >= bucketIdx * bucketMinutes; minuteIdx -= 1) {
+            const row = day.gexProfile![minuteIdx]
+            if (row) return row
+          }
+          return null
+        })
+      : null,
     spotSeries: lastNonNull(day.spotSeries, bucketMinutes, buckets),
     minuteLabels: Array.from(
       { length: buckets },

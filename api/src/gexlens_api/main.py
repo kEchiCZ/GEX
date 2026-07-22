@@ -12,6 +12,7 @@ import math
 from collections.abc import Callable
 from typing import Annotated
 
+import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,6 +50,9 @@ def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
                 clean[key] = None
             elif isinstance(value, pd.Timestamp):
                 clean[key] = value.isoformat()
+            elif isinstance(value, np.ndarray):
+                # List sloupce (gexprofile.values, ADR-0009) čte pandas jako ndarray
+                clean[key] = value.tolist()
             else:
                 clean[key] = value
         records.append(clean)
@@ -344,6 +348,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         readers: list[tuple[str, Callable[[], pd.DataFrame]]] = [
             ("levels", lambda: repository.levels(symbol, expiry, date)),
             ("levels2", lambda: repository.levels2(symbol, expiry, date)),
+            ("gexprofile", lambda: repository.gexprofile(symbol, expiry, date)),
             ("flow", lambda: repository.flow(symbol, date)),
             ("bars", lambda: repository.bars(symbol, date)),
         ]

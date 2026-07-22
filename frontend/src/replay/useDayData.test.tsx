@@ -31,6 +31,7 @@ function makeInputs(): ReplayInputs {
     levels: [],
     flow: [],
     oiPrev: [],
+    gexProfile: [],
   }
 }
 

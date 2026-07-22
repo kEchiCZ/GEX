@@ -14,8 +14,10 @@ import { useElementSize } from '../hooks/useElementSize'
 import { zoomAxis } from '../heatmap/view'
 import type { ViewTransform } from '../heatmap/view'
 import { fractionalRow } from '../heatmap/overlays'
-import { barGeometry, formatAmount, maxComponentSide, niceCeil } from '../profile/bars'
+import { barGeometry, formatAmount, gexCurvePaths, maxComponentSide, niceCeil } from '../profile/bars' // prettier-ignore
 import type { ProfileRow } from '../profile/bars'
+import type { GexProfileRow } from '../replay/loader'
+import { usePersistentState } from '../state/persist'
 import { useCrosshair } from '../state/Crosshair'
 
 /** Y transformace hlavního grafu: strike → obrazovková výška (sdílená osa). */
@@ -59,6 +61,7 @@ function StrikeProfileBase({
   onYViewChange,
   aggregate = null,
   onAggregateToggle,
+  gexProfile = null,
 }: {
   rows: ProfileRow[]
   spot: number | null
@@ -72,9 +75,15 @@ function StrikeProfileBase({
   /** Σ souhrn přes expirace: null = přepínač skrytý, jinak stav zapnuto/vypnuto. */
   aggregate?: boolean | null
   onAggregateToggle?: () => void
+  /** Dyn GEX profil aktuální minuty (ADR-0009); null = vrstva nedostupná. */
+  gexProfile?: GexProfileRow | null
 }) {
   const [zoom, setZoom] = useState<1 | 2 | 4>(1)
   const [scaleMode, setScaleMode] = useState<'rel' | 'abs'>('rel')
+  // Dyn GEX křivka (ADR-0009) — přepínatelná, volba přežívá refresh (ADR-0007)
+  const [gexOn, setGexOn] = usePersistentState('profileGex', true, (value, fallback) =>
+    typeof value === 'boolean' ? value : fallback,
+  )
   const { position: crosshair, setPosition: setCrosshair } = useCrosshair()
   // Se sdílenou osou svg vyplní celý panel (řádky mimo výřez se přirozeně oříznou)
   const { ref: bodyRef, size: bodySize } = useElementSize<HTMLDivElement>({
@@ -146,11 +155,26 @@ function StrikeProfileBase({
   // Popisky (strike i hodnoty) jen na každém k-tém řádku, ať se nepřekrývají
   const labelEvery = Math.max(1, Math.ceil(16 / Math.max(1, rowHeight)))
 
-  const spotRow = spot === null ? null : fractionalRow(strikesAscending, spot)
-  const spotY =
-    spotRow === null || ordered.length === 0
-      ? null
-      : (ordered.length - 1 - spotRow + 0.5) * rowHeight + offsetY
+  /** Cena → Y v souřadnicích profilu (shodné s heatmap rowToY). */
+  const priceToY = (price: number): number | null => {
+    const row = fractionalRow(strikesAscending, price)
+    if (row === null || ordered.length === 0) return null
+    return (ordered.length - 1 - row + 0.5) * rowHeight + offsetY
+  }
+  const spotY = spot === null ? null : priceToY(spot)
+
+  // Dyn GEX křivka (ADR-0009): kladná doprava (tlumení), záporná doleva
+  const gexCurve = useMemo(() => {
+    if (!gexOn || !gexProfile || ordered.length === 0) return null
+    return gexCurvePaths(
+      gexProfile,
+      (price) => priceToY(price) ?? -100,
+      halfWidth,
+      Math.max(10, halfWidth - LABEL_SPACE) * 0.95,
+    )
+    // priceToY závisí na rowHeight/offsetY — pokryto závislostmi níže
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gexOn, gexProfile, ordered, rowHeight, offsetY, halfWidth])
 
   const hovered = crosshair
     ? (ordered.find((row) => row.strike === crosshair.strike) ?? null)
@@ -169,6 +193,16 @@ function StrikeProfileBase({
               title="Σ = součet OI + volume přes všechny sbírané expirace"
             >
               Σ
+            </button>
+          )}
+          {gexProfile !== null && (
+            <button
+              className={gexOn ? 'chip active' : 'chip'}
+              onClick={() => setGexOn((value) => !value)}
+              aria-label="Dyn GEX profil"
+              title="Modelovaný NetGEX přes cenové pásmo (ADR-0009): zelená doprava = dealeři tlumí, červená doleva = zesilují; žlutá = dynamický flip"
+            >
+              GEX
             </button>
           )}
           <button
@@ -347,6 +381,42 @@ function StrikeProfileBase({
                   {formatAmount(tick.value)}
                 </text>
               ))}
+            </g>
+          )}
+          {/* Dyn GEX křivka (ADR-0009): model NetGEX přes pásmo, žlutá = flip */}
+          {gexCurve && (
+            <g data-part="gex-curve" opacity={0.9}>
+              {gexCurve.flipYs.map((y, index) => (
+                <line
+                  key={index}
+                  x1={0}
+                  y1={y}
+                  x2={width}
+                  y2={y}
+                  stroke="#e8c14b"
+                  strokeDasharray="3 3"
+                  opacity={0.65}
+                  data-part="gex-flip"
+                />
+              ))}
+              {gexCurve.positive && (
+                <path
+                  d={gexCurve.positive}
+                  stroke="#3ecf8e"
+                  fill="none"
+                  strokeWidth={1.6}
+                  data-part="gex-positive"
+                />
+              )}
+              {gexCurve.negative && (
+                <path
+                  d={gexCurve.negative}
+                  stroke="#f0616d"
+                  fill="none"
+                  strokeWidth={1.6}
+                  data-part="gex-negative"
+                />
+              )}
             </g>
           )}
           {/* cenová linka */}

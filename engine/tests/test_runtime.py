@@ -98,6 +98,16 @@ async def test_one_cycle_produces_full_day_artifacts(
     assert "flow.ES" in channels
     assert "price.ES" in channels
     assert "snapshot.ES.20260716" in channels
+    # Dyn GEX profil (ADR-0009): kanál + persistence do vlastní řady
+    assert "gexprofile.ES.20260716" in channels
+    gexprofile_data = next(
+        data for channel, data in publisher.messages if channel == "gexprofile.ES.20260716"
+    )
+    assert isinstance(gexprofile_data["values"], list) and gexprofile_data["values"]
+    gexprofile = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "gexprofile" / f"{day}.parquet"
+    )
+    assert len(gexprofile) == 1
 
     # price kanál nese plnou OHLC (#127), ne jen close
     price_data = next(data for channel, data in publisher.messages if channel == "price.ES")

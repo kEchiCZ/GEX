@@ -248,6 +248,16 @@ function MainContent() {
     () => liveOverlay.bars.at(-1)?.close ?? lastValue(day.spotSeries, playback.position),
     [liveOverlay.bars, day.spotSeries, playback.position],
   )
+  // Dyn GEX profil minuty pod playbackem (ADR-0009) — poslední s daty do pozice
+  const gexProfileRow = useMemo(() => {
+    if (!day.gexProfile || day.gexProfile.length === 0) return null
+    const index = Math.min(playback.position, day.gexProfile.length - 1)
+    for (let i = index; i >= 0; i -= 1) {
+      const row = day.gexProfile[i]
+      if (row) return row
+    }
+    return null
+  }, [day.gexProfile, playback.position])
   // Stabilní props pro těžké (memoizované) děti — živý spot mění jen graf, ne panely/profil
   const panelsVisible = useMemo(
     () => ({
@@ -638,6 +648,7 @@ function MainContent() {
           onYViewChange={handleYViewChange}
           aggregate={day.source === 'replay' ? aggregateOn : null}
           onAggregateToggle={handleAggregateToggle}
+          gexProfile={gexProfileRow}
         />
       </div>
     </>

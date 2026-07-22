@@ -58,6 +58,51 @@ export function niceCeil(value: number): number {
   return nice * base
 }
 
+/** Dyn GEX křivka v profilu (ADR-0009): SVG path data kladné a záporné části.
+
+Kladná část (dealeři tlumí) jde od středové osy DOPRAVA, záporná (zesilují)
+DOLEVA — stejná sémantika stran jako call/put pruhy. Škála na max |hodnota|
+profilu. `flipYs` = Y souřadnice průchodů nulou (dynamický flip). */
+export interface GexCurve {
+  positive: string
+  negative: string
+  flipYs: number[]
+}
+
+export function gexCurvePaths(
+  row: { gridStart: number; gridStep: number; values: number[] },
+  priceToY: (price: number) => number,
+  centerX: number,
+  halfSpan: number,
+): GexCurve {
+  const maxAbs = Math.max(1e-9, ...row.values.map((value) => Math.abs(value)))
+  let positive = ''
+  let negative = ''
+  const flipYs: number[] = []
+  let previousSign = 0
+  row.values.forEach((value, index) => {
+    const price = row.gridStart + index * row.gridStep
+    const x = centerX + (value / maxAbs) * halfSpan
+    const y = priceToY(price)
+    const sign = value >= 0 ? 1 : -1
+    const point = `${x.toFixed(1)},${y.toFixed(1)}`
+    if (sign >= 0) {
+      positive += `${previousSign < 0 || positive === '' ? 'M' : 'L'}${point}`
+    } else {
+      negative += `${previousSign >= 0 || negative === '' ? 'M' : 'L'}${point}`
+    }
+    // Průchod nulou mezi sousedními body → lineární interpolace ceny
+    if (index > 0 && previousSign !== 0 && sign !== previousSign) {
+      const prev = row.values[index - 1]
+      const prevPrice = row.gridStart + (index - 1) * row.gridStep
+      const zeroPrice = prevPrice + ((0 - prev) / (value - prev)) * row.gridStep
+      flipYs.push(priceToY(zeroPrice))
+    }
+    previousSign = sign
+  })
+  return { positive, negative, flipYs }
+}
+
 /** Šířky pruhů: normalizace referenční stranou (`scaleMax`, default max ve výřezu),
  * zoom násobí, ořez na halfWidth. */
 export function barGeometry(
