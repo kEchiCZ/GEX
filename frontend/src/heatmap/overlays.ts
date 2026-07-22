@@ -67,6 +67,95 @@ export function visibleOverlays(data: OverlayData, toggles: OverlayToggles): Ove
   }
 }
 
+/** Dvě linie zdí spárované PO ÚROVNÍCH, ne po pořadí síly (ADR-0008, #92). */
+export interface PairedWallSeries {
+  upper: (number | null)[]
+  lower: (number | null)[]
+  /** Na které linii leží poslední známá PRIMÁRNÍ zeď (plný styl + cenovka). */
+  primaryIsUpper: boolean
+}
+
+/** Spáruje primární a sekundární zeď do dvou úrovňově stabilních linií.
+
+Primární zeď (argmax koncentrace) mezi dvěma rovnocennými úrovněmi minutu po
+minutě přeskakuje — kreslit ji přímo dává svislé pruhy (#92). Párování po
+úrovních drží každou linii na její hladině: v minutě se dvěma kandidáty jde
+vyšší strike na `upper`, nižší na `lower`; jediný kandidát se přiřadí linii
+s bližší poslední hodnotou (řada bez sekundární zdi tak zůstává úrovňově
+stabilní, i když primární přeskakuje). */
+export function pairWallSeries(
+  primary: (number | null)[],
+  secondary: (number | null)[],
+): PairedWallSeries {
+  const upper: (number | null)[] = []
+  const lower: (number | null)[] = []
+  let lastUpper: number | null = null
+  let lastLower: number | null = null
+  for (let t = 0; t < primary.length; t += 1) {
+    const p = primary[t] ?? null
+    const s = secondary[t] ?? null
+    if (p !== null && s !== null) {
+      const hi = Math.max(p, s)
+      const lo = Math.min(p, s)
+      upper.push(hi)
+      lower.push(lo)
+      lastUpper = hi
+      lastLower = lo
+    } else if (p !== null || s !== null) {
+      const value = (p ?? s)!
+      const upperGap = lastUpper === null ? Number.POSITIVE_INFINITY : Math.abs(value - lastUpper)
+      const lowerGap = lastLower === null ? Number.POSITIVE_INFINITY : Math.abs(value - lastLower)
+      if (upperGap <= lowerGap) {
+        upper.push(value)
+        lower.push(null)
+        lastUpper = value
+      } else {
+        upper.push(null)
+        lower.push(value)
+        lastLower = value
+      }
+    } else {
+      upper.push(null)
+      lower.push(null)
+    }
+  }
+  let primaryIsUpper = true
+  for (let t = primary.length - 1; t >= 0; t -= 1) {
+    const p = primary[t]
+    if (p !== null && p !== undefined) {
+      primaryIsUpper = upper[t] === p
+      break
+    }
+  }
+  return { upper, lower, primaryIsUpper }
+}
+
+/** Nahradí pár (zeď, sekundární zeď) úrovňově spárovanými liniemi (ADR-0008).
+
+Vypnuto (`enabled=false`): sekundární linie se zahodí a primární se kreslí
+jako dřív. Zapnuto: primární styl (barva + cenovka) dostane linie, na které
+primární zeď AKTUÁLNĚ leží; druhá linie je tečkovaná bez cenovky (název
+s prefixem `walls:` — kreslí se jen jako řada). */
+export function resolveSecondaryWalls(walls: LevelLine[], enabled: boolean): LevelLine[] {
+  const result: LevelLine[] = []
+  for (const line of walls) {
+    if (line.name.endsWith('_2')) continue // sekundární se zpracuje u primární
+    const secondary = walls.find((item) => item.name === `${line.name}_2`)
+    const hasSecondary =
+      enabled && secondary !== undefined && secondary.series.some((value) => value !== null)
+    if (!hasSecondary) {
+      result.push(line)
+      continue
+    }
+    const paired = pairWallSeries(line.series, secondary.series)
+    const primarySeries = paired.primaryIsUpper ? paired.upper : paired.lower
+    const altSeries = paired.primaryIsUpper ? paired.lower : paired.upper
+    result.push({ ...line, series: primarySeries })
+    result.push({ ...secondary, name: `walls:${secondary.name}`, series: altSeries })
+  }
+  return result
+}
+
 /** Indexy pro popisky osy: každý k-tý tak, aby rozestup na obrazovce byl ≥ minSpacingPx. */
 export function tickIndices(count: number, stepPx: number, minSpacingPx: number): number[] {
   if (count <= 0 || stepPx <= 0) return []

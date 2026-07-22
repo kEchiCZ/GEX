@@ -20,7 +20,7 @@ import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
 import type { HeatmapMode, HeatmapScale } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
 import { expirySettleUtc } from './instrument/expiry'
-import { visibleOverlays } from './heatmap/overlays'
+import { resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { DEFAULT_VIEW } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
@@ -362,10 +362,14 @@ function MainContent() {
   const overlays = useMemo(
     () => ({
       ...baseOverlays,
-      walls: [...(baseOverlays.walls ?? []), ...computedWalls],
+      // Sekundární zeď (ADR-0008): spárování po úrovních dle přepínače
+      walls: [
+        ...resolveSecondaryWalls(baseOverlays.walls ?? [], toggles.secondaryWall),
+        ...computedWalls,
+      ],
       levels: [...(baseOverlays.levels ?? []), ...setupLines],
     }),
-    [baseOverlays, computedWalls, setupLines],
+    [baseOverlays, computedWalls, setupLines, toggles.secondaryWall],
   )
 
   if (view === 'dashboard') {

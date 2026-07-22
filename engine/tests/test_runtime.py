@@ -79,6 +79,12 @@ async def test_one_cycle_produces_full_day_artifacts(
 
     levels = pd.read_parquet(settings.derived_dir / "ES" / "20260716" / "levels" / f"{day}.parquet")
     assert len(levels) == 1
+    # Sekundární zdi jdou do vlastní řady levels2 (ADR-0008, #92)
+    levels2 = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "levels2" / f"{day}.parquet"
+    )
+    assert list(levels2.columns) == ["ts_min", "call_wall_2", "put_wall_2"]
+    assert len(levels2) == 1
     flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{day}.parquet")
     assert list(flow.columns) == ["ts_min", "flow_delta", "cum_delta"]
     day_bars = pd.read_parquet(settings.derived_dir / "ES" / "bars" / f"{day}.parquet")
@@ -101,6 +107,13 @@ async def test_one_cycle_produces_full_day_artifacts(
     assert price_data["close"] == SPOT
     assert price_data["volume"] == 1200.0
     assert price_data["final"] is True  # uzavřený bar (ADR-0005)
+
+    # levels kanál nese i sekundární zdi (aditivní pole, ADR-0008)
+    levels_data = next(
+        data for channel, data in publisher.messages if channel == "levels.ES.20260716"
+    )
+    assert "call_wall_2" in levels_data
+    assert "put_wall_2" in levels_data
 
     # snapshot kanál nese per-strike řez minuty (#127)
     snap_data = next(

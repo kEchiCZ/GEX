@@ -53,7 +53,7 @@ export interface ReplayDay {
   provisionalMinutes: number[]
 }
 
-const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall'] as const
+const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2'] as const // prettier-ignore
 
 interface BarInput {
   tsIso: string
@@ -130,6 +130,8 @@ interface ReplayBundle {
   date: string
   snapshots_arrow_base64: string
   levels: Array<Record<string, unknown>>
+  /** Sekundární zdi (ADR-0008, #92) — starší API pole neposílá. */
+  levels2?: Array<Record<string, unknown>>
   flow: Array<Record<string, unknown>>
   bars: Array<Record<string, unknown>>
   /** OI téže expirace z předchozího archivovaného dne (ΔOI vs. včera). */
@@ -292,10 +294,26 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
       final: tsIso !== liveMinuteIso,
     }
   })
-  const levels: LevelsInput[] = bundle.levels.map((row) => ({
-    tsIso: canonicalTs(row.ts_min),
-    values: Object.fromEntries(LEVEL_KEYS.map((key) => [key, numOrNull(row[key])])),
-  }))
+  // Levels + sekundární zdi (vlastní řada levels2, ADR-0008) sloučené per minuta
+  const levelsByTs = new Map<string, LevelsInput>()
+  for (const row of bundle.levels) {
+    const tsIso = canonicalTs(row.ts_min)
+    levelsByTs.set(tsIso, {
+      tsIso,
+      values: Object.fromEntries(LEVEL_KEYS.map((key) => [key, numOrNull(row[key])])),
+    })
+  }
+  for (const row of bundle.levels2 ?? []) {
+    const tsIso = canonicalTs(row.ts_min)
+    const entry = levelsByTs.get(tsIso) ?? {
+      tsIso,
+      values: Object.fromEntries(LEVEL_KEYS.map((key) => [key, null])),
+    }
+    entry.values.call_wall_2 = numOrNull(row.call_wall_2)
+    entry.values.put_wall_2 = numOrNull(row.put_wall_2)
+    levelsByTs.set(tsIso, entry)
+  }
+  const levels = [...levelsByTs.values()]
   const flow: FlowInput[] = bundle.flow.map((row) => ({
     tsIso: canonicalTs(row.ts_min),
     cum_delta: Number(row.cum_delta) || 0,
@@ -476,6 +494,10 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
   const walls: LevelLine[] = [
     { name: 'call_wall', color: '#3ecf8e', series: levelSeries('call_wall') },
     { name: 'put_wall', color: '#f0616d', series: levelSeries('put_wall') },
+    // Sekundární zdi (ADR-0008): App je podle přepínače spáruje s primární
+    // po úrovních, nebo zahodí; kreslí se tečkovaně a bez cenovky
+    { name: 'call_wall_2', color: 'rgba(62,207,142,0.55)', dash: [2, 3], series: levelSeries('call_wall_2') }, // prettier-ignore
+    { name: 'put_wall_2', color: 'rgba(240,97,109,0.55)', dash: [2, 3], series: levelSeries('put_wall_2') }, // prettier-ignore
   ]
   const overlays: OverlayData = {
     price,

@@ -10,7 +10,7 @@ import pytest
 
 from gexlens_engine.compute.levels import compute_levels
 from gexlens_engine.config import Settings
-from gexlens_engine.storage.parquet_store import LevelsRow, SnapshotWriter
+from gexlens_engine.storage.parquet_store import Levels2Row, LevelsRow, SnapshotWriter
 
 GOLDEN_PATH = Path(__file__).parent / "golden" / "levels_basic.json"
 
@@ -93,6 +93,72 @@ def test_zero_profile_and_empty_profile() -> None:
     assert empty.put_wall is None
     assert empty.centroid is None
     assert empty.total_gex == 0.0
+
+
+def test_secondary_wall_reported_when_comparable(  # ADR-0008, #92
+) -> None:
+    """Dvě rovnocenné koncentrace → sekundární zeď; přeskakování mezi 7450/7500."""
+    profile = {
+        7400.0: -80.0,
+        7450.0: -950.0,  # sekundární put koncentrace (95 % primární)
+        7475.0: -100.0,
+        7500.0: -1000.0,  # primární put wall
+        7550.0: 200.0,
+        7600.0: 900.0,  # sekundární call koncentrace (90 % primární)
+        7625.0: 150.0,
+        7650.0: 1000.0,  # primární call wall
+    }
+    levels = compute_levels(profile, spot=7520.0)
+    assert levels.put_wall == 7500.0
+    assert levels.put_wall_2 == 7450.0
+    assert levels.call_wall == 7650.0
+    assert levels.call_wall_2 == 7600.0
+
+
+def test_secondary_wall_none_below_ratio_or_for_shoulder() -> None:
+    """Slabá koncentrace (< SECONDARY_WALL_RATIO) ani rameno primární nejsou 2. zeď."""
+    weak = compute_levels(
+        {7450.0: -300.0, 7500.0: -1000.0, 7600.0: 500.0},  # 30 % < ratio
+        spot=7550.0,
+    )
+    assert weak.put_wall == 7500.0
+    assert weak.put_wall_2 is None
+
+    # Soused primární zdi (rameno té samé koncentrace) není lokální vrchol
+    shoulder = compute_levels(
+        {7495.0: -900.0, 7500.0: -1000.0, 7505.0: -100.0, 7600.0: 500.0},
+        spot=7550.0,
+    )
+    assert shoulder.put_wall == 7500.0
+    assert shoulder.put_wall_2 is None
+
+    # Bez primární zdi není ani sekundární
+    empty = compute_levels({7600.0: 500.0}, spot=7550.0)
+    assert empty.put_wall is None
+    assert empty.put_wall_2 is None
+
+
+def test_levels2_series_persisted_to_derived(tmp_path: Path) -> None:
+    """ADR-0008: sekundární zdi jdou do vlastní řady derived/{sym}/{exp}/levels2."""
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    day = dt.date(2026, 7, 16)
+    rows = [
+        Levels2Row(
+            ts_min=dt.datetime(2026, 7, 16, 15, minute, tzinfo=dt.UTC),
+            call_wall_2=7600.0 if minute == 0 else None,
+            put_wall_2=7450.0,
+        )
+        for minute in range(2)
+    ]
+
+    path = writer.write_levels2("ES", "20260716", day, rows)
+
+    assert path == tmp_path / "derived" / "ES" / "20260716" / "levels2" / "2026-07-16.parquet"
+    frame = pd.read_parquet(path)
+    assert list(frame.columns) == ["ts_min", "call_wall_2", "put_wall_2"]
+    assert len(frame) == 2
+    assert frame["call_wall_2"][0] == pytest.approx(7600.0)
+    assert math.isnan(frame["call_wall_2"][1])
 
 
 def test_levels_series_persisted_to_derived(tmp_path: Path) -> None:
