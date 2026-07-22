@@ -29,6 +29,13 @@ export interface ProfileYView {
 const ROW_GAP = 1
 // Rezerva na každé straně pro číselný popisek hodnoty — pruhy nekončí až u okraje
 const LABEL_SPACE = 40
+// Levý pruh profilu s hodnotami strikes = úchop pro roztahování Y osy (#181);
+// stejná šířka jako AXIS_Y_WIDTH heatmapy, ať se osy chovají konzistentně
+const PROFILE_AXIS_ZONE = 48
+// Odhad šířky znaku popisku hodnoty (font 9 px) — kolizní logika popisků (#181)
+const VALUE_CHAR_PX = 5.5
+// Prostor strike popisků u levého okraje — hodnoty do něj nesmí zasáhnout
+const STRIKE_LABEL_RESERVE = 34
 
 /** Změna se znaménkem (+120 / −45) pro ΔOI tooltip. */
 function formatSigned(value: number): string {
@@ -90,25 +97,32 @@ function StrikeProfileBase({
   /** Střed řádku i (descending pořadí) — shodný vzorec s heatmap rowToY. */
   const rowCenterY = (index: number): number => (index + 0.5) * rowHeight + offsetY
 
-  // Úprava Y osy grafu tažením/kolečkem na profilu (stejná matematika jako heatmap osa)
+  // Úprava Y osy grafu tažením/kolečkem na profilu (stejná matematika jako heatmap
+  // osa) — jen nad pruhem s hodnotami strikes, zbytek panelu osu nehýbe (#181)
   const dragYRef = useRef<number | null>(null)
+  const [axisHover, setAxisHover] = useState(false)
   const yInteractive = Boolean(yView && onYViewChange)
+  const inAxisZone = (event: { clientX: number; currentTarget: Element }): boolean =>
+    event.clientX - event.currentTarget.getBoundingClientRect().left < PROFILE_AXIS_ZONE
   const yBase = (): ViewTransform => ({ offsetX: 0, offsetY, zoomX: 1, zoomY: yView?.zoomY ?? 1 })
   const applyY = (next: ViewTransform) =>
     onYViewChange?.({ offsetY: next.offsetY, zoomY: next.zoomY })
   const onProfileWheel = (event: React.WheelEvent<SVGSVGElement>) => {
-    if (!yInteractive) return
+    if (!yInteractive || !inAxisZone(event)) return
     const rect = event.currentTarget.getBoundingClientRect()
     const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
     applyY(zoomAxis(yBase(), 'y', factor, event.clientY - rect.top))
   }
   const onProfilePointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
-    if (!yInteractive) return
+    if (!yInteractive || !inAxisZone(event)) return
     dragYRef.current = event.clientY
     event.currentTarget.setPointerCapture(event.pointerId)
   }
   const onProfilePointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
-    if (dragYRef.current === null || !yInteractive) return
+    if (dragYRef.current === null || !yInteractive) {
+      setAxisHover(yInteractive && inAxisZone(event))
+      return
+    }
     const deltaY = event.clientY - dragYRef.current
     dragYRef.current = event.clientY
     // Kotva = střed (jako scale-y na levé ose): stlačení/roztažení cenové osy
@@ -182,12 +196,15 @@ function StrikeProfileBase({
           height={svgHeight}
           role="img"
           aria-label="Skládané pruhy strike profilu"
-          style={{ cursor: yInteractive ? 'ns-resize' : undefined }}
+          style={{ cursor: axisHover ? 'ns-resize' : undefined }}
           onWheel={onProfileWheel}
           onPointerDown={onProfilePointerDown}
           onPointerMove={onProfilePointerMove}
           onPointerUp={onProfilePointerUp}
-          onPointerLeave={() => setCrosshair(null)}
+          onPointerLeave={() => {
+            setCrosshair(null)
+            setAxisHover(false)
+          }}
         >
           {/* symetrická osa */}
           <line x1={halfWidth} y1={0} x2={halfWidth} y2={svgHeight} stroke="#2c3342" />
@@ -213,6 +230,15 @@ function StrikeProfileBase({
             const barHeight = Math.max(1, rowHeight - ROW_GAP)
             const y = rowCenterY(index) - barHeight / 2
             const highlighted = crosshair?.strike === row.strike
+            // Kolizní logika popisků hodnot (#181): když se číslo nevejde vedle
+            // pruhu (put by zasáhl do strike popisků, call za pravý okraj),
+            // překlopí se DOVNITŘ pruhu tmavým textem — nikdy se nepřekrývá
+            const callText = formatAmount(row.callVolComponent + row.callOiComponent)
+            const callEnd = halfWidth + bar.callVolWidth + bar.callOiWidth
+            const callOutside = callEnd + 3 + callText.length * VALUE_CHAR_PX <= width - 2
+            const putText = formatAmount(row.putVolComponent + row.putOiComponent)
+            const putEnd = halfWidth - bar.putVolWidth - bar.putOiWidth
+            const putOutside = putEnd - 3 - putText.length * VALUE_CHAR_PX >= STRIKE_LABEL_RESERVE
             return (
               <g
                 key={row.strike}
@@ -268,26 +294,26 @@ function StrikeProfileBase({
                 {/* Číselné hodnoty (Δ-vážené kontrakty) u konce pruhů — každý k-tý řádek */}
                 {index % labelEvery === 0 && row.callVolComponent + row.callOiComponent > 0 && (
                   <text
-                    x={halfWidth + bar.callVolWidth + bar.callOiWidth + 3}
+                    x={callOutside ? callEnd + 3 : callEnd - 3}
                     y={rowCenterY(index) + 3}
                     fontSize={9}
-                    fill={COLORS.callVol}
-                    textAnchor="start"
+                    fill={callOutside ? COLORS.callVol : '#12151c'}
+                    textAnchor={callOutside ? 'start' : 'end'}
                     data-part="value-call"
                   >
-                    {formatAmount(row.callVolComponent + row.callOiComponent)}
+                    {callText}
                   </text>
                 )}
                 {index % labelEvery === 0 && row.putVolComponent + row.putOiComponent > 0 && (
                   <text
-                    x={halfWidth - bar.putVolWidth - bar.putOiWidth - 3}
+                    x={putOutside ? putEnd - 3 : putEnd + 3}
                     y={rowCenterY(index) + 3}
                     fontSize={9}
-                    fill={COLORS.putVol}
-                    textAnchor="end"
+                    fill={putOutside ? COLORS.putVol : '#12151c'}
+                    textAnchor={putOutside ? 'end' : 'start'}
                     data-part="value-put"
                   >
-                    {formatAmount(row.putVolComponent + row.putOiComponent)}
+                    {putText}
                   </text>
                 )}
               </g>

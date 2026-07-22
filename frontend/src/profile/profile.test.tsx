@@ -130,6 +130,57 @@ test('yView: pruhy i cenová linka sledují Y transformaci hlavního grafu', () 
   expect(Number(screen.getByTestId('profile-price-line').getAttribute('y1'))).toBeCloseTo(300, 1)
 })
 
+test('popisky hodnot se nikdy nepřekrývají se strike popisky ani okrajem (#181)', () => {
+  renderPanel() // šířka 260, halfWidth 130, barHalf 90; max strana = put 7590 (60)
+  const panel = screen.getByLabelText('Skládané pruhy strike profilu')
+  const putVals = [...panel.querySelectorAll('[data-part="value-put"]')]
+  // 7590: plný put pruh končí na 40 (LABEL_SPACE) — hodnota by zasáhla do strike
+  // popisků, takže se překlopí DOVNITŘ pruhu (anchor start, tmavý text)
+  const fullPut = putVals.find((node) => node.textContent === '60')!
+  expect(fullPut.getAttribute('text-anchor')).toBe('start')
+  expect(Number(fullPut.getAttribute('x'))).toBeCloseTo(43, 1)
+  expect(fullPut.getAttribute('fill')).toBe('#12151c')
+  // 7600: krátký put pruh (15/60) má místa dost → hodnota vně pruhu jako dřív
+  const shortPut = putVals.find((node) => node.textContent === '15')!
+  expect(shortPut.getAttribute('text-anchor')).toBe('end')
+  const shortPutEnd = 130 - (15 / 60) * 90
+  expect(Number(shortPut.getAttribute('x'))).toBeCloseTo(shortPutEnd - 3, 1)
+  // Call strana se do pravého okraje vejde → vně pruhu
+  const call = [...panel.querySelectorAll('[data-part="value-call"]')].find(
+    (node) => node.textContent === '45',
+  )!
+  expect(call.getAttribute('text-anchor')).toBe('start')
+})
+
+test('Y osa profilu se roztahuje jen nad pruhem s hodnotami strikes (#181)', () => {
+  const changes: Array<{ offsetY: number; zoomY: number }> = []
+  render(
+    <CrosshairProvider>
+      <StrikeProfile
+        rows={rows()}
+        spot={7595}
+        height={200}
+        yView={{ offsetY: 0, zoomY: 1, baseHeight: 200 }}
+        onYViewChange={(next) => changes.push(next)}
+      />
+    </CrosshairProvider>,
+  )
+  const svg = screen.getByLabelText('Skládané pruhy strike profilu')
+  // Kolečko i drag MIMO zónu osy (x=100) osu nehýbou
+  fireEvent.wheel(svg, { deltaY: -100, clientX: 100 })
+  fireEvent.pointerDown(svg, { clientX: 100, clientY: 100, pointerId: 1 })
+  fireEvent.pointerMove(svg, { clientX: 100, clientY: 60, pointerId: 1 })
+  fireEvent.pointerUp(svg, { pointerId: 1 })
+  expect(changes).toHaveLength(0)
+  // V zóně osy (x=10) fungují jako dřív
+  fireEvent.wheel(svg, { deltaY: -100, clientX: 10 })
+  expect(changes.at(-1)!.zoomY).toBeGreaterThan(1)
+  fireEvent.pointerDown(svg, { clientX: 10, clientY: 100, pointerId: 1 })
+  fireEvent.pointerMove(svg, { clientX: 10, clientY: 60, pointerId: 1 })
+  fireEvent.pointerUp(svg, { pointerId: 1 })
+  expect(changes.at(-1)!.zoomY).toBeGreaterThan(1)
+})
+
 test('drag i kolečko na profilu upravují Y osu grafu (issue #116)', () => {
   const changes: Array<{ offsetY: number; zoomY: number }> = []
   render(

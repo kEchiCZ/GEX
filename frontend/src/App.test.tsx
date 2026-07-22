@@ -40,15 +40,20 @@ test('vykreslí kompletní layout (SPEC 7.1)', async () => {
   expect(await screen.findByRole('option', { name: '20260716' })).toBeDefined()
 })
 
-test('Ctrl+kolečko (pinch) nezoomuje stránku — zoom patří jen grafu (#179)', () => {
+test('Ctrl+kolečko (pinch) nezoomuje stránku NAD grafem; jinde zůstává (#179, #181)', () => {
   makeApp()
   // Pinch na touchpadu chodí jako wheel s ctrlKey; dispatchEvent vrací false,
   // když handler zavolal preventDefault (page zoom zablokován)
-  const pinch = new WheelEvent('wheel', { ctrlKey: true, cancelable: true, bubbles: true })
-  expect(window.dispatchEvent(pinch)).toBe(false)
-  // Obyčejné kolečko (zoom grafu, scroll) zůstává nedotčené
+  const overChart = new WheelEvent('wheel', { ctrlKey: true, cancelable: true, bubbles: true })
+  const chart = document.querySelector('.chart-row')!
+  expect(chart.dispatchEvent(overChart)).toBe(false)
+  // Mimo graf (sidebar/lišty) musí zoom prohlížeče zůstat — rozjetý page zoom
+  // by se jinak nedal vrátit (#181)
+  const overSidebar = new WheelEvent('wheel', { ctrlKey: true, cancelable: true, bubbles: true })
+  expect(screen.getByLabelText('Hlavní navigace').dispatchEvent(overSidebar)).toBe(true)
+  // Obyčejné kolečko nad grafem (zoom grafu) zůstává nedotčené
   const plain = new WheelEvent('wheel', { cancelable: true, bubbles: true })
-  expect(window.dispatchEvent(plain)).toBe(true)
+  expect(chart.dispatchEvent(plain)).toBe(true)
 })
 
 test('sidebar se dá sbalit a rozbalit', () => {
