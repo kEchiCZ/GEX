@@ -296,11 +296,15 @@ body {
 .bottom-panel {
   position: relative;
   border-bottom: 1px solid var(--border);
+  /* Při tažení předělů drží svg pixelovou šířku, než doběhne měření šířky
+     heatmapy — přesah se ořízne místo roztažení obsahu (#175, obdoba #173) */
+  overflow: hidden;
 }
 
+/* Šířku svg řídí px atribut z BottomPanels (#175) — CSS 100 % by při změně
+   layoutu na mezisnímek roztáhlo starý obsah (preserveAspectRatio=none) */
 .bottom-panel svg {
   display: block;
-  width: 100%;
 }
 
 .panel-title {
