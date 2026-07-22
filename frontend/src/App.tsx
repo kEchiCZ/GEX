@@ -626,13 +626,16 @@ function MainContent() {
 
 function Shell() {
   const { theme, priceInfo } = useAppState()
-  // Zoom stránky (Ctrl+kolečko / pinch na touchpadu chodí jako ctrl+wheel) nesmí
-  // zvětšovat UI aplikace — zoomovat smí jen graf a s ním svázané osy (#179).
-  // React onWheel handlery grafu/profilu běží dál; klávesové Ctrl +/− zůstává
-  // jako přístupová pojistka (to prohlížeč zablokovat nedá).
+  // Ctrl+kolečko / pinch (chodí jako ctrl+wheel) NAD GRAFEM a jeho ukazateli
+  // nesmí zoomovat stránku — tam patří zoom grafu (#179). Mimo .chart-row
+  // (sidebar, lišty) zůstává zoom prohlížeče plně funkční, jinak by se
+  // rozjetý page zoom nedal vrátit (#181); Ctrl+0 / Ctrl± fungují vždy.
   useEffect(() => {
     const blockPageZoom = (event: WheelEvent) => {
-      if (event.ctrlKey) event.preventDefault()
+      if (!event.ctrlKey) return
+      if (event.target instanceof Element && event.target.closest('.chart-row')) {
+        event.preventDefault()
+      }
     }
     window.addEventListener('wheel', blockPageZoom, { passive: false })
     return () => window.removeEventListener('wheel', blockPageZoom)
