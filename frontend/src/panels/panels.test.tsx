@@ -150,10 +150,13 @@ test('vodorovný předěl mění výšku spodních panelů tažením (#169)', ()
   const volSvg = () => screen.getByLabelText('Vol panel').querySelector('svg')!
   expect(volSvg().getAttribute('height')).toBe('84')
 
+  // Delta myši se dělí počtem viditelných panelů (#177): defaultně jsou
+  // zapnuté 3 (Vol, Opt Vol, Cum Δ) → 60 px myši = +20 px na panel a hrana
+  // celého bloku sleduje kurzor 1:1
   fireEvent.pointerDown(divider, { clientY: 600, pointerId: 1 })
   fireEvent.pointerMove(divider, { clientY: 540, pointerId: 1 }) // tažení nahoru → vyšší panely
   fireEvent.pointerUp(divider, { pointerId: 1 })
-  expect(volSvg().getAttribute('height')).toBe('144')
+  expect(volSvg().getAttribute('height')).toBe('104')
 
   // Meze: nejde stáhnout pod 50
   fireEvent.pointerDown(divider, { clientY: 300, pointerId: 1 })
