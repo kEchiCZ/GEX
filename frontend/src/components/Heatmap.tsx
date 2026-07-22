@@ -29,6 +29,7 @@ import {
   DEFAULT_VIEW,
   axisZoneAt,
   baseBucketPx,
+  compensateView,
   fitPriceView,
   homeOffsetX,
   zoomAxis,
@@ -145,6 +146,20 @@ export function Heatmap({
   useEffect(() => {
     onLogicalSizeChange?.(size)
   }, [size, onLogicalSizeChange])
+  // Změna velikosti plátna (předěly panelů, resize okna) nesmí hýbat obsahem:
+  // base měřítko závisí na rozměrech, proto se zoom kompenzuje tak, aby
+  // pixelové pozice buněk zůstaly — uživatel si graf srovná sám (#171)
+  const previousSizeRef = useRef<{ width: number; height: number } | null>(null)
+  useEffect(() => {
+    const previous = previousSizeRef.current
+    previousSizeRef.current = { width: logicalW, height: logicalH }
+    if (!previous || (previous.width === logicalW && previous.height === logicalH)) return
+    setView((current) =>
+      compensateView(current, grid.minutes, previous, { width: logicalW, height: logicalH }),
+    )
+    // Jen na změnu velikosti — změna počtu minut kompenzaci spouštět nesmí
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logicalW, logicalH])
   // Výchozí pohled: fit cenového pásma na skutečnou výšku canvasu (hi-DPI, resize);
   // osa X ukotvená k pravému okraji, když data nevyplní šířku (TradingView styl)
   const homeView = useMemo(() => {

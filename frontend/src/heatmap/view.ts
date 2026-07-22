@@ -101,6 +101,35 @@ export function fitPriceView(
   return { ...DEFAULT_VIEW, zoomY, offsetY: 0.1 * canvasHeight - yTop * zoomY }
 }
 
+/** Velikost plátna v logických CSS px. */
+export interface CanvasSize {
+  width: number
+  height: number
+}
+
+/** Kompenzace zoomu při změně velikosti plátna — obsah grafu se nehýbe (#171).
+
+Základní měřítko os je odvozené z rozměrů plátna (`baseBucketPx(minutes, width)`,
+`height / strikeCount`), takže roztažení panelů či okna by obsah proporčně
+přeškálovalo. Kompenzovaný zoom drží součin base × zoom konstantní: pixelové
+pozice buněk zůstávají (kotva levý horní roh, offsety se nemění) a změna
+rozměru jen odkryje/skryje kus plochy — TradingView chování. Záměrně bez
+ořezu na ZOOM_MIN/MAX: kompenzace není uživatelský zoom, ale změna základu. */
+export function compensateView(
+  view: ViewTransform,
+  minutes: number,
+  previous: CanvasSize,
+  next: CanvasSize,
+): ViewTransform {
+  if (previous.width <= 0 || previous.height <= 0 || next.width <= 0 || next.height <= 0) {
+    return view
+  }
+  const factorX = baseBucketPx(minutes, previous.width) / baseBucketPx(minutes, next.width)
+  const factorY = previous.height / next.height
+  if (factorX === 1 && factorY === 1) return view
+  return { ...view, zoomX: view.zoomX * factorX, zoomY: view.zoomY * factorY }
+}
+
 /** Zóna interakce podle pozice kurzoru: levý pruh = osa Y, spodní pruh = osa X. */
 export type AxisZone = 'x' | 'y' | null
 
