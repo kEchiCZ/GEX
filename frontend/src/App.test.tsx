@@ -40,6 +40,17 @@ test('vykreslí kompletní layout (SPEC 7.1)', async () => {
   expect(await screen.findByRole('option', { name: '20260716' })).toBeDefined()
 })
 
+test('Ctrl+kolečko (pinch) nezoomuje stránku — zoom patří jen grafu (#179)', () => {
+  makeApp()
+  // Pinch na touchpadu chodí jako wheel s ctrlKey; dispatchEvent vrací false,
+  // když handler zavolal preventDefault (page zoom zablokován)
+  const pinch = new WheelEvent('wheel', { ctrlKey: true, cancelable: true, bubbles: true })
+  expect(window.dispatchEvent(pinch)).toBe(false)
+  // Obyčejné kolečko (zoom grafu, scroll) zůstává nedotčené
+  const plain = new WheelEvent('wheel', { cancelable: true, bubbles: true })
+  expect(window.dispatchEvent(plain)).toBe(true)
+})
+
 test('sidebar se dá sbalit a rozbalit', () => {
   makeApp()
   const toggle = screen.getByLabelText('Sbalit menu')
