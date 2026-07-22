@@ -95,6 +95,21 @@ GEXPROFILE_SCHEMA = pa.schema(
     ]
 )
 
+# Modelované Dyn GEX pole (ADR-0009 fáze 2): budoucí sloupce s klesajícím τ.
+# Partice drží JEN poslední stav minuty (replace_and_write) — pole je odvoditelné
+# a historii „co model kdy tvrdil" nearchivujeme, jen historie profilů je poctivá.
+GEXFIELD_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("grid_start", pa.float64()),
+        ("grid_step", pa.float64()),
+        ("col_start", pa.timestamp("us", tz="UTC")),
+        ("col_step_min", pa.int32()),
+        ("col_count", pa.int32()),
+        ("values", pa.list_(pa.float64())),  # sloupce za sebou: values[col·grid_len + i]
+    ]
+)
+
 # Sekundární zdi (ADR-0008, #92) — VLASTNÍ řada, ne sloupce v LEVELS_SCHEMA:
 # přidání sloupce by rozbilo čtení existujících denních partic
 # (pq.read_table(..., schema=...)), stejné omezení jako u barů v ADR-0005
@@ -194,6 +209,21 @@ class GexProfileRow:
 
 
 @dataclass(frozen=True)
+class GexFieldRow:
+    """Modelované Dyn GEX pole (ADR-0009 fáze 2) — jen poslední stav minuty.
+
+    `values` jsou sloupce za sebou: values[col · grid_len + i]."""
+
+    ts_min: dt.datetime
+    grid_start: float
+    grid_step: float
+    col_start: dt.datetime
+    col_step_min: int
+    col_count: int
+    values: list[float]
+
+
+@dataclass(frozen=True)
 class TickRecord:
     """Jeden klasifikovaný trade hot zóny (SPEC 5.1: ts, conId, price, size, side)."""
 
@@ -228,6 +258,19 @@ class _PartitionBuffer:
         self._rows.extend(rows)
         if key is not None:
             self._rows.sort(key=lambda row: row[key])  # type: ignore[arg-type,return-value]
+        return self._write()
+
+    def replace_and_write(self, rows: Sequence[dict[str, object]]) -> Path:
+        """Nahradí CELÝ obsah partice — řady typu „jen poslední stav" (gexfield).
+
+        Předchozí obsah se nenačítá: po restartu enginu je starý stav bezcenný,
+        první cyklus ho přepíše čerstvým polem.
+        """
+        self._loaded = True
+        self._rows = list(rows)
+        return self._write()
+
+    def _write(self) -> Path:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._cleanup_stale_tmp()
         table = pa.Table.from_pylist(self._rows, schema=self._schema)
@@ -323,6 +366,14 @@ class SnapshotWriter:
         )
         buffer = self._buffer(path, GEXPROFILE_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_gexfield(self, symbol: str, expiry: str, day: dt.date, row: GexFieldRow) -> Path:
+        """Přepíše modelované pole v derived/{sym}/{exp}/gexfield — jen poslední stav."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "gexfield" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, GEXFIELD_SCHEMA)
+        return buffer.replace_and_write([asdict(row)])
 
     def write_bars(self, symbol: str, day: dt.date, bars: Sequence[BarLike]) -> Path:
         """Zapíše 1min bary podkladu do partice derived/{sym}/bars/{date}.parquet.

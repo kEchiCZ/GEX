@@ -126,5 +126,6 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
     minuteLabels: days.map((day) => dayLabel(day.date)),
     lastMinuteIso: null, // Daily pohled se neprojektuje (sloupec = den)
     gexProfile: null, // Dyn GEX profil je intraday vrstva (ADR-0009)
+    gexField: null,
   }
 }

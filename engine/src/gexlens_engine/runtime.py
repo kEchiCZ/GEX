@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.gex import GexEngine, GexInput
-from gexlens_engine.compute.gexfield import ProfileContract, gamma_profile
+from gexlens_engine.compute.gexfield import ProfileContract, gamma_field, gamma_profile
 from gexlens_engine.compute.levels import compute_levels
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
@@ -25,6 +25,7 @@ from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.parquet_store import (
     FlowRowLike,
+    GexFieldRow,
     GexProfileRow,
     Levels2Row,
     LevelsRow,
@@ -241,6 +242,44 @@ class EngineRuntime:
                     "values": profile_row.values,
                 },
             )
+            # Modelované pole budoucích sloupců (ADR-0009 fáze 2): drží se jen
+            # poslední stav — minulé sloupce 2D módu skládá frontend z historie
+            # profilů výše, budoucí z tohoto pole
+            gexfield = gamma_field(
+                profile_contracts,
+                ts_min=ts_min,
+                settle=settle,
+                grid_start=strikes_sorted[0],
+                grid_stop=strikes_sorted[-1],
+                grid_step=strike_step / 2.0,
+                multiplier=self.multiplier,
+            )
+            if gexfield is not None:
+                flat = [round(value, 1) for column in gexfield.values for value in column]
+                field_row = GexFieldRow(
+                    ts_min=ts_min,
+                    grid_start=gexfield.grid_start,
+                    grid_step=gexfield.grid_step,
+                    col_start=gexfield.col_start,
+                    col_step_min=gexfield.col_step_min,
+                    col_count=len(gexfield.values),
+                    values=flat,
+                )
+                await asyncio.to_thread(
+                    self.writer.write_gexfield, self.symbol, self.expiry, day, field_row
+                )
+                await self.publisher.publish(
+                    f"gexfield.{self.symbol}.{self.expiry}",
+                    {
+                        "ts_min": ts_min.isoformat(),
+                        "grid_start": field_row.grid_start,
+                        "grid_step": field_row.grid_step,
+                        "col_start": field_row.col_start.isoformat(),
+                        "col_step_min": field_row.col_step_min,
+                        "col_count": field_row.col_count,
+                        "values": field_row.values,
+                    },
+                )
 
         # 3) FlowΔ/CumΔ minuta + 4) bary podkladu — jen aktivní expirace
         # (soubory jsou per symbol; sekundární řetěz by je duplikoval)

@@ -205,6 +205,7 @@ source = { editable = "engine" }
 dependencies = [
     { name = "httpx" },
     { name = "ib-async" },
+    { name = "numpy" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pyarrow" },
     { name = "pydantic-settings" },
@@ -215,6 +216,7 @@ dependencies = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "ib-async", specifier = ">=2.0" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pyarrow", specifier = ">=18" },
     { name = "pydantic-settings", specifier = ">=2.7" },

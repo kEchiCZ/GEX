@@ -226,6 +226,8 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
           return null
         })
       : null,
+    // Modelované pole se mapuje časem, ne koši — beze změny (ADR-0009 fáze 2)
+    gexField: day.gexField,
     spotSeries: lastNonNull(day.spotSeries, bucketMinutes, buckets),
     minuteLabels: Array.from(
       { length: buckets },

@@ -70,6 +70,13 @@ class DataRepository:
         )
         return self._read(path)
 
+    def gexfield(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """Modelované Dyn GEX pole (ADR-0009 fáze 2) — partice drží jen poslední stav."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "gexfield" / f"{day.isoformat()}.parquet"
+        )
+        return self._read(path)
+
     def flow(self, symbol: str, day: dt.date) -> pd.DataFrame:
         path = self._settings.derived_dir / symbol / "flow" / f"{day.isoformat()}.parquet"
         return self._read(path)

@@ -3,7 +3,9 @@ import { INTERVALS, useAppState } from '../state/AppState'
 import type { Toggles } from '../state/AppState'
 
 const TOGGLE_LABELS: Record<keyof Toggles, string> = {
-  dynGex: 'Dyn GEX',
+  // Historicky „Dyn GEX", ale přepínač ukazuje zdi — název teď patří
+  // modelovanému heatmap módu (ADR-0009 fáze 2), ať se nepletou
+  dynGex: 'Zdi',
   secondaryWall: '2. zeď',
   gexLevels: 'GEX Levels',
   sessions: 'Sessions',

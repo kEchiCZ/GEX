@@ -32,6 +32,7 @@ function makeInputs(): ReplayInputs {
     flow: [],
     oiPrev: [],
     gexProfile: [],
+    gexField: null,
   }
 }
 
