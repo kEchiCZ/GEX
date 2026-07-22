@@ -20,6 +20,7 @@ Technický popis architektury, provozu, konfigurace a vývoje aplikace GEXLens. 
 10. [Testy a CI](#10-testy-a-ci)
 11. [Známé limity účtu a otevřené body](#11-známé-limity-účtu-a-otevřené-body)
 12. [Diagnostika a údržba](#12-diagnostika-a-údržba)
+13. [Zprovoznění od nuly — IBKR účet, TWS/Gateway](#13-zprovoznění-od-nuly--ibkr-účet-twsgateway)
 
 ---
 
@@ -263,6 +264,77 @@ Z [ADR-0001](../adr/0001-ibkr-account-limits.md) (měřeno živě na účtu):
 | Reset prostředí | `docker compose down`, smaž `./data` (přijdeš o 14denní okno, ne o OI archiv ve volume `pgdata`), `docker compose up -d --build`. |
 | Málo dat po restartu | Writer navazuje na rozepsaný den — mezera zůstane jen za dobu výpadku. |
 | Změna portu TWS | Settings v aplikaci, nebo `.env` + `docker compose up -d engine`. |
+
+## 13. Zprovoznění od nuly — IBKR účet, TWS/Gateway
+
+Jednorázový onboarding pro nové prostředí (převzato z issue #1, kde vznikl a byl
+odškrtán při prvním zprovoznění 16. 7. 2026). Bez těchto kroků se engine
+nepřipojí, nebo dostane jen delayed data, která záměrně odmítá (SPEC 3.1 —
+Greeks z delayed dat nejsou spolehlivé).
+
+### 13.1 Market data subskripce (Client Portal)
+
+1. <https://www.interactivebrokers.com> → **Log In → Portal** (IBKR login + IB Key).
+2. **Settings → User Settings → Market Data Subscriptions** → Configure (ozubené kolo).
+3. **North America → Futures → CME Real-Time (NP,L2)** — pokrývá ES/NQ futures
+   i futures opce (FOP). Levná subskripce (~1,55 USD/měs.) prokazatelně stačí
+   (ověřeno živě, ADR-0001).
+4. Zkontroluj status **Non-Professional** (jinak výrazně vyšší poplatky).
+5. *(Až pro SPY/SPX — sekundární scope)*: **OPRA (US Options Exchanges)**,
+   pro SPX index navíc **Cboe Streaming Market Indexes**.
+6. Vývoj proti **paper účtu**: Settings → Account Settings → Paper Trading
+   Account → *Share real-time market data with paper account* — jinak paper
+   účet subskripce nevidí.
+
+### 13.2 TWS nebo IB Gateway (musí běžet lokálně)
+
+Engine se připojuje socketem na lokální TWS/Gateway (z kontejneru přes
+`host.docker.internal`), ne přímo na servery IBKR.
+
+**Varianta A — stávající TWS (nejrychlejší):**
+Edit → Global Configuration → API → Settings → ✅ *Enable ActiveX and Socket
+Clients*, port **7496** live / **7497** paper, Trusted IPs `127.0.0.1`
+(vypne potvrzovací dialog), *Read-Only API* nechat **zapnuté** — GEXLens jen
+čte, nic neobchoduje.
+
+**Varianta B — dedikovaný IB Gateway (doporučeno pro trvalý provoz):**
+
+1. Stable Windows 64-bit: <https://www.interactivebrokers.com/en/trading/ibgateway-stable.php>
+2. Login obrazovka: režim **IB API**, Live/Paper, přihlášení s IB Key.
+3. Configure → Settings → API → Settings: port přepsat z 4001/4002 na
+   **7496/7497** (nebo nechat a upravit `GEXLENS_IBKR_PORT` v `.env`),
+   Trusted IPs `127.0.0.1`, Read-Only API zapnuté.
+4. Configure → Settings → Lock and Exit → **Auto restart**, čas mimo seanci
+   (např. 23:00) — jinak se TWS/GW jednou denně sám odhlásí a engine ztratí
+   spojení přes noc. Jednou týdně (neděle) je i tak nutné plné ruční
+   přihlášení — omezení IBKR.
+
+### 13.3 Konflikt jednoho přihlášení ⚠️
+
+IBKR povoluje jedno přihlášení na username: Gateway + TWS (či mobil s trading
+permission, druhé PC) se stejným loginem současně = Gateway spadne. Řešení:
+druhý user v Client Portal (Settings → Account Settings → Users & Access
+Rights) — pozor, market data subskripce se platí per user. Pro start stačí
+varianta A.
+
+### 13.4 Software na PC
+
+- **Docker Desktop** s WSL2 backendem — celý stack (PostgreSQL, api, engine,
+  frontend) běží přes `docker compose up -d` (kap. 3). Bez Dockeru: Python
+  3.12, Node.js ≥20, PostgreSQL 16 + `make run` (kap. 9).
+- Volné místo: ~1 GB pro 14denní datové okno; WSL2 limit paměti viz
+  `C:\Users\<user>\.wslconfig` (`[wsl2] memory=6GB` — pojistka proti
+  nafouknutí vmmem).
+
+### 13.5 Ověření a denní provoz
+
+```powershell
+Test-NetConnection 127.0.0.1 -Port 7496   # TcpTestSucceeded: True = API poslouchá
+```
+
+Každý obchodní den: TWS/Gateway běží a je přihlášený **před startem enginu**;
+stavová lišta aplikace ukazuje `connected :7496` a `● Live` (ne Offline).
+Diagnostika problémů: kap. 12.
 
 ---
 
