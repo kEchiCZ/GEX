@@ -33,6 +33,7 @@ import {
   smoothSeries,
 } from './heatmap/wallsModes'
 import type { WallsMode } from './heatmap/wallsModes'
+import { projectedSessions } from './instrument/sessions'
 import { aggregateDay, aggregateLive } from './replay/aggregate'
 import { sliceGrid, sliceOverlays, slicePanels } from './replay/slice'
 import { useAggregateProfile } from './replay/useAggregateProfile'
@@ -320,6 +321,19 @@ function MainContent() {
     [allOverlays, toggles.gexLevels, toggles.sessions, toggles.dynGex],
   )
 
+  // Seance i v projektované zóně (#195) — všechny seance dne najednou,
+  // včetně US Open/Close, které teprve přijdou
+  const projectedSessionMarkers = useMemo(() => {
+    if (!toggles.sessions || projectionExtra <= 0 || !playback.isLive || !selectedExpiry) return []
+    if (timeframe !== 'intraday' || !day.lastMinuteIso) return []
+    return projectedSessions(
+      day.lastMinuteIso,
+      expirySettleUtc(selectedExpiry),
+      bucketMinutes,
+      day.grid.minutes,
+    )
+  }, [toggles.sessions, projectionExtra, playback.isLive, selectedExpiry, timeframe, day.lastMinuteIso, bucketMinutes, day.grid.minutes]) // prettier-ignore
+
   // Walls módy (SPEC 4.4): bílé čárkované linie počítané z aktuální vrstvy gridu
   const computedWalls = useMemo<LevelLine[]>(() => {
     if (wallsMode === 'off') return []
@@ -368,8 +382,10 @@ function MainContent() {
         ...computedWalls,
       ],
       levels: [...(baseOverlays.levels ?? []), ...setupLines],
+      // Budoucí seance v projekci (#195)
+      sessions: [...(baseOverlays.sessions ?? []), ...projectedSessionMarkers],
     }),
-    [baseOverlays, computedWalls, setupLines, toggles.secondaryWall],
+    [baseOverlays, computedWalls, setupLines, toggles.secondaryWall, projectedSessionMarkers],
   )
 
   if (view === 'dashboard') {

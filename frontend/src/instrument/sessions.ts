@@ -55,6 +55,30 @@ function isEuDst(at: number, year: number): boolean {
   return at >= lastSundayUtc(year, 2) && at < lastSundayUtc(year, 9)
 }
 
+/** Čas seance v daný den (epoch ms) včetně DST posunu trhu (#159). */
+function sessionAtUtc(dayStart: Date, session: (typeof WORLD_SESSIONS)[number]): number {
+  const year = dayStart.getUTCFullYear()
+  let at = Date.UTC(
+    year,
+    dayStart.getUTCMonth(),
+    dayStart.getUTCDate(),
+    session.utcHour,
+    session.utcMinute,
+  )
+  // Uložené časy jsou letní — mimo DST daného trhu o hodinu později
+  const summer =
+    session.dst === 'us' ? isUsDst(at, year) : session.dst === 'eu' ? isEuDst(at, year) : true
+  if (!summer) at += 60 * 60_000
+  return at
+}
+
+/** Slučování popisků na téže pozici — kreslí se pod sebou (#193). */
+function mergeMarkers(byIndex: Map<number, string[]>): SessionMarker[] {
+  return [...byIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([minuteIdx, labels]) => ({ minuteIdx, label: labels.join(' · ') }))
+}
+
 /** Markery pro den daný ISO minutami (UTC); mimo rozsah dne se vynechají.
 
 Seance padnoucí na tutéž minutu se slučují do jednoho popisku — jinak by se
@@ -63,20 +87,9 @@ export function autoSessions(minuteKeysIso: string[]): SessionMarker[] {
   if (minuteKeysIso.length === 0) return []
   const times = minuteKeysIso.map((iso) => new Date(iso).getTime())
   const dayStart = new Date(minuteKeysIso[0])
-  const year = dayStart.getUTCFullYear()
   const byMinute = new Map<number, string[]>()
   for (const session of WORLD_SESSIONS) {
-    let at = Date.UTC(
-      year,
-      dayStart.getUTCMonth(),
-      dayStart.getUTCDate(),
-      session.utcHour,
-      session.utcMinute,
-    )
-    // Uložené časy jsou letní — mimo DST daného trhu o hodinu později (#159)
-    const summer =
-      session.dst === 'us' ? isUsDst(at, year) : session.dst === 'eu' ? isEuDst(at, year) : true
-    if (!summer) at += 60 * 60_000
+    const at = sessionAtUtc(dayStart, session)
     // Jen seance uvnitř rozsahu dat (minutová tolerance na začátku dne)
     if (at < times[0] - 60_000 || at > times[times.length - 1]) continue
     const minuteIdx = times.findIndex((t) => t >= at)
@@ -85,7 +98,32 @@ export function autoSessions(minuteKeysIso: string[]): SessionMarker[] {
     if (labels) labels.push(session.label)
     else byMinute.set(minuteIdx, [session.label])
   }
-  return [...byMinute.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([minuteIdx, labels]) => ({ minuteIdx, label: labels.join(' · ') }))
+  return mergeMarkers(byMinute)
+}
+
+/** Markery seancí v PROJEKTOVANÉ zóně (#195): mezi poslední naměřenou minutou
+a settle. `minuteIdx` je v prostoru košů projektované osy — koš
+`dataBuckets + k` pokrývá čas `last + (k+1) × bucket` (shodně s
+`projectionLabels`), takže US Open ap. jsou vidět dřív, než začnou. */
+export function projectedSessions(
+  lastMinuteIso: string,
+  settle: Date | null,
+  bucketMinutes: number,
+  dataBuckets: number,
+): SessionMarker[] {
+  const last = new Date(lastMinuteIso).getTime()
+  if (Number.isNaN(last) || settle === null) return []
+  const dayStart = new Date(lastMinuteIso)
+  const bucketMs = Math.max(1, bucketMinutes) * 60_000
+  const byBucket = new Map<number, string[]>()
+  for (const session of WORLD_SESSIONS) {
+    const at = sessionAtUtc(dayStart, session)
+    if (at <= last || at > settle.getTime()) continue
+    const index = Math.max(0, Math.ceil((at - last) / bucketMs) - 1)
+    const minuteIdx = dataBuckets + index
+    const labels = byBucket.get(minuteIdx)
+    if (labels) labels.push(session.label)
+    else byBucket.set(minuteIdx, [session.label])
+  }
+  return mergeMarkers(byBucket)
 }
