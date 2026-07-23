@@ -13,6 +13,7 @@ from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import (
     ChainDiscovery,
     ExpiryInfo,
+    OptionContractSpec,
     Underlying,
     build_contracts,
     select_band,
@@ -403,6 +404,55 @@ async def test_no_stall_alert_when_market_quiet(
         await pipeline.run_minute(TS + dt.timedelta(minutes=minute))
 
     assert not [data for channel, data in publisher.messages if channel == "alerts"]
+
+
+async def test_vol_concentration_alert_once_per_leader(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#208: dominantní strana příští expirace → jeden alert; nový leader → další."""
+    from types import SimpleNamespace
+
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+
+    def sec_spec(strike: float, right: str) -> OptionContractSpec:
+        return OptionContractSpec("ES", "FOP", "20260718", strike, right, "CME", "E4D", "50")
+
+    def cached(volume: float) -> SimpleNamespace:
+        return SimpleNamespace(snapshot=SimpleNamespace(volume=volume))
+
+    quotes = {
+        sec_spec(7450.0, "P"): cached(4100),
+        sec_spec(7500.0, "P"): cached(900),
+        sec_spec(7580.0, "C"): cached(800),
+        sec_spec(7400.0, "P"): cached(700),
+    }
+    pipeline.next_runtime = SimpleNamespace(  # type: ignore[assignment]
+        expiry="20260718", scheduler=SimpleNamespace(quotes=lambda: quotes)
+    )
+
+    await pipeline._check_vol_concentration(TS)
+    await pipeline._check_vol_concentration(TS)  # anti-spam: týž leader jen jednou
+
+    alerts = [
+        data
+        for channel, data in publisher.messages
+        if channel == "alerts" and data["kind"] == "vol_concentration"
+    ]
+    assert len(alerts) == 1
+    assert "7450P" in alerts[0]["message"]
+    assert "pojistka" in alerts[0]["message"]  # put pod spotem 7600 → dovětek
+
+    quotes[sec_spec(7650.0, "C")] = cached(20000)  # nový dominantní leader
+    await pipeline._check_vol_concentration(TS)
+    alerts = [
+        data
+        for channel, data in publisher.messages
+        if channel == "alerts" and data["kind"] == "vol_concentration"
+    ]
+    assert len(alerts) == 2
+    assert "7650C" in alerts[1]["message"]
+    assert "strop" in alerts[1]["message"]  # call nad spotem → dovětek
 
 
 async def test_archive_failure_does_not_kill_pipeline(

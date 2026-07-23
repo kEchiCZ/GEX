@@ -17,6 +17,26 @@ export interface ProfileRow {
   putOiChange?: number | null
 }
 
+export interface VolLeader {
+  strike: number
+  right: 'C' | 'P'
+  volume: number
+}
+
+/** Top N stran (strike × C/P) podle opčního volume — readout „Vol leadeři" (#208).
+
+Alanovo čtení před eventem: kde se nejvíc obchoduje na vybrané expiraci.
+Funguje nad řádky aktuální minuty (kumulativní denní volume) i Σ souhrnem.
+*/
+export function volLeaders(rows: ProfileRow[], count = 3): VolLeader[] {
+  const entries: VolLeader[] = []
+  for (const row of rows) {
+    if (row.callVolume > 0) entries.push({ strike: row.strike, right: 'C', volume: row.callVolume })
+    if (row.putVolume > 0) entries.push({ strike: row.strike, right: 'P', volume: row.putVolume })
+  }
+  return entries.sort((a, b) => b.volume - a.volume).slice(0, count)
+}
+
 export interface BarGeometry {
   strike: number
   /** Šířky segmentů v px: call jde doprava od symetrické osy, put doleva. */

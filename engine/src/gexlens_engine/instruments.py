@@ -19,6 +19,7 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.volleaders import detect_concentration
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import (
     ChainDiscovery,
@@ -199,6 +200,9 @@ class InstrumentPipeline:
     _minute_count: int = field(default=0, repr=False)
     _last_spot: float = field(default=float("nan"), repr=False)
     _backfill_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    # Vol koncentrace (#208): už ohlášené strany (expirace, strike, right) —
+    # jeden alert per leader; pipeline se denně překlápí, reset je přirozený
+    _vol_alerted: set[tuple[str, float, str]] = field(default_factory=set, repr=False)
 
     def __post_init__(self) -> None:
         if self.stall_detector is None:
@@ -308,6 +312,7 @@ class InstrumentPipeline:
         ):
             try:
                 await self.next_runtime.run_cycle(now, spot, [])
+                await self._check_vol_concentration(now)
             except Exception:
                 logger.exception(
                     "Sekundární cyklus %s %s selhal — pokračuji",
@@ -372,6 +377,58 @@ class InstrumentPipeline:
                 task: asyncio.Task[None] = asyncio.ensure_future(self.backfill_today())
                 task.add_done_callback(self._log_backfill_result)
                 self._backfill_task = task
+
+    async def _check_vol_concentration(self, now: dt.datetime) -> None:
+        """Alert na neobvyklou koncentraci volume na příští expiraci (#208).
+
+        Alanův event-workflow: jeden dominantní strike zítřejšího řetězu =
+        úroveň, kde se trh zajišťuje na event. Jeden alert per leader
+        (nová dominantní strana se ohlásí znovu).
+        """
+        runtime = self.next_runtime
+        if runtime is None:
+            return
+        volumes = {
+            (spec.strike, spec.right): float(cached.snapshot.volume or 0.0)
+            for spec, cached in runtime.scheduler.quotes().items()
+        }
+        found = detect_concentration(
+            volumes,
+            ratio=self.settings.vol_leader_ratio,
+            min_volume=self.settings.vol_leader_min_volume,
+        )
+        if found is None:
+            return
+        key = (runtime.expiry, found.strike, found.right)
+        if key in self._vol_alerted:
+            return
+        self._vol_alerted.add(key)
+        label = f"{found.strike:g}{found.right}"
+        # Interpretační dovětek jen když poloha vůči spotu odpovídá čtení z issue
+        if found.right == "P" and found.strike < self.spot:
+            hint = " Dominantní put pod trhem — pojistka/magnet pro negativní scénář."
+        elif found.right == "C" and found.strike > self.spot:
+            hint = " Dominantní call nad trhem — strop pro pozitivní scénář."
+        else:
+            hint = ""
+        await self.publisher.publish(
+            "alerts",
+            {
+                "kind": "vol_concentration",
+                "symbol": self.symbol,
+                "message": f"Neobvyklá koncentrace na expiraci {runtime.expiry}: "
+                f"{label} — {found.volume:,.0f} kontraktů "
+                f"({found.ratio:.1f}× medián top 10).{hint}",
+                "ts": now.timestamp(),
+            },
+        )
+        logger.info(
+            "Vol koncentrace %s %s: %s (%.1fx medián)",
+            self.symbol,
+            runtime.expiry,
+            label,
+            found.ratio,
+        )
 
     def _log_backfill_result(self, task: asyncio.Task[None]) -> None:
         if task.cancelled():

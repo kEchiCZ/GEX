@@ -327,6 +327,7 @@ docker compose up -d        # start na pozadí
 <li>Dole <strong>osa množství</strong> (Δ-vážené kontrakty, formát „5k&quot;) — vidíš, jak velké zdi reálně jsou; měřítko reaguje na zoom</li>
 <li><strong>Šedá přerušovaná linka</strong> = aktuální cena (spot)</li>
 <li>Tlačítko <strong>GEX</strong> = křivka modelovaného <strong>Dyn GEX profilu</strong> (zelená doprava = dealeři tlumí, červená doleva = zesilují); <strong>žlutá přerušovaná linka</strong> = <strong>dynamický flip</strong> (průchod křivky nulou). Detaily čtení: kapitola 18.</li>
+<li>Pod hlavičkou panelu běží readout <strong>Vol leadeři</strong> — top 3 strany (strike × C/P) podle opčního volume vybrané expirace, např. „7450P 4,1k · 7500P 2,9k&quot;. Sleduje playback i Σ souhrn; na zítřejší expiraci před eventem ukazuje, kde se trh zajišťuje (viz alert Vol koncentrace).</li>
 <li>Tlačítko <strong>Rel / Abs</strong> přepíná měřítko: <strong>Rel</strong> = normalizace na největší pruh ve výřezu (výchozí), <strong>Abs</strong> = zaokrouhlený „hezký&quot; strop (kulaté hodnoty na ose, stabilnější délky pruhů mezi snímky)</li>
 <li>Tlačítka <strong>1× / 2× / 4×</strong> zvětšují měřítko pruhů</li>
 <li>Tlačítko <strong>Σ</strong> = souhrn přes všechny sbírané expirace tohoto instrumentu (pondělní + úterní řetěz…). Hlavička se změní na „Σ expirací&quot;; heatmapa zůstává u zvolené expirace. Celkový positioning bez přepínání.</li>
@@ -507,6 +508,10 @@ docker compose up -d        # start na pozadí
 <tr>
 <td>Svíčky zase jedou</td>
 <td>Bary se vrátily — díra ve svíčkách se doplní backfillem</td>
+</tr>
+<tr>
+<td><strong>Vol koncentrace</strong></td>
+<td>Jedna strana (strike × C/P) příští expirace výrazně převyšuje zbytek (≥ 3× medián top 10) — úroveň, kde se trh zajišťuje na zítřek (put pod trhem pojistka/magnet, call nad trhem strop)</td>
 </tr>
 <tr>
 <td><strong>Nový setup</strong></td>
