@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # Kapacita market data lines účtu (ADR-0001: naměřeno ≥ 150; default konzervativní)
     market_data_lines: int = Field(default=100, ge=1)
 
+    # Tichá ztráta 5s barů (#221): alert po N minutách bez baru při živém spotu
+    bars_stall_alert_minutes: int = Field(default=3, ge=1)
+
     # Hot zóna (SPEC 3.4; limit streamů naměřen v ADR-0001)
     hot_zone_width: int = Field(default=15, ge=1)
     tick_by_tick_max_streams: int = Field(default=5, ge=1)

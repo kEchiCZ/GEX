@@ -12,7 +12,7 @@ zatím ne — discovery podkladu hledá jen futures kontrakty (ADR-0003).
 import asyncio
 import datetime as dt
 import logging
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -29,7 +29,7 @@ from gexlens_engine.ibkr.discovery import (
     build_contracts,
 )
 from gexlens_engine.ibkr.scheduler import SweepMetrics
-from gexlens_engine.ibkr.underlying import Bar
+from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.meta import meta_metadata, settings_table, watchlist_table
@@ -191,8 +191,18 @@ class InstrumentPipeline:
     next_runtime: EngineRuntime | None = None
     # Setup detektor (ADR-0004) — None = vypnuto
     setup_engine: SetupEngine | None = None
+    # Hlídání tiché ztráty 5s barů (#221); default z konfigurace v __post_init__
+    stall_detector: BarsStallDetector | None = None
+    # Re-backfill dnešních barů po návratu streamu (#221); None = backfill nezapojen
+    backfill_today: Callable[[], Awaitable[None]] | None = None
     _cycles_since_oi: int = field(default=0, repr=False)
     _minute_count: int = field(default=0, repr=False)
+    _last_spot: float = field(default=float("nan"), repr=False)
+    _backfill_task: asyncio.Task[None] | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.stall_detector is None:
+            self.stall_detector = BarsStallDetector(self.settings.bars_stall_alert_minutes)
 
     async def try_archive_oi(self, today: dt.date) -> bool:
         """Denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2)."""
@@ -279,7 +289,10 @@ class InstrumentPipeline:
 
         bars = list(self.minute_bars)
         self.minute_bars.clear()
-        metrics = await self.runtime.run_cycle(now, spot, bars, self.forming_bar())
+        forming = self.forming_bar()
+        # Hlídání barů PŘED cyklem — alert musí odejít, i kdyby sweep selhal (#221)
+        await self._watch_bars(now, spot, bars, forming)
+        metrics = await self.runtime.run_cycle(now, spot, bars, forming)
 
         # Setup detektor (ADR-0004) — jeho pád nesmí shodit sběr dat
         if self.setup_engine is not None:
@@ -304,8 +317,73 @@ class InstrumentPipeline:
         self._minute_count += 1
         return metrics
 
+    async def _watch_bars(
+        self, now: dt.datetime, spot: float, bars: Sequence[Bar], forming: Bar | None
+    ) -> None:
+        """Tichá ztráta 5s barů (#221): alert při výpadku, po návratu re-backfill díry.
+
+        Bar aktivita = uzavřené minuty NEBO rozdělaná agregace aktuální minuty;
+        zaseknutý agregátor drží starou rozdělanou minutu, ta se nepočítá.
+        """
+        detector = self.stall_detector
+        if detector is None:
+            return
+        bar_activity = bool(bars) or (forming is not None and forming.ts == now)
+        spot_moving = (
+            spot == spot and self._last_spot == self._last_spot and spot != self._last_spot
+        )
+        self._last_spot = spot
+        event = detector.observe(bar_activity=bar_activity, spot_moving=spot_moving)
+        if event == "stalled":
+            logger.error(
+                "Real-time bary %s nechodí ≥ %d min při živém spotu — mrtvý "
+                "reqRealTimeBars stream (výpadek TWS farem?); svíčky se nekreslí, "
+                "zvaž restart TWS",
+                self.symbol,
+                self.settings.bars_stall_alert_minutes,
+            )
+            await self.publisher.publish(
+                "alerts",
+                {
+                    "kind": "bars_stalled",
+                    "symbol": self.symbol,
+                    "message": f"Svíčky {self.symbol} se přestaly kreslit — real-time "
+                    f"bary z TWS nechodí ≥ {self.settings.bars_stall_alert_minutes} min, "
+                    "spot přitom žije (mrtvé TWS farmy?). Pomáhá restart TWS; díra se "
+                    "po návratu doplní backfillem.",
+                    "ts": now.timestamp(),
+                },
+            )
+        elif event == "recovered":
+            logger.info("Real-time bary %s zase chodí — díra se doplní backfillem", self.symbol)
+            await self.publisher.publish(
+                "alerts",
+                {
+                    "kind": "bars_recovered",
+                    "symbol": self.symbol,
+                    "message": f"Real-time bary {self.symbol} zase chodí — díra ve "
+                    "svíčkách se doplňuje backfillem",
+                    "ts": now.timestamp(),
+                },
+            )
+            if self.backfill_today is not None:
+                # Na pozadí: backfill čeká na PacingGuard a nesmí blokovat cyklus
+                # (watchdog CYCLE_TIMEOUT_S by ho jinak zabil i se sweepem)
+                task: asyncio.Task[None] = asyncio.ensure_future(self.backfill_today())
+                task.add_done_callback(self._log_backfill_result)
+                self._backfill_task = task
+
+    def _log_backfill_result(self, task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Re-backfill %s po výpadku barů selhal: %s", self.symbol, exc)
+
     def stop(self) -> None:
         """Odhlášení market dat podkladu (kontrakty řetězce rotuje scheduler sám)."""
+        if self._backfill_task is not None:
+            self._backfill_task.cancel()
         try:
             self.on_stop()
         except Exception:

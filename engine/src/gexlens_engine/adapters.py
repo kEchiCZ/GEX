@@ -5,6 +5,7 @@ spojením a HTTP publisher do API serveru.
 """
 
 import asyncio
+import datetime as dt
 import logging
 import math
 from typing import Any, cast
@@ -14,6 +15,7 @@ from ib_async import IB, Contract, FuturesOption, Option
 
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import QuoteSnapshot
+from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import PublisherLike
 
 logger = logging.getLogger(__name__)
@@ -125,6 +127,59 @@ class IbOIFetcher:
             return None
         finally:
             self._ib.cancelMktData(contract)
+
+
+class IbHistoricalClient:
+    """HistoricalClientLike nad reqHistoricalData: 1min bary jednoho dne (SPEC 3.6).
+
+    Kontrakt podkladu (front future) dodává konstrukce — instance per pipeline;
+    rate limit requestů drží PacingGuard nad tímto klientem, ne klient sám.
+    """
+
+    _REQUEST_TIMEOUT_S = 60.0
+
+    def __init__(self, ib: IB, contract: Contract) -> None:
+        self._ib = ib
+        self._contract = contract
+
+    async def fetch_day_bars(self, symbol: str, day: dt.date) -> list[Bar]:
+        # endDateTime = půlnoc UTC následujícího dne; "1 D" může přetéct do
+        # sousedních dní, filtr níže drží jen požadovaný den. Timeout chrání
+        # před visícím awaitem na mrtvé HMDS farmě (#221) — přesně ten stav,
+        # kvůli kterému se backfill spouští.
+        end = dt.datetime.combine(day + dt.timedelta(days=1), dt.time(0, 0), tzinfo=dt.UTC)
+        raw = await asyncio.wait_for(
+            self._ib.reqHistoricalDataAsync(
+                self._contract,
+                endDateTime=end,
+                durationStr="1 D",
+                barSizeSetting="1 min",
+                whatToShow="TRADES",
+                useRTH=False,
+                formatDate=2,
+            ),
+            timeout=self._REQUEST_TIMEOUT_S,
+        )
+        bars: list[Bar] = []
+        for item in raw:
+            ts = item.date
+            if not isinstance(ts, dt.datetime):
+                continue  # denní bar (date) sem nepatří
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=dt.UTC)
+            if ts.astimezone(dt.UTC).date() != day:
+                continue
+            bars.append(
+                Bar(
+                    ts=ts.astimezone(dt.UTC),
+                    open=item.open,
+                    high=item.high,
+                    low=item.low,
+                    close=item.close,
+                    volume=float(item.volume),
+                )
+            )
+        return bars
 
 
 class HttpPublisher(PublisherLike):

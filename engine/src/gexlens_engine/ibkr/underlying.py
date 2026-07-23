@@ -93,6 +93,43 @@ class RealTimeBarAggregator:
         return current
 
 
+class BarsStallDetector:
+    """Detekce tiché ztráty 5s barů (#221).
+
+    Po nočním výpadku TWS farem přestanou real-time bary chodit, zatímco spot
+    ticky jedou dál — svíčky se nekreslí a výpadek je pro uživatele neviditelný.
+    Detektor počítá po sobě jdoucí minutové cykly, kdy spot žije, ale žádný bar
+    nedorazil; po prahu ohlásí `"stalled"`, po návratu barů `"recovered"`.
+    Bez pohybu spotu (zavřený trh, noční přestávka CME) se čítač nezvyšuje —
+    chybějící bary tam nejsou závada.
+    """
+
+    def __init__(self, stall_minutes: int) -> None:
+        self._stall_minutes = stall_minutes
+        self._quiet_cycles = 0
+        self._stalled = False
+
+    @property
+    def stalled(self) -> bool:
+        return self._stalled
+
+    def observe(self, *, bar_activity: bool, spot_moving: bool) -> str | None:
+        """Jeden minutový cyklus; vrací "stalled"/"recovered" právě jednou, jinak None."""
+        if bar_activity:
+            self._quiet_cycles = 0
+            if self._stalled:
+                self._stalled = False
+                return "recovered"
+            return None
+        if not spot_moving:
+            return None
+        self._quiet_cycles += 1
+        if not self._stalled and self._quiet_cycles >= self._stall_minutes:
+            self._stalled = True
+            return "stalled"
+        return None
+
+
 class UnderlyingBackfiller:
     """Historical backfill 1min barů pro den + retention okno pod PacingGuardem."""
 
@@ -115,15 +152,28 @@ class UnderlyingBackfiller:
         ]
 
         async def fetch(day: dt.date) -> list[Bar]:
-            bars = await self._guard.run(
-                key=(symbol, day),
-                func=lambda: self._fetch_day(symbol, day),
-                priority=0 if day == end_day else 1,
-            )
-            return bars
+            # Selhání jednoho dne (mrtvá HMDS farma, timeout) nesmí zahodit
+            # zbytek okna — den se přeskočí a doplní až příští backfill (#221)
+            try:
+                return await self._guard.run(
+                    key=(symbol, day),
+                    func=lambda: self._fetch_day(symbol, day),
+                    priority=0 if day == end_day else 1,
+                )
+            except Exception:
+                logger.warning("Backfill %s %s selhal — den se přeskakuje", symbol, day)
+                return []
 
         results = await asyncio.gather(*(fetch(day) for day in days))
         return dict(zip(days, results, strict=True))
+
+    async def backfill_day(self, symbol: str, day: dt.date) -> list[Bar]:
+        """Jediný den s nejvyšší prioritou — doplnění díry po výpadku streamu (#221)."""
+        return await self._guard.run(
+            key=(symbol, day),
+            func=lambda: self._fetch_day(symbol, day),
+            priority=0,
+        )
 
     async def _fetch_day(self, symbol: str, day: dt.date) -> list[Bar]:
         bars = list(await self._client.fetch_day_bars(symbol, day))

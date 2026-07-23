@@ -3,11 +3,17 @@
 import asyncio
 import datetime as dt
 import time
+from collections.abc import Sequence
 
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.mock import MockHistoricalClient
 from gexlens_engine.ibkr.pacing import PacingGuard
-from gexlens_engine.ibkr.underlying import Bar, RealTimeBarAggregator, UnderlyingBackfiller
+from gexlens_engine.ibkr.underlying import (
+    Bar,
+    BarsStallDetector,
+    RealTimeBarAggregator,
+    UnderlyingBackfiller,
+)
 
 TODAY = dt.date(2026, 7, 16)
 
@@ -52,6 +58,42 @@ def test_flush_emits_partial_minute() -> None:
     assert flushed is not None
     assert flushed.close == 101.0
     assert aggregator.flush() is None  # druhý flush nemá co emitovat
+
+
+# ── BarsStallDetector (#221) ───────────────────────────────────────
+
+
+def test_stall_detector_alerts_after_threshold() -> None:
+    detector = BarsStallDetector(stall_minutes=3)
+    assert detector.observe(bar_activity=False, spot_moving=True) is None
+    assert detector.observe(bar_activity=False, spot_moving=True) is None
+    assert detector.observe(bar_activity=False, spot_moving=True) == "stalled"
+    assert detector.stalled is True
+    # Anti-spam: další tiché cykly už alert neopakují
+    assert detector.observe(bar_activity=False, spot_moving=True) is None
+
+
+def test_stall_detector_ignores_quiet_market() -> None:
+    # Zavřený trh / noční přestávka CME: spot stojí → chybějící bary nejsou závada
+    detector = BarsStallDetector(stall_minutes=2)
+    for _ in range(10):
+        assert detector.observe(bar_activity=False, spot_moving=False) is None
+    assert detector.stalled is False
+    # Přestávka uprostřed výpadku čítač drží, neresetuje: 1 tichý + pauza + 1 tichý = práh
+    assert detector.observe(bar_activity=False, spot_moving=True) is None
+    assert detector.observe(bar_activity=False, spot_moving=False) is None
+    assert detector.observe(bar_activity=False, spot_moving=True) == "stalled"
+
+
+def test_stall_detector_recovers_once() -> None:
+    detector = BarsStallDetector(stall_minutes=1)
+    assert detector.observe(bar_activity=False, spot_moving=True) == "stalled"
+    assert detector.observe(bar_activity=True, spot_moving=True) == "recovered"
+    assert detector.stalled is False
+    # Normální provoz ani opakovaná aktivita už nic nehlásí
+    assert detector.observe(bar_activity=True, spot_moving=True) is None
+    # Bar aktivita bez alertu čítač jen resetuje
+    assert detector.observe(bar_activity=False, spot_moving=True) == "stalled"
 
 
 # ── PacingGuard ────────────────────────────────────────────────────
@@ -136,3 +178,37 @@ async def test_backfill_respects_tight_pacing_limit() -> None:
 
     assert len(result) == 15
     assert len(client.calls) == 15
+
+
+async def test_backfill_day_single_request_priority_zero() -> None:
+    # Re-backfill díry po výpadku streamu (#221): jediný den, žádné okno historie
+    client = MockHistoricalClient(bars_per_day=7)
+    guard = PacingGuard()
+    backfiller = UnderlyingBackfiller(client, guard, Settings())
+
+    bars = await backfiller.backfill_day("ES", TODAY)
+
+    assert len(bars) == 7
+    assert client.calls == [("ES", TODAY)]
+
+
+async def test_backfill_skips_failed_day_and_continues() -> None:
+    # Mrtvá HMDS farma u jednoho dne nesmí zahodit zbytek okna (#221)
+    class FlakyClient:
+        def __init__(self) -> None:
+            self.calls: list[dt.date] = []
+
+        async def fetch_day_bars(self, symbol: str, day: dt.date) -> Sequence[Bar]:
+            self.calls.append(day)
+            if day == TODAY - dt.timedelta(days=3):
+                raise TimeoutError("mock: HMDS farm broken")
+            return [bar_5s(0, 0, close=100.0)]
+
+    client = FlakyClient()
+    backfiller = UnderlyingBackfiller(client, PacingGuard(), Settings())
+
+    result = await backfiller.backfill("ES", TODAY)
+
+    assert len(result) == 15
+    assert result[TODAY - dt.timedelta(days=3)] == []  # selhaný den = prázdný, ne výjimka
+    assert sum(1 for bars in result.values() if bars) == 14
