@@ -440,8 +440,9 @@ async def test_vol_concentration_alert_once_per_leader(
         if channel == "alerts" and data["kind"] == "vol_concentration"
     ]
     assert len(alerts) == 1
-    assert "7450P" in alerts[0]["message"]
-    assert "pojistka" in alerts[0]["message"]  # put pod spotem 7600 → dovětek
+    first = str(alerts[0]["message"])
+    assert "7450P" in first
+    assert "pojistka" in first  # put pod spotem 7600 → dovětek
 
     quotes[sec_spec(7650.0, "C")] = cached(20000)  # nový dominantní leader
     await pipeline._check_vol_concentration(TS)
@@ -451,8 +452,9 @@ async def test_vol_concentration_alert_once_per_leader(
         if channel == "alerts" and data["kind"] == "vol_concentration"
     ]
     assert len(alerts) == 2
-    assert "7650C" in alerts[1]["message"]
-    assert "strop" in alerts[1]["message"]  # call nad spotem → dovětek
+    second = str(alerts[1]["message"])
+    assert "7650C" in second
+    assert "strop" in second  # call nad spotem → dovětek
 
 
 async def test_archive_failure_does_not_kill_pipeline(
