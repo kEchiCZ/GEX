@@ -50,6 +50,10 @@ class MinuteInputs:
     # Surový přírůstek opčního volume (T3: vyhasínání aktivity)
     opt_vol: float
     minutes_to_expiry: float | None
+    # Dominance zdí (ADR-0010, #223): podíl zdi na kladné síle strany profilu.
+    # None = neznámá (starší data) → podmínky dominance se přeskakují.
+    call_wall_dom: float | None = field(default=None, kw_only=True)
+    put_wall_dom: float | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -72,6 +76,9 @@ class SetupParams:
     momentum_flow_share: float = 0.6
     momentum_flow_lookback: int = 10
     cooldown_minutes: int = 10
+    # Minimální dominance zdi pro T1/T3 (ADR-0010, #223): argmax existuje i nad
+    # plochým profilem — pod prahem zeď netvoří koncentraci a setup nevzniká
+    min_wall_dominance: float = 0.15
 
 
 @dataclass(frozen=True)
@@ -137,8 +144,15 @@ def detect_wall_bounce(
     now = history[-1]
     then = history[-1 - params.divergence_lookback]
 
-    for wall, direction in ((now.put_wall, Direction.LONG), (now.call_wall, Direction.SHORT)):
+    for wall, dominance, direction in (
+        (now.put_wall, now.put_wall_dom, Direction.LONG),
+        (now.call_wall, now.call_wall_dom, Direction.SHORT),
+    ):
         if wall is None:
+            continue
+        # Slabá zeď (ADR-0010, #223): argmax nad plochým profilem není koncentrace,
+        # odraz od ní nemá oporu; neznámá dominance (None) podmínku přeskakuje
+        if dominance is not None and dominance < params.min_wall_dominance:
             continue
         touched = (
             now.low <= wall + params.wall_zone
@@ -185,6 +199,7 @@ def detect_wall_bounce(
             ),
             context={
                 "wall": wall,
+                "wall_dom": dominance,
                 "flip": now.flip,
                 "max_pain": now.max_pain,
                 "cum_delta": now.cum_delta,
@@ -308,6 +323,12 @@ def detect_max_pain_pin(
         past_mp = history[-1 - params.pin_stability_lookback].max_pain
         if past_mp is not None and abs(now.max_pain - past_mp) >= params.pin_stability:
             return None
+    # Pin funguje jen při dostatečně velkém/koncentrovaném pozicování (ADR-0010,
+    # #223): plochý profil bez dominantní zdi magnet netvoří. Neznámé dominance
+    # (obě None, starší data) podmínku přeskakují.
+    dominances = [d for d in (now.call_wall_dom, now.put_wall_dom) if d is not None]
+    if dominances and max(dominances) < params.min_wall_dominance:
+        return None
     # Vyhasínání: průměr posledních 30 min pod průměrem celé dosavadní historie
     if len(history) >= 60:
         recent = [m.opt_vol for m in history[-30:]]
@@ -332,7 +353,11 @@ def detect_max_pain_pin(
             f"Max Pain pin: {now.minutes_to_expiry:.0f} min do expirace, cena {entry:g} "
             f"vs. Max Pain {now.max_pain:g}, opční aktivita vyhasíná."
         ),
-        context={"max_pain": now.max_pain, "minutes_to_expiry": now.minutes_to_expiry},
+        context={
+            "max_pain": now.max_pain,
+            "minutes_to_expiry": now.minutes_to_expiry,
+            "wall_dom_max": max(dominances) if dominances else None,
+        },
     )
 
 

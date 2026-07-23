@@ -383,6 +383,11 @@ export function useDayData(
         // Sekundární zdi (ADR-0008) — starší engine pole neposílá → null
         call_wall_2: numOrNull(data.call_wall_2),
         put_wall_2: numOrNull(data.put_wall_2),
+        // Dominance zdí (ADR-0010, #223) — starší engine pole neposílá → null
+        call_wall_dom: numOrNull(data.call_wall_dom),
+        put_wall_dom: numOrNull(data.put_wall_dom),
+        call_wall_2_dom: numOrNull(data.call_wall_2_dom),
+        put_wall_2_dom: numOrNull(data.put_wall_2_dom),
       }
       scheduleFlush()
     }

@@ -59,6 +59,13 @@ class DataRepository:
         )
         return self._read(path)
 
+    def walldom(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """Dominance zdí (ADR-0010, #223) — vlastní řada vedle levels."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "walldom" / f"{day.isoformat()}.parquet"
+        )
+        return self._read(path)
+
     def gexprofile(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
         """Dyn GEX profil per minuta (ADR-0009, #203)."""
         path = (

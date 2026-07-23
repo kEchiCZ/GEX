@@ -22,6 +22,7 @@ from gexlens_engine.adapters import (
     IbQuoteStreamer,
 )
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.ibkr.connection import ConnectionManager, ConnectionState
 from gexlens_engine.ibkr.discovery import ChainDiscovery, Underlying, build_contracts
@@ -302,6 +303,7 @@ async def create_pipeline(
                 repository=setups_repository,
                 oi_repository=oi_repository,
                 publisher=publisher,
+                params=SetupParams(min_wall_dominance=settings.setup_min_wall_dominance),
             )
             if setups_repository is not None
             else None

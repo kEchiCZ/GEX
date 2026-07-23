@@ -327,19 +327,21 @@ export function Heatmap({
       context.fillText('projekce →', x + 5, logicalH - 26)
     }
 
-    // Levels a walls linie (dle módu; barva per linie, volitelné čárkování)
+    // Levels a walls linie (dle módu; barva per linie, volitelné čárkování).
+    // Linie se slabými úseky (dominance zdi pod prahem, ADR-0010) se kreslí
+    // dvěma průchody: plné úseky normálně, slabé ztlumeně a tečkovaně.
     const levelLines = [...(overlays.levels ?? []), ...(overlays.walls ?? [])]
     const strikeStep = strikeCount > 1 ? Math.abs(grid.strikes[1] - grid.strikes[0]) : 0
-    for (const line of levelLines) {
-      context.strokeStyle = line.color || LEVEL_DEFAULT_COLOR
-      context.lineWidth = 1.5
-      if (line.dash) context.setLineDash(line.dash)
+    const strokeLevelLine = (
+      line: (typeof levelLines)[number],
+      include: (minuteIdx: number) => boolean,
+    ): void => {
       context.beginPath()
       let pen = false
       let lastValue: number | null = null
       line.series.forEach((value, minuteIdx) => {
         const row = value === null ? null : fractionalRow(grid.strikes, value)
-        if (row === null || value === null) {
+        if (row === null || value === null || !include(minuteIdx)) {
           pen = false
           lastValue = null
           return
@@ -357,6 +359,21 @@ export function Heatmap({
         lastValue = value
       })
       context.stroke()
+    }
+    for (const line of levelLines) {
+      context.strokeStyle = line.color || LEVEL_DEFAULT_COLOR
+      context.lineWidth = 1.5
+      const weak = line.weak
+      if (line.dash) context.setLineDash(line.dash)
+      if (weak === undefined) {
+        strokeLevelLine(line, () => true)
+      } else {
+        strokeLevelLine(line, (minuteIdx) => weak[minuteIdx] !== true)
+        context.globalAlpha = 0.4
+        context.setLineDash([2, 3])
+        strokeLevelLine(line, (minuteIdx) => weak[minuteIdx] === true)
+        context.globalAlpha = 1
+      }
       context.setLineDash([])
     }
 
@@ -377,7 +394,8 @@ export function Heatmap({
       context.lineTo(logicalW, y)
       context.stroke()
       context.setLineDash([])
-      const label = formatLevel(value)
+      // Cenovka zdi nese aktuální dominanci (ADR-0010, #223)
+      const label = formatLevel(value) + (line.labelSuffix ?? '')
       const width = measuredWidth(context, label) + 8
       context.fillStyle = line.color || LEVEL_DEFAULT_COLOR
       context.fillRect(46, y - 8, width, 15)

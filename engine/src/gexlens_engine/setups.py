@@ -115,6 +115,8 @@ class SetupEngine:
             bar_open = bar_high = bar_low = bar_close = spot
 
         minutes_left = self._minutes_to_expiry(runtime.expiry, now)
+        # Dominance zdí (ADR-0010, #223) — LevelsRow ji nenese, čte se z plných levels
+        full = runtime.last_gex_levels
         inputs = MinuteInputs(
             ts=now,
             open=bar_open,
@@ -130,6 +132,8 @@ class SetupEngine:
             put_flow=put_flow,
             opt_vol=raw_flow,
             minutes_to_expiry=minutes_left,
+            call_wall_dom=full.call_wall_dom if full else None,
+            put_wall_dom=full.put_wall_dom if full else None,
         )
         self._history.append(inputs)
 

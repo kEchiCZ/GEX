@@ -185,6 +185,67 @@ test('buildReplayDay dekóduje Arrow snapshoty a poskládá den', () => {
   expect(day.profileByMinute.rowsAt(1)[0].distanceFromSpot).toBeCloseTo(7600 - 7601.5)
 })
 
+test('walldom řada: slabé úseky zdi + dominance v cenovce (ADR-0010, #223)', () => {
+  const table = tableFromArrays({
+    ts_min: ['2026-07-16T15:00:00Z', '2026-07-16T15:01:00Z'],
+    strike: Float64Array.from([7600, 7600]),
+    right: ['C', 'C'],
+    volume: Float64Array.from([10, 20]),
+    oi: Float64Array.from([100, 100]),
+    delta: Float64Array.from([0.5, 0.5]),
+    stale_age: Float64Array.from([0, 0]),
+  })
+  const day = buildReplayDay({
+    symbol: 'ES',
+    expiry: '20260716',
+    date: '2026-07-16',
+    snapshots_arrow_base64: btoa(String.fromCharCode(...tableToIPC(table, 'stream'))),
+    levels: [
+      { ts_min: '2026-07-16T15:00:00Z', call_wall: 7650, put_wall: 7500 },
+      { ts_min: '2026-07-16T15:01:00Z', call_wall: 7650, put_wall: 7500 },
+    ],
+    walldom: [
+      { ts_min: '2026-07-16T15:00:00Z', call_wall_dom: 0.08, put_wall_dom: 0.5 },
+      { ts_min: '2026-07-16T15:01:00Z', call_wall_dom: 0.34, put_wall_dom: 0.5 },
+    ],
+    flow: [],
+    bars: [],
+  })
+
+  const callWall = day.overlays.walls?.find((line) => line.name === 'call_wall')
+  // Minuta 0 pod prahem 0.15 → slabý úsek; minuta 1 nad prahem
+  expect(callWall?.weak).toEqual([true, false])
+  // Cenovka nese poslední dominanci v %
+  expect(callWall?.labelSuffix).toBe(' · 34 %')
+  const putWall = day.overlays.walls?.find((line) => line.name === 'put_wall')
+  expect(putWall?.weak).toEqual([false, false])
+  expect(putWall?.labelSuffix).toBe(' · 50 %')
+})
+
+test('bez walldom řady (starší API) zůstávají zdi bez slabých úseků', () => {
+  const table = tableFromArrays({
+    ts_min: ['2026-07-16T15:00:00Z'],
+    strike: Float64Array.from([7600]),
+    right: ['C'],
+    volume: Float64Array.from([10]),
+    oi: Float64Array.from([100]),
+    delta: Float64Array.from([0.5]),
+    stale_age: Float64Array.from([0]),
+  })
+  const day = buildReplayDay({
+    symbol: 'ES',
+    expiry: '20260716',
+    date: '2026-07-16',
+    snapshots_arrow_base64: btoa(String.fromCharCode(...tableToIPC(table, 'stream'))),
+    levels: [{ ts_min: '2026-07-16T15:00:00Z', call_wall: 7650 }],
+    flow: [],
+    bars: [],
+  })
+  const callWall = day.overlays.walls?.find((line) => line.name === 'call_wall')
+  expect(callWall?.weak).toEqual([null]) // dominance neznámá → plný styl
+  expect(callWall?.labelSuffix).toBeUndefined()
+})
+
 // ── Inkrementální append (#127): append == plný build ───────────────
 
 type Cell = {

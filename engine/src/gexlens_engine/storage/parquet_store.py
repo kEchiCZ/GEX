@@ -121,6 +121,17 @@ LEVELS2_SCHEMA = pa.schema(
     ]
 )
 
+# Dominance zdí (ADR-0010, #223) — vlastní řada ze stejného důvodu jako levels2
+WALLDOM_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("call_wall_dom", pa.float64()),
+        ("put_wall_dom", pa.float64()),
+        ("call_wall_2_dom", pa.float64()),
+        ("put_wall_2_dom", pa.float64()),
+    ]
+)
+
 
 @dataclass(frozen=True)
 class SnapshotRow:
@@ -196,6 +207,17 @@ class Levels2Row:
     ts_min: dt.datetime
     call_wall_2: float | None
     put_wall_2: float | None
+
+
+@dataclass(frozen=True)
+class WallDomRow:
+    """Dominance zdí jedné minuty (ADR-0010, #223) — None = zeď v profilu není."""
+
+    ts_min: dt.datetime
+    call_wall_dom: float | None
+    put_wall_dom: float | None
+    call_wall_2_dom: float | None
+    put_wall_2_dom: float | None
 
 
 @dataclass(frozen=True)
@@ -351,6 +373,16 @@ class SnapshotWriter:
             self._settings.derived_dir / symbol / expiry / "levels2" / f"{day.isoformat()}.parquet"
         )
         buffer = self._buffer(path, LEVELS2_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_walldom(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[WallDomRow]
+    ) -> Path:
+        """Přidá dominanci zdí minuty do partice derived/{sym}/{exp}/walldom (ADR-0010)."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "walldom" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, WALLDOM_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_gexprofile(

@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 from sqlalchemy import create_engine
 
+from gexlens_engine.compute.levels import GexLevels
 from gexlens_engine.compute.setups import (
     Direction,
     MinuteInputs,
@@ -46,6 +47,8 @@ def minute(
     put_flow: float = 0.0,
     opt_vol: float = 10.0,
     minutes_to_expiry: float | None = 600.0,
+    call_wall_dom: float | None = None,
+    put_wall_dom: float | None = None,
     idx: int = 0,
 ) -> MinuteInputs:
     return MinuteInputs(
@@ -63,6 +66,8 @@ def minute(
         put_flow=put_flow,
         opt_vol=opt_vol,
         minutes_to_expiry=minutes_to_expiry,
+        call_wall_dom=call_wall_dom,
+        put_wall_dom=put_wall_dom,
     )
 
 
@@ -108,6 +113,24 @@ def test_wall_bounce_right_gamma_side_full_confidence() -> None:
     assert setup is not None
     assert setup.confidence == 55
     assert setup.target == 7530
+
+
+def test_wall_bounce_requires_wall_dominance() -> None:  # ADR-0010, #223
+    """Slabá zeď (dominance pod prahem) = argmax nad plochým profilem → žádný T1."""
+
+    def history_with(dom: float | None) -> list[MinuteInputs]:
+        rows = [
+            minute(7512 - i, cum_delta=float(i * 10), put_wall_dom=dom, idx=i) for i in range(10)
+        ]
+        rows.append(minute(7502, low=7501, cum_delta=110.0, put_wall_dom=dom, idx=10))
+        return rows
+
+    assert detect_wall_bounce(history_with(0.05), PARAMS) is None  # pod prahem 0.15
+    strong = detect_wall_bounce(history_with(0.4), PARAMS)
+    assert strong is not None
+    assert strong.context["wall_dom"] == 0.4
+    # None = dominance neznámá (starší data) → podmínka se přeskakuje
+    assert detect_wall_bounce(history_with(None), PARAMS) is not None
 
 
 def test_wall_bounce_discards_low_rrr() -> None:
@@ -171,6 +194,29 @@ def test_max_pain_pin_requires_distance_and_time() -> None:
     assert detect_max_pain_pin(close_to_mp, PARAMS) is None
     too_early = [minute(7530, max_pain=7510.0, minutes_to_expiry=500.0, idx=0)]
     assert detect_max_pain_pin(too_early, PARAMS) is None
+
+
+def test_max_pain_pin_requires_positioning_concentration() -> None:  # ADR-0010, #223
+    """Pin bez dominantní zdi (plochý profil) magnet netvoří → žádný T3."""
+
+    def pin_minute(call_dom: float | None, put_dom: float | None) -> list[MinuteInputs]:
+        return [
+            minute(
+                7530,
+                max_pain=7510.0,
+                minutes_to_expiry=100.0,
+                call_wall_dom=call_dom,
+                put_wall_dom=put_dom,
+                idx=0,
+            )
+        ]
+
+    assert detect_max_pain_pin(pin_minute(0.05, 0.08), PARAMS) is None  # obě pod prahem
+    strong = detect_max_pain_pin(pin_minute(0.05, 0.4), PARAMS)  # stačí jedna strana
+    assert strong is not None
+    assert strong.context["wall_dom_max"] == 0.4
+    # Neznámé dominance (obě None) podmínku přeskakují
+    assert detect_max_pain_pin(pin_minute(None, None), PARAMS) is not None
 
 
 # ── T4: gamma momentum ─────────────────────────────────────────────
@@ -247,6 +293,16 @@ class FakeRuntime:
         self.scheduler = FakeScheduler()
         self.last_levels = LevelsRow(TS, 7515.0, 7530.0, 7500.0, 7512.0, 100.0)
         self.last_flow = FakeFlow(0.0)
+        # Dominance zdí (ADR-0010, #223) — SetupEngine je čte z plných levels
+        self.last_gex_levels = GexLevels(
+            flip=7515.0,
+            call_wall=7530.0,
+            put_wall=7500.0,
+            centroid=7512.0,
+            total_gex=100.0,
+            call_wall_dom=0.5,
+            put_wall_dom=0.5,
+        )
 
 
 async def test_setup_engine_end_to_end(tmp_path: Path) -> None:

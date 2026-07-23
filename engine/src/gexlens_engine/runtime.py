@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.gex import GexEngine, GexInput
 from gexlens_engine.compute.gexfield import ProfileContract, gamma_field, gamma_profile
-from gexlens_engine.compute.levels import compute_levels
+from gexlens_engine.compute.levels import GexLevels, compute_levels
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
@@ -31,9 +31,30 @@ from gexlens_engine.storage.parquet_store import (
     LevelsRow,
     SnapshotRow,
     SnapshotWriter,
+    WallDomRow,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _levels_message(ts_min: dt.datetime, levels: GexLevels) -> dict[str, object]:
+    """WS zpráva kanálu levels.* — nová pole jen aditivně, starší klienti je ignorují."""
+    return {
+        "ts_min": ts_min.isoformat(),
+        "flip": levels.flip,
+        "call_wall": levels.call_wall,
+        "put_wall": levels.put_wall,
+        "centroid": levels.centroid,
+        "total_gex": levels.total_gex,
+        # Sekundární zdi (ADR-0008)
+        "call_wall_2": levels.call_wall_2,
+        "put_wall_2": levels.put_wall_2,
+        # Dominance zdí (ADR-0010, #223)
+        "call_wall_dom": levels.call_wall_dom,
+        "put_wall_dom": levels.put_wall_dom,
+        "call_wall_2_dom": levels.call_wall_2_dom,
+        "put_wall_2_dom": levels.put_wall_2_dom,
+    }
 
 
 class PublisherLike:
@@ -79,6 +100,8 @@ class EngineRuntime:
     # Poslední spočtené hodnoty cyklu — čte je SetupEngine (ADR-0004)
     last_levels: LevelsRow | None = field(default=None, init=False)
     last_flow: FlowRowLike | None = field(default=None, init=False)
+    # Kompletní levels vč. dominance zdí (ADR-0010, #223) — LevelsRow je nenese
+    last_gex_levels: GexLevels | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
@@ -203,7 +226,19 @@ class EngineRuntime:
         await asyncio.to_thread(
             self.writer.write_levels2, self.symbol, self.expiry, day, [levels2_row]
         )
+        # Dominance zdí (ADR-0010, #223) — vlastní řada, stejný důvod
+        walldom_row = WallDomRow(
+            ts_min=ts_min,
+            call_wall_dom=levels.call_wall_dom,
+            put_wall_dom=levels.put_wall_dom,
+            call_wall_2_dom=levels.call_wall_2_dom,
+            put_wall_2_dom=levels.put_wall_2_dom,
+        )
+        await asyncio.to_thread(
+            self.writer.write_walldom, self.symbol, self.expiry, day, [walldom_row]
+        )
         self.last_levels = levels_row
+        self.last_gex_levels = levels
 
         # Dyn GEX profil (ADR-0009, #203): NetGEX přes cenovou mřížku obálky —
         # historie profilů je zároveň naměřený díl budoucího 2D pole
@@ -285,18 +320,7 @@ class EngineRuntime:
         # (soubory jsou per symbol; sekundární řetěz by je duplikoval)
         if self.secondary:
             await self.publisher.publish(
-                f"levels.{self.symbol}.{self.expiry}",
-                {
-                    "ts_min": ts_min.isoformat(),
-                    "flip": levels.flip,
-                    "call_wall": levels.call_wall,
-                    "put_wall": levels.put_wall,
-                    "centroid": levels.centroid,
-                    "total_gex": levels.total_gex,
-                    # Sekundární zdi (ADR-0008) — aditivní pole, starší klienti ignorují
-                    "call_wall_2": levels.call_wall_2,
-                    "put_wall_2": levels.put_wall_2,
-                },
+                f"levels.{self.symbol}.{self.expiry}", _levels_message(ts_min, levels)
             )
             logger.info(
                 "Cyklus %s %s (sekundární): %d snapshotů, greeks %d/%d",
@@ -332,18 +356,7 @@ class EngineRuntime:
                 last_tick_ts=ts_min.isoformat(),
             )
         await self.publisher.publish(
-            f"levels.{self.symbol}.{self.expiry}",
-            {
-                "ts_min": ts_min.isoformat(),
-                "flip": levels.flip,
-                "call_wall": levels.call_wall,
-                "put_wall": levels.put_wall,
-                "centroid": levels.centroid,
-                "total_gex": levels.total_gex,
-                # Sekundární zdi (ADR-0008) — aditivní pole, starší klienti ignorují
-                "call_wall_2": levels.call_wall_2,
-                "put_wall_2": levels.put_wall_2,
-            },
+            f"levels.{self.symbol}.{self.expiry}", _levels_message(ts_min, levels)
         )
         await self.publisher.publish(
             f"flow.{self.symbol}",
