@@ -419,3 +419,25 @@ def test_chain_endpoint_last_minute_with_delta_oi(settings: Settings) -> None:
 def test_chain_endpoint_missing_day_404(client: TestClient) -> None:
     response = client.get("/chain/ES/20260716?date=2026-07-01")
     assert response.status_code == 404
+
+
+def test_replay_transport_f32_and_gzip(client: TestClient) -> None:
+    """#247: snapshot matice jde po drátě jako float32, odpovědi se gzipují."""
+    import pyarrow as pyarrow_types
+
+    payload = client.get(f"/replay/ES/20260716/{DAY.isoformat()}").json()
+    frame = read_arrow(base64.b64decode(payload["snapshots_arrow_base64"]))
+    # Hodnoty sedí (f32 stačí na tick 0,25 exaktně)…
+    assert float(frame[frame["right"] == "C"]["bid"].iloc[0]) == 10.0
+    # …a typ na drátě je float32 (poloviční přenos)
+    table = pyarrow.ipc.open_stream(
+        io.BytesIO(base64.b64decode(payload["snapshots_arrow_base64"]))
+    ).read_all()
+    assert table.schema.field("bid").type == pyarrow_types.float32()
+    assert table.schema.field("oi").type == pyarrow_types.float32()
+
+    # GZip middleware: velká odpověď s Accept-Encoding chodí komprimovaná
+    response = client.get(
+        f"/replay/ES/20260716/{DAY.isoformat()}", headers={"accept-encoding": "gzip"}
+    )
+    assert response.headers.get("content-encoding") == "gzip"

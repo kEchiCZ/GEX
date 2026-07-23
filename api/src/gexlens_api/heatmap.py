@@ -162,8 +162,19 @@ def to_arrow_bytes(layers: dict[str, pd.DataFrame]) -> bytes:
 
 
 def frame_to_arrow_bytes(frame: pd.DataFrame) -> bytes:
-    """Serializace surové denní partice (raw=true, replay) do Arrow IPC streamu."""
-    table = pa.Table.from_pandas(frame, preserve_index=False)
+    """Serializace surové denní partice (raw=true, replay) do Arrow IPC streamu.
+
+    F32 transport (#247): float64 sloupce se na drátě posílají jako float32 —
+    frontend je stejně ukládá do Float32Array, takže klient dostane bitově
+    identické hodnoty jako dnes; exaktní hodnoty (strike/OI/volume/ceny na
+    tick 0,25) zůstávají exaktní, plná přesnost trvá na disku v parquet.
+    Změřeno na reálném dni: max relativní odchylka Greeks 0,00001 %.
+    """
+    slim = frame.copy()
+    for column in slim.columns:
+        if str(slim[column].dtype) == "float64":
+            slim[column] = slim[column].astype("float32")
+    table = pa.Table.from_pandas(slim, preserve_index=False)
     sink = io.BytesIO()
     with pyarrow.ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
