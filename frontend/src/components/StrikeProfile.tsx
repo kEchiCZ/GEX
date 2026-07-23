@@ -14,7 +14,7 @@ import { useElementSize } from '../hooks/useElementSize'
 import { zoomAxis } from '../heatmap/view'
 import type { ViewTransform } from '../heatmap/view'
 import { fractionalRow } from '../heatmap/overlays'
-import { barGeometry, formatAmount, gexCurvePaths, maxComponentSide, niceCeil } from '../profile/bars' // prettier-ignore
+import { barGeometry, formatAmount, gexCurvePaths, maxComponentSide, niceCeil, volLeaders } from '../profile/bars' // prettier-ignore
 import type { ProfileRow } from '../profile/bars'
 import type { GexProfileRow } from '../replay/loader'
 import { usePersistentState } from '../state/persist'
@@ -99,6 +99,8 @@ function StrikeProfileBase({
 
   // Nejvyšší strike nahoře — stejná orientace jako heatmapa
   const ordered = useMemo(() => [...rows].sort((a, b) => b.strike - a.strike), [rows])
+  // Vol leadeři (#208): top 3 strany podle volume vybrané expirace
+  const leaders = useMemo(() => volLeaders(rows), [rows])
   const strikesAscending = useMemo(() => ordered.map((row) => row.strike).reverse(), [ordered])
   // Osa Y (#213): se sdíleným pohledem VŽDY strikes heatmapy — vlastní řádky
   // (Σ souhrn přes expirace) můžou mít jinou sadu/počet a osa by se rozjela
@@ -236,6 +238,20 @@ function StrikeProfileBase({
           ))}
         </div>
       </div>
+      {leaders.length > 0 && (
+        // Vol leadeři (#208): kde se dnes nejvíc obchoduje — Alanovo čtení
+        // úrovní zajištění; sleduje vybranou expiraci, playback i Σ souhrn
+        <div
+          className="profile-leaders muted"
+          data-testid="vol-leaders"
+          title="Top 3 strany podle opčního volume vybrané expirace — dominantní strike = úroveň, kde se trh zajišťuje (put pod trhem pojistka/magnet, call nad trhem strop)"
+        >
+          Vol leadeři:{' '}
+          {leaders
+            .map((leader) => `${leader.strike}${leader.right} ${formatAmount(leader.volume)}`)
+            .join(' · ')}
+        </div>
+      )}
       <div className="profile-body" ref={bodyRef}>
         <svg
           width={width}

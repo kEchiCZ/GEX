@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import { StrikeProfile } from '../components/StrikeProfile'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
-import { barGeometry, gexCurvePaths, niceCeil } from './bars'
+import { barGeometry, gexCurvePaths, niceCeil, volLeaders } from './bars'
 import type { ProfileRow } from './bars'
 
 function rows(): ProfileRow[] {
@@ -36,6 +36,26 @@ function rows(): ProfileRow[] {
 }
 
 // ── Geometrie ──────────────────────────────────────────────────────
+
+test('volLeaders: top strany podle volume, nuly se vynechávají (#208)', () => {
+  const leaders = volLeaders(rows())
+  // rows(): 7590 C100/P400, 7600 (viz fixture) — seřazeno sestupně podle volume
+  expect(leaders[0].volume).toBeGreaterThanOrEqual(leaders[1]?.volume ?? 0)
+  expect(leaders.length).toBeLessThanOrEqual(3)
+  expect(leaders[0]).toMatchObject({ strike: expect.any(Number), right: expect.any(String) })
+  expect(volLeaders([])).toEqual([])
+})
+
+test('Vol leadeři readout se vykreslí v hlavičce profilu (#208)', () => {
+  render(
+    <CrosshairProvider>
+      <StrikeProfile rows={rows()} spot={7600} />
+    </CrosshairProvider>,
+  )
+  const readout = screen.getByTestId('vol-leaders')
+  expect(readout.textContent).toContain('Vol leadeři:')
+  expect(readout.textContent).toContain('7590P')
+})
 
 test('barGeometry normalizuje největší stranou a zoom násobí šířky', () => {
   const base = barGeometry(rows(), 130, 1)

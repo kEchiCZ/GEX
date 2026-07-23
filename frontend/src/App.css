@@ -617,6 +617,22 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+/* Vol leadeři (#208): readout top 3 stran pod hlavičkou profilu */
+.profile-leaders {
+  position: absolute;
+  top: 30px;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  padding: 2px 8px;
+  font-size: 11px;
+  background: rgba(26, 30, 40, 0.75);
+  cursor: help;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Tělo profilu vyplní celý panel; svg se sdílenou osou se ořezává */
 .profile-body {
   flex: 1;

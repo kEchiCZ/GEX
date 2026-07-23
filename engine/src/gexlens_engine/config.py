@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     # Flow-adjusted OI odhad (ADR-0011, #222): OI_est = OI + α·čistý klasifikovaný
     # objem. α z validace open-ratio (~0,39 na čistém dni); 0 = vrstva vypnutá
     flow_oi_alpha: float = Field(default=0.4, ge=0, le=1)
+    # Vol leadeři (#208): alert, když top strana příští expirace ≥ ratio × medián
+    # top-10 a zároveň ≥ min_volume kontraktů (absolutní podlaha proti ránu)
+    vol_leader_ratio: float = Field(default=3.0, gt=0)
+    vol_leader_min_volume: float = Field(default=500.0, ge=0)
 
     # Opční řetězec a rotační scheduler (SPEC 3.2, 3.3)
     strike_range_points: float = Field(default=200.0, gt=0)
