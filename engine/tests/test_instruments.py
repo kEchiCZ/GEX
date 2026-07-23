@@ -1,5 +1,6 @@
 """Testy multi-instrument vrstvy (ADR-0003): plánování, watchlist, pipeline nad mocky."""
 
+import asyncio
 import datetime as dt
 from pathlib import Path
 
@@ -318,6 +319,26 @@ async def test_oi_missing_alert_and_retry_counter(
     alerts = [data for channel, data in publisher.messages if channel == "alerts"]
     assert alerts and alerts[-1]["kind"] == "oi_missing"
     assert alerts[-1]["symbol"] == "CL"
+
+
+async def test_watchdog_prerusi_visici_cyklus(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#219: cyklus visící na mrtvém IBKR await nesmí zastavit orchestrátor."""
+    settings, writer, repository, publisher = env
+    stuck = make_pipeline("NQ", 24000.0, settings, writer, repository, publisher)
+    healthy = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+
+    async def hang(now: dt.datetime) -> SweepMetrics:
+        await asyncio.sleep(3600)
+        raise AssertionError("nedosažitelné")
+
+    stuck.run_minute = hang  # type: ignore[method-assign]
+
+    results = dict(await gather_metrics([stuck, healthy], TS, timeout_s=0.2))
+
+    assert results["NQ"] is None  # timeout → neúspěšný cyklus, žádné viset
+    assert results["ES"] is not None  # smyčka pokračovala dalším instrumentem
 
 
 async def test_archive_failure_does_not_kill_pipeline(

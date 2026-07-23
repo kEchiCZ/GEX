@@ -41,6 +41,10 @@ logger = logging.getLogger(__name__)
 OI_RETRY_CYCLES = 30
 # Cooldown po selhání setupu instrumentu (např. neznámý symbol) — cyklů do dalšího pokusu
 SETUP_RETRY_CYCLES = 30
+# Watchdog minutového cyklu (#219): sweep bez timeoutu umí po výpadku IBKR viset
+# navždy (future se nikdy nevyřeší) a zastavit celý orchestrátor. Běžný sweep
+# trvá 0.5–35 s; strop je velkorysý, aby nezabíjel legitimní první sweep.
+CYCLE_TIMEOUT_S = 240.0
 
 
 class InstrumentSetupError(RuntimeError):
@@ -314,13 +318,28 @@ def _underlying_for(symbol: str, info: ExpiryInfo) -> Underlying:
 
 
 async def gather_metrics(
-    pipelines: Sequence[InstrumentPipeline], now: dt.datetime
+    pipelines: Sequence[InstrumentPipeline],
+    now: dt.datetime,
+    *,
+    timeout_s: float = CYCLE_TIMEOUT_S,
 ) -> list[tuple[str, SweepMetrics | None]]:
-    """Sekvenční cykly všech pipeline (špička lines = jedna dávka; SPEC kap. 8 odolnost)."""
+    """Sekvenční cykly všech pipeline (špička lines = jedna dávka; SPEC kap. 8 odolnost).
+
+    Každý cyklus běží pod watchdog timeoutem (#219) — zaseknutý await na mrtvém
+    IBKR spojení jinak zastaví celý orchestrátor navždy, zatímco spot stream
+    běží dál a engine vypadá zdravě."""
     results: list[tuple[str, SweepMetrics | None]] = []
     for pipeline in pipelines:
         try:
-            results.append((pipeline.symbol, await pipeline.run_minute(now)))
+            metrics = await asyncio.wait_for(pipeline.run_minute(now), timeout=timeout_s)
+            results.append((pipeline.symbol, metrics))
+        except TimeoutError:
+            logger.error(
+                "Cyklus %s nedoběhl do %g s (visící IBKR await?) — zrušen, pokračuji",
+                pipeline.symbol,
+                timeout_s,
+            )
+            results.append((pipeline.symbol, None))
         except Exception:
             logger.exception("Cyklus %s selhal — pokračuji dalším instrumentem", pipeline.symbol)
             results.append((pipeline.symbol, None))
