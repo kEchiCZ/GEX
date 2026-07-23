@@ -77,6 +77,17 @@ export interface ReplayDay {
   gexProfile: (GexProfileRow | null)[]
   /** Modelované pole budoucích sloupců (ADR-0009 fáze 2); null = bez pole. */
   gexField: GexFieldRow | null
+  /** GEX žebřík per minuta (#244); null = minuta žebřík nemá. */
+  ladder: (LadderMinuteRow | null)[]
+}
+
+/** GEX žebřík minuty (#244): významné striky per strana s podílem na síle. */
+export interface LadderMinuteRow {
+  tsIso: string
+  callStrikes: number[]
+  callShares: number[]
+  putStrikes: number[]
+  putShares: number[]
 }
 
 const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2', 'call_wall_dom', 'put_wall_dom', 'call_wall_2_dom', 'put_wall_2_dom', 'fa_flip', 'fa_call_wall', 'fa_put_wall'] as const // prettier-ignore
@@ -126,6 +137,8 @@ export interface ReplayInputs {
   gexProfile: GexProfileRow[]
   /** Modelované pole (ADR-0009 fáze 2) — jen poslední stav, starší se zahazuje. */
   gexField: GexFieldRow | null
+  /** GEX žebřík per minuta (#244). */
+  ladder: LadderMinuteRow[]
 }
 
 /** Jedna živá minuta z WS kanálů (#127) — snapshot řez + volitelně bar/levels/flow. */
@@ -153,6 +166,13 @@ export interface LiveMinute {
   flow?: { cum_delta: number }
   /** Dyn GEX profil minuty z WS kanálu gexprofile.* (ADR-0009). */
   gexProfile?: { grid_start: number; grid_step: number; values: number[] }
+  /** GEX žebřík minuty z WS kanálu ladder.* (#244). */
+  ladder?: {
+    call_strikes: number[]
+    call_shares: number[]
+    put_strikes: number[]
+    put_shares: number[]
+  }
   /** Modelované pole z WS kanálu gexfield.* (ADR-0009 fáze 2). */
   gexField?: {
     grid_start: number
@@ -176,6 +196,8 @@ interface ReplayBundle {
   walldom?: Array<Record<string, unknown>>
   /** Flow-adjusted levels (ADR-0011, #222) — starší API pole neposílá. */
   levelsfa?: Array<Record<string, unknown>>
+  /** GEX žebřík (#244) — starší API pole neposílá. */
+  ladder?: Array<Record<string, unknown>>
   /** Dyn GEX profily (ADR-0009, #203) — starší API pole neposílá. */
   gexprofile?: Array<Record<string, unknown>>
   /** Modelované pole (ADR-0009 fáze 2) — starší API klíč neposílá. */
@@ -402,6 +424,15 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     }))
     .filter((row) => row.values.length > 0 && Number.isFinite(row.gridStart))
 
+  // GEX žebřík (#244) — starší API klíč neposílá
+  const ladderRows: LadderMinuteRow[] = (bundle.ladder ?? []).map((row) => ({
+    tsIso: canonicalTs(row.ts_min),
+    callStrikes: Array.isArray(row.call_strikes) ? (row.call_strikes as number[]).map(Number) : [],
+    callShares: Array.isArray(row.call_shares) ? (row.call_shares as number[]).map(Number) : [],
+    putStrikes: Array.isArray(row.put_strikes) ? (row.put_strikes as number[]).map(Number) : [],
+    putShares: Array.isArray(row.put_shares) ? (row.put_shares as number[]).map(Number) : [],
+  }))
+
   // Modelované pole (ADR-0009 fáze 2) — partice drží jen poslední stav
   const fieldRaw = (bundle.gexfield ?? []).at(-1)
   const fieldValues =
@@ -443,6 +474,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     })),
     gexProfile,
     gexField,
+    ladder: ladderRows,
   }
 }
 
@@ -530,6 +562,15 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
         values: minute.gexProfile.values,
       })
     : inputs.gexProfile
+  const ladder = minute.ladder
+    ? upsertRow(inputs.ladder, {
+        tsIso,
+        callStrikes: minute.ladder.call_strikes,
+        callShares: minute.ladder.call_shares,
+        putStrikes: minute.ladder.put_strikes,
+        putShares: minute.ladder.put_shares,
+      })
+    : inputs.ladder
   // Modelované pole: nová minuta prostě nahradí staré (jen poslední stav)
   const gexField = minute.gexField
     ? {
@@ -559,6 +600,7 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     flow,
     gexProfile,
     gexField,
+    ladder,
   }
 }
 
@@ -717,6 +759,13 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     if (minuteIdx !== undefined) gexProfile[minuteIdx] = row
   }
 
+  // GEX žebřík per minuta (#244) — stejný sparse vzor jako gexProfile
+  const ladder: (LadderMinuteRow | null)[] = Array.from({ length: minutes }, () => null)
+  for (const row of inputs.ladder) {
+    const minuteIdx = minuteIndex.get(row.tsIso)
+    if (minuteIdx !== undefined) ladder[minuteIdx] = row
+  }
+
   return {
     symbol: inputs.symbol,
     expiry: inputs.expiry,
@@ -730,6 +779,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     provisionalMinutes,
     gexProfile,
     gexField: inputs.gexField,
+    ladder,
   }
 }
 

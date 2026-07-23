@@ -249,6 +249,43 @@ test('levelsfa řada: fa_* linie čárkovaně vedle měřených (ADR-0011, #222)
   expect(day.overlays.levels?.find((line) => line.name === 'flip')?.series).toEqual([7595])
 })
 
+test('ladder řada: žebřík per minuta z bundle (#244)', () => {
+  const table = tableFromArrays({
+    ts_min: ['2026-07-16T15:00:00Z', '2026-07-16T15:01:00Z'],
+    strike: Float64Array.from([7600, 7600]),
+    right: ['C', 'C'],
+    volume: Float64Array.from([10, 20]),
+    oi: Float64Array.from([100, 100]),
+    delta: Float64Array.from([0.5, 0.5]),
+    stale_age: Float64Array.from([0, 0]),
+  })
+  const day = buildReplayDay({
+    symbol: 'ES',
+    expiry: '20260716',
+    date: '2026-07-16',
+    snapshots_arrow_base64: btoa(String.fromCharCode(...tableToIPC(table, 'stream'))),
+    levels: [],
+    ladder: [
+      {
+        ts_min: '2026-07-16T15:01:00Z',
+        call_strikes: [7650, 7700],
+        call_shares: [0.4, 0.2],
+        put_strikes: [7500],
+        put_shares: [0.55],
+      },
+    ],
+    flow: [],
+    bars: [],
+  })
+  expect(day.ladder[0]).toBeNull() // minuta bez žebříku
+  expect(day.ladder[1]).toMatchObject({
+    callStrikes: [7650, 7700],
+    callShares: [0.4, 0.2],
+    putStrikes: [7500],
+    putShares: [0.55],
+  })
+})
+
 test('bez walldom řady (starší API) zůstávají zdi bez slabých úseků', () => {
   const table = tableFromArrays({
     ts_min: ['2026-07-16T15:00:00Z'],

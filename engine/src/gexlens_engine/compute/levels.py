@@ -170,6 +170,48 @@ def _secondary_wall(
     return best
 
 
+@dataclass(frozen=True)
+class LadderEntry:
+    """Příčka GEX žebříku (#244): významný strike strany s podílem na její síle."""
+
+    strike: float
+    side: str  # "call" (nad spotem) / "put" (pod spotem)
+    share: float
+
+
+def compute_ladder(
+    net_by_strike: Mapping[float, float],
+    spot: float,
+    *,
+    top_n: int = 3,
+    min_share: float = 0.1,
+) -> list[LadderEntry]:
+    """GEX žebřík (#244): top-N významných striků per strana dle |NetGEX|.
+
+    Kooperovo čtení „parametrů": zelené call úrovně nad cenou, červené put pod
+    ní. Filtr podílu na kladné síle strany (metrika dominance, ADR-0010)
+    vynechá šumové lokální extrémy — žebřík ukazuje JEN významné úrovně.
+    Řazeno silou sestupně, per strana max top_n příček.
+    """
+    ladder: list[LadderEntry] = []
+    for side in ("call", "put"):
+        region = _side_strengths(net_by_strike, spot, side=side)
+        total = sum(value for value in region.values() if value > 0.0)
+        if total <= 0.0:
+            continue
+        ranked = sorted(
+            ((strike, value / total) for strike, value in region.items() if value > 0.0),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        ladder.extend(
+            LadderEntry(strike=strike, side=side, share=share)
+            for strike, share in ranked[:top_n]
+            if share >= min_share
+        )
+    return ladder
+
+
 def _centroid(net_by_strike: Mapping[float, float]) -> float | None:
     total_abs = sum(abs(net) for net in net_by_strike.values())
     if total_abs == 0.0:

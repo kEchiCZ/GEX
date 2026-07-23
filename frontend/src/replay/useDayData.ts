@@ -20,7 +20,7 @@ import {
   fetchReplay,
   fetchReplayInputs,
 } from './loader'
-import type { GexFieldRow, GexProfileRow, LiveMinute, LiveMinuteRow, ProfileSource, ReplayDay, ReplayInputs } from './loader' // prettier-ignore
+import type { GexFieldRow, GexProfileRow, LadderMinuteRow, LiveMinute, LiveMinuteRow, ProfileSource, ReplayDay, ReplayInputs } from './loader' // prettier-ignore
 
 /** Daily pohled: strop stažených dnů (retence snapshotů je 14 dní, R4). */
 const DAILY_MAX_DAYS = 14
@@ -167,6 +167,8 @@ export interface DayData {
   gexProfile: (GexProfileRow | null)[] | null
   /** Modelované pole budoucích sloupců (ADR-0009 fáze 2); null = bez pole. */
   gexField: GexFieldRow | null
+  /** GEX žebřík per minuta/koš (#244); null = bez žebříku (demo, Daily). */
+  ladder: (LadderMinuteRow | null)[] | null
 }
 
 function demoDay(): DayData {
@@ -196,6 +198,7 @@ function demoDay(): DayData {
     lastMinuteIso: null, // demo den není ukotvený v čase → bez projekce
     gexProfile: null,
     gexField: null,
+    ladder: null,
   }
 }
 
@@ -219,6 +222,7 @@ function replayToDay(day: ReplayDay): DayData {
     lastMinuteIso: day.minutes.at(-1) ?? null,
     gexProfile: day.gexProfile,
     gexField: day.gexField,
+    ladder: day.ladder,
   }
 }
 
@@ -409,6 +413,16 @@ export function useDayData(
       part(minuteKey(data.ts_min)).flow = { cum_delta: Number(data.cum_delta) || 0 }
       scheduleFlush()
     }
+    // GEX žebřík minuty (#244) — starší engine kanál neposílá
+    const onLadder = (data: ChannelData) => {
+      part(minuteKey(data.ts_min)).ladder = {
+        call_strikes: Array.isArray(data.call_strikes) ? (data.call_strikes as number[]) : [],
+        call_shares: Array.isArray(data.call_shares) ? (data.call_shares as number[]) : [],
+        put_strikes: Array.isArray(data.put_strikes) ? (data.put_strikes as number[]) : [],
+        put_shares: Array.isArray(data.put_shares) ? (data.put_shares as number[]) : [],
+      }
+      scheduleFlush()
+    }
     // Dyn GEX profil minuty (ADR-0009) — starší engine kanál neposílá
     const onGexProfile = (data: ChannelData) => {
       if (!Array.isArray(data.values)) return
@@ -469,6 +483,7 @@ export function useDayData(
     const spotCh = `spot.${symbol}`
     const gexProfileCh = `gexprofile.${symbol}.${expiry}`
     const gexFieldCh = `gexfield.${symbol}.${expiry}`
+    const ladderCh = `ladder.${symbol}.${expiry}`
     socket.subscribe(snapshotCh, onSnapshot)
     socket.subscribe(priceCh, onPrice)
     socket.subscribe(levelsCh, onLevels)
@@ -477,6 +492,7 @@ export function useDayData(
     socket.subscribe(spotCh, onSpot)
     socket.subscribe(gexProfileCh, onGexProfile)
     socket.subscribe(gexFieldCh, onGexField)
+    socket.subscribe(ladderCh, onLadder)
     // Reconnect: dofetchni celý balík (mohli jsme zmeškat minuty)
     const offReconnect = socket.onReconnect(() => setReconcileTick((n) => n + 1))
     return () => {
@@ -489,6 +505,7 @@ export function useDayData(
       socket.unsubscribe(spotCh, onSpot)
       socket.unsubscribe(gexProfileCh, onGexProfile)
       socket.unsubscribe(gexFieldCh, onGexField)
+      socket.unsubscribe(ladderCh, onLadder)
       offReconnect()
     }
   }, [symbol, expiry, timeframe, socket])

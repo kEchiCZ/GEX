@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.gex import GexEngine, GexInput
 from gexlens_engine.compute.gexfield import ProfileContract, gamma_field, gamma_profile
-from gexlens_engine.compute.levels import GexLevels, compute_levels
+from gexlens_engine.compute.levels import GexLevels, compute_ladder, compute_levels
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
@@ -27,6 +27,7 @@ from gexlens_engine.storage.parquet_store import (
     FlowRowLike,
     GexFieldRow,
     GexProfileRow,
+    LadderRow,
     Levels2Row,
     LevelsRow,
     SnapshotRow,
@@ -241,6 +242,35 @@ class EngineRuntime:
         )
         self.last_levels = levels_row
         self.last_gex_levels = levels
+
+        # GEX žebřík (#244): top-N významných striků per strana — vlastní řada
+        # (proměnný počet příček) + aditivní WS kanál
+        ladder = compute_ladder(
+            gex.net_by_strike(),
+            spot=spot,
+            top_n=self.settings.ladder_top_n,
+            min_share=self.settings.ladder_min_share,
+        )
+        ladder_row = LadderRow(
+            ts_min=ts_min,
+            call_strikes=[entry.strike for entry in ladder if entry.side == "call"],
+            call_shares=[entry.share for entry in ladder if entry.side == "call"],
+            put_strikes=[entry.strike for entry in ladder if entry.side == "put"],
+            put_shares=[entry.share for entry in ladder if entry.side == "put"],
+        )
+        await asyncio.to_thread(
+            self.writer.write_ladder, self.symbol, self.expiry, day, [ladder_row]
+        )
+        await self.publisher.publish(
+            f"ladder.{self.symbol}.{self.expiry}",
+            {
+                "ts_min": ts_min.isoformat(),
+                "call_strikes": ladder_row.call_strikes,
+                "call_shares": ladder_row.call_shares,
+                "put_strikes": ladder_row.put_strikes,
+                "put_shares": ladder_row.put_shares,
+            },
+        )
 
         # Flow-adjusted levels (ADR-0011, #222): OI odhad = ranní OI + α·čistý
         # klasifikovaný objem (buy − sell z midpoint testu / Lee–Ready). Jen

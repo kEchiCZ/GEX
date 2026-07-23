@@ -97,6 +97,16 @@ async def test_one_cycle_produces_full_day_artifacts(
         "put_wall_2_dom",
     ]
     assert len(walldom) == 1
+    # GEX žebřík (#244): vlastní řada s list sloupci + WS kanál
+    ladder = pd.read_parquet(settings.derived_dir / "ES" / "20260716" / "ladder" / f"{day}.parquet")
+    assert list(ladder.columns) == [
+        "ts_min",
+        "call_strikes",
+        "call_shares",
+        "put_strikes",
+        "put_shares",
+    ]
+    assert len(ladder) == 1
     # Flow-adjusted levels (ADR-0011, #222): vlastní řada + WS kanál; první cyklus
     # bez přírůstku volume → odhad == měřené levels
     levelsfa = pd.read_parquet(
@@ -122,6 +132,7 @@ async def test_one_cycle_produces_full_day_artifacts(
     assert "call_wall_dom" in levels_data and "put_wall_dom" in levels_data
     assert "flow.ES" in channels
     assert "levelsfa.ES.20260716" in channels  # ADR-0011, #222
+    assert "ladder.ES.20260716" in channels  # #244
     assert "price.ES" in channels
     assert "snapshot.ES.20260716" in channels
     # Dyn GEX profil (ADR-0009): kanál + persistence do vlastní řady

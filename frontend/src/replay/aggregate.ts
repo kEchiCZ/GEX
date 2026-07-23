@@ -230,6 +230,17 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
       : null,
     // Modelované pole se mapuje časem, ne koši — beze změny (ADR-0009 fáze 2)
     gexField: day.gexField,
+    // Koš přebírá žebřík poslední minuty s daty (#244) — jako gexProfile
+    ladder: day.ladder
+      ? Array.from({ length: buckets }, (_, bucketIdx) => {
+          const end = bucketEnd(bucketIdx, bucketMinutes, minutes)
+          for (let minuteIdx = end; minuteIdx >= bucketIdx * bucketMinutes; minuteIdx -= 1) {
+            const row = day.ladder![minuteIdx]
+            if (row) return row
+          }
+          return null
+        })
+      : null,
     spotSeries: lastNonNull(day.spotSeries, bucketMinutes, buckets),
     minuteLabels: Array.from(
       { length: buckets },
