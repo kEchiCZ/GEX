@@ -215,6 +215,35 @@ body {
   padding: 4px 8px;
 }
 
+/* GEX režim badge (#209): typ obchodu dle kap. 18 — zelená fade, červená momentum,
+   žlutá flip zóna (neobchodovat). Tooltip nese playbook hint. */
+.regime-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: help;
+  white-space: nowrap;
+}
+
+.regime-badge.regime-positive {
+  color: #3ecf8e;
+  background: rgba(62, 207, 142, 0.14);
+  border: 1px solid rgba(62, 207, 142, 0.45);
+}
+
+.regime-badge.regime-negative {
+  color: #f0616d;
+  background: rgba(240, 97, 109, 0.14);
+  border: 1px solid rgba(240, 97, 109, 0.45);
+}
+
+.regime-badge.regime-flipzone {
+  color: #e8c14b;
+  background: rgba(232, 193, 75, 0.14);
+  border: 1px solid rgba(232, 193, 75, 0.45);
+}
+
 .live-indicator.live {
   color: var(--up);
 }

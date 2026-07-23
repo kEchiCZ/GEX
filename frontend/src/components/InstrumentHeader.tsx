@@ -1,6 +1,7 @@
 /** Hlavička instrumentu (SPEC 7.1): ticker, last + změna, expirace, Live, notifikace. */
 import { useEffect, useState } from 'react'
 import { expiryCountdown, expiryKind } from '../instrument/expiry'
+import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
 
 /** Čas alertu (unix s) → lokální datum + čas; prázdné, když ts chybí/nevalidní. */
@@ -43,6 +44,7 @@ export function InstrumentHeader({
     unreadAlerts,
     markAlertsRead,
     setView,
+    regimeInfo,
   } = useAppState()
   const [alertsOpen, setAlertsOpen] = useState(false)
   const live = status.engine === 'online'
@@ -89,6 +91,27 @@ export function InstrumentHeader({
         <span className="muted expiry-meta" data-testid="expiry-meta">
           {kind}
           {countdown && ` · expiruje ${countdown}`}
+        </span>
+      )}
+      {regimeInfo.state && (
+        // GEX režim (#209): jediná datově podložená hodnota vrstvy — TYP obchodu,
+        // ne směr. Tooltip nese playbook hint + polohu flip zóny.
+        <span
+          className={`regime-badge regime-${regimeInfo.state}`}
+          data-testid="regime-badge"
+          title={
+            REGIME_HINTS[regimeInfo.state] +
+            [
+              regimeInfo.measuredFlip !== null
+                ? ` Měřený flip ${regimeInfo.measuredFlip.toFixed(0)}.`
+                : '',
+              regimeInfo.dynamicFlip !== null
+                ? ` Dynamický flip ${regimeInfo.dynamicFlip.toFixed(0)}.`
+                : '',
+            ].join('')
+          }
+        >
+          {REGIME_LABELS[regimeInfo.state]}
         </span>
       )}
       <span className={live ? 'live-indicator live' : 'live-indicator stale'} role="status">

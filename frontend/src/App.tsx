@@ -25,6 +25,7 @@ import { resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { DEFAULT_VIEW } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
+import { gexRegime, profileZeroNearest } from './instrument/regime'
 import { priceTick } from './instrument/tick'
 import {
   WALLS_MODES,
@@ -67,8 +68,17 @@ function lastValue(series: (number | null)[] | undefined, position: number): num
 }
 
 function MainContent() {
-  const { toggles, symbol, selectedExpiry, view, timeframe, interval, setPriceInfo, socket } =
-    useAppState()
+  const {
+    toggles,
+    symbol,
+    selectedExpiry,
+    view,
+    timeframe,
+    interval,
+    setPriceInfo,
+    setRegimeInfo,
+    socket,
+  } = useAppState()
   // Volby grafu přežívají refresh (ADR-0007, #167); URL deep-link má přednost
   const [style, setStyle] = usePersistentState<HeatmapStyle>(
     'style',
@@ -193,6 +203,29 @@ function MainContent() {
       changePct: last !== null && open !== null && open !== 0 ? ((last - open) / open) * 100 : null,
     })
   }, [day.spotSeries, liveOverlay.bars, setPriceInfo])
+  // GEX režim badge (#209): živý spot vůči flip zóně (měřený × dynamický flip).
+  // Živé hodnoty, ne playback řez — badge je kontext „teď", stejně jako priceInfo.
+  useEffect(() => {
+    const spots = day.spotSeries.filter((value): value is number => value !== null)
+    const liveSpot = liveOverlay.bars.at(-1)?.close ?? spots.at(-1) ?? null
+    const flipSeries = day.overlays.levels?.find((line) => line.name === 'flip')?.series
+    const measuredFlip = flipSeries ? lastValue(flipSeries, flipSeries.length - 1) : null
+    const profiles = day.gexProfile ?? []
+    let lastProfile = null
+    for (let i = profiles.length - 1; i >= 0; i -= 1) {
+      if (profiles[i]) {
+        lastProfile = profiles[i]
+        break
+      }
+    }
+    const dynamicFlip =
+      lastProfile && liveSpot !== null ? profileZeroNearest(lastProfile, liveSpot) : null
+    setRegimeInfo({
+      state: gexRegime(liveSpot, measuredFlip, dynamicFlip),
+      measuredFlip,
+      dynamicFlip,
+    })
+  }, [day.spotSeries, day.overlays.levels, day.gexProfile, liveOverlay.bars, setRegimeInfo])
   // Pohled grafu (pan/zoom os) — sdílený heatmapou a spodními panely (společná osa X)
   const [chartView, setChartView] = useState<ViewTransform>(DEFAULT_VIEW)
   // Cenové pásmo dne pro auto-fit osy Y (fit počítá Heatmap se svou skutečnou výškou)

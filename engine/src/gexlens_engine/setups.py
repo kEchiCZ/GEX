@@ -20,6 +20,7 @@ from gexlens_engine.compute.setups import (
     SetupParams,
     detect_all,
     evaluate_bar,
+    gex_regime,
     max_pain_strike,
     r_result,
 )
@@ -134,6 +135,8 @@ class SetupEngine:
             minutes_to_expiry=minutes_left,
             call_wall_dom=full.call_wall_dom if full else None,
             put_wall_dom=full.put_wall_dom if full else None,
+            # GEX režim (#209) — do kontextu každého setupu pro kalibraci Fáze 2
+            gex_regime=(gex_regime(bar_close, levels.flip, levels.total_gex) if levels else None),
         )
         self._history.append(inputs)
 

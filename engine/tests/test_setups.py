@@ -19,6 +19,7 @@ from gexlens_engine.compute.setups import (
     detect_max_pain_pin,
     detect_wall_bounce,
     evaluate_bar,
+    gex_regime,
     max_pain_strike,
     r_result,
 )
@@ -49,6 +50,7 @@ def minute(
     minutes_to_expiry: float | None = 600.0,
     call_wall_dom: float | None = None,
     put_wall_dom: float | None = None,
+    gex_regime: str | None = None,
     idx: int = 0,
 ) -> MinuteInputs:
     return MinuteInputs(
@@ -68,6 +70,7 @@ def minute(
         minutes_to_expiry=minutes_to_expiry,
         call_wall_dom=call_wall_dom,
         put_wall_dom=put_wall_dom,
+        gex_regime=gex_regime,
     )
 
 
@@ -79,6 +82,29 @@ def test_max_pain_strike_symmetric() -> None:
     oi |= {(7490.0, "P"): 10.0, (7500.0, "P"): 10.0, (7510.0, "P"): 10.0}
     assert max_pain_strike(oi) == 7500.0
     assert max_pain_strike({}) is None
+
+
+# ── GEX režim (#209) ──────────────────────────────────────────────
+
+
+def test_gex_regime_from_flip_and_total_gex() -> None:
+    assert gex_regime(7520.0, 7515.0, -100.0) == "positive"  # close nad flipem
+    assert gex_regime(7510.0, 7515.0, 100.0) == "negative"  # close pod flipem
+    assert gex_regime(7515.0, 7515.0, 0.0) == "positive"  # na flipu = pozitivní strana (T1)
+    assert gex_regime(7515.0, None, 100.0) == "positive"  # bez flipu → znaménko TotalGEX
+    assert gex_regime(7515.0, None, -100.0) == "negative"
+    assert gex_regime(7515.0, None, 0.0) is None
+
+
+def test_detectors_carry_gex_regime_in_context() -> None:
+    # T1 s režimem: kontext ho nese pro kalibraci Fáze 2 (#209)
+    history = [
+        minute(7512 - i, cum_delta=float(i * 10), gex_regime="negative", idx=i) for i in range(10)
+    ]
+    history.append(minute(7502, low=7501, cum_delta=110.0, gex_regime="negative", idx=10))
+    setup = detect_wall_bounce(history, PARAMS)
+    assert setup is not None
+    assert setup.context["gex_regime"] == "negative"
 
 
 # ── T1: odraz od zdi ───────────────────────────────────────────────

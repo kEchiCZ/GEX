@@ -54,6 +54,10 @@ class MinuteInputs:
     # None = neznámá (starší data) → podmínky dominance se přeskakují.
     call_wall_dom: float | None = field(default=None, kw_only=True)
     put_wall_dom: float | None = field(default=None, kw_only=True)
+    # GEX režim (#209): "positive"/"negative" dle polohy close vůči flipu
+    # (fallback znaménko TotalGEX). Jen kontext pro kalibraci Fáze 2 — váhy
+    # confidence se z něj zatím nepočítají.
+    gex_regime: str | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,21 @@ class SetupCandidate:
     @property
     def rrr(self) -> float:
         return self.reward / self.risk if self.risk > 0 else 0.0
+
+
+def gex_regime(close: float, flip: float | None, total_gex: float) -> str | None:
+    """GEX režim minuty (#209): poloha vůči flipu, bez flipu znaménko TotalGEX.
+
+    Konvence shodná s `right_gamma_side` T1: close >= flip = pozitivní strana.
+    None = režim nelze určit (žádný flip a nulový TotalGEX).
+    """
+    if flip is not None:
+        return "positive" if close >= flip else "negative"
+    if total_gex > 0:
+        return "positive"
+    if total_gex < 0:
+        return "negative"
+    return None
 
 
 def max_pain_strike(oi_by_strike_right: Mapping[tuple[float, str], float]) -> float | None:
@@ -204,6 +223,7 @@ def detect_wall_bounce(
                 "max_pain": now.max_pain,
                 "cum_delta": now.cum_delta,
                 "right_gamma_side": right_gamma_side,
+                "gex_regime": now.gex_regime,
             },
         )
         if candidate.rrr < params.min_rrr:
@@ -262,7 +282,7 @@ def detect_failed_break(
                 f"Neúspěšný průraz {level:g} dolů (dno {extreme:g} bez akceptace) "
                 f"a reclaim — spring."
             ),
-            context={"level": level, "extreme": extreme},
+            context={"level": level, "extreme": extreme, "gex_regime": now.gex_regime},
         )
 
     for level in up_levels:  # breakout nahoru → SHORT po selhání
@@ -302,7 +322,7 @@ def detect_failed_break(
                 f"Neúspěšný průraz {level:g} nahoru (vrchol {extreme:g} bez akceptace) "
                 f"a návrat — upthrust."
             ),
-            context={"level": level, "extreme": extreme},
+            context={"level": level, "extreme": extreme, "gex_regime": now.gex_regime},
         )
     return None
 
@@ -357,6 +377,7 @@ def detect_max_pain_pin(
             "max_pain": now.max_pain,
             "minutes_to_expiry": now.minutes_to_expiry,
             "wall_dom_max": max(dominances) if dominances else None,
+            "gex_regime": now.gex_regime,
         },
     )
 
@@ -401,7 +422,11 @@ def detect_gamma_momentum(
                 f"Průraz flipu {now.flip:g} dolů do záporné gammy: put strana "
                 f"{put_flow / total_flow:.0%} toku, Cum Δ na minimu — dealeři zesilují."
             ),
-            context={"flip": now.flip, "put_flow_share": put_flow / total_flow},
+            context={
+                "flip": now.flip,
+                "put_flow_share": put_flow / total_flow,
+                "gex_regime": now.gex_regime,
+            },
         )
     if crossed_up:
         if call_flow / total_flow < params.momentum_flow_share:
@@ -423,7 +448,11 @@ def detect_gamma_momentum(
                 f"Průraz flipu {now.flip:g} nahoru: call strana "
                 f"{call_flow / total_flow:.0%} toku, Cum Δ na maximu."
             ),
-            context={"flip": now.flip, "call_flow_share": call_flow / total_flow},
+            context={
+                "flip": now.flip,
+                "call_flow_share": call_flow / total_flow,
+                "gex_regime": now.gex_regime,
+            },
         )
     return None
 
