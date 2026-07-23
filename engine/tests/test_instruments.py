@@ -19,6 +19,7 @@ from gexlens_engine.ibkr.discovery import (
 )
 from gexlens_engine.ibkr.mock import MockIB, MockOIFetcher, MockQuoteStreamer
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
+from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.instruments import (
     InstrumentPipeline,
     WatchlistReader,
@@ -339,6 +340,69 @@ async def test_watchdog_prerusi_visici_cyklus(
 
     assert results["NQ"] is None  # timeout → neúspěšný cyklus, žádné viset
     assert results["ES"] is not None  # smyčka pokračovala dalším instrumentem
+
+
+async def test_bars_stall_alert_and_recovery_backfill(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#221: bary nechodí při živém spotu → alert; po návratu recovery + re-backfill."""
+    settings, writer, repository, publisher = env
+    settings.bars_stall_alert_minutes = 2
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    backfills: list[bool] = []
+
+    async def fake_backfill() -> None:
+        backfills.append(True)
+
+    pipeline.backfill_today = fake_backfill
+    ticker = pipeline.ticker
+    assert isinstance(ticker, FakeTicker)
+
+    # Cyklus 0: první spot (žádný předchozí) → pohyb neznámý, čítač stojí
+    await pipeline.run_minute(TS)
+    # Cykly 1–2: spot žije, bary žádné → po prahu 2 min alert
+    ticker.last = 7601.0
+    await pipeline.run_minute(TS + dt.timedelta(minutes=1))
+    ticker.last = 7602.0
+    await pipeline.run_minute(TS + dt.timedelta(minutes=2))
+
+    alerts = [data for channel, data in publisher.messages if channel == "alerts"]
+    assert [a["kind"] for a in alerts] == ["bars_stalled"]
+    assert alerts[0]["symbol"] == "ES"
+
+    # Další tichý cyklus alert neopakuje (anti-spam)
+    ticker.last = 7603.0
+    await pipeline.run_minute(TS + dt.timedelta(minutes=3))
+    alerts = [data for channel, data in publisher.messages if channel == "alerts"]
+    assert len(alerts) == 1
+
+    # Návrat barů: recovery alert + re-backfill dnešního dne na pozadí
+    ticker.last = 7604.0
+    now = TS + dt.timedelta(minutes=4)
+    pipeline.minute_bars.append(
+        Bar(ts=now, open=7603.0, high=7605.0, low=7602.0, close=7604.0, volume=10.0)
+    )
+    await pipeline.run_minute(now)
+    assert pipeline._backfill_task is not None
+    await pipeline._backfill_task
+
+    alerts = [data for channel, data in publisher.messages if channel == "alerts"]
+    assert [a["kind"] for a in alerts] == ["bars_stalled", "bars_recovered"]
+    assert backfills == [True]
+
+
+async def test_no_stall_alert_when_market_quiet(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#221: zavřený trh (spot stojí) — chybějící bary nesmí spouštět alert."""
+    settings, writer, repository, publisher = env
+    settings.bars_stall_alert_minutes = 2
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+
+    for minute in range(5):  # FakeTicker drží stejnou cenu → spot se nehýbe
+        await pipeline.run_minute(TS + dt.timedelta(minutes=minute))
+
+    assert not [data for channel, data in publisher.messages if channel == "alerts"]
 
 
 async def test_archive_failure_does_not_kill_pipeline(

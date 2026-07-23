@@ -338,6 +338,8 @@ Druhy alertĹŻ:
 | **OI nedorazilo** | IBKR nedodalo Open Interest â€” GEX vrstvy jedou doÄŤasnÄ› z volume (viz ĹeĹˇenĂ­ potĂ­ĹľĂ­) |
 | **Instrument nejde spustit** | Ticker z watchlistu nenĂ­ futures s opÄŤnĂ­m Ĺ™etÄ›zem (napĹ™. akcie) â€” engine to zkusĂ­ znovu za 30 minut |
 | ObĂˇlka na stropu | PĂˇsmo strikes dosĂˇhlo maxima ĹˇĂ­Ĺ™ky â€” vzdĂˇlenĂ˝ okraj se posouvĂˇ za cenou |
+| **SvĂ­ÄŤky se pĹ™estaly kreslit** | Real-time bary z TWS nechodĂ­, ale cena Ĺľije (mrtvĂ© TWS farmy po noÄŤnĂ­ pĹ™estĂˇvce) â€” pomĂˇhĂˇ restart TWS; dĂ­ra se po nĂˇvratu doplnĂ­ sama |
+| SvĂ­ÄŤky zase jedou | Bary se vrĂˇtily â€” dĂ­ra ve svĂ­ÄŤkĂˇch se doplnĂ­ backfillem |
 | **NovĂ˝ setup** | Detektor naĹˇel obchodnĂ­ setup (odraz od zdi / neĂşspÄ›ĹˇnĂ˝ prĹŻraz / Max Pain pin / gamma momentum) |
 
 ### Setupy

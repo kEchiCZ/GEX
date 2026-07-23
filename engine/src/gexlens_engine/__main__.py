@@ -15,13 +15,19 @@ import sys
 from ib_async import IB, Contract, Future, RealTimeBarList, Ticker
 from sqlalchemy import create_engine
 
-from gexlens_engine.adapters import HttpPublisher, IbOIFetcher, IbQuoteStreamer
+from gexlens_engine.adapters import (
+    HttpPublisher,
+    IbHistoricalClient,
+    IbOIFetcher,
+    IbQuoteStreamer,
+)
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.ibkr.connection import ConnectionManager, ConnectionState
 from gexlens_engine.ibkr.discovery import ChainDiscovery, Underlying, build_contracts
+from gexlens_engine.ibkr.pacing import PacingGuard
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler
-from gexlens_engine.ibkr.underlying import Bar, RealTimeBarAggregator
+from gexlens_engine.ibkr.underlying import Bar, RealTimeBarAggregator, UnderlyingBackfiller
 from gexlens_engine.instruments import (
     SETUP_RETRY_CYCLES,
     InstrumentPipeline,
@@ -84,10 +90,13 @@ async def create_pipeline(
     oi_repository: OIEodRepository,
     symbol: str,
     setups_repository: SetupsRepository | None = None,
+    pacing_guard: PacingGuard | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
     front = await _resolve_front_future(ib, symbol)
     multiplier = parse_multiplier(front.multiplier)
+    if pacing_guard is None:
+        pacing_guard = PacingGuard()
 
     # Bary podkladu: 5s realtime bary → 1min agregace
     minute_bars: list[Bar] = []
@@ -231,9 +240,39 @@ async def create_pipeline(
         push_status=False,  # agregovaný status pushuje orchestrátor
     )
 
+    # Historical backfill 1min barů (SPEC 3.6, #221): aktuální den + retention
+    # okno při startu, jednodenní re-backfill po výpadku real-time streamu
+    backfiller = UnderlyingBackfiller(IbHistoricalClient(ib, front), pacing_guard, settings)
+
+    async def backfill_today() -> None:
+        day = dt.datetime.now(dt.UTC).date()
+        day_bars = await backfiller.backfill_day(symbol, day)
+        if day_bars:
+            await asyncio.to_thread(writer.write_bars, symbol, day, day_bars)
+        logger.info("Re-backfill %s %s: %d barů", symbol, day, len(day_bars))
+
+    async def initial_backfill() -> None:
+        try:
+            by_day = await backfiller.backfill(symbol, dt.datetime.now(dt.UTC).date())
+        except Exception:
+            logger.exception("Backfill barů %s selhal — svíčky jen z živého streamu", symbol)
+            return
+        for day, day_bars in by_day.items():
+            if day_bars:
+                await asyncio.to_thread(writer.write_bars, symbol, day, day_bars)
+        logger.info(
+            "Backfill %s: %d dní, %d barů",
+            symbol,
+            sum(1 for day_bars in by_day.values() if day_bars),
+            sum(len(day_bars) for day_bars in by_day.values()),
+        )
+
+    backfill_task = asyncio.create_task(initial_backfill())
+
     def on_stop() -> None:
         nonlocal stopped
         stopped = True
+        backfill_task.cancel()
         spot_streamer.stop()
         ib.cancelMktData(front)
         if rt_bars is not None:
@@ -256,6 +295,7 @@ async def create_pipeline(
         spot=spot,
         archive_contracts=archive_contracts,
         next_runtime=next_runtime,
+        backfill_today=backfill_today,
         setup_engine=(
             SetupEngine(
                 symbol=symbol,
@@ -315,6 +355,8 @@ async def main() -> None:
 
     retention = RetentionJob(settings)
     last_purge_date: dt.date | None = None
+    # Globální rate limiter historical requestů (SPEC 3.6) — sdílený všemi pipeline
+    pacing_guard = PacingGuard()
 
     pipelines: dict[str, InstrumentPipeline] = {}
     # Symboly po selhaném setupu: cooldown v cyklech do dalšího pokusu
@@ -374,6 +416,7 @@ async def main() -> None:
                     oi_repository,
                     symbol,
                     setups_repository=setups_repository,
+                    pacing_guard=pacing_guard,
                 )
             except InstrumentSetupError as exc:
                 setup_cooldown[symbol] = SETUP_RETRY_CYCLES
