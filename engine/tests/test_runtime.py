@@ -97,6 +97,14 @@ async def test_one_cycle_produces_full_day_artifacts(
         "put_wall_2_dom",
     ]
     assert len(walldom) == 1
+    # Flow-adjusted levels (ADR-0011, #222): vlastní řada + WS kanál; první cyklus
+    # bez přírůstku volume → odhad == měřené levels
+    levelsfa = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "levelsfa" / f"{day}.parquet"
+    )
+    assert len(levelsfa) == 1
+    assert levelsfa["total_gex"].iloc[0] == levels["total_gex"].iloc[0]
+    pd.testing.assert_frame_equal(levelsfa, levels)
     flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{day}.parquet")
     assert list(flow.columns) == ["ts_min", "flow_delta", "cum_delta"]
     day_bars = pd.read_parquet(settings.derived_dir / "ES" / "bars" / f"{day}.parquet")
@@ -113,6 +121,7 @@ async def test_one_cycle_produces_full_day_artifacts(
     )
     assert "call_wall_dom" in levels_data and "put_wall_dom" in levels_data
     assert "flow.ES" in channels
+    assert "levelsfa.ES.20260716" in channels  # ADR-0011, #222
     assert "price.ES" in channels
     assert "snapshot.ES.20260716" in channels
     # Dyn GEX profil (ADR-0009): kanál + persistence do vlastní řady
@@ -164,6 +173,35 @@ async def test_one_cycle_produces_full_day_artifacts(
     assert isinstance(snap_rows, list) and len(snap_rows) == 6
     assert set(snap_rows[0]) >= {"strike", "right", "oi", "volume", "delta", "stale_age"}
     assert snap_rows[0]["oi"] == 1000.0
+
+
+async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path) -> None:
+    """ADR-0011: α = 0 flow-adjusted vrstvu vypíná — žádná řada, žádný kanál."""
+    settings = Settings(data_dir=tmp_path / "data", flow_oi_alpha=0.0)
+    specs = contracts()
+    repository = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}"))
+    repository.ensure_schema()
+    repository.upsert_many(
+        [OIRecord("ES", "20260716", s.strike, s.right, TS.date(), 1000.0) for s in specs]
+    )
+    publisher = RecordingPublisher()
+    engine_runtime = EngineRuntime(
+        settings=settings,
+        scheduler=SubscriptionScheduler(MockQuoteStreamer(), settings),
+        writer=SnapshotWriter(settings),
+        oi_repository=repository,
+        publisher=publisher,
+        symbol="ES",
+        expiry="20260716",
+        multiplier=50.0,
+        contracts=specs,
+    )
+
+    await engine_runtime.run_cycle(TS, SPOT, [])
+
+    day = TS.date().isoformat()
+    assert not (settings.derived_dir / "ES" / "20260716" / "levelsfa" / f"{day}.parquet").exists()
+    assert "levelsfa.ES.20260716" not in [channel for channel, _ in publisher.messages]
 
 
 async def test_forming_bar_published_and_written_as_provisional(

@@ -107,6 +107,28 @@ def test_daily_reset_clears_state() -> None:
     assert flow == 0.0
 
 
+def test_net_volume_per_contract() -> None:  # ADR-0011, #222
+    """Čistý klasifikovaný objem (buy − sell, kontrakty) per spec, obě větve."""
+    tracker = CumDeltaTracker(multiplier=50.0)
+    call = spec("C")
+    put = spec("P")
+    # Bar větev: last nad midem (+30), pod midem (−20); první bar jen zakládá stav
+    tracker.add_bar(call, 100.0, 10.3, 10.0, 10.4, delta=0.5)
+    tracker.add_bar(call, 130.0, 10.3, 10.0, 10.4, delta=0.5)  # +30
+    tracker.add_bar(call, 150.0, 10.0, 10.0, 10.4, delta=0.5)  # last pod midem → −20
+    assert tracker.net_volume(call) == 10.0
+    # Tick větev: buy 5, sell 2, unknown nepřispívá
+    tracker.add_trade(trade("P", size=5.0, side="buy", ts=1.0), delta=-0.4)
+    tracker.add_trade(trade("P", size=2.0, side="sell", ts=2.0), delta=-0.4)
+    tracker.add_trade(trade("P", size=9.0, side="unknown", ts=3.0), delta=-0.4)
+    assert tracker.net_volume(put) == 3.0
+    assert tracker.net_volume(spec("C", strike=9999.0)) == 0.0  # neznámý kontrakt
+
+    tracker.reset()
+    assert tracker.net_volume(call) == 0.0
+    assert tracker.net_volume(put) == 0.0
+
+
 def test_volume_decrease_is_ignored_not_negative() -> None:
     tracker = CumDeltaTracker(multiplier=50.0)
     contract = spec("C")

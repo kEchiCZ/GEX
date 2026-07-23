@@ -79,7 +79,7 @@ export interface ReplayDay {
   gexField: GexFieldRow | null
 }
 
-const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2', 'call_wall_dom', 'put_wall_dom', 'call_wall_2_dom', 'put_wall_2_dom'] as const // prettier-ignore
+const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2', 'call_wall_dom', 'put_wall_dom', 'call_wall_2_dom', 'put_wall_2_dom', 'fa_flip', 'fa_call_wall', 'fa_put_wall'] as const // prettier-ignore
 
 interface BarInput {
   tsIso: string
@@ -174,6 +174,8 @@ interface ReplayBundle {
   levels2?: Array<Record<string, unknown>>
   /** Dominance zdí (ADR-0010, #223) — starší API pole neposílá. */
   walldom?: Array<Record<string, unknown>>
+  /** Flow-adjusted levels (ADR-0011, #222) — starší API pole neposílá. */
+  levelsfa?: Array<Record<string, unknown>>
   /** Dyn GEX profily (ADR-0009, #203) — starší API pole neposílá. */
   gexprofile?: Array<Record<string, unknown>>
   /** Modelované pole (ADR-0009 fáze 2) — starší API klíč neposílá. */
@@ -370,6 +372,18 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     entry.values.put_wall_dom = numOrNull(row.put_wall_dom)
     entry.values.call_wall_2_dom = numOrNull(row.call_wall_2_dom)
     entry.values.put_wall_2_dom = numOrNull(row.put_wall_2_dom)
+    levelsByTs.set(tsIso, entry)
+  }
+  // Flow-adjusted levels (ADR-0011, #222) — vlastní řada, klíče s prefixem fa_
+  for (const row of bundle.levelsfa ?? []) {
+    const tsIso = canonicalTs(row.ts_min)
+    const entry = levelsByTs.get(tsIso) ?? {
+      tsIso,
+      values: Object.fromEntries(LEVEL_KEYS.map((key) => [key, null])),
+    }
+    entry.values.fa_flip = numOrNull(row.flip)
+    entry.values.fa_call_wall = numOrNull(row.call_wall)
+    entry.values.fa_put_wall = numOrNull(row.put_wall)
     levelsByTs.set(tsIso, entry)
   }
   const levels = [...levelsByTs.values()]
@@ -601,6 +615,11 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     { name: 'flip', color: '#e8c14b', series: levelSeries('flip') },
     { name: 'centroid', color: '#9d7be8', series: levelSeries('centroid') },
     { name: 'max_pain', color: '#d24bd2', series: maxPainSeries(raw) },
+    // Flow-adjusted levels (ADR-0011, #222): ODHAD z ranního OI + klasifikovaného
+    // toku — čárkovaně (vizuální signál „model, ne měření"), přepínač „FA levels"
+    { name: 'fa_flip', color: 'rgba(232,193,75,0.75)', dash: [8, 4], series: levelSeries('fa_flip') }, // prettier-ignore
+    { name: 'fa_call_wall', color: 'rgba(62,207,142,0.75)', dash: [8, 4], series: levelSeries('fa_call_wall') }, // prettier-ignore
+    { name: 'fa_put_wall', color: 'rgba(240,97,109,0.75)', dash: [8, 4], series: levelSeries('fa_put_wall') }, // prettier-ignore
   ]
   // Dominance zdí (ADR-0010, #223): slabá zeď (pod prahem) se kreslí ztlumeně,
   // cenovka primární zdi nese aktuální dominanci v %

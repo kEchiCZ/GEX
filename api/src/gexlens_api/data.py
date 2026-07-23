@@ -59,6 +59,13 @@ class DataRepository:
         )
         return self._read(path)
 
+    def levelsfa(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """Flow-adjusted levels (ADR-0011, #222) — OI odhad z klasifikovaného toku."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "levelsfa" / f"{day.isoformat()}.parquet"
+        )
+        return self._read(path)
+
     def walldom(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
         """Dominance zdí (ADR-0010, #223) — vlastní řada vedle levels."""
         path = (

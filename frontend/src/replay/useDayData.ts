@@ -375,7 +375,10 @@ export function useDayData(
       scheduleFlush()
     }
     const onLevels = (data: ChannelData) => {
-      part(minuteKey(data.ts_min)).levels = {
+      // Merge, ne replace — kanál levelsfa.* plní tutéž minutu (fa_ klíče)
+      const entry = part(minuteKey(data.ts_min))
+      entry.levels = {
+        ...(entry.levels ?? {}),
         flip: numOrNull(data.flip),
         centroid: numOrNull(data.centroid),
         call_wall: numOrNull(data.call_wall),
@@ -388,6 +391,17 @@ export function useDayData(
         put_wall_dom: numOrNull(data.put_wall_dom),
         call_wall_2_dom: numOrNull(data.call_wall_2_dom),
         put_wall_2_dom: numOrNull(data.put_wall_2_dom),
+      }
+      scheduleFlush()
+    }
+    // Flow-adjusted levels (ADR-0011, #222) — starší engine kanál neposílá
+    const onLevelsFa = (data: ChannelData) => {
+      const entry = part(minuteKey(data.ts_min))
+      entry.levels = {
+        ...(entry.levels ?? {}),
+        fa_flip: numOrNull(data.flip),
+        fa_call_wall: numOrNull(data.call_wall),
+        fa_put_wall: numOrNull(data.put_wall),
       }
       scheduleFlush()
     }
@@ -450,6 +464,7 @@ export function useDayData(
     const snapshotCh = `snapshot.${symbol}.${expiry}`
     const priceCh = `price.${symbol}`
     const levelsCh = `levels.${symbol}.${expiry}`
+    const levelsFaCh = `levelsfa.${symbol}.${expiry}`
     const flowCh = `flow.${symbol}`
     const spotCh = `spot.${symbol}`
     const gexProfileCh = `gexprofile.${symbol}.${expiry}`
@@ -457,6 +472,7 @@ export function useDayData(
     socket.subscribe(snapshotCh, onSnapshot)
     socket.subscribe(priceCh, onPrice)
     socket.subscribe(levelsCh, onLevels)
+    socket.subscribe(levelsFaCh, onLevelsFa)
     socket.subscribe(flowCh, onFlow)
     socket.subscribe(spotCh, onSpot)
     socket.subscribe(gexProfileCh, onGexProfile)
@@ -468,6 +484,7 @@ export function useDayData(
       socket.unsubscribe(snapshotCh, onSnapshot)
       socket.unsubscribe(priceCh, onPrice)
       socket.unsubscribe(levelsCh, onLevels)
+      socket.unsubscribe(levelsFaCh, onLevelsFa)
       socket.unsubscribe(flowCh, onFlow)
       socket.unsubscribe(spotCh, onSpot)
       socket.unsubscribe(gexProfileCh, onGexProfile)

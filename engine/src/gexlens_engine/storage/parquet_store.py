@@ -375,6 +375,19 @@ class SnapshotWriter:
         buffer = self._buffer(path, LEVELS2_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
+    def write_levelsfa(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[LevelsRow]
+    ) -> Path:
+        """Přidá flow-adjusted levels minuty do derived/{sym}/{exp}/levelsfa (ADR-0011).
+
+        Stejné schéma jako levels — jiný vstup (OI odhad z klasifikovaného toku).
+        """
+        path = (
+            self._settings.derived_dir / symbol / expiry / "levelsfa" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, LEVELS_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
     def write_walldom(
         self, symbol: str, expiry: str, day: dt.date, rows: Sequence[WallDomRow]
     ) -> Path:
