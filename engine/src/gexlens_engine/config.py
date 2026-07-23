@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # top-10 a zároveň ≥ min_volume kontraktů (absolutní podlaha proti ránu)
     vol_leader_ratio: float = Field(default=3.0, gt=0)
     vol_leader_min_volume: float = Field(default=500.0, ge=0)
+    # GEX žebřík (#244): top-N významných striků per strana, filtr podílu na síle
+    ladder_top_n: int = Field(default=3, ge=1)
+    ladder_min_share: float = Field(default=0.1, ge=0, le=1)
 
     # Opční řetězec a rotační scheduler (SPEC 3.2, 3.3)
     strike_range_points: float = Field(default=200.0, gt=0)

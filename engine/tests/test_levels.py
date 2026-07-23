@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from gexlens_engine.compute.levels import compute_levels
+from gexlens_engine.compute.levels import compute_ladder, compute_levels
 from gexlens_engine.config import Settings
 from gexlens_engine.storage.parquet_store import (
     Levels2Row,
@@ -217,6 +217,35 @@ def test_levels2_series_persisted_to_derived(tmp_path: Path) -> None:
     assert len(frame) == 2
     assert frame["call_wall_2"][0] == pytest.approx(7600.0)
     assert math.isnan(frame["call_wall_2"][1])
+
+
+def test_ladder_top_strikes_per_side() -> None:  # #244
+    """Žebřík: top-N významných striků per strana, filtr podílu, řazení silou."""
+    profile = {
+        7480.0: -500.0,  # put 50 %
+        7470.0: -300.0,  # put 30 %
+        7460.0: -150.0,  # put 15 %
+        7450.0: -50.0,  # put 5 % — pod min_share
+        7520.0: 700.0,  # call 70 %
+        7530.0: 300.0,  # call 30 %
+    }
+    ladder = compute_ladder(profile, spot=7500.0, top_n=3, min_share=0.1)
+    calls = [(entry.strike, round(entry.share, 2)) for entry in ladder if entry.side == "call"]
+    puts = [(entry.strike, round(entry.share, 2)) for entry in ladder if entry.side == "put"]
+    assert calls == [(7520.0, 0.7), (7530.0, 0.3)]
+    assert puts == [(7480.0, 0.5), (7470.0, 0.3), (7460.0, 0.15)]  # 7450 odfiltrován
+
+    # top_n omezuje počet příček i při silných stranách
+    narrow = compute_ladder(profile, spot=7500.0, top_n=1, min_share=0.1)
+    assert [(entry.strike, entry.side) for entry in narrow] == [
+        (7520.0, "call"),
+        (7480.0, "put"),
+    ]
+
+    # Prázdná/jednostranná data: bez kladné síly strany žádné příčky
+    assert compute_ladder({}, spot=7500.0) == []
+    only_call = compute_ladder({7520.0: 100.0}, spot=7500.0)
+    assert [entry.side for entry in only_call] == ["call"]
 
 
 def test_walldom_series_persisted_to_derived(tmp_path: Path) -> None:

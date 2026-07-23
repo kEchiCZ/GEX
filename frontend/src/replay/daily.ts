@@ -127,5 +127,6 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
     lastMinuteIso: null, // Daily pohled se neprojektuje (sloupec = den)
     gexProfile: null, // Dyn GEX profil je intraday vrstva (ADR-0009)
     gexField: null,
+    ladder: null, // GEX žebřík je intraday vrstva (#244)
   }
 }

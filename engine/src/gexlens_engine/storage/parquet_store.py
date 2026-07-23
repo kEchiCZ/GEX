@@ -121,6 +121,17 @@ LEVELS2_SCHEMA = pa.schema(
     ]
 )
 
+# GEX žebřík (#244) — proměnný počet příček per minuta → list sloupce
+LADDER_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("call_strikes", pa.list_(pa.float64())),
+        ("call_shares", pa.list_(pa.float64())),
+        ("put_strikes", pa.list_(pa.float64())),
+        ("put_shares", pa.list_(pa.float64())),
+    ]
+)
+
 # Dominance zdí (ADR-0010, #223) — vlastní řada ze stejného důvodu jako levels2
 WALLDOM_SCHEMA = pa.schema(
     [
@@ -207,6 +218,17 @@ class Levels2Row:
     ts_min: dt.datetime
     call_wall_2: float | None
     put_wall_2: float | None
+
+
+@dataclass(frozen=True)
+class LadderRow:
+    """GEX žebřík jedné minuty (#244) — top-N významných striků per strana."""
+
+    ts_min: dt.datetime
+    call_strikes: list[float]
+    call_shares: list[float]
+    put_strikes: list[float]
+    put_shares: list[float]
 
 
 @dataclass(frozen=True)
@@ -386,6 +408,16 @@ class SnapshotWriter:
             self._settings.derived_dir / symbol / expiry / "levelsfa" / f"{day.isoformat()}.parquet"
         )
         buffer = self._buffer(path, LEVELS_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_ladder(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[LadderRow]
+    ) -> Path:
+        """Přidá GEX žebřík minuty do partice derived/{sym}/{exp}/ladder (#244)."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "ladder" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, LADDER_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_walldom(

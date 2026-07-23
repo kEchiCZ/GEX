@@ -59,6 +59,13 @@ class DataRepository:
         )
         return self._read(path)
 
+    def ladder(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """GEX žebřík (#244) — top-N významných striků per strana a minutu."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "ladder" / f"{day.isoformat()}.parquet"
+        )
+        return self._read(path)
+
     def levelsfa(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
         """Flow-adjusted levels (ADR-0011, #222) — OI odhad z klasifikovaného toku."""
         path = (

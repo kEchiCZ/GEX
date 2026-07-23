@@ -37,6 +37,8 @@ export interface Toggles {
   /** Sekundární zeď (ADR-0008, #92): dvě rovnocenné koncentrace jako dvě linie. */
   secondaryWall: boolean
   gexLevels: boolean
+  /** GEX žebřík (#244): významné striky jako barevné úrovně (Kooperovy „parametry"). */
+  ladder: boolean
   /** Flow-adjusted levels (ADR-0011, #222): flip/walls z OI odhadu ranní OI + tok. */
   flowAdjusted: boolean
   sessions: boolean
@@ -166,6 +168,7 @@ const DEFAULT_TOGGLES: Toggles = {
   dynGex: true,
   secondaryWall: true,
   gexLevels: true,
+  ladder: false,
   flowAdjusted: false,
   sessions: false,
   vol: true,

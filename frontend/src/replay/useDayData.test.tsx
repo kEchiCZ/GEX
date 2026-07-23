@@ -33,6 +33,7 @@ function makeInputs(): ReplayInputs {
     oiPrev: [],
     gexProfile: [],
     gexField: null,
+    ladder: [],
   }
 }
 

@@ -385,6 +385,37 @@ function MainContent() {
     ])
   }, [activeSetups, grid.minutes])
 
+  // GEX žebřík (#244): významné striky k pozici playbacku jako horizontální
+  // úrovně s cenovkou — jednobodová série (vzor setup linií), zelená call nad
+  // spotem, červená put pod ním; přípona cenovky = podíl na síle strany
+  const ladderLines = useMemo<LevelLine[]>(() => {
+    const minutes = grid.minutes
+    if (!toggles.ladder || minutes === 0 || !day.ladder) return []
+    let entry = null
+    for (let i = Math.min(playback.position, day.ladder.length - 1); i >= 0; i -= 1) {
+      if (day.ladder[i]) {
+        entry = day.ladder[i]
+        break
+      }
+    }
+    if (!entry) return []
+    const line = (strike: number, share: number, side: 'call' | 'put'): LevelLine => {
+      const series: (number | null)[] = Array.from({ length: minutes }, () => null)
+      series[minutes - 1] = strike
+      return {
+        name: `ladder-${side}-${strike}`,
+        color: side === 'call' ? 'rgba(62,207,142,0.85)' : 'rgba(240,97,109,0.85)',
+        series,
+        dash: [6, 5],
+        labelSuffix: ` · ${Math.round(share * 100)} %`,
+      }
+    }
+    return [
+      ...entry.callStrikes.map((strike, i) => line(strike, entry.callShares[i] ?? 0, 'call')),
+      ...entry.putStrikes.map((strike, i) => line(strike, entry.putShares[i] ?? 0, 'put')),
+    ]
+  }, [toggles.ladder, day.ladder, grid.minutes, playback.position])
+
   // Σ souhrn přes expirace v pravém profilu (Kooperovo čtení celkového positioningu)
   const [aggregateOn, setAggregateOn] = useState(false)
   const aggregateRows = useAggregateProfile(
@@ -467,11 +498,11 @@ function MainContent() {
         ...resolveSecondaryWalls(baseOverlays.walls ?? [], toggles.secondaryWall),
         ...computedWalls,
       ],
-      levels: [...(baseOverlays.levels ?? []), ...setupLines],
+      levels: [...(baseOverlays.levels ?? []), ...setupLines, ...ladderLines],
       // Budoucí seance v projekci (#195)
       sessions: [...(baseOverlays.sessions ?? []), ...projectedSessionMarkers],
     }),
-    [baseOverlays, computedWalls, setupLines, toggles.secondaryWall, projectedSessionMarkers],
+    [baseOverlays, computedWalls, setupLines, ladderLines, toggles.secondaryWall, projectedSessionMarkers], // prettier-ignore
   )
 
   if (view === 'dashboard') {
