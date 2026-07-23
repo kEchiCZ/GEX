@@ -27,6 +27,7 @@ import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { DEFAULT_VIEW } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
 import { gexRegime, profileZeroNearest } from './instrument/regime'
+import { pcrAt, pcrVolumeSeries } from './instrument/sentiment'
 import { priceTick } from './instrument/tick'
 import {
   WALLS_MODES,
@@ -460,6 +461,8 @@ function MainContent() {
       <Dashboard
         profileRows={profileRows}
         spot={spot}
+        pcr={day.raw ? pcrAt(day.raw, Math.min(playback.position, day.raw.minutes - 1)) : undefined}
+        pcrSeries={day.raw ? pcrVolumeSeries(day.raw) : undefined}
         callWall={lastValue(
           day.overlays.walls?.find((line) => line.name === 'call_wall')?.series,
           playback.position,

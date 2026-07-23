@@ -1021,3 +1021,16 @@ body {
 .chain-table td.stale {
   opacity: 0.45;
 }
+
+/* PCR sentiment na kartě Dashboardu (#205) */
+.card-pcr {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  cursor: help;
+}
+
+.card-pcr strong {
+  color: var(--text);
+}
