@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react'
 import { LiveSocket } from '../api/ws'
 import { API_BASE, WS_URL } from '../config'
+import type { GexRegimeState } from '../instrument/regime'
 import { mergedBooleans, oneOf, shortString, usePersistentState } from './persist'
 
 export interface PipelineStatus {
@@ -52,6 +53,13 @@ export type Theme = 'dark' | 'light'
 export interface PriceInfo {
   last: number | null
   changePct: number | null
+}
+
+/** GEX režim badge (#209; plní MainContent z živých levels + Dyn GEX profilu). */
+export interface RegimeInfo {
+  state: GexRegimeState | null
+  measuredFlip: number | null
+  dynamicFlip: number | null
 }
 
 /** Intraday timeframy — agregace 1m dat do košů (SPEC 7.1, TradingView sada). */
@@ -112,6 +120,8 @@ interface AppState {
   consoleLog: string[]
   priceInfo: PriceInfo
   setPriceInfo: (info: PriceInfo) => void
+  regimeInfo: RegimeInfo
+  setRegimeInfo: (info: RegimeInfo) => void
   /** Verze setupů — WS kanál setups.* ji zvedá, konzumenti přenačítají REST. */
   setupsVersion: number
   /** Sdílený WS klient — živý append intraday grafu (useDayData). */
@@ -200,6 +210,21 @@ export function AppStateProvider({
   const setPriceInfo = useCallback((info: PriceInfo) => {
     setPriceInfoState((previous) =>
       previous.last === info.last && previous.changePct === info.changePct ? previous : info,
+    )
+  }, [])
+  const [regimeInfo, setRegimeInfoState] = useState<RegimeInfo>({
+    state: null,
+    measuredFlip: null,
+    dynamicFlip: null,
+  })
+  // Stejný bail-out jako priceInfo — pojistka proti render smyčce (#78)
+  const setRegimeInfo = useCallback((info: RegimeInfo) => {
+    setRegimeInfoState((previous) =>
+      previous.state === info.state &&
+      previous.measuredFlip === info.measuredFlip &&
+      previous.dynamicFlip === info.dynamicFlip
+        ? previous
+        : info,
     )
   }, [])
   const [toggles, setToggles] = usePersistentState<Toggles>(
@@ -304,6 +329,8 @@ export function AppStateProvider({
       consoleLog,
       priceInfo,
       setPriceInfo,
+      regimeInfo,
+      setRegimeInfo,
       setupsVersion,
       socket: live,
     }),
@@ -329,6 +356,8 @@ export function AppStateProvider({
       consoleLog,
       priceInfo,
       setPriceInfo,
+      regimeInfo,
+      setRegimeInfo,
       setupsVersion,
       live,
     ],

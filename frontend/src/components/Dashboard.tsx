@@ -1,6 +1,7 @@
 /** Dashboard (SPEC 7.5): karty watchlistu s mini NetGEX profilem a stavem dat. */
 import { useEffect, useState } from 'react'
 import { API_BASE } from '../config'
+import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
 import type { ProfileRow } from '../profile/bars'
 
@@ -54,7 +55,7 @@ export function Dashboard({
   callWall: number | null
   putWall: number | null
 }) {
-  const { status, symbol: activeSymbol } = useAppState()
+  const { status, symbol: activeSymbol, regimeInfo } = useAppState()
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
 
   useEffect(() => {
@@ -88,6 +89,15 @@ export function Dashboard({
               </span>
             </header>
             <div className="card-price">{isActive && spot !== null ? spot.toFixed(2) : '—'}</div>
+            {isActive && regimeInfo.state && (
+              // GEX režim (#209) — jen aktivní instrument (data ostatních nejsou v paměti)
+              <span
+                className={`regime-badge regime-${regimeInfo.state}`}
+                title={REGIME_HINTS[regimeInfo.state]}
+              >
+                {REGIME_LABELS[regimeInfo.state]}
+              </span>
+            )}
             <MiniProfile rows={isActive ? profileRows : []} />
             <footer className="muted">
               {isActive && spot !== null && callWall !== null && putWall !== null ? (
