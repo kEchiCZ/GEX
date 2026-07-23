@@ -3,8 +3,11 @@ import { INTERVALS, useAppState } from '../state/AppState'
 import type { Toggles } from '../state/AppState'
 
 const TOGGLE_LABELS: Record<keyof Toggles, string> = {
+  // Dyn GEX pole jako podkladová vrstva (#242, à la Moodix) — kombinuje se
+  // s libovolným měřeným módem; dřív to byl exkluzivní mód v Mode selectu
+  dynGexField: 'Dyn GEX',
   // Historicky „Dyn GEX", ale přepínač ukazuje zdi — název teď patří
-  // modelovanému heatmap módu (ADR-0009 fáze 2), ať se nepletou
+  // modelované vrstvě, ať se nepletou
   dynGex: 'Zdi',
   secondaryWall: '2. zeď',
   gexLevels: 'GEX Levels',

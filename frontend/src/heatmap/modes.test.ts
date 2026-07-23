@@ -1,6 +1,6 @@
 /** Testy heatmap módů/škál — ručně spočtené hodnoty, zrcadlí engine compute/heatmap.py. */
 import { expect, test } from 'vitest'
-import { buildModeGrid, p99Denominator } from './modes'
+import { HEATMAP_MODES, buildModeGrid, p99Denominator } from './modes'
 import type { RawDay } from './modes'
 import { maxPainAt, maxPainSeries } from './maxpain'
 
@@ -193,4 +193,8 @@ test('maxPainSeries: bez OI je řada null', () => {
   const withOi = maxPainSeries(raw())
   expect(withOi[0]).not.toBeNull()
   expect([90, 100, 110]).toContain(withOi[0])
+})
+
+test('Dyn GEX není v Mode selectu — je to samostatná vrstva (#242)', () => {
+  expect(HEATMAP_MODES.map((mode) => mode.value)).not.toContain('dyn_gex')
 })

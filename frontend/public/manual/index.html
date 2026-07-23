@@ -116,7 +116,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Řádek přepínačů</strong></td>
-<td>Checkboxy vrstev: <strong>Zdi</strong> (call/put wall linie; dřív se jmenoval „Dyn GEX&quot; — název teď patří heatmap módu), <strong>GEX Levels</strong> (flip/centroid/Max Pain), <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol / Opt Vol / Delta / Δ Flow C/P</strong> (spodní panely), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong>. Co odškrtneš, zmizí — layout se přeskládá.</td>
+<td>Checkboxy vrstev: <strong>Dyn GEX</strong> (modelované pole jako podklad heatmapy — kombinuje se s libovolným módem, kap. 18), <strong>Zdi</strong> (call/put wall linie), <strong>GEX Levels</strong> (flip/centroid/Max Pain), <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol / Opt Vol / Delta / Δ Flow C/P</strong> (spodní panely), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong>. Co odškrtneš, zmizí — layout se přeskládá.</td>
 </tr>
 <tr>
 <td><strong>Lišta grafu</strong></td>
@@ -226,10 +226,6 @@ docker compose up -d        # start na pozadí
 <tr>
 <td><strong>OI±All</strong></td>
 <td>Rozdíl call − put OI (divergenční)</td>
-</tr>
-<tr>
-<td><strong>Dyn GEX</strong></td>
-<td>Modelované pole NetGEX (zelená = dealeři tlumí, červená = zesilují) přes celé pásmo a celý den — vlevo od předělu naměřená historie, vpravo modelovaná budoucnost do settle. Jak ho číst a obchodovat: <strong>kapitola 18</strong>.</td>
 </tr>
 </tbody></table>
 <p>Select <strong>Scale</strong> mění škálu hodnot: <strong>Linear</strong>, <strong>√</strong> (zvýrazní slabší), <strong>Log</strong>, <strong>Pow⅓</strong>. Znaménko se zachovává.</p>
@@ -627,7 +623,8 @@ http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelno
 <h3>Settle a gamma crunch</h3>
 <p><strong>Settle</strong> = vypořádání expirace: u denních ES/NQ opcí <strong>20:00 UTC (22:00 SELČ, 16:00 New York)</strong>. V tu chvíli opce zaniknou a jejich gamma z trhu zmizí — model i mapa počítají právě do tohoto okamžiku.</p>
 <p><strong>Gamma crunch:</strong> gamma opce je největší přesně na striku a čím méně času zbývá, tím je špičatější — ráno široký kopec přes několik strikes, večer úzká jehla na jednom striku. Zajišťovací toky tak mají poslední 1–2 hodiny největší páku: cena se buď <strong>přilepí</strong> k velkému striku (pin), nebo po proražení <strong>prudce akceleruje</strong>. V Dyn GEX mapě to vidíš jako stahování barev do tenkých jasných pásů směrem doprava.</p>
-<h3>Jak číst Dyn GEX mapu (Mode → Dyn GEX)</h3>
+<h3>Jak číst Dyn GEX mapu (přepínač <strong>Dyn GEX</strong> v řádku přepínačů)</h3>
+<p>Od 23. 7. je Dyn GEX <strong>samostatná vrstva, ne mód</strong>: zapíná se checkboxem a kreslí se jako podklad POD zvoleným měřeným módem (např. OI+OTM) — průhledná místa měřené mapy ukážou pole, koncentrace ho překryjí. Kontury (Contours) při zapnuté vrstvě obrysují pole.</p>
 <p><img src="img/dyn-gex-pole.png" alt="Dyn GEX pole — modelovaný NetGEX přes pásmo a čas"></p>
 <ul>
 <li><strong>Vlevo od předělu</strong> = naměřená historie (profil minutu po minutě, tehdejší IV/OI). <strong>Vpravo od předělu</strong> (ztlumené, svislý předěl = „teď&quot;) = modelovaná budoucnost do settle z aktuálního snapshotu.</li>
@@ -703,7 +700,7 @@ http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelno
 <td>Modelová verze flipu: nula Dyn GEX křivky (BS model, jemnější mřížka). S naměřeným flipem tvoří <strong>flip zónu</strong> (kap. 18).</td>
 </tr>
 <tr>
-<td><strong>Dyn GEX (mód)</strong></td>
+<td><strong>Dyn GEX (vrstva)</strong></td>
 <td>Modelované pole NetGEX pro hypotetické ceny přes pásmo a čas — „jakou gammu potká cena na úrovni X v čase T&quot;. Zelená tlumí, červená zesiluje.</td>
 </tr>
 <tr>

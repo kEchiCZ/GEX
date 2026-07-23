@@ -72,6 +72,7 @@ const AXIS_LABEL_FG = '#e6e9ef'
 
 export function Heatmap({
   grid,
+  underGrid = null,
   style,
   contours,
   overlays = {},
@@ -94,6 +95,9 @@ export function Heatmap({
   priceTick = 0.25,
 }: {
   grid: HeatmapGrid
+  /** Dyn GEX pole jako podklad (#242) — kreslí se POD měřeným gridem; průhledné
+      buňky měřené vrstvy ho ukážou. Musí mít shodné rozměry (App to zaručuje). */
+  underGrid?: HeatmapGrid | null
   style: HeatmapStyle
   contours: ContoursMode
   overlays?: OverlayData
@@ -194,14 +198,22 @@ export function Heatmap({
 
   const contourSegments = useMemo(() => {
     if (contours === 'off') return []
-    const field = grid.layers.signed ?? grid.layers.call ?? grid.layers.put
+    // S Dyn GEX podkladem (#242) obrysují kontury modelované pole (Moodix look);
+    // podklad má z App zaručené shodné rozměry s hlavním gridem
+    const source =
+      underGrid &&
+      underGrid.minutes === grid.minutes &&
+      underGrid.strikes.length === grid.strikes.length
+        ? underGrid
+        : grid
+    const field = source.layers.signed ?? source.layers.call ?? source.layers.put
     if (!field) return []
-    const smoothed = gaussianBlur(field, grid.minutes, strikeCount)
+    const smoothed = gaussianBlur(field, source.minutes, strikeCount)
     const magnitudes = Float32Array.from(smoothed, Math.abs)
     return contourLevels(magnitudes, contours).flatMap((level) =>
-      marchingSquares(magnitudes, grid.minutes, strikeCount, level),
+      marchingSquares(magnitudes, source.minutes, strikeCount, level),
     )
-  }, [grid, contours, strikeCount])
+  }, [grid, underGrid, contours, strikeCount])
 
   /** Převod dat → obrazovka v logických CSS px (sdílený pro data i overlay canvas). */
   const mapping = useCallback(() => {
@@ -234,7 +246,9 @@ export function Heatmap({
     }
   }, [grid.minutes, grid.strikes, strikeCount, view, logicalW, logicalH])
 
-  // 1) Data → offscreen bitmapa (jen při změně dat/stylu)
+  // 1) Data → offscreen bitmapa (jen při změně dat/stylu). S Dyn GEX podkladem
+  // (#242) se pole kreslí PRVNÍ a měřený grid přes něj — putImageData by podklad
+  // přepsala, měřená vrstva proto jde přes drawImage (alfa kompozice).
   useEffect(() => {
     const buffer = renderGrid(grid, style)
     const offscreen = document.createElement('canvas')
@@ -242,11 +256,32 @@ export function Heatmap({
     offscreen.height = buffer.height
     const context = offscreen.getContext('2d')
     if (!context) return // jsdom v testech
-    context.putImageData(new ImageData(buffer.data, buffer.width, buffer.height), 0, 0)
+    const underMatches =
+      underGrid !== null &&
+      underGrid.minutes === grid.minutes &&
+      underGrid.strikes.length === grid.strikes.length
+    if (underMatches) {
+      const underBuffer = renderGrid(underGrid, style)
+      context.putImageData(
+        new ImageData(underBuffer.data, underBuffer.width, underBuffer.height),
+        0,
+        0,
+      )
+      const top = document.createElement('canvas')
+      top.width = buffer.width
+      top.height = buffer.height
+      const topContext = top.getContext('2d')
+      if (topContext) {
+        topContext.putImageData(new ImageData(buffer.data, buffer.width, buffer.height), 0, 0)
+        context.drawImage(top, 0, 0)
+      }
+    } else {
+      context.putImageData(new ImageData(buffer.data, buffer.width, buffer.height), 0, 0)
+    }
     offscreenRef.current = offscreen
     drawData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grid, style])
+  }, [grid, underGrid, style])
 
   // 2) Bitmapa → viditelný canvas (pan/zoom)
   const drawData = useCallback(() => {
