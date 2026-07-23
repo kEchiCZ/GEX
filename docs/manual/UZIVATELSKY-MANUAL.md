@@ -98,7 +98,7 @@ Obrazovka se skládá z (shora dolů, zleva doprava):
 
 | Prvek | Popis |
 |---|---|
-| **Sidebar (vlevo)** | Přepínání obrazovek (Graf / Dashboard / IBKR Console / Settings), přepínač tématu Dark/Light, **editovatelný watchlist** (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový), verze. Tlačítkem « se sbalí. |
+| **Sidebar (vlevo)** | Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / IBKR Console / Settings), přepínač tématu Dark/Light, **editovatelný watchlist** (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový), verze. Tlačítkem « se sbalí. |
 | **Hlavička** | Ticker a název instrumentu, **poslední cena + denní změna v %**, **selektor expirace** s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h" — velké expirace nesou velké OI. V selektoru najdeš i **následující expiraci** (sbírá se souběžně — čtení positioningu příští seance). Indikátor ● Live / ○ Offline, zvonek notifikací. |
 | **Řádek timeframe** | **Intraday/Daily** a rozlišení **1m, 2m, 3m, 5m, 10m, 15m, 30m, 45m, 1h, 2h, 3h, 4h, 1d**. Intraday agreguje minutová data do zvolených košů (svíčky OHLC, objemy se sčítají); Daily zobrazí sloupec za každý uložený den (roste s historií, max 14 dní). |
 | **Řádek přepínačů** | Checkboxy vrstev: **Zdi** (call/put wall linie; dřív se jmenoval „Dyn GEX" — název teď patří heatmap módu), **GEX Levels** (flip/centroid/Max Pain), **Sessions** (automatické markery světových seancí), **Vol / Opt Vol / Delta / Δ Flow C/P** (spodní panely), **Vol + OI Δ**, **Projekce**, **News**. Co odškrtneš, zmizí — layout se přeskládá. |
@@ -285,6 +285,12 @@ Vedle nástrojů je **výběr barvy**. Anotace jsou ukotvené k **času a striku
 Karty instrumentů z watchlistu: aktuální cena, stav dat (● live / offline), **mini NetGEX profil** (zelené/červené sloupečky = čistý positioning po stricích) a vzdálenosti k call/put wall. Slouží jako rychlý přehled, když sleduješ víc instrumentů.
 
 ![Dashboard](img/dashboard.png)
+
+---
+
+## 11b. Řetěz — Greeks & OI tabulka
+
+Obrazovka **Řetěz** v sidebaru ukazuje klasickou opční tabulku vybrané expirace: **call strana vlevo, strike uprostřed, put vpravo**, sloupce Bid/Ask/Last/Vol/IV/Δ/Γ/Θ/Vega/OI/ΔOI (put strana zrcadlově, ať OI sousedí se strikem). Data jsou **živý pohled z poslední minuty** sběru, obnovují se každou minutu; ΔOI porovnává s posledním archivovaným dnem. Řádek nejblíž aktuální ceně je zvýrazněný (ATM), strany se zastaralými kotacemi jsou ztlumené. Expirace se přepíná selektorem v hlavičce — funguje i pro zítřejší řetěz.
 
 ---
 

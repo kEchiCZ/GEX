@@ -946,3 +946,78 @@ body {
   margin-top: 12px;
   font-size: 11px;
 }
+
+/* Greeks & OI tabulka (#202): chain pohled — call vlevo, strike uprostřed, put vpravo */
+.chain-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 10px 14px;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.chain-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.chain-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.chain-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chain-table th,
+.chain-table td {
+  padding: 3px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+
+.chain-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-chip);
+  z-index: 1;
+}
+
+.chain-table thead tr:nth-child(2) th {
+  top: 24px;
+}
+
+.chain-table .side-call {
+  color: #3ecf8e;
+  text-align: center;
+}
+
+.chain-table .side-put {
+  color: #f0616d;
+  text-align: center;
+}
+
+.chain-table .strike-col {
+  text-align: center;
+  font-weight: 600;
+  background: rgba(125, 133, 150, 0.12);
+  position: sticky;
+}
+
+.chain-table tr.atm td {
+  background: rgba(232, 193, 75, 0.12);
+}
+
+.chain-table td.stale {
+  opacity: 0.45;
+}

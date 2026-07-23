@@ -104,7 +104,7 @@ docker compose up -d        # start na pozadí
 </thead>
 <tbody><tr>
 <td><strong>Sidebar (vlevo)</strong></td>
-<td>Přepínání obrazovek (Graf / Dashboard / IBKR Console / Settings), přepínač tématu Dark/Light, <strong>editovatelný watchlist</strong> (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový), verze. Tlačítkem « se sbalí.</td>
+<td>Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / IBKR Console / Settings), přepínač tématu Dark/Light, <strong>editovatelný watchlist</strong> (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový), verze. Tlačítkem « se sbalí.</td>
 </tr>
 <tr>
 <td><strong>Hlavička</strong></td>
@@ -417,6 +417,9 @@ docker compose up -d        # start na pozadí
 <h2>11. Dashboard</h2>
 <p>Karty instrumentů z watchlistu: aktuální cena, stav dat (● live / offline), <strong>mini NetGEX profil</strong> (zelené/červené sloupečky = čistý positioning po stricích) a vzdálenosti k call/put wall. Slouží jako rychlý přehled, když sleduješ víc instrumentů.</p>
 <p><img src="img/dashboard.png" alt="Dashboard"></p>
+<hr>
+<h2>11b. Řetěz — Greeks &amp; OI tabulka</h2>
+<p>Obrazovka <strong>Řetěz</strong> v sidebaru ukazuje klasickou opční tabulku vybrané expirace: <strong>call strana vlevo, strike uprostřed, put vpravo</strong>, sloupce Bid/Ask/Last/Vol/IV/Δ/Γ/Θ/Vega/OI/ΔOI (put strana zrcadlově, ať OI sousedí se strikem). Data jsou <strong>živý pohled z poslední minuty</strong> sběru, obnovují se každou minutu; ΔOI porovnává s posledním archivovaným dnem. Řádek nejblíž aktuální ceně je zvýrazněný (ATM), strany se zastaralými kotacemi jsou ztlumené. Expirace se přepíná selektorem v hlavičce — funguje i pro zítřejší řetěz.</p>
 <hr>
 <h2>12. IBKR Console</h2>
 <p>Diagnostická obrazovka:</p>

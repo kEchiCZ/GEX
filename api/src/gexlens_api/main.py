@@ -319,6 +319,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "profile": [vars(item) for item in result],
         }
 
+    @app.get("/chain/{symbol}/{expiry}")
+    def chain(symbol: str, expiry: str, date: dt.date) -> dict[str, object]:
+        """Greeks & OI tabulka (#202): per-strike řetěz z poslední minuty snapshotů.
+
+        Řádek na strike se stranami C/P (bid/ask/last/vol/IV/Δ/Γ/Θ/V/OI + stale)
+        a ΔOI vs. poslední archivovaný den (věčný OI archiv, R4).
+        """
+        frame = repository.snapshots(symbol, expiry, date)
+        minute = frame["ts_min"].max()
+        rows = frame[frame["ts_min"] == minute]
+
+        oi_prev: dict[tuple[float, str], float] = {}
+        try:
+            repo = oi_repository()
+            previous = repo.latest_day_before(symbol, expiry, date)
+            if previous is not None:
+                oi_prev = {
+                    (record.strike, record.right): record.oi
+                    for record in repo.values_for(symbol, expiry, previous)
+                }
+        except Exception:
+            oi_prev = {}  # OI archiv nedostupný — tabulka drží tvar bez ΔOI
+
+        def clean(value: object) -> float | None:
+            number = float(value)  # type: ignore[arg-type]
+            return None if math.isnan(number) else number
+
+        by_strike: dict[float, dict[str, object]] = {}
+        for row in rows.itertuples():
+            strike = float(row.strike)
+            side = {
+                "bid": clean(row.bid),
+                "ask": clean(row.ask),
+                "last": clean(row.last),
+                "volume": clean(row.volume) or 0.0,
+                "iv": clean(row.iv),
+                "delta": clean(row.delta),
+                "gamma": clean(row.gamma),
+                "theta": clean(row.theta),
+                "vega": clean(row.vega),
+                "oi": clean(row.oi) or 0.0,
+                "stale": bool(row.stale_age > 0),
+            }
+            prev = oi_prev.get((strike, str(row.right)))
+            side["oi_change"] = None if prev is None else (side["oi"] or 0.0) - prev
+            entry = by_strike.setdefault(strike, {"strike": strike})
+            entry["call" if row.right == "C" else "put"] = side
+
+        return {
+            "ts": minute.isoformat(),
+            "symbol": symbol,
+            "expiry": expiry,
+            "rows": [by_strike[strike] for strike in sorted(by_strike)],
+        }
+
     @app.get("/flow/{symbol}")
     def flow(symbol: str, date: dt.date) -> dict[str, object]:
         """Řady Vol (podklad), OptVol (opce) a CumΔ pro spodní panely (SPEC kap. 6)."""

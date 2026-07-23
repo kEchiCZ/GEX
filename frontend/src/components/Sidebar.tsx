@@ -12,6 +12,7 @@ import type { AppView } from '../state/AppState'
 const NAV_ITEMS: Array<{ view: AppView; label: string }> = [
   { view: 'chart', label: 'Graf' },
   { view: 'dashboard', label: 'Dashboard' },
+  { view: 'chain', label: 'Řetěz' },
   { view: 'setups', label: 'Setupy' },
   { view: 'console', label: 'IBKR Console' },
   { view: 'settings', label: 'Settings' },
