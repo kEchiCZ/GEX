@@ -147,6 +147,8 @@ Select **Mode** přepíná, co buňky zobrazují (přepočet je okamžitý, bez 
 | **OI+OTM** | Vážená kombinace OI (60 %) a OTM volume (40 %) — „kde sedí i kde se dnes hraje" |
 | **OI−ITM** | OI očištěné o ITM volume |
 | **OI±All** | Rozdíl call − put OI (divergenční) |
+| **VEX** | Vega Exposure = vega × OI per strana — kolik $ přecenění drží dealeři na striku při změně IV o 1 bod. Strikes s velkou VEX = „volatility walls": při skoku IV (zprávy, FOMC) se tam nejvíc přehedgovává. Před událostmi relevantnější než OI mapa. |
+| **VEX ±** | Rozdíl call − put VEX (divergenční zobrazení vega rizika) |
 
 
 Select **Scale** mění škálu hodnot: **Linear**, **√** (zvýrazní slabší), **Log**, **Pow⅓**. Znaménko se zachovává.

@@ -25,6 +25,8 @@ class HeatmapCell:
     right: str  # C | P
     oi: float
     volume: float
+    # Vega kontraktu (VEX módy, #201) — starší volající ji nedodávají
+    vega: float = 0.0
 
 
 class HeatmapMode(enum.Enum):
@@ -35,6 +37,8 @@ class HeatmapMode(enum.Enum):
     OI_PLUS_OTM = "oi_plus_otm"
     OI_MINUS_ITM = "oi_minus_itm"
     OI_SIGNED_ALL = "oi_signed_all"  # OI ± All
+    VEX = "vex"  # vega × OI per strana (#201)
+    VEX_SIGNED = "vex_signed"  # vega×OI call − put
 
 
 class HeatmapScale(enum.Enum):
@@ -118,6 +122,19 @@ def compute_mode(
         }
     if mode is HeatmapMode.OI_SIGNED_ALL:
         return {"signed": {k: oi_of(calls, k) - oi_of(puts, k) for k in strikes}}
+
+    def vex_of(side: Mapping[float, HeatmapCell], strike: float) -> float:
+        """Vega Exposure strany (#201): vega × OI — $ přecenění na 1 bod IV."""
+        cell = side.get(strike)
+        return cell.vega * cell.oi if cell is not None else 0.0
+
+    if mode is HeatmapMode.VEX:
+        return {
+            "call": {k: vex_of(calls, k) for k in strikes},
+            "put": {k: vex_of(puts, k) for k in strikes},
+        }
+    if mode is HeatmapMode.VEX_SIGNED:
+        return {"signed": {k: vex_of(calls, k) - vex_of(puts, k) for k in strikes}}
     raise ValueError(f"Neznámý heatmap mód: {mode!r}")
 
 

@@ -198,3 +198,29 @@ test('maxPainSeries: bez OI je řada null', () => {
 test('Dyn GEX není v Mode selectu — je to samostatná vrstva (#242)', () => {
   expect(HEATMAP_MODES.map((mode) => mode.value)).not.toContain('dyn_gex')
 })
+
+test('VEX módy: vega × OI per strana, signed rozdíl; bez vega matic nuly (#201)', () => {
+  const raw: RawDay = {
+    minutes: 1,
+    strikes: [7590, 7600],
+    callOi: Float32Array.from([100, 150]),
+    putOi: Float32Array.from([200, 120]),
+    callVolume: Float32Array.from([40, 20]),
+    putVolume: Float32Array.from([10, 60]),
+    callVega: Float32Array.from([1.0, 2.0]),
+    putVega: Float32Array.from([1.5, 2.0]),
+    spotSeries: [7600],
+    staleAge: null,
+  }
+  const grid = buildModeGrid(raw, 'vex', 'linear')
+  // vega×OI: call [100, 300], put [300, 240] → p99 normalizace na 300
+  expect(grid.layers.call![0] * 300).toBeCloseTo(100)
+  expect(grid.layers.put![0] * 300).toBeCloseTo(300)
+  const signed = buildModeGrid(raw, 'vex_signed', 'linear')
+  // signed: [100−300, 300−240] = [−200, 60]
+  expect(signed.layers.signed![0]).toBeLessThan(0)
+  expect(signed.layers.signed![1]).toBeGreaterThan(0)
+  // Starší data bez vega matic → nulová vrstva, žádný pád
+  const noVega = buildModeGrid({ ...raw, callVega: undefined, putVega: undefined }, 'vex', 'linear')
+  expect(Array.from(noVega.layers.call!)).toEqual([0, 0])
+})

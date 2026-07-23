@@ -199,6 +199,8 @@ class EngineRuntime:
                             "oi": row.oi,
                             "volume": row.volume,
                             "delta": row.delta,
+                            # Vega pro VEX módy (#201) — aditivní pole
+                            "vega": row.vega,
                             "stale_age": row.stale_age,
                         }
                         for row in rows
