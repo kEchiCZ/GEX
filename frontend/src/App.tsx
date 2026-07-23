@@ -13,6 +13,7 @@ import { BottomPanels } from './components/BottomPanels'
 import { PlaybackBar } from './components/PlaybackBar'
 import { SettingsView } from './components/SettingsView'
 import { SetupCard } from './components/SetupCard'
+import { ChainView } from './components/ChainView'
 import { SetupsView } from './components/SetupsView'
 import { StrikeProfile } from './components/StrikeProfile'
 import { useSetups } from './hooks/useSetups'
@@ -470,6 +471,7 @@ function MainContent() {
       />
     )
   }
+  if (view === 'chain') return <ChainView />
   if (view === 'setups') return <SetupsView />
   if (view === 'console') return <Console />
   if (view === 'settings') return <SettingsView />

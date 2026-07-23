@@ -386,3 +386,36 @@ def test_heatmap_180x1440_under_300ms(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert elapsed < 0.3, f"heatmap odpověď trvala {elapsed:.3f}s"
+
+
+def test_chain_endpoint_last_minute_with_delta_oi(settings: Settings) -> None:
+    """#202: řetěz z poslední minuty, strany C/P per strike, ΔOI vs. archiv."""
+    from sqlalchemy import create_engine
+
+    from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
+
+    repo = OIEodRepository(create_engine(settings.database_url))
+    repo.ensure_schema()
+    previous = DAY - dt.timedelta(days=1)
+    repo.upsert_many(
+        [OIRecord("ES", "20260716", strike, "C", previous, 80.0) for strike in STRIKES]
+    )
+    client = TestClient(create_app(settings))
+
+    payload = client.get(f"/chain/ES/20260716?date={DAY.isoformat()}").json()
+
+    assert payload["ts"] == ts(MINUTES - 1).isoformat()
+    rows = payload["rows"]
+    assert [row["strike"] for row in rows] == sorted(STRIKES)
+    first = rows[0]
+    assert first["call"]["bid"] == 10.0 and first["put"]["ask"] == 10.5
+    assert first["call"]["delta"] == 0.5 and first["put"]["delta"] == -0.4
+    assert first["call"]["oi"] == 100.0  # z fixture: 100·(i+1)
+    assert first["call"]["oi_change"] == 20.0  # 100 − 80 z archivu
+    assert first["put"]["oi_change"] is None  # put v archivu není
+    assert first["call"]["stale"] is False
+
+
+def test_chain_endpoint_missing_day_404(client: TestClient) -> None:
+    response = client.get("/chain/ES/20260716?date=2026-07-01")
+    assert response.status_code == 404
