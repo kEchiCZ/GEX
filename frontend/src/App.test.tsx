@@ -34,7 +34,7 @@ test('vykreslí kompletní layout (SPEC 7.1)', async () => {
   expect(screen.getByLabelText('Přepínače vizualizace')).toBeDefined()
   expect(screen.getByLabelText('Stav pipeline')).toBeDefined()
   expect(screen.getByText('Zdi')).toBeDefined() // přepínač zdí (dřív „Dyn GEX")
-  expect(screen.getByText('Dyn GEX')).toBeDefined() // heatmap mód (ADR-0009 fáze 2)
+  expect(screen.getByText('Dyn GEX')).toBeDefined() // přepínač podkladové vrstvy (#242)
   // "Vol + OI Δ" je v přepínačích i v hlavičce strike profilu
   expect(screen.getAllByText('Vol + OI Δ').length).toBeGreaterThan(0)
   expect(screen.getByLabelText('Strike profil')).toBeDefined()

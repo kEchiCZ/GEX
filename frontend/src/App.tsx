@@ -19,7 +19,7 @@ import { StrikeProfile } from './components/StrikeProfile'
 import { useSetups } from './hooks/useSetups'
 import { buildGexGrid, projectGexField } from './heatmap/gexmode'
 import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
-import type { HeatmapMode, HeatmapScale } from './heatmap/modes'
+import type { HeatmapScale, MeasuredHeatmapMode } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
 import { expirySettleUtc } from './instrument/expiry'
 import { resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
@@ -92,7 +92,8 @@ function MainContent() {
     'off',
     oneOf(['off', 'major', 'all']),
   )
-  const [mode, setMode] = usePersistentState<HeatmapMode>(
+  // Persistovaný 'dyn_gex' z dob módu spadne reviverem na 'oi' (#242)
+  const [mode, setMode] = usePersistentState<MeasuredHeatmapMode>(
     'mode',
     'oi',
     oneOf(HEATMAP_MODES.map((item) => item.value)),
@@ -147,26 +148,30 @@ function MainContent() {
   // `rawDay` je identitou stabilní napříč spot ticky, živá cena jde zvlášť v `live` (#141).
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const { day: rawDay, live } = useDayData(symbol, selectedExpiry, today, timeframe, socket)
-  // Heatmap mód/škála: čistý přepočet ze surové matice (SPEC 4.3, bez fetch)
+  // Heatmap mód/škála: čistý přepočet ze surové matice (SPEC 4.3, bez fetch).
+  // Dyn GEX už není mód — je to podkladová vrstva (#242), viz gexUnderDay níž.
   const modeDay = useMemo(() => {
-    // Dyn GEX (ADR-0009 fáze 2): grid z historie profilů, ne ze snapshot matice.
-    // Bez profilů (demo, Daily, starší den) zůstává výchozí OI pohled.
-    if (mode === 'dyn_gex') {
-      if (!rawDay.gexProfile || rawDay.gexProfile.every((row) => row === null)) return rawDay
-      const built = buildGexGrid(
-        rawDay.gexProfile,
-        rawDay.grid.strikes,
-        rawDay.grid.minutes,
-        heatScale,
-      )
-      return { ...rawDay, grid: built }
-    }
     if (!rawDay.raw || (mode === 'oi' && heatScale === 'linear')) return rawDay
     return { ...rawDay, grid: buildModeGrid(rawDay.raw, mode, heatScale) }
   }, [rawDay, mode, heatScale])
   // Timeframe: agregace 1m dat do košů v paměti (Daily má sloupec = den, koše se nepoužijí)
   const bucketMinutes = timeframe === 'daily' ? 1 : INTERVAL_MINUTES[interval]
   const day = useMemo(() => aggregateDay(modeDay, bucketMinutes), [modeDay, bucketMinutes])
+  // Dyn GEX podkladová vrstva (#242, à la Moodix): modelované pole POD měřeným
+  // módem — průhledné buňky měřené vrstvy ukážou pole, koncentrace ho překryjí.
+  // Stejná pipeline jako hlavní grid (agregace košů, slice, projekce), aby
+  // rozměry seděly 1:1.
+  const gexUnderDay = useMemo(() => {
+    if (!toggles.dynGexField || timeframe !== 'intraday') return null
+    if (!rawDay.gexProfile || rawDay.gexProfile.every((row) => row === null)) return null
+    const built = buildGexGrid(
+      rawDay.gexProfile,
+      rawDay.grid.strikes,
+      rawDay.grid.minutes,
+      heatScale,
+    )
+    return aggregateDay({ ...rawDay, grid: built }, bucketMinutes)
+  }, [toggles.dynGexField, timeframe, rawDay, heatScale, bucketMinutes])
 
   const playback = usePlayback(day.grid.minutes)
   // Živá vrstva (#141): svíčky ze spot kanálu agregované do stejných košů jako den.
@@ -259,17 +264,30 @@ function MainContent() {
       expirySettleUtc(selectedExpiry),
       bucketMinutes,
     )
-    // Dyn GEX: projekční zóna nese modelované budoucí sloupce (ADR-0009 fáze 2)
-    if (mode === 'dyn_gex' && rawDay.gexProfile) {
-      return projectGexField(grid, extra, day.gexField, {
-        profiles: rawDay.gexProfile,
-        lastMinuteIso: day.lastMinuteIso,
-        bucketMinutes,
-        scale: heatScale,
-      })
-    }
     return projectGrid(grid, extra)
-  }, [grid, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, playback.isLive, mode, heatScale, day.gexField, rawDay.gexProfile]) // prettier-ignore
+  }, [grid, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, playback.isLive]) // prettier-ignore
+  // Dyn GEX podklad (#242): stejný slice + projekce jako hlavní grid — projekční
+  // zóna nese modelované budoucí sloupce (ADR-0009 fáze 2)
+  const gexUnderGrid = useMemo(() => {
+    if (!gexUnderDay || !rawDay.gexProfile) return null
+    const sliced = playback.isLive
+      ? gexUnderDay.grid
+      : sliceGrid(gexUnderDay.grid, playback.position)
+    if (!toggles.projection || timeframe !== 'intraday' || !selectedExpiry || !playback.isLive) {
+      return sliced
+    }
+    const extra = projectionLength(
+      day.lastMinuteIso ?? undefined,
+      expirySettleUtc(selectedExpiry),
+      bucketMinutes,
+    )
+    return projectGexField(sliced, extra, day.gexField, {
+      profiles: rawDay.gexProfile,
+      lastMinuteIso: day.lastMinuteIso,
+      bucketMinutes,
+      scale: heatScale,
+    })
+  }, [gexUnderDay, rawDay.gexProfile, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, day.gexField, bucketMinutes, heatScale]) // prettier-ignore
   const projectionExtra = projectedGrid.minutes - (projectedGrid.dataMinutes ?? projectedGrid.minutes) // prettier-ignore
   const chartLabels = useMemo(
     () =>
@@ -488,7 +506,7 @@ function MainContent() {
           Mode
           <select
             value={mode}
-            onChange={(event) => setMode(event.target.value as HeatmapMode)}
+            onChange={(event) => setMode(event.target.value as MeasuredHeatmapMode)}
             disabled={!rawDay.raw}
             title={rawDay.raw ? undefined : 'Módy jsou dostupné jen nad intraday replay daty'}
             aria-label="Heatmap mód"
@@ -606,6 +624,7 @@ function MainContent() {
           <main className="chart-area" aria-label="Heatmapa">
             <Heatmap
               grid={projectedGrid}
+              underGrid={gexUnderGrid}
               style={style}
               contours={contours}
               overlays={overlays}

@@ -67,3 +67,11 @@ měřená mapa z principu zodpovědět neumí.
 - Persistence roundtrip list sloupce; WS rámec; bundle klíč.
 - Frontend: geometrie křivky (nula uprostřed, škála na max |hodnota|),
   playback minuta, chip přepínač.
+
+## Dodatek 2026-07-23 (#242)
+
+Mód „Dyn GEX" překlopen na **samostatnou podkladovou vrstvu** (checkbox v řádku
+přepínačů), kombinovatelnou s libovolným měřeným módem — dle Moodix vzoru
+(Kooperovo čtení ES 23. 7.: OI+OTM + Dyn GEX najednou). Pole se kreslí POD
+měřený grid (alfa kompozice), kontury při zapnuté vrstvě obrysují pole.
+Výpočty (gexmode.ts, projekce fáze 2) beze změny.

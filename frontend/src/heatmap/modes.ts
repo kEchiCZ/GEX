@@ -15,9 +15,10 @@ export const HEATMAP_MODES = [
   { value: 'oi_plus_otm', label: 'OI+OTM' },
   { value: 'oi_minus_itm', label: 'OI−ITM' },
   { value: 'oi_signed_all', label: 'OI±All' },
-  { value: 'dyn_gex', label: 'Dyn GEX' },
 ] as const
-export type HeatmapMode = (typeof HEATMAP_MODES)[number]['value']
+/** Dyn GEX už není mód, ale samostatný overlay přepínač (#242, à la Moodix) —
+    hodnota v typu zůstává kvůli gridům z gexmode.ts a persistovaným volbám. */
+export type HeatmapMode = (typeof HEATMAP_MODES)[number]['value'] | 'dyn_gex'
 /** Módy počítané ze surové snapshot matice — Dyn GEX má vlastní stavbu (gexmode.ts). */
 export type MeasuredHeatmapMode = Exclude<HeatmapMode, 'dyn_gex'>
 

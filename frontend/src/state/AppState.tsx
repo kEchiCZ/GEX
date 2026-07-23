@@ -31,6 +31,8 @@ export interface AlertMessage {
 }
 
 export interface Toggles {
+  /** Dyn GEX pole jako podkladová vrstva heatmapy (#242) — kombinuje se s módy. */
+  dynGexField: boolean
   dynGex: boolean
   /** Sekundární zeď (ADR-0008, #92): dvě rovnocenné koncentrace jako dvě linie. */
   secondaryWall: boolean
@@ -160,6 +162,7 @@ function initialFromUrl(): { view: AppView; theme: Theme | null } {
 
 /** Výchozí stav přepínačů (persistuje se jako celek, ADR-0007). */
 const DEFAULT_TOGGLES: Toggles = {
+  dynGexField: false,
   dynGex: true,
   secondaryWall: true,
   gexLevels: true,
