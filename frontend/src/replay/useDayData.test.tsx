@@ -26,6 +26,8 @@ function makeInputs(): ReplayInputs {
     putVolume: new Float32Array([5]),
     callDelta: new Float32Array([0.5]),
     putDelta: new Float32Array([-0.4]),
+    callVega: new Float32Array([0]),
+    putVega: new Float32Array([0]),
     staleAge: new Float32Array([0]),
     bars: [{ tsIso: '2026-07-16T15:00:00.000Z', close: 7600.5, volume: 1000 }],
     levels: [],

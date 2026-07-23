@@ -360,6 +360,8 @@ export function useDayData(
         oi: Number(row.oi) || 0,
         volume: Number(row.volume) || 0,
         delta: Number(row.delta) || 0,
+        // Vega pro VEX módy (#201) — starší engine pole neposílá → 0
+        vega: Number(row.vega) || 0,
         stale_age: Number(row.stale_age) || 0,
       }))
       scheduleFlush()

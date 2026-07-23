@@ -72,6 +72,14 @@ def mode_matrices(
         return {"signed": piv("C", "volume") - piv("P", "volume")}
     if mode is HeatmapMode.OI_SIGNED_ALL:
         return {"signed": piv("C", "oi") - piv("P", "oi")}
+    # VEX (#201): vega × OI — $ přecenění dealerských knih na 1 bod IV
+    if mode is HeatmapMode.VEX:
+        return {
+            "call": piv("C", "vega") * piv("C", "oi"),
+            "put": piv("P", "vega") * piv("P", "oi"),
+        }
+    if mode is HeatmapMode.VEX_SIGNED:
+        return {"signed": piv("C", "vega") * piv("C", "oi") - piv("P", "vega") * piv("P", "oi")}
 
     call_otm, put_otm = otm_masks()
     if mode is HeatmapMode.VOL_OTM:

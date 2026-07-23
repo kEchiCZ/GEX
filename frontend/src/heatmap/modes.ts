@@ -15,6 +15,9 @@ export const HEATMAP_MODES = [
   { value: 'oi_plus_otm', label: 'OI+OTM' },
   { value: 'oi_minus_itm', label: 'OI−ITM' },
   { value: 'oi_signed_all', label: 'OI±All' },
+  // VEX (#201): vega × OI — kde bolí pohyb volatility (volatility walls)
+  { value: 'vex', label: 'VEX' },
+  { value: 'vex_signed', label: 'VEX ±' },
 ] as const
 /** Dyn GEX už není mód, ale samostatný overlay přepínač (#242, à la Moodix) —
     hodnota v typu zůstává kvůli gridům z gexmode.ts a persistovaným volbám. */
@@ -38,6 +41,9 @@ export interface RawDay {
   putOi: Float32Array
   callVolume: Float32Array
   putVolume: Float32Array
+  /** Vega matice pro VEX módy (#201); starší data je nemají → nulová vrstva. */
+  callVega?: Float32Array
+  putVega?: Float32Array
   /** Spot per minuta (OTM/ITM klasifikace) — díry se forward-fillují. */
   spotSeries: (number | null)[]
   staleAge: Float32Array | null
@@ -125,7 +131,10 @@ export function buildModeGrid(
   const call = new Float32Array(size)
   const put = new Float32Array(size)
   const signed = new Float32Array(size)
-  const twoSided = mode !== 'vol_signed' && mode !== 'oi_signed_all'
+  const twoSided = mode !== 'vol_signed' && mode !== 'oi_signed_all' && mode !== 'vex_signed'
+  // VEX (#201): vega chybí ve starších bundle/demo datech → nulové vrstvy
+  const callVega = raw.callVega ?? new Float32Array(size)
+  const putVega = raw.putVega ?? new Float32Array(size)
 
   for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
     const spot = spots[minuteIdx]
@@ -171,6 +180,11 @@ export function buildModeGrid(
       } else if (mode === 'oi_minus_itm') {
         call[index] = callOi[index] - callItm
         put[index] = putOi[index] - putItm
+      } else if (mode === 'vex') {
+        call[index] = callVega[index] * raw.callOi[index]
+        put[index] = putVega[index] * raw.putOi[index]
+      } else if (mode === 'vex_signed') {
+        signed[index] = callVega[index] * raw.callOi[index] - putVega[index] * raw.putOi[index]
       } else {
         signed[index] = callOi[index] - putOi[index]
       }

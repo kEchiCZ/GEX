@@ -227,6 +227,14 @@ docker compose up -d        # start na pozadí
 <td><strong>OI±All</strong></td>
 <td>Rozdíl call − put OI (divergenční)</td>
 </tr>
+<tr>
+<td><strong>VEX</strong></td>
+<td>Vega Exposure = vega × OI per strana — kolik $ přecenění drží dealeři na striku při změně IV o 1 bod. Strikes s velkou VEX = „volatility walls&quot;: při skoku IV (zprávy, FOMC) se tam nejvíc přehedgovává. Před událostmi relevantnější než OI mapa.</td>
+</tr>
+<tr>
+<td><strong>VEX ±</strong></td>
+<td>Rozdíl call − put VEX (divergenční zobrazení vega rizika)</td>
+</tr>
 </tbody></table>
 <p>Select <strong>Scale</strong> mění škálu hodnot: <strong>Linear</strong>, <strong>√</strong> (zvýrazní slabší), <strong>Log</strong>, <strong>Pow⅓</strong>. Znaménko se zachovává.</p>
 <h3>Walls — detekce zdí</h3>
