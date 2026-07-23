@@ -147,7 +147,14 @@ class IbHistoricalClient:
         # sousedních dní, filtr níže drží jen požadovaný den. Timeout chrání
         # před visícím awaitem na mrtvé HMDS farmě (#221) — přesně ten stav,
         # kvůli kterému se backfill spouští.
-        end = dt.datetime.combine(day + dt.timedelta(days=1), dt.time(0, 0), tzinfo=dt.UTC)
+        midnight_after = dt.datetime.combine(
+            day + dt.timedelta(days=1), dt.time(0, 0), tzinfo=dt.UTC
+        )
+        # HMDS odmítá endDateTime v budoucnosti ("query returned no data",
+        # změřeno živě) — pro dnešek se žádá do teď (prázdný string)
+        end: dt.datetime | str = (
+            "" if midnight_after >= dt.datetime.now(dt.UTC) else midnight_after
+        )
         raw = await asyncio.wait_for(
             self._ib.reqHistoricalDataAsync(
                 self._contract,
