@@ -49,11 +49,11 @@ function lastSeries(values: number[], bucketMinutes: number, buckets: number): n
 }
 
 /** Řada s dírami (levels, spot): poslední ne-null hodnota koše. */
-function lastNonNull(
-  values: (number | null)[],
+function lastNonNull<T>(
+  values: (T | null)[],
   bucketMinutes: number,
   buckets: number,
-): (number | null)[] {
+): (T | null)[] {
   return Array.from({ length: buckets }, (_, bucketIdx) => {
     const start = bucketIdx * bucketMinutes
     const end = bucketEnd(bucketIdx, bucketMinutes, values.length)
@@ -158,6 +158,8 @@ function aggregateOverlays(
   const line = (item: LevelLine): LevelLine => ({
     ...item,
     series: lastNonNull(item.series, bucketMinutes, buckets),
+    // Slabé úseky zdí (ADR-0010) se agregují stejně, jinak by indexy košů nesedly
+    weak: item.weak ? lastNonNull(item.weak, bucketMinutes, buckets) : undefined,
   })
   return {
     ...overlays,

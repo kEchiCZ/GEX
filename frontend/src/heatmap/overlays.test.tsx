@@ -71,6 +71,24 @@ test('resolveSecondaryWalls: zapnuto páruje, vypnuto vrací dnešní chování 
   expect(off[0].series).toEqual([7450, 7500, 7450])
 })
 
+test('resolveSecondaryWalls: párování zahazuje weak flagy (ADR-0010, #223)', () => {
+  // Párování prohazuje hodnoty zdí po úrovních — per-minutové weak flagy by po
+  // prohození patřily jiné zdi; nepárovaná linie si je naopak drží
+  const walls: LevelLine[] = [
+    { name: 'put_wall', color: '#f0616d', series: [7450, 7500], weak: [true, false] },
+    { name: 'put_wall_2', color: 'x', dash: [2, 3], series: [7500, 7450], weak: [false, false] },
+    { name: 'call_wall', color: '#3ecf8e', series: [7650, 7650], weak: [false, true], labelSuffix: ' · 34 %' }, // prettier-ignore
+    { name: 'call_wall_2', color: 'y', dash: [2, 3], series: [null, null] },
+  ]
+  const paired = resolveSecondaryWalls(walls, true)
+  expect(paired.find((line) => line.name === 'put_wall')?.weak).toBeUndefined()
+  expect(paired.find((line) => line.name === 'walls:put_wall_2')?.weak).toBeUndefined()
+  // call se nepáruje (sekundární bez hodnot) → weak i cenovka zůstávají
+  const callWall = paired.find((line) => line.name === 'call_wall')!
+  expect(callWall.weak).toEqual([false, true])
+  expect(callWall.labelSuffix).toBe(' · 34 %')
+})
+
 test('isLevelJump/breaksOnJump: flip se při velkém skoku přerušuje (#197)', () => {
   // Práh 10 kroků × strike krok 5 = 50 bodů
   expect(isLevelJump(7577, 7650, 5)).toBe(true) // 73 b > 50 → mezera

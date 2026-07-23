@@ -8,6 +8,9 @@
 - Sekundární zdi (ADR-0008, #92): druhé nejsilnější LOKÁLNÍ maximum téže
   strany se sílou >= SECONDARY_WALL_RATIO × primární — dvě rovnocenné
   koncentrace, mezi kterými primární zeď minutu po minutě přeskakuje.
+- Dominance zdi (ADR-0010, #223): podíl síly zdi na součtu kladné síly
+  celé strany (0–1]. Argmax existuje i nad plochým profilem — dominance
+  odlišuje skutečnou koncentraci od šumu (plochý profil ~1/N).
 - Centroid (HVL): Σ(K·|NetGEX|) / Σ|NetGEX|.
 """
 
@@ -32,6 +35,11 @@ class GexLevels:
     # Sekundární zdi (ADR-0008) — kw_only kvůli zpětné kompatibilitě konstrukce
     call_wall_2: float | None = field(default=None, kw_only=True)
     put_wall_2: float | None = field(default=None, kw_only=True)
+    # Dominance zdí (ADR-0010, #223) — podíl na kladné síle strany, None = zeď není
+    call_wall_dom: float | None = field(default=None, kw_only=True)
+    put_wall_dom: float | None = field(default=None, kw_only=True)
+    call_wall_2_dom: float | None = field(default=None, kw_only=True)
+    put_wall_2_dom: float | None = field(default=None, kw_only=True)
 
 
 def compute_levels(net_by_strike: Mapping[float, float], spot: float) -> GexLevels:
@@ -40,14 +48,22 @@ def compute_levels(net_by_strike: Mapping[float, float], spot: float) -> GexLeve
     nets = [net_by_strike[strike] for strike in strikes]
     call_wall = _call_wall(net_by_strike, spot)
     put_wall = _put_wall(net_by_strike, spot)
+    call_wall_2 = _secondary_wall(net_by_strike, spot, call_wall, side="call")
+    put_wall_2 = _secondary_wall(net_by_strike, spot, put_wall, side="put")
+    call_region = _side_strengths(net_by_strike, spot, side="call")
+    put_region = _side_strengths(net_by_strike, spot, side="put")
     return GexLevels(
         flip=_flip(strikes, nets, spot),
         call_wall=call_wall,
         put_wall=put_wall,
         centroid=_centroid(net_by_strike),
         total_gex=sum(nets),
-        call_wall_2=_secondary_wall(net_by_strike, spot, call_wall, side="call"),
-        put_wall_2=_secondary_wall(net_by_strike, spot, put_wall, side="put"),
+        call_wall_2=call_wall_2,
+        put_wall_2=put_wall_2,
+        call_wall_dom=_dominance(call_region, call_wall),
+        put_wall_dom=_dominance(put_region, put_wall),
+        call_wall_2_dom=_dominance(call_region, call_wall_2),
+        put_wall_2_dom=_dominance(put_region, put_wall_2),
     )
 
 
@@ -91,6 +107,31 @@ def _put_wall(net_by_strike: Mapping[float, float], spot: float) -> float | None
     return min(below, key=lambda strike: below[strike])
 
 
+def _side_strengths(
+    net_by_strike: Mapping[float, float], spot: float, *, side: str
+) -> dict[float, float]:
+    """Síla profilu na straně zdi: call = NetGEX nad spotem, put = −NetGEX pod ním."""
+    if side == "call":
+        return {k: v for k, v in net_by_strike.items() if k > spot}
+    # Put wall je argmin (nejzápornější NetGEX) — síla = převrácené znaménko
+    return {k: -v for k, v in net_by_strike.items() if k < spot}
+
+
+def _dominance(region: Mapping[float, float], wall: float | None) -> float | None:
+    """Podíl síly zdi na součtu KLADNÉ síly strany (ADR-0010, #223).
+
+    Koncentrovaný profil → ~1, plochý → ~1/N. Záporné hodnoty strany
+    (opačné znaménko) zeď netvoří a do jmenovatele nepatří.
+    """
+    if wall is None:
+        return None
+    strength = region.get(wall, 0.0)
+    if strength <= 0.0:
+        return None
+    total = sum(value for value in region.values() if value > 0.0)
+    return strength / total
+
+
 def _secondary_wall(
     net_by_strike: Mapping[float, float],
     spot: float,
@@ -104,11 +145,7 @@ def _secondary_wall(
     """
     if primary is None:
         return None
-    if side == "call":
-        region = {k: v for k, v in net_by_strike.items() if k > spot}
-    else:
-        # Put wall je argmin (nejzápornější NetGEX) — síla = převrácené znaménko
-        region = {k: -v for k, v in net_by_strike.items() if k < spot}
+    region = _side_strengths(net_by_strike, spot, side=side)
     strikes = sorted(region)
     values = [region[k] for k in strikes]
     primary_strength = region.get(primary, 0.0)

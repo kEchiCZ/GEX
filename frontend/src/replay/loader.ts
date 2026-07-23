@@ -16,6 +16,7 @@ import type { HeatmapGrid } from '../heatmap/grid'
 import { buildModeGrid } from '../heatmap/modes'
 import type { RawDay } from '../heatmap/modes'
 import { maxPainSeries } from '../heatmap/maxpain'
+import { WALL_DOM_WEAK, lastLevelValue } from '../heatmap/overlays'
 import type { LevelLine, OverlayData, PriceBar } from '../heatmap/overlays'
 import type { ProfileRow } from '../profile/bars'
 
@@ -78,7 +79,7 @@ export interface ReplayDay {
   gexField: GexFieldRow | null
 }
 
-const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2'] as const // prettier-ignore
+const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2', 'call_wall_dom', 'put_wall_dom', 'call_wall_2_dom', 'put_wall_2_dom'] as const // prettier-ignore
 
 interface BarInput {
   tsIso: string
@@ -171,6 +172,8 @@ interface ReplayBundle {
   levels: Array<Record<string, unknown>>
   /** Sekundární zdi (ADR-0008, #92) — starší API pole neposílá. */
   levels2?: Array<Record<string, unknown>>
+  /** Dominance zdí (ADR-0010, #223) — starší API pole neposílá. */
+  walldom?: Array<Record<string, unknown>>
   /** Dyn GEX profily (ADR-0009, #203) — starší API pole neposílá. */
   gexprofile?: Array<Record<string, unknown>>
   /** Modelované pole (ADR-0009 fáze 2) — starší API klíč neposílá. */
@@ -354,6 +357,19 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     }
     entry.values.call_wall_2 = numOrNull(row.call_wall_2)
     entry.values.put_wall_2 = numOrNull(row.put_wall_2)
+    levelsByTs.set(tsIso, entry)
+  }
+  // Dominance zdí (ADR-0010, #223) — vlastní řada, merge per minuta jako levels2
+  for (const row of bundle.walldom ?? []) {
+    const tsIso = canonicalTs(row.ts_min)
+    const entry = levelsByTs.get(tsIso) ?? {
+      tsIso,
+      values: Object.fromEntries(LEVEL_KEYS.map((key) => [key, null])),
+    }
+    entry.values.call_wall_dom = numOrNull(row.call_wall_dom)
+    entry.values.put_wall_dom = numOrNull(row.put_wall_dom)
+    entry.values.call_wall_2_dom = numOrNull(row.call_wall_2_dom)
+    entry.values.put_wall_2_dom = numOrNull(row.put_wall_2_dom)
     levelsByTs.set(tsIso, entry)
   }
   const levels = [...levelsByTs.values()]
@@ -586,13 +602,21 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     { name: 'centroid', color: '#9d7be8', series: levelSeries('centroid') },
     { name: 'max_pain', color: '#d24bd2', series: maxPainSeries(raw) },
   ]
+  // Dominance zdí (ADR-0010, #223): slabá zeď (pod prahem) se kreslí ztlumeně,
+  // cenovka primární zdi nese aktuální dominanci v %
+  const weakFlags = (domKey: string): (boolean | null)[] =>
+    levelSeries(domKey).map((dom) => (dom === null ? null : dom < WALL_DOM_WEAK))
+  const domSuffix = (domKey: string): string | undefined => {
+    const dom = lastLevelValue(levelSeries(domKey))
+    return dom === null ? undefined : ` · ${Math.round(dom * 100)} %`
+  }
   const walls: LevelLine[] = [
-    { name: 'call_wall', color: '#3ecf8e', series: levelSeries('call_wall') },
-    { name: 'put_wall', color: '#f0616d', series: levelSeries('put_wall') },
+    { name: 'call_wall', color: '#3ecf8e', series: levelSeries('call_wall'), weak: weakFlags('call_wall_dom'), labelSuffix: domSuffix('call_wall_dom') }, // prettier-ignore
+    { name: 'put_wall', color: '#f0616d', series: levelSeries('put_wall'), weak: weakFlags('put_wall_dom'), labelSuffix: domSuffix('put_wall_dom') }, // prettier-ignore
     // Sekundární zdi (ADR-0008): App je podle přepínače spáruje s primární
     // po úrovních, nebo zahodí; kreslí se tečkovaně a bez cenovky
-    { name: 'call_wall_2', color: 'rgba(62,207,142,0.55)', dash: [2, 3], series: levelSeries('call_wall_2') }, // prettier-ignore
-    { name: 'put_wall_2', color: 'rgba(240,97,109,0.55)', dash: [2, 3], series: levelSeries('put_wall_2') }, // prettier-ignore
+    { name: 'call_wall_2', color: 'rgba(62,207,142,0.55)', dash: [2, 3], series: levelSeries('call_wall_2'), weak: weakFlags('call_wall_2_dom') }, // prettier-ignore
+    { name: 'put_wall_2', color: 'rgba(240,97,109,0.55)', dash: [2, 3], series: levelSeries('put_wall_2'), weak: weakFlags('put_wall_2_dom') }, // prettier-ignore
   ]
   const overlays: OverlayData = {
     price,

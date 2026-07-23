@@ -85,6 +85,18 @@ async def test_one_cycle_produces_full_day_artifacts(
     )
     assert list(levels2.columns) == ["ts_min", "call_wall_2", "put_wall_2"]
     assert len(levels2) == 1
+    # Dominance zdí jde do vlastní řady walldom (ADR-0010, #223)
+    walldom = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "walldom" / f"{day}.parquet"
+    )
+    assert list(walldom.columns) == [
+        "ts_min",
+        "call_wall_dom",
+        "put_wall_dom",
+        "call_wall_2_dom",
+        "put_wall_2_dom",
+    ]
+    assert len(walldom) == 1
     flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{day}.parquet")
     assert list(flow.columns) == ["ts_min", "flow_delta", "cum_delta"]
     day_bars = pd.read_parquet(settings.derived_dir / "ES" / "bars" / f"{day}.parquet")
@@ -95,6 +107,11 @@ async def test_one_cycle_produces_full_day_artifacts(
     assert publisher.statuses[-1]["greeks_complete"] == 6
     channels = [channel for channel, _ in publisher.messages]
     assert "levels.ES.20260716" in channels
+    # WS levels nese dominance zdí aditivně (ADR-0010, #223)
+    levels_data = next(
+        data for channel, data in publisher.messages if channel == "levels.ES.20260716"
+    )
+    assert "call_wall_dom" in levels_data and "put_wall_dom" in levels_data
     assert "flow.ES" in channels
     assert "price.ES" in channels
     assert "snapshot.ES.20260716" in channels

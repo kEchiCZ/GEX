@@ -348,6 +348,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         readers: list[tuple[str, Callable[[], pd.DataFrame]]] = [
             ("levels", lambda: repository.levels(symbol, expiry, date)),
             ("levels2", lambda: repository.levels2(symbol, expiry, date)),
+            ("walldom", lambda: repository.walldom(symbol, expiry, date)),
             ("gexprofile", lambda: repository.gexprofile(symbol, expiry, date)),
             ("gexfield", lambda: repository.gexfield(symbol, expiry, date)),
             ("flow", lambda: repository.flow(symbol, date)),

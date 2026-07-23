@@ -10,7 +10,12 @@ import pytest
 
 from gexlens_engine.compute.levels import compute_levels
 from gexlens_engine.config import Settings
-from gexlens_engine.storage.parquet_store import Levels2Row, LevelsRow, SnapshotWriter
+from gexlens_engine.storage.parquet_store import (
+    Levels2Row,
+    LevelsRow,
+    SnapshotWriter,
+    WallDomRow,
+)
 
 GOLDEN_PATH = Path(__file__).parent / "golden" / "levels_basic.json"
 
@@ -156,6 +161,41 @@ def test_secondary_wall_none_below_ratio_or_for_shoulder() -> None:
     assert empty.put_wall_2 is None
 
 
+def test_wall_dominance_concentrated_vs_flat() -> None:  # ADR-0010, #223
+    """Koncentrace → dominance ~1; plochý profil → ~1/N (zeď je jen argmax)."""
+    concentrated = {7490.0: -50.0, 7510.0: 5.0, 7520.0: 90.0, 7530.0: 5.0}
+    levels = compute_levels(concentrated, spot=7500.0)
+    assert levels.call_wall == 7520.0
+    assert levels.call_wall_dom == pytest.approx(0.9)
+    assert levels.put_wall == 7490.0
+    assert levels.put_wall_dom == pytest.approx(1.0)  # jediný strike strany
+
+    flat = {7500.0 + 10 * i: 10.0 for i in range(1, 11)}
+    levels_flat = compute_levels(flat, spot=7500.0)
+    assert levels_flat.call_wall is not None  # argmax existuje i nad plochým profilem
+    assert levels_flat.call_wall_dom == pytest.approx(0.1)
+    assert levels_flat.put_wall is None
+    assert levels_flat.put_wall_dom is None
+
+
+def test_wall_dominance_ignores_opposite_sign_mass() -> None:
+    """Záporné hodnoty strany zeď netvoří — do jmenovatele dominance nepatří."""
+    profile = {7510.0: 60.0, 7520.0: -100.0, 7530.0: 40.0}
+    levels = compute_levels(profile, spot=7500.0)
+    assert levels.call_wall == 7510.0
+    assert levels.call_wall_dom == pytest.approx(0.6)
+
+
+def test_secondary_wall_dominance() -> None:
+    """Sekundární zeď má vlastní dominanci na téže straně."""
+    profile = {7510.0: 100.0, 7515.0: 10.0, 7520.0: 90.0}
+    levels = compute_levels(profile, spot=7500.0)
+    assert levels.call_wall == 7510.0
+    assert levels.call_wall_2 == 7520.0
+    assert levels.call_wall_dom == pytest.approx(100.0 / 200.0)
+    assert levels.call_wall_2_dom == pytest.approx(90.0 / 200.0)
+
+
 def test_levels2_series_persisted_to_derived(tmp_path: Path) -> None:
     """ADR-0008: sekundární zdi jdou do vlastní řady derived/{sym}/{exp}/levels2."""
     writer = SnapshotWriter(Settings(data_dir=tmp_path))
@@ -177,6 +217,36 @@ def test_levels2_series_persisted_to_derived(tmp_path: Path) -> None:
     assert len(frame) == 2
     assert frame["call_wall_2"][0] == pytest.approx(7600.0)
     assert math.isnan(frame["call_wall_2"][1])
+
+
+def test_walldom_series_persisted_to_derived(tmp_path: Path) -> None:
+    """ADR-0010: dominance zdí jde do vlastní řady derived/{sym}/{exp}/walldom."""
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    day = dt.date(2026, 7, 16)
+    rows = [
+        WallDomRow(
+            ts_min=dt.datetime(2026, 7, 16, 15, minute, tzinfo=dt.UTC),
+            call_wall_dom=0.42 if minute == 0 else None,
+            put_wall_dom=0.8,
+            call_wall_2_dom=None,
+            put_wall_2_dom=0.35,
+        )
+        for minute in range(2)
+    ]
+
+    path = writer.write_walldom("ES", "20260716", day, rows)
+
+    assert path == tmp_path / "derived" / "ES" / "20260716" / "walldom" / "2026-07-16.parquet"
+    frame = pd.read_parquet(path)
+    assert list(frame.columns) == [
+        "ts_min",
+        "call_wall_dom",
+        "put_wall_dom",
+        "call_wall_2_dom",
+        "put_wall_2_dom",
+    ]
+    assert frame["call_wall_dom"][0] == pytest.approx(0.42)
+    assert math.isnan(frame["call_wall_dom"][1])
 
 
 def test_levels_series_persisted_to_derived(tmp_path: Path) -> None:

@@ -25,7 +25,16 @@ export interface LevelLine {
   series: (number | null)[] // hodnota (strike) per minuta
   /** Vzor čárkování (canvas setLineDash); bez něj plná čára. */
   dash?: number[]
+  /** Slabá zeď per minuta (dominance < WALL_DOM_WEAK, ADR-0010, #223);
+      true = úsek se kreslí ztlumeně, null = dominance neznámá (plný styl). */
+  weak?: (boolean | null)[]
+  /** Přípona cenovky úrovně (aktuální dominance zdi, např. " · 34 %"). */
+  labelSuffix?: string
 }
+
+/** Práh slabé zdi (ADR-0010, #223) — pod ním se linie kreslí ztlumeně.
+    Zrcadlí engine default `GEXLENS_SETUP_MIN_WALL_DOMINANCE`. */
+export const WALL_DOM_WEAK = 0.15
 
 /** Cenovka úrovně: zaokrouhlení na 2 desetinná místa bez koncových nul. */
 export function formatLevel(value: number): string {
@@ -150,8 +159,15 @@ export function resolveSecondaryWalls(walls: LevelLine[], enabled: boolean): Lev
     const paired = pairWallSeries(line.series, secondary.series)
     const primarySeries = paired.primaryIsUpper ? paired.upper : paired.lower
     const altSeries = paired.primaryIsUpper ? paired.lower : paired.upper
-    result.push({ ...line, series: primarySeries })
-    result.push({ ...secondary, name: `walls:${secondary.name}`, series: altSeries })
+    // Párování míchá hodnoty primární a sekundární zdi po úrovních — per-minutové
+    // weak flagy by po prohození patřily jiné zdi, proto se zahazují (ADR-0010)
+    result.push({ ...line, series: primarySeries, weak: undefined })
+    result.push({
+      ...secondary,
+      name: `walls:${secondary.name}`,
+      series: altSeries,
+      weak: undefined,
+    })
   }
   return result
 }
