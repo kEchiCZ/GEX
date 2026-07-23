@@ -382,8 +382,9 @@ function MainContent() {
         gexLevels: toggles.gexLevels,
         sessions: toggles.sessions,
         dynGex: toggles.dynGex,
+        flowAdjusted: toggles.flowAdjusted,
       }),
-    [allOverlays, toggles.gexLevels, toggles.sessions, toggles.dynGex],
+    [allOverlays, toggles.gexLevels, toggles.sessions, toggles.dynGex, toggles.flowAdjusted],
   )
 
   // Seance i v projektované zóně (#195) — všechny seance dne najednou,

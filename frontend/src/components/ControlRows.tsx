@@ -8,6 +8,7 @@ const TOGGLE_LABELS: Record<keyof Toggles, string> = {
   dynGex: 'Zdi',
   secondaryWall: '2. zeď',
   gexLevels: 'GEX Levels',
+  flowAdjusted: 'FA levels',
   sessions: 'Sessions',
   vol: 'Vol',
   optVol: 'Opt Vol',

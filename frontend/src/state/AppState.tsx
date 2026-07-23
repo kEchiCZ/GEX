@@ -35,6 +35,8 @@ export interface Toggles {
   /** Sekundární zeď (ADR-0008, #92): dvě rovnocenné koncentrace jako dvě linie. */
   secondaryWall: boolean
   gexLevels: boolean
+  /** Flow-adjusted levels (ADR-0011, #222): flip/walls z OI odhadu ranní OI + tok. */
+  flowAdjusted: boolean
   sessions: boolean
   vol: boolean
   optVol: boolean
@@ -161,6 +163,7 @@ const DEFAULT_TOGGLES: Toggles = {
   dynGex: true,
   secondaryWall: true,
   gexLevels: true,
+  flowAdjusted: false,
   sessions: false,
   vol: true,
   optVol: true,

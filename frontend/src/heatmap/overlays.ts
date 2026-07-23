@@ -63,15 +63,21 @@ export interface OverlayToggles {
   gexLevels: boolean
   sessions: boolean
   dynGex: boolean
+  /** Flow-adjusted levels (ADR-0011, #222) — fa_* linie; bez flagu se skryjí. */
+  flowAdjusted?: boolean
 }
 
 /** Overlay přepínače odpovídají checkboxům (AC issue #24) — filtr viditelných vrstev. */
 export function visibleOverlays(data: OverlayData, toggles: OverlayToggles): OverlayData {
+  // FA linie (ODHAD, ADR-0011) mají vlastní přepínač nezávislý na GEX Levels
+  const levels = toggles.gexLevels
+    ? data.levels?.filter((line) => !line.name.startsWith('fa_') || toggles.flowAdjusted)
+    : data.levels?.filter((line) => line.name.startsWith('fa_') && toggles.flowAdjusted)
   return {
     price: data.price, // cenová křivka je vždy viditelná (SPEC 7.2)
     timestamp: data.timestamp,
     sessions: toggles.sessions ? data.sessions : undefined,
-    levels: toggles.gexLevels ? data.levels : undefined,
+    levels: levels && levels.length > 0 ? levels : undefined,
     walls: toggles.dynGex ? data.walls : undefined,
   }
 }

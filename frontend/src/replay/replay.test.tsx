@@ -222,6 +222,33 @@ test('walldom řada: slabé úseky zdi + dominance v cenovce (ADR-0010, #223)', 
   expect(putWall?.labelSuffix).toBe(' · 50 %')
 })
 
+test('levelsfa řada: fa_* linie čárkovaně vedle měřených (ADR-0011, #222)', () => {
+  const table = tableFromArrays({
+    ts_min: ['2026-07-16T15:00:00Z'],
+    strike: Float64Array.from([7600]),
+    right: ['C'],
+    volume: Float64Array.from([10]),
+    oi: Float64Array.from([100]),
+    delta: Float64Array.from([0.5]),
+    stale_age: Float64Array.from([0]),
+  })
+  const day = buildReplayDay({
+    symbol: 'ES',
+    expiry: '20260716',
+    date: '2026-07-16',
+    snapshots_arrow_base64: btoa(String.fromCharCode(...tableToIPC(table, 'stream'))),
+    levels: [{ ts_min: '2026-07-16T15:00:00Z', flip: 7595, call_wall: 7650, put_wall: 7500 }],
+    levelsfa: [{ ts_min: '2026-07-16T15:00:00Z', flip: 7580, call_wall: 7640, put_wall: 7510 }],
+    flow: [],
+    bars: [],
+  })
+  const faFlip = day.overlays.levels?.find((line) => line.name === 'fa_flip')
+  expect(faFlip?.series).toEqual([7580])
+  expect(faFlip?.dash).toBeDefined() // odhad se kreslí čárkovaně
+  expect(day.overlays.levels?.find((line) => line.name === 'fa_call_wall')?.series).toEqual([7640])
+  expect(day.overlays.levels?.find((line) => line.name === 'flip')?.series).toEqual([7595])
+})
+
 test('bez walldom řady (starší API) zůstávají zdi bez slabých úseků', () => {
   const table = tableFromArrays({
     ts_min: ['2026-07-16T15:00:00Z'],

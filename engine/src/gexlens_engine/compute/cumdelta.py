@@ -51,20 +51,30 @@ class CumDeltaTracker:
         self._cum = 0.0
         self._minute_flow = 0.0
         self._last_volume: dict[OptionContractSpec, float] = {}
+        # Čistý klasifikovaný objem per kontrakt (buy − sell, v kontraktech) —
+        # vstup flow-adjusted OI odhadu (ADR-0011, #222)
+        self._net_volume: dict[OptionContractSpec, float] = {}
 
     @property
     def cum_delta(self) -> float:
         return self._cum
+
+    def net_volume(self, spec: OptionContractSpec) -> float:
+        """Denní čistý klasifikovaný objem kontraktu (buy − sell; ADR-0011)."""
+        return self._net_volume.get(spec, 0.0)
 
     def reset(self) -> None:
         """Reset na začátku obchodního dne (SPEC 4.5, konfig. session start)."""
         self._cum = 0.0
         self._minute_flow = 0.0
         self._last_volume.clear()
+        self._net_volume.clear()
 
     def add_trade(self, trade: ClassifiedTrade, delta: float) -> float:
         """Hot zóna: flowΔ = sign · size · Δ · M; unknown klasifikace nepřispívá."""
-        flow = _TRADE_SIGN[trade.side] * trade.size * delta * self._multiplier
+        sign = _TRADE_SIGN[trade.side]
+        flow = sign * trade.size * delta * self._multiplier
+        self._net_volume[trade.spec] = self._net_volume.get(trade.spec, 0.0) + sign * trade.size
         self._apply(flow)
         return flow
 
@@ -95,7 +105,9 @@ class CumDeltaTracker:
                 cumulative_volume,
             )
             return 0.0
-        flow = midpoint_sign(last, bid, ask) * delta_volume * delta * self._multiplier
+        sign = midpoint_sign(last, bid, ask)
+        flow = sign * delta_volume * delta * self._multiplier
+        self._net_volume[spec] = self._net_volume.get(spec, 0.0) + sign * delta_volume
         self._apply(flow)
         return flow
 

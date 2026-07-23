@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     setups_enabled: bool = True
     # Minimální dominance zdi pro šablony T1/T3 (ADR-0010, #223)
     setup_min_wall_dominance: float = Field(default=0.15, ge=0, le=1)
+    # Flow-adjusted OI odhad (ADR-0011, #222): OI_est = OI + α·čistý klasifikovaný
+    # objem. α z validace open-ratio (~0,39 na čistém dni); 0 = vrstva vypnutá
+    flow_oi_alpha: float = Field(default=0.4, ge=0, le=1)
 
     # Opční řetězec a rotační scheduler (SPEC 3.2, 3.3)
     strike_range_points: float = Field(default=200.0, gt=0)

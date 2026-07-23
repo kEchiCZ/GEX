@@ -71,6 +71,32 @@ test('resolveSecondaryWalls: zapnuto páruje, vypnuto vrací dnešní chování 
   expect(off[0].series).toEqual([7450, 7500, 7450])
 })
 
+test('visibleOverlays: fa_* linie řídí přepínač FA levels (ADR-0011, #222)', () => {
+  const data = {
+    levels: [
+      { name: 'flip', color: 'y', series: [7595] },
+      { name: 'fa_flip', color: 'y', dash: [8, 4], series: [7580] },
+    ],
+    walls: [],
+    sessions: [],
+    timestamp: 't',
+  }
+  const base = { sessions: false, dynGex: false }
+  // FA off → jen měřené linie
+  const off = visibleOverlays(data, { ...base, gexLevels: true, flowAdjusted: false })
+  expect(off.levels?.map((line) => line.name)).toEqual(['flip'])
+  // FA on → obě
+  const on = visibleOverlays(data, { ...base, gexLevels: true, flowAdjusted: true })
+  expect(on.levels?.map((line) => line.name)).toEqual(['flip', 'fa_flip'])
+  // GEX Levels off + FA on → jen odhad
+  const faOnly = visibleOverlays(data, { ...base, gexLevels: false, flowAdjusted: true })
+  expect(faOnly.levels?.map((line) => line.name)).toEqual(['fa_flip'])
+  // Obojí off → žádné levels
+  expect(
+    visibleOverlays(data, { ...base, gexLevels: false, flowAdjusted: false }).levels,
+  ).toBeUndefined()
+})
+
 test('resolveSecondaryWalls: párování zahazuje weak flagy (ADR-0010, #223)', () => {
   // Párování prohazuje hodnoty zdí po úrovních — per-minutové weak flagy by po
   // prohození patřily jiné zdi; nepárovaná linie si je naopak drží

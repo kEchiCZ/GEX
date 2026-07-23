@@ -129,6 +129,7 @@ class EngineRuntime:
         # 1) Snapshot řádky (OI z ranního archivu — tick 588 intraday nechodí, ADR-0001)
         rows: list[SnapshotRow] = []
         gex_inputs: list[GexInput] = []
+        gex_specs: list[OptionContractSpec] = []
         profile_contracts: list[ProfileContract] = []
         for spec in self.contracts:
             cached = quotes.get(spec)
@@ -162,6 +163,7 @@ class EngineRuntime:
             gex_inputs.append(
                 GexInput(strike=spec.strike, right=spec.right, gamma=snapshot.gamma, oi=oi)
             )
+            gex_specs.append(spec)
             # Dyn GEX profil (ADR-0009): BS gamma nad uloženou IV per kontrakt
             profile_contracts.append(
                 ProfileContract(
@@ -239,6 +241,46 @@ class EngineRuntime:
         )
         self.last_levels = levels_row
         self.last_gex_levels = levels
+
+        # Flow-adjusted levels (ADR-0011, #222): OI odhad = ranní OI + α·čistý
+        # klasifikovaný objem (buy − sell z midpoint testu / Lee–Ready). Jen
+        # aktivní řetěz — tok se měří jen tam; α = 0 vrstvu vypíná. Odhad
+        # nejde pod nulu (pozice nemůže být záporná).
+        alpha = self.settings.flow_oi_alpha
+        if not self.secondary and alpha > 0.0:
+            fa_inputs = [
+                GexInput(
+                    strike=inp.strike,
+                    right=inp.right,
+                    gamma=inp.gamma,
+                    oi=max(0.0, inp.oi + alpha * tracker.net_volume(spec)),
+                )
+                for inp, spec in zip(gex_inputs, gex_specs, strict=True)
+            ]
+            gex_fa = self.gex_engine.compute(fa_inputs, spot=spot, multiplier=self.multiplier)
+            levels_fa = compute_levels(gex_fa.net_by_strike(), spot=spot)
+            levelsfa_row = LevelsRow(
+                ts_min=ts_min,
+                flip=levels_fa.flip,
+                call_wall=levels_fa.call_wall,
+                put_wall=levels_fa.put_wall,
+                centroid=levels_fa.centroid,
+                total_gex=levels_fa.total_gex,
+            )
+            await asyncio.to_thread(
+                self.writer.write_levelsfa, self.symbol, self.expiry, day, [levelsfa_row]
+            )
+            await self.publisher.publish(
+                f"levelsfa.{self.symbol}.{self.expiry}",
+                {
+                    "ts_min": ts_min.isoformat(),
+                    "flip": levels_fa.flip,
+                    "call_wall": levels_fa.call_wall,
+                    "put_wall": levels_fa.put_wall,
+                    "centroid": levels_fa.centroid,
+                    "total_gex": levels_fa.total_gex,
+                },
+            )
 
         # Dyn GEX profil (ADR-0009, #203): NetGEX přes cenovou mřížku obálky —
         # historie profilů je zároveň naměřený díl budoucího 2D pole
