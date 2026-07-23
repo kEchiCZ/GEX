@@ -152,9 +152,7 @@ class IbHistoricalClient:
         )
         # HMDS odmítá endDateTime v budoucnosti ("query returned no data",
         # změřeno živě) — pro dnešek se žádá do teď (prázdný string)
-        end: dt.datetime | str = (
-            "" if midnight_after >= dt.datetime.now(dt.UTC) else midnight_after
-        )
+        end: dt.datetime | str = "" if midnight_after >= dt.datetime.now(dt.UTC) else midnight_after
         raw = await asyncio.wait_for(
             self._ib.reqHistoricalDataAsync(
                 self._contract,
