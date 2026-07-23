@@ -282,7 +282,7 @@ Vedle nástrojů je **výběr barvy**. Anotace jsou ukotvené k **času a striku
 
 ## 11. Dashboard
 
-Karty instrumentů z watchlistu: aktuální cena, stav dat (● live / offline), **mini NetGEX profil** (zelené/červené sloupečky = čistý positioning po stricích) a vzdálenosti k call/put wall. Slouží jako rychlý přehled, když sleduješ víc instrumentů.
+Karty instrumentů z watchlistu: aktuální cena, stav dat (● live / offline), **GEX režim badge**, **PCR sentiment** (Put/Call ratio z vlastních dat: vol = dnešní tok, OI = držené pozicování, mini křivka = vývoj PCR vol za den s referencí 1.0; extrémy kontrariánsky), **mini NetGEX profil** (zelené/červené sloupečky = čistý positioning po stricích) a vzdálenosti k call/put wall. Slouží jako rychlý přehled, když sleduješ víc instrumentů.
 
 ![Dashboard](img/dashboard.png)
 
