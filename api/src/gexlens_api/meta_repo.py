@@ -8,18 +8,36 @@ import datetime as dt
 import threading
 from typing import Any
 
-from sqlalchemy import create_engine, delete, insert, select, update
-from sqlalchemy.engine import CursorResult, Engine
+from sqlalchemy import create_engine, delete, insert, select, text, update
+from sqlalchemy.engine import Connection, CursorResult, Engine
 from sqlalchemy.exc import IntegrityError
 
 from gexlens_engine.config import Settings
 from gexlens_engine.storage.meta import (
+    WATCHLIST_CHANNEL,
     alerts_table,
     annotations_table,
     meta_metadata,
     settings_table,
     watchlist_table,
 )
+
+
+def _notify_watchlist(conn: Connection, payload: str) -> None:
+    """PG NOTIFY změny watchlistu (#207) — engine startuje sběr do sekund.
+
+    Volá se uvnitř transakce (NOTIFY se doručí až s commitem, takže engine
+    nikdy nečte watchlist před zápisem). Mimo PostgreSQL (SQLite testy) no-op.
+    """
+    if conn.dialect.name != "postgresql":
+        return
+    conn.execute(
+        text("select pg_notify(:channel, :payload)"),
+        {
+            "channel": WATCHLIST_CHANNEL,
+            "payload": payload,
+        },
+    )
 
 
 class DuplicateEntryError(ValueError):
@@ -66,6 +84,7 @@ class MetaRepository:
             with self._db().begin() as conn:
                 result = conn.execute(insert(watchlist_table).values(symbol=symbol))
                 item_id = _inserted_id(result)
+                _notify_watchlist(conn, symbol)
         except IntegrityError as exc:
             raise DuplicateEntryError(f"Symbol {symbol!r} už ve watchlistu je") from exc
         return {"id": item_id, "symbol": symbol}
@@ -75,6 +94,7 @@ class MetaRepository:
             result = conn.execute(delete(watchlist_table).where(watchlist_table.c.id == item_id))
             if result.rowcount == 0:
                 raise NotFoundError(f"Watchlist položka {item_id} neexistuje")
+            _notify_watchlist(conn, "")
 
     # ── alerts ─────────────────────────────────────────────────────
 

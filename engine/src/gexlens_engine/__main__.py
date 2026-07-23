@@ -46,6 +46,7 @@ from gexlens_engine.instruments import (
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
+from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter
 from gexlens_engine.storage.retention import RetentionJob
@@ -350,6 +351,10 @@ async def main() -> None:
     await asyncio.to_thread(oi_repository.ensure_schema)
     watchlist_reader = WatchlistReader(db)
     await asyncio.to_thread(watchlist_reader.ensure_schema)
+    # LISTEN na změny watchlistu (#207): nový symbol startuje do sekund;
+    # poll à WATCHLIST_POLL_CYCLES zůstává jako fallback
+    watchlist_listener = WatchlistListener(settings.database_url)
+    watchlist_listener.start()
     setups_repository: SetupsRepository | None = None
     if settings.setups_enabled:
         setups_repository = SetupsRepository(db)
@@ -365,13 +370,17 @@ async def main() -> None:
     setup_cooldown: dict[str, int] = {}
     desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
     cycle = 0
+    force_watchlist = False
+    last_full_minute: dt.datetime | None = None
 
     while True:
         cycle_start = asyncio.get_running_loop().time()
         now = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
 
         # Watchlist se čte každý k-tý cyklus (uživatel přidal/odebral ticker v UI)
-        if cycle % settings.watchlist_poll_cycles == 0:
+        # nebo hned po NOTIFY probuzení (#207)
+        if force_watchlist or cycle % settings.watchlist_poll_cycles == 0:
+            force_watchlist = False
             desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
             # Runtime šířka pásma strikes ze Settings UI (vidět vzdálená křídla)
             override = await asyncio.to_thread(watchlist_reader.setting, "strike_range_points")
@@ -442,9 +451,18 @@ async def main() -> None:
                 ",".join(plan.skipped),
             )
 
-        # Sekvenční minutové cykly všech instrumentů + agregovaný status
-        results = await gather_metrics(list(pipelines.values()), now)
-        if results:
+        # Sekvenční minutové cykly všech instrumentů + agregovaný status.
+        # NOTIFY probuzení uprostřed minuty (#207): plný cyklus téže minuty by
+        # duplikoval zápisy (snapshoty se appendují) — běží jen nové pipeline,
+        # status se pushuje jen z plného běhu (agregát přes všechny instrumenty).
+        full_run = now != last_full_minute
+        if full_run:
+            run_list = list(pipelines.values())
+            last_full_minute = now
+        else:
+            run_list = [pipelines[symbol] for symbol in plan.start if symbol in pipelines]
+        results = await gather_metrics(run_list, now)
+        if results and full_run:
             await publisher.status(
                 engine="online",
                 connection="connected",
@@ -473,7 +491,10 @@ async def main() -> None:
 
         cycle += 1
         elapsed = asyncio.get_running_loop().time() - cycle_start
-        await asyncio.sleep(max(1.0, 60.0 - elapsed))
+        # Místo sleep čekání na NOTIFY (#207) — změna watchlistu probudí smyčku hned
+        if await watchlist_listener.wait(max(1.0, 60.0 - elapsed)):
+            force_watchlist = True
+            logger.info("Watchlist NOTIFY — okamžité přeplánování instrumentů")
 
 
 if __name__ == "__main__":

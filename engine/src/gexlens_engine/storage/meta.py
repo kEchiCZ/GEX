@@ -9,6 +9,11 @@ from sqlalchemy import JSON, Boolean, Column, Date, Integer, MetaData, String, T
 
 meta_metadata = MetaData()
 
+# PG NOTIFY kanál změn watchlistu (#207): API po zápisu notifikuje, engine
+# přes LISTEN probudí orchestrátor — nový symbol startuje do sekund, ne až
+# za WATCHLIST_POLL_CYCLES minut. Mimo PostgreSQL zůstává jen poll.
+WATCHLIST_CHANNEL = "gexlens_watchlist"
+
 watchlist_table = Table(
     "watchlist",
     meta_metadata,
