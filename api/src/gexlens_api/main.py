@@ -106,7 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Komprese odpovědí (#247): /replay bundle 12,4 MB → ~2 MB; klíčové pro
     # LAN/budoucí vzdálené nasazení (změřeno: komprese 184 ms, dekomprese
     # v prohlížeči 20 ms nativně — přenos je úzké hrdlo, ne CPU)
-    app.add_middleware(GZipMiddleware, minimum_size=1024)
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
     app.state.status_store = status_store
     app.state.live_hub = live_hub
     app.state.meta_repository = meta_repository
