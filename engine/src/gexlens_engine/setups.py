@@ -11,6 +11,7 @@ Selhání čehokoli tady nesmí shodit sběr dat — volající balí do try/exc
 import datetime as dt
 import logging
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -148,36 +149,66 @@ class SetupEngine:
         )
         self._history.append(inputs)
 
-        await self._evaluate_open(now, inputs, minutes_left)
+        await self._evaluate_open(now, inputs, minutes_left, bars)
         await self._detect_new(now, runtime, inputs)
 
     async def _evaluate_open(
-        self, now: dt.datetime, inputs: MinuteInputs, minutes_left: float | None
+        self,
+        now: dt.datetime,
+        inputs: MinuteInputs,
+        minutes_left: float | None,
+        bars: Sequence[Bar] | None = None,
     ) -> None:
+        # Vyhodnocení po jednotlivých barech (#257): cyklus umí nést víc minut
+        # najednou (sekvenční sweep instrumentů, dávka po zpoždění) — outcome
+        # i closed_ts musí patřit svíčce, která úroveň zasáhla (její ts = čas
+        # na 1m TF), ne wall-clock času cyklu. Konzervativní stop-first pravidlo
+        # platí jen UVNITŘ jedné svíčky — cíl v dřívější minutě vyhrává nad
+        # stopem v pozdější. Bez barů (spot fallback) se hodnotí agregát minuty.
+        points: Sequence[Bar] = (
+            sorted(bars, key=lambda bar: bar.ts)
+            if bars
+            else [
+                Bar(
+                    ts=now,
+                    open=inputs.open,
+                    high=inputs.high,
+                    low=inputs.low,
+                    close=inputs.close,
+                    volume=0.0,
+                )
+            ]
+        )
         still_open: list[_OpenSetup] = []
         for item in self._open:
             direction = Direction(item.stored.direction)
-            favourable = (
-                inputs.high - item.stored.entry
-                if direction is Direction.LONG
-                else item.stored.entry - inputs.low
-            )
-            adverse = (
-                item.stored.entry - inputs.low
-                if direction is Direction.LONG
-                else inputs.high - item.stored.entry
-            )
-            item.mfe = max(item.mfe, favourable)
-            item.mae = max(item.mae, adverse)
+            outcome: Outcome | None = None
+            closed_ts = now
+            for point in points:
+                favourable = (
+                    point.high - item.stored.entry
+                    if direction is Direction.LONG
+                    else item.stored.entry - point.low
+                )
+                adverse = (
+                    item.stored.entry - point.low
+                    if direction is Direction.LONG
+                    else point.high - item.stored.entry
+                )
+                item.mfe = max(item.mfe, favourable)
+                item.mae = max(item.mae, adverse)
+                outcome = evaluate_bar(
+                    direction,
+                    item.stored.entry,
+                    item.stored.target,
+                    item.stored.stop,
+                    point.high,
+                    point.low,
+                )
+                if outcome is not None:
+                    closed_ts = point.ts
+                    break
 
-            outcome = evaluate_bar(
-                direction,
-                item.stored.entry,
-                item.stored.target,
-                item.stored.stop,
-                inputs.high,
-                inputs.low,
-            )
             timeout = outcome is None and minutes_left is not None and minutes_left <= 0
             if outcome is None and not timeout:
                 still_open.append(item)
@@ -190,15 +221,16 @@ class SetupEngine:
             else:
                 outcome = Outcome.TIMEOUT
                 exit_price = inputs.close
+                closed_ts = now
             result = r_result(direction, item.stored.entry, item.stored.stop, exit_price)
             # Stop kontra-setupu (#252 C): další kontra pokus téže šablony až po
             # delším cooldownu — brání žebříku ztrát (24. 7.: 4 stopy za hodinu)
             if outcome is Outcome.STOP and item.counter:
-                self._last_counter_stop[item.stored.template] = now
+                self._last_counter_stop[item.stored.template] = closed_ts
             self.repository.close(
                 item.stored.id,
                 status=outcome.value,
-                closed_ts=now,
+                closed_ts=closed_ts,
                 outcome_r=result,
                 mfe=item.mfe,
                 mae=item.mae,

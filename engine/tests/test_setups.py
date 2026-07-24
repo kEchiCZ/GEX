@@ -588,8 +588,9 @@ async def test_setup_engine_counter_stop_cooldown(tmp_path: Path) -> None:
 
     async def step(idx: int, o: float, h: float, low: float, c: float, cum: float) -> None:
         fake.last_flow = FakeFlow(cum)
-        bar = Bar(ts=TS, open=o, high=h, low=low, close=c, volume=100.0)
-        await engine.on_minute(TS + dt.timedelta(minutes=idx), c, [bar], runtime)
+        ts = TS + dt.timedelta(minutes=idx)
+        bar = Bar(ts=ts, open=o, high=h, low=low, close=c, volume=100.0)
+        await engine.on_minute(ts, c, [bar], runtime)
 
     async def quiet(idx: int) -> None:
         await step(idx, 7505, 7506, 7504, 7505, float(idx * 10))
@@ -624,3 +625,56 @@ async def test_setup_engine_counter_stop_cooldown(tmp_path: Path) -> None:
     assert len(active) == 1
     assert active[0].template == "failed_break"
     assert active[0].direction == "long"
+
+
+async def test_setup_engine_close_ts_matches_hitting_bar(tmp_path: Path) -> None:
+    """#257: closed_ts patří svíčce, která úroveň zasáhla, ne času cyklu.
+
+    Cyklus nese dávku dvou barů: první (o 7 min starší než `now`) zasáhne cíl,
+    druhý by zasáhl stop — uzavření musí být TARGET s ts prvního baru;
+    konzervativní stop-first platí jen uvnitř jedné svíčky.
+    """
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}")
+    repository = SetupsRepository(db)
+    repository.ensure_schema()
+    oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
+    oi_repo.ensure_schema()
+    publisher = RecordingPublisher()
+    fake = FakeRuntime()
+    runtime = cast(EngineRuntime, fake)
+    engine = SetupEngine(
+        symbol="ES", repository=repository, oi_repository=oi_repo, publisher=publisher
+    )
+
+    async def step(idx: int, o: float, h: float, low: float, c: float, cum: float) -> None:
+        fake.last_flow = FakeFlow(cum)
+        ts = TS + dt.timedelta(minutes=idx)
+        await engine.on_minute(
+            ts, c, [Bar(ts=ts, open=o, high=h, low=low, close=c, volume=100.0)], runtime
+        )
+
+    for i in range(30):
+        await step(i, 7505, 7506, 7504, 7505, float(i * 10))
+    await step(30, 7500, 7500, 7473, 7496, 310.0)
+    await step(31, 7496, 7502, 7495, 7501, 320.0)  # setup: entry 7501, cíl 7515, stop 7472
+    assert len(repository.active_for("ES")) == 1
+
+    # Zpožděný cyklus v now=TS+40 s dávkou barů 33 a 34
+    fake.last_flow = FakeFlow(400.0)
+    target_bar = Bar(
+        ts=TS + dt.timedelta(minutes=33), open=7501, high=7516, low=7500, close=7514, volume=100.0
+    )
+    stop_bar = Bar(
+        ts=TS + dt.timedelta(minutes=34), open=7514, high=7514, low=7470, close=7480, volume=100.0
+    )
+    await engine.on_minute(TS + dt.timedelta(minutes=40), 7480, [target_bar, stop_bar], runtime)
+
+    rows = repository.list_for("ES")
+    assert rows[0]["status"] == "closed_target"
+    assert rows[0]["outcome_r"] > 0
+    closed_ts = str(rows[0]["closed_ts"])
+    assert closed_ts.startswith("2026-07-17T15:33")
+    # MFE/MAE se akumulují jen do uzavíracího baru — propad baru 34 (low 7470)
+    # se nepočítá; MAE = entry 7501 − low 7500 uzavíracího baru
+    assert rows[0]["mae"] == pytest.approx(1.0)
+    assert rows[0]["mfe"] == pytest.approx(7516 - 7501)
