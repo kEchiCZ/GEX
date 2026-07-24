@@ -117,3 +117,18 @@ Setupy jsou kontextové pravděpodobnosti, ne předpovědi — i dobrá šablona
 55–65 % úspěšnost a smysl dává jen se stop lossem. Statistická významnost
 kalibrace přichází po týdnech dat (jednotky setupů denně). Aplikace nikdy
 neobchoduje sama.
+
+## Dodatek 2026-07-24: šablona T5 — divergenční spring (#250)
+
+Z živého případu 24. 7. 8:49 (nové low 7433.75 ve vzduchoprázdnu + CumΔ na
+maximech okna → spring +25 b), který T1 nepokryl (cena mimo zónu zdi) a T2
+chytil pozdě (čeká na reclaim).
+
+- **Kontext:** minuta udělá nové extrémum okna `spring_lookback` (90 min)
+  a close NENÍ v zóně zdi (±wall_zone — tam patří T1).
+- **Trigger LONG:** nové low okna + CumΔ ≥ maximum okna (nákupy do slabosti)
+  + close ≥ low + `spring_rejection` (1 b). SHORT zrcadlově.
+- **Cíl:** nejbližší úroveň nad/pod entry (Max Pain/flip/protilehlá zeď).
+  **Stop:** extrém ∓ `spring_stop_buffer` (2 b). Filtr RRR ≥ 1,2.
+- Startovní confidence **50 %** (bez historie); kontext (extrém, CumΔ,
+  zeď, gamma režim) do DB pro kalibraci Fáze 2.

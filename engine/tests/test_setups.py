@@ -14,6 +14,7 @@ from gexlens_engine.compute.setups import (
     Outcome,
     SetupParams,
     SetupTemplate,
+    detect_divergence_spring,
     detect_failed_break,
     detect_gamma_momentum,
     detect_max_pain_pin,
@@ -243,6 +244,105 @@ def test_max_pain_pin_requires_positioning_concentration() -> None:  # ADR-0010,
     assert strong.context["wall_dom_max"] == 0.4
     # Neznámé dominance (obě None) podmínku přeskakují
     assert detect_max_pain_pin(pin_minute(None, None), PARAMS) is not None
+
+
+# ── T5: divergenční spring (#250, živý vzor 24. 7. 8:49) ──────────
+
+
+def spring_history(**last_kwargs: object) -> list[MinuteInputs]:
+    """90 min chop 7445–7460 s rostoucí CumΔ, pak nové low mimo zónu zdi."""
+    rows = [
+        minute(
+            7450 + (5 if i % 2 else -5),
+            low=7445.0,
+            high=7460.0,
+            put_wall=7400.0,
+            call_wall=7485.0,
+            flip=None,
+            cum_delta=94_000 + i * 100,
+            idx=i,
+        )
+        for i in range(90)
+    ]
+    defaults: dict[str, object] = dict(
+        low=7433.75,
+        high=7452.0,
+        put_wall=7400.0,
+        call_wall=7485.0,
+        flip=None,
+        cum_delta=103_600.0,
+        idx=90,
+    )
+    defaults.update(last_kwargs)
+    rows.append(minute(7436.0, **defaults))  # type: ignore[arg-type]
+    return rows
+
+
+def test_divergence_spring_long_on_new_low_with_cum_max() -> None:
+    setup = detect_divergence_spring(spring_history(), PARAMS)
+    assert setup is not None
+    assert setup.template is SetupTemplate.DIVERGENCE_SPRING
+    assert setup.direction is Direction.LONG
+    assert setup.entry == 7436.0
+    assert setup.stop == pytest.approx(7433.75 - 2.0)  # low − buffer
+    assert setup.target == 7485.0  # nejbližší úroveň nad entry (call wall)
+    assert setup.context["gex_regime"] is None
+    assert "nákupy do slabosti" in setup.reason
+
+
+def test_divergence_spring_requires_divergence_and_distance() -> None:
+    # CumΔ NENÍ na maximu okna → žádný spring (jen obyčejný pokles)
+    assert detect_divergence_spring(spring_history(cum_delta=95_000.0), PARAMS) is None
+    # Nové low v zóně zdi → území T1, T5 mlčí
+    assert detect_divergence_spring(spring_history(put_wall=7435.0), PARAMS) is None
+    # Bez odmítnutí (close u low) → žádný trigger
+    history = spring_history()
+    history[-1] = minute(
+        7434.0,
+        low=7433.75,
+        high=7452.0,
+        put_wall=7400.0,
+        call_wall=7485.0,
+        flip=None,
+        cum_delta=103_600.0,
+        idx=90,
+    )
+    assert detect_divergence_spring(history, PARAMS) is None
+
+
+def test_divergence_spring_short_mirror() -> None:
+    rows = [
+        minute(
+            7450 + (5 if i % 2 else -5),
+            low=7445.0,
+            high=7460.0,
+            put_wall=7400.0,
+            call_wall=7500.0,
+            flip=None,
+            max_pain=7440.0,
+            cum_delta=-i * 100.0,
+            idx=i,
+        )
+        for i in range(90)
+    ]
+    rows.append(
+        minute(
+            7462.0,
+            low=7455.0,
+            high=7466.0,
+            put_wall=7400.0,
+            call_wall=7500.0,
+            flip=None,
+            max_pain=7440.0,
+            cum_delta=-20_000.0,
+            idx=90,
+        )
+    )
+    setup = detect_divergence_spring(rows, PARAMS)
+    assert setup is not None
+    assert setup.direction is Direction.SHORT
+    assert setup.stop == pytest.approx(7466.0 + 2.0)
+    assert setup.target == 7440.0  # Max Pain pod entry
 
 
 # ── T4: gamma momentum ─────────────────────────────────────────────
