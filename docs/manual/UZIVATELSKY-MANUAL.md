@@ -457,6 +457,15 @@ V aplikaci jsou dva flipy — **obě čáry měří totéž dvěma metodami**:
 - **LONG:** jediný spolehlivý = **reclaim flipu** — návrat nad žlutou, retest shora drží. Cíl první zelená zóna nad flipem.
 - **Ruce pryč:** od „už to spadlo hodně" longů — zesilující dealeři je přejedou.
 
+### Playbook: ráno po výprodeji (premarket squeeze)
+
+Speciální případ červeného režimu s opačným ranním chováním. Když trh **zavře výrazně níž** a přes noc otevře v negativní gammě, leží pod cenou hromada **čerstvě otevřených putů** (včerejší zajišťování — na Řetězu je poznáš podle velkých kladných ΔOI na putech pod trhem). Dealeři jsou z té masy **dlouzí gamma**: každý pokles k ní je nutí nakupovat, a tak její horní **gamma okraj funguje v premarketu jako klouzavá podpora**, která má tendenci sunout index vzhůru směrem k Max Pain.
+
+- **Nastavení:** mód **OI+OTM** (ranní OI + denní volume na OTM) + vrstva **Dyn GEX** + **kontury Major** — bílá kontura ohraničující červenou masu pod cenou je ten okraj; v projekční zóně vidíš, kam se během dne stočí.
+- **Čtení:** dokud cena drží **nad okrajem**, ranní pullbacky k němu jsou nákupní příležitosti s cílem u Max Pain / první zelené zóny. Není to směrová sázka — je to mean-reversion tažená hedgingem.
+- **Bonus naší aplikace:** **FA levels** ukazují, kam tok masu přes den stěhuje, dřív než to potvrdí ranní OI (Moodix tuhle vrstvu nemá) — 23. 7. FA předpověděl posun put zdi 7500→7475 tři hodiny předem.
+- **Neplatí, když:** cena okraj ztratí (zpět běžný červený playbook — průrazy dolů), nebo když puty pod trhem nejsou čerstvé (ΔOI ≈ 0 — stará masa už je zahedgovaná).
+
 ### Playbook: večer (crunch, poslední ~90 minut)
 
 - **Pin trade (nad flipem, cena u jasného zeleného pásu):** spot krouží ±pár bodů kolem velkého striku a každé odskočení se vrací → **fade obou směrů k tomu striku**, malé cíle, těsné stopy. Večer je brzda nejsilnější, tohle je nejspolehlivější verze fade.
