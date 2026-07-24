@@ -27,6 +27,7 @@ export const TEMPLATE_LABELS: Record<string, string> = {
   failed_break: 'Neúspěšný průraz',
   max_pain_pin: 'Max Pain pin',
   gamma_momentum: 'Gamma momentum',
+  divergence_spring: 'Divergenční spring',
 }
 
 export const STATUS_LABELS: Record<SetupRow['status'], string> = {

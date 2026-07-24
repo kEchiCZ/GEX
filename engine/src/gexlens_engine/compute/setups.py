@@ -17,6 +17,7 @@ class SetupTemplate(enum.Enum):
     FAILED_BREAK = "failed_break"
     MAX_PAIN_PIN = "max_pain_pin"
     GAMMA_MOMENTUM = "gamma_momentum"
+    DIVERGENCE_SPRING = "divergence_spring"  # T5 (#250)
 
 
 class Direction(enum.Enum):
@@ -83,6 +84,10 @@ class SetupParams:
     # Minimální dominance zdi pro T1/T3 (ADR-0010, #223): argmax existuje i nad
     # plochým profilem — pod prahem zeď netvoří koncentraci a setup nevzniká
     min_wall_dominance: float = 0.15
+    # T5 divergenční spring (#250): okno extrémů, odmítnutí a stop buffer
+    spring_lookback: int = 90
+    spring_rejection: float = 1.0
+    spring_stop_buffer: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -457,9 +462,93 @@ def detect_gamma_momentum(
     return None
 
 
+def detect_divergence_spring(
+    history: Sequence[MinuteInputs], params: SetupParams
+) -> SetupCandidate | None:
+    """T5 (#250): nové extrémum ceny × extrém CumΔ ve vzduchoprázdnu.
+
+    Živý vzor 24. 7. 8:49: nové low seance 7433.75 mimo zónu zdi, zatímco
+    CumΔ dělala maxima okna (nákupy do slabosti) → spring +25 b. Zóna zdi
+    patří T1 (odraz), tady se chytá spring bez úrovně pod cenou.
+    """
+    if len(history) < params.spring_lookback + 1:
+        return None
+    now = history[-1]
+    window = history[-(params.spring_lookback + 1) : -1]
+
+    def near_wall(wall: float | None) -> bool:
+        return wall is not None and abs(now.close - wall) <= params.wall_zone
+
+    # LONG: nové low okna + CumΔ na maximu okna + odmítnutí (close zpět nad low)
+    if (
+        now.low <= min(m.low for m in window)
+        and now.cum_delta >= max(m.cum_delta for m in window)
+        and now.close >= now.low + params.spring_rejection
+        and not near_wall(now.put_wall)
+    ):
+        entry = now.close
+        target = _nearest_level_above(entry, (now.max_pain, now.flip, now.call_wall))
+        if target is not None:
+            candidate = SetupCandidate(
+                template=SetupTemplate.DIVERGENCE_SPRING,
+                direction=Direction.LONG,
+                entry=entry,
+                target=target,
+                stop=now.low - params.spring_stop_buffer,
+                confidence=50,
+                reason=(
+                    f"Divergenční spring: nové low okna {now.low:g} mimo zónu zdi, "
+                    f"CumΔ přitom na maximu ({now.cum_delta:.0f}) — nákupy do slabosti, "
+                    f"close {now.close:g} low odmítl."
+                ),
+                context={
+                    "extreme": now.low,
+                    "cum_delta": now.cum_delta,
+                    "put_wall": now.put_wall,
+                    "gex_regime": now.gex_regime,
+                },
+            )
+            if candidate.rrr >= params.min_rrr:
+                return candidate
+
+    # SHORT zrcadlově: nové high okna + CumΔ na minimu okna + odmítnutí dolů
+    if (
+        now.high >= max(m.high for m in window)
+        and now.cum_delta <= min(m.cum_delta for m in window)
+        and now.close <= now.high - params.spring_rejection
+        and not near_wall(now.call_wall)
+    ):
+        entry = now.close
+        target = _nearest_level_below(entry, (now.max_pain, now.flip, now.put_wall))
+        if target is not None:
+            candidate = SetupCandidate(
+                template=SetupTemplate.DIVERGENCE_SPRING,
+                direction=Direction.SHORT,
+                entry=entry,
+                target=target,
+                stop=now.high + params.spring_stop_buffer,
+                confidence=50,
+                reason=(
+                    f"Divergenční spring: nové high okna {now.high:g} mimo zónu zdi, "
+                    f"CumΔ přitom na minimu ({now.cum_delta:.0f}) — prodeje do síly, "
+                    f"close {now.close:g} high odmítl."
+                ),
+                context={
+                    "extreme": now.high,
+                    "cum_delta": now.cum_delta,
+                    "call_wall": now.call_wall,
+                    "gex_regime": now.gex_regime,
+                },
+            )
+            if candidate.rrr >= params.min_rrr:
+                return candidate
+    return None
+
+
 DETECTORS = (
     detect_failed_break,  # nejsilnější kontext první (anti-spam řeší orchestrátor)
     detect_wall_bounce,
+    detect_divergence_spring,
     detect_gamma_momentum,
     detect_max_pain_pin,
 )
