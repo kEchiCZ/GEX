@@ -33,6 +33,7 @@ from gexlens_engine.ibkr.scheduler import SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
+from gexlens_engine.storage.fa_validation import FaValidationRepository, collect_fa_validation
 from gexlens_engine.storage.meta import meta_metadata, settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 
@@ -192,6 +193,8 @@ class InstrumentPipeline:
     next_runtime: EngineRuntime | None = None
     # Setup detektor (ADR-0004) — None = vypnuto
     setup_engine: SetupEngine | None = None
+    # Denní FA validace po OI archivu (#232) — None = vypnuto
+    fa_repository: FaValidationRepository | None = None
     # Hlídání tiché ztráty 5s barů (#221); default z konfigurace v __post_init__
     stall_detector: BarsStallDetector | None = None
     # Re-backfill dnešních barů po návratu streamu (#221); None = backfill nezapojen
@@ -211,6 +214,7 @@ class InstrumentPipeline:
     async def try_archive_oi(self, today: dt.date) -> bool:
         """Denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2)."""
         if today in self.oi_repository.days(self.symbol):
+            await self._run_fa_validation(today)
             return True
         contracts = self.archive_contracts or self.runtime.contracts
         try:
@@ -250,7 +254,57 @@ class InstrumentPipeline:
                 },
             )
             return False
+        await self._run_fa_validation(today)
         return True
+
+    async def _run_fa_validation(self, today: dt.date) -> None:
+        """Denní FA validace (#232): open-ratio bod za včerejší volume vs. dnešní ΔOI.
+
+        Běží po úspěšném OI archivu; selhání nesmí zabít pipeline — bod se
+        dopočítá při dalším pokusu (idempotentní dedup v tabulce fa_validation).
+        """
+        if self.fa_repository is None:
+            return
+        try:
+            records = await asyncio.to_thread(
+                collect_fa_validation,
+                self.symbol,
+                self.settings.snapshots_dir,
+                self.oi_repository,
+                self.fa_repository,
+                today,
+            )
+        except Exception:
+            logger.exception("FA validace %s selhala — zkusí se při dalším OI cyklu", self.symbol)
+            return
+        for record in records:
+            point = record.point
+            logger.info(
+                "FA validace %s %s %s→%s: open-ratio %.3f, spearman %.3f, "
+                "silent %.3f, volume %.0f, |ΔOI| %.0f",
+                self.symbol,
+                record.expiry,
+                record.day,
+                record.next_day,
+                point.open_ratio,
+                point.spearman,
+                point.silent_share,
+                point.volume_sum,
+                point.doi_abs_sum,
+            )
+            await self.publisher.publish(
+                "alerts",
+                {
+                    "kind": "fa_validation",
+                    "symbol": self.symbol,
+                    "message": (
+                        f"FA validace {self.symbol} {record.expiry} ({record.day}): "
+                        f"open-ratio {point.open_ratio:.2f}, korelace {point.spearman:.2f} "
+                        f"(α=0.4, ADR-0011)"
+                    ),
+                    "ts": dt.datetime.now(dt.UTC).timestamp(),
+                },
+            )
 
     def _current_spot(self) -> float:
         last = self.ticker.last
