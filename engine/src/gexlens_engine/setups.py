@@ -12,6 +12,7 @@ import datetime as dt
 import logging
 from collections import deque
 from dataclasses import dataclass, field
+from typing import cast
 
 from gexlens_engine.compute.setups import (
     Direction,
@@ -21,6 +22,7 @@ from gexlens_engine.compute.setups import (
     detect_all,
     evaluate_bar,
     gex_regime,
+    is_counter_regime,
     max_pain_strike,
     r_result,
 )
@@ -41,6 +43,10 @@ class _OpenSetup:
     stored: StoredSetup
     mfe: float = 0.0
     mae: float = 0.0
+    # Kontra-režimový setup (#252 C): stop spouští delší cooldown šablony.
+    # Setupy načtené z DB po restartu flag nemají (kontext se nenačítá) — žebřík
+    # ztrát se po restartu hlídá až od prvního nově vzniklého setupu.
+    counter: bool = False
 
 
 @dataclass
@@ -56,6 +62,8 @@ class SetupEngine:
         self._prev_volumes: dict[object, float] = {}
         self._open: list[_OpenSetup] = []
         self._last_created: dict[str, dt.datetime] = {}
+        # Poslední stop kontra-režimového setupu per šablona (#252 C)
+        self._last_counter_stop: dict[str, dt.datetime] = {}
         self._max_pain: float | None = None
         self._max_pain_loaded_for: tuple[str, dt.date] | None = None
         # Otevřené setupy z DB (restart enginu) — MFE/MAE pokračují od nuly
@@ -183,6 +191,10 @@ class SetupEngine:
                 outcome = Outcome.TIMEOUT
                 exit_price = inputs.close
             result = r_result(direction, item.stored.entry, item.stored.stop, exit_price)
+            # Stop kontra-setupu (#252 C): další kontra pokus téže šablony až po
+            # delším cooldownu — brání žebříku ztrát (24. 7.: 4 stopy za hodinu)
+            if outcome is Outcome.STOP and item.counter:
+                self._last_counter_stop[item.stored.template] = now
             self.repository.close(
                 item.stored.id,
                 status=outcome.value,
@@ -225,6 +237,15 @@ class SetupEngine:
             cooldown_s = self.params.cooldown_minutes * 60
             if last is not None and (now - last).total_seconds() < cooldown_s:
                 continue
+            counter = is_counter_regime(
+                candidate.direction, cast(str | None, candidate.context.get("gex_regime"))
+            )
+            # Delší cooldown po stopu v kontra-režimu (#252 C)
+            if counter:
+                last_stop = self._last_counter_stop.get(template)
+                stop_cooldown_s = self.params.counter_stop_cooldown_minutes * 60
+                if last_stop is not None and (now - last_stop).total_seconds() < stop_cooldown_s:
+                    continue
             setup_id = self.repository.create(
                 symbol=self.symbol,
                 expiry=runtime.expiry,
@@ -254,7 +275,8 @@ class SetupEngine:
                         confidence=candidate.confidence,
                         reason=candidate.reason,
                         status="active",
-                    )
+                    ),
+                    counter=counter,
                 )
             )
             open_templates.add(template)

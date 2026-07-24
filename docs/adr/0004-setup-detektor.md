@@ -132,3 +132,25 @@ chytil pozdě (čeká na reclaim).
   **Stop:** extrém ∓ `spring_stop_buffer` (2 b). Filtr RRR ≥ 1,2.
 - Startovní confidence **50 %** (bez historie); kontext (extrém, CumΔ,
   zeď, gamma režim) do DB pro kalibraci Fáze 2.
+
+## Dodatek 2026-07-24: kontra-režimový filtr B+C (#252)
+
+Z 24. 7.: NQ v negativní gammě trendově klesal a detektor do poklesu opakovaně
+fadoval LONG — 11 kontra setupů T1/T2, 9 stopů, „žebřík ztrát" (4 stopy za
+hodinu), který 10min cooldown nezastavil. Varianta A (tvrdý zákaz kontra
+obchodů) zamítnuta — připravila by o vítěze v range dnech; D (čekat na
+kalibraci Fáze 2) běží souběžně dál.
+
+- **B — konfluence toku:** kontra-režimový T1/T2 (long v negativní gammě /
+  short v pozitivní; `is_counter_regime`) vyžaduje navíc CumΔ divergenci přes
+  `counter_flow_lookback` (30 min) — fade proti gammě jen s důkazem, že se tok
+  otáčí i na delším horizontu. Krátká historie po startu = konfluenci nelze
+  ověřit → kontra setup nevzniká (konzervativně). Neznámý režim (None) není
+  kontra — stejná konvence jako u neznámé dominance (ADR-0010).
+- **C — cooldown po stopu:** stop kontra setupu spustí pro šablonu delší
+  cooldown `counter_stop_cooldown_minutes` (45 min) na další kontra pokus;
+  first-try neblokuje, obchody po směru režimu nechává být. Stav je v paměti
+  enginu — po restartu se žebřík hlídá od prvního nového setupu.
+- Kontext setupu nese `counter_regime`; potvrzená konfluence je v `reason`
+  („Kontra-režim potvrzen tokem"). Prahy: `GEXLENS_SETUP_COUNTER_FLOW_LOOKBACK`,
+  `GEXLENS_SETUP_COUNTER_STOP_COOLDOWN_MINUTES`.
