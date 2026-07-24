@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     setups_enabled: bool = True
     # Minimální dominance zdi pro šablony T1/T3 (ADR-0010, #223)
     setup_min_wall_dominance: float = Field(default=0.15, ge=0, le=1)
+    # Kontra-režimový filtr (#252 B+C): okno CumΔ konfluence pro fade proti
+    # gammě a delší cooldown šablony po stopu kontra-setupu
+    setup_counter_flow_lookback: int = Field(default=30, ge=1)
+    setup_counter_stop_cooldown_minutes: int = Field(default=45, ge=0)
     # Flow-adjusted OI odhad (ADR-0011, #222): OI_est = OI + α·čistý klasifikovaný
     # objem. α z validace open-ratio (~0,39 na čistém dni); 0 = vrstva vypnutá
     flow_oi_alpha: float = Field(default=0.4, ge=0, le=1)

@@ -88,6 +88,10 @@ class SetupParams:
     spring_lookback: int = 90
     spring_rejection: float = 1.0
     spring_stop_buffer: float = 2.0
+    # Kontra-režim (#252 B+C): fade proti gammě vyžaduje CumΔ konfluenci přes
+    # delší okno a po stopu má šablona v kontra-režimu delší cooldown
+    counter_flow_lookback: int = 30
+    counter_stop_cooldown_minutes: int = 45
 
 
 @dataclass(frozen=True)
@@ -127,6 +131,35 @@ def gex_regime(close: float, flip: float | None, total_gex: float) -> str | None
     if total_gex < 0:
         return "negative"
     return None
+
+
+def is_counter_regime(direction: Direction, regime: str | None) -> bool:
+    """Kontra-režimový obchod (#252): long v negativní gammě / short v pozitivní.
+
+    Neznámý režim (None) není kontra — přísnější podmínky se přeskakují
+    (stejná konvence jako u neznámé dominance zdí, ADR-0010).
+    """
+    return (direction is Direction.LONG and regime == "negative") or (
+        direction is Direction.SHORT and regime == "positive"
+    )
+
+
+def _counter_flow_confirmed(
+    history: Sequence[MinuteInputs], direction: Direction, params: SetupParams
+) -> bool:
+    """B (#252): kontra-režim vyžaduje CumΔ divergenci přes delší okno.
+
+    Fade proti negativní gammě je legitimní jen s důkazem, že tok se otáčí
+    i na delším horizontu (24. 7.: 11 kontra longů NQ bez této konfluence,
+    9 stopů). Krátká historie = konfluenci nelze ověřit → False.
+    """
+    if len(history) < params.counter_flow_lookback + 1:
+        return False
+    now = history[-1]
+    then = history[-1 - params.counter_flow_lookback]
+    if direction is Direction.LONG:
+        return now.cum_delta > then.cum_delta
+    return now.cum_delta < then.cum_delta
 
 
 def max_pain_strike(oi_by_strike_right: Mapping[tuple[float, str], float]) -> float | None:
@@ -197,6 +230,11 @@ def detect_wall_bounce(
             right_gamma_side = now.flip is None or now.close <= now.flip
         if not (rejected and price_into_wall and divergence):
             continue
+        # Kontra-režim (#252 B): fade proti gammě jen s CumΔ konfluencí přes
+        # delší okno — krátká divergence sama sérii ztrát nezastavila (24. 7.)
+        counter = is_counter_regime(direction, now.gex_regime)
+        if counter and not _counter_flow_confirmed(history, direction, params):
+            continue
 
         entry = now.close
         if direction is Direction.LONG:
@@ -220,6 +258,11 @@ def detect_wall_bounce(
                 f"({then.cum_delta:.0f} → {now.cum_delta:.0f}) a odmítnutí zdi "
                 f"(close {now.close:g})."
                 + ("" if right_gamma_side else " Pozor: cena na špatné straně flipu.")
+                + (
+                    f" Kontra-režim potvrzen tokem ({params.counter_flow_lookback} min)."
+                    if counter
+                    else ""
+                )
             ),
             context={
                 "wall": wall,
@@ -229,6 +272,7 @@ def detect_wall_bounce(
                 "cum_delta": now.cum_delta,
                 "right_gamma_side": right_gamma_side,
                 "gex_regime": now.gex_regime,
+                "counter_regime": counter,
             },
         )
         if candidate.rrr < params.min_rrr:
@@ -271,6 +315,10 @@ def detect_failed_break(
         )
         if not fresh_reclaim:
             continue
+        # Kontra-režim (#252 B): reclaim v negativní gammě jen s CumΔ konfluencí
+        counter = is_counter_regime(Direction.LONG, now.gex_regime)
+        if counter and not _counter_flow_confirmed(history, Direction.LONG, params):
+            continue
         extreme = min(m.low for m in after)
         entry = now.close
         target = _nearest_level_above(entry, (now.max_pain, now.flip, now.call_wall))
@@ -286,8 +334,18 @@ def detect_failed_break(
             reason=(
                 f"Neúspěšný průraz {level:g} dolů (dno {extreme:g} bez akceptace) "
                 f"a reclaim — spring."
+                + (
+                    f" Kontra-režim potvrzen tokem ({params.counter_flow_lookback} min)."
+                    if counter
+                    else ""
+                )
             ),
-            context={"level": level, "extreme": extreme, "gex_regime": now.gex_regime},
+            context={
+                "level": level,
+                "extreme": extreme,
+                "gex_regime": now.gex_regime,
+                "counter_regime": counter,
+            },
         )
 
     for level in up_levels:  # breakout nahoru → SHORT po selhání
@@ -311,6 +369,10 @@ def detect_failed_break(
         )
         if not fresh_reclaim:
             continue
+        # Kontra-režim (#252 B): upthrust v pozitivní gammě jen s CumΔ konfluencí
+        counter = is_counter_regime(Direction.SHORT, now.gex_regime)
+        if counter and not _counter_flow_confirmed(history, Direction.SHORT, params):
+            continue
         extreme = max(m.high for m in after)
         entry = now.close
         target = _nearest_level_below(entry, (now.max_pain, now.flip, now.put_wall))
@@ -326,8 +388,18 @@ def detect_failed_break(
             reason=(
                 f"Neúspěšný průraz {level:g} nahoru (vrchol {extreme:g} bez akceptace) "
                 f"a návrat — upthrust."
+                + (
+                    f" Kontra-režim potvrzen tokem ({params.counter_flow_lookback} min)."
+                    if counter
+                    else ""
+                )
             ),
-            context={"level": level, "extreme": extreme, "gex_regime": now.gex_regime},
+            context={
+                "level": level,
+                "extreme": extreme,
+                "gex_regime": now.gex_regime,
+                "counter_regime": counter,
+            },
         )
     return None
 

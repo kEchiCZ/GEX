@@ -21,6 +21,7 @@ from gexlens_engine.compute.setups import (
     detect_wall_bounce,
     evaluate_bar,
     gex_regime,
+    is_counter_regime,
     max_pain_strike,
     r_result,
 )
@@ -98,14 +99,20 @@ def test_gex_regime_from_flip_and_total_gex() -> None:
 
 
 def test_detectors_carry_gex_regime_in_context() -> None:
-    # T1 s režimem: kontext ho nese pro kalibraci Fáze 2 (#209)
-    history = [
-        minute(7512 - i, cum_delta=float(i * 10), gex_regime="negative", idx=i) for i in range(10)
+    # T1 s režimem: kontext ho nese pro kalibraci Fáze 2 (#209). Kontra-režim
+    # (long v negativní gammě) potřebuje CumΔ konfluenci přes 30 min (#252 B)
+    # → historie s rostoucí CumΔ přes celé okno
+    history = [minute(7513, cum_delta=0.0, gex_regime="negative", idx=i) for i in range(21)]
+    history += [
+        minute(7512 - i, cum_delta=float(i * 10), gex_regime="negative", idx=21 + i)
+        for i in range(10)
     ]
-    history.append(minute(7502, low=7501, cum_delta=110.0, gex_regime="negative", idx=10))
+    history.append(minute(7502, low=7501, cum_delta=110.0, gex_regime="negative", idx=31))
     setup = detect_wall_bounce(history, PARAMS)
     assert setup is not None
     assert setup.context["gex_regime"] == "negative"
+    assert setup.context["counter_regime"] is True
+    assert "Kontra-režim potvrzen tokem" in setup.reason
 
 
 # ── T1: odraz od zdi ───────────────────────────────────────────────
@@ -167,6 +174,48 @@ def test_wall_bounce_discards_low_rrr() -> None:
     assert detect_wall_bounce(history, PARAMS) is None
 
 
+# ── Kontra-režimový filtr (#252 B) ─────────────────────────────────
+
+
+def test_is_counter_regime() -> None:
+    assert is_counter_regime(Direction.LONG, "negative")
+    assert is_counter_regime(Direction.SHORT, "positive")
+    assert not is_counter_regime(Direction.LONG, "positive")
+    assert not is_counter_regime(Direction.SHORT, "negative")
+    # Neznámý režim není kontra — přísnější podmínky se přeskakují
+    assert not is_counter_regime(Direction.LONG, None)
+
+
+def test_wall_bounce_counter_regime_needs_long_flow_confluence() -> None:
+    """Long v negativní gammě (#252 B): bez CumΔ konfluence přes 30 min žádný T1."""
+
+    def history_with(warmup_cum: float, count: int = 21) -> list[MinuteInputs]:
+        rows = [
+            minute(7513, cum_delta=warmup_cum, gex_regime="negative", idx=i) for i in range(count)
+        ]
+        rows += [
+            minute(7512 - i, cum_delta=float(i * 10), gex_regime="negative", idx=count + i)
+            for i in range(10)
+        ]
+        rows.append(minute(7502, low=7501, cum_delta=110.0, gex_regime="negative", idx=count + 10))
+        return rows
+
+    # CumΔ před 30 min nad dneškem → tok se na dlouhém okně neotáčí → žádný setup
+    assert detect_wall_bounce(history_with(500.0), PARAMS) is None
+    # Krátká historie (11 min) — konfluenci nelze ověřit → konzervativně bez setupu
+    assert detect_wall_bounce(history_with(0.0, count=0), PARAMS) is None
+    # S konfluencí setup vzniká (viz test_detectors_carry_gex_regime_in_context)
+    confirmed = detect_wall_bounce(history_with(0.0), PARAMS)
+    assert confirmed is not None
+    assert confirmed.context["counter_regime"] is True
+    # Long v POZITIVNÍ gammě není kontra — projde i bez dlouhé konfluence
+    history = [minute(7512 - i, flip=7495.0, cum_delta=float(i * 10), idx=i) for i in range(10)]
+    history.append(minute(7502, low=7501, flip=7495.0, cum_delta=110.0, gex_regime="positive"))
+    with_trend = detect_wall_bounce(history, PARAMS)
+    assert with_trend is not None
+    assert with_trend.context["counter_regime"] is False
+
+
 # ── T2: neúspěšný průraz (páteční scénář 7500 → 7473 → reclaim) ────
 
 
@@ -195,6 +244,31 @@ def test_failed_breakdown_dies_on_acceptance() -> None:
         history.append(minute(7495 + i * 0.1, idx=2 + i))
     history.append(minute(7501, idx=7))
     assert detect_failed_break(history, PARAMS) is None
+
+
+def test_failed_break_counter_regime_needs_flow_confluence() -> None:
+    """Reclaim long v negativní gammě (#252 B): jen s CumΔ konfluencí přes 30 min."""
+    # Krátká historie (3 min) s kontra-režimem — konfluenci nelze ověřit → None
+    short = [
+        minute(m.close, low=m.low, cum_delta=m.cum_delta, gex_regime="negative", idx=i)
+        for i, m in enumerate(failed_break_history())
+    ]
+    assert detect_failed_break(short, PARAMS) is None
+
+    def scenario(warmup_cum: float) -> list[MinuteInputs]:
+        rows = [minute(7505, cum_delta=warmup_cum, gex_regime="negative", idx=i) for i in range(30)]
+        rows.append(minute(7496, low=7473, cum_delta=50.0, gex_regime="negative", idx=30))
+        rows.append(minute(7501, low=7495, cum_delta=100.0, gex_regime="negative", idx=31))
+        return rows
+
+    # Tok se přes 30 min otáčí nahoru → setup vzniká s příznakem kontra-režimu
+    confirmed = detect_failed_break(scenario(0.0), PARAMS)
+    assert confirmed is not None
+    assert confirmed.direction is Direction.LONG
+    assert confirmed.context["counter_regime"] is True
+    assert "Kontra-režim potvrzen tokem" in confirmed.reason
+    # CumΔ před 30 min výš než teď → bez konfluence → žádný setup
+    assert detect_failed_break(scenario(500.0), PARAMS) is None
 
 
 # ── T3: Max Pain pin ───────────────────────────────────────────────
@@ -419,15 +493,16 @@ class FakeRuntime:
         self.scheduler = FakeScheduler()
         self.last_levels = LevelsRow(TS, 7515.0, 7530.0, 7500.0, 7512.0, 100.0)
         self.last_flow = FakeFlow(0.0)
-        # Dominance zdí (ADR-0010, #223) — SetupEngine je čte z plných levels
+        # Dominance zdí (ADR-0010, #223) — SetupEngine je čte z plných levels.
+        # Nízké hodnoty potlačují T1: orchestrační testy cílí na T2 (failed_break)
         self.last_gex_levels = GexLevels(
             flip=7515.0,
             call_wall=7530.0,
             put_wall=7500.0,
             centroid=7512.0,
             total_gex=100.0,
-            call_wall_dom=0.5,
-            put_wall_dom=0.5,
+            call_wall_dom=0.05,
+            put_wall_dom=0.05,
         )
 
 
@@ -438,13 +513,23 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
     oi_repo.ensure_schema()
     publisher = RecordingPublisher()
-    runtime = cast(EngineRuntime, FakeRuntime())
+    fake = FakeRuntime()
+    runtime = cast(EngineRuntime, fake)
     engine = SetupEngine(
         symbol="ES", repository=repository, oi_repository=oi_repo, publisher=publisher
     )
 
     def bar(o: float, h: float, low: float, c: float) -> Bar:
         return Bar(ts=TS, open=o, high=h, low=low, close=c, volume=100.0)
+
+    # Kontra-režim (#252 B): reclaim long v negativní gammě (close pod flipem 7515)
+    # potřebuje CumΔ konfluenci přes 30 min → warmup s rostoucí CumΔ před scénářem
+    for i in range(30):
+        fake.last_flow = FakeFlow(float(i))
+        await engine.on_minute(
+            TS - dt.timedelta(minutes=30 - i), 7505, [bar(7505, 7506, 7504, 7505)], runtime
+        )
+    fake.last_flow = FakeFlow(100.0)
 
     # Páteční scénář: baseline → průraz 7500 s dnem 7473 → reclaim 7501 → setup LONG
     await engine.on_minute(TS, 7505, [bar(7505, 7506, 7504, 7505)], runtime)
@@ -485,3 +570,57 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     reviewed = repository.list_for("ES")[0]
     assert reviewed["user_rating"] == 1
     assert reviewed["user_note"] == "vyšlo přesně podle predikce"
+
+
+async def test_setup_engine_counter_stop_cooldown(tmp_path: Path) -> None:
+    """#252 C: stop kontra-setupu → další kontra pokus téže šablony až za 45 min."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}")
+    repository = SetupsRepository(db)
+    repository.ensure_schema()
+    oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
+    oi_repo.ensure_schema()
+    publisher = RecordingPublisher()
+    fake = FakeRuntime()
+    runtime = cast(EngineRuntime, fake)
+    engine = SetupEngine(
+        symbol="ES", repository=repository, oi_repository=oi_repo, publisher=publisher
+    )
+
+    async def step(idx: int, o: float, h: float, low: float, c: float, cum: float) -> None:
+        fake.last_flow = FakeFlow(cum)
+        bar = Bar(ts=TS, open=o, high=h, low=low, close=c, volume=100.0)
+        await engine.on_minute(TS + dt.timedelta(minutes=idx), c, [bar], runtime)
+
+    async def quiet(idx: int) -> None:
+        await step(idx, 7505, 7506, 7504, 7505, float(idx * 10))
+
+    # Warmup 30 min s rostoucí CumΔ (konfluence B nesmí blokovat — testujeme C)
+    for i in range(30):
+        await quiet(i)
+    # Průraz + reclaim → kontra long (close 7501 pod flipem 7515 = negativní gamma)
+    await step(30, 7500, 7500, 7473, 7496, 310.0)
+    await step(31, 7496, 7502, 7495, 7501, 320.0)
+    active = repository.active_for("ES")
+    assert len(active) == 1
+    assert active[0].template == "failed_break"
+    # Stop 7472 zasažen → closed_stop spouští kontra cooldown šablony
+    await step(32, 7480, 7481, 7470, 7480, 330.0)
+    assert repository.active_for("ES") == []
+
+    # Druhý průraz + reclaim 9 min po stopu → blokováno (45min kontra cooldown),
+    # přestože běžný 10min cooldown od vzniku #1 už uplynul
+    for i in range(33, 40):
+        await quiet(i)
+    await step(40, 7500, 7500, 7472, 7496, 400.0)
+    await step(41, 7496, 7502, 7495, 7501, 410.0)
+    assert repository.active_for("ES") == []
+
+    # Třetí pokus 49 min po stopu → povolen
+    for i in range(42, 80):
+        await quiet(i)
+    await step(80, 7500, 7500, 7471, 7496, 800.0)
+    await step(81, 7496, 7502, 7495, 7501, 810.0)
+    active = repository.active_for("ES")
+    assert len(active) == 1
+    assert active[0].template == "failed_break"
+    assert active[0].direction == "long"

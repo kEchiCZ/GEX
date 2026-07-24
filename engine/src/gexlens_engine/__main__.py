@@ -307,7 +307,11 @@ async def create_pipeline(
                 repository=setups_repository,
                 oi_repository=oi_repository,
                 publisher=publisher,
-                params=SetupParams(min_wall_dominance=settings.setup_min_wall_dominance),
+                params=SetupParams(
+                    min_wall_dominance=settings.setup_min_wall_dominance,
+                    counter_flow_lookback=settings.setup_counter_flow_lookback,
+                    counter_stop_cooldown_minutes=settings.setup_counter_stop_cooldown_minutes,
+                ),
             )
             if setups_repository is not None
             else None
