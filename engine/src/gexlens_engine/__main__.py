@@ -46,6 +46,7 @@ from gexlens_engine.instruments import (
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
+from gexlens_engine.storage.fa_validation import FaValidationRepository
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter
@@ -93,6 +94,7 @@ async def create_pipeline(
     symbol: str,
     setups_repository: SetupsRepository | None = None,
     pacing_guard: PacingGuard | None = None,
+    fa_repository: FaValidationRepository | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
     front = await _resolve_front_future(ib, symbol)
@@ -298,6 +300,7 @@ async def create_pipeline(
         archive_contracts=archive_contracts,
         next_runtime=next_runtime,
         backfill_today=backfill_today,
+        fa_repository=fa_repository,
         setup_engine=(
             SetupEngine(
                 symbol=symbol,
@@ -349,6 +352,9 @@ async def main() -> None:
     db = create_engine(settings.database_url)
     oi_repository = OIEodRepository(db)
     await asyncio.to_thread(oi_repository.ensure_schema)
+    # Denní FA validace (#232): body open-ratio se sbírají samy po OI archivu
+    fa_repository = FaValidationRepository(db)
+    await asyncio.to_thread(fa_repository.ensure_schema)
     watchlist_reader = WatchlistReader(db)
     await asyncio.to_thread(watchlist_reader.ensure_schema)
     # LISTEN na změny watchlistu (#207): nový symbol startuje do sekund;
@@ -428,6 +434,7 @@ async def main() -> None:
                     symbol,
                     setups_repository=setups_repository,
                     pacing_guard=pacing_guard,
+                    fa_repository=fa_repository,
                 )
             except InstrumentSetupError as exc:
                 setup_cooldown[symbol] = SETUP_RETRY_CYCLES

@@ -67,3 +67,14 @@ dnech (skript ve scratchpadu, výsledky v issue #222).
   denní reset, podlaha 0 v OI odhadu.
 - Runtime: řada levelsfa zapsána + WS kanál publikován; α=0 vrstvu vypne.
 - Frontend: bundle merge fa_ klíčů, WS append, přepínač viditelnosti.
+
+## Průběžná validace (dodatek #232)
+
+Denní validaci dělá engine sám: po úspěšném ranním OI archivu job
+(`storage/fa_validation.py`) porovná včerejší kumulativní volume řetězce
+(řez 21:00 UTC — konec trade date, counter IBKR se resetuje ve 22:00 UTC)
+s ΔOI mezi archivy, spočítá open-ratio (≈ α), Spearmanovu korelaci
+volume × |ΔOI| a podíl „tichých" změn, a bod uloží do PG tabulky
+`fa_validation` (idempotentní upsert, dedup per symbol × expirace × den).
+Výsledek jde jako informační alert `fa_validation` do zvonku. Kalibrace α
+(Fáze 2) čte body přímo z tabulky — potřeba je ~5–7 čistých obchodních dní.
