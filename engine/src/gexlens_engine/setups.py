@@ -100,12 +100,18 @@ class SetupEngine:
         return call_flow, put_flow, raw
 
     @staticmethod
-    def _minutes_to_expiry(expiry: str, now: dt.datetime) -> float | None:
+    def _settle_ts(expiry: str) -> dt.datetime | None:
         try:
             date = dt.datetime.strptime(expiry, "%Y%m%d").date()
         except ValueError:
             return None
-        settle = dt.datetime.combine(date, dt.time(SETTLE_HOUR_UTC, 0), tzinfo=dt.UTC)
+        return dt.datetime.combine(date, dt.time(SETTLE_HOUR_UTC, 0), tzinfo=dt.UTC)
+
+    @classmethod
+    def _minutes_to_expiry(cls, expiry: str, now: dt.datetime) -> float | None:
+        settle = cls._settle_ts(expiry)
+        if settle is None:
+            return None
         return (settle - now).total_seconds() / 60.0
 
     async def on_minute(
@@ -149,14 +155,13 @@ class SetupEngine:
         )
         self._history.append(inputs)
 
-        await self._evaluate_open(now, inputs, minutes_left, bars)
+        await self._evaluate_open(now, inputs, bars)
         await self._detect_new(now, runtime, inputs)
 
     async def _evaluate_open(
         self,
         now: dt.datetime,
         inputs: MinuteInputs,
-        minutes_left: float | None,
         bars: Sequence[Bar] | None = None,
     ) -> None:
         # Vyhodnocení po jednotlivých barech (#257): cyklus umí nést víc minut
@@ -182,9 +187,14 @@ class SetupEngine:
         still_open: list[_OpenSetup] = []
         for item in self._open:
             direction = Direction(item.stored.direction)
+            settle = self._settle_ts(item.stored.expiry)
             outcome: Outcome | None = None
             closed_ts = now
             for point in points:
+                # Bary po settle už setupu nepatří (#259) — jinak by dnešní
+                # svíčka mohla „zavřít" včerejší setup jeho úrovněmi
+                if settle is not None and point.ts >= settle:
+                    break
                 favourable = (
                     point.high - item.stored.entry
                     if direction is Direction.LONG
@@ -209,7 +219,10 @@ class SetupEngine:
                     closed_ts = point.ts
                     break
 
-            timeout = outcome is None and minutes_left is not None and minutes_left <= 0
+            # Timeout podle expirace SETUPU, ne runtime (#259): po restartu přes
+            # hranici expirace by čerstvá runtime expirace nechala včerejší
+            # setupy žít a vyhodnocovat se svými úrovněmi proti dnešním cenám
+            timeout = outcome is None and settle is not None and now >= settle
             if outcome is None and not timeout:
                 still_open.append(item)
                 continue

@@ -678,3 +678,45 @@ async def test_setup_engine_close_ts_matches_hitting_bar(tmp_path: Path) -> None
     # se nepočítá; MAE = entry 7501 − low 7500 uzavíracího baru
     assert rows[0]["mae"] == pytest.approx(1.0)
     assert rows[0]["mfe"] == pytest.approx(7516 - 7501)
+
+
+async def test_setup_engine_stale_setup_times_out_by_own_expiry(tmp_path: Path) -> None:
+    """#259: setup proslé expirace se po restartu uzavře timeoutem svojí expirace.
+
+    Runtime jede na čerstvé expiraci (timeout z ní by setup nechal žít) a dnešní
+    bar zasahuje jeho target — bary po settle se ale nevyhodnocují, takže výhra
+    se falešně nepřipíše.
+    """
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}")
+    repository = SetupsRepository(db)
+    repository.ensure_schema()
+    oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
+    oi_repo.ensure_schema()
+    # Včerejší setup (expirace 20260716, settle 16. 7. 20:00 UTC < TS)
+    repository.create(
+        symbol="ES",
+        expiry="20260716",
+        template="wall_bounce",
+        direction="long",
+        created_ts=TS - dt.timedelta(days=1),
+        entry=7452.0,
+        target=7540.0,
+        stop=7428.0,
+        confidence=55,
+        reason="test",
+        context={},
+    )
+    # Restart enginu: __post_init__ načte aktivní setup z DB
+    engine = SetupEngine(
+        symbol="ES",
+        repository=repository,
+        oi_repository=oi_repo,
+        publisher=RecordingPublisher(),
+    )
+    runtime = cast(EngineRuntime, FakeRuntime())
+    bar = Bar(ts=TS, open=7538.0, high=7545.0, low=7538.0, close=7460.0, volume=100.0)
+    await engine.on_minute(TS, 7460, [bar], runtime)
+
+    rows = repository.list_for("ES")
+    assert rows[0]["status"] == "closed_timeout"  # ne closed_target z dnešního high
+    assert rows[0]["outcome_r"] == pytest.approx((7460 - 7452) / 24, rel=1e-3)
