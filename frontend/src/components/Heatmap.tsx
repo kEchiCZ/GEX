@@ -412,30 +412,37 @@ export function Heatmap({
       context.setLineDash([])
     }
 
-    // Horizontální projekce úrovní přes celou šířku s cenovkou (Moodix styl).
+    // Horizontální projekce úrovní přes celou šířku s popiskem (Moodix styl).
     // Jen pojmenované úrovně (flip/walls/centroid/max pain) — počítané walls řady ne.
+    // Popisek bez podkladového obdélníku: hodnota NAD čarou v barvě čáry.
+    // Max Pain je plnou čarou s textem „Max Pain" vpravo před osou Y.
     context.font = 'bold 10px sans-serif'
     for (const line of levelLines) {
       if (line.name.startsWith('walls:')) continue
       const value = lastLevelValue(line.series)
       const row = value === null ? null : fractionalRow(grid.strikes, value)
       if (value === null || row === null) continue
+      const isMaxPain = line.name === 'max_pain'
       const y = rowToY(row)
-      context.strokeStyle = line.color || LEVEL_DEFAULT_COLOR
+      const color = line.color || LEVEL_DEFAULT_COLOR
+      context.strokeStyle = color
       context.lineWidth = 1
-      context.setLineDash([6, 5])
+      if (!isMaxPain) context.setLineDash([6, 5])
       context.beginPath()
       context.moveTo(0, y)
       context.lineTo(logicalW, y)
       context.stroke()
       context.setLineDash([])
-      // Cenovka zdi nese aktuální dominanci (ADR-0010, #223)
-      const label = formatLevel(value) + (line.labelSuffix ?? '')
-      const width = measuredWidth(context, label) + 8
-      context.fillStyle = line.color || LEVEL_DEFAULT_COLOR
-      context.fillRect(46, y - 8, width, 15)
-      context.fillStyle = '#12151c'
-      context.fillText(label, 50, y + 4)
+      // Popisek zdi nese aktuální dominanci (ADR-0010, #223)
+      const label = isMaxPain
+        ? `Max Pain ${formatLevel(value)}`
+        : formatLevel(value) + (line.labelSuffix ?? '')
+      context.fillStyle = color
+      if (isMaxPain) {
+        context.fillText(label, logicalW - measuredWidth(context, label) - 6, y - 4)
+      } else {
+        context.fillText(label, 50, y - 4)
+      }
     }
     context.font = '11px sans-serif'
 
