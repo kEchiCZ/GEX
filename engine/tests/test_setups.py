@@ -13,8 +13,10 @@ from gexlens_engine.compute.setups import (
     Direction,
     MinuteInputs,
     Outcome,
+    SetupCandidate,
     SetupParams,
     SetupTemplate,
+    average_true_range,
     detect_all,
     detect_divergence_spring,
     detect_failed_break,
@@ -25,6 +27,7 @@ from gexlens_engine.compute.setups import (
     gex_regime,
     is_counter_regime,
     max_pain_strike,
+    normalize_candidate,
     r_result,
 )
 from gexlens_engine.ibkr.underlying import Bar
@@ -170,10 +173,100 @@ def test_wall_bounce_requires_wall_dominance() -> None:  # ADR-0010, #223
 
 
 def test_wall_bounce_discards_low_rrr() -> None:
-    # Cíl (flip) těsně nad entry → RRR < 1.2 → žádný setup
-    history = [minute(7512 - i, flip=7503.5, cum_delta=float(i * 10), idx=i) for i in range(10)]
-    history.append(minute(7502, low=7501, flip=7503.5, cum_delta=110.0, idx=10))
-    assert detect_wall_bounce(history, PARAMS) is None
+    # Cíl (flip) těsně nad entry → RRR < 1.2. Od #302 RRR neřeší jednotlivé
+    # šablony (zapomínalo se na to), ale jednotná normalizace v detect_all —
+    # čistý detektor kandidáta vrátí, pipeline ho zahodí.
+    # 20 minut historie kvůli ATR(14); pokles po 0,5 b, aby close před 10 min
+    # zůstal nad entry (podmínka „cena do zdi")
+    history = [
+        minute(7512 - i * 0.5, flip=7503.5, cum_delta=float(i * 10), idx=i) for i in range(20)
+    ]
+    history.append(minute(7502, low=7501, flip=7503.5, cum_delta=210.0, idx=20))
+    candidate = detect_wall_bounce(history, PARAMS)
+    assert candidate is not None
+    assert candidate.rrr < PARAMS.min_rrr
+    assert SetupTemplate.WALL_BOUNCE not in {c.template for c in detect_all(history, PARAMS)}
+
+
+# ── R-mechanika (#302) ─────────────────────────────────────────────
+
+
+def test_average_true_range() -> None:
+    # Bary s rozpětím 2 b a nulovou mezerou → ATR = 2; krátká historie = None
+    history = [minute(7500, low=7499, high=7501, idx=i) for i in range(15)]
+    assert average_true_range(history, 14) == pytest.approx(2.0)
+    assert average_true_range(history[:5], 14) is None
+    # Nulová volatilita se nedá použít jako měřítko
+    assert average_true_range([minute(7500, idx=i) for i in range(15)], 14) is None
+
+
+def _candidate(entry: float, target: float, stop: float, direction: Direction) -> SetupCandidate:
+    return SetupCandidate(
+        template=SetupTemplate.WALL_BOUNCE,
+        direction=direction,
+        entry=entry,
+        target=target,
+        stop=stop,
+        confidence=55,
+        reason="test",
+    )
+
+
+def test_normalize_widens_noise_level_stop() -> None:
+    """Stop těsnější než min_risk_atr × ATR se rozšíří — risk musí přežít šum."""
+    # ATR 10 → minimum 20 b; šablona chtěla stop 4 b (vzor NQ T5 z 27. 7.)
+    candidate = _candidate(28650.0, 28450.0, 28654.0, Direction.SHORT)
+    normalized = normalize_candidate(candidate, 10.0, PARAMS)
+    assert normalized is not None
+    assert normalized.risk == pytest.approx(20.0)
+    assert normalized.stop == pytest.approx(28670.0)
+    assert normalized.context["atr"] == 10.0
+    # Zrcadlově long
+    long_norm = normalize_candidate(
+        _candidate(28650.0, 28850.0, 28646.0, Direction.LONG), 10.0, PARAMS
+    )
+    assert long_norm is not None
+    assert long_norm.stop == pytest.approx(28630.0)
+
+
+def test_normalize_caps_unreachable_target() -> None:
+    """Cíl dál než max_rr × risk se zkrátí na částečný — jinak vždy vyhraje stop."""
+    # Vzor NQ failed_break z 27. 7.: cíl 511 b daleko proti stopu 20 b (RRR 25)
+    candidate = _candidate(28650.0, 28139.0, 28670.0, Direction.SHORT)
+    normalized = normalize_candidate(candidate, 5.0, PARAMS)
+    assert normalized is not None
+    assert normalized.risk == pytest.approx(20.0)  # ATR floor nezasáhl
+    assert normalized.target == pytest.approx(28650.0 - 3.0 * 20.0)
+    assert normalized.rrr == pytest.approx(PARAMS.max_rr)
+
+
+def test_normalize_keeps_reachable_target_and_rejects_low_rrr() -> None:
+    # Blízký cíl se nechává být…
+    normalized = normalize_candidate(
+        _candidate(7500.0, 7530.0, 7490.0, Direction.LONG), 2.0, PARAMS
+    )
+    assert normalized is not None
+    assert normalized.target == 7530.0
+    assert normalized.stop == 7490.0
+    # …ale pod min_rrr setup nevzniká (dřív kontrolovaly jen T1 a T5)
+    assert (
+        normalize_candidate(_candidate(7500.0, 7505.0, 7490.0, Direction.LONG), 2.0, PARAMS) is None
+    )
+
+
+def test_normalize_rejects_target_swallowed_by_widened_stop() -> None:
+    """Rozšířený stop může cíl přeskočit → záporné RRR, setup nesmí vzniknout."""
+    assert (
+        normalize_candidate(_candidate(7500.0, 7500.5, 7499.5, Direction.LONG), 50.0, PARAMS)
+        is None
+    )
+
+
+def test_detect_all_requires_measurable_atr() -> None:
+    """Bez ATR (krátká historie po startu) se risk nedá ověřit → žádné setupy."""
+    history = [minute(7512 - i, cum_delta=float(i * 10), idx=i) for i in range(10)]
+    history.append(minute(7502, low=7501, cum_delta=110.0, idx=10))
+    assert detect_all(history, PARAMS) == []
 
 
 # ── Kontra-režimový filtr (#252 B) ─────────────────────────────────
@@ -289,7 +382,9 @@ def test_max_pain_pin_short_above() -> None:
     assert setup is not None
     assert setup.direction is Direction.SHORT
     assert setup.target == 7510
-    assert setup.stop == pytest.approx(7535)  # 1.5 × 10 nad entry
+    # #302: stop = pin_stop_ratio × vzdálenost (dřív 1,5× → RRR 0,67)
+    assert setup.stop == pytest.approx(7527.5)  # 0.75 × 10 nad entry
+    assert setup.rrr == pytest.approx(1 / PARAMS.pin_stop_ratio)
 
 
 def test_max_pain_pin_requires_distance_and_time() -> None:
@@ -546,10 +641,12 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
         )
     fake.last_flow = FakeFlow(100.0)
 
-    # Páteční scénář: baseline → průraz 7500 s dnem 7473 → reclaim 7501 → setup LONG
+    # Páteční scénář: baseline → průraz 7500 s dnem 7494 → reclaim 7501 → setup LONG.
+    # Dno je mělké schválně (#302): hlubší průraz by dal risk 29 b proti cíli 14 b
+    # (RRR 0,48) a normalizace by setup zahodila — přesně ta vada, kterou #302 řeší.
     await engine.on_minute(TS, 7505, [bar(7505, 7506, 7504, 7505)], runtime)
     await engine.on_minute(
-        TS + dt.timedelta(minutes=1), 7496, [bar(7500, 7500, 7473, 7496)], runtime
+        TS + dt.timedelta(minutes=1), 7496, [bar(7500, 7500, 7494, 7496)], runtime
     )
     await engine.on_minute(
         TS + dt.timedelta(minutes=2), 7501, [bar(7496, 7502, 7495, 7501)], runtime
@@ -559,7 +656,7 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     assert len(active) == 1
     assert active[0].template == "failed_break"
     assert active[0].direction == "long"
-    assert active[0].stop == 7472
+    assert active[0].stop == 7493  # dno 7494 − 1
 
     created_alerts = [d for ch, d in publisher.messages if ch == "alerts"]
     assert any("Nový setup LONG" in str(a["message"]) for a in created_alerts)
@@ -577,7 +674,7 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     assert any(a.get("event") == "closed" and "uzavřen" in str(a["message"]) for a in closed_alerts)
     rows = repository.list_for("ES")
     assert rows[0]["status"] == "closed_target"
-    assert rows[0]["outcome_r"] == pytest.approx(14 / 29, rel=1e-3)
+    assert rows[0]["outcome_r"] == pytest.approx(14 / 8, rel=1e-3)  # cíl 7515, risk 8 b
     assert rows[0]["mfe"] >= 14
 
     # Ruční hodnocení (jediná mutace po uzavření)
@@ -613,13 +710,14 @@ async def test_setup_engine_counter_stop_cooldown(tmp_path: Path) -> None:
     # Warmup 30 min s rostoucí CumΔ (konfluence B nesmí blokovat — testujeme C)
     for i in range(30):
         await quiet(i)
-    # Průraz + reclaim → kontra long (close 7501 pod flipem 7515 = negativní gamma)
-    await step(30, 7500, 7500, 7473, 7496, 310.0)
+    # Průraz + reclaim → kontra long (close 7501 pod flipem 7515 = negativní gamma).
+    # Mělká dna (#302): hlubší průraz by neprošel RRR filtrem normalizace
+    await step(30, 7500, 7500, 7494, 7496, 310.0)
     await step(31, 7496, 7502, 7495, 7501, 320.0)
     active = repository.active_for("ES")
     assert len(active) == 1
     assert active[0].template == "failed_break"
-    # Stop 7472 zasažen → closed_stop spouští kontra cooldown šablony
+    # Stop 7493 zasažen → closed_stop spouští kontra cooldown šablony
     await step(32, 7480, 7481, 7470, 7480, 330.0)
     assert repository.active_for("ES") == []
 
@@ -627,14 +725,14 @@ async def test_setup_engine_counter_stop_cooldown(tmp_path: Path) -> None:
     # přestože běžný 10min cooldown od vzniku #1 už uplynul
     for i in range(33, 40):
         await quiet(i)
-    await step(40, 7500, 7500, 7472, 7496, 400.0)
+    await step(40, 7500, 7500, 7494, 7496, 400.0)
     await step(41, 7496, 7502, 7495, 7501, 410.0)
     assert repository.active_for("ES") == []
 
     # Třetí pokus 49 min po stopu → povolen
     for i in range(42, 80):
         await quiet(i)
-    await step(80, 7500, 7500, 7471, 7496, 800.0)
+    await step(80, 7500, 7500, 7494, 7496, 800.0)
     await step(81, 7496, 7502, 7495, 7501, 810.0)
     active = repository.active_for("ES")
     assert len(active) == 1
@@ -670,8 +768,8 @@ async def test_setup_engine_close_ts_matches_hitting_bar(tmp_path: Path) -> None
 
     for i in range(30):
         await step(i, 7505, 7506, 7504, 7505, float(i * 10))
-    await step(30, 7500, 7500, 7473, 7496, 310.0)
-    await step(31, 7496, 7502, 7495, 7501, 320.0)  # setup: entry 7501, cíl 7515, stop 7472
+    await step(30, 7500, 7500, 7494, 7496, 310.0)
+    await step(31, 7496, 7502, 7495, 7501, 320.0)  # setup: entry 7501, cíl 7515, stop 7493
     assert len(repository.active_for("ES")) == 1
 
     # Zpožděný cyklus v now=TS+40 s dávkou barů 33 a 34
@@ -693,6 +791,74 @@ async def test_setup_engine_close_ts_matches_hitting_bar(tmp_path: Path) -> None
     # se nepočítá; MAE = entry 7501 − low 7500 uzavíracího baru
     assert rows[0]["mae"] == pytest.approx(1.0)
     assert rows[0]["mfe"] == pytest.approx(7516 - 7501)
+
+
+async def test_setup_engine_blocks_direction_after_stop_streak(tmp_path: Path) -> None:
+    """#302: série stopů v jednom směru zablokuje směr napříč šablonami.
+
+    27. 7. vystřelil detektor 20 shortů za sebou proti stoupajícímu NQ —
+    per-šablonový anti-spam se dal obejít prokládáním šablon.
+    """
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}")
+    repository = SetupsRepository(db)
+    repository.ensure_schema()
+    oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
+    oi_repo.ensure_schema()
+    fake = FakeRuntime()
+    runtime = cast(EngineRuntime, fake)
+    engine = SetupEngine(
+        symbol="ES",
+        repository=repository,
+        oi_repository=oi_repo,
+        publisher=RecordingPublisher(),
+        # Kontra cooldown vypnutý — testujeme čistě blokaci směru
+        params=SetupParams(counter_stop_cooldown_minutes=0),
+    )
+
+    async def step(idx: int, o: float, h: float, low: float, c: float, cum: float) -> None:
+        fake.last_flow = FakeFlow(cum)
+        ts = TS + dt.timedelta(minutes=idx)
+        await engine.on_minute(
+            ts, c, [Bar(ts=ts, open=o, high=h, low=low, close=c, volume=100.0)], runtime
+        )
+
+    idx = 0
+    for _ in range(30):  # warmup (ATR + konfluence CumΔ)
+        await step(idx, 7505, 7506, 7504, 7505, float(idx * 10))
+        idx += 1
+
+    # Tři cykly průraz → reclaim → stop; každý = jeden long stop
+    for attempt in range(3):
+        await step(idx, 7500, 7500, 7494, 7496, float(idx * 10))
+        idx += 1
+        await step(idx, 7496, 7502, 7495, 7501, float(idx * 10))
+        idx += 1
+        assert len(repository.active_for("ES")) == 1, f"pokus {attempt} nevznikl"
+        await step(idx, 7495, 7496, 7490, 7492, float(idx * 10))  # stop 7493
+        idx += 1
+        assert repository.active_for("ES") == []
+        # 16 klidných minut: uplyne cooldown šablony a předchozí stop bar
+        # vypadne z reclaim okna (jinak by z něj vzniklo hlubší dno a nižší RRR)
+        for _ in range(16):
+            await step(idx, 7505, 7506, 7504, 7505, float(idx * 10))
+            idx += 1
+
+    stopped = [r for r in repository.list_for("ES") if r["status"] == "closed_stop"]
+    assert len(stopped) == 3
+
+    # Čtvrtý pokus se stejným vzorem → směr long je zablokovaný
+    await step(idx, 7500, 7500, 7494, 7496, float(idx * 10))
+    idx += 1
+    await step(idx, 7496, 7502, 7495, 7501, float(idx * 10))
+    idx += 1
+    assert repository.active_for("ES") == []
+
+    # Po uplynutí blokace (90 min) tentýž vzor projde
+    idx += 95
+    await step(idx, 7500, 7500, 7494, 7496, float(idx * 10))
+    idx += 1
+    await step(idx, 7496, 7502, 7495, 7501, float(idx * 10))
+    assert len(repository.active_for("ES")) == 1
 
 
 async def test_setup_engine_stale_setup_times_out_by_own_expiry(tmp_path: Path) -> None:

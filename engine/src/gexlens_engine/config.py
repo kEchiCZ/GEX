@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     # Vypnuté šablony (#303): čárkami oddělené kódy; prázdné = běží všechny.
     # T5 divergence_spring je default vypnutá (8,7 % úspěšnost, Ø −0,69R)
     setup_disabled_templates: str = "divergence_spring"
+    # R-mechanika setupů (#302): minimální risk v násobcích ATR (stop pod ním je
+    # v minutovém šumu) a strop vzdálenosti cíle v násobcích risku (dál = cíl
+    # nedosažitelný, vždy se trefí dřív stop)
+    setup_min_risk_atr: float = Field(default=2.0, gt=0)
+    setup_max_rr: float = Field(default=3.0, gt=0)
+    # Strop pokusů per směr: po N stopech v řadě se směr na X minut zablokuje
+    setup_max_stops_per_direction: int = Field(default=3, ge=1)
+    setup_direction_block_minutes: int = Field(default=90, ge=0)
     # Flow-adjusted OI odhad (ADR-0011, #222): OI_est = OI + α·čistý klasifikovaný
     # objem. α z validace open-ratio (~0,39 na čistém dni); 0 = vrstva vypnutá
     flow_oi_alpha: float = Field(default=0.4, ge=0, le=1)

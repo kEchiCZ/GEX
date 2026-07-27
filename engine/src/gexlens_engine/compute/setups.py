@@ -9,7 +9,7 @@ zdůvodněním. Žádné I/O — orchestraci (stav, DB, alerty) dělá
 import datetime as dt
 import enum
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 
 class SetupTemplate(enum.Enum):
@@ -69,12 +69,28 @@ class SetupParams:
     rejection_min: float = 1.0
     divergence_lookback: int = 10
     min_rrr: float = 1.2
+    # R-mechanika (#302) — jednotná pro všechny šablony, aplikuje se v `detect_all`.
+    # Prahy jsou v násobcích ATR, ne v absolutních bodech: ATR(14) 1min je
+    # medián 1,57 b na ES vs. 11,52 b na NQ (měřeno 20.–27. 7.), takže sdílený
+    # absolutní buffer dává na každém instrumentu jinak velký risk.
+    atr_lookback: int = 14
+    # Stop těsnější než min_risk_atr × ATR je uvnitř minutového šumu — rozšíří
+    # se na minimum (NQ T5 měla Ø risk 0,86 × ATR, setupy padaly do minuty)
+    min_risk_atr: float = 2.0
+    # Cíl dál než max_rr × risk je nedosažitelný: cíl = nejbližší úroveň, a když
+    # jsou všechny daleko, vzniklo RRR 16–42 (NQ) a vždy se trefil dřív stop.
+    # Nad tímto stropem se bere částečný cíl na max_rr × risk.
+    max_rr: float = 3.0
     break_min: float = 3.0
     acceptance_minutes: int = 5
     reclaim_window: int = 15
     reclaim_min: float = 1.0
     pin_max_minutes: float = 180.0
     pin_min_distance: float = 8.0
+    # T3 (#302): stop jako podíl vzdálenosti k Max Pain. Původních 1,5×
+    # riskovalo víc, než byl cíl hoden (RRR 0,7) — pin je vyvrácený, když se
+    # cena o takový podíl vzdálí špatným směrem.
+    pin_stop_ratio: float = 0.75
     pin_stability: float = 5.0
     pin_stability_lookback: int = 60
     momentum_break: float = 2.0
@@ -92,6 +108,12 @@ class SetupParams:
     # delší okno a po stopu má šablona v kontra-režimu delší cooldown
     counter_flow_lookback: int = 30
     counter_stop_cooldown_minutes: int = 45
+    # Strop pokusů per směr (#302): anti-spam je per šablona, takže se šablony
+    # prokládaly a vznikl shortovací automat (27. 7.: 20 shortů za sebou proti
+    # stoupajícímu NQ). Po N stopech v řadě v jednom směru se směr zablokuje;
+    # počítadlo maže až výhra v tom směru, takže po sérii jde 1 pokus za okno.
+    max_stops_per_direction: int = 3
+    direction_block_minutes: int = 90
     # Vypnuté šablony (#303): kandidát vznikne, ale zahodí se v `detect_all`.
     # T5 divergence_spring má 8,7 % úspěšnost a Ø −0,69R za 23 setupů — vznikla
     # z jediného živého případu (24. 7.), edge nepotvrdila. Kód zůstává, aby
@@ -187,6 +209,68 @@ def max_pain_strike(oi_by_strike_right: Mapping[tuple[float, str], float]) -> fl
     return best
 
 
+def average_true_range(history: Sequence[MinuteInputs], lookback: int) -> float | None:
+    """ATR minutových barů (#302); None = krátká historie nebo nulová volatilita.
+
+    Měřítko volatility instrumentu — prahy risku se od něj odvozují, aby
+    platily pro ES i NQ zároveň (ATR 1min medián 1,57 vs. 11,52 bodu).
+    """
+    if lookback < 1 or len(history) < lookback + 1:
+        return None
+    window = history[-lookback:]
+    previous = history[-lookback - 1 : -1]
+    total = 0.0
+    for now, prev in zip(window, previous, strict=True):
+        total += max(
+            now.high - now.low,
+            abs(now.high - prev.close),
+            abs(now.low - prev.close),
+        )
+    atr = total / lookback
+    return atr if atr > 0 else None
+
+
+def normalize_candidate(
+    candidate: SetupCandidate, atr: float, params: SetupParams
+) -> SetupCandidate | None:
+    """Sjednocená R-mechanika (#302) — jediné místo, kde se rozhoduje o risku a cíli.
+
+    1. Stop těsnější než `min_risk_atr` × ATR se rozšíří na minimum: risk musí
+       přežít minutový šum, ne lichotit R metrice.
+    2. Cíl dál než `max_rr` × risk se zkrátí na částečný cíl — premisa šablony
+       zůstává, ale cíl je dosažitelný.
+    3. Teprve pak se kontroluje `min_rrr`.
+
+    Záměrně mimo jednotlivé šablony: dřív kontrolovaly RRR jen T1 a T5,
+    zbytek na to zapomněl (T3 pouštěla setupy s RRR 0,7).
+    """
+    entry = candidate.entry
+    long = candidate.direction is Direction.LONG
+    sign = 1.0 if long else -1.0
+
+    risk = max(candidate.risk, params.min_risk_atr * atr)
+    if risk <= 0:
+        return None
+    stop = entry - sign * risk
+
+    capped = entry + sign * params.max_rr * risk
+    target = min(candidate.target, capped) if long else max(candidate.target, capped)
+    # Cíl musí zůstat na správné straně entry (úroveň mohla být příliš blízko
+    # a rozšířený stop ji přeskočil) — jinak by RRR bylo záporné
+    if (long and target <= entry) or (not long and target >= entry):
+        return None
+
+    normalized = replace(
+        candidate,
+        stop=stop,
+        target=target,
+        context={**candidate.context, "atr": atr, "risk": risk},
+    )
+    if normalized.rrr < params.min_rrr:
+        return None
+    return normalized
+
+
 def _nearest_level_above(entry: float, candidates: Sequence[float | None]) -> float | None:
     values = [value for value in candidates if value is not None and value > entry]
     return min(values) if values else None
@@ -250,7 +334,7 @@ def detect_wall_bounce(
             continue
         buffer = max(3.0, 0.25 * abs(target - entry))
         stop = wall - buffer if direction is Direction.LONG else wall + buffer
-        candidate = SetupCandidate(
+        return SetupCandidate(
             template=SetupTemplate.WALL_BOUNCE,
             direction=direction,
             entry=entry,
@@ -280,9 +364,6 @@ def detect_wall_bounce(
                 "counter_regime": counter,
             },
         )
-        if candidate.rrr < params.min_rrr:
-            continue
-        return candidate
     return None
 
 
@@ -440,10 +521,10 @@ def detect_max_pain_pin(
     direction = Direction.LONG if distance < 0 else Direction.SHORT
     entry = now.close
     target = now.max_pain
-    if direction is Direction.LONG:
-        stop = entry - 1.5 * abs(distance)
-    else:
-        stop = entry + 1.5 * abs(distance)
+    # Pin je vyvrácený, když se cena o `pin_stop_ratio` vzdálenosti vzdálí
+    # opačným směrem (#302) — původní 1,5× riskovalo víc, než byl cíl hoden
+    offset = params.pin_stop_ratio * abs(distance)
+    stop = entry - offset if direction is Direction.LONG else entry + offset
     return SetupCandidate(
         template=SetupTemplate.MAX_PAIN_PIN,
         direction=direction,
@@ -566,7 +647,7 @@ def detect_divergence_spring(
         entry = now.close
         target = _nearest_level_above(entry, (now.max_pain, now.flip, now.call_wall))
         if target is not None:
-            candidate = SetupCandidate(
+            return SetupCandidate(
                 template=SetupTemplate.DIVERGENCE_SPRING,
                 direction=Direction.LONG,
                 entry=entry,
@@ -585,8 +666,6 @@ def detect_divergence_spring(
                     "gex_regime": now.gex_regime,
                 },
             )
-            if candidate.rrr >= params.min_rrr:
-                return candidate
 
     # SHORT zrcadlově: nové high okna + CumΔ na minimu okna + odmítnutí dolů
     if (
@@ -598,7 +677,7 @@ def detect_divergence_spring(
         entry = now.close
         target = _nearest_level_below(entry, (now.max_pain, now.flip, now.put_wall))
         if target is not None:
-            candidate = SetupCandidate(
+            return SetupCandidate(
                 template=SetupTemplate.DIVERGENCE_SPRING,
                 direction=Direction.SHORT,
                 entry=entry,
@@ -617,8 +696,6 @@ def detect_divergence_spring(
                     "gex_regime": now.gex_regime,
                 },
             )
-            if candidate.rrr >= params.min_rrr:
-                return candidate
     return None
 
 
@@ -632,7 +709,15 @@ DETECTORS = (
 
 
 def detect_all(history: Sequence[MinuteInputs], params: SetupParams) -> list[SetupCandidate]:
-    """Vyhodnotí povolené šablony nad aktuální minutou (bez stavového anti-spamu)."""
+    """Vyhodnotí povolené šablony nad aktuální minutou (bez stavového anti-spamu).
+
+    Každý kandidát projde jednotnou R-mechanikou (#302). Bez měřitelného ATR
+    (krátká historie po startu, nulová volatilita) nelze risk ověřit → setup
+    nevzniká; stejná konzervativní konvence jako u kontra-režimu (#252 B).
+    """
+    atr = average_true_range(history, params.atr_lookback)
+    if atr is None:
+        return []
     results = []
     for detector in DETECTORS:
         candidate = detector(history, params)
@@ -640,7 +725,10 @@ def detect_all(history: Sequence[MinuteInputs], params: SetupParams) -> list[Set
             continue
         if candidate.template.value in params.disabled_templates:
             continue
-        results.append(candidate)
+        normalized = normalize_candidate(candidate, atr, params)
+        if normalized is None:
+            continue
+        results.append(normalized)
     return results
 
 
