@@ -99,6 +99,15 @@ class Settings(BaseSettings):
     repair_max_attempts: int = Field(default=3, ge=1)
     # Kapacita market data lines účtu (ADR-0001: naměřeno ≥ 150; default konzervativní)
     market_data_lines: int = Field(default=100, ge=1)
+    # Maximální stáří kotace použitelné pro výpočty (#306). Zmrzlá cache se
+    # nesmí započítat do GEX, úrovní ani Dyn GEX profilu — 27. 7. servírovala
+    # 15 h staré ATM Greeks a zdi/flip/Max Pain se z nich celý den počítaly.
+    # Řádek snapshotu se zapíše dál, ale se skutečným stářím (ne sentinelem),
+    # aby bylo zpětně poznat, co bylo čerstvé.
+    quote_max_age_s: float = Field(default=900.0, gt=0)
+    # Alert greeks_stalled: podíl stale kontraktů nad prahem po N sweepech
+    greeks_stall_share: float = Field(default=0.1, gt=0, le=1)
+    greeks_stall_cycles: int = Field(default=3, ge=1)
 
     # Tichá ztráta 5s barů (#221): alert po N minutách bez baru při živém spotu
     bars_stall_alert_minutes: int = Field(default=3, ge=1)

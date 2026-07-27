@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockQuoteStreamer
-from gexlens_engine.ibkr.scheduler import SubscriptionScheduler
+from gexlens_engine.ibkr.scheduler import QuoteSnapshot, SubscriptionScheduler
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
@@ -295,3 +295,76 @@ async def test_second_cycle_appends_and_accumulates(
     assert len(snapshots) == 12  # dvě minuty × 6 kontraktů
     levels = pd.read_parquet(settings.derived_dir / "ES" / "20260716" / "levels" / f"{day}.parquet")
     assert len(levels) == 2
+
+
+class PartialStreamer(MockQuoteStreamer):
+    """Mock, kterému lze za běhu „zabít" konkrétní striky (simulace mrtvých Greeks)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dead: set[float] = set()
+
+    async def fetch_quote(self, spec: OptionContractSpec, timeout_s: float) -> QuoteSnapshot | None:
+        if spec.strike in self.dead:
+            return None
+        return await super().fetch_quote(spec, timeout_s)
+
+
+async def test_expired_quote_stays_in_snapshot_but_leaves_computations(tmp_path: Path) -> None:
+    """#306: zmrzlá kotace se zapíše se svým stářím, ale nesmí do GEX ani úrovní.
+
+    27. 7. servírovala cache 15 h staré ATM Greeks a zdi, flip i Max Pain se z nich
+    celý den počítaly, aniž by to šlo poznat. Chybějící strike je poctivější.
+    """
+    settings = Settings(data_dir=tmp_path / "data", quote_max_age_s=60.0)
+    specs = contracts()
+    repository = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}"))
+    repository.ensure_schema()
+    # Asymetrické OI, ať je NetGEX nenulový a výpadek strike se v něm projeví
+    repository.upsert_many(
+        [
+            OIRecord(
+                "ES", "20260716", s.strike, s.right, TS.date(), 1000.0 if s.right == "C" else 300.0
+            )
+            for s in specs
+        ]
+    )
+    streamer = PartialStreamer()
+    scheduler = SubscriptionScheduler(streamer, settings)
+    engine_runtime = EngineRuntime(
+        settings=settings,
+        scheduler=scheduler,
+        writer=SnapshotWriter(settings),
+        oi_repository=repository,
+        publisher=RecordingPublisher(),
+        symbol="ES",
+        expiry="20260716",
+        multiplier=50.0,
+        contracts=specs,
+    )
+    await engine_runtime.run_cycle(TS, SPOT, [])
+
+    # TWS přestane pro strike 7600 dodávat Greeks; cache drží poslední kotaci,
+    # která mezitím zestárne hodinu (vzor 27. 7. — 15 h zmrzlé ATM striky)
+    streamer.dead = {7600.0}
+    for spec in (s for s in specs if s.strike == 7600.0):
+        cached = scheduler.quote(spec)
+        assert cached is not None
+        cached.updated_at -= 3600.0
+
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=1), SPOT, [])
+
+    day_dir = settings.data_dir / "snapshots" / "ES" / "20260716"
+    frame = pd.concat([pd.read_parquet(p) for p in day_dir.rglob("*.parquet")])
+    last = frame[frame.ts_min == frame.ts_min.max()]
+    # Řádky zůstávají — jen se skutečným stářím, ne sentinelem 0/999
+    assert set(last.strike.unique()) == {7590.0, 7600.0, 7610.0}
+    assert (last[last.strike == 7600.0].stale_age > 3600.0).all()
+    assert (last[last.strike == 7590.0].stale_age < 60.0).all()
+
+    # …ale do GEX/úrovní zmrzlý strike nevstoupil
+    levels_dir = settings.data_dir / "derived" / "ES" / "20260716" / "levels"
+    levels = pd.concat([pd.read_parquet(p) for p in levels_dir.rglob("*.parquet")])
+    assert len(levels) == 2
+    fresh_gex, stale_gex = levels.sort_values("ts_min").total_gex.tolist()
+    assert stale_gex != pytest.approx(fresh_gex)

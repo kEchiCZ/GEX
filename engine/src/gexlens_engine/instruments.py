@@ -29,7 +29,7 @@ from gexlens_engine.ibkr.discovery import (
     Underlying,
     build_contracts,
 )
-from gexlens_engine.ibkr.scheduler import SweepMetrics
+from gexlens_engine.ibkr.scheduler import GreeksStallDetector, SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
@@ -197,6 +197,8 @@ class InstrumentPipeline:
     fa_repository: FaValidationRepository | None = None
     # Hlídání tiché ztráty 5s barů (#221); default z konfigurace v __post_init__
     stall_detector: BarsStallDetector | None = None
+    # Hlídání tiché ztráty Greeks (#306); default z konfigurace v __post_init__
+    greeks_detector: GreeksStallDetector | None = None
     # Re-backfill dnešních barů po návratu streamu (#221); None = backfill nezapojen
     backfill_today: Callable[[], Awaitable[None]] | None = None
     _cycles_since_oi: int = field(default=0, repr=False)
@@ -210,6 +212,10 @@ class InstrumentPipeline:
     def __post_init__(self) -> None:
         if self.stall_detector is None:
             self.stall_detector = BarsStallDetector(self.settings.bars_stall_alert_minutes)
+        if self.greeks_detector is None:
+            self.greeks_detector = GreeksStallDetector(
+                self.settings.greeks_stall_share, self.settings.greeks_stall_cycles
+            )
 
     async def try_archive_oi(self, today: dt.date) -> bool:
         """Denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2)."""
@@ -351,6 +357,7 @@ class InstrumentPipeline:
         # Hlídání barů PŘED cyklem — alert musí odejít, i kdyby sweep selhal (#221)
         await self._watch_bars(now, spot, bars, forming)
         metrics = await self.runtime.run_cycle(now, spot, bars, forming)
+        await self._watch_greeks(now, metrics)
 
         # Setup detektor (ADR-0004) — jeho pád nesmí shodit sběr dat
         if self.setup_engine is not None:
@@ -375,6 +382,61 @@ class InstrumentPipeline:
                 )
         self._minute_count += 1
         return metrics
+
+    async def _watch_greeks(self, now: dt.datetime, metrics: SweepMetrics) -> None:
+        """Tichá ztráta Greeks (#306): alert, když sweep dlouho nedokáže obnovit kotace.
+
+        27. 7. přestala TWS počítat modelGreeks pro ATM striky; ceny a OI chodily
+        dál, takže se výpadek nijak neprojevil a cache 15 hodin servírovala zmrzlá
+        čísla. Metriky to celou dobu hlásily (`repair_count` 61 z 222), jen se na
+        ně nikdo nedíval — proto alert.
+        """
+        detector = self.greeks_detector
+        if detector is None:
+            return
+        event = detector.observe(total=metrics.total, stale=metrics.stale_count)
+        if event is None:
+            return
+        share = metrics.stale_count / metrics.total if metrics.total else 0.0
+        if event == "stalled":
+            logger.error(
+                "Greeks %s nechodí pro %d z %d kontraktů (%.0f %%) ≥ %d sweepů — "
+                "TWS je přestala počítat; zvaž restart TWS",
+                self.symbol,
+                metrics.stale_count,
+                metrics.total,
+                share * 100,
+                self.settings.greeks_stall_cycles,
+            )
+            await self.publisher.publish(
+                "alerts",
+                {
+                    "kind": "greeks_stalled",
+                    "symbol": self.symbol,
+                    "message": f"TWS nedodává Greeks pro {metrics.stale_count} z "
+                    f"{metrics.total} kontraktů {self.symbol} ({share:.0%}) — dotčené "
+                    "striky se přestaly počítat do GEX, zdí i Max Painu, aby výpočty "
+                    "nestály na zmrzlých datech. Pomáhá restart TWS.",
+                    "ts": now.timestamp(),
+                },
+            )
+        elif event == "recovered":
+            logger.info(
+                "Greeks %s zase chodí (stale %d/%d)",
+                self.symbol,
+                metrics.stale_count,
+                metrics.total,
+            )
+            await self.publisher.publish(
+                "alerts",
+                {
+                    "kind": "greeks_recovered",
+                    "symbol": self.symbol,
+                    "message": f"Greeks {self.symbol} zase chodí — striky se vrátily "
+                    "do GEX a úrovní",
+                    "ts": now.timestamp(),
+                },
+            )
 
     async def _watch_bars(
         self, now: dt.datetime, spot: float, bars: Sequence[Bar], forming: Bar | None
