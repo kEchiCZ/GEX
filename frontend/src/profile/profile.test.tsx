@@ -431,3 +431,40 @@ test('hover řádku nastaví crosshair a ukáže tooltip; crosshair zvenku zvýr
   expect(screen.getByTestId('profile-row-7600').getAttribute('opacity')).toBe('1')
   expect(screen.getByTestId('profile-row-7590').getAttribute('opacity')).not.toBe('1')
 })
+
+// ── Zmrzlé kotace (ADR-0015, #306) ─────────────────────────────────
+
+test('zmrzlá kotace se ztlumí a tooltip ji pojmenuje, čerstvá zůstává plná', () => {
+  // 7590 nese stáří 15 h (vzor 27. 7.: TWS přestala počítat Greeks pro ATM striky
+  // a panel je 15 hodin ukazoval jako živá čísla), 7600 je čerstvý
+  const withStale = rows().map((row) =>
+    row.strike === 7590 ? { ...row, staleAge: 54_000 } : { ...row, staleAge: 3 },
+  )
+  render(
+    <CrosshairProvider>
+      <StrikeProfile rows={withStale} spot={7595} height={200} />
+    </CrosshairProvider>,
+  )
+
+  const stale = screen.getByTestId('profile-row-7590')
+  const fresh = screen.getByTestId('profile-row-7600')
+  expect(stale.getAttribute('data-stale')).toBe('true')
+  expect(fresh.getAttribute('data-stale')).toBeNull()
+  expect(Number(stale.getAttribute('opacity'))).toBeLessThan(Number(fresh.getAttribute('opacity')))
+
+  fireEvent.pointerEnter(stale)
+  expect(screen.getByTestId('profile-stale').textContent).toContain('15.0 h')
+})
+
+test('stáří pod prahem se netváří jako zmrzlé (běžný sweep křídel)', () => {
+  // Křídla se sweepují každý 3. cyklus, takže jednotky minut jsou normální provoz
+  const fresh = rows().map((row) => ({ ...row, staleAge: 120 }))
+  render(
+    <CrosshairProvider>
+      <StrikeProfile rows={fresh} spot={7595} height={200} />
+    </CrosshairProvider>,
+  )
+  expect(screen.getByTestId('profile-row-7590').getAttribute('data-stale')).toBeNull()
+  fireEvent.pointerEnter(screen.getByTestId('profile-row-7590'))
+  expect(screen.queryByTestId('profile-stale')).toBeNull()
+})

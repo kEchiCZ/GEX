@@ -767,6 +767,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
           putOiChange: oiChangeReady
             ? inputs.putOi[index] - (prevOi.get(`${strike}|P`) ?? 0)
             : null,
+          staleAge: inputs.staleAge[index],
         }
       })
       profileCache.set(minuteIdx, rows)

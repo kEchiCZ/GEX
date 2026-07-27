@@ -11,6 +11,7 @@ grafu se pruhy hýbou synchronně. Bez `yView` (testy) platí legacy rozložení
 */
 import { memo, useMemo, useRef, useState } from 'react'
 import { useElementSize } from '../hooks/useElementSize'
+import { STALE_THRESHOLD_S } from '../heatmap/color'
 import { zoomAxis } from '../heatmap/view'
 import type { ViewTransform } from '../heatmap/view'
 import { fractionalRow } from '../heatmap/overlays'
@@ -38,6 +39,13 @@ const PROFILE_AXIS_ZONE = 48
 const VALUE_CHAR_PX = 5.5
 // Prostor strike popisků u levého okraje — hodnoty do něj nesmí zasáhnout
 const STRIKE_LABEL_RESERVE = 34
+
+/** Stáří kotace čitelně: sekundy do minuty, pak minuty, nad hodinu hodiny. */
+function formatStaleAge(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)} s`
+  if (seconds < 3600) return `${Math.round(seconds / 60)} min`
+  return `${(seconds / 3600).toFixed(1)} h`
+}
 
 /** Změna se znaménkem (+120 / −45) pro ΔOI tooltip. */
 function formatSigned(value: number): string {
@@ -295,6 +303,8 @@ function StrikeProfileBase({
             const barHeight = Math.max(1, rowHeight - ROW_GAP)
             const y = centerY - barHeight / 2
             const highlighted = crosshair?.strike === row.strike
+            // Zmrzlá kotace (ADR-0015): ztlumit, ať nevypadá jako živá data
+            const stale = (row.staleAge ?? 0) > STALE_THRESHOLD_S
             // Kolizní logika popisků hodnot (#181): když se číslo nevejde vedle
             // pruhu (put by zasáhl do strike popisků, call za pravý okraj),
             // překlopí se DOVNITŘ pruhu tmavým textem — nikdy se nepřekrývá
@@ -308,7 +318,8 @@ function StrikeProfileBase({
               <g
                 key={row.strike}
                 data-testid={`profile-row-${row.strike}`}
-                opacity={highlighted ? 1 : 0.88}
+                data-stale={stale ? 'true' : undefined}
+                opacity={stale ? 0.28 : highlighted ? 1 : 0.88}
                 onPointerEnter={() =>
                   setCrosshair({ minuteIdx: crosshair?.minuteIdx ?? 0, strike: row.strike })
                 }
@@ -480,6 +491,11 @@ function StrikeProfileBase({
             </span>
           )}
           <span>Δ od spotu: {hovered.distanceFromSpot.toFixed(1)}</span>
+          {(hovered.staleAge ?? 0) > STALE_THRESHOLD_S && (
+            <span data-testid="profile-stale">
+              ⚠ zmrzlá kotace: {formatStaleAge(hovered.staleAge ?? 0)} bez aktualizace
+            </span>
+          )}
         </div>
       )}
     </aside>

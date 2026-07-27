@@ -15,6 +15,10 @@ export interface ProfileRow {
   /** Změna OI proti předchozímu archivovanému dni (null = srovnání není k dispozici). */
   callOiChange?: number | null
   putOiChange?: number | null
+  /** Stáří kotace v sekundách (ADR-0015). Nad `STALE_THRESHOLD_S` je řádek
+  vykreslený ztlumeně — 27. 7. servírovala TWS 15 h zmrzlé ATM Greeks a panel
+  je ukazoval jako živá čísla. Undefined = starší data bez příznaku. */
+  staleAge?: number
 }
 
 export interface VolLeader {
