@@ -225,3 +225,34 @@ při přidání nové):
 Defaulty jsou odvozené z měření výše, ne odhadnuté — ale zůstávají kandidátem
 na kalibraci Fáze 2, až se nasbírají výsledky s opravenou mechanikou. Historické
 setupy se nepřepočítávají; srovnávat lze až od nasazení.
+
+## Dodatek 2026-07-27: sebekontrola detektoru (#309)
+
+Že detektor týden ztrácel (−43,5R za 166 uzavřených), se zjistilo **náhodou** —
+ručním dotazem do PG před nesouvisející prací. Stránka Setupy čísla ukazovala
+(#189), ale nic nekřičelo; rozdíl mezi „data existují" a „víš o tom" stál 43R.
+Stejná třída selhání jako ADR-0015 (#306), a obojí v jednom dni.
+
+- **`compute/setupstats.py`** (čisté funkce): agregace uzavřených setupů
+  v klouzavém okně na celek / šablonu / šablonu × směr → n, výhry, ΣR, Ø R,
+  hit-rate a **Wilson dolní mez** hit-rate. Wilson proto, že bodová úspěšnost
+  je při n≈20 nerozlišitelná od mince; helper je záměrně obecný, gate
+  SentimentLensu (SPEC 6.2) ho použije taky.
+- **Verdikt zhoršení:** okno `setup_selfcheck_days` (7 d), minimum
+  `setup_selfcheck_min_samples` (10 uzavřených) a práh
+  `setup_selfcheck_max_drawdown_r` (−10 R). Vědomě se neptáme, jestli je propad
+  statisticky odlišitelný od nuly — −10 R je −10 R bez ohledu na p-hodnotu;
+  minimum vzorků brání jen tomu, aby verdikt padl z jednoho dvou obchodů.
+- **Job** po vzoru FA validace (#253): po ranním OI archivu, jednou za den,
+  selhání nezabije pipeline. Okno se řídí `closed_ts`, ne `created_ts` — setup
+  otevřený před oknem a uzavřený v něm do bilance patří.
+- **Alert `setup_degraded`** pojmenuje nejhorší šablonu a směr a navrhne
+  `GEXLENS_SETUP_DISABLED_TEMPLATES`; návrat nad práh → `setup_recovered`.
+  Obojí právě jednou. **Denní „vše v pořádku" alert vědomě není** — zvonek, co
+  hlásí každý den, se naučí ignorovat; zdravý stav jde do logu.
+- Automatické vypínání šablon je mimo rozsah: co vypnout, rozhoduje uživatel
+  nad daty (jako u T5 v #303).
+
+Motivace navíc: prahy R-mechaniky z #302 (`min_risk_atr`, `max_rr`) jsou
+odvozené z měření, ale zatím **neověřená hypotéza**. Bez sebekontroly by se
+jejich případný neúspěch zase zjistil za týden a zase náhodou.

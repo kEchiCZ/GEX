@@ -3,6 +3,8 @@
 import asyncio
 import datetime as dt
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pandas as pd
 import pytest
@@ -31,9 +33,11 @@ from gexlens_engine.instruments import (
     plan_instruments,
 )
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
+from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.meta import settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository, OIRecord
 from gexlens_engine.storage.parquet_store import SnapshotWriter
+from gexlens_engine.storage.setups_store import SetupsRepository
 
 TS = dt.datetime(2026, 7, 17, 15, 0, tzinfo=dt.UTC)
 
@@ -476,3 +480,104 @@ async def test_archive_failure_does_not_kill_pipeline(
     alerts = [data for channel, data in publisher.messages if channel == "alerts"]
     assert alerts and alerts[-1]["kind"] == "oi_missing"
     assert alerts[-1]["symbol"] == "MES"
+
+
+async def test_setup_selfcheck_alerts_on_drawdown_and_recovers(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher], tmp_path: Path
+) -> None:
+    """#309: prodělávající detektor se ozve sám; zdravý stav zvonek neruší."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    setups = SetupsRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}"))
+    setups.ensure_schema()
+    pipeline.setup_engine = cast(SetupEngine, SimpleNamespace(repository=setups, on_minute=None))
+
+    today = TS.date()
+
+    def add(status: str, outcome_r: float, *, minutes: int) -> None:
+        setup_id = setups.create(
+            symbol="ES",
+            expiry="20260717",
+            template="failed_break",
+            direction="short",
+            created_ts=TS,
+            entry=7600.0,
+            target=7580.0,
+            stop=7610.0,
+            confidence=55,
+            reason="test",
+            context={},
+        )
+        setups.close(
+            setup_id,
+            status=status,
+            closed_ts=TS + dt.timedelta(minutes=minutes),
+            outcome_r=outcome_r,
+            mfe=0.0,
+            mae=0.0,
+        )
+
+    # 15 stopů = ΣR −15 pod prahem −10 při dostatku vzorků
+    for i in range(15):
+        add("closed_stop", -1.0, minutes=i)
+    await pipeline._run_setup_selfcheck(today)
+    alerts = [d for ch, d in publisher.messages if ch == "alerts"]
+    assert alerts[-1]["kind"] == "setup_degraded"
+    assert "failed_break short" in str(alerts[-1]["message"])
+
+    # Druhý běh téhož dne nic neposílá (jednou za den) …
+    before = len(publisher.messages)
+    await pipeline._run_setup_selfcheck(today)
+    assert len(publisher.messages) == before
+    # …a opakované zhoršení další den taky ne (alert právě jednou)
+    await pipeline._run_setup_selfcheck(today + dt.timedelta(days=1))
+    assert len(publisher.messages) == before
+
+    # Návrat nad práh → recovered právě jednou
+    for i in range(30):
+        add("closed_target", 1.5, minutes=100 + i)
+    await pipeline._run_setup_selfcheck(today + dt.timedelta(days=2))
+    alerts = [d for ch, d in publisher.messages if ch == "alerts"]
+    assert alerts[-1]["kind"] == "setup_recovered"
+    before = len(publisher.messages)
+    await pipeline._run_setup_selfcheck(today + dt.timedelta(days=3))
+    assert len(publisher.messages) == before
+
+
+def test_closed_since_ignores_active_and_older_window(tmp_path: Path) -> None:
+    """#309: okno se řídí časem uzavření, běžící setupy do bilance nepatří."""
+    setups = SetupsRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}"))
+    setups.ensure_schema()
+
+    def new_setup() -> int:
+        return setups.create(
+            symbol="ES",
+            expiry="20260717",
+            template="wall_bounce",
+            direction="long",
+            created_ts=TS - dt.timedelta(days=30),  # vznik dávno před oknem
+            entry=7600.0,
+            target=7620.0,
+            stop=7590.0,
+            confidence=55,
+            reason="test",
+            context={},
+        )
+
+    inside = new_setup()
+    setups.close(inside, status="closed_target", closed_ts=TS, outcome_r=2.0, mfe=0.0, mae=0.0)
+    outside = new_setup()
+    setups.close(
+        outside,
+        status="closed_stop",
+        closed_ts=TS - dt.timedelta(days=10),
+        outcome_r=-1.0,
+        mfe=0.0,
+        mae=0.0,
+    )
+    new_setup()  # zůstává active
+
+    rows = setups.closed_since("ES", TS - dt.timedelta(days=7))
+    assert len(rows) == 1
+    assert rows[0].outcome_r == 2.0
+    assert setups.closed_since("NQ", TS - dt.timedelta(days=7)) == []

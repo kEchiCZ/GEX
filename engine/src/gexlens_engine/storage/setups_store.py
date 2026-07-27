@@ -26,6 +26,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.setupstats import ClosedSetup
+
 setups_metadata = MetaData()
 
 setups_table = Table(
@@ -162,6 +164,35 @@ class SetupsRepository:
                 confidence=row.confidence,
                 reason=row.reason,
                 status=row.status,
+            )
+            for row in rows
+        ]
+
+    def closed_since(self, symbol: str, since: dt.datetime) -> list[ClosedSetup]:
+        """Uzavřené setupy s `closed_ts` od `since` — podklad sebekontroly (#309).
+
+        Řadí se podle času uzavření, ne vzniku: setup otevřený před oknem, ale
+        uzavřený v něm, do bilance okna patří.
+        """
+        stmt = select(
+            setups_table.c.template,
+            setups_table.c.direction,
+            setups_table.c.status,
+            setups_table.c.outcome_r,
+        ).where(
+            setups_table.c.symbol == symbol,
+            setups_table.c.status != "active",
+            setups_table.c.closed_ts.is_not(None),
+            setups_table.c.closed_ts >= since,
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            ClosedSetup(
+                template=row.template,
+                direction=row.direction,
+                status=row.status,
+                outcome_r=float(row.outcome_r or 0.0),
             )
             for row in rows
         ]
