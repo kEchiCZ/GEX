@@ -131,7 +131,8 @@ test('buildReplayDay dekóduje Arrow snapshoty a poskládá den', () => {
     volume: Float64Array.from([10, 5, 30, 12]),
     oi: Float64Array.from([100, 200, 100, 200]),
     delta: Float64Array.from([0.5, -0.4, 0.5, -0.4]),
-    stale_age: Float64Array.from([0, 0, 0, 0]),
+    // Minuta 1 nese zmrzlou call kotaci (ADR-0015) — musí se dostat do profilu
+    stale_age: Float64Array.from([0, 0, 54_000, 0]),
   })
   const base64 = btoa(String.fromCharCode(...tableToIPC(table, 'stream')))
 
@@ -183,6 +184,10 @@ test('buildReplayDay dekóduje Arrow snapshoty a poskládá den', () => {
   expect(day.profileByMinute.rowsAt(1)[0].callVolComponent).toBeCloseTo(30 * 0.5)
   expect(day.profileByMinute.rowsAt(1)[0].putOiComponent).toBeCloseTo(200 * 0.4)
   expect(day.profileByMinute.rowsAt(1)[0].distanceFromSpot).toBeCloseTo(7600 - 7601.5)
+  // Stáří kotace se propisuje do profilu (ADR-0015) — panel z něj ztlumuje řádky.
+  // Buňka bere maximum obou stran, takže zmrzlá call strana označí celý strike.
+  expect(day.profileByMinute.rowsAt(0)[0].staleAge).toBe(0)
+  expect(day.profileByMinute.rowsAt(1)[0].staleAge).toBe(54_000)
 })
 
 test('walldom řada: slabé úseky zdi + dominance v cenovce (ADR-0010, #223)', () => {
