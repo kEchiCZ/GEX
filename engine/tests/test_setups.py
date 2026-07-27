@@ -1,6 +1,7 @@
 """Testy setup detektoru (ADR-0004): šablony T1–T4, vyhodnocení, orchestrace."""
 
 import datetime as dt
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -14,6 +15,7 @@ from gexlens_engine.compute.setups import (
     Outcome,
     SetupParams,
     SetupTemplate,
+    detect_all,
     detect_divergence_spring,
     detect_failed_break,
     detect_gamma_momentum,
@@ -362,6 +364,19 @@ def test_divergence_spring_long_on_new_low_with_cum_max() -> None:
     assert setup.target == 7485.0  # nejbližší úroveň nad entry (call wall)
     assert setup.context["gex_regime"] is None
     assert "nákupy do slabosti" in setup.reason
+
+
+def test_detect_all_skips_disabled_templates() -> None:
+    """#303: T5 je default vypnutá — čistý detektor ji najde, detect_all zahodí."""
+    history = spring_history()
+    assert detect_divergence_spring(history, PARAMS) is not None
+    assert SetupTemplate.DIVERGENCE_SPRING.value in PARAMS.disabled_templates
+    templates = {c.template for c in detect_all(history, PARAMS)}
+    assert SetupTemplate.DIVERGENCE_SPRING not in templates
+
+    enabled = replace(PARAMS, disabled_templates=frozenset())
+    templates = {c.template for c in detect_all(history, enabled)}
+    assert SetupTemplate.DIVERGENCE_SPRING in templates
 
 
 def test_divergence_spring_requires_divergence_and_distance() -> None:
