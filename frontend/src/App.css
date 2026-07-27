@@ -633,11 +633,13 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Tělo profilu vyplní celý panel; svg se sdílenou osou se ořezává */
+/* Tělo profilu vyplní celý panel; svg se sdílenou osou se ořezává.
+   user-select: tažení osy Y nesmí označovat textové popisky cen */
 .profile-body {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  user-select: none;
 }
 
 .profile-header .chip {
