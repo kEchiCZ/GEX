@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # gammě a delší cooldown šablony po stopu kontra-setupu
     setup_counter_flow_lookback: int = Field(default=30, ge=1)
     setup_counter_stop_cooldown_minutes: int = Field(default=45, ge=0)
+    # Vypnuté šablony (#303): čárkami oddělené kódy; prázdné = běží všechny.
+    # T5 divergence_spring je default vypnutá (8,7 % úspěšnost, Ø −0,69R)
+    setup_disabled_templates: str = "divergence_spring"
     # Flow-adjusted OI odhad (ADR-0011, #222): OI_est = OI + α·čistý klasifikovaný
     # objem. α z validace open-ratio (~0,39 na čistém dni); 0 = vrstva vypnutá
     flow_oi_alpha: float = Field(default=0.4, ge=0, le=1)
@@ -126,6 +129,13 @@ class Settings(BaseSettings):
             if symbol and symbol not in seen:
                 seen.append(symbol)
         return seen
+
+    @property
+    def setup_disabled_template_set(self) -> frozenset[str]:
+        """Vypnuté šablony setupů z GEXLENS_SETUP_DISABLED_TEMPLATES (#303)."""
+        return frozenset(
+            raw.strip().lower() for raw in self.setup_disabled_templates.split(",") if raw.strip()
+        )
 
     @property
     def snapshots_dir(self) -> Path:

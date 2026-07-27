@@ -154,3 +154,21 @@ kalibraci Fáze 2) běží souběžně dál.
 - Kontext setupu nese `counter_regime`; potvrzená konfluence je v `reason`
   („Kontra-režim potvrzen tokem"). Prahy: `GEXLENS_SETUP_COUNTER_FLOW_LOOKBACK`,
   `GEXLENS_SETUP_COUNTER_STOP_COOLDOWN_MINUTES`.
+
+## Dodatek 2026-07-27: T5 divergence_spring vypnuta (#303)
+
+Za 20.–27. 7. je detektor celkově −43,5R (166 uzavřených, 15 % úspěšnost).
+T5 je z toho nejhorší šablona: **23 setupů, 2 výhry (8,7 %), Ø −0,69R**.
+
+Šablona vznikla z **jediného pozorovaného živého případu** (24. 7. 8:49, ES
+spring +25 b) a byla rovnou nasazena do živého detektoru. To bylo předčasné —
+jeden případ je hypotéza, ne pravidlo. Premisa „nové extrémum okna × extrém
+CumΔ" edge nepotvrdila.
+
+- Šablony lze vypnout přes `disabled_templates` (`SetupParams`) resp.
+  `GEXLENS_SETUP_DISABLED_TEMPLATES`; filtr je v `detect_all`, čisté detektory
+  zůstávají volatelné (testy a budoucí přeměření).
+- **Default: `divergence_spring` vypnuta.** Kód zůstává — po opravě
+  R-mechaniky (#302) se dá šablona přeměřit nad stejnými daty.
+- Pravidlo pro příště: nová šablona se nejdřív měří proti historii, do živého
+  detektoru jde až s výsledkem, ne s jedním pozorováním.

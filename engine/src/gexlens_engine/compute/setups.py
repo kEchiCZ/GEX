@@ -92,6 +92,11 @@ class SetupParams:
     # delší okno a po stopu má šablona v kontra-režimu delší cooldown
     counter_flow_lookback: int = 30
     counter_stop_cooldown_minutes: int = 45
+    # Vypnuté šablony (#303): kandidát vznikne, ale zahodí se v `detect_all`.
+    # T5 divergence_spring má 8,7 % úspěšnost a Ø −0,69R za 23 setupů — vznikla
+    # z jediného živého případu (24. 7.), edge nepotvrdila. Kód zůstává, aby
+    # šlo šablonu přeměřit po opravě R-mechaniky (#302).
+    disabled_templates: frozenset[str] = frozenset({SetupTemplate.DIVERGENCE_SPRING.value})
 
 
 @dataclass(frozen=True)
@@ -627,12 +632,15 @@ DETECTORS = (
 
 
 def detect_all(history: Sequence[MinuteInputs], params: SetupParams) -> list[SetupCandidate]:
-    """Vyhodnotí všechny šablony nad aktuální minutou (bez stavového anti-spamu)."""
+    """Vyhodnotí povolené šablony nad aktuální minutou (bez stavového anti-spamu)."""
     results = []
     for detector in DETECTORS:
         candidate = detector(history, params)
-        if candidate is not None:
-            results.append(candidate)
+        if candidate is None:
+            continue
+        if candidate.template.value in params.disabled_templates:
+            continue
+        results.append(candidate)
     return results
 
 
