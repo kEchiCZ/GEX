@@ -59,6 +59,45 @@ class SweepMetrics:
     sweep_duration_s: float
 
 
+class GreeksStallDetector:
+    """Detekce tichého výpadku Greeks (#306) — obdoba `BarsStallDetector` (#221).
+
+    27. 7. přestala TWS ve 22:34 počítat `modelGreeks` pro ATM striky; ceny a OI
+    chodily dál, takže se výpadek nijak neprojevil. Engine kontrakty správně
+    označil za stale, ale cache dál servírovala poslední známou kotaci, takže
+    se 15 hodin zapisovala zmrzlá čísla a nikdo si toho nevšiml.
+
+    Podíl stale kontraktů nad prahem po `stall_cycles` po sobě jdoucích sweepech
+    ohlásí `"stalled"`, návrat pod práh `"recovered"` — obojí právě jednou.
+    Sweep bez kontraktů se nehodnotí (není z čeho).
+    """
+
+    def __init__(self, stale_share: float, stall_cycles: int) -> None:
+        self._stale_share = stale_share
+        self._stall_cycles = stall_cycles
+        self._bad_cycles = 0
+        self._stalled = False
+
+    @property
+    def stalled(self) -> bool:
+        return self._stalled
+
+    def observe(self, *, total: int, stale: int) -> str | None:
+        if total <= 0:
+            return None
+        if stale / total <= self._stale_share:
+            self._bad_cycles = 0
+            if self._stalled:
+                self._stalled = False
+                return "recovered"
+            return None
+        self._bad_cycles += 1
+        if not self._stalled and self._bad_cycles >= self._stall_cycles:
+            self._stalled = True
+            return "stalled"
+        return None
+
+
 class QuoteStreamerLike(Protocol):
     """Zdroj kotací: subskribuje kontrakt, počká na kompletní sadu nebo timeout.
 

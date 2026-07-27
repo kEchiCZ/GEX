@@ -3,7 +3,11 @@
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockQuoteStreamer
-from gexlens_engine.ibkr.scheduler import QuoteSnapshot, SubscriptionScheduler
+from gexlens_engine.ibkr.scheduler import (
+    GreeksStallDetector,
+    QuoteSnapshot,
+    SubscriptionScheduler,
+)
 
 SPOT = 7600.0
 
@@ -147,3 +151,35 @@ async def test_streamer_exception_does_not_kill_sweep() -> None:
     # Výjimka streamu = nekompletní kontrakt, sweep běží dál (SPEC kap. 8: odolnost)
     assert metrics.greeks_complete == 7
     assert metrics.stale_count == 1
+
+
+# ── Detekce tiché ztráty Greeks (#306) ─────────────────────────────
+
+
+def test_greeks_stall_detector_reports_once_and_recovers() -> None:
+    """Podíl stale nad prahem po N sweepech → "stalled"; návrat → "recovered"."""
+    detector = GreeksStallDetector(stale_share=0.1, stall_cycles=3)
+
+    # 27 % stale, ale ještě ne dost cyklů
+    assert detector.observe(total=222, stale=61) is None
+    assert detector.observe(total=222, stale=61) is None
+    assert detector.observe(total=222, stale=61) == "stalled"
+    assert detector.stalled
+    # Alert jde právě jednou, i když stav trvá
+    assert detector.observe(total=222, stale=61) is None
+
+    assert detector.observe(total=228, stale=0) == "recovered"
+    assert not detector.stalled
+    assert detector.observe(total=228, stale=0) is None
+
+
+def test_greeks_stall_detector_ignores_noise_and_empty_sweeps() -> None:
+    detector = GreeksStallDetector(stale_share=0.1, stall_cycles=3)
+    # Občasný výpadek pod prahem sérii nezaloží
+    for _ in range(10):
+        assert detector.observe(total=100, stale=5) is None
+    # Prázdný sweep není z čeho hodnotit a nesmí sérii ani založit, ani zrušit
+    assert detector.observe(total=100, stale=50) is None
+    assert detector.observe(total=0, stale=0) is None
+    assert detector.observe(total=100, stale=50) is None
+    assert detector.observe(total=100, stale=50) == "stalled"

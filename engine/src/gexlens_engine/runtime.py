@@ -11,6 +11,7 @@ CumΔ (bar větev) → flow → bary podkladu → push stavu a live kanálů do 
 import asyncio
 import datetime as dt
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -123,9 +124,11 @@ class EngineRuntime:
         day = ts_min.date()
         metrics = await self.scheduler.sweep(self.contracts, spot)
         quotes = self.scheduler.quotes()
-        stale = self.scheduler.stale_contracts
         tracker = self.cum_delta
         assert tracker is not None  # nastaven v __post_init__
+        now_mono = time.monotonic()
+        max_age = self.settings.quote_max_age_s
+        expired = 0
 
         # 1) Snapshot řádky (OI z ranního archivu — tick 588 intraday nechodí, ADR-0001)
         rows: list[SnapshotRow] = []
@@ -137,6 +140,7 @@ class EngineRuntime:
             if cached is None:
                 continue
             snapshot = cached.snapshot
+            age = cached.age_s(now_mono)
             oi = (
                 self.oi_repository.get_oi(
                     spec.symbol, day, spec.strike, spec.right, expiry=spec.expiry
@@ -158,9 +162,18 @@ class EngineRuntime:
                     theta=snapshot.theta,
                     vega=snapshot.vega,
                     oi=oi,
-                    stale_age=999.0 if spec in stale else 0.0,
+                    # Skutečné stáří kotace (#306), ne sentinel — heatmapa i řetěz
+                    # už stale odlišit umí, jen dosud dostávaly jen 0/999
+                    stale_age=age,
                 )
             )
+            # Zmrzlá kotace do výpočtů nesmí (#306): GEX, zdi, flip, Max Pain
+            # i Dyn GEX profil se z ní počítaly, aniž by to šlo poznat. Řádek
+            # zůstává v snapshotu se svým stářím — chybějící díra je poctivější
+            # než tiše zkažený výpočet.
+            if age > max_age:
+                expired += 1
+                continue
             gex_inputs.append(
                 GexInput(strike=spec.strike, right=spec.right, gamma=snapshot.gamma, oi=oi)
             )
