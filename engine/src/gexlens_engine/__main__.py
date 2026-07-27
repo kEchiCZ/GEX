@@ -312,6 +312,10 @@ async def create_pipeline(
                     counter_flow_lookback=settings.setup_counter_flow_lookback,
                     counter_stop_cooldown_minutes=settings.setup_counter_stop_cooldown_minutes,
                     disabled_templates=settings.setup_disabled_template_set,
+                    min_risk_atr=settings.setup_min_risk_atr,
+                    max_rr=settings.setup_max_rr,
+                    max_stops_per_direction=settings.setup_max_stops_per_direction,
+                    direction_block_minutes=settings.setup_direction_block_minutes,
                 ),
             )
             if setups_repository is not None

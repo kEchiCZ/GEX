@@ -65,6 +65,10 @@ class SetupEngine:
         self._last_created: dict[str, dt.datetime] = {}
         # Poslední stop kontra-režimového setupu per šablona (#252 C)
         self._last_counter_stop: dict[str, dt.datetime] = {}
+        # Série stopů a blokace per směr (#302) — napříč šablonami, protože
+        # per-šablonový anti-spam se dal obejít jejich prokládáním
+        self._direction_stops: dict[str, int] = {}
+        self._direction_blocked_until: dict[str, dt.datetime] = {}
         self._max_pain: float | None = None
         self._max_pain_loaded_for: tuple[str, dt.date] | None = None
         # Otevřené setupy z DB (restart enginu) — MFE/MAE pokračují od nuly
@@ -240,6 +244,7 @@ class SetupEngine:
             # delším cooldownu — brání žebříku ztrát (24. 7.: 4 stopy za hodinu)
             if outcome is Outcome.STOP and item.counter:
                 self._last_counter_stop[item.stored.template] = closed_ts
+            self._track_direction_streak(item.stored.direction, outcome, closed_ts)
             self.repository.close(
                 item.stored.id,
                 status=outcome.value,
@@ -270,6 +275,39 @@ class SetupEngine:
             )
         self._open = still_open
 
+    def _track_direction_streak(
+        self, direction: str, outcome: Outcome, closed_ts: dt.datetime
+    ) -> None:
+        """Série stopů v jednom směru (#302) → dočasná blokace směru.
+
+        Výhra sérii maže; timeout ji nechává být (nic nevyvrátil). Počítadlo se
+        po blokaci nenuluje — po vyčerpané sérii projde jen jeden pokus za okno,
+        dokud směr nedokáže výhru.
+        """
+        if outcome is Outcome.TARGET:
+            self._direction_stops.pop(direction, None)
+            self._direction_blocked_until.pop(direction, None)
+            return
+        if outcome is not Outcome.STOP:
+            return
+        streak = self._direction_stops.get(direction, 0) + 1
+        self._direction_stops[direction] = streak
+        if streak >= self.params.max_stops_per_direction:
+            self._direction_blocked_until[direction] = closed_ts + dt.timedelta(
+                minutes=self.params.direction_block_minutes
+            )
+            logger.info(
+                "Setup %s: směr %s blokován do %s (%d stopů v řadě)",
+                self.symbol,
+                direction,
+                self._direction_blocked_until[direction],
+                streak,
+            )
+
+    def _direction_blocked(self, direction: str, now: dt.datetime) -> bool:
+        until = self._direction_blocked_until.get(direction)
+        return until is not None and now < until
+
     async def _detect_new(
         self, now: dt.datetime, runtime: EngineRuntime, inputs: MinuteInputs
     ) -> None:
@@ -281,6 +319,9 @@ class SetupEngine:
             last = self._last_created.get(template)
             cooldown_s = self.params.cooldown_minutes * 60
             if last is not None and (now - last).total_seconds() < cooldown_s:
+                continue
+            # Blokace směru po sérii stopů (#302) — napříč šablonami
+            if self._direction_blocked(candidate.direction.value, now):
                 continue
             counter = is_counter_regime(
                 candidate.direction, cast(str | None, candidate.context.get("gex_regime"))

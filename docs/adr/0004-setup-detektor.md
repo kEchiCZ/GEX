@@ -172,3 +172,56 @@ CumΔ" edge nepotvrdila.
   R-mechaniky (#302) se dá šablona přeměřit nad stejnými daty.
 - Pravidlo pro příště: nová šablona se nejdřív měří proti historii, do živého
   detektoru jde až s výsledkem, ne s jedním pozorováním.
+
+## Dodatek 2026-07-27: jednotná R-mechanika (#302)
+
+Za 20.–27. 7. byl detektor **−43,5R** (166 uzavřených, 15 % úspěšnost).
+Příčina nebyla v premisách šablon, ale v mechanice entry/stop/target.
+
+**Měření (setupy 20.–27. 7. + ATR z 1min barů):**
+
+| | ES | NQ |
+|---|---|---|
+| ATR(14) 1min, medián | 1,57 b | 11,52 b |
+| Ø risk T5 / T2 / T1 | 4,1 / 9,6 / 13,6 b | 9,9 / 22,4 / 38,9 b |
+| Ø risk v násobcích ATR (T5) | 2,6 × | **0,86 ×** |
+| Ø RRR T5 / T2 / T1 / T3 | 17,5 / 6,9 / 2,8 / 0,7 | 41,9 / 16,5 / 2,9 / 0,7 |
+
+Tři vady:
+
+1. **Absolutní buffery na dvou různě volatilních instrumentech.** NQ se hýbe
+   7,3× víc než ES, ale buffery byly sdílené v bodech — na NQ tak T5 riskovala
+   0,86 ATR (uvnitř minutového šumu; setupy padaly do minuty).
+2. **Nedosažitelné cíle.** Cíl = nejbližší z (max_pain, flip, protilehlá zeď);
+   když byly všechny daleko, vzniklo RRR 16–42 a vždy se dřív trefil stop.
+   `min_rrr` je dolní mez, takže tomu nebránil.
+3. **RRR se kontrolovalo jen v T1 a T5.** T2, T3 a T4 na kontrolu zapomněly —
+   T3 proto pouštěla setupy s RRR 0,7 (riskovala víc, než byl cíl hoden).
+
+**Řešení — `normalize_candidate` v `detect_all`, jediné místo pro celou
+mechaniku** (šablony samy už o risku/RRR nerozhodují, aby na to nešlo zapomenout
+při přidání nové):
+
+- **Prahy v násobcích ATR(14), ne v bodech** — platí pro ES i NQ zároveň.
+- **Minimální risk** `min_risk_atr` (2,0 × ATR): těsnější stop se rozšíří.
+  Na ES floor většinou nezasáhne (setupy měly 2,6–8,7 ATR), na NQ opraví
+  právě T5 a T2. Riskem se nesmí lichotit R metrice.
+- **Strop vzdálenosti cíle** `max_rr` (3,0 × risk): dál = částečný cíl.
+  Horní mez RRR je tím strukturální, ne další filtr.
+- **`min_rrr` až po normalizaci** a pro všechny šablony.
+- Bez měřitelného ATR (krátká historie po startu) setup nevzniká — stejná
+  konzervativní konvence jako u kontra-režimu (#252 B).
+- **T3:** stop `pin_stop_ratio` (0,75) × vzdálenost k Max Pain místo 1,5× →
+  RRR 1,33 místo 0,67.
+- **Strop pokusů per směr** `max_stops_per_direction` (3) /
+  `direction_block_minutes` (90): per-šablonový anti-spam se dal obejít
+  prokládáním šablon — 27. 7. vzniklo 20 shortů za sebou proti stoupajícímu NQ.
+  Blokace je napříč šablonami; počítadlo maže až výhra v daném směru, takže
+  po vyčerpané sérii projde jen jeden pokus za okno.
+- Kontext setupu nese `atr` a `risk` pro kalibraci Fáze 2. Env:
+  `GEXLENS_SETUP_MIN_RISK_ATR`, `GEXLENS_SETUP_MAX_RR`,
+  `GEXLENS_SETUP_MAX_STOPS_PER_DIRECTION`, `GEXLENS_SETUP_DIRECTION_BLOCK_MINUTES`.
+
+Defaulty jsou odvozené z měření výše, ne odhadnuté — ale zůstávají kandidátem
+na kalibraci Fáze 2, až se nasbírají výsledky s opravenou mechanikou. Historické
+setupy se nepřepočítávají; srovnávat lze až od nasazení.
