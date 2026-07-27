@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     # Strop pokusů per směr: po N stopech v řadě se směr na X minut zablokuje
     setup_max_stops_per_direction: int = Field(default=3, ge=1)
     setup_direction_block_minutes: int = Field(default=90, ge=0)
+    # Sebekontrola detektoru (#309): denní vyhodnocení klouzavého okna a alert
+    # při propadu. 27. 7. detektor týden ztrácel (−43,5R) a nikdo si toho
+    # nevšiml — stránka Setupy čísla ukazovala, ale nic nekřičelo.
+    setup_selfcheck_days: int = Field(default=7, ge=1)
+    setup_selfcheck_min_samples: int = Field(default=10, ge=1)
+    setup_selfcheck_max_drawdown_r: float = Field(default=-10.0, lt=0)
     # Flow-adjusted OI odhad (ADR-0011, #222): OI_est = OI + α·čistý klasifikovaný
     # objem. α z validace open-ratio (~0,39 na čistém dni); 0 = vrstva vypnutá
     flow_oi_alpha: float = Field(default=0.4, ge=0, le=1)

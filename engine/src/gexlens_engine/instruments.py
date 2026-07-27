@@ -19,6 +19,12 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.setupstats import (
+    SetupParamsStats,
+    aggregate,
+    degraded,
+    format_report,
+)
 from gexlens_engine.compute.volleaders import detect_concentration
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import (
@@ -208,6 +214,9 @@ class InstrumentPipeline:
     # Vol koncentrace (#208): už ohlášené strany (expirace, strike, right) —
     # jeden alert per leader; pipeline se denně překlápí, reset je přirozený
     _vol_alerted: set[tuple[str, float, str]] = field(default_factory=set, repr=False)
+    # Sebekontrola setupů (#309): den posledního běhu a zda je hlášené zhoršení
+    _selfcheck_day: dt.date | None = field(default=None, repr=False)
+    _selfcheck_degraded: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.stall_detector is None:
@@ -261,7 +270,65 @@ class InstrumentPipeline:
             )
             return False
         await self._run_fa_validation(today)
+        await self._run_setup_selfcheck(today)
         return True
+
+    async def _run_setup_selfcheck(self, today: dt.date) -> None:
+        """Denní sebekontrola detektoru (#309): alert, když za okno prodělává.
+
+        Běží po ranním OI archivu, jednou za den. Zdravý stav jde jen do logu —
+        denní „vše v pořádku" alert by zvonek naučil ignorovat. Selhání nesmí
+        zabít pipeline (stejně jako FA validace).
+        """
+        if self.setup_engine is None:
+            return
+        if self._selfcheck_day == today:
+            return
+        params = SetupParamsStats(
+            window_days=self.settings.setup_selfcheck_days,
+            min_samples=self.settings.setup_selfcheck_min_samples,
+            max_drawdown_r=self.settings.setup_selfcheck_max_drawdown_r,
+        )
+        since = dt.datetime.combine(
+            today - dt.timedelta(days=params.window_days), dt.time.min, tzinfo=dt.UTC
+        )
+        try:
+            rows = await asyncio.to_thread(
+                self.setup_engine.repository.closed_since, self.symbol, since
+            )
+        except Exception:
+            logger.exception("Sebekontrola setupů %s selhala — zkusí se zítra", self.symbol)
+            return
+        self._selfcheck_day = today
+        report = aggregate(rows)
+        summary = format_report(report, params.window_days)
+        is_bad = degraded(report, params)
+        logger.info("Sebekontrola setupů %s — %s", self.symbol, summary)
+        if is_bad and not self._selfcheck_degraded:
+            self._selfcheck_degraded = True
+            logger.error("Setup detektor %s prodělává: %s", self.symbol, summary)
+            await self.publisher.publish(
+                "alerts",
+                {
+                    "kind": "setup_degraded",
+                    "symbol": self.symbol,
+                    "message": f"Setup detektor {self.symbol} prodělává — {summary}. "
+                    "Zvaž vypnutí nejhorší šablony "
+                    "(GEXLENS_SETUP_DISABLED_TEMPLATES) nebo úpravu prahů.",
+                    "ts": dt.datetime.now(dt.UTC).timestamp(),
+                },
+            )
+        elif not is_bad and self._selfcheck_degraded:
+            self._selfcheck_degraded = False
+            await self.publisher.publish(
+                "alerts",
+                {
+                    "kind": "setup_recovered",
+                    "symbol": self.symbol,
+                    "message": f"Setup detektor {self.symbol} se vrátil nad práh — {summary}",
+                    "ts": dt.datetime.now(dt.UTC).timestamp(),
+                },
+            )
 
     async def _run_fa_validation(self, today: dt.date) -> None:
         """Denní FA validace (#232): open-ratio bod za včerejší volume vs. dnešní ΔOI.
