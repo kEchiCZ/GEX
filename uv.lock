@@ -18,6 +18,7 @@ members = [
     "gexlens",
     "gexlens-api",
     "gexlens-engine",
+    "gexlens-news",
 ]
 
 [[package]]
@@ -219,6 +220,29 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pyarrow", specifier = ">=18" },
+    { name = "pydantic-settings", specifier = ">=2.7" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
+]
+
+[[package]]
+name = "gexlens-news"
+version = "0.1.0"
+source = { editable = "news-engine" }
+dependencies = [
+    { name = "gexlens-engine" },
+    { name = "httpx" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "sqlalchemy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "gexlens-engine", editable = "engine" },
+    { name = "httpx", specifier = ">=0.28" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
+    { name = "pydantic", specifier = ">=2.10" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "sqlalchemy", specifier = ">=2.0" },
 ]
