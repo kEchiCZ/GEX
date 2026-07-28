@@ -23,6 +23,8 @@ export interface PanelSeries {
   /** Delta-vážený opční tok per strana (|Δ| × přírůstek volume) — čtení C/P aktivity. */
   deltaFlowCall: number[]
   deltaFlowPut: number[]
+  /** SentIndex po minutách (#288); prázdné = modul zatím data nemá. */
+  sentiment?: number[]
 }
 
 export interface PanelsVisible {
@@ -30,6 +32,7 @@ export interface PanelsVisible {
   optVol: boolean
   delta: boolean
   deltaFlow: boolean
+  sentiment: boolean
 }
 
 /** Časová část transformace hlavního grafu (sdílená osa X). */
@@ -355,6 +358,37 @@ function BottomPanelsBase({
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('cumdelta')}
+        </svg>
+      </section>,
+    )
+  }
+
+  if (visible.sentiment && data.sentiment && data.sentiment.length > 0) {
+    const sentiment = data.sentiment
+    const areas = cumDeltaAreas(sentiment, minutes * step, height)
+    const peak = seriesPeak(sentiment)
+    panels.push(
+      <section key="sentiment" className="bottom-panel" aria-label="Sentiment panel">
+        <span className="panel-title muted">Sentiment</span>
+        {idx !== null && sentiment[idx] !== undefined && (
+          <PanelValue>{sentiment[idx].toFixed(2)}</PanelValue>
+        )}
+        {axisValue('sentiment', peak, true)}
+        <svg
+          width={width}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          preserveAspectRatio="none"
+          onPointerMove={handleMove('sentiment')}
+          onPointerLeave={handleLeave}
+        >
+          <g transform={transform}>
+            {/* Vizuálně shodné s Cum Δ: trader čte flow a sentiment vedle sebe */}
+            <path d={areas.positive} fill={COLORS.call} opacity={0.55} data-part="sentiment-pos" />
+            <path d={areas.negative} fill={COLORS.put} opacity={0.55} data-part="sentiment-neg" />
+            <CrosshairLine x={pointer.crosshairX} height={height} />
+          </g>
+          {axisLineH('sentiment')}
         </svg>
       </section>,
     )

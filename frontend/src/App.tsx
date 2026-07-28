@@ -1,7 +1,10 @@
 /** Kořenový layout aplikace (SPEC 7.1) s obrazovkami Graf / Dashboard / Console / Settings. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import { alignSeriesToLabels } from './api/news'
 import { useAnnotations } from './annotations/useAnnotations'
+import { NewsView } from './components/NewsView'
+import { useNews } from './hooks/useNews'
 import { TimeframeRow, TogglesRow } from './components/ControlRows'
 import { Console } from './components/Console'
 import { Dashboard } from './components/Dashboard'
@@ -81,6 +84,8 @@ function MainContent() {
     setRegimeInfo,
     socket,
   } = useAppState()
+  // Zprávy a sentiment (#288/#289) — jeden zdroj pro panel, sidebar i chip
+  const newsData = useNews()
   // Volby grafu přežívají refresh (ADR-0007, #167); URL deep-link má přednost
   const [style, setStyle] = usePersistentState<HeatmapStyle>(
     'style',
@@ -304,10 +309,22 @@ function MainContent() {
           ],
     [day.minuteLabels, day.lastMinuteIso, projectionExtra, bucketMinutes],
   )
-  const panelSeries = useMemo(
-    () => (playback.isLive ? day.panels : slicePanels(day.panels, playback.position)),
-    [day.panels, playback.isLive, playback.position],
-  )
+  const panelSeries = useMemo(() => {
+    const base = playback.isLive ? day.panels : slicePanels(day.panels, playback.position)
+    if (!toggles.news) return base
+    // Sentiment přichází z jiného zdroje než bary (news-engine → API), takže
+    // se páruje podle času, ne podle indexu (#288)
+    const aligned = alignSeriesToLabels(newsData.series, day.minuteLabels)
+    const sliced = playback.isLive ? aligned : aligned.slice(0, playback.position + 1)
+    return { ...base, sentiment: sliced }
+  }, [
+    day.panels,
+    day.minuteLabels,
+    newsData.series,
+    playback.isLive,
+    playback.position,
+    toggles.news,
+  ])
   const allOverlays = useMemo(
     () => (playback.isLive ? staticOverlays : sliceOverlays(staticOverlays, playback.position)),
     [staticOverlays, playback.isLive, playback.position],
@@ -340,8 +357,11 @@ function MainContent() {
       optVol: toggles.optVol,
       delta: toggles.delta,
       deltaFlow: toggles.deltaFlow,
+      // Checkbox News zapíná zároveň panel Sentiment (#288); markery v grafu
+      // se na něj navěsí v #287
+      sentiment: toggles.news,
     }),
-    [toggles.vol, toggles.optVol, toggles.delta, toggles.deltaFlow],
+    [toggles.vol, toggles.optVol, toggles.delta, toggles.deltaFlow, toggles.news],
   )
   const panelTime = useMemo(
     () => ({ offsetX: chartView.offsetX, zoomX: chartView.zoomX }),
@@ -524,6 +544,7 @@ function MainContent() {
     )
   }
   if (view === 'chain') return <ChainView />
+  if (view === 'news') return <NewsView />
   if (view === 'setups') return <SetupsView />
   if (view === 'console') return <Console />
   if (view === 'settings') return <SettingsView />

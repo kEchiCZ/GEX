@@ -1046,3 +1046,78 @@ body {
 .card-pcr strong {
   color: var(--text);
 }
+
+/* Obrazovka News (#289) */
+.news-view {
+  padding: 12px 16px;
+  overflow: auto;
+}
+
+.news-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.news-header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.news-topics,
+.news-upcoming {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.news-upcoming {
+  display: block;
+}
+
+.news-upcoming h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+
+.news-upcoming ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.news-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.news-table th,
+.news-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid rgba(215, 220, 230, 0.08);
+}
+
+.news-time {
+  white-space: nowrap;
+}
+
+.news-title {
+  max-width: 640px;
+}
+
+.news-score.positive {
+  color: #14c8aa;
+}
+
+.news-score.negative {
+  color: #e05260;
+}
+
+.news-score.neutral {
+  color: #7d8596;
+}

@@ -14,6 +14,7 @@ const NAV_ITEMS: Array<{ view: AppView; label: string }> = [
   { view: 'dashboard', label: 'Dashboard' },
   { view: 'chain', label: 'Řetěz' },
   { view: 'setups', label: 'Setupy' },
+  { view: 'news', label: 'News' },
   { view: 'console', label: 'IBKR Console' },
   { view: 'settings', label: 'Settings' },
 ]
