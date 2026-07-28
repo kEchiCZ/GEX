@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from gexlens_engine.compute.levels import GexLevels
 from gexlens_engine.compute.setups import (
+    SETUP_MECHANICS_VERSION,
     Direction,
     MinuteInputs,
     Outcome,
@@ -901,3 +902,86 @@ async def test_setup_engine_stale_setup_times_out_by_own_expiry(tmp_path: Path) 
     rows = repository.list_for("ES")
     assert rows[0]["status"] == "closed_timeout"  # ne closed_target z dnešního high
     assert rows[0]["outcome_r"] == pytest.approx((7460 - 7452) / 24, rel=1e-3)
+
+
+# ── Verzování mechaniky (#311) ─────────────────────────────────────
+
+
+def test_new_setups_carry_current_mechanics_version(tmp_path: Path) -> None:
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}")
+    repository = SetupsRepository(db)
+    repository.ensure_schema()
+    setup_id = repository.create(
+        symbol="ES",
+        expiry="20260717",
+        template="wall_bounce",
+        direction="long",
+        created_ts=TS,
+        entry=7500.0,
+        target=7530.0,
+        stop=7490.0,
+        confidence=55,
+        reason="test",
+        context={},
+    )
+    row = next(r for r in repository.list_for("ES") if r["id"] == setup_id)
+    assert row["mechanics_version"] == SETUP_MECHANICS_VERSION
+
+
+def test_legacy_rows_get_version_1_and_are_excluded(tmp_path: Path) -> None:
+    """Migrace doplní sloupec do existující tabulky; staré řádky = v1 (#311).
+
+    Hranice tím vyjde správně: všechno před migrací vzniklo starou mechanikou
+    nebo nad zmrzlými daty (ADR-0015), takže do bilance aktuálního systému
+    nepatří.
+    """
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'legacy.sqlite'}")
+    # Tabulka „z doby před #311" — bez sloupce mechanics_version
+    with db.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE setups (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "symbol VARCHAR(16) NOT NULL, expiry VARCHAR(8) NOT NULL, "
+                "template VARCHAR(32) NOT NULL, direction VARCHAR(8) NOT NULL, "
+                "created_ts DATETIME NOT NULL, entry FLOAT NOT NULL, target FLOAT NOT NULL, "
+                "stop FLOAT NOT NULL, confidence INTEGER NOT NULL, reason TEXT NOT NULL, "
+                "context JSON NOT NULL, status VARCHAR(16) NOT NULL, closed_ts DATETIME, "
+                "outcome_r FLOAT, mfe FLOAT, mae FLOAT, user_rating INTEGER, user_note TEXT)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO setups (symbol, expiry, template, direction, created_ts, entry, "
+                "target, stop, confidence, reason, context, status, closed_ts, outcome_r) "
+                "VALUES ('ES','20260717','failed_break','short', :ts, 7500, 7200, 7505, 55, "
+                "'stara mechanika', '{}', 'closed_stop', :ts, -1.0)"
+            ),
+            {"ts": TS},
+        )
+
+    repository = SetupsRepository(db)
+    repository.ensure_schema()  # idempotentní ALTER
+    repository.ensure_schema()  # podruhé nesmí spadnout
+
+    since = TS - dt.timedelta(days=7)
+    assert len(repository.closed_since("ES", since)) == 1  # bez filtru se vidí
+    assert repository.closed_since("ES", since, mechanics_version=SETUP_MECHANICS_VERSION) == []
+
+    # Nový setup už nese aktuální verzi a do bilance patří
+    new_id = repository.create(
+        symbol="ES",
+        expiry="20260717",
+        template="wall_bounce",
+        direction="long",
+        created_ts=TS,
+        entry=7500.0,
+        target=7530.0,
+        stop=7490.0,
+        confidence=55,
+        reason="nova mechanika",
+        context={},
+    )
+    repository.close(new_id, status="closed_target", closed_ts=TS, outcome_r=2.0, mfe=0.0, mae=0.0)
+    current = repository.closed_since("ES", since, mechanics_version=SETUP_MECHANICS_VERSION)
+    assert len(current) == 1
+    assert current[0].outcome_r == 2.0

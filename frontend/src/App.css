@@ -842,6 +842,16 @@ body {
   font-size: 16px;
 }
 
+/* Přepínač verze mechaniky (#311) — default jen aktuální systém */
+.setups-version-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #7d8596;
+  cursor: pointer;
+}
+
 /* Zvýrazněné souhrnné statistiky (#189) — dlaždice s velkými hodnotami */
 .setups-stats {
   display: flex;

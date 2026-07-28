@@ -256,3 +256,40 @@ Stejná třída selhání jako ADR-0015 (#306), a obojí v jednom dni.
 Motivace navíc: prahy R-mechaniky z #302 (`min_risk_atr`, `max_rr`) jsou
 odvozené z měření, ale zatím **neověřená hypotéza**. Bez sebekontroly by se
 jejich případný neúspěch zase zjistil za týden a zase náhodou.
+
+## Dodatek 2026-07-28: verzování mechaniky (#311)
+
+Sebekontrola (#309) vystřelila hned první noc alert `setup_degraded` pro NQ
+(ΣR −24,7 / 7 dní). Rozpad okna ale ukázal, na čem verdikt stál: **86 setupů
+staré mechaniky, 28 z incidentu se zmrzlými Greeks a 4 platné** (ES 26 / 8 / 1).
+Hlášení tedy popisovalo systém, který po #302 a #306 už neexistuje — a takhle by
+vypadalo dalších ~6 dní, než okno odroluje. Zvonek opakovaně hlásící neřešitelné
+si člověk odnaučí číst, což je přesně failure mode, kvůli kterému v #309 vědomě
+není denní „vše v pořádku" alert.
+
+Hlubší problém: setupy nenesly informaci o tom, **jaký systém je vyrobil**.
+Poznámka v ADR-0015 („data z incidentu nepoužívat pro kalibraci") byla věta pro
+člověka, ne kontrola v kódu — a Fáze 2 by na ni musela někdo vzpomenout.
+
+- **`SETUP_MECHANICS_VERSION`** v `compute/setups.py`; zvedá se při každé změně
+  sémantiky stopů, cílů nebo filtrů. `1` = původní mechanika, `2` = #302 nad
+  ověřeně čerstvými daty po #306.
+- **Sloupec `setups.mechanics_version`**, zapsaný při vzniku. Migrace je
+  idempotentní ALTER v `ensure_schema` (`create_all` existující tabulku nemění);
+  staré řádky dostanou `1`. Hranice tím vyjde přirozeně správně — všechno před
+  migrací vzniklo starou mechanikou nebo nad zmrzlými daty, **včetně
+  36minutového překryvu 27. 7. 14:00–14:36**, kdy už běžela nová mechanika, ale
+  Greeks ještě nechodily. Žádné hardcodované okno incidentu.
+- **Sebekontrola i budoucí kalibrace počítají jen aktuální verzi.** Dokud není
+  `min_samples` platných vzorků, verdikt nepadne a zvonek mlčí — radši žádný
+  verdikt než verdikt o mrtvém systému.
+- **Stránka Setupy** defaultně ukazuje jen aktuální verzi (checkbox „Včetně
+  starší mechaniky (N)" ji přidá zpět). Počítadla úspěšnosti, ΣR i % účtu se tím
+  přirozeně „resetují" bez mazání čehokoli.
+
+**Mazání starých setupů bylo zvažováno a zamítnuto:** tabulka má explicitní
+pravidlo *„bez delete — R4 duch platí i tady"*, historické řádky jsou důkaz
+(právě z nich se diagnostikovalo −43,5R a Ø RRR 25–47) a bez nich nejde porovnat
+starou mechaniku s novou, což je přesně to, co chceme příští dny měřit.
+Verzování dá stejný čistý start ve statistikách, evidenci nezničí a je to trvalé
+řešení pro každou budoucí změnu, ne jednorázový úklid.

@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
-import { formatPct, formatPnlUsd, setupPnlPct, setupPnlUsd, setupRrr } from '../api/setups'
+import { CURRENT_MECHANICS_VERSION, formatPct, formatPnlUsd, setupPnlPct, setupPnlUsd, setupRrr } from '../api/setups' // prettier-ignore
 import { pointValue } from '../instrument/tick'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
@@ -26,6 +26,7 @@ const SETUP_ROW = {
   mae: 6,
   user_rating: null,
   user_note: null,
+  mechanics_version: CURRENT_MECHANICS_VERSION,
 }
 
 function mockApi(setups: Array<Record<string, unknown>>) {
@@ -222,4 +223,30 @@ test('WS událost setups.* přenačte setupy', async () => {
     const after = fetchMock.mock.calls.filter(([url]) => String(url).includes('/setups/ES')).length
     expect(after).toBeGreaterThan(before)
   })
+})
+
+test('statistiky počítají jen aktuální mechaniku, starší jde zapnout (#311)', async () => {
+  // Starý setup má jinou sémantiku stopů/cílů (Ø RRR 25–47) — do bilance
+  // aktuálního systému nepatří, jinak by čísla popisovala mrtvý detektor
+  const legacy = {
+    ...SETUP_ROW,
+    id: 1,
+    outcome_r: -8,
+    status: 'closed_stop',
+    mechanics_version: 1,
+  }
+  mockApi([legacy, SETUP_ROW])
+  renderApp()
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Setupy' }))
+  await screen.findByRole('heading', { name: /Setupy —/ })
+
+  // Default: jen aktuální verze → jeden řádek, ΣR z něj
+  expect(screen.getAllByRole('row').length - 1).toBe(1)
+  const toggle = screen.getByLabelText(/Včetně starší mechaniky/)
+  expect(toggle).toBeDefined()
+
+  // Po zapnutí se přidá i starý setup
+  fireEvent.click(toggle)
+  await waitFor(() => expect(screen.getAllByRole('row').length - 1).toBe(2))
 })
