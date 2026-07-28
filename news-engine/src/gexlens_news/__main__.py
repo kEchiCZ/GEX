@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from sqlalchemy import create_engine
 
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
+from gexlens_news.bars import BarsRepository
 from gexlens_news.collectors import Collector
 from gexlens_news.collectors.finnhub import FinnhubCollector
 from gexlens_news.collectors.forexfactory import ForexFactoryCollector
@@ -31,6 +32,7 @@ from gexlens_news.config import (
 )
 from gexlens_news.http import Fetcher, make_fetcher
 from gexlens_news.pipeline import DedupingWriter
+from gexlens_news.reaction_job import ReactionJob
 from gexlens_news.runner import CollectorRunner
 from gexlens_news.store import NewsWriter
 
@@ -86,13 +88,27 @@ async def run(settings: NewsSettings) -> None:
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, stop.set)
 
+    reactions = ReactionJob(engine, BarsRepository(settings.data_dir))
+
+    async def reaction_loop() -> None:
+        """Dopočet reakcí běží vedle sběru; jeho pád nesmí zastavit collectory."""
+        while not stop.is_set():
+            try:
+                await asyncio.to_thread(reactions.run, dt.datetime.now(dt.UTC))
+            except Exception:
+                logger.exception(
+                    "Dopočet reakcí selhal — zkusí se za %.0f s", settings.reaction_interval_s
+                )
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=settings.reaction_interval_s)
+
     enabled = [name for name, on in settings.enabled_sources.items() if on]
     logger.info(
         "news-engine běží: %d collectorů, zdroje s konfigurací: %s",
         len(collectors),
         ", ".join(sorted(enabled)) or "žádné",
     )
-    await runner.run(stop=stop)
+    await asyncio.gather(runner.run(stop=stop), reaction_loop())
     logger.info("news-engine ukončen")
 
 

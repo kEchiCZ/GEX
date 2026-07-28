@@ -80,6 +80,10 @@ services:
       GEXLENS_NEWS_GEMINI_API_KEY: ${GEXLENS_NEWS_GEMINI_API_KEY:-}
       GEXLENS_NEWS_REDDIT_CLIENT_ID: ${GEXLENS_NEWS_REDDIT_CLIENT_ID:-}
       GEXLENS_NEWS_REDDIT_CLIENT_SECRET: ${GEXLENS_NEWS_REDDIT_CLIENT_SECRET:-}
+      GEXLENS_NEWS_DATA_DIR: /app/data
+    volumes:
+      # Archiv 1min barů jen ke čtení — zapisuje ho datový engine (#276)
+      - ./data:/app/data:ro
     depends_on:
       postgres:
         condition: service_healthy
