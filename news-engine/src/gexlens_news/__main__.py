@@ -19,9 +19,15 @@ from sqlalchemy import create_engine
 
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_news.collectors import Collector
+from gexlens_news.collectors.finnhub import FinnhubCollector
 from gexlens_news.collectors.forexfactory import ForexFactoryCollector
 from gexlens_news.collectors.rss import RssCollector
-from gexlens_news.config import FED_RSS_URLS, NewsSettings, load_news_settings
+from gexlens_news.config import (
+    FED_RSS_URLS,
+    NEWS_RSS_URLS,
+    NewsSettings,
+    load_news_settings,
+)
 from gexlens_news.http import Fetcher, make_fetcher
 from gexlens_news.runner import CollectorRunner
 from gexlens_news.store import NewsWriter
@@ -46,7 +52,17 @@ def build_collectors(settings: NewsSettings, fetcher: Fetcher) -> list[Collector
             importance=3,
             symbols=["ES", "NQ"],
         ),
+        # Tier B (#272): redundantní headline zdroje; dedup je slučuje (#273)
+        RssCollector("rss_news", NEWS_RSS_URLS, fetcher, interval_s=settings.rss_interval_s),
     ]
+    if settings.finnhub_api_key:
+        collectors.append(
+            FinnhubCollector(
+                settings.finnhub_api_key, fetcher, interval_s=settings.finnhub_interval_s
+            )
+        )
+    else:
+        logger.info("Finnhub bez klíče — zdroj se nespouští (není to porucha)")
     return collectors
 
 

@@ -7,6 +7,7 @@ Bez toho by latenční požadavek „headline → DB < 60 s" (kap. 10) nešlo sp
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -21,6 +22,20 @@ BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 DEFAULT_TIMEOUT_S = 20.0
+
+# S10: klíč v query stringu se nesmí dostat do logů ani do uložených chyb.
+# httpx dává celé URL do textu výjimky, takže bez tohohle by token skončil
+# v `CollectorHealth.last_error` a odtud v UI.
+_SECRET_PARAM = re.compile(r"((?:token|api[_-]?key|apikey|key|secret)=)[^&\s\"']+", re.I)
+
+
+def strip_secrets(text: str) -> str:
+    """Nahradí hodnoty citlivých query parametrů hvězdičkami.
+
+    Náhrada je lambdou, ne backreferencí: escapování v replacement stringu se
+    snadno rozbije a tichá chyba by znamenala, že klíč projde do logu.
+    """
+    return _SECRET_PARAM.sub(lambda match: f"{match.group(1)}***", text)
 
 
 @dataclass(frozen=True)
