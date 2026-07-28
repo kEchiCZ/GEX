@@ -194,6 +194,23 @@ news_prediction_outcomes = Table(
 )
 
 
+# Váhy predictorů (SPEC 5.3): hit-rate per kategorie a predictor v klouzavém
+# okně → w_cat ve skóre eventu. Tabulka v #269 chyběla, doplněna v #282.
+news_weights = Table(
+    "news_weights",
+    sentiment_metadata,
+    Column("category", String(24), primary_key=True),
+    Column("predictor", String(8), primary_key=True),
+    Column("window_min", SmallInteger, primary_key=True),
+    Column("n", Integer, nullable=False),
+    Column("hit_rate", Float, nullable=False),
+    Column("hit_rate_lb", Float, nullable=False),
+    # Váha odvozená z dolní meze — edge nad mincí, ne bodová úspěšnost
+    Column("weight", Float, nullable=False),
+    Column("computed_at", DateTime(timezone=True), nullable=False),
+)
+
+
 # ── Odvozené řady a stav ───────────────────────────────────────────
 
 # Denní OHLC kontinuálního SentIndexu (SPEC 7.1) — zdroj pro vlny.
