@@ -26,7 +26,12 @@ from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.ibkr.connection import ConnectionManager, ConnectionState
 from gexlens_engine.ibkr.discovery import ChainDiscovery, Underlying, build_contracts
-from gexlens_engine.ibkr.newsticks import NEWS_TICK, NewsTickCollector
+from gexlens_engine.ibkr.newsticks import (
+    NewsTickCollector,
+    NewsTickLike,
+    subscribe_broad_tape,
+    tape_symbol,
+)
 from gexlens_engine.ibkr.pacing import PacingGuard
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler
 from gexlens_engine.ibkr.underlying import Bar, RealTimeBarAggregator, UnderlyingBackfiller
@@ -84,6 +89,40 @@ async def _resolve_front_future(ib: IB, symbol: str) -> Contract:
         f"{symbol}: podklad nenalezen jako futures na {'/'.join(FUTURES_EXCHANGES)} "
         "(podporovány jsou futures opce — ADR-0003)"
     )
+
+
+async def _start_broker_news(
+    ib: IB, manager: ConnectionManager, collector: NewsTickCollector
+) -> None:
+    """Broad tape všech news providerů + okamžitý zápis příchozích headlines (#334).
+
+    Odebírá se jednou na spojení, ne per symbol: páska providera není vázaná na
+    podklad, takže druhá subskripce by jen zdvojila tytéž ticky.
+    """
+
+    def make_contract(provider: str) -> Contract:
+        return Contract(secType="NEWS", exchange=provider, symbol=tape_symbol(provider))
+
+    async def resubscribe_news() -> None:
+        # Reconnect zahazuje serverové subskripce; bez obnovy by páska po prvním
+        # výpadku tiše umlkla
+        providers = [p.code for p in await ib.reqNewsProvidersAsync()]
+        subscribe_broad_tape(ib.client, providers, make_contract=make_contract)
+
+    async def store(tick: NewsTickLike, now: dt.datetime) -> None:
+        try:
+            await asyncio.to_thread(collector.write, [tick], now=now)
+        except Exception:
+            logger.exception("Okamžitý zápis headline selhal — dožene minutový cyklus")
+
+    def on_news_tick(tick: NewsTickLike) -> None:
+        # Zápis do DB je blokující; z handleru se jen odpálí úloha, ať se
+        # nebrzdí síťová smyčka ib_async
+        asyncio.create_task(store(tick, dt.datetime.now(dt.UTC)))
+
+    ib.tickNewsEvent += on_news_tick
+    manager.on_resubscribe(resubscribe_news)
+    await resubscribe_news()
 
 
 async def create_pipeline(
@@ -150,9 +189,9 @@ async def create_pipeline(
         obnovy by po prvním výpadku zamrzly (spot) a přestaly chodit (bary).
         """
         nonlocal rt_bars
-        # Generic tick 292 = živé headlines (#291, Tier D). Stojí jednu market
-        # data line na symbol — proti rezervě 80/≥150 (ADR-0001) zanedbatelné.
-        ticker = ib.reqMktData(front, NEWS_TICK if news_ticks else "", False, False)
+        # Headlines se NEodebírají tady: na futures je IBKR odmítá (#334),
+        # jede se přes broad tape providerů v `main()`.
+        ticker = ib.reqMktData(front, "", False, False)
         ticker.updateEvent += on_spot_tick
         bars_list = ib.reqRealTimeBars(front, 5, "TRADES", False)
         bars_list.updateEvent += on_bar_update
@@ -388,6 +427,7 @@ async def main() -> None:
     if settings.ibkr_news_enabled:
         await asyncio.to_thread(ensure_sentiment_schema, db)
         news_ticks = NewsTickCollector(db)
+        await _start_broker_news(ib, manager, news_ticks)
 
     retention = RetentionJob(settings)
     last_purge_date: dt.date | None = None

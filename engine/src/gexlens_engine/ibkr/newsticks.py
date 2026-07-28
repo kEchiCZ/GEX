@@ -9,6 +9,13 @@ přečte stejně jako zprávy z vlastních collectorů.
 Motivace je měřená: RSS zdroje doručují headline s mediánem 667 s po jejich
 vlastním `pubDate` (změřeno 28. 7. na 371 zprávách), takže požadavek
 „headline → DB < 60 s" plnilo 11 z 371. Broker tick chodí živě.
+
+**Odebírá se broad tape providera, ne podklad** (#334). Na futures IBKR news
+subskripci odmítá (`Error 10094: Derivative contracts cannot be used to
+subscribe to news`) a akciová proxy (SPY) padá na chybějícím předplatném US
+equity dat (`Error 10089`). Zbývá `secType='NEWS'` — celá páska providera,
+nezávislá na podkladu. To je pro makro sentiment stejně to, co chceme: zprávy
+hýbající ES/NQ nejsou vázané na jeden kontrakt.
 """
 
 import datetime as dt
@@ -27,8 +34,11 @@ from gexlens_engine.storage.sentiment import news_events
 
 logger = logging.getLogger(__name__)
 
-# Generic tick pro živé headlines (IBKR `mdoff,292`)
-NEWS_TICK = "292"
+# Generic ticks broad tape. `mdoff` vypíná kotace — NEWS kontrakt žádné nemá
+# a bez něj IBKR subskripci odmítne.
+BROAD_TAPE_TICKS = "mdoff,292"
+# Přípona „celá páska providera"; `BRFG` → `BRFG:BRFG_ALL`
+BROAD_TAPE_SUFFIX = "_ALL"
 # Kolik článků se drží v paměti jako „už zapsané"; IBKR seznam roste přes den
 SEEN_LIMIT = 5000
 # Nad touhle hranicí je epoch v milisekundách, ne sekundách (rok 2001 v ms)
@@ -52,6 +62,54 @@ def tick_time(raw: object, *, now: dt.datetime) -> dt.datetime:
         except (OverflowError, OSError, ValueError):
             logger.debug("Nečitelný timestamp headline: %r", raw)
     return now
+
+
+def tape_symbol(provider: str) -> str:
+    """`BRFG` → `BRFG:BRFG_ALL` — symbol celé pásky providera."""
+    return f"{provider}:{provider}{BROAD_TAPE_SUFFIX}"
+
+
+class MarketDataClient(Protocol):
+    """Nízkoúrovňový klient ib_async (`ib.client`)."""
+
+    def getReqId(self) -> int: ...
+
+    def reqMktData(
+        self,
+        reqId: int,
+        contract: Any,
+        genericTickList: str,
+        snapshot: bool,
+        regulatorySnapshot: bool,
+        mktDataOptions: list[Any],
+    ) -> None: ...
+
+
+def subscribe_broad_tape(
+    client: MarketDataClient, providers: Sequence[str], *, make_contract: Any
+) -> list[str]:
+    """Odebere pásku každého providera; vrací ty, u kterých request odešel.
+
+    Jde se přes `ib.client`, ne přes `IB.reqMktData`: ten si kontrakt ukládá do
+    registru tickerů podle `conId`, který NEWS kontrakt nemá a `reqContractDetails`
+    ho nedoplní (na NEWS kontrakt vůbec neodpoví). `Wrapper.tickNews` ale reqId
+    ignoruje a do `newsTicks` zapisuje bezpodmínečně, takže registr není potřeba.
+
+    Provider bez `_ALL` pásky (`BRFUPDN` — upgrady/downgrady) odpoví **asynchronně**
+    `Error 200: No security definition`. Tady se to nepozná a poznat nemá:
+    zahodit kvůli jednomu providerovi ostatní by bylo horší než chyba v logu.
+    """
+    subscribed: list[str] = []
+    for provider in providers:
+        req_id = client.getReqId()
+        try:
+            client.reqMktData(req_id, make_contract(provider), BROAD_TAPE_TICKS, False, False, [])
+        except Exception:
+            logger.exception("Subskripce pásky %s selhala — pokračuji dalším", provider)
+            continue
+        subscribed.append(provider)
+    logger.info("Broker news: odebráno %d pásek (%s)", len(subscribed), ", ".join(subscribed))
+    return subscribed
 
 
 class NewsTickLike(Protocol):
@@ -125,10 +183,16 @@ def normalize_tick(tick: NewsTickLike, *, now: dt.datetime) -> BrokerHeadline | 
 
 
 class NewsTickCollector:
-    """Čte `ib.newsTicks()` v minutovém cyklu a zapisuje nové do `news_events`.
+    """Zapisuje broker headlines do `news_events`.
 
-    Polling místo event handleru záměrně: engine má minutový cyklus a IBKR
-    seznam je kumulativní, takže stačí sledovat, co už jsme viděli.
+    Volá se ze dvou míst a to je záměr (#335):
+
+    * z handleru `ib.tickNewsEvent` **hned**, jak tick dorazí — minuta zdržení
+      je na minutovém timeframu pozdě,
+    * z minutového cyklu jako pojistka proti ztracenému eventu (výpadek loopu,
+      výjimka v handleru).
+
+    Dvojí zápis nevadí: `_seen` a UNIQUE na `dedup_hash` ho zahodí.
     """
 
     def __init__(self, db: Engine) -> None:
