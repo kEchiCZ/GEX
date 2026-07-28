@@ -35,6 +35,10 @@ class NewsSettings(BaseSettings):
     rss_interval_s: float = Field(default=60.0, gt=0)
     fed_rss_interval_s: float = Field(default=300.0, gt=0)
     reddit_interval_s: float = Field(default=900.0, gt=0)
+
+    # Okno rolling deduplikace (#273): rozdíl mezi tím, kdy tutéž story vydá
+    # Finnhub a kdy pomalejší RSS. Fixní časové buckety se vědomě nepoužívají.
+    dedup_window_minutes: int = Field(default=10, ge=1)
     cnn_fg_interval_s: float = Field(default=3600.0, gt=0)
 
     # Klíče a přihlašovací údaje — prázdné = zdroj vypnutý (S10)

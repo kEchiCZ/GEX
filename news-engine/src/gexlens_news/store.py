@@ -5,6 +5,7 @@ dedup a cross-source merge přijde v #273. Tady jde jen o to, aby skeleton
 uměl bezpečně psát a opakovaný běh nic nerozbil.
 """
 
+import datetime as dt
 import logging
 from collections.abc import Sequence
 
@@ -17,6 +18,15 @@ from gexlens_engine.storage.sentiment import news_events
 from gexlens_news.model import NewsEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _as_utc(value: dt.datetime) -> dt.datetime:
+    """Čas z DB vždy jako tz-aware UTC.
+
+    PostgreSQL vrací offset-aware, sqlite (testy) naivní — bez sjednocení by
+    porovnání časů v dedup okně padalo na TypeError.
+    """
+    return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
 
 
 class NewsWriter:
@@ -65,6 +75,34 @@ class NewsWriter:
         if skipped:
             logger.debug("Zahozeno %d duplicit dle dedup_hash", skipped)
         return written
+
+    def recent(self, since: dt.datetime) -> list[NewsEvent]:
+        """Eventy od `since` — naplní dedup okno po startu (#273).
+
+        Bez toho by restart procesu zapsal duplicity ke všemu, co dorazilo
+        v posledních minutách.
+        """
+        stmt = select(
+            news_events.c.ts_event,
+            news_events.c.ts_ingested,
+            news_events.c.source,
+            news_events.c.source_uid,
+            news_events.c.kind,
+            news_events.c.title,
+        ).where(news_events.c.ts_event >= since)
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            NewsEvent(
+                ts_event=_as_utc(row.ts_event),
+                ts_ingested=_as_utc(row.ts_ingested),
+                source=row.source,
+                source_uid=row.source_uid,
+                kind=row.kind,
+                title=row.title,
+            )
+            for row in rows
+        ]
 
     def count(self) -> int:
         with self._engine.connect() as conn:

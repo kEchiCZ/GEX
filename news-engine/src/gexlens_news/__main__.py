@@ -10,6 +10,7 @@ běží naprázdno a `status` to říká nahlas, místo aby předstíral, že sb
 import argparse
 import asyncio
 import contextlib
+import datetime as dt
 import logging
 import signal
 import sys
@@ -29,6 +30,7 @@ from gexlens_news.config import (
     load_news_settings,
 )
 from gexlens_news.http import Fetcher, make_fetcher
+from gexlens_news.pipeline import DedupingWriter
 from gexlens_news.runner import CollectorRunner
 from gexlens_news.store import NewsWriter
 
@@ -69,7 +71,9 @@ def build_collectors(settings: NewsSettings, fetcher: Fetcher) -> list[Collector
 async def run(settings: NewsSettings) -> None:
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     ensure_sentiment_schema(engine)
-    writer = NewsWriter(engine)
+    # Pořadí dle SPEC 3.1: normalizer → dedup → writer
+    writer = DedupingWriter(NewsWriter(engine), window_minutes=settings.dedup_window_minutes)
+    writer.prime_from_db(dt.datetime.now(dt.UTC))
     fetcher = make_fetcher()
     collectors = build_collectors(settings, fetcher)
     runner = CollectorRunner(collectors, writer.write)
