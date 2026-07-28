@@ -27,6 +27,7 @@ import {
   tickIndices,
 } from '../heatmap/overlays'
 import type { OverlayData, PriceBar, PriceStyle } from '../heatmap/overlays'
+import { markerColor, markerStyle } from '../heatmap/newsMarkers'
 import {
   DEFAULT_VIEW,
   axisZoneAt,
@@ -344,6 +345,33 @@ export function Heatmap({
       session.label.split(' · ').forEach((label, row) => {
         context.fillText(label, x + 4, 12 + row * 13)
       })
+    }
+
+    // Markery zpráv (#287, SPEC 9.1): svislá značka v čase události, barva dle
+    // sentimentu, jas a tloušťka dle důležitosti, glyf kategorie nad horní
+    // hranou. Nadcházející scheduled eventy jsou duté — o dopadu se neví nic.
+    for (const marker of overlays.newsMarkers ?? []) {
+      const x = minuteToX(marker.minuteIdx) - 0.5 * scaleX
+      const { alpha, width } = markerStyle(marker)
+      context.strokeStyle = markerColor(marker, alpha)
+      context.lineWidth = width
+      if (marker.upcoming) context.setLineDash([4, 4])
+      context.beginPath()
+      // Značka nejde přes celou výšku jako sessions — nesmí konkurovat cenové
+      // křivce; stačí pás u spodní hrany a glyf nahoře
+      context.moveTo(x, logicalH * 0.72)
+      context.lineTo(x, logicalH)
+      context.stroke()
+      context.setLineDash([])
+
+      context.fillStyle = markerColor(marker, Math.min(1, alpha + 0.05))
+      context.font = '11px sans-serif'
+      context.fillText(marker.glyph, x - 4, logicalH * 0.72 - 4)
+      if (marker.count > 1) {
+        // Cluster: jeden marker s počtem místo změti čar (SPEC 9.1)
+        context.font = '9px sans-serif'
+        context.fillText(String(marker.count), x + 6, logicalH * 0.72 - 4)
+      }
     }
 
     // Předěl mezi naměřenými daty a projekcí (ADR-0006)

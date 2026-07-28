@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { alignSeriesToLabels } from './api/news'
+import { buildNewsMarkers } from './heatmap/newsMarkers'
 import { useAnnotations } from './annotations/useAnnotations'
 import { NewsView } from './components/NewsView'
 import { useNews } from './hooks/useNews'
@@ -309,6 +310,15 @@ function MainContent() {
           ],
     [day.minuteLabels, day.lastMinuteIso, projectionExtra, bucketMinutes],
   )
+  // Markery zpráv se počítají nad CELOU osou včetně projekce (#287): jen tak
+  // se nadcházející CPI vykreslí vpravo od živé hrany, kde ho trader čeká
+  const newsMarkers = useMemo(
+    () =>
+      toggles.news
+        ? buildNewsMarkers(newsData.news, newsData.upcoming, chartLabels, minuteLabel)
+        : [],
+    [toggles.news, newsData.news, newsData.upcoming, chartLabels],
+  )
   const panelSeries = useMemo(() => {
     const base = playback.isLive ? day.panels : slicePanels(day.panels, playback.position)
     if (!toggles.news) return base
@@ -521,8 +531,11 @@ function MainContent() {
       levels: [...(baseOverlays.levels ?? []), ...setupLines, ...ladderLines],
       // Budoucí seance v projekci (#195)
       sessions: [...(baseOverlays.sessions ?? []), ...projectedSessionMarkers],
+      // Markery zpráv (#287) — osa nese i projekční část, takže nadcházející
+      // scheduled eventy padnou napravo od živé hrany
+      newsMarkers,
     }),
-    [baseOverlays, computedWalls, setupLines, ladderLines, toggles.secondaryWall, projectedSessionMarkers], // prettier-ignore
+    [baseOverlays, computedWalls, setupLines, ladderLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers], // prettier-ignore
   )
 
   if (view === 'dashboard') {
