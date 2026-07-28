@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     sweep_next_expiry: bool = True
     next_expiry_sweep_every: int = Field(default=3, ge=1)
     # Setup detektor (ADR-0004) — obchodní analýzy s auto-vyhodnocováním
+    # Živé broker headlines přes generic tick 292 (#291, Tier D). Stojí jednu
+    # market data line na symbol — proti rezervě 80/≥150 (ADR-0001) nic.
+    ibkr_news_enabled: bool = True
     setups_enabled: bool = True
     # Minimální dominance zdi pro šablony T1/T3 (ADR-0010, #223)
     setup_min_wall_dominance: float = Field(default=0.15, ge=0, le=1)

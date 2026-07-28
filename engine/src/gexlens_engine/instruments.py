@@ -37,6 +37,7 @@ from gexlens_engine.ibkr.discovery import (
     Underlying,
     build_contracts,
 )
+from gexlens_engine.ibkr.newsticks import NewsTickCollector, NewsTickLike
 from gexlens_engine.ibkr.scheduler import GreeksStallDetector, SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
@@ -207,6 +208,9 @@ class InstrumentPipeline:
     stall_detector: BarsStallDetector | None = None
     # Hlídání tiché ztráty Greeks (#306); default z konfigurace v __post_init__
     greeks_detector: GreeksStallDetector | None = None
+    # Broker headlines z ticku 292 (#291); None = live news vypnuté
+    news_ticks: NewsTickCollector | None = None
+    read_news_ticks: Callable[[], Sequence[NewsTickLike]] | None = None
     # Re-backfill dnešních barů po návratu streamu (#221); None = backfill nezapojen
     backfill_today: Callable[[], Awaitable[None]] | None = None
     _cycles_since_oi: int = field(default=0, repr=False)
@@ -431,6 +435,7 @@ class InstrumentPipeline:
         self.minute_bars.clear()
         forming = self.forming_bar()
         # Hlídání barů PŘED cyklem — alert musí odejít, i kdyby sweep selhal (#221)
+        await self._collect_news_ticks(now)
         await self._watch_bars(now, spot, bars, forming)
         metrics = await self.runtime.run_cycle(now, spot, bars, forming)
         await self._watch_greeks(now, metrics)
@@ -458,6 +463,21 @@ class InstrumentPipeline:
                 )
         self._minute_count += 1
         return metrics
+
+    async def _collect_news_ticks(self, now: dt.datetime) -> None:
+        """Broker headlines z ticku 292 (#291) — zápis do sdílené news_events.
+
+        Selhání nesmí zabít cyklus: zprávy jsou nadstavba, sběr opčních dat má
+        přednost.
+        """
+        if self.news_ticks is None or self.read_news_ticks is None:
+            return
+        try:
+            ticks = self.read_news_ticks()
+            if ticks:
+                await asyncio.to_thread(self.news_ticks.write, ticks, now=now)
+        except Exception:
+            logger.exception("Zápis IBKR headlines selhal — pokračuji")
 
     async def _watch_greeks(self, now: dt.datetime, metrics: SweepMetrics) -> None:
         """Tichá ztráta Greeks (#306): alert, když sweep dlouho nedokáže obnovit kotace.
