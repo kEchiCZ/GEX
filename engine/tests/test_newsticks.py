@@ -150,9 +150,9 @@ def test_writes_broker_headlines_once(tmp_path: Path) -> None:
     collector, engine = make(tmp_path)
     ticks = [FakeTick("!DJ-RTG Fed holds rates", articleId="x1")]
 
-    assert collector.write(ticks, now=NOW) == 1
+    assert len(collector.write(ticks, now=NOW)) == 1
     # IBKR seznam je kumulativní — druhé čtení téhož ticku nesmí zapsat znovu
-    assert collector.write(ticks, now=NOW) == 0
+    assert collector.write(ticks, now=NOW) == []
     assert collector.count() == 1
 
     with engine.connect() as conn:  # type: ignore[attr-defined]
@@ -203,11 +203,27 @@ def test_same_story_from_rss_and_broker_is_one_row(tmp_path: Path) -> None:
 def test_ticks_without_article_id_dedup_by_hash(tmp_path: Path) -> None:
     collector, _ = make(tmp_path)
     ticks = [FakeTick("Breaking story", articleId="")]
-    assert collector.write(ticks, now=NOW) == 1
-    assert collector.write(ticks, now=NOW) == 0
+    assert len(collector.write(ticks, now=NOW)) == 1
+    assert collector.write(ticks, now=NOW) == []
+
+
+def test_written_headline_carries_id_and_ws_payload(tmp_path: Path) -> None:
+    """Push do WS smí jít jen z toho, co v DB opravdu přibylo (#335)."""
+    collector, _ = make(tmp_path)
+
+    written = collector.write([FakeTick("!DJ-RTG Fed holds rates", articleId="x1")], now=NOW)
+
+    assert len(written) == 1
+    payload = written[0].as_news_row()
+    assert payload["id"] == written[0].id > 0
+    assert payload["title"] == "Fed holds rates"
+    assert payload["kind"] == "broker"
+    # Kategorii doplní až news-engine; UI ji zobrazí jako „Nezařazeno"
+    assert payload["category"] is None
+    assert payload["ts_event"] == NOW.isoformat()
 
 
 def test_empty_input_is_noop(tmp_path: Path) -> None:
     collector, _ = make(tmp_path)
-    assert collector.write([], now=NOW) == 0
-    assert collector.write([FakeTick("")], now=NOW) == 0
+    assert collector.write([], now=NOW) == []
+    assert collector.write([FakeTick("")], now=NOW) == []

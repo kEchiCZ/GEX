@@ -120,6 +120,10 @@ async def run(settings: NewsSettings) -> None:
             # event do empirického modelu vůbec nevstoupil (SPEC 2.4)
             try:
                 await asyncio.to_thread(classification.run, now)
+                # Push klasifikovaných řádků (#335): engine už syrový titulek
+                # pushnul hned po zápisu, tohle ho v UI doplní o kategorii
+                if publisher is not None and classification.last_batch:
+                    await publisher.publish_news(classification.last_batch)
             except Exception:
                 logger.exception("Pravidlová klasifikace selhala — zkusí se příští cyklus")
             try:

@@ -146,6 +146,39 @@ class BrokerHeadline:
         return f"ibkr_{self.provider.lower()}"
 
 
+@dataclass(frozen=True)
+class StoredHeadline:
+    """Zapsaná zpráva i s `id` z DB — podklad pro okamžitý push do UI."""
+
+    id: int
+    headline: BrokerHeadline
+
+    def as_news_row(self) -> dict[str, Any]:
+        """Payload kanálu `news` ve tvaru `NewsRow` frontendu.
+
+        Kategorie je `None` schválně: klasifikátor běží až v news-engine
+        a čekat na něj by zprávu zdrželo o minuty. UI ji zobrazí jako
+        „Nezařazeno" a doplní se, až dorazí klasifikovaná verze téhož `id`.
+        """
+        return {
+            "id": self.id,
+            "ts_event": self.headline.ts_event.isoformat(),
+            "ts_ingested": self.headline.ts_event.isoformat(),
+            "source": self.headline.source,
+            "kind": "broker",
+            "category": None,
+            "importance": None,
+            "title": self.headline.title,
+            "summary": None,
+            "sentiment_dir": None,
+            "sentiment_score": None,
+            "sentiment_source": None,
+            "forecast": None,
+            "previous": None,
+            "actual": None,
+        }
+
+
 def clean_headline(raw: str) -> str:
     """Titulek bez prefixu providera.
 
@@ -203,9 +236,13 @@ class NewsTickCollector:
         # articleId je stabilní; bez něj (starší providery) padáme na hash
         return headline.article_id or dedup_hash(headline.title, headline.ts_event)
 
-    def write(self, ticks: Sequence[NewsTickLike], *, now: dt.datetime) -> int:
-        """Zapíše nové headlines; vrací počet skutečně uložených."""
-        rows: list[dict[str, Any]] = []
+    def write(self, ticks: Sequence[NewsTickLike], *, now: dt.datetime) -> list[StoredHeadline]:
+        """Zapíše nové headlines; vrací **skutečně uložené** i s jejich `id`.
+
+        Vrací se záznamy, ne počet, protože volající je rovnou pushuje do WS
+        kanálu (#335) — a pushnout se smí jen to, co v DB opravdu přibylo.
+        """
+        pending: list[tuple[BrokerHeadline, dict[str, Any]]] = []
         for tick in ticks:
             headline = normalize_tick(tick, now=now)
             if headline is None:
@@ -214,43 +251,51 @@ class NewsTickCollector:
             if key in self._seen:
                 continue
             self._seen.add(key)
-            rows.append(
-                {
-                    "ts_event": headline.ts_event,
-                    "ts_ingested": now,
-                    "source": headline.source,
-                    "source_uid": headline.article_id or None,
-                    "kind": "broker",
-                    "category": None,  # doplní klasifikátor news-engine
-                    "importance": None,
-                    "title": headline.title,
-                    "summary": None,
-                    "symbols": [],
-                    "market_closed": False,
-                    "dedup_hash": dedup_hash(headline.title, headline.ts_event),
-                    "raw": {
-                        "provider": headline.provider,
-                        "article_id": headline.article_id,
+            pending.append(
+                (
+                    headline,
+                    {
+                        "ts_event": headline.ts_event,
+                        "ts_ingested": now,
+                        "source": headline.source,
+                        "source_uid": headline.article_id or None,
+                        "kind": "broker",
+                        "category": None,  # doplní klasifikátor news-engine
+                        "importance": None,
+                        "title": headline.title,
+                        "summary": None,
+                        "symbols": [],
+                        "market_closed": False,
+                        "dedup_hash": dedup_hash(headline.title, headline.ts_event),
+                        "raw": {
+                            "provider": headline.provider,
+                            "article_id": headline.article_id,
+                        },
                     },
-                }
+                )
             )
         if len(self._seen) > SEEN_LIMIT:
             self._seen.clear()
-        if not rows:
-            return 0
+        if not pending:
+            return []
 
         insert = pg_insert if self._db.dialect.name == "postgresql" else sqlite_insert
-        written = 0
+        written: list[StoredHeadline] = []
         with self._db.begin() as conn:
-            for row in rows:
+            for headline, row in pending:
+                # RETURNING, ne rowcount: PostgreSQL u ON CONFLICT DO NOTHING
+                # vrací -1 (= „nevím"), takže počítadlo by lhalo
                 stmt = (
                     insert(news_events)
                     .values(**row)
                     .on_conflict_do_nothing(index_elements=[news_events.c.dedup_hash])
+                    .returning(news_events.c.id)
                 )
-                written += conn.execute(stmt).rowcount or 0
+                inserted = conn.execute(stmt).first()
+                if inserted is not None:
+                    written.append(StoredHeadline(id=int(inserted.id), headline=headline))
         if written:
-            logger.info("IBKR headlines: %d nových (z %d ticků)", written, len(rows))
+            logger.info("IBKR headlines: %d nových (z %d ticků)", len(written), len(pending))
         return written
 
     def count(self) -> int:
