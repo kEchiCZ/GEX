@@ -92,7 +92,7 @@ async def _resolve_front_future(ib: IB, symbol: str) -> Contract:
 
 
 async def _start_broker_news(
-    ib: IB, manager: ConnectionManager, collector: NewsTickCollector
+    ib: IB, manager: ConnectionManager, collector: NewsTickCollector, publisher: PublisherLike
 ) -> None:
     """Broad tape všech news providerů + okamžitý zápis příchozích headlines (#334).
 
@@ -111,9 +111,14 @@ async def _start_broker_news(
 
     async def store(tick: NewsTickLike, now: dt.datetime) -> None:
         try:
-            await asyncio.to_thread(collector.write, [tick], now=now)
+            written = await asyncio.to_thread(collector.write, [tick], now=now)
         except Exception:
             logger.exception("Okamžitý zápis headline selhal — dožene minutový cyklus")
+            return
+        # Push hned po zápisu (#335): čekat na klasifikaci v news-engine by
+        # zprávu zdrželo o minuty, a syrový titulek je použitelný sám o sobě
+        for stored in written:
+            await publisher.publish("news", stored.as_news_row())
 
     def on_news_tick(tick: NewsTickLike) -> None:
         # Zápis do DB je blokující; z handleru se jen odpálí úloha, ať se
@@ -427,7 +432,7 @@ async def main() -> None:
     if settings.ibkr_news_enabled:
         await asyncio.to_thread(ensure_sentiment_schema, db)
         news_ticks = NewsTickCollector(db)
-        await _start_broker_news(ib, manager, news_ticks)
+        await _start_broker_news(ib, manager, news_ticks, publisher)
 
     retention = RetentionJob(settings)
     last_purge_date: dt.date | None = None

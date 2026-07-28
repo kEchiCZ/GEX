@@ -9,6 +9,7 @@ reklasifikace tiše měnila minulé predikce.
 
 import datetime as dt
 import logging
+from typing import Any
 
 from sqlalchemy import insert, select, update
 from sqlalchemy.engine import Engine
@@ -28,8 +29,11 @@ class RuleClassificationJob:
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
+        # Poslední dávka pro push do WS (#335). Držet ji tady je jednodušší než
+        # měnit návratový typ `run` — ten čte i retro pass, kterému stačí počet.
+        self.last_batch: list[dict[str, object]] = []
 
-    def _pending(self, limit: int) -> list[tuple[int, str, str | None, str, float | None]]:
+    def _pending(self, limit: int) -> list[Any]:
         already = select(news_classifications.c.event_id).where(
             news_classifications.c.source == RULE_SOURCE
         )
@@ -40,43 +44,60 @@ class RuleClassificationJob:
                 news_events.c.summary,
                 news_events.c.kind,
                 news_events.c.surprise_z,
+                # Pro push do WS (#335) — UI potřebuje celý řádek, ne jen kategorii
+                news_events.c.ts_event,
+                news_events.c.source,
             )
             .where(news_events.c.id.not_in(already))
             .order_by(news_events.c.ts_event.desc())
             .limit(limit)
         )
         with self._engine.connect() as conn:
-            rows = conn.execute(stmt).fetchall()
-        return [
-            (
-                int(row.id),
-                row.title,
-                row.summary,
-                row.kind,
-                float(row.surprise_z) if row.surprise_z is not None else None,
-            )
-            for row in rows
-        ]
+            return list(conn.execute(stmt).fetchall())
 
     def run(self, now: dt.datetime, *, limit: int = 500) -> int:
         """Zapíše verzi 1 pro nové eventy; vrací počet klasifikovaných."""
         pending = self._pending(limit)
+        self.last_batch = []
         if not pending:
             return 0
 
         rows: list[dict[str, object]] = []
         updates: list[tuple[int, str, int, int, float]] = []
-        for event_id, title, summary, kind, surprise_z in pending:
-            result = classify(title, summary)
+        batch: list[dict[str, object]] = []
+        for row in pending:
+            event_id = int(row.id)
+            title = row.title
+            surprise_z = float(row.surprise_z) if row.surprise_z is not None else None
+            result = classify(title, row.summary)
             direction = result.direction
             strength = result.strength
-            if kind == "scheduled":
+            if row.kind == "scheduled":
                 # Plánované eventy klasifikaci směru nepotřebují — plyne
                 # z překvapení a konvence řady (SPEC kap. 4)
                 from_convention = scheduled_direction(title, surprise_z)
                 if from_convention is not None:
                     direction = from_convention
                     strength = 0.6 if from_convention != 0 else 0.0
+            batch.append(
+                {
+                    "id": event_id,
+                    "ts_event": row.ts_event.isoformat(),
+                    "ts_ingested": row.ts_event.isoformat(),
+                    "source": row.source,
+                    "kind": row.kind,
+                    "category": result.category,
+                    "importance": result.importance,
+                    "title": title,
+                    "summary": row.summary,
+                    "sentiment_dir": direction,
+                    "sentiment_score": direction * strength,
+                    "sentiment_source": RULE_SOURCE,
+                    "forecast": None,
+                    "previous": None,
+                    "actual": None,
+                }
+            )
             rows.append(
                 {
                     "event_id": event_id,
@@ -107,5 +128,6 @@ class RuleClassificationJob:
                         sentiment_source=RULE_SOURCE,
                     )
                 )
+        self.last_batch = batch
         logger.info("Pravidlová klasifikace: %d eventů", len(rows))
         return len(rows)

@@ -166,8 +166,19 @@ def test_job_writes_version_one_and_denormalises(tmp_path: Path) -> None:
     assert event.sentiment_source == "rule"
     assert event.sentiment_score is not None and event.sentiment_score < 0
 
+    # Dávka pro WS push (#335) nese celý řádek, ne jen kategorii — UI z ní
+    # skládá feed bez dalšího dotazu
+    assert len(job.last_batch) == 1
+    pushed = job.last_batch[0]
+    assert pushed["category"] == "EARNINGS"
+    assert pushed["sentiment_dir"] == -1
+    assert pushed["title"] == "Nasdaq plunges as chip guidance misses"
+    assert isinstance(pushed["ts_event"], str)
+
     # Opakovaný běh nepřepisuje ani nepřidává druhou pravidlovou verzi
     assert job.run(NOW) == 0
+    # …a nesmí pushnout starou dávku znovu
+    assert job.last_batch == []
 
 
 def test_scheduled_event_takes_direction_from_convention(tmp_path: Path) -> None:
