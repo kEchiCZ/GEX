@@ -3,6 +3,12 @@
 Maže výhradně denní partice pod `snapshots/`, `ticks/` a `derived/` — k databázi
 (oi_eod, R4) job vůbec nemá přístup, takže ji z principu nemůže poškodit.
 Součástí je monitoring obsazení disku s hard limitem (alert pro UI/notifikace).
+
+**Výjimka: 1min bary podkladu se nemažou nikdy** (SPEC SentimentLens S4, #275).
+Jsou to trénovací data — bez nich nejde spočítat volume z-score reakčních oken
+(potřebuje 20 seancí, tedy víc než 14denní okno) ani zpětně přepočítat reakce
+na zprávy. Objem je zanedbatelný: 2 symboly × ~1400 barů/den ≈ desítky MB/rok.
+Stejný duch jako věčný OI archiv (ADR-0001).
 """
 
 import datetime as dt
@@ -13,6 +19,9 @@ from pathlib import Path
 from gexlens_engine.config import Settings
 
 logger = logging.getLogger(__name__)
+
+# Adresář s 1min bary podkladu; partice pod ním retence nemaže (S4, #275)
+BARS_DIR_NAME = "bars"
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,9 @@ class RetentionJob:
             if not root.exists():
                 continue
             for path in sorted(root.rglob("*.parquet")):
+                if self._is_protected(path):
+                    kept += 1
+                    continue
                 day = self._partition_day(path)
                 if day is None:
                     logger.warning("Partice s nerozpoznatelným datem, ponechávám: %s", path)
@@ -74,6 +86,16 @@ class RetentionJob:
             disk_limit_bytes=limit,
             disk_limit_exceeded=exceeded,
         )
+
+    def _is_protected(self, path: Path) -> bool:
+        """Partice vyňatá z retence — věčný archiv 1min barů (S4, #275).
+
+        Rozhoduje se podle adresáře, ne podle stáří: `derived/{symbol}/bars/`
+        drží trénovací data a maže se jen ručně.
+        """
+        if not self._settings.keep_bars_forever:
+            return False
+        return BARS_DIR_NAME in path.parts
 
     def seconds_until_next_run(self, now: dt.datetime) -> float:
         """Prodleva do dalšího nočního běhu (konfig. čas UTC po zavření US)."""

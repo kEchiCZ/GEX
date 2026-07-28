@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://gexlens:gexlens@localhost:5432/gexlens"
     data_dir: Path = Path("data")
     retention_days: int = Field(default=14, ge=1)
+    # Věčný archiv 1min barů podkladu (SentimentLens S4, #275): výjimka z retence
+    # jako u OI archivu. Bez něj nejde volume z-score (20 seancí > 14denní okno)
+    # ani zpětný přepočet reakcí na zprávy; objem desítky MB/rok.
+    keep_bars_forever: bool = True
     disk_limit_gb: float = Field(default=2.0, gt=0)
     # Čas nočního purge jobu (UTC, po zavření US seance)
     retention_purge_time_utc: dt.time = dt.time(21, 30)
