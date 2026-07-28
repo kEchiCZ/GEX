@@ -33,6 +33,8 @@ class NewsSettings(BaseSettings):
     data_dir: Path = Path("data")
     # Jak často se dopočítávají reakce na zprávy s uzavřenými okny
     reaction_interval_s: float = Field(default=300.0, gt=0)
+    # Interní ingest API pro WS kanály (#286); prázdné = push vypnutý
+    api_base: str = "http://localhost:8000"
 
     # Intervaly sběru (SPEC kap. 1). RSS jede à 60 s díky conditional GET —
     # nezměněný feed vrací 304, takže krátká perioda nikoho nezatěžuje.

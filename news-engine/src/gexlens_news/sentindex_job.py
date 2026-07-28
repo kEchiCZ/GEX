@@ -154,6 +154,36 @@ class SentIndexJob:
         )
         return len(series), topics
 
+    def current_value(self, now: dt.datetime) -> float:
+        """Aktuální hodnota indexu — pro WS push bez čtení celé řady."""
+        from gexlens_news.sentindex import sent_index
+
+        return sent_index(self.load_events(now), now)
+
+    def upcoming_events(self, now: dt.datetime) -> list[dict[str, object]]:
+        """Plánované eventy v nejbližších hodinách (podklad pro news.upcoming)."""
+        stmt = select(
+            news_events.c.id,
+            news_events.c.title,
+            news_events.c.ts_event,
+            news_events.c.importance,
+        ).where(
+            news_events.c.kind == "scheduled",
+            news_events.c.ts_event > now,
+            news_events.c.ts_event <= now + dt.timedelta(hours=2),
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            {
+                "id": int(row.id),
+                "title": row.title,
+                "ts_event": _as_utc(row.ts_event),
+                "importance": row.importance,
+            }
+            for row in rows
+        ]
+
 
 def _as_utc(value: dt.datetime) -> dt.datetime:
     return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
