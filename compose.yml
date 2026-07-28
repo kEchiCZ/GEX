@@ -81,6 +81,8 @@ services:
       GEXLENS_NEWS_REDDIT_CLIENT_ID: ${GEXLENS_NEWS_REDDIT_CLIENT_ID:-}
       GEXLENS_NEWS_REDDIT_CLIENT_SECRET: ${GEXLENS_NEWS_REDDIT_CLIENT_SECRET:-}
       GEXLENS_NEWS_DATA_DIR: /app/data
+      # V Dockeru je localhost sám kontejner — WS push musí mířit na službu api
+      GEXLENS_NEWS_API_BASE: http://api:8000
     volumes:
       # Bary čte (zapisuje je datový engine, #276), do derived/sentiment/ píše
       # vlastní řadu SentIndexu (#283) — adresář je rozdělený podle vlastnictví
@@ -88,6 +90,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      api:
+        condition: service_started
     restart: unless-stopped
 
   frontend:
