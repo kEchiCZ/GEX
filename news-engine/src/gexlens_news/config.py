@@ -35,6 +35,9 @@ class NewsSettings(BaseSettings):
     reaction_interval_s: float = Field(default=300.0, gt=0)
     # Interní ingest API pro WS kanály (#286); prázdné = push vypnutý
     api_base: str = "http://localhost:8000"
+    # Ranní retro pass (#284, SPEC 7.4) — čas před EU open, UTC
+    retro_pass_hour: int = Field(default=5, ge=0, le=23)
+    retro_pass_minute: int = Field(default=30, ge=0, le=59)
 
     # Intervaly sběru (SPEC kap. 1). RSS jede à 60 s díky conditional GET —
     # nezměněný feed vrací 304, takže krátká perioda nikoho nezatěžuje.
