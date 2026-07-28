@@ -14,11 +14,13 @@ import datetime as dt
 import logging
 from collections.abc import Awaitable, Callable, Collection, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Protocol
 
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
 from gexlens_engine.compute.setupstats import (
     SetupParamsStats,
     aggregate,
@@ -293,8 +295,15 @@ class InstrumentPipeline:
             today - dt.timedelta(days=params.window_days), dt.time.min, tzinfo=dt.UTC
         )
         try:
+            # Jen aktuální mechanika (#311): míchat výsledky různých systémů by
+            # znamenalo alertovat na něco, co už neexistuje
             rows = await asyncio.to_thread(
-                self.setup_engine.repository.closed_since, self.symbol, since
+                partial(
+                    self.setup_engine.repository.closed_since,
+                    self.symbol,
+                    since,
+                    mechanics_version=SETUP_MECHANICS_VERSION,
+                )
             )
         except Exception:
             logger.exception("Sebekontrola setupů %s selhala — zkusí se zítra", self.symbol)

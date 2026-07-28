@@ -4,12 +4,13 @@ Predikce jsou neměnné — jediná mutace je rating (+1/−1) a poznámka; hodn
 je kvalitativní vrstva a nevstupuje do automatické kalibrace confidence.
 */
 import { useState } from 'react'
-import { ACCOUNT_START_USD, STATUS_LABELS, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import { ACCOUNT_START_USD, CURRENT_MECHANICS_VERSION, STATUS_LABELS, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
 import type { SetupRow } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
 import { useSetups } from '../hooks/useSetups'
 import { pointValue } from '../instrument/tick'
 import { useAppState } from '../state/AppState'
+import { usePersistentState } from '../state/persist'
 
 function formatTs(iso: string | null): string {
   if (!iso) return '—'
@@ -74,8 +75,22 @@ function ReviewCell({
 export function SetupsView() {
   const { symbol } = useAppState()
   const { setups, refresh } = useSetups()
+  // Statistiky defaultně jen z aktuální mechaniky (#311) — setupy staré verze
+  // mají jinou sémantiku stopů a cílů (Ø RRR 25–47), míchat je do jedné bilance
+  // by znamenalo počítat výkonnost systému, který už neexistuje
+  const [allVersions, setAllVersions] = usePersistentState<boolean>(
+    'setupsAllVersions',
+    false,
+    (value) => (typeof value === 'boolean' ? value : false),
+  )
+  const legacyCount = setups.filter(
+    (row) => (row.mechanics_version ?? 1) !== CURRENT_MECHANICS_VERSION,
+  ).length
+  const visible = allVersions
+    ? setups
+    : setups.filter((row) => (row.mechanics_version ?? 1) === CURRENT_MECHANICS_VERSION)
 
-  const closed = setups.filter((row) => row.status !== 'active')
+  const closed = visible.filter((row) => row.status !== 'active')
   const wins = closed.filter((row) => (row.outcome_r ?? 0) > 0).length
   const totalR = closed.reduce((sum, row) => sum + (row.outcome_r ?? 0), 0)
   // P/L v USD na 1 kontrakt (#185) — CME hodnota bodu instrumentu
@@ -91,12 +106,22 @@ export function SetupsView() {
     <section className="setups-view" aria-label="Setupy">
       <header className="setups-summary">
         <h2>Setupy — {symbol}</h2>
+        {legacyCount > 0 && (
+          <label className="setups-version-toggle">
+            <input
+              type="checkbox"
+              checked={allVersions}
+              onChange={(event) => setAllVersions(event.target.checked)}
+            />
+            Včetně starší mechaniky ({legacyCount})
+          </label>
+        )}
       </header>
       {/* Zvýrazněné souhrnné statistiky (#189); P/L vždy na 1 kontrakt */}
       <div className="setups-stats" role="group" aria-label="Souhrnné statistiky">
         <div className="stat">
           <span className="stat-label muted">Aktivní</span>
-          <span className="stat-value">{setups.length - closed.length}</span>
+          <span className="stat-value">{visible.length - closed.length}</span>
         </div>
         <div className="stat">
           <span className="stat-label muted">Uzavřené</span>
@@ -127,13 +152,13 @@ export function SetupsView() {
           </span>
         </div>
       </div>
-      {setups.length === 0 && (
+      {visible.length === 0 && (
         <p className="muted">
           Zatím žádné setupy — detektor běží nad živými daty a čeká na podmínky šablon (odraz od
           zdi, neúspěšný průraz, Max Pain pin, gamma momentum).
         </p>
       )}
-      {setups.length > 0 && (
+      {visible.length > 0 && (
         <div className="setups-table-wrap">
           <table className="setups-table">
             <thead>
@@ -154,7 +179,7 @@ export function SetupsView() {
               </tr>
             </thead>
             <tbody>
-              {setups.map((row) => {
+              {visible.map((row) => {
                 const pnl = setupPnlUsd(row, pointUsd)
                 const pct = setupPnlPct(row, pointUsd)
                 return (

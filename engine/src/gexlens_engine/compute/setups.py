@@ -11,6 +11,16 @@ import enum
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
+# Verze mechaniky detektoru (#311). Zvedá se při KAŽDÉ změně sémantiky stopů,
+# cílů nebo filtrů — statistiky a budoucí kalibrace (Fáze 2) počítají jen
+# aktuální verzi, aby se nemíchaly výsledky různých systémů.
+#   1 = původní mechanika (absolutní buffery, RRR jen v T1/T5); patří sem i
+#       všechny řádky před zavedením sloupce, tedy včetně incidentu se zmrzlými
+#       Greeks 26.–27. 7. (ADR-0015)
+#   2 = jednotná R-mechanika #302 (min. risk dle ATR, cíl omezený násobkem
+#       risku, RRR filtr všude) nad ověřeně čerstvými daty po #306
+SETUP_MECHANICS_VERSION = 2
+
 
 class SetupTemplate(enum.Enum):
     WALL_BOUNCE = "wall_bounce"

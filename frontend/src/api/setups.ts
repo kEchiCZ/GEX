@@ -20,7 +20,14 @@ export interface SetupRow {
   mae: number | null
   user_rating: number | null
   user_note: string | null
+  /** Verze mechaniky detektoru, která setup vyrobila (#311); starší řádky 1. */
+  mechanics_version?: number
 }
+
+/** Aktuální verze mechaniky — zrcadlo `SETUP_MECHANICS_VERSION` v enginu (#311).
+Statistiky se defaultně počítají jen z ní, aby se nemíchaly výsledky staré
+(absolutní buffery, RRR 25–47) a nové R-mechaniky. */
+export const CURRENT_MECHANICS_VERSION = 2
 
 export const TEMPLATE_LABELS: Record<string, string> = {
   wall_bounce: 'Odraz od zdi',

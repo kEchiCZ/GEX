@@ -21,11 +21,14 @@ from sqlalchemy import (
     Table,
     Text,
     insert,
+    inspect,
     select,
+    text,
     update,
 )
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
 from gexlens_engine.compute.setupstats import ClosedSetup
 
 setups_metadata = MetaData()
@@ -52,6 +55,10 @@ setups_table = Table(
     Column("mae", Float, nullable=True),
     Column("user_rating", Integer, nullable=True),  # null / +1 / −1
     Column("user_note", Text, nullable=True),
+    # Verze mechaniky, která setup vyrobila (#311) — statistiky a kalibrace
+    # počítají jen aktuální, aby se nemíchaly výsledky různých systémů.
+    # Řádky z doby před zavedením sloupce dostanou 1 (viz `ensure_schema`).
+    Column("mechanics_version", Integer, nullable=False, server_default="1"),
 )
 
 
@@ -79,6 +86,30 @@ class SetupsRepository:
 
     def ensure_schema(self) -> None:
         setups_metadata.create_all(self._engine)
+        self._ensure_mechanics_version()
+
+    def _ensure_mechanics_version(self) -> None:
+        """Doplní sloupec `mechanics_version` do existující tabulky (#311).
+
+        `create_all` existující tabulku nemění, takže nasazené instance by
+        sloupec nedostaly. ALTER je idempotentní přes kontrolu inspektorem
+        a běží na PG i sqlite (testy). Staré řádky tím dostanou verzi 1 —
+        hranice tak vyjde přirozeně správně: všechno před touto migrací
+        vzniklo starou mechanikou nebo nad zmrzlými daty (ADR-0015).
+        """
+        inspector = inspect(self._engine)
+        if not inspector.has_table(setups_table.name):
+            return
+        columns = {col["name"] for col in inspector.get_columns(setups_table.name)}
+        if "mechanics_version" in columns:
+            return
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"ALTER TABLE {setups_table.name} "
+                    "ADD COLUMN mechanics_version INTEGER NOT NULL DEFAULT 1"
+                )
+            )
 
     def create(
         self,
@@ -108,6 +139,7 @@ class SetupsRepository:
             reason=reason,
             context=json.loads(json.dumps(context, default=str)),
             status="active",
+            mechanics_version=SETUP_MECHANICS_VERSION,
         )
         with self._engine.begin() as conn:
             result = conn.execute(stmt)
@@ -168,11 +200,16 @@ class SetupsRepository:
             for row in rows
         ]
 
-    def closed_since(self, symbol: str, since: dt.datetime) -> list[ClosedSetup]:
+    def closed_since(
+        self, symbol: str, since: dt.datetime, *, mechanics_version: int | None = None
+    ) -> list[ClosedSetup]:
         """Uzavřené setupy s `closed_ts` od `since` — podklad sebekontroly (#309).
 
         Řadí se podle času uzavření, ne vzniku: setup otevřený před oknem, ale
         uzavřený v něm, do bilance okna patří.
+
+        `mechanics_version` omezí bilanci na jeden systém (#311) — bez něj by se
+        míchaly výsledky staré a nové mechaniky a verdikt by mluvil o minulosti.
         """
         stmt = select(
             setups_table.c.template,
@@ -185,6 +222,8 @@ class SetupsRepository:
             setups_table.c.closed_ts.is_not(None),
             setups_table.c.closed_ts >= since,
         )
+        if mechanics_version is not None:
+            stmt = stmt.where(setups_table.c.mechanics_version == mechanics_version)
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
         return [
