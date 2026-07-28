@@ -1,0 +1,159 @@
+"""Obecný RSS/Atom collector — sdílený Tier A (Fed) i Tier B (CNBC, MarketWatch…).
+
+Parsuje se stdlib `xml.etree`, ne externí knihovnou: potřebujeme čtyři pole
+(titulek, čas, odkaz, popis) a další závislost by přinesla víc rizika než užitku.
+Nečitelná položka se přeskočí, celá dávka kvůli ní nepadá (SPEC 3.2).
+
+Conditional GET je tu podstatný — díky 304 může feed jet à 60 s (SPEC kap. 1).
+"""
+
+import datetime as dt
+import logging
+from collections.abc import Sequence
+from email.utils import parsedate_to_datetime
+from xml.etree import ElementTree
+
+from gexlens_news.collectors import CollectorClock, utc_now
+from gexlens_news.http import Fetcher
+from gexlens_news.model import NewsEvent, RawItem
+
+logger = logging.getLogger(__name__)
+
+_ATOM = "{http://www.w3.org/2005/Atom}"
+# Maximální délka `summary` (SPEC 2.1) — do DB jde stručný text, ne celý článek
+SUMMARY_LIMIT = 500
+
+
+def parse_feed_time(raw: str | None) -> dt.datetime | None:
+    """Čas položky: RFC 822 (RSS) i ISO 8601 (Atom). Naivní čas bereme jako UTC."""
+    if not raw:
+        return None
+    text = raw.strip()
+    for parser in (parsedate_to_datetime, dt.datetime.fromisoformat):
+        try:
+            parsed = parser(text)
+        except (TypeError, ValueError):
+            continue
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.UTC)
+    logger.debug("Nečitelný čas položky %r", raw)
+    return None
+
+
+def _text(element: ElementTree.Element, *names: str) -> str | None:
+    for name in names:
+        found = element.find(name)
+        if found is not None:
+            if found.text and found.text.strip():
+                return found.text.strip()
+            # Atom <link href="..."/> nese hodnotu v atributu
+            if href := found.get("href"):
+                return href
+    return None
+
+
+def parse_items(xml: str) -> list[dict[str, str | None]]:
+    """Položky feedu jako slovníky; nevalidní XML vyhodí (runner to ustojí)."""
+    root = ElementTree.fromstring(xml)
+    entries = root.iter("item") if root.iter("item") else []
+    items = [
+        {
+            "title": _text(entry, "title"),
+            "link": _text(entry, "link"),
+            "published": _text(entry, "pubDate", "published", "updated", "date"),
+            "summary": _text(entry, "description", "summary"),
+            "guid": _text(entry, "guid", "id"),
+        }
+        for entry in entries
+    ]
+    if items:
+        return items
+    # Atom
+    return [
+        {
+            "title": _text(entry, f"{_ATOM}title"),
+            "link": _text(entry, f"{_ATOM}link"),
+            "published": _text(entry, f"{_ATOM}published", f"{_ATOM}updated"),
+            "summary": _text(entry, f"{_ATOM}summary", f"{_ATOM}content"),
+            "guid": _text(entry, f"{_ATOM}id"),
+        }
+        for entry in root.iter(f"{_ATOM}entry")
+    ]
+
+
+class RssCollector:
+    """Jeden nebo více RSS/Atom feedů pod společným jménem zdroje."""
+
+    def __init__(
+        self,
+        name: str,
+        urls: Sequence[str],
+        fetcher: Fetcher,
+        *,
+        interval_s: float = 60.0,
+        kind: str = "headline",
+        category: str | None = None,
+        importance: int | None = None,
+        symbols: Sequence[str] = (),
+        clock: CollectorClock = utc_now,
+    ) -> None:
+        self._name = name
+        self._urls = list(urls)
+        self._fetcher = fetcher
+        self._interval_s = interval_s
+        self._kind = kind
+        self._category = category
+        self._importance = importance
+        self._symbols = list(symbols)
+        self._clock = clock
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def interval_s(self) -> float:
+        return self._interval_s
+
+    async def fetch(self) -> Sequence[RawItem]:
+        now = self._clock()
+        items: list[RawItem] = []
+        errors: list[str] = []
+        for url in self._urls:
+            try:
+                response = await self._fetcher.get(url)
+                if response.not_modified:
+                    continue  # 304 — feed se nezměnil, nic k práci
+                for entry in parse_items(response.text):
+                    items.append(
+                        RawItem(source=self._name, payload={**entry, "feed": url}, fetched_at=now)
+                    )
+            except Exception as error:  # noqa: BLE001 — jeden mrtvý feed nezabije ostatní
+                errors.append(f"{url}: {type(error).__name__}")
+        if errors and not items:
+            # Všechny feedy zdroje selhaly → ať to runner započítá do degradace
+            raise RuntimeError("; ".join(errors))
+        if errors:
+            logger.warning("Část feedů %s selhala: %s", self._name, "; ".join(errors))
+        return items
+
+    def normalize(self, item: RawItem) -> NewsEvent | None:
+        title = item.payload.get("title")
+        if not title:
+            return None
+        published = parse_feed_time(item.payload.get("published"))
+        summary = item.payload.get("summary")
+        return NewsEvent(
+            # Bez času publikace bereme čas ingestu — u RSS je rozdíl v jednotkách
+            # minut a zahodit zprávu kvůli chybějícímu datu by bylo horší
+            ts_event=published or item.fetched_at,
+            ts_ingested=item.fetched_at,
+            source=self._name,
+            source_uid=item.payload.get("guid") or item.payload.get("link"),
+            kind=self._kind,
+            category=self._category,
+            importance=self._importance,
+            title=str(title),
+            summary=summary[:SUMMARY_LIMIT] if summary else None,
+            symbols=list(self._symbols),
+            raw=dict(item.payload),
+        )

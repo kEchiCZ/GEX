@@ -8,6 +8,12 @@ lokálně a `.gitignore` je kryje. Prázdný klíč = zdroj se nespustí (ne deg
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Oficiální feedy Fedu (Tier A) — statements, projevy, minutes
+FED_RSS_URLS = (
+    "https://www.federalreserve.gov/feeds/press_monetary.xml",
+    "https://www.federalreserve.gov/feeds/speeches.xml",
+)
+
 
 class NewsSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GEXLENS_NEWS_", env_file=".env", extra="ignore")

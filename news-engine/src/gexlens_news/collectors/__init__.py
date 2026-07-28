@@ -7,13 +7,21 @@ padají běžně a modul na tom nesmí stát.
 """
 
 import datetime as dt
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, runtime_checkable
 
 from gexlens_news.model import NewsEvent, RawItem
 
 CollectorState = Literal["idle", "ok", "degraded"]
+
+# Zdroj času collectoru — injektovatelný, aby testy nebyly závislé na wall clocku
+CollectorClock = Callable[[], dt.datetime]
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
+
 
 # Po kolika po sobě jdoucích selháních se zdroj označí za degraded. Jedno
 # selhání je běžný provoz free API (timeout, 429) a nemá nic hlásit.
