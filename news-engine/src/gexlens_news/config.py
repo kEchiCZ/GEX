@@ -5,6 +5,8 @@ lokálně a `.gitignore` je kryje. Prázdný klíč = zdroj se nespustí (ne deg
 — nemá smysl hlásit poruchu něčeho, co uživatel vědomě nezapnul.
 """
 
+from pathlib import Path
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -27,6 +29,10 @@ class NewsSettings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://gexlens:gexlens@localhost:5432/gexlens"
     log_level: str = "INFO"
+    # Archiv 1min barů zapisuje datový engine; news-engine si ho jen čte (#276)
+    data_dir: Path = Path("data")
+    # Jak často se dopočítávají reakce na zprávy s uzavřenými okny
+    reaction_interval_s: float = Field(default=300.0, gt=0)
 
     # Intervaly sběru (SPEC kap. 1). RSS jede à 60 s díky conditional GET —
     # nezměněný feed vrací 304, takže krátká perioda nikoho nezatěžuje.
