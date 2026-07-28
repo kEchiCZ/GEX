@@ -82,8 +82,9 @@ services:
       GEXLENS_NEWS_REDDIT_CLIENT_SECRET: ${GEXLENS_NEWS_REDDIT_CLIENT_SECRET:-}
       GEXLENS_NEWS_DATA_DIR: /app/data
     volumes:
-      # Archiv 1min barů jen ke čtení — zapisuje ho datový engine (#276)
-      - ./data:/app/data:ro
+      # Bary čte (zapisuje je datový engine, #276), do derived/sentiment/ píše
+      # vlastní řadu SentIndexu (#283) — adresář je rozdělený podle vlastnictví
+      - ./data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
