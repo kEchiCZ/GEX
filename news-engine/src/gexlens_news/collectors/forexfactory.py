@@ -12,14 +12,17 @@ Vědomá omezení zdroje (změřeno v ADR-0013):
 
 Formát není oficiálně garantovaný, proto je parsování defenzivní: nečitelná
 položka se přeskočí a nezabije celou dávku (SPEC 3.2).
+
+Kategorie se určuje sdílenou keyword mapou z `classifier` (#280) — dvě
+paralelní mapy by se časem rozešly.
 """
 
 import datetime as dt
 import logging
-import re
 from collections.abc import Sequence
 from typing import Any
 
+from gexlens_news.classifier import classify_category
 from gexlens_news.collectors import CollectorClock, utc_now
 from gexlens_news.http import Fetcher
 from gexlens_news.model import NewsEvent, RawItem
@@ -34,24 +37,6 @@ FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 _SYMBOLS_BY_COUNTRY = {"USD": ["ES", "NQ"]}
 
 _IMPACT = {"high": 3, "medium": 2, "low": 1}
-
-# Kategorie z názvu eventu. Pořadí rozhoduje — první shoda vyhrává, takže
-# specifičtější vzory musí být dřív (FOMC před obecným "rate").
-_CATEGORY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("FED", re.compile(r"fomc|federal funds|fed chair|beige book|powell", re.I)),
-    ("MACRO_INFLATION", re.compile(r"\bcpi\b|\bppi\b|pce|inflation|price index", re.I)),
-    ("MACRO_LABOR", re.compile(r"non-farm|nonfarm|payroll|unemployment|jobless|employment", re.I)),
-    ("MACRO_GROWTH", re.compile(r"\bgdp\b|retail sales|pmi|ism|durable goods|industrial", re.I)),
-    ("ENERGY", re.compile(r"crude oil|natural gas|opec", re.I)),
-)
-
-
-def classify_title(title: str) -> str:
-    """Kategorie plánovaného eventu z názvu (SPEC kap. 4 — scheduled LLM nepotřebuje)."""
-    for category, pattern in _CATEGORY_PATTERNS:
-        if pattern.search(title):
-            return category
-    return "OTHER"
 
 
 def parse_number(raw: object) -> float | None:
@@ -135,7 +120,7 @@ class ForexFactoryCollector:
             # proto se do uid přidává čas releasu
             source_uid=f"{country}|{title}|{ts_event.isoformat()}",
             kind="scheduled",
-            category=classify_title(title),
+            category=classify_category(title),
             importance=impact,
             title=f"{country} {title}" if country else title,
             summary=None,

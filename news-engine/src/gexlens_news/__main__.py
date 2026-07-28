@@ -20,6 +20,7 @@ from sqlalchemy import create_engine
 
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_news.bars import BarsRepository
+from gexlens_news.classification_job import RuleClassificationJob
 from gexlens_news.collectors import Collector
 from gexlens_news.collectors.finnhub import FinnhubCollector
 from gexlens_news.collectors.forexfactory import ForexFactoryCollector
@@ -89,15 +90,25 @@ async def run(settings: NewsSettings) -> None:
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, stop.set)
 
+    classification = RuleClassificationJob(engine)
     reactions = ReactionJob(engine, BarsRepository(settings.data_dir))
     model_stats = ModelStatsJob(engine)
     last_stats_day: dt.date | None = None
 
     async def reaction_loop() -> None:
-        """Dopočet reakcí a denní přepočet modelu; pád nesmí zastavit collectory."""
+        """Klasifikace, dopočet reakcí a denní přepočet modelu.
+
+        Pád kterékoli fáze nesmí zastavit collectory ani ty ostatní.
+        """
         nonlocal last_stats_day
         while not stop.is_set():
             now = dt.datetime.now(dt.UTC)
+            # Pravidlová klasifikace první — bez kategorie a importance by
+            # event do empirického modelu vůbec nevstoupil (SPEC 2.4)
+            try:
+                await asyncio.to_thread(classification.run, now)
+            except Exception:
+                logger.exception("Pravidlová klasifikace selhala — zkusí se příští cyklus")
             try:
                 await asyncio.to_thread(reactions.run, now)
             except Exception:

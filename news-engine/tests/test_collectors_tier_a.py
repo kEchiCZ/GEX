@@ -6,11 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from gexlens_news.collectors.forexfactory import (
-    ForexFactoryCollector,
-    classify_title,
-    parse_number,
-)
+from gexlens_news.classifier import classify_category
+from gexlens_news.collectors.forexfactory import ForexFactoryCollector, parse_number
 from gexlens_news.collectors.rss import RssCollector, parse_feed_time, parse_items
 from gexlens_news.http import Response
 
@@ -57,14 +54,14 @@ def test_parse_number_handles_calendar_formats() -> None:
         assert parse_number(empty) is None
 
 
-def test_classify_title_prefers_specific_patterns() -> None:
-    assert classify_title("FOMC Statement") == "FED"
-    assert classify_title("Federal Funds Rate") == "FED"
-    assert classify_title("Core PCE Price Index m/m") == "MACRO_INFLATION"
-    assert classify_title("Non-Farm Employment Change") == "MACRO_LABOR"
-    assert classify_title("Advance GDP q/q") == "MACRO_GROWTH"
-    assert classify_title("Crude Oil Inventories") == "ENERGY"
-    assert classify_title("German ifo Business Climate") == "OTHER"
+def test_classify_category_prefers_specific_patterns() -> None:
+    assert classify_category("FOMC Statement") == "FED"
+    assert classify_category("Federal Funds Rate") == "FED"
+    assert classify_category("Core PCE Price Index m/m") == "MACRO_INFLATION"
+    assert classify_category("Non-Farm Employment Change") == "MACRO_LABOR"
+    assert classify_category("Advance GDP q/q") == "MACRO_GROWTH"
+    assert classify_category("Crude Oil Inventories") == "ENERGY"
+    assert classify_category("German ifo Business Climate") == "OTHER"
 
 
 async def test_forexfactory_normalizes_real_fixture() -> None:
