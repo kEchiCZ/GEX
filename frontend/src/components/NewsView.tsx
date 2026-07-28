@@ -15,6 +15,13 @@ const KIND_LABELS: Record<string, string> = {
   broker: 'Broker',
 }
 
+/** Číselná hodnota z API; `Numeric` sloupce můžou dorazit jako řetězec. */
+function asNumber(value: number | string | null): number | null {
+  if (value === null || value === '') return null
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 /** Barva badge dle skóre — stejný jazyk jako panel: teal +, červená −. */
 function scoreClass(score: number | null): string {
   if (score === null || score === 0) return 'news-score neutral'
@@ -26,6 +33,7 @@ function formatTime(iso: string): string {
 }
 
 function NewsRowItem({ row }: { row: NewsRow }) {
+  const score = asNumber(row.sentiment_score)
   return (
     <tr data-testid={`news-row-${row.id}`}>
       <td className="news-time muted">{formatTime(row.ts_event)}</td>
@@ -37,9 +45,7 @@ function NewsRowItem({ row }: { row: NewsRow }) {
       <td className="muted">{KIND_LABELS[row.kind] ?? row.kind}</td>
       <td>{row.importance ?? '—'}</td>
       <td>
-        <span className={scoreClass(row.sentiment_score)}>
-          {row.sentiment_score === null ? '—' : row.sentiment_score.toFixed(2)}
-        </span>
+        <span className={scoreClass(score)}>{score === null ? '—' : score.toFixed(2)}</span>
       </td>
     </tr>
   )
@@ -111,11 +117,11 @@ export function NewsView() {
               <li key={row.id} data-testid={`upcoming-${row.id}`}>
                 <strong>{row.title}</strong>
                 <span className="muted"> {countdownLabel(row.ts_event)}</span>
-                {row.forecast !== null && (
+                {asNumber(row.forecast) !== null && (
                   <span className="muted">
                     {' '}
-                    · konsensus {row.forecast}
-                    {row.previous !== null ? ` (min. ${row.previous})` : ''}
+                    · konsensus {asNumber(row.forecast)}
+                    {asNumber(row.previous) !== null ? ` (min. ${asNumber(row.previous)})` : ''}
                   </span>
                 )}
               </li>

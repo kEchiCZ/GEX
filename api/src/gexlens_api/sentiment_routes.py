@@ -11,6 +11,7 @@ stabilní kontrakt a N7/N8 mění jen data, ne tvar API.
 
 import datetime as dt
 import logging
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,10 @@ def _rows(engine: Engine, stmt: Any) -> list[dict[str, Any]]:
         for key, value in record.items():
             if isinstance(value, dt.datetime | dt.date):
                 record[key] = value.isoformat()
+            elif isinstance(value, Decimal):
+                # PG vrací Numeric jako Decimal a ten by se serializoval jako
+                # řetězec — frontend pak volá toFixed nad stringem a spadne
+                record[key] = float(value)
         out.append(record)
     return out
 
