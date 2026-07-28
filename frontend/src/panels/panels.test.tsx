@@ -47,7 +47,9 @@ test('cumDeltaAreas dělí plochu nad/pod nulou a drží rezervu od okrajů (#16
 
 // ── Panely: sdílená osa, C/P barvy, plochy ─────────────────────────
 
-function renderPanels(visible = { vol: true, optVol: true, delta: true, deltaFlow: false }) {
+function renderPanels(
+  visible = { vol: true, optVol: true, delta: true, deltaFlow: false, sentiment: false },
+) {
   return render(
     <CrosshairProvider>
       <BottomPanels data={DATA} visible={visible} width={400} />
@@ -75,7 +77,7 @@ test('vypnutí panelu přeskládá layout (AC)', () => {
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: false, optVol: true, delta: true, deltaFlow: false }}
+        visible={{ vol: false, optVol: true, delta: true, deltaFlow: false, sentiment: false }}
         width={400}
       />
     </CrosshairProvider>,
@@ -87,7 +89,7 @@ test('vypnutí panelu přeskládá layout (AC)', () => {
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: false, optVol: false, delta: false, deltaFlow: false }}
+        visible={{ vol: false, optVol: false, delta: false, deltaFlow: false, sentiment: false }}
         width={400}
       />
     </CrosshairProvider>,
@@ -100,7 +102,7 @@ test('Δ Flow panel: C/P delta-vážené sloupce, zapíná se checkboxem', () =>
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: false, optVol: false, delta: false, deltaFlow: true }}
+        visible={{ vol: false, optVol: false, delta: false, deltaFlow: true, sentiment: false }}
         width={400}
       />
     </CrosshairProvider>,
@@ -127,7 +129,7 @@ test('panely respektují výšku z props (#169)', () => {
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: false, delta: true, deltaFlow: false }}
+        visible={{ vol: true, optVol: false, delta: true, deltaFlow: false, sentiment: false }}
         width={400}
         height={160}
       />
@@ -185,7 +187,7 @@ test('crosshair ukazuje hodnoty ukazatelů vpravo (issue #104)', () => {
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: true, delta: true, deltaFlow: true }}
+        visible={{ vol: true, optVol: true, delta: true, deltaFlow: true, sentiment: false }}
         width={400}
       />
     </CrosshairProvider>,
@@ -212,7 +214,7 @@ test('crosshair drží i mimo data (posun grafu do budoucna) — issue #109', ()
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: true, delta: true, deltaFlow: false }}
+        visible={{ vol: true, optVol: true, delta: true, deltaFlow: false, sentiment: false }}
         width={400}
       />
       <Reader />
@@ -232,7 +234,7 @@ test('panel: hodnota na pravé ose Y podle výšky kurzoru (issue #107)', () => 
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: false, delta: true, deltaFlow: false }}
+        visible={{ vol: true, optVol: false, delta: true, deltaFlow: false, sentiment: false }}
         width={400}
       />
     </CrosshairProvider>,
@@ -282,7 +284,7 @@ test('pohyb v panelu nastaví minutu crosshairu; linka se kreslí ve všech pane
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: true, delta: true, deltaFlow: false }}
+        visible={{ vol: true, optVol: true, delta: true, deltaFlow: false, sentiment: false }}
         width={400}
       />
       <Reader />
@@ -305,7 +307,7 @@ test('panely respektují pan/zoom časové osy hlavního grafu (prop time)', () 
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: false, delta: false, deltaFlow: false }}
+        visible={{ vol: true, optVol: false, delta: false, deltaFlow: false, sentiment: false }}
         width={400}
         time={{ offsetX: 40, zoomX: 2 }}
       />

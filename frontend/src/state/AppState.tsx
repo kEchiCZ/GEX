@@ -52,7 +52,7 @@ export interface Toggles {
   news: boolean
 }
 
-export type AppView = 'chart' | 'dashboard' | 'chain' | 'setups' | 'console' | 'settings'
+export type AppView = 'chart' | 'dashboard' | 'chain' | 'setups' | 'news' | 'console' | 'settings'
 export type Theme = 'dark' | 'light'
 
 /** Poslední cena + denní změna (hlavička; plní MainContent z denních dat). */
