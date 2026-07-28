@@ -37,6 +37,7 @@ from gexlens_news.pipeline import DedupingWriter
 from gexlens_news.prediction_job import PredictionJob
 from gexlens_news.publisher import NewsPublisher
 from gexlens_news.reaction_job import ReactionJob
+from gexlens_news.retro_pass import RetroPass
 from gexlens_news.runner import CollectorRunner
 from gexlens_news.sentindex_job import SentIndexJob
 from gexlens_news.store import NewsWriter
@@ -99,6 +100,12 @@ async def run(settings: NewsSettings) -> None:
     sent_index = SentIndexJob(engine, settings.data_dir)
     predictions = PredictionJob(engine)
     publisher = NewsPublisher(settings.api_base) if settings.api_base else None
+    retro = RetroPass(
+        classification,
+        reactions,
+        sent_index,
+        run_at=dt.time(settings.retro_pass_hour, settings.retro_pass_minute),
+    )
     last_stats_day: dt.date | None = None
 
     async def reaction_loop() -> None:
@@ -146,6 +153,15 @@ async def run(settings: NewsSettings) -> None:
                     await publisher.publish_upcoming(upcoming, now)
             except Exception:
                 logger.exception("Přepočet SentIndexu selhal — zkusí se příští cyklus")
+            # Ranní retro pass (#284): dožene noční fronty, ať trader ráno
+            # otevírá aplikaci se zpracovanou nocí
+            if retro.due(now):
+                result = await asyncio.to_thread(retro.run, now)
+                if publisher is not None:
+                    await publisher.publish(
+                        "news",
+                        {"kind": "retro_pass", "message": result.describe(), "ts": now.isoformat()},
+                    )
             # Model se přepočítává jednou denně (SPEC 2.4: noční job); běží po
             # reakcích, aby zahrnul i to, co se právě dopočítalo
             if last_stats_day != now.date():
