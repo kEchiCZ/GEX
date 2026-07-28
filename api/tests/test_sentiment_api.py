@@ -183,3 +183,14 @@ def test_ws_channels_accept_news_subscriptions(client: TestClient) -> None:
         message = ws.receive_json()
         assert message["channel"] == "sentiment.ES"
         assert message["data"]["value"] == pytest.approx(0.42)
+
+
+def test_numeric_columns_are_json_numbers_not_strings(client: TestClient) -> None:
+    """PG vrací Numeric jako Decimal — serializace na řetězec shodí frontend.
+
+    UI nad hodnotou volá `toFixed`, takže string znamená pád celé aplikace,
+    ne jen špatné zobrazení.
+    """
+    row = next(r for r in client.get("/news").json()["news"] if r["sentiment_score"] is not None)
+    assert isinstance(row["sentiment_score"], (int, float))
+    assert not isinstance(row["sentiment_score"], str)

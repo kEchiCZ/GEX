@@ -12,11 +12,12 @@ export interface NewsRow {
   title: string
   summary: string | null
   sentiment_dir: number | null
-  sentiment_score: number | null
+  /** `Numeric` sloupce můžou z API dorazit jako řetězec (PG Decimal). */
+  sentiment_score: number | string | null
   sentiment_source: string | null
-  forecast: number | null
-  previous: number | null
-  actual: number | null
+  forecast: number | string | null
+  previous: number | string | null
+  actual: number | string | null
 }
 
 export interface SentimentPoint {
