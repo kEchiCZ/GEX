@@ -33,7 +33,7 @@ jobs:
       - run: uv sync --all-packages
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run mypy engine/src engine/tests api/src api/tests
+      - run: uv run mypy engine/src engine/tests api/src api/tests news-engine/src news-engine/tests
       - run: uv run pytest
 
   frontend:

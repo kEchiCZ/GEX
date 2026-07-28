@@ -62,6 +62,29 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # SentimentLens news-engine (SPEC S1) — samostatný proces nad stejnou PG.
+  # Startuje spolu s GEXLens (SPEC kap. 10, Provoz); dokud nejsou zapojené
+  # collectory (#271/#272), jen běží a drží schéma.
+  news-engine:
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+    command: python -m gexlens_news run
+    environment:
+      GEXLENS_NEWS_DATABASE_URL: postgresql+psycopg://gexlens:gexlens@postgres:5432/gexlens
+      # Klíče výhradně z lokálního .env (S10) — v repu jen prázdné placeholdery
+      GEXLENS_NEWS_FINNHUB_API_KEY: ${GEXLENS_NEWS_FINNHUB_API_KEY:-}
+      GEXLENS_NEWS_FRED_API_KEY: ${GEXLENS_NEWS_FRED_API_KEY:-}
+      GEXLENS_NEWS_BLS_API_KEY: ${GEXLENS_NEWS_BLS_API_KEY:-}
+      GEXLENS_NEWS_BEA_API_KEY: ${GEXLENS_NEWS_BEA_API_KEY:-}
+      GEXLENS_NEWS_GEMINI_API_KEY: ${GEXLENS_NEWS_GEMINI_API_KEY:-}
+      GEXLENS_NEWS_REDDIT_CLIENT_ID: ${GEXLENS_NEWS_REDDIT_CLIENT_ID:-}
+      GEXLENS_NEWS_REDDIT_CLIENT_SECRET: ${GEXLENS_NEWS_REDDIT_CLIENT_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   frontend:
     build:
       context: .
