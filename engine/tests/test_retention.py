@@ -120,3 +120,39 @@ def test_seconds_until_next_run(tmp_path: Path) -> None:
 
     assert job.seconds_until_next_run(before) == 3600.0
     assert job.seconds_until_next_run(after) == 23.5 * 3600  # zítra 21:30
+
+
+# ── Věčný archiv 1min barů (SentimentLens S4, #275) ────────────────
+
+
+def test_bars_survive_retention_forever(tmp_path: Path) -> None:
+    """Bary jsou trénovací data — retence je nesmí mazat.
+
+    Bez výjimky by se každou noc ztratil jeden den a volume z-score reakčních
+    oken (potřebuje 20 seancí) by nikdy nešlo spočítat, protože okno je 14 dní.
+    """
+    settings = Settings(data_dir=tmp_path)
+    ancient_bar = make_partition(
+        settings.derived_dir, "ES", "bars", day=TODAY - dt.timedelta(days=400)
+    )
+    old_bar = make_partition(settings.derived_dir, "NQ", "bars", day=DAY_15_OLD)
+    # Ostatní odvozené řady se mažou dál — výjimka platí jen na bary
+    old_levels = make_partition(settings.derived_dir, "ES", "20260716", "levels", day=DAY_15_OLD)
+
+    report = RetentionJob(settings).purge(TODAY)
+
+    assert ancient_bar.exists()
+    assert old_bar.exists()
+    assert not old_levels.exists()
+    assert set(report.deleted) == {old_levels}
+    assert report.kept_files == 2
+
+
+def test_bars_exemption_can_be_turned_off(tmp_path: Path) -> None:
+    """Vypnutelné konfigurací — kdyby archiv někdy přerostl disk."""
+    settings = Settings(data_dir=tmp_path, keep_bars_forever=False)
+    old_bar = make_partition(settings.derived_dir, "ES", "bars", day=DAY_15_OLD)
+
+    RetentionJob(settings).purge(TODAY)
+
+    assert not old_bar.exists()
