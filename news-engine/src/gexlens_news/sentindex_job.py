@@ -21,6 +21,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import news_events, sentiment_daily
+from gexlens_news.prediction_job import load_weight_map
 from gexlens_news.sentindex import (
     ScoredEvent,
     TopicIndex,
@@ -61,7 +62,13 @@ class SentIndexJob:
         self._symbols = list(symbols)
 
     def load_events(self, until: dt.datetime) -> list[ScoredEvent]:
-        """Klasifikované události v okně; bez skóre do indexu nevstupují."""
+        """Klasifikované události v okně; bez skóre do indexu nevstupují.
+
+        Skóre se škáluje váhou kategorie (SPEC 5.3): kategorie, jejíž predikce
+        historicky netrefovaly, přispívá do indexu míň. Chybějící váha =
+        neutrální 1.0, takže do kalibrace se nic nezkresluje ani nenuluje.
+        """
+        weights = load_weight_map(self._engine)
         since = until - dt.timedelta(days=LOOKBACK_DAYS)
         stmt = select(
             news_events.c.ts_event,
@@ -81,7 +88,7 @@ class SentIndexJob:
                 ts_event=_as_utc(row.ts_event),
                 category=row.category,
                 importance=int(row.importance or 1),
-                score=float(row.sentiment_score),
+                score=float(row.sentiment_score) * weights.get(row.category, 1.0),
             )
             for row in rows
             if row.sentiment_score
