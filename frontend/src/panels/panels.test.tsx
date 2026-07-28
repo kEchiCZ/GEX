@@ -321,3 +321,21 @@ test('panely respektují pan/zoom časové osy hlavního grafu (prop time)', () 
   fireEvent.pointerMove(svg, { clientX: 76, clientY: 40 })
   expect(screen.getByTestId('reader').textContent).toBe('1')
 })
+
+test('panel Sentiment kreslí plochu jako polygon, ne prázdný path (#288)', () => {
+  const data: PanelSeries = { ...DATA, sentiment: [-1, 0, 2, 1] }
+  render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={data}
+        visible={{ vol: false, optVol: false, delta: false, deltaFlow: false, sentiment: true }}
+      />
+    </CrosshairProvider>,
+  )
+  const pos = document.querySelector('[data-part="sentiment-pos"]')
+  const neg = document.querySelector('[data-part="sentiment-neg"]')
+  // Polygon, ne path — cumDeltaAreas vrací body, takže `d` by se nevykreslilo
+  expect(pos?.tagName.toLowerCase()).toBe('polygon')
+  expect(neg?.tagName.toLowerCase()).toBe('polygon')
+  expect(pos?.getAttribute('points')?.length ?? 0).toBeGreaterThan(0)
+})

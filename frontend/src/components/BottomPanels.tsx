@@ -384,8 +384,19 @@ function BottomPanelsBase({
         >
           <g transform={transform}>
             {/* Vizuálně shodné s Cum Δ: trader čte flow a sentiment vedle sebe */}
-            <path d={areas.positive} fill={COLORS.call} opacity={0.55} data-part="sentiment-pos" />
-            <path d={areas.negative} fill={COLORS.put} opacity={0.55} data-part="sentiment-neg" />
+            {/* cumDeltaAreas vrací body polygonu, ne path `d` — jako u Cum Δ */}
+            <polygon
+              points={areas.positive}
+              fill={COLORS.positive}
+              opacity={0.75}
+              data-part="sentiment-pos"
+            />
+            <polygon
+              points={areas.negative}
+              fill={COLORS.negative}
+              opacity={0.75}
+              data-part="sentiment-neg"
+            />
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('sentiment')}
