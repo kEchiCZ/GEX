@@ -31,6 +31,7 @@ from gexlens_news.config import (
     load_news_settings,
 )
 from gexlens_news.http import Fetcher, make_fetcher
+from gexlens_news.model_stats_job import ModelStatsJob
 from gexlens_news.pipeline import DedupingWriter
 from gexlens_news.reaction_job import ReactionJob
 from gexlens_news.runner import CollectorRunner
@@ -89,16 +90,28 @@ async def run(settings: NewsSettings) -> None:
             loop.add_signal_handler(sig, stop.set)
 
     reactions = ReactionJob(engine, BarsRepository(settings.data_dir))
+    model_stats = ModelStatsJob(engine)
+    last_stats_day: dt.date | None = None
 
     async def reaction_loop() -> None:
-        """Dopočet reakcí běží vedle sběru; jeho pád nesmí zastavit collectory."""
+        """Dopočet reakcí a denní přepočet modelu; pád nesmí zastavit collectory."""
+        nonlocal last_stats_day
         while not stop.is_set():
+            now = dt.datetime.now(dt.UTC)
             try:
-                await asyncio.to_thread(reactions.run, dt.datetime.now(dt.UTC))
+                await asyncio.to_thread(reactions.run, now)
             except Exception:
                 logger.exception(
                     "Dopočet reakcí selhal — zkusí se za %.0f s", settings.reaction_interval_s
                 )
+            # Model se přepočítává jednou denně (SPEC 2.4: noční job); běží po
+            # reakcích, aby zahrnul i to, co se právě dopočítalo
+            if last_stats_day != now.date():
+                try:
+                    await asyncio.to_thread(model_stats.run, now)
+                    last_stats_day = now.date()
+                except Exception:
+                    logger.exception("Přepočet model stats selhal — zkusí se příští cyklus")
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=settings.reaction_interval_s)
 
