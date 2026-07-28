@@ -79,18 +79,24 @@ export function countdownLabel(target: string, now: Date = new Date()): string {
   return rest === 0 ? `za ${hours} h` : `za ${hours} h ${rest} m`
 }
 
-/** Naváže řadu sentimentu na časovou osu grafu (popisky HH:MM lokálně).
+/** Naváže řadu sentimentu na časovou osu grafu.
 
 Index počítá news-engine nezávisle na tom, kdy dorazily bary, takže se hodnoty
 párují podle času, ne podle pořadí. Minuty bez hodnoty drží poslední známou —
-index je spojitý, ne vzorkovaný — a před první hodnotou je nula. */
-export function alignSeriesToLabels(series: SentimentPoint[], labels: string[]): number[] {
+index je spojitý, ne vzorkovaný — a před první hodnotou je nula.
+
+`formatLabel` **musí být tentýž formatter, který vyrobil `labels`**. Vlastní
+formátování by se s ním rozešlo (osa používá Intl bez vodicí nuly: `3:21`,
+ne `03:21`) a řada by tiše vyšla samá nula. */
+export function alignSeriesToLabels(
+  series: SentimentPoint[],
+  labels: string[],
+  formatLabel: (iso: string) => string,
+): number[] {
   if (labels.length === 0) return []
   const byLabel = new Map<string, number>()
   for (const point of series) {
-    const at = new Date(point.ts_min)
-    const label = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
-    byLabel.set(label, point.value)
+    byLabel.set(formatLabel(point.ts_min), point.value)
   }
   const out: number[] = []
   let last = 0

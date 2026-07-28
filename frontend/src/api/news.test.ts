@@ -7,25 +7,41 @@ function point(hour: number, minute: number, value: number) {
   return { ts_min: at.toISOString(), value }
 }
 
+/** Zrcadlí formát osy grafu (Intl, bez vodicí nuly u hodin): `9:05`. */
+const label = (iso: string): string => {
+  const at = new Date(iso)
+  return `${at.getHours()}:${String(at.getMinutes()).padStart(2, '0')}`
+}
+
 describe('alignSeriesToLabels', () => {
   test('páruje hodnoty podle času, ne podle pořadí', () => {
     const series = [point(9, 0, 1), point(9, 2, 3)]
-    expect(alignSeriesToLabels(series, ['09:00', '09:01', '09:02'])).toEqual([1, 1, 3])
+    expect(alignSeriesToLabels(series, ['9:00', '9:01', '9:02'], label)).toEqual([1, 1, 3])
   })
 
   test('minuty bez hodnoty drží poslední známou — index je spojitý', () => {
     const series = [point(9, 0, 2)]
-    expect(alignSeriesToLabels(series, ['09:00', '09:01', '09:02'])).toEqual([2, 2, 2])
+    expect(alignSeriesToLabels(series, ['9:00', '9:01', '9:02'], label)).toEqual([2, 2, 2])
   })
 
   test('před první hodnotou je nula, ne extrapolace dozadu', () => {
     const series = [point(9, 2, 5)]
-    expect(alignSeriesToLabels(series, ['09:00', '09:01', '09:02'])).toEqual([0, 0, 5])
+    expect(alignSeriesToLabels(series, ['9:00', '9:01', '9:02'], label)).toEqual([0, 0, 5])
+  })
+
+  test('formátování popisků musí sedět s osou, jinak řada tiše vyjde nulová', () => {
+    // Vlastní formát s vodicí nulou se s osou (`9:00`) nesejde
+    const wrong = (iso: string) => {
+      const at = new Date(iso)
+      return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+    }
+    expect(alignSeriesToLabels([point(9, 0, 7)], ['9:00'], wrong)).toEqual([0])
+    expect(alignSeriesToLabels([point(9, 0, 7)], ['9:00'], label)).toEqual([7])
   })
 
   test('prázdné vstupy nepadají', () => {
-    expect(alignSeriesToLabels([], ['09:00'])).toEqual([0])
-    expect(alignSeriesToLabels([point(9, 0, 1)], [])).toEqual([])
+    expect(alignSeriesToLabels([], ['9:00'], label)).toEqual([0])
+    expect(alignSeriesToLabels([point(9, 0, 1)], [], label)).toEqual([])
   })
 })
 

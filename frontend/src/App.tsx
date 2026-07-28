@@ -314,7 +314,7 @@ function MainContent() {
     if (!toggles.news) return base
     // Sentiment přichází z jiného zdroje než bary (news-engine → API), takže
     // se páruje podle času, ne podle indexu (#288)
-    const aligned = alignSeriesToLabels(newsData.series, day.minuteLabels)
+    const aligned = alignSeriesToLabels(newsData.series, day.minuteLabels, minuteLabel)
     const sliced = playback.isLive ? aligned : aligned.slice(0, playback.position + 1)
     return { ...base, sentiment: sliced }
   }, [
