@@ -78,3 +78,65 @@ Dedup je sdílený s news-engine (`compute.newstext`) — tatáž story přijat�
 brokerem i RSS musí být jeden záznam, ne dva.
 
 Vypínatelné přes `GEXLENS_IBKR_NEWS_ENABLED`.
+
+## Dodatek (#334): na futures news subskripce nejde
+
+První nasazení #291 zapsalo **nula** zpráv. Tick 292 se objednával jako
+`genericTickList` u `reqMktData` na ES/NQ, což IBKR odmítá:
+
+```
+Error 10094: API News error: Derivative contracts cannot be used to subscribe
+to news, please use the underlying (Stocks, Cash, News Topics, and certain
+Indexes are supported)., contract: Contract(secType='FUT', symbol='ES')
+```
+
+Chyba se jen zalogovala a engine běžel dál — feature byla tiše mrtvá. To je
+poučení samo o sobě: subskripce, jejíž selhání se nepozná na výstupu, potřebuje
+ověření, že něco přiteklo, ne jen že request odešel.
+
+### Co bylo zkoušeno
+
+| varianta | výsledek |
+|---|---|
+| tick 292 na FUT (ES, NQ) | `Error 10094` — deriváty nepodporovány |
+| SPY jako akciová proxy | `Error 10089` — účet nemá US equity market data |
+| `reqContractDetails` na NEWS kontraktu | žádná odpověď, request visí |
+| **NEWS broad tape přes `ib.client.reqMktData`** | **funguje** |
+
+### Zvolené řešení
+
+```python
+contract = Contract(secType="NEWS", exchange=code, symbol=f"{code}:{code}_ALL")
+ib.client.reqMktData(req_id, contract, "mdoff,292", False, False, [])
+```
+
+Dvě věci jsou nutné a nejsou zřejmé:
+
+- **`mdoff`** vypíná kotace. NEWS kontrakt žádné nemá a bez prefixu je IBKR
+  vyžaduje, takže subskripce neprojde.
+- **`ib.client`, ne `IB.reqMktData`.** Vysokoúrovňové API si kontrakt ukládá do
+  registru tickerů podle `conId`, který NEWS kontrakt nemá a `reqContractDetails`
+  ho nedoplní. `Wrapper.tickNews` ale reqId ignoruje a do `newsTicks` zapisuje
+  bezpodmínečně, takže registr není potřeba.
+
+Ověřeno sondou — 6 headlines okamžitě po připojení:
+
+```
+[BRFG] ts=1785271008000 Closing Market Summary: Market rotates away from semiconductors…
+[DJNL] ts=1785147132000 North American Morning Briefing
+```
+
+Timestampy potvrzují milisekundovou větev v `tick_time`.
+
+`BRFUPDN` (upgrady/downgrady) `_ALL` pásku nemá a vrací **asynchronně**
+`Error 200: No security definition`. Ostatní providery to nesmí shodit.
+
+### Důsledky
+
+- Subskripce je **na spojení, ne na symbol** — páska providera není vázaná na
+  podklad, druhá subskripce by jen zdvojila tytéž ticky. Odpadá tím i argument
+  „jedna market data line na symbol" z původního rozhodnutí.
+- Zprávy nejsou filtrované na ES/NQ. Pro makro sentiment je to spíš výhoda:
+  co hýbe indexem, nechodí pod tickerem kontraktu.
+- Po reconnectu se páska musí obnovit (`manager.on_resubscribe`), jinak po
+  prvním výpadku tiše umlkne.

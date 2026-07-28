@@ -8,9 +8,12 @@ from typing import Any
 from sqlalchemy import create_engine, select
 
 from gexlens_engine.ibkr.newsticks import (
+    BROAD_TAPE_TICKS,
     NewsTickCollector,
     clean_headline,
     normalize_tick,
+    subscribe_broad_tape,
+    tape_symbol,
     tick_time,
 )
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema, news_events
@@ -27,6 +30,69 @@ class FakeTick:
     articleId: str = "a1"
     timeStamp: Any = int(NOW.timestamp())
     extraData: str = ""
+
+
+class FakeClient:
+    """Zrcadlí `ib.client`; `fail_on` simuluje providera bez `_ALL` pásky."""
+
+    def __init__(self, fail_on: set[str] | None = None) -> None:
+        self.calls: list[tuple[int, str, str]] = []
+        self._next_id = 100
+        self._fail_on = fail_on or set()
+
+    def getReqId(self) -> int:
+        self._next_id += 1
+        return self._next_id
+
+    def reqMktData(
+        self,
+        reqId: int,
+        contract: Any,
+        genericTickList: str,
+        snapshot: bool,
+        regulatorySnapshot: bool,
+        mktDataOptions: list[Any],
+    ) -> None:
+        if contract in self._fail_on:
+            raise RuntimeError(f"provider {contract} neexistuje")
+        self.calls.append((reqId, contract, genericTickList))
+
+
+# ── Broad tape (#334) ──────────────────────────────────────────────
+
+
+def test_tape_symbol_builds_provider_wide_feed() -> None:
+    assert tape_symbol("BRFG") == "BRFG:BRFG_ALL"
+    assert tape_symbol("DJ-RTG") == "DJ-RTG:DJ-RTG_ALL"
+
+
+def test_subscribe_broad_tape_uses_mdoff_and_covers_every_provider() -> None:
+    """`mdoff` je nutné — bez něj IBKR chce ke kontraktu kotace, které NEWS nemá."""
+    client = FakeClient()
+    providers = ["BRFG", "DJ-RTG", "DJNL"]
+
+    subscribed = subscribe_broad_tape(client, providers, make_contract=tape_symbol)
+
+    assert subscribed == providers
+    assert [call[1] for call in client.calls] == [
+        "BRFG:BRFG_ALL",
+        "DJ-RTG:DJ-RTG_ALL",
+        "DJNL:DJNL_ALL",
+    ]
+    assert {call[2] for call in client.calls} == {BROAD_TAPE_TICKS}
+    # Každá páska musí mít vlastní reqId, jinak by si je IBKR přepsala
+    assert len({call[0] for call in client.calls}) == len(providers)
+
+
+def test_subscribe_broad_tape_survives_provider_without_tape() -> None:
+    """`BRFUPDN` pásku nemá — nesmí sebrat zbytek s sebou."""
+    client = FakeClient(fail_on={"BRFUPDN:BRFUPDN_ALL"})
+
+    subscribed = subscribe_broad_tape(
+        client, ["BRFG", "BRFUPDN", "DJNL"], make_contract=tape_symbol
+    )
+
+    assert subscribed == ["BRFG", "DJNL"]
 
 
 # ── Normalizace ────────────────────────────────────────────────────
