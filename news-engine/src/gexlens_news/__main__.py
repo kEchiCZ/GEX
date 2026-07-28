@@ -36,6 +36,7 @@ from gexlens_news.model_stats_job import ModelStatsJob
 from gexlens_news.pipeline import DedupingWriter
 from gexlens_news.reaction_job import ReactionJob
 from gexlens_news.runner import CollectorRunner
+from gexlens_news.sentindex_job import SentIndexJob
 from gexlens_news.store import NewsWriter
 
 logger = logging.getLogger("gexlens.news")
@@ -93,6 +94,7 @@ async def run(settings: NewsSettings) -> None:
     classification = RuleClassificationJob(engine)
     reactions = ReactionJob(engine, BarsRepository(settings.data_dir))
     model_stats = ModelStatsJob(engine)
+    sent_index = SentIndexJob(engine, settings.data_dir)
     last_stats_day: dt.date | None = None
 
     async def reaction_loop() -> None:
@@ -115,6 +117,11 @@ async def run(settings: NewsSettings) -> None:
                 logger.exception(
                     "Dopočet reakcí selhal — zkusí se za %.0f s", settings.reaction_interval_s
                 )
+            # Index se přepočítává každý cyklus — je to živá hodnota pro panel
+            try:
+                await asyncio.to_thread(sent_index.run, now)
+            except Exception:
+                logger.exception("Přepočet SentIndexu selhal — zkusí se příští cyklus")
             # Model se přepočítává jednou denně (SPEC 2.4: noční job); běží po
             # reakcích, aby zahrnul i to, co se právě dopočítalo
             if last_stats_day != now.date():
