@@ -74,12 +74,21 @@ class NewsEvent:
 
     @property
     def dedup_hash(self) -> str:
-        """Hash normalizovaného titulku — základ deduplikace (SPEC 3.3).
+        """Klíč pro idempotentní zápis: normalizovaný titulek + den události.
 
-        Záměrně **bez času**: časové okno řeší rolling porovnání v #273, ne hash.
-        Fixní časové buckety by rozdělily tutéž story na hranici okna.
+        Den v klíči **musí být**: `news_events.dedup_hash` je UNIQUE, takže
+        samotný titulek by znamenal, že se opakující se událost nikdy nezapíše
+        podruhé — měsíční „USD Core PCE Price Index m/m" by po prvním záznamu
+        mizel navždy (a „Fed holds rates" taky).
+
+        Hrubost na den je záměr: tatáž story z Finnhubu i CNBC v jeden den má
+        splynout (cross-source merge, SPEC 3.3). Případ přes půlnoc a drobné
+        přeformulování řeší rolling-window dedup (#273) **před** zápisem —
+        tenhle hash je poslední pojistka proti opakovanému fetchi téhož feedu,
+        ne hlavní dedup logika.
         """
-        return hashlib.sha256(normalize_title(self.title).encode("utf-8")).hexdigest()
+        key = f"{normalize_title(self.title)}|{self.ts_event.date().isoformat()}"
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 def normalize_title(title: str) -> str:

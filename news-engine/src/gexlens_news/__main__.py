@@ -19,27 +19,43 @@ from sqlalchemy import create_engine
 
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_news.collectors import Collector
-from gexlens_news.config import NewsSettings, load_news_settings
+from gexlens_news.collectors.forexfactory import ForexFactoryCollector
+from gexlens_news.collectors.rss import RssCollector
+from gexlens_news.config import FED_RSS_URLS, NewsSettings, load_news_settings
+from gexlens_news.http import Fetcher, make_fetcher
 from gexlens_news.runner import CollectorRunner
 from gexlens_news.store import NewsWriter
 
 logger = logging.getLogger("gexlens.news")
 
 
-def build_collectors(settings: NewsSettings) -> list[Collector]:
+def build_collectors(settings: NewsSettings, fetcher: Fetcher) -> list[Collector]:
     """Sada aktivních collectorů dle konfigurace.
 
-    Zatím prázdná — kontrakt a runner jsou hotové (#270), samotné zdroje
-    přidávají #271 (Tier A) a #272 (Tier B).
+    Tier A (#271) nepotřebuje klíče — veřejný kalendář a Fed RSS. Zdroje
+    s prázdným klíčem se nezakládají vůbec (S10): vypnutý zdroj není porucha.
     """
-    return []
+    collectors: list[Collector] = [
+        ForexFactoryCollector(fetcher, interval_s=settings.forexfactory_interval_s),
+        RssCollector(
+            "fed_rss",
+            FED_RSS_URLS,
+            fetcher,
+            interval_s=settings.fed_rss_interval_s,
+            category="FED",
+            importance=3,
+            symbols=["ES", "NQ"],
+        ),
+    ]
+    return collectors
 
 
 async def run(settings: NewsSettings) -> None:
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     ensure_sentiment_schema(engine)
     writer = NewsWriter(engine)
-    collectors = build_collectors(settings)
+    fetcher = make_fetcher()
+    collectors = build_collectors(settings, fetcher)
     runner = CollectorRunner(collectors, writer.write)
 
     stop = asyncio.Event()
@@ -71,7 +87,7 @@ def status(settings: NewsSettings) -> int:
         total = 0
         db_state = f"nedostupná ({type(error).__name__})"
 
-    collectors = build_collectors(settings)
+    collectors = build_collectors(settings, make_fetcher())
     runner = CollectorRunner(collectors, lambda _events: 0)
     print(f"DB: {db_state}")
     print(f"Eventů v news_events: {total}")
@@ -80,9 +96,7 @@ def status(settings: NewsSettings) -> int:
     print(f"Zdroje s konfigurací: {', '.join(sorted(configured)) or '—'}")
     if missing:
         print(f"Bez klíče (vypnuté): {', '.join(sorted(missing))}")
-    if not collectors:
-        print("Collectory: zatím žádné (kontrakt hotový, zdroje přidávají #271/#272)")
-        return 0
+    print(f"Collectory: {len(collectors)} aktivních")
     degraded = 0
     for health in runner.status():
         print(f"  {health.name}: {health.state} (chyb v řadě: {health.consecutive_failures})")

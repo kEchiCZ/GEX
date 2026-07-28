@@ -79,9 +79,14 @@ def test_dedup_hash_ignores_case_punctuation_and_stopwords() -> None:
     assert a.dedup_hash == b.dedup_hash
     different = NewsEvent(TS, TS, "finnhub", "headline", "Fed cuts rates")
     assert different.dedup_hash != a.dedup_hash
-    # Hash je jen z titulku — časové okno řeší rolling dedup (#273), ne hash
-    later = NewsEvent(TS + dt.timedelta(hours=5), TS, "finnhub", "headline", "Fed holds rates")
-    assert later.dedup_hash == a.dedup_hash
+    # Týž den → týž klíč (cross-source merge), jiný den → jiný klíč: opakující
+    # se událost se nesmí zahodit jako duplicita (měsíční CPI, „Fed holds rates")
+    later_same_day = NewsEvent(
+        TS + dt.timedelta(hours=5), TS, "finnhub", "headline", "Fed holds rates"
+    )
+    assert later_same_day.dedup_hash == a.dedup_hash
+    next_month = NewsEvent(TS + dt.timedelta(days=30), TS, "finnhub", "headline", "Fed holds rates")
+    assert next_month.dedup_hash != a.dedup_hash
 
 
 def test_normalize_title_survives_diacritics_and_empty_result() -> None:
