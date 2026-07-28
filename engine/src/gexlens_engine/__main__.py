@@ -26,6 +26,7 @@ from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.ibkr.connection import ConnectionManager, ConnectionState
 from gexlens_engine.ibkr.discovery import ChainDiscovery, Underlying, build_contracts
+from gexlens_engine.ibkr.newsticks import NEWS_TICK, NewsTickCollector
 from gexlens_engine.ibkr.pacing import PacingGuard
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler
 from gexlens_engine.ibkr.underlying import Bar, RealTimeBarAggregator, UnderlyingBackfiller
@@ -51,6 +52,7 @@ from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter
 from gexlens_engine.storage.retention import RetentionJob
+from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
 
 logger = logging.getLogger("gexlens.engine")
@@ -95,6 +97,7 @@ async def create_pipeline(
     setups_repository: SetupsRepository | None = None,
     pacing_guard: PacingGuard | None = None,
     fa_repository: FaValidationRepository | None = None,
+    news_ticks: NewsTickCollector | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
     front = await _resolve_front_future(ib, symbol)
@@ -147,7 +150,9 @@ async def create_pipeline(
         obnovy by po prvním výpadku zamrzly (spot) a přestaly chodit (bary).
         """
         nonlocal rt_bars
-        ticker = ib.reqMktData(front, "", False, False)
+        # Generic tick 292 = živé headlines (#291, Tier D). Stojí jednu market
+        # data line na symbol — proti rezervě 80/≥150 (ADR-0001) zanedbatelné.
+        ticker = ib.reqMktData(front, NEWS_TICK if news_ticks else "", False, False)
         ticker.updateEvent += on_spot_tick
         bars_list = ib.reqRealTimeBars(front, 5, "TRADES", False)
         bars_list.updateEvent += on_bar_update
@@ -321,6 +326,8 @@ async def create_pipeline(
             if setups_repository is not None
             else None
         ),
+        news_ticks=news_ticks,
+        read_news_ticks=(lambda: list(ib.newsTicks())) if news_ticks else None,
     )
 
     async def resubscribe() -> None:
@@ -374,6 +381,13 @@ async def main() -> None:
     if settings.setups_enabled:
         setups_repository = SetupsRepository(db)
         await asyncio.to_thread(setups_repository.ensure_schema)
+
+    # Broker headlines z ticku 292 (#291): schéma SentimentLensu sdílí obě
+    # služby, engine do něj jen zapisuje
+    news_ticks: NewsTickCollector | None = None
+    if settings.ibkr_news_enabled:
+        await asyncio.to_thread(ensure_sentiment_schema, db)
+        news_ticks = NewsTickCollector(db)
 
     retention = RetentionJob(settings)
     last_purge_date: dt.date | None = None
@@ -444,6 +458,7 @@ async def main() -> None:
                     setups_repository=setups_repository,
                     pacing_guard=pacing_guard,
                     fa_repository=fa_repository,
+                    news_ticks=news_ticks,
                 )
             except InstrumentSetupError as exc:
                 setup_cooldown[symbol] = SETUP_RETRY_CYCLES

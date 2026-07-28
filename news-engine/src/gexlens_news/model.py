@@ -7,35 +7,11 @@ pro plánovaný makro release i pro breaking headline. Výjimka jsou crowd data
 """
 
 import datetime as dt
-import hashlib
-import re
-import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
-# Slova, která nenesou význam pro shodu titulků — dedup je má ignorovat,
-# ať „Fed holds rates" a „The Fed holds rates" splynou (SPEC 3.3)
-_STOPWORDS = frozenset(
-    {
-        "a",
-        "an",
-        "and",
-        "as",
-        "at",
-        "by",
-        "for",
-        "from",
-        "in",
-        "is",
-        "of",
-        "on",
-        "the",
-        "to",
-        "with",
-    }
-)
-_NON_WORD = re.compile(r"[^\w\s]", re.UNICODE)
-_SPACES = re.compile(r"\s+")
+from gexlens_engine.compute.newstext import dedup_hash as _dedup_hash
+from gexlens_engine.compute.newstext import normalize_title
 
 
 @dataclass(frozen=True)
@@ -74,27 +50,13 @@ class NewsEvent:
 
     @property
     def dedup_hash(self) -> str:
-        """Klíč pro idempotentní zápis: normalizovaný titulek + den události.
+        """Klíč pro idempotentní zápis (SPEC 3.3).
 
-        Den v klíči **musí být**: `news_events.dedup_hash` je UNIQUE, takže
-        samotný titulek by znamenal, že se opakující se událost nikdy nezapíše
-        podruhé — měsíční „USD Core PCE Price Index m/m" by po prvním záznamu
-        mizel navždy (a „Fed holds rates" taky).
-
-        Hrubost na den je záměr: tatáž story z Finnhubu i CNBC v jeden den má
-        splynout (cross-source merge, SPEC 3.3). Případ přes půlnoc a drobné
-        přeformulování řeší rolling-window dedup (#273) **před** zápisem —
-        tenhle hash je poslední pojistka proti opakovanému fetchi téhož feedu,
-        ne hlavní dedup logika.
+        Implementace je sdílená s enginem (`compute.newstext`), protože broker
+        headlines z ticku 292 zapisuje engine (#291) — dvě implementace by
+        znamenaly tutéž story v DB dvakrát.
         """
-        key = f"{normalize_title(self.title)}|{self.ts_event.date().isoformat()}"
-        return hashlib.sha256(key.encode("utf-8")).hexdigest()
+        return _dedup_hash(self.title, self.ts_event)
 
 
-def normalize_title(title: str) -> str:
-    """Titulek na kanonický tvar: bez diakritiky, interpunkce a stopslov."""
-    folded = unicodedata.normalize("NFKD", title.casefold())
-    ascii_only = "".join(ch for ch in folded if not unicodedata.combining(ch))
-    words = _SPACES.sub(" ", _NON_WORD.sub(" ", ascii_only)).strip().split(" ")
-    kept = [w for w in words if w and w not in _STOPWORDS]
-    return " ".join(kept) if kept else " ".join(words)
+__all__ = ["NewsEvent", "RawItem", "normalize_title"]
