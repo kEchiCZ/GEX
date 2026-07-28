@@ -28,6 +28,11 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI deklaruje parametry přes volání v defaultu (Query/Path/Depends) —
+# B008 to hlásí jako chybu, ale je to dokumentovaný idiom frameworku
+extend-immutable-calls = ["fastapi.Query", "fastapi.Path", "fastapi.Body", "fastapi.Depends"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["gexlens_engine", "gexlens_api", "gexlens_news"]
 

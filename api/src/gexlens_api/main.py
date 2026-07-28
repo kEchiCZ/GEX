@@ -10,7 +10,7 @@ import contextlib
 import datetime as dt
 import math
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Any
 
 import numpy as np
 import pandas as pd
@@ -33,11 +33,13 @@ from gexlens_api.heatmap import (
 )
 from gexlens_api.live import LiveHub
 from gexlens_api.meta_repo import MetaRepository
+from gexlens_api.sentiment_routes import build_sentiment_router
 from gexlens_api.status import StatusStore
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
 from gexlens_engine.config import Settings, load_settings
 from gexlens_engine.storage.oi_archive import OIEodRepository
+from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
 
 
@@ -112,6 +114,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.meta_repository = meta_repository
     app.state.alert_engine = alert_engine
     app.include_router(build_router(meta_repository))
+    # SentimentLens (#285) — vlastní router, ať main.py nenaroste o dalších
+    # 200 řádků; schéma se zakládá lazy při prvním dotazu
+    sentiment_ready: list[bool] = []
+
+    def sentiment_engine() -> Any:
+        engine = meta_repository.engine()
+        if not sentiment_ready:
+            ensure_sentiment_schema(engine)
+            sentiment_ready.append(True)
+        return engine
+
+    app.include_router(build_sentiment_router(sentiment_engine, settings.data_dir))
 
     @app.exception_handler(PartitionNotFoundError)
     async def partition_not_found(_request: object, exc: PartitionNotFoundError) -> JSONResponse:

@@ -35,6 +35,7 @@ from gexlens_news.http import Fetcher, make_fetcher
 from gexlens_news.model_stats_job import ModelStatsJob
 from gexlens_news.pipeline import DedupingWriter
 from gexlens_news.prediction_job import PredictionJob
+from gexlens_news.publisher import NewsPublisher
 from gexlens_news.reaction_job import ReactionJob
 from gexlens_news.runner import CollectorRunner
 from gexlens_news.sentindex_job import SentIndexJob
@@ -97,6 +98,7 @@ async def run(settings: NewsSettings) -> None:
     model_stats = ModelStatsJob(engine)
     sent_index = SentIndexJob(engine, settings.data_dir)
     predictions = PredictionJob(engine)
+    publisher = NewsPublisher(settings.api_base) if settings.api_base else None
     last_stats_day: dt.date | None = None
 
     async def reaction_loop() -> None:
@@ -127,7 +129,21 @@ async def run(settings: NewsSettings) -> None:
                 logger.exception("Vyhodnocení predikcí selhalo — zkusí se příští cyklus")
             # Index se přepočítává každý cyklus — je to živá hodnota pro panel
             try:
-                await asyncio.to_thread(sent_index.run, now)
+                points, topics = await asyncio.to_thread(sent_index.run, now)
+                if publisher is not None and points:
+                    value = await asyncio.to_thread(sent_index.current_value, now)
+                    await publisher.publish_sentiment(
+                        "ES",
+                        value,
+                        [
+                            {"category": t.category, "value": t.value, "active": t.active}
+                            for t in topics
+                            if t.active
+                        ],
+                        now,
+                    )
+                    upcoming = await asyncio.to_thread(sent_index.upcoming_events, now)
+                    await publisher.publish_upcoming(upcoming, now)
             except Exception:
                 logger.exception("Přepočet SentIndexu selhal — zkusí se příští cyklus")
             # Model se přepočítává jednou denně (SPEC 2.4: noční job); běží po

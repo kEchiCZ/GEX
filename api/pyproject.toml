@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "API server GEXLens — FastAPI + WebSocket (SPEC kap. 6)"
 requires-python = ">=3.12"
 dependencies = [
+    "gexlens-news",
     "fastapi>=0.115",
     "gexlens-engine",
     "pandas>=2.2",
@@ -12,6 +13,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
+gexlens-news = { workspace = true }
 gexlens-engine = { workspace = true }
 
 [build-system]
