@@ -11,6 +11,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol, runtime_checkable
 
+from gexlens_news.http import strip_secrets
 from gexlens_news.model import NewsEvent, RawItem
 
 CollectorState = Literal["idle", "ok", "degraded"]
@@ -76,7 +77,9 @@ class CollectorHealth:
 
     def record_failure(self, error: BaseException) -> None:
         self.consecutive_failures += 1
-        self.last_error = f"{type(error).__name__}: {error}"
+        # Text výjimky umí nést celé URL i s tokenem (httpx) — S10 zakazuje,
+        # aby klíč skončil v logu nebo v UI přes `last_error`
+        self.last_error = strip_secrets(f"{type(error).__name__}: {error}")
         if self.consecutive_failures >= DEGRADED_AFTER_FAILURES:
             self.state = "degraded"
 

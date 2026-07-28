@@ -14,6 +14,13 @@ FED_RSS_URLS = (
     "https://www.federalreserve.gov/feeds/speeches.xml",
 )
 
+# Tier B redundance k Finnhubu (SPEC kap. 1) — širší pokrytí, dedup je řeší
+NEWS_RSS_URLS = (
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    "https://finance.yahoo.com/news/rssindex",
+)
+
 
 class NewsSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GEXLENS_NEWS_", env_file=".env", extra="ignore")
