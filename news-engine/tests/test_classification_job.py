@@ -44,6 +44,8 @@ def seed_event(engine: Engine, event_id: int, *, kind: str = "headline") -> None
 
 
 def seed_llm_classification(engine: Engine, event_id: int) -> None:
+    from sqlalchemy import update
+
     with engine.begin() as conn:
         conn.execute(
             insert(news_classifications),
@@ -59,6 +61,12 @@ def seed_llm_classification(engine: Engine, event_id: int) -> None:
                     "created_at": NOW - dt.timedelta(minutes=1),
                 }
             ],
+        )
+        # LLM pass denormalizuje do news_events — zrcadlí llm_classifier
+        conn.execute(
+            update(news_events)
+            .where(news_events.c.id == event_id)
+            .values(category="FED", importance=3, sentiment_dir=-1, sentiment_source="llm")
         )
 
 
