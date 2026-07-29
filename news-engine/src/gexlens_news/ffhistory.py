@@ -35,14 +35,12 @@ from dataclasses import dataclass
 from statistics import stdev
 from typing import Any
 
-import httpx
 from sqlalchemy import select, update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import news_events
 from gexlens_news.classifier import classify_category
 from gexlens_news.collectors.forexfactory import _IMPACT, _SYMBOLS_BY_COUNTRY, parse_number
-from gexlens_news.http import BROWSER_UA
 from gexlens_news.model import NewsEvent, normalize_title
 from gexlens_news.store import NewsWriter
 
@@ -139,16 +137,24 @@ def normalize_entry(entry: dict[str, Any], *, fetched_at: dt.datetime) -> NewsEv
 
 
 def fetch_week(week: str, *, timeout_s: float = 30.0) -> str:
-    """Jedna stránka kalendáře; FF vyžaduje prohlížečovou UA (ADR-0014)."""
-    response = httpx.get(
+    """Jedna stránka kalendáře přes curl_cffi s Chrome impersonací.
+
+    Cloudflare před FF pouští Windows TLS stack, ale **linuxový blokuje 403**
+    bez ohledu na hlavičky (změřeno 29. 7.: httpx i systémový curl z
+    kontejneru 403, z Windows hostu 200, stejná IP). curl_cffi napodobuje
+    kompletní Chrome fingerprint (JA3 + HTTP/2), a z kontejneru prochází.
+    """
+    from curl_cffi import requests as cffi_requests
+
+    response = cffi_requests.get(
         HISTORY_URL,
         params={"week": week},
-        headers={"User-Agent": BROWSER_UA},
+        impersonate="chrome",
         timeout=timeout_s,
-        follow_redirects=True,
     )
-    response.raise_for_status()
-    return response.text
+    # curl_cffi má jen částečné typy — raise_for_status je untyped
+    response.raise_for_status()  # type: ignore[no-untyped-call]
+    return str(response.text)
 
 
 def update_actuals(engine: Engine, events: list[NewsEvent]) -> int:

@@ -5,6 +5,9 @@ description = "SentimentLens news-engine — sběr a normalizace zpráv (SPEC ka
 requires-python = ">=3.12"
 dependencies = [
     "gexlens-engine",
+    # FF kalendář: Cloudflare blokuje linuxový TLS fingerprint (httpx i curl
+    # z kontejneru 403, z Windows 200) — curl_cffi impersonuje Chrome (#277)
+    "curl-cffi>=0.7",
     "httpx>=0.28",
     "psycopg[binary]>=3.2",
     "pydantic>=2.10",
