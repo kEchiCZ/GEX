@@ -313,6 +313,22 @@ export async function fetchWaves(): Promise<WaveRow[]> {
   return data.waves ?? []
 }
 
+/** Bod equity křivky (#298, SPEC 7.3) — řádek `track_record`. */
+export interface TrackRecordRow {
+  date: string
+  strategy: string
+  symbol: string
+  equity: number
+  drawdown: number | null
+}
+
+export async function fetchTrackRecord(): Promise<TrackRecordRow[]> {
+  const data = await getJson<{ track_record: TrackRecordRow[] }>('/stats/trackrecord', {
+    track_record: [],
+  })
+  return data.track_record ?? []
+}
+
 /** Položka review fronty (#293, SPEC 5.7). */
 export interface ReviewRow {
   event_id: number

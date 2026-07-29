@@ -1491,3 +1491,10 @@ body {
 .stats-gate-open {
   color: #3ecf8e;
 }
+
+.stats-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  margin-bottom: 6px;
+}

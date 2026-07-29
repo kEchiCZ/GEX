@@ -5,10 +5,18 @@ počítají klientsky nad `/stats/waves` (vlny přepočítává noční/průbě�
 tabulka má nízké stovky řádků).
 */
 import { useEffect, useMemo, useState } from 'react'
-import { fetchNewsStats, fetchWaves } from '../api/news'
+import { fetchNewsStats, fetchSignals, fetchTrackRecord, fetchWaves } from '../api/news'
 import { categoryLabel, GATE_MIN_SAMPLES, GATE_WILSON_LB } from '../api/news'
-import type { ModelStatsRow, WaveRow } from '../api/news'
+import type { ModelStatsRow, SignalRow, TrackRecordRow, WaveRow } from '../api/news'
 import { fetchSettings } from '../api/settings'
+import {
+  STRATEGY_COLORS,
+  STRATEGY_LABELS,
+  cagr,
+  groupCurves,
+  maxDrawdown,
+  signalHitRate,
+} from '../stats/trackrecord'
 import { currentWave, histogram, waveDirectionStats } from '../stats/waves'
 import { useAppState } from '../state/AppState'
 
@@ -100,11 +108,126 @@ function HistogramChart({
 
 const WINDOWS = [1, 5, 15, 60]
 
+/** Equity a drawdown křivky + souhrn (CAGR, max DD, hit-rate) — SPEC 7.3. */
+function TrackRecordSection({
+  curves,
+  signals,
+}: {
+  curves: Map<string, import('../api/news').TrackRecordRow[]>
+  signals: SignalRow[]
+}) {
+  const width = 560
+  const height = 160
+  const ddHeight = 60
+  const strategies = [...curves.keys()].sort()
+  if (strategies.length === 0) {
+    return (
+      <p className="muted">Zatím prázdné — křivky počítá noční job po nasbírání historie vln</p>
+    )
+  }
+  // Společná osa X = sjednocení dat; osy Y přes rozsah všech křivek
+  const dates = [...new Set(strategies.flatMap((s) => curves.get(s)!.map((r) => r.date)))].sort()
+  const dateIndex = new Map(dates.map((date, index) => [date, index]))
+  const xOf = (date: string) => ((dateIndex.get(date) ?? 0) / Math.max(1, dates.length - 1)) * width
+  const equities = strategies.flatMap((s) => curves.get(s)!.map((r) => r.equity))
+  const minEq = Math.min(...equities)
+  const maxEq = Math.max(...equities)
+  const spanEq = Math.max(1e-9, maxEq - minEq)
+  const yOf = (equity: number) => height - ((equity - minEq) / spanEq) * (height - 8) - 4
+  const worstDd = Math.min(-1e-9, ...strategies.map((s) => maxDrawdown(curves.get(s)!)))
+  const yDd = (dd: number) => (dd / worstDd) * (ddHeight - 4)
+
+  return (
+    <div>
+      <div className="stats-legend">
+        {strategies.map((strategy) => (
+          <span key={strategy} style={{ color: STRATEGY_COLORS[strategy] ?? '#d7dce6' }}>
+            ● {STRATEGY_LABELS[strategy] ?? strategy}
+          </span>
+        ))}
+      </div>
+      <svg width={width} height={height} role="img" aria-label="Equity křivky">
+        <line x1={0} y1={yOf(1)} x2={width} y2={yOf(1)} stroke="#2c3342" strokeDasharray="3 3" />
+        {strategies.map((strategy) => (
+          <polyline
+            key={strategy}
+            data-part={`equity-${strategy}`}
+            fill="none"
+            stroke={STRATEGY_COLORS[strategy] ?? '#d7dce6'}
+            strokeWidth={1.5}
+            points={curves
+              .get(strategy)!
+              .map((row) => `${xOf(row.date).toFixed(1)},${yOf(row.equity).toFixed(1)}`)
+              .join(' ')}
+          />
+        ))}
+      </svg>
+      <h4 className="muted">Drawdown</h4>
+      <svg width={width} height={ddHeight} role="img" aria-label="Drawdown křivky">
+        {strategies.map((strategy) => (
+          <polyline
+            key={strategy}
+            fill="none"
+            stroke={STRATEGY_COLORS[strategy] ?? '#d7dce6'}
+            strokeWidth={1}
+            points={curves
+              .get(strategy)!
+              .map((row) => `${xOf(row.date).toFixed(1)},${yDd(row.drawdown ?? 0).toFixed(1)}`)
+              .join(' ')}
+          />
+        ))}
+      </svg>
+      <table className="stats-table">
+        <thead>
+          <tr>
+            <th>Strategie</th>
+            <th>Equity</th>
+            <th>CAGR</th>
+            <th>Max DD</th>
+            <th>Hit-rate (+5 min)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {strategies.map((strategy) => {
+            const curve = curves.get(strategy)!
+            const last = curve[curve.length - 1]
+            const growth = cagr(curve)
+            const mode =
+              strategy === 'signals_news'
+                ? ('NEWS' as const)
+                : strategy === 'signals_combined'
+                  ? ('COMBINED' as const)
+                  : null
+            const hitRate = mode ? signalHitRate(signals, mode) : null
+            return (
+              <tr key={strategy}>
+                <td style={{ color: STRATEGY_COLORS[strategy] ?? undefined }}>
+                  {STRATEGY_LABELS[strategy] ?? strategy}
+                </td>
+                <td>{last.equity.toFixed(3)}</td>
+                <td>{growth === null ? '—' : `${(growth * 100).toFixed(1)} %`}</td>
+                <td>{`${(maxDrawdown(curve) * 100).toFixed(1)} %`}</td>
+                <td>
+                  {hitRate === null || hitRate.total === 0
+                    ? '—'
+                    : `${((hitRate.hits / hitRate.total) * 100).toFixed(0)} % (${hitRate.hits}/${hitRate.total})`}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export function StatsView() {
   const { symbol } = useAppState()
   const [waves, setWaves] = useState<WaveRow[]>([])
   const [stats, setStats] = useState<ModelStatsRow[]>([])
   const [retro, setRetro] = useState<RetroPassState | null>(null)
+  const [track, setTrack] = useState<TrackRecordRow[]>([])
+  const [signals, setSignals] = useState<SignalRow[]>([])
   const [windowMin, setWindowMin] = useState(5)
 
   useEffect(() => {
@@ -115,12 +238,16 @@ export function StatsView() {
         fetchWaves(),
         fetchNewsStats(),
         fetchSettings().catch(() => ({}) as Record<string, unknown>),
-      ]).then(([waveRows, statsRows, settings]) => {
+        fetchTrackRecord(),
+        fetchSignals(1000),
+      ]).then(([waveRows, statsRows, settings, trackRows, signalRows]) => {
         if (cancelled) return
         setWaves(waveRows)
         setStats(statsRows)
         const retroValue = settings.retro_pass
         setRetro(isRetroState(retroValue) ? retroValue : null)
+        setTrack(trackRows)
+        setSignals(signalRows)
       })
     }
     load()
@@ -261,6 +388,15 @@ export function StatsView() {
             </tbody>
           </table>
         )}
+      </section>
+
+      <section className="stats-section" aria-label="Track record">
+        <h2>Track record — mechanické equity křivky</h2>
+        <p className="muted">
+          Bez exekučních nákladů, point-in-time (S11); kalibrační období vyloučeno (ADR-0021).
+          Sebe-kontrola systému, ne obchodní signál.
+        </p>
+        <TrackRecordSection curves={groupCurves(track, symbol)} signals={signals} />
       </section>
 
       <section className="stats-section" aria-label="Retro pass">
