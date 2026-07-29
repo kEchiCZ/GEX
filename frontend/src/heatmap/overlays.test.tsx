@@ -1,12 +1,12 @@
 /** Testy overlayů (issue #24): mapování, viditelnost dle checkboxů, crosshair sync. */
 import { fireEvent, render, screen } from '@testing-library/react'
-import { expect, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 import { Heatmap } from '../components/Heatmap'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
 import { DEFAULT_VIEW } from './view'
 import type { ViewTransform } from './view'
 import { demoGrid } from './demo'
-import { breaksOnJump, formatLevel, fractionalRow, isLevelJump, pairWallSeries, pricePolyline, resolveSecondaryWalls, tickIndices, visibleOverlays } from './overlays' // prettier-ignore
+import { breaksOnJump, formatLevel, fractionalRow, isLevelJump, levelLabel, pairWallSeries, pricePolyline, resolveSecondaryWalls, tickIndices, visibleOverlays } from './overlays' // prettier-ignore
 import type { LevelLine, OverlayData } from './overlays'
 
 // ── Čisté helpery ──────────────────────────────────────────────────
@@ -280,4 +280,29 @@ test('tooltip buňky zobrazuje hodnoty vrstev', () => {
   expect(tooltip.textContent).toContain('strike')
   expect(tooltip.textContent).toContain('call')
   expect(tooltip.textContent).toContain('put')
+})
+
+describe('popisky úrovní (#342)', () => {
+  test('pojmenované úrovně mají český popisek', () => {
+    expect(levelLabel('flip')).toBe('Gamma Flip')
+    expect(levelLabel('max_pain')).toBe('Max Pain')
+    expect(levelLabel('call_wall')).toBe('Call zeď')
+    expect(levelLabel('put_wall')).toBe('Put zeď')
+    expect(levelLabel('centroid')).toBe('Těžiště')
+  })
+
+  test('sekundární zdi se popisují i s prefixem walls:', () => {
+    // resolveSecondaryWalls je po spárování přejmenuje (ADR-0008)
+    expect(levelLabel('walls:call_wall_2')).toBe('2. call zeď')
+    expect(levelLabel('walls:put_wall_2')).toBe('2. put zeď')
+  })
+
+  test('hřebeny a řady z módu zdí popisek nemají', () => {
+    // Proměnlivý počet hřebenů by graf zavalil; módové řady nejsou úrovně
+    expect(levelLabel('walls:ridge-0')).toBeNull()
+    expect(levelLabel('walls:ridge-7')).toBeNull()
+    expect(levelLabel('walls:call')).toBeNull()
+    expect(levelLabel('walls:put')).toBeNull()
+    expect(levelLabel('walls:flip')).toBeNull()
+  })
 })

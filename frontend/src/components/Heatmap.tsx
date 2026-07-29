@@ -23,6 +23,7 @@ import {
   fractionalRow,
   isLevelJump,
   lastLevelValue,
+  levelLabel,
   pricePolyline,
   tickIndices,
 } from '../heatmap/overlays'
@@ -53,6 +54,8 @@ import { useCrosshair } from '../state/Crosshair'
 const UP_COLOR = '#3ecf8e'
 const DOWN_COLOR = '#f0616d'
 const LEVEL_DEFAULT_COLOR = '#e8c14b'
+/** Svislý odstup, pod kterým se popisky úrovní považují za kolidující (#342). */
+const LABEL_ROW_GAP_PX = 12
 
 // measureText nutí layout — cache šířky per font|text (osy překreslujeme 5×/s při živém spotu)
 const textWidthCache = new Map<string, number>()
@@ -445,8 +448,12 @@ export function Heatmap({
     // Popisek bez podkladového obdélníku: hodnota NAD čarou v barvě čáry.
     // Max Pain je plnou čarou s textem „Max Pain" vpravo před osou Y.
     context.font = 'bold 10px sans-serif'
+    // Popisky blízkých úrovní by se překrývaly — každý další se odsune vpravo
+    // za ten předchozí. S názvy (#342) jsou širší, takže bez toho splývají.
+    const drawnLabels: { y: number; endX: number }[] = []
     for (const line of levelLines) {
-      if (line.name.startsWith('walls:')) continue
+      const name = levelLabel(line.name)
+      if (name === null) continue
       const value = lastLevelValue(line.series)
       const row = value === null ? null : fractionalRow(grid.strikes, value)
       if (value === null || row === null) continue
@@ -455,21 +462,28 @@ export function Heatmap({
       const color = line.color || LEVEL_DEFAULT_COLOR
       context.strokeStyle = color
       context.lineWidth = 1
-      if (!isMaxPain) context.setLineDash([6, 5])
+      // Sekundární zeď si drží vlastní tečkování, ať jde poznat od primární
+      if (!isMaxPain) context.setLineDash(line.dash ?? [6, 5])
       context.beginPath()
       context.moveTo(0, y)
       context.lineTo(logicalW, y)
       context.stroke()
       context.setLineDash([])
-      // Popisek zdi nese aktuální dominanci (ADR-0010, #223)
-      const label = isMaxPain
-        ? `Max Pain ${formatLevel(value)}`
-        : formatLevel(value) + (line.labelSuffix ?? '')
+      // Popisek zdi nese i aktuální dominanci (ADR-0010, #223)
+      const label = `${name} ${formatLevel(value)}${line.labelSuffix ?? ''}`
+      const width = measuredWidth(context, label)
       context.fillStyle = color
       if (isMaxPain) {
-        context.fillText(label, logicalW - measuredWidth(context, label) - 6, y - 4)
+        context.fillText(label, logicalW - width - 6, y - 4)
       } else {
-        context.fillText(label, 50, y - 4)
+        let x = 50
+        for (const drawn of drawnLabels) {
+          if (Math.abs(drawn.y - y) < LABEL_ROW_GAP_PX && drawn.endX + 8 > x) {
+            x = drawn.endX + 8
+          }
+        }
+        context.fillText(label, x, y - 4)
+        drawnLabels.push({ y, endX: x + width })
       }
     }
     context.font = '11px sans-serif'
