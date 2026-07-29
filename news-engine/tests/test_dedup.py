@@ -1,4 +1,4 @@
-"""Testy deduplikace (#273): rolling okno, cross-source merge, priming."""
+"""Testy deduplikace (#273, #274): rolling okno, cross-source merge, fuzzy, priming."""
 
 import datetime as dt
 from pathlib import Path
@@ -15,13 +15,18 @@ TS = dt.datetime(2026, 7, 28, 13, 59, 58, tzinfo=dt.UTC)
 
 
 def event(
-    title: str, source: str, *, at: dt.datetime = TS, ingested: dt.datetime | None = None
+    title: str,
+    source: str,
+    *,
+    at: dt.datetime = TS,
+    ingested: dt.datetime | None = None,
+    kind: str = "headline",
 ) -> NewsEvent:
     return NewsEvent(
         ts_event=at,
         ts_ingested=ingested or at,
         source=source,
-        kind="headline",
+        kind=kind,
         title=title,
         source_uid=f"{source}-{title}",
     )
@@ -107,6 +112,140 @@ def test_key_ignores_day_so_midnight_stories_merge() -> None:
     )
     assert len(result.events) == 1
     assert result.merged == 1
+
+
+# ── Fuzzy vrstva (#274) ────────────────────────────────────────────
+# Titulky v testech jsou skutečné páry z provozních dat 28.–29. 7. 2026,
+# na kterých byl práh J ≥ 0.9 změřen (ADR-0016).
+
+
+def test_reformulated_story_merges_across_sources() -> None:
+    """Jádro #274: totéž s drobnou obměnou znění je jedna story (J≈0.93)."""
+    dedup = RollingDeduplicator(window_minutes=10)
+    result = dedup.process(
+        [
+            event(
+                "Gold prices today: Gold remains below $4,100 ahead of Fed meeting",
+                "rss_yahoo",
+                at=TS,
+            ),
+            event(
+                "Gold prices today: Gold remains below $4,100 ahead of Fed meeting tomorrow",
+                "rss_cnbc",
+                at=TS + dt.timedelta(minutes=2),
+            ),
+        ]
+    )
+    assert len(result.events) == 1
+    assert result.merged == 1
+
+
+def test_reformulated_repeat_from_same_source_is_duplicate() -> None:
+    dedup = RollingDeduplicator(window_minutes=10)
+    result = dedup.process(
+        [
+            event(
+                "SK Hynix second-quarter profit surges 557% to a new high — but misses estimates",
+                "rss_yahoo",
+            ),
+            event(
+                "SK Hynix second-quarter profit surges to a new high — but misses estimates",
+                "rss_yahoo",
+                at=TS + dt.timedelta(minutes=1),
+            ),
+        ]
+    )
+    assert len(result.events) == 1
+    assert result.duplicates == 1
+    assert result.merged == 0
+
+
+def test_template_titles_of_different_companies_stay_apart() -> None:
+    """Šablonové titulky (J≈0.67) jsou hluboko pod prahem — nesmí splynout."""
+    dedup = RollingDeduplicator(window_minutes=10)
+    result = dedup.process(
+        [
+            event("Astrazeneca Q2 Earnings Call Highlights", "rss_yahoo"),
+            event(
+                "PayPal Q2 Earnings Call Highlights",
+                "rss_yahoo",
+                at=TS + dt.timedelta(minutes=1),
+            ),
+        ]
+    )
+    assert len(result.events) == 2
+
+
+def test_scheduled_events_never_merge_fuzzy() -> None:
+    """Kalendářní položky nejsou reformulace — fuzzy se na ně nepouští vůbec.
+
+    Titulky jsou syntetické s J = 0.9 (9 z 10 tokenů), aby test prokázal
+    guard na `kind`, ne jen podprahovou podobnost.
+    """
+    dedup = RollingDeduplicator(window_minutes=10)
+    base = "alpha beta gamma delta epsilon zeta eta theta iota"
+    result = dedup.process(
+        [
+            event(base, "forexfactory", kind="scheduled"),
+            event(
+                f"{base} kappa",
+                "forexfactory",
+                at=TS + dt.timedelta(minutes=1),
+                kind="scheduled",
+            ),
+        ]
+    )
+    assert len(result.events) == 2
+
+    # Kontrolní vzorek: tytéž titulky jako headline splynou
+    headline_dedup = RollingDeduplicator(window_minutes=10)
+    headline_result = headline_dedup.process(
+        [
+            event(base, "rss_yahoo"),
+            event(f"{base} kappa", "rss_cnbc", at=TS + dt.timedelta(minutes=1)),
+        ]
+    )
+    assert len(headline_result.events) == 1
+
+
+def test_fuzzy_merge_records_source_for_written_event() -> None:
+    """Sloučený zdroj se ukládá k prvnímu výskytu — i při fuzzy shodě."""
+    dedup = RollingDeduplicator(window_minutes=10)
+    first = event(
+        "Medicare is about to change a program that held down the cost of premiums",
+        "rss_yahoo",
+        at=TS,
+        ingested=TS,
+    )
+    reworded = event(
+        "Medicare is about to change a drug program that held down the cost of premiums",
+        "rss_cnbc",
+        at=TS + dt.timedelta(minutes=2),
+        ingested=TS + dt.timedelta(minutes=2),
+    )
+    dedup.process([first, reworded])
+
+    merged = dedup.merged_sources(first)
+    assert len(merged) == 1
+    assert merged[0]["source"] == "rss_cnbc"
+
+
+def test_fuzzy_layer_can_be_disabled() -> None:
+    dedup = RollingDeduplicator(window_minutes=10, jaccard_threshold=None)
+    result = dedup.process(
+        [
+            event(
+                "SK Hynix second-quarter profit surges 557% to a new high — but misses estimates",
+                "rss_yahoo",
+            ),
+            event(
+                "SK Hynix second-quarter profit surges to a new high — but misses estimates",
+                "rss_cnbc",
+                at=TS + dt.timedelta(minutes=1),
+            ),
+        ]
+    )
+    assert len(result.events) == 2
 
 
 # ── Zápisová cesta ─────────────────────────────────────────────────
