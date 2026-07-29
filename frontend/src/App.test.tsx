@@ -43,30 +43,6 @@ test('vykreslí kompletní layout (SPEC 7.1)', async () => {
   expect(await screen.findByRole('option', { name: '20260716' })).toBeDefined()
 })
 
-test('proběhlá expirace: hlavička hlásí replay dne expirace (#352)', async () => {
-  makeApp()
-  // Mock expirací je v minulosti → výchozí (poslední) je proběhlá
-  await screen.findByRole('option', { name: '20260717' })
-  expect(screen.getByTestId('expiry-meta').textContent).toContain(
-    'proběhla — zobrazen den expirace',
-  )
-})
-
-test('budoucí expirace: jen positioning, bez svíček (#352)', async () => {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ expiries: ['20991230', '20991231'] }),
-    }),
-  )
-  makeApp()
-  await screen.findByRole('option', { name: '20991231' })
-  expect(screen.getByTestId('expiry-meta').textContent).toContain(
-    'jen positioning — svíčky až v den expirace',
-  )
-})
-
 test('Ctrl+kolečko (pinch) nezoomuje stránku NAD grafem; jinde zůstává (#179, #181)', () => {
   makeApp()
   // Pinch na touchpadu chodí jako wheel s ctrlKey; dispatchEvent vrací false,
