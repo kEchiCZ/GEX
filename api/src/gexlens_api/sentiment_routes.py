@@ -318,13 +318,24 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
 
     @router.get("/signals")
     def signals_route(
-        mode: str | None = None, limit: int = Query(200, ge=1, le=1000)
+        mode: str | None = None,
+        from_ts: dt.datetime | None = Query(None, alias="from"),
+        to_ts: dt.datetime | None = Query(None, alias="to"),
+        limit: int = Query(200, ge=1, le=1000),
     ) -> dict[str, object]:
-        """Signály včetně `inputs` zdůvodnění a realizované úspěšnosti (#294)."""
+        """Signály včetně `inputs` zdůvodnění a realizované úspěšnosti (#294).
+
+        `from`/`to` vymezují čas signálu — replay konkrétního dne (#295)
+        nemá listovat celou historií přes `limit`.
+        """
         engine = engine_factory()
         stmt = select(signals).order_by(desc(signals.c.ts)).limit(limit)
         if mode is not None:
             stmt = stmt.where(signals.c.mode == mode)
+        if from_ts is not None:
+            stmt = stmt.where(signals.c.ts >= from_ts)
+        if to_ts is not None:
+            stmt = stmt.where(signals.c.ts <= to_ts)
         rows = _rows(engine, stmt)
         if rows:
             ids = [int(row["id"]) for row in rows]

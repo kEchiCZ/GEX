@@ -714,6 +714,8 @@ body {
   font-size: 12px;
   color: var(--text);
   pointer-events: none;
+  /* Druhý řádek tooltipu = signál (#295) */
+  white-space: pre-line;
 }
 
 .opacity-slider {
@@ -1299,4 +1301,122 @@ body {
 }
 .news-review-edit select {
   max-width: 140px;
+}
+
+/* Chip stavu sentimentu (#295, SPEC 9.0): RiskOn zelený / RiskOff červený /
+   Neutral šedý; tečka = nepotvrzená intradenní změna. */
+.state-chip-wrap {
+  position: relative;
+}
+
+.state-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  background: transparent;
+}
+
+.state-chip.state-riskon {
+  color: #3ecf8e;
+  background: rgba(62, 207, 142, 0.14);
+  border: 1px solid rgba(62, 207, 142, 0.45);
+}
+
+.state-chip.state-riskoff {
+  color: #f0616d;
+  background: rgba(240, 97, 109, 0.14);
+  border: 1px solid rgba(240, 97, 109, 0.45);
+}
+
+.state-chip.state-neutral {
+  color: var(--text-muted);
+  background: rgba(125, 133, 150, 0.14);
+  border: 1px solid rgba(125, 133, 150, 0.45);
+}
+
+.state-dot {
+  margin-left: 5px;
+  color: #e8c14b;
+  animation: state-dot-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes state-dot-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.state-popover {
+  position: absolute;
+  left: 0;
+  top: 32px;
+  width: 244px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  z-index: 10;
+}
+
+.state-spark-zero {
+  stroke: rgba(125, 133, 150, 0.5);
+  stroke-dasharray: 3 3;
+}
+
+.state-spark-line.positive {
+  stroke: #3ecf8e;
+  stroke-width: 1.5;
+}
+
+.state-spark-line.negative {
+  stroke: #f0616d;
+  stroke-width: 1.5;
+}
+
+.state-metrics {
+  display: grid;
+  grid-template-columns: auto 1fr auto 1fr;
+  gap: 2px 8px;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.state-metrics dt {
+  color: var(--text-muted);
+}
+
+.state-metrics dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.state-topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.state-topic {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid rgba(125, 133, 150, 0.4);
+}
+
+.state-topic.positive {
+  color: #3ecf8e;
+}
+
+.state-topic.negative {
+  color: #f0616d;
+}
+
+/* Progres ke gate v řádku přepínačů (#295, SPEC 9.0 „collecting data") */
+.signal-gate {
+  font-size: 12px;
+  white-space: nowrap;
 }

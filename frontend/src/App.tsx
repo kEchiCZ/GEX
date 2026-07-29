@@ -1,8 +1,10 @@
 /** Kořenový layout aplikace (SPEC 7.1) s obrazovkami Graf / Dashboard / Console / Settings. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { alignSeriesToLabels } from './api/news'
+import { alignSeriesToLabels, signalGateInfo } from './api/news'
 import { buildNewsMarkers } from './heatmap/newsMarkers'
+import { buildSignalMarkers } from './heatmap/signalMarkers'
+import { useSentimentState } from './hooks/useSentimentState'
 import { useAnnotations } from './annotations/useAnnotations'
 import { NewsView } from './components/NewsView'
 import { useNews } from './hooks/useNews'
@@ -83,10 +85,13 @@ function MainContent() {
     interval,
     setPriceInfo,
     setRegimeInfo,
+    signalMode,
     socket,
   } = useAppState()
   // Zprávy a sentiment (#288/#289) — jeden zdroj pro panel, sidebar i chip
   const newsData = useNews()
+  // Stav RiskOn/RiskOff (#295) — varovný badge šipek při unconfirmed změně
+  const sentState = useSentimentState()
   // Volby grafu přežívají refresh (ADR-0007, #167); URL deep-link má přednost
   const [style, setStyle] = usePersistentState<HeatmapStyle>(
     'style',
@@ -330,6 +335,18 @@ function MainContent() {
         : [],
     [toggles.news, newsData.news, newsData.upcoming, chartLabels],
   )
+  // Šipky signálů (#295, SPEC 9.0): dropdown vybírá zobrazenou větev (S9 —
+  // počítají se obě vždy); ⚠ badge při nepotvrzené intradenní změně stavu
+  const signalMarkers = useMemo(() => {
+    if (signalMode === 'off') return []
+    const branch = signalMode === 'news' ? 'NEWS' : 'COMBINED'
+    const rows = newsData.signals.filter((row) => row.mode === branch && row.symbol === symbol)
+    return buildSignalMarkers(rows, chartLabels, minuteLabel, {
+      warning: sentState?.unconfirmed ?? false,
+    })
+  }, [signalMode, newsData.signals, symbol, chartLabels, sentState?.unconfirmed])
+  // Progres ke gate pro dropdown (SPEC 9.0 „collecting data")
+  const signalGate = useMemo(() => signalGateInfo(newsData.stats, symbol), [newsData.stats, symbol])
   const panelSeries = useMemo(() => {
     const base = playback.isLive ? day.panels : slicePanels(day.panels, playback.position)
     if (!toggles.news) return base
@@ -545,8 +562,12 @@ function MainContent() {
       // Markery zpráv (#287) — osa nese i projekční část, takže nadcházející
       // scheduled eventy padnou napravo od živé hrany
       newsMarkers,
+      // Šipky signálů (#295): při přetáčení jen ty, co v čase pozice existovaly
+      signals: playback.isLive
+        ? signalMarkers
+        : signalMarkers.filter((signal) => signal.minuteIdx <= playback.position),
     }),
-    [baseOverlays, computedWalls, setupLines, ladderLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers], // prettier-ignore
+    [baseOverlays, computedWalls, setupLines, ladderLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, signalMarkers, playback.isLive, playback.position], // prettier-ignore
   )
 
   if (view === 'dashboard') {
@@ -576,7 +597,7 @@ function MainContent() {
   return (
     <>
       <TimeframeRow />
-      <TogglesRow />
+      <TogglesRow signalGate={signalGate} />
       <div className="row heatmap-controls" role="toolbar" aria-label="Heatmapa nastavení">
         <label className="toggle">
           Mode

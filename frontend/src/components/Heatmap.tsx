@@ -30,6 +30,7 @@ import {
 } from '../heatmap/overlays'
 import type { OverlayData, PriceBar, PriceStyle } from '../heatmap/overlays'
 import { markerColor, markerStyle } from '../heatmap/newsMarkers'
+import { signalAt, signalColor } from '../heatmap/signalMarkers'
 import {
   DEFAULT_VIEW,
   axisZoneAt,
@@ -540,6 +541,60 @@ export function Heatmap({
     }
     context.globalAlpha = 1
 
+    // Šipky signálů na cenové křivce (#295, SPEC 9.0): ▲ teal long pod cenou /
+    // ▼ červená short nad ní, sytost dle strength, decentní vodorovná stopa
+    // do expiry_ts, ⚠ badge při nepotvrzené změně stavu (6.3).
+    if (overlays.signals && overlays.signals.length > 0) {
+      const bars = overlays.price ?? []
+      const closeAtOrBefore = (minuteIdx: number): number | null => {
+        let close: number | null = null
+        for (const bar of bars) {
+          if (bar.minuteIdx > minuteIdx) break
+          close = bar.close
+        }
+        return close
+      }
+      for (const signal of overlays.signals) {
+        const close = closeAtOrBefore(signal.minuteIdx)
+        const row = close === null ? null : fractionalRow(grid.strikes, close)
+        if (row === null) continue
+        const x = minuteToX(signal.minuteIdx)
+        const y = rowToY(row)
+        const color = signalColor(signal)
+        // Stopa platnosti — tenká, ztlumená, ať nekonkuruje ceně
+        if (signal.endIdx > signal.minuteIdx) {
+          context.strokeStyle = signalColor(signal, 0.35)
+          context.lineWidth = 1
+          context.beginPath()
+          context.moveTo(x, y)
+          context.lineTo(minuteToX(signal.endIdx), y)
+          context.stroke()
+        }
+        // Trojúhelník: long míří nahoru a sedí POD cenou, short zrcadlově
+        const size = 6
+        const gap = 5
+        context.fillStyle = color
+        context.beginPath()
+        if (signal.direction === 'long') {
+          context.moveTo(x, y + gap)
+          context.lineTo(x - size, y + gap + size * 1.5)
+          context.lineTo(x + size, y + gap + size * 1.5)
+        } else {
+          context.moveTo(x, y - gap)
+          context.lineTo(x - size, y - gap - size * 1.5)
+          context.lineTo(x + size, y - gap - size * 1.5)
+        }
+        context.closePath()
+        context.fill()
+        if (signal.warning) {
+          context.font = '10px sans-serif'
+          const badgeY = signal.direction === 'long' ? y + gap + size * 1.5 + 11 : y - gap - size * 1.5 - 4 // prettier-ignore
+          context.fillText('⚠', x + size + 2, badgeY)
+          context.font = '11px sans-serif'
+        }
+      }
+    }
+
     // Anotace (SPEC 7.4): kreslené v datových souřadnicích, škálují se s pan/zoom
     const drawAnnotation = (tool: AnnotationTool, color: string, points: AnnotationPoint[]) => {
       if (points.length < 2) return
@@ -919,8 +974,11 @@ export function Heatmap({
     if (grid.layers.call) parts.push(`call ${grid.layers.call[index].toFixed(2)}`)
     if (grid.layers.put) parts.push(`put ${grid.layers.put[index].toFixed(2)}`)
     if (grid.layers.signed) parts.push(`± ${grid.layers.signed[index].toFixed(2)}`)
-    return parts.join(' · ')
-  }, [crosshair, grid])
+    // Signál v minutě crosshairu: režim, zdůvodnění, n, Wilson LB (#295, SPEC 9.0)
+    const signal = signalAt(overlays.signals ?? [], crosshair.minuteIdx)
+    const line = parts.join(' · ')
+    return signal ? `${line}\n${signal.tooltip}` : line
+  }, [crosshair, grid, overlays.signals])
 
   return (
     <div className="heatmap-stack" ref={stackRef}>

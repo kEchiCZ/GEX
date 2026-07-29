@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from sqlalchemy import create_engine
 
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
+from gexlens_news.anomaly_job import AnomalyJob
 from gexlens_news.bars import BarsRepository
 from gexlens_news.classification_job import RuleClassificationJob
 from gexlens_news.collectors import Collector
@@ -121,6 +122,8 @@ async def run(settings: NewsSettings) -> None:
     else:
         logger.info("Gemini bez klíče — LLM klasifikace se nespouští (není to porucha)")
     reactions = ReactionJob(engine, BarsRepository(settings.data_dir))
+    # Anomální reakce (#295, SPEC 9.4): |ret| nad p90 bucketu → zvonek
+    anomaly = AnomalyJob(engine)
     # Hodinové doplňování actual z FF kalendáře (#277) — widget feed ho nenese
     ff_refresh = (
         FfActualRefreshJob(engine, interval_s=settings.ff_actual_refresh_s)
@@ -192,6 +195,14 @@ async def run(settings: NewsSettings) -> None:
                 logger.exception(
                     "Dopočet reakcí selhal — zkusí se za %.0f s", settings.reaction_interval_s
                 )
+            # Anomálie hned po reakcích (#295) — hodnotí právě spočítaná okna
+            try:
+                anomaly_alerts = await asyncio.to_thread(anomaly.run, now)
+                if publisher is not None:
+                    for alert in anomaly_alerts:
+                        await publisher.publish("alerts", alert)
+            except Exception:
+                logger.exception("Detekce anomálií selhala — zkusí se příští cyklus")
             # Review fronta (#293) po reakcích — auto-uzavírání čte uzavřená okna
             try:
                 await asyncio.to_thread(review.run, now)
