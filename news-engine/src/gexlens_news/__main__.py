@@ -50,6 +50,7 @@ from gexlens_news.retro_pass import RetroPass
 from gexlens_news.runner import CollectorRunner
 from gexlens_news.sentiment_backfill import backfill_sentiment_daily
 from gexlens_news.sentindex_job import SentIndexJob
+from gexlens_news.signal_job import SignalJob
 from gexlens_news.store import NewsWriter
 from gexlens_news.waves_job import WavesJob
 
@@ -147,6 +148,12 @@ async def run(settings: NewsSettings) -> None:
         logger.info("Reddit bez credentials — crowd zdroj se nespouští (není to porucha)")
     crowd = CrowdRunner(crowd_collectors, CrowdWriter(engine))
     waves = WavesJob(engine, symbol="ES")
+    # Signal engine (#294): always-on výpočet obou větví (S9)
+    signal_job = SignalJob(
+        engine,
+        settings.data_dir,
+        symbols=tuple(s.strip().upper() for s in settings.signal_symbols.split(",") if s.strip()),
+    )
     sent_index = SentIndexJob(engine, settings.data_dir)
     predictions = PredictionJob(engine)
     publisher = NewsPublisher(settings.api_base) if settings.api_base else None
@@ -224,6 +231,17 @@ async def run(settings: NewsSettings) -> None:
                     await publisher.publish("sentiment.state", payload)
             except Exception:
                 logger.exception("Přepočet vln selhal — zkusí se příští cyklus")
+                payload = None
+            # Signal engine (#294) po vlnách — potřebuje potvrzený stav.
+            # Kanál `signals` běží vždy (S9); UI ho zobrazuje dle režimu.
+            if payload is not None:
+                try:
+                    await asyncio.to_thread(signal_job.run, now, state=payload["state"])
+                    if publisher is not None:
+                        for created in signal_job.last_created:
+                            await publisher.publish("signals", created)
+                except Exception:
+                    logger.exception("Signal engine selhal — zkusí se příští cyklus")
             # Ranní retro pass (#284): dožene noční fronty, ať trader ráno
             # otevírá aplikaci se zpracovanou nocí
             if retro.due(now):

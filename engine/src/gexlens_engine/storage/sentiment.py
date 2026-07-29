@@ -275,6 +275,21 @@ signals = Table(
     Index("ix_signals_ts", "symbol", "ts"),
 )
 
+# Vyhodnocení signálů (SPEC 6.3) — stejný mechanismus jako prediction
+# outcomes: realizovaný pohyb v oknech po signálu, podklad pro srovnání
+# NEWS vs. COMBINED. Ve schématu z N1 chyběla (doplněno v #294, precedens
+# `news_weights` z #282).
+signal_outcomes = Table(
+    "signal_outcomes",
+    sentiment_metadata,
+    Column("signal_id", Integer, ForeignKey("signals.id"), primary_key=True),
+    Column("window_min", SmallInteger, primary_key=True),
+    Column("ret_bp", Float, nullable=False),
+    Column("realized_dir", SmallInteger, nullable=False),
+    Column("correct", Boolean, nullable=False),
+    Column("computed_at", DateTime(timezone=True), nullable=False),
+)
+
 # Human-in-the-loop (SPEC 5.7): rozpor LLM × empirický model nebo nízká jistota.
 # Neopravené položky se stejně vyhodnotí automaticky — systém funguje i bez
 # ručních zásahů.

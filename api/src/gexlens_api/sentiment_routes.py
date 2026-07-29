@@ -32,6 +32,7 @@ from gexlens_engine.storage.sentiment import (
     review_queue,
     sentiment_daily,
     sentiment_waves,
+    signal_outcomes,
     signals,
     track_record,
 )
@@ -313,9 +314,28 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
     # ── Milestones N7/N8 — tvar API drží, data přibudou ────────────
 
     @router.get("/signals")
-    def signals_route(mode: str | None = None) -> dict[str, object]:
-        """Signály včetně `inputs` zdůvodnění — Signal engine je N7 (#294)."""
-        return {"signals": _empty_table(engine_factory(), signals, mode=mode)}
+    def signals_route(
+        mode: str | None = None, limit: int = Query(200, ge=1, le=1000)
+    ) -> dict[str, object]:
+        """Signály včetně `inputs` zdůvodnění a realizované úspěšnosti (#294)."""
+        engine = engine_factory()
+        stmt = select(signals).order_by(desc(signals.c.ts)).limit(limit)
+        if mode is not None:
+            stmt = stmt.where(signals.c.mode == mode)
+        rows = _rows(engine, stmt)
+        if rows:
+            ids = [int(row["id"]) for row in rows]
+            outcome_rows = _rows(
+                engine, select(signal_outcomes).where(signal_outcomes.c.signal_id.in_(ids))
+            )
+            by_signal: dict[int, list[dict[str, Any]]] = {}
+            for outcome in outcome_rows:
+                by_signal.setdefault(int(outcome["signal_id"]), []).append(outcome)
+            for row in rows:
+                row["outcomes"] = sorted(
+                    by_signal.get(int(row["id"]), []), key=lambda o: o["window_min"]
+                )
+        return {"signals": rows}
 
     @router.get("/review")
     def review_route() -> dict[str, object]:
