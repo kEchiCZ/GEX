@@ -177,7 +177,7 @@ def test_surprise_z_needs_minimum_samples(tmp_path: Path) -> None:
 # ── Backfill a refresh ─────────────────────────────────────────────
 
 
-def days_json_for(entry: dict) -> str:
+def days_json_for(entry: dict[str, object]) -> str:
     import json
 
     return json.dumps([{"date": "Mon", "dateline": entry["dateline"], "events": [entry]}])
