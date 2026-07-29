@@ -114,6 +114,53 @@ def test_key_ignores_day_so_midnight_stories_merge() -> None:
     assert result.merged == 1
 
 
+# ── Šířka okna (#351) ──────────────────────────────────────────────
+
+
+def test_default_window_catches_republication_across_midnight() -> None:
+    """Jádro #351: republikace s Δt 24 min přes půlnoc UTC (reálný případ
+    „Iran launches surprise ballistic missile attack" 23:5x → 00:1x) prošla
+    10min oknem i denním dedup_hashem. Výchozí okno ji musí zahodit.
+    """
+    dedup = RollingDeduplicator()
+    before_midnight = dt.datetime(2026, 7, 28, 23, 52, 0, tzinfo=dt.UTC)
+    result = dedup.process(
+        [
+            event(
+                "Iran launches surprise ballistic missile attack on U.S. forces",
+                "rss_news",
+                at=before_midnight,
+            ),
+            event(
+                "Iran launches surprise ballistic missile attack on U.S. forces",
+                "rss_news",
+                at=before_midnight + dt.timedelta(minutes=24),
+            ),
+        ]
+    )
+    assert len(result.events) == 1
+    assert result.duplicates == 1
+
+
+def test_daily_recurring_title_stays_a_new_event() -> None:
+    """Denní rubrika se stejným titulkem (Δt ≈ 24 h) je nové vydání, ne
+    duplicita — výchozí okno na ni nesmí dosáhnout.
+    """
+    dedup = RollingDeduplicator()
+    result = dedup.process(
+        [
+            event("Basic Materials Roundup: Market Talk", "rss_news", at=TS),
+            event(
+                "Basic Materials Roundup: Market Talk",
+                "rss_news",
+                at=TS + dt.timedelta(hours=24),
+            ),
+        ]
+    )
+    assert len(result.events) == 2
+    assert result.duplicates == 0
+
+
 # ── Fuzzy vrstva (#274) ────────────────────────────────────────────
 # Titulky v testech jsou skutečné páry z provozních dat 28.–29. 7. 2026,
 # na kterých byl práh J ≥ 0.9 změřen (ADR-0016).
