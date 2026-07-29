@@ -23,6 +23,7 @@ from gexlens_news.anomaly_job import AnomalyJob
 from gexlens_news.bars import BarsRepository
 from gexlens_news.classification_job import RuleClassificationJob
 from gexlens_news.collectors import Collector
+from gexlens_news.collectors.alpaca import AlpacaNewsStream
 from gexlens_news.collectors.finnhub import FinnhubCollector
 from gexlens_news.collectors.forexfactory import ForexFactoryCollector
 from gexlens_news.collectors.rss import RssCollector
@@ -304,6 +305,14 @@ async def run(settings: NewsSettings) -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=settings.llm_interval_s)
 
+    async def alpaca_loop() -> None:
+        """Alpaca news WS (#387) — push stream s reconnectem; bez klíčů nic."""
+        if not settings.alpaca_key_id or not settings.alpaca_secret:
+            logger.info("Alpaca bez klíčů — WS stream se nespouští (není to porucha)")
+            return
+        stream = AlpacaNewsStream(settings.alpaca_key_id, settings.alpaca_secret, writer)
+        await stream.run(stop)
+
     async def ff_actual_loop() -> None:
         """Refresh actual z FF kalendáře — vlastní 60s tikot (#386).
 
@@ -339,7 +348,12 @@ async def run(settings: NewsSettings) -> None:
         ", ".join(sorted(enabled)) or "žádné",
     )
     await asyncio.gather(
-        runner.run(stop=stop), reaction_loop(), llm_loop(), crowd_loop(), ff_actual_loop()
+        runner.run(stop=stop),
+        reaction_loop(),
+        llm_loop(),
+        crowd_loop(),
+        ff_actual_loop(),
+        alpaca_loop(),
     )
     logger.info("news-engine ukončen")
 
