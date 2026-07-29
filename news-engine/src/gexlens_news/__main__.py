@@ -47,6 +47,7 @@ from gexlens_news.prediction_job import PredictionJob
 from gexlens_news.publisher import NewsPublisher
 from gexlens_news.reaction_job import ReactionJob
 from gexlens_news.retro_pass import RetroPass
+from gexlens_news.review_job import ReviewJob
 from gexlens_news.runner import CollectorRunner
 from gexlens_news.sentiment_backfill import backfill_sentiment_daily
 from gexlens_news.sentindex_job import SentIndexJob
@@ -147,6 +148,7 @@ async def run(settings: NewsSettings) -> None:
     else:
         logger.info("Reddit bez credentials — crowd zdroj se nespouští (není to porucha)")
     crowd = CrowdRunner(crowd_collectors, CrowdWriter(engine))
+    review = ReviewJob(engine, symbol="ES")
     waves = WavesJob(engine, symbol="ES")
     # Signal engine (#294): always-on výpočet obou větví (S9)
     signal_job = SignalJob(
@@ -190,6 +192,11 @@ async def run(settings: NewsSettings) -> None:
                 logger.exception(
                     "Dopočet reakcí selhal — zkusí se za %.0f s", settings.reaction_interval_s
                 )
+            # Review fronta (#293) po reakcích — auto-uzavírání čte uzavřená okna
+            try:
+                await asyncio.to_thread(review.run, now)
+            except Exception:
+                logger.exception("Review fronta selhala — zkusí se příští cyklus")
             # Actual z FF kalendáře před reakcemi být nemusí (reakce na actual
             # nečekají), ale před klasifikací dalšího cyklu ano — surprise_z
             # řídí směr scheduled eventů (SPEC kap. 4)

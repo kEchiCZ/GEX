@@ -197,3 +197,29 @@ def test_numeric_columns_are_json_numbers_not_strings(client: TestClient) -> Non
     row = next(r for r in client.get("/news").json()["news"] if r["sentiment_score"] is not None)
     assert isinstance(row["sentiment_score"], (int, float))
     assert not isinstance(row["sentiment_score"], str)
+
+
+def test_review_correction_creates_manual_version(client: TestClient) -> None:
+    """#293: korekce → nová verze source=manual + denormalizace + resolved."""
+    event_id = client.get("/news").json()["news"][0]["id"]
+
+    # Prázdná korekce se odmítá
+    assert client.post(f"/review/{event_id}", json={}).status_code == 422
+    # Neznámá kategorie se odmítá
+    assert client.post(f"/review/{event_id}", json={"category": "HACKED"}).status_code == 422
+    assert client.post("/review/999999", json={"direction": 1}).status_code == 404
+
+    response = client.post(f"/review/{event_id}", json={"direction": -1, "category": "GEOPOLITICS"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["direction"] == -1
+    assert body["category"] == "GEOPOLITICS"
+
+    # Nová verze je v historii klasifikací (S11 — append, ne přepis)
+    detail = client.get(f"/news/{event_id}").json()
+    versions = detail["classifications"]
+    assert versions[-1]["source"] == "manual"
+    assert versions[-1]["direction"] == -1
+    # Denormalizace na eventu se propsala
+    assert detail["event"]["sentiment_source"] == "manual"
+    assert detail["event"]["category"] == "GEOPOLITICS"

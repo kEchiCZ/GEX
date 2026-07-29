@@ -25,25 +25,18 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Engine
 
-from gexlens_engine.storage.sentiment import news_classifications, news_events
+from gexlens_engine.storage.sentiment import (
+    NEWS_CATEGORIES,
+    news_classifications,
+    news_events,
+)
 
 logger = logging.getLogger(__name__)
 
 LLM_SOURCE = "llm"
 
-# Kategorie ze SPEC 2.1 — jediný povolený slovník výstupu
-CATEGORIES = (
-    "FED",
-    "MACRO_INFLATION",
-    "MACRO_LABOR",
-    "MACRO_GROWTH",
-    "GEOPOLITICS",
-    "ENERGY",
-    "TECH",
-    "EARNINGS",
-    "CRYPTO",
-    "OTHER",
-)
+# Kategorie ze SPEC 2.1 — kanonický slovník žije ve storage schématu
+CATEGORIES = NEWS_CATEGORIES
 
 # Oddělovače dat v promptu (SPEC kap. 4 — prompt hardening)
 DATA_OPEN = "<<<NEWS_DATA"

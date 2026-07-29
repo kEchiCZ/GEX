@@ -1282,3 +1282,21 @@ body {
 .legend-down span {
   color: var(--down);
 }
+
+/* Review fronta (#293): zvýraznění řádku ke kontrole + inline korekce */
+.news-review-flag {
+  background: color-mix(in srgb, #f0b429 12%, transparent);
+}
+.news-review-badge {
+  padding: 0 6px;
+  color: #f0b429;
+}
+.news-review-edit {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 8px;
+  align-items: center;
+}
+.news-review-edit select {
+  max-width: 140px;
+}
