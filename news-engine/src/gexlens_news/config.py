@@ -47,9 +47,11 @@ class NewsSettings(BaseSettings):
     fed_rss_interval_s: float = Field(default=300.0, gt=0)
     reddit_interval_s: float = Field(default=900.0, gt=0)
 
-    # Okno rolling deduplikace (#273): rozdíl mezi tím, kdy tutéž story vydá
-    # Finnhub a kdy pomalejší RSS. Fixní časové buckety se vědomě nepoužívají.
-    dedup_window_minutes: int = Field(default=10, ge=1)
+    # Okno rolling deduplikace (#273, #351): musí pokrýt republikace téže story
+    # (měřeno Δt 23 min – hodiny), ne jen rozdíl rychlosti zdrojů — 10 min ze
+    # SPEC 3.3 propouštělo ~19 duplicit/den přes půlnoc UTC (ADR-0017). Strop
+    # drží denní rubriky se stejným titulkem (Δt ≈ 24 h) oddělené.
+    dedup_window_minutes: int = Field(default=360, ge=1, le=1080)
     cnn_fg_interval_s: float = Field(default=3600.0, gt=0)
 
     # Klíče a přihlašovací údaje — prázdné = zdroj vypnutý (S10)

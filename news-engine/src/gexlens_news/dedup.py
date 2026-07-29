@@ -26,9 +26,13 @@ from gexlens_news.model import NewsEvent, normalize_title
 
 logger = logging.getLogger(__name__)
 
-# Okno pro porovnání „je to tatáž story?" (SPEC 3.3 mluví o jednotkách minut;
-# 10 min dává rezervu pomalejším RSS zdrojům, které tutéž zprávu vydají později)
-DEFAULT_WINDOW_MINUTES = 10
+# Okno pro porovnání „je to tatáž story?" (#351, ADR-0017). SPEC 3.3 mluvil
+# o 10 minutách (rezerva na rychlost zdrojů), jenže zdroje tutéž story
+# REPUBLIKUJÍ s Δt 23 min – hodiny; týž den to zachytí `dedup_hash`
+# (titulek+den), přes půlnoc UTC ale nic — měřeno ~19 propuštěných
+# duplicit/den. 6 h chytá republikace a drží denní rubriky se stejným
+# titulkem (Market Talk Roundup, Δt ≈ 24 h) oddělené.
+DEFAULT_WINDOW_MINUTES = 360
 # Práh fuzzy shody — měřeno 29. 7. 2026 na 1658 zprávách z 24 h provozu (#274):
 # J ≥ 0.9 dalo 24 párů, všechny ručně ověřené pravé duplicity; pásmo 0.83–0.88
 # už obsahuje falešné merge (různé firmy v šablonových titulcích). ADR-0016.
