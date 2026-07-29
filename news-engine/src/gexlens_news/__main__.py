@@ -48,6 +48,7 @@ from gexlens_news.publisher import NewsPublisher
 from gexlens_news.reaction_job import ReactionJob
 from gexlens_news.retro_pass import RetroPass
 from gexlens_news.runner import CollectorRunner
+from gexlens_news.sentiment_backfill import backfill_sentiment_daily
 from gexlens_news.sentindex_job import SentIndexJob
 from gexlens_news.store import NewsWriter
 from gexlens_news.waves_job import WavesJob
@@ -310,6 +311,21 @@ def status(settings: NewsSettings) -> int:
     return 1 if degraded else 0
 
 
+def backfill_sentiment(settings: NewsSettings) -> int:
+    """Denní svíčky SentIndexu z historických eventů (#375, CLI příkaz)."""
+    engine = create_engine(settings.database_url, pool_pre_ping=True)
+    ensure_sentiment_schema(engine)
+    stats = backfill_sentiment_daily(engine)
+    # Vlny se přepočtou hned — ať CLI rovnou ukáže výsledný stav (#292)
+    payload, _changed = WavesJob(engine, symbol="ES").run(dt.datetime.now(dt.UTC))
+    print(f"Backfill sentiment_daily: {stats.describe()}")
+    print(
+        f"Stav: {payload['state']} (unconfirmed={payload['unconfirmed']}), "
+        f"close={payload['last_close']}, MA5={payload['ma5']}, MA10={payload['ma10']}"
+    )
+    return 0
+
+
 def backfill_ff(settings: NewsSettings, weeks: int | None) -> int:
     """Jednorázový backfill historického FF kalendáře (#277, CLI příkaz)."""
     engine = create_engine(settings.database_url, pool_pre_ping=True)
@@ -322,7 +338,10 @@ def backfill_ff(settings: NewsSettings, weeks: int | None) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gexlens_news", description="SentimentLens news-engine")
     parser.add_argument(
-        "command", choices=("run", "status", "backfill-ff"), nargs="?", default="run"
+        "command",
+        choices=("run", "status", "backfill-ff", "backfill-sentiment-daily"),
+        nargs="?",
+        default="run",
     )
     parser.add_argument(
         "--weeks",
@@ -345,6 +364,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return status(settings)
     if args.command == "backfill-ff":
         return backfill_ff(settings, args.weeks)
+    if args.command == "backfill-sentiment-daily":
+        return backfill_sentiment(settings)
     try:
         asyncio.run(run(settings))
     except KeyboardInterrupt:
