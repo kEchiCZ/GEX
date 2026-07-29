@@ -31,6 +31,7 @@ from gexlens_news.config import (
     NewsSettings,
     load_news_settings,
 )
+from gexlens_news.ffhistory import FfActualRefreshJob, run_backfill
 from gexlens_news.http import Fetcher, make_fetcher
 from gexlens_news.llm_classifier import GeminiClient, LlmClassificationJob
 from gexlens_news.model_stats_job import ModelStatsJob
@@ -109,6 +110,12 @@ async def run(settings: NewsSettings) -> None:
     else:
         logger.info("Gemini bez klíče — LLM klasifikace se nespouští (není to porucha)")
     reactions = ReactionJob(engine, BarsRepository(settings.data_dir))
+    # Hodinové doplňování actual z FF kalendáře (#277) — widget feed ho nenese
+    ff_refresh = (
+        FfActualRefreshJob(engine, interval_s=settings.ff_actual_refresh_s)
+        if settings.ff_actual_refresh_s > 0
+        else None
+    )
     model_stats = ModelStatsJob(engine)
     sent_index = SentIndexJob(engine, settings.data_dir)
     predictions = PredictionJob(engine)
@@ -146,6 +153,14 @@ async def run(settings: NewsSettings) -> None:
                 logger.exception(
                     "Dopočet reakcí selhal — zkusí se za %.0f s", settings.reaction_interval_s
                 )
+            # Actual z FF kalendáře před reakcemi být nemusí (reakce na actual
+            # nečekají), ale před klasifikací dalšího cyklu ano — surprise_z
+            # řídí směr scheduled eventů (SPEC kap. 4)
+            if ff_refresh is not None and ff_refresh.due(now):
+                try:
+                    await asyncio.to_thread(ff_refresh.run, now)
+                except Exception:
+                    logger.exception("Refresh actual selhal — zkusí se příští hodinu")
             # Predikce a jejich vyhodnocení musí být před indexem — váhy
             # z nich vstupují do skóre (SPEC 5.3)
             try:
@@ -248,9 +263,26 @@ def status(settings: NewsSettings) -> int:
     return 1 if degraded else 0
 
 
+def backfill_ff(settings: NewsSettings, weeks: int | None) -> int:
+    """Jednorázový backfill historického FF kalendáře (#277, CLI příkaz)."""
+    engine = create_engine(settings.database_url, pool_pre_ping=True)
+    ensure_sentiment_schema(engine)
+    stats = run_backfill(engine, weeks=weeks or settings.ff_backfill_weeks)
+    print(f"Backfill FF: {stats.describe()}")
+    return 1 if stats.weeks_fetched == 0 else 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gexlens_news", description="SentimentLens news-engine")
-    parser.add_argument("command", choices=("run", "status"), nargs="?", default="run")
+    parser.add_argument(
+        "command", choices=("run", "status", "backfill-ff"), nargs="?", default="run"
+    )
+    parser.add_argument(
+        "--weeks",
+        type=int,
+        default=None,
+        help="backfill-ff: kolik týdnů historie stáhnout (default z konfigurace)",
+    )
     args = parser.parse_args(argv)
 
     settings = load_news_settings()
@@ -264,6 +296,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     if args.command == "status":
         return status(settings)
+    if args.command == "backfill-ff":
+        return backfill_ff(settings, args.weeks)
     try:
         asyncio.run(run(settings))
     except KeyboardInterrupt:

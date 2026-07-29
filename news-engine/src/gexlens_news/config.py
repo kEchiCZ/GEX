@@ -47,6 +47,12 @@ class NewsSettings(BaseSettings):
     fed_rss_interval_s: float = Field(default=300.0, gt=0)
     reddit_interval_s: float = Field(default=900.0, gt=0)
 
+    # Hodinový refresh actual hodnot z FF kalendáře (#277, ADR-0018) —
+    # widget feed actual nenese; 0 = vypnuto
+    ff_actual_refresh_s: float = Field(default=3600.0, ge=0)
+    # Kolik týdnů historie stáhne CLI `backfill-ff` bez explicitního --weeks
+    ff_backfill_weeks: int = Field(default=156, ge=1, le=520)
+
     # Gemini batch klasifikace (#281, SPEC kap. 4): dávka à 60 s jen při
     # neprázdné frontě; denní limit s rezervou pod free tierem (~1500 RPD)
     gemini_model: str = "gemini-flash-latest"
