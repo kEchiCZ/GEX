@@ -223,6 +223,21 @@ def test_written_headline_carries_id_and_ws_payload(tmp_path: Path) -> None:
     assert payload["ts_event"] == NOW.isoformat()
 
 
+def test_market_closed_odpovida_case_zpravy(tmp_path: Path) -> None:
+    """Sobotní titulek se nesmí uložit, jako by trh běžel (#339)."""
+    collector, engine = make(tmp_path)
+    sobota = dt.datetime(2026, 7, 25, 23, 0, tzinfo=dt.UTC)  # 18:00 CT
+
+    collector.write(
+        [FakeTick("Breaking weekend story", timeStamp=int(sobota.timestamp()))], now=NOW
+    )
+
+    with engine.connect() as conn:  # type: ignore[attr-defined]
+        row = conn.execute(select(news_events)).fetchone()
+    assert row is not None
+    assert row.market_closed is True
+
+
 def test_empty_input_is_noop(tmp_path: Path) -> None:
     collector, _ = make(tmp_path)
     assert collector.write([], now=NOW) == []

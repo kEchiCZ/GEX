@@ -10,6 +10,7 @@ import datetime as dt
 from dataclasses import dataclass, field
 from typing import Any
 
+from gexlens_engine.compute.marketclock import is_market_closed as _is_market_closed
 from gexlens_engine.compute.newstext import dedup_hash as _dedup_hash
 from gexlens_engine.compute.newstext import normalize_title
 
@@ -45,8 +46,17 @@ class NewsEvent:
     previous: float | None = None
     actual: float | None = None
     surprise_z: float | None = None
-    market_closed: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def market_closed(self) -> bool:
+        """Byl trh v čase události zavřený (SPEC 2.2)?
+
+        Počítá se, ne nastavuje: jako pole to byl default `False`, který žádný
+        collector nepřepsal, takže sobotní titulek byl v DB uložený, jako by
+        trh běžel (#339). Odvozeno od `ts_event` to nemá jak zapomenout.
+        """
+        return _is_market_closed(self.ts_event)
 
     @property
     def dedup_hash(self) -> str:

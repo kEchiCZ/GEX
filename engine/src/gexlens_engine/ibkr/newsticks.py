@@ -29,6 +29,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.newstext import dedup_hash
 from gexlens_engine.storage.sentiment import news_events
 
@@ -265,7 +266,7 @@ class NewsTickCollector:
                         "title": headline.title,
                         "summary": None,
                         "symbols": [],
-                        "market_closed": False,
+                        "market_closed": is_market_closed(headline.ts_event),
                         "dedup_hash": dedup_hash(headline.title, headline.ts_event),
                         "raw": {
                             "provider": headline.provider,
