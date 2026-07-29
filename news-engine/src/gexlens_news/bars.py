@@ -70,12 +70,18 @@ class BarsRepository:
         return sorted(bars, key=lambda bar: bar.ts)
 
     def load_range(self, symbol: str, start: dt.datetime, end: dt.datetime) -> list[Bar]:
-        """Bary v intervalu; čte i sousední dny, aby okno přes půlnoc nechybělo."""
-        days = {(start + dt.timedelta(days=offset)).date() for offset in range(-1, 2)}
-        days |= {(end + dt.timedelta(days=offset)).date() for offset in range(-1, 2)}
+        """Bary v intervalu; čte i sousední dny, aby okno přes půlnoc nechybělo.
+
+        Prochází **každý** den rozsahu, ne jen okolí krajů. Původní verze četla
+        pouze ±1 den kolem `start` a `end`, takže u delšího rozsahu vynechala
+        prostředek — a víkendová zpráva pak neměla z čeho měřit (#339).
+        """
+        day = start.date() - dt.timedelta(days=1)
+        last = end.date() + dt.timedelta(days=1)
         collected: list[Bar] = []
-        for day in sorted(days):
+        while day <= last:
             collected.extend(self.load_day(symbol, day))
+            day += dt.timedelta(days=1)
         return [bar for bar in collected if start <= bar.ts <= end]
 
     def recent_sessions(self, symbol: str, before: dt.date, count: int) -> list[Sequence[Bar]]:

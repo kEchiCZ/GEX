@@ -132,3 +132,93 @@ def test_low_importance_event_does_not_contaminate(tmp_path: Path) -> None:
             select(news_reactions.c.contaminated).where(news_reactions.c.event_id == event_id)
         ).fetchall()
     assert all(not r.contaminated for r in rows)
+
+
+def write_holiday_bars(data_dir: Path, symbol: str, day: dt.date) -> None:
+    """Zavřený den: bary jen do 12:00 UTC, pak celý den nic.
+
+    Zrcadlí svátek — rozvrh Globexu by tvrdil, že se obchoduje, ale žádný bar
+    neexistuje.
+    """
+    directory = data_dir / "derived" / symbol / "bars"
+    directory.mkdir(parents=True, exist_ok=True)
+    start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
+    rows = [
+        {
+            "ts_min": start + dt.timedelta(minutes=minute),
+            "open": 7000.0,
+            "high": 7001.0,
+            "low": 6999.0,
+            "close": 7000.0,
+            "volume": 100.0,
+        }
+        for minute in range(12 * 60)
+    ]
+    pq.write_table(pa.Table.from_pylist(rows), directory / f"{day.isoformat()}.parquet")
+
+
+def test_market_closed_se_opravi_podle_baru(tmp_path: Path) -> None:
+    """Svátek: rozvrh říká „otevřeno", bary říkají pravdu (#339)."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    # Zpráva ve 14:30 UTC ve všední den — rozvrh Globexu = otevřeno
+    for symbol in ("ES", "NQ"):
+        write_holiday_bars(tmp_path / "data", symbol, DAY)
+        write_bars(tmp_path / "data", symbol, DAY + dt.timedelta(days=1))
+    job = ReactionJob(engine, BarsRepository(tmp_path / "data"))
+    event_id = add_event(engine, EVENT_TS, importance=1, title="Svátek headline")
+
+    job.run(NOW)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(news_events).where(news_events.c.id == event_id)).fetchone()
+    assert row is not None
+    assert row.market_closed is True
+
+
+def test_dira_v_datech_jednoho_symbolu_neni_zavreny_trh(tmp_path: Path) -> None:
+    """Chybějící bary jednoho symbolu nesmí předstírat zavřený trh (#339)."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    write_bars(tmp_path / "data", "ES", DAY)  # ES obchoduje
+    write_holiday_bars(tmp_path / "data", "NQ", DAY)  # NQ má díru
+    write_bars(tmp_path / "data", "NQ", DAY + dt.timedelta(days=1))
+    job = ReactionJob(engine, BarsRepository(tmp_path / "data"))
+    event_id = add_event(engine, EVENT_TS, importance=1, title="Díra v NQ")
+
+    job.run(NOW)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(news_events).where(news_events.c.id == event_id)).fetchone()
+    assert row is not None
+    assert row.market_closed is False
+
+
+def test_vikendova_zprava_dostane_deferred_reakci(tmp_path: Path) -> None:
+    """Sobotní geopolitika je příklad ze SPEC 5.1 — dřív nedostala reakci žádnou.
+
+    Job načítal bary jen 30 min zpět, takže přes zavřený víkend nenašel základní
+    cenu a `compute_reactions` vrátil prázdno. Deferred tím nikdy nevystřelilo.
+    """
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    patek = dt.date(2026, 7, 24)
+    pondeli = dt.date(2026, 7, 27)
+    for symbol in ("ES", "NQ"):
+        write_bars(tmp_path / "data", symbol, patek)
+        write_bars(tmp_path / "data", symbol, pondeli)  # sobota a neděle chybí
+
+    sobota = dt.datetime(2026, 7, 25, 14, 0, tzinfo=dt.UTC)
+    event_id = add_event(engine, sobota, importance=3, title="Víkendová geopolitika")
+
+    job = ReactionJob(engine, BarsRepository(tmp_path / "data"))
+    assert job.run(dt.datetime(2026, 7, 27, 12, 0, tzinfo=dt.UTC)) == 8
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(news_reactions).where(news_reactions.c.event_id == event_id)
+        ).fetchall()
+        event = conn.execute(select(news_events).where(news_events.c.id == event_id)).fetchone()
+    assert all(row.deferred for row in rows)
+    assert event is not None
+    assert event.market_closed is True

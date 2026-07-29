@@ -18,12 +18,14 @@ Rozvrh Globexu pro ES/NQ v **americkém centrálním čase**:
 Časy jsou definované v CT, ne v UTC — proto `zoneinfo`, ne posun konstantou.
 Aproximace DST by dvakrát ročně na několik týdnů posunula hranici o hodinu.
 
-**Svátky CME tenhle modul nepokrývá** a je to vědomé: udržovaný seznam svátků
-by tiše zastaral a lhal by pak stejně jako natvrdo zapsané `False`, jen míň
-nápadně. Měření reakcí na tom nestojí — `deferred` v `news_reactions` se
-odvozuje z mezery k prvnímu obchodovanému baru (SPEC 5.1), což svátky pokrývá
-samo a bez kalendáře. Na svátek proto `market_closed` řekne „otevřeno", ale
-okno se stejně změří deferred, takže model se šum nenaučí.
+**Tohle je odhad, ne konečná hodnota.** Rozvrh nezná svátky, zkrácené seance
+ani neplánované halty — sám o sobě by na Vánoce tvrdil „otevřeno". Udržovaný
+seznam svátků to neřeší: tiše zastará a lže pak stejně, jen míň nápadně.
+
+Konečnou hodnotu proto zapisuje `ReactionJob` z **archivu 1min barů** (#339):
+bar buď existuje, nebo ne, což je měření a ne kalendář. Rozvrh je tu jen proto,
+aby zpráva měla rozumnou hodnotu hned při zápisu, než se k ní dostanou bary —
+stejný vzorec jako provizorní bar rozdělané minuty (ADR-0005).
 """
 
 import datetime as dt
