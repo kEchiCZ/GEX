@@ -66,6 +66,9 @@ class NewsSettings(BaseSettings):
     # drží denní rubriky se stejným titulkem (Δt ≈ 24 h) oddělené.
     dedup_window_minutes: int = Field(default=360, ge=1, le=1080)
     cnn_fg_interval_s: float = Field(default=3600.0, gt=0)
+    # Signal engine (#294, SPEC 6.5): publikace pro ES; NQ = přidat do výčtu
+    signal_symbols: str = "ES"
+
     # PCR řada z vlastních snapshot dat (#290, SPEC 5.8) — odvozená, bez klíče
     pcr_interval_s: float = Field(default=300.0, gt=0)
     pcr_symbols: str = "ES,NQ"
