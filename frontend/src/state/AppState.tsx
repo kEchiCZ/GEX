@@ -52,7 +52,8 @@ export interface Toggles {
   news: boolean
 }
 
-export type AppView = 'chart' | 'dashboard' | 'chain' | 'setups' | 'news' | 'console' | 'settings'
+export type AppView =
+  'chart' | 'dashboard' | 'chain' | 'setups' | 'news' | 'stats' | 'console' | 'settings'
 export type Theme = 'dark' | 'light'
 
 /** Režim zobrazení signálů (#295, SPEC 6.1/S9): výpočet běží vždy, tohle řídí jen UI. */
@@ -146,7 +147,16 @@ const AppStateContext = createContext<AppState | null>(null)
 const LOG_LIMIT = 200
 const ALERTS_LIMIT = 50
 
-const VIEWS: readonly AppView[] = ['chart', 'dashboard', 'chain', 'setups', 'console', 'settings']
+const VIEWS: readonly AppView[] = [
+  'chart',
+  'dashboard',
+  'chain',
+  'setups',
+  'news',
+  'stats',
+  'console',
+  'settings',
+]
 
 /** Výchozí expirace: dnešní (0DTE řetěz), jinak nejnovější — první dir může být včerejšek. */
 export function defaultExpiry(expiries: string[]): string | null {

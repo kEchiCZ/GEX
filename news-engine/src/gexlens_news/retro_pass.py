@@ -21,6 +21,11 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
+from sqlalchemy import insert, update
+from sqlalchemy.engine import Engine
+
+from gexlens_engine.storage.meta import settings_table
+
 logger = logging.getLogger(__name__)
 
 # Kolik hodin zpět se považuje za „noc" pro report (jen popisná hodnota)
@@ -114,3 +119,29 @@ class RetroPass:
         except Exception:
             logger.exception("Retro pass: fáze %s selhala — pokračuji dál", label)
             return 0
+
+
+# Klíč v tabulce `settings` — záložka Stats čte stav přes GET /settings (9.6)
+RETRO_PASS_SETTINGS_KEY = "retro_pass"
+
+
+def store_retro_result(engine: Engine, result: RetroResult) -> None:
+    """Persistuje výsledek do `settings` — WS push zprávu přežije jen otevřené UI.
+
+    Vlastní tabulka by pro jeden řádek stavu byla přehnaná; `settings` je
+    generický key→JSON store a API ho už vystavuje.
+    """
+    payload = {
+        "ran_at": result.ran_at.isoformat(),
+        "classified": result.classified,
+        "reactions": result.reactions,
+        "index_points": result.index_points,
+    }
+    with engine.begin() as conn:
+        updated = conn.execute(
+            update(settings_table)
+            .where(settings_table.c.key == RETRO_PASS_SETTINGS_KEY)
+            .values(value=payload)
+        )
+        if updated.rowcount == 0:
+            conn.execute(insert(settings_table).values(key=RETRO_PASS_SETTINGS_KEY, value=payload))

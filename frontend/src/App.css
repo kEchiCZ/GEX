@@ -1420,3 +1420,74 @@ body {
   font-size: 12px;
   white-space: nowrap;
 }
+
+/* ── Záložka Stats (#297, SPEC 9.6) ───────────────────────── */
+.stats-view {
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.stats-section {
+  margin-bottom: 28px;
+}
+
+.stats-section h2 {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+
+.stats-section h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.stats-section h4 {
+  margin: 8px 0 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.stats-grid {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.stats-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.stats-axis-label {
+  fill: var(--text-muted);
+  font-size: 10px;
+}
+
+.stats-table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.stats-table th,
+.stats-table td {
+  padding: 3px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.stats-table th {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.stats-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-gate-open {
+  color: #3ecf8e;
+}

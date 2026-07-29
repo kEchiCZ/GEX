@@ -47,7 +47,7 @@ from gexlens_news.pipeline import DedupingWriter
 from gexlens_news.prediction_job import PredictionJob
 from gexlens_news.publisher import NewsPublisher
 from gexlens_news.reaction_job import ReactionJob
-from gexlens_news.retro_pass import RetroPass
+from gexlens_news.retro_pass import RetroPass, store_retro_result
 from gexlens_news.review_job import ReviewJob
 from gexlens_news.runner import CollectorRunner
 from gexlens_news.sentiment_backfill import backfill_sentiment_daily
@@ -264,6 +264,11 @@ async def run(settings: NewsSettings) -> None:
             # otevírá aplikaci se zpracovanou nocí
             if retro.due(now):
                 result = await asyncio.to_thread(retro.run, now)
+                # Stav do `settings` — záložka Stats ho čte i po restartu UI (9.6)
+                try:
+                    await asyncio.to_thread(store_retro_result, engine, result)
+                except Exception:
+                    logger.exception("Uložení stavu retro passu selhalo")
                 if publisher is not None:
                     await publisher.publish(
                         "news",
