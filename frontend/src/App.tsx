@@ -25,7 +25,7 @@ import { buildGexGrid, projectGexField } from './heatmap/gexmode'
 import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
 import type { HeatmapScale, MeasuredHeatmapMode } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
-import { expirySettleUtc } from './instrument/expiry'
+import { expirySettleUtc, sessionDateFor } from './instrument/expiry'
 import { SETUP_COLORS, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { DEFAULT_VIEW } from './heatmap/view'
@@ -153,7 +153,18 @@ function MainContent() {
   // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame).
   // `rawDay` je identitou stabilní napříč spot ticky, živá cena jde zvlášť v `live` (#141).
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
-  const { day: rawDay, live } = useDayData(symbol, selectedExpiry, today, timeframe, socket)
+  // Proběhlá expirace se čte jako replay svého posledního dne (#352) — bez
+  // socketu: kanály price/spot/flow jsou per symbol a přilepily by dnešní
+  // svíčky do historického dne.
+  const viewDate = sessionDateFor(selectedExpiry, today)
+  const isHistoricalExpiry = viewDate !== today
+  const { day: rawDay, live } = useDayData(
+    symbol,
+    selectedExpiry,
+    viewDate,
+    timeframe,
+    isHistoricalExpiry ? undefined : socket,
+  )
   // Heatmap mód/škála: čistý přepočet ze surové matice (SPEC 4.3, bez fetch).
   // Dyn GEX už není mód — je to podkladová vrstva (#242), viz gexUnderDay níž.
   const modeDay = useMemo(() => {
@@ -251,7 +262,7 @@ function MainContent() {
     }
   }, [day.overlays.price])
   // Anotace: persistence per instrument + den (SPEC 7.4)
-  const annotationsState = useAnnotations(symbol, today)
+  const annotationsState = useAnnotations(symbol, viewDate)
 
   // Přetáčení = synchronní krájení všech panelů v paměti
   const grid = useMemo(
@@ -450,7 +461,7 @@ function MainContent() {
   const [aggregateOn, setAggregateOn] = useState(false)
   const aggregateRows = useAggregateProfile(
     symbol,
-    today,
+    viewDate,
     aggregateOn && day.source === 'replay',
     spot,
   )
@@ -670,7 +681,9 @@ function MainContent() {
           onChange={(event) => setAnnotationColor(event.target.value)}
         />
         <span className="muted" data-testid="data-source">
-          {day.source === 'replay' ? `replay ${today}` : 'demo data'}
+          {day.source === 'replay'
+            ? `replay ${viewDate}${isHistoricalExpiry ? ' · den expirace' : ''}`
+            : 'demo data'}
         </span>
         <button
           className={showReplay ? 'chip active' : 'chip'}
@@ -708,17 +721,21 @@ function MainContent() {
               fitRange={fitRange}
               onLogicalSizeChange={setHeatSize}
               dateLabel={
-                timeframe === 'intraday' ? today.split('-').reverse().join('.') : undefined
+                timeframe === 'intraday' ? viewDate.split('-').reverse().join('.') : undefined
               }
-              resetKey={`${symbol}|${selectedExpiry}|${timeframe}|${interval}|${today}`}
+              resetKey={`${symbol}|${selectedExpiry}|${timeframe}|${interval}|${viewDate}`}
               priceTick={priceTick(symbol)}
             />
             <SetupCard setups={activeSetups} onDismiss={handleDismissSetup} />
             {day.source === 'demo' && (
               <div className="demo-banner" role="status">
-                Demo data — pro {symbol} zatím nejsou uložená živá data.
-                {timeframe === 'intraday' &&
-                  ' Engine začne sbírat do ~5 minut po přidání do watchlistu.'}
+                {isHistoricalExpiry
+                  ? `Demo data — pro expiraci ${viewDate} už nejsou uložená data ` +
+                    '(mimo retenci 14 dní).'
+                  : `Demo data — pro ${symbol} zatím nejsou uložená živá data.` +
+                    (timeframe === 'intraday'
+                      ? ' Engine začne sbírat do ~5 minut po přidání do watchlistu.'
+                      : '')}
               </div>
             )}
           </main>

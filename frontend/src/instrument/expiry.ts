@@ -8,6 +8,24 @@ přibližný settle 20:00 UTC (16:00 ET) dne expirace.
 
 export type ExpiryKind = 'denní' | 'týdenní' | 'měsíční' | 'kvartální' | 'EOM'
 
+/** `20260728` → `2026-07-28`; null = nečitelný formát. */
+export function expiryIsoDate(expiry: string): string | null {
+  if (!/^\d{8}$/.test(expiry)) return null
+  return `${expiry.slice(0, 4)}-${expiry.slice(4, 6)}-${expiry.slice(6, 8)}`
+}
+
+/** Den seance pro zvolenou expiraci (#352).
+
+Proběhlá expirace nemá k dnešku žádná data (řetěz se přestal sweepovat dnem
+expirace) — fetch dneška by navždy padal a UI by tiše zůstalo na demo datech.
+Čte se proto replay jejího posledního dne = dne expirace. Aktuální a budoucí
+expirace se čtou nad dnešní seancí (positioning zítřejšího řetězu se obchoduje
+už dnes). */
+export function sessionDateFor(expiry: string | null, today: string): string {
+  const date = expiry ? expiryIsoDate(expiry) : null
+  return date !== null && date < today ? date : today
+}
+
 function parse(expiry: string): Date | null {
   if (!/^\d{8}$/.test(expiry)) return null
   const year = Number(expiry.slice(0, 4))

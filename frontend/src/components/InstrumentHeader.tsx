@@ -1,6 +1,6 @@
 /** Hlavička instrumentu (SPEC 7.1): ticker, last + změna, expirace, Live, notifikace. */
 import { useEffect, useState } from 'react'
-import { expiryCountdown, expiryKind } from '../instrument/expiry'
+import { expiryCountdown, expiryIsoDate, expiryKind } from '../instrument/expiry'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
 
@@ -56,6 +56,19 @@ export function InstrumentHeader({
   }, [])
   const kind = selectedExpiry ? expiryKind(selectedExpiry) : null
   const countdown = selectedExpiry ? expiryCountdown(selectedExpiry, now) : null
+  // Vztah chainu k zobrazené seanci (#352): proběhlá expirace se čte jako
+  // replay dne expirace; budoucí chain se obchoduje nad dnešní seancí — bez
+  // vysvětlivky mate, že „budoucnost už má svíčky".
+  const expiryDate = selectedExpiry ? expiryIsoDate(selectedExpiry) : null
+  const todayIso = now.toISOString().slice(0, 10)
+  const chainNote =
+    expiryDate === null
+      ? null
+      : expiryDate < todayIso
+        ? 'proběhla — zobrazen den expirace'
+        : expiryDate > todayIso
+          ? 'svíčky = dnešní seance'
+          : null
 
   return (
     <header className="instrument-header">
@@ -91,6 +104,7 @@ export function InstrumentHeader({
         <span className="muted expiry-meta" data-testid="expiry-meta">
           {kind}
           {countdown && ` · expiruje ${countdown}`}
+          {chainNote && ` · ${chainNote}`}
         </span>
       )}
       {regimeInfo.state && (
