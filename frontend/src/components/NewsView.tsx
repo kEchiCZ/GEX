@@ -3,10 +3,13 @@
 Nahoře sekce Upcoming s countdownem — trader potřebuje vědět, že ve 14:30
 přijde CPI, **dřív než přijde**. Pod ní filtrovatelný feed.
 */
-import { useMemo, useState } from 'react'
-import { categoryGlyph, categoryLabel, countdownLabel } from '../api/news'
-import type { NewsRow } from '../api/news'
+import { useEffect, useMemo, useState } from 'react'
+import { categoryGlyph, categoryLabel, countdownLabel, fetchCrowd, latestCrowd } from '../api/news'
+import type { CrowdRow, NewsRow } from '../api/news'
 import { useNews } from '../hooks/useNews'
+
+/** Crowd data se mění pomalu (F&G à 1 h, PCR à 5 min) — refresh stačí volný. */
+const CROWD_REFRESH_MS = 300_000
 
 const KIND_LABELS: Record<string, string> = {
   scheduled: 'Plánovaná',
@@ -51,10 +54,61 @@ function NewsRowItem({ row }: { row: NewsRow }) {
   )
 }
 
+/** Crowd blok (#290, SPEC 5.8): doplňkový pohled MIMO SentIndex. */
+function CrowdBlock({ rows }: { rows: CrowdRow[] }) {
+  const latest = latestCrowd(rows)
+  const fearGreed = latest.get('cnn_fg|score|')
+  const rating =
+    fearGreed?.raw && typeof fearGreed.raw.rating === 'string' ? fearGreed.raw.rating : null
+  const pcrs = ['ES', 'NQ']
+    .map((symbol) => ({ symbol, row: latest.get(`gexlens|pcr_volume|${symbol}`) }))
+    .filter((entry) => entry.row !== undefined)
+  const reddit = [...latest.values()].filter((row) => row.source === 'reddit')
+  if (!fearGreed && pcrs.length === 0 && reddit.length === 0) return null
+  return (
+    <div className="news-topics" aria-label="Crowd sentiment">
+      <span className="muted">Crowd (mimo index):</span>
+      {fearGreed && (
+        <span title="CNN Fear & Greed">
+          F&G {asNumber(fearGreed.value)?.toFixed(0) ?? '—'}
+          {rating ? ` (${rating})` : ''}
+        </span>
+      )}
+      {pcrs.map(({ symbol, row }) => (
+        <span key={symbol} title={`Put/call volume ratio ${symbol} (vlastní opční data)`}>
+          PCR {symbol} {asNumber(row!.value)?.toFixed(2) ?? '—'}
+        </span>
+      ))}
+      {reddit.map((row) => (
+        <span key={row.metric} title="Průměrné skóre hot postů">
+          r/{row.metric.startsWith('wsb') ? 'wallstreetbets' : 'stocks'}{' '}
+          {asNumber(row.value)?.toFixed(0) ?? '—'}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 export function NewsView() {
   const { news, upcoming, topics } = useNews()
   const [category, setCategory] = useState<string>('')
   const [minImportance, setMinImportance] = useState<number>(0)
+  const [crowd, setCrowd] = useState<CrowdRow[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      void fetchCrowd().then((rows) => {
+        if (!cancelled) setCrowd(rows)
+      })
+    }
+    load()
+    const timer = setInterval(load, CROWD_REFRESH_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [])
 
   const categories = useMemo(
     () => [...new Set(news.map((row) => row.category).filter((c): c is string => !!c))].sort(),
@@ -108,6 +162,8 @@ export function NewsView() {
           ))}
         </div>
       )}
+
+      <CrowdBlock rows={crowd} />
 
       {upcoming.length > 0 && (
         <div className="news-upcoming" aria-label="Nadcházející události">
