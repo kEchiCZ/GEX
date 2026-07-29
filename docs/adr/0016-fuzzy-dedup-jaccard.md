@@ -1,6 +1,6 @@
 # ADR-0016: Fuzzy dedup přes token Jaccard místo simhashe
 
-**Stav:** navrženo (PR s labelem `needs-decision`)
+**Stav:** přijato (schváleno uživatelem 29. 7. 2026, mergnuto v PR #353)
 **Datum:** 2026-07-29
 **Issue:** #274 (souvisí: #351)
 

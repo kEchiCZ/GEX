@@ -1,6 +1,6 @@
 # ADR-0017: Rolling dedup okno z 10 minut na 6 hodin
 
-**Stav:** navrženo (PR s labelem `needs-decision`)
+**Stav:** přijato (schváleno uživatelem 29. 7. 2026)
 **Datum:** 2026-07-29
 **Issue:** #351 (navazuje na měření z #274, ADR-0016)
 
