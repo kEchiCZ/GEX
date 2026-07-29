@@ -11,7 +11,7 @@ import datetime as dt
 import logging
 from typing import Any
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import news_classifications, news_events
@@ -21,7 +21,6 @@ from gexlens_news.conventions import scheduled_direction
 logger = logging.getLogger(__name__)
 
 RULE_SOURCE = "rule"
-RULE_VERSION = 1
 
 
 class RuleClassificationJob:
@@ -34,9 +33,12 @@ class RuleClassificationJob:
         self.last_batch: list[dict[str, object]] = []
 
     def _pending(self, limit: int) -> list[Any]:
-        already = select(news_classifications.c.event_id).where(
-            news_classifications.c.source == RULE_SOURCE
-        )
+        # Jakákoli existující klasifikace event vyřazuje (#373): pravidlový
+        # pass je PRVNÍ průchod/fallback — event, který už má LLM verzi,
+        # nepotřebuje hrubší pravidlovou navrch (a denormalizace by regresí
+        # z llm na rule lhala). Scheduled eventy LLM nikdy nebere, takže směr
+        # ze surprise_z dostávají vždy tady.
+        already = select(news_classifications.c.event_id)
         stmt = (
             select(
                 news_events.c.id,
@@ -61,6 +63,22 @@ class RuleClassificationJob:
         self.last_batch = []
         if not pending:
             return 0
+
+        # Verze = max+1 per event (S11): LLM pass mohl event klasifikovat dřív
+        # (po FF backfillu #277 pravidlový pass nestíhal) a natvrdo zapsaná
+        # verze 1 pak shazovala celou dávku na UniqueViolation (#373)
+        with self._engine.connect() as conn:
+            versions = {
+                int(event_id): int(version)
+                for event_id, version in conn.execute(
+                    select(
+                        news_classifications.c.event_id,
+                        func.max(news_classifications.c.version),
+                    )
+                    .where(news_classifications.c.event_id.in_([int(row.id) for row in pending]))
+                    .group_by(news_classifications.c.event_id)
+                )
+            }
 
         rows: list[dict[str, object]] = []
         updates: list[tuple[int, str, int, int, float]] = []
@@ -101,7 +119,7 @@ class RuleClassificationJob:
             rows.append(
                 {
                     "event_id": event_id,
-                    "version": RULE_VERSION,
+                    "version": versions.get(event_id, 0) + 1,
                     "source": RULE_SOURCE,
                     "category": result.category,
                     "importance": result.importance,
