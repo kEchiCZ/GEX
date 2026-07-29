@@ -143,8 +143,11 @@ def test_daily_candles_and_state(client: TestClient) -> None:
     assert daily[0]["open"] == pytest.approx(-0.5)
 
     state = client.get("/sentiment/state").json()
-    assert state["state"] == "unknown"  # vlny až v N7
+    # Jediný den v řadě → MA okna nejsou plná → Neutral (#292, SPEC 5.6)
+    assert state["state"] == "Neutral"
+    assert state["unconfirmed"] is False
     assert state["last_close"] == pytest.approx(0.5)
+    assert state["current_wave"] is None
 
 
 def test_topics_computed_from_live_events(client: TestClient) -> None:
