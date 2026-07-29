@@ -55,6 +55,10 @@ export interface Toggles {
 export type AppView = 'chart' | 'dashboard' | 'chain' | 'setups' | 'news' | 'console' | 'settings'
 export type Theme = 'dark' | 'light'
 
+/** Režim zobrazení signálů (#295, SPEC 6.1/S9): výpočet běží vždy, tohle řídí jen UI. */
+export type SignalMode = 'off' | 'news' | 'combined'
+export const SIGNAL_MODES: readonly SignalMode[] = ['off', 'news', 'combined']
+
 /** Poslední cena + denní změna (hlavička; plní MainContent z denních dat). */
 export interface PriceInfo {
   last: number | null
@@ -116,6 +120,9 @@ interface AppState {
   setInterval: (value: Interval) => void
   toggles: Toggles
   setToggle: (key: keyof Toggles, value: boolean) => void
+  /** Dropdown OFF/NEWS/COMBINED vedle News checkboxu (#295, SPEC 9.0). */
+  signalMode: SignalMode
+  setSignalMode: (mode: SignalMode) => void
   view: AppView
   setView: (view: AppView) => void
   theme: Theme
@@ -241,6 +248,12 @@ export function AppStateProvider({
     DEFAULT_TOGGLES,
     mergedBooleans<Toggles>(),
   )
+  // Režim signálů je string, do `Toggles` (jen booleany) nepatří
+  const [signalMode, setSignalMode] = usePersistentState<SignalMode>(
+    'signalMode',
+    'off',
+    oneOf(SIGNAL_MODES),
+  )
 
   const appendLog = useCallback((line: string) => {
     const stamp = new Date().toLocaleTimeString()
@@ -328,6 +341,8 @@ export function AppStateProvider({
       setInterval,
       toggles,
       setToggle: (key, val) => setToggles((prev) => ({ ...prev, [key]: val })),
+      signalMode,
+      setSignalMode,
       view,
       setView,
       theme,
@@ -353,6 +368,8 @@ export function AppStateProvider({
       setInterval,
       setTheme,
       setToggles,
+      signalMode,
+      setSignalMode,
       expiries,
       selectedExpiry,
       timeframe,

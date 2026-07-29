@@ -4,8 +4,15 @@ Jeden hook pro všechny tři konzumenty (panel, sidebar, chip v hlavičce) —
 tři nezávislé fetche téhož by API zbytečně bušily a rozešly se v čase.
 */
 import { useCallback, useEffect, useState } from 'react'
-import { fetchNews, fetchSentimentSeries, fetchTopics, fetchUpcoming } from '../api/news'
-import type { NewsRow, SentimentPoint, TopicRow } from '../api/news'
+import {
+  fetchNews,
+  fetchNewsStats,
+  fetchSentimentSeries,
+  fetchSignals,
+  fetchTopics,
+  fetchUpcoming,
+} from '../api/news'
+import type { ModelStatsRow, NewsRow, SentimentPoint, SignalRow, TopicRow } from '../api/news'
 import { useAppState } from '../state/AppState'
 
 /** Perioda přenačtení. Index se počítá po minutě, takže častěji nemá smysl. */
@@ -34,6 +41,10 @@ export interface NewsData {
   upcoming: NewsRow[]
   series: SentimentPoint[]
   topics: TopicRow[]
+  /** Signály obou větví (#295); filtr dle režimu dělá až UI (S9). */
+  signals: SignalRow[]
+  /** Empirický model — progres ke gate v dropdownu režimu (#295). */
+  stats: ModelStatsRow[]
   refresh: () => void
 }
 
@@ -43,6 +54,8 @@ export function useNews(): NewsData {
   const [upcoming, setUpcoming] = useState<NewsRow[]>([])
   const [series, setSeries] = useState<SentimentPoint[]>([])
   const [topics, setTopics] = useState<TopicRow[]>([])
+  const [signals, setSignals] = useState<SignalRow[]>([])
+  const [stats, setStats] = useState<ModelStatsRow[]>([])
   const [version, setVersion] = useState(0)
 
   useEffect(() => {
@@ -53,12 +66,16 @@ export function useNews(): NewsData {
         fetchUpcoming(),
         fetchSentimentSeries(symbol),
         fetchTopics(),
-      ]).then(([feed, next, points, topicRows]) => {
+        fetchSignals(),
+        fetchNewsStats(),
+      ]).then(([feed, next, points, topicRows, signalRows, statsRows]) => {
         if (cancelled) return
         setNews(feed)
         setUpcoming(next)
         setSeries(points)
         setTopics(topicRows)
+        setSignals(signalRows)
+        setStats(statsRows)
       })
     }
     load()
@@ -81,6 +98,17 @@ export function useNews(): NewsData {
     return () => socket.unsubscribe('news', handler)
   }, [socket])
 
+  // Nový signál z WS (#295) — šipka se má objevit hned, ne s dalším fetchem
+  useEffect(() => {
+    const handler = (data: Record<string, unknown>) => {
+      if (typeof data.id !== 'number' || typeof data.direction !== 'string') return
+      const incoming = data as unknown as SignalRow
+      setSignals((previous) => [incoming, ...previous.filter((row) => row.id !== incoming.id)])
+    }
+    socket.subscribe('signals', handler)
+    return () => socket.unsubscribe('signals', handler)
+  }, [socket])
+
   const refresh = useCallback(() => setVersion((previous) => previous + 1), [])
-  return { news, upcoming, series, topics, refresh }
+  return { news, upcoming, series, topics, signals, stats, refresh }
 }

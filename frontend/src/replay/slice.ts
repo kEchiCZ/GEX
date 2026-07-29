@@ -42,6 +42,9 @@ export function sliceOverlays(full: OverlayData, position: number): OverlayData 
     levels: full.levels?.map((line) => ({ ...line, series: cutLine(line.series) })),
     walls: full.walls?.map((line) => ({ ...line, series: cutLine(line.series) })),
     sessions: full.sessions?.filter((session) => session.minuteIdx <= position),
+    // Signály vzniklé po pozici jsou v přetáčeném čase budoucnost (#295);
+    // stopa platnosti se nechává celá — expirace byla známá už při vzniku
+    signals: full.signals?.filter((signal) => signal.minuteIdx <= position),
   }
 }
 

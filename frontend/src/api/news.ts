@@ -177,6 +177,104 @@ export function latestCrowd(rows: CrowdRow[]): Map<string, CrowdRow> {
   return latest
 }
 
+/** Stav RiskOn/RiskOff/Neutral (#292/#295, SPEC 5.6 a 9.0). */
+export interface SentimentStateInfo {
+  symbol: string
+  state: 'RiskOn' | 'RiskOff' | 'Neutral'
+  unconfirmed: boolean
+  unconfirmed_state: string
+  last_close: number | null
+  ma5: number | null
+  ma10: number | null
+  threshold: number | null
+  current_wave: {
+    direction: string
+    start_date: string
+    end_date: string | null
+    depth: number
+    length_days: number
+  } | null
+}
+
+export async function fetchSentimentState(symbol: string): Promise<SentimentStateInfo | null> {
+  return getJson<SentimentStateInfo | null>(`/sentiment/state?symbol=${symbol}`, null)
+}
+
+/** Realizovaný výsledek signálu per okno (#294). */
+export interface SignalOutcome {
+  signal_id: number
+  window_min: number
+  ret_bp: number | string
+  realized_dir: number | null
+  correct: boolean | null
+  computed_at: string
+}
+
+/** Signál Long/Short nápovědy (#294, SPEC 6.3) včetně zdůvodnění v `inputs`. */
+export interface SignalRow {
+  id: number
+  ts: string
+  symbol: string
+  direction: 'long' | 'short'
+  strength: number
+  mode: 'NEWS' | 'COMBINED'
+  inputs: Record<string, unknown>
+  expiry_ts: string
+  outcomes?: SignalOutcome[]
+}
+
+export async function fetchSignals(limit = 200): Promise<SignalRow[]> {
+  const data = await getJson<{ signals: SignalRow[] }>(`/signals?limit=${limit}`, { signals: [] })
+  // Generický mock/degradované API může vrátit objekt bez pole
+  return data.signals ?? []
+}
+
+/** Řádek empirického modelu (`news_model_stats`) — podklad progresu ke gate (6.2). */
+export interface ModelStatsRow {
+  category: string
+  importance: number
+  surprise_bucket: string
+  deferred: boolean
+  window_min: number
+  symbol: string
+  n: number
+  ret_mean_bp: number
+  hit_rate: number | null
+  hit_rate_lb: number | null
+}
+
+export async function fetchNewsStats(): Promise<ModelStatsRow[]> {
+  const data = await getJson<{ stats: ModelStatsRow[] }>('/news/stats', { stats: [] })
+  return data.stats ?? []
+}
+
+/** Zrcadlo gate podmínky signal enginu (6.2): n ≥ 30 ∧ Wilson LB > 0.50. */
+export const GATE_MIN_SAMPLES = 30
+export const GATE_WILSON_LB = 0.5
+
+export interface SignalGateInfo {
+  /** Kolik bucketů primárního okna má gate otevřený. */
+  open: number
+  /** Nejlepší progres k n ≥ 30 (0–1) — pro stav „sbírám data". */
+  progress: number
+}
+
+/** Progres ke gate z modelových statistik; primární okno +5 min (SPEC 6.2). */
+export function signalGateInfo(
+  stats: ModelStatsRow[],
+  symbol: string,
+  windowMin = 5,
+): SignalGateInfo {
+  let open = 0
+  let progress = 0
+  for (const row of stats) {
+    if (row.window_min !== windowMin || row.symbol !== symbol) continue
+    if (row.n >= GATE_MIN_SAMPLES && (row.hit_rate_lb ?? 0) > GATE_WILSON_LB) open += 1
+    progress = Math.max(progress, Math.min(1, row.n / GATE_MIN_SAMPLES))
+  }
+  return { open, progress }
+}
+
 /** Položka review fronty (#293, SPEC 5.7). */
 export interface ReviewRow {
   event_id: number

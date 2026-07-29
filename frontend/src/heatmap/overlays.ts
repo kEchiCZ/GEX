@@ -1,6 +1,7 @@
 /** Overlaye heatmapy (SPEC 7.2): cenová křivka, sessions, levels, walls — čisté helpery. */
 
 import type { NewsMarker } from './newsMarkers'
+import type { SignalMarker } from './signalMarkers'
 
 export interface PriceBar {
   minuteIdx: number
@@ -120,6 +121,8 @@ export interface OverlayData {
   sessions?: SessionMarker[]
   /** Markery zpráv na časové ose (#287); prázdné = checkbox News je vypnutý. */
   newsMarkers?: NewsMarker[]
+  /** Šipky signálů na cenové křivce (#295); prázdné = režim OFF. */
+  signals?: SignalMarker[]
   levels?: LevelLine[]
   walls?: LevelLine[]
   /** Timestamp posledních dat (zobrazený v rohu). */
