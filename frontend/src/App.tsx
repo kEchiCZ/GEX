@@ -25,7 +25,7 @@ import { buildGexGrid, projectGexField } from './heatmap/gexmode'
 import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
 import type { HeatmapScale, MeasuredHeatmapMode } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
-import { expiryIsoDate, expirySettleUtc, sessionDateFor } from './instrument/expiry'
+import { expirySettleUtc, sessionDateFor } from './instrument/expiry'
 import { SETUP_COLORS, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { DEFAULT_VIEW } from './heatmap/view'
@@ -158,12 +158,6 @@ function MainContent() {
   // svíčky do historického dne.
   const viewDate = sessionDateFor(selectedExpiry, today)
   const isHistoricalExpiry = viewDate !== today
-  // Budoucí expirace = positioning (heatmapa, levels, profil) BEZ cenových
-  // svíček (zadání uživatele 29. 7., #352): svíčky patří k seanci, a ta u
-  // budoucí expirace teprve proběhne. Vědomá odchylka od SPEC 7.2 („cenová
-  // křivka vždy viditelná") — SPEC nepočítal s pohledem na budoucí řetěz.
-  const expiryIso = selectedExpiry ? expiryIsoDate(selectedExpiry) : null
-  const isForwardExpiry = expiryIso !== null && expiryIso > today
   const { day: rawDay, live } = useDayData(
     symbol,
     selectedExpiry,
@@ -540,8 +534,6 @@ function MainContent() {
   const overlays = useMemo(
     () => ({
       ...baseOverlays,
-      // Budoucí expirace bez svíček (#352) — levels/heatmapa zůstávají
-      price: isForwardExpiry ? [] : baseOverlays.price,
       // Sekundární zeď (ADR-0008): spárování po úrovních dle přepínače
       walls: [
         ...resolveSecondaryWalls(baseOverlays.walls ?? [], toggles.secondaryWall),
@@ -554,7 +546,7 @@ function MainContent() {
       // scheduled eventy padnou napravo od živé hrany
       newsMarkers,
     }),
-    [baseOverlays, computedWalls, setupLines, ladderLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, isForwardExpiry], // prettier-ignore
+    [baseOverlays, computedWalls, setupLines, ladderLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers], // prettier-ignore
   )
 
   if (view === 'dashboard') {
@@ -714,7 +706,7 @@ function MainContent() {
               style={style}
               contours={contours}
               overlays={overlays}
-              liveBars={isForwardExpiry ? [] : liveOverlay.bars}
+              liveBars={liveOverlay.bars}
               liveLabels={liveOverlay.labels}
               minuteLabels={chartLabels}
               priceStyle={priceStyle}

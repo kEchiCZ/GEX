@@ -57,8 +57,8 @@ export function InstrumentHeader({
   const kind = selectedExpiry ? expiryKind(selectedExpiry) : null
   const countdown = selectedExpiry ? expiryCountdown(selectedExpiry, now) : null
   // Vztah chainu k zobrazené seanci (#352): proběhlá expirace se čte jako
-  // replay dne expirace; budoucí chain ukazuje jen positioning — svíčky
-  // patří k seanci, která teprve proběhne.
+  // replay dne expirace; budoucí chain se obchoduje nad dnešní seancí — bez
+  // vysvětlivky mate, že „budoucnost už má svíčky".
   const expiryDate = selectedExpiry ? expiryIsoDate(selectedExpiry) : null
   const todayIso = now.toISOString().slice(0, 10)
   const chainNote =
@@ -67,7 +67,7 @@ export function InstrumentHeader({
       : expiryDate < todayIso
         ? 'proběhla — zobrazen den expirace'
         : expiryDate > todayIso
-          ? 'jen positioning — svíčky až v den expirace'
+          ? 'svíčky = dnešní seance'
           : null
 
   return (
