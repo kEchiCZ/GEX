@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import Table, desc, func, select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.sentwaves import DailyClose, assess_state
 from gexlens_engine.storage.sentiment import (
     crowd_sentiment,
     news_classifications,
@@ -239,20 +240,58 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         }
 
     @router.get("/sentiment/state")
-    def sentiment_state() -> dict[str, object]:
-        """Stav RiskOn/RiskOff/Neutral — vlny přijdou v N7 (#292)."""
+    def sentiment_state(symbol: str = "ES") -> dict[str, object]:
+        """Stav RiskOn/RiskOff/Neutral (#292, SPEC 5.6).
+
+        Počítá se sdílenými pravidly z `gexlens_engine.compute.sentwaves` —
+        toutéž implementací, kterou news-engine ukládá vlny. Potvrzený stav
+        stojí jen na UZAVŘENÝCH dnech; dnešní průběžný close dává pouze
+        „unconfirmed" indikaci.
+        """
         engine = engine_factory()
-        waves = _rows(
-            engine, select(sentiment_waves).order_by(desc(sentiment_waves.c.start_date)).limit(1)
+        stmt = (
+            select(sentiment_daily.c.date, sentiment_daily.c.close)
+            .where(sentiment_daily.c.symbol == symbol)
+            .order_by(sentiment_daily.c.date)
         )
-        last = _rows(
-            engine, select(sentiment_daily).order_by(desc(sentiment_daily.c.date)).limit(1)
+        with engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        today = dt.datetime.now(dt.UTC).date()
+        completed = [
+            DailyClose(date=row.date, close=float(row.close)) for row in rows if row.date < today
+        ]
+        provisional = next(
+            (
+                DailyClose(date=row.date, close=float(row.close))
+                for row in rows
+                if row.date == today
+            ),
+            None,
         )
+        confirmed = assess_state(completed)
+        provisional_assessment = (
+            assess_state([*completed, provisional]) if provisional is not None else confirmed
+        )
+        wave = confirmed.wave
         return {
-            "state": "unknown",  # vlny zatím nejsou počítané (N7)
-            "unconfirmed": False,
-            "last_close": last[0]["close"] if last else None,
-            "current_wave": waves[0] if waves else None,
+            "symbol": symbol,
+            "state": confirmed.state,
+            "unconfirmed": provisional is not None
+            and provisional_assessment.state != confirmed.state,
+            "unconfirmed_state": provisional_assessment.state,
+            "last_close": provisional.close if provisional else confirmed.close,
+            "ma5": confirmed.ma5,
+            "ma10": confirmed.ma10,
+            "threshold": confirmed.threshold,
+            "current_wave": {
+                "direction": wave.direction,
+                "start_date": wave.start.isoformat(),
+                "end_date": wave.end.isoformat() if wave.end else None,
+                "depth": wave.depth,
+                "length_days": wave.length_days,
+            }
+            if wave is not None
+            else None,
         }
 
     @router.get("/sentiment/crowd")

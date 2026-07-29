@@ -50,6 +50,7 @@ from gexlens_news.retro_pass import RetroPass
 from gexlens_news.runner import CollectorRunner
 from gexlens_news.sentindex_job import SentIndexJob
 from gexlens_news.store import NewsWriter
+from gexlens_news.waves_job import WavesJob
 
 logger = logging.getLogger("gexlens.news")
 
@@ -144,6 +145,7 @@ async def run(settings: NewsSettings) -> None:
     else:
         logger.info("Reddit bez credentials — crowd zdroj se nespouští (není to porucha)")
     crowd = CrowdRunner(crowd_collectors, CrowdWriter(engine))
+    waves = WavesJob(engine, symbol="ES")
     sent_index = SentIndexJob(engine, settings.data_dir)
     predictions = PredictionJob(engine)
     publisher = NewsPublisher(settings.api_base) if settings.api_base else None
@@ -213,6 +215,14 @@ async def run(settings: NewsSettings) -> None:
                     await publisher.publish_upcoming(upcoming, now)
             except Exception:
                 logger.exception("Přepočet SentIndexu selhal — zkusí se příští cyklus")
+            # Vlny + stav (#292) až PO indexu — čtou denní close, který index
+            # právě upsertnul; změna stavu jde do WS `sentiment.state`
+            try:
+                payload, changed = await asyncio.to_thread(waves.run, now)
+                if publisher is not None and changed:
+                    await publisher.publish("sentiment.state", payload)
+            except Exception:
+                logger.exception("Přepočet vln selhal — zkusí se příští cyklus")
             # Ranní retro pass (#284): dožene noční fronty, ať trader ráno
             # otevírá aplikaci se zpracovanou nocí
             if retro.due(now):
