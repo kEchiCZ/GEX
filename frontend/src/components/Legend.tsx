@@ -1,12 +1,13 @@
-/** Legenda grafu (#346): ukázka každého prvku + co znamená a jak na něj cena reaguje.
+/** Legenda grafu (#346, rozšířeno #348): ukázka prvku + kdy podle něj cena roste a kdy klesá.
 
 Obsah je **data**, ne JSX — ukázky se kreslí generickým `LegendSwatch` ze
 stejných barevných konstant, jaké používá graf (`LEVEL_COLORS`, `SETUP_COLORS`,
 `callColor`/`putColor`). Legenda se tak nemůže rozejít s tím, co uživatel
 opravdu vidí; kdyby byly barvy opsané, tichý rozchod by nikdo neodhalil.
 
-Vysvětlení záměrně říká i **jak na úroveň cena reaguje** — samotný název
-(„Gamma Flip") traderovi nepomůže, pokud neví, co od něj čekat.
+Každá položka nese `up`/`down` — konkrétní obraz v grafu pro růst a pokles.
+Samotné „ukazuje sílu call strany" traderovi nepomůže; potřebuje vědět, jak to
+vypadá, když cena poroste, a jak když bude klesat.
 */
 import { useEffect } from 'react'
 import { LEVEL_COLORS, SECONDARY_WALL_DASH, SETUP_COLORS } from '../heatmap/overlays'
@@ -14,6 +15,9 @@ import { callColor, putColor } from '../heatmap/color'
 
 const UP_COLOR = '#3ecf8e'
 const DOWN_COLOR = '#f0616d'
+/** Žebřík a GEX křivka mají vlastní odstíny — zrcadlí App.tsx a StrikeProfile. */
+const LADDER_CALL = 'rgba(62,207,142,0.85)'
+const GEX_FLIP = '#e8c14b'
 
 function rgba(color: [number, number, number, number]): string {
   return `rgba(${color[0]},${color[1]},${color[2]},${(color[3] / 255).toFixed(2)})`
@@ -35,13 +39,21 @@ export type Swatch =
   | { kind: 'area'; positive: string; negative: string }
   /** Sloupce panelu. */
   | { kind: 'bars'; color: string; second?: string }
+  /** GEX křivka v pravém profilu: zelená doprava, červená doleva, žlutý flip. */
+  | { kind: 'gex' }
 
 export interface LegendItem {
   name: string
   swatch: Swatch
+  /** Kde to v aplikaci je — u prvků mimo hlavní graf. */
+  where?: string
   /** Co to je. */
   what: string
-  /** Jak na to cena reaguje / jak to číst. Prázdné u čistě popisných prvků. */
+  /** Konkrétní obraz v grafu, když cena roste. */
+  up?: string
+  /** …a když klesá. */
+  down?: string
+  /** Doplňující čtení nebo varování. */
   how?: string
 }
 
@@ -54,109 +66,143 @@ export interface LegendSection {
 export const LEGEND_SECTIONS: LegendSection[] = [
   {
     title: 'Úrovně v hlavním grafu',
-    note: 'Vodorovné čáry přes celou šířku. Popisek nad čarou nese název a aktuální cenu, u zdí i jejich dominanci v procentech.',
+    note: 'Vodorovné čáry přes celou šířku. Popisek nad čarou nese název a aktuální cenu, u zdí i dominanci v procentech. Úrovně nejsou signály — říkají, KDE trh nejspíš zareaguje, ne KDY se otočí.',
     items: [
       {
         name: 'Max Pain',
         swatch: { kind: 'line', color: LEVEL_COLORS.max_pain },
-        what: 'Strike, na kterém by při expiraci vypršelo bez hodnoty nejvíc otevřených opcí — tedy cena, kde drtivá většina držitelů opcí prodělá nejvíc.',
-        how: 'Čím blíž expiraci, tím silněji k němu bývá cena tažena (pinning). V poslední hodině obchodování se kolem něj často „zasekne“. Není to předpověď, spíš gravitace — proti silné zprávě neobstojí.',
+        where: 'Hlavní graf, plná čára; popisek vpravo u osy.',
+        what: 'Strike, na kterém by při expiraci vypršelo bez hodnoty nejvíc otevřených opcí — cena, kde drtivá většina držitelů opcí prodělá nejvíc. Je to jedno číslo za celý den a mění se pomalu.',
+        up: 'Cena je POD Max Painem a blíží se expirace → tah nahoru k němu. Typicky pomalé plíživé stoupání bez velkých svíček, které se u Max Painu zastaví.',
+        down: 'Cena je NAD Max Painem před expirací → stejně plíživý tah dolů k němu. Odpoledne v den expirace je to nejsilnější.',
+        how: 'Je to gravitace, ne příkaz. Silná zpráva Max Pain přebije a cena od něj utíká celý den.',
       },
       {
         name: 'Gamma Flip',
         swatch: { kind: 'line', color: LEVEL_COLORS.flip, dash: [6, 5] },
-        what: 'Úroveň, kde kumulativní NetGEX mění znaménko — hranice mezi kladnou a zápornou gamma dealerů.',
-        how: 'NAD ní jsou dealeři v kladné gamma a pohyb tlumí: prodávají do růstu, kupují do poklesu, takže trh má sklon k návratu k průměru a menším rozpětím. POD ní je gamma záporná a dealeři pohyb zesilují — trendy jedou dál, volatilita roste, propady zrychlují. Průraz této úrovně mění charakter dne.',
+        where: 'Hlavní graf, žlutá čárkovaná čára.',
+        what: 'Úroveň, kde kumulativní NetGEX mění znaménko — hranice mezi kladnou a zápornou gamma dealerů. Ze všech úrovní mění charakter dne nejvíc.',
+        up: 'Cena NAD flipem: dealeři prodávají do růstu a kupují do poklesu, takže růst je pomalý a plynulý, propady se rychle vykupují a rozpětí svíček je malé. Nákup poklesu tady funguje.',
+        down: 'Cena PROPADNE POD flip: dealeři pohyb zesilují, svíčky se prodlouží, propad zrychlí a nevykupuje se. Tady vznikají prudké výprodeje — pod flipem se poklesy nekupují.',
+        how: 'Nejdůležitější je samotný průraz. Když cena flip prorazí dolů a udrží se, čekej vyšší volatilitu do konce dne.',
       },
       {
         name: 'Call zeď',
         swatch: { kind: 'line', color: LEVEL_COLORS.call_wall },
-        what: 'Strike nad spotem s největší koncentrací call gamma. Popisek nese i dominanci — jak velký podíl síly call strany zeď drží.',
-        how: 'Působí jako odpor: při přiblížení dealeři prodávají a růst brzdí. Když ji cena prorazí a udrží se nad ní, hedging se obrátí a pohyb se často zrychlí (gamma squeeze).',
+        where: 'Hlavní graf, zelená čára nad cenou.',
+        what: 'Strike nad spotem s největší koncentrací call gamma. Číslo za popiskem je dominance — jak velký podíl síly call strany zeď drží. Nad 30 % je silná, pod 15 % se kreslí ztlumeně.',
+        up: 'Cena zeď PRORAZÍ a udrží se nad ní → hedging se obrátí, dealeři začnou dokupovat a růst zrychlí (gamma squeeze). Poznáš to podle rychlé svíčky, která zeď protne a nevrátí se pod ni.',
+        down: 'Cena se o zeď opře a odmítne ji — dlouhý horní knot těsně pod čarou → obrat dolů. To je typičtější obraz než průraz.',
       },
       {
         name: 'Put zeď',
         swatch: { kind: 'line', color: LEVEL_COLORS.put_wall },
-        what: 'Strike pod spotem s největší koncentrací put gamma.',
-        how: 'Působí jako podpora — poklesy se u ní obvykle zastaví. Průraz dolů ale bere trhu záchytný bod a otevírá prostor k rychlému pádu k další úrovni.',
+        where: 'Hlavní graf, červená čára pod cenou.',
+        what: 'Strike pod spotem s největší koncentrací put gamma, opět s dominancí v popisku.',
+        up: 'Cena o zeď zavadí a odrazí se — dlouhý spodní knot na čáře → pokračování nahoru. Dealeři u put zdi kupují.',
+        down: 'Cena zeď PRORAZÍ dolů a udrží se pod ní → podpora zmizela a otevírá se prostor k rychlému pádu na druhou put zeď nebo další strike.',
       },
       {
         name: '2. call zeď / 2. put zeď',
-        swatch: {
-          kind: 'line',
-          color: LEVEL_COLORS.call_wall_2,
-          dash: [...SECONDARY_WALL_DASH],
-        },
-        what: 'Druhá nejsilnější zeď na dané straně. Kreslí se tečkovaně a poloprůhledně, ať ji nespleteš s primární.',
-        how: 'Ukazuje, kam se pozicing přesune, když primární zeď padne — tedy nejbližší další místo, kde pohyb nejspíš narazí. Zobrazí se jen když existuje; některé dny na jedné straně žádná druhá zeď není.',
+        swatch: { kind: 'line', color: LEVEL_COLORS.call_wall_2, dash: [...SECONDARY_WALL_DASH] },
+        where: 'Hlavní graf, tečkovaně a poloprůhledně; zapíná přepínač „2. zeď“.',
+        what: 'Druhá nejsilnější zeď na dané straně. Zobrazí se jen když existuje — některé dny na jedné straně žádná není.',
+        up: 'Po průrazu call zdi je druhá call zeď nejbližší další brzda, tedy přirozený cíl pohybu nahoru.',
+        down: 'Po průrazu put zdi míří pokles obvykle na druhou put zeď. Je to nejbližší místo, kde se pád má o co zastavit.',
+      },
+      {
+        name: 'GEX žebřík',
+        swatch: { kind: 'line', color: LADDER_CALL, dash: [6, 5] },
+        where:
+          'Hlavní graf, zapíná přepínač „GEX žebřík“. Zelené příčky nad cenou, červené pod ní.',
+        what: 'Všechny významné striky k aktuální pozici přehrávání, ne jen ta nejsilnější zeď. Číslo za cenou je podíl na síle dané strany, takže vidíš i pořadí důležitosti.',
+        up: 'Cena stoupá mezi příčkami. Příčka s vysokým podílem je brzda; příčky s malým podílem cena obvykle projede bez zastavení. Řídká oblast nad cenou = volný prostor k růstu.',
+        down: 'Při poklesu fungují červené příčky jako schody — u silných se cena zastaví, přes slabé propadne. Prázdno pod cenou znamená, že pád nemá kde zpomalit.',
       },
       {
         name: 'Těžiště',
         swatch: { kind: 'line', color: LEVEL_COLORS.centroid, dash: [6, 5] },
-        what: 'Vážený střed opčního pozicingu — kde leží masa otevřených kontraktů.',
-        how: 'Orientační bod, kolem kterého se pozicing rozkládá. Cena daleko od těžiště znamená, že se trh vzdálil od hlavní koncentrace pozic.',
+        where: 'Hlavní graf, fialová čárkovaná čára.',
+        what: 'Vážený střed opčního pozicingu — kde leží masa otevřených kontraktů. Pomalá a slabá úroveň.',
+        up: 'Cena hluboko pod těžištěm → mírný tah nahoru, trh se vzdálil od hlavní koncentrace pozic.',
+        down: 'Cena vysoko nad těžištěm → mírný tah dolů. Sama o sobě obrat nezpůsobí, ber ji jako kontext.',
       },
       {
         name: 'Slabá zeď',
         swatch: { kind: 'line', color: LEVEL_COLORS.call_wall, dash: [2, 3], opacity: 0.4 },
-        what: 'Úsek zdi, kde dominance klesla pod 15 % — kreslí se ztlumeně a tečkovaně.',
-        how: 'Zeď je v tu chvíli roztříštěná mezi víc strikes. Neber ji jako spolehlivou podporu ani odpor.',
+        where: 'Hlavní graf, ztlumený tečkovaný úsek zdi.',
+        what: 'Úsek, kde dominance klesla pod 15 % — síla strany je roztříštěná mezi víc strikes.',
+        how: 'Odraz tady nečekej a nestav na ni vstup. Cena přes takovou úroveň obvykle projde, jako by tam nebyla.',
       },
     ],
   },
   {
     title: 'Navržený setup',
-    note: 'Objeví se, jen když detektor najde příležitost. Ke grafu patří karta s popisem a poměrem rizika.',
+    note: 'Objeví se, jen když detektor najde příležitost. Ke grafu patří karta s popisem, poměrem rizika a důvěrou.',
     items: [
       {
         name: 'Vstup',
         swatch: { kind: 'line', color: SETUP_COLORS.entry, dash: [6, 5] },
-        what: 'Cena, na které setup počítá se vstupem do pozice.',
+        where: 'Hlavní graf, modrá čárkovaná čára.',
+        what: 'Cena, na které setup počítá se vstupem do pozice. Směr je na kartě setupu.',
+        up: 'U LONG setupu leží cíl NAD vstupem a stop pod ním.',
+        down: 'U SHORT setupu je to obráceně — cíl POD vstupem, stop nad ním.',
       },
       {
         name: 'Cíl',
         swatch: { kind: 'line', color: SETUP_COLORS.target, dash: [6, 5] },
+        where: 'Hlavní graf, zelená čárkovaná čára.',
         what: 'Cílová cena setupu. Zásah cílem setup uzavírá jako úspěšný.',
       },
       {
         name: 'Stop',
         swatch: { kind: 'line', color: SETUP_COLORS.stop, dash: [6, 5] },
-        what: 'Ochranná úroveň. Zásah stopem setup uzavírá se ztrátou — vyhodnocuje se vždy dřív než cíl, aby výsledky nelhaly.',
+        where: 'Hlavní graf, červená čárkovaná čára.',
+        what: 'Ochranná úroveň. Zásah stopem setup uzavírá se ztrátou — v rámci jedné svíčky se vyhodnocuje vždy dřív než cíl, aby statistika nelhala.',
       },
     ],
   },
   {
     title: 'Heatmapa',
-    note: 'Barva buňky = velikost hodnoty na daném striku a v dané minutě. Co se měří, určuje přepínač Mode (OI, Vol, VEX…), jak se to škáluje, přepínač Scale.',
+    note: 'Barva buňky = velikost hodnoty na daném striku a v dané minutě. Co se měří, určuje přepínač Mode (OI, Vol, VEX…), jak se to škáluje, přepínač Scale. Svislá osa jsou striky, vodorovná čas.',
     items: [
       {
         name: 'Call vrstva',
         swatch: { kind: 'ramp', to: rgba(callColor(1)) },
-        what: 'Zelenomodrá. Sytost roste s velikostí hodnoty na call straně.',
-        how: 'Souvislý sytý pruh přes několik minut je zeď — místo, kde je koncentrovaný pozicing. Náhlé rozsvícení nového striku znamená čerstvý tok.',
+        where: 'Hlavní graf, zelenomodré buňky.',
+        what: 'Sytost roste s velikostí hodnoty na call straně. Souvislý sytý pruh přes několik minut je zeď.',
+        up: 'Zelený pruh nad cenou bledne nebo se posouvá výš → odpor slábne a nad cenou se uvolňuje prostor.',
+        down: 'Nový sytý zelený pruh se rozsvítí těsně nad cenou → čerstvě postavený strop, růst má kde narazit.',
       },
       {
         name: 'Put vrstva',
         swatch: { kind: 'ramp', to: rgba(putColor(1)) },
-        what: 'Červená. Totéž pro put stranu.',
+        where: 'Hlavní graf, červené buňky.',
+        what: 'Totéž pro put stranu, obvykle pod cenou.',
+        up: 'Sytý červený pruh těsně pod cenou = pevná podložka, o kterou se dá opřít růst.',
+        down: 'Červená pod cenou vybledne nebo zmizí → podpora se rozpustila a pod cenou je prázdno.',
       },
       {
         name: 'Vrstva ±',
         swatch: { kind: 'diverging' },
-        what: 'Módy se znaménkem (Vol ±, OI±All, VEX ±) kreslí převahu: zeleně tam, kde vede call strana, červeně kde put.',
-        how: 'Rychle ukáže, která strana na striku dominuje, místo aby se obě sčítaly.',
+        where: 'Hlavní graf v módech Vol ±, OI±All, VEX ±.',
+        what: 'Kreslí převahu, ne součet: zeleně kde vede call strana, červeně kde put.',
+        up: 'Zelená převaha na strikách nad cenou → call strana staví pozici výš, trh počítá s růstem.',
+        down: 'Červená převaha pod cenou → put strana sílí, poptávka po ochraně roste.',
       },
       {
         name: 'Stará data',
         swatch: { kind: 'ramp', to: 'rgba(150,150,150,0.85)' },
-        what: 'Buňka odbarvená do šeda a zprůhledněná — kotace je starší než 5 minut.',
-        how: 'Není to prázdno, ale neaktuálnost. Nestav na takovém striku rozhodnutí.',
+        where: 'Hlavní graf, odbarvené a zprůhledněné buňky.',
+        what: 'Kotace na tom striku je starší než 5 minut. Není to prázdno, ale neaktuálnost.',
+        how: 'Na takovém striku nestav rozhodnutí — zeď tam možná už není, jen o tom zatím nevíme.',
       },
       {
         name: 'Projekce',
         swatch: { kind: 'ramp', to: 'rgba(20,200,170,0.45)' },
-        what: 'Plocha vpravo za svislým předělem „projekce →“. Poslední naměřený sloupec protažený do konce seance, kreslený se sníženou sytostí.',
-        how: 'Ukazuje, kde by zdi ležely, kdyby se pozicing dál neměnil. Není to měření ani předpověď — jen prodloužení současného stavu.',
+        where: 'Hlavní graf vpravo za svislým předělem „projekce →“.',
+        what: 'Poslední naměřený sloupec protažený do konce seance, se sníženou sytostí.',
+        how: 'Ukazuje, kde by zdi ležely, kdyby se pozicing už neměnil. Není to měření ani předpověď ceny — nečti z ní směr.',
       },
     ],
   },
@@ -166,8 +212,10 @@ export const LEGEND_SECTIONS: LegendSection[] = [
       {
         name: 'Svíčky',
         swatch: { kind: 'candles' },
-        what: 'Minutové OHLC nad heatmapou; zelená roste, červená klesá. Přepínačem Cena lze přepnout na spojitou linku.',
-        how: 'Poslední svíčka je rozdělaná a dokresluje se živě, proto se během minuty mění.',
+        where: 'Hlavní graf nad heatmapou; přepínačem Cena lze přepnout na linku.',
+        what: 'Minutové OHLC; zelená roste, červená klesá. Poslední svíčka je rozdělaná a dokresluje se živě.',
+        up: 'Dlouhé spodní knoty na úrovni = kupci ji brání, cena se od ní odráží nahoru.',
+        down: 'Dlouhé horní knoty na úrovni = prodejci ji brání, cena se od ní odráží dolů.',
       },
     ],
   },
@@ -177,50 +225,66 @@ export const LEGEND_SECTIONS: LegendSection[] = [
       {
         name: 'Zpráva',
         swatch: { kind: 'vline', color: 'rgba(20,184,166,0.95)', width: 2 },
-        what: 'Svislá čára v minutě, kdy zpráva vyšla, s ikonou kategorie. Zelenomodrá je pozitivní, červená negativní, šedá neutrální nebo teprve plánovaná.',
-        how: 'Jas a tloušťka odpovídají důležitosti — okrajová zpráva je sotva vidět, FOMC křičí. Pohyb těsně po silné značce je reakce na zprávu, ne na pozicing.',
+        where: 'Hlavní graf, svislá čára s ikonou kategorie v minutě vydání.',
+        what: 'Zelenomodrá je pozitivní zpráva, červená negativní, šedá neutrální nebo teprve plánovaná. Jas a tloušťka odpovídají důležitosti — okrajová zpráva je sotva vidět, FOMC křičí.',
+        up: 'Pohyb nahoru hned po zelenomodré značce je reakce na zprávu, ne na pozicing — zdi ho nemusí zastavit.',
+        down: 'Totéž dolů po červené značce. Šedá značka vpředu je plánovaný event: do jeho času čekej klidnější trh a pak skok.',
       },
       {
         name: 'Seance',
         swatch: { kind: 'vline', color: 'rgba(125,133,150,0.8)', dash: [4, 4] },
-        what: 'Otevření a zavření hlavních trhů (Sydney, Šanghaj, Frankfurt, Londýn, US) s popiskem.',
-        how: 'Likvidita a charakter pohybu se na těchto hranicích mění — zejména US open bývá zlom dne.',
+        where: 'Hlavní graf, svislé šedé čáry s popiskem.',
+        what: 'Otevření a zavření hlavních trhů — Sydney, Šanghaj, Frankfurt, Londýn, US.',
+        how: 'Na těchto hranicích se mění likvidita. US open bývá zlom dne: noční pohyb se často otočí a teprve tady vzniká skutečný směr.',
       },
     ],
   },
   {
     title: 'Panely pod grafem',
-    note: 'Sdílejí časovou osu s hlavním grafem a crosshair — hodnota pod kurzorem se ukazuje vpravo. Které panely jsou vidět, řídí přepínače nad grafem.',
+    note: 'Sdílejí časovou osu s hlavním grafem i crosshair — hodnota pod kurzorem se ukazuje vpravo. Které panely jsou vidět, řídí přepínače nad grafem.',
     items: [
       {
         name: 'Vol',
         swatch: { kind: 'bars', color: 'rgba(125,133,150,0.8)' },
+        where: 'První panel pod grafem.',
         what: 'Zobchodovaný objem futures za minutu.',
-        how: 'Pohyb na vysokém objemu má váhu, tentýž pohyb na nízkém je spíš šum.',
+        up: 'Průraz zdi nahoru na vysokém sloupci → pohyb má za sebou skutečné obchody a spíš vydrží.',
+        down: 'Průraz na nízkém objemu se často vrací zpátky — je to past, ne směr.',
       },
       {
         name: 'Opt Vol',
         swatch: { kind: 'bars', color: UP_COLOR, second: DOWN_COLOR },
-        what: 'Opční volume rozdělené na call (zeleně) a put (červeně).',
-        how: 'Skok na jedné straně ukazuje, kam vstupuje čerstvý opční tok — často předchází pohybu zdí.',
+        where: 'Druhý panel; zeleně call, červeně put.',
+        what: 'Kolik opčních kontraktů se v dané minutě zobchodovalo, rozdělené na strany.',
+        up: 'Skok zelených sloupců → čerstvý zájem o cally. Nová zeď se často objeví do pár minut po takovém skoku.',
+        down: 'Skok červených sloupců → nakupuje se ochrana, staví se put pozice pod cenou.',
       },
       {
         name: 'Δ Flow C/P',
         swatch: { kind: 'bars', color: UP_COLOR, second: DOWN_COLOR },
-        what: 'Delta-vážený opční tok per strana — objem přepočtený na skutečnou směrovou expozici.',
-        how: 'Na rozdíl od holého volume rozliší, jestli tok tlačí trh nahoru, nebo dolů.',
+        where: 'Třetí panel; zeleně call strana, červeně put.',
+        what: 'Tentýž opční tok jako Opt Vol, ale přepočtený deltou na směrovou váhu. Sto kontraktů hluboko OTM s deltou 0,05 hne trhem jinak než sto kontraktů na penězích s deltou 0,5 — Δ Flow to rozliší, holé volume ne.',
+        up: 'Zelená výrazně přebíjí červenou → směrová váha je na call straně. Dealeři se proti tomu zajišťují nákupem futures, což cenu podpírá.',
+        down: 'Červená přebíjí zelenou → váha je na put straně a zajištění tlačí cenu dolů.',
+        how: 'Neříká, kdo byl agresor — jen na které straně a v jaké směrové váze se obchodovalo. Ber ho jako váhu toku, ne jako důkaz nákupu či prodeje.',
       },
       {
         name: 'Cum Δ',
         swatch: { kind: 'area', positive: UP_COLOR, negative: DOWN_COLOR },
-        what: 'Kumulativní delta futures — plocha nad nulou zeleně, pod nulou červeně.',
-        how: 'Ukazuje, jestli den táhli agresivní kupci, nebo prodejci. Rozchod s cenou (cena roste, Cum Δ klesá) je varovný signál slábnoucího pohybu.',
+        where: 'Čtvrtý panel; plocha nad nulou zeleně, pod nulou červeně.',
+        what: 'Kumulativní delta futures — průběžný součet toho, jestli obchody vznikaly agresivním nákupem, nebo prodejem. Na rozdíl od Δ Flow tady agresora známe.',
+        up: 'Cena roste A Cum Δ roste s ní → za růstem stojí agresivní kupci, pohyb má podporu a spíš pokračuje.',
+        down: 'Cena klesá A Cum Δ klesá → agresivní prodejci, propad má za sebou skutečný tok.',
+        how: 'Nejcennější je rozchod: cena udělá nové maximum, ale Cum Δ ne → růst už netlačí kupci a často následuje obrat dolů. Obráceně stejně.',
       },
       {
         name: 'Sentiment',
         swatch: { kind: 'area', positive: UP_COLOR, negative: DOWN_COLOR },
-        what: 'Index nálady ze zpracovaných zpráv, spojitá řada s exponenciálním dozníváním.',
-        how: 'Kladné pásmo je risk-on, záporné risk-off. Čti jako kontext k pohybu, ne jako vstupní signál.',
+        where: 'Poslední panel.',
+        what: 'Index nálady ze zpracovaných zpráv — spojitá řada, ve které vliv zprávy postupně doznívá.',
+        up: 'Kladné pásmo = risk-on: investoři jsou ochotní nést riziko, peníze tečou do akcií a ES/NQ mají sklon růst. Index roste = zprávy tuhle chuť posilují.',
+        down: 'Záporné pásmo = risk-off: útěk do bezpečí, peníze odtékají z akcií do dluhopisů a dolaru, ES/NQ jsou pod tlakem. Prudký propad indexu je obvykle jedna silná negativní zpráva.',
+        how: 'Je to kontext, ne vstupní signál. Trh na zprávu zareaguje v řádu minut, index doznívá mnohem déle.',
       },
     ],
   },
@@ -230,14 +294,21 @@ export const LEGEND_SECTIONS: LegendSection[] = [
       {
         name: 'Vol + OI',
         swatch: { kind: 'bars', color: UP_COLOR, second: DOWN_COLOR },
-        what: 'Vodorovné pruhy per strike — otevřené kontrakty a objem, call vpravo, put vlevo. Sdílí osu Y s grafem, takže pruh je vždy v úrovni svého striku.',
-        how: 'Nejdelší pruhy jsou zdi, které v grafu vidíš jako vodorovné čáry.',
+        where:
+          'Pravý panel, vodorovné pruhy per strike. Sdílí osu Y s grafem, takže pruh je vždy v úrovni svého striku.',
+        what: 'Otevřené kontrakty a objem na každém striku — call zeleně, put červeně.',
+        up: 'Krátké pruhy nad cenou = řídký pozicing = málo odporu nad ní, prostor k růstu.',
+        down: 'Nejdelší pruhy jsou přesně ty zdi, které v grafu vidíš jako vodorovné čáry. Dlouhý pruh pod cenou je podpora.',
       },
       {
         name: 'GEX křivka',
-        swatch: { kind: 'line', color: LEVEL_COLORS.centroid, width: 2 },
-        what: 'Modelovaný profil NetGEX přes cenové pásmo, zapnutelný chipem GEX.',
-        how: 'Průchod nulou je gamma flip. Vpravo od nuly kladná gamma (tlumení), vlevo záporná (zesilování).',
+        swatch: { kind: 'gex' },
+        where:
+          'POZOR — není v hlavním grafu. Je to křivka v pravém profilu, zapíná se chipem „GEX“ v jeho hlavičce.',
+        what: 'Modelovaný NetGEX přes cenové pásmo. Zelená vyčnívá doprava = kladná gamma, dealeři tlumí. Červená doleva = záporná gamma, dealeři zesilují. Žlutá značka je průchod nulou, tedy dynamický gamma flip.',
+        up: 'Cena v zeleném pásmu → pohyby se tlumí, čekej menší rozsah a návraty k průměru; růst bude pozvolný.',
+        down: 'Cena v červeném pásmu → pohyby se zesilují, propady zrychlují a nevykupují se.',
+        how: 'Není to Max Pain a nemá s ním nic společného. Max Pain je jedno číslo a v hlavním grafu je to plná vodorovná čára; GEX křivka je průběh přes celé cenové pásmo v pravém profilu.',
       },
     ],
   },
@@ -278,6 +349,26 @@ export function LegendSwatch({ swatch }: { swatch: Swatch }) {
           strokeWidth={swatch.width ?? 1.5}
           strokeDasharray={swatch.dash?.join(' ')}
         />
+      </svg>
+    )
+  }
+  if (swatch.kind === 'gex') {
+    // Svislá osa nuly, kladná část doprava zeleně, záporná doleva červeně
+    const axis = SWATCH_W / 2
+    return (
+      <svg {...common} role="presentation">
+        <path
+          d={`M${axis},1 C${axis + 16},4 ${axis + 14},7 ${axis},9`}
+          fill={UP_COLOR}
+          opacity={0.8}
+        />
+        <path
+          d={`M${axis},9 C${axis - 18},11 ${axis - 12},15 ${axis},17`}
+          fill={DOWN_COLOR}
+          opacity={0.8}
+        />
+        <line x1={axis} y1={1} x2={axis} y2={SWATCH_H - 1} stroke="var(--border)" />
+        <line x1={axis - 5} y1={9} x2={axis + 5} y2={9} stroke={GEX_FLIP} strokeWidth={1.5} />
       </svg>
     )
   }
@@ -396,7 +487,24 @@ export function Legend({ onClose }: { onClose: () => void }) {
                     <LegendSwatch swatch={item.swatch} />
                     <div className="legend-text">
                       <strong>{item.name}</strong>
+                      {item.where && <p className="legend-where">{item.where}</p>}
                       <p>{item.what}</p>
+                      {(item.up || item.down) && (
+                        <div className="legend-moves">
+                          {item.up && (
+                            <p className="legend-up">
+                              <span>▲ Roste</span>
+                              {item.up}
+                            </p>
+                          )}
+                          {item.down && (
+                            <p className="legend-down">
+                              <span>▼ Klesá</span>
+                              {item.down}
+                            </p>
+                          )}
+                        </div>
+                      )}
                       {item.how && <p className="legend-how">{item.how}</p>}
                     </div>
                   </li>

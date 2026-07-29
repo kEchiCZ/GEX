@@ -1232,3 +1232,53 @@ body {
 .legend-how {
   color: var(--text) !important;
 }
+
+/* Kde prvek najít — odlišeno od popisu, ať se dá přeskočit očima */
+.legend-where {
+  font-size: 12px !important;
+  font-style: italic;
+  color: var(--text-muted) !important;
+}
+
+/* Podmínky růstu a poklesu (#348) — zelený a červený pruh vlevo */
+.legend-moves {
+  margin: 6px 0 4px;
+  display: grid;
+  gap: 4px;
+}
+
+.legend-up,
+.legend-down {
+  margin: 0 !important;
+  padding: 3px 8px;
+  border-left: 3px solid;
+  border-radius: 0 3px 3px 0;
+  color: var(--text) !important;
+  font-size: 13px;
+}
+
+.legend-up {
+  border-color: var(--up);
+  background: rgba(62, 207, 142, 0.07);
+}
+
+.legend-down {
+  border-color: var(--down);
+  background: rgba(240, 97, 109, 0.07);
+}
+
+.legend-up span,
+.legend-down span {
+  display: inline-block;
+  min-width: 62px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.legend-up span {
+  color: var(--up);
+}
+
+.legend-down span {
+  color: var(--down);
+}
