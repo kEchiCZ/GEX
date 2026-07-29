@@ -47,6 +47,13 @@ class NewsSettings(BaseSettings):
     fed_rss_interval_s: float = Field(default=300.0, gt=0)
     reddit_interval_s: float = Field(default=900.0, gt=0)
 
+    # Gemini batch klasifikace (#281, SPEC kap. 4): dávka à 60 s jen při
+    # neprázdné frontě; denní limit s rezervou pod free tierem (~1500 RPD)
+    gemini_model: str = "gemini-2.5-flash"
+    llm_interval_s: float = Field(default=60.0, gt=0)
+    llm_daily_limit: int = Field(default=1400, ge=0)
+    llm_batch_limit: int = Field(default=200, ge=1, le=500)
+
     # Okno rolling deduplikace (#273, #351): musí pokrýt republikace téže story
     # (měřeno Δt 23 min – hodiny), ne jen rozdíl rychlosti zdrojů — 10 min ze
     # SPEC 3.3 propouštělo ~19 duplicit/den přes půlnoc UTC (ADR-0017). Strop
