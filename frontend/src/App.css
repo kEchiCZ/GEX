@@ -1498,3 +1498,121 @@ body {
   font-size: 12px;
   margin-bottom: 6px;
 }
+
+/* ── Indikátor tendence (#350) ────────────────────────────── */
+.tendency-wrap {
+  position: relative;
+}
+
+.tendency-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.tendency-chip.tendency-long,
+.tendency-chip.tendency-strong_long {
+  color: #3ecf8e;
+  border-color: rgba(62, 207, 142, 0.45);
+}
+
+.tendency-chip.tendency-strong_long {
+  background: rgba(62, 207, 142, 0.14);
+}
+
+.tendency-chip.tendency-short,
+.tendency-chip.tendency-strong_short {
+  color: #f0616d;
+  border-color: rgba(240, 97, 109, 0.45);
+}
+
+.tendency-chip.tendency-strong_short {
+  background: rgba(240, 97, 109, 0.14);
+}
+
+.tendency-scale {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.tendency-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(125, 133, 150, 0.4);
+}
+
+.tendency-dot.active {
+  background: currentColor;
+  box-shadow: 0 0 4px currentColor;
+}
+
+.tendency-popover {
+  position: absolute;
+  left: 0;
+  top: 32px;
+  width: 340px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  z-index: 10;
+}
+
+.tendency-meta {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.tendency-uncalibrated {
+  color: #e8c14b;
+  border: 1px solid rgba(232, 193, 75, 0.45);
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 11px;
+  cursor: help;
+}
+
+.tendency-votes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.tendency-votes li {
+  display: grid;
+  grid-template-columns: 34px auto;
+  column-gap: 8px;
+}
+
+.tendency-vote {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text-muted);
+}
+
+.tendency-vote.positive {
+  color: #3ecf8e;
+}
+
+.tendency-vote.negative {
+  color: #f0616d;
+}
+
+.tendency-vote-detail {
+  grid-column: 2;
+  font-size: 11px;
+}

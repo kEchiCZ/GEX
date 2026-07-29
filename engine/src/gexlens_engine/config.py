@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     # market data line na symbol — proti rezervě 80/≥150 (ADR-0001) nic.
     ibkr_news_enabled: bool = True
     setups_enabled: bool = True
+    # Indikátor tendence (#350) — minutový výpočet + zápis historie
+    tendency_enabled: bool = True
     # Minimální dominance zdi pro šablony T1/T3 (ADR-0010, #223)
     setup_min_wall_dominance: float = Field(default=0.15, ge=0, le=1)
     # Kontra-režimový filtr (#252 B+C): okno CumΔ konfluence pro fade proti

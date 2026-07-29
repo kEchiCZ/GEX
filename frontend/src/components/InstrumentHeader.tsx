@@ -4,6 +4,7 @@ import { expiryCountdown, expiryIsoDate, expiryKind } from '../instrument/expiry
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
 import { StateChip } from './StateChip'
+import { TendencyChip } from './TendencyChip'
 
 /** Čas alertu (unix s) → lokální datum + čas; prázdné, když ts chybí/nevalidní. */
 function alertTimestamp(ts: number): string {
@@ -129,6 +130,8 @@ export function InstrumentHeader({
           {REGIME_LABELS[regimeInfo.state]}
         </span>
       )}
+      {/* Souhrnná tendence ceny (#350) — úplně nahoře, jedním pohledem */}
+      <TendencyChip />
       {/* Chip RiskOn/RiskOff/Neutral (#295, SPEC 9.0) — news sentiment vedle GEX režimu */}
       <StateChip />
       <span className={live ? 'live-indicator live' : 'live-indicator stale'} role="status">

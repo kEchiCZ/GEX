@@ -17,7 +17,12 @@ from dataclasses import dataclass, field
 
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.gex import GexEngine, GexInput
-from gexlens_engine.compute.gexfield import ProfileContract, gamma_field, gamma_profile
+from gexlens_engine.compute.gexfield import (
+    GexProfile,
+    ProfileContract,
+    gamma_field,
+    gamma_profile,
+)
 from gexlens_engine.compute.levels import GexLevels, compute_ladder, compute_levels
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
@@ -104,6 +109,8 @@ class EngineRuntime:
     last_flow: FlowRowLike | None = field(default=None, init=False)
     # Kompletní levels vč. dominance zdí (ADR-0010, #223) — LevelsRow je nenese
     last_gex_levels: GexLevels | None = field(default=None, init=False)
+    # Poslední Dyn GEX profil (ADR-0009) — tendency (#350) z něj čte gammu v místě ceny
+    last_profile: GexProfile | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
@@ -346,6 +353,7 @@ class EngineRuntime:
                 grid_step=strike_step / 2.0,
                 multiplier=self.multiplier,
             )
+            self.last_profile = profile
             profile_row = GexProfileRow(
                 ts_min=ts_min,
                 grid_start=profile.grid_start,

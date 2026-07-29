@@ -45,6 +45,7 @@ from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.fa_validation import FaValidationRepository, collect_fa_validation
 from gexlens_engine.storage.meta import meta_metadata, settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
+from gexlens_engine.tendency import TendencyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,8 @@ class InstrumentPipeline:
     next_runtime: EngineRuntime | None = None
     # Setup detektor (ADR-0004) — None = vypnuto
     setup_engine: SetupEngine | None = None
+    # Indikátor tendence (#350) — None = vypnuto
+    tendency_engine: TendencyEngine | None = None
     # Denní FA validace po OI archivu (#232) — None = vypnuto
     fa_repository: FaValidationRepository | None = None
     # Hlídání tiché ztráty 5s barů (#221); default z konfigurace v __post_init__
@@ -446,6 +449,12 @@ class InstrumentPipeline:
                 await self.setup_engine.on_minute(now, spot, bars, self.runtime)
             except Exception:
                 logger.exception("Setup detektor %s selhal — pokračuji", self.symbol)
+        # Indikátor tendence (#350) — stejný kontrakt: pád nesmí shodit sběr
+        if self.tendency_engine is not None:
+            try:
+                await self.tendency_engine.on_minute(now, spot, self.runtime)
+            except Exception:
+                logger.exception("Indikátor tendence %s selhal — pokračuji", self.symbol)
 
         # Následující expirace v nižší kadenci; její pád nesmí shodit aktivní řetěz
         if (
