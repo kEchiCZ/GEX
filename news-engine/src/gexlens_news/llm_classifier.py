@@ -161,7 +161,7 @@ class GeminiClient:
         self,
         api_key: str,
         *,
-        model: str = "gemini-2.5-flash",
+        model: str = "gemini-flash-latest",
         timeout_s: float = 30.0,
         post: Callable[..., httpx.Response] | None = None,
     ) -> None:
