@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.newstext import normalize_source_uid
 from gexlens_engine.storage.sentiment import news_events
 from gexlens_news.model import NewsEvent
 
@@ -43,7 +44,7 @@ class NewsWriter:
                 "ts_event": event.ts_event,
                 "ts_ingested": event.ts_ingested,
                 "source": event.source,
-                "source_uid": event.source_uid,
+                "source_uid": normalize_source_uid(event.source_uid),
                 "kind": event.kind,
                 "category": event.category,
                 "importance": event.importance,
