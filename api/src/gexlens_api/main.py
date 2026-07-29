@@ -41,6 +41,7 @@ from gexlens_engine.config import Settings, load_settings
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
+from gexlens_engine.storage.tendency_store import TendencyRepository
 
 
 def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
@@ -94,6 +95,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             repo.ensure_schema()
             setups_repository_ref.append(repo)
         return setups_repository_ref[0]
+
+    tendency_repository_ref: list[TendencyRepository] = []
+
+    def tendency_repository() -> TendencyRepository:
+        if not tendency_repository_ref:
+            repo = TendencyRepository(meta_repository.engine())
+            repo.ensure_schema()
+            tendency_repository_ref.append(repo)
+        return tendency_repository_ref[0]
 
     app = FastAPI(title="GEXLens API")
     # Frontend běží na jiném lokálním portu (nginx :8080, Vite dev :5173) —
@@ -228,6 +238,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             rows = []  # DB nedostupná — UI drží tvar
         return {"symbol": symbol, "setups": rows}
+
+    @app.get("/tendency/{symbol}")
+    def tendency_series(symbol: str, date: dt.date | None = None) -> dict[str, object]:
+        """Minutová řada indikátoru tendence (#350) — rozpad hlasů v každém bodě."""
+        day = date or dt.datetime.now(dt.UTC).date()
+        try:
+            rows = tendency_repository().series_for(symbol, day)
+        except Exception:
+            rows = []  # DB nedostupná — UI drží tvar
+        for row in rows:
+            ts_min = row.get("ts_min")
+            if isinstance(ts_min, dt.datetime):
+                row["ts_min"] = ts_min.isoformat()
+        return {"symbol": symbol, "date": day.isoformat(), "tendency": rows}
 
     @app.patch("/setups/{symbol}/{setup_id}/review")
     def setups_review(symbol: str, setup_id: int, payload: dict[str, object]) -> dict[str, str]:

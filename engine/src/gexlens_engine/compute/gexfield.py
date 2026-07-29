@@ -151,3 +151,22 @@ def gamma_field(
         col_step_min=col_step_min,
         values=tuple(columns),
     )
+
+
+def gamma_at_price(profile: GexProfile, price: float) -> float | None:
+    """NetGEX profilu v místě ceny — lineární interpolace na mřížce (#350).
+
+    Mimo mřížku vrací krajní hodnotu (extrapolace by si vymýšlela); prázdný
+    profil → None.
+    """
+    if not profile.values or profile.grid_step <= 0:
+        return None
+    position = (price - profile.grid_start) / profile.grid_step
+    if position <= 0:
+        return profile.values[0]
+    last = len(profile.values) - 1
+    if position >= last:
+        return profile.values[last]
+    low = int(position)
+    fraction = position - low
+    return profile.values[low] * (1 - fraction) + profile.values[low + 1] * fraction

@@ -59,6 +59,8 @@ from gexlens_engine.storage.parquet_store import SnapshotWriter
 from gexlens_engine.storage.retention import RetentionJob
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
+from gexlens_engine.storage.tendency_store import TendencyRepository
+from gexlens_engine.tendency import TendencyEngine
 
 logger = logging.getLogger("gexlens.engine")
 
@@ -139,6 +141,7 @@ async def create_pipeline(
     oi_repository: OIEodRepository,
     symbol: str,
     setups_repository: SetupsRepository | None = None,
+    tendency_repository: TendencyRepository | None = None,
     pacing_guard: PacingGuard | None = None,
     fa_repository: FaValidationRepository | None = None,
     news_ticks: NewsTickCollector | None = None,
@@ -370,6 +373,17 @@ async def create_pipeline(
             if setups_repository is not None
             else None
         ),
+        tendency_engine=(
+            TendencyEngine(
+                symbol=symbol,
+                repository=tendency_repository,
+                oi_repository=oi_repository,
+                publisher=publisher,
+                data_dir=settings.data_dir,
+            )
+            if tendency_repository is not None
+            else None
+        ),
         news_ticks=news_ticks,
         read_news_ticks=(lambda: list(ib.newsTicks())) if news_ticks else None,
     )
@@ -425,6 +439,10 @@ async def main() -> None:
     if settings.setups_enabled:
         setups_repository = SetupsRepository(db)
         await asyncio.to_thread(setups_repository.ensure_schema)
+    tendency_repository: TendencyRepository | None = None
+    if settings.tendency_enabled:
+        tendency_repository = TendencyRepository(db)
+        await asyncio.to_thread(tendency_repository.ensure_schema)
 
     # Broker headlines z ticku 292 (#291): schéma SentimentLensu sdílí obě
     # služby, engine do něj jen zapisuje
@@ -501,6 +519,7 @@ async def main() -> None:
                     oi_repository,
                     symbol,
                     setups_repository=setups_repository,
+                    tendency_repository=tendency_repository,
                     pacing_guard=pacing_guard,
                     fa_repository=fa_repository,
                     news_ticks=news_ticks,
