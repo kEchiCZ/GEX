@@ -16,7 +16,12 @@ import type { HeatmapGrid } from '../heatmap/grid'
 import { buildModeGrid } from '../heatmap/modes'
 import type { RawDay } from '../heatmap/modes'
 import { maxPainSeries } from '../heatmap/maxpain'
-import { LEVEL_COLORS, SECONDARY_WALL_DASH, WALL_DOM_WEAK, lastLevelValue } from '../heatmap/overlays'
+import {
+  LEVEL_COLORS,
+  SECONDARY_WALL_DASH,
+  WALL_DOM_WEAK,
+  lastLevelValue,
+} from '../heatmap/overlays'
 import type { LevelLine, OverlayData, PriceBar } from '../heatmap/overlays'
 import type { ProfileRow } from '../profile/bars'
 
