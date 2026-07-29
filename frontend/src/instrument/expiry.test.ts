@@ -13,7 +13,7 @@ test('frontContractCode: TWS symbol předního kvartálního kontraktu (#189)', 
   // Nekvartální produkt (měsíční cyklus) neodhadujeme
   expect(frontContractCode('CL', new Date('2026-07-22T09:00:00Z'))).toBeNull()
 })
-import { expiryCountdown, expiryKind } from './expiry'
+import { expiryCountdown, expiryIsoDate, expiryKind, sessionDateFor } from './expiry'
 
 test('expiryKind: 3. pátek = měsíční, v kvartálních měsících kvartální', () => {
   expect(expiryKind('20260717')).toBe('měsíční') // 3. pátek července (dnešní opex)
@@ -27,6 +27,21 @@ test('expiryKind: pátek = týdenní, poslední obchodní den = EOM, jinak denn�
   expect(expiryKind('20260720')).toBe('denní') // pondělí
   expect(expiryKind('20260721')).toBe('denní') // úterý
   expect(expiryKind('nesmysl')).toBeNull()
+})
+
+test('expiryIsoDate: kompaktní formát na ISO, nesmysl null', () => {
+  expect(expiryIsoDate('20260728')).toBe('2026-07-28')
+  expect(expiryIsoDate('nesmysl')).toBeNull()
+  expect(expiryIsoDate('2026-07-28')).toBeNull()
+})
+
+test('sessionDateFor: proběhlá expirace = den expirace, aktuální a budoucí = dnešek (#352)', () => {
+  const today = '2026-07-29'
+  expect(sessionDateFor('20260728', today)).toBe('2026-07-28') // proběhlá → její den
+  expect(sessionDateFor('20260729', today)).toBe(today) // dnešní 0DTE
+  expect(sessionDateFor('20260730', today)).toBe(today) // zítřejší chain nad dnešní seancí
+  expect(sessionDateFor(null, today)).toBe(today)
+  expect(sessionDateFor('nesmysl', today)).toBe(today) // nečitelná expirace nesmí shodit fetch
 })
 
 test('expiryCountdown: odpočet k ≈20:00 UTC, po expiraci null', () => {
