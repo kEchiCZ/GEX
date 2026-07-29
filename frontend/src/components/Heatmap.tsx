@@ -22,6 +22,7 @@ import {
   formatLevel,
   fractionalRow,
   isLevelJump,
+  hasLevelProjection,
   lastLevelValue,
   levelLabel,
   pricePolyline,
@@ -452,8 +453,8 @@ export function Heatmap({
     // za ten předchozí. S názvy (#342) jsou širší, takže bez toho splývají.
     const drawnLabels: { y: number; endX: number }[] = []
     for (const line of levelLines) {
+      if (!hasLevelProjection(line.name)) continue
       const name = levelLabel(line.name)
-      if (name === null) continue
       const value = lastLevelValue(line.series)
       const row = value === null ? null : fractionalRow(grid.strikes, value)
       if (value === null || row === null) continue
@@ -470,7 +471,8 @@ export function Heatmap({
       context.stroke()
       context.setLineDash([])
       // Popisek zdi nese i aktuální dominanci (ADR-0010, #223)
-      const label = `${name} ${formatLevel(value)}${line.labelSuffix ?? ''}`
+      const label =
+        (name === null ? '' : `${name} `) + formatLevel(value) + (line.labelSuffix ?? '')
       const width = measuredWidth(context, label)
       context.fillStyle = color
       if (isMaxPain) {

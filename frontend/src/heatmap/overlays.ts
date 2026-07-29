@@ -60,9 +60,21 @@ export const LEVEL_LABELS: Record<string, string> = {
   'walls:put_wall_2': '2. put zeď',
 }
 
-/** Popisek úrovně; `null` = linie se nepopisuje (viz `LEVEL_LABELS`). */
+/** Popisek úrovně; `null` = linie nemá název, kreslí se jen s cenou. */
 export function levelLabel(name: string): string | null {
   return LEVEL_LABELS[name] ?? null
+}
+
+/** Má linie dostat horizontální projekci přes celou šířku s cenovkou? (#344)
+
+Pozor, tohle NENÍ jen kosmetika: setup entry/cíl/stop a GEX žebřík jsou
+**jednobodové série** (hodnotu nese jen poslední minuta), takže projekce je
+jejich jediné vykreslení — bez ní z grafu zmizí úplně.
+
+Vyřazují se proto jen bezejmenné `walls:*`, tedy hřebeny a řady z přepínače
+módu zdí, které se kreslí jako průběh v čase a projekci nechtějí. */
+export function hasLevelProjection(name: string): boolean {
+  return levelLabel(name) !== null || !name.startsWith('walls:')
 }
 
 /** Cenovka úrovně: zaokrouhlení na 2 desetinná místa bez koncových nul. */
