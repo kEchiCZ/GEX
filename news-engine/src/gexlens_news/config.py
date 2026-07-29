@@ -43,6 +43,9 @@ class NewsSettings(BaseSettings):
     # nezměněný feed vrací 304, takže krátká perioda nikoho nezatěžuje.
     forexfactory_interval_s: float = Field(default=3600.0, gt=0)
     finnhub_interval_s: float = Field(default=60.0, gt=0)
+    # Alpaca news WS (#387): bez klíčů se stream nespouští (není to porucha)
+    alpaca_key_id: str = Field(default="")
+    alpaca_secret: str = Field(default="")
     rss_interval_s: float = Field(default=60.0, gt=0)
     # 60 s (#386): FOMC statement je nejcitlivější headline; 1 req/min je zdarma
     fed_rss_interval_s: float = Field(default=60.0, gt=0)

@@ -13,6 +13,8 @@ dependencies = [
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "sqlalchemy>=2.0",
+    # Alpaca news stream (#387) — push WS, ne polling
+    "websockets>=13",
 ]
 
 [build-system]
