@@ -5,9 +5,21 @@ počítají klientsky nad `/stats/waves` (vlny přepočítává noční/průbě�
 tabulka má nízké stovky řádků).
 */
 import { useEffect, useMemo, useState } from 'react'
-import { fetchNewsStats, fetchSignals, fetchTrackRecord, fetchWaves } from '../api/news'
+import {
+  fetchNewsStats,
+  fetchSignals,
+  fetchSourceLatency,
+  fetchTrackRecord,
+  fetchWaves,
+} from '../api/news'
 import { categoryLabel, GATE_MIN_SAMPLES, GATE_WILSON_LB } from '../api/news'
-import type { ModelStatsRow, SignalRow, TrackRecordRow, WaveRow } from '../api/news'
+import type {
+  ModelStatsRow,
+  SignalRow,
+  SourceLatencyRow,
+  TrackRecordRow,
+  WaveRow,
+} from '../api/news'
 import { fetchSettings } from '../api/settings'
 import {
   STRATEGY_COLORS,
@@ -107,6 +119,15 @@ function HistogramChart({
 }
 
 const WINDOWS = [1, 5, 15, 60]
+
+/** Sekundy → lidský zápis: `42 s`, `4 m 14 s`, `1 h 7 m`. */
+export function formatSeconds(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '—'
+  const total = Math.round(value)
+  if (total < 60) return `${total} s`
+  if (total < 3600) return `${Math.floor(total / 60)} m ${total % 60} s`
+  return `${Math.floor(total / 3600)} h ${Math.floor((total % 3600) / 60)} m`
+}
 
 /** Equity a drawdown křivky + souhrn (CAGR, max DD, hit-rate) — SPEC 7.3. */
 function TrackRecordSection({
@@ -228,6 +249,7 @@ export function StatsView() {
   const [retro, setRetro] = useState<RetroPassState | null>(null)
   const [track, setTrack] = useState<TrackRecordRow[]>([])
   const [signals, setSignals] = useState<SignalRow[]>([])
+  const [latency, setLatency] = useState<SourceLatencyRow[]>([])
   const [windowMin, setWindowMin] = useState(5)
 
   useEffect(() => {
@@ -240,7 +262,8 @@ export function StatsView() {
         fetchSettings().catch(() => ({}) as Record<string, unknown>),
         fetchTrackRecord(),
         fetchSignals(1000),
-      ]).then(([waveRows, statsRows, settings, trackRows, signalRows]) => {
+        fetchSourceLatency(),
+      ]).then(([waveRows, statsRows, settings, trackRows, signalRows, latencyPayload]) => {
         if (cancelled) return
         setWaves(waveRows)
         setStats(statsRows)
@@ -248,6 +271,7 @@ export function StatsView() {
         setRetro(isRetroState(retroValue) ? retroValue : null)
         setTrack(trackRows)
         setSignals(signalRows)
+        setLatency(latencyPayload.latency)
       })
     }
     load()
@@ -397,6 +421,45 @@ export function StatsView() {
           Sebe-kontrola systému, ne obchodní signál.
         </p>
         <TrackRecordSection curves={groupCurves(track, symbol)} signals={signals} />
+      </section>
+
+      <section className="stats-section" aria-label="Latence zdrojů">
+        <h2>Latence zdrojů zpráv (7 dní)</h2>
+        <p className="muted">
+          ts_ingested − ts_event: zpoždění ZDROJE, ne naší cesty (event-driven od #335). Scheduled
+          eventy se neměří; latence nad 6 h (staré články z prvního fetche, backfill) jdou zvlášť do
+          „mimo".
+        </p>
+        {latency.length === 0 ? (
+          <p className="muted">Zatím žádná data</p>
+        ) : (
+          <table className="stats-table">
+            <thead>
+              <tr>
+                <th>Zdroj</th>
+                <th>n</th>
+                <th>Medián</th>
+                <th>p90</th>
+                <th>Dávky</th>
+                <th>Mimo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {latency.map((row) => (
+                <tr key={row.source}>
+                  <td>{row.source}</td>
+                  <td>{row.n}</td>
+                  <td>{formatSeconds(row.median_s)}</td>
+                  <td>{formatSeconds(row.p90_s)}</td>
+                  <td>
+                    {row.batch_share === null ? '—' : `${Math.round(row.batch_share * 100)} %`}
+                  </td>
+                  <td>{row.n_over_cutoff}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </section>
 
       <section className="stats-section" aria-label="Retro pass">

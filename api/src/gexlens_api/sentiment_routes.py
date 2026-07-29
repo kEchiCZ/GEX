@@ -65,6 +65,18 @@ def _rows(engine: Engine, stmt: Any) -> list[dict[str, Any]]:
     return out
 
 
+def _utc(value: dt.datetime) -> dt.datetime:
+    return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
+
+
+def _percentile(ordered: list[float], fraction: float) -> float | None:
+    """Nearest-rank percentil seřazené řady; None pro prázdnou."""
+    if not ordered:
+        return None
+    rank = max(0, min(len(ordered) - 1, round(fraction * (len(ordered) - 1))))
+    return ordered[rank]
+
+
 def _empty_table(engine: Engine, table: Table, **filters: Any) -> list[dict[str, Any]]:
     """Dotaz nad tabulkou pozdějšího milestonu — dnes vrací prázdno, ale tvar drží."""
     stmt = select(table)
@@ -125,6 +137,64 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
             news_model_stats.c.category, news_model_stats.c.window_min
         )
         return {"stats": _rows(engine_factory(), stmt)}
+
+    @router.get("/news/latency")
+    def news_latency(days: int = Query(7, ge=1, le=14)) -> dict[str, object]:
+        """Latence zdrojů: `ts_ingested − ts_event` per zdroj (#358).
+
+        Měří zpoždění ZDROJE, ne naše (cesta je od #335 event-driven).
+        Scheduled eventy se neměří — `ts_event` je plánovaný slot, ne čas
+        publikace. Latence nad strop se počítají zvlášť (`n_over_cutoff`):
+        typicky staré články z prvního fetche feedu nebo backfill, které by
+        medián zdroje nesmyslně nafoukly — ale nesmí zmizet beze stopy.
+        """
+        cutoff_s = 6 * 3600
+        since = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
+        stmt = select(
+            news_events.c.source,
+            news_events.c.ts_event,
+            news_events.c.ts_ingested,
+        ).where(
+            news_events.c.ts_ingested >= since,
+            news_events.c.kind != "scheduled",
+        )
+        with engine_factory().connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+
+        by_source: dict[str, dict[str, Any]] = {}
+        ingests: dict[str, list[dt.datetime]] = {}
+        for row in rows:
+            entry = by_source.setdefault(
+                row.source,
+                {"source": row.source, "n": 0, "n_over_cutoff": 0, "latencies": []},
+            )
+            latency = (_utc(row.ts_ingested) - _utc(row.ts_event)).total_seconds()
+            if latency < 0:
+                continue  # budoucí ts_event u ne-scheduled = vadné razítko zdroje
+            if latency > cutoff_s:
+                entry["n_over_cutoff"] += 1
+                continue
+            entry["n"] += 1
+            entry["latencies"].append(latency)
+            ingests.setdefault(row.source, []).append(_utc(row.ts_ingested))
+
+        out = []
+        for entry in by_source.values():
+            latencies = sorted(entry.pop("latencies"))
+            entry["median_s"] = _percentile(latencies, 0.5)
+            entry["p90_s"] = _percentile(latencies, 0.9)
+            # Dávkované doručení (#358): podíl eventů do 2 s od jiného ingestu
+            # téhož zdroje — u dávek je „latence" zčásti artefakt doručování
+            arrivals = sorted(ingests.get(str(entry["source"]), []))
+            bursts = sum(
+                1
+                for index in range(1, len(arrivals))
+                if (arrivals[index] - arrivals[index - 1]).total_seconds() <= 2
+            )
+            entry["batch_share"] = bursts / len(arrivals) if arrivals else None
+            out.append(entry)
+        out.sort(key=lambda item: str(item["source"]))
+        return {"days": days, "cutoff_s": cutoff_s, "latency": out}
 
     @router.get("/news/{event_id}")
     def news_detail(event_id: int) -> dict[str, object]:

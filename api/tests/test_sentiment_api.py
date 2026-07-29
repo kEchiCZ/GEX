@@ -223,3 +223,17 @@ def test_review_correction_creates_manual_version(client: TestClient) -> None:
     # Denormalizace na eventu se propsala
     assert detail["event"]["sentiment_source"] == "manual"
     assert detail["event"]["category"] == "GEOPOLITICS"
+
+
+def test_news_latency_measures_source_delay(client: TestClient) -> None:
+    """#358: medián/p90 per zdroj; scheduled a latence nad strop mimo percentily."""
+    payload = client.get("/news/latency").json()
+    assert payload["days"] == 7
+    by_source = {row["source"]: row for row in payload["latency"]}
+    # Scheduled event (forexfactory) se neměří vůbec
+    assert "forexfactory" not in by_source
+    rss = by_source["rss_news"]
+    assert rss["n"] == 1
+    assert rss["median_s"] == pytest.approx(3600)
+    assert rss["p90_s"] == pytest.approx(3600)
+    assert rss["n_over_cutoff"] == 0
