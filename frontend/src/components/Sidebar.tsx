@@ -4,6 +4,7 @@ Watchlist je editovatelný (CRUD /watchlist, issue #21) a kliknutí na symbol
 přepne aktivní ticker celé aplikace (graf, expirace, dashboard).
 */
 import { useEffect, useState } from 'react'
+import { Legend } from './Legend'
 import { API_BASE, APP_VERSION } from '../config'
 import { frontContractCode } from '../instrument/expiry'
 import { useAppState } from '../state/AppState'
@@ -26,6 +27,8 @@ interface WatchlistItem {
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
+  // Legenda grafu (#346) — modál nad aplikací, ať jde porovnávat s grafem
+  const [legendOpen, setLegendOpen] = useState(false)
   const { view, setView, theme, setTheme, symbol: activeSymbol, setSymbol } = useAppState()
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
   const [newSymbol, setNewSymbol] = useState('')
@@ -183,12 +186,16 @@ export function Sidebar() {
               </button>
             </form>
           </section>
+          <button className="nav-item legend-button" onClick={() => setLegendOpen(true)}>
+            Legenda
+          </button>
           <footer className="sidebar-footer">
             <button className="nav-item">Sign out</button>
             <span className="muted">v{APP_VERSION}</span>
           </footer>
         </>
       )}
+      {legendOpen && <Legend onClose={() => setLegendOpen(false)} />}
     </aside>
   )
 }

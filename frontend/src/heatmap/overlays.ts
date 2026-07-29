@@ -38,6 +38,30 @@ export interface LevelLine {
     Zrcadlí engine default `GEXLENS_SETUP_MIN_WALL_DOMINANCE`. */
 export const WALL_DOM_WEAK = 0.15
 
+/** Barvy úrovní — jediný zdroj pro graf i legendu (#346).
+
+Dokud byly literály v `loader.ts`, ukázka v legendě se s grafem mohla rozejít
+a nikdo by si toho nevšiml. */
+export const LEVEL_COLORS = {
+  flip: '#e8c14b',
+  centroid: '#9d7be8',
+  max_pain: '#d24bd2',
+  call_wall: '#3ecf8e',
+  put_wall: '#f0616d',
+  call_wall_2: 'rgba(62,207,142,0.55)',
+  put_wall_2: 'rgba(240,97,109,0.55)',
+} as const
+
+/** Barvy linií navrženého setupu (ADR-0004). */
+export const SETUP_COLORS = {
+  entry: 'rgba(77,163,255,0.9)',
+  target: 'rgba(63,191,111,0.9)',
+  stop: 'rgba(224,85,99,0.9)',
+} as const
+
+/** Čárkování sekundární zdi — odlišuje ji od primární. */
+export const SECONDARY_WALL_DASH = [2, 3]
+
 /** České názvy úrovní pro popisky v grafu (#342).
 
 Bez názvu byla u čáry jen holá cena a z grafu nešlo poznat, co která znamená —

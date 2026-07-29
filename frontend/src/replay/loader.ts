@@ -16,7 +16,12 @@ import type { HeatmapGrid } from '../heatmap/grid'
 import { buildModeGrid } from '../heatmap/modes'
 import type { RawDay } from '../heatmap/modes'
 import { maxPainSeries } from '../heatmap/maxpain'
-import { WALL_DOM_WEAK, lastLevelValue } from '../heatmap/overlays'
+import {
+  LEVEL_COLORS,
+  SECONDARY_WALL_DASH,
+  WALL_DOM_WEAK,
+  lastLevelValue,
+} from '../heatmap/overlays'
 import type { LevelLine, OverlayData, PriceBar } from '../heatmap/overlays'
 import type { ProfileRow } from '../profile/bars'
 
@@ -676,9 +681,9 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
   const grid = buildModeGrid(raw, 'oi', 'linear')
 
   const levels: LevelLine[] = [
-    { name: 'flip', color: '#e8c14b', series: levelSeries('flip') },
-    { name: 'centroid', color: '#9d7be8', series: levelSeries('centroid') },
-    { name: 'max_pain', color: '#d24bd2', series: maxPainSeries(raw) },
+    { name: 'flip', color: LEVEL_COLORS.flip, series: levelSeries('flip') },
+    { name: 'centroid', color: LEVEL_COLORS.centroid, series: levelSeries('centroid') },
+    { name: 'max_pain', color: LEVEL_COLORS.max_pain, series: maxPainSeries(raw) },
     // Flow-adjusted levels (ADR-0011, #222): ODHAD z ranního OI + klasifikovaného
     // toku — čárkovaně (vizuální signál „model, ne měření"), přepínač „FA levels"
     { name: 'fa_flip', color: 'rgba(232,193,75,0.75)', dash: [8, 4], series: levelSeries('fa_flip') }, // prettier-ignore
@@ -694,12 +699,12 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     return dom === null ? undefined : ` · ${Math.round(dom * 100)} %`
   }
   const walls: LevelLine[] = [
-    { name: 'call_wall', color: '#3ecf8e', series: levelSeries('call_wall'), weak: weakFlags('call_wall_dom'), labelSuffix: domSuffix('call_wall_dom') }, // prettier-ignore
-    { name: 'put_wall', color: '#f0616d', series: levelSeries('put_wall'), weak: weakFlags('put_wall_dom'), labelSuffix: domSuffix('put_wall_dom') }, // prettier-ignore
+    { name: 'call_wall', color: LEVEL_COLORS.call_wall, series: levelSeries('call_wall'), weak: weakFlags('call_wall_dom'), labelSuffix: domSuffix('call_wall_dom') }, // prettier-ignore
+    { name: 'put_wall', color: LEVEL_COLORS.put_wall, series: levelSeries('put_wall'), weak: weakFlags('put_wall_dom'), labelSuffix: domSuffix('put_wall_dom') }, // prettier-ignore
     // Sekundární zdi (ADR-0008): App je podle přepínače spáruje s primární
     // po úrovních, nebo zahodí; kreslí se tečkovaně a bez cenovky
-    { name: 'call_wall_2', color: 'rgba(62,207,142,0.55)', dash: [2, 3], series: levelSeries('call_wall_2'), weak: weakFlags('call_wall_2_dom') }, // prettier-ignore
-    { name: 'put_wall_2', color: 'rgba(240,97,109,0.55)', dash: [2, 3], series: levelSeries('put_wall_2'), weak: weakFlags('put_wall_2_dom') }, // prettier-ignore
+    { name: 'call_wall_2', color: LEVEL_COLORS.call_wall_2, dash: SECONDARY_WALL_DASH, series: levelSeries('call_wall_2'), weak: weakFlags('call_wall_2_dom') }, // prettier-ignore
+    { name: 'put_wall_2', color: LEVEL_COLORS.put_wall_2, dash: SECONDARY_WALL_DASH, series: levelSeries('put_wall_2'), weak: weakFlags('put_wall_2_dom') }, // prettier-ignore
   ]
   const overlays: OverlayData = {
     price,

@@ -26,7 +26,7 @@ import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
 import type { HeatmapScale, MeasuredHeatmapMode } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
 import { expirySettleUtc } from './instrument/expiry'
-import { resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
+import { SETUP_COLORS, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { DEFAULT_VIEW } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
@@ -409,9 +409,9 @@ function MainContent() {
       return { name, color, series, dash: [6, 5] }
     }
     return activeSetups.flatMap((setup) => [
-      line(`setup-entry-${setup.id}`, 'rgba(77,163,255,0.9)', setup.entry),
-      line(`setup-target-${setup.id}`, 'rgba(63,191,111,0.9)', setup.target),
-      line(`setup-stop-${setup.id}`, 'rgba(224,85,99,0.9)', setup.stop),
+      line(`setup-entry-${setup.id}`, SETUP_COLORS.entry, setup.entry),
+      line(`setup-target-${setup.id}`, SETUP_COLORS.target, setup.target),
+      line(`setup-stop-${setup.id}`, SETUP_COLORS.stop, setup.stop),
     ])
   }, [activeSetups, grid.minutes])
 
