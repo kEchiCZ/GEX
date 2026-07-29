@@ -329,6 +329,29 @@ export async function fetchTrackRecord(): Promise<TrackRecordRow[]> {
   return data.track_record ?? []
 }
 
+/** Latence zdroje zpráv (#358): ts_ingested − ts_event, percentily + dávky. */
+export interface SourceLatencyRow {
+  source: string
+  n: number
+  /** Eventy nad stropem (staré články z prvního fetche, backfill) — mimo percentily. */
+  n_over_cutoff: number
+  median_s: number | null
+  p90_s: number | null
+  /** Podíl eventů doručených do 2 s od jiného — dávkované doručení. */
+  batch_share: number | null
+}
+
+export async function fetchSourceLatency(
+  days = 7,
+): Promise<{ days: number; cutoff_s: number; latency: SourceLatencyRow[] }> {
+  const data = await getJson<{ days: number; cutoff_s: number; latency: SourceLatencyRow[] }>(
+    `/news/latency?days=${days}`,
+    { days, cutoff_s: 0, latency: [] },
+  )
+  // Generický mock/degradované API může vrátit objekt bez pole
+  return { days: data.days ?? days, cutoff_s: data.cutoff_s ?? 0, latency: data.latency ?? [] }
+}
+
 /** Položka review fronty (#293, SPEC 5.7). */
 export interface ReviewRow {
   event_id: number
