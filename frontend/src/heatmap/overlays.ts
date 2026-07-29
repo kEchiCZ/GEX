@@ -38,6 +38,33 @@ export interface LevelLine {
     Zrcadlí engine default `GEXLENS_SETUP_MIN_WALL_DOMINANCE`. */
 export const WALL_DOM_WEAK = 0.15
 
+/** České názvy úrovní pro popisky v grafu (#342).
+
+Bez názvu byla u čáry jen holá cena a z grafu nešlo poznat, co která znamená —
+pojmenovaný byl jen Max Pain. Klíčem je `LevelLine.name`.
+
+Chybí tu záměrně dvě skupiny:
+
+* `walls:ridge-*` — hřebeny, jejich počet je proměnlivý a N popisků by graf
+  zavalilo,
+* `walls:call` / `walls:put` — počítané řady z přepínače módu zdí, ne
+  pojmenované úrovně; jejich význam určuje zvolený mód, ne linie sama. */
+export const LEVEL_LABELS: Record<string, string> = {
+  flip: 'Gamma Flip',
+  centroid: 'Těžiště',
+  call_wall: 'Call zeď',
+  put_wall: 'Put zeď',
+  max_pain: 'Max Pain',
+  // Sekundární zdi (ADR-0008) nesou po spárování prefix `walls:`
+  'walls:call_wall_2': '2. call zeď',
+  'walls:put_wall_2': '2. put zeď',
+}
+
+/** Popisek úrovně; `null` = linie se nepopisuje (viz `LEVEL_LABELS`). */
+export function levelLabel(name: string): string | null {
+  return LEVEL_LABELS[name] ?? null
+}
+
 /** Cenovka úrovně: zaokrouhlení na 2 desetinná místa bez koncových nul. */
 export function formatLevel(value: number): string {
   return String(Math.round(value * 100) / 100)
