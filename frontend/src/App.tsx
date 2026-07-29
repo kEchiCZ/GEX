@@ -23,6 +23,7 @@ import { SettingsView } from './components/SettingsView'
 import { SetupCard } from './components/SetupCard'
 import { ChainView } from './components/ChainView'
 import { SetupsView } from './components/SetupsView'
+import { StatsView } from './components/StatsView'
 import { StrikeProfile } from './components/StrikeProfile'
 import { useSetups } from './hooks/useSetups'
 import { buildGexGrid, projectGexField } from './heatmap/gexmode'
@@ -608,6 +609,7 @@ function MainContent() {
   if (view === 'chain') return <ChainView />
   if (view === 'news') return <NewsView />
   if (view === 'setups') return <SetupsView />
+  if (view === 'stats') return <StatsView />
   if (view === 'console') return <Console />
   if (view === 'settings') return <SettingsView />
 

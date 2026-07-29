@@ -297,6 +297,22 @@ export function signalGateInfo(
   return { open, progress }
 }
 
+/** Vlna sentimentu (#292, SPEC 5.6) — řádek `sentiment_waves`. */
+export interface WaveRow {
+  id: number
+  symbol: string
+  direction: 'RiskOn' | 'RiskOff'
+  start_date: string
+  end_date: string | null
+  depth: number
+  length_days: number
+}
+
+export async function fetchWaves(): Promise<WaveRow[]> {
+  const data = await getJson<{ waves: WaveRow[] }>('/stats/waves', { waves: [] })
+  return data.waves ?? []
+}
+
 /** Položka review fronty (#293, SPEC 5.7). */
 export interface ReviewRow {
   event_id: number
