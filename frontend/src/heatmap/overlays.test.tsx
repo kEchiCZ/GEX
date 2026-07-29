@@ -6,7 +6,7 @@ import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
 import { DEFAULT_VIEW } from './view'
 import type { ViewTransform } from './view'
 import { demoGrid } from './demo'
-import { breaksOnJump, formatLevel, fractionalRow, isLevelJump, levelLabel, pairWallSeries, pricePolyline, resolveSecondaryWalls, tickIndices, visibleOverlays } from './overlays' // prettier-ignore
+import { breaksOnJump, formatLevel, fractionalRow, isLevelJump, hasLevelProjection, levelLabel, pairWallSeries, pricePolyline, resolveSecondaryWalls, tickIndices, visibleOverlays } from './overlays' // prettier-ignore
 import type { LevelLine, OverlayData } from './overlays'
 
 // ── Čisté helpery ──────────────────────────────────────────────────
@@ -304,5 +304,27 @@ describe('popisky úrovní (#342)', () => {
     expect(levelLabel('walls:call')).toBeNull()
     expect(levelLabel('walls:put')).toBeNull()
     expect(levelLabel('walls:flip')).toBeNull()
+  })
+})
+
+describe('horizontální projekce úrovní (#344)', () => {
+  test('setup linie a GEX žebřík projekci mají — je to jejich jediné vykreslení', () => {
+    // Jednobodová série: hodnotu nese jen poslední minuta, průběh v čase není
+    expect(hasLevelProjection('setup-entry-12')).toBe(true)
+    expect(hasLevelProjection('setup-target-12')).toBe(true)
+    expect(hasLevelProjection('setup-stop-12')).toBe(true)
+    expect(hasLevelProjection('ladder-call-3')).toBe(true)
+  })
+
+  test('pojmenované úrovně projekci mají', () => {
+    expect(hasLevelProjection('flip')).toBe(true)
+    expect(hasLevelProjection('max_pain')).toBe(true)
+    expect(hasLevelProjection('walls:call_wall_2')).toBe(true)
+  })
+
+  test('bezejmenné walls: řady projekci nemají — kreslí se jako průběh v čase', () => {
+    expect(hasLevelProjection('walls:ridge-0')).toBe(false)
+    expect(hasLevelProjection('walls:call')).toBe(false)
+    expect(hasLevelProjection('walls:flip')).toBe(false)
   })
 })
