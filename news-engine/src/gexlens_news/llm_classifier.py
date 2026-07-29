@@ -162,7 +162,9 @@ class GeminiClient:
         api_key: str,
         *,
         model: str = "gemini-flash-latest",
-        timeout_s: float = 30.0,
+        # Velká dávka (200 titulků) trvá i desítky sekund — 30 s padalo
+        # na ReadTimeout (změřeno 29. 7. na gemini-3.6-flash)
+        timeout_s: float = 120.0,
         post: Callable[..., httpx.Response] | None = None,
     ) -> None:
         self._api_key = api_key
@@ -177,8 +179,16 @@ class GeminiClient:
         )
         body = {
             "contents": [{"parts": [{"text": build_prompt(items)}]}],
-            # Deterministický výstup + vynucený JSON — snižuje počet zahozených dávek
-            "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
+            "generationConfig": {
+                # Deterministický výstup + vynucený JSON — méně zahozených dávek
+                "temperature": 0,
+                "responseMimeType": "application/json",
+                # Klasifikace thinking nepotřebuje: default gemini-3.6-flash
+                # přemýšlel stovky tokenů per dávka → ReadTimeouty a spálený
+                # tokenový rozpočet. `thinkingLevel` je Gemini 3+ pole;
+                # starší 2.5 modely (thinkingBudget) by ho odmítly 400.
+                "thinkingConfig": {"thinkingLevel": "minimal"},
+            },
         }
         response = self._post(
             url,
