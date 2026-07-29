@@ -68,9 +68,11 @@ class RetroPass:
         reaction_job: object,
         sentindex_job: object,
         *,
+        llm_job: object | None = None,
         run_at: dt.time = dt.time(5, 30),
     ) -> None:
         self._classification = classification_job
+        self._llm = llm_job
         self._reactions = reaction_job
         self._sentindex = sentindex_job
         self._run_at = run_at
@@ -91,6 +93,10 @@ class RetroPass:
         ostatní — retro pass má dohnat, co jde, ne spadnout na první chybě.
         """
         classified = self._safe("klasifikace", lambda: self._classification.run(now))  # type: ignore[attr-defined]
+        # LLM dožene frontu z vyčerpaného denního limitu (#281) — po půlnoci
+        # UTC je rozpočet čerstvý, takže retro pass doklasifikuje i zbytek
+        if self._llm is not None:
+            classified += self._safe("LLM klasifikace", lambda: self._llm.run(now))  # type: ignore[attr-defined]
         reactions = self._safe("reakce", lambda: self._reactions.run(now))  # type: ignore[attr-defined]
         points = self._safe("SentIndex", lambda: self._sentindex.run(now)[0])  # type: ignore[attr-defined]
 

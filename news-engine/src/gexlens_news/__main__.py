@@ -32,6 +32,7 @@ from gexlens_news.config import (
     load_news_settings,
 )
 from gexlens_news.http import Fetcher, make_fetcher
+from gexlens_news.llm_classifier import GeminiClient, LlmClassificationJob
 from gexlens_news.model_stats_job import ModelStatsJob
 from gexlens_news.pipeline import DedupingWriter
 from gexlens_news.prediction_job import PredictionJob
@@ -95,6 +96,18 @@ async def run(settings: NewsSettings) -> None:
             loop.add_signal_handler(sig, stop.set)
 
     classification = RuleClassificationJob(engine)
+    # Gemini pass (#281): bez klíče se nespouští — pravidlová klasifikace
+    # je plnohodnotný fallback, ne porucha
+    llm: LlmClassificationJob | None = None
+    if settings.gemini_api_key:
+        llm = LlmClassificationJob(
+            engine,
+            GeminiClient(settings.gemini_api_key, model=settings.gemini_model),
+            daily_limit=settings.llm_daily_limit,
+            batch_limit=settings.llm_batch_limit,
+        )
+    else:
+        logger.info("Gemini bez klíče — LLM klasifikace se nespouští (není to porucha)")
     reactions = ReactionJob(engine, BarsRepository(settings.data_dir))
     model_stats = ModelStatsJob(engine)
     sent_index = SentIndexJob(engine, settings.data_dir)
@@ -104,6 +117,7 @@ async def run(settings: NewsSettings) -> None:
         classification,
         reactions,
         sent_index,
+        llm_job=llm,
         run_at=dt.time(settings.retro_pass_hour, settings.retro_pass_minute),
     )
     last_stats_day: dt.date | None = None
@@ -177,13 +191,32 @@ async def run(settings: NewsSettings) -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=settings.reaction_interval_s)
 
+    async def llm_loop() -> None:
+        """Gemini dávka à `llm_interval_s` — jen při neprázdné frontě (#281).
+
+        Vlastní smyčka, ne součást reaction_loop: SPEC kap. 4 chce 60s kadenci,
+        reakce jedou à 300 s. Prázdná fronta nestojí žádný request.
+        """
+        if llm is None:
+            return
+        while not stop.is_set():
+            try:
+                await asyncio.to_thread(llm.run, dt.datetime.now(dt.UTC))
+                # Push nové verze do UI (#335) — doplní kategorii/směr k řádku
+                if publisher is not None and llm.last_batch:
+                    await publisher.publish_news(llm.last_batch)
+            except Exception:
+                logger.exception("LLM klasifikace selhala — zkusí se příští cyklus")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=settings.llm_interval_s)
+
     enabled = [name for name, on in settings.enabled_sources.items() if on]
     logger.info(
         "news-engine běží: %d collectorů, zdroje s konfigurací: %s",
         len(collectors),
         ", ".join(sorted(enabled)) or "žádné",
     )
-    await asyncio.gather(runner.run(stop=stop), reaction_loop())
+    await asyncio.gather(runner.run(stop=stop), reaction_loop(), llm_loop())
     logger.info("news-engine ukončen")
 
 
