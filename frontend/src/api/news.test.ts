@@ -1,6 +1,12 @@
 /** Testy klienta SentimentLensu (#288): párování řady a formátování. */
 import { describe, expect, test } from 'vitest'
-import { alignSeriesToLabels, categoryGlyph, categoryLabel, countdownLabel } from './news'
+import {
+  alignSeriesToLabels,
+  categoryGlyph,
+  categoryLabel,
+  countdownLabel,
+  latestCrowd,
+} from './news'
 
 function point(hour: number, minute: number, value: number) {
   const at = new Date(2026, 6, 28, hour, minute)
@@ -62,5 +68,30 @@ describe('popisky', () => {
     expect(countdownLabel(at(13, 12), now)).toBe('za 1 h 12 m')
     expect(countdownLabel(at(14, 0), now)).toBe('za 2 h')
     expect(countdownLabel(at(11, 0), now)).toBe('právě teď')
+  })
+})
+
+describe('latestCrowd', () => {
+  const row = (ts: string, metric: string, value: number, symbol = '') => ({
+    ts,
+    source: metric === 'pcr_volume' ? 'gexlens' : 'cnn_fg',
+    metric,
+    symbol,
+    value,
+    raw: null,
+  })
+
+  test('vybere nejnovější bod každé řady (#290)', () => {
+    const latest = latestCrowd([
+      row('2026-07-28T00:00:00Z', 'score', 40),
+      row('2026-07-29T00:00:00Z', 'score', 55),
+      row('2026-07-27T00:00:00Z', 'score', 70),
+      row('2026-07-29T14:00:00Z', 'pcr_volume', 0.8, 'ES'),
+      row('2026-07-29T14:05:00Z', 'pcr_volume', 0.9, 'ES'),
+    ])
+    expect(latest.get('cnn_fg|score|')?.value).toBe(55)
+    expect(latest.get('gexlens|pcr_volume|ES')?.value).toBe(0.9)
+    // Symboly tvoří samostatné řady
+    expect(latest.get('gexlens|pcr_volume|NQ')).toBeUndefined()
   })
 })

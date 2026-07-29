@@ -31,6 +31,13 @@ from gexlens_news.config import (
     NewsSettings,
     load_news_settings,
 )
+from gexlens_news.crowd import (
+    CnnFearGreedCollector,
+    CrowdRunner,
+    CrowdWriter,
+    PcrCollector,
+    RedditCollector,
+)
 from gexlens_news.ffhistory import FfActualRefreshJob, run_backfill
 from gexlens_news.http import Fetcher, make_fetcher
 from gexlens_news.llm_classifier import GeminiClient, LlmClassificationJob
@@ -117,6 +124,26 @@ async def run(settings: NewsSettings) -> None:
         else None
     )
     model_stats = ModelStatsJob(engine)
+    # Tier C crowd zdroje (#290): CNN F&G + PCR bez klíčů; Reddit jen s creds
+    crowd_collectors: list[object] = [
+        CnnFearGreedCollector(interval_s=settings.cnn_fg_interval_s),
+        PcrCollector(
+            settings.data_dir,
+            [s.strip().upper() for s in settings.pcr_symbols.split(",") if s.strip()],
+            interval_s=settings.pcr_interval_s,
+        ),
+    ]
+    if settings.reddit_client_id and settings.reddit_client_secret:
+        crowd_collectors.append(
+            RedditCollector(
+                settings.reddit_client_id,
+                settings.reddit_client_secret,
+                interval_s=settings.reddit_interval_s,
+            )
+        )
+    else:
+        logger.info("Reddit bez credentials — crowd zdroj se nespouští (není to porucha)")
+    crowd = CrowdRunner(crowd_collectors, CrowdWriter(engine))
     sent_index = SentIndexJob(engine, settings.data_dir)
     predictions = PredictionJob(engine)
     publisher = NewsPublisher(settings.api_base) if settings.api_base else None
@@ -225,13 +252,23 @@ async def run(settings: NewsSettings) -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=settings.llm_interval_s)
 
+    async def crowd_loop() -> None:
+        """Crowd zdroje (#290) — intervaly per zdroj drží CrowdRunner."""
+        while not stop.is_set():
+            try:
+                await asyncio.to_thread(crowd.run_due, dt.datetime.now(dt.UTC))
+            except Exception:
+                logger.exception("Crowd cyklus selhal — zkusí se za minutu")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=60.0)
+
     enabled = [name for name, on in settings.enabled_sources.items() if on]
     logger.info(
         "news-engine běží: %d collectorů, zdroje s konfigurací: %s",
         len(collectors),
         ", ".join(sorted(enabled)) or "žádné",
     )
-    await asyncio.gather(runner.run(stop=stop), reaction_loop(), llm_loop())
+    await asyncio.gather(runner.run(stop=stop), reaction_loop(), llm_loop(), crowd_loop())
     logger.info("news-engine ukončen")
 
 

@@ -150,3 +150,29 @@ export async function fetchTopics(activeOnly = false): Promise<TopicRow[]> {
   )
   return data.topics
 }
+
+/** Bod crowd řady (#290, SPEC 2.6) — F&G skóre, PCR, Reddit průměry. */
+export interface CrowdRow {
+  ts: string
+  source: string
+  metric: string
+  symbol: string
+  value: number | string
+  raw: Record<string, unknown> | null
+}
+
+export async function fetchCrowd(): Promise<CrowdRow[]> {
+  const data = await getJson<{ crowd: CrowdRow[] }>('/sentiment/crowd', { crowd: [] })
+  return data.crowd
+}
+
+/** Poslední bod každé řady (source|metric|symbol) — pro souhrnný blok v News. */
+export function latestCrowd(rows: CrowdRow[]): Map<string, CrowdRow> {
+  const latest = new Map<string, CrowdRow>()
+  for (const row of rows) {
+    const key = `${row.source}|${row.metric}|${row.symbol}`
+    const existing = latest.get(key)
+    if (!existing || existing.ts < row.ts) latest.set(key, row)
+  }
+  return latest
+}

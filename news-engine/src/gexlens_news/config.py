@@ -66,6 +66,9 @@ class NewsSettings(BaseSettings):
     # drží denní rubriky se stejným titulkem (Δt ≈ 24 h) oddělené.
     dedup_window_minutes: int = Field(default=360, ge=1, le=1080)
     cnn_fg_interval_s: float = Field(default=3600.0, gt=0)
+    # PCR řada z vlastních snapshot dat (#290, SPEC 5.8) — odvozená, bez klíče
+    pcr_interval_s: float = Field(default=300.0, gt=0)
+    pcr_symbols: str = "ES,NQ"
 
     # Klíče a přihlašovací údaje — prázdné = zdroj vypnutý (S10)
     finnhub_api_key: str = ""
