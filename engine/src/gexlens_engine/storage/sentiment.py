@@ -66,6 +66,21 @@ REACTION_WINDOWS = (1, 5, 15, 60)
 
 # ── Jádro: události a jejich klasifikace ───────────────────────────
 
+# Kategorie ze SPEC 2.1 — jediný povolený slovník; sdílené news-enginem
+# (klasifikace) i API (validace ruční korekce, #293)
+NEWS_CATEGORIES = (
+    "FED",
+    "MACRO_INFLATION",
+    "MACRO_LABOR",
+    "MACRO_GROWTH",
+    "GEOPOLITICS",
+    "ENERGY",
+    "TECH",
+    "EARNINGS",
+    "CRYPTO",
+    "OTHER",
+)
+
 news_events = Table(
     "news_events",
     sentiment_metadata,

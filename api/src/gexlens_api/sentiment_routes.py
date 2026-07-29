@@ -17,11 +17,14 @@ from typing import Any
 
 import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import Table, desc, func, select
+from pydantic import BaseModel, Field
+from sqlalchemy import Table, desc, func, insert, select
+from sqlalchemy import update as sql_update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.sentwaves import DailyClose, assess_state
 from gexlens_engine.storage.sentiment import (
+    NEWS_CATEGORIES,
     crowd_sentiment,
     news_classifications,
     news_events,
@@ -338,9 +341,110 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         return {"signals": rows}
 
     @router.get("/review")
-    def review_route() -> dict[str, object]:
-        """Review fronta — plní se v N7 (#293)."""
-        return {"review": _empty_table(engine_factory(), review_queue)}
+    def review_route(resolved: bool = False) -> dict[str, object]:
+        """Review fronta s detaily eventů (#293, SPEC 5.7); default nevyřízené."""
+        engine = engine_factory()
+        stmt = (
+            select(
+                review_queue.c.event_id,
+                review_queue.c.reason,
+                review_queue.c.created_at,
+                review_queue.c.resolved_at,
+                news_events.c.title,
+                news_events.c.ts_event,
+                news_events.c.category,
+                news_events.c.importance,
+                news_events.c.sentiment_dir,
+                news_events.c.sentiment_score,
+                news_events.c.sentiment_source,
+            )
+            .join(news_events, news_events.c.id == review_queue.c.event_id)
+            .order_by(desc(review_queue.c.created_at))
+        )
+        if not resolved:
+            stmt = stmt.where(review_queue.c.resolved_at.is_(None))
+        return {"review": _rows(engine, stmt)}
+
+    class ReviewCorrection(BaseModel):
+        """Ruční korekce směru/kategorie — aspoň jedno pole (#293)."""
+
+        direction: int | None = Field(None, ge=-1, le=1)
+        category: str | None = None
+
+    @router.post("/review/{event_id}")
+    def review_correct(event_id: int, correction: ReviewCorrection) -> dict[str, object]:
+        """Korekce → NOVÁ verze klasifikace (`source='manual'`, S11).
+
+        Minulé predikce a signály zůstávají nedotčené — nesou verzi, ze
+        které vznikly. Denormalizace v `news_events` se přepíše na manual,
+        takže korekce se propíše do budoucích výpočtů i trénovacích statistik.
+        """
+        if correction.direction is None and correction.category is None:
+            raise HTTPException(422, "Korekce musí měnit směr nebo kategorii")
+        if correction.category is not None and correction.category not in NEWS_CATEGORIES:
+            raise HTTPException(422, f"Neznámá kategorie {correction.category!r}")
+        engine = engine_factory()
+        now = dt.datetime.now(dt.UTC)
+        with engine.begin() as conn:
+            event = conn.execute(select(news_events).where(news_events.c.id == event_id)).first()
+            if event is None:
+                raise HTTPException(404, f"Event {event_id} neexistuje")
+            latest = conn.execute(
+                select(news_classifications)
+                .where(news_classifications.c.event_id == event_id)
+                .order_by(desc(news_classifications.c.version))
+                .limit(1)
+            ).first()
+            direction = (
+                correction.direction
+                if correction.direction is not None
+                else int(latest.direction if latest is not None else event.sentiment_dir or 0)
+            )
+            category = (
+                correction.category
+                or (latest.category if latest is not None else event.category)
+                or "OTHER"
+            )
+            # Síla se korekcí nemění — oprava říká „jiný směr/kategorie",
+            # ne „jiná intenzita"; bez předchozí verze neutrální 0.5
+            strength = float(latest.strength) if latest is not None else 0.5
+            importance = int(latest.importance if latest is not None else event.importance or 1)
+            version = int(latest.version) + 1 if latest is not None else 1
+            conn.execute(
+                insert(news_classifications).values(
+                    event_id=event_id,
+                    version=version,
+                    source="manual",
+                    category=category,
+                    importance=importance,
+                    direction=direction,
+                    strength=strength,
+                    created_at=now,
+                )
+            )
+            conn.execute(
+                sql_update(news_events)
+                .where(news_events.c.id == event_id)
+                .values(
+                    category=category,
+                    sentiment_dir=direction,
+                    sentiment_score=direction * strength,
+                    sentiment_source="manual",
+                )
+            )
+            conn.execute(
+                sql_update(review_queue)
+                .where(review_queue.c.event_id == event_id)
+                .values(resolved_at=now)
+            )
+        logger.info("Ruční korekce eventu %d: dir=%s, kategorie=%s", event_id, direction, category)
+        return {
+            "event_id": event_id,
+            "version": version,
+            "direction": direction,
+            "category": category,
+            "strength": strength,
+        }
 
     @router.get("/stats/waves")
     def stats_waves() -> dict[str, object]:

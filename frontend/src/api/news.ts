@@ -176,3 +176,36 @@ export function latestCrowd(rows: CrowdRow[]): Map<string, CrowdRow> {
   }
   return latest
 }
+
+/** Položka review fronty (#293, SPEC 5.7). */
+export interface ReviewRow {
+  event_id: number
+  reason: string
+  created_at: string
+  resolved_at: string | null
+  title: string
+  category: string | null
+  sentiment_dir: number | null
+}
+
+export async function fetchReview(): Promise<ReviewRow[]> {
+  const data = await getJson<{ review: ReviewRow[] }>('/review', { review: [] })
+  return data.review
+}
+
+/** Ruční korekce směru/kategorie → nová verze klasifikace (source=manual). */
+export async function submitReview(
+  eventId: number,
+  correction: { direction?: number; category?: string },
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/review/${eventId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(correction),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}

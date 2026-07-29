@@ -4,12 +4,27 @@ Nahoře sekce Upcoming s countdownem — trader potřebuje vědět, že ve 14:30
 přijde CPI, **dřív než přijde**. Pod ní filtrovatelný feed.
 */
 import { useEffect, useMemo, useState } from 'react'
-import { categoryGlyph, categoryLabel, countdownLabel, fetchCrowd, latestCrowd } from '../api/news'
-import type { CrowdRow, NewsRow } from '../api/news'
+import {
+  CATEGORY_LABELS,
+  categoryGlyph,
+  categoryLabel,
+  countdownLabel,
+  fetchCrowd,
+  fetchReview,
+  latestCrowd,
+  submitReview,
+} from '../api/news'
+import type { CrowdRow, NewsRow, ReviewRow } from '../api/news'
 import { useNews } from '../hooks/useNews'
 
 /** Crowd data se mění pomalu (F&G à 1 h, PCR à 5 min) — refresh stačí volný. */
 const CROWD_REFRESH_MS = 300_000
+
+/** Důvody zařazení do review fronty (#293) — lidsky. */
+const REVIEW_REASONS: Record<string, string> = {
+  disagreement: 'LLM × empirický model se rozchází',
+  low_confidence: 'nízká jistota klasifikace',
+}
 
 const KIND_LABELS: Record<string, string> = {
   scheduled: 'Plánovaná',
@@ -35,16 +50,78 @@ function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })
 }
 
-function NewsRowItem({ row }: { row: NewsRow }) {
+function NewsRowItem({
+  row,
+  review,
+  onCorrect,
+}: {
+  row: NewsRow
+  review: ReviewRow | undefined
+  onCorrect: (eventId: number, correction: { direction?: number; category?: string }) => void
+}) {
   const score = asNumber(row.sentiment_score)
+  const [editing, setEditing] = useState(false)
+  const [direction, setDirection] = useState<number>(row.sentiment_dir ?? 0)
+  const [category, setCategory] = useState<string>(row.category ?? 'OTHER')
   return (
-    <tr data-testid={`news-row-${row.id}`}>
+    <tr
+      data-testid={`news-row-${row.id}`}
+      className={review ? 'news-review-flag' : undefined}
+      title={review ? `Ke kontrole: ${REVIEW_REASONS[review.reason] ?? review.reason}` : undefined}
+    >
       <td className="news-time muted">{formatTime(row.ts_event)}</td>
       <td className="news-category">
         <span title={categoryLabel(row.category)}>{categoryGlyph(row.category)}</span>{' '}
         {categoryLabel(row.category)}
       </td>
-      <td className="news-title">{row.title}</td>
+      <td className="news-title">
+        {review && (
+          <button
+            type="button"
+            className="chip news-review-badge"
+            aria-label={`Zkontrolovat klasifikaci: ${row.title}`}
+            title={REVIEW_REASONS[review.reason] ?? review.reason}
+            onClick={() => setEditing((value) => !value)}
+          >
+            ⚠
+          </button>
+        )}{' '}
+        {row.title}
+        {editing && review && (
+          <span className="news-review-edit">
+            <select
+              aria-label="Oprava směru"
+              value={direction}
+              onChange={(event) => setDirection(Number(event.target.value))}
+            >
+              <option value={1}>+1 risk-on</option>
+              <option value={0}>0 neutrální</option>
+              <option value={-1}>−1 risk-off</option>
+            </select>
+            <select
+              aria-label="Oprava kategorie"
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+            >
+              {Object.keys(CATEGORY_LABELS).map((key) => (
+                <option key={key} value={key}>
+                  {categoryLabel(key)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="chip"
+              onClick={() => {
+                onCorrect(row.id, { direction, category })
+                setEditing(false)
+              }}
+            >
+              Opravit
+            </button>
+          </span>
+        )}
+      </td>
       <td className="muted">{KIND_LABELS[row.kind] ?? row.kind}</td>
       <td>{row.importance ?? '—'}</td>
       <td>
@@ -94,12 +171,16 @@ export function NewsView() {
   const [category, setCategory] = useState<string>('')
   const [minImportance, setMinImportance] = useState<number>(0)
   const [crowd, setCrowd] = useState<CrowdRow[]>([])
+  const [review, setReview] = useState<ReviewRow[]>([])
 
   useEffect(() => {
     let cancelled = false
     const load = () => {
       void fetchCrowd().then((rows) => {
         if (!cancelled) setCrowd(rows)
+      })
+      void fetchReview().then((rows) => {
+        if (!cancelled) setReview(rows)
       })
     }
     load()
@@ -109,6 +190,20 @@ export function NewsView() {
       clearInterval(timer)
     }
   }, [])
+
+  const reviewByEvent = useMemo(
+    () => new Map(review.map((item) => [item.event_id, item])),
+    [review],
+  )
+  const handleCorrect = (
+    eventId: number,
+    correction: { direction?: number; category?: string },
+  ) => {
+    void submitReview(eventId, correction).then((ok) => {
+      // Oprava = nová verze klasifikace; refetch stáhne aktualizovaný feed
+      if (ok) void fetchReview().then(setReview)
+    })
+  }
 
   const categories = useMemo(
     () => [...new Set(news.map((row) => row.category).filter((c): c is string => !!c))].sort(),
@@ -205,7 +300,12 @@ export function NewsView() {
           </thead>
           <tbody>
             {filtered.map((row) => (
-              <NewsRowItem key={row.id} row={row} />
+              <NewsRowItem
+                key={row.id}
+                row={row}
+                review={reviewByEvent.get(row.id)}
+                onCorrect={handleCorrect}
+              />
             ))}
           </tbody>
         </table>
