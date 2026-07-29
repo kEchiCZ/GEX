@@ -62,3 +62,21 @@ def dedup_hash(title: str, ts_event: dt.datetime) -> str:
     """
     key = f"{normalize_title(title)}|{ts_event.date().isoformat()}"
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+# Limit sloupce `news_events.source_uid` (storage/sentiment.py) — sdílená
+# konstanta, ať normalizace a schéma nemůžou rozejít
+SOURCE_UID_MAX_LENGTH = 128
+
+
+def normalize_source_uid(uid: str | None) -> str | None:
+    """Uid delší než sloupec → deterministický SHA-256 hex (#380).
+
+    RSS guid/link nebo FF `country|title|date` můžou limit 128 znaků přerůst
+    a shodit celou dávku zápisu (StringDataRightTruncation). Hash drží
+    identitu stabilní; prosté oříznutí by mohlo kolidovat mezi dvěma dlouhými
+    uid se stejným prefixem.
+    """
+    if uid is None or len(uid) <= SOURCE_UID_MAX_LENGTH:
+        return uid
+    return hashlib.sha256(uid.encode("utf-8")).hexdigest()

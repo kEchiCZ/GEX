@@ -30,7 +30,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.marketclock import is_market_closed
-from gexlens_engine.compute.newstext import dedup_hash
+from gexlens_engine.compute.newstext import dedup_hash, normalize_source_uid
 from gexlens_engine.storage.sentiment import news_events
 
 logger = logging.getLogger(__name__)
@@ -259,7 +259,7 @@ class NewsTickCollector:
                         "ts_event": headline.ts_event,
                         "ts_ingested": now,
                         "source": headline.source,
-                        "source_uid": headline.article_id or None,
+                        "source_uid": normalize_source_uid(headline.article_id or None),
                         "kind": "broker",
                         "category": None,  # doplní klasifikátor news-engine
                         "importance": None,
