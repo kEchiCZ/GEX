@@ -65,12 +65,16 @@ class NewsWriter:
         written = 0
         with self._engine.begin() as conn:
             for row in rows:
+                # RETURNING, ne rowcount: PostgreSQL u ON CONFLICT DO NOTHING
+                # vrací -1 (= „nevím") a počítadlo by lhalo (#367)
                 stmt = (
                     insert(news_events)
                     .values(**row)
                     .on_conflict_do_nothing(index_elements=[news_events.c.dedup_hash])
+                    .returning(news_events.c.id)
                 )
-                written += conn.execute(stmt).rowcount or 0
+                if conn.execute(stmt).first() is not None:
+                    written += 1
         skipped = len(rows) - written
         if skipped:
             logger.debug("Zahozeno %d duplicit dle dedup_hash", skipped)
