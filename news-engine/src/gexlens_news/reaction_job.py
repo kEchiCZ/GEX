@@ -10,8 +10,8 @@ import datetime as dt
 import logging
 from collections.abc import Sequence
 
-from sqlalchemy import and_, insert, not_, select
-from sqlalchemy.engine import Engine
+from sqlalchemy import and_, insert, not_, select, update
+from sqlalchemy.engine import Connection, Engine
 
 from gexlens_engine.storage.sentiment import news_events, news_reactions
 from gexlens_news.bars import BarsRepository
@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 # Importance, od které event kontaminuje cizí okno (SPEC 5.1)
 CONTAMINATION_MIN_IMPORTANCE = 2
+# Jak daleko zpět hledat poslední obchodovaný bar před zprávou. Musí pokrýt
+# nejdelší zavření: pátek 16:00 CT → neděle 17:00 CT, a k tomu svátek navíc.
+CLOSURE_LOOKBACK_DAYS = 5
+# Totéž dopředu — první obchodovaný bar po víkendové zprávě (SPEC 5.1 deferred)
+CLOSURE_LOOKAHEAD_DAYS = 5
 
 
 class ReactionJob:
@@ -86,19 +91,28 @@ class ReactionJob:
         for event_id, ts_event in pending:
             others = self._contaminating(ts_event)
             rows: list[dict[str, object]] = []
+            # Zavřený trh podle skutečně obchodovaných barů, per symbol (#339)
+            closed_flags: list[bool] = []
             for symbol in self._symbols:
                 window_end = ts_event + dt.timedelta(minutes=max(self._windows) + 1)
-                # Načítáme i dopředu, aby deferred (víkend) našel první bar
+                # Dozadu přes celé zavření, dopředu k prvnímu obchodovanému baru
+                # — jinak deferred okno nemá základní cenu ani cíl (#339)
                 bars = self._bars.load_range(
-                    symbol, ts_event - dt.timedelta(minutes=30), window_end + dt.timedelta(days=4)
+                    symbol,
+                    ts_event - dt.timedelta(days=CLOSURE_LOOKBACK_DAYS),
+                    window_end + dt.timedelta(days=CLOSURE_LOOKAHEAD_DAYS),
                 )
-                for reaction in compute_reactions(
+                reactions = compute_reactions(
                     ts_event,
                     bars,
                     windows=self._windows,
                     other_event_ts=others,
                     baseline=baselines[symbol],
-                ):
+                )
+                if reactions:
+                    # `deferred` je na event stejné ve všech oknech
+                    closed_flags.append(reactions[0].deferred)
+                for reaction in reactions:
                     rows.append(
                         {
                             "event_id": event_id,
@@ -115,10 +129,31 @@ class ReactionJob:
             if rows:
                 with self._engine.begin() as conn:
                     conn.execute(insert(news_reactions), rows)
+                    self._correct_market_closed(conn, event_id, closed_flags)
                 written += len(rows)
         if written:
             logger.info("Reakce: zapsáno %d oken pro %d eventů", written, len(pending))
         return written
+
+    @staticmethod
+    def _correct_market_closed(conn: Connection, event_id: int, closed_flags: list[bool]) -> None:
+        """Opraví `market_closed` podle skutečně obchodovaných barů (#339).
+
+        Při zápisu zprávy se hodnota odhaduje z rozvrhu Globexu, který nezná
+        svátky ani neplánované halty — na Vánoce by tvrdil „otevřeno". Bary
+        jsou proti tomu měření, ne kalendář: nezastarají a pokryjí i zkrácené
+        seance. Proto se hodnota tady přepíše na naměřenou.
+
+        Zavřeno jen tehdy, když **žádný** ze sledovaných symbolů neobchodoval.
+        Díra v datech jednoho symbolu není zavřený trh a nesmí ho předstírat.
+        """
+        if not closed_flags:
+            return
+        conn.execute(
+            update(news_events)
+            .where(news_events.c.id == event_id)
+            .values(market_closed=all(closed_flags))
+        )
 
     def _baseline_for(self, symbol: str, today: dt.date) -> dict[dt.time, VolumeBaseline] | None:
         sessions = self._bars.recent_sessions(symbol, today, MIN_BASELINE_SESSIONS)
