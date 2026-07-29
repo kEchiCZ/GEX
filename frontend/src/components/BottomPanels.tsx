@@ -12,7 +12,14 @@ CSS roztažení škáluje obsah stejně jako canvas heatmapy.
 */
 import { memo, useState } from 'react'
 import { baseBucketPx } from '../heatmap/view'
-import { CUM_DELTA_PAD, barHeights, cumDeltaAreas, seriesPeak } from '../panels/geometry'
+import {
+  CUM_DELTA_PAD,
+  barHeights,
+  cumDeltaAreas,
+  sentimentCandleGeometry,
+  seriesPeak,
+} from '../panels/geometry'
+import type { SentimentCandle } from '../panels/geometry'
 import { useCrosshair } from '../state/Crosshair'
 
 export interface PanelSeries {
@@ -25,6 +32,9 @@ export interface PanelSeries {
   deltaFlowPut: number[]
   /** SentIndex po minutách (#288); prázdné = modul zatím data nemá. */
   sentiment?: number[]
+  /** Daily pohled (#296, SPEC 7.1): OHLC svíčka per sloupec-den; null = den
+  bez dat. Když je přítomné, panel Sentiment kreslí svíčky místo plochy. */
+  sentimentCandles?: (SentimentCandle | null)[]
 }
 
 export interface PanelsVisible {
@@ -72,6 +82,9 @@ const COLORS = {
   put: '#ef4444',
   positive: 'rgba(62, 207, 142, 0.55)',
   negative: 'rgba(240, 97, 109, 0.55)',
+  // Svíčky sentimentu (#296): plné barvy shodné s cenovými svíčkami (SPEC 7.1)
+  candleUp: '#3ecf8e',
+  candleDown: '#f0616d',
 }
 
 function usePanelPointer(minutes: number, width: number, time: TimeTransform) {
@@ -363,7 +376,68 @@ function BottomPanelsBase({
     )
   }
 
-  if (visible.sentiment && data.sentiment && data.sentiment.length > 0) {
+  // Daily pohled (#296): svíčky místo plochy — viditelný intradenní rozkmit
+  // sentimentu; barvy shodné s cenovými svíčkami (SPEC 7.1)
+  if (visible.sentiment && data.sentimentCandles && data.sentimentCandles.length > 0) {
+    const candles = data.sentimentCandles
+    const { geoms, zeroY } = sentimentCandleGeometry(candles, step, height)
+    const peak = Math.max(
+      1e-9,
+      ...candles.flatMap((candle) => (candle ? [Math.abs(candle.high), Math.abs(candle.low)] : [])),
+    )
+    const hovered = idx !== null ? candles[idx] : null
+    panels.push(
+      <section key="sentiment" className="bottom-panel" aria-label="Sentiment panel">
+        <span className="panel-title muted">Sentiment</span>
+        {hovered && (
+          <PanelValue>
+            O {hovered.open.toFixed(2)} · H {hovered.high.toFixed(2)} · L {hovered.low.toFixed(2)} ·
+            C {hovered.close.toFixed(2)}
+          </PanelValue>
+        )}
+        {axisValue('sentiment', peak, true)}
+        <svg
+          width={width}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          preserveAspectRatio="none"
+          onPointerMove={handleMove('sentiment')}
+          onPointerLeave={handleLeave}
+        >
+          <line
+            x1={0}
+            y1={zeroY}
+            x2={width}
+            y2={zeroY}
+            stroke="#2c3342"
+            data-testid="sentiment-zero"
+          />
+          <g transform={transform}>
+            {geoms.map((geom) => (
+              <g key={geom.index} data-part="sentiment-candle">
+                <line
+                  x1={geom.x}
+                  y1={geom.wickY1}
+                  x2={geom.x}
+                  y2={geom.wickY2}
+                  stroke={geom.up ? COLORS.candleUp : COLORS.candleDown}
+                />
+                <rect
+                  x={geom.x - barWidth / 2}
+                  y={geom.bodyY}
+                  width={barWidth}
+                  height={geom.bodyHeight}
+                  fill={geom.up ? COLORS.candleUp : COLORS.candleDown}
+                />
+              </g>
+            ))}
+            <CrosshairLine x={pointer.crosshairX} height={height} />
+          </g>
+          {axisLineH('sentiment')}
+        </svg>
+      </section>,
+    )
+  } else if (visible.sentiment && data.sentiment && data.sentiment.length > 0) {
     const sentiment = data.sentiment
     const areas = cumDeltaAreas(sentiment, minutes * step, height)
     const peak = seriesPeak(sentiment)

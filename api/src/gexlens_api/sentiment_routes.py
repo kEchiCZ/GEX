@@ -186,11 +186,14 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
 
     @router.get("/sentiment/daily")
     def sentiment_daily_route(
+        symbol: str | None = None,
         from_date: dt.date | None = Query(None, alias="from"),
         to_date: dt.date | None = Query(None, alias="to"),
     ) -> dict[str, object]:
         """OHLC svíčky sentimentu (SPEC 7.1) — zdroj pro Daily pohled i vlny."""
         stmt = select(sentiment_daily).order_by(sentiment_daily.c.date)
+        if symbol is not None:
+            stmt = stmt.where(sentiment_daily.c.symbol == symbol)
         if from_date is not None:
             stmt = stmt.where(sentiment_daily.c.date >= from_date)
         if to_date is not None:

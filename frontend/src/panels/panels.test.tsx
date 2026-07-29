@@ -6,7 +6,7 @@ import { LiveSocket } from '../api/ws'
 import { BottomPanels } from '../components/BottomPanels'
 import { FakeWebSocket } from '../test/fakeWs'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
-import { cumDeltaAreas, barHeights } from './geometry'
+import { cumDeltaAreas, barHeights, sentimentCandleGeometry } from './geometry'
 import type { PanelSeries } from '../components/BottomPanels'
 
 const DATA: PanelSeries = {
@@ -338,4 +338,51 @@ test('panel Sentiment kreslí plochu jako polygon, ne prázdný path (#288)', ()
   expect(pos?.tagName.toLowerCase()).toBe('polygon')
   expect(neg?.tagName.toLowerCase()).toBe('polygon')
   expect(pos?.getAttribute('points')?.length ?? 0).toBeGreaterThan(0)
+})
+
+// ── Sentiment svíčky v Daily pohledu (#296, SPEC 7.1) ──────────────
+
+test('sentimentCandleGeometry: symetrická škála kolem nuly, dny bez dat se přeskočí', () => {
+  const { geoms, zeroY } = sentimentCandleGeometry(
+    [
+      { open: 0, high: 1, low: -0.5, close: 0.5 },
+      null,
+      { open: 0.5, high: 0.5, low: -1, close: -1 },
+    ],
+    10,
+    80,
+    0,
+  )
+  expect(zeroY).toBe(40)
+  expect(geoms).toHaveLength(2) // null den nekreslí nic
+  expect(geoms.map((geom) => geom.index)).toEqual([0, 2])
+  // Peak = max |high|,|low| = 1 → high 1 sedí na horní hraně, low −1 na spodní
+  expect(geoms[0].wickY1).toBe(0)
+  expect(geoms[1].wickY2).toBe(80)
+  expect(geoms[0].up).toBe(true)
+  expect(geoms[1].up).toBe(false)
+  // Tělo první svíčky: open 0 → 40, close 0.5 → 20
+  expect(geoms[0].bodyY).toBe(20)
+  expect(geoms[0].bodyHeight).toBe(20)
+})
+
+test('panel Sentiment kreslí svíčky místo plochy, když dorazí Daily OHLC (#296)', () => {
+  const candles = [
+    { open: 0, high: 1, low: -0.5, close: 0.5 },
+    { open: 0.5, high: 0.6, low: -0.2, close: -0.1 },
+  ]
+  const { container } = render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={{ ...DATA, sentimentCandles: candles }}
+        visible={{ vol: false, optVol: false, delta: false, deltaFlow: false, sentiment: true }}
+        width={400}
+      />
+    </CrosshairProvider>,
+  )
+  expect(screen.getByLabelText('Sentiment panel')).toBeDefined()
+  expect(container.querySelectorAll('[data-part="sentiment-candle"]')).toHaveLength(2)
+  // Plocha (intraday zobrazení) se nekreslí
+  expect(container.querySelector('[data-part="sentiment-pos"]')).toBeNull()
+  expect(screen.getByTestId('sentiment-zero')).toBeDefined()
 })
