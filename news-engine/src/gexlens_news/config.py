@@ -44,7 +44,8 @@ class NewsSettings(BaseSettings):
     forexfactory_interval_s: float = Field(default=3600.0, gt=0)
     finnhub_interval_s: float = Field(default=60.0, gt=0)
     rss_interval_s: float = Field(default=60.0, gt=0)
-    fed_rss_interval_s: float = Field(default=300.0, gt=0)
+    # 60 s (#386): FOMC statement je nejcitlivější headline; 1 req/min je zdarma
+    fed_rss_interval_s: float = Field(default=60.0, gt=0)
     reddit_interval_s: float = Field(default=900.0, gt=0)
 
     # Hodinový refresh actual hodnot z FF kalendáře (#277, ADR-0018) —

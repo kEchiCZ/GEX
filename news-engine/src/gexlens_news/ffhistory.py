@@ -302,12 +302,20 @@ def run_backfill(
     )
 
 
+# Burst po high-impact release (#386): jak dlouho po ts_event se ptát à 60 s
+BURST_WINDOW_MIN = 20
+BURST_INTERVAL_S = 60.0
+BURST_MIN_IMPORTANCE = 3
+
+
 class FfActualRefreshJob:
-    """Hodinové doplňování `actual` z aktuální (+ minulé) stránky kalendáře.
+    """Doplňování `actual` z aktuální (+ minulé) stránky kalendáře.
 
     Widget feed `actual` nemá (ADR-0013) — bez tohohle jobu by scheduled
     eventy nikdy nedostaly hodnotu ani surprise_z. Minulý týden se čte kvůli
-    eventům z pátku/víkendu při pondělním běhu.
+    eventům z pátku/víkendu při pondělním běhu. Základní kadence je hodinová;
+    po high-impact release se přepíná na 60s burst (#386), dokud actual
+    nedorazí nebo neuplyne okno.
     """
 
     def __init__(
@@ -323,7 +331,31 @@ class FfActualRefreshJob:
         self._last_run: dt.datetime | None = None
 
     def due(self, now: dt.datetime) -> bool:
-        return self._last_run is None or now - self._last_run >= self._interval
+        if self._last_run is None:
+            return True
+        elapsed = now - self._last_run
+        if elapsed >= self._interval:
+            return True
+        # Burst po high-impact release (#386): actual řídí surprise_z a tím
+        # směr eventu — hodinové čekání by zahodilo přesně ty minuty, kdy na
+        # něm záleží. FF ho publikuje do ~1 min, tak se ptáme à 60 s.
+        return elapsed >= dt.timedelta(seconds=BURST_INTERVAL_S) and self._release_pending(now)
+
+    def _release_pending(self, now: dt.datetime) -> bool:
+        """Proběhl právě high-impact scheduled event bez actual?"""
+        stmt = (
+            select(news_events.c.id)
+            .where(
+                news_events.c.kind == "scheduled",
+                news_events.c.importance >= BURST_MIN_IMPORTANCE,
+                news_events.c.actual.is_(None),
+                news_events.c.ts_event <= now,
+                news_events.c.ts_event >= now - dt.timedelta(minutes=BURST_WINDOW_MIN),
+            )
+            .limit(1)
+        )
+        with self._engine.connect() as conn:
+            return conn.execute(stmt).first() is not None
 
     def run(self, now: dt.datetime) -> int:
         """Jeden průchod; vrací počet doplněných actual hodnot."""

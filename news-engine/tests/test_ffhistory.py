@@ -4,7 +4,8 @@ import datetime as dt
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, insert, select
+from sqlalchemy import update as sql_update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema, news_events
@@ -275,3 +276,48 @@ def test_refresh_job_updates_past_events_only(tmp_path: Path) -> None:
     # Interval guard: hned po běhu není due
     assert not job.due(NOW + dt.timedelta(minutes=30))
     assert job.due(NOW + dt.timedelta(hours=1))
+
+
+def test_actual_refresh_bursts_after_high_impact_release(tmp_path: Path) -> None:
+    """#386: po high-impact release bez actual se due() přepne na 60s kadenci."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'burst.sqlite'}")
+    ensure_sentiment_schema(engine)
+    now = dt.datetime(2026, 7, 30, 12, 35, tzinfo=dt.UTC)
+    job = FfActualRefreshJob(engine, fetch=lambda week: "", interval_s=3600.0)
+    job._last_run = now - dt.timedelta(seconds=90)  # hodinová kadence by mlčela
+
+    # Bez čekajícího release → burst nebeží
+    assert job.due(now) is False
+
+    with engine.begin() as conn:
+        conn.execute(
+            insert(news_events).values(
+                ts_event=now - dt.timedelta(minutes=5),
+                ts_ingested=now - dt.timedelta(hours=30),
+                source="forexfactory",
+                kind="scheduled",
+                category="MACRO_INFLATION",
+                importance=3,
+                title="USD CPI m/m",
+                symbols=[],
+                market_closed=False,
+                actual=None,
+                dedup_hash="cpi-burst",
+                raw={},
+            )
+        )
+    assert job.due(now) is True
+    # Pod 60 s od posledního běhu burst netiká (šetří FF)
+    job._last_run = now - dt.timedelta(seconds=30)
+    assert job.due(now) is False
+    # Release s doplněným actual burst ukončí
+    with engine.begin() as conn:
+        conn.execute(sql_update(news_events).values(actual=0.3))
+    job._last_run = now - dt.timedelta(seconds=90)
+    assert job.due(now) is False
+    # Starý release mimo okno burst nespouští
+    with engine.begin() as conn:
+        conn.execute(
+            sql_update(news_events).values(actual=None, ts_event=now - dt.timedelta(hours=2))
+        )
+    assert job.due(now) is False
