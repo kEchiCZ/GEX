@@ -5,6 +5,8 @@ import { alignSeriesToLabels, signalGateInfo } from './api/news'
 import { buildNewsMarkers } from './heatmap/newsMarkers'
 import { buildSignalMarkers } from './heatmap/signalMarkers'
 import { useSentimentState } from './hooks/useSentimentState'
+import { useSentimentDaily } from './hooks/useSentimentDaily'
+import { dayLabel } from './replay/daily'
 import { useAnnotations } from './annotations/useAnnotations'
 import { NewsView } from './components/NewsView'
 import { useNews } from './hooks/useNews'
@@ -347,9 +349,22 @@ function MainContent() {
   }, [signalMode, newsData.signals, symbol, chartLabels, sentState?.unconfirmed])
   // Progres ke gate pro dropdown (SPEC 9.0 „collecting data")
   const signalGate = useMemo(() => signalGateInfo(newsData.stats, symbol), [newsData.stats, symbol])
+  // Daily OHLC SentIndexu (#296) — jen když je Daily pohled a panel zapnutý
+  const sentimentDaily = useSentimentDaily(symbol, timeframe === 'daily' && toggles.news)
   const panelSeries = useMemo(() => {
     const base = playback.isLive ? day.panels : slicePanels(day.panels, playback.position)
     if (!toggles.news) return base
+    // Daily pohled (#296): svíčka per sloupec-den, párovaná datem přes týž
+    // formatter, kterým vznikly popisky osy (vzor alignSeriesToLabels)
+    if (timeframe === 'daily') {
+      const byLabel = new Map(sentimentDaily.map((row) => [dayLabel(row.date), row]))
+      const candles = day.minuteLabels.map((label) => {
+        const row = byLabel.get(label)
+        return row ? { open: row.open, high: row.high, low: row.low, close: row.close } : null
+      })
+      const sliced = playback.isLive ? candles : candles.slice(0, playback.position + 1)
+      return { ...base, sentimentCandles: sliced }
+    }
     // Sentiment přichází z jiného zdroje než bary (news-engine → API), takže
     // se páruje podle času, ne podle indexu (#288)
     const aligned = alignSeriesToLabels(newsData.series, day.minuteLabels, minuteLabel)
@@ -359,6 +374,8 @@ function MainContent() {
     day.panels,
     day.minuteLabels,
     newsData.series,
+    sentimentDaily,
+    timeframe,
     playback.isLive,
     playback.position,
     toggles.news,

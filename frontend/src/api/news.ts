@@ -177,6 +177,28 @@ export function latestCrowd(rows: CrowdRow[]): Map<string, CrowdRow> {
   return latest
 }
 
+/** Denní OHLC svíčka SentIndexu (#296, SPEC 7.1) — open nese overnight zbytek. */
+export interface SentimentDailyRow {
+  date: string
+  symbol: string
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
+export async function fetchSentimentDaily(
+  symbol: string,
+  fromDate?: string,
+): Promise<SentimentDailyRow[]> {
+  const from = fromDate ? `&from=${fromDate}` : ''
+  const data = await getJson<{ daily: SentimentDailyRow[] }>(
+    `/sentiment/daily?symbol=${symbol}${from}`,
+    { daily: [] },
+  )
+  return data.daily ?? []
+}
+
 /** Stav RiskOn/RiskOff/Neutral (#292/#295, SPEC 5.6 a 9.0). */
 export interface SentimentStateInfo {
   symbol: string
