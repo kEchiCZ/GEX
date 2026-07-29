@@ -258,6 +258,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         level=settings.log_level.upper(),
         format="%(asctime)s %(name)s %(message)s",
     )
+    # S10 (#362): httpx na INFO vypisuje plná URL — u zdrojů s tokenem v query
+    # (Finnhub) by klíč skončil v logu kontejneru při každém fetchi
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     if args.command == "status":
         return status(settings)
     try:
