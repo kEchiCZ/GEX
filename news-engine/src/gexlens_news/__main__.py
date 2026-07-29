@@ -54,6 +54,7 @@ from gexlens_news.sentiment_backfill import backfill_sentiment_daily
 from gexlens_news.sentindex_job import SentIndexJob
 from gexlens_news.signal_job import SignalJob
 from gexlens_news.store import NewsWriter
+from gexlens_news.track_record import TrackRecordJob
 from gexlens_news.waves_job import WavesJob
 
 logger = logging.getLogger("gexlens.news")
@@ -131,6 +132,8 @@ async def run(settings: NewsSettings) -> None:
         else None
     )
     model_stats = ModelStatsJob(engine)
+    # Track record (#298): noční mechanické equity křivky (SPEC 7.3)
+    track = TrackRecordJob(engine, BarsRepository(settings.data_dir))
     # Tier C crowd zdroje (#290): CNN F&G + PCR bez klíčů; Reddit jen s creds
     crowd_collectors: list[object] = [
         CnnFearGreedCollector(interval_s=settings.cnn_fg_interval_s),
@@ -279,6 +282,11 @@ async def run(settings: NewsSettings) -> None:
             if last_stats_day != now.date():
                 try:
                     await asyncio.to_thread(model_stats.run, now)
+                    # Track record po model stats — čte tytéž noční vstupy
+                    try:
+                        await asyncio.to_thread(track.run, now)
+                    except Exception:
+                        logger.exception("Track record selhal — zkusí se příští den")
                     last_stats_day = now.date()
                 except Exception:
                     logger.exception("Přepočet model stats selhal — zkusí se příští cyklus")
