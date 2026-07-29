@@ -211,14 +211,6 @@ async def run(settings: NewsSettings) -> None:
                 await asyncio.to_thread(review.run, now)
             except Exception:
                 logger.exception("Review fronta selhala — zkusí se příští cyklus")
-            # Actual z FF kalendáře před reakcemi být nemusí (reakce na actual
-            # nečekají), ale před klasifikací dalšího cyklu ano — surprise_z
-            # řídí směr scheduled eventů (SPEC kap. 4)
-            if ff_refresh is not None and ff_refresh.due(now):
-                try:
-                    await asyncio.to_thread(ff_refresh.run, now)
-                except Exception:
-                    logger.exception("Refresh actual selhal — zkusí se příští hodinu")
             # Predikce a jejich vyhodnocení musí být před indexem — váhy
             # z nich vstupují do skóre (SPEC 5.3)
             try:
@@ -312,6 +304,24 @@ async def run(settings: NewsSettings) -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=settings.llm_interval_s)
 
+    async def ff_actual_loop() -> None:
+        """Refresh actual z FF kalendáře — vlastní 60s tikot (#386).
+
+        V reaction_loop (à 300 s) by burst po release neměl jak tikat po
+        minutě; `due()` sám rozhoduje mezi hodinovou kadencí a burstem.
+        """
+        if ff_refresh is None:
+            return
+        while not stop.is_set():
+            now = dt.datetime.now(dt.UTC)
+            if ff_refresh.due(now):
+                try:
+                    await asyncio.to_thread(ff_refresh.run, now)
+                except Exception:
+                    logger.exception("Refresh actual selhal — zkusí se příště")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=60.0)
+
     async def crowd_loop() -> None:
         """Crowd zdroje (#290) — intervaly per zdroj drží CrowdRunner."""
         while not stop.is_set():
@@ -328,7 +338,9 @@ async def run(settings: NewsSettings) -> None:
         len(collectors),
         ", ".join(sorted(enabled)) or "žádné",
     )
-    await asyncio.gather(runner.run(stop=stop), reaction_loop(), llm_loop(), crowd_loop())
+    await asyncio.gather(
+        runner.run(stop=stop), reaction_loop(), llm_loop(), crowd_loop(), ff_actual_loop()
+    )
     logger.info("news-engine ukončen")
 
 
