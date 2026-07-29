@@ -10,9 +10,11 @@ tatáž zpráva z Finnhubu i CNBC má být **jeden** záznam, `source` nese ten
 nejrychlejší a ostatní se schovají do `raw.merged_sources`. Naměřená latence
 per zdroj je podklad pro budoucí prioritizaci.
 
-Vědomé omezení: shoda je na normalizovaném titulku, takže přeformulovanou
-story mezi zdroji nechytí. Fuzzy matching (simhash) je follow-up #274 —
-ladění podobnostních prahů nemá blokovat N1.
+Fuzzy vrstva (#274): přeformulovanou story chytá token Jaccard ≥ 0.9 nad
+týmž oknem. Simhash ze SPEC byl na provozních datech zamítnut — Hammingova
+vzdálenost pravé a falešné páry neodděluje (ADR-0016). Fuzzy se nikdy
+nepouští na `scheduled` eventy: „Durable Goods" vs „Core Durable Goods"
+jsou dvě různé kalendářní události, ne reformulace.
 """
 
 import datetime as dt
@@ -27,6 +29,13 @@ logger = logging.getLogger(__name__)
 # Okno pro porovnání „je to tatáž story?" (SPEC 3.3 mluví o jednotkách minut;
 # 10 min dává rezervu pomalejším RSS zdrojům, které tutéž zprávu vydají později)
 DEFAULT_WINDOW_MINUTES = 10
+# Práh fuzzy shody — měřeno 29. 7. 2026 na 1658 zprávách z 24 h provozu (#274):
+# J ≥ 0.9 dalo 24 párů, všechny ručně ověřené pravé duplicity; pásmo 0.83–0.88
+# už obsahuje falešné merge (různé firmy v šablonových titulcích). ADR-0016.
+DEFAULT_JACCARD_THRESHOLD = 0.9
+# Fuzzy jen pro volné titulky. Scheduled eventy jsou položky kalendáře — páry
+# jako „Durable Goods" vs „Core Durable Goods" (J=0.83) jsou různé události.
+FUZZY_KINDS = frozenset({"headline", "broker"})
 
 
 @dataclass
@@ -37,6 +46,8 @@ class _Seen:
     ts_event: dt.datetime
     first_source: str
     first_ingested: dt.datetime
+    kind: str
+    tokens: frozenset[str]
     merged: list[dict[str, object]] = field(default_factory=list)
 
 
@@ -52,8 +63,14 @@ class DedupResult:
 class RollingDeduplicator:
     """Drží okno nedávných stories a slučuje do nich nové výskyty."""
 
-    def __init__(self, *, window_minutes: int = DEFAULT_WINDOW_MINUTES) -> None:
+    def __init__(
+        self,
+        *,
+        window_minutes: int = DEFAULT_WINDOW_MINUTES,
+        jaccard_threshold: float | None = DEFAULT_JACCARD_THRESHOLD,
+    ) -> None:
         self._window = dt.timedelta(minutes=window_minutes)
+        self._jaccard = jaccard_threshold
         self._seen: dict[str, _Seen] = {}
 
     @staticmethod
@@ -83,8 +100,36 @@ class RollingDeduplicator:
                     ts_event=event.ts_event,
                     first_source=event.source,
                     first_ingested=event.ts_ingested,
+                    kind=event.kind,
+                    tokens=frozenset(key.split()),
                 ),
             )
+
+    def _fuzzy_match(self, event: NewsEvent, key: str) -> _Seen | None:
+        """Nejpodobnější story v okně s Jaccard ≥ prahu; None = žádná.
+
+        Lineární průchod oknem je záměr: při 10min okně jde o desítky záznamů
+        a i s okny v hodinách (#351) o stovky množinových průniků na event —
+        levnější než údržba LSH indexu, který by se stejně po každém prune
+        přestavoval.
+        """
+        if self._jaccard is None or event.kind not in FUZZY_KINDS:
+            return None
+        tokens = frozenset(key.split())
+        if not tokens:
+            return None
+        best: _Seen | None = None
+        best_similarity = 0.0
+        for seen in self._seen.values():
+            if seen.kind not in FUZZY_KINDS or not seen.tokens:
+                continue
+            similarity = len(tokens & seen.tokens) / len(tokens | seen.tokens)
+            if similarity >= self._jaccard and similarity > best_similarity:
+                best = seen
+                best_similarity = similarity
+        if best is not None:
+            logger.debug("Fuzzy merge (J=%.2f): %r ~ %r", best_similarity, event.title, best.key)
+        return best
 
     def process(self, events: Sequence[NewsEvent]) -> DedupResult:
         """Rozdělí dávku na nové eventy a slučované výskyty.
@@ -97,13 +142,15 @@ class RollingDeduplicator:
         for event in sorted(events, key=lambda e: e.ts_event):
             self._prune(event.ts_event)
             key = self.key_of(event)
-            seen = self._seen.get(key)
+            seen = self._seen.get(key) or self._fuzzy_match(event, key)
             if seen is None:
                 self._seen[key] = _Seen(
                     key=key,
                     ts_event=event.ts_event,
                     first_source=event.source,
                     first_ingested=event.ts_ingested,
+                    kind=event.kind,
+                    tokens=frozenset(key.split()),
                 )
                 result.events.append(event)
                 continue
