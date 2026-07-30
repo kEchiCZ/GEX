@@ -1,12 +1,9 @@
 /** Řádky timeframe a přepínačů vizualizace (SPEC 7.1). */
 import { INTERVALS, useAppState } from '../state/AppState'
-import type { SignalMode, Toggles } from '../state/AppState'
+import type { SignalMode, Toggles, UnderlayPlane } from '../state/AppState'
 import type { SignalGateInfo } from '../api/news'
 
 const TOGGLE_LABELS: Record<keyof Toggles, string> = {
-  // Dyn GEX pole jako podkladová vrstva (#242, à la Moodix) — kombinuje se
-  // s libovolným měřeným módem; dřív to byl exkluzivní mód v Mode selectu
-  dynGexField: 'Dyn GEX',
   // Historicky „Dyn GEX", ale přepínač ukazuje zdi — název teď patří
   // modelované vrstvě, ať se nepletou
   dynGex: 'Zdi',
@@ -53,6 +50,14 @@ export function TimeframeRow() {
   )
 }
 
+/** Podkladová plocha (#204): dřív checkbox Dyn GEX, teď dropdown tří ploch. */
+const PLANE_LABELS: Record<UnderlayPlane, string> = {
+  off: 'Off',
+  gex: 'Dyn GEX',
+  charm: 'Dyn Charm',
+  vanna: 'Dyn Vanna',
+}
+
 const SIGNAL_MODE_LABELS: Record<SignalMode, string> = {
   off: 'Off',
   news: 'NEWS',
@@ -60,12 +65,29 @@ const SIGNAL_MODE_LABELS: Record<SignalMode, string> = {
 }
 
 export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null }) {
-  const { toggles, setToggle, signalMode, setSignalMode } = useAppState()
+  const { toggles, setToggle, signalMode, setSignalMode, underlayPlane, setUnderlayPlane } =
+    useAppState()
   // „Collecting data" (SPEC 9.0): režim zapnutý, ale žádný bucket neprošel
   // Wilson gate (6.2) → místo šipek se ukazuje progres nejlepšího bucketu
   const collecting = signalMode !== 'off' && signalGate != null && signalGate.open === 0
   return (
     <div className="row toggles-row" role="toolbar" aria-label="Přepínače vizualizace">
+      {/* Modelovaná podkladová vrstva (#242/#204): Dyn GEX / Charm / Vanna */}
+      <label className="toggle">
+        Dyn plocha
+        <select
+          value={underlayPlane}
+          onChange={(event) => setUnderlayPlane(event.target.value as UnderlayPlane)}
+          aria-label="Podkladová plocha"
+          title="Modelovaná dealer expozice pod heatmapou: gamma (brzdy/plyn), charm (toky od času), vanna (toky od volatility)"
+        >
+          {(Object.keys(PLANE_LABELS) as UnderlayPlane[]).map((value) => (
+            <option key={value} value={value}>
+              {PLANE_LABELS[value]}
+            </option>
+          ))}
+        </select>
+      </label>
       {(Object.keys(TOGGLE_LABELS) as (keyof Toggles)[]).map((key) => (
         <label key={key} className="toggle">
           <input

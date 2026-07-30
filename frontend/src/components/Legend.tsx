@@ -31,8 +31,9 @@ export type Swatch =
   | { kind: 'vline'; color: string; width?: number; dash?: number[] }
   /** Barevný přechod buněk heatmapy od nuly k maximu. */
   | { kind: 'ramp'; to: string }
-  /** Divergentní rampa signed vrstev (záporné ← 0 → kladné). */
-  | { kind: 'diverging' }
+  /** Divergentní rampa signed vrstev (záporné ← 0 → kladné); barvy lze
+      přebít pro palety ploch (#204). */
+  | { kind: 'diverging'; pos?: string; neg?: string }
   /** Svíčky ceny. */
   | { kind: 'candles' }
   /** Plocha panelu nad/pod nulou. */
@@ -193,6 +194,24 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         what: 'Kreslí převahu, ne součet: zeleně kde vede call strana, červeně kde put.',
         up: 'Zelená převaha na strikách nad cenou → call strana staví pozici výš, trh počítá s růstem.',
         down: 'Červená převaha pod cenou → put strana sílí, poptávka po ochraně roste.',
+      },
+      {
+        name: 'Dyn Charm plocha',
+        swatch: { kind: 'diverging', pos: 'rgb(235,170,40)', neg: 'rgb(70,130,240)' },
+        where: 'Podkladová vrstva pod heatmapou; dropdown „Dyn plocha“ → Dyn Charm.',
+        what: 'Modelovaná změna dealer delta-hedge jen plynutím času (dDelta/dČas za den). Jantarová = kladný charm, modrá = záporný. Kvantifikuje EOD toky: OTM delty ke konci dne „vyhnívají“ a dealeři musí hedge dorovnávat i bez pohybu ceny.',
+        up: 'Velká charm koncentrace POD spotem → do close předvídatelný tok nákupů (proslulé „charm flows“ poslední hodinu).',
+        down: 'Koncentrace NAD spotem → tok prodejů do close. Nejsilnější v expirační dny.',
+        how: 'Model z uložené IV a OI (stejný dealer model jako Dyn GEX) — čti jako mapu toků od času, ne jako signál.',
+      },
+      {
+        name: 'Dyn Vanna plocha',
+        swatch: { kind: 'diverging', pos: 'rgb(20,190,170)', neg: 'rgb(150,80,230)' },
+        where: 'Podkladová vrstva pod heatmapou; dropdown „Dyn plocha“ → Dyn Vanna.',
+        what: 'Modelovaná změna dealer delta-hedge se změnou implikované volatility (dDelta/dVol za 1 % IV). Teal = kladná vanna, fialová = záporná. Ukazuje, na kterých úrovních je trh nejcitlivější na pohyb IV.',
+        up: 'Po události IV klesá → na úrovních s velkou vannou dealeři dorovnávají hedge nákupy (klasický „vanna rally“ pátek po opexu).',
+        down: 'Skok IV nahoru (šok) obrací tytéž toky do prodejů.',
+        how: 'Spolu s Dyn GEX a Charm tři síly expiračních dnů: GEX = brzdy/plyn od spotu, charm = toky od času, vanna = toky od volatility.',
       },
       {
         name: 'Stará data',
@@ -472,9 +491,9 @@ export function LegendSwatch({ swatch }: { swatch: Swatch }) {
               </>
             ) : (
               <>
-                <stop offset="0%" stopColor={rgba(putColor(1))} />
+                <stop offset="0%" stopColor={swatch.neg ?? rgba(putColor(1))} />
                 <stop offset="50%" stopColor="rgba(0,0,0,0)" />
-                <stop offset="100%" stopColor={rgba(callColor(1))} />
+                <stop offset="100%" stopColor={swatch.pos ?? rgba(callColor(1))} />
               </>
             )}
           </linearGradient>

@@ -20,8 +20,8 @@ from gexlens_engine.compute.gex import GexEngine, GexInput
 from gexlens_engine.compute.gexfield import (
     GexProfile,
     ProfileContract,
-    gamma_field,
-    gamma_profile,
+    greek_fields,
+    greek_profiles,
 )
 from gexlens_engine.compute.levels import GexLevels, compute_ladder, compute_levels
 from gexlens_engine.config import Settings
@@ -344,7 +344,9 @@ class EngineRuntime:
             settle = dt.datetime.strptime(self.expiry, "%Y%m%d").replace(
                 hour=20, minute=0, tzinfo=dt.UTC
             )
-            profile = gamma_profile(
+            # Gamma + charm + vanna jedním průchodem (#204) — sdílené d1/φ,
+            # tři plochy nestojí trojnásobek. Gamma drží původní kanály/adresáře.
+            profiles = greek_profiles(
                 profile_contracts,
                 ts_min=ts_min,
                 settle=settle,
@@ -353,29 +355,36 @@ class EngineRuntime:
                 grid_step=strike_step / 2.0,
                 multiplier=self.multiplier,
             )
-            self.last_profile = profile
-            profile_row = GexProfileRow(
-                ts_min=ts_min,
-                grid_start=profile.grid_start,
-                grid_step=profile.grid_step,
-                values=[round(value, 1) for value in profile.values],
-            )
-            await asyncio.to_thread(
-                self.writer.write_gexprofile, self.symbol, self.expiry, day, [profile_row]
-            )
-            await self.publisher.publish(
-                f"gexprofile.{self.symbol}.{self.expiry}",
-                {
-                    "ts_min": ts_min.isoformat(),
-                    "grid_start": profile_row.grid_start,
-                    "grid_step": profile_row.grid_step,
-                    "values": profile_row.values,
-                },
-            )
+            self.last_profile = profiles["gamma"]
+            for greek, profile in profiles.items():
+                profile_row = GexProfileRow(
+                    ts_min=ts_min,
+                    grid_start=profile.grid_start,
+                    grid_step=profile.grid_step,
+                    values=[round(value, 1) for value in profile.values],
+                )
+                subdir = "gexprofile" if greek == "gamma" else f"{greek}profile"
+                await asyncio.to_thread(
+                    self.writer.write_gexprofile,
+                    self.symbol,
+                    self.expiry,
+                    day,
+                    [profile_row],
+                    subdir=subdir,
+                )
+                await self.publisher.publish(
+                    f"{subdir}.{self.symbol}.{self.expiry}",
+                    {
+                        "ts_min": ts_min.isoformat(),
+                        "grid_start": profile_row.grid_start,
+                        "grid_step": profile_row.grid_step,
+                        "values": profile_row.values,
+                    },
+                )
             # Modelované pole budoucích sloupců (ADR-0009 fáze 2): drží se jen
             # poslední stav — minulé sloupce 2D módu skládá frontend z historie
             # profilů výše, budoucí z tohoto pole
-            gexfield = gamma_field(
+            fields = greek_fields(
                 profile_contracts,
                 ts_min=ts_min,
                 settle=settle,
@@ -384,22 +393,28 @@ class EngineRuntime:
                 grid_step=strike_step / 2.0,
                 multiplier=self.multiplier,
             )
-            if gexfield is not None:
-                flat = [round(value, 1) for column in gexfield.values for value in column]
+            for greek, field in (fields or {}).items():
+                flat = [round(value, 1) for column in field.values for value in column]
                 field_row = GexFieldRow(
                     ts_min=ts_min,
-                    grid_start=gexfield.grid_start,
-                    grid_step=gexfield.grid_step,
-                    col_start=gexfield.col_start,
-                    col_step_min=gexfield.col_step_min,
-                    col_count=len(gexfield.values),
+                    grid_start=field.grid_start,
+                    grid_step=field.grid_step,
+                    col_start=field.col_start,
+                    col_step_min=field.col_step_min,
+                    col_count=len(field.values),
                     values=flat,
                 )
+                subdir = "gexfield" if greek == "gamma" else f"{greek}field"
                 await asyncio.to_thread(
-                    self.writer.write_gexfield, self.symbol, self.expiry, day, field_row
+                    self.writer.write_gexfield,
+                    self.symbol,
+                    self.expiry,
+                    day,
+                    field_row,
+                    subdir=subdir,
                 )
                 await self.publisher.publish(
-                    f"gexfield.{self.symbol}.{self.expiry}",
+                    f"{subdir}.{self.symbol}.{self.expiry}",
                     {
                         "ts_min": ts_min.isoformat(),
                         "grid_start": field_row.grid_start,

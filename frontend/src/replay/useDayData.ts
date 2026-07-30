@@ -163,6 +163,8 @@ export interface DayData {
   minuteLabels: string[]
   /** ISO čas poslední naměřené minuty — horizont projekce (ADR-0006). */
   lastMinuteIso: string | null
+  /** ISO časy všech minut osy — zarovnávání externích řad (#204 plochy). */
+  minutesIso: string[]
   /** Dyn GEX profil per minuta/koš (ADR-0009); null = bez profilů. */
   gexProfile: (GexProfileRow | null)[] | null
   /** Modelované pole budoucích sloupců (ADR-0009 fáze 2); null = bez pole. */
@@ -196,6 +198,7 @@ function demoDay(): DayData {
     spotSeries,
     minuteLabels,
     lastMinuteIso: null, // demo den není ukotvený v čase → bez projekce
+    minutesIso: [],
     gexProfile: null,
     gexField: null,
     ladder: null,
@@ -220,6 +223,7 @@ function replayToDay(day: ReplayDay): DayData {
     spotSeries,
     minuteLabels,
     lastMinuteIso: day.minutes.at(-1) ?? null,
+    minutesIso: day.minutes,
     gexProfile: day.gexProfile,
     gexField: day.gexField,
     ladder: day.ladder,

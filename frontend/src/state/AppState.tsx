@@ -31,8 +31,6 @@ export interface AlertMessage {
 }
 
 export interface Toggles {
-  /** Dyn GEX pole jako podkladová vrstva heatmapy (#242) — kombinuje se s módy. */
-  dynGexField: boolean
   dynGex: boolean
   /** Sekundární zeď (ADR-0008, #92): dvě rovnocenné koncentrace jako dvě linie. */
   secondaryWall: boolean
@@ -59,6 +57,10 @@ export type Theme = 'dark' | 'light'
 /** Režim zobrazení signálů (#295, SPEC 6.1/S9): výpočet běží vždy, tohle řídí jen UI. */
 export type SignalMode = 'off' | 'news' | 'combined'
 export const SIGNAL_MODES: readonly SignalMode[] = ['off', 'news', 'combined']
+
+/** Podkladová plocha heatmapy (#242 → dropdown #204): jedna aktivní, ne checkboxy. */
+export type UnderlayPlane = 'off' | 'gex' | 'charm' | 'vanna'
+export const UNDERLAY_PLANES: readonly UnderlayPlane[] = ['off', 'gex', 'charm', 'vanna']
 
 /** Poslední cena + denní změna (hlavička; plní MainContent z denních dat). */
 export interface PriceInfo {
@@ -124,6 +126,9 @@ interface AppState {
   /** Dropdown OFF/NEWS/COMBINED vedle News checkboxu (#295, SPEC 9.0). */
   signalMode: SignalMode
   setSignalMode: (mode: SignalMode) => void
+  /** Dropdown podkladové plochy Off/Dyn GEX/Charm/Vanna (#204). */
+  underlayPlane: UnderlayPlane
+  setUnderlayPlane: (plane: UnderlayPlane) => void
   view: AppView
   setView: (view: AppView) => void
   theme: Theme
@@ -181,7 +186,6 @@ function initialFromUrl(): { view: AppView; theme: Theme | null } {
 
 /** Výchozí stav přepínačů (persistuje se jako celek, ADR-0007). */
 const DEFAULT_TOGGLES: Toggles = {
-  dynGexField: false,
   dynGex: true,
   secondaryWall: true,
   gexLevels: true,
@@ -263,6 +267,12 @@ export function AppStateProvider({
     'signalMode',
     'off',
     oneOf(SIGNAL_MODES),
+  )
+  // Dřív checkbox dynGexField (#242) — dropdown ploch ho nahrazuje (#204)
+  const [underlayPlane, setUnderlayPlane] = usePersistentState<UnderlayPlane>(
+    'underlayPlane',
+    'off',
+    oneOf(UNDERLAY_PLANES),
   )
 
   const appendLog = useCallback((line: string) => {
@@ -353,6 +363,8 @@ export function AppStateProvider({
       setToggle: (key, val) => setToggles((prev) => ({ ...prev, [key]: val })),
       signalMode,
       setSignalMode,
+      underlayPlane,
+      setUnderlayPlane,
       view,
       setView,
       theme,
@@ -380,6 +392,8 @@ export function AppStateProvider({
       setToggles,
       signalMode,
       setSignalMode,
+      underlayPlane,
+      setUnderlayPlane,
       expiries,
       selectedExpiry,
       timeframe,
