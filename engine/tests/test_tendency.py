@@ -122,3 +122,53 @@ def test_repository_upserts_votes_and_version(tmp_path: Path) -> None:
     assert rows[0]["weights_version"] == TENDENCY_WEIGHTS_VERSION
     assert {vote["name"] for vote in rows[0]["votes"]} == {"flip", "max_pain"}
     assert repository.series_for("ES", NOW.date() + dt.timedelta(days=1)) == []
+
+
+def test_charm_flow_votes_against_net_charm_with_time_ramp() -> None:
+    """#397: dealer tok = −sign(charm); rampa 0 → 1 mezi T−4 h a T−1 h."""
+    from gexlens_engine.compute.tendency import charm_time_factor
+
+    assert charm_time_factor(30.0) == 1.0
+    assert charm_time_factor(150.0) == pytest.approx(0.5)
+    assert charm_time_factor(300.0) == 0.0
+    assert charm_time_factor(-15.0) == 0.0  # po close se nehlasuje
+
+    # Záporný charm (put masa pod cenou) hodinu před close → plný long hlas
+    late = evaluate_tendency(inputs(charm_at_price=-500.0, minutes_to_close=45.0))
+    assert late is not None
+    assert vote_of(late, "charm_flow") == 1.0
+    # Kladný charm v půlce rampy → poloviční short hlas
+    mid = evaluate_tendency(inputs(charm_at_price=800.0, minutes_to_close=150.0))
+    assert mid is not None
+    assert vote_of(mid, "charm_flow") == pytest.approx(-0.5)
+    # Ráno (za rampou) hlas 0 — složka je vidět, ale mlčí
+    morning = evaluate_tendency(inputs(charm_at_price=-500.0, minutes_to_close=400.0))
+    assert morning is not None
+    assert vote_of(morning, "charm_flow") == 0.0
+    # Bez minutes_to_close se složka přeskakuje
+    missing = evaluate_tendency(inputs(charm_at_price=-500.0))
+    assert missing is None or "charm_flow" not in {v.name for v in missing.votes}
+
+
+def test_vanna_flow_needs_iv_trend() -> None:
+    """#397: hlas = sign(vanna) × směr IV; plochá IV (deadband) mlčí."""
+    base = dict(vanna_at_price=200.0, iv_now=0.148, iv_then=0.150)  # IV klesá o 0,2 b
+    falling = evaluate_tendency(inputs(**base))
+    assert falling is not None
+    assert vote_of(falling, "vanna_flow") == 1.0  # kladná vanna + pokles IV → nákupy
+    rising = evaluate_tendency(inputs(vanna_at_price=200.0, iv_now=0.152, iv_then=0.150))
+    assert rising is not None
+    assert vote_of(rising, "vanna_flow") == -1.0
+    negative = evaluate_tendency(inputs(vanna_at_price=-200.0, iv_now=0.148, iv_then=0.150))
+    assert negative is not None
+    assert vote_of(negative, "vanna_flow") == -1.0
+    flat = evaluate_tendency(inputs(vanna_at_price=200.0, iv_now=0.1505, iv_then=0.150))
+    assert flat is not None
+    assert vote_of(flat, "vanna_flow") == 0.0  # pod deadbandem
+    # Bez IV řady se složka přeskakuje
+    missing = evaluate_tendency(inputs(vanna_at_price=200.0, iv_now=0.15))
+    assert missing is None or "vanna_flow" not in {v.name for v in missing.votes}
+
+
+def test_weights_version_bumped_for_v2() -> None:
+    assert TENDENCY_WEIGHTS_VERSION == 2

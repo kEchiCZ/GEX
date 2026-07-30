@@ -111,6 +111,9 @@ class EngineRuntime:
     last_gex_levels: GexLevels | None = field(default=None, init=False)
     # Poslední Dyn GEX profil (ADR-0009) — tendency (#350) z něj čte gammu v místě ceny
     last_profile: GexProfile | None = field(default=None, init=False)
+    # Charm/vanna profily (#204) — tendency v2 (#397) z nich čte toky v místě ceny
+    last_charm_profile: GexProfile | None = field(default=None, init=False)
+    last_vanna_profile: GexProfile | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
@@ -356,6 +359,8 @@ class EngineRuntime:
                 multiplier=self.multiplier,
             )
             self.last_profile = profiles["gamma"]
+            self.last_charm_profile = profiles["charm"]
+            self.last_vanna_profile = profiles["vanna"]
             for greek, profile in profiles.items():
                 profile_row = GexProfileRow(
                     ts_min=ts_min,

@@ -21,7 +21,8 @@ import datetime as dt
 from dataclasses import dataclass, field
 
 # Verze vah (S11) — zvednout při každé změně vah nebo pravidel hlasů
-TENDENCY_WEIGHTS_VERSION = 1
+# v2 (#397): + charm_flow (časová rampa do close) a vanna_flow (× trend IV)
+TENDENCY_WEIGHTS_VERSION = 2
 
 # Nekalibrované výchozí váhy (#350): flip nejvyšší, zbytek rovnocenný
 WEIGHTS: dict[str, float] = {
@@ -35,11 +36,20 @@ WEIGHTS: dict[str, float] = {
     "delta_flow": 1.0,
     "sentindex": 1.0,
     "gamma_at_price": 1.0,
+    "charm_flow": 1.0,
+    "vanna_flow": 1.0,
 }
 
 # Strop příspěvku jedné složky do výsledného skóre — těsně pod hranicí
 # „Strong" (0,5), aby jediná složka nikdy neudělala Strong sama
 COMPONENT_CAP = 0.45
+
+# Charm tok (#397): rampa hlasu k close 20:00 UTC — plná síla od T−1 h,
+# nula do T−4 h; ráno by charm hlasoval šum, který trh začne řešit až večer
+CHARM_RAMP_FULL_MIN = 60.0
+CHARM_RAMP_ZERO_MIN = 240.0
+# Vanna tok (#397): deadband trendu ATM IV — pod 0,1 vol bodu za okno je IV plochá
+VANNA_IV_DEADBAND = 0.001
 
 BAND_STRONG = 0.5
 BAND_WEAK = 0.15
@@ -72,6 +82,14 @@ class TendencyInputs:
     sent_value_then: float | None = None
     # Gamma modelového profilu v místě ceny (gexfield.gamma_at_price)
     gamma_at_price: float | None = None
+    # Charm/vanna plochy v místě ceny (#397) — tytéž modely jako Dyn plochy
+    charm_at_price: float | None = None
+    vanna_at_price: float | None = None
+    # Minuty do close seance (20:00 UTC) — časová rampa charm hlasu
+    minutes_to_close: float | None = None
+    # ATM IV teď a před oknem — směr pro vanna hlas
+    iv_now: float | None = None
+    iv_then: float | None = None
 
 
 @dataclass(frozen=True)
@@ -193,7 +211,43 @@ def _collect_votes(inputs: TendencyInputs) -> list[ComponentVote]:
             _sign(inputs.gamma_at_price),
             f"gamma v místě ceny {'kladná (tlumení)' if inputs.gamma_at_price > 0 else 'záporná (zesilování)' if inputs.gamma_at_price < 0 else 'nulová'}",  # noqa: E501
         )
+    if inputs.charm_at_price is not None and inputs.minutes_to_close is not None:
+        # Dealer hedge tok = −d(delta knihy)/dt: záporný net charm (vyhnívající
+        # put masa pod cenou) → nákupy do close → long; zrcadlově short.
+        ramp = charm_time_factor(inputs.minutes_to_close)
+        add(
+            "charm_flow",
+            -_sign(inputs.charm_at_price) * ramp,
+            f"charm {'záporný → nákupy' if inputs.charm_at_price < 0 else 'kladný → prodeje' if inputs.charm_at_price > 0 else 'nulový'} do close, síla {ramp:.0%} ({max(0.0, inputs.minutes_to_close):.0f} min do 20:00 UTC)",  # noqa: E501
+        )
+    if (
+        inputs.vanna_at_price is not None
+        and inputs.iv_now is not None
+        and inputs.iv_then is not None
+    ):  # noqa: E501
+        # Hedge tok při pohybu IV = −vanna·Δσ: kladná vanna + klesající IV →
+        # nákupy → long. Plochá IV (deadband) → hlas mlčí.
+        iv_change = inputs.iv_now - inputs.iv_then
+        vote = 0.0
+        if abs(iv_change) >= VANNA_IV_DEADBAND:
+            vote = _sign(inputs.vanna_at_price) * -_sign(iv_change)
+        add(
+            "vanna_flow",
+            vote,
+            f"vanna {'kladná' if inputs.vanna_at_price > 0 else 'záporná' if inputs.vanna_at_price < 0 else 'nulová'}, ATM IV {iv_change * 100:+.2f} b za okno",  # noqa: E501
+        )
     return votes
+
+
+def charm_time_factor(minutes_to_close: float) -> float:
+    """Rampa charm hlasu: 0 do T−4 h, lineárně k 1 od T−1 h; po close 0."""
+    if minutes_to_close < 0:
+        return 0.0
+    if minutes_to_close <= CHARM_RAMP_FULL_MIN:
+        return 1.0
+    if minutes_to_close >= CHARM_RAMP_ZERO_MIN:
+        return 0.0
+    return (CHARM_RAMP_ZERO_MIN - minutes_to_close) / (CHARM_RAMP_ZERO_MIN - CHARM_RAMP_FULL_MIN)
 
 
 def band_of(score: float) -> str:
