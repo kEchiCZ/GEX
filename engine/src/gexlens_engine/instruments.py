@@ -45,6 +45,7 @@ from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.fa_validation import FaValidationRepository, collect_fa_validation
 from gexlens_engine.storage.meta import meta_metadata, settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
+from gexlens_engine.t6 import T6Collector
 from gexlens_engine.tendency import TendencyEngine
 
 logger = logging.getLogger(__name__)
@@ -205,6 +206,8 @@ class InstrumentPipeline:
     setup_engine: SetupEngine | None = None
     # Indikátor tendence (#350) — None = vypnuto
     tendency_engine: TendencyEngine | None = None
+    # Sběrač kandidátů T6 (#256) — None = vypnuto
+    t6_collector: T6Collector | None = None
     # Denní FA validace po OI archivu (#232) — None = vypnuto
     fa_repository: FaValidationRepository | None = None
     # Hlídání tiché ztráty 5s barů (#221); default z konfigurace v __post_init__
@@ -455,6 +458,12 @@ class InstrumentPipeline:
                 await self.tendency_engine.on_minute(now, spot, self.runtime)
             except Exception:
                 logger.exception("Indikátor tendence %s selhal — pokračuji", self.symbol)
+        # Sběrač kandidátů T6 (#256) — sám se hlídá na jeden běh denně
+        if self.t6_collector is not None:
+            try:
+                await self.t6_collector.on_minute(now, spot, self.runtime)
+            except Exception:
+                logger.exception("T6 sběrač %s selhal — pokračuji", self.symbol)
 
         # Následující expirace v nižší kadenci; její pád nesmí shodit aktivní řetěz
         if (
