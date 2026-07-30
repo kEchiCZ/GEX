@@ -41,6 +41,10 @@ export type Swatch =
   | { kind: 'bars'; color: string; second?: string }
   /** GEX křivka v pravém profilu: zelená doprava, červená doleva, žlutý flip. */
   | { kind: 'gex' }
+  /** Šipka signálu na cenové křivce se stopou platnosti (#295). */
+  | { kind: 'signal' }
+  /** Chip z hlavičky (stav sentimentu, tendence). */
+  | { kind: 'chip'; color: string; label: string }
 
 export interface LegendItem {
   name: string
@@ -237,6 +241,40 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         what: 'Otevření a zavření hlavních trhů — Sydney, Šanghaj, Frankfurt, Londýn, US.',
         how: 'Na těchto hranicích se mění likvidita. US open bývá zlom dne: noční pohyb se často otočí a teprve tady vzniká skutečný směr.',
       },
+      {
+        name: 'Signál ze zpráv',
+        swatch: { kind: 'signal' },
+        where:
+          'Hlavní graf, trojúhelník na cenové křivce; zapíná dropdown „Signály“ (Off / NEWS / COMBINED).',
+        what: 'Long/Short nápověda ze zpráv: vznikne, jen když je potvrzený denní stav (RiskOn/RiskOff), přišla čerstvá zpráva ve směru stavu A její typ má v historii dost změřených reakcí se spolehlivou úspěšností (n ≥ 30, spodní mez hit-rate > 50 %). Sytost šipky = síla; vodorovná stopa vede do konce platnosti. Režim NEWS bere jen zprávy, COMBINED navíc vyžaduje souhlas GEX kontextu (cena vs. flip, sklon Cum Δ).',
+        up: '▲ zelenomodrá pod cenou = long signál. Tooltip u kurzoru ukáže zdůvodnění, počet vzorků a hit-rate.',
+        down: '▼ červená nad cenou = short signál. Badge ⚠ u šipky znamená nepotvrzenou změnu stavu — signál může předčasně vyhasnout.',
+        how: 'Není to příkaz k obchodu — je to statistika minulých reakcí na podobné zprávy. Dokud model nemá dost dat, dropdown ukazuje „sbírám data“ a signály nechodí.',
+      },
+    ],
+  },
+  {
+    title: 'Chipy v hlavičce',
+    note: 'Souhrnný kontext dne vedle ceny — klik na chip otevře detail.',
+    items: [
+      {
+        name: 'Tendence ceny',
+        swatch: { kind: 'chip', color: '#7d8596', label: 'Neutral' },
+        where: 'Hlavička, pětitečková škála Strong Short · Short · Neutral · Long · Strong Long.',
+        what: 'Souhrn deseti ukazatelů z této legendy do jednoho čísla — každá složka (poloha vůči flipu, zdem, Max Painu, těžišti, sklon a rozchod Cum Δ, Δ Flow, SentIndex, gamma v místě ceny) hlasuje −1 až +1 a skóre je vážený průměr s nejvyšší vahou Gamma Flipu. Klik rozbalí rozpad hlasů: vidíš, KTERÁ složka indikátor táhne — žádná černá skříňka.',
+        up: 'Long / Strong Long: převažují růstové podmínky. Zelený chip a tečka vpravo.',
+        down: 'Short / Strong Short: převažují klesající podmínky. Červený chip a tečka vlevo.',
+        how: 'Badge „nekalibrováno“ je přiznání, že váhy zatím nejsou ověřené proti datům — indikátor popisuje positioning a tok, NENÍ to doporučení k obchodu. Neutral je schválně široký: dokud si složky odporují, raději mlčí.',
+      },
+      {
+        name: 'Stav sentimentu',
+        swatch: { kind: 'chip', color: DOWN_COLOR, label: 'RISK OFF' },
+        where: 'Hlavička, zelený RISK ON / červený RISK OFF / šedý NEUTRAL.',
+        what: 'Dlouhodobá nálada trhu z denních uzávěrů indexu zpráv (vlny nad MA5/MA10 s adaptivním prahem potvrzení). Na rozdíl od panelu Sentiment (minuty) se mění nejvýš jednou denně. Klik otevře sparkline dnešního indexu, klouzavé průměry a aktivní témata.',
+        up: 'RISK ON: potvrzená pozitivní vlna — prostředí přeje růstu indexů.',
+        down: 'RISK OFF: potvrzená negativní vlna — útěk od rizika, ES/NQ pod tlakem.',
+        how: 'Pulsující tečka = nepotvrzená intradenní změna; potvrdí ji až denní close. Stav řídí i vznik signálů (long jen při RiskOn, short jen při RiskOff).',
+      },
     ],
   },
   {
@@ -284,7 +322,7 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         what: 'Index nálady ze zpracovaných zpráv — spojitá řada, ve které vliv zprávy postupně doznívá.',
         up: 'Kladné pásmo = risk-on: investoři jsou ochotní nést riziko, peníze tečou do akcií a ES/NQ mají sklon růst. Index roste = zprávy tuhle chuť posilují.',
         down: 'Záporné pásmo = risk-off: útěk do bezpečí, peníze odtékají z akcií do dluhopisů a dolaru, ES/NQ jsou pod tlakem. Prudký propad indexu je obvykle jedna silná negativní zpráva.',
-        how: 'Je to kontext, ne vstupní signál. Trh na zprávu zareaguje v řádu minut, index doznívá mnohem déle.',
+        how: 'Je to kontext, ne vstupní signál. Trh na zprávu zareaguje v řádu minut, index doznívá mnohem déle. V Daily timeframe se panel kreslí jako OHLC svíčky — open ukazuje, co z nočních a víkendových zpráv do rána reálně zbylo, rozkmit svíčky velikost denních výkyvů nálady.',
       },
     ],
   },
@@ -349,6 +387,55 @@ export function LegendSwatch({ swatch }: { swatch: Swatch }) {
           strokeWidth={swatch.width ?? 1.5}
           strokeDasharray={swatch.dash?.join(' ')}
         />
+      </svg>
+    )
+  }
+  if (swatch.kind === 'signal') {
+    // Šipka long na cenové křivce + stopa platnosti (zrcadlí Heatmap #295)
+    return (
+      <svg {...common} role="presentation">
+        <polyline
+          points={`2,7 14,5 24,9 34,6 ${SWATCH_W - 2},8`}
+          fill="none"
+          stroke={UP_COLOR}
+          strokeWidth={1.2}
+          opacity={0.6}
+        />
+        <line
+          x1={24}
+          y1={9}
+          x2={SWATCH_W - 4}
+          y2={9}
+          stroke="rgba(20,184,166,0.4)"
+          strokeWidth={1}
+        />
+        <polygon points="24,11 19,16 29,16" fill="rgba(20,184,166,0.95)" />
+      </svg>
+    )
+  }
+  if (swatch.kind === 'chip') {
+    return (
+      <svg {...common} role="presentation">
+        <rect
+          x={1}
+          y={2}
+          width={SWATCH_W - 2}
+          height={SWATCH_H - 4}
+          rx={(SWATCH_H - 4) / 2}
+          fill="none"
+          stroke={swatch.color}
+          opacity={0.7}
+        />
+        <text
+          x={SWATCH_W / 2}
+          y={midY + 3.5}
+          textAnchor="middle"
+          fontSize={9}
+          fontWeight={600}
+          fill={swatch.color}
+        >
+          {swatch.label}
+        </text>
       </svg>
     )
   }
