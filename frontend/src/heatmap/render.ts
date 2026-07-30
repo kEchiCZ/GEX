@@ -83,7 +83,31 @@ Vnitřní smyčka počítá barvu ve skalárech místo `Rgba` n-tic: helpery z `
 alokovaly 3–5 polí na pixel, což přes 250k buněk dělalo ~1M alokací a polovinu času
 překreslení (#142). Matematika je s nimi shodná — hlídá to test proti `callColor`
 / `putColor` / `blend` / `applyStale`. */
-export function renderGrid(grid: HeatmapGrid, style: HeatmapStyle): PixelBuffer {
+/** Divergentní paleta signed vrstvy: RGB pro kladnou a zápornou stranu (#204). */
+export interface SignedPalette {
+  pos: [number, number, number]
+  neg: [number, number, number]
+  /** Historická zvláštnost výchozí palety: R kladné strany se neškáluje
+      hodnotou (parita se `signedColor`/`callColor` v color.ts). */
+  posRConstant?: boolean
+}
+
+/** Výchozí (gamma): zelená kladná, červená záporná — historické chování. */
+export const DEFAULT_SIGNED_PALETTE: SignedPalette = {
+  pos: [24, 190, 160],
+  neg: [230, 45, 60],
+  posRConstant: true,
+}
+/** Charm: jantarová kladná, modrá záporná (#204). */
+export const CHARM_PALETTE: SignedPalette = { pos: [235, 170, 40], neg: [70, 130, 240] }
+/** Vanna: teal kladná, fialová záporná (#204, Moodix vzor). */
+export const VANNA_PALETTE: SignedPalette = { pos: [20, 190, 170], neg: [150, 80, 230] }
+
+export function renderGrid(
+  grid: HeatmapGrid,
+  style: HeatmapStyle,
+  palette: SignedPalette = DEFAULT_SIGNED_PALETTE,
+): PixelBuffer {
   const width = grid.minutes
   const height = grid.strikes.length
   const dataMinutes = dataMinutesOf(grid)
@@ -123,18 +147,18 @@ export function renderGrid(grid: HeatmapGrid, style: HeatmapStyle): PixelBuffer 
       let b = 0
       let a = 0
       if (signed) {
-        // signedColor: záporné červeně, kladné zeleně
+        // signedColor dle palety plochy (#204); default = záporné červeně, kladné zeleně
         const raw = signed[index]
         const v = raw < -1 ? -1 : raw > 1 ? 1 : raw
         if (v >= 0) {
-          r = 24
-          g = Math.round(190 * v)
-          b = Math.round(160 * v)
+          r = palette.posRConstant ? palette.pos[0] : Math.round(palette.pos[0] * v)
+          g = Math.round(palette.pos[1] * v)
+          b = Math.round(palette.pos[2] * v)
           a = Math.round(v * 255)
         } else {
-          r = Math.round(230 * -v)
-          g = Math.round(45 * -v)
-          b = Math.round(60 * -v)
+          r = Math.round(palette.neg[0] * -v)
+          g = Math.round(palette.neg[1] * -v)
+          b = Math.round(palette.neg[2] * -v)
           a = Math.round(-v * 255)
         }
       } else {

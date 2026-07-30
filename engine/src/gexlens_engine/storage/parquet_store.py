@@ -431,24 +431,28 @@ class SnapshotWriter:
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_gexprofile(
-        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[GexProfileRow]
+        self,
+        symbol: str,
+        expiry: str,
+        day: dt.date,
+        rows: Sequence[GexProfileRow],
+        *,
+        subdir: str = "gexprofile",
     ) -> Path:
-        """Přidá Dyn GEX profil minuty do derived/{sym}/{exp}/gexprofile (ADR-0009)."""
-        path = (
-            self._settings.derived_dir
-            / symbol
-            / expiry
-            / "gexprofile"
-            / f"{day.isoformat()}.parquet"
-        )
+        """Přidá profil plochy do derived/{sym}/{exp}/{subdir} (ADR-0009, #204).
+
+        `subdir`: gexprofile (gamma) / charmprofile / vannaprofile — stejné
+        schéma, jiná BS derivace.
+        """
+        path = self._settings.derived_dir / symbol / expiry / subdir / f"{day.isoformat()}.parquet"
         buffer = self._buffer(path, GEXPROFILE_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
-    def write_gexfield(self, symbol: str, expiry: str, day: dt.date, row: GexFieldRow) -> Path:
-        """Přepíše modelované pole v derived/{sym}/{exp}/gexfield — jen poslední stav."""
-        path = (
-            self._settings.derived_dir / symbol / expiry / "gexfield" / f"{day.isoformat()}.parquet"
-        )
+    def write_gexfield(
+        self, symbol: str, expiry: str, day: dt.date, row: GexFieldRow, *, subdir: str = "gexfield"
+    ) -> Path:
+        """Přepíše modelované pole v derived/{sym}/{exp}/{subdir} — jen poslední stav."""
+        path = self._settings.derived_dir / symbol / expiry / subdir / f"{day.isoformat()}.parquet"
         buffer = self._buffer(path, GEXFIELD_SCHEMA)
         return buffer.replace_and_write([asdict(row)])
 

@@ -80,22 +80,18 @@ class DataRepository:
         )
         return self._read(path)
 
-    def gexprofile(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
-        """Dyn GEX profil per minuta (ADR-0009, #203)."""
-        path = (
-            self._settings.derived_dir
-            / symbol
-            / expiry
-            / "gexprofile"
-            / f"{day.isoformat()}.parquet"
-        )
+    def gexprofile(
+        self, symbol: str, expiry: str, day: dt.date, *, subdir: str = "gexprofile"
+    ) -> pd.DataFrame:
+        """Profil plochy per minuta (ADR-0009, #203/#204): gexprofile/charmprofile/vannaprofile."""
+        path = self._settings.derived_dir / symbol / expiry / subdir / f"{day.isoformat()}.parquet"
         return self._read(path)
 
-    def gexfield(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
-        """Modelované Dyn GEX pole (ADR-0009 fáze 2) — partice drží jen poslední stav."""
-        path = (
-            self._settings.derived_dir / symbol / expiry / "gexfield" / f"{day.isoformat()}.parquet"
-        )
+    def gexfield(
+        self, symbol: str, expiry: str, day: dt.date, *, subdir: str = "gexfield"
+    ) -> pd.DataFrame:
+        """Modelované pole plochy (ADR-0009 fáze 2) — partice drží jen poslední stav."""
+        path = self._settings.derived_dir / symbol / expiry / subdir / f"{day.isoformat()}.parquet"
         return self._read(path)
 
     def flow(self, symbol: str, day: dt.date) -> pd.DataFrame:

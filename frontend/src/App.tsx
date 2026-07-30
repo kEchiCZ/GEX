@@ -6,6 +6,7 @@ import { buildNewsMarkers } from './heatmap/newsMarkers'
 import { buildSignalMarkers } from './heatmap/signalMarkers'
 import { useSentimentState } from './hooks/useSentimentState'
 import { useSentimentDaily } from './hooks/useSentimentDaily'
+import { alignPlaneProfiles, useGreekPlane } from './hooks/useGreekPlane'
 import { dayLabel } from './replay/daily'
 import { useAnnotations } from './annotations/useAnnotations'
 import { NewsView } from './components/NewsView'
@@ -33,6 +34,7 @@ import { projectGrid, projectionLabels, projectionLength } from './heatmap/proje
 import { expirySettleUtc, sessionDateFor } from './instrument/expiry'
 import { SETUP_COLORS, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
+import { CHARM_PALETTE, DEFAULT_SIGNED_PALETTE, VANNA_PALETTE } from './heatmap/render'
 import { DEFAULT_VIEW } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
 import { gexRegime, profileZeroNearest } from './instrument/regime'
@@ -89,6 +91,7 @@ function MainContent() {
     setPriceInfo,
     setRegimeInfo,
     signalMode,
+    underlayPlane,
     socket,
   } = useAppState()
   // Zprávy a sentiment (#288/#289) — jeden zdroj pro panel, sidebar i chip
@@ -182,21 +185,37 @@ function MainContent() {
   // Timeframe: agregace 1m dat do košů v paměti (Daily má sloupec = den, koše se nepoužijí)
   const bucketMinutes = timeframe === 'daily' ? 1 : INTERVAL_MINUTES[interval]
   const day = useMemo(() => aggregateDay(modeDay, bucketMinutes), [modeDay, bucketMinutes])
-  // Dyn GEX podkladová vrstva (#242, à la Moodix): modelované pole POD měřeným
-  // módem — průhledné buňky měřené vrstvy ukážou pole, koncentrace ho překryjí.
-  // Stejná pipeline jako hlavní grid (agregace košů, slice, projekce), aby
-  // rozměry seděly 1:1.
+  // Podkladová plocha (#242 → #204): gamma z /replay balíku; charm/vanna se
+  // stahují a odebírají jen když jsou zobrazené (kanál per plocha)
+  const greekPlane = useGreekPlane(
+    symbol,
+    selectedExpiry,
+    viewDate,
+    underlayPlane,
+    isHistoricalExpiry ? undefined : socket,
+  )
+  const planeProfiles = useMemo(() => {
+    if (underlayPlane === 'gex') return rawDay.gexProfile
+    if (underlayPlane === 'off') return null
+    if (greekPlane.profiles.length === 0) return null
+    return alignPlaneProfiles(greekPlane.profiles, rawDay.minutesIso)
+  }, [underlayPlane, rawDay.gexProfile, rawDay.minutesIso, greekPlane.profiles])
+  const planeField = underlayPlane === 'gex' ? day.gexField : greekPlane.field
+  const planePalette =
+    underlayPlane === 'charm'
+      ? CHARM_PALETTE
+      : underlayPlane === 'vanna'
+        ? VANNA_PALETTE
+        : DEFAULT_SIGNED_PALETTE
+  // Modelované pole POD měřeným módem — průhledné buňky měřené vrstvy ukážou
+  // pole, koncentrace ho překryjí. Stejná pipeline jako hlavní grid (agregace
+  // košů, slice, projekce), aby rozměry seděly 1:1.
   const gexUnderDay = useMemo(() => {
-    if (!toggles.dynGexField || timeframe !== 'intraday') return null
-    if (!rawDay.gexProfile || rawDay.gexProfile.every((row) => row === null)) return null
-    const built = buildGexGrid(
-      rawDay.gexProfile,
-      rawDay.grid.strikes,
-      rawDay.grid.minutes,
-      heatScale,
-    )
+    if (underlayPlane === 'off' || timeframe !== 'intraday') return null
+    if (!planeProfiles || planeProfiles.every((row) => row === null)) return null
+    const built = buildGexGrid(planeProfiles, rawDay.grid.strikes, rawDay.grid.minutes, heatScale)
     return aggregateDay({ ...rawDay, grid: built }, bucketMinutes)
-  }, [toggles.dynGexField, timeframe, rawDay, heatScale, bucketMinutes])
+  }, [underlayPlane, timeframe, planeProfiles, rawDay, heatScale, bucketMinutes])
 
   const playback = usePlayback(day.grid.minutes)
   // Živá vrstva (#141): svíčky ze spot kanálu agregované do stejných košů jako den.
@@ -294,7 +313,7 @@ function MainContent() {
   // Dyn GEX podklad (#242): stejný slice + projekce jako hlavní grid — projekční
   // zóna nese modelované budoucí sloupce (ADR-0009 fáze 2)
   const gexUnderGrid = useMemo(() => {
-    if (!gexUnderDay || !rawDay.gexProfile) return null
+    if (!gexUnderDay || !planeProfiles) return null
     const sliced = playback.isLive
       ? gexUnderDay.grid
       : sliceGrid(gexUnderDay.grid, playback.position)
@@ -306,13 +325,13 @@ function MainContent() {
       expirySettleUtc(selectedExpiry),
       bucketMinutes,
     )
-    return projectGexField(sliced, extra, day.gexField, {
-      profiles: rawDay.gexProfile,
+    return projectGexField(sliced, extra, planeField, {
+      profiles: planeProfiles,
       lastMinuteIso: day.lastMinuteIso,
       bucketMinutes,
       scale: heatScale,
     })
-  }, [gexUnderDay, rawDay.gexProfile, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, day.gexField, bucketMinutes, heatScale]) // prettier-ignore
+  }, [gexUnderDay, planeProfiles, planeField, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, heatScale]) // prettier-ignore
   const projectionExtra = projectedGrid.minutes - (projectedGrid.dataMinutes ?? projectedGrid.minutes) // prettier-ignore
   const chartLabels = useMemo(
     () =>
@@ -743,6 +762,7 @@ function MainContent() {
             <Heatmap
               grid={projectedGrid}
               underGrid={gexUnderGrid}
+              underPalette={planePalette}
               style={style}
               contours={contours}
               overlays={overlays}

@@ -475,6 +475,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             bundle["oi_prev"] = []
         return bundle
 
+    @app.get("/gexplane/{symbol}/{expiry}")
+    def gexplane(
+        symbol: str, expiry: str, greek: str, date: dt.date | None = None
+    ) -> dict[str, object]:
+        """Charm/vanna plocha pro Dyn dropdown (#204) — načítá se až při volbě.
+
+        Gamma jede v /replay balíku a WS jako dřív; charm/vanna se přenáší jen
+        když je zobrazená („only the displayed greek is transferred").
+        """
+        if greek not in ("charm", "vanna"):
+            raise HTTPException(422, "greek musí být charm nebo vanna")
+        day = date or dt.datetime.now(dt.UTC).date()
+        out: dict[str, object] = {
+            "symbol": symbol,
+            "expiry": expiry,
+            "date": day.isoformat(),
+            "greek": greek,
+        }
+        try:
+            out["profiles"] = _records(
+                repository.gexprofile(symbol, expiry, day, subdir=f"{greek}profile")
+            )
+        except PartitionNotFoundError:
+            out["profiles"] = []
+        try:
+            out["field"] = _records(
+                repository.gexfield(symbol, expiry, day, subdir=f"{greek}field")
+            )
+        except PartitionNotFoundError:
+            out["field"] = []
+        return out
+
     @app.websocket("/ws/live")
     async def ws_live(websocket: WebSocket) -> None:
         """Live push kanálů (SPEC kap. 6): subscribe/unsubscribe protokol zprávami."""

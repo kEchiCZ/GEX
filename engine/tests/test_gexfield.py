@@ -202,3 +202,65 @@ def test_gexprofile_persisted_with_list_column(tmp_path: Path) -> None:
     frame = pd.read_parquet(path)
     assert list(frame.columns) == ["ts_min", "grid_start", "grid_step", "values"]
     assert list(frame["values"][0]) == [1.0, -2.5, 3.0]
+
+
+def test_greek_profiles_match_gamma_and_add_charm_vanna() -> None:
+    """#204: kombinovaný průchod dává bit-shodnou gammu + nenulové charm/vanna."""
+    from gexlens_engine.compute.gexfield import bs_charm, bs_vanna, greek_fields, greek_profiles
+
+    now = dt.datetime(2026, 7, 30, 14, 0, tzinfo=dt.UTC)
+    settle = now + dt.timedelta(hours=6)
+    contracts = [
+        ProfileContract(strike=7400.0 + 10 * i, right=("C" if i % 2 else "P"), iv=0.15, oi=1000.0)
+        for i in range(10)
+    ]
+    single = gamma_profile(
+        contracts,
+        ts_min=now,
+        settle=settle,
+        grid_start=7380.0,
+        grid_stop=7500.0,
+        grid_step=5.0,
+        multiplier=50.0,
+    )
+    combined = greek_profiles(
+        contracts,
+        ts_min=now,
+        settle=settle,
+        grid_start=7380.0,
+        grid_stop=7500.0,
+        grid_step=5.0,
+        multiplier=50.0,
+    )
+    assert combined["gamma"].values == pytest.approx(single.values)
+    assert any(value != 0 for value in combined["charm"].values)
+    assert any(value != 0 for value in combined["vanna"].values)
+
+    fields = greek_fields(
+        contracts,
+        ts_min=now,
+        settle=settle,
+        grid_start=7380.0,
+        grid_stop=7500.0,
+        grid_step=5.0,
+        multiplier=50.0,
+    )
+    assert fields is not None
+    assert set(fields) == {"gamma", "charm", "vanna"}
+    # Sloupce všech ploch sdílí mřížku i časovou osu
+    assert fields["charm"].col_start == fields["gamma"].col_start
+    assert len(fields["vanna"].values) == len(fields["gamma"].values)
+
+    # Ruční BS kontrola v jednom bodě: charm = φ(d1)·d2/(2τ)/365, vanna = −φ(d1)·d2/σ·0,01
+    import math
+
+    spot, strike, iv = 7400.0, 7450.0, 0.2
+    tau = 0.05
+    sqrt_tau = math.sqrt(tau)
+    d1 = (math.log(spot / strike) + 0.5 * iv * iv * tau) / (iv * sqrt_tau)
+    d2 = d1 - iv * sqrt_tau
+    phi = math.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi)
+    assert bs_charm(spot, strike, iv, tau) == pytest.approx(phi * d2 / (2 * tau) / 365.0)
+    assert bs_vanna(spot, strike, iv, tau) == pytest.approx(-phi * d2 / iv * 0.01)
+    assert bs_charm(spot, strike, 0.0, tau) == 0.0
+    assert bs_vanna(spot, strike, iv, 0.0) == 0.0

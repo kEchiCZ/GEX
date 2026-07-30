@@ -258,7 +258,7 @@ export async function fetchReplayInputs(
 }
 
 /** Kanonický klíč minuty: Arrow vrací timestamp jako epoch (ms), JSON jako ISO string. */
-function canonicalTs(value: unknown): string {
+export function canonicalTs(value: unknown): string {
   if (typeof value === 'number' || typeof value === 'bigint') {
     return new Date(Number(value)).toISOString()
   }

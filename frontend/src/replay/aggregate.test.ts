@@ -21,6 +21,7 @@ function sampleDay(): DayData {
     source: 'replay',
     grid: { minutes: 4, strikes: [100, 105], layers: { call, put }, staleAge: null },
     raw: null,
+    minutesIso: [],
     overlays: {
       price,
       levels: [{ name: 'flip', color: '#fff', series: [100, null, null, 102] }],

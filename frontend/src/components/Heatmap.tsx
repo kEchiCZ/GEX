@@ -14,6 +14,7 @@ import { useElementSize } from '../hooks/useElementSize'
 import { contourLevels, marchingSquares } from '../heatmap/contours'
 import type { ContoursMode } from '../heatmap/contours'
 import { gaussianBlur, renderGrid } from '../heatmap/render'
+import type { SignedPalette } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
 import {
@@ -79,6 +80,7 @@ const AXIS_LABEL_FG = '#e6e9ef'
 export function Heatmap({
   grid,
   underGrid = null,
+  underPalette,
   style,
   contours,
   overlays = {},
@@ -104,6 +106,8 @@ export function Heatmap({
   /** Dyn GEX pole jako podklad (#242) — kreslí se POD měřeným gridem; průhledné
       buňky měřené vrstvy ho ukážou. Musí mít shodné rozměry (App to zaručuje). */
   underGrid?: HeatmapGrid | null
+  /** Paleta podkladové plochy (#204): gamma zelená–červená, charm jantar–modrá, vanna teal–fialová. */
+  underPalette?: SignedPalette
   style: HeatmapStyle
   contours: ContoursMode
   overlays?: OverlayData
@@ -267,7 +271,7 @@ export function Heatmap({
       underGrid.minutes === grid.minutes &&
       underGrid.strikes.length === grid.strikes.length
     if (underMatches) {
-      const underBuffer = renderGrid(underGrid, style)
+      const underBuffer = renderGrid(underGrid, style, underPalette)
       context.putImageData(
         new ImageData(underBuffer.data, underBuffer.width, underBuffer.height),
         0,
@@ -287,7 +291,7 @@ export function Heatmap({
     offscreenRef.current = offscreen
     drawData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grid, underGrid, style])
+  }, [grid, underGrid, style, underPalette])
 
   // 2) Bitmapa → viditelný canvas (pan/zoom)
   const drawData = useCallback(() => {
