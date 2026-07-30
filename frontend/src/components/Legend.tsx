@@ -280,7 +280,7 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         name: 'Tendence ceny',
         swatch: { kind: 'chip', color: '#7d8596', label: 'Neutral' },
         where: 'Hlavička, pětitečková škála Strong Short · Short · Neutral · Long · Strong Long.',
-        what: 'Souhrn deseti ukazatelů z této legendy do jednoho čísla — každá složka (poloha vůči flipu, zdem, Max Painu, těžišti, sklon a rozchod Cum Δ, Δ Flow, SentIndex, gamma v místě ceny) hlasuje −1 až +1 a skóre je vážený průměr s nejvyšší vahou Gamma Flipu. Klik rozbalí rozpad hlasů: vidíš, KTERÁ složka indikátor táhne — žádná černá skříňka.',
+        what: 'Souhrn dvanácti ukazatelů z této legendy do jednoho čísla — každá složka (poloha vůči flipu, zdem, Max Painu, těžišti, sklon a rozchod Cum Δ, Δ Flow, SentIndex, gamma/charm/vanna v místě ceny) hlasuje −1 až +1 a skóre je vážený průměr s nejvyšší vahou Gamma Flipu. Klik rozbalí rozpad hlasů: vidíš, KTERÁ složka indikátor táhne — žádná černá skříňka.',
         up: 'Long / Strong Long: převažují růstové podmínky. Zelený chip a tečka vpravo.',
         down: 'Short / Strong Short: převažují klesající podmínky. Červený chip a tečka vlevo.',
         how: 'Badge „nekalibrováno“ je přiznání, že váhy zatím nejsou ověřené proti datům — indikátor popisuje positioning a tok, NENÍ to doporučení k obchodu. Neutral je schválně široký: dokud si složky odporují, raději mlčí.',

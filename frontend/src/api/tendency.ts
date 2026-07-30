@@ -39,6 +39,8 @@ export const VOTE_LABELS: Record<string, string> = {
   delta_flow: 'Δ Flow C/P',
   sentindex: 'SentIndex',
   gamma_at_price: 'GEX v místě ceny',
+  charm_flow: 'Charm tok do close',
+  vanna_flow: 'Vanna × trend IV',
 }
 
 export async function fetchTendency(symbol: string, date?: string): Promise<TendencyRow[]> {

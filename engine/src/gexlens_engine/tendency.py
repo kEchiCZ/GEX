@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # Okno sklonů (Cum Δ, cena, SentIndex) — shodné s CumΔ oknem signal enginu
 SLOPE_LOOKBACK_MIN = 10
 SENTIMENT_SUBDIR = "sentiment"
+# Sklon ATM IV pro vanna hlas (#397) — delší okno, IV se hýbe pomaleji než cena
+IV_LOOKBACK_MIN = 30
+# Close seance pro časovou rampu charm hlasu (shodné se settle konvencí)
+SESSION_CLOSE_UTC = dt.time(20, 0)
 
 
 @dataclass
@@ -45,6 +49,8 @@ class TendencyEngine:
         self._max_pain_loaded_for: tuple[str, dt.date] | None = None
         # Cache dnešní parquet řady SentIndexu (přepisuje se celá každý cyklus)
         self._sent_cache: tuple[Path, float, list[tuple[dt.datetime, float]]] | None = None
+        # ATM IV historie pro vanna hlas (#397)
+        self._iv_history: deque[tuple[dt.datetime, float]] = deque(maxlen=IV_LOOKBACK_MIN + 1)
 
     def _refresh_max_pain(self, expiry: str, today: dt.date) -> None:
         if self._max_pain_loaded_for == (expiry, today) and self._max_pain is not None:
@@ -80,6 +86,32 @@ class TendencyEngine:
         if not seen:
             return None, None
         return call_flow, put_flow
+
+    def _atm_iv(self, runtime: EngineRuntime, spot: float) -> float | None:
+        """Průměrná IV kotací nejblíž spotu (obě strany) — trend řady čte vanna hlas."""
+        best_diff: float | None = None
+        ivs: list[float] = []
+        quotes = runtime.scheduler.quotes()
+        for spec in quotes:
+            diff = abs(spec.strike - spot)
+            if best_diff is None or diff < best_diff - 1e-9:
+                best_diff = diff
+        if best_diff is None:
+            return None
+        for spec, cached in quotes.items():
+            if abs(spec.strike - spot) <= best_diff + 1e-9:
+                iv = cached.snapshot.iv
+                if iv is not None and iv > 0:
+                    ivs.append(float(iv))
+        if not ivs:
+            return None
+        return sum(ivs) / len(ivs)
+
+    @staticmethod
+    def _minutes_to_close(now: dt.datetime) -> float:
+        """Minuty do 20:00 UTC dnešní seance; po close záporné (rampa → 0)."""
+        close = dt.datetime.combine(now.date(), SESSION_CLOSE_UTC, dt.UTC)
+        return (close - now).total_seconds() / 60.0
 
     def _sentiment(self, now: dt.datetime) -> tuple[float | None, float | None]:
         """Aktuální hodnota SentIndexu + hodnota před oknem z denní parquet partice."""
@@ -135,7 +167,18 @@ class TendencyEngine:
         if cum_now is not None:
             self._history.append((now, cum_now, spot))
 
+        atm_iv = self._atm_iv(runtime, spot)
+        iv_then: float | None = None
+        if self._iv_history:
+            iv_oldest = self._iv_history[0]
+            if now - iv_oldest[0] >= dt.timedelta(minutes=IV_LOOKBACK_MIN):
+                iv_then = iv_oldest[1]
+        if atm_iv is not None:
+            self._iv_history.append((now, atm_iv))
+
         profile = runtime.last_profile
+        charm_profile = runtime.last_charm_profile
+        vanna_profile = runtime.last_vanna_profile
         inputs = TendencyInputs(
             ts_min=now,
             spot=spot,
@@ -154,6 +197,11 @@ class TendencyEngine:
             sent_value=sent_value,
             sent_value_then=sent_then,
             gamma_at_price=gamma_at_price(profile, spot) if profile else None,
+            charm_at_price=gamma_at_price(charm_profile, spot) if charm_profile else None,
+            vanna_at_price=gamma_at_price(vanna_profile, spot) if vanna_profile else None,
+            minutes_to_close=self._minutes_to_close(now),
+            iv_now=atm_iv,
+            iv_then=iv_then,
         )
         result = evaluate_tendency(inputs)
         if result is None:
