@@ -36,6 +36,7 @@ from gexlens_news.signal_engine import (
     GexContext,
     SignalEvent,
     evaluate_event,
+    gate_passes,
 )
 
 logger = logging.getLogger(__name__)
@@ -186,7 +187,13 @@ class SignalJob:
             )
         return events
 
-    def _bucket_stats(self, event: SignalEvent, symbol: str) -> BucketStats | None:
+    def _bucket_stats(self, event: SignalEvent, symbol: str, state: str) -> BucketStats | None:
+        """Bucket na primárním okně; preferuje pohled podmíněný stavem (#402).
+
+        Režimový bucket se použije, jen když SÁM projde Wilson gate — jinak
+        fallback na nepodmíněný 'all'. Horší než dosavadní chování to být
+        nemůže, jen přesnější tam, kde na to podmíněná větev má data.
+        """
         stmt = select(news_model_stats).where(
             news_model_stats.c.category == event.category,
             news_model_stats.c.importance == event.importance,
@@ -194,17 +201,28 @@ class SignalJob:
             news_model_stats.c.deferred == event.deferred,
             news_model_stats.c.window_min == self._primary_window,
             news_model_stats.c.symbol == symbol,
+            news_model_stats.c.regime.in_((state, "all")),
         )
         with self._engine.connect() as conn:
-            row = conn.execute(stmt).first()
-        if row is None:
-            return None
-        return BucketStats(
-            n=int(row.n),
-            hit_rate_lb=float(row.hit_rate_lb) if row.hit_rate_lb is not None else None,
-            ret_mean_bp=float(row.ret_mean_bp),
-            window_min=int(row.window_min),
-        )
+            rows = conn.execute(stmt).fetchall()
+        by_regime = {row.regime: row for row in rows}
+
+        def to_stats(row: Any) -> BucketStats:
+            return BucketStats(
+                n=int(row.n),
+                hit_rate_lb=float(row.hit_rate_lb) if row.hit_rate_lb is not None else None,
+                ret_mean_bp=float(row.ret_mean_bp),
+                window_min=int(row.window_min),
+                regime=str(row.regime),
+            )
+
+        conditional = by_regime.get(state)
+        if conditional is not None:
+            stats = to_stats(conditional)
+            if gate_passes(stats):
+                return stats
+        fallback = by_regime.get("all")
+        return to_stats(fallback) if fallback is not None else None
 
     def _already_signalled(self, now: dt.datetime) -> set[tuple[int, str]]:
         """(event_id, mode) páry z nedávných signálů — dedup (anti-spam)."""
@@ -307,7 +325,7 @@ class SignalJob:
             for symbol in self._symbols:
                 gex = load_gex_context(self._data_dir, symbol, now)
                 for event in events:
-                    stats = self._bucket_stats(event, symbol)
+                    stats = self._bucket_stats(event, symbol, state)
                     for candidate in evaluate_event(
                         event, state=state, stats=stats, now=now, gex=gex
                     ):

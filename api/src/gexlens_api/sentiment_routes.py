@@ -131,11 +131,17 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         return {"upcoming": _rows(engine_factory(), stmt)}
 
     @router.get("/news/stats")
-    def news_stats() -> dict[str, object]:
-        """Empirický model pro inspekci — hit-raty per okno včetně Wilson LB."""
+    def news_stats(regime: str | None = None) -> dict[str, object]:
+        """Empirický model pro inspekci — hit-raty per okno včetně Wilson LB.
+
+        `regime` (#402): all / RiskOn / RiskOff / Neutral / gamma_positive /
+        gamma_negative; bez filtru se vrací všechny pohledy.
+        """
         stmt = select(news_model_stats).order_by(
             news_model_stats.c.category, news_model_stats.c.window_min
         )
+        if regime is not None:
+            stmt = stmt.where(news_model_stats.c.regime == regime)
         return {"stats": _rows(engine_factory(), stmt)}
 
     @router.get("/news/latency")

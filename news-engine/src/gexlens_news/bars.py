@@ -22,6 +22,7 @@ class BarsRepository:
     """Denní partice `derived/{symbol}/bars/{YYYY-MM-DD}.parquet`."""
 
     def __init__(self, data_dir: Path) -> None:
+        self.data_dir = data_dir
         self._derived = data_dir / "derived"
 
     def _path(self, symbol: str, day: dt.date) -> Path:

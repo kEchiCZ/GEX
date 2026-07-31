@@ -38,6 +38,7 @@ const WAVES = [
 
 const STATS = [
   {
+    regime: 'all',
     category: 'MACRO_INFLATION',
     importance: 3,
     surprise_bucket: 'neg_large',
@@ -50,6 +51,7 @@ const STATS = [
     hit_rate_lb: 0.59,
   },
   {
+    regime: 'all',
     category: 'FED',
     importance: 2,
     surprise_bucket: 'none',
@@ -69,22 +71,24 @@ beforeEach(() => {
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
-      const body = url.includes('/stats/waves')
-        ? { waves: WAVES }
-        : url.includes('/news/stats')
-          ? { stats: STATS }
-          : url.includes('/settings')
-            ? {
-                settings: {
-                  retro_pass: {
-                    ran_at: '2026-07-29T05:00:00+00:00',
-                    classified: 12,
-                    reactions: 96,
-                    index_points: 480,
+      const body = url.includes('/setups/')
+        ? { setups: [] }
+        : url.includes('/stats/waves')
+          ? { waves: WAVES }
+          : url.includes('/news/stats')
+            ? { stats: STATS }
+            : url.includes('/settings')
+              ? {
+                  settings: {
+                    retro_pass: {
+                      ran_at: '2026-07-29T05:00:00+00:00',
+                      classified: 12,
+                      reactions: 96,
+                      index_points: 480,
+                    },
                   },
-                },
-              }
-            : {}
+                }
+              : {}
       return Promise.resolve({ ok: true, json: () => Promise.resolve(body) })
     }),
   )

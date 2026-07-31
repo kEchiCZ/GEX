@@ -147,6 +147,9 @@ news_reactions = Table(
     Column("ret_bp", Float, nullable=False),
     Column("range_bp", Float, nullable=False),
     Column("vol_z", Float, nullable=True),
+    # GEX režim v čase eventu (#402): positive/negative; None = levels toho dne
+    # nejsou (starší data mimo retenci) — podmíněná větev roste od nasazení
+    Column("gex_regime", String(16), nullable=True),
     # Do okna spadl jiný event s importance ≥ 2 → mimo trénovací statistiky.
     # Bez toho by se všem headlines z Fed day přičetl tentýž pohyb (SPEC 5.1).
     Column("contaminated", Boolean, nullable=False, default=False),
@@ -161,6 +164,10 @@ news_reactions = Table(
 news_model_stats = Table(
     "news_model_stats",
     sentiment_metadata,
+    # Režimová dimenze (#402): 'all' = nepodmíněný agregát (původní chování),
+    # 'RiskOn'/'RiskOff'/'Neutral' = podmíněno stavem sentimentu v čase eventu,
+    # 'gamma_positive'/'gamma_negative' = podmíněno GEX režimem reakce.
+    Column("regime", String(16), primary_key=True, server_default="all"),
     Column("category", String(24), primary_key=True),
     Column("importance", SmallInteger, primary_key=True),
     Column("surprise_bucket", String(16), primary_key=True),
@@ -337,4 +344,22 @@ def ensure_sentiment_schema(engine: Engine) -> None:
     bez ručního kroku. Tabulky pozdějších milestones vznikají rovnou — migrace
     mají být dopředné (SPEC kap. 11).
     """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    existing = set(inspector.get_table_names())
+    # Dopředná migrace #402: `news_model_stats` je plně derivovaná (noční
+    # full-replace) — při chybějícím sloupci `regime` se tabulka zahodí
+    # a create_all ji založí v novém tvaru; data doplní příští přepočet.
+    if "news_model_stats" in existing:
+        columns = {column["name"] for column in inspector.get_columns("news_model_stats")}
+        if "regime" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("DROP TABLE news_model_stats"))
+    # `news_reactions` jsou naměřená data — jen aditivní ADD COLUMN.
+    if "news_reactions" in existing:
+        columns = {column["name"] for column in inspector.get_columns("news_reactions")}
+        if "gex_regime" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE news_reactions ADD COLUMN gex_regime VARCHAR(16)"))
     sentiment_metadata.create_all(engine)
