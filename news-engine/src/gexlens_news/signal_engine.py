@@ -42,6 +42,8 @@ class BucketStats:
     hit_rate_lb: float | None
     ret_mean_bp: float
     window_min: int
+    # Ze kterého režimového pohledu bucket je (#402): 'all' = nepodmíněný
+    regime: str = "all"
 
 
 @dataclass(frozen=True)
@@ -149,6 +151,7 @@ def evaluate_event(
             "hit_rate_lb": stats.hit_rate_lb,
             "ret_mean_bp": stats.ret_mean_bp,
             "window_min": stats.window_min,
+            "regime": stats.regime,
         },
         "half_life_min": tau,
     }

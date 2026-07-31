@@ -8,13 +8,18 @@ nejistota.
 
 import datetime as dt
 import logging
-from collections.abc import Sequence
 
 from sqlalchemy import delete, insert, select
 from sqlalchemy.engine import Engine
 
-from gexlens_engine.storage.sentiment import news_events, news_model_stats, news_reactions
-from gexlens_news.model_stats import BucketStats, ReactionSample, aggregate_samples
+from gexlens_engine.compute.sentwaves import DailyClose, assess_state
+from gexlens_engine.storage.sentiment import (
+    news_events,
+    news_model_stats,
+    news_reactions,
+    sentiment_daily,
+)
+from gexlens_news.model_stats import BucketStats, ReactionSample, aggregate_by_regime
 
 logger = logging.getLogger(__name__)
 
@@ -25,17 +30,39 @@ class ModelStatsJob:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
+    def _state_by_date(self) -> dict[dt.date, str]:
+        """Point-in-time stav pro každý den — z closes PŘED daným dnem (S11).
+
+        Stejná mechanika jako track record: stav dne d se počítá jen z closes
+        < d, takže podmíněné buckety nekoukají do budoucnosti.
+        """
+        stmt = (
+            select(sentiment_daily.c.date, sentiment_daily.c.close)
+            .where(sentiment_daily.c.symbol == "ES")
+            .order_by(sentiment_daily.c.date)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        closes = [DailyClose(date=row.date, close=float(row.close)) for row in rows]
+        out: dict[dt.date, str] = {}
+        for index, point in enumerate(closes):
+            out[point.date] = assess_state(closes[:index]).state if index else "Neutral"
+        return out
+
     def load_samples(self) -> list[ReactionSample]:
+        state_by_date = self._state_by_date()
         stmt = select(
             news_events.c.category,
             news_events.c.importance,
             news_events.c.surprise_z,
             news_events.c.sentiment_dir,
+            news_events.c.ts_event,
             news_reactions.c.symbol,
             news_reactions.c.window_min,
             news_reactions.c.ret_bp,
             news_reactions.c.contaminated,
             news_reactions.c.deferred,
+            news_reactions.c.gex_regime,
         ).select_from(
             news_reactions.join(news_events, news_events.c.id == news_reactions.c.event_id)
         )
@@ -52,14 +79,17 @@ class ModelStatsJob:
                 ret_bp=float(row.ret_bp),
                 contaminated=bool(row.contaminated),
                 deferred=bool(row.deferred),
+                state=state_by_date.get(row.ts_event.date()),
+                gex_regime=row.gex_regime,
             )
             for row in rows
         ]
 
-    def store(self, stats: Sequence[BucketStats], now: dt.datetime) -> None:
+    def store(self, stats: list[tuple[str, BucketStats]], now: dt.datetime) -> None:
         """Nahradí celou tabulku — přepočet je vždy úplný."""
         rows = [
             {
+                "regime": regime,
                 "category": item.key.category,
                 "importance": item.key.importance,
                 "surprise_bucket": item.key.surprise_bucket,
@@ -74,7 +104,7 @@ class ModelStatsJob:
                 "hit_rate_lb": item.hit_rate_lb,
                 "computed_at": now,
             }
-            for item in stats
+            for regime, item in stats
         ]
         with self._engine.begin() as conn:
             conn.execute(delete(news_model_stats))
@@ -84,15 +114,15 @@ class ModelStatsJob:
     def run(self, now: dt.datetime) -> int:
         """Přepočet; vrací počet bucketů."""
         samples = self.load_samples()
-        stats = aggregate_samples(samples)
+        stats = aggregate_by_regime(samples)
         self.store(stats, now)
         if stats:
-            usable = [s for s in stats if s.n >= 5]
+            unconditional = sum(1 for regime, _ in stats if regime == "all")
             logger.info(
-                "Model stats: %d bucketů z %d oken (%d s n≥5)",
+                "Model stats: %d řádků (%d nepodmíněných bucketů) z %d oken",
                 len(stats),
+                unconditional,
                 len(samples),
-                len(usable),
             )
         else:
             logger.info(

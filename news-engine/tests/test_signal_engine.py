@@ -109,7 +109,13 @@ def test_inputs_snapshot_is_complete() -> None:
     inputs = result[0].inputs
     assert inputs["event_id"] == 1
     assert inputs["classification_version"] == 2
-    assert inputs["bucket"] == {"n": 50, "hit_rate_lb": 0.58, "ret_mean_bp": 6.0, "window_min": 5}
+    assert inputs["bucket"] == {
+        "n": 50,
+        "hit_rate_lb": 0.58,
+        "ret_mean_bp": 6.0,
+        "window_min": 5,
+        "regime": "all",
+    }
     assert inputs["state"] == "RiskOn"
     assert inputs["half_life_min"] == 270
 

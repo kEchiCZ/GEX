@@ -21,6 +21,8 @@ import type {
   WaveRow,
 } from '../api/news'
 import { fetchSettings } from '../api/settings'
+import { CURRENT_MECHANICS_VERSION, fetchSetups, templateLabel } from '../api/setups'
+import type { SetupRow } from '../api/setups'
 import {
   STRATEGY_COLORS,
   STRATEGY_LABELS,
@@ -119,6 +121,40 @@ function HistogramChart({
 }
 
 const WINDOWS = [1, 5, 15, 60]
+
+/** Režimové pohledy statistik (#402) — 'all' je nepodmíněný průměr. */
+const REGIME_LABELS: Record<string, string> = {
+  all: 'Vše',
+  RiskOn: 'Risk On',
+  RiskOff: 'Risk Off',
+  Neutral: 'Neutral',
+  gamma_positive: 'Pozitivní gamma',
+  gamma_negative: 'Negativní gamma',
+}
+
+/** Úspěšnost setup šablon per GEX režim (#402) — jen aktuální mechanika. */
+function setupRegimeRows(
+  setups: SetupRow[],
+): { template: string; regime: string; n: number; winRate: number }[] {
+  const groups = new Map<string, { template: string; regime: string; n: number; wins: number }>()
+  for (const setup of setups) {
+    if ((setup.mechanics_version ?? 1) !== CURRENT_MECHANICS_VERSION) continue
+    if (setup.status !== 'closed_target' && setup.status !== 'closed_stop') continue
+    const regime = String(setup.context?.gex_regime ?? 'neznámý')
+    const key = `${setup.template}|${regime}`
+    const group = groups.get(key) ?? { template: setup.template, regime, n: 0, wins: 0 }
+    group.n += 1
+    if (setup.status === 'closed_target') group.wins += 1
+    groups.set(key, group)
+  }
+  return [...groups.values()]
+    .map((group) => ({ ...group, winRate: group.wins / group.n }))
+    .sort((a, b) =>
+      a.template === b.template
+        ? a.regime.localeCompare(b.regime)
+        : a.template.localeCompare(b.template),
+    )
+}
 
 /** Sekundy → lidský zápis: `42 s`, `4 m 14 s`, `1 h 7 m`. */
 export function formatSeconds(value: number | null): string {
@@ -251,6 +287,8 @@ export function StatsView() {
   const [signals, setSignals] = useState<SignalRow[]>([])
   const [latency, setLatency] = useState<SourceLatencyRow[]>([])
   const [windowMin, setWindowMin] = useState(5)
+  const [regime, setRegime] = useState('all')
+  const [setups, setSetups] = useState<SetupRow[]>([])
 
   useEffect(() => {
     let cancelled = false
@@ -263,16 +301,20 @@ export function StatsView() {
         fetchTrackRecord(),
         fetchSignals(1000),
         fetchSourceLatency(),
-      ]).then(([waveRows, statsRows, settings, trackRows, signalRows, latencyPayload]) => {
-        if (cancelled) return
-        setWaves(waveRows)
-        setStats(statsRows)
-        const retroValue = settings.retro_pass
-        setRetro(isRetroState(retroValue) ? retroValue : null)
-        setTrack(trackRows)
-        setSignals(signalRows)
-        setLatency(latencyPayload.latency)
-      })
+        fetchSetups(symbol),
+      ]).then(
+        ([waveRows, statsRows, settings, trackRows, signalRows, latencyPayload, setupRows]) => {
+          if (cancelled) return
+          setWaves(waveRows)
+          setStats(statsRows)
+          const retroValue = settings.retro_pass
+          setRetro(isRetroState(retroValue) ? retroValue : null)
+          setTrack(trackRows)
+          setSignals(signalRows)
+          setLatency(latencyPayload.latency)
+          setSetups(setupRows)
+        },
+      )
     }
     load()
     const timer = window.setInterval(load, REFRESH_MS)
@@ -290,10 +332,16 @@ export function StatsView() {
   const bucketRows = useMemo(
     () =>
       stats
-        .filter((row) => row.symbol === symbol && row.window_min === windowMin)
+        .filter(
+          (row) =>
+            row.symbol === symbol &&
+            row.window_min === windowMin &&
+            (row.regime ?? 'all') === regime,
+        )
         .sort((a, b) => b.n - a.n),
-    [stats, symbol, windowMin],
+    [stats, symbol, windowMin, regime],
   )
+  const setupRegime = useMemo(() => setupRegimeRows(setups), [setups])
 
   return (
     <div className="stats-view" aria-label="Statistiky">
@@ -367,6 +415,21 @@ export function StatsView() {
                 </option>
               ))}
             </select>
+          </label>{' '}
+          <label className="toggle">
+            režim
+            <select
+              value={regime}
+              onChange={(event) => setRegime(event.target.value)}
+              aria-label="Režim statistik"
+              title="Podmíněné pohledy (#402): tentýž vzorec se v jiném režimu chová jinak — z režimů se učíme, nezapomínáme je"
+            >
+              {Object.entries(REGIME_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
           </label>
           )
         </h2>
@@ -409,6 +472,38 @@ export function StatsView() {
                   </tr>
                 )
               })}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section className="stats-section" aria-label="Setupy per režim">
+        <h2>Setupy — úspěšnost šablon per GEX režim</h2>
+        <p className="muted">
+          Uzavřené setupy aktuální mechaniky (v{CURRENT_MECHANICS_VERSION}) rozdělené režimem vzniku
+          (#402). Tentýž vzorec se v pozitivní a negativní gamě chová jinak.
+        </p>
+        {setupRegime.length === 0 ? (
+          <p className="muted">Zatím žádné uzavřené setupy aktuální mechaniky</p>
+        ) : (
+          <table className="stats-table">
+            <thead>
+              <tr>
+                <th>Šablona</th>
+                <th>Režim</th>
+                <th>n</th>
+                <th>Úspěšnost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {setupRegime.map((row) => (
+                <tr key={`${row.template}|${row.regime}`}>
+                  <td>{templateLabel(row.template)}</td>
+                  <td>{REGIME_LABELS[`gamma_${row.regime}`] ?? row.regime}</td>
+                  <td>{row.n}</td>
+                  <td>{(row.winRate * 100).toFixed(0)} %</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}

@@ -22,6 +22,8 @@ export interface SetupRow {
   user_note: string | null
   /** Verze mechaniky detektoru, která setup vyrobila (#311); starší řádky 1. */
   mechanics_version?: number
+  /** Kontext vzniku (gex_regime, …) — podklad režimových statistik (#402). */
+  context?: Record<string, unknown> | null
 }
 
 /** Aktuální verze mechaniky — zrcadlo `SETUP_MECHANICS_VERSION` v enginu (#311).

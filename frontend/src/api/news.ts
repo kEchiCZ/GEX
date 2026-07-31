@@ -253,6 +253,8 @@ export async function fetchSignals(limit = 200): Promise<SignalRow[]> {
 
 /** Řádek empirického modelu (`news_model_stats`) — podklad progresu ke gate (6.2). */
 export interface ModelStatsRow {
+  /** Režimový pohled (#402): all / RiskOn / RiskOff / Neutral / gamma_positive / gamma_negative. */
+  regime: string
   category: string
   importance: number
   surprise_bucket: string
@@ -290,6 +292,8 @@ export function signalGateInfo(
   let open = 0
   let progress = 0
   for (const row of stats) {
+    // Progres ke gate se počítá z nepodmíněného pohledu (#402)
+    if (row.regime !== undefined && row.regime !== 'all') continue
     if (row.window_min !== windowMin || row.symbol !== symbol) continue
     if (row.n >= GATE_MIN_SAMPLES && (row.hit_rate_lb ?? 0) > GATE_WILSON_LB) open += 1
     progress = Math.max(progress, Math.min(1, row.n / GATE_MIN_SAMPLES))

@@ -44,6 +44,9 @@ class ReactionSample:
     deferred: bool
     # Směr z klasifikace (N3); None = zatím neklasifikováno → do hit-rate nejde
     sentiment_dir: int | None = None
+    # Režimové dimenze (#402); None = nezjištěno → jen do nepodmíněného agregátu
+    state: str | None = None
+    gex_regime: str | None = None
 
 
 @dataclass(frozen=True)
@@ -162,3 +165,20 @@ def lookup(
         if item.key == key:
             return item
     return None
+
+
+def aggregate_by_regime(samples: Sequence[ReactionSample]) -> list[tuple[str, BucketStats]]:
+    """Agregáty per režim (#402): 'all' + per stav + per GEX režim.
+
+    Podmíněné pohledy jsou PARALELNÍ k nepodmíněnému, ne náhrada — dělení
+    ředí n a Wilson gate si každý pohled hlídá sám. Vzorky bez zjištěného
+    režimu do dané podmíněné větve prostě nevstupují (žádné dopočítávání).
+    """
+    out: list[tuple[str, BucketStats]] = [("all", item) for item in aggregate_samples(samples)]
+    for state in ("RiskOn", "RiskOff", "Neutral"):
+        subset = [sample for sample in samples if sample.state == state]
+        out.extend((state, item) for item in aggregate_samples(subset))
+    for regime, label in (("positive", "gamma_positive"), ("negative", "gamma_negative")):
+        subset = [sample for sample in samples if sample.gex_regime == regime]
+        out.extend((label, item) for item in aggregate_samples(subset))
+    return out
