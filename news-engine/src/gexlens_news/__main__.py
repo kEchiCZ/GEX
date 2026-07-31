@@ -40,6 +40,7 @@ from gexlens_news.crowd import (
     PcrCollector,
     RedditCollector,
 )
+from gexlens_news.drift import DriftJob
 from gexlens_news.ffhistory import FfActualRefreshJob, run_backfill
 from gexlens_news.http import Fetcher, make_fetcher
 from gexlens_news.llm_classifier import GeminiClient, LlmClassificationJob
@@ -133,6 +134,8 @@ async def run(settings: NewsSettings) -> None:
         else None
     )
     model_stats = ModelStatsJob(engine)
+    # Drift hlídka (#403): noční test, jestli modely ještě platí
+    drift = DriftJob(engine)
     # Track record (#298): noční mechanické equity křivky (SPEC 7.3)
     track = TrackRecordJob(engine, BarsRepository(settings.data_dir))
     # Tier C crowd zdroje (#290): CNN F&G + PCR bez klíčů; Reddit jen s creds
@@ -280,6 +283,14 @@ async def run(settings: NewsSettings) -> None:
                         await asyncio.to_thread(track.run, now)
                     except Exception:
                         logger.exception("Track record selhal — zkusí se příští den")
+                    # Drift hlídka (#403) po čerstvých agregátech
+                    try:
+                        drift_alerts = await asyncio.to_thread(drift.run, now)
+                        if publisher is not None:
+                            for alert in drift_alerts:
+                                await publisher.publish("alerts", alert)
+                    except Exception:
+                        logger.exception("Drift hlídka selhala — zkusí se příští den")
                     last_stats_day = now.date()
                 except Exception:
                     logger.exception("Přepočet model stats selhal — zkusí se příští cyklus")

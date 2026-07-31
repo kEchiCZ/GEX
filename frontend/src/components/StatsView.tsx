@@ -36,6 +36,29 @@ import { useAppState } from '../state/AppState'
 
 const REFRESH_MS = 300_000
 
+/** Nález drift hlídky (#403) uložený v `settings` (klíč drift_state). */
+interface DriftFinding {
+  kind: string
+  key: string
+  label: string
+  symbol: string
+  longterm_rate: number
+  recent_rate: number
+  recent_n: number
+  p_value: number
+}
+
+interface DriftState {
+  computed_at: string
+  findings: DriftFinding[]
+}
+
+function isDriftState(value: unknown): value is DriftState {
+  return (
+    typeof value === 'object' && value !== null && Array.isArray((value as DriftState).findings)
+  )
+}
+
 /** Stav retro passu uložený news-enginem do `settings` (klíč retro_pass). */
 interface RetroPassState {
   ran_at: string
@@ -289,6 +312,7 @@ export function StatsView() {
   const [windowMin, setWindowMin] = useState(5)
   const [regime, setRegime] = useState('all')
   const [setups, setSetups] = useState<SetupRow[]>([])
+  const [drift, setDrift] = useState<DriftState | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -309,6 +333,8 @@ export function StatsView() {
           setStats(statsRows)
           const retroValue = settings.retro_pass
           setRetro(isRetroState(retroValue) ? retroValue : null)
+          const driftValue = settings.drift_state
+          setDrift(isDriftState(driftValue) ? driftValue : null)
           setTrack(trackRows)
           setSignals(signalRows)
           setLatency(latencyPayload.latency)
@@ -342,6 +368,10 @@ export function StatsView() {
     [stats, symbol, windowMin, regime],
   )
   const setupRegime = useMemo(() => setupRegimeRows(setups), [setups])
+  const driftKeys = useMemo(
+    () => new Set((drift?.findings ?? []).map((finding) => finding.key)),
+    [drift],
+  )
 
   return (
     <div className="stats-view" aria-label="Statistiky">
@@ -457,9 +487,22 @@ export function StatsView() {
               {bucketRows.map((row, index) => {
                 const gateOpen =
                   row.n >= GATE_MIN_SAMPLES && (row.hit_rate_lb ?? 0) > GATE_WILSON_LB
+                const driftKey = `news:${row.category}|${row.importance}|${row.surprise_bucket}|${row.deferred}|${row.symbol}`
+                const hasDrift = driftKeys.has(driftKey)
                 return (
                   <tr key={index} className={gateOpen ? 'stats-gate-open' : undefined}>
-                    <td>{categoryLabel(row.category)}</td>
+                    <td>
+                      {categoryLabel(row.category)}
+                      {hasDrift && (
+                        <span
+                          className="stats-drift-badge"
+                          title="Drift (#403): poslední výsledky se rozešly s historií — viz sekce Drift hlídka"
+                        >
+                          {' '}
+                          ⚠
+                        </span>
+                      )}
+                    </td>
                     <td>{row.importance}</td>
                     <td>{row.surprise_bucket}</td>
                     <td>{row.deferred ? 'ano' : '—'}</td>
@@ -550,6 +593,45 @@ export function StatsView() {
                     {row.batch_share === null ? '—' : `${Math.round(row.batch_share * 100)} %`}
                   </td>
                   <td>{row.n_over_cutoff}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section className="stats-section" aria-label="Drift hlídka">
+        <h2>Drift hlídka</h2>
+        <p className="muted">
+          Noční test (#403): klouzavá úspěšnost posledních výsledků vs. dlouhodobá. Nález znamená
+          „model v tomto vzorci přestává platit" — gate se zavře sám, tohle jen zkracuje dobu, po
+          kterou bys věřil číslům, která už neplatí.
+        </p>
+        {!drift || drift.findings.length === 0 ? (
+          <p className="muted">
+            Žádný drift{drift ? ` (kontrola ${new Date(drift.computed_at).toLocaleString()})` : ''}
+          </p>
+        ) : (
+          <table className="stats-table">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Symbol</th>
+                <th>Posledních n</th>
+                <th>Klouzavá</th>
+                <th>Dlouhodobá</th>
+                <th>p</th>
+              </tr>
+            </thead>
+            <tbody>
+              {drift.findings.map((finding) => (
+                <tr key={finding.key} className="stats-drift-row">
+                  <td>{finding.label}</td>
+                  <td>{finding.symbol}</td>
+                  <td>{finding.recent_n}</td>
+                  <td>{(finding.recent_rate * 100).toFixed(0)} %</td>
+                  <td>{(finding.longterm_rate * 100).toFixed(0)} %</td>
+                  <td>{finding.p_value.toFixed(3)}</td>
                 </tr>
               ))}
             </tbody>

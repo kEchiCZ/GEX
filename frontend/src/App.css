@@ -1616,3 +1616,13 @@ body {
   grid-column: 2;
   font-size: 11px;
 }
+
+/* Drift hlídka (#403) */
+.stats-drift-badge {
+  color: #e8c14b;
+  cursor: help;
+}
+
+.stats-drift-row {
+  color: #e8c14b;
+}
