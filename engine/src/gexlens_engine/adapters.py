@@ -143,10 +143,13 @@ class IbHistoricalClient:
         self._contract = contract
 
     async def fetch_day_bars(self, symbol: str, day: dt.date) -> list[Bar]:
-        # endDateTime = půlnoc UTC následujícího dne; "1 D" může přetéct do
-        # sousedních dní, filtr níže drží jen požadovaný den. Timeout chrání
-        # před visícím awaitem na mrtvé HMDS farmě (#221) — přesně ten stav,
-        # kvůli kterému se backfill spouští.
+        # endDateTime = půlnoc UTC následujícího dne; duration v SEKUNDÁCH
+        # (#400): "1 D" je u IBKR obchodní den (ES 22:00→21:00 UTC), takže od
+        # půlnoci zpět nedosáhl na závěr předchozí seance a díry 20:xx–21:00
+        # přežívaly backfill. 86400 S = celý kalendářní den; přetečení do
+        # sousedních dní drží filtr níže. Timeout chrání před visícím awaitem
+        # na mrtvé HMDS farmě (#221) — přesně ten stav, kvůli kterému se
+        # backfill spouští.
         midnight_after = dt.datetime.combine(
             day + dt.timedelta(days=1), dt.time(0, 0), tzinfo=dt.UTC
         )
@@ -157,7 +160,7 @@ class IbHistoricalClient:
             self._ib.reqHistoricalDataAsync(
                 self._contract,
                 endDateTime=end,
-                durationStr="1 D",
+                durationStr="86400 S",
                 barSizeSetting="1 min",
                 whatToShow="TRADES",
                 useRTH=False,
