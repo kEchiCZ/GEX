@@ -43,13 +43,7 @@ function importanceMark(importance: number | null): string {
   return '!'.repeat(Math.min(3, Math.max(1, importance ?? 1)))
 }
 
-export function NewsMarkerDialog({
-  marker,
-  onClose,
-}: {
-  marker: NewsMarker
-  onClose: () => void
-}) {
+export function NewsMarkerDialog({ marker, onClose }: { marker: NewsMarker; onClose: () => void }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
