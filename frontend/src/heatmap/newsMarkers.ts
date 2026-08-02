@@ -23,6 +23,8 @@ export interface NewsMarker {
   /** Plánovaný event, který ještě nenastal → dutý marker s countdownem. */
   upcoming: boolean
   titles: string[]
+  /** Zprávy clusteru — dialog po kliknutí na marker je zobrazí celé (#408). */
+  rows: NewsRow[]
 }
 
 /** Číslo z API; `Numeric` sloupce můžou dorazit jako řetězec (PG Decimal). */
@@ -60,6 +62,7 @@ export function buildNewsMarkers(
         score: existing.score + score,
         importance: Math.max(existing.importance, importance),
         titles: [...existing.titles, row.title],
+        rows: [...existing.rows, row],
         // Cluster je „nadcházející" jen když v něm není nic proběhlého
         upcoming: existing.upcoming && isUpcoming,
       })
@@ -73,6 +76,7 @@ export function buildNewsMarkers(
       glyph: categoryGlyph(row.category),
       upcoming: isUpcoming,
       titles: [row.title],
+      rows: [row],
     })
   }
 
@@ -104,4 +108,42 @@ export function markerStyle(marker: NewsMarker): { alpha: number; width: number 
 export function markerAt(markers: NewsMarker[], minuteIdx: number | null): NewsMarker | null {
   if (minuteIdx === null) return null
   return markers.find((marker) => marker.minuteIdx === minuteIdx) ?? null
+}
+
+/** Nejbližší marker do tolerance minut — hit-test kliknutí na glyf (#408).
+
+Klik nikdy netrefí přesnou minutu (glyf je pár px široký, osa zoomovaná),
+proto se hledá nejbližší marker v okolí; při shodě vzdáleností vyhrává první. */
+export function markerNear(
+  markers: NewsMarker[],
+  minuteIdx: number,
+  tolerance: number,
+): NewsMarker | null {
+  let best: NewsMarker | null = null
+  let bestDistance = Infinity
+  for (const marker of markers) {
+    const distance = Math.abs(marker.minuteIdx - minuteIdx)
+    if (distance <= tolerance && distance < bestDistance) {
+      best = marker
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
+/** Očekávaný dopad zprávy na trh: 1 = long, −1 = short, 0 = neutrální/nezměřené.
+
+Klasifikovaný směr (sentiment_dir) má přednost; bez něj rozhoduje znaménko
+skóre. Nadcházející eventy směr nemají — o dopadu se před výsledkem neví nic. */
+export function expectedImpact(row: NewsRow): -1 | 0 | 1 {
+  if (row.sentiment_dir === 1 || row.sentiment_dir === -1) return row.sentiment_dir
+  const score = asNumber(row.sentiment_score)
+  if (score > 0) return 1
+  if (score < 0) return -1
+  return 0
+}
+
+/** Významné zprávy (importance ≥ 2) — filtr markerů „Významné" (#408). */
+export function significantOnly(rows: NewsRow[]): NewsRow[] {
+  return rows.filter((row) => (row.importance ?? 1) >= 2)
 }

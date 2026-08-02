@@ -1,6 +1,14 @@
 /** Testy markerů zpráv (#287): mapování na osu, clustering, barvy, projekce. */
 import { describe, expect, test } from 'vitest'
-import { buildNewsMarkers, markerAt, markerColor, markerStyle } from './newsMarkers'
+import {
+  buildNewsMarkers,
+  expectedImpact,
+  markerAt,
+  markerColor,
+  markerNear,
+  markerStyle,
+  significantOnly,
+} from './newsMarkers'
 import type { NewsRow } from '../api/news'
 
 /** Zrcadlí formát osy grafu (Intl, bez vodicí nuly u hodin). */
@@ -98,7 +106,14 @@ describe('buildNewsMarkers', () => {
 })
 
 describe('vzhled', () => {
-  const base = { minuteIdx: 0, count: 1, importance: 2, glyph: '•', titles: [] }
+  const base = {
+    minuteIdx: 0,
+    count: 1,
+    importance: 2,
+    glyph: '•',
+    titles: [] as string[],
+    rows: [] as NewsRow[],
+  }
 
   test('barva odpovídá znaménku skóre', () => {
     expect(markerColor({ ...base, score: 1, upcoming: false }, 1)).toContain('20,184,166')
@@ -120,5 +135,47 @@ describe('vzhled', () => {
     expect(markerAt(markers, 2)?.count).toBe(1)
     expect(markerAt(markers, 1)).toBeNull()
     expect(markerAt(markers, null)).toBeNull()
+  })
+})
+
+describe('interakce a filtr (#408)', () => {
+  test('cluster nese celé zprávy pro dialog, ne jen titulky', () => {
+    const markers = buildNewsMarkers(
+      [row({ id: 1, hour: 9, minute: 1 }), row({ id: 2, hour: 9, minute: 1 })],
+      [],
+      LABELS,
+      label,
+    )
+    expect(markers[0].rows.map((item) => item.id)).toEqual([1, 2])
+  })
+
+  test('markerNear: klik vedle glyfu trefí nejbližší marker do tolerance', () => {
+    const markers = buildNewsMarkers(
+      [row({ id: 1, hour: 9, minute: 0 }), row({ id: 2, hour: 9, minute: 3 })],
+      [],
+      LABELS,
+      label,
+    )
+    expect(markerNear(markers, 1, 1)?.minuteIdx).toBe(0)
+    expect(markerNear(markers, 2, 1)?.minuteIdx).toBe(3)
+    // Mimo toleranci nic — klik doprostřed prázdné plochy dialog neotvírá
+    expect(markerNear(markers, 1, 0)).toBeNull()
+  })
+
+  test('expectedImpact: klasifikovaný směr má přednost, jinak znaménko skóre', () => {
+    expect(expectedImpact(row({ id: 1, hour: 9, minute: 0, sentiment_dir: -1, sentiment_score: 0.9 }))).toBe(-1) // prettier-ignore
+    expect(expectedImpact(row({ id: 2, hour: 9, minute: 0, sentiment_score: 0.4 }))).toBe(1)
+    expect(expectedImpact(row({ id: 3, hour: 9, minute: 0, sentiment_score: '-0.2' }))).toBe(-1)
+    expect(expectedImpact(row({ id: 4, hour: 9, minute: 0, sentiment_score: null }))).toBe(0)
+  })
+
+  test('significantOnly: pouští importance ≥ 2, chybějící důležitost je okrajová', () => {
+    const rows = [
+      row({ id: 1, hour: 9, minute: 0, importance: 1 }),
+      row({ id: 2, hour: 9, minute: 0, importance: 2 }),
+      row({ id: 3, hour: 9, minute: 0, importance: 3 }),
+      row({ id: 4, hour: 9, minute: 0, importance: null }),
+    ]
+    expect(significantOnly(rows).map((item) => item.id)).toEqual([2, 3])
   })
 })

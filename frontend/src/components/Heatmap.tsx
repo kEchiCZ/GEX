@@ -30,7 +30,8 @@ import {
   tickIndices,
 } from '../heatmap/overlays'
 import type { OverlayData, PriceBar, PriceStyle } from '../heatmap/overlays'
-import { markerColor, markerStyle } from '../heatmap/newsMarkers'
+import { markerColor, markerNear, markerStyle } from '../heatmap/newsMarkers'
+import type { NewsMarker as NewsMarkerType } from '../heatmap/newsMarkers'
 import { signalAt, signalColor } from '../heatmap/signalMarkers'
 import {
   DEFAULT_VIEW,
@@ -101,6 +102,7 @@ export function Heatmap({
   dateLabel,
   resetKey,
   priceTick = 0.25,
+  onNewsMarkerClick,
 }: {
   grid: HeatmapGrid
   /** Dyn GEX pole jako podklad (#242) — kreslí se POD měřeným gridem; průhledné
@@ -138,6 +140,8 @@ export function Heatmap({
   resetKey?: string | number
   /** Min cenový tick instrumentu — crosshair cena na ose Y se na něj zaokrouhlí. */
   priceTick?: number
+  /** Klik na news marker (pás/glyf u spodní hrany) — otevře dialog zpráv (#408). */
+  onNewsMarkerClick?: (marker: NewsMarkerType) => void
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -198,6 +202,8 @@ export function Heatmap({
   }, [resetKey, fitRange, homeView, setView])
   // Tažení: pan plochy, nebo roztahování jedné osy (TradingView styl)
   const dragRef = useRef<{ x: number; y: number; mode: 'pan' | 'scale-x' | 'scale-y' } | null>(null)
+  // Výchozí bod stisku — klik (bez tažení) na news marker otevře dialog (#408)
+  const clickRef = useRef<{ x: number; y: number } | null>(null)
   const [axisHover, setAxisHover] = useState<AxisZone>(null)
   const [draft, setDraft] = useState<AnnotationPoint[] | null>(null)
   // Surová pozice kurzoru (CSS px) — osové labely crosshairu (cena na Y je spojitá)
@@ -893,6 +899,7 @@ export function Heatmap({
     // Tažení za pruh osy = roztahování/stahování dané osy; jinde pan plochy
     const point = canvasPoint(event)
     const zone = point ? axisZoneAt(point.x, point.y, logicalH) : null
+    clickRef.current = point
     dragRef.current = {
       x: event.clientX,
       y: event.clientY,
@@ -950,7 +957,7 @@ export function Heatmap({
     setPointer({ x, y })
   }
 
-  const onPointerUp = () => {
+  const onPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (draft && annotationTool && annotationTool !== 'eraser') {
       if (onAnnotationCreate && draft.length >= 2) {
         onAnnotationCreate({ tool: annotationTool, color: annotationColor, points: draft })
@@ -959,6 +966,22 @@ export function Heatmap({
       return
     }
     dragRef.current = null
+    // Klik (bez tažení) do pásu markerů u spodní hrany → dialog zpráv (#408).
+    // Pan se pozná podle uražené vzdálenosti — kapture drží tentýž pointer.
+    const start = clickRef.current
+    clickRef.current = null
+    if (!start || !onNewsMarkerClick) return
+    const point = canvasPoint(event)
+    if (!point || Math.hypot(point.x - start.x, point.y - start.y) > 4) return
+    if (point.y < logicalH * 0.6) return // markery žijí jen u spodní hrany
+    const markers = overlays.newsMarkers ?? []
+    if (markers.length === 0) return
+    const { screenToCell, scaleX } = mapping()
+    const { minuteIdx } = screenToCell(point.x, point.y)
+    // Tolerance v minutách dle zoomu: glyf je ~8 px široký i při hustší ose
+    const tolerance = Math.max(1, Math.ceil(6 / Math.max(scaleX, 0.01)))
+    const marker = markerNear(markers, minuteIdx, tolerance)
+    if (marker) onNewsMarkerClick(marker)
   }
 
   // Tooltip buňky (čas, strike, hodnoty metrik)

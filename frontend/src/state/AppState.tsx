@@ -62,6 +62,10 @@ export const SIGNAL_MODES: readonly SignalMode[] = ['off', 'news', 'combined']
 export type UnderlayPlane = 'off' | 'gex' | 'charm' | 'vanna'
 export const UNDERLAY_PLANES: readonly UnderlayPlane[] = ['off', 'gex', 'charm', 'vanna']
 
+/** Filtr news markerů v grafu (#408): všechny, nebo jen významné (importance ≥ 2). */
+export type NewsMarkerFilter = 'all' | 'important'
+export const NEWS_MARKER_FILTERS: readonly NewsMarkerFilter[] = ['all', 'important']
+
 /** Poslední cena + denní změna (hlavička; plní MainContent z denních dat). */
 export interface PriceInfo {
   last: number | null
@@ -129,6 +133,9 @@ interface AppState {
   /** Dropdown podkladové plochy Off/Dyn GEX/Charm/Vanna (#204). */
   underlayPlane: UnderlayPlane
   setUnderlayPlane: (plane: UnderlayPlane) => void
+  /** Filtr news markerů Vše/Významné vedle News checkboxu (#408). */
+  newsMarkerFilter: NewsMarkerFilter
+  setNewsMarkerFilter: (filter: NewsMarkerFilter) => void
   view: AppView
   setView: (view: AppView) => void
   theme: Theme
@@ -274,6 +281,11 @@ export function AppStateProvider({
     'off',
     oneOf(UNDERLAY_PLANES),
   )
+  const [newsMarkerFilter, setNewsMarkerFilter] = usePersistentState<NewsMarkerFilter>(
+    'newsMarkerFilter',
+    'all',
+    oneOf(NEWS_MARKER_FILTERS),
+  )
 
   const appendLog = useCallback((line: string) => {
     const stamp = new Date().toLocaleTimeString()
@@ -365,6 +377,8 @@ export function AppStateProvider({
       setSignalMode,
       underlayPlane,
       setUnderlayPlane,
+      newsMarkerFilter,
+      setNewsMarkerFilter,
       view,
       setView,
       theme,
@@ -394,6 +408,8 @@ export function AppStateProvider({
       setSignalMode,
       underlayPlane,
       setUnderlayPlane,
+      newsMarkerFilter,
+      setNewsMarkerFilter,
       expiries,
       selectedExpiry,
       timeframe,
