@@ -1,6 +1,6 @@
 /** Řádky timeframe a přepínačů vizualizace (SPEC 7.1). */
 import { INTERVALS, useAppState } from '../state/AppState'
-import type { SignalMode, Toggles, UnderlayPlane } from '../state/AppState'
+import type { NewsMarkerFilter, SignalMode, Toggles, UnderlayPlane } from '../state/AppState'
 import type { SignalGateInfo } from '../api/news'
 
 const TOGGLE_LABELS: Record<keyof Toggles, string> = {
@@ -64,9 +64,22 @@ const SIGNAL_MODE_LABELS: Record<SignalMode, string> = {
   combined: 'COMBINED',
 }
 
+const NEWS_FILTER_LABELS: Record<NewsMarkerFilter, string> = {
+  all: 'Vše',
+  important: 'Významné',
+}
+
 export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null }) {
-  const { toggles, setToggle, signalMode, setSignalMode, underlayPlane, setUnderlayPlane } =
-    useAppState()
+  const {
+    toggles,
+    setToggle,
+    signalMode,
+    setSignalMode,
+    underlayPlane,
+    setUnderlayPlane,
+    newsMarkerFilter,
+    setNewsMarkerFilter,
+  } = useAppState()
   // „Collecting data" (SPEC 9.0): režim zapnutý, ale žádný bucket neprošel
   // Wilson gate (6.2) → místo šipek se ukazuje progres nejlepšího bucketu
   const collecting = signalMode !== 'off' && signalGate != null && signalGate.open === 0
@@ -98,6 +111,24 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
           {TOGGLE_LABELS[key]}
         </label>
       ))}
+      {/* Filtr news markerů (#408): jen významné zprávy (importance ≥ 2),
+          ať plocha grafu nekřičí okrajovými titulky; jen když je News zapnuté */}
+      {toggles.news && (
+        <label className="toggle">
+          <select
+            value={newsMarkerFilter}
+            onChange={(event) => setNewsMarkerFilter(event.target.value as NewsMarkerFilter)}
+            aria-label="Filtr news markerů"
+            title="Které zprávy kreslit do grafu: všechny, nebo jen významné (importance ≥ 2)"
+          >
+            {(Object.keys(NEWS_FILTER_LABELS) as NewsMarkerFilter[]).map((value) => (
+              <option key={value} value={value}>
+                {NEWS_FILTER_LABELS[value]}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {/* Dropdown režimu signálů vedle News checkboxu (#295, SPEC 9.0) */}
       <label className="toggle">
         Signály

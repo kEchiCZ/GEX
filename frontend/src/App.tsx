@@ -2,7 +2,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { alignSeriesToLabels, signalGateInfo } from './api/news'
-import { buildNewsMarkers } from './heatmap/newsMarkers'
+import { buildNewsMarkers, significantOnly } from './heatmap/newsMarkers'
+import type { NewsMarker } from './heatmap/newsMarkers'
+import { NewsMarkerDialog } from './components/NewsMarkerDialog'
 import { buildSignalMarkers } from './heatmap/signalMarkers'
 import { useSentimentState } from './hooks/useSentimentState'
 import { useSentimentDaily } from './hooks/useSentimentDaily'
@@ -92,6 +94,7 @@ function MainContent() {
     setRegimeInfo,
     signalMode,
     underlayPlane,
+    newsMarkerFilter,
     socket,
   } = useAppState()
   // Zprávy a sentiment (#288/#289) — jeden zdroj pro panel, sidebar i chip
@@ -349,14 +352,21 @@ function MainContent() {
     [day.minuteLabels, day.lastMinuteIso, projectionExtra, bucketMinutes],
   )
   // Markery zpráv se počítají nad CELOU osou včetně projekce (#287): jen tak
-  // se nadcházející CPI vykreslí vpravo od živé hrany, kde ho trader čeká
-  const newsMarkers = useMemo(
-    () =>
-      toggles.news
-        ? buildNewsMarkers(newsData.news, newsData.upcoming, chartLabels, minuteLabel)
-        : [],
-    [toggles.news, newsData.news, newsData.upcoming, chartLabels],
-  )
+  // se nadcházející CPI vykreslí vpravo od živé hrany, kde ho trader čeká.
+  // Filtr „Významné" (#408) pouští jen importance ≥ 2 — okrajové titulky
+  // plochu nezahltí, FOMC/CPI zůstávají.
+  const newsMarkers = useMemo(() => {
+    if (!toggles.news) return []
+    const important = newsMarkerFilter === 'important'
+    return buildNewsMarkers(
+      important ? significantOnly(newsData.news) : newsData.news,
+      important ? significantOnly(newsData.upcoming) : newsData.upcoming,
+      chartLabels,
+      minuteLabel,
+    )
+  }, [toggles.news, newsMarkerFilter, newsData.news, newsData.upcoming, chartLabels])
+  // Dialog zpráv kliknutého markeru (#408)
+  const [newsDialogMarker, setNewsDialogMarker] = useState<NewsMarker | null>(null)
   // Šipky signálů (#295, SPEC 9.0): dropdown vybírá zobrazenou větev (S9 —
   // počítají se obě vždy); ⚠ badge při nepotvrzené intradenní změně stavu
   const signalMarkers = useMemo(() => {
@@ -785,7 +795,14 @@ function MainContent() {
               }
               resetKey={`${symbol}|${selectedExpiry}|${timeframe}|${interval}|${viewDate}`}
               priceTick={priceTick(symbol)}
+              onNewsMarkerClick={setNewsDialogMarker}
             />
+            {newsDialogMarker && (
+              <NewsMarkerDialog
+                marker={newsDialogMarker}
+                onClose={() => setNewsDialogMarker(null)}
+              />
+            )}
             <SetupCard setups={activeSetups} onDismiss={handleDismissSetup} />
             {day.source === 'demo' && (
               <div className="demo-banner" role="status">
