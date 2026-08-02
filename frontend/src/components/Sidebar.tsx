@@ -3,7 +3,7 @@
 Watchlist je editovatelný (CRUD /watchlist, issue #21) a kliknutí na symbol
 přepne aktivní ticker celé aplikace (graf, expirace, dashboard).
 */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Legend } from './Legend'
 import { API_BASE, APP_VERSION } from '../config'
 import { frontContractCode } from '../instrument/expiry'
@@ -26,6 +26,9 @@ interface WatchlistItem {
   symbol: string
 }
 
+/** Interval opakování po neúspěšném načtení watchlistu (#407). */
+const WATCHLIST_RETRY_MS = 15_000
+
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
   // Legenda grafu (#346) — modál nad aplikací, ať jde porovnávat s grafem
@@ -33,22 +36,44 @@ export function Sidebar() {
   const { view, setView, theme, setTheme, symbol: activeSymbol, setSymbol } = useAppState()
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
   const [newSymbol, setNewSymbol] = useState('')
+  const [watchlistError, setWatchlistError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    fetch(`${API_BASE}/watchlist`)
-      .then((response) => (response.ok ? response.json() : { watchlist: [] }))
-      .then((payload: { watchlist?: WatchlistItem[] }) => {
-        if (!cancelled) setWatchlist(payload.watchlist ?? [])
-      })
-      .catch(() => {
-        // API neběží — watchlist ukáže aspoň aktivní symbol
-        if (!cancelled) setWatchlist([])
-      })
-    return () => {
-      cancelled = true
+  /** Načte watchlist ze serveru; null = API nedostupné/chyba (#407). */
+  const fetchWatchlist = useCallback(async (): Promise<WatchlistItem[] | null> => {
+    try {
+      const response = await fetch(`${API_BASE}/watchlist`)
+      if (!response.ok) return null
+      const payload = (await response.json()) as { watchlist?: WatchlistItem[] }
+      return payload.watchlist ?? []
+    } catch {
+      return null
     }
   }, [])
+
+  // Načtení při startu se opakuje, dokud neprojde, a obnovuje se při návratu
+  // do okna — jednorázový fetch při startu nechal watchlist po výpadku API
+  // (restart kontejnerů) trvale prázdný (#407)
+  useEffect(() => {
+    let cancelled = false
+    let timer: number | undefined
+    const sync = async () => {
+      const list = await fetchWatchlist()
+      if (cancelled) return
+      if (list !== null) {
+        setWatchlist(list)
+      } else {
+        timer = window.setTimeout(() => void sync(), WATCHLIST_RETRY_MS)
+      }
+    }
+    void sync()
+    const onFocus = () => void sync()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [fetchWatchlist])
 
   const addSymbol = async () => {
     const symbol = newSymbol.trim().toUpperCase()
@@ -59,12 +84,25 @@ export function Sidebar() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol }),
       })
-      if (!response.ok) return // duplicitní symbol (409) apod. — beze změny
+      if (response.status === 409) {
+        // Symbol na serveru už je, jen ho lokální stav ztratil — místo tichého
+        // zahození se seznam srovná se serverem a symbol se objeví (#407)
+        const list = await fetchWatchlist()
+        if (list !== null) setWatchlist(list)
+        setNewSymbol('')
+        setWatchlistError(null)
+        return
+      }
+      if (!response.ok) {
+        setWatchlistError(`Přidání ${symbol} selhalo (HTTP ${response.status})`)
+        return
+      }
       const item = (await response.json()) as WatchlistItem
       setWatchlist((previous) => [...previous, item])
       setNewSymbol('')
+      setWatchlistError(null)
     } catch {
-      // API neběží — přidání se neprovede
+      setWatchlistError('API nedostupné — přidání se neprovedlo')
     }
   }
 
@@ -73,9 +111,12 @@ export function Sidebar() {
       const response = await fetch(`${API_BASE}/watchlist/${item.id}`, { method: 'DELETE' })
       if (response.ok || response.status === 404) {
         setWatchlist((previous) => previous.filter((entry) => entry.id !== item.id))
+        setWatchlistError(null)
+      } else {
+        setWatchlistError(`Odebrání ${item.symbol} selhalo (HTTP ${response.status})`)
       }
     } catch {
-      // API neběží — smazání se neprovede
+      setWatchlistError('API nedostupné — smazání se neprovedlo')
     }
   }
 
@@ -186,6 +227,11 @@ export function Sidebar() {
                 +
               </button>
             </form>
+            {watchlistError && (
+              <p className="watchlist-error" role="alert">
+                {watchlistError}
+              </p>
+            )}
           </section>
           <button className="nav-item legend-button" onClick={() => setLegendOpen(true)}>
             Legenda
