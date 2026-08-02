@@ -157,6 +157,12 @@ body {
   font-size: 12px;
 }
 
+.watchlist-error {
+  margin: 4px 0 0;
+  color: #f0616d;
+  font-size: 11px;
+}
+
 .sidebar-footer {
   margin-top: auto;
   display: flex;
