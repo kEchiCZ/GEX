@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><p>﻿# GEXLens — Uživatelský manuál</p>
-<p><em>Verze 1.3 · červenec 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.4 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -32,7 +32,7 @@
 <li><a href="#8-spodn%C3%AD-panely--vol-opt-vol-cum-%CE%B4">Spodní panely — Vol, Opt Vol, Cum Δ</a></li>
 <li><a href="#9-playback--p%C5%99ehr%C3%A1v%C3%A1n%C3%AD-dne">Playback — přehrávání dne</a></li>
 <li><a href="#10-anotace--kreslen%C3%AD-do-grafu">Anotace — kreslení do grafu</a></li>
-<li><a href="#11-dashboard">Dashboard</a></li>
+<li><a href="#11-dashboard">Dashboard</a> · <a href="#11b-%C5%99et%C4%9Bz--greeks--oi-tabulka">11b. Řetěz</a> · <a href="#11c-news-a-sentiment-sentimentlens">11c. News a sentiment</a> · <a href="#11d-sign%C3%A1ly-a-stats">11d. Signály a Stats</a></li>
 <li><a href="#12-ibkr-console">IBKR Console</a></li>
 <li><a href="#13-settings">Settings</a></li>
 <li><a href="#14-notifikace-a-alerty">Notifikace a alerty</a></li>
@@ -45,7 +45,7 @@
 <hr>
 <h2>1. Co aplikace umí</h2>
 <ul>
-<li><strong>Heatmapa čas × strike</strong> — barevná mapa opčního positioningu přes celý obchodní den. Zelená (teal) = call strana, červená = put strana. Sedm přepínatelných metrik (<strong>Mode</strong>: OI, Vol OTM/ITM, Vol ±, OI+OTM, OI−ITM, OI±All) a čtyři škály (<strong>Scale</strong>: Linear, √, Log, Pow⅓).</li>
+<li><strong>Heatmapa čas × strike</strong> — barevná mapa opčního positioningu přes celý obchodní den. Zelená (teal) = call strana, červená = put strana. Devět přepínatelných metrik (<strong>Mode</strong>: OI, Vol OTM/ITM, Vol ±, OI+OTM, OI−ITM, OI±All, VEX, VEX ±) a čtyři škály (<strong>Scale</strong>: Linear, √, Log, Pow⅓).</li>
 <li><strong>GEX úrovně</strong> — automaticky počítaný <strong>flip</strong> (zero-gamma), <strong>call wall</strong>, <strong>put wall</strong>, <strong>centroid</strong> a <strong>Max Pain</strong>, vykreslované jako časové linie i horizontální úrovně s cenovkami, přepočítávané každou minutu. Volitelné <strong>Walls</strong> módy (Peak/Center/Smooth/Flip/Ridge).</li>
 <li><strong>Multi-instrument</strong> — watchlist v sidebaru: přidej ticker (ES, NQ, RTY…) a engine ho začne sbírat <strong>do několika sekund</strong>; svíčky a Vol panel se zpětně doplní za celý den, opční data (OI, Greeks) běží od momentu přidání. Kliknutím přepínáš celou aplikaci.</li>
 <li><strong>Více expirací najednou</strong> — vedle aktivního řetězu se sbírá i následující expirace (čtení positioningu příští seance) a pravý profil umí <strong>Σ souhrn přes expirace</strong>.</li>
@@ -53,7 +53,11 @@
 <li><strong>ΔOI vs. včera</strong> — kde přes noc přibyly/ubyly otevřené pozice (tooltip profilu).</li>
 <li><strong>Replay</strong> — skrytý za tlačítkem ⏮ Replay; slider přehraje vývoj dne rychlostí 1×/5×/20×. Aplikace defaultně jede vždy live.</li>
 <li><strong>Anotace</strong> — šipky, linie a kreslení od ruky přímo do grafu; uložené k instrumentu a dni, přežijí restart.</li>
-<li><strong>Dashboard, IBKR Console, Settings</strong> — provozní obrazovky pro přehled, diagnostiku a konfiguraci.</li>
+<li><strong>News a sentiment (SentimentLens)</strong> — vlastní news-engine sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy), klasifikuje směr a důležitost, počítá <strong>SentIndex</strong> a stav <strong>RISK ON / RISK OFF</strong>. V grafu markery zpráv (klik = dialog s detaily a dopadem Long/Short), obrazovka <strong>News</strong> s feedem a nadcházejícími událostmi.</li>
+<li><strong>Signály</strong> — empiricky gate-ované Long/Short nápovědy ze zpráv (šipky na ceně); pouštějí se, až když daný typ zprávy má statisticky ověřenou reakci (n ≥ 30, Wilson LB &gt; 0,50).</li>
+<li><strong>Tendence</strong> — souhrnný chip v hlavičce (Strong Short … Strong Long) z 12 složek positioningu a toku, s rozpadem hlasů po kliknutí.</li>
+<li><strong>Setup detektor</strong> — šablony T1–T5 (odraz od zdi, neúspěšný průraz, Max Pain pin, gamma momentum, divergenční spring) s kartou, liniemi v grafu, P/L evidencí a hodnocením.</li>
+<li><strong>Dashboard, Řetěz, Stats, IBKR Console, Settings</strong> — provozní obrazovky pro přehled, opční tabulku, statistiky, diagnostiku a konfiguraci.</li>
 </ul>
 <p><img src="img/graf.png" alt="Hlavní obrazovka"></p>
 <hr>
@@ -104,11 +108,11 @@ docker compose up -d        # start na pozadí
 </thead>
 <tbody><tr>
 <td><strong>Sidebar (vlevo)</strong></td>
-<td>Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / IBKR Console / Settings), přepínač tématu Dark/Light, <strong>editovatelný watchlist</strong> (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový), verze. Tlačítkem « se sbalí.</td>
+<td>Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / News / Stats / IBKR Console / Settings), odkaz <strong>Manuál</strong>, přepínač tématu Dark/Light, <strong>editovatelný watchlist</strong> (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový; při chybě se pod formulářem ukáže hláška a seznam se sám srovná se serverem), tlačítko <strong>Legenda</strong> (modál s ukázkami všech prvků grafu a čtením „roste/klesá&quot;), verze. Tlačítkem « se sbalí.</td>
 </tr>
 <tr>
 <td><strong>Hlavička</strong></td>
-<td>Ticker a název instrumentu, <strong>poslední cena + denní změna v %</strong>, <strong>selektor expirace</strong> s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h&quot; — velké expirace nesou velké OI. V selektoru najdeš i <strong>následující expiraci</strong> (sbírá se souběžně — čtení positioningu příští seance). Indikátor ● Live / ○ Offline, zvonek notifikací.</td>
+<td>Ticker a název instrumentu, <strong>poslední cena + denní změna v %</strong>, <strong>selektor expirace</strong> s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h&quot; — velké expirace nesou velké OI. V selektoru najdeš i <strong>následující expiraci</strong> (sbírá se souběžně — čtení positioningu příští seance). Dále <strong>GEX režim badge</strong> (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem), <strong>chip Tendence</strong> (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno&quot;), <strong>chip stavu sentimentu</strong> RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna). Indikátor ● Live / ○ Offline, zvonek notifikací.</td>
 </tr>
 <tr>
 <td><strong>Řádek timeframe</strong></td>
@@ -116,7 +120,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Řádek přepínačů</strong></td>
-<td>Checkboxy vrstev: <strong>Dyn GEX</strong> (modelované pole jako podklad heatmapy — kombinuje se s libovolným módem, kap. 18), <strong>Zdi</strong> (call/put wall linie), <strong>GEX Levels</strong>, <strong>GEX žebřík</strong> (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce — Kooperovo čtení „parametrů&quot;; jen striky s dostatečnou dominancí) (flip/centroid/Max Pain), <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol / Opt Vol / Delta / Δ Flow C/P</strong> (spodní panely), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong>. Co odškrtneš, zmizí — layout se přeskládá.</td>
+<td>Dropdown <strong>Dyn plocha</strong> (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18). Checkboxy vrstev: <strong>Zdi</strong> (call/put wall linie), <strong>2. zeď</strong> (druhá nejsilnější koncentrace strany, tečkovaně), <strong>GEX Levels</strong> (flip/centroid/Max Pain), <strong>GEX žebřík</strong> (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), <strong>FA levels</strong> (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI), <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol / Opt Vol / Delta / Δ Flow C/P</strong> (spodní panely), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong> (markery zpráv + panel Sentiment) s dropdownem <strong>Vše/Významné</strong> (filtr markerů na importance ≥ 2), dropdown <strong>Signály</strong> (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá.</td>
 </tr>
 <tr>
 <td><strong>Lišta grafu</strong></td>
@@ -190,7 +194,7 @@ docker compose up -d        # start na pozadí
 <p>Crosshair navíc ukazuje <strong>osové štítky jako TradingView</strong>: dole na ose X <strong>datum + čas</strong> pod svislou linkou, vpravo na ose Y <strong>cenu</strong> na úrovni kurzoru. Cena je zaokrouhlená na <strong>minimální tick instrumentu</strong> (ES/NQ = 0,25) — mezi 7530,00 a 7530,25 tedy nic není. Crosshair <strong>zůstává viditelný i mimo svíce</strong> — když posuneš graf a jedeš myší přes prázdnou/budoucí plochu, nezmizí.</p>
 <p><strong>Pohled se nesmýká sám.</strong> Graf se automaticky napasuje (fit na cenové pásmo + ukotvení historie) <strong>jen při změně datasetu</strong> — jiný symbol, expirace, timeframe nebo den. Resize pravého panelu, živý přírůstek minut ani úprava os <strong>tvůj pan/zoom nepřepíšou</strong>. Kdykoli se vrátíš na napasovaný pohled dvojklikem nebo tlačítkem ⟲.</p>
 <p>Spodní panely (Vol / Opt Vol / Cum Δ) <strong>sledují časovou osu heatmapy</strong> — při posunu či zoomu osy X se roztahují synchronně.</p>
-<h3>Mode — osm metrik heatmapy</h3>
+<h3>Mode — devět metrik heatmapy</h3>
 <p>Select <strong>Mode</strong> přepíná, co buňky zobrazují (přepočet je okamžitý, bez čekání na server; dostupné nad živými/replay daty):</p>
 <table>
 <thead>
@@ -293,6 +297,16 @@ docker compose up -d        # start na pozadí
 <td>Zdi</td>
 </tr>
 <tr>
+<td><strong>2. zeď</strong></td>
+<td>zelená/červená tečkovaná (bez cenovky)</td>
+<td>2. zeď</td>
+</tr>
+<tr>
+<td><strong>FA levels</strong></td>
+<td>vlastní odstíny s prefixem FA</td>
+<td>FA levels</td>
+</tr>
+<tr>
 <td><strong>Walls módy</strong></td>
 <td>bílé čárkované</td>
 <td>select Walls</td>
@@ -303,12 +317,31 @@ docker compose up -d        # start na pozadí
 <td>Sessions</td>
 </tr>
 <tr>
+<td><strong>News markery</strong></td>
+<td>svislé značky u spodní hrany + glyf kategorie</td>
+<td>News</td>
+</tr>
+<tr>
+<td><strong>Šipky signálů</strong></td>
+<td>▲ teal / ▼ červená na cenové křivce</td>
+<td>Signály</td>
+</tr>
+<tr>
 <td><strong>Cenová vrstva</strong></td>
 <td>zelená/červená</td>
 <td>vždy (viz kap. 6)</td>
 </tr>
 </tbody></table>
 <p>Každá úroveň se navíc promítá jako <strong>horizontální čárkovaná linka přes celou šířku s barevnou cenovkou</strong> u levého okraje (poslední známá hodnota) — na první pohled vidíš, kde úrovně právě leží. Vpravo na ose je <strong>štítek aktuální ceny</strong>; v pravém dolním rohu <strong>timestamp</strong> posledních dat.</p>
+<h3>News markery — zprávy přímo v grafu</h3>
+<p>Se zapnutým <strong>News</strong> se na časové ose kreslí značky zpráv a makro událostí (pás u spodní hrany + glyf kategorie: 🏛 Fed, 📊 inflace, 👷 trh práce…):</p>
+<ul>
+<li><strong>Barva = změřený dopad</strong>: teal kladný sentiment, červená záporný, šedá neutrální/nezměřený. <strong>Jas a tloušťka = důležitost</strong> — okrajová zpráva nekřičí jako FOMC.</li>
+<li>Víc zpráv v téže minutě = <strong>jeden marker s počtem</strong> (cluster).</li>
+<li><strong>Nadcházející plánované eventy</strong> (CPI ve 14:30…) se kreslí <strong>dutě čárkovaně do projekční zóny</strong> vpravo od živé hrany — vidíš je dřív, než přijdou.</li>
+<li><strong>Klik na marker otevře dialog</strong> se zprávami dané minuty: čas, kategorie, důležitost (! až !!!), titulek, případný souhrn a <strong>očekávaný dopad na trh — Long ▲ / Short ▼ / Neutrální</strong> (u klasifikovaných zpráv podle směru, jinak podle znaménka skóre; stejná logika, jakou se barví marker). U makro událostí navíc <strong>očekávání / minule / výsledek</strong>, u nadcházejících odpočet. Zavření: ×, Esc, nebo klik mimo.</li>
+<li>Dropdown <strong>Vše / Významné</strong> vedle checkboxu News omezí markery jen na zprávy s <strong>důležitostí ≥ 2</strong> — plocha se nezahltí drobnými titulky, FOMC/CPI zůstávají.</li>
+</ul>
 <h3>Stale buňky</h3>
 <p>Pokud se některý strike nepodařilo obnovit (výpadek dat), jeho buňky jsou <strong>vyšedlé s nižší sytostí</strong> — poznáš tak stará data od živých. Souhrn běží ve stavové liště (<code>Repair: retrying N…</code>).</p>
 <hr>
@@ -369,6 +402,10 @@ docker compose up -d        # start na pozadí
 <td><strong>Cum Δ</strong></td>
 <td>Kumulativní delta flow jako plocha <strong>nad nulou (zelená) / pod nulou (červená)</strong>. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Počítá se s plnou klasifikací agresora (tick-by-tick v hot zóně, midpoint test jinde) a resetuje se na začátku dne.</td>
 </tr>
+<tr>
+<td><strong>Sentiment</strong></td>
+<td>SentIndex z news-engine (zapíná checkbox <strong>News</strong>): intraday spojitá řada kolem nuly (kladná = risk-on tón zpráv, záporná = risk-off), v <strong>Daily</strong> pohledu OHLC svíčka indexu za každý den (open nese overnight zbytek).</td>
+</tr>
 </tbody></table>
 <p>Pohyb myší v kterémkoli panelu hýbe crosshairem ve všech panelech i heatmapě. Při najetí navíc uvidíš <strong>hodnoty ukazatele</strong>:</p>
 <ul>
@@ -424,6 +461,72 @@ docker compose up -d        # start na pozadí
 <hr>
 <h2>11b. Řetěz — Greeks &amp; OI tabulka</h2>
 <p>Obrazovka <strong>Řetěz</strong> v sidebaru ukazuje klasickou opční tabulku vybrané expirace: <strong>call strana vlevo, strike uprostřed, put vpravo</strong>, sloupce Bid/Ask/Last/Vol/IV/Δ/Γ/Θ/Vega/OI/ΔOI (put strana zrcadlově, ať OI sousedí se strikem). Data jsou <strong>živý pohled z poslední minuty</strong> sběru, obnovují se každou minutu; ΔOI porovnává s posledním archivovaným dnem. Řádek nejblíž aktuální ceně je zvýrazněný (ATM), strany se zastaralými kotacemi jsou ztlumené. Expirace se přepíná selektorem v hlavičce — funguje i pro zítřejší řetěz.</p>
+<hr>
+<h2>11c. News a sentiment (SentimentLens)</h2>
+<p>Vlastní <strong>news-engine</strong> běží vedle datového enginu: sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy, broker pásku z IBKR), klasifikuje <strong>kategorii, důležitost (1–3) a směr dopadu</strong>, a počítá z nich <strong>SentIndex</strong> — souhrnný sentiment s rozpadem po tématech. Nic z toho nechodí ven; vše se počítá lokálně.</p>
+<h3>Obrazovka News</h3>
+<ul>
+<li><strong>Filtry</strong> nahoře: kategorie a minimální důležitost (vše / 2+ / 3).</li>
+<li><strong>„Co hýbe trhem&quot;</strong> — aktivní témata s příspěvkem k indexu (🏛 Fed +0,42 …).</li>
+<li><strong>Crowd sentiment</strong> — externí kontrariánské ukazatele: Fear &amp; Greed, Put/Call ratio, Reddit průměry.</li>
+<li><strong>Nadcházející</strong> — nejbližší plánované události s odpočtem a konsensem (např. „CPI za 1 h 12 m · konsensus 2,9 (min. 3,0)&quot;).</li>
+<li><strong>Tabulka zpráv</strong> — čas, kategorie, titulek, typ, důležitost, skóre. U řádků s nejistou klasifikací je tužka ✎ — můžeš <strong>ručně opravit směr nebo kategorii</strong> (uloží se jako korekce, model se z ní učí — review fronta).</li>
+</ul>
+<h3>Stav RISK ON / RISK OFF</h3>
+<p>Chip v hlavičce (kap. 4) překlápí stav podle SentIndexu vůči klouzavým průměrům MA5/MA10 s potvrzením — nepotvrzená intradenní změna má tečku a signály z ní nesou ⚠. Historii přepnutí (vlny, jejich hloubku a délku) najdeš na obrazovce <strong>Stats</strong>.</p>
+<h3>Kde se sentiment potkává s grafem</h3>
+<ul>
+<li><strong>News markery</strong> na časové ose + dialog po kliknutí (kap. 5).</li>
+<li><strong>Panel Sentiment</strong> pod grafem (kap. 8).</li>
+<li><strong>Signály</strong> — viz další kapitola.</li>
+</ul>
+<hr>
+<h2>11d. Signály a Stats</h2>
+<h3>Signály — Long/Short nápovědy ze zpráv</h3>
+<p>Dropdown <strong>Signály</strong> v řádku přepínačů: <strong>Off / NEWS / COMBINED</strong> (obě větve se počítají vždy, dropdown jen vybírá zobrazenou):</p>
+<ul>
+<li><strong>NEWS</strong> — reakce čistě na zprávu (kategorie × důležitost × překvapení vs. konsensus).</li>
+<li><strong>COMBINED</strong> — totéž se souhlasem GEX kontextu (režim, poloha vůči flipu).</li>
+</ul>
+<p>Signál se ukáže jako <strong>šipka na cenové křivce</strong> (▲ Long teal / ▼ Short červená, sytost = síla) s <strong>vodorovnou stopou platnosti</strong> do své expirace. Tooltip u crosshairu nese režim, zdůvodnění, <strong>n vzorků a Wilson LB</strong>. Při nepotvrzené změně stavu sentimentu nese šipka <strong>⚠</strong>.</p>
+<p><strong>Empirická gate:</strong> signál z daného typu zprávy se pouští, <strong>až když má bucket n ≥ 30 změřených reakcí a spodní mez úspěšnosti (Wilson LB) &gt; 0,50</strong>. Dokud žádný bucket gate neprošel, u dropdownu běží „⏳ sběr dat X %&quot; — aplikace se přiznaně učí, místo aby střílela od boku. Statistiky jsou <strong>režimově podmíněné</strong> (RiskOn/RiskOff/Neutral, gamma ±): když má režimový pohled dost dat, použije se přednostně, jinak se korektně spadne na celkový.</p>
+<h3>Obrazovka Stats</h3>
+<table>
+<thead>
+<tr>
+<th>Sekce</th>
+<th>Co ukazuje</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Vlny sentimentu</strong></td>
+<td>Historie RISK ON/OFF vln — hloubka, délka, četnost per směr</td>
+</tr>
+<tr>
+<td><strong>Hit-raty bucketů</strong></td>
+<td>Empirický model reakcí na zprávy: úspěšnost per kategorie × důležitost × překvapení, přepínač <strong>okna reakce</strong> (+5/+15/+30/+60 min) a <strong>režimu</strong> (vše / RiskOn / RiskOff / Neutral / gamma ±), progres ke gate</td>
+</tr>
+<tr>
+<td><strong>Setupy per režim</strong></td>
+<td>Úspěšnost šablon T1–T5 rozpadlá podle GEX režimu — které setupy fungují v jakém prostředí</td>
+</tr>
+<tr>
+<td><strong>Track record</strong></td>
+<td>Mechanické equity křivky strategií (signály, setupy) + drawdown</td>
+</tr>
+<tr>
+<td><strong>Latence zdrojů</strong></td>
+<td>Jak rychle který zdroj doručuje zprávy (medián, p90, podíl dávek)</td>
+</tr>
+<tr>
+<td><strong>Drift hlídka</strong></td>
+<td>Alert, když se čerstvá úspěšnost bucketu statisticky rozejde s historickou — model přestává platit (⚠ badge už u přepínače Signály)</td>
+</tr>
+<tr>
+<td><strong>Ranní retro pass</strong></td>
+<td>Denní přehodnocení včerejších klasifikací s odstupem</td>
+</tr>
+</tbody></table>
 <hr>
 <h2>12. IBKR Console</h2>
 <p>Diagnostická obrazovka:</p>
@@ -528,6 +631,30 @@ docker compose up -d        # start na pozadí
 <td><strong>FA validace</strong></td>
 <td>Ranní kalibrační bod FA vrstvy: po příchodu OI archivu engine porovná včerejší klasifikovaný volume s ΔOI (open-ratio ≈ α, korelace) a bod uloží pro kalibraci — čistě informační</td>
 </tr>
+<tr>
+<td><strong>Greeks se zasekly / zase jedou</strong></td>
+<td>Kotace opčního řetězu přestaly chodit při živém spotu (obdoba svíček) — hint restart TWS; návrat se ohlásí</td>
+</tr>
+<tr>
+<td><strong>Setup detektor degradován/obnoven</strong></td>
+<td>Detektoru chybí vstup (např. OI pro Max Pain) — šablony na něm závislé se dočasně nevyhodnocují</td>
+</tr>
+<tr>
+<td><strong>T6 kandidát</strong></td>
+<td>Ráno po výprodeji (close −1 % a hůř) nastala konstelace premarket squeeze (kap. 18) — zatím se jen sbírá, šablona vznikne po ~5 výskytech</td>
+</tr>
+<tr>
+<td><strong>Drift hlídka</strong></td>
+<td>Čerstvá úspěšnost signálového bucketu se statisticky rozešla s historickou — model přestává platit, signály z něj ber s rezervou (detail na Stats)</td>
+</tr>
+<tr>
+<td><strong>News anomálie</strong></td>
+<td>Výrazný pohyb ceny bez odpovídající zprávy — něco hýbe trhem mimo pokryté zdroje</td>
+</tr>
+<tr>
+<td><strong>Retro pass</strong></td>
+<td>Ranní přehodnocení včerejších klasifikací zpráv s odstupem — čistě informační</td>
+</tr>
 </tbody></table>
 <h3>Setupy</h3>
 <p>Když detektor najde setup, přijde alert <strong>Nový setup</strong> a nad grafem se ukáže <strong>karta setupu</strong> pro daný instrument: směr (LONG/SHORT), šablona, <strong>datum a čas vzniku</strong> (kdy se splnily podmínky), úrovně <strong>Entry / Cíl / Stop</strong>, RRR a důvěra, plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce <strong>Setupy</strong> v sidebaru.</p>
@@ -576,7 +703,7 @@ docker compose up -d        # start na pozadí
 <hr>
 <h2>16. Deep-linky</h2>
 <p>Aplikaci lze otevřít rovnou v konkrétním stavu pomocí URL parametrů:</p>
-<pre><code>http://127.0.0.1:8080/?view=dashboard          # obrazovka: chart | dashboard | console | settings
+<pre><code>http://127.0.0.1:8080/?view=dashboard          # obrazovka: chart | dashboard | chain | setups | news | stats | console | settings
 http://127.0.0.1:8080/?theme=light             # téma
 http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelností 60 % (default jsou svíčky)
 </code></pre>
@@ -615,6 +742,18 @@ http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelno
 <td>Mimo obchodní hodiny nevznikají nové snapshoty — použij playback pro přehrání posledního dne.</td>
 </tr>
 <tr>
+<td><strong>Neděle večer: žádné svíčky</strong></td>
+<td>CME Globex otvírá <strong>v neděli 17:00 chicagského času = 18:00 New York = 24:00 SELČ</strong>. Do půlnoci našeho času se ES/NQ neobchodují — svíčky se objeví pár minut po otevření. (Všední dny: denní přestávka 22:00–23:00 SELČ.)</td>
+</tr>
+<tr>
+<td>Symbol „zmizel&quot; z watchlistu</td>
+<td>Watchlist se nenačetl (např. restart služeb v nevhodný moment) — od v0.1.4 se sám obnovuje po 15 s a při návratu do okna; případné chyby přidání/odebrání ukazuje hláška pod formulářem. Stačí chvíli počkat nebo obnovit stránku.</td>
+</tr>
+<tr>
+<td>Po aktualizaci aplikace nevidím nové funkce</td>
+<td>Prohlížeč drží starý build v cache — dej <strong>Ctrl+Shift+R</strong> (hard reload).</td>
+</tr>
+<tr>
 <td>TWS spadlo po přihlášení na mobilu</td>
 <td>Limit jednoho přihlášení IBKR. Znovu se přihlas v TWS; aplikace se sama připojí.</td>
 </tr>
@@ -636,8 +775,14 @@ http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelno
 <h3>Settle a gamma crunch</h3>
 <p><strong>Settle</strong> = vypořádání expirace: u denních ES/NQ opcí <strong>20:00 UTC (22:00 SELČ, 16:00 New York)</strong>. V tu chvíli opce zaniknou a jejich gamma z trhu zmizí — model i mapa počítají právě do tohoto okamžiku.</p>
 <p><strong>Gamma crunch:</strong> gamma opce je největší přesně na striku a čím méně času zbývá, tím je špičatější — ráno široký kopec přes několik strikes, večer úzká jehla na jednom striku. Zajišťovací toky tak mají poslední 1–2 hodiny největší páku: cena se buď <strong>přilepí</strong> k velkému striku (pin), nebo po proražení <strong>prudce akceleruje</strong>. V Dyn GEX mapě to vidíš jako stahování barev do tenkých jasných pásů směrem doprava.</p>
-<h3>Jak číst Dyn GEX mapu (přepínač <strong>Dyn GEX</strong> v řádku přepínačů)</h3>
-<p>Od 23. 7. je Dyn GEX <strong>samostatná vrstva, ne mód</strong>: zapíná se checkboxem a kreslí se jako podklad POD zvoleným měřeným módem (např. OI+OTM) — průhledná místa měřené mapy ukážou pole, koncentrace ho překryjí. Kontury (Contours) při zapnuté vrstvě obrysují pole.</p>
+<h3>Jak číst Dyn GEX mapu (dropdown <strong>Dyn plocha</strong> v řádku přepínačů)</h3>
+<p>Dyn GEX je <strong>samostatná podkladová vrstva, ne mód</strong>: vybírá se v dropdownu <strong>Dyn plocha</strong> a kreslí se POD zvoleným měřeným módem (např. OI+OTM) — průhledná místa měřené mapy ukážou pole, koncentrace ho překryjí. Kontury (Contours) při zapnuté vrstvě obrysují pole.</p>
+<p>Vedle Dyn GEX (gamma, zelená–červená) jsou v dropdownu dvě další modelované plochy:</p>
+<ul>
+<li><strong>Dyn Charm</strong> (jantar–modrá) — toky od plynutí času: jak se s blížícím settle mění delta pozic a kudy potečou zajišťovací příkazy jen proto, že běží hodiny. Nejsilnější poslední hodiny seance.</li>
+<li><strong>Dyn Vanna</strong> (teal–fialová) — toky od změny volatility: kudy se přehedgovává, když IV skočí nebo spadne (zprávy, FOMC). Čti spolu s VEX módem.</li>
+</ul>
+<p>Vždy je aktivní jen jedna plocha; barvy ploch vysvětluje i <strong>Legenda</strong> v sidebaru.</p>
 <p><img src="img/dyn-gex-pole.png" alt="Dyn GEX pole — modelovaný NetGEX přes pásmo a čas"></p>
 <ul>
 <li><strong>Vlevo od předělu</strong> = naměřená historie (profil minutu po minutě, tehdejší IV/OI). <strong>Vpravo od předělu</strong> (ztlumené, svislý předěl = „teď&quot;) = modelovaná budoucnost do settle z aktuálního snapshotu.</li>
@@ -771,6 +916,46 @@ http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelno
 <tr>
 <td><strong>Stale</strong></td>
 <td>Data starší než 5 minut — vizuálně odlišená.</td>
+</tr>
+<tr>
+<td><strong>VEX</strong> (Vega Exposure)</td>
+<td>vega × OI per strana — kolik $ přecenění drží dealeři na striku při změně IV o 1 bod. „Volatility walls&quot; před událostmi.</td>
+</tr>
+<tr>
+<td><strong>Charm</strong></td>
+<td>Citlivost delty na čas — zajišťovací toky, které vznikají jen plynutím času k settle.</td>
+</tr>
+<tr>
+<td><strong>Vanna</strong></td>
+<td>Citlivost delty na volatilitu — toky spuštěné skokem/propadem IV.</td>
+</tr>
+<tr>
+<td><strong>FA levels</strong> (flow-adjusted)</td>
+<td>Flip/walls počítané z odhadu OI = ranní OI + dnešní klasifikovaný tok — ukazují stěhování úrovní dřív, než to potvrdí zítřejší OI archiv.</td>
+</tr>
+<tr>
+<td><strong>SentIndex</strong></td>
+<td>Souhrnný sentiment zpráv z news-engine — vážený součet klasifikovaných událostí s rozpadem po tématech; kladný risk-on, záporný risk-off.</td>
+</tr>
+<tr>
+<td><strong>RISK ON / RISK OFF</strong></td>
+<td>Stav SentIndexu vůči MA5/MA10 s potvrzením; historie přepnutí = vlny (Stats).</td>
+</tr>
+<tr>
+<td><strong>Signál (NEWS/COMBINED)</strong></td>
+<td>Empiricky gate-ovaná Long/Short nápověda z reakcí na zprávy; COMBINED navíc vyžaduje souhlas GEX kontextu.</td>
+</tr>
+<tr>
+<td><strong>Gate / Wilson LB</strong></td>
+<td>Podmínka spuštění signálů: bucket musí mít n ≥ 30 reakcí a spodní mez 95% intervalu úspěšnosti (Wilson lower bound) &gt; 0,50.</td>
+</tr>
+<tr>
+<td><strong>Tendence</strong></td>
+<td>Souhrnný chip Strong Short … Strong Long z 12 složek positioningu a toku (flip, zdi, CumΔ, charm/vanna tok…); orientační, váhy zatím nekalibrované.</td>
+</tr>
+<tr>
+<td><strong>Drift</strong></td>
+<td>Statistický rozchod čerstvé úspěšnosti bucketu s historickou — signál, že se trh vůči modelu změnil.</td>
 </tr>
 </tbody></table>
 <hr>
