@@ -5,11 +5,13 @@ Nepřepisuje logiku: importuje `detect_all`, `evaluate_bar`, `r_result` z
 jinak dělá `SetupEngine` (anti-spam per šablona, blokace směru po sérii stopů,
 cooldown v kontra-režimu, vyhodnocení otevřených setupů po barech).
 
-Omezení (platí STEJNĚ pro obě porovnávané konfigurace, takže rozdíl mezi nimi
-zůstává poctivý): call_flow/put_flow/opt_vol se z uložených řad rekonstruovat
-nedají, jdou dovnitř jako 0 — tím fakticky vypadává T4 gamma momentum a T3 má
-slabší podmínku vyhasínání aktivity. Absolutní počty se proto od produkce liší;
-harness se kvůli tomu proti produkci validuje (viz --validate).
+Opční toky (`call_flow` / `put_flow` / `opt_vol`) se **rekonstruují ze snapshotů**
+(`data/snapshots/{symbol}/{expiry}/*.parquet`), ne z předpočítané řady — engine
+je nikam neukládá, počítá si je za běhu z cache kotací. Snapshot ale nese per
+minutu a kontrakt `volume` i `delta`, což jsou přesně vstupy `SetupEngine._flows`:
+přírůstek volume proti předchozí minutě téhož kontraktu, vážený |delta|, sečtený
+zvlášť za call a put strany (`opt_vol` je nevážený součet přírůstků). Záporné
+přírůstky (reset volume na přelomu seance) se zahazují, stejně jako v produkci.
 """
 
 import argparse
@@ -49,6 +51,41 @@ def load_series(pattern: str) -> pd.DataFrame | None:
     return frame.sort_values("ts_min").drop_duplicates("ts_min", keep="last")
 
 
+def option_flows(symbol: str, expiry: str) -> pd.DataFrame | None:
+    """Δ-vážený opční tok per minuta ze snapshotů — zrcadlo `SetupEngine._flows`.
+
+    Engine porovnává `snapshot.volume` proti hodnotě téhož kontraktu z minulé
+    minuty; tady je totéž jako `groupby(strike, right).shift()` nad uloženou
+    maticí. Kontrakt, který se ve sweepu poprvé objeví, přírůstek nemá (NaN →
+    zahodit) — shodné s `previous is None: continue` v produkci.
+    """
+    files = sorted(glob.glob(f"data/snapshots/{symbol}/{expiry}/*.parquet"))
+    if not files:
+        return None
+    snap = pd.concat(
+        [
+            pd.read_parquet(f, columns=["ts_min", "strike", "right", "volume", "delta"])
+            for f in files
+        ]
+    )
+    if snap.empty:
+        return None
+    snap = snap.sort_values(["strike", "right", "ts_min"])
+    previous = snap.groupby(["strike", "right"], sort=False)["volume"].shift()
+    increment = (snap["volume"] - previous).where(lambda s: s > 0)  # ≤ 0 se přeskakuje
+    snap = snap.assign(inc=increment, weighted=increment * snap["delta"].abs())
+    grouped = snap.groupby(["ts_min", "right"], sort=True)[["inc", "weighted"]].sum()
+    wide = grouped.unstack("right")
+    return pd.DataFrame(
+        {
+            "ts_min": wide.index,
+            "call_flow": wide.get(("weighted", "C"), pd.Series(0.0, index=wide.index)).fillna(0.0),
+            "put_flow": wide.get(("weighted", "P"), pd.Series(0.0, index=wide.index)).fillna(0.0),
+            "opt_vol": wide["inc"].sum(axis=1).fillna(0.0),
+        }
+    ).reset_index(drop=True)
+
+
 def max_pain_for(repo: OIEodRepository, symbol: str, expiry: str, day: dt.date) -> float | None:
     try:
         records = repo.values_for(symbol, expiry, day)
@@ -71,6 +108,9 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
         frame = frame.merge(dom, on="ts_min", how="left")
     if flow is not None:
         frame = frame.merge(flow[["ts_min", "cum_delta"]], on="ts_min", how="left")
+    flows = option_flows(symbol, expiry)
+    if flows is not None:
+        frame = frame.merge(flows, on="ts_min", how="left")
     if frame.empty:
         return []
     day = pd.Timestamp(frame.ts_min.iloc[-1]).date()
@@ -95,9 +135,9 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
                 put_wall=none_if_nan(getattr(row, "put_wall", None)),
                 max_pain=pain,
                 cum_delta=float(getattr(row, "cum_delta", 0.0) or 0.0),
-                call_flow=0.0,  # viz omezení v docstringu
-                put_flow=0.0,
-                opt_vol=0.0,
+                call_flow=float(getattr(row, "call_flow", 0.0) or 0.0),
+                put_flow=float(getattr(row, "put_flow", 0.0) or 0.0),
+                opt_vol=float(getattr(row, "opt_vol", 0.0) or 0.0),
                 minutes_to_expiry=left if left > 0 else None,
                 call_wall_dom=none_if_nan(getattr(row, "call_wall_dom", None)),
                 put_wall_dom=none_if_nan(getattr(row, "put_wall_dom", None)),
@@ -248,9 +288,10 @@ def main() -> None:
 
     repo = OIEodRepository(create_engine(args.db)) if args.db else None
 
+    # Produkční default = absolutní prahy (násobky ATR jsou 0, viz #434)
     configs = {
-        "baseline (absolutní prahy)": SetupParams(wall_zone_atr=0.0, rejection_min_atr=0.0),
-        "ATR škálované (#434)": SetupParams(),
+        "baseline (produkční prahy)": SetupParams(),
+        "ATR škálované (#434)": SetupParams(wall_zone_atr=1.9, rejection_min_atr=0.6),
     }
 
     report: dict = {}
