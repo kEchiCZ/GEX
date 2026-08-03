@@ -77,8 +77,7 @@ export function visiblePriceRange(
   if (strikes.length < 2 || canvasHeight <= 0) return null
   const scaleY = (canvasHeight / strikes.length) * view.zoomY
   if (scaleY <= 0) return null
-  const rowAtY = (y: number): number =>
-    strikes.length - 1 - ((y - view.offsetY) / scaleY - 0.5)
+  const rowAtY = (y: number): number => strikes.length - 1 - ((y - view.offsetY) / scaleY - 0.5)
   const top = priceAtRow(strikes, rowAtY(0))
   const bottom = priceAtRow(strikes, rowAtY(canvasHeight))
   return top > bottom ? { top, bottom } : null
