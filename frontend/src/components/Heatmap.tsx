@@ -241,34 +241,32 @@ export function Heatmap({
   // Resize pravého panelu, živý přírůstek minut ani úprava os pohled neresetují —
   // uživatelův pan/zoom tak zůstává zachovaný a X se neukotvuje samo doprava.
   const fittedKeyRef = useRef<string | number | undefined | symbol>(UNFITTED)
-  // Kotva X po fitu (#423): délka osy se může změnit AŽ PO fitu (projekční
-  // zóna dorazí později) — offsetX spočtený nad starým baseBucketPx by data
-  // odsunul mimo plátno. Dokud uživatel do X nezasáhne, kotva se přepočítává.
-  const appliedXRef = useRef<{ zoomX: number; offsetX: number } | null>(null)
-  const fitMinutesRef = useRef(0)
+  // Poslední programově aplikovaný pohled — dokud se od něj uživatel neodchýlí
+  // (gesto, resize kompenzace), je pohled v „auto režimu" a smí se sám dolaďovat
+  const appliedViewRef = useRef<ViewTransform | null>(null)
   useEffect(() => {
     if (fittedKeyRef.current === resetKey) return
     if (!fitRange) return // počkej na reálná data (cenové pásmo dne)
     fittedKeyRef.current = resetKey
-    fitMinutesRef.current = grid.minutes
-    appliedXRef.current = { zoomX: initialView.zoomX, offsetX: initialView.offsetX }
+    appliedViewRef.current = initialView
     setView(() => initialView)
-  }, [resetKey, fitRange, initialView, grid.minutes, setView])
+  }, [resetKey, fitRange, initialView, setView])
+  // Auto režim (#423, #428): fit proběhne na PRVNÍ data po přepnutí datasetu,
+  // jenže osa se pak prodlouží o projekci (offsetX by ujel mimo plátno) a
+  // cenové pásmo se rozšíří o zbytek dne (úzký fit by nechal cenu mimo výřez).
+  // Dokud uživatel do pohledu nezasáhne, pohled proto sleduje aktuální
+  // initialView; první gesto ho zmrazí.
   useEffect(() => {
     if (fittedKeyRef.current !== resetKey) return
-    if (fitMinutesRef.current === grid.minutes) return
-    fitMinutesRef.current = grid.minutes
-    const applied = appliedXRef.current
-    // Pan/zoom X od uživatele kotvu zmrazí — pohled se mu už nesmí hýbat sám
-    if (!applied || view.zoomX !== applied.zoomX || view.offsetX !== applied.offsetX) return
-    const offsetX =
-      initialZoomX === null
-        ? homeOffsetX(grid.minutes, logicalW)
-        : anchoredOffsetX(grid.minutes, grid.dataMinutes ?? grid.minutes, logicalW, view.zoomX)
-    appliedXRef.current = { zoomX: view.zoomX, offsetX }
-    // Živý růst s fit-to-width offset nemění — setView jen při skutečném posunu (#118)
-    if (offsetX !== view.offsetX) setView((previous) => ({ ...previous, offsetX }))
-  }, [grid.minutes, grid.dataMinutes, resetKey, view.zoomX, view.offsetX, initialZoomX, logicalW, setView]) // prettier-ignore
+    const applied = appliedViewRef.current
+    if (!applied) return
+    const viewEquals = (a: ViewTransform, b: ViewTransform): boolean =>
+      a.zoomX === b.zoomX && a.zoomY === b.zoomY && a.offsetX === b.offsetX && a.offsetY === b.offsetY // prettier-ignore
+    if (!viewEquals(view, applied)) return // uživatel/resize převzal kontrolu
+    if (viewEquals(initialView, applied)) return
+    appliedViewRef.current = initialView
+    setView(() => initialView)
+  }, [initialView, view, resetKey, setView])
   // Tažení: pan plochy, nebo roztahování jedné osy (TradingView styl)
   const dragRef = useRef<{ x: number; y: number; mode: 'pan' | 'scale-x' | 'scale-y' } | null>(null)
   // Výchozí bod stisku — klik (bez tažení) na news marker otevře dialog (#408)
