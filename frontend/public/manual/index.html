@@ -556,6 +556,10 @@ docker compose up -d        # start na pozadí
 <td><strong>Rozsah strikes (± body od spotu)</strong> — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB)</td>
 </tr>
 <tr>
+<td><strong>Alerty</strong></td>
+<td><strong>Hlásit chyby subskripce market dat</strong> — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert <em>Chyba subskripce</em> v kap. 14)</td>
+</tr>
+<tr>
 <td><strong>Vzhled</strong></td>
 <td>Téma <strong>Dark/Light</strong> (přepne se ihned), jazyk</td>
 </tr>
@@ -634,6 +638,10 @@ docker compose up -d        # start na pozadí
 <tr>
 <td><strong>Greeks se zasekly / zase jedou</strong></td>
 <td>Kotace opčního řetězu přestaly chodit při živém spotu (obdoba svíček) — hint restart TWS; návrat se ohlásí</td>
+</tr>
+<tr>
+<td><strong>Chyba subskripce</strong></td>
+<td>TWS opakovaně odmítla data konkrétních kontraktů (error 354 „not subscribed&quot;); alert vypíše, o které kontrakty jde. Ojedinělé výskyty se nehlásí — ty patří ke krátkým výpadkům farem a data se vrátí sama. Když alert přijde, zkontroluj subskripce v Market Data Subscription Manager. Jde vypnout v Settings → Alerty</td>
 </tr>
 <tr>
 <td><strong>Setup detektor degradován/obnoven</strong></td>

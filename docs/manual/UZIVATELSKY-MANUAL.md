@@ -388,6 +388,7 @@ Změny se **ukládají okamžitě** (bez tlačítka Uložit) a engine si je prů
 |---|---|
 | **IBKR** | Host, port (7496 live / 7497 paper), client ID |
 | **Engine** | **Rozsah strikes (± body od spotu)** — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB) |
+| **Alerty** | **Hlásit chyby subskripce market dat** — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert *Chyba subskripce* v kap. 14) |
 | **Vzhled** | Téma **Dark/Light** (přepne se ihned), jazyk |
 | **Seance** | Historické pole (JSON) — markery seancí se nově generují **automaticky** z časů světových burz; checkbox Sessions v grafu |
 
@@ -423,6 +424,7 @@ Druhy alertů:
 | **Nový setup** | Detektor našel obchodní setup (odraz od zdi / neúspěšný průraz / Max Pain pin / gamma momentum / divergenční spring) |
 | **FA validace** | Ranní kalibrační bod FA vrstvy: po příchodu OI archivu engine porovná včerejší klasifikovaný volume s ΔOI (open-ratio ≈ α, korelace) a bod uloží pro kalibraci — čistě informační |
 | **Greeks se zasekly / zase jedou** | Kotace opčního řetězu přestaly chodit při živém spotu (obdoba svíček) — hint restart TWS; návrat se ohlásí |
+| **Chyba subskripce** | TWS opakovaně odmítla data konkrétních kontraktů (error 354 „not subscribed"); alert vypíše, o které kontrakty jde. Ojedinělé výskyty se nehlásí — ty patří ke krátkým výpadkům farem a data se vrátí sama. Když alert přijde, zkontroluj subskripce v Market Data Subscription Manager. Jde vypnout v Settings → Alerty |
 | **Setup detektor degradován/obnoven** | Detektoru chybí vstup (např. OI pro Max Pain) — šablony na něm závislé se dočasně nevyhodnocují |
 | **T6 kandidát** | Ráno po výprodeji (close −1 % a hůř) nastala konstelace premarket squeeze (kap. 18) — zatím se jen sbírá, šablona vznikne po ~5 výskytech |
 | **Drift hlídka** | Čerstvá úspěšnost signálového bucketu se statisticky rozešla s historickou — model přestává platit, signály z něj ber s rezervou (detail na Stats) |
