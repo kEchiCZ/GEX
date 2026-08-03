@@ -126,6 +126,13 @@ class Settings(BaseSettings):
     # Tichá ztráta 5s barů (#221): alert po N minutách bez baru při živém spotu
     bars_stall_alert_minutes: int = Field(default=3, ge=1)
 
+    # Chyby subskripce market data (#417): alert až při shluku error 354 v okně —
+    # jednotlivý výskyt je přechodný výpadek farmy, ne chybějící subskripce.
+    # Alert jde vypnout za běhu klíčem `subscription_alert_enabled` v Settings UI.
+    subscription_error_threshold: int = Field(default=5, ge=1)
+    subscription_error_window_s: float = Field(default=60.0, gt=0)
+    subscription_error_cooldown_s: float = Field(default=900.0, ge=0)
+
     # Hot zóna (SPEC 3.4; limit streamů naměřen v ADR-0001)
     hot_zone_width: int = Field(default=15, ge=1)
     tick_by_tick_max_streams: int = Field(default=5, ge=1)

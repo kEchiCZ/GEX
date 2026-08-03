@@ -69,6 +69,22 @@ export function SettingsView() {
         ))}
       </section>
 
+      <section aria-label="Alerty">
+        <h2>Alerty</h2>
+        <label>
+          <input
+            type="checkbox"
+            checked={values.subscription_alert_enabled !== false}
+            onChange={(event) => put('subscription_alert_enabled', event.target.checked)}
+          />
+          Hlásit chyby subskripce market dat
+        </label>
+        <p className="muted">
+          Alert, když TWS opakovaně odmítne data konkrétního kontraktu (error 354). S platnými
+          subskripcemi ES/NQ by nastat neměl — ojedinělé výpadky farmy se nehlásí.
+        </p>
+      </section>
+
       <section aria-label="Vzhled">
         <h2>Vzhled</h2>
         <label>

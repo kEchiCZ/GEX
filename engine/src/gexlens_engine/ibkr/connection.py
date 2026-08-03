@@ -20,8 +20,10 @@ from gexlens_engine.config import Settings
 logger = logging.getLogger(__name__)
 
 LIVE_MARKET_DATA_TYPE = 1
-# Kódy TWS signalizující, že live data nejsou k dispozici (subskripce chybí / delayed)
-DELAYED_DATA_ERROR_CODES = frozenset({354, 10167, 10197})
+# Kódy TWS = engine dostává DELAYED data (SPEC 3.1: fail-fast, Greeks z nich nejsou
+# spolehlivé). Error 354 („not subscribed") sem NEPATŘÍ: je per-request a v provozu
+# chodí i s platnou subskripcí při výpadku farmy — hlídá ho `subscription.py` (#417).
+DELAYED_DATA_ERROR_CODES = frozenset({10167, 10197})
 
 
 class ConnectionState(enum.Enum):
@@ -138,7 +140,12 @@ class ConnectionManager:
             )
 
     def report_error(self, code: int, message: str) -> None:
-        """Zpracování chybových kódů TWS relevantních pro dostupnost live dat."""
+        """Zpracování chybových kódů TWS relevantních pro dostupnost live dat.
+
+        Volá se z `ib.errorEvent` (zapojeno v `__main__`); reaguje jen na kódy
+        znamenající delayed data. Per-request chyby subskripce (354) sem nepatří,
+        viz `DELAYED_DATA_ERROR_CODES`.
+        """
         if code in DELAYED_DATA_ERROR_CODES:
             self._set_state(ConnectionState.ERROR, f"IBKR error {code}: {message}")
 
