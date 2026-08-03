@@ -30,6 +30,7 @@ from gexlens_engine.compute.setups import (
     max_pain_strike,
     normalize_candidate,
     r_result,
+    scale_params,
 )
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
@@ -985,3 +986,24 @@ def test_legacy_rows_get_version_1_and_are_excluded(tmp_path: Path) -> None:
     current = repository.closed_since("ES", since, mechanics_version=SETUP_MECHANICS_VERSION)
     assert len(current) == 1
     assert current[0].outcome_r == 2.0
+
+
+# ── ATR škálování prahů (#434) ────────────────────────────────────────
+
+
+def test_scale_params_is_identity_with_default_multipliers() -> None:
+    """Výchozí násobky 0 = chování beze změny (škálování zamítnuto měřením)."""
+    params = SetupParams()
+    scaled = scale_params(params, atr=11.5)
+    assert scaled.wall_zone == params.wall_zone
+    assert scaled.rejection_min == params.rejection_min
+
+
+def test_scale_params_keeps_absolute_value_as_floor() -> None:
+    """Na klidném trhu (malé ATR) drží absolutní práh, jinak rozhoduje ATR."""
+    params = SetupParams(wall_zone=3.0, wall_zone_atr=1.9, rejection_min=1.0, rejection_min_atr=0.6)
+    calm = scale_params(params, atr=0.5)
+    assert calm.wall_zone == 3.0  # 1,9 × 0,5 = 0,95 < 3,0 → spodní mez
+    volatile = scale_params(params, atr=11.5)
+    assert volatile.wall_zone == pytest.approx(21.85)
+    assert volatile.rejection_min == pytest.approx(6.9)
