@@ -205,9 +205,8 @@ function StrikeProfileBase({
   return (
     <aside className="strike-profile" aria-label="Strike profil" style={{ width }}>
       <div className="profile-header">
-        <span className="muted profile-title">
-          {aggregate ? 'Vol + OI Δ · Σ expirací' : 'Vol + OI Δ'}
-        </span>
+        {/* Stav Σ nese jen zvýrazněný chip (#415) — popisek se nemění */}
+        <span className="muted profile-title">Vol + OI Δ</span>
         <div role="toolbar" aria-label="Zoom profilu">
           {aggregate !== null && (
             <button

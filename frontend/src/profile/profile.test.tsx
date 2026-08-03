@@ -395,7 +395,9 @@ test('Σ přepínač: viditelný jen s aggregate prop, mění hlavičku a volá 
       />
     </CrosshairProvider>,
   )
-  expect(screen.getByText('Vol + OI Δ · Σ expirací')).toBeDefined()
+  // Stav Σ nese jen chip (#415): popisek se nemění, chip dostane class active
+  expect(screen.getByText('Vol + OI Δ')).toBeDefined()
+  expect(screen.getByLabelText('Souhrn přes expirace').className).toContain('active')
 
   rerender(
     <CrosshairProvider>
