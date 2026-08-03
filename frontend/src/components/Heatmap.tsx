@@ -96,6 +96,7 @@ export function Heatmap({
   annotations = [],
   annotationTool = null,
   annotationColor = '#e8c14b',
+  bucketMinutes = 1,
   onAnnotationCreate,
   onAnnotationErase,
   view: controlledView,
@@ -133,6 +134,10 @@ export function Heatmap({
   annotations?: StoredAnnotation[]
   annotationTool?: ActiveTool
   annotationColor?: string
+  /** Minut na jeden sloupec gridu (#430): anotace se ukládají v absolutních
+      minutách dne a tady se převádí na index bucketu aktuálního TF.
+      Daily pohled nechává 1 (jednotka = sloupec-den, beze změny chování). */
+  bucketMinutes?: number
   onAnnotationCreate?: (payload: AnnotationPayload) => void
   onAnnotationErase?: (id: number) => void
   /** Řízený pohled (pan/zoom os) — sdílení časové osy se spodními panely. */
@@ -315,7 +320,9 @@ export function Heatmap({
       },
       // Anotace: spojité datové souřadnice (čas × strike, ne pixely — SPEC 7.4)
       screenToDataPoint: (x: number, y: number): AnnotationPoint => {
-        const minute = (x - view.offsetX) / scaleX - 0.5
+        // Absolutní minuty dne (#430): index bucketu × bucketMinutes — anotace
+        // drží pozici i po přepnutí timeframe (jiná velikost bucketu)
+        const minute = ((x - view.offsetX) / scaleX - 0.5) * bucketMinutes
         const row = strikeCount - 1 - ((y - view.offsetY) / scaleY - 0.5)
         const clamped = Math.min(strikeCount - 1, Math.max(0, row))
         const lowIdx = Math.min(strikeCount - 2, Math.max(0, Math.floor(clamped)))
@@ -327,7 +334,7 @@ export function Heatmap({
         return { minute, strike }
       },
     }
-  }, [grid.minutes, grid.strikes, strikeCount, view, logicalW, logicalH])
+  }, [grid.minutes, grid.strikes, strikeCount, view, logicalW, logicalH, bucketMinutes])
 
   // 1) Data → offscreen bitmapa (jen při změně dat/stylu). S Dyn GEX podkladem
   // (#242) se pole kreslí PRVNÍ a měřený grid přes něj — putImageData by podklad
@@ -679,7 +686,7 @@ export function Heatmap({
       context.lineWidth = 2
       context.beginPath()
       points.forEach((point, index) => {
-        const px = minuteToX(point.minute)
+        const px = minuteToX(point.minute / bucketMinutes)
         const py = rowToY(fractionalRow(grid.strikes, point.strike) ?? 0)
         if (index === 0) context.moveTo(px, py)
         else context.lineTo(px, py)
@@ -688,9 +695,9 @@ export function Heatmap({
       if (tool === 'arrow') {
         const from = points[0]
         const to = points[points.length - 1]
-        const x1 = minuteToX(from.minute)
+        const x1 = minuteToX(from.minute / bucketMinutes)
         const y1 = rowToY(fractionalRow(grid.strikes, from.strike) ?? 0)
-        const x2 = minuteToX(to.minute)
+        const x2 = minuteToX(to.minute / bucketMinutes)
         const y2 = rowToY(fractionalRow(grid.strikes, to.strike) ?? 0)
         const angle = Math.atan2(y2 - y1, x2 - x1)
         const head = 10
@@ -741,6 +748,7 @@ export function Heatmap({
     }
   }, [
     mapping,
+    bucketMinutes,
     contourSegments,
     overlays,
     grid.strikes,
@@ -972,7 +980,7 @@ export function Heatmap({
       if (point && onAnnotationErase) {
         // Tolerance gumy: ~5 minut a 2 strike kroky
         const strikeStep = strikeCount > 1 ? Math.abs(grid.strikes[1] - grid.strikes[0]) : 1
-        const target = nearestAnnotationId(annotations, point, 5, 2 * strikeStep)
+        const target = nearestAnnotationId(annotations, point, 5 * bucketMinutes, 2 * strikeStep)
         if (target !== null) onAnnotationErase(target)
       }
       return

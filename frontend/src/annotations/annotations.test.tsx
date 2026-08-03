@@ -133,6 +133,65 @@ test('tažení s nástrojem linie vytvoří anotaci vázanou na čas×strike (AC
   expect(points[1].strike).toBeGreaterThan(points[0].strike)
 })
 
+test('anotace se ukládají v absolutních minutách dne — TF bucket se převádí (#430)', () => {
+  const grid = demoGrid(100, 10) // 100 bucketů × 5 min = 500 minut dne
+  const created: AnnotationPayload[] = []
+  render(
+    <CrosshairProvider>
+      <Heatmap
+        grid={grid}
+        style="gradient"
+        contours="off"
+        bucketMinutes={5}
+        annotationTool="line"
+        onAnnotationCreate={(payload) => created.push(payload)}
+      />
+    </CrosshairProvider>,
+  )
+  const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
+  fireEvent.pointerDown(overlay, { clientX: 120, clientY: 320 })
+  fireEvent.pointerMove(overlay, { clientX: 600, clientY: 64 })
+  fireEvent.pointerUp(overlay)
+
+  // Bucket ~9.5 × 5 min = minuta ~47.5 dne — nezávislé na zvoleném TF
+  expect(created).toHaveLength(1)
+  expect(created[0].points[0].minute).toBeCloseTo(47.5, 1)
+  expect(created[0].points[1].minute).toBeCloseTo(247.5, 1)
+})
+
+test('guma najde anotaci v absolutních minutách i při jiné velikosti bucketu (#430)', () => {
+  const grid = demoGrid(100, 10)
+  const erased: number[] = []
+  const annotation: StoredAnnotation = {
+    id: 4,
+    payload: {
+      tool: 'line',
+      color: '#fff',
+      // Minuta 47.5 dne = bucket 9.5 na 5min gridu → x = 120 px
+      points: [
+        { minute: 47.5, strike: grid.strikes[5] },
+        { minute: 100, strike: grid.strikes[6] },
+      ],
+    },
+  }
+  render(
+    <CrosshairProvider>
+      <Heatmap
+        grid={grid}
+        style="gradient"
+        contours="off"
+        bucketMinutes={5}
+        annotations={[annotation]}
+        annotationTool="eraser"
+        onAnnotationErase={(id) => erased.push(id)}
+      />
+    </CrosshairProvider>,
+  )
+  const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
+  fireEvent.pointerDown(overlay, { clientX: 120, clientY: 288 })
+  expect(erased).toEqual([4])
+})
+
 test('guma na heatmapě zavolá onAnnotationErase s id nejbližší anotace', () => {
   const grid = demoGrid(100, 10)
   const erased: number[] = []
