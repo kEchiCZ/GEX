@@ -20,6 +20,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from gexlens_api.alerts import AlertEngine
+from gexlens_api.backup import build_backup_router
 from gexlens_api.crud import build_router
 from gexlens_api.data import DataRepository, PartitionNotFoundError
 from gexlens_api.heatmap import (
@@ -136,6 +137,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return engine
 
     app.include_router(build_sentiment_router(sentiment_engine, settings.data_dir))
+    # Záloha PostgreSQL (#438): parquety má uživatel na disku, DB je ve volume
+    app.include_router(build_backup_router(settings.database_url))
 
     @app.exception_handler(PartitionNotFoundError)
     async def partition_not_found(_request: object, exc: PartitionNotFoundError) -> JSONResponse:

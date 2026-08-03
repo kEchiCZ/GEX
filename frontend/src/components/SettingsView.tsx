@@ -4,6 +4,8 @@ Hodnoty jdou přes PUT /settings/{key} hned při změně — engine si je čte
 průběžně (bez restartu tam, kde SPEC restart nevyžaduje). Téma se aplikuje
 živě na kořenový element.
 */
+import { useState } from 'react'
+import { downloadBackup } from '../api/backup'
 import { useServerSettings } from '../api/settings'
 import { useAppState } from '../state/AppState'
 import type { Theme } from '../state/AppState'
@@ -18,13 +20,35 @@ const ENGINE_FIELDS: NumberField[] = [
   { key: 'strike_range_points', label: 'Rozsah strikes (± body)', fallback: 200 },
   { key: 'batch_size', label: 'Velikost dávky', fallback: 80 },
   { key: 'hot_zone_width', label: 'Šířka hot zóny (± strikes)', fallback: 15 },
-  { key: 'retention_days', label: 'Retence (dny)', fallback: 14 },
-  { key: 'disk_limit_gb', label: 'Disk limit (GB)', fallback: 2 },
+  // Fallbacky musí odpovídat defaultům enginu, jinak pole ukazuje nepravdu
+  // (engine tyhle dvě hodnoty zatím čte z konfigurace, ne z DB — viz #438)
+  { key: 'retention_days', label: 'Retence (dny)', fallback: 90 },
+  { key: 'disk_limit_gb', label: 'Disk limit (GB)', fallback: 5 },
 ]
 
 export function SettingsView() {
   const { theme, setTheme } = useAppState()
   const { values, put } = useServerSettings()
+  const [backup, setBackup] = useState<'idle' | 'running'>('idle')
+  const [backupNote, setBackupNote] = useState<string | null>(null)
+
+  const runBackup = async () => {
+    setBackup('running')
+    setBackupNote(null)
+    try {
+      const where = await downloadBackup()
+      setBackupNote(
+        where === 'saved'
+          ? 'Hotovo — záloha uložena na zvolené místo.'
+          : 'Hotovo — záloha stažena do složky Stažené soubory (prohlížeč neumí výběr složky).',
+      )
+    } catch (error) {
+      // Chyba musí být vidět: tichá neúspěšná záloha je horší než žádná
+      setBackupNote(error instanceof Error ? error.message : 'Záloha selhala.')
+    } finally {
+      setBackup('idle')
+    }
+  }
 
   return (
     <main className="settings" aria-label="Settings">
@@ -67,6 +91,29 @@ export function SettingsView() {
             />
           </label>
         ))}
+      </section>
+
+      <section aria-label="Záloha">
+        <h2>Záloha databáze</h2>
+        <button className="chip" onClick={runBackup} disabled={backup === 'running'}>
+          {backup === 'running' ? 'Zálohuji…' : 'Zálohovat PostgreSQL'}
+        </button>
+        {backupNote && (
+          <p className="muted" role="status">
+            {backupNote}
+          </p>
+        )}
+        <p className="muted">
+          Zálohuje <strong>PostgreSQL</strong> — věčný OI archiv, setupy s výsledky, signály,
+          tendence a statistiky modelu. Ta data se nedají znovu pořídit a na rozdíl od parquetů
+          neleží ve složce projektu, ale v Docker volume, který se smazáním kontejnerů dá ztratit.
+        </p>
+        <p className="muted">
+          <strong>Kam ukládat:</strong> zvol složku <em>mimo adresář projektu</em>, ideálně na jiný
+          disk nebo do cloudu. Záloha v repozitáři chrání jen před smazáním volume — ne před
+          selháním disku ani ztrátou počítače, protože leží na tomtéž místě. Navíc obsahuje veškerá
+          data a do gitu nepatří.
+        </p>
       </section>
 
       <section aria-label="Alerty">
