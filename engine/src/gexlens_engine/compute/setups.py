@@ -75,8 +75,21 @@ class MinuteInputs:
 class SetupParams:
     """Prahy šablon (ADR-0004 defaulty; body podkladu)."""
 
+    # Prahy vzdálenosti od zdi. Absolutní body v sobě nesou asymetrii mezi
+    # instrumenty: 3 body jsou na ES 2,4× medián minutového rozsahu (dotyk
+    # zaznamená prakticky každá svíčka u zdi), na NQ jen 0,27× (low musí zeď
+    # trefit přesně). Nabízelo se proto škálovat je ATR jako R-mechaniku níž.
+    #
+    # ZMĚŘENO A ZAMÍTNUTO (#434, `scripts/backtest_setups.py`, 20. 7.–4. 8.):
+    # škálování 1,9 × ATR překlopilo NQ z +25,6 R na −15,0 R a bylo horší v
+    # 9 z 12 dnů — úzká zóna na NQ nefunguje jako závada, ale jako filtr
+    # kvality. Násobky proto zůstávají na 0 (= vypnuto, chování beze změny)
+    # a slouží jako kalibrační páka pro #394, kde se prahy budou ladit na
+    # delší historii spolu s vahami.
     wall_zone: float = 3.0
+    wall_zone_atr: float = 0.0
     rejection_min: float = 1.0
+    rejection_min_atr: float = 0.0
     divergence_lookback: int = 10
     min_rrr: float = 1.2
     # R-mechanika (#302) — jednotná pro všechny šablony, aplikuje se v `detect_all`.
@@ -718,6 +731,20 @@ DETECTORS = (
 )
 
 
+def scale_params(params: SetupParams, atr: float) -> SetupParams:
+    """Prahy vzdálenosti volitelně přepočtené na volatilitu instrumentu (#434).
+
+    Absolutní hodnota je spodní mez, nad ní rozhoduje násobek ATR. S výchozími
+    násobky 0 je funkce identita — škálování se měřením neosvědčilo (viz
+    komentář u `SetupParams.wall_zone`) a zůstává jen jako kalibrační páka.
+    """
+    return replace(
+        params,
+        wall_zone=max(params.wall_zone, params.wall_zone_atr * atr),
+        rejection_min=max(params.rejection_min, params.rejection_min_atr * atr),
+    )
+
+
 def detect_all(history: Sequence[MinuteInputs], params: SetupParams) -> list[SetupCandidate]:
     """Vyhodnotí povolené šablony nad aktuální minutou (bez stavového anti-spamu).
 
@@ -728,9 +755,10 @@ def detect_all(history: Sequence[MinuteInputs], params: SetupParams) -> list[Set
     atr = average_true_range(history, params.atr_lookback)
     if atr is None:
         return []
+    scaled = scale_params(params, atr)
     results = []
     for detector in DETECTORS:
-        candidate = detector(history, params)
+        candidate = detector(history, scaled)
         if candidate is None:
             continue
         if candidate.template.value in params.disabled_templates:

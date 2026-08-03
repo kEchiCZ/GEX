@@ -1,0 +1,303 @@
+"""Offline přehrání historie přes PRODUKČNÍ detektor setupů (#434).
+
+Nepřepisuje logiku: importuje `detect_all`, `evaluate_bar`, `r_result` z
+`gexlens_engine.compute.setups` a jen kolem nich staví orchestraci, kterou
+jinak dělá `SetupEngine` (anti-spam per šablona, blokace směru po sérii stopů,
+cooldown v kontra-režimu, vyhodnocení otevřených setupů po barech).
+
+Omezení (platí STEJNĚ pro obě porovnávané konfigurace, takže rozdíl mezi nimi
+zůstává poctivý): call_flow/put_flow/opt_vol se z uložených řad rekonstruovat
+nedají, jdou dovnitř jako 0 — tím fakticky vypadává T4 gamma momentum a T3 má
+slabší podmínku vyhasínání aktivity. Absolutní počty se proto od produkce liší;
+harness se kvůli tomu proti produkci validuje (viz --validate).
+"""
+
+import argparse
+import dataclasses
+import datetime as dt
+import glob
+import json
+import os
+import sys
+from collections import defaultdict
+
+import pandas as pd
+from sqlalchemy import create_engine
+
+from gexlens_engine.compute.setups import (
+    Direction,
+    MinuteInputs,
+    Outcome,
+    SetupParams,
+    detect_all,
+    evaluate_bar,
+    gex_regime,
+    is_counter_regime,
+    max_pain_strike,
+    r_result,
+)
+from gexlens_engine.storage.oi_archive import OIEodRepository
+
+DATA = "data/derived"
+
+
+def load_series(pattern: str) -> pd.DataFrame | None:
+    files = sorted(glob.glob(pattern))
+    if not files:
+        return None
+    frame = pd.concat([pd.read_parquet(f) for f in files])
+    return frame.sort_values("ts_min").drop_duplicates("ts_min", keep="last")
+
+
+def max_pain_for(repo: OIEodRepository, symbol: str, expiry: str, day: dt.date) -> float | None:
+    try:
+        records = repo.values_for(symbol, expiry, day)
+    except Exception:
+        return None
+    oi_map = {(r.strike, r.right): r.oi for r in records}
+    return max_pain_strike(oi_map) if oi_map else None
+
+
+def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[MinuteInputs]:
+    """MinuteInputs jednoho obchodního dne (expirace = adresář derived)."""
+    bars = load_series(f"{DATA}/{symbol}/bars/*.parquet")
+    levels = load_series(f"{DATA}/{symbol}/{expiry}/levels/*.parquet")
+    dom = load_series(f"{DATA}/{symbol}/{expiry}/walldom/*.parquet")
+    flow = load_series(f"{DATA}/{symbol}/flow/*.parquet")
+    if bars is None or levels is None:
+        return []
+    frame = bars.merge(levels, on="ts_min", how="inner")
+    if dom is not None:
+        frame = frame.merge(dom, on="ts_min", how="left")
+    if flow is not None:
+        frame = frame.merge(flow[["ts_min", "cum_delta"]], on="ts_min", how="left")
+    if frame.empty:
+        return []
+    day = pd.Timestamp(frame.ts_min.iloc[-1]).date()
+    pain = max_pain_for(repo, symbol, expiry, day)
+    settle = dt.datetime.strptime(expiry, "%Y%m%d").replace(hour=20, tzinfo=dt.UTC)
+
+    minutes: list[MinuteInputs] = []
+    for row in frame.itertuples():
+        ts = pd.Timestamp(row.ts_min).to_pydatetime()
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=dt.UTC)
+        left = (settle - ts).total_seconds() / 60.0
+        minutes.append(
+            MinuteInputs(
+                ts=ts,
+                open=float(row.open),
+                high=float(row.high),
+                low=float(row.low),
+                close=float(row.close),
+                flip=none_if_nan(getattr(row, "flip", None)),
+                call_wall=none_if_nan(getattr(row, "call_wall", None)),
+                put_wall=none_if_nan(getattr(row, "put_wall", None)),
+                max_pain=pain,
+                cum_delta=float(getattr(row, "cum_delta", 0.0) or 0.0),
+                call_flow=0.0,  # viz omezení v docstringu
+                put_flow=0.0,
+                opt_vol=0.0,
+                minutes_to_expiry=left if left > 0 else None,
+                call_wall_dom=none_if_nan(getattr(row, "call_wall_dom", None)),
+                put_wall_dom=none_if_nan(getattr(row, "put_wall_dom", None)),
+                gex_regime=gex_regime(
+                    float(row.close),
+                    none_if_nan(getattr(row, "flip", None)),
+                    float(getattr(row, "total_gex", 0.0) or 0.0),
+                ),
+            )
+        )
+    return minutes
+
+
+def none_if_nan(value):
+    if value is None:
+        return None
+    try:
+        return None if pd.isna(value) else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+@dataclasses.dataclass
+class OpenSetup:
+    template: str
+    direction: Direction
+    entry: float
+    target: float
+    stop: float
+    created: dt.datetime
+    counter: bool
+
+
+def replay(minutes: list[MinuteInputs], params: SetupParams) -> list[dict]:
+    """Přehraje den; vrací uzavřené i otevřené setupy s výsledkem v R."""
+    history: list[MinuteInputs] = []
+    open_setups: list[OpenSetup] = []
+    done: list[dict] = []
+    last_created: dict[str, dt.datetime] = {}
+    last_counter_stop: dict[str, dt.datetime] = {}
+    dir_stops: dict[str, int] = defaultdict(int)
+    dir_blocked: dict[str, dt.datetime] = {}
+
+    for now in minutes:
+        history.append(now)
+        # 1) Vyhodnocení otevřených (stop-first uvnitř svíčky, jako SetupEngine)
+        still: list[OpenSetup] = []
+        for item in open_setups:
+            outcome = evaluate_bar(
+                item.direction, item.entry, item.target, item.stop, now.high, now.low
+            )
+            if outcome is None:
+                still.append(item)
+                continue
+            exit_price = item.stop if outcome is Outcome.STOP else item.target
+            result = r_result(item.direction, item.entry, item.stop, exit_price)
+            done.append(
+                {
+                    "template": item.template,
+                    "direction": item.direction.value,
+                    "created": item.created,
+                    "closed": now.ts,
+                    "outcome": outcome.value,
+                    "r": result,
+                }
+            )
+            side = item.direction.value
+            if outcome is Outcome.STOP:
+                if item.counter:
+                    last_counter_stop[item.template] = now.ts
+                dir_stops[side] += 1
+                if dir_stops[side] >= params.max_stops_per_direction:
+                    dir_blocked[side] = now.ts + dt.timedelta(
+                        minutes=params.direction_block_minutes
+                    )
+            else:
+                dir_stops[side] = 0
+                dir_blocked.pop(side, None)
+        open_setups = still
+
+        # 2) Nové kandidáty přes produkční detect_all
+        open_templates = {item.template for item in open_setups}
+        for candidate in detect_all(history, params):
+            template = candidate.template.value
+            if template in open_templates:
+                continue
+            last = last_created.get(template)
+            if last is not None and (now.ts - last).total_seconds() < params.cooldown_minutes * 60:
+                continue
+            blocked = dir_blocked.get(candidate.direction.value)
+            if blocked is not None and now.ts < blocked:
+                continue
+            counter = is_counter_regime(candidate.direction, candidate.context.get("gex_regime"))
+            if counter:
+                stop_ts = last_counter_stop.get(template)
+                if (
+                    stop_ts is not None
+                    and (now.ts - stop_ts).total_seconds()
+                    < params.counter_stop_cooldown_minutes * 60
+                ):
+                    continue
+            last_created[template] = now.ts
+            open_setups.append(
+                OpenSetup(
+                    template=template,
+                    direction=candidate.direction,
+                    entry=candidate.entry,
+                    target=candidate.target,
+                    stop=candidate.stop,
+                    created=now.ts,
+                    counter=counter,
+                )
+            )
+            open_templates.add(template)
+
+    for item in open_setups:  # neuzavřené do konce dne = bez výsledku
+        done.append(
+            {
+                "template": item.template,
+                "direction": item.direction.value,
+                "created": item.created,
+                "closed": None,
+                "outcome": "active",
+                "r": None,
+            }
+        )
+    return done
+
+
+def summarize(rows: list[dict]) -> dict:
+    closed = [r for r in rows if r["r"] is not None]
+    wins = [r for r in closed if r["outcome"] == Outcome.TARGET.value]
+    total_r = sum(r["r"] for r in closed)
+    return {
+        "setupů": len(rows),
+        "uzavřených": len(closed),
+        "úspěšnost %": round(100 * len(wins) / len(closed), 1) if closed else 0.0,
+        "Ø R": round(total_r / len(closed), 2) if closed else 0.0,
+        "Σ R": round(total_r, 2),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--symbols", default="ES,NQ")
+    parser.add_argument("--db", default=os.environ.get("GEXLENS_DATABASE_URL", ""))
+    args = parser.parse_args()
+
+    repo = OIEodRepository(create_engine(args.db)) if args.db else None
+
+    configs = {
+        "baseline (absolutní prahy)": SetupParams(wall_zone_atr=0.0, rejection_min_atr=0.0),
+        "ATR škálované (#434)": SetupParams(),
+    }
+
+    report: dict = {}
+    for symbol in args.symbols.split(","):
+        expiries = sorted(
+            os.path.basename(p)
+            for p in glob.glob(f"{DATA}/{symbol}/*")
+            if os.path.basename(p).isdigit()
+        )
+        per_config: dict[str, list[dict]] = {name: [] for name in configs}
+        per_template: dict[str, dict[str, list[dict]]] = {
+            name: defaultdict(list) for name in configs
+        }
+        per_day: dict[str, dict[str, float]] = defaultdict(dict)
+        for expiry in expiries:
+            minutes = build_minutes(symbol, expiry, repo) if repo else []
+            if len(minutes) < 60:
+                continue
+            for name, params in configs.items():
+                rows = replay(minutes, params)
+                per_config[name].extend(rows)
+                for row in rows:
+                    per_template[name][row["template"]].append(row)
+                closed = [r["r"] for r in rows if r["r"] is not None]
+                per_day[expiry][name] = round(sum(closed), 2)
+        report[symbol] = {
+            "dnů": len(expiries),
+            "Σ R po dnech": dict(sorted(per_day.items())),
+            "konfigurace": {
+                name: {
+                    "celkem": summarize(rows),
+                    "per šablona": {
+                        tmpl: summarize(trows) for tmpl, trows in sorted(per_template[name].items())
+                    },
+                }
+                for name, rows in per_config.items()
+            },
+        }
+    out = os.environ.get("BACKTEST_OUT")
+    text = json.dumps(report, ensure_ascii=False, indent=2, default=str)
+    if out:
+        with open(out, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        print(f"zapsáno: {out}".encode("ascii", "replace").decode())
+    else:
+        sys.stdout.write(text)
+
+
+if __name__ == "__main__":
+    main()
