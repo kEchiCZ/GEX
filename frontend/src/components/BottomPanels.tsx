@@ -56,8 +56,15 @@ const IDENTITY_TIME: TimeTransform = { offsetX: 0, zoomX: 1 }
 const DEFAULT_height = 84
 
 const fmtInt = (value: number): string => Math.round(value).toLocaleString('cs-CZ')
-const fmtSigned = (value: number): string =>
-  (value > 0 ? '+' : '') + Math.round(value).toLocaleString('cs-CZ')
+/** Znaménkový formát; malé škály (|peak| < 10, např. sentiment −1…+1) by
+Math.round srazil na „±0", proto 2 desetinná místa (#418). */
+const fmtSigned = (value: number, peak = Infinity): string => {
+  const text =
+    peak < 10
+      ? value.toLocaleString('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+      : Math.round(value).toLocaleString('cs-CZ')
+  return (value > 0 ? '+' : '') + text
+}
 
 /** Hodnota ukazatele vpravo nahoře (HTML overlay — SVG by text roztáhl). */
 function PanelValue({ children }: { children: React.ReactNode }) {
@@ -181,7 +188,7 @@ function BottomPanelsBase({
     const value = signed
       ? ((height / 2 - y) / Math.max(1, height / 2 - CUM_DELTA_PAD)) * peak
       : ((height - y) / (height - 4)) * peak
-    return <PanelAxisValue y={y}>{signed ? fmtSigned(value) : fmtInt(value)}</PanelAxisValue>
+    return <PanelAxisValue y={y}>{signed ? fmtSigned(value, peak) : fmtInt(value)}</PanelAxisValue>
   }
   /** Vodorovná crosshair linka na úrovni kurzoru (jen v najetém panelu, mimo transform). */
   const axisLineH = (key: string): React.ReactNode => {
