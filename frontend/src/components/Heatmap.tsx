@@ -42,6 +42,7 @@ import {
   fitPriceView,
   homeOffsetX,
   viewYForPriceRange,
+  visiblePriceRange,
   zoomAxis,
   zoomBoth,
 } from '../heatmap/view'
@@ -101,6 +102,7 @@ export function Heatmap({
   initialZoomX = null,
   initialPriceRange = null,
   onUserZoomX,
+  onUserYRange,
   onViewReset,
   onViewChange,
   fitRange = null,
@@ -143,6 +145,10 @@ export function Heatmap({
   initialPriceRange?: { top: number; bottom: number } | null
   /** Uživatelská změna zoomu X (kolečko/tažení osy) — rodič ji persistuje (#419). */
   onUserZoomX?: (zoomX: number) => void
+  /** Uživatelská změna pohledu Y (kolečko/pan/tažení osy) — hlásí se viditelné
+      cenové pásmo k persistenci. JEN z gest: pohled a grid tu vždy patří
+      k sobě, na rozdíl od přechodných renderů při přepnutí instrumentu (#426). */
+  onUserYRange?: (range: { top: number; bottom: number }) => void
   /** Reset pohledu (dvojklik/⟲) — rodič smaže persistovaný zoom TF (#419). */
   onViewReset?: () => void
   /** Cenové pásmo dne pro auto-fit osy Y (výchozí pohled i cíl resetu). */
@@ -208,10 +214,20 @@ export function Heatmap({
   // Persistovaný zoom TF (#419): poslední NAMĚŘENÁ svíčka ve 3/4 šířky —
   // vpravo zůstává čtvrtina na projekční zónu (ADR-0006)
   const initialView = useMemo(() => {
-    // Osa Y: persistované cenové pásmo instrumentu (#422) má přednost před auto-fitem
-    const yPart = initialPriceRange
-      ? viewYForPriceRange(grid.strikes, initialPriceRange.top, initialPriceRange.bottom, logicalH)
-      : null
+    // Osa Y: persistované cenové pásmo instrumentu (#422) má přednost před
+    // auto-fitem — ale jen když se protíná s obálkou strikes. Pásmo mimo obálku
+    // (otrávený zápis, velký overnight pohyb) by schovalo svíčky mimo plátno,
+    // proto se ignoruje a platí auto-fit (#426).
+    const lastStrike = grid.strikes[grid.strikes.length - 1]
+    const rangeValid =
+      initialPriceRange !== null &&
+      grid.strikes.length > 1 &&
+      initialPriceRange.top > grid.strikes[0] &&
+      initialPriceRange.bottom < lastStrike
+    const yPart =
+      rangeValid && initialPriceRange
+        ? viewYForPriceRange(grid.strikes, initialPriceRange.top, initialPriceRange.bottom, logicalH) // prettier-ignore
+        : null
     const withY = yPart ? { ...homeView, ...yPart } : homeView
     if (initialZoomX === null) return withY
     const dataMinutes = grid.dataMinutes ?? grid.minutes
@@ -910,16 +926,21 @@ export function Heatmap({
     return { x: event.clientX - rect.left, y: event.clientY - rect.top }
   }
 
-  // Uživatelské gesto měnící zoom: změnu zoomX hlásí rodiči k persistenci (#419)
+  // Uživatelské gesto měnící pohled: změny zoomX a pásma Y hlásí rodiči
+  // k persistenci (#419, #426) — jediné místo, odkud se persistence plní
   const setGestureView = useCallback(
     (updater: (previous: ViewTransform) => ViewTransform) => {
       setView((previous) => {
         const next = updater(previous)
         if (next.zoomX !== previous.zoomX) onUserZoomX?.(next.zoomX)
+        if (next.zoomY !== previous.zoomY || next.offsetY !== previous.offsetY) {
+          const range = visiblePriceRange(grid.strikes, next, logicalH)
+          if (range) onUserYRange?.(range)
+        }
         return next
       })
     },
-    [setView, onUserZoomX],
+    [setView, onUserZoomX, onUserYRange, grid.strikes, logicalH],
   )
 
   // Kolečko: zoom ukotvený ke kurzoru; nad pruhem osy jen daná osa (TradingView styl)
@@ -1002,9 +1023,9 @@ export function Heatmap({
         setGestureView((previous) => zoomAxis(previous, 'x', factor, logicalW))
       } else if (mode === 'scale-y') {
         const factor = Math.exp(-deltaY * 0.005)
-        setView((previous) => zoomAxis(previous, 'y', factor, logicalH / 2))
+        setGestureView((previous) => zoomAxis(previous, 'y', factor, logicalH / 2))
       } else {
-        setView((previous) => ({
+        setGestureView((previous) => ({
           ...previous,
           offsetX: previous.offsetX + deltaX,
           offsetY: previous.offsetY + deltaY,
