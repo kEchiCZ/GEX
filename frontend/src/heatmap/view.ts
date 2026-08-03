@@ -37,6 +37,17 @@ function clampZoom(value: number): number {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value))
 }
 
+/** OffsetX pro persistovaný zoom (#419): střed posledního NAMĚŘENÉHO koše
+ve 3/4 šířky canvasu — vpravo zůstává čtvrtina na projekční zónu (ADR-0006). */
+export function anchoredOffsetX(
+  minutes: number,
+  dataMinutes: number,
+  canvasWidth: number,
+  zoomX: number,
+): number {
+  return 0.75 * canvasWidth - (dataMinutes - 0.5) * baseBucketPx(minutes, canvasWidth) * zoomX
+}
+
 /** Zoom jedné osy kolem kotvy v pixelech — bod pod kotvou zůstává na místě. */
 export function zoomAxis(
   view: ViewTransform,

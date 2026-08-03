@@ -36,6 +36,7 @@ import { signalAt, signalColor } from '../heatmap/signalMarkers'
 import {
   DEFAULT_VIEW,
   axisZoneAt,
+  anchoredOffsetX,
   baseBucketPx,
   compensateView,
   fitPriceView,
@@ -96,6 +97,9 @@ export function Heatmap({
   onAnnotationCreate,
   onAnnotationErase,
   view: controlledView,
+  initialZoomX = null,
+  onUserZoomX,
+  onViewReset,
   onViewChange,
   fitRange = null,
   onLogicalSizeChange,
@@ -130,6 +134,12 @@ export function Heatmap({
   /** Řízený pohled (pan/zoom os) — sdílení časové osy se spodními panely. */
   view?: ViewTransform
   onViewChange?: (view: ViewTransform) => void
+  /** Persistovaný zoom X pro daný TF (#419); null = výchozí fit-to-width. */
+  initialZoomX?: number | null
+  /** Uživatelská změna zoomu X (kolečko/tažení osy) — rodič ji persistuje (#419). */
+  onUserZoomX?: (zoomX: number) => void
+  /** Reset pohledu (dvojklik/⟲) — rodič smaže persistovaný zoom TF (#419). */
+  onViewReset?: () => void
   /** Cenové pásmo dne pro auto-fit osy Y (výchozí pohled i cíl resetu). */
   fitRange?: { low: number; high: number } | null
   /** Hlášení logické velikosti (CSS px) — pravý profil sdílí Y měřítko. */
@@ -190,6 +200,17 @@ export function Heatmap({
       : DEFAULT_VIEW
     return { ...base, offsetX: homeOffsetX(grid.minutes, logicalW) }
   }, [fitRange, grid.strikes, grid.minutes, logicalH, logicalW])
+  // Persistovaný zoom TF (#419): poslední NAMĚŘENÁ svíčka ve 3/4 šířky —
+  // vpravo zůstává čtvrtina na projekční zónu (ADR-0006)
+  const initialView = useMemo(() => {
+    if (initialZoomX === null) return homeView
+    const dataMinutes = grid.dataMinutes ?? grid.minutes
+    return {
+      ...homeView,
+      zoomX: initialZoomX,
+      offsetX: anchoredOffsetX(grid.minutes, dataMinutes, logicalW, initialZoomX),
+    }
+  }, [homeView, initialZoomX, grid.dataMinutes, grid.minutes, logicalW])
   // Auto-fit jen JEDNOU na dataset (resetKey = symbol/expirace/timeframe/den).
   // Resize pravého panelu, živý přírůstek minut ani úprava os pohled neresetují —
   // uživatelův pan/zoom tak zůstává zachovaný a X se neukotvuje samo doprava.
@@ -198,8 +219,8 @@ export function Heatmap({
     if (fittedKeyRef.current === resetKey) return
     if (!fitRange) return // počkej na reálná data (cenové pásmo dne)
     fittedKeyRef.current = resetKey
-    setView(() => homeView)
-  }, [resetKey, fitRange, homeView, setView])
+    setView(() => initialView)
+  }, [resetKey, fitRange, initialView, setView])
   // Tažení: pan plochy, nebo roztahování jedné osy (TradingView styl)
   const dragRef = useRef<{ x: number; y: number; mode: 'pan' | 'scale-x' | 'scale-y' } | null>(null)
   // Výchozí bod stisku — klik (bez tažení) na news marker otevře dialog (#408)
@@ -857,13 +878,25 @@ export function Heatmap({
     return { x: event.clientX - rect.left, y: event.clientY - rect.top }
   }
 
+  // Uživatelské gesto měnící zoom: změnu zoomX hlásí rodiči k persistenci (#419)
+  const setGestureView = useCallback(
+    (updater: (previous: ViewTransform) => ViewTransform) => {
+      setView((previous) => {
+        const next = updater(previous)
+        if (next.zoomX !== previous.zoomX) onUserZoomX?.(next.zoomX)
+        return next
+      })
+    },
+    [setView, onUserZoomX],
+  )
+
   // Kolečko: zoom ukotvený ke kurzoru; nad pruhem osy jen daná osa (TradingView styl)
   const onWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
     const point = canvasPoint(event)
     if (!point) return
     const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
     const zone = axisZoneAt(point.x, point.y, logicalH)
-    setView((previous) =>
+    setGestureView((previous) =>
       zone === 'x'
         ? zoomAxis(previous, 'x', factor, point.x)
         : zone === 'y'
@@ -872,7 +905,10 @@ export function Heatmap({
     )
   }
 
-  const resetView = () => setView(() => homeView)
+  const resetView = () => {
+    setView(() => homeView)
+    onViewReset?.()
+  }
 
   const eventDataPoint = (event: React.PointerEvent<HTMLCanvasElement>): AnnotationPoint | null => {
     const point = canvasPoint(event)
@@ -931,7 +967,7 @@ export function Heatmap({
         // Kotva = pravý okraj: poslední svíčka drží pozici. Doleva = roztáhnout,
         // doprava = zmenšit (jako osa Y nahoru = roztáhnout) — obrácené znaménko.
         const factor = Math.exp(-deltaX * 0.005)
-        setView((previous) => zoomAxis(previous, 'x', factor, logicalW))
+        setGestureView((previous) => zoomAxis(previous, 'x', factor, logicalW))
       } else if (mode === 'scale-y') {
         const factor = Math.exp(-deltaY * 0.005)
         setView((previous) => zoomAxis(previous, 'y', factor, logicalH / 2))

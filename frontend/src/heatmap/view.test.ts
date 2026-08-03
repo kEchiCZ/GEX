@@ -6,6 +6,7 @@ import {
   TIME_RIGHT_MARGIN_PX,
   ZOOM_MAX,
   ZOOM_MIN,
+  anchoredOffsetX,
   axisZoneAt,
   baseBucketPx,
   compensateView,
@@ -109,6 +110,20 @@ test('homeOffsetX ukotví málo dat k pravému okraji s odsazením', () => {
   expect(homeOffsetX(1380, 1200)).toBe(0)
   // Téměř plná šířka: offset nejde do záporu (levý okraj zůstává viditelný)
   expect(homeOffsetX(99, 100 * BUCKET_MAX_PX)).toBe(0)
+})
+
+test('anchoredOffsetX: poslední naměřený koš ve 3/4 šířky canvasu (#419)', () => {
+  const width = 1200
+  const minutes = 1380 // celá osa včetně projekce
+  const dataMinutes = 400 // poslední naměřená svíčka
+  const zoomX = 3
+  const offset = anchoredOffsetX(minutes, dataMinutes, width, zoomX)
+  // Střed posledního naměřeného koše po transformaci = 3/4 šířky
+  const center = (dataMinutes - 0.5) * baseBucketPx(minutes, width) * zoomX + offset
+  expect(center).toBeCloseTo(0.75 * width)
+  // Bez projekce (dataMinutes == minutes) kotva platí stejně
+  const full = anchoredOffsetX(400, 400, width, 2)
+  expect((400 - 0.5) * baseBucketPx(400, width) * 2 + full).toBeCloseTo(0.75 * width)
 })
 
 test('axisZoneAt: levý pruh = osa Y, spodní pruh = osa X, jinak plocha', () => {

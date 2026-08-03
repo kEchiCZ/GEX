@@ -72,6 +72,21 @@ export function mergedBooleans<T extends { [K in keyof T]: boolean }>(): Revive<
   }
 }
 
+/** Reviver pro mapu čísel sevřených do intervalu (zoom per TF, #419):
+neznámé tvary a hodnoty mimo meze se tiše zahodí. */
+export function clampedNumberMap(min: number, max: number): Revive<Record<string, number>> {
+  return (value, fallback) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return fallback
+    const result: Record<string, number> = {}
+    for (const [key, stored] of Object.entries(value)) {
+      if (typeof stored === 'number' && Number.isFinite(stored)) {
+        result[key] = Math.min(max, Math.max(min, stored))
+      }
+    }
+    return result
+  }
+}
+
 /** Reviver pro krátký identifikátor (symbol tickeru). */
 export function shortString(maxLength = 12): Revive<string> {
   return (value, fallback) =>
