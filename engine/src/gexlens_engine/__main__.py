@@ -11,6 +11,8 @@ import datetime as dt
 import logging
 import os
 import sys
+import time
+from collections.abc import Callable
 
 from ib_async import IB, Contract, Future, RealTimeBarList, Ticker
 from sqlalchemy import create_engine
@@ -24,7 +26,11 @@ from gexlens_engine.adapters import (
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
-from gexlens_engine.ibkr.connection import ConnectionManager, ConnectionState
+from gexlens_engine.ibkr.connection import (
+    DELAYED_DATA_ERROR_CODES,
+    ConnectionManager,
+    ConnectionState,
+)
 from gexlens_engine.ibkr.discovery import ChainDiscovery, Underlying, build_contracts
 from gexlens_engine.ibkr.newsticks import (
     NewsTickCollector,
@@ -34,6 +40,12 @@ from gexlens_engine.ibkr.newsticks import (
 )
 from gexlens_engine.ibkr.pacing import PacingGuard
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler
+from gexlens_engine.ibkr.subscription import (
+    NOT_SUBSCRIBED_ERROR_CODE,
+    SubscriptionErrorAlert,
+    SubscriptionErrorTracker,
+    contract_label,
+)
 from gexlens_engine.ibkr.underlying import Bar, RealTimeBarAggregator, UnderlyingBackfiller
 from gexlens_engine.instruments import (
     SETUP_RETRY_CYCLES,
@@ -93,6 +105,64 @@ async def _resolve_front_future(ib: IB, symbol: str) -> Contract:
         f"{symbol}: podklad nenalezen jako futures na {'/'.join(FUTURES_EXCHANGES)} "
         "(podporovány jsou futures opce — ADR-0003)"
     )
+
+
+def _watch_subscription_errors(
+    ib: IB,
+    manager: ConnectionManager,
+    settings: Settings,
+    publisher: PublisherLike,
+    alert_enabled: Callable[[], bool],
+) -> SubscriptionErrorTracker:
+    """Zapojení `ib.errorEvent` (#417): delayed data → fail-fast, 354 → hlídání shluků.
+
+    Do #417 se errorEvent neodebíral vůbec a `ConnectionManager.report_error` byl
+    mrtvý kód. Rozdělení kódů je záměrné: delayed data znamenají, že celý engine
+    počítá nad nespolehlivými Greeks (SPEC 3.1 fail-fast), zatímco error 354 se
+    týká JEDNOHO requestu a v provozu chodí sporadicky i s platnou subskripcí —
+    shodit kvůli němu stav spojení by z výpadku farmy udělalo trvalou chybu.
+    """
+    tracker = SubscriptionErrorTracker(
+        threshold=settings.subscription_error_threshold,
+        window_s=settings.subscription_error_window_s,
+        cooldown_s=settings.subscription_error_cooldown_s,
+    )
+
+    async def publish(alert: SubscriptionErrorAlert) -> None:
+        await publisher.publish(
+            "alerts",
+            {
+                "kind": "subscription_error",
+                "symbol": alert.symbol,
+                "message": alert.message,
+                "ts": dt.datetime.now(dt.UTC).timestamp(),
+            },
+        )
+
+    def on_error(reqId: int, code: int, message: str, contract: object = None) -> None:
+        if code in DELAYED_DATA_ERROR_CODES:
+            manager.report_error(code, message)
+            return
+        if code != NOT_SUBSCRIBED_ERROR_CODE:
+            return  # ostatní kódy loguje ib_async samo
+        label = contract_label(contract)
+        symbol = str(getattr(contract, "symbol", "") or "")
+        alert = tracker.observe(label, symbol, now=time.monotonic())
+        if alert is None:
+            # Ojedinělý výskyt = přechodný výpadek farmy; sweep si kontrakt vezme příště
+            logger.debug("IBKR error 354 (reqId %s): %s — %s", reqId, label, message)
+            return
+        logger.error(
+            "TWS odmítla market data %d× za %g s: %s",
+            alert.count,
+            alert.window_s,
+            ", ".join(alert.contracts),
+        )
+        if alert_enabled():
+            asyncio.create_task(publish(alert))
+
+    ib.errorEvent += on_error
+    return tracker
 
 
 async def _start_broker_news(
@@ -433,6 +503,12 @@ async def main() -> None:
         heartbeat_interval_s=settings.heartbeat_interval_s,
         heartbeat_timeout_s=settings.heartbeat_timeout_s,
     )
+    # Alert subscription_error jde vypnout v Settings UI (#417); hodnota se
+    # obnovuje v hlavním cyklu, handler errorEvent nesmí sahat do DB
+    subscription_alerts = {"enabled": True}
+    subscription_errors = _watch_subscription_errors(
+        ib, manager, settings, publisher, lambda: subscription_alerts["enabled"]
+    )
     await manager.start()
     while manager.state is not ConnectionState.CONNECTED:
         await asyncio.sleep(0.5)
@@ -493,6 +569,9 @@ async def main() -> None:
         if force_watchlist or cycle % settings.watchlist_poll_cycles == 0:
             force_watchlist = False
             desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
+            # Přepínač alertu chyb subskripce (#417) — čte se ze stejného poll cyklu
+            flag = await asyncio.to_thread(watchlist_reader.setting, "subscription_alert_enabled")
+            subscription_alerts["enabled"] = flag is not False
             # Runtime šířka pásma strikes ze Settings UI (vidět vzdálená křídla)
             override = await asyncio.to_thread(watchlist_reader.setting, "strike_range_points")
             new_range = clamp_strike_range(override, settings) if override is not None else None
@@ -583,6 +662,9 @@ async def main() -> None:
                 connection="connected",
                 port=settings.ibkr_port,
                 last_tick_ts=now.isoformat(),
+                # Kolikrát TWS za běh odmítla market data (#417) — s platnými
+                # subskripcemi má zůstat na nule, růst je signál k prověření
+                subscription_errors=subscription_errors.total,
                 **aggregate_status(results),
             )
 

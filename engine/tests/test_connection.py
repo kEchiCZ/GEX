@@ -115,7 +115,7 @@ async def test_delayed_market_data_is_error_state() -> None:
     await manager.stop()
 
 
-@pytest.mark.parametrize("code", [354, 10167, 10197])
+@pytest.mark.parametrize("code", [10167, 10197])
 async def test_delayed_error_codes_are_error_state(code: int) -> None:
     client = MockIB()
     manager = manager_with(client)
@@ -124,6 +124,23 @@ async def test_delayed_error_codes_are_error_state(code: int) -> None:
 
     manager.report_error(code, "mock hláška TWS")
     assert manager.state is ConnectionState.ERROR
+    await manager.stop()
+
+
+async def test_not_subscribed_error_does_not_change_state() -> None:
+    """Error 354 je per-request a chodí i s platnou subskripcí (#417).
+
+    Do #417 shazoval stav na ERROR — jedna přechodná chyba ze sweepu (~1 ze 70k)
+    by tak z výpadku farmy udělala trvalou chybu spojení. Hlídá ho
+    `SubscriptionErrorTracker`, ne stavový automat.
+    """
+    client = MockIB()
+    manager = manager_with(client)
+    await manager.start()
+    await wait_for_state(manager, ConnectionState.CONNECTED)
+
+    manager.report_error(354, "Requested market data is not subscribed")
+    assert manager.state is ConnectionState.CONNECTED
     await manager.stop()
 
 
