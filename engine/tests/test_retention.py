@@ -1,4 +1,9 @@
-"""Testy RetentionJobu (issue #12): purge >14 dní, oi_eod netknutá, disk limit."""
+"""Testy RetentionJobu (issue #12): purge okna, oi_eod netknutá, disk limit.
+
+Okno se všude nastavuje explicitně (`RETENTION_DAYS`), ne přes produkční
+default — ten je od ADR-0022 na 90 dnech a konstanty `DAY_*_OLD` stojí na
+hranici 14 dnů. Testuje se mechanika purge, ne konkrétní nakonfigurované okno.
+"""
 
 import datetime as dt
 from pathlib import Path
@@ -10,6 +15,7 @@ from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
 from gexlens_engine.storage.retention import RetentionJob
 
 TODAY = dt.date(2026, 7, 16)
+RETENTION_DAYS = 14
 DAY_15_OLD = TODAY - dt.timedelta(days=15)
 DAY_13_OLD = TODAY - dt.timedelta(days=13)
 
@@ -23,7 +29,7 @@ def make_partition(root: Path, *parts: str, day: dt.date) -> Path:
 
 
 def test_purge_deletes_15_days_keeps_13_days(tmp_path: Path) -> None:
-    settings = Settings(data_dir=tmp_path)
+    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path)
     old_snap = make_partition(settings.snapshots_dir, "ES", "20260716", day=DAY_15_OLD)
     new_snap = make_partition(settings.snapshots_dir, "ES", "20260716", day=DAY_13_OLD)
     old_ticks = make_partition(settings.ticks_dir, "ES", day=DAY_15_OLD)
@@ -43,7 +49,7 @@ def test_purge_deletes_15_days_keeps_13_days(tmp_path: Path) -> None:
 
 
 def test_boundary_day_exactly_retention_is_kept(tmp_path: Path) -> None:
-    settings = Settings(data_dir=tmp_path)
+    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path)
     boundary = make_partition(
         settings.snapshots_dir, "ES", "20260716", day=TODAY - dt.timedelta(days=14)
     )
@@ -55,7 +61,7 @@ def test_boundary_day_exactly_retention_is_kept(tmp_path: Path) -> None:
 
 def test_oi_eod_never_touched_by_purge(tmp_path: Path) -> None:
     """AC + R4: purge job se oi_eod nedotkne, ani když jsou data starší než retence."""
-    settings = Settings(data_dir=tmp_path / "data")
+    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path / "data")
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'gexlens.db'}")
     repository = OIEodRepository(engine)
     repository.ensure_schema()
@@ -75,7 +81,7 @@ def test_oi_eod_never_touched_by_purge(tmp_path: Path) -> None:
 
 
 def test_unparseable_partition_name_is_kept(tmp_path: Path) -> None:
-    settings = Settings(data_dir=tmp_path)
+    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path)
     directory = settings.snapshots_dir / "ES" / "20260716"
     directory.mkdir(parents=True)
     weird = directory / "not-a-date.parquet"
@@ -89,7 +95,7 @@ def test_unparseable_partition_name_is_kept(tmp_path: Path) -> None:
 
 
 def test_empty_partition_dirs_removed(tmp_path: Path) -> None:
-    settings = Settings(data_dir=tmp_path)
+    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path)
     old = make_partition(settings.snapshots_dir, "ES", "20260101", day=DAY_15_OLD)
 
     RetentionJob(settings).purge(TODAY)
@@ -99,20 +105,22 @@ def test_empty_partition_dirs_removed(tmp_path: Path) -> None:
 
 
 def test_disk_usage_and_limit_alert(tmp_path: Path) -> None:
-    settings = Settings(data_dir=tmp_path, disk_limit_gb=1.0)
+    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path, disk_limit_gb=1.0)
     make_partition(settings.snapshots_dir, "ES", "20260716", day=DAY_13_OLD)
 
     report = RetentionJob(settings).purge(TODAY)
     assert report.disk_usage_bytes >= 1024
     assert not report.disk_limit_exceeded
 
-    tiny_limit = Settings(data_dir=tmp_path, disk_limit_gb=1e-9)
+    tiny_limit = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path, disk_limit_gb=1e-9)
     report_exceeded = RetentionJob(tiny_limit).purge(TODAY)
     assert report_exceeded.disk_limit_exceeded  # hard limit → alert
 
 
 def test_seconds_until_next_run(tmp_path: Path) -> None:
-    settings = Settings(data_dir=tmp_path, retention_purge_time_utc=dt.time(21, 30))
+    settings = Settings(
+        retention_days=RETENTION_DAYS, data_dir=tmp_path, retention_purge_time_utc=dt.time(21, 30)
+    )
     job = RetentionJob(settings)
 
     before = dt.datetime(2026, 7, 16, 20, 30, tzinfo=dt.UTC)
@@ -131,7 +139,7 @@ def test_bars_survive_retention_forever(tmp_path: Path) -> None:
     Bez výjimky by se každou noc ztratil jeden den a volume z-score reakčních
     oken (potřebuje 20 seancí) by nikdy nešlo spočítat, protože okno je 14 dní.
     """
-    settings = Settings(data_dir=tmp_path)
+    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path)
     ancient_bar = make_partition(
         settings.derived_dir, "ES", "bars", day=TODAY - dt.timedelta(days=400)
     )
@@ -150,7 +158,7 @@ def test_bars_survive_retention_forever(tmp_path: Path) -> None:
 
 def test_bars_exemption_can_be_turned_off(tmp_path: Path) -> None:
     """Vypnutelné konfigurací — kdyby archiv někdy přerostl disk."""
-    settings = Settings(data_dir=tmp_path, keep_bars_forever=False)
+    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path, keep_bars_forever=False)
     old_bar = make_partition(settings.derived_dir, "ES", "bars", day=DAY_15_OLD)
 
     RetentionJob(settings).purge(TODAY)
