@@ -37,7 +37,7 @@ import { expirySettleUtc, sessionDateFor } from './instrument/expiry'
 import { SETUP_COLORS, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { CHARM_PALETTE, DEFAULT_SIGNED_PALETTE, VANNA_PALETTE } from './heatmap/render'
-import { DEFAULT_VIEW } from './heatmap/view'
+import { DEFAULT_VIEW, ZOOM_MAX, ZOOM_MIN } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
 import { gexRegime, profileZeroNearest } from './instrument/regime'
 import { pcrAt, pcrVolumeSeries } from './instrument/sentiment'
@@ -58,7 +58,7 @@ import { EMPTY_LIVE, minuteLabel, useDayData } from './replay/useDayData'
 import { usePlayback } from './replay/usePlayback'
 import { AppStateProvider, INTERVAL_MINUTES, useAppState } from './state/AppState'
 import { CrosshairProvider } from './state/Crosshair'
-import { clampedNumber, oneOf, usePersistentState } from './state/persist'
+import { clampedNumber, clampedNumberMap, oneOf, usePersistentState } from './state/persist'
 import type { ActiveTool } from './annotations/model'
 import type { ContoursMode } from './heatmap/contours'
 import type { HeatmapStyle } from './heatmap/render'
@@ -282,6 +282,28 @@ function MainContent() {
   }, [day.spotSeries, day.overlays.levels, day.gexProfile, liveOverlay.bars, setRegimeInfo])
   // Pohled grafu (pan/zoom os) — sdílený heatmapou a spodními panely (společná osa X)
   const [chartView, setChartView] = useState<ViewTransform>(DEFAULT_VIEW)
+  // Zoom X per timeframe přežívá refresh i změnu instrumentu (#419);
+  // reset pohledu (dvojklik/⟲) uložený zoom TF maže → návrat k fit-to-width
+  const [chartZoom, setChartZoom] = usePersistentState<Record<string, number>>(
+    'chartZoomX',
+    {},
+    clampedNumberMap(ZOOM_MIN, ZOOM_MAX),
+  )
+  const zoomKey = timeframe === 'daily' ? 'daily' : `intraday:${interval}`
+  const savedZoomX = chartZoom[zoomKey] ?? null
+  const persistZoomX = useCallback(
+    (zoomX: number) => setChartZoom((previous) => ({ ...previous, [zoomKey]: zoomX })),
+    [zoomKey, setChartZoom],
+  )
+  const clearZoomX = useCallback(
+    () =>
+      setChartZoom((previous) => {
+        const rest = { ...previous }
+        delete rest[zoomKey]
+        return rest
+      }),
+    [zoomKey, setChartZoom],
+  )
   // Cenové pásmo dne pro auto-fit osy Y (fit počítá Heatmap se svou skutečnou výškou)
   const fitRange = useMemo(() => {
     const bars = day.overlays.price ?? []
@@ -788,6 +810,9 @@ function MainContent() {
               onAnnotationErase={(id) => void annotationsState.erase(id)}
               view={chartView}
               onViewChange={setChartView}
+              initialZoomX={savedZoomX}
+              onUserZoomX={persistZoomX}
+              onViewReset={clearZoomX}
               fitRange={fitRange}
               onLogicalSizeChange={setHeatSize}
               dateLabel={
