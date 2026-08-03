@@ -87,6 +87,29 @@ export function clampedNumberMap(min: number, max: number): Revive<Record<string
   }
 }
 
+/** Reviver pro mapu cenových pásem {top > bottom} (#422): nevalidní záznamy
+se tiše zahodí. */
+export function priceRangeMap(): Revive<Record<string, { top: number; bottom: number }>> {
+  return (value, fallback) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return fallback
+    const result: Record<string, { top: number; bottom: number }> = {}
+    for (const [key, stored] of Object.entries(value)) {
+      if (typeof stored !== 'object' || stored === null) continue
+      const { top, bottom } = stored as { top?: unknown; bottom?: unknown }
+      if (
+        typeof top === 'number' &&
+        Number.isFinite(top) &&
+        typeof bottom === 'number' &&
+        Number.isFinite(bottom) &&
+        top > bottom
+      ) {
+        result[key] = { top, bottom }
+      }
+    }
+    return result
+  }
+}
+
 /** Reviver pro krátký identifikátor (symbol tickeru). */
 export function shortString(maxLength = 12): Revive<string> {
   return (value, fallback) =>

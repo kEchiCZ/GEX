@@ -37,6 +37,72 @@ function clampZoom(value: number): number {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value))
 }
 
+/** Interpolovaná pozice ceny v ose strikes; za okraji lineární extrapolace
+krokem krajních strikes (pásmo viditelné nad/pod obálkou se nesmí ořezat). */
+function fractionalRowOf(strikes: number[], value: number): number {
+  const last = strikes.length - 1
+  if (value <= strikes[0]) {
+    const step = strikes[1] - strikes[0]
+    return step > 0 ? (value - strikes[0]) / step : 0
+  }
+  if (value >= strikes[last]) {
+    const step = strikes[last] - strikes[last - 1]
+    return step > 0 ? last + (value - strikes[last]) / step : last
+  }
+  for (let index = 0; index < last; index += 1) {
+    if (value >= strikes[index] && value <= strikes[index + 1]) {
+      return index + (value - strikes[index]) / (strikes[index + 1] - strikes[index])
+    }
+  }
+  return last
+}
+
+/** Cena na (zlomkovém) řádku osy strikes; mimo obálku extrapolace krajním krokem. */
+function priceAtRow(strikes: number[], row: number): number {
+  const last = strikes.length - 1
+  if (row <= 0) return strikes[0] + row * (strikes[1] - strikes[0])
+  if (row >= last) return strikes[last] + (row - last) * (strikes[last] - strikes[last - 1])
+  const lower = Math.floor(row)
+  return strikes[lower] + (row - lower) * (strikes[lower + 1] - strikes[lower])
+}
+
+/** Viditelné cenové pásmo osy Y (#422): ceny na horní a dolní hraně canvasu.
+Kotva persistence pohledu je cena, ne zoomY/offsetY — obnovení tak sedí,
+i když se obálka strikes mezitím rozšíří. */
+export function visiblePriceRange(
+  strikes: number[],
+  view: ViewTransform,
+  canvasHeight: number,
+): { top: number; bottom: number } | null {
+  if (strikes.length < 2 || canvasHeight <= 0) return null
+  const scaleY = (canvasHeight / strikes.length) * view.zoomY
+  if (scaleY <= 0) return null
+  const rowAtY = (y: number): number =>
+    strikes.length - 1 - ((y - view.offsetY) / scaleY - 0.5)
+  const top = priceAtRow(strikes, rowAtY(0))
+  const bottom = priceAtRow(strikes, rowAtY(canvasHeight))
+  return top > bottom ? { top, bottom } : null
+}
+
+/** zoomY/offsetY zobrazující přesně dané cenové pásmo (#422) — inverze
+`visiblePriceRange`. Nevalidní vstup → null (volající spadne na auto-fit). */
+export function viewYForPriceRange(
+  strikes: number[],
+  top: number,
+  bottom: number,
+  canvasHeight: number,
+): { zoomY: number; offsetY: number } | null {
+  if (strikes.length < 2 || canvasHeight <= 0 || !(top > bottom)) return null
+  const step = canvasHeight / strikes.length
+  const yAtRow = (row: number): number => (strikes.length - 1 - row + 0.5) * step
+  const yTop = yAtRow(fractionalRowOf(strikes, top))
+  const yBottom = yAtRow(fractionalRowOf(strikes, bottom))
+  const span = yBottom - yTop
+  if (span <= 0) return null
+  const zoomY = clampZoom(canvasHeight / span)
+  return { zoomY, offsetY: -yTop * zoomY }
+}
+
 /** OffsetX pro persistovaný zoom (#419): střed posledního NAMĚŘENÉHO koše
 ve 3/4 šířky canvasu — vpravo zůstává čtvrtina na projekční zónu (ADR-0006). */
 export function anchoredOffsetX(

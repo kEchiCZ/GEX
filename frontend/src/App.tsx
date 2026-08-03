@@ -37,7 +37,7 @@ import { expirySettleUtc, sessionDateFor } from './instrument/expiry'
 import { SETUP_COLORS, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { CHARM_PALETTE, DEFAULT_SIGNED_PALETTE, VANNA_PALETTE } from './heatmap/render'
-import { DEFAULT_VIEW, ZOOM_MAX, ZOOM_MIN } from './heatmap/view'
+import { DEFAULT_VIEW, ZOOM_MAX, ZOOM_MIN, visiblePriceRange } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
 import { gexRegime, profileZeroNearest } from './instrument/regime'
 import { pcrAt, pcrVolumeSeries } from './instrument/sentiment'
@@ -58,7 +58,7 @@ import { EMPTY_LIVE, minuteLabel, useDayData } from './replay/useDayData'
 import { usePlayback } from './replay/usePlayback'
 import { AppStateProvider, INTERVAL_MINUTES, useAppState } from './state/AppState'
 import { CrosshairProvider } from './state/Crosshair'
-import { clampedNumber, clampedNumberMap, oneOf, usePersistentState } from './state/persist'
+import { clampedNumber, clampedNumberMap, oneOf, priceRangeMap, usePersistentState } from './state/persist' // prettier-ignore
 import type { ActiveTool } from './annotations/model'
 import type { ContoursMode } from './heatmap/contours'
 import type { HeatmapStyle } from './heatmap/render'
@@ -295,15 +295,30 @@ function MainContent() {
     (zoomX: number) => setChartZoom((previous) => ({ ...previous, [zoomKey]: zoomX })),
     [zoomKey, setChartZoom],
   )
-  const clearZoomX = useCallback(
-    () =>
-      setChartZoom((previous) => {
-        const rest = { ...previous }
-        delete rest[zoomKey]
-        return rest
-      }),
-    [zoomKey, setChartZoom],
-  )
+  // Viditelné cenové pásmo osy Y per instrument (#422) — kotva na cenu, ne na
+  // zoomY/offsetY, aby obnovení sedělo i po rozšíření obálky strikes
+  const [chartYRange, setChartYRange] = usePersistentState<
+    Record<string, { top: number; bottom: number }>
+  >('chartYRange', {}, priceRangeMap())
+  const yRangeKey = timeframe === 'daily' ? `daily:${symbol}` : symbol
+  const savedYRange = chartYRange[yRangeKey] ?? null
+  // Reset pohledu (dvojklik/⟲): smaže uložený zoom X i pásmo Y → návrat k auto-fitu.
+  // skipNextYStoreRef: změna pohledu vyvolaná samotným resetem se nesmí hned
+  // uložit zpět — jinak by reset nikdy nevedl k čerstvému auto-fitu
+  const skipNextYStoreRef = useRef(false)
+  const clearSavedView = useCallback(() => {
+    skipNextYStoreRef.current = true
+    setChartZoom((previous) => {
+      const rest = { ...previous }
+      delete rest[zoomKey]
+      return rest
+    })
+    setChartYRange((previous) => {
+      const rest = { ...previous }
+      delete rest[yRangeKey]
+      return rest
+    })
+  }, [zoomKey, yRangeKey, setChartZoom, setChartYRange])
   // Cenové pásmo dne pro auto-fit osy Y (fit počítá Heatmap se svou skutečnou výškou)
   const fitRange = useMemo(() => {
     const bars = day.overlays.price ?? []
@@ -474,6 +489,28 @@ function MainContent() {
     () => ({ offsetX: chartView.offsetX, zoomX: chartView.zoomX }),
     [chartView.offsetX, chartView.zoomX],
   )
+  // Uložení viditelného pásma Y při každé změně pohledu (#422). Před prvním
+  // fitem se neukládá (DEFAULT_VIEW identita, prázdné strikes → null); přechodný
+  // zápis starého pohledu nad novým gridem při přepnutí instrumentu se sám
+  // přepíše hned dalším commitem s fitnutým pohledem.
+  useEffect(() => {
+    if (chartView === DEFAULT_VIEW) return
+    if (skipNextYStoreRef.current) {
+      skipNextYStoreRef.current = false
+      return
+    }
+    const range = visiblePriceRange(projectedGrid.strikes, chartView, heatSize.height)
+    if (!range) return
+    const stored = chartYRange[yRangeKey]
+    if (
+      stored &&
+      Math.abs(stored.top - range.top) < 1e-9 &&
+      Math.abs(stored.bottom - range.bottom) < 1e-9
+    ) {
+      return
+    }
+    setChartYRange((previous) => ({ ...previous, [yRangeKey]: range }))
+  }, [chartView, projectedGrid.strikes, heatSize.height, yRangeKey, chartYRange, setChartYRange])
   const profileYView = useMemo(
     () => ({ offsetY: chartView.offsetY, zoomY: chartView.zoomY, baseHeight: heatSize.height }),
     [chartView.offsetY, chartView.zoomY, heatSize.height],
@@ -811,8 +848,9 @@ function MainContent() {
               view={chartView}
               onViewChange={setChartView}
               initialZoomX={savedZoomX}
+              initialPriceRange={savedYRange}
               onUserZoomX={persistZoomX}
-              onViewReset={clearZoomX}
+              onViewReset={clearSavedView}
               fitRange={fitRange}
               onLogicalSizeChange={setHeatSize}
               dateLabel={

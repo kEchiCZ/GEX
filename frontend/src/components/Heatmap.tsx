@@ -41,6 +41,7 @@ import {
   compensateView,
   fitPriceView,
   homeOffsetX,
+  viewYForPriceRange,
   zoomAxis,
   zoomBoth,
 } from '../heatmap/view'
@@ -98,6 +99,7 @@ export function Heatmap({
   onAnnotationErase,
   view: controlledView,
   initialZoomX = null,
+  initialPriceRange = null,
   onUserZoomX,
   onViewReset,
   onViewChange,
@@ -136,6 +138,9 @@ export function Heatmap({
   onViewChange?: (view: ViewTransform) => void
   /** Persistovaný zoom X pro daný TF (#419); null = výchozí fit-to-width. */
   initialZoomX?: number | null
+  /** Persistované viditelné cenové pásmo osy Y per instrument (#422);
+      null = auto-fit na denní pásmo. */
+  initialPriceRange?: { top: number; bottom: number } | null
   /** Uživatelská změna zoomu X (kolečko/tažení osy) — rodič ji persistuje (#419). */
   onUserZoomX?: (zoomX: number) => void
   /** Reset pohledu (dvojklik/⟲) — rodič smaže persistovaný zoom TF (#419). */
@@ -203,24 +208,51 @@ export function Heatmap({
   // Persistovaný zoom TF (#419): poslední NAMĚŘENÁ svíčka ve 3/4 šířky —
   // vpravo zůstává čtvrtina na projekční zónu (ADR-0006)
   const initialView = useMemo(() => {
-    if (initialZoomX === null) return homeView
+    // Osa Y: persistované cenové pásmo instrumentu (#422) má přednost před auto-fitem
+    const yPart = initialPriceRange
+      ? viewYForPriceRange(grid.strikes, initialPriceRange.top, initialPriceRange.bottom, logicalH)
+      : null
+    const withY = yPart ? { ...homeView, ...yPart } : homeView
+    if (initialZoomX === null) return withY
     const dataMinutes = grid.dataMinutes ?? grid.minutes
     return {
-      ...homeView,
+      ...withY,
       zoomX: initialZoomX,
       offsetX: anchoredOffsetX(grid.minutes, dataMinutes, logicalW, initialZoomX),
     }
-  }, [homeView, initialZoomX, grid.dataMinutes, grid.minutes, logicalW])
+  }, [homeView, initialZoomX, initialPriceRange, grid.strikes, grid.dataMinutes, grid.minutes, logicalH, logicalW]) // prettier-ignore
   // Auto-fit jen JEDNOU na dataset (resetKey = symbol/expirace/timeframe/den).
   // Resize pravého panelu, živý přírůstek minut ani úprava os pohled neresetují —
   // uživatelův pan/zoom tak zůstává zachovaný a X se neukotvuje samo doprava.
   const fittedKeyRef = useRef<string | number | undefined | symbol>(UNFITTED)
+  // Kotva X po fitu (#423): délka osy se může změnit AŽ PO fitu (projekční
+  // zóna dorazí později) — offsetX spočtený nad starým baseBucketPx by data
+  // odsunul mimo plátno. Dokud uživatel do X nezasáhne, kotva se přepočítává.
+  const appliedXRef = useRef<{ zoomX: number; offsetX: number } | null>(null)
+  const fitMinutesRef = useRef(0)
   useEffect(() => {
     if (fittedKeyRef.current === resetKey) return
     if (!fitRange) return // počkej na reálná data (cenové pásmo dne)
     fittedKeyRef.current = resetKey
+    fitMinutesRef.current = grid.minutes
+    appliedXRef.current = { zoomX: initialView.zoomX, offsetX: initialView.offsetX }
     setView(() => initialView)
-  }, [resetKey, fitRange, initialView, setView])
+  }, [resetKey, fitRange, initialView, grid.minutes, setView])
+  useEffect(() => {
+    if (fittedKeyRef.current !== resetKey) return
+    if (fitMinutesRef.current === grid.minutes) return
+    fitMinutesRef.current = grid.minutes
+    const applied = appliedXRef.current
+    // Pan/zoom X od uživatele kotvu zmrazí — pohled se mu už nesmí hýbat sám
+    if (!applied || view.zoomX !== applied.zoomX || view.offsetX !== applied.offsetX) return
+    const offsetX =
+      initialZoomX === null
+        ? homeOffsetX(grid.minutes, logicalW)
+        : anchoredOffsetX(grid.minutes, grid.dataMinutes ?? grid.minutes, logicalW, view.zoomX)
+    appliedXRef.current = { zoomX: view.zoomX, offsetX }
+    // Živý růst s fit-to-width offset nemění — setView jen při skutečném posunu (#118)
+    if (offsetX !== view.offsetX) setView((previous) => ({ ...previous, offsetX }))
+  }, [grid.minutes, grid.dataMinutes, resetKey, view.zoomX, view.offsetX, initialZoomX, logicalW, setView]) // prettier-ignore
   // Tažení: pan plochy, nebo roztahování jedné osy (TradingView styl)
   const dragRef = useRef<{ x: number; y: number; mode: 'pan' | 'scale-x' | 'scale-y' } | null>(null)
   // Výchozí bod stisku — klik (bez tažení) na news marker otevře dialog (#408)
