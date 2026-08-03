@@ -1,8 +1,10 @@
 """Podkladová data (SPEC 3.6): 5s real-time bary → 1min agregace + historical backfill.
 
-Backfill 1min barů pro aktuální den a `retention_days` dní zpět běží přes
+Backfill 1min barů pro aktuální den a `bars_backfill_days` dní zpět běží přes
 PacingGuard — aktuální den má nejvyšší prioritu, identické požadavky se
-deduplikují.
+deduplikují. Okno je záměrně nezávislé na retenci (ADR-0022): backfill
+nepřeskakuje dny, které už na disku jsou, takže by širší retence znamenala
+desítky zbytečných historických dotazů při každém startu.
 """
 
 import asyncio
@@ -141,14 +143,14 @@ class UnderlyingBackfiller:
         self._settings = settings
 
     async def backfill(self, symbol: str, end_day: dt.date) -> dict[dt.date, list[Bar]]:
-        """Stáhne 1min bary pro end_day a retention_days dní zpět.
+        """Stáhne 1min bary pro end_day a `bars_backfill_days` dní zpět.
 
         Aktuální den jde s prioritou 0 (UI ho potřebuje první), historie s 1.
         Dny bez dat (víkend/svátek) vrací prázdný seznam — není to chyba.
         """
         days = [
             end_day - dt.timedelta(days=offset)
-            for offset in range(self._settings.retention_days + 1)
+            for offset in range(self._settings.bars_backfill_days + 1)
         ]
 
         async def fetch(day: dt.date) -> list[Bar]:
