@@ -12,6 +12,8 @@ import {
   compensateView,
   fitPriceView,
   homeOffsetX,
+  viewYForPriceRange,
+  visiblePriceRange,
   zoomAxis,
   zoomBoth,
 } from './view'
@@ -124,6 +126,45 @@ test('anchoredOffsetX: poslední naměřený koš ve 3/4 šířky canvasu (#419)
   // Bez projekce (dataMinutes == minutes) kotva platí stejně
   const full = anchoredOffsetX(400, 400, width, 2)
   expect((400 - 0.5) * baseBucketPx(400, width) * 2 + full).toBeCloseTo(0.75 * width)
+})
+
+test('visiblePriceRange ↔ viewYForPriceRange: round-trip na cenové kotvě (#422)', () => {
+  const strikes = Array.from({ length: 41 }, (_, i) => 7400 + i * 5) // 7400–7600
+  const height = 640
+  // Uložené pásmo → zoomY/offsetY → zpět stejné pásmo
+  const y = viewYForPriceRange(strikes, 7560, 7480, height)
+  expect(y).not.toBeNull()
+  const view = { offsetX: 0, offsetY: y!.offsetY, zoomX: 1, zoomY: y!.zoomY }
+  const range = visiblePriceRange(strikes, view, height)
+  expect(range!.top).toBeCloseTo(7560, 6)
+  expect(range!.bottom).toBeCloseTo(7480, 6)
+  // Round-trip funguje i po rozšíření obálky strikes (kotva je cena, ne řádek)
+  const wider = Array.from({ length: 61 }, (_, i) => 7350 + i * 5)
+  const y2 = viewYForPriceRange(wider, range!.top, range!.bottom, height)
+  const view2 = { offsetX: 0, offsetY: y2!.offsetY, zoomX: 1, zoomY: y2!.zoomY }
+  const range2 = visiblePriceRange(wider, view2, height)
+  expect(range2!.top).toBeCloseTo(7560, 6)
+  expect(range2!.bottom).toBeCloseTo(7480, 6)
+})
+
+test('visiblePriceRange extrapoluje za obálku strikes krajním krokem', () => {
+  const strikes = [7400, 7405, 7410]
+  // Oddálený pohled (zoomY < 1): hrany canvasu leží nad/pod obálkou
+  const range = visiblePriceRange(strikes, { offsetX: 0, offsetY: 0, zoomX: 1, zoomY: 0.5 }, 600)
+  expect(range).not.toBeNull()
+  expect(range!.top).toBeGreaterThan(7410)
+  expect(range!.bottom).toBeLessThan(7400)
+  // Inverze vrátí pohled zobrazující právě to pásmo
+  const y = viewYForPriceRange(strikes, range!.top, range!.bottom, 600)
+  expect(y!.zoomY).toBeCloseTo(0.5, 6)
+  expect(y!.offsetY).toBeCloseTo(0, 6)
+})
+
+test('viewYForPriceRange: nevalidní vstup → null (auto-fit fallback)', () => {
+  const strikes = [7400, 7405, 7410]
+  expect(viewYForPriceRange([], 7410, 7400, 600)).toBeNull()
+  expect(viewYForPriceRange(strikes, 7400, 7410, 600)).toBeNull() // top < bottom
+  expect(viewYForPriceRange(strikes, 7405, 7405, 600)).toBeNull() // prázdné pásmo
 })
 
 test('axisZoneAt: levý pruh = osa Y, spodní pruh = osa X, jinak plocha', () => {
