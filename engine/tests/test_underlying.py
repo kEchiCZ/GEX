@@ -168,6 +168,24 @@ async def test_backfill_14_days_without_pacing_violation() -> None:
     assert client.calls[0] == ("ES", TODAY)  # aktuální den má prioritu 0 → jde první
 
 
+async def test_backfill_window_is_independent_of_retention() -> None:
+    """Delší retence (ADR-0022) nesmí rozšířit backfill.
+
+    `retention_days` řídil obojí; při 90denní retenci by každý start enginu
+    znamenal 91 historických dotazů na symbol, protože backfill nepřeskakuje
+    dny, které už na disku jsou.
+    """
+    client = MockHistoricalClient(max_requests=200, window_s=600, bars_per_day=1)
+    guard = PacingGuard(max_requests=200, window_s=600)
+    settings = Settings(retention_days=90, bars_backfill_days=14)
+    backfiller = UnderlyingBackfiller(client, guard, settings)
+
+    result = await backfiller.backfill("ES", TODAY)
+
+    assert len(result) == 15  # 14 dní zpět + aktuální den, ne 91
+    assert len(client.calls) == 15
+
+
 async def test_backfill_respects_tight_pacing_limit() -> None:
     # Limit těsnější než počet dní: guard musí requesty rozprostřít, žádný nesmí spadnout
     client = MockHistoricalClient(max_requests=4, window_s=0.1, bars_per_day=1)

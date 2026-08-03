@@ -11,7 +11,7 @@
 |---|---|
 | R1 | Žádná MVP zjednodušení — všechny moduly ve finální podobě |
 | R2 | Cum Δ s **plnou klasifikací agresora**: tick-by-tick pro hot zónu (ATM ±15 strikes), Lee–Ready midpoint test pro zbytek řetězce |
-| R3 | Retence intraday dat a tick dat: **14 dní** (denní Parquet partice, noční purge job) |
+| R3 | Retence intraday dat a tick dat: **14 dní** (denní Parquet partice, noční purge job) — *okno prodlouženo na 90 dní, viz ADR-0022* |
 | R4 | **Výjimka: EOD snapshot Open Interest se archivuje bez časového limitu** (řádově KB/den, nenahraditelná data) |
 | R5 | Datový zdroj výhradně IBKR (účet existuje); žádné placené externí feedy |
 | R6 | Stack: Python 3.12 + ib_async (data engine), FastAPI + WebSocket (API), PostgreSQL (metadata + OI archiv), Parquet (snapshoty), React + TypeScript (frontend), canvas/WebGL heatmapa |
@@ -48,7 +48,7 @@ Primární instrument: ES (E-mini S&P 500) futures opce, všechny weekly/EOM exp
 │  • SnapshotWriter (1min konsolidace → Parquet)         │
 │  • OIArchiver (EOD, PostgreSQL, bez retence)           │
 │  • ComputeEngine (GEX, levels, walls, profily, CumΔ)   │
-│  • RetentionJob (purge >14 dní, mimo OI archiv)        │
+│  • RetentionJob (purge >90 dní, mimo OI archiv)        │
 └──────────────┬─────────────────────────────────────────┘
                │ Parquet (snapshoty) + PostgreSQL (meta, OI)
 ┌──────────────▼─────────────────────────────────────────┐
@@ -177,7 +177,8 @@ Skládané pruhy: složka Vol a složka OI Δ vizuálně odlišené odstínem; d
 - Odvozené řady (levels, walls, CumΔ, flowΔ): `data/derived/…` — počítané při zápisu, replay je nečte znovu z raw dat.
 
 ### 5.2 Retence (R3, R4)
-- Noční job (konfig. čas po zavření US): smaž partice `snapshots/`, `ticks/`, `derived/` starší **14 kalendářních dní**.
+- Noční job (konfig. čas po zavření US): smaž partice `snapshots/`, `ticks/`, `derived/` starší **90 kalendářních dní** (ADR-0022; původní R3 mělo 14 — prodlouženo kvůli backtestům prahů a prohlížení starších dnů v UI).
+- Rozsah startovního backfillu barů je samostatný (`bars_backfill_days`, 14 dní) — nezávislý na retenci, viz ADR-0022.
 - **OI archiv v PostgreSQL se NIKDY nemaže** (tabulka `oi_eod(symbol, expiry, strike, right, date, oi)`).
 - Stavová lišta zobrazuje obsazení disku; konfigurovatelný hard limit s alertem.
 
