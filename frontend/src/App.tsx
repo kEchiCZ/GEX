@@ -302,12 +302,25 @@ function MainContent() {
   >('chartYRange', {}, priceRangeMap())
   const yRangeKey = timeframe === 'daily' ? `daily:${symbol}` : symbol
   const savedYRange = chartYRange[yRangeKey] ?? null
-  // Reset pohledu (dvojklik/⟲): smaže uložený zoom X i pásmo Y → návrat k auto-fitu.
-  // skipNextYStoreRef: změna pohledu vyvolaná samotným resetem se nesmí hned
-  // uložit zpět — jinak by reset nikdy nevedl k čerstvému auto-fitu
-  const skipNextYStoreRef = useRef(false)
+  // Uložení pásma Y — volá se JEN z uživatelských gest (Heatmap onUserYRange,
+  // drag pravé osy v profilu): tam pohled a grid vždy patří k sobě (#426)
+  const storeYRange = useCallback(
+    (range: { top: number; bottom: number }) =>
+      setChartYRange((previous) => {
+        const stored = previous[yRangeKey]
+        if (
+          stored &&
+          Math.abs(stored.top - range.top) < 1e-9 &&
+          Math.abs(stored.bottom - range.bottom) < 1e-9
+        ) {
+          return previous
+        }
+        return { ...previous, [yRangeKey]: range }
+      }),
+    [yRangeKey, setChartYRange],
+  )
+  // Reset pohledu (dvojklik/⟲): smaže uložený zoom X i pásmo Y → návrat k auto-fitu
   const clearSavedView = useCallback(() => {
-    skipNextYStoreRef.current = true
     setChartZoom((previous) => {
       const rest = { ...previous }
       delete rest[zoomKey]
@@ -489,36 +502,22 @@ function MainContent() {
     () => ({ offsetX: chartView.offsetX, zoomX: chartView.zoomX }),
     [chartView.offsetX, chartView.zoomX],
   )
-  // Uložení viditelného pásma Y při každé změně pohledu (#422). Před prvním
-  // fitem se neukládá (DEFAULT_VIEW identita, prázdné strikes → null); přechodný
-  // zápis starého pohledu nad novým gridem při přepnutí instrumentu se sám
-  // přepíše hned dalším commitem s fitnutým pohledem.
-  useEffect(() => {
-    if (chartView === DEFAULT_VIEW) return
-    if (skipNextYStoreRef.current) {
-      skipNextYStoreRef.current = false
-      return
-    }
-    const range = visiblePriceRange(projectedGrid.strikes, chartView, heatSize.height)
-    if (!range) return
-    const stored = chartYRange[yRangeKey]
-    if (
-      stored &&
-      Math.abs(stored.top - range.top) < 1e-9 &&
-      Math.abs(stored.bottom - range.bottom) < 1e-9
-    ) {
-      return
-    }
-    setChartYRange((previous) => ({ ...previous, [yRangeKey]: range }))
-  }, [chartView, projectedGrid.strikes, heatSize.height, yRangeKey, chartYRange, setChartYRange])
   const profileYView = useMemo(
     () => ({ offsetY: chartView.offsetY, zoomY: chartView.zoomY, baseHeight: heatSize.height }),
     [chartView.offsetY, chartView.zoomY, heatSize.height],
   )
   const handleYViewChange = useCallback(
-    (next: { offsetY: number; zoomY: number }) =>
-      setChartView((view) => ({ ...view, offsetY: next.offsetY, zoomY: next.zoomY })),
-    [],
+    (next: { offsetY: number; zoomY: number }) => {
+      setChartView((view) => ({ ...view, offsetY: next.offsetY, zoomY: next.zoomY }))
+      // Drag pravé osy je uživatelské gesto — pásmo Y se persistuje i odsud (#426)
+      const range = visiblePriceRange(
+        projectedGrid.strikes,
+        { offsetX: 0, zoomX: 1, offsetY: next.offsetY, zoomY: next.zoomY },
+        heatSize.height,
+      )
+      if (range) storeYRange(range)
+    },
+    [projectedGrid.strikes, heatSize.height, storeYRange],
   )
   const handleAggregateToggle = useCallback(() => setAggregateOn((value) => !value), [])
   const handleDismissSetup = useCallback(
@@ -850,6 +849,7 @@ function MainContent() {
               initialZoomX={savedZoomX}
               initialPriceRange={savedYRange}
               onUserZoomX={persistZoomX}
+              onUserYRange={storeYRange}
               onViewReset={clearSavedView}
               fitRange={fitRange}
               onLogicalSizeChange={setHeatSize}
