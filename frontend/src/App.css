@@ -618,9 +618,26 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 4px 8px;
   background: rgba(26, 30, 40, 0.85);
   border-bottom: 1px solid var(--border);
+}
+
+/* Popisek ustupuje toolbaru: při úzkém panelu se zkrátí výpustkou,
+   chipy (Σ/GEX/Abs/1×/2×/4×) se nikdy nezalomí na skrytý řádek */
+.profile-header .profile-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-header [role='toolbar'] {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 
 /* Vol leadeři (#208): readout top 3 stran pod hlavičkou profilu */
