@@ -129,6 +129,16 @@ class SetupParams:
     momentum_flow_lookback: int = 10
     # Okno, ve kterém smí průraz flipu nastat, aby se stihl potvrdit tokem (#443)
     momentum_cross_window: int = 10
+    # Jak přísně musí CumΔ potvrzovat směr průrazu (#443). 0 = absolutní extrém
+    # okna (původní stav — z 11 křížení neprošlo ani jedno).
+    #
+    # ZMĚŘENO (20. 7.–4. 8.): 0,25 / 0,33 / 0,5 dávají shodné výsledky, práh tedy
+    # není citlivý — ponechána nejpřísnější funkční hodnota. Uvolnění brány T4
+    # rozjelo (NQ 3 → 5 setupů) a zmírnilo její ztrátu (Ø R −1,00 → −0,30), ale
+    # POZITIVNÍ EXPEKTANCI NEPROKÁZALO. Vzorek 5 setupů je na odsouzení malý
+    # (T5 se vypínala až na 23), proto šablona zůstává zapnutá kvůli sběru dat
+    # — vyhodnotit při kalibraci #394 a při záporném výsledku vypnout jako T5.
+    momentum_cum_quantile: float = 0.25
     # T7 pokračování trendu (#443): pullback k EMA a jeho odmítnutí
     trend_ema_span: int = 20
     trend_pullback_atr: float = 0.5
@@ -600,6 +610,24 @@ def detect_gamma_momentum(
         return None
     cum_window = [m.cum_delta for m in history[-30:]]
 
+    def cum_confirms(down: bool) -> bool:
+        """Potvrzuje CumΔ směr průrazu? (#443)
+
+        Původně se vyžadovalo ABSOLUTNÍ minimum/maximum okna — tak přísné, že
+        z 11 křížení flipu neprošlo ani jedno (0 setupů z 280 za celou historii).
+        Smysl brány je „tok potvrzuje směr", ne „přesně teď padl rekord", takže
+        stačí kvantil: dolní/horní `momentum_cum_quantile` část okna.
+        """
+        ordered = sorted(cum_window)
+        if not ordered:
+            return False
+        share = min(max(params.momentum_cum_quantile, 0.0), 1.0)
+        if down:
+            index = max(0, int(share * (len(ordered) - 1)))
+            return now.cum_delta <= ordered[index]
+        index = min(len(ordered) - 1, int((1.0 - share) * (len(ordered) - 1)))
+        return now.cum_delta >= ordered[index]
+
     # Průraz stačí v posledních `momentum_cross_window` minutách, když DRŽÍ (#443).
     # Původně musel nastat přesně v aktuální minutě zároveň s převahou toku a
     # extrémem CumΔ — změřeno: za 2 dny (5 545 minut ES+NQ) prošlo branou křížení
@@ -619,7 +647,7 @@ def detect_gamma_momentum(
     if crossed_down:
         if put_flow / total_flow < params.momentum_flow_share:
             return None
-        if now.cum_delta > min(cum_window):
+        if not cum_confirms(down=True):
             return None
         entry = now.close
         target = _nearest_level_below(entry, (now.put_wall,))
@@ -645,7 +673,7 @@ def detect_gamma_momentum(
     if crossed_up:
         if call_flow / total_flow < params.momentum_flow_share:
             return None
-        if now.cum_delta < max(cum_window):
+        if not cum_confirms(down=False):
             return None
         entry = now.close
         target = _nearest_level_above(entry, (now.call_wall,))

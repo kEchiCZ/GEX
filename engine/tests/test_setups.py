@@ -1089,3 +1089,44 @@ def test_trend_continuation_needs_positive_gamma_side() -> None:
     atr = average_true_range(history, params.atr_lookback) or 1.0
 
     assert detect_trend_continuation(history, params, atr) is None
+
+
+def test_gamma_momentum_cum_gate_uses_quantile_not_absolute_extreme() -> None:
+    """CumΔ musí směr POTVRZOVAT, ne padnout rekord (#443).
+
+    Původní podmínka „CumΔ = absolutní minimum okna" byla tak přísná, že
+    z 11 křížení flipu neprošlo ani jedno (0 setupů z 280 za celou historii).
+    """
+    # Klesající CumΔ: poslední hodnota je nízko, ale NENÍ absolutní minimum
+    history = [
+        minute(
+            7510.0,
+            flip=7500.0,
+            put_wall=7400.0,
+            call_wall=7600.0,
+            cum_delta=100.0 - i,
+            put_flow=10.0,
+            idx=i,
+        )
+        for i in range(30)
+    ]
+    history[5] = replace(history[5], cum_delta=-999.0)  # rekordní minimum dřív v okně
+    # Průraz flipu dolů a držení pod ním
+    history.append(
+        minute(
+            7490.0,
+            flip=7500.0,
+            put_wall=7400.0,
+            call_wall=7600.0,
+            cum_delta=60.0,
+            put_flow=10.0,
+            idx=30,
+        )
+    )
+
+    strict = detect_gamma_momentum(history, SetupParams(momentum_cum_quantile=0.0))
+    relaxed = detect_gamma_momentum(history, SetupParams(momentum_cum_quantile=0.25))
+
+    assert strict is None  # rekord padl dřív → původní brána neprojde
+    assert relaxed is not None
+    assert relaxed.direction is Direction.SHORT
