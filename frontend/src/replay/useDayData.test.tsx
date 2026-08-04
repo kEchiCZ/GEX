@@ -19,6 +19,7 @@ function makeInputs(): ReplayInputs {
     expiry: '20260716',
     date: '2026-07-16',
     minutes: ['2026-07-16T15:00:00.000Z'],
+    snapshotMinutes: [true],
     strikes: [7600],
     callOi: new Float32Array([100]),
     putOi: new Float32Array([200]),
