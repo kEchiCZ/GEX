@@ -19,6 +19,13 @@ from dataclasses import dataclass, field, replace
 #       Greeks 26.–27. 7. (ADR-0015)
 #   2 = jednotná R-mechanika #302 (min. risk dle ATR, cíl omezený násobkem
 #       risku, RRR filtr všude) nad ověřeně čerstvými daty po #306
+#
+# #443 (T7 + okno průrazu T4) verzi ZÁMĚRNĚ nezvedá, i když sahá na filtr T4:
+# T4 nevygeneroval za celou historii jediný setup, takže není co znehodnotit,
+# a T7 je aditivní — sémantika stávajících šablon se nemění. Zvednutí by
+# vyřadilo všech 280 historických setupů ze statistik těsně před kalibrací
+# #394, tedy by uškodilo víc, než by pomohlo. Až se bude sahat na CumΔ bránu
+# T4 nebo na mechaniku existujících šablon, verzi zvednout.
 SETUP_MECHANICS_VERSION = 2
 
 
