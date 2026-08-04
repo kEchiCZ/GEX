@@ -28,6 +28,7 @@ class SetupTemplate(enum.Enum):
     MAX_PAIN_PIN = "max_pain_pin"
     GAMMA_MOMENTUM = "gamma_momentum"
     DIVERGENCE_SPRING = "divergence_spring"  # T5 (#250)
+    TREND_CONTINUATION = "trend_continuation"  # T7 (#443)
 
 
 class Direction(enum.Enum):
@@ -119,6 +120,13 @@ class SetupParams:
     momentum_break: float = 2.0
     momentum_flow_share: float = 0.6
     momentum_flow_lookback: int = 10
+    # Okno, ve kterém smí průraz flipu nastat, aby se stihl potvrdit tokem (#443)
+    momentum_cross_window: int = 10
+    # T7 pokračování trendu (#443): pullback k EMA a jeho odmítnutí
+    trend_ema_span: int = 20
+    trend_pullback_atr: float = 0.5
+    trend_rejection_atr: float = 0.25
+    trend_min_distance_atr: float = 1.0
     cooldown_minutes: int = 10
     # Minimální dominance zdi pro T1/T3 (ADR-0010, #223): argmax existuje i nad
     # plochým profilem — pod prahem zeď netvoří koncentraci a setup nevzniká
@@ -575,7 +583,6 @@ def detect_gamma_momentum(
     if len(history) < params.momentum_flow_lookback + 1:
         return None
     now = history[-1]
-    prev = history[-2]
     if now.flip is None:
         return None
     recent = history[-params.momentum_flow_lookback :]
@@ -586,8 +593,22 @@ def detect_gamma_momentum(
         return None
     cum_window = [m.cum_delta for m in history[-30:]]
 
-    crossed_down = prev.close >= now.flip and now.close <= now.flip - params.momentum_break
-    crossed_up = prev.close <= now.flip and now.close >= now.flip + params.momentum_break
+    # Průraz stačí v posledních `momentum_cross_window` minutách, když DRŽÍ (#443).
+    # Původně musel nastat přesně v aktuální minutě zároveň s převahou toku a
+    # extrémem CumΔ — změřeno: za 2 dny (5 545 minut ES+NQ) prošlo branou křížení
+    # 11 minut, z toho 1 s tokem a 0 s extrémem. Potvrzení tokem přirozeně
+    # přichází až PO průrazu, takže konjunkce v jedné minutě byla nedosažitelná
+    # (0 setupů z 280 za celou historii).
+    window = history[-(params.momentum_cross_window + 1) :]
+    pairs = [(a, b) for a, b in zip(window, window[1:], strict=False) if a.flip and b.flip]
+    crossed_down = (
+        any(a.close >= a.flip and b.close < b.flip for a, b in pairs)  # type: ignore[operator]
+        and now.close <= now.flip - params.momentum_break
+    )
+    crossed_up = (
+        any(a.close <= a.flip and b.close > b.flip for a, b in pairs)  # type: ignore[operator]
+        and now.close >= now.flip + params.momentum_break
+    )
     if crossed_down:
         if put_flow / total_flow < params.momentum_flow_share:
             return None
@@ -722,6 +743,93 @@ def detect_divergence_spring(
     return None
 
 
+def _ema(values: Sequence[float], span: int) -> float | None:
+    """EMA posledních hodnot; kratší historie než span = None."""
+    if len(values) < span:
+        return None
+    alpha = 2.0 / (span + 1)
+    result = values[-span]
+    for value in values[-span + 1 :]:
+        result = alpha * value + (1 - alpha) * result
+    return result
+
+
+def detect_trend_continuation(
+    history: Sequence[MinuteInputs], params: SetupParams, atr: float
+) -> SetupCandidate | None:
+    """T7: pokračování trendu nad/pod celým positioningem (#443).
+
+    Trendový den utíká svému zajištění a šablony na DOTYK úrovně nemají co
+    detekovat — 3. 8. byla NQ odpoledne průměrně 379 bodů nad put zdí a pod ni
+    se dostala jedinou minutou z 391, takže nevznikl žádný setup.
+
+    Kotví se proto jinak: cena musí být mimo celý pás zdí (nad oběma, resp. pod
+    oběma) na správné straně flipu, udělat pullback k EMA a odmítnout ho. Prahy
+    jsou v násobcích ATR, ne v bodech — sdílená absolutní hodnota má na ES a NQ
+    jinou citlivost (viz #434).
+    """
+    if atr <= 0 or len(history) < params.trend_ema_span + 2:
+        return None
+    now = history[-1]
+    if now.flip is None or now.call_wall is None or now.put_wall is None:
+        return None
+    closes = [item.close for item in history]
+    ema = _ema(closes, params.trend_ema_span)
+    if ema is None:
+        return None
+
+    # Cena musí být daleko od zdi, o kterou se opírá (jinak to řeší T1 odraz),
+    # a mít kam jít — protilehlá zeď je cíl, ne překážka. Původní návrh chtěl
+    # cenu nad OBĚMA zdmi; změřeno na 3. 8.: nenastalo to ani jednou z 1 776
+    # minut, protože call zeď je z podstaty nad cenou.
+    gap = params.trend_min_distance_atr * atr
+    if now.close >= now.flip and now.close > now.put_wall + gap and now.close < now.call_wall:
+        direction = Direction.LONG
+        support, objective = now.put_wall, now.call_wall
+    elif now.close <= now.flip and now.close < now.call_wall - gap and now.close > now.put_wall:
+        direction = Direction.SHORT
+        support, objective = now.call_wall, now.put_wall
+    else:
+        return None
+
+    # Pullback k EMA a jeho odmítnutí v téže minutě — vstup po korekci, ne na vrcholu
+    if direction is Direction.LONG:
+        touched = now.low <= ema + params.trend_pullback_atr * atr
+        rejected = now.close >= ema + params.trend_rejection_atr * atr
+        trend_intact = now.close > ema
+        stop = now.low - params.trend_rejection_atr * atr
+    else:
+        touched = now.high >= ema - params.trend_pullback_atr * atr
+        rejected = now.close <= ema - params.trend_rejection_atr * atr
+        trend_intact = now.close < ema
+        stop = now.high + params.trend_rejection_atr * atr
+    if not (touched and rejected and trend_intact):
+        return None
+
+    entry = now.close
+    return SetupCandidate(
+        template=SetupTemplate.TREND_CONTINUATION,
+        direction=direction,
+        entry=entry,
+        target=objective,  # protilehlá zeď; R-mechanika cíl případně zkrátí
+        stop=stop,
+        confidence=50,
+        reason=(
+            f"Pokračování trendu {'nad' if direction is Direction.LONG else 'pod'} zdí "
+            f"{support:g} (flip {now.flip:g}, cíl {objective:g}): pullback k "
+            f"EMA{params.trend_ema_span} {ema:.0f} a odmítnutí (close {entry:g})."
+        ),
+        context={
+            "ema": ema,
+            "flip": now.flip,
+            "support_wall": support,
+            "objective_wall": objective,
+            "atr": atr,
+            "gex_regime": now.gex_regime,
+        },
+    )
+
+
 DETECTORS = (
     detect_failed_break,  # nejsilnější kontext první (anti-spam řeší orchestrátor)
     detect_wall_bounce,
@@ -757,8 +865,10 @@ def detect_all(history: Sequence[MinuteInputs], params: SetupParams) -> list[Set
         return []
     scaled = scale_params(params, atr)
     results = []
-    for detector in DETECTORS:
-        candidate = detector(history, scaled)
+    # T7 potřebuje ATR přímo (prahy jsou jeho násobky), proto stojí mimo DETECTORS
+    candidates = [detector(history, scaled) for detector in DETECTORS]
+    candidates.append(detect_trend_continuation(history, scaled, atr))
+    for candidate in candidates:
         if candidate is None:
             continue
         if candidate.template.value in params.disabled_templates:

@@ -17,12 +17,14 @@ from gexlens_engine.compute.setups import (
     SetupCandidate,
     SetupParams,
     SetupTemplate,
+    _ema,
     average_true_range,
     detect_all,
     detect_divergence_spring,
     detect_failed_break,
     detect_gamma_momentum,
     detect_max_pain_pin,
+    detect_trend_continuation,
     detect_wall_bounce,
     evaluate_bar,
     gex_regime,
@@ -813,8 +815,17 @@ async def test_setup_engine_blocks_direction_after_stop_streak(tmp_path: Path) -
         repository=repository,
         oi_repository=oi_repo,
         publisher=RecordingPublisher(),
-        # Kontra cooldown vypnutý — testujeme čistě blokaci směru
-        params=SetupParams(counter_stop_cooldown_minutes=0),
+        # Kontra cooldown vypnutý a T7 vypnutá — testuje se čistě blokace směru;
+        # scénář splňuje i podmínky pokračování trendu a druhý setup by test mátl
+        params=SetupParams(
+            counter_stop_cooldown_minutes=0,
+            disabled_templates=frozenset(
+                {
+                    SetupTemplate.DIVERGENCE_SPRING.value,
+                    SetupTemplate.TREND_CONTINUATION.value,
+                }
+            ),
+        ),
     )
 
     async def step(idx: int, o: float, h: float, low: float, c: float, cum: float) -> None:
@@ -1007,3 +1018,74 @@ def test_scale_params_keeps_absolute_value_as_floor() -> None:
     volatile = scale_params(params, atr=11.5)
     assert volatile.wall_zone == pytest.approx(21.85)
     assert volatile.rejection_min == pytest.approx(6.9)
+
+
+# ── T7 pokračování trendu (#443) ──────────────────────────────────────
+
+
+def trend_minute(
+    idx: int,
+    close: float,
+    low: float,
+    high: float,
+    *,
+    flip: float,
+    put_wall: float,
+    call_wall: float,
+) -> MinuteInputs:
+    return MinuteInputs(
+        ts=TS + dt.timedelta(minutes=idx),
+        open=close,
+        high=high,
+        low=low,
+        close=close,
+        flip=flip,
+        call_wall=call_wall,
+        put_wall=put_wall,
+        max_pain=None,
+        cum_delta=0.0,
+        call_flow=0.0,
+        put_flow=0.0,
+        opt_vol=0.0,
+        minutes_to_expiry=300.0,
+    )
+
+
+def test_trend_continuation_fires_on_pullback_above_support_wall() -> None:
+    """Cena utekla put zdi, pullback k EMA a odmítnutí → long po trendu."""
+    params = SetupParams()
+    levels = {"flip": 7400.0, "put_wall": 7420.0, "call_wall": 7600.0}
+    # Stoupající trend, ať EMA leží pod cenou
+    history = [trend_minute(i, 7480.0 + i, 7479.0 + i, 7482.0 + i, **levels) for i in range(40)]
+    atr = average_true_range(history, params.atr_lookback) or 1.0
+    ema = _ema([m.close for m in history], params.trend_ema_span)
+    assert ema is not None
+    # Poslední minuta: knot dolů k EMA, close zpět nad ní
+    history.append(trend_minute(40, ema + 0.5 * atr, ema - 0.1 * atr, ema + 0.6 * atr, **levels))
+
+    candidate = detect_trend_continuation(history, params, atr)
+
+    assert candidate is not None
+    assert candidate.direction is Direction.LONG
+    assert candidate.target == levels["call_wall"]  # cíl je protilehlá zeď
+    assert candidate.stop < candidate.entry
+
+
+def test_trend_continuation_skips_price_close_to_support_wall() -> None:
+    """U zdi patří scéna T1 odrazu, ne trendové šabloně."""
+    params = SetupParams()
+    levels = {"flip": 7400.0, "put_wall": 7478.0, "call_wall": 7600.0}
+    history = [trend_minute(i, 7480.0 + i, 7479.0 + i, 7482.0 + i, **levels) for i in range(41)]
+    atr = average_true_range(history, params.atr_lookback) or 1.0
+
+    assert detect_trend_continuation(history, params, atr) is None
+
+
+def test_trend_continuation_needs_positive_gamma_side() -> None:
+    """Long pod flipem = jiný režim; šablona je pro pokračování v gammě."""
+    params = SetupParams()
+    levels = {"flip": 7900.0, "put_wall": 7420.0, "call_wall": 7600.0}
+    history = [trend_minute(i, 7480.0 + i, 7479.0 + i, 7482.0 + i, **levels) for i in range(41)]
+    atr = average_true_range(history, params.atr_lookback) or 1.0
+
+    assert detect_trend_continuation(history, params, atr) is None
