@@ -20,6 +20,15 @@ from dataclasses import dataclass, field, replace
 #   2 = jednotná R-mechanika #302 (min. risk dle ATR, cíl omezený násobkem
 #       risku, RRR filtr všude) nad ověřeně čerstvými daty po #306
 #
+# #463 (obnova OI archivu po publikačním okně) verzi NEZVEDÁ, ale je to
+# hraniční případ k rozhodnutí: mechanika šablon se nemění vůbec, mění se
+# KVALITA vstupů — Max Pain i zdi se dosud v některých dnech počítaly nad
+# předpublikačním OI. Zvednutí by vyřadilo historii ze statistik těsně před
+# kalibrací #394 (stejná úvaha jako u #443 níže) a navíc by hranice byla
+# falešně ostrá: zkažené byly jen dny, kdy archivace stihla proběhnout před
+# publikací, ne všechny. Zpětně je od sebe nerozlišíme — `captured_ts` mají
+# až řádky po této změně.
+#
 # #443 (T7 + okno průrazu T4) verzi ZÁMĚRNĚ nezvedá, i když sahá na filtr T4:
 # T4 nevygeneroval za celou historii jediný setup, takže není co znehodnotit,
 # a T7 je aditivní — sémantika stávajících šablon se nemění. Zvednutí by

@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     strike_range_max_points: float = Field(default=800.0, gt=0)
     batch_size: int = Field(default=80, ge=1)
     batch_timeout_s: float = Field(default=4.0, gt=0)
+    # Hodina UTC, po které IBKR publikuje kompletní denní OI (#463). Snímek
+    # pořízený dřív nese předpublikační čísla — engine ho po této hodině
+    # povinně obnoví a teprve dvě shodná čtení bere jako finální. Naměřeno
+    # 4. 8. 2026: publikace dorazila 12:45–14:00 SELČ (10:45–12:00 UTC).
+    oi_publication_hour_utc: int = Field(default=12, ge=0, le=23)
     # Křídla řetězce se sweepují každý k-tý cyklus (ATM±atm_sweep_width každý cyklus)
     wings_sweep_every: int = Field(default=3, ge=1)
     atm_sweep_width: int = Field(default=30, ge=1)
