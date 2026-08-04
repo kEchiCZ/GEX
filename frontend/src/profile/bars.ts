@@ -19,6 +19,11 @@ export interface ProfileRow {
   vykreslený ztlumeně — 27. 7. servírovala TWS 15 h zmrzlé ATM Greeks a panel
   je ukazoval jako živá čísla. Undefined = starší data bez příznaku. */
   staleAge?: number
+  /** OI pro tuhle stranu striku NENÍ k dispozici (#465) — archiv ho nepokrývá
+  (strike přibyl posunem pásma) nebo ho IBKR nedodal. Nezaměňovat s OI = 0:
+  ve výpočtech je to nula, ale v panelu se kreslí šrafovaně, ne jako prázdno. */
+  callOiMissing?: boolean
+  putOiMissing?: boolean
 }
 
 export interface VolLeader {

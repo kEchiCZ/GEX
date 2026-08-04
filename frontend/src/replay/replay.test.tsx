@@ -423,6 +423,34 @@ test('appendMinute dá identický výsledek jako plný build (#127)', () => {
   expect(normalize(incremental)).toEqual(normalize(full))
 })
 
+test('striky bez OI se dekódují do profilu jako chybějící, ne jako nula (#465)', () => {
+  const bundle = {
+    ...bundleFor(CELLS, BARS, LEVELS, FLOW),
+    oimissing: [{ ts_min: M1, strike: 7610, right: 'C' }],
+  }
+  const day = buildReplayDay(bundle)
+
+  const minute1 = day.profileByMinute.rowsAt(1)
+  const strike7610 = minute1.find((row) => row.strike === 7610)!
+  expect(strike7610.callOiMissing).toBe(true)
+  expect(strike7610.putOiMissing).toBe(false) // put stranu nikdo neoznačil
+
+  // Jiná minuta téhož striku je změřená — příznak je per minuta, ne per strike
+  expect(day.profileByMinute.rowsAt(0).find((row) => row.strike === 7610)!.callOiMissing).toBe(
+    false,
+  )
+  // Ostatní striky zůstávají beze změny
+  expect(minute1.find((row) => row.strike === 7600)!.callOiMissing).toBe(false)
+})
+
+test('bez klíče oimissing (starší API) není nic označené (#465)', () => {
+  const day = buildReplayDay(bundleFor(CELLS, BARS, LEVELS, FLOW))
+
+  expect(
+    day.profileByMinute.rowsAt(1).every((row) => !row.callOiMissing && !row.putOiMissing),
+  ).toBe(true)
+})
+
 // ── Díra ve sběru: osa X ze sjednocení snapshotů a barů (#459) ─────
 
 /** M1 = minuta, kdy sweep neproběhl: bar backfill dotáhl, snapshot chybí. */
