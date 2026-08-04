@@ -439,17 +439,49 @@ body {
   gap: 18px;
 }
 
-/* Nápověda k parametru (#438): vysvětlení pod polem, ne v tooltipu — meze
-   musí být vidět dřív, než uživatel hodnotu změní */
-.settings .setting-field {
-  margin-bottom: 10px;
+/* Parametr a jeho nápověda vedle sebe (#445): pod polem se stránka roztahovala
+   do výšky a nešla přehlédnout. Levý sloupec drží pevnou šířku, ať jsou pole
+   pod sebou zarovnaná; nápověda teče vpravo a láme se až v rámci svého sloupce. */
+.settings .setting-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 4px 16px;
+  align-items: baseline;
+  margin: 2px 0;
+}
+
+.settings .setting-row > label {
+  justify-content: space-between;
+  margin: 0;
 }
 
 .settings .setting-help {
-  margin: 2px 0 0;
-  max-width: 70ch;
+  margin: 0;
   font-size: 12px;
   line-height: 1.45;
+}
+
+/* Úzké okno: nápověda se vrátí pod pole, jinak by na ni nezbylo místo */
+@media (max-width: 900px) {
+  .settings .setting-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Lišta s uložením (#445) — drží se dole, ať je vidět i po odscrollování */
+.settings-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+}
+
+.settings-actions .dirty {
+  color: var(--accent);
 }
 
 .console h2,

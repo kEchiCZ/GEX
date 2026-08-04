@@ -86,13 +86,16 @@ test('notifikační zvonek: badge z alerts kanálu, otevření ukáže historii 
   expect(screen.getByLabelText('Notifikace (0)')).toBeDefined() // badge vynulován
 })
 
-test('změna nastavení se ukládá okamžitě (PUT, bez restartu) a téma se aplikuje živě', async () => {
+test('nastavení se uloží tlačítkem (PUT, bez restartu) a téma se aplikuje živě', async () => {
   const fetchMock = mockApi()
   renderApp()
 
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
   const hotZone = await screen.findByLabelText('Šířka hot zóny (± strikes)')
   fireEvent.change(hotZone, { target: { value: '9' } })
+  // Do #445 letěl PUT po každém stisku klávesy — rozepsaná hodnota tak stihla
+  // dojet do enginu. Nově se odesílá až potvrzením.
+  fireEvent.click(screen.getByRole('button', { name: 'Uložit' }))
 
   await waitFor(() => {
     const putCall = fetchMock.mock.calls.find(

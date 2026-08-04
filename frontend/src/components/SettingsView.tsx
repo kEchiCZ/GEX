@@ -1,8 +1,12 @@
-/** Settings (SPEC 7.5): konfigurace enginu a UI; změny se ukládají okamžitě.
+/** Settings (SPEC 7.5): konfigurace enginu a UI.
 
-Hodnoty jdou přes PUT /settings/{key} hned při změně — engine si je čte
-průběžně (bez restartu tam, kde SPEC restart nevyžaduje). Téma se aplikuje
-živě na kořenový element.
+Změny se drží v konceptu a odesílají až tlačítkem **Uložit** (#445) — dřív se
+každý stisk klávesy propsal rovnou na server, takže rozepsaná hodnota (např. „1"
+při psaní „150") stihla dojet do enginu. Neuložený koncept se opuštěním
+obrazovky nebo refreshem zahodí a platí původní hodnoty.
+
+Výjimka je téma: aplikuje se i ukládá okamžitě, protože jde o čistě vizuální
+volbu s okamžitou zpětnou vazbou (AC #167) — čekat u něj na Uložit by mátlo.
 */
 import { useState } from 'react'
 import { downloadBackup } from '../api/backup'
@@ -34,7 +38,7 @@ const ENGINE_FIELDS: NumberField[] = [
     min: 50,
     max: 400,
     restarts: true,
-    help: 'Jak široké pásmo strikes kolem spotu se sbírá. Víc bodů = vidíš vzdálená křídla (pojistky hluboko OTM), ale roste počet kontraktů a tím i zátěž subskripcí. Strop 400 je polovina denní obálky.',
+    help: 'Jak široké pásmo strikes kolem spotu se sbírá. Víc bodů = vidíš vzdálená křídla (pojistky hluboko OTM), ale roste počet kontraktů a tím zátěž subskripcí.',
   },
   {
     key: 'batch_size',
@@ -43,7 +47,7 @@ const ENGINE_FIELDS: NumberField[] = [
     min: 10,
     max: 100,
     restarts: true,
-    help: 'Kolik kontraktů se najednou přihlásí k odběru kotací. Nezvyšuj nad 100 — účet má ověřenou kapacitu ~150 souběžných market data lines (ADR-0001) a rezerva patří hot zóně a podkladu. Vyšší hodnota vede na IBKR error 101.',
+    help: 'Kolik kontraktů se najednou přihlásí k odběru kotací. Nezvyšuj nad 100 — účet má ověřenou kapacitu ~150 souběžných market data lines (ADR-0001) a rezerva patří hot zóně a podkladu.',
   },
   {
     key: 'hot_zone_width',
@@ -52,7 +56,7 @@ const ENGINE_FIELDS: NumberField[] = [
     min: 1,
     max: 50,
     restarts: true,
-    help: 'Kolik strikes kolem ATM se klasifikuje tick-by-tick (nejpřesnější čtení agresora). Účet zvládne jen 5 souběžných tick-by-tick streamů, takže se zóna stejně ořízne od ATM ven — zbytek jede přes midpoint test. Zvyšovat má smysl až po dokoupení Quote Booster packů.',
+    help: 'Kolik strikes kolem ATM se klasifikuje tick-by-tick (nejpřesnější čtení agresora). Účet zvládne jen 5 souběžných streamů, takže se zóna stejně ořízne od ATM ven — zbytek jede přes midpoint test.',
   },
   {
     key: 'retention_days',
@@ -60,7 +64,7 @@ const ENGINE_FIELDS: NumberField[] = [
     fallback: 90,
     min: 1,
     max: 3650,
-    help: 'Po kolika dnech noční úklid maže snapshoty a odvozené řady. Delší okno = můžeš se dívat na starší dny a přehrávat historii, ale roste místo na disku (~17 MB/den pro ES+NQ). OI archiv, setupy a signály se nemažou nikdy bez ohledu na tuto hodnotu.',
+    help: 'Po kolika dnech noční úklid maže snapshoty a odvozené řady. Delší okno = starší dny jdou prohlížet a přehrávat, ale roste místo na disku (~17 MB/den pro ES+NQ). OI archiv, setupy a signály se nemažou nikdy.',
   },
   {
     key: 'disk_limit_gb',
@@ -68,15 +72,50 @@ const ENGINE_FIELDS: NumberField[] = [
     fallback: 5,
     min: 0.5,
     max: 1000,
-    help: 'Nad tímto obsazením složky s daty přijde alert. Není to tvrdý strop — data se dál zapisují, jen upozorní. Drž ho nad očekávaným obsazením při zvolené retenci, jinak bude hlásit planě.',
+    help: 'Nad tímto obsazením složky s daty přijde alert. Není to tvrdý strop — data se dál zapisují, jen upozorní. Drž ho nad očekávaným obsazením při zvolené retenci.',
   },
 ]
+
+const DEFAULT_SESSIONS = [
+  { label: 'London', minuteIdx: 60 },
+  { label: 'New York', minuteIdx: 210 },
+]
+
+/** Parametr vlevo, nápověda vpravo (#445). */
+function SettingRow({ children, help }: { children: React.ReactNode; help: React.ReactNode }) {
+  return (
+    <div className="setting-row">
+      {children}
+      <p className="muted setting-help">{help}</p>
+    </div>
+  )
+}
 
 export function SettingsView() {
   const { theme, setTheme } = useAppState()
   const { values, put } = useServerSettings()
+  // Rozepsané změny; prázdný objekt = nic k uložení
+  const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [backup, setBackup] = useState<'idle' | 'running'>('idle')
   const [backupNote, setBackupNote] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  const dirtyKeys = Object.keys(draft)
+  const value = (key: string, fallback: unknown): unknown =>
+    key in draft ? draft[key] : (values[key] ?? fallback)
+  const edit = (key: string, next: unknown) => {
+    setSaved(false)
+    setDraft((previous) => ({ ...previous, [key]: next }))
+  }
+  const save = () => {
+    for (const [key, next] of Object.entries(draft)) put(key, next)
+    setDraft({})
+    setSaved(true)
+  }
+  const discard = () => {
+    setDraft({})
+    setSaved(false)
+  }
 
   const runBackup = async () => {
     setBackup('running')
@@ -100,166 +139,194 @@ export function SettingsView() {
     <main className="settings" aria-label="Settings">
       <section aria-label="IBKR">
         <h2>IBKR</h2>
+        <SettingRow
+          help={
+            <>
+              Adresa, kde běží TWS / IB Gateway. V Dockeru se na hostitele odkazuje přes{' '}
+              <code>host.docker.internal</code>.
+            </>
+          }
+        >
+          <label>
+            Host
+            <input
+              value={String(value('ibkr_host', '127.0.0.1'))}
+              onChange={(event) => edit('ibkr_host', event.target.value)}
+            />
+          </label>
+        </SettingRow>
+        <SettingRow help="7496 = TWS živý účet, 7497 = TWS paper, 4001 / 4002 = IB Gateway (živý / paper). Musí odpovídat portu v TWS → Global Configuration → API → Settings.">
+          <label>
+            Port
+            <input
+              type="number"
+              value={Number(value('ibkr_port', 7496))}
+              onChange={(event) => edit('ibkr_port', Number(event.target.value))}
+            />
+          </label>
+        </SettingRow>
+        <SettingRow help="Odlišuje připojené aplikace. Každá musí mít vlastní číslo (0–999) — se stejným ID by engine odpojil jinou aplikaci připojenou na TWS. Měň jen při konfliktu.">
+          <label>
+            Client ID
+            <input
+              type="number"
+              value={Number(value('ibkr_client_id', 1))}
+              onChange={(event) => edit('ibkr_client_id', Number(event.target.value))}
+            />
+          </label>
+        </SettingRow>
         <p className="muted">
-          Parametry spojení na TWS / IB Gateway. Na rozdíl od sekce Engine se{' '}
-          <strong>neprojeví za běhu</strong> — spojení se navazuje při startu, takže po změně je
-          potřeba restartovat engine (<code>docker compose restart engine</code>).
-        </p>
-        <label>
-          Host
-          <input
-            value={String(values.ibkr_host ?? '127.0.0.1')}
-            onChange={(event) => put('ibkr_host', event.target.value)}
-          />
-        </label>
-        <label>
-          Port
-          <input
-            type="number"
-            value={Number(values.ibkr_port ?? 7496)}
-            onChange={(event) => put('ibkr_port', Number(event.target.value))}
-          />
-        </label>
-        <p className="muted setting-help">
-          <em>
-            7496 = TWS živý účet, 7497 = TWS paper, 4001 / 4002 = IB Gateway (živý / paper). Musí
-            odpovídat portu v TWS → Global Configuration → API → Settings.
-          </em>
-        </p>
-        <label>
-          Client ID
-          <input
-            type="number"
-            value={Number(values.ibkr_client_id ?? 1)}
-            onChange={(event) => put('ibkr_client_id', Number(event.target.value))}
-          />
-        </label>
-        <p className="muted setting-help">
-          <em>
-            Odlišuje připojené aplikace. Každá musí mít vlastní číslo (0–999) — se stejným ID by
-            engine odpojil jinou aplikaci připojenou na TWS. Měň jen při konfliktu.
-          </em>
+          Spojení se navazuje při startu, takže tyhle tři hodnoty si engine{' '}
+          <strong>nepřebírá za běhu</strong> — po uložení ho restartuj (
+          <code>docker compose restart engine</code>).
         </p>
       </section>
 
       <section aria-label="Engine">
         <h2>Engine</h2>
-        <p className="muted">
-          Změny si engine přebírá do 5 minut za běhu. Hodnotu mimo povolený rozsah srovná na
-          nejbližší povolenou — nerozbiješ tím sběr dat.
-        </p>
         {ENGINE_FIELDS.map((field) => (
-          <div className="setting-field" key={field.key}>
+          <SettingRow
+            key={field.key}
+            help={
+              <>
+                {field.help}{' '}
+                <em>
+                  Rozsah {field.min}–{field.max}, výchozí {field.fallback}.
+                  {field.restarts ? ' Změna nakrátko přeruší sběr dat instrumentu.' : ''}
+                </em>
+              </>
+            }
+          >
             <label>
               {field.label}
               <input
                 type="number"
                 min={field.min}
                 max={field.max}
-                value={Number(values[field.key] ?? field.fallback)}
-                onChange={(event) => put(field.key, Number(event.target.value))}
+                value={Number(value(field.key, field.fallback))}
+                onChange={(event) => edit(field.key, Number(event.target.value))}
               />
             </label>
-            <p className="muted setting-help">
-              {field.help}{' '}
-              <em>
-                Rozsah {field.min}–{field.max}, výchozí {field.fallback}.
-                {field.restarts ? ' Změna nakrátko přeruší sběr dat instrumentu.' : ''}
-              </em>
-            </p>
-          </div>
+          </SettingRow>
         ))}
+        <p className="muted">
+          Uložené změny si engine přebírá do 5 minut. Hodnotu mimo povolený rozsah srovná na
+          nejbližší povolenou — nerozbiješ tím sběr dat.
+        </p>
       </section>
 
       <section aria-label="Záloha">
         <h2>Záloha databáze</h2>
-        <button className="chip" onClick={runBackup} disabled={backup === 'running'}>
-          {backup === 'running' ? 'Zálohuji…' : 'Zálohovat PostgreSQL'}
-        </button>
+        <SettingRow
+          help={
+            <>
+              Zálohuje <strong>PostgreSQL</strong> — věčný OI archiv, setupy s výsledky, signály,
+              tendence a statistiky modelu. Ta data se nedají znovu pořídit a na rozdíl od parquetů
+              neleží ve složce projektu, ale v Docker volume, který se smazáním kontejnerů dá
+              ztratit. <strong>Kam ukládat:</strong> složku <em>mimo adresář projektu</em>, ideálně
+              na jiný disk nebo do cloudu — záloha v repozitáři neleží nikde jinde než originál a do
+              gitu nepatří.
+            </>
+          }
+        >
+          <button className="chip" onClick={runBackup} disabled={backup === 'running'}>
+            {backup === 'running' ? 'Zálohuji…' : 'Zálohovat PostgreSQL'}
+          </button>
+        </SettingRow>
         {backupNote && (
           <p className="muted" role="status">
             {backupNote}
           </p>
         )}
-        <p className="muted">
-          Zálohuje <strong>PostgreSQL</strong> — věčný OI archiv, setupy s výsledky, signály,
-          tendence a statistiky modelu. Ta data se nedají znovu pořídit a na rozdíl od parquetů
-          neleží ve složce projektu, ale v Docker volume, který se smazáním kontejnerů dá ztratit.
-        </p>
-        <p className="muted">
-          <strong>Kam ukládat:</strong> zvol složku <em>mimo adresář projektu</em>, ideálně na jiný
-          disk nebo do cloudu. Záloha v repozitáři chrání jen před smazáním volume — ne před
-          selháním disku ani ztrátou počítače, protože leží na tomtéž místě. Navíc obsahuje veškerá
-          data a do gitu nepatří.
-        </p>
       </section>
 
       <section aria-label="Alerty">
         <h2>Alerty</h2>
-        <label>
-          <input
-            type="checkbox"
-            checked={values.subscription_alert_enabled !== false}
-            onChange={(event) => put('subscription_alert_enabled', event.target.checked)}
-          />
-          Hlásit chyby subskripce market dat
-        </label>
-        <p className="muted">
-          Alert, když TWS opakovaně odmítne data konkrétního kontraktu (error 354). S platnými
-          subskripcemi ES/NQ by nastat neměl — ojedinělé výpadky farmy se nehlásí.
-        </p>
+        <SettingRow help="Alert, když TWS opakovaně odmítne data konkrétního kontraktu (error 354). S platnými subskripcemi ES/NQ by nastat neměl — ojedinělé výpadky farmy se nehlásí.">
+          <label>
+            <input
+              type="checkbox"
+              checked={value('subscription_alert_enabled', true) !== false}
+              onChange={(event) => edit('subscription_alert_enabled', event.target.checked)}
+            />
+            Hlásit chyby subskripce market dat
+          </label>
+        </SettingRow>
       </section>
 
       <section aria-label="Vzhled">
         <h2>Vzhled</h2>
-        <label>
-          Téma
-          <select
-            value={theme}
-            onChange={(event) => {
-              const next = event.target.value as Theme
-              setTheme(next) // aplikuje se okamžitě, bez restartu (AC)
-              put('theme', next)
-            }}
-          >
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
-          </select>
-        </label>
-        <label>
-          Jazyk
-          <select
-            value={String(values.language ?? 'cs')}
-            onChange={(event) => put('language', event.target.value)}
-          >
-            <option value="cs">Čeština</option>
-            <option value="en">English</option>
-          </select>
-        </label>
+        <SettingRow help="Aplikuje se i ukládá okamžitě, bez tlačítka Uložit — je to čistě vizuální volba a čekání by u ní mátlo.">
+          <label>
+            Téma
+            <select
+              value={theme}
+              onChange={(event) => {
+                const next = event.target.value as Theme
+                setTheme(next) // aplikuje se okamžitě, bez restartu (AC)
+                put('theme', next)
+              }}
+            >
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+          </label>
+        </SettingRow>
+        <SettingRow help="Jazyk textů v aplikaci.">
+          <label>
+            Jazyk
+            <select
+              value={String(value('language', 'cs'))}
+              onChange={(event) => edit('language', event.target.value)}
+            >
+              <option value="cs">Čeština</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+        </SettingRow>
       </section>
 
       <section aria-label="Seance">
         <h2>Seance</h2>
-        <label>
-          Seznam seancí (JSON: [{'{'}"label", "minuteIdx"{'}'}])
-          <textarea
-            rows={3}
-            defaultValue={JSON.stringify(
-              values.sessions ?? [
-                { label: 'London', minuteIdx: 60 },
-                { label: 'New York', minuteIdx: 210 },
-              ],
-            )}
-            onBlur={(event) => {
-              try {
-                put('sessions', JSON.parse(event.target.value))
-              } catch {
-                // Nevalidní JSON se neukládá — pole zůstává k opravě
-              }
-            }}
-          />
-        </label>
+        <SettingRow help="Historické pole — markery seancí se generují automaticky z časů světových burz, tohle už se nepoužívá. Nevalidní JSON se neuloží.">
+          <label>
+            Seznam seancí (JSON)
+            <textarea
+              rows={3}
+              defaultValue={JSON.stringify(values.sessions ?? DEFAULT_SESSIONS)}
+              onBlur={(event) => {
+                try {
+                  edit('sessions', JSON.parse(event.target.value))
+                } catch {
+                  // Nevalidní JSON se do konceptu nedostane — pole zůstává k opravě
+                }
+              }}
+            />
+          </label>
+        </SettingRow>
       </section>
+
+      <div className="settings-actions">
+        <button className="chip active" onClick={save} disabled={dirtyKeys.length === 0}>
+          Uložit
+        </button>
+        <button className="chip" onClick={discard} disabled={dirtyKeys.length === 0}>
+          Zahodit změny
+        </button>
+        <span className="muted" role="status">
+          {dirtyKeys.length > 0 ? (
+            <span className="dirty">
+              Neuloženo: {dirtyKeys.length}{' '}
+              {dirtyKeys.length === 1 ? 'změna' : dirtyKeys.length < 5 ? 'změny' : 'změn'} — bez
+              uložení se při odchodu zahodí.
+            </span>
+          ) : saved ? (
+            'Uloženo.'
+          ) : (
+            'Žádné neuložené změny.'
+          )}
+        </span>
+      </div>
     </main>
   )
 }
