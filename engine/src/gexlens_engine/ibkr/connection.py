@@ -21,9 +21,21 @@ logger = logging.getLogger(__name__)
 
 LIVE_MARKET_DATA_TYPE = 1
 # Kódy TWS = engine dostává DELAYED data (SPEC 3.1: fail-fast, Greeks z nich nejsou
-# spolehlivé). Error 354 („not subscribed") sem NEPATŘÍ: je per-request a v provozu
-# chodí i s platnou subskripcí při výpadku farmy — hlídá ho `subscription.py` (#417).
-DELAYED_DATA_ERROR_CODES = frozenset({10167, 10197})
+# spolehlivé). Patří sem jen 10167 „Displaying delayed market data", který delayed
+# data přímo potvrzuje.
+#
+# NEPATŘÍ sem:
+# * 354 („not subscribed") — per-request, chodí i s platnou subskripcí při výpadku
+#   farmy; hlídá ho `subscription.py` (#417),
+# * 10197 („No market data during competing live session") — viz níže (#451).
+DELAYED_DATA_ERROR_CODES = frozenset({10167})
+
+# Konkurenční relace: stejný účet je přihlášený jinde (mobil, Client Portal, druhá
+# TWS) a přetahuje si market data. NENÍ to potvrzení delayed dat — naměřeno 4. 8.:
+# kód chodil 2× za minutu na trvalých spot subskripcích, zatímco bary i Greeks
+# tekly kompletní. Fail-fast kvůli němu překlápěl stav spojení do `error` dvakrát
+# za minutu, přestože bylo všechno v pořádku. Řeší se alertem, ne stavem (#451).
+COMPETING_SESSION_ERROR_CODE = 10197
 
 
 class ConnectionState(enum.Enum):

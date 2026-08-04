@@ -115,7 +115,7 @@ async def test_delayed_market_data_is_error_state() -> None:
     await manager.stop()
 
 
-@pytest.mark.parametrize("code", [10167, 10197])
+@pytest.mark.parametrize("code", [10167])
 async def test_delayed_error_codes_are_error_state(code: int) -> None:
     client = MockIB()
     manager = manager_with(client)
@@ -124,6 +124,23 @@ async def test_delayed_error_codes_are_error_state(code: int) -> None:
 
     manager.report_error(code, "mock hláška TWS")
     assert manager.state is ConnectionState.ERROR
+    await manager.stop()
+
+
+async def test_competing_session_does_not_change_state() -> None:
+    """Konkurenční relace (10197) není potvrzení delayed dat (#451).
+
+    Naměřeno 4. 8.: kód chodil 2× za minutu na trvalých spot subskripcích,
+    zatímco bary i Greeks tekly kompletní. Fail-fast kvůli němu překlápěl stav
+    do `error` dvakrát za minutu, přestože bylo všechno v pořádku.
+    """
+    client = MockIB()
+    manager = manager_with(client)
+    await manager.start()
+    await wait_for_state(manager, ConnectionState.CONNECTED)
+
+    manager.report_error(10197, "No market data during competing live session")
+    assert manager.state is ConnectionState.CONNECTED
     await manager.stop()
 
 

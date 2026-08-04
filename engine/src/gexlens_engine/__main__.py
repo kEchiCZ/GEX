@@ -28,6 +28,7 @@ from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.ibkr.account import classify_accounts
 from gexlens_engine.ibkr.connection import (
+    COMPETING_SESSION_ERROR_CODE,
     DELAYED_DATA_ERROR_CODES,
     ConnectionManager,
     ConnectionState,
@@ -139,6 +140,13 @@ def _watch_subscription_errors(
         window_s=settings.subscription_error_window_s,
         cooldown_s=settings.subscription_error_cooldown_s,
     )
+    # Konkurenční relace (#451) má vlastní počítadlo: chodí v jiném rytmu než 354
+    # a hlásit ji každou minutu by bylo k ničemu — proto delší cooldown
+    competing_sessions = SubscriptionErrorTracker(
+        threshold=settings.subscription_error_threshold,
+        window_s=settings.subscription_error_window_s,
+        cooldown_s=max(settings.subscription_error_cooldown_s, 3600.0),
+    )
 
     async def publish(alert: SubscriptionErrorAlert) -> None:
         await publisher.publish(
@@ -151,9 +159,34 @@ def _watch_subscription_errors(
             },
         )
 
+    async def publish_competing(alert: SubscriptionErrorAlert) -> None:
+        await publisher.publish(
+            "alerts",
+            {
+                "kind": "competing_session",
+                "symbol": alert.symbol,
+                "message": (
+                    f"Stejný IBKR účet je přihlášený jinde a přetahuje si market data "
+                    f"({alert.count}× za {alert.window_s:g} s). Data můžou vypadávat — "
+                    "odhlas účet z mobilní aplikace, Client Portal nebo druhé TWS."
+                ),
+                "ts": dt.datetime.now(dt.UTC).timestamp(),
+            },
+        )
+
     def on_error(reqId: int, code: int, message: str, contract: object = None) -> None:
         if code in DELAYED_DATA_ERROR_CODES:
             manager.report_error(code, message)
+            return
+        if code == COMPETING_SESSION_ERROR_CODE:
+            # Konkurenční relace (#451): stav spojení se NEMĚNÍ — data můžou téct
+            # dál. Uživatel se to ale dozvědět má, protože při horším průběhu
+            # feed mizí úplně (4. 8. tak vypadla data ve 14 cyklech ze 192).
+            alert = competing_sessions.observe(contract_label(contract), "", now=time.monotonic())
+            if alert is not None:
+                logger.warning("Konkurenční relace odebírá market data: %s", message)
+                if alert_enabled():
+                    asyncio.create_task(publish_competing(alert))
             return
         if code != NOT_SUBSCRIBED_ERROR_CODE:
             return  # ostatní kódy loguje ib_async samo

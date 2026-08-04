@@ -644,6 +644,10 @@ docker compose up -d        # start na pozadí
 <td>TWS opakovaně odmítla data konkrétních kontraktů (error 354 „not subscribed&quot;); alert vypíše, o které kontrakty jde. Ojedinělé výskyty se nehlásí — ty patří ke krátkým výpadkům farem a data se vrátí sama. Když alert přijde, zkontroluj subskripce v Market Data Subscription Manager. Jde vypnout v Settings → Alerty</td>
 </tr>
 <tr>
+<td><strong>Konkurenční relace</strong></td>
+<td>Stejný IBKR účet je přihlášený jinde (mobilní aplikace, Client Portal, druhá TWS) a přetahuje si market data. IBKR povoluje jen jednu aktivní market-data relaci na subskripci, takže data můžou vypadávat — pomůže odhlásit účet z ostatních míst. Sdílení dat s paper účtem tohle <strong>neřeší</strong>: sdílí se oprávnění, ne kapacita relace</td>
+</tr>
+<tr>
 <td><strong>Setup detektor degradován/obnoven</strong></td>
 <td>Detektoru chybí vstup (např. OI pro Max Pain) — šablony na něm závislé se dočasně nevyhodnocují</td>
 </tr>
