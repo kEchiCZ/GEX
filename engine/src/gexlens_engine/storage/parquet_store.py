@@ -121,6 +121,18 @@ LEVELS2_SCHEMA = pa.schema(
     ]
 )
 
+# Striky bez OI (#465) — vlastní řada, ať se nemění SNAPSHOT_SCHEMA (ADR-0005).
+# `oi = 0.0` ve snapshotu dnes znamená OBOJÍ: „IBKR poslal nulu" i „nedodal nic".
+# Ve výpočtech na tom nesejde (nulové OI přispívá nulou), ale graf tím tvrdí
+# měření tam, kde žádné není. Řada nese striky, které v archivu chyběly.
+OI_MISSING_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("strike", pa.float64()),
+        ("right", pa.string()),
+    ]
+)
+
 # GEX žebřík (#244) — proměnný počet příček per minuta → list sloupce
 LADDER_SCHEMA = pa.schema(
     [
@@ -218,6 +230,19 @@ class Levels2Row:
     ts_min: dt.datetime
     call_wall_2: float | None
     put_wall_2: float | None
+
+
+@dataclass(frozen=True)
+class OiMissingRow:
+    """Strike, pro který v dané minutě NEBYLO OI k dispozici (#465).
+
+    Nezaměňovat s OI = 0: tady jde o kontrakt, který archiv vůbec nepokrývá
+    (přibyl posunem pásma) nebo jehož OI IBKR nedodal.
+    """
+
+    ts_min: dt.datetime
+    strike: float
+    right: str
 
 
 @dataclass(frozen=True)
@@ -395,6 +420,26 @@ class SnapshotWriter:
             self._settings.derived_dir / symbol / expiry / "levels2" / f"{day.isoformat()}.parquet"
         )
         buffer = self._buffer(path, LEVELS2_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_oi_missing(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[OiMissingRow]
+    ) -> Path | None:
+        """Přidá striky bez OI do partice derived/{sym}/{exp}/oimissing (#465).
+
+        Prázdný seznam se nezapisuje — v běžný den řada nevznikne vůbec a její
+        existence sama nese informaci, že něco chybělo.
+        """
+        if not rows:
+            return None
+        path = (
+            self._settings.derived_dir
+            / symbol
+            / expiry
+            / "oimissing"
+            / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, OI_MISSING_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_levelsfa(

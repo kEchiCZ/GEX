@@ -311,6 +311,34 @@ class InstrumentPipeline:
                 self.settings.greeks_stall_share, self.settings.greeks_stall_cycles
             )
 
+    async def _archive_new_strikes(
+        self, previous: Sequence[OptionContractSpec], today: dt.date
+    ) -> None:
+        """Doarchivuje OI striků, které přibyly rozšířením obálky (#465).
+
+        Denní archiv pokrývá pásmo z okamžiku archivace; auto-rozšíření (ADR-0002)
+        ho během dne posouvá za cenou. Bez doplnění mají nové striky `get_oi`
+        None, tedy v grafu nulu — přitom je nikdo nezměřil.
+
+        Selhání nesmí shodit cyklus: OI je doplněk, sběr kotací běží dál.
+        """
+        known = {(spec.strike, spec.right) for spec in previous}
+        fresh = [spec for spec in self.runtime.contracts if (spec.strike, spec.right) not in known]
+        if not fresh:
+            return
+        try:
+            result = await self.archiver.archive_day(fresh, today)
+        except Exception:
+            logger.exception("Doarchivace nových striků %s selhala — zkusí se příště", self.symbol)
+            return
+        logger.info(
+            "Obálka %s se rozšířila o %d kontraktů: %d s OI, %d bez",
+            self.symbol,
+            len(fresh),
+            result.written,
+            len(result.missing),
+        )
+
     def _oi_refresh_due(self, now: dt.datetime) -> bool:
         """Má se existující snímek dne přečíst znovu? (#463)
 
@@ -557,9 +585,14 @@ class InstrumentPipeline:
         expansion = self.discovery.maybe_expand(self.info, self.band, spot)
         if expansion.expanded:
             self.band = expansion.band
+            previous_contracts = self.runtime.contracts
             self.runtime.contracts = build_contracts(
                 _underlying_for(self.symbol, self.info), self.info, self.band
             )
+            # Striky přibylé posunem pásma nemá denní archiv pokryté (#465):
+            # 4. 8. tak NQ vyjelo 11 striků nad archivované pásmo a všechny
+            # měly v grafu nulové OI. Doarchivují se hned, ne až zítra.
+            await self._archive_new_strikes(previous_contracts, now.date())
             if expansion.capped:
                 await self.publisher.publish(
                     "alerts",

@@ -64,6 +64,42 @@ def runtime(tmp_path: Path) -> tuple[EngineRuntime, RecordingPublisher, Settings
     return engine_runtime, publisher, settings
 
 
+async def test_striky_bez_oi_jdou_do_vlastni_rady(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """#465: strike, který archiv nepokrývá, se nesmí tvářit jako změřená nula."""
+    engine_runtime, _publisher, settings = runtime
+    # Strike přibylý posunem pásma — v archivu (fixture) není
+    novy = OptionContractSpec("ES", "FOP", "20260716", 7620.0, "C", "CME", "E3D", "50")
+    engine_runtime.contracts = [*engine_runtime.contracts, novy]
+
+    await engine_runtime.run_cycle(TS, SPOT, [])
+
+    day = TS.date().isoformat()
+    missing = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "oimissing" / f"{day}.parquet"
+    )
+    assert list(missing.columns) == ["ts_min", "strike", "right"]
+    assert missing["strike"].tolist() == [7620.0]
+    assert missing["right"].tolist() == ["C"]
+
+    # Ve snapshotu zůstává 0.0 (do výpočtů přispívá nulou), rozlišení nese řada
+    snapshots = pd.read_parquet(settings.snapshots_dir / "ES" / "20260716" / f"{day}.parquet")
+    assert snapshots.loc[snapshots["strike"] == 7620.0, "oi"].tolist() == [0.0]
+
+
+async def test_bez_chybejiciho_oi_rada_nevznikne(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """Běžný den: všechny striky mají OI → soubor se vůbec nezaloží (#465)."""
+    engine_runtime, _publisher, settings = runtime
+
+    await engine_runtime.run_cycle(TS, SPOT, [])
+
+    day = TS.date().isoformat()
+    assert not (settings.derived_dir / "ES" / "20260716" / "oimissing" / f"{day}.parquet").exists()
+
+
 async def test_one_cycle_produces_full_day_artifacts(
     runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
 ) -> None:
