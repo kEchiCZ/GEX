@@ -25,6 +25,7 @@ from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.instruments import (
     SETUP_RETRY_CYCLES,
+    SETUP_RETRY_FIRST_CYCLES,
     InstrumentPipeline,
     SetupCooldown,
     WatchlistReader,
@@ -91,7 +92,7 @@ def test_plan_instruments_start_stop_and_cap() -> None:
 
 
 def test_setup_cooldown_blokuje_az_do_vyprseni() -> None:
-    cooldown = SetupCooldown(cycles=3)
+    cooldown = SetupCooldown(max_cycles=8, first_cycles=3)
     cooldown.penalize("ES")
 
     assert cooldown.blocked("ES")
@@ -105,10 +106,53 @@ def test_setup_cooldown_blokuje_az_do_vyprseni() -> None:
     assert not cooldown.blocked("ES")
 
 
+def test_setup_cooldown_eskaluje_a_zastavi_se_na_stropu() -> None:
+    """#457: dočasná příčina stojí 1 cyklus, trvale vadný symbol se utlumí na strop."""
+    cooldown = SetupCooldown(max_cycles=8, first_cycles=1)
+
+    assert cooldown.penalize("ES") == 1
+    assert cooldown.penalize("ES") == 2
+    assert cooldown.penalize("ES") == 4
+    assert cooldown.penalize("ES") == 8
+    assert cooldown.penalize("ES") == 8  # strop se nepřekročí
+
+
+def test_setup_cooldown_prvni_odklad_pousti_hned_dalsi_cyklus() -> None:
+    """Regrese #457: po jednom selhání se musí zkusit znovu za minutu, ne za 30."""
+    cooldown = SetupCooldown()
+
+    assert cooldown.penalize("ES") == SETUP_RETRY_FIRST_CYCLES
+    assert cooldown.blocked("ES")
+
+    cooldown.tick()
+
+    assert not cooldown.blocked("ES")
+
+
+def test_setup_cooldown_uspech_nuluje_eskalaci() -> None:
+    cooldown = SetupCooldown(max_cycles=8, first_cycles=1)
+    cooldown.penalize("ES")
+    cooldown.penalize("ES")  # eskalováno na 4
+
+    cooldown.succeeded("ES")
+
+    assert not cooldown.blocked("ES")
+    assert cooldown.penalize("ES") == 1  # série začíná znovu od nejkratšího
+
+
+def test_setup_cooldown_eskalace_je_per_symbol() -> None:
+    cooldown = SetupCooldown(max_cycles=8, first_cycles=1)
+    cooldown.penalize("ES")
+    cooldown.penalize("ES")
+
+    assert cooldown.penalize("NQ") == 1  # cizí série NQ netrestá
+
+
 def test_setup_cooldown_clear_uvolni_vse_a_hlasi_symboly() -> None:
     """Regrese #455: po reconnectu musí pipeline naskočit hned, ne za 30 minut."""
-    cooldown = SetupCooldown(cycles=SETUP_RETRY_CYCLES)
+    cooldown = SetupCooldown(max_cycles=SETUP_RETRY_CYCLES)
     cooldown.penalize("ES")
+    cooldown.penalize("ES")  # eskalovaná série ze starého spojení
     cooldown.penalize("NQ")
 
     released = cooldown.clear()
@@ -117,6 +161,7 @@ def test_setup_cooldown_clear_uvolni_vse_a_hlasi_symboly() -> None:
     assert not cooldown.blocked("ES")
     assert not cooldown.blocked("NQ")
     assert cooldown.clear() == ()  # opakované volání je no-op
+    assert cooldown.penalize("ES") == SETUP_RETRY_FIRST_CYCLES  # eskalace taky pryč
 
 
 def test_setup_cooldown_tick_na_prazdnem_nespadne() -> None:

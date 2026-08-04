@@ -695,14 +695,15 @@ async def main() -> None:
                     fa_repository=fa_repository,
                     news_ticks=news_ticks,
                 )
+                setup_cooldown.succeeded(symbol)
             except ConnectionError as exc:
                 # Spojení se rozpadlo uprostřed setupu (odhlášená TWS, restart
                 # Gateway). O symbolu to nevypovídá nic — cooldown by jen držel
                 # graf prázdný, i když se supervisor za pár vteřin přepojí (#455).
                 logger.warning("Setup %s přerušen výpadkem spojení: %s", symbol, exc)
             except InstrumentSetupError as exc:
-                setup_cooldown.penalize(symbol)
-                logger.warning("Setup %s selhal: %s", symbol, exc)
+                delay = setup_cooldown.penalize(symbol)
+                logger.warning("Setup %s selhal (další pokus za %d cyklů): %s", symbol, delay, exc)
                 await publisher.publish(
                     "alerts",
                     {
@@ -713,8 +714,10 @@ async def main() -> None:
                     },
                 )
             except Exception:
-                setup_cooldown.penalize(symbol)
-                logger.exception("Setup %s selhal neočekávaně — cooldown", symbol)
+                delay = setup_cooldown.penalize(symbol)
+                logger.exception(
+                    "Setup %s selhal neočekávaně — další pokus za %d cyklů", symbol, delay
+                )
         if plan.skipped:
             logger.warning(
                 "Nad strop max_instruments=%d: %s neběží",

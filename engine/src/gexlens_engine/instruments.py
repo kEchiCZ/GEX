@@ -52,8 +52,11 @@ logger = logging.getLogger(__name__)
 
 # OI retry každých ~30 minutových cyklů (CME publikuje OI jednou denně ráno, ADR-0001)
 OI_RETRY_CYCLES = 30
-# Cooldown po selhání setupu instrumentu (např. neznámý symbol) — cyklů do dalšího pokusu
+# Strop odkladu po opakovaném selhání setupu (neznámý symbol) — cyklů do dalšího pokusu
 SETUP_RETRY_CYCLES = 30
+# První odklad (#457): dočasná příčina (přetažená market data konkurenční relací)
+# stojí jednu minutu, ne půl hodiny. Eskaluje se až opakováním.
+SETUP_RETRY_FIRST_CYCLES = 1
 # Watchdog minutového cyklu (#219): sweep bez timeoutu umí po výpadku IBKR viset
 # navždy (future se nikdy nevyřeší) a zastavit celý orchestrátor. Běžný sweep
 # trvá 0.5–35 s; strop je velkorysý, aby nezabíjel legitimní první sweep.
@@ -68,7 +71,14 @@ class SetupCooldown:
     """Odklad dalšího pokusu o setup instrumentu po selhání.
 
     Chrání před zakládáním pipeline u symbolu, který nastartovat NEJDE (neznámý
-    ticker, chybějící řetězec) — takový pokus by jinak běžel každou minutu.
+    ticker, chybějící řetězec) — takový pokus by jinak každou minutu pálil
+    `reqContractDetails` + discovery ze sdíleného pacing budgetu a publikoval
+    stejný alert `instrument_error`.
+
+    Odklad se ale eskaluje, nezačíná na stropu (#457): 1 → 2 → 4 → … → `max_cycles`.
+    Dočasná příčina (přetažená market data konkurenční relací) tak stojí jednu
+    minutu, kdežto trvale vadný symbol se sám utlumí na původních 30 cyklů.
+    Úspěšný setup eskalaci nuluje.
 
     Rozpadlé spojení chybou symbolu není (#455): po přepojení musí setup dostat
     šanci hned, jinak uživatel opraví konfiguraci a graf zůstane prázdný celý
@@ -76,13 +86,29 @@ class SetupCooldown:
     spojení ze Settings.
     """
 
-    def __init__(self, cycles: int = SETUP_RETRY_CYCLES) -> None:
-        self._cycles = cycles
+    def __init__(
+        self,
+        max_cycles: int = SETUP_RETRY_CYCLES,
+        first_cycles: int = SETUP_RETRY_FIRST_CYCLES,
+    ) -> None:
+        self._max_cycles = max_cycles
+        self._first_cycles = first_cycles
         self._remaining: dict[str, int] = {}
+        # Délka PŘÍŠTÍHO odkladu; drží se i po vypršení, jinak by se série
+        # selhání nikdy neeskalovala (každý pokus by začínal od jedničky)
+        self._next_cycles: dict[str, int] = {}
 
-    def penalize(self, symbol: str) -> None:
-        """Symbol se přeskočí následujících `cycles` cyklů."""
-        self._remaining[symbol] = self._cycles
+    def penalize(self, symbol: str) -> int:
+        """Odloží symbol a vrátí počet cyklů (kvůli logu)."""
+        delay = self._next_cycles.get(symbol, self._first_cycles)
+        self._remaining[symbol] = delay
+        self._next_cycles[symbol] = min(delay * 2, self._max_cycles)
+        return delay
+
+    def succeeded(self, symbol: str) -> None:
+        """Setup prošel — další případné selhání začíná zase od nejkratšího odkladu."""
+        self._remaining.pop(symbol, None)
+        self._next_cycles.pop(symbol, None)
 
     def tick(self) -> None:
         """Odečte cyklus; symbol s vyčerpaným odkladem je zase způsobilý."""
@@ -95,9 +121,14 @@ class SetupCooldown:
         return symbol in self._remaining
 
     def clear(self) -> tuple[str, ...]:
-        """Zruší všechny odklady; vrací uvolněné symboly kvůli logu."""
+        """Zruší odklady i eskalaci; vrací uvolněné symboly kvůli logu.
+
+        Eskalace se maže taky — série selhání patřila starému spojení a na novém
+        o ničem nevypovídá.
+        """
         released = tuple(self._remaining)
         self._remaining.clear()
+        self._next_cycles.clear()
         return released
 
 
