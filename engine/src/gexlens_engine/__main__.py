@@ -26,6 +26,7 @@ from gexlens_engine.adapters import (
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
+from gexlens_engine.ibkr.account import classify_accounts
 from gexlens_engine.ibkr.connection import (
     DELAYED_DATA_ERROR_CODES,
     ConnectionManager,
@@ -67,7 +68,12 @@ from gexlens_engine.instruments import (
     read_watchlist,
 )
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
-from gexlens_engine.runtime_settings import RUNTIME_SETTINGS, apply_runtime_settings
+from gexlens_engine.runtime_settings import (
+    CONNECTION_SETTINGS,
+    RUNTIME_SETTINGS,
+    apply_connection_settings,
+    apply_runtime_settings,
+)
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
 from gexlens_engine.storage.fa_validation import FaValidationRepository
@@ -582,10 +588,26 @@ async def main() -> None:
             # Nastavení laditelná za běhu ze Settings UI (#438) — jedním dotazem.
             # Do #438 se četl jen rozsah strikes; retence, disk limit, velikost
             # dávky a hot zóna se uložily, ale engine je nikdy nepřečetl.
-            keys = [spec.key for spec in RUNTIME_SETTINGS] + ["subscription_alert_enabled"]
+            keys = (
+                [spec.key for spec in RUNTIME_SETTINGS]
+                + [spec.key for spec in CONNECTION_SETTINGS]
+                + ["subscription_alert_enabled", "ibkr_host"]
+            )
             stored = await asyncio.to_thread(watchlist_reader.settings_map, keys)
             subscription_alerts["enabled"] = stored.get("subscription_alert_enabled") is not False
-            if apply_runtime_settings(settings, stored):
+            restart_pipelines = apply_runtime_settings(settings, stored)
+            # Změna spojení (#446): odpojením se supervisor ConnectionManageru
+            # sám připojí znovu — už s novým hostem/portem/clientId. Pipeline
+            # se musí postavit znovu, subskripce patřily starému spojení.
+            if apply_connection_settings(settings, stored):
+                logger.info(
+                    "Změna připojení k IBKR — přepojuji na %s:%d",
+                    settings.ibkr_host,
+                    settings.ibkr_port,
+                )
+                ib.disconnect()
+                restart_pipelines = True
+            if restart_pipelines:
                 for symbol in list(pipelines):
                     pipelines.pop(symbol).stop()
 
@@ -660,6 +682,8 @@ async def main() -> None:
         else:
             run_list = [pipelines[symbol] for symbol in plan.start if symbol in pipelines]
         results = await gather_metrics(run_list, now)
+        # Účty čte ib_async z připojení; po přepojení se mohou změnit (#446)
+        account = classify_accounts(ib.managedAccounts())
         if results and full_run:
             await publisher.status(
                 engine="online",
@@ -669,6 +693,9 @@ async def main() -> None:
                 # Kolikrát TWS za běh odmítla market data (#417) — s platnými
                 # subskripcemi má zůstat na nule, růst je signál k prověření
                 subscription_errors=subscription_errors.total,
+                # Připojený účet (#446): uživatel musí poznat paper od živého
+                account=account.label,
+                account_paper=account.paper,
                 **aggregate_status(results),
             )
 
