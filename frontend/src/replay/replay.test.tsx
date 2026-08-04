@@ -423,6 +423,119 @@ test('appendMinute dá identický výsledek jako plný build (#127)', () => {
   expect(normalize(incremental)).toEqual(normalize(full))
 })
 
+// ── Díra ve sběru: osa X ze sjednocení snapshotů a barů (#459) ─────
+
+/** M1 = minuta, kdy sweep neproběhl: bar backfill dotáhl, snapshot chybí. */
+const MID = '2026-07-16T15:02:00Z'
+const CELLS_WITH_GAP: Cell[] = [
+  ...CELLS.filter((c) => c.ts === M0),
+  // M1 chybí — sweep neproběhl; snapshot je až o minutu později
+  { ts: MID, strike: 7600, right: 'C', volume: 30, oi: 100, delta: 0.5 },
+  { ts: MID, strike: 7600, right: 'P', volume: 12, oi: 200, delta: -0.4 },
+  { ts: MID, strike: 7610, right: 'C', volume: 20, oi: 80, delta: 0.45 },
+  { ts: MID, strike: 7610, right: 'P', volume: 6, oi: 90, delta: -0.3 },
+]
+const BARS_WITH_GAP = [
+  ...BARS,
+  { ts_min: MID, open: 7602, high: 7605, low: 7601, close: 7604, volume: 900 },
+]
+// Engine v díře nezapsal ani levels, ani flow
+const LEVELS_WITH_GAP = [
+  LEVELS[0],
+  { ts_min: MID, flip: 7596, centroid: 7599, call_wall: 7655, put_wall: 7505 },
+]
+const FLOW_WITH_GAP = [FLOW[0], { ts_min: MID, flow_delta: -20, cum_delta: 30 }]
+
+test('backfillovaná svíčka bez snapshotu dostane vlastní sloupec osy (#459)', () => {
+  const day = buildReplayDay(
+    bundleFor(CELLS_WITH_GAP, BARS_WITH_GAP, LEVELS_WITH_GAP, FLOW_WITH_GAP),
+  )
+
+  // Osa nese i minutu, kde máme jen cenu — bez toho by svíčky navazovaly
+  // a 1minutová díra by vypadala jako spojitý průběh
+  expect(day.minutes).toEqual([M0, M1, MID].map((ts) => ts.replace('Z', '.000Z')))
+  expect(day.overlays.price!.map((bar) => bar.minuteIdx)).toEqual([0, 1, 2])
+  expect(day.overlays.price!.map((bar) => bar.close)).toEqual([7600.5, 7602, 7604])
+})
+
+test('sloupec bez snapshotu se nevydává za měření (#459)', () => {
+  const day = buildReplayDay(
+    bundleFor(CELLS_WITH_GAP, BARS_WITH_GAP, LEVELS_WITH_GAP, FLOW_WITH_GAP),
+  )
+  const gapIdx = 1
+
+  // Profil z nul by tvrdil, že v celém řetězu není žádné OI
+  expect(day.profileByMinute.rowsAt(gapIdx)).toEqual([])
+  // Max Pain z nulového OI ukáže libovolný strike → v díře se nekreslí
+  const maxPain = day.overlays.levels!.find((line) => line.name === 'max_pain')!
+  expect(maxPain.series[gapIdx]).toBeNull()
+  // Levels tam engine nezapsal → přerušení linie, ne dokreslený soused
+  const flip = day.overlays.levels!.find((line) => line.name === 'flip')!
+  expect(flip.series[gapIdx]).toBeNull()
+})
+
+test('přírůstkové panely počítají přes díru, ne vůči nulovému sloupci (#459)', () => {
+  const day = buildReplayDay(
+    bundleFor(CELLS_WITH_GAP, BARS_WITH_GAP, LEVELS_WITH_GAP, FLOW_WITH_GAP),
+  )
+
+  // Bez přeskočení díry by OptVol v MID vyskočil na celé kumulativní volume
+  // (30+20 = 50 místo přírůstku 22 proti M0) — falešný špic po každém výpadku
+  expect(day.panels.optVolCall[1]).toBe(0) // díra sama nic nenaměřila
+  expect(day.panels.optVolCall[2]).toBeCloseTo(30 - 10 + (20 - 8), 5)
+  expect(day.panels.deltaFlowCall[1]).toBe(0)
+  expect(day.panels.deltaFlowCall[2]).toBeCloseTo((30 - 10) * 0.5 + (20 - 8) * 0.45, 5)
+  // CumΔ je kumulativní: v díře drží poslední známou hodnotu, nepropadá na nulu
+  expect(day.panels.cumDelta).toEqual([50, 50, 30])
+})
+
+test('append vsune minutu doprostřed osy a dá identický den jako plný build (#459)', () => {
+  // Bar dorazí dřív než snapshot (#135), takže bar-only minuta vznikne v ose
+  // a teprve pak přijde její snapshot — nová minuta se musí zařadit podle času
+  const full = buildReplayDay(
+    bundleFor(CELLS_WITH_GAP, BARS_WITH_GAP, LEVELS_WITH_GAP, FLOW_WITH_GAP),
+  )
+
+  const start = decodeBundle(
+    bundleFor(
+      CELLS_WITH_GAP.filter((c) => c.ts === M0),
+      [BARS[0], BARS_WITH_GAP[2]], // M0 + MID: minuta M1 v ose ještě chybí
+      [LEVELS[0]],
+      [FLOW[0]],
+    ),
+  )
+  expect(start.minutes).toEqual([M0, MID].map((ts) => ts.replace('Z', '.000Z')))
+
+  // Dozadu doplněná minuta M1 (jen bar) — patří mezi M0 a MID
+  const gapMinute: LiveMinute = {
+    tsIso: M1,
+    rows: [], // sweep neproběhl — jen cena z backfillu
+    bar: { open: 7600.5, high: 7603, low: 7600, close: 7602, volume: 1300 },
+  }
+  const withGap = appendMinute(start, gapMinute)
+  expect(withGap.minutes).toEqual([M0, M1, MID].map((ts) => ts.replace('Z', '.000Z')))
+  // MID zatím zná jen svůj bar — snapshot dorazí až dalším WS příchodem
+  expect(withGap.snapshotMinutes).toEqual([true, false, false])
+
+  // Snapshot MID se nesmí přenosem buněk posunout na cizí sloupec
+  const midSnapshot: LiveMinute = {
+    tsIso: MID,
+    rows: CELLS_WITH_GAP.filter((c) => c.ts === MID).map((c) => ({
+      strike: c.strike,
+      right: c.right,
+      oi: c.oi,
+      volume: c.volume,
+      delta: c.delta,
+    })),
+    bar: { open: 7602, high: 7605, low: 7601, close: 7604, volume: 900 },
+    levels: { flip: 7596, centroid: 7599, call_wall: 7655, put_wall: 7505 },
+    flow: { cum_delta: 30 },
+  }
+  const incremental = assembleReplayDay(appendMinute(withGap, midSnapshot))
+
+  expect(normalize(incremental)).toEqual(normalize(full))
+})
+
 test('bar aktuální wall-clock minuty je po dekódování bundle provizorní (#158)', () => {
   const bundle = bundleFor(CELLS, BARS, LEVELS, FLOW)
   // Reload uprostřed minuty M1: bar M1 je s jistotou rozdělaný → provizorní,

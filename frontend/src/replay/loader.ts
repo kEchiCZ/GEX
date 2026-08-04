@@ -127,6 +127,12 @@ export interface ReplayInputs {
   expiry: string
   date: string
   minutes: string[]
+  /** Paralelně k `minutes`: měla minuta opční snapshot? (#459)
+   *
+   * Osa X je sjednocení minut ze snapshotů a barů, takže po výpadku sběru
+   * existují sloupce, kde máme jen cenu. Matice tam nesou nuly a ty NEJSOU
+   * měření — kdo z nich počítá přírůstky nebo profil, musí je přeskočit. */
+  snapshotMinutes: boolean[]
   strikes: number[]
   callOi: Float32Array
   putOi: Float32Array
@@ -309,18 +315,22 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     throw new Error('Replay balík: snapshot tabulka nemá očekávané sloupce')
   }
 
-  const minuteKeys: string[] = []
-  const minuteIndex = new Map<string, number>()
+  // Osa X = sjednocení minut ze snapshotů a barů (#459). Backfill barů po
+  // výpadku (#225) doplní cenu i pro minuty, kdy opční sweep neběžel; kdyby se
+  // osa stavěla jen ze snapshotů, ty bary by se zahodily a graf by 46minutovou
+  // díru vykreslil jako spojitý průběh. Řadí se podle času, ne podle pořadí
+  // řádků — backfillovaná minuta patří doprostřed, ne na konec.
+  const snapshotTs = new Set<string>()
   const strikeSet = new Set<number>()
   const rowCount = table.numRows
   for (let row = 0; row < rowCount; row += 1) {
-    const ts = canonicalTs(tsColumn.get(row))
-    if (!minuteIndex.has(ts)) {
-      minuteIndex.set(ts, minuteKeys.length)
-      minuteKeys.push(ts)
-    }
+    snapshotTs.add(canonicalTs(tsColumn.get(row)))
     strikeSet.add(Number(strikeColumn.get(row)))
   }
+  const barTs = bundle.bars.map((bar) => canonicalTs(bar.ts_min))
+  const minuteKeys = [...new Set([...snapshotTs, ...barTs])].sort()
+  const minuteIndex = new Map(minuteKeys.map((ts, index) => [ts, index]))
+  const snapshotMinutes = minuteKeys.map((ts) => snapshotTs.has(ts))
   const strikes = [...strikeSet].sort((a, b) => a - b)
   const strikeIndex = new Map(strikes.map((strike, index) => [strike, index]))
   const minutes = minuteKeys.length
@@ -471,6 +481,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     expiry: bundle.expiry,
     date: bundle.date,
     minutes: minuteKeys,
+    snapshotMinutes,
     strikes,
     callOi,
     putOi,
@@ -509,9 +520,27 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   const existingIdx = inputs.minutes.indexOf(tsIso)
   const isAppend = existingIdx === -1
   const oldMinutes = inputs.minutes.length
-  const newMinutes = isAppend ? [...inputs.minutes, tsIso] : inputs.minutes
+  // Nová minuta patří tam, kam ji řadí čas — po #459 může osa nést bar-only
+  // minuty, takže „vždycky na konec" už neplatí. Běžný živý případ (novější než
+  // vše ostatní) vyjde na konec i tak, jen se k němu dojde přes hledání.
+  const insertAt = isAppend ? inputs.minutes.findIndex((existing) => existing > tsIso) : existingIdx
+  const targetMinute = isAppend && insertAt === -1 ? oldMinutes : insertAt
+  const newMinutes = isAppend
+    ? [...inputs.minutes.slice(0, targetMinute), tsIso, ...inputs.minutes.slice(targetMinute)]
+    : inputs.minutes
   const newMinuteCount = newMinutes.length
-  const targetMinute = isAppend ? oldMinutes : existingIdx
+  // Vsunutí doprostřed posouvá všechny minuty za sebou o jedna
+  const shift = (minuteIdx: number): number =>
+    isAppend && minuteIdx >= targetMinute ? minuteIdx + 1 : minuteIdx
+  const snapshotMinutes = isAppend
+    ? [
+        ...inputs.snapshotMinutes.slice(0, targetMinute),
+        minute.rows.length > 0,
+        ...inputs.snapshotMinutes.slice(targetMinute),
+      ]
+    : inputs.snapshotMinutes.map((has, index) =>
+        index === targetMinute ? has || minute.rows.length > 0 : has,
+      )
 
   const strikeSet = new Set(inputs.strikes)
   for (const row of minute.rows) strikeSet.add(row.strike)
@@ -536,7 +565,7 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     const newStrikeIdx = newStrikeIndex.get(inputs.strikes[oldStrikeIdx])!
     for (let minuteIdx = 0; minuteIdx < oldMinutes; minuteIdx += 1) {
       const from = oldStrikeIdx * oldMinutes + minuteIdx
-      const to = newStrikeIdx * newMinuteCount + minuteIdx
+      const to = newStrikeIdx * newMinuteCount + shift(minuteIdx)
       callOi[to] = inputs.callOi[from]
       putOi[to] = inputs.putOi[from]
       callVolume[to] = inputs.callVolume[from]
@@ -610,6 +639,7 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   return {
     ...inputs,
     minutes: newMinutes,
+    snapshotMinutes,
     strikes: newStrikes,
     callOi,
     putOi,
@@ -640,7 +670,13 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
   const price: PriceBar[] = []
   const provisionalMinutes: number[] = []
   let previousClose = Number.NaN
-  for (const bar of inputs.bars) {
+  // Bary se řadí podle osy, ne podle pořadí příchodu (#459): dozadu doplněná
+  // minuta (backfill, opožděný bar) by jinak skončila na konci pole a `up` by
+  // se počítalo vůči špatnému sousedovi — svíčka by dostala obrácenou barvu
+  const orderedBars = [...inputs.bars].sort(
+    (a, b) => (minuteIndex.get(a.tsIso) ?? -1) - (minuteIndex.get(b.tsIso) ?? -1),
+  )
+  for (const bar of orderedBars) {
     const minuteIdx = minuteIndex.get(bar.tsIso)
     if (minuteIdx !== undefined && Number.isFinite(bar.close)) {
       price.push({
@@ -680,10 +716,17 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
   }
   const grid = buildModeGrid(raw, 'oi', 'linear')
 
+  // Minuta bez snapshotu nese v maticích nuly, ne měření (#459) — Max Pain z
+  // nulového OI by ukázal libovolný strike, takže se v díře nekreslí vůbec
+  const hasSnapshot = (minuteIdx: number): boolean => inputs.snapshotMinutes[minuteIdx] !== false
+  const maxPain = maxPainSeries(raw).map((value, minuteIdx) =>
+    hasSnapshot(minuteIdx) ? value : null,
+  )
+
   const levels: LevelLine[] = [
     { name: 'flip', color: LEVEL_COLORS.flip, series: levelSeries('flip') },
     { name: 'centroid', color: LEVEL_COLORS.centroid, series: levelSeries('centroid') },
-    { name: 'max_pain', color: LEVEL_COLORS.max_pain, series: maxPainSeries(raw) },
+    { name: 'max_pain', color: LEVEL_COLORS.max_pain, series: maxPain },
     // Flow-adjusted levels (ADR-0011, #222): ODHAD z ranního OI + klasifikovaného
     // toku — čárkovaně (vizuální signál „model, ne měření"), přepínač „FA levels"
     { name: 'fa_flip', color: 'rgba(232,193,75,0.75)', dash: [8, 4], series: levelSeries('fa_flip') }, // prettier-ignore
@@ -719,19 +762,39 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     const minuteIdx = minuteIndex.get(bar.tsIso)
     if (minuteIdx !== undefined) vol[minuteIdx] = bar.volume
   }
-  const optVolCall = optVolSeries(inputs.callVolume, minutes, strikes.length)
-  const optVolPut = optVolSeries(inputs.putVolume, minutes, strikes.length)
+  // Přírůstkové panely počítají rozdíl vůči PŘEDCHOZÍ MĚŘENÉ minutě, ne vůči
+  // index-1 (#459): sloupec bez snapshotu má nulové kumulativní volume, takže
+  // by za dírou vyskočil falešný špic o velikosti celého dne
+  const measured = measuredMinutes(inputs.snapshotMinutes, minutes)
+  const optVolCall = optVolSeries(inputs.callVolume, minutes, strikes.length, measured)
+  const optVolPut = optVolSeries(inputs.putVolume, minutes, strikes.length, measured)
   const deltaFlowCall = deltaFlowSeries(
     inputs.callVolume,
     inputs.callDelta,
     minutes,
     strikes.length,
+    measured,
   )
-  const deltaFlowPut = deltaFlowSeries(inputs.putVolume, inputs.putDelta, minutes, strikes.length)
+  const deltaFlowPut = deltaFlowSeries(
+    inputs.putVolume,
+    inputs.putDelta,
+    minutes,
+    strikes.length,
+    measured,
+  )
+  // CumΔ je kumulativní: v díře držíme poslední známou hodnotu. Nula by tvrdila,
+  // že se tok vynuloval a zase vrátil — plochý úsek říká „nevíme o přírůstku",
+  // což je stav, ve kterém jsme opravdu byli.
   const cumDelta = Array.from({ length: minutes }, () => 0)
+  const cumDeltaByMinute = new Map<number, number>()
   for (const row of inputs.flow) {
     const minuteIdx = minuteIndex.get(row.tsIso)
-    if (minuteIdx !== undefined) cumDelta[minuteIdx] = row.cum_delta
+    if (minuteIdx !== undefined) cumDeltaByMinute.set(minuteIdx, row.cum_delta)
+  }
+  let lastCumDelta = 0
+  for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
+    lastCumDelta = cumDeltaByMinute.get(minuteIdx) ?? lastCumDelta
+    cumDelta[minuteIdx] = lastCumDelta
   }
 
   // ΔOI vs. předchozí archivovaný den téže expirace (null = není srovnání)
@@ -748,6 +811,9 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     length: minutes,
     rowsAt(minuteIdx: number): ProfileRow[] {
       if (minuteIdx < 0 || minuteIdx >= minutes) return []
+      // Minuta bez snapshotu (#459): profil z nul by ukázal prázdné pruhy jako
+      // měření, že v celém řetězu není žádné OI
+      if (!hasSnapshot(minuteIdx)) return []
       const cached = profileCache.get(minuteIdx)
       if (cached) return cached
       const spotAtMinute = price.find((bar) => bar.minuteIdx === minuteIdx)?.close ?? Number.NaN
@@ -816,18 +882,43 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
   return assembleReplayDay(decodeBundle(bundle))
 }
 
+/** Mapa „předchozí MĚŘENÁ minuta" pro přírůstkové panely (#459).
+ *
+ * `prev[i]` = index poslední minuty se snapshotem před `i`, nebo -1 (žádná —
+ * první měřená minuta dne, nebo minuta bez snapshotu). Přírůstky se počítají
+ * přes díru, ne vůči nulovému sloupci. */
+interface MeasuredMinutes {
+  measured: (minuteIdx: number) => boolean
+  prev: Int32Array
+}
+
+function measuredMinutes(snapshotMinutes: boolean[], minutes: number): MeasuredMinutes {
+  const measured = (minuteIdx: number): boolean => snapshotMinutes[minuteIdx] ?? true
+  const prev = new Int32Array(minutes).fill(-1)
+  let last = -1
+  for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
+    if (!measured(minuteIdx)) continue
+    prev[minuteIdx] = last
+    last = minuteIdx
+  }
+  return { measured, prev }
+}
+
 /** Δ Flow per minuta: Σ přes strikes |delta| × kladný přírůstek volume (SPEC 4.6 váhy). */
 function deltaFlowSeries(
   volume: Float32Array,
   delta: Float32Array,
   minutes: number,
   strikeCount: number,
+  measured: MeasuredMinutes,
 ): number[] {
   const series = Array.from({ length: minutes }, () => 0)
   for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
     for (let minuteIdx = 1; minuteIdx < minutes; minuteIdx += 1) {
+      const previous = measured.prev[minuteIdx]
+      if (previous < 0) continue
       const index = strikeIdx * minutes + minuteIdx
-      const increment = volume[index] - volume[index - 1]
+      const increment = volume[index] - volume[strikeIdx * minutes + previous]
       if (increment > 0) series[minuteIdx] += increment * Math.abs(delta[index])
     }
   }
@@ -835,12 +926,19 @@ function deltaFlowSeries(
 }
 
 /** OptVol per minuta: Σ kladných přírůstků kumulativního volume přes strikes. */
-function optVolSeries(volume: Float32Array, minutes: number, strikeCount: number): number[] {
+function optVolSeries(
+  volume: Float32Array,
+  minutes: number,
+  strikeCount: number,
+  measured: MeasuredMinutes,
+): number[] {
   const series = Array.from({ length: minutes }, () => 0)
   for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
     for (let minuteIdx = 1; minuteIdx < minutes; minuteIdx += 1) {
+      const previous = measured.prev[minuteIdx]
+      if (previous < 0) continue
       const index = strikeIdx * minutes + minuteIdx
-      const increment = volume[index] - volume[index - 1]
+      const increment = volume[index] - volume[strikeIdx * minutes + previous]
       if (increment > 0) series[minuteIdx] += increment
     }
   }
