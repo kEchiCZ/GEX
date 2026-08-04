@@ -152,6 +152,16 @@ export interface ReplayInputs {
   gexField: GexFieldRow | null
   /** GEX žebřík per minuta (#244). */
   ladder: LadderMinuteRow[]
+  /** Klíče `minuta|strike|strana`, pro které OI není k dispozici (#465).
+   *
+   * Množina místo pole: profil se na ni ptá per řádek při každém překreslení,
+   * takže lineární hledání by bylo O(strikes × chybějících) na minutu. */
+  oiMissing: Set<string>
+}
+
+/** Klíč do `ReplayInputs.oiMissing` — sjednocený tvar pro decode i append. */
+export function oiMissingKey(tsIso: string, strike: number, right: string): string {
+  return `${tsIso}|${strike}|${right}`
 }
 
 /** Jedna živá minuta z WS kanálů (#127) — snapshot řez + volitelně bar/levels/flow. */
@@ -213,6 +223,8 @@ interface ReplayBundle {
   levelsfa?: Array<Record<string, unknown>>
   /** GEX žebřík (#244) — starší API pole neposílá. */
   ladder?: Array<Record<string, unknown>>
+  /** Striky bez OI (#465) — v běžný den prázdné, starší API klíč neposílá. */
+  oimissing?: Array<Record<string, unknown>>
   /** Dyn GEX profily (ADR-0009, #203) — starší API pole neposílá. */
   gexprofile?: Array<Record<string, unknown>>
   /** Modelované pole (ADR-0009 fáze 2) — starší API klíč neposílá. */
@@ -458,6 +470,13 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     putShares: Array.isArray(row.put_shares) ? (row.put_shares as number[]).map(Number) : [],
   }))
 
+  // Striky bez OI (#465) — v běžný den řada neexistuje a množina zůstane prázdná
+  const oiMissing = new Set<string>(
+    (bundle.oimissing ?? []).map((row) =>
+      oiMissingKey(canonicalTs(row.ts_min), Number(row.strike), String(row.right)),
+    ),
+  )
+
   // Modelované pole (ADR-0009 fáze 2) — partice drží jen poslední stav
   const fieldRaw = (bundle.gexfield ?? []).at(-1)
   const fieldValues =
@@ -503,6 +522,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     gexProfile,
     gexField,
     ladder: ladderRows,
+    oiMissing,
   }
 }
 
@@ -636,6 +656,9 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
       }
     : inputs.gexField
 
+  // Chybějící OI chodí zatím jen v /replay balíku, ne po WS — živě příchozí
+  // minuta množinu nemění, ale musí ji propustit dál (jinak by ji append
+  // zahodil a šrafování by po první živé minutě zmizelo)
   return {
     ...inputs,
     minutes: newMinutes,
@@ -839,6 +862,9 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
             ? inputs.putOi[index] - (prevOi.get(`${strike}|P`) ?? 0)
             : null,
           staleAge: inputs.staleAge[index],
+          // Bez dat ≠ nula (#465): panel to kreslí šrafovaně
+          callOiMissing: inputs.oiMissing.has(oiMissingKey(minuteKeys[minuteIdx], strike, 'C')),
+          putOiMissing: inputs.oiMissing.has(oiMissingKey(minuteKeys[minuteIdx], strike, 'P')),
         }
       })
       profileCache.set(minuteIdx, rows)

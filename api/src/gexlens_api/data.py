@@ -59,6 +59,17 @@ class DataRepository:
         )
         return self._read(path)
 
+    def oi_missing(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """Striky bez OI (#465) — v běžný den řada neexistuje a čtení skončí prázdné."""
+        path = (
+            self._settings.derived_dir
+            / symbol
+            / expiry
+            / "oimissing"
+            / f"{day.isoformat()}.parquet"
+        )
+        return self._read(path)
+
     def ladder(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
         """GEX žebřík (#244) — top-N významných striků per strana a minutu."""
         path = (

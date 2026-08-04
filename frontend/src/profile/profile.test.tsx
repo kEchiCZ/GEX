@@ -112,6 +112,34 @@ test('niceCeil zaokrouhluje na 1/2/5×10^n (absolutní škála)', () => {
   expect(niceCeil(0)).toBe(1)
 })
 
+test('strike bez OI dostane šrafuru, změřená nula zůstane prázdná (#465)', () => {
+  const withMissing = rows()
+  withMissing[0] = { ...withMissing[0], callOiMissing: true }
+  // 7600 má OI změřené (nenulové) a 7590 put stranu taky — šrafovat se nesmí
+  const { container } = render(
+    <CrosshairProvider>
+      <StrikeProfile rows={withMissing} spot={7595} height={200} />
+    </CrosshairProvider>,
+  )
+
+  const hatched = container.querySelectorAll('[data-part="call-oi-missing"]')
+  expect(hatched).toHaveLength(1)
+  expect(hatched[0].getAttribute('fill')).toBe('url(#oi-missing-hatch)')
+  expect(container.querySelector('#oi-missing-hatch')).not.toBeNull() // pattern je v defs
+  expect(container.querySelectorAll('[data-part="put-oi-missing"]')).toHaveLength(0)
+})
+
+test('bez příznaku se nešrafuje nic (#465)', () => {
+  const { container } = render(
+    <CrosshairProvider>
+      <StrikeProfile rows={rows()} spot={7595} height={200} />
+    </CrosshairProvider>,
+  )
+
+  expect(container.querySelectorAll('[data-part="call-oi-missing"]')).toHaveLength(0)
+  expect(container.querySelectorAll('[data-part="put-oi-missing"]')).toHaveLength(0)
+})
+
 // ── Render a orientace (AC: rozložení a orientace dle Moodix) ─────
 
 function renderPanel() {

@@ -277,6 +277,19 @@ function StrikeProfileBase({
             setAxisHover(false)
           }}
         >
+          <defs>
+            {/* Šrafura pro striky bez OI (#465). Neutrální šedá schválně — barva
+            strany by vypadala jako naměřená hodnota. */}
+            <pattern
+              id="oi-missing-hatch"
+              width={6}
+              height={6}
+              patternUnits="userSpaceOnUse"
+              patternTransform="rotate(45)"
+            >
+              <line x1={0} y1={0} x2={0} y2={6} stroke="rgba(215,220,230,0.5)" strokeWidth={1.6} />
+            </pattern>
+          </defs>
           {/* symetrická osa */}
           <line x1={halfWidth} y1={0} x2={halfWidth} y2={svgHeight} stroke="#2c3342" />
           {/* popisky strikes (každý k-tý, ať se nepřekrývají) */}
@@ -368,6 +381,28 @@ function StrikeProfileBase({
                   fill={COLORS.putOi}
                   data-part="put-oi"
                 />
+                {/* Bez OI (#465): šrafovaná půlka řádku. Prázdno by tvrdilo změřenou
+                nulu — přitom archiv strike nepokrývá nebo ho IBKR nedodal. */}
+                {row.callOiMissing && (
+                  <rect
+                    x={halfWidth}
+                    y={y}
+                    width={barHalf}
+                    height={barHeight}
+                    fill="url(#oi-missing-hatch)"
+                    data-part="call-oi-missing"
+                  />
+                )}
+                {row.putOiMissing && (
+                  <rect
+                    x={halfWidth - barHalf}
+                    y={y}
+                    width={barHalf}
+                    height={barHeight}
+                    fill="url(#oi-missing-hatch)"
+                    data-part="put-oi-missing"
+                  />
+                )}
                 {/* Číselné hodnoty (Δ-vážené kontrakty) u konce pruhů — každý k-tý řádek */}
                 {index % labelEvery === 0 && row.callVolComponent + row.callOiComponent > 0 && (
                   <text
