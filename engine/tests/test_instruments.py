@@ -24,7 +24,9 @@ from gexlens_engine.ibkr.mock import MockIB, MockOIFetcher, MockQuoteStreamer
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.instruments import (
+    SETUP_RETRY_CYCLES,
     InstrumentPipeline,
+    SetupCooldown,
     WatchlistReader,
     aggregate_status,
     gather_metrics,
@@ -83,6 +85,44 @@ def test_plan_instruments_start_stop_and_cap() -> None:
     # Instrument nad stropem, který běžel, se zastaví
     over = plan_instruments(running=["GC"], desired=["ES", "NQ", "GC"], max_instruments=2)
     assert over.stop == ["GC"]
+
+
+# ── Cooldown setupu (#455) ─────────────────────────────────────────
+
+
+def test_setup_cooldown_blokuje_az_do_vyprseni() -> None:
+    cooldown = SetupCooldown(cycles=3)
+    cooldown.penalize("ES")
+
+    assert cooldown.blocked("ES")
+    assert not cooldown.blocked("NQ")  # netrestaný symbol jde založit hned
+
+    for _ in range(2):
+        cooldown.tick()
+        assert cooldown.blocked("ES")
+
+    cooldown.tick()
+    assert not cooldown.blocked("ES")
+
+
+def test_setup_cooldown_clear_uvolni_vse_a_hlasi_symboly() -> None:
+    """Regrese #455: po reconnectu musí pipeline naskočit hned, ne za 30 minut."""
+    cooldown = SetupCooldown(cycles=SETUP_RETRY_CYCLES)
+    cooldown.penalize("ES")
+    cooldown.penalize("NQ")
+
+    released = cooldown.clear()
+
+    assert set(released) == {"ES", "NQ"}  # volající to loguje
+    assert not cooldown.blocked("ES")
+    assert not cooldown.blocked("NQ")
+    assert cooldown.clear() == ()  # opakované volání je no-op
+
+
+def test_setup_cooldown_tick_na_prazdnem_nespadne() -> None:
+    cooldown = SetupCooldown()
+    cooldown.tick()
+    assert not cooldown.blocked("ES")
 
 
 # ── Watchlist z DB ─────────────────────────────────────────────────

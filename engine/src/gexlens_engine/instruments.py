@@ -64,6 +64,43 @@ class InstrumentSetupError(RuntimeError):
     """Instrument nejde nastartovat (neznámý symbol, chybí FOP řetězec, …)."""
 
 
+class SetupCooldown:
+    """Odklad dalšího pokusu o setup instrumentu po selhání.
+
+    Chrání před zakládáním pipeline u symbolu, který nastartovat NEJDE (neznámý
+    ticker, chybějící řetězec) — takový pokus by jinak běžel každou minutu.
+
+    Rozpadlé spojení chybou symbolu není (#455): po přepojení musí setup dostat
+    šanci hned, jinak uživatel opraví konfiguraci a graf zůstane prázdný celý
+    cooldown. Proto `clear()` — volá se po reconnectu i po změně parametrů
+    spojení ze Settings.
+    """
+
+    def __init__(self, cycles: int = SETUP_RETRY_CYCLES) -> None:
+        self._cycles = cycles
+        self._remaining: dict[str, int] = {}
+
+    def penalize(self, symbol: str) -> None:
+        """Symbol se přeskočí následujících `cycles` cyklů."""
+        self._remaining[symbol] = self._cycles
+
+    def tick(self) -> None:
+        """Odečte cyklus; symbol s vyčerpaným odkladem je zase způsobilý."""
+        for symbol in list(self._remaining):
+            self._remaining[symbol] -= 1
+            if self._remaining[symbol] <= 0:
+                del self._remaining[symbol]
+
+    def blocked(self, symbol: str) -> bool:
+        return symbol in self._remaining
+
+    def clear(self) -> tuple[str, ...]:
+        """Zruší všechny odklady; vrací uvolněné symboly kvůli logu."""
+        released = tuple(self._remaining)
+        self._remaining.clear()
+        return released
+
+
 def expiry_expired(expiry: str, today: dt.date) -> bool:
     """True, když expirace (YYYYMMDD) už proběhla — pipeline se musí překlopit.
 

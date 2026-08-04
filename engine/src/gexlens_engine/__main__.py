@@ -56,9 +56,9 @@ from gexlens_engine.ibkr.subscription import (
 )
 from gexlens_engine.ibkr.underlying import Bar, RealTimeBarAggregator, UnderlyingBackfiller
 from gexlens_engine.instruments import (
-    SETUP_RETRY_CYCLES,
     InstrumentPipeline,
     InstrumentSetupError,
+    SetupCooldown,
     WatchlistReader,
     aggregate_status,
     expiry_expired,
@@ -603,7 +603,19 @@ async def main() -> None:
 
     pipelines: dict[str, InstrumentPipeline] = {}
     # Symboly po selhaném setupu: cooldown v cyklech do dalšího pokusu
-    setup_cooldown: dict[str, int] = {}
+    setup_cooldown = SetupCooldown()
+
+    async def release_cooldown_after_reconnect() -> None:
+        """Po reconnectu se setup zkusí hned (#455).
+
+        Selhání ze staré, rozpadlé relace o novém spojení nic neříká; bez
+        uvolnění by pipeline naskočila až po SETUP_RETRY_CYCLES minutách.
+        """
+        released = setup_cooldown.clear()
+        if released:
+            logger.info("Reconnect ruší cooldown setupu: %s", ", ".join(released))
+
+    manager.on_resubscribe(release_cooldown_after_reconnect)
     desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
     cycle = 0
     force_watchlist = False
@@ -640,6 +652,10 @@ async def main() -> None:
                 )
                 ib.disconnect()
                 restart_pipelines = True
+                # Cooldown patřil starému spojení — na novém portu/hostu se
+                # musí zkusit hned, jinak uživatel opraví Settings a graf
+                # zůstane prázdný celý cooldown (#455)
+                setup_cooldown.clear()
             if restart_pipelines:
                 for symbol in list(pipelines):
                     pipelines.pop(symbol).stop()
@@ -655,11 +671,8 @@ async def main() -> None:
                 )
                 pipelines.pop(symbol).stop()
 
-        for symbol in list(setup_cooldown):
-            setup_cooldown[symbol] -= 1
-            if setup_cooldown[symbol] <= 0:
-                del setup_cooldown[symbol]
-        eligible = [symbol for symbol in desired if symbol not in setup_cooldown]
+        setup_cooldown.tick()
+        eligible = [symbol for symbol in desired if not setup_cooldown.blocked(symbol)]
 
         plan = plan_instruments(pipelines.keys(), eligible, settings.max_instruments)
         for symbol in plan.stop:
@@ -682,8 +695,13 @@ async def main() -> None:
                     fa_repository=fa_repository,
                     news_ticks=news_ticks,
                 )
+            except ConnectionError as exc:
+                # Spojení se rozpadlo uprostřed setupu (odhlášená TWS, restart
+                # Gateway). O symbolu to nevypovídá nic — cooldown by jen držel
+                # graf prázdný, i když se supervisor za pár vteřin přepojí (#455).
+                logger.warning("Setup %s přerušen výpadkem spojení: %s", symbol, exc)
             except InstrumentSetupError as exc:
-                setup_cooldown[symbol] = SETUP_RETRY_CYCLES
+                setup_cooldown.penalize(symbol)
                 logger.warning("Setup %s selhal: %s", symbol, exc)
                 await publisher.publish(
                     "alerts",
@@ -695,7 +713,7 @@ async def main() -> None:
                     },
                 )
             except Exception:
-                setup_cooldown[symbol] = SETUP_RETRY_CYCLES
+                setup_cooldown.penalize(symbol)
                 logger.exception("Setup %s selhal neočekávaně — cooldown", symbol)
         if plan.skipped:
             logger.warning(
