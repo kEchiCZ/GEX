@@ -280,6 +280,42 @@ def make_pipeline(
     )
 
 
+async def test_rozsirena_obalka_doarchivuje_nove_striky(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#465: 4. 8. vyjelo NQ 11 striků nad archivované pásmo a všechny měly v grafu nulu."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    today = TS.date()
+    puvodni = list(pipeline.runtime.contracts)
+
+    # Cena utekla nahoru → obálka se rozšířila o strike, který archiv nezná
+    novy = OptionContractSpec("ES", "FOP", "20260717", 7650.0, "C", "CME", "ES0", "50")
+    pipeline.runtime.contracts = [*puvodni, novy]
+    pipeline.archiver = OIArchiver(repository, MockOIFetcher({novy: 321.0}), settings)
+
+    await pipeline._archive_new_strikes(puvodni, today)
+
+    assert repository.get_oi("ES", today, 7650.0, "C") == 321.0
+    # Původní striky se nepřepisují — doarchivace se týká jen přírůstku
+    assert repository.get_oi("ES", today, puvodni[0].strike, puvodni[0].right) == 500.0
+
+
+async def test_doarchivace_bez_pridanych_striku_nedela_nic(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+
+    class ExplodingArchiver(OIArchiver):
+        async def archive_day(self, contracts, day, now=None):  # type: ignore[no-untyped-def]
+            raise AssertionError("archivace se nesmí volat, když nic nepřibylo")
+
+    pipeline.archiver = ExplodingArchiver(repository, MockOIFetcher(), settings)
+
+    await pipeline._archive_new_strikes(list(pipeline.runtime.contracts), TS.date())
+
+
 def test_oi_refresh_je_potreba_az_po_publikacnim_okne(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:

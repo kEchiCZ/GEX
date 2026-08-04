@@ -36,6 +36,7 @@ from gexlens_engine.storage.parquet_store import (
     LadderRow,
     Levels2Row,
     LevelsRow,
+    OiMissingRow,
     SnapshotRow,
     SnapshotWriter,
     WallDomRow,
@@ -145,18 +146,23 @@ class EngineRuntime:
         gex_inputs: list[GexInput] = []
         gex_specs: list[OptionContractSpec] = []
         profile_contracts: list[ProfileContract] = []
+        oi_missing: list[OiMissingRow] = []
         for spec in self.contracts:
             cached = quotes.get(spec)
             if cached is None:
                 continue
             snapshot = cached.snapshot
             age = cached.age_s(now_mono)
-            oi = (
-                self.oi_repository.get_oi(
-                    spec.symbol, day, spec.strike, spec.right, expiry=spec.expiry
-                )
-                or 0.0
+            archived_oi = self.oi_repository.get_oi(
+                spec.symbol, day, spec.strike, spec.right, expiry=spec.expiry
             )
+            # `None` = archiv strike nepokrývá (přibyl posunem pásma) nebo OI
+            # nedodalo IBKR. Do výpočtů jde 0.0 jako dřív (nulové OI přispívá
+            # nulou), ale strike se zapíše do vlastní řady — jinak by graf
+            # tvrdil změřenou nulu tam, kde nikdo nic nezměřil (#465)
+            if archived_oi is None:
+                oi_missing.append(OiMissingRow(ts_min=ts_min, strike=spec.strike, right=spec.right))
+            oi = archived_oi or 0.0
             rows.append(
                 SnapshotRow(
                     ts_min=ts_min,
@@ -245,6 +251,17 @@ class EngineRuntime:
         await asyncio.to_thread(
             self.writer.write_levels, self.symbol, self.expiry, day, [levels_row]
         )
+        # Striky bez OI (#465) — vlastní řada; v běžný den nevznikne vůbec
+        if oi_missing:
+            await asyncio.to_thread(
+                self.writer.write_oi_missing, self.symbol, self.expiry, day, oi_missing
+            )
+            logger.warning(
+                "%s %s: %d striků bez OI v archivu — v grafu se označí jako bez dat",
+                self.symbol,
+                ts_min.isoformat(),
+                len(oi_missing),
+            )
         # Sekundární zdi (ADR-0008) — vlastní řada, ať se nemění LEVELS_SCHEMA
         levels2_row = Levels2Row(
             ts_min=ts_min,
