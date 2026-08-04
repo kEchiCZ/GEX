@@ -125,6 +125,41 @@ def test_no_signals_in_neutral_or_below_gate(tmp_path: Path) -> None:
     assert seed_bucket_ok.run(NOW, state="Neutral") == 0  # Neutral negeneruje
 
 
+def test_rejects_are_counted_per_filter(tmp_path: Path) -> None:
+    """Rozpad důvodů odpadnutí (#453) — bez něj je prázdná `signals` němá."""
+    engine = make_db(tmp_path)
+    seed_event(engine, 1)
+    job = SignalJob(engine, tmp_path, symbols=("ES",))
+
+    # Bez bucket statistik odpadne kandidát hned na prvním filtru
+    assert job.run(NOW, state="RiskOn") == 0
+    assert job.last_rejects == {"bez_statistik": 1}
+
+    # Statistiky pod gate → posune se filtr, na kterém to padá
+    seed_bucket(engine, n=10)
+    assert job.run(NOW, state="RiskOn") == 0
+    assert job.last_rejects == {"gate": 1}
+
+    # Neutral: kandidát se načte, ale zastaví ho stav (a je to v počítadle)
+    assert job.run(NOW, state="Neutral") == 0
+    assert job.last_rejects == {"stav": 1}
+
+
+def test_combined_reject_is_counted_alongside_created_news_signal(tmp_path: Path) -> None:
+    """NEWS vznikne, COMBINED ne — chybějící GEX kontext musí být vidět."""
+    engine = make_db(tmp_path)
+    seed_event(engine, 1)
+    seed_bucket(engine)
+    job = SignalJob(engine, tmp_path, symbols=("ES",))
+
+    assert job.run(NOW, state="RiskOn") == 1
+    assert job.last_rejects == {"gex_chybi": 1}
+
+    # Druhý běh: NEWS už je dedupovaný, COMBINED pořád bez kontextu
+    assert job.run(NOW + dt.timedelta(minutes=1), state="RiskOn") == 0
+    assert job.last_rejects == {"gex_chybi": 1, "dedup": 1}
+
+
 def test_confirmed_state_change_expires_active_signals(tmp_path: Path) -> None:
     engine = make_db(tmp_path)
     seed_event(engine, 1)
