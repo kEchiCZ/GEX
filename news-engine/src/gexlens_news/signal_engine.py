@@ -33,6 +33,15 @@ SHORT = "short"
 GATE_MIN_SAMPLES = 30
 GATE_WILSON_LB = 0.50
 
+# Důvody, proč kandidát nedal signál (#453). Prázdná tabulka `signals` se
+# bez tohohle rozpadu nedá odlišit od poruchy — job je loguje po cyklech.
+REJECT_NO_STATS = "bez_statistik"
+REJECT_STALE = "necerstve"
+REJECT_GATE = "gate"
+REJECT_DIRECTION = "smer"
+REJECT_GEX_MISSING = "gex_chybi"  # blokuje jen COMBINED větev
+REJECT_GEX_CONFLICT = "gex_nesouhlas"  # dtto
+
 
 @dataclass(frozen=True)
 class BucketStats:
@@ -117,20 +126,29 @@ def _direction_for(event: SignalEvent, state: str, stats: BucketStats) -> str | 
     return None
 
 
-def evaluate_event(
+def explain_event(
     event: SignalEvent,
     *,
     state: str,
     stats: BucketStats | None,
     now: dt.datetime,
     gex: GexContext | None,
-) -> list[SignalCandidate]:
-    """Signály obou větví pro jeden event; prázdný seznam = žádný signál."""
-    if stats is None or not event_is_fresh(event, now) or not gate_passes(stats):
-        return []
+) -> tuple[list[SignalCandidate], list[str]]:
+    """Jako `evaluate_event`, ale vrací i důvody odpadnutí (#453).
+
+    Důvody jsou kumulativní jen v rámci větví: NEWS blokuje vždy nejvýš jeden
+    (vyhodnocuje se v pořadí statistiky → čerstvost → gate → směr), COMBINED
+    přidává svůj vlastní i tehdy, když NEWS signál vznikl.
+    """
+    if stats is None:
+        return [], [REJECT_NO_STATS]
+    if not event_is_fresh(event, now):
+        return [], [REJECT_STALE]
+    if not gate_passes(stats):
+        return [], [REJECT_GATE]
     direction = _direction_for(event, state, stats)
     if direction is None:
-        return []
+        return [], [REJECT_DIRECTION]
 
     tau = half_life_minutes(event.category, event.importance)
     expiry = event.ts_event + dt.timedelta(minutes=tau)
@@ -165,7 +183,12 @@ def evaluate_event(
         )
     ]
     # COMBINED jen s dostupným a souhlasným GEX kontextem (SPEC 6.1/6.3)
-    if gex is not None and gex.supports(direction):
+    reasons: list[str] = []
+    if gex is None:
+        reasons.append(REJECT_GEX_MISSING)
+    elif not gex.supports(direction):
+        reasons.append(REJECT_GEX_CONFLICT)
+    else:
         candidates.append(
             SignalCandidate(
                 direction=direction,
@@ -175,4 +198,17 @@ def evaluate_event(
                 inputs={**base_inputs, "gex": gex.snapshot()},
             )
         )
+    return candidates, reasons
+
+
+def evaluate_event(
+    event: SignalEvent,
+    *,
+    state: str,
+    stats: BucketStats | None,
+    now: dt.datetime,
+    gex: GexContext | None,
+) -> list[SignalCandidate]:
+    """Signály obou větví pro jeden event; prázdný seznam = žádný signál."""
+    candidates, _reasons = explain_event(event, state=state, stats=stats, now=now, gex=gex)
     return candidates

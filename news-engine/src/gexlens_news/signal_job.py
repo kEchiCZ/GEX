@@ -9,11 +9,14 @@
 * **potvrzená** změna stavu expiruje aktivní signály (unconfirmed jen
   badge v UI, SPEC 6.3) — `expiry_ts` je lifecycle pole, `inputs` immutable,
 * vyhodnocení à la prediction outcomes: realizovaný pohyb v oknech po
-  signálu → `signal_outcomes` (srovnání NEWS vs. COMBINED edge).
+  signálu → `signal_outcomes` (srovnání NEWS vs. COMBINED edge),
+* rozpad odpadlých kandidátů po filtrech do logu (#453) — prázdná `signals`
+  jinak vypadá stejně jako rozbitý job.
 """
 
 import datetime as dt
 import logging
+from collections import Counter
 from typing import Any
 
 import pyarrow.parquet as pq
@@ -35,7 +38,7 @@ from gexlens_news.signal_engine import (
     BucketStats,
     GexContext,
     SignalEvent,
-    evaluate_event,
+    explain_event,
     gate_passes,
 )
 
@@ -46,6 +49,10 @@ logger = logging.getLogger(__name__)
 CANDIDATE_LOOKBACK_HOURS = 8
 # Sklon CumΔ se měří přes tohle okno (SPEC 6.1 „směr a sklon CumΔ")
 CUM_DELTA_SLOPE_MINUTES = 10
+
+# Důvody odpadnutí, které patří jobu (ne čistým pravidlům) — viz #453
+REJECT_STATE = "stav"  # stav není RiskOn/RiskOff, negeneruje se vůbec
+REJECT_DEDUP = "dedup"  # týž (event, mode) už signál založil
 
 
 def load_gex_context(data_dir: Any, symbol: str, now: dt.datetime) -> GexContext | None:
@@ -130,6 +137,8 @@ class SignalJob:
         self._last_confirmed_state: str | None = None
         # Nové signály posledního běhu — volající je pushne do WS `signals`
         self.last_created: list[dict[str, Any]] = []
+        # Rozpad posledního běhu: důvod odpadnutí → počet (#453)
+        self.last_rejects: Counter[str] = Counter()
 
     # ── Kandidáti a statistiky ─────────────────────────────────────
 
@@ -313,23 +322,49 @@ class SignalJob:
 
     # ── Hlavní běh ─────────────────────────────────────────────────
 
+    def _log_cycle(self, state: str, candidates: int, created: int) -> None:
+        """Jeden řádek na cyklus: kolik kandidátů odpadlo a na kterém filtru.
+
+        Bez tohohle rozpadu se prázdná `signals` nedá odlišit od poruchy (#453);
+        kandidáti se proto načítají i ve stavu, kdy se negeneruje.
+        """
+        if not candidates:
+            return
+        breakdown = ", ".join(f"{reason}={n}" for reason, n in sorted(self.last_rejects.items()))
+        logger.info(
+            "Signály: %d nových z %d kandidátů (stav %s); odpadlo: %s",
+            created,
+            candidates,
+            state,
+            breakdown or "nic",
+        )
+
     def run(self, now: dt.datetime, *, state: str) -> int:
         """Jeden cyklus; vrací počet nových signálů (`last_created` pro WS)."""
         self.last_created = []
+        self.last_rejects = Counter()
         self._expire_on_state_change(state, now)
 
         created = 0
-        if state in ("RiskOn", "RiskOff"):
-            events = self._candidate_events(now)
+        events = self._candidate_events(now)
+        if state not in ("RiskOn", "RiskOff"):
+            # SPEC 6.3: mimo RiskOn/RiskOff se negeneruje — ale ať je vidět,
+            # kolik kandidátů na tomhle jediném filtru zůstalo viset
+            self.last_rejects[REJECT_STATE] += len(events) * len(self._symbols)
+        else:
             seen = self._already_signalled(now) if events else set()
             for symbol in self._symbols:
                 gex = load_gex_context(self._data_dir, symbol, now)
                 for event in events:
                     stats = self._bucket_stats(event, symbol, state)
-                    for candidate in evaluate_event(
+                    candidates, reasons = explain_event(
                         event, state=state, stats=stats, now=now, gex=gex
-                    ):
+                    )
+                    for reason in reasons:
+                        self.last_rejects[reason] += 1
+                    for candidate in candidates:
                         if (event.event_id, candidate.mode) in seen:
+                            self.last_rejects[REJECT_DEDUP] += 1
                             continue
                         row = {
                             "ts": now,
@@ -354,8 +389,6 @@ class SignalJob:
                                 "expiry_ts": candidate.expiry_ts.isoformat(),
                             }
                         )
-            if created:
-                logger.info("Signály: %d nových (stav %s)", created, state)
-
+        self._log_cycle(state, len(events) * len(self._symbols), created)
         self._evaluate_outcomes(now)
         return created
