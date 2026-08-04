@@ -262,6 +262,10 @@ class InstrumentPipeline:
     on_stop: Callable[[], None] = lambda: None
     spot: float = 0.0
     oi_available: bool = False
+    # Snímek OI je definitivní (#463): pořízený po publikačním okně a potvrzený
+    # druhým nezměněným čtením. Dokud ne, engine ho po okně obnovuje — jinak by
+    # se celý den držela předpublikační čísla, která vypadají jako platná data.
+    oi_final: bool = False
     # OI archiv pokrývá i další expirace (ΔOI vs. včera); None = jen aktivní řetěz
     archive_contracts: Sequence[OptionContractSpec] | None = None
     # Sekundární runtime následující expirace (čtení positioningu příští seance)
@@ -307,14 +311,40 @@ class InstrumentPipeline:
                 self.settings.greeks_stall_share, self.settings.greeks_stall_cycles
             )
 
-    async def try_archive_oi(self, today: dt.date) -> bool:
-        """Denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2)."""
-        if today in self.oi_repository.days(self.symbol):
+    def _oi_refresh_due(self, now: dt.datetime) -> bool:
+        """Má se existující snímek dne přečíst znovu? (#463)
+
+        Před publikačním oknem nemá smysl číst — IBKR finální čísla ještě nemá.
+        Po okně se čte, dokud dvě po sobě jdoucí čtení nedají totéž (`oi_final`);
+        potvrzení se do DB neukládá, takže po restartu proběhne jedno kontrolní
+        čtení navíc. To je levnější než další stav v schématu.
+        """
+        return now.hour >= self.settings.oi_publication_hour_utc and not self.oi_final
+
+    async def try_archive_oi(self, today: dt.date, now: dt.datetime | None = None) -> bool:
+        """Denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2).
+
+        Po #463 archivace nekončí prvním úspěchem: snímek z doby před publikací
+        IBKR nese neúplná čísla (4. 8. 2026 tak celý den běžel GEX na půlnočním
+        stavu, kde put strana měla Σ OI 1 877 proti 29 282 na call straně).
+        `now` je injektovatelné kvůli testům — rozhodnutí o obnově závisí na
+        hodině, takže by test jinak platil jen část dne.
+        """
+        now = now or dt.datetime.now(dt.UTC)
+        if today in self.oi_repository.days(self.symbol) and not self._oi_refresh_due(now):
             await self._run_fa_validation(today)
             return True
+        captured = self.oi_repository.captured_at(self.symbol, today)
+        if captured is not None and captured.hour < self.settings.oi_publication_hour_utc:
+            logger.info(
+                "OI archiv %s %s je z %s UTC, tedy před publikací — obnovuji",
+                self.symbol,
+                today,
+                captured.strftime("%H:%M"),
+            )
         contracts = self.archive_contracts or self.runtime.contracts
         try:
-            result = await self.archiver.archive_day(contracts, today)
+            result = await self.archiver.archive_day(contracts, today, now=now)
         except Exception:
             # Selhání archivace nesmí zabít pipeline (#215: MES CardinalityViolation
             # shodil celý řetěz do cooldownu) — sběr běží dál s volume fallbackem,
@@ -350,6 +380,12 @@ class InstrumentPipeline:
                 },
             )
             return False
+        # Finální je snímek pořízený po publikačním okně, jehož hodnoty se proti
+        # předchozímu čtení nezměnily — jedno čtení po okně nestačí, publikace
+        # může doběhnout zrovna mezi dvěma dávkami sweepu
+        if now.hour >= self.settings.oi_publication_hour_utc and not result.changed:
+            self.oi_final = True
+            logger.info("OI archiv %s %s je finální (dvě shodná čtení)", self.symbol, today)
         await self._run_fa_validation(today)
         await self._run_setup_selfcheck(today)
         return True
@@ -506,11 +542,13 @@ class InstrumentPipeline:
 
     async def run_minute(self, now: dt.datetime) -> SweepMetrics:
         """Jeden minutový cyklus instrumentu: OI retry, expanze obálky, runtime cyklus."""
-        if not self.oi_available:
+        # Retry běží nejen když OI chybí, ale i dokud snímek není finální (#463):
+        # předpublikační čísla jsou nenulová, takže se bez toho nikdy neobnoví
+        if not self.oi_available or self._oi_refresh_due(now):
             self._cycles_since_oi += 1
             if self._cycles_since_oi >= OI_RETRY_CYCLES:
                 self._cycles_since_oi = 0
-                self.oi_available = await self.try_archive_oi(now.date())
+                self.oi_available = await self.try_archive_oi(now.date(), now)
 
         spot = self._current_spot()
 

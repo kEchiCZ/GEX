@@ -280,6 +280,61 @@ def make_pipeline(
     )
 
 
+def test_oi_refresh_je_potreba_az_po_publikacnim_okne(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#463: před oknem se nečte (data nejsou), po okně dokud není potvrzeno."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    hour = settings.oi_publication_hour_utc
+
+    pred_oknem = dt.datetime(2026, 8, 4, hour - 1, 30, tzinfo=dt.UTC)
+    po_okne = dt.datetime(2026, 8, 4, hour, 5, tzinfo=dt.UTC)
+
+    assert pipeline._oi_refresh_due(pred_oknem) is False
+    assert pipeline._oi_refresh_due(po_okne) is True
+
+    # Potvrzený snímek se už neobnovuje
+    pipeline.oi_final = True
+    assert pipeline._oi_refresh_due(po_okne) is False
+
+
+async def test_predpublikacni_snimek_se_po_okne_prepise(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """Regrese #463: 4. 8. 2026 držel půlnoční snímek celý den (put Σ OI 1 877 vs 29 282 call)."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    today = TS.date()
+    specs = pipeline.runtime.contracts
+
+    # Půlnoční archivace uspěla, ale s předpublikačními čísly
+    repository.upsert_many(
+        [OIRecord("ES", spec.expiry, spec.strike, spec.right, today, 2.0) for spec in specs],
+        dt.datetime(2026, 8, 4, 0, 5, tzinfo=dt.UTC),
+    )
+    assert today in repository.days("ES")
+
+    # Po okně dodá IBKR kompletní hodnoty — mock fetcher vrací 500.0
+    pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings)
+    po_okne = dt.datetime(2026, 8, 4, settings.oi_publication_hour_utc, 5, tzinfo=dt.UTC)
+    assert await pipeline.try_archive_oi(today, po_okne) is True
+
+    assert repository.get_oi("ES", today, specs[0].strike, specs[0].right) == 500.0
+    assert pipeline.oi_final is False  # jedno čtení po okně nestačí
+
+    # Druhé čtení dá totéž → snímek je potvrzený a dál se neobnovuje
+    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert pipeline.oi_final is True
+
+    # A před oknem se předpublikační snímek nepřepisuje (data ještě nejsou)
+    pipeline.oi_final = False
+    pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 9.0)), settings)
+    pred_oknem = dt.datetime(2026, 8, 4, settings.oi_publication_hour_utc - 2, 0, tzinfo=dt.UTC)
+    assert await pipeline.try_archive_oi(today, pred_oknem) is True
+    assert repository.get_oi("ES", today, specs[0].strike, specs[0].right) == 500.0
+
+
 @pytest.fixture
 def env(tmp_path: Path) -> tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher]:
     settings = Settings(data_dir=tmp_path / "data")

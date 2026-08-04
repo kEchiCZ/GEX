@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
@@ -80,6 +80,62 @@ async def test_rerun_same_day_is_idempotent_upsert(repository: OIEodRepository) 
     )
     # Bez filtru se bere nejbližší expirace (deterministicky, žádný MultipleResultsFound)
     assert repository.get_oi("ES", DAY_1, specs[0].strike, specs[0].right) == 750.0
+
+
+async def test_captured_ts_zaznamenan_a_changed_hlasi_ustaleni(
+    repository: OIEodRepository,
+) -> None:
+    """#463: archiv nese čas pořízení a druhé shodné čtení hlásí `changed=False`."""
+    specs = contracts()
+    ranni = dt.datetime(2026, 7, 15, 0, 5, tzinfo=dt.UTC)
+    archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), Settings())
+
+    first = await archiver.archive_day(specs, DAY_1, now=ranni)
+
+    assert first.changed is True  # první snímek dne je vždy změna
+    assert repository.captured_at("ES", DAY_1) == ranni
+
+    # Publikace doběhla — jiné hodnoty, tedy ještě není ustáleno
+    po_publikaci = dt.datetime(2026, 7, 15, 12, 30, tzinfo=dt.UTC)
+    archiver_new = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 1500.0)), Settings())
+    second = await archiver_new.archive_day(specs, DAY_1, now=po_publikaci)
+
+    assert second.changed is True
+    assert repository.get_oi("ES", DAY_1, specs[0].strike, specs[0].right) == 1500.0
+    assert repository.captured_at("ES", DAY_1) == po_publikaci
+
+    # Třetí čtení dá totéž → ustáleno
+    third = await archiver_new.archive_day(
+        specs, DAY_1, now=dt.datetime(2026, 7, 15, 13, 0, tzinfo=dt.UTC)
+    )
+
+    assert third.changed is False
+
+
+def test_captured_at_bez_archivu_je_none(repository: OIEodRepository) -> None:
+    assert repository.captured_at("ES", DAY_1) is None
+
+
+async def test_migrace_doplni_captured_ts_stare_tabulce(tmp_path: Path) -> None:
+    """Řádky z doby před #463 mají NULL — berou se jako předpublikační."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'legacy.db'}")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE oi_eod (symbol VARCHAR(16), expiry VARCHAR(8), strike FLOAT,"
+                ' "right" VARCHAR(1), date DATE, oi FLOAT,'
+                ' PRIMARY KEY (symbol, expiry, strike, "right", date))'
+            )
+        )
+        conn.execute(
+            text("INSERT INTO oi_eod VALUES ('ES', '20260716', 7600.0, 'C', '2026-07-15', 123.0)")
+        )
+
+    repo = OIEodRepository(engine)
+    repo.ensure_schema()  # nesmí spadnout na existující tabulce bez sloupce
+
+    assert repo.get_oi("ES", DAY_1, 7600.0, "C") == 123.0
+    assert repo.captured_at("ES", DAY_1) is None
 
 
 async def test_duplicate_series_merged_by_sum(repository: OIEodRepository) -> None:

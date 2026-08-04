@@ -12,7 +12,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from sqlalchemy import Column, Date, Float, MetaData, String, Table, func, select
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    Float,
+    MetaData,
+    String,
+    Table,
+    func,
+    inspect,
+    select,
+    text,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
@@ -34,6 +46,10 @@ oi_eod_table = Table(
     Column("right", String(1), primary_key=True),
     Column("date", Date, primary_key=True),
     Column("oi", Float, nullable=False),
+    # Kdy snímek vznikl (#463). Archiv pořízený před publikačním oknem IBKR
+    # nese předpublikační čísla a musí se po okně přepsat — bez času pořízení
+    # to nejde poznat, protože i neúplná data jsou validní nenulová hodnota.
+    Column("captured_ts", DateTime(timezone=True), nullable=True),
 )
 
 
@@ -53,6 +69,9 @@ class ArchiveResult:
 
     written: int
     missing: tuple[OptionContractSpec, ...]
+    #: Lišila se nová čtení od toho, co už v archivu bylo? `True` i pro první
+    #: snímek dne. Dvě po sobě jdoucí nezměněná čtení = OI se ustálilo (#463).
+    changed: bool = True
 
 
 class OIFetcherLike(Protocol):
@@ -74,8 +93,31 @@ class OIEodRepository:
 
     def ensure_schema(self) -> None:
         metadata.create_all(self._engine)
+        self._migrate_captured_ts()
 
-    def upsert_many(self, records: Sequence[OIRecord]) -> None:
+    def _migrate_captured_ts(self) -> None:
+        """Doplní `captured_ts` do tabulky založené před #463.
+
+        Staré řádky zůstanou s NULL — u nich čas pořízení neznáme, takže se
+        berou jako předpublikační a po okně se přepíšou. To je bezpečnější
+        volba: přepsat správnou hodnotu stejnou hodnotou nic nezkazí, kdežto
+        ponechat předpublikační snímek zkazí GEX na celý den.
+        """
+        inspector = inspect(self._engine)
+        if not inspector.has_table(oi_eod_table.name):
+            return
+        columns = {col["name"] for col in inspector.get_columns(oi_eod_table.name)}
+        if "captured_ts" in columns:
+            return
+        column_type = "TIMESTAMPTZ" if self._engine.dialect.name == "postgresql" else "TIMESTAMP"
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(f"ALTER TABLE {oi_eod_table.name} ADD COLUMN captured_ts {column_type}")
+            )
+
+    def upsert_many(
+        self, records: Sequence[OIRecord], captured_ts: dt.datetime | None = None
+    ) -> None:
         """Idempotentní zápis: opakovaný běh týž den aktualizuje hodnoty (upsert)."""
         if not records:
             return
@@ -87,6 +129,7 @@ class OIEodRepository:
                 "right": r.right,
                 "date": r.day,
                 "oi": r.oi,
+                "captured_ts": captured_ts,
             }
             for r in records
         ]
@@ -96,12 +139,17 @@ class OIEodRepository:
         if dialect == "postgresql":
             pg_stmt = pg_insert(oi_eod_table).values(rows)
             stmt = pg_stmt.on_conflict_do_update(
-                index_elements=primary_key, set_={"oi": pg_stmt.excluded.oi}
+                index_elements=primary_key,
+                set_={"oi": pg_stmt.excluded.oi, "captured_ts": pg_stmt.excluded.captured_ts},
             )
         elif dialect == "sqlite":
             sqlite_stmt = sqlite_insert(oi_eod_table).values(rows)
             stmt = sqlite_stmt.on_conflict_do_update(
-                index_elements=primary_key, set_={"oi": sqlite_stmt.excluded.oi}
+                index_elements=primary_key,
+                set_={
+                    "oi": sqlite_stmt.excluded.oi,
+                    "captured_ts": sqlite_stmt.excluded.captured_ts,
+                },
             )
         else:
             raise ValueError(f"Nepodporovaný databázový dialekt pro upsert: {dialect!r}")
@@ -117,6 +165,38 @@ class OIEodRepository:
         )
         with self._engine.connect() as conn:
             return [row.date for row in conn.execute(stmt)]
+
+    def captured_at(self, symbol: str, day: dt.date) -> dt.datetime | None:
+        """Kdy vznikl snímek dne; None = archiv chybí NEBO je z doby před #463.
+
+        Obě situace vedou ke stejnému závěru (snímek je potřeba po publikačním
+        okně obnovit), takže je volající nemusí rozlišovat — na existenci
+        archivu je `days()`.
+        """
+        stmt = select(func.max(oi_eod_table.c.captured_ts)).where(
+            oi_eod_table.c.symbol == symbol,
+            oi_eod_table.c.date == day,
+        )
+        with self._engine.connect() as conn:
+            captured: dt.datetime | None = conn.execute(stmt).scalar_one_or_none()
+        if captured is None:
+            return None
+        # sqlite vrací naivní datetime — archiv je vždy v UTC
+        return captured if captured.tzinfo is not None else captured.replace(tzinfo=dt.UTC)
+
+    def snapshot(self, symbol: str, day: dt.date) -> dict[tuple[str, float, str], float]:
+        """Archivované OI dne podle klíče (expirace, strike, strana) — pro porovnání."""
+        stmt = select(
+            oi_eod_table.c.expiry,
+            oi_eod_table.c.strike,
+            oi_eod_table.c["right"],
+            oi_eod_table.c.oi,
+        ).where(oi_eod_table.c.symbol == symbol, oi_eod_table.c.date == day)
+        with self._engine.connect() as conn:
+            return {
+                (row.expiry, float(row.strike), row.right): float(row.oi)
+                for row in conn.execute(stmt)
+            }
 
     def latest_day_before(self, symbol: str, expiry: str, day: dt.date) -> dt.date | None:
         """Poslední archivovaný den dané expirace před `day` (základ pro ΔOI)."""
@@ -183,7 +263,10 @@ class OIArchiver:
         self._settings = settings
 
     async def archive_day(
-        self, contracts: Sequence[OptionContractSpec], day: dt.date
+        self,
+        contracts: Sequence[OptionContractSpec],
+        day: dt.date,
+        now: dt.datetime | None = None,
     ) -> ArchiveResult:
         """Stáhne OI všech kontraktů (po dávkách) a idempotentně zapíše do DB."""
         records: list[OIRecord] = []
@@ -233,10 +316,21 @@ class OIArchiver:
                 day,
                 len(records) - len(deduped),
             )
-        await asyncio.to_thread(self._repository.upsert_many, deduped)
+        # Porovnání s archivem PŘED zápisem (#463): dvě po sobě jdoucí nezměněná
+        # čtení znamenají, že IBKR publikaci dokončil a snímek je finální
+        previous = (
+            await asyncio.to_thread(self._repository.snapshot, deduped[0].symbol, day)
+            if deduped
+            else {}
+        )  # prettier-ignore
+        changed = not previous or any(
+            previous.get((r.expiry, r.strike, r.right)) != r.oi for r in deduped
+        )
+        captured_ts = now or dt.datetime.now(dt.UTC)
+        await asyncio.to_thread(self._repository.upsert_many, deduped, captured_ts)
         if missing:
             logger.warning("OI archivace %s: %d kontraktů bez OI", day, len(missing))
-        return ArchiveResult(written=len(deduped), missing=tuple(missing))
+        return ArchiveResult(written=len(deduped), missing=tuple(missing), changed=changed)
 
     async def _fetch_one(self, spec: OptionContractSpec) -> float | None:
         try:
