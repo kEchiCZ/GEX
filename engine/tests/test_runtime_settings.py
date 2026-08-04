@@ -6,6 +6,7 @@ from gexlens_engine.config import Settings
 from gexlens_engine.runtime_settings import (
     RUNTIME_SETTINGS,
     RuntimeSetting,
+    apply_connection_settings,
     apply_runtime_settings,
     coerce_setting,
 )
@@ -87,3 +88,34 @@ def test_out_of_range_value_is_clamped_not_ignored() -> None:
     settings = base_settings()
     apply_runtime_settings(settings, {"hot_zone_width": 999})
     assert settings.hot_zone_width == 50
+
+
+# ── Parametry spojení (#446) ──────────────────────────────────────────
+
+
+def test_connection_settings_apply_and_request_reconnect() -> None:
+    settings = base_settings()
+    changed = apply_connection_settings(
+        settings, {"ibkr_host": "192.168.1.10", "ibkr_port": 7497, "ibkr_client_id": 5}
+    )
+
+    assert changed is True  # volající se musí přepojit
+    assert settings.ibkr_host == "192.168.1.10"
+    assert settings.ibkr_port == 7497
+    assert settings.ibkr_client_id == 5
+
+
+def test_connection_settings_ignore_empty_host_and_unchanged_values() -> None:
+    """Prázdný host by engine poslal připojovat se „nikam"."""
+    settings = base_settings()
+    before = settings.ibkr_host
+
+    assert apply_connection_settings(settings, {"ibkr_host": "   "}) is False
+    assert apply_connection_settings(settings, {"ibkr_port": settings.ibkr_port}) is False
+    assert settings.ibkr_host == before
+
+
+def test_connection_port_is_clamped_to_valid_range() -> None:
+    settings = base_settings()
+    apply_connection_settings(settings, {"ibkr_port": 99999})
+    assert settings.ibkr_port == 65535

@@ -70,6 +70,41 @@ RUNTIME_SETTINGS: tuple[RuntimeSetting, ...] = (
 )
 
 
+# Parametry spojení (#446). Nejdou aplikovat přepsáním za běhu jako ostatní —
+# spojení se navazuje při startu, takže po změně se engine musí přepojit.
+# Uživatel je má v Settings vedle ostatních a čeká, že po uložení začnou platit;
+# odkazovat ho do `.env` je špatná odpověď.
+CONNECTION_SETTINGS: tuple[RuntimeSetting, ...] = (
+    RuntimeSetting(key="ibkr_port", minimum=1, maximum=65535, integer=True),
+    RuntimeSetting(key="ibkr_client_id", minimum=0, maximum=999, integer=True),
+)
+
+
+def apply_connection_settings(settings: Settings, values: dict[str, object]) -> bool:
+    """Promítne host/port/clientId; `True` = je potřeba se přepojit.
+
+    Host je řetězec, takže se validuje zvlášť — prázdná hodnota by engine
+    poslala připojovat se „nikam".
+    """
+    changed = False
+    host = values.get("ibkr_host")
+    if isinstance(host, str) and host.strip() and host.strip() != settings.ibkr_host:
+        logger.info("Runtime změna ibkr_host: %s → %s", settings.ibkr_host, host.strip())
+        settings.ibkr_host = host.strip()
+        changed = True
+    for spec in CONNECTION_SETTINGS:
+        raw = values.get(spec.key)
+        if raw is None:
+            continue
+        new_value = coerce_setting(raw, spec, settings)
+        if new_value is None or new_value == getattr(settings, spec.key):
+            continue
+        logger.info("Runtime změna %s: %s → %s", spec.key, getattr(settings, spec.key), new_value)
+        setattr(settings, spec.key, new_value)
+        changed = True
+    return changed
+
+
 def coerce_setting(value: object, spec: RuntimeSetting, settings: Settings) -> float | int | None:
     """Hodnota z UI převedená a sevřená do mezí; `None` = nepoužitelná.
 

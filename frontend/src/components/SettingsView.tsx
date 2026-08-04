@@ -92,7 +92,7 @@ function SettingRow({ children, help }: { children: React.ReactNode; help: React
 }
 
 export function SettingsView() {
-  const { theme, setTheme } = useAppState()
+  const { theme, setTheme, status } = useAppState()
   const { values, put } = useServerSettings()
   // Rozepsané změny; prázdný objekt = nic k uložení
   const [draft, setDraft] = useState<Record<string, unknown>>({})
@@ -176,9 +176,22 @@ export function SettingsView() {
           </label>
         </SettingRow>
         <p className="muted">
-          Spojení se navazuje při startu, takže tyhle tři hodnoty si engine{' '}
-          <strong>nepřebírá za běhu</strong> — po uložení ho restartuj (
-          <code>docker compose restart engine</code>).
+          Po uložení se engine sám přepojí — restartovat ho není potřeba. Přepojení na pár sekund
+          přeruší sběr dat.
+        </p>
+        <p className="muted" data-testid="account-info">
+          {status.engine === 'online' && status.account ? (
+            <>
+              Připojeno k účtu <strong>{status.account}</strong>.{' '}
+              {status.account_paper === true
+                ? 'Paper účet — data jsou reálná, obchody nikoli.'
+                : status.account_paper === false
+                  ? 'ŽIVÝ účet.'
+                  : ''}
+            </>
+          ) : (
+            'Účet neznámý — engine není připojený k TWS.'
+          )}
         </p>
       </section>
 

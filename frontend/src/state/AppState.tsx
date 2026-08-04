@@ -18,6 +18,9 @@ export interface PipelineStatus {
   disk_limit_bytes?: number
   last_tick_ts?: string
   news_available?: boolean
+  /** Připojený IBKR účet (#446) — „DU1234567 (paper)"; paper flag zvlášť pro barvu. */
+  account?: string
+  account_paper?: boolean | null
   updated_at?: number | null
 }
 
