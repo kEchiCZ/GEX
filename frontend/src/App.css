@@ -439,6 +439,19 @@ body {
   gap: 18px;
 }
 
+/* Nápověda k parametru (#438): vysvětlení pod polem, ne v tooltipu — meze
+   musí být vidět dřív, než uživatel hodnotu změní */
+.settings .setting-field {
+  margin-bottom: 10px;
+}
+
+.settings .setting-help {
+  margin: 2px 0 0;
+  max-width: 70ch;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .console h2,
 .settings h2 {
   font-size: 13px;

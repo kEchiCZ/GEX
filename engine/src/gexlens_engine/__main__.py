@@ -53,7 +53,6 @@ from gexlens_engine.instruments import (
     InstrumentSetupError,
     WatchlistReader,
     aggregate_status,
-    clamp_strike_range,
     expiry_expired,
     gather_metrics,
     merge_symbols,
@@ -62,6 +61,7 @@ from gexlens_engine.instruments import (
     read_watchlist,
 )
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
+from gexlens_engine.runtime_settings import RUNTIME_SETTINGS, apply_runtime_settings
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
 from gexlens_engine.storage.fa_validation import FaValidationRepository
@@ -569,19 +569,13 @@ async def main() -> None:
         if force_watchlist or cycle % settings.watchlist_poll_cycles == 0:
             force_watchlist = False
             desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
-            # Přepínač alertu chyb subskripce (#417) — čte se ze stejného poll cyklu
-            flag = await asyncio.to_thread(watchlist_reader.setting, "subscription_alert_enabled")
-            subscription_alerts["enabled"] = flag is not False
-            # Runtime šířka pásma strikes ze Settings UI (vidět vzdálená křídla)
-            override = await asyncio.to_thread(watchlist_reader.setting, "strike_range_points")
-            new_range = clamp_strike_range(override, settings) if override is not None else None
-            if new_range is not None:
-                logger.info(
-                    "Runtime změna rozsahu strikes: %g → %g bodů — pipeline se překlopí",
-                    settings.strike_range_points,
-                    new_range,
-                )
-                settings.strike_range_points = new_range
+            # Nastavení laditelná za běhu ze Settings UI (#438) — jedním dotazem.
+            # Do #438 se četl jen rozsah strikes; retence, disk limit, velikost
+            # dávky a hot zóna se uložily, ale engine je nikdy nepřečetl.
+            keys = [spec.key for spec in RUNTIME_SETTINGS] + ["subscription_alert_enabled"]
+            stored = await asyncio.to_thread(watchlist_reader.settings_map, keys)
+            subscription_alerts["enabled"] = stored.get("subscription_alert_enabled") is not False
+            if apply_runtime_settings(settings, stored):
                 for symbol in list(pipelines):
                     pipelines.pop(symbol).stop()
 

@@ -14,16 +14,62 @@ interface NumberField {
   key: string
   label: string
   fallback: number
+  /** K čemu parametr je — uživatel nemá číst kód, aby to zjistil (#438). */
+  help: string
+  /** Meze, které engine stejně vynutí (`runtime_settings.py`); hodnota mimo ně
+      se srovná na nejbližší povolenou, ne zahodí. */
+  min: number
+  max: number
+  /** Změna si vynutí znovupostavení pipeline (na pár sekund vypadnou data). */
+  restarts?: boolean
 }
 
+// Meze i chování musí odpovídat RUNTIME_SETTINGS v enginu — jinak UI slibuje
+// něco jiného, než engine udělá
 const ENGINE_FIELDS: NumberField[] = [
-  { key: 'strike_range_points', label: 'Rozsah strikes (± body)', fallback: 200 },
-  { key: 'batch_size', label: 'Velikost dávky', fallback: 80 },
-  { key: 'hot_zone_width', label: 'Šířka hot zóny (± strikes)', fallback: 15 },
-  // Fallbacky musí odpovídat defaultům enginu, jinak pole ukazuje nepravdu
-  // (engine tyhle dvě hodnoty zatím čte z konfigurace, ne z DB — viz #438)
-  { key: 'retention_days', label: 'Retence (dny)', fallback: 90 },
-  { key: 'disk_limit_gb', label: 'Disk limit (GB)', fallback: 5 },
+  {
+    key: 'strike_range_points',
+    label: 'Rozsah strikes (± body)',
+    fallback: 200,
+    min: 50,
+    max: 400,
+    restarts: true,
+    help: 'Jak široké pásmo strikes kolem spotu se sbírá. Víc bodů = vidíš vzdálená křídla (pojistky hluboko OTM), ale roste počet kontraktů a tím i zátěž subskripcí. Strop 400 je polovina denní obálky.',
+  },
+  {
+    key: 'batch_size',
+    label: 'Velikost dávky',
+    fallback: 80,
+    min: 10,
+    max: 100,
+    restarts: true,
+    help: 'Kolik kontraktů se najednou přihlásí k odběru kotací. Nezvyšuj nad 100 — účet má ověřenou kapacitu ~150 souběžných market data lines (ADR-0001) a rezerva patří hot zóně a podkladu. Vyšší hodnota vede na IBKR error 101.',
+  },
+  {
+    key: 'hot_zone_width',
+    label: 'Šířka hot zóny (± strikes)',
+    fallback: 15,
+    min: 1,
+    max: 50,
+    restarts: true,
+    help: 'Kolik strikes kolem ATM se klasifikuje tick-by-tick (nejpřesnější čtení agresora). Účet zvládne jen 5 souběžných tick-by-tick streamů, takže se zóna stejně ořízne od ATM ven — zbytek jede přes midpoint test. Zvyšovat má smysl až po dokoupení Quote Booster packů.',
+  },
+  {
+    key: 'retention_days',
+    label: 'Retence (dny)',
+    fallback: 90,
+    min: 1,
+    max: 3650,
+    help: 'Po kolika dnech noční úklid maže snapshoty a odvozené řady. Delší okno = můžeš se dívat na starší dny a přehrávat historii, ale roste místo na disku (~17 MB/den pro ES+NQ). OI archiv, setupy a signály se nemažou nikdy bez ohledu na tuto hodnotu.',
+  },
+  {
+    key: 'disk_limit_gb',
+    label: 'Disk limit (GB)',
+    fallback: 5,
+    min: 0.5,
+    max: 1000,
+    help: 'Nad tímto obsazením složky s daty přijde alert. Není to tvrdý strop — data se dál zapisují, jen upozorní. Drž ho nad očekávaným obsazením při zvolené retenci, jinak bude hlásit planě.',
+  },
 ]
 
 export function SettingsView() {
@@ -54,6 +100,11 @@ export function SettingsView() {
     <main className="settings" aria-label="Settings">
       <section aria-label="IBKR">
         <h2>IBKR</h2>
+        <p className="muted">
+          Parametry spojení na TWS / IB Gateway. Na rozdíl od sekce Engine se{' '}
+          <strong>neprojeví za běhu</strong> — spojení se navazuje při startu, takže po změně je
+          potřeba restartovat engine (<code>docker compose restart engine</code>).
+        </p>
         <label>
           Host
           <input
@@ -69,6 +120,12 @@ export function SettingsView() {
             onChange={(event) => put('ibkr_port', Number(event.target.value))}
           />
         </label>
+        <p className="muted setting-help">
+          <em>
+            7496 = TWS živý účet, 7497 = TWS paper, 4001 / 4002 = IB Gateway (živý / paper). Musí
+            odpovídat portu v TWS → Global Configuration → API → Settings.
+          </em>
+        </p>
         <label>
           Client ID
           <input
@@ -77,19 +134,40 @@ export function SettingsView() {
             onChange={(event) => put('ibkr_client_id', Number(event.target.value))}
           />
         </label>
+        <p className="muted setting-help">
+          <em>
+            Odlišuje připojené aplikace. Každá musí mít vlastní číslo (0–999) — se stejným ID by
+            engine odpojil jinou aplikaci připojenou na TWS. Měň jen při konfliktu.
+          </em>
+        </p>
       </section>
 
       <section aria-label="Engine">
         <h2>Engine</h2>
+        <p className="muted">
+          Změny si engine přebírá do 5 minut za běhu. Hodnotu mimo povolený rozsah srovná na
+          nejbližší povolenou — nerozbiješ tím sběr dat.
+        </p>
         {ENGINE_FIELDS.map((field) => (
-          <label key={field.key}>
-            {field.label}
-            <input
-              type="number"
-              value={Number(values[field.key] ?? field.fallback)}
-              onChange={(event) => put(field.key, Number(event.target.value))}
-            />
-          </label>
+          <div className="setting-field" key={field.key}>
+            <label>
+              {field.label}
+              <input
+                type="number"
+                min={field.min}
+                max={field.max}
+                value={Number(values[field.key] ?? field.fallback)}
+                onChange={(event) => put(field.key, Number(event.target.value))}
+              />
+            </label>
+            <p className="muted setting-help">
+              {field.help}{' '}
+              <em>
+                Rozsah {field.min}–{field.max}, výchozí {field.fallback}.
+                {field.restarts ? ' Změna nakrátko přeruší sběr dat instrumentu.' : ''}
+              </em>
+            </p>
+          </div>
         ))}
       </section>
 
