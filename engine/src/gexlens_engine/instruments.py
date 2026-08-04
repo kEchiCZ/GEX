@@ -157,21 +157,17 @@ class WatchlistReader:
             ).fetchone()
         return None if row is None else row[0]
 
-
-def clamp_strike_range(value: object, settings: Settings) -> float | None:
-    """Validní nová šířka pásma z runtime nastavení; None = beze změny/nevalidní.
-
-    Meze: minimálně 50 bodů (smysluplné pásmo), maximálně polovina
-    strike_range_max_points (invariant konfigurace: max ≥ 2× šířka).
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        return None
-    try:
-        points = float(value)
-    except ValueError:
-        return None
-    clamped = min(max(points, 50.0), settings.strike_range_max_points / 2)
-    return None if clamped == settings.strike_range_points else clamped
+    def settings_map(self, keys: Sequence[str]) -> dict[str, object]:
+        """Víc klíčů najednou (#438) — jeden dotaz místo N na každý poll cyklus."""
+        if not keys:
+            return {}
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                select(settings_table.c.key, settings_table.c.value).where(
+                    settings_table.c.key.in_(list(keys))
+                )
+            ).fetchall()
+        return {str(row[0]): row[1] for row in rows}
 
 
 @dataclass

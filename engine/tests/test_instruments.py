@@ -103,20 +103,6 @@ def test_watchlist_reader_roundtrip(tmp_path: Path) -> None:
     assert reader.setting("strike_range_points") == 400
 
 
-def test_clamp_strike_range() -> None:
-    from gexlens_engine.instruments import clamp_strike_range
-
-    settings = Settings(data_dir=Path("data"))  # default 200, max 800
-    assert clamp_strike_range(400, settings) == 400.0
-    assert clamp_strike_range("300", settings) == 300.0
-    assert clamp_strike_range(10, settings) == 50.0  # spodní mez
-    assert clamp_strike_range(9999, settings) == 400.0  # strop max/2
-    assert clamp_strike_range(200, settings) is None  # beze změny
-    assert clamp_strike_range("nesmysl", settings) is None
-    assert clamp_strike_range(True, settings) is None
-    assert clamp_strike_range({"x": 1}, settings) is None
-
-
 def test_oi_prev_day_queries(tmp_path: Path) -> None:
     """ΔOI vs. včera: poslední archivovaný den před datem + hodnoty daného dne."""
     repository = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
