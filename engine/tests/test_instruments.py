@@ -567,3 +567,66 @@ def test_closed_since_ignores_active_and_older_window(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert rows[0].outcome_r == 2.0
     assert setups.closed_since("NQ", TS - dt.timedelta(days=7)) == []
+
+
+async def test_secondary_expiry_band_expands_with_price(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """Obálka sekundární expirace musí sledovat cenu (#442).
+
+    Do #442 ji `create_pipeline` nastavil jednou při startu a `maybe_expand` se
+    na ni nevolal — 3. 8. tak zamrzla na 28290–28680, cena vyrostla na 28925
+    a heatmapa i zdi následující expirace se nad horním strikem přestaly kreslit.
+    """
+    settings, writer, oi_repository, publisher = env
+    spot = 7500.0
+    pipeline = make_pipeline("ES", spot, settings, writer, oi_repository, publisher)
+
+    # Sekundár se stejnou nabídkou strikes jako aktivní řetěz, ale širší osou
+    strikes = tuple(spot + offset for offset in range(-400, 401, 10))
+    next_info = ExpiryInfo(
+        trading_class="ES1",
+        expiry="20260718",
+        exchange="CME",
+        multiplier="50",
+        strikes=strikes,
+    )
+    next_band = select_band(next_info.strikes, spot, settings.strike_range_points)
+    underlying = Underlying(symbol="ES", sec_type="FUT", exchange="CME", con_id=1)
+    pipeline.next_info = next_info
+    pipeline.next_band = next_band
+    pipeline.next_runtime = EngineRuntime(
+        settings=settings,
+        scheduler=SubscriptionScheduler(MockQuoteStreamer(), settings),
+        writer=writer,
+        oi_repository=oi_repository,
+        publisher=publisher,
+        symbol="ES",
+        expiry=next_info.expiry,
+        multiplier=50.0,
+        contracts=build_contracts(underlying, next_info, next_band),
+        cum_delta=CumDeltaTracker(multiplier=50.0),
+        push_status=False,
+        secondary=True,
+    )
+    original_high = next_band.high
+
+    # Cena vyběhne k hornímu okraji pásma — stejná situace jako 3. 8.
+    pipeline._expand_secondary(spot=original_high - 5.0)
+
+    assert pipeline.next_band is not None
+    assert pipeline.next_band.high > original_high
+    # Kontrakty sekundáru se musí přestavět, jinak se nová šířka nikam nepropíše
+    assert max(c.strike for c in pipeline.next_runtime.contracts) > original_high
+
+
+async def test_secondary_expansion_noop_without_secondary_runtime(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """Bez sekundáru (vypnutý sweep_next_expiry) se nesmí nic stát."""
+    settings, writer, oi_repository, publisher = env
+    pipeline = make_pipeline("ES", 7500.0, settings, writer, oi_repository, publisher)
+
+    pipeline._expand_secondary(spot=9999.0)  # nesmí spadnout
+
+    assert pipeline.next_band is None

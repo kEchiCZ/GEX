@@ -198,6 +198,11 @@ class InstrumentPipeline:
     archive_contracts: Sequence[OptionContractSpec] | None = None
     # Sekundární runtime následující expirace (čtení positioningu příští seance)
     next_runtime: EngineRuntime | None = None
+    # Obálka sekundáru se musí roztahovat stejně jako aktivní (#442) — bez toho
+    # zamrzla na hodnotě ze startu pipeline a při trendovém dni cena utekla nad
+    # horní strike (3. 8.: pásmo 28290–28680, cena 28925 → graf uříznutý)
+    next_info: ExpiryInfo | None = None
+    next_band: StrikeBand | None = None
     # Setup detektor (ADR-0004) — None = vypnuto
     setup_engine: SetupEngine | None = None
     # Indikátor tendence (#350) — None = vypnuto
@@ -394,6 +399,33 @@ class InstrumentPipeline:
                 },
             )
 
+    def _expand_secondary(self, spot: float) -> None:
+        """Roztažení obálky sekundární expirace (#442).
+
+        Sekundár dostával pásmo jen jednou při startu pipeline, takže při
+        trendovém dni cena utekla nad horní strike a jeho heatmapa i zdi se
+        nad tou hranicí přestaly kreslit. Rozšiřuje se stejnou logikou jako
+        aktivní řetěz; `capped` se u něj nealertuje — o stropu obálky
+        informuje už alert aktivního řetězu a druhý by jen zdvojoval.
+        """
+        if self.next_runtime is None or self.next_info is None or self.next_band is None:
+            return
+        expansion = self.discovery.maybe_expand(self.next_info, self.next_band, spot)
+        if not expansion.expanded:
+            return
+        self.next_band = expansion.band
+        self.next_runtime.contracts = build_contracts(
+            _underlying_for(self.symbol, self.next_info), self.next_info, self.next_band
+        )
+        logger.info(
+            "Obálka sekundární expirace %s %s rozšířena na %g–%g (%d kontraktů)",
+            self.symbol,
+            self.next_info.expiry,
+            self.next_band.low,
+            self.next_band.high,
+            len(self.next_runtime.contracts),
+        )
+
     def _current_spot(self) -> float:
         last = self.ticker.last
         if last == last:  # není NaN
@@ -414,7 +446,8 @@ class InstrumentPipeline:
 
         spot = self._current_spot()
 
-        # Auto-rozšíření denní obálky (ADR-0002)
+        # Auto-rozšíření denní obálky (ADR-0002) — aktivní i sekundární řetěz (#442)
+        self._expand_secondary(spot)
         expansion = self.discovery.maybe_expand(self.info, self.band, spot)
         if expansion.expanded:
             self.band = expansion.band

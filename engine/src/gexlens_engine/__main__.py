@@ -31,7 +31,13 @@ from gexlens_engine.ibkr.connection import (
     ConnectionManager,
     ConnectionState,
 )
-from gexlens_engine.ibkr.discovery import ChainDiscovery, Underlying, build_contracts
+from gexlens_engine.ibkr.discovery import (
+    ChainDiscovery,
+    ExpiryInfo,
+    StrikeBand,
+    Underlying,
+    build_contracts,
+)
 from gexlens_engine.ibkr.newsticks import (
     NewsTickCollector,
     NewsTickLike,
@@ -327,11 +333,13 @@ async def create_pipeline(
     # Následující expirace (čtení positioningu příští seance): sekundární runtime
     # sweepuje v nižší kadenci, píše jen snapshots + levels své expirace
     next_runtime: EngineRuntime | None = None
+    next_info: ExpiryInfo | None = None
+    next_band: StrikeBand | None = None
     if settings.sweep_next_expiry and len(infos) > 1:
         next_info = infos[1]
-        next_contracts = build_contracts(
-            underlying, next_info, discovery.initial_band(next_info, spot)
-        )
+        # Pásmo se dál roztahuje v run_cycle (#442) — bez toho zamrzlo na startu
+        next_band = discovery.initial_band(next_info, spot)
+        next_contracts = build_contracts(underlying, next_info, next_band)
         next_runtime = EngineRuntime(
             settings=settings,
             scheduler=SubscriptionScheduler(streamer, settings),
@@ -424,6 +432,8 @@ async def create_pipeline(
         spot=spot,
         archive_contracts=archive_contracts,
         next_runtime=next_runtime,
+        next_info=next_info,
+        next_band=next_band,
         backfill_today=backfill_today,
         fa_repository=fa_repository,
         setup_engine=(
