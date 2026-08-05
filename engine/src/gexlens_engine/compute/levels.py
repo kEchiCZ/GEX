@@ -188,7 +188,7 @@ def compute_ladder(
 ) -> list[LadderEntry]:
     """GEX žebřík (#244): top-N významných striků per strana dle |NetGEX|.
 
-    Kooperovo čtení „parametrů": zelené call úrovně nad cenou, červené put pod
+    Čtení „parametrů": zelené call úrovně nad cenou, červené put pod
     ní. Filtr podílu na kladné síle strany (metrika dominance, ADR-0010)
     vynechá šumové lokální extrémy — žebřík ukazuje JEN významné úrovně.
     Řazeno silou sestupně, per strana max top_n příček.

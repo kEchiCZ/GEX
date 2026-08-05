@@ -2,7 +2,7 @@
 
 **Stav:** přijato (2026-07-21, rozhodl uživatel)
 **Kontext:** SPEC v2.0 (kap. 7.2) popisuje heatmapu jen nad naměřenými minutami —
-osa X končí posledním snapshotem. Referenční nástroj (Moodix) kreslí gamma
+osa X končí posledním snapshotem. Užitečnější je kreslit gamma
 plochu až do konce seance, i tam, kde ještě žádná cena není.
 
 ## Problém

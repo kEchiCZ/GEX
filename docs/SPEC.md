@@ -1,7 +1,7 @@
 # GEXLens — Kompletní funkční a technická specifikace
 **Verze 2.0 · 16. 7. 2026 · Autor zadání: Roman (ROHOR Studio)**
 
-> Cíl: **plně funkční, spustitelná aplikace** (nikoli MVP) pro vizualizaci opčního positioningu (GEX/OI/Vol heatmapa) nad ES futures opcemi, s jediným datovým zdrojem **Interactive Brokers TWS/Gateway API**. Vzor UX: Moodix v2.7.0.
+> Cíl: **plně funkční, spustitelná aplikace** (nikoli MVP) pro vizualizaci opčního positioningu (GEX/OI/Vol heatmapa) nad ES futures opcemi, s jediným datovým zdrojem **Interactive Brokers TWS/Gateway API**.
 
 ---
 
@@ -76,7 +76,7 @@ Engine a API server běží jako dva procesy (nebo jeden proces se dvěma asynci
 
 ### 3.2 Discovery opčního řetězce
 - `reqSecDefOptParams` na podklad (ES futures → FOP, exchange CME/GLOBEX; akcie/indexy → OPT, SMART).
-- ES weekly trading classes: `E1A–E5A` (po), … `E1E–E5E`? — **implementační úkol: enumerovat skutečné tradingClass z API**, minimálně denní weeklies (E1C–E5C styl viditelný v Moodixu jako „E3C"), EOM (`EW`), kvartální (`ES`). Selektor expirace v UI zobrazuje tradingClass + datum.
+- ES weekly trading classes: `E1A–E5A` (po), … `E1E–E5E`? — **implementační úkol: enumerovat skutečné tradingClass z API**, minimálně denní weeklies (styl E1C–E5C), EOM (`EW`), kvartální (`ES`). Selektor expirace v UI zobrazuje tradingClass + datum.
 - Rozsah strikes: konfigurovatelné pásmo ±X bodů od spotu (default ±200 pro ES, tj. ~180 strikes), s automatickým rozšířením, pokud se spot přiblíží k okraji na < 25 % pásma.
 
 ### 3.3 Rotační scheduler subskripcí (celý řetězec)

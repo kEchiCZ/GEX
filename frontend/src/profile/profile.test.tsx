@@ -140,7 +140,7 @@ test('bez příznaku se nešrafuje nic (#465)', () => {
   expect(container.querySelectorAll('[data-part="put-oi-missing"]')).toHaveLength(0)
 })
 
-// ── Render a orientace (AC: rozložení a orientace dle Moodix) ─────
+// ── Render a orientace (AC: rozložení a orientace dle referenčního návrhu) ─────
 
 function renderPanel() {
   return render(
