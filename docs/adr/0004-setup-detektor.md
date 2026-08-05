@@ -2,7 +2,7 @@
 
 **Stav:** navrženo (2026-07-18, čeká na schválení šablon uživatelem)
 **Kontext:** Uživatel chce, aby aplikace analyzovala vývoj ceny v kontextu GEX
-positioningu (jako to dělá ručně workflow A. Koopera) a dávala **indicie**:
+positioningu (jako ruční workflow diskrečního tradera) a dávala **indicie**:
 na jakých úrovních a za jakých podmínek long/short, s cílem a stop lossem.
 Analýzy se ukládají a automaticky vyhodnocují proti realitě, aby se jejich
 váha časem zpřesňovala. SPEC v2.0 tuto funkci nepokrývá.

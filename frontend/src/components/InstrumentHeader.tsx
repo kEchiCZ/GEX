@@ -50,7 +50,7 @@ export function InstrumentHeader({
   } = useAppState()
   const [alertsOpen, setAlertsOpen] = useState(false)
   const live = status.engine === 'online'
-  // Odpočet do expirace se obnovuje po minutě (velké expirace = velké OI, Moodix workflow)
+  // Odpočet do expirace se obnovuje po minutě (velké expirace = velké OI)
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60_000)

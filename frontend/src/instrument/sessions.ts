@@ -1,4 +1,4 @@
-/** Automatické seance markery světových burz (SPEC 7.2 Sessions, Moodix styl).
+/** Automatické seance markery světových burz (SPEC 7.2 Sessions).
 
 Časy jsou uložené jako LETNÍ UTC; US a evropské seance dostávají aproximaci
 DST (#159) — mimo letní čas se posouvají o hodinu později. Aproximace pracuje

@@ -1,6 +1,6 @@
 /** Pravý strike profil panel (SPEC 4.6/7.3): skládané pruhy C/P, zoom, cenová linka.
 
-Orientace dle Moodix: call doprava (teal), put doleva (červená), symetrická osa
+Orientace: call doprava (teal), put doleva (červená), symetrická osa
 uprostřed. Složky Vol (sytý odstín) a OI Δ (světlejší) jsou skládané. Osa strikes
 je sdílená s heatmapou (stejné pořadí, nejvyšší strike nahoře) a crosshair se
 synchronizuje přes sdílený kontext.

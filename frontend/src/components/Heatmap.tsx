@@ -286,7 +286,7 @@ export function Heatmap({
 
   const contourSegments = useMemo(() => {
     if (contours === 'off') return []
-    // S Dyn GEX podkladem (#242) obrysují kontury modelované pole (Moodix look);
+    // S Dyn GEX podkladem (#242) obrysují kontury modelované pole;
     // podklad má z App zaručené shodné rozměry s hlavním gridem
     const source =
       underGrid &&
@@ -529,7 +529,7 @@ export function Heatmap({
       context.setLineDash([])
     }
 
-    // Horizontální projekce úrovní přes celou šířku s popiskem (Moodix styl).
+    // Horizontální projekce úrovní přes celou šířku s popiskem.
     // Jen pojmenované úrovně (flip/walls/centroid/max pain) — počítané walls řady ne.
     // Popisek bez podkladového obdélníku: hodnota NAD čarou v barvě čáry.
     // Max Pain je plnou čarou s textem „Max Pain" vpravo před osou Y.

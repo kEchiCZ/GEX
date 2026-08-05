@@ -552,7 +552,7 @@ Speciální případ červeného režimu s opačným ranním chováním. Když t
 
 - **Nastavení:** mód **OI+OTM** (ranní OI + denní volume na OTM) + vrstva **Dyn GEX** + **kontury Major** — bílá kontura ohraničující červenou masu pod cenou je ten okraj; v projekční zóně vidíš, kam se během dne stočí.
 - **Čtení:** dokud cena drží **nad okrajem**, ranní pullbacky k němu jsou nákupní příležitosti s cílem u Max Pain / první zelené zóny. Není to směrová sázka — je to mean-reversion tažená hedgingem.
-- **Bonus naší aplikace:** **FA levels** ukazují, kam tok masu přes den stěhuje, dřív než to potvrdí ranní OI (Moodix tuhle vrstvu nemá) — 23. 7. FA předpověděl posun put zdi 7500→7475 tři hodiny předem.
+- **Bonus naší aplikace:** **FA levels** ukazují, kam tok masu přes den stěhuje, dřív než to potvrdí ranní OI — 23. 7. FA předpověděl posun put zdi 7500→7475 tři hodiny předem.
 - **Neplatí, když:** cena okraj ztratí (zpět běžný červený playbook — průrazy dolů), nebo když puty pod trhem nejsou čerstvé (ΔOI ≈ 0 — stará masa už je zahedgovaná).
 
 ### Playbook: večer (crunch, poslední ~90 minut)

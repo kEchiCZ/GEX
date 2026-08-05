@@ -2,7 +2,7 @@
 
 **Stav:** přijato (2026-07-22, rozhodl uživatel — issue #203)
 **Kontext:** SPEC v2.0 popisuje heatmapu nad NAMĚŘENÝMI daty (OI/volume per
-strike). Referenční nástroj (Moodix) kreslí navíc modelované pole „Dyn GEX":
+strike). Chybí modelované pole „Dyn GEX":
 dealer gamma expozici přepočtenou pro hypotetické ceny přes celé pásmo a čas.
 Odpovídá na otázku „jakou gammu potká cena na úrovni X v čase T", kterou
 měřená mapa z principu zodpovědět neumí.
@@ -71,7 +71,7 @@ měřená mapa z principu zodpovědět neumí.
 ## Dodatek 2026-07-23 (#242)
 
 Mód „Dyn GEX" překlopen na **samostatnou podkladovou vrstvu** (checkbox v řádku
-přepínačů), kombinovatelnou s libovolným měřeným módem — dle Moodix vzoru
-(Kooperovo čtení ES 23. 7.: OI+OTM + Dyn GEX najednou). Pole se kreslí POD
+přepínačů), kombinovatelnou s libovolným měřeným módem — typické čtení je
+OI+OTM + Dyn GEX najednou. Pole se kreslí POD
 měřený grid (alfa kompozice), kontury při zapnuté vrstvě obrysují pole.
 Výpočty (gexmode.ts, projekce fáze 2) beze změny.

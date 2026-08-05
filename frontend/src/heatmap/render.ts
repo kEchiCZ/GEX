@@ -100,7 +100,7 @@ export const DEFAULT_SIGNED_PALETTE: SignedPalette = {
 }
 /** Charm: jantarová kladná, modrá záporná (#204). */
 export const CHARM_PALETTE: SignedPalette = { pos: [235, 170, 40], neg: [70, 130, 240] }
-/** Vanna: teal kladná, fialová záporná (#204, Moodix vzor). */
+/** Vanna: teal kladná, fialová záporná (#204). */
 export const VANNA_PALETTE: SignedPalette = { pos: [20, 190, 170], neg: [150, 80, 230] }
 
 export function renderGrid(

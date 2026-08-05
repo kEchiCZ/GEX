@@ -579,7 +579,7 @@ function MainContent() {
     ]
   }, [toggles.ladder, day.ladder, grid.minutes, playback.position])
 
-  // Σ souhrn přes expirace v pravém profilu (Kooperovo čtení celkového positioningu)
+  // Σ souhrn přes expirace v pravém profilu (čtení celkového positioningu napříč expiracemi)
   const [aggregateOn, setAggregateOn] = useState(false)
   const aggregateRows = useAggregateProfile(
     symbol,

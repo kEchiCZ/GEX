@@ -2,7 +2,7 @@
 **Verze 1.3 · 27. 7. 2026 · Zadání pro implementaci v Claude Code**
 *(v1.1: topic indexy, sentiment waves, RiskOn/RiskOff/Neutral, review fronta, Signal engine s režimy OFF/NEWS/COMBINED, bezpečnost S10 · v1.2: sentiment svíčky, statistika vln, track record, ranní retro pass, záložka Stats · v1.3: revize po review — kontinuální SentIndex bez resetu, point-in-time disciplína S11, věčný archiv 1min barů, signály počítané vždy, Wilson gate, kontaminovaná okna, per-okno vyhodnocení predikcí, verzovaná klasifikace, kalibrační/vyhodnocovací split, Reddit + CNN F&G místo Stocktwits, crowd data mimo SentIndex, víkendové deferred reakce, oprava rout a milestones)*
 
-> Cíl: sbírat market-moving zprávy z více free zdrojů do **jednotného formátu**, časově je synchronizovat s reakcí ES/NQ, učit se z historických reakcí typickou odezvu trhu na daný typ zprávy a z toho průběžně počítat **sentiment index** jako podpůrný signál pro vstup/výstup. Metodicky obdoba Moodix Index (běžící suma impact skóre jednotlivých zpráv), ale nad vlastními daty. **Systém se nesmí učit šum** — všechna opatření k tomu (kontaminace oken, Wilson gate, immutable predikce, kalibrační split) jsou závazná.
+> Cíl: sbírat market-moving zprávy z více free zdrojů do **jednotného formátu**, časově je synchronizovat s reakcí ES/NQ, učit se z historických reakcí typickou odezvu trhu na daný typ zprávy a z toho průběžně počítat **sentiment index** jako podpůrný signál pro vstup/výstup. Metodicky běžící suma impact skóre jednotlivých zpráv, nad vlastními daty. **Systém se nesmí učit šum** — všechna opatření k tomu (kontaminace oken, Wilson gate, immutable predikce, kalibrační split) jsou závazná.
 
 ---
 
@@ -17,7 +17,7 @@
 | S5 | **Zprávy, reakce a skóre se archivují bez časového limitu** (čistý text, řádově KB–MB/den) — jsou to trénovací data, výjimka z 14denní retence stejně jako OI archiv |
 | S6 | Pouze free zdroje a free API tiery; rate limity jsou tvrdá omezení architektury, ne výjimky |
 | S7 | Žádné stahování obrázků/videí — jen čas, titulek, stručný text, strukturovaná pole |
-| S8 | Výstupní stav sentimentu je diskretizovaný: **RiskOn / RiskOff / Neutral** (dle Moodix vzoru), odvozený z kontinuálního SentIndexu a sentiment waves |
+| S8 | Výstupní stav sentimentu je diskretizovaný: **RiskOn / RiskOff / Neutral**, odvozený z kontinuálního SentIndexu a sentiment waves |
 | S9 | **Signal engine (Long/Short nápověda) se počítá a ukládá vždy** (po splnění gate 6.2) — uživatelský přepínač OFF · NEWS · COMBINED řídí pouze zobrazení a notifikace, ne výpočet. Jinak by track record (7.3) neměl data. Default zobrazení OFF. Signály jsou vždy jen nápověda, nikdy automatická exekuce |
 | S10 | **Žádná tajemství v gitu.** API klíče, přihlašovací údaje a identifikátory účtů existují výhradně lokálně (`.env` / lokální config mimo repo). Repo obsahuje jen `.env.example` s prázdnými placeholdery; `.gitignore` kryje `.env*`, `config.local.*`; pre-commit hook se secret-scannerem (gitleaks) blokuje commit klíčů; logy a `raw` payloady se před uložením čistí od tokenů v URL |
 | S11 | **Point-in-time disciplína.** Predikce a signály jsou immutable záznamy se snapshotem vstupů platných v okamžiku vzniku. Klasifikace se nikdy nepřepisuje in-place — verzuje se append-only (2.3). Track record a hit-raty se počítají výhradně z point-in-time dat; zpětná reklasifikace nikdy nemění minulé predikce, signály ani track record |
@@ -179,7 +179,7 @@ Běžící suma vážených impact skóre s exponenciálním dohasínáním (τ 
 Stejný výpočet jako SentIndex, ale filtrovaný per kategorie: `TopicIndex_cat(t)`. Topic index se **aktivuje**, jakmile kategorie nasbírá ≥ N eventů v klouzavém okně (default N=5 / 24 h, konfig.) — ukazuje, který narativ aktuálně trhem hýbe (FED vs. geopolitika vs. makro). Aktivní topicy vrací API seřazené dle |kumulativního skóre|. Ukládání shodné se SentIndexem.
 
 ### 5.6 Sentiment waves a stav RiskOn/RiskOff/Neutral
-Dlouhodobá vrstva nad intradenním indexem (Moodix vzor):
+Dlouhodobá vrstva nad intradenním indexem:
 - Denní hodnota sentimentu = denní close kontinuálního SentIndexu (PostgreSQL, navždy) → z ní klouzavé průměry **MA5** a **MA10**.
 - **Vlna (wave):** RiskOn, když denní sentiment > MA5 > MA10 (a zrcadlově RiskOff); přechody detekované na denním close, intradenně jen „unconfirmed" indikace.
 - **Stav (state):** `RiskOn / RiskOff / Neutral`. **Výchozí pravidla jsou pinnutá zde** (konfig je jen override, jinak nejdou psát golden testy): RiskOn ⇔ close > MA5 > MA10 ∧ hloubka aktuální vlny ≥ potvrzovací práh; RiskOff zrcadlově; vše ostatní Neutral. Potvrzovací práh = průměrná hloubka historických vln opačného směru (adaptivní, ze `sentiment_waves`); dokud historie vln neexistuje, práh = 0 (stav čistě z MA podmínky).

@@ -19,7 +19,7 @@ export const HEATMAP_MODES = [
   { value: 'vex', label: 'VEX' },
   { value: 'vex_signed', label: 'VEX ±' },
 ] as const
-/** Dyn GEX už není mód, ale samostatný overlay přepínač (#242, à la Moodix) —
+/** Dyn GEX už není mód, ale samostatný overlay přepínač (#242) —
     hodnota v typu zůstává kvůli gridům z gexmode.ts a persistovaným volbám. */
 export type HeatmapMode = (typeof HEATMAP_MODES)[number]['value'] | 'dyn_gex'
 /** Módy počítané ze surové snapshot matice — Dyn GEX má vlastní stavbu (gexmode.ts). */
