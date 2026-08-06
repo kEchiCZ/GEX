@@ -325,22 +325,18 @@ export function StatsView() {
         fetchTrackRecord(),
         fetchSignals(1000),
         fetchSourceLatency(),
-        fetchSetups(symbol),
-      ]).then(
-        ([waveRows, statsRows, settings, trackRows, signalRows, latencyPayload, setupRows]) => {
-          if (cancelled) return
-          setWaves(waveRows)
-          setStats(statsRows)
-          const retroValue = settings.retro_pass
-          setRetro(isRetroState(retroValue) ? retroValue : null)
-          const driftValue = settings.drift_state
-          setDrift(isDriftState(driftValue) ? driftValue : null)
-          setTrack(trackRows)
-          setSignals(signalRows)
-          setLatency(latencyPayload.latency)
-          setSetups(setupRows)
-        },
-      )
+      ]).then(([waveRows, statsRows, settings, trackRows, signalRows, latencyPayload]) => {
+        if (cancelled) return
+        setWaves(waveRows)
+        setStats(statsRows)
+        const retroValue = settings.retro_pass
+        setRetro(isRetroState(retroValue) ? retroValue : null)
+        const driftValue = settings.drift_state
+        setDrift(isDriftState(driftValue) ? driftValue : null)
+        setTrack(trackRows)
+        setSignals(signalRows)
+        setLatency(latencyPayload.latency)
+      })
     }
     load()
     const timer = window.setInterval(load, REFRESH_MS)
@@ -349,6 +345,23 @@ export function StatsView() {
       window.clearInterval(timer)
     }
   }, [])
+
+  // Setupy závisí na symbolu — vlastní efekt, aby přepnutí symbolu refetchlo tabulku (#500)
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      void fetchSetups(symbol).then((setupRows) => {
+        if (cancelled) return
+        setSetups(setupRows)
+      })
+    }
+    load()
+    const timer = window.setInterval(load, REFRESH_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [symbol])
 
   const symbolWaves = useMemo(() => waves.filter((wave) => wave.symbol === symbol), [waves, symbol])
   const active = currentWave(symbolWaves, symbol)
