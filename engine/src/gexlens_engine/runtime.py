@@ -13,13 +13,16 @@ import datetime as dt
 import logging
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.flowoi import oi_estimate
 from gexlens_engine.compute.gex import GexEngine, GexInput
 from gexlens_engine.compute.gexfield import (
     GexProfile,
     ProfileContract,
+    gamma_field,
+    gamma_profile,
     greek_fields,
     greek_profiles,
 )
@@ -39,10 +42,13 @@ from gexlens_engine.storage.parquet_store import (
     LadderRow,
     Levels2Row,
     LevelsRow,
+    NetFlowRow,
+    OiEstRow,
     OiMissingRow,
     SnapshotRow,
     SnapshotWriter,
     WallDomRow,
+    read_netflow_latest,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,6 +114,9 @@ class EngineRuntime:
     # Sekundární řetěz (následující expirace): jen snapshots + levels —
     # flow/CumΔ a bary podkladu patří výhradně aktivní expiraci (per-symbol soubory)
     secondary: bool = False
+    # Per-symbol α flow-adjusted odhadu (#232): None = default z konfigurace
+    # (flow_oi_alpha); ranní kalibrace fáze 2 ho nastavuje za běhu
+    flow_alpha: float | None = None
     # Poslední spočtené hodnoty cyklu — čte je SetupEngine (ADR-0004)
     last_levels: LevelsRow | None = field(default=None, init=False)
     last_flow: FlowRowLike | None = field(default=None, init=False)
@@ -122,10 +131,45 @@ class EngineRuntime:
     # označí, pokud v běžícím dni chybí předchozí minuty — kumulativy v něm
     # dohánějí celou dobu výpadku, ne jednu minutu
     _catch_up_pending: bool = field(default=True, init=False)
+    # Navázání kumulativního net objemu z partice netflow po restartu (#232)
+    _netflow_seed_pending: bool = field(default=True, init=False)
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
             self.cum_delta = CumDeltaTracker(multiplier=self.multiplier)
+
+    async def _seed_net_volume(self, day: dt.date) -> None:
+        """Jednorázově naváže kumulativní net objem z partice netflow (#232).
+
+        Restart enginu uprostřed dne dřív vynuloval FA odhad — tok naměřený
+        dopoledne existoval jen v paměti. Partice netflow ho drží, takže se
+        odhad po startu naváže tam, kde předchozí proces skončil. Klíče už
+        naměřené po restartu mají přednost (restore_net_volume je setdefault).
+        """
+        if not self._netflow_seed_pending:
+            return
+        self._netflow_seed_pending = False
+        path = (
+            self.settings.derived_dir
+            / self.symbol
+            / self.expiry
+            / "netflow"
+            / f"{day.isoformat()}.parquet"
+        )
+        stored = await asyncio.to_thread(read_netflow_latest, path)
+        if not stored:
+            return
+        tracker = self.cum_delta
+        assert tracker is not None  # nastaven v __post_init__
+        by_key = {(spec.strike, spec.right): spec for spec in self.contracts}
+        restored = {by_key[key]: net for key, net in stored.items() if key in by_key}
+        tracker.restore_net_volume(restored)
+        logger.info(
+            "%s %s: kumulativní net objem obnoven z partice netflow (%d stran)",
+            self.symbol,
+            self.expiry,
+            len(restored),
+        )
 
     async def run_cycle(
         self,
@@ -347,19 +391,58 @@ class EngineRuntime:
             },
         )
 
-        # Flow-adjusted levels (ADR-0011, #222): OI odhad = ranní OI + α·čistý
-        # klasifikovaný objem (buy − sell z midpoint testu / Lee–Ready). Jen
-        # aktivní řetěz — tok se měří jen tam; α = 0 vrstvu vypíná. Odhad
-        # nejde pod nulu (pozice nemůže být záporná).
-        alpha = self.settings.flow_oi_alpha
+        # Flow-adjusted vrstva (ADR-0011, #222/#232): OI odhad = ranní OI +
+        # α·čistý klasifikovaný objem (buy − sell z midpoint testu / Lee–Ready).
+        # Jen aktivní řetěz — tok se měří jen tam; α = 0 vrstvu vypíná. Jediný
+        # odhad (compute/flowoi.oi_estimate) sdílí FA levels, FA Dyn GEX
+        # profil/pole i řady netflow/oiest — všechno je TENTÝŽ model.
+        alpha = self.flow_alpha if self.flow_alpha is not None else self.settings.flow_oi_alpha
+        fa_oi: dict[OptionContractSpec, float] = {}
         if not self.secondary and alpha > 0.0:
-            fa_inputs = [
-                GexInput(
-                    strike=inp.strike,
-                    right=inp.right,
-                    gamma=inp.gamma,
-                    oi=max(0.0, inp.oi + alpha * tracker.net_volume(spec)),
+            # Po restartu uprostřed dne naváže kumulativ z partice netflow —
+            # jinak by odhad začínal od nuly a zahodil celý dopolední tok
+            await self._seed_net_volume(day)
+            fa_oi = {
+                spec: oi_estimate(inp.oi, tracker.net_volume(spec), alpha)
+                for inp, spec in zip(gex_inputs, gex_specs, strict=True)
+            }
+            # Persistence netflow (#232): kumulativ dne per strana — vstup ranní
+            # kalibrace α a zpětné validace směru (znaménko net vs. ΔOI)
+            netflow_rows = [
+                NetFlowRow(ts_min=ts_min, strike=spec.strike, right=spec.right, net_volume=net)
+                for spec, net in sorted(
+                    tracker.net_volumes().items(),
+                    key=lambda item: (item[0].strike, item[0].right),
                 )
+                if net != 0.0
+            ]
+            if netflow_rows:
+                await asyncio.to_thread(
+                    self.writer.write_netflow, self.symbol, self.expiry, day, netflow_rows
+                )
+            # Řada oiest (#232): jen strany, kde se odhad liší od měřeného OI —
+            # frontend při FA zdroji přepíše měřenou matici těmito buňkami
+            oiest_rows = [
+                OiEstRow(ts_min=ts_min, strike=spec.strike, right=spec.right, oi_est=fa_oi[spec])
+                for inp, spec in zip(gex_inputs, gex_specs, strict=True)
+                if fa_oi[spec] != inp.oi
+            ]
+            if oiest_rows:
+                await asyncio.to_thread(
+                    self.writer.write_oiest, self.symbol, self.expiry, day, oiest_rows
+                )
+                await self.publisher.publish(
+                    f"oiest.{self.symbol}.{self.expiry}",
+                    {
+                        "ts_min": ts_min.isoformat(),
+                        "rows": [
+                            {"strike": row.strike, "right": row.right, "oi_est": row.oi_est}
+                            for row in oiest_rows
+                        ],
+                    },
+                )
+            fa_inputs = [
+                GexInput(strike=inp.strike, right=inp.right, gamma=inp.gamma, oi=fa_oi[spec])
                 for inp, spec in zip(gex_inputs, gex_specs, strict=True)
             ]
             gex_fa = self.gex_engine.compute(fa_inputs, spot=spot, multiplier=self.multiplier)
@@ -480,6 +563,89 @@ class EngineRuntime:
                         "values": field_row.values,
                     },
                 )
+
+            # FA Dyn GEX (#232): TENTÝŽ výpočet profilu/pole nad OI_est —
+            # parametrizovaný vstup, žádná druhá implementace. Jen gamma
+            # (charm/vanna FA nemá ve scope). Zapisuje se každou minutu i bez
+            # rozdílu vůči měřené vrstvě, aby frontend měl souvislou FA řadu
+            # od začátku dne (podklad forward-filluje poslední profil).
+            if fa_oi:
+                fa_contracts = [
+                    replace(contract, oi=fa_oi[spec])
+                    for contract, spec in zip(profile_contracts, gex_specs, strict=True)
+                ]
+                fa_profile = gamma_profile(
+                    fa_contracts,
+                    ts_min=ts_min,
+                    settle=settle,
+                    grid_start=strikes_sorted[0],
+                    grid_stop=strikes_sorted[-1],
+                    grid_step=strike_step / 2.0,
+                    multiplier=self.multiplier,
+                )
+                fa_profile_row = GexProfileRow(
+                    ts_min=ts_min,
+                    grid_start=fa_profile.grid_start,
+                    grid_step=fa_profile.grid_step,
+                    values=[round(value, 1) for value in fa_profile.values],
+                )
+                await asyncio.to_thread(
+                    self.writer.write_gexprofile,
+                    self.symbol,
+                    self.expiry,
+                    day,
+                    [fa_profile_row],
+                    subdir="gexprofilefa",
+                )
+                await self.publisher.publish(
+                    f"gexprofilefa.{self.symbol}.{self.expiry}",
+                    {
+                        "ts_min": ts_min.isoformat(),
+                        "grid_start": fa_profile_row.grid_start,
+                        "grid_step": fa_profile_row.grid_step,
+                        "values": fa_profile_row.values,
+                    },
+                )
+                fa_field = gamma_field(
+                    fa_contracts,
+                    ts_min=ts_min,
+                    settle=settle,
+                    grid_start=strikes_sorted[0],
+                    grid_stop=strikes_sorted[-1],
+                    grid_step=strike_step / 2.0,
+                    multiplier=self.multiplier,
+                )
+                if fa_field is not None:
+                    fa_flat = [round(value, 1) for column in fa_field.values for value in column]
+                    fa_field_row = GexFieldRow(
+                        ts_min=ts_min,
+                        grid_start=fa_field.grid_start,
+                        grid_step=fa_field.grid_step,
+                        col_start=fa_field.col_start,
+                        col_step_min=fa_field.col_step_min,
+                        col_count=len(fa_field.values),
+                        values=fa_flat,
+                    )
+                    await asyncio.to_thread(
+                        self.writer.write_gexfield,
+                        self.symbol,
+                        self.expiry,
+                        day,
+                        fa_field_row,
+                        subdir="gexfieldfa",
+                    )
+                    await self.publisher.publish(
+                        f"gexfieldfa.{self.symbol}.{self.expiry}",
+                        {
+                            "ts_min": ts_min.isoformat(),
+                            "grid_start": fa_field_row.grid_start,
+                            "grid_step": fa_field_row.grid_step,
+                            "col_start": fa_field_row.col_start.isoformat(),
+                            "col_step_min": fa_field_row.col_step_min,
+                            "col_count": fa_field_row.col_count,
+                            "values": fa_field_row.values,
+                        },
+                    )
 
         # 3) FlowΔ/CumΔ minuta + 4) bary podkladu — jen aktivní expirace
         # (soubory jsou per symbol; sekundární řetěz by je duplikoval)

@@ -252,6 +252,18 @@ async def test_one_cycle_produces_full_day_artifacts(
         settings.derived_dir / "ES" / "20260716" / "gexfield" / f"{day}.parquet"
     )
     assert len(gexfield) == 1  # jen poslední stav (replace_and_write)
+    # FA Dyn GEX (#232): vlastní řady + kanály; bez toku je odhad == měření,
+    # takže FA profil kopíruje měřený a řady netflow/oiest vůbec nevzniknou
+    assert "gexprofilefa.ES.20260716" in channels
+    assert "gexfieldfa.ES.20260716" in channels
+    gexprofilefa = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "gexprofilefa" / f"{day}.parquet"
+    )
+    assert list(gexprofilefa.iloc[0]["values"]) == pytest.approx(
+        list(gexprofile.iloc[0]["values"]), abs=0.11
+    )
+    assert not (settings.derived_dir / "ES" / "20260716" / "netflow" / f"{day}.parquet").exists()
+    assert not (settings.derived_dir / "ES" / "20260716" / "oiest" / f"{day}.parquet").exists()
 
     # price kanál nese plnou OHLC (#127), ne jen close
     price_data = next(data for channel, data in publisher.messages if channel == "price.ES")
@@ -277,6 +289,129 @@ async def test_one_cycle_produces_full_day_artifacts(
     assert isinstance(snap_rows, list) and len(snap_rows) == 6
     assert set(snap_rows[0]) >= {"strike", "right", "oi", "volume", "delta", "stale_age"}
     assert snap_rows[0]["oi"] == 1000.0
+
+
+class RisingVolumeStreamer(MockQuoteStreamer):
+    """Kumulativní volume roste s každým fetch; buy klasifikaci mají jen cally.
+
+    Call: last nad midem → midpoint test buy, druhá minuta +100 kontraktů.
+    Put: last přesně na midu → sign 0, net zůstává nulový. Asymetrie je nutná —
+    při stejném OI obou stran se NetGEX profil vynuluje (call − put) a FA
+    vrstva by nebyla od měřené k rozeznání.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._fetches: dict[OptionContractSpec, int] = {}
+
+    async def fetch_quote(self, spec: OptionContractSpec, timeout_s: float) -> QuoteSnapshot | None:
+        base = await super().fetch_quote(spec, timeout_s)
+        if base is None:
+            return None
+        count = self._fetches[spec] = self._fetches.get(spec, 0) + 1
+        return QuoteSnapshot(
+            bid=10.0,
+            ask=10.5,
+            last=10.4 if spec.right == "C" else 10.25,  # nad midem = buy / na midu = 0
+            volume=100.0 * count,
+            iv=0.15,
+            delta=0.5 if spec.right == "C" else -0.5,
+            gamma=0.01,
+            theta=-0.5,
+            vega=1.2,
+        )
+
+
+def build_runtime(
+    tmp_path: Path, streamer: MockQuoteStreamer, **settings_kwargs: object
+) -> tuple[EngineRuntime, RecordingPublisher, Settings]:
+    """Runtime nad zadaným streamerem; OI archiv fixture 1000 per strana."""
+    settings = Settings(data_dir=tmp_path / "data", **settings_kwargs)  # type: ignore[arg-type]
+    specs = contracts()
+    repository = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}"))
+    repository.ensure_schema()
+    repository.upsert_many(
+        [OIRecord("ES", "20260716", s.strike, s.right, TS.date(), 1000.0) for s in specs]
+    )
+    publisher = RecordingPublisher()
+    engine_runtime = EngineRuntime(
+        settings=settings,
+        scheduler=SubscriptionScheduler(streamer, settings),
+        writer=SnapshotWriter(settings),
+        oi_repository=repository,
+        publisher=publisher,
+        symbol="ES",
+        expiry="20260716",
+        multiplier=50.0,
+        contracts=specs,
+    )
+    return engine_runtime, publisher, settings
+
+
+async def test_klasifikovany_tok_zapisuje_netflow_oiest_a_fa_vrstvy(tmp_path: Path) -> None:
+    """#232: přírůstek volume → řady netflow/oiest + FA Dyn GEX z TÉHOŽ odhadu."""
+    engine_runtime, publisher, settings = build_runtime(tmp_path, RisingVolumeStreamer())
+    await engine_runtime.run_cycle(TS, SPOT, [])  # baseline — bez přírůstku
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=1), SPOT, [])
+
+    day = TS.date().isoformat()
+    base = settings.derived_dir / "ES" / "20260716"
+    netflow = pd.read_parquet(base / "netflow" / f"{day}.parquet")
+    assert list(netflow.columns) == ["ts_min", "strike", "right", "net_volume"]
+    # Jen druhá minuta má klasifikovaný přírůstek a jen call strany: 3 × +100
+    assert len(netflow) == 3
+    assert set(netflow["right"]) == {"C"}
+    assert set(netflow["net_volume"]) == {100.0}
+
+    oiest = pd.read_parquet(base / "oiest" / f"{day}.parquet")
+    assert list(oiest.columns) == ["ts_min", "strike", "right", "oi_est"]
+    # OI_est = 1000 + α(0.4)·100 = 1040 — stejná formule jako FA levels
+    assert set(oiest["oi_est"]) == {1040.0}
+    assert set(oiest["right"]) == {"C"}
+    assert len(oiest) == 3
+
+    channels = [channel for channel, _ in publisher.messages]
+    assert "oiest.ES.20260716" in channels
+    oiest_data = next(
+        data for channel, data in publisher.messages if channel == "oiest.ES.20260716"
+    )
+    rows = oiest_data["rows"]
+    assert isinstance(rows, list) and len(rows) == 3
+    assert rows[0]["oi_est"] == 1040.0
+
+    # FA Dyn GEX profil/pole: vlastní řady + kanály; druhá minuta se od měřené
+    # vrstvy liší (OI_est > OI), takže hodnoty nejsou identické
+    fa_profile = pd.read_parquet(base / "gexprofilefa" / f"{day}.parquet")
+    measured_profile = pd.read_parquet(base / "gexprofile" / f"{day}.parquet")
+    assert len(fa_profile) == 2
+    # První minuta bez toku: FA == měřené (až na zaokrouhlení 0.1 v zápisu)
+    assert list(fa_profile.iloc[0]["values"]) == pytest.approx(
+        list(measured_profile.iloc[0]["values"]), abs=0.11
+    )
+    assert list(fa_profile.iloc[1]["values"]) != list(measured_profile.iloc[1]["values"])
+    assert "gexprofilefa.ES.20260716" in channels
+    assert "gexfieldfa.ES.20260716" in channels
+    assert (base / "gexfieldfa" / f"{day}.parquet").exists()
+
+
+async def test_netflow_seed_navaze_kumulativ_po_restartu(tmp_path: Path) -> None:
+    """#232: nový proces naváže FA odhad z partice netflow, ne od nuly."""
+    first_runtime, _publisher, _settings = build_runtime(tmp_path, RisingVolumeStreamer())
+    await first_runtime.run_cycle(TS, SPOT, [])
+    await first_runtime.run_cycle(TS + dt.timedelta(minutes=1), SPOT, [])
+
+    # „Restart": nový runtime se svým writerem, trackerem i streamerem
+    second_runtime, publisher, settings = build_runtime(tmp_path, RisingVolumeStreamer())
+    await second_runtime.run_cycle(TS + dt.timedelta(minutes=2), SPOT, [])
+
+    day = TS.date().isoformat()
+    oiest = pd.read_parquet(settings.derived_dir / "ES" / "20260716" / "oiest" / f"{day}.parquet")
+    third = oiest[oiest["ts_min"] == TS + dt.timedelta(minutes=2)]
+    # První sweep nového procesu nemá vlastní přírůstek — odhad 1040 nese
+    # výhradně kumulativ obnovený z partice (+100 × α 0.4, jen call strany)
+    assert len(third) == 3
+    assert set(third["right"]) == {"C"}
+    assert set(third["oi_est"]) == {1040.0}
 
 
 async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path) -> None:
@@ -305,7 +440,14 @@ async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path) -> None:
 
     day = TS.date().isoformat()
     assert not (settings.derived_dir / "ES" / "20260716" / "levelsfa" / f"{day}.parquet").exists()
-    assert "levelsfa.ES.20260716" not in [channel for channel, _ in publisher.messages]
+    channels = [channel for channel, _ in publisher.messages]
+    assert "levelsfa.ES.20260716" not in channels
+    # #232: α = 0 vypíná CELOU flow-adjusted vrstvu — netflow, oiest i FA Dyn GEX
+    for series in ("netflow", "oiest", "gexprofilefa", "gexfieldfa"):
+        assert not (settings.derived_dir / "ES" / "20260716" / series / f"{day}.parquet").exists()
+    assert "oiest.ES.20260716" not in channels
+    assert "gexprofilefa.ES.20260716" not in channels
+    assert "gexfieldfa.ES.20260716" not in channels
 
 
 async def test_forming_bar_published_and_written_as_provisional(

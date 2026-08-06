@@ -63,6 +63,19 @@ class CumDeltaTracker:
         """Denní čistý klasifikovaný objem kontraktu (buy − sell; ADR-0011)."""
         return self._net_volume.get(spec, 0.0)
 
+    def net_volumes(self) -> dict[OptionContractSpec, float]:
+        """Kopie celé mapy čistého objemu — persistence řady netflow (#232)."""
+        return dict(self._net_volume)
+
+    def restore_net_volume(self, values: dict[OptionContractSpec, float]) -> None:
+        """Naváže kumulativ z partice netflow po restartu uprostřed dne (#232).
+
+        Jen chybějící klíče (setdefault): tok naměřený PO restartu má přednost
+        a uložený kumulativ ho nesmí přepsat.
+        """
+        for spec, net in values.items():
+            self._net_volume.setdefault(spec, net)
+
     def reset(self) -> None:
         """Reset na začátku obchodního dne (SPEC 4.5, konfig. session start)."""
         self._cum = 0.0

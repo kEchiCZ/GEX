@@ -249,6 +249,34 @@ def test_replay_bundle(client: TestClient) -> None:
     assert len(raw) == MINUTES * len(STRIKES) * 2  # surová data pro lokální přepínání módů
     assert payload["oi_prev"] == []  # bez archivu předchozího dne balík drží tvar
     assert payload["catchup"] == []  # engine běžel celý den — řada neexistuje (#518)
+    # Flow-adjusted zdroj (#232): klíče drží tvar, i když řady (zatím) neexistují
+    assert payload["oiest"] == []
+    assert payload["gexprofilefa"] == []
+    assert payload["gexfieldfa"] == []
+
+
+def test_replay_bundle_oiest(settings: Settings) -> None:
+    """OI odhad z toku (#232): /replay nese řadu oiest + FA Dyn GEX profil."""
+    from gexlens_engine.storage.parquet_store import GexProfileRow, OiEstRow
+
+    writer = SnapshotWriter(settings)
+    writer.write_oiest(
+        "ES", "20260716", DAY, [OiEstRow(ts_min=ts(1), strike=7600.0, right="C", oi_est=140.0)]
+    )
+    writer.write_gexprofile(
+        "ES",
+        "20260716",
+        DAY,
+        [GexProfileRow(ts_min=ts(1), grid_start=7590.0, grid_step=5.0, values=[1.0, 2.0])],
+        subdir="gexprofilefa",
+    )
+    client = TestClient(create_app(settings))
+
+    payload = client.get(f"/replay/ES/20260716/{DAY.isoformat()}").json()
+    assert payload["oiest"] == [
+        {"ts_min": ts(1).isoformat(), "strike": 7600.0, "right": "C", "oi_est": 140.0}
+    ]
+    assert payload["gexprofilefa"][0]["values"] == [1.0, 2.0]
 
 
 def test_replay_bundle_catchup(settings: Settings) -> None:
