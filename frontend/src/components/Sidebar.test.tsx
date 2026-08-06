@@ -104,3 +104,33 @@ test('nedostupné API při přidání ukáže chybovou hlášku místo tichého 
   fireEvent.submit(screen.getByLabelText('Watchlist').querySelector('form')!)
   expect(await screen.findByRole('alert')).toBeDefined()
 })
+
+test('opakovaný focus při nedostupném API nemnoží retry řetězy (#506)', async () => {
+  vi.useFakeTimers()
+  let calls = 0
+  mockFetch(async (call) => {
+    calls = call
+    throw new Error('connection refused')
+  })
+  renderSidebar()
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0) // úvodní sync selže → naplánován retry
+  })
+  const afterInitial = calls
+
+  // Tři návraty do okna, každý spustí sync (selže) a naplánuje retry —
+  // starý čekající timeout se musí zrušit, platí vždy jen jeden řetěz
+  await act(async () => {
+    fireEvent.focus(window)
+    fireEvent.focus(window)
+    fireEvent.focus(window)
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(calls).toBe(afterInitial + 3)
+
+  // Po intervalu smí doběhnout JEDEN retry, ne čtyři paralelní
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15_000)
+  })
+  expect(calls).toBe(afterInitial + 4)
+})

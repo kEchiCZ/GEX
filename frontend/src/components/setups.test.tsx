@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
-import { CURRENT_MECHANICS_VERSION, formatPct, formatPnlUsd, setupPnlPct, setupPnlUsd, setupRrr } from '../api/setups' // prettier-ignore
+import { CURRENT_MECHANICS_VERSION, formatPct, formatPnlUsd, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
 import { pointValue } from '../instrument/tick'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
@@ -68,6 +68,10 @@ beforeEach(() => {
 test('výpočet RRR ze setupu', () => {
   expect(setupRrr({ entry: 7501, target: 7515, stop: 7472 })).toBeCloseTo(14 / 29)
   expect(setupRrr({ entry: 7501, target: 7515, stop: 7501 })).toBe(0)
+})
+
+test('T7 trend_continuation má český popisek, ne syrový kód šablony (#506)', () => {
+  expect(templateLabel('trend_continuation')).toBe('Pokračování trendu')
 })
 
 test('P/L setupu v USD na 1 kontrakt (#185)', () => {

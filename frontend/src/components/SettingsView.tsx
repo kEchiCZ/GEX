@@ -128,8 +128,17 @@ export function SettingsView() {
           : 'Hotovo — záloha stažena do složky Stažené soubory (prohlížeč neumí výběr složky).',
       )
     } catch (error) {
-      // Chyba musí být vidět: tichá neúspěšná záloha je horší než žádná
-      setBackupNote(error instanceof Error ? error.message : 'Záloha selhala.')
+      // DOMException nemusí být instanceof Error — AbortError se pozná podle name
+      const isAbort =
+        typeof error === 'object' &&
+        error !== null &&
+        (error as { name?: unknown }).name === 'AbortError'
+      if (isAbort) {
+        // Zrušení dialogu „Uložit jako" není chyba zálohy — žádná hláška (#506)
+      } else {
+        // Chyba musí být vidět: tichá neúspěšná záloha je horší než žádná
+        setBackupNote(error instanceof Error ? error.message : 'Záloha selhala.')
+      }
     } finally {
       setBackup('idle')
     }
