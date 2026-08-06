@@ -87,7 +87,7 @@ from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
 from gexlens_engine.storage.t6_store import T6Repository
 from gexlens_engine.storage.tendency_store import TendencyRepository
-from gexlens_engine.t6 import T6Collector
+from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tendency import TendencyEngine
 
 logger = logging.getLogger("gexlens.engine")
@@ -603,6 +603,14 @@ async def main() -> None:
     if settings.t6_collector_enabled:
         t6_repository = T6Repository(db)
         await asyncio.to_thread(t6_repository.ensure_schema)
+        # Kandidáti uložení starou konvencí UTC půlnoci se při startu dorovnají
+        # na settle konvenci z věčného archivu barů (#498)
+        await asyncio.to_thread(
+            recompute_stale_candidates,
+            t6_repository,
+            settings.data_dir,
+            settings.t6_trigger_pct,
+        )
 
     # Broker headlines z ticku 292 (#291): schéma SentimentLensu sdílí obě
     # služby, engine do něj jen zapisuje

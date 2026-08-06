@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
+from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import (
     Direction,
     MinuteInputs,
@@ -35,8 +36,6 @@ from gexlens_engine.storage.setups_store import SetupsRepository, StoredSetup
 logger = logging.getLogger(__name__)
 
 HISTORY_MINUTES = 400
-# Settle ≈ 20:00 UTC dne expirace (shodné s frontend instrument/expiry.ts)
-SETTLE_HOUR_UTC = 20
 
 
 @dataclass
@@ -105,11 +104,12 @@ class SetupEngine:
 
     @staticmethod
     def _settle_ts(expiry: str) -> dt.datetime | None:
+        """Settle dne expirace — konvence sdílená přes compute.settle (#498)."""
         try:
             date = dt.datetime.strptime(expiry, "%Y%m%d").date()
         except ValueError:
             return None
-        return dt.datetime.combine(date, dt.time(SETTLE_HOUR_UTC, 0), tzinfo=dt.UTC)
+        return settle_ts(date)
 
     @classmethod
     def _minutes_to_expiry(cls, expiry: str, now: dt.datetime) -> float | None:
