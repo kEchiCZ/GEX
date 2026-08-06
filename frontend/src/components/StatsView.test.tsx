@@ -1,8 +1,8 @@
 /** Render test záložky Stats (#297, SPEC 9.6). */
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import { StatsView } from './StatsView'
-import { AppStateProvider } from '../state/AppState'
+import { AppStateProvider, useAppState } from '../state/AppState'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
 
@@ -105,6 +105,16 @@ function makeView() {
   )
 }
 
+/** Tlačítko na přepnutí symbolu — simulace sidebaru pro test #500. */
+function SymbolSwitch({ to }: { to: string }) {
+  const { setSymbol } = useAppState()
+  return (
+    <button type="button" onClick={() => setSymbol(to)}>
+      Přepnout na {to}
+    </button>
+  )
+}
+
 test('zobrazí vlny, hit-raty s gate zvýrazněním a stav retro passu (SPEC 9.6)', async () => {
   makeView()
 
@@ -123,4 +133,26 @@ test('zobrazí vlny, hit-raty s gate zvýrazněním a stav retro passu (SPEC 9.6
 
   // Retro pass ze settings (text je rozsekaný interpolacemi → přes sekci)
   expect(screen.getByLabelText('Retro pass').textContent).toContain('zpracováno 108 položek')
+})
+
+test('přepnutí symbolu refetchne tabulku setupů s novým symbolem (#500)', async () => {
+  window.localStorage.clear()
+  const socket = new LiveSocket('ws://test/ws/live', {
+    webSocketFactory: (url) => new FakeWebSocket(url),
+  })
+  render(
+    <AppStateProvider socket={socket}>
+      <SymbolSwitch to="NQ" />
+      <StatsView />
+    </AppStateProvider>,
+  )
+  const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>
+  const setupCalls = () =>
+    fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes('/setups/'))
+
+  await waitFor(() => expect(setupCalls().some((url) => url.includes('/setups/ES'))).toBe(true))
+  expect(setupCalls().some((url) => url.includes('/setups/NQ'))).toBe(false)
+
+  fireEvent.click(screen.getByText('Přepnout na NQ'))
+  await waitFor(() => expect(setupCalls().some((url) => url.includes('/setups/NQ'))).toBe(true))
 })
