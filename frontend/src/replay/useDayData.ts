@@ -331,6 +331,7 @@ export function useDayData(
             applied.push({
               tsIso: ts,
               rows: partial.rows ?? [],
+              catchUp: partial.catchUp,
               bar: partial.bar,
               levels: partial.levels,
               flow: partial.flow,
@@ -360,7 +361,11 @@ export function useDayData(
 
     const onSnapshot = (data: ChannelData) => {
       const raw = Array.isArray(data.rows) ? (data.rows as Record<string, unknown>[]) : []
-      part(minuteKey(data.ts_min)).rows = raw.map((row): LiveMinuteRow => ({
+      const entry = part(minuteKey(data.ts_min))
+      // Catch-up minuta (#518): první sweep po restartu enginu — přírůstkové
+      // panely ji nesmí číst jako minutový obchod (starší engine klíč neposílá)
+      if (data.catch_up === true) entry.catchUp = true
+      entry.rows = raw.map((row): LiveMinuteRow => ({
         strike: Number(row.strike),
         right: String(row.right) === 'C' ? 'C' : 'P',
         oi: Number(row.oi) || 0,

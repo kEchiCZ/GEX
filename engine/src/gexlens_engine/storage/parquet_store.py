@@ -133,6 +133,17 @@ OI_MISSING_SCHEMA = pa.schema(
     ]
 )
 
+# Catch-up minuty (#518, ADR-0024) — první minuta po startu enginu uprostřed
+# dne. Kumulativní čítače (denní volume per kontrakt) v ní pokrývají celou dobu
+# výpadku, takže přírůstkové odvozeniny (Opt Vol, Δ Flow, okenní analýza #483)
+# ji nesmí číst jako minutový obchod. Vlastní řada po vzoru oimissing — sloupec
+# v SNAPSHOT_SCHEMA by rozbil čtení starých partic (ADR-0005/ADR-0008).
+CATCHUP_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+    ]
+)
+
 # GEX žebřík (#244) — proměnný počet příček per minuta → list sloupce
 LADDER_SCHEMA = pa.schema(
     [
@@ -243,6 +254,17 @@ class OiMissingRow:
     ts_min: dt.datetime
     strike: float
     right: str
+
+
+@dataclass(frozen=True)
+class CatchUpRow:
+    """Minuta prvního sweepu po startu enginu uprostřed dne (#518, ADR-0024).
+
+    Její kumulativy dohánějí celou dobu výpadku — kdo počítá minutové
+    přírůstky, musí ji brát jako první měřenou minutu dne, ne jako obchod.
+    """
+
+    ts_min: dt.datetime
 
 
 @dataclass(frozen=True)
@@ -440,6 +462,22 @@ class SnapshotWriter:
             / f"{day.isoformat()}.parquet"
         )
         buffer = self._buffer(path, OI_MISSING_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_catch_up(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[CatchUpRow]
+    ) -> Path | None:
+        """Přidá catch-up minuty do partice derived/{sym}/{exp}/catchup (#518).
+
+        Stejný princip jako oimissing: prázdný seznam se nezapisuje — v běžný
+        den (engine běžel od začátku) řada nevznikne vůbec.
+        """
+        if not rows:
+            return None
+        path = (
+            self._settings.derived_dir / symbol / expiry / "catchup" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, CATCHUP_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_levelsfa(

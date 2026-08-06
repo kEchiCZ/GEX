@@ -453,6 +453,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ("levelsfa", lambda: repository.levelsfa(symbol, expiry, date)),
             ("ladder", lambda: repository.ladder(symbol, expiry, date)),
             ("oimissing", lambda: repository.oi_missing(symbol, expiry, date)),
+            # Catch-up minuty (#518, ADR-0024): první sweep po startu uprostřed dne
+            ("catchup", lambda: repository.catch_up(symbol, expiry, date)),
             ("gexprofile", lambda: repository.gexprofile(symbol, expiry, date)),
             ("gexfield", lambda: repository.gexfield(symbol, expiry, date)),
             ("flow", lambda: repository.flow(symbol, date)),

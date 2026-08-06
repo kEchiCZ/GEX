@@ -70,6 +70,13 @@ class DataRepository:
         )
         return self._read(path)
 
+    def catch_up(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """Catch-up minuty (#518, ADR-0024) — když engine běžel celý den, řada neexistuje."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "catchup" / f"{day.isoformat()}.parquet"
+        )
+        return self._read(path)
+
     def ladder(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
         """GEX žebřík (#244) — top-N významných striků per strana a minutu."""
         path = (

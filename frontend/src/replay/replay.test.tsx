@@ -2,8 +2,11 @@
 import { act, fireEvent, render, renderHook, screen } from '@testing-library/react'
 import { tableFromArrays, tableToIPC } from 'apache-arrow'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { BottomPanels } from '../components/BottomPanels'
+import type { PanelSeries } from '../components/BottomPanels'
 import { PlaybackBar } from '../components/PlaybackBar'
 import { demoGrid } from '../heatmap/demo'
+import { CrosshairProvider } from '../state/Crosshair'
 import { appendMinute, assembleReplayDay, buildReplayDay, decodeBundle } from './loader'
 import type { LiveMinute, ReplayDay } from './loader'
 import { sliceGrid, sliceOverlays, slicePanels, sliceSeries } from './slice'
@@ -449,6 +452,105 @@ test('bez klíče oimissing (starší API) není nic označené (#465)', () => {
   expect(
     day.profileByMinute.rowsAt(1).every((row) => !row.callOiMissing && !row.putOiMissing),
   ).toBe(true)
+})
+
+// ── Catch-up minuta po startu enginu uprostřed dne (#518, ADR-0024) ─
+
+test('catch-up minuta neprodukuje skokový přírůstek (#518)', () => {
+  // Restart enginu: M0 je poslední minuta před výpadkem, M1 první sweep po
+  // startu — jeho kumulativy dohánějí celou dobu výpadku
+  const bundle = { ...bundleFor(CELLS, BARS, LEVELS, FLOW), catchup: [{ ts_min: M1 }] }
+  const day = buildReplayDay(bundle)
+
+  // Bez flagu by M1 dostala přírůstek 32 call / 10 put (kladné diffy kumulativů
+  // obou striků) — s ním je první měřenou minutou dne a skok se nekreslí jako obchod
+  expect(day.panels.optVolCall).toEqual([0, 0])
+  expect(day.panels.optVolPut).toEqual([0, 0])
+  expect(day.panels.deltaFlowCall).toEqual([0, 0])
+  expect(day.panels.deltaFlowPut).toEqual([0, 0])
+  // CumΔ řadu flag nemění — tu počítá engine sám od svého startu
+  expect(day.panels.cumDelta).toEqual([50, 30])
+})
+
+test('minuta PO catch-up už počítá přírůstek proti ní (#518)', () => {
+  // Start uprostřed dne: M0 je catch-up (první měřená minuta), M1 běžná —
+  // kumulativy catch-up minuty už jsou správné, diff proti nim je poctivý
+  const bundle = { ...bundleFor(CELLS, BARS, LEVELS, FLOW), catchup: [{ ts_min: M0 }] }
+  const day = buildReplayDay(bundle)
+
+  expect(day.panels.optVolCall).toEqual([0, 20 + 12])
+  expect(day.panels.optVolPut).toEqual([0, 7 + 3])
+})
+
+test('CumΔ nese „od HH:MM", když den nezačíná od začátku seance (#518)', () => {
+  // První měřená minuta dne je catch-up → měření začalo až startem enginu
+  const withCatch = buildReplayDay({
+    ...bundleFor(CELLS, BARS, LEVELS, FLOW),
+    catchup: [{ ts_min: M0 }],
+  })
+  expect(withCatch.panels.cumDeltaFromIso).toBe(M0.replace('Z', '.000Z'))
+
+  // Restart uprostřed dne (den začal normálně) ani běžný den popisek nemají
+  const restarted = buildReplayDay({
+    ...bundleFor(CELLS, BARS, LEVELS, FLOW),
+    catchup: [{ ts_min: M1 }],
+  })
+  expect(restarted.panels.cumDeltaFromIso).toBeNull()
+  expect(buildReplayDay(bundleFor(CELLS, BARS, LEVELS, FLOW)).panels.cumDeltaFromIso).toBeNull()
+})
+
+test('panel Cum Δ zobrazí popisek startu měření, bez něj nic (#518)', () => {
+  const series: PanelSeries = {
+    vol: [0, 0],
+    optVolCall: [0, 0],
+    optVolPut: [0, 0],
+    cumDelta: [5, 9],
+    deltaFlowCall: [0, 0],
+    deltaFlowPut: [0, 0],
+    cumDeltaFromIso: M0,
+  }
+  const visible = { vol: false, optVol: false, delta: true, deltaFlow: false, sentiment: false }
+  const { unmount } = render(
+    <CrosshairProvider>
+      <BottomPanels data={series} visible={visible} />
+    </CrosshairProvider>,
+  )
+  expect(screen.getByTestId('cumdelta-from').textContent).toContain('· od ')
+  unmount()
+
+  render(
+    <CrosshairProvider>
+      <BottomPanels data={{ ...series, cumDeltaFromIso: null }} visible={visible} />
+    </CrosshairProvider>,
+  )
+  expect(screen.queryByTestId('cumdelta-from')).toBeNull()
+})
+
+test('živá catch-up minuta z WS neprodukuje špic (#518)', () => {
+  const start = decodeBundle(
+    bundleFor(
+      CELLS.filter((c) => c.ts === M0),
+      [BARS[0]],
+      [LEVELS[0]],
+      [FLOW[0]],
+    ),
+  )
+  const catchUpMinute: LiveMinute = {
+    tsIso: M1,
+    catchUp: true, // aditivní klíč snapshot kanálu po restartu enginu
+    rows: CELLS.filter((c) => c.ts === M1).map((c) => ({
+      strike: c.strike,
+      right: c.right,
+      oi: c.oi,
+      volume: c.volume,
+      delta: c.delta,
+    })),
+    flow: { cum_delta: 30 },
+  }
+  const day = assembleReplayDay(appendMinute(start, catchUpMinute))
+
+  expect(day.panels.optVolCall).toEqual([0, 0])
+  expect(day.panels.deltaFlowPut).toEqual([0, 0])
 })
 
 // ── Díra ve sběru: osa X ze sjednocení snapshotů a barů (#459) ─────

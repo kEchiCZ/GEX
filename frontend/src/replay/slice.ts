@@ -56,5 +56,7 @@ export function slicePanels(full: PanelSeries, position: number): PanelSeries {
     cumDelta: sliceSeries(full.cumDelta, position),
     deltaFlowCall: sliceSeries(full.deltaFlowCall, position),
     deltaFlowPut: sliceSeries(full.deltaFlowPut, position),
+    // Popisek „od HH:MM" (#518) je vlastnost dne, ne pozice — přetáčením nemizí
+    cumDeltaFromIso: full.cumDeltaFromIso,
   }
 }
