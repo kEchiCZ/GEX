@@ -35,7 +35,13 @@ from dataclasses import dataclass, field, replace
 # vyřadilo všech 280 historických setupů ze statistik těsně před kalibrací
 # #394, tedy by uškodilo víc, než by pomohlo. Až se bude sahat na CumΔ bránu
 # T4 nebo na mechaniku existujících šablon, verzi zvednout.
-SETUP_MECHANICS_VERSION = 2
+#
+#   3 = kalibrace #434/#394: T7 práh `trend_min_distance_atr` 1,0 → 12,0 ×ATR.
+#       Původní hodnota byla degenerovaná (splňovalo ji 98,9 % minut ES /
+#       95,2 % NQ s polohovou branou) — T7 tedy vznikal z jiné množiny minut
+#       než po změně, takže se mění filtr šablony a historické T7 řádky
+#       nejsou srovnatelné s novými.
+SETUP_MECHANICS_VERSION = 3
 
 
 class SetupTemplate(enum.Enum):
@@ -100,13 +106,24 @@ class SetupParams:
     # ZMĚŘENO A ZAMÍTNUTO (#434, `scripts/backtest_setups.py`, 20. 7.–4. 8.):
     # škálování 1,9 × ATR překlopilo NQ z +25,6 R na −15,0 R a bylo horší v
     # 9 z 12 dnů — úzká zóna na NQ nefunguje jako závada, ale jako filtr
-    # kvality. Násobky proto zůstávají na 0 (= vypnuto, chování beze změny)
-    # a slouží jako kalibrační páka pro #394, kde se prahy budou ladit na
-    # delší historii spolu s vahami.
+    # kvality. Přeměřeno při kalibraci #394 (20. 7.–7. 8., 15 dní) na mřížce
+    # 0,5/1,0/1,5/2,0 × ATR: KAŽDÝ násobek NQ zhoršil (Σ +31,1 R baseline →
+    # +1,8 / −4,3 / −20,6 / −23,3 R) a ES nepomohl. Násobky proto zůstávají
+    # na 0 (= vypnuto, chování beze změny) a slouží jen jako kalibrační páka.
     wall_zone: float = 3.0
     wall_zone_atr: float = 0.0
     rejection_min: float = 1.0
     rejection_min_atr: float = 0.0
+    # ATR páky pro prahy průrazu/reclaim T2 (#434) — stejná konvence jako výše:
+    # 0 = vypnuto (absolutní body), jinak max(absolutní mez, násobek × ATR).
+    #
+    # ZMĚŘENO (kalibrace #394, 20. 7.–7. 8.): škálování break_min POMÁHÁ na ES
+    # (2,0 × ATR: Σ +24,7 → +44,1 R, lepší v 7 z 9 změněných dnů — odřízne
+    # ztrátové T2 z minutového šumu) a mírně škodí na NQ (+31,1 → +19,2 R,
+    # řeže i ziskové shorty). Kvůli neshodě mezi instrumenty zůstává 0;
+    # rozhodnutí je v #434 (needs-decision).
+    break_min_atr: float = 0.0
+    reclaim_min_atr: float = 0.0
     divergence_lookback: int = 10
     min_rrr: float = 1.2
     # R-mechanika (#302) — jednotná pro všechny šablony, aplikuje se v `detect_all`.
@@ -147,12 +164,24 @@ class SetupParams:
     # POZITIVNÍ EXPEKTANCI NEPROKÁZALO. Vzorek 5 setupů je na odsouzení malý
     # (T5 se vypínala až na 23), proto šablona zůstává zapnutá kvůli sběru dat
     # — vyhodnotit při kalibraci #394 a při záporném výsledku vypnout jako T5.
+    # Stav při kalibraci #394 (7. 8.): T4 po #447/#449 reálně vzniká — produkce
+    # 1 setup (NQ short 5. 8., +3 R), harness 7 za 15 dní (Σ −2,2 R). Vzorek
+    # pořád malý, šablona dál sbírá data.
     momentum_cum_quantile: float = 0.25
     # T7 pokračování trendu (#443): pullback k EMA a jeho odmítnutí
     trend_ema_span: int = 20
     trend_pullback_atr: float = 0.5
     trend_rejection_atr: float = 0.25
-    trend_min_distance_atr: float = 1.0
+    # Minimální odstup od opěrné zdi. Původní 1,0 × ATR byl degenerovaný práh:
+    # splňovalo ho 98,9 % minut ES / 95,2 % NQ, které prošly polohovou branou
+    # (na ES je 1 ATR ≈ 1,6 b, medián odstupu ceny od zdi je přitom 29 ATR) —
+    # šablona tak degenerovala na EMA20 pullback držený jen anti-spamem.
+    # ZMĚŘENO (kalibrace #394, sweep 1/2/3/5/8/12/20/30 × ATR, 15 dní):
+    # 12 × ATR je nejvyšší hodnota, kde obě strany žijí a NQ se zlepší
+    # (Σ +6,2 → +17,1 R, hit 32,5 → 40,9 %; ES +41,9 → +28,8 R, pořád kladné);
+    # od 20 × ATR NQ umírá (n 23 → 7, Σ +1,1 → −4,0 R). Motivační případ
+    # („stovky bodů od zdi", ~33 ATR na NQ) by tedy šablonu zabil.
+    trend_min_distance_atr: float = 12.0
     cooldown_minutes: int = 10
     # Minimální dominance zdi pro T1/T3 (ADR-0010, #223): argmax existuje i nad
     # plochým profilem — pod prahem zeď netvoří koncentraci a setup nevzniká
@@ -887,13 +916,17 @@ def scale_params(params: SetupParams, atr: float) -> SetupParams:
     """Prahy vzdálenosti volitelně přepočtené na volatilitu instrumentu (#434).
 
     Absolutní hodnota je spodní mez, nad ní rozhoduje násobek ATR. S výchozími
-    násobky 0 je funkce identita — škálování se měřením neosvědčilo (viz
-    komentář u `SetupParams.wall_zone`) a zůstává jen jako kalibrační páka.
+    násobky 0 je funkce identita — škálování zóny zdi se měřením neosvědčilo
+    (viz komentář u `SetupParams.wall_zone`), škálování prahů průrazu T2 je
+    mezi ES a NQ rozporné (viz `break_min_atr`); obojí zůstává kalibrační
+    páka vypnutá v defaultu.
     """
     return replace(
         params,
         wall_zone=max(params.wall_zone, params.wall_zone_atr * atr),
         rejection_min=max(params.rejection_min, params.rejection_min_atr * atr),
+        break_min=max(params.break_min, params.break_min_atr * atr),
+        reclaim_min=max(params.reclaim_min, params.reclaim_min_atr * atr),
     )
 
 

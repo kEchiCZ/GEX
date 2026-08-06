@@ -1008,6 +1008,8 @@ def test_scale_params_is_identity_with_default_multipliers() -> None:
     scaled = scale_params(params, atr=11.5)
     assert scaled.wall_zone == params.wall_zone
     assert scaled.rejection_min == params.rejection_min
+    assert scaled.break_min == params.break_min
+    assert scaled.reclaim_min == params.reclaim_min
 
 
 def test_scale_params_keeps_absolute_value_as_floor() -> None:
@@ -1018,6 +1020,17 @@ def test_scale_params_keeps_absolute_value_as_floor() -> None:
     volatile = scale_params(params, atr=11.5)
     assert volatile.wall_zone == pytest.approx(21.85)
     assert volatile.rejection_min == pytest.approx(6.9)
+
+
+def test_scale_params_covers_break_thresholds_of_t2() -> None:
+    """Páka #434 pro prahy průrazu/reclaim T2 — stejná konvence max(abs, k × ATR)."""
+    params = SetupParams(break_min=3.0, break_min_atr=2.0, reclaim_min=1.0, reclaim_min_atr=0.5)
+    calm = scale_params(params, atr=1.0)
+    assert calm.break_min == 3.0  # 2 × 1 = 2 < 3 → spodní mez
+    assert calm.reclaim_min == 1.0
+    volatile = scale_params(params, atr=11.5)
+    assert volatile.break_min == pytest.approx(23.0)
+    assert volatile.reclaim_min == pytest.approx(5.75)
 
 
 # ── T7 pokračování trendu (#443) ──────────────────────────────────────
@@ -1077,6 +1090,26 @@ def test_trend_continuation_skips_price_close_to_support_wall() -> None:
     levels = {"flip": 7400.0, "put_wall": 7478.0, "call_wall": 7600.0}
     history = [trend_minute(i, 7480.0 + i, 7479.0 + i, 7482.0 + i, **levels) for i in range(41)]
     atr = average_true_range(history, params.atr_lookback) or 1.0
+
+    assert detect_trend_continuation(history, params, atr) is None
+
+
+def test_trend_continuation_distance_gate_binds() -> None:
+    """Práh 12 × ATR (#394): zeď „jen“ pár ATR pod cenou trend nedokazuje.
+
+    Původní 1,0 × ATR splňovalo 98,9 % minut ES — šablona degenerovala na
+    EMA20 pullback. Stejná scéna jako úspěšný test výše, jen s put zdí
+    5 × ATR pod entry → kandidát nevznikne.
+    """
+    params = SetupParams()
+    levels = {"flip": 7400.0, "put_wall": 7420.0, "call_wall": 7600.0}
+    history = [trend_minute(i, 7480.0 + i, 7479.0 + i, 7482.0 + i, **levels) for i in range(40)]
+    atr = average_true_range(history, params.atr_lookback) or 1.0
+    ema = _ema([m.close for m in history], params.trend_ema_span)
+    assert ema is not None
+    near = {"flip": 7400.0, "put_wall": round(ema - 5.0 * atr, 2), "call_wall": 7600.0}
+    history = [trend_minute(i, m.close, m.low, m.high, **near) for i, m in enumerate(history)]
+    history.append(trend_minute(40, ema + 0.5 * atr, ema - 0.1 * atr, ema + 0.6 * atr, **near))
 
     assert detect_trend_continuation(history, params, atr) is None
 
