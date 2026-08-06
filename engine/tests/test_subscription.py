@@ -1,12 +1,23 @@
-"""Testy hlídání chyb subskripce market data (#417)."""
+"""Testy hlídání chyb subskripce market data (#417) a konkurenční relace (#451/#495)."""
 
+import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import cast
 
+import pytest
+from ib_async import IB
+
+import gexlens_engine.__main__ as engine_main
+from gexlens_engine.config import Settings
+from gexlens_engine.ibkr.connection import ConnectionManager
 from gexlens_engine.ibkr.subscription import (
     MAX_ALERT_CONTRACTS,
     SubscriptionErrorTracker,
     contract_label,
 )
+from gexlens_engine.runtime import PublisherLike
 
 
 def tracker(
@@ -75,6 +86,99 @@ def test_dominant_symbol_wins() -> None:
     alert = detector.observe("NQU6 28505C", "NQ", now=2.0)
     assert alert is not None
     assert alert.symbol == "NQ"
+
+
+# ── Konkurenční relace (#451/#495) ───────────────────────────────────
+
+
+def test_competing_session_prah_zachyti_realnou_cetnost() -> None:
+    """#495: 10197 chodí ~2× za minutu — defaultní práh (2/120 s) ho musí naplnit.
+
+    Sdílený `subscription_error_threshold` (5/60 s) při reálné kadenci nešel
+    nikdy překročit a alert `competing_session` se neodpálil.
+    """
+    settings = Settings()
+    detector = SubscriptionErrorTracker(
+        threshold=settings.competing_session_threshold,
+        window_s=settings.competing_session_window_s,
+        cooldown_s=3600.0,
+    )
+
+    assert detector.observe("ES @CME", "ES", now=0.0) is None
+    alert = detector.observe("ES @CME", "ES", now=30.0)  # reálná kadence: à ~30 s
+
+    assert alert is not None
+    assert alert.symbol == "ES"
+
+
+class _FakeErrorEvent:
+    """Náhrada ib_async errorEvent — jen registrace handlerů a emit."""
+
+    def __init__(self) -> None:
+        self.handlers: list[Callable[..., None]] = []
+
+    def __iadd__(self, handler: Callable[..., None]) -> "_FakeErrorEvent":
+        self.handlers.append(handler)
+        return self
+
+    def emit(self, *args: object) -> None:
+        for handler in self.handlers:
+            handler(*args)
+
+
+class _RecordingPublisher(PublisherLike):
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, dict[str, object]]] = []
+
+    async def status(self, **fields: object) -> None:
+        pass
+
+    async def publish(self, channel: str, data: dict[str, object]) -> None:
+        self.messages.append((channel, data))
+
+
+async def test_competing_session_alert_se_odpali_a_nese_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#495: zapojení v `_watch_subscription_errors` při reálné četnosti 2/min
+    publikuje alert `competing_session` včetně symbolu (dřív se posílal prázdný)."""
+    fake_now = {"t": 0.0}
+    monkeypatch.setattr(engine_main, "time", SimpleNamespace(monotonic=lambda: fake_now["t"]))
+
+    ib = SimpleNamespace(errorEvent=_FakeErrorEvent())
+    manager = SimpleNamespace(report_error=lambda code, message: None)
+    publisher = _RecordingPublisher()
+    engine_main._watch_subscription_errors(
+        cast(IB, ib),
+        cast(ConnectionManager, manager),
+        Settings(),
+        publisher,
+        lambda: True,
+    )
+
+    contract = SimpleNamespace(
+        symbol="NQ",
+        localSymbol="NQU6",
+        right="",
+        strike=0.0,
+        lastTradeDateOrContractMonth="",
+        exchange="CME",
+    )
+    message = "No market data during competing live session"
+    ib.errorEvent.emit(1, 10197, message, contract)
+    fake_now["t"] = 30.0  # další výskyt za půl minuty — naměřená kadence ze 4. 8.
+    ib.errorEvent.emit(2, 10197, message, contract)
+    for _ in range(3):  # nech doběhnout create_task s publikací alertu
+        await asyncio.sleep(0)
+
+    alerts = [
+        data
+        for channel, data in publisher.messages
+        if channel == "alerts" and data["kind"] == "competing_session"
+    ]
+    assert len(alerts) == 1
+    assert alerts[0]["symbol"] == "NQ"
+    assert "přetahuje si market data" in str(alerts[0]["message"])
 
 
 # ── Popisek kontraktu ────────────────────────────────────────────────
