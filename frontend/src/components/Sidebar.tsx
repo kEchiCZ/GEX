@@ -62,6 +62,9 @@ export function Sidebar() {
       if (list !== null) {
         setWatchlist(list)
       } else {
+        // Souběžný sync (onFocus během čekajícího retry) nesmí timer přepsat
+        // bez zrušení — vznikaly by paralelní retry řetězy (#506)
+        window.clearTimeout(timer)
         timer = window.setTimeout(() => void sync(), WATCHLIST_RETRY_MS)
       }
     }

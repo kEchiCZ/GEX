@@ -761,6 +761,7 @@ export function Heatmap({
     minuteLabels,
     strikeCount,
     grid.minutes,
+    grid.dataMinutes,
     logicalW,
     logicalH,
     dpr,

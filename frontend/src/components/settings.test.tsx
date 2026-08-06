@@ -7,6 +7,7 @@ import { AppStateProvider } from '../state/AppState'
 const puts: { key: string; value: unknown }[] = []
 // Serverové hodnoty per test — výchozí stav simuluje načtené settings
 let serverValues: Record<string, unknown> = {}
+const backupMock = vi.fn<() => Promise<'saved' | 'downloaded'>>()
 
 vi.mock('../api/settings', () => ({
   useServerSettings: () => ({
@@ -15,12 +16,17 @@ vi.mock('../api/settings', () => ({
   }),
 }))
 
+vi.mock('../api/backup', () => ({
+  downloadBackup: () => backupMock(),
+}))
+
 beforeEach(() => {
   serverValues = { ibkr_port: 7496, retention_days: 90 }
 })
 
 afterEach(() => {
   puts.length = 0
+  backupMock.mockReset()
 })
 
 function renderSettings() {
@@ -111,6 +117,32 @@ test('skutečná editace textarey Seance koncept vytvoří a Uložit ji odešle 
   expect(screen.getByRole('status').textContent).toContain('Neuloženo')
   fireEvent.click(screen.getByRole('button', { name: 'Uložit' }))
   expect(puts).toEqual([{ key: 'sessions', value: [{ label: 'Sydney', minuteIdx: 1 }] }])
+})
+
+test('zrušení dialogu „Uložit jako" u zálohy není chyba — žádná hláška (#506)', async () => {
+  backupMock.mockRejectedValueOnce(new DOMException('The user aborted a request.', 'AbortError'))
+  renderSettings()
+  const button = (await screen.findByRole('button', {
+    name: 'Zálohovat PostgreSQL',
+  })) as HTMLButtonElement
+
+  fireEvent.click(button)
+  await waitFor(() => expect(button.disabled).toBe(false))
+
+  expect(screen.queryByText(/aborted/i)).toBeNull()
+  expect(screen.queryByText(/selhala/i)).toBeNull()
+})
+
+test('skutečná chyba zálohy zůstává vidět (#506)', async () => {
+  backupMock.mockRejectedValueOnce(new Error('Záloha selhala: HTTP 503'))
+  renderSettings()
+  const button = (await screen.findByRole('button', {
+    name: 'Zálohovat PostgreSQL',
+  })) as HTMLButtonElement
+
+  fireEvent.click(button)
+
+  expect(await screen.findByText(/HTTP 503/)).toBeDefined()
 })
 
 test('Uložit je nedostupné, dokud není co uložit', async () => {
