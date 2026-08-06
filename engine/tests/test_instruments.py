@@ -37,9 +37,10 @@ from gexlens_engine.instruments import (
 )
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
+from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.meta import settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository, OIRecord
-from gexlens_engine.storage.parquet_store import SnapshotWriter
+from gexlens_engine.storage.parquet_store import NetFlowRow, SnapshotWriter
 from gexlens_engine.storage.setups_store import SetupsRepository
 
 TS = dt.datetime(2026, 7, 17, 15, 0, tzinfo=dt.UTC)
@@ -950,3 +951,60 @@ async def test_secondary_expansion_noop_without_secondary_runtime(
     await pipeline._expand_secondary(spot=9999.0, today=TS.date())  # nesmí spadnout
 
     assert pipeline.next_band is None
+
+
+async def test_kalibrace_alfa_po_oi_archivu_nastavi_runtime(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#232 fáze 2: ranní kalibrace propíše α do runtime a pošle informační alert."""
+    settings, writer, oi_repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, oi_repository, publisher)
+    # Souborová sqlite — ":memory:" má tabulky jen pro jedno spojení
+    alpha_repo = FaAlphaRepository(
+        create_engine(f"sqlite+pysqlite:///{settings.data_dir.parent / 'alpha.sqlite'}")
+    )
+    alpha_repo.ensure_schema()
+    pipeline.alpha_repository = alpha_repo
+
+    today = TS.date()
+    prev = today - dt.timedelta(days=1)
+    # Včerejší archiv (dnešní s OI 500 založil make_pipeline): ΔOI = +40 per strana
+    contracts = list(pipeline.runtime.contracts)
+    oi_repository.upsert_many(
+        [OIRecord("ES", "20260717", c.strike, c.right, prev, 460.0) for c in contracts]
+    )
+    # Včerejší netflow: +100 kontraktů na každé straně → poměr 40/100 = 0.4
+    ts = dt.datetime.combine(prev, dt.time(20, 0), tzinfo=dt.UTC)
+    writer.write_netflow(
+        "ES",
+        "20260717",
+        prev,
+        [
+            NetFlowRow(ts_min=ts, strike=c.strike, right=c.right, net_volume=100.0)
+            for c in contracts
+        ],
+    )
+
+    await pipeline._run_alpha_calibration(today)
+
+    assert pipeline.runtime.flow_alpha == pytest.approx(0.4)
+
+    def calibration_alerts() -> list[dict[str, object]]:
+        return [
+            data
+            for channel, data in publisher.messages
+            if channel == "alerts" and data.get("kind") == "fa_calibration"
+        ]
+
+    assert len(calibration_alerts()) == 1
+    assert "0.40" in str(calibration_alerts()[0]["message"])
+
+    # Idempotence: druhý běh bod nepřidá ani nezdvojí alert
+    await pipeline._run_alpha_calibration(today)
+    assert len(calibration_alerts()) == 1
+
+    # Start enginu další den: nový pipeline bez nového bodu dostane uloženou α
+    fresh = make_pipeline("ES", 7600.0, settings, writer, oi_repository, publisher)
+    fresh.alpha_repository = alpha_repo
+    await fresh._run_alpha_calibration(today)
+    assert fresh.runtime.flow_alpha == pytest.approx(0.4)

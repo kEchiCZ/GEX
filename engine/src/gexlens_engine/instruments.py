@@ -42,6 +42,7 @@ from gexlens_engine.ibkr.scheduler import GreeksStallDetector, SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
+from gexlens_engine.storage.fa_calibration import FaAlphaRepository, collect_alpha_calibration
 from gexlens_engine.storage.fa_validation import FaValidationRepository, collect_fa_validation
 from gexlens_engine.storage.meta import meta_metadata, settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
@@ -283,6 +284,8 @@ class InstrumentPipeline:
     t6_collector: T6Collector | None = None
     # Denní FA validace po OI archivu (#232) — None = vypnuto
     fa_repository: FaValidationRepository | None = None
+    # Ranní kalibrace α po OI archivu (#232 fáze 2) — None = vypnuto
+    alpha_repository: FaAlphaRepository | None = None
     # Hlídání tiché ztráty 5s barů (#221); default z konfigurace v __post_init__
     stall_detector: BarsStallDetector | None = None
     # Hlídání tiché ztráty Greeks (#306); default z konfigurace v __post_init__
@@ -394,6 +397,7 @@ class InstrumentPipeline:
         has_snapshot = today in self.oi_repository.days(self.symbol)
         if has_snapshot and not self._oi_refresh_due(now):
             await self._run_fa_validation(today)
+            await self._run_alpha_calibration(today)
             return True
         captured = self.oi_repository.captured_at(self.symbol, today)
         if captured is not None and captured < self.settings.oi_publication_utc(captured.date()):
@@ -452,6 +456,7 @@ class InstrumentPipeline:
             self.oi_final = True
             logger.info("OI archiv %s %s je finální (dvě shodná čtení)", self.symbol, today)
         await self._run_fa_validation(today)
+        await self._run_alpha_calibration(today)
         await self._run_setup_selfcheck(today)
         return True
 
@@ -564,6 +569,7 @@ class InstrumentPipeline:
         except Exception:
             logger.exception("FA validace %s selhala — zkusí se při dalším OI cyklu", self.symbol)
             return
+        alpha = self._current_alpha()
         for record in records:
             point = record.point
             logger.info(
@@ -587,11 +593,77 @@ class InstrumentPipeline:
                     "message": (
                         f"FA validace {self.symbol} {record.expiry} ({record.day}): "
                         f"open-ratio {point.open_ratio:.2f}, korelace {point.spearman:.2f} "
-                        f"(α=0.4, ADR-0011)"
+                        f"(α={alpha:.2f}, ADR-0011)"
                     ),
                     "ts": dt.datetime.now(dt.UTC).timestamp(),
                 },
             )
+
+    def _current_alpha(self) -> float:
+        """Aktuálně platná α symbolu: kalibrovaná z runtime, jinak konfigurace."""
+        if self.runtime.flow_alpha is not None:
+            return self.runtime.flow_alpha
+        return self.settings.flow_oi_alpha
+
+    async def _run_alpha_calibration(self, today: dt.date) -> None:
+        """Ranní kalibrace α (#232 fáze 2): včerejší netflow vs. skutečné ΔOI.
+
+        Běží po FA validaci nad týmiž archivy; selhání nesmí zabít pipeline —
+        bod se dopočítá při dalším OI cyklu (idempotentní dedup v historii).
+        I bez nového bodu se uložená α propíše do runtime (start enginu).
+        """
+        if self.alpha_repository is None:
+            return
+        try:
+            result = await asyncio.to_thread(
+                collect_alpha_calibration,
+                self.symbol,
+                self.settings.derived_dir,
+                self.oi_repository,
+                self.alpha_repository,
+                today,
+            )
+            if result is None:
+                state = await asyncio.to_thread(self.alpha_repository.get, self.symbol)
+                if state is not None and self.runtime.flow_alpha != state.alpha:
+                    self.runtime.flow_alpha = state.alpha
+                    logger.info(
+                        "α %s obnovena z kalibrace: %.3f (%d dnů)",
+                        self.symbol,
+                        state.alpha,
+                        state.days,
+                    )
+                return
+        except Exception:
+            logger.exception("Kalibrace α %s selhala — zkusí se při dalším OI cyklu", self.symbol)
+            return
+        self.runtime.flow_alpha = result.alpha_after
+        point = result.point
+        logger.info(
+            "Kalibrace α %s %s (%s): medián %.3f (buy %s / sell %s, %d stran) → α %.3f (%d dnů)",
+            self.symbol,
+            result.expiry,
+            result.day,
+            point.ratio_median,
+            "—" if point.ratio_buy is None else f"{point.ratio_buy:.3f}",
+            "—" if point.ratio_sell is None else f"{point.ratio_sell:.3f}",
+            point.samples,
+            result.alpha_after,
+            result.days,
+        )
+        await self.publisher.publish(
+            "alerts",
+            {
+                "kind": "fa_calibration",
+                "symbol": self.symbol,
+                "message": (
+                    f"Kalibrace FA α {self.symbol}: denní medián ΔOI/net "
+                    f"{point.ratio_median:.2f} ({point.samples} stran) → "
+                    f"α = {result.alpha_after:.2f} po {result.days} dnech"
+                ),
+                "ts": dt.datetime.now(dt.UTC).timestamp(),
+            },
+        )
 
     async def _expand_secondary(self, spot: float, today: dt.date) -> None:
         """Roztažení obálky sekundární expirace (#442).

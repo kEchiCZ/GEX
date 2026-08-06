@@ -1,4 +1,5 @@
 /** Stavová lišta pipeline (SPEC 3.7 + 7.1) — živě ze status kanálu /ws/live. */
+import { daysLabel, useFaAlpha } from '../hooks/useFaAlpha'
 import { useAppState } from '../state/AppState'
 
 function formatBytes(bytes?: number): string {
@@ -14,7 +15,9 @@ function formatBytes(bytes?: number): string {
 }
 
 export function StatusBar() {
-  const { status } = useAppState()
+  const { status, symbol } = useAppState()
+  // Kalibrovaná FA α (#232 fáze 2) — badge jen když už existuje první bod
+  const faAlpha = useFaAlpha(symbol)
   const greeks =
     status.greeks_complete !== undefined && status.greeks_total !== undefined
       ? `Greeks ${status.greeks_complete}/${status.greeks_total}`
@@ -41,6 +44,18 @@ export function StatusBar() {
       {repair && <span data-testid="status-repair">{repair}</span>}
       {lines && <span data-testid="status-lines">{lines}</span>}
       <span data-testid="status-disk">{disk}</span>
+      {faAlpha && (
+        <span
+          data-testid="status-fa-alpha"
+          title={
+            'Kalibrovaná α flow-adjusted odhadu OI (ADR-0011): medián poměru skutečného ' +
+            'ΔOI k net klasifikovanému toku z ranních validací, EMA přes dny. ' +
+            'Počet = kolik čistých dnů už kalibrace započetla.'
+          }
+        >
+          FA α={faAlpha.alpha.toFixed(2)} · {daysLabel(faAlpha.days)}
+        </span>
+      )}
       <span data-testid="status-ibkr">
         IBKR: {connection}
         {status.port !== undefined ? ` :${status.port}` : ''}
