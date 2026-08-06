@@ -293,6 +293,10 @@ class InstrumentPipeline:
     # Re-backfill dnešních barů po návratu streamu (#221); None = backfill nezapojen
     backfill_today: Callable[[], Awaitable[None]] | None = None
     _cycles_since_oi: int = field(default=0, repr=False)
+    # Den, ke kterému patří `oi_available`/`oi_final` (#494): pipeline symbolu
+    # s nedenní nejbližší expirací přežije půlnoc a bez resetu by včerejší
+    # finalita blokovala archivaci nového dne navždy.
+    _oi_day: dt.date | None = field(default=None, repr=False)
     _minute_count: int = field(default=0, repr=False)
     _last_spot: float = field(default=float("nan"), repr=False)
     _backfill_task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -312,18 +316,22 @@ class InstrumentPipeline:
             )
 
     async def _archive_new_strikes(
-        self, previous: Sequence[OptionContractSpec], today: dt.date
+        self,
+        previous: Sequence[OptionContractSpec],
+        current: Sequence[OptionContractSpec],
+        today: dt.date,
     ) -> None:
         """Doarchivuje OI striků, které přibyly rozšířením obálky (#465).
 
         Denní archiv pokrývá pásmo z okamžiku archivace; auto-rozšíření (ADR-0002)
         ho během dne posouvá za cenou. Bez doplnění mají nové striky `get_oi`
-        None, tedy v grafu nulu — přitom je nikdo nezměřil.
+        None, tedy v grafu nulu — přitom je nikdo nezměřil. `current` je
+        explicitní, aby stejná cesta pokryla aktivní i sekundární řetěz (#494).
 
         Selhání nesmí shodit cyklus: OI je doplněk, sběr kotací běží dál.
         """
         known = {(spec.strike, spec.right) for spec in previous}
-        fresh = [spec for spec in self.runtime.contracts if (spec.strike, spec.right) not in known]
+        fresh = [spec for spec in current if (spec.strike, spec.right) not in known]
         if not fresh:
             return
         try:
@@ -338,6 +346,27 @@ class InstrumentPipeline:
             result.written,
             len(result.missing),
         )
+
+    def _archive_universe(self) -> list[OptionContractSpec]:
+        """Kontrakty pro denní archiv: snímek z discovery ∪ aktuální obálky (#494).
+
+        `archive_contracts` je statický snímek z `initial_band` při založení
+        pipeline; expanze obálky (aktivní i sekundární) během dne přidává
+        striky, které v něm nejsou. Post-publikační obnova je musí číst taky,
+        jinak nové striky jedou celý den na předpublikačním OI.
+        """
+        universe: list[OptionContractSpec] = list(self.archive_contracts or ())
+        seen = {(spec.expiry, spec.strike, spec.right) for spec in universe}
+        sources: list[Sequence[OptionContractSpec]] = [self.runtime.contracts]
+        if self.next_runtime is not None:
+            sources.append(self.next_runtime.contracts)
+        for source in sources:
+            for spec in source:
+                key = (spec.expiry, spec.strike, spec.right)
+                if key not in seen:
+                    seen.add(key)
+                    universe.append(spec)
+        return universe
 
     def _oi_refresh_due(self, now: dt.datetime) -> bool:
         """Má se existující snímek dne přečíst znovu? (#463)
@@ -359,7 +388,11 @@ class InstrumentPipeline:
         hodině, takže by test jinak platil jen část dne.
         """
         now = now or dt.datetime.now(dt.UTC)
-        if today in self.oi_repository.days(self.symbol) and not self._oi_refresh_due(now):
+        self._oi_day = today
+        # Platný denní archiv už existuje → případné selhání níže je jen
+        # neúspěšná OBNOVA, ne ztráta OI (#494) — jede se dál na starším snímku
+        has_snapshot = today in self.oi_repository.days(self.symbol)
+        if has_snapshot and not self._oi_refresh_due(now):
             await self._run_fa_validation(today)
             return True
         captured = self.oi_repository.captured_at(self.symbol, today)
@@ -370,7 +403,7 @@ class InstrumentPipeline:
                 today,
                 captured.strftime("%H:%M"),
             )
-        contracts = self.archive_contracts or self.runtime.contracts
+        contracts = self._archive_universe()
         try:
             result = await self.archiver.archive_day(contracts, today, now=now)
         except Exception:
@@ -378,6 +411,8 @@ class InstrumentPipeline:
             # shodil celý řetěz do cooldownu) — sběr běží dál s volume fallbackem,
             # retry po OI_RETRY_CYCLES cyklech
             logger.exception("OI archivace %s selhala — pokračuje se bez OI", self.symbol)
+            if has_snapshot:
+                return await self._report_refresh_failed(today)
             await self.publisher.publish(
                 "alerts",
                 {
@@ -397,6 +432,8 @@ class InstrumentPipeline:
             len(result.missing),
         )
         if result.written == 0:
+            if has_snapshot:
+                return await self._report_refresh_failed(today)
             await self.publisher.publish(
                 "alerts",
                 {
@@ -416,6 +453,31 @@ class InstrumentPipeline:
             logger.info("OI archiv %s %s je finální (dvě shodná čtení)", self.symbol, today)
         await self._run_fa_validation(today)
         await self._run_setup_selfcheck(today)
+        return True
+
+    async def _report_refresh_failed(self, today: dt.date) -> bool:
+        """Neúspěšná post-publikační OBNOVA při existujícím denním archivu (#494).
+
+        Přechodný výpadek fetche po publikaci nesmí shodit `oi_available` ani
+        hlásit „GEX/OI vrstvy bez OI" — platný (byť starší) snímek dne existuje
+        a vrstvy z něj jedou dál. `oi_final` zůstává False, takže se obnova
+        zopakuje dalším retry cyklem.
+        """
+        logger.warning(
+            "Obnova OI archivu %s %s selhala — jede se na starším snímku, další pokus za 30 min",
+            self.symbol,
+            today,
+        )
+        await self.publisher.publish(
+            "alerts",
+            {
+                "kind": "oi_refresh_failed",
+                "symbol": self.symbol,
+                "message": f"Obnova OI pro {self.symbol} po publikačním okně selhala — "
+                "jede se na starším snímku dne, další pokus za 30 min",
+                "ts": dt.datetime.now(dt.UTC).timestamp(),
+            },
+        )
         return True
 
     async def _run_setup_selfcheck(self, today: dt.date) -> None:
@@ -531,7 +593,7 @@ class InstrumentPipeline:
                 },
             )
 
-    def _expand_secondary(self, spot: float) -> None:
+    async def _expand_secondary(self, spot: float, today: dt.date) -> None:
         """Roztažení obálky sekundární expirace (#442).
 
         Sekundár dostával pásmo jen jednou při startu pipeline, takže při
@@ -539,6 +601,8 @@ class InstrumentPipeline:
         nad tou hranicí přestaly kreslit. Rozšiřuje se stejnou logikou jako
         aktivní řetěz; `capped` se u něj nealertuje — o stropu obálky
         informuje už alert aktivního řetězu a druhý by jen zdvojoval.
+        Nové striky se doarchivují stejně jako u aktivního řetězu (#494) —
+        bez toho by měly `get_oi` None celý den.
         """
         if self.next_runtime is None or self.next_info is None or self.next_band is None:
             return
@@ -546,9 +610,11 @@ class InstrumentPipeline:
         if not expansion.expanded:
             return
         self.next_band = expansion.band
+        previous_contracts = self.next_runtime.contracts
         self.next_runtime.contracts = build_contracts(
             _underlying_for(self.symbol, self.next_info), self.next_info, self.next_band
         )
+        await self._archive_new_strikes(previous_contracts, self.next_runtime.contracts, today)
         logger.info(
             "Obálka sekundární expirace %s %s rozšířena na %g–%g (%d kontraktů)",
             self.symbol,
@@ -570,18 +636,27 @@ class InstrumentPipeline:
 
     async def run_minute(self, now: dt.datetime) -> SweepMetrics:
         """Jeden minutový cyklus instrumentu: OI retry, expanze obálky, runtime cyklus."""
+        # Nový den (#494): finalita i dostupnost OI patřily včerejšku. Pipeline
+        # s nedenní nejbližší expirací přežije půlnoc a bez resetu by se nový
+        # den nikdy nearchivoval (oi_final=True vypíná retry blok níže).
+        today = now.date()
+        if self._oi_day is not None and self._oi_day != today:
+            self.oi_available = False
+            self.oi_final = False
+            self._cycles_since_oi = OI_RETRY_CYCLES  # archivuj hned, ne až za 30 min
+        self._oi_day = today
         # Retry běží nejen když OI chybí, ale i dokud snímek není finální (#463):
         # předpublikační čísla jsou nenulová, takže se bez toho nikdy neobnoví
         if not self.oi_available or self._oi_refresh_due(now):
             self._cycles_since_oi += 1
             if self._cycles_since_oi >= OI_RETRY_CYCLES:
                 self._cycles_since_oi = 0
-                self.oi_available = await self.try_archive_oi(now.date(), now)
+                self.oi_available = await self.try_archive_oi(today, now)
 
         spot = self._current_spot()
 
         # Auto-rozšíření denní obálky (ADR-0002) — aktivní i sekundární řetěz (#442)
-        self._expand_secondary(spot)
+        await self._expand_secondary(spot, today)
         expansion = self.discovery.maybe_expand(self.info, self.band, spot)
         if expansion.expanded:
             self.band = expansion.band
@@ -592,7 +667,7 @@ class InstrumentPipeline:
             # Striky přibylé posunem pásma nemá denní archiv pokryté (#465):
             # 4. 8. tak NQ vyjelo 11 striků nad archivované pásmo a všechny
             # měly v grafu nulové OI. Doarchivují se hned, ne až zítra.
-            await self._archive_new_strikes(previous_contracts, now.date())
+            await self._archive_new_strikes(previous_contracts, self.runtime.contracts, today)
             if expansion.capped:
                 await self.publisher.publish(
                     "alerts",

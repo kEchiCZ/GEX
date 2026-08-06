@@ -112,6 +112,39 @@ async def test_captured_ts_zaznamenan_a_changed_hlasi_ustaleni(
     assert third.changed is False
 
 
+async def test_vypadek_drive_archivovaneho_kontraktu_brani_finalite(
+    repository: OIEodRepository,
+) -> None:
+    """#494 (4): neúplné potvrzovací čtení nesmí prohlásit snímek za finální.
+
+    Kontrakt, který archiv už má a aktuální čtení ho nedodalo, nejde potvrdit
+    jako nezměněný — `changed` musí zůstat True."""
+    specs = contracts()
+    archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), Settings())
+    await archiver.archive_day(specs, DAY_1)
+
+    # Potvrzovací čtení: první (dřív archivovaný) kontrakt OI nedodal, zbytek beze změny
+    partial = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs[1:], 500.0)), Settings())
+    result = await partial.archive_day(specs, DAY_1)
+
+    assert specs[0] in result.missing
+    assert result.changed is True
+
+
+async def test_trvale_chybejici_strike_nebrani_ustaleni(repository: OIEodRepository) -> None:
+    """#494 (4): strike bez OI v obou čteních (nikdy archivovaný) finalitu neblokuje —
+    jinak by se archiv obnovoval donekonečna."""
+    specs = contracts()
+    values = dict.fromkeys(specs[1:], 500.0)  # první kontrakt OI nedodá nikdy
+    archiver = OIArchiver(repository, MockOIFetcher(values), Settings())
+
+    await archiver.archive_day(specs, DAY_1)
+    result = await archiver.archive_day(specs, DAY_1)
+
+    assert specs[0] in result.missing
+    assert result.changed is False  # dvě shodná čtení → ustáleno
+
+
 def test_captured_at_bez_archivu_je_none(repository: OIEodRepository) -> None:
     assert repository.captured_at("ES", DAY_1) is None
 

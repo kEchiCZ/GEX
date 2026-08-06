@@ -326,6 +326,13 @@ class OIArchiver:
         changed = not previous or any(
             previous.get((r.expiry, r.strike, r.right)) != r.oi for r in deduped
         )
+        # Kontrakt dřív archivovaný, který teď čtení nedodalo, nejde potvrdit
+        # jako nezměněný — neúplné čtení nesmí prohlásit snímek za finální (#494).
+        # Trvale chybějící striky (OI bez hodnoty celý den) finalitě nebrání,
+        # jinak by se archiv obnovoval donekonečna.
+        changed = changed or any(
+            (spec.expiry, spec.strike, spec.right) in previous for spec in missing
+        )
         captured_ts = now or dt.datetime.now(dt.UTC)
         await asyncio.to_thread(self._repository.upsert_many, deduped, captured_ts)
         if missing:
