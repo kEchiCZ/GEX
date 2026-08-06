@@ -12,10 +12,11 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import gex_regime, max_pain_strike
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIEodRepository
-from gexlens_engine.storage.t6_store import T6Repository
+from gexlens_engine.storage.t6_store import T6_CONVENTION_VERSION, T6Repository
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,13 @@ class DailyCloses:
 
 
 def read_daily_closes(data_dir: Path, symbol: str, today: dt.date) -> DailyCloses | None:
-    """Closy posledních dvou seancí z parquet archivu barů (derived/{sym}/bars)."""
+    """Closy posledních dvou seancí z parquet archivu barů (derived/{sym}/bars).
+
+    Den seance končí settle US seance, ne UTC půlnocí (#498): close dne D je
+    poslední bar s `ts_min` PŘED settle(D). Bary po settle patří následující
+    seanci a do closu dne D se nepočítají. Dny bez baru před settle (neděle —
+    Globex otevírá až po settle hranici, svátky) se přeskočí.
+    """
     bars_dir = data_dir / "derived" / symbol / "bars"
     if not bars_dir.exists():
         return None
@@ -72,26 +79,101 @@ def read_daily_closes(data_dir: Path, symbol: str, today: dt.date) -> DailyClose
             continue
         if day < today:
             days.append(day)
-    if len(days) < 2:
-        return None
-    days.sort()
+    days.sort(reverse=True)
 
     import pyarrow.parquet as pq
 
-    def last_close(day: dt.date) -> float | None:
+    def session_close(day: dt.date) -> float | None:
+        """Close poslední minuty před settle hranicí dne, nebo None."""
         try:
-            table = pq.read_table(bars_dir / f"{day.isoformat()}.parquet", columns=["close"])
+            table = pq.read_table(
+                bars_dir / f"{day.isoformat()}.parquet", columns=["ts_min", "close"]
+            )
         except Exception:
             return None
-        if table.num_rows == 0:
-            return None
-        return float(table.column("close")[-1].as_py())
+        boundary = settle_ts(day)
+        best_ts: dt.datetime | None = None
+        best_close: float | None = None
+        for ts, close in zip(
+            table.column("ts_min").to_pylist(), table.column("close").to_pylist(), strict=True
+        ):
+            if ts >= boundary:
+                continue
+            if best_ts is None or ts > best_ts:
+                best_ts = ts
+                best_close = float(close)
+        return best_close
 
-    last = last_close(days[-1])
-    previous = last_close(days[-2])
-    if last is None or previous is None:
+    closes: list[tuple[dt.date, float]] = []
+    for day in days:
+        close = session_close(day)
+        if close is None:
+            continue
+        closes.append((day, close))
+        if len(closes) == 2:
+            break
+    if len(closes) < 2:
         return None
-    return DailyCloses(last_day=days[-1], last_close=last, previous_close=previous)
+    (last_day, last), (_, previous) = closes
+    return DailyCloses(last_day=last_day, last_close=last, previous_close=previous)
+
+
+def recompute_stale_candidates(
+    repository: T6Repository, data_dir: Path, trigger_pct: float = DEFAULT_TRIGGER_PCT
+) -> int:
+    """Přepočet kandidátů uložených starou konvencí UTC půlnoci (#498).
+
+    Trigger i overnight gap se přepočítají z věčného archivu 1min barů podle
+    settle konvence, aby se kalibrace neučila ze dvou režimů. Záznamy, pro
+    které bary chybí, se odstraní s logem. Běží při startu enginu; dotkne se
+    jen řádků s `convention_version` < aktuální — opakovaný start je no-op.
+    Vrací počet přepočtených řádků.
+    """
+    stale = repository.list_stale(T6_CONVENTION_VERSION)
+    updated = 0
+    for row in stale:
+        symbol = str(row["symbol"])
+        day: dt.date = row["day"]
+        closes = read_daily_closes(data_dir, symbol, day)
+        if closes is None:
+            logger.warning(
+                "T6 přepočet (#498): %s %s bez dostupných barů — kandidát odstraněn",
+                symbol,
+                day,
+            )
+            repository.delete(symbol=symbol, day=day)
+            continue
+        change_pct = (closes.last_close / closes.previous_close - 1) * 100
+        spot = float(row["spot"])
+        overnight_pct = (spot / closes.last_close - 1) * 100 if closes.last_close > 0 else None
+        if not drop_trigger(closes.previous_close, closes.last_close, trigger_pct):
+            # Řádek zůstává (ruční verdikt u issue už může existovat), jen se
+            # poctivě přepíše — kalibrace pozná slabý trigger z hodnoty
+            logger.warning(
+                "T6 přepočet (#498): %s %s pod settle konvencí netriggeruje (%.2f %%) — ponechán",
+                symbol,
+                day,
+                change_pct,
+            )
+        repository.upsert(
+            symbol=symbol,
+            day=day,
+            trigger_close_pct=change_pct,
+            overnight_move_pct=overnight_pct,
+            put_oi_increase=row["put_oi_increase"],
+            gex_regime=row["gex_regime"],
+            max_pain=row["max_pain"],
+            spot=spot,
+            evaluated_at=row["evaluated_at"],
+        )
+        updated += 1
+    if stale:
+        logger.info(
+            "T6 přepočet (#498): %d kandidátů přepočteno na settle konvenci, %d odstraněno",
+            updated,
+            len(stale) - updated,
+        )
+    return updated
 
 
 @dataclass
