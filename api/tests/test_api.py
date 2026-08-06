@@ -248,6 +248,19 @@ def test_replay_bundle(client: TestClient) -> None:
     raw = read_arrow(base64.b64decode(payload["snapshots_arrow_base64"]))
     assert len(raw) == MINUTES * len(STRIKES) * 2  # surová data pro lokální přepínání módů
     assert payload["oi_prev"] == []  # bez archivu předchozího dne balík drží tvar
+    assert payload["catchup"] == []  # engine běžel celý den — řada neexistuje (#518)
+
+
+def test_replay_bundle_catchup(settings: Settings) -> None:
+    """Catch-up minuty (#518, ADR-0024): /replay nese minutu prvního sweepu po startu."""
+    from gexlens_engine.storage.parquet_store import CatchUpRow
+
+    writer = SnapshotWriter(settings)
+    writer.write_catch_up("ES", "20260716", DAY, [CatchUpRow(ts_min=ts(1))])
+    client = TestClient(create_app(settings))
+
+    payload = client.get(f"/replay/ES/20260716/{DAY.isoformat()}").json()
+    assert [row["ts_min"] for row in payload["catchup"]] == [ts(1).isoformat()]
 
 
 def test_replay_bundle_oi_prev(settings: Settings) -> None:

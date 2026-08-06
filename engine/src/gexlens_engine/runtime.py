@@ -24,12 +24,14 @@ from gexlens_engine.compute.gexfield import (
     greek_profiles,
 )
 from gexlens_engine.compute.levels import GexLevels, compute_ladder, compute_levels
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.parquet_store import (
+    CatchUpRow,
     FlowRowLike,
     GexFieldRow,
     GexProfileRow,
@@ -115,6 +117,10 @@ class EngineRuntime:
     # Charm/vanna profily (#204) — tendency v2 (#397) z nich čte toky v místě ceny
     last_charm_profile: GexProfile | None = field(default=None, init=False)
     last_vanna_profile: GexProfile | None = field(default=None, init=False)
+    # Catch-up flag (#518, ADR-0024): první úspěšný sweep po startu procesu se
+    # označí, pokud v běžícím dni chybí předchozí minuty — kumulativy v něm
+    # dohánějí celou dobu výpadku, ne jednu minutu
+    _catch_up_pending: bool = field(default=True, init=False)
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
@@ -213,29 +219,55 @@ class EngineRuntime:
                     ask=snapshot.ask,
                     delta=snapshot.delta,
                 )
+        # Catch-up flag (#518, ADR-0024): první minuta se snapshoty po startu
+        # procesu, které v běžícím dni předchází neměřená minuta s otevřeným
+        # trhem. Kumulativní denní volume v ní srovnal první sweep sám, takže
+        # přírůstkové odvozeniny ji musí brát jako první měřenou minutu dne.
+        # Start na začátku dne (předchozí minuta patří jinému dni) ani na
+        # otevření seance (trh byl zavřený) flag nedostane — nic nechybí.
+        catch_up = False
+        if rows and self._catch_up_pending:
+            self._catch_up_pending = False
+            previous_minute = ts_min - dt.timedelta(minutes=1)
+            catch_up = previous_minute.date() == day and not is_market_closed(previous_minute)
         if rows:
             await asyncio.to_thread(self.writer.write_minute, self.symbol, self.expiry, day, rows)
+            if catch_up:
+                await asyncio.to_thread(
+                    self.writer.write_catch_up,
+                    self.symbol,
+                    self.expiry,
+                    day,
+                    [CatchUpRow(ts_min=ts_min)],
+                )
+                logger.warning(
+                    "%s %s: první sweep po startu uprostřed dne — minuta označena catch_up",
+                    self.symbol,
+                    ts_min.isoformat(),
+                )
             # Inkrementální řez minuty pro živý append heatmapy (#127) — jen pole nutná
             # pro frontend grid/profil; jede pro aktivní i sekundární řetěz
-            await self.publisher.publish(
-                f"snapshot.{self.symbol}.{self.expiry}",
-                {
-                    "ts_min": ts_min.isoformat(),
-                    "rows": [
-                        {
-                            "strike": row.strike,
-                            "right": row.right,
-                            "oi": row.oi,
-                            "volume": row.volume,
-                            "delta": row.delta,
-                            # Vega pro VEX módy (#201) — aditivní pole
-                            "vega": row.vega,
-                            "stale_age": row.stale_age,
-                        }
-                        for row in rows
-                    ],
-                },
-            )
+            snapshot_message: dict[str, object] = {
+                "ts_min": ts_min.isoformat(),
+                "rows": [
+                    {
+                        "strike": row.strike,
+                        "right": row.right,
+                        "oi": row.oi,
+                        "volume": row.volume,
+                        "delta": row.delta,
+                        # Vega pro VEX módy (#201) — aditivní pole
+                        "vega": row.vega,
+                        "stale_age": row.stale_age,
+                    }
+                    for row in rows
+                ],
+            }
+            # Aditivní klíč (#518) — starší klienti ho ignorují; posílá se jen
+            # když platí, běžná minuta zprávu nenafukuje
+            if catch_up:
+                snapshot_message["catch_up"] = True
+            await self.publisher.publish(f"snapshot.{self.symbol}.{self.expiry}", snapshot_message)
 
         # 2) GEX + levels
         gex = self.gex_engine.compute(gex_inputs, spot=spot, multiplier=self.multiplier)

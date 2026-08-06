@@ -12,6 +12,7 @@ CSS roztažení škáluje obsah stejně jako canvas heatmapy.
 */
 import { memo, useState } from 'react'
 import { baseBucketPx } from '../heatmap/view'
+import { minuteLabel } from '../replay/useDayData'
 import {
   CUM_DELTA_PAD,
   barHeights,
@@ -35,6 +36,10 @@ export interface PanelSeries {
   /** Daily pohled (#296, SPEC 7.1): OHLC svíčka per sloupec-den; null = den
   bez dat. Když je přítomné, panel Sentiment kreslí svíčky místo plochy. */
   sentimentCandles?: (SentimentCandle | null)[]
+  /** ISO čas první měřené minuty, když den nezačíná od začátku seance (#518,
+  ADR-0024) — engine startoval uprostřed dne a tok před tímto časem chybí.
+  Panel Cum Δ to přizná popiskem „od HH:MM". Null/chybí = den je celý. */
+  cumDeltaFromIso?: string | null
 }
 
 export interface PanelsVisible {
@@ -353,7 +358,20 @@ function BottomPanelsBase({
     const areas = cumDeltaAreas(data.cumDelta, minutes * step, height)
     panels.push(
       <section key="cumdelta" className="bottom-panel" aria-label="Cum Δ panel">
-        <span className="panel-title muted">Cum Δ</span>
+        <span className="panel-title muted">
+          Cum Δ
+          {/* Den nezačíná od začátku seance (#518): měření běží až od startu
+          enginu — decentní přiznání v legendě, detail v tooltipu */}
+          {data.cumDeltaFromIso && (
+            <span
+              data-testid="cumdelta-from"
+              title="Engine startoval uprostřed seance — tok před tímto časem chybí a nelze ho rekonstruovat"
+            >
+              {' '}
+              · od {minuteLabel(data.cumDeltaFromIso)}
+            </span>
+          )}
+        </span>
         {idx !== null && <PanelValue>{fmtSigned(data.cumDelta[idx])}</PanelValue>}
         {axisValue('cumdelta', cumPeak, true)}
         <svg

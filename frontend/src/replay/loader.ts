@@ -157,6 +157,11 @@ export interface ReplayInputs {
    * Množina místo pole: profil se na ni ptá per řádek při každém překreslení,
    * takže lineární hledání by bylo O(strikes × chybějících) na minutu. */
   oiMissing: Set<string>
+  /** ISO minuty s příznakem catch_up (#518, ADR-0024): první sweep po startu
+   * enginu uprostřed dne. Kumulativy v nich dohánějí celou dobu výpadku, takže
+   * přírůstkové odvozeniny je čtou jako první měřenou minutu dne, ne jako
+   * minutový obchod. */
+  catchUpMinutes: Set<string>
 }
 
 /** Klíč do `ReplayInputs.oiMissing` — sjednocený tvar pro decode i append. */
@@ -178,6 +183,8 @@ export interface LiveMinuteRow {
 export interface LiveMinute {
   tsIso: string
   rows: LiveMinuteRow[]
+  /** Catch-up minuta (#518): první sweep po startu enginu uprostřed dne. */
+  catchUp?: boolean
   bar?: {
     open?: number
     high?: number
@@ -225,6 +232,8 @@ interface ReplayBundle {
   ladder?: Array<Record<string, unknown>>
   /** Striky bez OI (#465) — v běžný den prázdné, starší API klíč neposílá. */
   oimissing?: Array<Record<string, unknown>>
+  /** Catch-up minuty (#518, ADR-0024) — v běžný den prázdné, starší API klíč neposílá. */
+  catchup?: Array<Record<string, unknown>>
   /** Dyn GEX profily (ADR-0009, #203) — starší API pole neposílá. */
   gexprofile?: Array<Record<string, unknown>>
   /** Modelované pole (ADR-0009 fáze 2) — starší API klíč neposílá. */
@@ -477,6 +486,11 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     ),
   )
 
+  // Catch-up minuty (#518) — v běžný den řada neexistuje a množina zůstane prázdná
+  const catchUpMinutes = new Set<string>(
+    (bundle.catchup ?? []).map((row) => canonicalTs(row.ts_min)),
+  )
+
   // Modelované pole (ADR-0009 fáze 2) — partice drží jen poslední stav
   const fieldRaw = (bundle.gexfield ?? []).at(-1)
   const fieldValues =
@@ -523,6 +537,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     gexField,
     ladder: ladderRows,
     oiMissing,
+    catchUpMinutes,
   }
 }
 
@@ -656,11 +671,19 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
       }
     : inputs.gexField
 
+  // Catch-up minuta z WS (#518): první živý sweep po restartu enginu se musí
+  // označit i bez refetche balíku — jinak by Opt Vol/Δ Flow vykreslily skok
+  // kumulativu jako obří bar až do hodinové rekonciliace
+  const catchUpMinutes = minute.catchUp
+    ? new Set(inputs.catchUpMinutes).add(tsIso)
+    : inputs.catchUpMinutes
+
   // Chybějící OI chodí zatím jen v /replay balíku, ne po WS — živě příchozí
   // minuta množinu nemění, ale musí ji propustit dál (jinak by ji append
   // zahodil a šrafování by po první živé minutě zmizelo)
   return {
     ...inputs,
+    catchUpMinutes,
     minutes: newMinutes,
     snapshotMinutes,
     strikes: newStrikes,
@@ -787,8 +810,11 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
   }
   // Přírůstkové panely počítají rozdíl vůči PŘEDCHOZÍ MĚŘENÉ minutě, ne vůči
   // index-1 (#459): sloupec bez snapshotu má nulové kumulativní volume, takže
-  // by za dírou vyskočil falešný špic o velikosti celého dne
-  const measured = measuredMinutes(inputs.snapshotMinutes, minutes)
+  // by za dírou vyskočil falešný špic o velikosti celého dne.
+  // Catch-up minuta (#518) se chová jako první měřená minuta dne — její
+  // kumulativy dohánějí celou dobu výpadku, ne jednu minutu obchodů.
+  const isCatchUp = (minuteIdx: number): boolean => inputs.catchUpMinutes.has(minuteKeys[minuteIdx])
+  const measured = measuredMinutes(inputs.snapshotMinutes, minutes, isCatchUp)
   const optVolCall = optVolSeries(inputs.callVolume, minutes, strikes.length, measured)
   const optVolPut = optVolSeries(inputs.putVolume, minutes, strikes.length, measured)
   const deltaFlowCall = deltaFlowSeries(
@@ -886,6 +912,13 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     if (minuteIdx !== undefined) ladder[minuteIdx] = row
   }
 
+  // Popisek „od HH:MM" pro CumΔ (#518, ADR-0024): je-li PRVNÍ měřená minuta
+  // dne catch-up, den nezačíná od začátku seance — tok před startem enginu
+  // rekonstruovat nelze a panel to musí přiznat
+  const firstMeasuredIdx = inputs.snapshotMinutes.findIndex((has) => has)
+  const cumDeltaFromIso =
+    firstMeasuredIdx >= 0 && isCatchUp(firstMeasuredIdx) ? minuteKeys[firstMeasuredIdx] : null
+
   return {
     symbol: inputs.symbol,
     expiry: inputs.expiry,
@@ -894,7 +927,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     grid,
     raw,
     overlays,
-    panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut },
+    panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut, cumDeltaFromIso },
     profileByMinute,
     provisionalMinutes,
     gexProfile,
@@ -912,19 +945,28 @@ export function buildReplayDay(bundle: ReplayBundle): ReplayDay {
  *
  * `prev[i]` = index poslední minuty se snapshotem před `i`, nebo -1 (žádná —
  * první měřená minuta dne, nebo minuta bez snapshotu). Přírůstky se počítají
- * přes díru, ne vůči nulovému sloupci. */
+ * přes díru, ne vůči nulovému sloupci.
+ *
+ * Catch-up minuta (#518, ADR-0024) dostává `prev = -1` VŽDY: její kumulativy
+ * dohánějí celou dobu výpadku, takže rozdíl proti čemukoli dřívějšímu není
+ * minutový obchod. Pro NÁSLEDUJÍCÍ minuty ale předchůdcem je — její kumulativy
+ * už jsou správné a diff proti nim je poctivá minuta. */
 interface MeasuredMinutes {
   measured: (minuteIdx: number) => boolean
   prev: Int32Array
 }
 
-function measuredMinutes(snapshotMinutes: boolean[], minutes: number): MeasuredMinutes {
+function measuredMinutes(
+  snapshotMinutes: boolean[],
+  minutes: number,
+  isCatchUp?: (minuteIdx: number) => boolean,
+): MeasuredMinutes {
   const measured = (minuteIdx: number): boolean => snapshotMinutes[minuteIdx] ?? true
   const prev = new Int32Array(minutes).fill(-1)
   let last = -1
   for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
     if (!measured(minuteIdx)) continue
-    prev[minuteIdx] = last
+    prev[minuteIdx] = isCatchUp?.(minuteIdx) ? -1 : last
     last = minuteIdx
   }
   return { measured, prev }

@@ -100,6 +100,63 @@ async def test_bez_chybejiciho_oi_rada_nevznikne(
     assert not (settings.derived_dir / "ES" / "20260716" / "oimissing" / f"{day}.parquet").exists()
 
 
+async def test_prvni_sweep_po_startu_uprostred_dne_ma_catch_up(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """#518 (ADR-0024): první sweep po startu uprostřed dne nese catch_up flag.
+
+    TS je 15:00 UTC ve čtvrtek — trh byl otevřený i minutu předtím, takže
+    předchozí minuty dne chybí a kumulativy prvního sweepu dohánějí celý den.
+    """
+    engine_runtime, publisher, settings = runtime
+
+    await engine_runtime.run_cycle(TS, SPOT, [])
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=1), SPOT, [])
+
+    day = TS.date().isoformat()
+    catchup = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "catchup" / f"{day}.parquet"
+    )
+    assert list(catchup.columns) == ["ts_min"]
+    # Flag má JEN první sweep procesu — další cykly už jsou běžné minuty
+    assert len(catchup) == 1
+    assert catchup["ts_min"].iloc[0].to_pydatetime() == TS
+
+    # WS: aditivní klíč jen v první minutě, běžná minuta zprávu nenafukuje
+    snaps = [data for channel, data in publisher.messages if channel == "snapshot.ES.20260716"]
+    assert len(snaps) == 2
+    assert snaps[0].get("catch_up") is True
+    assert "catch_up" not in snaps[1]
+
+
+async def test_start_na_zacatku_dne_je_bez_catch_up(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """#518: start na začátku dne — žádné minuty dne nechybí, flag nevznikne."""
+    engine_runtime, publisher, settings = runtime
+    midnight = dt.datetime(2026, 7, 16, 0, 0, tzinfo=dt.UTC)
+
+    await engine_runtime.run_cycle(midnight, SPOT, [])
+
+    day = midnight.date().isoformat()
+    assert not (settings.derived_dir / "ES" / "20260716" / "catchup" / f"{day}.parquet").exists()
+    snap = next(data for channel, data in publisher.messages if channel == "snapshot.ES.20260716")
+    assert "catch_up" not in snap
+
+
+async def test_start_na_otevreni_seance_je_bez_catch_up(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """#518: start na otevření seance — předchozí minuta byla denní přestávka CME."""
+    engine_runtime, _publisher, settings = runtime
+    session_open = dt.datetime(2026, 7, 16, 22, 0, tzinfo=dt.UTC)  # 17:00 CT
+
+    await engine_runtime.run_cycle(session_open, SPOT, [])
+
+    day = session_open.date().isoformat()
+    assert not (settings.derived_dir / "ES" / "20260716" / "catchup" / f"{day}.parquet").exists()
+
+
 async def test_one_cycle_produces_full_day_artifacts(
     runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
 ) -> None:
