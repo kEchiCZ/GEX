@@ -22,6 +22,7 @@ from typing import Any
 from sqlalchemy import insert, select, update
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
 from gexlens_engine.storage.meta import settings_table
 from gexlens_engine.storage.sentiment import news_events, news_model_stats, news_reactions
 from gexlens_engine.storage.setups_store import setups_table
@@ -153,15 +154,22 @@ class DriftJob:
         return findings
 
     def _setup_findings(self) -> list[DriftFinding]:
+        # Jen aktuální mechanika (#496, konvence z #311): míchat výsledky různých
+        # systémů = alertovat na něco, co už neexistuje — v1 baseline navíc nesla
+        # incident se zmrzlými Greeks 26.–27. 7. (ADR-0015). Řazení podle
+        # `closed_ts`: „posledních 20" mají být poslední UZAVŘENÉ, ne založené.
         stmt = (
             select(
                 setups_table.c.symbol,
                 setups_table.c.template,
                 setups_table.c.status,
-                setups_table.c.created_ts,
+                setups_table.c.closed_ts,
             )
-            .where(setups_table.c.status.in_(("closed_target", "closed_stop")))
-            .order_by(setups_table.c.created_ts.desc())
+            .where(
+                setups_table.c.status.in_(("closed_target", "closed_stop")),
+                setups_table.c.mechanics_version == SETUP_MECHANICS_VERSION,
+            )
+            .order_by(setups_table.c.closed_ts.desc())
         )
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
