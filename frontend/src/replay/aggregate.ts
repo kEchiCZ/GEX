@@ -211,10 +211,24 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
       }
     : null
 
+  // Koš přebírá FA profil poslední minuty s daty (#232) — jako gexProfile
+  const lastRowPerBucket = <T>(rows: (T | null)[] | null): (T | null)[] | null =>
+    rows
+      ? Array.from({ length: buckets }, (_, bucketIdx) => {
+          const end = bucketEnd(bucketIdx, bucketMinutes, minutes)
+          for (let minuteIdx = end; minuteIdx >= bucketIdx * bucketMinutes; minuteIdx -= 1) {
+            const row = rows[minuteIdx]
+            if (row) return row
+          }
+          return null
+        })
+      : null
+
   return {
     source: day.source,
     grid,
     raw: day.raw, // surová 1m matice se nese dál (módy se aplikují před agregací)
+    rawFa: day.rawFa, // FA matice stejně — zdroj OI se přepíná před agregací (#232)
     minutesIso: day.minutesIso, // ISO minut zůstávají 1m — zarovnávání je před agregací
     overlays: aggregateOverlays(day.overlays, bucketMinutes, buckets),
     panels: {
@@ -228,29 +242,14 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
     profileByMinute,
     demoProfileRows: day.demoProfileRows,
     // Koš přebírá Dyn GEX profil poslední minuty s daty (ADR-0009)
-    gexProfile: day.gexProfile
-      ? Array.from({ length: buckets }, (_, bucketIdx) => {
-          const end = bucketEnd(bucketIdx, bucketMinutes, minutes)
-          for (let minuteIdx = end; minuteIdx >= bucketIdx * bucketMinutes; minuteIdx -= 1) {
-            const row = day.gexProfile![minuteIdx]
-            if (row) return row
-          }
-          return null
-        })
-      : null,
+    gexProfile: lastRowPerBucket(day.gexProfile),
     // Modelované pole se mapuje časem, ne koši — beze změny (ADR-0009 fáze 2)
     gexField: day.gexField,
+    // FA varianty (#232): profil po koších jako měřený, pole beze změny
+    gexProfileFa: lastRowPerBucket(day.gexProfileFa),
+    gexFieldFa: day.gexFieldFa,
     // Koš přebírá žebřík poslední minuty s daty (#244) — jako gexProfile
-    ladder: day.ladder
-      ? Array.from({ length: buckets }, (_, bucketIdx) => {
-          const end = bucketEnd(bucketIdx, bucketMinutes, minutes)
-          for (let minuteIdx = end; minuteIdx >= bucketIdx * bucketMinutes; minuteIdx -= 1) {
-            const row = day.ladder![minuteIdx]
-            if (row) return row
-          }
-          return null
-        })
-      : null,
+    ladder: lastRowPerBucket(day.ladder),
     spotSeries: lastNonNull(day.spotSeries, bucketMinutes, buckets),
     minuteLabels: Array.from(
       { length: buckets },

@@ -1,6 +1,6 @@
 /** Řádky timeframe a přepínačů vizualizace (SPEC 7.1). */
 import { INTERVALS, useAppState } from '../state/AppState'
-import type { NewsMarkerFilter, SignalMode, Toggles, UnderlayPlane } from '../state/AppState'
+import type { NewsMarkerFilter, OiSource, SignalMode, Toggles, UnderlayPlane } from '../state/AppState' // prettier-ignore
 import type { SignalGateInfo } from '../api/news'
 
 const TOGGLE_LABELS: Record<keyof Toggles, string> = {
@@ -61,6 +61,12 @@ const PLANE_LABELS: Record<UnderlayPlane, string> = {
   vanna: 'Dyn Vanna',
 }
 
+/** Zdroj OI (#232): měřený ranní archiv, nebo flow-adjusted odhad (opt-in). */
+const OI_SOURCE_LABELS: Record<OiSource, string> = {
+  measured: 'Měřené',
+  fa: 'FA odhad',
+}
+
 const SIGNAL_MODE_LABELS: Record<SignalMode, string> = {
   off: 'Off',
   news: 'NEWS',
@@ -82,6 +88,8 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
     setUnderlayPlane,
     newsMarkerFilter,
     setNewsMarkerFilter,
+    oiSource,
+    setOiSource,
   } = useAppState()
   // „Collecting data" (SPEC 9.0): režim zapnutý, ale žádný bucket neprošel
   // Wilson gate (6.2) → místo šipek se ukazuje progres nejlepšího bucketu
@@ -100,6 +108,24 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
           {(Object.keys(PLANE_LABELS) as UnderlayPlane[]).map((value) => (
             <option key={value} value={value}>
               {PLANE_LABELS[value]}
+            </option>
+          ))}
+        </select>
+      </label>
+      {/* Zdroj OI (#232): default měřené; FA odhad je opt-in a chip má
+          tečkovaný okraj — uživatel musí vždy poznat, že kouká na odhad */}
+      <label className="toggle">
+        OI
+        <select
+          className={oiSource === 'fa' ? 'fa-source-active' : undefined}
+          value={oiSource}
+          onChange={(event) => setOiSource(event.target.value as OiSource)}
+          aria-label="Zdroj OI"
+          title="Měřené = ranní OI archiv (mění se 1× denně). FA odhad = OI + α·klasifikovaný intradenní tok (ADR-0011) — vidí i dnes postavený positioning, ale je to model, ne měření. Volba se pamatuje per symbol."
+        >
+          {(Object.keys(OI_SOURCE_LABELS) as OiSource[]).map((value) => (
+            <option key={value} value={value}>
+              {OI_SOURCE_LABELS[value]}
             </option>
           ))}
         </select>

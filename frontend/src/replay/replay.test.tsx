@@ -193,6 +193,77 @@ test('buildReplayDay dekóduje Arrow snapshoty a poskládá den', () => {
   expect(day.profileByMinute.rowsAt(1)[0].staleAge).toBe(54_000)
 })
 
+test('FA zdroj (#232): oiest přepisuje odhad, měřený režim je bit-identický', () => {
+  const table = tableFromArrays({
+    ts_min: [
+      '2026-07-16T15:00:00Z',
+      '2026-07-16T15:00:00Z',
+      '2026-07-16T15:01:00Z',
+      '2026-07-16T15:01:00Z',
+    ],
+    strike: Float64Array.from([7600, 7600, 7600, 7600]),
+    right: ['C', 'P', 'C', 'P'],
+    volume: Float64Array.from([10, 5, 30, 12]),
+    oi: Float64Array.from([100, 200, 100, 200]),
+    delta: Float64Array.from([0.5, -0.4, 0.5, -0.4]),
+    stale_age: Float64Array.from([0, 0, 0, 0]),
+  })
+  const common = {
+    symbol: 'ES',
+    expiry: '20260716',
+    date: '2026-07-16',
+    snapshots_arrow_base64: btoa(String.fromCharCode(...tableToIPC(table, 'stream'))),
+    levels: [],
+    flow: [],
+    bars: [],
+  }
+  const withoutFa = decodeBundle({ ...common })
+  const withFa = decodeBundle({
+    ...common,
+    oiest: [{ ts_min: '2026-07-16T15:01:00Z', strike: 7600, right: 'C', oi_est: 140 }],
+    gexprofilefa: [
+      { ts_min: '2026-07-16T15:00:00Z', grid_start: 7590, grid_step: 5, values: [1, 2] },
+    ],
+  })
+
+  // REGRES: měřené matice jsou bit-identické s během bez FA řad
+  expect([...withFa.callOi]).toEqual([...withoutFa.callOi])
+  expect([...withFa.putOi]).toEqual([...withoutFa.putOi])
+  // Odhad: přepsaná jen buňka z oiest (index = strikeIdx·minutes + minuteIdx)
+  expect(withFa.hasOiEst).toBe(true)
+  expect(withoutFa.hasOiEst).toBe(false)
+  expect(withFa.callOiEst[1]).toBe(140)
+  expect(withFa.callOiEst[0]).toBe(withFa.callOi[0])
+  expect([...withFa.putOiEst]).toEqual([...withFa.putOi])
+
+  const day = assembleReplayDay(withFa)
+  const dayWithout = assembleReplayDay(withoutFa)
+  expect(dayWithout.rawFa).toBeNull()
+  expect(day.rawFa).not.toBeNull()
+  expect(day.rawFa!.callOi[1]).toBe(140)
+  expect(day.raw.callOi[1]).toBe(100) // měřená vrstva odhad nevidí
+  // Měřený grid (výchozí OI mód) se FA řadou nemění — bit-identita
+  expect([...day.grid.layers.call!]).toEqual([...dayWithout.grid.layers.call!])
+  expect([...day.grid.layers.put!]).toEqual([...dayWithout.grid.layers.put!])
+  // FA Dyn GEX profil jede vedle měřeného
+  expect(day.gexProfileFa?.[0]?.values).toEqual([1, 2])
+  expect(day.gexProfile[0]).toBeNull()
+
+  // Živý append: oiest minuty přepíše odhad, měření nechá
+  const appended = appendMinute(withFa, {
+    tsIso: '2026-07-16T15:02:00Z',
+    rows: [
+      { strike: 7600, right: 'C', oi: 100, volume: 40, delta: 0.5 },
+      { strike: 7600, right: 'P', oi: 200, volume: 20, delta: -0.4 },
+    ],
+    oiEst: [{ strike: 7600, right: 'C', oi_est: 150 }],
+  })
+  expect(appended.callOi[2]).toBe(100)
+  expect(appended.callOiEst[2]).toBe(150)
+  expect(appended.putOiEst[2]).toBe(200) // bez odhadu = měření
+  expect(appended.callOiEst[1]).toBe(140) // starší odhad přenos přežil
+})
+
 test('walldom řada: slabé úseky zdi + dominance v cenovce (ADR-0010, #223)', () => {
   const table = tableFromArrays({
     ts_min: ['2026-07-16T15:00:00Z', '2026-07-16T15:01:00Z'],

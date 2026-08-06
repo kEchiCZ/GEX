@@ -25,6 +25,9 @@ function makeInputs(): ReplayInputs {
     strikes: [7600],
     callOi: new Float32Array([100]),
     putOi: new Float32Array([200]),
+    callOiEst: new Float32Array([100]),
+    putOiEst: new Float32Array([200]),
+    hasOiEst: false,
     callVolume: new Float32Array([10]),
     putVolume: new Float32Array([5]),
     callDelta: new Float32Array([0.5]),
@@ -38,6 +41,8 @@ function makeInputs(): ReplayInputs {
     oiPrev: [],
     gexProfile: [],
     gexField: null,
+    gexProfileFa: [],
+    gexFieldFa: null,
     ladder: [],
   }
 }
