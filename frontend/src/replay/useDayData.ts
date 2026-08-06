@@ -169,6 +169,10 @@ export interface DayData {
   gexProfile: (GexProfileRow | null)[] | null
   /** Modelované pole budoucích sloupců (ADR-0009 fáze 2); null = bez pole. */
   gexField: GexFieldRow | null
+  /** FA zdroj OI (#232): surová matice s OI_est a FA Dyn GEX; null = bez odhadu. */
+  rawFa: RawDay | null
+  gexProfileFa: (GexProfileRow | null)[] | null
+  gexFieldFa: GexFieldRow | null
   /** GEX žebřík per minuta/koš (#244); null = bez žebříku (demo, Daily). */
   ladder: (LadderMinuteRow | null)[] | null
 }
@@ -201,6 +205,9 @@ function demoDay(): DayData {
     minutesIso: [],
     gexProfile: null,
     gexField: null,
+    rawFa: null,
+    gexProfileFa: null,
+    gexFieldFa: null,
     ladder: null,
   }
 }
@@ -226,6 +233,9 @@ function replayToDay(day: ReplayDay): DayData {
     minutesIso: day.minutes,
     gexProfile: day.gexProfile,
     gexField: day.gexField,
+    rawFa: day.rawFa,
+    gexProfileFa: day.gexProfileFa,
+    gexFieldFa: day.gexFieldFa,
     ladder: day.ladder,
   }
 }
@@ -337,6 +347,9 @@ export function useDayData(
               flow: partial.flow,
               gexProfile: partial.gexProfile,
               gexField: partial.gexField,
+              oiEst: partial.oiEst,
+              gexProfileFa: partial.gexProfileFa,
+              gexFieldFa: partial.gexFieldFa,
             })
             pending.delete(ts)
             known.add(ts)
@@ -446,6 +459,40 @@ export function useDayData(
       }
       scheduleFlush()
     }
+    // OI odhady minuty (#232) — jen strany lišící se od měřeného OI
+    const onOiEst = (data: ChannelData) => {
+      const raw = Array.isArray(data.rows) ? (data.rows as Record<string, unknown>[]) : []
+      part(minuteKey(data.ts_min)).oiEst = raw.map((row) => ({
+        strike: Number(row.strike),
+        right: String(row.right) === 'C' ? ('C' as const) : ('P' as const),
+        oi_est: Number(row.oi_est) || 0,
+      }))
+      scheduleFlush()
+    }
+    // FA Dyn GEX profil minuty (#232) — starší engine kanál neposílá
+    const onGexProfileFa = (data: ChannelData) => {
+      if (!Array.isArray(data.values)) return
+      part(minuteKey(data.ts_min)).gexProfileFa = {
+        grid_start: Number(data.grid_start),
+        grid_step: Number(data.grid_step),
+        values: (data.values as unknown[]).map(Number),
+      }
+      scheduleFlush()
+    }
+    // FA modelované pole (#232) — jen poslední stav jako gexfield
+    const onGexFieldFa = (data: ChannelData) => {
+      const colCount = Number(data.col_count)
+      if (!Array.isArray(data.values) || !Number.isFinite(colCount) || colCount <= 0) return
+      part(minuteKey(data.ts_min)).gexFieldFa = {
+        grid_start: Number(data.grid_start),
+        grid_step: Number(data.grid_step),
+        col_start: String(data.col_start),
+        col_step_min: Number(data.col_step_min),
+        col_count: colCount,
+        values: (data.values as unknown[]).map(Number),
+      }
+      scheduleFlush()
+    }
     // Modelované pole (ADR-0009 fáze 2) — jen poslední stav, starší se zahazuje
     const onGexField = (data: ChannelData) => {
       const colCount = Number(data.col_count)
@@ -496,6 +543,9 @@ export function useDayData(
     const spotCh = `spot.${symbol}`
     const gexProfileCh = `gexprofile.${symbol}.${expiry}`
     const gexFieldCh = `gexfield.${symbol}.${expiry}`
+    const oiEstCh = `oiest.${symbol}.${expiry}`
+    const gexProfileFaCh = `gexprofilefa.${symbol}.${expiry}`
+    const gexFieldFaCh = `gexfieldfa.${symbol}.${expiry}`
     const ladderCh = `ladder.${symbol}.${expiry}`
     socket.subscribe(snapshotCh, onSnapshot)
     socket.subscribe(priceCh, onPrice)
@@ -505,6 +555,9 @@ export function useDayData(
     socket.subscribe(spotCh, onSpot)
     socket.subscribe(gexProfileCh, onGexProfile)
     socket.subscribe(gexFieldCh, onGexField)
+    socket.subscribe(oiEstCh, onOiEst)
+    socket.subscribe(gexProfileFaCh, onGexProfileFa)
+    socket.subscribe(gexFieldFaCh, onGexFieldFa)
     socket.subscribe(ladderCh, onLadder)
     // Reconnect: dofetchni celý balík (mohli jsme zmeškat minuty)
     const offReconnect = socket.onReconnect(() => setReconcileTick((n) => n + 1))
@@ -518,6 +571,9 @@ export function useDayData(
       socket.unsubscribe(spotCh, onSpot)
       socket.unsubscribe(gexProfileCh, onGexProfile)
       socket.unsubscribe(gexFieldCh, onGexField)
+      socket.unsubscribe(oiEstCh, onOiEst)
+      socket.unsubscribe(gexProfileFaCh, onGexProfileFa)
+      socket.unsubscribe(gexFieldFaCh, onGexFieldFa)
       socket.unsubscribe(ladderCh, onLadder)
       offReconnect()
     }

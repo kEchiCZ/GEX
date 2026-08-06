@@ -22,6 +22,9 @@ function sampleDay(): DayData {
     source: 'replay',
     grid: { minutes: 4, strikes: [100, 105], layers: { call, put }, staleAge: null },
     raw: null,
+    rawFa: null,
+    gexProfileFa: null,
+    gexFieldFa: null,
     minutesIso: [],
     overlays: {
       price,
@@ -199,6 +202,9 @@ test('buildDailyDay: sloupec = den, denní OHLC svíčka a součty', () => {
     provisionalMinutes: [],
     gexProfile: [null, null],
     gexField: null,
+    rawFa: null,
+    gexProfileFa: null,
+    gexFieldFa: null,
     ladder: [],
   }
   const dayB: ReplayDay = {

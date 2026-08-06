@@ -110,6 +110,21 @@ export function priceRangeMap(): Revive<Record<string, { top: number; bottom: nu
   }
 }
 
+/** Reviver pro mapu výčtových hodnot per klíč (zdroj OI per symbol, #232):
+neznámé tvary a hodnoty mimo povolenou množinu se tiše zahodí. */
+export function enumMap<T extends string>(allowed: readonly T[]): Revive<Record<string, T>> {
+  return (value, fallback) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return fallback
+    const result: Record<string, T> = {}
+    for (const [key, stored] of Object.entries(value)) {
+      if (typeof stored === 'string' && (allowed as readonly string[]).includes(stored)) {
+        result[key] = stored as T
+      }
+    }
+    return result
+  }
+}
+
 /** Reviver pro krátký identifikátor (symbol tickeru). */
 export function shortString(maxLength = 12): Revive<string> {
   return (value, fallback) =>

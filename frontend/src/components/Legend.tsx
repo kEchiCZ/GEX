@@ -196,6 +196,16 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         down: 'Červená převaha pod cenou → put strana sílí, poptávka po ochraně roste.',
       },
       {
+        name: 'Zdroj OI: FA odhad',
+        swatch: { kind: 'chip', color: '#e8c14b', label: 'FA' },
+        where:
+          'Přepínač „OI" v řádku přepínačů (Měřené / FA odhad). Aktivní FA značí tečkovaný okraj přepínače a badge „FA odhad" nad grafem.',
+        what: 'OI vrstvy heatmapy, Dyn GEX podklad i GEX křivka pravého profilu se místo měřeného ranního archivu počítají z odhadu OI_est = ranní OI + α·čistý klasifikovaný tok (ADR-0011). Vidí tedy i positioning postavený DNES, který ranní OI nezná — u 0DTE je to většina gammy. FA levels linie (čárkované) vychází z téhož odhadu.',
+        up: 'Nová zeď/flip z FA odhadu výš než měřené → dnešní tok staví positioning nad cenou; měřené vrstvy ho uvidí až zítra ráno.',
+        down: 'FA put zeď/flip níž než měřené → dnes se staví ochrana pod trhem.',
+        how: 'Je to model, ne měření: intradenní tok je klasifikovaný odhad a α hrubý kalibrační faktor (engine ho každé ráno ladí proti skutečnému ΔOI — badge „FA α" ve stavové liště). Vol, Δ Flow, Cum Δ i OI Δ složka pravého profilu zůstávají VŽDY měřené. Default je Měřené; volba se pamatuje per symbol.',
+      },
+      {
         name: 'Dyn Charm plocha',
         swatch: { kind: 'diverging', pos: 'rgb(235,170,40)', neg: 'rgb(70,130,240)' },
         where: 'Podkladová vrstva pod heatmapou; dropdown „Dyn plocha“ → Dyn Charm.',

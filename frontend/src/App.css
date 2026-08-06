@@ -1768,3 +1768,18 @@ body {
 .stats-drift-row {
   color: #e8c14b;
 }
+
+/* FA zdroj OI (#232): odhad musí byt na prvni pohled odlisitelny od mereni */
+.toggle select.fa-source-active {
+  border: 1px dashed #e8c14b;
+  color: #e8c14b;
+}
+
+.fa-badge {
+  border: 1px dashed #e8c14b;
+  border-radius: 9px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: #e8c14b;
+  cursor: help;
+}

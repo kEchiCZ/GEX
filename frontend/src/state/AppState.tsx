@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { LiveSocket } from '../api/ws'
 import { API_BASE, WS_URL } from '../config'
 import type { GexRegimeState } from '../instrument/regime'
-import { mergedBooleans, oneOf, shortString, usePersistentState } from './persist'
+import { enumMap, mergedBooleans, oneOf, shortString, usePersistentState } from './persist'
 
 export interface PipelineStatus {
   engine: string
@@ -71,6 +71,12 @@ export const UNDERLAY_PLANES: readonly UnderlayPlane[] = ['off', 'gex', 'charm',
 /** Filtr news markerů v grafu (#408): všechny, nebo jen významné (importance ≥ 2). */
 export type NewsMarkerFilter = 'all' | 'important'
 export const NEWS_MARKER_FILTERS: readonly NewsMarkerFilter[] = ['all', 'important']
+
+/** Zdroj OI pro heatmapu a Dyn GEX (#232 fáze 2): měřený ranní archiv, nebo
+flow-adjusted odhad OI_est = OI + α·net (ADR-0011). Default VŽDY měřené —
+FA je opt-in a UI ho vždy značí jako odhad. Persistuje se per symbol. */
+export type OiSource = 'measured' | 'fa'
+export const OI_SOURCES: readonly OiSource[] = ['measured', 'fa']
 
 /** Poslední cena + denní změna (hlavička; plní MainContent z denních dat). */
 export interface PriceInfo {
@@ -142,6 +148,9 @@ interface AppState {
   /** Filtr news markerů Vše/Významné vedle News checkboxu (#408). */
   newsMarkerFilter: NewsMarkerFilter
   setNewsMarkerFilter: (filter: NewsMarkerFilter) => void
+  /** Zdroj OI aktivního symbolu (#232): měřené / FA odhad; persist per symbol. */
+  oiSource: OiSource
+  setOiSource: (source: OiSource) => void
   view: AppView
   setView: (view: AppView) => void
   theme: Theme
@@ -293,6 +302,18 @@ export function AppStateProvider({
     'all',
     oneOf(NEWS_MARKER_FILTERS),
   )
+  // Zdroj OI per symbol (#232) — vzor chartYRange mapy: klíč = symbol,
+  // chybějící záznam = default měřené (FA je opt-in)
+  const [oiSourceMap, setOiSourceMap] = usePersistentState<Record<string, OiSource>>(
+    'oiSourceBySymbol',
+    {},
+    enumMap(OI_SOURCES),
+  )
+  const oiSource: OiSource = oiSourceMap[symbol] ?? 'measured'
+  const setOiSource = useCallback(
+    (source: OiSource) => setOiSourceMap((previous) => ({ ...previous, [symbol]: source })),
+    [symbol, setOiSourceMap],
+  )
 
   const appendLog = useCallback((line: string) => {
     const stamp = new Date().toLocaleTimeString()
@@ -386,6 +407,8 @@ export function AppStateProvider({
       setUnderlayPlane,
       newsMarkerFilter,
       setNewsMarkerFilter,
+      oiSource,
+      setOiSource,
       view,
       setView,
       theme,
@@ -417,6 +440,8 @@ export function AppStateProvider({
       setUnderlayPlane,
       newsMarkerFilter,
       setNewsMarkerFilter,
+      oiSource,
+      setOiSource,
       expiries,
       selectedExpiry,
       timeframe,

@@ -71,6 +71,9 @@ export interface ReplayDay {
   grid: HeatmapGrid // celý den (výchozí OI mód, normalizace p99)
   /** Surová snapshot matice — přepínání módů/škál lokálně (SPEC 4.3). */
   raw: RawDay
+  /** Surová matice s OI nahrazeným FA odhadem (#232, řada oiest); null =
+  žádný odhad nedorazil. OI složky nesou OI_est, volume/vega zůstávají měřené. */
+  rawFa: RawDay | null
   overlays: OverlayData // celý den
   panels: PanelSeries // celý den
   /** Profilové řádky per minuta (líné — krájení bez přepočtu celého dne). */
@@ -82,6 +85,10 @@ export interface ReplayDay {
   gexProfile: (GexProfileRow | null)[]
   /** Modelované pole budoucích sloupců (ADR-0009 fáze 2); null = bez pole. */
   gexField: GexFieldRow | null
+  /** FA varianta Dyn GEX profilu (#232, řada gexprofilefa); null = bez FA řady. */
+  gexProfileFa: (GexProfileRow | null)[] | null
+  /** FA varianta modelovaného pole (#232, řada gexfieldfa). */
+  gexFieldFa: GexFieldRow | null
   /** GEX žebřík per minuta (#244); null = minuta žebřík nemá. */
   ladder: (LadderMinuteRow | null)[]
 }
@@ -136,6 +143,12 @@ export interface ReplayInputs {
   strikes: number[]
   callOi: Float32Array
   putOi: Float32Array
+  /** FA odhad OI (#232): kopie měřených matic s buňkami přepsanými řadou
+   * oiest. Drží se VŽDY (i bez odhadu — pak jsou identické), aby append
+   * nemusel větvit tvar; `hasOiEst` říká, jestli nějaký odhad vůbec dorazil. */
+  callOiEst: Float32Array
+  putOiEst: Float32Array
+  hasOiEst: boolean
   callVolume: Float32Array
   putVolume: Float32Array
   callDelta: Float32Array
@@ -150,6 +163,9 @@ export interface ReplayInputs {
   gexProfile: GexProfileRow[]
   /** Modelované pole (ADR-0009 fáze 2) — jen poslední stav, starší se zahazuje. */
   gexField: GexFieldRow | null
+  /** FA varianta Dyn GEX profilů/pole (#232) — prázdné = engine FA nepočítá. */
+  gexProfileFa: GexProfileRow[]
+  gexFieldFa: GexFieldRow | null
   /** GEX žebřík per minuta (#244). */
   ladder: LadderMinuteRow[]
   /** Klíče `minuta|strike|strana`, pro které OI není k dispozici (#465).
@@ -198,6 +214,10 @@ export interface LiveMinute {
   flow?: { cum_delta: number }
   /** Dyn GEX profil minuty z WS kanálu gexprofile.* (ADR-0009). */
   gexProfile?: { grid_start: number; grid_step: number; values: number[] }
+  /** OI odhady minuty z WS kanálu oiest.* (#232) — jen strany lišící se od měření. */
+  oiEst?: Array<{ strike: number; right: 'C' | 'P'; oi_est: number }>
+  /** FA Dyn GEX profil minuty z WS kanálu gexprofilefa.* (#232). */
+  gexProfileFa?: { grid_start: number; grid_step: number; values: number[] }
   /** GEX žebřík minuty z WS kanálu ladder.* (#244). */
   ladder?: {
     call_strikes: number[]
@@ -207,6 +227,15 @@ export interface LiveMinute {
   }
   /** Modelované pole z WS kanálu gexfield.* (ADR-0009 fáze 2). */
   gexField?: {
+    grid_start: number
+    grid_step: number
+    col_start: string
+    col_step_min: number
+    col_count: number
+    values: number[]
+  }
+  /** FA modelované pole z WS kanálu gexfieldfa.* (#232). */
+  gexFieldFa?: {
     grid_start: number
     grid_step: number
     col_start: string
@@ -238,6 +267,11 @@ interface ReplayBundle {
   gexprofile?: Array<Record<string, unknown>>
   /** Modelované pole (ADR-0009 fáze 2) — starší API klíč neposílá. */
   gexfield?: Array<Record<string, unknown>>
+  /** OI odhad z toku (#232) — jen strany lišící se od měřeného OI. */
+  oiest?: Array<Record<string, unknown>>
+  /** FA varianta Dyn GEX profilů/pole (#232) — starší API klíče neposílá. */
+  gexprofilefa?: Array<Record<string, unknown>>
+  gexfieldfa?: Array<Record<string, unknown>>
   flow: Array<Record<string, unknown>>
   bars: Array<Record<string, unknown>>
   /** OI téže expirace z předchozího archivovaného dne (ΔOI vs. včera). */
@@ -310,6 +344,37 @@ function base64ToBytes(base64: string): Uint8Array {
 
 function numOrNull(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** Řádky profilové řady z bundle → GexProfileRow[] (gexprofile i gexprofilefa). */
+function decodeProfileRows(rows: Array<Record<string, unknown>> | undefined): GexProfileRow[] {
+  return (rows ?? [])
+    .map((row) => ({
+      tsIso: canonicalTs(row.ts_min),
+      gridStart: Number(row.grid_start),
+      gridStep: Number(row.grid_step),
+      values: Array.isArray(row.values) ? (row.values as number[]).map(Number) : [],
+    }))
+    .filter((row) => row.values.length > 0 && Number.isFinite(row.gridStart))
+}
+
+/** Poslední řádek řady pole → GexFieldRow (gexfield i gexfieldfa, #232). */
+function decodeFieldRows(rows: Array<Record<string, unknown>> | undefined): GexFieldRow | null {
+  const fieldRaw = (rows ?? []).at(-1)
+  const fieldValues =
+    fieldRaw && Array.isArray(fieldRaw.values) ? (fieldRaw.values as number[]).map(Number) : []
+  const fieldColCount = fieldRaw ? Number(fieldRaw.col_count) : 0
+  return fieldRaw && fieldColCount > 0 && fieldValues.length % fieldColCount === 0 && fieldValues.length > 0 // prettier-ignore
+    ? {
+        tsIso: canonicalTs(fieldRaw.ts_min),
+        gridStart: Number(fieldRaw.grid_start),
+        gridStep: Number(fieldRaw.grid_step),
+        colStartIso: canonicalTs(fieldRaw.col_start),
+        colStepMin: Number(fieldRaw.col_step_min),
+        colCount: fieldColCount,
+        values: fieldValues,
+      }
+    : null
 }
 
 /** Klíč aktuální wall-clock minuty (UTC) — detekce rozdělané minuty v bundle (#158). */
@@ -460,15 +525,9 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     cum_delta: Number(row.cum_delta) || 0,
   }))
 
-  // Dyn GEX profily (ADR-0009) — starší API klíč neposílá
-  const gexProfile: GexProfileRow[] = (bundle.gexprofile ?? [])
-    .map((row) => ({
-      tsIso: canonicalTs(row.ts_min),
-      gridStart: Number(row.grid_start),
-      gridStep: Number(row.grid_step),
-      values: Array.isArray(row.values) ? (row.values as number[]).map(Number) : [],
-    }))
-    .filter((row) => row.values.length > 0 && Number.isFinite(row.gridStart))
+  // Dyn GEX profily (ADR-0009) — starší API klíč neposílá; FA varianta (#232)
+  const gexProfile = decodeProfileRows(bundle.gexprofile)
+  const gexProfileFa = decodeProfileRows(bundle.gexprofilefa)
 
   // GEX žebřík (#244) — starší API klíč neposílá
   const ladderRows: LadderMinuteRow[] = (bundle.ladder ?? []).map((row) => ({
@@ -492,22 +551,24 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   )
 
   // Modelované pole (ADR-0009 fáze 2) — partice drží jen poslední stav
-  const fieldRaw = (bundle.gexfield ?? []).at(-1)
-  const fieldValues =
-    fieldRaw && Array.isArray(fieldRaw.values) ? (fieldRaw.values as number[]).map(Number) : []
-  const fieldColCount = fieldRaw ? Number(fieldRaw.col_count) : 0
-  const gexField: GexFieldRow | null =
-    fieldRaw && fieldColCount > 0 && fieldValues.length % fieldColCount === 0 && fieldValues.length > 0 // prettier-ignore
-      ? {
-          tsIso: canonicalTs(fieldRaw.ts_min),
-          gridStart: Number(fieldRaw.grid_start),
-          gridStep: Number(fieldRaw.grid_step),
-          colStartIso: canonicalTs(fieldRaw.col_start),
-          colStepMin: Number(fieldRaw.col_step_min),
-          colCount: fieldColCount,
-          values: fieldValues,
-        }
-      : null
+  const gexField = decodeFieldRows(bundle.gexfield)
+  const gexFieldFa = decodeFieldRows(bundle.gexfieldfa)
+
+  // FA odhad OI (#232): kopie měřených matic s buňkami přepsanými řadou oiest.
+  // Měřené matice zůstávají NEDOTČENÉ — měřený režim musí být bit-identický
+  // s chováním bez FA vrstvy.
+  const callOiEst = callOi.slice()
+  const putOiEst = putOi.slice()
+  const oiestRows = bundle.oiest ?? []
+  for (const row of oiestRows) {
+    const minuteIdx = minuteIndex.get(canonicalTs(row.ts_min))
+    const strikeIdx = strikeIndex.get(Number(row.strike))
+    const est = Number(row.oi_est)
+    if (minuteIdx === undefined || strikeIdx === undefined || !Number.isFinite(est)) continue
+    const index = strikeIdx * minutes + minuteIdx
+    if (String(row.right) === 'C') callOiEst[index] = est
+    else putOiEst[index] = est
+  }
 
   return {
     symbol: bundle.symbol,
@@ -518,6 +579,9 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     strikes,
     callOi,
     putOi,
+    callOiEst,
+    putOiEst,
+    hasOiEst: oiestRows.length > 0,
     callVolume,
     putVolume,
     callDelta,
@@ -535,6 +599,8 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     })),
     gexProfile,
     gexField,
+    gexProfileFa,
+    gexFieldFa,
     ladder: ladderRows,
     oiMissing,
     catchUpMinutes,
@@ -587,6 +653,8 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   const size = strikeCount * newMinuteCount
   const callOi = new Float32Array(size)
   const putOi = new Float32Array(size)
+  const callOiEst = new Float32Array(size)
+  const putOiEst = new Float32Array(size)
   const callVolume = new Float32Array(size)
   const putVolume = new Float32Array(size)
   const callDelta = new Float32Array(size)
@@ -603,6 +671,8 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
       const to = newStrikeIdx * newMinuteCount + shift(minuteIdx)
       callOi[to] = inputs.callOi[from]
       putOi[to] = inputs.putOi[from]
+      callOiEst[to] = inputs.callOiEst[from]
+      putOiEst[to] = inputs.putOiEst[from]
       callVolume[to] = inputs.callVolume[from]
       putVolume[to] = inputs.putVolume[from]
       callDelta[to] = inputs.callDelta[from]
@@ -612,21 +682,31 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
       staleAge[to] = inputs.staleAge[from]
     }
   }
-  // Nová minuta ze snapshot řezu
+  // Nová minuta ze snapshot řezu; odhad = měření, dokud ho oiest nepřepíše
   for (const row of minute.rows) {
     const to = newStrikeIndex.get(row.strike)! * newMinuteCount + targetMinute
     if (row.right === 'C') {
       callOi[to] = row.oi
+      callOiEst[to] = row.oi
       callVolume[to] = row.volume
       callDelta[to] = row.delta
       callVega[to] = row.vega ?? 0
     } else {
       putOi[to] = row.oi
+      putOiEst[to] = row.oi
       putVolume[to] = row.volume
       putDelta[to] = row.delta
       putVega[to] = row.vega ?? 0
     }
     staleAge[to] = Math.max(staleAge[to], row.stale_age ?? 0)
+  }
+  // OI odhady minuty z kanálu oiest.* (#232) — jen strany lišící se od měření
+  for (const row of minute.oiEst ?? []) {
+    const strikeIdx = newStrikeIndex.get(row.strike)
+    if (strikeIdx === undefined || !Number.isFinite(row.oi_est)) continue
+    const to = strikeIdx * newMinuteCount + targetMinute
+    if (row.right === 'C') callOiEst[to] = row.oi_est
+    else putOiEst[to] = row.oi_est
   }
 
   const bars = minute.bar
@@ -649,6 +729,14 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
         values: minute.gexProfile.values,
       })
     : inputs.gexProfile
+  const gexProfileFa = minute.gexProfileFa
+    ? upsertRow(inputs.gexProfileFa, {
+        tsIso,
+        gridStart: minute.gexProfileFa.grid_start,
+        gridStep: minute.gexProfileFa.grid_step,
+        values: minute.gexProfileFa.values,
+      })
+    : inputs.gexProfileFa
   const ladder = minute.ladder
     ? upsertRow(inputs.ladder, {
         tsIso,
@@ -670,6 +758,17 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
         values: minute.gexField.values,
       }
     : inputs.gexField
+  const gexFieldFa = minute.gexFieldFa
+    ? {
+        tsIso,
+        gridStart: minute.gexFieldFa.grid_start,
+        gridStep: minute.gexFieldFa.grid_step,
+        colStartIso: minute.gexFieldFa.col_start,
+        colStepMin: minute.gexFieldFa.col_step_min,
+        colCount: minute.gexFieldFa.col_count,
+        values: minute.gexFieldFa.values,
+      }
+    : inputs.gexFieldFa
 
   // Catch-up minuta z WS (#518): první živý sweep po restartu enginu se musí
   // označit i bez refetche balíku — jinak by Opt Vol/Δ Flow vykreslily skok
@@ -689,6 +788,9 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     strikes: newStrikes,
     callOi,
     putOi,
+    callOiEst,
+    putOiEst,
+    hasOiEst: inputs.hasOiEst || (minute.oiEst?.length ?? 0) > 0,
     callVolume,
     putVolume,
     callDelta,
@@ -701,6 +803,8 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     flow,
     gexProfile,
     gexField,
+    gexProfileFa,
+    gexFieldFa,
     ladder,
   }
 }
@@ -761,6 +865,11 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     staleAge: inputs.staleAge,
   }
   const grid = buildModeGrid(raw, 'oi', 'linear')
+  // FA zdroj (#232): tatáž matice s OI_est místo měřeného OI — módy heatmapy
+  // se nad ní přepínají stejně. Bez odhadu je null a UI padá na měřené.
+  const rawFa: RawDay | null = inputs.hasOiEst
+    ? { ...raw, callOi: inputs.callOiEst, putOi: inputs.putOiEst }
+    : null
 
   // Minuta bez snapshotu nese v maticích nuly, ne měření (#459) — Max Pain z
   // nulového OI by ukázal libovolný strike, takže se v díře nekreslí vůbec
@@ -904,6 +1013,15 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     const minuteIdx = minuteIndex.get(row.tsIso)
     if (minuteIdx !== undefined) gexProfile[minuteIdx] = row
   }
+  // FA varianta (#232) — stejný sparse tvar; bez řady zůstává null
+  let gexProfileFa: (GexProfileRow | null)[] | null = null
+  if (inputs.gexProfileFa.length > 0) {
+    gexProfileFa = Array.from({ length: minutes }, () => null)
+    for (const row of inputs.gexProfileFa) {
+      const minuteIdx = minuteIndex.get(row.tsIso)
+      if (minuteIdx !== undefined) gexProfileFa[minuteIdx] = row
+    }
+  }
 
   // GEX žebřík per minuta (#244) — stejný sparse vzor jako gexProfile
   const ladder: (LadderMinuteRow | null)[] = Array.from({ length: minutes }, () => null)
@@ -926,12 +1044,15 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     minutes: minuteKeys,
     grid,
     raw,
+    rawFa,
     overlays,
     panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut, cumDeltaFromIso },
     profileByMinute,
     provisionalMinutes,
     gexProfile,
     gexField: inputs.gexField,
+    gexProfileFa,
+    gexFieldFa: inputs.gexFieldFa,
     ladder,
   }
 }

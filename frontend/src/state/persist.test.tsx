@@ -5,7 +5,7 @@ import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
-import { clampedNumber, mergedBooleans, oneOf, readStored, shortString, usePersistentState } from './persist' // prettier-ignore
+import { clampedNumber, enumMap, mergedBooleans, oneOf, readStored, shortString, usePersistentState } from './persist' // prettier-ignore
 
 // ── Revivery ───────────────────────────────────────────────────────
 
@@ -34,6 +34,16 @@ test('mergedBooleans: známé klíče přes defaulty, cizí i nebooleanové zaho
   })
   expect(revive(null, fallback)).toBe(fallback)
   expect(revive('rozbité', fallback)).toBe(fallback)
+})
+
+test('enumMap: mapa per klíč pouští jen povolené hodnoty (#232 zdroj OI)', () => {
+  const revive = enumMap(['measured', 'fa'] as const)
+  expect(revive({ ES: 'fa', NQ: 'measured' }, {})).toEqual({ ES: 'fa', NQ: 'measured' })
+  // Nevalidní hodnoty a tvary se tiše zahodí — rozbitý localStorage nesmí shodit app
+  expect(revive({ ES: 'fa', NQ: 'nesmysl', CL: 7 }, {})).toEqual({ ES: 'fa' })
+  expect(revive('fa', { ES: 'measured' })).toEqual({ ES: 'measured' })
+  expect(revive(['fa'], {})).toEqual({})
+  expect(revive(null, {})).toEqual({})
 })
 
 test('shortString: neprázdný krátký řetězec, jinak fallback', () => {

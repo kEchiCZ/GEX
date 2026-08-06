@@ -95,6 +95,7 @@ function MainContent() {
     signalMode,
     underlayPlane,
     newsMarkerFilter,
+    oiSource,
     socket,
   } = useAppState()
   // Zprávy a sentiment (#288/#289) — jeden zdroj pro panel, sidebar i chip
@@ -179,12 +180,19 @@ function MainContent() {
     timeframe,
     isHistoricalExpiry ? undefined : socket,
   )
+  // FA zdroj OI (#232): opt-in přepínač per symbol. Aktivní je jen když FA
+  // data opravdu existují — bez řady oiest se poctivě padá na měřené
+  // (a badge se nekreslí, aby graf netvrdil odhad, který nemá).
+  const faActive = oiSource === 'fa' && rawDay.rawFa !== null
   // Heatmap mód/škála: čistý přepočet ze surové matice (SPEC 4.3, bez fetch).
   // Dyn GEX už není mód — je to podkladová vrstva (#242), viz gexUnderDay níž.
+  // Při FA zdroji se módy počítají nad maticí s OI_est (měřená zůstává netknutá).
   const modeDay = useMemo(() => {
-    if (!rawDay.raw || (mode === 'oi' && heatScale === 'linear')) return rawDay
-    return { ...rawDay, grid: buildModeGrid(rawDay.raw, mode, heatScale) }
-  }, [rawDay, mode, heatScale])
+    const raw = faActive ? rawDay.rawFa : rawDay.raw
+    if (!raw) return rawDay
+    if (!faActive && mode === 'oi' && heatScale === 'linear') return rawDay
+    return { ...rawDay, grid: buildModeGrid(raw, mode, heatScale) }
+  }, [rawDay, mode, heatScale, faActive])
   // Timeframe: agregace 1m dat do košů v paměti (Daily má sloupec = den, koše se nepoužijí)
   const bucketMinutes = timeframe === 'daily' ? 1 : INTERVAL_MINUTES[interval]
   const day = useMemo(() => aggregateDay(modeDay, bucketMinutes), [modeDay, bucketMinutes])
@@ -198,12 +206,21 @@ function MainContent() {
     isHistoricalExpiry ? undefined : socket,
   )
   const planeProfiles = useMemo(() => {
-    if (underlayPlane === 'gex') return rawDay.gexProfile
+    if (underlayPlane === 'gex') {
+      // FA zdroj (#232): Dyn GEX podklad z FA profilů (tentýž odhad jako
+      // heatmapa a FA levels); charm/vanna FA variantu nemají
+      return faActive && rawDay.gexProfileFa ? rawDay.gexProfileFa : rawDay.gexProfile
+    }
     if (underlayPlane === 'off') return null
     if (greekPlane.profiles.length === 0) return null
     return alignPlaneProfiles(greekPlane.profiles, rawDay.minutesIso)
-  }, [underlayPlane, rawDay.gexProfile, rawDay.minutesIso, greekPlane.profiles])
-  const planeField = underlayPlane === 'gex' ? day.gexField : greekPlane.field
+  }, [underlayPlane, rawDay.gexProfile, rawDay.gexProfileFa, rawDay.minutesIso, greekPlane.profiles, faActive]) // prettier-ignore
+  const planeField =
+    underlayPlane === 'gex'
+      ? faActive && day.gexFieldFa
+        ? day.gexFieldFa
+        : day.gexField
+      : greekPlane.field
   const planePalette =
     underlayPlane === 'charm'
       ? CHARM_PALETTE
@@ -475,16 +492,18 @@ function MainContent() {
     () => liveOverlay.bars.at(-1)?.close ?? lastValue(day.spotSeries, playback.position),
     [liveOverlay.bars, day.spotSeries, playback.position],
   )
-  // Dyn GEX profil minuty pod playbackem (ADR-0009) — poslední s daty do pozice
+  // Dyn GEX profil minuty pod playbackem (ADR-0009) — poslední s daty do pozice.
+  // Při FA zdroji čte GEX křivka pravého profilu FA řadu (#232).
   const gexProfileRow = useMemo(() => {
-    if (!day.gexProfile || day.gexProfile.length === 0) return null
-    const index = Math.min(playback.position, day.gexProfile.length - 1)
+    const source = faActive && day.gexProfileFa ? day.gexProfileFa : day.gexProfile
+    if (!source || source.length === 0) return null
+    const index = Math.min(playback.position, source.length - 1)
     for (let i = index; i >= 0; i -= 1) {
-      const row = day.gexProfile[i]
+      const row = source[i]
       if (row) return row
     }
     return null
-  }, [day.gexProfile, playback.position])
+  }, [day.gexProfile, day.gexProfileFa, faActive, playback.position])
   // Stabilní props pro těžké (memoizované) děti — živý spot mění jen graf, ne panely/profil
   const panelsVisible = useMemo(
     () => ({
@@ -813,6 +832,16 @@ function MainContent() {
             ? `replay ${viewDate}${isHistoricalExpiry ? ' · den expirace' : ''}`
             : 'demo data'}
         </span>
+        {/* FA zdroj (#232): graf ukazuje ODHAD, ne měření — badge to musí křičet */}
+        {faActive && (
+          <span
+            className="fa-badge"
+            data-testid="fa-badge"
+            title="OI vrstvy, Dyn GEX podklad i GEX křivka profilu jedou z FA odhadu OI_est = ranní OI + α·klasifikovaný tok (ADR-0011) — je to model, ne měření. OI Δ složka pravého profilu zůstává měřená."
+          >
+            FA odhad
+          </span>
+        )}
         <button
           className={showReplay ? 'chip active' : 'chip'}
           aria-label="Replay ovládání"

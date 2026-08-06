@@ -1,6 +1,6 @@
 # ADR-0011: Flow-adjusted GEX — odhad intradenního positioningu z klasifikovaného toku
 
-**Stav:** přijato, fáze 1 (2026-07-23, scope zadal uživatel v issue #222)
+**Stav:** přijato, fáze 1 (2026-07-23, #222) + fáze 2 (2026-08-06, #232)
 **Kontext:** OI se aktualizuje 1× denně (SPEC 3.5) — všechny GEX výpočty stojí
 na ranním snapshotu a dnešní nově postavený positioning nevidí. U 0DTE, které
 tvoří většinu objemu, je to díra přesně tam, kde se odehrává většina gammy.
@@ -67,6 +67,45 @@ dnech (skript ve scratchpadu, výsledky v issue #222).
   denní reset, podlaha 0 v OI odhadu.
 - Runtime: řada levelsfa zapsána + WS kanál publikován; α=0 vrstvu vypne.
 - Frontend: bundle merge fa_ klíčů, WS append, přepínač viditelnosti.
+
+## Fáze 2 (2026-08-06, #232)
+
+Rozhodnutí uživatele (6. 8.): FA je jeden mechanismus pro ES i NQ; výchozí
+zdroj je všude MĚŘENÉ OI a FA je opt-in přepínač persistovaný per symbol;
+setupy dál jedou výhradně z měřených úrovní; α se kalibruje per symbol
+z ranních potvrzení proti skutečnému ΔOI z věčného archivu.
+
+1. **Řada `netflow`** (`derived/{sym}/{exp}/netflow`): kumulativní čistý
+   klasifikovaný objem per strana a minutu — jen strany s nenulovým netem,
+   jen aktivní řetěz. Umožňuje zpětnou validaci směru (znaménko net vs. ΔOI),
+   kalibraci α a navázání kumulativu po restartu enginu uprostřed dne
+   (`CumDeltaTracker.restore_net_volume`, živé měření má přednost).
+2. **Jediná definice odhadu** `compute/flowoi.oi_estimate`:
+   `OI_est = max(0, OI_ráno + α·net)`. FA levels (fáze 1), FA Dyn GEX
+   profil/pole i řada oiest počítají z TÉHOŽ čísla — UI nikdy neukazuje dvě
+   různé „flow-adjusted" pravdy.
+3. **Řada `oiest`** (per minuta × strike × right; jen strany lišící se od
+   měřeného OI) + WS kanál `oiest.*` + klíč `oiest` v /replay bundle.
+   Frontend z ní staví FA matici: kopie měřené s přepsanými buňkami.
+4. **FA Dyn GEX**: tentýž výpočet `gamma_profile`/`gamma_field`
+   parametrizovaný vstupem OI_est → řady `gexprofilefa`/`gexfieldfa`,
+   WS kanály a bundle klíče. Jen gamma; charm/vanna FA variantu nemají.
+5. **Kalibrace α per symbol** (ranní job po OI archivu, hned za FA validací):
+   včerejší konec dne netflow (řez 21:00 UTC) vs. skutečné ΔOI mezi archivy →
+   medián poměrů ΔOI/net přes strany s |net| ≥ 25 kontraktů (≥ 5 stran),
+   EMA přes dny (λ 0,3), α sevřená do [0, 1]. Historie v PG tabulce
+   `fa_alpha_history` (vč. buy/sell mediánů — asymetrická α se zavede až
+   pokud ji data jasně ukážou; zatím jedna společná), aktuální stav
+   v `fa_alpha`. Engine ji propisuje do `runtime.flow_alpha`; bez
+   kalibrovaného bodu platí default `GEXLENS_FLOW_OI_ALPHA` (0,4).
+   API `GET /fa/alpha`, frontend badge „FA α=0.34 · 5 dní" ve stavové liště.
+6. **UI zdroj OI** (přepínač „OI: Měřené / FA odhad", persist per symbol,
+   default měřené): při FA čtou OI módy heatmapy, Dyn GEX podklad i GEX
+   křivka pravého profilu FA řady; FA levels linie vychází z téhož odhadu.
+   Vol/Δ Flow/Cum Δ a OI Δ složka profilu zůstávají VŽDY měřené. Aktivní FA
+   značí tečkovaný chip + badge „FA odhad"; bez dat řady oiest UI poctivě
+   padá na měřené a badge nekreslí. Měřený režim je bit-identický s chováním
+   před fází 2 (regresní testy v loaderu).
 
 ## Průběžná validace (dodatek #232)
 
