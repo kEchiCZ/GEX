@@ -91,6 +91,15 @@ class DataRepository:
         )
         return self._read(path)
 
+    def oiest(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """OI odhad z klasifikovaného toku (#232, ADR-0011 fáze 2).
+
+        Jen strany lišící se od měřeného OI; bez toku řada neexistuje a čtení
+        skončí prázdné (PartitionNotFoundError → bundle drží tvar).
+        """
+        path = self._settings.derived_dir / symbol / expiry / "oiest" / f"{day.isoformat()}.parquet"
+        return self._read(path)
+
     def walldom(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
         """Dominance zdí (ADR-0010, #223) — vlastní řada vedle levels."""
         path = (

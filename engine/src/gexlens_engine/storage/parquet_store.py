@@ -144,6 +144,32 @@ CATCHUP_SCHEMA = pa.schema(
     ]
 )
 
+# Čistý klasifikovaný objem per strana (#232, ADR-0011 fáze 2) — KUMULATIV dne
+# k dané minutě (buy − sell v kontraktech, znaménko z klasifikace agresora).
+# Zapisují se jen strany s nenulovým netem: řada je vstup ranní kalibrace α
+# a zpětné validace směru (znaménko net vs. znaménko ΔOI); nulové řádky by ji
+# jen nafukovaly. Vlastní řada, ne sloupec ve SNAPSHOT_SCHEMA (ADR-0005/0008).
+NETFLOW_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("strike", pa.float64()),
+        ("right", pa.string()),
+        ("net_volume", pa.float64()),
+    ]
+)
+
+# OI odhad z toku (#232): OI_est = max(0, OI_ráno + α·net) — compute/flowoi.py.
+# Zapisují se jen strany, kde se odhad LIŠÍ od měřeného OI; frontend při FA
+# zdroji přepíše měřenou matici těmito buňkami, zbytek minuty zůstává měřený.
+OIEST_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("strike", pa.float64()),
+        ("right", pa.string()),
+        ("oi_est", pa.float64()),
+    ]
+)
+
 # GEX žebřík (#244) — proměnný počet příček per minuta → list sloupce
 LADDER_SCHEMA = pa.schema(
     [
@@ -265,6 +291,26 @@ class CatchUpRow:
     """
 
     ts_min: dt.datetime
+
+
+@dataclass(frozen=True)
+class NetFlowRow:
+    """Kumulativní čistý klasifikovaný objem strany k minutě (#232, ADR-0011)."""
+
+    ts_min: dt.datetime
+    strike: float
+    right: str
+    net_volume: float
+
+
+@dataclass(frozen=True)
+class OiEstRow:
+    """OI odhad strany k minutě (#232) — jen strany lišící se od měřeného OI."""
+
+    ts_min: dt.datetime
+    strike: float
+    right: str
+    oi_est: float
 
 
 @dataclass(frozen=True)
@@ -493,6 +539,36 @@ class SnapshotWriter:
         buffer = self._buffer(path, LEVELS_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
+    def write_netflow(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[NetFlowRow]
+    ) -> Path | None:
+        """Přidá kumulativní net objem minuty do derived/{sym}/{exp}/netflow (#232).
+
+        Prázdný seznam se nezapisuje — dokud nikdo neobchoduje, řada nevzniká
+        (stejný princip jako oimissing).
+        """
+        if not rows:
+            return None
+        path = (
+            self._settings.derived_dir / symbol / expiry / "netflow" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, NETFLOW_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_oiest(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[OiEstRow]
+    ) -> Path | None:
+        """Přidá OI odhady minuty do derived/{sym}/{exp}/oiest (#232).
+
+        Jen strany, kde se odhad liší od měřeného OI; prázdný seznam se
+        nezapisuje.
+        """
+        if not rows:
+            return None
+        path = self._settings.derived_dir / symbol / expiry / "oiest" / f"{day.isoformat()}.parquet"
+        buffer = self._buffer(path, OIEST_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
     def write_ladder(
         self, symbol: str, expiry: str, day: dt.date, rows: Sequence[LadderRow]
     ) -> Path:
@@ -579,3 +655,27 @@ class SnapshotWriter:
             buffer = _PartitionBuffer(path, schema)
             self._buffers[path] = buffer
         return buffer
+
+
+def read_netflow_latest(path: Path) -> dict[tuple[float, str], float]:
+    """Poslední kumulativní net per strana z partice netflow (#232).
+
+    Slouží k navázání kumulativu po restartu enginu uprostřed dne — bez toho
+    by FA odhad začínal od nuly a zahodil celý dopolední tok. Neexistující
+    partice vrací prázdnou mapu. Blokující čtení — volat přes to_thread.
+    """
+    if not path.exists():
+        return {}
+    table = pq.read_table(path, schema=NETFLOW_SCHEMA)
+    latest: dict[tuple[float, str], tuple[dt.datetime, float]] = {}
+    columns = [
+        table.column(name).to_pylist() for name in ("ts_min", "strike", "right", "net_volume")
+    ]  # noqa: E501
+    for ts, strike, right, net in zip(*columns, strict=True):
+        if ts is None:
+            continue
+        key = (float(strike), str(right))
+        current = latest.get(key)
+        if current is None or ts >= current[0]:
+            latest[key] = (ts, float(net) if net is not None else 0.0)
+    return {key: net for key, (_, net) in latest.items()}

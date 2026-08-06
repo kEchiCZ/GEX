@@ -187,6 +187,50 @@ def test_no_partial_files_after_simulated_crash(writer: SnapshotWriter, tmp_path
     assert len(frame) == 4
 
 
+def test_netflow_and_oiest_partitions(tmp_path: Path) -> None:
+    """#232: řady netflow/oiest — schéma, append přes minuty, prázdný zápis nic nezaloží."""
+    from gexlens_engine.storage.parquet_store import NetFlowRow, OiEstRow, read_netflow_latest
+
+    settings = Settings(data_dir=tmp_path)
+    writer = SnapshotWriter(settings)
+    ts0 = dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
+    ts1 = ts0 + dt.timedelta(minutes=1)
+
+    # Prázdné seznamy soubor nezaloží — bez toku řada neexistuje
+    assert writer.write_netflow("ES", "20260716", DAY, []) is None
+    assert writer.write_oiest("ES", "20260716", DAY, []) is None
+    assert not (settings.derived_dir / "ES" / "20260716" / "netflow").exists()
+
+    writer.write_netflow(
+        "ES", "20260716", DAY, [NetFlowRow(ts_min=ts0, strike=7600.0, right="C", net_volume=25.0)]
+    )
+    path = writer.write_netflow(
+        "ES",
+        "20260716",
+        DAY,
+        [
+            NetFlowRow(ts_min=ts1, strike=7600.0, right="C", net_volume=40.0),
+            NetFlowRow(ts_min=ts1, strike=7590.0, right="P", net_volume=-10.0),
+        ],
+    )
+    assert path is not None
+    frame = pd.read_parquet(path)
+    assert list(frame.columns) == ["ts_min", "strike", "right", "net_volume"]
+    assert len(frame) == 3  # kumulativ se přidává po minutách, nic se nepřepisuje
+
+    # Poslední kumulativ per strana — navázání po restartu (#232)
+    assert read_netflow_latest(path) == {(7600.0, "C"): 40.0, (7590.0, "P"): -10.0}
+    assert read_netflow_latest(path.with_name("neexistuje.parquet")) == {}
+
+    oiest_path = writer.write_oiest(
+        "ES", "20260716", DAY, [OiEstRow(ts_min=ts0, strike=7600.0, right="C", oi_est=1010.0)]
+    )
+    assert oiest_path is not None
+    oiest = pd.read_parquet(oiest_path)
+    assert list(oiest.columns) == ["ts_min", "strike", "right", "oi_est"]
+    assert oiest["oi_est"].tolist() == [1010.0]
+
+
 def test_derived_dir_reserved_for_compute(tmp_path: Path) -> None:
     """Sanity: cesty partic odpovídají SPEC 5.1 rozvržení data adresáře."""
     settings = Settings(data_dir=tmp_path)

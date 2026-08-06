@@ -457,6 +457,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ("catchup", lambda: repository.catch_up(symbol, expiry, date)),
             ("gexprofile", lambda: repository.gexprofile(symbol, expiry, date)),
             ("gexfield", lambda: repository.gexfield(symbol, expiry, date)),
+            # Flow-adjusted zdroj (#232): OI odhad + FA varianta Dyn GEX vrstev
+            ("oiest", lambda: repository.oiest(symbol, expiry, date)),
+            (
+                "gexprofilefa",
+                lambda: repository.gexprofile(symbol, expiry, date, subdir="gexprofilefa"),
+            ),
+            (
+                "gexfieldfa",
+                lambda: repository.gexfield(symbol, expiry, date, subdir="gexfieldfa"),
+            ),
             ("flow", lambda: repository.flow(symbol, date)),
             ("bars", lambda: repository.bars(symbol, date)),
         ]

@@ -38,6 +38,18 @@ def trade(right: str, size: float, side: str, ts: float = 1.0) -> ClassifiedTrad
     return ClassifiedTrade(spec=spec(right), price=10.0, size=size, ts=ts, side=TradeSide(side))
 
 
+def test_restore_net_volume_nechava_prednost_zivemu_mereni() -> None:
+    """#232: navázání z partice netflow nesmí přepsat tok naměřený po restartu."""
+    tracker = CumDeltaTracker(multiplier=50.0)
+    tracker.add_trade(trade("C", size=10.0, side="buy"), delta=0.5)
+
+    tracker.restore_net_volume({spec("C"): 999.0, spec("P"): -40.0})
+
+    assert tracker.net_volume(spec("C")) == 10.0  # živé měření má přednost
+    assert tracker.net_volume(spec("P")) == -40.0  # chybějící klíč se doplní
+    assert tracker.net_volumes() == {spec("C"): 10.0, spec("P"): -40.0}
+
+
 def test_golden_tick_stream_reproduces_cum_delta() -> None:
     """AC: syntetický tick stream se známým buy/sell rozdělením → očekávaná CumΔ."""
     golden = load_golden()
