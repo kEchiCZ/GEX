@@ -6,6 +6,7 @@ import { profileSourceOf } from './loader'
 import type { DayData } from './useDayData'
 import type { ReplayDay } from './loader'
 import type { PriceBar } from '../heatmap/overlays'
+import type { ProfileRow } from '../profile/bars'
 
 function sampleDay(): DayData {
   // 4 minuty × 2 strikes; vrstvy v kumulativní sémantice (roste v čase)
@@ -120,6 +121,32 @@ test('aggregateDay: kumulativní vrstvy berou poslední minutu koše, Vol se sč
   expect(day.minuteLabels).toEqual(['9:30', '9:32']) // začátek koše
   expect(day.overlays.levels![0].series).toEqual([100, 102]) // poslední ne-null
   expect(day.overlays.sessions![0].minuteIdx).toBe(1)
+})
+
+test('aggregateDay: koš končící v díře přebírá profil poslední minuty se snapshotem (#503)', () => {
+  const measuredRow: ProfileRow = {
+    strike: 100,
+    callVolComponent: 1,
+    callOiComponent: 2,
+    putVolComponent: 3,
+    putOiComponent: 4,
+    callVolume: 1,
+    putVolume: 3,
+    callOi: 2,
+    putOi: 4,
+    distanceFromSpot: 0,
+  }
+  const day = sampleDay()
+  // Minuta 3 je díra (bez snapshotu → prázdný profil), minuty 0–2 měřené
+  day.profileByMinute = profileSourceOf([[measuredRow], [measuredRow], [measuredRow], []])
+  const coarse = aggregateDay(day, 2)
+  // Koš 1 (minuty 2–3) končí v díře → profil poslední měřené minuty (2), ne prázdno
+  expect(coarse.profileByMinute!.rowsAt(1)).toEqual([measuredRow])
+  expect(coarse.profileByMinute!.rowsAt(0)).toEqual([measuredRow])
+  // Koš bez jediné měřené minuty zůstává prázdný
+  const empty = sampleDay()
+  empty.profileByMinute = profileSourceOf([[measuredRow], [measuredRow], [], []])
+  expect(aggregateDay(empty, 2).profileByMinute!.rowsAt(1)).toEqual([])
 })
 
 test('aggregateDay: bucketMinutes 1 vrací originál, neúplný poslední koš se ořeže', () => {
