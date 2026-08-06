@@ -16,7 +16,7 @@ from pathlib import Path
 from gexlens_engine.compute.gexfield import gamma_at_price
 from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import max_pain_strike
-from gexlens_engine.compute.tendency import TendencyInputs, evaluate_tendency
+from gexlens_engine.compute.tendency import BandHysteresis, TendencyInputs, evaluate_tendency
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.tendency_store import TendencyRepository, votes_payload
@@ -50,6 +50,10 @@ class TendencyEngine:
         self._sent_cache: tuple[Path, float, list[tuple[dt.datetime, float]]] | None = None
         # ATM IV historie pro vanna hlas (#397)
         self._iv_history: deque[tuple[dt.datetime, float]] = deque(maxlen=IV_LOOKBACK_MIN + 1)
+        # Hystereze pásma (#394) — resetuje se na přelomu dne (nový den nemá
+        # dědit rozpracované přepnutí ani pásmo včerejšího závěru)
+        self._hysteresis = BandHysteresis()
+        self._hysteresis_day: dt.date | None = None
 
     def _refresh_max_pain(self, expiry: str, today: dt.date) -> None:
         if self._max_pain_loaded_for == (expiry, today) and self._max_pain is not None:
@@ -201,7 +205,10 @@ class TendencyEngine:
             iv_now=atm_iv,
             iv_then=iv_then,
         )
-        result = evaluate_tendency(inputs)
+        if self._hysteresis_day != now.date():
+            self._hysteresis = BandHysteresis()
+            self._hysteresis_day = now.date()
+        result = evaluate_tendency(inputs, self._hysteresis)
         if result is None:
             return
         self.repository.upsert(self.symbol, result)

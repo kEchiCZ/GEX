@@ -22,9 +22,17 @@ from dataclasses import dataclass, field
 
 # Verze vah (S11) — zvednout při každé změně vah nebo pravidel hlasů
 # v2 (#397): + charm_flow (časová rampa do close) a vanna_flow (× trend IV)
-TENDENCY_WEIGHTS_VERSION = 2
+# v3 (#394): hystereze pásem (margin + dwell) — skóre i hlasy beze změny,
+#            ale uložené pásmo už není čisté band_of(score), takže řádky
+#            v3 nejsou v pásmech srovnatelné s v2
+TENDENCY_WEIGHTS_VERSION = 3
 
-# Nekalibrované výchozí váhy (#350): flip nejvyšší, zbytek rovnocenný
+# Nekalibrované výchozí váhy (#350): flip nejvyšší, zbytek rovnocenný.
+# Kalibrace #394 (7. 8., 7 dní dat v2): korelace hlasů s pohybem ceny za
+# 15/30/60 min jsou slabé (|r| ≤ 0,23) a mezi ES a NQ si odporují znaménkem
+# (flip na ES +0,12, na NQ ~0; gamma_at_price na obou záporná) — vzorek je
+# jeden trendový týden, ne režimový průřez. Váhy proto ZŮSTÁVAJÍ nekalibrované;
+# čísla a možnosti jsou v issue #394 (needs-decision).
 WEIGHTS: dict[str, float] = {
     "flip": 3.0,
     "walls_distance": 1.0,
@@ -55,6 +63,27 @@ BAND_STRONG = 0.5
 BAND_WEAK = 0.15
 
 BANDS = ("strong_short", "short", "neutral", "long", "strong_long")
+
+# Hystereze pásem (#394): bez ní pásmo kmitalo ~198× denně (medián běhu
+# 2 minuty), protože skóre osciluje těsně kolem prahů ±0,15. Změřeno na
+# historii tendency 29. 7.–6. 8. (ES i NQ ~7 100 minut):
+#   margin 0,05           → ~96 přepnutí/den
+#   dwell 3 min           → ~46 přepnutí/den
+#   margin 0,05 + dwell 3 → ~28 přepnutí/den, medián běhu 16–18 min
+# Kombinace drží obojí: skóre musí prahy překročit znatelně (margin) a nový
+# stav vydržet (dwell). Cena je zpoždění přepnutí o `dwell` minut — pro
+# indikátor s horizontem 15–60 min přijatelné.
+BAND_HYSTERESIS_MARGIN = 0.05
+BAND_DWELL_MINUTES = 3
+
+# Meze pásem pro hysterezi: (dolní, horní) hranice skóre daného pásma
+_BAND_BOUNDS: dict[str, tuple[float, float]] = {
+    "strong_short": (float("-inf"), -BAND_STRONG),
+    "short": (-BAND_STRONG, -BAND_WEAK),
+    "neutral": (-BAND_WEAK, BAND_WEAK),
+    "long": (BAND_WEAK, BAND_STRONG),
+    "strong_long": (BAND_STRONG, float("inf")),
+}
 
 
 @dataclass(frozen=True)
@@ -263,8 +292,57 @@ def band_of(score: float) -> str:
     return "strong_long"
 
 
-def evaluate_tendency(inputs: TendencyInputs) -> TendencyResult | None:
-    """Skóre a pásmo z dostupných složek; None = žádná složka nemá data."""
+@dataclass
+class BandHysteresis:
+    """Stavový filtr pásma (#394) — drží ho TendencyEngine mezi minutami.
+
+    Pásmo se přepne, až když skóre opustí stávající pásmo o `margin` A nový
+    kandidát vydrží `dwell` po sobě jdoucích minut. Skóre samotné se nemění —
+    hystereze filtruje jen prezentované/ukládané pásmo.
+    """
+
+    margin: float = BAND_HYSTERESIS_MARGIN
+    dwell: int = BAND_DWELL_MINUTES
+    band: str | None = None
+    _pending: str | None = None
+    _pending_count: int = 0
+
+    def update(self, score: float) -> str:
+        raw = band_of(score)
+        if self.band is None:
+            self.band = raw
+            return raw
+        if raw == self.band or not self._beyond_margin(score):
+            # Návrat do stávajícího pásma (nebo jen ťuknutí do prahu) maže
+            # rozpracované přepnutí — kmit se nesčítá přes přestávky
+            self._pending = None
+            self._pending_count = 0
+            return self.band
+        if self._pending == raw:
+            self._pending_count += 1
+        else:
+            self._pending = raw
+            self._pending_count = 1
+        if self._pending_count >= self.dwell:
+            self.band = raw
+            self._pending = None
+            self._pending_count = 0
+        return self.band
+
+    def _beyond_margin(self, score: float) -> bool:
+        assert self.band is not None
+        low, high = _BAND_BOUNDS[self.band]
+        return score < low - self.margin or score > high + self.margin
+
+
+def evaluate_tendency(
+    inputs: TendencyInputs, hysteresis: BandHysteresis | None = None
+) -> TendencyResult | None:
+    """Skóre a pásmo z dostupných složek; None = žádná složka nemá data.
+
+    S `hysteresis` se pásmo filtruje proti kmitání (#394); bez ní je čisté
+    `band_of(score)` — testy a jednorázová vyhodnocení stav nepotřebují.
+    """
     votes = _collect_votes(inputs)
     if not votes:
         return None
@@ -279,6 +357,6 @@ def evaluate_tendency(inputs: TendencyInputs) -> TendencyResult | None:
     return TendencyResult(
         ts_min=inputs.ts_min,
         score=score,
-        band=band_of(score),
+        band=hysteresis.update(score) if hysteresis is not None else band_of(score),
         votes=tuple(votes),
     )

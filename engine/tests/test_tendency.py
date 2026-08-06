@@ -10,6 +10,7 @@ from gexlens_engine.compute.gexfield import GexProfile, gamma_at_price
 from gexlens_engine.compute.tendency import (
     COMPONENT_CAP,
     TENDENCY_WEIGHTS_VERSION,
+    BandHysteresis,
     TendencyInputs,
     TendencyResult,
     band_of,
@@ -170,8 +171,60 @@ def test_vanna_flow_needs_iv_trend() -> None:
     assert missing is None or "vanna_flow" not in {v.name for v in missing.votes}
 
 
-def test_weights_version_bumped_for_v2() -> None:
-    assert TENDENCY_WEIGHTS_VERSION == 2
+def test_weights_version_bumped_for_v3() -> None:
+    """v3 (#394): hystereze pásem — uložená pásma nejsou srovnatelná s v2."""
+    assert TENDENCY_WEIGHTS_VERSION == 3
+
+
+# ── Hystereze pásem (#394) ────────────────────────────────────────────
+
+
+def test_hysteresis_ignores_flicker_around_threshold() -> None:
+    """Kmit těsně kolem prahu ±0,15 pásmo nepřepne (margin 0,05)."""
+    hyst = BandHysteresis()
+    assert hyst.update(0.10) == "neutral"  # první minuta usadí stav
+    # 0,16–0,19 je za prahem long, ale ne o margin → drží neutral
+    for score in (0.16, 0.19, 0.14, 0.18):
+        assert hyst.update(score) == "neutral"
+
+
+def test_hysteresis_switches_after_margin_and_dwell() -> None:
+    """Skóre za prahem o margin musí vydržet dwell minut, pak se přepne."""
+    hyst = BandHysteresis()
+    assert hyst.update(0.0) == "neutral"
+    assert hyst.update(0.25) == "neutral"  # 1. minuta za 0,15 + 0,05
+    assert hyst.update(0.30) == "neutral"  # 2. minuta
+    assert hyst.update(0.28) == "long"  # 3. minuta (dwell 3) → přepnutí
+    # Návrat pod práh se řídí stejnými pravidly z pásma long
+    assert hyst.update(0.05) == "long"  # 1. minuta pod 0,15 − 0,05
+    assert hyst.update(0.16) == "long"  # návrat do long maže rozpracované přepnutí
+    assert hyst.update(0.05) == "long"
+    assert hyst.update(0.02) == "long"
+    assert hyst.update(0.08) == "neutral"
+
+
+def test_hysteresis_pending_resets_on_return_to_band() -> None:
+    """Přerušený pokus o přepnutí se nesčítá přes návraty do pásma."""
+    hyst = BandHysteresis()
+    hyst.update(0.0)
+    hyst.update(0.25)
+    hyst.update(0.25)
+    hyst.update(0.10)  # návrat → počítadlo na nule
+    assert hyst.update(0.25) == "neutral"
+    assert hyst.update(0.25) == "neutral"
+    assert hyst.update(0.25) == "long"
+
+
+def test_evaluate_tendency_uses_hysteresis_when_given() -> None:
+    """Skóre se hysterezí nemění, filtruje se jen pásmo."""
+    hyst = BandHysteresis()
+    first = evaluate_tendency(inputs(centroid=7449.0), hysteresis=hyst)  # slabý short hlas
+    assert first is not None
+    assert first.band == band_of(first.score)  # první minuta = bez filtru
+    strong = evaluate_tendency(inputs(flip=7400.0), hysteresis=hyst)  # skok do long
+    assert strong is not None
+    assert strong.band == first.band  # dwell 3 min ještě drží původní pásmo
+    assert strong.score == pytest.approx(COMPONENT_CAP)  # skóre samotné bez filtru
 
 
 def test_minutes_to_close_odvozene_ze_settle_burzovni_zony() -> None:
