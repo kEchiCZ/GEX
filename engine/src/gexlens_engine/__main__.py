@@ -12,7 +12,8 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from ib_async import IB, Contract, Future, RealTimeBarList, Ticker
 from sqlalchemy import create_engine
@@ -149,6 +150,14 @@ def _watch_subscription_errors(
         window_s=settings.competing_session_window_s,
         cooldown_s=max(settings.subscription_error_cooldown_s, 3600.0),
     )
+    # `create_task` bez držené reference může GC uklidit před doběhem (#499,
+    # RUF006) — alert by pak tiše nedorazil. Reference se drží do dokončení.
+    pending_publishes: set[asyncio.Task[None]] = set()
+
+    def spawn_publish(coro: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.create_task(coro)
+        pending_publishes.add(task)
+        task.add_done_callback(pending_publishes.discard)
 
     async def publish(alert: SubscriptionErrorAlert) -> None:
         await publisher.publish(
@@ -193,7 +202,7 @@ def _watch_subscription_errors(
             if alert is not None:
                 logger.warning("Konkurenční relace odebírá market data: %s", message)
                 if alert_enabled():
-                    asyncio.create_task(publish_competing(alert))
+                    spawn_publish(publish_competing(alert))
             return
         if code != NOT_SUBSCRIBED_ERROR_CODE:
             return  # ostatní kódy loguje ib_async samo
@@ -211,7 +220,7 @@ def _watch_subscription_errors(
             ", ".join(alert.contracts),
         )
         if alert_enabled():
-            asyncio.create_task(publish(alert))
+            spawn_publish(publish(alert))
 
     ib.errorEvent += on_error
     return tracker
