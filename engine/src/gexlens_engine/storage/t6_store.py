@@ -28,6 +28,10 @@ from sqlalchemy.sql import Executable
 # 1 = close-to-close řezané UTC půlnocí (do #498),
 # 2 = den končí settle US seance (compute.settle, #498).
 # Startovní přepočet (t6.recompute_stale_candidates) dorovná starší řádky.
+# Pozn. #511: settle se odvozuje z burzovní timezone (16:00 ET) — v letním čase
+# je hranice shodná s dřívějšími 20:00 UTC a všichni existující kandidáti jsou
+# letní, výsledky se tedy nemění a verze zůstává 2. Zvednout až při změně,
+# která reálně přepisuje existující data.
 T6_CONVENTION_VERSION = 2
 
 t6_metadata = MetaData()

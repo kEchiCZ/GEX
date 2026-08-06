@@ -25,6 +25,7 @@ from gexlens_engine.compute.gexfield import (
 )
 from gexlens_engine.compute.levels import GexLevels, compute_ladder, compute_levels
 from gexlens_engine.compute.marketclock import is_market_closed
+from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
@@ -393,9 +394,9 @@ class EngineRuntime:
             strike_step = min(
                 b - a for a, b in zip(strikes_sorted, strikes_sorted[1:], strict=False) if b > a
             )
-            settle = dt.datetime.strptime(self.expiry, "%Y%m%d").replace(
-                hour=20, minute=0, tzinfo=dt.UTC
-            )
+            # Settle dne expirace ze sdílené konvence (#511) — 16:00 ET,
+            # tedy 20:00 UTC v létě a 21:00 UTC v zimě
+            settle = settle_ts(dt.datetime.strptime(self.expiry, "%Y%m%d").date())
             # Gamma + charm + vanna jedním průchodem (#204) — sdílené d1/φ,
             # tři plochy nestojí trojnásobek. Gamma drží původní kanály/adresáře.
             profiles = greek_profiles(

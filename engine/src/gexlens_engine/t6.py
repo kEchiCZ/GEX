@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from gexlens_engine.compute.settle import settle_ts
+from gexlens_engine.compute.settle import ET_TZ, session_time_utc, settle_ts
 from gexlens_engine.compute.setups import gex_regime, max_pain_strike
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIEodRepository
@@ -20,9 +20,17 @@ from gexlens_engine.storage.t6_store import T6_CONVENTION_VERSION, T6Repository
 
 logger = logging.getLogger(__name__)
 
-# Vyhodnocení běží v prvním cyklu po tomto čase — před US open (13:30 UTC),
-# aby metriky zachytily premarket, ne už otevřený trh
-EVALUATE_AFTER_UTC = dt.time(13, 25)
+# Vyhodnocení běží v prvním cyklu po tomto čase — před US open (9:30 ET),
+# aby metriky zachytily premarket, ne už otevřený trh. Čas je burzovní (#511):
+# fixní 13:25 UTC by v zimě spadl hodinu před konec premarketu.
+EVALUATE_AFTER_ET = dt.time(9, 25)
+
+
+def evaluate_after_utc(day: dt.date) -> dt.datetime:
+    """UTC okamžik, po kterém smí T6 v den `day` vyhodnotit kandidáta."""
+    return session_time_utc(day, EVALUATE_AFTER_ET.hour, EVALUATE_AFTER_ET.minute, ET_TZ)
+
+
 # Trigger: včerejší close-to-close pod prahem (záporné procento)
 DEFAULT_TRIGGER_PCT = -1.0
 
@@ -192,7 +200,7 @@ class T6Collector:
 
     async def on_minute(self, now: dt.datetime, spot: float, runtime: EngineRuntime) -> None:
         today = now.date()
-        if self._evaluated_for == today or now.time() < EVALUATE_AFTER_UTC:
+        if self._evaluated_for == today or now < evaluate_after_utc(today):
             return
         self._evaluated_for = today  # jeden pokus denně i při chybě — žádné bušení
 

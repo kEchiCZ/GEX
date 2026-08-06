@@ -376,7 +376,7 @@ class InstrumentPipeline:
         potvrzení se do DB neukládá, takže po restartu proběhne jedno kontrolní
         čtení navíc. To je levnější než další stav v schématu.
         """
-        return now.hour >= self.settings.oi_publication_hour_utc and not self.oi_final
+        return now >= self.settings.oi_publication_utc(now.date()) and not self.oi_final
 
     async def try_archive_oi(self, today: dt.date, now: dt.datetime | None = None) -> bool:
         """Denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2).
@@ -396,7 +396,7 @@ class InstrumentPipeline:
             await self._run_fa_validation(today)
             return True
         captured = self.oi_repository.captured_at(self.symbol, today)
-        if captured is not None and captured.hour < self.settings.oi_publication_hour_utc:
+        if captured is not None and captured < self.settings.oi_publication_utc(captured.date()):
             logger.info(
                 "OI archiv %s %s je z %s UTC, tedy před publikací — obnovuji",
                 self.symbol,
@@ -448,7 +448,7 @@ class InstrumentPipeline:
         # Finální je snímek pořízený po publikačním okně, jehož hodnoty se proti
         # předchozímu čtení nezměnily — jedno čtení po okně nestačí, publikace
         # může doběhnout zrovna mezi dvěma dávkami sweepu
-        if now.hour >= self.settings.oi_publication_hour_utc and not result.changed:
+        if now >= self.settings.oi_publication_utc(now.date()) and not result.changed:
             self.oi_final = True
             logger.info("OI archiv %s %s je finální (dvě shodná čtení)", self.symbol, today)
         await self._run_fa_validation(today)

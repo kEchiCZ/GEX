@@ -15,6 +15,7 @@ from gexlens_engine.storage.t6_store import T6_CONVENTION_VERSION, T6Repository
 from gexlens_engine.t6 import (
     T6Collector,
     drop_trigger,
+    evaluate_after_utc,
     put_oi_increase_below,
     read_daily_closes,
     recompute_stale_candidates,
@@ -92,6 +93,24 @@ def test_read_daily_closes_cuts_day_at_settle(tmp_path: Path) -> None:
     assert closes is not None
     assert closes.previous_close == 7500.0  # ne 7550 z baru po settle
     assert closes.last_close == 7420.0
+
+
+def test_read_daily_closes_zimni_settle_je_21_utc(tmp_path: Path) -> None:
+    """#511: v zimě je settle 16:00 ET = 21:00 UTC — bar ve 20:30 JE před settle.
+
+    Fixní 20:00 UTC by ho odřízlo a close dne by byl o hodinu dřívější bar.
+    """
+    write_bars_day(
+        tmp_path,
+        "ES",
+        dt.date(2026, 1, 13),
+        [(dt.time(19, 59), 7480.0), (dt.time(20, 30), 7500.0), (dt.time(21, 1), 7550.0)],
+    )
+    write_bars_day(tmp_path, "ES", dt.date(2026, 1, 14), [(dt.time(20, 59), 7400.0)])
+    closes = read_daily_closes(tmp_path, "ES", dt.date(2026, 1, 15))
+    assert closes is not None
+    assert closes.previous_close == 7500.0  # bar 20:30 platí, 21:01 už patří další seanci
+    assert closes.last_close == 7400.0
 
 
 def test_read_daily_closes_skips_day_without_pre_settle_bars(tmp_path: Path) -> None:
@@ -202,6 +221,34 @@ def test_collector_includes_put_mass_from_oi_archive(tmp_path: Path) -> None:
     asyncio.run(collector.on_minute(MORNING, 7410.0, cast(EngineRuntime, FakeRuntime())))
     rows = repository.list_for("ES")
     assert rows[0]["put_oi_increase"] == 25_000.0
+
+
+def test_evaluate_after_je_burzovni_cas() -> None:
+    """#511: evaluace po 9:25 ET — 13:25 UTC v létě (dřívější chování), 14:25 v zimě."""
+    assert evaluate_after_utc(dt.date(2026, 7, 24)) == dt.datetime(
+        2026, 7, 24, 13, 25, tzinfo=dt.UTC
+    )
+    assert evaluate_after_utc(dt.date(2026, 1, 15)) == dt.datetime(
+        2026, 1, 15, 14, 25, tzinfo=dt.UTC
+    )
+
+
+def test_collector_v_zime_ceka_na_9_25_et(tmp_path: Path) -> None:
+    """#511: 13:26 UTC je v zimě teprve 8:26 ET — evaluace běží až po 14:25 UTC."""
+    write_bars_day(tmp_path, "ES", dt.date(2026, 1, 13), [(dt.time(20, 59), 7500.0)])
+    write_bars_day(tmp_path, "ES", dt.date(2026, 1, 14), [(dt.time(20, 59), 7400.0)])
+    collector, repository, _ = make_collector(tmp_path)
+    runtime = cast(EngineRuntime, FakeRuntime())
+
+    asyncio.run(
+        collector.on_minute(dt.datetime(2026, 1, 15, 13, 26, tzinfo=dt.UTC), 7410.0, runtime)
+    )
+    assert repository.list_for("ES") == []  # před 9:25 ET nic (a gating se nespotřebuje)
+
+    asyncio.run(
+        collector.on_minute(dt.datetime(2026, 1, 15, 14, 26, tzinfo=dt.UTC), 7410.0, runtime)
+    )
+    assert len(repository.list_for("ES")) == 1
 
 
 def test_overnight_move_measured_from_settle_close(tmp_path: Path) -> None:

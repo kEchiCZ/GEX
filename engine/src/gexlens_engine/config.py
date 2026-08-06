@@ -5,7 +5,9 @@ Engine s nevalidní konfigurací odmítá nastartovat: `load_settings` vyhodí
 """
 
 import datetime as dt
+import logging
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -106,11 +108,18 @@ class Settings(BaseSettings):
     strike_range_max_points: float = Field(default=800.0, gt=0)
     batch_size: int = Field(default=80, ge=1)
     batch_timeout_s: float = Field(default=4.0, gt=0)
-    # Hodina UTC, po které IBKR publikuje kompletní denní OI (#463). Snímek
-    # pořízený dřív nese předpublikační čísla — engine ho po této hodině
+    # Burzovní čas, po kterém IBKR publikuje kompletní denní OI (#463, #511).
+    # Snímek pořízený dřív nese předpublikační čísla — engine ho po tomto čase
     # povinně obnoví a teprve dvě shodná čtení bere jako finální. Naměřeno
-    # 4. 8. 2026: publikace dorazila 12:45–14:00 SELČ (10:45–12:00 UTC).
-    oi_publication_hour_utc: int = Field(default=12, ge=0, le=23)
+    # 4. 8. 2026: publikace dorazila 12:45–14:00 SELČ (10:45–12:00 UTC), tedy
+    # do 7:00 chicagského času. CME publikuje podle svého času — fixní UTC
+    # hodina by se přes DST půl roku míjela o hodinu (#511); default odpovídá
+    # dřívějším 12:00 UTC v letním čase.
+    oi_publication_time_local: dt.time = dt.time(7, 0)
+    oi_publication_tz: str = "America/Chicago"
+    # DEPRECATED (#511): stará fixní UTC hodina. Je-li nastavená, má přednost
+    # (zpětná kompatibilita .env) a při startu se zaloguje deprecation warning.
+    oi_publication_hour_utc: int | None = Field(default=None, ge=0, le=23)
     # Křídla řetězce se sweepují každý k-tý cyklus (ATM±atm_sweep_width každý cyklus)
     wings_sweep_every: int = Field(default=3, ge=1)
     atm_sweep_width: int = Field(default=30, ge=1)
@@ -172,6 +181,18 @@ class Settings(BaseSettings):
     def _validate_backoff(self) -> "Settings":
         if self.reconnect_backoff_max_s < self.reconnect_backoff_base_s:
             raise ValueError("reconnect_backoff_max_s musí být ≥ reconnect_backoff_base_s")
+        try:
+            ZoneInfo(self.oi_publication_tz)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(
+                f"oi_publication_tz musí být platná IANA zóna (zadáno: {self.oi_publication_tz!r})"
+            ) from exc
+        if self.oi_publication_hour_utc is not None:
+            logging.getLogger(__name__).warning(
+                "GEXLENS_OI_PUBLICATION_HOUR_UTC je zastaralé (#511) — použij "
+                "GEXLENS_OI_PUBLICATION_TIME_LOCAL + GEXLENS_OI_PUBLICATION_TZ "
+                "(burzovní čas, DST-korektní); fixní UTC hodina zatím platí dál"
+            )
         if self.strike_range_max_points < 2 * self.strike_range_points:
             raise ValueError(
                 "strike_range_max_points musí být ≥ 2× strike_range_points (výchozí obálka)"
@@ -196,6 +217,20 @@ class Settings(BaseSettings):
         return frozenset(
             raw.strip().lower() for raw in self.setup_disabled_templates.split(",") if raw.strip()
         )
+
+    def oi_publication_utc(self, day: dt.date) -> dt.datetime:
+        """UTC okamžik publikačního okna OI pro den `day` (#511).
+
+        Default je burzovní čas (`oi_publication_time_local` v `oi_publication_tz`,
+        DST řeší zoneinfo); zastaralý klíč `oi_publication_hour_utc` má z důvodu
+        zpětné kompatibility přednost.
+        """
+        if self.oi_publication_hour_utc is not None:
+            return dt.datetime.combine(day, dt.time(self.oi_publication_hour_utc, 0), tzinfo=dt.UTC)
+        local = dt.datetime.combine(
+            day, self.oi_publication_time_local, tzinfo=ZoneInfo(self.oi_publication_tz)
+        )
+        return local.astimezone(dt.UTC)
 
     @property
     def snapshots_dir(self) -> Path:

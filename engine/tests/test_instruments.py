@@ -324,10 +324,10 @@ def test_oi_refresh_je_potreba_az_po_publikacnim_okne(
     """#463: před oknem se nečte (data nejsou), po okně dokud není potvrzeno."""
     settings, writer, repository, publisher = env
     pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
-    hour = settings.oi_publication_hour_utc
+    okno = settings.oi_publication_utc(dt.date(2026, 8, 4))
 
-    pred_oknem = dt.datetime(2026, 8, 4, hour - 1, 30, tzinfo=dt.UTC)
-    po_okne = dt.datetime(2026, 8, 4, hour, 5, tzinfo=dt.UTC)
+    pred_oknem = okno - dt.timedelta(minutes=90)
+    po_okne = okno + dt.timedelta(minutes=5)
 
     assert pipeline._oi_refresh_due(pred_oknem) is False
     assert pipeline._oi_refresh_due(po_okne) is True
@@ -335,6 +335,12 @@ def test_oi_refresh_je_potreba_az_po_publikacnim_okne(
     # Potvrzený snímek se už neobnovuje
     pipeline.oi_final = True
     assert pipeline._oi_refresh_due(po_okne) is False
+
+    # #511: okno je burzovní čas (7:00 America/Chicago) — v zimě 13:00 UTC,
+    # takže 12:30 UTC je PŘED oknem, ačkoli v létě by už bylo po něm
+    pipeline.oi_final = False
+    assert pipeline._oi_refresh_due(dt.datetime(2026, 1, 15, 12, 30, tzinfo=dt.UTC)) is False
+    assert pipeline._oi_refresh_due(dt.datetime(2026, 1, 15, 13, 5, tzinfo=dt.UTC)) is True
 
 
 async def test_predpublikacni_snimek_se_po_okne_prepise(
@@ -355,7 +361,7 @@ async def test_predpublikacni_snimek_se_po_okne_prepise(
 
     # Po okně dodá IBKR kompletní hodnoty — mock fetcher vrací 500.0
     pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings)
-    po_okne = dt.datetime(2026, 8, 4, settings.oi_publication_hour_utc, 5, tzinfo=dt.UTC)
+    po_okne = settings.oi_publication_utc(dt.date(2026, 8, 4)) + dt.timedelta(minutes=5)
     assert await pipeline.try_archive_oi(today, po_okne) is True
 
     assert repository.get_oi("ES", today, specs[0].strike, specs[0].right) == 500.0
@@ -368,7 +374,7 @@ async def test_predpublikacni_snimek_se_po_okne_prepise(
     # A před oknem se předpublikační snímek nepřepisuje (data ještě nejsou)
     pipeline.oi_final = False
     pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 9.0)), settings)
-    pred_oknem = dt.datetime(2026, 8, 4, settings.oi_publication_hour_utc - 2, 0, tzinfo=dt.UTC)
+    pred_oknem = settings.oi_publication_utc(dt.date(2026, 8, 4)) - dt.timedelta(hours=2)
     assert await pipeline.try_archive_oi(today, pred_oknem) is True
     assert repository.get_oi("ES", today, specs[0].strike, specs[0].right) == 500.0
 
@@ -396,7 +402,7 @@ async def test_obnova_po_okne_cte_i_striky_pridane_expanzi(
     pipeline.archiver = OIArchiver(
         repository, MockOIFetcher(dict.fromkeys(vsechny, 500.0)), settings
     )
-    po_okne = dt.datetime(2026, 7, 17, settings.oi_publication_hour_utc, 5, tzinfo=dt.UTC)
+    po_okne = settings.oi_publication_utc(dt.date(2026, 7, 17)) + dt.timedelta(minutes=5)
     assert await pipeline.try_archive_oi(today, po_okne) is True
 
     assert repository.get_oi("ES", today, 7650.0, "C") == 500.0
@@ -467,7 +473,7 @@ async def test_pulnoc_resetuje_finalitu_a_archivuje_novy_den(
     day1 = TS.date()
 
     # Den 1: čtení po okně shodné s archivem (make_pipeline uložil 500.0) → finální
-    po_okne = dt.datetime(2026, 7, 17, settings.oi_publication_hour_utc, 5, tzinfo=dt.UTC)
+    po_okne = settings.oi_publication_utc(dt.date(2026, 7, 17)) + dt.timedelta(minutes=5)
     assert await pipeline.try_archive_oi(day1, po_okne) is True
     assert pipeline.oi_final is True
 
@@ -488,7 +494,7 @@ async def test_neuspesna_obnova_jede_na_starsim_snimku(
     settings, writer, repository, publisher = env
     pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
     today = TS.date()
-    po_okne = dt.datetime(2026, 7, 17, settings.oi_publication_hour_utc, 5, tzinfo=dt.UTC)
+    po_okne = settings.oi_publication_utc(dt.date(2026, 7, 17)) + dt.timedelta(minutes=5)
 
     class ExplodingArchiver:
         async def archive_day(self, contracts: object, day: dt.date, now: object = None) -> object:

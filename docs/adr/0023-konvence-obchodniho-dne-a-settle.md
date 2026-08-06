@@ -37,3 +37,21 @@ partici místo pondělní seance (#512).
 - T6 kandidáti sbíraní před #498 jsou přepočtení podle nové konvence; verze
   konvence se ukládá (obdoba `SETUP_MECHANICS_VERSION`), aby kalibrace nikdy
   nemíchala dva režimy.
+
+## Dodatek 2026-08-06 (#511)
+
+Bod 2 realizován: settle a další denní hranice odvozuje `compute/settle.py`
+z burzovní timezone (`settle_ts` = 16:00 `America/New_York`,
+`session_time_utc` pro obecný burzovní čas); frontend má protějšek
+`instrument/tz.ts` (`Intl.DateTimeFormat` s `timeZone`, bez závislostí)
+a session markery jsou definované v lokálním čase burzy + IANA zóně.
+
+**Config migrace:** `GEXLENS_OI_PUBLICATION_HOUR_UTC` (fixní UTC hodina) je
+nahrazeno dvojicí `GEXLENS_OI_PUBLICATION_TIME_LOCAL` +
+`GEXLENS_OI_PUBLICATION_TZ` (default `07:00` `America/Chicago`, což odpovídá
+dřívějším 12:00 UTC v letním čase). Starý klíč funguje dál a má přednost
+(zpětná kompatibilita .env), ale při startu loguje deprecation warning.
+
+Uložená data (parquet, DB) se nemigrují — konvence je výpočetní. Verze T6
+konvence zůstává 2: letní settle hranice se nemění a všichni existující
+kandidáti jsou letní, přepočet by tedy nic nezměnil.

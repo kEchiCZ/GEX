@@ -13,7 +13,13 @@ test('frontContractCode: TWS symbol předního kvartálního kontraktu (#189)', 
   // Nekvartální produkt (měsíční cyklus) neodhadujeme
   expect(frontContractCode('CL', new Date('2026-07-22T09:00:00Z'))).toBeNull()
 })
-import { expiryCountdown, expiryIsoDate, expiryKind, sessionDateFor } from './expiry'
+import {
+  expiryCountdown,
+  expiryIsoDate,
+  expiryKind,
+  expirySettleUtc,
+  sessionDateFor,
+} from './expiry'
 
 test('expiryKind: 3. pátek = měsíční, v kvartálních měsících kvartální', () => {
   expect(expiryKind('20260717')).toBe('měsíční') // 3. pátek července (dnešní opex)
@@ -44,10 +50,19 @@ test('sessionDateFor: proběhlá expirace = den expirace, aktuální a budoucí 
   expect(sessionDateFor('nesmysl', today)).toBe(today) // nečitelná expirace nesmí shodit fetch
 })
 
-test('expiryCountdown: odpočet k ≈20:00 UTC, po expiraci null', () => {
+test('expiryCountdown: odpočet k letnímu settle 20:00 UTC, po expiraci null', () => {
   const now = new Date(Date.UTC(2026, 6, 17, 14, 18)) // 14:18 UTC v den expirace
   expect(expiryCountdown('20260717', now)).toBe('≈ za 5 h 42 m')
   expect(expiryCountdown('20260717', new Date(Date.UTC(2026, 6, 17, 21, 0)))).toBeNull()
   expect(expiryCountdown('20260720', now)).toBe('≈ za 3 d')
   expect(expiryCountdown('20260717', new Date(Date.UTC(2026, 6, 17, 19, 30)))).toBe('≈ za 30 m')
+})
+
+test('expirySettleUtc: 16:00 ET — v zimě 21:00 UTC, ne 20:00 (#511)', () => {
+  expect(expirySettleUtc('20260717')?.toISOString()).toBe('2026-07-17T20:00:00.000Z')
+  expect(expirySettleUtc('20260115')?.toISOString()).toBe('2026-01-15T21:00:00.000Z')
+  expect(expirySettleUtc('nesmysl')).toBeNull()
+  // Zimní odpočet: ve 20:30 UTC ještě půl hodiny do settle (fixní 20:00 by dalo null)
+  expect(expiryCountdown('20260115', new Date(Date.UTC(2026, 0, 15, 20, 30)))).toBe('≈ za 30 m')
+  expect(expiryCountdown('20260115', new Date(Date.UTC(2026, 0, 15, 21, 0)))).toBeNull()
 })
