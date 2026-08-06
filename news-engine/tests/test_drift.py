@@ -4,7 +4,7 @@ import datetime as dt
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, insert
+from sqlalchemy import create_engine, insert, update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.meta import meta_metadata
@@ -14,7 +14,7 @@ from gexlens_engine.storage.sentiment import (
     news_model_stats,
     news_reactions,
 )
-from gexlens_engine.storage.setups_store import SetupsRepository
+from gexlens_engine.storage.setups_store import SetupsRepository, setups_table
 from gexlens_news.drift import RECENT_N, DriftJob, binomial_p_at_most
 
 NOW = dt.datetime(2026, 7, 31, 2, 0, tzinfo=dt.UTC)
@@ -137,33 +137,114 @@ def test_no_drift_without_enough_recent_samples(tmp_path: Path) -> None:
     assert DriftJob(engine).run(NOW) == []
 
 
+def seed_closed_setup(
+    repository: SetupsRepository,
+    *,
+    win: bool,
+    created_ts: dt.datetime,
+    closed_ts: dt.datetime,
+    template: str = "wall_bounce",
+) -> int:
+    setup_id = repository.create(
+        symbol="ES",
+        expiry="20260731",
+        template=template,
+        direction="long",
+        created_ts=created_ts,
+        entry=7400.0,
+        target=7420.0,
+        stop=7390.0,
+        confidence=1,
+        reason="test",
+        context={},
+    )
+    repository.close(
+        setup_id,
+        status="closed_target" if win else "closed_stop",
+        closed_ts=closed_ts,
+        outcome_r=1.0 if win else -1.0,
+        mfe=1.0,
+        mae=0.5,
+    )
+    return setup_id
+
+
 def test_setup_template_drift(tmp_path: Path) -> None:
     engine = make_db(tmp_path)
     repository = SetupsRepository(engine)
     # 50 uzavřených: starších 30 se 70% úspěšností, posledních 20 jen 4 výhry
     outcomes = [True] * 21 + [False] * 9 + [True] * 4 + [False] * 16
     for index, win in enumerate(outcomes):
-        setup_id = repository.create(
-            symbol="ES",
-            expiry="20260731",
-            template="wall_bounce",
-            direction="long",
+        seed_closed_setup(
+            repository,
+            win=win,
             created_ts=NOW - dt.timedelta(days=len(outcomes) - index),
-            entry=7400.0,
-            target=7420.0,
-            stop=7390.0,
-            confidence=1,
-            reason="test",
-            context={},
-        )
-        repository.close(
-            setup_id,
-            status="closed_target" if win else "closed_stop",
             closed_ts=NOW - dt.timedelta(days=len(outcomes) - index, hours=-2),
-            outcome_r=1.0 if win else -1.0,
-            mfe=1.0,
-            mae=0.5,
         )
     alerts = DriftJob(engine).run(NOW)
     assert len(alerts) == 1
     assert "wall_bounce" in alerts[0]["message"]
+
+
+def test_setup_drift_ignoruje_stare_mechanics_verze(tmp_path: Path) -> None:
+    """#496: v1 výsledky (včetně incidentu se zmrzlými Greeks, ADR-0015) nesmí
+    vstupovat do baseline aktuálního systému — konvence z #311."""
+    engine = make_db(tmp_path)
+    repository = SetupsRepository(engine)
+    # Aktuální mechanika: 50 uzavřených se stabilní úspěšností ~70 % → žádný drift
+    outcomes = [True] * 21 + [False] * 9 + [True] * 14 + [False] * 6
+    for index, win in enumerate(outcomes):
+        seed_closed_setup(
+            repository,
+            win=win,
+            created_ts=NOW - dt.timedelta(days=100 - index),
+            closed_ts=NOW - dt.timedelta(days=100 - index, hours=-2),
+        )
+    # v1: 20 NEJNOVĚJI uzavřených, samé stopky — bez filtru by vytlačily
+    # klouzavé okno a spustily falešný drift alert
+    v1_ids = [
+        seed_closed_setup(
+            repository,
+            win=False,
+            created_ts=NOW - dt.timedelta(days=2, minutes=index),
+            closed_ts=NOW - dt.timedelta(days=1, minutes=-index),
+        )
+        for index in range(RECENT_N)
+    ]
+    with engine.begin() as conn:
+        conn.execute(
+            update(setups_table).where(setups_table.c.id.in_(v1_ids)).values(mechanics_version=1)
+        )
+
+    assert DriftJob(engine).run(NOW) == []
+
+
+def test_setup_drift_okno_se_ridi_casem_uzavreni(tmp_path: Path) -> None:
+    """#496: „posledních 20" jsou poslední UZAVŘENÉ, ne poslední založené.
+
+    Dvacet ztrát založených nejdřív, ale uzavřených nejpozději, musí tvořit
+    klouzavé okno — řazení podle created_ts by je schovalo do baseline.
+    """
+    engine = make_db(tmp_path)
+    repository = SetupsRepository(engine)
+    # Baseline: 30 výsledků se 70 % — uzavřené dávno
+    for index in range(30):
+        seed_closed_setup(
+            repository,
+            win=index < 21,
+            created_ts=NOW - dt.timedelta(days=50, minutes=-index),
+            closed_ts=NOW - dt.timedelta(days=30, minutes=-index),
+        )
+    # 20 ztrát: založené PŘED baseline, ale uzavřené jako poslední
+    for index in range(RECENT_N):
+        seed_closed_setup(
+            repository,
+            win=False,
+            created_ts=NOW - dt.timedelta(days=100, minutes=-index),
+            closed_ts=NOW - dt.timedelta(days=1, minutes=-index),
+        )
+
+    alerts = DriftJob(engine).run(NOW)
+    assert len(alerts) == 1
+    assert "wall_bounce" in alerts[0]["message"]
+    assert "20 výsledků 0%" in alerts[0]["message"]  # klouzavé okno = samé ztráty
