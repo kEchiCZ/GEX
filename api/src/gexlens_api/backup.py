@@ -76,15 +76,35 @@ async def stream_dump(database_url: str) -> AsyncIterator[bytes]:
         env={**os.environ, **dump_env(database_url)},
     )
     assert process.stdout is not None
+    # stderr se čte souběžně (#497): pg_dump s upovídaným stderr (>64 KB) by se
+    # jinak zablokoval na zaplněné rouře už během streamování stdout a čtení
+    # v `finally` by na něj čekalo navždy
+    stderr_task: asyncio.Task[bytes] | None = (
+        asyncio.create_task(process.stderr.read()) if process.stderr is not None else None
+    )
+    completed = False
     try:
         while chunk := await process.stdout.read(CHUNK_BYTES):
             yield chunk
+        completed = True
     finally:
-        stderr = b""
-        if process.stderr is not None:
-            stderr = await process.stderr.read()
+        if not completed and process.returncode is None:
+            # Přerušené stahování (#497): klient se odpojil, generátor se zavírá
+            # a stdout rouru už nikdo nečte — pg_dump by na její zaplněné straně
+            # visel navždy (a s ním tento task na wait()). Částečná záloha je
+            # stejně nepoužitelná, proces se ukončí.
+            process.kill()
+        if not completed:
+            # Zbytek stdout po killu dočíst do koše: plná roura drží
+            # flow-control pauzu a bez jejího EOF transport nedokončí
+            # `wait()` (waiter se budí až po connection_lost všech rour)
+            while await process.stdout.read(CHUNK_BYTES):
+                pass
+        stderr = await stderr_task if stderr_task is not None else b""
         code = await process.wait()
-        if code != 0:
+        if not completed:
+            logger.info("Stahování zálohy přerušeno klientem — pg_dump ukončen (kód %s)", code)
+        elif code != 0:
             # Klient už má část dat; chybu nelze poslat jako HTTP status, proto
             # aspoň do logu — poškozený soubor pozná pg_restore
             logger.error("pg_dump skončil s kódem %d: %s", code, stderr.decode(errors="replace"))
