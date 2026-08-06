@@ -67,11 +67,21 @@ export function useGreekPlane(
       .then((response) => (response.ok ? response.json() : null))
       .then((payload: { profiles?: RawRow[]; field?: RawRow[] } | null) => {
         if (cancelled || !payload) return
-        setData({
-          profiles: (payload.profiles ?? [])
-            .map(parseProfile)
-            .filter((row): row is GexProfileRow => row !== null),
-          field: parseField((payload.field ?? []).at(-1)),
+        const fetched = (payload.profiles ?? [])
+          .map(parseProfile)
+          .filter((row): row is GexProfileRow => row !== null)
+        const fetchedField = parseField((payload.field ?? []).at(-1))
+        // Fetch a WS subscribe běží souběžně — minuty došlé z WS mezi vyžádáním
+        // a vyřízením fetche nesmí náhrada celého objektu zahodit (#504).
+        // Merge podle tsIso; při duplicitě vyhrává WS řádek (dorazil později).
+        setData((previous) => {
+          const wsTs = new Set(previous.profiles.map((row) => row.tsIso))
+          const onlyFetched = fetched.filter((row) => !wsTs.has(row.tsIso))
+          const field =
+            previous.field && (!fetchedField || previous.field.tsIso >= fetchedField.tsIso)
+              ? previous.field
+              : fetchedField
+          return { profiles: [...onlyFetched, ...previous.profiles], field }
         })
       })
       .catch(() => {
