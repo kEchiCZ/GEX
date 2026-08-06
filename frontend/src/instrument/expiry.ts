@@ -3,8 +3,9 @@
 Frontend zná jen datum expirace (YYYYMMDD) — typ se odvozuje kalendářně:
 3. pátek = měsíční (v březnu/červnu/září/prosinci kvartální), poslední obchodní
 den měsíce = EOM, jiný pátek = týdenní, jinak denní 0DTE. Odpočet míří na
-přibližný settle 20:00 UTC (16:00 ET) dne expirace.
+settle 16:00 ET dne expirace (v létě 20:00 UTC, v zimě 21:00 — #511).
 */
+import { zonedTimeUtc } from './tz'
 
 export type ExpiryKind = 'denní' | 'týdenní' | 'měsíční' | 'kvartální' | 'EOM'
 
@@ -59,12 +60,21 @@ export function expiryKind(expiry: string): ExpiryKind | null {
   return 'denní'
 }
 
-/** Přibližný settle: 20:00 UTC dne expirace (16:00 ET). */
+/** Settle dne expirace: 16:00 ET — DST-korektně přes IANA zónu (#511),
+shodné s engine `compute/settle.py`. */
 export function expirySettleUtc(expiry: string): Date | null {
   const date = parse(expiry)
   if (!date) return null
-  date.setUTCHours(20, 0, 0, 0)
-  return date
+  return new Date(
+    zonedTimeUtc(
+      'America/New_York',
+      date.getUTCFullYear(),
+      date.getUTCMonth() + 1,
+      date.getUTCDate(),
+      16,
+      0,
+    ),
+  )
 }
 
 /** Měsíční kódy kvartálního cyklu futures (CME): bře H, čvn M, zář U, pro Z. */

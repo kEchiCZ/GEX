@@ -1,75 +1,49 @@
 /** Automatické seance markery světových burz (SPEC 7.2 Sessions).
 
-Časy jsou uložené jako LETNÍ UTC; US a evropské seance dostávají aproximaci
-DST (#159) — mimo letní čas se posouvají o hodinu později. Aproximace pracuje
-s celými dny UTC (přechodový víkend může být ±hodinu vedle), asijské burzy
-zůstávají pevně (Indie/Šanghaj DST nemají, Tokio taky ne; Sydney se záměrně
-neřeší — jde o orientaci v grafu, ne o burzovní kalendář). Marker se umístí
-na první minutu dne >= času seance; seance mimo rozsah minut se vynechají.
+Časy jsou definované v LOKÁLNÍM čase burzy + IANA zóně a na UTC se převádí
+přes `instrument/tz.ts` (#511) — DST tak řeší zoneinfo prohlížeče, ne vlastní
+aproximace po celých dnech UTC (ta se na přechodovém víkendu míjela o hodinu,
+#159). Burzy bez DST (Tokio, Šanghaj, Indie) padnou na stejné UTC minuty jako
+dřív; Sydney tím dostává korektní posun AEST/AEDT zdarma. Marker se umístí na
+první minutu dne >= času seance; seance mimo rozsah minut se vynechají.
 */
 import type { SessionMarker } from '../heatmap/overlays'
+import { zonedTimeUtc } from './tz'
 
 const WORLD_SESSIONS: Array<{
   label: string
-  utcHour: number
-  utcMinute: number
-  /** Trh s letním časem: mimo DST se čas posouvá o hodinu později. */
-  dst?: 'us' | 'eu'
+  hour: number
+  minute: number
+  /** IANA zóna burzy — lokální čas výše se převádí DST-korektně (#511). */
+  tz: string
 }> = [
-  { label: 'Sydney', utcHour: 0, utcMinute: 0 },
-  { label: 'Tokio', utcHour: 0, utcMinute: 0 },
-  { label: 'Šanghaj', utcHour: 1, utcMinute: 30 },
-  { label: 'Indie', utcHour: 3, utcMinute: 45 },
-  { label: 'Sydney Cl', utcHour: 6, utcMinute: 0 },
-  { label: 'Tokio Cl', utcHour: 6, utcMinute: 0 },
-  { label: 'Šanghaj Cl', utcHour: 7, utcMinute: 0 },
-  { label: 'Frankfurt', utcHour: 7, utcMinute: 0, dst: 'eu' },
-  { label: 'Londýn', utcHour: 7, utcMinute: 0, dst: 'eu' },
-  { label: 'US Pre', utcHour: 12, utcMinute: 0, dst: 'us' },
-  { label: 'US Open', utcHour: 13, utcMinute: 30, dst: 'us' },
-  { label: 'Indie Cl', utcHour: 10, utcMinute: 0 },
-  { label: 'Frankfurt Cl', utcHour: 15, utcMinute: 30, dst: 'eu' },
-  { label: 'Londýn Cl', utcHour: 15, utcMinute: 30, dst: 'eu' },
-  { label: 'US Close', utcHour: 20, utcMinute: 0, dst: 'us' },
+  { label: 'Sydney', hour: 10, minute: 0, tz: 'Australia/Sydney' },
+  { label: 'Tokio', hour: 9, minute: 0, tz: 'Asia/Tokyo' },
+  { label: 'Šanghaj', hour: 9, minute: 30, tz: 'Asia/Shanghai' },
+  { label: 'Indie', hour: 9, minute: 15, tz: 'Asia/Kolkata' },
+  { label: 'Sydney Cl', hour: 16, minute: 0, tz: 'Australia/Sydney' },
+  { label: 'Tokio Cl', hour: 15, minute: 0, tz: 'Asia/Tokyo' },
+  { label: 'Šanghaj Cl', hour: 15, minute: 0, tz: 'Asia/Shanghai' },
+  { label: 'Frankfurt', hour: 9, minute: 0, tz: 'Europe/Berlin' },
+  { label: 'Londýn', hour: 8, minute: 0, tz: 'Europe/London' },
+  { label: 'US Pre', hour: 8, minute: 0, tz: 'America/New_York' },
+  { label: 'US Open', hour: 9, minute: 30, tz: 'America/New_York' },
+  { label: 'Indie Cl', hour: 15, minute: 30, tz: 'Asia/Kolkata' },
+  { label: 'Frankfurt Cl', hour: 17, minute: 30, tz: 'Europe/Berlin' },
+  { label: 'Londýn Cl', hour: 16, minute: 30, tz: 'Europe/London' },
+  { label: 'US Close', hour: 16, minute: 0, tz: 'America/New_York' },
 ]
 
-/** N-tá neděle měsíce (UTC půlnoc); month 0-based. */
-function nthSundayUtc(year: number, month: number, nth: number): number {
-  const firstDay = new Date(Date.UTC(year, month, 1)).getUTCDay()
-  return Date.UTC(year, month, 1 + ((7 - firstDay) % 7) + (nth - 1) * 7)
-}
-
-/** Poslední neděle měsíce (UTC půlnoc); month 0-based. */
-function lastSundayUtc(year: number, month: number): number {
-  const last = new Date(Date.UTC(year, month + 1, 0))
-  return Date.UTC(year, month, last.getUTCDate() - last.getUTCDay())
-}
-
-/** US DST: 2. neděle března až 1. neděle listopadu (aproximace po dnech UTC). */
-function isUsDst(at: number, year: number): boolean {
-  return at >= nthSundayUtc(year, 2, 2) && at < nthSundayUtc(year, 10, 1)
-}
-
-/** EU DST: poslední neděle března až poslední neděle října. */
-function isEuDst(at: number, year: number): boolean {
-  return at >= lastSundayUtc(year, 2) && at < lastSundayUtc(year, 9)
-}
-
-/** Čas seance v daný den (epoch ms) včetně DST posunu trhu (#159). */
+/** Čas seance v den `dayStart` (epoch ms) — lokální čas burzy → UTC (#511). */
 function sessionAtUtc(dayStart: Date, session: (typeof WORLD_SESSIONS)[number]): number {
-  const year = dayStart.getUTCFullYear()
-  let at = Date.UTC(
-    year,
-    dayStart.getUTCMonth(),
+  return zonedTimeUtc(
+    session.tz,
+    dayStart.getUTCFullYear(),
+    dayStart.getUTCMonth() + 1,
     dayStart.getUTCDate(),
-    session.utcHour,
-    session.utcMinute,
+    session.hour,
+    session.minute,
   )
-  // Uložené časy jsou letní — mimo DST daného trhu o hodinu později
-  const summer =
-    session.dst === 'us' ? isUsDst(at, year) : session.dst === 'eu' ? isEuDst(at, year) : true
-  if (!summer) at += 60 * 60_000
-  return at
 }
 
 /** Slučování popisků na téže pozici — kreslí se pod sebou (#193). */

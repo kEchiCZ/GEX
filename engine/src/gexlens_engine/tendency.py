@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from gexlens_engine.compute.gexfield import gamma_at_price
+from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import max_pain_strike
 from gexlens_engine.compute.tendency import TendencyInputs, evaluate_tendency
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
@@ -27,8 +28,6 @@ SLOPE_LOOKBACK_MIN = 10
 SENTIMENT_SUBDIR = "sentiment"
 # Sklon ATM IV pro vanna hlas (#397) — delší okno, IV se hýbe pomaleji než cena
 IV_LOOKBACK_MIN = 30
-# Close seance pro časovou rampu charm hlasu (shodné se settle konvencí)
-SESSION_CLOSE_UTC = dt.time(20, 0)
 
 
 @dataclass
@@ -109,9 +108,8 @@ class TendencyEngine:
 
     @staticmethod
     def _minutes_to_close(now: dt.datetime) -> float:
-        """Minuty do 20:00 UTC dnešní seance; po close záporné (rampa → 0)."""
-        close = dt.datetime.combine(now.date(), SESSION_CLOSE_UTC, dt.UTC)
-        return (close - now).total_seconds() / 60.0
+        """Minuty do settle dnešní seance (16:00 ET, #511); po close záporné (rampa → 0)."""
+        return (settle_ts(now.date()) - now).total_seconds() / 60.0
 
     def _sentiment(self, now: dt.datetime) -> tuple[float | None, float | None]:
         """Aktuální hodnota SentIndexu + hodnota před oknem z denní parquet partice."""

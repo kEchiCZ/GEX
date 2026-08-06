@@ -1130,3 +1130,13 @@ def test_gamma_momentum_cum_gate_uses_quantile_not_absolute_extreme() -> None:
     assert strict is None  # rekord padl dřív → původní brána neprojde
     assert relaxed is not None
     assert relaxed.direction is Direction.SHORT
+
+
+def test_settle_ts_expirace_v_burzovni_zone() -> None:
+    """#511: settle expirace 16:00 ET — letní 20:00 UTC (dřívější chování), zimní 21:00."""
+    assert SetupEngine._settle_ts("20260717") == dt.datetime(2026, 7, 17, 20, 0, tzinfo=dt.UTC)
+    assert SetupEngine._settle_ts("20260115") == dt.datetime(2026, 1, 15, 21, 0, tzinfo=dt.UTC)
+    assert SetupEngine._settle_ts("nesmysl") is None
+    # Timeout setupu se v zimě posouvá se settle: ve 20:30 UTC ještě 30 minut zbývá
+    now = dt.datetime(2026, 1, 15, 20, 30, tzinfo=dt.UTC)
+    assert SetupEngine._minutes_to_expiry("20260115", now) == 30.0

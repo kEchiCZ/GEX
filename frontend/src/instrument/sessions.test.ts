@@ -1,4 +1,4 @@
-/** Testy automatických seance markerů (pevné UTC časy, jen uvnitř rozsahu dat). */
+/** Testy automatických seance markerů (lokální čas burzy → UTC přes IANA zóny, #511). */
 import { expect, test } from 'vitest'
 import { autoSessions, projectedSessions } from './sessions'
 
@@ -62,15 +62,20 @@ test('projectedSessions: budoucí seance v projektované zóně (#195)', () => {
   expect(projectedSessions('rozbité', settle, 1, 540)).toEqual([])
 })
 
-test('mimo letní čas se US a evropské seance posouvají o hodinu později (#159)', () => {
-  // 15. 1. 2026: US i EU standardní čas → uložené letní časy +1 h; Asie beze změny
+test('mimo letní čas se US a evropské seance posouvají o hodinu později (#159, #511)', () => {
+  // 15. 1. 2026: US i EU standardní čas → o hodinu pozdější UTC; Asie beze změny
   const keys = minutes('2026-01-15T00:00:00Z', 22 * 60)
   const byLabel = new Map(autoSessions(keys).map((m) => [m.label, m.minuteIdx]))
-  expect(byLabel.get('US Open')).toBe(14 * 60 + 30) // 13:30 EDT času → 14:30 UTC v zimě
-  expect(byLabel.get('US Close')).toBe(21 * 60)
+  expect(byLabel.get('US Open')).toBe(14 * 60 + 30) // 9:30 ET → 14:30 UTC v zimě
+  expect(byLabel.get('US Close')).toBe(21 * 60) // settle 16:00 ET → 21:00 UTC
   // Frankfurt/Londýn v zimě 8:00 — v létě splývaly se Šanghaj Cl (7:00), v zimě už ne
   expect(byLabel.get('Šanghaj Cl')).toBe(7 * 60)
   expect(byLabel.get('Frankfurt · Londýn')).toBe(8 * 60)
   expect(byLabel.get('Frankfurt Cl · Londýn Cl')).toBe(16 * 60 + 30)
   expect(byLabel.get('Indie')).toBe(3 * 60 + 45) // bez DST, beze změny
+  // Sydney je v lednu v AEDT: otevírá 23:00 UTC předchozího dne (mimo rozsah),
+  // zavírá v 5:00 UTC — dřívější aproximace ho držela fixně na 0:00/6:00 (#511)
+  expect(byLabel.has('Sydney')).toBe(false)
+  expect(byLabel.get('Sydney Cl')).toBe(5 * 60)
+  expect(byLabel.get('Tokio')).toBe(0) // bez DST — dřív splýval se Sydney
 })

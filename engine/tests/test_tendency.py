@@ -172,3 +172,15 @@ def test_vanna_flow_needs_iv_trend() -> None:
 
 def test_weights_version_bumped_for_v2() -> None:
     assert TENDENCY_WEIGHTS_VERSION == 2
+
+
+def test_minutes_to_close_odvozene_ze_settle_burzovni_zony() -> None:
+    """#511: rampa charm hlasu míří na settle 16:00 ET — 20:00 UTC v létě, 21:00 v zimě."""
+    from gexlens_engine.tendency import TendencyEngine
+
+    summer = dt.datetime(2026, 7, 30, 19, 0, tzinfo=dt.UTC)
+    assert TendencyEngine._minutes_to_close(summer) == 60.0
+    winter = dt.datetime(2026, 1, 15, 20, 0, tzinfo=dt.UTC)
+    assert TendencyEngine._minutes_to_close(winter) == 60.0  # fixních 20:00 UTC by dalo 0
+    po_close = dt.datetime(2026, 1, 15, 21, 30, tzinfo=dt.UTC)
+    assert TendencyEngine._minutes_to_close(po_close) == -30.0
