@@ -4,7 +4,12 @@ import { beforeEach, expect, test, vi } from 'vitest'
 import { Heatmap } from '../components/Heatmap'
 import { demoGrid } from '../heatmap/demo'
 import { CrosshairProvider } from '../state/Crosshair'
-import { nearestAnnotationId } from './model'
+import {
+  axisIndexFromMinute,
+  minuteAxisOffsets,
+  minuteFromAxisIndex,
+  nearestAnnotationId,
+} from './model'
 import { useAnnotations } from './useAnnotations'
 import type { AnnotationPayload, StoredAnnotation } from './model'
 
@@ -49,6 +54,37 @@ beforeEach(() => vi.restoreAllMocks())
 test('guma najde anotaci v toleranci, mimo toleranci nic', () => {
   expect(nearestAnnotationId([SAVED], { minute: 11, strike: 7421 }, 5, 10)).toBe(7)
   expect(nearestAnnotationId([SAVED], { minute: 200, strike: 7800 }, 5, 10)).toBeNull()
+})
+
+// ── Mapa 1m osy: minuta dne ↔ index sloupce (#502) ─────────────────
+
+const isoMinute = (minute: number): string =>
+  `2026-07-30T${String(14 + Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00.000Z`
+
+test('minuteAxisOffsets: díra v ose se propíše do ofsetů; prázdná/nečitelná osa = null', () => {
+  // Minuty 0–2, výpadek, pak od 48. minuty
+  const holey = [0, 1, 2, 48, 49].map(isoMinute)
+  expect(minuteAxisOffsets(holey)).toEqual([0, 1, 2, 48, 49])
+  expect(minuteAxisOffsets([])).toBeNull()
+  expect(minuteAxisOffsets(['not-a-date'])).toBeNull()
+})
+
+test('minuteFromAxisIndex/axisIndexFromMinute: interpolace přes díru a extrapolace za okraji', () => {
+  const offsets = [0, 1, 2, 48, 49]
+  // Uvnitř sloupce a přes díru (index 2.5 = půlka mezi minutami 2 a 48)
+  expect(minuteFromAxisIndex(offsets, 3)).toBe(48)
+  expect(minuteFromAxisIndex(offsets, 2.5)).toBeCloseTo(25)
+  expect(axisIndexFromMinute(offsets, 48)).toBe(3)
+  expect(axisIndexFromMinute(offsets, 25)).toBeCloseTo(2.5)
+  // Za okraji 1 min / index (projekční zóna, minuty před začátkem)
+  expect(minuteFromAxisIndex(offsets, 6)).toBe(51)
+  expect(axisIndexFromMinute(offsets, 51)).toBe(6)
+  expect(minuteFromAxisIndex(offsets, -1)).toBe(-1)
+  expect(axisIndexFromMinute(offsets, -1)).toBe(-1)
+  // Vzájemná inverze na souvislé ose = identita
+  const contiguous = [0, 1, 2, 3]
+  expect(minuteFromAxisIndex(contiguous, 1.25)).toBeCloseTo(1.25)
+  expect(axisIndexFromMinute(contiguous, 1.25)).toBeCloseTo(1.25)
 })
 
 // ── useAnnotations: reload persistence (AC) ────────────────────────
@@ -190,6 +226,74 @@ test('guma najde anotaci v absolutních minutách i při jiné velikosti bucketu
   const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
   fireEvent.pointerDown(overlay, { clientX: 120, clientY: 288 })
   expect(erased).toEqual([4])
+})
+
+test('anotace nad osou s dírou se uloží ve skutečné minutě dne, ne indexu (#502)', () => {
+  // Osa 100 sloupců: minuty 0–2, výpadek sběru (45 min), pak souvisle od 48
+  const holeyAxis = [0, 1, 2, ...Array.from({ length: 97 }, (_, i) => 48 + i)].map(isoMinute)
+  const grid = demoGrid(100, 10) // canvas 1200 px → sloupec 12 px
+  const created: AnnotationPayload[] = []
+  render(
+    <CrosshairProvider>
+      <Heatmap
+        grid={grid}
+        style="gradient"
+        contours="off"
+        minutesIso={holeyAxis}
+        annotationTool="line"
+        onAnnotationCreate={(payload) => created.push(payload)}
+      />
+    </CrosshairProvider>,
+  )
+  const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
+  // Sloupce 5 a 10 (x = 66 / 126 px) leží ZA dírou → minuty 50 a 55 dne
+  fireEvent.pointerDown(overlay, { clientX: 66, clientY: 320 })
+  fireEvent.pointerMove(overlay, { clientX: 126, clientY: 64 })
+  fireEvent.pointerUp(overlay)
+
+  expect(created).toHaveLength(1)
+  expect(created[0].points[0].minute).toBeCloseTo(50, 1)
+  expect(created[0].points[1].minute).toBeCloseTo(55, 1)
+})
+
+test('vložení minut doprostřed osy (backfill) anotaci neposune (#502)', () => {
+  // Anotace ukotvená na minutách 50–55 dne (nakreslená nad osou s dírou);
+  // rekonciliace díru dotáhne → osa má 145 souvislých minut
+  const annotation: StoredAnnotation = {
+    id: 3,
+    payload: {
+      tool: 'line',
+      color: '#fff',
+      points: [
+        { minute: 50, strike: 7420 },
+        { minute: 55, strike: 7425 },
+      ],
+    },
+  }
+  const backfilled = Array.from({ length: 145 }, (_, minute) => isoMinute(minute))
+  const grid = demoGrid(145, 10) // sloupec 1200/145 px
+  const erased: number[] = []
+  render(
+    <CrosshairProvider>
+      <Heatmap
+        grid={grid}
+        style="gradient"
+        contours="off"
+        minutesIso={backfilled}
+        annotations={[annotation]}
+        annotationTool="eraser"
+        onAnnotationErase={(id) => erased.push(id)}
+      />
+    </CrosshairProvider>,
+  )
+  const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
+  const columnPx = 1200 / 145
+  // Na pozici PŮVODNÍHO indexu 5 (kam by ji posunula indexová aritmetika) není nic
+  fireEvent.pointerDown(overlay, { clientX: (5 + 0.5) * columnPx, clientY: 288 })
+  expect(erased).toEqual([])
+  // Na sloupci minuty 50 anotace je
+  fireEvent.pointerDown(overlay, { clientX: (50 + 0.5) * columnPx, clientY: 288 })
+  expect(erased).toEqual([3])
 })
 
 test('guma na heatmapě zavolá onAnnotationErase s id nejbližší anotace', () => {
