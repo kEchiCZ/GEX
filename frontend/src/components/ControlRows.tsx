@@ -19,6 +19,9 @@ const TOGGLE_LABELS: Record<keyof Toggles, string> = {
   volOiDelta: 'Vol + OI Δ',
   projection: 'Projekce',
   news: 'News',
+  // Vrstva setupů (#399): na konci řádku vedle dropdownu Signály — skupina
+  // „nápovědy". Skryje kartu i entry/cíl/stop linie; detektor běží dál
+  setups: 'Setupy',
 }
 
 export function TimeframeRow() {
