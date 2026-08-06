@@ -534,7 +534,8 @@ function MainContent() {
   )
   const setupLines = useMemo<LevelLine[]>(() => {
     const minutes = grid.minutes
-    if (minutes === 0) return []
+    // Checkbox Setupy (#399): vypnutí skryje linie, detektor běží dál
+    if (!toggles.setups || minutes === 0) return []
     const line = (name: string, color: string, value: number): LevelLine => {
       // Jen poslední minuta nese hodnotu — kreslí se horizontální projekce s cenovkou
       const series: (number | null)[] = Array.from({ length: minutes }, () => null)
@@ -546,7 +547,7 @@ function MainContent() {
       line(`setup-target-${setup.id}`, SETUP_COLORS.target, setup.target),
       line(`setup-stop-${setup.id}`, SETUP_COLORS.stop, setup.stop),
     ])
-  }, [activeSetups, grid.minutes])
+  }, [toggles.setups, activeSetups, grid.minutes])
 
   // GEX žebřík (#244): významné striky k pozici playbacku jako horizontální
   // úrovně s cenovkou — jednobodová série (vzor setup linií), zelená call nad
@@ -868,7 +869,8 @@ function MainContent() {
                 onClose={() => setNewsDialogMarker(null)}
               />
             )}
-            <SetupCard setups={activeSetups} onDismiss={handleDismissSetup} />
+            {/* Checkbox Setupy (#399): globální viditelnost vrstvy setupů */}
+            {toggles.setups && <SetupCard setups={activeSetups} onDismiss={handleDismissSetup} />}
             {day.source === 'demo' && (
               <div className="demo-banner" role="status">
                 {isHistoricalExpiry

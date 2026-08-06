@@ -51,6 +51,9 @@ export interface Toggles {
   /** Projekce heatmapy do settle (ADR-0006) — jen intraday. */
   projection: boolean
   news: boolean
+  /** Vrstva setupů (#399): karta aktivního setupu + entry/cíl/stop linie.
+  Řídí jen zobrazení v grafu — detektor i stránka Setupy běží vždy. */
+  setups: boolean
 }
 
 export type AppView =
@@ -209,6 +212,7 @@ const DEFAULT_TOGGLES: Toggles = {
   volOiDelta: true,
   projection: true,
   news: false,
+  setups: true,
 }
 
 export function AppStateProvider({
