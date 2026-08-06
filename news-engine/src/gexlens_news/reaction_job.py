@@ -41,8 +41,8 @@ class LevelsRegimeReader:
 
     Partice `derived/{sym}/{expiry}/levels/{date}.parquet` — pro ES/NQ je
     aktivní expirace dne zpravidla den sám (denní expirace); fallback vezme
-    kteroukoli expiraci, která partici toho dne má. Mimo 14denní retenci
-    levels nejsou → None a podmíněná větev prostě roste od nasazení.
+    kteroukoli expiraci, která partici toho dne má. Mimo 90denní retenci
+    (ADR-0022) levels nejsou → None a podmíněná větev prostě roste od nasazení.
     """
 
     def __init__(self, data_dir: Path) -> None:
