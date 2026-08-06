@@ -39,6 +39,7 @@ from gexlens_api.status import StatusStore
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
 from gexlens_engine.config import Settings, load_settings
+from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
@@ -172,6 +173,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/instruments")
     def instruments() -> dict[str, list[str]]:
         return {"instruments": repository.list_symbols()}
+
+    # Kalibrovaná FA α (#232 fáze 2) — lazy repo jako OI archiv výše
+    alpha_repository_ref: list[FaAlphaRepository] = []
+
+    def alpha_repository() -> FaAlphaRepository:
+        if not alpha_repository_ref:
+            repo = FaAlphaRepository(meta_repository.engine())
+            repo.ensure_schema()
+            alpha_repository_ref.append(repo)
+        return alpha_repository_ref[0]
+
+    @app.get("/fa/alpha")
+    def fa_alpha() -> dict[str, object]:
+        """Aktuální kalibrovaná α per symbol + počet validačních dnů (#232).
+
+        Frontend z toho kreslí badge „FA α=0.34 · 5 dní". Před prvním
+        kalibračním bodem je seznam prázdný — engine jede na defaultu
+        z konfigurace a UI to přizná („FA α default").
+        """
+        try:
+            states = alpha_repository().list_all()
+        except Exception:
+            states = []  # DB nedostupná — UI drží tvar
+        return {
+            "alphas": [
+                {
+                    "symbol": state.symbol,
+                    "alpha": state.alpha,
+                    "days": state.days,
+                    "updated_at": state.updated_at.isoformat(),
+                }
+                for state in states
+            ]
+        }
 
     @app.get("/instruments/{symbol}/expiries")
     def expiries(symbol: str) -> dict[str, list[str]]:

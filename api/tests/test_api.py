@@ -315,6 +315,37 @@ def test_replay_bundle_oi_prev(settings: Settings) -> None:
     assert by_key[(7600.0, "C")] == 456.0
 
 
+def test_fa_alpha_endpoint(settings: Settings) -> None:
+    """Kalibrovaná FA α (#232 fáze 2): prázdný stav drží tvar, pak per-symbol záznam."""
+    from sqlalchemy import create_engine as sa_create_engine
+
+    from gexlens_engine.compute.facalibration import AlphaCalibrationPoint
+    from gexlens_engine.storage.fa_calibration import FaAlphaRepository
+
+    client = TestClient(create_app(settings))
+    assert client.get("/fa/alpha").json() == {"alphas": []}
+
+    repo = FaAlphaRepository(sa_create_engine(settings.database_url))
+    repo.ensure_schema()
+    point = AlphaCalibrationPoint(samples=8, ratio_median=0.34, ratio_buy=0.4, ratio_sell=0.31)
+    repo.record(
+        "ES",
+        DAY,
+        "20260716",
+        point,
+        alpha_after=0.34,
+        days=5,
+        now=dt.datetime(2026, 8, 6, 12, 0, tzinfo=dt.UTC),
+    )
+
+    payload = client.get("/fa/alpha").json()
+    assert len(payload["alphas"]) == 1
+    row = payload["alphas"][0]
+    assert row["symbol"] == "ES"
+    assert row["alpha"] == 0.34
+    assert row["days"] == 5
+
+
 def test_profile_aggregate_sums_expiries(settings: Settings) -> None:
     """Σ profil: OI/volume se sčítají přes všechny expirace dne per strike a strana."""
     writer = SnapshotWriter(settings)

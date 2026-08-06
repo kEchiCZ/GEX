@@ -78,6 +78,7 @@ from gexlens_engine.runtime_settings import (
 )
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
+from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.fa_validation import FaValidationRepository
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
@@ -278,6 +279,7 @@ async def create_pipeline(
     t6_repository: T6Repository | None = None,
     pacing_guard: PacingGuard | None = None,
     fa_repository: FaValidationRepository | None = None,
+    alpha_repository: FaAlphaRepository | None = None,
     news_ticks: NewsTickCollector | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
@@ -491,6 +493,7 @@ async def create_pipeline(
         next_band=next_band,
         backfill_today=backfill_today,
         fa_repository=fa_repository,
+        alpha_repository=alpha_repository,
         setup_engine=(
             SetupEngine(
                 symbol=symbol,
@@ -585,6 +588,9 @@ async def main() -> None:
     # Denní FA validace (#232): body open-ratio se sbírají samy po OI archivu
     fa_repository = FaValidationRepository(db)
     await asyncio.to_thread(fa_repository.ensure_schema)
+    # Ranní kalibrace α (#232 fáze 2): netflow vs. skutečné ΔOI z archivu
+    alpha_repository = FaAlphaRepository(db)
+    await asyncio.to_thread(alpha_repository.ensure_schema)
     watchlist_reader = WatchlistReader(db)
     await asyncio.to_thread(watchlist_reader.ensure_schema)
     # LISTEN na změny watchlistu (#207): nový symbol startuje do sekund;
@@ -717,6 +723,7 @@ async def main() -> None:
                     t6_repository=t6_repository,
                     pacing_guard=pacing_guard,
                     fa_repository=fa_repository,
+                    alpha_repository=alpha_repository,
                     news_ticks=news_ticks,
                 )
                 setup_cooldown.succeeded(symbol)
