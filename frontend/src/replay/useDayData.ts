@@ -324,8 +324,10 @@ export function useDayData(
         for (const ts of [...pending.keys()].sort((a, b) => (a < b ? -1 : 1))) {
           const partial = pending.get(ts)!
           // Aplikuj minutu, když má snapshot řez (nová/aktualizace mřížky) NEBO už existuje
-          // (dorazil jen bar/levels/flow k uzavřené minutě — jinak by svíčka chyběla, #133).
-          if (partial.rows || known.has(ts)) {
+          // (dorazil jen bar/levels/flow k uzavřené minutě — jinak by svíčka chyběla, #133)
+          // NEBO nese aspoň bar: osa X = sjednocení minut ze snapshotů a barů (#459),
+          // takže bar-only minuta při výpadku opčního sběru dostane sloupec i živě (#503).
+          if (partial.rows || known.has(ts) || partial.bar) {
             applied.push({
               tsIso: ts,
               rows: partial.rows ?? [],

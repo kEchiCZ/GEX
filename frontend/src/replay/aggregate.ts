@@ -193,12 +193,21 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
       : null,
   }
 
-  // Koš přebírá profil své poslední minuty — jen přemapování indexu, bez materializace (#142)
+  // Koš přebírá profil poslední minuty koše S DATY — koš končící v díře (minuta
+  // bez snapshotu vrací []) scanuje zpět jako gexProfile/ladder, jinak by profil
+  // zhasl, i když dřívější minuty koše měřené jsou (#503).
   const source = day.profileByMinute
   const profileByMinute = source
     ? {
         length: buckets,
-        rowsAt: (bucketIdx: number) => source.rowsAt(bucketEnd(bucketIdx, bucketMinutes, minutes)),
+        rowsAt: (bucketIdx: number) => {
+          const end = bucketEnd(bucketIdx, bucketMinutes, minutes)
+          for (let minuteIdx = end; minuteIdx >= bucketIdx * bucketMinutes; minuteIdx -= 1) {
+            const rows = source.rowsAt(minuteIdx)
+            if (rows.length > 0) return rows
+          }
+          return []
+        },
       }
     : null
 

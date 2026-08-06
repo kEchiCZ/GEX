@@ -417,6 +417,36 @@ test('bar bez pole final se bere jako finální (starší engine)', async () => 
   expect(result.current.day.overlays.price!.filter((b) => b.minuteIdx === 1)).toHaveLength(1)
 })
 
+test('živá bar-only minuta (výpadek opčního sběru) dostane sloupec na ose (#503)', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(result.current.day.grid.minutes).toBe(1)
+
+  // Price kanál jede, snapshot pro 15:01 nikdy nedorazí (výpadek sweepu, #417) —
+  // osa X je sjednocení minut ze snapshotů a barů (#459), sloupec musí vzniknout
+  await act(async () => {
+    socket.emit('price.ES', {
+      ts: '2026-07-16T15:01:00Z',
+      open: 7601,
+      high: 7605,
+      low: 7600,
+      close: 7602,
+      volume: 1300,
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  expect(result.current.day.grid.minutes).toBe(2)
+  const candle = result.current.day.overlays.price!.filter((bar) => bar.minuteIdx === 1)
+  expect(candle).toHaveLength(1)
+  expect(candle[0].close).toBe(7602)
+})
+
 test('daily režim nepoužívá intraday live fetch', async () => {
   vi.mocked(fetchDays).mockResolvedValue([])
   renderHook(() => useDayData('ES', '20260716', '2026-07-16', 'daily', makeSocket()))
