@@ -841,6 +841,7 @@ function MainContent() {
               priceOpacity={priceOpacity}
               annotations={annotationsState.annotations}
               bucketMinutes={bucketMinutes}
+              minutesIso={day.minutesIso}
               annotationTool={annotationTool}
               annotationColor={annotationColor}
               onAnnotationCreate={(payload) => void annotationsState.create(payload)}
