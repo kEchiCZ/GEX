@@ -140,11 +140,13 @@ def _watch_subscription_errors(
         window_s=settings.subscription_error_window_s,
         cooldown_s=settings.subscription_error_cooldown_s,
     )
-    # Konkurenční relace (#451) má vlastní počítadlo: chodí v jiném rytmu než 354
-    # a hlásit ji každou minutu by bylo k ničemu — proto delší cooldown
+    # Konkurenční relace (#451) má vlastní počítadlo A vlastní práh (#495):
+    # 10197 chodí ~2× za minutu, takže sdílený práh 5/60 s nešel nikdy naplnit
+    # a alert se neodpálil. Hlásit ji každou minutu by ale bylo k ničemu —
+    # proto delší cooldown.
     competing_sessions = SubscriptionErrorTracker(
-        threshold=settings.subscription_error_threshold,
-        window_s=settings.subscription_error_window_s,
+        threshold=settings.competing_session_threshold,
+        window_s=settings.competing_session_window_s,
         cooldown_s=max(settings.subscription_error_cooldown_s, 3600.0),
     )
 
@@ -182,7 +184,12 @@ def _watch_subscription_errors(
             # Konkurenční relace (#451): stav spojení se NEMĚNÍ — data můžou téct
             # dál. Uživatel se to ale dozvědět má, protože při horším průběhu
             # feed mizí úplně (4. 8. tak vypadla data ve 14 cyklech ze 192).
-            alert = competing_sessions.observe(contract_label(contract), "", now=time.monotonic())
+            # Symbol se předává (#495) — alert v UI je vázaný na instrument.
+            alert = competing_sessions.observe(
+                contract_label(contract),
+                str(getattr(contract, "symbol", "") or ""),
+                now=time.monotonic(),
+            )
             if alert is not None:
                 logger.warning("Konkurenční relace odebírá market data: %s", message)
                 if alert_enabled():

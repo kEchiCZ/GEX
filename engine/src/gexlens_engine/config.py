@@ -137,6 +137,11 @@ class Settings(BaseSettings):
     subscription_error_threshold: int = Field(default=5, ge=1)
     subscription_error_window_s: float = Field(default=60.0, gt=0)
     subscription_error_cooldown_s: float = Field(default=900.0, ge=0)
+    # Konkurenční relace (#495): error 10197 chodí při přetahované session
+    # ~2× za minutu (naměřeno 4. 8., viz connection.py) — sdílený práh 5/60 s
+    # by se nikdy nenaplnil a alert competing_session by se neodpálil
+    competing_session_threshold: int = Field(default=2, ge=1)
+    competing_session_window_s: float = Field(default=120.0, gt=0)
 
     # Hot zóna (SPEC 3.4; limit streamů naměřen v ADR-0001)
     hot_zone_width: int = Field(default=15, ge=1)
