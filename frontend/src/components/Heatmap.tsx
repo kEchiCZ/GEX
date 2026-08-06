@@ -965,6 +965,9 @@ export function Heatmap({
   }
 
   const resetView = () => {
+    // Reset je programová změna pohledu — bez aktualizace applied ref by ho
+    // auto-follow vyhodnotil jako uživatelské gesto a trvale se vypnul (#501)
+    appliedViewRef.current = homeView
     setView(() => homeView)
     onViewReset?.()
   }

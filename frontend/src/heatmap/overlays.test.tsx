@@ -1,4 +1,5 @@
 /** Testy overlayů (issue #24): mapování, viditelnost dle checkboxů, crosshair sync. */
+import { useState } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, test } from 'vitest'
 import { Heatmap } from '../components/Heatmap'
@@ -251,6 +252,46 @@ test('auto-fit jen při změně datasetu (resetKey), ne při živém růstu/resi
   // Změna timeframe (jiný resetKey) → refit
   rerender(draw(demoGrid(20, 10), 'ES|e|intraday|5m|d'))
   expect(calls.length).toBeGreaterThan(afterInitial)
+})
+
+test('reset pohledu nevypne auto-follow — po změně dat se pohled dál dotahuje (#501)', () => {
+  // Harness zrcadlí App: řízený pohled + persistovaný zoom, reset ho maže
+  const views: ViewTransform[] = []
+  function Harness({ fit }: { fit: { low: number; high: number } }) {
+    const [view, setView] = useState(DEFAULT_VIEW)
+    const [savedZoomX, setSavedZoomX] = useState<number | null>(2)
+    return (
+      <CrosshairProvider>
+        <Heatmap
+          grid={demoGrid(100, 10)}
+          style="gradient"
+          contours="off"
+          fitRange={fit}
+          view={view}
+          onViewChange={(next) => {
+            views.push(next)
+            setView(next)
+          }}
+          initialZoomX={savedZoomX}
+          onViewReset={() => setSavedZoomX(null)}
+          resetKey="ES|e|intraday|1m|d"
+        />
+      </CrosshairProvider>
+    )
+  }
+  const { rerender } = render(<Harness fit={{ low: 7405, high: 7440 }} />)
+  // Úvodní fit aplikoval persistovaný zoom X
+  expect(views[views.length - 1].zoomX).toBe(2)
+
+  // Dvojklik reset → homeView (zoom X zpět na 1) a smazání persistence
+  fireEvent.doubleClick(screen.getByRole('img', { name: 'GEX heatmapa' }))
+  const afterReset = views[views.length - 1]
+  expect(afterReset.zoomX).toBe(1)
+
+  // Pásmo dne se rozšíří → auto-follow musí pohled dál dotahovat (nový fit Y)
+  rerender(<Harness fit={{ low: 7400, high: 7445 }} />)
+  const afterGrow = views[views.length - 1]
+  expect(afterGrow).not.toEqual(afterReset)
 })
 
 test('heatmapa má reset zobrazení (tlačítko i dvojklik neshodí render)', () => {
