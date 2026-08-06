@@ -294,7 +294,7 @@ async def test_rozsirena_obalka_doarchivuje_nove_striky(
     pipeline.runtime.contracts = [*puvodni, novy]
     pipeline.archiver = OIArchiver(repository, MockOIFetcher({novy: 321.0}), settings)
 
-    await pipeline._archive_new_strikes(puvodni, today)
+    await pipeline._archive_new_strikes(puvodni, pipeline.runtime.contracts, today)
 
     assert repository.get_oi("ES", today, 7650.0, "C") == 321.0
     # Původní striky se nepřepisují — doarchivace se týká jen přírůstku
@@ -313,7 +313,9 @@ async def test_doarchivace_bez_pridanych_striku_nedela_nic(
 
     pipeline.archiver = ExplodingArchiver(repository, MockOIFetcher(), settings)
 
-    await pipeline._archive_new_strikes(list(pipeline.runtime.contracts), TS.date())
+    await pipeline._archive_new_strikes(
+        list(pipeline.runtime.contracts), pipeline.runtime.contracts, TS.date()
+    )
 
 
 def test_oi_refresh_je_potreba_az_po_publikacnim_okne(
@@ -369,6 +371,142 @@ async def test_predpublikacni_snimek_se_po_okne_prepise(
     pred_oknem = dt.datetime(2026, 8, 4, settings.oi_publication_hour_utc - 2, 0, tzinfo=dt.UTC)
     assert await pipeline.try_archive_oi(today, pred_oknem) is True
     assert repository.get_oi("ES", today, specs[0].strike, specs[0].right) == 500.0
+
+
+async def test_obnova_po_okne_cte_i_striky_pridane_expanzi(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#494 (1): obálka se rozšíří před publikačním oknem — obnova po okně musí
+    přečíst i nové striky, ne jen statický snímek `archive_contracts`."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    today = TS.date()
+    puvodni = list(pipeline.runtime.contracts)
+    pipeline.archive_contracts = puvodni  # statický snímek z doby založení pipeline
+
+    # Expanze před oknem: nový strike se doarchivuje předpublikačními čísly
+    novy = OptionContractSpec("ES", "FOP", "20260717", 7650.0, "C", "CME", "ES0", "50")
+    pipeline.runtime.contracts = [*puvodni, novy]
+    pipeline.archiver = OIArchiver(repository, MockOIFetcher({novy: 2.0}), settings)
+    await pipeline._archive_new_strikes(puvodni, pipeline.runtime.contracts, today)
+    assert repository.get_oi("ES", today, 7650.0, "C") == 2.0
+
+    # Po okně dodá IBKR finální čísla — obnova musí pokrýt i strike z expanze
+    vsechny = list(pipeline.runtime.contracts)
+    pipeline.archiver = OIArchiver(
+        repository, MockOIFetcher(dict.fromkeys(vsechny, 500.0)), settings
+    )
+    po_okne = dt.datetime(2026, 7, 17, settings.oi_publication_hour_utc, 5, tzinfo=dt.UTC)
+    assert await pipeline.try_archive_oi(today, po_okne) is True
+
+    assert repository.get_oi("ES", today, 7650.0, "C") == 500.0
+
+
+async def test_expanze_sekundaru_doarchivuje_nove_striky(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#494 (2): expanze obálky sekundární expirace musí nové striky doarchivovat
+    stejně jako aktivní řetěz — jinak mají `get_oi` None celý den."""
+    settings, writer, repository, publisher = env
+    spot = 7500.0
+    pipeline = make_pipeline("ES", spot, settings, writer, repository, publisher)
+
+    strikes = tuple(spot + offset for offset in range(-400, 401, 10))
+    next_info = ExpiryInfo(
+        trading_class="ES1",
+        expiry="20260718",
+        exchange="CME",
+        multiplier="50",
+        strikes=strikes,
+    )
+    next_band = select_band(next_info.strikes, spot, settings.strike_range_points)
+    underlying = Underlying(symbol="ES", sec_type="FUT", exchange="CME", con_id=1)
+    pipeline.next_info = next_info
+    pipeline.next_band = next_band
+    pipeline.next_runtime = EngineRuntime(
+        settings=settings,
+        scheduler=SubscriptionScheduler(MockQuoteStreamer(), settings),
+        writer=writer,
+        oi_repository=repository,
+        publisher=publisher,
+        symbol="ES",
+        expiry=next_info.expiry,
+        multiplier=50.0,
+        contracts=build_contracts(underlying, next_info, next_band),
+        cum_delta=CumDeltaTracker(multiplier=50.0),
+        push_status=False,
+        secondary=True,
+    )
+    original_high = next_band.high
+
+    class ConstOIFetcher(MockOIFetcher):
+        """OI pro libovolný kontrakt — nové striky vzniknou až expanzí."""
+
+        async def fetch_oi(self, spec: OptionContractSpec, timeout_s: float) -> float | None:
+            return 77.0
+
+    pipeline.archiver = OIArchiver(repository, ConstOIFetcher(), settings)
+
+    await pipeline._expand_secondary(spot=original_high - 5.0, today=TS.date())
+
+    assert pipeline.next_runtime is not None
+    nejvyssi = max(c.strike for c in pipeline.next_runtime.contracts)
+    assert nejvyssi > original_high
+    assert repository.get_oi("ES", TS.date(), nejvyssi, "C", expiry="20260718") == 77.0
+
+
+async def test_pulnoc_resetuje_finalitu_a_archivuje_novy_den(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#494 (3): pipeline s nedenní expirací přežije půlnoc — včerejší `oi_final`
+    nesmí blokovat archivaci nového dne."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    specs = list(pipeline.runtime.contracts)
+    pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings)
+    day1 = TS.date()
+
+    # Den 1: čtení po okně shodné s archivem (make_pipeline uložil 500.0) → finální
+    po_okne = dt.datetime(2026, 7, 17, settings.oi_publication_hour_utc, 5, tzinfo=dt.UTC)
+    assert await pipeline.try_archive_oi(day1, po_okne) is True
+    assert pipeline.oi_final is True
+
+    # Přechod přes půlnoc: finalita se resetuje a nový den se archivuje hned
+    pulnoc = dt.datetime(2026, 7, 18, 0, 0, tzinfo=dt.UTC)
+    await pipeline.run_minute(pulnoc)
+
+    assert pipeline.oi_final is False  # finalita patřila včerejšku
+    assert pipeline.oi_available is True
+    assert dt.date(2026, 7, 18) in repository.days("ES")  # nový den archivovaný
+
+
+async def test_neuspesna_obnova_jede_na_starsim_snimku(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#494 (5): výpadek fetche při post-publikační obnově nesmí shodit
+    `oi_available` ani hlásit „bez OI" — platný denní archiv existuje."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    today = TS.date()
+    po_okne = dt.datetime(2026, 7, 17, settings.oi_publication_hour_utc, 5, tzinfo=dt.UTC)
+
+    class ExplodingArchiver:
+        async def archive_day(self, contracts: object, day: dt.date, now: object = None) -> object:
+            raise RuntimeError("mock: přechodný výpadek IBKR")
+
+    pipeline.archiver = ExplodingArchiver()  # type: ignore[assignment]
+
+    assert await pipeline.try_archive_oi(today, po_okne) is True  # starší snímek platí dál
+    alerts = [d for ch, d in publisher.messages if ch == "alerts"]
+    assert alerts[-1]["kind"] == "oi_refresh_failed"
+    assert "starším snímku" in str(alerts[-1]["message"])
+    assert pipeline.oi_final is False  # obnova se zopakuje dalším retry cyklem
+
+    # Totéž pro fetch, který nespadne, ale nic nevrátí (written == 0)
+    pipeline.archiver = OIArchiver(repository, MockOIFetcher(), settings)
+    assert await pipeline.try_archive_oi(today, po_okne) is True
+    alerts = [d for ch, d in publisher.messages if ch == "alerts"]
+    assert alerts[-1]["kind"] == "oi_refresh_failed"
 
 
 @pytest.fixture
@@ -788,7 +926,7 @@ async def test_secondary_expiry_band_expands_with_price(
     original_high = next_band.high
 
     # Cena vyběhne k hornímu okraji pásma — stejná situace jako 3. 8.
-    pipeline._expand_secondary(spot=original_high - 5.0)
+    await pipeline._expand_secondary(spot=original_high - 5.0, today=TS.date())
 
     assert pipeline.next_band is not None
     assert pipeline.next_band.high > original_high
@@ -803,6 +941,6 @@ async def test_secondary_expansion_noop_without_secondary_runtime(
     settings, writer, oi_repository, publisher = env
     pipeline = make_pipeline("ES", 7500.0, settings, writer, oi_repository, publisher)
 
-    pipeline._expand_secondary(spot=9999.0)  # nesmí spadnout
+    await pipeline._expand_secondary(spot=9999.0, today=TS.date())  # nesmí spadnout
 
     assert pipeline.next_band is None
