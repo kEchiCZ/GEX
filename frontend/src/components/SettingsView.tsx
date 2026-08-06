@@ -304,12 +304,23 @@ export function SettingsView() {
         <SettingRow help="Historické pole — markery seancí se generují automaticky z časů světových burz, tohle už se nepoužívá. Nevalidní JSON se neuloží.">
           <label>
             Seznam seancí (JSON)
+            {/* defaultValue se vyhodnotí při prvním renderu, kdy fetch settings
+                ještě běží — klíč remountne textarea, jakmile se platná hodnota
+                (server / koncept / zahození konceptu) změní (#505) */}
             <textarea
               rows={3}
-              defaultValue={JSON.stringify(values.sessions ?? DEFAULT_SESSIONS)}
+              key={JSON.stringify(value('sessions', DEFAULT_SESSIONS))}
+              defaultValue={JSON.stringify(value('sessions', DEFAULT_SESSIONS))}
               onBlur={(event) => {
                 try {
-                  edit('sessions', JSON.parse(event.target.value))
+                  const parsed: unknown = JSON.parse(event.target.value)
+                  // Beze změny žádný koncept — klik dovnitř a ven by jinak označil
+                  // „Neuloženo" a Uložit by zapsal defaulty přes serverovou hodnotu (#505)
+                  if (
+                    JSON.stringify(parsed) !== JSON.stringify(value('sessions', DEFAULT_SESSIONS))
+                  ) {
+                    edit('sessions', parsed)
+                  }
                 } catch {
                   // Nevalidní JSON se do konceptu nedostane — pole zůstává k opravě
                 }
