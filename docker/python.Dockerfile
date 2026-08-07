@@ -32,10 +32,12 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 # Neprivilegovaný běh (#542): API je jediná služba dosažitelná zvenčí a má RW
 # bind mount ./data — kompromitace pod rootem by znamenala zápis na hostitelský
-# disk. Pevné UID, aby šlo na Linuxu adresář předem chownout
-# (`chown -R 10001:10001 data`); na Docker Desktopu se práva bind mountu emulují.
+# disk. Přepnutí na UID 10001 dělá entrypoint až po srovnání vlastnictví dat;
+# `USER` v Dockerfile nestačí, podadresáře z dřívějška patří rootu.
 RUN useradd --system --uid 10001 --user-group --create-home --home-dir /home/gexlens gexlens \
     && mkdir -p /app/data \
     && chown -R gexlens:gexlens /app/data
-USER 10001:10001
+COPY docker/entrypoint.sh /usr/local/bin/gexlens-entrypoint
+RUN chmod +x /usr/local/bin/gexlens-entrypoint
 ENV HOME=/home/gexlens
+ENTRYPOINT ["/usr/local/bin/gexlens-entrypoint"]
