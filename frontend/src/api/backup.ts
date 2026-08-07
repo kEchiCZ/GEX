@@ -33,7 +33,9 @@ export function filenameFrom(header: string | null, today: Date): string {
 
 export async function downloadBackup(): Promise<BackupResult> {
   const response = await fetch(`${API_BASE}/backup/postgres`, { headers: tokenHeaders() })
-  if (response.status === 401 || response.status === 503) {
+  // Jen 401. Pod 503 se schovává i „pg_dump není v image" — vlastní hláška by
+  // tu příčinu přepsala, a detail ze serveru ji vysvětlí líp (#542)
+  if (response.status === 401) {
     throw new Error(
       'Záloha vyžaduje API token (#542) — vlož hodnotu GEXLENS_API_TOKEN z .env ' +
         'do pole nad tlačítkem.',
