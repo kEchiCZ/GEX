@@ -16,9 +16,9 @@ import asyncio
 import datetime as dt
 import logging
 import shutil
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.engine import make_url
 
@@ -110,8 +110,13 @@ async def stream_dump(database_url: str) -> AsyncIterator[bytes]:
             logger.error("pg_dump skončil s kódem %d: %s", code, stderr.decode(errors="replace"))
 
 
-def build_backup_router(database_url: str) -> APIRouter:
-    router = APIRouter(prefix="/backup", tags=["backup"])
+def build_backup_router(
+    database_url: str, require_token: Callable[..., None] | None = None
+) -> APIRouter:
+    # Dump nese celý nenahraditelný archiv, takže endpoint stojí za tokenem
+    # (#542 C3); bez guardu (testy) se chová jako dřív
+    guards = [Depends(require_token)] if require_token is not None else []
+    router = APIRouter(prefix="/backup", tags=["backup"], dependencies=guards)
 
     @router.get("/postgres")
     async def postgres_backup() -> StreamingResponse:

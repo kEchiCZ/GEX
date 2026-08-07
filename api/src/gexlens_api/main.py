@@ -14,7 +14,15 @@ from typing import Annotated, Any
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
@@ -32,8 +40,14 @@ from gexlens_api.heatmap import (
     normalization_denominator,
     to_arrow_bytes,
 )
-from gexlens_api.live import LiveHub
+from gexlens_api.live import LiveHub, TooManyChannels, TooManySubscribers, parse_channels
 from gexlens_api.meta_repo import MetaRepository
+from gexlens_api.security import (
+    build_token_guard,
+    load_allowed_origins,
+    load_api_token,
+    origin_allowed,
+)
 from gexlens_api.sentiment_routes import build_sentiment_router
 from gexlens_api.status import StatusStore
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
@@ -108,11 +122,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return tendency_repository_ref[0]
 
     app = FastAPI(title="GEXLens API")
-    # Frontend běží na jiném lokálním portu (nginx :8080, Vite dev :5173) —
-    # bez CORS hlaviček prohlížeč fetche blokuje. Vše zůstává na localhostu
-    # (SPEC kap. 8: žádný vzdálený přístup).
+    api_token = load_api_token()
+    allowed_origins = load_allowed_origins()
+    require_token = build_token_guard(api_token)
+    # V produkci je frontend same-origin (nginx proxuje /api, #542) a CORS se
+    # neuplatní. Regex zůstává kvůli Vite dev serveru na jiném portu; vzdálené
+    # origins se přidávají výhradně přes GEXLENS_ALLOWED_ORIGINS.
     app.add_middleware(
         CORSMiddleware,
+        allow_origins=allowed_origins,
         allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
         allow_methods=["*"],
         allow_headers=["*"],
@@ -138,12 +156,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return engine
 
     app.include_router(build_sentiment_router(sentiment_engine, settings.data_dir))
-    # Záloha PostgreSQL (#438): parquety má uživatel na disku, DB je ve volume
-    app.include_router(build_backup_router(settings.database_url))
+    # Záloha PostgreSQL (#438): parquety má uživatel na disku, DB je ve volume.
+    # Dump nese celý archiv, takže jen s tokenem (#542 C3).
+    app.include_router(build_backup_router(settings.database_url, require_token))
 
     @app.exception_handler(PartitionNotFoundError)
     async def partition_not_found(_request: object, exc: PartitionNotFoundError) -> JSONResponse:
-        return JSONResponse(status_code=404, content={"detail": f"Denní partice neexistuje: {exc}"})
+        # Bez cesty na disku (#542 M6) — hláška prozrazovala rozložení kontejneru
+        return JSONResponse(status_code=404, content={"detail": "Denní partice neexistuje"})
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -155,14 +175,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Agregovaný stav pipeline (SPEC 3.7): greeks progress, repair, lines, disk."""
         return status_store.snapshot()
 
-    # Interní ingest z enginu (API bindí na localhost — SPEC kap. 8 bezpečnost)
-    @app.post("/internal/status")
+    # Interní ingest z enginu. Chráněno sdíleným tajemstvím (#542 C5) — kdokoli
+    # s přístupem na port by jinak podvrhl UI libovolné ceny, úrovně i alerty.
+    @app.post("/internal/status", dependencies=[Depends(require_token)])
     def internal_status(fields: dict[str, object]) -> dict[str, str]:
         status_store.update(**fields)
         live_hub.publish("status", status_store.snapshot())
         return {"status": "ok"}
 
-    @app.post("/internal/publish")
+    @app.post("/internal/publish", dependencies=[Depends(require_token)])
     def internal_publish(message: dict[str, object]) -> dict[str, int]:
         channel = message.get("channel")
         data = message.get("data")
@@ -561,8 +582,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.websocket("/ws/live")
     async def ws_live(websocket: WebSocket) -> None:
         """Live push kanálů (SPEC kap. 6): subscribe/unsubscribe protokol zprávami."""
+        # CORS se na WS handshake nevztahuje — bez téhle kontroly by živý
+        # positioning četla libovolná stránka otevřená v prohlížeči (#542 H1)
+        if not origin_allowed(
+            websocket.headers.get("origin"),
+            websocket.headers.get("host"),
+            allowed_origins,
+        ):
+            await websocket.close(code=1008, reason="Nepovolený Origin")
+            return
+        try:
+            subscriber_id, queue = live_hub.register()
+        except TooManySubscribers:
+            await websocket.close(code=1013, reason="Příliš mnoho spojení")
+            return
         await websocket.accept()
-        subscriber_id, queue = live_hub.register()
 
         async def sender() -> None:
             while True:
@@ -573,9 +607,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             while True:
                 request = await websocket.receive_json()
                 action = request.get("action")
-                channels = request.get("channels", [])
+                try:
+                    channels = parse_channels(request.get("channels", []))
+                except ValueError as exc:
+                    await websocket.send_json({"type": "error", "detail": str(exc)})
+                    continue
                 if action == "subscribe":
-                    subscribed = live_hub.subscribe(subscriber_id, channels)
+                    try:
+                        subscribed = live_hub.subscribe(subscriber_id, channels)
+                    except TooManyChannels as exc:
+                        await websocket.send_json({"type": "error", "detail": str(exc)})
+                        continue
                     await websocket.send_json(
                         {"type": "ack", "action": "subscribe", "channels": sorted(subscribed)}
                     )

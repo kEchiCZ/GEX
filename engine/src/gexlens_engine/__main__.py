@@ -563,7 +563,15 @@ async def main() -> None:
         raise SystemExit(2) from exc
 
     api_base = os.environ.get("GEXLENS_API_BASE", "http://127.0.0.1:8000")
-    publisher = HttpPublisher(api_base)
+    api_token = os.environ.get("GEXLENS_API_TOKEN", "").strip()
+    if not api_token:
+        # Bez tokenu API interní ingest odmítá (#542) — stav i kanály by tiše
+        # přestaly chodit, tak ať je důvod vidět hned při startu
+        logger.error(
+            "GEXLENS_API_TOKEN není nastaven — API odmítne /internal/*, "
+            "UI zůstane bez živých dat (vygeneruj přes scripts/init-secrets.ps1)"
+        )
+    publisher = HttpPublisher(api_base, api_token)
     ib = IB()
     manager = ConnectionManager(
         ib,

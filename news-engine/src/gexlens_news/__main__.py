@@ -168,7 +168,11 @@ async def run(settings: NewsSettings) -> None:
     )
     sent_index = SentIndexJob(engine, settings.data_dir)
     predictions = PredictionJob(engine)
-    publisher = NewsPublisher(settings.api_base) if settings.api_base else None
+    publisher = (
+        NewsPublisher(settings.api_base, api_token=settings.api_token)
+        if settings.api_base
+        else None
+    )
     retro = RetroPass(
         classification,
         reactions,

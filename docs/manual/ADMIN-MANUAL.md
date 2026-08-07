@@ -21,6 +21,7 @@ Technický popis architektury, provozu, konfigurace a vývoje aplikace GEXLens. 
 11. [Známé limity účtu a otevřené body](#11-známé-limity-účtu-a-otevřené-body)
 12. [Diagnostika a údržba](#12-diagnostika-a-údržba)
 13. [Zprovoznění od nuly — IBKR účet, TWS/Gateway](#13-zprovoznění-od-nuly--ibkr-účet-twsgateway)
+14. [Bezpečnost a nasazení na server](#14-bezpečnost-a-nasazení-na-server)
 
 ---
 
@@ -203,11 +204,14 @@ Interaktivní dokumentace: `http://127.0.0.1:8000/docs` (OpenAPI).
 | `GET /flow/{sym}?date` | CumΔ + OptVol + Vol řady |
 | `GET /replay/{sym}/{expiry}/{date}` | Kompletní denní balík (levels/flow/bars JSON + snapshoty base64 Arrow + `oi_prev` pro ΔOI vs. včera) |
 | CRUD `/watchlist`, `/alerts`, `/annotations?symbol&date`, `/settings` | PostgreSQL persistence |
-| `POST /internal/status`, `POST /internal/publish` | **Ingest z enginu** (nechráněné — API bindí jen na localhost) |
+| `POST /internal/status`, `POST /internal/publish` | **Ingest z enginu** — vyžaduje hlavičku `X-GEXLens-Token` (#542) |
+| `GET /backup/postgres` | Stream `pg_dump -Fc` — vyžaduje `X-GEXLens-Token` (#542) |
 
 ### WebSocket `/ws/live`
 
 Protokol: klient pošle `{"action":"subscribe","channels":["status","price.ES","levels.*"]}` (podpora trailing wildcard), server vrací ack a pushuje `{"channel":..., "data":...}`. Backpressure: fronta 100 zpráv per klient, při zaplnění se zahazují nejstarší framy. Kanály: `status`, `price.{sym}`, `snapshot.{sym}.{expiry}`, `levels.*`, `flow.*`, `alerts`, `news`.
+
+Handshake kontroluje hlavičku `Origin` (#542): CORS se na WebSocket nevztahuje, takže bez téhle kontroly by živý positioning četla libovolná stránka otevřená v prohlížeči. Povolen je same-origin (Host stránky za nginx), localhost v libovolném portu a cokoli v `GEXLENS_ALLOWED_ORIGINS`. Klienti bez hlavičky `Origin` (engine, curl) projdou. Stropy: 64 souběžných spojení, 256 kanálů na spojení.
 
 ## 8. Frontend
 
@@ -337,6 +341,67 @@ Test-NetConnection 127.0.0.1 -Port 7496   # TcpTestSucceeded: True = API poslouc
 Každý obchodní den: TWS/Gateway běží a je přihlášený **před startem enginu**;
 stavová lišta aplikace ukazuje `connected :7496` a `● Live` (ne Offline).
 Diagnostika problémů: kap. 12.
+
+---
+
+## 14. Bezpečnost a nasazení na server
+
+Výchozí stav aplikace počítá s tím, že běží na jednom PC za NATem. Přesun na
+VPS s veřejnou IP (#539) tenhle předpoklad ruší, proto proběhla prověrka #542.
+Tahle kapitola je její provozní výstup.
+
+### Tajemství
+
+Dvě hodnoty musí být v lokálním `.env` (do repa nepatří, `.gitignore` je drží venku):
+
+| Proměnná | K čemu |
+|---|---|
+| `GEXLENS_PG_PASSWORD` | Heslo k PostgreSQL. Compose bez něj **nenastartuje** — žádný slabý default už neexistuje. |
+| `GEXLENS_API_TOKEN` | Sdílené tajemství pro `/internal/*` (engine i news-engine → API) a `/backup/postgres`. |
+
+Vygeneruje je `pwsh scripts/init-secrets.ps1` — skript je idempotentní, existující
+hodnoty nepřepisuje a heslo rovnou přepíše i v běžícím PostgreSQL (`ALTER USER`).
+To je nutné: `POSTGRES_PASSWORD` se uplatní jen při prvním `initdb`, takže na
+existujícím volume by samotná změna v `.env` znamenala, že se služby k DB
+nepřipojí.
+
+Token do UI patří jen kvůli stažení zálohy — vkládá se do pole **Settings →
+Záloha databáze → API token** a zůstává v localStorage prohlížeče. V image
+frontendu být nesmí, ten si stáhne kdokoli.
+
+### Síť
+
+`compose.yml` nepublikuje nic na `0.0.0.0`. Adresu řídí `GEXLENS_BIND_ADDR`
+(default `127.0.0.1`); na serveru sem patří Tailscale IP. **Nikdy `0.0.0.0`** —
+Docker zapisuje publikaci do řetězce `DOCKER`, který se na Linuxu vyhodnocuje
+před UFW, takže port publikovaný bez adresy je veřejný i se „zapnutým firewallem".
+
+Prohlížeč mluví jen s nginx (`:8080`), který proxuje `/api` → `api:8000` včetně
+WebSocketu. Port API i PostgreSQL zůstávají publikované na loopback jen pro
+nástroje na hostiteli (zálohy, sondy) — pro provoz je potřeba nemá.
+
+### Checklist před nasazením na VPS
+
+1. `pwsh scripts/init-secrets.ps1` na serveru; ověřit, že `.env` má práva 600.
+2. `GEXLENS_BIND_ADDR` = Tailscale IP serveru.
+3. `GEXLENS_ALLOWED_ORIGINS` = adresa UI, pod kterou se bude otevírat (jinak
+   prohlížeč zablokuje fetch a WS handshake skončí na kontrole Origin).
+4. UFW: povolit jen SSH a Tailscale; ověřit `nmap` z venku, že 8080/8000/55432
+   nejsou vidět (kontrolovat zvenčí, ne `ufw status` — viz past s DOCKER chainem).
+5. SSH: klíče, `PasswordAuthentication no`, root login zakázaný.
+6. IB Gateway: **VNC nikdy veřejně**, jen přes tunel.
+7. Zálohy: `scripts/backup-postgres.ps1` (nebo cron s `pg_dump`) mimo server,
+   šifrovaně — dump obsahuje celý OI archiv a historii setupů.
+8. `docker compose up -d --build`, pak ověřit, že engine publikuje (`/status`
+   ukazuje `engine: online`) — chybějící token se pozná tak, že UI zůstane bez
+   živých dat a engine loguje chybu hned při startu.
+
+### Opakovaná prověrka
+
+`pwsh scripts/security-scan.ps1` spustí gitleaks (celá historie), pip-audit
+a npm audit; s `-Images` navíc trivy nad postavenými images. První tři běží
+i v CI jako job `security` na každý PR. Nálezy trivy jsou zpravidla OS balíky
+base image — řeší je rebuild s čerstvou bází, ne zásah do kódu, proto v CI nejsou.
 
 ---
 

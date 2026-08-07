@@ -6,13 +6,20 @@ from gexlens_engine.ibkr.account import classify_accounts
 def test_paper_account_recognised() -> None:
     info = classify_accounts(["DU1234567"])
     assert info.paper is True
-    assert info.label == "DU1234567 (paper)"
+    # Štítek jde do neautentizovaného /status, takže číslo maskované (#542 M7)
+    assert info.label == "DU***567 (paper)"
 
 
 def test_live_account_recognised() -> None:
     info = classify_accounts(["U7654321"])
     assert info.paper is False
     assert "živý" in info.label
+    assert "7654321" not in info.label
+
+
+def test_kratky_identifikator_se_nemaskuje() -> None:
+    """Maskování nesmí ze čtyřznakového účtu udělat samé hvězdičky."""
+    assert classify_accounts(["U123"]).label == "U123 (živý)"
 
 
 def test_mixed_accounts_are_not_reported_as_paper() -> None:

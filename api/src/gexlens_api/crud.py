@@ -8,6 +8,24 @@ from pydantic import BaseModel, Field
 
 from gexlens_api.alerts import AlertKind
 from gexlens_api.meta_repo import DuplicateEntryError, MetaRepository, NotFoundError
+from gexlens_engine.runtime_settings import CONNECTION_SETTINGS, RUNTIME_SETTINGS
+
+# Klíče řídící engine (#542 C4). Bez whitelistu byl `PUT /settings/{key}`
+# neautentizované řízení enginu: `ibkr_host` ho přepojí na cizí server
+# a `retention_days=1` nechá noční purge smazat archiv.
+ENGINE_SETTINGS = frozenset(
+    [spec.key for spec in RUNTIME_SETTINGS]
+    + [spec.key for spec in CONNECTION_SETTINGS]
+    + ["ibkr_host", "subscription_alert_enabled"]
+)
+
+# Předvolby UI držené na serveru, ať platí napříč prohlížeči. Engine je nečte,
+# takže nemají bezpečnostní dopad — jen musí projít validací.
+# `reconnect_requested` píše Console, ale nikdo ho zatím nečte (viz #551).
+UI_SETTINGS = frozenset(["theme", "language", "sessions", "reconnect_requested"])
+
+# `retro_pass` chybí schválně — ten si news-engine píše přímo do DB, ne přes API.
+WRITABLE_SETTINGS = ENGINE_SETTINGS | UI_SETTINGS
 
 
 class WatchlistItemIn(BaseModel):
@@ -103,6 +121,12 @@ def build_router(repository: MetaRepository) -> APIRouter:
 
     @router.put("/settings/{key}")
     def setting_put(key: str, setting: SettingIn) -> dict[str, Any]:
+        if key not in WRITABLE_SETTINGS:
+            raise HTTPException(
+                422,
+                f"Neznámý klíč nastavení: {key!r} "
+                f"(povolené: {', '.join(sorted(WRITABLE_SETTINGS))})",
+            )
         repository.setting_put(key, setting.value)
         return {"key": key, "value": setting.value}
 

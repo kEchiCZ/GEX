@@ -6,6 +6,7 @@ rovnou na zvolené místo. Jinde spadne na klasické stažení do složky Staže
 soubory — proto se sem hlásí zpět, která z cest se použila.
 */
 import { API_BASE } from '../config'
+import { tokenHeaders } from './apiToken'
 
 export type BackupResult = 'saved' | 'downloaded'
 
@@ -31,7 +32,13 @@ export function filenameFrom(header: string | null, today: Date): string {
 }
 
 export async function downloadBackup(): Promise<BackupResult> {
-  const response = await fetch(`${API_BASE}/backup/postgres`)
+  const response = await fetch(`${API_BASE}/backup/postgres`, { headers: tokenHeaders() })
+  if (response.status === 401 || response.status === 503) {
+    throw new Error(
+      'Záloha vyžaduje API token (#542) — vlož hodnotu GEXLENS_API_TOKEN z .env ' +
+        'do pole nad tlačítkem.',
+    )
+  }
   if (!response.ok) {
     const detail = await response.text().catch(() => '')
     throw new Error(`Záloha selhala: HTTP ${response.status} ${detail}`.trim())

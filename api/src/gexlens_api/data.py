@@ -16,9 +16,30 @@ class PartitionNotFoundError(FileNotFoundError):
     """Požadovaná denní partice neexistuje → HTTP 404."""
 
 
+class OutsideDataDirError(PartitionNotFoundError):
+    """Cesta by vedla mimo datový adresář (pokus o traversal, #542 M6).
+
+    Dědí z `PartitionNotFoundError`, takže se ven tváří jako běžné 404 —
+    útočník se z odpovědi nedozví, že narazil na kontrolu.
+    """
+
+
 class DataRepository:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+
+    def _resolve(self, path: Path) -> Path:
+        """Ověří, že cesta zůstala uvnitř datového adresáře.
+
+        `symbol` a `expiry` chodí z URL a skládají se do cest bez validace —
+        `..` se přes ně dostane až sem. Kontrola je záměrně v jednom místě
+        pod všemi metodami, ne u každého path parametru zvlášť.
+        """
+        root = self._settings.data_dir.resolve()
+        resolved = path.resolve()
+        if resolved != root and root not in resolved.parents:
+            raise OutsideDataDirError(str(path))
+        return resolved
 
     def list_symbols(self) -> list[str]:
         return self._list_dirs(self._settings.snapshots_dir)
@@ -34,7 +55,10 @@ class DataRepository:
         """
         by_date: dict[str, str] = {}
         for expiry in self.list_expiries(symbol):
-            expiry_dir = self._settings.snapshots_dir / symbol / expiry
+            try:
+                expiry_dir = self._resolve(self._settings.snapshots_dir / symbol / expiry)
+            except OutsideDataDirError:
+                continue
             for partition in expiry_dir.glob("*.parquet"):
                 day = partition.stem
                 current = by_date.get(day)
@@ -130,11 +154,16 @@ class DataRepository:
         return self._read(path)
 
     def _list_dirs(self, root: Path) -> list[str]:
-        if not root.exists():
+        try:
+            resolved = self._resolve(root)
+        except OutsideDataDirError:
             return []
-        return sorted(entry.name for entry in root.iterdir() if entry.is_dir())
+        if not resolved.exists():
+            return []
+        return sorted(entry.name for entry in resolved.iterdir() if entry.is_dir())
 
     def _read(self, path: Path) -> pd.DataFrame:
-        if not path.exists():
+        resolved = self._resolve(path)
+        if not resolved.exists():
             raise PartitionNotFoundError(str(path))
-        return pd.read_parquet(path)
+        return pd.read_parquet(resolved)

@@ -8,10 +8,15 @@ from fastapi.testclient import TestClient
 from gexlens_api.main import create_app
 from gexlens_engine.config import Settings
 
+TOKEN = "test-token"
+
 
 @pytest.fixture
-def client(tmp_path: Path) -> TestClient:
-    return TestClient(create_app(Settings(data_dir=tmp_path)))
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    # Interní ingest je od #542 za sdíleným tajemstvím; engine ho posílá stejně
+    monkeypatch.setenv("GEXLENS_API_TOKEN", TOKEN)
+    app = create_app(Settings(data_dir=tmp_path))
+    return TestClient(app, headers={"X-GEXLens-Token": TOKEN})
 
 
 def test_internal_status_updates_and_broadcasts(client: TestClient) -> None:
