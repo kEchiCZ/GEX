@@ -103,6 +103,24 @@ test('Dyn GEX křivka v profilu: chip přepíná vrstvu (ADR-0009)', () => {
   expect(panel.querySelector('[data-part="gex-curve"]')).toBeNull()
 })
 
+test('gexCurvePaths: body v díře osy se vynechají a křivka se přeruší (#548)', () => {
+  const row = { gridStart: 100, gridStep: 1, values: [4, 3, 2, 2, 2, -4] }
+  const paths = gexCurvePaths(row, (price) => price, 50, 25, [[101, 104]])
+  // Ceny 102 a 103 leží uvnitř díry (101, 104) → vynechané; 104 začíná novým M
+  expect(paths.positive).toBe('M75.0,100.0L68.8,101.0M62.5,104.0')
+  expect(paths.negative).toBe('M25.0,105.0')
+  // Flip mezi 104 (2) a 105 (−4) se počítá normálně — NENÍ přes díru
+  expect(paths.flipYs).toHaveLength(1)
+  expect(paths.flipYs[0]).toBeCloseTo(104.333, 2)
+})
+
+test('gexCurvePaths: hodnoty v díře neovlivní škálu křivky (#548)', () => {
+  const row = { gridStart: 100, gridStep: 1, values: [1, 10, 1] }
+  const paths = gexCurvePaths(row, (price) => price, 50, 25, [[100.5, 101.5]])
+  // max |v| jen z kreslených bodů = 1 → oba body na plném rozpětí (x = 75)
+  expect(paths.positive).toBe('M75.0,100.0M75.0,102.0')
+})
+
 test('niceCeil zaokrouhluje na 1/2/5×10^n (absolutní škála)', () => {
   expect(niceCeil(60)).toBe(100)
   expect(niceCeil(12)).toBe(20)
@@ -433,6 +451,83 @@ test('Σ přepínač: viditelný jen s aggregate prop, mění hlavičku a volá 
     </CrosshairProvider>,
   )
   expect(screen.queryByLabelText('Souhrn přes expirace')).toBeNull() // demo data — bez Σ
+})
+
+// ── Děravá strike osa (#548) ───────────────────────────────────────
+
+/** Syntetická děravá osa: klastry po 10 bodech s dírou 310 (NQ vzor z hlášení). */
+function gapRows(): ProfileRow[] {
+  return [29360, 29370, 29680, 29690].map((strike) => ({
+    strike,
+    callVolComponent: 10,
+    callOiComponent: 5,
+    putVolComponent: 10,
+    putOiComponent: 5,
+    callVolume: 100,
+    putVolume: 100,
+    callOi: 500,
+    putOi: 500,
+    distanceFromSpot: 0,
+  }))
+}
+
+test('děravá osa: pruh u díry se capne na medián rozestupů, ostatní plné (#548)', () => {
+  render(
+    <CrosshairProvider>
+      <StrikeProfile
+        rows={gapRows()}
+        spot={null}
+        yView={{ offsetY: 0, zoomY: 1, baseHeight: 400 }}
+        axisStrikes={[29360, 29370, 29680, 29690]}
+      />
+    </CrosshairProvider>,
+  )
+  // rowHeight = 400/4 = 100 px = 10 bodů uvnitř klastru; plný pruh = 99 px
+  const barOf = (strike: number) =>
+    screen.getByTestId(`profile-row-${strike}`).querySelector('[data-part="call-vol"]')!
+  const inner = barOf(29360)
+  expect(Number(inner.getAttribute('height'))).toBeCloseTo(99, 1)
+  // 29370 sousedí s dírou shora: horní polovina capnutá na 49.5×(7.5/155),
+  // dolní plná → výška ≈ 51.9 px a pruh nesmí přesáhnout střed o víc než cap
+  const belowGap = barOf(29370)
+  const capHalfPx = 49.5 * (7.5 / 155)
+  expect(Number(belowGap.getAttribute('height'))).toBeCloseTo(49.5 + capHalfPx, 1)
+  const centerY = 250 // (4−1−1+0.5)×100
+  expect(Number(belowGap.getAttribute('y'))).toBeCloseTo(centerY - capHalfPx, 1)
+  // 29680 zrcadlově (díra zdola): začíná plnou polovinou nad středem 150
+  const aboveGap = barOf(29680)
+  expect(Number(aboveGap.getAttribute('height'))).toBeCloseTo(49.5 + capHalfPx, 1)
+  expect(Number(aboveGap.getAttribute('y'))).toBeCloseTo(150 - 49.5, 1)
+  // Žádný pruh není vyšší než medián rozestupů (100 px = 10 bodů)
+  const svg = screen.getByLabelText('Skládané pruhy strike profilu')
+  for (const rect of svg.querySelectorAll('[data-part="call-vol"], [data-part="put-vol"]')) {
+    expect(Number(rect.getAttribute('height'))).toBeLessThanOrEqual(100)
+  }
+})
+
+test('děravá osa: GEX křivka se přes díru přeruší na dva segmenty (#548)', () => {
+  render(
+    <CrosshairProvider>
+      <StrikeProfile
+        rows={gapRows()}
+        spot={null}
+        yView={{ offsetY: 0, zoomY: 1, baseHeight: 400 }}
+        axisStrikes={[29360, 29370, 29680, 29690]}
+        gexProfile={{
+          tsIso: 't',
+          gridStart: 29360,
+          gridStep: 10,
+          values: Array.from({ length: 34 }, () => 100), // 29360..29690, vše kladné
+        }}
+      />
+    </CrosshairProvider>,
+  )
+  const positive = screen
+    .getByLabelText('Skládané pruhy strike profilu')
+    .querySelector('[data-part="gex-positive"]')!
+  const path = positive.getAttribute('d')!
+  // Body uvnitř (29370, 29680) vypadly → dva segmenty místo souvislé čáry
+  expect(path.match(/M/g)).toHaveLength(2)
 })
 
 // ── Crosshair sync + tooltip ───────────────────────────────────────

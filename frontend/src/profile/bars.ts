@@ -91,7 +91,11 @@ export function niceCeil(value: number): number {
 
 Kladná část (dealeři tlumí) jde od středové osy DOPRAVA, záporná (zesilují)
 DOLEVA — stejná sémantika stran jako call/put pruhy. Škála na max |hodnota|
-profilu. `flipYs` = Y souřadnice průchodů nulou (dynamický flip). */
+profilu. `flipYs` = Y souřadnice průchodů nulou (dynamický flip).
+
+`gapRanges` = cenové intervaly děr strike osy (#548): body uvnitř díry se
+vynechají a křivka se přeruší — souvislá čára by díru „spojila" a v její
+stlačené zóně kreslila svislý schod (vzor `isLevelJump`/`breaksOnJump`, #198). */
 export interface GexCurve {
   positive: string
   negative: string
@@ -103,22 +107,38 @@ export function gexCurvePaths(
   priceToY: (price: number) => number,
   centerX: number,
   halfSpan: number,
+  gapRanges: ReadonlyArray<readonly [number, number]> = [],
 ): GexCurve {
-  const maxAbs = Math.max(1e-9, ...row.values.map((value) => Math.abs(value)))
+  const inGap = (price: number): boolean =>
+    gapRanges.some(([low, high]) => price > low && price < high)
+  // Škála jen z kreslených bodů — hodnoty uvnitř díry nesmí měřítko rozmáčknout
+  const kept = row.values.map((_, index) => !inGap(row.gridStart + index * row.gridStep))
+  const maxAbs = Math.max(
+    1e-9,
+    ...row.values.filter((_, index) => kept[index]).map((value) => Math.abs(value)),
+  )
   let positive = ''
   let negative = ''
   const flipYs: number[] = []
   let previousSign = 0
+  let broken = false
   row.values.forEach((value, index) => {
+    if (!kept[index]) {
+      // Bod v díře (#548): vynechat, další bod začne novým segmentem (M);
+      // reset znaménka zruší i interpolaci flipu přes díru
+      broken = true
+      previousSign = 0
+      return
+    }
     const price = row.gridStart + index * row.gridStep
     const x = centerX + (value / maxAbs) * halfSpan
     const y = priceToY(price)
     const sign = value >= 0 ? 1 : -1
     const point = `${x.toFixed(1)},${y.toFixed(1)}`
     if (sign >= 0) {
-      positive += `${previousSign < 0 || positive === '' ? 'M' : 'L'}${point}`
+      positive += `${previousSign < 0 || broken || positive === '' ? 'M' : 'L'}${point}`
     } else {
-      negative += `${previousSign >= 0 || negative === '' ? 'M' : 'L'}${point}`
+      negative += `${previousSign >= 0 || broken || negative === '' ? 'M' : 'L'}${point}`
     }
     // Průchod nulou mezi sousedními body → lineární interpolace ceny
     if (index > 0 && previousSign !== 0 && sign !== previousSign) {
@@ -127,6 +147,7 @@ export function gexCurvePaths(
       const zeroPrice = prevPrice + ((0 - prev) / (value - prev)) * row.gridStep
       flipYs.push(priceToY(zeroPrice))
     }
+    broken = false
     previousSign = sign
   })
   return { positive, negative, flipYs }

@@ -33,6 +33,7 @@ import type { OverlayData, PriceBar, PriceStyle } from '../heatmap/overlays'
 import { markerColor, markerNear, markerStyle } from '../heatmap/newsMarkers'
 import type { NewsMarker as NewsMarkerType } from '../heatmap/newsMarkers'
 import { signalAt, signalColor } from '../heatmap/signalMarkers'
+import { gapBands } from '../heatmap/spacing'
 import {
   DEFAULT_VIEW,
   axisZoneAt,
@@ -406,8 +407,15 @@ export function Heatmap({
     const scaleY = (logicalH / offscreen.height) * view.zoomY
     context.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, dpr * view.offsetX, dpr * view.offsetY)
     context.drawImage(offscreen, 0, 0)
+    // Děravá strike osa (#548): natažený bitmap by data roztáhl přes díru —
+    // pásmo díry se vymaže (zůstane tmavé) a krajní buňky drží cap na medián
+    // rozestupů; platí i pro Dyn GEX podklad (#242), sdílí tutéž osu
+    context.setTransform(dpr, 0, 0, dpr, 0, 0)
+    for (const band of gapBands(grid.strikes, scaleY, view.offsetY)) {
+      context.clearRect(0, band.top, logicalW, band.bottom - band.top)
+    }
     context.setTransform(1, 0, 0, 1, 0, 0)
-  }, [view, logicalW, logicalH, dpr])
+  }, [view, logicalW, logicalH, dpr, grid.strikes])
 
   // 3) STATICKÁ overlay vrstva: kontury, uzavřené svíčky, sessions, levels/walls,
   // anotace, popisky os, timestamp. Překresluje se jen při změně dat/pohledu — NE

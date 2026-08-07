@@ -58,7 +58,7 @@ function fractionalRowOf(strikes: number[], value: number): number {
 }
 
 /** Cena na (zlomkovém) řádku osy strikes; mimo obálku extrapolace krajním krokem. */
-function priceAtRow(strikes: number[], row: number): number {
+export function priceAtRow(strikes: number[], row: number): number {
   const last = strikes.length - 1
   if (row <= 0) return strikes[0] + row * (strikes[1] - strikes[0])
   if (row >= last) return strikes[last] + (row - last) * (strikes[last] - strikes[last - 1])

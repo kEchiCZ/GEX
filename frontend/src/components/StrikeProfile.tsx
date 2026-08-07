@@ -15,6 +15,7 @@ import { STALE_THRESHOLD_S } from '../heatmap/color'
 import { zoomAxis } from '../heatmap/view'
 import type { ViewTransform } from '../heatmap/view'
 import { fractionalRow } from '../heatmap/overlays'
+import { axisGapRanges, capHalfFractions } from '../heatmap/spacing'
 import { barGeometry, formatAmount, gexCurvePaths, maxComponentSide, niceCeil, volLeaders } from '../profile/bars' // prettier-ignore
 import type { ProfileRow } from '../profile/bars'
 import type { GexProfileRow } from '../replay/loader'
@@ -168,6 +169,14 @@ function StrikeProfileBase({
   )
   // Osa množství: plná strana = scaleMax/zoom (Δ-vážené kontrakty)
   const axisFull = ordered.length > 0 ? scaleMax / zoom : 0
+  // Děravá osa (#548): cap polovin výšky pruhu na medián rozestupů — pruh
+  // u díry zůstane tenký místo roztažení přes stovky bodů
+  const capMap = useMemo(
+    () => new Map(ordered.map((row) => [row.strike, capHalfFractions(axis, row.strike)])),
+    [ordered, axis],
+  )
+  // Díry v ose (#548): GEX/Dyn křivka se přes ně přerušuje místo souvislé čáry
+  const gapRanges = useMemo(() => axisGapRanges(axis), [axis])
   // Popisky (strike i hodnoty) jen na každém k-tém řádku, ať se nepřekrývají
   const labelEvery = Math.max(1, Math.ceil(16 / Math.max(1, rowHeight)))
 
@@ -193,10 +202,11 @@ function StrikeProfileBase({
       (price) => priceToY(price) ?? -100,
       halfWidth,
       Math.max(10, halfWidth - LABEL_SPACE) * 0.95,
+      gapRanges,
     )
     // priceToY závisí na axis/rowHeight/offsetY — pokryto závislostmi níže
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gexOn, gexProfile, ordered, axis, rowHeight, offsetY, halfWidth])
+  }, [gexOn, gexProfile, ordered, axis, rowHeight, offsetY, halfWidth, gapRanges])
 
   const hovered = crosshair
     ? (ordered.find((row) => row.strike === crosshair.strike) ?? null)
@@ -314,8 +324,14 @@ function StrikeProfileBase({
             const bar = geometry.get(row.strike)
             const centerY = strikeCenterY(row.strike)
             if (!bar || centerY === null) return null
-            const barHeight = Math.max(1, rowHeight - ROW_GAP)
-            const y = centerY - barHeight / 2
+            // Poloviny výšky pruhu zvlášť (#548): u díry v ose se strana k díře
+            // capne na medián rozestupů, druhá strana zůstává plná
+            const caps = capMap.get(row.strike) ?? { up: 1, down: 1 }
+            const fullHalf = Math.max(1, rowHeight - ROW_GAP) / 2
+            const halfUp = Math.max(0.5, fullHalf * caps.up)
+            const halfDown = Math.max(0.5, fullHalf * caps.down)
+            const barHeight = halfUp + halfDown
+            const y = centerY - halfUp
             const highlighted = crosshair?.strike === row.strike
             // Zmrzlá kotace (ADR-0015): ztlumit, ať nevypadá jako živá data
             const stale = (row.staleAge ?? 0) > STALE_THRESHOLD_S
