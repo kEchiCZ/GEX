@@ -29,6 +29,7 @@ if (-not (Test-Path $EnvPath)) {
 }
 
 $lines = @(Get-Content -LiteralPath $EnvPath)
+$append = ''
 $added = @()
 $pgPassword = $null
 
@@ -42,13 +43,19 @@ foreach ($key in @('GEXLENS_PG_PASSWORD', 'GEXLENS_API_TOKEN')) {
         continue
     }
     $secret = New-Secret
-    $lines += "$key=$secret"
+    $append += "$key=$secret`n"
     $added += $key
     if ($key -eq 'GEXLENS_PG_PASSWORD') { $pgPassword = $secret }
 }
 
 if ($added.Count -gt 0) {
-    Set-Content -LiteralPath $EnvPath -Value $lines -Encoding utf8
+    # Přípis přes .NET, ne Set-Content: soubor nese uživatelovy API klíče a
+    # přepsání celého obsahu by pod PowerShellem 5.1 přidalo BOM (`-Encoding utf8`
+    # tam BOM píše) — první proměnná v .env by se rozbila na `﻿GEXLENS_…`.
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $prefix = if ($lines.Count -gt 0 -and $lines[-1].Trim()) { "`n" } else { '' }
+    $header = "# Tajemství vygenerovaná scripts/init-secrets.ps1 (#542)`n"
+    [System.IO.File]::AppendAllText($EnvPath, $prefix + $header + $append, $utf8NoBom)
     Write-Host "Doplněno do .env: $($added -join ', ')"
 } else {
     Write-Host 'Nic doplňovat netřeba.'
