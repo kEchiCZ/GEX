@@ -396,6 +396,19 @@ nástroje na hostiteli (zálohy, sondy) — pro provoz je potřeba nemá.
    ukazuje `engine: online`) — chybějící token se pozná tak, že UI zůstane bez
    živých dat a engine loguje chybu hned při startu.
 
+### Návrat zpět (rollback)
+
+Rotace hesla nesahá na data — mění jen přihlašovací údaj, `pgdata` volume ani parquety se nedotkne. Vrátit ji lze kdykoli:
+
+```powershell
+docker exec $(docker compose ps -q postgres) psql -U gexlens -d gexlens `
+  -c "ALTER USER gexlens PASSWORD 'gexlens';"
+```
+
+Funguje vždy, i když se heslo v `.env` rozejde s databází nebo `.env` ztratíš: `psql` uvnitř kontejneru chodí přes unix socket, který heslo nevyžaduje. Stejným příkazem se dá nastavit i nová hodnota, když je potřeba sladit `.env` s běžícím serverem. Po změně restartovat stack (`docker compose up -d`) — běžící kontejnery drží spojení se starým heslem.
+
+**Při revertu změn #542 na tohle nezapomenout.** Starší `compose.yml` má `POSTGRES_PASSWORD: gexlens` natvrdo, takže po návratu ke starému kódu se služby k databázi s rotovaným heslem nepřipojí. Pořadí: nejdřív vrátit heslo příkazem výše, pak revertovat kód.
+
 ### Opakovaná prověrka
 
 `pwsh scripts/security-scan.ps1` spustí gitleaks (celá historie), pip-audit
