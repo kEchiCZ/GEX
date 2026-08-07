@@ -703,6 +703,43 @@ async def test_bars_stall_alert_and_recovery_backfill(
     assert backfills == [True]
 
 
+async def test_strikes_stalled_alert_a_recovery(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#547: repair kola nad prahem → alert strikes_stalled s hintem; návrat → recovery."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+
+    def metrics(stalled: int) -> SweepMetrics:
+        return SweepMetrics(
+            total=96,
+            greeks_complete=96 - stalled,
+            repair_count=stalled,
+            stale_count=0,
+            lines_utilization=0.8,
+            sweep_duration_s=1.0,
+            computed_greeks=stalled,
+            stalled_count=stalled,
+        )
+
+    await pipeline._watch_repair(TS, metrics(74))
+    alerts = [data for channel, data in publisher.messages if channel == "alerts"]
+    assert [a["kind"] for a in alerts] == ["strikes_stalled"]
+    assert alerts[0]["symbol"] == "ES"
+    assert "restart TWS" in str(alerts[0]["message"])
+
+    # Stav trvá → žádný další alert (anti-spam)
+    await pipeline._watch_repair(TS + dt.timedelta(minutes=1), metrics(74))
+    alerts = [data for channel, data in publisher.messages if channel == "alerts"]
+    assert len(alerts) == 1
+
+    # TWS zase dodává → recovery právě jednou
+    await pipeline._watch_repair(TS + dt.timedelta(minutes=2), metrics(0))
+    await pipeline._watch_repair(TS + dt.timedelta(minutes=3), metrics(0))
+    alerts = [data for channel, data in publisher.messages if channel == "alerts"]
+    assert [a["kind"] for a in alerts] == ["strikes_stalled", "strikes_recovered"]
+
+
 async def test_no_stall_alert_when_market_quiet(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:

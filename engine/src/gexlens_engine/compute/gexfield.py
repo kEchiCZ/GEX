@@ -305,3 +305,118 @@ def greek_fields(
         )
         for greek, cols in columns.items()
     }
+
+
+# ── Fallback greeks z mid ceny (#547) ──────────────────────────────────
+# TWS umí pro část striků trvale nedodávat modelGreeks, přestože kotace tečou
+# (7. 8.: celé ATM pásmo NQ QN1 0DTE, celou seanci). Engine si pak greeks
+# dopočítá sám: IV inverzí BS ceny z mid, delta/gamma/vega/theta z téže formule
+# (r = q = 0). Jednotky kopírují TWS modelGreeks: vega za 1 % IV, theta za den.
+
+_IV_LO = 1e-4
+_IV_HI = 10.0
+_IV_MAX_ITER = 100
+_IV_REL_TOL = 1e-9
+
+
+def _norm_cdf(x: float) -> float:
+    """Distribuční funkce N(0,1) přes math.erf — bez závislosti na scipy."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def bs_price(spot: float, strike: float, iv: float, tau_years: float, right: str) -> float:
+    """BS cena evropské opce (r = q = 0); nevalidní vstupy → 0, iv ≤ 0 → vnitřní hodnota."""
+    if spot <= 0.0 or strike <= 0.0 or tau_years <= 0.0:
+        return 0.0
+    intrinsic = max(spot - strike, 0.0) if right == "C" else max(strike - spot, 0.0)
+    if iv <= 0.0:
+        return intrinsic
+    d1, d2 = _d1_d2(spot, strike, iv, tau_years)
+    call = spot * _norm_cdf(d1) - strike * _norm_cdf(d2)
+    return call if right == "C" else call - spot + strike  # put-call parita při r = 0
+
+
+def implied_vol(
+    price: float, spot: float, strike: float, tau_years: float, right: str
+) -> float | None:
+    """IV inverzí BS ceny (#547): Newton krok jištěný bisekcí v [1e-4, 10].
+
+    Vrací None mimo no-arbitrage pásmo (cena ≤ vnitřní hodnota, cena ≥ spot
+    resp. strike) a při nekonvergenci — volající nechá strike nekompletní,
+    vymyšlená IV je horší než díra.
+    """
+    if price <= 0.0 or spot <= 0.0 or strike <= 0.0 or tau_years <= 0.0:
+        return None
+    if right not in ("C", "P"):
+        return None
+    intrinsic = max(spot - strike, 0.0) if right == "C" else max(strike - spot, 0.0)
+    upper = spot if right == "C" else strike
+    if price <= intrinsic or price >= upper:
+        return None
+    lo, hi = _IV_LO, _IV_HI
+    if price <= bs_price(spot, strike, lo, tau_years, right):
+        return None  # cena na úrovni vnitřní hodnoty — IV pod rozlišením
+    if price >= bs_price(spot, strike, hi, tau_years, right):
+        return None  # na cenu nestačí ani 1000 % vol
+    iv = 0.5
+    for _ in range(_IV_MAX_ITER):
+        diff = bs_price(spot, strike, iv, tau_years, right) - price
+        if abs(diff) <= _IV_REL_TOL * max(price, 1.0):
+            return iv
+        if diff > 0.0:
+            hi = iv
+        else:
+            lo = iv
+        # Newton krok přes vegu; mimo závorku nebo s mizivou vegou → bisekce
+        d1, _ = _d1_d2(spot, strike, iv, tau_years)
+        vega = spot * math.exp(-0.5 * d1 * d1) / _SQRT_2PI * math.sqrt(tau_years)
+        newton = iv - diff / vega if vega > 1e-12 else None
+        iv = newton if newton is not None and lo < newton < hi else 0.5 * (lo + hi)
+    return None
+
+
+@dataclass(frozen=True)
+class FallbackGreeks:
+    """Vlastní BS greeks (#547) — jednotky dle TWS: vega za 1 % IV, theta za den."""
+
+    iv: float
+    delta: float
+    gamma: float
+    theta: float
+    vega: float
+
+
+def fallback_greeks(
+    *,
+    spot: float,
+    strike: float,
+    right: str,
+    mid: float,
+    settle: dt.datetime,
+    now: dt.datetime,
+) -> FallbackGreeks | None:
+    """BS greeks z mid ceny (#547): IV inverzí, zbytek z téže formule (r = q = 0).
+
+    τ do settle s podlahou TAU_FLOOR_S (τ→0 diverguje ATM gamma). None při ceně
+    mimo no-arbitrage pásmo nebo nekonvergenci — žádné vymyšlené hodnoty.
+    """
+    if spot <= 0.0 or strike <= 0.0 or mid <= 0.0:
+        return None
+    tau_years = max((settle - now).total_seconds(), TAU_FLOOR_S) / _YEAR_S
+    iv = implied_vol(mid, spot, strike, tau_years, right)
+    if iv is None:
+        return None
+    d1, _ = _d1_d2(spot, strike, iv, tau_years)
+    phi = math.exp(-0.5 * d1 * d1) / _SQRT_2PI
+    sqrt_tau = math.sqrt(tau_years)
+    delta = _norm_cdf(d1) if right == "C" else _norm_cdf(d1) - 1.0
+    # Theta pro r = 0 je pro call i put identická (jen časový rozpad φ)
+    theta = -(spot * phi * iv) / (2.0 * sqrt_tau) / _DAYS_PER_YEAR
+    vega = spot * phi * sqrt_tau * _VOL_POINT
+    return FallbackGreeks(
+        iv=iv,
+        delta=delta,
+        gamma=bs_gamma(spot, strike, iv, tau_years),
+        theta=theta,
+        vega=vega,
+    )

@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockQuoteStreamer
-from gexlens_engine.ibkr.scheduler import QuoteSnapshot, SubscriptionScheduler
+from gexlens_engine.ibkr.scheduler import PartialQuote, QuoteSnapshot, SubscriptionScheduler
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
@@ -98,6 +98,62 @@ async def test_bez_chybejiciho_oi_rada_nevznikne(
 
     day = TS.date().isoformat()
     assert not (settings.derived_dir / "ES" / "20260716" / "oimissing" / f"{day}.parquet").exists()
+
+
+async def test_dopoctene_greeks_jdou_do_vlastni_rady(tmp_path: Path) -> None:
+    """#547: strike s fallback BS greeks se zapíše do snapshotu a označí v řadě greekssource."""
+    settings = Settings(data_dir=tmp_path / "data", greeks_fallback_sweeps=1)
+    specs = contracts()
+    repository = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}"))
+    repository.ensure_schema()
+    repository.upsert_many(
+        [OIRecord("ES", "20260716", s.strike, s.right, TS.date(), 1000.0) for s in specs]
+    )
+    publisher = RecordingPublisher()
+    atm_call = next(s for s in specs if s.strike == 7600.0 and s.right == "C")
+    # TWS model pro ATM call mlčí, kotace tečou (scénář 7. 8. na NQ)
+    streamer = MockQuoteStreamer(partial_greeks={atm_call})
+    engine_runtime = EngineRuntime(
+        settings=settings,
+        # τ do settle 20:00 UTC téhož dne — pevné „teď" kvůli determinismu
+        scheduler=SubscriptionScheduler(streamer, settings, utc_now=lambda: TS),
+        writer=SnapshotWriter(settings),
+        oi_repository=repository,
+        publisher=publisher,
+        symbol="ES",
+        expiry="20260716",
+        multiplier=50.0,
+        contracts=specs,
+    )
+
+    await engine_runtime.run_cycle(TS, SPOT, [])
+
+    day = TS.date().isoformat()
+    source = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "greekssource" / f"{day}.parquet"
+    )
+    assert list(source.columns) == ["ts_min", "strike", "right"]
+    assert source["strike"].tolist() == [7600.0]
+    assert source["right"].tolist() == ["C"]
+
+    # Snapshot nese dopočtené hodnoty (IV z inverze, ne mockových 0.15)
+    snapshots = pd.read_parquet(settings.snapshots_dir / "ES" / "20260716" / f"{day}.parquet")
+    row = snapshots[(snapshots["strike"] == 7600.0) & (snapshots["right"] == "C")]
+    assert len(row) == 1
+    assert float(row["iv"].iloc[0]) > 0.0
+    assert float(row["iv"].iloc[0]) != 0.15
+    assert 0.0 < float(row["delta"].iloc[0]) < 1.0
+
+    # WS zpráva minuty nese aditivní příznak jen u dopočteného řádku
+    snap_data = next(
+        data for channel, data in publisher.messages if channel == "snapshot.ES.20260716"
+    )
+    snap_rows = snap_data["rows"]
+    assert isinstance(snap_rows, list)
+    flagged = [r for r in snap_rows if r.get("greeks_computed")]
+    assert [(r["strike"], r["right"]) for r in flagged] == [(7600.0, "C")]
+    ostatni = [r for r in snap_rows if not r.get("greeks_computed")]
+    assert all("greeks_computed" not in r for r in ostatni)
 
 
 async def test_prvni_sweep_po_startu_uprostred_dne_ma_catch_up(
@@ -304,7 +360,9 @@ class RisingVolumeStreamer(MockQuoteStreamer):
         super().__init__()
         self._fetches: dict[OptionContractSpec, int] = {}
 
-    async def fetch_quote(self, spec: OptionContractSpec, timeout_s: float) -> QuoteSnapshot | None:
+    async def fetch_quote(
+        self, spec: OptionContractSpec, timeout_s: float
+    ) -> QuoteSnapshot | PartialQuote | None:
         base = await super().fetch_quote(spec, timeout_s)
         if base is None:
             return None
@@ -539,7 +597,9 @@ class PartialStreamer(MockQuoteStreamer):
         super().__init__()
         self.dead: set[float] = set()
 
-    async def fetch_quote(self, spec: OptionContractSpec, timeout_s: float) -> QuoteSnapshot | None:
+    async def fetch_quote(
+        self, spec: OptionContractSpec, timeout_s: float
+    ) -> QuoteSnapshot | PartialQuote | None:
         if spec.strike in self.dead:
             return None
         return await super().fetch_quote(spec, timeout_s)

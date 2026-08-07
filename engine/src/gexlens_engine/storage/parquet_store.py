@@ -133,6 +133,18 @@ OI_MISSING_SCHEMA = pa.schema(
     ]
 )
 
+# Dopočtené Greeks (#547) — vlastní řada po vzoru oimissing (ADR-0005/0008):
+# strike, jehož modelGreeks v dané minutě nedodala TWS a engine je dopočítal
+# BS modelem z mid ceny (IV inverzí). Sloupec v SNAPSHOT_SCHEMA by rozbil
+# čtení starých partic; nepřítomnost řady = všechny Greeks z TWS modelu.
+GREEKS_SOURCE_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("strike", pa.float64()),
+        ("right", pa.string()),
+    ]
+)
+
 # Catch-up minuty (#518, ADR-0024) — první minuta po startu enginu uprostřed
 # dne. Kumulativní čítače (denní volume per kontrakt) v ní pokrývají celou dobu
 # výpadku, takže přírůstkové odvozeniny (Opt Vol, Δ Flow, okenní analýza #483)
@@ -275,6 +287,19 @@ class OiMissingRow:
 
     Nezaměňovat s OI = 0: tady jde o kontrakt, který archiv vůbec nepokrývá
     (přibyl posunem pásma) nebo jehož OI IBKR nedodal.
+    """
+
+    ts_min: dt.datetime
+    strike: float
+    right: str
+
+
+@dataclass(frozen=True)
+class GreeksSourceRow:
+    """Strike s Greeks dopočtenými enginem v dané minutě (#547).
+
+    TWS model je nedodal, kotace ale tekly — hodnoty ve snapshotu jsou vlastní
+    BS dopočet z mid ceny, ne měřený model. Frontend je může odlišit.
     """
 
     ts_min: dt.datetime
@@ -508,6 +533,26 @@ class SnapshotWriter:
             / f"{day.isoformat()}.parquet"
         )
         buffer = self._buffer(path, OI_MISSING_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_greeks_source(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[GreeksSourceRow]
+    ) -> Path | None:
+        """Přidá striky s dopočtenými Greeks do derived/{sym}/{exp}/greekssource (#547).
+
+        Prázdný seznam se nezapisuje — dokud TWS model dodává, řada nevznikne
+        vůbec (stejný princip jako oimissing).
+        """
+        if not rows:
+            return None
+        path = (
+            self._settings.derived_dir
+            / symbol
+            / expiry
+            / "greekssource"
+            / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, GREEKS_SOURCE_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_catch_up(
