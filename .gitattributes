@@ -1,0 +1,5 @@
+# Skripty spouštěné v Linuxových kontejnerech musí mít LF (#542): `core.autocrlf=true`
+# na Windows by jim jinak při checkoutu dal CRLF a shebang `#!/bin/sh\r` v obrazu
+# selže s „no such file or directory" — chyba, která se projeví až v Dockeru.
+*.sh text eol=lf
+docker/entrypoint.sh text eol=lf
