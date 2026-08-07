@@ -1,18 +1,33 @@
 # GEXLens — jeden příkaz start (SPEC kap. 8): docker compose up --build
 #
-# Pozn.: PostgreSQL je publikovaný na hostitelský port 55432 (na vývojovém PC
-# běží nativní PG na 5432 i 5433 — viz komentář v issue #30). Engine se
-# připojuje na TWS/Gateway běžící NA HOSTITELI přes host.docker.internal.
+# Pozn.: Engine se připojuje na TWS/Gateway běžící NA HOSTITELI přes
+# host.docker.internal.
+#
+# BEZPEČNOST (#542): žádná služba se nepublikuje na 0.0.0.0. Docker zapisuje
+# publikaci portů do řetězce DOCKER, který se na Linuxu vyhodnocuje PŘED UFW —
+# port publikovaný bez adresy je na VPS veřejný i se „zapnutým firewallem".
+# Adresa se řídí GEXLENS_BIND_ADDR (default loopback); na serveru se nastaví na
+# Tailscale IP, aby UI viselo jen v tunelu.
+x-logging: &default-logging
+  # Bez limitu roste json-file donekonečna (engine loguje každý sweep)
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   postgres:
     restart: unless-stopped
     image: postgres:16
+    logging: *default-logging
     environment:
       POSTGRES_USER: gexlens
-      POSTGRES_PASSWORD: gexlens
+      POSTGRES_PASSWORD: ${GEXLENS_PG_PASSWORD:?chybí GEXLENS_PG_PASSWORD — vygeneruj přes scripts/init-secrets.ps1}
       POSTGRES_DB: gexlens
     ports:
-      - "55432:5432"
+      # Jen pro nástroje na hostiteli (zálohy, sondy) — kontejnery jedou po
+      # compose síti na postgres:5432
+      - "${GEXLENS_BIND_ADDR:-127.0.0.1}:55432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -27,11 +42,18 @@ services:
       context: .
       dockerfile: docker/python.Dockerfile
     command: uvicorn gexlens_api.main:app --host 0.0.0.0 --port 8000
+    logging: *default-logging
     environment:
-      GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:gexlens@postgres:5432/gexlens
+      GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
       GEXLENS_DATA_DIR: /app/data
+      # Sdílené tajemství pro /internal/* a /backup (#542)
+      GEXLENS_API_TOKEN: ${GEXLENS_API_TOKEN:?chybí GEXLENS_API_TOKEN — vygeneruj přes scripts/init-secrets.ps1}
+      # Origins nad rámec localhostu (Tailscale UI); prázdné = jen same-origin
+      GEXLENS_ALLOWED_ORIGINS: ${GEXLENS_ALLOWED_ORIGINS:-}
     ports:
-      - "8000:8000"
+      # Prohlížeč sem nechodí (nginx proxuje /api) — publikace zůstává jen pro
+      # nástroje na hostiteli a je vázaná na loopback
+      - "${GEXLENS_BIND_ADDR:-127.0.0.1}:8000:8000"
     volumes:
       - ./data:/app/data
     depends_on:
@@ -43,14 +65,16 @@ services:
       context: .
       dockerfile: docker/python.Dockerfile
     command: python -m gexlens_engine
+    logging: *default-logging
     environment:
       # TWS/IB Gateway běží na hostiteli (Windows/Mac Docker Desktop)
       GEXLENS_IBKR_HOST: host.docker.internal
       GEXLENS_IBKR_PORT: ${GEXLENS_IBKR_PORT:-7496}
       GEXLENS_IBKR_CLIENT_ID: ${GEXLENS_IBKR_CLIENT_ID:-1}
-      GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:gexlens@postgres:5432/gexlens
+      GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
       GEXLENS_DATA_DIR: /app/data
       GEXLENS_API_BASE: http://api:8000
+      GEXLENS_API_TOKEN: ${GEXLENS_API_TOKEN:?}
       # Základ symbolů a strop souběžných instrumentů jdou ladit z .env (#215:
       # výchozí strop 3 = ES+NQ+MES; pro MNQ je potřeba 4)
       GEXLENS_SYMBOLS: ${GEXLENS_SYMBOLS:-ES}
@@ -72,8 +96,9 @@ services:
       context: .
       dockerfile: docker/python.Dockerfile
     command: python -m gexlens_news run
+    logging: *default-logging
     environment:
-      GEXLENS_NEWS_DATABASE_URL: postgresql+psycopg://gexlens:gexlens@postgres:5432/gexlens
+      GEXLENS_NEWS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
       # Klíče výhradně z lokálního .env (S10) — v repu jen prázdné placeholdery
       GEXLENS_NEWS_FINNHUB_API_KEY: ${GEXLENS_NEWS_FINNHUB_API_KEY:-}
       GEXLENS_NEWS_FRED_API_KEY: ${GEXLENS_NEWS_FRED_API_KEY:-}
@@ -85,6 +110,7 @@ services:
       GEXLENS_NEWS_DATA_DIR: /app/data
       # V Dockeru je localhost sám kontejner — WS push musí mířit na službu api
       GEXLENS_NEWS_API_BASE: http://api:8000
+      GEXLENS_NEWS_API_TOKEN: ${GEXLENS_API_TOKEN:?}
     volumes:
       # Bary čte (zapisuje je datový engine, #276), do derived/sentiment/ píše
       # vlastní řadu SentIndexu (#283) — adresář je rozdělený podle vlastnictví
@@ -102,9 +128,12 @@ services:
       context: .
       dockerfile: docker/frontend.Dockerfile
       args:
-        VITE_API_BASE: http://127.0.0.1:8000
+        # Relativní základ (#542): prohlížeč mluví jen s nginx, ten proxuje
+        # /api → api:8000. Odpadá expozice portu 8000 i CORS.
+        VITE_API_BASE: /api
+    logging: *default-logging
     ports:
-      - "8080:80"
+      - "${GEXLENS_BIND_ADDR:-127.0.0.1}:8080:80"
     depends_on:
       - api
 

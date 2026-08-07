@@ -28,8 +28,10 @@ UPCOMING_MIN_IMPORTANCE = 3
 class NewsPublisher:
     """HTTP klient interního ingestu; při nedostupném API jen loguje."""
 
-    def __init__(self, api_base: str, *, timeout_s: float = 5.0) -> None:
-        self._client = httpx.AsyncClient(base_url=api_base, timeout=timeout_s)
+    def __init__(self, api_base: str, *, api_token: str = "", timeout_s: float = 5.0) -> None:
+        # Interní ingest je za sdíleným tajemstvím (#542) — bez tokenu 401
+        headers = {"X-GEXLens-Token": api_token} if api_token else {}
+        self._client = httpx.AsyncClient(base_url=api_base, timeout=timeout_s, headers=headers)
         # Aby se stejný event nehlásil každý cyklus znovu
         self._announced: set[int] = set()
 

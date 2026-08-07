@@ -27,7 +27,19 @@ class AccountInfo:
         if not self.accounts:
             return "neznámý účet"
         kind = "paper" if self.paper else "živý"
-        return f"{', '.join(self.accounts)} ({kind})"
+        return f"{', '.join(mask_account(name) for name in self.accounts)} ({kind})"
+
+
+def mask_account(name: str) -> str:
+    """Číslo účtu pro veřejný stav — zůstane prefix a poslední tři znaky.
+
+    Štítek jde do `/status`, který je bez autentizace (#542 M7). Rozlišit dva
+    účty od sebe stačí koncovka; celé číslo je zbytečný identifikátor.
+    """
+    if len(name) <= 5:
+        return name
+    prefix = "DU" if name.upper().startswith(PAPER_PREFIXES) else name[:1]
+    return f"{prefix}***{name[-3:]}"
 
 
 def classify_accounts(accounts: object) -> AccountInfo:

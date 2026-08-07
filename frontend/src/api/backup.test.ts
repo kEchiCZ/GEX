@@ -53,3 +53,16 @@ test('chyba serveru se nepolyká — tichá neúspěšná záloha je horší ne�
   )
   await expect(downloadBackup()).rejects.toThrow(/503/)
 })
+
+test('401 vysvětlí chybějící API token, ne holý stavový kód (#542)', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => 'Chybí nebo nesedí hlavička X-GEXLens-Token',
+      headers: { get: () => null },
+    }),
+  )
+  await expect(downloadBackup()).rejects.toThrow(/API token/)
+})

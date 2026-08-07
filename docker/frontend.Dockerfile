@@ -4,7 +4,8 @@ WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-ARG VITE_API_BASE=http://127.0.0.1:8000
+# Relativní základ (#542) — prohlížeč jde na API přes nginx proxy, ne na port 8000
+ARG VITE_API_BASE=/api
 ENV VITE_API_BASE=$VITE_API_BASE
 RUN npm run build
 

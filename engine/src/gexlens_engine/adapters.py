@@ -206,8 +206,11 @@ class IbHistoricalClient:
 class HttpPublisher(PublisherLike):
     """Push stavu a kanálů do API serveru přes interní ingest endpoints."""
 
-    def __init__(self, api_base: str) -> None:
-        self._client = httpx.AsyncClient(base_url=api_base, timeout=5.0)
+    def __init__(self, api_base: str, api_token: str = "") -> None:
+        # Interní ingest je za sdíleným tajemstvím (#542 C5); bez tokenu API
+        # odpoví 401 a stav ani kanály se nepublikují
+        headers = {"X-GEXLens-Token": api_token} if api_token else {}
+        self._client = httpx.AsyncClient(base_url=api_base, timeout=5.0, headers=headers)
 
     async def status(self, **fields: Any) -> None:
         try:

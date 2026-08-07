@@ -9,6 +9,7 @@ Výjimka je téma: aplikuje se i ukládá okamžitě, protože jde o čistě viz
 volbu s okamžitou zpětnou vazbou (AC #167) — čekat u něj na Uložit by mátlo.
 */
 import { useState } from 'react'
+import { loadApiToken, saveApiToken } from '../api/apiToken'
 import { downloadBackup } from '../api/backup'
 import { useServerSettings } from '../api/settings'
 import { useAppState } from '../state/AppState'
@@ -98,6 +99,8 @@ export function SettingsView() {
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [backup, setBackup] = useState<'idle' | 'running'>('idle')
   const [backupNote, setBackupNote] = useState<string | null>(null)
+  // Token se neukládá na server (je to sdílené tajemství z .env), jen do prohlížeče
+  const [apiToken, setApiToken] = useState(() => loadApiToken())
   const [saved, setSaved] = useState(false)
 
   const dirtyKeys = Object.keys(draft)
@@ -254,6 +257,28 @@ export function SettingsView() {
           <button className="chip" onClick={runBackup} disabled={backup === 'running'}>
             {backup === 'running' ? 'Zálohuji…' : 'Zálohovat PostgreSQL'}
           </button>
+        </SettingRow>
+        <SettingRow
+          help={
+            <>
+              Sdílené tajemství <code>GEXLENS_API_TOKEN</code> z lokálního <code>.env</code> (#542).
+              Bez něj API zálohu odmítne — dump nese celý archiv, takže nesmí být ke stažení bez
+              ověření. Zůstává jen v tomhle prohlížeči, na server se neukládá.
+            </>
+          }
+        >
+          <label>
+            API token
+            <input
+              type="password"
+              value={apiToken}
+              autoComplete="off"
+              onChange={(event) => {
+                setApiToken(event.target.value)
+                saveApiToken(event.target.value)
+              }}
+            />
+          </label>
         </SettingRow>
         {backupNote && (
           <p className="muted" role="status">

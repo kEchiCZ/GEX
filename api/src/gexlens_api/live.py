@@ -11,12 +11,50 @@ zahazují nejstarší framy (pomalý klient nikdy neblokuje publish ani server).
 import asyncio
 import contextlib
 import logging
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
 Message = dict[str, object]
+
+# Stropy proti vyčerpání zdrojů (#542 H2). `publish` iteruje vzory KAŽDÉHO
+# subskribenta, takže neomezená množina kanálů je CPU DoS v event loopu —
+# degraduje doručování všem ostatním, nejen útočníkovi.
+MAX_SUBSCRIBERS = 64
+MAX_CHANNELS_PER_SUBSCRIBER = 256
+MAX_CHANNEL_LENGTH = 128
+# Frontend odebírá kanály tvaru `levels.ES.20260807` nebo `price.*`
+CHANNEL_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+
+class TooManySubscribers(Exception):
+    """Vyčerpaný strop souběžných WS spojení."""
+
+
+class TooManyChannels(Exception):
+    """Subskribent překročil strop kanálů."""
+
+
+def parse_channels(raw: object) -> list[str]:
+    """Zvaliduje seznam kanálů z klientské zprávy.
+
+    Bez kontroly typu se řetězec `"abc"` iteroval po znacích (subskripce
+    kanálů `a`, `b`, `c`) a číslo shodilo spojení neodchyceným TypeError.
+    """
+    if not isinstance(raw, list):
+        raise ValueError("Pole channels musí být seznam řetězců")
+    if len(raw) > MAX_CHANNELS_PER_SUBSCRIBER:
+        raise ValueError(f"Najednou lze poslat nejvýš {MAX_CHANNELS_PER_SUBSCRIBER} kanálů")
+    channels: list[str] = []
+    for item in raw:
+        if not isinstance(item, str) or not item:
+            raise ValueError("Kanál musí být neprázdný řetězec")
+        if len(item) > MAX_CHANNEL_LENGTH or not CHANNEL_RE.match(item):
+            raise ValueError(f"Neplatný název kanálu: {item[:32]!r}")
+        channels.append(item)
+    return channels
 
 
 @dataclass
@@ -35,12 +73,15 @@ def channel_matches(patterns: set[str], channel: str) -> bool:
 class LiveHub:
     """Pub/sub rozcestník mezi enginem (publish) a WebSocket klienty (fronty)."""
 
-    def __init__(self, queue_size: int = 100) -> None:
+    def __init__(self, queue_size: int = 100, max_subscribers: int = MAX_SUBSCRIBERS) -> None:
         self._queue_size = queue_size
+        self._max_subscribers = max_subscribers
         self._subscribers: dict[int, _Subscriber] = {}
         self._next_id = 0
 
     def register(self) -> tuple[int, asyncio.Queue[Message]]:
+        if len(self._subscribers) >= self._max_subscribers:
+            raise TooManySubscribers(f"Strop {self._max_subscribers} souběžných WS spojení")
         self._next_id += 1
         subscriber = _Subscriber(queue=asyncio.Queue(maxsize=self._queue_size))
         self._subscribers[self._next_id] = subscriber
@@ -51,7 +92,13 @@ class LiveHub:
 
     def subscribe(self, subscriber_id: int, channels: Iterable[str]) -> set[str]:
         subscriber = self._subscribers[subscriber_id]
-        subscriber.channels.update(channels)
+        merged = subscriber.channels | set(channels)
+        if len(merged) > MAX_CHANNELS_PER_SUBSCRIBER:
+            raise TooManyChannels(
+                f"Strop {MAX_CHANNELS_PER_SUBSCRIBER} kanálů na spojení "
+                f"(zbývá {MAX_CHANNELS_PER_SUBSCRIBER - len(subscriber.channels)})"
+            )
+        subscriber.channels = merged
         return set(subscriber.channels)
 
     def unsubscribe(self, subscriber_id: int, channels: Iterable[str]) -> set[str]:

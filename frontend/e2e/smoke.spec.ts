@@ -3,8 +3,9 @@
 Reprodukuje časování, kterým #146 shazoval PRODUKCI na bílou stránku, zatímco
 dev i jsdom testy byly zelené:
 
-- Na portu API běží TCP „tarpit": spojení přijme a mlčí → WebSocket zůstane
-  viset ve stavu CONNECTING po celý test (žádné onopen/onclose).
+- Na portu API běží TCP „tarpit": spojení přijme a mlčí → WebSocket (tunelovaný
+  přes proxy `/api` ve `vite preview`) zůstane viset ve stavu CONNECTING po celý
+  test (žádné onopen/onclose).
 - REST je mockovaný přes page.route, takže expirace dorazí okamžitě → frontend
   volá subscribe kanálů v okně, kdy je socket prokazatelně CONNECTING.
   Chybný send() v tom stavu = InvalidStateError = pageerror + zmizelá aplikace.
@@ -16,8 +17,8 @@ pořád víc, než dělal CI do #154.
 import net from 'node:net'
 import { expect, test } from '@playwright/test'
 
-/** Default z frontend/src/config.ts (VITE_API_BASE se v produkčním buildu CI nenastavuje).
-Lokální ladění proti buildu s jiným VITE_API_BASE: SMOKE_API_PORT=18000 npm run smoke */
+/** Cíl proxy `/api` z vite.config.ts (#542) — bundle volá relativní cestu, WS
+tunel končí tady. Lokální ladění proti jinému portu: SMOKE_API_PORT=18000 npm run smoke */
 const API_PORT = Number(process.env.SMOKE_API_PORT ?? 8000)
 
 let tarpit: net.Server | null = null
@@ -51,7 +52,7 @@ test('produkční bundle se načte, přežije subscribe během CONNECTING a nevy
 
   // REST mock: expirace hned (spouští subscribe WS kanálů), zbytek 404 jako
   // chybějící API — ty cesty musí aplikace přežít (fallback na demo data)
-  await page.route(`http://127.0.0.1:${API_PORT}/**`, async (route) => {
+  await page.route('**/api/**', async (route) => {
     if (route.request().url().endsWith('/instruments/ES/expiries')) {
       await route.fulfill({ json: { expiries: ['20991231'] } })
       return

@@ -22,9 +22,13 @@ from gexlens_engine.storage.sentiment import (
 # relativní — pevné datum by test po pár hodinách přestalo platit
 NOW = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
 
+INTERNAL_TOKEN = "test-token"
+
 
 @pytest.fixture
-def client(tmp_path: Path) -> TestClient:
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    # Interní ingest je od #542 za tokenem; news-engine ho posílá stejně
+    monkeypatch.setenv("GEXLENS_API_TOKEN", INTERNAL_TOKEN)
     settings = Settings(
         data_dir=tmp_path / "data",
         database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}",
@@ -92,7 +96,7 @@ def client(tmp_path: Path) -> TestClient:
         ),
         series_dir / f"{NOW.date().isoformat()}.parquet",
     )
-    return TestClient(app)
+    return TestClient(app, headers={"X-GEXLens-Token": INTERNAL_TOKEN})
 
 
 def test_news_feed_filters(client: TestClient) -> None:
