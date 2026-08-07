@@ -21,7 +21,7 @@ ENGINE_SETTINGS = frozenset(
 
 # Předvolby UI držené na serveru, ať platí napříč prohlížeči. Engine je nečte,
 # takže nemají bezpečnostní dopad — jen musí projít validací.
-# `reconnect_requested` píše Console, ale nikdo ho zatím nečte (viz #551).
+# `reconnect_requested` píše Console, ale nikdo ho zatím nečte (viz #554).
 UI_SETTINGS = frozenset(["theme", "language", "sessions", "reconnect_requested"])
 
 # `retro_pass` chybí schválně — ten si news-engine píše přímo do DB, ne přes API.
