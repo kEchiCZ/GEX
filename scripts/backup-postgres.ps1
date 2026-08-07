@@ -41,8 +41,14 @@ Write-Host "Zálohuji $Database z $Container -> $file" -ForegroundColor Cyan
 $dump = "docker exec $Container pg_dump --username $User --format=custom --no-owner --no-privileges $Database"
 cmd /c "$dump > `"$file`""
 if ($LASTEXITCODE -ne 0) { Remove-Item $file -ErrorAction SilentlyContinue; throw "pg_dump selhal (kód $LASTEXITCODE)" }
-# Platný custom dump začíná signaturou PGDMP — chytí i tiché poškození roury
-$magic = [Text.Encoding]::ASCII.GetString([byte[]](Get-Content $file -Encoding Byte -TotalCount 5))
+# Platný custom dump začíná signaturou PGDMP — chytí i tiché poškození roury.
+# Čte se přes FileStream: `Get-Content -Encoding Byte` v PowerShellu 7 neexistuje
+# (nahrazeno `-AsByteStream`) a skript na něm padal AŽ PO vytvoření dumpu, takže
+# záloha vznikla, ale ohlásila se jako chyba a neproběhla rotace.
+$head = New-Object byte[] 5
+$stream = [IO.File]::OpenRead($file)
+try { [void]$stream.Read($head, 0, $head.Length) } finally { $stream.Dispose() }
+$magic = [Text.Encoding]::ASCII.GetString($head)
 if ($magic -ne 'PGDMP') { Remove-Item $file -Force; throw "Záloha není platný pg_dump (hlavička '$magic')" }
 
 $size = (Get-Item $file).Length / 1MB
