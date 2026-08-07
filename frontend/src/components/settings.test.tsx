@@ -7,12 +7,18 @@ import { AppStateProvider } from '../state/AppState'
 const puts: { key: string; value: unknown }[] = []
 // Serverové hodnoty per test — výchozí stav simuluje načtené settings
 let serverValues: Record<string, unknown> = {}
+// Chyba, kterou má saveAll vrátit (null = uložení projde)
+let saveFailure: Error | null = null
 const backupMock = vi.fn<() => Promise<'saved' | 'downloaded'>>()
 
 vi.mock('../api/settings', () => ({
   useServerSettings: () => ({
     values: serverValues,
     put: (key: string, value: unknown) => puts.push({ key, value }),
+    saveAll: async (entries: [string, unknown][]) => {
+      if (saveFailure) throw saveFailure
+      for (const [key, value] of entries) puts.push({ key, value })
+    },
   }),
 }))
 
@@ -22,10 +28,13 @@ vi.mock('../api/backup', () => ({
 
 beforeEach(() => {
   serverValues = { ibkr_port: 7496, retention_days: 90 }
+  saveFailure = null
 })
 
 afterEach(() => {
   puts.length = 0
+  saveFailure = null
+  vi.useRealTimers()
   backupMock.mockReset()
 })
 
@@ -54,11 +63,41 @@ test('Uložit odešle všechny rozepsané změny najednou', async () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'Uložit' }))
 
-  expect(puts).toEqual([
-    { key: 'ibkr_port', value: 7497 },
-    { key: 'retention_days', value: 120 },
-  ])
+  await waitFor(() =>
+    expect(puts).toEqual([
+      { key: 'ibkr_port', value: 7497 },
+      { key: 'retention_days', value: 120 },
+    ]),
+  )
   await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Uloženo'))
+})
+
+test('potvrzení uložení samo zmizí — jinak splyne s klidovým stavem', async () => {
+  renderSettings()
+  fireEvent.change(await screen.findByLabelText('Port'), { target: { value: '7497' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Uložit' }))
+
+  const status = screen.getByRole('status')
+  await waitFor(() => expect(status.textContent).toContain('Uloženo'))
+
+  await waitFor(() => expect(status.textContent).toContain('Žádné neuložené změny'), {
+    timeout: 5000,
+  })
+})
+
+test('odmítnuté uložení se netváří jako úspěch a koncept zůstane (#542)', async () => {
+  // Neznámý klíč vrací od #542 HTTP 422 — dřív se chyba spolkla a UI hlásilo „Uloženo"
+  saveFailure = new Error('Uložení nastavení retention_days selhalo: HTTP 422')
+  renderSettings()
+  fireEvent.change(await screen.findByLabelText('Retence (dny)'), { target: { value: '120' } })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Uložit' }))
+
+  const status = screen.getByRole('status')
+  await waitFor(() => expect(status.textContent).toContain('HTTP 422'))
+  expect(status.textContent).not.toContain('✓ Uloženo')
+  // Koncept se nezahodil — Uložit jde zkusit znovu
+  expect((screen.getByRole('button', { name: 'Uložit' }) as HTMLButtonElement).disabled).toBe(false)
 })
 
 test('Zahodit změny vrátí původní hodnoty a nic neodešle', async () => {
@@ -116,7 +155,9 @@ test('skutečná editace textarey Seance koncept vytvoří a Uložit ji odešle 
 
   expect(screen.getByRole('status').textContent).toContain('Neuloženo')
   fireEvent.click(screen.getByRole('button', { name: 'Uložit' }))
-  expect(puts).toEqual([{ key: 'sessions', value: [{ label: 'Sydney', minuteIdx: 1 }] }])
+  await waitFor(() =>
+    expect(puts).toEqual([{ key: 'sessions', value: [{ label: 'Sydney', minuteIdx: 1 }] }]),
+  )
 })
 
 test('zrušení dialogu „Uložit jako" u zálohy není chyba — žádná hláška (#506)', async () => {

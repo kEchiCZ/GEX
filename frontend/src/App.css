@@ -484,6 +484,29 @@ body {
   color: var(--accent);
 }
 
+/* Potvrzení uložení: barva odliší od klidového šedého textu, krátký náběh dá
+najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnutelná). */
+.settings-actions .save-ok {
+  color: var(--up);
+  animation: settings-saved 160ms ease-out;
+}
+
+.settings-actions .save-error {
+  color: var(--down);
+}
+
+@keyframes settings-saved {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-actions .save-ok {
+    animation: none;
+  }
+}
+
 .console h2,
 .settings h2 {
   font-size: 13px;
