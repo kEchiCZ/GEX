@@ -8,7 +8,7 @@ obrazovky nebo refreshem zahodí a platí původní hodnoty.
 Výjimka je téma: aplikuje se i ukládá okamžitě, protože jde o čistě vizuální
 volbu s okamžitou zpětnou vazbou (AC #167) — čekat u něj na Uložit by mátlo.
 */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { loadApiToken, saveApiToken } from '../api/apiToken'
 import { downloadBackup } from '../api/backup'
 import { useServerSettings } from '../api/settings'
@@ -94,31 +94,50 @@ function SettingRow({ children, help }: { children: React.ReactNode; help: React
 
 export function SettingsView() {
   const { theme, setTheme, status } = useAppState()
-  const { values, put } = useServerSettings()
+  const { values, put, saveAll } = useServerSettings()
   // Rozepsané změny; prázdný objekt = nic k uložení
   const [draft, setDraft] = useState<Record<string, unknown>>({})
   const [backup, setBackup] = useState<'idle' | 'running'>('idle')
   const [backupNote, setBackupNote] = useState<string | null>(null)
   // Token se neukládá na server (je to sdílené tajemství z .env), jen do prohlížeče
   const [apiToken, setApiToken] = useState(() => loadApiToken())
-  const [saved, setSaved] = useState(false)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const dirtyKeys = Object.keys(draft)
   const value = (key: string, fallback: unknown): unknown =>
     key in draft ? draft[key] : (values[key] ?? fallback)
   const edit = (key: string, next: unknown) => {
-    setSaved(false)
+    setSaveState('idle')
     setDraft((previous) => ({ ...previous, [key]: next }))
   }
   const save = () => {
-    for (const [key, next] of Object.entries(draft)) put(key, next)
-    setDraft({})
-    setSaved(true)
+    const entries = Object.entries(draft)
+    setSaveState('saving')
+    setSaveError(null)
+    void saveAll(entries)
+      .then(() => {
+        setDraft({})
+        setSaveState('saved')
+      })
+      .catch((error: unknown) => {
+        // Koncept se NEmaže — uživatel musí mít co zkusit znovu
+        setSaveError(error instanceof Error ? error.message : 'Uložení selhalo.')
+        setSaveState('error')
+      })
   }
   const discard = () => {
     setDraft({})
-    setSaved(false)
+    setSaveState('idle')
   }
+
+  // Potvrzení samo zmizí. Trvalé „Uloženo" splyne s klidovým stavem, takže se
+  // po druhém uložení nedá poznat, jestli se něco stalo.
+  useEffect(() => {
+    if (saveState !== 'saved') return
+    const timer = setTimeout(() => setSaveState('idle'), 3000)
+    return () => clearTimeout(timer)
+  }, [saveState])
 
   const runBackup = async () => {
     setBackup('running')
@@ -365,21 +384,37 @@ export function SettingsView() {
       </section>
 
       <div className="settings-actions">
-        <button className="chip active" onClick={save} disabled={dirtyKeys.length === 0}>
+        <button
+          className="chip active"
+          onClick={save}
+          disabled={dirtyKeys.length === 0 || saveState === 'saving'}
+        >
           Uložit
         </button>
-        <button className="chip" onClick={discard} disabled={dirtyKeys.length === 0}>
+        <button
+          className="chip"
+          onClick={discard}
+          disabled={dirtyKeys.length === 0 || saveState === 'saving'}
+        >
           Zahodit změny
         </button>
+        {/* Pořadí větví: chyba a průběh mají přednost před „Neuloženo" — po
+        neúspěchu koncept zůstává, takže by ho jinak přebilo. */}
         <span className="muted" role="status">
-          {dirtyKeys.length > 0 ? (
+          {saveState === 'error' ? (
+            <span className="save-error">
+              Uložení selhalo: {saveError} Změny zůstávají rozepsané.
+            </span>
+          ) : saveState === 'saving' ? (
+            'Ukládám…'
+          ) : dirtyKeys.length > 0 ? (
             <span className="dirty">
               Neuloženo: {dirtyKeys.length}{' '}
               {dirtyKeys.length === 1 ? 'změna' : dirtyKeys.length < 5 ? 'změny' : 'změn'} — bez
               uložení se při odchodu zahodí.
             </span>
-          ) : saved ? (
-            'Uloženo.'
+          ) : saveState === 'saved' ? (
+            <span className="save-ok">✓ Uloženo</span>
           ) : (
             'Žádné neuložené změny.'
           )}
