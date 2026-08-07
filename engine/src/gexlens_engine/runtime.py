@@ -31,7 +31,11 @@ from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
-from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
+from gexlens_engine.ibkr.scheduler import (
+    GREEKS_SOURCE_COMPUTED,
+    SubscriptionScheduler,
+    SweepMetrics,
+)
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.parquet_store import (
@@ -39,6 +43,7 @@ from gexlens_engine.storage.parquet_store import (
     FlowRowLike,
     GexFieldRow,
     GexProfileRow,
+    GreeksSourceRow,
     LadderRow,
     Levels2Row,
     LevelsRow,
@@ -133,6 +138,8 @@ class EngineRuntime:
     _catch_up_pending: bool = field(default=True, init=False)
     # Navázání kumulativního net objemu z partice netflow po restartu (#232)
     _netflow_seed_pending: bool = field(default=True, init=False)
+    # Throttle logu dopočtených Greeks (#547): loguje se jen změna počtu
+    _computed_greeks_logged: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
@@ -198,12 +205,19 @@ class EngineRuntime:
         gex_specs: list[OptionContractSpec] = []
         profile_contracts: list[ProfileContract] = []
         oi_missing: list[OiMissingRow] = []
+        greeks_computed: list[GreeksSourceRow] = []
         for spec in self.contracts:
             cached = quotes.get(spec)
             if cached is None:
                 continue
             snapshot = cached.snapshot
             age = cached.age_s(now_mono)
+            # Vlastní BS dopočet místo TWS modelu (#547) — do vlastní řady,
+            # ať jde v grafu i zpětně poznat, které Greeks nejsou měřené
+            if cached.source == GREEKS_SOURCE_COMPUTED:
+                greeks_computed.append(
+                    GreeksSourceRow(ts_min=ts_min, strike=spec.strike, right=spec.right)
+                )
             archived_oi = self.oi_repository.get_oi(
                 spec.symbol, day, spec.strike, spec.right, expiry=spec.expiry
             )
@@ -292,21 +306,27 @@ class EngineRuntime:
                 )
             # Inkrementální řez minuty pro živý append heatmapy (#127) — jen pole nutná
             # pro frontend grid/profil; jede pro aktivní i sekundární řetěz
+            computed_keys = {(row.strike, row.right) for row in greeks_computed}
+            message_rows: list[dict[str, object]] = []
+            for row in rows:
+                message_row: dict[str, object] = {
+                    "strike": row.strike,
+                    "right": row.right,
+                    "oi": row.oi,
+                    "volume": row.volume,
+                    "delta": row.delta,
+                    # Vega pro VEX módy (#201) — aditivní pole
+                    "vega": row.vega,
+                    "stale_age": row.stale_age,
+                }
+                # Aditivní klíč (#547): Greeks jsou vlastní BS dopočet, ne TWS
+                # model — posílá se jen když platí, běžný řádek nenafukuje
+                if (row.strike, row.right) in computed_keys:
+                    message_row["greeks_computed"] = True
+                message_rows.append(message_row)
             snapshot_message: dict[str, object] = {
                 "ts_min": ts_min.isoformat(),
-                "rows": [
-                    {
-                        "strike": row.strike,
-                        "right": row.right,
-                        "oi": row.oi,
-                        "volume": row.volume,
-                        "delta": row.delta,
-                        # Vega pro VEX módy (#201) — aditivní pole
-                        "vega": row.vega,
-                        "stale_age": row.stale_age,
-                    }
-                    for row in rows
-                ],
+                "rows": message_rows,
             }
             # Aditivní klíč (#518) — starší klienti ho ignorují; posílá se jen
             # když platí, běžná minuta zprávu nenafukuje
@@ -339,6 +359,22 @@ class EngineRuntime:
                 ts_min.isoformat(),
                 len(oi_missing),
             )
+        # Dopočtené Greeks (#547) — vlastní řada po vzoru oimissing; dokud TWS
+        # model dodává, řada nevznikne vůbec
+        if greeks_computed:
+            await asyncio.to_thread(
+                self.writer.write_greeks_source, self.symbol, self.expiry, day, greeks_computed
+            )
+        # Throttle (#547): hlásit jen změnu počtu, ne stejnou větu každou minutu
+        if len(greeks_computed) != self._computed_greeks_logged:
+            self._computed_greeks_logged = len(greeks_computed)
+            if greeks_computed:
+                logger.warning(
+                    "%s %s: %d striků s vlastními BS greeks — TWS model je nedodává",
+                    self.symbol,
+                    ts_min.isoformat(),
+                    len(greeks_computed),
+                )
         # Sekundární zdi (ADR-0008) — vlastní řada, ať se nemění LEVELS_SCHEMA
         levels2_row = Levels2Row(
             ts_min=ts_min,

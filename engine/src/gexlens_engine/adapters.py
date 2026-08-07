@@ -14,7 +14,7 @@ import httpx
 from ib_async import IB, Contract, FuturesOption, Option
 
 from gexlens_engine.ibkr.discovery import OptionContractSpec
-from gexlens_engine.ibkr.scheduler import QuoteSnapshot
+from gexlens_engine.ibkr.scheduler import PartialQuote, QuoteSnapshot
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import PublisherLike
 
@@ -58,7 +58,9 @@ class IbQuoteStreamer:
         self._qualified[spec] = first
         return first
 
-    async def fetch_quote(self, spec: OptionContractSpec, timeout_s: float) -> QuoteSnapshot | None:
+    async def fetch_quote(
+        self, spec: OptionContractSpec, timeout_s: float
+    ) -> QuoteSnapshot | PartialQuote | None:
         contract = await self._contract(spec)
         if contract is None:
             return None
@@ -89,6 +91,17 @@ class IbQuoteStreamer:
                     gamma=gamma,
                     theta=theta if theta is not None and _valid(theta) else 0.0,
                     vega=vega if vega is not None and _valid(vega) else 0.0,
+                )
+            # Timeout bez modelGreeks (#547): kotace můžou žít i tak — TWS
+            # opční model umí pro část striků trvale mlčet (7. 8.: ATM pásmo
+            # NQ QN1). Částečná kotace umožní scheduleru dopočítat vlastní
+            # BS greeks místo věčně nekompletního striku.
+            if _valid(ticker.bid) and _valid(ticker.ask):
+                return PartialQuote(
+                    bid=ticker.bid,
+                    ask=ticker.ask,
+                    last=ticker.last if _valid(ticker.last) else (ticker.bid + ticker.ask) / 2,
+                    volume=ticker.volume if _valid(ticker.volume) else 0.0,
                 )
             return None
         finally:

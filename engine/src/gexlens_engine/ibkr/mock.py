@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.hotzone import HotZoneClientLike, StreamLimitError
-from gexlens_engine.ibkr.scheduler import QuoteSnapshot
+from gexlens_engine.ibkr.scheduler import PartialQuote, QuoteSnapshot
 from gexlens_engine.ibkr.underlying import Bar
 
 
@@ -103,8 +103,10 @@ class MockQuoteStreamer:
     """Mock zdroje kotací pro SubscriptionScheduler.
 
     `fail_first` určuje, kolik prvních pokusů daného kontraktu vrátí nekompletní
-    data (None); `always_fail` kontrakty nedodají data nikdy. `delay_s` simuluje
-    latenci subskripce.
+    data (None); `always_fail` kontrakty nedodají data nikdy. `partial_greeks`
+    kontrakty vrací trvale jen kotace bez Greeks (#547: TWS model mlčí),
+    `partial_first` totéž pro N prvních pokusů. `delay_s` simuluje latenci
+    subskripce.
     """
 
     def __init__(
@@ -112,17 +114,27 @@ class MockQuoteStreamer:
         *,
         fail_first: dict[OptionContractSpec, int] | None = None,
         always_fail: set[OptionContractSpec] | None = None,
+        partial_greeks: set[OptionContractSpec] | None = None,
+        partial_first: dict[OptionContractSpec, int] | None = None,
+        partial_quote: PartialQuote | None = None,
         delay_s: float = 0.0,
     ) -> None:
         self.fail_first = dict(fail_first or {})
         self.always_fail = set(always_fail or ())
+        self.partial_greeks = set(partial_greeks or ())
+        self.partial_first = dict(partial_first or {})
+        self.partial_quote = partial_quote or PartialQuote(
+            bid=10.0, ask=10.5, last=10.25, volume=100.0
+        )
         self.delay_s = delay_s
         self.fetch_calls: list[OptionContractSpec] = []
         self.max_concurrent = 0
         self._concurrent = 0
         self._attempts: dict[OptionContractSpec, int] = {}
 
-    async def fetch_quote(self, spec: OptionContractSpec, timeout_s: float) -> QuoteSnapshot | None:
+    async def fetch_quote(
+        self, spec: OptionContractSpec, timeout_s: float
+    ) -> QuoteSnapshot | PartialQuote | None:
         self.fetch_calls.append(spec)
         self._concurrent += 1
         self.max_concurrent = max(self.max_concurrent, self._concurrent)
@@ -136,6 +148,8 @@ class MockQuoteStreamer:
             attempt = self._attempts[spec] = self._attempts.get(spec, 0) + 1
             if attempt <= self.fail_first.get(spec, 0):
                 return None
+            if spec in self.partial_greeks or attempt <= self.partial_first.get(spec, 0):
+                return self.partial_quote
             return QuoteSnapshot(
                 bid=10.0,
                 ask=10.5,

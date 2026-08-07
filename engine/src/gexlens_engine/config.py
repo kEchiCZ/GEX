@@ -125,6 +125,16 @@ class Settings(BaseSettings):
     atm_sweep_width: int = Field(default=30, ge=1)
     # Max pokusů repair fronty na kontrakt za sweep, pak stale označení
     repair_max_attempts: int = Field(default=3, ge=1)
+    # Repair backoff per kontrakt (#547): odklad po k. neúspěšném kole je
+    # 0 → base → 2·base → … → strop. Bez něj mlel repair trvale vadné kontrakty
+    # à 4 s celé hodiny (pacing zátěž bez jediného úspěchu — 7. 8. ATM pásmo NQ).
+    repair_backoff_base_s: float = Field(default=4.0, gt=0)
+    repair_backoff_max_s: float = Field(default=300.0, gt=0)
+    # Po N neúspěšných repair kolech alert strikes_stalled (hint: restart TWS)
+    repair_stall_rounds: int = Field(default=10, ge=1)
+    # Fallback vlastních greeks (#547): po N sweepech s živými kotacemi bez TWS
+    # modelGreeks se greeks dopočítají BS modelem z mid ceny (IV inverzí)
+    greeks_fallback_sweeps: int = Field(default=3, ge=1)
     # Kapacita market data lines účtu (ADR-0001: naměřeno ≥ 150; default konzervativní)
     market_data_lines: int = Field(default=100, ge=1)
     # Maximální stáří kotace použitelné pro výpočty (#306). Zmrzlá cache se
@@ -181,6 +191,8 @@ class Settings(BaseSettings):
     def _validate_backoff(self) -> "Settings":
         if self.reconnect_backoff_max_s < self.reconnect_backoff_base_s:
             raise ValueError("reconnect_backoff_max_s musí být ≥ reconnect_backoff_base_s")
+        if self.repair_backoff_max_s < self.repair_backoff_base_s:
+            raise ValueError("repair_backoff_max_s musí být ≥ repair_backoff_base_s")
         try:
             ZoneInfo(self.oi_publication_tz)
         except (ZoneInfoNotFoundError, ValueError) as exc:

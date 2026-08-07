@@ -38,7 +38,11 @@ from gexlens_engine.ibkr.discovery import (
     build_contracts,
 )
 from gexlens_engine.ibkr.newsticks import NewsTickCollector, NewsTickLike
-from gexlens_engine.ibkr.scheduler import GreeksStallDetector, SweepMetrics
+from gexlens_engine.ibkr.scheduler import (
+    GreeksStallDetector,
+    RepairStallDetector,
+    SweepMetrics,
+)
 from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
@@ -290,6 +294,8 @@ class InstrumentPipeline:
     stall_detector: BarsStallDetector | None = None
     # Hlídání tiché ztráty Greeks (#306); default z konfigurace v __post_init__
     greeks_detector: GreeksStallDetector | None = None
+    # Trvale selhávající repair kontraktů (#547); default v __post_init__
+    repair_detector: RepairStallDetector | None = None
     # Broker headlines z ticku 292 (#291); None = live news vypnuté
     news_ticks: NewsTickCollector | None = None
     read_news_ticks: Callable[[], Sequence[NewsTickLike]] | None = None
@@ -317,6 +323,8 @@ class InstrumentPipeline:
             self.greeks_detector = GreeksStallDetector(
                 self.settings.greeks_stall_share, self.settings.greeks_stall_cycles
             )
+        if self.repair_detector is None:
+            self.repair_detector = RepairStallDetector()
 
     async def _archive_new_strikes(
         self,
@@ -760,6 +768,7 @@ class InstrumentPipeline:
         await self._watch_bars(now, spot, bars, forming)
         metrics = await self.runtime.run_cycle(now, spot, bars, forming)
         await self._watch_greeks(now, metrics)
+        await self._watch_repair(now, metrics)
 
         # Setup detektor (ADR-0004) — jeho pád nesmí shodit sběr dat
         if self.setup_engine is not None:
@@ -863,6 +872,54 @@ class InstrumentPipeline:
                     "symbol": self.symbol,
                     "message": f"Greeks {self.symbol} zase chodí — striky se vrátily "
                     "do GEX a úrovní",
+                    "ts": now.timestamp(),
+                },
+            )
+
+    async def _watch_repair(self, now: dt.datetime, metrics: SweepMetrics) -> None:
+        """Trvale selhávající repair (#547): alert `strikes_stalled` + recovery.
+
+        7. 8. TWS celou seanci nedodávala modelGreeks pro ATM pásmo NQ QN1 —
+        repair běžel hodiny à 4 s bez jediného úspěchu a bez jediné hlášky.
+        Kontrakty s ≥ `repair_stall_rounds` neúspěšnými koly nese scheduler
+        v metrikách; tady se z hrany dělá alert (vzor bars_stalled).
+        """
+        detector = self.repair_detector
+        if detector is None:
+            return
+        event = detector.observe(metrics.stalled_count)
+        if event is None:
+            return
+        if event == "stalled":
+            logger.error(
+                "Repair %s: %d kontraktů se nedaří obnovit ≥ %d kol — TWS pro ně "
+                "trvale nedodává kompletní data; retry běží s backoffem, "
+                "zvaž restart TWS",
+                self.symbol,
+                metrics.stalled_count,
+                self.settings.repair_stall_rounds,
+            )
+            await self.publisher.publish(
+                "alerts",
+                {
+                    "kind": "strikes_stalled",
+                    "symbol": self.symbol,
+                    "message": f"TWS dlouhodobě nedodává kompletní data pro "
+                    f"{metrics.stalled_count} striků {self.symbol} — repair běží "
+                    "s backoffem; striky s živými kotacemi jedou na dopočtených "
+                    "Greeks (BS z mid ceny). Pomáhá restart TWS.",
+                    "ts": now.timestamp(),
+                },
+            )
+        elif event == "recovered":
+            logger.info("Repair %s: zaseknuté striky se zotavily", self.symbol)
+            await self.publisher.publish(
+                "alerts",
+                {
+                    "kind": "strikes_recovered",
+                    "symbol": self.symbol,
+                    "message": f"Striky {self.symbol} se zotavily — TWS zase dodává "
+                    "kompletní data, dopočtené Greeks skončily",
                     "ts": now.timestamp(),
                 },
             )

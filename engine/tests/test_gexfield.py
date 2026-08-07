@@ -9,8 +9,11 @@ import pytest
 from gexlens_engine.compute.gexfield import (
     ProfileContract,
     bs_gamma,
+    bs_price,
+    fallback_greeks,
     gamma_field,
     gamma_profile,
+    implied_vol,
 )
 from gexlens_engine.config import Settings
 from gexlens_engine.storage.parquet_store import GexFieldRow, GexProfileRow, SnapshotWriter
@@ -264,3 +267,76 @@ def test_greek_profiles_match_gamma_and_add_charm_vanna() -> None:
     assert bs_vanna(spot, strike, iv, tau) == pytest.approx(-phi * d2 / iv * 0.01)
     assert bs_charm(spot, strike, 0.0, tau) == 0.0
     assert bs_vanna(spot, strike, iv, 0.0) == 0.0
+
+
+# ── IV inverze a fallback greeks (#547) ────────────────────────────────
+
+
+def test_implied_vol_round_trip_call_i_put() -> None:
+    """IV inverze proti známé BS ceně: round-trip na obou stranách."""
+    tau = 30.0 / 365.0
+    call_price = bs_price(7600.0, 7650.0, 0.22, tau, "C")
+    assert implied_vol(call_price, 7600.0, 7650.0, tau, "C") == pytest.approx(0.22, abs=1e-6)
+
+    put_price = bs_price(7600.0, 7650.0, 0.22, tau, "P")
+    # Put-call parita při r = 0: P = C − S + K
+    assert put_price == pytest.approx(call_price - 7600.0 + 7650.0, abs=1e-9)
+    assert implied_vol(put_price, 7600.0, 7650.0, tau, "P") == pytest.approx(0.22, abs=1e-6)
+
+
+def test_implied_vol_round_trip_kratke_tau_a_vysoka_vol() -> None:
+    """0DTE poměry: krátké τ i vysoká IV se musí invertovat zpátky."""
+    tau = 300.0 / (365.0 * 24 * 3600)  # podlaha TAU_FLOOR_S
+    price = bs_price(29500.0, 29500.0, 1.1, tau, "C")
+    assert implied_vol(price, 29500.0, 29500.0, tau, "C") == pytest.approx(1.1, rel=1e-5)
+
+
+def test_implied_vol_mimo_pasmo_vraci_none() -> None:
+    """Kraj (#547): cena pod vnitřní hodnotou nebo nad podkladem → žádná IV."""
+    tau = 5.0 / 365.0
+    # ITM call: vnitřní hodnota 100, mid jen 99 → arbitrážní cena, nekonverguje
+    assert implied_vol(99.0, 7600.0, 7500.0, tau, "C") is None
+    # Cena nad horní hranicí pásma (call ≥ spot)
+    assert implied_vol(7601.0, 7600.0, 7500.0, tau, "C") is None
+    # Nevalidní vstupy
+    assert implied_vol(0.0, 7600.0, 7500.0, tau, "C") is None
+    assert implied_vol(10.0, 7600.0, 7500.0, 0.0, "C") is None
+    assert implied_vol(10.0, 7600.0, 7500.0, tau, "X") is None
+
+
+def test_fallback_greeks_konzistentni_s_bs_formuli() -> None:
+    """Fallback (#547): IV z mid, gamma shodná se sdílenou bs_gamma, znaménka sedí."""
+    now = dt.datetime(2026, 7, 16, 14, 0, tzinfo=dt.UTC)
+    settle = now + dt.timedelta(days=30)
+    tau = 30.0 / 365.0
+    mid = bs_price(7600.0, 7650.0, 0.25, tau, "C")
+
+    greeks = fallback_greeks(spot=7600.0, strike=7650.0, right="C", mid=mid, settle=settle, now=now)
+
+    assert greeks is not None
+    assert greeks.iv == pytest.approx(0.25, abs=1e-6)
+    assert greeks.gamma == pytest.approx(bs_gamma(7600.0, 7650.0, greeks.iv, tau), rel=1e-6)
+    assert 0.0 < greeks.delta < 1.0
+    assert greeks.theta < 0.0  # časový rozpad
+    assert greeks.vega > 0.0
+
+    put = fallback_greeks(
+        spot=7600.0, strike=7650.0, right="P", mid=mid + 50.0, settle=settle, now=now
+    )
+    assert put is not None
+    assert -1.0 < put.delta < 0.0
+
+
+def test_fallback_greeks_nekonverguje_zadne_vymyslene_hodnoty() -> None:
+    """Kraj (#547): mid pod vnitřní hodnotou → None, strike zůstane nekompletní."""
+    now = dt.datetime(2026, 7, 16, 14, 0, tzinfo=dt.UTC)
+    settle = now + dt.timedelta(days=5)
+    # ITM call: vnitřní hodnota 100, mid 10.25 — kotace evidentně nesedí k podkladu
+    assert (
+        fallback_greeks(spot=7600.0, strike=7500.0, right="C", mid=10.25, settle=settle, now=now)
+        is None
+    )
+    assert (
+        fallback_greeks(spot=7600.0, strike=7500.0, right="C", mid=0.0, settle=settle, now=now)
+        is None
+    )
