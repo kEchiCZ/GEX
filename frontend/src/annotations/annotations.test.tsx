@@ -61,6 +61,38 @@ test('guma najde anotaci v toleranci, mimo toleranci nic', () => {
   expect(nearestAnnotationId([SAVED], { minute: 200, strike: 7800 }, 5, 10)).toBeNull()
 })
 
+test('hit-test měří vzdálenost od úsečky, ne jen od bodů (#594)', () => {
+  // SAVED vede z (10, 7420) do (30, 7450) — střed úsečky je (20, 7435)
+  expect(nearestAnnotationId([SAVED], { minute: 20, strike: 7435 }, 5, 10)).toBe(7)
+  // Bod stejně daleko od OBOU konců, ale mimo úsečku (nad ní) → netrefí
+  expect(nearestAnnotationId([SAVED], { minute: 20, strike: 7470 }, 5, 10)).toBeNull()
+  // Za koncem úsečky se netrefí taky (průmět je ořezaný na konce, ne přímka)
+  expect(nearestAnnotationId([SAVED], { minute: 60, strike: 7495 }, 5, 10)).toBeNull()
+  // Freehand: kdekoli na tahu
+  const stroke: StoredAnnotation = {
+    id: 5,
+    payload: {
+      tool: 'freehand',
+      color: '#fff',
+      points: [
+        { minute: 0, strike: 7400 },
+        { minute: 40, strike: 7400 },
+        { minute: 40, strike: 7500 },
+      ],
+    },
+  }
+  expect(nearestAnnotationId([stroke], { minute: 20, strike: 7401 }, 5, 10)).toBe(5)
+  expect(nearestAnnotationId([stroke], { minute: 41, strike: 7450 }, 5, 10)).toBe(5)
+  expect(nearestAnnotationId([stroke], { minute: 20, strike: 7450 }, 5, 10)).toBeNull()
+  // Jednobodová (degenerovaná) anotace zůstává na vzdálenosti od bodu
+  const dot: StoredAnnotation = {
+    id: 6,
+    payload: { tool: 'line', color: '#fff', points: [{ minute: 10, strike: 7420 }] },
+  }
+  expect(nearestAnnotationId([dot], { minute: 11, strike: 7421 }, 5, 10)).toBe(6)
+  expect(nearestAnnotationId([dot], { minute: 40, strike: 7420 }, 5, 10)).toBeNull()
+})
+
 // ── Mapa 1m osy: minuta dne ↔ index sloupce (#502) ─────────────────
 
 const isoMinute = (minute: number): string =>

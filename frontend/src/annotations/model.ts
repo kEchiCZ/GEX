@@ -76,20 +76,47 @@ export function axisIndexFromMinute(offsets: number[], minute: number): number {
   return low + (span > 0 ? (minute - offsets[low]) / span : 0)
 }
 
-/** Najde anotaci nejblíž bodu (guma); vzdálenost normalizovaná tolerancemi os. */
+/** Vzdálenost bodu od úsečky `a`–`b` (vše v normalizovaných souřadnicích). */
+function segmentDistance(
+  point: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): number {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const lengthSq = dx * dx + dy * dy
+  if (lengthSq === 0) return Math.hypot(point.x - a.x, point.y - a.y)
+  // Průmět bodu na úsečku, ořezaný na její rozsah (konce, ne přímka)
+  const t = Math.min(1, Math.max(0, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq))
+  return Math.hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy))
+}
+
+/** Najde anotaci nejblíž bodu (guma #28, uchopení pro přesun #589).
+
+Měří se vzdálenost od ÚSEČEK mezi po sobě jdoucími body, ne jen od samotných bodů (#594):
+uprostřed dlouhé linie se jinak nedalo chytit nic, i když se tam kreslí. Souřadnice se
+normalizují tolerancemi os, takže 1 = hranice tolerance a obě osy váží stejně. */
 export function nearestAnnotationId(
   annotations: StoredAnnotation[],
   point: AnnotationPoint,
   minuteTolerance: number,
   strikeTolerance: number,
 ): number | null {
+  const normalize = (item: AnnotationPoint) => ({
+    x: item.minute / minuteTolerance,
+    y: item.strike / strikeTolerance,
+  })
+  const target = normalize(point)
   let bestId: number | null = null
   let bestDistance = 1 // > 1 = mimo toleranci
   for (const annotation of annotations) {
-    for (const candidate of annotation.payload.points) {
-      const dx = (candidate.minute - point.minute) / minuteTolerance
-      const dy = (candidate.strike - point.strike) / strikeTolerance
-      const distance = Math.sqrt(dx * dx + dy * dy)
+    const points = annotation.payload.points
+    if (points.length === 0) continue
+    for (let index = 0; index < points.length; index += 1) {
+      // Jednobodová anotace nemá úsečku — měří se vzdálenost od bodu
+      const from = normalize(points[index])
+      const to = normalize(points[Math.min(index + 1, points.length - 1)])
+      const distance = segmentDistance(target, from, to)
       if (distance <= bestDistance) {
         bestDistance = distance
         bestId = annotation.id
