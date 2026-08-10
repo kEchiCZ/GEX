@@ -86,7 +86,13 @@ export function projectGrid(grid: HeatmapGrid, extra: number): HeatmapGrid {
 }
 
 /** Popisky osy X pro projektované koše — hranice košů navazující na poslední
-naměřený koš (#584), takže 5m projekce běží `11:05, 11:10, …`, ne `11:03, 11:08`. */
+naměřený koš (#584), takže 5m projekce běží `11:05, 11:10, …`, ne `11:03, 11:08`.
+
+Projekce jde rovnoměrnými kroky `bucketMinutes` a NEkotví se znovu na otevření
+další seance. Do settle (16:00 CT) se seance nemění, takže to hraje roli jen u
+vzdálené expirace, kde projekci zastaví až 24h strop — a i tam se to pozná jen na
+timeframech, které nedělí hodinu (45m/3h/4h). Přesné dorovnání by znamenalo nést
+seznam hranic i do `projectGexField`, což je nepoměr k tomu, co se tím získá. */
 export function projectionLabels(
   lastMinuteIso: string | undefined,
   extra: number,

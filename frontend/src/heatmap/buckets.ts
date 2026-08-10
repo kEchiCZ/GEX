@@ -1,16 +1,21 @@
-/** Plán timeframe košů: mapa minuta osy → koš, zarovnaná na wall-clock (#584).
+/** Plán timeframe košů: mapa minuta osy → koš, zarovnaná na otevření seance (#584).
 
 Osa X je sjednocení minut se snapshotem a minut s barem (#459), takže její první
 minuta padne kamkoliv — třeba na `23:59Z`. Kdyby se koš počítal z INDEXU minuty
 (`floor(minuteIdx / bucketMinutes)`), hranice by se o ten zbytek posunuly a 5m koše
-by běžely `10:59–11:03` místo `11:00–11:04`. Koš je proto určen wall-clockem:
-`floor(epochMs / bucketMs)`, tedy shodně s TradingView.
+by běžely `10:59–11:03` místo `11:00–11:04`. Koš je proto určen časem.
 
-Kotva je UTC midnight = celé hodiny burzovního (ET) času, takže 1m…1h vyjdou 1:1
-s TradingView. 45m/2h/3h/4h TV kotví na open seance — ty zůstávají na UTC kotvě.
+Kotva je **otevření Globex seance 17:00 CT** (ADR-0023, `compute/marketclock.py`),
+stejně jako v TradingView: koš `k` běží od `open + k × timeframe`. Pro timeframy,
+které dělí hodinu (1m…30m, 1h), z toho vyjdou celé hodiny/minuty jako při kotvě na
+půlnoc; u 45m/3h/4h se to liší — 4h koše startují na 17:00/21:00/01:00/05:00 CT
+(18:00/22:00/02:00/06:00 ET), ne na celých čtyřhodinách UTC. Nová seance kotvu
+resetuje, takže rozdělaný koš na hranici seance končí — jako v TV.
 
 Koše bez jediné naměřené minuty se NEvytvářejí: osa zůstává hustá jako v 1m pohledu,
 kde se díra v datech taky nekreslí jako prázdný sloupec. */
+import { zonedDateParts, zonedTimeUtc } from '../instrument/tz'
+
 export interface BucketPlan {
   bucketMinutes: number
   /** Počet košů nad naměřenými minutami. */
@@ -25,10 +30,37 @@ export interface BucketPlan {
   startMs: Float64Array | null
 }
 
-/** Wall-clock hranice koše, do kterého padne čas `ms`. */
+/** Zóna a hodina otevření Globexu — shodné s engine `compute/marketclock.py`. */
+const SESSION_TZ = 'America/Chicago'
+const SESSION_OPEN_HOUR = 17
+
+/** Poslední otevření seance v čase ≤ `ms` (epoch ms).
+
+Okno se drží v jednoúrovňové cache: plán košů jde po ose vzestupně, takže se
+`Intl` převod zaplatí jednou za seanci, ne za každou minutu. */
+let sessionCache: { from: number; to: number; open: number } | null = null
+
+function sessionOpenMs(ms: number): number {
+  const hit = sessionCache
+  if (hit && ms >= hit.from && ms < hit.to) return hit.open
+  const openAt = (at: number): number => {
+    const { year, month, day } = zonedDateParts(SESSION_TZ, at)
+    return zonedTimeUtc(SESSION_TZ, year, month, day, SESSION_OPEN_HOUR, 0)
+  }
+  let open = openAt(ms)
+  // Před 17:00 CT patří čas ještě do seance otevřené předchozí den (den v CT má
+  // 23–25 h, takže −24 h vždy spadne na předchozí kalendářní datum)
+  if (open > ms) open = openAt(ms - 24 * 3_600_000)
+  const next = openAt(open + 24 * 3_600_000)
+  sessionCache = { from: open, to: next > open ? next : open + 24 * 3_600_000, open }
+  return open
+}
+
+/** Hranice koše, do kterého padne čas `ms` — zarovnaná na otevření seance. */
 export function bucketStartMs(ms: number, bucketMinutes: number): number {
   const bucketMs = Math.max(1, bucketMinutes) * 60_000
-  return Math.floor(ms / bucketMs) * bucketMs
+  const open = sessionOpenMs(ms)
+  return open + Math.floor((ms - open) / bucketMs) * bucketMs
 }
 
 function planFromBucketOf(
