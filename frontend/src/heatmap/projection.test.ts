@@ -104,3 +104,14 @@ test('projectionLabels navazují na poslední naměřenou minutu', () => {
   ])
   expect(projectionLabels(undefined, 3, 1, (iso) => iso)).toEqual([])
 })
+
+test('projectionLabels drží wall-clock hranice košů i z nezarovnané minuty (#584)', () => {
+  // Poslední naměřená 19:03 leží uvnitř koše 19:00 → projekce začíná na 19:05
+  expect(projectionLabels('2026-07-21T19:03:00Z', 3, 5, (iso) => iso.slice(11, 16))).toEqual([
+    '19:05',
+    '19:10',
+    '19:15',
+  ])
+  // Počet košů do settle se počítá od hranice posledního koše, ne od 19:03
+  expect(projectionLength('2026-07-21T19:03:00Z', new Date('2026-07-21T19:15:00Z'), 5)).toBe(3)
+})

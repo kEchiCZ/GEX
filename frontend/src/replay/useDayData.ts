@@ -104,10 +104,13 @@ export interface LiveOverlay {
   bars: PriceBar[]
   /** Popisky minut za koncem gridu; index = `minuteIdx - grid.minutes`. */
   labels: string[]
+  /** ISO časy minut za koncem gridu (paralelně k `labels`) — zarovnání košů
+  náběžné hrany na wall-clock (#584). */
+  minutesIso: string[]
 }
 
 /** Sdílená prázdná vrstva — stabilní identita pro dny bez živého spotu. */
-export const EMPTY_LIVE: LiveOverlay = { bars: [], labels: [] }
+export const EMPTY_LIVE: LiveOverlay = { bars: [], labels: [], minutesIso: [] }
 
 /** Rozdělí spot svíčky na živou vrstvu: zálohy uzavřených minut bez skutečného baru
 (#143) a rozdělané minuty za koncem gridu (náběžná hrana, #128). */
@@ -132,6 +135,7 @@ function splitSpotBars(day: ReplayDay, spotBars: SpotBar[]): LiveOverlay {
   }
   const bars: PriceBar[] = []
   const labels: string[] = []
+  const edgeIso: string[] = []
   for (const spot of [...spotBars].sort((a, b) => (a.minuteIso < b.minuteIso ? -1 : 1))) {
     const existingIdx = minuteIndex.get(spot.minuteIso)
     if (existingIdx !== undefined) {
@@ -144,9 +148,10 @@ function splitSpotBars(day: ReplayDay, spotBars: SpotBar[]): LiveOverlay {
       const minuteIdx = day.grid.minutes + labels.length
       bars.push(toPriceBar(spot, minuteIdx, bars.at(-1)?.close ?? closeBefore(minuteIdx)))
       labels.push(minuteLabel(spot.minuteIso))
+      edgeIso.push(spot.minuteIso)
     }
   }
-  return bars.length === 0 ? EMPTY_LIVE : { bars, labels }
+  return bars.length === 0 ? EMPTY_LIVE : { bars, labels, minutesIso: edgeIso }
 }
 
 export interface DayData {
