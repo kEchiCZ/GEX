@@ -108,6 +108,7 @@ export function Heatmap({
   onAnnotationCreate,
   onAnnotationErase,
   onAnnotationMove,
+  cellAbsolute,
   view: controlledView,
   initialZoomX = null,
   initialPriceRange = null,
@@ -157,6 +158,9 @@ export function Heatmap({
   /** Přesun anotace tažením v režimu Kurzor (#589); bez handleru se tažení
       chová jako dosud (pan plochy) a anotace se nezvýrazňují. */
   onAnnotationMove?: (id: number, payload: AnnotationPayload) => void
+  /** Absolutní hodnoty buňky do tooltipu (#470) — normalizovaná čísla v gridu
+      nesou barvu, ne velikost pozice. `null` = pro tu buňku nejsou. */
+  cellAbsolute?: (bucketIdx: number, strike: number) => string | null
   /** Řízený pohled (pan/zoom os) — sdílení časové osy se spodními panely. */
   view?: ViewTransform
   onViewChange?: (view: ViewTransform) => void
@@ -1219,9 +1223,13 @@ export function Heatmap({
     if (grid.layers.signed) parts.push(`± ${grid.layers.signed[index].toFixed(2)}`)
     // Signál v minutě crosshairu: režim, zdůvodnění, n, Wilson LB (#295, SPEC 9.0)
     const signal = signalAt(overlays.signals ?? [], crosshair.minuteIdx)
+    // Absolutní hodnoty VEDLE normalizovaných (#470): 0.52 je jen podíl vůči p99 dne
+    // a o velikosti pozice neřekne nic. Normalizovaná se čte jako barva, absolutní
+    // se rozhoduje. Projekční sloupce měřená data nemají.
+    const absolute = projected ? null : cellAbsolute?.(crosshair.minuteIdx, crosshair.strike)
     const line = parts.join(' · ')
-    return signal ? `${line}\n${signal.tooltip}` : line
-  }, [crosshair, grid, overlays.signals])
+    return [line, absolute, signal?.tooltip].filter(Boolean).join('\n')
+  }, [crosshair, grid, overlays.signals, cellAbsolute])
 
   return (
     <div className="heatmap-stack" ref={stackRef}>

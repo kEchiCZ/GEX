@@ -41,6 +41,7 @@ import { DEFAULT_VIEW, ZOOM_MAX, ZOOM_MIN, visiblePriceRange } from './heatmap/v
 import type { ViewTransform } from './heatmap/view'
 import { gexRegime, profileZeroNearest } from './instrument/regime'
 import { pcrAt, pcrVolumeSeries } from './instrument/sentiment'
+import { dataAgeMinutes, ohlcCoverage, STALE_AFTER_MINUTES } from './instrument/coverage'
 import { priceTick } from './instrument/tick'
 import {
   WALLS_MODES,
@@ -92,6 +93,7 @@ function MainContent() {
     interval,
     setPriceInfo,
     setRegimeInfo,
+    setOhlcCoverage,
     signalMode,
     underlayPlane,
     newsMarkerFilter,
@@ -303,6 +305,34 @@ function MainContent() {
       dynamicFlip,
     })
   }, [day.spotSeries, day.overlays.levels, day.gexProfile, liveOverlay.bars, setRegimeInfo])
+  // Pokrytí OHLC do hlavičky (#470) — počítá se nad 1m osou, ne nad koši, aby
+  // číslo znamenalo minuty dne bez ohledu na zvolený timeframe
+  useEffect(() => {
+    setOhlcCoverage(
+      ohlcCoverage(
+        rawDay.minutesIso,
+        (rawDay.overlays.price ?? []).map((bar) => bar.minuteIdx),
+      ),
+    )
+  }, [rawDay.minutesIso, rawDay.overlays.price, setOhlcCoverage])
+  // Čas posledních dat grafu (#470): živá minuta má přednost před poslední naměřenou.
+  // Tiká po 30 s, aby stáří stárlo samo — bez ticku by značka po zamrznutí sběru
+  // ukazovala „čerstvo" tak dlouho, dokud nepřijde jiný render.
+  const [stampNow, setStampNow] = useState(() => new Date())
+  useEffect(() => {
+    const timer = setInterval(() => setStampNow(new Date()), 30_000)
+    return () => clearInterval(timer)
+  }, [])
+  const dataStamp = useMemo(() => {
+    const iso = liveOverlay.minutesIso.at(-1) ?? rawDay.lastMinuteIso
+    const ageMinutes = dataAgeMinutes(iso, stampNow)
+    if (!iso || ageMinutes === null) return null
+    return {
+      label: minuteLabel(iso),
+      ageMinutes,
+      stale: ageMinutes >= STALE_AFTER_MINUTES,
+    }
+  }, [liveOverlay.minutesIso, rawDay.lastMinuteIso, stampNow])
   // Pohled grafu (pan/zoom os) — sdílený heatmapou a spodními panely (společná osa X)
   const [chartView, setChartView] = useState<ViewTransform>(DEFAULT_VIEW)
   // Zoom X per timeframe přežívá refresh i změnu instrumentu (#419);
@@ -512,6 +542,20 @@ function MainContent() {
   const spot = useMemo(
     () => liveOverlay.bars.at(-1)?.close ?? lastValue(day.spotSeries, playback.position),
     [liveOverlay.bars, day.spotSeries, playback.position],
+  )
+  // Absolutní hodnoty buňky do tooltipu heatmapy (#470). Zdroj je profil KOŠE, ne
+  // surová 1m matice: `day.raw` se agregací nepřevzorkovává, takže indexovat ji
+  // indexem koše by ukazovalo cizí minutu. Ukazují se OI i Vol bez ohledu na mód —
+  // obojí je měřená veličina té buňky a mód mění jen to, co se z nich kreslí.
+  const cellAbsolute = useCallback(
+    (bucketIdx: number, strike: number): string | null => {
+      const rows = day.profileByMinute?.rowsAt(bucketIdx) ?? day.demoProfileRows
+      const row = rows?.find((item) => item.strike === strike)
+      if (!row) return null
+      const n = (value: number) => Math.round(value).toLocaleString('cs-CZ')
+      return `OI C/P ${n(row.callOi)} / ${n(row.putOi)} · Vol C/P ${n(row.callVolume)} / ${n(row.putVolume)}`
+    },
+    [day.profileByMinute, day.demoProfileRows],
   )
   // Dyn GEX profil minuty pod playbackem (ADR-0009) — poslední s daty do pozice.
   // Při FA zdroji čte GEX křivka pravého profilu FA řadu (#232).
@@ -872,6 +916,21 @@ function MainContent() {
             ? `replay ${viewDate}${isHistoricalExpiry ? ' · den expirace' : ''}`
             : 'demo data'}
         </span>
+        {/* Čas posledních dat u grafu (#470): když engine přestane sbírat, graf
+        vypadá jako živý — jen se přestane hýbat. Tady je to vidět hned. */}
+        {dataStamp && (
+          <span
+            className={dataStamp.stale ? 'data-stamp stale' : 'data-stamp'}
+            data-testid="data-stamp"
+            title={
+              dataStamp.stale
+                ? `Poslední data jsou ${Math.floor(dataStamp.ageMinutes)} min stará — sběr stojí, nebo je trh zavřený.`
+                : 'Čas poslední minuty, kterou graf má (bar nebo snapshot).'
+            }
+          >
+            {dataStamp.stale ? '⊘' : '◷'} Data {dataStamp.label}
+          </span>
+        )}
         {/* FA zdroj (#232): graf ukazuje ODHAD, ne měření — badge to musí křičet */}
         {faActive && (
           <span
@@ -907,6 +966,7 @@ function MainContent() {
               liveBars={liveOverlay.bars}
               liveLabels={liveOverlay.labels}
               minuteLabels={chartLabels}
+              cellAbsolute={cellAbsolute}
               priceStyle={priceStyle}
               priceOpacity={priceOpacity}
               annotations={annotationsState.annotations}
@@ -1033,7 +1093,7 @@ function MainContent() {
 }
 
 function Shell() {
-  const { theme, priceInfo } = useAppState()
+  const { theme, priceInfo, ohlcCoverage: ohlcCoverageInfo } = useAppState()
   // Ctrl+kolečko / pinch (chodí jako ctrl+wheel) NAD GRAFEM a jeho ukazateli
   // nesmí zoomovat stránku — tam patří zoom grafu (#179). Mimo .chart-row
   // (sidebar, lišty) zůstává zoom prohlížeče plně funkční, jinak by se
@@ -1055,6 +1115,7 @@ function Shell() {
         <InstrumentHeader
           lastPrice={priceInfo.last ?? undefined}
           changePct={priceInfo.changePct ?? undefined}
+          ohlc={ohlcCoverageInfo}
         />
         <MainContent />
         <StatusBar />

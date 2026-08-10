@@ -236,6 +236,53 @@ body {
 
 /* GEX režim badge (#209): typ obchodu dle kap. 18 — zelená fade, červená momentum,
    žlutá flip zóna (neobchodovat). Tooltip nese playbook hint. */
+/* Pokrytí dat v hlavičce (#470): číslo + mini progress bar */
+.coverage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: help;
+  white-space: nowrap;
+}
+
+.coverage-bar {
+  display: inline-block;
+  width: 46px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(125, 133, 150, 0.28);
+  overflow: hidden;
+}
+
+.coverage-fill {
+  display: block;
+  height: 100%;
+  background: #3ecf8e;
+}
+
+.coverage-partial {
+  color: #e8c14b;
+}
+
+.coverage-partial .coverage-fill {
+  background: #e8c14b;
+}
+
+/* Čas posledních dat nad grafem (#470) — stálá odpověď na „koukám na živá data?" */
+.data-stamp {
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: help;
+  white-space: nowrap;
+}
+
+.data-stamp.stale {
+  color: #f0616d;
+  font-weight: 600;
+}
+
 .regime-badge {
   padding: 3px 10px;
   border-radius: 999px;

@@ -2,6 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { LiveSocket } from '../api/ws'
+import type { Coverage } from '../instrument/coverage'
 import { API_BASE, WS_URL } from '../config'
 import type { GexRegimeState } from '../instrument/regime'
 import { enumMap, mergedBooleans, oneOf, shortString, usePersistentState } from './persist'
@@ -163,6 +164,9 @@ interface AppState {
   setPriceInfo: (info: PriceInfo) => void
   regimeInfo: RegimeInfo
   setRegimeInfo: (info: RegimeInfo) => void
+  /** Pokrytí OHLC barů zobrazeného dne (#470) — hlásí graf, čte hlavička. */
+  ohlcCoverage: Coverage | null
+  setOhlcCoverage: (coverage: Coverage | null) => void
   /** Verze setupů — WS kanál setups.* ji zvedá, konzumenti přenačítají REST. */
   setupsVersion: number
   /** Sdílený WS klient — živý append intraday grafu (useDayData). */
@@ -263,6 +267,15 @@ export function AppStateProvider({
   const setPriceInfo = useCallback((info: PriceInfo) => {
     setPriceInfoState((previous) =>
       previous.last === info.last && previous.changePct === info.changePct ? previous : info,
+    )
+  }, [])
+  const [ohlcCoverage, setOhlcCoverageState] = useState<Coverage | null>(null)
+  // Bail-out na stejné hodnoty jako u priceInfo — graf hlásí pokrytí při každé nové minutě
+  const setOhlcCoverage = useCallback((coverage: Coverage | null) => {
+    setOhlcCoverageState((previous) =>
+      previous?.covered === coverage?.covered && previous?.expected === coverage?.expected
+        ? previous
+        : coverage,
     )
   }, [])
   const [regimeInfo, setRegimeInfoState] = useState<RegimeInfo>({
@@ -421,6 +434,8 @@ export function AppStateProvider({
       setPriceInfo,
       regimeInfo,
       setRegimeInfo,
+      ohlcCoverage,
+      setOhlcCoverage,
       setupsVersion,
       socket: live,
     }),
@@ -456,6 +471,8 @@ export function AppStateProvider({
       setPriceInfo,
       regimeInfo,
       setRegimeInfo,
+      ohlcCoverage,
+      setOhlcCoverage,
       setupsVersion,
       live,
     ],

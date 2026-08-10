@@ -126,3 +126,34 @@ test('tlačítka zpět/vpřed kreslení jsou nejdřív disabled a Ctrl+Z je nero
   expect(undo.disabled).toBe(true)
   expect(redo.disabled).toBe(true)
 })
+
+test('hlavička ukazuje pokrytí Greeks s progress barem (#470)', () => {
+  makeApp()
+  // Bez statusu se badge nekreslí — nemá co tvrdit
+  expect(screen.queryByTestId('coverage-greeks')).toBeNull()
+
+  const ws = FakeWebSocket.latest()
+  act(() => {
+    ws.open()
+    ws.push('status', { engine: 'online', greeks_complete: 91, greeks_total: 182 })
+  })
+
+  const badge = screen.getByTestId('coverage-greeks')
+  expect(badge.textContent).toBe('Greeks 91/182 (50 %)')
+  expect(badge.className).toContain('coverage-partial') // neúplné pokrytí hlásí barvu
+  expect(badge.querySelector('.coverage-fill')?.getAttribute('style')).toContain('width: 50%')
+
+  act(() => {
+    ws.push('status', { engine: 'online', greeks_complete: 182, greeks_total: 182 })
+  })
+  expect(screen.getByTestId('coverage-greeks').textContent).toBe('Greeks 182/182 (100 %)')
+  expect(screen.getByTestId('coverage-greeks').className).not.toContain('coverage-partial')
+})
+
+test('demo den nemá měřitelnou osu, takže OHLC badge ani časová značka nesvítí (#470)', () => {
+  makeApp()
+  // Demo den (bez /replay dat) nemá ISO osu ani lastMinuteIso — badge by lhal
+  expect(screen.queryByTestId('coverage-ohlc')).toBeNull()
+  expect(screen.queryByTestId('data-stamp')).toBeNull()
+  expect(screen.getByTestId('data-source').textContent).toBe('demo data')
+})

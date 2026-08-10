@@ -1,5 +1,7 @@
 /** Hlavička instrumentu (SPEC 7.1): ticker, last + změna, expirace, Live, notifikace. */
 import { useEffect, useState } from 'react'
+import { coverageLabel, greeksCoverage } from '../instrument/coverage'
+import type { Coverage } from '../instrument/coverage'
 import { expiryCountdown, expiryIsoDate, expiryKind } from '../instrument/expiry'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
@@ -28,12 +30,44 @@ const SYMBOL_NAMES: Record<string, string> = {
   GC: 'Gold',
 }
 
+/** Pokrytí s progress barem — číslo `84/158` samo o sobě přehlédneš (#470). */
+function CoverageBadge({
+  label,
+  coverage,
+  title,
+  testId,
+}: {
+  label: string
+  coverage: Coverage | null
+  title: string
+  testId: string
+}) {
+  if (!coverage) return null
+  // Neúplná data hlásí barvu: čekat na 100 % u Greeks je normální jen chvíli po startu
+  const incomplete = coverage.ratio < 1
+  return (
+    <span
+      className={incomplete ? 'coverage coverage-partial' : 'coverage'}
+      data-testid={testId}
+      title={title}
+    >
+      {label} {coverageLabel(coverage)}
+      <span className="coverage-bar" aria-hidden="true">
+        <span className="coverage-fill" style={{ width: `${Math.round(coverage.ratio * 100)}%` }} />
+      </span>
+    </span>
+  )
+}
+
 export function InstrumentHeader({
   lastPrice,
   changePct,
+  ohlc,
 }: {
   lastPrice?: number
   changePct?: number
+  /** Pokrytí OHLC barů pro zobrazený den (#470); `null` = osu nelze změřit. */
+  ohlc?: Coverage | null
 }) {
   const {
     symbol,
@@ -78,6 +112,28 @@ export function InstrumentHeader({
         <span className="ticker">{symbol}</span>
         <span className="name muted">{SYMBOL_NAMES[symbol] ?? ''}</span>
       </div>
+      {/* Pokrytí dat u grafu, ne ve spodní liště (#470) — díra v datech musí být
+      vidět tam, kam se člověk dívá */}
+      <CoverageBadge
+        label="Greeks"
+        testId="coverage-greeks"
+        coverage={greeksCoverage(status.greeks_complete, status.greeks_total)}
+        title={
+          'Kolik striků chainu má kompletní řecká (delta/gamma/vega). Neúplné pokrytí ' +
+          'znamená, že část striků čeká na dopočet nebo se opakovaně nedaří — hodnoty ' +
+          'v profilu a Dyn GEX pak stojí na menším vzorku.'
+        }
+      />
+      <CoverageBadge
+        label="OHLC"
+        testId="coverage-ohlc"
+        coverage={ohlc ?? null}
+        title={
+          'Kolik minut zobrazeného dne má cenovou svíčku proti tomu, kolik jich mělo ' +
+          'podle časového rozpětí osy být. Méně než 100 % = díra ve sběru barů; ' +
+          'cenová křivka pak spojuje body přes chybějící úsek.'
+        }
+      />
       <div className="instrument-price">
         <span className="last">{lastPrice !== undefined ? lastPrice.toFixed(2) : '—'}</span>
         {changePct !== undefined && (
