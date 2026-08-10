@@ -65,6 +65,19 @@ body {
   align-self: flex-end;
 }
 
+/* DEV badge (#568) — křiklavě odlišit vývojové prostředí od produkce */
+.env-badge {
+  align-self: stretch;
+  text-align: center;
+  background: #e08a00;
+  color: #14181f;
+  font-weight: 700;
+  letter-spacing: 2px;
+  border-radius: 6px;
+  padding: 4px 6px;
+  cursor: help;
+}
+
 .sidebar ul {
   list-style: none;
   margin: 0;
