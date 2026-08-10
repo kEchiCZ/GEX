@@ -76,6 +76,19 @@ def test_annotations_crud(client: TestClient) -> None:
     assert other_day["annotations"] == []  # persistence per instrument+den (SPEC 7.4)
 
     annotation_id = created.json()["id"]
+
+    # Přesun tažením (#589): PUT přepíše payload a drží id, symbol i den
+    moved = {"tool": "arrow", "color": "#ff0000", "points": [[3, 7620], [7, 7670]]}
+    updated = client.put(f"/annotations/{annotation_id}", json={"payload": moved})
+    assert updated.status_code == 200
+    assert updated.json()["id"] == annotation_id
+    assert updated.json()["payload"] == moved
+    after = client.get("/annotations", params={"symbol": "ES", "date": "2026-07-16"}).json()
+    assert after["annotations"] == [
+        {"id": annotation_id, "symbol": "ES", "day": "2026-07-16", "payload": moved}
+    ]
+    assert client.put("/annotations/424242", json={"payload": moved}).status_code == 404
+
     assert client.delete(f"/annotations/{annotation_id}").status_code == 204
     assert client.delete(f"/annotations/{annotation_id}").status_code == 404
 

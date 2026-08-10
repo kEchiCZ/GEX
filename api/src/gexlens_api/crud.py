@@ -50,6 +50,16 @@ class AnnotationIn(BaseModel):
     payload: dict[str, Any]
 
 
+class AnnotationPut(BaseModel):
+    """Nový payload existující anotace — přesun tažením (#589).
+
+    Symbol ani den se nemění: anotace patří ke dni, ve kterém vznikla, a přesun
+    ji posouvá jen v rámci jeho osy.
+    """
+
+    payload: dict[str, Any]
+
+
 class SettingIn(BaseModel):
     value: Any
 
@@ -107,6 +117,13 @@ def build_router(repository: MetaRepository) -> APIRouter:
     @router.post("/annotations", status_code=201)
     def annotation_create(annotation: AnnotationIn) -> dict[str, Any]:
         return repository.annotation_create(annotation.symbol, annotation.day, annotation.payload)
+
+    @router.put("/annotations/{annotation_id}")
+    def annotation_put(annotation_id: int, annotation: AnnotationPut) -> dict[str, Any]:
+        try:
+            return repository.annotation_update(annotation_id, annotation.payload)
+        except NotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     @router.delete("/annotations/{annotation_id}", status_code=204)
     def annotation_delete(annotation_id: int) -> None:

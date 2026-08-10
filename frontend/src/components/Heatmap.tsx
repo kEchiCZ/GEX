@@ -107,6 +107,7 @@ export function Heatmap({
   minutesIso,
   onAnnotationCreate,
   onAnnotationErase,
+  onAnnotationMove,
   view: controlledView,
   initialZoomX = null,
   initialPriceRange = null,
@@ -153,6 +154,9 @@ export function Heatmap({
   minutesIso?: string[]
   onAnnotationCreate?: (payload: AnnotationPayload) => void
   onAnnotationErase?: (id: number) => void
+  /** Přesun anotace tažením v režimu Kurzor (#589); bez handleru se tažení
+      chová jako dosud (pan plochy) a anotace se nezvýrazňují. */
+  onAnnotationMove?: (id: number, payload: AnnotationPayload) => void
   /** Řízený pohled (pan/zoom os) — sdílení časové osy se spodními panely. */
   view?: ViewTransform
   onViewChange?: (view: ViewTransform) => void
@@ -291,6 +295,15 @@ export function Heatmap({
   const clickRef = useRef<{ x: number; y: number } | null>(null)
   const [axisHover, setAxisHover] = useState<AxisZone>(null)
   const [draft, setDraft] = useState<AnnotationPoint[] | null>(null)
+  // Přesun anotace tažením (#589): rozpracovaná pozice se kreslí místo uložené,
+  // uloží se až na pointerup. `origin` je datový bod stisku, `points` původní body.
+  const [moving, setMoving] = useState<{ id: number; points: AnnotationPoint[] } | null>(null)
+  const moveRef = useRef<{ id: number; origin: AnnotationPoint; points: AnnotationPoint[] } | null>(
+    null,
+  )
+  // Anotace pod kurzorem v režimu Kurzor — zvýrazní se, ať je poznat, že tažení
+  // pohne jí a ne grafem
+  const [hoverAnnotationId, setHoverAnnotationId] = useState<number | null>(null)
   // Surová pozice kurzoru (CSS px) — osové labely crosshairu (cena na Y je spojitá)
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null)
   const { position: crosshair, setPosition: setCrosshair } = useCrosshair()
@@ -721,10 +734,16 @@ export function Heatmap({
         ((axisOffsets ? axisIndexFromMinute(axisOffsets, minute) : minute) + bucketPhase) /
           bucketMinutes,
       )
-    const drawAnnotation = (tool: AnnotationTool, color: string, points: AnnotationPoint[]) => {
+    const drawAnnotation = (
+      tool: AnnotationTool,
+      color: string,
+      points: AnnotationPoint[],
+      emphasized = false,
+    ) => {
       if (points.length < 2) return
       context.strokeStyle = color
-      context.lineWidth = 2
+      // Zvýraznění pod kurzorem / při přesunu — silnější tah (#589)
+      context.lineWidth = emphasized ? 4 : 2
       context.beginPath()
       points.forEach((point, index) => {
         const px = annotationX(point.minute)
@@ -751,7 +770,14 @@ export function Heatmap({
       }
     }
     for (const annotation of annotations) {
-      drawAnnotation(annotation.payload.tool, annotation.payload.color, annotation.payload.points)
+      // Přesouvaná anotace se kreslí na rozpracované pozici, ne na uložené (#589)
+      const dragged = moving?.id === annotation.id
+      drawAnnotation(
+        annotation.payload.tool,
+        annotation.payload.color,
+        dragged ? moving.points : annotation.payload.points,
+        dragged || hoverAnnotationId === annotation.id,
+      )
     }
     if (draft && annotationTool && annotationTool !== 'eraser') {
       drawAnnotation(annotationTool, annotationColor, draft)
@@ -797,6 +823,8 @@ export function Heatmap({
     grid.strikes,
     annotations,
     draft,
+    moving,
+    hoverAnnotationId,
     annotationTool,
     annotationColor,
     priceStyle,
@@ -1021,16 +1049,34 @@ export function Heatmap({
     return point ? mapping().screenToDataPoint(point.x, point.y) : null
   }
 
+  /** Anotace v dosahu datového bodu — společná tolerance gumy (#588) a přesunu (#589). */
+  const annotationAt = (point: AnnotationPoint): number | null => {
+    const strikeStep = strikeCount > 1 ? Math.abs(grid.strikes[1] - grid.strikes[0]) : 1
+    // Tolerance: ~5 minut a 2 strike kroky
+    return nearestAnnotationId(annotations, point, 5 * bucketMinutes, 2 * strikeStep)
+  }
+
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (annotationTool === 'eraser') {
       const point = eventDataPoint(event)
       if (point && onAnnotationErase) {
-        // Tolerance gumy: ~5 minut a 2 strike kroky
-        const strikeStep = strikeCount > 1 ? Math.abs(grid.strikes[1] - grid.strikes[0]) : 1
-        const target = nearestAnnotationId(annotations, point, 5 * bucketMinutes, 2 * strikeStep)
+        const target = annotationAt(point)
         if (target !== null) onAnnotationErase(target)
       }
       return
+    }
+    // Režim Kurzor: tažení, které začne na anotaci, ji přesune (#589); jinde pan plochy
+    if (!annotationTool && onAnnotationMove) {
+      const point = eventDataPoint(event)
+      const target = point ? annotationAt(point) : null
+      const source = annotations.find((annotation) => annotation.id === target)
+      if (point && source) {
+        // `moving` se nastaví teprve prvním pohybem — klik bez tažení tak nevyvolá
+        // zbytečný PUT s nezměněnou pozicí
+        moveRef.current = { id: source.id, origin: point, points: source.payload.points }
+        event.currentTarget.setPointerCapture(event.pointerId)
+        return
+      }
     }
     if (annotationTool) {
       const point = eventDataPoint(event)
@@ -1052,6 +1098,24 @@ export function Heatmap({
 
   const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = overlayRef.current
+    const dragging = moveRef.current
+    if (dragging) {
+      const point = eventDataPoint(event)
+      if (point) {
+        // Posun v DATOVÉM prostoru (minuta × strike), ne v pixelech — anotace tak
+        // drží pozici i po přepnutí timeframe nebo backfillu minut (#502)
+        const dMinute = point.minute - dragging.origin.minute
+        const dStrike = point.strike - dragging.origin.strike
+        setMoving({
+          id: dragging.id,
+          points: dragging.points.map((item) => ({
+            minute: item.minute + dMinute,
+            strike: item.strike + dStrike,
+          })),
+        })
+      }
+      return
+    }
     if (draft && annotationTool && annotationTool !== 'eraser') {
       const point = eventDataPoint(event)
       if (point) {
@@ -1097,9 +1161,25 @@ export function Heatmap({
     const strike = strikeIdx >= 0 && strikeIdx < strikeCount ? grid.strikes[strikeIdx] : null
     setCrosshair({ minuteIdx, strike })
     setPointer({ x, y })
+    // Anotace pod kurzorem (jen režim Kurzor s povoleným přesunem, #589)
+    const hover =
+      !annotationTool && onAnnotationMove ? annotationAt(mapping().screenToDataPoint(x, y)) : null
+    setHoverAnnotationId((previous) => (previous === hover ? previous : hover))
   }
 
   const onPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const dragging = moveRef.current
+    if (dragging) {
+      moveRef.current = null
+      const dropped = moving
+      setMoving(null)
+      const source = annotations.find((annotation) => annotation.id === dragging.id)
+      // Klik bez tažení nic nepřesouvá (dropped === null) — jen vybere/odklikne
+      if (dropped && source && onAnnotationMove) {
+        onAnnotationMove(dragging.id, { ...source.payload, points: dropped.points })
+      }
+      return
+    }
     if (draft && annotationTool && annotationTool !== 'eraser') {
       if (onAnnotationCreate && draft.length >= 2) {
         onAnnotationCreate({ tool: annotationTool, color: annotationColor, points: draft })
@@ -1170,7 +1250,17 @@ export function Heatmap({
         style={{
           width: logicalW,
           height: logicalH,
-          cursor: axisHover === 'x' ? 'ew-resize' : axisHover === 'y' ? 'ns-resize' : undefined,
+          cursor:
+            axisHover === 'x'
+              ? 'ew-resize'
+              : axisHover === 'y'
+                ? 'ns-resize'
+                : // Anotace pod kurzorem se dá uchopit a přesunout (#589)
+                  hoverAnnotationId !== null
+                  ? moving
+                    ? 'grabbing'
+                    : 'grab'
+                  : undefined,
         }}
         onWheel={onWheel}
         onPointerDown={onPointerDown}

@@ -882,6 +882,7 @@ function MainContent() {
               annotationColor={annotationColor}
               onAnnotationCreate={(payload) => void annotationsState.create(payload)}
               onAnnotationErase={(id) => void annotationsState.erase(id)}
+              onAnnotationMove={(id, payload) => void annotationsState.move(id, payload)}
               view={chartView}
               onViewChange={setChartView}
               initialZoomX={savedZoomX}

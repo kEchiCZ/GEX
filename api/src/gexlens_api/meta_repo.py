@@ -158,6 +158,21 @@ class MetaRepository:
             annotation_id = _inserted_id(result)
         return {"id": annotation_id, "symbol": symbol, "day": day, "payload": payload}
 
+    def annotation_update(self, annotation_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Přepíše payload anotace — přesun tažením (#589) drží `id`, ať undo ví na co mířit."""
+        with self._db().begin() as conn:
+            result = conn.execute(
+                update(annotations_table)
+                .where(annotations_table.c.id == annotation_id)
+                .values(payload=payload)
+            )
+            if result.rowcount == 0:
+                raise NotFoundError(f"Anotace {annotation_id} neexistuje")
+            row = conn.execute(
+                select(annotations_table).where(annotations_table.c.id == annotation_id)
+            ).one()
+            return dict(row._mapping)
+
     def annotation_delete(self, annotation_id: int) -> None:
         with self._db().begin() as conn:
             result = conn.execute(
