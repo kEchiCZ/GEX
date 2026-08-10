@@ -7,8 +7,9 @@ aproximace po celých dnech UTC (ta se na přechodovém víkendu míjela o hodin
 dřív; Sydney tím dostává korektní posun AEST/AEDT zdarma. Marker se umístí na
 první minutu dne >= času seance; seance mimo rozsah minut se vynechají.
 */
-import type { SessionMarker } from '../heatmap/overlays'
+import { bucketStartMs } from '../heatmap/buckets'
 import { zonedTimeUtc } from './tz'
+import type { SessionMarker } from '../heatmap/overlays'
 
 const WORLD_SESSIONS: Array<{
   label: string
@@ -77,8 +78,8 @@ export function autoSessions(minuteKeysIso: string[]): SessionMarker[] {
 
 /** Markery seancí v PROJEKTOVANÉ zóně (#195): mezi poslední naměřenou minutou
 a settle. `minuteIdx` je v prostoru košů projektované osy — koš
-`dataBuckets + k` pokrývá čas `last + (k+1) × bucket` (shodně s
-`projectionLabels`), takže US Open ap. jsou vidět dřív, než začnou. */
+`dataBuckets + k` pokrývá čas `hranice posledního koše + (k+1) × bucket`
+(shodně s `projectionLabels`, #584), takže US Open ap. jsou vidět dřív, než začnou. */
 export function projectedSessions(
   lastMinuteIso: string,
   settle: Date | null,
@@ -89,11 +90,12 @@ export function projectedSessions(
   if (Number.isNaN(last) || settle === null) return []
   const dayStart = new Date(lastMinuteIso)
   const bucketMs = Math.max(1, bucketMinutes) * 60_000
+  const lastBucketStart = bucketStartMs(last, bucketMinutes)
   const byBucket = new Map<number, string[]>()
   for (const session of WORLD_SESSIONS) {
     const at = sessionAtUtc(dayStart, session)
     if (at <= last || at > settle.getTime()) continue
-    const index = Math.max(0, Math.ceil((at - last) / bucketMs) - 1)
+    const index = Math.max(0, Math.ceil((at - lastBucketStart) / bucketMs) - 1)
     const minuteIdx = dataBuckets + index
     const labels = byBucket.get(minuteIdx)
     if (labels) labels.push(session.label)

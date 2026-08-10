@@ -3,28 +3,29 @@
 Zdrojová 1m data jsou v kumulativní sémantice (OI/volume per buňka = stav v čase),
 takže hodnota koše = poslední minuta koše; přírůstkové řady (Vol, OptVol) se sčítají,
 cena se skládá do OHLC. Timeframe se tedy přepíná bez dalšího fetch.
+
+Hranice košů určuje wall-clock plán (`heatmap/buckets.ts`), ne index minuty na ose —
+5m koš tedy vždy začíná na `HH:00/05/10…` jako v TradingView (#584).
 */
+import { minuteLabel } from './useDayData'
+import { bucketStartMs, cachedBucketPlan } from '../heatmap/buckets'
 import type { DayData, LiveOverlay } from './useDayData'
+import type { BucketPlan } from '../heatmap/buckets'
 import type { HeatmapGrid } from '../heatmap/grid'
 import type { LevelLine, OverlayData, PriceBar } from '../heatmap/overlays'
-
-/** Poslední minuta koše (ořezaná na konec dne). */
-function bucketEnd(bucketIdx: number, bucketMinutes: number, minutes: number): number {
-  return Math.min(minutes - 1, (bucketIdx + 1) * bucketMinutes - 1)
-}
 
 function aggregateLayer(
   layer: Float32Array | undefined,
   minutes: number,
   strikeCount: number,
-  bucketMinutes: number,
-  buckets: number,
+  plan: BucketPlan,
 ): Float32Array | undefined {
   if (!layer) return undefined
+  const { buckets, ends } = plan
   const result = new Float32Array(buckets * strikeCount)
   for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
     for (let bucketIdx = 0; bucketIdx < buckets; bucketIdx += 1) {
-      const source = strikeIdx * minutes + bucketEnd(bucketIdx, bucketMinutes, minutes)
+      const source = strikeIdx * minutes + ends[bucketIdx]
       result[strikeIdx * buckets + bucketIdx] = layer[source]
     }
   }
@@ -32,32 +33,24 @@ function aggregateLayer(
 }
 
 /** Přírůstková řada (Vol, OptVol): součet koše. */
-function sumSeries(values: number[], bucketMinutes: number, buckets: number): number[] {
-  const result = Array.from({ length: buckets }, () => 0)
+function sumSeries(values: number[], plan: BucketPlan): number[] {
+  const result = Array.from({ length: plan.buckets }, () => 0)
   values.forEach((value, index) => {
-    result[Math.min(buckets - 1, Math.floor(index / bucketMinutes))] += value
+    const bucketIdx = plan.bucketOf[index]
+    if (bucketIdx !== undefined) result[bucketIdx] += value
   })
   return result
 }
 
 /** Kumulativní řada (CumΔ): poslední hodnota koše. */
-function lastSeries(values: number[], bucketMinutes: number, buckets: number): number[] {
-  return Array.from({ length: buckets }, (_, bucketIdx) => {
-    const end = bucketEnd(bucketIdx, bucketMinutes, values.length)
-    return values[end] ?? 0
-  })
+function lastSeries(values: number[], plan: BucketPlan): number[] {
+  return Array.from({ length: plan.buckets }, (_, bucketIdx) => values[plan.ends[bucketIdx]] ?? 0)
 }
 
 /** Řada s dírami (levels, spot): poslední ne-null hodnota koše. */
-function lastNonNull<T>(
-  values: (T | null)[],
-  bucketMinutes: number,
-  buckets: number,
-): (T | null)[] {
-  return Array.from({ length: buckets }, (_, bucketIdx) => {
-    const start = bucketIdx * bucketMinutes
-    const end = bucketEnd(bucketIdx, bucketMinutes, values.length)
-    for (let index = end; index >= start; index -= 1) {
+function lastNonNull<T>(values: (T | null)[], plan: BucketPlan): (T | null)[] {
+  return Array.from({ length: plan.buckets }, (_, bucketIdx) => {
+    for (let index = plan.ends[bucketIdx]; index >= plan.starts[bucketIdx]; index -= 1) {
       const value = values[index]
       if (value !== null && value !== undefined) return value
     }
@@ -66,10 +59,11 @@ function lastNonNull<T>(
 }
 
 /** Skládání 1m barů do OHLC svíček koše (exportováno kvůli testům). */
-export function aggregateBars(bars: PriceBar[], bucketMinutes: number): PriceBar[] {
+export function aggregateBars(bars: PriceBar[], plan: BucketPlan): PriceBar[] {
   const byBucket = new Map<number, PriceBar[]>()
   for (const bar of bars) {
-    const bucketIdx = Math.floor(bar.minuteIdx / bucketMinutes)
+    const bucketIdx = plan.bucketOf[bar.minuteIdx]
+    if (bucketIdx === undefined) continue // bar mimo osu (nemělo by nastat)
     const group = byBucket.get(bucketIdx)
     if (group) group.push(bar)
     else byBucket.set(bucketIdx, [bar])
@@ -99,19 +93,41 @@ export function aggregateBars(bars: PriceBar[], bucketMinutes: number): PriceBar
 její minuta patří — včetně už uzavřených minut téhož koše (`staticBars`). Volající
 pak musí statickou svíčku toho koše vynechat, jinak by se kreslila dvakrát.
 
-`gridMinutes` je počet minut PŘED agregací (kvůli mapování popisků náběžné hrany). */
+`gridMinutes` je počet minut PŘED agregací a `minutesIso` je jejich osa — koše
+náběžné hrany se stejně jako naměřené zarovnávají na wall-clock (#584). */
 export function aggregateLive(
   live: LiveOverlay,
   bucketMinutes: number,
   gridMinutes: number,
   staticBars: PriceBar[],
+  minutesIso: string[],
 ): LiveOverlay {
   if (bucketMinutes <= 1 || live.bars.length === 0) return live
-  const buckets = Math.max(1, Math.ceil(gridMinutes / bucketMinutes))
+  const plan = cachedBucketPlan(minutesIso, gridMinutes, bucketMinutes)
+  const buckets = plan.buckets
   const staticByBucket = new Map(staticBars.map((bar) => [bar.minuteIdx, bar]))
+  // Koše za koncem naměřených dat: wall-clock hranice → index koše (v pořadí času)
+  const edgeStartMs: number[] = []
+  const edgeIndex = new Map<number, number>()
+  const lastMeasuredStart = plan.startMs ? plan.startMs[buckets - 1] : Number.NaN
+  const bucketOfLive = (bar: PriceBar): number => {
+    if (bar.minuteIdx < gridMinutes) return plan.bucketOf[bar.minuteIdx]
+    const iso = live.minutesIso[bar.minuteIdx - gridMinutes]
+    const ms = iso === undefined ? Number.NaN : Date.parse(iso)
+    // Osa bez ISO časů (demo den) → dosavadní indexové koše
+    if (!plan.startMs || Number.isNaN(ms)) return Math.floor(bar.minuteIdx / bucketMinutes)
+    const start = bucketStartMs(ms, bucketMinutes)
+    if (start === lastMeasuredStart) return buckets - 1 // rozdělaná minuta patří do posledního koše
+    const known = edgeIndex.get(start)
+    if (known !== undefined) return known
+    const bucketIdx = buckets + edgeStartMs.length
+    edgeStartMs.push(start)
+    edgeIndex.set(start, bucketIdx)
+    return bucketIdx
+  }
   const byBucket = new Map<number, PriceBar[]>()
-  for (const bar of live.bars) {
-    const bucketIdx = Math.floor(bar.minuteIdx / bucketMinutes)
+  for (const bar of [...live.bars].sort((a, b) => a.minuteIdx - b.minuteIdx)) {
+    const bucketIdx = bucketOfLive(bar)
     const group = byBucket.get(bucketIdx)
     if (group) group.push(bar)
     else byBucket.set(bucketIdx, [bar])
@@ -142,33 +158,34 @@ export function aggregateLive(
       low: Math.min(...lows),
       up: previousClose === undefined ? close >= open : !(close < previousClose),
     })
-    // Popisek potřebují jen koše za koncem gridu (náběžná hrana)
+    // Popisek potřebují jen koše za koncem gridu (náběžná hrana); popisek je
+    // hranice koše, ne první živá minuta v něm (#584)
     if (bucketIdx >= buckets) {
-      labels[bucketIdx - buckets] = live.labels[first.minuteIdx - gridMinutes] ?? ''
+      const start = edgeStartMs[bucketIdx - buckets]
+      labels[bucketIdx - buckets] =
+        start === undefined
+          ? (live.labels[first.minuteIdx - gridMinutes] ?? '')
+          : minuteLabel(new Date(start).toISOString())
     }
   }
-  return { bars, labels }
+  return { bars, labels, minutesIso: edgeStartMs.map((ms) => new Date(ms).toISOString()) }
 }
 
-function aggregateOverlays(
-  overlays: OverlayData,
-  bucketMinutes: number,
-  buckets: number,
-): OverlayData {
+function aggregateOverlays(overlays: OverlayData, plan: BucketPlan): OverlayData {
   const line = (item: LevelLine): LevelLine => ({
     ...item,
-    series: lastNonNull(item.series, bucketMinutes, buckets),
+    series: lastNonNull(item.series, plan),
     // Slabé úseky zdí (ADR-0010) se agregují stejně, jinak by indexy košů nesedly
-    weak: item.weak ? lastNonNull(item.weak, bucketMinutes, buckets) : undefined,
+    weak: item.weak ? lastNonNull(item.weak, plan) : undefined,
   })
   return {
     ...overlays,
-    price: overlays.price ? aggregateBars(overlays.price, bucketMinutes) : undefined,
+    price: overlays.price ? aggregateBars(overlays.price, plan) : undefined,
     levels: overlays.levels?.map(line),
     walls: overlays.walls?.map(line),
     sessions: overlays.sessions?.map((session) => ({
       ...session,
-      minuteIdx: Math.floor(session.minuteIdx / bucketMinutes),
+      minuteIdx: plan.bucketOf[session.minuteIdx] ?? plan.buckets - 1,
     })),
   }
 }
@@ -178,18 +195,19 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
   if (bucketMinutes <= 1) return day
   const { minutes, strikes } = day.grid
   const strikeCount = strikes.length
-  const buckets = Math.max(1, Math.ceil(minutes / bucketMinutes))
+  const plan = cachedBucketPlan(day.minutesIso, minutes, bucketMinutes)
+  const buckets = plan.buckets
 
   const grid: HeatmapGrid = {
     minutes: buckets,
     strikes,
     layers: {
-      call: aggregateLayer(day.grid.layers.call, minutes, strikeCount, bucketMinutes, buckets),
-      put: aggregateLayer(day.grid.layers.put, minutes, strikeCount, bucketMinutes, buckets),
-      signed: aggregateLayer(day.grid.layers.signed, minutes, strikeCount, bucketMinutes, buckets),
+      call: aggregateLayer(day.grid.layers.call, minutes, strikeCount, plan),
+      put: aggregateLayer(day.grid.layers.put, minutes, strikeCount, plan),
+      signed: aggregateLayer(day.grid.layers.signed, minutes, strikeCount, plan),
     },
     staleAge: day.grid.staleAge
-      ? (aggregateLayer(day.grid.staleAge, minutes, strikeCount, bucketMinutes, buckets) ?? null)
+      ? (aggregateLayer(day.grid.staleAge, minutes, strikeCount, plan) ?? null)
       : null,
   }
 
@@ -201,8 +219,12 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
     ? {
         length: buckets,
         rowsAt: (bucketIdx: number) => {
-          const end = bucketEnd(bucketIdx, bucketMinutes, minutes)
-          for (let minuteIdx = end; minuteIdx >= bucketIdx * bucketMinutes; minuteIdx -= 1) {
+          for (
+            let minuteIdx = plan.ends[bucketIdx];
+            minuteIdx >= plan.starts[bucketIdx];
+            minuteIdx -= 1
+          ) {
+            // prettier-ignore
             const rows = source.rowsAt(minuteIdx)
             if (rows.length > 0) return rows
           }
@@ -215,8 +237,12 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
   const lastRowPerBucket = <T>(rows: (T | null)[] | null): (T | null)[] | null =>
     rows
       ? Array.from({ length: buckets }, (_, bucketIdx) => {
-          const end = bucketEnd(bucketIdx, bucketMinutes, minutes)
-          for (let minuteIdx = end; minuteIdx >= bucketIdx * bucketMinutes; minuteIdx -= 1) {
+          for (
+            let minuteIdx = plan.ends[bucketIdx];
+            minuteIdx >= plan.starts[bucketIdx];
+            minuteIdx -= 1
+          ) {
+            // prettier-ignore
             const row = rows[minuteIdx]
             if (row) return row
           }
@@ -230,14 +256,14 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
     raw: day.raw, // surová 1m matice se nese dál (módy se aplikují před agregací)
     rawFa: day.rawFa, // FA matice stejně — zdroj OI se přepíná před agregací (#232)
     minutesIso: day.minutesIso, // ISO minut zůstávají 1m — zarovnávání je před agregací
-    overlays: aggregateOverlays(day.overlays, bucketMinutes, buckets),
+    overlays: aggregateOverlays(day.overlays, plan),
     panels: {
-      vol: sumSeries(day.panels.vol, bucketMinutes, buckets),
-      optVolCall: sumSeries(day.panels.optVolCall, bucketMinutes, buckets),
-      optVolPut: sumSeries(day.panels.optVolPut, bucketMinutes, buckets),
-      cumDelta: lastSeries(day.panels.cumDelta, bucketMinutes, buckets),
-      deltaFlowCall: sumSeries(day.panels.deltaFlowCall, bucketMinutes, buckets),
-      deltaFlowPut: sumSeries(day.panels.deltaFlowPut, bucketMinutes, buckets),
+      vol: sumSeries(day.panels.vol, plan),
+      optVolCall: sumSeries(day.panels.optVolCall, plan),
+      optVolPut: sumSeries(day.panels.optVolPut, plan),
+      cumDelta: lastSeries(day.panels.cumDelta, plan),
+      deltaFlowCall: sumSeries(day.panels.deltaFlowCall, plan),
+      deltaFlowPut: sumSeries(day.panels.deltaFlowPut, plan),
     },
     profileByMinute,
     demoProfileRows: day.demoProfileRows,
@@ -250,10 +276,13 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
     gexFieldFa: day.gexFieldFa,
     // Koš přebírá žebřík poslední minuty s daty (#244) — jako gexProfile
     ladder: lastRowPerBucket(day.ladder),
-    spotSeries: lastNonNull(day.spotSeries, bucketMinutes, buckets),
-    minuteLabels: Array.from(
-      { length: buckets },
-      (_, bucketIdx) => day.minuteLabels[bucketIdx * bucketMinutes] ?? '',
+    spotSeries: lastNonNull(day.spotSeries, plan),
+    // Popisek koše = jeho wall-clock hranice (11:00), i když první naměřená
+    // minuta v koši je až 11:02 (#584); bez ISO osy zbývá popisek první minuty
+    minuteLabels: Array.from({ length: buckets }, (_, bucketIdx) =>
+      plan.startMs
+        ? minuteLabel(new Date(plan.startMs[bucketIdx]).toISOString())
+        : (day.minuteLabels[plan.starts[bucketIdx]] ?? ''),
     ),
     lastMinuteIso: day.lastMinuteIso,
   }

@@ -9,6 +9,7 @@ chytřejšího by předstíralo znalost, kterou nemáme.
 Projektovaná část se kreslí sníženou sytostí a odděluje ji svislý předěl, aby
 graf netvrdil, že vpravo jsou naměřené hodnoty (viz `render.ts`).
 */
+import { bucketStartMs } from './buckets'
 import { dataMinutesOf } from './grid'
 import type { HeatmapGrid } from './grid'
 
@@ -17,7 +18,10 @@ roztáhla osu do absurdna. Ořezává se před přepočtem na koše, aby strop
 znamenal stejný časový úsek na každém timeframe (#156). */
 export const PROJECTION_MAX_MINUTES = 24 * 60
 
-/** Kolik košů zbývá od poslední naměřené minuty do settle; 0 = neprojektovat. */
+/** Kolik košů zbývá od poslední naměřené minuty do settle; 0 = neprojektovat.
+
+Koše navazují na HRANICI posledního naměřeného koše, ne na poslední minutu (#584):
+počítají se hranice košů, které padnou do intervalu (poslední minuta, settle]. */
 export function projectionLength(
   lastMinuteIso: string | undefined,
   settle: Date | null,
@@ -26,10 +30,12 @@ export function projectionLength(
   if (!lastMinuteIso || !settle) return 0
   const last = new Date(lastMinuteIso)
   if (Number.isNaN(last.getTime())) return 0
-  const remainingMinutes = (settle.getTime() - last.getTime()) / 60_000
-  if (remainingMinutes <= 0) return 0
-  const capped = Math.min(PROJECTION_MAX_MINUTES, remainingMinutes)
-  return Math.floor(capped / Math.max(1, bucketMinutes))
+  const lastMs = last.getTime()
+  if (settle.getTime() - lastMs <= 0) return 0
+  // Strop je v minutách reálného času, ať znamená stejný úsek na každém timeframe (#156)
+  const horizonMs = Math.min(settle.getTime(), lastMs + PROJECTION_MAX_MINUTES * 60_000)
+  const bucketMs = Math.max(1, bucketMinutes) * 60_000
+  return Math.max(0, Math.floor((horizonMs - bucketStartMs(lastMs, bucketMinutes)) / bucketMs))
 }
 
 /** Rozšíří grid o `extra` sloupců zopakováním posledního naměřeného sloupce.
@@ -79,7 +85,8 @@ export function projectGrid(grid: HeatmapGrid, extra: number): HeatmapGrid {
   }
 }
 
-/** Popisky osy X pro projektované minuty (navazují na poslední naměřenou). */
+/** Popisky osy X pro projektované koše — hranice košů navazující na poslední
+naměřený koš (#584), takže 5m projekce běží `11:05, 11:10, …`, ne `11:03, 11:08`. */
 export function projectionLabels(
   lastMinuteIso: string | undefined,
   extra: number,
@@ -89,7 +96,9 @@ export function projectionLabels(
   if (!lastMinuteIso || extra <= 0) return []
   const last = new Date(lastMinuteIso)
   if (Number.isNaN(last.getTime())) return []
+  const bucketMs = Math.max(1, bucketMinutes) * 60_000
+  const lastBucketStart = bucketStartMs(last.getTime(), bucketMinutes)
   return Array.from({ length: extra }, (_, index) =>
-    format(new Date(last.getTime() + (index + 1) * bucketMinutes * 60_000).toISOString()),
+    format(new Date(lastBucketStart + (index + 1) * bucketMs).toISOString()),
   )
 }

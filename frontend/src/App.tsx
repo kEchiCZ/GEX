@@ -243,9 +243,15 @@ function MainContent() {
   const liveOverlay = useMemo(
     () =>
       playback.isLive
-        ? aggregateLive(live, bucketMinutes, modeDay.grid.minutes, day.overlays.price ?? [])
+        ? aggregateLive(
+            live,
+            bucketMinutes,
+            modeDay.grid.minutes,
+            day.overlays.price ?? [],
+            modeDay.minutesIso,
+          )
         : EMPTY_LIVE,
-    [live, bucketMinutes, modeDay.grid.minutes, day.overlays.price, playback.isLive],
+    [live, bucketMinutes, modeDay.grid.minutes, modeDay.minutesIso, day.overlays.price, playback.isLive], // prettier-ignore
   )
   // Koše, které živá vrstva přebírá — jejich statická svíčka se vynechá (jinak dvojí kresba).
   // Klíč je primitivní: mění se jednou za koš, ne s každým tickem.

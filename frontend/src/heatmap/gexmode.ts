@@ -7,6 +7,7 @@ nepřebila minulost jinou škálou. Budoucí sloupce se kreslí ve stávající
 projekční zóně (ztlumení + předěl, ADR-0006) — vizuál sám říká „model".
 */
 import type { GexFieldRow, GexProfileRow } from '../replay/loader'
+import { bucketStartMs } from './buckets'
 import { dataMinutesOf } from './grid'
 import type { HeatmapGrid } from './grid'
 import { copysignTransform, p99Denominator } from './modes'
@@ -135,8 +136,12 @@ export function projectGexField(
     result.set(signed.subarray(from, from + dataMinutes), strikeIdx * total)
   }
   const colStepMs = Math.max(1, fieldRow.colStepMin) * 60_000
+  const bucketMs = Math.max(1, opts.bucketMinutes) * 60_000
+  // Koš k pokrývá čas hranice posledního koše + (k+1) × bucket — shodně
+  // s `projectionLabels` a `projectedSessions` (#584)
+  const lastBucketStart = bucketStartMs(lastMs, opts.bucketMinutes)
   for (let k = 0; k < extra; k += 1) {
-    const timeMs = lastMs + (k + 1) * opts.bucketMinutes * 60_000
+    const timeMs = lastBucketStart + (k + 1) * bucketMs
     const colIdx = Math.min(
       fieldRow.colCount - 1,
       Math.max(0, Math.round((timeMs - colStartMs) / colStepMs)),

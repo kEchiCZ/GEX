@@ -33,6 +33,7 @@ import type { OverlayData, PriceBar, PriceStyle } from '../heatmap/overlays'
 import { markerColor, markerNear, markerStyle } from '../heatmap/newsMarkers'
 import type { NewsMarker as NewsMarkerType } from '../heatmap/newsMarkers'
 import { signalAt, signalColor } from '../heatmap/signalMarkers'
+import { bucketPhaseMinutes } from '../heatmap/buckets'
 import { gapBands } from '../heatmap/spacing'
 import {
   DEFAULT_VIEW,
@@ -320,6 +321,11 @@ export function Heatmap({
     () => (minutesIso ? minuteAxisOffsets(minutesIso) : null),
     [minutesIso],
   )
+  // Posun hranic košů proti začátku osy (#584): index koše × bucketMinutes − fáze = index 1m osy
+  const bucketPhase = useMemo(
+    () => bucketPhaseMinutes(minutesIso ?? [], bucketMinutes),
+    [minutesIso, bucketMinutes],
+  )
 
   /** Převod dat → obrazovka v logických CSS px (sdílený pro data i overlay canvas). */
   const mapping = useCallback(() => {
@@ -341,7 +347,9 @@ export function Heatmap({
         // Absolutní minuta dne (#430, #502): spojitý index bucketu → index 1m
         // osy → skutečná minuta přes mapu osy. Anotace tak drží pozici při
         // přepnutí timeframe i po backfillu minut doprostřed osy.
-        const axisIndex = ((x - view.offsetX) / scaleX - 0.5) * bucketMinutes
+        // `bucketPhase` je posun hranic košů proti začátku osy (#584) — bez něj
+        // by anotace po přepnutí TF ujely až o (bucketMinutes − 1) minut
+        const axisIndex = ((x - view.offsetX) / scaleX - 0.5) * bucketMinutes - bucketPhase
         const minute = axisOffsets ? minuteFromAxisIndex(axisOffsets, axisIndex) : axisIndex
         const row = strikeCount - 1 - ((y - view.offsetY) / scaleY - 0.5)
         const clamped = Math.min(strikeCount - 1, Math.max(0, row))
@@ -354,7 +362,7 @@ export function Heatmap({
         return { minute, strike }
       },
     }
-  }, [grid.minutes, grid.strikes, strikeCount, view, logicalW, logicalH, bucketMinutes, axisOffsets]) // prettier-ignore
+  }, [grid.minutes, grid.strikes, strikeCount, view, logicalW, logicalH, bucketMinutes, bucketPhase, axisOffsets]) // prettier-ignore
 
   // 1) Data → offscreen bitmapa (jen při změně dat/stylu). S Dyn GEX podkladem
   // (#242) se pole kreslí PRVNÍ a měřený grid přes něj — putImageData by podklad
@@ -709,7 +717,10 @@ export function Heatmap({
     // Anotace (SPEC 7.4): kreslené v datových souřadnicích, škálují se s pan/zoom.
     // Absolutní minuta dne → index 1m osy přes mapu (#502) → index bucketu.
     const annotationX = (minute: number): number =>
-      minuteToX((axisOffsets ? axisIndexFromMinute(axisOffsets, minute) : minute) / bucketMinutes)
+      minuteToX(
+        ((axisOffsets ? axisIndexFromMinute(axisOffsets, minute) : minute) + bucketPhase) /
+          bucketMinutes,
+      )
     const drawAnnotation = (tool: AnnotationTool, color: string, points: AnnotationPoint[]) => {
       if (points.length < 2) return
       context.strokeStyle = color
@@ -779,6 +790,7 @@ export function Heatmap({
   }, [
     mapping,
     bucketMinutes,
+    bucketPhase,
     axisOffsets,
     contourSegments,
     overlays,
