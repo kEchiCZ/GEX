@@ -630,3 +630,41 @@ test('guma na heatmapě zavolá onAnnotationErase s id nejbližší anotace', ()
   fireEvent.pointerDown(overlay, { clientX: 120, clientY: 288 })
   expect(erased).toEqual([9])
 })
+
+// ── Absolutní hodnoty v tooltipu (#470) ───────────────────────────
+
+test('tooltip nese absolutní hodnoty VEDLE normalizovaných (#470)', () => {
+  const grid = demoGrid(100, 10)
+  render(
+    <CrosshairProvider>
+      <Heatmap
+        grid={grid}
+        style="gradient"
+        contours="off"
+        cellAbsolute={(bucketIdx, strike) => `OI C/P 938 / 918 · min ${bucketIdx} · s ${strike}`}
+      />
+    </CrosshairProvider>,
+  )
+  const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
+  fireEvent.pointerMove(overlay, { clientX: 120, clientY: 288 })
+  const tooltip = screen.getByRole('tooltip')
+  // Normalizovaná hodnota zůstává (čte se z ní barva), absolutní je vedle ní
+  expect(tooltip.textContent).toContain('strike')
+  expect(tooltip.textContent).toContain('call ')
+  expect(tooltip.textContent).toContain('OI C/P 938 / 918')
+  // Index koše a strike dorazí do callbacku správně (x=120 na 12px mřížce → sloupec 10)
+  expect(tooltip.textContent).toContain('min 10')
+  expect(tooltip.textContent).toContain(`s ${grid.strikes[5]}`)
+})
+
+test('tooltip: bez cellAbsolute zůstává jednořádkový jako dřív (#470)', () => {
+  const grid = demoGrid(100, 10)
+  render(
+    <CrosshairProvider>
+      <Heatmap grid={grid} style="gradient" contours="off" />
+    </CrosshairProvider>,
+  )
+  const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
+  fireEvent.pointerMove(overlay, { clientX: 120, clientY: 288 })
+  expect(screen.getByRole('tooltip').textContent).not.toContain('OI C/P')
+})
