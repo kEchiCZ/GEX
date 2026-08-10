@@ -817,7 +817,7 @@ export function Heatmap({
     if (!canvas) return
     const context = canvas.getContext('2d')
     if (!context) return
-    const { minuteToX, rowToY, scaleX, scaleY, screenToDataPoint } = mapping()
+    const { minuteToX, rowToY, scaleX, screenToDataPoint } = mapping()
     context.setTransform(dpr, 0, 0, dpr, 0, 0)
     context.clearRect(0, 0, logicalW, logicalH)
 
@@ -897,14 +897,8 @@ export function Heatmap({
         context.lineTo(logicalW, pointer.y)
         context.stroke()
       }
-      // Zvýraznění buňky pod kurzorem (jen nad daty — mimo svíce se nekreslí)
-      const inRangeMinute = crosshair.minuteIdx >= 0 && crosshair.minuteIdx < grid.minutes
-      const row = crosshair.strike === null ? -1 : grid.strikes.indexOf(crosshair.strike)
-      if (inRangeMinute && row >= 0) {
-        const y = rowToY(row)
-        context.strokeStyle = 'rgba(215,220,230,0.9)'
-        context.strokeRect(x - 0.5 * scaleX, y - 0.5 * scaleY, scaleX, scaleY)
-      }
+      // Buňka pod kurzorem se NEobtahuje (#588): obrys velikosti koše × strike vypadal
+      // jako prázdná svíčka a překrýval tu skutečnou. Co je pod kurzorem, říká tooltip.
 
       // Osové labely crosshairu (TradingView styl) — kreslené naposled, nad vším
       context.font = 'bold 11px sans-serif'
