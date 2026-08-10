@@ -35,6 +35,23 @@ export async function createAnnotation(
   return { id: row.id, payload: row.payload }
 }
 
+/** Přepíše payload existující anotace — přesun tažením (#589) drží `id`. */
+export async function updateAnnotation(
+  id: number,
+  payload: AnnotationPayload,
+): Promise<StoredAnnotation> {
+  const response = await fetch(`${API_BASE}/annotations/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ payload }),
+  })
+  if (!response.ok) {
+    throw new Error(`Přesun anotace selhal: HTTP ${response.status}`)
+  }
+  const row = (await response.json()) as AnnotationRow
+  return { id: row.id, payload: row.payload }
+}
+
 export async function deleteAnnotation(id: number): Promise<void> {
   const response = await fetch(`${API_BASE}/annotations/${id}`, { method: 'DELETE' })
   if (!response.ok && response.status !== 404) {

@@ -35,6 +35,11 @@ function mockFetch(overrides: Partial<Record<string, unknown>> = {}) {
         json: async () => ({ id: 42, symbol: 'ES', day: '2026-07-16', payload: body.payload }),
       }
     }
+    if (init?.method === 'PUT') {
+      const body = JSON.parse(String(init.body)) as { payload: AnnotationPayload }
+      const id = Number(target.split('/').pop())
+      return { ok: true, json: async () => ({ id, symbol: 'ES', day: '2026-07-16', payload: body.payload }) } // prettier-ignore
+    }
     if (init?.method === 'DELETE') {
       return { ok: true, status: 204, json: async () => ({}) }
     }
@@ -294,6 +299,150 @@ test('vložení minut doprostřed osy (backfill) anotaci neposune (#502)', () =>
   // Na sloupci minuty 50 anotace je
   fireEvent.pointerDown(overlay, { clientX: (50 + 0.5) * columnPx, clientY: 288 })
   expect(erased).toEqual([3])
+})
+
+// ── Přesun tažením v režimu Kurzor (#589) ─────────────────────────
+
+/** Anotace u sloupce 9.5 (x = 120 px) a řádku 5 zdola (y = 288 px) na demo gridu. */
+function movable(grid: ReturnType<typeof demoGrid>): StoredAnnotation {
+  return {
+    id: 11,
+    payload: {
+      tool: 'line',
+      color: '#abcdef',
+      points: [
+        { minute: 9.5, strike: grid.strikes[5] },
+        { minute: 20, strike: grid.strikes[6] },
+      ],
+    },
+  }
+}
+
+test('tažení anotace v režimu Kurzor ji přesune o rozdíl v datových souřadnicích (#589)', () => {
+  const grid = demoGrid(100, 10) // sloupec 12 px, řádek 64 px
+  const annotation = movable(grid)
+  const moves: Array<{ id: number; payload: AnnotationPayload }> = []
+  render(
+    <CrosshairProvider>
+      <Heatmap
+        grid={grid}
+        style="gradient"
+        contours="off"
+        annotations={[annotation]}
+        annotationTool={null}
+        onAnnotationMove={(id, payload) => moves.push({ id, payload })}
+      />
+    </CrosshairProvider>,
+  )
+  const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
+  // Stisk na anotaci, tažení o 5 sloupců vpravo a o řádek nahoru
+  fireEvent.pointerDown(overlay, { clientX: 120, clientY: 288 })
+  fireEvent.pointerMove(overlay, { clientX: 180, clientY: 224 })
+  fireEvent.pointerUp(overlay)
+
+  expect(moves).toHaveLength(1)
+  expect(moves[0].id).toBe(11)
+  const { points, tool, color } = moves[0].payload
+  expect(tool).toBe('line') // nástroj i barva zůstávají
+  expect(color).toBe('#abcdef')
+  // Oba body se posunuly o TENTÝŽ rozdíl (5 minut, 1 strike krok)
+  const strikeStep = grid.strikes[1] - grid.strikes[0]
+  expect(points[0].minute).toBeCloseTo(14.5, 5)
+  expect(points[1].minute).toBeCloseTo(25, 5)
+  expect(points[0].strike).toBeCloseTo(grid.strikes[5] + strikeStep, 5)
+  expect(points[1].strike).toBeCloseTo(grid.strikes[6] + strikeStep, 5)
+})
+
+test('přesun se drží minut dne, takže na jiném TF posune o stejný čas (#589, #430)', () => {
+  const grid = demoGrid(100, 10) // 5min koše → sloupec 12 px
+  const annotation: StoredAnnotation = {
+    id: 12,
+    payload: {
+      tool: 'arrow',
+      color: '#fff',
+      points: [
+        { minute: 47.5, strike: grid.strikes[5] },
+        { minute: 100, strike: grid.strikes[5] },
+      ],
+    },
+  }
+  const moves: Array<{ id: number; payload: AnnotationPayload }> = []
+  render(
+    <CrosshairProvider>
+      <Heatmap
+        grid={grid}
+        style="gradient"
+        contours="off"
+        bucketMinutes={5}
+        annotations={[annotation]}
+        annotationTool={null}
+        onAnnotationMove={(id, payload) => moves.push({ id, payload })}
+      />
+    </CrosshairProvider>,
+  )
+  const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
+  fireEvent.pointerDown(overlay, { clientX: 120, clientY: 288 })
+  fireEvent.pointerMove(overlay, { clientX: 156, clientY: 288 }) // 3 koše = 15 minut
+  fireEvent.pointerUp(overlay)
+
+  expect(moves).toHaveLength(1)
+  expect(moves[0].payload.points[0].minute).toBeCloseTo(62.5, 5)
+  expect(moves[0].payload.points[1].minute).toBeCloseTo(115, 5)
+})
+
+test('tažení mimo anotaci ji nepřesouvá (zůstává pan plochy) a klik bez tažení taky ne (#589)', () => {
+  const grid = demoGrid(100, 10)
+  const moves: number[] = []
+  render(
+    <CrosshairProvider>
+      <Heatmap
+        grid={grid}
+        style="gradient"
+        contours="off"
+        annotations={[movable(grid)]}
+        annotationTool={null}
+        onAnnotationMove={(id) => moves.push(id)}
+      />
+    </CrosshairProvider>,
+  )
+  const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
+  // Daleko od anotace → pan
+  fireEvent.pointerDown(overlay, { clientX: 900, clientY: 100 })
+  fireEvent.pointerMove(overlay, { clientX: 950, clientY: 150 })
+  fireEvent.pointerUp(overlay)
+  expect(moves).toEqual([])
+  // Stisk na anotaci bez pohybu → žádné ukládání
+  fireEvent.pointerDown(overlay, { clientX: 120, clientY: 288 })
+  fireEvent.pointerUp(overlay)
+  expect(moves).toEqual([])
+})
+
+test('move pošle PUT s novým payloadem a při chybě vrátí původní pozici (#589)', async () => {
+  const fetchMock = mockFetch()
+  const { result } = renderHook(() => useAnnotations('ES', '2026-07-16'))
+  await waitFor(() => expect(result.current.annotations).toHaveLength(1))
+
+  const moved: AnnotationPayload = {
+    ...SAVED.payload,
+    points: [
+      { minute: 15, strike: 7430 },
+      { minute: 35, strike: 7460 },
+    ],
+  }
+  await act(() => result.current.move(7, moved))
+  expect(result.current.annotations).toEqual([{ id: 7, payload: moved }])
+  const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')
+  expect(putCall).toBeDefined()
+  expect(String(putCall![0]).endsWith('/annotations/7')).toBe(true)
+  expect(JSON.parse(String(putCall![1]!.body)).payload).toEqual(moved)
+
+  // Selhání uložení musí vrátit původní pozici — jinak by po reloadu skočila zpět
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })),
+  )
+  await act(() => result.current.move(7, SAVED.payload))
+  expect(result.current.annotations).toEqual([{ id: 7, payload: moved }])
 })
 
 test('guma na heatmapě zavolá onAnnotationErase s id nejbližší anotace', () => {
