@@ -112,3 +112,17 @@ test('přepínače timeframe a vizualizace mění stav', () => {
   fireEvent.click(sessions)
   expect(sessions.checked).toBe(true)
 })
+
+test('tlačítka zpět/vpřed kreslení jsou nejdřív disabled a Ctrl+Z je nerozbije (#590)', () => {
+  makeApp()
+
+  const undo = screen.getByRole('button', { name: 'Zpět' }) as HTMLButtonElement
+  const redo = screen.getByRole('button', { name: 'Vpřed' }) as HTMLButtonElement
+  expect(undo.disabled).toBe(true)
+  expect(redo.disabled).toBe(true)
+  // Klávesa nad prázdnou historií je no-op (nesmí spadnout ani nic smazat)
+  fireEvent.keyDown(window, { key: 'z', ctrlKey: true })
+  fireEvent.keyDown(window, { key: 'z', ctrlKey: true, shiftKey: true })
+  expect(undo.disabled).toBe(true)
+  expect(redo.disabled).toBe(true)
+})
