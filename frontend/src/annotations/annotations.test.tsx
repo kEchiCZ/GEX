@@ -136,6 +136,128 @@ test('create pošle POST s payloadem v čas×strike souřadnicích; erase pošle
   ).toBe(true)
 })
 
+// ── Undo/redo (#590) ──────────────────────────────────────────────
+
+const drawn = (minute: number): AnnotationPayload => ({
+  tool: 'line',
+  color: '#00ff00',
+  points: [
+    { minute, strike: 7400 },
+    { minute: minute + 5, strike: 7410 },
+  ],
+})
+
+test('undo/redo: tři nakreslené prvky se vrátí a zase obnoví (#590)', async () => {
+  let nextId = 100
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url: unknown, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { payload: AnnotationPayload }
+        return { ok: true, json: async () => ({ id: (nextId += 1), payload: body.payload }) }
+      }
+      if (init?.method === 'DELETE') return { ok: true, status: 204, json: async () => ({}) }
+      return { ok: true, json: async () => ({ annotations: [] }) }
+    }),
+  )
+  const { result } = renderHook(() => useAnnotations('ES', '2026-07-16'))
+  await waitFor(() => expect(result.current.canUndo).toBe(false))
+  expect(result.current.canRedo).toBe(false)
+
+  for (const minute of [10, 20, 30]) await act(() => result.current.create(drawn(minute)))
+  expect(result.current.annotations).toHaveLength(3)
+  expect(result.current.canUndo).toBe(true)
+
+  for (let i = 0; i < 3; i += 1) await act(() => result.current.undo())
+  expect(result.current.annotations).toEqual([])
+  expect(result.current.canUndo).toBe(false)
+  expect(result.current.canRedo).toBe(true)
+
+  for (let i = 0; i < 3; i += 1) await act(() => result.current.redo())
+  expect(result.current.annotations.map((a) => a.payload.points[0].minute)).toEqual([10, 20, 30])
+  expect(result.current.canRedo).toBe(false)
+
+  // Prázdný zásobník: undo/redo navíc nic nerozbije
+  await act(() => result.current.redo())
+  expect(result.current.annotations).toHaveLength(3)
+})
+
+test('undo vrátí i smazání gumou a přesun (#590)', async () => {
+  mockFetch()
+  const { result } = renderHook(() => useAnnotations('ES', '2026-07-16'))
+  await waitFor(() => expect(result.current.annotations).toHaveLength(1))
+
+  await act(() => result.current.erase(7))
+  expect(result.current.annotations).toEqual([])
+  await act(() => result.current.undo())
+  // Anotace je zpátky se stejným payloadem (id přidělí server znovu)
+  expect(result.current.annotations).toHaveLength(1)
+  expect(result.current.annotations[0].payload).toEqual(SAVED.payload)
+
+  const restoredId = result.current.annotations[0].id
+  const moved = { ...SAVED.payload, points: [{ minute: 99, strike: 7500 }] }
+  await act(() => result.current.move(restoredId, moved))
+  expect(result.current.annotations[0].payload).toEqual(moved)
+  await act(() => result.current.undo())
+  expect(result.current.annotations[0].payload).toEqual(SAVED.payload)
+})
+
+test('undo/redo přemapuje id, takže další undo maže existující anotaci (#590)', async () => {
+  let nextId = 200
+  const deleted: number[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { payload: AnnotationPayload }
+        return { ok: true, json: async () => ({ id: (nextId += 1), payload: body.payload }) }
+      }
+      if (init?.method === 'DELETE') {
+        deleted.push(Number(String(url).split('/').pop()))
+        return { ok: true, status: 204, json: async () => ({}) }
+      }
+      return { ok: true, json: async () => ({ annotations: [] }) }
+    }),
+  )
+  const { result } = renderHook(() => useAnnotations('ES', '2026-07-16'))
+  await waitFor(() => expect(result.current.canUndo).toBe(false))
+
+  await act(() => result.current.create(drawn(10))) // id 201
+  await act(() => result.current.undo()) // DELETE 201
+  await act(() => result.current.redo()) // znovu POST → id 202
+  const secondId = result.current.annotations[0].id
+  expect(secondId).toBe(202)
+  await act(() => result.current.undo()) // musí mazat 202, ne 201
+  expect(deleted).toEqual([201, 202])
+  expect(result.current.annotations).toEqual([])
+})
+
+test('nová operace zahodí redo zásobník (#590)', async () => {
+  mockFetch()
+  const { result } = renderHook(() => useAnnotations('ES', '2026-07-16'))
+  await waitFor(() => expect(result.current.annotations).toHaveLength(1))
+
+  await act(() => result.current.create(drawn(10)))
+  await act(() => result.current.undo())
+  expect(result.current.canRedo).toBe(true)
+  await act(() => result.current.create(drawn(50)))
+  expect(result.current.canRedo).toBe(false)
+})
+
+test('přepnutí instrumentu/dne vynuluje historii (#590)', async () => {
+  mockFetch()
+  const { result, rerender } = renderHook(
+    ({ symbol, date }: { symbol: string; date: string }) => useAnnotations(symbol, date),
+    { initialProps: { symbol: 'ES', date: '2026-07-16' } },
+  )
+  await waitFor(() => expect(result.current.annotations).toHaveLength(1))
+  await act(() => result.current.create(drawn(10)))
+  expect(result.current.canUndo).toBe(true)
+
+  rerender({ symbol: 'NQ', date: '2026-07-16' })
+  await waitFor(() => expect(result.current.canUndo).toBe(false))
+})
+
 // ── Kreslení na heatmapě: drag → payload v datových souřadnicích ──
 
 test('tažení s nástrojem linie vytvoří anotaci vázanou na čas×strike (AC)', () => {

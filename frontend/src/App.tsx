@@ -366,6 +366,21 @@ function MainContent() {
   }, [day.overlays.price])
   // Anotace: persistence per instrument + den (SPEC 7.4)
   const annotationsState = useAnnotations(symbol, viewDate)
+  // Ctrl+Z / Ctrl+Shift+Z nad kreslením (#590) — tlačítka ↶ ↷ dělají totéž
+  const { undo: undoAnnotation, redo: redoAnnotation } = annotationsState
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'z') return
+      const tag = (event.target as HTMLElement | null)?.tagName
+      // V editovatelných polích si Ctrl+Z řeší prohlížeč sám
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      event.preventDefault()
+      if (event.shiftKey) void redoAnnotation()
+      else void undoAnnotation()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undoAnnotation, redoAnnotation])
 
   // Přetáčení = synchronní krájení všech panelů v paměti
   const grid = useMemo(
@@ -833,6 +848,25 @@ function MainContent() {
           value={annotationColor}
           onChange={(event) => setAnnotationColor(event.target.value)}
         />
+        {/* Undo/redo kreslení (#590) — pokrývá i mazání gumou a přesun (#589) */}
+        <button
+          className="chip"
+          onClick={() => void annotationsState.undo()}
+          disabled={!annotationsState.canUndo}
+          aria-label="Zpět"
+          title="Zpět (Ctrl+Z)"
+        >
+          ↶
+        </button>
+        <button
+          className="chip"
+          onClick={() => void annotationsState.redo()}
+          disabled={!annotationsState.canRedo}
+          aria-label="Vpřed"
+          title="Vpřed (Ctrl+Shift+Z)"
+        >
+          ↷
+        </button>
         <span className="muted" data-testid="data-source">
           {day.source === 'replay'
             ? `replay ${viewDate}${isHistoricalExpiry ? ' · den expirace' : ''}`
