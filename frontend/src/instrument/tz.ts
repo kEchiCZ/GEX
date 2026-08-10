@@ -43,6 +43,23 @@ function offsetMs(timeZone: string, ts: number): number {
   return asUtc - Math.floor(ts / 1000) * 1000
 }
 
+/** Kalendářní datum a čas okamžiku `ts` (epoch ms) v zóně `timeZone`; `month` je 1-based. */
+export function zonedDateParts(
+  timeZone: string,
+  ts: number,
+): { year: number; month: number; day: number; hour: number; minute: number } {
+  const parts = formatter(timeZone).formatToParts(ts)
+  const get = (type: Intl.DateTimeFormatPartTypes): number =>
+    Number(parts.find((p) => p.type === type)?.value ?? NaN)
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: get('hour'),
+    minute: get('minute'),
+  }
+}
+
 /** Epoch ms okamžiku „`hour`:`minute` dne `year`-`month`-`day` v zóně `timeZone`".
 
 `month` je 1-based. Dvě iterace stačí: první odhad s offsetem UTC okamžiku,
