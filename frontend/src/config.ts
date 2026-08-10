@@ -18,3 +18,7 @@ export const WS_URL: string = wsUrlFor(
 )
 
 export const APP_VERSION = '0.1.0'
+
+/** Prostředí aplikace (#568): 'dev' rozsvítí DEV badge v sidebaru, ať se okno
+dev a prod nesplete. Produkce build arg neposílá → prázdné, bez badge. */
+export const APP_ENV: string = (import.meta.env.VITE_GEXLENS_ENV as string | undefined) ?? ''

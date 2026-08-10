@@ -240,6 +240,25 @@ Regenerace manuálů (MD → HTML pro in-app wiki → PDF): `powershell scripts/
 
 Konvence: feature branch `feat/{issue}-slug` / `fix/...`, PR s `Closes #N`, merge po zeleném CI. Výpočty vždy s golden testy v `engine/tests/golden/` (ručně spočtené hodnoty, výpočet dokumentovaný v `description`).
 
+### Oddělená prostředí DEV a PROD (#568)
+
+Vedle produkčního stacku (`compose.yml`, :8080) existuje dev stack (`compose.dev.yml`, projekt `gexdev`, :8081) s vlastním PG volume (`gexdev_pgdata`) a vlastní kopií parquet dat (`data-dev/`). Cíl: vývoj se nikdy nedotkne produkčních dat, která nejdou znovu pořídit (věčný OI archiv, setupy, track record).
+
+| Skript / ikona | Co dělá | Souběh s prod |
+| --- | --- | --- |
+| `scripts/start-prod.ps1` (ikona **GEXLens**) | produkce; shodí dev-live, pokud běží | — |
+| `scripts/start-dev.ps1` (ikona **GEXLens DEV**) | dev bez enginu: PG + API + frontend nad kopií dat | **povolen** — market data účtu se nedotkne, prod dál sbírá |
+| `scripts/start-dev.ps1 -Live` (ikona **GEXLens DEV+Engine**) | plný stack proti TWS | **zakázán** — skript nejdřív shodí produkci (jeden účet); po dobu běhu prod nesbírá |
+| `scripts/seed-dev.ps1` | obnoví dev PG z nejnovější zálohy + zrcadlí `data/` → `data-dev/` | povolen |
+
+Pravidla:
+
+- **Produkce pouští výhradně `main`.** `start-prod.ps1 -Build` odmítne stavět z jiné větve nebo ze špinavého stromu (`-Force` = vědomé obejití). Bez `-Build` se jen startují dřív postavené image. Dev pouští libovolnou rozpracovanou větev.
+- **Nasazení po mergi:** `git checkout main && git pull`, pak `.\scripts\start-prod.ps1 -Build`. Před nasazením, které sahá na schéma DB, vždy `.\scripts\backup-postgres.ps1` — izolace dev to nenahrazuje, je to druhá vrstva.
+- Dev frontend nese v sidebaru oranžový badge **DEV** (build arg `VITE_GEXLENS_ENV`), ať se okna prohlížeče nespletou.
+- Dev stack je jednorázový: rozbitý dev = `docker compose -f compose.dev.yml down -v`, smazat `data-dev/`, `seed-dev.ps1` znovu.
+- Dev engine má výchozí `clientId 2` (`GEXLENS_DEV_IBKR_CLIENT_ID`), aby se v TWS nepotkal s produkční jedničkou.
+
 ## 10. Testy a CI
 
 - **Python** (~160): jednotkové + golden (GEX, levels, heatmap módy, walls, CumΔ, profil), mock-based integrační (scheduler, hot zóna, runtime), PG integrační (v CI přes service kontejner), **e2e smoke** — deterministický referenční den přes celou pipeline engine→storage→API proti golden hodnotám.

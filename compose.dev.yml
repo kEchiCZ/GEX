@@ -1,0 +1,141 @@
+# GEXLens — DEV prostředí (#568). Samostatný stack vedle produkce:
+# vlastní projekt (gexdev), vlastní PG volume, vlastní data-dev/, porty +1.
+#
+# Dva režimy (rozhodnutí uživatele, #568):
+#   docker compose -f compose.dev.yml up -d
+#     → postgres + api + frontend. NEDOTKNE se market data účtu, smí běžet
+#       souběžně s produkcí. Většina vývoje (UI, API, výpočty nad kopií dat).
+#   docker compose -f compose.dev.yml --profile live up -d
+#     → + engine + news-engine. Exkluzivní s produkcí (jeden účet) — souběh
+#       vynuceně řeší scripts/start-dev.ps1 -Live (nejdřív shodí prod).
+#
+# Data se plní ze zálohy produkce: scripts/seed-dev.ps1. Celý dev stack je
+# jednorázově zahoditelný — `docker compose -f compose.dev.yml down -v`
+# + smazání data-dev/ a seed znovu.
+#
+# Záměrně SAMOSTATNÝ soubor, ne override přes -f compose.yml -f …: seznamy
+# portů se při override SLUČUJÍ (publikoval by se :8080 i :8081 z jednoho
+# kontejneru) a sdílená definice by tiše měnila produkci.
+name: gexdev
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+services:
+  postgres:
+    restart: unless-stopped
+    image: postgres:16
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: gexlens
+      POSTGRES_PASSWORD: ${GEXLENS_PG_PASSWORD:?chybí GEXLENS_PG_PASSWORD — vygeneruj přes scripts/init-secrets.ps1}
+      POSTGRES_DB: gexlens
+    ports:
+      # Prod má 55432 — dev o jedničku výš, ať jdou zálohy/sondy na oba
+      - "${GEXLENS_BIND_ADDR:-127.0.0.1}:55433:5432"
+    volumes:
+      # Jmenné volume dostane prefix projektu → gexdev_pgdata, s produkčním
+      # gex_pgdata se nemůže potkat
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gexlens"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+    command: uvicorn gexlens_api.main:app --host 0.0.0.0 --port 8000
+    logging: *default-logging
+    environment:
+      GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
+      GEXLENS_DATA_DIR: /app/data
+      GEXLENS_API_TOKEN: ${GEXLENS_API_TOKEN:?chybí GEXLENS_API_TOKEN — vygeneruj přes scripts/init-secrets.ps1}
+      GEXLENS_ALLOWED_ORIGINS: ${GEXLENS_ALLOWED_ORIGINS:-}
+    ports:
+      - "${GEXLENS_BIND_ADDR:-127.0.0.1}:8001:8000"
+    volumes:
+      - ./data-dev:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  engine:
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+    command: python -m gexlens_engine
+    logging: *default-logging
+    environment:
+      GEXLENS_IBKR_HOST: host.docker.internal
+      GEXLENS_IBKR_PORT: ${GEXLENS_IBKR_PORT:-7496}
+      # Jiné default clientId než prod (1) — pojistka pro případ, že by v TWS
+      # ještě dožíval produkční engine
+      GEXLENS_IBKR_CLIENT_ID: ${GEXLENS_DEV_IBKR_CLIENT_ID:-2}
+      GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
+      GEXLENS_DATA_DIR: /app/data
+      GEXLENS_API_BASE: http://api:8000
+      GEXLENS_API_TOKEN: ${GEXLENS_API_TOKEN:?}
+      GEXLENS_SYMBOLS: ${GEXLENS_SYMBOLS:-ES}
+      GEXLENS_MAX_INSTRUMENTS: ${GEXLENS_MAX_INSTRUMENTS:-3}
+    volumes:
+      - ./data-dev:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  news-engine:
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+    command: python -m gexlens_news run
+    logging: *default-logging
+    environment:
+      GEXLENS_NEWS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
+      GEXLENS_NEWS_FINNHUB_API_KEY: ${GEXLENS_NEWS_FINNHUB_API_KEY:-}
+      GEXLENS_NEWS_FRED_API_KEY: ${GEXLENS_NEWS_FRED_API_KEY:-}
+      GEXLENS_NEWS_BLS_API_KEY: ${GEXLENS_NEWS_BLS_API_KEY:-}
+      GEXLENS_NEWS_BEA_API_KEY: ${GEXLENS_NEWS_BEA_API_KEY:-}
+      GEXLENS_NEWS_GEMINI_API_KEY: ${GEXLENS_NEWS_GEMINI_API_KEY:-}
+      GEXLENS_NEWS_REDDIT_CLIENT_ID: ${GEXLENS_NEWS_REDDIT_CLIENT_ID:-}
+      GEXLENS_NEWS_REDDIT_CLIENT_SECRET: ${GEXLENS_NEWS_REDDIT_CLIENT_SECRET:-}
+      GEXLENS_NEWS_DATA_DIR: /app/data
+      GEXLENS_NEWS_API_BASE: http://api:8000
+      GEXLENS_NEWS_API_TOKEN: ${GEXLENS_API_TOKEN:?}
+    volumes:
+      - ./data-dev:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        VITE_API_BASE: /api
+        # Viditelný DEV badge v sidebaru (#568) — ať se okno dev a prod nesplete
+        VITE_GEXLENS_ENV: dev
+    logging: *default-logging
+    ports:
+      - "${GEXLENS_BIND_ADDR:-127.0.0.1}:8081:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

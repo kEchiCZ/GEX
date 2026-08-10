@@ -18,6 +18,8 @@ dist/
 # Data (Parquet snapshoty, ticky, derived — retence řeší engine)
 data/
 data-live/
+# Dev kopie produkčních dat (#568) — plní scripts/seed-dev.ps1
+data-dev/
 
 # Prostředí a secrets
 .env

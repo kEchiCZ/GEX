@@ -5,7 +5,7 @@ přepne aktivní ticker celé aplikace (graf, expirace, dashboard).
 */
 import { useCallback, useEffect, useState } from 'react'
 import { Legend } from './Legend'
-import { API_BASE, APP_VERSION } from '../config'
+import { API_BASE, APP_ENV, APP_VERSION } from '../config'
 import { frontContractCode } from '../instrument/expiry'
 import { useAppState } from '../state/AppState'
 import type { AppView } from '../state/AppState'
@@ -28,6 +28,17 @@ interface WatchlistItem {
 
 /** Interval opakování po neúspěšném načtení watchlistu (#407). */
 const WATCHLIST_RETRY_MS = 15_000
+
+/** DEV badge (#568): viditelné odlišení vývojového prostředí od produkce.
+Mimo sbalovací blok sidebaru — musí být vidět i se sbaleným menu. */
+export function EnvBadge({ env = APP_ENV }: { env?: string }) {
+  if (env !== 'dev') return null
+  return (
+    <span className="env-badge" title="Vývojové prostředí — kopie dat, ne produkce">
+      DEV
+    </span>
+  )
+}
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
@@ -139,6 +150,7 @@ export function Sidebar() {
       >
         {collapsed ? '»' : '«'}
       </button>
+      <EnvBadge />
       {!collapsed && (
         <>
           <nav aria-label="Hlavní navigace">
