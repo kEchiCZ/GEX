@@ -118,7 +118,8 @@ market data a nemá žádný důvod umět odeslat příkaz. Proto platí:
 3. **Tajemství jen v `.env`** (`GEXLENS_TASTY_CLIENT_SECRET`, `GEXLENS_TASTY_REFRESH_TOKEN`),
    nikdy v repu ani natvrdo v compose — stejný režim jako `GEXLENS_PG_PASSWORD`
    a `GEXLENS_API_TOKEN` podle #542. `.env.example` nese jen prázdné klíče s komentářem.
-   **Dev i produkce sdílejí jeden grant** (rozhodnutí uživatele 2026-08-11) — viz níže.
+   **Dev a produkce mají každé svůj grant** na témže účtu (rozhodnutí uživatele
+   2026-08-11) — viz níže.
 4. **Refresh token nikdy neexpiruje** — je to trvalé tajemství, ne dočasná relace, a tak
    se s ním musí zacházet. Access token (platnost 15 min) se obnovuje automaticky.
 5. **Redakce tokenů v logu doložená testem, ne docstringem.** Precedens #553: čištění tokenů
@@ -130,18 +131,21 @@ a transakce — grant jen na market data vydat nelze. Blast radius kompromitace 
 informací o účtu, nikoli cizí obchody. To je řádový rozdíl oproti plnému session tokenu,
 ale není to nula.
 
-**Sdílený grant mezi dev a produkcí** (rozhodnutí uživatele 2026-08-11). Na jednom účtu lze
-vydat víc grantů a odvolat je nezávisle, ale rozdělovat se nebudou — jeden grant, obě
-prostředí. Přijaté důsledky:
+**Oddělené granty pro dev a produkci** (rozhodnutí uživatele 2026-08-11). Účet je jeden,
+granty dva — na jednom účtu lze vydat víc grantů a odvolat je nezávisle (potvrzeno
+uživatelem). Přínos:
 
-- odvolání grantu shodí dev i produkci současně,
-- z logů brokera nepoznáme, které prostředí zátěž způsobilo,
-- únik `.env` z devu kompromituje i produkční přístup.
+- **nezávislé odvolání** — zabití dev přístupu (uniklý token, experiment mimo mísu) nechá
+  produkci běžet,
+- **atribuce** — při throttlingu je vidět, která strana ho způsobila,
+- menší blast radius při úniku `.env` z jednoho prostředí.
 
-Praktický dopad, který z toho plyne: **rate limit a kapacita subskripcí jsou sdílené per
-účet.** Dev experiment ujídá z rozpočtu produkce a v krajním případě jí způsobí 429 uprostřed
-seance. Dev proto musí mít konzervativnější limity než produkce, odvozené z hodnot změřených
-ve spiku (#612), ne odhadnuté. Provozně to řeší #623.
+Oddělené granty ale **neřeší kapacitu**: rate limit a kapacita subskripcí jsou
+pravděpodobně vázané na účet, ne na grant, takže dev experiment může ujídat z rozpočtu
+produkce a v krajním případě jí způsobit 429 uprostřed seance. Dev proto musí mít
+konzervativnější limity než produkce, odvozené z hodnot změřených ve spiku (#612), ne
+odhadnuté. Zda jsou limity per účet, nebo per grant, je explicitní bod měření v #612;
+provozně to řeší #623.
 
 **Předpoklad k ověření (#612):** že scope `read` stačí na `/api-quote-tokens` a na DXLink
 streaming. Očekává se ano, ale celý tento návrh na tom stojí — pokud by market data
