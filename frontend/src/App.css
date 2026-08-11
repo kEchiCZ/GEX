@@ -242,7 +242,14 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  /* Odskok doprava; zvoneček za skupinou zůstává nejvíc vpravo */
+}
+
+/* Pravý blok hlavičky (#597): pokrytí + Live + zvoneček u sebe u pravého okraje.
+   Auto mezera je JEN tady — dvě (na badge i na zvonečku) si volné místo rozdělily. */
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   margin-left: auto;
 }
 
@@ -615,7 +622,6 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
 
 .bell-wrap {
   position: relative;
-  margin-left: auto;
 }
 
 .bell-wrap .bell {
