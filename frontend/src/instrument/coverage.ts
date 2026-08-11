@@ -37,9 +37,13 @@ export function greeksCoverage(
   return { covered: complete, expected: total, ratio: Math.min(1, complete / total) }
 }
 
-/** Popisek pokrytí: `84/158 (53 %)`. */
+/** Popisek pokrytí: `84/158 (53 %)`, u plného pokrytí bez procent (`158/158`).
+
+Ve zdravém stavu badge nemá co říct, tak ať aspoň nekřičí (#597) — procento je
+informace jen tehdy, když něco chybí. */
 export function coverageLabel(coverage: Coverage): string {
-  return `${coverage.covered}/${coverage.expected} (${Math.round(coverage.ratio * 100)} %)`
+  const counts = `${coverage.covered}/${coverage.expected}`
+  return coverage.ratio >= 1 ? counts : `${counts} (${Math.round(coverage.ratio * 100)} %)`
 }
 
 /** Stáří posledních dat v minutách; `null` = není čas, ke kterému se vztáhnout. */

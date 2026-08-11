@@ -27,6 +27,7 @@ test('ohlcCoverage: souvislý den bez děr je 100 %, duplikáty barů se nepoč�
   const full = ohlcCoverage(axis, [...axis.keys()])!
   expect(full).toMatchObject({ covered: 30, expected: 30 })
   expect(full.ratio).toBe(1)
+  expect(coverageLabel(full)).toBe('30/30') // plné pokrytí bez procent (#597)
   // Provizorní i finální bar téže minuty = jedna pokrytá minuta
   const withDuplicates = ohlcCoverage(axis, [0, 0, 1, 1, 2])!
   expect(withDuplicates.covered).toBe(3)
@@ -46,6 +47,7 @@ test('greeksCoverage: bez hodnot ze statusu null, jinak podíl', () => {
   expect(coverageLabel(partial)).toBe('91/182 (50 %)')
   // Přestřelený počet (engine dohlásí víc) se nezobrazí jako 120 %
   expect(greeksCoverage(200, 182)!.ratio).toBe(1)
+  expect(coverageLabel(greeksCoverage(200, 182)!)).toBe('200/182')
 })
 
 test('dataAgeMinutes: stáří v minutách, budoucí čas nedává záporné', () => {
