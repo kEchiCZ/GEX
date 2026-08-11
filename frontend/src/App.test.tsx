@@ -140,10 +140,11 @@ test('hlavička ukazuje pokrytí Greeks s progress barem (#470)', () => {
 
   const badge = screen.getByTestId('coverage-greeks')
   expect(badge.textContent).toBe('Greeks 91/182 (50 %)')
-  // Skupina badge sedí u pravého okraje hlavičky, zvoneček zůstává za ní (#597)
-  const group = badge.closest('.coverage-group')!
-  const bell = document.querySelector('.bell-wrap')!
-  expect(group.compareDocumentPosition(bell) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  // Pravý blok drží pokrytí, Live i zvoneček u sebe a zvoneček je z nich poslední (#597)
+  const right = badge.closest('.header-right')!
+  const bell = right.querySelector('.bell-wrap')!
+  expect(right.querySelector('.live-indicator')).not.toBeNull()
+  expect(right.lastElementChild).toBe(bell)
   expect(badge.className).toContain('coverage-partial') // neúplné pokrytí hlásí barvu
   expect(badge.querySelector('.coverage-fill')?.getAttribute('style')).toContain('width: 50%')
 

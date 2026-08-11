@@ -168,98 +168,103 @@ export function InstrumentHeader({
       <TendencyChip />
       {/* Chip RiskOn/RiskOff/Neutral (#295, SPEC 9.0) — news sentiment vedle GEX režimu */}
       <StateChip />
-      {/* Pokrytí dat u grafu, ne ve spodní liště (#470) — díra v datech musí být vidět
-      tam, kam se člověk dívá. Drobné a u pravého okraje (#597), ať neruší zbytek hlavičky. */}
-      <div className="coverage-group">
-        <CoverageBadge
-          label="Greeks"
-          testId="coverage-greeks"
-          coverage={greeksCoverage(status.greeks_complete, status.greeks_total)}
-          title={
-            'Kolik striků chainu má kompletní řecká (delta/gamma/vega). Neúplné pokrytí ' +
-            'znamená, že část striků čeká na dopočet nebo se opakovaně nedaří — hodnoty ' +
-            'v profilu a Dyn GEX pak stojí na menším vzorku.'
-          }
-        />
-        <CoverageBadge
-          label="OHLC"
-          testId="coverage-ohlc"
-          coverage={ohlc ?? null}
-          title={
-            'Kolik minut zobrazeného dne má cenovou svíčku proti tomu, kolik jich mělo ' +
-            'podle časového rozpětí osy být. Méně než 100 % = díra ve sběru barů; ' +
-            'cenová křivka pak spojuje body přes chybějící úsek.'
-          }
-        />
-      </div>
-      <span className={live ? 'live-indicator live' : 'live-indicator stale'} role="status">
-        {live ? '● Live' : '○ Offline'}
-      </span>
-      <div className="bell-wrap">
-        <button
-          className="bell"
-          aria-label={`Notifikace (${unreadAlerts})`}
-          onClick={() => {
-            setAlertsOpen((open) => !open)
-            markAlertsRead()
-          }}
-        >
-          🔔{unreadAlerts > 0 && <span className="badge">{unreadAlerts}</span>}
-        </button>
-        {alertsOpen && (
-          <div className="alerts-dropdown" role="dialog" aria-label="Historie alertů">
-            {alerts.length === 0 && <p className="muted">Žádné alerty</p>}
-            <ol>
-              {[...alerts].reverse().map((alert, index) => {
-                const stamp = alertTimestamp(alert.ts)
-                // Zvoneček je globální (napříč instrumenty) → u alertu i symbol
-                const tag = [alert.symbol, alert.kind].filter(Boolean).join(' · ')
-                // Setup alerty jsou proklikávací (#186): nový setup → graf
-                // instrumentu (karta + linie), výsledek → stránka Setupy.
-                // Alerty od staršího enginu bez `event` rozliší text zprávy.
-                const isSetup = alert.kind === 'setup' && alert.symbol !== ''
-                const isResult =
-                  alert.event === 'closed' ||
-                  (alert.event === undefined && alert.message.includes('uzavřen'))
-                const content = (
-                  <>
-                    {stamp && <time className="alert-time muted">{stamp}</time>}
-                    <span className="muted">[{tag}]</span> {alert.message}
-                  </>
-                )
-                return (
-                  <li key={index}>
-                    {isSetup ? (
-                      <button
-                        type="button"
-                        className="alert-link"
-                        aria-label={
-                          isResult
-                            ? `Otevřít vyhodnocení setupů ${alert.symbol}`
-                            : `Otevřít graf ${alert.symbol}`
-                        }
-                        title={
-                          isResult
-                            ? `Otevřít vyhodnocení setupů ${alert.symbol}`
-                            : `Otevřít graf ${alert.symbol}`
-                        }
-                        onClick={() => {
-                          setSymbol(alert.symbol)
-                          setView(isResult ? 'setups' : 'chart')
-                          setAlertsOpen(false)
-                        }}
-                      >
-                        {content}
-                      </button>
-                    ) : (
-                      content
-                    )}
-                  </li>
-                )
-              })}
-            </ol>
-          </div>
-        )}
+      {/* Pravý blok hlavičky (#597): pokrytí dat, Live a zvoneček drží u sebe u pravého
+      okraje. Odsazuje je JEDEN `margin-left: auto` na téhle skupině — dva (dřív na badge
+      i na zvonečku) si volné místo rozdělily a mezi nimi zbyla mezera. */}
+      <div className="header-right">
+        {/* Pokrytí dat u grafu, ne ve spodní liště (#470) — díra v datech musí být vidět
+        tam, kam se člověk dívá. Drobné (#597), ať neruší zbytek hlavičky. */}
+        <div className="coverage-group">
+          <CoverageBadge
+            label="Greeks"
+            testId="coverage-greeks"
+            coverage={greeksCoverage(status.greeks_complete, status.greeks_total)}
+            title={
+              'Kolik striků chainu má kompletní řecká (delta/gamma/vega). Neúplné pokrytí ' +
+              'znamená, že část striků čeká na dopočet nebo se opakovaně nedaří — hodnoty ' +
+              'v profilu a Dyn GEX pak stojí na menším vzorku.'
+            }
+          />
+          <CoverageBadge
+            label="OHLC"
+            testId="coverage-ohlc"
+            coverage={ohlc ?? null}
+            title={
+              'Kolik minut zobrazeného dne má cenovou svíčku proti tomu, kolik jich mělo ' +
+              'podle časového rozpětí osy být. Méně než 100 % = díra ve sběru barů; ' +
+              'cenová křivka pak spojuje body přes chybějící úsek.'
+            }
+          />
+        </div>
+        <span className={live ? 'live-indicator live' : 'live-indicator stale'} role="status">
+          {live ? '● Live' : '○ Offline'}
+        </span>
+        <div className="bell-wrap">
+          <button
+            className="bell"
+            aria-label={`Notifikace (${unreadAlerts})`}
+            onClick={() => {
+              setAlertsOpen((open) => !open)
+              markAlertsRead()
+            }}
+          >
+            🔔{unreadAlerts > 0 && <span className="badge">{unreadAlerts}</span>}
+          </button>
+          {alertsOpen && (
+            <div className="alerts-dropdown" role="dialog" aria-label="Historie alertů">
+              {alerts.length === 0 && <p className="muted">Žádné alerty</p>}
+              <ol>
+                {[...alerts].reverse().map((alert, index) => {
+                  const stamp = alertTimestamp(alert.ts)
+                  // Zvoneček je globální (napříč instrumenty) → u alertu i symbol
+                  const tag = [alert.symbol, alert.kind].filter(Boolean).join(' · ')
+                  // Setup alerty jsou proklikávací (#186): nový setup → graf
+                  // instrumentu (karta + linie), výsledek → stránka Setupy.
+                  // Alerty od staršího enginu bez `event` rozliší text zprávy.
+                  const isSetup = alert.kind === 'setup' && alert.symbol !== ''
+                  const isResult =
+                    alert.event === 'closed' ||
+                    (alert.event === undefined && alert.message.includes('uzavřen'))
+                  const content = (
+                    <>
+                      {stamp && <time className="alert-time muted">{stamp}</time>}
+                      <span className="muted">[{tag}]</span> {alert.message}
+                    </>
+                  )
+                  return (
+                    <li key={index}>
+                      {isSetup ? (
+                        <button
+                          type="button"
+                          className="alert-link"
+                          aria-label={
+                            isResult
+                              ? `Otevřít vyhodnocení setupů ${alert.symbol}`
+                              : `Otevřít graf ${alert.symbol}`
+                          }
+                          title={
+                            isResult
+                              ? `Otevřít vyhodnocení setupů ${alert.symbol}`
+                              : `Otevřít graf ${alert.symbol}`
+                          }
+                          onClick={() => {
+                            setSymbol(alert.symbol)
+                            setView(isResult ? 'setups' : 'chart')
+                            setAlertsOpen(false)
+                          }}
+                        >
+                          {content}
+                        </button>
+                      ) : (
+                        content
+                      )}
+                    </li>
+                  )
+                })}
+              </ol>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   )
