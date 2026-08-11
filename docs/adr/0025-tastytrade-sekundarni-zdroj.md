@@ -102,6 +102,38 @@ překryv nastává jen u spotu a OI.
    z jiného než primárního zdroje musí být v rozhraní čitelný — stejný princip, jaký už
    platí pro pokrytí hot zóny.
 
+### Přístupová práva a tajemství
+
+*Doplněno 2026-08-11 na podnět uživatele (issue #620).*
+
+Sekundární zdroj se připojuje k **brokerskému účtu s reálnými penězi**. Aplikace z něj čte
+market data a nemá žádný důvod umět odeslat příkaz. Proto platí:
+
+1. **Výhradně OAuth2 se scope `read`.** tastytrade nabízí scopy `read`, `trade` a `openid`;
+   grant se vydává v Manage → Create Grant s potvrzením druhým faktorem. Scope **`trade` se
+   nezaškrtne nikdy** — nejde o důvěru v kód, ale o to, že právo, které aplikace nemá, nelze
+   zneužít. `openid` jen pokud ho autorizační tok vyžaduje.
+2. **Přihlášení jménem a heslem přes `/sessions` je zakázané**, a to i pro jednorázový
+   ověřovací spike. Session token z hesla nese plná práva účtu včetně obchodování.
+3. **Tajemství jen v `.env`** (`GEXLENS_TASTY_CLIENT_SECRET`, `GEXLENS_TASTY_REFRESH_TOKEN`),
+   nikdy v repu ani natvrdo v compose — stejný režim jako `GEXLENS_PG_PASSWORD`
+   a `GEXLENS_API_TOKEN` podle #542. `.env.example` nese jen prázdné klíče s komentářem.
+   Dev prostředí má vlastní grant, ne sdílený s produkcí.
+4. **Refresh token nikdy neexpiruje** — je to trvalé tajemství, ne dočasná relace, a tak
+   se s ním musí zacházet. Access token (platnost 15 min) se obnovuje automaticky.
+5. **Redakce tokenů v logu doložená testem, ne docstringem.** Precedens #553: čištění tokenů
+   z raw payloadů v news-engine nebylo implementované, přestože docstring tvrdil opak.
+   Token nesmí projít do logu ani při výjimce a při retry.
+
+**Poctivé omezení:** scopy jsou hrubé. `read` stále umožňuje číst zůstatky, pozice
+a transakce — grant jen na market data vydat nelze. Blast radius kompromitace je tedy únik
+informací o účtu, nikoli cizí obchody. To je řádový rozdíl oproti plnému session tokenu,
+ale není to nula.
+
+**Předpoklad k ověření (#612):** že scope `read` stačí na `/api-quote-tokens` a na DXLink
+streaming. Očekává se ano, ale celý tento návrh na tom stojí — pokud by market data
+vyžadovala `trade`, je to důvod k přehodnocení celé integrace, ne k rozšíření scope.
+
 ## Důsledky
 
 **Co se nemění:** IBKR zůstává primární pro všechny dnešní datové cesty. Do dokončení fáze 1
