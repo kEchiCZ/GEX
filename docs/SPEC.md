@@ -211,7 +211,7 @@ Levý sbalitelný sidebar (Dashboard, Watchlist s % změnami, IBKR Console, Them
 
 ### 7.2 Heatmapa (canvas/WebGL)
 - Render ~180 strikes × 1440 min při 60 fps pan/zoom; barevné vrstvy call (zelená) / put (červená), styl **Gradient** (bilineární interpolace) / **Blobs** (gaussovský kernel kolem koncentrací).
-- **Contours Off/Major/All:** marching squares nad vyhlazeným polem; Major = 2 izolinie na p75/p90, All = 5 úrovní; bílé přerušované.
+- **Contours Off/Major/All:** marching squares nad vyhlazeným polem, **obě strany zvlášť** (kladná i záporná struktura, #570). Prahy jsou **podíl síly, ne kvantily**: Major = 2 izolinie na 65 % a 95 % z p99 absolutní hodnoty strany, All = 40 % a 70 %; jmenovatel p99 se počítá **per strana** (při dominanci jedné strany by slabší jinak neměla čáru) a **nad transformovaným polem** (po aplikaci škály), takže kontury sedí na barvy. Konstanty `CONTOUR_MAJOR`/`CONTOUR_ALL`; bílé přerušované, záporná strana stejným stylem. *(Rev. 2026-08-12, #571 + #570: původní kvantilové prahy p75/p90 + 5 úrovní odpovídaly na „kolik buněk je slabších", ne „jak silná je brzda" — práh plaval mezi dny a All kreslilo 5 čar, viz #238.)*
 - Overlay: 1m cenová křivka (up/down tick barevně), sessions markery (konfig. seznam světových seancí s popisky), GEX Levels linie, Walls linie dle módu, značka aktuální ceny na pravé ose, timestamp dat.
 - Crosshair synchronizovaný se spodními panely a strike profilem; tooltip buňky (čas, strike, hodnoty metrik).
 
