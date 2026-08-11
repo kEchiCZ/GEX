@@ -147,6 +147,24 @@ konzervativnější limity než produkce, odvozené z hodnot změřených ve spi
 odhadnuté. Zda jsou limity per účet, nebo per grant, je explicitní bod měření v #612;
 provozně to řeší #623.
 
+### Konzervativní limity jsou dočasné, ne cílový stav
+
+Opatrné hodnoty platí **jen dokud měření neproběhne**. Jakmile spike (#612) zjistí skutečné
+stropy, produkční limity se **zvednou na maximum, které feed unese** — smyslem druhého zdroje
+je odstranit strop, ne přinést nový. Nechat po měření zbytečně nízké hodnoty by znamenalo
+zaplatit cenu integrace a nevybrat si její hlavní přínos.
+
+Konkrétně se po měření přenastaví: počet symbolů na subskripci, počet souběžných spojení,
+šířka strike bandu a počet současně držených expirací (#616), kadence REST dotazů.
+
+**Pozor na záměnu s IBKR.** U IBKR platí opačné pravidlo — `batch_size` se zvyšovat nesmí,
+protože strop účtu je tvrdých 100 market data lines a jeho překročení shodí subskripce.
+Toto rozhodnutí se týká **výhradně tastytrade větve**; limity IBKR zůstávají tam, kde jsou.
+
+Rezerva se nechává jen tam, kde ji vyžaduje sdílení účtu s dev prostředím a stabilita při
+reconnectu — ne „pro jistotu". Pokud měření žádné omezení neodhalí, je správná hodnota
+ta nejvyšší, která projde zátěžovým testem přes celou seanci.
+
 **Předpoklad k ověření (#612):** že scope `read` stačí na `/api-quote-tokens` a na DXLink
 streaming. Očekává se ano, ale celý tento návrh na tom stojí — pokud by market data
 vyžadovala `trade`, je to důvod k přehodnocení celé integrace, ne k rozšíření scope.
