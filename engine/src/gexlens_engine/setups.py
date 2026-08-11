@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
+from gexlens_engine.compute.gexfield import gamma_edges
 from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import (
     Direction,
@@ -137,6 +138,9 @@ class SetupEngine:
         minutes_left = self._minutes_to_expiry(runtime.expiry, now)
         # Dominance zdí (ADR-0010, #223) — LevelsRow ji nenese, čte se z plných levels
         full = runtime.last_gex_levels
+        # Hranice gamma masy (#600) z Dyn GEX profilu téže minuty — počítá se tady,
+        # neukládá: detektor ji potřebuje jako číslo, graf ji nekreslí.
+        edges = gamma_edges(runtime.last_profile) if runtime.last_profile else None
         inputs = MinuteInputs(
             ts=now,
             open=bar_open,
@@ -156,6 +160,8 @@ class SetupEngine:
             put_wall_dom=full.put_wall_dom if full else None,
             # GEX režim (#209) — do kontextu každého setupu pro kalibraci Fáze 2
             gex_regime=(gex_regime(bar_close, levels.flip, levels.total_gex) if levels else None),
+            gamma_edge_up=edges.up if edges else None,
+            gamma_edge_dn=edges.dn if edges else None,
         )
         self._history.append(inputs)
 
