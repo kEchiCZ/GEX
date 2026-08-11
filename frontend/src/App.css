@@ -239,9 +239,13 @@ body {
 /* Pokrytí dat v hlavičce (#470): číslo + mini progress bar. Drobné a u pravého
    okraje (#597) — ve zdravém stavu nemá co říct, tak ať nebere pozornost. */
 .coverage-group {
+  /* Dva řádky pod sebou (#604): Greeks nahoře, OHLC dole. `stretch` dá oběma
+     šířku toho širšího, takže s `space-between` uvnitř lícují popisky vlevo
+     i proužky vpravo. */
   display: inline-flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
 }
 
 /* Pravý blok hlavičky (#597): pokrytí + Live + zvoneček u sebe u pravého okraje.
@@ -256,8 +260,10 @@ body {
 .coverage {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: space-between;
+  gap: 6px;
   font-size: 10px;
+  line-height: 1.2;
   color: var(--text-muted);
   cursor: help;
   white-space: nowrap;
