@@ -112,28 +112,6 @@ export function InstrumentHeader({
         <span className="ticker">{symbol}</span>
         <span className="name muted">{SYMBOL_NAMES[symbol] ?? ''}</span>
       </div>
-      {/* Pokrytí dat u grafu, ne ve spodní liště (#470) — díra v datech musí být
-      vidět tam, kam se člověk dívá */}
-      <CoverageBadge
-        label="Greeks"
-        testId="coverage-greeks"
-        coverage={greeksCoverage(status.greeks_complete, status.greeks_total)}
-        title={
-          'Kolik striků chainu má kompletní řecká (delta/gamma/vega). Neúplné pokrytí ' +
-          'znamená, že část striků čeká na dopočet nebo se opakovaně nedaří — hodnoty ' +
-          'v profilu a Dyn GEX pak stojí na menším vzorku.'
-        }
-      />
-      <CoverageBadge
-        label="OHLC"
-        testId="coverage-ohlc"
-        coverage={ohlc ?? null}
-        title={
-          'Kolik minut zobrazeného dne má cenovou svíčku proti tomu, kolik jich mělo ' +
-          'podle časového rozpětí osy být. Méně než 100 % = díra ve sběru barů; ' +
-          'cenová křivka pak spojuje body přes chybějící úsek.'
-        }
-      />
       <div className="instrument-price">
         <span className="last">{lastPrice !== undefined ? lastPrice.toFixed(2) : '—'}</span>
         {changePct !== undefined && (
@@ -190,6 +168,30 @@ export function InstrumentHeader({
       <TendencyChip />
       {/* Chip RiskOn/RiskOff/Neutral (#295, SPEC 9.0) — news sentiment vedle GEX režimu */}
       <StateChip />
+      {/* Pokrytí dat u grafu, ne ve spodní liště (#470) — díra v datech musí být vidět
+      tam, kam se člověk dívá. Drobné a u pravého okraje (#597), ať neruší zbytek hlavičky. */}
+      <div className="coverage-group">
+        <CoverageBadge
+          label="Greeks"
+          testId="coverage-greeks"
+          coverage={greeksCoverage(status.greeks_complete, status.greeks_total)}
+          title={
+            'Kolik striků chainu má kompletní řecká (delta/gamma/vega). Neúplné pokrytí ' +
+            'znamená, že část striků čeká na dopočet nebo se opakovaně nedaří — hodnoty ' +
+            'v profilu a Dyn GEX pak stojí na menším vzorku.'
+          }
+        />
+        <CoverageBadge
+          label="OHLC"
+          testId="coverage-ohlc"
+          coverage={ohlc ?? null}
+          title={
+            'Kolik minut zobrazeného dne má cenovou svíčku proti tomu, kolik jich mělo ' +
+            'podle časového rozpětí osy být. Méně než 100 % = díra ve sběru barů; ' +
+            'cenová křivka pak spojuje body přes chybějící úsek.'
+          }
+        />
+      </div>
       <span className={live ? 'live-indicator live' : 'live-indicator stale'} role="status">
         {live ? '● Live' : '○ Offline'}
       </span>

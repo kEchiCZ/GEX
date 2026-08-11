@@ -140,13 +140,18 @@ test('hlavička ukazuje pokrytí Greeks s progress barem (#470)', () => {
 
   const badge = screen.getByTestId('coverage-greeks')
   expect(badge.textContent).toBe('Greeks 91/182 (50 %)')
+  // Skupina badge sedí u pravého okraje hlavičky, zvoneček zůstává za ní (#597)
+  const group = badge.closest('.coverage-group')!
+  const bell = document.querySelector('.bell-wrap')!
+  expect(group.compareDocumentPosition(bell) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(badge.className).toContain('coverage-partial') // neúplné pokrytí hlásí barvu
   expect(badge.querySelector('.coverage-fill')?.getAttribute('style')).toContain('width: 50%')
 
   act(() => {
     ws.push('status', { engine: 'online', greeks_complete: 182, greeks_total: 182 })
   })
-  expect(screen.getByTestId('coverage-greeks').textContent).toBe('Greeks 182/182 (100 %)')
+  // Plné pokrytí bez procent a bez varovné barvy (#597)
+  expect(screen.getByTestId('coverage-greeks').textContent).toBe('Greeks 182/182')
   expect(screen.getByTestId('coverage-greeks').className).not.toContain('coverage-partial')
 })
 
