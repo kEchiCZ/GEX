@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from gexlens_engine.compute.gexfield import (
+    GAMMA_EDGE_SHARE,
     GexProfile,
     ProfileContract,
     bs_gamma,
@@ -354,7 +355,7 @@ def _profile(values: list[float], *, start: float = 7400.0, step: float = 5.0) -
 def test_gamma_edges_najde_okraje_masy_s_interpolaci() -> None:
     # Mřížka 7400..7440 po 5 bodech; maximum 100 → práh 10
     values = [0.0, 5.0, 40.0, 100.0, 60.0, 20.0, 5.0, 0.0, 0.0]
-    edges = gamma_edges(_profile(values))
+    edges = gamma_edges(_profile(values), share=0.1)
     assert edges.up is not None and edges.dn is not None
     assert edges.threshold == pytest.approx(10.0)
     # Dolní: mezi 7405 (5) a 7410 (40) — |NetGEX| protne 10 kousek nad 7405
@@ -373,7 +374,7 @@ def test_gamma_edges_nepretne_se_o_nulu_u_flipu() -> None:
     """
     # Call strana kladná, put strana záporná, uprostřed nula (flip)
     values = [-80.0, -100.0, -40.0, 0.0, 40.0, 100.0, 60.0, 0.0, 0.0]
-    edges = gamma_edges(_profile(values))
+    edges = gamma_edges(_profile(values), share=0.1)
     assert edges.up is not None and edges.dn is not None
     assert edges.dn == pytest.approx(7400.0)  # masa sahá až na kraj mřížky
     assert 7430.0 < edges.up < 7435.0  # za posledním významným bodem, ne u nuly
@@ -381,7 +382,7 @@ def test_gamma_edges_nepretne_se_o_nulu_u_flipu() -> None:
 
 def test_gamma_edges_kraj_mrizky_a_prazdny_profil() -> None:
     # Masa přesahuje mřížku na obou koncích → hranice jsou její kraje
-    edges = gamma_edges(_profile([100.0, 100.0, 100.0]))
+    edges = gamma_edges(_profile([100.0, 100.0, 100.0]), share=0.1)
     assert (edges.dn, edges.up) == (7400.0, 7410.0)
     # Prázdný profil i samé nuly → hranice neexistují (radši None než výmysl)
     assert gamma_edges(_profile([])).up is None
@@ -397,3 +398,16 @@ def test_gamma_edges_prah_se_da_zvednout() -> None:
     assert tight.up is not None and tight.dn is not None
     assert tight.up < wide.up
     assert tight.dn > wide.dn
+
+
+def test_gamma_edges_vychozi_prah_je_kalibrovany_na_85_procent() -> None:
+    """Default vychází z měření #601, ne z odhadu — plochý profil jinak nemá okraj."""
+    assert pytest.approx(0.85) == GAMMA_EDGE_SHARE
+    # Zvon, který na mřížce neklesne pod 10 % maxima: při nízkém prahu hranice
+    # padne na kraj mřížky (= neurčitelná), teprve vysoký práh vrátí něco uvnitř
+    values = [30.0, 55.0, 80.0, 100.0, 80.0, 55.0, 30.0]
+    low = gamma_edges(_profile(values), share=0.1)
+    default = gamma_edges(_profile(values))
+    assert (low.dn, low.up) == (7400.0, 7430.0)  # oba kraje mřížky
+    assert default.dn is not None and default.up is not None
+    assert 7400.0 < default.dn < default.up < 7430.0

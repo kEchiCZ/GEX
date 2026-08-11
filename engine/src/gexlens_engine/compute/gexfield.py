@@ -174,14 +174,19 @@ def gamma_at_price(profile: GexProfile, price: float) -> float | None:
 
 # ── Hranice gamma masy (#600) ──────────────────────────────────────────
 
-# Práh okraje masy: podíl z maxima |NetGEX| profilu. Za hranicí gamma masy
-# vyhasíná, takže dealerský hedging tam cenu přestává tlumit.
+# Práh okraje masy: podíl z maxima |NetGEX| profilu.
 #
-# 0,10 je PRVNÍ NÁSTŘEL, ne změřená hodnota — profil má u ATM řádově vyšší
-# gammu než na křídlech, takže desetina maxima leží typicky až za posledními
-# významnými striky. Kalibruje se měřením v #601 (kolik průrazů, jaký pohyb,
-# kolik falešných); do té doby je to jediná konstanta, na které hranice visí.
-GAMMA_EDGE_SHARE = 0.10
+# ZMĚŘENO (#601 fáze 1, `scripts/measure_gamma_edges.py`, 18 expirací ES+NQ):
+# profil na naší mřížce (±200 b kolem spotu, krok 2,5) NEMÁ okraj v běžném slova
+# smyslu — je to plochý zvon. Při 10 % i 50 % maxima leží hranice ve 100 % minut
+# NA KRAJI mřížky, tedy neurčitelná; použitelnou hodnotu dává až 0,85 (ES 3 %
+# minut na kraji, NQ pořád 83 %). Proto 0,85, ne původní nástřel 0,10.
+#
+# Pozor na interpretaci: při tomhle prahu to není „okraj gamma masy", ale okraj
+# jejího JÁDRA (kde gamma klesne na 85 % maxima). Měření průrazů hranu nenašlo
+# — pohyb po směru 37–61 %, medián ±1 bod, MAE ≥ MFE — takže na téhle veličině
+# nestaví žádný detektor; viz závěr v #601.
+GAMMA_EDGE_SHARE = 0.85
 
 
 @dataclass(frozen=True)
