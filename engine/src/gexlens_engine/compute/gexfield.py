@@ -172,6 +172,72 @@ def gamma_at_price(profile: GexProfile, price: float) -> float | None:
     return profile.values[low] * (1 - fraction) + profile.values[low + 1] * fraction
 
 
+# ── Hranice gamma masy (#600) ──────────────────────────────────────────
+
+# Práh okraje masy: podíl z maxima |NetGEX| profilu. Za hranicí gamma masy
+# vyhasíná, takže dealerský hedging tam cenu přestává tlumit.
+#
+# 0,10 je PRVNÍ NÁSTŘEL, ne změřená hodnota — profil má u ATM řádově vyšší
+# gammu než na křídlech, takže desetina maxima leží typicky až za posledními
+# významnými striky. Kalibruje se měřením v #601 (kolik průrazů, jaký pohyb,
+# kolik falešných); do té doby je to jediná konstanta, na které hranice visí.
+GAMMA_EDGE_SHARE = 0.10
+
+
+@dataclass(frozen=True)
+class GammaEdges:
+    """Krajní ceny, kde |NetGEX| ještě překročí práh — okraj gamma masy (#600).
+
+    `up`/`dn` jsou v bodech podkladu; `None` = hranici nelze určit (prázdný
+    profil, samé nuly). Hodnota na kraji mřížky znamená, že masa mřížku
+    přesahuje a skutečná hranice leží dál.
+    """
+
+    up: float | None
+    dn: float | None
+    threshold: float
+
+
+def gamma_edges(profile: GexProfile, *, share: float = GAMMA_EDGE_SHARE) -> GammaEdges:
+    """Horní a dolní hranice gamma masy profilu.
+
+    Hledá se GLOBÁLNÍ krajní bod nad prahem, ne souvislé pásmo od spotu:
+    profil prochází u flipu nulou, takže „souvislé pásmo" by se o flip přeťalo
+    a hranice by spadla doprostřed masy. Mezi posledním bodem nad prahem a
+    prvním pod ním se lineárně interpoluje.
+    """
+    values = profile.values
+    if not values or profile.grid_step <= 0:
+        return GammaEdges(up=None, dn=None, threshold=0.0)
+    peak = max(abs(value) for value in values)
+    threshold = peak * max(0.0, share)
+    if peak <= 0.0 or threshold <= 0.0:
+        return GammaEdges(up=None, dn=None, threshold=0.0)
+
+    above = [index for index, value in enumerate(values) if abs(value) >= threshold]
+    if not above:
+        return GammaEdges(up=None, dn=None, threshold=threshold)
+
+    def price_at(index: float) -> float:
+        return profile.grid_start + index * profile.grid_step
+
+    def crossing(inner: int, outer: int) -> float:
+        """Cena, kde |NetGEX| protne práh mezi sousedy `inner` (nad) a `outer` (pod)."""
+        high = abs(values[inner])
+        low = abs(values[outer])
+        span = high - low
+        if span <= 0.0:
+            return price_at(inner)
+        fraction = (high - threshold) / span
+        return price_at(inner) + (price_at(outer) - price_at(inner)) * fraction
+
+    top = above[-1]
+    bottom = above[0]
+    up = price_at(top) if top == len(values) - 1 else crossing(top, top + 1)
+    dn = price_at(bottom) if bottom == 0 else crossing(bottom, bottom - 1)
+    return GammaEdges(up=up, dn=dn, threshold=threshold)
+
+
 # ── Charm a Vanna plochy (#204) ────────────────────────────────────────
 # Stejný dealer model jako gamma (NaiveDealerModel: call − put), jen jiná
 # BS derivace. Pro r = q = 0 mají call i put IDENTICKÝ charm i vannu.

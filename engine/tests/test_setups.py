@@ -618,6 +618,9 @@ class FakeRuntime:
             call_wall_dom=0.05,
             put_wall_dom=0.05,
         )
+        # Dyn GEX profil minuty — SetupEngine z něj počítá hranice gamma masy (#600).
+        # None = minuta profil nemá; orchestrační testy na hranicích nestojí.
+        self.last_profile = None
 
 
 async def test_setup_engine_end_to_end(tmp_path: Path) -> None:

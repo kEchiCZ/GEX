@@ -92,6 +92,10 @@ class MinuteInputs:
     # (fallback znaménko TotalGEX). Jen kontext pro kalibraci Fáze 2 — váhy
     # confidence se z něj zatím nepočítají.
     gex_regime: str | None = field(default=None, kw_only=True)
+    # Hranice gamma masy z Dyn GEX profilu (#600): za nimi hedging cenu přestává
+    # tlumit. None = profil minuty chybí (starší data, minuta bez snapshotu).
+    gamma_edge_up: float | None = field(default=None, kw_only=True)
+    gamma_edge_dn: float | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)

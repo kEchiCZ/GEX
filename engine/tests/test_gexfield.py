@@ -7,10 +7,12 @@ import pandas as pd
 import pytest
 
 from gexlens_engine.compute.gexfield import (
+    GexProfile,
     ProfileContract,
     bs_gamma,
     bs_price,
     fallback_greeks,
+    gamma_edges,
     gamma_field,
     gamma_profile,
     implied_vol,
@@ -340,3 +342,58 @@ def test_fallback_greeks_nekonverguje_zadne_vymyslene_hodnoty() -> None:
         fallback_greeks(spot=7600.0, strike=7500.0, right="C", mid=0.0, settle=settle, now=now)
         is None
     )
+
+
+# ── Hranice gamma masy (#600) ──────────────────────────────────────────
+
+
+def _profile(values: list[float], *, start: float = 7400.0, step: float = 5.0) -> GexProfile:
+    return GexProfile(ts_min=TS, grid_start=start, grid_step=step, values=tuple(values))
+
+
+def test_gamma_edges_najde_okraje_masy_s_interpolaci() -> None:
+    # Mřížka 7400..7440 po 5 bodech; maximum 100 → práh 10
+    values = [0.0, 5.0, 40.0, 100.0, 60.0, 20.0, 5.0, 0.0, 0.0]
+    edges = gamma_edges(_profile(values))
+    assert edges.up is not None and edges.dn is not None
+    assert edges.threshold == pytest.approx(10.0)
+    # Dolní: mezi 7405 (5) a 7410 (40) — |NetGEX| protne 10 kousek nad 7405
+    assert edges.dn == pytest.approx(7410.0 - (40.0 - 10.0) / (40.0 - 5.0) * 5.0)
+    assert 7405.0 < edges.dn < 7410.0
+    # Horní: mezi 7425 (20) a 7430 (5)
+    assert edges.up == pytest.approx(7425.0 + (20.0 - 10.0) / (20.0 - 5.0) * 5.0)
+    assert 7425.0 < edges.up < 7430.0
+
+
+def test_gamma_edges_nepretne_se_o_nulu_u_flipu() -> None:
+    """Profil mění u flipu znaménko — hranice musí zůstat na okrajích masy.
+
+    Souvislé pásmo od spotu by se o průchod nulou přeťalo a hranice by spadla
+    doprostřed masy; proto se hledá globální krajní bod nad prahem.
+    """
+    # Call strana kladná, put strana záporná, uprostřed nula (flip)
+    values = [-80.0, -100.0, -40.0, 0.0, 40.0, 100.0, 60.0, 0.0, 0.0]
+    edges = gamma_edges(_profile(values))
+    assert edges.up is not None and edges.dn is not None
+    assert edges.dn == pytest.approx(7400.0)  # masa sahá až na kraj mřížky
+    assert 7430.0 < edges.up < 7435.0  # za posledním významným bodem, ne u nuly
+
+
+def test_gamma_edges_kraj_mrizky_a_prazdny_profil() -> None:
+    # Masa přesahuje mřížku na obou koncích → hranice jsou její kraje
+    edges = gamma_edges(_profile([100.0, 100.0, 100.0]))
+    assert (edges.dn, edges.up) == (7400.0, 7410.0)
+    # Prázdný profil i samé nuly → hranice neexistují (radši None než výmysl)
+    assert gamma_edges(_profile([])).up is None
+    assert gamma_edges(_profile([0.0, 0.0, 0.0])).dn is None
+
+
+def test_gamma_edges_prah_se_da_zvednout() -> None:
+    """Vyšší podíl utáhne hranice blíž k jádru masy — páka pro kalibraci #601."""
+    values = [0.0, 10.0, 50.0, 100.0, 50.0, 10.0, 0.0]
+    wide = gamma_edges(_profile(values), share=0.05)
+    tight = gamma_edges(_profile(values), share=0.5)
+    assert wide.up is not None and wide.dn is not None
+    assert tight.up is not None and tight.dn is not None
+    assert tight.up < wide.up
+    assert tight.dn > wide.dn
