@@ -1,7 +1,7 @@
 # GEXLens — Kompletní funkční a technická specifikace
 **Verze 2.0 · 16. 7. 2026 · Autor zadání: Roman (ROHOR Studio)**
 
-> Cíl: **plně funkční, spustitelná aplikace** (nikoli MVP) pro vizualizaci opčního positioningu (GEX/OI/Vol heatmapa) nad ES futures opcemi, s jediným datovým zdrojem **Interactive Brokers TWS/Gateway API**.
+> Cíl: **plně funkční, spustitelná aplikace** (nikoli MVP) pro vizualizaci opčního positioningu (GEX/OI/Vol heatmapa) nad ES futures opcemi, s primárním datovým zdrojem **Interactive Brokers TWS/Gateway API** (sekundární brokerský zdroj s daty zdarma připuštěn v roli rozšíření/fallbacku, viz ADR-0025).
 
 ---
 
@@ -13,7 +13,7 @@
 | R2 | Cum Δ s **plnou klasifikací agresora**: tick-by-tick pro hot zónu (ATM ±15 strikes), Lee–Ready midpoint test pro zbytek řetězce |
 | R3 | Retence intraday dat a tick dat: **14 dní** (denní Parquet partice, noční purge job) — *okno prodlouženo na 90 dní, viz ADR-0022* |
 | R4 | **Výjimka: EOD snapshot Open Interest se archivuje bez časového limitu** (řádově KB/den, nenahraditelná data) |
-| R5 | Datový zdroj výhradně IBKR (účet existuje); žádné placené externí feedy |
+| R5 | Datový zdroj výhradně IBKR (účet existuje); žádné placené externí feedy — *rozšířeno na brokerské účty s daty zdarma, primární zdroj zůstává IBKR, viz ADR-0025* |
 | R6 | Stack: Python 3.12 + ib_async (data engine), FastAPI + WebSocket (API), PostgreSQL (metadata + OI archiv), Parquet (snapshoty), React + TypeScript (frontend), canvas/WebGL heatmapa |
 
 ---
