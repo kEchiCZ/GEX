@@ -386,6 +386,15 @@ class EngineRuntime:
                     # Vega pro VEX módy (#201) — aditivní pole
                     "vega": row.vega,
                     "stale_age": row.stale_age,
+                    # Midpoint pro P/C v prémiích (#469) — aditivní; None = bez kotace
+                    "mid": (
+                        (row.bid + row.ask) / 2
+                        if row.bid is not None
+                        and row.ask is not None
+                        and row.bid > 0
+                        and row.ask > 0
+                        else None
+                    ),
                 }
                 # Aditivní klíč (#547): Greeks jsou vlastní BS dopočet, ne TWS
                 # model — posílá se jen když platí, běžný řádek nenafukuje

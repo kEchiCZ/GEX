@@ -19,6 +19,7 @@ import { axisGapRanges, capHalfFractions } from '../heatmap/spacing'
 import { barGeometry, formatAmount, gexCurvePaths, maxComponentSide, niceCeil, volLeaders } from '../profile/bars' // prettier-ignore
 import type { ProfileRow } from '../profile/bars'
 import { GEX_UNIT_LABELS, weightProfileRow } from '../heatmap/units'
+import { PcrPanel } from './PcrPanel'
 import type { GexUnits } from '../heatmap/units'
 import type { GexProfileRow } from '../replay/loader'
 import { usePersistentState } from '../state/persist'
@@ -75,6 +76,8 @@ function StrikeProfileBase({
   gexProfile = null,
   gexUnits = 'per_point',
   axisStrikes = null,
+  symbol = 'ES',
+  expiry = null,
 }: {
   rows: ProfileRow[]
   spot: number | null
@@ -92,6 +95,9 @@ function StrikeProfileBase({
   gexProfile?: GexProfileRow | null
   /** Jednotka GEX křivky (#569): $/1 % váží hladiny P²/100, $/bod = surová řada. */
   gexUnits?: GexUnits
+  /** Symbol a expirace pro P/C panel (#469) — multiplikátor a popiska původu. */
+  symbol?: string
+  expiry?: string | null
   /** Strikes HEATMAPY vzestupně — sdílená osa Y (#213). Řádky panelu (Σ souhrn
   = sjednocení expirací) můžou mít jinou sadu než graf; bez kotvení k této ose
   by se cenové osy obou panelů rozjely. Null = osa z vlastních řádků (legacy). */
@@ -557,6 +563,8 @@ function StrikeProfileBase({
           )}
         </div>
       )}
+      {/* PUT/CALL v prémiích/kontraktech/notionalu (#469) — řádky zobrazené minuty */}
+      <PcrPanel rows={ordered} symbol={symbol} expiry={expiry} spot={spot} />
     </aside>
   )
 }

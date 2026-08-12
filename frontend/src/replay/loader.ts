@@ -155,6 +155,9 @@ export interface ReplayInputs {
   putDelta: Float32Array
   callVega: Float32Array
   putVega: Float32Array
+  /** Midpoint (bid+ask)/2 per buňka (#469); 0 = kotace chybí. */
+  callMid: Float32Array
+  putMid: Float32Array
   staleAge: Float32Array
   bars: BarInput[]
   levels: LevelsInput[]
@@ -195,6 +198,8 @@ export interface LiveMinuteRow {
   /** Vega pro VEX módy (#201) — starší engine pole neposílá. */
   vega?: number
   stale_age?: number
+  /** Midpoint (bid+ask)/2 pro P/C v prémiích (#469); null/chybí = bez kotace. */
+  mid?: number | null
 }
 export interface LiveMinute {
   tsIso: string
@@ -397,6 +402,8 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   const deltaColumn = table.getChild('delta')
   const staleColumn = table.getChild('stale_age')
   const vegaColumn = table.getChild('vega') // VEX módy (#201)
+  const bidColumn = table.getChild('bid') // P/C v prémiích (#469)
+  const askColumn = table.getChild('ask')
   if (!tsColumn || !strikeColumn || !rightColumn) {
     throw new Error('Replay balík: snapshot tabulka nemá očekávané sloupce')
   }
@@ -430,6 +437,8 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   const putDelta = new Float32Array(size)
   const callVega = new Float32Array(size)
   const putVega = new Float32Array(size)
+  const callMid = new Float32Array(size)
+  const putMid = new Float32Array(size)
   const staleAge = new Float32Array(size)
 
   for (let row = 0; row < rowCount; row += 1) {
@@ -441,16 +450,21 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     const volume = Number(volumeColumn?.get(row) ?? 0) || 0
     const delta = Number(deltaColumn?.get(row) ?? 0) || 0
     const vega = Number(vegaColumn?.get(row) ?? 0) || 0
+    const bid = Number(bidColumn?.get(row) ?? 0) || 0
+    const ask = Number(askColumn?.get(row) ?? 0) || 0
+    const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0
     if (right === 'C') {
       callOi[index] = oi
       callVolume[index] = volume
       callDelta[index] = delta
       callVega[index] = vega
+      callMid[index] = mid
     } else {
       putOi[index] = oi
       putVolume[index] = volume
       putDelta[index] = delta
       putVega[index] = vega
+      putMid[index] = mid
     }
     staleAge[index] = Math.max(staleAge[index], Number(staleColumn?.get(row) ?? 0) || 0)
   }
@@ -588,6 +602,8 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     putDelta,
     callVega,
     putVega,
+    callMid,
+    putMid,
     staleAge,
     bars,
     levels,
@@ -661,6 +677,8 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   const putDelta = new Float32Array(size)
   const callVega = new Float32Array(size)
   const putVega = new Float32Array(size)
+  const callMid = new Float32Array(size)
+  const putMid = new Float32Array(size)
   const staleAge = new Float32Array(size)
 
   // Přenos starých buněk na nový stride (minutes je násobitel řádku, viz grid.ts)
@@ -679,6 +697,8 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
       putDelta[to] = inputs.putDelta[from]
       callVega[to] = inputs.callVega[from]
       putVega[to] = inputs.putVega[from]
+      callMid[to] = inputs.callMid[from]
+      putMid[to] = inputs.putMid[from]
       staleAge[to] = inputs.staleAge[from]
     }
   }
@@ -691,12 +711,14 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
       callVolume[to] = row.volume
       callDelta[to] = row.delta
       callVega[to] = row.vega ?? 0
+      callMid[to] = row.mid ?? 0
     } else {
       putOi[to] = row.oi
       putOiEst[to] = row.oi
       putVolume[to] = row.volume
       putDelta[to] = row.delta
       putVega[to] = row.vega ?? 0
+      putMid[to] = row.mid ?? 0
     }
     staleAge[to] = Math.max(staleAge[to], row.stale_age ?? 0)
   }
@@ -797,6 +819,8 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     putDelta,
     callVega,
     putVega,
+    callMid,
+    putMid,
     staleAge,
     bars,
     levels,
@@ -997,6 +1021,9 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
             ? inputs.putOi[index] - (prevOi.get(`${strike}|P`) ?? 0)
             : null,
           staleAge: inputs.staleAge[index],
+          // Midpoint pro P/C v prémiích (#469); 0 = kotace chybí
+          callMid: inputs.callMid[index],
+          putMid: inputs.putMid[index],
           // Bez dat ≠ nula (#465): panel to kreslí šrafovaně
           callOiMissing: inputs.oiMissing.has(oiMissingKey(minuteKeys[minuteIdx], strike, 'C')),
           putOiMissing: inputs.oiMissing.has(oiMissingKey(minuteKeys[minuteIdx], strike, 'P')),

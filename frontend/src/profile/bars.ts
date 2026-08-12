@@ -24,6 +24,9 @@ export interface ProfileRow {
   ve výpočtech je to nula, ale v panelu se kreslí šrafovaně, ne jako prázdno. */
   callOiMissing?: boolean
   putOiMissing?: boolean
+  /** Midpoint (bid+ask)/2 pro P/C v prémiích (#469); 0/undefined = kotace chybí. */
+  callMid?: number
+  putMid?: number
 }
 
 export interface VolLeader {

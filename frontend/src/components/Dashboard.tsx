@@ -147,7 +147,7 @@ export function Dashboard({
               <div
                 className="card-pcr muted"
                 data-testid="card-pcr"
-                title="Put/Call ratio z našich dat. Volume > 1 a roste = defenzivní tok (nákupy putů), extrémy fungují kontrariánsky. OI = strukturální pozicování; rozdíl volume vs. OI = dnešní tok proti drženému stavu. Křivka = vývoj PCR (volume) za den, čárkovaná reference = 1.0."
+                title="Put/Call ratio z našich dat — počítá se z KONTRAKTŮ aktivní expirace (#469): vol = dnešní kumulativní opční volume, OI = ranní archiv. Volume > 1 a roste = defenzivní tok (nákupy putů), extrémy fungují kontrariánsky. OI = strukturální pozicování; rozdíl volume vs. OI = dnešní tok proti drženému stavu. Křivka = vývoj PCR (volume) za den, čárkovaná reference = 1.0. Prémiově váženou variantu (kolik peněz, ne kusů) má panel PUT/CALL pod strike profilem."
               >
                 <span>
                   PCR vol <strong>{formatPcr(pcr.volume)}</strong> · OI{' '}
