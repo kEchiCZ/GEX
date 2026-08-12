@@ -79,13 +79,16 @@ class CachedQuote:
 
 @dataclass(frozen=True)
 class SweepMetrics:
-    """Metriky jednoho sweepu pro stavovou lištu (SPEC 3.7: Greeks X/Y, Repair, lines %)."""
+    """Metriky jednoho sweepu pro stavovou lištu (SPEC 3.7: Greeks X/Y, Repair).
+
+    Lines % tu není (#630): obsazené linky jsou vlastnost účtu napříč pipeline,
+    měří je `ibkr.lines.LineGauge` a do statusu je dává orchestrátor.
+    """
 
     total: int
     greeks_complete: int
     repair_count: int
     stale_count: int
-    lines_utilization: float
     sweep_duration_s: float
     # Striky s vlastními dopočtenými greeks (#547) — TWS model je nedodává
     computed_greeks: int = 0
@@ -309,9 +312,6 @@ class SubscriptionScheduler:
             greeks_complete=len(selected) - stale_count,
             repair_count=repair_count,
             stale_count=stale_count,
-            lines_utilization=min(
-                1.0, self._settings.batch_size / self._settings.market_data_lines
-            ),
             sweep_duration_s=self._clock() - start,
             computed_greeks=sum(
                 1

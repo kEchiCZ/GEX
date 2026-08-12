@@ -716,7 +716,6 @@ async def test_strikes_stalled_alert_a_recovery(
             greeks_complete=96 - stalled,
             repair_count=stalled,
             stale_count=0,
-            lines_utilization=0.8,
             sweep_duration_s=1.0,
             computed_greeks=stalled,
             stalled_count=stalled,

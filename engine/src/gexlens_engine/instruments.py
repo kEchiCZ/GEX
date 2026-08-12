@@ -1101,7 +1101,6 @@ def aggregate_status(
         "greeks_complete": sum(m.greeks_complete for m in valid),
         "greeks_total": sum(m.total for m in valid),
         "repair_count": sum(m.stale_count for m in valid),
-        "lines_utilization": max((m.lines_utilization for m in valid), default=0.0),
         "symbols": ",".join(symbol for symbol, _ in results),
     }
 

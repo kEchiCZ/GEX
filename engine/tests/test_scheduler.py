@@ -79,10 +79,9 @@ async def test_batching_respects_batch_size_and_lines() -> None:
     streamer = MockQuoteStreamer(delay_s=0.005)
     scheduler = SubscriptionScheduler(streamer, Settings())
 
-    metrics = await scheduler.sweep(contracts, SPOT)
+    await scheduler.sweep(contracts, SPOT)
 
     assert streamer.max_concurrent <= 80  # dávka nikdy nepřekročí batch_size
-    assert metrics.lines_utilization == 80 / 100
 
 
 async def test_incomplete_contracts_repair_and_recover() -> None:

@@ -11,9 +11,10 @@ import math
 from typing import Any, cast
 
 import httpx
-from ib_async import IB, Contract, FuturesOption, Option
+from ib_async import IB, Contract, FuturesOption, Option, RealTimeBarList
 
 from gexlens_engine.ibkr.discovery import OptionContractSpec
+from gexlens_engine.ibkr.lines import LineGauge
 from gexlens_engine.ibkr.scheduler import PartialQuote, QuoteSnapshot
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import PublisherLike
@@ -38,11 +39,26 @@ def _valid(value: float | None) -> bool:
     return value is not None and not math.isnan(value)
 
 
+def count_ib_lines(ib: IB) -> int:
+    """Aktivní market data lines dle registru ib_async (#630).
+
+    reqMktData tickery + realtime bars streamy — obojí u IBKR čerpá linku.
+    Broad tape NEWS pásky jdou mimo registr (raw client) a díky `mdoff`
+    linku nespotřebují; tick-by-tick má vlastní limit (ADR-0001), nepočítá se.
+    """
+    mkt_data = len(ib.wrapper.ticker2ReqId.get("mktData", {}))
+    bars = sum(
+        1 for sub in ib.wrapper.reqId2Subscriber.values() if isinstance(sub, RealTimeBarList)
+    )
+    return mkt_data + bars
+
+
 class IbQuoteStreamer:
     """QuoteStreamerLike nad reqMktData: subskribce → kompletní sada → odsubskribce."""
 
-    def __init__(self, ib: IB) -> None:
+    def __init__(self, ib: IB, line_gauge: LineGauge | None = None) -> None:
         self._ib = ib
+        self._line_gauge = line_gauge
         self._qualified: dict[OptionContractSpec, Contract] = {}
 
     async def _contract(self, spec: OptionContractSpec) -> Contract | None:
@@ -65,6 +81,8 @@ class IbQuoteStreamer:
         if contract is None:
             return None
         ticker = self._ib.reqMktData(contract, "", False, False)
+        if self._line_gauge is not None:
+            self._line_gauge.sample()
         try:
             deadline = asyncio.get_running_loop().time() + timeout_s
             while asyncio.get_running_loop().time() < deadline:
@@ -126,6 +144,8 @@ class IbOIFetcher:
         if contract is None:
             return None
         ticker = self._ib.reqMktData(contract, "101", False, False)
+        if self._streamer._line_gauge is not None:
+            self._streamer._line_gauge.sample()
         try:
             deadline = asyncio.get_running_loop().time() + timeout_s
             while asyncio.get_running_loop().time() < deadline:
