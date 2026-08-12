@@ -513,3 +513,28 @@ def test_replay_transport_f32_and_gzip(client: TestClient) -> None:
         f"/replay/ES/20260716/{DAY.isoformat()}", headers={"accept-encoding": "gzip"}
     )
     assert response.headers.get("content-encoding") == "gzip"
+
+
+def test_gammacliff_endpoint(settings: Settings) -> None:
+    """#576: /gammacliff vrací živý podíl (z levels) + historii (tabulka může chybět)."""
+    from gexlens_engine.storage.parquet_store import LevelsRow
+
+    writer = SnapshotWriter(settings)
+    today = dt.datetime.now(dt.UTC)
+    from gexlens_engine.compute.settle import trading_session_date
+
+    session = trading_session_date(today)
+    key = session.strftime("%Y%m%d")
+    next_key = (session + dt.timedelta(days=1)).strftime("%Y%m%d")
+
+    def row(gex: float) -> LevelsRow:
+        return LevelsRow(today - dt.timedelta(minutes=5), 7600.0, 7650.0, 7550.0, 7590.0, gex)
+
+    writer.write_levels("ES", key, session, [row(-600.0)])
+    writer.write_levels("ES", next_key, session, [row(400.0)])
+    client = TestClient(create_app(settings))
+
+    payload = client.get("/gammacliff/ES").json()
+    assert payload["today"] is not None
+    assert payload["today"]["cliff_share"] == pytest.approx(0.6)
+    assert payload["rows"] == []  # engine tabulku ještě nezaložil — tvar drží

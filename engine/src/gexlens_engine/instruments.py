@@ -29,6 +29,7 @@ from gexlens_engine.compute.setupstats import (
 )
 from gexlens_engine.compute.volleaders import detect_concentration
 from gexlens_engine.config import Settings
+from gexlens_engine.gammacliff import GammaCliffCollector
 from gexlens_engine.ibkr.discovery import (
     ChainDiscovery,
     ExpiryInfo,
@@ -286,6 +287,8 @@ class InstrumentPipeline:
     tendency_engine: TendencyEngine | None = None
     # Sběrač kandidátů T6 (#256) — None = vypnuto
     t6_collector: T6Collector | None = None
+    # Gamma útes po expiraci (#576, fáze 1 jen měření) — None = vypnuto
+    gamma_cliff: GammaCliffCollector | None = None
     # Denní FA validace po OI archivu (#232) — None = vypnuto
     fa_repository: FaValidationRepository | None = None
     # Ranní kalibrace α po OI archivu (#232 fáze 2) — None = vypnuto
@@ -788,6 +791,12 @@ class InstrumentPipeline:
                 await self.t6_collector.on_minute(now, spot, self.runtime)
             except Exception:
                 logger.exception("T6 sběrač %s selhal — pokračuji", self.symbol)
+        # Gamma útes (#576) — jednou po settle; pád nesmí shodit sběr
+        if self.gamma_cliff is not None:
+            try:
+                await self.gamma_cliff.on_minute(now)
+            except Exception:
+                logger.exception("Gamma útes %s selhal — pokračuji", self.symbol)
 
         # Následující expirace v nižší kadenci; její pád nesmí shodit aktivní řetěz
         if (

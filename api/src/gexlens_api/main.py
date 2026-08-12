@@ -26,6 +26,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 
 from gexlens_api.alerts import AlertEngine
 from gexlens_api.backup import build_backup_router
@@ -50,10 +51,14 @@ from gexlens_api.security import (
 )
 from gexlens_api.sentiment_routes import build_sentiment_router
 from gexlens_api.status import StatusStore
+from gexlens_engine.compute.gammacliff import build_cliff
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
+from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.config import Settings, load_settings
+from gexlens_engine.gammacliff import read_expiries_at
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
+from gexlens_engine.storage.gammacliff_store import gamma_cliff_table
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
@@ -302,6 +307,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             rows = []  # DB nedostupná — UI drží tvar
         return {"symbol": symbol, "setups": rows}
+
+    @app.get("/gammacliff/{symbol}")
+    def gamma_cliff(symbol: str, limit: int = 30) -> dict[str, object]:
+        """Gamma útes (#576): živý podíl dnes odpadající gammy + uložená historie.
+
+        `today` se počítá z posledních levels řádků sledovaných expirací —
+        chip „dnes odpadá X %" má smysl PŘED settle, kdy tabulka řádek ještě
+        nemá. Historie z `gamma_cliff` (fáze 1 jen měří, nic nezapíná).
+        """
+        now = dt.datetime.now(dt.UTC)
+        session = trading_session_date(now)
+        today: dict[str, object] | None = None
+        record = build_cliff(
+            session, symbol, read_expiries_at(settings.data_dir, symbol, session, now)
+        )
+        if record is not None:
+            today = {
+                "session_date": record.session_date.isoformat(),
+                "cliff_share": record.cliff_share,
+                "gex_before": record.gex_before,
+                "gex_expiring": record.gex_expiring,
+                "is_opex": record.is_opex,
+            }
+        rows: list[dict[str, object]] = []
+        try:
+            stmt = (
+                select(gamma_cliff_table)
+                .where(gamma_cliff_table.c.symbol == symbol)
+                .order_by(gamma_cliff_table.c.session_date.desc())
+                .limit(max(1, min(limit, 365)))
+            )
+            with meta_repository.engine().connect() as conn:
+                for row in conn.execute(stmt):
+                    payload = dict(row._mapping)
+                    payload["session_date"] = row.session_date.isoformat()
+                    payload["computed_at"] = row.computed_at.isoformat()
+                    rows.append(payload)
+        except Exception:
+            rows = []  # tabulka ještě neexistuje (engine neběžel) — UI drží tvar
+        return {"symbol": symbol, "today": today, "rows": rows}
 
     @app.get("/tendency/{symbol}")
     def tendency_series(symbol: str, date: dt.date | None = None) -> dict[str, object]:

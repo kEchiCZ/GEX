@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     tendency_enabled: bool = True
     # Sběrač kandidátů T6 Premarket squeeze (#256) — jen sběr, žádný setup
     t6_collector_enabled: bool = True
+    # Gamma útes po expiraci (#576, fáze 1 jen měření)
+    gamma_cliff_enabled: bool = True
     t6_trigger_pct: float = -1.0
     # Minimální dominance zdi pro šablony T1/T3 (ADR-0010, #223)
     setup_min_wall_dominance: float = Field(default=0.15, ge=0, le=1)

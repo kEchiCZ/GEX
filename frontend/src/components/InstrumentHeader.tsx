@@ -5,6 +5,7 @@ import type { Coverage } from '../instrument/coverage'
 import { expiryCountdown, expiryIsoDate, expiryKind } from '../instrument/expiry'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
+import { GammaCliffChip } from './GammaCliffChip'
 import { StateChip } from './StateChip'
 import { TendencyChip } from './TendencyChip'
 
@@ -143,6 +144,8 @@ export function InstrumentHeader({
           {chainNote && ` · ${chainNote}`}
         </span>
       )}
+      {/* Gamma útes (#576): kolik gammy dnešní expirací odpadne — jen informace */}
+      <GammaCliffChip symbol={symbol} />
       {regimeInfo.state && (
         // GEX režim (#209): jediná datově podložená hodnota vrstvy — TYP obchodu,
         // ne směr. Tooltip nese playbook hint + polohu flip zóny.

@@ -17,6 +17,7 @@ from typing import Any
 
 from ib_async import IB, Contract, Future, RealTimeBarList, Ticker
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 
 from gexlens_engine.adapters import (
     HttpPublisher,
@@ -27,6 +28,7 @@ from gexlens_engine.adapters import (
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
+from gexlens_engine.gammacliff import GammaCliffCollector
 from gexlens_engine.ibkr.account import classify_accounts
 from gexlens_engine.ibkr.connection import (
     COMPETING_SESSION_ERROR_CODE,
@@ -80,6 +82,7 @@ from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.fa_validation import FaValidationRepository
+from gexlens_engine.storage.gammacliff_store import GammaCliffRepository
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter
@@ -277,6 +280,8 @@ async def create_pipeline(
     setups_repository: SetupsRepository | None = None,
     tendency_repository: TendencyRepository | None = None,
     t6_repository: T6Repository | None = None,
+    gamma_cliff_repository: GammaCliffRepository | None = None,
+    db: Engine | None = None,
     pacing_guard: PacingGuard | None = None,
     fa_repository: FaValidationRepository | None = None,
     alpha_repository: FaAlphaRepository | None = None,
@@ -537,6 +542,16 @@ async def create_pipeline(
             if t6_repository is not None
             else None
         ),
+        gamma_cliff=(
+            GammaCliffCollector(
+                symbol=symbol,
+                repository=gamma_cliff_repository,
+                db=db,
+                data_dir=settings.data_dir,
+            )
+            if gamma_cliff_repository is not None and db is not None
+            else None
+        ),
         news_ticks=news_ticks,
         read_news_ticks=(lambda: list(ib.newsTicks())) if news_ticks else None,
     )
@@ -625,6 +640,10 @@ async def main() -> None:
             settings.data_dir,
             settings.t6_trigger_pct,
         )
+    gamma_cliff_repository: GammaCliffRepository | None = None
+    if settings.gamma_cliff_enabled:
+        gamma_cliff_repository = GammaCliffRepository(db)
+        await asyncio.to_thread(gamma_cliff_repository.ensure_schema)
 
     # Broker headlines z ticku 292 (#291): schéma SentimentLensu sdílí obě
     # služby, engine do něj jen zapisuje
@@ -729,6 +748,8 @@ async def main() -> None:
                     setups_repository=setups_repository,
                     tendency_repository=tendency_repository,
                     t6_repository=t6_repository,
+                    gamma_cliff_repository=gamma_cliff_repository,
+                    db=db,
                     pacing_guard=pacing_guard,
                     fa_repository=fa_repository,
                     alpha_repository=alpha_repository,
