@@ -180,7 +180,11 @@ function MainContent() {
   // svíčky do historického dne.
   const viewDate = sessionDateFor(selectedExpiry, today)
   const isHistoricalExpiry = viewDate !== today
-  const { day: rawDay, live } = useDayData(
+  const {
+    day: rawDay,
+    live,
+    staleData,
+  } = useDayData(
     symbol,
     selectedExpiry,
     viewDate,
@@ -1009,6 +1013,16 @@ function MainContent() {
             )}
             {/* Checkbox Setupy (#399): globální viditelnost vrstvy setupů */}
             {toggles.setups && <SetupCard setups={activeSetups} onDismiss={handleDismissSetup} />}
+            {/* Data se nedaří obnovit (#516): zobrazený stav je starý — nikdy
+                tiše neukazovat zastaralé jako živé */}
+            {staleData && (
+              <div className="stale-banner" role="status" data-testid="stale-banner">
+                {`Data se nedaří obnovit (${staleData.failures}× po sobě) — zobrazen stav z ` +
+                  (staleData.lastMinuteIso
+                    ? `${new Date(staleData.lastMinuteIso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${Math.max(0, Math.round((Date.now() - new Date(staleData.lastMinuteIso).getTime()) / 60000))} min staré)`
+                    : 'neznámého času')}
+              </div>
+            )}
             {day.source === 'demo' && (
               <div className="demo-banner" role="status">
                 {isHistoricalExpiry

@@ -464,6 +464,30 @@ export function Heatmap({
     context.setTransform(dpr, 0, 0, dpr, 0, 0)
     context.clearRect(0, 0, logicalW, logicalH)
 
+    // Díry v ose (#516): sloupce bez zaznamenaných dat — diagonální šrafura
+    // (vzor oimissing #465), ať „souvislá" Daily řada neskrývá výpadek sběru
+    if (grid.missingMinutes?.some(Boolean)) {
+      context.save()
+      context.strokeStyle = 'rgba(150,150,150,0.3)'
+      context.lineWidth = 1
+      for (let minuteIdx = 0; minuteIdx < grid.minutes; minuteIdx += 1) {
+        if (!grid.missingMinutes[minuteIdx]) continue
+        const x0 = minuteToX(minuteIdx) - 0.5 * scaleX
+        context.save()
+        context.beginPath()
+        context.rect(x0, 0, scaleX, logicalH)
+        context.clip()
+        context.beginPath()
+        for (let x = x0 - logicalH; x < x0 + scaleX; x += 7) {
+          context.moveTo(x, logicalH)
+          context.lineTo(x + logicalH, 0)
+        }
+        context.stroke()
+        context.restore()
+      }
+      context.restore()
+    }
+
     // Kontury (bílé přerušované, SPEC 7.2)
     if (contourSegments.length > 0) {
       context.strokeStyle = 'rgba(255,255,255,0.8)'
@@ -834,6 +858,8 @@ export function Heatmap({
     contourSegments,
     overlays,
     grid.strikes,
+    grid.minutes,
+    grid.missingMinutes,
     annotations,
     draft,
     moving,
@@ -1221,6 +1247,8 @@ export function Heatmap({
     if (crosshair.minuteIdx < 0 || crosshair.minuteIdx >= grid.minutes) return null
     const strikeIdx = grid.strikes.indexOf(crosshair.strike)
     if (strikeIdx < 0) return null
+    // Díra v ose (#516): sloupec bez zaznamenaných dat — hodnoty by lhaly nulou
+    if (grid.missingMinutes?.[crosshair.minuteIdx]) return 'bez zaznamenaných dat'
     const index = strikeIdx * grid.minutes + crosshair.minuteIdx
     const projected = crosshair.minuteIdx >= (grid.dataMinutes ?? grid.minutes)
     const parts: string[] = [

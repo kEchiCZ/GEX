@@ -540,3 +540,37 @@ test('živý den se po návratu z cache dorovná plným fetchem (#514)', async (
   // …ale živý den se DOROVNÁ dalším fetchem (minuty zmeškané bez WS subskripce)
   expect(fetchReplayInputs).toHaveBeenCalledTimes(3)
 })
+
+// ── Indikace zastaralých dat (#516) ────────────────────────────────
+
+test('selhané obnovy ukážou stáří dat do 2 cyklů; obnova indikaci smaže (#516)', async () => {
+  const today = sessionDateIso()
+  vi.mocked(fetchReplayInputs).mockResolvedValueOnce({ ...makeInputs(), date: today })
+  const { result } = renderHook(() => useDayData('ES', '20260716', today, 'intraday'))
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(result.current.staleData).toBeNull()
+
+  // Dvě selhání po sobě (retry à 30 s) → indikace se stářím posledních dat
+  vi.mocked(fetchReplayInputs).mockRejectedValueOnce(new Error('down'))
+  vi.mocked(fetchReplayInputs).mockRejectedValueOnce(new Error('down'))
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_600_000) // pojistka → 1. selhání
+  })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000) // retry → 2. selhání
+  })
+  expect(result.current.staleData).not.toBeNull()
+  expect(result.current.staleData?.failures).toBeGreaterThanOrEqual(2)
+  expect(result.current.staleData?.lastMinuteIso).toBe('2026-07-16T15:00:00.000Z')
+  // Data se dál ukazují (poslední známý stav), jen s indikací
+  expect(result.current.day.source).toBe('replay')
+
+  // Úspěšná obnova → indikace zmizí
+  vi.mocked(fetchReplayInputs).mockResolvedValue({ ...makeInputs(), date: today })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000)
+  })
+  expect(result.current.staleData).toBeNull()
+})

@@ -247,10 +247,16 @@ function replayToDay(day: ReplayDay): DayData {
   }
 }
 
+/** Po kolika selhaných obnovách po sobě se ukáže indikace stáří dat (#516). */
+export const STALE_FAILURES_THRESHOLD = 2
+
 /** Denní data rozdělená na statickou (`day`) a živou (`live`) část — viz #141. */
 export interface DayFeed {
   day: DayData
   live: LiveOverlay
+  /** Data se nedaří obnovit (#516): ≥ N selhání po sobě → banner se stářím.
+  Null = obnovy fungují (nebo není co obnovovat — demo/daily). */
+  staleData: { failures: number; lastMinuteIso: string | null } | null
 }
 
 export function useDayData(
@@ -268,6 +274,8 @@ export function useDayData(
     inputsRef.current = inputs
   }, [inputs])
   const [daily, setDaily] = useState<DayData | null>(null)
+  // Selhané obnovy po sobě (#516) — banner „zobrazen stav z HH:MM" po prahu
+  const [refreshFailures, setRefreshFailures] = useState(0)
   // Živý spot (#128, #143): rozdělaná svíčka aktuální minuty + záložní bary minut bez skutečného baru
   const [spotBars, setSpotBars] = useState<SpotBar[]>([])
 
@@ -279,6 +287,7 @@ export function useDayData(
     inputsRef.current = cached
     setDaily(null)
     setSpotBars([])
+    setRefreshFailures(0)
     if (import.meta.env.DEV) {
       console.debug(`[replay-cache #514] ${symbol}|${expiry}|${date}: ${cached ? 'hit — okamžitý render' : 'miss — plný fetch'}`) // prettier-ignore
     }
@@ -328,12 +337,22 @@ export function useDayData(
     let timer: ReturnType<typeof setTimeout> | null = null
     fetchReplayInputs(symbol, expiry, date)
       .then((loaded) => {
+        if (cancelled) return
         // Prázdný den (0 minut) nesmí přepsat poslední živý stav při přechodném výpadku
-        if (!cancelled && loaded.minutes.length > 0) setInputs(loaded)
+        if (loaded.minutes.length > 0) {
+          setInputs(loaded)
+          setRefreshFailures(0)
+        } else {
+          // Prázdná odpověď = neúspěšná obnova (#516) — počítá se a zkouší znovu
+          setRefreshFailures((n) => n + 1)
+          timer = setTimeout(() => setRetry((n) => n + 1), 30_000)
+        }
       })
       .catch(() => {
         // Den (zatím) neexistuje — např. čerstvě přidaný ticker; zkusit znovu za 30 s
-        if (!cancelled) timer = setTimeout(() => setRetry((n) => n + 1), 30_000)
+        if (cancelled) return
+        setRefreshFailures((n) => n + 1)
+        timer = setTimeout(() => setRetry((n) => n + 1), 30_000)
       })
     return () => {
       cancelled = true
@@ -616,13 +635,17 @@ export function useDayData(
         const results = await Promise.allSettled(
           recent.map((day) => fetchReplay(symbol, day.expiry, day.date)),
         )
-        const days = results
-          .filter(
-            (result): result is PromiseFulfilledResult<ReplayDay> =>
-              result.status === 'fulfilled' && result.value.grid.minutes > 0,
-          )
-          .map((result) => result.value)
-        if (!cancelled && days.length > 0) setDaily(buildDailyDay(days))
+        const days: ReplayDay[] = []
+        const missingDates: string[] = []
+        results.forEach((result, index) => {
+          if (result.status === 'fulfilled' && result.value.grid.minutes > 0) {
+            days.push(result.value)
+          } else {
+            // Den bez dat (#516): NEvynechat tiše — osa dostane šrafovaný sloupec
+            missingDates.push(recent[index].date)
+          }
+        })
+        if (!cancelled && days.length > 0) setDaily(buildDailyDay(days, missingDates))
       })
       .catch(() => {
         // API neběží — zůstává demo dataset
@@ -640,6 +663,10 @@ export function useDayData(
     () => (baseReplay ? splitSpotBars(baseReplay, spotBars) : EMPTY_LIVE),
     [baseReplay, spotBars],
   )
-  if (timeframe === 'daily') return { day: daily ?? fallback, live: EMPTY_LIVE }
-  return { day: replayDay ?? fallback, live: replayDay ? live : EMPTY_LIVE }
+  const staleData =
+    timeframe === 'intraday' && inputs && refreshFailures >= STALE_FAILURES_THRESHOLD
+      ? { failures: refreshFailures, lastMinuteIso: inputs.minutes.at(-1) ?? null }
+      : null
+  if (timeframe === 'daily') return { day: daily ?? fallback, live: EMPTY_LIVE, staleData: null }
+  return { day: replayDay ?? fallback, live: replayDay ? live : EMPTY_LIVE, staleData }
 }

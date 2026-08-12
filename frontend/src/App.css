@@ -1945,3 +1945,18 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   margin-top: 2px;
   font-size: 11px;
 }
+
+/* Banner zastaralých dat (#516) — vedle demo banneru, ale výstražný */
+.stale-banner {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(180, 120, 20, 0.92);
+  color: #fff;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  z-index: 6;
+  pointer-events: none;
+}
