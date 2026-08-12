@@ -46,6 +46,18 @@ z burzovní timezone (`settle_ts` = 16:00 `America/New_York`,
 `instrument/tz.ts` (`Intl.DateTimeFormat` s `timeZone`, bez závislostí)
 a session markery jsou definované v lokálním čase burzy + IANA zóně.
 
+## Dodatek 2026-08-12 (#512)
+
+Bod 3 realizován: `session_bounds`/`session_frame` v API (`gexlens_api/data.py`)
+sešívají osu obchodního dne `[open 17:00 CT D−1, open 17:00 CT D)` pro všechny
+denní čtecí endpointy (/replay, /flow, /heatmap, /profile, /chain, /levels,
+/gexplane profily); `gexfield*` se nesešívá (partice drží jen poslední stav).
+Frontend odvozuje živý den přes `sessionDateIso` (`instrument/tz.ts`) — po
+17:00 CT běží osa následujícího dne. Polouzavřený interval = žádné dvojí
+započtení z konstrukce; kontinuitu CumΔ/volume přes hranici partic kryje
+`api/tests/test_session_day.py`. Vedlejší nález: CumΔ se dnes resetuje jen
+restartem enginu (SPEC 4.5 reset nezapojen) — řeší #638.
+
 **Config migrace:** `GEXLENS_OI_PUBLICATION_HOUR_UTC` (fixní UTC hodina) je
 nahrazeno dvojicí `GEXLENS_OI_PUBLICATION_TIME_LOCAL` +
 `GEXLENS_OI_PUBLICATION_TZ` (default `07:00` `America/Chicago`, což odpovídá

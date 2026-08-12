@@ -34,6 +34,7 @@ import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
 import type { HeatmapScale, MeasuredHeatmapMode } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
 import { expirySettleUtc, sessionDateFor } from './instrument/expiry'
+import { sessionDateIso } from './instrument/tz'
 import { SETUP_COLORS, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { CHARM_PALETTE, DEFAULT_SIGNED_PALETTE, VANNA_PALETTE } from './heatmap/render'
@@ -170,7 +171,10 @@ function MainContent() {
 
   // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame).
   // `rawDay` je identitou stabilní napříč spot ticky, živá cena jde zvlášť v `live` (#141).
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  // Obchodní den = Globex seance (#512): po 17:00 CT běží seance zítřka —
+  // /replay pro ten den sešije večer na serveru. Známé omezení: hodnota je
+  // z mountu a přes hranici se sama nepřeklopí (tatáž třída jako #508).
+  const today = useMemo(() => sessionDateIso(), [])
   // Proběhlá expirace se čte jako replay svého posledního dne (#352) — bez
   // socketu: kanály price/spot/flow jsou per symbol a přilepily by dnešní
   // svíčky do historického dne.
