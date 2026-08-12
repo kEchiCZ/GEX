@@ -796,7 +796,6 @@ class EngineRuntime:
                 greeks_complete=metrics.greeks_complete,
                 greeks_total=metrics.total,
                 repair_count=metrics.stale_count,
-                lines_utilization=metrics.lines_utilization,
                 last_tick_ts=ts_min.isoformat(),
             )
         await self.publisher.publish(

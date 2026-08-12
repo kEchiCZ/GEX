@@ -24,6 +24,7 @@ from gexlens_engine.adapters import (
     IbHistoricalClient,
     IbOIFetcher,
     IbQuoteStreamer,
+    count_ib_lines,
 )
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.setups import SetupParams
@@ -43,6 +44,7 @@ from gexlens_engine.ibkr.discovery import (
     Underlying,
     build_contracts,
 )
+from gexlens_engine.ibkr.lines import LineGauge
 from gexlens_engine.ibkr.newsticks import (
     NewsTickCollector,
     NewsTickLike,
@@ -286,6 +288,7 @@ async def create_pipeline(
     fa_repository: FaValidationRepository | None = None,
     alpha_repository: FaAlphaRepository | None = None,
     news_ticks: NewsTickCollector | None = None,
+    line_gauge: LineGauge | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
     front = await _resolve_front_future(ib, symbol)
@@ -391,7 +394,7 @@ async def create_pipeline(
         multiplier,
     )
 
-    streamer = IbQuoteStreamer(ib)
+    streamer = IbQuoteStreamer(ib, line_gauge)
     # Následující expirace (čtení positioningu příští seance): sekundární runtime
     # sweepuje v nižší kadenci, píše jen snapshots + levels své expirace
     next_runtime: EngineRuntime | None = None
@@ -588,6 +591,9 @@ async def main() -> None:
         )
     publisher = HttpPublisher(api_base, api_token)
     ib = IB()
+    # Obsazené market data lines (#630): měřené z registru subskripcí,
+    # jediný gauge nad sdíleným spojením — strop účtu platí napříč pipeline
+    line_gauge = LineGauge(lambda: count_ib_lines(ib))
     manager = ConnectionManager(
         ib,
         settings,
@@ -754,6 +760,7 @@ async def main() -> None:
                     fa_repository=fa_repository,
                     alpha_repository=alpha_repository,
                     news_ticks=news_ticks,
+                    line_gauge=line_gauge,
                 )
                 setup_cooldown.succeeded(symbol)
             except ConnectionError as exc:
@@ -810,6 +817,9 @@ async def main() -> None:
                 # Připojený účet (#446): uživatel musí poznat paper od živého
                 account=account.label,
                 account_paper=account.paper,
+                # Špička obsazených linek od minulého statusu (#630) — měřeno,
+                # ne konfigurační odhad; strop účtu je tvrdých 100 (ADR-0001)
+                lines_utilization=line_gauge.utilization(settings.market_data_lines),
                 **aggregate_status(results),
             )
 
