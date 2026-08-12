@@ -148,3 +148,29 @@ def test_seance_jen_z_vecera_d_minus_1(settings: Settings) -> None:
     minutes = pd.to_datetime(snapshots["ts_min"]).dt.tz_convert("UTC").tolist()
     assert minutes == [at(MONDAY, 22, 30)]
     assert writer is not None  # writer jen kvůli konzistentnímu vzoru fixture
+
+
+def test_replay_cache_hlavicky(client: TestClient, settings: Settings) -> None:
+    """#514: uzavřená seance immutable; živý den ETag + 304 při shodě."""
+    payload = client.get(f"/replay/ES/20260720/{MONDAY.isoformat()}")
+    assert payload.status_code == 200
+    assert payload.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert "etag" not in payload.headers
+
+    # Živý den: seance ještě neskončila → no-cache + ETag; shoda → 304
+    from gexlens_engine.compute.settle import trading_session_date
+
+    now = dt.datetime.now(dt.UTC)
+    live_session = trading_session_date(now)
+    writer = SnapshotWriter(settings)
+    writer.write_minute(
+        "ES", "20260720", now.date(), [_snapshot(now - dt.timedelta(minutes=3), 70.0)]
+    )
+    live = client.get(f"/replay/ES/20260720/{live_session.isoformat()}")
+    assert live.status_code == 200
+    assert live.headers["cache-control"] == "no-cache"
+    etag = live.headers["etag"]
+    cached = client.get(
+        f"/replay/ES/20260720/{live_session.isoformat()}", headers={"If-None-Match": etag}
+    )
+    assert cached.status_code == 304
