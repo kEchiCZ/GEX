@@ -950,6 +950,10 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
   const measured = measuredMinutes(inputs.snapshotMinutes, minutes, isCatchUp)
   const optVolCall = optVolSeries(inputs.callVolume, minutes, strikes.length, measured)
   const optVolPut = optVolSeries(inputs.putVolume, minutes, strikes.length, measured)
+  // Evo OI (#573): Σ OI přes striky per minuta; minuty bez snapshotu drží
+  // předchozí hodnotu (schod) — nula by lhala „pozice zmizely"
+  const evoOiCall = oiTotalSeries(inputs.callOi, minutes, strikes.length, hasSnapshot)
+  const evoOiPut = oiTotalSeries(inputs.putOi, minutes, strikes.length, hasSnapshot)
   const deltaFlowCall = deltaFlowSeries(
     inputs.callVolume,
     inputs.callDelta,
@@ -1073,7 +1077,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     raw,
     rawFa,
     overlays,
-    panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut, cumDeltaFromIso },
+    panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut, evoOiCall, evoOiPut, cumDeltaFromIso }, // prettier-ignore
     profileByMinute,
     provisionalMinutes,
     gexProfile,
@@ -1142,6 +1146,28 @@ function deltaFlowSeries(
 }
 
 /** OptVol per minuta: Σ kladných přírůstků kumulativního volume přes strikes. */
+/** Σ OI přes striky per minuta (#573); minuta bez snapshotu = předchozí hodnota. */
+export function oiTotalSeries(
+  oi: Float32Array,
+  minutes: number,
+  strikeCount: number,
+  hasSnapshot: (minuteIdx: number) => boolean,
+): number[] {
+  const series = Array.from({ length: minutes }, () => 0)
+  for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
+    if (!hasSnapshot(minuteIdx)) {
+      series[minuteIdx] = minuteIdx > 0 ? series[minuteIdx - 1] : 0
+      continue
+    }
+    let total = 0
+    for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
+      total += oi[strikeIdx * minutes + minuteIdx]
+    }
+    series[minuteIdx] = total
+  }
+  return series
+}
+
 function optVolSeries(
   volume: Float32Array,
   minutes: number,

@@ -63,6 +63,8 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
   const cumDelta = Array.from({ length: columns }, () => 0)
   const deltaFlowCall = Array.from({ length: columns }, () => 0)
   const deltaFlowPut = Array.from({ length: columns }, () => 0)
+  const evoOiCall = Array.from({ length: columns }, () => 0)
+  const evoOiPut = Array.from({ length: columns }, () => 0)
   const price: PriceBar[] = []
   const spotSeries: (number | null)[] = Array.from({ length: columns }, () => null)
   const profileByMinute: ProfileRow[][] = []
@@ -90,6 +92,9 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
     cumDelta[dayIdx] = day.panels.cumDelta.at(-1) ?? 0
     deltaFlowCall[dayIdx] = day.panels.deltaFlowCall.reduce((sum, value) => sum + value, 0)
     deltaFlowPut[dayIdx] = day.panels.deltaFlowPut.reduce((sum, value) => sum + value, 0)
+    // Evo OI (#573): úroveň posledního sloupce dne — Σ přes striky z raw matic
+    evoOiCall[dayIdx] = day.panels.evoOiCall?.at(-1) ?? 0
+    evoOiPut[dayIdx] = day.panels.evoOiPut?.at(-1) ?? 0
 
     const bar = dailyBar(dayIdx, day.overlays.price ?? [], previousClose)
     if (bar) {
@@ -132,7 +137,7 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
       sessions: [],
       timestamp: entries.at(-1)?.date ?? '',
     },
-    panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut },
+    panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut, evoOiCall, evoOiPut }, // prettier-ignore
     profileByMinute: profileSourceOf(profileByMinute),
     demoProfileRows: null,
     spotSeries,

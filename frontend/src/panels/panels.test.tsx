@@ -6,7 +6,7 @@ import { LiveSocket } from '../api/ws'
 import { BottomPanels } from '../components/BottomPanels'
 import { FakeWebSocket } from '../test/fakeWs'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
-import { cumDeltaAreas, barHeights, sentimentCandleGeometry } from './geometry'
+import { cumDeltaAreas, barHeights, evoOiDisplay, evoOiStepPath, sentimentCandleGeometry } from './geometry' // prettier-ignore
 import type { PanelSeries } from '../components/BottomPanels'
 
 const DATA: PanelSeries = {
@@ -48,7 +48,14 @@ test('cumDeltaAreas dělí plochu nad/pod nulou a drží rezervu od okrajů (#16
 // ── Panely: sdílená osa, C/P barvy, plochy ─────────────────────────
 
 function renderPanels(
-  visible = { vol: true, optVol: true, delta: true, deltaFlow: false, sentiment: false },
+  visible = {
+    vol: true,
+    optVol: true,
+    delta: true,
+    deltaFlow: false,
+    evoOi: false,
+    sentiment: false,
+  },
 ) {
   return render(
     <CrosshairProvider>
@@ -77,7 +84,14 @@ test('vypnutí panelu přeskládá layout (AC)', () => {
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: false, optVol: true, delta: true, deltaFlow: false, sentiment: false }}
+        visible={{
+          vol: false,
+          optVol: true,
+          delta: true,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: false,
+        }}
         width={400}
       />
     </CrosshairProvider>,
@@ -89,7 +103,14 @@ test('vypnutí panelu přeskládá layout (AC)', () => {
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: false, optVol: false, delta: false, deltaFlow: false, sentiment: false }}
+        visible={{
+          vol: false,
+          optVol: false,
+          delta: false,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: false,
+        }}
         width={400}
       />
     </CrosshairProvider>,
@@ -102,7 +123,14 @@ test('Δ Flow panel: C/P delta-vážené sloupce, zapíná se checkboxem', () =>
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: false, optVol: false, delta: false, deltaFlow: true, sentiment: false }}
+        visible={{
+          vol: false,
+          optVol: false,
+          delta: false,
+          deltaFlow: true,
+          evoOi: false,
+          sentiment: false,
+        }}
         width={400}
       />
     </CrosshairProvider>,
@@ -129,7 +157,14 @@ test('panely respektují výšku z props (#169)', () => {
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: false, delta: true, deltaFlow: false, sentiment: false }}
+        visible={{
+          vol: true,
+          optVol: false,
+          delta: true,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: false,
+        }}
         width={400}
         height={160}
       />
@@ -187,7 +222,14 @@ test('crosshair ukazuje hodnoty ukazatelů vpravo (issue #104)', () => {
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: true, delta: true, deltaFlow: true, sentiment: false }}
+        visible={{
+          vol: true,
+          optVol: true,
+          delta: true,
+          deltaFlow: true,
+          evoOi: false,
+          sentiment: false,
+        }}
         width={400}
       />
     </CrosshairProvider>,
@@ -214,7 +256,14 @@ test('crosshair drží i mimo data (posun grafu do budoucna) — issue #109', ()
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: true, delta: true, deltaFlow: false, sentiment: false }}
+        visible={{
+          vol: true,
+          optVol: true,
+          delta: true,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: false,
+        }}
         width={400}
       />
       <Reader />
@@ -234,7 +283,14 @@ test('panel: hodnota na pravé ose Y podle výšky kurzoru (issue #107)', () => 
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: false, delta: true, deltaFlow: false, sentiment: false }}
+        visible={{
+          vol: true,
+          optVol: false,
+          delta: true,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: false,
+        }}
         width={400}
       />
     </CrosshairProvider>,
@@ -284,7 +340,14 @@ test('pohyb v panelu nastaví minutu crosshairu; linka se kreslí ve všech pane
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: true, delta: true, deltaFlow: false, sentiment: false }}
+        visible={{
+          vol: true,
+          optVol: true,
+          delta: true,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: false,
+        }}
         width={400}
       />
       <Reader />
@@ -307,7 +370,14 @@ test('panely respektují pan/zoom časové osy hlavního grafu (prop time)', () 
     <CrosshairProvider>
       <BottomPanels
         data={DATA}
-        visible={{ vol: true, optVol: false, delta: false, deltaFlow: false, sentiment: false }}
+        visible={{
+          vol: true,
+          optVol: false,
+          delta: false,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: false,
+        }}
         width={400}
         time={{ offsetX: 40, zoomX: 2 }}
       />
@@ -328,7 +398,14 @@ test('panel Sentiment kreslí plochu jako polygon, ne prázdný path (#288)', ()
     <CrosshairProvider>
       <BottomPanels
         data={data}
-        visible={{ vol: false, optVol: false, delta: false, deltaFlow: false, sentiment: true }}
+        visible={{
+          vol: false,
+          optVol: false,
+          delta: false,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: true,
+        }}
       />
     </CrosshairProvider>,
   )
@@ -375,7 +452,14 @@ test('panel Sentiment kreslí svíčky místo plochy, když dorazí Daily OHLC (
     <CrosshairProvider>
       <BottomPanels
         data={{ ...DATA, sentimentCandles: candles }}
-        visible={{ vol: false, optVol: false, delta: false, deltaFlow: false, sentiment: true }}
+        visible={{
+          vol: false,
+          optVol: false,
+          delta: false,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: true,
+        }}
         width={400}
       />
     </CrosshairProvider>,
@@ -385,4 +469,17 @@ test('panel Sentiment kreslí svíčky místo plochy, když dorazí Daily OHLC (
   // Plocha (intraday zobrazení) se nekreslí
   expect(container.querySelector('[data-part="sentiment-pos"]')).toBeNull()
   expect(screen.getByTestId('sentiment-zero')).toBeDefined()
+})
+
+// ── Evo OI (#573) ──────────────────────────────────────────────────
+
+test('evoOiStepPath: schodovitá cesta bez interpolace (#573)', () => {
+  // Tři hodnoty, prostřední beze změny → H přes dva kroky, V jen při změně
+  const path = evoOiStepPath([10, 10, 20], 30, (value) => 100 - value)
+  expect(path).toBe('M0.0,90.0H10.0H20.0V80.0H30.0')
+})
+
+test('evoOiDisplay: Δ od začátku osy jako výchozí čtení (#573)', () => {
+  expect(evoOiDisplay([100, 100, 130, 90], 'delta')).toEqual([0, 0, 30, -10])
+  expect(evoOiDisplay([100, 130], 'abs')).toEqual([100, 130])
 })

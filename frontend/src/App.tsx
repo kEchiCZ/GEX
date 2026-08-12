@@ -604,11 +604,12 @@ function MainContent() {
       optVol: toggles.optVol,
       delta: toggles.delta,
       deltaFlow: toggles.deltaFlow,
+      evoOi: toggles.evoOi,
       // Checkbox News zapíná zároveň panel Sentiment (#288); markery v grafu
       // se na něj navěsí v #287
       sentiment: toggles.news,
     }),
-    [toggles.vol, toggles.optVol, toggles.delta, toggles.deltaFlow, toggles.news],
+    [toggles.vol, toggles.optVol, toggles.delta, toggles.deltaFlow, toggles.evoOi, toggles.news],
   )
   const panelTime = useMemo(
     () => ({ offsetX: chartView.offsetX, zoomX: chartView.zoomX }),

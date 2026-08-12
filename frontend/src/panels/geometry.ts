@@ -111,3 +111,36 @@ export function sentimentCandleGeometry(
   })
   return { geoms, zeroY }
 }
+
+// ── Evo OI (#573) ──────────────────────────────────────────────────
+
+/** Zobrazovaná řada Evo OI: Δ od začátku osy (default — absolutní OI se mění
+málo a byl by opticky plochý), nebo absolutní úroveň. */
+export function evoOiDisplay(series: number[], mode: 'delta' | 'abs'): number[] {
+  if (mode === 'abs') return series
+  const base = series.find((value) => value > 0) ?? 0
+  return series.map((value) => (value > 0 || base === 0 ? value - base : 0))
+}
+
+/** SVG path schodovité křivky (H → V úseky) — OI se mezi aktualizacemi tick 101
+NEinterpoluje: šikmá čára by si vymýšlela průběh, který jsme nenaměřili. */
+export function evoOiStepPath(
+  series: number[],
+  width: number,
+  toY: (value: number) => number,
+): string {
+  const step = width / Math.max(1, series.length)
+  let path = ''
+  let previousY: number | null = null
+  series.forEach((value, index) => {
+    const y = toY(value)
+    if (previousY === null) {
+      path += `M${(index * step).toFixed(1)},${y.toFixed(1)}`
+    } else if (y !== previousY) {
+      path += `V${y.toFixed(1)}`
+    }
+    path += `H${((index + 1) * step).toFixed(1)}`
+    previousY = y
+  })
+  return path
+}

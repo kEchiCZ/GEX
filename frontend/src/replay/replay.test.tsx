@@ -7,7 +7,13 @@ import type { PanelSeries } from '../components/BottomPanels'
 import { PlaybackBar } from '../components/PlaybackBar'
 import { demoGrid } from '../heatmap/demo'
 import { CrosshairProvider } from '../state/Crosshair'
-import { appendMinute, assembleReplayDay, buildReplayDay, decodeBundle } from './loader'
+import {
+  appendMinute,
+  assembleReplayDay,
+  buildReplayDay,
+  decodeBundle,
+  oiTotalSeries,
+} from './loader'
 import type { LiveMinute, ReplayDay } from './loader'
 import { sliceGrid, sliceOverlays, slicePanels, sliceSeries } from './slice'
 import { usePlayback, TICK_MS } from './usePlayback'
@@ -580,7 +586,14 @@ test('panel Cum Δ zobrazí popisek startu měření, bez něj nic (#518)', () =
     deltaFlowPut: [0, 0],
     cumDeltaFromIso: M0,
   }
-  const visible = { vol: false, optVol: false, delta: true, deltaFlow: false, sentiment: false }
+  const visible = {
+    vol: false,
+    optVol: false,
+    delta: true,
+    deltaFlow: false,
+    evoOi: false,
+    sentiment: false,
+  }
   const { unmount } = render(
     <CrosshairProvider>
       <BottomPanels data={series} visible={visible} />
@@ -952,4 +965,11 @@ test('appendMinute přidá nový strike (posun osy) beze ztráty starých buněk
   expect(day.raw.callOi[idx7610m0]).toBe(80)
   // Nový strike 7620 C v minutě 1 (strikeIdx 2, minuteIdx 1)
   expect(day.raw.callOi[2 * 2 + 1]).toBe(40)
+})
+
+test('oiTotalSeries: Σ přes striky per minuta, minuta bez snapshotu drží schod (#573)', () => {
+  // 2 striky × 3 minuty; minuta 1 bez snapshotu — nesmí spadnout na nulu
+  const oi = Float32Array.from([100, 0, 120, 50, 0, 40]) // strike0: [100,0,120], strike1: [50,0,40]
+  const series = oiTotalSeries(oi, 3, 2, (minuteIdx) => minuteIdx !== 1)
+  expect(series).toEqual([150, 150, 160])
 })
