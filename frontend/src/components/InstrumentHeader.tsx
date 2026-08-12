@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react'
 import { coverageLabel, greeksCoverage } from '../instrument/coverage'
 import type { Coverage } from '../instrument/coverage'
-import { expiryCountdown, expiryIsoDate, expiryKind } from '../instrument/expiry'
+import { expiryCountdown, expiryIsoDate, expiryKind, expirySettleUtc } from '../instrument/expiry'
+import { formatSettleWatch } from '../instrument/settlewatch'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
 import { GammaCliffChip } from './GammaCliffChip'
@@ -82,6 +83,7 @@ export function InstrumentHeader({
     markAlertsRead,
     setView,
     regimeInfo,
+    settleWatch,
   } = useAppState()
   const [alertsOpen, setAlertsOpen] = useState(false)
   const live = status.engine === 'online'
@@ -146,6 +148,26 @@ export function InstrumentHeader({
       )}
       {/* Gamma útes (#576): kolik gammy dnešní expirací odpadne — jen informace */}
       <GammaCliffChip symbol={symbol} />
+      {/* Settle watch (#603): denní teze jednou větou — uzavřeme nad/pod klíčovou zdí? */}
+      {settleWatch && selectedExpiry && (
+        <span
+          className="muted settle-watch"
+          data-testid="settle-watch"
+          title={
+            `Settle watch (#603): nejvýznamnější zeď dne (${settleWatch.name}` +
+            `${settleWatch.weak ? ', slabá/neznámá dominance' : ', silná dominance'}) ` +
+            'a odstup ceny od ní se znaménkem (kladné = cena nad úrovní). ' +
+            'Denní otázka: uzavřeme settle nad ní, nebo pod ní?'
+          }
+        >
+          {`settle ${
+            expirySettleUtc(selectedExpiry)?.toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            }) ?? '—'
+          } · ${formatSettleWatch(settleWatch)}`}
+        </span>
+      )}
       {regimeInfo.state && (
         // GEX režim (#209): jediná datově podložená hodnota vrstvy — TYP obchodu,
         // ne směr. Tooltip nese playbook hint + polohu flip zóny.

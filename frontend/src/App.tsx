@@ -41,6 +41,7 @@ import { CHARM_PALETTE, DEFAULT_SIGNED_PALETTE, VANNA_PALETTE } from './heatmap/
 import { DEFAULT_VIEW, ZOOM_MAX, ZOOM_MIN, visiblePriceRange } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
 import { gexRegime, profileZeroNearest } from './instrument/regime'
+import { settleWatchLevel } from './instrument/settlewatch'
 import { pcrAt, pcrVolumeSeries } from './instrument/sentiment'
 import { dataAgeMinutes, ohlcCoverage, STALE_AFTER_MINUTES } from './instrument/coverage'
 import { priceTick } from './instrument/tick'
@@ -75,6 +76,13 @@ const ANNOTATION_TOOLS: Array<{ tool: ActiveTool; label: string }> = [
 ]
 
 /** Poslední ne-null hodnota řady do pozice (spot, walls pro dashboard). */
+function lastWeakFlag(flags: (boolean | null)[]): boolean | null {
+  for (let index = flags.length - 1; index >= 0; index -= 1) {
+    if (flags[index] !== null) return flags[index]
+  }
+  return null
+}
+
 function lastValue(series: (number | null)[] | undefined, position: number): number | null {
   if (!series) return null
   for (let index = Math.min(position, series.length - 1); index >= 0; index -= 1) {
@@ -94,6 +102,7 @@ function MainContent() {
     interval,
     setPriceInfo,
     setRegimeInfo,
+    setSettleWatch,
     setOhlcCoverage,
     signalMode,
     underlayPlane,
@@ -315,7 +324,14 @@ function MainContent() {
       measuredFlip,
       dynamicFlip,
     })
-  }, [day.spotSeries, day.overlays.levels, day.gexProfile, liveOverlay.bars, setRegimeInfo])
+    // Settle watch (#603): klíčová zeď dne (silné před slabými, pak nejbližší)
+    const wallCandidates = (day.overlays.walls ?? []).map((line) => ({
+      name: line.name,
+      level: lastValue(line.series, line.series.length - 1) ?? Number.NaN,
+      weak: line.weak ? (lastWeakFlag(line.weak) ?? null) : null,
+    }))
+    setSettleWatch(settleWatchLevel(wallCandidates, liveSpot))
+  }, [day.spotSeries, day.overlays.levels, day.overlays.walls, day.gexProfile, liveOverlay.bars, setRegimeInfo, setSettleWatch]) // prettier-ignore
   // Pokrytí OHLC do hlavičky (#470) — počítá se nad 1m osou, ne nad koši, aby
   // číslo znamenalo minuty dne bez ohledu na zvolený timeframe
   useEffect(() => {
