@@ -1095,6 +1095,8 @@ function MainContent() {
           gexProfile={gexProfileRow}
           gexUnits={gexUnits}
           axisStrikes={day.grid.strikes}
+          symbol={symbol}
+          expiry={selectedExpiry}
         />
       </div>
     </>

@@ -1894,3 +1894,54 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   color: #e8c14b;
   cursor: help;
 }
+
+/* PUT/CALL panel pod strike profilem (#469) */
+.pcr-panel {
+  border-top: 1px solid var(--border, #2a2f3a);
+  padding: 6px 8px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.pcr-panel.pcr-unreliable .pcr-values,
+.pcr-panel.pcr-unreliable .pcr-bar {
+  opacity: 0.45;
+}
+.pcr-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.pcr-head select {
+  font-size: 11px;
+}
+.pcr-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #14b8a0; /* call strana */
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.pcr-bar-put {
+  display: block;
+  height: 100%;
+  background: #ef4444;
+}
+.pcr-values {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.pcr-put {
+  color: #ef4444;
+}
+.pcr-call {
+  color: #14b8a0;
+}
+.pcr-ratio {
+  font-weight: 600;
+}
+.pcr-caption {
+  margin-top: 2px;
+  font-size: 11px;
+}
