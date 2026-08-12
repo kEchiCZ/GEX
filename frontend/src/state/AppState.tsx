@@ -5,6 +5,8 @@ import { LiveSocket } from '../api/ws'
 import type { Coverage } from '../instrument/coverage'
 import { API_BASE, WS_URL } from '../config'
 import type { GexRegimeState } from '../instrument/regime'
+import { GEX_UNITS } from '../heatmap/units'
+import type { GexUnits } from '../heatmap/units'
 import { enumMap, mergedBooleans, oneOf, shortString, usePersistentState } from './persist'
 
 export interface PipelineStatus {
@@ -149,6 +151,9 @@ interface AppState {
   /** Filtr news markerů Vše/Významné vedle News checkboxu (#408). */
   newsMarkerFilter: NewsMarkerFilter
   setNewsMarkerFilter: (filter: NewsMarkerFilter) => void
+  /** Jednotka Dyn ploch a GEX křivky (#569): $/1 % (výchozí) váží P²/100, $/bod je surové pole enginu. */
+  gexUnits: GexUnits
+  setGexUnits: (units: GexUnits) => void
   /** Zdroj OI aktivního symbolu (#232): měřené / FA odhad; persist per symbol. */
   oiSource: OiSource
   setOiSource: (source: OiSource) => void
@@ -315,6 +320,12 @@ export function AppStateProvider({
     'all',
     oneOf(NEWS_MARKER_FILTERS),
   )
+  // Jednotka Dyn ploch (#569): default $/1 % (referenční čtení); engine ukládá $/bod
+  const [gexUnits, setGexUnits] = usePersistentState<GexUnits>(
+    'gexUnits',
+    'per_percent',
+    oneOf(GEX_UNITS),
+  )
   // Zdroj OI per symbol (#232) — vzor chartYRange mapy: klíč = symbol,
   // chybějící záznam = default měřené (FA je opt-in)
   const [oiSourceMap, setOiSourceMap] = usePersistentState<Record<string, OiSource>>(
@@ -420,6 +431,8 @@ export function AppStateProvider({
       setUnderlayPlane,
       newsMarkerFilter,
       setNewsMarkerFilter,
+      gexUnits,
+      setGexUnits,
       oiSource,
       setOiSource,
       view,
@@ -455,6 +468,8 @@ export function AppStateProvider({
       setUnderlayPlane,
       newsMarkerFilter,
       setNewsMarkerFilter,
+      gexUnits,
+      setGexUnits,
       oiSource,
       setOiSource,
       expiries,

@@ -87,6 +87,43 @@ test('projectGexField bez pole spadne na konstantní projekci', () => {
   expect(projectGexField(grid, 0, FIELD, opts)).toBe(grid)
 })
 
+test('buildGexGrid: váha $/1 % se násobí až PO interpolaci (#569)', () => {
+  // Uzly mřížky na 100 a 110, strike 105 uprostřed. Správně (po interpolaci):
+  // interp(10,30) = 20 → ×105²/100 = 2205. Špatně (před): interp(10·100, 30·121) = 2315.
+  const profiles = [{ tsIso: '2026-07-22T14:00:00+00:00', gridStart: 100, gridStep: 10, values: [10, 30] }] // prettier-ignore
+  const grid = buildGexGrid(profiles, [100, 105], 1, 'linear', 'per_percent')
+  // vrstva [1000, 2205], p99 = 2205 → signed [1000/2205, 1]
+  expect(grid.layers.signed![1]).toBe(1)
+  expect(grid.layers.signed![0]).toBeCloseTo(1000 / 2205, 5)
+  // Pořadí operací: hodnota z „váha před interpolací" by dala 1000/2315
+  expect(Math.abs(grid.layers.signed![0] - 1000 / 2315)).toBeGreaterThan(1e-3)
+})
+
+test('buildGexGrid: default i explicitní $/bod jsou bitově shodné s dneškem (#569)', () => {
+  const profiles = [row('2026-07-22T14:00:00+00:00', [4, 1, 2, 3, -8])]
+  const byDefault = buildGexGrid(profiles, [100, 105], 1, 'linear')
+  const explicit = buildGexGrid(profiles, [100, 105], 1, 'linear', 'per_point')
+  expect([...explicit.layers.signed!]).toEqual([...byDefault.layers.signed!])
+})
+
+test('projectGexField: váha $/1 % sdílí jmenovatel s naměřenou částí (#569)', () => {
+  const profiles: (GexProfileRow | null)[] = [row('2026-07-22T14:00:00+00:00', [4, 0, 2]), null]
+  const grid = buildGexGrid(profiles, [100, 105], 2, 'linear', 'per_percent')
+  const projected = projectGexField(grid, 3, FIELD, {
+    profiles,
+    lastMinuteIso: '2026-07-22T14:01:00+00:00',
+    bucketMinutes: 1,
+    scale: 'linear',
+    units: 'per_percent',
+  })
+  // Naměřené: strike 100 = 4·100 = 400, strike 105 = 2·110.25 = 220.5 → p99 = 400.
+  // Projekce: col0 strike 100 = 8·100/400 → clamp 1; strike 105 = −4·110.25/400 → −1.1 → clamp −1;
+  // col1 strike 100 = 0, strike 105 = −12·110.25/400 → clamp −1.
+  const expected = [1, 1, 1, 0, 0, 0.55125, 0.55125, -1, -1, -1]
+  const actual = [...projected.layers.signed!]
+  expected.forEach((value, index) => expect(actual[index]).toBeCloseTo(value, 5))
+})
+
 test('renderGrid s projectionDynamic nekopíruje projekční sloupce', () => {
   // Bez příznaku by render držel od dataMinutes konstantní pixel (ADR-0006
   // zkratka) — dynamické pole má ale v projekci různé hodnoty i znaménka

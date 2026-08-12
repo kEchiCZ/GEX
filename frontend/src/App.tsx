@@ -97,6 +97,7 @@ function MainContent() {
     signalMode,
     underlayPlane,
     newsMarkerFilter,
+    gexUnits,
     oiSource,
     socket,
   } = useAppState()
@@ -235,9 +236,9 @@ function MainContent() {
   const gexUnderDay = useMemo(() => {
     if (underlayPlane === 'off' || timeframe !== 'intraday') return null
     if (!planeProfiles || planeProfiles.every((row) => row === null)) return null
-    const built = buildGexGrid(planeProfiles, rawDay.grid.strikes, rawDay.grid.minutes, heatScale)
+    const built = buildGexGrid(planeProfiles, rawDay.grid.strikes, rawDay.grid.minutes, heatScale, gexUnits) // prettier-ignore
     return aggregateDay({ ...rawDay, grid: built }, bucketMinutes)
-  }, [underlayPlane, timeframe, planeProfiles, rawDay, heatScale, bucketMinutes])
+  }, [underlayPlane, timeframe, planeProfiles, rawDay, heatScale, gexUnits, bucketMinutes])
 
   const playback = usePlayback(day.grid.minutes)
   // Živá vrstva (#141): svíčky ze spot kanálu agregované do stejných košů jako den.
@@ -284,6 +285,8 @@ function MainContent() {
   }, [day.spotSeries, liveOverlay.bars, setPriceInfo])
   // GEX režim badge (#209): živý spot vůči flip zóně (měřený × dynamický flip).
   // Živé hodnoty, ne playback řez — badge je kontext „teď", stejně jako priceInfo.
+  // Záměrně NEzvážený profil (#569): flip je cenová úroveň a nesmí záviset
+  // na zobrazovací jednotce (P²/100 nuly nemění, ale interpolaci mezi uzly ano).
   useEffect(() => {
     const spots = day.spotSeries.filter((value): value is number => value !== null)
     const liveSpot = liveOverlay.bars.at(-1)?.close ?? spots.at(-1) ?? null
@@ -451,8 +454,9 @@ function MainContent() {
       lastMinuteIso: day.lastMinuteIso,
       bucketMinutes,
       scale: heatScale,
+      units: gexUnits,
     })
-  }, [gexUnderDay, planeProfiles, planeField, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, heatScale]) // prettier-ignore
+  }, [gexUnderDay, planeProfiles, planeField, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, heatScale, gexUnits]) // prettier-ignore
   const projectionExtra = projectedGrid.minutes - (projectedGrid.dataMinutes ?? projectedGrid.minutes) // prettier-ignore
   const chartLabels = useMemo(
     () =>
@@ -1085,6 +1089,7 @@ function MainContent() {
           aggregate={day.source === 'replay' ? aggregateOn : null}
           onAggregateToggle={handleAggregateToggle}
           gexProfile={gexProfileRow}
+          gexUnits={gexUnits}
           axisStrikes={day.grid.strikes}
         />
       </div>

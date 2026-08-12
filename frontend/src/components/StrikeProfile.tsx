@@ -18,6 +18,8 @@ import { fractionalRow } from '../heatmap/overlays'
 import { axisGapRanges, capHalfFractions } from '../heatmap/spacing'
 import { barGeometry, formatAmount, gexCurvePaths, maxComponentSide, niceCeil, volLeaders } from '../profile/bars' // prettier-ignore
 import type { ProfileRow } from '../profile/bars'
+import { GEX_UNIT_LABELS, weightProfileRow } from '../heatmap/units'
+import type { GexUnits } from '../heatmap/units'
 import type { GexProfileRow } from '../replay/loader'
 import { usePersistentState } from '../state/persist'
 import { useCrosshair } from '../state/Crosshair'
@@ -71,6 +73,7 @@ function StrikeProfileBase({
   aggregate = null,
   onAggregateToggle,
   gexProfile = null,
+  gexUnits = 'per_point',
   axisStrikes = null,
 }: {
   rows: ProfileRow[]
@@ -87,6 +90,8 @@ function StrikeProfileBase({
   onAggregateToggle?: () => void
   /** Dyn GEX profil aktuální minuty (ADR-0009); null = vrstva nedostupná. */
   gexProfile?: GexProfileRow | null
+  /** Jednotka GEX křivky (#569): $/1 % váží hladiny P²/100, $/bod = surová řada. */
+  gexUnits?: GexUnits
   /** Strikes HEATMAPY vzestupně — sdílená osa Y (#213). Řádky panelu (Σ souhrn
   = sjednocení expirací) můžou mít jinou sadu než graf; bez kotvení k této ose
   by se cenové osy obou panelů rozjely. Null = osa z vlastních řádků (legacy). */
@@ -194,11 +199,13 @@ function StrikeProfileBase({
   }
   const spotY = spot === null ? null : priceToY(spot)
 
-  // Dyn GEX křivka (ADR-0009): kladná doprava (tlumení), záporná doleva
+  // Dyn GEX křivka (ADR-0009): kladná doprava (tlumení), záporná doleva.
+  // Jednotka (#569): váha P²/100 na hladinách řádku PŘED kreslením — křivka,
+  // její škála (maxAbs) i interpolovaný flip pak patří k témuž zobrazení.
   const gexCurve = useMemo(() => {
     if (!gexOn || !gexProfile || ordered.length === 0) return null
     return gexCurvePaths(
-      gexProfile,
+      weightProfileRow(gexProfile, gexUnits),
       (price) => priceToY(price) ?? -100,
       halfWidth,
       Math.max(10, halfWidth - LABEL_SPACE) * 0.95,
@@ -206,7 +213,7 @@ function StrikeProfileBase({
     )
     // priceToY závisí na axis/rowHeight/offsetY — pokryto závislostmi níže
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gexOn, gexProfile, ordered, axis, rowHeight, offsetY, halfWidth, gapRanges])
+  }, [gexOn, gexProfile, gexUnits, ordered, axis, rowHeight, offsetY, halfWidth, gapRanges])
 
   const hovered = crosshair
     ? (ordered.find((row) => row.strike === crosshair.strike) ?? null)
@@ -233,7 +240,7 @@ function StrikeProfileBase({
               className={gexOn ? 'chip active' : 'chip'}
               onClick={() => setGexOn((value) => !value)}
               aria-label="Dyn GEX profil"
-              title="Modelovaný NetGEX přes cenové pásmo (ADR-0009): zelená doprava = dealeři tlumí, červená doleva = zesilují; žlutá = dynamický flip"
+              title={`Modelovaný NetGEX přes cenové pásmo (ADR-0009): zelená doprava = dealeři tlumí, červená doleva = zesilují; žlutá = dynamický flip. Jednotka ${GEX_UNIT_LABELS[gexUnits]} (přepínač u Dyn plochy).`}
             >
               GEX
             </button>
