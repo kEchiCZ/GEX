@@ -42,11 +42,18 @@ function dailyBar(dayIdx: number, bars: PriceBar[], previousClose: number): Pric
 }
 
 /** Složení Daily datasetu z denních replay balíků (seřazených vzestupně dle data). */
-export function buildDailyDay(days: ReplayDay[]): DayData {
-  const columns = days.length
+export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): DayData {
+  // Díry v ose (#516): dny bez zaznamenaných dat dostávají prázdný sloupec
+  // se šrafurou místo tichého vynechání — „souvislá" řada nesmí skrývat díru
+  const entries: { date: string; day: ReplayDay | null }[] = [
+    ...days.map((day) => ({ date: day.date, day: day as ReplayDay | null })),
+    ...missingDates.map((date) => ({ date, day: null })),
+  ].sort((a, b) => a.date.localeCompare(b.date))
+  const columns = entries.length
   const strikes = [...new Set(days.flatMap((day) => day.grid.strikes))].sort((a, b) => a - b)
   const strikeIndex = new Map(strikes.map((strike, index) => [strike, index]))
   const size = columns * strikes.length
+  const missingMinutes = entries.map((entry) => entry.day === null)
 
   const call = new Float32Array(size)
   const put = new Float32Array(size)
@@ -62,7 +69,12 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
   const lineSeries = new Map<string, { color: string; series: (number | null)[] }>()
 
   let previousClose = Number.NaN
-  days.forEach((day, dayIdx) => {
+  entries.forEach(({ day }, dayIdx) => {
+    if (day === null) {
+      // Chybějící den: sloupec zůstává nulový, profil prázdný — vizuál nese šrafura
+      profileByMinute.push([])
+      return
+    }
     const lastMinute = day.grid.minutes - 1
     day.grid.strikes.forEach((strike, sourceIdx) => {
       const targetIdx = strikeIndex.get(strike)!
@@ -106,6 +118,7 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
     strikes,
     layers: { call, put },
     staleAge: null,
+    missingMinutes: missingMinutes.some(Boolean) ? missingMinutes : null,
   }
 
   return {
@@ -117,13 +130,13 @@ export function buildDailyDay(days: ReplayDay[]): DayData {
       levels: toLines(['flip', 'centroid']),
       walls: toLines(['call_wall', 'put_wall']),
       sessions: [],
-      timestamp: days.at(-1)?.date ?? '',
+      timestamp: entries.at(-1)?.date ?? '',
     },
     panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut },
     profileByMinute: profileSourceOf(profileByMinute),
     demoProfileRows: null,
     spotSeries,
-    minuteLabels: days.map((day) => dayLabel(day.date)),
+    minuteLabels: entries.map((entry) => dayLabel(entry.date)),
     lastMinuteIso: null, // Daily pohled se neprojektuje (sloupec = den)
     minutesIso: [], // plochy (#204) jsou intraday vrstva
     gexProfile: null, // Dyn GEX profil je intraday vrstva (ADR-0009)

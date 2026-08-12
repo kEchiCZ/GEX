@@ -21,6 +21,8 @@ export interface HeatmapGrid {
   layers: HeatmapLayers
   /** Stáří dat buňky v sekundách (stale > STALE_THRESHOLD_S se kreslí odlišně), nebo null. */
   staleAge: Float32Array | null
+  /** Sloupce bez zaznamenaných dat (#516, díry v Daily ose) — kreslí se šrafovaně. */
+  missingMinutes?: boolean[] | null
 }
 
 /** Počet naměřených minut gridu (bez projekce). */

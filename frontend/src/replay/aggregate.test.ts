@@ -351,3 +351,66 @@ test('dayLabel formátuje ISO datum česky', () => {
   expect(dayLabel('2026-07-16')).toBe('16.7.')
   expect(dayLabel('nesmysl')).toBe('nesmysl')
 })
+
+function makeReplayDay(date: string): ReplayDay {
+  return {
+    symbol: 'ES',
+    expiry: date.replaceAll('-', ''),
+    date,
+    minutes: ['a'],
+    raw: {
+      minutes: 1,
+      strikes: [100],
+      callOi: Float32Array.from([1]),
+      putOi: Float32Array.from([1]),
+      callVolume: Float32Array.from([0]),
+      putVolume: Float32Array.from([0]),
+      spotSeries: [102],
+      staleAge: null,
+    },
+    grid: {
+      minutes: 1,
+      strikes: [100],
+      layers: { call: Float32Array.from([0.5]), put: Float32Array.from([0.2]) },
+      staleAge: null,
+    },
+    overlays: {
+      price: [{ minuteIdx: 0, open: 100, high: 103, low: 99, close: 102, up: true }],
+      levels: [],
+      walls: [],
+    },
+    panels: {
+      vol: [10],
+      optVolCall: [1],
+      optVolPut: [3],
+      cumDelta: [5],
+      deltaFlowCall: [1],
+      deltaFlowPut: [2],
+    },
+    profileByMinute: profileSourceOf([[]]),
+    provisionalMinutes: [],
+    gexProfile: [null],
+    gexField: null,
+    rawFa: null,
+    gexProfileFa: null,
+    gexFieldFa: null,
+    ladder: [],
+  }
+}
+
+test('buildDailyDay: chybějící den = šrafovaný sloupec, ne tiché vynechání (#516)', () => {
+  const dayA = makeReplayDay('2026-07-16')
+  const dayB = makeReplayDay('2026-07-18')
+  const daily = buildDailyDay([dayA, dayB], ['2026-07-17'])
+  // Tři sloupce chronologicky — díra uprostřed zůstává v ose
+  expect(daily.grid.minutes).toBe(3)
+  expect(daily.minuteLabels).toEqual([dayLabel('2026-07-16'), dayLabel('2026-07-17'), dayLabel('2026-07-18')]) // prettier-ignore
+  expect(daily.grid.missingMinutes).toEqual([false, true, false])
+  // Chybějící sloupec je prázdný (nula ≠ data, vizuál nese šrafura + tooltip)
+  const strikes = daily.grid.strikes.length
+  for (let strikeIdx = 0; strikeIdx < strikes; strikeIdx += 1) {
+    expect(daily.grid.layers.call?.[strikeIdx * 3 + 1] ?? 0).toBe(0)
+  }
+  // Bez děr příznak není (žádná režie pro běžný den)
+  expect(buildDailyDay([dayA, dayB]).grid.missingMinutes ?? null).toBeNull()
+})
