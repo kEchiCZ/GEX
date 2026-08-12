@@ -72,7 +72,7 @@ Platí proto:
 | Datový typ | Primární | Role tastytrade | Režim |
 |---|---|---|---|
 | Spot / front future | IBKR | záloha | **fallback** (10197, stale, výpadek datové farmy) |
-| Kotace řetězce | IBKR (do limitu lines) | strikes a expirace mimo dosah IBKR | **rozšíření** — disjunktní množiny, nulový překryv |
+| Kotace řetězce | IBKR (do limitu lines) | strikes a expirace mimo dosah IBKR; při výpadku IBKR celý řetěz | **rozšíření + fallback** (rev. 2026-08-12, viz dodatek) |
 | TimeAndSale / agresor | IBKR tick-by-tick (5 streamů, ATM) | zbytek ATM±15 místo Lee–Ready midpoint testu | **rozšíření** — disjunktní |
 | OI | IBKR tick 101 | `Summary.open_interest` | **fallback** + logování rozporů |
 | Greeks | vlastní výpočet | dxFeed `Greeks` | **validátor** → případně primární podle naměřených dat |
@@ -199,3 +199,33 @@ integrace má vlastní milestone M7.
 dostupná nebo že klíčové eventy (`Summary.open_interest`, `TimeAndSale.aggressor_side`)
 nechodí, ADR se překlopí na „zamítnuto" a R5 se vrátí k původnímu znění. Do té doby platí
 rev. 2.
+
+## Dodatek 2026-08-12 — plný fallback opčního řetězu (#614/#616)
+
+**Rozhodnutí uživatele:** tastytrade je primárně rozšíření/doplnění; sekundárně
+ale při výpadku IBKR (výpadek farmy, pád TWS, **přetažení feedu mobilní
+aplikací** — error 10197) přebírá **celý opční řetěz**, a po zotavení IBKR ho
+automaticky vrací. Řádek „Kotace řetězce" v matici se mění z „rozšíření" na
+„rozšíření + fallback".
+
+Pravidla zůstávají v platnosti beze změny a vztahují se i na řetěz:
+
+1. Přepnutí vlastnictví **jen na hranici snapshotu s hysterezí** (pravidlo 3) —
+   mobilní přetahovaná je intermitentní, bez hystereze by řetěz kmital.
+2. **Viditelná degradace** (pravidlo 5): badge „řetěz: tastytrade" po celou dobu
+   fallbacku; návrat k IBKR opět s hysterezí (N úspěšných cyklů).
+3. Sloupec `source` per záznam (pravidlo 1) — fallbackové minuty jsou v datech
+   rozlišitelné navždy.
+4. **CumΔ během fallbacku** mění zdroj klasifikace (TimeAndSale místo IBKR
+   tick-by-tick + midpoint) — track record musí období oddělit, stejný
+   mechanismus jako u #615.
+5. Podmínkou je parita kotací doložená shadow fází (#613) — bez ní by přepnutí
+   skokově změnilo GEX pole.
+
+**Dopad na spike #612:** schopnost utáhnout ŠÍŘKU CELÉHO řetězu (aktivní +
+sekundární expirace, plné pásmo strikes) souběžně je od teď **tvrdý
+požadavek**, ne nice-to-have — bez něj fallback řetězu nemůže existovat
+a měří se explicitně.
+
+Poznámka k souběhu s mobilem: plnohodnotné trvalé řešení zůstává druhý IBKR
+username (#539 fáze 0) — fallback řetězu je pojistka a most, ne náhrada.
