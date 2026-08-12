@@ -21,6 +21,12 @@ from dataclasses import dataclass
 
 # Okna dle SPEC 5.1; primární pro hit-rate je +5 min (konfig. per kategorie)
 DEFAULT_WINDOWS = (1, 5, 15, 60)
+# Denní okna (#564): horizonty v OBCHODNÍCH dnech — referenční efekt zprávy
+# žije dny až dva týdny, minutová okna ho nevidí. Do `news_reactions.window_min`
+# se ukládají jako N × 1440 (1440/2880/7200/14400) — hodnota je identifikátor
+# okna, ne doslovný počet minut.
+DAILY_WINDOW_DAYS = (1, 2, 5, 10)
+MINUTES_PER_TRADING_DAY = 1440
 # Mezera mezi zprávou a prvním obchodovaným barem, od které jde o deferred.
 # Běžná díra v datech (jeden chybějící bar) se tím nezamění za zavřený trh.
 DEFERRED_GAP_MINUTES = 5
@@ -173,6 +179,77 @@ def compute_reactions(
                 range_bp=range_bp,
                 vol_z=volume_z_score(in_window, baseline),
                 contaminated=contaminated,
+                deferred=deferred,
+            )
+        )
+    return results
+
+
+@dataclass(frozen=True)
+class SessionDaily:
+    """Denní agregát jedné Globex seance pro denní okna (#564).
+
+    `close` = poslední bar ≤ settle seance (settle close), `high`/`low` přes
+    bary seance do settle. Seance existuje jen tam, kde jsou bary — svátky
+    řeší data, ne kalendář (ADR-0023 bod 4).
+    """
+
+    day: dt.date
+    settle_ts: dt.datetime
+    close: float
+    high: float
+    low: float
+
+
+def compute_daily_reactions(
+    event_ts: dt.datetime,
+    bars: Sequence[Bar],
+    sessions: Sequence[SessionDaily],
+    *,
+    window_days: Sequence[int] = DAILY_WINDOW_DAYS,
+    deferred_gap_minutes: int = DEFERRED_GAP_MINUTES,
+) -> list[Reaction]:
+    """Reakce v denních oknech (#564); vrací jen okna, která už šla uzavřít.
+
+    Definice okna: **1d = nejbližší settle po události**, Nd = o N−1 seancí
+    dál. Ranní zpráva má 1d ke svému dennímu close, zpráva po settle k close
+    následující seance. Základní cena = poslední bar před událostí (u zavřeného
+    trhu včetně gapu — stejná konvence jako minutová okna).
+
+    Vědomé odchylky od minutových oken (dokumentované v SPEC 5.1):
+    * `contaminated` je vždy False — v denním horizontu spadne do okna prakticky
+      vždy jiný event; denní okna měří režimovou odpověď bucketu, ne izolovanou
+      zprávu, a kontaminační filtr by je vyprázdnil celé.
+    * `vol_z` je None — objemová baseline per minuta dne nemá pro denní
+      horizont smysl.
+    * `range_bp` se počítá ze session high/low zúčastněných seancí — první
+      seance zahrnuje i pohyb před událostí (aproximace).
+    """
+    ordered = sorted(bars, key=lambda bar: bar.ts)
+    base = _last_before(ordered, event_ts)
+    first_traded = _first_at_or_after(ordered, event_ts)
+    if base is None or first_traded is None or base.close <= 0:
+        return []
+    deferred = first_traded.ts - event_ts >= dt.timedelta(minutes=deferred_gap_minutes)
+
+    ahead = [session for session in sessions if session.settle_ts > event_ts]
+    results: list[Reaction] = []
+    for days in window_days:
+        if len(ahead) < days:
+            continue  # okno ještě neuzavřené (nebo konec archivu) — příště
+        involved = ahead[:days]
+        end = involved[-1]
+        ret_bp = (end.close - base.close) / base.close * 10_000
+        range_bp = (
+            (max(s.high for s in involved) - min(s.low for s in involved)) / base.close * 10_000
+        )
+        results.append(
+            Reaction(
+                window_min=days * MINUTES_PER_TRADING_DAY,
+                ret_bp=ret_bp,
+                range_bp=range_bp,
+                vol_z=None,
+                contaminated=False,
                 deferred=deferred,
             )
         )

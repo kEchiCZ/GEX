@@ -14,14 +14,19 @@ from pathlib import Path
 from sqlalchemy import and_, insert, not_, select, update
 from sqlalchemy.engine import Connection, Engine
 
+from gexlens_engine.compute.settle import settle_ts, trading_session_date
 from gexlens_engine.compute.setups import gex_regime
 from gexlens_engine.storage.sentiment import news_events, news_reactions
 from gexlens_news.bars import BarsRepository
 from gexlens_news.reactions import (
+    DAILY_WINDOW_DAYS,
     DEFAULT_WINDOWS,
     MIN_BASELINE_SESSIONS,
+    MINUTES_PER_TRADING_DAY,
+    SessionDaily,
     VolumeBaseline,
     build_volume_baseline,
+    compute_daily_reactions,
     compute_reactions,
 )
 
@@ -34,6 +39,10 @@ CONTAMINATION_MIN_IMPORTANCE = 2
 CLOSURE_LOOKBACK_DAYS = 5
 # Totéž dopředu — první obchodovaný bar po víkendové zprávě (SPEC 5.1 deferred)
 CLOSURE_LOOKAHEAD_DAYS = 5
+# Denní okna (#564): event je zralý, až jde uzavřít NEJDELŠÍ okno — všechna
+# denní okna se zapisují najednou (parciální zápis by rozbil pending dotaz).
+# 10 obchodních dní ≈ 14 kalendářních + rezerva na svátky.
+DAILY_READY_CALENDAR_DAYS = 16
 
 
 class LevelsRegimeReader:
@@ -105,11 +114,17 @@ class ReactionJob:
         *,
         symbols: Sequence[str] = ("ES", "NQ"),
         windows: Sequence[int] = DEFAULT_WINDOWS,
+        daily_window_days: Sequence[int] = DAILY_WINDOW_DAYS,
     ) -> None:
         self._engine = engine
         self._bars = bars
         self._symbols = list(symbols)
         self._windows = list(windows)
+        # Denní okna v obchodních dnech (#564); () denní fázi vypíná
+        self._daily_window_days = list(daily_window_days)
+        # Cache denních sérií per symbol: (počet partic, série) — přestaví se
+        # jen když přibude nová partice, jinak by job četl stovky souborů denně
+        self._daily_series_cache: dict[str, tuple[int, list[SessionDaily]]] = {}
         # GEX režim reakce (#402) — levels čteme ze stejného data_dir jako bary
         self._regime_reader = LevelsRegimeReader(bars.data_dir)
 
@@ -144,11 +159,142 @@ class ReactionJob:
             rows = conn.execute(stmt).fetchall()
         return [_as_utc(row.ts_event) for row in rows]
 
-    def run(self, now: dt.datetime, *, limit: int = 200) -> int:
-        """Dopočítá reakce; vrací počet zapsaných řádků."""
-        pending = self._pending_events(now, limit)
+    def _daily_sessions(self, symbol: str) -> list[SessionDaily]:
+        """Denní agregáty Globex seancí z bars partic (#564), s cache per běh.
+
+        Bary se přiřazují seanci přes `trading_session_date` (večer partice D
+        patří seanci D+1, ADR-0023) a ořezávají na settle — close je settle
+        close. Přestavuje se jen když přibude partice (1× denně), jinak by
+        každý běh četl stovky souborů.
+        """
+        partition_days = self._bars.sessions(symbol)
+        cached = self._daily_series_cache.get(symbol)
+        if cached is not None and cached[0] == len(partition_days):
+            return cached[1]
+        highs: dict[dt.date, float] = {}
+        lows: dict[dt.date, float] = {}
+        last: dict[dt.date, tuple[dt.datetime, float]] = {}
+        settle_by_day: dict[dt.date, dt.datetime] = {}
+        for day in partition_days:
+            for bar in self._bars.load_day(symbol, day):
+                session = trading_session_date(bar.ts)
+                boundary = settle_by_day.setdefault(session, settle_ts(session))
+                if bar.ts > boundary:
+                    continue  # po settle (15:00–16:00 CT) — mimo denní agregát
+                highs[session] = max(highs.get(session, bar.high), bar.high)
+                lows[session] = min(lows.get(session, bar.low), bar.low)
+                previous = last.get(session)
+                if previous is None or bar.ts >= previous[0]:
+                    last[session] = (bar.ts, bar.close)
+        series = [
+            SessionDaily(
+                day=session,
+                settle_ts=settle_by_day[session],
+                close=last[session][1],
+                high=highs[session],
+                low=lows[session],
+            )
+            for session in sorted(last)
+        ]
+        self._daily_series_cache[symbol] = (len(partition_days), series)
+        return series
+
+    def _pending_daily_events(self, now: dt.datetime, limit: int) -> list[tuple[int, dt.datetime]]:
+        """Eventy bez denních oken, u kterých už šlo uzavřít i nejdelší okno."""
+        ready_before = now - dt.timedelta(days=DAILY_READY_CALENDAR_DAYS)
+        measured = (
+            select(news_reactions.c.event_id)
+            .where(news_reactions.c.window_min >= MINUTES_PER_TRADING_DAY)
+            .distinct()
+        )
+        stmt = (
+            select(news_events.c.id, news_events.c.ts_event)
+            .where(
+                news_events.c.ts_event <= ready_before,
+                not_(news_events.c.id.in_(measured)),
+            )
+            .order_by(news_events.c.ts_event.desc())
+            .limit(limit)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [(int(row.id), _as_utc(row.ts_event)) for row in rows]
+
+    def _run_daily(self, now: dt.datetime, *, limit: int) -> int:
+        """Denní okna (#564): 1d/2d/5d/10d obchodních dní, zápis až kompletní.
+
+        Všechna denní okna eventu se zapisují najednou (pending dotaz stojí na
+        „event nemá ŽÁDNÉ denní okno"); event s ještě neuzavřeným oknem se
+        přeskočí a vezme příští běh. Symbol bez barů kolem eventu (starší než
+        archiv) nepřispívá — stejná konvence jako minutová fáze.
+        """
+        if not self._daily_window_days:
+            return 0
+        pending = self._pending_daily_events(now, limit)
         if not pending:
             return 0
+        series = {symbol: self._daily_sessions(symbol) for symbol in self._symbols}
+        written = 0
+        measured_events = 0
+        for event_id, ts_event in pending:
+            rows: list[dict[str, object]] = []
+            wait_for_close = False
+            for symbol in self._symbols:
+                bars = self._bars.load_range(
+                    symbol,
+                    ts_event - dt.timedelta(days=CLOSURE_LOOKBACK_DAYS),
+                    ts_event + dt.timedelta(days=CLOSURE_LOOKAHEAD_DAYS),
+                )
+                reactions = compute_daily_reactions(
+                    ts_event,
+                    bars,
+                    series[symbol],
+                    window_days=self._daily_window_days,
+                )
+                if not reactions:
+                    continue  # symbol bez základní ceny — trvalé, nic nepíšeme
+                if len(reactions) < len(self._daily_window_days):
+                    wait_for_close = True
+                    break
+                spot_at_event: float | None = None
+                for bar in bars:
+                    if bar.ts <= ts_event:
+                        spot_at_event = float(bar.close)
+                    else:
+                        break
+                regime = self._regime_reader.regime_at(symbol, ts_event, spot_at_event)
+                for reaction in reactions:
+                    rows.append(
+                        {
+                            "event_id": event_id,
+                            "symbol": symbol,
+                            "window_min": reaction.window_min,
+                            "ret_bp": reaction.ret_bp,
+                            "range_bp": reaction.range_bp,
+                            "vol_z": reaction.vol_z,
+                            "contaminated": reaction.contaminated,
+                            "deferred": reaction.deferred,
+                            "gex_regime": regime,
+                            "computed_at": now,
+                        }
+                    )
+            if wait_for_close or not rows:
+                continue
+            with self._engine.begin() as conn:
+                conn.execute(insert(news_reactions), rows)
+            written += len(rows)
+            measured_events += 1
+        if written:
+            logger.info(
+                "Denní okna (#564): zapsáno %d oken pro %d eventů", written, measured_events
+            )
+        return written
+
+    def run(self, now: dt.datetime, *, limit: int = 200) -> int:
+        """Dopočítá reakce; vrací počet zapsaných řádků (minutová + denní okna)."""
+        pending = self._pending_events(now, limit)
+        if not pending:
+            return self._run_daily(now, limit=limit)
         written = 0
         baselines = {symbol: self._baseline_for(symbol, now.date()) for symbol in self._symbols}
         for event_id, ts_event in pending:
@@ -205,7 +351,7 @@ class ReactionJob:
                 written += len(rows)
         if written:
             logger.info("Reakce: zapsáno %d oken pro %d eventů", written, len(pending))
-        return written
+        return written + self._run_daily(now, limit=limit)
 
     @staticmethod
     def _correct_market_closed(conn: Connection, event_id: int, closed_flags: list[bool]) -> None:

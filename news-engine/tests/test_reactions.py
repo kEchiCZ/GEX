@@ -7,8 +7,10 @@ import pytest
 from gexlens_news.reactions import (
     MIN_BASELINE_SESSIONS,
     Bar,
+    SessionDaily,
     VolumeBaseline,
     build_volume_baseline,
+    compute_daily_reactions,
     compute_reactions,
     volume_z_score,
 )
@@ -167,3 +169,68 @@ def test_reaction_without_baseline_still_produces_ret_and_range() -> None:
     assert reaction.vol_z is None
     assert reaction.ret_bp == pytest.approx(0.0)
     assert reaction.range_bp > 0
+
+
+# ── Denní okna (#564) ──────────────────────────────────────────────
+
+
+def daily_sessions(first_day: dt.date, closes: list[float]) -> list[SessionDaily]:
+    """Seance po sobě, settle 20:00 UTC, high/low = close ± 10."""
+    return [
+        SessionDaily(
+            day=first_day + dt.timedelta(days=index),
+            settle_ts=dt.datetime.combine(
+                first_day + dt.timedelta(days=index), dt.time(20, 0), tzinfo=dt.UTC
+            ),
+            close=close,
+            high=close + 10,
+            low=close - 10,
+        )
+        for index, close in enumerate(closes)
+    ]
+
+
+def test_daily_1d_je_nejblizsi_settle_po_udalosti() -> None:
+    day = dt.date(2026, 7, 28)
+    sessions = daily_sessions(day, [7010.0, 7020.0, 7030.0])
+    around = bars(dt.datetime(2026, 7, 28, 14, 0, tzinfo=dt.UTC), [7000.0] * 60)
+    # Ranní zpráva: 1d = settle TÉŽE seance, 2d = další
+    morning = dt.datetime(2026, 7, 28, 14, 30, tzinfo=dt.UTC)
+    reactions = compute_daily_reactions(morning, around, sessions, window_days=(1, 2))
+    assert [r.window_min for r in reactions] == [1440, 2880]
+    assert reactions[0].ret_bp == pytest.approx((7010.0 - 7000.0) / 7000.0 * 10_000)
+    assert reactions[1].ret_bp == pytest.approx((7020.0 - 7000.0) / 7000.0 * 10_000)
+    # Zpráva PO settle: 1d = settle následující seance
+    evening_bars = bars(dt.datetime(2026, 7, 28, 20, 0, tzinfo=dt.UTC), [7000.0] * 90)
+    evening = dt.datetime(2026, 7, 28, 20, 30, tzinfo=dt.UTC)
+    late = compute_daily_reactions(evening, evening_bars, sessions, window_days=(1,))
+    assert late[0].ret_bp == pytest.approx((7020.0 - 7000.0) / 7000.0 * 10_000)
+
+
+def test_daily_vraci_jen_uzavrena_okna_a_spravne_flagy() -> None:
+    day = dt.date(2026, 7, 28)
+    sessions = daily_sessions(day, [7010.0, 7020.0])
+    around = bars(dt.datetime(2026, 7, 28, 14, 0, tzinfo=dt.UTC), [7000.0] * 60)
+    event = dt.datetime(2026, 7, 28, 14, 30, tzinfo=dt.UTC)
+    reactions = compute_daily_reactions(event, around, sessions, window_days=(1, 2, 5))
+    # 5d nejde uzavřít (jen 2 seance) — vrací se jen 1d a 2d
+    assert [r.window_min for r in reactions] == [1440, 2880]
+    for reaction in reactions:
+        assert reaction.contaminated is False  # v denním horizontu se neměří izolace
+        assert reaction.vol_z is None
+        assert reaction.deferred is False
+    # range ze session high/low: max high 7030, min low 7000 → 30 b nad základnou 7000
+    assert reactions[1].range_bp == pytest.approx((7030.0 - 7000.0) / 7000.0 * 10_000)
+
+
+def test_daily_vikendova_zprava_je_deferred_a_zahrnuje_gap() -> None:
+    saturday = dt.datetime(2026, 7, 25, 12, 0, tzinfo=dt.UTC)
+    # Poslední bar v pátek, první obchodovaný až v neděli večer — gap v základně
+    friday_bars = bars(dt.datetime(2026, 7, 24, 19, 0, tzinfo=dt.UTC), [7000.0] * 30)
+    sunday_bars = bars(dt.datetime(2026, 7, 26, 22, 0, tzinfo=dt.UTC), [7100.0] * 30)
+    sessions = daily_sessions(dt.date(2026, 7, 27), [7150.0])
+    reactions = compute_daily_reactions(
+        saturday, [*friday_bars, *sunday_bars], sessions, window_days=(1,)
+    )
+    assert reactions[0].deferred is True
+    assert reactions[0].ret_bp == pytest.approx((7150.0 - 7000.0) / 7000.0 * 10_000)
