@@ -169,3 +169,24 @@ def test_close_minute_series_and_persistence(tmp_path: Path) -> None:
     frame = pd.read_parquet(path)
     assert list(frame.columns) == ["ts_min", "flow_delta", "cum_delta"]
     assert list(frame["cum_delta"]) == [50.0, 25.0]
+
+
+def test_roll_session_resets_only_on_boundary() -> None:
+    """#638: první volání jen fixuje seanci; reset až při přechodu na nový den."""
+    tracker = CumDeltaTracker(multiplier=50.0)
+    tracker.add_trade(trade("C", size=2.0, side="buy"), delta=0.5)  # +50
+    assert tracker.roll_session(dt.date(2026, 7, 20)) is False  # start procesu, bez resetu
+    assert tracker.cum_delta == pytest.approx(50.0)
+    assert tracker.roll_session(dt.date(2026, 7, 20)) is False  # táž seance
+    assert tracker.cum_delta == pytest.approx(50.0)
+    assert tracker.roll_session(dt.date(2026, 7, 21)) is True  # hranice → reset
+    assert tracker.cum_delta == 0.0
+    assert tracker.net_volumes() == {}
+
+
+def test_restore_cum_navazuje_zaklad_po_restartu() -> None:
+    """#638: seed z flow partice přičítá základ, tok po restartu se neztrácí."""
+    tracker = CumDeltaTracker(multiplier=50.0)
+    tracker.add_trade(trade("C", size=1.0, side="buy"), delta=0.5)  # +25 po restartu
+    tracker.restore_cum(1000.0)
+    assert tracker.cum_delta == pytest.approx(1025.0)

@@ -10,6 +10,7 @@ CumΔ (bar větev) → flow → bary podkladu → push stavu a live kanálů do 
 
 import asyncio
 import datetime as dt
+import functools
 import logging
 import time
 from collections.abc import Sequence
@@ -28,7 +29,7 @@ from gexlens_engine.compute.gexfield import (
 )
 from gexlens_engine.compute.levels import GexLevels, compute_ladder, compute_levels
 from gexlens_engine.compute.marketclock import is_market_closed
-from gexlens_engine.compute.settle import settle_ts
+from gexlens_engine.compute.settle import session_bounds, settle_ts, trading_session_date
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import (
@@ -53,6 +54,7 @@ from gexlens_engine.storage.parquet_store import (
     SnapshotRow,
     SnapshotWriter,
     WallDomRow,
+    read_last_cum_delta,
     read_netflow_latest,
 )
 
@@ -138,6 +140,8 @@ class EngineRuntime:
     _catch_up_pending: bool = field(default=True, init=False)
     # Navázání kumulativního net objemu z partice netflow po restartu (#232)
     _netflow_seed_pending: bool = field(default=True, init=False)
+    # Navázání CumΔ z flow partice po restartu uprostřed seance (#638)
+    _flow_seed_pending: bool = field(default=True, init=False)
     # Throttle logu dopočtených Greeks (#547): loguje se jen změna počtu
     _computed_greeks_logged: int = field(default=0, init=False)
 
@@ -145,25 +149,72 @@ class EngineRuntime:
         if self.cum_delta is None:
             self.cum_delta = CumDeltaTracker(multiplier=self.multiplier)
 
-    async def _seed_net_volume(self, day: dt.date) -> None:
+    def _session_partition_days(self, session_day: dt.date) -> list[dt.date]:
+        """UTC dny partic, přes které se rozkládá Globex seance `session_day` (#638)."""
+        start, _ = session_bounds(session_day)
+        days = {start.date(), session_day}
+        return sorted(days)
+
+    async def _seed_cum_delta(self, session_day: dt.date) -> None:
+        """Jednorázově naváže CumΔ z flow partice po restartu uprostřed seance (#638).
+
+        Kumulativ je kotvený na open seance — restart ho dřív nulovat směl,
+        teď se základ přečte z posledního zapsaného řádku AKTUÁLNÍ seance
+        (večer D−1 + D, okno session_bounds). Bez řádku v okně (start nové
+        seance) se nenavazuje nic — nula je správný základ.
+        """
+        if not self._flow_seed_pending:
+            return
+        self._flow_seed_pending = False
+        start, end = session_bounds(session_day)
+        paths = [
+            self.settings.derived_dir / self.symbol / "flow" / f"{day.isoformat()}.parquet"
+            for day in self._session_partition_days(session_day)
+        ]
+        base = await asyncio.to_thread(
+            functools.partial(read_last_cum_delta, paths, start=start, end=end)
+        )
+        if base is None or base == 0.0:
+            return
+        tracker = self.cum_delta
+        assert tracker is not None  # nastaven v __post_init__
+        tracker.restore_cum(base)
+        logger.info(
+            "%s %s: CumΔ navázán z flow partice (%.0f) — restart uprostřed seance %s",
+            self.symbol,
+            self.expiry,
+            base,
+            session_day.isoformat(),
+        )
+
+    async def _seed_net_volume(self, session_day: dt.date) -> None:
         """Jednorázově naváže kumulativní net objem z partice netflow (#232).
 
         Restart enginu uprostřed dne dřív vynuloval FA odhad — tok naměřený
         dopoledne existoval jen v paměti. Partice netflow ho drží, takže se
         odhad po startu naváže tam, kde předchozí proces skončil. Klíče už
         naměřené po restartu mají přednost (restore_net_volume je setdefault).
+        Od #638 jen řádky AKTUÁLNÍ seance — kumulativ předchozí seance ležící
+        v téže UTC partici se přenést nesmí.
         """
         if not self._netflow_seed_pending:
             return
         self._netflow_seed_pending = False
-        path = (
-            self.settings.derived_dir
-            / self.symbol
-            / self.expiry
-            / "netflow"
-            / f"{day.isoformat()}.parquet"
-        )
-        stored = await asyncio.to_thread(read_netflow_latest, path)
+        start, end = session_bounds(session_day)
+        stored: dict[tuple[float, str], float] = {}
+        for day in self._session_partition_days(session_day):
+            path = (
+                self.settings.derived_dir
+                / self.symbol
+                / self.expiry
+                / "netflow"
+                / f"{day.isoformat()}.parquet"
+            )
+            partial = await asyncio.to_thread(
+                functools.partial(read_netflow_latest, path, start=start, end=end)
+            )
+            # Pozdější partice (vyšší UTC den) přepíše starší stav téhož klíče
+            stored.update(partial)
         if not stored:
             return
         tracker = self.cum_delta
@@ -195,6 +246,23 @@ class EngineRuntime:
         quotes = self.scheduler.quotes()
         tracker = self.cum_delta
         assert tracker is not None  # nastaven v __post_init__
+        # Hranice Globex seance (#638): reset kumulativů PŘED zpracováním
+        # minuty nové seance — tentýž okamžik, kdy se překlápí osa dne (#512).
+        # První cyklus po startu jen zafixuje seanci; navázání řeší seed níže.
+        session_day = trading_session_date(ts_min)
+        if tracker.roll_session(session_day):
+            self._netflow_seed_pending = False  # nová seance nemá co navazovat
+            self._flow_seed_pending = False
+            logger.info(
+                "%s %s: Globex seance %s — CumΔ i net objem začínají od nuly (#638)",
+                self.symbol,
+                self.expiry,
+                session_day.isoformat(),
+            )
+        elif not self.secondary:
+            # Restart uprostřed seance: navázat CumΔ z flow partice (flow
+            # zapisuje jen aktivní řetěz, sekundární kumulativ nepoužívá)
+            await self._seed_cum_delta(session_day)
         now_mono = time.monotonic()
         max_age = self.settings.quote_max_age_s
         expired = 0
@@ -437,7 +505,7 @@ class EngineRuntime:
         if not self.secondary and alpha > 0.0:
             # Po restartu uprostřed dne naváže kumulativ z partice netflow —
             # jinak by odhad začínal od nuly a zahodil celý dopolední tok
-            await self._seed_net_volume(day)
+            await self._seed_net_volume(session_day)
             fa_oi = {
                 spec: oi_estimate(inp.oi, tracker.net_volume(spec), alpha)
                 for inp, spec in zip(gex_inputs, gex_specs, strict=True)

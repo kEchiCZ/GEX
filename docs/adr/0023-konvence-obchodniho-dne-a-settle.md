@@ -58,6 +58,19 @@ započtení z konstrukce; kontinuitu CumΔ/volume přes hranici partic kryje
 `api/tests/test_session_day.py`. Vedlejší nález: CumΔ se dnes resetuje jen
 restartem enginu (SPEC 4.5 reset nezapojen) — řeší #638.
 
+## Dodatek 2026-08-12 (#638)
+
+CumΔ i čistý klasifikovaný objem (FA odhad) jsou kotvené na **open Globex
+seance**: `CumDeltaTracker.roll_session` resetuje na hranici (tentýž okamžik,
+kdy se překlápí osa dne z #512), restart uprostřed seance kumulativy NEnuluje —
+navazují se z partic (`read_last_cum_delta` pro flow, session-aware
+`read_netflow_latest` pro netflow, obě přes okno `session_bounds`). Sdílená
+definice hranic přesunuta do `compute/settle.py` (`session_bounds`,
+`trading_session_date`); API je re-exportuje. Kotva net objemu je správně
+tatáž: ranní OI archiv odráží pozice k předchozímu settle, takže tok od open
+seance je přesně to, co v něm chybí. `SETUP_MECHANICS_VERSION` 3 → 4 —
+hodnoty `cum_delta` v setup contextu před/po nejsou srovnatelné.
+
 **Config migrace:** `GEXLENS_OI_PUBLICATION_HOUR_UTC` (fixní UTC hodina) je
 nahrazeno dvojicí `GEXLENS_OI_PUBLICATION_TIME_LOCAL` +
 `GEXLENS_OI_PUBLICATION_TZ` (default `07:00` `America/Chicago`, což odpovídá

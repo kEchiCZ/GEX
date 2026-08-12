@@ -14,25 +14,20 @@ započtení na hranici z konstrukce).
 import datetime as dt
 from collections.abc import Callable
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from gexlens_engine.compute.settle import session_time_utc
+# Jedna sdílená definice hranic (ADR-0023 bod 1): seanci definuje engine
+# compute/settle; API ji jen re-exportuje pro své testy a konzumenty (#638)
+from gexlens_engine.compute.settle import session_bounds
 from gexlens_engine.config import Settings
 
-_CHICAGO_TZ = ZoneInfo("America/Chicago")
-# Otevření Globex — hranice obchodního dne (ADR-0023); DST řeší session_time_utc
-GLOBEX_OPEN_LOCAL = dt.time(17, 0)
-
-
-def session_bounds(day: dt.date) -> tuple[dt.datetime, dt.datetime]:
-    """UTC hranice seance obchodního dne `day`: [open D−1, open D)."""
-
-    def open_of(d: dt.date) -> dt.datetime:
-        return session_time_utc(d, GLOBEX_OPEN_LOCAL.hour, GLOBEX_OPEN_LOCAL.minute, _CHICAGO_TZ)
-
-    return open_of(day - dt.timedelta(days=1)), open_of(day)
+__all__ = [
+    "DataRepository",
+    "OutsideDataDirError",
+    "PartitionNotFoundError",
+    "session_bounds",
+]
 
 
 class PartitionNotFoundError(FileNotFoundError):

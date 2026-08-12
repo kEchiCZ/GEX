@@ -702,12 +702,21 @@ class SnapshotWriter:
         return buffer
 
 
-def read_netflow_latest(path: Path) -> dict[tuple[float, str], float]:
+def read_netflow_latest(
+    path: Path,
+    *,
+    start: dt.datetime | None = None,
+    end: dt.datetime | None = None,
+) -> dict[tuple[float, str], float]:
     """Poslední kumulativní net per strana z partice netflow (#232).
 
     Slouží k navázání kumulativu po restartu enginu uprostřed dne — bez toho
     by FA odhad začínal od nuly a zahodil celý dopolední tok. Neexistující
     partice vrací prázdnou mapu. Blokující čtení — volat přes to_thread.
+
+    `start`/`end` (#638): jen řádky v okně [start, end) — kumulativ je od #638
+    kotvený na Globex seanci, takže seed nesmí přenést stav PŘEDCHOZÍ seance
+    ležící v téže UTC partici (engine spadlý před 17:00 CT).
     """
     if not path.exists():
         return {}
@@ -719,8 +728,39 @@ def read_netflow_latest(path: Path) -> dict[tuple[float, str], float]:
     for ts, strike, right, net in zip(*columns, strict=True):
         if ts is None:
             continue
+        if (start is not None and ts < start) or (end is not None and ts >= end):
+            continue
         key = (float(strike), str(right))
         current = latest.get(key)
         if current is None or ts >= current[0]:
             latest[key] = (ts, float(net) if net is not None else 0.0)
     return {key: net for key, (_, net) in latest.items()}
+
+
+def read_last_cum_delta(
+    paths: Sequence[Path],
+    *,
+    start: dt.datetime,
+    end: dt.datetime,
+) -> float | None:
+    """Poslední `cum_delta` z flow partic v okně seance [start, end) (#638).
+
+    Navázání CumΔ po restartu uprostřed seance — seance může ležet ve dvou
+    UTC particích (večer D−1 + D), proto seznam cest. Bez řádku v okně None.
+    Blokující čtení — volat přes to_thread.
+    """
+    best: tuple[dt.datetime, float] | None = None
+    for path in paths:
+        if not path.exists():
+            continue
+        table = pq.read_table(path, schema=FLOW_SCHEMA)
+        for ts, cum in zip(
+            table.column("ts_min").to_pylist(),
+            table.column("cum_delta").to_pylist(),
+            strict=True,
+        ):
+            if ts is None or ts < start or ts >= end:
+                continue
+            if best is None or ts >= best[0]:
+                best = (ts, float(cum) if cum is not None else 0.0)
+    return best[1] if best is not None else None

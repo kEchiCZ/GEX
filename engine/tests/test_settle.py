@@ -42,3 +42,22 @@ def test_session_time_utc_chicago_i_new_york() -> None:
     assert session_time_utc(day_winter, 9, 30, ET_TZ) == dt.datetime(
         2026, 1, 15, 14, 30, tzinfo=dt.UTC
     )
+
+
+def test_session_bounds_a_trading_session_date() -> None:
+    """Obchodní den = Globex seance (ADR-0023, #512/#638): [17:00 CT D−1, 17:00 CT D)."""
+    from gexlens_engine.compute.settle import session_bounds, trading_session_date
+
+    start, end = session_bounds(dt.date(2026, 7, 20))
+    assert start == dt.datetime(2026, 7, 19, 22, 0, tzinfo=dt.UTC)  # CDT
+    assert end == dt.datetime(2026, 7, 20, 22, 0, tzinfo=dt.UTC)
+    start_winter, _ = session_bounds(dt.date(2026, 1, 20))
+    assert start_winter == dt.datetime(2026, 1, 19, 23, 0, tzinfo=dt.UTC)  # CST
+
+    # Polouzavřený interval: open patří NOVÉ seanci
+    assert trading_session_date(start) == dt.date(2026, 7, 20)
+    assert trading_session_date(start - dt.timedelta(minutes=1)) == dt.date(2026, 7, 19)
+    # Půlnoc UTC uprostřed seance den nemění (19:00 CT)
+    assert trading_session_date(dt.datetime(2026, 7, 21, 0, 30, tzinfo=dt.UTC)) == dt.date(
+        2026, 7, 21
+    )
