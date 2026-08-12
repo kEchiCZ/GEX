@@ -327,10 +327,19 @@ export function Heatmap({
     const field = source.layers.signed ?? source.layers.call ?? source.layers.put
     if (!field) return []
     const smoothed = gaussianBlur(field, source.minutes, strikeCount)
-    const magnitudes = Float32Array.from(smoothed, Math.abs)
-    return contourLevels(magnitudes, contours).flatMap((level) =>
-      marchingSquares(magnitudes, source.minutes, strikeCount, level),
+    // Prahy per strana nad znaménkovým polem (#571); záporná strana jedním
+    // algoritmem nad -field (#570) — u čistě kladných polí je sada prázdná
+    const levels = contourLevels(smoothed, contours)
+    const segments = levels.positive.flatMap((level) =>
+      marchingSquares(smoothed, source.minutes, strikeCount, level),
     )
+    if (levels.negative.length > 0) {
+      const negated = Float32Array.from(smoothed, (value) => -value)
+      for (const level of levels.negative) {
+        segments.push(...marchingSquares(negated, source.minutes, strikeCount, level))
+      }
+    }
+    return segments
   }, [grid, underGrid, contours, strikeCount])
 
   // Mapa 1m osy pro anotace (#502) — null = identita index == minuta

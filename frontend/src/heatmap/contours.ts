@@ -1,9 +1,22 @@
-/** Contours (SPEC 7.2): marching squares nad vyhlazeným polem, Off / Major / All. */
+/** Contours (SPEC 7.2, rev. 2026-08-12 — #571 + #570): marching squares nad
+vyhlazeným polem, Off / Major / All.
+
+Prahy jsou PODÍL SÍLY, ne kvantily rozlohy: úroveň = podíl × p99 absolutní
+hodnoty strany. Kvantil odpovídá na „kolik buněk je slabších", o síle brzdy
+neříká nic a práh plave mezi dny. p99 místo maxima, aby jedna odlehlá buňka
+nestlačila prahy k nule — a protože p99 je i jmenovatel barev (modes.ts),
+kontury sedí na barvu. Jmenovatel se počítá ZVLÁŠŤ per strana (#570): při
+dominanci jedné strany by slabší jinak neměla ani jednu čáru. */
 
 export type ContoursMode = 'off' | 'major' | 'all'
 
 /** Úsečka v souřadnicích buněk: [x1, y1, x2, y2]. */
 export type Segment = [number, number, number, number]
+
+/** Prahy jako podíl z p99 síly strany (#571): spodní čára = tady tlumení
+začíná, horní = tady už je silné. Vždy dvě úrovně; ladí se tady. */
+export const CONTOUR_MAJOR: readonly number[] = [0.65, 0.95]
+export const CONTOUR_ALL: readonly number[] = [0.4, 0.7]
 
 export function quantile(values: ArrayLike<number>, q: number): number {
   const sorted = Array.from(values).sort((a, b) => a - b)
@@ -12,13 +25,32 @@ export function quantile(values: ArrayLike<number>, q: number): number {
   return sorted[index]
 }
 
-/** Úrovně izolinií: Major = p75 a p90; All = 5 úrovní p50–p95 (SPEC 7.2). */
-export function contourLevels(field: ArrayLike<number>, mode: ContoursMode): number[] {
-  if (mode === 'off') return []
-  const positive = Array.from(field).filter((value) => value > 0)
-  if (positive.length === 0) return []
-  if (mode === 'major') return [quantile(positive, 0.75), quantile(positive, 0.9)]
-  return [0.5, 0.65, 0.75, 0.85, 0.95].map((q) => quantile(positive, q))
+/** Úrovně izolinií per strana pole — obě sady jsou kladné hodnoty.
+
+`negative` jsou úrovně v |hodnotách| záporné strany: kreslí se jedním
+algoritmem nad `-field` (#570), žádná větev s obrácenou logikou. Čistě
+kladná pole (OI, Vol) mají zápornou sadu prázdnou — chování beze změny. */
+export interface ContourLevels {
+  positive: number[]
+  negative: number[]
+}
+
+export function contourLevels(field: ArrayLike<number>, mode: ContoursMode): ContourLevels {
+  if (mode === 'off') return { positive: [], negative: [] }
+  const shares = mode === 'major' ? CONTOUR_MAJOR : CONTOUR_ALL
+  const positives: number[] = []
+  const negatives: number[] = []
+  for (let index = 0; index < field.length; index += 1) {
+    const value = field[index]
+    if (value > 0) positives.push(value)
+    else if (value < 0) negatives.push(-value)
+  }
+  const positiveP99 = quantile(positives, 0.99)
+  const negativeP99 = quantile(negatives, 0.99)
+  return {
+    positive: positiveP99 > 0 ? shares.map((share) => share * positiveP99) : [],
+    negative: negativeP99 > 0 ? shares.map((share) => share * negativeP99) : [],
+  }
 }
 
 function interpolate(level: number, a: number, b: number): number {
