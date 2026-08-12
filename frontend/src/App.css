@@ -1960,3 +1960,9 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   z-index: 6;
   pointer-events: none;
 }
+
+/* Settle watch (#603) — decentní segment v hlavičce */
+.settle-watch {
+  font-size: 12px;
+  white-space: nowrap;
+}

@@ -5,6 +5,7 @@ import { LiveSocket } from '../api/ws'
 import type { Coverage } from '../instrument/coverage'
 import { API_BASE, WS_URL } from '../config'
 import type { GexRegimeState } from '../instrument/regime'
+import type { SettleWatchInfo } from '../instrument/settlewatch'
 import { GEX_UNITS } from '../heatmap/units'
 import type { GexUnits } from '../heatmap/units'
 import { enumMap, mergedBooleans, oneOf, shortString, usePersistentState } from './persist'
@@ -169,6 +170,9 @@ interface AppState {
   setPriceInfo: (info: PriceInfo) => void
   regimeInfo: RegimeInfo
   setRegimeInfo: (info: RegimeInfo) => void
+  /** Settle watch (#603): klíčová úroveň dne + odstup — plní MainContent, čte hlavička. */
+  settleWatch: SettleWatchInfo | null
+  setSettleWatch: (info: SettleWatchInfo | null) => void
   /** Pokrytí OHLC barů zobrazeného dne (#470) — hlásí graf, čte hlavička. */
   ohlcCoverage: Coverage | null
   setOhlcCoverage: (coverage: Coverage | null) => void
@@ -294,6 +298,18 @@ export function AppStateProvider({
       previous.state === info.state &&
       previous.measuredFlip === info.measuredFlip &&
       previous.dynamicFlip === info.dynamicFlip
+        ? previous
+        : info,
+    )
+  }, [])
+  // Settle watch (#603) — týž bail-out vzor proti render smyčce
+  const [settleWatch, setSettleWatchState] = useState<SettleWatchInfo | null>(null)
+  const setSettleWatch = useCallback((info: SettleWatchInfo | null) => {
+    setSettleWatchState((previous) =>
+      previous?.name === info?.name &&
+      previous?.level === info?.level &&
+      previous?.distance === info?.distance &&
+      previous?.weak === info?.weak
         ? previous
         : info,
     )
@@ -447,6 +463,8 @@ export function AppStateProvider({
       setPriceInfo,
       regimeInfo,
       setRegimeInfo,
+      settleWatch,
+      setSettleWatch,
       ohlcCoverage,
       setOhlcCoverage,
       setupsVersion,
@@ -486,6 +504,8 @@ export function AppStateProvider({
       setPriceInfo,
       regimeInfo,
       setRegimeInfo,
+      settleWatch,
+      setSettleWatch,
       ohlcCoverage,
       setOhlcCoverage,
       setupsVersion,
