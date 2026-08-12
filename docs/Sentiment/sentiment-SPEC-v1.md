@@ -222,7 +222,9 @@ Signály se generují až po nasbírání minima dat: bucket eventu musí mít `
 Signály jsou nápověda pro tradera, ne exekuce ani doporučení; UI u signálu vždy zobrazuje sílu, počet podkladových vzorků a Wilson LB hit-rate bucketu. Bez dostatečných dat se signál nezobrazí (6.2).
 
 ### 6.5 Symboly
-Reakce, buckety a outcomes se od začátku měří pro **ES i NQ** (data + schéma). Index a signály se publikují pro **ES**; zapnutí NQ = konfigurační přepínač, ne refactoring.
+*(Rev. 2026-08-12, ADR-0026 / #579 — původní znění slibovalo „zapnutí NQ = konfigurační přepínač"; diagnostika #453 doložila, že přepínač byl rozbitý: stav tekl jen z ES a `news_weights` neměly symbol.)*
+
+Celá pipeline je **per symbol**: reakce, buckety, outcomes, váhy (`news_weights.symbol`), SentIndex (řada i denní OHLC), vlny, stav i signály existují samostatně pro každý symbol z `GEXLENS_NEWS_SIGNAL_SYMBOLS` (default `ES,NQ`). Události (`news_events`) zůstávají sdílené — zpráva je jedna, reakce jsou dvě. Signál se generuje výhradně proti stavu svého symbolu a `inputs` nesou `state_symbol`. Rozdíl reakcí NQ − ES per zpráva je čitelný z view `news_reaction_spread` (míra „technologického charakteru" zprávy — zatím jen uložená veličina, žádná feature). Mimo per-symbol rozsah: review fronta (o klasifikaci, ne o symbolu) a track record (7.3, ES).
 
 ## 7. Statistiky a sebe-vyhodnocení
 

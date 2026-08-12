@@ -99,14 +99,14 @@ def test_signal_created_once_and_deduped(tmp_path: Path) -> None:
     seed_bucket(engine)
     job = SignalJob(engine, tmp_path, symbols=("ES",))
 
-    assert job.run(NOW, state="RiskOn") == 1
+    assert job.run(NOW, states={"ES": "RiskOn"}) == 1
     assert len(job.last_created) == 1
     created = job.last_created[0]
     assert created["direction"] == "long"
     assert created["mode"] == "NEWS"
 
     # Týž event podruhé → dedup, nic nového
-    assert job.run(NOW + dt.timedelta(minutes=5), state="RiskOn") == 0
+    assert job.run(NOW + dt.timedelta(minutes=5), states={"ES": "RiskOn"}) == 0
 
     with engine.connect() as conn:
         rows = conn.execute(select(signals)).fetchall()
@@ -119,10 +119,10 @@ def test_no_signals_in_neutral_or_below_gate(tmp_path: Path) -> None:
     seed_event(engine, 1)
     seed_bucket(engine, n=10)  # pod gate
     job = SignalJob(engine, tmp_path, symbols=("ES",))
-    assert job.run(NOW, state="RiskOn") == 0
+    assert job.run(NOW, states={"ES": "RiskOn"}) == 0
 
     seed_bucket_ok = SignalJob(engine, tmp_path, symbols=("ES",))
-    assert seed_bucket_ok.run(NOW, state="Neutral") == 0  # Neutral negeneruje
+    assert seed_bucket_ok.run(NOW, states={"ES": "Neutral"}) == 0  # Neutral negeneruje
 
 
 def test_rejects_are_counted_per_filter(tmp_path: Path) -> None:
@@ -132,16 +132,16 @@ def test_rejects_are_counted_per_filter(tmp_path: Path) -> None:
     job = SignalJob(engine, tmp_path, symbols=("ES",))
 
     # Bez bucket statistik odpadne kandidát hned na prvním filtru
-    assert job.run(NOW, state="RiskOn") == 0
+    assert job.run(NOW, states={"ES": "RiskOn"}) == 0
     assert job.last_rejects == {"bez_statistik": 1}
 
     # Statistiky pod gate → posune se filtr, na kterém to padá
     seed_bucket(engine, n=10)
-    assert job.run(NOW, state="RiskOn") == 0
+    assert job.run(NOW, states={"ES": "RiskOn"}) == 0
     assert job.last_rejects == {"gate": 1}
 
     # Neutral: kandidát se načte, ale zastaví ho stav (a je to v počítadle)
-    assert job.run(NOW, state="Neutral") == 0
+    assert job.run(NOW, states={"ES": "Neutral"}) == 0
     assert job.last_rejects == {"stav": 1}
 
 
@@ -152,11 +152,11 @@ def test_combined_reject_is_counted_alongside_created_news_signal(tmp_path: Path
     seed_bucket(engine)
     job = SignalJob(engine, tmp_path, symbols=("ES",))
 
-    assert job.run(NOW, state="RiskOn") == 1
+    assert job.run(NOW, states={"ES": "RiskOn"}) == 1
     assert job.last_rejects == {"gex_chybi": 1}
 
     # Druhý běh: NEWS už je dedupovaný, COMBINED pořád bez kontextu
-    assert job.run(NOW + dt.timedelta(minutes=1), state="RiskOn") == 0
+    assert job.run(NOW + dt.timedelta(minutes=1), states={"ES": "RiskOn"}) == 0
     assert job.last_rejects == {"gex_chybi": 1, "dedup": 1}
 
 
@@ -165,11 +165,11 @@ def test_confirmed_state_change_expires_active_signals(tmp_path: Path) -> None:
     seed_event(engine, 1)
     seed_bucket(engine)
     job = SignalJob(engine, tmp_path, symbols=("ES",))
-    assert job.run(NOW, state="RiskOn") == 1
+    assert job.run(NOW, states={"ES": "RiskOn"}) == 1
 
     # Potvrzená změna stavu → aktivní signál expiruje okamžitě (SPEC 6.3)
     later = NOW + dt.timedelta(minutes=30)
-    job.run(later, state="Neutral")
+    job.run(later, states={"ES": "Neutral"})
     with engine.connect() as conn:
         row = conn.execute(select(signals)).one()
     expiry = row.expiry_ts if row.expiry_ts.tzinfo else row.expiry_ts.replace(tzinfo=dt.UTC)
@@ -190,10 +190,10 @@ def test_outcomes_measured_from_bars_after_windows_close(tmp_path: Path) -> None
         ],
     )
     job = SignalJob(engine, tmp_path, symbols=("ES",))
-    assert job.run(NOW, state="RiskOn") == 1
+    assert job.run(NOW, states={"ES": "RiskOn"}) == 1
 
     # Po uzavření okna +5 min se outcome spočítá; delší okna ještě ne
-    job.run(NOW + dt.timedelta(minutes=6), state="RiskOn")
+    job.run(NOW + dt.timedelta(minutes=6), states={"ES": "RiskOn"})
     with engine.connect() as conn:
         outcomes = conn.execute(select(signal_outcomes)).fetchall()
     by_window = {int(o.window_min): o for o in outcomes}
@@ -227,3 +227,40 @@ def test_gex_context_loader(tmp_path: Path) -> None:
     assert context.spot == 7455.0
     assert context.flip == 7440.0
     assert context.supports("long")  # spot nad flipem
+
+
+def test_stavy_per_symbol_a_state_symbol_v_inputs(tmp_path: Path) -> None:
+    """ADR-0026: NQ generuje proti NQ stavu; ES v Neutral mlčí; inputs nesou state_symbol."""
+    engine = make_db(tmp_path)
+    seed_event(engine, 1)
+    seed_bucket(engine)  # ES bucket
+    with engine.begin() as conn:  # NQ bucket téhož tvaru
+        conn.execute(
+            insert(news_model_stats),
+            [
+                {
+                    "category": "FED",
+                    "importance": 3,
+                    "surprise_bucket": "none",
+                    "deferred": False,
+                    "window_min": 5,
+                    "symbol": "NQ",
+                    "n": 50,
+                    "ret_mean_bp": 6.0,
+                    "ret_median_bp": 6.0,
+                    "ret_sigma_bp": 4.0,
+                    "hit_rate": 0.65,
+                    "hit_rate_lb": 0.6,
+                    "computed_at": NOW,
+                }
+            ],
+        )
+    job = SignalJob(engine, tmp_path, symbols=("ES", "NQ"))
+
+    created = job.run(NOW, states={"ES": "Neutral", "NQ": "RiskOn"})
+
+    assert created == 1  # jen NQ — ES stav negeneruje
+    with engine.connect() as conn:
+        rows = conn.execute(select(signals)).fetchall()
+    assert {row.symbol for row in rows} == {"NQ"}
+    assert all(row.inputs["state_symbol"] == "NQ" for row in rows)

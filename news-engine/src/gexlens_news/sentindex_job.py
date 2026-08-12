@@ -53,22 +53,25 @@ class SentIndexJob:
         engine: Engine,
         data_dir: Path,
         *,
-        symbols: Sequence[str] = ("ES",),
+        symbols: Sequence[str] = ("ES", "NQ"),
     ) -> None:
         self._engine = engine
         self._dir = data_dir / "derived" / SENTIMENT_SUBDIR
-        # SPEC 5.4 definuje jeden globální index; symboly jsou tu proto, aby
-        # per-symbol vážení (SPEC 6.5) šlo zapnout bez změny schématu
+        # Index per symbol (ADR-0026, #579): tytéž eventy, váhy symbolu.
+        # První symbol je primární — drží návratové hodnoty pro retro pass.
         self._symbols = list(symbols)
+        # Poslední spočtená hodnota per symbol (plní run) — podklad WS pushů
+        self.last_values: dict[str, float] = {}
 
-    def load_events(self, until: dt.datetime) -> list[ScoredEvent]:
+    def load_events(self, until: dt.datetime, symbol: str = "ES") -> list[ScoredEvent]:
         """Klasifikované události v okně; bez skóre do indexu nevstupují.
 
-        Skóre se škáluje váhou kategorie (SPEC 5.3): kategorie, jejíž predikce
-        historicky netrefovaly, přispívá do indexu míň. Chybějící váha =
-        neutrální 1.0, takže do kalibrace se nic nezkresluje ani nenuluje.
+        Skóre se škáluje váhou kategorie (SPEC 5.3) daného symbolu (ADR-0026):
+        kategorie, jejíž predikce historicky netrefovaly, přispívá do indexu
+        míň. Chybějící váha = neutrální 1.0, takže do kalibrace se nic
+        nezkresluje ani nenuluje.
         """
-        weights = load_weight_map(self._engine)
+        weights = load_weight_map(self._engine, symbol)
         since = until - dt.timedelta(days=LOOKBACK_DAYS)
         stmt = select(
             news_events.c.ts_event,
@@ -94,10 +97,17 @@ class SentIndexJob:
             if row.sentiment_score
         ]
 
-    def write_series(self, day: dt.date, series: Sequence[tuple[dt.datetime, float]]) -> Path:
-        """Přepíše denní partici — řada se počítá celá znovu z eventů."""
-        self._dir.mkdir(parents=True, exist_ok=True)
-        path = self._dir / f"{day.isoformat()}.parquet"
+    def write_series(
+        self, day: dt.date, series: Sequence[tuple[dt.datetime, float]], symbol: str = "ES"
+    ) -> Path:
+        """Přepíše denní partici symbolu — řada se počítá celá znovu z eventů.
+
+        Layout `derived/sentiment/{SYMBOL}/{den}.parquet` (ADR-0026); historické
+        ploché soubory zůstávají jako ES legacy, čte je API fallbackem.
+        """
+        target = self._dir / symbol
+        target.mkdir(parents=True, exist_ok=True)
+        path = target / f"{day.isoformat()}.parquet"
         table = pa.Table.from_pylist(
             [{"ts_min": moment, "value": value} for moment, value in series],
             schema=SERIES_SCHEMA,
@@ -105,60 +115,78 @@ class SentIndexJob:
         pq.write_table(table, path)
         return path
 
-    def store_daily(self, day: dt.date, series: Sequence[tuple[dt.datetime, float]]) -> None:
+    def store_daily(
+        self, day: dt.date, series: Sequence[tuple[dt.datetime, float]], symbol: str = "ES"
+    ) -> None:
+        """Denní svíčka JEDNOHO symbolu — hodnoty se mezi symboly liší (ADR-0026)."""
         candle = daily_ohlc(series, day)
         if candle is None:
             return
         dialect = self._engine.dialect.name
         insert = pg_insert if dialect == "postgresql" else sqlite_insert
         now = dt.datetime.now(dt.UTC)
+        values = {
+            "date": day,
+            "symbol": symbol,
+            "open": candle.open,
+            "high": candle.high,
+            "low": candle.low,
+            "close": candle.close,
+            "update_time": now,
+        }
         with self._engine.begin() as conn:
-            for symbol in self._symbols:
-                values = {
-                    "date": day,
-                    "symbol": symbol,
-                    "open": candle.open,
-                    "high": candle.high,
-                    "low": candle.low,
-                    "close": candle.close,
-                    "update_time": now,
-                }
-                stmt = insert(sentiment_daily).values(**values)
-                conn.execute(
-                    stmt.on_conflict_do_update(
-                        index_elements=[sentiment_daily.c.date, sentiment_daily.c.symbol],
-                        set_={
-                            key: values[key]
-                            for key in ("open", "high", "low", "close", "update_time")
-                        },
-                    )
+            stmt = insert(sentiment_daily).values(**values)
+            conn.execute(
+                stmt.on_conflict_do_update(
+                    index_elements=[sentiment_daily.c.date, sentiment_daily.c.symbol],
+                    set_={
+                        key: values[key] for key in ("open", "high", "low", "close", "update_time")
+                    },
                 )
+            )
 
     def run(self, now: dt.datetime) -> tuple[int, list[TopicIndex]]:
-        """Přepočet dneška; vrací délku řady a aktuální topic indexy."""
-        events = self.load_events(now)
-        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        series = sent_index_series(events, day_start, now)
-        if series:
-            self.write_series(now.date(), series)
-            self.store_daily(now.date(), series)
-        topics = topic_indexes(events, now)
-        active = [topic for topic in topics if topic.active]
-        logger.info(
-            "SentIndex %s: %.3f (z %d eventů), aktivních topiců %d%s",
-            now.date(),
-            series[-1][1] if series else 0.0,
-            len(events),
-            len(active),
-            f" — {', '.join(t.category for t in active[:3])}" if active else "",
-        )
-        return len(series), topics
+        """Přepočet dneška pro všechny symboly (ADR-0026).
 
-    def current_value(self, now: dt.datetime) -> float:
-        """Aktuální hodnota indexu — pro WS push bez čtení celé řady."""
+        Vrací (délka řady primárního symbolu, jeho topic indexy) — kontrakt
+        pro retro pass beze změny; hodnoty per symbol nechává v `last_values`.
+        """
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        primary_points = 0
+        primary_topics: list[TopicIndex] = []
+        self.last_values = {}
+        for order, symbol in enumerate(self._symbols):
+            events = self.load_events(now, symbol)
+            series = sent_index_series(events, day_start, now)
+            if series:
+                self.write_series(now.date(), series, symbol)
+                self.store_daily(now.date(), series, symbol)
+                self.last_values[symbol] = series[-1][1]
+            topics = topic_indexes(events, now)
+            if order == 0:
+                primary_points = len(series)
+                primary_topics = topics
+            active = [topic for topic in topics if topic.active]
+            logger.info(
+                "SentIndex %s %s: %.3f (z %d eventů), aktivních topiců %d%s",
+                symbol,
+                now.date(),
+                series[-1][1] if series else 0.0,
+                len(events),
+                len(active),
+                f" — {', '.join(t.category for t in active[:3])}" if active else "",
+            )
+        return primary_points, primary_topics
+
+    def current_value(self, now: dt.datetime, symbol: str = "ES") -> float:
+        """Aktuální hodnota indexu symbolu — pro WS push bez čtení celé řady."""
         from gexlens_news.sentindex import sent_index
 
-        return sent_index(self.load_events(now), now)
+        return sent_index(self.load_events(now, symbol), now)
+
+    @property
+    def symbols(self) -> list[str]:
+        return list(self._symbols)
 
     def upcoming_events(self, now: dt.datetime) -> list[dict[str, object]]:
         """Plánované eventy v nejbližších hodinách (podklad pro news.upcoming)."""

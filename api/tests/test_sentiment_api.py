@@ -89,12 +89,17 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     series_dir = settings.data_dir / "derived" / "sentiment"
     series_dir.mkdir(parents=True, exist_ok=True)
+    schema = pa.schema([("ts_min", pa.timestamp("us", tz="UTC")), ("value", pa.float64())])
+    # ES jako plochý legacy soubor (před ADR-0026) — fallback musí dál fungovat
     pq.write_table(
-        pa.Table.from_pylist(
-            [{"ts_min": NOW, "value": 0.5}],
-            schema=pa.schema([("ts_min", pa.timestamp("us", tz="UTC")), ("value", pa.float64())]),
-        ),
+        pa.Table.from_pylist([{"ts_min": NOW, "value": 0.5}], schema=schema),
         series_dir / f"{NOW.date().isoformat()}.parquet",
+    )
+    # NQ v per-symbol layoutu (ADR-0026)
+    (series_dir / "NQ").mkdir(exist_ok=True)
+    pq.write_table(
+        pa.Table.from_pylist([{"ts_min": NOW, "value": 0.7}], schema=schema),
+        series_dir / "NQ" / f"{NOW.date().isoformat()}.parquet",
     )
     return TestClient(app, headers={"X-GEXLens-Token": INTERNAL_TOKEN})
 
@@ -138,6 +143,16 @@ def test_sentiment_index_reads_series_and_survives_missing_day(client: TestClien
     assert today["series"][0]["value"] == pytest.approx(0.5)
     # Den bez partice vrací prázdnou řadu, ne chybu
     missing = client.get("/sentiment/index/ES", params={"date": "2020-01-01"}).json()
+    assert missing["series"] == []
+
+
+def test_sentiment_index_per_symbol_layout(client: TestClient) -> None:
+    """ADR-0026: NQ čte vlastní partici; legacy plochý soubor patří jen ES."""
+    nq = client.get("/sentiment/index/NQ", params={"date": NOW.date().isoformat()}).json()
+    assert len(nq["series"]) == 1
+    assert nq["series"][0]["value"] == pytest.approx(0.7)
+    # NQ bez partice NEpadá na ES legacy soubor — cizí řada je horší než žádná
+    missing = client.get("/sentiment/index/NQ", params={"date": "2020-01-01"}).json()
     assert missing["series"] == []
 
 

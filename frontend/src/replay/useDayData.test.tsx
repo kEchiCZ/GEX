@@ -544,6 +544,10 @@ test('živý den se po návratu z cache dorovná plným fetchem (#514)', async (
 // ── Indikace zastaralých dat (#516) ────────────────────────────────
 
 test('selhané obnovy ukážou stáří dat do 2 cyklů; obnova indikaci smaže (#516)', async () => {
+  // Pevný start uprostřed seance: posuny času v testu (+1 h pojistka) nesmí
+  // překročit hranici Globex seance 17:00 CT — živý den by přestal být živý
+  // a test by padal jen v hodině před hranicí (nalezeno 12. 8. ve 22:21 UTC)
+  vi.setSystemTime(new Date('2026-08-12T14:00:00Z'))
   const today = sessionDateIso()
   vi.mocked(fetchReplayInputs).mockResolvedValueOnce({ ...makeInputs(), date: today })
   const { result } = renderHook(() => useDayData('ES', '20260716', today, 'intraday'))

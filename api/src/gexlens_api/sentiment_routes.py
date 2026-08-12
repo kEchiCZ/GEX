@@ -242,9 +242,16 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
 
     @router.get("/sentiment/index/{symbol}")
     def sentiment_index(symbol: str, date: dt.date | None = None) -> dict[str, object]:
-        """1min řada SentIndexu daného dne (SPEC 5.4)."""
+        """1min řada SentIndexu daného dne (SPEC 5.4), per symbol (ADR-0026).
+
+        Partice `derived/sentiment/{SYMBOL}/{den}.parquet`; historické ploché
+        soubory (před ADR-0026) jsou ES legacy — fallback jen pro ES.
+        """
         day = date or dt.datetime.now(dt.UTC).date()
-        path = data_dir / "derived" / SENTIMENT_SUBDIR / f"{day.isoformat()}.parquet"
+        base = data_dir / "derived" / SENTIMENT_SUBDIR
+        path = base / symbol / f"{day.isoformat()}.parquet"
+        if not path.exists() and symbol == "ES":
+            path = base / f"{day.isoformat()}.parquet"
         if not path.exists():
             return {"symbol": symbol, "date": day.isoformat(), "series": []}
         try:

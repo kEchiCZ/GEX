@@ -64,17 +64,20 @@ def test_job_writes_series_and_daily_candle(tmp_path: Path) -> None:
     points, topics = job.run(NOW)
     assert points == 361  # 00:00–06:00 po minutě
 
-    path = tmp_path / "data" / "derived" / "sentiment" / "2026-07-28.parquet"
+    # Per-symbol layout (ADR-0026): partice pro každý symbol z výčtu
+    path = tmp_path / "data" / "derived" / "sentiment" / "ES" / "2026-07-28.parquet"
     assert path.exists()
+    assert (tmp_path / "data" / "derived" / "sentiment" / "NQ" / "2026-07-28.parquet").exists()
     rows = pq.read_table(path).to_pylist()
     assert len(rows) == points
     # Open nese zbytek noční zprávy — celý smysl kontinuálního indexu
     assert rows[0]["value"] < 0
 
     with engine.connect() as conn:
-        candle = conn.execute(select(sentiment_daily)).fetchone()
-    assert candle is not None
-    assert candle.symbol == "ES"
+        candles = conn.execute(select(sentiment_daily)).fetchall()
+    by_symbol = {row.symbol: row for row in candles}
+    assert set(by_symbol) == {"ES", "NQ"}
+    candle = by_symbol["ES"]
     assert candle.open < 0
     assert candle.low <= candle.close <= candle.high
 
@@ -89,7 +92,7 @@ def test_unclassified_events_do_not_enter_the_index(tmp_path: Path) -> None:
     points, topics = job.run(NOW)
     assert topics == []
     rows = pq.read_table(
-        tmp_path / "data" / "derived" / "sentiment" / "2026-07-28.parquet"
+        tmp_path / "data" / "derived" / "sentiment" / "ES" / "2026-07-28.parquet"
     ).to_pylist()
     assert all(row["value"] == 0.0 for row in rows)
     assert points > 0
@@ -105,6 +108,6 @@ def test_rerun_overwrites_instead_of_duplicating(tmp_path: Path) -> None:
 
     with engine.connect() as conn:
         candles = conn.execute(select(sentiment_daily)).fetchall()
-    assert len(candles) == 1  # upsert, ne insert
-    files = list((tmp_path / "data" / "derived" / "sentiment").glob("*.parquet"))
+    assert len(candles) == 2  # upsert per symbol (ES + NQ), ne insert
+    files = list((tmp_path / "data" / "derived" / "sentiment" / "ES").glob("*.parquet"))
     assert len(files) == 1
