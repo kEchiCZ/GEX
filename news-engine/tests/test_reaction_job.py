@@ -319,7 +319,7 @@ def test_cekajici_event_tombstone_nedostane(tmp_path: Path) -> None:
     # Event už je přes práh 16 dní, ale bary končí DAY+3 → 2d okno nejde
     # uzavřít (chybí settle) — to je dočasný stav, ne tombstone
     now = EVENT_TS + dt.timedelta(days=20)
-    job._daily_window_days = (1, 30)  # 30d okno se z 4 dnů barů neuzavře
+    job._daily_window_days = [1, 30]  # 30d okno se z 4 dnů barů neuzavře
     job.run(now)
 
     with engine.connect() as conn:
