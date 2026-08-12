@@ -237,12 +237,59 @@ test('gaussianBlur má maximum ve zdroji a rozprostírá energii', () => {
 
 // ── Contours ───────────────────────────────────────────────────────
 
-test('quantile a úrovně izolinií', () => {
+test('quantile a úrovně izolinií (#571: podíl síly z p99, 2 úrovně na stranu)', () => {
   const field = Float32Array.from({ length: 100 }, (_, index) => (index + 1) / 100)
   expect(quantile(field, 0.9)).toBeCloseTo(0.9)
-  expect(contourLevels(field, 'off')).toEqual([])
-  expect(contourLevels(field, 'major')).toHaveLength(2)
-  expect(contourLevels(field, 'all')).toHaveLength(5)
+  expect(contourLevels(field, 'off')).toEqual({ positive: [], negative: [] })
+  const major = contourLevels(field, 'major')
+  const all = contourLevels(field, 'all')
+  // Vždy právě 2 úrovně na stranu (dřív mělo All 5 kvantilů — obsah #238)
+  expect(major.positive).toHaveLength(2)
+  expect(all.positive).toHaveLength(2)
+  // Podíl z p99 strany: p99 = 0.99 → Major 0.65/0.95, All 0.40/0.70 z něj
+  expect(major.positive[0]).toBeCloseTo(0.65 * 0.99)
+  expect(major.positive[1]).toBeCloseTo(0.95 * 0.99)
+  expect(all.positive[0]).toBeCloseTo(0.4 * 0.99)
+  expect(all.positive[1]).toBeCloseTo(0.7 * 0.99)
+  // Čistě kladné pole (OI, Vol): záporná sada prázdná — beze změny chování (#570)
+  expect(major.negative).toEqual([])
+})
+
+test('contourLevels: dominanta i rovnoměrné pole dají prahy ve stejném poměru k p99 (#571)', () => {
+  // Jedna obří koncentrace v jinak slabém poli — kvantil by prahy stlačil
+  // k nule (p75 ≈ šum), podíl síly drží stejný poměr jako rovnoměrné pole
+  const dominant = Float32Array.from({ length: 100 }, (_, index) => (index === 50 ? 100 : 0.01))
+  const uniform = Float32Array.from({ length: 100 }, () => 4)
+  const ratios = (field: Float32Array) => {
+    const positives = [...field].filter((value) => value > 0)
+    const p99 = quantile(positives, 0.99)
+    return contourLevels(field, 'all').positive.map((level) => level / p99)
+  }
+  expect(ratios(dominant)).toEqual(ratios(uniform))
+  expect(ratios(dominant)[0]).toBeCloseTo(0.4)
+})
+
+test('contourLevels: záporná strana zrcadlově z |hodnot|, vlastní jmenovatel (#570+#571)', () => {
+  // Dominance 10:1 — se sdíleným jmenovatelem by slabší strana neměla čáru
+  const field = Float32Array.from([10, 8, 0, -1, -0.8])
+  const levels = contourLevels(field, 'major')
+  expect(levels.positive[1]).toBeCloseTo(0.95 * 10)
+  expect(levels.negative[1]).toBeCloseTo(0.95 * 1) // p99 |záporných| = 1
+  // Úroveň záporné strany je POD p99 kladné — přes -field ji marching najde
+  expect(levels.negative[1]).toBeLessThan(levels.positive[0])
+})
+
+test('marching squares nad -field: symetrické pole dá stejný počet segmentů obou stran (#570)', () => {
+  // Kladný pahorek nahoře, zrcadlově záporný dole
+  const field = new Float32Array(6 * 5)
+  field[1 * 6 + 2] = 1 // řádek 1
+  field[3 * 6 + 2] = -1 // řádek 3, zrcadlo
+  const levels = contourLevels(field, 'major')
+  const positive = levels.positive.flatMap((level) => marchingSquares(field, 6, 5, level))
+  const negated = Float32Array.from(field, (value) => -value)
+  const negative = levels.negative.flatMap((level) => marchingSquares(negated, 6, 5, level))
+  expect(positive.length).toBeGreaterThan(0)
+  expect(negative.length).toBe(positive.length)
 })
 
 test('marching squares najde hranici kolem vrcholu', () => {
