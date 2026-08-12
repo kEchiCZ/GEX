@@ -17,11 +17,14 @@ import {
   CUM_DELTA_PAD,
   barHeights,
   cumDeltaAreas,
+  evoOiDisplay,
+  evoOiStepPath,
   sentimentCandleGeometry,
   seriesPeak,
 } from '../panels/geometry'
 import type { SentimentCandle } from '../panels/geometry'
 import { useCrosshair } from '../state/Crosshair'
+import { oneOf, usePersistentState } from '../state/persist'
 
 export interface PanelSeries {
   vol: number[]
@@ -31,6 +34,9 @@ export interface PanelSeries {
   /** Delta-vážený opční tok per strana (|Δ| × přírůstek volume) — čtení C/P aktivity. */
   deltaFlowCall: number[]
   deltaFlowPut: number[]
+  /** Evo OI (#573): Σ OI přes striky per sloupec, C/P zvlášť; prázdné = starší data. */
+  evoOiCall?: number[]
+  evoOiPut?: number[]
   /** SentIndex po minutách (#288); prázdné = modul zatím data nemá. */
   sentiment?: number[]
   /** Daily pohled (#296, SPEC 7.1): OHLC svíčka per sloupec-den; null = den
@@ -47,6 +53,8 @@ export interface PanelsVisible {
   optVol: boolean
   delta: boolean
   deltaFlow: boolean
+  /** Evo OI (#573): vývoj celkového call/put OI — budování vs. zavírání pozic. */
+  evoOi: boolean
   sentiment: boolean
 }
 
@@ -157,6 +165,12 @@ function BottomPanelsBase({
   const minutes = data.vol.length
   const axisMinutes = Math.max(minutes, totalMinutes ?? minutes)
   const pointer = usePanelPointer(axisMinutes, width, time)
+  // Režim Evo OI (#573): Δ od začátku osy (výchozí) vs. absolutní úroveň
+  const [evoOiMode, setEvoOiMode] = usePersistentState<'delta' | 'abs'>(
+    'evoOiMode',
+    'delta',
+    oneOf(['delta', 'abs']),
+  )
   const { position } = useCrosshair()
   // Index pod crosshairem (sdílený napříč panely) — hodnoty vpravo nahoře
   const idx =
@@ -349,6 +363,85 @@ function BottomPanelsBase({
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('deltaflow')}
+        </svg>
+      </section>,
+    )
+  }
+
+  if (visible.evoOi && (data.evoOiCall?.length ?? 0) > 0) {
+    const callSeries = evoOiDisplay(data.evoOiCall ?? [], evoOiMode)
+    const putSeries = evoOiDisplay(data.evoOiPut ?? [], evoOiMode)
+    const evoPeak = Math.max(1, seriesPeak(callSeries), seriesPeak(putSeries))
+    const signed = evoOiMode === 'delta'
+    const toY = signed
+      ? (value: number) => height / 2 - (value / evoPeak) * (height / 2 - CUM_DELTA_PAD)
+      : (value: number) => height - (value / evoPeak) * (height - 4)
+    panels.push(
+      <section
+        key="evooi"
+        className="bottom-panel"
+        aria-label="Evo OI panel"
+        title={
+          'Evo OI (#573): vývoj celkového OI callů (zelená) a putů (červená) přes striky. ' +
+          'Objem roste + OI roste = pozice se budují; objem roste + OI klesá = zavírání, ' +
+          'zeď se rozpouští. POZOR: OI na futures chodí přes tick 101 jen občas (ADR-0001) — ' +
+          'plochá schodovitá čára znamená „bez aktualizace", ne „nic se neděje".'
+        }
+      >
+        <span className="panel-title muted">
+          Evo OI
+          <button
+            className={evoOiMode === 'delta' ? 'chip active' : 'chip'}
+            onClick={() => setEvoOiMode(evoOiMode === 'delta' ? 'abs' : 'delta')}
+            aria-label="Režim Evo OI"
+            title="Δ = přírůstek od začátku osy (výchozí — absolutní OI se mění málo); abs = absolutní úroveň"
+          >
+            {evoOiMode === 'delta' ? 'Δ' : 'abs'}
+          </button>
+        </span>
+        {idx !== null && (
+          <PanelValue>
+            <span style={{ color: COLORS.call }}>
+              C {signed ? fmtSigned(callSeries[idx]) : fmtInt(callSeries[idx])}
+            </span>{' '}
+            <span style={{ color: COLORS.put }}>
+              P {signed ? fmtSigned(putSeries[idx]) : fmtInt(putSeries[idx])}
+            </span>
+          </PanelValue>
+        )}
+        {axisValue('evooi', evoPeak, signed)}
+        <svg
+          width={width}
+          height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          preserveAspectRatio="none"
+          onPointerMove={handleMove('evooi')}
+          onPointerLeave={handleLeave}
+        >
+          {
+            signed &&
+            <line x1={0} y1={height / 2} x2={width} y2={height / 2} stroke="#2c3342" data-testid="evooi-zero" /> // prettier-ignore
+          }
+          <g transform={transform}>
+            <path
+              d={evoOiStepPath(callSeries, minutes * step, toY)}
+              fill="none"
+              stroke={COLORS.call}
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+              data-part="evooi-call"
+            />
+            <path
+              d={evoOiStepPath(putSeries, minutes * step, toY)}
+              fill="none"
+              stroke={COLORS.put}
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+              data-part="evooi-put"
+            />
+            <CrosshairLine x={pointer.crosshairX} height={height} />
+          </g>
+          {axisLineH('evooi')}
         </svg>
       </section>,
     )

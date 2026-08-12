@@ -51,6 +51,8 @@ export interface Toggles {
   optVol: boolean
   delta: boolean
   deltaFlow: boolean
+  /** Panel Evo OI (#573): vývoj celkového call/put OI. */
+  evoOi: boolean
   volOiDelta: boolean
   /** Projekce heatmapy do settle (ADR-0006) — jen intraday. */
   projection: boolean
@@ -231,6 +233,7 @@ const DEFAULT_TOGGLES: Toggles = {
   optVol: true,
   delta: true,
   deltaFlow: false,
+  evoOi: false,
   volOiDelta: true,
   projection: true,
   news: false,

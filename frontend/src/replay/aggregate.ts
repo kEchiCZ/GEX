@@ -264,6 +264,9 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
       cumDelta: lastSeries(day.panels.cumDelta, plan),
       deltaFlowCall: sumSeries(day.panels.deltaFlowCall, plan),
       deltaFlowPut: sumSeries(day.panels.deltaFlowPut, plan),
+      // Evo OI (#573) je úroveň, ne tok — koš přebírá poslední hodnotu
+      evoOiCall: lastSeries(day.panels.evoOiCall ?? [], plan),
+      evoOiPut: lastSeries(day.panels.evoOiPut ?? [], plan),
     },
     profileByMinute,
     demoProfileRows: day.demoProfileRows,

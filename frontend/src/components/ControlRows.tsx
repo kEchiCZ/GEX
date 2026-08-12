@@ -18,6 +18,7 @@ const TOGGLE_LABELS: Record<keyof Toggles, string> = {
   optVol: 'Opt Vol',
   delta: 'Delta',
   deltaFlow: 'Δ Flow C/P',
+  evoOi: 'Evo OI',
   volOiDelta: 'Vol + OI Δ',
   projection: 'Projekce',
   news: 'News',
