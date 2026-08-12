@@ -37,4 +37,6 @@ test('formát: strana úrovně + odstup se znaménkem (#603 příklady)', () => 
   expect(formatSettleWatch({ name: 'call_wall', level: 7800, distance: -7.3, weak: false })).toBe('nad 7800 −7.3 b') // prettier-ignore
   // Cena 2,1 b NAD úrovní → „pod 7800 +2,1 b" (strana se překlopí, znaménko taky)
   expect(formatSettleWatch({ name: 'call_wall', level: 7800, distance: 2.1, weak: false })).toBe('pod 7800 +2.1 b') // prettier-ignore
+  // Interpolovaný GEX level se zaokrouhlí (#653) — žádný float vlak v hlavičce
+  expect(formatSettleWatch({ name: 'gex_level', level: 7628.166920999555, distance: -55.0, weak: false })).toBe('nad 7628.2 −55.0 b') // prettier-ignore
 })
