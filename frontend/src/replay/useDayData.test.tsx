@@ -5,6 +5,8 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { LiveSocket } from '../api/ws'
 import { useDayData } from './useDayData'
 import { fetchDays, fetchReplay, fetchReplayInputs } from './loader'
+import { clearBundleCache } from './bundleCache'
+import { sessionDateIso } from '../instrument/tz'
 import type { ReplayInputs } from './loader'
 
 vi.mock('./loader', async (importOriginal) => {
@@ -72,7 +74,10 @@ function makeSocket(): FakeSocket {
   return socket as unknown as FakeSocket
 }
 
-beforeEach(() => vi.useFakeTimers())
+beforeEach(() => {
+  vi.useFakeTimers()
+  clearBundleCache()
+})
 afterEach(() => {
   vi.useRealTimers()
   vi.clearAllMocks()
@@ -113,8 +118,9 @@ test('WS snapshot+price přidá novou minutu (append, ne refetch) — issue #127
 })
 
 test('plný refetch je hodinová pojistka, ne každou minutu — issue #127', async () => {
+  // Živý den (#514: historický kešovaný den pojistku záměrně přeskakuje)
   vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
-  renderHook(() => useDayData('ES', '20260716', '2026-07-16', 'intraday', makeSocket()))
+  renderHook(() => useDayData('ES', '20260716', sessionDateIso(), 'intraday', makeSocket()))
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0)
   })
@@ -463,4 +469,74 @@ test('daily režim nepoužívá intraday live fetch', async () => {
   })
   expect(fetchReplayInputs).not.toHaveBeenCalled()
   expect(fetchReplay).not.toHaveBeenCalled()
+})
+
+// ── LRU cache balíků (#514) ────────────────────────────────────────
+
+test('návrat na kešovaný historický den renderuje okamžitě bez dalšího fetche (#514)', async () => {
+  clearBundleCache()
+  vi.mocked(fetchReplayInputs).mockImplementation(async (symbol, expiry, date) => ({
+    ...makeInputs(),
+    symbol,
+    expiry,
+    date,
+  }))
+  const { result, rerender } = renderHook(
+    ({ symbol, expiry }: { symbol: string; expiry: string }) =>
+      useDayData(symbol, expiry, '2026-07-16', 'intraday'),
+    { initialProps: { symbol: 'ES', expiry: '20260716' } },
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(fetchReplayInputs).toHaveBeenCalledTimes(1)
+  expect(result.current.day.source).toBe('replay')
+
+  rerender({ symbol: 'NQ', expiry: '20260716' })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(fetchReplayInputs).toHaveBeenCalledTimes(2)
+
+  // Návrat: den je historický (2026-07-16 < dnešní seance) → žádný třetí fetch,
+  // data jsou k dispozici okamžitě (žádné demo mezistadium)
+  rerender({ symbol: 'ES', expiry: '20260716' })
+  expect(result.current.day.source).toBe('replay') // okamžitě, žádné demo mezistadium
+  expect(result.current.day.grid.minutes).toBe(1)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(fetchReplayInputs).toHaveBeenCalledTimes(2)
+})
+
+test('živý den se po návratu z cache dorovná plným fetchem (#514)', async () => {
+  clearBundleCache()
+  const today = sessionDateIso()
+  vi.mocked(fetchReplayInputs).mockImplementation(async (symbol, expiry, date) => ({
+    ...makeInputs(),
+    symbol,
+    expiry,
+    date,
+  }))
+  const { result, rerender } = renderHook(
+    ({ symbol }: { symbol: string }) => useDayData(symbol, '20260716', today, 'intraday'),
+    { initialProps: { symbol: 'ES' } },
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(fetchReplayInputs).toHaveBeenCalledTimes(1)
+  rerender({ symbol: 'NQ' })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  rerender({ symbol: 'ES' })
+  // Okamžitý render z cache…
+  expect(result.current.day.source).toBe('replay')
+  expect(result.current.day.grid.minutes).toBe(1)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  // …ale živý den se DOROVNÁ dalším fetchem (minuty zmeškané bez WS subskripce)
+  expect(fetchReplayInputs).toHaveBeenCalledTimes(3)
 })

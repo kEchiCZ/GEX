@@ -20,6 +20,8 @@ import {
   fetchReplay,
   fetchReplayInputs,
 } from './loader'
+import { bundleCacheKey, getCachedBundle, storeCachedBundle } from './bundleCache'
+import { sessionDateIso } from '../instrument/tz'
 import type { GexFieldRow, GexProfileRow, LadderMinuteRow, LiveMinute, LiveMinuteRow, ProfileSource, ReplayDay, ReplayInputs } from './loader' // prettier-ignore
 
 /** Daily pohled: strop stažených dnů (retence snapshotů je 14 dní, R4). */
@@ -269,12 +271,28 @@ export function useDayData(
   // Živý spot (#128, #143): rozdělaná svíčka aktuální minuty + záložní bary minut bez skutečného baru
   const [spotBars, setSpotBars] = useState<SpotBar[]>([])
 
-  // Změna instrumentu/expirace: starý dataset nesmí přežít (jiný symbol → demo/nový fetch)
+  // Změna instrumentu/expirace: starý dataset nesmí přežít — ale návrat na
+  // kešovaný klíč (#514) renderuje okamžitě z LRU místo demo + plného stažení
   useEffect(() => {
-    setInputs(null)
+    const cached = expiry ? getCachedBundle(bundleCacheKey(symbol, expiry, date)) : null
+    setInputs(cached)
+    inputsRef.current = cached
     setDaily(null)
     setSpotBars([])
+    if (import.meta.env.DEV) {
+      console.debug(`[replay-cache #514] ${symbol}|${expiry}|${date}: ${cached ? 'hit — okamžitý render' : 'miss — plný fetch'}`) // prettier-ignore
+    }
   }, [symbol, expiry, date])
+
+  // Každý nový stav (fetch i WS append) se zrcadlí do cache — návrat na symbol
+  // pak startuje z posledního známého stavu, ne ze stavu při odchodu z mountu
+  useEffect(() => {
+    // Identita balíku musí sedět na klíč — při přepnutí klíče tenhle efekt
+    // běží ještě se STARÝMI inputs a nesmí je uložit pod nový klíč
+    if (inputs && inputs.symbol === symbol && inputs.expiry === expiry && inputs.date === date) {
+      storeCachedBundle(bundleCacheKey(symbol, expiry, date), inputs)
+    }
+  }, [inputs, symbol, expiry, date])
 
   // Jakmile pro minutu dorazí FINÁLNÍ bar (price kanál), spot záloha končí.
   // Pouhý snapshot minuty nestačí — jinak by svíčka do příchodu baru chyběla (#143).
@@ -298,9 +316,14 @@ export function useDayData(
     return () => clearInterval(id)
   }, [timeframe])
 
-  // Úvodní / rekonciliační fetch celého balíku
+  // Úvodní / rekonciliační fetch celého balíku. Uzavřená seance (den před
+  // dnešním obchodním dnem, #512) je immutable — kešovaný balík se znovu
+  // nestahuje vůbec; živý den se z cache jen vykreslí a fetch ho DOROVNÁ
+  // (minuty zmeškané bez WS subskripce jiného symbolu).
   useEffect(() => {
     if (!expiry || timeframe !== 'intraday') return
+    const immutable = date < sessionDateIso()
+    if (immutable && getCachedBundle(bundleCacheKey(symbol, expiry, date))) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
     fetchReplayInputs(symbol, expiry, date)

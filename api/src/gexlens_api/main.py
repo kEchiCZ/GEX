@@ -17,6 +17,7 @@ import pandas as pd
 from fastapi import (
     Depends,
     FastAPI,
+    Header,
     HTTPException,
     Query,
     Response,
@@ -31,7 +32,7 @@ from sqlalchemy import select
 from gexlens_api.alerts import AlertEngine
 from gexlens_api.backup import build_backup_router
 from gexlens_api.crud import build_router
-from gexlens_api.data import DataRepository, PartitionNotFoundError
+from gexlens_api.data import DataRepository, PartitionNotFoundError, session_bounds
 from gexlens_api.heatmap import (
     ARROW_MEDIA_TYPE,
     MissingSpotSeriesError,
@@ -542,17 +543,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.get("/replay/{symbol}/{expiry}/{date}")
-    def replay(symbol: str, expiry: str, date: dt.date) -> dict[str, object]:
+    def replay(
+        symbol: str,
+        expiry: str,
+        date: dt.date,
+        if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
+    ) -> Response:
         """Kompletní denní balík pro playback (SPEC kap. 6).
 
         Snapshot matice jde surová (base64 Arrow) — klient přepíná módy/škály
         lokálně bez dalších requestů (latence < 100 ms, SPEC kap. 8).
+
+        HTTP cache (#514): uzavřená seance (konec seance < teď) je immutable —
+        prohlížeč historické dny drží a nestahuje 12MB balík znovu. Živý den
+        dostává ETag z poslední minuty snapshotů → 304 při shodě.
         """
         # Osa obchodního dne = Globex seance (#512, ADR-0023 bod 3): každá
         # řada se sešívá z partice D−1 (večer) + D; gexfield/gexfieldfa drží
         # jen poslední stav pole, sešití nemá smysl — čtou se beze změny.
         session = repository.session_frame
         snapshots_frame = session(lambda d: repository.snapshots(symbol, expiry, d), date)
+        _, session_end = session_bounds(date)
+        immutable = dt.datetime.now(dt.UTC) >= session_end
+        if immutable:
+            cache_headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+        else:
+            last_ts = (
+                snapshots_frame["ts_min"].max().isoformat() if not snapshots_frame.empty else "0"
+            )
+            etag = f'W/"{symbol}-{expiry}-{date.isoformat()}-{len(snapshots_frame)}-{last_ts}"'
+            if if_none_match == etag:
+                return Response(status_code=304, headers={"ETag": etag})
+            cache_headers = {"Cache-Control": "no-cache", "ETag": etag}
         bundle: dict[str, object] = {
             "symbol": symbol,
             "expiry": expiry,
@@ -613,7 +635,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             # OI archiv nedostupný (např. čerstvá DB) — balík drží tvar bez ΔOI
             bundle["oi_prev"] = []
-        return bundle
+        return JSONResponse(bundle, headers=cache_headers)
 
     @app.get("/gexplane/{symbol}/{expiry}")
     def gexplane(
