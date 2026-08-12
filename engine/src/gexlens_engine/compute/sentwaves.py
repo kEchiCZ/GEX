@@ -1,20 +1,23 @@
-"""Sentiment waves a stav RiskOn/RiskOff/Neutral (#292, SPEC 5.6) — čisté funkce.
+"""Sentiment waves a stav RiskOn/RiskOff/Neutral (#292, SPEC 5.6 rev. #563) — čisté funkce.
 
 Žije v enginu ze stejného důvodu jako `newstext`: pravidla musí být JEDNA
 implementace pro news-engine (job počítá a ukládá vlny) i API (route servíruje
 stav) — dvě kopie by se rozešly a stav v UI by lhal proti uloženým vlnám.
 
-Pinnutá pravidla (SPEC 5.6 — konfig je jen override, jinak nejdou psát
-golden testy):
+Pinnutá pravidla (SPEC 5.6 rev. 2026-08-12, #563 — konfig je jen override,
+jinak nejdou psát golden testy):
 
-* Podmínka dne: RiskOn ⇔ close > MA5 > MA10; RiskOff zrcadlově; jinak žádná.
-* Vlna = souvislé dny se stejnou podmínkou; den bez podmínky vlnu uzavírá.
-* **Hloubka vlny = max |close − MA10| přes dny vlny** (ADR-0019) — jak daleko
-  se režim natáhl od dlouhodobého průměru; jednotka = body indexu.
-* Stav: směr vlny, pokud hloubka ≥ potvrzovací práh; jinak Neutral.
-* Práh = průměrná hloubka DOKONČENÝCH vln opačného směru, které skončily
-  před začátkem aktuální vlny (walk-forward — budoucí vlny nesmí kalibrovat
-  minulý stav). Bez historie práh = 0.
+* **Stav = poloha denního close vůči oběma průměrům** (definovaný každý den):
+  RiskOn ⇔ close nad MA5 i MA10; RiskOff ⇔ pod oběma; mezi nimi Neutral.
+* **Polarita trendu = MA5 vs. MA10** (up/down) — atribut stavu, ne brána.
+* Vlna = souvislé dny s řetězenou podmínkou (close > MA5 > MA10, zrcadlově);
+  den bez podmínky vlnu uzavírá. **Hloubka vlny = max |close − MA10|**
+  (ADR-0019). Vlna i hloubka jsou od #563 ATRIBUTY stavu, ne brána —
+  potvrzovací práh se dál počítá a reportuje, ale stav negatuje.
+* POZOR na čtení: názvy stavů popisují NÁLADU (na trh dopadají špatné/dobré
+  zprávy), ne predikci ceny. Měření #563 na 2024–2026: následné výnosy byly
+  kontrariánské (RiskOff období se vykupovala) — směr určuje až kalibrace
+  signálů nad track recordem (#453), nikdy název stavu.
 
 Vše počítáno na denních close kontinuálního SentIndexu (`sentiment_daily`);
 intradenní hodnota dneška dává jen „unconfirmed" indikaci (SPEC 5.6).
@@ -54,12 +57,15 @@ class Wave:
 class StateAssessment:
     """Stav k poslednímu dni řady + vstupy, ze kterých vznikl (pro UI/API)."""
 
-    state: str  # RiskOn / RiskOff / Neutral
+    state: str  # RiskOn / RiskOff / Neutral (poloha vůči MA5+MA10, #563)
     close: float | None
     ma5: float | None
     ma10: float | None
     wave: Wave | None
+    # Potvrzovací práh — od #563 jen informační atribut, stav negatuje
     threshold: float
+    # Polarita trendu MA5 vs. MA10 ("up"/"down"); None dokud okna nejsou plná
+    polarity: str | None = None
 
 
 def moving_average(closes: list[float], window: int) -> float | None:
@@ -70,7 +76,12 @@ def moving_average(closes: list[float], window: int) -> float | None:
 
 
 def day_condition(close: float, ma5: float | None, ma10: float | None) -> str | None:
-    """Podmínka dne: RiskOn ⇔ close > MA5 > MA10, RiskOff zrcadlově."""
+    """Řetězená podmínka dne: RiskOn ⇔ close > MA5 > MA10, RiskOff zrcadlově.
+
+    Od #563 definuje jen VLNY (detect_waves) — stav dne určuje `position_state`.
+    Řetězení (AND polohy a polarity) pouštělo ze čtyř režimů dva, a proto stav
+    spal 96,5 % dní; jako definice vlnových úseků zůstává beze změny.
+    """
     if ma5 is None or ma10 is None:
         return None
     if close > ma5 > ma10:
@@ -78,6 +89,29 @@ def day_condition(close: float, ma5: float | None, ma10: float | None) -> str | 
     if close < ma5 < ma10:
         return RISK_OFF
     return None
+
+
+def position_state(close: float, ma5: float | None, ma10: float | None) -> str | None:
+    """Stav dne z polohy vůči oběma průměrům (SPEC 5.6 rev. #563).
+
+    RiskOn = close nad MA5 i MA10 (pozitivní nálada), RiskOff = pod oběma,
+    Neutral = mezi průměry. None dokud MA okna nejsou plná. Ostrá nerovnost:
+    close přesně na průměru polohu nepotvrzuje.
+    """
+    if ma5 is None or ma10 is None:
+        return None
+    if close > ma5 and close > ma10:
+        return RISK_ON
+    if close < ma5 and close < ma10:
+        return RISK_OFF
+    return NEUTRAL
+
+
+def trend_polarity(ma5: float | None, ma10: float | None) -> str | None:
+    """Polarita trendu: "up" ⇔ MA5 > MA10, "down" ⇔ MA5 < MA10; rovnost None."""
+    if ma5 is None or ma10 is None or ma5 == ma10:
+        return None
+    return "up" if ma5 > ma10 else "down"
 
 
 def detect_waves(points: list[DailyClose]) -> list[Wave]:
@@ -154,7 +188,12 @@ def confirmation_threshold(waves: list[Wave], *, direction: str, before: dt.date
 
 
 def assess_state(points: list[DailyClose]) -> StateAssessment:
-    """Stav k poslednímu dni řady dle pinnutých pravidel SPEC 5.6."""
+    """Stav k poslednímu dni řady dle pinnutých pravidel SPEC 5.6 (rev. #563).
+
+    Stav = poloha close vůči oběma průměrům — definovaný každý den, žádná
+    vlnová brána (ta držela Neutral 96,5 % dní a signální větev spala).
+    Vlna, hloubka i potvrzovací práh zůstávají jako atributy pro UI/kalibraci.
+    """
     if not points:
         return StateAssessment(
             state=NEUTRAL, close=None, ma5=None, ma10=None, wave=None, threshold=0.0
@@ -165,13 +204,18 @@ def assess_state(points: list[DailyClose]) -> StateAssessment:
     last = points[-1]
     waves = detect_waves(points)
     ongoing = waves[-1] if waves and waves[-1].end is None else None
-    condition = day_condition(last.close, ma5, ma10)
-    if condition is None or ongoing is None:
-        return StateAssessment(
-            state=NEUTRAL, close=last.close, ma5=ma5, ma10=ma10, wave=ongoing, threshold=0.0
-        )
-    threshold = confirmation_threshold(waves, direction=condition, before=ongoing.start)
-    state = condition if ongoing.depth >= threshold else NEUTRAL
+    state = position_state(last.close, ma5, ma10) or NEUTRAL
+    threshold = (
+        confirmation_threshold(waves, direction=ongoing.direction, before=ongoing.start)
+        if ongoing is not None
+        else 0.0
+    )
     return StateAssessment(
-        state=state, close=last.close, ma5=ma5, ma10=ma10, wave=ongoing, threshold=threshold
+        state=state,
+        close=last.close,
+        ma5=ma5,
+        ma10=ma10,
+        wave=ongoing,
+        threshold=threshold,
+        polarity=trend_polarity(ma5, ma10),
     )

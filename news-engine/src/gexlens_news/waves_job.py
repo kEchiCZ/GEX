@@ -101,6 +101,8 @@ class WavesJob:
         payload: dict[str, Any] = {
             "symbol": self._symbol,
             "state": confirmed.state,
+            # Polarita trendu MA5 vs. MA10 (#563) — atribut stavu pro UI
+            "polarity": confirmed.polarity,
             # Unconfirmed indikace (SPEC 5.6): dnešní průběžná hodnota by stav
             # změnila, ale potvrdit ho smí až denní close
             "unconfirmed": provisional is not None

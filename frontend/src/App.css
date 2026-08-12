@@ -1515,6 +1515,13 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   animation: state-dot-pulse 1.6s ease-in-out infinite;
 }
 
+/* Polarita trendu MA5×MA10 (#563) — decentní, barvu nese stav chipu */
+.state-polarity {
+  margin-left: 4px;
+  font-size: 0.8em;
+  opacity: 0.75;
+}
+
 @keyframes state-dot-pulse {
   50% {
     opacity: 0.35;
