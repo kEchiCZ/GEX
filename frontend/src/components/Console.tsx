@@ -33,12 +33,8 @@ export function Console() {
             onChange={(event) => put('ibkr_client_id', Number(event.target.value))}
           />
         </label>
-        <button
-          className="chip"
-          onClick={() => put('reconnect_requested', new Date().toISOString())}
-        >
-          Reconnect
-        </button>
+        {/* Tlačítko Reconnect odstraněno (#554): klíč reconnect_requested nikdo
+            nečetl — skutečné přepojení dělá uložení IBKR nastavení (#446) */}
         <p className="muted">
           Stav: {status.connection ?? status.engine}
           {status.port !== undefined ? ` :${status.port}` : ''}

@@ -125,8 +125,15 @@ export function enumMap<T extends string>(allowed: readonly T[]): Revive<Record<
   }
 }
 
-/** Reviver pro krátký identifikátor (symbol tickeru). */
-export function shortString(maxLength = 12): Revive<string> {
+/** Reviver pro symbol tickeru (#554 L5): jen tvar symbolu, žádné cestové znaky.
+
+Hodnota se skládá do API cest — otrávený localStorage typu `../settings` by
+jinak přesměroval fetch na jiný same-origin endpoint. Tohle je jediné místo,
+kudy do cest teče nedůvěryhodný řetězec, proto tvrdý whitelist znaků.
+*/
+const SYMBOL_SHAPE = /^[A-Z0-9.]{1,12}$/
+
+export function shortString(): Revive<string> {
   return (value, fallback) =>
-    typeof value === 'string' && value.length > 0 && value.length <= maxLength ? value : fallback
+    typeof value === 'string' && SYMBOL_SHAPE.test(value) ? value : fallback
 }
