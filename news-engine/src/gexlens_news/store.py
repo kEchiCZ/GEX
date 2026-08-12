@@ -16,6 +16,7 @@ from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.newstext import normalize_source_uid
 from gexlens_engine.storage.sentiment import news_events
+from gexlens_news.http import sanitize_raw
 from gexlens_news.model import NewsEvent
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,9 @@ class NewsWriter:
                 "surprise_z": event.surprise_z,
                 "market_closed": event.market_closed,
                 "dedup_hash": event.dedup_hash,
-                "raw": event.raw,
+                # S10 (#553): raw payload nesmí do DB s tokenem v URL — čistí
+                # se až tady na zápisu, jediné hrdlo pro všechny collectory
+                "raw": sanitize_raw(event.raw),
             }
             for event in events
         ]
