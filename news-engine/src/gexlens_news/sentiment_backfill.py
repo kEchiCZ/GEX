@@ -48,9 +48,13 @@ def _as_utc(value: dt.datetime) -> dt.datetime:
     return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
 
 
-def load_scored_events(engine: Engine) -> list[ScoredEvent]:
-    """Všechny skórované eventy chronologicky — stejné filtry jako živý index."""
-    weights = load_weight_map(engine)
+def load_scored_events(engine: Engine, symbol: str = "ES") -> list[ScoredEvent]:
+    """Všechny skórované eventy chronologicky — stejné filtry jako živý index.
+
+    Váhy per symbol (ADR-0026): NQ řada se počítá z týchž eventů, ale s NQ
+    vahami — proto se eventy načítají per symbol, ne jednou pro všechny.
+    """
+    weights = load_weight_map(engine, symbol)
     stmt = (
         select(
             news_events.c.ts_event,
@@ -81,7 +85,7 @@ def load_scored_events(engine: Engine) -> list[ScoredEvent]:
 def backfill_sentiment_daily(
     engine: Engine,
     *,
-    symbols: tuple[str, ...] = ("ES",),
+    symbols: tuple[str, ...] = ("ES", "NQ"),
     end: dt.date | None = None,
     step_minutes: int = 1,
 ) -> BackfillDailyStats:
@@ -90,33 +94,33 @@ def backfill_sentiment_daily(
     Den po dni: 1min řada z eventů v příspěvkovém okně → OHLC → insert
     ON CONFLICT DO NOTHING. Idempotentní — opakovaný běh nic nepřepíše.
     """
-    events = load_scored_events(engine)
-    if not events:
-        logger.warning("Žádné skórované eventy — backfill nemá z čeho počítat")
-        return BackfillDailyStats(days_written=0, days_skipped=0)
-
-    today = dt.datetime.now(dt.UTC).date()
-    last_day = end or (today - dt.timedelta(days=1))
-    first_day = events[0].ts_event.date()
-    timestamps = [event.ts_event for event in events]
-
     insert = pg_insert if engine.dialect.name == "postgresql" else sqlite_insert
     now = dt.datetime.now(dt.UTC)
+    today = now.date()
+    last_day = end or (today - dt.timedelta(days=1))
     written = 0
     skipped = 0
-    day = first_day
-    while day <= last_day:
-        day_start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
-        day_end = day_start + dt.timedelta(days=1) - dt.timedelta(minutes=step_minutes)
-        window_start = day_start - dt.timedelta(days=CONTRIBUTION_LOOKBACK_DAYS)
-        window = events[bisect_left(timestamps, window_start) : bisect_right(timestamps, day_end)]
-        series = sent_index_series(window, day_start, day_end, step_minutes=step_minutes)
-        candle = daily_ohlc(series, day)
-        day = day + dt.timedelta(days=1)
-        if candle is None:
+    for symbol in symbols:
+        events = load_scored_events(engine, symbol)
+        if not events:
+            logger.warning("%s: žádné skórované eventy — backfill nemá z čeho počítat", symbol)
             continue
-        with engine.begin() as conn:
-            for symbol in symbols:
+        first_day = events[0].ts_event.date()
+        timestamps = [event.ts_event for event in events]
+        day = first_day
+        while day <= last_day:
+            day_start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
+            day_end = day_start + dt.timedelta(days=1) - dt.timedelta(minutes=step_minutes)
+            window_start = day_start - dt.timedelta(days=CONTRIBUTION_LOOKBACK_DAYS)
+            window = events[
+                bisect_left(timestamps, window_start) : bisect_right(timestamps, day_end)
+            ]
+            series = sent_index_series(window, day_start, day_end, step_minutes=step_minutes)
+            candle = daily_ohlc(series, day)
+            day = day + dt.timedelta(days=1)
+            if candle is None:
+                continue
+            with engine.begin() as conn:
                 stmt = (
                     insert(sentiment_daily)
                     .values(

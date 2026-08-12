@@ -224,6 +224,9 @@ news_weights = Table(
     Column("category", String(24), primary_key=True),
     Column("predictor", String(8), primary_key=True),
     Column("window_min", SmallInteger, primary_key=True),
+    # Váhy per symbol (ADR-0026, #579): outcomes ES a NQ se nesmí míchat,
+    # jinak je „NQ index" jen kopie ES křivky
+    Column("symbol", String(16), primary_key=True, server_default="ES"),
     Column("n", Integer, nullable=False),
     Column("hit_rate", Float, nullable=False),
     Column("hit_rate_lb", Float, nullable=False),
@@ -356,6 +359,14 @@ def ensure_sentiment_schema(engine: Engine) -> None:
         if "regime" not in columns:
             with engine.begin() as conn:
                 conn.execute(text("DROP TABLE news_model_stats"))
+    # `news_weights` jsou plně derivované (noční full-replace) — při chybějícím
+    # sloupci `symbol` (ADR-0026) se tabulka zahodí a založí v novém tvaru;
+    # hodnoty doplní příští přepočet vah.
+    if "news_weights" in existing:
+        columns = {column["name"] for column in inspector.get_columns("news_weights")}
+        if "symbol" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("DROP TABLE news_weights"))
     # `news_reactions` jsou naměřená data — jen aditivní ADD COLUMN.
     if "news_reactions" in existing:
         columns = {column["name"] for column in inspector.get_columns("news_reactions")}
@@ -363,3 +374,25 @@ def ensure_sentiment_schema(engine: Engine) -> None:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE news_reactions ADD COLUMN gex_regime VARCHAR(16)"))
     sentiment_metadata.create_all(engine)
+
+    # Rozdíl reakcí NQ − ES per (event, okno) — míra „technologického
+    # charakteru" zprávy (ADR-0026, #579). View, ne materializace: obě
+    # reakce trvale žijí v `news_reactions`, druhá kopie by lhala při
+    # doplnění oken. PG umí CREATE OR REPLACE, SQLite (testy) jen IF NOT
+    # EXISTS — definice se nemění, takže obojí je idempotentní.
+    view_sql = (
+        "VIEW news_reaction_spread AS "
+        "SELECT nq.event_id AS event_id, nq.window_min AS window_min, "
+        "nq.ret_bp - es.ret_bp AS spread_bp, "
+        "nq.ret_bp AS nq_ret_bp, es.ret_bp AS es_ret_bp, "
+        "(nq.contaminated OR es.contaminated) AS contaminated "
+        "FROM news_reactions nq "
+        "JOIN news_reactions es ON es.event_id = nq.event_id "
+        "AND es.window_min = nq.window_min AND es.symbol = 'ES' "
+        "WHERE nq.symbol = 'NQ'"
+    )
+    with engine.begin() as conn:
+        if engine.dialect.name == "postgresql":
+            conn.execute(text("CREATE OR REPLACE " + view_sql))
+        else:
+            conn.execute(text("CREATE VIEW IF NOT EXISTS" + view_sql.removeprefix("VIEW")))

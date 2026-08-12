@@ -56,7 +56,7 @@ def test_backfill_writes_days_from_first_event(tmp_path: Path) -> None:
     # platit (decay), ale high > 0 určitě; DAY2 už jen dozvuk
     seed_scored_event(engine, 1, dt.datetime(2026, 7, 20, 13, 30, tzinfo=dt.UTC), 0.6)
 
-    stats = backfill_sentiment_daily(engine, end=DAY2, step_minutes=5)
+    stats = backfill_sentiment_daily(engine, end=DAY2, step_minutes=5, symbols=("ES",))
     assert stats.days_written == 2  # DAY1 + DAY2 (dozvuk)
     assert stats.days_skipped == 0
 
@@ -90,7 +90,7 @@ def test_backfill_never_overwrites_live_days(tmp_path: Path) -> None:
             ],
         )
 
-    stats = backfill_sentiment_daily(engine, end=DAY2, step_minutes=5)
+    stats = backfill_sentiment_daily(engine, end=DAY2, step_minutes=5, symbols=("ES",))
     assert stats.days_skipped == 1
     assert stats.days_written == 1  # jen DAY2
 
@@ -106,3 +106,21 @@ def test_backfill_without_events_is_noop(tmp_path: Path) -> None:
     engine = make_db(tmp_path)
     stats = backfill_sentiment_daily(engine)
     assert stats.days_written == 0
+
+
+def test_backfill_pise_radu_pro_kazdy_symbol(tmp_path: Path) -> None:
+    """ADR-0026: NQ řada vzniká vedle ES — z týchž eventů, s NQ vahami."""
+    engine = make_db(tmp_path)
+    seed_scored_event(engine, 1, dt.datetime(2026, 7, 20, 13, 30, tzinfo=dt.UTC), 0.6)
+
+    stats = backfill_sentiment_daily(engine, end=DAY2, step_minutes=5)
+    assert stats.days_written == 4  # 2 dny × 2 symboly
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(sentiment_daily)).fetchall()
+    assert {row.symbol for row in rows} == {"ES", "NQ"}
+    # Bez vah v news_weights jsou řady shodné (neutrální 1.0) — liší se až
+    # s per-symbol vahami; tady se ověřuje existence obou řad
+    es = sorted(float(r.close) for r in rows if r.symbol == "ES")
+    nq = sorted(float(r.close) for r in rows if r.symbol == "NQ")
+    assert es == nq

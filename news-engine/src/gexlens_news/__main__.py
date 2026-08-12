@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import contextlib
 import datetime as dt
+import functools
 import logging
 import signal
 import sys
@@ -159,14 +160,13 @@ async def run(settings: NewsSettings) -> None:
         logger.info("Reddit bez credentials — crowd zdroj se nespouští (není to porucha)")
     crowd = CrowdRunner(crowd_collectors, CrowdWriter(engine))
     review = ReviewJob(engine, symbol="ES")
-    waves = WavesJob(engine, symbol="ES")
+    symbols = tuple(s.strip().upper() for s in settings.signal_symbols.split(",") if s.strip())
+    # Vlny + stav per symbol (ADR-0026) — signály se generují proti stavu
+    # SVÉHO symbolu, ne proti globální ES instanci
+    waves_jobs = {symbol: WavesJob(engine, symbol=symbol) for symbol in symbols}
     # Signal engine (#294): always-on výpočet obou větví (S9)
-    signal_job = SignalJob(
-        engine,
-        settings.data_dir,
-        symbols=tuple(s.strip().upper() for s in settings.signal_symbols.split(",") if s.strip()),
-    )
-    sent_index = SentIndexJob(engine, settings.data_dir)
+    signal_job = SignalJob(engine, settings.data_dir, symbols=symbols)
+    sent_index = SentIndexJob(engine, settings.data_dir, symbols=symbols)
     predictions = PredictionJob(engine)
     publisher = (
         NewsPublisher(settings.api_base, api_token=settings.api_token)
@@ -222,42 +222,45 @@ async def run(settings: NewsSettings) -> None:
             # Predikce a jejich vyhodnocení musí být před indexem — váhy
             # z nich vstupují do skóre (SPEC 5.3)
             try:
-                await asyncio.to_thread(predictions.run, now)
+                await asyncio.to_thread(functools.partial(predictions.run, now, symbols=symbols))
             except Exception:
                 logger.exception("Vyhodnocení predikcí selhalo — zkusí se příští cyklus")
             # Index se přepočítává každý cyklus — je to živá hodnota pro panel
             try:
                 points, topics = await asyncio.to_thread(sent_index.run, now)
                 if publisher is not None and points:
-                    value = await asyncio.to_thread(sent_index.current_value, now)
-                    await publisher.publish_sentiment(
-                        "ES",
-                        value,
-                        [
-                            {"category": t.category, "value": t.value, "active": t.active}
-                            for t in topics
-                            if t.active
-                        ],
-                        now,
-                    )
+                    # Topics jde jednou (nejsou per symbol), hodnota per symbol
+                    topic_payload = [
+                        {"category": t.category, "value": t.value, "active": t.active}
+                        for t in topics
+                        if t.active
+                    ]
+                    for symbol in symbols:
+                        value = sent_index.last_values.get(symbol)
+                        if value is None:
+                            continue
+                        await publisher.publish_sentiment(symbol, value, topic_payload, now)
                     upcoming = await asyncio.to_thread(sent_index.upcoming_events, now)
                     await publisher.publish_upcoming(upcoming, now)
             except Exception:
                 logger.exception("Přepočet SentIndexu selhal — zkusí se příští cyklus")
             # Vlny + stav (#292) až PO indexu — čtou denní close, který index
-            # právě upsertnul; změna stavu jde do WS `sentiment.state`
-            try:
-                payload, changed = await asyncio.to_thread(waves.run, now)
-                if publisher is not None and changed:
-                    await publisher.publish("sentiment.state", payload)
-            except Exception:
-                logger.exception("Přepočet vln selhal — zkusí se příští cyklus")
-                payload = None
-            # Signal engine (#294) po vlnách — potřebuje potvrzený stav.
-            # Kanál `signals` běží vždy (S9); UI ho zobrazuje dle režimu.
-            if payload is not None:
+            # právě upsertnul; změna stavu jde do WS `sentiment.state`.
+            # Per symbol (ADR-0026): stavy se sbírají do mapy pro SignalJob.
+            states: dict[str, str] = {}
+            for symbol, waves in waves_jobs.items():
                 try:
-                    await asyncio.to_thread(signal_job.run, now, state=payload["state"])
+                    payload, changed = await asyncio.to_thread(waves.run, now)
+                    states[symbol] = str(payload["state"])
+                    if publisher is not None and changed:
+                        await publisher.publish("sentiment.state", payload)
+                except Exception:
+                    logger.exception("Přepočet vln %s selhal — zkusí se příští cyklus", symbol)
+            # Signal engine (#294) po vlnách — potřebuje potvrzené stavy.
+            # Kanál `signals` běží vždy (S9); UI ho zobrazuje dle režimu.
+            if states:
+                try:
+                    await asyncio.to_thread(signal_job.run, now, states=states)
                     if publisher is not None:
                         for created in signal_job.last_created:
                             await publisher.publish("signals", created)
@@ -405,14 +408,16 @@ def backfill_sentiment(settings: NewsSettings) -> int:
     """Denní svíčky SentIndexu z historických eventů (#375, CLI příkaz)."""
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     ensure_sentiment_schema(engine)
-    stats = backfill_sentiment_daily(engine)
-    # Vlny se přepočtou hned — ať CLI rovnou ukáže výsledný stav (#292)
-    payload, _changed = WavesJob(engine, symbol="ES").run(dt.datetime.now(dt.UTC))
+    symbols = tuple(s.strip().upper() for s in settings.signal_symbols.split(",") if s.strip())
+    stats = backfill_sentiment_daily(engine, symbols=symbols)
     print(f"Backfill sentiment_daily: {stats.describe()}")
-    print(
-        f"Stav: {payload['state']} (unconfirmed={payload['unconfirmed']}), "
-        f"close={payload['last_close']}, MA5={payload['ma5']}, MA10={payload['ma10']}"
-    )
+    # Vlny se přepočtou hned — ať CLI rovnou ukáže výsledný stav (#292)
+    for symbol in symbols:
+        payload, _changed = WavesJob(engine, symbol=symbol).run(dt.datetime.now(dt.UTC))
+        print(
+            f"Stav {symbol}: {payload['state']} (unconfirmed={payload['unconfirmed']}), "
+            f"close={payload['last_close']}, MA5={payload['ma5']}, MA10={payload['ma10']}"
+        )
     return 0
 
 

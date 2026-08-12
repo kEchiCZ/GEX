@@ -1,11 +1,19 @@
 /** Dashboard (SPEC 7.5): karty watchlistu s mini NetGEX profilem a stavem dat. */
 import { useEffect, useState } from 'react'
+import { fetchSentimentState } from '../api/news'
+import type { SentimentStateInfo } from '../api/news'
 import { API_BASE } from '../config'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { formatPcr } from '../instrument/sentiment'
 import type { PcrPoint } from '../instrument/sentiment'
 import { useAppState } from '../state/AppState'
 import type { ProfileRow } from '../profile/bars'
+
+const SENT_LABELS: Record<SentimentStateInfo['state'], string> = {
+  RiskOn: 'RISK ON',
+  RiskOff: 'RISK OFF',
+  Neutral: 'NEUTRAL',
+}
 
 interface WatchlistItem {
   id: number
@@ -100,6 +108,8 @@ export function Dashboard({
 }) {
   const { status, symbol: activeSymbol, regimeInfo } = useAppState()
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
+  // Sentiment stav per karta (#579, ADR-0026) — řada každého symbolu je vlastní
+  const [sentStates, setSentStates] = useState<Record<string, SentimentStateInfo>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -118,6 +128,21 @@ export function Dashboard({
   }, [])
 
   const symbols = watchlist.length > 0 ? watchlist.map((item) => item.symbol) : [activeSymbol]
+  const symbolsKey = symbols.join(',')
+
+  useEffect(() => {
+    let cancelled = false
+    for (const symbol of symbolsKey.split(',')) {
+      void fetchSentimentState(symbol).then((info) => {
+        if (!cancelled && info && typeof info.state === 'string') {
+          setSentStates((previous) => ({ ...previous, [symbol]: info }))
+        }
+      })
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [symbolsKey])
 
   return (
     <main className="dashboard" aria-label="Dashboard">
@@ -139,6 +164,16 @@ export function Dashboard({
                 title={REGIME_HINTS[regimeInfo.state]}
               >
                 {REGIME_LABELS[regimeInfo.state]}
+              </span>
+            )}
+            {sentStates[symbol] && (
+              // Sentiment stav per instrument (#579) — řady ES a NQ se liší
+              <span
+                className={`state-chip state-${sentStates[symbol].state.toLowerCase()} card-sentiment`}
+                data-testid="card-sentiment"
+                title={`Sentiment ${symbol}: stav ${SENT_LABELS[sentStates[symbol].state]} — poloha denního close řady symbolu vůči MA5/MA10 (SPEC 5.6)`}
+              >
+                {SENT_LABELS[sentStates[symbol].state]}
               </span>
             )}
             {isActive && (pcr.volume !== null || pcr.oi !== null) && (

@@ -179,12 +179,16 @@ class PredictionJob:
         ]
 
     def recompute_weights(self, now: dt.datetime, *, symbol: str = "ES") -> int:
-        """Přepočte váhy z klouzavého okna; tabulku nahradí celou."""
+        """Přepočte váhy symbolu z klouzavého okna; nahradí jen řádky symbolu.
+
+        Per symbol (ADR-0026): outcomes ES a NQ se nesmí míchat — kategorie
+        s dobrým track recordem na NQ by jinak nafoukla i váhu v ES indexu.
+        """
         weights = compute_weights(
             self.load_outcomes(now, symbol), primary_window_min=self._primary_window
         )
         with self._engine.begin() as conn:
-            conn.execute(delete(news_weights))
+            conn.execute(delete(news_weights).where(news_weights.c.symbol == symbol))
             if weights:
                 conn.execute(
                     insert(news_weights),
@@ -193,6 +197,7 @@ class PredictionJob:
                             "category": w.category,
                             "predictor": w.predictor,
                             "window_min": w.window_min,
+                            "symbol": symbol,
                             "n": w.n,
                             "hit_rate": w.hit_rate,
                             "hit_rate_lb": w.hit_rate_lb,
@@ -204,25 +209,34 @@ class PredictionJob:
                 )
         if weights:
             logger.info(
-                "Váhy: %d kategorií, nejlepší %s",
+                "Váhy %s: %d kategorií, nejlepší %s",
+                symbol,
                 len(weights),
                 max(weights, key=lambda w: w.weight).category,
             )
         return len(weights)
 
-    def run(self, now: dt.datetime) -> tuple[int, int, int]:
+    def run(
+        self, now: dt.datetime, *, symbols: tuple[str, ...] = ("ES", "NQ")
+    ) -> tuple[int, int, int]:
         created = self.create_predictions(now)
         evaluated = self.evaluate(now)
-        weights = self.recompute_weights(now)
+        weights = 0
+        for symbol in symbols:
+            weights += self.recompute_weights(now, symbol=symbol)
         return created, evaluated, weights
 
 
-def load_weight_map(engine: Engine) -> dict[str, float]:
-    """Váhy per kategorie pro škálování skóre (SPEC 5.3).
+def load_weight_map(engine: Engine, symbol: str = "ES") -> dict[str, float]:
+    """Váhy per kategorie pro škálování skóre (SPEC 5.3), per symbol (ADR-0026).
 
     Chybějící váha = neutrální 1.0. Do kalibrace se tedy skóre nezkresluje ani
     nenuluje — jen se nezpřesňuje.
     """
     with engine.connect() as conn:
-        rows = conn.execute(select(news_weights.c.category, news_weights.c.weight)).fetchall()
+        rows = conn.execute(
+            select(news_weights.c.category, news_weights.c.weight).where(
+                news_weights.c.symbol == symbol
+            )
+        ).fetchall()
     return {row.category: float(row.weight) for row in rows}

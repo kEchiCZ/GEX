@@ -134,7 +134,9 @@ class SignalJob:
         self._symbols = symbols
         self._primary_window = primary_window_min
         self._bars = BarsRepository(data_dir)
-        self._last_confirmed_state: str | None = None
+        # Potvrzený stav per symbol (ADR-0026) — expirace se řídí stavem
+        # SVÉHO symbolu, ne globálem
+        self._last_confirmed_state: dict[str, str] = {}
         # Nové signály posledního běhu — volající je pushne do WS `signals`
         self.last_created: list[dict[str, Any]] = []
         # Rozpad posledního běhu: důvod odpadnutí → počet (#453)
@@ -248,27 +250,26 @@ class SignalJob:
 
     # ── Lifecycle ──────────────────────────────────────────────────
 
-    def _expire_on_state_change(self, state: str, now: dt.datetime) -> None:
-        """Potvrzená změna stavu expiruje aktivní signály (SPEC 6.3)."""
-        if self._last_confirmed_state is None:
-            self._last_confirmed_state = state
-            return
-        if state == self._last_confirmed_state:
+    def _expire_on_state_change(self, symbol: str, state: str, now: dt.datetime) -> None:
+        """Potvrzená změna stavu symbolu expiruje JEHO aktivní signály (SPEC 6.3)."""
+        previous = self._last_confirmed_state.get(symbol)
+        self._last_confirmed_state[symbol] = state
+        if previous is None or state == previous:
             return
         with self._engine.begin() as conn:
             result = conn.execute(
                 update(signals)
-                .where(signals.c.symbol.in_(self._symbols), signals.c.expiry_ts > now)
+                .where(signals.c.symbol == symbol, signals.c.expiry_ts > now)
                 .values(expiry_ts=now)
             )
         if result.rowcount:
             logger.info(
-                "Změna stavu %s → %s: expirováno %d aktivních signálů",
-                self._last_confirmed_state,
+                "Změna stavu %s %s → %s: expirováno %d aktivních signálů",
+                symbol,
+                previous,
                 state,
                 result.rowcount,
             )
-        self._last_confirmed_state = state
 
     # ── Vyhodnocení (à la prediction outcomes) ─────────────────────
 
@@ -322,7 +323,7 @@ class SignalJob:
 
     # ── Hlavní běh ─────────────────────────────────────────────────
 
-    def _log_cycle(self, state: str, candidates: int, created: int) -> None:
+    def _log_cycle(self, states: dict[str, str], candidates: int, created: int) -> None:
         """Jeden řádek na cyklus: kolik kandidátů odpadlo a na kterém filtru.
 
         Bez tohohle rozpadu se prázdná `signals` nedá odlišit od poruchy (#453);
@@ -331,64 +332,75 @@ class SignalJob:
         if not candidates:
             return
         breakdown = ", ".join(f"{reason}={n}" for reason, n in sorted(self.last_rejects.items()))
+        state_label = ", ".join(f"{sym}={states.get(sym, '?')}" for sym in self._symbols)
         logger.info(
             "Signály: %d nových z %d kandidátů (stav %s); odpadlo: %s",
             created,
             candidates,
-            state,
+            state_label,
             breakdown or "nic",
         )
 
-    def run(self, now: dt.datetime, *, state: str) -> int:
-        """Jeden cyklus; vrací počet nových signálů (`last_created` pro WS)."""
+    def run(self, now: dt.datetime, *, states: dict[str, str]) -> int:
+        """Jeden cyklus; vrací počet nových signálů (`last_created` pro WS).
+
+        `states` mapuje symbol → potvrzený stav JEHO řady (ADR-0026). Symbol
+        bez stavu v mapě se přeskočí přes filtr stavu — NQ signál proti ES
+        režimu byla přesně vada, kterou #453 doložil.
+        """
         self.last_created = []
         self.last_rejects = Counter()
-        self._expire_on_state_change(state, now)
 
         created = 0
         events = self._candidate_events(now)
-        if state not in ("RiskOn", "RiskOff"):
-            # SPEC 6.3: mimo RiskOn/RiskOff se negeneruje — ale ať je vidět,
-            # kolik kandidátů na tomhle jediném filtru zůstalo viset
-            self.last_rejects[REJECT_STATE] += len(events) * len(self._symbols)
-        else:
-            seen = self._already_signalled(now) if events else set()
-            for symbol in self._symbols:
-                gex = load_gex_context(self._data_dir, symbol, now)
-                for event in events:
-                    stats = self._bucket_stats(event, symbol, state)
-                    candidates, reasons = explain_event(
-                        event, state=state, stats=stats, now=now, gex=gex
-                    )
-                    for reason in reasons:
-                        self.last_rejects[reason] += 1
-                    for candidate in candidates:
-                        if (event.event_id, candidate.mode) in seen:
-                            self.last_rejects[REJECT_DEDUP] += 1
-                            continue
-                        row = {
-                            "ts": now,
-                            "symbol": symbol,
-                            "direction": candidate.direction,
-                            "strength": candidate.strength,
-                            "mode": candidate.mode,
-                            "inputs": candidate.inputs,
-                            "expiry_ts": candidate.expiry_ts,
+        seen: set[tuple[int, str]] | None = None
+        for symbol in self._symbols:
+            state = states.get(symbol, "Neutral")
+            self._expire_on_state_change(symbol, state, now)
+            if state not in ("RiskOn", "RiskOff"):
+                # SPEC 6.3: mimo RiskOn/RiskOff se negeneruje — ale ať je
+                # vidět, kolik kandidátů na tomhle jediném filtru zůstalo
+                self.last_rejects[REJECT_STATE] += len(events)
+                continue
+            if seen is None:
+                seen = self._already_signalled(now) if events else set()
+            gex = load_gex_context(self._data_dir, symbol, now)
+            for event in events:
+                stats = self._bucket_stats(event, symbol, state)
+                candidates, reasons = explain_event(
+                    event, state=state, stats=stats, now=now, gex=gex
+                )
+                for reason in reasons:
+                    self.last_rejects[reason] += 1
+                for candidate in candidates:
+                    if (event.event_id, candidate.mode) in seen:
+                        self.last_rejects[REJECT_DEDUP] += 1
+                        continue
+                    row = {
+                        "ts": now,
+                        "symbol": symbol,
+                        "direction": candidate.direction,
+                        "strength": candidate.strength,
+                        "mode": candidate.mode,
+                        # `state_symbol` (ADR-0026): z čí řady stav pochází —
+                        # bez toho signál není zpětně vysvětlitelný (SPEC 6.3)
+                        "inputs": {**candidate.inputs, "state_symbol": symbol},
+                        "expiry_ts": candidate.expiry_ts,
+                    }
+                    with self._engine.begin() as conn:
+                        signal_id = conn.execute(
+                            insert(signals).values(**row).returning(signals.c.id)
+                        ).scalar()
+                    seen.add((event.event_id, candidate.mode))
+                    created += 1
+                    self.last_created.append(
+                        {
+                            **row,
+                            "id": signal_id,
+                            "ts": now.isoformat(),
+                            "expiry_ts": candidate.expiry_ts.isoformat(),
                         }
-                        with self._engine.begin() as conn:
-                            signal_id = conn.execute(
-                                insert(signals).values(**row).returning(signals.c.id)
-                            ).scalar()
-                        seen.add((event.event_id, candidate.mode))
-                        created += 1
-                        self.last_created.append(
-                            {
-                                **row,
-                                "id": signal_id,
-                                "ts": now.isoformat(),
-                                "expiry_ts": candidate.expiry_ts.isoformat(),
-                            }
-                        )
-        self._log_cycle(state, len(events) * len(self._symbols), created)
+                    )
+        self._log_cycle(states, len(events) * len(self._symbols), created)
         self._evaluate_outcomes(now)
         return created
