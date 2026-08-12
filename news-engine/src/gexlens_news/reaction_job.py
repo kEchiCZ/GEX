@@ -137,6 +137,10 @@ class ReactionJob:
             .where(
                 news_events.c.ts_event <= ready_before,
                 not_(news_events.c.id.in_(measured)),
+                # #655: trvale nespočitatelné eventy (před pokrytím barů) se
+                # nevybírají — bez filtru se týchž ~4 800 mrtvých eventů
+                # přescanovávalo každý cyklus donekonečna
+                news_events.c.daily_uncomputable.is_not(True),
             )
             .order_by(news_events.c.ts_event.desc())
             .limit(limit)
@@ -212,6 +216,10 @@ class ReactionJob:
             .where(
                 news_events.c.ts_event <= ready_before,
                 not_(news_events.c.id.in_(measured)),
+                # #655: trvale nespočitatelné eventy (před pokrytím barů) se
+                # nevybírají — bez filtru se týchž ~4 800 mrtvých eventů
+                # přescanovávalo každý cyklus donekonečna
+                news_events.c.daily_uncomputable.is_not(True),
             )
             .order_by(news_events.c.ts_event.desc())
             .limit(limit)
@@ -236,6 +244,7 @@ class ReactionJob:
         series = {symbol: self._daily_sessions(symbol) for symbol in self._symbols}
         written = 0
         measured_events = 0
+        uncomputable: list[int] = []
         for event_id, ts_event in pending:
             rows: list[dict[str, object]] = []
             wait_for_close = False
@@ -278,12 +287,30 @@ class ReactionJob:
                             "computed_at": now,
                         }
                     )
-            if wait_for_close or not rows:
+            if wait_for_close:
+                continue  # dočasné — nejdelší okno se uzavře v příštích dnech
+            if not rows:
+                # Žádný symbol nemá základní cenu → bary pro tohle období
+                # neexistují a existovat nebudou (archiv sahá 2 roky zpět,
+                # IBKR limit). Tombstone (#655): event se přestane vybírat.
+                uncomputable.append(event_id)
                 continue
             with self._engine.begin() as conn:
                 conn.execute(insert(news_reactions), rows)
             written += len(rows)
             measured_events += 1
+        if uncomputable:
+            with self._engine.begin() as conn:
+                conn.execute(
+                    update(news_events)
+                    .where(news_events.c.id.in_(uncomputable))
+                    .values(daily_uncomputable=True)
+                )
+            logger.info(
+                "Denní okna (#655): %d eventů před pokrytím barů označeno jako "
+                "trvale nespočitatelné",
+                len(uncomputable),
+            )
         if written:
             logger.info(
                 "Denní okna (#564): zapsáno %d oken pro %d eventů", written, measured_events

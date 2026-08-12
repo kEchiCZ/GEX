@@ -110,6 +110,10 @@ news_events = Table(
     Column("sentiment_source", String(8), nullable=True),
     # Trhy zavřené v čase události → reakce se měří deferred (SPEC 5.1)
     Column("market_closed", Boolean, nullable=False, default=False),
+    # Denní okna nikdy nepůjdou spočítat — event předchází pokrytí barů (#655).
+    # NULL = nerozhodnuto; nastavuje výhradně ReactionJob, pending dotaz
+    # označené eventy vynechává (jinak se přescanovávaly donekonečna).
+    Column("daily_uncomputable", Boolean, nullable=True),
     Column("dedup_hash", String(64), nullable=False, unique=True),
     Column("raw", JSON, nullable=False, default=dict),
     Index("ix_news_events_ts", "ts_event"),
@@ -367,6 +371,12 @@ def ensure_sentiment_schema(engine: Engine) -> None:
         if "symbol" not in columns:
             with engine.begin() as conn:
                 conn.execute(text("DROP TABLE news_weights"))
+    # `news_events` jsou naměřená data — jen aditivní ADD COLUMN (#655).
+    if "news_events" in existing:
+        columns = {column["name"] for column in inspector.get_columns("news_events")}
+        if "daily_uncomputable" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE news_events ADD COLUMN daily_uncomputable BOOLEAN"))
     # `news_reactions` jsou naměřená data — jen aditivní ADD COLUMN.
     if "news_reactions" in existing:
         columns = {column["name"] for column in inspector.get_columns("news_reactions")}
