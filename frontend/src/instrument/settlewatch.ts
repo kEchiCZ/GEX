@@ -50,5 +50,8 @@ Znaménko = spot − úroveň (kladné: cena nad úrovní), takže „nad 7800 �
 export function formatSettleWatch(watch: SettleWatchInfo): string {
   const side = watch.distance < 0 ? 'nad' : 'pod'
   const signed = `${watch.distance >= 0 ? '+' : '−'}${Math.abs(watch.distance).toFixed(1)}`
-  return `${side} ${watch.level} ${signed} b`
+  // GEX levels jsou interpolované floaty (#653) — bez zaokrouhlení by v hlavičce
+  // stálo „nad 7628.166920999555"; Number() shodí koncovou nulu u celých strajků
+  const level = Number(watch.level.toFixed(1))
+  return `${side} ${level} ${signed} b`
 }
