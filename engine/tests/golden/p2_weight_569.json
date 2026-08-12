@@ -1,0 +1,10 @@
+{
+  "description": "Paritní fixture #569: váha jednotky $/1 % = per_point × P²/100 s CENOU HLADINY (ne spotem). Stejná čísla musí dát engine (price_weight_per_percent, test_p2_weight_569.py) i frontend (priceWeight, heatmap/units.test.ts). Hodnoty zvolené tak, aby byly exaktní v float64.",
+  "contract": { "gamma": 0.0021, "oi": 1500, "multiplier": 50 },
+  "per_point": 157.5,
+  "levels": [
+    { "price": 6000.0, "per_percent": 56700000.0 },
+    { "price": 6800.0, "per_percent": 72828000.0 },
+    { "price": 7600.0, "per_percent": 90972000.0 }
+  ]
+}

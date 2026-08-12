@@ -44,6 +44,18 @@ class GexProfile:
     values: tuple[float, ...]  # NetGEX $/bod na mřížce grid_start + i·grid_step
 
 
+def price_weight_per_percent(price: float) -> float:
+    """Váha jednotky $/1 % (#569): P²/100, kde P je cena hladiny mřížky, ne spot.
+
+    Engine pole počítá a ukládá výhradně v $/bod (Γ·OI·M) — tahle váha se
+    aplikuje až při čtení/odvozeninách (band_regime #575, aby pásmo sedělo
+    na kontury frontendu). Musí zůstat identická s frontendovou `priceWeight`
+    (frontend/src/heatmap/units.ts); paritu obou implementací fixuje golden
+    fixture tests/golden/p2_weight_569.json.
+    """
+    return price * price / 100.0
+
+
 def bs_gamma(spot: float, strike: float, iv: float, tau_years: float) -> float:
     """Black-Scholes gamma (r = 0, q = 0) — sdílená pro obě strany opce."""
     if spot <= 0.0 or strike <= 0.0 or iv <= 0.0 or tau_years <= 0.0:

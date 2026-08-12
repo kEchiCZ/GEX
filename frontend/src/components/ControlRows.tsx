@@ -1,4 +1,6 @@
 /** Řádky timeframe a přepínačů vizualizace (SPEC 7.1). */
+import { GEX_UNITS, GEX_UNIT_LABELS } from '../heatmap/units'
+import type { GexUnits } from '../heatmap/units'
 import { INTERVALS, useAppState } from '../state/AppState'
 import type { NewsMarkerFilter, OiSource, SignalMode, Toggles, UnderlayPlane } from '../state/AppState' // prettier-ignore
 import type { SignalGateInfo } from '../api/news'
@@ -88,6 +90,8 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
     setUnderlayPlane,
     newsMarkerFilter,
     setNewsMarkerFilter,
+    gexUnits,
+    setGexUnits,
     oiSource,
     setOiSource,
   } = useAppState()
@@ -112,6 +116,24 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
           ))}
         </select>
       </label>
+      {/* Jednotka Dyn ploch (#569) — jen zobrazovací přepočet, engine posílá $/bod */}
+      {underlayPlane !== 'off' && (
+        <label className="toggle">
+          Jednotka
+          <select
+            value={gexUnits}
+            onChange={(event) => setGexUnits(event.target.value as GexUnits)}
+            aria-label="Jednotka Dyn plochy"
+            title="$/1 % (výchozí) = Γ·OI·M·P²/100 s cenou hladiny — kolik dolarů podkladu dealeři přeobchodují při pohybu o 1 %; vyšší hladiny mají přirozeně větší váhu. $/bod = surové pole bez váhy (jednotka enginu). Týká se Dyn ploch a GEX křivky profilu; zdi, levels, flip a setupy se nemění."
+          >
+            {GEX_UNITS.map((value) => (
+              <option key={value} value={value}>
+                {GEX_UNIT_LABELS[value]}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {/* Zdroj OI (#232): default měřené; FA odhad je opt-in a chip má
           tečkovaný okraj — uživatel musí vždy poznat, že kouká na odhad */}
       <label className="toggle">

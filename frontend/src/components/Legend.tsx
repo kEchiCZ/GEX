@@ -206,13 +206,22 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         how: 'Je to model, ne měření: intradenní tok je klasifikovaný odhad a α hrubý kalibrační faktor (engine ho každé ráno ladí proti skutečnému ΔOI — badge „FA α" ve stavové liště). Vol, Δ Flow, Cum Δ i OI Δ složka pravého profilu zůstávají VŽDY měřené. Default je Měřené; volba se pamatuje per symbol.',
       },
       {
+        name: 'Dyn GEX plocha',
+        swatch: { kind: 'diverging' },
+        where: 'Podkladová vrstva pod heatmapou; dropdown „Dyn plocha“ → Dyn GEX.',
+        what: 'Modelovaný NetGEX přes cenové pásmo a čas (ADR-0009): zelená = dealeři pohyb tlumí, červená = zesilují. Není to směr, je to reakce trhu na pohyb. Jednotka dle přepínače „Jednotka“ (#569): $/1 % (výchozí) váží každou hladinu P²/100 — kolik dolarů podkladu dealeři přeobchodují při pohybu o 1 %, vyšší cenové hladiny mají přirozeně větší váhu; $/bod je surové pole bez váhy.',
+        up: 'Silné zelené pásmo nad cenou → strop z tření; pohyb vzhůru se do něj bude zpomalovat.',
+        down: 'Cena v červené zóně → pohyby se zesilují oběma směry, propady zrychlují.',
+        how: 'Přepnutí jednotky mění tvar plochy a bílé čárkované Walls (Peak/Ridge) nad ní — zdi, levels, flip, Max Pain a setupy z enginu se nemění nikdy.',
+      },
+      {
         name: 'Dyn Charm plocha',
         swatch: { kind: 'diverging', pos: 'rgb(235,170,40)', neg: 'rgb(70,130,240)' },
         where: 'Podkladová vrstva pod heatmapou; dropdown „Dyn plocha“ → Dyn Charm.',
         what: 'Modelovaná změna dealer delta-hedge jen plynutím času (dDelta/dČas za den). Jantarová = kladný charm, modrá = záporný. Kvantifikuje EOD toky: OTM delty ke konci dne „vyhnívají“ a dealeři musí hedge dorovnávat i bez pohybu ceny.',
         up: 'Velká charm koncentrace POD spotem → do close předvídatelný tok nákupů (proslulé „charm flows“ poslední hodinu).',
         down: 'Koncentrace NAD spotem → tok prodejů do close. Nejsilnější v expirační dny.',
-        how: 'Model z uložené IV a OI (stejný dealer model jako Dyn GEX) — čti jako mapu toků od času, ne jako signál.',
+        how: 'Model z uložené IV a OI (stejný dealer model jako Dyn GEX) — čti jako mapu toků od času, ne jako signál. Jednotka sdílí přepínač s Dyn GEX (#569) — význam barvy se přepnutím plochy nemění.',
       },
       {
         name: 'Dyn Vanna plocha',
@@ -221,7 +230,7 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         what: 'Modelovaná změna dealer delta-hedge se změnou implikované volatility (dDelta/dVol za 1 % IV). Teal = kladná vanna, fialová = záporná. Ukazuje, na kterých úrovních je trh nejcitlivější na pohyb IV.',
         up: 'Po události IV klesá → na úrovních s velkou vannou dealeři dorovnávají hedge nákupy (klasický „vanna rally“ pátek po opexu).',
         down: 'Skok IV nahoru (šok) obrací tytéž toky do prodejů.',
-        how: 'Spolu s Dyn GEX a Charm tři síly expiračních dnů: GEX = brzdy/plyn od spotu, charm = toky od času, vanna = toky od volatility.',
+        how: 'Spolu s Dyn GEX a Charm tři síly expiračních dnů: GEX = brzdy/plyn od spotu, charm = toky od času, vanna = toky od volatility. Jednotka sdílí přepínač s Dyn GEX (#569).',
       },
       {
         name: 'Stará data',
@@ -372,7 +381,7 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         swatch: { kind: 'gex' },
         where:
           'POZOR — není v hlavním grafu. Je to křivka v pravém profilu, zapíná se chipem „GEX“ v jeho hlavičce.',
-        what: 'Modelovaný NetGEX přes cenové pásmo. Zelená vyčnívá doprava = kladná gamma, dealeři tlumí. Červená doleva = záporná gamma, dealeři zesilují. Žlutá značka je průchod nulou, tedy dynamický gamma flip.',
+        what: 'Modelovaný NetGEX přes cenové pásmo. Zelená vyčnívá doprava = kladná gamma, dealeři tlumí. Červená doleva = záporná gamma, dealeři zesilují. Žlutá značka je průchod nulou, tedy dynamický gamma flip. Jednotka dle přepínače u Dyn plochy (#569): $/1 % (výchozí, váha P²/100 per hladina) nebo $/bod.',
         up: 'Cena v zeleném pásmu → pohyby se tlumí, čekej menší rozsah a návraty k průměru; růst bude pozvolný.',
         down: 'Cena v červeném pásmu → pohyby se zesilují, propady zrychlují a nevykupují se.',
         how: 'Není to Max Pain a nemá s ním nic společného. Max Pain je jedno číslo a v hlavním grafu je to plná vodorovná čára; GEX křivka je průběh přes celé cenové pásmo v pravém profilu.',

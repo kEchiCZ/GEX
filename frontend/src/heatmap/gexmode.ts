@@ -13,6 +13,8 @@ import type { HeatmapGrid } from './grid'
 import { copysignTransform, p99Denominator } from './modes'
 import type { HeatmapScale } from './modes'
 import { projectGrid } from './projection'
+import { priceWeight } from './units'
+import type { GexUnits } from './units'
 
 /** Lineární interpolace hodnoty na ceně `price`; mimo mřížku hodnota kraje.
 
@@ -34,11 +36,15 @@ function sampleAt(
   return values[offset + low] * (1 - frac) + values[offset + low + 1] * frac
 }
 
-/** Naměřená část: forward-fill profilů per minuta, vzorky na cenách strikes. */
+/** Naměřená část: forward-fill profilů per minuta, vzorky na cenách strikes.
+
+Váha jednotky (#569) se násobí až PO interpolaci — na striku je cena P přesně
+známá; interpolovat zvážené hodnoty by dalo jiné (špatné) číslo. */
 function measuredLayer(
   profiles: (GexProfileRow | null)[],
   strikes: number[],
   minutes: number,
+  units: GexUnits,
 ): Float32Array {
   const layer = new Float32Array(minutes * strikes.length)
   let last: GexProfileRow | null = null
@@ -47,14 +53,15 @@ function measuredLayer(
     if (row) last = row
     if (!last) continue
     for (let strikeIdx = 0; strikeIdx < strikes.length; strikeIdx += 1) {
-      layer[strikeIdx * minutes + minuteIdx] = sampleAt(
-        last.values,
-        0,
-        last.values.length,
-        last.gridStart,
-        last.gridStep,
-        strikes[strikeIdx],
-      )
+      layer[strikeIdx * minutes + minuteIdx] =
+        sampleAt(
+          last.values,
+          0,
+          last.values.length,
+          last.gridStart,
+          last.gridStep,
+          strikes[strikeIdx],
+        ) * priceWeight(strikes[strikeIdx], units)
     }
   }
   return layer
@@ -68,24 +75,32 @@ function transformInPlace(layer: Float32Array, scale: HeatmapScale): Float32Arra
   return layer
 }
 
-/** Jmenovatel normalizace dyn módu — p99 naměřené části (sdílí ho i projekce). */
+/** Jmenovatel normalizace dyn módu — p99 naměřené části (sdílí ho i projekce).
+
+`units` (#569) default `per_point` = uložená jednotka enginu (bez váhy). */
 export function gexDenominator(
   profiles: (GexProfileRow | null)[],
   strikes: number[],
   scale: HeatmapScale,
+  units: GexUnits = 'per_point',
 ): number {
-  const layer = transformInPlace(measuredLayer(profiles, strikes, profiles.length), scale)
+  const layer = transformInPlace(measuredLayer(profiles, strikes, profiles.length, units), scale)
   return Math.max(p99Denominator(layer), 1e-9)
 }
 
-/** Sestaví naměřenou část dyn módu (signed vrstva −1..1) — čistá funkce. */
+/** Sestaví naměřenou část dyn módu (signed vrstva −1..1) — čistá funkce.
+
+`units` (#569): váha P²/100 se aplikuje před transformací škály i p99, takže
+barvy, kontury i computedWalls čtou konzistentně zvážené pole; `per_point`
+(default) je bitově shodný s chováním před #569. */
 export function buildGexGrid(
   profiles: (GexProfileRow | null)[],
   strikes: number[],
   minutes: number,
   scale: HeatmapScale,
+  units: GexUnits = 'per_point',
 ): HeatmapGrid {
-  const layer = transformInPlace(measuredLayer(profiles, strikes, minutes), scale)
+  const layer = transformInPlace(measuredLayer(profiles, strikes, minutes, units), scale)
   const denominator = Math.max(p99Denominator(layer), 1e-9)
   for (let index = 0; index < layer.length; index += 1) {
     const value = layer[index] / denominator
@@ -108,6 +123,8 @@ export function projectGexField(
     lastMinuteIso: string | null
     bucketMinutes: number
     scale: HeatmapScale
+    /** Jednotka zobrazení (#569); default per_point = uložená jednotka enginu. */
+    units?: GexUnits
   },
 ): HeatmapGrid {
   const dataMinutes = dataMinutesOf(grid)
@@ -126,7 +143,8 @@ export function projectGexField(
     return projectGrid(grid, extra)
   }
 
-  const denominator = gexDenominator(opts.profiles, grid.strikes, opts.scale)
+  const units = opts.units ?? 'per_point'
+  const denominator = gexDenominator(opts.profiles, grid.strikes, opts.scale, units)
   const strikeCount = grid.strikes.length
   const total = dataMinutes + extra
   const signed = grid.layers.signed ?? new Float32Array(grid.minutes * strikeCount)
@@ -148,14 +166,16 @@ export function projectGexField(
     )
     const offset = colIdx * gridLen
     for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
-      const raw = sampleAt(
-        fieldRow.values,
-        offset,
-        gridLen,
-        fieldRow.gridStart,
-        fieldRow.gridStep,
-        grid.strikes[strikeIdx],
-      )
+      // Váha jednotky (#569) až po interpolaci — P je cena striku, ne uzlu pole
+      const raw =
+        sampleAt(
+          fieldRow.values,
+          offset,
+          gridLen,
+          fieldRow.gridStart,
+          fieldRow.gridStep,
+          grid.strikes[strikeIdx],
+        ) * priceWeight(grid.strikes[strikeIdx], units)
       const value = copysignTransform(raw, opts.scale) / denominator
       result[strikeIdx * total + dataMinutes + k] = value < -1 ? -1 : value > 1 ? 1 : value
     }
