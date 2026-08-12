@@ -289,3 +289,44 @@ def test_job_ceka_na_uzavreni_nejdelsiho_denniho_okna(tmp_path: Path) -> None:
             )
         ).fetchall()
     assert len(minute_count) > 0
+
+
+def test_event_pred_pokrytim_baru_dostane_tombstone(tmp_path: Path) -> None:
+    """#655: event bez barů (před archivem) se označí a přestane vybírat."""
+    engine, job = make_daily_env(tmp_path)
+    # Event rok před prvním barem — základní cena neexistuje a existovat nebude
+    prehistoricky = add_event(
+        engine, EVENT_TS - dt.timedelta(days=365), importance=2, title="Starý CPI"
+    )
+    now = EVENT_TS + dt.timedelta(days=20)
+    job.run(now)
+
+    assert daily_rows(engine, prehistoricky) == []
+    with engine.connect() as conn:
+        event = conn.execute(
+            select(news_events).where(news_events.c.id == prehistoricky)
+        ).fetchone()
+    assert event is not None
+    assert event.daily_uncomputable is True
+    # Pending dotaz ho už nevybírá — další běh ho nezpracovává znovu
+    assert job._pending_daily_events(now, limit=200) == []
+
+
+def test_cekajici_event_tombstone_nedostane(tmp_path: Path) -> None:
+    """Dočasné wait_for_close (neuzavřené okno) se NESMÍ zaměnit s trvalým."""
+    engine, job = make_daily_env(tmp_path)
+    event_id = add_event(engine, EVENT_TS, importance=2, title="CPI")
+    # Event už je přes práh 16 dní, ale bary končí DAY+3 → 2d okno nejde
+    # uzavřít (chybí settle) — to je dočasný stav, ne tombstone
+    now = EVENT_TS + dt.timedelta(days=20)
+    job._daily_window_days = [1, 30]  # 30d okno se z 4 dnů barů neuzavře
+    job.run(now)
+
+    with engine.connect() as conn:
+        event = conn.execute(select(news_events).where(news_events.c.id == event_id)).fetchone()
+    assert event is not None
+    assert event.daily_uncomputable is not True
+    # a zůstává v pending — příští běh to zkusí znovu
+    assert (event_id, EVENT_TS) in [
+        (eid, ts) for eid, ts in job._pending_daily_events(now, limit=200)
+    ]
