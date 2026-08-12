@@ -117,8 +117,8 @@ test('nastavení se uloží tlačítkem (PUT, bez restartu) a téma se aplikuje 
   })
 })
 
-test('konzole loguje události ze status kanálu a reconnect zapisuje požadavek', async () => {
-  const fetchMock = mockApi()
+test('konzole loguje události ze status kanálu, bez tlačítka Reconnect', async () => {
+  mockApi()
   renderApp()
   const ws = FakeWebSocket.latest()
   act(() => {
@@ -130,15 +130,9 @@ test('konzole loguje události ze status kanálu a reconnect zapisuje požadavek
   const log = screen.getByLabelText('Log API událostí')
   expect(log.textContent).toContain('status: engine=online')
 
-  fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
-  await waitFor(() => {
-    expect(
-      fetchMock.mock.calls.some(
-        ([url, init]) =>
-          init?.method === 'PUT' && String(url).endsWith('/settings/reconnect_requested'),
-      ),
-    ).toBe(true)
-  })
+  // Tlačítko Reconnect odstraněno (#554) — mrtvý klíč nikdo nečetl (#446 řeší
+  // skutečné přepojení uložením IBKR nastavení)
+  expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull()
 })
 
 test('sidebar obsahuje odkaz na uživatelský manuál (wiki)', () => {

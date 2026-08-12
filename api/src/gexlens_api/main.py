@@ -183,14 +183,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Interní ingest z enginu. Chráněno sdíleným tajemstvím (#542 C5) — kdokoli
     # s přístupem na port by jinak podvrhl UI libovolné ceny, úrovně i alerty.
+    # `async def` je nutné (#554 L6): sync def by FastAPI pustil ve worker
+    # threadu a `LiveHub.publish` sahá na asyncio.Queue, která thread-safe není.
     @app.post("/internal/status", dependencies=[Depends(require_token)])
-    def internal_status(fields: dict[str, object]) -> dict[str, str]:
+    async def internal_status(fields: dict[str, object]) -> dict[str, str]:
         status_store.update(**fields)
         live_hub.publish("status", status_store.snapshot())
         return {"status": "ok"}
 
     @app.post("/internal/publish", dependencies=[Depends(require_token)])
-    def internal_publish(message: dict[str, object]) -> dict[str, int]:
+    async def internal_publish(message: dict[str, object]) -> dict[str, int]:
         channel = message.get("channel")
         data = message.get("data")
         if not isinstance(channel, str) or not isinstance(data, dict):

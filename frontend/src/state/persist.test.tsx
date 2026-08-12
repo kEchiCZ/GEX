@@ -46,11 +46,16 @@ test('enumMap: mapa per klíč pouští jen povolené hodnoty (#232 zdroj OI)', 
   expect(revive(null, {})).toEqual({})
 })
 
-test('shortString: neprázdný krátký řetězec, jinak fallback', () => {
-  const revive = shortString(4)
+test('shortString: jen tvar symbolu, jinak fallback (#554 L5)', () => {
+  const revive = shortString()
   expect(revive('NQ', 'ES')).toBe('NQ')
+  expect(revive('MES.CME', 'ES')).toBe('MES.CME')
   expect(revive('', 'ES')).toBe('ES')
-  expect(revive('PŘÍLIŠDLOUHÉ', 'ES')).toBe('ES')
+  expect(revive('PŘÍLIŠDLOUHÉHODNOTA', 'ES')).toBe('ES')
+  // cestové znaky nesmí projít — hodnota se skládá do API cest
+  expect(revive('../settings', 'ES')).toBe('ES')
+  expect(revive('ES?x=1', 'ES')).toBe('ES')
+  expect(revive('es', 'ES')).toBe('ES')
 })
 
 // ── Hook ───────────────────────────────────────────────────────────
