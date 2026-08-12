@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
@@ -222,3 +223,69 @@ def test_vikendova_zprava_dostane_deferred_reakci(tmp_path: Path) -> None:
     assert all(row.deferred for row in rows)
     assert event is not None
     assert event.market_closed is True
+
+
+# ── Denní okna (#564) ──────────────────────────────────────────────
+
+
+def make_daily_env(tmp_path: Path) -> tuple[Engine, ReactionJob]:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    for offset in range(4):  # DAY..DAY+3 — dost na okna 1d a 2d
+        write_bars(tmp_path / "data", "ES", DAY + dt.timedelta(days=offset), drift_bp=20.0)
+        write_bars(tmp_path / "data", "NQ", DAY + dt.timedelta(days=offset))
+    job = ReactionJob(engine, BarsRepository(tmp_path / "data"), daily_window_days=(1, 2))
+    return engine, job
+
+
+def daily_rows(engine: Engine, event_id: int) -> list[tuple[str, int, float]]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(
+                news_reactions.c.symbol,
+                news_reactions.c.window_min,
+                news_reactions.c.ret_bp,
+            ).where(
+                news_reactions.c.event_id == event_id,
+                news_reactions.c.window_min >= 1440,
+            )
+        ).fetchall()
+    return sorted((str(r.symbol), int(r.window_min), float(r.ret_bp)) for r in rows)
+
+
+def test_job_dopocita_denni_okna_a_je_idempotentni(tmp_path: Path) -> None:
+    engine, job = make_daily_env(tmp_path)
+    event_id = add_event(engine, EVENT_TS, importance=2, title="CPI")
+    now = EVENT_TS + dt.timedelta(days=20)  # nejdelší okno dávno uzavřené
+    job.run(now)
+
+    rows = daily_rows(engine, event_id)
+    assert [(symbol, window) for symbol, window, _ in rows] == [
+        ("ES", 1440),
+        ("ES", 2880),
+        ("NQ", 1440),
+        ("NQ", 2880),
+    ]
+    # ES drift +20 bp od eventu → settle close 1d i 2d o 20 bp nad základnou
+    es_1d = next(ret for symbol, window, ret in rows if symbol == "ES" and window == 1440)
+    assert es_1d == pytest.approx(20.0, abs=0.1)
+    # Idempotence: druhý běh nic nepřidá
+    assert job.run(now + dt.timedelta(minutes=1)) == 0
+    assert daily_rows(engine, event_id) == rows
+
+
+def test_job_ceka_na_uzavreni_nejdelsiho_denniho_okna(tmp_path: Path) -> None:
+    engine, job = make_daily_env(tmp_path)
+    event_id = add_event(engine, EVENT_TS, importance=2, title="Fed speech")
+    # Event mladší než DAILY_READY_CALENDAR_DAYS → denní fáze ho nebere,
+    # minutová okna se ale dopočítají normálně
+    job.run(EVENT_TS + dt.timedelta(days=2))
+    assert daily_rows(engine, event_id) == []
+    with engine.connect() as conn:
+        minute_count = conn.execute(
+            select(news_reactions.c.event_id).where(
+                news_reactions.c.event_id == event_id,
+                news_reactions.c.window_min < 1440,
+            )
+        ).fetchall()
+    assert len(minute_count) > 0
