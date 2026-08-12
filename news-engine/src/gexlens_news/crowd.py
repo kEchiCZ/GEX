@@ -31,7 +31,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import crowd_sentiment
-from gexlens_news.http import BROWSER_UA
+from gexlens_news.http import BROWSER_UA, sanitize_raw
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,8 @@ class CrowdWriter:
                         metric=point.metric,
                         symbol=point.symbol,
                         value=point.value,
-                        raw=point.raw,
+                        # S10 (#553): sanitizace na zápisu, stejně jako NewsWriter
+                        raw=sanitize_raw(point.raw),
                     )
                     .on_conflict_do_nothing(
                         index_elements=[

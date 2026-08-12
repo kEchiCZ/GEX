@@ -20,7 +20,8 @@ class RawItem:
     """Nezpracovaný záznam ze zdroje — payload se ukládá do `news_events.raw`.
 
     Collector si do `payload` dá, co potřebuje pro `normalize`; engine do něj
-    nezasahuje kromě sanitizace tokenů (S10).
+    nezasahuje. Sanitizace tokenů (S10, #553) probíhá až na zápisu do DB —
+    `sanitize_raw` v NewsWriter.write a v crowd insert cestě.
     """
 
     source: str

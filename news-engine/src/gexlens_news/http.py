@@ -9,7 +9,7 @@ Bez toho by latenční požadavek „headline → DB < 60 s" (kap. 10) nešlo sp
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 
@@ -28,14 +28,39 @@ DEFAULT_TIMEOUT_S = 20.0
 # v `CollectorHealth.last_error` a odtud v UI.
 _SECRET_PARAM = re.compile(r"((?:token|api[_-]?key|apikey|key|secret)=)[^&\s\"']+", re.I)
 
+# S10 (#553): token může být i segment cesty (`/feed/<token>.xml`). Maskuje se
+# dlouhý segment bez pomlček a teček ([A-Za-z0-9_]{20,}) — slugy článků tečky
+# a pomlčky mají, tokeny ne. Lookbehind vylučuje `//` (host) a `:/` (schéma),
+# aplikuje se jen na texty s `://`, aby se nemrzačil běžný text.
+_SECRET_PATH_SEGMENT = re.compile(r"(?<![:/])/[A-Za-z0-9_]{20,}(?=[./?#&\s\"']|$)")
+
 
 def strip_secrets(text: str) -> str:
-    """Nahradí hodnoty citlivých query parametrů hvězdičkami.
+    """Nahradí hodnoty citlivých query parametrů (a tokeny v URL cestě) hvězdičkami.
 
     Náhrada je lambdou, ne backreferencí: escapování v replacement stringu se
     snadno rozbije a tichá chyba by znamenala, že klíč projde do logu.
     """
-    return _SECRET_PARAM.sub(lambda match: f"{match.group(1)}***", text)
+    cleaned = _SECRET_PARAM.sub(lambda match: f"{match.group(1)}***", text)
+    if "://" in cleaned:
+        cleaned = _SECRET_PATH_SEGMENT.sub("/***", cleaned)
+    return cleaned
+
+
+def sanitize_raw(value: Any) -> Any:
+    """Rekurzivní sanitizace `raw` payloadu před zápisem do DB (S10, #553).
+
+    Prochází dict/list/str; každý string projde `strip_secrets`. Vrací novou
+    strukturu, vstup nemění. Ostatní typy prochází beze změny — jediný nosič
+    tajemství je text (URL v položkách feedů).
+    """
+    if isinstance(value, str):
+        return strip_secrets(value)
+    if isinstance(value, dict):
+        return {key: sanitize_raw(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [sanitize_raw(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
