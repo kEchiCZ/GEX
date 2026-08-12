@@ -2,14 +2,37 @@
 
 Repository jen čte, co engine zapsal (snapshots/derived Parquet) — API server
 nemá vlastní stav ani zápis.
+
+Obchodní den = Globex seance (ADR-0023 bod 3, #512): osa dne D je
+[17:00 America/Chicago dne D−1, 17:00 CT dne D). Úložiště zůstává klíčované
+UTC kalendářním dnem; sešití probíhá tady ve čtecí vrstvě — `session_frame`
+spojí partici D s večerem partice D−1 a ořízne na okno seance. Polouzavřený
+interval zaručuje, že každá minuta patří právě jedné seanci (žádné dvojí
+započtení na hranici z konstrukce).
 """
 
 import datetime as dt
+from collections.abc import Callable
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from gexlens_engine.compute.settle import session_time_utc
 from gexlens_engine.config import Settings
+
+_CHICAGO_TZ = ZoneInfo("America/Chicago")
+# Otevření Globex — hranice obchodního dne (ADR-0023); DST řeší session_time_utc
+GLOBEX_OPEN_LOCAL = dt.time(17, 0)
+
+
+def session_bounds(day: dt.date) -> tuple[dt.datetime, dt.datetime]:
+    """UTC hranice seance obchodního dne `day`: [open D−1, open D)."""
+
+    def open_of(d: dt.date) -> dt.datetime:
+        return session_time_utc(d, GLOBEX_OPEN_LOCAL.hour, GLOBEX_OPEN_LOCAL.minute, _CHICAGO_TZ)
+
+    return open_of(day - dt.timedelta(days=1)), open_of(day)
 
 
 class PartitionNotFoundError(FileNotFoundError):
@@ -152,6 +175,33 @@ class DataRepository:
     def bars(self, symbol: str, day: dt.date) -> pd.DataFrame:
         path = self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
         return self._read(path)
+
+    def session_frame(
+        self,
+        read: Callable[[dt.date], pd.DataFrame],
+        day: dt.date,
+        *,
+        ts_col: str = "ts_min",
+    ) -> pd.DataFrame:
+        """Sešije osu obchodního dne (#512): partice D−1 + D oříznuté na seanci.
+
+        `read` je čtečka jedné denní partice (např. `lambda d: self.levels(...)`).
+        Chybějící partice na jedné straně nevadí (nedělní seance má jen večer
+        v sobotní/nedělní partici, pondělní ráno zase jen D); chybí-li obě,
+        letí PartitionNotFoundError — stejné 404 chování jako dosud.
+        """
+        start, end = session_bounds(day)
+        frames: list[pd.DataFrame] = []
+        for partition_day in (day - dt.timedelta(days=1), day):
+            try:
+                frames.append(read(partition_day))
+            except PartitionNotFoundError:
+                continue
+        if not frames:
+            raise PartitionNotFoundError(f"{day.isoformat()} (seance {start}–{end})")
+        joined = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+        mask = (joined[ts_col] >= start) & (joined[ts_col] < end)
+        return joined.loc[mask].reset_index(drop=True)
 
     def _list_dirs(self, root: Path) -> list[str]:
         try:

@@ -60,6 +60,17 @@ export function zonedDateParts(
   }
 }
 
+/** ISO datum obchodního dne (Globex seance, ADR-0023 bod 3, #512).
+
+Den D pokrývá [17:00 CT dne D−1, 17:00 CT dne D) — po 17:00 America/Chicago
+už běží seance NÁSLEDUJÍCÍHO kalendářního dne. Nedělní večer tak patří
+pondělní ose a večerní živý sběr od 17:00 CT zítřejší. */
+export function sessionDateIso(ts: number = Date.now()): string {
+  const parts = zonedDateParts('America/Chicago', ts)
+  const shifted = Date.UTC(parts.year, parts.month - 1, parts.day + (parts.hour >= 17 ? 1 : 0))
+  return new Date(shifted).toISOString().slice(0, 10)
+}
+
 /** Epoch ms okamžiku „`hour`:`minute` dne `year`-`month`-`day` v zóně `timeZone`".
 
 `month` je 1-based. Dvě iterace stačí: první odhad s offsetem UTC okamžiku,

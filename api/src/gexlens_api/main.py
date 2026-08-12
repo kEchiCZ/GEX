@@ -257,7 +257,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         to_ts: Annotated[dt.datetime | None, Query(alias="to")] = None,
     ) -> Response:
         """Heatmap matice dne v Arrow IPC streamu (binárně pro výkon, SPEC kap. 6)."""
-        frame = repository.snapshots(symbol, expiry, date)
+        # Osa dne = Globex seance (#512): večer D−1 patří dni D
+        frame = repository.session_frame(lambda d: repository.snapshots(symbol, expiry, d), date)
         if from_ts is not None:
             frame = frame[frame["ts_min"] >= from_ts]
         if to_ts is not None:
@@ -285,7 +286,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/levels/{symbol}/{expiry}")
     def levels(symbol: str, expiry: str, date: dt.date) -> dict[str, object]:
         """Časové řady flip/walls/centroid (SPEC 4.2)."""
-        return {"levels": _records(repository.levels(symbol, expiry, date))}
+        return {
+            "levels": _records(
+                repository.session_frame(lambda d: repository.levels(symbol, expiry, d), date)
+            )
+        }
 
     @app.get("/setups/{symbol}")
     def setups_list(
@@ -339,7 +344,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         expiries_used: list[str] = []
         for expiry in repository.list_expiries(symbol):
             try:
-                frame = repository.snapshots(symbol, expiry, date)
+                frame = repository.session_frame(
+                    lambda d: repository.snapshots(symbol, expiry, d),  # noqa: B023
+                    date,
+                )
             except PartitionNotFoundError:
                 continue
             if frame.empty:
@@ -390,7 +398,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> dict[str, object]:
         """Strike profil k okamžiku ts (SPEC 4.6): poslední snapshot ≤ ts."""
         profile_variant = _parse_enum(ProfileVariant, variant, "variant")
-        frame = repository.snapshots(symbol, expiry, date)
+        frame = repository.session_frame(lambda d: repository.snapshots(symbol, expiry, d), date)
         eligible = frame[frame["ts_min"] <= ts]
         if eligible.empty:
             raise HTTPException(404, f"Před {ts.isoformat()} není žádný snapshot")
@@ -428,7 +436,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Řádek na strike se stranami C/P (bid/ask/last/vol/IV/Δ/Γ/Θ/V/OI + stale)
         a ΔOI vs. poslední archivovaný den (věčný OI archiv, R4).
         """
-        frame = repository.snapshots(symbol, expiry, date)
+        frame = repository.session_frame(lambda d: repository.snapshots(symbol, expiry, d), date)
         minute = frame["ts_min"].max()
         rows = frame[frame["ts_min"] == minute]
 
@@ -479,7 +487,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/flow/{symbol}")
     def flow(symbol: str, date: dt.date) -> dict[str, object]:
         """Řady Vol (podklad), OptVol (opce) a CumΔ pro spodní panely (SPEC kap. 6)."""
-        flow_records = _records(repository.flow(symbol, date))
+        flow_records = _records(
+            repository.session_frame(lambda d: repository.flow(symbol, d), date)
+        )
         return {
             "flow": flow_records,
             "opt_vol": _opt_vol_series(repository, symbol, date),
@@ -493,7 +503,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Snapshot matice jde surová (base64 Arrow) — klient přepíná módy/škály
         lokálně bez dalších requestů (latence < 100 ms, SPEC kap. 8).
         """
-        snapshots_frame = repository.snapshots(symbol, expiry, date)
+        # Osa obchodního dne = Globex seance (#512, ADR-0023 bod 3): každá
+        # řada se sešívá z partice D−1 (večer) + D; gexfield/gexfieldfa drží
+        # jen poslední stav pole, sešití nemá smysl — čtou se beze změny.
+        session = repository.session_frame
+        snapshots_frame = session(lambda d: repository.snapshots(symbol, expiry, d), date)
         bundle: dict[str, object] = {
             "symbol": symbol,
             "expiry": expiry,
@@ -503,28 +517,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ).decode("ascii"),
         }
         readers: list[tuple[str, Callable[[], pd.DataFrame]]] = [
-            ("levels", lambda: repository.levels(symbol, expiry, date)),
-            ("levels2", lambda: repository.levels2(symbol, expiry, date)),
-            ("walldom", lambda: repository.walldom(symbol, expiry, date)),
-            ("levelsfa", lambda: repository.levelsfa(symbol, expiry, date)),
-            ("ladder", lambda: repository.ladder(symbol, expiry, date)),
-            ("oimissing", lambda: repository.oi_missing(symbol, expiry, date)),
+            ("levels", lambda: session(lambda d: repository.levels(symbol, expiry, d), date)),
+            ("levels2", lambda: session(lambda d: repository.levels2(symbol, expiry, d), date)),
+            ("walldom", lambda: session(lambda d: repository.walldom(symbol, expiry, d), date)),
+            ("levelsfa", lambda: session(lambda d: repository.levelsfa(symbol, expiry, d), date)),
+            ("ladder", lambda: session(lambda d: repository.ladder(symbol, expiry, d), date)),
+            (
+                "oimissing",
+                lambda: session(lambda d: repository.oi_missing(symbol, expiry, d), date),
+            ),
             # Catch-up minuty (#518, ADR-0024): první sweep po startu uprostřed dne
-            ("catchup", lambda: repository.catch_up(symbol, expiry, date)),
-            ("gexprofile", lambda: repository.gexprofile(symbol, expiry, date)),
+            ("catchup", lambda: session(lambda d: repository.catch_up(symbol, expiry, d), date)),
+            (
+                "gexprofile",
+                lambda: session(lambda d: repository.gexprofile(symbol, expiry, d), date),
+            ),
             ("gexfield", lambda: repository.gexfield(symbol, expiry, date)),
             # Flow-adjusted zdroj (#232): OI odhad + FA varianta Dyn GEX vrstev
-            ("oiest", lambda: repository.oiest(symbol, expiry, date)),
+            ("oiest", lambda: session(lambda d: repository.oiest(symbol, expiry, d), date)),
             (
                 "gexprofilefa",
-                lambda: repository.gexprofile(symbol, expiry, date, subdir="gexprofilefa"),
+                lambda: session(
+                    lambda d: repository.gexprofile(symbol, expiry, d, subdir="gexprofilefa"),
+                    date,
+                ),
             ),
             (
                 "gexfieldfa",
                 lambda: repository.gexfield(symbol, expiry, date, subdir="gexfieldfa"),
             ),
-            ("flow", lambda: repository.flow(symbol, date)),
-            ("bars", lambda: repository.bars(symbol, date)),
+            ("flow", lambda: session(lambda d: repository.flow(symbol, d), date)),
+            ("bars", lambda: session(lambda d: repository.bars(symbol, d), date)),
         ]
         for key, reader in readers:
             try:
@@ -567,7 +590,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
         try:
             out["profiles"] = _records(
-                repository.gexprofile(symbol, expiry, day, subdir=f"{greek}profile")
+                repository.session_frame(
+                    lambda d: repository.gexprofile(symbol, expiry, d, subdir=f"{greek}profile"),
+                    day,
+                )
             )
         except PartitionNotFoundError:
             out["profiles"] = []
@@ -643,7 +669,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 def _spot_series(repository: DataRepository, symbol: str, day: dt.date) -> pd.Series | None:
     try:
-        bars = repository.bars(symbol, day)
+        bars = repository.session_frame(lambda d: repository.bars(symbol, d), day)
     except PartitionNotFoundError:
         return None
     return bars.set_index("ts_min")["close"]
@@ -668,8 +694,13 @@ def _opt_vol_series(
     total: pd.Series | None = None
     for expiry in repository.list_expiries(symbol):
         try:
-            frame = repository.snapshots(symbol, expiry, day)
+            frame = repository.session_frame(
+                lambda d: repository.snapshots(symbol, expiry, d),  # noqa: B023
+                day,
+            )
         except PartitionNotFoundError:
+            continue
+        if frame.empty:
             continue
         per_contract = frame.pivot_table(
             index="ts_min", columns=["strike", "right"], values="volume", aggfunc="last"
@@ -687,7 +718,7 @@ def _underlying_vol_series(
     repository: DataRepository, symbol: str, day: dt.date
 ) -> list[dict[str, object]]:
     try:
-        bars = repository.bars(symbol, day)
+        bars = repository.session_frame(lambda d: repository.bars(symbol, d), day)
     except PartitionNotFoundError:
         return []
     return [
