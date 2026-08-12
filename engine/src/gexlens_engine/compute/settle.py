@@ -38,3 +38,31 @@ def settle_ts(day: dt.date) -> dt.datetime:
     `instrument/expiry.ts`).
     """
     return session_time_utc(day, SETTLE_LOCAL.hour, SETTLE_LOCAL.minute, ET_TZ)
+
+
+# Otevření Globex — hranice obchodního dne (ADR-0023 bod 3, #512/#638)
+GLOBEX_OPEN_LOCAL = dt.time(17, 0)
+
+
+def session_bounds(day: dt.date) -> tuple[dt.datetime, dt.datetime]:
+    """UTC hranice Globex seance obchodního dne `day`: [open 17:00 CT D−1, open D).
+
+    Polouzavřený interval — každá minuta patří právě jedné seanci. Sdílí ji
+    čtecí vrstva API (#512) i reset kumulativů v enginu (#638).
+    """
+
+    def open_of(d: dt.date) -> dt.datetime:
+        return session_time_utc(d, GLOBEX_OPEN_LOCAL.hour, GLOBEX_OPEN_LOCAL.minute, CME_TZ)
+
+    return open_of(day - dt.timedelta(days=1)), open_of(day)
+
+
+def trading_session_date(ts: dt.datetime) -> dt.date:
+    """Obchodní den, do kterého okamžik `ts` patří (ADR-0023, #638).
+
+    Po 17:00 America/Chicago běží seance NÁSLEDUJÍCÍHO kalendářního dne —
+    protějšek frontend `sessionDateIso` (instrument/tz.ts).
+    """
+    local = ts.astimezone(CME_TZ)
+    day = local.date()
+    return day + dt.timedelta(days=1) if local.time() >= GLOBEX_OPEN_LOCAL else day

@@ -41,7 +41,10 @@ from dataclasses import dataclass, field, replace
 #       95,2 % NQ s polohovou branou) — T7 tedy vznikal z jiné množiny minut
 #       než po změně, takže se mění filtr šablony a historické T7 řádky
 #       nejsou srovnatelné s novými.
-SETUP_MECHANICS_VERSION = 3
+#    v4: CumΔ a net objem kotvené na open Globex seance (#638) — dřív se
+#       resetovaly jen restartem enginu, takže cum_delta v context řádcích
+#       v3 a v4 nejsou srovnatelné (jiná základna).
+SETUP_MECHANICS_VERSION = 4
 
 
 class SetupTemplate(enum.Enum):

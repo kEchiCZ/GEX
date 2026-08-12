@@ -54,6 +54,8 @@ class CumDeltaTracker:
         # Čistý klasifikovaný objem per kontrakt (buy − sell, v kontraktech) —
         # vstup flow-adjusted OI odhadu (ADR-0011, #222)
         self._net_volume: dict[OptionContractSpec, float] = {}
+        # Obchodní den (Globex seance), ke kterému kumulativ patří (#638)
+        self._session_date: dt.date | None = None
 
     @property
     def cum_delta(self) -> float:
@@ -77,11 +79,41 @@ class CumDeltaTracker:
             self._net_volume.setdefault(spec, net)
 
     def reset(self) -> None:
-        """Reset na začátku obchodního dne (SPEC 4.5, konfig. session start)."""
+        """Reset na začátku obchodního dne (SPEC 4.5; volá `roll_session`, #638)."""
         self._cum = 0.0
         self._minute_flow = 0.0
         self._last_volume.clear()
         self._net_volume.clear()
+
+    def roll_session(self, session_date: dt.date) -> bool:
+        """Reset kumulativů na hranici Globex seance (#638, SPEC 4.5).
+
+        Vrací True, když právě proběhl reset (přechod na nový obchodní den).
+        První volání po startu procesu jen zafixuje seanci BEZ resetu —
+        restart uprostřed seance nesmí zahodit dopolední tok; navázání
+        z partic (flow/netflow seed) řeší runtime.
+
+        Kotva obou kumulativů je open seance (17:00 CT): CumΔ tím sedí na osu
+        obchodního dne (#512) a net objem na ranní OI archiv, který odráží
+        pozice k předchozímu settle — tok od open je přesně to, co v něm není.
+        """
+        if self._session_date == session_date:
+            return False
+        first = self._session_date is None
+        self._session_date = session_date
+        if first:
+            return False
+        self.reset()
+        return True
+
+    def restore_cum(self, base: float) -> None:
+        """Naváže CumΔ z flow partice po restartu uprostřed seance (#638).
+
+        Přičítá základ k dosavadnímu (typicky nulovému) kumulativu — tok
+        naměřený po restartu se tím neztrácí. Volat nejvýš jednou; hlídá
+        runtime (pending flag), ne tracker.
+        """
+        self._cum += base
 
     def add_trade(self, trade: ClassifiedTrade, delta: float) -> float:
         """Hot zóna: flowΔ = sign · size · Δ · M; unknown klasifikace nepřispívá."""

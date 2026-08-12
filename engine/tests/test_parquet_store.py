@@ -237,3 +237,39 @@ def test_derived_dir_reserved_for_compute(tmp_path: Path) -> None:
     assert settings.snapshots_dir == tmp_path / "snapshots"
     assert settings.ticks_dir == tmp_path / "ticks"
     assert settings.derived_dir == tmp_path / "derived"
+
+
+def test_read_last_cum_delta_okno_seance(tmp_path: Path) -> None:
+    """#638: seed CumΔ čte jen řádky v okně seance, přes dvě UTC partice."""
+    import datetime as dt
+
+    from gexlens_engine.compute.cumdelta import FlowRow
+    from gexlens_engine.storage.parquet_store import read_last_cum_delta
+
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    sunday = dt.date(2026, 7, 19)
+    monday = dt.date(2026, 7, 20)
+    # Neděle: řádek PŘED openem (mimo okno) + večer po openu (v okně)
+    writer.write_flow("ES", sunday, [
+        FlowRow(dt.datetime(2026, 7, 19, 21, 30, tzinfo=dt.UTC), 5.0, 999.0),
+        FlowRow(dt.datetime(2026, 7, 19, 23, 0, tzinfo=dt.UTC), 5.0, 5.0),
+    ])
+    writer.write_flow("ES", monday, [
+        FlowRow(dt.datetime(2026, 7, 20, 15, 0, tzinfo=dt.UTC), 3.0, 8.0),
+        FlowRow(dt.datetime(2026, 7, 20, 22, 30, tzinfo=dt.UTC), 4.0, 12.0),  # už úterní seance
+    ])
+    paths = [
+        tmp_path / "derived" / "ES" / "flow" / f"{day.isoformat()}.parquet"
+        for day in (sunday, monday)
+    ]
+    start = dt.datetime(2026, 7, 19, 22, 0, tzinfo=dt.UTC)
+    end = dt.datetime(2026, 7, 20, 22, 0, tzinfo=dt.UTC)
+    assert read_last_cum_delta(paths, start=start, end=end) == 8.0
+    # Jen večerní část (restart v neděli v noci)
+    assert read_last_cum_delta(paths[:1], start=start, end=end) == 5.0
+    # Řádek 21:30 (před openem) patří PŘEDCHOZÍ seanci — do pondělního okna nesmí
+    prev_start = dt.datetime(2026, 7, 18, 22, 0, tzinfo=dt.UTC)
+    assert read_last_cum_delta(paths, start=prev_start, end=start) == 999.0
+    # Okno bez jediného řádku → None
+    empty_end = dt.datetime(2026, 7, 18, 22, 0, tzinfo=dt.UTC)
+    assert read_last_cum_delta(paths, start=dt.datetime(2026, 7, 17, 22, 0, tzinfo=dt.UTC), end=empty_end) is None  # noqa: E501
