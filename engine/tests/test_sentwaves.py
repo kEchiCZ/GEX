@@ -11,6 +11,8 @@ from gexlens_engine.compute.sentwaves import (
     day_condition,
     detect_waves,
     moving_average,
+    position_state,
+    trend_polarity,
 )
 
 START = dt.date(2026, 7, 1)
@@ -115,38 +117,60 @@ def test_state_neutral_without_full_ma_window() -> None:
     assert assessment.ma10 is None
 
 
-def test_state_confirms_without_history_threshold_zero() -> None:
-    """SPEC: dokud historie vln neexistuje, práh = 0 — stav čistě z MA."""
+def test_position_state_pinned_rules() -> None:
+    """SPEC 5.6 rev. #563: RiskOn = nad oběma, RiskOff = pod oběma, mezi = Neutral."""
+    assert position_state(1.0, 0.5, 0.2) == "RiskOn"
+    assert position_state(1.0, 0.2, 0.5) == "RiskOn"  # polarita MA stav nemění
+    assert position_state(-1.0, -0.5, -0.2) == "RiskOff"
+    assert position_state(0.3, 0.5, 0.2) == "Neutral"  # mezi průměry
+    assert position_state(0.3, 0.2, 0.5) == "Neutral"
+    assert position_state(1.0, None, None) is None  # okno MA není plné
+    # Rovnost není ostrá nerovnost — polohu nepotvrzuje
+    assert position_state(0.5, 0.5, 0.2) == "Neutral"
+
+
+def test_trend_polarity() -> None:
+    assert trend_polarity(0.5, 0.2) == "up"
+    assert trend_polarity(0.2, 0.5) == "down"
+    assert trend_polarity(0.5, 0.5) is None
+    assert trend_polarity(None, 0.5) is None
+
+
+def test_state_defined_every_day_with_full_windows() -> None:
+    """Jádro #563: stav je definovaný každý den — vlnová brána ho už negatuje.
+
+    Dřívější pravidla by tu vrátila Neutral (mělká vlna pod prahem);
+    poloha pod oběma průměry je ale RiskOff bez ohledu na hloubku.
+    """
+    base = [0.0] * 10 + [1.0, 1.0] + [0.0] * 10
+    shallow = assess_state(series(base + [-0.1]))
+    assert shallow.state == "RiskOff"  # close −0.1 pod MA5 −0.02 i MA10 −0.01
+    assert shallow.polarity == "down"
+    # Vlna a práh zůstávají jako atributy (kalibrace/UI)
+    assert shallow.wave is not None and shallow.wave.direction == "RiskOff"
+    assert shallow.threshold == pytest.approx(0.9)
+
+    deep = assess_state(series(base + [-3.0]))
+    assert deep.state == "RiskOff"
+    assert deep.threshold == pytest.approx(0.9)
+
+
+def test_state_riskon_without_wave_history() -> None:
     assessment = assess_state(series([0.0] * 10 + [1.0]))
     assert assessment.state == "RiskOn"
+    assert assessment.polarity == "up"
     assert assessment.threshold == 0.0
     assert assessment.wave is not None and assessment.wave.end is None
 
 
-def test_state_needs_depth_over_adaptive_threshold() -> None:
-    # Historie: RiskOn vlna hloubky 0.9, pak 10 nul (MA se vrátí k nule).
-    # Poslední den: pokles → RiskOff podmínka (close < MA5 < MA10, obě záporné).
-    # Mělká: close −0.1 → MA5 −0.02, MA10 −0.01 → hloubka 0.09 < práh 0.9.
-    # Hluboká: close −3 → MA5 −0.6, MA10 −0.3 → hloubka 2.7 ≥ práh 0.9.
-    base = [0.0] * 10 + [1.0, 1.0] + [0.0] * 10
-    shallow = base + [-0.1]
-    deep = base + [-3.0]
-
-    shallow_assessment = assess_state(series(shallow))
-    assert shallow_assessment.wave is not None
-    assert shallow_assessment.wave.direction == "RiskOff"
-    assert shallow_assessment.wave.depth < shallow_assessment.threshold
-    assert shallow_assessment.state == "Neutral"
-
-    deep_assessment = assess_state(series(deep))
-    assert deep_assessment.state == "RiskOff"
-    assert deep_assessment.threshold == pytest.approx(0.9)
-
-
-def test_state_neutral_when_condition_breaks() -> None:
-    assessment = assess_state(series(GOLDEN))  # poslední den 0.0 → podmínka pryč
+def test_state_between_averages_is_neutral() -> None:
+    # GOLDEN končí close 0.0: MA5 = 0.4, MA10 = 0.2 → mezi? 0.0 < obě → RiskOff.
+    # Proto vlastní řada: poslední close mezi průměry.
+    assessment = assess_state(series([0.0] * 10 + [1.0, 1.0, 0.3]))
+    assert assessment.ma5 is not None and assessment.ma10 is not None
+    assert min(assessment.ma5, assessment.ma10) < 0.3 < max(assessment.ma5, assessment.ma10)
     assert assessment.state == "Neutral"
-    assert assessment.wave is None  # žádná probíhající vlna
+    assert assessment.wave is None  # řetězená podmínka padla → žádná probíhající vlna
 
 
 def test_empty_series_is_neutral() -> None:

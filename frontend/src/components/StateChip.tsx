@@ -80,11 +80,18 @@ export function StateChip() {
         title={
           state.unconfirmed
             ? `Nepotvrzená intradenní změna na ${state.unconfirmed_state} — potvrdí až denní close`
-            : 'Stav sentimentu z denních close SentIndexu (klik → detail)'
+            : 'Poloha SentIndexu vůči MA5/MA10 (#563): RISK OFF = index pod oběma průměry ' +
+              '(převažují negativní zprávy), RISK ON = nad oběma, NEUTRAL = mezi. ' +
+              'Šipka = trend MA5 vs. MA10. Popisuje náladu, NE směr ceny — historicky ' +
+              'se risk-off epizody vykupovaly. Klik → detail.'
         }
         onClick={() => setOpen((value) => !value)}
       >
         {STATE_LABELS[state.state]}
+        {/* Polarita trendu (#563): ▲ MA5 nad MA10, ▼ pod — atribut, ne směr ceny */}
+        {state.polarity && (
+          <span className="state-polarity">{state.polarity === 'up' ? '▲' : '▼'}</span>
+        )}
         {state.unconfirmed && <span className="state-dot">●</span>}
       </button>
       {open && (

@@ -203,6 +203,8 @@ export async function fetchSentimentDaily(
 export interface SentimentStateInfo {
   symbol: string
   state: 'RiskOn' | 'RiskOff' | 'Neutral'
+  /** Polarita trendu MA5 vs. MA10 (#563); null dokud okna nejsou plná. */
+  polarity?: 'up' | 'down' | null
   unconfirmed: boolean
   unconfirmed_state: string
   last_close: number | null

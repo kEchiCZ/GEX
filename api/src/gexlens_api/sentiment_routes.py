@@ -359,6 +359,7 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         return {
             "symbol": symbol,
             "state": confirmed.state,
+            "polarity": confirmed.polarity,
             "unconfirmed": provisional is not None
             and provisional_assessment.state != confirmed.state,
             "unconfirmed_state": provisional_assessment.state,
