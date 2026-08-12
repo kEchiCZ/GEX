@@ -250,14 +250,22 @@ def test_read_last_cum_delta_okno_seance(tmp_path: Path) -> None:
     sunday = dt.date(2026, 7, 19)
     monday = dt.date(2026, 7, 20)
     # Neděle: řádek PŘED openem (mimo okno) + večer po openu (v okně)
-    writer.write_flow("ES", sunday, [
-        FlowRow(dt.datetime(2026, 7, 19, 21, 30, tzinfo=dt.UTC), 5.0, 999.0),
-        FlowRow(dt.datetime(2026, 7, 19, 23, 0, tzinfo=dt.UTC), 5.0, 5.0),
-    ])
-    writer.write_flow("ES", monday, [
-        FlowRow(dt.datetime(2026, 7, 20, 15, 0, tzinfo=dt.UTC), 3.0, 8.0),
-        FlowRow(dt.datetime(2026, 7, 20, 22, 30, tzinfo=dt.UTC), 4.0, 12.0),  # už úterní seance
-    ])
+    writer.write_flow(
+        "ES",
+        sunday,
+        [
+            FlowRow(dt.datetime(2026, 7, 19, 21, 30, tzinfo=dt.UTC), 5.0, 999.0),
+            FlowRow(dt.datetime(2026, 7, 19, 23, 0, tzinfo=dt.UTC), 5.0, 5.0),
+        ],
+    )
+    writer.write_flow(
+        "ES",
+        monday,
+        [
+            FlowRow(dt.datetime(2026, 7, 20, 15, 0, tzinfo=dt.UTC), 3.0, 8.0),
+            FlowRow(dt.datetime(2026, 7, 20, 22, 30, tzinfo=dt.UTC), 4.0, 12.0),  # už úterní seance
+        ],
+    )
     paths = [
         tmp_path / "derived" / "ES" / "flow" / f"{day.isoformat()}.parquet"
         for day in (sunday, monday)
@@ -272,4 +280,9 @@ def test_read_last_cum_delta_okno_seance(tmp_path: Path) -> None:
     assert read_last_cum_delta(paths, start=prev_start, end=start) == 999.0
     # Okno bez jediného řádku → None
     empty_end = dt.datetime(2026, 7, 18, 22, 0, tzinfo=dt.UTC)
-    assert read_last_cum_delta(paths, start=dt.datetime(2026, 7, 17, 22, 0, tzinfo=dt.UTC), end=empty_end) is None  # noqa: E501
+    assert (
+        read_last_cum_delta(
+            paths, start=dt.datetime(2026, 7, 17, 22, 0, tzinfo=dt.UTC), end=empty_end
+        )
+        is None
+    )  # noqa: E501
