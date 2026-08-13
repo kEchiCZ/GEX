@@ -3,7 +3,7 @@
 import datetime as dt
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from gexlens_api.alerts import AlertKind
@@ -108,6 +108,76 @@ def build_router(repository: MetaRepository) -> APIRouter:
             repository.alert_delete(alert_id)
         except NotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
+
+    # ── Deník (#673, fáze A): manuální retrospektiva ───────────────
+
+    JOURNAL_TYPES = ("pozorovani", "hypoteza", "retro_dne", "obchod")
+
+    @router.get("/journal")
+    def journal_list(
+        symbol: str | None = None,
+        date: dt.date | None = None,
+        entry_type: str | None = None,
+        limit: int = Query(500, ge=1, le=2000),
+    ) -> dict[str, list[dict[str, Any]]]:
+        return {
+            "journal": repository.journal_list(
+                symbol=symbol, day=date, entry_type=entry_type, limit=limit
+            )
+        }
+
+    class JournalEntry(BaseModel):
+        """Nový záznam deníku; ts_ref = okamžik, ke kterému se vztahuje."""
+
+        ts_ref: dt.datetime
+        symbol: str = Field(min_length=1, max_length=12, pattern=r"^[A-Z0-9.]+$")
+        entry_type: str
+        text: str = Field(min_length=1, max_length=10_000)
+        tags: list[str] = Field(default_factory=list, max_length=20)
+        setup_id: int | None = None
+        news_event_id: int | None = None
+
+    class JournalPatch(BaseModel):
+        """Úprava záznamu — text/tagy; okamžik ani typ se zpětně nemění."""
+
+        text: str | None = Field(None, min_length=1, max_length=10_000)
+        tags: list[str] | None = Field(None, max_length=20)
+
+    @router.post("/journal", status_code=201)
+    def journal_create(entry: JournalEntry) -> dict[str, Any]:
+        if entry.entry_type not in JOURNAL_TYPES:
+            raise HTTPException(422, f"entry_type musí být jeden z {JOURNAL_TYPES}")
+        if entry.entry_type == "obchod":
+            # Fáze B (#673): typ `obchod` plní až import fillů, ne ruční zápis
+            raise HTTPException(422, "Typ 'obchod' zakládá import exekucí (fáze B), ne ruční zápis")
+        now = dt.datetime.now(dt.UTC)
+        return repository.journal_create(
+            {
+                "ts_ref": entry.ts_ref,
+                "symbol": entry.symbol,
+                "entry_type": entry.entry_type,
+                "text": entry.text,
+                "tags": entry.tags,
+                "setup_id": entry.setup_id,
+                "news_event_id": entry.news_event_id,
+                "created_ts": now,
+            }
+        )
+
+    @router.patch("/journal/{entry_id}")
+    def journal_update(entry_id: int, patch: JournalPatch) -> dict[str, Any]:
+        values: dict[str, Any] = {"updated_ts": dt.datetime.now(dt.UTC)}
+        if patch.text is not None:
+            values["text"] = patch.text
+        if patch.tags is not None:
+            values["tags"] = patch.tags
+        if len(values) == 1:
+            raise HTTPException(422, "Úprava musí měnit text nebo tagy")
+        return repository.journal_update(entry_id, values)
+
+    @router.delete("/journal/{entry_id}", status_code=204)
+    def journal_delete(entry_id: int) -> None:
+        repository.journal_delete(entry_id)
 
     @router.get("/annotations")
     def annotations_list(symbol: str, date: dt.date) -> dict[str, list[dict[str, Any]]]:

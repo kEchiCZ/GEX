@@ -65,7 +65,7 @@ export interface Toggles {
 }
 
 export type AppView =
-  'chart' | 'dashboard' | 'chain' | 'setups' | 'news' | 'stats' | 'console' | 'settings'
+  'chart' | 'dashboard' | 'chain' | 'setups' | 'journal' | 'news' | 'stats' | 'console' | 'settings'
 export type Theme = 'dark' | 'light'
 
 /** Režim zobrazení signálů (#295, SPEC 6.1/S9): výpočet běží vždy, tohle řídí jen UI. */
@@ -167,6 +167,9 @@ interface AppState {
   setOiSource: (source: OiSource) => void
   view: AppView
   setView: (view: AppView) => void
+  /** Rychlý vstup do deníku (#673): předvyplněný okamžik z Replay tlačítka ✎. */
+  journalDraft: { tsRef: string } | null
+  setJournalDraft: (draft: { tsRef: string } | null) => void
   theme: Theme
   setTheme: (theme: Theme) => void
   alerts: AlertMessage[]
@@ -199,6 +202,7 @@ const VIEWS: readonly AppView[] = [
   'dashboard',
   'chain',
   'setups',
+  'journal',
   'news',
   'stats',
   'console',
@@ -269,6 +273,8 @@ export function AppStateProvider({
   )
   const [interval, setInterval] = usePersistentState<Interval>('interval', '1m', oneOf(INTERVALS))
   const [view, setView] = useState<AppView>(() => initialFromUrl().view)
+  // Rychlý vstup do deníku (#673) — jen v paměti, nepersistuje se
+  const [journalDraft, setJournalDraft] = useState<{ tsRef: string } | null>(null)
   const [theme, setTheme] = usePersistentState<Theme>(
     'theme',
     'dark',
@@ -469,6 +475,8 @@ export function AppStateProvider({
       setOiSource,
       view,
       setView,
+      journalDraft,
+      setJournalDraft,
       theme,
       setTheme,
       alerts,

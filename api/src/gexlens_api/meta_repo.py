@@ -17,6 +17,7 @@ from gexlens_engine.storage.meta import (
     WATCHLIST_CHANNEL,
     alerts_table,
     annotations_table,
+    journal_table,
     meta_metadata,
     settings_table,
     watchlist_table,
@@ -136,6 +137,53 @@ class MetaRepository:
             result = conn.execute(delete(alerts_table).where(alerts_table.c.id == alert_id))
             if result.rowcount == 0:
                 raise NotFoundError(f"Alert {alert_id} neexistuje")
+
+    # ── journal (#673, fáze A) ─────────────────────────────────────
+
+    def journal_list(
+        self,
+        *,
+        symbol: str | None = None,
+        day: dt.date | None = None,
+        entry_type: str | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        stmt = select(journal_table).order_by(journal_table.c.ts_ref.desc()).limit(limit)
+        if symbol is not None:
+            stmt = stmt.where(journal_table.c.symbol == symbol)
+        if day is not None:
+            start = dt.datetime.combine(day, dt.time.min, tzinfo=dt.UTC)
+            stmt = stmt.where(
+                journal_table.c.ts_ref >= start,
+                journal_table.c.ts_ref < start + dt.timedelta(days=1),
+            )
+        if entry_type is not None:
+            stmt = stmt.where(journal_table.c.entry_type == entry_type)
+        with self._db().connect() as conn:
+            return [dict(row._mapping) for row in conn.execute(stmt)]
+
+    def journal_create(self, values: dict[str, Any]) -> dict[str, Any]:
+        with self._db().begin() as conn:
+            result = conn.execute(insert(journal_table).values(**values))
+            entry_id = _inserted_id(result)
+            row = conn.execute(select(journal_table).where(journal_table.c.id == entry_id)).one()
+            return dict(row._mapping)
+
+    def journal_update(self, entry_id: int, values: dict[str, Any]) -> dict[str, Any]:
+        with self._db().begin() as conn:
+            result = conn.execute(
+                update(journal_table).where(journal_table.c.id == entry_id).values(**values)
+            )
+            if result.rowcount == 0:
+                raise NotFoundError(f"Záznam deníku {entry_id} neexistuje")
+            row = conn.execute(select(journal_table).where(journal_table.c.id == entry_id)).one()
+            return dict(row._mapping)
+
+    def journal_delete(self, entry_id: int) -> None:
+        with self._db().begin() as conn:
+            result = conn.execute(delete(journal_table).where(journal_table.c.id == entry_id))
+            if result.rowcount == 0:
+                raise NotFoundError(f"Záznam deníku {entry_id} neexistuje")
 
     # ── annotations ────────────────────────────────────────────────
 

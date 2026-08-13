@@ -582,3 +582,36 @@ def test_gexforward_endpoint(settings: Settings) -> None:
     # Den bez partice = prázdné days, ne chyba
     empty = client.get("/gexforward/ES", params={"date": "2020-01-01"}).json()
     assert empty["days"] == []
+
+
+def test_journal_crud_a_validace(client: TestClient) -> None:
+    """Deník (#673 fáze A): CRUD, filtry, zákaz ručního typu obchod."""
+    entry = {
+        "ts_ref": "2026-07-16T14:30:00Z",
+        "symbol": "ES",
+        "entry_type": "pozorovani",
+        "text": "Cena respektuje flip, odrazy drží.",
+        "tags": ["flip", "fade"],
+    }
+    created = client.post("/journal", json=entry)
+    assert created.status_code == 201
+    entry_id = created.json()["id"]
+
+    listed = client.get("/journal", params={"symbol": "ES", "date": "2026-07-16"}).json()
+    assert [e["id"] for e in listed["journal"]] == [entry_id]
+    assert listed["journal"][0]["tags"] == ["flip", "fade"]
+    # Jiný den = prázdno
+    assert client.get("/journal", params={"date": "2026-07-17"}).json()["journal"] == []
+
+    patched = client.patch(f"/journal/{entry_id}", json={"text": "Upřesnění: drží jen do 16:00."})
+    assert patched.status_code == 200
+    assert patched.json()["updated_ts"] is not None
+
+    # Typ obchod zakládá až import fillů (fáze B), ruční zápis se odmítne
+    assert client.post("/journal", json={**entry, "entry_type": "obchod"}).status_code == 422
+    assert client.post("/journal", json={**entry, "entry_type": "blbost"}).status_code == 422
+    # Symbol validace (stejné pravidlo jako persist reviver #554)
+    assert client.post("/journal", json={**entry, "symbol": "../x"}).status_code == 422
+
+    assert client.delete(f"/journal/{entry_id}").status_code == 204
+    assert client.get("/journal").json()["journal"] == []
