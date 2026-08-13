@@ -611,11 +611,12 @@ function MainContent() {
   // Čistě klientský výpočet z mid prémií, které /replay už nese (#469).
   const expectedMove = useMemo(() => {
     if (!tradersMode || timeframe !== 'intraday') return null
-    if (!rawDay.profileByMinute || rawDay.minutesIso.length === 0) return null
+    const source = rawDay.profileByMinute
+    if (!source || rawDay.minutesIso.length === 0) return null
     return computeExpectedMove({
       minutesIso: rawDay.minutesIso,
       spotSeries: rawDay.spotSeries,
-      rowsAt: (idx) => rawDay.profileByMinute.rowsAt(idx),
+      rowsAt: (idx) => source.rowsAt(idx),
       usOpenMs: usOpenMs(viewDate),
     })
   }, [tradersMode, timeframe, rawDay, viewDate])
