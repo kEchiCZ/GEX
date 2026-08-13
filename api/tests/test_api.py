@@ -662,3 +662,114 @@ def test_oidelta_endpoint(settings: Settings) -> None:
     # Bez archivu drží tvar (days: None) — briefing sekci skryje
     empty = client.get("/oidelta/ES/20991231").json()
     assert empty["days"] is None
+
+
+def test_profile_window_full_day_equals_daily_cumulative(client: TestClient) -> None:
+    """AC #483: okno přes celý den == denní kumulativ (baseline před prvním snapshotem = 0)."""
+    window = client.get(
+        "/profile/ES/20260716",
+        params={
+            "date": DAY.isoformat(),
+            "from": (ts(0) - dt.timedelta(minutes=5)).isoformat(),
+            "to": ts(MINUTES - 1).isoformat(),
+            "variant": "vol",
+        },
+    ).json()
+    point = client.get(
+        "/profile/ES/20260716",
+        params={"date": DAY.isoformat(), "ts": ts(MINUTES - 1).isoformat(), "variant": "vol"},
+    ).json()
+    assert window["profile"] == point["profile"]
+    assert window["oi_static"] is True
+    assert window["from_ts"] is None  # nic před from → od začátku seance
+    assert window["to_ts"] == ts(MINUTES - 1).isoformat()
+    assert window["stale_count"] == 0
+
+
+def test_profile_window_zero_length_is_zero(client: TestClient) -> None:
+    """AC #483: okno nulové délky == nulové volume složky (OI zůstává statické)."""
+    payload = client.get(
+        "/profile/ES/20260716",
+        params={
+            "date": DAY.isoformat(),
+            "from": ts(1).isoformat(),
+            "to": ts(1).isoformat(),
+            "variant": "vol",
+        },
+    ).json()
+    for row in payload["profile"]:
+        assert row["call_vol_component"] == 0.0
+        assert row["put_vol_component"] == 0.0
+        assert row["call_volume"] == 0.0
+    # OI je statické k t2, ne nulové
+    assert payload["profile"][0]["call_oi"] == 100.0
+
+
+def test_profile_window_diff_values(client: TestClient) -> None:
+    """Okno (t0, t2]: volume = kumulativ(t2) − kumulativ(t0) per strike a strana."""
+    payload = client.get(
+        "/profile/ES/20260716",
+        params={
+            "date": DAY.isoformat(),
+            "from": ts(0).isoformat(),
+            "to": ts(2).isoformat(),
+            "variant": "vol",
+        },
+    ).json()
+    row = next(r for r in payload["profile"] if r["strike"] == 7590.0)
+    # vol okna = 10·(3−1)·1 = 20 na obou stranách (+5 za C se odečte)
+    assert row["call_volume"] == pytest.approx(20.0)
+    assert row["put_volume"] == pytest.approx(20.0)
+    assert row["call_vol_component"] == pytest.approx(20.0 * 0.5)
+    assert row["net"] == pytest.approx(10.0 - 8.0)
+    assert payload["from_ts"] == ts(0).isoformat()
+
+
+def test_profile_window_param_validation(client: TestClient) -> None:
+    """ts × from/to se vylučují; from ≤ to; něco z toho musí přijít."""
+    base = {"date": DAY.isoformat()}
+    assert client.get("/profile/ES/20260716", params=base).status_code == 422
+    assert (
+        client.get(
+            "/profile/ES/20260716",
+            params={
+                **base,
+                "ts": ts(1).isoformat(),
+                "from": ts(0).isoformat(),
+                "to": ts(1).isoformat(),
+            },
+        ).status_code
+        == 422
+    )
+    assert (
+        client.get(
+            "/profile/ES/20260716",
+            params={**base, "from": ts(2).isoformat(), "to": ts(0).isoformat()},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.get("/profile/ES/20260716", params={**base, "from": ts(0).isoformat()}).status_code
+        == 422
+    )
+
+
+def test_flow_window_summary(client: TestClient) -> None:
+    """Okno /flow (#483): CumΔ diff + součty Vol/OptVol přes minuty (t1, t2]."""
+    payload = client.get(
+        "/flow/ES",
+        params={"date": DAY.isoformat(), "from": ts(0).isoformat(), "to": ts(2).isoformat()},
+    ).json()
+    window = payload["window"]
+    assert window["cum_delta"] == pytest.approx(100.0)  # 150 − 50
+    assert window["vol"] == pytest.approx(2000.0)  # bary minut 1 a 2
+    assert window["opt_vol"] == pytest.approx(240.0)  # 120 + 120
+    # Řady zůstávají v odpovědi beze změny (regresní chování)
+    assert [row["cum_delta"] for row in payload["flow"]] == [50.0, 100.0, 150.0]
+
+    assert (
+        client.get(
+            "/flow/ES", params={"date": DAY.isoformat(), "from": ts(2).isoformat()}
+        ).status_code
+        == 422
+    )
