@@ -103,9 +103,10 @@ export function decodeRange(raw: string | null): RangeSelection | null {
   return { fromIso, toIso }
 }
 
-/** Popisek chipu: „15:30–16:05" lokálním časem. */
+/** Popisek chipu: „15:30–16:05" lokálním časem — vždy 24h (aplikace je česká;
+CI v en-US by jinak dalo „03:30 PM"). */
 export function rangeLabel(range: RangeSelection): string {
   const fmt = (iso: string) =>
-    new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
   return `${fmt(range.fromIso)}–${fmt(range.toIso)}`
 }
