@@ -7,6 +7,7 @@ Ranní OI archiv se doplňuje per instrument, noční retention purge běží gl
 """
 
 import asyncio
+import contextlib
 import datetime as dt
 import logging
 import os
@@ -38,6 +39,7 @@ from gexlens_engine.ibkr.connection import (
 from gexlens_engine.ibkr.discovery import (
     ChainDiscovery,
     ExpiryInfo,
+    OptionContractSpec,
     StrikeBand,
     Underlying,
     build_contracts,
@@ -50,7 +52,7 @@ from gexlens_engine.ibkr.newsticks import (
     tape_symbol,
 )
 from gexlens_engine.ibkr.pacing import PacingGuard
-from gexlens_engine.ibkr.scheduler import SubscriptionScheduler
+from gexlens_engine.ibkr.scheduler import CachedQuote, SubscriptionScheduler
 from gexlens_engine.ibkr.subscription import (
     NOT_SUBSCRIBED_ERROR_CODE,
     SubscriptionErrorAlert,
@@ -83,6 +85,7 @@ from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.fa_validation import FaValidationRepository
+from gexlens_engine.storage.feed_comparison import FeedComparisonRepository
 from gexlens_engine.storage.gammacliff_store import GammaCliffRepository
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
@@ -93,6 +96,11 @@ from gexlens_engine.storage.setups_store import SetupsRepository
 from gexlens_engine.storage.t6_store import T6Repository
 from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
+from gexlens_engine.tasty.provider import TastyChainCache
+from gexlens_engine.tasty.session import TastyCredentials, TastySession
+from gexlens_engine.tasty.shadow import ShadowComparator, shadow_symbols
+from gexlens_engine.tasty.stream import DxLinkStream
+from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
 from gexlens_engine.tendency import TendencyEngine
 
 logger = logging.getLogger("gexlens.engine")
@@ -670,6 +678,73 @@ async def main() -> None:
     pacing_guard = PacingGuard()
 
     pipelines: dict[str, InstrumentPipeline] = {}
+
+    # ── tastytrade shadow (#613) — jen měří do feed_comparison, nic víc ──
+    shadow_stop = asyncio.Event()
+    shadow_tasks: list[asyncio.Task[None]] = []
+    shadow_chain: dict[str, ChainSymbols | None] = {"ES": None}
+    if settings.tasty_shadow and settings.tasty_client_secret and settings.tasty_refresh_token:
+        tasty_session = TastySession(
+            TastyCredentials(
+                client_secret=settings.tasty_client_secret,
+                refresh_token=settings.tasty_refresh_token,
+            )
+        )
+        symbol_map = SymbolMap(tasty_session)
+        tasty_cache = TastyChainCache()
+        tasty_stream = DxLinkStream(tasty_session.quote_token, tasty_cache.on_event)
+        comparison_repository = FeedComparisonRepository(db)
+        await asyncio.to_thread(comparison_repository.ensure_schema)
+
+        def shadow_contracts() -> dict[OptionContractSpec, CachedQuote]:
+            merged: dict[OptionContractSpec, CachedQuote] = {}
+            for pipeline in pipelines.values():
+                merged.update(pipeline.runtime.scheduler.quotes())
+                if pipeline.next_runtime is not None:
+                    merged.update(pipeline.next_runtime.scheduler.quotes())
+            return merged
+
+        comparator = ShadowComparator(
+            comparison_repository,
+            tasty_cache,
+            shadow_contracts,
+            lambda: shadow_chain.get("ES"),
+        )
+
+        async def shadow_symbols_loop() -> None:
+            """Denní obnova chain mapy + průběžné dorovnání subskripce."""
+            while not shadow_stop.is_set():
+                try:
+                    today = dt.datetime.now(dt.UTC).date()
+                    # Jedna mapa per produkt; ES i NQ jsou v témže chain endpointu
+                    # svých produktů — mapy se drží per symbol pipeline
+                    symbols: set[str] = set()
+                    for symbol in pipelines:
+                        chain = await symbol_map.chain(symbol, today)
+                        if symbol == "ES":
+                            shadow_chain["ES"] = chain
+                        symbols |= shadow_symbols(list(shadow_contracts().keys()), chain)
+                    if symbols:
+                        await tasty_stream.set_symbols(symbols)
+                except Exception:
+                    logger.exception("Shadow symbols refresh selhal — zkusí se za minutu")
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(shadow_stop.wait(), timeout=60.0)
+
+        shadow_tasks = [
+            asyncio.create_task(tasty_stream.run(shadow_stop)),
+            asyncio.create_task(comparator.run(shadow_stop)),
+            asyncio.create_task(shadow_symbols_loop()),
+        ]
+        # Reference na tasks se drží (RUF006) — GC by je jinak uklidil před doběhem
+        logger.info(
+            "tasty shadow mód ZAPNUT (%d úloh) — zapisuje se jen feed_comparison (#613)",
+            len(shadow_tasks),
+        )
+    elif settings.tasty_shadow:
+        logger.warning(
+            "GEXLENS_TASTY_SHADOW=1, ale chybí tasty tajemství v env — shadow se nespouští"
+        )
     # Symboly po selhaném setupu: cooldown v cyklech do dalšího pokusu
     setup_cooldown = SetupCooldown()
 

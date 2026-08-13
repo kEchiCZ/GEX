@@ -109,6 +109,13 @@ class Settings(BaseSettings):
     # Strop šířky denní obálky strikes (ADR-0002); při dosažení se obálka posouvá
     strike_range_max_points: float = Field(default=800.0, gt=0)
     batch_size: int = Field(default=80, ge=1)
+
+    # tastytrade shadow mód (#613, M7 fáze 1): default VYPNUTO — zapíná se
+    # vědomě na sběr ≥5 čistých seancí; tajemství výhradně z env (ADR-0025)
+    tasty_shadow: bool = False
+    tasty_client_secret: str = ""
+    tasty_refresh_token: str = ""
+
     batch_timeout_s: float = Field(default=4.0, gt=0)
     # Burzovní čas, po kterém IBKR publikuje kompletní denní OI (#463, #511).
     # Snímek pořízený dřív nese předpublikační čísla — engine ho po tomto čase
