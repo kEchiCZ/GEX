@@ -289,6 +289,15 @@ function MainContent() {
   }, [underlayPlane, timeframe, planeProfiles, rawDay, heatScale, gexUnits, bucketMinutes])
 
   const playback = usePlayback(day.grid.minutes)
+  // Pozice playbacku je v KOŠÍCH aktuálního TF — na index 1m osy se mapuje
+  // koncem koše (#507: PCR indexoval 1m řadu pozicí v koších a při TF > 1m
+  // ukazoval hodnotu ze začátku dne)
+  const playbackMinuteIdx = useMemo(() => {
+    const length = rawDay.minutesIso.length
+    if (length === 0) return 0
+    if (playback.isLive) return length - 1
+    return Math.min((playback.position + 1) * bucketMinutes - 1, length - 1)
+  }, [rawDay.minutesIso.length, playback.isLive, playback.position, bucketMinutes])
   // Forward GEX (#572): bloky budoucích dnů — jen Daily + Dyn GEX podklad.
   // V replay (přetáčení) se projekce nekreslí (ADR-0006), guard níže.
   const forwardBlocksAll = useGexForward(
@@ -928,17 +937,14 @@ function MainContent() {
     const flipSeries =
       rawDay.overlays.levels?.find((line) => line.name === 'flip')?.series ??
       rawDay.minutesIso.map(() => null)
-    const positionIdx = playback.isLive
-      ? rawDay.minutesIso.length - 1
-      : Math.min(playback.position, rawDay.minutesIso.length - 1)
     return {
       dateIso: viewDate,
       minutesIso: rawDay.minutesIso,
       spotSeries: rawDay.spotSeries,
       flipSeries,
-      positionIdx,
+      positionIdx: playbackMinuteIdx, // pozice v koších → 1m (#507)
     }
-  }, [timeframe, rawDay, playback.isLive, playback.position, viewDate])
+  }, [timeframe, rawDay, playbackMinuteIdx, viewDate])
   const applyPreset = useCallback(
     (preset: RangePreset) => {
       if (!presetInputs) return
@@ -961,8 +967,10 @@ function MainContent() {
   // v ose se přeskakují couváním na nejbližší minutu se snapshotem.
   const rangeWindowRows = useMemo(() => {
     if (!rangeSpan || !day.profileByMinute) return null
+    // profileByMinute je po agregaci KOŠOVÝ (rowsAt bere index koše, #503) —
+    // proto se sahá přes startBucket/endBucket, ne 1m indexy (#507 třída chyb)
     const source = day.profileByMinute
-    const { fromIdx, toIdx } = rangeSpan
+    const { startBucket: fromIdx, endBucket: toIdx } = rangeSpan
     let rows2: ReturnType<typeof source.rowsAt> = []
     for (
       let idx = Math.min(toIdx, source.length - 1);
@@ -1084,7 +1092,7 @@ function MainContent() {
       <Dashboard
         profileRows={profileRows}
         spot={spot}
-        pcr={day.raw ? pcrAt(day.raw, Math.min(playback.position, day.raw.minutes - 1)) : undefined}
+        pcr={day.raw ? pcrAt(day.raw, Math.min(playbackMinuteIdx, day.raw.minutes - 1)) : undefined}
         pcrSeries={day.raw ? pcrVolumeSeries(day.raw) : undefined}
         callWall={lastValue(
           day.overlays.walls?.find((line) => line.name === 'call_wall')?.series,
@@ -1324,8 +1332,7 @@ function MainContent() {
           onClick={() => {
             const minuteIso = playback.isLive
               ? new Date().toISOString()
-              : (day.minutesIso[Math.min(playback.position, day.minutesIso.length - 1)] ??
-                new Date().toISOString())
+              : (day.minutesIso[playbackMinuteIdx] ?? new Date().toISOString())
             setJournalDraft({ tsRef: minuteIso })
             setView('journal')
           }}
