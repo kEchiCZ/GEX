@@ -65,7 +65,7 @@ export interface Toggles {
 }
 
 export type AppView =
-  'chart' | 'dashboard' | 'chain' | 'setups' | 'journal' | 'news' | 'stats' | 'console' | 'settings'
+  'chart' | 'dashboard' | 'chain' | 'setups' | 'briefing' | 'journal' | 'news' | 'stats' | 'console' | 'settings' // prettier-ignore
 export type Theme = 'dark' | 'light'
 
 /** Režim zobrazení signálů (#295, SPEC 6.1/S9): výpočet běží vždy, tohle řídí jen UI. */
@@ -167,9 +167,10 @@ interface AppState {
   setOiSource: (source: OiSource) => void
   view: AppView
   setView: (view: AppView) => void
-  /** Rychlý vstup do deníku (#673): předvyplněný okamžik z Replay tlačítka ✎. */
-  journalDraft: { tsRef: string } | null
-  setJournalDraft: (draft: { tsRef: string } | null) => void
+  /** Rychlý vstup do deníku (#673): předvyplněný okamžik (✎/Shift+klik);
+      briefing (#674) předvyplní i text ranního plánu. */
+  journalDraft: { tsRef: string; text?: string } | null
+  setJournalDraft: (draft: { tsRef: string; text?: string } | null) => void
   /** Traders mode (#627 bod 5): zapíná trading vrstvy — teď značky deníku
       v ose (#673); postupně referenční úrovně (#678). Default vypnuto. */
   tradersMode: boolean
@@ -206,6 +207,7 @@ const VIEWS: readonly AppView[] = [
   'dashboard',
   'chain',
   'setups',
+  'briefing',
   'journal',
   'news',
   'stats',
@@ -278,7 +280,7 @@ export function AppStateProvider({
   const [interval, setInterval] = usePersistentState<Interval>('interval', '1m', oneOf(INTERVALS))
   const [view, setView] = useState<AppView>(() => initialFromUrl().view)
   // Rychlý vstup do deníku (#673) — jen v paměti, nepersistuje se
-  const [journalDraft, setJournalDraft] = useState<{ tsRef: string } | null>(null)
+  const [journalDraft, setJournalDraft] = useState<{ tsRef: string; text?: string } | null>(null)
   // Traders mode (#627 bod 5): přepínač trading vrstev; když se osvědčí,
   // přepínač zmizí a vrstvy budou standard
   const [tradersMode, setTradersMode] = usePersistentState<boolean>(

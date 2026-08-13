@@ -15,6 +15,7 @@ const NAV_ITEMS: Array<{ view: AppView; label: string }> = [
   { view: 'dashboard', label: 'Dashboard' },
   { view: 'chain', label: 'Řetěz' },
   { view: 'setups', label: 'Setupy' },
+  { view: 'briefing', label: 'Briefing' },
   { view: 'journal', label: 'Deník' },
   { view: 'news', label: 'News' },
   { view: 'stats', label: 'Stats' },

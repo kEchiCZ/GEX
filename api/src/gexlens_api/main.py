@@ -300,6 +300,69 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         }
 
+    @app.get("/bars/{symbol}")
+    def bars(symbol: str, date: dt.date) -> dict[str, object]:
+        """1min OHLCV bary podkladu za obchodní seanci (#674, #678).
+
+        Lehká JSON alternativa k /replay pro pohledy, které potřebují jen cenu
+        (briefing: overnight rozsah + včerejší settle; referenční úrovně:
+        PDH/PDL, VWAP). Osa dne = Globex seance (session_frame, #512).
+        """
+        return {
+            "symbol": symbol,
+            "date": date.isoformat(),
+            "bars": _records(
+                repository.session_frame(lambda d: repository.bars(symbol, d), date)
+            ),
+        }
+
+    @app.get("/oidelta/{symbol}/{expiry}")
+    def oi_delta(symbol: str, expiry: str, movers: int = 10) -> dict[str, object]:
+        """ΔOI přes noc (#674): souhrn změny OI vs. předchozí archivovaný den.
+
+        Porovnává poslední dva archivované dny věčného OI archivu dané expirace
+        (ranní archiv ~po otevření CME nese včerejší settlement OI). Před prvním
+        archivem expirace vrací prázdný tvar — briefing sekci skryje.
+        """
+        empty: dict[str, object] = {"symbol": symbol, "expiry": expiry, "days": None}
+        try:
+            repo = oi_repository()
+            today_utc = dt.datetime.now(dt.UTC).date()
+            current = repo.latest_day_before(symbol, expiry, today_utc + dt.timedelta(days=1))
+            if current is None:
+                return empty
+            previous = repo.latest_day_before(symbol, expiry, current)
+            latest = {(r.strike, r.right): r.oi for r in repo.values_for(symbol, expiry, current)}
+            prior: dict[tuple[float, str], float] = {}
+            if previous is not None:
+                prior = {
+                    (r.strike, r.right): r.oi for r in repo.values_for(symbol, expiry, previous)
+                }
+        except Exception:
+            return empty  # OI archiv nedostupný — briefing drží tvar bez ΔOI
+        totals = {"C": 0.0, "P": 0.0}
+        deltas = {"C": 0.0, "P": 0.0}
+        rows: list[dict[str, object]] = []
+        for (strike, right), oi in latest.items():
+            totals[right] = totals.get(right, 0.0) + oi
+            delta = oi - prior.get((strike, right), 0.0) if prior else 0.0
+            deltas[right] = deltas.get(right, 0.0) + delta
+            rows.append({"strike": strike, "right": right, "oi": oi, "delta": delta})
+        rows.sort(key=lambda row: -abs(float(row["delta"])))  # type: ignore[arg-type]
+        return {
+            "symbol": symbol,
+            "expiry": expiry,
+            "days": {
+                "current": current.isoformat(),
+                "previous": previous.isoformat() if previous is not None else None,
+            },
+            "call_total": totals.get("C", 0.0),
+            "put_total": totals.get("P", 0.0),
+            "call_delta": deltas.get("C", 0.0),
+            "put_delta": deltas.get("P", 0.0),
+            "movers": rows[: max(0, movers)],
+        }
+
     @app.get("/setups/{symbol}")
     def setups_list(
         symbol: str, date: dt.date | None = None, status: str | None = None

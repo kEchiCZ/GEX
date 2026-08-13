@@ -615,3 +615,50 @@ def test_journal_crud_a_validace(client: TestClient) -> None:
 
     assert client.delete(f"/journal/{entry_id}").status_code == 204
     assert client.get("/journal").json()["journal"] == []
+
+
+def test_bars_endpoint(client: TestClient) -> None:
+    """Lehké OHLCV bary (#674/#678): JSON alternativa k /replay jen pro cenu."""
+    payload = client.get(f"/bars/ES?date={DAY.isoformat()}").json()
+    assert payload["symbol"] == "ES"
+    assert len(payload["bars"]) == MINUTES
+    first = payload["bars"][0]
+    assert {"ts_min", "open", "high", "low", "close", "volume"} <= set(first)
+    assert client.get("/bars/NEZNAMY?date=2026-07-16").status_code == 404
+
+
+def test_oidelta_endpoint(settings: Settings) -> None:
+    """ΔOI přes noc (#674): souhrn posledních dvou archivovaných dnů expirace."""
+    from sqlalchemy import create_engine as sa_create_engine
+
+    from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
+
+    oi_repo = OIEodRepository(sa_create_engine(settings.database_url))
+    oi_repo.ensure_schema()
+    previous_day = DAY - dt.timedelta(days=1)
+    oi_repo.upsert_many(
+        [
+            OIRecord("ES", "20260716", 7600.0, "C", previous_day, 100.0),
+            OIRecord("ES", "20260716", 7600.0, "P", previous_day, 200.0),
+            OIRecord("ES", "20260716", 7600.0, "C", DAY, 150.0),
+            OIRecord("ES", "20260716", 7600.0, "P", DAY, 180.0),
+            OIRecord("ES", "20260716", 7650.0, "C", DAY, 40.0),  # nový strike bez včerejška
+        ]
+    )
+    client = TestClient(create_app(settings))
+
+    payload = client.get("/oidelta/ES/20260716").json()
+    assert payload["days"] == {
+        "current": DAY.isoformat(),
+        "previous": previous_day.isoformat(),
+    }
+    assert payload["call_total"] == 190.0
+    assert payload["put_total"] == 180.0
+    assert payload["call_delta"] == 90.0  # +50 na 7600 + 40 nový strike
+    assert payload["put_delta"] == -20.0
+    movers = payload["movers"]
+    assert movers[0]["strike"] == 7600.0 and movers[0]["right"] == "C"  # |Δ| 50 největší
+
+    # Bez archivu drží tvar (days: None) — briefing sekci skryje
+    empty = client.get("/oidelta/ES/20991231").json()
+    assert empty["days"] is None
