@@ -78,6 +78,7 @@ function StrikeProfileBase({
   axisStrikes = null,
   symbol = 'ES',
   expiry = null,
+  windowLabel = null,
 }: {
   rows: ProfileRow[]
   spot: number | null
@@ -98,6 +99,9 @@ function StrikeProfileBase({
   /** Symbol a expirace pro P/C panel (#469) — multiplikátor a popiska původu. */
   symbol?: string
   expiry?: string | null
+  /** Okenní režim P/C panelu (#486): popisek aktivního range; `rows` jsou pak
+      okenní řádky (#484). */
+  windowLabel?: string | null
   /** Strikes HEATMAPY vzestupně — sdílená osa Y (#213). Řádky panelu (Σ souhrn
   = sjednocení expirací) můžou mít jinou sadu než graf; bez kotvení k této ose
   by se cenové osy obou panelů rozjely. Null = osa z vlastních řádků (legacy). */
@@ -564,7 +568,13 @@ function StrikeProfileBase({
         </div>
       )}
       {/* PUT/CALL v prémiích/kontraktech/notionalu (#469) — řádky zobrazené minuty */}
-      <PcrPanel rows={ordered} symbol={symbol} expiry={expiry} spot={spot} />
+      <PcrPanel
+        rows={ordered}
+        symbol={symbol}
+        expiry={expiry}
+        spot={spot}
+        windowLabel={windowLabel}
+      />
     </aside>
   )
 }

@@ -773,3 +773,29 @@ def test_flow_window_summary(client: TestClient) -> None:
         ).status_code
         == 422
     )
+
+
+def test_profile_window_pc_summary_golden(client: TestClient) -> None:
+    """Golden #486: ručně spočítaný P/C souhrn okna (3 strikes) == výstup API.
+
+    Fixture: vol(t,i,strana) = 10·(t+1)·(i+1) + 5 pro C; bid 10, ask 10.5
+    → mid 10.25. Okno (t0, t2]: vol_okna = 20·(i+1) na obou stranách.
+      volume/strana  = 20·(1+2+3) = 120
+      premium/strana = 120 × 10.25 = 1230 (v bodech; multiplikátor řeší klient)
+    """
+    payload = client.get(
+        "/profile/ES/20260716",
+        params={
+            "date": DAY.isoformat(),
+            "from": ts(0).isoformat(),
+            "to": ts(2).isoformat(),
+            "variant": "vol",
+        },
+    ).json()
+    summary = payload["window_summary"]
+    assert summary["call_volume"] == pytest.approx(120.0)
+    assert summary["put_volume"] == pytest.approx(120.0)
+    assert summary["call_premium_points"] == pytest.approx(1230.0)
+    assert summary["put_premium_points"] == pytest.approx(1230.0)
+    assert summary["ratio_volume"] == pytest.approx(1.0)
+    assert summary["ratio_premium"] == pytest.approx(1.0)

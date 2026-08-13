@@ -1522,6 +1522,7 @@ function MainContent() {
           axisStrikes={day.grid.strikes}
           symbol={symbol}
           expiry={selectedExpiry}
+          windowLabel={rangeWindowRows && range ? rangeLabel(range) : null}
         />
       </div>
     </>

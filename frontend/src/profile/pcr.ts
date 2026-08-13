@@ -110,3 +110,47 @@ export function formatMoney(value: number): string {
   if (abs >= 1e3) return `$${(value / 1e3).toFixed(1)}k`
   return `$${value.toFixed(0)}`
 }
+
+/** Top strikes okna dle premium podílu (#486) — rozklad do tooltipu.
+
+Premium per strana striku = objem okna × mid × multiplikátor (táž aproximace
+jako computePcr s unit 'premium'); share = podíl na součtu obou stran. Stale
+strany se vylučují shodně s computePcr.
+*/
+export interface TopPremiumStrike {
+  strike: number
+  side: 'C' | 'P'
+  premium: number
+  share: number
+}
+
+export function topPremiumStrikes(
+  rows: ProfileRow[],
+  multiplier: number,
+  limit = 5,
+  staleThresholdS = STALE_THRESHOLD_S,
+): TopPremiumStrike[] {
+  const entries: Array<{ strike: number; side: 'C' | 'P'; premium: number }> = []
+  let total = 0
+  for (const row of rows) {
+    const stale = (row.staleAge ?? 0) > staleThresholdS
+    if (stale) continue
+    const callMid = row.callMid ?? 0
+    const putMid = row.putMid ?? 0
+    if (callMid > 0 && row.callVolume > 0) {
+      const premium = row.callVolume * callMid * multiplier
+      entries.push({ strike: row.strike, side: 'C', premium })
+      total += premium
+    }
+    if (putMid > 0 && row.putVolume > 0) {
+      const premium = row.putVolume * putMid * multiplier
+      entries.push({ strike: row.strike, side: 'P', premium })
+      total += premium
+    }
+  }
+  if (total <= 0) return []
+  return entries
+    .sort((a, b) => b.premium - a.premium)
+    .slice(0, limit)
+    .map((entry) => ({ ...entry, share: entry.premium / total }))
+}
