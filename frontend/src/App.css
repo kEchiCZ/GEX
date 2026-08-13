@@ -1966,3 +1966,70 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   font-size: 12px;
   white-space: nowrap;
 }
+
+/* ── Deník (#673, fáze A) ─────────────────────────────────────────── */
+.journal-view {
+  padding: 16px 24px;
+  max-width: 860px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+.journal-form {
+  background: var(--panel-bg, #161b26);
+  border: 1px solid var(--panel-border, #2a3242);
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.journal-form textarea,
+.journal-entry textarea {
+  width: 100%;
+  background: var(--input-bg, #0f131c);
+  color: inherit;
+  border: 1px solid var(--panel-border, #2a3242);
+  border-radius: 6px;
+  padding: 8px;
+  resize: vertical;
+}
+.journal-form-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.journal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.journal-entry {
+  background: var(--panel-bg, #161b26);
+  border: 1px solid var(--panel-border, #2a3242);
+  border-left: 3px solid #14b8a6;
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.journal-entry header {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 0.85em;
+}
+.journal-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.journal-tag {
+  font-size: 0.8em;
+  padding: 0 6px;
+}
+.journal-text {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+}

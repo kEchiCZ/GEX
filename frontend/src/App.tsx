@@ -6,6 +6,7 @@ import { buildNewsMarkers, significantOnly } from './heatmap/newsMarkers'
 import type { NewsMarker } from './heatmap/newsMarkers'
 import { NewsMarkerDialog } from './components/NewsMarkerDialog'
 import { buildSignalMarkers } from './heatmap/signalMarkers'
+import { JournalView } from './components/JournalView'
 import { useSentimentState } from './hooks/useSentimentState'
 import { useSentimentDaily } from './hooks/useSentimentDaily'
 import { alignPlaneProfiles, useGreekPlane } from './hooks/useGreekPlane'
@@ -100,6 +101,8 @@ function MainContent() {
     symbol,
     selectedExpiry,
     view,
+    setView,
+    setJournalDraft,
     timeframe,
     interval,
     setPriceInfo,
@@ -857,6 +860,7 @@ function MainContent() {
   if (view === 'chain') return <ChainView />
   if (view === 'news') return <NewsView />
   if (view === 'setups') return <SetupsView />
+  if (view === 'journal') return <JournalView />
   if (view === 'stats') return <StatsView />
   if (view === 'console') return <Console />
   if (view === 'settings') return <SettingsView />
@@ -1027,6 +1031,22 @@ function MainContent() {
           }}
         >
           ⏮ Replay
+        </button>
+        {/* Rychlý vstup do deníku (#673): okamžik = minuta pod playbackem */}
+        <button
+          className="chip"
+          aria-label="Záznam do deníku k této minutě"
+          title="Otevře Deník s předvyplněným okamžikem (aktuální minuta playbacku)"
+          onClick={() => {
+            const minuteIso = playback.isLive
+              ? new Date().toISOString()
+              : (day.minutesIso[Math.min(playback.position, day.minutesIso.length - 1)] ??
+                new Date().toISOString())
+            setJournalDraft({ tsRef: minuteIso })
+            setView('journal')
+          }}
+        >
+          ✎
         </button>
       </div>
       <div className="chart-row">
