@@ -3,6 +3,7 @@ import { memo } from 'react'
 import { setupRrr, templateLabel } from '../api/setups'
 import type { SetupRow } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
+import { positionLabel, positionSize } from '../instrument/position'
 
 /** Čas vzniku setupu (ISO) → lokální datum + čas; prázdné, když chybí/nevalidní. */
 function setupTimestamp(iso: string): string {
@@ -21,9 +22,14 @@ function setupTimestamp(iso: string): string {
 function SetupCardBase({
   setups,
   onDismiss,
+  riskAccountUsd = 0,
+  riskPct = 0,
 }: {
   setups: SetupRow[]
   onDismiss: (id: number) => void
+  /** Kalkulačka pozice (#679): účet a % rizika ze Settings → Trading; 0 = skrýt. */
+  riskAccountUsd?: number
+  riskPct?: number
 }) {
   if (setups.length === 0) return null
   return (
@@ -51,6 +57,19 @@ function SetupCardBase({
           <div className="setup-card-meta">
             RRR {setupRrr(setup).toFixed(1)} · důvěra {setup.confidence} %
           </div>
+          {(() => {
+            // Kalkulačka pozice (#679): čistě klientský výpočet, nic na server
+            const size = positionSize({
+              symbol: setup.symbol,
+              entry: setup.entry,
+              stop: setup.stop,
+              accountUsd: riskAccountUsd,
+              riskPct,
+            })
+            return size === null ? null : (
+              <div className="setup-card-position muted">{positionLabel(size, riskPct)}</div>
+            )
+          })()}
           {setupTimestamp(setup.created_ts) && (
             <div className="setup-card-time muted">Vznik {setupTimestamp(setup.created_ts)}</div>
           )}

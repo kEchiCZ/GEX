@@ -110,6 +110,8 @@ function MainContent() {
     setView,
     setJournalDraft,
     tradersMode,
+    riskAccountUsd,
+    riskPct,
     timeframe,
     interval,
     setPriceInfo,
@@ -1179,7 +1181,14 @@ function MainContent() {
               />
             )}
             {/* Checkbox Setupy (#399): globální viditelnost vrstvy setupů */}
-            {toggles.setups && <SetupCard setups={activeSetups} onDismiss={handleDismissSetup} />}
+            {toggles.setups && (
+              <SetupCard
+                setups={activeSetups}
+                onDismiss={handleDismissSetup}
+                riskAccountUsd={riskAccountUsd}
+                riskPct={riskPct}
+              />
+            )}
             {/* Data se nedaří obnovit (#516): zobrazený stav je starý — nikdy
                 tiše neukazovat zastaralé jako živé */}
             {staleData && (

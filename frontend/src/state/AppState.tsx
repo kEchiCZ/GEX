@@ -10,7 +10,7 @@ import { GEX_UNITS } from '../heatmap/units'
 import type { GexUnits } from '../heatmap/units'
 import { FORWARD_RANGES } from '../heatmap/dailyforward'
 import type { ForwardRange } from '../heatmap/dailyforward'
-import { enumMap, mergedBooleans, oneOf, shortString, usePersistentState } from './persist'
+import { clampedNumber, enumMap, mergedBooleans, oneOf, shortString, usePersistentState } from './persist' // prettier-ignore
 
 export interface PipelineStatus {
   engine: string
@@ -175,6 +175,12 @@ interface AppState {
       v ose (#673); postupně referenční úrovně (#678). Default vypnuto. */
   tradersMode: boolean
   setTradersMode: (enabled: boolean) => void
+  /** Kalkulačka pozice (#679): velikost účtu a riziko na obchod — jen
+      v prohlížeči, na server se nikdy neposílá. */
+  riskAccountUsd: number
+  setRiskAccountUsd: (value: number) => void
+  riskPct: number
+  setRiskPct: (value: number) => void
   theme: Theme
   setTheme: (theme: Theme) => void
   alerts: AlertMessage[]
@@ -288,6 +294,13 @@ export function AppStateProvider({
     false,
     (value, fallback) => (typeof value === 'boolean' ? value : fallback),
   )
+  // Kalkulačka pozice (#679): default 5 000 $ (báze P/L statistik #191) a 1 %
+  const [riskAccountUsd, setRiskAccountUsd] = usePersistentState<number>(
+    'riskAccountUsd',
+    5000,
+    clampedNumber(0, 100_000_000),
+  )
+  const [riskPct, setRiskPct] = usePersistentState<number>('riskPct', 1, clampedNumber(0, 100))
   const [theme, setTheme] = usePersistentState<Theme>(
     'theme',
     'dark',
@@ -492,6 +505,10 @@ export function AppStateProvider({
       setJournalDraft,
       tradersMode,
       setTradersMode,
+      riskAccountUsd,
+      setRiskAccountUsd,
+      riskPct,
+      setRiskPct,
       theme,
       setTheme,
       alerts,
@@ -539,6 +556,8 @@ export function AppStateProvider({
       view,
       journalDraft,
       tradersMode,
+      riskAccountUsd,
+      riskPct,
       theme,
       alerts,
       unreadAlerts,
