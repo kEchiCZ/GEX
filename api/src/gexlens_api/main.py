@@ -311,9 +311,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "symbol": symbol,
             "date": date.isoformat(),
-            "bars": _records(
-                repository.session_frame(lambda d: repository.bars(symbol, d), date)
-            ),
+            "bars": _records(repository.session_frame(lambda d: repository.bars(symbol, d), date)),
         }
 
     @app.get("/oidelta/{symbol}/{expiry}")
