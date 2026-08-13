@@ -11,7 +11,6 @@ Prostředí: GEXLENS_DEV_TASTY_CLIENT_SECRET + GEXLENS_DEV_TASTY_REFRESH_TOKEN
 """
 
 import asyncio
-import datetime as dt
 import json
 import os
 import statistics
@@ -124,16 +123,29 @@ async def dxlink_session(url: str, token: str):
                 raise RuntimeError(f"DXLink ERROR: {message}")
         raise TimeoutError(msg_type)
 
-    await send({"type": "SETUP", "channel": 0, "version": "0.1-gexlens-probe",
-                "keepaliveTimeout": 60, "acceptKeepaliveTimeout": 60})
+    await send(
+        {
+            "type": "SETUP",
+            "channel": 0,
+            "version": "0.1-gexlens-probe",
+            "keepaliveTimeout": 60,
+            "acceptKeepaliveTimeout": 60,
+        }
+    )
     await recv_until("SETUP")
     state = await recv_until("AUTH_STATE")
     if state.get("state") == "UNAUTHORIZED":
         await send({"type": "AUTH", "channel": 0, "token": token})
         state = await recv_until("AUTH_STATE")
     assert state.get("state") == "AUTHORIZED", state
-    await send({"type": "CHANNEL_REQUEST", "channel": 1, "service": "FEED",
-                "parameters": {"contract": "AUTO"}})
+    await send(
+        {
+            "type": "CHANNEL_REQUEST",
+            "channel": 1,
+            "service": "FEED",
+            "parameters": {"contract": "AUTO"},
+        }
+    )
     await recv_until("CHANNEL_OPENED")
     return ws, send, recv_until
 
@@ -143,8 +155,16 @@ EVENT_FIELDS = {
     "Quote": ["eventSymbol", "bidPrice", "askPrice", "bidSize", "askSize"],
     "Greeks": ["eventSymbol", "volatility", "delta", "gamma", "theta", "vega", "price"],
     "Summary": ["eventSymbol", "openInterest", "dayOpenPrice", "prevDayClosePrice"],
-    "TimeAndSale": ["eventSymbol", "time", "price", "size", "aggressorSide",
-                     "spreadLeg", "extendedTradingHours", "type"],
+    "TimeAndSale": [
+        "eventSymbol",
+        "time",
+        "price",
+        "size",
+        "aggressorSide",
+        "spreadLeg",
+        "extendedTradingHours",
+        "type",
+    ],
     "Candle": ["eventSymbol", "time", "open", "high", "low", "close", "volume"],
 }
 
@@ -157,9 +177,15 @@ async def step_events(symbols: list[str], seconds: float = 90.0) -> None:
     quote = httpx.get(f"{API}/api-quote-tokens", headers=headers, timeout=15).json()["data"]
     ws, send, recv_until = await dxlink_session(quote["dxlink-url"], quote["token"])
 
-    await send({"type": "FEED_SETUP", "channel": 1, "acceptAggregationPeriod": 0,
-                "acceptDataFormat": "COMPACT",
-                "acceptEventFields": EVENT_FIELDS})
+    await send(
+        {
+            "type": "FEED_SETUP",
+            "channel": 1,
+            "acceptAggregationPeriod": 0,
+            "acceptDataFormat": "COMPACT",
+            "acceptEventFields": EVENT_FIELDS,
+        }
+    )
     config = await recv_until("FEED_CONFIG")
     accepted = sorted((config.get("eventFields") or {}).keys())
     print(json.dumps({"feed_config_accepted_events": accepted}), file=sys.stderr)
@@ -180,8 +206,10 @@ async def step_events(symbols: list[str], seconds: float = 90.0) -> None:
             await send({"type": "KEEPALIVE", "channel": 0})
             last_keepalive = time.monotonic()
         try:
-            raw = await asyncio.wait_for(ws.recv(), timeout=min(5.0, max(0.1, deadline - time.monotonic())))
-        except (TimeoutError, asyncio.TimeoutError):
+            raw = await asyncio.wait_for(
+                ws.recv(), timeout=min(5.0, max(0.1, deadline - time.monotonic()))
+            )
+        except TimeoutError:
             continue
         except Exception as error:
             print(f"// spojeni ukonceno: {type(error).__name__}", file=sys.stderr)
@@ -231,9 +259,15 @@ async def step_limits(max_expiries: int = 8, hold_s: float = 12.0) -> None:
 
     quote = httpx.get(f"{API}/api-quote-tokens", headers=headers, timeout=15).json()["data"]
     ws, send, recv_until = await dxlink_session(quote["dxlink-url"], quote["token"])
-    await send({"type": "FEED_SETUP", "channel": 1, "acceptAggregationPeriod": 0,
-                "acceptDataFormat": "COMPACT",
-                "acceptEventFields": {"Quote": EVENT_FIELDS["Quote"]}})
+    await send(
+        {
+            "type": "FEED_SETUP",
+            "channel": 1,
+            "acceptAggregationPeriod": 0,
+            "acceptDataFormat": "COMPACT",
+            "acceptEventFields": {"Quote": EVENT_FIELDS["Quote"]},
+        }
+    )
     await recv_until("FEED_CONFIG")
 
     total = 0
@@ -243,8 +277,9 @@ async def step_limits(max_expiries: int = 8, hold_s: float = 12.0) -> None:
         add = [{"type": "Quote", "symbol": sym} for sym in symbols]
         # dávkovaně po 500 v jedné zprávě, ať JSON není obří
         for offset in range(0, len(add), 500):
-            await send({"type": "FEED_SUBSCRIPTION", "channel": 1,
-                        "add": add[offset:offset + 500]})
+            await send(
+                {"type": "FEED_SUBSCRIPTION", "channel": 1, "add": add[offset : offset + 500]}
+            )
         total += len(symbols)
         got: set[str] = set()
         messages = 0
@@ -256,7 +291,7 @@ async def step_limits(max_expiries: int = 8, hold_s: float = 12.0) -> None:
                 last_keepalive = time.monotonic()
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
-            except (TimeoutError, asyncio.TimeoutError):
+            except TimeoutError:
                 continue
             except Exception as error:
                 errors.append(type(error).__name__)
@@ -271,9 +306,13 @@ async def step_limits(max_expiries: int = 8, hold_s: float = 12.0) -> None:
                         got.add(values[j])
             elif message.get("type") == "ERROR":
                 errors.append(str(message))
-        row = {"po_expiraci": str(date), "symbolu_celkem": total,
-               "quote_zprav_za_okno": messages,
-               "unikatnich_symbolu_s_kotaci": len(got), "chyby": errors}
+        row = {
+            "po_expiraci": str(date),
+            "symbolu_celkem": total,
+            "quote_zprav_za_okno": messages,
+            "unikatnich_symbolu_s_kotaci": len(got),
+            "chyby": errors,
+        }
         report.append(row)
         print(json.dumps(row, ensure_ascii=False), flush=True)
         if errors:
