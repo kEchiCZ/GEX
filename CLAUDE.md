@@ -19,6 +19,9 @@ agresora, retence 14 dní s výjimkou věčného OI archivu, jediný datový zdr
 3. Výpočty (GEX, levels, walls, CumΔ) musí mít jednotkové testy proti golden datasetu v `engine/tests/golden/`.
 4. IBKR volání nikdy netestuj proti live API v CI — použij mock vrstvu `engine/ibkr/mock.py`.
 5. Žádné hardcoded credentials; konfigurace přes `.env` (viz `.env.example`).
+   **Obsah `.env` se NIKDY nevypisuje do konzole ani logu** (ani při ladění) —
+   tajemství se referencují jen názvem proměnné; při úpravě souboru vždy
+   nejdřív ověř, že končí newline (append bez něj přilepí řádek k tajemství).
 6. Pokud SPEC něco nepokrývá, založ ADR v `docs/adr/` a označ PR labelem `needs-decision` — nerozhoduj mlčky.
 7. Komentáře a dokumentace česky, identifikátory v kódu anglicky.
 
