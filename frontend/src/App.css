@@ -2098,3 +2098,9 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   font-size: 0.82em;
   margin-top: 2px;
 }
+
+/* Relativní síla ES vs. NQ (#680, Traders mode) */
+.rs-chip {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
