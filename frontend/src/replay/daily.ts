@@ -8,6 +8,7 @@ import type { DayData } from './useDayData'
 import { profileSourceOf } from './loader'
 import type { ReplayDay } from './loader'
 import type { HeatmapGrid } from '../heatmap/grid'
+import type { GexProfileRow } from './loader'
 import type { LevelLine, PriceBar } from '../heatmap/overlays'
 import type { ProfileRow } from '../profile/bars'
 
@@ -68,6 +69,9 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
   const price: PriceBar[] = []
   const spotSeries: (number | null)[] = Array.from({ length: columns }, () => null)
   const profileByMinute: ProfileRow[][] = []
+  // Dyn Daily (#572): sloupec dne = POSLEDNÍ profil dne (stejná konvence
+  // jako OI vrstvy výše — stav na konci dne)
+  const gexProfileByDay: (GexProfileRow | null)[] = Array.from({ length: columns }, () => null)
   const lineSeries = new Map<string, { color: string; series: (number | null)[] }>()
 
   let previousClose = Number.NaN
@@ -103,6 +107,7 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
       spotSeries[dayIdx] = bar.close
     }
     profileByMinute.push(day.profileByMinute.rowsAt(day.profileByMinute.length - 1))
+    gexProfileByDay[dayIdx] = day.gexProfile.at(-1) ?? null
 
     for (const line of [...(day.overlays.levels ?? []), ...(day.overlays.walls ?? [])]) {
       if (!lineSeries.has(line.name)) {
@@ -142,9 +147,11 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
     demoProfileRows: null,
     spotSeries,
     minuteLabels: entries.map((entry) => dayLabel(entry.date)),
-    lastMinuteIso: null, // Daily pohled se neprojektuje (sloupec = den)
+    lastMinuteIso: null, // intradenní projekce se v Daily nekreslí (sloupec = den)
     minutesIso: [], // plochy (#204) jsou intraday vrstva
-    gexProfile: null, // Dyn GEX profil je intraday vrstva (ADR-0009)
+    // Dyn Daily podklad (#572): poslední profil každého dne; budoucí dny
+    // dodává forward pole (#519) přes projectDailyForward
+    gexProfile: gexProfileByDay.some((row) => row !== null) ? gexProfileByDay : null,
     gexField: null,
     rawFa: null, // FA zdroj OI je intraday vrstva (#232)
     gexProfileFa: null,

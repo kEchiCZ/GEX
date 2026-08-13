@@ -30,6 +30,8 @@ import { StatsView } from './components/StatsView'
 import { StrikeProfile } from './components/StrikeProfile'
 import { useSetups } from './hooks/useSetups'
 import { buildGexGrid, projectGexField } from './heatmap/gexmode'
+import { extendDailyGrid, forwardBoundaries, forwardLabels, futureBlocks, projectDailyForward } from './heatmap/dailyforward' // prettier-ignore
+import { useGexForward } from './hooks/useGexForward'
 import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
 import type { HeatmapScale, MeasuredHeatmapMode } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
@@ -106,6 +108,7 @@ function MainContent() {
     setOhlcCoverage,
     signalMode,
     underlayPlane,
+    forwardRange,
     newsMarkerFilter,
     gexUnits,
     oiSource,
@@ -251,13 +254,35 @@ function MainContent() {
   // pole, koncentrace ho překryjí. Stejná pipeline jako hlavní grid (agregace
   // košů, slice, projekce), aby rozměry seděly 1:1.
   const gexUnderDay = useMemo(() => {
-    if (underlayPlane === 'off' || timeframe !== 'intraday') return null
+    if (underlayPlane === 'off') return null
+    // Daily umí zatím jen Dyn GEX (#572) — charm/vanna forward až po ověření čtení
+    if (timeframe !== 'intraday' && underlayPlane !== 'gex') return null
     if (!planeProfiles || planeProfiles.every((row) => row === null)) return null
     const built = buildGexGrid(planeProfiles, rawDay.grid.strikes, rawDay.grid.minutes, heatScale, gexUnits) // prettier-ignore
     return aggregateDay({ ...rawDay, grid: built }, bucketMinutes)
-  }, [underlayPlane, timeframe, planeProfiles, rawDay, heatScale, gexUnits, bucketMinutes])
+  }, [underlayPlane, planeProfiles, rawDay, heatScale, gexUnits, bucketMinutes])
 
   const playback = usePlayback(day.grid.minutes)
+  // Forward GEX (#572): bloky budoucích dnů — jen Daily + Dyn GEX podklad.
+  // V replay (přetáčení) se projekce nekreslí (ADR-0006), guard níže.
+  const forwardBlocksAll = useGexForward(
+    symbol,
+    timeframe === 'daily' && underlayPlane === 'gex' && toggles.projection,
+  )
+  const lastDailyDate = timeframe === 'daily' ? day.overlays.timestamp : ''
+  const dailyForward = useMemo(() => {
+    if (timeframe !== 'daily' || underlayPlane !== 'gex' || !toggles.projection) return []
+    if (!playback.isLive || !lastDailyDate) return []
+    // Pojistka proti staré ose: první forward den musí navazovat na poslední
+    // naměřený sloupec (engine počítá od dnešní seance) — jinak by v ose
+    // vznikla tichá díra
+    if (!forwardBlocksAll.some((block) => block.day === lastDailyDate)) return []
+    return futureBlocks(forwardBlocksAll, lastDailyDate, forwardRange)
+  }, [timeframe, underlayPlane, toggles.projection, playback.isLive, lastDailyDate, forwardBlocksAll, forwardRange]) // prettier-ignore
+  const dailyForwardMarkers = useMemo(
+    () => (dailyForward.length > 0 ? forwardBoundaries(dailyForward, day.grid.minutes) : []),
+    [dailyForward, day.grid],
+  )
   // Živá vrstva (#141): svíčky ze spot kanálu agregované do stejných košů jako den.
   // Při přetáčení (ne-live) živá cena do grafu nepatří.
   const liveOverlay = useMemo(
@@ -448,7 +473,12 @@ function MainContent() {
   // konstantní. Jen intraday a jen LIVE — Daily má sloupec = den; při přetáčení
   // by se projektoval vynulovaný sloupec za pozicí slice (#156).
   const projectedGrid = useMemo(() => {
-    if (!toggles.projection || timeframe !== 'intraday' || !selectedExpiry || !playback.isLive) {
+    // Daily Forward (#572): měřené módy se neprojektují — osa dostane prázdné
+    // sloupce budoucích dnů, model nese jen Dyn podklad (gexUnderGrid níže)
+    if (timeframe === 'daily') {
+      return dailyForward.length > 0 ? extendDailyGrid(grid, dailyForward.length) : grid
+    }
+    if (!toggles.projection || !selectedExpiry || !playback.isLive) {
       return grid
     }
     const extra = projectionLength(
@@ -457,7 +487,7 @@ function MainContent() {
       bucketMinutes,
     )
     return projectGrid(grid, extra)
-  }, [grid, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, playback.isLive]) // prettier-ignore
+  }, [grid, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, playback.isLive, dailyForward]) // prettier-ignore
   // Dyn GEX podklad (#242): stejný slice + projekce jako hlavní grid — projekční
   // zóna nese modelované budoucí sloupce (ADR-0009 fáze 2)
   const gexUnderGrid = useMemo(() => {
@@ -465,7 +495,18 @@ function MainContent() {
     const sliced = playback.isLive
       ? gexUnderDay.grid
       : sliceGrid(gexUnderDay.grid, playback.position)
-    if (!toggles.projection || timeframe !== 'intraday' || !selectedExpiry || !playback.isLive) {
+    if (timeframe === 'daily') {
+      // Forward GEX (#572): budoucí dny z bloků #519; hranice expirací nese
+      // grid v hardEdgesX, ať blur útes nerozmaže
+      return dailyForward.length > 0
+        ? projectDailyForward(sliced, dailyForward, {
+            profiles: planeProfiles,
+            scale: heatScale,
+            units: gexUnits,
+          })
+        : sliced
+    }
+    if (!toggles.projection || !selectedExpiry || !playback.isLive) {
       return sliced
     }
     const extra = projectionLength(
@@ -480,23 +521,21 @@ function MainContent() {
       scale: heatScale,
       units: gexUnits,
     })
-  }, [gexUnderDay, planeProfiles, planeField, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, heatScale, gexUnits]) // prettier-ignore
+  }, [gexUnderDay, planeProfiles, planeField, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, heatScale, gexUnits, dailyForward]) // prettier-ignore
   const projectionExtra = projectedGrid.minutes - (projectedGrid.dataMinutes ?? projectedGrid.minutes) // prettier-ignore
-  const chartLabels = useMemo(
-    () =>
-      projectionExtra <= 0
-        ? day.minuteLabels
-        : [
-            ...day.minuteLabels,
-            ...projectionLabels(
-              day.lastMinuteIso ?? undefined,
-              projectionExtra,
-              bucketMinutes,
-              minuteLabel,
-            ),
-          ],
-    [day.minuteLabels, day.lastMinuteIso, projectionExtra, bucketMinutes],
-  )
+  const chartLabels = useMemo(() => {
+    if (projectionExtra <= 0) return day.minuteLabels
+    if (timeframe === 'daily') return [...day.minuteLabels, ...forwardLabels(dailyForward)]
+    return [
+      ...day.minuteLabels,
+      ...projectionLabels(
+        day.lastMinuteIso ?? undefined,
+        projectionExtra,
+        bucketMinutes,
+        minuteLabel,
+      ),
+    ]
+  }, [day.minuteLabels, day.lastMinuteIso, projectionExtra, bucketMinutes, timeframe, dailyForward]) // prettier-ignore
   // Markery zpráv se počítají nad CELOU osou včetně projekce (#287): jen tak
   // se nadcházející CPI vykreslí vpravo od živé hrany, kde ho trader čeká.
   // Filtr „Významné" (#408) pouští jen importance ≥ 2 — okrajové titulky
@@ -995,6 +1034,7 @@ function MainContent() {
               liveBars={liveOverlay.bars}
               liveLabels={liveOverlay.labels}
               minuteLabels={chartLabels}
+              forwardMarkers={dailyForwardMarkers}
               cellAbsolute={cellAbsolute}
               priceStyle={priceStyle}
               priceOpacity={priceOpacity}
