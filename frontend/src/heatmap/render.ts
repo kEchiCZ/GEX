@@ -34,6 +34,7 @@ export function gaussianBlur(
   height: number,
   radius = 2,
   constantFromX = width,
+  hardEdgesX: number[] = [],
 ): Float32Array {
   const sigma = radius / 1.5
   const kernel: number[] = []
@@ -48,13 +49,32 @@ export function gaussianBlur(
   // Od tohoto sloupce je výstup obou průchodů podél x konstantní
   const cut = Math.min(width, Math.max(0, constantFromX) + radius + 1)
 
+  // Tvrdé hranice (#572): vodorovný průchod nesmí sáhnout přes hranici
+  // expirace — segment [start, end) se rozmazává jen sám v sobě, útes
+  // mezi segmenty zůstává plný skok (AC #572)
+  const edges = [...hardEdgesX].filter((e) => e > 0 && e < width).sort((a, b) => a - b)
+  const segmentStarts = [0, ...edges]
+  const segmentOf = (x: number): [number, number] => {
+    let start = 0
+    let end = width
+    for (const edge of segmentStarts) {
+      if (edge <= x) start = edge
+      else {
+        end = edge
+        break
+      }
+    }
+    return [start, end]
+  }
+
   const horizontal = new Float32Array(field.length)
   for (let y = 0; y < height; y += 1) {
     const row = y * width
     for (let x = 0; x < cut; x += 1) {
+      const [segStart, segEnd] = edges.length > 0 ? segmentOf(x) : [0, width]
       let acc = 0
       for (let k = -radius; k <= radius; k += 1) {
-        const sx = Math.min(width - 1, Math.max(0, x + k))
+        const sx = Math.min(segEnd - 1, Math.max(segStart, x + k))
         acc += field[row + sx] * kernel[k + radius]
       }
       horizontal[row + x] = acc
@@ -117,7 +137,14 @@ export function renderGrid(
   const blurRadius = 2
   const layerOf = (values?: Float32Array): Float32Array | undefined =>
     values && style === 'blobs'
-      ? gaussianBlur(values, width, height, blurRadius, constantProjection ? dataMinutes : width)
+      ? gaussianBlur(
+          values,
+          width,
+          height,
+          blurRadius,
+          constantProjection ? dataMinutes : width,
+          grid.hardEdgesX ?? [],
+        )
       : values
 
   const call = layerOf(grid.layers.call)

@@ -8,6 +8,8 @@ import type { GexRegimeState } from '../instrument/regime'
 import type { SettleWatchInfo } from '../instrument/settlewatch'
 import { GEX_UNITS } from '../heatmap/units'
 import type { GexUnits } from '../heatmap/units'
+import { FORWARD_RANGES } from '../heatmap/dailyforward'
+import type { ForwardRange } from '../heatmap/dailyforward'
 import { enumMap, mergedBooleans, oneOf, shortString, usePersistentState } from './persist'
 
 export interface PipelineStatus {
@@ -151,6 +153,9 @@ interface AppState {
   /** Dropdown podkladové plochy Off/Dyn GEX/Charm/Vanna (#204). */
   underlayPlane: UnderlayPlane
   setUnderlayPlane: (plane: UnderlayPlane) => void
+  /** Rozsah Forward GEX projekce v Daily (#572): settle / +1 den / týden. */
+  forwardRange: ForwardRange
+  setForwardRange: (range: ForwardRange) => void
   /** Filtr news markerů Vše/Významné vedle News checkboxu (#408). */
   newsMarkerFilter: NewsMarkerFilter
   setNewsMarkerFilter: (filter: NewsMarkerFilter) => void
@@ -339,6 +344,12 @@ export function AppStateProvider({
     'all',
     oneOf(NEWS_MARKER_FILTERS),
   )
+  // Rozsah Forward GEX projekce (#572): default celý týden — přepínač filtruje
+  const [forwardRange, setForwardRange] = usePersistentState<ForwardRange>(
+    'forwardRange',
+    'week',
+    oneOf(FORWARD_RANGES),
+  )
   // Jednotka Dyn ploch (#569): default $/1 % (referenční čtení); engine ukládá $/bod
   const [gexUnits, setGexUnits] = usePersistentState<GexUnits>(
     'gexUnits',
@@ -448,6 +459,8 @@ export function AppStateProvider({
       setSignalMode,
       underlayPlane,
       setUnderlayPlane,
+      forwardRange,
+      setForwardRange,
       newsMarkerFilter,
       setNewsMarkerFilter,
       gexUnits,
@@ -487,6 +500,8 @@ export function AppStateProvider({
       setSignalMode,
       underlayPlane,
       setUnderlayPlane,
+      forwardRange,
+      setForwardRange,
       newsMarkerFilter,
       setNewsMarkerFilter,
       gexUnits,

@@ -1,6 +1,8 @@
 /** Řádky timeframe a přepínačů vizualizace (SPEC 7.1). */
 import { GEX_UNITS, GEX_UNIT_LABELS } from '../heatmap/units'
 import type { GexUnits } from '../heatmap/units'
+import { FORWARD_RANGES, FORWARD_RANGE_LABELS } from '../heatmap/dailyforward'
+import type { ForwardRange } from '../heatmap/dailyforward'
 import { INTERVALS, useAppState } from '../state/AppState'
 import type { NewsMarkerFilter, OiSource, SignalMode, Toggles, UnderlayPlane } from '../state/AppState' // prettier-ignore
 import type { SignalGateInfo } from '../api/news'
@@ -89,6 +91,9 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
     setSignalMode,
     underlayPlane,
     setUnderlayPlane,
+    forwardRange,
+    setForwardRange,
+    timeframe,
     newsMarkerFilter,
     setNewsMarkerFilter,
     gexUnits,
@@ -117,6 +122,25 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
           ))}
         </select>
       </label>
+      {/* Rozsah Forward GEX projekce (#572, jen Daily + Dyn GEX): settle = bez
+          budoucích dnů, +1 den, do konce týdne */}
+      {timeframe === 'daily' && underlayPlane === 'gex' && (
+        <label className="toggle">
+          Projekce dnů
+          <select
+            value={forwardRange}
+            onChange={(event) => setForwardRange(event.target.value as ForwardRange)}
+            aria-label="Rozsah Forward GEX projekce"
+            title="Kolik budoucích obchodních dnů modelovat: settle = žádný, +1 den, nebo do konce týdne. Budoucí dny ukazují Dyn GEX z dnešního OI mínus expirace, které do té doby odpadnou — gamma útesy."
+          >
+            {FORWARD_RANGES.map((value) => (
+              <option key={value} value={value}>
+                {FORWARD_RANGE_LABELS[value]}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {/* Jednotka Dyn ploch (#569) — jen zobrazovací přepočet, engine posílá $/bod */}
       {underlayPlane !== 'off' && (
         <label className="toggle">

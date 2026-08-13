@@ -23,6 +23,9 @@ export interface HeatmapGrid {
   staleAge: Float32Array | null
   /** Sloupce bez zaznamenaných dat (#516, díry v Daily ose) — kreslí se šrafovaně. */
   missingMinutes?: boolean[] | null
+  /** Hranice expirací na ose X (#572): blur nesmí přelít hodnoty přes tyto
+  sloupce — gamma útes je signál, ne šum. Index = první sloupec ZA hranicí. */
+  hardEdgesX?: number[] | null
 }
 
 /** Počet naměřených minut gridu (bez projekce). */

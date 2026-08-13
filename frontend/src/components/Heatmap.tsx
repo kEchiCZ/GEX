@@ -17,6 +17,7 @@ import { gaussianBlur, renderGrid } from '../heatmap/render'
 import type { SignedPalette } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
+import type { ForwardBoundary } from '../heatmap/dailyforward'
 import {
   breaksOnJump,
   candleGeometry,
@@ -122,6 +123,7 @@ export function Heatmap({
   resetKey,
   priceTick = 0.25,
   onNewsMarkerClick,
+  forwardMarkers = [],
 }: {
   grid: HeatmapGrid
   /** Dyn GEX pole jako podklad (#242) — kreslí se POD měřeným gridem; průhledné
@@ -131,6 +133,8 @@ export function Heatmap({
   underPalette?: SignedPalette
   style: HeatmapStyle
   contours: ContoursMode
+  /** Hranice expirací Forward GEX (#572): svislice + popisek odpadlé gammy. */
+  forwardMarkers?: ForwardBoundary[]
   overlays?: OverlayData
   /** Živé svíčky ze spot kanálu — kreslí se na dynamickou vrstvu (#141). */
   liveBars?: PriceBar[]
@@ -521,6 +525,32 @@ export function Heatmap({
       })
     }
 
+    // Svislice expirací Forward GEX (#572): oranžové čárkované na hranici
+    // dne PO odpadu expirace; OPEX (3. pátek) sytější a silnější. Popisek
+    // nese podíl odpadlé gammy — bez čísla je čára jen dekorace.
+    for (const marker of forwardMarkers) {
+      const x = minuteToX(marker.minuteIdx) - 0.5 * scaleX
+      context.strokeStyle = marker.isOpex ? 'rgba(255,140,20,0.95)' : 'rgba(240,160,60,0.65)'
+      context.lineWidth = marker.isOpex ? 2 : 1
+      context.setLineDash([5, 4])
+      context.beginPath()
+      context.moveTo(x, 0)
+      context.lineTo(x, logicalH)
+      context.stroke()
+      context.setLineDash([])
+      context.lineWidth = 1
+      context.fillStyle = marker.isOpex ? 'rgba(255,140,20,0.95)' : 'rgba(240,160,60,0.9)'
+      const expiryLabel = marker.expiries
+        .map((expiry) => `${Number(expiry.slice(6, 8))}.${Number(expiry.slice(4, 6))}.`)
+        .join('+')
+      const shareLabel = marker.share !== null ? ` −${Math.round(marker.share * 100)} %` : ''
+      context.fillText(
+        `po exp ${expiryLabel}${shareLabel}${marker.isOpex ? ' (OPEX)' : ''}`,
+        x + 4,
+        26,
+      )
+    }
+
     // Markery zpráv (#287, SPEC 9.1): svislá značka v čase události, barva dle
     // sentimentu, jas a tloušťka dle důležitosti, glyf kategorie nad horní
     // hranou. Nadcházející scheduled eventy jsou duté — o dopadu se neví nic.
@@ -875,6 +905,7 @@ export function Heatmap({
     logicalW,
     logicalH,
     dpr,
+    forwardMarkers,
   ])
 
   // 4) DYNAMICKÁ overlay vrstva (#141): živé svíčky ze spotu, značka aktuální ceny
