@@ -42,7 +42,9 @@ import type { HeatmapScale, MeasuredHeatmapMode } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
 import { expirySettleUtc, sessionDateFor } from './instrument/expiry'
 import { sessionDateIso } from './instrument/tz'
-import { SETUP_COLORS, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays'
+import { EM_COLOR, EM_DASH, SETUP_COLORS, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays' // prettier-ignore
+import { computeExpectedMove, emUsage } from './instrument/expectedmove'
+import { usOpenMs } from './api/briefing'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { CHARM_PALETTE, DEFAULT_SIGNED_PALETTE, VANNA_PALETTE } from './heatmap/render'
 import { DEFAULT_VIEW, ZOOM_MAX, ZOOM_MIN, visiblePriceRange } from './heatmap/view'
@@ -604,6 +606,40 @@ function MainContent() {
     },
     [day.minutesIso, bucketMinutes, setJournalDraft, setView],
   )
+  // Expected move dne (#676, Traders mode): ATM straddle v referenční minutě
+  // (první minuta US seance; před openem průběžný odhad z poslední overnight).
+  // Čistě klientský výpočet z mid prémií, které /replay už nese (#469).
+  const expectedMove = useMemo(() => {
+    if (!tradersMode || timeframe !== 'intraday') return null
+    const source = rawDay.profileByMinute
+    if (!source || rawDay.minutesIso.length === 0) return null
+    return computeExpectedMove({
+      minutesIso: rawDay.minutesIso,
+      spotSeries: rawDay.spotSeries,
+      rowsAt: (idx) => source.rowsAt(idx),
+      usOpenMs: usOpenMs(viewDate),
+    })
+  }, [tradersMode, timeframe, rawDay, viewDate])
+  const emLines = useMemo((): LevelLine[] => {
+    if (!expectedMove) return []
+    const length = day.minuteLabels.length
+    const refBucket = Math.floor(expectedMove.refMinuteIdx / bucketMinutes)
+    const line = (name: string, value: number): LevelLine => ({
+      name,
+      color: EM_COLOR,
+      dash: [...EM_DASH],
+      series: Array.from({ length }, (_, idx) => (idx >= refBucket ? value : null)),
+    })
+    const upper = line('em_upper', expectedMove.upper)
+    // Vyčerpání rozsahu do cenovky: EM v bodech + kde v pásmu cena právě je
+    const spotNow = lastValue(day.spotSeries, day.spotSeries.length - 1)
+    const usage = spotNow === null ? null : Math.round(emUsage(expectedMove, spotNow) * 100)
+    upper.labelSuffix =
+      ` · EM ${Math.round(expectedMove.em * 100) / 100} b` +
+      (usage === null ? '' : ` · ${usage} %`) +
+      (expectedMove.preOpen ? ' (pre-open)' : '')
+    return [upper, line('em_lower', expectedMove.lower)]
+  }, [expectedMove, day.minuteLabels.length, day.spotSeries, bucketMinutes])
   // Šipky signálů (#295, SPEC 9.0): dropdown vybírá zobrazenou větev (S9 —
   // počítají se obě vždy); ⚠ badge při nepotvrzené intradenní změně stavu
   const signalMarkers = useMemo(() => {
@@ -866,7 +902,7 @@ function MainContent() {
         ...resolveSecondaryWalls(baseOverlays.walls ?? [], toggles.secondaryWall),
         ...computedWalls,
       ],
-      levels: [...(baseOverlays.levels ?? []), ...setupLines, ...ladderLines],
+      levels: [...(baseOverlays.levels ?? []), ...setupLines, ...ladderLines, ...emLines],
       // Budoucí seance v projekci (#195)
       sessions: [...(baseOverlays.sessions ?? []), ...projectedSessionMarkers],
       // Markery zpráv (#287) — osa nese i projekční část, takže nadcházející
@@ -879,7 +915,7 @@ function MainContent() {
         ? signalMarkers
         : signalMarkers.filter((signal) => signal.minuteIdx <= playback.position),
     }),
-    [baseOverlays, computedWalls, setupLines, ladderLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, journalMarkers, signalMarkers, playback.isLive, playback.position], // prettier-ignore
+    [baseOverlays, computedWalls, setupLines, ladderLines, emLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, journalMarkers, signalMarkers, playback.isLive, playback.position], // prettier-ignore
   )
 
   if (view === 'dashboard') {
