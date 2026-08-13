@@ -93,6 +93,12 @@ export function JournalView() {
   useEffect(() => {
     if (journalDraft) {
       setFormTs(toLocalInput(journalDraft.tsRef))
+      // Briefing (#674) předvyplní kostru ranního plánu
+      if (journalDraft.text !== undefined) {
+        setFormText(journalDraft.text)
+        setFormType('retro_dne')
+        setFormTags('plan')
+      }
       setJournalDraft(null)
     }
   }, [journalDraft, setJournalDraft])

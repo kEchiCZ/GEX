@@ -9,6 +9,7 @@ import { fetchJournal } from './api/journal'
 import type { JournalEntry } from './api/journal'
 import { NewsMarkerDialog } from './components/NewsMarkerDialog'
 import { buildSignalMarkers } from './heatmap/signalMarkers'
+import { BriefingView } from './components/BriefingView'
 import { JournalView } from './components/JournalView'
 import { useSentimentState } from './hooks/useSentimentState'
 import { useSentimentDaily } from './hooks/useSentimentDaily'
@@ -902,6 +903,7 @@ function MainContent() {
   if (view === 'chain') return <ChainView />
   if (view === 'news') return <NewsView />
   if (view === 'setups') return <SetupsView />
+  if (view === 'briefing') return <BriefingView />
   if (view === 'journal') return <JournalView />
   if (view === 'stats') return <StatsView />
   if (view === 'console') return <Console />

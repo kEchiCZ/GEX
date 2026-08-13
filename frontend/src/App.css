@@ -2033,3 +2033,62 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   margin: 6px 0 0;
   white-space: pre-wrap;
 }
+
+/* Ranní briefing (#674) */
+.briefing-view {
+  padding: 16px 20px;
+  overflow-y: auto;
+  height: 100%;
+}
+.briefing-header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.briefing-header h2 {
+  margin: 0;
+}
+.briefing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+  max-width: 1200px;
+}
+.briefing-card {
+  background: var(--panel-bg, #161b26);
+  border: 1px solid var(--panel-border, #2a3242);
+  border-left: 3px solid #e8c14b;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.briefing-card h3 {
+  margin: 0 0 8px;
+  font-size: 0.95em;
+}
+.briefing-em {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+.briefing-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.briefing-table td {
+  padding: 2px 0;
+  font-size: 0.9em;
+}
+.briefing-table td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.briefing-list {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9em;
+}
