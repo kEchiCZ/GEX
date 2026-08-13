@@ -78,6 +78,10 @@ services:
       # Základ symbolů a strop souběžných instrumentů jdou ladit z .env (#215:
       # výchozí strop 3 = ES+NQ+MES; pro MNQ je potřeba 4)
       GEXLENS_SYMBOLS: ${GEXLENS_SYMBOLS:-ES}
+      # tastytrade shadow (#613): default vypnuto, tajemství z .env (ADR-0025)
+      GEXLENS_TASTY_SHADOW: ${GEXLENS_TASTY_SHADOW:-false}
+      GEXLENS_TASTY_CLIENT_SECRET: ${GEXLENS_TASTY_CLIENT_SECRET:-}
+      GEXLENS_TASTY_REFRESH_TOKEN: ${GEXLENS_TASTY_REFRESH_TOKEN:-}
       GEXLENS_MAX_INSTRUMENTS: ${GEXLENS_MAX_INSTRUMENTS:-3}
     volumes:
       - ./data:/app/data
