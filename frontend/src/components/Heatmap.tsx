@@ -607,7 +607,7 @@ export function Heatmap({
     if (range) {
       const startX = minuteToX(range.startBucket) - 0.5 * scaleX
       const endX = minuteToX(range.endBucket + 1) - 0.5 * scaleX
-      context.fillStyle = 'rgba(8,10,15,0.45)'
+      context.fillStyle = 'rgba(8,10,15,0.72)'
       if (startX > 0) context.fillRect(0, 0, Math.min(startX, logicalW), logicalH)
       if (endX < logicalW) context.fillRect(Math.max(0, endX), 0, logicalW - endX, logicalH)
       context.strokeStyle = 'rgba(77,163,255,0.9)'

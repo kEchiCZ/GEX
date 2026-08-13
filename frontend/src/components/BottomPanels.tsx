@@ -193,14 +193,14 @@ function BottomPanelsBase({
           y={0}
           width={Math.max(0, range.startBucket * step)}
           height={height}
-          fill="rgba(8,10,15,0.45)"
+          fill="rgba(8,10,15,0.72)"
         />
         <rect
           x={(range.endBucket + 1) * step}
           y={0}
           width={Math.max(0, width - (range.endBucket + 1) * step)}
           height={height}
-          fill="rgba(8,10,15,0.45)"
+          fill="rgba(8,10,15,0.72)"
         />
       </>
     ) : null
