@@ -311,6 +311,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             rows = []  # DB nedostupná — UI drží tvar
         return {"symbol": symbol, "setups": rows}
 
+    @app.get("/gexforward/{symbol}")
+    def gex_forward(symbol: str, date: dt.date | None = None) -> dict[str, object]:
+        """Forward GEX (#519): modelové Dyn pole per budoucí obchodní den.
+
+        Bloky z partice dne (přepočet po ranním OI archivu). Prázdné `days`
+        = pole se ještě nespočítalo (např. před prvním archivem dne).
+        `math.isnan` u dropped_share prvního dne → None v JSON.
+        """
+        day = date or trading_session_date(dt.datetime.now(dt.UTC))
+        try:
+            frame = repository.gexforward(symbol, day)
+        except PartitionNotFoundError:
+            return {"symbol": symbol, "date": day.isoformat(), "days": []}
+        days: list[dict[str, object]] = []
+        for row in frame.to_dict("records"):
+            share = row.get("dropped_share")
+            days.append(
+                {
+                    "day": row["day"],
+                    "grid_start": float(row["grid_start"]),
+                    "grid_step": float(row["grid_step"]),
+                    "values": [float(v) for v in row["values"]],
+                    "dropped_expiries": [str(e) for e in row["dropped_expiries"]],
+                    "dropped_share": float(share) if share is not None and share == share else None,
+                    "iv_fallback_share": float(row["iv_fallback_share"]),
+                    "computed_ts": row["computed_ts"].isoformat(),
+                }
+            )
+        days.sort(key=lambda block: str(block["day"]))
+        return {"symbol": symbol, "date": day.isoformat(), "days": days}
+
     @app.get("/gammacliff/{symbol}")
     def gamma_cliff(symbol: str, limit: int = 30) -> dict[str, object]:
         """Gamma útes (#576): živý podíl dnes odpadající gammy + uložená historie.

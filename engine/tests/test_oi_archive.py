@@ -10,7 +10,12 @@ from sqlalchemy import create_engine, text
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockOIFetcher
-from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository, OIRecord
+from gexlens_engine.storage.oi_archive import (
+    ContractSnapshot,
+    OIArchiver,
+    OIEodRepository,
+    OIRecord,
+)
 
 DAY_1 = dt.date(2026, 7, 15)
 DAY_2 = dt.date(2026, 7, 16)
@@ -222,10 +227,12 @@ async def test_fetcher_exception_counts_as_missing(repository: OIEodRepository) 
     specs = contracts(count=2)
 
     class ExplodingFetcher(MockOIFetcher):
-        async def fetch_oi(self, spec: OptionContractSpec, timeout_s: float) -> float | None:
+        async def fetch_snapshot(
+            self, spec: OptionContractSpec, timeout_s: float
+        ) -> ContractSnapshot | None:
             if spec == specs[0]:
                 raise RuntimeError("mock: timeout")
-            return 42.0
+            return ContractSnapshot(oi=42.0)
 
     archiver = OIArchiver(repository, ExplodingFetcher(), Settings())
     result = await archiver.archive_day(specs, DAY_1)
@@ -250,3 +257,37 @@ async def test_upsert_on_real_postgres() -> None:
 
     assert repo.count_for_day("ES", DAY_1) == 6
     assert DAY_1 in repo.days("ES")
+
+
+async def test_snapshot_hodnoty_se_ulozi_a_prectou(repository: OIEodRepository) -> None:
+    """#519: IV/greeks/prémie z ranního průchodu projdou až do chain_for_day."""
+    specs = contracts(count=2)
+    fetcher = MockOIFetcher(
+        snapshots={
+            specs[0]: ContractSnapshot(
+                oi=100.0,
+                iv=0.21,
+                delta=0.55,
+                gamma=0.002,
+                theta=-1.2,
+                vega=3.4,
+                close_prem=12.5,
+                und_price=7500.25,
+            ),
+            specs[1]: ContractSnapshot(oi=50.0),  # greeks nedorazily → NULL
+        }
+    )
+    archiver = OIArchiver(repository, fetcher, Settings())
+    result = await archiver.archive_day(specs, DAY_1)
+    assert result.written == 2
+
+    chain = repository.chain_for_day("ES", DAY_1)
+    by_strike = {(r.strike, r.right): r for r in chain}
+    full = by_strike[(specs[0].strike, specs[0].right)]
+    assert full.iv == 0.21
+    assert full.delta == 0.55
+    assert full.close_prem == 12.5
+    assert full.und_price == 7500.25
+    bare = by_strike[(specs[1].strike, specs[1].right)]
+    assert bare.oi == 50.0
+    assert bare.iv is None and bare.delta is None

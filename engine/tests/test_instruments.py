@@ -39,7 +39,12 @@ from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.meta import settings_table, watchlist_table
-from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository, OIRecord
+from gexlens_engine.storage.oi_archive import (
+    ContractSnapshot,
+    OIArchiver,
+    OIEodRepository,
+    OIRecord,
+)
 from gexlens_engine.storage.parquet_store import NetFlowRow, SnapshotWriter
 from gexlens_engine.storage.setups_store import SetupsRepository
 
@@ -449,8 +454,10 @@ async def test_expanze_sekundaru_doarchivuje_nove_striky(
     class ConstOIFetcher(MockOIFetcher):
         """OI pro libovolný kontrakt — nové striky vzniknou až expanzí."""
 
-        async def fetch_oi(self, spec: OptionContractSpec, timeout_s: float) -> float | None:
-            return 77.0
+        async def fetch_snapshot(
+            self, spec: OptionContractSpec, timeout_s: float
+        ) -> ContractSnapshot | None:
+            return ContractSnapshot(oi=77.0)
 
     pipeline.archiver = OIArchiver(repository, ConstOIFetcher(), settings)
 
