@@ -18,6 +18,7 @@ from gexlens_engine.ibkr.lines import LineGauge
 from gexlens_engine.ibkr.scheduler import PartialQuote, QuoteSnapshot
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import PublisherLike
+from gexlens_engine.storage.oi_archive import ContractSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,11 @@ class IbQuoteStreamer:
             self._ib.cancelMktData(contract)
 
 
+# Po přečtení OI se na model greeks čeká už jen krátce (#519) — u nelikvidních
+# striků model nemusí tikat vůbec a natahovat kvůli němu ranní průchod nechceme
+SNAPSHOT_GREEKS_GRACE_S = 2.0
+
+
 class IbOIFetcher:
     """OIFetcherLike: generic tick 101 (call/put OI) — funguje pro OPT i FOP.
 
@@ -133,13 +139,19 @@ class IbOIFetcher:
     issue #65/ADR-0001); tick 101 vrací callOpenInterest/putOpenInterest.
     Hodnota se čte podle strany kontraktu — druhá strana bývá validní 0.0
     a nesmí se zaměnit.
+
+    Od #519 se z téže subskripce opportunisticky čte i IV, model greeks
+    a závěrečná prémie — kontrakt je stejně přihlášený, hodnoty jsou zdarma.
+    Ranní bid/ask se záměrně nečte (předotevírací spready lžou o likviditě).
     """
 
     def __init__(self, ib: IB, streamer: IbQuoteStreamer) -> None:
         self._ib = ib
         self._streamer = streamer
 
-    async def fetch_oi(self, spec: OptionContractSpec, timeout_s: float) -> float | None:
+    async def fetch_snapshot(
+        self, spec: OptionContractSpec, timeout_s: float
+    ) -> ContractSnapshot | None:
         contract = await self._streamer._contract(spec)  # sdílená kvalifikační cache
         if contract is None:
             return None
@@ -147,8 +159,10 @@ class IbOIFetcher:
         if self._streamer._line_gauge is not None:
             self._streamer._line_gauge.sample()
         try:
-            deadline = asyncio.get_running_loop().time() + timeout_s
-            while asyncio.get_running_loop().time() < deadline:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout_s
+            oi: float | None = None
+            while loop.time() < deadline:
                 await asyncio.sleep(0.25)
                 value = (
                     getattr(ticker, "callOpenInterest", None)
@@ -156,8 +170,33 @@ class IbOIFetcher:
                     else getattr(ticker, "putOpenInterest", None)
                 )
                 if _valid(value):
-                    return float(value)  # type: ignore[arg-type]
-            return None
+                    oi = float(value)  # type: ignore[arg-type]
+                    break
+            if oi is None:
+                return None
+            # Grace na greeks (#519): OI často dorazí dřív než model — krátké
+            # dočkání, ale nikdy přes původní deadline
+            grace_end = min(deadline, loop.time() + SNAPSHOT_GREEKS_GRACE_S)
+            while ticker.modelGreeks is None and loop.time() < grace_end:
+                await asyncio.sleep(0.25)
+            greeks = ticker.modelGreeks
+            close = float(ticker.close) if _valid(ticker.close) else None
+
+            def clean(value: float | None) -> float | None:
+                return float(value) if value is not None and _valid(value) else None
+
+            if greeks is None:
+                return ContractSnapshot(oi=oi, close_prem=close)
+            return ContractSnapshot(
+                oi=oi,
+                iv=clean(greeks.impliedVol),
+                delta=clean(greeks.delta),
+                gamma=clean(greeks.gamma),
+                theta=clean(greeks.theta),
+                vega=clean(greeks.vega),
+                close_prem=close,
+                und_price=clean(greeks.undPrice),
+            )
         finally:
             self._ib.cancelMktData(contract)
 

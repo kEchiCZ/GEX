@@ -110,6 +110,21 @@ GEXFIELD_SCHEMA = pa.schema(
     ]
 )
 
+# Forward GEX (#519): pole per budoucí obchodní den — jeden řádek = den.
+# Partice drží jen poslední stav (replace_and_write), přepočet po OI archivu.
+GEXFORWARD_SCHEMA = pa.schema(
+    [
+        ("day", pa.string()),  # ISO datum sloupce
+        ("grid_start", pa.float64()),
+        ("grid_step", pa.float64()),
+        ("values", pa.list_(pa.float64())),
+        ("dropped_expiries", pa.list_(pa.string())),
+        ("dropped_share", pa.float64()),  # NaN = první den (není vůči čemu)
+        ("iv_fallback_share", pa.float64()),
+        ("computed_ts", pa.timestamp("us", tz="UTC")),
+    ]
+)
+
 # Sekundární zdi (ADR-0008, #92) — VLASTNÍ řada, ne sloupce v LEVELS_SCHEMA:
 # přidání sloupce by rozbilo čtení existujících denních partic
 # (pq.read_table(..., schema=...)), stejné omezení jako u barů v ADR-0005
@@ -651,6 +666,14 @@ class SnapshotWriter:
         path = self._settings.derived_dir / symbol / expiry / subdir / f"{day.isoformat()}.parquet"
         buffer = self._buffer(path, GEXPROFILE_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_gexforward(
+        self, symbol: str, day: dt.date, rows: Sequence[dict[str, object]]
+    ) -> Path:
+        """Přepíše forward pole v derived/{sym}/gexforward — jen poslední stav (#519)."""
+        path = self._settings.derived_dir / symbol / "gexforward" / f"{day.isoformat()}.parquet"
+        buffer = self._buffer(path, GEXFORWARD_SCHEMA)
+        return buffer.replace_and_write(list(rows))
 
     def write_gexfield(
         self, symbol: str, expiry: str, day: dt.date, row: GexFieldRow, *, subdir: str = "gexfield"

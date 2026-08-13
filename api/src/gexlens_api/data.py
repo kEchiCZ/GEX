@@ -163,6 +163,11 @@ class DataRepository:
         path = self._settings.derived_dir / symbol / expiry / subdir / f"{day.isoformat()}.parquet"
         return self._read(path)
 
+    def gexforward(self, symbol: str, day: dt.date) -> pd.DataFrame:
+        """Forward GEX (#519): bloky per budoucí obchodní den — poslední stav dne."""
+        path = self._settings.derived_dir / symbol / "gexforward" / f"{day.isoformat()}.parquet"
+        return self._read(path)
+
     def flow(self, symbol: str, day: dt.date) -> pd.DataFrame:
         path = self._settings.derived_dir / symbol / "flow" / f"{day.isoformat()}.parquet"
         return self._read(path)

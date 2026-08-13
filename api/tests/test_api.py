@@ -538,3 +538,47 @@ def test_gammacliff_endpoint(settings: Settings) -> None:
     assert payload["today"] is not None
     assert payload["today"]["cliff_share"] == pytest.approx(0.6)
     assert payload["rows"] == []  # engine tabulku ještě nezaložil — tvar drží
+
+
+def test_gexforward_endpoint(settings: Settings) -> None:
+    """Forward GEX (#519): bloky per den z partice; NaN dropped_share → None."""
+    writer = SnapshotWriter(settings)
+    computed = dt.datetime(2026, 7, 16, 12, 0, tzinfo=dt.UTC)
+    writer.write_gexforward(
+        "ES",
+        DAY,
+        [
+            {
+                "day": "2026-07-16",
+                "grid_start": 7400.0,
+                "grid_step": 50.0,
+                "values": [1.0, 2.0, 3.0],
+                "dropped_expiries": [],
+                "dropped_share": float("nan"),
+                "iv_fallback_share": 0.1,
+                "computed_ts": computed,
+            },
+            {
+                "day": "2026-07-17",
+                "grid_start": 7400.0,
+                "grid_step": 50.0,
+                "values": [0.5, 1.0, 1.5],
+                "dropped_expiries": ["20260716"],
+                "dropped_share": 0.38,
+                "iv_fallback_share": 0.1,
+                "computed_ts": computed,
+            },
+        ],
+    )
+    client = TestClient(create_app(settings))
+    payload = client.get("/gexforward/ES", params={"date": DAY.isoformat()}).json()
+    assert payload["symbol"] == "ES"
+    days = payload["days"]
+    assert [d["day"] for d in days] == ["2026-07-16", "2026-07-17"]
+    assert days[0]["dropped_share"] is None
+    assert days[1]["dropped_share"] == 0.38
+    assert days[1]["dropped_expiries"] == ["20260716"]
+    assert days[1]["values"] == [0.5, 1.0, 1.5]
+    # Den bez partice = prázdné days, ne chyba
+    empty = client.get("/gexforward/ES", params={"date": "2020-01-01"}).json()
+    assert empty["days"] == []

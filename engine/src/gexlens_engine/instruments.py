@@ -20,6 +20,7 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.gexforward import ForwardContract, forward_field
 from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
 from gexlens_engine.compute.setupstats import (
     SetupParamsStats,
@@ -469,7 +470,73 @@ class InstrumentPipeline:
         await self._run_fa_validation(today)
         await self._run_alpha_calibration(today)
         await self._run_setup_selfcheck(today)
+        await self._write_forward_field(today)
         return True
+
+    async def _write_forward_field(self, today: dt.date) -> None:
+        """Forward GEX (#519): pole per budoucí den z denního snímku řetězce.
+
+        Počítá se po (znovu)pořízení OI archivu — OI se přes den nemění, takže
+        per minuta nemá smysl. Selhání nesmí shodit archivační cestu: forward
+        je odvozenina, sběr běží dál.
+        """
+        try:
+            chain = await asyncio.to_thread(self.oi_repository.chain_for_day, self.symbol, today)
+            contracts = [
+                ForwardContract(
+                    expiry=record.expiry,
+                    strike=record.strike,
+                    right=record.right,
+                    oi=record.oi,
+                    iv=record.iv,
+                )
+                for record in chain
+            ]
+            strikes = sorted({record.strike for record in chain})
+            if len(strikes) < 2:
+                return
+            strike_step = min(b - a for a, b in zip(strikes, strikes[1:], strict=False) if b > a)
+            field = await asyncio.to_thread(
+                lambda: forward_field(
+                    contracts,
+                    today=today,
+                    grid_start=strikes[0],
+                    grid_stop=strikes[-1],
+                    grid_step=strike_step / 2.0,
+                    multiplier=self.runtime.multiplier,
+                )
+            )
+            if field is None:
+                return
+            computed_ts = dt.datetime.now(dt.UTC)
+            rows = [
+                {
+                    "day": block.date.isoformat(),
+                    "grid_start": field.grid_start,
+                    "grid_step": field.grid_step,
+                    "values": list(block.values),
+                    "dropped_expiries": list(block.dropped_expiries),
+                    "dropped_share": block.dropped_share
+                    if block.dropped_share is not None
+                    else float("nan"),
+                    "iv_fallback_share": field.iv_fallback_share,
+                    "computed_ts": computed_ts,
+                }
+                for block in field.days
+            ]
+            await asyncio.to_thread(self.runtime.writer.write_gexforward, self.symbol, today, rows)
+            measured = sum(1 for c in contracts if c.iv is not None)
+            logger.info(
+                "Forward GEX %s %s: %d dnů, %d kontraktů (%d s měřenou IV, fallback %.0f %%)",
+                self.symbol,
+                today,
+                len(field.days),
+                len(contracts),
+                measured,
+                field.iv_fallback_share * 100,
+            )
+        except Exception:
+            logger.exception("Forward GEX %s se nespočítal — zkusí se po další archivaci", today)
 
     async def _report_refresh_failed(self, today: dt.date) -> bool:
         """Neúspěšná post-publikační OBNOVA při existujícím denním archivu (#494).
