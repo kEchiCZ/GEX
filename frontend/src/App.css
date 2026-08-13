@@ -2104,3 +2104,21 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+
+/* Range selector (#484) */
+.range-chip {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: var(--panel-bg, #161b26);
+  border: 1px solid rgba(77, 163, 255, 0.6);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+}
