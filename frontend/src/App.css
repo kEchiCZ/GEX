@@ -2122,3 +2122,8 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   font-size: 0.85em;
   font-variant-numeric: tabular-nums;
 }
+
+/* Preset rozsahů (#487) */
+.range-preset-select {
+  max-width: 110px;
+}
