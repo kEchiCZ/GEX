@@ -616,6 +616,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload["oi_static"] = True
             # Stale buňky k t2 — diff stale buňky lže nulou (posudek #483)
             payload["stale_count"] = int((rows["stale_age"] > 0).sum())
+            # P/C souhrn okna (#486): premium v BODECH (Σ vol_okna × mid k t2) —
+            # multiplikátor instrumentu API nezná, aplikuje ho klient (#185).
+            # Aproximace (nález 18): neváží ceny v okamžicích obchodů, ale mid
+            # posledního snapshotu okna. Mid jen z živých bid>0 ∧ ask>0.
+            totals = {"C": {"volume": 0.0, "premium": 0.0}, "P": {"volume": 0.0, "premium": 0.0}}
+            for row in rows.itertuples():
+                side = totals.get(str(row.right))
+                if side is None:
+                    continue
+                vol = row_volume(row)
+                side["volume"] += vol
+                bid = float(row.bid)
+                ask = float(row.ask)
+                if not math.isnan(bid) and not math.isnan(ask) and bid > 0 and ask > 0:
+                    side["premium"] += vol * (bid + ask) / 2
+            call, put = totals["C"], totals["P"]
+            payload["window_summary"] = {
+                "call_volume": call["volume"],
+                "put_volume": put["volume"],
+                "call_premium_points": call["premium"],
+                "put_premium_points": put["premium"],
+                "ratio_volume": put["volume"] / call["volume"] if call["volume"] > 0 else None,
+                "ratio_premium": put["premium"] / call["premium"] if call["premium"] > 0 else None,
+            }
         return payload
 
     @app.get("/chain/{symbol}/{expiry}")

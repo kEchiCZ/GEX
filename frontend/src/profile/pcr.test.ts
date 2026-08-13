@@ -1,7 +1,7 @@
 /** Testy P/C poměru (#469): jednotky, základy, stale vyloučení, ruční přepočet. */
-import { expect, test } from 'vitest'
+import { describe, expect, it, test } from 'vitest'
 import type { ProfileRow } from './bars'
-import { computePcr, formatMoney } from './pcr'
+import { computePcr, formatMoney, topPremiumStrikes } from './pcr'
 
 function row(overrides: Partial<ProfileRow> & { strike: number }): ProfileRow {
   return {
@@ -70,4 +70,47 @@ test('formatMoney kompaktně', () => {
   expect(formatMoney(60_900_000)).toBe('$60.9M')
   expect(formatMoney(1_230_000_000)).toBe('$1.2B')
   expect(formatMoney(950)).toBe('$950')
+})
+
+describe('okenní P/C (#486) — parita s API golden testem', () => {
+  // Zrcadlí test_profile_window_pc_summary_golden: 3 strikes, okno vol
+  // 20·(i+1) per strana, mid 10.25 → premium/strana 120 × 10.25 × M
+  const windowRows: ProfileRow[] = [1, 2, 3].map((factor, index) => ({
+    strike: 7590 + index * 10,
+    callVolComponent: 0,
+    callOiComponent: 0,
+    putVolComponent: 0,
+    putOiComponent: 0,
+    callVolume: 20 * factor,
+    putVolume: 20 * factor,
+    callOi: 100,
+    putOi: 150,
+    distanceFromSpot: 0,
+    callMid: 10.25,
+    putMid: 10.25,
+    staleAge: 0,
+  }))
+
+  it('premium = Σ vol_okna × mid × multiplikátor; kusový poměr vedle', () => {
+    const premium = computePcr(windowRows, 'vol', 'premium', 50, 7600)
+    expect(premium.call).toBeCloseTo(120 * 10.25 * 50, 6)
+    expect(premium.put).toBeCloseTo(120 * 10.25 * 50, 6)
+    expect(premium.ratio).toBeCloseTo(1, 6)
+    const contracts = computePcr(windowRows, 'vol', 'contracts', 50, 7600)
+    expect(contracts.call).toBe(120)
+    expect(contracts.ratio).toBeCloseTo(1, 6)
+  })
+
+  it('topPremiumStrikes: top 5 dle podílu, stale strany vyloučené', () => {
+    const top = topPremiumStrikes(windowRows, 50)
+    expect(top).toHaveLength(5) // 6 stran, limit 5
+    expect(top[0].premium).toBeCloseTo(60 * 10.25 * 50, 6) // největší strike i=3
+    // Podíly se sčítají přes CELEK (i mimo top 5): 60+60+40+40+20 z 240
+    expect(top[0].share).toBeCloseTo(60 / 240, 6)
+    const stale = topPremiumStrikes(
+      windowRows.map((row) => ({ ...row, staleAge: 9999 })),
+      50,
+    )
+    expect(stale).toEqual([])
+  })
 })
