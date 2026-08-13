@@ -75,11 +75,15 @@ const LEVEL_DEFAULT_COLOR = '#e8c14b'
 const LABEL_ROW_GAP_PX = 12
 
 // measureText nutí layout — cache šířky per font|text (osy překreslujeme 5×/s při živém spotu)
+// Strop (#509): klíče nesou ceny/časy, za dlouhý běh by mapa rostla donekonečna.
+// Při přetečení se celá zahodí — znovu se naplní za pár snímků, LRU se nevyplatí.
+const TEXT_WIDTH_CACHE_MAX = 4096
 const textWidthCache = new Map<string, number>()
 function measuredWidth(context: CanvasRenderingContext2D, text: string): number {
   const key = `${context.font}|${text}`
   let width = textWidthCache.get(key)
   if (width === undefined) {
+    if (textWidthCache.size >= TEXT_WIDTH_CACHE_MAX) textWidthCache.clear()
     width = context.measureText(text).width
     textWidthCache.set(key, width)
   }
