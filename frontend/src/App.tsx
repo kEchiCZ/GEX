@@ -184,9 +184,17 @@ function MainContent() {
   // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame).
   // `rawDay` je identitou stabilní napříč spot ticky, živá cena jde zvlášť v `live` (#141).
   // Obchodní den = Globex seance (#512): po 17:00 CT běží seance zítřka —
-  // /replay pro ten den sešije večer na serveru. Známé omezení: hodnota je
-  // z mountu a přes hranici se sama nepřeklopí (tatáž třída jako #508).
-  const today = useMemo(() => sessionDateIso(), [])
+  // /replay pro ten den sešije večer na serveru. Kontrola 1×/min (#508):
+  // aplikace běžící přes hranici seance se sama překlopí na nový den,
+  // místo aby do reloadu fetchovala a zobrazovala včerejšek.
+  const [today, setToday] = useState(() => sessionDateIso())
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const current = sessionDateIso()
+      setToday((previous) => (previous === current ? previous : current))
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
   // Proběhlá expirace se čte jako replay svého posledního dne (#352) — bez
   // socketu: kanály price/spot/flow jsou per symbol a přilepily by dnešní
   // svíčky do historického dne.
@@ -260,7 +268,7 @@ function MainContent() {
     if (!planeProfiles || planeProfiles.every((row) => row === null)) return null
     const built = buildGexGrid(planeProfiles, rawDay.grid.strikes, rawDay.grid.minutes, heatScale, gexUnits) // prettier-ignore
     return aggregateDay({ ...rawDay, grid: built }, bucketMinutes)
-  }, [underlayPlane, planeProfiles, rawDay, heatScale, gexUnits, bucketMinutes])
+  }, [underlayPlane, timeframe, planeProfiles, rawDay, heatScale, gexUnits, bucketMinutes])
 
   const playback = usePlayback(day.grid.minutes)
   // Forward GEX (#572): bloky budoucích dnů — jen Daily + Dyn GEX podklad.
