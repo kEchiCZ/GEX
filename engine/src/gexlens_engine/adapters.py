@@ -262,6 +262,31 @@ class IbHistoricalClient:
         return bars
 
 
+class IbkrProvider:
+    """MarketDataProviderLike nad ib_async (#613) — čistá extrakce dnešní cesty.
+
+    Žádná nová logika: drží JEDNU sdílenou instanci streameru (kvalifikační
+    cache kontraktů je společná pro sweep i OI snímek, jako dosud) a továrně
+    vydává historického klienta vázaného na front future.
+    """
+
+    name = "ibkr"
+
+    def __init__(self, ib: IB, line_gauge: LineGauge | None = None) -> None:
+        self._ib = ib
+        self._streamer = IbQuoteStreamer(ib, line_gauge)
+        self._oi_fetcher = IbOIFetcher(ib, self._streamer)
+
+    def quote_streamer(self) -> IbQuoteStreamer:
+        return self._streamer
+
+    def oi_fetcher(self) -> IbOIFetcher:
+        return self._oi_fetcher
+
+    def historical(self, front: object) -> IbHistoricalClient:
+        return IbHistoricalClient(self._ib, cast(Contract, front))
+
+
 class HttpPublisher(PublisherLike):
     """Push stavu a kanálů do API serveru přes interní ingest endpoints."""
 

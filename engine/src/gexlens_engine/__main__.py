@@ -21,9 +21,7 @@ from sqlalchemy.engine import Engine
 
 from gexlens_engine.adapters import (
     HttpPublisher,
-    IbHistoricalClient,
-    IbOIFetcher,
-    IbQuoteStreamer,
+    IbkrProvider,
     count_ib_lines,
 )
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
@@ -73,6 +71,7 @@ from gexlens_engine.instruments import (
     plan_instruments,
     read_watchlist,
 )
+from gexlens_engine.provider import MarketDataProviderLike
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.runtime_settings import (
     CONNECTION_SETTINGS,
@@ -288,9 +287,14 @@ async def create_pipeline(
     fa_repository: FaValidationRepository | None = None,
     alpha_repository: FaAlphaRepository | None = None,
     news_ticks: NewsTickCollector | None = None,
+    provider: MarketDataProviderLike | None = None,
     line_gauge: LineGauge | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
+    # Provider (#613): svazek datových zdrojů; default = IBKR (jediný zapojený
+    # do výpočtů, dokud shadow fáze M7 neskončí)
+    if provider is None:
+        provider = IbkrProvider(ib, line_gauge)
     front = await _resolve_front_future(ib, symbol)
     multiplier = parse_multiplier(front.multiplier)
     if pacing_guard is None:
@@ -394,7 +398,7 @@ async def create_pipeline(
         multiplier,
     )
 
-    streamer = IbQuoteStreamer(ib, line_gauge)
+    streamer = provider.quote_streamer()
     # Následující expirace (čtení positioningu příští seance): sekundární runtime
     # sweepuje v nižší kadenci, píše jen snapshots + levels své expirace
     next_runtime: EngineRuntime | None = None
@@ -444,7 +448,7 @@ async def create_pipeline(
 
     # Historical backfill 1min barů (SPEC 3.6, #221): aktuální den + retention
     # okno při startu, jednodenní re-backfill po výpadku real-time streamu
-    backfiller = UnderlyingBackfiller(IbHistoricalClient(ib, front), pacing_guard, settings)
+    backfiller = UnderlyingBackfiller(provider.historical(front), pacing_guard, settings)
 
     async def backfill_today() -> None:
         day = dt.datetime.now(dt.UTC).date()
@@ -488,7 +492,7 @@ async def create_pipeline(
         info=info,
         band=band,
         runtime=runtime,
-        archiver=OIArchiver(oi_repository, IbOIFetcher(ib, streamer), settings),
+        archiver=OIArchiver(oi_repository, provider.oi_fetcher(), settings),
         oi_repository=oi_repository,
         ticker=fut_ticker,
         minute_bars=minute_bars,
@@ -594,6 +598,7 @@ async def main() -> None:
     # Obsazené market data lines (#630): měřené z registru subskripcí,
     # jediný gauge nad sdíleným spojením — strop účtu platí napříč pipeline
     line_gauge = LineGauge(lambda: count_ib_lines(ib))
+    provider = IbkrProvider(ib, line_gauge)
     manager = ConnectionManager(
         ib,
         settings,
@@ -760,6 +765,7 @@ async def main() -> None:
                     fa_repository=fa_repository,
                     alpha_repository=alpha_repository,
                     news_ticks=news_ticks,
+                    provider=provider,
                     line_gauge=line_gauge,
                 )
                 setup_cooldown.succeeded(symbol)
