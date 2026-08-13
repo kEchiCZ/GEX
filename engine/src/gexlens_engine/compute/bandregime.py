@@ -1,0 +1,135 @@
+"""Pásmová režimová metrika (#575, fáze 1 — jen měření): ostrost a hloubka.
+
+Referenční čtení: dvě kontury na Dyn ploše; „čím jsou čáry blíž u sebe, tím
+ostřejší přechod". Tady se totéž pravidlo počítá nad VÁŽENÝM profilem minuty
+($/1 %, #569 — tatáž jednotka, na které stojí kontury frontendu):
+
+- prahy = podíly maxima kladné části profilu (Major 0,65 / All 0,40 — poměry
+  z #571; reference je den-level p99, per-minutová metrika používá maximum
+  téže minuty, aby byla čistou funkcí jednoho řádku),
+- **tlumící zóna** = souvislý úsek kolem ceny, kde vážený profil > práh All,
+- **ostrost** = vzdálenost průsečíků Major a All na hraně zóny nejbližší ceně
+  (doslova „jak blízko u sebe jsou ty dvě čáry"),
+- dvě normalizace (rozhodnutí uživatele 13. 8. — měřit obě, kalibrace ~31. 8.
+  vybere vítěze; do té doby se #575 nezavírá):
+  A. `band_sharpness` = ostrost / šířka zóny (bezrozměrná, přenositelná),
+  B. `band_sharpness_pct` = ostrost jako % ceny (nejblíž čtení z obrazovky),
+- `band_depth` = spojitá poloha: −1 (profil na ceně nulový) … 0 (hrana All)
+  … +1 (hrana Major a hlouběji).
+
+Žádná brána na hodnotách nestojí — fáze 1 je zapisuje do `context` setupů.
+"""
+
+import math
+from dataclasses import dataclass
+
+from gexlens_engine.compute.gexfield import GexProfile, price_weight_per_percent
+
+# Poměry prahů z kontur #571 (Major/All) — sdílené konstanty čtení
+BAND_MAJOR_SHARE = 0.65
+BAND_ALL_SHARE = 0.40
+
+
+@dataclass(frozen=True)
+class BandMetrics:
+    """Měřené veličiny pásma pro `context` setupu (#575 fáze 1)."""
+
+    sharpness: float  # varianta A: spread hran / šířka zóny (0–1)
+    sharpness_pct: float  # varianta B: spread hran jako % ceny
+    depth: float  # −1 … +1 (viz modul)
+
+
+def _weighted(profile: GexProfile) -> list[float]:
+    return [
+        value * price_weight_per_percent(profile.grid_start + i * profile.grid_step)
+        for i, value in enumerate(profile.values)
+    ]
+
+
+def _crossing(values: list[float], start_idx: int, step: int, threshold: float) -> float | None:
+    """Frakční index prvního poklesu pod práh směrem `step`; None = kraj mřížky.
+
+    Lineární interpolace mezi posledním bodem nad prahem a prvním pod ním —
+    stejná přesnost, s jakou kontury kreslí frontend (marching squares).
+    """
+    previous = values[start_idx]
+    if previous <= threshold:
+        return float(start_idx)
+    index = start_idx + step
+    while 0 <= index < len(values):
+        current = values[index]
+        if current <= threshold:
+            fraction = (previous - threshold) / (previous - current)
+            return (index - step) + step * fraction
+        previous = current
+        index += step
+    return None
+
+
+def band_metrics(profile: GexProfile, price: float) -> BandMetrics | None:
+    """Ostrost a hloubka pásma v místě ceny; None = metrika nedává smysl.
+
+    None nastává, když profil nemá kladnou část (žádná tlumící zóna), cena
+    je mimo mřížku, nebo zóna sahá až na kraj mřížky (hrana neurčitelná —
+    stejný závěr jako měření #601: na kraji se neměří, nelže se).
+    """
+    if not profile.values or profile.grid_step <= 0:
+        return None
+    weighted = _weighted(profile)
+    top = max(weighted)
+    if top <= 0.0:
+        return None
+    position = (price - profile.grid_start) / profile.grid_step
+    if position < 0 or position > len(weighted) - 1:
+        return None
+    t_major = BAND_MAJOR_SHARE * top
+    t_all = BAND_ALL_SHARE * top
+
+    low = int(position)
+    frac = position - low
+    at_price = weighted[low] * (1 - frac) + weighted[min(low + 1, len(weighted) - 1)] * frac
+
+    # Hloubka: pod All lineárně k −1 (profil 0), nad All lineárně k +1 (Major)
+    if at_price <= t_all:
+        depth = max(-1.0, (at_price - t_all) / t_all)
+    else:
+        depth = min(1.0, (at_price - t_all) / (t_major - t_all))
+
+    # Hrany zóny: průsečíky All a Major na obou stranách od nejbližšího uzlu
+    anchor = low if weighted[low] >= at_price else min(low + 1, len(weighted) - 1)
+    edges: list[tuple[float, float]] = []  # (vzdálenost hrany All od ceny, spread)
+    for step in (-1, 1):
+        all_cross = _crossing(weighted, anchor, step, t_all)
+        major_cross = _crossing(weighted, anchor, step, t_major)
+        if all_cross is None or major_cross is None:
+            continue  # zóna sahá na kraj mřížky — hrana neurčitelná
+        edges.append((abs(all_cross - position), abs(all_cross - major_cross) * profile.grid_step))
+    if not edges:
+        return None
+    all_low = _crossing(weighted, anchor, -1, t_all)
+    all_high = _crossing(weighted, anchor, 1, t_all)
+    if all_low is None or all_high is None:
+        return None
+    zone_width = (all_high - all_low) * profile.grid_step
+    if zone_width <= 0 or price <= 0:
+        return None
+    spread = min(edges, key=lambda edge: edge[0])[1]  # hrana nejblíž ceně
+    return BandMetrics(
+        sharpness=round(spread / zone_width, 4),
+        sharpness_pct=round(spread / price * 100.0, 4),
+        depth=round(depth, 4),
+    )
+
+
+def band_context(profile: GexProfile | None, price: float) -> dict[str, float]:
+    """Klíče do `context` JSON setupu; prázdný dict = nezměřeno (bez lhaní)."""
+    if profile is None or not math.isfinite(price):
+        return {}
+    metrics = band_metrics(profile, price)
+    if metrics is None:
+        return {}
+    return {
+        "band_sharpness": metrics.sharpness,
+        "band_sharpness_pct": metrics.sharpness_pct,
+        "band_depth": metrics.depth,
+    }

@@ -176,6 +176,25 @@ class SetupsRepository:
             result = conn.execute(stmt)
         return result.rowcount > 0
 
+    def enrich_context(self, setup_id: int, extra: dict[str, Any]) -> None:
+        """Doplní klíče do `context` JSON — backfill pásmových metrik (#575).
+
+        Merge, ne replace: existující klíče (atr, risk, gex_regime…) zůstávají;
+        stejné klíče se přepíšou (idempotentní opakovaný backfill).
+        """
+        if not extra:
+            return
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                select(setups_table.c.context).where(setups_table.c.id == setup_id)
+            ).fetchone()
+            if row is None:
+                return
+            merged = {**(row.context or {}), **json.loads(json.dumps(extra, default=str))}
+            conn.execute(
+                update(setups_table).where(setups_table.c.id == setup_id).values(context=merged)
+            )
+
     def active_for(self, symbol: str) -> list[StoredSetup]:
         stmt = select(setups_table).where(
             setups_table.c.symbol == symbol, setups_table.c.status == "active"

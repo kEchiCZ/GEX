@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
+from gexlens_engine.compute.bandregime import band_context
 from gexlens_engine.compute.gexfield import gamma_edges
 from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import (
@@ -338,6 +339,9 @@ class SetupEngine:
                 stop_cooldown_s = self.params.counter_stop_cooldown_minutes * 60
                 if last_stop is not None and (now - last_stop).total_seconds() < stop_cooldown_s:
                     continue
+            # Pásmové metriky (#575 fáze 1): obě varianty ostrosti + hloubka
+            # z Dyn profilu minuty — jen měření, brána se nemění
+            context = {**candidate.context, **band_context(runtime.last_profile, candidate.entry)}
             setup_id = self.repository.create(
                 symbol=self.symbol,
                 expiry=runtime.expiry,
@@ -349,7 +353,7 @@ class SetupEngine:
                 stop=candidate.stop,
                 confidence=candidate.confidence,
                 reason=candidate.reason,
-                context=candidate.context,
+                context=context,
             )
             self._last_created[template] = now
             self._open.append(
