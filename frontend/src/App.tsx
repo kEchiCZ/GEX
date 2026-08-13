@@ -4,6 +4,9 @@ import './App.css'
 import { alignSeriesToLabels, signalGateInfo } from './api/news'
 import { buildNewsMarkers, significantOnly } from './heatmap/newsMarkers'
 import type { NewsMarker } from './heatmap/newsMarkers'
+import { buildJournalMarkers } from './heatmap/journalMarkers'
+import { fetchJournal } from './api/journal'
+import type { JournalEntry } from './api/journal'
 import { NewsMarkerDialog } from './components/NewsMarkerDialog'
 import { buildSignalMarkers } from './heatmap/signalMarkers'
 import { JournalView } from './components/JournalView'
@@ -103,6 +106,7 @@ function MainContent() {
     view,
     setView,
     setJournalDraft,
+    tradersMode,
     timeframe,
     interval,
     setPriceInfo,
@@ -563,6 +567,42 @@ function MainContent() {
   }, [toggles.news, newsMarkerFilter, newsData.news, newsData.upcoming, chartLabels])
   // Dialog zpráv kliknutého markeru (#408)
   const [newsDialogMarker, setNewsDialogMarker] = useState<NewsMarker | null>(null)
+  // Značky deníku v ose (#673, Traders mode): záznamy symbolu se párují na osu
+  // stejným formatterem jako popisky (vzor news markerů). Refetch i při návratu
+  // z Deníku (změna view) — nový záznam se má ukázat hned.
+  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([])
+  useEffect(() => {
+    if (!tradersMode) {
+      setJournalEntries([])
+      return
+    }
+    let cancelled = false
+    void fetchJournal({ symbol }).then((rows) => {
+      if (!cancelled) setJournalEntries(rows)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [tradersMode, symbol, view])
+  const journalMarkers = useMemo(() => {
+    if (!tradersMode || journalEntries.length === 0) return []
+    // Daily pohled páruje datem (sloupec = den), intraday minutou
+    const format = timeframe === 'daily' ? (iso: string) => dayLabel(iso.slice(0, 10)) : minuteLabel
+    return buildJournalMarkers(journalEntries, chartLabels, format)
+  }, [tradersMode, journalEntries, chartLabels, timeframe])
+  // Shift+klik do plochy (#673): rychlý zápis k minutě pod kurzorem — myšlenka
+  // přijde většinou až s odstupem od okamžiku, ✎ u Replay nese jen minutu playbacku
+  const handleJournalQuickAdd = useCallback(
+    (minuteIdx: number) => {
+      if (day.minutesIso.length === 0) return
+      const absolute = Math.max(0, Math.min(minuteIdx * bucketMinutes, day.minutesIso.length - 1))
+      const iso = day.minutesIso[absolute]
+      if (!iso) return
+      setJournalDraft({ tsRef: iso })
+      setView('journal')
+    },
+    [day.minutesIso, bucketMinutes, setJournalDraft, setView],
+  )
   // Šipky signálů (#295, SPEC 9.0): dropdown vybírá zobrazenou větev (S9 —
   // počítají se obě vždy); ⚠ badge při nepotvrzené intradenní změně stavu
   const signalMarkers = useMemo(() => {
@@ -831,12 +871,14 @@ function MainContent() {
       // Markery zpráv (#287) — osa nese i projekční část, takže nadcházející
       // scheduled eventy padnou napravo od živé hrany
       newsMarkers,
+      // Značky deníku (#673) — jen v Traders mode (memo je bez něj prázdné)
+      journalMarkers,
       // Šipky signálů (#295): při přetáčení jen ty, co v čase pozice existovaly
       signals: playback.isLive
         ? signalMarkers
         : signalMarkers.filter((signal) => signal.minuteIdx <= playback.position),
     }),
-    [baseOverlays, computedWalls, setupLines, ladderLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, signalMarkers, playback.isLive, playback.position], // prettier-ignore
+    [baseOverlays, computedWalls, setupLines, ladderLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, journalMarkers, signalMarkers, playback.isLive, playback.position], // prettier-ignore
   )
 
   if (view === 'dashboard') {
@@ -1036,7 +1078,7 @@ function MainContent() {
         <button
           className="chip"
           aria-label="Záznam do deníku k této minutě"
-          title="Otevře Deník s předvyplněným okamžikem (aktuální minuta playbacku)"
+          title="Otevře Deník s předvyplněným okamžikem (aktuální minuta playbacku). Přesnou minutu vybereš Shift+klikem do grafu."
           onClick={() => {
             const minuteIso = playback.isLive
               ? new Date().toISOString()
@@ -1089,6 +1131,8 @@ function MainContent() {
               resetKey={`${symbol}|${selectedExpiry}|${timeframe}|${interval}|${viewDate}`}
               priceTick={priceTick(symbol)}
               onNewsMarkerClick={setNewsDialogMarker}
+              onJournalMarkerClick={() => setView('journal')}
+              onJournalQuickAdd={timeframe === 'intraday' ? handleJournalQuickAdd : undefined}
             />
             {newsDialogMarker && (
               <NewsMarkerDialog

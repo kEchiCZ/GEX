@@ -170,6 +170,10 @@ interface AppState {
   /** Rychlý vstup do deníku (#673): předvyplněný okamžik z Replay tlačítka ✎. */
   journalDraft: { tsRef: string } | null
   setJournalDraft: (draft: { tsRef: string } | null) => void
+  /** Traders mode (#627 bod 5): zapíná trading vrstvy — teď značky deníku
+      v ose (#673); postupně referenční úrovně (#678). Default vypnuto. */
+  tradersMode: boolean
+  setTradersMode: (enabled: boolean) => void
   theme: Theme
   setTheme: (theme: Theme) => void
   alerts: AlertMessage[]
@@ -275,6 +279,13 @@ export function AppStateProvider({
   const [view, setView] = useState<AppView>(() => initialFromUrl().view)
   // Rychlý vstup do deníku (#673) — jen v paměti, nepersistuje se
   const [journalDraft, setJournalDraft] = useState<{ tsRef: string } | null>(null)
+  // Traders mode (#627 bod 5): přepínač trading vrstev; když se osvědčí,
+  // přepínač zmizí a vrstvy budou standard
+  const [tradersMode, setTradersMode] = usePersistentState<boolean>(
+    'tradersMode',
+    false,
+    (value, fallback) => (typeof value === 'boolean' ? value : fallback),
+  )
   const [theme, setTheme] = usePersistentState<Theme>(
     'theme',
     'dark',
@@ -477,6 +488,8 @@ export function AppStateProvider({
       setView,
       journalDraft,
       setJournalDraft,
+      tradersMode,
+      setTradersMode,
       theme,
       setTheme,
       alerts,
@@ -522,6 +535,8 @@ export function AppStateProvider({
       interval,
       toggles,
       view,
+      journalDraft,
+      tradersMode,
       theme,
       alerts,
       unreadAlerts,
