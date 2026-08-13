@@ -331,6 +331,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pydantic-settings" },
     { name = "sqlalchemy" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -342,6 +343,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=18" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "websockets", specifier = ">=16.1" },
 ]
 
 [[package]]
