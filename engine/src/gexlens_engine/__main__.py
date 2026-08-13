@@ -682,7 +682,7 @@ async def main() -> None:
     # ── tastytrade shadow (#613) — jen měří do feed_comparison, nic víc ──
     shadow_stop = asyncio.Event()
     shadow_tasks: list[asyncio.Task[None]] = []
-    shadow_chain: dict[str, ChainSymbols | None] = {"ES": None}
+    shadow_chain: dict[str, ChainSymbols] = {}
     if settings.tasty_shadow and settings.tasty_client_secret and settings.tasty_refresh_token:
         tasty_session = TastySession(
             TastyCredentials(
@@ -708,7 +708,7 @@ async def main() -> None:
             comparison_repository,
             tasty_cache,
             shadow_contracts,
-            lambda: shadow_chain.get("ES"),
+            lambda: dict(shadow_chain),
         )
 
         async def shadow_symbols_loop() -> None:
@@ -721,8 +721,7 @@ async def main() -> None:
                     symbols: set[str] = set()
                     for symbol in pipelines:
                         chain = await symbol_map.chain(symbol, today)
-                        if symbol == "ES":
-                            shadow_chain["ES"] = chain
+                        shadow_chain[symbol] = chain
                         symbols |= shadow_symbols(list(shadow_contracts().keys()), chain)
                     if symbols:
                         await tasty_stream.set_symbols(symbols)
