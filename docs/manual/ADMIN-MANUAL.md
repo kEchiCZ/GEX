@@ -229,6 +229,9 @@ Interaktivní dokumentace: `http://127.0.0.1:8000/docs` (OpenAPI).
 |---|---|
 | `GET /health`, `GET /status` | Liveness; agregovaný stav pipeline (`lines_utilization` je od #630 měřená špička) |
 | `GET /gexforward/{symbol}` | Forward GEX bloky per budoucí den (#519) |
+| `GET /bars/{symbol}?date=` | Lehké 1min OHLCV bary seance (#674/#678) — bez /replay balíku |
+| `GET /oidelta/{symbol}/{expiry}` | ΔOI posledních dvou archivovaných dnů + top movers (#674) |
+| `GET /journal`, `POST/PATCH/DELETE /journal/*` | Deník tradera (#673, fáze A) |
 | `GET /gammacliff/{symbol}` | Dnešní odpad gammy + historie útesů (#576) |
 | `GET /fa/alpha` | Kalibrovaná α FA odhadu per symbol (#232) |
 | `GET /gexplane/{...}` | Dyn Charm/Vanna plochy (#204) |

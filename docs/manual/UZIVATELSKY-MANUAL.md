@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.6 · srpen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.7 · srpen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.
 
@@ -18,7 +18,7 @@ GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME 
 8. [Spodní panely — Vol, Opt Vol, Cum Δ](#8-spodní-panely--vol-opt-vol-cum-δ)
 9. [Playback — přehrávání dne](#9-playback--přehrávání-dne)
 10. [Anotace — kreslení do grafu](#10-anotace--kreslení-do-grafu)
-11. [Dashboard](#11-dashboard) · [11b. Řetěz](#11b-řetěz--greeks--oi-tabulka) · [11c. News a sentiment](#11c-news-a-sentiment-sentimentlens) · [11d. Signály a Stats](#11d-signály-a-stats) · [11e. Deník a Traders mode](#11e-deník-tradera-a-traders-mode)
+11. [Dashboard](#11-dashboard) · [11b. Řetěz](#11b-řetěz--greeks--oi-tabulka) · [11c. News a sentiment](#11c-news-a-sentiment-sentimentlens) · [11d. Signály a Stats](#11d-signály-a-stats) · [11e. Deník a Traders mode](#11e-deník-tradera-a-traders-mode) · [11f. Ranní briefing](#11f-ranní-briefing-sidebar--briefing)
 12. [IBKR Console](#12-ibkr-console)
 13. [Settings](#13-settings)
 14. [Notifikace a alerty](#14-notifikace-a-alerty)
@@ -437,10 +437,52 @@ přepínač zmizí a stanou se standardní součástí aplikace. Dnes pod něj p
   hrany v minutě, ke které se vztahuje (víc záznamů v minutě = jedna značka
   s počtem); klik na značku otevře Deník. V Replay tak vidíš své tehdejší
   poznámky v kontextu toho, co graf ukazoval.
-- výhledově **referenční úrovně** (předchozí high/low/close, overnight extrémy).
+- **Expected move dne (EM ±)** — dvě modré čárkované linie: spot referenční
+  minuty ± cena ATM straddlu (mid call + mid put). Referenční minuta je první
+  minuta US seance; před openem se ukazuje průběžný odhad označený
+  „(pre-open)" a openem se zamkne. Cenovka horní linie nese EM v bodech
+  a **vyčerpání pásma v %** (50 % = uprostřed, přes 100 % = trh už ušel víc,
+  než opce ráno naceňovaly). Hranice čti spolu se zdmi — zeď těsně za EM
+  hranicí je silná konfluence.
+- **Referenční úrovně** — tlumené tečkované linie **ONH/ONL** (overnight
+  high/low do US openu; před openem s příponou „běží"), **PDH/PDL** (extrémy
+  předchozí seance) a **VWAP** (objemem vážený průměr dne jako křivka).
+  Smysl vrstvy: konfluence — zeď sedící na PDH je jiná informace než zeď
+  v prázdnu, protože PDH sleduje i zbytek trhu.
+- **Chip relativní síly ES vs. NQ** v hlavičce — normalizovaný spread od US
+  openu v procentních bodech („RS NQ vede · ES−NQ −0,46 pb"); kladný spread
+  = ES silnější. Funkce na zkoušku — když se neosvědčí, zmizí bez následků.
 
-S tradingem souvisí i **expected move** a **relativní síla** (plánované
-funkce) — jsou to trading-info údaje, ne vrstvy positioningu.
+### Kalkulačka velikosti pozice (u karty setupu)
+
+V Settings → Trading nastav **velikost účtu (USD)** a **riziko na obchod
+(%)** — ukládají se jen v prohlížeči, na server nikdy neodcházejí. Karta
+setupu pak pod RRR ukazuje řádek typu `riziko 50 $ (1 %) · stop 8 b →
+ES 0× · MES 1×`: počet kontraktů = riziko / (stop v bodech × hodnota bodu),
+vždy zaokrouhleno dolů, vedle plného kontraktu i micro varianta (MES/MNQ).
+Nezávisí na Traders mode — je součástí karty setupu.
+
+---
+
+## 11f. Ranní briefing (sidebar → Briefing)
+
+Plán dne na jedné obrazovce před US openem — čistá kompozice dat, která už
+aplikace sbírá; nic se tu nepočítá nově. Obnovuje se každou minutu, v hlavičce
+běží **odpočet do US openu** (9:30 New York, DST-korektně).
+
+| Karta | Co ukazuje |
+|---|---|
+| **Režim a úrovně** | Pozitivní/negativní gamma + poloha ceny vůči flipu; flip, call/put wall, těžiště |
+| **Včera a overnight** | Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena |
+| **Gamma dnes a přes týden** | Chip „dnes odpadá X % gammy" (kap. 14) + Forward GEX útesy dalších dnů týdne |
+| **Makro kalendář dne** | Dnešní plánované eventy (významné napřed, ❗ = importance ≥ 3) |
+| **ΔOI přes noc** | Změna call/put OI vs. předchozí archivovaný den + top strike movers |
+| **Sentiment** | Stav RiskOn/RiskOff/Neutral per instrument (ES, NQ) |
+
+Tlačítko **„☀ Založit ranní plán do deníku"** předvyplní záznam deníku
+(kap. 11e) kostrou plánu — režim, úrovně, včerejšek, overnight, odpad gammy
+a prázdná „Teze dne" k doplnění. Ranní rituál: otevřít Briefing → projít
+karty → ☀ → dopsat tezi.
 
 ---
 
@@ -467,7 +509,7 @@ Změny se **ukládají okamžitě** (bez tlačítka Uložit) a engine si je prů
 | **IBKR** | Host, port (7496 live / 7497 paper), client ID |
 | **Engine** | **Rozsah strikes (± body od spotu)** — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB) |
 | **Alerty** | **Hlásit chyby subskripce market dat** — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert *Chyba subskripce* v kap. 14) |
-| **Trading** | **Traders mode** — přepínač trading vrstev (viz kap. 11e); ukládá se jen v prohlížeči |
+| **Trading** | **Traders mode** — přepínač trading vrstev (viz kap. 11e); **velikost účtu + riziko na obchod** pro kalkulačku pozice u setup karty. Vše jen v prohlížeči, na server neodchází |
 | **Vzhled** | Téma **Dark/Light** (přepne se ihned), jazyk |
 | **Seance** | Historické pole (JSON) — markery seancí se nově generují **automaticky** z časů světových burz; checkbox Sessions v grafu |
 
