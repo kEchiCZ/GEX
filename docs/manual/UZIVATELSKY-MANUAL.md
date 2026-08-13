@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.5 · srpen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.6 · srpen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.
 
@@ -18,7 +18,7 @@ GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME 
 8. [Spodní panely — Vol, Opt Vol, Cum Δ](#8-spodní-panely--vol-opt-vol-cum-δ)
 9. [Playback — přehrávání dne](#9-playback--přehrávání-dne)
 10. [Anotace — kreslení do grafu](#10-anotace--kreslení-do-grafu)
-11. [Dashboard](#11-dashboard) · [11b. Řetěz](#11b-řetěz--greeks--oi-tabulka) · [11c. News a sentiment](#11c-news-a-sentiment-sentimentlens) · [11d. Signály a Stats](#11d-signály-a-stats)
+11. [Dashboard](#11-dashboard) · [11b. Řetěz](#11b-řetěz--greeks--oi-tabulka) · [11c. News a sentiment](#11c-news-a-sentiment-sentimentlens) · [11d. Signály a Stats](#11d-signály-a-stats) · [11e. Deník a Traders mode](#11e-deník-tradera-a-traders-mode)
 12. [IBKR Console](#12-ibkr-console)
 13. [Settings](#13-settings)
 14. [Notifikace a alerty](#14-notifikace-a-alerty)
@@ -409,6 +409,41 @@ Signál se ukáže jako **šipka na cenové křivce** (▲ Long teal / ▼ Short
 
 ---
 
+## 11e. Deník tradera a Traders mode
+
+### Deník (sidebar → Deník)
+
+Manuální retrospektiva: **pozorování / hypotéza / retrospektiva dne**, s tagy
+a vazbou na symbol a konkrétní minutu (`ts_ref`). Denní pár drží tlačítka
+**☀ Ranní plán** a **☾ Vyhodnocení dne** (typ retrospektiva s tagem #plan /
+#vyhodnoceni). Export do Markdownu tlačítkem **⬇ Export MD**. Typ *obchod* se
+ručně založit nedá — vznikne až importem exekucí (odloženo, až začneš obchodovat).
+
+Rychlý zápis:
+
+- **✎ u Replay** — otevře Deník s předvyplněnou aktuální minutou playbacku.
+- **Shift+klik do grafu** — předvyplní minutu **pod kurzorem**. Na tohle
+  sáhni, když ti myšlenka dojde až s odstupem: najedeš na místo v grafu, kde
+  se to stalo, a čas nemusíš vypisovat ručně. Přesný okamžik jde pak doladit
+  v poli formuláře.
+
+### Traders mode (Settings → Trading)
+
+Přepínač **vrstev pro aktivní obchodování** — informací, které nepotřebuješ
+ke čtení positioningu, ale k exekuci. Default vypnuto; když se vrstvy osvědčí,
+přepínač zmizí a stanou se standardní součástí aplikace. Dnes pod něj patří:
+
+- **Značky deníku ✎ na časové ose grafu** — každý záznam se ukáže u horní
+  hrany v minutě, ke které se vztahuje (víc záznamů v minutě = jedna značka
+  s počtem); klik na značku otevře Deník. V Replay tak vidíš své tehdejší
+  poznámky v kontextu toho, co graf ukazoval.
+- výhledově **referenční úrovně** (předchozí high/low/close, overnight extrémy).
+
+S tradingem souvisí i **expected move** a **relativní síla** (plánované
+funkce) — jsou to trading-info údaje, ne vrstvy positioningu.
+
+---
+
 ## 12. IBKR Console
 
 Diagnostická obrazovka:
@@ -432,6 +467,7 @@ Změny se **ukládají okamžitě** (bez tlačítka Uložit) a engine si je prů
 | **IBKR** | Host, port (7496 live / 7497 paper), client ID |
 | **Engine** | **Rozsah strikes (± body od spotu)** — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB) |
 | **Alerty** | **Hlásit chyby subskripce market dat** — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert *Chyba subskripce* v kap. 14) |
+| **Trading** | **Traders mode** — přepínač trading vrstev (viz kap. 11e); ukládá se jen v prohlížeči |
 | **Vzhled** | Téma **Dark/Light** (přepne se ihned), jazyk |
 | **Seance** | Historické pole (JSON) — markery seancí se nově generují **automaticky** z časů světových burz; checkbox Sessions v grafu |
 
@@ -467,7 +503,7 @@ Druhy alertů:
 
 | Alert | Kdy |
 |---|---|
-| Cena × úroveň | Cena protne flip nebo wall |
+| **Cena u úrovně** | Cena se přiblíží k flipu / call zdi / put zdi na ≤ 1 krok striků (ES ±5 b). Anti-spam: úroveň po vystřelení mlčí 15 min **a** znovu hlásí až poté, co cena od úrovně odešla (2× práh) — konsolidace u zdi tak pípne jednou, ne každou minutu |
 | Cum Δ skok | Skok kumulativní delty o nastavený práh |
 | Dominantní strike | Změna striku s největší koncentrací |
 | Výpadek spojení | TWS/Gateway nedostupné |

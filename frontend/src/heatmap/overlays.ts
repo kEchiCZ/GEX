@@ -1,5 +1,6 @@
 /** Overlaye heatmapy (SPEC 7.2): cenová křivka, sessions, levels, walls — čisté helpery. */
 
+import type { JournalMarker } from './journalMarkers'
 import type { NewsMarker } from './newsMarkers'
 import type { SignalMarker } from './signalMarkers'
 
@@ -121,6 +122,8 @@ export interface OverlayData {
   sessions?: SessionMarker[]
   /** Markery zpráv na časové ose (#287); prázdné = checkbox News je vypnutý. */
   newsMarkers?: NewsMarker[]
+  /** Značky deníku u horní hrany (#673); prázdné = Traders mode vypnutý. */
+  journalMarkers?: JournalMarker[]
   /** Šipky signálů na cenové křivce (#295); prázdné = režim OFF. */
   signals?: SignalMarker[]
   levels?: LevelLine[]

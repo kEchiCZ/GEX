@@ -93,7 +93,7 @@ function SettingRow({ children, help }: { children: React.ReactNode; help: React
 }
 
 export function SettingsView() {
-  const { theme, setTheme, status } = useAppState()
+  const { theme, setTheme, status, tradersMode, setTradersMode } = useAppState()
   const { values, put, saveAll } = useServerSettings()
   // Rozepsané změny; prázdný objekt = nic k uložení
   const [draft, setDraft] = useState<Record<string, unknown>>({})
@@ -316,6 +316,20 @@ export function SettingsView() {
               onChange={(event) => edit('subscription_alert_enabled', event.target.checked)}
             />
             Hlásit chyby subskripce market dat
+          </label>
+        </SettingRow>
+      </section>
+
+      <section aria-label="Trading">
+        <h2>Trading</h2>
+        <SettingRow help="Traders mode (#627): zapíná vrstvy pro aktivní obchodování — teď značky deníku ✎ na časové ose grafu, postupně přibudou referenční úrovně. Ukládá se okamžitě, jen v tomto prohlížeči.">
+          <label>
+            <input
+              type="checkbox"
+              checked={tradersMode}
+              onChange={(event) => setTradersMode(event.target.checked)}
+            />
+            Traders mode — trading vrstvy v grafu
           </label>
         </SettingRow>
       </section>

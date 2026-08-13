@@ -31,6 +31,8 @@ import {
   tickIndices,
 } from '../heatmap/overlays'
 import type { OverlayData, PriceBar, PriceStyle } from '../heatmap/overlays'
+import { journalMarkerNear } from '../heatmap/journalMarkers'
+import type { JournalMarker } from '../heatmap/journalMarkers'
 import { markerColor, markerNear, markerStyle } from '../heatmap/newsMarkers'
 import type { NewsMarker as NewsMarkerType } from '../heatmap/newsMarkers'
 import { signalAt, signalColor } from '../heatmap/signalMarkers'
@@ -123,6 +125,8 @@ export function Heatmap({
   resetKey,
   priceTick = 0.25,
   onNewsMarkerClick,
+  onJournalMarkerClick,
+  onJournalQuickAdd,
   forwardMarkers = [],
 }: {
   grid: HeatmapGrid
@@ -193,6 +197,11 @@ export function Heatmap({
   priceTick?: number
   /** Klik na news marker (pás/glyf u spodní hrany) — otevře dialog zpráv (#408). */
   onNewsMarkerClick?: (marker: NewsMarkerType) => void
+  /** Klik na značku deníku (pás u horní hrany, #673) — otevře Deník. */
+  onJournalMarkerClick?: (marker: JournalMarker) => void
+  /** Shift+klik do plochy (#673): rychlý zápis do deníku k minutě pod kurzorem —
+      myšlenka přijde většinou až s odstupem, ✎ u Replay nese jen aktuální minutu. */
+  onJournalQuickAdd?: (minuteIdx: number) => void
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -575,6 +584,25 @@ export function Heatmap({
         // Cluster: jeden marker s počtem místo změti čar (SPEC 9.1)
         context.font = '9px sans-serif'
         context.fillText(String(marker.count), x + 6, logicalH * 0.72 - 4)
+      }
+    }
+
+    // Značky deníku (#673, Traders mode): pás u HORNÍ hrany, aby nekolidoval
+    // s news markery dole; glyf ✎ pod čárkou, cluster s počtem
+    for (const marker of overlays.journalMarkers ?? []) {
+      const x = minuteToX(marker.minuteIdx) - 0.5 * scaleX
+      context.strokeStyle = 'rgba(232,193,75,0.85)'
+      context.lineWidth = 1.5
+      context.beginPath()
+      context.moveTo(x, 0)
+      context.lineTo(x, logicalH * 0.1)
+      context.stroke()
+      context.fillStyle = 'rgba(232,193,75,0.95)'
+      context.font = '11px sans-serif'
+      context.fillText('✎', x - 4, logicalH * 0.1 + 12)
+      if (marker.count > 1) {
+        context.font = '9px sans-serif'
+        context.fillText(String(marker.count), x + 6, logicalH * 0.1 + 12)
       }
     }
 
@@ -1256,16 +1284,30 @@ export function Heatmap({
     // Pan se pozná podle uražené vzdálenosti — kapture drží tentýž pointer.
     const start = clickRef.current
     clickRef.current = null
-    if (!start || !onNewsMarkerClick) return
+    if (!start) return
     const point = canvasPoint(event)
     if (!point || Math.hypot(point.x - start.x, point.y - start.y) > 4) return
-    if (point.y < logicalH * 0.6) return // markery žijí jen u spodní hrany
-    const markers = overlays.newsMarkers ?? []
-    if (markers.length === 0) return
     const { screenToCell, scaleX } = mapping()
     const { minuteIdx } = screenToCell(point.x, point.y)
     // Tolerance v minutách dle zoomu: glyf je ~8 px široký i při hustší ose
     const tolerance = Math.max(1, Math.ceil(6 / Math.max(scaleX, 0.01)))
+    // Shift+klik (#673): rychlý zápis do deníku k minutě pod kurzorem
+    if (event.shiftKey && onJournalQuickAdd) {
+      onJournalQuickAdd(minuteIdx)
+      return
+    }
+    // Značky deníku žijí u horní hrany (#673)
+    if (point.y < logicalH * 0.25 && onJournalMarkerClick) {
+      const journal = journalMarkerNear(overlays.journalMarkers ?? [], minuteIdx, tolerance)
+      if (journal) {
+        onJournalMarkerClick(journal)
+        return
+      }
+    }
+    if (!onNewsMarkerClick) return
+    if (point.y < logicalH * 0.6) return // news markery žijí jen u spodní hrany
+    const markers = overlays.newsMarkers ?? []
+    if (markers.length === 0) return
     const marker = markerNear(markers, minuteIdx, tolerance)
     if (marker) onNewsMarkerClick(marker)
   }

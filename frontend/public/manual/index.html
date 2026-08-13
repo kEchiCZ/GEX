@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.5 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.6 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -32,7 +32,7 @@
 <li><a href="#8-spodn%C3%AD-panely--vol-opt-vol-cum-%CE%B4">Spodní panely — Vol, Opt Vol, Cum Δ</a></li>
 <li><a href="#9-playback--p%C5%99ehr%C3%A1v%C3%A1n%C3%AD-dne">Playback — přehrávání dne</a></li>
 <li><a href="#10-anotace--kreslen%C3%AD-do-grafu">Anotace — kreslení do grafu</a></li>
-<li><a href="#11-dashboard">Dashboard</a> · <a href="#11b-%C5%99et%C4%9Bz--greeks--oi-tabulka">11b. Řetěz</a> · <a href="#11c-news-a-sentiment-sentimentlens">11c. News a sentiment</a> · <a href="#11d-sign%C3%A1ly-a-stats">11d. Signály a Stats</a></li>
+<li><a href="#11-dashboard">Dashboard</a> · <a href="#11b-%C5%99et%C4%9Bz--greeks--oi-tabulka">11b. Řetěz</a> · <a href="#11c-news-a-sentiment-sentimentlens">11c. News a sentiment</a> · <a href="#11d-sign%C3%A1ly-a-stats">11d. Signály a Stats</a> · <a href="#11e-den%C3%ADk-tradera-a-traders-mode">11e. Deník a Traders mode</a></li>
 <li><a href="#12-ibkr-console">IBKR Console</a></li>
 <li><a href="#13-settings">Settings</a></li>
 <li><a href="#14-notifikace-a-alerty">Notifikace a alerty</a></li>
@@ -588,6 +588,35 @@ víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.</p>
 </tr>
 </tbody></table>
 <hr>
+<h2>11e. Deník tradera a Traders mode</h2>
+<h3>Deník (sidebar → Deník)</h3>
+<p>Manuální retrospektiva: <strong>pozorování / hypotéza / retrospektiva dne</strong>, s tagy
+a vazbou na symbol a konkrétní minutu (<code>ts_ref</code>). Denní pár drží tlačítka
+<strong>☀ Ranní plán</strong> a <strong>☾ Vyhodnocení dne</strong> (typ retrospektiva s tagem #plan /
+#vyhodnoceni). Export do Markdownu tlačítkem <strong>⬇ Export MD</strong>. Typ <em>obchod</em> se
+ručně založit nedá — vznikne až importem exekucí (odloženo, až začneš obchodovat).</p>
+<p>Rychlý zápis:</p>
+<ul>
+<li><strong>✎ u Replay</strong> — otevře Deník s předvyplněnou aktuální minutou playbacku.</li>
+<li><strong>Shift+klik do grafu</strong> — předvyplní minutu <strong>pod kurzorem</strong>. Na tohle
+sáhni, když ti myšlenka dojde až s odstupem: najedeš na místo v grafu, kde
+se to stalo, a čas nemusíš vypisovat ručně. Přesný okamžik jde pak doladit
+v poli formuláře.</li>
+</ul>
+<h3>Traders mode (Settings → Trading)</h3>
+<p>Přepínač <strong>vrstev pro aktivní obchodování</strong> — informací, které nepotřebuješ
+ke čtení positioningu, ale k exekuci. Default vypnuto; když se vrstvy osvědčí,
+přepínač zmizí a stanou se standardní součástí aplikace. Dnes pod něj patří:</p>
+<ul>
+<li><strong>Značky deníku ✎ na časové ose grafu</strong> — každý záznam se ukáže u horní
+hrany v minutě, ke které se vztahuje (víc záznamů v minutě = jedna značka
+s počtem); klik na značku otevře Deník. V Replay tak vidíš své tehdejší
+poznámky v kontextu toho, co graf ukazoval.</li>
+<li>výhledově <strong>referenční úrovně</strong> (předchozí high/low/close, overnight extrémy).</li>
+</ul>
+<p>S tradingem souvisí i <strong>expected move</strong> a <strong>relativní síla</strong> (plánované
+funkce) — jsou to trading-info údaje, ne vrstvy positioningu.</p>
+<hr>
 <h2>12. IBKR Console</h2>
 <p>Diagnostická obrazovka:</p>
 <ul>
@@ -618,6 +647,10 @@ víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.</p>
 <tr>
 <td><strong>Alerty</strong></td>
 <td><strong>Hlásit chyby subskripce market dat</strong> — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert <em>Chyba subskripce</em> v kap. 14)</td>
+</tr>
+<tr>
+<td><strong>Trading</strong></td>
+<td><strong>Traders mode</strong> — přepínač trading vrstev (viz kap. 11e); ukládá se jen v prohlížeči</td>
 </tr>
 <tr>
 <td><strong>Vzhled</strong></td>
@@ -657,8 +690,8 @@ zůstanou ve formuláři. Téma (Dark/Light) se ukládá hned, zbytek přes Ulo�
 </tr>
 </thead>
 <tbody><tr>
-<td>Cena × úroveň</td>
-<td>Cena protne flip nebo wall</td>
+<td><strong>Cena u úrovně</strong></td>
+<td>Cena se přiblíží k flipu / call zdi / put zdi na ≤ 1 krok striků (ES ±5 b). Anti-spam: úroveň po vystřelení mlčí 15 min <strong>a</strong> znovu hlásí až poté, co cena od úrovně odešla (2× práh) — konsolidace u zdi tak pípne jednou, ne každou minutu</td>
 </tr>
 <tr>
 <td>Cum Δ skok</td>
