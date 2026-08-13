@@ -84,7 +84,14 @@ export const LEVEL_LABELS: Record<string, string> = {
   // Sekundární zdi (ADR-0008) nesou po spárování prefix `walls:`
   'walls:call_wall_2': '2. call zeď',
   'walls:put_wall_2': '2. put zeď',
+  // Expected move dne (#676, Traders mode) — hranice spot_ref ± ATM straddle
+  em_upper: 'EM +',
+  em_lower: 'EM −',
 }
+
+/** Barva a čárkování EM hranic (#676) — jediný zdroj pro graf i legendu. */
+export const EM_COLOR = 'rgba(120,170,255,0.9)'
+export const EM_DASH = [6, 4]
 
 /** Popisek úrovně; `null` = linie nemá název, kreslí se jen s cenou. */
 export function levelLabel(name: string): string | null {
