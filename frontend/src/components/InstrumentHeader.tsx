@@ -7,6 +7,7 @@ import { formatSettleWatch } from '../instrument/settlewatch'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
 import { GammaCliffChip } from './GammaCliffChip'
+import { RelativeStrengthChip } from './RelativeStrengthChip'
 import { StateChip } from './StateChip'
 import { TendencyChip } from './TendencyChip'
 
@@ -148,6 +149,8 @@ export function InstrumentHeader({
       )}
       {/* Gamma útes (#576): kolik gammy dnešní expirací odpadne — jen informace */}
       <GammaCliffChip symbol={symbol} />
+      {/* Relativní síla ES vs. NQ (#680, Traders mode) — widget na zkoušku */}
+      <RelativeStrengthChip />
       {/* Settle watch (#603): denní teze jednou větou — uzavřeme nad/pod klíčovou zdí? */}
       {settleWatch && selectedExpiry && (
         <span
