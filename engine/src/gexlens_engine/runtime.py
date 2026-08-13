@@ -27,6 +27,12 @@ from gexlens_engine.compute.gexfield import (
     greek_fields,
     greek_profiles,
 )
+from gexlens_engine.compute.levelalerts import (
+    LevelProximityWatcher,
+)
+from gexlens_engine.compute.levelalerts import (
+    strike_step as chain_strike_step,
+)
 from gexlens_engine.compute.levels import GexLevels, compute_ladder, compute_levels
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import session_bounds, settle_ts, trading_session_date
@@ -129,6 +135,8 @@ class EngineRuntime:
     last_flow: FlowRowLike | None = field(default=None, init=False)
     # Kompletní levels vč. dominance zdí (ADR-0010, #223) — LevelsRow je nenese
     last_gex_levels: GexLevels | None = field(default=None, init=False)
+    # Cenové alerty na úrovně (#675) — staví se líně z kroku striků řetězce
+    _level_watcher: LevelProximityWatcher | None = field(default=None, init=False)
     # Poslední Dyn GEX profil (ADR-0009) — tendency (#350) z něj čte gammu v místě ceny
     last_profile: GexProfile | None = field(default=None, init=False)
     # Charm/vanna profily (#204) — tendency v2 (#397) z nich čte toky v místě ceny
@@ -474,6 +482,30 @@ class EngineRuntime:
         )
         self.last_levels = levels_row
         self.last_gex_levels = levels
+
+        # Cenové alerty na úrovně (#675) — jen primární řetěz (sekundární má
+        # tytéž zdi o expiraci dál, duplicitní zvonek by jen otravoval)
+        if not self.secondary and self.settings.level_alert_near_steps > 0:
+            if self._level_watcher is None:
+                step = chain_strike_step([contract.strike for contract in self.contracts])
+                self._level_watcher = LevelProximityWatcher(
+                    near_points=step * self.settings.level_alert_near_steps,
+                    cooldown_s=self.settings.level_alert_cooldown_s,
+                )
+            for proximity in self._level_watcher.observe(levels, spot=spot, now=time.monotonic()):
+                await self.publisher.publish(
+                    "alerts",
+                    {
+                        "kind": "level_proximity",
+                        "symbol": self.symbol,
+                        "message": (
+                            f"{self.symbol}: cena {proximity.price:g} se blíží k úrovni "
+                            f"{proximity.label} {proximity.level:g} "
+                            f"(Δ {proximity.distance:g} b)"
+                        ),
+                        "ts": dt.datetime.now(dt.UTC).timestamp(),
+                    },
+                )
 
         # GEX žebřík (#244): top-N významných striků per strana — vlastní řada
         # (proměnný počet příček) + aditivní WS kanál

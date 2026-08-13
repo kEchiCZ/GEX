@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     t6_collector_enabled: bool = True
     # Gamma útes po expiraci (#576, fáze 1 jen měření)
     gamma_cliff_enabled: bool = True
+    # Cenové alerty na úrovně (#675): práh přiblížení v násobcích kroku striků
+    # (škáluje per symbol — ES krok 5 b, NQ širší); 0 = vypnuto
+    level_alert_near_steps: float = Field(default=1.0, ge=0)
+    # Cooldown per úroveň; po vystřelení navíc musí cena zónu opustit
+    # (re-arm hystereze), jinak by alert pálil každou minutu konsolidace u zdi
+    level_alert_cooldown_s: float = Field(default=900.0, gt=0)
     t6_trigger_pct: float = -1.0
     # Minimální dominance zdi pro šablony T1/T3 (ADR-0010, #223)
     setup_min_wall_dominance: float = Field(default=0.15, ge=0, le=1)
