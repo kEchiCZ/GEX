@@ -103,6 +103,18 @@ docker compose down              # odstranění kontejnerů (volume pgdata zůst
 
 Data: Parquet v `./data` (bind mount, sdílené engine↔API), PostgreSQL ve volume `pgdata`. Zálohovat stačí `./data` + `pg_dump` (hlavně tabulku `oi_eod`, která se nikdy nemaže).
 
+### Provozní detaily kontejnerů
+
+- Kontejnery běží pod **UID 10001** (`docker/entrypoint.sh`) — bind-mount
+  adresáře musí být zapisovatelné pro tento UID.
+- **nginx frontendu proxuje `/api`** na službu API — port API se ven
+  nepublikuje; po nasazení frontendu je potřeba **hard reload**
+  (Ctrl+Shift+R), nginx drží starý bundle.
+- Shellové skripty mají v `.gitattributes` vynucené `eol=lf` — checkout na
+  Windows je nesmí konvertovat na CRLF (kontejner by je nespustil.)
+
+---
+
 ## 4. Konfigurace — kompletní reference
 
 Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuje se při startu — nevalidní hodnota = engine odmítne nastartovat se srozumitelnou chybou.
@@ -130,7 +142,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_WINGS_SWEEP_EVERY` | 3 | Křídla každý k-tý cyklus |
 | `GEXLENS_ATM_SWEEP_WIDTH` | 30 | ATM ± N strikes každý cyklus |
 | `GEXLENS_REPAIR_MAX_ATTEMPTS` | 3 | Retry repair fronty za sweep |
-| `GEXLENS_MARKET_DATA_LINES` | 100 | Kapacita lines (účet ≥ 150, ADR-0001) |
+| `GEXLENS_MARKET_DATA_LINES` | 100 | Kapacita market data lines — **tvrdý strop účtu je 100** (změřeno #609; původní odhad „≥ 150" z ADR-0001 neplatil). `batch_size` nikdy nezvyšovat |
 | `GEXLENS_HOT_ZONE_WIDTH` | 15 | Cílová šířka hot zóny (degraduje dle účtu) |
 | `GEXLENS_TICK_BY_TICK_MAX_STREAMS` | 5 | Naměřený limit účtu (ADR-0001) |
 | `GEXLENS_DATABASE_URL` | postgres localhost | V compose směřuje na službu `postgres` |
@@ -139,6 +151,14 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_DISK_LIMIT_GB` | 2 | Alert při překročení |
 | `GEXLENS_RETENTION_PURGE_TIME_UTC` | 21:30 | Čas nočního purge |
 | `GEXLENS_API_BASE` | http://127.0.0.1:8000 | Kam engine pushuje (v compose `http://api:8000`) |
+
+| `GEXLENS_PG_PASSWORD` | — | **Povinné** — compose bez něj nenastartuje (generuje `scripts/init-secrets.ps1`) |
+| `GEXLENS_API_TOKEN` | — | **Povinné** — sdílené tajemství `/internal/*` a `/backup/postgres` |
+| `GEXLENS_BIND_ADDR` | 127.0.0.1 | Na jaké adrese publikují porty (server: ponechat loopback + reverse proxy) |
+| `GEXLENS_ALLOWED_ORIGINS` | — | CORS whitelist API |
+| `GEXLENS_NEWS_API_TOKEN` | — | Token news-engine → API push |
+| `GEXLENS_TASTY_SHADOW` | false | Shadow porovnání tastytrade feedu (M7 fáze 1, #613) — zapisuje JEN do `feed_comparison`, nic nepublikuje. Kill switch = vypnout flag |
+| `GEXLENS_TASTY_CLIENT_SECRET` / `_REFRESH_TOKEN` | — | OAuth2 grant **výhradně scope `read`** (ADR-0025); dev prostředí má vlastní `GEXLENS_DEV_TASTY_*` grant. Obsah `.env` se nikdy nevypisuje do konzole |
 
 Frontend build-time: `VITE_API_BASE` (nginx build arg, default `http://127.0.0.1:8000`).
 
@@ -176,6 +196,15 @@ Odolnost: ConnectionManager watchdog (heartbeat 30/15 s + exponenciální reconn
 | `derived/{sym}/{expiry}/levels/{date}.parquet` | ts_min, flip, call_wall, put_wall, centroid, total_gex |
 | `derived/{sym}/flow/{date}.parquet` | ts_min, flow_delta, cum_delta |
 | `derived/{sym}/bars/{date}.parquet` | ts_min, open, high, low, close, volume |
+| `derived/{sym}/netflow/{date}.parquet` | Δ-vážený tok per strana (podklad FA odhadu OI) |
+| `derived/{sym}/{expiry}/oiest/{date}.parquet` | FA odhad OI (netflow×α, #232) |
+| `derived/{sym}/{expiry}/gexprofile(fa)/…` + `gexfield(fa)/…` | Dyn profily/pole; `…fa` varianty nad FA odhadem |
+| `derived/{sym}/{expiry}/charmprofile/…`, `vannaprofile/…` (+ `…field`) | Dyn Charm/Vanna plochy (#204) |
+| `derived/{sym}/{expiry}/greekssource/{date}.parquet` | Zdroj greeks per minutu (model/computed, #547) |
+| `derived/{sym}/{expiry}/oimissing/{date}.parquet` | Striky bez OI (šrafura, #465) |
+| `derived/{sym}/catchup/{date}.parquet` | Příznak dohánění po startu (#518) |
+| `derived/{sym}/gexforward/{date}.parquet` | **Forward GEX** (#519): bloky per budoucí obchodní den (day, grid, values, dropped_expiries, dropped_share, iv_fallback_share); jen poslední stav, přepočet po OI archivu |
+| `derived/sentiment/{SYM}/{date}.parquet` | 1min řada SentIndexu per symbol (ADR-0026; ploché soubory bez symbolu = ES legacy) |
 
 Zápis je **atomický** (temp + rename) — po pádu procesu nikdy nezůstane částečný soubor; osiřelé `.tmp` se uklízí při dalším zápisu. Writer po restartu navazuje na rozepsaný den.
 
@@ -183,7 +212,11 @@ Zápis je **atomický** (temp + rename) — po pádu procesu nikdy nezůstane č
 
 | Tabulka | Účel |
 |---|---|
-| `oi_eod(symbol, expiry, strike, right, date, oi)` | **Věčný** OI archiv — žádná retence, žádné delete API |
+| `oi_eod(symbol, expiry, strike, right, date, oi, iv, delta, gamma, theta, vega, close_prem, und_price)` | **Věčný** denní snímek řetězce — od #519 nese vedle OI i IV/greeks/závěrečnou prémii/ref. spot z ranního průchodu (NULL = model nedodal). Žádná retence, žádné delete API |
+| `gamma_cliff` | Denní odpad gammy po expiraci + metriky následující seance (#576, fáze měření) |
+| `feed_comparison` | Shadow porovnání IBKR × tastytrade per (minuta, kontrakt, pole) — jen po dobu sběru M7 fáze 1 (#613) |
+| `sentiment_daily`, `sentiment_waves`, `news_*`, `signals`, `signal_outcomes`, `track_record` | SentimentLens (per symbol od ADR-0026) |
+| `setups` | Setupy vč. `context` JSON (od #575 nese band_sharpness/band_sharpness_pct/band_depth) a `mechanics_version` |
 | `watchlist`, `alerts`, `annotations`, `settings` | CRUD přes API |
 
 ## 7. API reference
@@ -194,7 +227,12 @@ Interaktivní dokumentace: `http://127.0.0.1:8000/docs` (OpenAPI).
 
 | Endpoint | Popis |
 |---|---|
-| `GET /health`, `GET /status` | Liveness; agregovaný stav pipeline |
+| `GET /health`, `GET /status` | Liveness; agregovaný stav pipeline (`lines_utilization` je od #630 měřená špička) |
+| `GET /gexforward/{symbol}` | Forward GEX bloky per budoucí den (#519) |
+| `GET /gammacliff/{symbol}` | Dnešní odpad gammy + historie útesů (#576) |
+| `GET /fa/alpha` | Kalibrovaná α FA odhadu per symbol (#232) |
+| `GET /gexplane/{...}` | Dyn Charm/Vanna plochy (#204) |
+| `GET /sentiment/*?symbol=` | Sentiment per symbol (ADR-0026): index/daily/state/waves |
 | `GET /instruments`, `GET /instruments/{sym}/expiries` | Dostupné symboly/expirace (ze storage) |
 | `GET /instruments/{sym}/days` | Uložené dny s expirací per den (Daily pohled) |
 | `GET /profile/{sym}/aggregate?date` | Σ profil: OI/volume sečtené přes všechny expirace dne per strike (registrováno PŘED /profile/{sym}/{expiry}) |
@@ -265,6 +303,14 @@ Pravidla:
 - **Frontend** (~58): jednotkové (geometrie, barvy, contours, slice), komponentové (jsdom + testing-library, PointerEvent polyfill), Arrow round-trip loaderu, **e2e render smoke** (App nad /replay balíkem), vizuální regresní snapshoty renderu.
 - **CI** (GitHub Actions, na každý PR): python job (ruff, mypy strict, pytest + PostgreSQL service), frontend job (eslint, prettier, vitest, build). Výkonnostní testy s tvrdým limitem běží jen lokálně (`CI` env skip).
 
+### Bezpečnostní kontroly v CI
+
+Job **`security`** na každém PR: gitleaks (celá historie — pozor, test
+s realisticky vypadajícím tajemstvím spadne i po přepsání souboru, dokud je
+v historii větve), pip-audit, npm audit. Lokálně `pwsh scripts/security-scan.ps1`.
+
+---
+
 ## 11. Známé limity účtu a otevřené body
 
 Z [ADR-0001](../adr/0001-ibkr-account-limits.md) (měřeno živě na účtu):
@@ -276,6 +322,17 @@ Z [ADR-0001](../adr/0001-ibkr-account-limits.md) (měřeno živě na účtu):
 | **FOP OI** | **tick 588 nedodává nikdy; tick 101 funguje** | **VYŘEŠENO (issue #65, ADR-0001 v3):** `IbOIFetcher` používá generic tick 101 pro OPT i FOP a čte hodnotu podle strany kontraktu (opačná strana = validní 0.0). Retry à 30 min + volume fallback zůstávají jako pojistka. |
 
 [ADR-0002](../adr/0002-strike-band-expansion.md): obálka strikes je grow-only (křídla se neztrácejí), strop šířky s alertem. [ADR-0003](../adr/0003-multi-instrument.md): multi-instrument orchestrace řízená watchlistem.
+
+### Sekundární datový zdroj — tastytrade/dxFeed (M7)
+
+Naměřené limity a pasti feedu: **ADR-0027** (6 000+ symbolů na subskripci,
+REST ≥ 6 req/s, povinné KEEPALIVE, dekádová kolize futures candle symbolů).
+Přístup výhradně **OAuth2 scope `read`** — nikdy `/sessions`, nikdy `trade`
+(ADR-0025); granty oddělené pro dev a produkci. Shadow mód (#613) porovnává
+oba feedy do `feed_comparison`, nic nepublikuje; vyhodnocení
+`scripts/feed_comparison_report.py`.
+
+---
 
 ## 12. Diagnostika a údržba
 

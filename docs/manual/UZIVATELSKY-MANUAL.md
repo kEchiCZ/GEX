@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.4 · srpen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.5 · srpen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.
 
@@ -43,7 +43,7 @@ GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME 
 - **News a sentiment (SentimentLens)** — vlastní news-engine sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy), klasifikuje směr a důležitost, počítá **SentIndex** a stav **RISK ON / RISK OFF**. V grafu markery zpráv (klik = dialog s detaily a dopadem Long/Short), obrazovka **News** s feedem a nadcházejícími událostmi.
 - **Signály** — empiricky gate-ované Long/Short nápovědy ze zpráv (šipky na ceně); pouštějí se, až když daný typ zprávy má statisticky ověřenou reakci (n ≥ 30, Wilson LB > 0,50).
 - **Tendence** — souhrnný chip v hlavičce (Strong Short … Strong Long) z 12 složek positioningu a toku, s rozpadem hlasů po kliknutí.
-- **Setup detektor** — šablony T1–T5 (odraz od zdi, neúspěšný průraz, Max Pain pin, gamma momentum, divergenční spring) s kartou, liniemi v grafu, P/L evidencí a hodnocením.
+- **Setup detektor** — šablony T1–T5 a T7 (odraz od zdi, neúspěšný průraz, Max Pain pin, gamma momentum, divergenční spring, pokračování trendu) s kartou, liniemi v grafu, P/L evidencí a hodnocením.
 - **Dashboard, Řetěz, Stats, IBKR Console, Settings** — provozní obrazovky pro přehled, opční tabulku, statistiky, diagnostiku a konfiguraci.
 
 ![Hlavní obrazovka](img/graf.png)
@@ -106,6 +106,8 @@ Obrazovka se skládá z (shora dolů, zleva doprava):
 | **Hlavička** | Ticker a název instrumentu, **poslední cena + denní změna v %**, **selektor expirace** s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h" — velké expirace nesou velké OI. V selektoru najdeš i **následující expiraci** (sbírá se souběžně — čtení positioningu příští seance). Dále **GEX režim badge** (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem), **chip Tendence** (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno"), **chip stavu sentimentu** RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna). Indikátor ● Live / ○ Offline, zvonek notifikací. |
 | **Řádek timeframe** | **Intraday/Daily** a rozlišení **1m, 2m, 3m, 5m, 10m, 15m, 30m, 45m, 1h, 2h, 3h, 4h, 1d**. Intraday agreguje minutová data do zvolených košů (svíčky OHLC, objemy se sčítají); Daily zobrazí sloupec za každý uložený den (roste s historií, max 14 dní). |
 | **Řádek přepínačů** | Dropdown **Dyn plocha** (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18). Checkboxy vrstev: **Zdi** (call/put wall linie), **2. zeď** (druhá nejsilnější koncentrace strany, tečkovaně), **GEX Levels** (flip/centroid/Max Pain), **GEX žebřík** (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), **FA levels** (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI), **Sessions** (automatické markery světových seancí), **Vol / Opt Vol / Delta / Δ Flow C/P** (spodní panely), **Vol + OI Δ**, **Projekce**, **News** (markery zpráv + panel Sentiment) s dropdownem **Vše/Významné** (filtr markerů na importance ≥ 2), dropdown **Signály** (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá. |
+| **Hlavička (novinky v1.5)** | **Settle watch** — segment „settle 22:00 · nad/pod X ±d b": klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?" na jeden pohled. **Chip „odpadá X % gammy"** — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. |
+| **Přepínač OI** | **Měřené / FA odhad** — zdroj Open Interest pro heatmapu i profil (persistováno per symbol, default Měřené). FA odhad = OI dopočtené z klasifikovaného toku (netflow×α): k dispozici dřív než publikovaný archiv, ale je to odhad — při pochybnosti věř Měřeným. FA má i vlastní Dyn GEX plochu v dropdownu Dyn plocha a vlastní FA levels. |
 | **Lišta grafu** | **Mode** (7 metrik heatmapy), **Scale** (Linear/√/Log/Pow⅓), **Walls** (Off/Peak/Center/Smooth/Flip/Ridge), Styl (Gradient/Blobs), Contours (Off/Major/All), **Cena** (Svíčky/Křivka) + **Viditelnost**, nástroje anotací + barva, indikátor zdroje dat, tlačítko **⏮ Replay**. |
 | **Heatmapa** | Hlavní plocha — viz kapitola 5. |
 | **Strike profil** | Pravý panel; **předěl mezi grafem a panelem jde táhnout** (kurzor ↔) — viz kapitola 7. |
@@ -174,10 +176,15 @@ Select **Walls** kreslí bílé čárkované linie počítané z právě zobraze
 
 ### Contours (izolinie)
 
-Bílé přerušované vrstevnice nad vyhlazeným polem:
+Bílé přerušované vrstevnice nad vyhlazeným polem. Prahy jsou **procenta síly
+z 99. percentilu pole, zvlášť za kladnou a zápornou stranu** — na každé straně
+tedy vždy uvidíš dvě čáry bez ohledu na to, jak silný den je:
 - **Off** — vypnuto
-- **Major** — dvě úrovně (p75 a p90) — jen hlavní koncentrace
-- **All** — pět úrovní — detailní tvar
+- **Major** — úrovně 65 % a 95 % — jen jádra koncentrací
+- **All** — úrovně 40 % a 70 % — širší obrys struktury
+
+Vzdálenost obou čar nese informaci: **čím blíž jsou u sebe, tím ostřejší je
+přechod** mezi „drží" a „pustilo" (čtení v kap. 18).
 
 ### Linie v heatmapě (overlaye)
 
@@ -247,7 +254,19 @@ Horizontální skládané pruhy pro každý strike, **na stejné výškové ose 
 - **Šířku panelu změníš tažením předělu** mezi grafem a panelem (kurzor ↔). Panel jde roztáhnout hodně doleva (až ~360 px zbyde na graf), aby byla vidět celá délka pruhu i s číslem.
 - **Profilem ovládáš i cenovou osu Y grafu** — tažení svisle nebo kolečko nad profilem stlačuje/roztahuje ceny stejně jako levý okraj heatmapy (kurzor ↕).
 
+- **Šrafovaná půlka řádku** = OI pro tenhle strike **chybí** (IBKR ho nedodalo) — něco jiného než změřená nula, která zůstává prázdná. Šrafura říká „nevíme", prázdno říká „nula".
+
 Čteš z něj na první pohled, **kde sedí dominantní call a put koncentrace** — typicky walls.
+
+### PUT / CALL panel (pod profilem)
+
+Poměr obou stran vybrané expirace ve třech jednotkách (dropdown): **Kontrakty**
+(kusy), **Prémie $** (kolik peněz za pozice někdo zaplatil — mid × kontrakty ×
+multiplikátor; OTM křídla s tisíci levných kusů nepřebijí ATM pozici za násobně
+víc) a **Notional $** (nominál podkladu). Základ volíš druhým dropdownem:
+Vol + OI / Vol / OI. Červený-zelený pruh ukazuje poměr, čísla PUT/CALL a P/C.
+Zmrzlé kotace se do prémií nepočítají — při >30 % chybějících midů panel
+zašedne s vysvětlením, aby prémie nelhala.
 
 > **Proč večer „zmizí" jedna strana pruhů?** Pruhy jsou **Δ-vážené** — násobí se deltou opce (kolik futures dealer na kontrakt reálně drží). Ke konci seance se delta polarizuje (viz gamma crunch, kap. 18): OTM opce mají deltu skoro 0, ITM skoro 1. Nad spotem proto zbývají hlavně červené (ITM puty) a pod spotem zelené (ITM cally). Není to chyba — surové OI/Vol obou stran pořád vidíš v tooltipu řádku; zapnutím **Σ** se přimíchá zítřejší expirace s měkčími deltami a obě strany se zase objeví.
 
@@ -263,6 +282,7 @@ Tři panely se **sdílenou časovou osou** s heatmapou. Každý zvlášť vypne�
 | **Opt Vol** | Minutový objem opcí, **barevně call (teal) / put (červená)** vedle sebe |
 | **Δ Flow C/P** | Delta-vážený opční tok zvlášť za call a put stranu (\|Δ\| × přírůstek volume). Z něj čteš, **na které straně se právě obchoduje** — např. „uzavírání callů" = call sloupce slábnou. Default vypnutý (checkbox Δ Flow C/P). |
 | **Cum Δ** | Kumulativní delta flow jako plocha **nad nulou (zelená) / pod nulou (červená)**. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Počítá se s plnou klasifikací agresora (tick-by-tick v hot zóně, midpoint test jinde) a resetuje se na začátku dne. |
+| **Evo OI** | Vývoj celkového Open Interest v čase, zvlášť call (teal) a put (červená), **schodovité kreslení** (OI se mění skokem při archivu, ne spojitě). Tlačítko **Δ** přepíná absolutní hodnotu vs. změnu od začátku dne. V Daily ose = hodnota na konci každého dne. Default vypnutý (checkbox Evo OI). |
 | **Sentiment** | SentIndex z news-engine (zapíná checkbox **News**): intraday spojitá řada kolem nuly (kladná = risk-on tón zpráv, záporná = risk-off), v **Daily** pohledu OHLC svíčka indexu za každý den (open nese overnight zbytek). |
 
 Pohyb myší v kterémkoli panelu hýbe crosshairem ve všech panelech i heatmapě. Při najetí navíc uvidíš **hodnoty ukazatele**:
@@ -301,6 +321,14 @@ Vedle nástrojů je **výběr barvy**. Anotace jsou ukotvené k **času a striku
 
 ---
 
+### Technická poznámka k ukotvení
+
+Anotace se vážou na **absolutní minutu dne × cenu** — přepnutí timeframe
+(1m ↔ 15m) s nimi nehne. Kreslí se jen v den svého vzniku (per instrument
+a den) a dožívají s retencí dat.
+
+---
+
 ## 11. Dashboard
 
 Karty instrumentů z watchlistu: aktuální cena, stav dat (● live / offline), **GEX režim badge**, **PCR sentiment** (Put/Call ratio z vlastních dat: vol = dnešní tok, OI = držené pozicování, mini křivka = vývoj PCR vol za den s referencí 1.0; extrémy kontrariánsky), **mini NetGEX profil** (zelené/červené sloupečky = čistý positioning po stricích) a vzdálenosti k call/put wall. Slouží jako rychlý přehled, když sleduješ víc instrumentů.
@@ -329,7 +357,21 @@ Vlastní **news-engine** běží vedle datového enginu: sbírá zprávy a makro
 
 ### Stav RISK ON / RISK OFF
 
-Chip v hlavičce (kap. 4) překlápí stav podle SentIndexu vůči klouzavým průměrům MA5/MA10 s potvrzením — nepotvrzená intradenní změna má tečku a signály z ní nesou ⚠. Historii přepnutí (vlny, jejich hloubku a délku) najdeš na obrazovce **Stats**.
+Chip v hlavičce (kap. 4) ukazuje stav podle **polohy denního close SentIndexu
+vůči klouzavým průměrům MA5 a MA10**: nad oběma = RISK ON, pod oběma =
+RISK OFF, mezi nimi = NEUTRAL. Nepotvrzená intradenní změna má tečku
+a signály z ní nesou ⚠. Historii přepnutí (vlny, hloubku a délku) najdeš na
+obrazovce **Stats**.
+
+**Pozor na čtení jmen:** RISK ON/OFF popisuje **náladu zpravodajského toku**,
+ne předpověď směru ceny — měření na naší historii ukázalo, že trh se
+k náladě často chová kontrariánsky (výprodeje nálady se vykupovaly). Směr
+smí říct jen kalibrovaný signál, nikdy samotné jméno stavu.
+
+**Per instrument:** od v1.5 má každý podklad vlastní řadu — ES a NQ mají
+oddělený index, vlny i stav (chip se přepíná se zobrazeným instrumentem;
+tatáž zpráva hýbe každým podkladem jinak — technologická zpráva pohne NQ
+víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.
 
 ### Kde se sentiment potkává s grafem
 
@@ -358,9 +400,10 @@ Signál se ukáže jako **šipka na cenové křivce** (▲ Long teal / ▼ Short
 |---|---|
 | **Vlny sentimentu** | Historie RISK ON/OFF vln — hloubka, délka, četnost per směr |
 | **Hit-raty bucketů** | Empirický model reakcí na zprávy: úspěšnost per kategorie × důležitost × překvapení, přepínač **okna reakce** (+5/+15/+30/+60 min) a **režimu** (vše / RiskOn / RiskOff / Neutral / gamma ±), progres ke gate |
-| **Setupy per režim** | Úspěšnost šablon T1–T5 rozpadlá podle GEX režimu — které setupy fungují v jakém prostředí |
+| **Setupy per režim** | Úspěšnost šablon T1–T7 rozpadlá podle GEX režimu — které setupy fungují v jakém prostředí |
 | **Track record** | Mechanické equity křivky strategií (signály, setupy) + drawdown |
 | **Latence zdrojů** | Jak rychle který zdroj doručuje zprávy (medián, p90, podíl dávek) |
+| **Striky se zasekly / zase jedou** | Část pásma opakovaně nejde opravit (repair kola bez úspěchu) — TWS pro ně přestala dodávat modelGreeks; hint **restart TWS**. Návrat se ohlásí |
 | **Drift hlídka** | Alert, když se čerstvá úspěšnost bucketu statisticky rozejde s historickou — model přestává platit (⚠ badge už u přepínače Signály) |
 | **Ranní retro pass** | Denní přehodnocení včerejších klasifikací s odstupem |
 
@@ -397,6 +440,20 @@ Změny se **ukládají okamžitě** (bez tlačítka Uložit) a engine si je prů
 Light téma:
 
 ![Light téma](img/light.png)
+
+---
+
+### Záloha a API token
+
+- **API token** — pole pro hodnotu `GEXLENS_API_TOKEN` z `.env`. Potřebuje ho
+  tlačítko zálohy (bez něj server vrátí 401). Ukládá se **jen v prohlížeči**,
+  na server neodchází.
+- **Zálohovat PostgreSQL** — stáhne dump databáze (OI archiv navždy, setupy,
+  sentiment historie, anotace…). Ukládej mimo repo, ideálně mimo disk
+  s aplikací. Alternativa bez tokenu: `scripts/backup-postgres.ps1`.
+- **Potvrzení uložení** — po Uložit se ukáže zelené „✓ Uloženo" (zmizí po
+  3 s); když server změny odmítne, chyba se ukáže červeně a rozepsané hodnoty
+  zůstanou ve formuláři. Téma (Dark/Light) se ukládá hned, zbytek přes Uložit.
 
 ---
 
@@ -453,6 +510,20 @@ Když detektor najde setup, přijde alert **Nový setup** a nad grafem se ukáž
 
 ---
 
+### Novinky v1.5 ve stavové liště
+
+- **Lines %** je od v1.5 **měřená hodnota** — špička souběžně obsazených
+  market data linek od minulého údaje (registr subskripcí: sweep dávka +
+  trvalé streamy), ne konfigurační konstanta. Strop účtu je 100 linek;
+  typická špička sweep okna je ~85 %.
+- **α badge** (u FA odhadu OI) — kalibrovaná hodnota alfa per symbol + počet
+  kalibračních dnů; do první kalibrace default 0,4.
+- **Catch-up** — první minuty po startu enginu jsou označené příznakem
+  (CumΔ má vysvětlující popisek): kumulativy se dopočítávají ze session
+  archivu, ne od nuly.
+
+---
+
 ## 16. Deep-linky
 
 Aplikaci lze otevřít rovnou v konkrétním stavu pomocí URL parametrů:
@@ -482,6 +553,15 @@ Parametry lze kombinovat.
 | Po aktualizaci aplikace nevidím nové funkce | Prohlížeč drží starý build v cache — dej **Ctrl+Shift+R** (hard reload). |
 | TWS spadlo po přihlášení na mobilu | Limit jednoho přihlášení IBKR. Znovu se přihlas v TWS; aplikace se sama připojí. |
 | Aplikace nejde otevřít (:8080) | `docker compose up -d` v adresáři projektu; první start po rebootu chvíli trvá. |
+
+---
+
+### Obchodní den aplikace
+
+Obchodní den (Daily svíčka, denní osa, CumΔ reset) je **Globex seance**:
+od 17:00 CT předchozího dne do 17:00 CT — ne kalendářní půlnoc. Nedělní
+večer proto patří pondělnímu dni a restart aplikace uprostřed seance
+kumulativy **nenuluje** (dopočtou se od otevření seance).
 
 ---
 
@@ -523,6 +603,90 @@ Vždy je aktivní jen jedna plocha; barvy ploch vysvětluje i **Legenda** v side
 - **Bledé oblasti = vzduchoprázdno.** Nikdo tam nic nedrží, cena projde bez odporu.
 - **Rozhraní zelené a červené v čase = dráha dynamického flipu.**
 
+### Jak se Dyn GEX plocha čte — a jak ne
+
+Čtyři omyly, do kterých spadne každý, kdo je zvyklý číst grafy jako křivky:
+
+**1. Zelená není cesta nejmenšího odporu — je to zóna největšího odporu.**
+Uvnitř zeleného pásma market makeři pohyb aktivně brzdí; cena tam bývá
+**uvězněná**, ne že by tudy klouzala. Cesta nejmenšího odporu je tam, kde je
+mapa **tmavá nebo červená**. Intuice „cena se drží podél pásma" přitom není
+úplně mimo — silné zelené pásmo opravdu funguje jako koridor a cena v něm
+zůstává. Jen je to **koridor z tření, ne z hladkosti**: uvnitř čekej
+postranní pohyb a návraty ke středu, pod pásmem rychlejší, trendovější pohyb.
+
+**2. Stoupající pásmo neznamená rostoucí cenu.** V projekci pásmo často
+stoupá doprava — není to předpověď růstu. Jak vypadávají nejbližší expirace,
+zbývá struktura z delších kontraktů, jejichž open interest leží výš. Je to
+**důsledek složení trhu, ne směrová šipka.** Čáry ber jako **hranice režimu,
+ne jako trajektorii.**
+
+**3. Dvě kontury čti jako polohu vůči pásmu:**
+
+| Kde je cena | Co to znamená |
+|---|---|
+| **nad oběma** čarami | uvnitř tlumící zóny — výkyvy se zaplácnou, spíš postranní pohyb |
+| **mezi čarami** | přechodové pásmo, tlumení slábne |
+| **pod oběma** | mimo zónu — brzdy jsou pryč, pohyb se rozjede snáz |
+
+Vzdálenost čar = **ostrost přechodu** (blízko u sebe = „pustí to najednou").
+Speciální případ: leží-li obě kontury **nad** cenou, není to koridor, ve
+kterém jsi — je to **strop nad hlavou**, na kterém by se případná rally
+zpomalila.
+
+**4. Budoucnost je spočítaná ze zmrazeného dneška.** Projekce předpokládá,
+že open interest i volatilita zůstanou dnešní a mění se jen zbývající čas.
+To v realitě neplatí — **čím dál doprava, tím spekulativnější** (pár dní
+solidní, za měsíc náčrt). **Ostré útesy u expirací jsou spolehlivější než
+absolutní čísla:** že po expiraci struktura zmizí, je jistota daná
+kalendářem; přesná síla pásma je odhad.
+
+**Jednotka:** plocha se zobrazuje v **$/1 %** (přepínač Jednotka) — každá
+cenová hladina je vážená P²/100, tedy „kolik dolarů podkladu dealeři
+přeobchodují při pohybu o 1 %". Vyšší hladiny mají přirozeně větší váhu;
+$/bod je surové pole bez váhy (obě varianty ukazují tutéž strukturu, liší
+se důrazem).
+
+**Postup čtení odshora dolů:**
+1. najdi předěl **Today/projekce** — vpravo od něj nejsou data, ale model,
+2. podívej se, **kde je cena vůči barvám** (v zeleném = fade den, v červeném/bledém = momentum),
+3. přes **Walls: Flip** si ukaž hranici zelené/červené,
+4. najdi **nejbližší expiraci** a chip „odpadá X %" — co z dnešní struktury zítra nebude,
+5. **kontury** ti řeknou, jak ostré ty hranice jsou.
+
+### Denní Forward GEX — gamma útesy týdne
+
+V **Daily** pohledu se zapnutou plochou Dyn GEX pokračuje osa přes budoucí
+obchodní dny (přepínač **Projekce dnů**: settle / +1 den / týden):
+
+- **Předěl Today** odděluje naměřené dny od modelu; projekční sloupce jsou
+  ztlumené a měřená heatmapa se do budoucna nekreslí vůbec — model nese jen
+  podkladová plocha.
+- Každý budoucí den se počítá z dnešního OI **mínus expirace, které do té
+  doby odpadnou** — každý kontrakt žije do své vlastní expirace. Mezi dny
+  proto vznikají **ostré svislé předěly — gamma útesy**. Nalevo od expirace
+  může být pásmo silně zelené, hned napravo bledé: struktura, která dnes
+  cenu drží, po expiraci neexistuje. Trh, který se týden nehnul, se po
+  expiraci klidně rozjede — nemuselo se stát nic víc, než že vypršely opce,
+  které ho držely.
+- **Oranžové čárkované svislice** označují expirační dny s popiskem „po exp
+  X −38 %" (podíl odpadlé gammy); **OPEX** (třetí pátek) je sytější
+  a silnější — bývá to největší útes měsíce.
+- Útesy se záměrně **nevyhlazují** — skok je signál, ne šum.
+- V replayi se projekce nekreslí (model má smysl jen od živého „teď").
+
+### Setupy — doplnění šablon (v1.5)
+
+- **T7 trend_continuation** — pro trendové dny bez dotyku zdi: cena daleko od
+  opěrné zdi (práh v násobcích ATR, kalibrováno 12×ATR), na správné straně
+  flipu, protilehlá zeď je cíl; spouštěč pullback k EMA20 + odmítnutí.
+  Vznikla, protože trendový den neměly šablony T1–T5 co detekovat.
+- **T4 gamma_momentum** — brána CumΔ je nově **kvantilová** (horních 25 %
+  dne), ne absolutní extrém. Šablona zatím sbírá data pro kalibraci;
+  pozitivní expektanci neprokázala — ber ji jako měřicí, ne obchodní.
+- Prahy šablon jsou **verzované** (`mechanics_version`) — po změně mechaniky
+  se staré setupy nemíchají do statistik nových.
+
 ### Flip: naměřený vs. dynamický = flip ZÓNA
 
 V aplikaci jsou dva flipy — **obě čáry měří totéž dvěma metodami**:
@@ -530,6 +694,10 @@ V aplikaci jsou dva flipy — **obě čáry měří totéž dvěma metodami**:
 | | Kde | Barva | Metoda |
 |---|---|---|---|
 | **Naměřený flip** | hlavní graf | žlutá čárkovaná | průchod nulou kumulativního NetGEX z reálného OI, interpolace mezi striky; driftuje pomalu (hlavní vstup OI se přes den mění málo) |
+| **Forward GEX** | Modelové Dyn GEX pole přes budoucí obchodní dny (Daily pohled): dnešní OI mínus expirace, které do daného dne odpadnou. Ukazuje gamma útesy. |
+| **Gamma útes** | Skoková změna struktury po expiraci — gamma vypršených opcí zmizí ze dne na den. Svislice s „−X %" v Daily; chip „odpadá X %" v hlavičce pro dnešek. |
+| **Settle watch** | Segment hlavičky „nad/pod X ±d b": nejsilnější zeď dne a vzdálenost k ní — teze „uzavřeme nad X?". |
+| **FA odhad OI** | OI dopočtené z klasifikovaného toku (netflow×α) místo změřeného archivu — dostupné dřív, ale je to odhad; přepínač OI: Měřené/FA odhad, kalibrovaná α ve stavové liště. |
 | **Dynamický flip** | pravý panel (+ rozhraní barev v Dyn GEX mapě) | žlutá čárkovaná (slabší) | nula Black-Scholes modelu na jemnější mřížce — hladší odhad „teď" |
 
 **Rozdíl obou čar ber jako flip ZÓNU.** Blízko sebe = ostrá hranice režimů, signály čitelné. Rozjeté = hranice rozmazaná → **uvnitř zóny neobchoduj**, čekej, až cena opustí celé pásmo.

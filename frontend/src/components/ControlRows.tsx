@@ -113,7 +113,7 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
           value={underlayPlane}
           onChange={(event) => setUnderlayPlane(event.target.value as UnderlayPlane)}
           aria-label="Podkladová plocha"
-          title="Modelovaná dealer expozice pod heatmapou: gamma (brzdy/plyn), charm (toky od času), vanna (toky od volatility)"
+          title="Modelovaná dealer expozice pod heatmapou: gamma (brzdy/plyn), charm (toky od času), vanna (toky od volatility). Zelená = pohyb se tlumí, červená = zesiluje — není to směr, je to reakce trhu na pohyb."
         >
           {(Object.keys(PLANE_LABELS) as UnderlayPlane[]).map((value) => (
             <option key={value} value={value}>

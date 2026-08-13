@@ -34,7 +34,15 @@ $css = @"
 function Build-Manual([string]$mdName, [string]$title, [bool]$toWiki) {
     $md = Join-Path $manualDir $mdName
     $bodyFile = Join-Path $env:TEMP "gexlens-manual-body.html"
-    npx --yes marked --gfm -i $md -o $bodyFile
+    # BOM na začátku MD rozbíjel první nadpis (# skončil v <p> neskonvertovaný,
+    # nález #542) — marked dostává kopii bez BOM; verze připnutá kvůli
+    # reprodukovatelným buildům (#560)
+    $clean = [System.IO.Path]::GetTempFileName()
+    $text = [System.IO.File]::ReadAllText($md)
+    if ($text.Length -gt 0 -and $text[0] -eq [char]0xFEFF) { $text = $text.Substring(1) }
+    [System.IO.File]::WriteAllText($clean, $text, (New-Object System.Text.UTF8Encoding($false)))
+    npx --yes marked@15.0.6 --gfm -i $clean -o $bodyFile
+    Remove-Item $clean
     $body = Get-Content $bodyFile -Raw -Encoding UTF8
     $html = "<!doctype html><html lang=`"cs`"><head><meta charset=`"utf-8`">" +
             "<title>$title</title>$css</head><body>$body</body></html>"
