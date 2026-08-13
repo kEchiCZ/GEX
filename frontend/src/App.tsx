@@ -42,8 +42,10 @@ import type { HeatmapScale, MeasuredHeatmapMode } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
 import { expirySettleUtc, sessionDateFor } from './instrument/expiry'
 import { sessionDateIso } from './instrument/tz'
-import { EM_COLOR, EM_DASH, SETUP_COLORS, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays' // prettier-ignore
+import { EM_COLOR, EM_DASH, REF_COLOR, REF_DASH, SETUP_COLORS, VWAP_COLOR, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays' // prettier-ignore
 import { computeExpectedMove, emUsage } from './instrument/expectedmove'
+import { vwapSeriesForAxis } from './instrument/referencelevels'
+import { useReferenceLevels } from './hooks/useReferenceLevels'
 import { usOpenMs } from './api/briefing'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { CHARM_PALETTE, DEFAULT_SIGNED_PALETTE, VANNA_PALETTE } from './heatmap/render'
@@ -642,6 +644,42 @@ function MainContent() {
       (expectedMove.preOpen ? ' (pre-open)' : '')
     return [upper, line('em_lower', expectedMove.lower)]
   }, [expectedMove, day.minuteLabels.length, day.spotSeries, bucketMinutes])
+  // Referenční úrovně (#678, Traders mode): ONH/ONL, PDH/PDL, denní VWAP —
+  // konfluence zdí s úrovněmi, které sleduje zbytek trhu (zeď na PDH ≠ zeď
+  // v prázdnu). Z lehkých /bars, ne z /replay balíku.
+  const referenceLevels = useReferenceLevels(
+    symbol,
+    viewDate,
+    tradersMode && timeframe === 'intraday',
+  )
+  const refLines = useMemo((): LevelLine[] => {
+    if (!referenceLevels) return []
+    const length = day.minuteLabels.length
+    const constant = (name: string, value: number | null, suffix?: string): LevelLine[] =>
+      value === null
+        ? []
+        : [
+            {
+              name,
+              color: REF_COLOR,
+              dash: [...REF_DASH],
+              series: Array.from({ length }, () => value),
+              ...(suffix ? { labelSuffix: suffix } : {}),
+            },
+          ]
+    const running = referenceLevels.onRunning ? ' (běží)' : undefined
+    const lines = [
+      ...constant('ref_onh', referenceLevels.onHigh, running),
+      ...constant('ref_onl', referenceLevels.onLow, running),
+      ...constant('ref_pdh', referenceLevels.prevHigh),
+      ...constant('ref_pdl', referenceLevels.prevLow),
+    ]
+    const vwapSeries = vwapSeriesForAxis(referenceLevels.vwap, day.minutesIso, bucketMinutes)
+    if (vwapSeries.some((value) => value !== null)) {
+      lines.push({ name: 'ref_vwap', color: VWAP_COLOR, series: vwapSeries })
+    }
+    return lines
+  }, [referenceLevels, day.minuteLabels.length, day.minutesIso, bucketMinutes])
   // Šipky signálů (#295, SPEC 9.0): dropdown vybírá zobrazenou větev (S9 —
   // počítají se obě vždy); ⚠ badge při nepotvrzené intradenní změně stavu
   const signalMarkers = useMemo(() => {
@@ -904,7 +942,7 @@ function MainContent() {
         ...resolveSecondaryWalls(baseOverlays.walls ?? [], toggles.secondaryWall),
         ...computedWalls,
       ],
-      levels: [...(baseOverlays.levels ?? []), ...setupLines, ...ladderLines, ...emLines],
+      levels: [...(baseOverlays.levels ?? []), ...setupLines, ...ladderLines, ...emLines, ...refLines], // prettier-ignore
       // Budoucí seance v projekci (#195)
       sessions: [...(baseOverlays.sessions ?? []), ...projectedSessionMarkers],
       // Markery zpráv (#287) — osa nese i projekční část, takže nadcházející
@@ -917,7 +955,7 @@ function MainContent() {
         ? signalMarkers
         : signalMarkers.filter((signal) => signal.minuteIdx <= playback.position),
     }),
-    [baseOverlays, computedWalls, setupLines, ladderLines, emLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, journalMarkers, signalMarkers, playback.isLive, playback.position], // prettier-ignore
+    [baseOverlays, computedWalls, setupLines, ladderLines, emLines, refLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, journalMarkers, signalMarkers, playback.isLive, playback.position], // prettier-ignore
   )
 
   if (view === 'dashboard') {
