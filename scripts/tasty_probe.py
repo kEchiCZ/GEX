@@ -228,7 +228,7 @@ async def step_events(symbols: list[str], seconds: float = 90.0) -> None:
 
     report: dict[str, object] = {"symbols": symbols, "window_s": seconds}
     for event_type, times in arrivals.items():
-        gaps = [b - a for a, b in zip(times, times[1:])]
+        gaps = [b - a for a, b in zip(times, times[1:], strict=False)]
         report[event_type] = {
             "messages": len(times),
             "gap_median_s": round(statistics.median(gaps), 3) if gaps else None,
