@@ -87,11 +87,22 @@ export const LEVEL_LABELS: Record<string, string> = {
   // Expected move dne (#676, Traders mode) — hranice spot_ref ± ATM straddle
   em_upper: 'EM +',
   em_lower: 'EM −',
+  // Referenční úrovně (#678, Traders mode) — úrovně, které sleduje zbytek trhu
+  ref_onh: 'ONH',
+  ref_onl: 'ONL',
+  ref_pdh: 'PDH',
+  ref_pdl: 'PDL',
+  ref_vwap: 'VWAP',
 }
 
 /** Barva a čárkování EM hranic (#676) — jediný zdroj pro graf i legendu. */
 export const EM_COLOR = 'rgba(120,170,255,0.9)'
 export const EM_DASH = [6, 4]
+
+/** Referenční úrovně (#678): tlumená šedá tečkovaná; VWAP vlastní barvou. */
+export const REF_COLOR = 'rgba(190,197,210,0.6)'
+export const REF_DASH = [2, 5]
+export const VWAP_COLOR = 'rgba(127,212,224,0.85)'
 
 /** Popisek úrovně; `null` = linie nemá název, kreslí se jen s cenou. */
 export function levelLabel(name: string): string | null {
