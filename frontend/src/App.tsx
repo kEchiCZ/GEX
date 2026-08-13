@@ -45,6 +45,8 @@ import { sessionDateIso } from './instrument/tz'
 import { EM_COLOR, EM_DASH, REF_COLOR, REF_DASH, SETUP_COLORS, VWAP_COLOR, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays' // prettier-ignore
 import { computeExpectedMove, emUsage } from './instrument/expectedmove'
 import { vwapSeriesForAxis } from './instrument/referencelevels'
+import { decodeRange, encodeRange, rangeBuckets, rangeLabel, windowProfileRows } from './instrument/rangeselect' // prettier-ignore
+import type { RangeSelection } from './instrument/rangeselect'
 import { useReferenceLevels } from './hooks/useReferenceLevels'
 import { usOpenMs } from './api/briefing'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
@@ -868,7 +870,82 @@ function MainContent() {
     aggregateOn && day.source === 'replay',
     spot,
   )
-  const displayedProfileRows = aggregateOn && aggregateRows ? aggregateRows : profileRows
+  // ── Range selector (#484): okno [t1, t2] jako pár ISO minut (1m osa) ──
+  // Drží se v ISO, ne v indexech — přežije přepnutí TF i playback; URL share.
+  const [range, setRange] = useState<RangeSelection | null>(() =>
+    decodeRange(new URLSearchParams(window.location.search).get('range')),
+  )
+  const [rangeTool, setRangeTool] = useState(false)
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    if (range) url.searchParams.set('range', encodeRange(range))
+    else url.searchParams.delete('range')
+    window.history.replaceState(null, '', url)
+  }, [range])
+  useEffect(() => {
+    if (!range) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setRange(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [range])
+  const rangeSpan = useMemo(
+    () =>
+      range && timeframe === 'intraday' ? rangeBuckets(range, day.minutesIso, bucketMinutes) : null,
+    [range, timeframe, day.minutesIso, bucketMinutes],
+  )
+  const handleRangeDrag = useCallback(
+    (startBucket: number, endBucket: number) => {
+      const length = day.minutesIso.length
+      if (length === 0) return
+      const fromIdx = Math.max(0, Math.min(startBucket * bucketMinutes, length - 1))
+      const toIdx = Math.max(
+        fromIdx,
+        Math.min(endBucket * bucketMinutes + bucketMinutes - 1, length - 1),
+      )
+      setRange({ fromIso: day.minutesIso[fromIdx], toIso: day.minutesIso[toIdx] })
+    },
+    [day.minutesIso, bucketMinutes],
+  )
+  const handleRangeCommit = useCallback(() => {
+    // Klik bez tažení (prázdné okno na 1m) není výběr — zruší se
+    setRange((current) => (current && current.fromIso === current.toIso ? null : current))
+  }, [])
+  // Okenní profil V KLIENTOVI (posudek #484): diff kumulativních řádků t2 − t1,
+  // baseline = poslední snapshot PŘED oknem (sémantika API from, #483); díry
+  // v ose se přeskakují couváním na nejbližší minutu se snapshotem.
+  const rangeWindowRows = useMemo(() => {
+    if (!rangeSpan || !day.profileByMinute) return null
+    const source = day.profileByMinute
+    const { fromIdx, toIdx } = rangeSpan
+    let rows2: ReturnType<typeof source.rowsAt> = []
+    for (
+      let idx = Math.min(toIdx, source.length - 1);
+      idx >= fromIdx && rows2.length === 0;
+      idx -= 1
+    ) {
+      // prettier-ignore
+      rows2 = source.rowsAt(idx)
+    }
+    if (rows2.length === 0) return null
+    let rows1: ReturnType<typeof source.rowsAt> = []
+    for (let idx = fromIdx - 1; idx >= 0 && rows1.length === 0; idx -= 1) {
+      rows1 = source.rowsAt(idx)
+    }
+    return windowProfileRows(rows2, rows1)
+  }, [rangeSpan, day.profileByMinute])
+  // CumΔ okna do chipu — kumulativ per 1m minutu z panelů (kotva se odečte)
+  const rangeCum = useMemo(() => {
+    if (!rangeSpan) return null
+    const cum = rawDay.panels.cumDelta
+    if (cum.length === 0) return null
+    const at = (idx: number) => cum[Math.max(0, Math.min(idx, cum.length - 1))] ?? 0
+    return at(rangeSpan.toIdx) - (rangeSpan.fromIdx > 0 ? at(rangeSpan.fromIdx - 1) : 0)
+  }, [rangeSpan, rawDay.panels.cumDelta])
+  // Okno má přednost před Σ agregací — profil ukazuje vybrané okno
+  const displayedProfileRows =
+    rangeWindowRows ?? (aggregateOn && aggregateRows ? aggregateRows : profileRows)
 
   // Overlay přepínače odpovídají checkboxům (AC issue #24)
   const baseOverlays = useMemo(
@@ -1080,12 +1157,26 @@ function MainContent() {
         {ANNOTATION_TOOLS.map(({ tool, label }) => (
           <button
             key={label}
-            className={annotationTool === tool ? 'chip active' : 'chip'}
-            onClick={() => setAnnotationTool(tool)}
+            className={annotationTool === tool && !rangeTool ? 'chip active' : 'chip'}
+            onClick={() => {
+              setAnnotationTool(tool)
+              setRangeTool(false) // nástroje se vylučují — oba chytají tažení
+            }}
           >
             {label}
           </button>
         ))}
+        {/* Range selector (#484): tažením vyber okno [t1, t2] */}
+        <button
+          className={rangeTool ? 'chip active' : 'chip'}
+          onClick={() => {
+            setRangeTool((value) => !value)
+            setAnnotationTool(null)
+          }}
+          title="Rozsah: tažením v grafu vyber časové okno — pravý profil se přepne na okno (co se zobchodovalo mezi t1 a t2). Rychlá cesta: Alt+tažení kdykoli. Úchyty okrajů táhni v režimu Kurzor, Alt+tažení uvnitř posouvá celé okno, Esc zavře."
+        >
+          ⧉ Rozsah
+        </button>
         <input
           type="color"
           aria-label="Barva anotace"
@@ -1211,7 +1302,27 @@ function MainContent() {
               onNewsMarkerClick={setNewsDialogMarker}
               onJournalMarkerClick={() => setView('journal')}
               onJournalQuickAdd={timeframe === 'intraday' ? handleJournalQuickAdd : undefined}
+              range={rangeSpan ? { startBucket: rangeSpan.startBucket, endBucket: rangeSpan.endBucket } : null} // prettier-ignore
+              onRangeDrag={timeframe === 'intraday' ? handleRangeDrag : undefined}
+              onRangeCommit={handleRangeCommit}
+              rangeCreate={rangeTool}
             />
+            {/* Chip aktivního range (#484): popisek okna + CumΔ okna + zavření */}
+            {range && timeframe === 'intraday' && (
+              <div className="range-chip" role="status" data-testid="range-chip">
+                ⧉ {rangeLabel(range)}
+                {rangeCum !== null &&
+                  ` · CumΔ okna ${rangeCum >= 0 ? '+' : ''}${Math.round(rangeCum).toLocaleString('cs-CZ')}`}
+                <button
+                  className="chip"
+                  onClick={() => setRange(null)}
+                  aria-label="Zavřít range"
+                  title="Zavře okno (také Esc) — profil se vrátí na živý stav"
+                >
+                  ×
+                </button>
+              </div>
+            )}
             {newsDialogMarker && (
               <NewsMarkerDialog
                 marker={newsDialogMarker}
@@ -1287,6 +1398,7 @@ function MainContent() {
             // panely samy kreslí dál jen naměřená data
             totalMinutes={projectedGrid.minutes}
             height={panelHeight}
+            range={rangeSpan ? { startBucket: rangeSpan.startBucket, endBucket: rangeSpan.endBucket } : null} // prettier-ignore
           />
           {showReplay && <PlaybackBar playback={playback} />}
         </div>

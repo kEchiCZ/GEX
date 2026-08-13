@@ -150,6 +150,7 @@ function BottomPanelsBase({
   time = IDENTITY_TIME,
   totalMinutes,
   height = DEFAULT_height,
+  range = null,
 }: {
   data: PanelSeries
   visible: PanelsVisible
@@ -161,6 +162,8 @@ function BottomPanelsBase({
   totalMinutes?: number
   /** Výška jednoho panelu — tažitelný předěl v App ji mění za běhu (#169). */
   height?: number
+  /** Aktivní range (#484) v koších osy — panely mimo okno se ztlumí. */
+  range?: { startBucket: number; endBucket: number } | null
 }) {
   const minutes = data.vol.length
   const axisMinutes = Math.max(minutes, totalMinutes ?? minutes)
@@ -180,6 +183,27 @@ function BottomPanelsBase({
   // Stejné základní měřítko jako heatmapa — málo dat se neroztahuje na šířku
   const step = baseBucketPx(axisMinutes, width)
   const barWidth = Math.max(0.5, step * 0.8)
+  // Ztlumení mimo range (#484): dva recty v datovém prostoru — transform <g>
+  // je posune/roztáhne shodně s bary, žádná pixelová aritmetika
+  const rangeDim =
+    range !== null && step > 0 ? (
+      <>
+        <rect
+          x={0}
+          y={0}
+          width={Math.max(0, range.startBucket * step)}
+          height={height}
+          fill="rgba(8,10,15,0.45)"
+        />
+        <rect
+          x={(range.endBucket + 1) * step}
+          y={0}
+          width={Math.max(0, width - (range.endBucket + 1) * step)}
+          height={height}
+          fill="rgba(8,10,15,0.45)"
+        />
+      </>
+    ) : null
   const transform = `translate(${time.offsetX} 0) scale(${time.zoomX} 1)`
 
   // Vrcholy pro škály os Y; Opt Vol a Δ Flow sdílí škálu C/P (jednoznačná osa)
@@ -254,6 +278,7 @@ function BottomPanelsBase({
                 fill={COLORS.vol}
               />
             ))}
+            {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('vol')}
@@ -307,6 +332,7 @@ function BottomPanelsBase({
                 fill={COLORS.put}
               />
             ))}
+            {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('optvol')}
@@ -360,6 +386,7 @@ function BottomPanelsBase({
                 fill={COLORS.put}
               />
             ))}
+            {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('deltaflow')}
@@ -439,6 +466,7 @@ function BottomPanelsBase({
               vectorEffect="non-scaling-stroke"
               data-part="evooi-put"
             />
+            {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('evooi')}
@@ -486,6 +514,7 @@ function BottomPanelsBase({
           <g transform={transform}>
             <polygon points={areas.positive} fill={COLORS.positive} data-part="cumdelta-positive" />
             <polygon points={areas.negative} fill={COLORS.negative} data-part="cumdelta-negative" />
+            {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('cumdelta')}
@@ -549,6 +578,7 @@ function BottomPanelsBase({
                 />
               </g>
             ))}
+            {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('sentiment')}
@@ -589,6 +619,7 @@ function BottomPanelsBase({
               opacity={0.75}
               data-part="sentiment-neg"
             />
+            {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
           {axisLineH('sentiment')}
