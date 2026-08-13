@@ -2092,3 +2092,9 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   gap: 4px;
   font-size: 0.9em;
 }
+
+/* Kalkulačka pozice u setup karty (#679) */
+.setup-card-position {
+  font-size: 0.82em;
+  margin-top: 2px;
+}

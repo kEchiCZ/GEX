@@ -93,7 +93,17 @@ function SettingRow({ children, help }: { children: React.ReactNode; help: React
 }
 
 export function SettingsView() {
-  const { theme, setTheme, status, tradersMode, setTradersMode } = useAppState()
+  const {
+    theme,
+    setTheme,
+    status,
+    tradersMode,
+    setTradersMode,
+    riskAccountUsd,
+    setRiskAccountUsd,
+    riskPct,
+    setRiskPct,
+  } = useAppState()
   const { values, put, saveAll } = useServerSettings()
   // Rozepsané změny; prázdný objekt = nic k uložení
   const [draft, setDraft] = useState<Record<string, unknown>>({})
@@ -330,6 +340,31 @@ export function SettingsView() {
               onChange={(event) => setTradersMode(event.target.checked)}
             />
             Traders mode — trading vrstvy v grafu
+          </label>
+        </SettingRow>
+        <SettingRow help="Kalkulačka velikosti pozice (#679) u karty setupu: riziko = účet × %, kontrakty = riziko / (stop v bodech × hodnota bodu), vč. micro variant (MES/MNQ). Ukládá se jen v prohlížeči, na server nikdy neodchází.">
+          <label>
+            Velikost účtu (USD)
+            <input
+              type="number"
+              min={0}
+              step={100}
+              value={riskAccountUsd}
+              onChange={(event) => setRiskAccountUsd(Number(event.target.value) || 0)}
+              aria-label="Velikost účtu v USD"
+            />
+          </label>
+          <label>
+            Riziko na obchod (%)
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={0.25}
+              value={riskPct}
+              onChange={(event) => setRiskPct(Number(event.target.value) || 0)}
+              aria-label="Riziko na obchod v procentech"
+            />
           </label>
         </SettingRow>
       </section>
