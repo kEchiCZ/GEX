@@ -531,43 +531,92 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         symbol: str,
         expiry: str,
         date: dt.date,
-        ts: dt.datetime,
+        ts: dt.datetime | None = None,
+        from_ts: Annotated[dt.datetime | None, Query(alias="from")] = None,
+        to_ts: Annotated[dt.datetime | None, Query(alias="to")] = None,
         variant: str = "combined",
         oi_weight: float = 1.0,
         spot: float | None = None,
     ) -> dict[str, object]:
-        """Strike profil k okamžiku ts (SPEC 4.6): poslední snapshot ≤ ts."""
+        """Strike profil k okamžiku ts, nebo za okno [from, to] (SPEC 4.6, #483).
+
+        Volume ve snapshotech je kumulativní denní (SPEC 4.3) — okenní hodnoty
+        jsou prostý rozdíl dvou snímků, O(strikes). OI v okenním módu zůstává
+        statické k `to` (`oi_static: true`) — otevřené pozice nejsou tok.
+        """
+        window = from_ts is not None or to_ts is not None
+        if window and (ts is not None or from_ts is None or to_ts is None):
+            raise HTTPException(422, "Okenní mód vyžaduje from i to a vylučuje ts")
+        if not window and ts is None:
+            raise HTTPException(422, "Chybí ts= (point-in-time), nebo from=&to= (okno)")
+        if window and from_ts is not None and to_ts is not None and from_ts > to_ts:
+            raise HTTPException(422, "from musí být ≤ to")
         profile_variant = _parse_enum(ProfileVariant, variant, "variant")
         frame = repository.session_frame(lambda d: repository.snapshots(symbol, expiry, d), date)
-        eligible = frame[frame["ts_min"] <= ts]
+        # Konec okna (t2 v budoucnosti se clampne na poslední snapshot)
+        reference = ts if ts is not None else to_ts
+        assert reference is not None  # guardy výše: buď ts, nebo from+to
+        eligible = frame[frame["ts_min"] <= reference]
         if eligible.empty:
-            raise HTTPException(404, f"Před {ts.isoformat()} není žádný snapshot")
+            raise HTTPException(404, f"Před {reference.isoformat()} není žádný snapshot")
         minute = eligible["ts_min"].max()
         rows = eligible[eligible["ts_min"] == minute].dropna(subset=["delta"])
 
+        # Začátek okna: poslední snapshot ≤ from; nic před from → baseline 0
+        # (okno „od začátku seance"). Kontrakt bez řádku v t1 (přibyl s posunem
+        # obálky) má baseline 0 taky.
+        baseline: dict[tuple[float, str], float] = {}
+        baseline_minute: pd.Timestamp | None = None
+        if window:
+            before = frame[frame["ts_min"] <= from_ts]
+            if not before.empty:
+                baseline_minute = before["ts_min"].max()
+                base_rows = before[before["ts_min"] == baseline_minute]
+                baseline = {
+                    (float(row.strike), str(row.right)): (
+                        0.0 if math.isnan(row.volume) else float(row.volume)
+                    )
+                    for row in base_rows.itertuples()
+                }
+
         if spot is None:
-            spot = _spot_at(repository, symbol, date, ts)
+            spot = _spot_at(repository, symbol, date, reference)
         if spot is None:
             raise HTTPException(
                 422, "Chybí spot: dodej ?spot= nebo ulož bary podkladu (derived/bars)"
             )
+
+        def row_volume(row: Any) -> float:
+            total = 0.0 if math.isnan(row.volume) else float(row.volume)
+            if not window:
+                return total
+            # Korekce v datech můžou dát záporné okno — clamp na 0 (posudek #483)
+            return max(0.0, total - baseline.get((float(row.strike), str(row.right)), 0.0))
+
         inputs = [
             ProfileInput(
                 strike=float(row.strike),
                 right=str(row.right),
-                volume=float(row.volume) if not math.isnan(row.volume) else 0.0,
+                volume=row_volume(row),
                 oi=float(row.oi) if not math.isnan(row.oi) else 0.0,
                 delta=float(row.delta),
             )
             for row in rows.itertuples()
         ]
         result = compute_profile(inputs, profile_variant, spot, oi_weight=oi_weight)
-        return {
+        payload: dict[str, object] = {
             "ts": minute.isoformat(),
             "spot": spot,
             "variant": profile_variant.value,
             "profile": [vars(item) for item in result],
         }
+        if window:
+            payload["from_ts"] = baseline_minute.isoformat() if baseline_minute is not None else None  # noqa: E501 # fmt: skip
+            payload["to_ts"] = minute.isoformat()
+            payload["oi_static"] = True
+            # Stale buňky k t2 — diff stale buňky lže nulou (posudek #483)
+            payload["stale_count"] = int((rows["stale_age"] > 0).sum())
+        return payload
 
     @app.get("/chain/{symbol}/{expiry}")
     def chain(symbol: str, expiry: str, date: dt.date) -> dict[str, object]:
@@ -625,16 +674,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.get("/flow/{symbol}")
-    def flow(symbol: str, date: dt.date) -> dict[str, object]:
-        """Řady Vol (podklad), OptVol (opce) a CumΔ pro spodní panely (SPEC kap. 6)."""
-        flow_records = _records(
-            repository.session_frame(lambda d: repository.flow(symbol, d), date)
-        )
-        return {
-            "flow": flow_records,
-            "opt_vol": _opt_vol_series(repository, symbol, date),
-            "vol": _underlying_vol_series(repository, symbol, date),
-        }
+    def flow(
+        symbol: str,
+        date: dt.date,
+        from_ts: Annotated[dt.datetime | None, Query(alias="from")] = None,
+        to_ts: Annotated[dt.datetime | None, Query(alias="to")] = None,
+    ) -> dict[str, object]:
+        """Řady Vol (podklad), OptVol (opce) a CumΔ pro spodní panely (SPEC kap. 6).
+
+        S from=&to= (#483) navíc okenní souhrn: CumΔ_okno = CumΔ(t2) − CumΔ(t1)
+        (kotva na open seance se rozdílem odečte), Vol podkladu a OptVol jako
+        součty přes minuty okna (t1, t2].
+        """
+        flow_frame = repository.session_frame(lambda d: repository.flow(symbol, d), date)
+        flow_records = _records(flow_frame)
+        opt_vol = _opt_vol_series(repository, symbol, date)
+        vol = _underlying_vol_series(repository, symbol, date)
+        payload: dict[str, object] = {"flow": flow_records, "opt_vol": opt_vol, "vol": vol}
+        if from_ts is not None or to_ts is not None:
+            if from_ts is None or to_ts is None or from_ts > to_ts:
+                raise HTTPException(422, "Okenní mód vyžaduje from ≤ to")
+
+            def cum_at(limit: dt.datetime) -> float:
+                eligible = flow_frame[flow_frame["ts_min"] <= limit]
+                if eligible.empty:
+                    return 0.0  # před prvním záznamem = od začátku seance
+                value = eligible.iloc[-1]["cum_delta"]
+                return 0.0 if pd.isna(value) else float(value)
+
+            def series_sum(records: list[dict[str, object]], key: str) -> float:
+                total = 0.0
+                for record in records:
+                    ts_min = record.get("ts_min")
+                    if not isinstance(ts_min, str):
+                        continue
+                    stamp = dt.datetime.fromisoformat(ts_min)
+                    if from_ts < stamp <= to_ts:
+                        value = record.get(key)
+                        if isinstance(value, (int, float)):
+                            total += float(value)
+                return total
+
+            payload["window"] = {
+                "from_ts": from_ts.isoformat(),
+                "to_ts": to_ts.isoformat(),
+                "cum_delta": cum_at(to_ts) - cum_at(from_ts),
+                "vol": series_sum(vol, "vol"),
+                "opt_vol": series_sum(opt_vol, "opt_vol"),
+            }
+        return payload
 
     @app.get("/replay/{symbol}/{expiry}/{date}")
     def replay(
