@@ -667,6 +667,7 @@ async def test_bars_stall_alert_and_recovery_backfill(
     """#221: bary nechodí při živém spotu → alert; po návratu recovery + re-backfill."""
     settings, writer, repository, publisher = env
     settings.bars_stall_alert_minutes = 2
+    settings.level_alert_near_steps = 0.0  # zdi fixture jsou u spotu — nešumět (#675)
     pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
     backfills: list[bool] = []
 
@@ -752,12 +753,30 @@ async def test_no_stall_alert_when_market_quiet(
     """#221: zavřený trh (spot stojí) — chybějící bary nesmí spouštět alert."""
     settings, writer, repository, publisher = env
     settings.bars_stall_alert_minutes = 2
+    settings.level_alert_near_steps = 0.0  # zdi fixture jsou u spotu — nešumět (#675)
     pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
 
     for minute in range(5):  # FakeTicker drží stejnou cenu → spot se nehýbe
         await pipeline.run_minute(TS + dt.timedelta(minutes=minute))
 
     assert not [data for channel, data in publisher.messages if channel == "alerts"]
+
+
+async def test_level_proximity_alert_z_pipeline(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#675: zdi fixture leží krok striků od spotu → alert vystřelí, ale jen jednou."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+
+    await pipeline.run_minute(TS)
+    alerts = [data for channel, data in publisher.messages if channel == "alerts"]
+    assert alerts and all(a["kind"] == "level_proximity" for a in alerts)
+    assert all(a["symbol"] == "ES" for a in alerts)
+
+    # Cena zůstává v zóně → další minuty mlčí (re-arm hystereze)
+    await pipeline.run_minute(TS + dt.timedelta(minutes=1))
+    assert len([data for channel, data in publisher.messages if channel == "alerts"]) == len(alerts)
 
 
 async def test_vol_concentration_alert_once_per_leader(
