@@ -601,28 +601,6 @@ export function Heatmap({
       }
     }
 
-    // Range selector (#484): ztlumení mimo okno + okrajové linie s úchyty.
-    // Fallback bez WebGL (#490): dva polopropustné recty na statické vrstvě —
-    // kreslí se jen při změně range, datová vrstva se nesahá.
-    if (range) {
-      const startX = minuteToX(range.startBucket) - 0.5 * scaleX
-      const endX = minuteToX(range.endBucket + 1) - 0.5 * scaleX
-      context.fillStyle = 'rgba(8,10,15,0.72)'
-      if (startX > 0) context.fillRect(0, 0, Math.min(startX, logicalW), logicalH)
-      if (endX < logicalW) context.fillRect(Math.max(0, endX), 0, logicalW - endX, logicalH)
-      context.strokeStyle = 'rgba(77,163,255,0.9)'
-      context.lineWidth = 1.5
-      for (const x of [startX, endX]) {
-        context.beginPath()
-        context.moveTo(x, 0)
-        context.lineTo(x, logicalH)
-        context.stroke()
-        // Úchyt uprostřed výšky — tažením se okraj upravuje
-        context.fillStyle = 'rgba(77,163,255,0.9)'
-        context.fillRect(x - 3, logicalH / 2 - 12, 6, 24)
-      }
-    }
-
     // Značky deníku (#673, Traders mode): pás u HORNÍ hrany, aby nekolidoval
     // s news markery dole; glyf ✎ pod čárkou, cluster s počtem
     for (const marker of overlays.journalMarkers ?? []) {
@@ -944,6 +922,26 @@ export function Heatmap({
       context.font = '11px sans-serif'
       context.fillText(overlays.timestamp, logicalW - 150, logicalH - 26)
     }
+
+    // Range selector (#484): okrajové linie s úchyty. Samotné ZTLUMENÍ mimo
+    // okno kreslí dynamická vrstva (leží nad statickou i nad živými svíčkami —
+    // jeden dim, nic se nesčítá; zpětná vazba: dim pod cenovou vrstvou vypadal
+    // skoro nulově). Fallback bez WebGL (#490).
+    if (range) {
+      const startX = minuteToX(range.startBucket) - 0.5 * scaleX
+      const endX = minuteToX(range.endBucket + 1) - 0.5 * scaleX
+      context.strokeStyle = 'rgba(77,163,255,0.9)'
+      context.lineWidth = 1.5
+      for (const x of [startX, endX]) {
+        context.beginPath()
+        context.moveTo(x, 0)
+        context.lineTo(x, logicalH)
+        context.stroke()
+        // Úchyt uprostřed výšky — tažením se okraj upravuje
+        context.fillStyle = 'rgba(77,163,255,0.9)'
+        context.fillRect(x - 3, logicalH / 2 - 12, 6, 24)
+      }
+    }
   }, [
     mapping,
     bucketMinutes,
@@ -1021,6 +1019,17 @@ export function Heatmap({
       }
     }
     context.globalAlpha = 1 // značka aktuální ceny zůstává plně viditelná
+
+    // Range (#484): ztlumit i živé svíčky téhle vrstvy mimo okno — statická
+    // vrstva je pod nimi, bez tohohle by živá hrana zůstala plně svítit.
+    // Crosshair a značka ceny se kreslí až po dimu (mají zůstat čitelné).
+    if (range) {
+      const startX = minuteToX(range.startBucket) - 0.5 * scaleX
+      const endX = minuteToX(range.endBucket + 1) - 0.5 * scaleX
+      context.fillStyle = 'rgba(8,10,15,0.72)'
+      if (startX > 0) context.fillRect(0, 0, Math.min(startX, logicalW), logicalH)
+      if (endX < logicalW) context.fillRect(Math.max(0, endX), 0, logicalW - endX, logicalH)
+    }
 
     // Značka aktuální ceny: živý bar má přednost před poslední uzavřenou minutou
     const lastBar = liveBars.at(-1) ?? lastClosed
@@ -1103,6 +1112,7 @@ export function Heatmap({
     minuteLabels,
     dateLabel,
     priceTick,
+    range,
     logicalW,
     logicalH,
     dpr,
