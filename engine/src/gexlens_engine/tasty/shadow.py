@@ -52,7 +52,7 @@ def compare_minute(
     ts: dt.datetime,
     ibkr_quotes: dict[OptionContractSpec, CachedQuote],
     tasty_cache: TastyChainCache,
-    chain: ChainSymbols,
+    chains: dict[str, ChainSymbols],
     *,
     now_monotonic: float,
     now_utc: dt.datetime,
@@ -66,6 +66,11 @@ def compare_minute(
     """
     rows: list[ComparisonRow] = []
     for spec, cached in ibkr_quotes.items():
+        # Mapa per produkt (ES i NQ mají vlastní chain endpoint) — bez toho
+        # by se druhý instrument tiše nikdy neporovnal
+        chain = chains.get(spec.symbol)
+        if chain is None:
+            continue
         streamer = chain.streamer_symbol(spec)
         if streamer is None:
             continue  # kontrakt mimo tasty chain — report to uvidí jinde
@@ -112,7 +117,7 @@ class ShadowComparator:
         repository: FeedComparisonRepository,
         tasty_cache: TastyChainCache,
         contracts_source: Callable[[], dict[OptionContractSpec, CachedQuote]],
-        chain_source: Callable[[], ChainSymbols | None],
+        chain_source: Callable[[], dict[str, ChainSymbols]],
         *,
         interval_s: float = 60.0,
     ) -> None:
@@ -136,15 +141,15 @@ class ShadowComparator:
                 logger.exception("Shadow porovnání selhalo — příští minuta jede dál")
 
     async def _tick(self) -> None:
-        chain = self._chain_source()
-        if chain is None:
+        chains = self._chain_source()
+        if not chains:
             return
         ts = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
         rows = compare_minute(
             ts,
             self._contracts_source(),
             self._cache,
-            chain,
+            chains,
             now_monotonic=time.monotonic(),
             now_utc=dt.datetime.now(dt.UTC),
         )
