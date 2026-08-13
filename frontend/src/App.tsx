@@ -47,6 +47,8 @@ import { computeExpectedMove, emUsage } from './instrument/expectedmove'
 import { vwapSeriesForAxis } from './instrument/referencelevels'
 import { decodeRange, encodeRange, rangeBuckets, rangeLabel, windowProfileRows } from './instrument/rangeselect' // prettier-ignore
 import type { RangeSelection } from './instrument/rangeselect'
+import { RANGE_PRESETS, presetDisabledReason, presetRange } from './instrument/rangepresets'
+import type { RangePreset } from './instrument/rangepresets'
 import { useReferenceLevels } from './hooks/useReferenceLevels'
 import { usOpenMs } from './api/briefing'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
@@ -876,6 +878,12 @@ function MainContent() {
     decodeRange(new URLSearchParams(window.location.search).get('range')),
   )
   const [rangeTool, setRangeTool] = useState(false)
+  // Klouzavý preset (#487): 'last30' v live se posouvá s příchodem nové minuty
+  const [rangePresetMode, setRangePresetMode] = useState<'last30' | null>(null)
+  const closeRange = useCallback(() => {
+    setRange(null)
+    setRangePresetMode(null)
+  }, [])
   useEffect(() => {
     const url = new URL(window.location.href)
     if (range) url.searchParams.set('range', encodeRange(range))
@@ -885,11 +893,11 @@ function MainContent() {
   useEffect(() => {
     if (!range) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setRange(null)
+      if (event.key === 'Escape') closeRange()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [range])
+  }, [range, closeRange])
   const rangeSpan = useMemo(
     () =>
       range && timeframe === 'intraday' ? rangeBuckets(range, day.minutesIso, bucketMinutes) : null,
@@ -905,6 +913,7 @@ function MainContent() {
         Math.min(endBucket * bucketMinutes + bucketMinutes - 1, length - 1),
       )
       setRange({ fromIso: day.minutesIso[fromIdx], toIso: day.minutesIso[toIdx] })
+      setRangePresetMode(null) // ruční zásah ruší klouzavý preset (#487)
     },
     [day.minutesIso, bucketMinutes],
   )
@@ -912,6 +921,41 @@ function MainContent() {
     // Klik bez tažení (prázdné okno na 1m) není výběr — zruší se
     setRange((current) => (current && current.fromIso === current.toIso ? null : current))
   }, [])
+  // Presety rozsahů (#487): vstupy čistých funkcí — flip řada per 1m z bundlu,
+  // pozice = poslední minuta dat (live) / pozice playbacku (replay)
+  const presetInputs = useMemo(() => {
+    if (timeframe !== 'intraday' || rawDay.minutesIso.length === 0) return null
+    const flipSeries =
+      rawDay.overlays.levels?.find((line) => line.name === 'flip')?.series ??
+      rawDay.minutesIso.map(() => null)
+    const positionIdx = playback.isLive
+      ? rawDay.minutesIso.length - 1
+      : Math.min(playback.position, rawDay.minutesIso.length - 1)
+    return {
+      dateIso: viewDate,
+      minutesIso: rawDay.minutesIso,
+      spotSeries: rawDay.spotSeries,
+      flipSeries,
+      positionIdx,
+    }
+  }, [timeframe, rawDay, playback.isLive, playback.position, viewDate])
+  const applyPreset = useCallback(
+    (preset: RangePreset) => {
+      if (!presetInputs) return
+      const result = presetRange(preset, presetInputs)
+      if (!result) return
+      setRange(result)
+      // Klouže jen v live — v replay je okno fixní k pozici (zadání #487)
+      setRangePresetMode(preset === 'last30' && playback.isLive ? 'last30' : null)
+    },
+    [presetInputs, playback.isLive],
+  )
+  // Klouzavé okno: nová minuta dne → posun přesně 1×/min (AC #487)
+  useEffect(() => {
+    if (rangePresetMode !== 'last30' || !presetInputs || !playback.isLive) return
+    const result = presetRange('last30', presetInputs)
+    if (result) setRange(result)
+  }, [rangePresetMode, presetInputs, playback.isLive])
   // Okenní profil V KLIENTOVI (posudek #484): diff kumulativních řádků t2 − t1,
   // baseline = poslední snapshot PŘED oknem (sémantika API from, #483); díry
   // v ose se přeskakují couváním na nejbližší minutu se snapshotem.
@@ -1177,6 +1221,35 @@ function MainContent() {
         >
           ⧉ Rozsah
         </button>
+        {/* Presety rozsahů (#487): jedním klikem typická okna */}
+        {timeframe === 'intraday' && (
+          <select
+            className="range-preset-select"
+            value=""
+            aria-label="Preset rozsahu"
+            title="Typická okna jedním klikem — US open +30 min, RTH, Globex noc, posledních 30 min (v live klouže s časem), od posledního průchodu flipem"
+            onChange={(event) => {
+              const preset = event.target.value as RangePreset | ''
+              if (preset) applyPreset(preset)
+            }}
+          >
+            <option value="">Preset…</option>
+            {RANGE_PRESETS.map(({ value, label }) => {
+              const available = presetInputs !== null && presetRange(value, presetInputs) !== null
+              return (
+                <option
+                  key={value}
+                  value={value}
+                  disabled={!available}
+                  title={available ? undefined : presetDisabledReason(value)}
+                >
+                  {label}
+                  {available ? '' : ` (${presetDisabledReason(value)})`}
+                </option>
+              )
+            })}
+          </select>
+        )}
         <input
           type="color"
           aria-label="Barva anotace"
@@ -1313,9 +1386,14 @@ function MainContent() {
                 ⧉ {rangeLabel(range)}
                 {rangeCum !== null &&
                   ` · CumΔ okna ${rangeCum >= 0 ? '+' : ''}${Math.round(rangeCum).toLocaleString('cs-CZ')}`}
+                {rangePresetMode === 'last30' && (
+                  <span className="muted" title="Okno se posouvá s novou minutou (preset)">
+                    ⟳
+                  </span>
+                )}
                 <button
                   className="chip"
-                  onClick={() => setRange(null)}
+                  onClick={closeRange}
                   aria-label="Zavřít range"
                   title="Zavře okno (také Esc) — profil se vrátí na živý stav"
                 >

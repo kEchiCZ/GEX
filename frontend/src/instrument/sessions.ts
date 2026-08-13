@@ -35,6 +35,16 @@ const WORLD_SESSIONS: Array<{
   { label: 'US Close', hour: 16, minute: 0, tz: 'America/New_York' },
 ]
 
+/** Čas US seance daného ISO dne v epoch ms — z TÉŽE tabulky jako markery
+(#487: presety rozsahů nesmí duplikovat časy; DST řeší zoneinfo, #511). */
+export function usSessionMs(kind: 'open' | 'close', dateIso: string): number {
+  const label = kind === 'open' ? 'US Open' : 'US Close'
+  const session = WORLD_SESSIONS.find((item) => item.label === label)
+  if (!session) throw new Error(`Seance ${label} chybí v tabulce WORLD_SESSIONS`)
+  const [year, month, day] = dateIso.split('-').map(Number)
+  return zonedTimeUtc(session.tz, year, month, day, session.hour, session.minute)
+}
+
 /** Čas seance v den `dayStart` (epoch ms) — lokální čas burzy → UTC (#511). */
 function sessionAtUtc(dayStart: Date, session: (typeof WORLD_SESSIONS)[number]): number {
   return zonedTimeUtc(
