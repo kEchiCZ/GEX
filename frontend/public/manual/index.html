@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.6 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.7 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -32,7 +32,7 @@
 <li><a href="#8-spodn%C3%AD-panely--vol-opt-vol-cum-%CE%B4">Spodní panely — Vol, Opt Vol, Cum Δ</a></li>
 <li><a href="#9-playback--p%C5%99ehr%C3%A1v%C3%A1n%C3%AD-dne">Playback — přehrávání dne</a></li>
 <li><a href="#10-anotace--kreslen%C3%AD-do-grafu">Anotace — kreslení do grafu</a></li>
-<li><a href="#11-dashboard">Dashboard</a> · <a href="#11b-%C5%99et%C4%9Bz--greeks--oi-tabulka">11b. Řetěz</a> · <a href="#11c-news-a-sentiment-sentimentlens">11c. News a sentiment</a> · <a href="#11d-sign%C3%A1ly-a-stats">11d. Signály a Stats</a> · <a href="#11e-den%C3%ADk-tradera-a-traders-mode">11e. Deník a Traders mode</a></li>
+<li><a href="#11-dashboard">Dashboard</a> · <a href="#11b-%C5%99et%C4%9Bz--greeks--oi-tabulka">11b. Řetěz</a> · <a href="#11c-news-a-sentiment-sentimentlens">11c. News a sentiment</a> · <a href="#11d-sign%C3%A1ly-a-stats">11d. Signály a Stats</a> · <a href="#11e-den%C3%ADk-tradera-a-traders-mode">11e. Deník a Traders mode</a> · <a href="#11f-rann%C3%AD-briefing-sidebar--briefing">11f. Ranní briefing</a></li>
 <li><a href="#12-ibkr-console">IBKR Console</a></li>
 <li><a href="#13-settings">Settings</a></li>
 <li><a href="#14-notifikace-a-alerty">Notifikace a alerty</a></li>
@@ -612,10 +612,69 @@ přepínač zmizí a stanou se standardní součástí aplikace. Dnes pod něj p
 hrany v minutě, ke které se vztahuje (víc záznamů v minutě = jedna značka
 s počtem); klik na značku otevře Deník. V Replay tak vidíš své tehdejší
 poznámky v kontextu toho, co graf ukazoval.</li>
-<li>výhledově <strong>referenční úrovně</strong> (předchozí high/low/close, overnight extrémy).</li>
+<li><strong>Expected move dne (EM ±)</strong> — dvě modré čárkované linie: spot referenční
+minuty ± cena ATM straddlu (mid call + mid put). Referenční minuta je první
+minuta US seance; před openem se ukazuje průběžný odhad označený
+„(pre-open)&quot; a openem se zamkne. Cenovka horní linie nese EM v bodech
+a <strong>vyčerpání pásma v %</strong> (50 % = uprostřed, přes 100 % = trh už ušel víc,
+než opce ráno naceňovaly). Hranice čti spolu se zdmi — zeď těsně za EM
+hranicí je silná konfluence.</li>
+<li><strong>Referenční úrovně</strong> — tlumené tečkované linie <strong>ONH/ONL</strong> (overnight
+high/low do US openu; před openem s příponou „běží&quot;), <strong>PDH/PDL</strong> (extrémy
+předchozí seance) a <strong>VWAP</strong> (objemem vážený průměr dne jako křivka).
+Smysl vrstvy: konfluence — zeď sedící na PDH je jiná informace než zeď
+v prázdnu, protože PDH sleduje i zbytek trhu.</li>
+<li><strong>Chip relativní síly ES vs. NQ</strong> v hlavičce — normalizovaný spread od US
+openu v procentních bodech („RS NQ vede · ES−NQ −0,46 pb&quot;); kladný spread
+= ES silnější. Funkce na zkoušku — když se neosvědčí, zmizí bez následků.</li>
 </ul>
-<p>S tradingem souvisí i <strong>expected move</strong> a <strong>relativní síla</strong> (plánované
-funkce) — jsou to trading-info údaje, ne vrstvy positioningu.</p>
+<h3>Kalkulačka velikosti pozice (u karty setupu)</h3>
+<p>V Settings → Trading nastav <strong>velikost účtu (USD)</strong> a <strong>riziko na obchod
+(%)</strong> — ukládají se jen v prohlížeči, na server nikdy neodcházejí. Karta
+setupu pak pod RRR ukazuje řádek typu <code>riziko 50 $ (1 %) · stop 8 b → ES 0× · MES 1×</code>: počet kontraktů = riziko / (stop v bodech × hodnota bodu),
+vždy zaokrouhleno dolů, vedle plného kontraktu i micro varianta (MES/MNQ).
+Nezávisí na Traders mode — je součástí karty setupu.</p>
+<hr>
+<h2>11f. Ranní briefing (sidebar → Briefing)</h2>
+<p>Plán dne na jedné obrazovce před US openem — čistá kompozice dat, která už
+aplikace sbírá; nic se tu nepočítá nově. Obnovuje se každou minutu, v hlavičce
+běží <strong>odpočet do US openu</strong> (9:30 New York, DST-korektně).</p>
+<table>
+<thead>
+<tr>
+<th>Karta</th>
+<th>Co ukazuje</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Režim a úrovně</strong></td>
+<td>Pozitivní/negativní gamma + poloha ceny vůči flipu; flip, call/put wall, těžiště</td>
+</tr>
+<tr>
+<td><strong>Včera a overnight</strong></td>
+<td>Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena</td>
+</tr>
+<tr>
+<td><strong>Gamma dnes a přes týden</strong></td>
+<td>Chip „dnes odpadá X % gammy&quot; (kap. 14) + Forward GEX útesy dalších dnů týdne</td>
+</tr>
+<tr>
+<td><strong>Makro kalendář dne</strong></td>
+<td>Dnešní plánované eventy (významné napřed, ❗ = importance ≥ 3)</td>
+</tr>
+<tr>
+<td><strong>ΔOI přes noc</strong></td>
+<td>Změna call/put OI vs. předchozí archivovaný den + top strike movers</td>
+</tr>
+<tr>
+<td><strong>Sentiment</strong></td>
+<td>Stav RiskOn/RiskOff/Neutral per instrument (ES, NQ)</td>
+</tr>
+</tbody></table>
+<p>Tlačítko <strong>„☀ Založit ranní plán do deníku&quot;</strong> předvyplní záznam deníku
+(kap. 11e) kostrou plánu — režim, úrovně, včerejšek, overnight, odpad gammy
+a prázdná „Teze dne&quot; k doplnění. Ranní rituál: otevřít Briefing → projít
+karty → ☀ → dopsat tezi.</p>
 <hr>
 <h2>12. IBKR Console</h2>
 <p>Diagnostická obrazovka:</p>
@@ -650,7 +709,7 @@ funkce) — jsou to trading-info údaje, ne vrstvy positioningu.</p>
 </tr>
 <tr>
 <td><strong>Trading</strong></td>
-<td><strong>Traders mode</strong> — přepínač trading vrstev (viz kap. 11e); ukládá se jen v prohlížeči</td>
+<td><strong>Traders mode</strong> — přepínač trading vrstev (viz kap. 11e); <strong>velikost účtu + riziko na obchod</strong> pro kalkulačku pozice u setup karty. Vše jen v prohlížeči, na server neodchází</td>
 </tr>
 <tr>
 <td><strong>Vzhled</strong></td>
