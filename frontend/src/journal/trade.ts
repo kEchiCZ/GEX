@@ -7,6 +7,8 @@ jako platná cena.
 import type { JournalGrade, JournalTrade, TradeDirection } from '../api/journal'
 
 export interface TradeDraft {
+  /** Klíč setupu z playbooku — povinný (#710). */
+  setupKey: string
   direction: TradeDirection
   plannedEntry: string
   plannedStop: string
@@ -24,6 +26,7 @@ export interface TradeDraft {
 }
 
 export const EMPTY_TRADE: TradeDraft = {
+  setupKey: '',
   direction: 'long',
   plannedEntry: '',
   plannedStop: '',
@@ -53,6 +56,7 @@ export function draftToTrade(draft: TradeDraft): Partial<JournalTrade> & {
 } {
   return {
     direction: draft.direction,
+    setup_key: draft.setupKey === '' ? null : draft.setupKey,
     planned_entry: num(draft.plannedEntry),
     planned_stop: num(draft.plannedStop),
     planned_target: num(draft.plannedTarget),
@@ -72,6 +76,7 @@ export function draftToTrade(draft: TradeDraft): Partial<JournalTrade> & {
 export function tradeToDraft(trade: JournalTrade): TradeDraft {
   const str = (value: number | null) => (value === null ? '' : String(value))
   return {
+    setupKey: trade.setup_key ?? '',
     direction: trade.direction,
     plannedEntry: str(trade.planned_entry),
     plannedStop: str(trade.planned_stop),

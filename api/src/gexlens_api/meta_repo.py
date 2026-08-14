@@ -20,6 +20,7 @@ from gexlens_engine.storage.meta import (
     ensure_meta_schema,
     journal_table,
     journal_trades_table,
+    playbook_table,
     settings_table,
     watchlist_table,
 )
@@ -241,6 +242,43 @@ class MetaRepository:
             result = conn.execute(delete(journal_table).where(journal_table.c.id == entry_id))
             if result.rowcount == 0:
                 raise NotFoundError(f"Záznam deníku {entry_id} neexistuje")
+
+    # ── playbook (#710) ────────────────────────────────────────────
+
+    def playbook(self, *, include_inactive: bool = False) -> list[dict[str, Any]]:
+        stmt = select(playbook_table).order_by(playbook_table.c.name)
+        if not include_inactive:
+            stmt = stmt.where(playbook_table.c.active.is_(True))
+        with self._db().connect() as conn:
+            return [dict(row._mapping) for row in conn.execute(stmt)]
+
+    def playbook_keys(self) -> set[str]:
+        """Klíče aktivních setupů — validace vazby z obchodu."""
+        stmt = select(playbook_table.c.key).where(playbook_table.c.active.is_(True))
+        with self._db().connect() as conn:
+            return {str(row[0]) for row in conn.execute(stmt)}
+
+    def playbook_create(self, values: dict[str, Any]) -> dict[str, Any]:
+        try:
+            with self._db().begin() as conn:
+                result = conn.execute(insert(playbook_table).values(**values))
+                item_id = _inserted_id(result)
+                row = conn.execute(
+                    select(playbook_table).where(playbook_table.c.id == item_id)
+                ).one()
+                return dict(row._mapping)
+        except IntegrityError as exc:
+            raise DuplicateEntryError(f"Setup {values.get('key')!r} už v playbooku je") from exc
+
+    def playbook_update(self, item_id: int, values: dict[str, Any]) -> dict[str, Any]:
+        with self._db().begin() as conn:
+            result = conn.execute(
+                update(playbook_table).where(playbook_table.c.id == item_id).values(**values)
+            )
+            if result.rowcount == 0:
+                raise NotFoundError(f"Setup playbooku {item_id} neexistuje")
+            row = conn.execute(select(playbook_table).where(playbook_table.c.id == item_id)).one()
+            return dict(row._mapping)
 
     def _journal_read(self, conn: Connection, entry_id: int) -> dict[str, Any]:
         row = conn.execute(select(journal_table).where(journal_table.c.id == entry_id)).one()

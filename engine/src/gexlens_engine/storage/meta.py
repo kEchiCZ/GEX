@@ -5,6 +5,8 @@ poskytuje API server (issue #21). JSON sloupce fungují na PostgreSQL i SQLite
 (testy).
 """
 
+import datetime as dt
+
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -18,7 +20,9 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    func,
     inspect,
+    select,
     text,
 )
 from sqlalchemy.engine import Engine
@@ -109,7 +113,7 @@ journal_table = Table(
     Column("setup_id", Integer, nullable=True),
     Column("news_event_id", Integer, nullable=True),
     # Aditivní od #709 — řádky z fáze A mají NULL a čtou se jako `smb`
-    # (viz `_migrate_journal_columns`); tichý přepis historie by falšoval,
+    # (viz `ensure_meta_schema`); tichý přepis historie by falšoval,
     # pod jakým profilem záznam vznikl.
     Column("profile", String(16), nullable=True),
     Column("created_ts", DateTime(timezone=True), nullable=False),
@@ -154,6 +158,86 @@ journal_trades_table = Table(
     Column("fees", Float, nullable=True),
 )
 
+# PlayBook setupů (#710) — jádro SMB metodiky: archiv pojmenovaných,
+# opakovatelných setupů, kde každý má vlastní kartu a vlastní statistiku.
+# Obchoduje se jen to, co je v playbooku; bez pojmenovaného setupu jako
+# povinného pole není co agregovat.
+playbook_table = Table(
+    "journal_playbook",
+    meta_metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("key", String(64), nullable=False, unique=True),
+    Column("name", String(128), nullable=False),
+    Column("profile", String(16), nullable=False, default="both"),  # PLAYBOOK_SCOPES
+    Column("thesis", Text, nullable=False, default=""),
+    Column("entry_conditions", Text, nullable=False, default=""),
+    Column("invalidation", Text, nullable=False, default=""),
+    Column("management", Text, nullable=False, default=""),
+    # Vyřazený setup se NEMAŽE — historické záznamy na něj odkazují.
+    Column("active", Boolean, nullable=False, default=True),
+    Column("created_ts", DateTime(timezone=True), nullable=False),
+    Column("updated_ts", DateTime(timezone=True), nullable=True),
+)
+
+PLAYBOOK_SCOPES = ("smb", "futures", "both")
+
+# Výchozí sada pro futures profil. Klíče se ZÁMĚRNĚ kryjí se šablonami
+# detektoru (`compute/setups.py`), aby šlo porovnat „co detektor nabídl"
+# s „co jsem vzal" (#627). Uživatel si je smí přejmenovat i vyřadit.
+DEFAULT_PLAYBOOK: tuple[dict[str, str], ...] = (
+    {
+        "key": "wall_bounce",
+        "name": "Odraz od zdi",
+        "thesis": (
+            "U silné zdi drží dealeři velkou gammu — hedging tlačí cenu zpět, dokud zeď vydrží."
+        ),
+        "entry_conditions": "Cena testuje zeď s dostatečnou dominancí, režim tlumící.",
+        "invalidation": "Průraz zdi se zavřením za ní, nebo dominance zdi klesne.",
+        "management": "Stop za zeď, cíl první protilehlá úroveň.",
+    },
+    {
+        "key": "failed_break",
+        "name": "Neúspěšný průraz",
+        "thesis": "Průraz bez pokračování ukazuje, že za úrovní není poptávka.",
+        "entry_conditions": "Cena projde úroveň a vrátí se zpět pod ni.",
+        "invalidation": "Znovudobytí úrovně.",
+        "management": "Stop za extrém průrazu, cíl opačná strana rozsahu.",
+    },
+    {
+        "key": "max_pain_pin",
+        "name": "Pin k Max Pain",
+        "thesis": "Do expirace stahuje hedging cenu k striku s nejmenší vyplacenou hodnotou.",
+        "entry_conditions": "Blízko expirace, cena v dosahu Max Pain, tlumící režim.",
+        "invalidation": "Odchod z pásma, nebo skok volatility.",
+        "management": "Malé cíle, těsné stopy — večer je brzda nejsilnější.",
+    },
+    {
+        "key": "flip_cross",
+        "name": "Průchod flip zónou",
+        "thesis": "Za flipem se mění znaménko gammy: z tlumení na zesilování pohybu.",
+        "entry_conditions": "Cena protne flip zónu se souhlasným tokem.",
+        "invalidation": "Návrat do původního režimu.",
+        "management": "Jít s pohybem, cíl další jasné pásmo.",
+    },
+    {
+        "key": "gamma_momentum",
+        "name": "Gamma momentum",
+        "thesis": "V záporné gammě dealeři pohyb zesilují — pullbacky jsou mělké.",
+        "entry_conditions": "Cena pod flipem, vzduchoprázdno k dalšímu pásmu.",
+        "invalidation": "Vstup do tlumící zóny.",
+        "management": "Nestavět nic proti pohybu.",
+    },
+    {
+        "key": "zone_edge_reversion",
+        "name": "Návrat k okraji zóny",
+        "thesis": "Okraj tlumící zóny funguje jako mean-reversion hrana.",
+        "entry_conditions": "Cena drží nad okrajem, pullback k němu.",
+        "invalidation": "Ztráta okraje.",
+        "management": "Cíl Max Pain nebo první zelené pásmo.",
+    },
+)
+
+
 settings_table = Table(
     "settings",
     meta_metadata,
@@ -171,6 +255,7 @@ def ensure_meta_schema(engine: Engine) -> None:
     repository i engine), aby se tvar schématu nerozešel.
     """
     meta_metadata.create_all(engine)
+    _seed_playbook(engine)
     inspector = inspect(engine)
     if not inspector.has_table(journal_table.name):
         return
@@ -186,3 +271,29 @@ def ensure_meta_schema(engine: Engine) -> None:
     with engine.begin() as conn:
         for name, sql_type in missing.items():
             conn.execute(text(f"ALTER TABLE {journal_table.name} ADD COLUMN {name} {sql_type}"))
+
+
+def _seed_playbook(engine: Engine) -> None:
+    """Naplní výchozí sadu setupů, jen když je playbook úplně prázdný (#710).
+
+    Prázdný playbook by znamenal, že typ `obchod` nejde uložit (setup je
+    povinný). Jednou naplněná tabulka se už nikdy nedoplňuje — uživatel si
+    setupy přejmenovává i vyřazuje a návrat smazaného by ho jen otravoval.
+    """
+    with engine.begin() as conn:
+        existing = conn.execute(select(func.count()).select_from(playbook_table)).scalar_one()
+        if existing:
+            return
+        now = dt.datetime.now(dt.UTC)
+        conn.execute(
+            playbook_table.insert(),
+            [
+                {
+                    **item,
+                    "profile": "futures",
+                    "active": True,
+                    "created_ts": now,
+                }
+                for item in DEFAULT_PLAYBOOK
+            ],
+        )

@@ -138,9 +138,72 @@ export async function fetchJournal(filters: {
   try {
     const response = await fetch(`${API_BASE}/journal?${params}`)
     if (!response.ok) return []
-    return ((await response.json()) as { journal: JournalEntry[] }).journal
+    return ((await response.json()) as { journal?: JournalEntry[] }).journal ?? []
   } catch {
     return []
+  }
+}
+
+/** Karta setupu v PlayBooku (#710). */
+export interface PlaybookItem {
+  id: number
+  key: string
+  name: string
+  profile: 'smb' | 'futures' | 'both'
+  thesis: string
+  entry_conditions: string
+  invalidation: string
+  management: string
+  active: boolean
+  created_ts: string
+  updated_ts: string | null
+}
+
+export async function fetchPlaybook(includeInactive = false): Promise<PlaybookItem[]> {
+  const params = includeInactive ? '?include_inactive=true' : ''
+  try {
+    const response = await fetch(`${API_BASE}/playbook${params}`)
+    if (!response.ok) return []
+    return ((await response.json()) as { playbook?: PlaybookItem[] }).playbook ?? []
+  } catch {
+    return []
+  }
+}
+
+export async function createPlaybookItem(item: {
+  key: string
+  name: string
+  profile?: string
+  thesis?: string
+  entry_conditions?: string
+  invalidation?: string
+  management?: string
+}): Promise<PlaybookItem | null> {
+  try {
+    const response = await fetch(`${API_BASE}/playbook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(item),
+    })
+    return response.ok ? ((await response.json()) as PlaybookItem) : null
+  } catch {
+    return null
+  }
+}
+
+export async function updatePlaybookItem(
+  id: number,
+  patch: Partial<Omit<PlaybookItem, 'id' | 'key' | 'created_ts' | 'updated_ts'>>,
+): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/playbook/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    return response.ok
+  } catch {
+    return false
   }
 }
 
