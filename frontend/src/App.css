@@ -2119,6 +2119,25 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
 .playbook-detail dd {
   margin: 0 0 0 12px;
 }
+/* Snímek kontextu (#711) */
+.journal-context {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 6px 0 0;
+  font-size: 0.8em;
+}
+.journal-context-item {
+  white-space: nowrap;
+}
+.journal-context-rest {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
 .journal-nearby {
   display: flex;
   gap: 8px;

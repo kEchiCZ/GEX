@@ -35,6 +35,7 @@ import { useAppState } from '../state/AppState'
 
 /** Okno, ve kterém se detekovaný setup ještě považuje za „k této minutě". */
 const SETUP_MATCH_MS = 15 * 60 * 1000
+import { CONTEXT_LABELS, loadJournalContext } from '../journal/context'
 import { EMPTY_TRADE, draftToTrade, tradeToDraft } from '../journal/trade'
 import type { TradeDraft } from '../journal/trade'
 import { JournalPlaybook } from './JournalPlaybook'
@@ -71,6 +72,41 @@ function TradeSummary({ entry }: { entry: JournalEntry }) {
         </span>
       ))}
     </p>
+  )
+}
+
+/** Snímek kontextu v čitelné podobě — surové JSON uživateli nic neřekne. */
+function ContextSummary({ context }: { context: Record<string, unknown> | null }) {
+  const [open, setOpen] = useState(false)
+  if (context === null) {
+    return <p className="journal-context muted">Kontext se nezachytil (starší záznam nebo výpadek dat).</p> // prettier-ignore
+  }
+  const show = (key: string) => {
+    const value = context[key]
+    // Chybějící hodnota se ukáže jako „—", nedosazuje se nula ani se
+    // pole tiše nevynechá — jinak by výpadek vypadal jako měření.
+    const text =
+      value === null || value === undefined
+        ? '—'
+        : typeof value === 'number'
+          ? String(Number(value.toFixed(2)))
+          : String(value)
+    return (
+      <span key={key} className="journal-context-item">
+        <span className="muted">{CONTEXT_LABELS[key] ?? key}:</span> {text}
+      </span>
+    )
+  }
+  const headline = ['regime', 'flip', 'spot', 'dist_to_flip']
+  const rest = ['call_wall', 'put_wall', 'centroid', 'total_gex', 'cliff_share', 'tendency_band']
+  return (
+    <div className="journal-context">
+      <button className="chip" onClick={() => setOpen((value) => !value)} aria-label="Kontext">
+        {open ? '▾ Kontext' : '▸ Kontext'}
+      </button>
+      {headline.map(show)}
+      {open && <div className="journal-context-rest">{rest.map(show)}</div>}
+    </div>
   )
 }
 
@@ -151,6 +187,7 @@ function EntryCard({
         <>
           <p className="journal-text">{entry.text}</p>
           <TradeSummary entry={entry} />
+          <ContextSummary context={entry.context} />
         </>
       )}
       {error !== '' && <p className="journal-error">{error}</p>}
@@ -159,7 +196,7 @@ function EntryCard({
 }
 
 export function JournalView() {
-  const { symbol, journalDraft, setJournalDraft } = useAppState()
+  const { symbol, selectedExpiry, journalDraft, setJournalDraft } = useAppState()
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [meta, setMeta] = useState<JournalMeta | null>(null)
   const [filterSymbol, setFilterSymbol] = useState<string>('')
@@ -257,8 +294,12 @@ export function JournalView() {
       .map((tag) => tag.trim().replace(/^#/, ''))
       .filter(Boolean)
     if (extraTag && !tags.includes(extraTag)) tags.push(extraTag)
+    const tsIso = new Date(formTs).toISOString()
+    // Kontext se skládá při zápisu — poziční mapa se během dne mění a zpětně
+    // by ji nešlo rekonstruovat (retence 90 dní, verzovaná mechanika).
+    const context = await loadJournalContext({ symbol, expiry: selectedExpiry, tsRef: tsIso })
     const created = await createJournalEntry({
-      ts_ref: new Date(formTs).toISOString(),
+      ts_ref: tsIso,
       symbol,
       entry_type: entryType,
       text: formText.trim(),
@@ -268,6 +309,7 @@ export function JournalView() {
       // Vazba na detekovaný setup — sloupec existoval od fáze A a nikdy se
       // neplnil; bez něj nejde odpovědět „vzal jsem ho, nebo přeskočil?" (#627)
       ...(nearbySetup ? { setup_id: nearbySetup.id } : {}),
+      context: context as unknown as Record<string, unknown>,
     })
     if (created) {
       setFormText('')

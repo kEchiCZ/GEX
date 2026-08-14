@@ -5,7 +5,13 @@ Kvalita setupu a exekuce se známkuje ODDĚLENĚ od výsledku (SMB, Steenbarger)
 žádné P/L neukazuje. Převody rozepsaných hodnot jsou v `journal/trade.ts`.
 */
 import type { JournalGrade, JournalTrade, PlaybookItem, TradeDirection } from '../api/journal'
-import { mistakeLabel, plannedRR } from '../api/journal'
+import {
+  FAILURE_MODES,
+  FAILURE_MODE_LABELS,
+  mistakeLabel,
+  plannedRR,
+  realizedR,
+} from '../api/journal'
 import { draftToTrade } from '../journal/trade'
 import type { TradeDraft } from '../journal/trade'
 
@@ -33,7 +39,11 @@ export function JournalTradeFields({
         : [...draft.mistakeTags, tag],
     )
 
-  const rr = plannedRR(draftToTrade(draft) as JournalTrade)
+  const asTrade = draftToTrade(draft) as JournalTrade
+  const rr = plannedRR(asTrade)
+  // Ztrátový obchod poznáme z realizovaného R nebo z net P/L
+  const r = realizedR(asTrade)
+  const isLoss = (r !== null && r < 0) || (asTrade.net_pnl !== null && asTrade.net_pnl < 0)
 
   return (
     <fieldset className="journal-trade" aria-label="Obchod">
@@ -167,6 +177,25 @@ export function JournalTradeFields({
           ))}
         </select>
       </div>
+
+      {isLoss && (
+        <div className="journal-form-row">
+          {/* Nabízí se jen u ztráty — u ziskového obchodu není co vysvětlovat */}
+          <select
+            value={draft.failureMode}
+            onChange={(event) => set('failureMode', event.target.value)}
+            aria-label="Proč teze selhala"
+            title="map_moved jde doložit proti uloženému snímku kontextu (#711)"
+          >
+            <option value="">proč teze selhala —</option>
+            {FAILURE_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {FAILURE_MODE_LABELS[mode]}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {mistakeTags.length > 0 && (
         <div className="journal-form-row journal-mistakes" aria-label="Chyby">

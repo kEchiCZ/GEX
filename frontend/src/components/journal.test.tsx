@@ -33,8 +33,21 @@ const ENTRY: JournalEntry = {
   news_event_id: null,
   profile: 'futures',
   trade: null,
+  context: null,
   created_ts: '2026-08-14T14:31:00+00:00',
   updated_ts: null,
+}
+
+/** Prázdné podklady kontextu (#711) — jeden tvar pro všechny endpointy. */
+const EMPTY_PAYLOAD = {
+  journal: [],
+  playbook: [],
+  setups: [],
+  bars: [],
+  levels: [],
+  tendency: [],
+  days: [],
+  today: null,
 }
 
 const PLAYBOOK = [
@@ -70,7 +83,7 @@ function mockJournalApi(entries: JournalEntry[]) {
         new Response(JSON.stringify({ ...ENTRY, id: 2, ...body }), { status: 201 }),
       )
     }
-    return Promise.resolve(new Response('{}'))
+    return Promise.resolve(new Response(JSON.stringify(EMPTY_PAYLOAD)))
   })
 }
 
@@ -230,7 +243,7 @@ test('detekovaný setup u zapisované minuty nabídne převzetí plánu (#710)',
         new Response(JSON.stringify({ ...ENTRY, id: 2, ...body }), { status: 201 }),
       )
     }
-    return Promise.resolve(new Response(JSON.stringify({ journal: [] })))
+    return Promise.resolve(new Response(JSON.stringify(EMPTY_PAYLOAD)))
   })
   render(<JournalView />)
   await waitFor(() => expect(screen.getByText(/Detektor tu nabídl/)).toBeTruthy())
@@ -258,7 +271,7 @@ test('neuložený záznam se ohlásí, nezmizí potichu', async () => {
     if (String(url).includes('/journal') && init?.method === 'POST') {
       return Promise.resolve(new Response('{}', { status: 422 }))
     }
-    return Promise.resolve(new Response(JSON.stringify({ journal: [] })))
+    return Promise.resolve(new Response(JSON.stringify(EMPTY_PAYLOAD)))
   })
   render(<JournalView />)
   fireEvent.change(screen.getByLabelText('Text záznamu'), { target: { value: 'Pozoruji.' } })
@@ -266,4 +279,88 @@ test('neuložený záznam se ohlásí, nezmizí potichu', async () => {
   await waitFor(() => expect(screen.getByText(/nepodařilo uložit/)).toBeTruthy())
   // Text zůstane ve formuláři, ať se nemusí psát znovu
   expect((screen.getByLabelText('Text záznamu') as HTMLTextAreaElement).value).toBe('Pozoruji.')
+})
+
+test('snímek kontextu odejde se záznamem a chybějící zdroj nedosadí nulu (#711)', async () => {
+  fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+    const path = String(url)
+    if (path.includes('/playbook')) {
+      return Promise.resolve(new Response(JSON.stringify({ playbook: PLAYBOOK })))
+    }
+    if (path.includes('/levels/')) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            levels: [
+              {
+                ts_min: '2026-08-14T14:30:00+00:00',
+                flip: 6805,
+                call_wall: 6850,
+                put_wall: 6750,
+                centroid: 6800,
+                total_gex: -50,
+              },
+            ],
+          }),
+        ),
+      )
+    }
+    if (path.includes('/bars/')) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            bars: [
+              {
+                ts_min: '2026-08-14T14:30:00+00:00',
+                open: 6810,
+                high: 6812,
+                low: 6808,
+                close: 6810,
+                volume: 100,
+              },
+            ],
+          }),
+        ),
+      )
+    }
+    if (init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      return Promise.resolve(
+        new Response(JSON.stringify({ ...ENTRY, id: 3, ...body }), { status: 201 }),
+      )
+    }
+    return Promise.resolve(new Response(JSON.stringify(EMPTY_PAYLOAD)))
+  })
+
+  useAppStateMock.mockReturnValue({
+    symbol: 'ES',
+    selectedExpiry: '20260814',
+    journalDraft: { tsRef: '2026-08-14T14:30:00+00:00' },
+    setJournalDraft: vi.fn(),
+  })
+  render(<JournalView />)
+  fireEvent.change(screen.getByLabelText('Text záznamu'), { target: { value: 'Fade zdi.' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Přidat záznam' }))
+
+  await waitFor(() => {
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    expect(post).toBeTruthy()
+    const body = JSON.parse(String(post![1]!.body)) as {
+      context: {
+        version: number
+        flip: number | null
+        spot: number | null
+        dist_to_flip: number | null
+        cliff_share: number | null
+        tendency_band: string | null
+      }
+    }
+    expect(body.context.version).toBe(1)
+    expect(body.context.flip).toBe(6805)
+    expect(body.context.spot).toBe(6810)
+    expect(body.context.dist_to_flip).toBeCloseTo(5)
+    // Zdroje, které nic nevrátily, zůstanou null — nikdy nula
+    expect(body.context.cliff_share).toBeNull()
+    expect(body.context.tendency_band).toBeNull()
+  })
 })
