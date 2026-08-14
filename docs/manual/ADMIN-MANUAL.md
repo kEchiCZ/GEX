@@ -147,7 +147,8 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_TICK_BY_TICK_MAX_STREAMS` | 5 | Naměřený limit účtu (ADR-0001) |
 | `GEXLENS_DATABASE_URL` | postgres localhost | V compose směřuje na službu `postgres` |
 | `GEXLENS_DATA_DIR` | data | Kořen Parquet partic |
-| `GEXLENS_RETENTION_DAYS` | 14 | Purge okno (oi_eod se nikdy nemaže) |
+| `GEXLENS_RETENTION_DAYS` | **90** | Purge okno (ADR-0022, odchylka od R3). Nemaže se: `oi_eod` ani žádná `bars/` partice |
+| `GEXLENS_KEEP_BARS_FOREVER` | true | Bary podkladu se z purge vyjímají — základ historických výpočtů (ADR-0028) |
 | `GEXLENS_DISK_LIMIT_GB` | 2 | Alert při překročení |
 | `GEXLENS_RETENTION_PURGE_TIME_UTC` | 21:30 | Čas nočního purge |
 | `GEXLENS_API_BASE` | http://127.0.0.1:8000 | Kam engine pushuje (v compose `http://api:8000`) |
@@ -187,7 +188,7 @@ Odolnost: ConnectionManager watchdog (heartbeat 30/15 s + exponenciální reconn
 
 ## 6. Datové formáty a persistence
 
-### Parquet (`GEXLENS_DATA_DIR`, retence 14 dní)
+### Parquet (`GEXLENS_DATA_DIR`, retence 90 dní — ADR-0022)
 
 | Partice | Schéma |
 |---|---|
@@ -195,7 +196,7 @@ Odolnost: ConnectionManager watchdog (heartbeat 30/15 s + exponenciální reconn
 | `ticks/{sym}/{YYYY-MM-DD}.parquet` | ts, conId, price, size, side |
 | `derived/{sym}/{expiry}/levels/{date}.parquet` | ts_min, flip, call_wall, put_wall, centroid, total_gex |
 | `derived/{sym}/flow/{date}.parquet` | ts_min, flow_delta, cum_delta |
-| `derived/{sym}/bars/{date}.parquet` | ts_min, open, high, low, close, volume |
+| `derived/{sym}/bars/{date}.parquet` | ts_min, open, high, low, close, volume — **z purge vyňaté, drží se navždy** (`GEXLENS_KEEP_BARS_FOREVER=true`); ES i NQ mají ~2 roky historie od 2024-07-28 (backfill `scripts/backfill_bars.py`) |
 | `derived/{sym}/netflow/{date}.parquet` | Δ-vážený tok per strana (podklad FA odhadu OI) |
 | `derived/{sym}/{expiry}/oiest/{date}.parquet` | FA odhad OI (netflow×α, #232) |
 | `derived/{sym}/{expiry}/gexprofile(fa)/…` + `gexfield(fa)/…` | Dyn profily/pole; `…fa` varianty nad FA odhadem |
