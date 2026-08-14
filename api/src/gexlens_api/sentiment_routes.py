@@ -100,8 +100,15 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         importance: int | None = None,
         kind: str | None = None,
         limit: int = Query(DEFAULT_FEED_LIMIT, ge=1, le=MAX_FEED_LIMIT),
+        symbol: str = "ES",
     ) -> dict[str, object]:
-        """Feed s filtrem; nejnovější první."""
+        """Feed s filtrem; nejnovější první.
+
+        Karta zprávy (#656) nese i naměřený dopad: `reactions_bp` mapuje
+        uzavřená párovací okna z `news_reactions` (minuty → ret_bp pro daný
+        symbol) a `reaction_contaminated` říká, že do okna spadl jiný významný
+        event (pohyb nejde přičíst téhle zprávě, SPEC 5.1).
+        """
         stmt = select(news_events).order_by(desc(news_events.c.ts_event)).limit(limit)
         if from_ts is not None:
             stmt = stmt.where(news_events.c.ts_event >= from_ts)
@@ -113,7 +120,32 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
             stmt = stmt.where(news_events.c.importance >= importance)
         if kind is not None:
             stmt = stmt.where(news_events.c.kind == kind)
-        return {"news": _rows(engine_factory(), stmt)}
+        rows = _rows(engine_factory(), stmt)
+        event_ids = [row["id"] for row in rows if isinstance(row.get("id"), int)]
+        if event_ids:
+            with engine_factory().connect() as conn:
+                measured = conn.execute(
+                    select(
+                        news_reactions.c.event_id,
+                        news_reactions.c.window_min,
+                        news_reactions.c.ret_bp,
+                        news_reactions.c.contaminated,
+                    ).where(
+                        news_reactions.c.event_id.in_(event_ids),
+                        news_reactions.c.symbol == symbol,
+                    )
+                ).all()
+            by_event: dict[int, dict[str, float]] = {}
+            contaminated: set[int] = set()
+            for event_id, window_min, ret_bp, contam in measured:
+                by_event.setdefault(event_id, {})[str(window_min)] = float(ret_bp)
+                if contam:
+                    contaminated.add(event_id)
+            for row in rows:
+                event_id = row.get("id")
+                row["reactions_bp"] = by_event.get(event_id) if isinstance(event_id, int) else None
+                row["reaction_contaminated"] = event_id in contaminated
+        return {"news": rows}
 
     @router.get("/news/upcoming")
     def news_upcoming(hours: int = Query(24, ge=1, le=168)) -> dict[str, object]:

@@ -12,10 +12,13 @@ import {
   fetchCrowd,
   fetchReview,
   latestCrowd,
+  primaryReaction,
+  relativeAge,
   submitReview,
 } from '../api/news'
 import type { CrowdRow, NewsRow, ReviewRow } from '../api/news'
 import { useNews } from '../hooks/useNews'
+import { useSentimentState } from '../hooks/useSentimentState'
 
 /** Crowd data se mění pomalu (F&G à 1 h, PCR à 5 min) — refresh stačí volný. */
 const CROWD_REFRESH_MS = 300_000
@@ -46,8 +49,24 @@ function scoreClass(score: number | null): string {
   return score > 0 ? 'news-score positive' : 'news-score negative'
 }
 
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit' })
+/** Naměřený dopad na kartě (#656): barva dle znaménka, tooltip všechna okna. */
+function ImpactValue({ row }: { row: NewsRow }) {
+  const primary = primaryReaction(row)
+  if (!primary) return null
+  const windows = Object.entries(row.reactions_bp ?? {})
+    .map(([minutes, value]) => `+${minutes} min: ${Number(value).toFixed(1)} bp`)
+    .join(' · ')
+  const title =
+    `Naměřený pohyb trhu v párovacím okně po zprávě (${windows}).` +
+    (row.reaction_contaminated
+      ? ' ⚠ Do okna spadl jiný významný event — pohyb nejde přičíst jen téhle zprávě.'
+      : '')
+  return (
+    <span className={scoreClass(primary.bp)} title={title} data-testid={`impact-${row.id}`}>
+      Δ{primary.windowMin}m {primary.bp >= 0 ? '+' : ''}
+      {primary.bp.toFixed(1)} bp{row.reaction_contaminated ? ' ⚠' : ''}
+    </span>
+  )
 }
 
 function NewsRowItem({
@@ -64,17 +83,30 @@ function NewsRowItem({
   const [direction, setDirection] = useState<number>(row.sentiment_dir ?? 0)
   const [category, setCategory] = useState<string>(row.category ?? 'OTHER')
   return (
-    <tr
+    <article
       data-testid={`news-row-${row.id}`}
-      className={review ? 'news-review-flag' : undefined}
+      className={review ? 'news-card news-review-flag' : 'news-card'}
       title={review ? `Ke kontrole: ${REVIEW_REASONS[review.reason] ?? review.reason}` : undefined}
     >
-      <td className="news-time muted">{formatTime(row.ts_event)}</td>
-      <td className="news-category">
-        <span title={categoryLabel(row.category)}>{categoryGlyph(row.category)}</span>{' '}
-        {categoryLabel(row.category)}
-      </td>
-      <td className="news-title">
+      <div className="news-card-head">
+        <span className="news-category">
+          <span title={categoryLabel(row.category)}>{categoryGlyph(row.category)}</span>{' '}
+          {categoryLabel(row.category)}
+        </span>
+        <span className="news-time muted" title={new Date(row.ts_event).toLocaleString()}>
+          {relativeAge(row.ts_event, Date.now())}
+        </span>
+        <span className="muted">{KIND_LABELS[row.kind] ?? row.kind}</span>
+        <span className="muted" title={`Důležitost ${row.importance ?? 1}/3`}>
+          {'!'.repeat(Math.min(3, Math.max(1, row.importance ?? 1)))}
+        </span>
+        <span className={scoreClass(score)} title="Skóre klasifikace (směr × váha)">
+          {score === null ? '—' : score.toFixed(2)}
+        </span>
+        {/* Naměřený dopad (#656) — co trh PO zprávě skutečně udělal */}
+        <ImpactValue row={row} />
+      </div>
+      <p className="news-card-title">
         {review && (
           <button
             type="button"
@@ -87,47 +119,43 @@ function NewsRowItem({
           </button>
         )}{' '}
         {row.title}
-        {editing && review && (
-          <span className="news-review-edit">
-            <select
-              aria-label="Oprava směru"
-              value={direction}
-              onChange={(event) => setDirection(Number(event.target.value))}
-            >
-              <option value={1}>+1 risk-on</option>
-              <option value={0}>0 neutrální</option>
-              <option value={-1}>−1 risk-off</option>
-            </select>
-            <select
-              aria-label="Oprava kategorie"
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
-            >
-              {Object.keys(CATEGORY_LABELS).map((key) => (
-                <option key={key} value={key}>
-                  {categoryLabel(key)}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="chip"
-              onClick={() => {
-                onCorrect(row.id, { direction, category })
-                setEditing(false)
-              }}
-            >
-              Opravit
-            </button>
-          </span>
-        )}
-      </td>
-      <td className="muted">{KIND_LABELS[row.kind] ?? row.kind}</td>
-      <td>{row.importance ?? '—'}</td>
-      <td>
-        <span className={scoreClass(score)}>{score === null ? '—' : score.toFixed(2)}</span>
-      </td>
-    </tr>
+      </p>
+      {row.summary && <p className="muted news-card-summary">{row.summary}</p>}
+      {editing && review && (
+        <span className="news-review-edit">
+          <select
+            aria-label="Oprava směru"
+            value={direction}
+            onChange={(event) => setDirection(Number(event.target.value))}
+          >
+            <option value={1}>+1 risk-on</option>
+            <option value={0}>0 neutrální</option>
+            <option value={-1}>−1 risk-off</option>
+          </select>
+          <select
+            aria-label="Oprava kategorie"
+            value={category}
+            onChange={(event) => setCategory(event.target.value)}
+          >
+            {Object.keys(CATEGORY_LABELS).map((key) => (
+              <option key={key} value={key}>
+                {categoryLabel(key)}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="chip"
+            onClick={() => {
+              onCorrect(row.id, { direction, category })
+              setEditing(false)
+            }}
+          >
+            Opravit
+          </button>
+        </span>
+      )}
+    </article>
   )
 }
 
@@ -168,6 +196,8 @@ function CrowdBlock({ rows }: { rows: CrowdRow[] }) {
 
 export function NewsView() {
   const { news, upcoming, topics } = useNews()
+  // Aktuální stav + trend (#656 bod 6) — týž zdroj jako chip v hlavičce
+  const sentState = useSentimentState()
   const [category, setCategory] = useState<string>('')
   const [minImportance, setMinImportance] = useState<number>(0)
   const [crowd, setCrowd] = useState<CrowdRow[]>([])
@@ -246,6 +276,19 @@ export function NewsView() {
         </label>
       </header>
 
+      {sentState && (
+        <div className="news-topics" aria-label="Stav sentimentu">
+          <span className="muted">Stav:</span>
+          <span className={`news-state state-${sentState.state.toLowerCase()}`}>
+            {sentState.state}
+            {sentState.unconfirmed ? ' (nepotvrzený)' : ''}
+          </span>
+          <span className="muted">
+            trend {sentState.polarity === 'up' ? '↑' : sentState.polarity === 'down' ? '↓' : '→'}
+          </span>
+        </div>
+      )}
+
       {activeTopics.length > 0 && (
         <div className="news-topics" aria-label="Aktivní témata">
           <span className="muted">Co hýbe trhem:</span>
@@ -287,28 +330,16 @@ export function NewsView() {
           Finnhub se zapne po doplnění klíče.
         </p>
       ) : (
-        <table className="news-table">
-          <thead>
-            <tr>
-              <th>Čas</th>
-              <th>Kategorie</th>
-              <th>Titulek</th>
-              <th>Typ</th>
-              <th>Důl.</th>
-              <th>Skóre</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((row) => (
-              <NewsRowItem
-                key={row.id}
-                row={row}
-                review={reviewByEvent.get(row.id)}
-                onCorrect={handleCorrect}
-              />
-            ))}
-          </tbody>
-        </table>
+        <div className="news-cards" aria-label="Feed zpráv">
+          {filtered.map((row) => (
+            <NewsRowItem
+              key={row.id}
+              row={row}
+              review={reviewByEvent.get(row.id)}
+              onCorrect={handleCorrect}
+            />
+          ))}
+        </div>
       )}
     </section>
   )
