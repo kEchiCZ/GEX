@@ -1225,7 +1225,7 @@ function MainContent() {
             setRangeTool((value) => !value)
             setAnnotationTool(null)
           }}
-          title="Rozsah: tažením v grafu vyber časové okno — pravý profil se přepne na okno (co se zobchodovalo mezi t1 a t2). Rychlá cesta: Alt+tažení kdykoli. Úchyty okrajů táhni v režimu Kurzor, Alt+tažení uvnitř posouvá celé okno, Esc zavře."
+          title="Rozsah: tažením v grafu vyber časové okno — pravý profil a P/C se přepnou na okno. Hotové okno pak uprav přímo tažením: za okraj měníš tu stranu, tažením uvnitř posouváš celé okno (data se přepočítávají živě). Nové okno: tento nástroj mimo stávající okno, nebo Alt+tažení kdykoli. Esc/× zavře."
         >
           ⧉ Rozsah
         </button>

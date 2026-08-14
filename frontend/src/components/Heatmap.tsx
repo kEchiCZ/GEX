@@ -74,6 +74,9 @@ const LEVEL_DEFAULT_COLOR = '#e8c14b'
 /** Svislý odstup, pod kterým se popisky úrovní považují za kolidující (#342). */
 const LABEL_ROW_GAP_PX = 12
 
+/** Tolerance úchopu okraje range (#484) v px — musí jít trefit i při hustší ose. */
+const RANGE_EDGE_TOL_PX = 6
+
 // measureText nutí layout — cache šířky per font|text (osy překreslujeme 5×/s při živém spotu)
 // Strop (#509): klíče nesou ceny/časy, za dlouhý běh by mapa rostla donekonečna.
 // Při přetečení se celá zahodí — znovu se naplní za pár snímků, LRU se nevyplatí.
@@ -326,6 +329,10 @@ export function Heatmap({
   const dragRef = useRef<{ x: number; y: number; mode: 'pan' | 'scale-x' | 'scale-y' } | null>(null)
   // Tažení range (#484): create drží kotvu (druhý okraj), move offset úchopu
   const rangeDragRef = useRef<{ mode: 'create' | 'move'; anchor: number } | null>(null)
+  // Stav pro kurzor (ref nevyvolá re-render; při tažení se stejně renderuje
+  // každou změnou range, ale hover mimo tažení potřebuje vlastní stav)
+  const [rangeDragging, setRangeDragging] = useState(false)
+  const [rangeHover, setRangeHover] = useState<'edge' | 'move' | null>(null)
   // Výchozí bod stisku — klik (bez tažení) na news marker otevře dialog (#408)
   const clickRef = useRef<{ x: number; y: number } | null>(null)
   const [axisHover, setAxisHover] = useState<AxisZone>(null)
@@ -1227,40 +1234,43 @@ export function Heatmap({
       event.currentTarget.setPointerCapture(event.pointerId)
       return
     }
-    // Range selector (#484): nástroj Rozsah nebo Alt+drag vytváří okno;
-    // s existujícím range chytá úchyty okrajů (±5 px) a Alt+drag uvnitř
-    // posouvá celé okno. Drag na ose (zoom X) má přednost — nekoliduje.
+    // Range selector (#484): existující okno má přednost — tažení za okraj
+    // upravuje tu stranu, tažení uvnitř posouvá celé okno; obojí BEZ
+    // modifikátorů a nezávisle na zvoleném nástroji (zpětná vazba uživatele:
+    // s aktivním nástrojem Rozsah šlo jen kreslit nová okna). Nové okno
+    // vytváří nástroj Rozsah nebo Alt+drag; Alt+drag uvnitř okna taky kreslí
+    // nové (úniková cesta). Drag na ose (zoom X) má přednost — nekoliduje.
     if (onRangeDrag) {
       const point = canvasPoint(event)
       const zone = point ? axisZoneAt(point.x, point.y, logicalH) : null
       if (point && zone === null) {
         const { screenToCell, minuteToX, scaleX } = mapping()
         const { minuteIdx } = screenToCell(point.x, point.y)
-        if (range && !rangeCreate && !event.altKey) {
+        if (range && !event.altKey) {
           const startX = minuteToX(range.startBucket) - 0.5 * scaleX
           const endX = minuteToX(range.endBucket + 1) - 0.5 * scaleX
-          if (Math.abs(point.x - startX) <= 5) {
+          if (Math.abs(point.x - startX) <= RANGE_EDGE_TOL_PX) {
             rangeDragRef.current = { mode: 'create', anchor: range.endBucket }
+            setRangeDragging(true)
             event.currentTarget.setPointerCapture(event.pointerId)
             return
           }
-          if (Math.abs(point.x - endX) <= 5) {
+          if (Math.abs(point.x - endX) <= RANGE_EDGE_TOL_PX) {
             rangeDragRef.current = { mode: 'create', anchor: range.startBucket }
+            setRangeDragging(true)
             event.currentTarget.setPointerCapture(event.pointerId)
             return
           }
-        }
-        if (range && event.altKey && !rangeCreate) {
-          const startX = minuteToX(range.startBucket) - 0.5 * scaleX
-          const endX = minuteToX(range.endBucket + 1) - 0.5 * scaleX
           if (point.x > startX && point.x < endX) {
             rangeDragRef.current = { mode: 'move', anchor: minuteIdx - range.startBucket }
+            setRangeDragging(true)
             event.currentTarget.setPointerCapture(event.pointerId)
             return
           }
         }
         if (rangeCreate || event.altKey) {
           rangeDragRef.current = { mode: 'create', anchor: minuteIdx }
+          setRangeDragging(true)
           onRangeDrag(minuteIdx, minuteIdx)
           event.currentTarget.setPointerCapture(event.pointerId)
           return
@@ -1289,7 +1299,9 @@ export function Heatmap({
         const { minuteIdx } = mapping().screenToCell(point.x, point.y)
         if (rangeDrag.mode === 'move' && range) {
           const width = range.endBucket - range.startBucket
-          const start = minuteIdx - rangeDrag.anchor
+          // Clamp na hranice naměřených dat — posun za okraj okno nezmenšuje
+          const maxStart = Math.max(0, (grid.dataMinutes ?? grid.minutes) - 1 - width)
+          const start = Math.max(0, Math.min(minuteIdx - rangeDrag.anchor, maxStart))
           onRangeDrag(start, start + width)
         } else {
           onRangeDrag(Math.min(rangeDrag.anchor, minuteIdx), Math.max(rangeDrag.anchor, minuteIdx))
@@ -1354,6 +1366,21 @@ export function Heatmap({
     if (!point) return
     const { x, y } = point
     setAxisHover(axisZoneAt(x, y, logicalH))
+    // Hover nad range (#484): okraj → ew-resize, vnitřek → grab
+    if (range && onRangeDrag && axisZoneAt(x, y, logicalH) === null) {
+      const { minuteToX: rangeMinuteToX, scaleX: rangeScaleX } = mapping()
+      const startX = rangeMinuteToX(range.startBucket) - 0.5 * rangeScaleX
+      const endX = rangeMinuteToX(range.endBucket + 1) - 0.5 * rangeScaleX
+      const nextHover =
+        Math.abs(x - startX) <= RANGE_EDGE_TOL_PX || Math.abs(x - endX) <= RANGE_EDGE_TOL_PX
+          ? 'edge'
+          : x > startX && x < endX
+            ? 'move'
+            : null
+      setRangeHover((previous) => (previous === nextHover ? previous : nextHover))
+    } else {
+      setRangeHover((previous) => (previous === null ? previous : null))
+    }
     const { minuteIdx, strikeIdx } = mapping().screenToCell(x, y)
     // Crosshair drží i mimo svíce (prázdná/budoucí plocha po posunu) — nesnapuje
     // se na neexistující bar; strike je null mimo cenové pásmo, minuta smí být mimo rozsah.
@@ -1369,6 +1396,7 @@ export function Heatmap({
   const onPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (rangeDragRef.current) {
       rangeDragRef.current = null
+      setRangeDragging(false)
       onRangeCommit?.()
       return
     }
@@ -1479,12 +1507,19 @@ export function Heatmap({
               ? 'ew-resize'
               : axisHover === 'y'
                 ? 'ns-resize'
-                : // Anotace pod kurzorem se dá uchopit a přesunout (#589)
-                  hoverAnnotationId !== null
-                  ? moving
-                    ? 'grabbing'
-                    : 'grab'
-                  : undefined,
+                : // Range (#484): okraj se roztahuje, vnitřek posouvá celé okno
+                  rangeDragging
+                  ? 'grabbing'
+                  : rangeHover === 'edge'
+                    ? 'ew-resize'
+                    : rangeHover === 'move'
+                      ? 'grab'
+                      : // Anotace pod kurzorem se dá uchopit a přesunout (#589)
+                        hoverAnnotationId !== null
+                        ? moving
+                          ? 'grabbing'
+                          : 'grab'
+                        : undefined,
         }}
         onWheel={onWheel}
         onPointerDown={onPointerDown}
