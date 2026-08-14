@@ -2134,3 +2134,35 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   gap: 6px;
   margin-top: 4px;
 }
+
+/* Karty zpráv (#656) */
+.news-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.news-card {
+  background: var(--panel-bg, #161b26);
+  border: 1px solid var(--panel-border, #2a3242);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.news-card-head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: 0.85em;
+}
+.news-card-head .news-time {
+  margin-left: auto;
+  order: 9;
+}
+.news-card-title {
+  margin: 4px 0 0;
+  font-weight: 600;
+}
+.news-card-summary {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+}

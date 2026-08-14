@@ -1,12 +1,15 @@
 /** Testy klienta SentimentLensu (#288): párování řady a formátování. */
-import { describe, expect, test } from 'vitest'
+import { describe, expect, it, test } from 'vitest'
 import {
   alignSeriesToLabels,
   categoryGlyph,
   categoryLabel,
   countdownLabel,
   latestCrowd,
+  primaryReaction,
+  relativeAge,
 } from './news'
+import type { NewsRow } from './news'
 
 function point(hour: number, minute: number, value: number) {
   const at = new Date(2026, 6, 28, hour, minute)
@@ -93,5 +96,30 @@ describe('latestCrowd', () => {
     expect(latest.get('gexlens|pcr_volume|ES')?.value).toBe(0.9)
     // Symboly tvoří samostatné řady
     expect(latest.get('gexlens|pcr_volume|NQ')).toBeUndefined()
+  })
+})
+
+describe('karta zprávy (#656)', () => {
+  const row = (reactions: Record<string, number | string> | null): NewsRow =>
+    ({
+      id: 1,
+      ts_event: '2026-08-14T12:00:00Z',
+      reactions_bp: reactions,
+    }) as unknown as NewsRow
+
+  it('primaryReaction preferuje 5m okno, jinak nejkratší', () => {
+    expect(primaryReaction(row({ '5': -16.5, '15': -12 }))).toEqual({ windowMin: 5, bp: -16.5 })
+    expect(primaryReaction(row({ '15': -12, '60': 3 }))).toEqual({ windowMin: 15, bp: -12 })
+    expect(primaryReaction(row({ '1': '2.5' }))).toEqual({ windowMin: 1, bp: 2.5 }) // PG Decimal jako string
+    expect(primaryReaction(row(null))).toBeNull()
+    expect(primaryReaction(row({}))).toBeNull()
+  })
+
+  it('relativeAge: s → min → h → datum', () => {
+    const now = Date.parse('2026-08-14T12:00:30Z')
+    expect(relativeAge('2026-08-14T12:00:14Z', now)).toBe('před 16 s')
+    expect(relativeAge('2026-08-14T11:57:30Z', now)).toBe('před 3 min')
+    expect(relativeAge('2026-08-14T10:00:30Z', now)).toBe('před 2 h')
+    expect(relativeAge('2026-08-12T10:00:30Z', now)).toMatch(/\d/) // starší = datum+čas
   })
 })

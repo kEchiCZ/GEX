@@ -62,7 +62,7 @@ export function useNews(): NewsData {
     let cancelled = false
     const load = () => {
       void Promise.all([
-        fetchNews(),
+        fetchNews(100, symbol), // dopad zpráv per aktivní symbol (#656)
         fetchUpcoming(),
         fetchSentimentSeries(symbol),
         fetchTopics(),

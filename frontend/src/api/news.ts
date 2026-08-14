@@ -17,6 +17,12 @@ export interface NewsRow {
   sentiment_source: string | null
   forecast: number | string | null
   previous: number | string | null
+  /** Naměřený dopad (#656): párovací okno (min) → ret_bp pro symbol feedu;
+  null/undefined = okna ještě neuzavřená nebo bez reakce. */
+  reactions_bp?: Record<string, number | string> | null
+  /** Do některého okna spadl jiný významný event — pohyb nejde přičíst téhle
+  zprávě (SPEC 5.1); karta to značí ⚠. */
+  reaction_contaminated?: boolean
   actual: number | string | null
 }
 
@@ -120,9 +126,41 @@ async function getJson<T>(path: string, fallback: T): Promise<T> {
   }
 }
 
-export async function fetchNews(limit = 100): Promise<NewsRow[]> {
-  const data = await getJson<{ news: NewsRow[] }>(`/news?limit=${limit}`, { news: [] })
+export async function fetchNews(limit = 100, symbol = 'ES'): Promise<NewsRow[]> {
+  const data = await getJson<{ news: NewsRow[] }>(`/news?limit=${limit}&symbol=${symbol}`, {
+    news: [],
+  })
   return data.news
+}
+
+/** Hlavní naměřený dopad karty (#656): preferuje 5m okno, jinak nejkratší
+uzavřené; null = žádná reakce ještě není. */
+export function primaryReaction(row: NewsRow): { windowMin: number; bp: number } | null {
+  const reactions = row.reactions_bp
+  if (!reactions) return null
+  const windows = Object.keys(reactions)
+    .map(Number)
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b)
+  if (windows.length === 0) return null
+  const windowMin = windows.includes(5) ? 5 : windows[0]
+  const raw = reactions[String(windowMin)]
+  const bp = typeof raw === 'number' ? raw : Number(raw)
+  return Number.isFinite(bp) ? { windowMin, bp } : null
+}
+
+/** Relativní stáří zprávy: „před 16 s / před 3 min / před 2 h“, starší = čas. */
+export function relativeAge(iso: string, nowMs: number): string {
+  const delta = Math.max(0, nowMs - Date.parse(iso))
+  if (delta < 60_000) return `před ${Math.round(delta / 1000)} s`
+  if (delta < 3_600_000) return `před ${Math.round(delta / 60_000)} min`
+  if (delta < 86_400_000) return `před ${Math.round(delta / 3_600_000)} h`
+  return new Date(iso).toLocaleString([], {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 export async function fetchUpcoming(hours = 24): Promise<NewsRow[]> {

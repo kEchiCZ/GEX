@@ -256,3 +256,87 @@ def test_news_latency_measures_source_delay(client: TestClient) -> None:
     assert rss["median_s"] == pytest.approx(3600)
     assert rss["p90_s"] == pytest.approx(3600)
     assert rss["n_over_cutoff"] == 0
+
+
+def test_news_feed_measured_reactions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#656: feed nese naměřený dopad z news_reactions per symbol + kontaminaci."""
+    from gexlens_engine.storage.sentiment import news_reactions
+
+    monkeypatch.setenv("GEXLENS_API_TOKEN", INTERNAL_TOKEN)
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}",
+    )
+    app = create_app(settings)
+    engine = MetaRepository(settings).engine()
+    ensure_sentiment_schema(engine)
+
+    with engine.begin() as conn:
+        inserted = conn.execute(
+            insert(news_events).values(
+                ts_event=NOW - dt.timedelta(hours=1),
+                ts_ingested=NOW,
+                source="rss_news",
+                kind="headline",
+                title="CPI hot",
+                category="INFLATION",
+                importance=3,
+                sentiment_dir=-1,
+                sentiment_score=-0.4,
+                sentiment_source="rule",
+                symbols=[],
+                market_closed=False,
+                dedup_hash="reakce-1",
+                raw={},
+            )
+        ).inserted_primary_key
+        assert inserted is not None
+        event_id = int(inserted[0])
+        conn.execute(
+            insert(news_reactions),
+            [
+                {
+                    "event_id": event_id,
+                    "symbol": "ES",
+                    "window_min": 5,
+                    "ret_bp": -16.5,
+                    "range_bp": 20.0,
+                    "contaminated": False,
+                    "deferred": False,
+                    "computed_at": NOW,
+                },
+                {
+                    "event_id": event_id,
+                    "symbol": "ES",
+                    "window_min": 15,
+                    "ret_bp": -12.0,
+                    "range_bp": 25.0,
+                    "contaminated": True,
+                    "deferred": False,
+                    "computed_at": NOW,
+                },
+                {
+                    "event_id": event_id,
+                    "symbol": "NQ",
+                    "window_min": 5,
+                    "ret_bp": 99.0,
+                    "range_bp": 30.0,
+                    "contaminated": False,
+                    "deferred": False,
+                    "computed_at": NOW,
+                },
+            ],
+        )
+
+    api = TestClient(app)
+    row = next(item for item in api.get("/news").json()["news"] if item["id"] == event_id)
+    assert row["reactions_bp"] == {"5": -16.5, "15": -12.0}  # jen ES (default symbol)
+    assert row["reaction_contaminated"] is True  # kterékoli okno kontaminované
+
+    nq = next(
+        item
+        for item in api.get("/news", params={"symbol": "NQ"}).json()["news"]
+        if item["id"] == event_id
+    )
+    assert nq["reactions_bp"] == {"5": 99.0}
+    assert nq["reaction_contaminated"] is False
