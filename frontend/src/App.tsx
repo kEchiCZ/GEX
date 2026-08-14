@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { alignSeriesToLabels, signalGateInfo } from './api/news'
+import type { NewsRow } from './api/news'
 import { buildNewsMarkers, significantOnly } from './heatmap/newsMarkers'
 import type { NewsMarker } from './heatmap/newsMarkers'
 import { buildJournalMarkers } from './heatmap/journalMarkers'
@@ -45,7 +46,7 @@ import { sessionDateIso } from './instrument/tz'
 import { EM_COLOR, EM_DASH, REF_COLOR, REF_DASH, SETUP_COLORS, VWAP_COLOR, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays' // prettier-ignore
 import { computeExpectedMove, emUsage } from './instrument/expectedmove'
 import { vwapSeriesForAxis } from './instrument/referencelevels'
-import { decodeRange, encodeRange, rangeBuckets, rangeLabel, windowProfileRows } from './instrument/rangeselect' // prettier-ignore
+import { decodeRange, encodeRange, rangeBuckets, rangeLabel, reactionWindow, windowProfileRows } from './instrument/rangeselect' // prettier-ignore
 import type { RangeSelection } from './instrument/rangeselect'
 import { RANGE_PRESETS, presetDisabledReason, presetRange } from './instrument/rangepresets'
 import type { RangePreset } from './instrument/rangepresets'
@@ -889,9 +890,12 @@ function MainContent() {
   const [rangeTool, setRangeTool] = useState(false)
   // Klouzavý preset (#487): 'last30' v live se posouvá s příchodem nové minuty
   const [rangePresetMode, setRangePresetMode] = useState<'last30' | null>(null)
+  // Poznámka k oknu (#488): „okno běží" u reakčního okna clampnutého na živou hranu
+  const [rangeNote, setRangeNote] = useState<string | null>(null)
   const closeRange = useCallback(() => {
     setRange(null)
     setRangePresetMode(null)
+    setRangeNote(null)
   }, [])
   useEffect(() => {
     const url = new URL(window.location.href)
@@ -923,8 +927,21 @@ function MainContent() {
       )
       setRange({ fromIso: day.minutesIso[fromIdx], toIso: day.minutesIso[toIdx] })
       setRangePresetMode(null) // ruční zásah ruší klouzavý preset (#487)
+      setRangeNote(null)
     },
     [day.minutesIso, bucketMinutes],
+  )
+  // Range z news markeru (#488): reakční okno zprávy — táž okna jako news_reactions
+  const handleMarkerRange = useCallback(
+    (newsRow: NewsRow, minutes: number) => {
+      const result = reactionWindow(newsRow.ts_event, minutes, rawDay.minutesIso.at(-1) ?? null)
+      if (!result) return
+      setRange(result.range)
+      setRangePresetMode(null)
+      setRangeNote(result.open ? 'okno běží' : null)
+      setNewsDialogMarker(null)
+    },
+    [rawDay.minutesIso],
   )
   const handleRangeCommit = useCallback(() => {
     // Klik bez tažení (prázdné okno na 1m) není výběr — zruší se
@@ -953,6 +970,7 @@ function MainContent() {
       setRange(result)
       // Klouže jen v live — v replay je okno fixní k pozici (zadání #487)
       setRangePresetMode(preset === 'last30' && playback.isLive ? 'last30' : null)
+      setRangeNote(null)
     },
     [presetInputs, playback.isLive],
   )
@@ -1391,6 +1409,7 @@ function MainContent() {
             {range && timeframe === 'intraday' && (
               <div className="range-chip" role="status" data-testid="range-chip">
                 ⧉ {rangeLabel(range)}
+                {rangeNote && ` · ⏳ ${rangeNote}`}
                 {rangeCum !== null &&
                   ` · CumΔ okna ${rangeCum >= 0 ? '+' : ''}${Math.round(rangeCum).toLocaleString('cs-CZ')}`}
                 {rangePresetMode === 'last30' && (
@@ -1412,6 +1431,7 @@ function MainContent() {
               <NewsMarkerDialog
                 marker={newsDialogMarker}
                 onClose={() => setNewsDialogMarker(null)}
+                onSetRange={timeframe === 'intraday' ? handleMarkerRange : undefined}
               />
             )}
             {/* Checkbox Setupy (#399): globální viditelnost vrstvy setupů */}
