@@ -272,7 +272,7 @@ def test_news_feed_measured_reactions(tmp_path: Path, monkeypatch: pytest.Monkey
     ensure_sentiment_schema(engine)
 
     with engine.begin() as conn:
-        event_id = conn.execute(
+        inserted = conn.execute(
             insert(news_events).values(
                 ts_event=NOW - dt.timedelta(hours=1),
                 ts_ingested=NOW,
@@ -289,7 +289,9 @@ def test_news_feed_measured_reactions(tmp_path: Path, monkeypatch: pytest.Monkey
                 dedup_hash="reakce-1",
                 raw={},
             )
-        ).inserted_primary_key[0]
+        ).inserted_primary_key
+        assert inserted is not None
+        event_id = int(inserted[0])
         conn.execute(
             insert(news_reactions),
             [
