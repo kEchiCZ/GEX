@@ -114,3 +114,38 @@ describe('okenní P/C (#486) — parita s API golden testem', () => {
     expect(stale).toEqual([])
   })
 })
+
+describe('rozsah striků (#645)', () => {
+  // spot 7600: call 7590 je ITM, call 7610 OTM; put naopak
+  const rows: ProfileRow[] = [
+    row({ strike: 7590, callVolume: 10, putVolume: 10, callMid: 20, putMid: 2, staleAge: 0 }),
+    row({ strike: 7610, callVolume: 10, putVolume: 10, callMid: 2, putMid: 20, staleAge: 0 }),
+  ]
+
+  it('otm: ITM strany se vynechají úplně (kontrakty i prémie)', () => {
+    const premium = computePcr(rows, 'vol', 'premium', 1, 7600, undefined, 'otm')
+    expect(premium.call).toBeCloseTo(10 * 2, 6) // jen call 7610
+    expect(premium.put).toBeCloseTo(10 * 2, 6) // jen put 7590
+    const contracts = computePcr(rows, 'vol', 'contracts', 1, 7600, undefined, 'otm')
+    expect(contracts.call).toBe(10)
+    expect(contracts.put).toBe(10)
+  })
+
+  it('timevalue: z ITM prémie zbyde mid − intrinsic (clamp 0)', () => {
+    // call 7590: intrinsic 10, mid 20 → čas. hodnota 10; call 7610 OTM beze změny
+    const premium = computePcr(rows, 'vol', 'premium', 1, 7600, undefined, 'timevalue')
+    expect(premium.call).toBeCloseTo(10 * 10 + 10 * 2, 6)
+    expect(premium.put).toBeCloseTo(10 * 2 + 10 * 10, 6) // put 7610: intrinsic 10 z mid 20
+  })
+
+  it('bez spotu degradují otm i timevalue na Vše', () => {
+    const all = computePcr(rows, 'vol', 'premium', 1, null, undefined, 'all')
+    const otm = computePcr(rows, 'vol', 'premium', 1, null, undefined, 'otm')
+    expect(otm).toEqual(all)
+  })
+
+  it('topPremiumStrikes respektuje otm rozsah', () => {
+    const top = topPremiumStrikes(rows, 1, 5, undefined, 'otm', 7600)
+    expect(top.map((t) => `${t.strike}${t.side}`).sort()).toEqual(['7590P', '7610C'])
+  })
+})
