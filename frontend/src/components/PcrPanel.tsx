@@ -15,13 +15,15 @@ import {
   PCR_BASES,
   PCR_BASIS_LABELS,
   PCR_MISSING_LIMIT,
+  PCR_SCOPES,
+  PCR_SCOPE_LABELS,
   PCR_UNITS,
   PCR_UNIT_LABELS,
   computePcr,
   formatMoney,
   topPremiumStrikes,
 } from '../profile/pcr'
-import type { PcrBasis, PcrUnit } from '../profile/pcr'
+import type { PcrBasis, PcrScope, PcrUnit } from '../profile/pcr'
 import { pointValue } from '../instrument/tick'
 import { oneOf, usePersistentState } from '../state/persist'
 
@@ -43,21 +45,28 @@ export function PcrPanel({
 }) {
   const [basis, setBasis] = usePersistentState<PcrBasis>('pcrBasis', 'vol_oi', oneOf(PCR_BASES))
   const [unit, setUnit] = usePersistentState<PcrUnit>('pcrUnit', 'premium', oneOf(PCR_UNITS))
+  // Rozsah striků (#645): default Jen OTM — ITM prémie je vnitřní hodnota,
+  // ne sázka na směr (doloženo měřením v issue: P/C 0,05 kvůli ITM callům)
+  const [scope, setScope] = usePersistentState<PcrScope>('pcrScope', 'otm', oneOf(PCR_SCOPES))
   const windowed = windowLabel !== null
   // Okno (#486): premium hlavní bar, kusový poměr sekundárně — oba najednou
   const effectiveBasis: PcrBasis = windowed ? 'vol' : basis
   const effectiveUnit: PcrUnit = windowed ? 'premium' : unit
   const result = useMemo(
-    () => computePcr(rows, effectiveBasis, effectiveUnit, pointValue(symbol), spot),
-    [rows, effectiveBasis, effectiveUnit, symbol, spot],
+    () =>
+      computePcr(rows, effectiveBasis, effectiveUnit, pointValue(symbol), spot, undefined, scope),
+    [rows, effectiveBasis, effectiveUnit, symbol, spot, scope],
   )
   const contractsResult = useMemo(
-    () => (windowed ? computePcr(rows, 'vol', 'contracts', pointValue(symbol), spot) : null),
-    [windowed, rows, symbol, spot],
+    () =>
+      windowed
+        ? computePcr(rows, 'vol', 'contracts', pointValue(symbol), spot, undefined, scope)
+        : null,
+    [windowed, rows, symbol, spot, scope],
   )
   const topStrikes = useMemo(
-    () => (windowed ? topPremiumStrikes(rows, pointValue(symbol)) : []),
-    [windowed, rows, symbol],
+    () => (windowed ? topPremiumStrikes(rows, pointValue(symbol), 5, undefined, scope, spot) : []),
+    [windowed, rows, symbol, scope, spot],
   )
   if (rows.length === 0) return null
 
@@ -122,6 +131,18 @@ export function PcrPanel({
             </select>
           </>
         )}
+        <select
+          value={scope}
+          onChange={(event) => setScope(event.target.value as PcrScope)}
+          aria-label="Rozsah striků P/C poměru"
+          title="Jen OTM = sázky na směr (ITM strana se vynechá — její prémie je hlavně vnitřní hodnota). Čas. hodnota = mid − intrinsic, jen u Prémie $. Bez spotu se chová jako Vše."
+        >
+          {PCR_SCOPES.map((value) => (
+            <option key={value} value={value}>
+              {PCR_SCOPE_LABELS[value]}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="pcr-bar" aria-hidden="true">
         <span className="pcr-bar-put" style={{ width: `${(putShare * 100).toFixed(1)}%` }} />
@@ -146,6 +167,7 @@ export function PcrPanel({
         {windowed
           ? `Prémie $ (≈ objem okna × mid k t2) · jen Vol`
           : `${PCR_UNIT_LABELS[unit]} · ${PCR_BASIS_LABELS[basis]}`}
+        {` · ${PCR_SCOPE_LABELS[scope]}`}
         {expiry ? ` · exp ${expiry}` : ''}
       </div>
     </div>

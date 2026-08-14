@@ -14,9 +14,15 @@ import type { ProfileRow } from './bars'
 
 export type PcrBasis = 'vol_oi' | 'vol' | 'oi'
 export type PcrUnit = 'contracts' | 'premium' | 'notional'
+/** Rozsah striků (#645): ITM prémie je z velké části vnitřní hodnota, ne sázka
+na směr — „jen OTM" filtruje strany podle polohy vůči spotu, „čas. hodnota"
+počítá prémii jako mid − intrinsic (jen u jednotky Prémie $; bez spotu se obě
+volby chovají jako Vše — polohu vůči spotu nejde určit). */
+export type PcrScope = 'all' | 'otm' | 'timevalue'
 
 export const PCR_BASES: readonly PcrBasis[] = ['vol_oi', 'vol', 'oi']
 export const PCR_UNITS: readonly PcrUnit[] = ['contracts', 'premium', 'notional']
+export const PCR_SCOPES: readonly PcrScope[] = ['otm', 'all', 'timevalue']
 
 export const PCR_BASIS_LABELS: Record<PcrBasis, string> = {
   vol_oi: 'Vol + OI',
@@ -27,6 +33,11 @@ export const PCR_UNIT_LABELS: Record<PcrUnit, string> = {
   contracts: 'Kontrakty',
   premium: 'Prémie $',
   notional: 'Notional $',
+}
+export const PCR_SCOPE_LABELS: Record<PcrScope, string> = {
+  all: 'Vše',
+  otm: 'Jen OTM',
+  timevalue: 'Čas. hodnota',
 }
 
 /** Nad tímhle podílem vyloučených kontraktů je prémie zavádějící → zašedne. */
@@ -56,14 +67,22 @@ export function computePcr(
   multiplier: number,
   spot: number | null,
   staleThresholdS: number = STALE_THRESHOLD_S,
+  scope: PcrScope = 'all',
 ): PcrResult {
   let put = 0
   let call = 0
   let included = 0
   let excluded = 0
+  // Bez spotu nejde určit polohu vůči spotu — OTM i čas. hodnota degradují
+  // na Vše (poctivější než tichá nula)
+  const scoped = spot !== null && Number.isFinite(spot) ? scope : 'all'
   for (const row of rows) {
-    const callCount = sideCount(row, 'call', basis)
-    const putCount = sideCount(row, 'put', basis)
+    // Jen OTM (#645): call je sázka jen nad spotem, put pod ním — ITM strana
+    // se vynechává úplně (její prémie je převážně vnitřní hodnota)
+    const callIn = scoped !== 'otm' || row.strike > (spot as number)
+    const putIn = scoped !== 'otm' || row.strike < (spot as number)
+    const callCount = callIn ? sideCount(row, 'call', basis) : 0
+    const putCount = putIn ? sideCount(row, 'put', basis) : 0
     if (unit === 'contracts') {
       call += callCount
       put += putCount
@@ -78,18 +97,23 @@ export function computePcr(
     }
     // Prémie: mid per strana; zmrzlý/chybějící mid stranu vylučuje z výpočtu
     const stale = (row.staleAge ?? 0) > staleThresholdS
-    const callMid = !stale && (row.callMid ?? 0) > 0 ? (row.callMid ?? 0) : null
-    const putMid = !stale && (row.putMid ?? 0) > 0 ? (row.putMid ?? 0) : null
-    if (callMid !== null) {
+    let callMid = !stale && (row.callMid ?? 0) > 0 ? (row.callMid ?? 0) : null
+    let putMid = !stale && (row.putMid ?? 0) > 0 ? (row.putMid ?? 0) : null
+    // Čas. hodnota (#645): mid − intrinsic — z ITM prémie zbyde jen sázka na čas
+    if (scoped === 'timevalue' && spot !== null) {
+      if (callMid !== null) callMid = Math.max(0, callMid - Math.max(0, spot - row.strike))
+      if (putMid !== null) putMid = Math.max(0, putMid - Math.max(0, row.strike - spot))
+    }
+    if (callMid !== null && callIn) {
       call += callCount * callMid * multiplier
       included += callCount
-    } else {
+    } else if (callIn) {
       excluded += callCount
     }
-    if (putMid !== null) {
+    if (putMid !== null && putIn) {
       put += putCount * putMid * multiplier
       included += putCount
-    } else {
+    } else if (putIn) {
       excluded += putCount
     }
   }
@@ -129,20 +153,31 @@ export function topPremiumStrikes(
   multiplier: number,
   limit = 5,
   staleThresholdS = STALE_THRESHOLD_S,
+  scope: PcrScope = 'all',
+  spot: number | null = null,
 ): TopPremiumStrike[] {
   const entries: Array<{ strike: number; side: 'C' | 'P'; premium: number }> = []
   let total = 0
+  const scoped = spot !== null && Number.isFinite(spot) ? scope : 'all'
   for (const row of rows) {
     const stale = (row.staleAge ?? 0) > staleThresholdS
     if (stale) continue
-    const callMid = row.callMid ?? 0
-    const putMid = row.putMid ?? 0
-    if (callMid > 0 && row.callVolume > 0) {
+    let callMid = row.callMid ?? 0
+    let putMid = row.putMid ?? 0
+    // Táž pravidla rozsahu jako computePcr (#645) — tooltip nesmí ukazovat
+    // jiné složení než hlavní číslo
+    const callIn = scoped !== 'otm' || row.strike > (spot as number)
+    const putIn = scoped !== 'otm' || row.strike < (spot as number)
+    if (scoped === 'timevalue' && spot !== null) {
+      callMid = Math.max(0, callMid - Math.max(0, spot - row.strike))
+      putMid = Math.max(0, putMid - Math.max(0, row.strike - spot))
+    }
+    if (callIn && callMid > 0 && row.callVolume > 0) {
       const premium = row.callVolume * callMid * multiplier
       entries.push({ strike: row.strike, side: 'C', premium })
       total += premium
     }
-    if (putMid > 0 && row.putVolume > 0) {
+    if (putIn && putMid > 0 && row.putVolume > 0) {
       const premium = row.putVolume * putMid * multiplier
       entries.push({ strike: row.strike, side: 'P', premium })
       total += premium
