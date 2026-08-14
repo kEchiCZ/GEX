@@ -29,7 +29,7 @@
 <li><a href="#5-heatmapa-podrobn%C4%9B">Heatmapa podrobně</a></li>
 <li><a href="#6-cenov%C3%A1-vrstva--k%C5%99ivka-a-sv%C3%AD%C4%8Dky">Cenová vrstva — křivka a svíčky</a></li>
 <li><a href="#7-strike-profil-prav%C3%BD-panel">Strike profil (pravý panel)</a></li>
-<li><a href="#8-spodn%C3%AD-panely--vol-opt-vol-cum-%CE%B4">Spodní panely — Vol, Opt Vol, Cum Δ</a></li>
+<li><a href="#8-spodn%C3%AD-panely--vol-opt-vol-cum-%CE%B4-evo-oi">Spodní panely — Vol, Opt Vol, Cum Δ, Evo OI</a></li>
 <li><a href="#9-playback--p%C5%99ehr%C3%A1v%C3%A1n%C3%AD-dne">Playback — přehrávání dne</a></li>
 <li><a href="#10-anotace--kreslen%C3%AD-do-grafu">Anotace — kreslení do grafu</a></li>
 <li><a href="#11-dashboard">Dashboard</a> · <a href="#11b-%C5%99et%C4%9Bz--greeks--oi-tabulka">11b. Řetěz</a> · <a href="#11c-news-a-sentiment-sentimentlens">11c. News a sentiment</a> · <a href="#11d-sign%C3%A1ly-a-stats">11d. Signály a Stats</a> · <a href="#11e-den%C3%ADk-tradera-a-traders-mode">11e. Deník a Traders mode</a> · <a href="#11f-rann%C3%AD-briefing-sidebar--briefing">11f. Ranní briefing</a></li>
@@ -272,8 +272,43 @@ tedy vždy uvidíš dvě čáry bez ohledu na to, jak silný den je:</p>
 <li><strong>Major</strong> — úrovně 65 % a 95 % — jen jádra koncentrací</li>
 <li><strong>All</strong> — úrovně 40 % a 70 % — širší obrys struktury</li>
 </ul>
+<p><strong>Major a All nejsou „důležité vs. všechny&quot; úrovně — je to jen posun obou
+prahů.</strong> Major kreslí užší obrys kolem nejsilnějších jader, All zachytí i
+střední zóny. Počet čar je v obou případech stejný (dvě na stranu).</p>
+<p><strong>Nad čím se kontury počítají:</strong> vždy nad <strong>právě zobrazeným polem</strong>, ne nad
+vlastním datovým zdrojem. Se zapnutou Dyn plochou obrysují modelované pole,
+jinak měřený grid podle zvoleného Mode. Proto sedí na barvy — používají týž
+jmenovatel (p99) jako barevná škála.</p>
+<p><strong>Jak číst:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Kde je cena</th>
+<th>Co to znamená</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>nad oběma</strong> čarami</td>
+<td>uvnitř tlumící zóny — výkyvy se zaplácnou</td>
+</tr>
+<tr>
+<td><strong>mezi čarami</strong></td>
+<td>přechodové pásmo, tlumení slábne</td>
+</tr>
+<tr>
+<td><strong>pod oběma</strong></td>
+<td>mimo zónu — pohyb se rozjede snáz</td>
+</tr>
+</tbody></table>
 <p>Vzdálenost obou čar nese informaci: <strong>čím blíž jsou u sebe, tím ostřejší je
-přechod</strong> mezi „drží&quot; a „pustilo&quot; (čtení v kap. 18).</p>
+přechod</strong> mezi „drží&quot; a „pustilo&quot; (podrobné čtení v kap. 18). Kontury jsou
+<strong>doplněk ke zdem, ne samostatný signál</strong>: zdi říkají <em>kde</em> je hranice,
+kontury <em>jak ostrá</em> je.</p>
+<blockquote>
+<p><strong>Pozor na záměnu:</strong> kontury i <strong>Walls módy</strong> kreslí stejným stylem (bílá
+čárkovaná). Rozeznáš je podle tvaru — kontury jsou uzavřené křivky kolem
+koncentrací, walls jsou linie vedené zleva doprava.</p>
+</blockquote>
 <h3>Linie v heatmapě (overlaye)</h3>
 <table>
 <thead>
@@ -412,8 +447,8 @@ zašedne s vysvětlením, aby prémie nelhala.</p>
 <p><strong>Proč večer „zmizí&quot; jedna strana pruhů?</strong> Pruhy jsou <strong>Δ-vážené</strong> — násobí se deltou opce (kolik futures dealer na kontrakt reálně drží). Ke konci seance se delta polarizuje (viz gamma crunch, kap. 18): OTM opce mají deltu skoro 0, ITM skoro 1. Nad spotem proto zbývají hlavně červené (ITM puty) a pod spotem zelené (ITM cally). Není to chyba — surové OI/Vol obou stran pořád vidíš v tooltipu řádku; zapnutím <strong>Σ</strong> se přimíchá zítřejší expirace s měkčími deltami a obě strany se zase objeví.</p>
 </blockquote>
 <hr>
-<h2>8. Spodní panely — Vol, Opt Vol, Cum Δ</h2>
-<p>Tři panely se <strong>sdílenou časovou osou</strong> s heatmapou. Každý zvlášť vypneš checkboxem v horní liště (Vol / Opt Vol / Delta).</p>
+<h2>8. Spodní panely — Vol, Opt Vol, Cum Δ, Evo OI</h2>
+<p>Panely se <strong>sdílenou časovou osou</strong> s heatmapou. Každý zvlášť vypneš checkboxem v horní liště (Vol / Opt Vol / Delta / Δ Flow C/P / Evo OI).</p>
 <table>
 <thead>
 <tr>
@@ -439,7 +474,7 @@ zašedne s vysvětlením, aby prémie nelhala.</p>
 </tr>
 <tr>
 <td><strong>Evo OI</strong></td>
-<td>Vývoj celkového Open Interest v čase, zvlášť call (teal) a put (červená), <strong>schodovité kreslení</strong> (OI se mění skokem při archivu, ne spojitě). Tlačítko <strong>Δ</strong> přepíná absolutní hodnotu vs. změnu od začátku dne. V Daily ose = hodnota na konci každého dne. Default vypnutý (checkbox Evo OI).</td>
+<td>Vývoj celkového Open Interest v čase, zvlášť call (teal) a put (červená), <strong>schodovité kreslení</strong>. V Daily ose = hodnota na konci každého dne. Default vypnutý (checkbox Evo OI). Podrobně níže.</td>
 </tr>
 <tr>
 <td><strong>Sentiment</strong></td>
@@ -451,6 +486,46 @@ zašedne s vysvětlením, aby prémie nelhala.</p>
 <li><strong>vpravo nahoře</strong> hodnotu pro <strong>minutu pod crosshairem</strong> (Opt Vol a Δ Flow zvlášť C/P);</li>
 <li><strong>vpravo na ose Y</strong> hodnotu podle <strong>výškové úrovně kurzoru</strong> (ne max daného času) + <strong>vodorovnou crosshair linku</strong> na té úrovni. U Cum Δ je škála znaménková kolem nuly.</li>
 </ul>
+<h3>Evo OI podrobně — budují se pozice, nebo zavírají?</h3>
+<p><strong>„Evo&quot; = evolution, tedy vývoj.</strong> Panel je prostý součet Open Interestu přes
+všechny striky vybrané expirace, minutu po minutě — teal call, červená put.
+Jednotkou jsou <strong>kontrakty</strong>.</p>
+<p><strong>Trojúhelníkový glyf u nadpisu je tlačítko, ne značka v grafu.</strong> Je to
+velké řecké <strong>Δ</strong> a přepíná režim svislé osy:</p>
+<table>
+<thead>
+<tr>
+<th>Režim</th>
+<th>Co osa ukazuje</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Δ</strong> (výchozí)</td>
+<td><strong>změnu od začátku osy</strong> — křivka startuje na nule, hodnoty se znaménkem (<code>+30</code>, <code>−10</code>)</td>
+</tr>
+<tr>
+<td><strong>abs</strong></td>
+<td><strong>absolutní úroveň</strong> OI v kontraktech</td>
+</tr>
+</tbody></table>
+<p>Výchozí je Δ proto, že celkové OI se za den mění řádově o promile — v
+absolutní škále by obě linky vypadaly jako rovné čáry a panel by nenesl
+žádnou informaci.</p>
+<p><strong>K čemu to je:</strong> objem sám o sobě neřekne, jestli obchod pozici <strong>otevřel,
+nebo zavřel</strong>. To dopoví až OI. Proto se Evo OI čte <strong>vedle</strong> panelů Opt Vol
+a Δ Flow, ne samostatně:</p>
+<ul>
+<li>objem roste <strong>a OI roste</strong> → pozice se <strong>budují</strong>, zeď se staví;</li>
+<li>objem roste <strong>a OI klesá</strong> → <strong>zavírání</strong>, zeď se rozpouští.</li>
+</ul>
+<blockquote>
+<p><strong>Plochý úsek neznamená „nic se neděje&quot;.</strong> OI chodí z IBKR přes tick 101
+jen občas (viz ADR-0001), a schodovité kreslení je záměr — šikmá spojnice
+by si vymýšlela průběh, který jsme nenaměřili. Vodorovný úsek tedy čti jako
+<strong>„od posledního snímku nepřišla aktualizace&quot;</strong>.</p>
+</blockquote>
+<p>Panel vždy ukazuje <strong>měřené OI</strong>; přepínač Měřené / FA odhad s ním nehýbe
+(ten se týká heatmapy a strike profilu).</p>
 <hr>
 <h2>9. Playback — přehrávání dne</h2>
 <p><strong>Aplikace defaultně jede vždy live</strong> — replay lišta je skrytá, aby nerušila. Zobrazíš ji tlačítkem <strong>⏮ Replay</strong> v liště grafu:</p>
@@ -679,15 +754,26 @@ karty → ☀ → dopsat tezi.</p>
 <h2>12. IBKR Console</h2>
 <p>Diagnostická obrazovka:</p>
 <ul>
-<li><strong>Připojení</strong> — host/port/client ID, tlačítko <strong>Reconnect</strong> (vyžádá znovupřipojení enginu), aktuální stav spojení</li>
+<li><strong>Připojení</strong> — host/port/client ID a aktuální stav spojení. Tlačítko
+Reconnect už tu není: engine se přepojuje sám, ruční tlačítko jen mátlo.</li>
 <li><strong>Subskripce</strong> — průběh Greeks (X/Y), velikost repair fronty, vytížení market data lines</li>
-<li><strong>Log</strong> — chronologický záznam událostí (změny stavu spojení, alerty)</li>
+<li><strong>Log</strong> — chronologický záznam <strong>událostí přijatých v prohlížeči</strong> (změny
+stavu spojení, alerty). <strong>Není to log enginu</strong> a po obnovení stránky je
+prázdný — serverové logy hledej v kontejneru (viz ADMIN-MANUAL).</li>
 </ul>
 <p>Sem se podívej jako první, když něco nevypadá dobře.</p>
+<blockquote>
+<p><strong>Poznámka:</strong> host/port/client ID najdeš i v Settings → IBKR a průběh
+Greeks / repair / lines i ve stavové liště (kap. 15). Tahle duplicita je
+známá a obrazovka se bude slučovat do Settings.</p>
+</blockquote>
 <p><img src="img/console.png" alt="IBKR Console"></p>
 <hr>
 <h2>13. Settings</h2>
-<p>Změny se <strong>ukládají okamžitě</strong> (bez tlačítka Uložit) a engine si je průběžně přebírá:</p>
+<p>Formulář se vyplní, zkontroluje a odešle tlačítkem <strong>Uložit</strong> — rozepsaná
+hodnota se do enginu nedostane (dřív se ukládalo po každé klávese, což při
+psaní „150&quot; poslalo do enginu i „1&quot; a „15&quot;). Výjimkou je téma Dark/Light,
+které se přepne hned.</p>
 <table>
 <thead>
 <tr>
@@ -700,7 +786,7 @@ karty → ☀ → dopsat tezi.</p>
 <td>Host, port (7496 live / 7497 paper), client ID</td>
 </tr>
 <tr>
-<td><strong>Engine</strong></td>
+<td><strong>Engine (IBKR pipeline)</strong></td>
 <td><strong>Rozsah strikes (± body od spotu)</strong> — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB)</td>
 </tr>
 <tr>
@@ -720,6 +806,16 @@ karty → ☀ → dopsat tezi.</p>
 <td>Historické pole (JSON) — markery seancí se nově generují <strong>automaticky</strong> z časů světových burz; checkbox Sessions v grafu</td>
 </tr>
 </tbody></table>
+<blockquote>
+<p><strong>Sekce Engine se týká výhradně IBKR.</strong> Velikost dávky i šířka hot zóny
+jsou odvozené od limitů tvého IBKR účtu (100 market data lines, 5
+tick-by-tick streamů — ADR-0001), rozsah strikes řídí rotační sweep přes
+IBKR. <strong>Nastavení pro tastytrade v Settings zatím není</strong> a být nemůže:
+tastytrade dnes běží jako tichá měřicí větev, která data nikam nepublikuje,
+jen porovnává s IBKR do tabulky <code>feed_comparison</code>. Zapíná se proměnnými v
+<code>.env</code> a vyžaduje restart enginu (viz ADMIN-MANUAL). Sekce v Settings
+přibude, až se tastytrade stane plnohodnotným zdrojem dat.</p>
+</blockquote>
 <p><img src="img/settings.png" alt="Settings"></p>
 <p>Light téma:</p>
 <p><img src="img/light.png" alt="Light téma"></p>
@@ -1032,11 +1128,43 @@ To v realitě neplatí — <strong>čím dál doprava, tím spekulativnější</
 solidní, za měsíc náčrt). <strong>Ostré útesy u expirací jsou spolehlivější než
 absolutní čísla:</strong> že po expiraci struktura zmizí, je jistota daná
 kalendářem; přesná síla pásma je odhad.</p>
-<p><strong>Jednotka:</strong> plocha se zobrazuje v <strong>$/1 %</strong> (přepínač Jednotka) — každá
-cenová hladina je vážená P²/100, tedy „kolik dolarů podkladu dealeři
-přeobchodují při pohybu o 1 %&quot;. Vyšší hladiny mají přirozeně větší váhu;
-$/bod je surové pole bez váhy (obě varianty ukazují tutéž strukturu, liší
-se důrazem).</p>
+<p><strong>Jednotka ($/bod vs. $/1 %).</strong> Engine počítá a ukládá vždycky jen surové
+<strong>$/bod</strong>; přepínač <strong>Jednotka</strong> v řádku přepínačů je čistě zobrazovací a
+objeví se jen se zapnutou Dyn plochou.</p>
+<table>
+<thead>
+<tr>
+<th>Jednotka</th>
+<th>Jak ji číst</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>$/bod</strong></td>
+<td>kolik dolarů gamma expozice připadá na <strong>1 bod</strong> pohybu podkladu — surová, mechanická veličina</td>
+</tr>
+<tr>
+<td><strong>$/1 %</strong> (výchozí)</td>
+<td>kolik dolarů podkladu musí dealeři <strong>přeobchodovat při pohybu o 1 %</strong></td>
+</tr>
+</tbody></table>
+<p>Převod <strong>není</strong> dělení stem, ale váha <strong>P²/100</strong>, kde P je cena dané cenové
+hladiny (ne spot). Dvě P v tom jsou proto, že 1 % je P/100 bodů (první P) a
+delta se ještě převádí z kusů na dolary notional (druhé P). Vyšší hladiny
+tak mají přirozeně větší váhu. <strong>$/1 %</strong> je výchozí, protože je srovnatelná
+napříč cenovými hladinami i napříč dny s různou úrovní indexu.</p>
+<p>Obě varianty ukazují <strong>tutéž strukturu</strong>, liší se jen důrazem — <strong>znaménka
+ani poloha flipu se přepnutím nemění</strong>.</p>
+<blockquote>
+<p><strong>Co přepínač NEovlivňuje:</strong> zdi, GEX levels, flip a setupy. Ty se počítají
+z měřeného pole a zůstávají v původních jednotkách. Přepínač působí na Dyn
+plochu (GEX / Charm / Vanna) a na GEX křivku ve strike profilu.</p>
+</blockquote>
+<blockquote>
+<p><strong>Nezaměň s druhým „Jednotkou&quot;.</strong> Pod strike profilem dole je vlastní
+přepínač <strong>Jednotka P/C poměru</strong> (kontrakty / prémie / notional, kap. 7) —
+jiná věc, jen shodou okolností stejné slovo. Přepínač jednotek Dyn GEX je
+jediný a je nahoře v liště přepínačů.</p>
+</blockquote>
 <p><strong>Postup čtení odshora dolů:</strong></p>
 <ol>
 <li>najdi předěl <strong>Today/projekce</strong> — vpravo od něj nejsou data, ale model,</li>
@@ -1210,6 +1338,18 @@ se staré setupy nemíchají do statistik nových.</li>
 <tr>
 <td><strong>ΔOI vs. včera</strong></td>
 <td>Změna OI proti předchozímu dni — kde přes noc vznikly/zanikly pozice.</td>
+</tr>
+<tr>
+<td><strong>Evo OI</strong></td>
+<td><em>Evolution</em> = vývoj. Spodní panel s celkovým OI (call/put) minutu po minutě. Spolu s objemem rozliší, jestli se pozice <strong>budují</strong> (objem ↑, OI ↑), nebo <strong>zavírají</strong> (objem ↑, OI ↓). Tlačítko Δ přepíná změnu od začátku osy vs. absolutní úroveň.</td>
+</tr>
+<tr>
+<td><strong>Contours (kontury)</strong></td>
+<td>Bílé izolinie nad zobrazeným polem na prazích % síly z p99 (Major 65/95, All 40/70, vždy dvě na stranu). Říkají, <strong>jak ostrá</strong> je hranice tlumící zóny — zdi říkají <em>kde</em>, kontury <em>jak ostře</em>.</td>
+</tr>
+<tr>
+<td><strong>$/bod vs. $/1 %</strong></td>
+<td>Jednotka Dyn ploch a GEX křivky. $/bod = surové pole (gamma expozice na 1 bod pohybu). $/1 % = totéž vážené P²/100 — kolik dolarů dealeři přeobchodují při 1% pohybu; srovnatelné napříč cenovými hladinami, proto výchozí. Zdi, levels ani flip přepínač nemění.</td>
 </tr>
 <tr>
 <td><strong>Δ Flow C/P</strong></td>
