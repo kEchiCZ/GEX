@@ -6,6 +6,7 @@ import {
   minuteIndexFor,
   rangeBuckets,
   rangeLabel,
+  reactionWindow,
   windowCumDelta,
   windowProfileRows,
 } from './rangeselect'
@@ -117,5 +118,29 @@ describe('URL round-trip', () => {
     expect(rangeLabel({ fromIso: '2026-08-13T15:00:00Z', toIso: '2026-08-13T15:30:00Z' })).toMatch(
       /^\d{2}:\d{2}–\d{2}:\d{2}$/,
     )
+  })
+})
+
+describe('reactionWindow (#488)', () => {
+  const event = '2026-08-13T14:30:00Z'
+
+  it('uzavřené okno: ts_event → +15 min', () => {
+    const result = reactionWindow(event, 15, '2026-08-13T16:00:00Z')
+    expect(result).toEqual({
+      range: { fromIso: '2026-08-13T14:30:00.000Z', toIso: '2026-08-13T14:45:00.000Z' },
+      open: false,
+    })
+  })
+
+  it('běžící okno se clampne na živou hranu a označí open', () => {
+    const result = reactionWindow(event, 60, '2026-08-13T15:00:00Z')
+    expect(result?.range.toIso).toBe('2026-08-13T15:00:00.000Z')
+    expect(result?.open).toBe(true)
+  })
+
+  it('event za hranou dat / nevalidní vstup → null', () => {
+    expect(reactionWindow(event, 15, '2026-08-13T14:00:00Z')).toBeNull() // data končí před eventem
+    expect(reactionWindow(event, 15, null)).toBeNull()
+    expect(reactionWindow('nesmysl', 15, '2026-08-13T16:00:00Z')).toBeNull()
   })
 })

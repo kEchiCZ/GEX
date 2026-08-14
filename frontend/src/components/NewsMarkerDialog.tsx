@@ -8,6 +8,7 @@ tvrdit něco jiného, než co uživatel vidí v grafu.
 import { useEffect } from 'react'
 import { categoryGlyph, categoryLabel, countdownLabel } from '../api/news'
 import type { NewsRow } from '../api/news'
+import { REACTION_RANGE_MINUTES } from '../instrument/rangeselect'
 import { expectedImpact } from '../heatmap/newsMarkers'
 import type { NewsMarker } from '../heatmap/newsMarkers'
 
@@ -43,7 +44,17 @@ function importanceMark(importance: number | null): string {
   return '!'.repeat(Math.min(3, Math.max(1, importance ?? 1)))
 }
 
-export function NewsMarkerDialog({ marker, onClose }: { marker: NewsMarker; onClose: () => void }) {
+export function NewsMarkerDialog({
+  marker,
+  onClose,
+  onSetRange,
+}: {
+  marker: NewsMarker
+  onClose: () => void
+  /** Range na reakční okno zprávy (#488): ts_event → +minut (okna 15/60 jako
+      `news_reactions`). Bez handleru se tlačítka nekreslí (Daily pohled). */
+  onSetRange?: (row: NewsRow, minutes: number) => void
+}) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
@@ -94,6 +105,22 @@ export function NewsMarkerDialog({ marker, onClose }: { marker: NewsMarker; onCl
                 <p className="news-dialog-title">{row.title}</p>
                 {row.summary && <p className="muted news-dialog-summary">{row.summary}</p>}
                 <ScheduledNumbers row={row} />
+                {/* Range na reakční okno (#488) — u budoucích eventů okno ještě
+                    neexistuje, tlačítka nemají co vybrat */}
+                {onSetRange && !marker.upcoming && (
+                  <div className="news-dialog-range">
+                    {REACTION_RANGE_MINUTES.map((minutes) => (
+                      <button
+                        key={minutes}
+                        className="chip"
+                        onClick={() => onSetRange(row, minutes)}
+                        title={`Nastaví okno ${minutes} min od události — profil a P/C ukážou, co se v reakci zobchodovalo (stejné okno jako měřené reakce)`}
+                      >
+                        ⧉ +{minutes} min
+                      </button>
+                    ))}
+                  </div>
+                )}
               </li>
             ))}
           </ul>

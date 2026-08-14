@@ -110,3 +110,31 @@ export function rangeLabel(range: RangeSelection): string {
     new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
   return `${fmt(range.fromIso)}–${fmt(range.toIso)}`
 }
+
+/** Reakční okno zprávy (#488): ts_event → ts_event + minut, clamp na živou hranu.
+
+Okna 15/60 min jsou TATÁŽ okna jako `news_reactions` (sentiment-SPEC 2.2) —
+žádný duplicitní výpočet. `open` = okno ještě běží (t2 spadlo za poslední
+minutu dat) — chip range to přizná místo tichého ořezu.
+*/
+export const REACTION_RANGE_MINUTES = [15, 60] as const
+
+export function reactionWindow(
+  tsEventIso: string,
+  minutes: number,
+  lastDataIso: string | null,
+): { range: RangeSelection; open: boolean } | null {
+  const start = Date.parse(tsEventIso)
+  if (Number.isNaN(start) || minutes <= 0) return null
+  const end = start + minutes * 60_000
+  const lastData = lastDataIso === null ? Number.NaN : Date.parse(lastDataIso)
+  if (Number.isNaN(lastData) || lastData <= start) return null // okno nemá žádná data
+  const open = end > lastData
+  return {
+    range: {
+      fromIso: new Date(start).toISOString(),
+      toIso: new Date(Math.min(end, lastData)).toISOString(),
+    },
+    open,
+  }
+}

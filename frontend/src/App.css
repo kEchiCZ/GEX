@@ -2127,3 +2127,10 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
 .range-preset-select {
   max-width: 110px;
 }
+
+/* Range z news markeru (#488) */
+.news-dialog-range {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
