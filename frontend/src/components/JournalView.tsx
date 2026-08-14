@@ -21,10 +21,23 @@ import {
   realizedR,
   updateJournalEntry,
 } from '../api/journal'
-import type { JournalEntry, JournalMeta, JournalProfile, JournalType } from '../api/journal'
+import { fetchPlaybook } from '../api/journal'
+import type {
+  JournalEntry,
+  JournalMeta,
+  JournalProfile,
+  JournalType,
+  PlaybookItem,
+} from '../api/journal'
+import { fetchSetups, templateLabel } from '../api/setups'
+import type { SetupRow } from '../api/setups'
 import { useAppState } from '../state/AppState'
+
+/** Okno, ve kterém se detekovaný setup ještě považuje za „k této minutě". */
+const SETUP_MATCH_MS = 15 * 60 * 1000
 import { EMPTY_TRADE, draftToTrade, tradeToDraft } from '../journal/trade'
 import type { TradeDraft } from '../journal/trade'
+import { JournalPlaybook } from './JournalPlaybook'
 import { JournalTradeFields } from './JournalTradeFields'
 
 const PROFILES: JournalProfile[] = ['smb', 'futures']
@@ -65,10 +78,12 @@ function EntryCard({
   entry,
   onChanged,
   mistakeTags,
+  playbook,
 }: {
   entry: JournalEntry
   onChanged: () => void
   mistakeTags: string[]
+  playbook: PlaybookItem[]
 }) {
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(entry.text)
@@ -121,7 +136,12 @@ function EntryCard({
         <>
           <textarea value={text} onChange={(event) => setText(event.target.value)} rows={4} />
           {trade && (
-            <JournalTradeFields draft={trade} onChange={setTrade} mistakeTags={mistakeTags} />
+            <JournalTradeFields
+              draft={trade}
+              onChange={setTrade}
+              mistakeTags={mistakeTags}
+              playbook={playbook}
+            />
           )}
           <button className="chip" onClick={() => void save()} disabled={text.trim() === ''}>
             Uložit
@@ -154,11 +174,34 @@ export function JournalView() {
   const [formTags, setFormTags] = useState('')
   const [formError, setFormError] = useState('')
   const [trade, setTrade] = useState<TradeDraft>(EMPTY_TRADE)
+  const [playbook, setPlaybook] = useState<PlaybookItem[]>([])
+  const [setups, setSetups] = useState<SetupRow[]>([])
+  const [showPlaybook, setShowPlaybook] = useState(false)
   // null = uživatel profil neměnil, drží se odvození ze symbolu
   const [profileOverride, setProfileOverride] = useState<JournalProfile | null>(null)
 
   const profile = profileOverride ?? defaultProfile(symbol)
   const mistakeTags = useMemo(() => meta?.mistake_tags ?? [], [meta])
+  // Setupy nabízené playbookem: profil filtruje, `both` platí vždy
+  const profilePlaybook = useMemo(
+    () => playbook.filter((item) => item.profile === 'both' || item.profile === profile),
+    [playbook, profile],
+  )
+  // Detektor v okolí zapisované minuty (#710) — nabídne předvyplnění plánu
+  const nearbySetup = useMemo(() => {
+    const target = new Date(formTs).getTime()
+    if (!Number.isFinite(target)) return null
+    let best: SetupRow | null = null
+    let bestDelta = SETUP_MATCH_MS
+    for (const row of setups) {
+      const delta = Math.abs(new Date(row.created_ts).getTime() - target)
+      if (delta <= bestDelta) {
+        best = row
+        bestDelta = delta
+      }
+    }
+    return best
+  }, [setups, formTs])
   const symbolOptions = useMemo(() => {
     const known = new Set(meta?.symbols ?? [])
     known.add(symbol)
@@ -182,6 +225,14 @@ export function JournalView() {
   }, [entries.length])
 
   useEffect(() => {
+    void fetchPlaybook().then(setPlaybook)
+  }, [])
+
+  useEffect(() => {
+    void fetchSetups(symbol).then(setSetups)
+  }, [symbol])
+
+  useEffect(() => {
     if (journalDraft) {
       setFormTs(toLocalInput(journalDraft.tsRef))
       // Briefing (#674) předvyplní kostru ranního plánu
@@ -197,6 +248,10 @@ export function JournalView() {
   const submit = async (typeOverride?: JournalType, extraTag?: string) => {
     if (formText.trim() === '') return
     const entryType = typeOverride ?? formType
+    if (entryType === 'obchod' && trade.setupKey === '') {
+      setFormError('Vyber setup z playbooku — bez něj nejde obchody porovnávat.')
+      return
+    }
     const tags = formTags
       .split(',')
       .map((tag) => tag.trim().replace(/^#/, ''))
@@ -210,6 +265,9 @@ export function JournalView() {
       tags,
       profile,
       ...(entryType === 'obchod' ? { trade: draftToTrade(trade) } : {}),
+      // Vazba na detekovaný setup — sloupec existoval od fáze A a nikdy se
+      // neplnil; bez něj nejde odpovědět „vzal jsem ho, nebo přeskočil?" (#627)
+      ...(nearbySetup ? { setup_id: nearbySetup.id } : {}),
     })
     if (created) {
       setFormText('')
@@ -286,8 +344,36 @@ export function JournalView() {
           rows={3}
           aria-label="Text záznamu"
         />
+        {nearbySetup && (
+          <p className="journal-nearby muted">
+            Detektor tu nabídl <strong>{templateLabel(nearbySetup.template)}</strong> (
+            {nearbySetup.direction === 'long' ? 'long' : 'short'}, vstup {nearbySetup.entry}).
+            {formType === 'obchod' && (
+              <button
+                type="button"
+                className="chip"
+                onClick={() =>
+                  setTrade((current) => ({
+                    ...current,
+                    direction: nearbySetup.direction,
+                    plannedEntry: String(nearbySetup.entry),
+                    plannedStop: String(nearbySetup.stop),
+                    plannedTarget: String(nearbySetup.target),
+                  }))
+                }
+              >
+                Převzít plán
+              </button>
+            )}
+          </p>
+        )}
         {formType === 'obchod' && (
-          <JournalTradeFields draft={trade} onChange={setTrade} mistakeTags={mistakeTags} />
+          <JournalTradeFields
+            draft={trade}
+            onChange={setTrade}
+            mistakeTags={mistakeTags}
+            playbook={profilePlaybook}
+          />
         )}
         {formError !== '' && <p className="journal-error">{formError}</p>}
         <div className="journal-form-row">
@@ -313,6 +399,13 @@ export function JournalView() {
           </button>
         </div>
       </section>
+
+      {showPlaybook && (
+        <JournalPlaybook
+          items={playbook}
+          onChanged={() => void fetchPlaybook(true).then(setPlaybook)}
+        />
+      )}
 
       <section className="journal-list" aria-label="Záznamy">
         <div className="journal-form-row">
@@ -361,6 +454,18 @@ export function JournalView() {
           <button className="chip" onClick={exportMd} disabled={entries.length === 0}>
             ⬇ Export MD
           </button>
+          <button
+            className={showPlaybook ? 'chip active' : 'chip'}
+            onClick={() => {
+              // Při otevření dotáhnout i vyřazené, ať jdou vrátit zpět
+              if (!showPlaybook) void fetchPlaybook(true).then(setPlaybook)
+              else void fetchPlaybook().then(setPlaybook)
+              setShowPlaybook((value) => !value)
+            }}
+            aria-pressed={showPlaybook}
+          >
+            PlayBook
+          </button>
         </div>
         {entries.length === 0 ? (
           <p className="muted">
@@ -369,7 +474,13 @@ export function JournalView() {
           </p>
         ) : (
           entries.map((entry) => (
-            <EntryCard key={entry.id} entry={entry} onChanged={reload} mistakeTags={mistakeTags} />
+            <EntryCard
+              key={entry.id}
+              entry={entry}
+              onChanged={reload}
+              mistakeTags={mistakeTags}
+              playbook={playbook}
+            />
           ))
         )}
       </section>

@@ -649,6 +649,7 @@ def test_journal_profil_a_obchod(client: TestClient) -> None:
         "planned_entry": 6810.0,
         "planned_stop": 6813.0,
         "planned_target": 6798.0,
+        "setup_key": "wall_bounce",  # povinné od #710
         "setup_grade": "A",
         "execution_grade": "B",
         "mistake_tags": ["late_exit"],
@@ -722,6 +723,87 @@ def test_journal_neexistujici_id_vraci_404(client: TestClient) -> None:
     """PATCH/DELETE nad chybějícím id vracely 500 (#707) — sousední routy 404."""
     assert client.patch("/journal/424242", json={"text": "nic"}).status_code == 404
     assert client.delete("/journal/424242").status_code == 404
+
+
+def test_playbook_setupu(client: TestClient) -> None:
+    """PlayBook (#710): výchozí sada, CRUD, vyřazení místo mazání."""
+    listed = client.get("/playbook").json()["playbook"]
+    keys = {item["key"] for item in listed}
+    # Prázdný playbook by znamenal, že obchod nejde uložit (setup je povinný)
+    assert "wall_bounce" in keys
+    assert all(item["active"] for item in listed)
+    # Klíče se kryjí se šablonami detektoru, ať jde srovnat nabídnuté vs. vzaté
+    assert {"failed_break", "max_pain_pin", "gamma_momentum"} <= keys
+
+    created = client.post(
+        "/playbook",
+        json={
+            "key": "vwap_reclaim",
+            "name": "Návrat nad VWAP",
+            "profile": "futures",
+            "thesis": "Znovudobytí VWAP obrací intradenní bias.",
+        },
+    )
+    assert created.status_code == 201
+    item_id = created.json()["id"]
+    # Klíč je unikátní
+    assert (
+        client.post("/playbook", json={"key": "vwap_reclaim", "name": "Duplicita"}).status_code
+        == 409
+    )
+    assert client.post("/playbook", json={"key": "Velké Písmeno", "name": "x"}).status_code == 422
+    assert (
+        client.post("/playbook", json={"key": "ok_key", "name": "x", "profile": "nic"}).status_code
+        == 422
+    )
+
+    patched = client.patch(f"/playbook/{item_id}", json={"name": "VWAP reclaim"})
+    assert patched.status_code == 200
+    assert patched.json()["name"] == "VWAP reclaim"
+    assert client.patch("/playbook/424242", json={"name": "x"}).status_code == 404
+
+    # Vyřazení = active=false, ne DELETE — historické záznamy na setup odkazují
+    assert client.patch(f"/playbook/{item_id}", json={"active": False}).status_code == 200
+    active_keys = {item["key"] for item in client.get("/playbook").json()["playbook"]}
+    assert "vwap_reclaim" not in active_keys
+    all_keys = {
+        item["key"]
+        for item in client.get("/playbook", params={"include_inactive": True}).json()["playbook"]
+    }
+    assert "vwap_reclaim" in all_keys
+
+
+def test_obchod_vyzaduje_setup_z_playbooku(client: TestClient) -> None:
+    """Bez pojmenovaného setupu není co agregovat (#710)."""
+    base = {
+        "ts_ref": "2026-07-16T14:30:00Z",
+        "symbol": "ES",
+        "entry_type": "obchod",
+        "text": "Fade zdi.",
+    }
+    trade = {"direction": "short", "planned_entry": 6810.0, "planned_stop": 6813.0}
+
+    assert client.post("/journal", json={**base, "trade": trade}).status_code == 422
+    assert (
+        client.post(
+            "/journal", json={**base, "trade": {**trade, "setup_key": "vymyslene"}}
+        ).status_code
+        == 422
+    )
+    ok = client.post("/journal", json={**base, "trade": {**trade, "setup_key": "wall_bounce"}})
+    assert ok.status_code == 201
+    assert ok.json()["trade"]["setup_key"] == "wall_bounce"
+
+    # Vyřazený setup se k novému obchodu už použít nedá
+    items = client.get("/playbook").json()["playbook"]
+    wall = next(item for item in items if item["key"] == "wall_bounce")
+    client.patch(f"/playbook/{wall['id']}", json={"active": False})
+    assert (
+        client.post(
+            "/journal", json={**base, "trade": {**trade, "setup_key": "wall_bounce"}}
+        ).status_code
+        == 422
+    )
 
 
 def test_bars_endpoint(client: TestClient) -> None:

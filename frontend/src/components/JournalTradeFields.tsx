@@ -4,7 +4,7 @@ Kvalita setupu a exekuce se známkuje ODDĚLENĚ od výsledku (SMB, Steenbarger)
 — dobrý obchod a ziskový obchod jsou dvě různé věci, proto formulář u známek
 žádné P/L neukazuje. Převody rozepsaných hodnot jsou v `journal/trade.ts`.
 */
-import type { JournalGrade, JournalTrade, TradeDirection } from '../api/journal'
+import type { JournalGrade, JournalTrade, PlaybookItem, TradeDirection } from '../api/journal'
 import { mistakeLabel, plannedRR } from '../api/journal'
 import { draftToTrade } from '../journal/trade'
 import type { TradeDraft } from '../journal/trade'
@@ -15,10 +15,12 @@ export function JournalTradeFields({
   draft,
   onChange,
   mistakeTags,
+  playbook,
 }: {
   draft: TradeDraft
   onChange: (draft: TradeDraft) => void
   mistakeTags: string[]
+  playbook: PlaybookItem[]
 }) {
   const set = <K extends keyof TradeDraft>(key: K, value: TradeDraft[K]) =>
     onChange({ ...draft, [key]: value })
@@ -36,6 +38,20 @@ export function JournalTradeFields({
   return (
     <fieldset className="journal-trade" aria-label="Obchod">
       <div className="journal-form-row">
+        {/* Setup je povinný — bez něj není co agregovat (#710) */}
+        <select
+          value={draft.setupKey}
+          onChange={(event) => set('setupKey', event.target.value)}
+          aria-label="Setup z playbooku"
+          title="Obchoduje se jen to, co je v playbooku"
+        >
+          <option value="">— vyber setup —</option>
+          {playbook.map((item) => (
+            <option key={item.key} value={item.key}>
+              {item.name}
+            </option>
+          ))}
+        </select>
         <select
           value={draft.direction}
           onChange={(event) => set('direction', event.target.value as TradeDirection)}

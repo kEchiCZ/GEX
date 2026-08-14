@@ -14,6 +14,7 @@ from gexlens_engine.storage.meta import (
     JOURNAL_PROFILES,
     JOURNAL_TYPES,
     MISTAKE_TAGS,
+    PLAYBOOK_SCOPES,
     TRADE_DIRECTIONS,
     default_profile,
 )
@@ -146,6 +147,13 @@ def build_router(repository: MetaRepository) -> APIRouter:
     def _validated_trade(trade: JournalTrade) -> dict[str, Any]:
         if trade.direction not in TRADE_DIRECTIONS:
             raise HTTPException(422, f"direction musí být jeden z {TRADE_DIRECTIONS}")
+        # Setup je povinný (#710): bez pojmenovaného setupu není co agregovat
+        # — všechny statistiky z #714 na tom stojí.
+        if not trade.setup_key:
+            raise HTTPException(422, "Obchod musí mít setup z playbooku")
+        known = repository.playbook_keys()
+        if trade.setup_key not in known:
+            raise HTTPException(422, f"Neznámý setup {trade.setup_key!r} (není v playbooku)")
         for label, grade in (
             ("setup_grade", trade.setup_grade),
             ("execution_grade", trade.execution_grade),
@@ -189,6 +197,58 @@ def build_router(repository: MetaRepository) -> APIRouter:
             "mistake_tags": list(MISTAKE_TAGS),
             "symbols": repository.journal_symbols(),
         }
+
+    # ── PlayBook setupů (#710) ─────────────────────────────────────
+
+    class PlaybookItem(BaseModel):
+        """Karta setupu: podmínky vstupu, invalidace, management."""
+
+        key: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+        name: str = Field(min_length=1, max_length=128)
+        profile: str = "both"
+        thesis: str = Field("", max_length=4000)
+        entry_conditions: str = Field("", max_length=4000)
+        invalidation: str = Field("", max_length=4000)
+        management: str = Field("", max_length=4000)
+
+    class PlaybookPatch(BaseModel):
+        name: str | None = Field(None, min_length=1, max_length=128)
+        profile: str | None = None
+        thesis: str | None = Field(None, max_length=4000)
+        entry_conditions: str | None = Field(None, max_length=4000)
+        invalidation: str | None = Field(None, max_length=4000)
+        management: str | None = Field(None, max_length=4000)
+        active: bool | None = None
+
+    @router.get("/playbook")
+    def playbook_list(include_inactive: bool = False) -> dict[str, list[dict[str, Any]]]:
+        return {"playbook": repository.playbook(include_inactive=include_inactive)}
+
+    @router.post("/playbook", status_code=201)
+    def playbook_create(item: PlaybookItem) -> dict[str, Any]:
+        if item.profile not in PLAYBOOK_SCOPES:
+            raise HTTPException(422, f"profile musí být jeden z {PLAYBOOK_SCOPES}")
+        try:
+            return repository.playbook_create(
+                {**item.model_dump(), "active": True, "created_ts": dt.datetime.now(dt.UTC)}
+            )
+        except DuplicateEntryError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @router.patch("/playbook/{item_id}")
+    def playbook_update(item_id: int, patch: PlaybookPatch) -> dict[str, Any]:
+        fields = {name: value for name, value in patch.model_dump().items() if value is not None}
+        if not fields:
+            raise HTTPException(422, "Není co měnit")
+        if "profile" in fields and fields["profile"] not in PLAYBOOK_SCOPES:
+            raise HTTPException(422, f"profile musí být jeden z {PLAYBOOK_SCOPES}")
+        fields["updated_ts"] = dt.datetime.now(dt.UTC)
+        try:
+            # Vyřazení je `active=false`, ne DELETE — historické záznamy
+            # na setup odkazují a musí zůstat čitelné.
+            return repository.playbook_update(item_id, fields)
+        except NotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     class JournalEntry(BaseModel):
         """Nový záznam deníku; ts_ref = okamžik, ke kterému se vztahuje."""
