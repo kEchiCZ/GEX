@@ -9,6 +9,14 @@ from pydantic import BaseModel, Field
 from gexlens_api.alerts import AlertKind
 from gexlens_api.meta_repo import DuplicateEntryError, MetaRepository, NotFoundError
 from gexlens_engine.runtime_settings import CONNECTION_SETTINGS, RUNTIME_SETTINGS
+from gexlens_engine.storage.meta import (
+    JOURNAL_GRADES,
+    JOURNAL_PROFILES,
+    JOURNAL_TYPES,
+    MISTAKE_TAGS,
+    TRADE_DIRECTIONS,
+    default_profile,
+)
 
 # Klíče řídící engine (#542 C4). Bez whitelistu byl `PUT /settings/{key}`
 # neautentizované řízení enginu: `ibkr_host` ho přepojí na cizí server
@@ -109,21 +117,77 @@ def build_router(repository: MetaRepository) -> APIRouter:
         except NotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
 
-    # ── Deník (#673, fáze A): manuální retrospektiva ───────────────
+    # ── Deník (#673 fáze A, #709 rev. 2) ───────────────────────────
 
-    JOURNAL_TYPES = ("pozorovani", "hypoteza", "retro_dne", "obchod")
+    class JournalTrade(BaseModel):
+        """Strukturovaný obchod. Plán i exekuce jsou volitelné — záznam smí
+        vzniknout hned po vstupu a doplnit se po výstupu."""
+
+        direction: str
+        planned_entry: float | None = None
+        planned_stop: float | None = None
+        planned_target: float | None = None
+        actual_entry: float | None = None
+        actual_exit: float | None = None
+        size: float | None = None
+        opened_ts: dt.datetime | None = None
+        closed_ts: dt.datetime | None = None
+        setup_key: str | None = Field(None, max_length=64)
+        setup_grade: str | None = None
+        execution_grade: str | None = None
+        mistake_tags: list[str] = Field(default_factory=list, max_length=20)
+        emotion: int | None = Field(None, ge=1, le=5)
+        mfe: float | None = None
+        mae: float | None = None
+        gross_pnl: float | None = None
+        net_pnl: float | None = None
+        fees: float | None = None
+
+    def _validated_trade(trade: JournalTrade) -> dict[str, Any]:
+        if trade.direction not in TRADE_DIRECTIONS:
+            raise HTTPException(422, f"direction musí být jeden z {TRADE_DIRECTIONS}")
+        for label, grade in (
+            ("setup_grade", trade.setup_grade),
+            ("execution_grade", trade.execution_grade),
+        ):
+            if grade is not None and grade not in JOURNAL_GRADES:
+                raise HTTPException(422, f"{label} musí být jeden z {JOURNAL_GRADES}")
+        unknown = [tag for tag in trade.mistake_tags if tag not in MISTAKE_TAGS]
+        if unknown:
+            # Volný text by znemožnil spočítat, kolik která chyba stojí.
+            raise HTTPException(422, f"Neznámé mistake tagy: {unknown}")
+        return trade.model_dump()
 
     @router.get("/journal")
     def journal_list(
         symbol: str | None = None,
         date: dt.date | None = None,
         entry_type: str | None = None,
+        profile: str | None = None,
         limit: int = Query(500, ge=1, le=2000),
     ) -> dict[str, list[dict[str, Any]]]:
+        if profile is not None and profile not in JOURNAL_PROFILES:
+            raise HTTPException(422, f"profile musí být jeden z {JOURNAL_PROFILES}")
         return {
             "journal": repository.journal_list(
-                symbol=symbol, day=date, entry_type=entry_type, limit=limit
+                symbol=symbol,
+                day=date,
+                entry_type=entry_type,
+                profile=profile,
+                limit=limit,
             )
+        }
+
+    @router.get("/journal/meta")
+    def journal_meta() -> dict[str, Any]:
+        """Číselníky pro UI — ať se výčty nedrží duplicitně v TS."""
+        return {
+            "types": list(JOURNAL_TYPES),
+            "profiles": list(JOURNAL_PROFILES),
+            "grades": list(JOURNAL_GRADES),
+            "directions": list(TRADE_DIRECTIONS),
+            "mistake_tags": list(MISTAKE_TAGS),
+            "symbols": repository.journal_symbols(),
         }
 
     class JournalEntry(BaseModel):
@@ -136,20 +200,30 @@ def build_router(repository: MetaRepository) -> APIRouter:
         tags: list[str] = Field(default_factory=list, max_length=20)
         setup_id: int | None = None
         news_event_id: int | None = None
+        profile: str | None = None
+        trade: JournalTrade | None = None
 
     class JournalPatch(BaseModel):
-        """Úprava záznamu — text/tagy; okamžik ani typ se zpětně nemění."""
+        """Úprava záznamu — text/tagy/profil a obchod; okamžik ani typ se
+        zpětně nemění (jinak by značka ✎ ukazovala na jinou minutu)."""
 
         text: str | None = Field(None, min_length=1, max_length=10_000)
         tags: list[str] | None = Field(None, max_length=20)
+        profile: str | None = None
+        trade: JournalTrade | None = None
 
     @router.post("/journal", status_code=201)
     def journal_create(entry: JournalEntry) -> dict[str, Any]:
         if entry.entry_type not in JOURNAL_TYPES:
             raise HTTPException(422, f"entry_type musí být jeden z {JOURNAL_TYPES}")
-        if entry.entry_type == "obchod":
-            # Fáze B (#673): typ `obchod` plní až import fillů, ne ruční zápis
-            raise HTTPException(422, "Typ 'obchod' zakládá import exekucí (fáze B), ne ruční zápis")
+        profile = entry.profile or default_profile(entry.symbol)
+        if profile not in JOURNAL_PROFILES:
+            raise HTTPException(422, f"profile musí být jeden z {JOURNAL_PROFILES}")
+        if entry.entry_type == "obchod" and entry.trade is None:
+            raise HTTPException(422, "Typ 'obchod' vyžaduje objekt trade")
+        if entry.entry_type != "obchod" and entry.trade is not None:
+            raise HTTPException(422, "Objekt trade patří jen k typu 'obchod'")
+        trade = _validated_trade(entry.trade) if entry.trade is not None else None
         now = dt.datetime.now(dt.UTC)
         return repository.journal_create(
             {
@@ -160,8 +234,10 @@ def build_router(repository: MetaRepository) -> APIRouter:
                 "tags": entry.tags,
                 "setup_id": entry.setup_id,
                 "news_event_id": entry.news_event_id,
+                "profile": profile,
                 "created_ts": now,
-            }
+            },
+            trade,
         )
 
     @router.patch("/journal/{entry_id}")
@@ -171,13 +247,24 @@ def build_router(repository: MetaRepository) -> APIRouter:
             values["text"] = patch.text
         if patch.tags is not None:
             values["tags"] = patch.tags
-        if len(values) == 1:
-            raise HTTPException(422, "Úprava musí měnit text nebo tagy")
-        return repository.journal_update(entry_id, values)
+        if patch.profile is not None:
+            if patch.profile not in JOURNAL_PROFILES:
+                raise HTTPException(422, f"profile musí být jeden z {JOURNAL_PROFILES}")
+            values["profile"] = patch.profile
+        trade = _validated_trade(patch.trade) if patch.trade is not None else None
+        if len(values) == 1 and trade is None:
+            raise HTTPException(422, "Úprava musí měnit text, tagy, profil nebo obchod")
+        try:
+            return repository.journal_update(entry_id, values, trade)
+        except NotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     @router.delete("/journal/{entry_id}", status_code=204)
     def journal_delete(entry_id: int) -> None:
-        repository.journal_delete(entry_id)
+        try:
+            repository.journal_delete(entry_id)
+        except NotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     @router.get("/annotations")
     def annotations_list(symbol: str, date: dt.date) -> dict[str, list[dict[str, Any]]]:

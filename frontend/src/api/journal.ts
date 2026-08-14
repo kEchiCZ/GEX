@@ -1,4 +1,4 @@
-/** Deník tradera (#673, fáze A): REST klient /journal. */
+/** Deník tradera (#673 fáze A, #709 rev. 2): REST klient /journal. */
 import { API_BASE } from '../config'
 
 export type JournalType = 'pozorovani' | 'hypoteza' | 'retro_dne' | 'obchod'
@@ -10,6 +10,46 @@ export const JOURNAL_TYPE_LABELS: Record<JournalType, string> = {
   obchod: 'Obchod',
 }
 
+/** Profil deníku (#709) — řídí, která pole formulář ukazuje. */
+export type JournalProfile = 'smb' | 'futures'
+
+export const JOURNAL_PROFILE_LABELS: Record<JournalProfile, string> = {
+  smb: 'SMB',
+  futures: 'Futures',
+}
+
+/** Symboly, u kterých se předvyplňuje futures profil (zrcadlo `meta.py`). */
+const FUTURES_SYMBOLS = new Set(['ES', 'NQ', 'MES', 'MNQ', 'RTY', 'YM', 'M2K', 'MYM'])
+
+export function defaultProfile(symbol: string): JournalProfile {
+  return FUTURES_SYMBOLS.has(symbol.toUpperCase()) ? 'futures' : 'smb'
+}
+
+export type TradeDirection = 'long' | 'short'
+export type JournalGrade = 'A' | 'B' | 'C'
+
+export interface JournalTrade {
+  direction: TradeDirection
+  planned_entry: number | null
+  planned_stop: number | null
+  planned_target: number | null
+  actual_entry: number | null
+  actual_exit: number | null
+  size: number | null
+  opened_ts: string | null
+  closed_ts: string | null
+  setup_key: string | null
+  setup_grade: JournalGrade | null
+  execution_grade: JournalGrade | null
+  mistake_tags: string[]
+  emotion: number | null
+  mfe: number | null
+  mae: number | null
+  gross_pnl: number | null
+  net_pnl: number | null
+  fees: number | null
+}
+
 export interface JournalEntry {
   id: number
   ts_ref: string
@@ -19,19 +59,82 @@ export interface JournalEntry {
   tags: string[]
   setup_id: number | null
   news_event_id: number | null
+  profile: JournalProfile
+  trade: JournalTrade | null
   created_ts: string
   updated_ts: string | null
+}
+
+export interface JournalMeta {
+  types: JournalType[]
+  profiles: JournalProfile[]
+  grades: JournalGrade[]
+  directions: TradeDirection[]
+  mistake_tags: string[]
+  symbols: string[]
+}
+
+const EMPTY_META: JournalMeta = {
+  types: ['pozorovani', 'hypoteza', 'retro_dne', 'obchod'],
+  profiles: ['smb', 'futures'],
+  grades: ['A', 'B', 'C'],
+  directions: ['long', 'short'],
+  mistake_tags: [],
+  symbols: [],
+}
+
+/** Popisky chyb; server drží jen klíče, ať se výčet nerozejde. */
+export const MISTAKE_LABELS: Record<string, string> = {
+  chased_entry: 'Naháněný vstup',
+  moved_stop: 'Posunutý stop',
+  oversized: 'Příliš velká pozice',
+  undersized: 'Příliš malá pozice',
+  revenge_trade: 'Revenge trade',
+  fomo: 'FOMO',
+  early_exit: 'Předčasný výstup',
+  late_exit: 'Pozdní výstup',
+  no_plan: 'Bez plánu',
+  off_plan: 'Mimo plán',
+  overtrading: 'Overtrading',
+}
+
+export function mistakeLabel(tag: string): string {
+  return MISTAKE_LABELS[tag] ?? tag
+}
+
+/**
+ * Plánované R:R z uložených polí. Odvozeniny se záměrně neukládají —
+ * druhá kopie by se při editaci rozešla s pravdou.
+ */
+export function plannedRR(trade: JournalTrade): number | null {
+  const { planned_entry: entry, planned_stop: stop, planned_target: target } = trade
+  if (entry === null || stop === null || target === null) return null
+  const risk = Math.abs(entry - stop)
+  if (risk === 0) return null
+  return Math.abs(target - entry) / risk
+}
+
+/** Realizované R — kolik násobků rizika obchod skutečně přinesl. */
+export function realizedR(trade: JournalTrade): number | null {
+  const { actual_entry: entry, actual_exit: exit, planned_stop: stop } = trade
+  if (entry === null || exit === null || stop === null) return null
+  const risk = Math.abs(entry - stop)
+  if (risk === 0) return null
+  const move = trade.direction === 'long' ? exit - entry : entry - exit
+  return move / risk
 }
 
 export async function fetchJournal(filters: {
   symbol?: string
   date?: string
   entryType?: JournalType
+  profile?: JournalProfile
 }): Promise<JournalEntry[]> {
   const params = new URLSearchParams()
   if (filters.symbol) params.set('symbol', filters.symbol)
   if (filters.date) params.set('date', filters.date)
   if (filters.entryType) params.set('entry_type', filters.entryType)
+  if (filters.profile) params.set('profile', filters.profile)
   try {
     const response = await fetch(`${API_BASE}/journal?${params}`)
     if (!response.ok) return []
@@ -41,12 +144,26 @@ export async function fetchJournal(filters: {
   }
 }
 
+export async function fetchJournalMeta(): Promise<JournalMeta> {
+  try {
+    const response = await fetch(`${API_BASE}/journal/meta`)
+    if (!response.ok) return EMPTY_META
+    return (await response.json()) as JournalMeta
+  } catch {
+    return EMPTY_META
+  }
+}
+
 export async function createJournalEntry(entry: {
   ts_ref: string
   symbol: string
-  entry_type: Exclude<JournalType, 'obchod'>
+  entry_type: JournalType
   text: string
   tags: string[]
+  profile?: JournalProfile
+  setup_id?: number | null
+  news_event_id?: number | null
+  trade?: Partial<JournalTrade> & { direction: TradeDirection }
 }): Promise<JournalEntry | null> {
   try {
     const response = await fetch(`${API_BASE}/journal`, {
@@ -62,7 +179,12 @@ export async function createJournalEntry(entry: {
 
 export async function updateJournalEntry(
   id: number,
-  patch: { text?: string; tags?: string[] },
+  patch: {
+    text?: string
+    tags?: string[]
+    profile?: JournalProfile
+    trade?: Partial<JournalTrade> & { direction: TradeDirection }
+  },
 ): Promise<boolean> {
   try {
     const response = await fetch(`${API_BASE}/journal/${id}`, {
