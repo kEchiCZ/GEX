@@ -1,20 +1,33 @@
-/** Obrazovka Deník (#673, fáze A): manuální retrospektiva tradera.
+/** Obrazovka Deník (#673 fáze A, #709 rev. 2): retrospektiva tradera.
 
 Timeline záznamů s filtry + formulář nového záznamu. Denní pár = tlačítka
 Ranní plán / Večerní vyhodnocení (typ retro_dne s tagem). Export do Markdownu.
-Fáze B (import exekucí) přidá typ `obchod` — ten se ručně zakládat nedá.
+
+Profil (SMB / Futures) řídí, která pole formulář ukazuje, a ukládá se
+U ZÁZNAMU — historické zápisy si drží profil, pod kterým vznikly.
 */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  JOURNAL_PROFILE_LABELS,
   JOURNAL_TYPE_LABELS,
   createJournalEntry,
+  defaultProfile,
   deleteJournalEntry,
   fetchJournal,
+  fetchJournalMeta,
   journalToMarkdown,
+  mistakeLabel,
+  plannedRR,
+  realizedR,
   updateJournalEntry,
 } from '../api/journal'
-import type { JournalEntry, JournalType } from '../api/journal'
+import type { JournalEntry, JournalMeta, JournalProfile, JournalType } from '../api/journal'
 import { useAppState } from '../state/AppState'
+import { EMPTY_TRADE, draftToTrade, tradeToDraft } from '../journal/trade'
+import type { TradeDraft } from '../journal/trade'
+import { JournalTradeFields } from './JournalTradeFields'
+
+const PROFILES: JournalProfile[] = ['smb', 'futures']
 
 function toLocalInput(iso: string): string {
   const date = new Date(iso)
@@ -22,18 +35,66 @@ function toLocalInput(iso: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-function EntryCard({ entry, onChanged }: { entry: JournalEntry; onChanged: () => void }) {
+/** Shrnutí obchodu do řádku karty — R se počítá, neukládá. */
+function TradeSummary({ entry }: { entry: JournalEntry }) {
+  const trade = entry.trade
+  if (!trade) return null
+  const rr = plannedRR(trade)
+  const r = realizedR(trade)
+  const parts: string[] = [trade.direction === 'long' ? 'Long' : 'Short']
+  if (trade.actual_entry !== null) parts.push(`vstup ${trade.actual_entry}`)
+  if (trade.actual_exit !== null) parts.push(`výstup ${trade.actual_exit}`)
+  if (rr !== null) parts.push(`plán R:R ${rr.toFixed(2)}`)
+  if (r !== null) parts.push(`výsledek ${r >= 0 ? '+' : ''}${r.toFixed(2)}R`)
+  if (trade.net_pnl !== null) parts.push(`net ${trade.net_pnl}`)
+  return (
+    <p className="journal-trade-summary muted">
+      {parts.join(' · ')}
+      {trade.setup_grade && <span className="chip">setup {trade.setup_grade}</span>}
+      {trade.execution_grade && <span className="chip">exekuce {trade.execution_grade}</span>}
+      {trade.mistake_tags.map((tag) => (
+        <span key={tag} className="chip journal-mistake">
+          {mistakeLabel(tag)}
+        </span>
+      ))}
+    </p>
+  )
+}
+
+function EntryCard({
+  entry,
+  onChanged,
+  mistakeTags,
+}: {
+  entry: JournalEntry
+  onChanged: () => void
+  mistakeTags: string[]
+}) {
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(entry.text)
+  const [trade, setTrade] = useState<TradeDraft | null>(
+    entry.trade ? tradeToDraft(entry.trade) : null,
+  )
+  const [error, setError] = useState('')
 
   const save = async () => {
-    if (await updateJournalEntry(entry.id, { text })) {
+    const ok = await updateJournalEntry(entry.id, {
+      text,
+      ...(trade ? { trade: draftToTrade(trade) } : {}),
+    })
+    if (ok) {
       setEditing(false)
+      setError('')
       onChanged()
+    } else {
+      // Tiché selhání by znamenalo ztracený zápis bez vysvětlení
+      setError('Uložení se nepovedlo — zkontroluj hodnoty a spojení.')
     }
   }
   const remove = async () => {
-    if (window.confirm('Smazat záznam deníku?') && (await deleteJournalEntry(entry.id))) onChanged()
+    if (!window.confirm('Smazat záznam deníku?')) return
+    if (await deleteJournalEntry(entry.id)) onChanged()
+    else setError('Smazání se nepovedlo.')
   }
 
   return (
@@ -41,6 +102,7 @@ function EntryCard({ entry, onChanged }: { entry: JournalEntry; onChanged: () =>
       <header className="muted">
         {new Date(entry.ts_ref).toLocaleString()} · <strong>{entry.symbol}</strong> ·{' '}
         {JOURNAL_TYPE_LABELS[entry.entry_type]}
+        <span className="chip journal-profile">{JOURNAL_PROFILE_LABELS[entry.profile]}</span>
         {entry.tags.map((tag) => (
           <span key={tag} className="chip journal-tag">
             #{tag}
@@ -58,13 +120,20 @@ function EntryCard({ entry, onChanged }: { entry: JournalEntry; onChanged: () =>
       {editing ? (
         <>
           <textarea value={text} onChange={(event) => setText(event.target.value)} rows={4} />
+          {trade && (
+            <JournalTradeFields draft={trade} onChange={setTrade} mistakeTags={mistakeTags} />
+          )}
           <button className="chip" onClick={() => void save()} disabled={text.trim() === ''}>
             Uložit
           </button>
         </>
       ) : (
-        <p className="journal-text">{entry.text}</p>
+        <>
+          <p className="journal-text">{entry.text}</p>
+          <TradeSummary entry={entry} />
+        </>
       )}
+      {error !== '' && <p className="journal-error">{error}</p>}
     </article>
   )
 }
@@ -72,23 +141,45 @@ function EntryCard({ entry, onChanged }: { entry: JournalEntry; onChanged: () =>
 export function JournalView() {
   const { symbol, journalDraft, setJournalDraft } = useAppState()
   const [entries, setEntries] = useState<JournalEntry[]>([])
+  const [meta, setMeta] = useState<JournalMeta | null>(null)
   const [filterSymbol, setFilterSymbol] = useState<string>('')
   const [filterType, setFilterType] = useState<string>('')
+  const [filterProfile, setFilterProfile] = useState<string>('')
+  const [filterDate, setFilterDate] = useState<string>('')
   // Formulář nového záznamu; draft z rychlého vstupu (tlačítko ✎ u Replay)
   // předvyplní okamžik a symbol
-  const [formType, setFormType] = useState<Exclude<JournalType, 'obchod'>>('pozorovani')
+  const [formType, setFormType] = useState<JournalType>('pozorovani')
   const [formTs, setFormTs] = useState(() => toLocalInput(new Date().toISOString()))
   const [formText, setFormText] = useState('')
   const [formTags, setFormTags] = useState('')
+  const [formError, setFormError] = useState('')
+  const [trade, setTrade] = useState<TradeDraft>(EMPTY_TRADE)
+  // null = uživatel profil neměnil, drží se odvození ze symbolu
+  const [profileOverride, setProfileOverride] = useState<JournalProfile | null>(null)
+
+  const profile = profileOverride ?? defaultProfile(symbol)
+  const mistakeTags = useMemo(() => meta?.mistake_tags ?? [], [meta])
+  const symbolOptions = useMemo(() => {
+    const known = new Set(meta?.symbols ?? [])
+    known.add(symbol)
+    return [...known].sort()
+  }, [meta, symbol])
 
   const reload = useCallback(() => {
     void fetchJournal({
       symbol: filterSymbol || undefined,
+      date: filterDate || undefined,
       entryType: (filterType || undefined) as JournalType | undefined,
+      profile: (filterProfile || undefined) as JournalProfile | undefined,
     }).then(setEntries)
-  }, [filterSymbol, filterType])
+  }, [filterSymbol, filterDate, filterType, filterProfile])
 
   useEffect(reload, [reload])
+
+  // Číselníky drží server, ať se výčty nerozejdou s validací
+  useEffect(() => {
+    void fetchJournalMeta().then(setMeta)
+  }, [entries.length])
 
   useEffect(() => {
     if (journalDraft) {
@@ -103,8 +194,9 @@ export function JournalView() {
     }
   }, [journalDraft, setJournalDraft])
 
-  const submit = async (typeOverride?: Exclude<JournalType, 'obchod'>, extraTag?: string) => {
+  const submit = async (typeOverride?: JournalType, extraTag?: string) => {
     if (formText.trim() === '') return
+    const entryType = typeOverride ?? formType
     const tags = formTags
       .split(',')
       .map((tag) => tag.trim().replace(/^#/, ''))
@@ -113,14 +205,20 @@ export function JournalView() {
     const created = await createJournalEntry({
       ts_ref: new Date(formTs).toISOString(),
       symbol,
-      entry_type: typeOverride ?? formType,
+      entry_type: entryType,
       text: formText.trim(),
       tags,
+      profile,
+      ...(entryType === 'obchod' ? { trade: draftToTrade(trade) } : {}),
     })
     if (created) {
       setFormText('')
       setFormTags('')
+      setTrade(EMPTY_TRADE)
+      setFormError('')
       reload()
+    } else {
+      setFormError('Záznam se nepodařilo uložit — zkontroluj hodnoty a spojení se serverem.')
     }
   }
 
@@ -138,15 +236,34 @@ export function JournalView() {
     <main className="journal-view" aria-label="Deník">
       <section className="journal-form" aria-label="Nový záznam">
         <h3>Nový záznam · {symbol}</h3>
+        <div className="journal-form-row" role="group" aria-label="Profil deníku">
+          {PROFILES.map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={profile === value ? 'chip active' : 'chip'}
+              onClick={() => setProfileOverride(value)}
+              aria-pressed={profile === value}
+              title={
+                value === 'futures'
+                  ? 'Futures: seance, R v bodech, kontrakt — bez polí pro výběr akcie'
+                  : 'SMB: obecný profil (katalyzátor, výběr instrumentu)'
+              }
+            >
+              {JOURNAL_PROFILE_LABELS[value]}
+            </button>
+          ))}
+        </div>
         <div className="journal-form-row">
           <select
             value={formType}
-            onChange={(event) => setFormType(event.target.value as Exclude<JournalType, 'obchod'>)}
+            onChange={(event) => setFormType(event.target.value as JournalType)}
             aria-label="Typ záznamu"
           >
             <option value="pozorovani">Pozorování</option>
             <option value="hypoteza">Hypotéza</option>
             <option value="retro_dne">Retrospektiva dne</option>
+            <option value="obchod">Obchod</option>
           </select>
           <input
             type="datetime-local"
@@ -169,6 +286,10 @@ export function JournalView() {
           rows={3}
           aria-label="Text záznamu"
         />
+        {formType === 'obchod' && (
+          <JournalTradeFields draft={trade} onChange={setTrade} mistakeTags={mistakeTags} />
+        )}
+        {formError !== '' && <p className="journal-error">{formError}</p>}
         <div className="journal-form-row">
           <button className="chip" onClick={() => void submit()} disabled={formText.trim() === ''}>
             Přidat záznam
@@ -201,7 +322,11 @@ export function JournalView() {
             aria-label="Filtr symbolu"
           >
             <option value="">Všechny symboly</option>
-            <option value={symbol}>{symbol}</option>
+            {symbolOptions.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
           </select>
           <select
             value={filterType}
@@ -215,6 +340,24 @@ export function JournalView() {
               </option>
             ))}
           </select>
+          <select
+            value={filterProfile}
+            onChange={(event) => setFilterProfile(event.target.value)}
+            aria-label="Filtr profilu"
+          >
+            <option value="">Oba profily</option>
+            {PROFILES.map((value) => (
+              <option key={value} value={value}>
+                {JOURNAL_PROFILE_LABELS[value]}
+              </option>
+            ))}
+          </select>
+          <input
+            type="date"
+            value={filterDate}
+            onChange={(event) => setFilterDate(event.target.value)}
+            aria-label="Filtr dne"
+          />
           <button className="chip" onClick={exportMd} disabled={entries.length === 0}>
             ⬇ Export MD
           </button>
@@ -225,7 +368,9 @@ export function JournalView() {
             je vyhodnoť. Rychlý vstup: tlačítko ✎ u Replay.
           </p>
         ) : (
-          entries.map((entry) => <EntryCard key={entry.id} entry={entry} onChanged={reload} />)
+          entries.map((entry) => (
+            <EntryCard key={entry.id} entry={entry} onChanged={reload} mistakeTags={mistakeTags} />
+          ))
         )}
       </section>
     </main>

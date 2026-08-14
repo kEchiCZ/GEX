@@ -607,7 +607,7 @@ def test_journal_crud_a_validace(client: TestClient) -> None:
     assert patched.status_code == 200
     assert patched.json()["updated_ts"] is not None
 
-    # Typ obchod zakládá až import fillů (fáze B), ruční zápis se odmítne
+    # Typ obchod je od #709 povolený, ale bez objektu trade nedává smysl
     assert client.post("/journal", json={**entry, "entry_type": "obchod"}).status_code == 422
     assert client.post("/journal", json={**entry, "entry_type": "blbost"}).status_code == 422
     # Symbol validace (stejné pravidlo jako persist reviver #554)
@@ -615,6 +615,113 @@ def test_journal_crud_a_validace(client: TestClient) -> None:
 
     assert client.delete(f"/journal/{entry_id}").status_code == 204
     assert client.get("/journal").json()["journal"] == []
+
+
+def test_journal_profil_a_obchod(client: TestClient) -> None:
+    """Profil SMB/Futures a strukturovaný obchod (#709)."""
+    base = {
+        "ts_ref": "2026-07-16T14:30:00Z",
+        "symbol": "ES",
+        "text": "Fade do call wall, plán 3 body risk.",
+    }
+
+    # Profil se předvyplní podle symbolu: ES → futures, akcie → smb
+    es = client.post("/journal", json={**base, "entry_type": "pozorovani"}).json()
+    assert es["profile"] == "futures"
+    aapl = client.post(
+        "/journal", json={**base, "symbol": "AAPL", "entry_type": "pozorovani"}
+    ).json()
+    assert aapl["profile"] == "smb"
+    # Výslovná volba přebíjí odvození
+    forced = client.post(
+        "/journal", json={**base, "entry_type": "pozorovani", "profile": "smb"}
+    ).json()
+    assert forced["profile"] == "smb"
+    assert (
+        client.post(
+            "/journal", json={**base, "entry_type": "pozorovani", "profile": "nesmysl"}
+        ).status_code
+        == 422
+    )
+
+    trade = {
+        "direction": "short",
+        "planned_entry": 6810.0,
+        "planned_stop": 6813.0,
+        "planned_target": 6798.0,
+        "setup_grade": "A",
+        "execution_grade": "B",
+        "mistake_tags": ["late_exit"],
+        "emotion": 3,
+    }
+    created = client.post("/journal", json={**base, "entry_type": "obchod", "trade": trade})
+    assert created.status_code == 201
+    body = created.json()
+    trade_id = body["id"]
+    assert body["trade"]["direction"] == "short"
+    assert body["trade"]["setup_grade"] == "A"
+    assert body["trade"]["mistake_tags"] == ["late_exit"]
+    # Odvozené hodnoty se neukládají — R:R si spočítá čtenář
+    assert "planned_rr" not in body["trade"]
+
+    # Číselníky se drží na serveru; volný text chyby by znemožnil Σ P/L per tag
+    assert (
+        client.post(
+            "/journal",
+            json={**base, "entry_type": "obchod", "trade": {**trade, "mistake_tags": ["vymysl"]}},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/journal",
+            json={**base, "entry_type": "obchod", "trade": {**trade, "direction": "sideways"}},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/journal",
+            json={**base, "entry_type": "obchod", "trade": {**trade, "setup_grade": "F"}},
+        ).status_code
+        == 422
+    )
+    # Obchod patří jen k typu obchod
+    assert (
+        client.post(
+            "/journal", json={**base, "entry_type": "pozorovani", "trade": trade}
+        ).status_code
+        == 422
+    )
+
+    # Doplnění exekuce po výstupu
+    patched = client.patch(
+        f"/journal/{trade_id}",
+        json={"trade": {**trade, "actual_entry": 6809.5, "actual_exit": 6799.0}},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["trade"]["actual_exit"] == 6799.0
+
+    # Filtr profilu
+    futures = client.get("/journal", params={"profile": "futures"}).json()["journal"]
+    assert all(e["profile"] == "futures" for e in futures)
+    assert trade_id in [e["id"] for e in futures]
+    assert client.get("/journal", params={"profile": "nesmysl"}).status_code == 422
+
+    meta = client.get("/journal/meta").json()
+    assert "futures" in meta["profiles"]
+    assert "late_exit" in meta["mistake_tags"]
+    assert set(meta["symbols"]) >= {"AAPL", "ES"}
+
+    # Smazání záznamu odstraní i navázaný obchod
+    assert client.delete(f"/journal/{trade_id}").status_code == 204
+    assert trade_id not in [e["id"] for e in client.get("/journal").json()["journal"]]
+
+
+def test_journal_neexistujici_id_vraci_404(client: TestClient) -> None:
+    """PATCH/DELETE nad chybějícím id vracely 500 (#707) — sousední routy 404."""
+    assert client.patch("/journal/424242", json={"text": "nic"}).status_code == 404
+    assert client.delete("/journal/424242").status_code == 404
 
 
 def test_bars_endpoint(client: TestClient) -> None:

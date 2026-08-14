@@ -13,6 +13,8 @@ function entry(id: number, tsRef: string): JournalEntry {
     tags: [],
     setup_id: null,
     news_event_id: null,
+    profile: 'futures',
+    trade: null,
     created_ts: tsRef,
     updated_ts: null,
   }

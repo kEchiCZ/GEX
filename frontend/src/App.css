@@ -2034,6 +2034,48 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   white-space: pre-wrap;
 }
 
+/* Deník rev. 2 (#709): profil, obchod, chyby */
+.journal-profile {
+  font-size: 0.8em;
+  padding: 0 6px;
+  border-color: #6366f1;
+  color: #a5b4fc;
+}
+.journal-trade {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border, #2a3242);
+  border-radius: 6px;
+}
+.journal-trade input {
+  max-width: 8em;
+}
+.journal-mistakes {
+  flex-wrap: wrap;
+}
+.journal-mistake {
+  font-size: 0.8em;
+  padding: 0 6px;
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+.journal-trade-summary {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 6px 0 0;
+  font-size: 0.85em;
+}
+.journal-error {
+  margin: 6px 0 0;
+  color: #ef4444;
+  font-size: 0.85em;
+}
+
 /* Ranní briefing (#674) */
 .briefing-view {
   padding: 16px 20px;

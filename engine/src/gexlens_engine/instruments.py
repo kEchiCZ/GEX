@@ -50,7 +50,7 @@ from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository, collect_alpha_calibration
 from gexlens_engine.storage.fa_validation import FaValidationRepository, collect_fa_validation
-from gexlens_engine.storage.meta import meta_metadata, settings_table, watchlist_table
+from gexlens_engine.storage.meta import ensure_meta_schema, settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.t6 import T6Collector
 from gexlens_engine.tendency import TendencyEngine
@@ -215,7 +215,7 @@ class WatchlistReader:
         self._db = db
 
     def ensure_schema(self) -> None:
-        meta_metadata.create_all(self._db)
+        ensure_meta_schema(self._db)
 
     def symbols(self) -> list[str]:
         with self._db.connect() as conn:
