@@ -46,7 +46,8 @@ import { sessionDateIso } from './instrument/tz'
 import { EM_COLOR, EM_DASH, REF_COLOR, REF_DASH, SETUP_COLORS, VWAP_COLOR, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays' // prettier-ignore
 import { computeExpectedMove, emUsage } from './instrument/expectedmove'
 import { vwapSeriesForAxis } from './instrument/referencelevels'
-import { decodeRange, encodeRange, rangeBuckets, rangeLabel, reactionWindow, windowProfileRows } from './instrument/rangeselect' // prettier-ignore
+import { decodeRange, encodeRange, followUpRange, prePostWindows, rangeBuckets, rangeLabel, reactionWindow, windowProfileRows } from './instrument/rangeselect' // prettier-ignore
+import { diffProfileRows } from './profile/diff'
 import type { RangeSelection } from './instrument/rangeselect'
 import { RANGE_PRESETS, presetDisabledReason, presetRange } from './instrument/rangepresets'
 import type { RangePreset } from './instrument/rangepresets'
@@ -892,8 +893,15 @@ function MainContent() {
   const [rangePresetMode, setRangePresetMode] = useState<'last30' | null>(null)
   // Poznámka k oknu (#488): „okno běží" u reakčního okna clampnutého na živou hranu
   const [rangeNote, setRangeNote] = useState<string | null>(null)
+  // Duální rozsah (#489): B existuje jen vedle A; profil přepíná A / B / B−A
+  const [rangeB, setRangeB] = useState<RangeSelection | null>(() =>
+    decodeRange(new URLSearchParams(window.location.search).get('rangeB')),
+  )
+  const [rangeMode, setRangeMode] = useState<'a' | 'b' | 'diff'>('a')
   const closeRange = useCallback(() => {
     setRange(null)
+    setRangeB(null)
+    setRangeMode('a')
     setRangePresetMode(null)
     setRangeNote(null)
   }, [])
@@ -901,8 +909,10 @@ function MainContent() {
     const url = new URL(window.location.href)
     if (range) url.searchParams.set('range', encodeRange(range))
     else url.searchParams.delete('range')
+    if (range && rangeB) url.searchParams.set('rangeB', encodeRange(rangeB))
+    else url.searchParams.delete('rangeB')
     window.history.replaceState(null, '', url)
-  }, [range])
+  }, [range, rangeB])
   useEffect(() => {
     if (!range) return
     const onKey = (event: KeyboardEvent) => {
@@ -916,8 +926,15 @@ function MainContent() {
       range && timeframe === 'intraday' ? rangeBuckets(range, day.minutesIso, bucketMinutes) : null,
     [range, timeframe, day.minutesIso, bucketMinutes],
   )
+  const rangeSpanB = useMemo(
+    () =>
+      range && rangeB && timeframe === 'intraday'
+        ? rangeBuckets(rangeB, day.minutesIso, bucketMinutes)
+        : null,
+    [range, rangeB, timeframe, day.minutesIso, bucketMinutes],
+  )
   const handleRangeDrag = useCallback(
-    (startBucket: number, endBucket: number) => {
+    (startBucket: number, endBucket: number, which: 'a' | 'b') => {
       const length = day.minutesIso.length
       if (length === 0) return
       const fromIdx = Math.max(0, Math.min(startBucket * bucketMinutes, length - 1))
@@ -925,11 +942,32 @@ function MainContent() {
         fromIdx,
         Math.min(endBucket * bucketMinutes + bucketMinutes - 1, length - 1),
       )
-      setRange({ fromIso: day.minutesIso[fromIdx], toIso: day.minutesIso[toIdx] })
+      const next = { fromIso: day.minutesIso[fromIdx], toIso: day.minutesIso[toIdx] }
+      if (which === 'b') setRangeB(next)
+      else setRange(next)
       setRangePresetMode(null) // ruční zásah ruší klouzavý preset (#487)
       setRangeNote(null)
     },
     [day.minutesIso, bucketMinutes],
+  )
+  // Nové A (nástroj/Alt+tažení) ruší B — restart srovnání (posudek #489)
+  const handleRangeCreateStart = useCallback(() => {
+    setRangeB(null)
+    setRangeMode('a')
+  }, [])
+  // Pre/post event (#489): A = event−15→event, B = event→+15 — diferenční mód
+  const handleMarkerPrePost = useCallback(
+    (newsRow: NewsRow) => {
+      const result = prePostWindows(newsRow.ts_event, 15, rawDay.minutesIso.at(-1) ?? null)
+      if (!result) return
+      setRange(result.a)
+      setRangeB(result.b)
+      setRangeMode('diff')
+      setRangePresetMode(null)
+      setRangeNote(result.bOpen ? 'okno B běží' : null)
+      setNewsDialogMarker(null)
+    },
+    [rawDay.minutesIso],
   )
   // Range z news markeru (#488): reakční okno zprávy — táž okna jako news_reactions
   const handleMarkerRange = useCallback(
@@ -937,6 +975,8 @@ function MainContent() {
       const result = reactionWindow(newsRow.ts_event, minutes, rawDay.minutesIso.at(-1) ?? null)
       if (!result) return
       setRange(result.range)
+      setRangeB(null)
+      setRangeMode('a')
       setRangePresetMode(null)
       setRangeNote(result.open ? 'okno běží' : null)
       setNewsDialogMarker(null)
@@ -968,6 +1008,8 @@ function MainContent() {
       const result = presetRange(preset, presetInputs)
       if (!result) return
       setRange(result)
+      setRangeB(null)
+      setRangeMode('a')
       // Klouže jen v live — v replay je okno fixní k pozici (zadání #487)
       setRangePresetMode(preset === 'last30' && playback.isLive ? 'last30' : null)
       setRangeNote(null)
@@ -983,28 +1025,40 @@ function MainContent() {
   // Okenní profil V KLIENTOVI (posudek #484): diff kumulativních řádků t2 − t1,
   // baseline = poslední snapshot PŘED oknem (sémantika API from, #483); díry
   // v ose se přeskakují couváním na nejbližší minutu se snapshotem.
-  const rangeWindowRows = useMemo(() => {
-    if (!rangeSpan || !day.profileByMinute) return null
-    // profileByMinute je po agregaci KOŠOVÝ (rowsAt bere index koše, #503) —
-    // proto se sahá přes startBucket/endBucket, ne 1m indexy (#507 třída chyb)
-    const source = day.profileByMinute
-    const { startBucket: fromIdx, endBucket: toIdx } = rangeSpan
-    let rows2: ReturnType<typeof source.rowsAt> = []
-    for (
-      let idx = Math.min(toIdx, source.length - 1);
-      idx >= fromIdx && rows2.length === 0;
-      idx -= 1
-    ) {
-      // prettier-ignore
-      rows2 = source.rowsAt(idx)
-    }
-    if (rows2.length === 0) return null
-    let rows1: ReturnType<typeof source.rowsAt> = []
-    for (let idx = fromIdx - 1; idx >= 0 && rows1.length === 0; idx -= 1) {
-      rows1 = source.rowsAt(idx)
-    }
-    return windowProfileRows(rows2, rows1)
-  }, [rangeSpan, day.profileByMinute])
+  const windowRowsForSpan = useCallback(
+    (span: { startBucket: number; endBucket: number } | null) => {
+      if (!span || !day.profileByMinute) return null
+      // profileByMinute je po agregaci KOŠOVÝ (rowsAt bere index koše, #503) —
+      // proto se sahá přes startBucket/endBucket, ne 1m indexy (#507 třída chyb)
+      const source = day.profileByMinute
+      const { startBucket: fromIdx, endBucket: toIdx } = span
+      let rows2: ReturnType<typeof source.rowsAt> = []
+      for (
+        let idx = Math.min(toIdx, source.length - 1);
+        idx >= fromIdx && rows2.length === 0;
+        idx -= 1
+      ) {
+        rows2 = source.rowsAt(idx)
+      }
+      if (rows2.length === 0) return null
+      let rows1: ReturnType<typeof source.rowsAt> = []
+      for (let idx = fromIdx - 1; idx >= 0 && rows1.length === 0; idx -= 1) {
+        rows1 = source.rowsAt(idx)
+      }
+      return windowProfileRows(rows2, rows1)
+    },
+    [day.profileByMinute],
+  )
+  const rangeWindowRows = useMemo(() => windowRowsForSpan(rangeSpan), [windowRowsForSpan, rangeSpan]) // prettier-ignore
+  const rangeWindowRowsB = useMemo(() => windowRowsForSpan(rangeSpanB), [windowRowsForSpan, rangeSpanB]) // prettier-ignore
+  // Diferenční profil B−A (#489): surové objemy per strana, golden test v diff.test
+  const rangeDiffRows = useMemo(
+    () =>
+      rangeMode === 'diff' && rangeWindowRows && rangeWindowRowsB
+        ? diffProfileRows(rangeWindowRows, rangeWindowRowsB)
+        : null,
+    [rangeMode, rangeWindowRows, rangeWindowRowsB],
+  )
   // CumΔ okna do chipu — kumulativ per 1m minutu z panelů (kotva se odečte)
   const rangeCum = useMemo(() => {
     if (!rangeSpan) return null
@@ -1013,9 +1067,18 @@ function MainContent() {
     const at = (idx: number) => cum[Math.max(0, Math.min(idx, cum.length - 1))] ?? 0
     return at(rangeSpan.toIdx) - (rangeSpan.fromIdx > 0 ? at(rangeSpan.fromIdx - 1) : 0)
   }, [rangeSpan, rawDay.panels.cumDelta])
-  // Okno má přednost před Σ agregací — profil ukazuje vybrané okno
+  const rangeCumB = useMemo(() => {
+    if (!rangeSpanB) return null
+    const cum = rawDay.panels.cumDelta
+    if (cum.length === 0) return null
+    const at = (idx: number) => cum[Math.max(0, Math.min(idx, cum.length - 1))] ?? 0
+    return at(rangeSpanB.toIdx) - (rangeSpanB.fromIdx > 0 ? at(rangeSpanB.fromIdx - 1) : 0)
+  }, [rangeSpanB, rawDay.panels.cumDelta])
+  // Okno má přednost před Σ agregací; v duálním režimu vybírá mód A/B
+  // (diff kreslí vlastní vrstvu, profil drží A jako kontext)
+  const activeWindowRows = rangeMode === 'b' ? (rangeWindowRowsB ?? rangeWindowRows) : rangeWindowRows // prettier-ignore
   const displayedProfileRows =
-    rangeWindowRows ?? (aggregateOn && aggregateRows ? aggregateRows : profileRows)
+    activeWindowRows ?? (aggregateOn && aggregateRows ? aggregateRows : profileRows)
 
   // Overlay přepínače odpovídají checkboxům (AC issue #24)
   const baseOverlays = useMemo(
@@ -1401,17 +1464,53 @@ function MainContent() {
               onJournalMarkerClick={() => setView('journal')}
               onJournalQuickAdd={timeframe === 'intraday' ? handleJournalQuickAdd : undefined}
               range={rangeSpan ? { startBucket: rangeSpan.startBucket, endBucket: rangeSpan.endBucket } : null} // prettier-ignore
+              rangeB={rangeSpanB ? { startBucket: rangeSpanB.startBucket, endBucket: rangeSpanB.endBucket } : null} // prettier-ignore
               onRangeDrag={timeframe === 'intraday' ? handleRangeDrag : undefined}
+              onRangeCreateStart={handleRangeCreateStart}
               onRangeCommit={handleRangeCommit}
               rangeCreate={rangeTool}
             />
             {/* Chip aktivního range (#484): popisek okna + CumΔ okna + zavření */}
             {range && timeframe === 'intraday' && (
               <div className="range-chip" role="status" data-testid="range-chip">
-                ⧉ {rangeLabel(range)}
+                ⧉ {rangeB ? 'A ' : ''}
+                {rangeLabel(range)}
+                {rangeB && ` · B ${rangeLabel(rangeB)}`}
                 {rangeNote && ` · ⏳ ${rangeNote}`}
                 {rangeCum !== null &&
-                  ` · CumΔ okna ${rangeCum >= 0 ? '+' : ''}${Math.round(rangeCum).toLocaleString('cs-CZ')}`}
+                  ` · CumΔ${rangeB ? ' A' : ' okna'} ${rangeCum >= 0 ? '+' : ''}${Math.round(rangeCum).toLocaleString('cs-CZ')}`}
+                {rangeB &&
+                  rangeCumB !== null &&
+                  ` · B ${rangeCumB >= 0 ? '+' : ''}${Math.round(rangeCumB).toLocaleString('cs-CZ')}`}
+                {/* Duální rozsah (#489): +B vytvoří navazující okno, mód přepíná profil */}
+                {!rangeB && (
+                  <button
+                    className="chip"
+                    onClick={() => {
+                      const next = followUpRange(range, rawDay.minutesIso.at(-1) ?? null)
+                      if (next) {
+                        setRangeB(next)
+                        setRangeMode('diff')
+                      }
+                    }}
+                    disabled={followUpRange(range, rawDay.minutesIso.at(-1) ?? null) === null}
+                    title="Přidá druhé okno B (stejná šířka hned za A) — profil pak umí A / B / B−A. Okraje a posun táhneš stejně jako u A; nové A (tažením mimo okna) srovnání zruší."
+                  >
+                    +B
+                  </button>
+                )}
+                {rangeB && (
+                  <select
+                    value={rangeMode}
+                    onChange={(event) => setRangeMode(event.target.value as 'a' | 'b' | 'diff')}
+                    aria-label="Mód duálního rozsahu"
+                    title="A / B = profil daného okna; B−A = diferenční profil (co event změnil: nárůst aktivity doprava, pokles doleva)"
+                  >
+                    <option value="a">A</option>
+                    <option value="b">B</option>
+                    <option value="diff">B−A</option>
+                  </select>
+                )}
                 {rangePresetMode === 'last30' && (
                   <span className="muted" title="Okno se posouvá s novou minutou (preset)">
                     ⟳
@@ -1432,6 +1531,7 @@ function MainContent() {
                 marker={newsDialogMarker}
                 onClose={() => setNewsDialogMarker(null)}
                 onSetRange={timeframe === 'intraday' ? handleMarkerRange : undefined}
+                onSetPrePost={timeframe === 'intraday' ? handleMarkerPrePost : undefined}
               />
             )}
             {/* Checkbox Setupy (#399): globální viditelnost vrstvy setupů */}
@@ -1504,6 +1604,7 @@ function MainContent() {
             totalMinutes={projectedGrid.minutes}
             height={panelHeight}
             range={rangeSpan ? { startBucket: rangeSpan.startBucket, endBucket: rangeSpan.endBucket } : null} // prettier-ignore
+            rangeB={rangeSpanB ? { startBucket: rangeSpanB.startBucket, endBucket: rangeSpanB.endBucket } : null} // prettier-ignore
           />
           {showReplay && <PlaybackBar playback={playback} />}
         </div>
@@ -1542,7 +1643,19 @@ function MainContent() {
           axisStrikes={day.grid.strikes}
           symbol={symbol}
           expiry={selectedExpiry}
-          windowLabel={rangeWindowRows && range ? rangeLabel(range) : null}
+          windowLabel={
+            activeWindowRows && range
+              ? rangeB
+                ? `${rangeMode === 'b' ? 'B' : 'A'} ${rangeLabel(rangeMode === 'b' && rangeB ? rangeB : range)}`
+                : rangeLabel(range)
+              : null
+          }
+          diffRows={rangeDiffRows}
+          compareRows={
+            rangeB && rangeWindowRows && rangeWindowRowsB
+              ? { a: rangeWindowRows, b: rangeWindowRowsB }
+              : null
+          }
         />
       </div>
     </>

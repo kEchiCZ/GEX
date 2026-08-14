@@ -15,7 +15,7 @@ GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME 
 5. [Heatmapa podrobně](#5-heatmapa-podrobně)
 6. [Cenová vrstva — křivka a svíčky](#6-cenová-vrstva--křivka-a-svíčky)
 7. [Strike profil (pravý panel)](#7-strike-profil-pravý-panel)
-8. [Spodní panely — Vol, Opt Vol, Cum Δ](#8-spodní-panely--vol-opt-vol-cum-δ)
+8. [Spodní panely — Vol, Opt Vol, Cum Δ, Evo OI](#8-spodní-panely--vol-opt-vol-cum-δ-evo-oi)
 9. [Playback — přehrávání dne](#9-playback--přehrávání-dne)
 10. [Anotace — kreslení do grafu](#10-anotace--kreslení-do-grafu)
 11. [Dashboard](#11-dashboard) · [11b. Řetěz](#11b-řetěz--greeks--oi-tabulka) · [11c. News a sentiment](#11c-news-a-sentiment-sentimentlens) · [11d. Signály a Stats](#11d-signály-a-stats) · [11e. Deník a Traders mode](#11e-deník-tradera-a-traders-mode) · [11f. Ranní briefing](#11f-ranní-briefing-sidebar--briefing)
@@ -183,8 +183,31 @@ tedy vždy uvidíš dvě čáry bez ohledu na to, jak silný den je:
 - **Major** — úrovně 65 % a 95 % — jen jádra koncentrací
 - **All** — úrovně 40 % a 70 % — širší obrys struktury
 
+**Major a All nejsou „důležité vs. všechny" úrovně — je to jen posun obou
+prahů.** Major kreslí užší obrys kolem nejsilnějších jader, All zachytí i
+střední zóny. Počet čar je v obou případech stejný (dvě na stranu).
+
+**Nad čím se kontury počítají:** vždy nad **právě zobrazeným polem**, ne nad
+vlastním datovým zdrojem. Se zapnutou Dyn plochou obrysují modelované pole,
+jinak měřený grid podle zvoleného Mode. Proto sedí na barvy — používají týž
+jmenovatel (p99) jako barevná škála.
+
+**Jak číst:**
+
+| Kde je cena | Co to znamená |
+|---|---|
+| **nad oběma** čarami | uvnitř tlumící zóny — výkyvy se zaplácnou |
+| **mezi čarami** | přechodové pásmo, tlumení slábne |
+| **pod oběma** | mimo zónu — pohyb se rozjede snáz |
+
 Vzdálenost obou čar nese informaci: **čím blíž jsou u sebe, tím ostřejší je
-přechod** mezi „drží" a „pustilo" (čtení v kap. 18).
+přechod** mezi „drží" a „pustilo" (podrobné čtení v kap. 18). Kontury jsou
+**doplněk ke zdem, ne samostatný signál**: zdi říkají *kde* je hranice,
+kontury *jak ostrá* je.
+
+> **Pozor na záměnu:** kontury i **Walls módy** kreslí stejným stylem (bílá
+> čárkovaná). Rozeznáš je podle tvaru — kontury jsou uzavřené křivky kolem
+> koncentrací, walls jsou linie vedené zleva doprava.
 
 ### Linie v heatmapě (overlaye)
 
@@ -272,9 +295,9 @@ zašedne s vysvětlením, aby prémie nelhala.
 
 ---
 
-## 8. Spodní panely — Vol, Opt Vol, Cum Δ
+## 8. Spodní panely — Vol, Opt Vol, Cum Δ, Evo OI
 
-Tři panely se **sdílenou časovou osou** s heatmapou. Každý zvlášť vypneš checkboxem v horní liště (Vol / Opt Vol / Delta).
+Panely se **sdílenou časovou osou** s heatmapou. Každý zvlášť vypneš checkboxem v horní liště (Vol / Opt Vol / Delta / Δ Flow C/P / Evo OI).
 
 | Panel | Co ukazuje |
 |---|---|
@@ -282,13 +305,46 @@ Tři panely se **sdílenou časovou osou** s heatmapou. Každý zvlášť vypne�
 | **Opt Vol** | Minutový objem opcí, **barevně call (teal) / put (červená)** vedle sebe |
 | **Δ Flow C/P** | Delta-vážený opční tok zvlášť za call a put stranu (\|Δ\| × přírůstek volume). Z něj čteš, **na které straně se právě obchoduje** — např. „uzavírání callů" = call sloupce slábnou. Default vypnutý (checkbox Δ Flow C/P). |
 | **Cum Δ** | Kumulativní delta flow jako plocha **nad nulou (zelená) / pod nulou (červená)**. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Počítá se s plnou klasifikací agresora (tick-by-tick v hot zóně, midpoint test jinde) a resetuje se na začátku dne. |
-| **Evo OI** | Vývoj celkového Open Interest v čase, zvlášť call (teal) a put (červená), **schodovité kreslení** (OI se mění skokem při archivu, ne spojitě). Tlačítko **Δ** přepíná absolutní hodnotu vs. změnu od začátku dne. V Daily ose = hodnota na konci každého dne. Default vypnutý (checkbox Evo OI). |
+| **Evo OI** | Vývoj celkového Open Interest v čase, zvlášť call (teal) a put (červená), **schodovité kreslení**. V Daily ose = hodnota na konci každého dne. Default vypnutý (checkbox Evo OI). Podrobně níže. |
 | **Sentiment** | SentIndex z news-engine (zapíná checkbox **News**): intraday spojitá řada kolem nuly (kladná = risk-on tón zpráv, záporná = risk-off), v **Daily** pohledu OHLC svíčka indexu za každý den (open nese overnight zbytek). |
 
 Pohyb myší v kterémkoli panelu hýbe crosshairem ve všech panelech i heatmapě. Při najetí navíc uvidíš **hodnoty ukazatele**:
 
 - **vpravo nahoře** hodnotu pro **minutu pod crosshairem** (Opt Vol a Δ Flow zvlášť C/P);
 - **vpravo na ose Y** hodnotu podle **výškové úrovně kurzoru** (ne max daného času) + **vodorovnou crosshair linku** na té úrovni. U Cum Δ je škála znaménková kolem nuly.
+
+### Evo OI podrobně — budují se pozice, nebo zavírají?
+
+**„Evo" = evolution, tedy vývoj.** Panel je prostý součet Open Interestu přes
+všechny striky vybrané expirace, minutu po minutě — teal call, červená put.
+Jednotkou jsou **kontrakty**.
+
+**Trojúhelníkový glyf u nadpisu je tlačítko, ne značka v grafu.** Je to
+velké řecké **Δ** a přepíná režim svislé osy:
+
+| Režim | Co osa ukazuje |
+|---|---|
+| **Δ** (výchozí) | **změnu od začátku osy** — křivka startuje na nule, hodnoty se znaménkem (`+30`, `−10`) |
+| **abs** | **absolutní úroveň** OI v kontraktech |
+
+Výchozí je Δ proto, že celkové OI se za den mění řádově o promile — v
+absolutní škále by obě linky vypadaly jako rovné čáry a panel by nenesl
+žádnou informaci.
+
+**K čemu to je:** objem sám o sobě neřekne, jestli obchod pozici **otevřel,
+nebo zavřel**. To dopoví až OI. Proto se Evo OI čte **vedle** panelů Opt Vol
+a Δ Flow, ne samostatně:
+
+- objem roste **a OI roste** → pozice se **budují**, zeď se staví;
+- objem roste **a OI klesá** → **zavírání**, zeď se rozpouští.
+
+> **Plochý úsek neznamená „nic se neděje".** OI chodí z IBKR přes tick 101
+> jen občas (viz ADR-0001), a schodovité kreslení je záměr — šikmá spojnice
+> by si vymýšlela průběh, který jsme nenaměřili. Vodorovný úsek tedy čti jako
+> **„od posledního snímku nepřišla aktualizace"**.
+
+Panel vždy ukazuje **měřené OI**; přepínač Měřené / FA odhad s ním nehýbe
+(ten se týká heatmapy a strike profilu).
 
 ---
 
@@ -490,11 +546,18 @@ karty → ☀ → dopsat tezi.
 
 Diagnostická obrazovka:
 
-- **Připojení** — host/port/client ID, tlačítko **Reconnect** (vyžádá znovupřipojení enginu), aktuální stav spojení
+- **Připojení** — host/port/client ID a aktuální stav spojení. Tlačítko
+  Reconnect už tu není: engine se přepojuje sám, ruční tlačítko jen mátlo.
 - **Subskripce** — průběh Greeks (X/Y), velikost repair fronty, vytížení market data lines
-- **Log** — chronologický záznam událostí (změny stavu spojení, alerty)
+- **Log** — chronologický záznam **událostí přijatých v prohlížeči** (změny
+  stavu spojení, alerty). **Není to log enginu** a po obnovení stránky je
+  prázdný — serverové logy hledej v kontejneru (viz ADMIN-MANUAL).
 
 Sem se podívej jako první, když něco nevypadá dobře.
+
+> **Poznámka:** host/port/client ID najdeš i v Settings → IBKR a průběh
+> Greeks / repair / lines i ve stavové liště (kap. 15). Tahle duplicita je
+> známá a obrazovka se bude slučovat do Settings.
 
 ![IBKR Console](img/console.png)
 
@@ -502,16 +565,28 @@ Sem se podívej jako první, když něco nevypadá dobře.
 
 ## 13. Settings
 
-Změny se **ukládají okamžitě** (bez tlačítka Uložit) a engine si je průběžně přebírá:
+Formulář se vyplní, zkontroluje a odešle tlačítkem **Uložit** — rozepsaná
+hodnota se do enginu nedostane (dřív se ukládalo po každé klávese, což při
+psaní „150" poslalo do enginu i „1" a „15"). Výjimkou je téma Dark/Light,
+které se přepne hned.
 
 | Sekce | Položky |
 |---|---|
 | **IBKR** | Host, port (7496 live / 7497 paper), client ID |
-| **Engine** | **Rozsah strikes (± body od spotu)** — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB) |
+| **Engine (IBKR pipeline)** | **Rozsah strikes (± body od spotu)** — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB) |
 | **Alerty** | **Hlásit chyby subskripce market dat** — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert *Chyba subskripce* v kap. 14) |
 | **Trading** | **Traders mode** — přepínač trading vrstev (viz kap. 11e); **velikost účtu + riziko na obchod** pro kalkulačku pozice u setup karty. Vše jen v prohlížeči, na server neodchází |
 | **Vzhled** | Téma **Dark/Light** (přepne se ihned), jazyk |
 | **Seance** | Historické pole (JSON) — markery seancí se nově generují **automaticky** z časů světových burz; checkbox Sessions v grafu |
+
+> **Sekce Engine se týká výhradně IBKR.** Velikost dávky i šířka hot zóny
+> jsou odvozené od limitů tvého IBKR účtu (100 market data lines, 5
+> tick-by-tick streamů — ADR-0001), rozsah strikes řídí rotační sweep přes
+> IBKR. **Nastavení pro tastytrade v Settings zatím není** a být nemůže:
+> tastytrade dnes běží jako tichá měřicí větev, která data nikam nepublikuje,
+> jen porovnává s IBKR do tabulky `feed_comparison`. Zapíná se proměnnými v
+> `.env` a vyžaduje restart enginu (viz ADMIN-MANUAL). Sekce v Settings
+> přibude, až se tastytrade stane plnohodnotným zdrojem dat.
 
 ![Settings](img/settings.png)
 
@@ -719,11 +794,32 @@ solidní, za měsíc náčrt). **Ostré útesy u expirací jsou spolehlivější
 absolutní čísla:** že po expiraci struktura zmizí, je jistota daná
 kalendářem; přesná síla pásma je odhad.
 
-**Jednotka:** plocha se zobrazuje v **$/1 %** (přepínač Jednotka) — každá
-cenová hladina je vážená P²/100, tedy „kolik dolarů podkladu dealeři
-přeobchodují při pohybu o 1 %". Vyšší hladiny mají přirozeně větší váhu;
-$/bod je surové pole bez váhy (obě varianty ukazují tutéž strukturu, liší
-se důrazem).
+**Jednotka ($/bod vs. $/1 %).** Engine počítá a ukládá vždycky jen surové
+**$/bod**; přepínač **Jednotka** v řádku přepínačů je čistě zobrazovací a
+objeví se jen se zapnutou Dyn plochou.
+
+| Jednotka | Jak ji číst |
+|---|---|
+| **$/bod** | kolik dolarů gamma expozice připadá na **1 bod** pohybu podkladu — surová, mechanická veličina |
+| **$/1 %** (výchozí) | kolik dolarů podkladu musí dealeři **přeobchodovat při pohybu o 1 %** |
+
+Převod **není** dělení stem, ale váha **P²/100**, kde P je cena dané cenové
+hladiny (ne spot). Dvě P v tom jsou proto, že 1 % je P/100 bodů (první P) a
+delta se ještě převádí z kusů na dolary notional (druhé P). Vyšší hladiny
+tak mají přirozeně větší váhu. **$/1 %** je výchozí, protože je srovnatelná
+napříč cenovými hladinami i napříč dny s různou úrovní indexu.
+
+Obě varianty ukazují **tutéž strukturu**, liší se jen důrazem — **znaménka
+ani poloha flipu se přepnutím nemění**.
+
+> **Co přepínač NEovlivňuje:** zdi, GEX levels, flip a setupy. Ty se počítají
+> z měřeného pole a zůstávají v původních jednotkách. Přepínač působí na Dyn
+> plochu (GEX / Charm / Vanna) a na GEX křivku ve strike profilu.
+
+> **Nezaměň s druhým „Jednotkou".** Pod strike profilem dole je vlastní
+> přepínač **Jednotka P/C poměru** (kontrakty / prémie / notional, kap. 7) —
+> jiná věc, jen shodou okolností stejné slovo. Přepínač jednotek Dyn GEX je
+> jediný a je nahoře v liště přepínačů.
 
 **Postup čtení odshora dolů:**
 1. najdi předěl **Today/projekce** — vpravo od něj nejsou data, ale model,
@@ -829,6 +925,9 @@ Pravá (modelovaná) část mapy vychází z **aktuálního snímku IV a ranníh
 | **Max Pain** | Strike, kde by při expiraci vypršelo nejméně hodnoty opcí — trh k němu v expiracích často „přišpendlí" (pinning). |
 | **OI (Open Interest)** | Počet otevřených kontraktů; mění se jednou denně (CME publikuje ráno). |
 | **ΔOI vs. včera** | Změna OI proti předchozímu dni — kde přes noc vznikly/zanikly pozice. |
+| **Evo OI** | *Evolution* = vývoj. Spodní panel s celkovým OI (call/put) minutu po minutě. Spolu s objemem rozliší, jestli se pozice **budují** (objem ↑, OI ↑), nebo **zavírají** (objem ↑, OI ↓). Tlačítko Δ přepíná změnu od začátku osy vs. absolutní úroveň. |
+| **Contours (kontury)** | Bílé izolinie nad zobrazeným polem na prazích % síly z p99 (Major 65/95, All 40/70, vždy dvě na stranu). Říkají, **jak ostrá** je hranice tlumící zóny — zdi říkají *kde*, kontury *jak ostře*. |
+| **$/bod vs. $/1 %** | Jednotka Dyn ploch a GEX křivky. $/bod = surové pole (gamma expozice na 1 bod pohybu). $/1 % = totéž vážené P²/100 — kolik dolarů dealeři přeobchodují při 1% pohybu; srovnatelné napříč cenovými hladinami, proto výchozí. Zdi, levels ani flip přepínač nemění. |
 | **Δ Flow C/P** | Delta-vážený opční tok zvlášť za call/put stranu — na které straně se právě obchoduje. |
 | **Cum Δ** | Kumulativní delta flow — součet (směr obchodu × velikost × delta × multiplikátor) přes den. |
 | **Hot zóna** | Pásmo ATM strikes sledované tick-by-tick pro přesnou klasifikaci agresora. |

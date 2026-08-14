@@ -321,7 +321,7 @@ Z [ADR-0001](../adr/0001-ibkr-account-limits.md) (měřeno živě na účtu):
 | Limit | Hodnota | Dopad |
 |---|---|---|
 | Tick-by-tick streamy | **5** | Hot zóna degraduje z ATM±15 na ~ATM±1; zbytek klasifikuje midpoint test. Rozšíření = IBKR Quote Booster. |
-| Market data lines | ≥ 150 | Dávka 80 má rezervu |
+| Market data lines | **100** | Naměřený strop účtu (sonda #609). Původní údaj „≥ 150" v ADR-0001 neplatí — dávka 80 jede blízko stropu (~95–100/100), **`batch_size` proto nezvyšovat**. Strukturální řešení přinese #616. |
 | **FOP OI** | **tick 588 nedodává nikdy; tick 101 funguje** | **VYŘEŠENO (issue #65, ADR-0001 v3):** `IbOIFetcher` používá generic tick 101 pro OPT i FOP a čte hodnotu podle strany kontraktu (opačná strana = validní 0.0). Retry à 30 min + volume fallback zůstávají jako pojistka. |
 
 [ADR-0002](../adr/0002-strike-band-expansion.md): obálka strikes je grow-only (křídla se neztrácejí), strop šířky s alertem. [ADR-0003](../adr/0003-multi-instrument.md): multi-instrument orchestrace řízená watchlistem.
@@ -334,6 +334,22 @@ Přístup výhradně **OAuth2 scope `read`** — nikdy `/sessions`, nikdy `trade
 (ADR-0025); granty oddělené pro dev a produkci. Shadow mód (#613) porovnává
 oba feedy do `feed_comparison`, nic nepublikuje; vyhodnocení
 `scripts/feed_comparison_report.py`.
+
+**Konfigurace je jen přes `.env`, v Settings tastytrade není** — a záměrně:
+dokud větev jen měří, není co uživatelsky nastavovat. Sekce v UI přibude s
+fází 2 (#614), kdy se tasty stane fallbackem a validátorem.
+
+**Pozor na klíče, které engine nečte.** `Settings` v `config.py` zná pouze
+`GEXLENS_TASTY_SHADOW`, `_CLIENT_SECRET` a `_REFRESH_TOKEN`; model má
+`extra="ignore"`, takže cokoli dalšího se **tiše zahodí**.
+`GEXLENS_TASTY_CLIENT_ID` z `.env.example` nepoužívá nikdo (refresh flow
+posílá jen `refresh_token` + `client_secret`) a `GEXLENS_DEV_TASTY_*` čte
+napřímo z prostředí jen sonda `scripts/tasty_probe.py`. Když tedy nastavení
+„nezabírá", ověř nejdřív, že ten klíč engine vůbec zná.
+
+Provozní stav tasty větve (reconnecty DXLink, handshake, počet sledovaných
+symbolů, zapsané řádky) dnes končí **jen v logu kontejneru** a v tabulce
+`feed_comparison` — v UI pro něj zatím není obrazovka.
 
 ---
 

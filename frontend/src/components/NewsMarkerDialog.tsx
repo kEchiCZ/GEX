@@ -48,12 +48,15 @@ export function NewsMarkerDialog({
   marker,
   onClose,
   onSetRange,
+  onSetPrePost,
 }: {
   marker: NewsMarker
   onClose: () => void
   /** Range na reakční okno zprávy (#488): ts_event → +minut (okna 15/60 jako
       `news_reactions`). Bez handleru se tlačítka nekreslí (Daily pohled). */
   onSetRange?: (row: NewsRow, minutes: number) => void
+  /** Pre/post srovnání (#489): A = event−15→event, B = event→+15. */
+  onSetPrePost?: (row: NewsRow) => void
 }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -119,6 +122,15 @@ export function NewsMarkerDialog({
                         ⧉ +{minutes} min
                       </button>
                     ))}
+                    {onSetPrePost && (
+                      <button
+                        className="chip"
+                        onClick={() => onSetPrePost(row)}
+                        title="Duální okna A/B (#489): A = 15 min PŘED událostí, B = 15 min PO ní — diferenční profil B−A ukáže, co event změnil"
+                      >
+                        ⧉ pre/post ±15
+                      </button>
+                    )}
                   </div>
                 )}
               </li>

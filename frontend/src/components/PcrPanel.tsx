@@ -33,6 +33,7 @@ export function PcrPanel({
   expiry,
   spot,
   windowLabel = null,
+  compareRows = null,
 }: {
   rows: ProfileRow[]
   symbol: string
@@ -42,6 +43,9 @@ export function PcrPanel({
       řádky (#484). Panel váží premiem (hlavní) + kusově (sekundární řádek),
       základ jen Vol (OI je v okně statické) a tooltip nese top 5 strikes. */
   windowLabel?: string | null
+  /** Duální rozsah (#489): okenní řádky A a B — panel ukáže oba premium
+      poměry vedle sebe + Δ (respektuje zvolený rozsah striků #645). */
+  compareRows?: { a: ProfileRow[]; b: ProfileRow[] } | null
 }) {
   const [basis, setBasis] = usePersistentState<PcrBasis>('pcrBasis', 'vol_oi', oneOf(PCR_BASES))
   const [unit, setUnit] = usePersistentState<PcrUnit>('pcrUnit', 'premium', oneOf(PCR_UNITS))
@@ -64,6 +68,29 @@ export function PcrPanel({
         : null,
     [windowed, rows, symbol, spot, scope],
   )
+  const compare = useMemo(() => {
+    if (!compareRows) return null
+    const a = computePcr(
+      compareRows.a,
+      'vol',
+      'premium',
+      pointValue(symbol),
+      spot,
+      undefined,
+      scope,
+    )
+    const b = computePcr(
+      compareRows.b,
+      'vol',
+      'premium',
+      pointValue(symbol),
+      spot,
+      undefined,
+      scope,
+    )
+    if (a.ratio === null || b.ratio === null) return { a: a.ratio, b: b.ratio, delta: null }
+    return { a: a.ratio, b: b.ratio, delta: b.ratio - a.ratio }
+  }, [compareRows, symbol, spot, scope])
   const topStrikes = useMemo(
     () => (windowed ? topPremiumStrikes(rows, pointValue(symbol), 5, undefined, scope, spot) : []),
     [windowed, rows, symbol, scope, spot],
@@ -160,6 +187,15 @@ export function PcrPanel({
           kusově PUT {formatAmount(contractsResult.put)} · P/C{' '}
           {contractsResult.ratio === null ? '—' : contractsResult.ratio.toFixed(2)} · CALL{' '}
           {formatAmount(contractsResult.call)}
+        </div>
+      )}
+      {/* Srovnání oken A/B (#489): oba premium poměry + delta */}
+      {compare && (
+        <div className="muted pcr-compare" data-testid="pcr-compare">
+          P/C A {compare.a === null ? '—' : compare.a.toFixed(2)} · B{' '}
+          {compare.b === null ? '—' : compare.b.toFixed(2)}
+          {compare.delta !== null &&
+            ` · Δ ${compare.delta >= 0 ? '+' : ''}${compare.delta.toFixed(2)}`}
         </div>
       )}
       {/* Popiska původu čísla — metrika · základ · expirace (#469) */}

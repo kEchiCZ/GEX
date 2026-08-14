@@ -20,6 +20,8 @@ import { barGeometry, formatAmount, gexCurvePaths, maxComponentSide, niceCeil, v
 import type { ProfileRow } from '../profile/bars'
 import { GEX_UNIT_LABELS, weightProfileRow } from '../heatmap/units'
 import { PcrPanel } from './PcrPanel'
+import { diffPeak } from '../profile/diff'
+import type { DiffRow } from '../profile/diff'
 import type { GexUnits } from '../heatmap/units'
 import type { GexProfileRow } from '../replay/loader'
 import { usePersistentState } from '../state/persist'
@@ -79,6 +81,8 @@ function StrikeProfileBase({
   symbol = 'ES',
   expiry = null,
   windowLabel = null,
+  diffRows = null,
+  compareRows = null,
 }: {
   rows: ProfileRow[]
   spot: number | null
@@ -102,6 +106,11 @@ function StrikeProfileBase({
   /** Okenní režim P/C panelu (#486): popisek aktivního range; `rows` jsou pak
       okenní řádky (#484). */
   windowLabel?: string | null
+  /** Diferenční mód B−A (#489): divergentní pruhy ROZDÍLU okenních objemů
+      per strana (nárůst doprava, pokles doleva) místo běžných pruhů. */
+  diffRows?: DiffRow[] | null
+  /** Duální rozsah (#489): okenní řádky A a B pro srovnávací řádek P/C panelu. */
+  compareRows?: { a: ProfileRow[]; b: ProfileRow[] } | null
   /** Strikes HEATMAPY vzestupně — sdílená osa Y (#213). Řádky panelu (Σ souhrn
   = sjednocení expirací) můžou mít jinou sadu než graf; bez kotvení k této ose
   by se cenové osy obou panelů rozjely. Null = osa z vlastních řádků (legacy). */
@@ -320,6 +329,44 @@ function StrikeProfileBase({
           {/* symetrická osa */}
           <line x1={halfWidth} y1={0} x2={halfWidth} y2={svgHeight} stroke="#2c3342" />
           {/* popisky strikes (každý k-tý, ať se nepřekrývají) */}
+          {/* Diferenční mód (#489): B−A per strana, nárůst doprava / pokles
+              doleva; pokles ztlumený — směr už nese strana od středu */}
+          {diffRows &&
+            (() => {
+              const peak = diffPeak(diffRows)
+              if (peak <= 0) return null
+              const scale = barHalf / peak
+              return diffRows.map((diff) => {
+                const centerY = strikeCenterY(diff.strike)
+                if (centerY === null) return null
+                const half = Math.max(1, rowHeight - ROW_GAP) / 2
+                const bars: Array<[number, string, number]> = [
+                  [diff.callDelta, COLORS.callVol, centerY - half],
+                  [diff.putDelta, COLORS.putVol, centerY],
+                ]
+                return (
+                  <g key={diff.strike} data-testid={`diff-row-${diff.strike}`}>
+                    {bars.map(([value, color, y], index) => {
+                      const width = Math.min(barHalf, Math.abs(value) * scale)
+                      if (width <= 0) return null
+                      return (
+                        <rect
+                          key={index}
+                          x={value >= 0 ? halfWidth : halfWidth - width}
+                          y={y}
+                          width={width}
+                          height={Math.max(1, half - 1)}
+                          fill={color}
+                          opacity={value >= 0 ? 0.95 : 0.45}
+                        >
+                          <title>{`${diff.strike} ${index === 0 ? 'C' : 'P'} ${value >= 0 ? '+' : ''}${Math.round(value)}`}</title>
+                        </rect>
+                      )
+                    })}
+                  </g>
+                )
+              })
+            })()}
           {ordered.map((row, index) => {
             if (index % labelEvery !== 0) return null
             const centerY = strikeCenterY(row.strike)
@@ -337,133 +384,134 @@ function StrikeProfileBase({
               </text>
             )
           })}
-          {ordered.map((row, index) => {
-            const bar = geometry.get(row.strike)
-            const centerY = strikeCenterY(row.strike)
-            if (!bar || centerY === null) return null
-            // Poloviny výšky pruhu zvlášť (#548): u díry v ose se strana k díře
-            // capne na medián rozestupů, druhá strana zůstává plná
-            const caps = capMap.get(row.strike) ?? { up: 1, down: 1 }
-            const fullHalf = Math.max(1, rowHeight - ROW_GAP) / 2
-            const halfUp = Math.max(0.5, fullHalf * caps.up)
-            const halfDown = Math.max(0.5, fullHalf * caps.down)
-            const barHeight = halfUp + halfDown
-            const y = centerY - halfUp
-            const highlighted = crosshair?.strike === row.strike
-            // Zmrzlá kotace (ADR-0015): ztlumit, ať nevypadá jako živá data
-            const stale = (row.staleAge ?? 0) > STALE_THRESHOLD_S
-            // Kolizní logika popisků hodnot (#181): když se číslo nevejde vedle
-            // pruhu (put by zasáhl do strike popisků, call za pravý okraj),
-            // překlopí se DOVNITŘ pruhu tmavým textem — nikdy se nepřekrývá
-            const callText = formatAmount(row.callVolComponent + row.callOiComponent)
-            const callEnd = halfWidth + bar.callVolWidth + bar.callOiWidth
-            const callOutside = callEnd + 3 + callText.length * VALUE_CHAR_PX <= width - 2
-            const putText = formatAmount(row.putVolComponent + row.putOiComponent)
-            const putEnd = halfWidth - bar.putVolWidth - bar.putOiWidth
-            const putOutside = putEnd - 3 - putText.length * VALUE_CHAR_PX >= STRIKE_LABEL_RESERVE
-            return (
-              <g
-                key={row.strike}
-                data-testid={`profile-row-${row.strike}`}
-                data-stale={stale ? 'true' : undefined}
-                opacity={stale ? 0.28 : highlighted ? 1 : 0.88}
-                onPointerEnter={() =>
-                  setCrosshair({ minuteIdx: crosshair?.minuteIdx ?? 0, strike: row.strike })
-                }
-              >
-                {highlighted && (
-                  <rect
-                    x={0}
-                    y={y}
-                    width={width}
-                    height={barHeight}
-                    fill="rgba(215,220,230,0.08)"
-                  />
-                )}
-                {/* call: doprava — Vol sytě, OI Δ světleji (skládané) */}
-                <rect
-                  x={halfWidth}
-                  y={y}
-                  width={bar.callVolWidth}
-                  height={barHeight}
-                  fill={COLORS.callVol}
-                  data-part="call-vol"
-                />
-                <rect
-                  x={halfWidth + bar.callVolWidth}
-                  y={y}
-                  width={bar.callOiWidth}
-                  height={barHeight}
-                  fill={COLORS.callOi}
-                  data-part="call-oi"
-                />
-                {/* put: doleva */}
-                <rect
-                  x={halfWidth - bar.putVolWidth}
-                  y={y}
-                  width={bar.putVolWidth}
-                  height={barHeight}
-                  fill={COLORS.putVol}
-                  data-part="put-vol"
-                />
-                <rect
-                  x={halfWidth - bar.putVolWidth - bar.putOiWidth}
-                  y={y}
-                  width={bar.putOiWidth}
-                  height={barHeight}
-                  fill={COLORS.putOi}
-                  data-part="put-oi"
-                />
-                {/* Bez OI (#465): šrafovaná půlka řádku. Prázdno by tvrdilo změřenou
-                nulu — přitom archiv strike nepokrývá nebo ho IBKR nedodal. */}
-                {row.callOiMissing && (
+          {!diffRows &&
+            ordered.map((row, index) => {
+              const bar = geometry.get(row.strike)
+              const centerY = strikeCenterY(row.strike)
+              if (!bar || centerY === null) return null
+              // Poloviny výšky pruhu zvlášť (#548): u díry v ose se strana k díře
+              // capne na medián rozestupů, druhá strana zůstává plná
+              const caps = capMap.get(row.strike) ?? { up: 1, down: 1 }
+              const fullHalf = Math.max(1, rowHeight - ROW_GAP) / 2
+              const halfUp = Math.max(0.5, fullHalf * caps.up)
+              const halfDown = Math.max(0.5, fullHalf * caps.down)
+              const barHeight = halfUp + halfDown
+              const y = centerY - halfUp
+              const highlighted = crosshair?.strike === row.strike
+              // Zmrzlá kotace (ADR-0015): ztlumit, ať nevypadá jako živá data
+              const stale = (row.staleAge ?? 0) > STALE_THRESHOLD_S
+              // Kolizní logika popisků hodnot (#181): když se číslo nevejde vedle
+              // pruhu (put by zasáhl do strike popisků, call za pravý okraj),
+              // překlopí se DOVNITŘ pruhu tmavým textem — nikdy se nepřekrývá
+              const callText = formatAmount(row.callVolComponent + row.callOiComponent)
+              const callEnd = halfWidth + bar.callVolWidth + bar.callOiWidth
+              const callOutside = callEnd + 3 + callText.length * VALUE_CHAR_PX <= width - 2
+              const putText = formatAmount(row.putVolComponent + row.putOiComponent)
+              const putEnd = halfWidth - bar.putVolWidth - bar.putOiWidth
+              const putOutside = putEnd - 3 - putText.length * VALUE_CHAR_PX >= STRIKE_LABEL_RESERVE
+              return (
+                <g
+                  key={row.strike}
+                  data-testid={`profile-row-${row.strike}`}
+                  data-stale={stale ? 'true' : undefined}
+                  opacity={stale ? 0.28 : highlighted ? 1 : 0.88}
+                  onPointerEnter={() =>
+                    setCrosshair({ minuteIdx: crosshair?.minuteIdx ?? 0, strike: row.strike })
+                  }
+                >
+                  {highlighted && (
+                    <rect
+                      x={0}
+                      y={y}
+                      width={width}
+                      height={barHeight}
+                      fill="rgba(215,220,230,0.08)"
+                    />
+                  )}
+                  {/* call: doprava — Vol sytě, OI Δ světleji (skládané) */}
                   <rect
                     x={halfWidth}
                     y={y}
-                    width={barHalf}
+                    width={bar.callVolWidth}
                     height={barHeight}
-                    fill="url(#oi-missing-hatch)"
-                    data-part="call-oi-missing"
+                    fill={COLORS.callVol}
+                    data-part="call-vol"
                   />
-                )}
-                {row.putOiMissing && (
                   <rect
-                    x={halfWidth - barHalf}
+                    x={halfWidth + bar.callVolWidth}
                     y={y}
-                    width={barHalf}
+                    width={bar.callOiWidth}
                     height={barHeight}
-                    fill="url(#oi-missing-hatch)"
-                    data-part="put-oi-missing"
+                    fill={COLORS.callOi}
+                    data-part="call-oi"
                   />
-                )}
-                {/* Číselné hodnoty (Δ-vážené kontrakty) u konce pruhů — každý k-tý řádek */}
-                {index % labelEvery === 0 && row.callVolComponent + row.callOiComponent > 0 && (
-                  <text
-                    x={callOutside ? callEnd + 3 : callEnd - 3}
-                    y={centerY + 3}
-                    fontSize={9}
-                    fill={callOutside ? COLORS.callVol : '#12151c'}
-                    textAnchor={callOutside ? 'start' : 'end'}
-                    data-part="value-call"
-                  >
-                    {callText}
-                  </text>
-                )}
-                {index % labelEvery === 0 && row.putVolComponent + row.putOiComponent > 0 && (
-                  <text
-                    x={putOutside ? putEnd - 3 : putEnd + 3}
-                    y={centerY + 3}
-                    fontSize={9}
-                    fill={putOutside ? COLORS.putVol : '#12151c'}
-                    textAnchor={putOutside ? 'end' : 'start'}
-                    data-part="value-put"
-                  >
-                    {putText}
-                  </text>
-                )}
-              </g>
-            )
-          })}
+                  {/* put: doleva */}
+                  <rect
+                    x={halfWidth - bar.putVolWidth}
+                    y={y}
+                    width={bar.putVolWidth}
+                    height={barHeight}
+                    fill={COLORS.putVol}
+                    data-part="put-vol"
+                  />
+                  <rect
+                    x={halfWidth - bar.putVolWidth - bar.putOiWidth}
+                    y={y}
+                    width={bar.putOiWidth}
+                    height={barHeight}
+                    fill={COLORS.putOi}
+                    data-part="put-oi"
+                  />
+                  {/* Bez OI (#465): šrafovaná půlka řádku. Prázdno by tvrdilo změřenou
+                nulu — přitom archiv strike nepokrývá nebo ho IBKR nedodal. */}
+                  {row.callOiMissing && (
+                    <rect
+                      x={halfWidth}
+                      y={y}
+                      width={barHalf}
+                      height={barHeight}
+                      fill="url(#oi-missing-hatch)"
+                      data-part="call-oi-missing"
+                    />
+                  )}
+                  {row.putOiMissing && (
+                    <rect
+                      x={halfWidth - barHalf}
+                      y={y}
+                      width={barHalf}
+                      height={barHeight}
+                      fill="url(#oi-missing-hatch)"
+                      data-part="put-oi-missing"
+                    />
+                  )}
+                  {/* Číselné hodnoty (Δ-vážené kontrakty) u konce pruhů — každý k-tý řádek */}
+                  {index % labelEvery === 0 && row.callVolComponent + row.callOiComponent > 0 && (
+                    <text
+                      x={callOutside ? callEnd + 3 : callEnd - 3}
+                      y={centerY + 3}
+                      fontSize={9}
+                      fill={callOutside ? COLORS.callVol : '#12151c'}
+                      textAnchor={callOutside ? 'start' : 'end'}
+                      data-part="value-call"
+                    >
+                      {callText}
+                    </text>
+                  )}
+                  {index % labelEvery === 0 && row.putVolComponent + row.putOiComponent > 0 && (
+                    <text
+                      x={putOutside ? putEnd - 3 : putEnd + 3}
+                      y={centerY + 3}
+                      fontSize={9}
+                      fill={putOutside ? COLORS.putVol : '#12151c'}
+                      textAnchor={putOutside ? 'end' : 'start'}
+                      data-part="value-put"
+                    >
+                      {putText}
+                    </text>
+                  )}
+                </g>
+              )
+            })}
           {/* Osa množství (Δ-vážené kontrakty) + strany Put/Call — dole nad okrajem */}
           {axisFull > 0 && (
             <g data-part="amount-axis" fontSize={9} fill="#7d8596">
@@ -574,6 +622,7 @@ function StrikeProfileBase({
         expiry={expiry}
         spot={spot}
         windowLabel={windowLabel}
+        compareRows={compareRows}
       />
     </aside>
   )

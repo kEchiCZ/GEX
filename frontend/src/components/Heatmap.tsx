@@ -135,7 +135,9 @@ export function Heatmap({
   onJournalMarkerClick,
   onJournalQuickAdd,
   range = null,
+  rangeB = null,
   onRangeDrag,
+  onRangeCreateStart,
   onRangeCommit,
   rangeCreate = false,
   forwardMarkers = [],
@@ -215,9 +217,14 @@ export function Heatmap({
   onJournalQuickAdd?: (minuteIdx: number) => void
   /** Range selector (#484): aktivní okno v koších osy; kreslí ztlumení + úchyty. */
   range?: { startBucket: number; endBucket: number } | null
-  /** Živá změna range při tažení (vytvoření Alt+drag / nástrojem, úchyty okrajů,
-      Alt+drag středu posouvá okno). Commit řeší rodič v onRangeCommit. */
-  onRangeDrag?: (startBucket: number, endBucket: number) => void
+  /** Druhé okno B (#489): oranžové úchyty; při úchopu má přednost před A. */
+  rangeB?: { startBucket: number; endBucket: number } | null
+  /** Živá změna range při tažení; `which` říká, kterého okna se dotyk týká
+      (create nástrojem/Alt vždy 'a' — nové A ruší B v rodiči). */
+  onRangeDrag?: (startBucket: number, endBucket: number, which: 'a' | 'b') => void
+  /** Začátek KRESLENÍ nového okna (nástroj/Alt) — rodič ruší B (#489);
+      úpravy okrajů/posun existujících oken tohle nevolají. */
+  onRangeCreateStart?: () => void
   onRangeCommit?: () => void
   /** Nástroj „Rozsah" aktivní — obyčejné tažení vytváří range místo panu. */
   rangeCreate?: boolean
@@ -328,7 +335,9 @@ export function Heatmap({
   // Tažení: pan plochy, nebo roztahování jedné osy (TradingView styl)
   const dragRef = useRef<{ x: number; y: number; mode: 'pan' | 'scale-x' | 'scale-y' } | null>(null)
   // Tažení range (#484): create drží kotvu (druhý okraj), move offset úchopu
-  const rangeDragRef = useRef<{ mode: 'create' | 'move'; anchor: number } | null>(null)
+  const rangeDragRef = useRef<{ mode: 'create' | 'move'; anchor: number; which: 'a' | 'b' } | null>(
+    null,
+  )
   // Stav pro kurzor (ref nevyvolá re-render; při tažení se stejně renderuje
   // každou změnou range, ale hover mimo tažení potřebuje vlastní stav)
   const [rangeDragging, setRangeDragging] = useState(false)
@@ -938,10 +947,14 @@ export function Heatmap({
     // okno kreslí dynamická vrstva (leží nad statickou i nad živými svíčkami —
     // jeden dim, nic se nesčítá; zpětná vazba: dim pod cenovou vrstvou vypadal
     // skoro nulově). Fallback bez WebGL (#490).
-    if (range) {
-      const startX = minuteToX(range.startBucket) - 0.5 * scaleX
-      const endX = minuteToX(range.endBucket + 1) - 0.5 * scaleX
-      context.strokeStyle = 'rgba(77,163,255,0.9)'
+    for (const [target, color, label] of [
+      [range, 'rgba(77,163,255,0.9)', rangeB ? 'A' : null],
+      [rangeB, 'rgba(255,165,60,0.9)', 'B'],
+    ] as const) {
+      if (!target) continue
+      const startX = minuteToX(target.startBucket) - 0.5 * scaleX
+      const endX = minuteToX(target.endBucket + 1) - 0.5 * scaleX
+      context.strokeStyle = color
       context.lineWidth = 1.5
       for (const x of [startX, endX]) {
         context.beginPath()
@@ -949,8 +962,14 @@ export function Heatmap({
         context.lineTo(x, logicalH)
         context.stroke()
         // Úchyt uprostřed výšky — tažením se okraj upravuje
-        context.fillStyle = 'rgba(77,163,255,0.9)'
+        context.fillStyle = color
         context.fillRect(x - 3, logicalH / 2 - 12, 6, 24)
+      }
+      // Popisek okna při duálním režimu (#489) — ať se A/B nesplete
+      if (label) {
+        context.fillStyle = color
+        context.font = 'bold 11px sans-serif'
+        context.fillText(label, startX + 5, 14)
       }
     }
   }, [
@@ -980,6 +999,7 @@ export function Heatmap({
     dpr,
     forwardMarkers,
     range,
+    rangeB,
   ])
 
   // 4) DYNAMICKÁ overlay vrstva (#141): živé svíčky ze spotu, značka aktuální ceny
@@ -1035,11 +1055,22 @@ export function Heatmap({
     // vrstva je pod nimi, bez tohohle by živá hrana zůstala plně svítit.
     // Crosshair a značka ceny se kreslí až po dimu (mají zůstat čitelné).
     if (range) {
-      const startX = minuteToX(range.startBucket) - 0.5 * scaleX
-      const endX = minuteToX(range.endBucket + 1) - 0.5 * scaleX
+      // Jas = vybráno: dim je komplement SJEDNOCENÍ oken A a B (#489) —
+      // mezera mezi disjunktními okny se tlumí taky
+      const intervals = [range, ...(rangeB ? [rangeB] : [])]
+        .map((target) => ({
+          start: minuteToX(target.startBucket) - 0.5 * scaleX,
+          end: minuteToX(target.endBucket + 1) - 0.5 * scaleX,
+        }))
+        .sort((a, b) => a.start - b.start)
       context.fillStyle = 'rgba(8,10,15,0.72)'
-      if (startX > 0) context.fillRect(0, 0, Math.min(startX, logicalW), logicalH)
-      if (endX < logicalW) context.fillRect(Math.max(0, endX), 0, logicalW - endX, logicalH)
+      let cursor = 0
+      for (const interval of intervals) {
+        const start = Math.max(0, Math.min(interval.start, logicalW))
+        if (start > cursor) context.fillRect(cursor, 0, start - cursor, logicalH)
+        cursor = Math.max(cursor, Math.min(Math.max(0, interval.end), logicalW))
+      }
+      if (cursor < logicalW) context.fillRect(cursor, 0, logicalW - cursor, logicalH)
     }
 
     // Značka aktuální ceny: živý bar má přednost před poslední uzavřenou minutou
@@ -1124,6 +1155,7 @@ export function Heatmap({
     dateLabel,
     priceTick,
     range,
+    rangeB,
     logicalW,
     logicalH,
     dpr,
@@ -1246,32 +1278,43 @@ export function Heatmap({
       if (point && zone === null) {
         const { screenToCell, minuteToX, scaleX } = mapping()
         const { minuteIdx } = screenToCell(point.x, point.y)
-        if (range && !event.altKey) {
-          const startX = minuteToX(range.startBucket) - 0.5 * scaleX
-          const endX = minuteToX(range.endBucket + 1) - 0.5 * scaleX
-          if (Math.abs(point.x - startX) <= RANGE_EDGE_TOL_PX) {
-            rangeDragRef.current = { mode: 'create', anchor: range.endBucket }
-            setRangeDragging(true)
-            event.currentTarget.setPointerCapture(event.pointerId)
-            return
+        if (!event.altKey) {
+          // B má při úchopu přednost (novější okno, kreslí se „nahoře"; #489)
+          const targets: Array<['a' | 'b', { startBucket: number; endBucket: number }]> = []
+          if (rangeB) targets.push(['b', rangeB])
+          if (range) targets.push(['a', range])
+          for (const [which, target] of targets) {
+            const startX = minuteToX(target.startBucket) - 0.5 * scaleX
+            const endX = minuteToX(target.endBucket + 1) - 0.5 * scaleX
+            if (Math.abs(point.x - startX) <= RANGE_EDGE_TOL_PX) {
+              rangeDragRef.current = { mode: 'create', anchor: target.endBucket, which }
+              setRangeDragging(true)
+              event.currentTarget.setPointerCapture(event.pointerId)
+              return
+            }
+            if (Math.abs(point.x - endX) <= RANGE_EDGE_TOL_PX) {
+              rangeDragRef.current = { mode: 'create', anchor: target.startBucket, which }
+              setRangeDragging(true)
+              event.currentTarget.setPointerCapture(event.pointerId)
+              return
+            }
           }
-          if (Math.abs(point.x - endX) <= RANGE_EDGE_TOL_PX) {
-            rangeDragRef.current = { mode: 'create', anchor: range.startBucket }
-            setRangeDragging(true)
-            event.currentTarget.setPointerCapture(event.pointerId)
-            return
-          }
-          if (point.x > startX && point.x < endX) {
-            rangeDragRef.current = { mode: 'move', anchor: minuteIdx - range.startBucket }
-            setRangeDragging(true)
-            event.currentTarget.setPointerCapture(event.pointerId)
-            return
+          for (const [which, target] of targets) {
+            const startX = minuteToX(target.startBucket) - 0.5 * scaleX
+            const endX = minuteToX(target.endBucket + 1) - 0.5 * scaleX
+            if (point.x > startX && point.x < endX) {
+              rangeDragRef.current = { mode: 'move', anchor: minuteIdx - target.startBucket, which }
+              setRangeDragging(true)
+              event.currentTarget.setPointerCapture(event.pointerId)
+              return
+            }
           }
         }
         if (rangeCreate || event.altKey) {
-          rangeDragRef.current = { mode: 'create', anchor: minuteIdx }
+          rangeDragRef.current = { mode: 'create', anchor: minuteIdx, which: 'a' }
           setRangeDragging(true)
-          onRangeDrag(minuteIdx, minuteIdx)
+          onRangeCreateStart?.()
+          onRangeDrag(minuteIdx, minuteIdx, 'a')
           event.currentTarget.setPointerCapture(event.pointerId)
           return
         }
@@ -1297,14 +1340,19 @@ export function Heatmap({
       const point = canvasPoint(event)
       if (point) {
         const { minuteIdx } = mapping().screenToCell(point.x, point.y)
-        if (rangeDrag.mode === 'move' && range) {
-          const width = range.endBucket - range.startBucket
+        const target = rangeDrag.which === 'b' ? rangeB : range
+        if (rangeDrag.mode === 'move' && target) {
+          const width = target.endBucket - target.startBucket
           // Clamp na hranice naměřených dat — posun za okraj okno nezmenšuje
           const maxStart = Math.max(0, (grid.dataMinutes ?? grid.minutes) - 1 - width)
           const start = Math.max(0, Math.min(minuteIdx - rangeDrag.anchor, maxStart))
-          onRangeDrag(start, start + width)
+          onRangeDrag(start, start + width, rangeDrag.which)
         } else {
-          onRangeDrag(Math.min(rangeDrag.anchor, minuteIdx), Math.max(rangeDrag.anchor, minuteIdx))
+          onRangeDrag(
+            Math.min(rangeDrag.anchor, minuteIdx),
+            Math.max(rangeDrag.anchor, minuteIdx),
+            rangeDrag.which,
+          )
         }
       }
       return
@@ -1369,14 +1417,17 @@ export function Heatmap({
     // Hover nad range (#484): okraj → ew-resize, vnitřek → grab
     if (range && onRangeDrag && axisZoneAt(x, y, logicalH) === null) {
       const { minuteToX: rangeMinuteToX, scaleX: rangeScaleX } = mapping()
-      const startX = rangeMinuteToX(range.startBucket) - 0.5 * rangeScaleX
-      const endX = rangeMinuteToX(range.endBucket + 1) - 0.5 * rangeScaleX
-      const nextHover =
-        Math.abs(x - startX) <= RANGE_EDGE_TOL_PX || Math.abs(x - endX) <= RANGE_EDGE_TOL_PX
-          ? 'edge'
-          : x > startX && x < endX
-            ? 'move'
-            : null
+      let nextHover: 'edge' | 'move' | null = null
+      for (const target of [rangeB, range]) {
+        if (!target) continue
+        const startX = rangeMinuteToX(target.startBucket) - 0.5 * rangeScaleX
+        const endX = rangeMinuteToX(target.endBucket + 1) - 0.5 * rangeScaleX
+        if (Math.abs(x - startX) <= RANGE_EDGE_TOL_PX || Math.abs(x - endX) <= RANGE_EDGE_TOL_PX) {
+          nextHover = 'edge'
+          break
+        }
+        if (x > startX && x < endX) nextHover = 'move'
+      }
       setRangeHover((previous) => (previous === nextHover ? previous : nextHover))
     } else {
       setRangeHover((previous) => (previous === null ? previous : null))
