@@ -287,9 +287,7 @@ def ensure_meta_schema(engine: Engine) -> None:
     if missing:
         with engine.begin() as conn:
             for name, sql_type in missing.items():
-                conn.execute(
-                    text(f"ALTER TABLE {journal_table.name} ADD COLUMN {name} {sql_type}")
-                )
+                conn.execute(text(f"ALTER TABLE {journal_table.name} ADD COLUMN {name} {sql_type}"))
     if not inspector.has_table(journal_trades_table.name):
         return
     trade_columns = {col["name"] for col in inspector.get_columns(journal_trades_table.name)}
