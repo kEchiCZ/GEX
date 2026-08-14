@@ -907,13 +907,30 @@ Speciální případ červeného režimu s opačným ranním chováním. Když t
 
 Pravá (modelovaná) část mapy vychází z **aktuálního snímku IV a ranního OI**: velký příliv nového OI nebo skok volatility pásy přeskládá; dnešní čerstvý positioning model nevidí. Ber večerní plán z mapy ~hodinu předem a průběžně ověřuj, že pásy stojí. Zdi navíc nejsou stejně silné: cenovka zdi ukazuje **dominanci v %** (podíl zdi na síle celé strany profilu) a úseky, kde zeď drží méně než 15 % síly strany, se kreslí ztlumeně tečkovaně — slabá zeď je jen statistické maximum, ne opora pro obchod. **Vždy křížově potvrď s měřenou vrstvou** (walls, GEX Levels, CumΔ) — model je navigace, měření je terén.
 
+### Proč se naše úrovně liší od SPX služeb
+
+GEXLens počítá GEX z **opcí na ES futures** (FOP) — podkladem je přímo ten
+kontrakt, který obchoduješ. Striky, OI, spot i všechny úrovně jsou tedy
+nativně v ES a **nikde se nic nepřevádí z indexu**.
+
+Většina veřejných GEX služeb (SpotGamma, MenthorQ a podobné) počítá úrovně
+nad **SPX/SPY**. Mezi SPX a ES je rozdíl (cost of carry), který se během
+kvartálu smršťuje — proto **nelze porovnávat jejich čísla s našimi 1:1**.
+Rozdíl není chyba ani jedné strany; jsou to úrovně nad jiným podkladem.
+
+Praktický důsledek: náš flip na 6 812 a jejich flip na 6 78x můžou popisovat
+tutéž strukturu. Srovnávej **vzdálenost úrovně od aktuální ceny téhož
+podkladu**, ne absolutní čísla.
+
 ---
 
 ## 19. Slovníček pojmů
 
 | Pojem | Význam |
 |---|---|
-| **GEX** (Gamma Exposure) | Odhad, kolik dolarů musí dealeři hedgeovat na 1 bod pohybu podkladu. Kladný = dealeři tlumí pohyb, záporný = zesilují. |
+| **GEX** (Gamma Exposure) | Odhad, kolik dolarů musí dealeři hedgeovat na 1 bod pohybu podkladu. Kladný = dealeři tlumí pohyb, záporný = zesilují. Počítá se z **opcí na ES futures** (FOP), takže všechny úrovně jsou nativně v ES — viz kap. 18, proč se liší od SPX služeb. |
+| **Basis** | Rozdíl mezi cenou futures a indexu (cost of carry), který se během kvartálu smršťuje. **V GEXLens nikde nevystupuje** — podkladem opcí je přímo ES kontrakt. Relevantní jen při srovnávání s cizími SPX službami. |
+| **Roll** | Přechod na další kvartální kontrakt (likvidita se stěhuje ~2. čtvrtek měsíce expirace). Cenová historie přes roll obsahuje skok o roll spread — není to pohyb trhu (ADR-0028). |
 | **Flip (zero-gamma)** | Cena, kde kumulativní NetGEX prochází nulou — hranice mezi režimem komprese a expanze volatility. |
 | **Dynamický flip** | Modelová verze flipu: nula Dyn GEX křivky (BS model, jemnější mřížka). S naměřeným flipem tvoří **flip zónu** (kap. 18). |
 | **Dyn GEX (vrstva)** | Modelované pole NetGEX pro hypotetické ceny přes pásmo a čas — „jakou gammu potká cena na úrovni X v čase T". Zelená tlumí, červená zesiluje. |

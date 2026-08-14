@@ -98,6 +98,29 @@ V repu jsou dnes **dvě různé věci pod jménem „ATR"**:
 Nová metrika musí buď jednu z definic převzít beze změny, nebo se jmenovat
 jednoznačně. **Nezavádět třetí význam slova ATR.**
 
+## Dodatek (2026-08-15): roll kvartálních kontraktů
+
+Dvouletá historie barů **není jeden spojitý kontrakt**. `ibkr/deepbars.py`
+ji skládá z **expirovaných kvartálních kontraktů**, každý za období, kdy byl
+front (`ContFuture` s `endDateTime` IBKR zakazuje — Error 10339). Hranice
+oken jsou expirace, tj. 3. pátek kvartálního měsíce.
+
+Dopad na metriky této ADR:
+
+| Metrika | Dopad rollu |
+|---|---|
+| **Denní rozsah seance** (high − low) | **žádný** — seance leží celá uvnitř okna jednoho kontraktu |
+| **ATR** (true range vč. gapu) | **na 4 dnech v roce falešný** — gap přes hranici okna je roll spread, ne pohyb trhu |
+| **Realizovaná vol z close-to-close returnů** | **totéž** — 4 falešné skoky ročně |
+
+Proto: **primární metrikou zůstává denní rozsah seance**, který je vůči rollu
+imunní. Pokud se přidá cokoli počítaného *přes* hranici dnů (ATR s gapem,
+close-to-close returny), musí se **dny na hranici front okna vyloučit**, ne
+vyhladit — vyhlazení by roll spread rozetřelo do okolních dnů.
+
+Hranice oken jsou deterministicky spočitatelné (expirace kvartálů), takže
+jde o filtr nad známým seznamem dat, ne o detekci anomálií.
+
 ## Důsledky
 
 - Žádná nová externí závislost, žádný nový poplatek za data.

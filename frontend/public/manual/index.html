@@ -1282,6 +1282,17 @@ se staré setupy nemíchají do statistik nových.</li>
 </ul>
 <h3>Limity modelu (kdy mu nevěřit)</h3>
 <p>Pravá (modelovaná) část mapy vychází z <strong>aktuálního snímku IV a ranního OI</strong>: velký příliv nového OI nebo skok volatility pásy přeskládá; dnešní čerstvý positioning model nevidí. Ber večerní plán z mapy ~hodinu předem a průběžně ověřuj, že pásy stojí. Zdi navíc nejsou stejně silné: cenovka zdi ukazuje <strong>dominanci v %</strong> (podíl zdi na síle celé strany profilu) a úseky, kde zeď drží méně než 15 % síly strany, se kreslí ztlumeně tečkovaně — slabá zeď je jen statistické maximum, ne opora pro obchod. <strong>Vždy křížově potvrď s měřenou vrstvou</strong> (walls, GEX Levels, CumΔ) — model je navigace, měření je terén.</p>
+<h3>Proč se naše úrovně liší od SPX služeb</h3>
+<p>GEXLens počítá GEX z <strong>opcí na ES futures</strong> (FOP) — podkladem je přímo ten
+kontrakt, který obchoduješ. Striky, OI, spot i všechny úrovně jsou tedy
+nativně v ES a <strong>nikde se nic nepřevádí z indexu</strong>.</p>
+<p>Většina veřejných GEX služeb (SpotGamma, MenthorQ a podobné) počítá úrovně
+nad <strong>SPX/SPY</strong>. Mezi SPX a ES je rozdíl (cost of carry), který se během
+kvartálu smršťuje — proto <strong>nelze porovnávat jejich čísla s našimi 1:1</strong>.
+Rozdíl není chyba ani jedné strany; jsou to úrovně nad jiným podkladem.</p>
+<p>Praktický důsledek: náš flip na 6 812 a jejich flip na 6 78x můžou popisovat
+tutéž strukturu. Srovnávej <strong>vzdálenost úrovně od aktuální ceny téhož
+podkladu</strong>, ne absolutní čísla.</p>
 <hr>
 <h2>19. Slovníček pojmů</h2>
 <table>
@@ -1293,7 +1304,15 @@ se staré setupy nemíchají do statistik nových.</li>
 </thead>
 <tbody><tr>
 <td><strong>GEX</strong> (Gamma Exposure)</td>
-<td>Odhad, kolik dolarů musí dealeři hedgeovat na 1 bod pohybu podkladu. Kladný = dealeři tlumí pohyb, záporný = zesilují.</td>
+<td>Odhad, kolik dolarů musí dealeři hedgeovat na 1 bod pohybu podkladu. Kladný = dealeři tlumí pohyb, záporný = zesilují. Počítá se z <strong>opcí na ES futures</strong> (FOP), takže všechny úrovně jsou nativně v ES — viz kap. 18, proč se liší od SPX služeb.</td>
+</tr>
+<tr>
+<td><strong>Basis</strong></td>
+<td>Rozdíl mezi cenou futures a indexu (cost of carry), který se během kvartálu smršťuje. <strong>V GEXLens nikde nevystupuje</strong> — podkladem opcí je přímo ES kontrakt. Relevantní jen při srovnávání s cizími SPX službami.</td>
+</tr>
+<tr>
+<td><strong>Roll</strong></td>
+<td>Přechod na další kvartální kontrakt (likvidita se stěhuje ~2. čtvrtek měsíce expirace). Cenová historie přes roll obsahuje skok o roll spread — není to pohyb trhu (ADR-0028).</td>
 </tr>
 <tr>
 <td><strong>Flip (zero-gamma)</strong></td>
