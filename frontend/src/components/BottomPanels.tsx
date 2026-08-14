@@ -151,6 +151,7 @@ function BottomPanelsBase({
   totalMinutes,
   height = DEFAULT_height,
   range = null,
+  rangeB = null,
 }: {
   data: PanelSeries
   visible: PanelsVisible
@@ -164,6 +165,8 @@ function BottomPanelsBase({
   height?: number
   /** Aktivní range (#484) v koších osy — panely mimo okno se ztlumí. */
   range?: { startBucket: number; endBucket: number } | null
+  /** Druhé okno B (#489) — dim je komplement sjednocení obou. */
+  rangeB?: { startBucket: number; endBucket: number } | null
 }) {
   const minutes = data.vol.length
   const axisMinutes = Math.max(minutes, totalMinutes ?? minutes)
@@ -185,25 +188,34 @@ function BottomPanelsBase({
   const barWidth = Math.max(0.5, step * 0.8)
   // Ztlumení mimo range (#484): dva recty v datovém prostoru — transform <g>
   // je posune/roztáhne shodně s bary, žádná pixelová aritmetika
-  const rangeDim =
-    range !== null && step > 0 ? (
+  const rangeDim = (() => {
+    if (range === null || step <= 0) return null
+    // Komplement sjednocení oken A a B (#489) — jas znamená „vybráno"
+    const intervals = [range, ...(rangeB ? [rangeB] : [])]
+      .map((target) => ({ start: target.startBucket * step, end: (target.endBucket + 1) * step }))
+      .sort((a, b) => a.start - b.start)
+    const rects: Array<{ x: number; w: number }> = []
+    let cursor = 0
+    for (const interval of intervals) {
+      if (interval.start > cursor) rects.push({ x: cursor, w: interval.start - cursor })
+      cursor = Math.max(cursor, interval.end)
+    }
+    if (cursor < width) rects.push({ x: cursor, w: width - cursor })
+    return (
       <>
-        <rect
-          x={0}
-          y={0}
-          width={Math.max(0, range.startBucket * step)}
-          height={height}
-          fill="rgba(8,10,15,0.72)"
-        />
-        <rect
-          x={(range.endBucket + 1) * step}
-          y={0}
-          width={Math.max(0, width - (range.endBucket + 1) * step)}
-          height={height}
-          fill="rgba(8,10,15,0.72)"
-        />
+        {rects.map((rect, index) => (
+          <rect
+            key={index}
+            x={rect.x}
+            y={0}
+            width={Math.max(0, rect.w)}
+            height={height}
+            fill="rgba(8,10,15,0.72)"
+          />
+        ))}
       </>
-    ) : null
+    )
+  })()
   const transform = `translate(${time.offsetX} 0) scale(${time.zoomX} 1)`
 
   // Vrcholy pro škály os Y; Opt Vol a Δ Flow sdílí škálu C/P (jednoznačná osa)

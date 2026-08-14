@@ -138,3 +138,43 @@ export function reactionWindow(
     open,
   }
 }
+
+/** Navazující okno B za A (#489): stejná šířka hned za koncem A, clamp na
+poslední minutu dat; null když za A žádná data nejsou. */
+export function followUpRange(
+  a: RangeSelection,
+  lastDataIso: string | null,
+): RangeSelection | null {
+  const start = Date.parse(a.fromIso)
+  const end = Date.parse(a.toIso)
+  const lastData = lastDataIso === null ? Number.NaN : Date.parse(lastDataIso)
+  if (Number.isNaN(start) || Number.isNaN(end) || Number.isNaN(lastData)) return null
+  const width = end - start // inkluzivní rozpětí A v ms (od→do poslední minuty)
+  const bStart = end + 60_000 // navazuje NA další minutu, okna se nepřekrývají
+  if (bStart > lastData) return null
+  return {
+    fromIso: new Date(bStart).toISOString(),
+    toIso: new Date(Math.min(bStart + width, lastData)).toISOString(),
+  }
+}
+
+/** Pre/post okna kolem eventu (#489): A = event−minut → event, B = event → +minut. */
+export function prePostWindows(
+  tsEventIso: string,
+  minutes: number,
+  lastDataIso: string | null,
+): { a: RangeSelection; b: RangeSelection; bOpen: boolean } | null {
+  const event = Date.parse(tsEventIso)
+  if (Number.isNaN(event) || minutes <= 0) return null
+  const post = reactionWindow(tsEventIso, minutes, lastDataIso)
+  if (!post) return null
+  return {
+    a: {
+      fromIso: new Date(event - minutes * 60_000).toISOString(),
+      // A končí minutu PŘED eventem — event a reakce patří do B
+      toIso: new Date(event - 60_000).toISOString(),
+    },
+    b: post.range,
+    bOpen: post.open,
+  }
+}

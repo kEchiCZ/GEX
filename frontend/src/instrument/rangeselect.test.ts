@@ -5,6 +5,8 @@ import {
   encodeRange,
   minuteIndexFor,
   rangeBuckets,
+  followUpRange,
+  prePostWindows,
   rangeLabel,
   reactionWindow,
   windowCumDelta,
@@ -142,5 +144,30 @@ describe('reactionWindow (#488)', () => {
     expect(reactionWindow(event, 15, '2026-08-13T14:00:00Z')).toBeNull() // data končí před eventem
     expect(reactionWindow(event, 15, null)).toBeNull()
     expect(reactionWindow('nesmysl', 15, '2026-08-13T16:00:00Z')).toBeNull()
+  })
+})
+
+describe('duální rozsah (#489)', () => {
+  it('followUpRange: B stejné šířky hned za A, clamp na data', () => {
+    const a = { fromIso: '2026-08-14T14:00:00.000Z', toIso: '2026-08-14T14:29:00.000Z' }
+    expect(followUpRange(a, '2026-08-14T16:00:00Z')).toEqual({
+      fromIso: '2026-08-14T14:30:00.000Z',
+      toIso: '2026-08-14T14:59:00.000Z',
+    })
+    // Clamp: za A je jen 10 minut dat
+    expect(followUpRange(a, '2026-08-14T14:40:00Z')?.toIso).toBe('2026-08-14T14:40:00.000Z')
+    // Za A žádná data → null
+    expect(followUpRange(a, '2026-08-14T14:29:00Z')).toBeNull()
+  })
+
+  it('prePostWindows: A končí minutu před eventem, B = reakční okno', () => {
+    const result = prePostWindows('2026-08-14T14:30:00Z', 15, '2026-08-14T16:00:00Z')
+    expect(result).toEqual({
+      a: { fromIso: '2026-08-14T14:15:00.000Z', toIso: '2026-08-14T14:29:00.000Z' },
+      b: { fromIso: '2026-08-14T14:30:00.000Z', toIso: '2026-08-14T14:45:00.000Z' },
+      bOpen: false,
+    })
+    const open = prePostWindows('2026-08-14T14:30:00Z', 60, '2026-08-14T15:00:00Z')
+    expect(open?.bOpen).toBe(true)
   })
 })
