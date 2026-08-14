@@ -39,6 +39,8 @@ export interface JournalTrade {
   opened_ts: string | null
   closed_ts: string | null
   setup_key: string | null
+  /** Proč teze selhala (#711) — jen u ztrátových obchodů ve futures profilu. */
+  failure_mode: string | null
   setup_grade: JournalGrade | null
   execution_grade: JournalGrade | null
   mistake_tags: string[]
@@ -61,9 +63,22 @@ export interface JournalEntry {
   news_event_id: number | null
   profile: JournalProfile
   trade: JournalTrade | null
+  /** Snímek GEX kontextu k ts_ref (#711); null u záznamů z fáze A. */
+  context: Record<string, unknown> | null
   created_ts: string
   updated_ts: string | null
 }
+
+/** Taxonomie selhání teze (#711) — zrcadlo `FAILURE_MODES` v meta.py. */
+export const FAILURE_MODE_LABELS: Record<string, string> = {
+  customer_held_wall: 'Zeď držel zákazník, ne dealer',
+  vol_regime_shift: 'Skok volatility přeskládal mapu',
+  non_hedging_actor: 'Blok od nehedgujícího aktéra',
+  level_as_target: 'Bral jsem úroveň jako cílovku',
+  map_moved: 'Mapa se během obchodu posunula',
+}
+
+export const FAILURE_MODES = Object.keys(FAILURE_MODE_LABELS)
 
 export interface JournalMeta {
   types: JournalType[]
@@ -227,6 +242,7 @@ export async function createJournalEntry(entry: {
   setup_id?: number | null
   news_event_id?: number | null
   trade?: Partial<JournalTrade> & { direction: TradeDirection }
+  context?: Record<string, unknown> | null
 }): Promise<JournalEntry | null> {
   try {
     const response = await fetch(`${API_BASE}/journal`, {

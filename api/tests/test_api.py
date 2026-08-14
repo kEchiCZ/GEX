@@ -725,6 +725,70 @@ def test_journal_neexistujici_id_vraci_404(client: TestClient) -> None:
     assert client.delete("/journal/424242").status_code == 404
 
 
+def test_journal_kontext_a_failure_mode(client: TestClient) -> None:
+    """Snímek kontextu k ts_ref a taxonomie selhání teze (#711)."""
+    context = {
+        "version": 1,
+        "ts_ref": "2026-07-16T14:30:00+00:00",
+        "symbol": "ES",
+        "expiry": "20260716",
+        "regime": "negativní gamma (pohyb se zesiluje), cena nad flipem",
+        "flip": 6805.0,
+        "spot": 6810.0,
+        "dist_to_flip": 5.0,
+        # Chybějící zdroj zůstává null — nikdy se nedosazuje nula
+        "cliff_share": None,
+        "tendency_band": None,
+    }
+    created = client.post(
+        "/journal",
+        json={
+            "ts_ref": "2026-07-16T14:30:00Z",
+            "symbol": "ES",
+            "entry_type": "pozorovani",
+            "text": "Nad flipem, brzdy pryč.",
+            "context": context,
+        },
+    )
+    assert created.status_code == 201
+    entry_id = created.json()["id"]
+    # Snímek se ukládá jako HODNOTA — server ho nepřepočítává
+    assert created.json()["context"] == context
+    assert client.get("/journal").json()["journal"][0]["context"]["flip"] == 6805.0
+
+    # Záznam bez kontextu je platný (starší data, výpadek zdrojů)
+    plain = client.post(
+        "/journal",
+        json={
+            "ts_ref": "2026-07-16T15:00:00Z",
+            "symbol": "ES",
+            "entry_type": "pozorovani",
+            "text": "Bez kontextu.",
+        },
+    )
+    assert plain.status_code == 201
+    assert plain.json()["context"] is None
+
+    client.delete(f"/journal/{entry_id}")
+
+    base = {
+        "ts_ref": "2026-07-16T14:30:00Z",
+        "symbol": "ES",
+        "entry_type": "obchod",
+        "text": "Nevyšlo.",
+    }
+    trade = {"direction": "short", "setup_key": "wall_bounce", "net_pnl": -120.0}
+    ok = client.post("/journal", json={**base, "trade": {**trade, "failure_mode": "map_moved"}})
+    assert ok.status_code == 201
+    assert ok.json()["trade"]["failure_mode"] == "map_moved"
+    assert (
+        client.post(
+            "/journal", json={**base, "trade": {**trade, "failure_mode": "smula"}}
+        ).status_code
+        == 422
+    )
+
+
 def test_playbook_setupu(client: TestClient) -> None:
     """PlayBook (#710): výchozí sada, CRUD, vyřazení místo mazání."""
     listed = client.get("/playbook").json()["playbook"]

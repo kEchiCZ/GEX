@@ -116,8 +116,24 @@ journal_table = Table(
     # (viz `ensure_meta_schema`); tichý přepis historie by falšoval,
     # pod jakým profilem záznam vznikl.
     Column("profile", String(16), nullable=True),
+    # Snímek GEX kontextu k `ts_ref` (#711). Ukládá se HODNOTA, ne odkaz na
+    # přepočet: Parquet má retenci 90 dní (ADR-0022) a mechanika se verzuje,
+    # takže zpětný přepočet by dal jiná čísla než ta, podle kterých se
+    # rozhodovalo. NULL = kontext se nepodařilo složit (starý záznam, výpadek).
+    Column("context", JSON, nullable=True),
     Column("created_ts", DateTime(timezone=True), nullable=False),
     Column("updated_ts", DateTime(timezone=True), nullable=True),
+)
+
+# Proč teze selhala (#711, jen profil `futures` a jen u ztrátových obchodů).
+# Taxonomie podle SpotGamma; `map_moved` jde doložit PROTI uloženému snímku —
+# přesně to, co bez kontextu nešlo rozhodnout.
+FAILURE_MODES = (
+    "customer_held_wall",
+    "vol_regime_shift",
+    "non_hedging_actor",
+    "level_as_target",
+    "map_moved",
 )
 
 # Strukturovaný obchod (#709) — oddělená tabulka 1:1 k záznamu typu `obchod`.
@@ -147,6 +163,7 @@ journal_trades_table = Table(
     Column("opened_ts", DateTime(timezone=True), nullable=True),
     Column("closed_ts", DateTime(timezone=True), nullable=True),
     Column("setup_key", String(64), nullable=True),  # playbook (#710)
+    Column("failure_mode", String(32), nullable=True),  # FAILURE_MODES (#711)
     Column("setup_grade", String(1), nullable=True),  # JOURNAL_GRADES
     Column("execution_grade", String(1), nullable=True),
     Column("mistake_tags", JSON, nullable=False, default=list),  # MISTAKE_TAGS
@@ -264,13 +281,23 @@ def ensure_meta_schema(engine: Engine) -> None:
     # Staré řádky zůstanou s NULL: `profile` se dopočítá až při čtení,
     # zpětný UPDATE by tvrdil, že záznam vznikl pod profilem, který tehdy
     # neexistoval.
-    additive = {"profile": "VARCHAR(16)"}
+    json_type = "JSONB" if engine.dialect.name == "postgresql" else "JSON"
+    additive = {"profile": "VARCHAR(16)", "context": json_type}
     missing = {name: sql for name, sql in additive.items() if name not in columns}
-    if not missing:
+    if missing:
+        with engine.begin() as conn:
+            for name, sql_type in missing.items():
+                conn.execute(
+                    text(f"ALTER TABLE {journal_table.name} ADD COLUMN {name} {sql_type}")
+                )
+    if not inspector.has_table(journal_trades_table.name):
         return
-    with engine.begin() as conn:
-        for name, sql_type in missing.items():
-            conn.execute(text(f"ALTER TABLE {journal_table.name} ADD COLUMN {name} {sql_type}"))
+    trade_columns = {col["name"] for col in inspector.get_columns(journal_trades_table.name)}
+    if "failure_mode" not in trade_columns:
+        with engine.begin() as conn:
+            conn.execute(
+                text(f"ALTER TABLE {journal_trades_table.name} ADD COLUMN failure_mode VARCHAR(32)")
+            )
 
 
 def _seed_playbook(engine: Engine) -> None:

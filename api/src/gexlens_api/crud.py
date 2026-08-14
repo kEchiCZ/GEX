@@ -10,6 +10,7 @@ from gexlens_api.alerts import AlertKind
 from gexlens_api.meta_repo import DuplicateEntryError, MetaRepository, NotFoundError
 from gexlens_engine.runtime_settings import CONNECTION_SETTINGS, RUNTIME_SETTINGS
 from gexlens_engine.storage.meta import (
+    FAILURE_MODES,
     JOURNAL_GRADES,
     JOURNAL_PROFILES,
     JOURNAL_TYPES,
@@ -134,6 +135,7 @@ def build_router(repository: MetaRepository) -> APIRouter:
         opened_ts: dt.datetime | None = None
         closed_ts: dt.datetime | None = None
         setup_key: str | None = Field(None, max_length=64)
+        failure_mode: str | None = None
         setup_grade: str | None = None
         execution_grade: str | None = None
         mistake_tags: list[str] = Field(default_factory=list, max_length=20)
@@ -164,6 +166,8 @@ def build_router(repository: MetaRepository) -> APIRouter:
         if unknown:
             # Volný text by znemožnil spočítat, kolik která chyba stojí.
             raise HTTPException(422, f"Neznámé mistake tagy: {unknown}")
+        if trade.failure_mode is not None and trade.failure_mode not in FAILURE_MODES:
+            raise HTTPException(422, f"failure_mode musí být jeden z {FAILURE_MODES}")
         return trade.model_dump()
 
     @router.get("/journal")
@@ -262,6 +266,9 @@ def build_router(repository: MetaRepository) -> APIRouter:
         news_event_id: int | None = None
         profile: str | None = None
         trade: JournalTrade | None = None
+        # Snímek GEX kontextu k ts_ref (#711) — skládá klient, server ho jen
+        # uloží tak, jak přišel; přepočet na serveru by dal jiná čísla.
+        context: dict[str, Any] | None = None
 
     class JournalPatch(BaseModel):
         """Úprava záznamu — text/tagy/profil a obchod; okamžik ani typ se
@@ -295,6 +302,7 @@ def build_router(repository: MetaRepository) -> APIRouter:
                 "setup_id": entry.setup_id,
                 "news_event_id": entry.news_event_id,
                 "profile": profile,
+                "context": entry.context,
                 "created_ts": now,
             },
             trade,
