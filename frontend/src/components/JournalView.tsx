@@ -21,7 +21,7 @@ import {
   realizedR,
   updateJournalEntry,
 } from '../api/journal'
-import { fetchPlaybook } from '../api/journal'
+import { MISSED_REASONS, MISSED_REASON_LABELS, fetchPlaybook } from '../api/journal'
 import type {
   JournalEntry,
   JournalMeta,
@@ -212,6 +212,11 @@ function EntryCard({
         <>
           <p className="journal-text">{entry.text}</p>
           <TradeSummary entry={entry} />
+          {entry.missed_reason && (
+            <p className="journal-missed muted">
+              Nevzal jsem: {MISSED_REASON_LABELS[entry.missed_reason] ?? entry.missed_reason}
+            </p>
+          )}
           <ContextSummary context={entry.context} />
         </>
       )}
@@ -228,6 +233,8 @@ export function JournalView() {
   const [filterType, setFilterType] = useState<string>('')
   const [filterProfile, setFilterProfile] = useState<string>('')
   const [filterDate, setFilterDate] = useState<string>('')
+  const [filterQuery, setFilterQuery] = useState<string>('')
+  const [missedReason, setMissedReason] = useState<string>('')
   // Formulář nového záznamu; draft z rychlého vstupu (tlačítko ✎ u Replay)
   // předvyplní okamžik a symbol
   const [formType, setFormType] = useState<JournalType>('pozorovani')
@@ -278,8 +285,9 @@ export function JournalView() {
       date: filterDate || undefined,
       entryType: (filterType || undefined) as JournalType | undefined,
       profile: (filterProfile || undefined) as JournalProfile | undefined,
+      query: filterQuery || undefined,
     }).then(setEntries)
-  }, [filterSymbol, filterDate, filterType, filterProfile])
+  }, [filterSymbol, filterDate, filterType, filterProfile, filterQuery])
 
   useEffect(reload, [reload])
 
@@ -322,6 +330,10 @@ export function JournalView() {
       setFormError('Vyber setup z playbooku — bez něj nejde obchody porovnávat.')
       return
     }
+    if (entryType === 'promeskane' && missedReason === '') {
+      setFormError('Vyber důvod — bez něj se z promeškaného setupu nedá poučit.')
+      return
+    }
     const tags = formTags
       .split(',')
       .map((tag) => tag.trim().replace(/^#/, ''))
@@ -347,6 +359,7 @@ export function JournalView() {
       // Vazba na detekovaný setup — sloupec existoval od fáze A a nikdy se
       // neplnil; bez něj nejde odpovědět „vzal jsem ho, nebo přeskočil?" (#627)
       ...(nearbySetup ? { setup_id: nearbySetup.id } : {}),
+      ...(entryType === 'promeskane' ? { missed_reason: missedReason } : {}),
       context: context as unknown as Record<string, unknown>,
       ...(daily ? { daily } : {}),
     })
@@ -354,6 +367,7 @@ export function JournalView() {
       setFormText('')
       setFormTags('')
       setTrade(EMPTY_TRADE)
+      setMissedReason('')
       setFormError('')
       reload()
     } else {
@@ -461,6 +475,7 @@ export function JournalView() {
             <option value="hypoteza">Hypotéza</option>
             <option value="retro_dne">Retrospektiva dne</option>
             <option value="obchod">Obchod</option>
+            <option value="promeskane">Promeškaný setup</option>
           </select>
           <input
             type="datetime-local"
@@ -518,6 +533,23 @@ export function JournalView() {
               />
             )}
           </>
+        )}
+        {formType === 'promeskane' && (
+          <div className="journal-form-row">
+            {/* Cena váhavosti je měřitelná — bez důvodu se nedá poučit (#715) */}
+            <select
+              value={missedReason}
+              onChange={(event) => setMissedReason(event.target.value)}
+              aria-label="Proč jsem setup nevzal"
+            >
+              <option value="">— proč jsem ho nevzal —</option>
+              {MISSED_REASONS.map((reason) => (
+                <option key={reason} value={reason}>
+                  {MISSED_REASON_LABELS[reason]}
+                </option>
+              ))}
+            </select>
+          </div>
         )}
         {formType === 'obchod' && (
           <JournalTradeFields
@@ -602,6 +634,13 @@ export function JournalView() {
             value={filterDate}
             onChange={(event) => setFilterDate(event.target.value)}
             aria-label="Filtr dne"
+          />
+          <input
+            type="search"
+            value={filterQuery}
+            onChange={(event) => setFilterQuery(event.target.value)}
+            placeholder="hledat v textu"
+            aria-label="Hledat"
           />
           <button className="chip" onClick={exportMd} disabled={entries.length === 0}>
             ⬇ Export MD

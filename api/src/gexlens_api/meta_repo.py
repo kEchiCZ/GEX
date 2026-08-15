@@ -165,6 +165,7 @@ class MetaRepository:
         day: dt.date | None = None,
         entry_type: str | None = None,
         profile: str | None = None,
+        query: str | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
         stmt = select(journal_table).order_by(journal_table.c.ts_ref.desc()).limit(limit)
@@ -178,6 +179,11 @@ class MetaRepository:
             )
         if entry_type is not None:
             stmt = stmt.where(journal_table.c.entry_type == entry_type)
+        if query:
+            # Bez hledání je timeline po půl roce nepoužitelná. ILIKE stačí —
+            # objem je v tisících řádků, ne milionech; fulltext index by byl
+            # předčasná optimalizace.
+            stmt = stmt.where(journal_table.c.text.ilike(f"%{query}%"))
         if profile is not None:
             # Řádky z fáze A mají NULL a čtou se jako `smb` — filtr to musí
             # respektovat, jinak by starší záznamy z výběru „smb" vypadly.

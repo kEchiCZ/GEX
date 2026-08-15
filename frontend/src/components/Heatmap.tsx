@@ -31,7 +31,7 @@ import {
   tickIndices,
 } from '../heatmap/overlays'
 import type { OverlayData, PriceBar, PriceStyle } from '../heatmap/overlays'
-import { journalMarkerNear } from '../heatmap/journalMarkers'
+import { journalGlyph, journalMarkerColor, journalMarkerNear } from '../heatmap/journalMarkers'
 import type { JournalMarker } from '../heatmap/journalMarkers'
 import { markerColor, markerNear, markerStyle } from '../heatmap/newsMarkers'
 import type { NewsMarker as NewsMarkerType } from '../heatmap/newsMarkers'
@@ -622,18 +622,26 @@ export function Heatmap({
     }
 
     // Značky deníku (#673, Traders mode): pás u HORNÍ hrany, aby nekolidoval
-    // s news markery dole; glyf ✎ pod čárkou, cluster s počtem
+    // s news markery dole; glyf podle typu (#715), cluster s počtem
     for (const marker of overlays.journalMarkers ?? []) {
       const x = minuteToX(marker.minuteIdx) - 0.5 * scaleX
-      context.strokeStyle = 'rgba(232,193,75,0.85)'
+      // Barva podle výsledku jen tam, kde ho známe — neutrální jinak (#715)
+      const outcome = journalMarkerColor(marker.entries)
+      const stroke =
+        outcome === 'win'
+          ? 'rgba(20,184,166,0.85)'
+          : outcome === 'loss'
+            ? 'rgba(239,68,68,0.85)'
+            : 'rgba(232,193,75,0.85)'
+      context.strokeStyle = stroke
       context.lineWidth = 1.5
       context.beginPath()
       context.moveTo(x, 0)
       context.lineTo(x, logicalH * 0.1)
       context.stroke()
-      context.fillStyle = 'rgba(232,193,75,0.95)'
+      context.fillStyle = stroke.replace('0.85', '0.95')
       context.font = '11px sans-serif'
-      context.fillText('✎', x - 4, logicalH * 0.1 + 12)
+      context.fillText(journalGlyph(marker.entries), x - 4, logicalH * 0.1 + 12)
       if (marker.count > 1) {
         context.font = '9px sans-serif'
         context.fillText(String(marker.count), x + 6, logicalH * 0.1 + 12)

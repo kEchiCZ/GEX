@@ -35,6 +35,7 @@ const ENTRY: JournalEntry = {
   trade: null,
   context: null,
   daily: null,
+  missed_reason: null,
   created_ts: '2026-08-14T14:31:00+00:00',
   updated_ts: null,
 }
@@ -421,4 +422,80 @@ test('report card známkuje segmenty seance, ne kalendářní den (#712)', async
     expect(open30?.grade).toBe('B')
     expect(body.daily.review.tomorrow_goal).toBe('držet stop')
   })
+})
+
+test('promeškaný setup vyžaduje důvod a odešle ho (#715)', async () => {
+  mockJournalApi([])
+  render(<JournalView />)
+  fireEvent.change(screen.getByLabelText('Typ záznamu'), { target: { value: 'promeskane' } })
+  await waitFor(() => expect(screen.getByLabelText('Proč jsem setup nevzal')).toBeTruthy())
+  fireEvent.change(screen.getByLabelText('Text záznamu'), { target: { value: 'Viděl, nevzal.' } })
+
+  // Bez důvodu se neodešle a řekne proč
+  fireEvent.click(screen.getByRole('button', { name: 'Přidat záznam' }))
+  await waitFor(() => expect(screen.getByText(/Vyber důvod/)).toBeTruthy())
+  expect(fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')).toBeUndefined()
+
+  fireEvent.change(screen.getByLabelText('Proč jsem setup nevzal'), {
+    target: { value: 'nedovera' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Přidat záznam' }))
+  await waitFor(() => {
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    const body = JSON.parse(String(post![1]!.body)) as {
+      entry_type: string
+      missed_reason: string
+    }
+    expect(body.entry_type).toBe('promeskane')
+    expect(body.missed_reason).toBe('nedovera')
+  })
+})
+
+test('hledání v textu jde na server jako filtr q (#715)', async () => {
+  mockJournalApi([])
+  render(<JournalView />)
+  fireEvent.change(screen.getByLabelText('Hledat'), { target: { value: 'flip' } })
+  await waitFor(() => {
+    const get = fetchMock.mock.calls.find(
+      ([url, init]) => String(url).includes('q=flip') && (!init || init.method === undefined),
+    )
+    expect(get).toBeTruthy()
+  })
+})
+
+test('export MD nese strukturovaná pole i kontext (#715)', () => {
+  const md = journalToMarkdown([
+    {
+      ...ENTRY,
+      entry_type: 'obchod',
+      missed_reason: null,
+      context: { regime: 'negativní gamma', flip: 6805, session_segment: 'open30' },
+      trade: {
+        direction: 'short',
+        planned_entry: 6810,
+        planned_stop: 6813,
+        planned_target: null,
+        actual_entry: 6810,
+        actual_exit: 6798,
+        size: null,
+        opened_ts: null,
+        closed_ts: null,
+        setup_key: 'wall_bounce',
+        failure_mode: null,
+        setup_grade: 'A',
+        execution_grade: null,
+        mistake_tags: ['late_exit'],
+        emotion: null,
+        mfe: null,
+        mae: null,
+        gross_pnl: null,
+        net_pnl: null,
+        fees: null,
+      },
+    },
+  ])
+  expect(md).toContain('setup wall_bounce')
+  expect(md).toContain('+4.00R')
+  expect(md).toContain('Pozdní výstup')
+  expect(md).toContain('session_segment open30')
 })

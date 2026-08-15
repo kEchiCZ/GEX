@@ -867,6 +867,61 @@ def test_journal_denni_ritual(client: TestClient) -> None:
     )
 
 
+def test_journal_promeskane_a_fulltext(client: TestClient) -> None:
+    """Promeškaný setup a hledání v textu (#715)."""
+    base = {"ts_ref": "2026-07-16T14:30:00Z", "symbol": "ES"}
+
+    missed = client.post(
+        "/journal",
+        json={
+            **base,
+            "entry_type": "promeskane",
+            "text": "Odraz od zdi jsem viděl, ale nevzal.",
+            "missed_reason": "nedovera",
+            "setup_id": 42,
+        },
+    )
+    assert missed.status_code == 201
+    assert missed.json()["missed_reason"] == "nedovera"
+    # Vazba na detekovaný setup jde uložit i u promeškaného
+    assert missed.json()["setup_id"] == 42
+
+    # Bez důvodu se z promeškaného setupu nedá poučit
+    assert (
+        client.post("/journal", json={**base, "entry_type": "promeskane", "text": "x"}).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/journal",
+            json={**base, "entry_type": "promeskane", "text": "x", "missed_reason": "protoze"},
+        ).status_code
+        == 422
+    )
+    # Důvod patří jen k promeškanému
+    assert (
+        client.post(
+            "/journal",
+            json={**base, "entry_type": "pozorovani", "text": "x", "missed_reason": "nedovera"},
+        ).status_code
+        == 422
+    )
+
+    client.post(
+        "/journal",
+        json={**base, "entry_type": "pozorovani", "text": "Flip drží, cena se odráží."},
+    )
+    # Timeline je po půl roce bez hledání nepoužitelná
+    found = client.get("/journal", params={"q": "zdi"}).json()["journal"]
+    assert [entry["entry_type"] for entry in found] == ["promeskane"]
+    assert client.get("/journal", params={"q": "flip"}).json()["journal"] != []
+    assert client.get("/journal", params={"q": "nikde-neni"}).json()["journal"] == []
+
+    meta = client.get("/journal/meta").json()
+    assert "nedovera" in meta["missed_reasons"]
+    assert "promeskane" in meta["types"]
+
+
 def test_playbook_setupu(client: TestClient) -> None:
     """PlayBook (#710): výchozí sada, CRUD, vyřazení místo mazání."""
     listed = client.get("/playbook").json()["playbook"]

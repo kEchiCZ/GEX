@@ -14,6 +14,33 @@ export interface JournalMarker {
   entries: JournalEntry[]
 }
 
+/** Glyf podle typu záznamu (#715) — obchod se má poznat od poznámky. */
+export function journalGlyph(entries: JournalEntry[]): string {
+  // Ve shluku vyhrává „nejsilnější" typ: obchod > promeškané > poznámka
+  if (entries.some((entry) => entry.entry_type === 'obchod')) return '◆'
+  if (entries.some((entry) => entry.entry_type === 'promeskane')) return '○'
+  return '✎'
+}
+
+/**
+ * Barva značky podle výsledku obchodů ve shluku (#715).
+ *
+ * `null` = neutrální (poznámky, neuzavřené obchody) — barva se dosazuje jen
+ * tam, kde výsledek opravdu známe.
+ */
+export function journalMarkerColor(entries: JournalEntry[]): 'win' | 'loss' | null {
+  let total = 0
+  let known = false
+  for (const entry of entries) {
+    const net = entry.trade?.net_pnl
+    if (net === null || net === undefined) continue
+    known = true
+    total += net
+  }
+  if (!known || total === 0) return null
+  return total > 0 ? 'win' : 'loss'
+}
+
 export function buildJournalMarkers(
   entries: JournalEntry[],
   labels: string[],
