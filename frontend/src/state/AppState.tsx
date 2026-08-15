@@ -19,6 +19,10 @@ export interface PipelineStatus {
   greeks_complete?: number
   greeks_total?: number
   repair_count?: number
+  /** OI pokrytí aktivních řetězů (#664): archiv IBKR / tasty fill / bez hodnoty. */
+  oi_present?: number
+  oi_filled?: number
+  oi_missing?: number
   lines_utilization?: number
   disk_usage_bytes?: number
   disk_limit_bytes?: number

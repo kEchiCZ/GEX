@@ -176,6 +176,13 @@ export interface ReplayInputs {
    * Množina místo pole: profil se na ni ptá per řádek při každém překreslení,
    * takže lineární hledání by bylo O(strikes × chybějících) na minutu. */
   oiMissing: Set<string>
+  /** Klíče `minuta|strike|strana` s OI doplněným z tasty Summary (#664) —
+   * hodnota je měřená, jen z druhého feedu; množina drží původ čísla. */
+  oiFilled: Set<string>
+  /** Minuty, kde nadpoloviční část řetězu běží bez OI (#664): flip a spol.
+   * tam stojí na řídké páteři (typicky 0DTE ráno do publikace CME) a kreslí
+   * se ztlumeně. `null` = minuta bez snapshotů (nelze posoudit). */
+  oiLowMinutes: (boolean | null)[]
   /** ISO minuty s příznakem catch_up (#518, ADR-0024): první sweep po startu
    * enginu uprostřed dne. Kumulativy v nich dohánějí celou dobu výpadku, takže
    * přírůstkové odvozeniny je čtou jako první měřenou minutu dne, ne jako
@@ -187,6 +194,12 @@ export interface ReplayInputs {
 export function oiMissingKey(tsIso: string, strike: number, right: string): string {
   return `${tsIso}|${strike}|${right}`
 }
+
+/** Práh podílu kontraktů bez OI, nad kterým je minuta „řídká" (#664).
+ *
+ * 12. 8. běžel 0DTE flip celý den na 4 kontraktech ze 160 a od reference se
+ * lišil o ~50 b — nadpoloviční díra znamená, že flip není rovnocenná úroveň. */
+export const OI_LOW_THRESHOLD = 0.5
 
 /** Jedna živá minuta z WS kanálů (#127) — snapshot řez + volitelně bar/levels/flow. */
 export interface LiveMinuteRow {
@@ -266,6 +279,8 @@ interface ReplayBundle {
   ladder?: Array<Record<string, unknown>>
   /** Striky bez OI (#465) — v běžný den prázdné, starší API klíč neposílá. */
   oimissing?: Array<Record<string, unknown>>
+  /** Striky s OI z tasty Summary (#664) — bez fillu prázdné, starší API klíč neposílá. */
+  oifilled?: Array<Record<string, unknown>>
   /** Catch-up minuty (#518, ADR-0024) — v běžný den prázdné, starší API klíč neposílá. */
   catchup?: Array<Record<string, unknown>>
   /** Dyn GEX profily (ADR-0009, #203) — starší API pole neposílá. */
@@ -415,9 +430,14 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   // řádků — backfillovaná minuta patří doprostřed, ne na konec.
   const snapshotTs = new Set<string>()
   const strikeSet = new Set<number>()
+  // Kontraktů (řádků) per minuta — jmenovatel podílu chybějícího OI (#664);
+  // sjednocení striků přes den by ranní užší pásmo podhodnotilo
+  const rowsByTs = new Map<string, number>()
   const rowCount = table.numRows
   for (let row = 0; row < rowCount; row += 1) {
-    snapshotTs.add(canonicalTs(tsColumn.get(row)))
+    const ts = canonicalTs(tsColumn.get(row))
+    snapshotTs.add(ts)
+    rowsByTs.set(ts, (rowsByTs.get(ts) ?? 0) + 1)
     strikeSet.add(Number(strikeColumn.get(row)))
   }
   const barTs = bundle.bars.map((bar) => canonicalTs(bar.ts_min))
@@ -558,6 +578,24 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
       oiMissingKey(canonicalTs(row.ts_min), Number(row.strike), String(row.right)),
     ),
   )
+  // Striky s OI z tasty Summary (#664) — v oiMissing nejsou (hodnota je měřená)
+  const oiFilled = new Set<string>(
+    (bundle.oifilled ?? []).map((row) =>
+      oiMissingKey(canonicalTs(row.ts_min), Number(row.strike), String(row.right)),
+    ),
+  )
+  // Minuty s řídkou OI páteří (#664): podíl kontraktů bez OI nad prahem.
+  // Tasty fill díry zmenšuje sám od sebe — doplněné řádky v oimissing nejsou.
+  const missingByTs = new Map<string, number>()
+  for (const row of bundle.oimissing ?? []) {
+    const ts = canonicalTs(row.ts_min)
+    missingByTs.set(ts, (missingByTs.get(ts) ?? 0) + 1)
+  }
+  const oiLowMinutes: (boolean | null)[] = minuteKeys.map((ts) => {
+    const total = rowsByTs.get(ts) ?? 0
+    if (total === 0) return null
+    return (missingByTs.get(ts) ?? 0) / total > OI_LOW_THRESHOLD
+  })
 
   // Catch-up minuty (#518) — v běžný den řada neexistuje a množina zůstane prázdná
   const catchUpMinutes = new Set<string>(
@@ -619,6 +657,8 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     gexFieldFa,
     ladder: ladderRows,
     oiMissing,
+    oiFilled,
+    oiLowMinutes,
     catchUpMinutes,
   }
 }
@@ -657,6 +697,19 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
       ]
     : inputs.snapshotMinutes.map((has, index) =>
         index === targetMinute ? has || minute.rows.length > 0 : has,
+      )
+  // Živá minuta oimissing řadu nenese (WS ji neposílá) — stejně jako plný
+  // build bez záznamů: minuta se snapshoty = false, bar-only = null. Případnou
+  // ranní díru doplní zpětně refetch bundle; živou poctivost nese OI badge
+  // ze status kanálu (#664)
+  const oiLowMinutes = isAppend
+    ? [
+        ...inputs.oiLowMinutes.slice(0, targetMinute),
+        minute.rows.length > 0 ? false : null,
+        ...inputs.oiLowMinutes.slice(targetMinute),
+      ]
+    : inputs.oiLowMinutes.map((low, index) =>
+        index === targetMinute && low === null && minute.rows.length > 0 ? false : low,
       )
 
   const strikeSet = new Set(inputs.strikes)
@@ -807,6 +860,7 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     catchUpMinutes,
     minutes: newMinutes,
     snapshotMinutes,
+    oiLowMinutes,
     strikes: newStrikes,
     callOi,
     putOi,
@@ -902,8 +956,18 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     hasSnapshot(minuteIdx) ? value : null,
   )
 
+  // Flip na řídké OI páteři (#664): minuty s nadpoloviční dírou v OI se kreslí
+  // ztlumeně a je-li řídká i poslední měřená minuta, cenovka nese varování —
+  // flip z pár kontraktů není rovnocenná úroveň (12. 8.: 0DTE ~50 b vedle)
+  const lastLowOi = ((): boolean => {
+    for (let idx = inputs.oiLowMinutes.length - 1; idx >= 0; idx -= 1) {
+      const low = inputs.oiLowMinutes[idx]
+      if (low !== null) return low
+    }
+    return false
+  })()
   const levels: LevelLine[] = [
-    { name: 'flip', color: LEVEL_COLORS.flip, series: levelSeries('flip') },
+    { name: 'flip', color: LEVEL_COLORS.flip, series: levelSeries('flip'), weak: inputs.oiLowMinutes, labelSuffix: lastLowOi ? ' ⚠ řídké OI' : undefined }, // prettier-ignore
     { name: 'centroid', color: LEVEL_COLORS.centroid, series: levelSeries('centroid') },
     { name: 'max_pain', color: LEVEL_COLORS.max_pain, series: maxPain },
     // Flow-adjusted levels (ADR-0011, #222): ODHAD z ranního OI + klasifikovaného

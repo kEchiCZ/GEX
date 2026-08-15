@@ -817,6 +817,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "oimissing",
                 lambda: session(lambda d: repository.oi_missing(symbol, expiry, d), date),
             ),
+            # OI doplněné z tasty Summary (#664) — frontend jím značí původ hodnoty
+            (
+                "oifilled",
+                lambda: session(lambda d: repository.oi_filled(symbol, expiry, d), date),
+            ),
             # Catch-up minuty (#518, ADR-0024): první sweep po startu uprostřed dne
             ("catchup", lambda: session(lambda d: repository.catch_up(symbol, expiry, d), date)),
             (

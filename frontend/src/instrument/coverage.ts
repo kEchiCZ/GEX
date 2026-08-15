@@ -37,6 +37,22 @@ export function greeksCoverage(
   return { covered: complete, expected: total, ratio: Math.min(1, complete / total) }
 }
 
+/** Pokrytí OI aktivních řetězů ze status kanálu (#664).
+
+`covered` = kontrakty s hodnotou (archiv IBKR + tasty fill); `null` = engine
+hodnoty (ještě) neposlal — starší engine klíče nezná. */
+export function oiCoverage(
+  present: number | undefined,
+  filled: number | undefined,
+  missing: number | undefined,
+): Coverage | null {
+  if (present === undefined || filled === undefined || missing === undefined) return null
+  const covered = present + filled
+  const expected = covered + missing
+  if (expected <= 0) return null
+  return { covered, expected, ratio: Math.min(1, covered / expected) }
+}
+
 /** Popisek pokrytí: `84/158 (53 %)`, u plného pokrytí bez procent (`158/158`).
 
 Ve zdravém stavu badge nemá co říct, tak ať aspoň nekřičí (#597) — procento je

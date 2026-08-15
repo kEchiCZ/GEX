@@ -531,6 +531,46 @@ test('bez klíče oimissing (starší API) není nic označené (#465)', () => {
   ).toBe(true)
 })
 
+// ── Flip na řídké OI páteři + tasty fill (#664) ─
+
+test('minuta s nadpoloviční dírou v OI ztlumí flip a označí cenovku (#664)', () => {
+  // M1: 3 ze 4 kontraktů bez OI (75 % > práh 50 %) → řídká; M0 plná
+  const bundle = {
+    ...bundleFor(CELLS, BARS, LEVELS, FLOW),
+    oimissing: [
+      { ts_min: M1, strike: 7600, right: 'C' },
+      { ts_min: M1, strike: 7600, right: 'P' },
+      { ts_min: M1, strike: 7610, right: 'C' },
+    ],
+  }
+  const day = buildReplayDay(bundle)
+
+  const flip = day.overlays.levels!.find((line) => line.name === 'flip')!
+  expect(flip.weak).toEqual([false, true])
+  // Poslední měřená minuta je řídká → cenovka nese varování
+  expect(flip.labelSuffix).toContain('OI')
+})
+
+test('plné OI: flip bez ztlumení i varování (#664)', () => {
+  const day = buildReplayDay(bundleFor(CELLS, BARS, LEVELS, FLOW))
+
+  const flip = day.overlays.levels!.find((line) => line.name === 'flip')!
+  expect(flip.weak).toEqual([false, false])
+  expect(flip.labelSuffix).toBeUndefined()
+})
+
+test('řada oifilled se dekóduje do vlastní množiny (#664)', () => {
+  const bundle = {
+    ...bundleFor(CELLS, BARS, LEVELS, FLOW),
+    oifilled: [{ ts_min: M1, strike: 7610, right: 'C' }],
+  }
+  const inputs = decodeBundle(bundle)
+
+  expect(inputs.oiFilled.has('2026-07-16T15:01:00.000Z|7610|C')).toBe(true)
+  // Doplněná hodnota je měřená — do řídkosti se nepočítá
+  expect(inputs.oiLowMinutes).toEqual([false, false])
+})
+
 // ── Catch-up minuta po startu enginu uprostřed dne (#518, ADR-0024) ─
 
 test('catch-up minuta neprodukuje skokový přírůstek (#518)', () => {

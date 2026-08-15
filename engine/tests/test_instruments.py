@@ -385,6 +385,34 @@ async def test_predpublikacni_snimek_se_po_okne_prepise(
     assert repository.get_oi("ES", today, specs[0].strike, specs[0].right) == 500.0
 
 
+async def test_ridky_snimek_nesmi_byt_finalni(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#664: 12. 8. dvě shodná čtení 4 kontraktů ze 160 (CME 0DTE ještě
+    nepublikoval) prohlásila snímek za finální a obnova stála celý den."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    today = TS.date()
+    specs = list(pipeline.runtime.contracts)
+    po_okne = settings.oi_publication_utc(today) + dt.timedelta(minutes=5)
+
+    # OI dodají jen 2 kontrakty — dvě shodná čtení, ale řídké pokrytí
+    pipeline.archiver = OIArchiver(
+        repository, MockOIFetcher(dict.fromkeys(specs[:2], 40.0)), settings
+    )
+    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert pipeline.oi_final is False  # pokrytí pod prahem — obnova musí běžet dál
+    assert pipeline._oi_refresh_due(po_okne) is True
+
+    # Publikace doběhla → plné čtení; dvě shodná čtení teprve teď finalizují
+    pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings)
+    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert pipeline.oi_final is False  # první plné čtení se od řídkého liší
+    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert pipeline.oi_final is True
+
+
 async def test_obnova_po_okne_cte_i_striky_pridane_expanzi(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:

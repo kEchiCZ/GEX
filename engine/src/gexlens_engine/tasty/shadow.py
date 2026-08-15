@@ -57,6 +57,7 @@ def compare_minute(
     now_monotonic: float,
     now_utc: dt.datetime,
     max_age_ms: int = MAX_AGE_MS,
+    oi_ibkr: dict[tuple[str, str, float, str], float] | None = None,
 ) -> list[ComparisonRow]:
     """Řádky porovnání jedné minuty — čistá funkce (testy bez sítě).
 
@@ -101,6 +102,25 @@ def compare_minute(
                     age_tasty_ms=age_tasty_ms,
                 )
             )
+        # OI (#664): denní veličina — stáří se negatuje (Summary chodí při
+        # subskripci a při změně, archiv IBKR je denní snímek). IBKR strana
+        # z oi_eod, ne ze sweep cache; věk obou stran se nechává NULL.
+        oi_value_ibkr = None if oi_ibkr is None else oi_ibkr.get(
+            (spec.symbol, spec.expiry, spec.strike, spec.right)
+        )  # fmt: skip
+        oi_value_tasty = None if state is None else state.summary.open_interest
+        if oi_value_ibkr is not None or oi_value_tasty is not None:
+            rows.append(
+                ComparisonRow(
+                    ts=ts,
+                    symbol=label,
+                    field="oi",
+                    value_ibkr=oi_value_ibkr,
+                    value_tasty=oi_value_tasty,
+                    age_ibkr_ms=None,
+                    age_tasty_ms=None,
+                )
+            )
     return rows
 
 
@@ -120,12 +140,15 @@ class ShadowComparator:
         chain_source: Callable[[], dict[str, ChainSymbols]],
         *,
         interval_s: float = 60.0,
+        oi_source: Callable[[], dict[tuple[str, str, float, str], float]] | None = None,
     ) -> None:
         self._repository = repository
         self._cache = tasty_cache
         self._contracts_source = contracts_source
         self._chain_source = chain_source
         self._interval_s = interval_s
+        # OI porovnání (#664): sync čtení denního archivu — volá se přes to_thread
+        self._oi_source = oi_source
         #: Diagnostika zátěže: řádků zapsáno od startu
         self.rows_written = 0
 
@@ -145,6 +168,7 @@ class ShadowComparator:
         if not chains:
             return
         ts = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
+        oi_ibkr = None if self._oi_source is None else await asyncio.to_thread(self._oi_source)
         rows = compare_minute(
             ts,
             self._contracts_source(),
@@ -152,6 +176,7 @@ class ShadowComparator:
             chains,
             now_monotonic=time.monotonic(),
             now_utc=dt.datetime.now(dt.UTC),
+            oi_ibkr=oi_ibkr,
         )
         await asyncio.to_thread(self._repository.insert_many, rows)
         self.rows_written += len(rows)

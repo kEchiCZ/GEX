@@ -550,6 +550,23 @@ class SnapshotWriter:
         buffer = self._buffer(path, OI_MISSING_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
+    def write_oi_filled(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[OiMissingRow]
+    ) -> Path | None:
+        """Striky s OI doplněným z tasty Summary (#664) — derived/{sym}/{exp}/oifilled.
+
+        Stejný tvar řádku i princip jako oimissing: řada existuje, jen když
+        fill něco doplnil. Bez ní by tasty hodnoty zpětně splynuly s archivem
+        IBKR a původ čísla by nešel poznat.
+        """
+        if not rows:
+            return None
+        path = (
+            self._settings.derived_dir / symbol / expiry / "oifilled" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, OI_MISSING_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
     def write_greeks_source(
         self, symbol: str, expiry: str, day: dt.date, rows: Sequence[GreeksSourceRow]
     ) -> Path | None:

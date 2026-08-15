@@ -468,8 +468,22 @@ class InstrumentPipeline:
         # předchozímu čtení nezměnily — jedno čtení po okně nestačí, publikace
         # může doběhnout zrovna mezi dvěma dávkami sweepu
         if now >= self.settings.oi_publication_utc(now.date()) and not result.changed:
-            self.oi_final = True
-            logger.info("OI archiv %s %s je finální (dvě shodná čtení)", self.symbol, today)
+            # Shoda čtení nestačí (#664): 12. 8. dvě shodná čtení 4 kontraktů
+            # ze 160 zastavila obnovu 0DTE na celý den — řídký snímek finální
+            # být nesmí, obnova jede dál, dokud CME nedopublikuje
+            coverage = result.written / max(1, result.written + len(result.missing))
+            if coverage >= self.settings.oi_final_min_coverage:
+                self.oi_final = True
+                logger.info("OI archiv %s %s je finální (dvě shodná čtení)", self.symbol, today)
+            else:
+                logger.info(
+                    "OI archiv %s %s: dvě shodná čtení, ale pokrytí %.0f %% je pod prahem "
+                    "%.0f %% — obnova pokračuje",
+                    self.symbol,
+                    today,
+                    coverage * 100,
+                    self.settings.oi_final_min_coverage * 100,
+                )
         await self._run_fa_validation(today)
         await self._run_alpha_calibration(today)
         await self._run_setup_selfcheck(today)
@@ -1177,6 +1191,10 @@ def aggregate_status(
         "greeks_complete": sum(m.greeks_complete for m in valid),
         "greeks_total": sum(m.total for m in valid),
         "repair_count": sum(m.stale_count for m in valid),
+        # OI pokrytí aktivních řetězů (#664): archiv IBKR / tasty fill / díra
+        "oi_present": sum(m.oi_present for m in valid),
+        "oi_filled": sum(m.oi_filled for m in valid),
+        "oi_missing": sum(m.oi_missing for m in valid),
         "symbols": ",".join(symbol for symbol, _ in results),
     }
 

@@ -92,6 +92,11 @@ class SweepMetrics:
     sweep_duration_s: float
     # Striky s vlastními dopočtenými greeks (#547) — TWS model je nedodává
     computed_greeks: int = 0
+    # OI aktivního řetězu (#664): kolik kontraktů má OI z archivu IBKR, kolik
+    # doplnil tasty fill a kolik zůstalo bez hodnoty — plní run_cycle po sweepu
+    oi_present: int = 0
+    oi_filled: int = 0
+    oi_missing: int = 0
     # Kontrakty s ≥ repair_stall_rounds neúspěšnými repair koly (#547) — vstup
     # alertu strikes_stalled v pipeline
     stalled_count: int = 0

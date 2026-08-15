@@ -268,6 +268,16 @@ export function SettingsView() {
                 </td>
               </tr>
               <tr>
+                <td>OI řetězu</td>
+                <td>
+                  {status.oi_present != null && status.oi_filled != null
+                    ? `${status.oi_present + status.oi_filled}/${
+                        status.oi_present + status.oi_filled + (status.oi_missing ?? 0)
+                      }${status.oi_filled > 0 ? ` · ${status.oi_filled} z tastytrade` : ''}`
+                    : '—'}
+                </td>
+              </tr>
+              <tr>
                 <td>Market data lines</td>
                 <td>
                   {status.lines_utilization != null
