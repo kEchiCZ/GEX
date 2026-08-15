@@ -263,6 +263,50 @@ def test_oi_fill_flag_default_zapnuty() -> None:
     assert Settings().tasty_oi_fill is True
 
 
+def test_select_symbols_bere_cele_expirace_od_nejblizsi() -> None:
+    """#623: dev strop vybírá po CELÝCH expiracích od nejbližší — useknutá
+    polovina řetězu by byla k ničemu; cap 0 = bez stropu (produkce)."""
+    from gexlens_engine.tasty.devrun import select_symbols
+
+    chain = ChainSymbols(
+        product="ES",
+        day=TS.date(),
+        by_contract={
+            ("20260817", 7800.0, "C"): "./A1",
+            ("20260817", 7800.0, "P"): "./A2",
+            ("20260818", 7800.0, "C"): "./B1",
+            ("20260818", 7800.0, "P"): "./B2",
+            ("20260819", 7800.0, "C"): "./C1",
+        },
+    )
+    assert select_symbols(chain, 0) == {"./A1", "./A2", "./B1", "./B2", "./C1"}
+    # Strop 3: druhá expirace (2 symboly) by strop překročila → jen první celá
+    assert select_symbols(chain, 3) == {"./A1", "./A2"}
+    # Ani první expirace se nevejde → deterministický ořez, ať je co ladit
+    assert select_symbols(chain, 1) == {"./A1"}
+
+
+def test_tasty_only_default_vypnuty() -> None:
+    """#623: produkce se laboratorního flagu nesmí dotknout — default vypnuto,
+    strop subskripcí default 0 (na maximum, ADR-0027)."""
+    from gexlens_engine.config import Settings
+
+    assert Settings().tasty_only is False
+    assert Settings().tasty_max_subscriptions == 0
+
+
+def test_field_counts_meri_pokryti_eventu() -> None:
+    """#623: heartbeat čte pokrytí z cache — quote/greeks/OI zvlášť, trades Σ."""
+    cache = TastyChainCache(clock=lambda: TS)
+    feed_quote(cache, "./A1", 18.0, 18.5)
+    feed_greeks(cache, "./A1", 0.126, 0.52, 0.0112)
+    feed_summary(cache, "./A2", 989)
+    feed_trade(cache, "./A1", "BUY")
+    feed_trade(cache, "./A2", None)
+
+    assert cache.field_counts() == {"quotes": 1, "greeks": 1, "summary": 1, "trades": 2}
+
+
 def test_shadow_flag_default_vypnuty() -> None:
     """Regresní pojistka: bez flagu se shadow nespouští (chování beze změny)."""
     from gexlens_engine.config import Settings

@@ -97,6 +97,7 @@ from gexlens_engine.storage.t6_store import T6Repository
 from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.storage.volregime_store import VolRegimeRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
+from gexlens_engine.tasty.devrun import run_tasty_only
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.session import TastyCredentials, TastySession
 from gexlens_engine.tasty.shadow import ShadowComparator, shadow_symbols
@@ -606,6 +607,12 @@ async def main() -> None:
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(2) from exc
+
+    # Dev laboratoř jen s tastytrade (#623): bez IBKR, bez výpočtů, bez zápisů —
+    # celý zbytek main() (TWS connect, pipelines) se přeskočí
+    if settings.tasty_only:
+        await run_tasty_only(settings)
+        return
 
     api_base = os.environ.get("GEXLENS_API_BASE", "http://127.0.0.1:8000")
     api_token = os.environ.get("GEXLENS_API_TOKEN", "").strip()

@@ -126,6 +126,14 @@ class Settings(BaseSettings):
     # (typicky 0DTE do publikace CME) — hodnota IBKR má vždy přednost.
     # Vyžaduje běžící shadow větev (bez ní není z čeho číst).
     tasty_oi_fill: bool = True
+    # Dev laboratoř jen s tastytrade (#623, start-dev.ps1 -LiveTasty): engine
+    # přeskočí IBKR úplně a jen streamuje chain do cache s heartbeat logem.
+    # Produkce se flagu nedotýká — default vypnuto.
+    tasty_only: bool = False
+    # Strop subskribovaných streamer symbolů; 0 = bez stropu (produkce jede na
+    # maximum, ADR-0027: 6 008 změřeno bez degradace). Konzervativní hodnotu
+    # nastavuje jen dev (-LiveTasty), aby experimenty neujídaly kapacitu účtu.
+    tasty_max_subscriptions: int = Field(default=0, ge=0)
 
     batch_timeout_s: float = Field(default=4.0, gt=0)
     # Burzovní čas, po kterém IBKR publikuje kompletní denní OI (#463, #511).

@@ -293,6 +293,7 @@ Vedle produkčního stacku (`compose.yml`, :8080) existuje dev stack (`compose.d
 | `scripts/start-prod.ps1` (ikona **GEXLens**) | produkce; shodí dev-live, pokud běží | — |
 | `scripts/start-dev.ps1` (ikona **GEXLens DEV**) | dev bez enginu: PG + API + frontend nad kopií dat | **povolen** — market data účtu se nedotkne, prod dál sbírá |
 | `scripts/start-dev.ps1 -Live` (ikona **GEXLens DEV+Engine**) | plný stack proti TWS | **zakázán** — skript nejdřív shodí produkci (jeden účet); po dobu běhu prod nesbírá |
+| `scripts/start-dev.ps1 -LiveTasty` (`start-gexlens-dev-live-tasty.cmd`) | dev engine **jen s tastytrade** (#623): IBKR vypnuto, žádné výpočty ani zápisy — stream chainu do cache s minutovým heartbeatem v logu enginu | **povolen** — tasty snese souběžné streamy (ADR-0027), produkce nepřijde o minutu; news-engine se nestartuje (mluví s TWS) |
 | `scripts/seed-dev.ps1` | obnoví dev PG z nejnovější zálohy + zrcadlí `data/` → `data-dev/` | povolen |
 
 Pravidla:
@@ -302,6 +303,7 @@ Pravidla:
 - Dev frontend nese v sidebaru oranžový badge **DEV** (build arg `VITE_GEXLENS_ENV`), ať se okna prohlížeče nespletou.
 - Dev stack je jednorázový: rozbitý dev = `docker compose -f compose.dev.yml down -v`, smazat `data-dev/`, `seed-dev.ps1` znovu.
 - Dev engine má výchozí `clientId 2` (`GEXLENS_DEV_IBKR_CLIENT_ID`), aby se v TWS nepotkal s produkční jedničkou.
+- `-LiveTasty` si bere konzervativní strop 2 000 subskripcí (`GEXLENS_TASTY_MAX_SUBSCRIPTIONS`; měřeno 6 008 bez degradace, ADR-0027) — kapacita je pravděpodobně per účet, dev nesmí ujídat produkci. Vyžaduje dev tasty grant v `.env.dev` (#696). Pozor: cross-feed logika (shadow #613, fallback #614) se v tomto režimu ověřit nedá — potřebuje oba feedy vedle sebe.
 
 ## 10. Testy a CI
 
