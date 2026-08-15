@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.7 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.8 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -29,11 +29,11 @@
 <li><a href="#5-heatmapa-podrobn%C4%9B">Heatmapa podrobně</a></li>
 <li><a href="#6-cenov%C3%A1-vrstva--k%C5%99ivka-a-sv%C3%AD%C4%8Dky">Cenová vrstva — křivka a svíčky</a></li>
 <li><a href="#7-strike-profil-prav%C3%BD-panel">Strike profil (pravý panel)</a></li>
-<li><a href="#8-spodn%C3%AD-panely--vol-opt-vol-cum-%CE%B4-evo-oi">Spodní panely — Vol, Opt Vol, Cum Δ, Evo OI</a></li>
+<li><a href="#8-spodn%C3%AD-panely--vol-opt-vol-cum-%CE%B4-evo-oi">Spodní panely — Vol, Opt Vol, Cum Δ, Evo OI</a> · <a href="#8b-%C4%8Dasov%C3%A9-okno--rozsah-">8b. Časové okno — Rozsah ⧉</a></li>
 <li><a href="#9-playback--p%C5%99ehr%C3%A1v%C3%A1n%C3%AD-dne">Playback — přehrávání dne</a></li>
 <li><a href="#10-anotace--kreslen%C3%AD-do-grafu">Anotace — kreslení do grafu</a></li>
 <li><a href="#11-dashboard">Dashboard</a> · <a href="#11b-%C5%99et%C4%9Bz--greeks--oi-tabulka">11b. Řetěz</a> · <a href="#11c-news-a-sentiment-sentimentlens">11c. News a sentiment</a> · <a href="#11d-sign%C3%A1ly-a-stats">11d. Signály a Stats</a> · <a href="#11e-den%C3%ADk-tradera-a-traders-mode">11e. Deník a Traders mode</a> · <a href="#11f-rann%C3%AD-briefing-sidebar--briefing">11f. Ranní briefing</a></li>
-<li><a href="#12-ibkr-console">IBKR Console</a></li>
+<li><a href="#12-ibkr-console--zru%C5%A1ena-slou%C4%8Deno-do-settings">IBKR Console — zrušena</a></li>
 <li><a href="#13-settings">Settings</a></li>
 <li><a href="#14-notifikace-a-alerty">Notifikace a alerty</a></li>
 <li><a href="#15-stavov%C3%A1-li%C5%A1ta--co-znamenaj%C3%AD-%C3%BAdaje">Stavová lišta — co znamenají údaje</a></li>
@@ -57,7 +57,7 @@
 <li><strong>Signály</strong> — empiricky gate-ované Long/Short nápovědy ze zpráv (šipky na ceně); pouštějí se, až když daný typ zprávy má statisticky ověřenou reakci (n ≥ 30, Wilson LB &gt; 0,50).</li>
 <li><strong>Tendence</strong> — souhrnný chip v hlavičce (Strong Short … Strong Long) z 12 složek positioningu a toku, s rozpadem hlasů po kliknutí.</li>
 <li><strong>Setup detektor</strong> — šablony T1–T5 a T7 (odraz od zdi, neúspěšný průraz, Max Pain pin, gamma momentum, divergenční spring, pokračování trendu) s kartou, liniemi v grafu, P/L evidencí a hodnocením.</li>
-<li><strong>Dashboard, Řetěz, Stats, IBKR Console, Settings</strong> — provozní obrazovky pro přehled, opční tabulku, statistiky, diagnostiku a konfiguraci.</li>
+<li><strong>Dashboard, Řetěz, Stats, Settings</strong> — provozní obrazovky pro přehled, opční tabulku, statistiky a konfiguraci (stav enginu je v Settings).</li>
 </ul>
 <p><img src="img/graf.png" alt="Hlavní obrazovka"></p>
 <hr>
@@ -108,7 +108,7 @@ docker compose up -d        # start na pozadí
 </thead>
 <tbody><tr>
 <td><strong>Sidebar (vlevo)</strong></td>
-<td>Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / News / Stats / IBKR Console / Settings), odkaz <strong>Manuál</strong>, přepínač tématu Dark/Light, <strong>editovatelný watchlist</strong> (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový; při chybě se pod formulářem ukáže hláška a seznam se sám srovná se serverem), tlačítko <strong>Legenda</strong> (modál s ukázkami všech prvků grafu a čtením „roste/klesá&quot;), verze. Tlačítkem « se sbalí.</td>
+<td>Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / Briefing / Deník / News / Stats / Settings), odkaz <strong>Manuál</strong>, přepínač tématu Dark/Light, <strong>editovatelný watchlist</strong> (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový; při chybě se pod formulářem ukáže hláška a seznam se sám srovná se serverem), tlačítko <strong>Legenda</strong> (modál s ukázkami všech prvků grafu a čtením „roste/klesá&quot;), verze. Tlačítkem « se sbalí.</td>
 </tr>
 <tr>
 <td><strong>Hlavička</strong></td>
@@ -443,6 +443,13 @@ víc) a <strong>Notional $</strong> (nominál podkladu). Základ volíš druhým
 Vol + OI / Vol / OI. Červený-zelený pruh ukazuje poměr, čísla PUT/CALL a P/C.
 Zmrzlé kotace se do prémií nepočítají — při &gt;30 % chybějících midů panel
 zašedne s vysvětlením, aby prémie nelhala.</p>
+<p>Třetí dropdown volí <strong>rozsah striků</strong>: <strong>Jen OTM</strong> (výchozí — call se počítá
+jen nad spotem, put pod ním; ITM prémie je z velké části vnitřní hodnota, ne
+sázka na směr, a umí poměr úplně zkreslit), <strong>Vše</strong>, nebo <strong>Čas. hodnota</strong>
+(mid − intrinsic; má efekt jen u Prémie $). Bez známého spotu obě volby
+poctivě padají na Vše. Popiska pod pruhem vždy říká, z čeho číslo vzniká.
+S aktivním časovým oknem (kap. 8b) panel přepne na <strong>okenní režim</strong> — počítá
+jen to, co se zobchodovalo v okně.</p>
 <blockquote>
 <p><strong>Proč večer „zmizí&quot; jedna strana pruhů?</strong> Pruhy jsou <strong>Δ-vážené</strong> — násobí se deltou opce (kolik futures dealer na kontrakt reálně drží). Ke konci seance se delta polarizuje (viz gamma crunch, kap. 18): OTM opce mají deltu skoro 0, ITM skoro 1. Nad spotem proto zbývají hlavně červené (ITM puty) a pod spotem zelené (ITM cally). Není to chyba — surové OI/Vol obou stran pořád vidíš v tooltipu řádku; zapnutím <strong>Σ</strong> se přimíchá zítřejší expirace s měkčími deltami a obě strany se zase objeví.</p>
 </blockquote>
@@ -527,6 +534,56 @@ by si vymýšlela průběh, který jsme nenaměřili. Vodorovný úsek tedy čti
 <p>Panel vždy ukazuje <strong>měřené OI</strong>; přepínač Měřené / FA odhad s ním nehýbe
 (ten se týká heatmapy a strike profilu).</p>
 <hr>
+<h2>8b. Časové okno — Rozsah ⧉</h2>
+<p>Výběr okna [t1, t2] na časové ose: <strong>profil vpravo a P/C panel se přepočítají
+jen na to, co se zobchodovalo v okně</strong> — „co se nakoupilo v první půlhodině po
+openu&quot;, „co změnilo CPI&quot;. Vše se počítá lokálně, přepnutí je okamžité
+a funguje i v replay.</p>
+<h3>Ovládání</h3>
+<ul>
+<li><strong>Vytvoření</strong>: nástroj <strong>⧉ Rozsah</strong> v liště nástrojů a tažení v grafu — nebo
+kdykoli <strong>Alt+tažení</strong> bez přepínání nástroje.</li>
+<li><strong>Úprava hotového okna</strong>: tažení <strong>za okraj</strong> mění tu stranu (kurzor ↔),
+tažení <strong>uvnitř</strong> posouvá celé okno (ručička); data se přepočítávají živě
+během tažení. Posun se zastaví na hranici dat.</li>
+<li><strong>Zavření</strong>: × v chipu nebo <strong>Esc</strong>. Okno je v URL (<code>?range=</code>) — reload
+i sdílení odkazu ho udrží; playback ho neposouvá.</li>
+<li><strong>Chip</strong> nad grafem nese meze okna a <strong>CumΔ okna</strong> (kumulativní delta jen
+za okno — kotva na open se odečítá). „⏳ okno běží&quot; = konec okna je za živou
+hranou a dopočítává se.</li>
+</ul>
+<h3>Presety (dropdown Preset…)</h3>
+<p><strong>US open +30 min</strong>, <strong>RTH</strong>, <strong>Globex noc</strong> (od začátku seance do openu),
+<strong>Posledních 30 min</strong> (v live klouže s časem — chip nese ⟳; ruční zásah
+klouzání vypne) a <strong>Od flip crossu</strong> (od posledního průchodu ceny zero-gamma
+flipem). Nedostupné volby jsou šedé s důvodem (před openem, bez flip crossu).
+Časy jsou DST-korektní z téže tabulky jako markery seancí.</p>
+<h3>Okenní profil a P/C</h3>
+<p>Pruhy profilu ukazují <strong>objem zobchodovaný v okně</strong> (rozdíl kumulativů — OI
+zůstává statické k času t2, otevřené pozice nejsou tok). P/C panel v okenním
+režimu ukazuje <strong>premium jako hlavní číslo a kusový poměr vedle</strong> — rozdíl
+obou je sám o sobě informace (kusově vyrovnané okno může být penězi drtivě
+jednostranné). Tooltip nese <strong>top 5 striků dle podílu na prémiích</strong>
+a poctivé přiznání metodiky: premium ≈ objem okna × mid k t2 (neváží ceny
+jednotlivých obchodů).</p>
+<h3>Dvě okna — srovnání A/B a diferenční profil</h3>
+<p>Tlačítko <strong>+B</strong> v chipu přidá druhé okno (navazující, stejná šířka; okraje
+oranžově). Obě okna se tahají stejně; nové A (tažením mimo okna) srovnání
+ruší. Select v chipu přepíná profil:</p>
+<ul>
+<li><strong>A</strong> / <strong>B</strong> — okenní profil daného okna,</li>
+<li><strong>B−A</strong> — <strong>diferenční profil</strong>: rozdíl objemů per strike a strana. Nárůst
+aktivity doprava (sytě), pokles doleva (ztlumeně), cally teal / puty
+červeně. Čte se: „kam se aktivita přesunula mezi oknem A a B&quot;.</li>
+</ul>
+<p>P/C panel v duálním režimu přidá řádek <code>P/C A · B · Δ</code>. Chip nese CumΔ obou
+oken.</p>
+<h3>Propojení se zprávami</h3>
+<p>V dialogu news markeru (klik na marker) jsou akce <strong>⧉ +15 min</strong> / <strong>⧉ +60
+min</strong> (okno reakce na zprávu — tatáž okna, ve kterých se měří dopady) a <strong>⧉
+pre/post ±15</strong> — nastaví A = 15 min před událostí, B = 15 min po ní a rovnou
+mód B−A: „co ta zpráva změnila&quot;.</p>
+<hr>
 <h2>9. Playback — přehrávání dne</h2>
 <p><strong>Aplikace defaultně jede vždy live</strong> — replay lišta je skrytá, aby nerušila. Zobrazíš ji tlačítkem <strong>⏮ Replay</strong> v liště grafu:</p>
 <ul>
@@ -584,6 +641,14 @@ a den) a dožívají s retencí dat.</p>
 <h2>11c. News a sentiment (SentimentLens)</h2>
 <p>Vlastní <strong>news-engine</strong> běží vedle datového enginu: sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy, broker pásku z IBKR), klasifikuje <strong>kategorii, důležitost (1–3) a směr dopadu</strong>, a počítá z nich <strong>SentIndex</strong> — souhrnný sentiment s rozpadem po tématech. Nic z toho nechodí ven; vše se počítá lokálně.</p>
 <h3>Obrazovka News</h3>
+<p>Feed je od srpna 2026 <strong>kartový</strong>: každá zpráva je karta s kategorií,
+relativním stářím („před 16 s&quot;), typem, důležitostí, skóre klasifikace
+a hlavně <strong>naměřeným dopadem</strong> — <code>Δ5m −16,5 bp</code> říká, o kolik se trh po
+zprávě skutečně pohnul v párovacím okně (barva dle znaménka; tooltip nese
+všechna okna a ⚠, když do okna spadl jiný významný event a pohyb nejde
+přičíst téhle zprávě). Dopad se měří pro aktivní symbol (ES/NQ). Nahoře
+řádek <strong>Stav: RiskOn/RiskOff · trend ↑/↓/→</strong>. Plný text zprávy je přímo
+na kartě; opravy klasifikace (⚠ u titulku) zůstávají.</p>
 <ul>
 <li><strong>Filtry</strong> nahoře: kategorie a minimální důležitost (vše / 2+ / 3).</li>
 <li><strong>„Co hýbe trhem&quot;</strong> — aktivní témata s příspěvkem k indexu (🏛 Fed +0,42 …).</li>
@@ -664,20 +729,43 @@ víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.</p>
 </tbody></table>
 <hr>
 <h2>11e. Deník tradera a Traders mode</h2>
-<h3>Deník (sidebar → Deník)</h3>
-<p>Manuální retrospektiva: <strong>pozorování / hypotéza / retrospektiva dne</strong>, s tagy
-a vazbou na symbol a konkrétní minutu (<code>ts_ref</code>). Denní pár drží tlačítka
-<strong>☀ Ranní plán</strong> a <strong>☾ Vyhodnocení dne</strong> (typ retrospektiva s tagem #plan /
-#vyhodnoceni). Export do Markdownu tlačítkem <strong>⬇ Export MD</strong>. Typ <em>obchod</em> se
-ručně založit nedá — vznikne až importem exekucí (odloženo, až začneš obchodovat).</p>
-<p>Rychlý zápis:</p>
+<h3>Deník (sidebar → Deník) — rev. 2: PlayBook a proces</h3>
+<p>Deník stojí na metodice SMB Capital („The PlayBook&quot;): <strong>hodnotí se proces, ne
+P/L</strong> — kvalita setupu a exekuce se známkuje nezávisle na výsledku. Má dva
+<strong>profily</strong>: <code>SMB</code> (akciový) a <code>Futures</code> (ES/NQ — předvyplní se podle
+symbolu); profil se ukládá k záznamu a přepíná ve formuláři.</p>
+<p><strong>Typy záznamů:</strong> pozorování / hypotéza / retrospektiva dne (volný text</p>
 <ul>
-<li><strong>✎ u Replay</strong> — otevře Deník s předvyplněnou aktuální minutou playbacku.</li>
-<li><strong>Shift+klik do grafu</strong> — předvyplní minutu <strong>pod kurzorem</strong>. Na tohle
-sáhni, když ti myšlenka dojde až s odstupem: najedeš na místo v grafu, kde
-se to stalo, a čas nemusíš vypisovat ručně. Přesný okamžik jde pak doladit
-v poli formuláře.</li>
+<li>tagy, jako dřív), <strong>obchod</strong> (strukturovaný — viz níž) a <strong>promeškaný
+setup</strong> (povinný důvod z číselníku: nevšiml jsem si, nedůvěra, mimo plán,
+mimo seanci, risk vyčerpán, váhání — cena váhavosti je pak měřitelná;
+u detekovaných setupů se dopočítá, jak by obchod dopadl).</li>
 </ul>
+<p><strong>Strukturovaný obchod</strong>: PlayBook setup (obchoduje se jen to, co je
+v playbooku), plán vs. exekuce, <strong>grading setupu A/B/C nezávisle na
+výsledku</strong>, grading exekuce, mistake tagy (uzavřený číselník — každá chyba
+má spočitatelnou cenu), emoce, failure mode. <strong>PlayBook</strong> je archiv
+pojmenovaných setupů (teze, podmínky vstupu, invalidace, management);
+vyřazený setup se deaktivuje, nikdy nemaže. Klíče se kryjí se šablonami
+detektoru — jde srovnat „co detektor nabídl&quot; s „co jsem vzal&quot;.</p>
+<p><strong>Auto-snapshot GEX kontextu</strong>: k obchodu se automaticky uloží poziční mapa
+<strong>v okamžiku vstupu</strong> (režim, flip, zdi, vzdálenosti) — jako hodnota, ne
+odkaz. Po měsíci tak jde rozlišit „setup nefunguje&quot; od „vzal jsem ho
+v podmínkách, ve kterých platit nemohl&quot;. Tohle žádný komerční deník neumí.</p>
+<p><strong>Denní rituál</strong>: ☀ ranní plán (předvyplní ho Briefing, kap. 11f) a večerní
+<strong>Daily Report Card</strong> — den se hodnotí <strong>po segmentech seance</strong> (Globex noc,
+US open +30, dopoledne, odpoledne…), protože degradace výkonu odpoledne se
+v denním průměru schová. Segmenty jsou tatáž okna jako v grafu a presetech.</p>
+<p><strong>Futures vrstva</strong> (profil Futures): automatický <strong>tag seance</strong> z času
+záznamu, <strong>R v bodech</strong> (1 R znamená totéž na ES i MES — v dolarech by růst
+size maskoval degradaci skillu), volatilitní režim (ADR-0028), makro tag,
+kontrakt/roll.</p>
+<p><strong>Statistiky (obrazovka Stats)</strong>: win rate, profit factor, <strong>expectancy</strong>,
+Σ bodů, histogram R, plánované vs. realizované R:R; řezy per setup, per
+seance, per GEX režim; <strong>cena chyb</strong> (kolik R stojí každý mistake tag)
+a „nabídl a přeskočil&quot; u promeškaných.</p>
+<p><strong>Rychlý vstup</strong>: ✎ u Replay (aktuální minuta), <strong>Shift+klik do grafu</strong>
+(minuta pod kurzorem), ☀ z Briefingu. Fulltext hledání a export MD zůstávají.</p>
 <h3>Traders mode (Settings → Trading)</h3>
 <p>Přepínač <strong>vrstev pro aktivní obchodování</strong> — informací, které nepotřebuješ
 ke čtení positioningu, ale k exekuci. Default vypnuto; když se vrstvy osvědčí,
@@ -751,23 +839,17 @@ běží <strong>odpočet do US openu</strong> (9:30 New York, DST-korektně).</p
 a prázdná „Teze dne&quot; k doplnění. Ranní rituál: otevřít Briefing → projít
 karty → ☀ → dopsat tezi.</p>
 <hr>
-<h2>12. IBKR Console</h2>
-<p>Diagnostická obrazovka:</p>
+<h2>12. IBKR Console — zrušena (sloučeno do Settings)</h2>
+<p>Obrazovka je od srpna 2026 pryč: nenesla nic unikátního a navíc posílala
+enginu rozepsané hodnoty při psaní (bez tlačítka Uložit). Kde co najdeš teď:</p>
 <ul>
-<li><strong>Připojení</strong> — host/port/client ID a aktuální stav spojení. Tlačítko
-Reconnect už tu není: engine se přepojuje sám, ruční tlačítko jen mátlo.</li>
-<li><strong>Subskripce</strong> — průběh Greeks (X/Y), velikost repair fronty, vytížení market data lines</li>
-<li><strong>Log</strong> — chronologický záznam <strong>událostí přijatých v prohlížeči</strong> (změny
-stavu spojení, alerty). <strong>Není to log enginu</strong> a po obnovení stránky je
-prázdný — serverové logy hledej v kontejneru (viz ADMIN-MANUAL).</li>
+<li><strong>Editace host/port/client ID</strong> — Settings → IBKR (s konceptem a Uložit).</li>
+<li><strong>Stav spojení, účet, Greeks X/Y, repair fronta, lines %</strong> — Settings →
+<strong>Stav enginu</strong> (read-only) a stavová lišta dole (kap. 15).</li>
+<li><strong>Log událostí</strong> — sbalená sekce pod Stavem enginu; je to záznam událostí
+<strong>v prohlížeči</strong> (po obnovení stránky prázdný), serverové logy jsou
+v kontejnerech (ADMIN-MANUAL).</li>
 </ul>
-<p>Sem se podívej jako první, když něco nevypadá dobře.</p>
-<blockquote>
-<p><strong>Poznámka:</strong> host/port/client ID najdeš i v Settings → IBKR a průběh
-Greeks / repair / lines i ve stavové liště (kap. 15). Tahle duplicita je
-známá a obrazovka se bude slučovat do Settings.</p>
-</blockquote>
-<p><img src="img/console.png" alt="IBKR Console"></p>
 <hr>
 <h2>13. Settings</h2>
 <p>Formulář se vyplní, zkontroluje a odešle tlačítkem <strong>Uložit</strong> — rozepsaná
@@ -788,6 +870,10 @@ které se přepne hned.</p>
 <tr>
 <td><strong>Engine (IBKR pipeline)</strong></td>
 <td><strong>Rozsah strikes (± body od spotu)</strong> — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB)</td>
+</tr>
+<tr>
+<td><strong>Stav enginu</strong></td>
+<td>Read-only stav: spojení + port, účet (paper), Greeks X/Y + repair fronta, lines % + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console)</td>
 </tr>
 <tr>
 <td><strong>Alerty</strong></td>
