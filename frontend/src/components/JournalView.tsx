@@ -110,7 +110,20 @@ function ContextSummary({ context }: { context: Record<string, unknown> | null }
     )
   }
   const headline = ['regime', 'flip', 'spot', 'dist_to_flip']
-  const rest = ['call_wall', 'put_wall', 'centroid', 'total_gex', 'cliff_share', 'tendency_band']
+  const rest = [
+    'call_wall',
+    'put_wall',
+    'centroid',
+    'total_gex',
+    'cliff_share',
+    'tendency_band',
+    // Futures vrstva (#713) — u profilu smb tato pole zůstanou prázdná
+    'session_segment',
+    'vol_bucket',
+    'macro_event',
+    'contract',
+    'roll_week',
+  ]
   return (
     <div className="journal-context">
       <button className="chip" onClick={() => setOpen((value) => !value)} aria-label="Kontext">
@@ -317,7 +330,12 @@ export function JournalView() {
     const tsIso = new Date(formTs).toISOString()
     // Kontext se skládá při zápisu — poziční mapa se během dne mění a zpětně
     // by ji nešlo rekonstruovat (retence 90 dní, verzovaná mechanika).
-    const context = await loadJournalContext({ symbol, expiry: selectedExpiry, tsRef: tsIso })
+    const context = await loadJournalContext({
+      symbol,
+      expiry: selectedExpiry,
+      tsRef: tsIso,
+      profile,
+    })
     const created = await createJournalEntry({
       ts_ref: tsIso,
       symbol,
