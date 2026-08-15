@@ -33,6 +33,7 @@ import {
 } from '../stats/trackrecord'
 import { currentWave, histogram, waveDirectionStats } from '../stats/waves'
 import { useAppState } from '../state/AppState'
+import { JournalStats } from './JournalStats'
 
 const REFRESH_MS = 300_000
 
@@ -564,6 +565,8 @@ export function StatsView() {
           </table>
         )}
       </section>
+
+      <JournalStats symbol={symbol} />
 
       <section className="stats-section" aria-label="Track record">
         <h2>Track record — mechanické equity křivky</h2>

@@ -162,6 +162,7 @@ export async function fetchJournal(filters: {
   entryType?: JournalType
   profile?: JournalProfile
   query?: string
+  limit?: number
 }): Promise<JournalEntry[]> {
   const params = new URLSearchParams()
   if (filters.symbol) params.set('symbol', filters.symbol)
@@ -169,6 +170,7 @@ export async function fetchJournal(filters: {
   if (filters.entryType) params.set('entry_type', filters.entryType)
   if (filters.profile) params.set('profile', filters.profile)
   if (filters.query) params.set('q', filters.query)
+  if (filters.limit) params.set('limit', String(filters.limit))
   try {
     const response = await fetch(`${API_BASE}/journal?${params}`)
     if (!response.ok) return []
