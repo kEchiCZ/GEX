@@ -63,7 +63,18 @@ annotations_table = Table(
 # Deník tradera (#673 fáze A, #709 rev. 2). PG navždy, stejná třída dat jako
 # anotace: záznamy vázané na okamžik (ts_ref) a symbol, volné tagy, volitelná
 # vazba na setup/news event.
-JOURNAL_TYPES = ("pozorovani", "hypoteza", "retro_dne", "obchod")
+JOURNAL_TYPES = ("pozorovani", "hypoteza", "retro_dne", "obchod", "promeskane")
+
+# Proč jsem platný setup nevzal (#715). Cena váhavosti je měřitelná —
+# bez tohohle deník ukazuje jen to, co jsem udělal, ne co jsem měl a neudělal.
+MISSED_REASONS = (
+    "nevsiml_jsem_si",
+    "nedovera",
+    "mimo_plan",
+    "mimo_seanci",
+    "risk_vycerpan",
+    "vahani",
+)
 
 # Profil deníku (#709): řídí, která pole formulář ukazuje. Ukládá se
 # U ZÁZNAMU, ne globálně — historické zápisy si drží profil, pod kterým
@@ -121,6 +132,8 @@ journal_table = Table(
     # takže zpětný přepočet by dal jiná čísla než ta, podle kterých se
     # rozhodovalo. NULL = kontext se nepodařilo složit (starý záznam, výpadek).
     Column("context", JSON, nullable=True),
+    # Proč jsem platný setup nevzal (#715) — jen u typu `promeskane`
+    Column("missed_reason", String(32), nullable=True),
     # Denní rituál (#712) — ranní plán / Daily Report Card u typu `retro_dne`.
     # Jeden JSON místo šesti řídkých sloupců: je to soudržný dokument a drtivá
     # většina řádků deníku jsou pozorování, která z nich nemají nic.
@@ -290,7 +303,12 @@ def ensure_meta_schema(engine: Engine) -> None:
     # zpětný UPDATE by tvrdil, že záznam vznikl pod profilem, který tehdy
     # neexistoval.
     json_type = "JSONB" if engine.dialect.name == "postgresql" else "JSON"
-    additive = {"profile": "VARCHAR(16)", "context": json_type, "daily": json_type}
+    additive = {
+        "profile": "VARCHAR(16)",
+        "context": json_type,
+        "daily": json_type,
+        "missed_reason": "VARCHAR(32)",
+    }
     missing = {name: sql for name, sql in additive.items() if name not in columns}
     if missing:
         with engine.begin() as conn:

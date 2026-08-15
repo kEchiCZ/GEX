@@ -1,14 +1,27 @@
 /** Deník tradera (#673 fáze A, #709 rev. 2): REST klient /journal. */
 import { API_BASE } from '../config'
 
-export type JournalType = 'pozorovani' | 'hypoteza' | 'retro_dne' | 'obchod'
+export type JournalType = 'pozorovani' | 'hypoteza' | 'retro_dne' | 'obchod' | 'promeskane'
 
 export const JOURNAL_TYPE_LABELS: Record<JournalType, string> = {
   pozorovani: 'Pozorování',
   hypoteza: 'Hypotéza',
   retro_dne: 'Retrospektiva dne',
   obchod: 'Obchod',
+  promeskane: 'Promeškaný setup',
 }
+
+/** Proč jsem platný setup nevzal (#715) — zrcadlo `MISSED_REASONS`. */
+export const MISSED_REASON_LABELS: Record<string, string> = {
+  nevsiml_jsem_si: 'Nevšiml jsem si',
+  nedovera: 'Nedůvěra k setupu',
+  mimo_plan: 'Mimo plán',
+  mimo_seanci: 'Mimo mou seanci',
+  risk_vycerpan: 'Risk už vyčerpaný',
+  vahani: 'Váhání',
+}
+
+export const MISSED_REASONS = Object.keys(MISSED_REASON_LABELS)
 
 /** Profil deníku (#709) — řídí, která pole formulář ukazuje. */
 export type JournalProfile = 'smb' | 'futures'
@@ -67,6 +80,8 @@ export interface JournalEntry {
   context: Record<string, unknown> | null
   /** Ranní plán / Daily Report Card (#712) u typu retro_dne. */
   daily: Record<string, unknown> | null
+  /** Proč jsem setup nevzal (#715) u typu promeskane. */
+  missed_reason: string | null
   created_ts: string
   updated_ts: string | null
 }
@@ -146,12 +161,14 @@ export async function fetchJournal(filters: {
   date?: string
   entryType?: JournalType
   profile?: JournalProfile
+  query?: string
 }): Promise<JournalEntry[]> {
   const params = new URLSearchParams()
   if (filters.symbol) params.set('symbol', filters.symbol)
   if (filters.date) params.set('date', filters.date)
   if (filters.entryType) params.set('entry_type', filters.entryType)
   if (filters.profile) params.set('profile', filters.profile)
+  if (filters.query) params.set('q', filters.query)
   try {
     const response = await fetch(`${API_BASE}/journal?${params}`)
     if (!response.ok) return []
@@ -246,6 +263,7 @@ export async function createJournalEntry(entry: {
   trade?: Partial<JournalTrade> & { direction: TradeDirection }
   context?: Record<string, unknown> | null
   daily?: Record<string, unknown> | null
+  missed_reason?: string | null
 }): Promise<JournalEntry | null> {
   try {
     const response = await fetch(`${API_BASE}/journal`, {
@@ -306,7 +324,45 @@ export function journalToMarkdown(entries: JournalEntry[]): string {
       parts.push(
         `**${time} · ${entry.symbol} · ${JOURNAL_TYPE_LABELS[entry.entry_type]}**${tags}\n\n${entry.text}\n`,
       )
+      // Strukturovaná pole se exportují taky — retrospektiva má být čitelná
+      // i mimo aplikaci (původní požadavek #673)
+      const detail = entryDetailLines(entry)
+      if (detail.length > 0) parts.push(`${detail.join('\n')}\n`)
     }
   }
   return parts.join('\n')
+}
+
+/** Řádky strukturovaného detailu pro export — obchod, důvod, kontext. */
+function entryDetailLines(entry: JournalEntry): string[] {
+  const lines: string[] = []
+  const { trade } = entry
+  if (trade) {
+    const bits: string[] = [trade.direction === 'long' ? 'Long' : 'Short']
+    if (trade.setup_key) bits.push(`setup ${trade.setup_key}`)
+    if (trade.actual_entry !== null) bits.push(`vstup ${trade.actual_entry}`)
+    if (trade.actual_exit !== null) bits.push(`výstup ${trade.actual_exit}`)
+    const r = realizedR(trade)
+    if (r !== null) bits.push(`${r >= 0 ? '+' : ''}${r.toFixed(2)}R`)
+    if (trade.setup_grade) bits.push(`kvalita ${trade.setup_grade}`)
+    if (trade.execution_grade) bits.push(`exekuce ${trade.execution_grade}`)
+    if (trade.failure_mode) bits.push(FAILURE_MODE_LABELS[trade.failure_mode] ?? trade.failure_mode)
+    for (const tag of trade.mistake_tags) bits.push(mistakeLabel(tag))
+    lines.push(`- Obchod: ${bits.join(' · ')}`)
+  }
+  if (entry.missed_reason) {
+    lines.push(`- Nevzal jsem: ${MISSED_REASON_LABELS[entry.missed_reason] ?? entry.missed_reason}`)
+  }
+  const context = entry.context
+  if (context) {
+    const bits: string[] = []
+    for (const key of ['regime', 'flip', 'spot', 'session_segment', 'vol_bucket', 'macro_event']) {
+      const value = context[key]
+      if (value !== null && value !== undefined && value !== '') {
+        bits.push(`${key} ${String(value)}`)
+      }
+    }
+    if (bits.length > 0) lines.push(`- Kontext: ${bits.join(' · ')}`)
+  }
+  return lines
 }

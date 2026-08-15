@@ -14,6 +14,7 @@ from gexlens_engine.storage.meta import (
     JOURNAL_GRADES,
     JOURNAL_PROFILES,
     JOURNAL_TYPES,
+    MISSED_REASONS,
     MISTAKE_TAGS,
     PLAYBOOK_SCOPES,
     REPORT_GRADES,
@@ -194,6 +195,7 @@ def build_router(repository: MetaRepository) -> APIRouter:
         date: dt.date | None = None,
         entry_type: str | None = None,
         profile: str | None = None,
+        q: str | None = None,
         limit: int = Query(500, ge=1, le=2000),
     ) -> dict[str, list[dict[str, Any]]]:
         if profile is not None and profile not in JOURNAL_PROFILES:
@@ -204,6 +206,7 @@ def build_router(repository: MetaRepository) -> APIRouter:
                 day=date,
                 entry_type=entry_type,
                 profile=profile,
+                query=q,
                 limit=limit,
             )
         }
@@ -217,6 +220,7 @@ def build_router(repository: MetaRepository) -> APIRouter:
             "grades": list(JOURNAL_GRADES),
             "directions": list(TRADE_DIRECTIONS),
             "mistake_tags": list(MISTAKE_TAGS),
+            "missed_reasons": list(MISSED_REASONS),
             "symbols": repository.journal_symbols(),
         }
 
@@ -284,6 +288,8 @@ def build_router(repository: MetaRepository) -> APIRouter:
         news_event_id: int | None = None
         profile: str | None = None
         trade: JournalTrade | None = None
+        # Proč jsem platný setup nevzal (#715) — jen u typu `promeskane`
+        missed_reason: str | None = None
         # Snímek GEX kontextu k ts_ref (#711) — skládá klient, server ho jen
         # uloží tak, jak přišel; přepočet na serveru by dal jiná čísla.
         context: dict[str, Any] | None = None
@@ -313,6 +319,11 @@ def build_router(repository: MetaRepository) -> APIRouter:
             raise HTTPException(422, "Objekt trade patří jen k typu 'obchod'")
         if entry.daily is not None and entry.entry_type != "retro_dne":
             raise HTTPException(422, "Denní rituál patří jen k typu 'retro_dne'")
+        if entry.entry_type == "promeskane":
+            if entry.missed_reason not in MISSED_REASONS:
+                raise HTTPException(422, f"missed_reason musí být jeden z {MISSED_REASONS}")
+        elif entry.missed_reason is not None:
+            raise HTTPException(422, "missed_reason patří jen k typu 'promeskane'")
         trade = _validated_trade(entry.trade) if entry.trade is not None else None
         daily = _validated_daily(entry.daily) if entry.daily is not None else None
         now = dt.datetime.now(dt.UTC)
@@ -326,6 +337,7 @@ def build_router(repository: MetaRepository) -> APIRouter:
                 "setup_id": entry.setup_id,
                 "news_event_id": entry.news_event_id,
                 "profile": profile,
+                "missed_reason": entry.missed_reason,
                 "context": entry.context,
                 "daily": daily,
                 "created_ts": now,
