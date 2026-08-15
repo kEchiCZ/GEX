@@ -2119,6 +2119,27 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
 .playbook-detail dd {
   margin: 0 0 0 12px;
 }
+/* Denní rituál (#712) */
+.journal-daily {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border, #2a3242);
+  border-radius: 6px;
+}
+.journal-daily[disabled] {
+  opacity: 0.6;
+}
+.journal-daily input[type='text'] {
+  flex: 1;
+  min-width: 6em;
+}
+.journal-segment-label {
+  min-width: 9em;
+}
+
 /* Snímek kontextu (#711) */
 .journal-context {
   display: flex;

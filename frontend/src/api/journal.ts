@@ -65,6 +65,8 @@ export interface JournalEntry {
   trade: JournalTrade | null
   /** Snímek GEX kontextu k ts_ref (#711); null u záznamů z fáze A. */
   context: Record<string, unknown> | null
+  /** Ranní plán / Daily Report Card (#712) u typu retro_dne. */
+  daily: Record<string, unknown> | null
   created_ts: string
   updated_ts: string | null
 }
@@ -243,6 +245,7 @@ export async function createJournalEntry(entry: {
   news_event_id?: number | null
   trade?: Partial<JournalTrade> & { direction: TradeDirection }
   context?: Record<string, unknown> | null
+  daily?: Record<string, unknown> | null
 }): Promise<JournalEntry | null> {
   try {
     const response = await fetch(`${API_BASE}/journal`, {
@@ -263,6 +266,7 @@ export async function updateJournalEntry(
     tags?: string[]
     profile?: JournalProfile
     trade?: Partial<JournalTrade> & { direction: TradeDirection }
+    daily?: Record<string, unknown> | null
   },
 ): Promise<boolean> {
   try {
