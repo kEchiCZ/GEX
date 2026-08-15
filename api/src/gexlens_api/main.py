@@ -64,6 +64,7 @@ from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
 from gexlens_engine.storage.tendency_store import TendencyRepository
+from gexlens_engine.storage.volregime_store import VolRegimeRepository
 
 
 def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
@@ -442,6 +443,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             rows = []  # tabulka ještě neexistuje (engine neběžel) — UI drží tvar
         return {"symbol": symbol, "today": today, "rows": rows}
+
+    @app.get("/volregime/{symbol}")
+    def vol_regime(symbol: str, limit: int = 365) -> dict[str, object]:
+        """Volatilitní režim per seance (ADR-0028, #713).
+
+        Percentil denního rozsahu v klouzavém okně vlastní historie. Chybí-li
+        vzorek (nový instrument), řádek prostě není — nikdy se nedosazuje
+        `normal` jako „bezpečný default", to by byl tichý výpadek vydávaný
+        za měření.
+        """
+        try:
+            rows = VolRegimeRepository(meta_repository.engine()).list_for(
+                symbol, limit=max(1, min(limit, 1000))
+            )
+        except Exception:
+            rows = []  # tabulka ještě neexistuje (engine neběžel) — UI drží tvar
+        return {"symbol": symbol, "rows": rows}
 
     @app.get("/tendency/{symbol}")
     def tendency_series(symbol: str, date: dt.date | None = None) -> dict[str, object]:

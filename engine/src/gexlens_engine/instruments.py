@@ -54,6 +54,7 @@ from gexlens_engine.storage.meta import ensure_meta_schema, settings_table, watc
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.t6 import T6Collector
 from gexlens_engine.tendency import TendencyEngine
+from gexlens_engine.volregime import VolRegimeCollector
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +291,8 @@ class InstrumentPipeline:
     t6_collector: T6Collector | None = None
     # Gamma útes po expiraci (#576, fáze 1 jen měření) — None = vypnuto
     gamma_cliff: GammaCliffCollector | None = None
+    # Volatilitní režim z barů (ADR-0028, #713) — None = vypnuto
+    vol_regime: VolRegimeCollector | None = None
     # Denní FA validace po OI archivu (#232) — None = vypnuto
     fa_repository: FaValidationRepository | None = None
     # Ranní kalibrace α po OI archivu (#232 fáze 2) — None = vypnuto
@@ -864,6 +867,12 @@ class InstrumentPipeline:
                 await self.gamma_cliff.on_minute(now)
             except Exception:
                 logger.exception("Gamma útes %s selhal — pokračuji", self.symbol)
+        # Volatilitní režim (ADR-0028) — jednou po settle, čte jen bary
+        if self.vol_regime is not None:
+            try:
+                await self.vol_regime.on_minute(now)
+            except Exception:
+                logger.exception("Volatilitní režim %s selhal — pokračuji", self.symbol)
 
         # Následující expirace v nižší kadenci; její pád nesmí shodit aktivní řetěz
         if (

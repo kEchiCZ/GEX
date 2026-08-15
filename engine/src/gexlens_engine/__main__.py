@@ -95,6 +95,7 @@ from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
 from gexlens_engine.storage.t6_store import T6Repository
 from gexlens_engine.storage.tendency_store import TendencyRepository
+from gexlens_engine.storage.volregime_store import VolRegimeRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.session import TastyCredentials, TastySession
@@ -102,6 +103,7 @@ from gexlens_engine.tasty.shadow import ShadowComparator, shadow_symbols
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
 from gexlens_engine.tendency import TendencyEngine
+from gexlens_engine.volregime import VolRegimeCollector
 
 logger = logging.getLogger("gexlens.engine")
 
@@ -290,6 +292,7 @@ async def create_pipeline(
     tendency_repository: TendencyRepository | None = None,
     t6_repository: T6Repository | None = None,
     gamma_cliff_repository: GammaCliffRepository | None = None,
+    vol_regime_repository: VolRegimeRepository | None = None,
     db: Engine | None = None,
     pacing_guard: PacingGuard | None = None,
     fa_repository: FaValidationRepository | None = None,
@@ -567,6 +570,15 @@ async def create_pipeline(
             if gamma_cliff_repository is not None and db is not None
             else None
         ),
+        vol_regime=(
+            VolRegimeCollector(
+                symbol=symbol,
+                repository=vol_regime_repository,
+                data_dir=settings.data_dir,
+            )
+            if vol_regime_repository is not None
+            else None
+        ),
         news_ticks=news_ticks,
         read_news_ticks=(lambda: list(ib.newsTicks())) if news_ticks else None,
     )
@@ -663,6 +675,10 @@ async def main() -> None:
     if settings.gamma_cliff_enabled:
         gamma_cliff_repository = GammaCliffRepository(db)
         await asyncio.to_thread(gamma_cliff_repository.ensure_schema)
+
+    # Volatilitní režim (ADR-0028): čte jen bary, žádná IBKR linka navíc
+    vol_regime_repository = VolRegimeRepository(db)
+    await asyncio.to_thread(vol_regime_repository.ensure_schema)
 
     # Broker headlines z ticku 292 (#291): schéma SentimentLensu sdílí obě
     # služby, engine do něj jen zapisuje
@@ -834,6 +850,7 @@ async def main() -> None:
                     tendency_repository=tendency_repository,
                     t6_repository=t6_repository,
                     gamma_cliff_repository=gamma_cliff_repository,
+                    vol_regime_repository=vol_regime_repository,
                     db=db,
                     pacing_guard=pacing_guard,
                     fa_repository=fa_repository,

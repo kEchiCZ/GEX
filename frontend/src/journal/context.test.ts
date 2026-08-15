@@ -35,6 +35,9 @@ const BASE = {
   prevDayBars: [bar(10, 6700, 6720, 6690)],
   cliff: { session_date: '2026-08-14', cliff_share: 0.15, is_opex: false },
   tendency: [] as TendencyRow[],
+  profile: 'futures' as const,
+  volRegime: null,
+  macroEvent: null,
 }
 
 describe('composeContext', () => {
@@ -113,5 +116,44 @@ describe('nearestLevel', () => {
   it('bez ceny nebo bez úrovní nevymýšlí', () => {
     expect(nearestLevel(null, 6810)).toBeNull()
     expect(nearestLevel(levels(30, 6805, -50), null)).toBeNull()
+  })
+})
+
+describe('futures vrstva v kontextu (#713)', () => {
+  it('zachytí seanci, kontrakt a roll týden', () => {
+    const context = composeContext(BASE)
+    // 14:30 UTC = hodina po US open (13:30 UTC v létě) → RTH dopoledne
+    expect(context.session_segment).toBe('dopoledne')
+    expect(context.contract).toBe('ESU6')
+    expect(context.roll_week).toBe(false)
+  })
+
+  it('volatilitní bucket se přebírá, nedopočítává', () => {
+    const context = composeContext({
+      ...BASE,
+      volRegime: {
+        session_date: '2026-08-14',
+        symbol: 'ES',
+        session_range: 60,
+        percentile: 0.9,
+        bucket: 'crisis',
+        sample: 200,
+        version: 1,
+      },
+    })
+    expect(context.vol_bucket).toBe('crisis')
+    expect(context.vol_percentile).toBeCloseTo(0.9)
+  })
+
+  it('chybějící režim zůstane null — NIKDY se nedosazuje "normal"', () => {
+    expect(composeContext(BASE).vol_bucket).toBeNull()
+    expect(composeContext(BASE).macro_event).toBeNull()
+  })
+
+  it('profil smb futures pole nepočítá — u akcií nedávají smysl', () => {
+    const context = composeContext({ ...BASE, profile: 'smb' })
+    expect(context.session_segment).toBeNull()
+    expect(context.contract).toBeNull()
+    expect(context.roll_week).toBeNull()
   })
 })
