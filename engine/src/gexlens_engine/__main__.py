@@ -300,6 +300,7 @@ async def create_pipeline(
     news_ticks: NewsTickCollector | None = None,
     provider: MarketDataProviderLike | None = None,
     line_gauge: LineGauge | None = None,
+    oi_fallback: Callable[[OptionContractSpec], float | None] | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
     # Provider (#613): svazek datových zdrojů; default = IBKR (jediný zapojený
@@ -433,6 +434,7 @@ async def create_pipeline(
             cum_delta=CumDeltaTracker(multiplier=multiplier),
             push_status=False,
             secondary=True,
+            oi_fallback=oi_fallback,
         )
         logger.info(
             "Sekundární řetěz %s %s %s: %d kontraktů (kadence 1/%d)",
@@ -455,6 +457,7 @@ async def create_pipeline(
         contracts=contracts,
         cum_delta=CumDeltaTracker(multiplier=multiplier),
         push_status=False,  # agregovaný status pushuje orchestrátor
+        oi_fallback=oi_fallback,
     )
 
     # Historical backfill 1min barů (SPEC 3.6, #221): aktuální den + retention
@@ -695,10 +698,12 @@ async def main() -> None:
 
     pipelines: dict[str, InstrumentPipeline] = {}
 
-    # ── tastytrade shadow (#613) — jen měří do feed_comparison, nic víc ──
+    # ── tastytrade shadow (#613) — měří do feed_comparison; k tomu OI fill
+    # (#664, předsunutý kus #614): chybějící archivní OI doplní Summary ──
     shadow_stop = asyncio.Event()
     shadow_tasks: list[asyncio.Task[None]] = []
     shadow_chain: dict[str, ChainSymbols] = {}
+    tasty_oi_lookup: Callable[[OptionContractSpec], float | None] | None = None
     if settings.tasty_shadow and settings.tasty_client_secret and settings.tasty_refresh_token:
         tasty_session = TastySession(
             TastyCredentials(
@@ -720,12 +725,44 @@ async def main() -> None:
                     merged.update(pipeline.next_runtime.scheduler.quotes())
             return merged
 
+        def shadow_oi_snapshot() -> dict[tuple[str, str, float, str], float]:
+            """Denní archiv IBKR pro OI porovnání (#664) — klíč (symbol, expiry, strike, right)."""
+            today = dt.datetime.now(dt.UTC).date()
+            merged_oi: dict[tuple[str, str, float, str], float] = {}
+            for pipeline_symbol in list(pipelines):
+                snapshot = oi_repository.snapshot(pipeline_symbol, today)
+                for (expiry, strike, right), oi_value in snapshot.items():
+                    merged_oi[(pipeline_symbol, expiry, strike, right)] = oi_value
+            return merged_oi
+
         comparator = ShadowComparator(
             comparison_repository,
             tasty_cache,
             shadow_contracts,
             lambda: dict(shadow_chain),
+            oi_source=shadow_oi_snapshot,
         )
+
+        if settings.tasty_oi_fill:
+
+            def _tasty_oi(spec: OptionContractSpec) -> float | None:
+                chain = shadow_chain.get(spec.symbol)
+                if chain is None:
+                    return None
+                streamer = chain.streamer_symbol(spec)
+                if streamer is None:
+                    return None
+                state = tasty_cache.state(streamer)
+                if state is None:
+                    return None
+                # Summary je denní agregát — stáří se nehlídá: event chodí při
+                # subskripci a při změně, OI se přes den nemění (ADR-0027)
+                return state.summary.open_interest
+
+            tasty_oi_lookup = _tasty_oi
+            logger.info(
+                "tasty OI fill ZAPNUT — díry denního archivu doplní Summary (#664, kus #614)"
+            )
 
         async def shadow_symbols_loop() -> None:
             """Denní obnova chain mapy + průběžné dorovnání subskripce."""
@@ -858,6 +895,7 @@ async def main() -> None:
                     news_ticks=news_ticks,
                     provider=provider,
                     line_gauge=line_gauge,
+                    oi_fallback=tasty_oi_lookup,
                 )
                 setup_cooldown.succeeded(symbol)
             except ConnectionError as exc:

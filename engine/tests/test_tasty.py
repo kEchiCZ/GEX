@@ -187,6 +187,82 @@ def test_compare_minute_meri_data_ne_hodiny() -> None:
     assert bid_stale.value_ibkr is None and bid_stale.value_tasty == 18.1
 
 
+def test_compare_minute_porovnava_oi_z_archivu_a_summary() -> None:
+    """#664: pole `oi` — IBKR strana z denního archivu, tasty ze Summary; bez
+    stáří (denní veličina). Bez obou stran řádek nevznikne."""
+    import time
+
+    from gexlens_engine.ibkr.scheduler import CachedQuote, QuoteSnapshot
+    from gexlens_engine.tasty.shadow import compare_minute
+
+    now_mono = time.monotonic()
+    spec = OptionContractSpec(
+        symbol="ES",
+        sec_type="FOP",
+        expiry="20260813",
+        strike=7775.0,
+        right="C",
+        exchange="CME",
+        trading_class="E2D",
+        multiplier="50",
+    )
+    snapshot = QuoteSnapshot(
+        bid=18.0,
+        ask=18.5,
+        last=18.2,
+        volume=10.0,
+        iv=0.126,
+        delta=0.52,
+        gamma=0.0112,
+        theta=-13.0,
+        vega=1.1,
+    )
+    fresh = {spec: CachedQuote(snapshot=snapshot, updated_at=now_mono - 5.0)}
+    chain = ChainSymbols(
+        product="ES",
+        day=TS.date(),
+        by_contract={("20260813", 7775.0, "C"): "./E2DQ26C7775:XCME"},
+    )
+    cache = TastyChainCache(clock=lambda: TS - dt.timedelta(seconds=3))
+    feed_summary(cache, "./E2DQ26C7775:XCME", 1234.0)
+
+    rows = compare_minute(
+        TS,
+        fresh,
+        cache,
+        {"ES": chain},
+        now_monotonic=now_mono,
+        now_utc=TS,
+        oi_ibkr={("ES", "20260813", 7775.0, "C"): 1200.0},
+    )
+    oi_row = next(row for row in rows if row.field == "oi")
+    assert oi_row.value_ibkr == 1200.0
+    assert oi_row.value_tasty == 1234.0
+    assert oi_row.age_ibkr_ms is None and oi_row.age_tasty_ms is None
+
+    # Bez archivu i Summary se řádek `oi` nezapisuje (nulová informace)
+    empty_cache = TastyChainCache(clock=lambda: TS)
+    feed_quote(empty_cache, "./E2DQ26C7775:XCME", 18.1, 18.6)
+    rows_none = compare_minute(
+        TS,
+        fresh,
+        empty_cache,
+        {"ES": chain},
+        now_monotonic=now_mono,
+        now_utc=TS,
+        oi_ibkr={},
+    )
+    assert all(row.field != "oi" for row in rows_none)
+
+
+def test_oi_fill_flag_default_zapnuty() -> None:
+    """#664: fill je default ZAPNUTÝ — konzervativní default by nechal 0DTE ráno
+    bez OI i s běžícím shadow (pravidlo: tasty limity na maximum)."""
+    from gexlens_engine.config import Settings
+
+    assert Settings().tasty_oi_fill is True
+
+
 def test_shadow_flag_default_vypnuty() -> None:
     """Regresní pojistka: bez flagu se shadow nespouští (chování beze změny)."""
     from gexlens_engine.config import Settings

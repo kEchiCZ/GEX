@@ -121,6 +121,11 @@ class Settings(BaseSettings):
     tasty_shadow: bool = False
     tasty_client_secret: str = ""
     tasty_refresh_token: str = ""
+    # Doplnění chybějícího OI z tasty Summary (#664, předsunutý kus #614 dle
+    # rozhodnutí uživatele 15. 8.): nastupuje JEN tam, kde denní archiv mlčí
+    # (typicky 0DTE do publikace CME) — hodnota IBKR má vždy přednost.
+    # Vyžaduje běžící shadow větev (bez ní není z čeho číst).
+    tasty_oi_fill: bool = True
 
     batch_timeout_s: float = Field(default=4.0, gt=0)
     # Burzovní čas, po kterém IBKR publikuje kompletní denní OI (#463, #511).
@@ -135,6 +140,10 @@ class Settings(BaseSettings):
     # DEPRECATED (#511): stará fixní UTC hodina. Je-li nastavená, má přednost
     # (zpětná kompatibilita .env) a při startu se zaloguje deprecation warning.
     oi_publication_hour_utc: int | None = Field(default=None, ge=0, le=23)
+    # Finalita OI snímku (#664): dvě shodná čtení smí snímek prohlásit za
+    # finální jen při pokrytí aspoň tohoto podílu řetězce. 12. 8. čtyři
+    # kontrakty ze 160 dvakrát shodně přečtené zastavily obnovu na celý den.
+    oi_final_min_coverage: float = Field(default=0.9, gt=0, le=1)
     # Křídla řetězce se sweepují každý k-tý cyklus (ATM±atm_sweep_width každý cyklus)
     wings_sweep_every: int = Field(default=3, ge=1)
     atm_sweep_width: int = Field(default=30, ge=1)

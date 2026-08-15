@@ -100,6 +100,57 @@ async def test_bez_chybejiciho_oi_rada_nevznikne(
     assert not (settings.derived_dir / "ES" / "20260716" / "oimissing" / f"{day}.parquet").exists()
 
 
+async def test_oi_fill_z_tasty_jde_do_vlastni_rady(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """#664: strike bez archivu doplní tasty Summary — hodnota do snapshotu,
+    záznam do řady oifilled; archivované OI má vždy přednost před fallbackem."""
+    engine_runtime, _publisher, settings = runtime
+    novy = OptionContractSpec("ES", "FOP", "20260716", 7620.0, "C", "CME", "E3D", "50")
+    engine_runtime.contracts = [*engine_runtime.contracts, novy]
+    # Fallback vrací hodnotu pro všechno — archivované striky ho nesmí použít
+    engine_runtime.oi_fallback = lambda spec: 321.0
+
+    metrics = await engine_runtime.run_cycle(TS, SPOT, [])
+
+    day = TS.date().isoformat()
+    filled = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "oifilled" / f"{day}.parquet"
+    )
+    assert filled["strike"].tolist() == [7620.0]
+    assert filled["right"].tolist() == ["C"]
+    # Doplněný strike NENÍ chybějící — řada oimissing nevznikne
+    assert not (settings.derived_dir / "ES" / "20260716" / "oimissing" / f"{day}.parquet").exists()
+    snapshots = pd.read_parquet(settings.snapshots_dir / "ES" / "20260716" / f"{day}.parquet")
+    assert snapshots.loc[snapshots["strike"] == 7620.0, "oi"].tolist() == [321.0]
+    # Archivovaný strike drží hodnotu z archivu, ne z fallbacku
+    assert set(snapshots.loc[snapshots["strike"] == 7600.0, "oi"]) == {1000.0}
+    assert metrics.oi_present == 6
+    assert metrics.oi_filled == 1
+    assert metrics.oi_missing == 0
+
+
+async def test_oi_fill_bez_fallbacku_zustava_missing(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """#664: fallback vrací None (tasty symbol nezná) → chování #465 beze změny."""
+    engine_runtime, _publisher, settings = runtime
+    novy = OptionContractSpec("ES", "FOP", "20260716", 7620.0, "C", "CME", "E3D", "50")
+    engine_runtime.contracts = [*engine_runtime.contracts, novy]
+    engine_runtime.oi_fallback = lambda spec: None
+
+    metrics = await engine_runtime.run_cycle(TS, SPOT, [])
+
+    day = TS.date().isoformat()
+    assert not (settings.derived_dir / "ES" / "20260716" / "oifilled" / f"{day}.parquet").exists()
+    missing = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "oimissing" / f"{day}.parquet"
+    )
+    assert missing["strike"].tolist() == [7620.0]
+    assert metrics.oi_filled == 0
+    assert metrics.oi_missing == 1
+
+
 async def test_dopoctene_greeks_jdou_do_vlastni_rady(tmp_path: Path) -> None:
     """#547: strike s fallback BS greeks se zapíše do snapshotu a označí v řadě greekssource."""
     settings = Settings(data_dir=tmp_path / "data", greeks_fallback_sweeps=1)

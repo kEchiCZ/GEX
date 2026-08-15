@@ -1,6 +1,6 @@
 /** Hlavička instrumentu (SPEC 7.1): ticker, last + změna, expirace, Live, notifikace. */
 import { useEffect, useState } from 'react'
-import { coverageLabel, greeksCoverage } from '../instrument/coverage'
+import { coverageLabel, greeksCoverage, oiCoverage } from '../instrument/coverage'
 import type { Coverage } from '../instrument/coverage'
 import { expiryCountdown, expiryIsoDate, expiryKind, expirySettleUtc } from '../instrument/expiry'
 import { formatSettleWatch } from '../instrument/settlewatch'
@@ -211,6 +211,17 @@ export function InstrumentHeader({
               'Kolik striků chainu má kompletní řecká (delta/gamma/vega). Neúplné pokrytí ' +
               'znamená, že část striků čeká na dopočet nebo se opakovaně nedaří — hodnoty ' +
               'v profilu a Dyn GEX pak stojí na menším vzorku.'
+            }
+          />
+          <CoverageBadge
+            label="OI"
+            testId="coverage-oi"
+            coverage={oiCoverage(status.oi_present, status.oi_filled, status.oi_missing)}
+            title={
+              'Kolik kontraktů aktivních řetězů má hodnotu OI (denní archiv IBKR + případné ' +
+              'doplnění z tastytrade). Díra je typická pro denní expiraci ráno, než CME ' +
+              'publikuje OI — flip a GEX pak stojí na řídké páteři a kreslí se ztlumeně.' +
+              (status.oi_filled ? ` Z toho ${status.oi_filled} doplněno z tastytrade.` : '')
             }
           />
           <CoverageBadge

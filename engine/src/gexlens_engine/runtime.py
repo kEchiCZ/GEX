@@ -13,7 +13,7 @@ import datetime as dt
 import functools
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
@@ -130,6 +130,9 @@ class EngineRuntime:
     # Per-symbol α flow-adjusted odhadu (#232): None = default z konfigurace
     # (flow_oi_alpha); ranní kalibrace fáze 2 ho nastavuje za běhu
     flow_alpha: float | None = None
+    # Fallback OI z tasty Summary (#664): lookup nastupuje JEN kde denní archiv
+    # kontrakt nepokrývá (typicky 0DTE do publikace CME); None = fill neběží
+    oi_fallback: Callable[[OptionContractSpec], float | None] | None = None
     # Poslední spočtené hodnoty cyklu — čte je SetupEngine (ADR-0004)
     last_levels: LevelsRow | None = field(default=None, init=False)
     last_flow: FlowRowLike | None = field(default=None, init=False)
@@ -152,6 +155,8 @@ class EngineRuntime:
     _flow_seed_pending: bool = field(default=True, init=False)
     # Throttle logu dopočtených Greeks (#547): loguje se jen změna počtu
     _computed_greeks_logged: int = field(default=0, init=False)
+    # Throttle logu OI fillu (#664): loguje se jen změna počtu doplněných
+    _oi_filled_logged: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
@@ -281,6 +286,8 @@ class EngineRuntime:
         gex_specs: list[OptionContractSpec] = []
         profile_contracts: list[ProfileContract] = []
         oi_missing: list[OiMissingRow] = []
+        oi_filled_rows: list[OiMissingRow] = []
+        oi_present_count = 0
         greeks_computed: list[GreeksSourceRow] = []
         for spec in self.contracts:
             cached = quotes.get(spec)
@@ -298,12 +305,23 @@ class EngineRuntime:
                 spec.symbol, day, spec.strike, spec.right, expiry=spec.expiry
             )
             # `None` = archiv strike nepokrývá (přibyl posunem pásma) nebo OI
-            # nedodalo IBKR. Do výpočtů jde 0.0 jako dřív (nulové OI přispívá
-            # nulou), ale strike se zapíše do vlastní řady — jinak by graf
-            # tvrdil změřenou nulu tam, kde nikdo nic nezměřil (#465)
-            if archived_oi is None:
+            # nedodalo IBKR. Nejdřív se zkusí tasty Summary (#664) — měřená
+            # hodnota z druhého feedu, ne odhad; jde do vlastní řady oifilled,
+            # ať zpětně nesplyne s archivem IBKR. Bez obou zdrojů jde do
+            # výpočtů 0.0 jako dřív a strike se zapíše do oimissing — jinak by
+            # graf tvrdil změřenou nulu tam, kde nikdo nic nezměřil (#465)
+            filled_oi: float | None = None
+            if archived_oi is not None:
+                oi_present_count += 1
+            elif self.oi_fallback is not None:
+                filled_oi = self.oi_fallback(spec)
+            if filled_oi is not None:
+                oi_filled_rows.append(
+                    OiMissingRow(ts_min=ts_min, strike=spec.strike, right=spec.right)
+                )
+            elif archived_oi is None:
                 oi_missing.append(OiMissingRow(ts_min=ts_min, strike=spec.strike, right=spec.right))
-            oi = archived_oi or 0.0
+            oi = archived_oi if archived_oi is not None else (filled_oi or 0.0)
             rows.append(
                 SnapshotRow(
                     ts_min=ts_min,
@@ -354,6 +372,14 @@ class EngineRuntime:
                     ask=snapshot.ask,
                     delta=snapshot.delta,
                 )
+        # OI pokrytí aktivního řetězu do metrik (#664) — status je agreguje
+        # do stavové lišty (badge OI vedle Greeks)
+        metrics = replace(
+            metrics,
+            oi_present=oi_present_count,
+            oi_filled=len(oi_filled_rows),
+            oi_missing=len(oi_missing),
+        )
         # Catch-up flag (#518, ADR-0024): první minuta se snapshoty po startu
         # procesu, které v běžícím dni předchází neměřená minuta s otevřeným
         # trhem. Kumulativní denní volume v ní srovnal první sweep sám, takže
@@ -443,6 +469,21 @@ class EngineRuntime:
                 self.symbol,
                 ts_min.isoformat(),
                 len(oi_missing),
+            )
+        # OI doplněné z tasty Summary (#664) — vlastní řada po vzoru oimissing;
+        # bez fillu (plný archiv IBKR / shadow neběží) řada nevznikne vůbec
+        if oi_filled_rows:
+            await asyncio.to_thread(
+                self.writer.write_oi_filled, self.symbol, self.expiry, day, oi_filled_rows
+            )
+        # Throttle (#664): hlásit jen změnu počtu, ne stejnou větu každou minutu
+        if len(oi_filled_rows) != self._oi_filled_logged:
+            self._oi_filled_logged = len(oi_filled_rows)
+            logger.info(
+                "%s %s: %d striků s OI z tasty Summary (archiv IBKR je nepokrývá)",
+                self.symbol,
+                ts_min.isoformat(),
+                len(oi_filled_rows),
             )
         # Dopočtené Greeks (#547) — vlastní řada po vzoru oimissing; dokud TWS
         # model dodává, řada nevznikne vůbec

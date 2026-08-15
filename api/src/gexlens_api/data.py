@@ -112,6 +112,13 @@ class DataRepository:
         )
         return self._read(path)
 
+    def oi_filled(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """Striky s OI doplněným z tasty Summary (#664) — bez fillu řada neexistuje."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "oifilled" / f"{day.isoformat()}.parquet"
+        )
+        return self._read(path)
+
     def catch_up(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
         """Catch-up minuty (#518, ADR-0024) — když engine běžel celý den, řada neexistuje."""
         path = (
