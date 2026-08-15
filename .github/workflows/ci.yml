@@ -68,6 +68,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # gitleaks skenuje celou historii, ne jen špičku
+      # Compose smoke (#696): interpolace a env_file obou stacků musí projít
+      # i bez lokálního .env (dummy tajemství; .env.dev je volitelný)
+      - name: docker compose config
+        run: |
+          touch .env
+          GEXLENS_PG_PASSWORD=ci GEXLENS_API_TOKEN=ci docker compose -f compose.yml config -q
+          GEXLENS_PG_PASSWORD=ci GEXLENS_API_TOKEN=ci docker compose -f compose.dev.yml config -q
       - name: gitleaks
         run: |
           docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \

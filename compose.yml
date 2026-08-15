@@ -43,13 +43,13 @@ services:
       dockerfile: docker/python.Dockerfile
     command: uvicorn gexlens_api.main:app --host 0.0.0.0 --port 8000
     logging: *default-logging
+    env_file:
+      - .env
     environment:
       GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
       GEXLENS_DATA_DIR: /app/data
       # Sdílené tajemství pro /internal/* a /backup (#542)
       GEXLENS_API_TOKEN: ${GEXLENS_API_TOKEN:?chybí GEXLENS_API_TOKEN — vygeneruj přes scripts/init-secrets.ps1}
-      # Origins nad rámec localhostu (Tailscale UI); prázdné = jen same-origin
-      GEXLENS_ALLOWED_ORIGINS: ${GEXLENS_ALLOWED_ORIGINS:-}
     ports:
       # Prohlížeč sem nechodí (nginx proxuje /api) — publikace zůstává jen pro
       # nástroje na hostiteli a je vázaná na loopback
@@ -66,23 +66,19 @@ services:
       dockerfile: docker/python.Dockerfile
     command: python -m gexlens_engine
     logging: *default-logging
+    # Celý .env jde do kontejneru (#696) — dřív ruční allowlist ~12 proměnných
+    # tiše ignoroval zbytek dokumentovaných klíčů (Alpaca, ladicí GEXLENS_*…).
+    # `environment:` níže VYHRÁVÁ nad env_file — nese jen hodnoty, které compose
+    # odvozuje nebo musí přepsat (topologie kontejnerů ≠ hodnoty pro hostitele).
+    env_file:
+      - .env
     environment:
       # TWS/IB Gateway běží na hostiteli (Windows/Mac Docker Desktop)
       GEXLENS_IBKR_HOST: host.docker.internal
-      GEXLENS_IBKR_PORT: ${GEXLENS_IBKR_PORT:-7496}
-      GEXLENS_IBKR_CLIENT_ID: ${GEXLENS_IBKR_CLIENT_ID:-1}
       GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
       GEXLENS_DATA_DIR: /app/data
       GEXLENS_API_BASE: http://api:8000
       GEXLENS_API_TOKEN: ${GEXLENS_API_TOKEN:?}
-      # Základ symbolů a strop souběžných instrumentů jdou ladit z .env (#215:
-      # výchozí strop 3 = ES+NQ+MES; pro MNQ je potřeba 4)
-      GEXLENS_SYMBOLS: ${GEXLENS_SYMBOLS:-ES}
-      # tastytrade shadow (#613): default vypnuto, tajemství z .env (ADR-0025)
-      GEXLENS_TASTY_SHADOW: ${GEXLENS_TASTY_SHADOW:-false}
-      GEXLENS_TASTY_CLIENT_SECRET: ${GEXLENS_TASTY_CLIENT_SECRET:-}
-      GEXLENS_TASTY_REFRESH_TOKEN: ${GEXLENS_TASTY_REFRESH_TOKEN:-}
-      GEXLENS_MAX_INSTRUMENTS: ${GEXLENS_MAX_INSTRUMENTS:-3}
     volumes:
       - ./data:/app/data
     depends_on:
@@ -101,16 +97,12 @@ services:
       dockerfile: docker/python.Dockerfile
     command: python -m gexlens_news run
     logging: *default-logging
+    # Klíče zdrojů z celého .env (#696) — allowlist dřív tiše vynechal třeba
+    # Alpaca (#387); env_file je doručí všechny, S10 platí dál (jen lokálně)
+    env_file:
+      - .env
     environment:
       GEXLENS_NEWS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
-      # Klíče výhradně z lokálního .env (S10) — v repu jen prázdné placeholdery
-      GEXLENS_NEWS_FINNHUB_API_KEY: ${GEXLENS_NEWS_FINNHUB_API_KEY:-}
-      GEXLENS_NEWS_FRED_API_KEY: ${GEXLENS_NEWS_FRED_API_KEY:-}
-      GEXLENS_NEWS_BLS_API_KEY: ${GEXLENS_NEWS_BLS_API_KEY:-}
-      GEXLENS_NEWS_BEA_API_KEY: ${GEXLENS_NEWS_BEA_API_KEY:-}
-      GEXLENS_NEWS_GEMINI_API_KEY: ${GEXLENS_NEWS_GEMINI_API_KEY:-}
-      GEXLENS_NEWS_REDDIT_CLIENT_ID: ${GEXLENS_NEWS_REDDIT_CLIENT_ID:-}
-      GEXLENS_NEWS_REDDIT_CLIENT_SECRET: ${GEXLENS_NEWS_REDDIT_CLIENT_SECRET:-}
       GEXLENS_NEWS_DATA_DIR: /app/data
       # V Dockeru je localhost sám kontejner — WS push musí mířit na službu api
       GEXLENS_NEWS_API_BASE: http://api:8000

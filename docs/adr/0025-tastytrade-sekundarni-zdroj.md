@@ -229,3 +229,11 @@ a měří se explicitně.
 
 Poznámka k souběhu s mobilem: plnohodnotné trvalé řešení zůstává druhý IBKR
 username (#539 fáze 0) — fallback řetězu je pojistka a most, ne náhrada.
+
+## Dodatek 15. 8. 2026 (#696)
+
+Nález 17 z triáže („menší blast radius při úniku `.env` neplatí, dokud dev
+i prod čtou tentýž soubor") vyřešen: dev stack čte `.env` + volitelný
+`.env.dev`, dev grant se ukládá do `.env.dev` pod standardními názvy
+`GEXLENS_TASTY_*`. Oddělené soubory = oddělený blast radius; na VPS (#539)
+pojede jen prod `.env`.

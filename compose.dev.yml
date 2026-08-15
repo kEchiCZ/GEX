@@ -53,11 +53,17 @@ services:
       dockerfile: docker/python.Dockerfile
     command: uvicorn gexlens_api.main:app --host 0.0.0.0 --port 8000
     logging: *default-logging
+    # Sdílený .env + dev přepisy (#696): .env.dev je volitelný — dev tajemství
+    # a odchylky (vlastní tasty grant pod STANDARDNÍMI názvy GEXLENS_TASTY_*,
+    # jiné symboly…) patří sem, prod .env zůstává netknutý (ADR-0025 nález 17)
+    env_file:
+      - path: .env
+      - path: .env.dev
+        required: false
     environment:
       GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
       GEXLENS_DATA_DIR: /app/data
       GEXLENS_API_TOKEN: ${GEXLENS_API_TOKEN:?chybí GEXLENS_API_TOKEN — vygeneruj přes scripts/init-secrets.ps1}
-      GEXLENS_ALLOWED_ORIGINS: ${GEXLENS_ALLOWED_ORIGINS:-}
     ports:
       - "${GEXLENS_BIND_ADDR:-127.0.0.1}:8001:8000"
     volumes:
@@ -73,18 +79,19 @@ services:
       dockerfile: docker/python.Dockerfile
     command: python -m gexlens_engine
     logging: *default-logging
+    env_file:
+      - path: .env
+      - path: .env.dev
+        required: false
     environment:
       GEXLENS_IBKR_HOST: host.docker.internal
-      GEXLENS_IBKR_PORT: ${GEXLENS_IBKR_PORT:-7496}
       # Jiné default clientId než prod (1) — pojistka pro případ, že by v TWS
-      # ještě dožíval produkční engine
+      # ještě dožíval produkční engine; .env.dev může přepsat
       GEXLENS_IBKR_CLIENT_ID: ${GEXLENS_DEV_IBKR_CLIENT_ID:-2}
       GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
       GEXLENS_DATA_DIR: /app/data
       GEXLENS_API_BASE: http://api:8000
       GEXLENS_API_TOKEN: ${GEXLENS_API_TOKEN:?}
-      GEXLENS_SYMBOLS: ${GEXLENS_SYMBOLS:-ES}
-      GEXLENS_MAX_INSTRUMENTS: ${GEXLENS_MAX_INSTRUMENTS:-3}
     volumes:
       - ./data-dev:/app/data
     depends_on:
@@ -101,15 +108,12 @@ services:
       dockerfile: docker/python.Dockerfile
     command: python -m gexlens_news run
     logging: *default-logging
+    env_file:
+      - path: .env
+      - path: .env.dev
+        required: false
     environment:
       GEXLENS_NEWS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
-      GEXLENS_NEWS_FINNHUB_API_KEY: ${GEXLENS_NEWS_FINNHUB_API_KEY:-}
-      GEXLENS_NEWS_FRED_API_KEY: ${GEXLENS_NEWS_FRED_API_KEY:-}
-      GEXLENS_NEWS_BLS_API_KEY: ${GEXLENS_NEWS_BLS_API_KEY:-}
-      GEXLENS_NEWS_BEA_API_KEY: ${GEXLENS_NEWS_BEA_API_KEY:-}
-      GEXLENS_NEWS_GEMINI_API_KEY: ${GEXLENS_NEWS_GEMINI_API_KEY:-}
-      GEXLENS_NEWS_REDDIT_CLIENT_ID: ${GEXLENS_NEWS_REDDIT_CLIENT_ID:-}
-      GEXLENS_NEWS_REDDIT_CLIENT_SECRET: ${GEXLENS_NEWS_REDDIT_CLIENT_SECRET:-}
       GEXLENS_NEWS_DATA_DIR: /app/data
       GEXLENS_NEWS_API_BASE: http://api:8000
       GEXLENS_NEWS_API_TOKEN: ${GEXLENS_API_TOKEN:?}
