@@ -57,11 +57,11 @@ test('navigace v sidebaru přepíná obrazovky', async () => {
   expect(await screen.findByLabelText('Karta ES')).toBeDefined()
   expect(screen.getByLabelText('Karta SPY')).toBeDefined()
 
-  fireEvent.click(screen.getByRole('button', { name: 'IBKR Console' }))
-  expect(screen.getByLabelText('Připojení')).toBeDefined()
-
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
   expect(screen.getByLabelText('Settings')).toBeDefined()
+  // IBKR Console zrušena (#705) — stav žije v Settings
+  expect(screen.queryByRole('button', { name: 'IBKR Console' })).toBeNull()
+  expect(screen.getByTestId('engine-status')).toBeDefined()
 
   fireEvent.click(screen.getByRole('button', { name: 'Graf' }))
   expect(screen.getByLabelText('Heatmapa')).toBeDefined()
@@ -117,7 +117,7 @@ test('nastavení se uloží tlačítkem (PUT, bez restartu) a téma se aplikuje 
   })
 })
 
-test('konzole loguje události ze status kanálu, bez tlačítka Reconnect', async () => {
+test('Settings nese stav enginu a log událostí (náhrada Console, #705)', async () => {
   mockApi()
   renderApp()
   const ws = FakeWebSocket.latest()
@@ -126,12 +126,13 @@ test('konzole loguje události ze status kanálu, bez tlačítka Reconnect', asy
     ws.push('status', { engine: 'online', connection: 'connected', port: 7496 })
   })
 
-  fireEvent.click(screen.getByRole('button', { name: 'IBKR Console' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+  const block = screen.getByTestId('engine-status')
+  expect(block.textContent).toContain('online')
+  expect(block.textContent).toContain('7496')
   const log = screen.getByLabelText('Log API událostí')
   expect(log.textContent).toContain('status: engine=online')
-
-  // Tlačítko Reconnect odstraněno (#554) — mrtvý klíč nikdo nečetl (#446 řeší
-  // skutečné přepojení uložením IBKR nastavení)
+  // Tlačítko Reconnect zůstává odstraněné (#554)
   expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull()
 })
 

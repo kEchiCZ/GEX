@@ -65,7 +65,7 @@ export interface Toggles {
 }
 
 export type AppView =
-  'chart' | 'dashboard' | 'chain' | 'setups' | 'briefing' | 'journal' | 'news' | 'stats' | 'console' | 'settings' // prettier-ignore
+  'chart' | 'dashboard' | 'chain' | 'setups' | 'briefing' | 'journal' | 'news' | 'stats' | 'settings' // prettier-ignore
 export type Theme = 'dark' | 'light'
 
 /** Režim zobrazení signálů (#295, SPEC 6.1/S9): výpočet běží vždy, tohle řídí jen UI. */
@@ -217,7 +217,6 @@ const VIEWS: readonly AppView[] = [
   'journal',
   'news',
   'stats',
-  'console',
   'settings',
 ]
 
