@@ -34,6 +34,7 @@ const ENTRY: JournalEntry = {
   profile: 'futures',
   trade: null,
   context: null,
+  daily: null,
   created_ts: '2026-08-14T14:31:00+00:00',
   updated_ts: null,
 }
@@ -362,5 +363,62 @@ test('snímek kontextu odejde se záznamem a chybějící zdroj nedosadí nulu (
     // Zdroje, které nic nevrátily, zůstanou null — nikdy nula
     expect(body.context.cliff_share).toBeNull()
     expect(body.context.tendency_band).toBeNull()
+  })
+})
+
+test('strukturovaný ranní plán se zamkne a odejde jako daily (#712)', async () => {
+  mockJournalApi([])
+  render(<JournalView />)
+  fireEvent.change(screen.getByLabelText('Typ záznamu'), { target: { value: 'retro_dne' } })
+  await waitFor(() => expect(screen.getByLabelText('Podmínka 1')).toBeTruthy())
+
+  fireEvent.change(screen.getByLabelText('Podmínka 1'), { target: { value: 'nad flipem' } })
+  fireEvent.change(screen.getByLabelText('Akce 1'), { target: { value: 'long, risk 3 b' } })
+  fireEvent.change(screen.getByLabelText('Procesní cíl'), { target: { value: 'max 3 obchody' } })
+  fireEvent.click(screen.getByRole('button', { name: '☀ Ranní plán' }))
+
+  await waitFor(() => {
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    expect(post).toBeTruthy()
+    const body = JSON.parse(String(post![1]!.body)) as {
+      entry_type: string
+      tags: string[]
+      text: string
+      daily: { plan: { locked_ts: string | null; scenarios: unknown[]; process_goal: string } }
+    }
+    expect(body.entry_type).toBe('retro_dne')
+    expect(body.tags).toContain('plan')
+    // Zamčení je nevratné — plán nejde dopsat po faktu
+    expect(body.daily.plan.locked_ts).toBeTruthy()
+    expect(body.daily.plan.scenarios).toHaveLength(1)
+    expect(body.daily.plan.process_goal).toBe('max 3 obchody')
+    // Text se dopočítá z struktury, deník zůstane čitelný i bez UI
+    expect(body.text).toContain('Když nad flipem → long, risk 3 b')
+  })
+})
+
+test('report card známkuje segmenty seance, ne kalendářní den (#712)', async () => {
+  mockJournalApi([])
+  render(<JournalView />)
+  fireEvent.change(screen.getByLabelText('Typ záznamu'), { target: { value: 'retro_dne' } })
+  await waitFor(() => expect(screen.getByLabelText('Známka US open +30')).toBeTruthy())
+  // Futures profil má Globex noc i power hour — akciové dělení by tu bylo mrtvé
+  expect(screen.getByLabelText('Známka Globex noc')).toBeTruthy()
+  expect(screen.getByLabelText('Známka Power hour')).toBeTruthy()
+
+  fireEvent.change(screen.getByLabelText('Známka US open +30'), { target: { value: 'B' } })
+  fireEvent.change(screen.getByLabelText('Cíl na zítřek'), { target: { value: 'držet stop' } })
+  fireEvent.click(screen.getByRole('button', { name: '☾ Vyhodnocení dne' }))
+
+  await waitFor(() => {
+    const post = fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')
+    const body = JSON.parse(String(post![1]!.body)) as {
+      tags: string[]
+      daily: { review: { segments: Array<{ key: string; grade: string }>; tomorrow_goal: string } }
+    }
+    expect(body.tags).toContain('vyhodnoceni')
+    const open30 = body.daily.review.segments.find((s) => s.key === 'open30')
+    expect(open30?.grade).toBe('B')
+    expect(body.daily.review.tomorrow_goal).toBe('držet stop')
   })
 })

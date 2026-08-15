@@ -789,6 +789,84 @@ def test_journal_kontext_a_failure_mode(client: TestClient) -> None:
     )
 
 
+def test_journal_denni_ritual(client: TestClient) -> None:
+    """Ranní plán a Daily Report Card (#712)."""
+    plan = {
+        "plan": {
+            "scenarios": [{"condition": "nad flipem", "action": "long k call wall"}],
+            "process_goal": "max 3 obchody",
+            "mental_state": 4,
+            "locked_ts": "2026-07-16T12:00:00+00:00",
+            "prev_goal": "držet stop",
+        }
+    }
+    created = client.post(
+        "/journal",
+        json={
+            "ts_ref": "2026-07-16T12:00:00Z",
+            "symbol": "ES",
+            "entry_type": "retro_dne",
+            "text": "Plán dne.",
+            "tags": ["plan"],
+            "daily": plan,
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["daily"]["plan"]["process_goal"] == "max 3 obchody"
+
+    review = {
+        "review": {
+            "segments": [{"key": "open30", "grade": "B", "note": "nečekal jsem"}],
+            "lesson": "čekat na potvrzení",
+            "tomorrow_goal": "držet stop",
+            "plan_entry_id": created.json()["id"],
+        }
+    }
+    done = client.post(
+        "/journal",
+        json={
+            "ts_ref": "2026-07-16T20:00:00Z",
+            "symbol": "ES",
+            "entry_type": "retro_dne",
+            "text": "Vyhodnocení.",
+            "tags": ["vyhodnoceni"],
+            "daily": review,
+        },
+    )
+    assert done.status_code == 201
+    assert done.json()["daily"]["review"]["segments"][0]["grade"] == "B"
+
+    # Známka je z A–F (proces), ne libovolný text
+    bad = {"review": {"segments": [{"key": "open30", "grade": "Z"}]}}
+    assert (
+        client.post(
+            "/journal",
+            json={
+                "ts_ref": "2026-07-16T20:00:00Z",
+                "symbol": "ES",
+                "entry_type": "retro_dne",
+                "text": "x",
+                "daily": bad,
+            },
+        ).status_code
+        == 422
+    )
+    # Rituál patří jen k retro_dne
+    assert (
+        client.post(
+            "/journal",
+            json={
+                "ts_ref": "2026-07-16T20:00:00Z",
+                "symbol": "ES",
+                "entry_type": "pozorovani",
+                "text": "x",
+                "daily": plan,
+            },
+        ).status_code
+        == 422
+    )
+
+
 def test_playbook_setupu(client: TestClient) -> None:
     """PlayBook (#710): výchozí sada, CRUD, vyřazení místo mazání."""
     listed = client.get("/playbook").json()["playbook"]

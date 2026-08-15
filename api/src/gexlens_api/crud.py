@@ -16,6 +16,7 @@ from gexlens_engine.storage.meta import (
     JOURNAL_TYPES,
     MISTAKE_TAGS,
     PLAYBOOK_SCOPES,
+    REPORT_GRADES,
     TRADE_DIRECTIONS,
     default_profile,
 )
@@ -170,6 +171,23 @@ def build_router(repository: MetaRepository) -> APIRouter:
             raise HTTPException(422, f"failure_mode musí být jeden z {FAILURE_MODES}")
         return trade.model_dump()
 
+    def _validated_daily(daily: dict[str, Any]) -> dict[str, Any]:
+        """Denní rituál (#712). Obsah je uživatelský dokument, kontroluje se
+        jen to, co se pak vyhodnocuje strojově — známky segmentů."""
+        review = daily.get("review")
+        if isinstance(review, dict):
+            segments = review.get("segments")
+            if isinstance(segments, list):
+                bad = [
+                    segment.get("grade")
+                    for segment in segments
+                    if isinstance(segment, dict)
+                    and segment.get("grade") not in (None, "", *REPORT_GRADES)
+                ]
+                if bad:
+                    raise HTTPException(422, f"Známka segmentu musí být z {REPORT_GRADES}: {bad}")
+        return daily
+
     @router.get("/journal")
     def journal_list(
         symbol: str | None = None,
@@ -269,6 +287,8 @@ def build_router(repository: MetaRepository) -> APIRouter:
         # Snímek GEX kontextu k ts_ref (#711) — skládá klient, server ho jen
         # uloží tak, jak přišel; přepočet na serveru by dal jiná čísla.
         context: dict[str, Any] | None = None
+        # Ranní plán / Daily Report Card (#712) — jen u typu `retro_dne`.
+        daily: dict[str, Any] | None = None
 
     class JournalPatch(BaseModel):
         """Úprava záznamu — text/tagy/profil a obchod; okamžik ani typ se
@@ -278,6 +298,7 @@ def build_router(repository: MetaRepository) -> APIRouter:
         tags: list[str] | None = Field(None, max_length=20)
         profile: str | None = None
         trade: JournalTrade | None = None
+        daily: dict[str, Any] | None = None
 
     @router.post("/journal", status_code=201)
     def journal_create(entry: JournalEntry) -> dict[str, Any]:
@@ -290,7 +311,10 @@ def build_router(repository: MetaRepository) -> APIRouter:
             raise HTTPException(422, "Typ 'obchod' vyžaduje objekt trade")
         if entry.entry_type != "obchod" and entry.trade is not None:
             raise HTTPException(422, "Objekt trade patří jen k typu 'obchod'")
+        if entry.daily is not None and entry.entry_type != "retro_dne":
+            raise HTTPException(422, "Denní rituál patří jen k typu 'retro_dne'")
         trade = _validated_trade(entry.trade) if entry.trade is not None else None
+        daily = _validated_daily(entry.daily) if entry.daily is not None else None
         now = dt.datetime.now(dt.UTC)
         return repository.journal_create(
             {
@@ -303,6 +327,7 @@ def build_router(repository: MetaRepository) -> APIRouter:
                 "news_event_id": entry.news_event_id,
                 "profile": profile,
                 "context": entry.context,
+                "daily": daily,
                 "created_ts": now,
             },
             trade,
@@ -319,9 +344,11 @@ def build_router(repository: MetaRepository) -> APIRouter:
             if patch.profile not in JOURNAL_PROFILES:
                 raise HTTPException(422, f"profile musí být jeden z {JOURNAL_PROFILES}")
             values["profile"] = patch.profile
+        if patch.daily is not None:
+            values["daily"] = _validated_daily(patch.daily)
         trade = _validated_trade(patch.trade) if patch.trade is not None else None
         if len(values) == 1 and trade is None:
-            raise HTTPException(422, "Úprava musí měnit text, tagy, profil nebo obchod")
+            raise HTTPException(422, "Úprava musí měnit text, tagy, profil, obchod nebo rituál")
         try:
             return repository.journal_update(entry_id, values, trade)
         except NotFoundError as exc:

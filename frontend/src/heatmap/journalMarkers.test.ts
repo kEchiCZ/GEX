@@ -16,6 +16,7 @@ function entry(id: number, tsRef: string): JournalEntry {
     profile: 'futures',
     trade: null,
     context: null,
+    daily: null,
     created_ts: tsRef,
     updated_ts: null,
   }

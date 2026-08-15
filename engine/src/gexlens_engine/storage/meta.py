@@ -121,9 +121,17 @@ journal_table = Table(
     # takže zpětný přepočet by dal jiná čísla než ta, podle kterých se
     # rozhodovalo. NULL = kontext se nepodařilo složit (starý záznam, výpadek).
     Column("context", JSON, nullable=True),
+    # Denní rituál (#712) — ranní plán / Daily Report Card u typu `retro_dne`.
+    # Jeden JSON místo šesti řídkých sloupců: je to soudržný dokument a drtivá
+    # většina řádků deníku jsou pozorování, která z nich nemají nic.
+    Column("daily", JSON, nullable=True),
     Column("created_ts", DateTime(timezone=True), nullable=False),
     Column("updated_ts", DateTime(timezone=True), nullable=True),
 )
+
+# Známky Daily Report Card (#712). Škála A–F jako u SMB, širší než A/B/C
+# u setupu — hodnotí se PROCES, ne výsledek.
+REPORT_GRADES = ("A", "B", "C", "D", "F")
 
 # Proč teze selhala (#711, jen profil `futures` a jen u ztrátových obchodů).
 # Taxonomie podle SpotGamma; `map_moved` jde doložit PROTI uloženému snímku —
@@ -282,7 +290,7 @@ def ensure_meta_schema(engine: Engine) -> None:
     # zpětný UPDATE by tvrdil, že záznam vznikl pod profilem, který tehdy
     # neexistoval.
     json_type = "JSONB" if engine.dialect.name == "postgresql" else "JSON"
-    additive = {"profile": "VARCHAR(16)", "context": json_type}
+    additive = {"profile": "VARCHAR(16)", "context": json_type, "daily": json_type}
     missing = {name: sql for name, sql in additive.items() if name not in columns}
     if missing:
         with engine.begin() as conn:

@@ -36,8 +36,20 @@ import { useAppState } from '../state/AppState'
 /** Okno, ve kterém se detekovaný setup ještě považuje za „k této minutě". */
 const SETUP_MATCH_MS = 15 * 60 * 1000
 import { CONTEXT_LABELS, loadJournalContext } from '../journal/context'
+import {
+  EMPTY_PLAN,
+  cleanScenarios,
+  emptyReview,
+  isPlanLocked,
+  planToText,
+  previousGoal,
+  reviewToText,
+} from '../journal/daily'
+import type { DailyPlan, DailyReview } from '../journal/daily'
+import { daySegments } from '../journal/segments'
 import { EMPTY_TRADE, draftToTrade, tradeToDraft } from '../journal/trade'
 import type { TradeDraft } from '../journal/trade'
+import { JournalPlanFields, JournalReviewFields } from './JournalDaily'
 import { JournalPlaybook } from './JournalPlaybook'
 import { JournalTradeFields } from './JournalTradeFields'
 
@@ -214,6 +226,8 @@ export function JournalView() {
   const [playbook, setPlaybook] = useState<PlaybookItem[]>([])
   const [setups, setSetups] = useState<SetupRow[]>([])
   const [showPlaybook, setShowPlaybook] = useState(false)
+  const [plan, setPlan] = useState<DailyPlan>(EMPTY_PLAN)
+  const [review, setReview] = useState<DailyReview | null>(null)
   // null = uživatel profil neměnil, drží se odvození ze symbolu
   const [profileOverride, setProfileOverride] = useState<JournalProfile | null>(null)
 
@@ -282,8 +296,14 @@ export function JournalView() {
     }
   }, [journalDraft, setJournalDraft])
 
-  const submit = async (typeOverride?: JournalType, extraTag?: string) => {
-    if (formText.trim() === '') return
+  const submit = async (
+    typeOverride?: JournalType,
+    extraTag?: string,
+    daily?: Record<string, unknown>,
+    textOverride?: string,
+  ) => {
+    const bodyText = (textOverride ?? formText).trim()
+    if (bodyText === '') return
     const entryType = typeOverride ?? formType
     if (entryType === 'obchod' && trade.setupKey === '') {
       setFormError('Vyber setup z playbooku — bez něj nejde obchody porovnávat.')
@@ -302,7 +322,7 @@ export function JournalView() {
       ts_ref: tsIso,
       symbol,
       entry_type: entryType,
-      text: formText.trim(),
+      text: bodyText,
       tags,
       profile,
       ...(entryType === 'obchod' ? { trade: draftToTrade(trade) } : {}),
@@ -310,6 +330,7 @@ export function JournalView() {
       // neplnil; bez něj nejde odpovědět „vzal jsem ho, nebo přeskočil?" (#627)
       ...(nearbySetup ? { setup_id: nearbySetup.id } : {}),
       context: context as unknown as Record<string, unknown>,
+      ...(daily ? { daily } : {}),
     })
     if (created) {
       setFormText('')
@@ -320,6 +341,64 @@ export function JournalView() {
     } else {
       setFormError('Záznam se nepodařilo uložit — zkontroluj hodnoty a spojení se serverem.')
     }
+  }
+
+  // ── Denní rituál (#712) ──────────────────────────────────────
+  const formDayIso = formTs.slice(0, 10)
+  const segmentLabels = useMemo(() => {
+    const labels: Record<string, string> = {}
+    for (const segment of daySegments(profile, formDayIso)) labels[segment.key] = segment.label
+    return labels
+  }, [profile, formDayIso])
+
+  // Cíl z posledního vyhodnocení PŘED dneškem — bez navázání je to jen
+  // seznam přání (Steenbarger)
+  useEffect(() => {
+    setPlan((current) =>
+      isPlanLocked(current)
+        ? current
+        : { ...current, prev_goal: previousGoal(entries, formDayIso) },
+    )
+  }, [entries, formDayIso])
+
+  // Report card se zakládá až na vyžádání, ať prázdný formulář nekřičí
+  useEffect(() => {
+    if (formType !== 'retro_dne') return
+    setReview((current) =>
+      current === null ? emptyReview(daySegments(profile, formDayIso).map((s) => s.key)) : current,
+    )
+  }, [formType, profile, formDayIso])
+
+  // Struktura je nabídka, ne povinnost — rychlý textový plán musí dál fungovat,
+  // jinak se deník přestane používat (Jigsaw: over-dokumentace ho zabije).
+  const planReady =
+    formText.trim() !== '' ||
+    cleanScenarios(plan.scenarios).length > 0 ||
+    plan.process_goal.trim() !== ''
+  const reviewReady =
+    formText.trim() !== '' ||
+    (review !== null &&
+      (review.segments.some((segment) => segment.grade !== '' || segment.note.trim() !== '') ||
+        review.lesson.trim() !== '' ||
+        review.tomorrow_goal.trim() !== ''))
+
+  const submitPlan = async () => {
+    const locked: DailyPlan = {
+      ...plan,
+      scenarios: cleanScenarios(plan.scenarios),
+      // Zamčení je nevratné — jinak by „plán" šel dopsat po faktu
+      locked_ts: new Date().toISOString(),
+    }
+    const text = formText.trim() !== '' ? formText.trim() : planToText(locked)
+    await submit('retro_dne', 'plan', { plan: locked }, text)
+    setPlan({ ...EMPTY_PLAN, prev_goal: locked.prev_goal })
+  }
+
+  const submitReview = async () => {
+    if (review === null) return
+    const text = formText.trim() !== '' ? formText.trim() : reviewToText(review, segmentLabels)
+    await submit('retro_dne', 'vyhodnoceni', { review }, text)
+    setReview(emptyReview(daySegments(profile, formDayIso).map((segment) => segment.key)))
   }
 
   const exportMd = () => {
@@ -409,6 +488,19 @@ export function JournalView() {
             )}
           </p>
         )}
+        {formType === 'retro_dne' && (
+          <>
+            <JournalPlanFields plan={plan} onChange={setPlan} />
+            {review !== null && (
+              <JournalReviewFields
+                review={review}
+                onChange={setReview}
+                profile={profile}
+                dateIso={formDayIso}
+              />
+            )}
+          </>
+        )}
         {formType === 'obchod' && (
           <JournalTradeFields
             draft={trade}
@@ -422,20 +514,20 @@ export function JournalView() {
           <button className="chip" onClick={() => void submit()} disabled={formText.trim() === ''}>
             Přidat záznam
           </button>
-          {/* Denní pár: ranní plán / večerní vyhodnocení (#673) */}
+          {/* Denní pár: ranní plán / večerní vyhodnocení (#673, struktura #712) */}
           <button
             className="chip"
-            onClick={() => void submit('retro_dne', 'plan')}
-            disabled={formText.trim() === ''}
-            title="Uloží text jako ranní plán dne (retro_dne #plan)"
+            onClick={() => void submitPlan()}
+            disabled={!planReady}
+            title="Uloží a ZAMKNE ranní plán — po zamčení se needituje"
           >
             ☀ Ranní plán
           </button>
           <button
             className="chip"
-            onClick={() => void submit('retro_dne', 'vyhodnoceni')}
-            disabled={formText.trim() === ''}
-            title="Uloží text jako večerní vyhodnocení dne (retro_dne #vyhodnoceni)"
+            onClick={() => void submitReview()}
+            disabled={!reviewReady}
+            title="Uloží Daily Report Card — známka za proces, ne za zisk"
           >
             ☾ Vyhodnocení dne
           </button>
