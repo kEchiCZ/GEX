@@ -79,6 +79,19 @@ class TastyChainCache:
     def symbols_tracked(self) -> int:
         return len(self._states)
 
+    def field_counts(self) -> dict[str, int]:
+        """Diagnostika pokrytí (#623): kolik symbolů má quote/greeks/OI a Σ trades."""
+        quotes = greeks = summary = trades = 0
+        for state in self._states.values():
+            if state.quote.updated_at is not None:
+                quotes += 1
+            if state.greeks.updated_at is not None:
+                greeks += 1
+            if state.summary.open_interest is not None:
+                summary += 1
+            trades += state.trades
+        return {"quotes": quotes, "greeks": greeks, "summary": summary, "trades": trades}
+
     def on_event(self, event_type: str, values: list[object]) -> None:
         """EventCallback pro DxLinkStream — pořadí polí dle stream.EVENT_FIELDS."""
         symbol = str(values[0]) if values else ""

@@ -88,6 +88,10 @@ services:
       # Jiné default clientId než prod (1) — pojistka pro případ, že by v TWS
       # ještě dožíval produkční engine; .env.dev může přepsat
       GEXLENS_IBKR_CLIENT_ID: ${GEXLENS_DEV_IBKR_CLIENT_ID:-2}
+      # tasty-only laboratoř (#623): -LiveTasty předá flag + konzervativní
+      # strop subskripcí z prostředí hostitele; defaulty nechávají -Live beze změny
+      GEXLENS_TASTY_ONLY: ${GEXLENS_TASTY_ONLY:-false}
+      GEXLENS_TASTY_MAX_SUBSCRIPTIONS: ${GEXLENS_TASTY_MAX_SUBSCRIPTIONS:-0}
       GEXLENS_DATABASE_URL: postgresql+psycopg://gexlens:${GEXLENS_PG_PASSWORD:?}@postgres:5432/gexlens
       GEXLENS_DATA_DIR: /app/data
       GEXLENS_API_BASE: http://api:8000
