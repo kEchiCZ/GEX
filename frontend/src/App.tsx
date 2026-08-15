@@ -1,4 +1,4 @@
-/** Kořenový layout aplikace (SPEC 7.1) s obrazovkami Graf / Dashboard / Console / Settings. */
+/** Kořenový layout aplikace (SPEC 7.1) s obrazovkami Graf / Dashboard / Settings…. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { alignSeriesToLabels, signalGateInfo } from './api/news'
@@ -20,7 +20,6 @@ import { useAnnotations } from './annotations/useAnnotations'
 import { NewsView } from './components/NewsView'
 import { useNews } from './hooks/useNews'
 import { TimeframeRow, TogglesRow } from './components/ControlRows'
-import { Console } from './components/Console'
 import { Dashboard } from './components/Dashboard'
 import { Heatmap } from './components/Heatmap'
 import { InstrumentHeader } from './components/InstrumentHeader'
@@ -1192,7 +1191,6 @@ function MainContent() {
   if (view === 'briefing') return <BriefingView />
   if (view === 'journal') return <JournalView />
   if (view === 'stats') return <StatsView />
-  if (view === 'console') return <Console />
   if (view === 'settings') return <SettingsView />
 
   return (

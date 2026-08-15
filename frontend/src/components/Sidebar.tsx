@@ -19,7 +19,6 @@ const NAV_ITEMS: Array<{ view: AppView; label: string }> = [
   { view: 'journal', label: 'Deník' },
   { view: 'news', label: 'News' },
   { view: 'stats', label: 'Stats' },
-  { view: 'console', label: 'IBKR Console' },
   { view: 'settings', label: 'Settings' },
 ]
 

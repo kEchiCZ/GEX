@@ -2320,3 +2320,18 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   margin: 4px 0 0;
   white-space: pre-wrap;
 }
+
+/* Stav enginu v Settings (#705 — náhrada IBKR Console) */
+.settings-status td {
+  padding: 2px 12px 2px 0;
+  font-size: 0.9em;
+}
+.settings-events pre {
+  max-height: 200px;
+  overflow: auto;
+  font-size: 0.8em;
+  background: var(--input-bg, #0f131c);
+  border-radius: 6px;
+  padding: 8px;
+  white-space: pre-wrap;
+}

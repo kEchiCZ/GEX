@@ -97,6 +97,7 @@ export function SettingsView() {
     theme,
     setTheme,
     status,
+    consoleLog,
     tradersMode,
     setTradersMode,
     riskAccountUsd,
@@ -234,6 +235,56 @@ export function SettingsView() {
             'Účet neznámý — engine není připojený k TWS.'
           )}
         </p>
+      </section>
+
+      {/* Náhrada IBKR Console (#705): read-only stav + události v prohlížeči.
+          Editace host/port/client ID je výš — S konceptem a Uložit (#445),
+          Console je obcházela a posílala enginu rozepsané hodnoty. */}
+      <section aria-label="Stav enginu">
+        <h2>Stav enginu</h2>
+        <SettingRow help="Živý stav pipeline — totéž, co stavová lišta dole, pohromadě u nastavení. Jen ke čtení.">
+          <table className="settings-status" data-testid="engine-status">
+            <tbody>
+              <tr>
+                <td>Spojení</td>
+                <td>
+                  {status.engine === 'online' ? 'online' : (status.engine ?? '—')}
+                  {status.connection ? ` · ${status.connection}` : ''}
+                  {status.port ? ` · port ${status.port}` : ''}
+                </td>
+              </tr>
+              <tr>
+                <td>Účet</td>
+                <td>
+                  {status.account ?? '—'}
+                  {status.account_paper ? ' (paper)' : ''}
+                </td>
+              </tr>
+              <tr>
+                <td>Greeks</td>
+                <td>
+                  {status.greeks_complete ?? '—'}/{status.greeks_total ?? '—'} · repair fronta{' '}
+                  {status.repair_count ?? '—'}
+                </td>
+              </tr>
+              <tr>
+                <td>Market data lines</td>
+                <td>
+                  {status.lines_utilization != null
+                    ? `${Math.round(status.lines_utilization * 100)} %`
+                    : '—'}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </SettingRow>
+        <details className="settings-events">
+          <summary className="muted">
+            Poslední události (jen tento prohlížeč — po obnovení stránky se maže; serverové logy
+            jsou v kontejnerech)
+          </summary>
+          <pre aria-label="Log API událostí">{consoleLog.join('\n') || '—'}</pre>
+        </details>
       </section>
 
       <section aria-label="Engine">
