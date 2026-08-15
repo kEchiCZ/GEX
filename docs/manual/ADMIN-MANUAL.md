@@ -159,7 +159,9 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_ALLOWED_ORIGINS` | — | CORS whitelist API |
 | `GEXLENS_NEWS_API_TOKEN` | — | Token news-engine → API push |
 | `GEXLENS_TASTY_SHADOW` | false | Shadow porovnání tastytrade feedu (M7 fáze 1, #613) — zapisuje JEN do `feed_comparison`, nic nepublikuje. Kill switch = vypnout flag |
-| `GEXLENS_TASTY_CLIENT_SECRET` / `_REFRESH_TOKEN` | — | OAuth2 grant **výhradně scope `read`** (ADR-0025); dev prostředí má vlastní `GEXLENS_DEV_TASTY_*` grant. Obsah `.env` se nikdy nevypisuje do konzole |
+| `GEXLENS_TASTY_CLIENT_SECRET` / `_REFRESH_TOKEN` | — | OAuth2 grant **výhradně scope `read`** (ADR-0025); dev grant patří do `.env.dev` pod standardními názvy. Obsah `.env` se nikdy nevypisuje do konzole |
+
+**Od #696 jde do kontejnerů celý `.env`** (`env_file`), ne ruční výčet — každý klíč z `.env.example` po `docker compose up -d <služba>` skutečně platí. `environment:` v compose nese jen odvozené hodnoty (DATABASE_URL, adresy služeb, /app/data) a ty mají přednost. **Dev stack navíc čte volitelný `.env.dev`** (přepisy jen pro dev: vlastní tasty grant, symboly…; viz `.env.dev.example`). Pozn.: změna PG hesla v `.env.dev` vyžaduje reseed dev volume.
 
 Frontend build-time: `VITE_API_BASE` (nginx build arg, default `http://127.0.0.1:8000`).
 

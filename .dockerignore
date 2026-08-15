@@ -1,0 +1,17 @@
+# Build kontext (#696): image staví výhradně explicitní COPY v Dockerfile —
+# tohle je pojistka proti zapečení tajemství/dat budoucím `COPY . .`
+# a proti tahání GB parquetů do kontextu klasickým builderem.
+.git
+.env*
+data/
+data-dev/
+node_modules/
+frontend/node_modules/
+frontend/dist/
+docs/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+*.pdf
+*.dump
+scripts/issues.json
