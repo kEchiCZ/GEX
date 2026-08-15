@@ -421,7 +421,7 @@ function BottomPanelsBase({
         className="bottom-panel"
         aria-label="Evo OI panel"
         title={
-          'Evo OI (#573): vývoj celkového OI callů (zelená) a putů (červená) přes striky. ' +
+          'Evo OI (#573): vývoj celkového OI callů (teal) a putů (červená) přes striky. ' +
           'Objem roste + OI roste = pozice se budují; objem roste + OI klesá = zavírání, ' +
           'zeď se rozpouští. POZOR: OI na futures chodí přes tick 101 jen občas (ADR-0001) — ' +
           'plochá schodovitá čára znamená „bez aktualizace", ne „nic se neděje".'
