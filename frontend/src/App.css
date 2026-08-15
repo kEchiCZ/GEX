@@ -2119,6 +2119,26 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
 .playbook-detail dd {
   margin: 0 0 0 12px;
 }
+/* Statistiky deníku (#714) */
+.stats-small td {
+  opacity: 0.65;
+}
+.stats-loss {
+  color: #ef4444;
+}
+.stats-bar {
+  display: inline-block;
+  height: 10px;
+  border-radius: 2px;
+  min-width: 2px;
+}
+.stats-bar.win {
+  background: #14b8a6;
+}
+.stats-bar.loss {
+  background: #ef4444;
+}
+
 /* Denní rituál (#712) */
 .journal-daily {
   display: flex;
