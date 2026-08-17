@@ -96,6 +96,12 @@ news_events = Table(
     Column("importance", SmallInteger, nullable=True),
     Column("title", Text, nullable=False),
     Column("summary", Text, nullable=True),
+    # Plné znění článku (#743), pokud ho zdroj dodá — Alpaca `content`, IBKR
+    # `reqNewsArticle`. Sloupec je vlastní, ne rozšířený `summary`: perex má
+    # limit 500 znaků a jinou sémantiku, přepsat ho by rozbilo čtenáře feedu.
+    # Model z něj bere jen titulek + první odstavec (celý článek by při dnešní
+    # velikosti korpusu přeučoval), zbytek se drží pro pozdější přeměření.
+    Column("body", Text, nullable=True),
     Column("symbols", JSON, nullable=False, default=list),
     # Jen scheduled (Tier A)
     Column("forecast", Numeric, nullable=True),
@@ -377,6 +383,9 @@ def ensure_sentiment_schema(engine: Engine) -> None:
         if "daily_uncomputable" not in columns:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE news_events ADD COLUMN daily_uncomputable BOOLEAN"))
+        if "body" not in columns:  # #743: plné znění článku
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE news_events ADD COLUMN body TEXT"))
     # `news_reactions` jsou naměřená data — jen aditivní ADD COLUMN.
     if "news_reactions" in existing:
         columns = {column["name"] for column in inspector.get_columns("news_reactions")}

@@ -172,3 +172,32 @@ def test_hash_row_deduplikuje() -> None:
     """Opakované slovo nemá vážit víc — rysy jsou binární."""
     assert len(hash_row(["w=fed", "w=fed"])) == 1
     assert hash_row(["w=fed"]).max() < DEFAULT_BUCKETS
+
+
+# ── Plný text článku (#743) ────────────────────────────────────────
+
+
+def test_lead_rysy_maji_vlastni_prefix() -> None:
+    """Slovo v titulku a v těle musí být DVA různé rysy — nadpis váží jinak."""
+    names = features("Fed cuts rates", body="The Fed cuts rates by 25 bps today.")
+
+    assert "w=cuts" in names  # z titulku
+    assert "b=cuts" in names  # z leadu
+    assert names.count("w=cuts") == 1
+
+
+def test_bez_tela_se_rysy_nemeni() -> None:
+    """Zprávy bez plného textu (většina zdrojů) se musí chovat jako dřív."""
+    assert features("Fed cuts rates") == features("Fed cuts rates", body=None)
+    assert features("Fed cuts rates") == features("Fed cuts rates", body="")
+
+
+def test_dlouhy_clanek_se_orizne_na_lead() -> None:
+    """Celý článek by při dnešním korpusu přeučoval — bere se první odstavec."""
+    long_body = "First sentence here. " + "Filler sentence. " * 200
+    names = features("Titulek", body=long_body)
+    body_features = [n for n in names if n.startswith("b=")]
+
+    assert "b=first" in names
+    # 400 znaků leadu nedá stovky unikátních rysů z 3400znakového článku
+    assert len(body_features) < 120

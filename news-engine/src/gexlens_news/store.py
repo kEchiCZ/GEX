@@ -51,6 +51,7 @@ class NewsWriter:
                 "importance": event.importance,
                 "title": event.title,
                 "summary": event.summary,
+                "body": event.body,
                 "symbols": event.symbols,
                 "forecast": event.forecast,
                 "previous": event.previous,
