@@ -202,6 +202,18 @@ class GeminiClient:
         )
         if response.status_code == 429:
             raise GeminiRateLimited("Gemini 429 — limit vyčerpán")
+        if response.status_code >= 400:
+            # Tělo nese konkrétní důvod (neznámé pole v generationConfig,
+            # překročený vstup, špatný argument). Bez něj zbyde v logu jen
+            # „400 Bad Request" a příčina se dá jen hádat — přesně proto stála
+            # klasifikace od 13. do 17. 8. nepovšimnutá (#738). Klíč jde
+            # hlavičkou, ne v URL, takže se do logu nemá jak dostat.
+            logger.error(
+                "Gemini %d pro model %s: %.500s",
+                response.status_code,
+                self._model,
+                response.text,
+            )
         response.raise_for_status()
         return parse_llm_rows(_extract_text(response.json()))
 
