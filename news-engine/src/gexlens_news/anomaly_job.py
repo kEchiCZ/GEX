@@ -13,7 +13,12 @@ Pinnuté detaily (SPEC hodnoty nechává otevřené):
 * jen nekontaminovaná okna na primárním okně (+5 min) — kontaminované okno
   neměří reakci na tuhle zprávu (SPEC 2.4),
 * každá (event, symbol) anomálie se hlásí právě jednou; po restartu se
-  hodnotí jen reakce spočítané od startu procesu, starší už trader viděl.
+  hodnotí jen reakce spočítané od startu procesu, starší už trader viděl,
+* **hlásí se jen reakce na čerstvé události** (`MAX_EVENT_AGE`) — watermark
+  sleduje čas VÝPOČTU, ne čas zprávy, takže při dopočtu historie (backfill
+  #744) by zvonek dostal tisíce alertů o dva roky starých pohybech, jako by
+  se staly teď. Zjištěno naživo 17. 8.: dopočet reakcí k backfillu začal
+  chrlit desítky alertů za běh.
 """
 
 import datetime as dt
@@ -28,6 +33,13 @@ from gexlens_news.model_stats import surprise_bucket
 from gexlens_news.predictions import DEFAULT_PRIMARY_WINDOW_MIN
 
 logger = logging.getLogger(__name__)
+
+#: Jak stará smí být UDÁLOST, aby se její anomální reakce ještě hlásila do
+#: zvonku. Nestačí sledovat čas výpočtu: deferred reakce (trhy zavřené, měří se
+#: po otevření) legitimně vzniká i o víkendu s odstupem, takže práh musí
+#: pokrýt pátek večer → pondělí ráno. Tři dny to zvládnou a zároveň spolehlivě
+#: odříznou historický dopočet.
+MAX_EVENT_AGE = dt.timedelta(days=3)
 
 # Minimální hloubka bucketu pro smysluplný percentil
 MIN_BUCKET_SAMPLES = 30
@@ -57,7 +69,7 @@ class AnomalyJob:
         self._watermark = started_at or dt.datetime.now(dt.UTC)
         self._announced: set[tuple[int, str]] = set()
 
-    def _fresh_reactions(self) -> list[dict[str, Any]]:
+    def _fresh_reactions(self, now: dt.datetime) -> list[dict[str, Any]]:
         stmt = (
             select(
                 news_reactions.c.event_id,
@@ -73,6 +85,9 @@ class AnomalyJob:
             .join(news_events, news_events.c.id == news_reactions.c.event_id)
             .where(
                 news_reactions.c.computed_at >= self._watermark,
+                # Watermark hlídá čas VÝPOČTU; bez druhé podmínky by dopočet
+                # historie (#744) vyslal alert o každém starém pohybu
+                news_events.c.ts_event >= now - MAX_EVENT_AGE,
                 news_reactions.c.window_min == self._window,
                 news_reactions.c.contaminated.is_(False),
                 news_events.c.category.is_not(None),
@@ -113,7 +128,7 @@ class AnomalyJob:
     def run(self, now: dt.datetime) -> list[dict[str, Any]]:
         """Payloady `AlertMessage` pro anomální reakce; posun watermark."""
         alerts: list[dict[str, Any]] = []
-        fresh_rows = self._fresh_reactions()
+        fresh_rows = self._fresh_reactions(now)
         for fresh in fresh_rows:
             key = (int(fresh["event_id"]), str(fresh["symbol"]))
             if key in self._announced:
