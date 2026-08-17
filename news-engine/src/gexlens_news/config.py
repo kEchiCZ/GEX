@@ -60,7 +60,13 @@ class NewsSettings(BaseSettings):
     ff_backfill_weeks: int = Field(default=156, ge=1, le=520)
 
     # Gemini batch klasifikace (#281, SPEC kap. 4): dávka à 60 s jen při
-    # neprázdné frontě; denní limit s rezervou pod free tierem (~1500 RPD)
+    # neprázdné frontě; denní limit s rezervou pod free tierem (~1500 RPD).
+    #
+    # ZAKONZERVOVÁNO (#740 fáze 0): default VYPNUTO. Účet je free tier, takže
+    # větev naráží na kvótu (#738), a hlavně neprokázala hodnotu — 0 z 20 řádků
+    # `news_weights` prošlo Wilson gate. Zapnutí = vědomé rozhodnutí, klíč
+    # v `.env` sám o sobě nestačí.
+    llm_enabled: bool = False
     gemini_model: str = "gemini-flash-latest"
     llm_interval_s: float = Field(default=60.0, gt=0)
     llm_daily_limit: int = Field(default=1400, ge=0)
