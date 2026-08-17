@@ -301,7 +301,7 @@ export function SettingsView() {
                 <td>Křížová kontrola feedů</td>
                 <td title={status.feed_crosscheck_detail ?? undefined}>
                   {status.feed_crosscheck != null
-                    ? CROSSCHECK_LABELS[status.feed_crosscheck] ?? status.feed_crosscheck
+                    ? (CROSSCHECK_LABELS[status.feed_crosscheck] ?? status.feed_crosscheck)
                     : 'neměří se (shadow neběží)'}
                 </td>
               </tr>
