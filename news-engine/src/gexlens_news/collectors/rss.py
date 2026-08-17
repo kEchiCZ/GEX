@@ -5,6 +5,20 @@ Parsuje se stdlib `xml.etree`, ne externí knihovnou: potřebujeme čtyři pole
 Nečitelná položka se přeskočí, celá dávka kvůli ní nepadá (SPEC 3.2).
 
 Conditional GET je tu podstatný — díky 304 může feed jet à 60 s (SPEC kap. 1).
+
+**Proč ne `defusedxml` (#552 L4).** Feed je nedůvěryhodný vstup, ale oba klasické
+XML útoky jsou tu pokryté i bez další závislosti:
+
+* **XXE** — Python expat externí entity neresolvuje, `ElementTree` navíc žádné
+  rozhraní pro jejich načtení nenabízí.
+* **billion laughs** — mitigované v expatu od 2.4; produkční image má **2.7.3**
+  (ověřeno 17. 8. 2026 v běžícím kontejneru). Aby tenhle předpoklad nezůstal
+  jen v komentáři, hlídá spodní hranici test `test_expat_umi_branit_amplifikaci`
+  — po výměně base image spadne CI, ne provoz.
+* **velký vnořený XML** jako DoS vektor stál na tom, že se stahovalo tělo bez
+  omezení; to řeší strop `MAX_RESPONSE_BYTES` v `http.py` (M4).
+
+Rozhodnutí se tedy neopírá o „riziko je nízké", ale o tři konkrétní zábrany.
 """
 
 import datetime as dt
@@ -22,6 +36,14 @@ logger = logging.getLogger(__name__)
 _ATOM = "{http://www.w3.org/2005/Atom}"
 # Maximální délka `summary` (SPEC 2.1) — do DB jde stručný text, ne celý článek
 SUMMARY_LIMIT = 500
+# L3 (#552): titulek jde do Gemini promptu a `news_events.title` je Text bez
+# limitu — megabajtový titulek by spálil tokenový rozpočet. Reálné titulky mají
+# desítky znaků, 500 je řádová rezerva.
+TITLE_LIMIT = 500
+# L2 (#552): dedup chrání proti opakování, ne proti tisícům UNIKÁTNÍCH titulků.
+# Bez stropu zaplaví jeden nepřátelský feed `news_events`, WS push i frontu
+# Gemini. Největší reálný feed má desítky položek na dávku.
+MAX_ITEMS_PER_FEED = 200
 
 
 def parse_feed_time(raw: str | None) -> dt.datetime | None:
@@ -123,7 +145,18 @@ class RssCollector:
                 response = await self._fetcher.get(url)
                 if response.not_modified:
                     continue  # 304 — feed se nezměnil, nic k práci
-                for entry in parse_items(response.text):
+                entries = parse_items(response.text)
+                if len(entries) > MAX_ITEMS_PER_FEED:
+                    # Ořez, ne zahození: zdroj může legitimně poslat víc po
+                    # výpadku. Novější položky jsou ve feedu první.
+                    logger.warning(
+                        "Feed %s poslal %d položek, beru prvních %d (#552 L2)",
+                        url,
+                        len(entries),
+                        MAX_ITEMS_PER_FEED,
+                    )
+                    entries = entries[:MAX_ITEMS_PER_FEED]
+                for entry in entries:
                     items.append(
                         RawItem(source=self._name, payload={**entry, "feed": url}, fetched_at=now)
                     )
@@ -141,6 +174,11 @@ class RssCollector:
         if not title:
             return None
         published = parse_feed_time(item.payload.get("published"))
+        # Pozn. (#552 L2): budoucí `ts_event` se tu VĚDOMĚ nepřepisuje. Feed ho
+        # sice plně ovládá, ale zahodit ho by ničilo informaci a u plánovaných
+        # událostí (makro kalendář) je budoucí čas legitimní. Škodil jen tím, že
+        # držel položku na vrcholu LLM fronty — to řeší řazení podle menšího
+        # z (ts_event, ts_ingested) v `llm_classifier._pending`.
         summary = item.payload.get("summary")
         return NewsEvent(
             # Bez času publikace bereme čas ingestu — u RSS je rozdíl v jednotkách
@@ -152,7 +190,7 @@ class RssCollector:
             kind=self._kind,
             category=self._category,
             importance=self._importance,
-            title=str(title),
+            title=str(title)[:TITLE_LIMIT],
             summary=summary[:SUMMARY_LIMIT] if summary else None,
             symbols=list(self._symbols),
             raw=dict(item.payload),

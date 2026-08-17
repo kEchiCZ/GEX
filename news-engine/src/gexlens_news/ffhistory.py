@@ -41,6 +41,7 @@ from sqlalchemy.engine import Engine
 from gexlens_engine.storage.sentiment import news_events
 from gexlens_news.classifier import classify_category
 from gexlens_news.collectors.forexfactory import _IMPACT, _SYMBOLS_BY_COUNTRY, parse_number
+from gexlens_news.http import read_limited_cffi
 from gexlens_news.model import NewsEvent, normalize_title
 from gexlens_news.store import NewsWriter
 
@@ -146,15 +147,23 @@ def fetch_week(week: str, *, timeout_s: float = 30.0) -> str:
     """
     from curl_cffi import requests as cffi_requests
 
+    # stream=True + čtení s limitem (#552 M4): bez toho by kompromitovaný zdroj
+    # natáhl libovolně velké tělo do paměti; timeout je per-čtení, takže
+    # pomalu kapající gigabajty ho neuhlídají.
     response = cffi_requests.get(
         HISTORY_URL,
         params={"week": week},
         impersonate="chrome",
         timeout=timeout_s,
+        stream=True,
     )
-    # curl_cffi má jen částečné typy — raise_for_status je untyped
-    response.raise_for_status()  # type: ignore[no-untyped-call]
-    return str(response.text)
+    try:
+        # curl_cffi má jen částečné typy — raise_for_status je untyped
+        response.raise_for_status()  # type: ignore[no-untyped-call]
+        return read_limited_cffi(response)
+    finally:
+        # curl_cffi má jen částečné typy — close je untyped
+        response.close()  # type: ignore[no-untyped-call]
 
 
 def update_actuals(engine: Engine, events: list[NewsEvent]) -> int:
