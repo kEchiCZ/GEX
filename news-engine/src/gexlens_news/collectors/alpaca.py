@@ -17,6 +17,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any, Protocol
 
+from gexlens_engine.compute.newstext import strip_html
 from gexlens_news.model import NewsEvent
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,10 @@ def normalize_message(payload: dict[str, Any], now: dt.datetime) -> NewsEvent | 
     if ts_event.tzinfo is None:
         ts_event = ts_event.replace(tzinfo=dt.UTC)
     summary = str(payload.get("summary") or "").strip() or None
+    # Plné znění (#743): Alpaca ho posílá v `content` jako HTML a dosud se
+    # zahazovalo — model tak měl k dispozici jen ~50 znaků titulku. Značky se
+    # odstraňují hned, do DB nepatří (a do promptu ani do rysů už vůbec).
+    body = strip_html(str(payload.get("content") or "")) or None
     symbols = [str(symbol) for symbol in payload.get("symbols") or []]
     uid = payload.get("id")
     return NewsEvent(
@@ -59,6 +64,7 @@ def normalize_message(payload: dict[str, Any], now: dt.datetime) -> NewsEvent | 
         kind="headline",
         title=headline,
         summary=summary,
+        body=body,
         source_uid=str(uid) if uid is not None else None,
         symbols=symbols,
         raw={"benzinga_url": payload.get("url"), "author": payload.get("author")},

@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from gexlens_engine.compute.newstext import lead_paragraph
+
 #: Velikost hashovacího prostoru. 2^18 na ~18 tis. vzorků: kolizí je málo a
 #: paměť váhového vektoru je 2 MB.
 DEFAULT_BUCKETS = 2**18
@@ -51,8 +53,19 @@ def tokenize(title: str) -> list[str]:
     return tokens
 
 
-def features(title: str, *, source: str | None = None, hour_utc: int | None = None) -> list[str]:
-    """Rysy jedné zprávy: n-gramy z titulku + zdroj + hodina.
+def features(
+    title: str,
+    *,
+    source: str | None = None,
+    hour_utc: int | None = None,
+    body: str | None = None,
+) -> list[str]:
+    """Rysy jedné zprávy: n-gramy z titulku + prvního odstavce + zdroj + hodina.
+
+    Z článku se bere **jen lead** (#743): titulek má ~8 slov, celý text ~350,
+    což by při dnešní velikosti korpusu přidalo hlavně boilerplate a přeučovalo.
+    Rysy z leadu mají vlastní prefix `b=`, takže „cuts" v titulku a v těle jsou
+    dva různé rysy — nadpis váží víc a model si to má odvodit sám z dat.
 
     Vědomě NEPOUŽÍVÁ nic, co vzniká až po zprávě (reakce, kontaminace, režim
     spočtený zpětně) — look-ahead by nafoukl offline čísla a v provozu by se
@@ -62,6 +75,14 @@ def features(title: str, *, source: str | None = None, hour_utc: int | None = No
     out = [f"w={token}" for token in tokens]
     for size in range(2, MAX_NGRAM + 1):
         out.extend("w=" + "_".join(tokens[i : i + size]) for i in range(len(tokens) - size + 1))
+    if body:
+        lead_tokens = tokenize(lead_paragraph(body))
+        out.extend(f"b={token}" for token in lead_tokens)
+        for size in range(2, MAX_NGRAM + 1):
+            out.extend(
+                "b=" + "_".join(lead_tokens[i : i + size])
+                for i in range(len(lead_tokens) - size + 1)
+            )
     if source:
         out.append(f"src={source}")
     if hour_utc is not None:

@@ -42,6 +42,9 @@ class NewsEvent:
     category: str | None = None
     importance: int | None = None
     summary: str | None = None
+    # Plné znění článku (#743) — jen pokud ho zdroj dodá; do modelu jde
+    # titulek + první odstavec, ne celý text
+    body: str | None = None
     symbols: list[str] = field(default_factory=list)
     forecast: float | None = None
     previous: float | None = None

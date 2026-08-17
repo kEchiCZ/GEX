@@ -35,6 +35,60 @@ _STOPWORDS = frozenset(
 _NON_WORD = re.compile(r"[^\w\s]", re.UNICODE)
 _SPACES = re.compile(r"\s+")
 
+# Plné znění článku (#743) chodí od zdrojů jako HTML. Značky se strhávají hned
+# při normalizaci — do DB ani do rysů modelu nepatří. `script`/`style` se musí
+# vyhodit VČETNĚ obsahu, jinak by v textu zůstal kód a CSS.
+_HTML_BLOCK = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.I | re.S)
+_HTML_TAG = re.compile(r"<[^>]+>")
+_HTML_ENTITY = re.compile(r"&(#\d+|#x[0-9a-f]+|[a-z]+);", re.I)
+
+#: Kolik znaků plného textu se posílá modelu jako „první odstavec". Lead nese
+#: většinu signálu; celý článek (~350 slov) by při dnešní velikosti korpusu
+#: přidal hlavně boilerplate a přeučoval (#740 fáze 1, #743).
+LEAD_CHARS = 400
+
+
+def strip_html(raw: str) -> str:
+    """HTML článku → čistý text (#743).
+
+    Vlastní implementace místo knihovny: potřebujeme setřít značky a entity,
+    ne parsovat dokument, a další závislost v obraze kvůli tomuhle nestojí za
+    to. `script` a `style` padají i s obsahem — bez toho by v textu zůstal
+    JavaScript a CSS, což by modelu dodalo tisíce nesmyslných rysů.
+    """
+    if not raw:
+        return ""
+    text = _HTML_BLOCK.sub(" ", raw)
+    text = _HTML_TAG.sub(" ", text)
+    text = _HTML_ENTITY.sub(
+        lambda match: {
+            "amp": "&",
+            "lt": "<",
+            "gt": ">",
+            "quot": '"',
+            "apos": "'",
+            "nbsp": " ",
+        }.get(match.group(1).lower(), " "),
+        text,
+    )
+    return _SPACES.sub(" ", text).strip()
+
+
+def lead_paragraph(body: str | None, *, limit: int = LEAD_CHARS) -> str:
+    """První odstavec článku pro rysy modelu — ne celý text (#740, #743).
+
+    Řez na hranici věty, ne uprostřed slova: uříznutá věta by vyrobila
+    n-gramy, které v žádném jiném článku nevzniknou.
+    """
+    if not body:
+        return ""
+    text = body.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    return cut[: end + 1].strip() if end > limit // 2 else cut.rsplit(" ", 1)[0].strip()
+
 
 def normalize_title(title: str) -> str:
     """Titulek na kanonický tvar: bez diakritiky, interpunkce a stopslov.
