@@ -160,6 +160,8 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_NEWS_API_TOKEN` | — | Token news-engine → API push |
 | `GEXLENS_TASTY_SHADOW` | false | Shadow porovnání tastytrade feedu (M7 fáze 1, #613) — zapisuje JEN do `feed_comparison`, nic nepublikuje. Kill switch = vypnout flag |
 | `GEXLENS_TASTY_CLIENT_SECRET` / `_REFRESH_TOKEN` | — | OAuth2 grant **výhradně scope `read`** (ADR-0025); dev grant patří do `.env.dev` pod standardními názvy. Obsah `.env` se nikdy nevypisuje do konzole |
+| `GEXLENS_CROSSCHECK_ENABLED` | true | Křížová kontrola IBKR × tasty (#517 fáze A) — pasivní, bez requestů a linek navíc. Bez shadow se tiše nezapne |
+| `GEXLENS_CROSSCHECK_SHARE_THRESHOLD` / `_MINUTES` / `_COOLDOWN_MINUTES` | 0.70 / 3 / 15 | Prahy **měřené** na shadow historii, ne odhadnuté — viz níže. `_MINUTES` pod 3 = falešný poplach každou třetí minutu |
 
 **Od #696 jde do kontejnerů celý `.env`** (`env_file`), ne ruční výčet — každý klíč z `.env.example` po `docker compose up -d <služba>` skutečně platí. `environment:` v compose nese jen odvozené hodnoty (DATABASE_URL, adresy služeb, /app/data) a ty mají přednost. **Dev stack navíc čte volitelný `.env.dev`** (přepisy jen pro dev: vlastní tasty grant, symboly…; viz `.env.dev.example`). Pozn.: změna PG hesla v `.env.dev` vyžaduje reseed dev volume.
 
@@ -355,6 +357,55 @@ napřímo z prostředí jen sonda `scripts/tasty_probe.py`. Když tedy nastaven�
 Provozní stav tasty větve (reconnecty DXLink, handshake, počet sledovaných
 symbolů, zapsané řádky) dnes končí **jen v logu kontejneru** a v tabulce
 `feed_comparison` — v UI pro něj zatím není obrazovka.
+
+### Křížová kontrola feedů (#517 fáze A)
+
+Heartbeat testuje jen TCP spojení a stall detektory (ADR-0015) měří pasivně
+stáří dat — incident 26.–27. 7. (15 h zmrzlé ATM greeks při tekoucích cenách)
+nezachytila ani jedna vrstva. Chyběla **nezávislá reference**: mlčí data, nebo
+mlčí trh? Běžící shadow ji dodává zadarmo, takže detektor nedělá **žádný
+request na IBKR a nebere žádnou market data line** — jen čte, co `compare_minute`
+stejně počítá.
+
+Rozhoduje se z rozpadu kontraktů podle čerstvosti obou stran:
+
+| Situace | Verdikt | Chování |
+| --- | --- | --- |
+| IBKR mlčí ∧ tasty data má | `ibkr_suspect` | **alert** — tasty vylučuje „tichý trh"; farmu od mrtvých subskripcí rozliší až sonda fáze B |
+| oba mlčí | `quiet` | ticho — nikdo neobchoduje, není co hlásit |
+| tasty mlčí ∧ IBKR data má | `tasty_suspect` | **jen stav a log, bez alertu** — viz níže |
+| oba dodávají | `ok` | — |
+
+**Proč zrovna 70 % / 3 minuty.** Sweep obchází kontrakty po dávkách
+`batch_size`, takže **každou třetí minutu** vyskočí podíl „IBKR mlčí" na ~58 %
+a hned zase spadne — rotační artefakt, ne porucha. Okamžitý podíl je proto jako
+signál nepoužitelný a naivní práh by alertoval 24/7. Měření na 3 016 minutách
+čisté shadow historie (13.–16. 8. 2026) — nejdelší souvislá série minut nad
+prahem:
+
+| práh | nejdelší série | počet epizod |
+| --- | --- | --- |
+| 50 % | 2 min | 696 |
+| 60 % | 2 min | 42 |
+| **70 %** | **2 min** | **2** |
+| 80 % | 1 min | 1 |
+
+Série tří minut v řadě nenastala při žádném prahu ani jednou. Podmínka „M minut
+v řadě" tedy rotaci odfiltruje úplně; `_MINUTES` snížené na 2 by naopak plašilo.
+
+**Proč `tasty_suspect` nealertuje.** Přehrání téže historie detektorem dalo
+41 epizod „tasty mlčí ∧ IBKR data má" — všechny v hodinách **21–06 UTC**.
+Příčina je konstrukční: dxFeed je **event-driven** (v klidu neposílá nic, okno
+stáří vyprší), IBKR sweep **poll-driven** (vrací poslední kotaci pořád dokola).
+V noci a v denní pauze CME (16:00–17:00 CT) je to normální stav, ne porucha —
+v alert kanálu by z toho bylo 41 planých poplachů. Stav se proto jen poznamená
+do `/status` a jednou na začátku epizody do logu.
+
+Kontrolní měření po téhle úpravě: **3 053 minut čisté historie → 0 alertů.**
+
+Stav je v **Settings → Stav enginu** (řádek *Křížová kontrola feedů*) a v
+`/status` jako `feed_crosscheck`. Když shadow neběží, pole ve statusu **chybí**
+— UI to ukáže jako „neměří se", což je jiný stav než `ok`.
 
 ---
 
