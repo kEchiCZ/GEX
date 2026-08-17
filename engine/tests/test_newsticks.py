@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, select
 from gexlens_engine.ibkr.newsticks import (
     BROAD_TAPE_TICKS,
     NewsTickCollector,
+    broad_tape_providers,
     clean_headline,
     normalize_tick,
     subscribe_broad_tape,
@@ -64,6 +65,27 @@ class FakeClient:
 def test_tape_symbol_builds_provider_wide_feed() -> None:
     assert tape_symbol("BRFG") == "BRFG:BRFG_ALL"
     assert tape_symbol("DJ-RTG") == "DJ-RTG:DJ-RTG_ALL"
+
+
+def test_broad_tape_providers_normalizuje_dow_jones_kanaly() -> None:
+    """#546: přesně to, co IBKR vrátilo na produkci 17. 8. 2026.
+
+    Pět DJ-* kanálů je pro broad tape neplatných (Warning 321, valid are
+    [BRFG, BRFUPDN, DJ, DJNL, BZ, DJTOP, FLY]) — po normalizaci zbude kořen
+    `DJ`, který se do té doby NEODEBÍRAL VŮBEC.
+    """
+    z_ibkr = ["BRFG", "BRFUPDN", "DJ-N", "DJ-RT", "DJ-RTA", "DJ-RTE", "DJ-RTG", "DJNL"]
+
+    assert broad_tape_providers(z_ibkr) == ["BRFG", "BRFUPDN", "DJ", "DJNL"]
+
+
+def test_broad_tape_providers_nechava_kody_bez_pomlcky() -> None:
+    assert broad_tape_providers(["BRFG", "DJNL", "BZ", "FLY"]) == ["BRFG", "DJNL", "BZ", "FLY"]
+
+
+def test_broad_tape_providers_zahodi_prazdne_a_duplicity() -> None:
+    """Duplicity vzniknou normalizací (DJ-N i DJ-RT → DJ); pořadí se drží."""
+    assert broad_tape_providers(["DJ-RT", "", "  ", "DJ-N", "BRFG", "DJ"]) == ["DJ", "BRFG"]
 
 
 def test_subscribe_broad_tape_uses_mdoff_and_covers_every_provider() -> None:

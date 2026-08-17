@@ -20,7 +20,7 @@ hýbající ES/NQ nejsou vázané na jeden kontrakt.
 
 import datetime as dt
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -70,6 +70,33 @@ def tape_symbol(provider: str) -> str:
     return f"{provider}:{provider}{BROAD_TAPE_SUFFIX}"
 
 
+def broad_tape_providers(codes: Iterable[str]) -> list[str]:
+    """Kódy z `reqNewsProviders` → kódy použitelné pro broad tape (#546).
+
+    `reqNewsProviders` vrací kódy pro **článkové** API (`reqNewsArticle`), kde
+    Dow Jones jede v kanálech `DJ-N`, `DJ-RT`, `DJ-RTA`, `DJ-RTE`, `DJ-RTG`.
+    Broad tape ale zná jen kořen `DJ` a varianty s pomlčkou odmítá:
+
+        Warning 321: The entered news source is invalid.
+        Valid are: [BRFG, BRFUPDN, DJ, DJNL, BZ, DJTOP, FLY]
+
+    Bez téhle normalizace se posílalo pět requestů, které IBKR pokaždé zahodil
+    (odtud pět startovních warningů), a **kořen `DJ` se neodebíral vůbec** — Dow
+    Jones páska nám tedy neteče, ačkoli na ni účet subskripci má. Pomlčka se
+    proto usekne a duplicity slijí; pořadí se zachovává kvůli čitelnosti logu.
+
+    Kódy bez pomlčky (`BRFG`, `DJNL`) procházejí beze změny. Whitelist se
+    vědomě NEZAVÁDÍ: platné zdroje závisí na subskripcích účtu, takže by ho
+    fixní seznam v kódu buď ořezal, nebo by zastaral.
+    """
+    normalized: list[str] = []
+    for code in codes:
+        root = code.split("-", 1)[0].strip()
+        if root and root not in normalized:
+            normalized.append(root)
+    return normalized
+
+
 class MarketDataClient(Protocol):
     """Nízkoúrovňový klient ib_async (`ib.client`)."""
 
@@ -101,6 +128,7 @@ def subscribe_broad_tape(
     zahodit kvůli jednomu providerovi ostatní by bylo horší než chyba v logu.
     """
     subscribed: list[str] = []
+    issued: list[str] = []
     for provider in providers:
         req_id = client.getReqId()
         try:
@@ -109,7 +137,16 @@ def subscribe_broad_tape(
             logger.exception("Subskripce pásky %s selhala — pokračuji dalším", provider)
             continue
         subscribed.append(provider)
-    logger.info("Broker news: odebráno %d pásek (%s)", len(subscribed), ", ".join(subscribed))
+        # Mapa reqId→provider (#546): IBKR hlásí odmítnutí i Error 200 asynchronně
+        # a jen s reqId, navíc s vlastním (zkomoleným) názvem zdroje. Bez téhle
+        # dvojice se z logu nedá poznat, KTERÁ páska spadla.
+        issued.append(f"{req_id}={provider}")
+    logger.info(
+        "Broker news: odebráno %d pásek (%s); reqId → provider: %s",
+        len(subscribed),
+        ", ".join(subscribed),
+        ", ".join(issued),
+    )
     return subscribed
 
 
