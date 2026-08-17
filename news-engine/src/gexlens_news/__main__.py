@@ -114,9 +114,18 @@ async def run(settings: NewsSettings) -> None:
 
     classification = RuleClassificationJob(engine)
     # Gemini pass (#281): bez klíče se nespouští — pravidlová klasifikace
-    # je plnohodnotný fallback, ne porucha
+    # je plnohodnotný fallback, ne porucha.
+    #
+    # ZAKONZERVOVÁNO 17. 8. 2026 (#740 fáze 0, rozhodnutí uživatele): účet má
+    # free tier, takže větev stejně naráží na denní kvótu (#738), a měřením se
+    # ukázalo, že hodnotu nepřidává — v `news_weights` neprošla Wilson gate ANI
+    # JEDNOU (0 z 20 řádků, průměrný hit rate 0,484 proti 0,516 u pravidel).
+    # Kód ani historická data (15 747 klasifikací) se nemažou: až empirický
+    # prediktor (#740) projde fází 1, bude se s čím srovnávat.
     llm: LlmClassificationJob | None = None
-    if settings.gemini_api_key:
+    if not settings.llm_enabled:
+        logger.info("LLM klasifikace zakonzervována (GEXLENS_NEWS_LLM_ENABLED=false, #740)")
+    elif settings.gemini_api_key:
         llm = LlmClassificationJob(
             engine,
             GeminiClient(settings.gemini_api_key, model=settings.gemini_model),
