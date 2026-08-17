@@ -74,3 +74,40 @@ def test_handle_writes_news_and_raises_on_error_frame() -> None:
     # Error rámec (typicky špatné klíče) musí session shodit → reconnect + log
     with pytest.raises(RuntimeError, match="auth failed"):
         asyncio.run(stream._handle('[{"T":"error","msg":"auth failed"}]'))
+
+
+# ── Plné znění článku (#743) ───────────────────────────────────────
+
+
+def test_content_se_uklada_jako_body_bez_html() -> None:
+    """Alpaca posílá plný článek v `content` — dřív se zahazoval."""
+    payload = {
+        "T": "n",
+        "id": 1,
+        "headline": "NVIDIA beats estimates",
+        "summary": "Krátký perex",
+        "content": "<p>Plný <b>text</b> článku.</p><script>track()</script>",
+        "created_at": "2026-08-17T12:00:00Z",
+        "symbols": ["NVDA"],
+    }
+
+    event = normalize_message(payload, NOW)
+
+    assert event is not None
+    assert event.body == "Plný text článku."  # bez značek i bez skriptu
+    assert event.summary == "Krátký perex"  # perex zůstává vlastním polem
+
+
+def test_bez_content_zustane_body_prazdne() -> None:
+    """Plný text má jen ~30 % zpráv; zbytek se musí chovat jako dřív."""
+    payload = {
+        "T": "n",
+        "id": 2,
+        "headline": "Zpráva bez těla",
+        "created_at": "2026-08-17T12:00:00Z",
+    }
+
+    event = normalize_message(payload, NOW)
+
+    assert event is not None
+    assert event.body is None
