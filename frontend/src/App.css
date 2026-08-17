@@ -1058,6 +1058,25 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   font-size: 11px;
 }
 
+/* Denní bilance (#748) — musí být na první pohled odlišitelná od celkové
+   historie nad ní, jinak si uživatel splete „dnes" s „za celou dobu".
+   Menší dlaždice a levý pruh: jiná váha čísla, ne jiná barva hodnot. */
+.setups-stats-day .stat {
+  padding: 6px 12px;
+  min-width: 84px;
+  border-left: 3px solid var(--accent, #4c8dff);
+}
+
+.setups-stats-day .stat-value {
+  font-size: 15px;
+}
+
+.setups-day-empty {
+  margin-top: -6px;
+  margin-bottom: 14px;
+  font-size: 12px;
+}
+
 .setups-table-wrap {
   overflow-x: auto;
 }
