@@ -48,6 +48,7 @@ from gexlens_engine.ibkr.lines import LineGauge
 from gexlens_engine.ibkr.newsticks import (
     NewsTickCollector,
     NewsTickLike,
+    broad_tape_providers,
     subscribe_broad_tape,
     tape_symbol,
 )
@@ -258,7 +259,17 @@ async def _start_broker_news(
     async def resubscribe_news() -> None:
         # Reconnect zahazuje serverové subskripce; bez obnovy by páska po prvním
         # výpadku tiše umlkla
-        providers = [p.code for p in await ib.reqNewsProvidersAsync()]
+        codes = [p.code for p in await ib.reqNewsProvidersAsync()]
+        # Kódy z reqNewsProviders jsou pro článkové API; broad tape zná jen
+        # kořeny (#546) — bez normalizace pět requestů spadne a `DJ` chybí
+        providers = broad_tape_providers(codes)
+        if providers != codes:
+            logger.info(
+                "Broker news: %d kódů z IBKR → %d pásek (%s)",
+                len(codes),
+                len(providers),
+                ", ".join(providers),
+            )
         subscribe_broad_tape(ib.client, providers, make_contract=make_contract)
 
     async def store(tick: NewsTickLike, now: dt.datetime) -> None:
