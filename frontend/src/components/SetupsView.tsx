@@ -4,7 +4,8 @@ Predikce jsou neměnné — jediná mutace je rating (+1/−1) a poznámka; hodn
 je kvalitativní vrstva a nevstupuje do automatické kalibrace confidence.
 */
 import { useState } from 'react'
-import { ACCOUNT_START_USD, CURRENT_MECHANICS_VERSION, STATUS_LABELS, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import { ACCOUNT_START_USD, CURRENT_MECHANICS_VERSION, STATUS_LABELS, dailyStats, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import { sessionDateIso } from '../instrument/tz'
 import type { SetupRow } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
 import { useSetups } from '../hooks/useSetups'
@@ -101,6 +102,9 @@ export function SetupsView() {
   const totalPct = (totalPnl / ACCOUNT_START_USD) * 100
   const averageR = closed.length > 0 ? totalR / closed.length : 0
   const pnlClass = totalPnl >= 0 ? 'r-positive' : 'r-negative'
+  // Bilance dnešní seance (#748) — nad `visible`, aby ctila přepínač verze
+  // mechaniky; jinak by si horní a spodní blok odporovaly
+  const day = dailyStats(visible, pointUsd, sessionDateIso(), sessionDateIso)
 
   return (
     <section className="setups-view" aria-label="Setupy">
@@ -152,6 +156,79 @@ export function SetupsView() {
           </span>
         </div>
       </div>
+      {/* Bilance dnešní SEANCE (#748) — oddělená od celkové historie výše.
+          Den je Globex seance (#512), ne kalendářní datum. */}
+      <div className="setups-stats setups-stats-day" role="group" aria-label="Dnešní seance">
+        <div className="stat">
+          <span className="stat-label muted">Dnes obchodů</span>
+          <span className="stat-value" data-testid="day-trades">
+            {day.trades > 0 ? day.trades : '—'}
+          </span>
+        </div>
+        <div className="stat">
+          <span className="stat-label muted">Úspěšné / ztrátové</span>
+          <span className="stat-value">
+            {day.closed > 0 ? (
+              <>
+                <span className="r-positive">{day.wins}</span>
+                {' / '}
+                <span className="r-negative">{day.losses}</span>
+              </>
+            ) : (
+              '—'
+            )}
+          </span>
+        </div>
+        <div className="stat">
+          <span className="stat-label muted">Úspěšnost dne</span>
+          {/* null ≠ 0 %: den bez uzavřeného obchodu není neúspěšný, jen nedokončený */}
+          <span className="stat-value" data-testid="day-winrate">
+            {day.winRate === null ? '—' : `${Math.round(day.winRate)} %`}
+          </span>
+        </div>
+        <div className="stat">
+          <span className="stat-label muted">Největší zisk</span>
+          <span className="stat-value r-positive">
+            {day.bestUsd !== null && day.bestUsd > 0 ? formatPnlUsd(day.bestUsd) : '—'}
+          </span>
+        </div>
+        <div className="stat">
+          <span className="stat-label muted">Největší ztráta</span>
+          <span className="stat-value r-negative">
+            {day.worstUsd !== null && day.worstUsd < 0 ? formatPnlUsd(day.worstUsd) : '—'}
+          </span>
+        </div>
+        <div className="stat">
+          <span className="stat-label muted">% účtu dnes</span>
+          <span
+            className={`stat-value ${day.pnlUsd >= 0 ? 'r-positive' : 'r-negative'}`}
+            data-testid="day-pct"
+          >
+            {day.closed > 0 ? formatPct(day.pnlPct) : '—'}
+          </span>
+        </div>
+        <div className="stat">
+          <span className="stat-label muted">Riskováno (max / celkem)</span>
+          {/* Dvě čtení rizika: největší jednotlivá sázka a celkové nasazení dne.
+              Počítá se i z aktivních — „co je v sázce" je otázka o vstupu. */}
+          <span
+            className="stat-value"
+            data-testid="day-risk"
+            title="Max riziko v jednom obchodě / součet rizik všech dnešních obchodů, v % startovního účtu"
+          >
+            {' '}
+            {/* prettier-ignore */}
+            {day.trades > 0
+              ? `${day.maxRiskPct.toFixed(1)} % / ${day.totalRiskPct.toFixed(1)} %`
+              : '—'}
+          </span>
+        </div>
+      </div>
+      {day.trades === 0 && (
+        <p className="muted setups-day-empty">
+          Dnešní seance zatím bez obchodu — detektor běží, jen nenastaly podmínky šablon.
+        </p>
+      )}
       {visible.length === 0 && (
         <p className="muted">
           Zatím žádné setupy — detektor běží nad živými daty a čeká na podmínky šablon (odraz od

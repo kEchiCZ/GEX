@@ -96,6 +96,79 @@ export function formatPct(value: number): string {
   return `${value > 0 ? '+' : ''}${value.toFixed(2)} %`
 }
 
+/** Riziko jednoho setupu v USD na 1 kontrakt: |entry − stop| × hodnota bodu.
+
+Na rozdíl od P/L je známé už při vzniku setupu — proto se počítá i pro aktivní
+pozice, kde `outcome_r` ještě není. */
+export function setupRiskUsd(row: Pick<SetupRow, 'entry' | 'stop'>, pointValueUsd: number): number {
+  return Math.abs(row.entry - row.stop) * pointValueUsd
+}
+
+/** Souhrn jednoho obchodního dne (#748). */
+export interface DailyStats {
+  /** Uzavřené dnes + aktivní vzniklé dnes. */
+  trades: number
+  closed: number
+  active: number
+  wins: number
+  losses: number
+  /** Úspěšnost z uzavřených; `null` když se dnes nic neuzavřelo. */
+  winRate: number | null
+  bestUsd: number | null
+  worstUsd: number | null
+  pnlUsd: number
+  pnlPct: number
+  /** Největší riziko v JEDNOM dnešním obchodě (% účtu). */
+  maxRiskPct: number
+  /** Součet rizik všech dnešních obchodů (% účtu) — celkové nasazení dne. */
+  totalRiskPct: number
+}
+
+/** Statistika dne ze setupů (#748).
+
+**Den je obchodní seance, ne kalendářní datum** — `sessionDateIso` mapuje čas na
+seanci [17:00 CT D−1, 17:00 CT D), takže noční Globex obchod spadne do správného
+dne (#512). Bez toho by se večerní obchody počítaly k předchozímu dni.
+
+**Který čas rozhoduje**: uzavřený setup patří do dne, kdy se uzavřel (`closed_ts`)
+— bilance dne je to, co se dnes zrealizovalo. Aktivní patří do dne vzniku
+(`created_ts`), protože jiný čas nemají a riziko už nesou.
+
+Riziko se počítá i pro aktivní pozice: „kolik dnes bylo v sázce" je otázka
+o vstupu, ne o výsledku. */
+export function dailyStats(
+  rows: SetupRow[],
+  pointValueUsd: number,
+  sessionDate: string,
+  toSessionDate: (ts: number) => string,
+): DailyStats {
+  const today = rows.filter((row) => {
+    const stamp = row.status === 'active' ? row.created_ts : (row.closed_ts ?? row.created_ts)
+    return toSessionDate(new Date(stamp).getTime()) === sessionDate
+  })
+  const closed = today.filter((row) => row.status !== 'active' && row.outcome_r !== null)
+  const pnls = closed.map((row) => setupPnlUsd(row, pointValueUsd) ?? 0)
+  const wins = pnls.filter((value) => value > 0).length
+  const risks = today.map((row) => setupRiskUsd(row, pointValueUsd))
+  const pnlUsd = pnls.reduce((sum, value) => sum + value, 0)
+  return {
+    trades: today.length,
+    closed: closed.length,
+    active: today.length - closed.length,
+    wins,
+    losses: closed.length - wins,
+    // Bez uzavřeného obchodu úspěšnost neexistuje — nula by lhala, že se
+    // nedařilo, přitom se jen ještě nic nedokončilo
+    winRate: closed.length > 0 ? (wins / closed.length) * 100 : null,
+    bestUsd: pnls.length > 0 ? Math.max(...pnls) : null,
+    worstUsd: pnls.length > 0 ? Math.min(...pnls) : null,
+    pnlUsd,
+    pnlPct: (pnlUsd / ACCOUNT_START_USD) * 100,
+    maxRiskPct: risks.length > 0 ? (Math.max(...risks) / ACCOUNT_START_USD) * 100 : 0,
+    totalRiskPct: (risks.reduce((sum, value) => sum + value, 0) / ACCOUNT_START_USD) * 100,
+  }
+}
+
 export async function fetchSetups(symbol: string): Promise<SetupRow[]> {
   const response = await fetch(`${API_BASE}/setups/${symbol}`)
   if (!response.ok) return []
