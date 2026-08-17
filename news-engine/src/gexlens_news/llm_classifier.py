@@ -22,7 +22,7 @@ from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import case, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import (
@@ -44,6 +44,17 @@ DATA_CLOSE = "NEWS_DATA>>>"
 
 # Souhrny se ořezávají — dlouhý text nezlepší klasifikaci, jen spálí tokeny
 SUMMARY_LIMIT = 300
+# Totéž pro titulek (#552 L3): `news_events.title` je Text bez limitu a
+# collector ořezává až od opravy #552 — starší řádky můžou být libovolně dlouhé,
+# takže se strop uplatní ještě jednou tady, těsně před odesláním do Gemini.
+TITLE_LIMIT = 500
+
+# Čas, podle kterého se řadí fronta (#552 L2): menší z (ts_event, ts_ingested).
+# `case` místo `func.least` kvůli SQLite v testech.
+_EFFECTIVE_TS = case(
+    (news_events.c.ts_event < news_events.c.ts_ingested, news_events.c.ts_event),
+    else_=news_events.c.ts_ingested,
+)
 
 # Cooldowny: 429 = denní/minutový limit (čekat dlouho), 5xx/síť = krátce
 RATE_LIMIT_COOLDOWN_S = 600
@@ -91,7 +102,7 @@ def build_prompt(items: list[dict[str, Any]]) -> str:
     payload = [
         {
             "id": item["id"],
-            "title": str(item["title"]),
+            "title": str(item["title"])[:TITLE_LIMIT],
             "summary": (str(item["summary"])[:SUMMARY_LIMIT] if item.get("summary") else None),
         }
         for item in items
@@ -254,7 +265,13 @@ class LlmClassificationJob:
             )
             .where(news_events.c.id.not_in(already))
             .where(news_events.c.kind != "scheduled")
-            .order_by(news_events.c.ts_event.desc())
+            # Řadí se podle MENŠÍHO z (ts_event, ts_ingested) — #552 L2. `ts_event`
+            # je plně pod kontrolou feedu, takže položka datovaná do budoucna by
+            # jinak trvale seděla na vrcholu fronty a vyžrala denní rozpočet
+            # legitimním zprávám. Collector budoucí čas zahazuje už na vstupu,
+            # tohle je druhá obrana (a chrání i řádky zapsané před opravou).
+            # `case` místo `func.least`: SQLite (testy) `least` nezná.
+            .order_by(_EFFECTIVE_TS.desc())
             .limit(self._batch_limit)
         )
         if high_impact_only:

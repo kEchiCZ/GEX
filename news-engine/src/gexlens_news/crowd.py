@@ -31,7 +31,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import crowd_sentiment
-from gexlens_news.http import BROWSER_UA, sanitize_raw
+from gexlens_news.http import BROWSER_UA, read_limited_cffi, sanitize_raw
 
 logger = logging.getLogger(__name__)
 
@@ -174,11 +174,18 @@ def fetch_cnn_payload(*, timeout_s: float = 30.0) -> dict[str, Any]:
     """Fetch přes curl_cffi — browser TLS fingerprint (lekce z #277)."""
     from curl_cffi import requests as cffi_requests
 
+    # stream=True + čtení s limitem (#552 M4) — payload nese ~roční historii,
+    # ale strop drží i kompromitovaný endpoint v mezích
     response = cffi_requests.get(
-        CNN_URL, headers=CNN_HEADERS, impersonate="chrome", timeout=timeout_s
+        CNN_URL, headers=CNN_HEADERS, impersonate="chrome", timeout=timeout_s, stream=True
     )
-    response.raise_for_status()  # type: ignore[no-untyped-call]
-    payload = json.loads(response.text)
+    try:
+        response.raise_for_status()  # type: ignore[no-untyped-call]
+        body = read_limited_cffi(response)
+    finally:
+        # curl_cffi má jen částečné typy — close je untyped
+        response.close()  # type: ignore[no-untyped-call]
+    payload = json.loads(body)
     if not isinstance(payload, dict):
         raise ValueError("F&G payload není objekt")
     return payload
