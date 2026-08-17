@@ -13,7 +13,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
 from ib_async import IB, Contract, Future, RealTimeBarList, Ticker
@@ -97,6 +97,7 @@ from gexlens_engine.storage.t6_store import T6Repository
 from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.storage.volregime_store import VolRegimeRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
+from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.devrun import run_tasty_only
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.session import TastyCredentials, TastySession
@@ -279,6 +280,24 @@ async def _start_broker_news(
     ib.tickNewsEvent += on_news_tick
     manager.on_resubscribe(resubscribe_news)
     await resubscribe_news()
+
+
+def _crosscheck_status(detector: CrossCheckDetector | None) -> dict[str, object]:
+    """Pole křížové kontroly do /status (#517 A).
+
+    Bez shadow větve (nebo než doběhne první minuta) se do statusu nepřidá nic
+    — UI tak pozná „neměří se" od „měří se a je ticho" (chybějící klíč vs.
+    stav `ok`), místo aby vypnutý detektor vypadal jako zdravý feed.
+    """
+    if detector is None or detector.last is None:
+        return {}
+    verdict = detector.last
+    return {
+        "feed_crosscheck": verdict.state,
+        "feed_crosscheck_detail": verdict.message,
+        "feed_crosscheck_ibkr_dead_share": round(verdict.tally.ibkr_dead_share, 3),
+        "feed_crosscheck_contracts": verdict.tally.contracts,
+    }
 
 
 async def create_pipeline(
@@ -711,6 +730,10 @@ async def main() -> None:
     shadow_tasks: list[asyncio.Task[None]] = []
     shadow_chain: dict[str, ChainSymbols] = {}
     tasty_oi_lookup: Callable[[OptionContractSpec], float | None] | None = None
+    # Křížová kontrola (#517 A) — None, dokud neběží shadow větev; status ji
+    # čte z hlavní smyčky, proto musí být viditelná i při vypnutém shadow
+    crosscheck: CrossCheckDetector | None = None
+    publish_crosscheck: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None
     if settings.tasty_shadow and settings.tasty_client_secret and settings.tasty_refresh_token:
         tasty_session = TastySession(
             TastyCredentials(
@@ -742,12 +765,37 @@ async def main() -> None:
                     merged_oi[(pipeline_symbol, expiry, strike, right)] = oi_value
             return merged_oi
 
+        # Křížová kontrola IBKR × tasty (#517 fáze A): tasty čerstvé při mrtvém
+        # IBKR vylučuje „tichý trh" — jediná nejednoznačnost, kterou pasivní
+        # vrstva sama neuměla rozhodnout. Nula requestů, nula linek.
+        if settings.crosscheck_enabled:
+            crosscheck = CrossCheckDetector(
+                share_threshold=settings.crosscheck_share_threshold,
+                minutes_threshold=settings.crosscheck_minutes,
+                cooldown_minutes=settings.crosscheck_cooldown_minutes,
+            )
+
+            async def _publish_crosscheck(verdict: CrossCheckVerdict) -> None:
+                await publisher.publish(
+                    "alerts",
+                    {
+                        "kind": "feed_crosscheck",
+                        "symbol": "*",
+                        "message": verdict.message,
+                        "ts": dt.datetime.now(dt.UTC).timestamp(),
+                    },
+                )
+
+            publish_crosscheck = _publish_crosscheck
+
         comparator = ShadowComparator(
             comparison_repository,
             tasty_cache,
             shadow_contracts,
             lambda: dict(shadow_chain),
             oi_source=shadow_oi_snapshot,
+            detector=crosscheck,
+            on_alert=publish_crosscheck,
         )
 
         if settings.tasty_oi_fill:
@@ -962,6 +1010,8 @@ async def main() -> None:
                 # Špička obsazených linek od minulého statusu (#630) — měřeno,
                 # ne konfigurační odhad; strop účtu je tvrdých 100 (ADR-0001)
                 lines_utilization=line_gauge.utilization(settings.market_data_lines),
+                # Křížová kontrola feedů (#517 A) — chybí, když shadow neběží
+                **_crosscheck_status(crosscheck),
                 **aggregate_status(results),
             )
 

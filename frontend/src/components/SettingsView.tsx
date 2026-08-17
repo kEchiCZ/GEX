@@ -29,6 +29,16 @@ interface NumberField {
   restarts?: boolean
 }
 
+// Stavy křížové kontroly IBKR × tasty (#517 A). Text říká, co dělat, ne jen
+// jak se stav jmenuje — „quiet" sám o sobě uživateli nic neřekne.
+const CROSSCHECK_LABELS: Record<string, string> = {
+  ok: 'oba zdroje dodávají data',
+  ibkr_suspect: '⚠ IBKR mlčí, tastytrade data má — problém je na straně IBKR',
+  tasty_suspect: 'tastytrade zaostává (sekundární zdroj)',
+  quiet: 'oba zdroje ticho — tichý trh, ne porucha',
+  insufficient: 'málo kontraktů na výrok',
+}
+
 // Meze i chování musí odpovídat RUNTIME_SETTINGS v enginu — jinak UI slibuje
 // něco jiného, než engine udělá
 const ENGINE_FIELDS: NumberField[] = [
@@ -283,6 +293,16 @@ export function SettingsView() {
                   {status.lines_utilization != null
                     ? `${Math.round(status.lines_utilization * 100)} %`
                     : '—'}
+                </td>
+              </tr>
+              {/* Křížová kontrola feedů (#517 A): chybějící pole = neměří se
+                  (shadow neběží) — to je jiný stav než „měří se a je ticho" */}
+              <tr>
+                <td>Křížová kontrola feedů</td>
+                <td title={status.feed_crosscheck_detail ?? undefined}>
+                  {status.feed_crosscheck != null
+                    ? CROSSCHECK_LABELS[status.feed_crosscheck] ?? status.feed_crosscheck
+                    : 'neměří se (shadow neběží)'}
                 </td>
               </tr>
             </tbody>

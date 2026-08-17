@@ -134,6 +134,15 @@ class Settings(BaseSettings):
     # maximum, ADR-0027: 6 008 změřeno bez degradace). Konzervativní hodnotu
     # nastavuje jen dev (-LiveTasty), aby experimenty neujídaly kapacitu účtu.
     tasty_max_subscriptions: int = Field(default=0, ge=0)
+    # Křížová kontrola feedů (#517 fáze A): pasivní detektor nad shadow daty,
+    # žádný request navíc. Bez běžící shadow větve se tiše nezapne.
+    # Prahy jsou MĚŘENÉ na 3 016 minutách shadow historie (13.–16. 8. 2026):
+    # sweep rotace vyhodí podíl na ~58 % každou třetí minutu, série tří minut
+    # v řadě nenastala ani jednou — proto 0,70 / 3 min.
+    crosscheck_enabled: bool = True
+    crosscheck_share_threshold: float = Field(default=0.70, gt=0, le=1)
+    crosscheck_minutes: int = Field(default=3, ge=1)
+    crosscheck_cooldown_minutes: int = Field(default=15, ge=1)
 
     batch_timeout_s: float = Field(default=4.0, gt=0)
     # Burzovní čas, po kterém IBKR publikuje kompletní denní OI (#463, #511).

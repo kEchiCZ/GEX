@@ -31,6 +31,12 @@ export interface PipelineStatus {
   /** Připojený IBKR účet (#446) — „DU1234567 (paper)"; paper flag zvlášť pro barvu. */
   account?: string
   account_paper?: boolean | null
+  /** Křížová kontrola IBKR × tasty (#517 A). Klíč CHYBÍ, když shadow neběží —
+      „neměří se" je jiný stav než `ok` a UI je nesmí splácnout dohromady. */
+  feed_crosscheck?: 'ok' | 'ibkr_suspect' | 'tasty_suspect' | 'quiet' | 'insufficient'
+  feed_crosscheck_detail?: string
+  feed_crosscheck_ibkr_dead_share?: number
+  feed_crosscheck_contracts?: number
   updated_at?: number | null
 }
 

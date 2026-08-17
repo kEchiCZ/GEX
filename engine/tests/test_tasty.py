@@ -162,7 +162,9 @@ def test_compare_minute_meri_data_ne_hodiny() -> None:
     feed_quote(cache, "./E2DQ26C7775:XCME", 18.1, 18.6)
     feed_greeks(cache, "./E2DQ26C7775:XCME", 0.127, 0.53, 0.0113)
 
-    rows = compare_minute(TS, fresh, cache, {"ES": chain}, now_monotonic=now_mono, now_utc=now_utc)
+    rows = compare_minute(
+        TS, fresh, cache, {"ES": chain}, now_monotonic=now_mono, now_utc=now_utc
+    ).rows
     by_field = {row.field: row for row in rows}
     assert set(by_field) == {"bid", "ask", "iv", "delta", "gamma"}
     assert by_field["bid"].delta is not None
@@ -174,7 +176,7 @@ def test_compare_minute_meri_data_ne_hodiny() -> None:
     feed_quote(old_cache, "./E2DQ26C7775:XCME", 18.1, 18.6)
     rows_old = compare_minute(
         TS, fresh, old_cache, {"ES": chain}, now_monotonic=now_mono, now_utc=now_utc
-    )
+    ).rows
     bid_old = next(row for row in rows_old if row.field == "bid")
     assert bid_old.value_tasty is None and bid_old.value_ibkr == 18.0
 
@@ -182,7 +184,7 @@ def test_compare_minute_meri_data_ne_hodiny() -> None:
     stale = {spec: CachedQuote(snapshot=snapshot, updated_at=now_mono - 5.0, stale=True)}
     rows_stale = compare_minute(
         TS, stale, cache, {"ES": chain}, now_monotonic=now_mono, now_utc=now_utc
-    )
+    ).rows
     bid_stale = next(row for row in rows_stale if row.field == "bid")
     assert bid_stale.value_ibkr is None and bid_stale.value_tasty == 18.1
 
@@ -234,7 +236,7 @@ def test_compare_minute_porovnava_oi_z_archivu_a_summary() -> None:
         now_monotonic=now_mono,
         now_utc=TS,
         oi_ibkr={("ES", "20260813", 7775.0, "C"): 1200.0},
-    )
+    ).rows
     oi_row = next(row for row in rows if row.field == "oi")
     assert oi_row.value_ibkr == 1200.0
     assert oi_row.value_tasty == 1234.0
@@ -251,7 +253,7 @@ def test_compare_minute_porovnava_oi_z_archivu_a_summary() -> None:
         now_monotonic=now_mono,
         now_utc=TS,
         oi_ibkr={},
-    )
+    ).rows
     assert all(row.field != "oi" for row in rows_none)
 
 

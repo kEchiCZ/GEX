@@ -17,11 +17,13 @@ import contextlib
 import datetime as dt
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import CachedQuote
 from gexlens_engine.storage.feed_comparison import ComparisonRow, FeedComparisonRepository
+from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict, MinuteTally
 from gexlens_engine.tasty.provider import TastyChainCache, TastyContractState
 from gexlens_engine.tasty.symbols import ChainSymbols
 
@@ -48,6 +50,14 @@ def contract_label(spec: OptionContractSpec) -> str:
     return f"{spec.symbol} {spec.expiry} {spec.strike:g}{spec.right}"
 
 
+@dataclass(frozen=True)
+class MinuteComparison:
+    """Výstup jedné minuty: řádky do reportu + rozpad čerstvosti pro #517 fázi A."""
+
+    rows: list[ComparisonRow]
+    tally: MinuteTally
+
+
 def compare_minute(
     ts: dt.datetime,
     ibkr_quotes: dict[OptionContractSpec, CachedQuote],
@@ -58,14 +68,20 @@ def compare_minute(
     now_utc: dt.datetime,
     max_age_ms: int = MAX_AGE_MS,
     oi_ibkr: dict[tuple[str, str, float, str], float] | None = None,
-) -> list[ComparisonRow]:
-    """Řádky porovnání jedné minuty — čistá funkce (testy bez sítě).
+) -> MinuteComparison:
+    """Řádky porovnání jedné minuty + tally čerstvosti — čistá funkce (testy bez sítě).
 
     Stáří IBKR strany se měří od monotonic času sweep cache, tasty strany od
     UTC času posledního eventu; obě se normalizují na ms vůči TÉŽE referenci
     (okamžik porovnání), takže report měří rozdíl dat, ne rozdíl hodin.
+
+    Tally se počítá TADY, ne dodatečným dotazem nad `feed_comparison`:
+    kontrakty s oběma stranami mrtvými se do řádků nezapisují (nulová
+    informace pro report), takže kategorii „tichý trh" jde zachytit jen
+    v tomhle průchodu (#517 fáze A).
     """
     rows: list[ComparisonRow] = []
+    both_fresh = ibkr_only_dead = tasty_only_dead = both_dead = 0
     for spec, cached in ibkr_quotes.items():
         # Mapa per produkt (ES i NQ mají vlastní chain endpoint) — bez toho
         # by se druhý instrument tiše nikdy neporovnal
@@ -79,6 +95,10 @@ def compare_minute(
         age_ibkr_ms = int((now_monotonic - cached.updated_at) * 1000)
         ibkr_fresh = age_ibkr_ms <= max_age_ms and not cached.stale
         label = contract_label(spec)
+        # Živost strany = dodala v okně aspoň jednu hodnotu z _FIELDS. OI se
+        # nezapočítává (denní veličina s vypnutým stářím), jinak by tichý
+        # kontrakt vypadal jako živý.
+        ibkr_alive = tasty_alive = False
         for field_name, ibkr_value, tasty_value in _FIELDS:
             value_ibkr = ibkr_value(cached) if ibkr_fresh else None
             value_tasty: float | None = None
@@ -89,6 +109,8 @@ def compare_minute(
                     age_tasty_ms = int((now_utc - source.updated_at).total_seconds() * 1000)
                     if age_tasty_ms <= max_age_ms:
                         value_tasty = tasty_value(state)
+            ibkr_alive = ibkr_alive or value_ibkr is not None
+            tasty_alive = tasty_alive or value_tasty is not None
             if value_ibkr is None and value_tasty is None:
                 continue  # obě strany mrtvé — nulová informace, jen objem
             rows.append(
@@ -121,7 +143,22 @@ def compare_minute(
                     age_tasty_ms=None,
                 )
             )
-    return rows
+        if ibkr_alive and tasty_alive:
+            both_fresh += 1
+        elif tasty_alive:
+            ibkr_only_dead += 1
+        elif ibkr_alive:
+            tasty_only_dead += 1
+        else:
+            both_dead += 1
+    tally = MinuteTally(
+        contracts=both_fresh + ibkr_only_dead + tasty_only_dead + both_dead,
+        both_fresh=both_fresh,
+        ibkr_only_dead=ibkr_only_dead,
+        tasty_only_dead=tasty_only_dead,
+        both_dead=both_dead,
+    )
+    return MinuteComparison(rows=rows, tally=tally)
 
 
 class ShadowComparator:
@@ -141,6 +178,8 @@ class ShadowComparator:
         *,
         interval_s: float = 60.0,
         oi_source: Callable[[], dict[tuple[str, str, float, str], float]] | None = None,
+        detector: CrossCheckDetector | None = None,
+        on_alert: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None,
     ) -> None:
         self._repository = repository
         self._cache = tasty_cache
@@ -149,6 +188,9 @@ class ShadowComparator:
         self._interval_s = interval_s
         # OI porovnání (#664): sync čtení denního archivu — volá se přes to_thread
         self._oi_source = oi_source
+        # Křížová kontrola (#517 fáze A): bez detektoru se shadow chová jako dřív
+        self._detector = detector
+        self._on_alert = on_alert
         #: Diagnostika zátěže: řádků zapsáno od startu
         self.rows_written = 0
 
@@ -169,7 +211,7 @@ class ShadowComparator:
             return
         ts = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
         oi_ibkr = None if self._oi_source is None else await asyncio.to_thread(self._oi_source)
-        rows = compare_minute(
+        comparison = compare_minute(
             ts,
             self._contracts_source(),
             self._cache,
@@ -178,6 +220,14 @@ class ShadowComparator:
             now_utc=dt.datetime.now(dt.UTC),
             oi_ibkr=oi_ibkr,
         )
+        rows = comparison.rows
+        # Křížová kontrola (#517 A) běží PŘED zápisem: verdikt nesmí záviset
+        # na tom, jestli se insert povedl — detekce výpadku feedu je cennější
+        # než řádek v pracovní tabulce.
+        if self._detector is not None:
+            verdict = self._detector.observe(comparison.tally)
+            if verdict.alert and self._on_alert is not None:
+                await self._on_alert(verdict)
         await asyncio.to_thread(self._repository.insert_many, rows)
         self.rows_written += len(rows)
         if rows and self.rows_written % (len(rows) * 5) < len(rows):
