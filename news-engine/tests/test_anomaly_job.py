@@ -23,14 +23,20 @@ def make_db(tmp_path: Path) -> Engine:
     return engine
 
 
-def seed_event(engine: Engine, event_id: int, *, title: str = "CPI") -> None:
+def seed_event(
+    engine: Engine,
+    event_id: int,
+    *,
+    title: str = "CPI",
+    ts_event: dt.datetime | None = None,
+) -> None:
     with engine.begin() as conn:
         conn.execute(
             insert(news_events),
             [
                 {
                     "id": event_id,
-                    "ts_event": NOW - dt.timedelta(minutes=30),
+                    "ts_event": ts_event or NOW - dt.timedelta(minutes=30),
                     "ts_ingested": NOW,
                     "source": "forexfactory",
                     "kind": "scheduled",
@@ -131,3 +137,31 @@ def test_old_and_contaminated_reactions_ignored(tmp_path: Path) -> None:
     seed_event(engine, 2)
     seed_reaction(engine, 2, ret_bp=42.0, computed_at=NOW, contaminated=True)
     assert AnomalyJob(engine, started_at=START).run(NOW) == []
+
+
+def test_stara_udalost_nealertuje_pri_dopoctu_historie(tmp_path: Path) -> None:
+    """#744: backfill dopočítá reakce dva roky staré zprávy — TEĎ.
+
+    Watermark hlídá čas VÝPOČTU, takže sám o sobě takovou reakci propustí a
+    zvonek dostane alert o pohybu, který se stal předloni. Naživo (17. 8.) to
+    začalo chrlit desítky alertů za běh, jakmile se rozjel dopočet backfillu.
+    """
+    engine = make_db(tmp_path)
+    seed_history(engine, 40)  # p90 = 5 bp
+    seed_event(engine, 1, title="Stará zpráva", ts_event=NOW - dt.timedelta(days=400))
+    seed_reaction(engine, 1, ret_bp=-42.0, computed_at=NOW)  # spočítáno až teď
+    job = AnomalyJob(engine, started_at=START)
+
+    assert job.run(NOW) == []
+
+
+def test_deferred_reakce_pres_vikend_se_porad_hlasi(tmp_path: Path) -> None:
+    """Práh stáří nesmí zabít legitimní případ: zpráva v pátek večer, trhy
+    zavřené, reakce se změří až v pondělí ráno."""
+    engine = make_db(tmp_path)
+    seed_history(engine, 40)
+    seed_event(engine, 1, title="Páteční zpráva", ts_event=NOW - dt.timedelta(days=2, hours=12))
+    seed_reaction(engine, 1, ret_bp=-42.0, computed_at=NOW)
+    job = AnomalyJob(engine, started_at=START)
+
+    assert len(job.run(NOW)) == 1
