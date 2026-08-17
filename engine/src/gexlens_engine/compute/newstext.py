@@ -47,6 +47,13 @@ _HTML_ENTITY = re.compile(r"&(#\d+|#x[0-9a-f]+|[a-z]+);", re.I)
 #: přidal hlavně boilerplate a přeučoval (#740 fáze 1, #743).
 LEAD_CHARS = 400
 
+#: Kolik znaků článku se vůbec UKLÁDÁ (#744). Průměrný článek má ~3,5 kB a
+#: backfill za dva roky by tak zabral ~177 MB — nad rozpočtem, který na to
+#: máme. Model přitom čte jen prvních LEAD_CHARS, takže 1 500 drží
+#: čtyřnásobnou rezervu pro pozdější rozšíření a objem srazí na třetinu.
+#: Ořezává se konzistentně živý stream i backfill, ať korpus není nesourodý.
+BODY_MAX_CHARS = 1500
+
 
 def strip_html(raw: str) -> str:
     """HTML článku → čistý text (#743).
@@ -72,6 +79,15 @@ def strip_html(raw: str) -> str:
         text,
     )
     return _SPACES.sub(" ", text).strip()
+
+
+def clip_body(text: str, *, limit: int = BODY_MAX_CHARS) -> str:
+    """Ořez článku na ukládanou délku (#744) — na hranici věty, ne slova.
+
+    Sdílí logiku s `lead_paragraph`, jen s jiným limitem: obojí je „vezmi
+    smysluplný začátek textu", liší se jen tím, kolik ho je potřeba.
+    """
+    return lead_paragraph(text, limit=limit)
 
 
 def lead_paragraph(body: str | None, *, limit: int = LEAD_CHARS) -> str:

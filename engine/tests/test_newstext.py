@@ -79,3 +79,23 @@ def test_lead_kratky_text_projde_cely() -> None:
 
     assert lead_paragraph("Krátká zpráva.") == "Krátká zpráva."
     assert lead_paragraph(None) == ""
+
+
+def test_clip_body_orizne_dlouhy_clanek() -> None:
+    """#744: průměrný článek 3,5 kB × 75 tis. zpráv = 177 MB, na což není místo."""
+    from gexlens_engine.compute.newstext import BODY_MAX_CHARS, clip_body
+
+    long_article = "Věta číslo jedna. " * 500
+
+    clipped = clip_body(long_article)
+
+    assert len(clipped) <= BODY_MAX_CHARS
+    assert clipped.endswith(".")  # řez na hranici věty
+
+
+def test_clip_body_kratky_clanek_nechava_byt() -> None:
+    from gexlens_engine.compute.newstext import clip_body
+
+    assert clip_body("Krátká zpráva o dvou větách. A konec.") == (
+        "Krátká zpráva o dvou větách. A konec."
+    )
