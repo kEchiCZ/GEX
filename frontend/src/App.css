@@ -191,13 +191,34 @@ body {
   min-width: 0;
 }
 
+/* Hlavička ve dvou řádcích (#752). Do té doby to byl jeden `flex` BEZ `wrap`:
+   jak přibývaly chipy (gamma útes, relativní síla, settle watch, režim,
+   tendence, sentiment), vytlačily zvoneček i pokrytí mimo viditelnou plochu.
+   Samotné `flex-wrap` by je zalamovalo náhodně podle šířky okna — dva pevné
+   řádky drží pořadí, ve kterém identita a ovládání nikdy neuteče. */
 .instrument-header {
   display: flex;
-  align-items: center;
-  gap: 16px;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px 14px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  /* Zalomení až na třetí řádek je lepší než zvoneček za okrajem */
+  flex-wrap: wrap;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Kontextové chipy jsou hustší a drobnější než identita nad nimi — jinak by
+   druhý řádek opticky přebil cenu, kvůli které se člověk dívá. */
+.header-row-context {
+  gap: 10px;
+  row-gap: 6px;
 }
 
 .ticker {
