@@ -8,6 +8,17 @@ cokoli spadlo. Engine zůstane připojený — jen mu přestanou chodit ticky.
 from gexlens_engine.tasty.spot_fallback import SpotFallback
 
 
+def source_of(fallback: SpotFallback) -> str:
+    """Aktivní zdroj jako prostý `str`.
+
+    Bez toho si mypy po prvním `assert ... == "tasty"` zúží typ na
+    `Literal['tasty']` a další porovnání s `"ibkr"` označí za nemožné
+    (`comparison-overlap`) — přestože právě přepnutí mezi zdroji je to,
+    co se testuje.
+    """
+    return fallback.active_source
+
+
 def test_pri_zdravem_ibkr_se_publikuje_ibkr() -> None:
     fallback = SpotFallback()
 
@@ -61,12 +72,12 @@ def test_navrat_na_ibkr_az_po_zotavovacim_okne() -> None:
     fallback = SpotFallback(stale_after_s=30.0, recover_after_s=60.0)
     fallback.on_ibkr(6000.0, now=100.0)
     fallback.resolve(now=135.0, tasty_price=6002.5, tasty_fresh=True)
-    assert fallback.active_source == "tasty"
+    assert source_of(fallback) == "tasty"
 
     # IBKR se ozve, ale zotavovací okno ještě neuplynulo
     early = fallback.on_ibkr(6001.0, now=140.0)
     assert early.price is None
-    assert fallback.active_source == "tasty"
+    assert source_of(fallback) == "tasty"
 
     # Souvislé ticky; přepnout se má přesně na konci okna (140 + 60 = 200)
     switches = [fallback.on_ibkr(6001.0, now=float(ts)) for ts in range(145, 206, 5)]
@@ -75,7 +86,7 @@ def test_navrat_na_ibkr_az_po_zotavovacim_okne() -> None:
     assert len(switched) == 1  # hrana, ne opakované hlášení
     assert switched[0].source == "ibkr"
     assert switched[0].price == 6001.0
-    assert fallback.active_source == "ibkr"
+    assert source_of(fallback) == "ibkr"
 
 
 def test_dira_uprostred_zotavovani_okno_resetuje() -> None:
@@ -89,7 +100,7 @@ def test_dira_uprostred_zotavovani_okno_resetuje() -> None:
     late = fallback.on_ibkr(6001.0, now=210.0)  # jen 30 s od resetu
 
     assert late.price is None
-    assert fallback.active_source == "tasty"
+    assert source_of(fallback) == "tasty"
 
 
 def test_behem_fallbacku_se_ibkr_ticky_nepublikuji() -> None:
