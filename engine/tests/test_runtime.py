@@ -1,6 +1,7 @@
 """Smoke test runtime (issue #30): jeden cyklus nad mocky vyprodukuje kompletní den."""
 
 import datetime as dt
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -10,7 +11,13 @@ from sqlalchemy import create_engine
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockQuoteStreamer
-from gexlens_engine.ibkr.scheduler import PartialQuote, QuoteSnapshot, SubscriptionScheduler
+from gexlens_engine.ibkr.scheduler import (
+    FEED_TASTY,
+    CachedQuote,
+    PartialQuote,
+    QuoteSnapshot,
+    SubscriptionScheduler,
+)
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
@@ -714,3 +721,63 @@ async def test_expired_quote_stays_in_snapshot_but_leaves_computations(tmp_path:
     assert len(levels) == 2
     fresh_gex, stale_gex = levels.sort_values("ts_min").total_gex.tolist()
     assert stale_gex != pytest.approx(fresh_gex)
+
+
+async def test_fallback_retezu_prebira_kotace_a_zastavuje_cumdelta(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """#614 fáze 2b: při výpadku IBKR staví cyklus profil z tasty kotací.
+
+    Zároveň se hlídá druhá polovina zadání — CumΔ a net objem se za fallbacku
+    NEKRMÍ. Tasty denní objem v sémantice IBKR nedodává, takže dosadit nulu by
+    znamenalo skokový záporný přírůstek přes celý řetěz.
+    """
+    engine_runtime, _publisher, settings = runtime
+    specs = list(engine_runtime.contracts)
+    substitute = {
+        spec: CachedQuote(
+            snapshot=QuoteSnapshot(
+                bid=11.0,
+                ask=11.5,
+                last=None,
+                volume=None,
+                iv=0.2,
+                delta=0.4,
+                gamma=0.0042,
+                theta=-1.0,
+                vega=0.8,
+            ),
+            updated_at=time.monotonic(),
+            feed=FEED_TASTY,
+        )
+        for spec in specs
+    }
+    engine_runtime.chain_fallback = lambda _specs: substitute
+
+    await engine_runtime.run_cycle(TS, SPOT, [])
+
+    day = TS.date().isoformat()
+    snapshots = pd.read_parquet(settings.snapshots_dir / "ES" / "20260716" / f"{day}.parquet")
+    # Gamma z tasty se propsala do snímku, ne hodnota z mock IBKR streameru
+    assert set(snapshots["gamma"].unique()) == {0.0042}
+    # Objem ani poslední cena se nevymýšlejí — díra, kterou je vidět (#465)
+    assert snapshots["volume"].isna().all()
+    assert snapshots["last"].isna().all()
+    # A CumΔ zůstal netknutý: tracker žádný bar nedostal
+    assert engine_runtime.last_flow is not None
+    assert engine_runtime.last_flow.cum_delta == 0.0
+
+
+async def test_po_navratu_na_ibkr_cyklus_zase_cte_sweep(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+) -> None:
+    """Návrat nesmí vyžadovat restart — hook vrátí None a cyklus jede z IBKR."""
+    engine_runtime, _publisher, settings = runtime
+    engine_runtime.chain_fallback = lambda _specs: None
+
+    await engine_runtime.run_cycle(TS, SPOT, [])
+
+    day = TS.date().isoformat()
+    snapshots = pd.read_parquet(settings.snapshots_dir / "ES" / "20260716" / f"{day}.parquet")
+    # Mock streamer dodává objem; kdyby cyklus zůstal na fallbacku, byl by NULL
+    assert snapshots["volume"].notna().any()

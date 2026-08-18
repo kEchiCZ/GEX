@@ -160,6 +160,28 @@ test('hlavička ukazuje pokrytí Greeks s progress barem (#470)', () => {
   expect(screen.getByTestId('coverage-greeks').className).not.toContain('coverage-partial')
 })
 
+test('fallback na tastytrade je vidět v hlavičce, jinak chip nesvítí (#614)', () => {
+  makeApp()
+  const ws = FakeWebSocket.latest()
+  act(() => {
+    ws.open()
+    ws.push('status', { engine: 'online', chain_source: 'ibkr', spot_source: 'ibkr' })
+  })
+  // Za normálního provozu chip nemá co říct a jen by zabíral místo
+  expect(screen.queryByTestId('fallback-chip')).toBeNull()
+
+  act(() => {
+    ws.push('status', { engine: 'online', chain_source: 'tasty', spot_source: 'ibkr' })
+  })
+  // Tiché přepnutí zdroje zakazuje ADR-0025 pravidlo 5
+  expect(screen.getByTestId('fallback-chip').textContent).toContain('řetěz: tastytrade')
+
+  act(() => {
+    ws.push('status', { engine: 'online', chain_source: 'tasty', spot_source: 'tasty' })
+  })
+  expect(screen.getByTestId('fallback-chip').textContent).toContain('řetěz + cena: tastytrade')
+})
+
 test('demo den nemá měřitelnou osu, takže OHLC badge ani časová značka nesvítí (#470)', () => {
   makeApp()
   // Demo den (bez /replay dat) nemá ISO osu ani lastMinuteIso — pokrytí se nedá

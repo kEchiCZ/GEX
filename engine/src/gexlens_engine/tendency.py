@@ -71,8 +71,14 @@ class TendencyEngine:
         """
         call_flow = put_flow = 0.0
         seen = False
-        for spec, cached in runtime.scheduler.quotes().items():
+        # Aktivní zdroj řetězu, ne přímo sweep cache (#614 fáze 2b)
+        for spec, cached in runtime.current_quotes().items():
             snapshot = cached.snapshot
+            # Fallback z tasty objem nenese — přírůstek se za něj nepočítá
+            # a `seen` zůstane False, takže tendence minutu vynechá místo
+            # aby ohlásila nulový tok jako změřený
+            if snapshot.volume is None:
+                continue
             previous = self._prev_volumes.get(spec)
             self._prev_volumes[spec] = snapshot.volume
             if previous is None:

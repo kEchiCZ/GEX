@@ -40,6 +40,7 @@ from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import (
     GREEKS_SOURCE_COMPUTED,
+    CachedQuote,
     SubscriptionScheduler,
     SweepMetrics,
 )
@@ -133,6 +134,13 @@ class EngineRuntime:
     # Fallback OI z tasty Summary (#664): lookup nastupuje JEN kde denní archiv
     # kontrakt nepokrývá (typicky 0DTE do publikace CME); None = fill neběží
     oi_fallback: Callable[[OptionContractSpec], float | None] | None = None
+    # Fallback celého řetězu z tasty (#614 fáze 2b): vrací hotovou cache kotací,
+    # když IBKR mlčí, jinak None. Rozhodnutí padá jednou za minutu v orchestrátoru
+    # (ADR-0025 pravidlo 3 — přepnutí jen na hranici snímku), runtime se jen ptá.
+    chain_fallback: (
+        Callable[[Sequence[OptionContractSpec]], dict[OptionContractSpec, CachedQuote] | None]
+        | None
+    ) = None
     # Poslední spočtené hodnoty cyklu — čte je SetupEngine (ADR-0004)
     last_levels: LevelsRow | None = field(default=None, init=False)
     last_flow: FlowRowLike | None = field(default=None, init=False)
@@ -242,6 +250,20 @@ class EngineRuntime:
             len(restored),
         )
 
+    def current_quotes(self) -> dict[OptionContractSpec, CachedQuote]:
+        """Kotace řetězu z aktivního zdroje — IBKR sweep, nebo fallback z tasty (#614).
+
+        Jediné místo, kde se zdroj vybírá. Setupy i tendence čtou přes tuhle
+        metodu ze stejného důvodu: kdyby sahaly rovnou na `scheduler.quotes()`,
+        počítaly by za výpadku IBKR ze zmrzlé cache, zatímco graf vedle nich
+        by ukazoval čerstvá tasty data — dva různé obrazy téže minuty.
+        """
+        if self.chain_fallback is not None:
+            fallback = self.chain_fallback(self.contracts)
+            if fallback is not None:
+                return fallback
+        return self.scheduler.quotes()
+
     async def run_cycle(
         self,
         ts_min: dt.datetime,
@@ -256,7 +278,7 @@ class EngineRuntime:
         """
         day = ts_min.date()
         metrics = await self.scheduler.sweep(self.contracts, spot)
-        quotes = self.scheduler.quotes()
+        quotes = self.current_quotes()
         tracker = self.cum_delta
         assert tracker is not None  # nastaven v __post_init__
         # Hranice Globex seance (#638): reset kumulativů PŘED zpracováním
@@ -362,8 +384,12 @@ class EngineRuntime:
                     oi=oi,
                 )
             )
-            # CumΔ bar větev (hot zóna má vlastní tick větev přes on_trade)
-            if not self.secondary:
+            # CumΔ bar větev (hot zóna má vlastní tick větev přes on_trade).
+            # Bez kumulativního objemu se tracker NEKRMÍ (#614 fáze 2b): tasty
+            # ho v sémantice IBKR nedodá a dosadit nulu by znamenalo skokový
+            # záporný přírůstek přes celý řetěz. Řady CumΔ a net objem během
+            # fallbacku stojí — díra, kterou je vidět, místo vymyšleného čísla.
+            if not self.secondary and snapshot.volume is not None and snapshot.last is not None:
                 tracker.add_bar(
                     spec,
                     cumulative_volume=snapshot.volume,
