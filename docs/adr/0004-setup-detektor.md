@@ -25,6 +25,12 @@ Všechny prahy jsou konfigurovatelné (env `GEXLENS_SETUP_*`); uvedené hodnoty
 jsou defaulty. Vzdálenosti v bodech podkladu. Společné podmínky: OI dostupné
 (ne volume fallback), spot známý, úrovně z posledního minutového cyklu.
 
+> **Čísla šablon nejsou v tomhle dokumentu závazná.** Jediný závazný zdroj je
+> `TEMPLATE_REGISTRY` v `engine/src/gexlens_engine/compute/setups.py` (#735),
+> který nese i rezervace pro šablony, které teprve vzniknou. ADR popisuje
+> mechaniku, ne přidělování čísel — kopie seznamu zastarají a právě tak vznikla
+> kolize dvou T7.
+
 ### T1 — Odraz od zdi (wall bounce)
 - **Kontext:** cena v zóně zdi (±3 b od call/put wall) a na „správné" straně
   flipu (put wall bounce: cena ≥ flip = kladná gamma tlumí; jinak nižší confidence).
