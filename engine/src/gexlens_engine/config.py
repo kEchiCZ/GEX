@@ -116,9 +116,18 @@ class Settings(BaseSettings):
     strike_range_max_points: float = Field(default=800.0, gt=0)
     batch_size: int = Field(default=80, ge=1)
 
-    # tastytrade shadow mód (#613, M7 fáze 1): default VYPNUTO — zapíná se
-    # vědomě na sběr ≥5 čistých seancí; tajemství výhradně z env (ADR-0025)
-    tasty_shadow: bool = False
+    # tastytrade větev (#613, M7): OAuth session, DXLink stream, chain mapa,
+    # křížová kontrola (#517 A), oba fallbacky (#614) a doplnění OI (#664).
+    # TRVALÁ součást provozu, proto default `true` — bez tajemství se stejně
+    # nespustí, takže nic nezapíná omylem.
+    tasty_enabled: bool = True
+    # Zápis porovnávacích řádků do `feed_comparison` (#613). DOČASNÉ: vypne se
+    # po vyhodnocení M7 fáze 2. Tally pro detektor a fallbacky běží dál (#763).
+    tasty_comparison_write: bool = True
+    # Zastaralý společný vypínač (#763). Hlídal měření i fallbacky naráz, takže
+    # „vypínám doběhnuté měření" tiše bralo odolnost proti výpadku IBKR.
+    # `None` = nenastaveno; když nastaven, řídí `tasty_enabled` (viz validátor).
+    tasty_shadow: bool | None = None
     tasty_client_secret: str = ""
     tasty_refresh_token: str = ""
     # Doplnění chybějícího OI z tasty Summary (#664, předsunutý kus #614 dle
@@ -269,6 +278,19 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"oi_publication_tz musí být platná IANA zóna (zadáno: {self.oi_publication_tz!r})"
             ) from exc
+        if self.tasty_shadow is not None:
+            # Zpětná kompatibilita (#763): starý flag dál platí, ale řídí jen
+            # trvalou větev. Zápis porovnání má nově vlastní vypínač, jinak by
+            # se s vypnutým měřením ztratily i fallbacky.
+            self.tasty_enabled = self.tasty_shadow
+            logging.getLogger(__name__).warning(
+                "GEXLENS_TASTY_SHADOW je zastaralé (#763) — hlídalo i fallbacky "
+                "z #614, takže jeho vypnutím se tiše ztrácela odolnost proti "
+                "výpadku IBKR. Použij GEXLENS_TASTY_ENABLED (trvalá větev) "
+                "a GEXLENS_TASTY_COMPARISON_WRITE (dočasné měření). "
+                "Zatím se z něj přebírá tasty_enabled=%s",
+                self.tasty_enabled,
+            )
         if self.oi_publication_hour_utc is not None:
             logging.getLogger(__name__).warning(
                 "GEXLENS_OI_PUBLICATION_HOUR_UTC je zastaralé (#511) — použij "

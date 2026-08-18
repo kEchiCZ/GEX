@@ -6,6 +6,7 @@ import logging
 
 import pytest
 
+from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.tasty.mock import feed_greeks, feed_quote, feed_summary, feed_trade
 from gexlens_engine.tasty.provider import TastyChainCache, _number
@@ -127,7 +128,7 @@ def test_compare_minute_meri_data_ne_hodiny() -> None:
     import time
 
     from gexlens_engine.ibkr.scheduler import CachedQuote, QuoteSnapshot
-    from gexlens_engine.tasty.shadow import compare_minute
+    from gexlens_engine.tasty.monitor import compare_minute
 
     now_mono = time.monotonic()
     now_utc = TS
@@ -195,7 +196,7 @@ def test_compare_minute_porovnava_oi_z_archivu_a_summary() -> None:
     import time
 
     from gexlens_engine.ibkr.scheduler import CachedQuote, QuoteSnapshot
-    from gexlens_engine.tasty.shadow import compare_minute
+    from gexlens_engine.tasty.monitor import compare_minute
 
     now_mono = time.monotonic()
     spec = OptionContractSpec(
@@ -309,8 +310,48 @@ def test_field_counts_meri_pokryti_eventu() -> None:
     assert cache.field_counts() == {"quotes": 1, "greeks": 1, "summary": 1, "trades": 2}
 
 
-def test_shadow_flag_default_vypnuty() -> None:
-    """Regresní pojistka: bez flagu se shadow nespouští (chování beze změny)."""
-    from gexlens_engine.config import Settings
+def settings_bez_env_souboru() -> Settings:
+    """Settings jen z proměnných prostředí, bez `.env`.
 
-    assert Settings().tasty_shadow is False
+    Bez toho by testy flagů četly vývojářský `.env` a na každém stroji vyšly
+    jinak — přesně proto dosud padal `test_shadow_flag_default_vypnuty` lokálně
+    a v CI prošel. `_env_file` zná pydantic-settings až za běhu, mypy o něm neví.
+    """
+    return Settings(_env_file=None)  # type: ignore[call-arg]
+
+
+def test_tasty_vetev_je_defaultne_zapnuta_ale_bez_tajemstvi_nenabehne() -> None:
+    """#763: trvalá větev má default ZAPNUTO — nese fallbacky z #614.
+
+    Bezpečné to je proto, že orchestrátor navíc vyžaduje tajemství; bez nich
+    se nespustí nic. Default `false` by naopak znamenal, že nová instalace
+    tiše běží bez odolnosti proti výpadku IBKR.
+    """
+    settings = settings_bez_env_souboru()
+
+    assert settings.tasty_enabled is True
+    assert settings.tasty_comparison_write is True
+    assert settings.tasty_shadow is None  # zastaralý flag zůstává nenastavený
+    assert settings.tasty_client_secret == ""  # bez něj větev nenaběhne
+
+
+def test_zastaraly_shadow_flag_dal_ridi_trvalou_vetev(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Zpětná kompatibilita (#763): stávající `.env` musí fungovat beze změny."""
+    monkeypatch.setenv("GEXLENS_TASTY_SHADOW", "0")
+    assert settings_bez_env_souboru().tasty_enabled is False
+
+    monkeypatch.setenv("GEXLENS_TASTY_SHADOW", "1")
+    assert settings_bez_env_souboru().tasty_enabled is True
+
+
+def test_vypnuty_zapis_porovnani_nevypina_vetev(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Jádro #763: konec měření nesmí vzít fallbacky.
+
+    Přesně tenhle stav nastane, až doběhne vyhodnocení M7 fáze 2 — a do #763
+    se dal nastavit jen tak, že se vyplo obojí.
+    """
+    monkeypatch.setenv("GEXLENS_TASTY_COMPARISON_WRITE", "0")
+    settings = settings_bez_env_souboru()
+
+    assert settings.tasty_comparison_write is False
+    assert settings.tasty_enabled is True
