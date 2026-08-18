@@ -162,6 +162,12 @@ class Settings(BaseSettings):
     # Max stáří tasty hodnoty, aby kontrakt vstoupil do fallbackového řetězu
     tasty_chain_max_age_s: float = Field(default=120.0, gt=0)
 
+    # Jak dlouho se při startu čeká na IBKR, než engine rozjede zbytek i bez něj
+    # (#756). Nejde o timeout spojení — supervisor se pokouší dál; jen se za
+    # čekáním nesmí zaseknout tastytrade větev a spot fallback, které IBKR
+    # nepotřebují. Po startu Windows nebývá TWS spuštěná vůbec.
+    startup_connect_wait_s: float = Field(default=60.0, ge=0)
+
     crosscheck_enabled: bool = True
     crosscheck_share_threshold: float = Field(default=0.70, gt=0, le=1)
     crosscheck_minutes: int = Field(default=3, ge=1)

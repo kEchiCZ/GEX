@@ -737,6 +737,23 @@ async def create_pipeline(
     return pipeline
 
 
+async def wait_for_connection(manager: ConnectionManager, timeout_s: float) -> bool:
+    """Počká na IBKR nejvýš `timeout_s`; vrací, jestli se povedlo (#756).
+
+    Návrat `False` NENÍ chyba — supervisor `ConnectionManager` se pokouší
+    připojovat dál a hlavní smyčka pipelines založí, jakmile spojení bude.
+    Smysl časového stropu je jen ten, aby se za čekáním nezasekly části
+    enginu, které na IBKR vůbec nestojí.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while manager.state is not ConnectionState.CONNECTED:
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(0.5)
+    return True
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     try:
@@ -779,8 +796,19 @@ async def main() -> None:
         ib, manager, settings, publisher, lambda: subscription_alerts["enabled"]
     )
     await manager.start()
-    while manager.state is not ConnectionState.CONNECTED:
-        await asyncio.sleep(0.5)
+    # Čekání na IBKR je OHRANIČENÉ (#756). Dokud tu byla nekonečná smyčka,
+    # zůstal za ní celý zbytek main() — schéma DB, pipelines, tastytrade větev
+    # i spot fallback z #614. Bez běžícího TWS tak neběželo NIC: engine se
+    # dvacet minut po startu Windows dokola pokoušel připojit a v logu nebyl
+    # jediný řádek `tasty`. Fallback z #614 přitom má chránit právě proti
+    # mlčícímu IBKR — jen doteď uměl jen ten případ, kdy spojení nejdřív bylo.
+    if not await wait_for_connection(manager, settings.startup_connect_wait_s):
+        logger.warning(
+            "IBKR se za %.0f s nepřipojil — engine startuje bez něj. Opční řetěz "
+            "a výpočty naskočí samy, jakmile spojení bude; do té doby jede jen "
+            "tastytrade větev (cena podkladu). Typicky: nespuštěná TWS po startu stroje.",
+            settings.startup_connect_wait_s,
+        )
 
     writer = SnapshotWriter(settings)
     db = create_engine(settings.database_url)
@@ -1031,6 +1059,17 @@ async def main() -> None:
                 "tasty OI fill ZAPNUT — díry denního archivu doplní Summary (#664, kus #614)"
             )
 
+        def shadow_target_symbols() -> list[str]:
+            """Instrumenty, pro které se drží tasty subskripce.
+
+            Nejen běžící pipelines (#756): bez připojeného IBKR neběží žádná,
+            takže by se řetěz ani front future nikdy neodebraly a fallback by
+            při startu bez TWS neměl z čeho stavět. Konfigurovaný seznam je
+            dostupný vždy; symboly přidané do watchlistu se přidají, jakmile
+            jejich pipeline naskočí.
+            """
+            return sorted({*settings.symbol_list, *pipelines})
+
         async def shadow_symbols_loop() -> None:
             """Denní obnova chain mapy + průběžné dorovnání subskripce."""
             while not shadow_stop.is_set():
@@ -1039,7 +1078,7 @@ async def main() -> None:
                     # Jedna mapa per produkt; ES i NQ jsou v témže chain endpointu
                     # svých produktů — mapy se drží per symbol pipeline
                     symbols: set[str] = set()
-                    for symbol in pipelines:
+                    for symbol in shadow_target_symbols():
                         chain = await symbol_map.chain(symbol, today)
                         shadow_chain[symbol] = chain
                         symbols |= shadow_symbols(list(shadow_contracts().keys()), chain)
@@ -1056,10 +1095,43 @@ async def main() -> None:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(shadow_stop.wait(), timeout=60.0)
 
+        async def orphan_spot_loop() -> None:
+            """Cena z tasty pro instrumenty BEZ běžící pipeline (#756).
+
+            Spot fallback z #614 žije uvnitř pipeline, takže dokud IBKR
+            nepřipojí, nemá kdo cenu publikovat — a uživatel vidí prázdný graf,
+            i když tasty data teče. Tahle smyčka díru zaplní a jakmile pipeline
+            naskočí, sama pro daný symbol umlkne: dva zdroje na jeden kanál by
+            v grafu vypadaly jako skákající cena.
+            """
+            while not shadow_stop.is_set():
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(shadow_stop.wait(), timeout=SPOT_FALLBACK_POLL_S)
+                if shadow_stop.is_set():
+                    return
+                try:
+                    for symbol in shadow_target_symbols():
+                        if symbol in pipelines:
+                            continue  # publikuje pipeline, sem nepatří
+                        price, fresh = _tasty_spot(symbol)
+                        if price is None or not fresh:
+                            continue
+                        await publisher.publish(
+                            f"spot.{symbol}",
+                            {
+                                "ts": dt.datetime.now(dt.UTC).isoformat(),
+                                "price": price,
+                                "source": "tasty",
+                            },
+                        )
+                except Exception:
+                    logger.exception("Spot bez pipeline selhal — příští cyklus jede dál")
+
         shadow_tasks = [
             asyncio.create_task(tasty_stream.run(shadow_stop)),
             asyncio.create_task(comparator.run(shadow_stop)),
             asyncio.create_task(shadow_symbols_loop()),
+            asyncio.create_task(orphan_spot_loop()),
         ]
         # Reference na tasks se drží (RUF006) — GC by je jinak uklidil před doběhem
         logger.info(
@@ -1147,6 +1219,13 @@ async def main() -> None:
             logger.info("Zastavuji pipeline %s (odebráno z watchlistu)", symbol)
             pipelines.pop(symbol).stop()
         for symbol in plan.start:
+            # Bez spojení nemá zakládání smysl (#756): discovery i subskripce
+            # jsou IBKR volání, takže by cyklus co minutu spálil pokus, spadl
+            # na ConnectionError a zaplnil log. Existující pipeline se NEruší —
+            # `plan.stop` se řídí watchlistem, ne stavem spojení, aby krátký
+            # výpadek nezboural běžící instrumenty.
+            if manager.state is not ConnectionState.CONNECTED:
+                break
             try:
                 pipelines[symbol] = await create_pipeline(
                     ib,
@@ -1215,10 +1294,15 @@ async def main() -> None:
         results = await gather_metrics(run_list, now)
         # Účty čte ib_async z připojení; po přepojení se mohou změnit (#446)
         account = classify_accounts(ib.managedAccounts())
-        if results and full_run:
+        # Status se pushuje i BEZ pipelines (#756). Dřív ho podmiňoval neprázdný
+        # `results`, takže při nepřipojeném IBKR neodešel vůbec a UI hlásilo
+        # mrtvý engine — přestože engine běžel a tastytrade větev dodávala cenu.
+        # „Engine běží" a „IBKR je připojen" jsou dva různé stavy a status je
+        # nesmí splácnout dohromady.
+        if full_run:
             await publisher.status(
                 engine="online",
-                connection="connected",
+                connection=manager.state.value,
                 port=settings.ibkr_port,
                 last_tick_ts=now.isoformat(),
                 # Kolikrát TWS za běh odmítla market data (#417) — s platnými
