@@ -1,6 +1,6 @@
 # GEXLens — Manuál pro správce a vývojáře
 
-*Verze 1.0 · červenec 2026 · interní dokumentace — není dostupná v aplikaci*
+*Verze 1.1 · srpen 2026 · interní dokumentace — není dostupná v aplikaci*
 
 Technický popis architektury, provozu, konfigurace a vývoje aplikace GEXLens. Uživatelská příručka: `UZIVATELSKY-MANUAL.md`. Zdroj pravdy funkčních požadavků: [`docs/SPEC.md`](../SPEC.md) (v2.0); architektonická rozhodnutí v [`docs/adr/`](../adr/).
 
@@ -162,6 +162,15 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_TASTY_CLIENT_SECRET` / `_REFRESH_TOKEN` | — | OAuth2 grant **výhradně scope `read`** (ADR-0025); dev grant patří do `.env.dev` pod standardními názvy. Obsah `.env` se nikdy nevypisuje do konzole |
 | `GEXLENS_CROSSCHECK_ENABLED` | true | Křížová kontrola IBKR × tasty (#517 fáze A) — pasivní, bez requestů a linek navíc. Bez shadow se tiše nezapne |
 | `GEXLENS_CROSSCHECK_SHARE_THRESHOLD` / `_MINUTES` / `_COOLDOWN_MINUTES` | 0.70 / 3 / 15 | Prahy **měřené** na shadow historii, ne odhadnuté — viz níže. `_MINUTES` pod 3 = falešný poplach každou třetí minutu |
+| `GEXLENS_TASTY_SPOT_FALLBACK` | true | Cena podkladu z tastytrade, když IBKR přestane posílat ticky (#614 fáze 2a) |
+| `GEXLENS_TASTY_SPOT_STALE_AFTER_S` / `_RECOVER_AFTER_S` / `_MAX_AGE_S` | 30 / 60 / 30 | Hystereze spotu: kdy převzít, kdy vrátit, max stáří tasty kotace. Návrat je delší než převzetí schválně — kmitání zdroje stojí víc než o půl minuty pozdější návrat |
+| `GEXLENS_TASTY_CHAIN_FALLBACK` | true | Fallback **celého opčního řetězu** (#614 fáze 2b). Spouští ho verdikt křížové kontroly, takže dědí její měřené prahy |
+| `GEXLENS_TASTY_CHAIN_RECOVER_MINUTES` | 5 | Kolik čistých minut v řadě vrátí řetěz na IBKR. Delší než zapínací série (`_CROSSCHECK_MINUTES`): přepnutí překreslí celý profil |
+| `GEXLENS_TASTY_CHAIN_MAX_AGE_S` | 120 | Max stáří tasty hodnoty, aby kontrakt vstoupil do fallbackového řetězu |
+| `GEXLENS_STARTUP_CONNECT_WAIT_S` | 60 | Jak dlouho se při startu čeká na IBKR, než engine rozjede zbytek i bez něj (#756). **Není to timeout spojení** — supervisor se pokouší dál. 0 = nečekat |
+| `GEXLENS_TASTY_OI_FILL` | true | Díry denního OI archivu doplní tasty `Summary` (#664) — typicky 0DTE ráno, než CME publikuje |
+| `GEXLENS_NEWS_LLM_ENABLED` | false | LLM klasifikace zpráv (Gemini). **Zakonzervováno** (#740 fáze 0): v `news_weights` neprošla Wilson gate ani jednou (0/20 řádků, hit rate 0,484 proti 0,516 u pravidel) |
+| `GEXLENS_NEWS_ALPACA_KEY_ID` / `_SECRET` | — | Alpaca News API — živý stream i historický backfill (#743, #744). Stačí paper účet a **Trading API**, ne Broker API |
 
 **Od #696 jde do kontejnerů celý `.env`** (`env_file`), ne ruční výčet — každý klíč z `.env.example` po `docker compose up -d <služba>` skutečně platí. `environment:` v compose nese jen odvozené hodnoty (DATABASE_URL, adresy služeb, /app/data) a ty mají přednost. **Dev stack navíc čte volitelný `.env.dev`** (přepisy jen pro dev: vlastní tasty grant, symboly…; viz `.env.dev.example`). Pozn.: změna PG hesla v `.env.dev` vyžaduje reseed dev volume.
 
@@ -232,7 +241,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8000/docs` (OpenAPI).
 
 | Endpoint | Popis |
 |---|---|
-| `GET /health`, `GET /status` | Liveness; agregovaný stav pipeline (`lines_utilization` je od #630 měřená špička) |
+| `GET /health`, `GET /status` | Liveness; agregovaný stav pipeline (`lines_utilization` je od #630 měřená špička). Pole `chain_source` / `spot_source` nesou aktivní zdroj dat (#614), `feed_crosscheck*` verdikt křížové kontroly (#517 A). **Chybějící klíč znamená „neměří se"**, ne „je to v pořádku" — od #756 chodí status i bez jediné pipeline a `connection` nese skutečný stav spojení |
 | `GET /gexforward/{symbol}` | Forward GEX bloky per budoucí den (#519) |
 | `GET /bars/{symbol}?date=` | Lehké 1min OHLCV bary seance (#674/#678) — bez /replay balíku |
 | `GET /oidelta/{symbol}/{expiry}` | ΔOI posledních dvou archivovaných dnů + top movers (#674) |
@@ -342,21 +351,27 @@ Přístup výhradně **OAuth2 scope `read`** — nikdy `/sessions`, nikdy `trade
 oba feedy do `feed_comparison`, nic nepublikuje; vyhodnocení
 `scripts/feed_comparison_report.py`.
 
-**Konfigurace je jen přes `.env`, v Settings tastytrade není** — a záměrně:
-dokud větev jen měří, není co uživatelsky nastavovat. Sekce v UI přibude s
-fází 2 (#614), kdy se tasty stane fallbackem a validátorem.
+**Konfigurace je jen přes `.env`, v Settings tastytrade není.** Od fáze 2
+(#614) se ale aktivní fallback **ukazuje v hlavičce** jantarovým chipem —
+tiché přepnutí zdroje zakazuje ADR-0025 pravidlo 5.
 
-**Pozor na klíče, které engine nečte.** `Settings` v `config.py` zná pouze
-`GEXLENS_TASTY_SHADOW`, `_CLIENT_SECRET` a `_REFRESH_TOKEN`; model má
-`extra="ignore"`, takže cokoli dalšího se **tiše zahodí**.
-`GEXLENS_TASTY_CLIENT_ID` z `.env.example` nepoužívá nikdo (refresh flow
-posílá jen `refresh_token` + `client_secret`) a `GEXLENS_DEV_TASTY_*` čte
-napřímo z prostředí jen sonda `scripts/tasty_probe.py`. Když tedy nastavení
-„nezabírá", ověř nejdřív, že ten klíč engine vůbec zná.
+**Pozor na klíče, které engine nečte.** Model `Settings` má `extra="ignore"`,
+takže neznámý klíč se **tiše zahodí**. `GEXLENS_TASTY_CLIENT_ID`
+z `.env.example` nepoužívá nikdo (refresh flow posílá jen `refresh_token`
++ `client_secret`) a `GEXLENS_DEV_TASTY_*` čte napřímo z prostředí jen sonda
+`scripts/tasty_probe.py`. Když nastavení „nezabírá", ověř nejdřív, že ten klíč
+engine vůbec zná — seznam je v kapitole 4.
+
+⚠️ **`GEXLENS_TASTY_SHADOW` dnes NENÍ jen vypínač měření.** Hlídá celý blok,
+pod kterým visí i křížová kontrola (#517 A), oba fallbacky (#614 2a/2b), OI
+fill (#664) i publikace ceny bez pipeline (#756). **Vypnutím si tiše vypneš
+odolnost proti výpadku IBKR**, aniž by to cokoli oznámilo — nedělej to, dokud
+nedoběhne #763 (rozdělení flagu na trvalou a měřicí část).
 
 Provozní stav tasty větve (reconnecty DXLink, handshake, počet sledovaných
-symbolů, zapsané řádky) dnes končí **jen v logu kontejneru** a v tabulce
-`feed_comparison` — v UI pro něj zatím není obrazovka.
+symbolů, zapsané řádky) končí **jen v logu kontejneru** a v tabulce
+`feed_comparison`; v `/status` je z něj `chain_source` a `spot_source`.
+Samostatná obrazovka je zadaná v #706.
 
 ### Křížová kontrola feedů (#517 fáze A)
 
@@ -407,6 +422,58 @@ Stav je v **Settings → Stav enginu** (řádek *Křížová kontrola feedů*) a
 `/status` jako `feed_crosscheck`. Když shadow neběží, pole ve statusu **chybí**
 — UI to ukáže jako „neměří se", což je jiný stav než `ok`.
 
+### Fallback na tastytrade (#614 fáze 2a a 2b)
+
+Když IBKR přestane posílat data, přebírá je tastytrade. Typická příčina není
+porucha, ale **souběh s mobilem**: market data jsou per uživatel, takže
+přihlášení do IBKR aplikace v telefonu přetáhne feed k sobě (error 10197) a
+engine zůstane připojený — jen mu přestanou chodit ticky.
+
+| Co | Kdy nastoupí tasty | Kdy se vrátí IBKR |
+| --- | --- | --- |
+| **Spot podkladu** (2a) | 30 s bez ticku | 60 s souvislých dat |
+| **Opční řetěz** — kotace, greeks, OI (2b) | verdikt `ibkr_suspect`, tedy 3 min | 5 čistých minut v řadě |
+
+Řetěz se spouští **verdiktem křížové kontroly**, ne vlastním prahem — dědí tak
+kalibraci měřenou na 3 016 minutách místo nového odhadu. Návrat vyžaduje
+`state == "ok" AND streak == 0`: samotné `ok` nestačí, protože detektor ho
+vrací i pro minutu nad prahem, která zatím nenaplnila sérii do alertu. Stavy
+`quiet` a `insufficient` sérii jen nulují — tichý trh není důkaz uzdravení.
+
+**Co fallback vědomě NEdodá: kumulativní denní objem.** Tasty ho ve stejné
+sémantice nemá, a dosadit nulu by znamenalo skokový záporný přírůstek přes celý
+řetěz. Po dobu fallbacku řetězu proto **stojí CumΔ a net objem** a ve snímcích
+jsou `NULL` — díra, kterou je vidět, místo čísla, které lže. Heatmapa, GEX
+profil, zdi i flip běží dál.
+
+Přepnutí se hlásí alertem a jantarovým chipem v hlavičce; `/status` nese
+`chain_source` a `spot_source` (`ibkr` | `tasty`). `spot_source` se agreguje
+pesimisticky — stačí jeden instrument na fallbacku a status hlásí `tasty`,
+protože výpadek market data je vlastnost účtu.
+
+⚠️ Zbývá slepé místo: **mrtvá tasty větev dnes selže tiše** (#764). Stav
+`tasty_suspect` detektor umí, ale alert je vypnutý natvrdo kvůli 41 planým
+epizodám v noci. Když tedy tasty umře za běhu, pozná se to až při výpadku IBKR.
+
+### Start bez běžícího TWS (#756)
+
+Engine na IBKR čeká **nejvýš `GEXLENS_STARTUP_CONNECT_WAIT_S`** (default 60 s)
+a pak rozjede zbytek i bez něj. Do #756 tu bylo nekonečné čekání, za kterým
+zůstalo úplně všechno — schéma DB, pipelines i tastytrade větev — takže po
+startu Windows bez spuštěné TWS neběželo nic.
+
+Co platí po vypršení stropu:
+
+- pipeline se **nezakládá** (discovery i subskripce jsou IBKR volání), ale
+  existující se **neruší** — `plan.stop` se řídí watchlistem, ne spojením,
+- tasty se odebírá i pro instrumenty **bez** pipeline, jinak by fallback neměl
+  z čeho stavět,
+- cenu publikuje samostatná smyčka, která pro symbol s běžící pipeline umlkne,
+- `/status` chodí i bez pipelines a `connection` nese **skutečný** stav —
+  „engine běží" a „IBKR je připojen" jsou dva různé stavy.
+
+Pipeline se založí sama, jakmile se spojení objeví. Restart enginu není potřeba.
+
 ---
 
 ## 12. Diagnostika a údržba
@@ -421,6 +488,11 @@ Stav je v **Settings → Stav enginu** (řádek *Křížová kontrola feedů*) a
 | Reset prostředí | `docker compose down`, smaž `./data` (přijdeš o 14denní okno, ne o OI archiv ve volume `pgdata`), `docker compose up -d --build`. |
 | Málo dat po restartu | Writer navazuje na rozepsaný den — mezera zůstane jen za dobu výpadku. |
 | Změna portu TWS | Settings v aplikaci, nebo `.env` + `docker compose up -d engine`. |
+| Graf zamrzl, engine hlásí connected | Souběh s mobilem (error 10197) — market data jsou per uživatel. Od #614 přebírá data tastytrade: do 30 s cena, do 3 min celý řetěz; v hlavičce svítí jantarový chip. Zamrzne-li i tak, ověř tasty větev: `docker compose logs engine | grep -i tasty`. |
+| CumΔ stojí, zbytek jede | Očekávané chování při fallbacku řetězu (#614) — tasty denní objem v sémantice IBKR nedodává, tak se nevymýšlí. Skončí návratem na IBKR. |
+| V logu není ani řádek `tasty` | Chybí grant v `.env` (`GEXLENS_TASTY_CLIENT_SECRET`, `_REFRESH_TOKEN`) nebo je vypnutý `GEXLENS_TASTY_SHADOW` — ten dnes hlídá i fallbacky, viz kap. 11. |
+| `Error 200, reqId 5/6` po startu | Známé (#734): `BRFUPDN` a `DJ` nemají celofeedovou pásku. Není to porucha, zprávy tečou z `BRFG` a `DJNL`. |
+| Backfill zpráv | `python scripts/alpaca_news_backfill.py --dry-run` (změří objem), pak `--from 2024-07-28` — historie headlines z Alpaca s filtrem relevance (indexové ETF + mega caps; bez něj je ~85 % zpráv small caps bez vazby na index). |
 
 ## 13. Zprovoznění od nuly — IBKR účet, TWS/Gateway
 

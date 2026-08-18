@@ -1,8 +1,8 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.8 · srpen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.9 · srpen 2026 · pro aplikaci GEXLens v0.1*
 
-GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Jediným zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); žádná data neodcházejí mimo tvůj počítač.
+GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
 ---
 
@@ -103,10 +103,12 @@ Obrazovka se skládá z (shora dolů, zleva doprava):
 | Prvek | Popis |
 |---|---|
 | **Sidebar (vlevo)** | Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / Briefing / Deník / News / Stats / Settings), odkaz **Manuál**, přepínač tématu Dark/Light, **editovatelný watchlist** (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový; při chybě se pod formulářem ukáže hláška a seznam se sám srovná se serverem), tlačítko **Legenda** (modál s ukázkami všech prvků grafu a čtením „roste/klesá"), verze. Tlačítkem « se sbalí. |
-| **Hlavička** | Ticker a název instrumentu, **poslední cena + denní změna v %**, **selektor expirace** s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h" — velké expirace nesou velké OI. V selektoru najdeš i **následující expiraci** (sbírá se souběžně — čtení positioningu příští seance). Dále **GEX režim badge** (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem), **chip Tendence** (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno"), **chip stavu sentimentu** RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna). Indikátor ● Live / ○ Offline, zvonek notifikací. |
+| **Hlavička — horní řádek** | **Kdo a za kolik**: ticker a název instrumentu, **poslední cena + denní změna v %**, **selektor expirace** s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h" — velké expirace nesou velké OI. V selektoru najdeš i **následující expiraci** (sbírá se souběžně — čtení positioningu příští seance). |
+| **Hlavička — spodní řádek** | **V jakém je to stavu**: **GEX režim badge** (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem), **chip Tendence** (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno"), **chip stavu sentimentu** RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna), **settle watch**, **chip gamma útesu** a vpravo **ukazatele pokrytí dat**, indikátor ● Live / ○ Offline a zvonek notifikací. |
 | **Řádek timeframe** | **Intraday/Daily** a rozlišení **1m, 2m, 3m, 5m, 10m, 15m, 30m, 45m, 1h, 2h, 3h, 4h, 1d**. Intraday agreguje minutová data do zvolených košů (svíčky OHLC, objemy se sčítají); Daily zobrazí sloupec za každý uložený den (roste s historií, max 14 dní). |
 | **Řádek přepínačů** | Dropdown **Dyn plocha** (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18). Checkboxy vrstev: **Zdi** (call/put wall linie), **2. zeď** (druhá nejsilnější koncentrace strany, tečkovaně), **GEX Levels** (flip/centroid/Max Pain), **GEX žebřík** (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), **FA levels** (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI), **Sessions** (automatické markery světových seancí), **Vol / Opt Vol / Delta / Δ Flow C/P** (spodní panely), **Vol + OI Δ**, **Projekce**, **News** (markery zpráv + panel Sentiment) s dropdownem **Vše/Významné** (filtr markerů na importance ≥ 2), dropdown **Signály** (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá. |
-| **Hlavička (novinky v1.5)** | **Settle watch** — segment „settle 22:00 · nad/pod X ±d b": klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?" na jeden pohled. **Chip „odpadá X % gammy"** — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. |
+| **Chipy stavu trhu** | **Settle watch** — segment „settle 22:00 · nad/pod X ±d b": klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?" na jeden pohled. **Chip „odpadá X % gammy"** — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. |
+| **Ukazatele pokrytí dat** | Tři drobné proužky **Greeks**, **OI** a **OHLC** s podílem „kolik z kolika". Zelený = úplné, žlutý = díra (část striků čeká na dopočet, nebo chybí svíčky), **ztlumený s pomlčkou = hodnotu teď nelze změřit** (typicky odpojené IBKR nebo pár vteřin po startu). Prvky **nemizí** — ukazatel, který zmizí, vypadá jako rozbité rozhraní, ne jako chybějící data. |
 | **Přepínač OI** | **Měřené / FA odhad** — zdroj Open Interest pro heatmapu i profil (persistováno per symbol, default Měřené). FA odhad = OI dopočtené z klasifikovaného toku (netflow×α): k dispozici dřív než publikovaný archiv, ale je to odhad — při pochybnosti věř Měřeným. FA má i vlastní Dyn GEX plochu v dropdownu Dyn plocha a vlastní FA levels. |
 | **Lišta grafu** | **Mode** (7 metrik heatmapy), **Scale** (Linear/√/Log/Pow⅓), **Walls** (Off/Peak/Center/Smooth/Flip/Ridge), Styl (Gradient/Blobs), Contours (Off/Major/All), **Cena** (Svíčky/Křivka) + **Viditelnost**, nástroje anotací + barva, indikátor zdroje dat, tlačítko **⏮ Replay**. |
 | **Heatmapa** | Hlavní plocha — viz kapitola 5. |
@@ -470,7 +472,19 @@ Obrazovka **Řetěz** v sidebaru ukazuje klasickou opční tabulku vybrané expi
 
 ## 11c. News a sentiment (SentimentLens)
 
-Vlastní **news-engine** běží vedle datového enginu: sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy, broker pásku z IBKR), klasifikuje **kategorii, důležitost (1–3) a směr dopadu**, a počítá z nich **SentIndex** — souhrnný sentiment s rozpadem po tématech. Nic z toho nechodí ven; vše se počítá lokálně.
+Vlastní **news-engine** běží vedle datového enginu: sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy, Alpaca, broker pásku z IBKR), klasifikuje **kategorii, důležitost (1–3) a směr dopadu**, a počítá z nich **SentIndex** — souhrnný sentiment s rozpadem po tématech. Nic z toho nechodí ven; vše se počítá lokálně.
+
+**Klasifikace jede na pravidlech, ne na AI modelu.** LLM větev (Gemini) je od
+srpna 2026 zakonzervovaná: měřením se ukázalo, že hodnotu nepřidávala — proti
+pravidlům měla horší úspěšnost (0,484 vs. 0,516) a statistickou branou neprošla
+ani jednou. Zůstává vypnutá i s historickými klasifikacemi, aby šlo srovnání
+kdykoli zopakovat.
+
+**Model dostává titulek i začátek článku.** Do srpna 2026 se ukládalo jen
+prvních pár desítek znaků, takže se rozhodovalo prakticky jen podle titulku;
+nově se ukládá plné znění a modelu jde titulek + úvodní odstavec. Celý článek
+záměrně ne — stovky slov na zprávu by se při dnešní velikosti vzorku naučily
+nazpaměť místo zobecnění.
 
 ### Obrazovka News
 
@@ -746,6 +760,12 @@ Druhy alertů:
 
 Když detektor najde setup, přijde alert **Nový setup** a nad grafem se ukáže **karta setupu** pro daný instrument: směr (LONG/SHORT), šablona, **datum a čas vzniku** (kdy se splnily podmínky), úrovně **Entry / Cíl / Stop**, RRR a důvěra, plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce **Setupy** v sidebaru.
 
+**Denní statistika seance** (obrazovka Setupy): nad seznamem je souhrn dnešního
+dne — kolik obchodů proběhlo, kolik úspěšných a kolik ztrátových, úspěšnost
+v %, největší ziskový a největší ztrátový obchod, **kolik procent účtu se
+vydělalo nebo prodělalo** a **kolik procent bylo maximálně v riziku**. Řez je
+podle **Globex seance**, ne kalendářního dne, takže nedělní večer patří pondělí.
+
 **Kontra-režimový filtr:** obchod proti gamma režimu (long v negativní gammě / short v pozitivní — „fade v červeném", nejčastější ztráta z kap. 18) má u odrazu od zdi a neúspěšného průrazu přísnější podmínky: musí ho potvrdit CumΔ přes delší okno (30 min), jinak setup nevznikne. A po kontra setupu uzavřeném na stop má stejná šablona 45min pauzu na další kontra pokus — brání sérii ztrát v trendovém dni. Potvrzené setupy poznáš v zdůvodnění podle „Kontra-režim potvrzen tokem".
 
 ---
@@ -805,6 +825,10 @@ Parametry lze kombinovat.
 | Symbol „zmizel" z watchlistu | Watchlist se nenačetl (např. restart služeb v nevhodný moment) — od v0.1.4 se sám obnovuje po 15 s a při návratu do okna; případné chyby přidání/odebrání ukazuje hláška pod formulářem. Stačí chvíli počkat nebo obnovit stránku. |
 | Po aktualizaci aplikace nevidím nové funkce | Prohlížeč drží starý build v cache — dej **Ctrl+Shift+R** (hard reload). |
 | TWS spadlo po přihlášení na mobilu | Limit jednoho přihlášení IBKR. Znovu se přihlas v TWS; aplikace se sama připojí. |
+| **Přihlásil jsem se na mobilu a data stála** | Market data jsou u IBKR **per uživatel**, takže je mobil přetáhne k sobě (error 10197) — aplikace zůstane připojená, jen jí přestanou chodit ticky. Nově to řeší sama: do **30 s** převezme cenu a do **3 minut** celý opční řetěz **tastytrade** a v hlavičce se rozsvítí jantarový chip. Po návratu IBKR se přepne zpátky. Dělat nemusíš nic. |
+| **Chip „⤳ řetěz: tastytrade" v hlavičce** | Běží záložní zdroj dat (viz řádek výše). Graf, heatmapa i GEX úrovně jedou dál. **Stojí ale CumΔ a net objem** — tastytrade denní objem ve stejném významu nedodává a vymyslet ho by bylo horší než ho přiznat. Rozjedou se samy po návratu na IBKR. |
+| **Ukazatel Greeks/OI/OHLC má pomlčku** | Hodnotu teď nejde změřit — engine ji neposlal, typicky když neběží TWS nebo pár vteřin po startu. Rozdíl proti žlutému ukazateli: žlutá znamená **naměřenou díru**, pomlčka **žádné měření**. |
+| **Po startu počítače nic neběží** | Zkontroluj, že běží **TWS** — po restartu Windows se nespouští sama. Engine na ni čeká minutu a pak se rozjede i bez ní (cena poteče z tastytrade), opční data ale bez TWS nevzniknou. Pipeline naskočí sama, jakmile se TWS přihlásí; restartovat aplikaci není potřeba. |
 | Aplikace nejde otevřít (:8080) | `docker compose up -d` v adresáři projektu; první start po rebootu chvíli trvá. |
 
 ---
@@ -960,6 +984,11 @@ obchodní dny (přepínač **Projekce dnů**: settle / +1 den / týden):
   pozitivní expektanci neprokázala — ber ji jako měřicí, ne obchodní.
 - Prahy šablon jsou **verzované** (`mechanics_version`) — po změně mechaniky
   se staré setupy nemíchají do statistik nových.
+- **Čísla šablon (T1, T2…) jsou závazná a nerecyklují se.** I vypnutá nebo
+  zahozená šablona si číslo nechává — historické záznamy v track recordu ho
+  nesou dál a přidělit ho jiné mechanice by obě populace spláclo do jedné
+  statistiky. Volná čísla se přidělují z jednoho seznamu v kódu, ne podle
+  zadání jednotlivých úprav.
 
 ### Flip: naměřený vs. dynamický = flip ZÓNA
 
