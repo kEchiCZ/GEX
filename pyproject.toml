@@ -38,6 +38,11 @@ known-first-party = ["gexlens_engine", "gexlens_api", "gexlens_news"]
 
 [tool.mypy]
 strict = true
+# Engine, API i news-engine běží výhradně v Linux kontejneru (docker/python.Dockerfile).
+# Bez tohoto řádku kontroluje mypy proti platformě, na které zrovna běží, takže
+# vývoj na Windows hlásí chyby u POSIX-only API (signal.SIGUSR1, faulthandler.register
+# — #771), zatímco CI na Linuxu je nevidí. Kontrola má odpovídat produkci.
+platform = "linux"
 
 [[tool.mypy.overrides]]
 module = ["pyarrow.*", "pandas.*", "curl_cffi.*"]

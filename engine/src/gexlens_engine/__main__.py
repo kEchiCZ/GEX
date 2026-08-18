@@ -28,6 +28,7 @@ from gexlens_engine.adapters import (
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
+from gexlens_engine.diagnostics import install_stack_dump
 from gexlens_engine.gammacliff import GammaCliffCollector
 from gexlens_engine.ibkr.account import classify_accounts
 from gexlens_engine.ibkr.connection import (
@@ -756,6 +757,8 @@ async def wait_for_connection(manager: ConnectionManager, timeout_s: float) -> b
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    # Hned po logování, ať je dump k dispozici i pro pád při startu (#771)
+    install_stack_dump()
     try:
         settings = load_settings()
     except ConfigError as exc:
