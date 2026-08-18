@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # a spojení se zbytečně recyklovalo
     heartbeat_interval_s: float = Field(default=30.0, gt=0)
     heartbeat_timeout_s: float = Field(default=15.0, gt=0)
+    # Jak dlouho smí spojení viset mimo stav connected, než se to ohlásí jako
+    # porucha (#770). 18. 8. byl engine osm hodin offline a nikde to nezaznělo —
+    # výpadek se poznal až tím, že si člověk všiml zamrzlého grafu. Práh je
+    # velkorysý: běžný restart TWS je otázka desítek sekund, denní údržba IBKR
+    # (23:45–00:45 ET) taky nemá trvat déle než pár minut.
+    reconnect_stall_alert_s: float = Field(default=300.0, gt=0)
 
     # Instrumenty (ADR-0003): základní sada futures podkladů; watchlist z DB se přidává za běhu
     symbols: str = "ES"
