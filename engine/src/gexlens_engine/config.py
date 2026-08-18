@@ -139,6 +139,18 @@ class Settings(BaseSettings):
     # Prahy jsou MĚŘENÉ na 3 016 minutách shadow historie (13.–16. 8. 2026):
     # sweep rotace vyhodí podíl na ~58 % každou třetí minutu, série tří minut
     # v řadě nenastala ani jednou — proto 0,70 / 3 min.
+    # Spot fallback na tasty (#614): když IBKR přestane posílat ticky (mobil
+    # přetáhl market data — error 10197, nebo výpadek farmy), přebírá cenu
+    # podkladu tastytrade. Bez toho zamrzne cenový graf, aniž by cokoli spadlo.
+    tasty_spot_fallback: bool = True
+    # Jak dlouho smí chybět IBKR tick, než se sáhne po tasty
+    tasty_spot_stale_after_s: float = Field(default=30.0, gt=0)
+    # Jak dlouho musí IBKR souvisle dodávat, než se převezme zpět (hystereze
+    # proti blikání zdroje při kolísavém spojení)
+    tasty_spot_recover_after_s: float = Field(default=60.0, gt=0)
+    # Max stáří tasty kotace, aby se dala použít jako spot
+    tasty_spot_max_age_s: float = Field(default=30.0, gt=0)
+
     crosscheck_enabled: bool = True
     crosscheck_share_threshold: float = Field(default=0.70, gt=0, le=1)
     crosscheck_minutes: int = Field(default=3, ge=1)

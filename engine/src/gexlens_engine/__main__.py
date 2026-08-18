@@ -103,12 +103,17 @@ from gexlens_engine.tasty.devrun import run_tasty_only
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.session import TastyCredentials, TastySession
 from gexlens_engine.tasty.shadow import ShadowComparator, shadow_symbols
+from gexlens_engine.tasty.spot_fallback import SpotFallback
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.volregime import VolRegimeCollector
 
 logger = logging.getLogger("gexlens.engine")
+
+#: Jak často se kontroluje mlčící IBKR spot (#614). Musí být výrazně kratší
+#: než práh výpadku, jinak by se fallback zapínal se zpožděním celé periody.
+SPOT_FALLBACK_POLL_S = 5.0
 
 # Hlavní US futures burzy — filtr discovery podkladu (QBALGO apod. vynecháváme)
 FUTURES_EXCHANGES = ("CME", "CBOT", "NYMEX", "COMEX")
@@ -332,6 +337,7 @@ async def create_pipeline(
     provider: MarketDataProviderLike | None = None,
     line_gauge: LineGauge | None = None,
     oi_fallback: Callable[[OptionContractSpec], float | None] | None = None,
+    spot_fallback_source: Callable[[str], tuple[float | None, bool]] | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
     # Provider (#613): svazek datových zdrojů; default = IBKR (jediný zapojený
@@ -365,20 +371,82 @@ async def create_pipeline(
     loop = asyncio.get_running_loop()
     # Živý spot (#128): throttlovaný publish spot.{symbol} z ticker.updateEvent (~5 Hz)
     spot_streamer = SpotStreamer(publisher, symbol)
+    # Fallback na tasty (#614) — jen když je zapnutý A je z čeho brát
+    tasty_spot = spot_fallback_source
+    spot_fallback = (
+        SpotFallback(
+            stale_after_s=settings.tasty_spot_stale_after_s,
+            recover_after_s=settings.tasty_spot_recover_after_s,
+        )
+        if settings.tasty_spot_fallback and tasty_spot is not None
+        else None
+    )
+
+    def _publish_spot(price: float, source: str) -> None:
+        loop.create_task(
+            publisher.publish(
+                f"spot.{symbol}",
+                {
+                    "ts": dt.datetime.now(dt.UTC).isoformat(),
+                    "price": price,
+                    # Zdroj jde s každým tickem (#614): tichý fallback je
+                    # zakázaný, uživatel musí poznat, odkud se dívá
+                    "source": source,
+                },
+            )
+        )
 
     def on_spot_tick(ticker: Ticker) -> None:
         if stopped:
             return
         price = ticker.last if ticker.last == ticker.last else ticker.marketPrice()
+        if spot_fallback is not None:
+            decision = spot_fallback.on_ibkr(price, loop.time())
+            if decision.switched:
+                logger.info("Spot %s: zpět na IBKR (feed se zotavil, #614)", symbol)
+            if decision.price is None:
+                return  # během fallbacku se IBKR ticky nepublikují
+            price = decision.price
         published = spot_streamer.sample(price, loop.time())
         if published is None:
             return
-        loop.create_task(
-            publisher.publish(
-                f"spot.{symbol}",
-                {"ts": dt.datetime.now(dt.UTC).isoformat(), "price": published},
-            )
-        )
+        _publish_spot(published, spot_fallback.active_source if spot_fallback else "ibkr")
+
+    async def spot_fallback_loop() -> None:
+        """Hlídá mlčící IBKR i mimo jeho ticky (#614).
+
+        Bez vlastní smyčky by se výpadek nepoznal: `on_spot_tick` se při
+        mlčícím feedu prostě nevolá, takže rozhodnutí musí přijít odjinud.
+        """
+        while not stopped and spot_fallback is not None and tasty_spot is not None:
+            await asyncio.sleep(SPOT_FALLBACK_POLL_S)
+            try:
+                price, fresh = tasty_spot(symbol)
+                decision = spot_fallback.resolve(loop.time(), tasty_price=price, tasty_fresh=fresh)
+                if decision.switched:
+                    logger.warning(
+                        "Spot %s: IBKR mlčí, přebírá tastytrade (#614) — "
+                        "typicky souběh s mobilem (error 10197)",
+                        symbol,
+                    )
+                    await publisher.publish(
+                        "alerts",
+                        {
+                            "kind": "spot_fallback",
+                            "symbol": symbol,
+                            "message": (
+                                f"{symbol}: IBKR přestal posílat cenu, spot přebírá "
+                                f"tastytrade. Data běží dál, jen z jiného zdroje."
+                            ),
+                            "ts": dt.datetime.now(dt.UTC).timestamp(),
+                        },
+                    )
+                if decision.price is not None:
+                    published = spot_streamer.sample(decision.price, loop.time())
+                    if published is not None:
+                        _publish_spot(published, decision.source)
+            except Exception:
+                logger.exception("Spot fallback selhal — příští cyklus jede dál")
 
     def subscribe_underlying() -> Ticker:
         """Trvalé subskripce podkladu — při startu a po každém reconnectu.
@@ -519,11 +587,15 @@ async def create_pipeline(
         )
 
     backfill_task = asyncio.create_task(initial_backfill())
+    # Hlídač mlčícího IBKR spotu (#614); bez fallbacku se úloha nezakládá
+    fallback_task = asyncio.create_task(spot_fallback_loop()) if spot_fallback is not None else None
 
     def on_stop() -> None:
         nonlocal stopped
         stopped = True
         backfill_task.cancel()
+        if fallback_task is not None:
+            fallback_task.cancel()
         spot_streamer.stop()
         ib.cancelMktData(front)
         if rt_bars is not None:
@@ -740,6 +812,10 @@ async def main() -> None:
     shadow_stop = asyncio.Event()
     shadow_tasks: list[asyncio.Task[None]] = []
     shadow_chain: dict[str, ChainSymbols] = {}
+    # Streamer symbol front futures per instrument (#614) — zdroj spotu, když
+    # IBKR přestane posílat (mobil přetáhl market data, výpadek farmy)
+    shadow_front_future: dict[str, str] = {}
+    tasty_spot_lookup: Callable[[str], tuple[float | None, bool]] | None = None
     tasty_oi_lookup: Callable[[OptionContractSpec], float | None] | None = None
     # Křížová kontrola (#517 A) — None, dokud neběží shadow větev; status ji
     # čte z hlavní smyčky, proto musí být viditelná i při vypnutém shadow
@@ -809,6 +885,27 @@ async def main() -> None:
             on_alert=publish_crosscheck,
         )
 
+        def _tasty_spot(symbol: str) -> tuple[float | None, bool]:
+            """(cena podkladu z tasty, je čerstvá?) — vstup fallbacku (#614).
+
+            Cena je mid z bid/ask front futures. `last` se schválně nebere:
+            u futures může být poslední obchod starý minuty, kdežto kotace
+            se drží živá, a fallback má nahradit ŽIVÝ spot.
+            """
+            streamer = shadow_front_future.get(symbol)
+            if streamer is None:
+                return None, False
+            state = tasty_cache.state(streamer)
+            if state is None or state.quote.updated_at is None:
+                return None, False
+            bid, ask = state.quote.bid, state.quote.ask
+            if bid is None or ask is None or bid <= 0 or ask <= 0:
+                return None, False
+            age_s = (dt.datetime.now(dt.UTC) - state.quote.updated_at).total_seconds()
+            return (bid + ask) / 2.0, age_s <= settings.tasty_spot_max_age_s
+
+        tasty_spot_lookup = _tasty_spot
+
         if settings.tasty_oi_fill:
 
             def _tasty_oi(spec: OptionContractSpec) -> float | None:
@@ -842,6 +939,12 @@ async def main() -> None:
                         chain = await symbol_map.chain(symbol, today)
                         shadow_chain[symbol] = chain
                         symbols |= shadow_symbols(list(shadow_contracts().keys()), chain)
+                        # Podklad (#614): bez něj by při výpadku IBKR zamrzl
+                        # cenový graf, i kdyby řetěz z tasty tekl dál
+                        front = await symbol_map.front_future(symbol)
+                        if front:
+                            shadow_front_future[symbol] = front
+                            symbols.add(front)
                     if symbols:
                         await tasty_stream.set_symbols(symbols)
                 except Exception:
@@ -962,6 +1065,7 @@ async def main() -> None:
                     provider=provider,
                     line_gauge=line_gauge,
                     oi_fallback=tasty_oi_lookup,
+                    spot_fallback_source=tasty_spot_lookup,
                 )
                 setup_cooldown.succeeded(symbol)
             except ConnectionError as exc:

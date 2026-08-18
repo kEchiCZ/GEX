@@ -36,6 +36,42 @@ class SymbolMap:
     def __init__(self, session: TastySession) -> None:
         self._session = session
         self._cache: dict[str, ChainSymbols] = {}
+        # Front future se během dne nemění; roll řeší restart nebo změna dne
+        self._front_future: dict[str, str] = {}
+
+    async def front_future(self, product: str) -> str | None:
+        """Streamer symbol front kontraktu podkladu — zdroj spotu při fallbacku (#614).
+
+        Symbol se **nesestavuje**, čte se z API: past z #612 je, že futures kód
+        bez explicitního roku koliduje přes dekádu (`/ESU6` = 2016 i 2026).
+        API vrací `/ESU26:XCME`, kde je rok jednoznačný.
+
+        Front kontrakt = nejbližší nepropadlá expirace mezi aktivními. Pole
+        `active-month` se u některých produktů neplní, takže se na něj nedá
+        spolehnout a rozhoduje datum.
+        """
+        cached = self._front_future.get(product)
+        if cached is not None:
+            return cached
+        payload = await self._session.get_json(f"/instruments/futures?product-code={product}")
+        items = [
+            item
+            for item in payload.get("data", {}).get("items", [])
+            if item.get("streamer-symbol") and item.get("expiration-date")
+        ]
+        if not items:
+            logger.warning("tasty: pro %s nevrátilo API žádný futures kontrakt", product)
+            return None
+        nearest = min(items, key=lambda item: str(item["expiration-date"]))
+        symbol = str(nearest["streamer-symbol"])
+        self._front_future[product] = symbol
+        logger.info(
+            "tasty front future %s: %s (expirace %s)",
+            product,
+            symbol,
+            nearest.get("expiration-date"),
+        )
+        return symbol
 
     async def chain(self, product: str, today: dt.date) -> ChainSymbols:
         cached = self._cache.get(product)
