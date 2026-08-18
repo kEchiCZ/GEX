@@ -1,9 +1,13 @@
-"""Setup detektor (ADR-0004, Fáze 1): čisté funkce šablon T1–T4 a vyhodnocení.
+"""Setup detektor (ADR-0004, Fáze 1): čisté funkce šablon a vyhodnocení.
 
 Vstupem je historie minutových vstupů (cena podkladu + GEX úrovně + tok);
 výstupem kandidáti setupů s entry/target/stop, confidence a českým
 zdůvodněním. Žádné I/O — orchestraci (stav, DB, alerty) dělá
 `gexlens_engine.setups.SetupEngine`. Prahy dle ADR-0004.
+
+Čísla šablon (T1, T2, …) drží `TEMPLATE_REGISTRY` níže — je to jediný závazný
+zdroj včetně rezervací pro šablony, které teprve vzniknou (#735). Seznam se
+nikam nekopíruje; kopie zastarají a přesně tak vznikla kolize dvou T7.
 """
 
 import datetime as dt
@@ -52,8 +56,68 @@ class SetupTemplate(enum.Enum):
     FAILED_BREAK = "failed_break"
     MAX_PAIN_PIN = "max_pain_pin"
     GAMMA_MOMENTUM = "gamma_momentum"
-    DIVERGENCE_SPRING = "divergence_spring"  # T5 (#250)
-    TREND_CONTINUATION = "trend_continuation"  # T7 (#443)
+    DIVERGENCE_SPRING = "divergence_spring"
+    TREND_CONTINUATION = "trend_continuation"
+
+
+@dataclass(frozen=True)
+class TemplateSlot:
+    """Jedno číslo v rejstříku šablon; `template=None` = rezervováno napřed."""
+
+    number: int
+    template: SetupTemplate | None
+    origin: str
+    note: str = ""
+
+
+# Závazný rejstřík čísel šablon (#735). Do jeho zavedení žilo přiřazení „T7"
+# jen v prózách issues, takže #601 navrhlo T7 podruhé — a #443 ho už mělo.
+#
+# Proč to není kosmetika: `mechanics_version` i statistiky track recordu se
+# řadí podle identifikátoru šablony. Kdyby dvě mechaniky sdílely jedno číslo,
+# smíchají se v jedné statistice dvě populace setupů — tiše. Nic nespadne, jen
+# čísla přestanou znamenat, co tvrdí, a to přesně pod kalibrací #394/#434,
+# která na těch statistikách stojí.
+#
+# Číslo je jednou přidělené NAVŽDY. I když se šablona vypne nebo zahodí, číslo
+# se nerecykluje — historické řádky v track recordu ho nesou dál a recyklace by
+# je splácla s novou mechanikou.
+#
+# Rezervace jsou plnohodnotné položky, ne poznámky: teprve tak je vidět, které
+# číslo je volné. Naopak issue, které šablona NENÍ, číslo nedostane (viz níže).
+TEMPLATE_REGISTRY: tuple[TemplateSlot, ...] = (
+    TemplateSlot(1, SetupTemplate.WALL_BOUNCE, "ADR-0004"),
+    TemplateSlot(2, SetupTemplate.FAILED_BREAK, "ADR-0004"),
+    TemplateSlot(3, SetupTemplate.MAX_PAIN_PIN, "ADR-0004"),
+    TemplateSlot(4, SetupTemplate.GAMMA_MOMENTUM, "ADR-0004"),
+    TemplateSlot(5, SetupTemplate.DIVERGENCE_SPRING, "#250"),
+    TemplateSlot(6, None, "#256", "premarket squeeze — rezervováno, nesbírá se"),
+    TemplateSlot(7, SetupTemplate.TREND_CONTINUATION, "#443"),
+    TemplateSlot(8, None, "#601", "průraz hranice gammy — přečíslováno z T7 (#735)"),
+    TemplateSlot(9, None, "#577", "strop nad hlavou — rezervováno, fáze 1 sběr"),
+)
+
+# Vědomě BEZ čísla, ať se rejstřík nezaplní věcmi, které šablona nejsou:
+#   #576 (gamma útes po expiraci) měří vlastnost trhu do chipu — nemá entry,
+#        stop ani cíl, takže to není setup.
+#   #602 (rezignace long put v den expirace) je driftový faktor, ne šablona.
+# Roadmapa #629 obě vedla jako „implicitně T8 a T9"; tím by se T8 zablokovalo
+# pro něco, co detektor nikdy nevytvoří.
+
+#: Rychlé vyhledání čísla podle šablony — odvozené, aby existoval jeden zdroj.
+SETUP_TEMPLATE_NUMBERS: Mapping[SetupTemplate, int] = {
+    slot.template: slot.number for slot in TEMPLATE_REGISTRY if slot.template is not None
+}
+
+
+def template_number(template: SetupTemplate) -> int:
+    """Číslo šablony podle rejstříku (`T7` → 7)."""
+    return SETUP_TEMPLATE_NUMBERS[template]
+
+
+def template_label(template: SetupTemplate) -> str:
+    """Označení pro log a UI: `T7 trend_continuation`."""
+    return f"T{template_number(template)} {template.value}"
 
 
 class Direction(enum.Enum):
