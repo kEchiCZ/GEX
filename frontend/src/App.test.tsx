@@ -129,8 +129,12 @@ test('tlačítka zpět/vpřed kreslení jsou nejdřív disabled a Ctrl+Z je nero
 
 test('hlavička ukazuje pokrytí Greeks s progress barem (#470)', () => {
   makeApp()
-  // Bez statusu se badge nekreslí — nemá co tvrdit
-  expect(screen.queryByTestId('coverage-greeks')).toBeNull()
+  // Bez statusu prvek zůstává na místě a jen nic netvrdí (#758) — mizející
+  // ukazatel vypadá jako rozbité rozhraní, ne jako chybějící data
+  const unknown = screen.getByTestId('coverage-greeks')
+  expect(unknown.textContent).toBe('Greeks —')
+  expect(unknown.className).toContain('coverage-unknown')
+  expect(unknown.querySelector('.coverage-fill')?.getAttribute('style')).toContain('width: 0%')
 
   const ws = FakeWebSocket.latest()
   act(() => {
@@ -158,8 +162,9 @@ test('hlavička ukazuje pokrytí Greeks s progress barem (#470)', () => {
 
 test('demo den nemá měřitelnou osu, takže OHLC badge ani časová značka nesvítí (#470)', () => {
   makeApp()
-  // Demo den (bez /replay dat) nemá ISO osu ani lastMinuteIso — badge by lhal
-  expect(screen.queryByTestId('coverage-ohlc')).toBeNull()
+  // Demo den (bez /replay dat) nemá ISO osu ani lastMinuteIso — pokrytí se nedá
+  // změřit, tak ho prvek přizná pomlčkou místo aby lhal číslem (#758)
+  expect(screen.getByTestId('coverage-ohlc').textContent).toBe('OHLC —')
   expect(screen.queryByTestId('data-stamp')).toBeNull()
   expect(screen.getByTestId('data-source').textContent).toBe('demo data')
 })
