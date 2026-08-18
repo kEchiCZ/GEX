@@ -313,6 +313,24 @@ body {
   background: #e8c14b;
 }
 
+/* Aktivní fallback na tastytrade (#614): chip svítí jen za výpadku IBKR, tak
+   ať je vidět. Jantarová, ne červená — data tečou dál, jen z jiného zdroje;
+   červená patří stavům, kdy graf něco netvrdí správně. */
+.fallback-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid rgba(232, 193, 75, 0.5);
+  border-radius: 10px;
+  background: rgba(232, 193, 75, 0.12);
+  color: #e8c14b;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: help;
+  white-space: nowrap;
+}
+
 /* Neznámé pokrytí (#758): prvek zůstává na místě, jen nic netvrdí. Ztlumený,
    aby se nepletl s neúplným pokrytím — to je nález, tohle je jen chybějící
    měření. Proužek zůstává prázdný, ne poloprázdný. */

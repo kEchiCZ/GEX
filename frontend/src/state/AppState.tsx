@@ -37,6 +37,11 @@ export interface PipelineStatus {
   feed_crosscheck_detail?: string
   feed_crosscheck_ibkr_dead_share?: number
   feed_crosscheck_contracts?: number
+  /** Zdroj opčního řetězu a ceny podkladu (#614). Klíč CHYBÍ, když ochrana
+      neběží — stejná logika jako u křížové kontroly: „nechrání se" není totéž
+      co „chrání se a je vše v pořádku". */
+  chain_source?: 'ibkr' | 'tasty'
+  spot_source?: 'ibkr' | 'tasty' | 'none'
   updated_at?: number | null
 }
 

@@ -269,6 +269,10 @@ class InstrumentPipeline:
     forming_bar: Callable[[], Bar | None] = lambda: None
     on_stop: Callable[[], None] = lambda: None
     spot: float = 0.0
+    # Odkud teče cena podkladu (#614 fáze 2a): "ibkr" | "tasty" | "none".
+    # Status ho agreguje do UI — tiché přepnutí zdroje zakazuje ADR-0025
+    # pravidlo 5, takže uživatel musí poznat, odkud se dívá.
+    spot_source: Callable[[], str] = lambda: "ibkr"
     oi_available: bool = False
     # Snímek OI je definitivní (#463): pořízený po publikačním okně a potvrzený
     # druhým nezměněným čtením. Dokud ne, engine ho po okně obnovuje — jinak by
@@ -1089,9 +1093,12 @@ class InstrumentPipeline:
         runtime = self.next_runtime
         if runtime is None:
             return
+        # Aktivní zdroj řetězu (#614 fáze 2b): za fallbacku objem chybí, takže
+        # `min_volume` alert utne. Čtení přímo ze sweep cache by naopak nechalo
+        # vyhlásit koncentraci nad zmrzlými čísly z doby před výpadkem.
         volumes = {
             (spec.strike, spec.right): float(cached.snapshot.volume or 0.0)
-            for spec, cached in runtime.scheduler.quotes().items()
+            for spec, cached in runtime.current_quotes().items()
         }
         found = detect_concentration(
             volumes,

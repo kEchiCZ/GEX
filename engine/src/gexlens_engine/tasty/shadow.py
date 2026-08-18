@@ -180,6 +180,7 @@ class ShadowComparator:
         oi_source: Callable[[], dict[tuple[str, str, float, str], float]] | None = None,
         detector: CrossCheckDetector | None = None,
         on_alert: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None,
+        on_verdict: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None,
     ) -> None:
         self._repository = repository
         self._cache = tasty_cache
@@ -191,6 +192,9 @@ class ShadowComparator:
         # Křížová kontrola (#517 fáze A): bez detektoru se shadow chová jako dřív
         self._detector = detector
         self._on_alert = on_alert
+        # KAŽDÝ verdikt, ne jen alert (#614 fáze 2b): fallback řetězu se musí
+        # dozvědět i o čistých minutách, jinak by se nikdy nevrátil na IBKR
+        self._on_verdict = on_verdict
         #: Diagnostika zátěže: řádků zapsáno od startu
         self.rows_written = 0
 
@@ -226,6 +230,8 @@ class ShadowComparator:
         # než řádek v pracovní tabulce.
         if self._detector is not None:
             verdict = self._detector.observe(comparison.tally)
+            if self._on_verdict is not None:
+                await self._on_verdict(verdict)
             if verdict.alert and self._on_alert is not None:
                 await self._on_alert(verdict)
         await asyncio.to_thread(self._repository.insert_many, rows)

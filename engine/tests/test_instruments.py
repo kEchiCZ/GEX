@@ -829,7 +829,10 @@ async def test_vol_concentration_alert_once_per_leader(
         sec_spec(7400.0, "P"): cached(700),
     }
     pipeline.next_runtime = SimpleNamespace(  # type: ignore[assignment]
-        expiry="20260718", scheduler=SimpleNamespace(quotes=lambda: quotes)
+        expiry="20260718",
+        scheduler=SimpleNamespace(quotes=lambda: quotes),
+        # Aktivní zdroj řetězu (#614 fáze 2b): bez fallbacku je to sweep cache
+        current_quotes=lambda: quotes,
     )
 
     await pipeline._check_vol_concentration(TS)

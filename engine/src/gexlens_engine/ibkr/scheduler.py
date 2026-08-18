@@ -32,15 +32,29 @@ logger = logging.getLogger(__name__)
 GREEKS_SOURCE_MODEL = "model"
 GREEKS_SOURCE_COMPUTED = "computed"
 
+# Feed, ze kterého kotace pochází (#614 fáze 2b). Cache plní IBKR sweep;
+# `tasty` do ní vkládá fallback řetězu při výpadku IBKR. Starší záznamy
+# a Parquet partice bez značky se čtou jako `ibkr` (zpětná kompatibilita).
+FEED_IBKR = "ibkr"
+FEED_TASTY = "tasty"
+
 
 @dataclass(frozen=True)
 class QuoteSnapshot:
-    """Kompletní sada dat jednoho kontraktu z jedné subskripce (SPEC 3.3)."""
+    """Kompletní sada dat jednoho kontraktu z jedné subskripce (SPEC 3.3).
+
+    `last` a `volume` jsou volitelné (#614 fáze 2b): fallback řetězu z tasty
+    dodá stav kontraktu (kotace, greeks, OI), ale NE kumulativní denní objem —
+    dxFeed ho v odebíraných eventech nemá a sčítat ho z TimeAndSale od okamžiku
+    subskripce by dalo jiné číslo než IBKR měří od otevření seance. `None`
+    znamená „neměřeno", ne nula; ADR-0025 pravidlo 2 zakazuje míchat hodnoty
+    z různých zdrojů a #465 zakazuje vydávat nezměřené za změřenou nulu.
+    """
 
     bid: float
     ask: float
-    last: float
-    volume: float
+    last: float | None
+    volume: float | None
     iv: float
     delta: float
     gamma: float
@@ -72,6 +86,8 @@ class CachedQuote:
     stale: bool = False
     # Zdroj Greeks (#547): "model" = TWS modelGreeks, "computed" = vlastní BS dopočet
     source: str = GREEKS_SOURCE_MODEL
+    # Feed kotace (#614 fáze 2b): "ibkr" ze sweepu, "tasty" z fallbacku řetězu
+    feed: str = FEED_IBKR
 
     def age_s(self, now: float) -> float:
         return now - self.updated_at

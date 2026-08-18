@@ -75,6 +75,40 @@ function CoverageBadge({
   )
 }
 
+/** Chip aktivního fallbacku na tastytrade (#614).
+
+Vědomě se nekreslí, dokud oba zdroje jedou z IBKR: stav „vše normální" nemá
+co říct a v hlavičce už je chipů dost. Zato jakmile se přepne cokoli, musí to
+být vidět bez rozklikávání — uživatel jinak nepozná, že se dívá na jiná data
+než obvykle. */
+function FallbackChip({
+  chainSource,
+  spotSource,
+}: {
+  chainSource?: 'ibkr' | 'tasty'
+  spotSource?: 'ibkr' | 'tasty' | 'none'
+}) {
+  const parts: string[] = []
+  if (chainSource === 'tasty') parts.push('řetěz')
+  if (spotSource === 'tasty') parts.push('cena')
+  if (parts.length === 0) return null
+  return (
+    <span
+      className="fallback-chip"
+      data-testid="fallback-chip"
+      title={
+        `Data pro ${parts.join(' i ')} tečou z tastytrade, protože IBKR přestal ` +
+        'dodávat — typicky souběh s přihlášením na mobilu (error 10197) nebo výpadek ' +
+        'datové farmy. Graf běží dál. Po dobu fallbacku řetězu ale stojí CumΔ a net ' +
+        'objem: tastytrade denní objem ve stejné sémantice nedodává, a vymyšlená nula ' +
+        'by byla horší než viditelná díra.'
+      }
+    >
+      ⤳ {parts.join(' + ')}: tastytrade
+    </span>
+  )
+}
+
 export function InstrumentHeader({
   lastPrice,
   changePct,
@@ -222,6 +256,10 @@ export function InstrumentHeader({
         <TendencyChip />
         {/* Chip RiskOn/RiskOff/Neutral (#295, SPEC 9.0) — news sentiment vedle GEX režimu */}
         <StateChip />
+        {/* Aktivní fallback na tastytrade (#614) — ADR-0025 pravidlo 5 zakazuje
+        tiché přepnutí zdroje. Chip svítí JEN při fallbacku: za normálního
+        provozu by trvalé „zdroj: IBKR" jen zabíralo místo. */}
+        <FallbackChip chainSource={status.chain_source} spotSource={status.spot_source} />
         {/* Pravý blok hlavičky (#597): pokrytí dat, Live a zvoneček drží u sebe u pravého
       okraje. Odsazuje je JEDEN `margin-left: auto` na téhle skupině — dva (dřív na badge
       i na zvonečku) si volné místo rozdělily a mezi nimi zbyla mezera. */}

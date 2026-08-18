@@ -13,7 +13,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from typing import Any
 
 from ib_async import IB, Contract, Future, RealTimeBarList, Ticker
@@ -98,6 +98,7 @@ from gexlens_engine.storage.t6_store import T6Repository
 from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.storage.volregime_store import VolRegimeRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
+from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.devrun import run_tasty_only
 from gexlens_engine.tasty.provider import TastyChainCache
@@ -316,6 +317,33 @@ def _crosscheck_status(detector: CrossCheckDetector | None) -> dict[str, object]
     }
 
 
+def _spot_source_status(running: Sequence[InstrumentPipeline]) -> dict[str, object]:
+    """Zdroj spotu do /status (#614 fáze 2a).
+
+    Agreguje se pesimisticky: stačí JEDEN instrument na fallbacku a status
+    hlásí `tasty`. Výpadek market data je vlastnost účtu, takže „půlka
+    instrumentů z IBKR" je stav, o kterém se uživatel má dozvědět celý,
+    ne průměrovaný do zdravě vypadající většiny.
+    """
+    sources = {pipeline.spot_source() for pipeline in running}
+    if not sources:
+        return {}
+    return {"spot_source": "tasty" if "tasty" in sources else sorted(sources)[0]}
+
+
+def _chain_source_status(fallback: "ChainFallback | None") -> dict[str, object]:
+    """Zdroj opčního řetězu do /status (#614 fáze 2b).
+
+    Bez zapnutého fallbacku se klíč nepřidá vůbec — stejná logika jako
+    u křížové kontroly: chybějící klíč znamená „tahle ochrana neběží",
+    ne „běží a je vše v pořádku". Tiché přepnutí zdroje zakazuje ADR-0025
+    pravidlo 5, takže stav musí být čitelný i bez alertu.
+    """
+    if fallback is None:
+        return {}
+    return {"chain_source": fallback.active_source}
+
+
 async def create_pipeline(
     ib: IB,
     manager: ConnectionManager,
@@ -338,6 +366,10 @@ async def create_pipeline(
     line_gauge: LineGauge | None = None,
     oi_fallback: Callable[[OptionContractSpec], float | None] | None = None,
     spot_fallback_source: Callable[[str], tuple[float | None, bool]] | None = None,
+    chain_fallback_source: (
+        Callable[[Sequence[OptionContractSpec]], dict[OptionContractSpec, CachedQuote] | None]
+        | None
+    ) = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
     # Provider (#613): svazek datových zdrojů; default = IBKR (jediný zapojený
@@ -534,6 +566,7 @@ async def create_pipeline(
             push_status=False,
             secondary=True,
             oi_fallback=oi_fallback,
+            chain_fallback=chain_fallback_source,
         )
         logger.info(
             "Sekundární řetěz %s %s %s: %d kontraktů (kadence 1/%d)",
@@ -557,6 +590,7 @@ async def create_pipeline(
         cum_delta=CumDeltaTracker(multiplier=multiplier),
         push_status=False,  # agregovaný status pushuje orchestrátor
         oi_fallback=oi_fallback,
+        chain_fallback=chain_fallback_source,
     )
 
     # Historical backfill 1min barů (SPEC 3.6, #221): aktuální den + retention
@@ -616,6 +650,7 @@ async def create_pipeline(
         forming_bar=lambda: aggregator.current,
         on_stop=on_stop,
         spot=spot,
+        spot_source=(lambda: spot_fallback.active_source if spot_fallback else "ibkr"),
         archive_contracts=archive_contracts,
         next_runtime=next_runtime,
         next_info=next_info,
@@ -817,6 +852,14 @@ async def main() -> None:
     shadow_front_future: dict[str, str] = {}
     tasty_spot_lookup: Callable[[str], tuple[float | None, bool]] | None = None
     tasty_oi_lookup: Callable[[OptionContractSpec], float | None] | None = None
+    # Fallback celého řetězu (#614 fáze 2b): jedna instance pro celý engine —
+    # market data lines jsou vlastnost účtu, takže výpadek bere ES i NQ naráz
+    chain_fallback: ChainFallback | None = None
+    chain_quotes_lookup: (
+        Callable[[Sequence[OptionContractSpec]], dict[OptionContractSpec, CachedQuote] | None]
+        | None
+    ) = None
+    chain_verdict_hook: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None
     # Křížová kontrola (#517 A) — None, dokud neběží shadow větev; status ji
     # čte z hlavní smyčky, proto musí být viditelná i při vypnutém shadow
     crosscheck: CrossCheckDetector | None = None
@@ -875,6 +918,66 @@ async def main() -> None:
 
             publish_crosscheck = _publish_crosscheck
 
+        if settings.tasty_chain_fallback and crosscheck is not None:
+            chain_fallback = ChainFallback(recover_minutes=settings.tasty_chain_recover_minutes)
+
+            def _chain_quotes(
+                specs: Sequence[OptionContractSpec],
+            ) -> dict[OptionContractSpec, CachedQuote] | None:
+                """Řetěz z tasty, nebo None = ať si runtime vezme IBKR sweep.
+
+                Volá se na hranici snímku (ADR-0025 pravidlo 3); samotné
+                rozhodnutí padlo minutu předtím ve `_chain_verdict`, tady se
+                už jen skládají hodnoty.
+                """
+                if chain_fallback is None or chain_fallback.active_source != "tasty":
+                    return None
+                if not specs:
+                    return None
+                # Všechny specs jedné pipeline sdílejí symbol; mapa je per produkt
+                chain = shadow_chain.get(specs[0].symbol)
+                return tasty_chain_quotes(
+                    specs,
+                    chain,
+                    tasty_cache,
+                    now_utc_ts=dt.datetime.now(dt.UTC).timestamp(),
+                    now_monotonic=time.monotonic(),
+                    max_age_ms=int(settings.tasty_chain_max_age_s * 1000),
+                )
+
+            chain_quotes_lookup = _chain_quotes
+
+            async def _chain_verdict(verdict: CrossCheckVerdict) -> None:
+                """Minutový verdikt křížové kontroly → zdroj řetězu pro další snímek."""
+                if chain_fallback is None:
+                    return
+                decision = chain_fallback.observe(verdict)
+                if not decision.switched:
+                    return
+                logger.warning("Fallback řetězu (#614): %s", decision.message)
+                await publisher.publish(
+                    "alerts",
+                    {
+                        "kind": "chain_fallback",
+                        "symbol": "*",
+                        "message": decision.message
+                        + (
+                            ". Řady CumΔ a net objem po dobu fallbacku stojí — "
+                            "tastytrade denní objem v sémantice IBKR nedodává."
+                            if decision.source == "tasty"
+                            else "."
+                        ),
+                        "ts": dt.datetime.now(dt.UTC).timestamp(),
+                    },
+                )
+
+            chain_verdict_hook = _chain_verdict
+            logger.info(
+                "Fallback řetězu z tasty ZAPNUT (#614 fáze 2b) — spouští ho verdikt "
+                "křížové kontroly, návrat po %d čistých minutách",
+                settings.tasty_chain_recover_minutes,
+            )
+
         comparator = ShadowComparator(
             comparison_repository,
             tasty_cache,
@@ -883,6 +986,7 @@ async def main() -> None:
             oi_source=shadow_oi_snapshot,
             detector=crosscheck,
             on_alert=publish_crosscheck,
+            on_verdict=chain_verdict_hook,
         )
 
         def _tasty_spot(symbol: str) -> tuple[float | None, bool]:
@@ -1065,6 +1169,7 @@ async def main() -> None:
                     provider=provider,
                     line_gauge=line_gauge,
                     oi_fallback=tasty_oi_lookup,
+                    chain_fallback_source=chain_quotes_lookup,
                     spot_fallback_source=tasty_spot_lookup,
                 )
                 setup_cooldown.succeeded(symbol)
@@ -1127,6 +1232,8 @@ async def main() -> None:
                 lines_utilization=line_gauge.utilization(settings.market_data_lines),
                 # Křížová kontrola feedů (#517 A) — chybí, když shadow neběží
                 **_crosscheck_status(crosscheck),
+                **_chain_source_status(chain_fallback),
+                **_spot_source_status(run_list),
                 **aggregate_status(results),
             )
 

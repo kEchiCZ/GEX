@@ -622,6 +622,10 @@ class FakeRuntime:
         # None = minuta profil nemá; orchestrační testy na hranicích nestojí.
         self.last_profile = None
 
+    def current_quotes(self) -> dict[object, object]:
+        """Aktivní zdroj řetězu (#614 fáze 2b) — bez fallbacku prostě sweep cache."""
+        return self.scheduler.quotes()
+
 
 async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}")

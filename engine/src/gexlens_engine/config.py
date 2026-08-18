@@ -150,6 +150,17 @@ class Settings(BaseSettings):
     tasty_spot_recover_after_s: float = Field(default=60.0, gt=0)
     # Max stáří tasty kotace, aby se dala použít jako spot
     tasty_spot_max_age_s: float = Field(default=30.0, gt=0)
+    # Fallback CELÉHO opčního řetězu (#614 fáze 2b): fáze 2a zachránila cenu,
+    # ale heatmapa i GEX stojí na řetězu — bez tohohle graf při výpadku IBKR
+    # pořád zamrzne, jen se pod ním hýbe cena. Spouští ho verdikt křížové
+    # kontroly (#517 A), takže dědí její MĚŘENÉ prahy místo nových odhadů.
+    tasty_chain_fallback: bool = True
+    # Kolik čistých minut v řadě vrátí řetěz zpět na IBKR. Delší než zapínací
+    # série (crosscheck_minutes): přepnutí zdroje překreslí celý profil, takže
+    # kmitání stojí víc než o pár minut pozdější návrat.
+    tasty_chain_recover_minutes: int = Field(default=5, ge=1)
+    # Max stáří tasty hodnoty, aby kontrakt vstoupil do fallbackového řetězu
+    tasty_chain_max_age_s: float = Field(default=120.0, gt=0)
 
     crosscheck_enabled: bool = True
     crosscheck_share_threshold: float = Field(default=0.70, gt=0, le=1)

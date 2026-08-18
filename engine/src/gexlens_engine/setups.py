@@ -87,8 +87,15 @@ class SetupEngine:
     def _flows(self, runtime: EngineRuntime) -> tuple[float, float, float]:
         """Δ-vážené přírůstky volume per strana + surový přírůstek (z cache kotací)."""
         call_flow = put_flow = raw = 0.0
-        for spec, cached in runtime.scheduler.quotes().items():
+        # Aktivní zdroj řetězu, ne přímo sweep cache (#614 fáze 2b) — jinak by
+        # se za fallbacku počítal tok ze zmrzlých IBKR kotací
+        for spec, cached in runtime.current_quotes().items():
             snapshot = cached.snapshot
+            # Bez objemu (fallback z tasty) se přírůstek počítat nedá. Poslední
+            # známou hodnotu si držíme dál, ať se po návratu na IBKR naváže
+            # na ni, a ne na první ponovu viděné číslo jako na celý přírůstek.
+            if snapshot.volume is None:
+                continue
             previous = self._prev_volumes.get(spec)
             self._prev_volumes[spec] = snapshot.volume
             if previous is None:
