@@ -1,15 +1,27 @@
-"""Shadow porovnání IBKR × tasty (#613) — nic nepublikuje, jen měří.
+"""Minutový monitor obou feedů (#613, #763) — tally trvale, řádky volitelně.
 
 Porovnává se na minutovém gridu enginu: v okamžiku uzavřené minuty se vezme
 IBKR sweep cache a k ní poslední tasty stav s explicitním max stářím
 (timestamp normalizace konstrukcí — dva STAVY k témuž referenčnímu času,
-ne dva proudy; konvence ADR-0015). Obě strany starší než práh se zapisují
-jako NULL — report z toho počítá podíl chybějících vzorků.
+ne dva proudy; konvence ADR-0015).
 
-Kill switch: GEXLENS_TASTY_SHADOW=false — smyčka se vůbec nespustí; vypnutí
-za běhu = restart není potřeba, flag se čte při startu enginu a shadow lze
-zabít i samostatně (vlastní task, pád nesmí ohrozit sběr — každá výjimka
-se loguje a smyčka jede dál).
+Jeden průchod dává **dvě věci s různou životností** a #763 je oddělilo:
+
+* **`MinuteTally`** — rozpad kontraktů podle čerstvosti. Krmí detektor #517
+  fáze A a přes jeho verdikt oba fallbacky z #614. **Trvalá součást provozu**;
+  bez něj se řetěz při výpadku IBKR nepřepne.
+* **`ComparisonRow`** — řádky do `feed_comparison` pro kalibrační report.
+  **Dočasné**: skončí s vyhodnocením M7 fáze 2 (`tasty_comparison_write`).
+
+Do #763 hlídal obojí jeden flag `GEXLENS_TASTY_SHADOW`, takže „vypínám
+doběhnuté měření" tiše vyplo i odolnost proti výpadku IBKR. Proto se monitor
+jmenuje monitor, ne shadow, a zápis je jen jeho volitelný odběratel.
+
+Bez zapisovatele se řádky **vůbec nestaví** — odpadne tím ~3 000 alokací
+a jeden `insert_many` za minutu, a `feed_comparison` přestane růst.
+
+Pád jedné iterace smyčku nezabíjí: sběr IBKR nesmí být ohrožen ničím odtud,
+takže každá výjimka se loguje a jede se dál.
 """
 
 import asyncio
@@ -68,8 +80,9 @@ def compare_minute(
     now_utc: dt.datetime,
     max_age_ms: int = MAX_AGE_MS,
     oi_ibkr: dict[tuple[str, str, float, str], float] | None = None,
+    collect_rows: bool = True,
 ) -> MinuteComparison:
-    """Řádky porovnání jedné minuty + tally čerstvosti — čistá funkce (testy bez sítě).
+    """Tally čerstvosti + volitelně řádky porovnání — čistá funkce (testy bez sítě).
 
     Stáří IBKR strany se měří od monotonic času sweep cache, tasty strany od
     UTC času posledního eventu; obě se normalizují na ms vůči TÉŽE referenci
@@ -79,6 +92,12 @@ def compare_minute(
     kontrakty s oběma stranami mrtvými se do řádků nezapisují (nulová
     informace pro report), takže kategorii „tichý trh" jde zachytit jen
     v tomhle průchodu (#517 fáze A).
+
+    `collect_rows=False` (#763) vypne stavění řádků, **ne** jejich započtení do
+    tally — hodnoty se pořád čtou a vyhodnocují, jen se z nich nedělají
+    dataclassy pro tabulku. Tally proto musí vyjít bit-identicky jako se
+    zapisováním; drží to test, protože právě na téhle rovnosti stojí to, že
+    vypnutí měření nezmění chování fallbacků.
     """
     rows: list[ComparisonRow] = []
     both_fresh = ibkr_only_dead = tasty_only_dead = both_dead = 0
@@ -113,6 +132,8 @@ def compare_minute(
             tasty_alive = tasty_alive or value_tasty is not None
             if value_ibkr is None and value_tasty is None:
                 continue  # obě strany mrtvé — nulová informace, jen objem
+            if not collect_rows:
+                continue
             rows.append(
                 ComparisonRow(
                     ts=ts,
@@ -131,7 +152,7 @@ def compare_minute(
             (spec.symbol, spec.expiry, spec.strike, spec.right)
         )  # fmt: skip
         oi_value_tasty = None if state is None else state.summary.open_interest
-        if oi_value_ibkr is not None or oi_value_tasty is not None:
+        if collect_rows and (oi_value_ibkr is not None or oi_value_tasty is not None):
             rows.append(
                 ComparisonRow(
                     ts=ts,
@@ -161,17 +182,22 @@ def compare_minute(
     return MinuteComparison(rows=rows, tally=tally)
 
 
-class ShadowComparator:
-    """Minutová smyčka shadow porovnání — vlastní task vedle pipelines.
+class FeedMonitor:
+    """Minutová smyčka nad oběma feedy — vlastní task vedle pipelines.
 
     `contracts_source` vrací aktuální množinu (spec → CachedQuote) přes
     všechny pipelines; `chain_source` denní mapu symbolů. Pád jedné iterace
-    smyčku nezabíjí (sběr IBKR nesmí být ohrožen ničím z shadow větve).
+    smyčku nezabíjí (sběr IBKR nesmí být ohrožen ničím odtud).
+
+    `repository=None` (#763) = **měření se nezapisuje**, monitor ale běží dál
+    a dodává tally detektoru i fallbackům. Do #763 byl zapisovatel povinný
+    a celá smyčka visela na flagu `SHADOW`, takže jeho vypnutím se ztratila
+    i produkční odolnost. Zápis je proto odběratel monitoru, ne naopak.
     """
 
     def __init__(
         self,
-        repository: FeedComparisonRepository,
+        repository: FeedComparisonRepository | None,
         tasty_cache: TastyChainCache,
         contracts_source: Callable[[], dict[OptionContractSpec, CachedQuote]],
         chain_source: Callable[[], dict[str, ChainSymbols]],
@@ -189,7 +215,7 @@ class ShadowComparator:
         self._interval_s = interval_s
         # OI porovnání (#664): sync čtení denního archivu — volá se přes to_thread
         self._oi_source = oi_source
-        # Křížová kontrola (#517 fáze A): bez detektoru se shadow chová jako dřív
+        # Křížová kontrola (#517 fáze A): bez detektoru monitor jen měří
         self._detector = detector
         self._on_alert = on_alert
         # KAŽDÝ verdikt, ne jen alert (#614 fáze 2b): fallback řetězu se musí
@@ -214,7 +240,14 @@ class ShadowComparator:
         if not chains:
             return
         ts = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
-        oi_ibkr = None if self._oi_source is None else await asyncio.to_thread(self._oi_source)
+        collect_rows = self._repository is not None
+        # OI archiv se čte jen kvůli řádkům (do tally nevstupuje — denní veličina
+        # s vypnutým stářím), takže bez zapisovatele odpadá i tenhle dotaz do DB
+        oi_ibkr = (
+            await asyncio.to_thread(self._oi_source)
+            if collect_rows and self._oi_source is not None
+            else None
+        )
         comparison = compare_minute(
             ts,
             self._contracts_source(),
@@ -223,6 +256,7 @@ class ShadowComparator:
             now_monotonic=time.monotonic(),
             now_utc=dt.datetime.now(dt.UTC),
             oi_ibkr=oi_ibkr,
+            collect_rows=collect_rows,
         )
         rows = comparison.rows
         # Křížová kontrola (#517 A) běží PŘED zápisem: verdikt nesmí záviset
@@ -234,18 +268,20 @@ class ShadowComparator:
                 await self._on_verdict(verdict)
             if verdict.alert and self._on_alert is not None:
                 await self._on_alert(verdict)
+        if self._repository is None:
+            return
         await asyncio.to_thread(self._repository.insert_many, rows)
         self.rows_written += len(rows)
         if rows and self.rows_written % (len(rows) * 5) < len(rows):
             logger.info(
-                "Shadow: %d řádků tuto minutu (%d celkem, tasty sleduje %d symbolů)",
+                "Porovnání feedů: %d řádků tuto minutu (%d celkem, tasty sleduje %d symbolů)",
                 len(rows),
                 self.rows_written,
                 self._cache.symbols_tracked(),
             )
 
 
-def shadow_symbols(contracts: Sequence[OptionContractSpec], chain: ChainSymbols) -> set[str]:
+def tracked_symbols(contracts: Sequence[OptionContractSpec], chain: ChainSymbols) -> set[str]:
     """Streamer symboly pro stejnou množinu kontraktů, jakou drží IBKR."""
     symbols = set()
     for spec in contracts:

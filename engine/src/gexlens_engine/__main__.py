@@ -101,9 +101,9 @@ from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.devrun import run_tasty_only
+from gexlens_engine.tasty.monitor import FeedMonitor, tracked_symbols
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.session import TastyCredentials, TastySession
-from gexlens_engine.tasty.shadow import ShadowComparator, shadow_symbols
 from gexlens_engine.tasty.spot_fallback import SpotFallback
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
@@ -892,7 +892,7 @@ async def main() -> None:
     # čte z hlavní smyčky, proto musí být viditelná i při vypnutém shadow
     crosscheck: CrossCheckDetector | None = None
     publish_crosscheck: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None
-    if settings.tasty_shadow and settings.tasty_client_secret and settings.tasty_refresh_token:
+    if settings.tasty_enabled and settings.tasty_client_secret and settings.tasty_refresh_token:
         tasty_session = TastySession(
             TastyCredentials(
                 client_secret=settings.tasty_client_secret,
@@ -902,8 +902,13 @@ async def main() -> None:
         symbol_map = SymbolMap(tasty_session)
         tasty_cache = TastyChainCache()
         tasty_stream = DxLinkStream(tasty_session.quote_token, tasty_cache.on_event)
-        comparison_repository = FeedComparisonRepository(db)
-        await asyncio.to_thread(comparison_repository.ensure_schema)
+        # Zapisovatel porovnání je VOLITELNÝ odběratel monitoru (#763): bez něj
+        # se řádky vůbec nestaví a `feed_comparison` přestane růst, ale tally
+        # pro detektor i oba fallbacky běží dál.
+        comparison_repository: FeedComparisonRepository | None = None
+        if settings.tasty_comparison_write:
+            comparison_repository = FeedComparisonRepository(db)
+            await asyncio.to_thread(comparison_repository.ensure_schema)
 
         def shadow_contracts() -> dict[OptionContractSpec, CachedQuote]:
             merged: dict[OptionContractSpec, CachedQuote] = {}
@@ -1006,7 +1011,7 @@ async def main() -> None:
                 settings.tasty_chain_recover_minutes,
             )
 
-        comparator = ShadowComparator(
+        monitor = FeedMonitor(
             comparison_repository,
             tasty_cache,
             shadow_contracts,
@@ -1081,7 +1086,7 @@ async def main() -> None:
                     for symbol in shadow_target_symbols():
                         chain = await symbol_map.chain(symbol, today)
                         shadow_chain[symbol] = chain
-                        symbols |= shadow_symbols(list(shadow_contracts().keys()), chain)
+                        symbols |= tracked_symbols(list(shadow_contracts().keys()), chain)
                         # Podklad (#614): bez něj by při výpadku IBKR zamrzl
                         # cenový graf, i kdyby řetěz z tasty tekl dál
                         front = await symbol_map.front_future(symbol)
@@ -1129,18 +1134,21 @@ async def main() -> None:
 
         shadow_tasks = [
             asyncio.create_task(tasty_stream.run(shadow_stop)),
-            asyncio.create_task(comparator.run(shadow_stop)),
+            asyncio.create_task(monitor.run(shadow_stop)),
             asyncio.create_task(shadow_symbols_loop()),
             asyncio.create_task(orphan_spot_loop()),
         ]
         # Reference na tasks se drží (RUF006) — GC by je jinak uklidil před doběhem
         logger.info(
-            "tasty shadow mód ZAPNUT (%d úloh) — zapisuje se jen feed_comparison (#613)",
+            "tastytrade větev ZAPNUTA (%d úloh); porovnání do feed_comparison: %s (#763)",
             len(shadow_tasks),
+            "zapisuje se" if comparison_repository is not None else "VYPNUTO",
         )
-    elif settings.tasty_shadow:
+    elif settings.tasty_enabled:
         logger.warning(
-            "GEXLENS_TASTY_SHADOW=1, ale chybí tasty tajemství v env — shadow se nespouští"
+            "tastytrade větev je zapnutá, ale chybí tajemství v env "
+            "(GEXLENS_TASTY_CLIENT_SECRET, _REFRESH_TOKEN) — nespouští se, "
+            "takže při výpadku IBKR nebude fallback (#614)"
         )
     # Symboly po selhaném setupu: cooldown v cyklech do dalšího pokusu
     setup_cooldown = SetupCooldown()

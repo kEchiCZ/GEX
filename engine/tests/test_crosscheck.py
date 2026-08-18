@@ -15,8 +15,8 @@ from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import CachedQuote, QuoteSnapshot
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, MinuteTally
 from gexlens_engine.tasty.mock import feed_greeks, feed_quote
+from gexlens_engine.tasty.monitor import compare_minute
 from gexlens_engine.tasty.provider import TastyChainCache
-from gexlens_engine.tasty.shadow import compare_minute
 from gexlens_engine.tasty.symbols import ChainSymbols
 
 TS = dt.datetime(2026, 8, 13, 14, 0, tzinfo=dt.UTC)
@@ -223,3 +223,78 @@ def test_podily_jsou_bezpecne_pri_nule_kontraktu(share: float) -> None:
     assert empty.ibkr_dead_share == 0.0
     assert empty.tasty_dead_share == 0.0
     assert empty.both_dead_share == 0.0
+
+
+def test_vypnuty_zapis_nemeni_tally_ani_o_kontrakt() -> None:
+    """#763: konec měření nesmí změnit chování detektoru ani fallbacků.
+
+    Tally je jediné, co z tohohle průchodu jde do produkce — verdikt detektoru
+    přes něj spouští fallback řetězu i návrat zpět (#614 fáze 2b). Kdyby se
+    s vypnutým zápisem lišil byť o jeden kontrakt, znamenalo by to, že se
+    aplikace po dojetí shadow začne rozhodovat jinak. Tenhle test je proto
+    tvrdá podmínka celého rozdělení flagu.
+    """
+    now_mono = time.monotonic()
+    specs = [
+        OptionContractSpec(
+            symbol="ES",
+            sec_type="FOP",
+            expiry="20260813",
+            strike=strike,
+            right=right,
+            exchange="CME",
+            trading_class="E2D",
+            multiplier="50",
+        )
+        for strike in (7770.0, 7775.0, 7780.0)
+        for right in ("C", "P")
+    ]
+    snapshot = QuoteSnapshot(
+        bid=18.0,
+        ask=18.5,
+        last=18.25,
+        volume=120.0,
+        iv=0.125,
+        delta=0.52,
+        gamma=0.0112,
+        theta=-13.0,
+        vega=1.1,
+    )
+    chain = ChainSymbols(
+        product="ES",
+        day=TS.date(),
+        by_contract={
+            ("20260813", spec.strike, spec.right): f"./E2DQ26{spec.right}{spec.strike:g}:XCME"
+            for spec in specs
+        },
+    )
+    # Míchaný stav: část kontraktů živá, část stale — ať tally není triviální
+    quotes = {
+        spec: CachedQuote(snapshot=snapshot, updated_at=now_mono - 5.0, stale=index % 2 == 0)
+        for index, spec in enumerate(specs)
+    }
+    cache = TastyChainCache(clock=lambda: TS)
+    for spec in specs[:4]:
+        streamer = chain.streamer_symbol(spec)
+        assert streamer is not None
+        cache.on_event("Quote", [streamer, 18.0, 18.6, 3, 4])
+        cache.on_event("Greeks", [streamer, 0.126, 0.53, 0.0113, -13.1, 1.2, 18.3])
+    oi = {("ES", "20260813", spec.strike, spec.right): 1000.0 for spec in specs}
+
+    se_zapisem = compare_minute(
+        TS, quotes, cache, {"ES": chain}, now_monotonic=now_mono, now_utc=TS, oi_ibkr=oi
+    )
+    bez_zapisu = compare_minute(
+        TS,
+        quotes,
+        cache,
+        {"ES": chain},
+        now_monotonic=now_mono,
+        now_utc=TS,
+        oi_ibkr=oi,
+        collect_rows=False,
+    )
+
+    assert bez_zapisu.tally == se_zapisem.tally
+    assert se_zapisem.rows  # kontrola, že test měří na neprázdném vzorku
+    assert bez_zapisu.rows == []

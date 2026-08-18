@@ -158,9 +158,11 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_BIND_ADDR` | 127.0.0.1 | Na jaké adrese publikují porty (server: ponechat loopback + reverse proxy) |
 | `GEXLENS_ALLOWED_ORIGINS` | — | CORS whitelist API |
 | `GEXLENS_NEWS_API_TOKEN` | — | Token news-engine → API push |
-| `GEXLENS_TASTY_SHADOW` | false | Shadow porovnání tastytrade feedu (M7 fáze 1, #613) — zapisuje JEN do `feed_comparison`, nic nepublikuje. Kill switch = vypnout flag |
+| `GEXLENS_TASTY_ENABLED` | true | **Trvalá** tastytrade větev (#613, #763): session, DXLink stream, chain mapa, křížová kontrola (#517 A), oba fallbacky (#614), OI fill (#664). Bez tajemství se stejně nespustí, proto default `true` |
+| `GEXLENS_TASTY_COMPARISON_WRITE` | true | **Dočasný** zápis porovnávacích řádků do `feed_comparison` (#613). Vypnout po vyhodnocení M7 fáze 2 — tally pro detektor a fallbacky běží dál, takže se tím NEztrácí odolnost proti výpadku IBKR |
+| `GEXLENS_TASTY_SHADOW` | — | **ZASTARALÉ (#763)**, nechávej nenastavené. Hlídalo obojí naráz, takže „vypínám doběhnuté měření" tiše bralo i fallbacky. Když je nastaven, řídí `GEXLENS_TASTY_ENABLED` a engine to při startu ohlásí varováním |
 | `GEXLENS_TASTY_CLIENT_SECRET` / `_REFRESH_TOKEN` | — | OAuth2 grant **výhradně scope `read`** (ADR-0025); dev grant patří do `.env.dev` pod standardními názvy. Obsah `.env` se nikdy nevypisuje do konzole |
-| `GEXLENS_CROSSCHECK_ENABLED` | true | Křížová kontrola IBKR × tasty (#517 fáze A) — pasivní, bez requestů a linek navíc. Bez shadow se tiše nezapne |
+| `GEXLENS_CROSSCHECK_ENABLED` | true | Křížová kontrola IBKR × tasty (#517 fáze A) — pasivní, bez requestů a linek navíc. Bez zapnuté tasty větve se tiše nezapne |
 | `GEXLENS_CROSSCHECK_SHARE_THRESHOLD` / `_MINUTES` / `_COOLDOWN_MINUTES` | 0.70 / 3 / 15 | Prahy **měřené** na shadow historii, ne odhadnuté — viz níže. `_MINUTES` pod 3 = falešný poplach každou třetí minutu |
 | `GEXLENS_TASTY_SPOT_FALLBACK` | true | Cena podkladu z tastytrade, když IBKR přestane posílat ticky (#614 fáze 2a) |
 | `GEXLENS_TASTY_SPOT_STALE_AFTER_S` / `_RECOVER_AFTER_S` / `_MAX_AGE_S` | 30 / 60 / 30 | Hystereze spotu: kdy převzít, kdy vrátit, max stáří tasty kotace. Návrat je delší než převzetí schválně — kmitání zdroje stojí víc než o půl minuty pozdější návrat |
@@ -362,11 +364,18 @@ z `.env.example` nepoužívá nikdo (refresh flow posílá jen `refresh_token`
 `scripts/tasty_probe.py`. Když nastavení „nezabírá", ověř nejdřív, že ten klíč
 engine vůbec zná — seznam je v kapitole 4.
 
-⚠️ **`GEXLENS_TASTY_SHADOW` dnes NENÍ jen vypínač měření.** Hlídá celý blok,
-pod kterým visí i křížová kontrola (#517 A), oba fallbacky (#614 2a/2b), OI
-fill (#664) i publikace ceny bez pipeline (#756). **Vypnutím si tiše vypneš
-odolnost proti výpadku IBKR**, aniž by to cokoli oznámilo — nedělej to, dokud
-nedoběhne #763 (rozdělení flagu na trvalou a měřicí část).
+**Trvalé × dočasné je od #763 rozdělené.** Do té doby hlídal jeden flag
+`GEXLENS_TASTY_SHADOW` obojí, takže nejpřirozenější možná úvaha — „měření
+doběhlo, vypínám ho" — tiše vypnula i křížovou kontrolu, oba fallbacky, OI fill
+a publikaci ceny bez pipeline. Nově:
+
+* `GEXLENS_TASTY_ENABLED` drží **trvalou** větev (default `true`),
+* `GEXLENS_TASTY_COMPARISON_WRITE` jen **dočasný** zápis do `feed_comparison`.
+
+Až doběhne vyhodnocení M7 fáze 2, vypíná se **druhý** z nich. Monitor běží dál
+a dodává tally detektoru i fallbackům; ověřuje to test, který porovnává tally
+se zapisováním a bez něj — musí vyjít shodně, jinak by se aplikace po konci
+měření začala rozhodovat jinak.
 
 Provozní stav tasty větve (reconnecty DXLink, handshake, počet sledovaných
 symbolů, zapsané řádky) končí **jen v logu kontejneru** a v tabulce
@@ -378,7 +387,7 @@ Samostatná obrazovka je zadaná v #706.
 Heartbeat testuje jen TCP spojení a stall detektory (ADR-0015) měří pasivně
 stáří dat — incident 26.–27. 7. (15 h zmrzlé ATM greeks při tekoucích cenách)
 nezachytila ani jedna vrstva. Chyběla **nezávislá reference**: mlčí data, nebo
-mlčí trh? Běžící shadow ji dodává zadarmo, takže detektor nedělá **žádný
+mlčí trh? Běžící tasty větev ji dodává zadarmo, takže detektor nedělá **žádný
 request na IBKR a nebere žádnou market data line** — jen čte, co `compare_minute`
 stejně počítá.
 
@@ -419,7 +428,7 @@ do `/status` a jednou na začátku epizody do logu.
 Kontrolní měření po téhle úpravě: **3 053 minut čisté historie → 0 alertů.**
 
 Stav je v **Settings → Stav enginu** (řádek *Křížová kontrola feedů*) a v
-`/status` jako `feed_crosscheck`. Když shadow neběží, pole ve statusu **chybí**
+`/status` jako `feed_crosscheck`. Když tasty větev neběží, pole ve statusu **chybí**
 — UI to ukáže jako „neměří se", což je jiný stav než `ok`.
 
 ### Fallback na tastytrade (#614 fáze 2a a 2b)
