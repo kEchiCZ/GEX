@@ -313,6 +313,17 @@ body {
   background: #e8c14b;
 }
 
+/* Neznámé pokrytí (#758): prvek zůstává na místě, jen nic netvrdí. Ztlumený,
+   aby se nepletl s neúplným pokrytím — to je nález, tohle je jen chybějící
+   měření. Proužek zůstává prázdný, ne poloprázdný. */
+.coverage-unknown {
+  opacity: 0.45;
+}
+
+.coverage-unknown .coverage-bar {
+  background: rgba(125, 133, 150, 0.18);
+}
+
 /* Čas posledních dat nad grafem (#470) — stálá odpověď na „koukám na živá data?" */
 .data-stamp {
   font-size: 12px;

@@ -33,7 +33,12 @@ const SYMBOL_NAMES: Record<string, string> = {
   GC: 'Gold',
 }
 
-/** Pokrytí s progress barem — číslo `84/158` samo o sobě přehlédneš (#470). */
+/** Pokrytí s progress barem — číslo `84/158` samo o sobě přehlédneš (#470).
+
+Neznámé pokrytí prvek NESKRÝVÁ (#758): do té doby zmizel celý a v panelu zbyly
+jen ty ukazatele, které data měly — což vypadá jako rozbité rozhraní, ne jako
+chybějící data. Přitom „tohle zrovna neměřím" je nejcennější právě při výpadku
+zdroje. Místo zmizení se ukáže pomlčka a prázdný proužek. */
 function CoverageBadge({
   label,
   coverage,
@@ -45,18 +50,26 @@ function CoverageBadge({
   title: string
   testId: string
 }) {
-  if (!coverage) return null
-  // Neúplná data hlásí barvu: čekat na 100 % u Greeks je normální jen chvíli po startu
-  const incomplete = coverage.ratio < 1
+  // Tři stavy, tři barvy: neznámé (ztlumené), neúplné (žluté), plné (zelené).
+  // Čekat na 100 % u Greeks je normální jen chvíli po startu.
+  const state = coverage === null ? 'unknown' : coverage.ratio < 1 ? 'partial' : 'full'
   return (
     <span
-      className={incomplete ? 'coverage coverage-partial' : 'coverage'}
+      className={state === 'full' ? 'coverage' : `coverage coverage-${state}`}
       data-testid={testId}
-      title={title}
+      title={
+        coverage === null
+          ? `${title} Hodnotu teď nelze změřit — engine ji (ještě) neposlal, ` +
+            'typicky při odpojeném IBKR nebo krátce po startu.'
+          : title
+      }
     >
-      {label} {coverageLabel(coverage)}
+      {label} {coverage === null ? '—' : coverageLabel(coverage)}
       <span className="coverage-bar" aria-hidden="true">
-        <span className="coverage-fill" style={{ width: `${Math.round(coverage.ratio * 100)}%` }} />
+        <span
+          className="coverage-fill"
+          style={{ width: `${coverage === null ? 0 : Math.round(coverage.ratio * 100)}%` }}
+        />
       </span>
     </span>
   )
