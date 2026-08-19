@@ -38,6 +38,9 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    # 19. 8. visel job 3× přes 15 minut na stahování Chromia (#782) — bez
+    # timeoutu by držel runner až 6 h; celý job normálně trvá ~2 minuty
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
@@ -55,7 +58,14 @@ jobs:
       - run: npm run build
       # Smoke PRODUKČNÍHO bundlu (#154): build se dosud jen stavěl, nikdy nespustil —
       # runtime chyba viditelná jen v produkci (#146, bílá stránka) by prošla
+      # Cache Chromia (#782): download z Playwright CDN opakovaně visí desítky
+      # minut. Klíč z package-lock — nová verze @playwright/test = nový download
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
       - run: npx playwright install --with-deps chromium
+        timeout-minutes: 6
       - run: npm run smoke
 
   # Bezpečnostní skeny (#542). Drží stav, který prověrka nastavila: žádný
