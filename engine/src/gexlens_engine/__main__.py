@@ -315,6 +315,8 @@ def _crosscheck_status(detector: CrossCheckDetector | None) -> dict[str, object]
         "feed_crosscheck_detail": verdict.message,
         "feed_crosscheck_ibkr_dead_share": round(verdict.tally.ibkr_dead_share, 3),
         "feed_crosscheck_contracts": verdict.tally.contracts,
+        # Rozlišovač „hýbe se trh?" (#764) — kontrola kalibrace prahu naživo
+        "feed_crosscheck_ibkr_changed_share": round(verdict.tally.ibkr_changed_share, 3),
     }
 
 
@@ -939,13 +941,16 @@ async def main() -> None:
                 share_threshold=settings.crosscheck_share_threshold,
                 minutes_threshold=settings.crosscheck_minutes,
                 cooldown_minutes=settings.crosscheck_cooldown_minutes,
+                change_threshold=settings.crosscheck_change_threshold,
             )
 
             async def _publish_crosscheck(verdict: CrossCheckVerdict) -> None:
+                # Mrtvá záloha (#764) má vlastní kanál: nejde o „data jsou
+                # špatná" (feed_crosscheck), ale o „záloha není k dispozici"
                 await publisher.publish(
                     "alerts",
                     {
-                        "kind": "feed_crosscheck",
+                        "kind": "feed_backup_dead" if verdict.backup_dead else "feed_crosscheck",
                         "symbol": "*",
                         "message": verdict.message,
                         "ts": dt.datetime.now(dt.UTC).timestamp(),
