@@ -278,6 +278,13 @@ class Settings(BaseSettings):
     keep_bars_forever: bool = True
     # 90denní retence vychází na ~1,5 GB (ES+NQ); 2 GB by hlásily falešný alert
     disk_limit_gb: float = Field(default=5.0, gt=0)
+    # Dohled nad volným místem (#773) — jen měření a alerty, úklid řeší #757.
+    # Prahy na SKUTEČNÉM volném místě disku s datovým adresářem (bind mount
+    # ukazuje čísla hostitele); velikost DB má vlastní práh, protože WSL disk
+    # s PostgreSQL volume z kontejneru změřit nejde a C: plní právě růst DB.
+    disk_free_warn_gb: float = Field(default=15.0, gt=0)
+    disk_free_crit_gb: float = Field(default=5.0, gt=0)
+    db_size_alert_gb: float = Field(default=4.0, gt=0)
     # Čas nočního purge jobu (UTC, po zavření US seance)
     retention_purge_time_utc: dt.time = dt.time(21, 30)
 
