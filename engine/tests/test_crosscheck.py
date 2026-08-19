@@ -434,16 +434,24 @@ def test_compare_minute_meri_zmeny_proti_predchozi_minute() -> None:
         }
 
     minute_one = compare_minute(
-        TS, quotes({7700.0: 18.0, 7750.0: 9.0}), cache, {"ES": chain},
-        now_monotonic=now_mono, now_utc=TS,
+        TS,
+        quotes({7700.0: 18.0, 7750.0: 9.0}),
+        cache,
+        {"ES": chain},
+        now_monotonic=now_mono,
+        now_utc=TS,
     )
     # První minuta nemá s čím srovnávat — náběh nesmí hlásit „trh se hýbe"
     assert minute_one.tally.ibkr_comparable == 0
     assert minute_one.tally.ibkr_changed == 0
 
     minute_two = compare_minute(
-        TS, quotes({7700.0: 18.25, 7750.0: 9.0}), cache, {"ES": chain},
-        now_monotonic=now_mono, now_utc=TS,
+        TS,
+        quotes({7700.0: 18.25, 7750.0: 9.0}),
+        cache,
+        {"ES": chain},
+        now_monotonic=now_mono,
+        now_utc=TS,
         previous_ibkr=minute_one.ibkr_values,
     )
     # Jeden kontrakt se hnul, druhý vrací tutéž kotaci
@@ -467,11 +475,14 @@ def test_compare_minute_mrtva_strana_neni_komparabilni() -> None:
         specs[0]: CachedQuote(snapshot=_change_snapshot(19.0), updated_at=now_mono, stale=True)
     }
 
-    minute_one = compare_minute(
-        TS, fresh, cache, {"ES": chain}, now_monotonic=now_mono, now_utc=TS
-    )
+    minute_one = compare_minute(TS, fresh, cache, {"ES": chain}, now_monotonic=now_mono, now_utc=TS)
     minute_two = compare_minute(
-        TS, stale, cache, {"ES": chain}, now_monotonic=now_mono, now_utc=TS,
+        TS,
+        stale,
+        cache,
+        {"ES": chain},
+        now_monotonic=now_mono,
+        now_utc=TS,
         previous_ibkr=minute_one.ibkr_values,
     )
 
@@ -505,8 +516,13 @@ def test_simulovany_vypadek_tasty_pri_bezicim_ibkr_alertuje() -> None:
             for spec in specs
         }
         comparison = compare_minute(
-            TS, quotes, dead_tasty, {"ES": chain},
-            now_monotonic=now_mono, now_utc=TS, previous_ibkr=previous,
+            TS,
+            quotes,
+            dead_tasty,
+            {"ES": chain},
+            now_monotonic=now_mono,
+            now_utc=TS,
+            previous_ibkr=previous,
         )
         previous = comparison.ibkr_values
         verdicts.append(detector.observe(comparison.tally))
