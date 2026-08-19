@@ -85,3 +85,13 @@ describe('previousDateIso', () => {
     expect(previousDateIso('2026-03-01')).toBe('2026-02-28')
   })
 })
+
+describe('popisky časové osy historie (#788)', () => {
+  it('nese HH:MM per koš (start koše), stejný formát jako dnešní osa', async () => {
+    const { minuteLabel } = await import('./useDayData')
+    const view = buildHistoryView([day('2026-08-18', 10)], 5)
+    expect(view.slices[0].labels).toHaveLength(2)
+    expect(view.slices[0].labels[0]).toBe(minuteLabel('2026-08-18T00:00:00+00:00'))
+    expect(view.slices[0].labels[1]).toBe(minuteLabel('2026-08-18T00:05:00+00:00'))
+  })
+})

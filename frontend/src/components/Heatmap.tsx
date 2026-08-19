@@ -986,15 +986,25 @@ export function Heatmap({
       context.fillText(label, 6, y + 4)
     }
     // Osa X: čas u spodního okraje
-    for (const minuteIdx of tickIndices(grid.minutes, scaleX, 88)) {
-      const x = minuteToX(minuteIdx)
-      if (x < 24 || x > logicalW - 44) continue
-      const label = minuteLabels[minuteIdx] ?? `m${minuteIdx}`
+    const drawTimeTick = (x: number, label: string) => {
+      if (x < 24 || x > logicalW - 44 || label === '') return
       const width = measuredWidth(context, label)
       context.fillStyle = 'rgba(18,21,28,0.75)'
       context.fillRect(x - width / 2 - 4, logicalH - 19, width + 8, 15)
       context.fillStyle = 'rgba(180,188,202,0.95)'
       context.fillText(label, x - width / 2, logicalH - 7)
+    }
+    for (const minuteIdx of tickIndices(grid.minutes, scaleX, 88)) {
+      drawTimeTick(minuteToX(minuteIdx), minuteLabels[minuteIdx] ?? `m${minuteIdx}`)
+    }
+    // Časy i pro historii přes hranici dne (#788) — rozestup košů stejný jako
+    // dnešní osa, rytmus startuje od začátku každého dne (slice)
+    if (history) {
+      for (const slice of history.slices) {
+        for (const local of tickIndices(slice.labels.length, scaleX, 88)) {
+          drawTimeTick(minuteToX(slice.firstBucket + local), slice.labels[local])
+        }
+      }
     }
 
     // Timestamp dat (SPEC 7.2)
@@ -1190,9 +1200,23 @@ export function Heatmap({
       // Osové labely crosshairu (TradingView styl) — kreslené naposled, nad vším
       context.font = 'bold 11px sans-serif'
       // Osa X (dole): datum + čas pod svislou linkou (jen nad daty — mimo svíce bez času)
-      const timeStr =
+      let timeStr =
         minuteLabels[crosshair.minuteIdx] ?? liveLabels[crosshair.minuteIdx - grid.minutes]
-      const timeLabel = timeStr ? `${dateLabel ? `${dateLabel} ` : ''}${timeStr}`.trim() : ''
+      let datePrefix = dateLabel
+      // Historie přes hranici dne (#788): čas ze slice + JEHO datum — dnešní
+      // dateLabel by k času před třemi dny tvrdil špatný den
+      if (timeStr === undefined && history && crosshair.minuteIdx < 0) {
+        const slice = history.slices.find(
+          (candidate) =>
+            crosshair.minuteIdx >= candidate.firstBucket &&
+            crosshair.minuteIdx < candidate.firstBucket + candidate.labels.length,
+        )
+        if (slice) {
+          timeStr = slice.labels[crosshair.minuteIdx - slice.firstBucket]
+          datePrefix = slice.date.split('-').reverse().join('.')
+        }
+      }
+      const timeLabel = timeStr ? `${datePrefix ? `${datePrefix} ` : ''}${timeStr}`.trim() : ''
       if (timeLabel) {
         const width = measuredWidth(context, timeLabel) + 12
         const boxX = Math.min(logicalW - width, Math.max(0, x - width / 2))
@@ -1229,6 +1253,7 @@ export function Heatmap({
     priceTick,
     range,
     rangeB,
+    history,
     logicalW,
     logicalH,
     dpr,
