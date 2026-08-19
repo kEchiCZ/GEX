@@ -348,3 +348,51 @@ async def test_connection_offline_status_key_only_when_offline() -> None:
     await wait_for_state(manager, ConnectionState.CONNECTED)
     assert engine_main._connection_offline_status(manager) == {}
     await manager.stop()
+
+
+# ── Vynucená obnova subskripcí (#517 fáze B) ─────────────────────────
+
+
+async def test_resubscribe_now_probehne_vsechny_callbacky() -> None:
+    """Sonda našla mrtvé subskripce při živé farmě → jedna cílená obnova."""
+    client = MockIB()
+    manager = manager_with(client)
+    calls: list[str] = []
+
+    async def first() -> None:
+        calls.append("first")
+
+    async def second() -> None:
+        calls.append("second")
+
+    manager.on_resubscribe(first)
+    manager.on_resubscribe(second)
+    await manager.start()
+    await wait_for_state(manager, ConnectionState.CONNECTED)
+    calls.clear()  # connect je volá taky; měří se jen vynucený běh
+
+    assert await manager.resubscribe_now() is True
+    assert calls == ["first", "second"]
+    await manager.stop()
+
+
+async def test_selhana_vynucena_obnova_prepoji_spojeni() -> None:
+    """Když obnova neprojde, spojení nenese data → disconnect a supervisor
+    se přepojí standardní cestou; výsledek se hlásí jako False."""
+    client = MockIB()
+    manager = manager_with(client)
+    attempts = {"n": 0}
+
+    async def flaky() -> None:
+        attempts["n"] += 1
+        if attempts["n"] == 2:  # první volání je z connectu; selže až vynucený běh
+            raise RuntimeError("subscription farm refused")
+
+    manager.on_resubscribe(flaky)
+    await manager.start()
+    await wait_for_state(manager, ConnectionState.CONNECTED)
+
+    assert await manager.resubscribe_now() is False
+    # Disconnect nastartuje reconnect; MockIB se nechá znovu připojit
+    await wait_for_state(manager, ConnectionState.CONNECTED)
+    await manager.stop()

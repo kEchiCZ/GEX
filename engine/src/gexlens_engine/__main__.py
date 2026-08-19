@@ -54,6 +54,7 @@ from gexlens_engine.ibkr.newsticks import (
     tape_symbol,
 )
 from gexlens_engine.ibkr.pacing import PacingGuard
+from gexlens_engine.ibkr.probe import FarmProbe
 from gexlens_engine.ibkr.scheduler import CachedQuote, SubscriptionScheduler
 from gexlens_engine.ibkr.subscription import (
     NOT_SUBSCRIBED_ERROR_CODE,
@@ -379,6 +380,76 @@ def _crosscheck_status(detector: CrossCheckDetector | None) -> dict[str, object]
         # Rozlišovač „hýbe se trh?" (#764) — kontrola kalibrace prahu naživo
         "feed_crosscheck_ibkr_changed_share": round(verdict.tally.ibkr_changed_share, 3),
     }
+
+
+def _setup_farm_probe(
+    ib: IB,
+    manager: ConnectionManager,
+    settings: Settings,
+    publisher: PublisherLike,
+    pipelines: dict[str, InstrumentPipeline],
+) -> Callable[[str], None] | None:
+    """Aktivní IBKR sonda (#517 fáze B) — vrátí spouštěč, nebo None (vypnuto).
+
+    Spouštěč se volá z alert cesty fáze A na verdikt `ibkr_suspect`; sonda pak
+    mimo tick monitoru rozliší výpadek farmy od mrtvých subskripcí (a ty
+    rovnou cíleně obnoví přes `manager.resubscribe_now`). Výsledek jde do
+    zvonečku jako `feed_probe`.
+    """
+    if not settings.probe_enabled:
+        return None
+
+    async def snapshot_probe() -> bool:
+        """Snapshot referenčního front future — test DORUČENÍ dat.
+
+        Kontrakt se bere z běžící pipeline (verdikt `ibkr_suspect` předpokládá
+        ≥ min_contracts sledovaných kontraktů, takže pipeline existuje).
+        Živost = přišla použitelná hodnota, ne „request nespadl" — lekce
+        z fáze A: zmrzlou kotaci TWS ochotně vrací pořád dokola.
+        """
+        pipeline = next(iter(pipelines.values()), None)
+        contract = None if pipeline is None else getattr(pipeline.ticker, "contract", None)
+        if contract is None:
+            raise RuntimeError("žádná běžící pipeline s kontraktem podkladu")
+        tickers = await ib.reqTickersAsync(contract)
+        ticker = tickers[0] if tickers else None
+        if ticker is None:
+            return False
+        values = (ticker.bid, ticker.ask, ticker.last, ticker.close)
+        # `v == v` vyřazuje NaN (ib_async jím značí chybějící pole), `> 0`
+        # sentinel -1, kterým IBKR hlásí prázdnou stranu knihy
+        return any(v is not None and v == v and v > 0 for v in values)
+
+    probe = FarmProbe(
+        snapshot_probe,
+        manager.resubscribe_now,
+        # Sonda nesmí být poslední kapkou přes strop lines (ADR-0001)
+        lines_free=lambda: max(0, settings.market_data_lines - count_ib_lines(ib)),
+    )
+
+    async def probe_and_report(reason: str) -> None:
+        report = await probe.trigger(reason)
+        if report is None:
+            return
+        await publisher.publish(
+            "alerts",
+            {
+                "kind": "feed_probe",
+                "symbol": "*",
+                "message": report.message,
+                "ts": dt.datetime.now(dt.UTC).timestamp(),
+            },
+        )
+
+    # RUF006: reference na běžící sondu se drží do dokončení (#499)
+    pending: set[asyncio.Task[None]] = set()
+
+    def spawn(reason: str) -> None:
+        task = asyncio.create_task(probe_and_report(reason))
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+
+    return spawn
 
 
 def _spot_source_status(running: Sequence[InstrumentPipeline]) -> dict[str, object]:
@@ -1007,6 +1078,7 @@ async def main() -> None:
                 cooldown_minutes=settings.crosscheck_cooldown_minutes,
                 change_threshold=settings.crosscheck_change_threshold,
             )
+            probe_spawner = _setup_farm_probe(ib, manager, settings, publisher, pipelines)
 
             async def _publish_crosscheck(verdict: CrossCheckVerdict) -> None:
                 # Mrtvá záloha (#764) má vlastní kanál: nejde o „data jsou
@@ -1020,6 +1092,12 @@ async def main() -> None:
                         "ts": dt.datetime.now(dt.UTC).timestamp(),
                     },
                 )
+                # Aktivní sonda (#517 fáze B): `ibkr_suspect` říká, že problém
+                # je na straně IBKR — sonda rozliší farmu od mrtvých subskripcí
+                # a subskripce rovnou cíleně obnoví. Běží mimo tick monitoru,
+                # aby snapshot (až 10 s) nezdržel minutové porovnání.
+                if probe_spawner is not None and verdict.state == "ibkr_suspect":
+                    probe_spawner(verdict.message)
 
             publish_crosscheck = _publish_crosscheck
 
