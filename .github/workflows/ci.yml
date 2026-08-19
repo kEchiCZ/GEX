@@ -64,7 +64,10 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-      - run: npx playwright install --with-deps chromium
+      # BEZ --with-deps (#782 follow-up): apt část tahala volitelné CJK fonty
+      # ze šnečího Azure mirroru (19. 8. 2 min/balík → timeout) — systémové
+      # knihovny Chromia má runner image předinstalované, smoke fonty nepotřebuje
+      - run: npx playwright install chromium
         timeout-minutes: 6
       - run: npm run smoke
 

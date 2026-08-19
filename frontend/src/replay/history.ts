@@ -19,6 +19,7 @@ import { API_BASE } from '../config'
 import type { PriceBar } from '../heatmap/overlays'
 import { cachedBucketPlan } from '../heatmap/buckets'
 import { aggregateBars } from './aggregate'
+import { minuteLabel } from './useDayData'
 
 /** Jedna historická seance: 1m bary s `minuteIdx` = pořadí v seanci (0..N−1). */
 export interface HistoryDay {
@@ -33,6 +34,10 @@ export interface HistorySlice {
   /** První (nejlevější) koš slice — sem patří svislý předěl s datem. */
   firstBucket: number
   price: PriceBar[]
+  /** Popisky časové osy (HH:MM) per koš slice — index = koš − firstBucket.
+      Stejný formát i cache jako dnešní osa (`minuteLabel`), takže osa X
+      nese časy po celé délce, ne jen pro dnešek. */
+  labels: string[]
 }
 
 export interface HistoryView {
@@ -103,6 +108,10 @@ export function buildHistoryView(
       date: day.date,
       firstBucket,
       price: aggregated.map((bar) => ({ ...bar, minuteIdx: bar.minuteIdx + firstBucket })),
+      labels: Array.from({ length: buckets }, (_, bucketIdx) => {
+        const iso = day.minutesIso[plan.starts[bucketIdx] ?? 0]
+        return iso === undefined ? '' : minuteLabel(iso)
+      }),
     })
     offset = firstBucket
   }
