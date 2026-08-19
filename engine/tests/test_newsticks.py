@@ -1,12 +1,17 @@
 """Testy broker headlines z ticku 292 (#291): normalizace, dedup, zápis."""
 
 import datetime as dt
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
+from ib_async import IB
 from sqlalchemy import create_engine, select
 
+import gexlens_engine.__main__ as engine_main
+from gexlens_engine.ibkr.connection import ConnectionManager, ConnectionState
 from gexlens_engine.ibkr.newsticks import (
     BROAD_TAPE_TICKS,
     NewsTickCollector,
@@ -17,6 +22,7 @@ from gexlens_engine.ibkr.newsticks import (
     tape_symbol,
     tick_time,
 )
+from gexlens_engine.runtime import PublisherLike
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema, news_events
 
 NOW = dt.datetime(2026, 7, 28, 14, 0, tzinfo=dt.UTC)
@@ -264,3 +270,70 @@ def test_empty_input_is_noop(tmp_path: Path) -> None:
     collector, _ = make(tmp_path)
     assert collector.write([], now=NOW) == []
     assert collector.write([FakeTick("")], now=NOW) == []
+
+
+# ── Start broker news bez spojení (#778) ─────────────────────────────
+
+
+class _FakeTickEvent:
+    def __init__(self) -> None:
+        self.handlers: list[Any] = []
+
+    def __iadd__(self, handler: Any) -> "_FakeTickEvent":
+        self.handlers.append(handler)
+        return self
+
+
+class _NullPublisher(PublisherLike):
+    async def status(self, **fields: object) -> None:
+        pass
+
+    async def publish(self, channel: str, data: dict[str, object]) -> None:
+        pass
+
+
+def _fake_ib(providers: Callable[[], Awaitable[list[Any]]]) -> Any:
+    return SimpleNamespace(tickNewsEvent=_FakeTickEvent(), reqNewsProvidersAsync=providers)
+
+
+async def test_start_bez_spojeni_odber_odlozi_a_nespadne() -> None:
+    """#778: engine startující bez TWS (#756) nesmí spadnout na eager odběru —
+    19. 8. ConnectionError odsud vzal celý main() a proces zůstal viset."""
+
+    async def providers() -> list[Any]:
+        raise AssertionError("na nepřipojeného klienta se nesmí sahat")
+
+    callbacks: list[Any] = []
+    manager = SimpleNamespace(
+        state=ConnectionState.RECONNECTING, on_resubscribe=callbacks.append
+    )
+    ib = _fake_ib(providers)
+
+    await engine_main._start_broker_news(
+        cast(IB, ib),
+        cast(ConnectionManager, manager),
+        cast(NewsTickCollector, None),
+        _NullPublisher(),
+    )
+
+    assert len(callbacks) == 1  # záruka odběru: proběhne s prvním (re)connectem
+    assert len(ib.tickNewsEvent.handlers) == 1  # příjem ticků je zapojený už teď
+
+
+async def test_pad_spojeni_behem_eager_odberu_nepropadne() -> None:
+    """Race #778: stav byl connected, ale spojení spadlo před odběrem —
+    ConnectionError nesmí zabít main(), odběr obnoví reconnect callback."""
+
+    async def providers() -> list[Any]:
+        raise ConnectionError("Not connected")
+
+    manager = SimpleNamespace(
+        state=ConnectionState.CONNECTED, on_resubscribe=lambda callback: None
+    )
+
+    await engine_main._start_broker_news(
+        cast(IB, _fake_ib(providers)),
+        cast(ConnectionManager, manager),
+        cast(NewsTickCollector, None),
+        _NullPublisher(),
+    )

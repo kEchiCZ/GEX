@@ -297,7 +297,19 @@ async def _start_broker_news(
 
     ib.tickNewsEvent += on_news_tick
     manager.on_resubscribe(resubscribe_news)
-    await resubscribe_news()
+    # Engine smí startovat bez TWS (#756) — eager odběr by na nepřipojeném
+    # klientovi spadl ConnectionError a vzal celý main() s sebou (#778: proces
+    # pak zůstal viset a kontejner vypadal zdravě). Zárukou odběru je registrace
+    # výš: `on_resubscribe` běží po KAŽDÉM úspěšném (re)connectu; eager volání
+    # je jen zkratka pro start s už běžícím TWS.
+    if manager.state is not ConnectionState.CONNECTED:
+        logger.info("IBKR nepřipojen — broker news se odebere s prvním connectem")
+        return
+    try:
+        await resubscribe_news()
+    except ConnectionError:
+        # Spojení spadlo mezi kontrolou stavu a odběrem — obnoví ho reconnect
+        logger.warning("Odběr broker news selhal (spojení spadlo) — obnoví se po reconnectu")
 
 
 def _crosscheck_status(detector: CrossCheckDetector | None) -> dict[str, object]:
