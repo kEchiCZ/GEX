@@ -12,10 +12,14 @@ Co jde z kontejneru měřit POCTIVĚ (ověřeno 19. 8. na živém stacku):
 * **velikost PostgreSQL databáze** — `pg_database_size()` je přesný tahoun
   růstu (feed_comparison ~500 MB/den, #757).
 
-Co z kontejneru změřit NEJDE: hostitelský systémový disk (C:), kde roste
-WSL vhdx s PG volume — statfs uvnitř VM ukazuje virtuální kapacitu
-(1 TB total / 924 GB free), ne realitu hostitele. Proto má velikost DB
-vlastní práh (`db_size_alert_gb`): růst DB je to, co C: reálně plní.
+Co z kontejneru změřit NEJDE: obsazení hostitelského disku WSL vhdx, ve
+kterém žije PG volume — statfs uvnitř VM ukazuje virtuální kapacitu
+(1 TB total / 924 GB free), ne realitu hostitele. Na tomhle stroji leží
+vhdx na D: (`D:\Programy\Docker\DockerDesktopWSL`, dohledáno 19. 8.),
+tedy na TÉMŽE disku jako datový adresář — jeho růst tak měřené volné
+místo ukusuje přímo. Vlastní práh na velikost DB (`db_size_alert_gb`)
+zůstává jako časná výstraha na tahouna růstu a pojistka pro konfigurace,
+kde vhdx leží na jiném disku než data.
 
 Alert má hysterezi: hlásí se přechod mezi úrovněmi hned, trvající stav
 nejvýš jednou za cooldown; návrat do pořádku úrovně re-armuje.
@@ -187,7 +191,7 @@ class DiskWatch:
         ]
         if snapshot.db_bytes is not None and snapshot.db_bytes > self._db_alert:
             parts.append(
-                f"DB přerostla práh {_gb(self._db_alert)} — plní WSL disk na systémovém C:"
+                f"DB přerostla práh {_gb(self._db_alert)} — plní WSL disk Dockeru"
             )
         if eaters:
             parts.append(f"největší tabulky: {eaters}")

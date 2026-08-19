@@ -281,7 +281,9 @@ class Settings(BaseSettings):
     # Dohled nad volným místem (#773) — jen měření a alerty, úklid řeší #757.
     # Prahy na SKUTEČNÉM volném místě disku s datovým adresářem (bind mount
     # ukazuje čísla hostitele); velikost DB má vlastní práh, protože WSL disk
-    # s PostgreSQL volume z kontejneru změřit nejde a C: plní právě růst DB.
+    # s PostgreSQL volume z kontejneru změřit nejde; na tomhle stroji leží
+    # vhdx na D: vedle dat (růst tak ukusuje z měřeného volného místa přímo),
+    # práh na DB je časná výstraha na tahouna růstu.
     disk_free_warn_gb: float = Field(default=15.0, gt=0)
     disk_free_crit_gb: float = Field(default=5.0, gt=0)
     db_size_alert_gb: float = Field(default=4.0, gt=0)
