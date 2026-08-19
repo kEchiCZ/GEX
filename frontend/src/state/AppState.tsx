@@ -42,6 +42,9 @@ export interface PipelineStatus {
       co „chrání se a je vše v pořádku". */
   chain_source?: 'ibkr' | 'tasty'
   spot_source?: 'ibkr' | 'tasty' | 'none'
+  /** Jak dlouho chybí IBKR spojení v sekundách (#770). Klíč CHYBÍ, když
+      spojení drží — nepřítomnost = nic k hlášení. */
+  connection_offline_for_s?: number
   updated_at?: number | null
 }
 

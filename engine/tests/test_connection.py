@@ -5,9 +5,11 @@ import contextlib
 
 import pytest
 
+import gexlens_engine.__main__ as engine_main
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.connection import ConnectionManager, ConnectionState
 from gexlens_engine.ibkr.mock import MockIB
+from gexlens_engine.runtime import PublisherLike
 
 
 def fast_settings() -> Settings:
@@ -283,4 +285,66 @@ async def test_no_report_while_connection_holds() -> None:
     await asyncio.sleep(0.15)  # několikanásobek prahu i intervalu watchdogu
 
     assert reports == []
+    await manager.stop()
+
+
+# ── Zapojení do zvonečku a /status (#770) ────────────────────────────
+
+
+class _RecordingPublisher(PublisherLike):
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, dict[str, object]]] = []
+
+    async def status(self, **fields: object) -> None:
+        pass
+
+    async def publish(self, channel: str, data: dict[str, object]) -> None:
+        self.messages.append((channel, data))
+
+
+async def test_offline_for_s_measures_only_outage() -> None:
+    """Do prvního connectu spojení chybí; po připojení je hodnota None."""
+    client = MockIB()
+    manager = manager_with(client)
+    assert manager.offline_for_s is not None
+
+    await manager.start()
+    await wait_for_state(manager, ConnectionState.CONNECTED)
+    assert manager.offline_for_s is None
+    await manager.stop()
+
+
+async def test_stall_report_publishes_bell_alert() -> None:
+    """Konec #770: hlášení watchdogu doteče až do zvonečku jako alert
+    `connection_stall` — 18. 8. se osmihodinový výpadek poznal jen tím,
+    že si člověk všiml zamrzlého grafu."""
+    client = MockIB(fail_connects=1000)  # TWS je trvale dole
+    manager = manager_with_watchdog(client, stall_alert_s=0.05)
+    publisher = _RecordingPublisher()
+    engine_main._watch_connection_stall(manager, Settings(), publisher)
+
+    await manager.start()
+    async with asyncio.timeout(3.0):
+        while not publisher.messages:
+            await asyncio.sleep(0.005)
+
+    channel, data = publisher.messages[0]
+    assert channel == "alerts"
+    assert data["kind"] == "connection_stall"
+    assert data["symbol"] == "*"
+    assert "sběr dat" in str(data["message"])
+    await manager.stop()
+
+
+async def test_connection_offline_status_key_only_when_offline() -> None:
+    """/status: klíč `connection_offline_for_s` chybí, když spojení drží —
+    nepřítomnost znamená „nic k hlášení" (konvence z #517 A)."""
+    client = MockIB()
+    manager = manager_with(client)
+    before = engine_main._connection_offline_status(manager)
+    assert isinstance(before.get("connection_offline_for_s"), int)
+
+    await manager.start()
+    await wait_for_state(manager, ConnectionState.CONNECTED)
+    assert engine_main._connection_offline_status(manager) == {}
     await manager.stop()

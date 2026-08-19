@@ -251,6 +251,55 @@ def _watch_subscription_errors(
     return tracker
 
 
+def _watch_connection_stall(
+    manager: ConnectionManager, settings: Settings, publisher: PublisherLike
+) -> None:
+    """Dlouhý výpadek IBKR spojení do zvonečku (#770).
+
+    Watchdog v ConnectionManageru hlásí přes `on_stall` každých
+    `reconnect_stall_alert_s`, dokud se spojení nevrátí — 18. 8. byl engine
+    osm hodin offline a poznalo se to jen tím, že si člověk všiml zamrzlého
+    grafu. Log ERROR píše watchdog sám; tady se výpadek jen publikuje.
+    """
+    # RUF006: create_task bez držené reference může GC uklidit před doběhem
+    # (#499) — alert by pak tiše nedorazil
+    pending: set[asyncio.Task[None]] = set()
+
+    def on_stall(offline_s: float) -> None:
+        task = asyncio.create_task(
+            publisher.publish(
+                "alerts",
+                {
+                    "kind": "connection_stall",
+                    "symbol": "*",
+                    "message": (
+                        f"IBKR spojení chybí už {offline_s / 60:.0f} min — sběr dat "
+                        f"stojí. Zkontroluj TWS a API port "
+                        f"{settings.ibkr_host}:{settings.ibkr_port}."
+                    ),
+                    "ts": dt.datetime.now(dt.UTC).timestamp(),
+                },
+            )
+        )
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+
+    manager.on_stall(on_stall)
+
+
+def _connection_offline_status(manager: ConnectionManager) -> dict[str, object]:
+    """Délka výpadku IBKR spojení do /status (#770).
+
+    Stejná konvence jako feed_crosscheck (#517 A): klíč CHYBÍ, když spojení
+    drží — nepřítomnost znamená „nic k hlášení", ne „neměří se". Posílá se
+    doba, ne timestamp (zdroj je monotonic, viz ConnectionManager.offline_for_s).
+    """
+    offline_for = manager.offline_for_s
+    if offline_for is None:
+        return {}
+    return {"connection_offline_for_s": round(offline_for)}
+
+
 async def _start_broker_news(
     ib: IB, manager: ConnectionManager, collector: NewsTickCollector, publisher: PublisherLike
 ) -> None:
@@ -798,6 +847,9 @@ async def main() -> None:
     subscription_errors = _watch_subscription_errors(
         ib, manager, settings, publisher, lambda: subscription_alerts["enabled"]
     )
+    # Dlouhý výpadek spojení hlásí zvoneček (#770) — registrace PŘED start(),
+    # ať dozor platí od první vteřiny (i pro „TWS po startu stroje neběží")
+    _watch_connection_stall(manager, settings, publisher)
     await manager.start()
     # Čekání na IBKR je OHRANIČENÉ (#756). Dokud tu byla nekonečná smyčka,
     # zůstal za ní celý zbytek main() — schéma DB, pipelines, tastytrade větev
@@ -1327,6 +1379,8 @@ async def main() -> None:
                 lines_utilization=line_gauge.utilization(settings.market_data_lines),
                 # Křížová kontrola feedů (#517 A) — chybí, když shadow neběží
                 **_crosscheck_status(crosscheck),
+                # Délka výpadku IBKR spojení (#770) — chybí, když spojení drží
+                **_connection_offline_status(manager),
                 **_chain_source_status(chain_fallback),
                 **_spot_source_status(run_list),
                 **aggregate_status(results),

@@ -151,6 +151,17 @@ class ConnectionManager:
         """Kolikrát musel watchdog vzkřísit supervisora — nenulová hodnota je nález."""
         return self._supervisor_restarts
 
+    @property
+    def offline_for_s(self) -> float | None:
+        """Jak dlouho spojení chybí v sekundách; None = spojení drží (#770).
+
+        Doba, ne timestamp — počítá se z monotonic, takže ji neposune změna
+        hodin ani DST; na wall-clock „od kdy" si ji odečte konzument.
+        """
+        if self._offline_since is None:
+            return None
+        return time.monotonic() - self._offline_since
+
     async def start(self) -> None:
         self._stopping = False
         self._offline_since = time.monotonic()
