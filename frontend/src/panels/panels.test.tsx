@@ -195,13 +195,46 @@ test('vodorovný předěl mění výšku spodních panelů tažením (#169)', ()
   fireEvent.pointerUp(divider, { pointerId: 1 })
   expect(volSvg().getAttribute('height')).toBe('104')
 
-  // Meze: nejde stáhnout pod 50
+  // Meze: nejde stáhnout pod 25 (#792 — polovina původních 50)
   fireEvent.pointerDown(divider, { clientY: 300, pointerId: 1 })
   fireEvent.pointerMove(divider, { clientY: 900, pointerId: 1 })
   fireEvent.pointerUp(divider, { pointerId: 1 })
-  expect(volSvg().getAttribute('height')).toBe('50')
+  expect(volSvg().getAttribute('height')).toBe('25')
   // Výška se persistuje (ADR-0007)
-  expect(window.localStorage.getItem('gexlens.panelHeight')).toBe('50')
+  expect(window.localStorage.getItem('gexlens.panelHeight')).toBe('25')
+})
+
+test('úchyt panelu mění výšku jen jemu; globální předěl výšky sjednotí (#792)', () => {
+  const socket = new LiveSocket('ws://test/ws/live', {
+    webSocketFactory: (url) => new FakeWebSocket(url),
+  })
+  render(<App socket={socket} />)
+  const volSvg = () => screen.getByLabelText('Vol panel').querySelector('svg')!
+  const optSvg = () => screen.getByLabelText('Opt Vol panel').querySelector('svg')!
+  expect(volSvg().getAttribute('height')).toBe('84')
+
+  // Úchyt na spodní hraně Vol panelu: tažení dolů zvětšuje 1:1 JEN Vol
+  const handle = screen.getByRole('separator', { name: 'Výška panelu Vol' })
+  fireEvent.pointerDown(handle, { clientY: 100, pointerId: 1 })
+  fireEvent.pointerMove(handle, { clientY: 140, pointerId: 1 })
+  fireEvent.pointerUp(handle, { pointerId: 1 })
+  expect(volSvg().getAttribute('height')).toBe('124')
+  expect(optSvg().getAttribute('height')).toBe('84')
+
+  // Klamp na nové minimum 25 (#792)
+  fireEvent.pointerDown(handle, { clientY: 500, pointerId: 1 })
+  fireEvent.pointerMove(handle, { clientY: 100, pointerId: 1 })
+  fireEvent.pointerUp(handle, { pointerId: 1 })
+  expect(volSvg().getAttribute('height')).toBe('25')
+  // Individuální výšky se persistují (ADR-0007)
+  expect(JSON.parse(window.localStorage.getItem('gexlens.panelHeights') ?? '{}').vol).toBe(25)
+
+  // Globální předěl individuální výšky maže — blok je zase jednotný
+  const divider = screen.getByRole('separator', { name: 'Výška spodních panelů' })
+  fireEvent.pointerDown(divider, { clientY: 600, pointerId: 1 })
+  fireEvent.pointerMove(divider, { clientY: 570, pointerId: 1 })
+  fireEvent.pointerUp(divider, { pointerId: 1 })
+  expect(volSvg().getAttribute('height')).toBe(optSvg().getAttribute('height'))
 })
 
 test('málo košů se neroztahuje na šířku — ukotvení k pravému okraji (issue #102)', () => {

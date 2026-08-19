@@ -788,6 +788,24 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   background: var(--accent);
 }
 
+/* Úchyt výšky jednoho panelu (#792): tenký pruh na spodní hraně sekce —
+   neviditelný, dokud na něm kurzor nesedí (panely mají vlastní border-bottom) */
+.panel-resize-h {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 5px;
+  cursor: row-resize;
+  touch-action: none;
+  z-index: 2;
+}
+
+.panel-resize-h:hover,
+.panel-resize-h:active {
+  background: var(--accent);
+}
+
 /* Proklikávací setup alert ve zvonečku (#186) — vypadá jako řádek, chová se jako odkaz */
 .alert-link {
   display: block;
