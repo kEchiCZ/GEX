@@ -52,11 +52,11 @@ def test_kriticka_uroven_pod_5_gb(tmp_path: Path) -> None:
 
 
 def test_velka_db_varuje_i_pri_volnem_disku(tmp_path: Path) -> None:
-    """C:/WSL z kontejneru změřit nejde — plní ho růst DB, proto vlastní práh."""
+    """Obsazení WSL vhdx z kontejneru změřit nejde — tahouna růstu (DB) hlídá vlastní práh."""
     alert = watch(tmp_path).evaluate(snapshot(free=100.0, db=5.0))
     assert alert is not None
     assert alert.level == "warning"
-    assert "systémovém C:" in alert.message
+    assert "WSL disk" in alert.message
 
 
 def test_trvajici_stav_hlasi_az_po_cooldownu(tmp_path: Path) -> None:
