@@ -4,6 +4,16 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 WORKDIR /app
 ENV UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1
 
+# Python bufferuje stdout po ~8 kB, když nejde do terminálu (#771). Za provozu
+# to není poznat — engine chrlí řádky a buffer se plní za sekundy. Vyplave to
+# až v poruše, kdy je výstupu málo: 18. 8. byl při osmihodinovém výpadku
+# `docker logs` u enginu i API ÚPLNĚ prázdný, takže po příčině nezůstala stopa
+# a běžící proces vypadal jako zaseklý. Patří to do image, ne do compose —
+# prod i dev stavějí z tohoto Dockerfilu a nesmí se to rozejít.
+# PYTHONFAULTHANDLER vypíše zásobník při tvrdém pádu interpretu; dump
+# zaseknutého procesu za běhu umí `gexlens_engine.diagnostics` přes SIGUSR1.
+ENV PYTHONUNBUFFERED=1 PYTHONFAULTHANDLER=1
+
 # pg_dump pro zálohu DB z UI (#439). Musí být verze 16 kvůli serveru
 # `postgres:16` — klient 15 z bookworm dump odmítne („server version mismatch"),
 # proto oficiální PGDG repozitář místo distribučního balíku.
