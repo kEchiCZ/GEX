@@ -86,6 +86,7 @@ from gexlens_engine.runtime_settings import (
 )
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
+from gexlens_engine.storage.diskwatch import DiskWatch, utcnow_ts
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.fa_validation import FaValidationRepository
 from gexlens_engine.storage.feed_comparison import FeedComparisonRepository
@@ -1005,6 +1006,15 @@ async def main() -> None:
 
     retention = RetentionJob(settings)
     last_purge_date: dt.date | None = None
+    # Dohled nad volným místem (#773): měří datový disk (bind mount = čísla
+    # hostitele) a velikost PostgreSQL; alerty do zvonečku, úklid řeší #757
+    disk_watch = DiskWatch(
+        settings.data_dir,
+        db,
+        warn_free_gb=settings.disk_free_warn_gb,
+        crit_free_gb=settings.disk_free_crit_gb,
+        db_alert_gb=settings.db_size_alert_gb,
+    )
     # Globální rate limiter historical requestů (SPEC 3.6) — sdílený všemi pipeline
     pacing_guard = PacingGuard()
 
@@ -1458,6 +1468,21 @@ async def main() -> None:
         # „Engine běží" a „IBKR je připojen" jsou dva různé stavy a status je
         # nesmí splácnout dohromady.
         if full_run:
+            # Dohled disku (#773): měří se v intervalu DiskWatch, mezi měřeními
+            # se vrací poslední snímek — rglob a SQL neběží každou minutu
+            disk_snapshot = await asyncio.to_thread(disk_watch.tick, utcnow_ts())
+            if disk_snapshot is not None:
+                disk_alert = disk_watch.evaluate(disk_snapshot)
+                if disk_alert is not None:
+                    await publisher.publish(
+                        "alerts",
+                        {
+                            "kind": "disk_space",
+                            "symbol": "*",
+                            "message": disk_alert.message,
+                            "ts": now.timestamp(),
+                        },
+                    )
             await publisher.status(
                 engine="online",
                 connection=manager.state.value,
@@ -1478,6 +1503,9 @@ async def main() -> None:
                 **_connection_offline_status(manager),
                 **_chain_source_status(chain_fallback),
                 **_spot_source_status(run_list),
+                # Obsazení disku (#773) — plní i patičku UI, která do teď
+                # ukazovala `disk — / —`; klíče chybí do prvního měření
+                **disk_watch.status_fields(int(settings.disk_limit_gb * 1024**3)),
                 **aggregate_status(results),
             )
 
