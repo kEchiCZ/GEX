@@ -83,6 +83,8 @@ class IBClientLike(Protocol):
 
 StatusCallback = Callable[[StatusEvent], None]
 ResubscribeCallback = Callable[[], Awaitable[None]]
+#: Hlášení dlouho trvajícího odpojení (#770); argument = jak dlouho už spojení není
+StallCallback = Callable[[float], None]
 
 
 class ConnectionManager:
@@ -95,18 +97,29 @@ class ConnectionManager:
         *,
         heartbeat_interval_s: float = 10.0,
         heartbeat_timeout_s: float = 5.0,
+        watchdog_interval_s: float = 30.0,
     ) -> None:
         self._client = client
         self._settings = settings
         self._heartbeat_interval_s = heartbeat_interval_s
         self._heartbeat_timeout_s = heartbeat_timeout_s
+        self._watchdog_interval_s = watchdog_interval_s
         self._state = ConnectionState.DISCONNECTED
         self._history: list[StatusEvent] = []
         self._status_callbacks: list[StatusCallback] = []
         self._resubscribe_callbacks: list[ResubscribeCallback] = []
+        self._stall_callbacks: list[StallCallback] = []
         self._backoff_history: list[float] = []
         self._supervisor: asyncio.Task[None] | None = None
+        self._watchdog: asyncio.Task[None] | None = None
         self._stopping = False
+        # Od kdy jsme mimo stav connected (monotonic; None = spojení drží).
+        # Měří se monotonicky schválně — letní čas ani srovnání hodin nesmí
+        # posunout práh hlášení.
+        self._offline_since: float | None = time.monotonic()
+        self._last_stall_report: float | None = None
+        #: Kolikrát watchdog vzkřísil mrtvého supervisora (diagnostika, #770)
+        self._supervisor_restarts = 0
 
     @property
     def state(self) -> ConnectionState:
@@ -129,17 +142,46 @@ class ConnectionManager:
         """Registrace plné resubskripce; volá se po každém úspěšném (re)connectu."""
         self._resubscribe_callbacks.append(callback)
 
+    def on_stall(self, callback: StallCallback) -> None:
+        """Registrace hlášení, že spojení chybí podezřele dlouho (#770)."""
+        self._stall_callbacks.append(callback)
+
+    @property
+    def supervisor_restarts(self) -> int:
+        """Kolikrát musel watchdog vzkřísit supervisora — nenulová hodnota je nález."""
+        return self._supervisor_restarts
+
+    @property
+    def offline_for_s(self) -> float | None:
+        """Jak dlouho spojení chybí v sekundách; None = spojení drží (#770).
+
+        Doba, ne timestamp — počítá se z monotonic, takže ji neposune změna
+        hodin ani DST; na wall-clock „od kdy" si ji odečte konzument.
+        """
+        if self._offline_since is None:
+            return None
+        return time.monotonic() - self._offline_since
+
     async def start(self) -> None:
         self._stopping = False
+        self._offline_since = time.monotonic()
+        self._last_stall_report = None
         self._supervisor = asyncio.create_task(self._supervise())
+        # Watchdog běží ZÁMĚRNĚ mimo supervisora (#770). Kdyby visel na téže
+        # úloze, sdílel by i její osud — a přesně to se 18. 8. stalo: reconnect
+        # umlkl, engine zůstal osm hodin offline a nikde to nezaznělo.
+        self._watchdog = asyncio.create_task(self._watch())
 
     async def stop(self) -> None:
         self._stopping = True
-        if self._supervisor is not None:
-            self._supervisor.cancel()
+        for task in (self._watchdog, self._supervisor):
+            if task is None:
+                continue
+            task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await self._supervisor
-            self._supervisor = None
+                await task
+        self._watchdog = None
+        self._supervisor = None
         self._client.disconnect()
         self._set_state(ConnectionState.DISCONNECTED, "zastaveno")
 
@@ -163,50 +205,154 @@ class ConnectionManager:
 
     def _set_state(self, state: ConnectionState, detail: str) -> None:
         self._state = state
+        if state is ConnectionState.CONNECTED:
+            self._offline_since = None
+            self._last_stall_report = None
+        elif self._offline_since is None:
+            self._offline_since = time.monotonic()
         event = StatusEvent(
             state=state, detail=detail, port=self._settings.ibkr_port, ts=time.time()
         )
         self._history.append(event)
         logger.info("IBKR stav: %s (%s)", state.value, detail)
         for callback in self._status_callbacks:
-            callback(event)
+            # Odběratel stavu (publikace do API, UI) nesmí shodit smyčku spojení —
+            # výjimka odsud dřív propadla až do supervisora a zabila reconnect (#770)
+            try:
+                callback(event)
+            except Exception:
+                logger.exception("Odběratel stavu spojení selhal (stav %s)", state.value)
 
     async def _supervise(self) -> None:
+        """Nekonečná smyčka připojování. Skončit smí JEN na `stop()` (#770).
+
+        Každá iterace je proto obalená — jakákoli neočekávaná výjimka (odběratel
+        stavu, selhaná resubskripce, chyba v ib_async) se zaloguje a smyčka jede
+        dál. Dokud tady bylo holé tělo, stačila jediná výjimka mimo `connectAsync`
+        a celý reconnect zmizel bez jediného řádku v logu.
+        """
         backoff = self._settings.reconnect_backoff_base_s
         first_attempt = True
         while not self._stopping:
-            self._set_state(
-                ConnectionState.CONNECTING if first_attempt else ConnectionState.RECONNECTING,
-                f"připojuji na {self._settings.ibkr_host}:{self._settings.ibkr_port}",
-            )
             try:
-                await self._client.connectAsync(
-                    self._settings.ibkr_host,
-                    self._settings.ibkr_port,
-                    clientId=self._settings.ibkr_client_id,
-                    timeout=self._settings.connect_timeout_s,
-                )
-            except Exception as exc:
+                connected = await self._try_connect(first_attempt, backoff)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Neočekávaná chyba ve smyčce spojení — pokračuji dál")
+                connected = False
+            first_attempt = False
+            if not connected:
                 self._backoff_history.append(backoff)
-                self._set_state(
-                    ConnectionState.RECONNECTING,
-                    f"připojení selhalo ({exc}); další pokus za {backoff:g} s",
-                )
-                first_attempt = False
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, self._settings.reconnect_backoff_max_s)
                 continue
 
             backoff = self._settings.reconnect_backoff_base_s
-            first_attempt = False
-            self._client.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
-            for resubscribe in self._resubscribe_callbacks:
-                await resubscribe()
-            self._set_state(ConnectionState.CONNECTED, "spojení navázáno, subskripce obnoveny")
-
-            await self._monitor()
+            try:
+                await self._monitor()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Heartbeat spojení selhal — přepínám na reconnect")
             if not self._stopping:
                 self._set_state(ConnectionState.RECONNECTING, "spojení ztraceno")
+
+    async def _try_connect(self, first_attempt: bool, backoff: float) -> bool:
+        """Jeden pokus o připojení včetně resubskripcí. True = spojení drží."""
+        self._set_state(
+            ConnectionState.CONNECTING if first_attempt else ConnectionState.RECONNECTING,
+            f"připojuji na {self._settings.ibkr_host}:{self._settings.ibkr_port}",
+        )
+        try:
+            await self._client.connectAsync(
+                self._settings.ibkr_host,
+                self._settings.ibkr_port,
+                clientId=self._settings.ibkr_client_id,
+                timeout=self._settings.connect_timeout_s,
+            )
+        except Exception as exc:
+            self._set_state(
+                ConnectionState.RECONNECTING,
+                f"připojení selhalo ({exc}); další pokus za {backoff:g} s",
+            )
+            return False
+
+        self._client.reqMarketDataType(LIVE_MARKET_DATA_TYPE)
+        for resubscribe in self._resubscribe_callbacks:
+            # Selhaná resubskripce znamená spojení bez dat — zpátky na reconnect.
+            # Dřív výjimka odsud propadla ze smyčky a engine zůstal viset offline.
+            try:
+                await resubscribe()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._set_state(
+                    ConnectionState.RECONNECTING,
+                    f"obnova subskripcí selhala ({exc}) — připojuji znovu",
+                )
+                with contextlib.suppress(Exception):
+                    self._client.disconnect()
+                return False
+
+        self._set_state(ConnectionState.CONNECTED, "spojení navázáno, subskripce obnoveny")
+        return True
+
+    async def _watch(self) -> None:
+        """Dozor nad supervisorem a nad délkou výpadku (#770).
+
+        Dvě věci, které 18. 8. chyběly:
+        1. Když supervisor z jakéhokoli důvodu skončí, nikdo si toho nevšiml —
+           `create_task` výjimku jen odloží a engine tiše zůstane offline.
+           Watchdog ho vzkřísí.
+        2. Osm hodin bez spojení neprodukovalo žádné hlášení. Po překročení
+           `reconnect_stall_alert_s` jde ERROR do logu a hlášení odběratelům
+           (zvoneček), a opakuje se, dokud se spojení nevrátí.
+        """
+        while not self._stopping:
+            await asyncio.sleep(self._watchdog_interval_s)
+            if self._stopping:
+                return
+            self._revive_supervisor_if_dead()
+            self._report_stall_if_due()
+
+    def _revive_supervisor_if_dead(self) -> None:
+        task = self._supervisor
+        if task is None or not task.done():
+            return
+        # Výjimku si vyzvedneme, ať se neztratí v „exception was never retrieved"
+        exc = None if task.cancelled() else task.exception()
+        self._supervisor_restarts += 1
+        logger.error(
+            "Smyčka spojení skončila (%s) — startuji ji znovu (už po %d.)",
+            exc if exc is not None else "bez výjimky",
+            self._supervisor_restarts,
+        )
+        self._supervisor = asyncio.create_task(self._supervise())
+
+    def _report_stall_if_due(self) -> None:
+        if self._offline_since is None:
+            return
+        now = time.monotonic()
+        offline_s = now - self._offline_since
+        threshold = self._settings.reconnect_stall_alert_s
+        if offline_s < threshold:
+            return
+        if self._last_stall_report is not None and now - self._last_stall_report < threshold:
+            return
+        self._last_stall_report = now
+        logger.error(
+            "IBKR spojení chybí už %.0f s (stav %s, %s:%d) — sběr dat stojí",
+            offline_s,
+            self._state.value,
+            self._settings.ibkr_host,
+            self._settings.ibkr_port,
+        )
+        for callback in self._stall_callbacks:
+            try:
+                callback(offline_s)
+            except Exception:
+                logger.exception("Hlášení výpadku spojení selhalo")
 
     async def _monitor(self) -> None:
         """Heartbeat: periodicky ověřuje spojení; při výpadku se vrací supervisoru."""

@@ -136,6 +136,31 @@ test('Settings nese stav enginu a log událostí (náhrada Console, #705)', asyn
   expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull()
 })
 
+test('řádek Spojení ukazuje délku výpadku IBKR, jen když pole přijde (#770)', async () => {
+  mockApi()
+  renderApp()
+  const ws = FakeWebSocket.latest()
+  act(() => {
+    ws.open()
+    ws.push('status', {
+      engine: 'online',
+      connection: 'reconnecting',
+      port: 7496,
+      connection_offline_for_s: 480,
+    })
+  })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+  const block = screen.getByTestId('engine-status')
+  expect(block.textContent).toContain('bez spojení 8 min')
+
+  // Spojení se vrátí → klíč ze statusu zmizí a údaj o výpadku s ním
+  act(() => {
+    ws.push('status', { engine: 'online', connection: 'connected', port: 7496 })
+  })
+  expect(screen.getByTestId('engine-status').textContent).not.toContain('bez spojení')
+})
+
 test('sidebar obsahuje odkaz na uživatelský manuál (wiki)', () => {
   mockApi()
   renderApp()

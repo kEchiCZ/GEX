@@ -261,6 +261,10 @@ export function SettingsView() {
                   {status.engine === 'online' ? 'online' : (status.engine ?? '—')}
                   {status.connection ? ` · ${status.connection}` : ''}
                   {status.port ? ` · port ${status.port}` : ''}
+                  {/* Délka výpadku IBKR (#770) — pole chybí, když spojení drží */}
+                  {status.connection_offline_for_s != null
+                    ? ` · bez spojení ${Math.round(status.connection_offline_for_s / 60)} min`
+                    : ''}
                 </td>
               </tr>
               <tr>
