@@ -23,7 +23,13 @@ TS = dt.datetime(2026, 8, 13, 14, 0, tzinfo=dt.UTC)
 
 
 def tally(
-    *, ibkr_dead: int = 0, tasty_dead: int = 0, both_dead: int = 0, ok: int = 0
+    *,
+    ibkr_dead: int = 0,
+    tasty_dead: int = 0,
+    both_dead: int = 0,
+    ok: int = 0,
+    comparable: int = 0,
+    changed: int = 0,
 ) -> MinuteTally:
     return MinuteTally(
         contracts=ibkr_dead + tasty_dead + both_dead + ok,
@@ -31,6 +37,8 @@ def tally(
         ibkr_only_dead=ibkr_dead,
         tasty_only_dead=tasty_dead,
         both_dead=both_dead,
+        ibkr_comparable=comparable,
+        ibkr_changed=changed,
     )
 
 
@@ -298,3 +306,228 @@ def test_vypnuty_zapis_nemeni_tally_ani_o_kontrakt() -> None:
     assert bez_zapisu.tally == se_zapisem.tally
     assert se_zapisem.rows  # kontrola, že test měří na neprázdném vzorku
     assert bez_zapisu.rows == []
+
+
+# ── Mrtvá tastytrade záloha (#764) ───────────────────────────────────
+#
+# Rozlišovač „tichý trh × mrtvá záloha": mlčící tasty alertuje, jen když se
+# IBKR hodnoty přitom mění. Práh 0,30 je měřený nad 4 833 min historie
+# (pauza CME medián ~0, aktivní trh p5 ≈ 0,38; 0 planých epizod).
+
+
+def test_mrtva_zaloha_alertuje_kdyz_se_trh_hybe() -> None:
+    """AC: tasty mlčí ∧ IBKR hodnoty se mění → po M minutách alert #764."""
+    detector = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3)
+    dead = tally(tasty_dead=80, ok=20, comparable=100, changed=90)
+
+    first = detector.observe(dead)
+    second = detector.observe(dead)
+    third = detector.observe(dead)
+
+    assert (first.alert, second.alert) == (False, False)
+    assert third.alert is True
+    assert third.backup_dead is True
+    assert third.state == "tasty_suspect"  # stav fáze A se nemění (AC #764)
+    assert "fallback" in third.message.lower()  # praktický důsledek, ne jen stav
+
+
+def test_tichy_trh_mlcici_tasty_nealertuje() -> None:
+    """Pauza CME: tasty mlčí, ale IBKR hodnoty stojí — žádný alert, jen stav.
+
+    Přesně případ 6 epizod z historie (všechny 21–22 UTC), kvůli kterým byl
+    alert do #764 vypnutý natvrdo.
+    """
+    detector = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3)
+    quiet_market = tally(tasty_dead=80, ok=20, comparable=100, changed=5)
+
+    verdicts = [detector.observe(quiet_market) for _ in range(10)]
+
+    assert all(v.alert is False for v in verdicts)
+    assert all(v.backup_dead is False for v in verdicts)
+    assert verdicts[-1].state == "tasty_suspect"  # tlumené hlášení zůstává
+
+
+def test_backup_serie_vyzaduje_pohyb_v_rade() -> None:
+    """Minuta bez pohybu trhu sérii nuluje — důkaz mrtvé zálohy nepřináší."""
+    detector = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3)
+    moving = tally(tasty_dead=80, ok=20, comparable=100, changed=90)
+    still = tally(tasty_dead=80, ok=20, comparable=100, changed=5)
+
+    assert detector.observe(moving).alert is False
+    assert detector.observe(moving).alert is False
+    assert detector.observe(still).alert is False  # série se přerušila
+    assert detector.observe(moving).alert is False
+    assert detector.observe(moving).alert is False
+    third_in_row = detector.observe(moving)
+    assert third_in_row.alert is True
+    assert third_in_row.backup_dead is True
+
+
+def test_backup_alert_ma_vlastni_cooldown() -> None:
+    detector = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3, cooldown_minutes=15)
+    dead = tally(tasty_dead=80, ok=20, comparable=100, changed=90)
+
+    alerts = [detector.observe(dead).alert for _ in range(10)]
+
+    assert alerts.count(True) == 1  # jednou na hraně série, pak cooldown
+
+
+def test_malo_komparabilnich_kontraktu_nealertuje() -> None:
+    """Náběh po startu: pár komparabilních kontraktů o pohybu trhu nevypovídá."""
+    detector = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3)
+    thin = tally(tasty_dead=80, ok=20, comparable=5, changed=5)
+
+    verdicts = [detector.observe(thin) for _ in range(5)]
+
+    assert all(v.backup_dead is False for v in verdicts)
+
+
+def test_changed_share_bezpecny_bez_komparabilnich() -> None:
+    assert MinuteTally().ibkr_changed_share == 0.0
+    assert tally(ok=10).ibkr_changed_share == 0.0
+
+
+def _change_spec(strike: float) -> OptionContractSpec:
+    return OptionContractSpec(
+        symbol="ES",
+        sec_type="FOP",
+        expiry="20260813",
+        strike=strike,
+        right="C",
+        exchange="CME",
+        trading_class="E2D",
+        multiplier="50",
+    )
+
+
+def _change_snapshot(bid: float) -> QuoteSnapshot:
+    return QuoteSnapshot(
+        bid=bid,
+        ask=bid + 0.5,
+        last=bid + 0.25,
+        volume=120.0,
+        iv=0.125,
+        delta=0.52,
+        gamma=0.0112,
+        theta=-13.0,
+        vega=1.1,
+    )
+
+
+def test_compare_minute_meri_zmeny_proti_predchozi_minute() -> None:
+    """Změna se počítá per kontrakt: obě minuty mají hodnotu a liší se."""
+    now_mono = time.monotonic()
+    specs = [_change_spec(7700.0), _change_spec(7750.0)]
+    chain = ChainSymbols(
+        product="ES",
+        day=TS.date(),
+        by_contract={
+            ("20260813", spec.strike, "C"): f"./E2DQ26C{spec.strike:g}:XCME" for spec in specs
+        },
+    )
+    cache = TastyChainCache(clock=lambda: TS)
+
+    def quotes(bids: dict[float, float]) -> dict[OptionContractSpec, CachedQuote]:
+        return {
+            spec: CachedQuote(snapshot=_change_snapshot(bids[spec.strike]), updated_at=now_mono)
+            for spec in specs
+        }
+
+    minute_one = compare_minute(
+        TS,
+        quotes({7700.0: 18.0, 7750.0: 9.0}),
+        cache,
+        {"ES": chain},
+        now_monotonic=now_mono,
+        now_utc=TS,
+    )
+    # První minuta nemá s čím srovnávat — náběh nesmí hlásit „trh se hýbe"
+    assert minute_one.tally.ibkr_comparable == 0
+    assert minute_one.tally.ibkr_changed == 0
+
+    minute_two = compare_minute(
+        TS,
+        quotes({7700.0: 18.25, 7750.0: 9.0}),
+        cache,
+        {"ES": chain},
+        now_monotonic=now_mono,
+        now_utc=TS,
+        previous_ibkr=minute_one.ibkr_values,
+    )
+    # Jeden kontrakt se hnul, druhý vrací tutéž kotaci
+    assert minute_two.tally.ibkr_comparable == 2
+    assert minute_two.tally.ibkr_changed == 1
+    assert minute_two.tally.ibkr_changed_share == 0.5
+
+
+def test_compare_minute_mrtva_strana_neni_komparabilni() -> None:
+    """Kontrakt bez čerstvé IBKR hodnoty v jedné z minut do rozlišovače nevstupuje."""
+    now_mono = time.monotonic()
+    specs = [_change_spec(7700.0)]
+    chain = ChainSymbols(
+        product="ES",
+        day=TS.date(),
+        by_contract={("20260813", 7700.0, "C"): "./E2DQ26C7700:XCME"},
+    )
+    cache = TastyChainCache(clock=lambda: TS)
+    fresh = {specs[0]: CachedQuote(snapshot=_change_snapshot(18.0), updated_at=now_mono)}
+    stale = {
+        specs[0]: CachedQuote(snapshot=_change_snapshot(19.0), updated_at=now_mono, stale=True)
+    }
+
+    minute_one = compare_minute(TS, fresh, cache, {"ES": chain}, now_monotonic=now_mono, now_utc=TS)
+    minute_two = compare_minute(
+        TS,
+        stale,
+        cache,
+        {"ES": chain},
+        now_monotonic=now_mono,
+        now_utc=TS,
+        previous_ibkr=minute_one.ibkr_values,
+    )
+
+    assert minute_two.tally.ibkr_comparable == 0
+    assert minute_two.tally.ibkr_changed == 0
+
+
+def test_simulovany_vypadek_tasty_pri_bezicim_ibkr_alertuje() -> None:
+    """AC #764: odpojený tasty stream (prázdná cache) ∧ IBKR dodává měnící se
+    hodnoty → celý řetěz compare_minute → detektor dojde k alertu backup_dead."""
+    now_mono = time.monotonic()
+    specs = [_change_spec(7600.0 + 5 * i) for i in range(30)]
+    chain = ChainSymbols(
+        product="ES",
+        day=TS.date(),
+        by_contract={
+            ("20260813", spec.strike, "C"): f"./E2DQ26C{spec.strike:g}:XCME" for spec in specs
+        },
+    )
+    dead_tasty = TastyChainCache(clock=lambda: TS)  # stream odpojený: žádný event
+    detector = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3)
+
+    previous: dict[str, tuple[float | None, ...]] | None = None
+    verdicts = []
+    for minute in range(4):
+        quotes = {
+            spec: CachedQuote(
+                snapshot=_change_snapshot(18.0 + minute + spec.strike / 10_000),
+                updated_at=now_mono,
+            )
+            for spec in specs
+        }
+        comparison = compare_minute(
+            TS,
+            quotes,
+            dead_tasty,
+            {"ES": chain},
+            now_monotonic=now_mono,
+            now_utc=TS,
+            previous_ibkr=previous,
+        )
+        previous = comparison.ibkr_values
+        verdicts.append(detector.observe(comparison.tally))
+
+    # Minuta 0 nemá s čím srovnávat (náběh), alert padne na 3. srovnatelné minutě
+    assert [v.backup_dead for v in verdicts] == [False, False, False, True]
+    assert verdicts[-1].alert is True
+    assert "fallback" in verdicts[-1].message.lower()

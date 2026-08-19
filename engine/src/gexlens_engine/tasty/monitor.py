@@ -68,6 +68,11 @@ class MinuteComparison:
 
     rows: list[ComparisonRow]
     tally: MinuteTally
+    #: IBKR hodnoty této minuty per kontrakt (pořadí _FIELDS; None = pole bez
+    #: čerstvé hodnoty). Volající je příští minutu vrátí jako `previous_ibkr`,
+    #: z čehož se počítá rozlišovač „hýbe se trh?" (#764) — funkce zůstává
+    #: čistá, stav drží FeedMonitor.
+    ibkr_values: dict[str, tuple[float | None, ...]]
 
 
 def compare_minute(
@@ -81,6 +86,7 @@ def compare_minute(
     max_age_ms: int = MAX_AGE_MS,
     oi_ibkr: dict[tuple[str, str, float, str], float] | None = None,
     collect_rows: bool = True,
+    previous_ibkr: dict[str, tuple[float | None, ...]] | None = None,
 ) -> MinuteComparison:
     """Tally čerstvosti + volitelně řádky porovnání — čistá funkce (testy bez sítě).
 
@@ -101,6 +107,8 @@ def compare_minute(
     """
     rows: list[ComparisonRow] = []
     both_fresh = ibkr_only_dead = tasty_only_dead = both_dead = 0
+    ibkr_comparable = ibkr_changed = 0
+    ibkr_values: dict[str, tuple[float | None, ...]] = {}
     for spec, cached in ibkr_quotes.items():
         # Mapa per produkt (ES i NQ mají vlastní chain endpoint) — bez toho
         # by se druhý instrument tiše nikdy neporovnal
@@ -118,8 +126,10 @@ def compare_minute(
         # nezapočítává (denní veličina s vypnutým stářím), jinak by tichý
         # kontrakt vypadal jako živý.
         ibkr_alive = tasty_alive = False
+        minute_values: list[float | None] = []
         for field_name, ibkr_value, tasty_value in _FIELDS:
             value_ibkr = ibkr_value(cached) if ibkr_fresh else None
+            minute_values.append(value_ibkr)
             value_tasty: float | None = None
             age_tasty_ms: int | None = None
             if state is not None:
@@ -172,14 +182,32 @@ def compare_minute(
             tasty_only_dead += 1
         else:
             both_dead += 1
+        # Rozlišovač „hýbe se trh?" (#764): kontrakt je komparabilní, když má
+        # aspoň jedno pole hodnotu v TÉTO i PŘEDCHOZÍ minutě; změněný, když se
+        # kterékoli takové pole liší. Přesná rovnost floatů je záměr — sweep
+        # při tichém trhu vrací tutéž kotaci bit-identicky.
+        ibkr_values[label] = current = tuple(minute_values)
+        prev = None if previous_ibkr is None else previous_ibkr.get(label)
+        if prev is not None:
+            pairs = [
+                (p, c)
+                for p, c in zip(prev, current, strict=True)
+                if p is not None and c is not None
+            ]
+            if pairs:
+                ibkr_comparable += 1
+                if any(p != c for p, c in pairs):
+                    ibkr_changed += 1
     tally = MinuteTally(
         contracts=both_fresh + ibkr_only_dead + tasty_only_dead + both_dead,
         both_fresh=both_fresh,
         ibkr_only_dead=ibkr_only_dead,
         tasty_only_dead=tasty_only_dead,
         both_dead=both_dead,
+        ibkr_comparable=ibkr_comparable,
+        ibkr_changed=ibkr_changed,
     )
-    return MinuteComparison(rows=rows, tally=tally)
+    return MinuteComparison(rows=rows, tally=tally, ibkr_values=ibkr_values)
 
 
 class FeedMonitor:
@@ -223,6 +251,9 @@ class FeedMonitor:
         self._on_verdict = on_verdict
         #: Diagnostika zátěže: řádků zapsáno od startu
         self.rows_written = 0
+        #: IBKR hodnoty minulé minuty (#764) — vstup rozlišovače změn; None
+        #: do první minuty, takže náběh nikdy nehlásí „trh se hýbe"
+        self._previous_ibkr: dict[str, tuple[float | None, ...]] | None = None
 
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
@@ -257,7 +288,12 @@ class FeedMonitor:
             now_utc=dt.datetime.now(dt.UTC),
             oi_ibkr=oi_ibkr,
             collect_rows=collect_rows,
+            previous_ibkr=self._previous_ibkr,
         )
+        # Po výpadku iterace je „předchozí" minuta starší než 60 s — změny se
+        # pak měří přes delší okno, což signál jen zesílí (víc času na pohyb);
+        # kalibrace #764 běžela na přesných minutách, směr chyby je bezpečný.
+        self._previous_ibkr = comparison.ibkr_values
         rows = comparison.rows
         # Křížová kontrola (#517 A) běží PŘED zápisem: verdikt nesmí záviset
         # na tom, jestli se insert povedl — detekce výpadku feedu je cennější

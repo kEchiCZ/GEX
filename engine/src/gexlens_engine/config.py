@@ -187,6 +187,11 @@ class Settings(BaseSettings):
     crosscheck_share_threshold: float = Field(default=0.70, gt=0, le=1)
     crosscheck_minutes: int = Field(default=3, ge=1)
     crosscheck_cooldown_minutes: int = Field(default=15, ge=1)
+    # Rozlišovač „tichý trh × mrtvá záloha" (#764): podíl kontraktů s měnícími
+    # se IBKR hodnotami, od kterého je trh živý a mlčící tasty porucha. Měřeno
+    # nad 4 833 min historie: pauza CME má medián ~0, aktivní trh p5 ≈ 0,38 —
+    # default 0,30 dal na celé historii 0 planých poplachů.
+    crosscheck_change_threshold: float = Field(default=0.30, gt=0, le=1)
 
     batch_timeout_s: float = Field(default=4.0, gt=0)
     # Burzovní čas, po kterém IBKR publikuje kompletní denní OI (#463, #511).

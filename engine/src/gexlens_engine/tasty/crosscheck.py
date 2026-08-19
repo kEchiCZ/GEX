@@ -14,11 +14,13 @@ stejně počítá. Nula requestů na IBKR, nula dotazů do PG, žádná linka na
   subskripce — rozlišit je umí až aktivní sonda fáze B). Tasty čerstvé
   vylučuje „tichý trh" bez jediného requestu navíc → alert.
 * **obojí mrtvé** → nikdo neobchoduje; přestávka, svátek, tenká noc → ticho.
-* **tasty mrtvé ∧ IBKR čerstvé** → sekundární zdroj → jen stav a log, BEZ
-  alertu. Přehrání historie ukázalo 41 takových epizod, všechny v hodinách
-  21–06 UTC: dxFeed posílá eventy jen při změně, takže v noci a v denní pauze
-  CME okno stáří vyprší, zatímco IBKR sweep vrací poslední kotaci pořád
-  dokola. Rozdíl event-driven × poll-driven feedu, ne porucha.
+* **tasty mrtvé ∧ IBKR čerstvé** → sekundární zdroj → stav a log; alert
+  (#764, `backup_dead`) až když se IBKR hodnoty přitom MĚNÍ — čerstvost sama
+  nestačí, protože dxFeed posílá eventy jen při změně, takže v noci a v denní
+  pauze CME okno stáří vyprší, zatímco IBKR sweep vrací poslední kotaci pořád
+  dokola (rozdíl event-driven × poll-driven feedu, ne porucha). Měnící se
+  hodnoty tichý trh vylučují: trh běží a mlčící záloha je porucha — a pozná
+  se HNED, ne až při výpadku IBKR, kdy fallback nemá z čeho stavět.
 * **obojí čerstvé** → OK.
 
 Prahy měřené, ne odhadnuté (shadow data 13.–16. 8. 2026, 3 016 minut):
@@ -44,6 +46,14 @@ logger = logging.getLogger(__name__)
 #: Podíl kontraktů „IBKR mrtvé ∧ tasty čerstvé", od kterého se minuta počítá
 #: jako podezřelá. Nad rotačním artefaktem (~58 %) s rezervou.
 DEFAULT_SHARE_THRESHOLD = 0.70
+
+#: Rozlišovač „tichý trh × mrtvá záloha" (#764): podíl kontraktů, jejichž IBKR
+#: hodnoty se MĚNÍ mezi minutami, od kterého trh považujeme za živý. Měřeno
+#: nad celou historií feed_comparison (4 833 minut, 13.–19. 8. 2026): za pauzy
+#: CME (20–22 UTC) je medián změn ~0, za aktivního trhu p5 ≈ 0,38–0,42 —
+#: práh 0,30 leží pod aktivním p5 a stará větev „tasty mlčí" s ním dává
+#: 0 planých epizod (bez rozlišovače jich bylo 6, všechny v pauze CME).
+DEFAULT_CHANGE_THRESHOLD = 0.30
 
 #: Kolik podezřelých minut V ŘADĚ spustí alert. Rotační pík trvá vždy právě
 #: jednu minutu, nejdelší naměřená série jsou dvě → tři jsou bezpečné dno.
@@ -75,6 +85,12 @@ class MinuteTally:
     ibkr_only_dead: int = 0
     tasty_only_dead: int = 0
     both_dead: int = 0
+    #: Kolik kontraktů mělo IBKR hodnotu v této I předchozí minutě (#764) —
+    #: jen ty vypovídají o tom, jestli se trh hýbe. 0 = změny se neměří
+    #: (první minuta po startu, výpadek předchozí minuty).
+    ibkr_comparable: int = 0
+    #: Z komparabilních: kolika kontraktům se aspoň jedno pole změnilo.
+    ibkr_changed: int = 0
 
     @property
     def ibkr_dead_share(self) -> float:
@@ -95,6 +111,13 @@ class MinuteTally:
             return 0.0
         return self.both_dead / self.contracts
 
+    @property
+    def ibkr_changed_share(self) -> float:
+        """Podíl kontraktů s měnícími se IBKR hodnotami — „hýbe se trh?" (#764)."""
+        if self.ibkr_comparable <= 0:
+            return 0.0
+        return self.ibkr_changed / self.ibkr_comparable
+
 
 @dataclass(frozen=True)
 class CrossCheckVerdict:
@@ -105,6 +128,11 @@ class CrossCheckVerdict:
     streak: int
     alert: bool
     message: str
+    #: Mrtvá tastytrade záloha (#764): tasty mlčí, zatímco se IBKR hodnoty
+    #: mění — trh běží, ticho druhého zdroje je porucha, ne pauza. Vlastní
+    #: příznak vedle `state`, protože je to jiná zpráva než `tasty_suspect`
+    #: („záloha není k dispozici", ne „data jsou špatná").
+    backup_dead: bool = False
 
 
 class CrossCheckDetector:
@@ -122,14 +150,18 @@ class CrossCheckDetector:
         minutes_threshold: int = DEFAULT_MINUTES_THRESHOLD,
         min_contracts: int = DEFAULT_MIN_CONTRACTS,
         cooldown_minutes: int = DEFAULT_COOLDOWN_MINUTES,
+        change_threshold: float = DEFAULT_CHANGE_THRESHOLD,
     ) -> None:
         self._share_threshold = share_threshold
         self._minutes_threshold = max(1, minutes_threshold)
         self._min_contracts = min_contracts
         self._cooldown_minutes = cooldown_minutes
+        self._change_threshold = change_threshold
         self._ibkr_streak = 0
         self._tasty_streak = 0
-        self._since_alert: dict[CrossCheckState, int] = {}
+        #: Minuty v řadě, kdy tasty mlčí A trh se přitom hýbe (#764)
+        self._backup_streak = 0
+        self._since_alert: dict[str, int] = {}
         #: Čisté minuty v řadě — po `minutes_threshold` se cooldown re-armuje
         self._clean_streak = 0
         #: Poslední verdikt pro /status — čte orchestrátor, ne detektor sám
@@ -148,6 +180,7 @@ class CrossCheckDetector:
             # nedodal falešnou minutu do rozjetého počítadla
             self._ibkr_streak = 0
             self._tasty_streak = 0
+            self._backup_streak = 0
             return self._finish(
                 "insufficient",
                 tally,
@@ -159,6 +192,7 @@ class CrossCheckDetector:
         if tally.ibkr_dead_share >= self._share_threshold:
             self._ibkr_streak += 1
             self._tasty_streak = 0
+            self._backup_streak = 0
             if self._ibkr_streak >= self._minutes_threshold:
                 message = (
                     f"IBKR mlčí na {tally.ibkr_dead_share * 100:.0f} % kontraktů "
@@ -188,6 +222,7 @@ class CrossCheckDetector:
         # poplachů čistě-IBKR sondy, kvůli kterému fáze A vůbec vznikla).
         if tally.both_dead_share >= self._share_threshold:
             self._tasty_streak = 0
+            self._backup_streak = 0
             return self._finish(
                 "quiet",
                 tally,
@@ -198,31 +233,57 @@ class CrossCheckDetector:
 
         if tally.tasty_dead_share >= self._share_threshold:
             self._tasty_streak += 1
+            # Rozlišovač „tichý trh × mrtvá záloha" (#764): mlčící tasty je
+            # porucha jen tehdy, když se IBKR hodnoty přitom MĚNÍ — trh běží
+            # a druhý zdroj by měl co streamovat. Vlastní série: minuta bez
+            # pohybu trhu důkaz o mrtvé záloze nepřináší, tak sérii nuluje.
+            market_moving = (
+                tally.ibkr_comparable >= self._min_contracts
+                and tally.ibkr_changed_share >= self._change_threshold
+            )
+            self._backup_streak = self._backup_streak + 1 if market_moving else 0
+            if self._backup_streak >= self._minutes_threshold:
+                message = (
+                    f"Mrtvá tastytrade záloha: tasty mlčí na "
+                    f"{tally.tasty_dead_share * 100:.0f} % kontraktů už "
+                    f"{self._backup_streak} min, zatímco se IBKR hodnoty mění "
+                    f"({tally.ibkr_changed_share * 100:.0f} % kontraktů) — fallback na "
+                    f"tastytrade teď NENÍ k dispozici; při výpadku IBKR graf zamrzne"
+                )
+                return self._finish(
+                    "tasty_suspect",
+                    tally,
+                    self._backup_streak,
+                    self._may_alert("backup_dead"),
+                    message,
+                    backup_dead=True,
+                )
             if self._tasty_streak >= self._minutes_threshold:
                 message = (
                     f"tastytrade mlčí na {tally.tasty_dead_share * 100:.0f} % kontraktů "
                     f"({tally.tasty_only_dead}/{tally.contracts}) už {self._tasty_streak} min, "
                     f"IBKR data má — sekundární zdroj, jen se poznamenává"
                 )
-                # Vědomě BEZ alertu (`alert=False`): přehrání 3 051 minut historie
-                # dalo 41 epizod, všechny v hodinách 21–06 UTC. Příčina je
-                # konstrukční, ne porucha — dxFeed posílá eventy jen při změně,
-                # takže v noci a v denní pauze CME (16:00–17:00 CT) okno stáří
+                # Bez rozlišovače vědomě BEZ alertu: přehrání historie dalo
+                # 6 epizod „tasty mlčí" (dřív 41 na kratší historii), všechny
+                # v pauze CME 21–22 UTC. Příčina je konstrukční, ne porucha —
+                # dxFeed posílá eventy jen při změně, takže v tichu okno stáří
                 # vyprší, zatímco IBKR sweep vrací poslední kotaci pořád dokola.
-                # Do alert kanálu by to bylo 41 planých poplachů; stav zůstává
-                # čitelný v /status a v logu.
+                # Stav zůstává čitelný v /status a v logu; alertuje až větev
+                # `backup_dead` výš, která tichý trh vyloučí měřením změn.
                 return self._finish("tasty_suspect", tally, self._tasty_streak, False, message)
             return self._finish("ok", tally, self._tasty_streak, False, "tastytrade zaostává")
 
         self._tasty_streak = 0
+        self._backup_streak = 0
         return self._finish("ok", tally, 0, False, "Oba zdroje dodávají data")
 
-    def _may_alert(self, state: CrossCheckState) -> bool:
+    def _may_alert(self, key: str) -> bool:
         """Alert jen na hraně série a nejvýš jednou za cooldown."""
-        elapsed = self._since_alert.get(state)
+        elapsed = self._since_alert.get(key)
         if elapsed is not None and elapsed < self._cooldown_minutes:
             return False
-        self._since_alert[state] = 0
+        self._since_alert[key] = 0
         return True
 
     def _finish(
@@ -232,6 +293,8 @@ class CrossCheckDetector:
         streak: int,
         alert: bool,
         message: str,
+        *,
+        backup_dead: bool = False,
     ) -> CrossCheckVerdict:
         if state in ("ok", "quiet") and streak == 0:
             # Uzdravení re-armuje cooldown, ale až po stejně dlouhé čisté sérii,
@@ -243,7 +306,12 @@ class CrossCheckDetector:
         else:
             self._clean_streak = 0
         verdict = CrossCheckVerdict(
-            state=state, tally=tally, streak=streak, alert=alert, message=message
+            state=state,
+            tally=tally,
+            streak=streak,
+            alert=alert,
+            message=message,
+            backup_dead=backup_dead,
         )
         self.last = verdict
         if alert:
