@@ -312,6 +312,28 @@ export function fractionalRow(strikes: number[], value: number): number | null {
   return null
 }
 
+/** Jako `fractionalRow`, ale mimo pásmo strikes EXTRAPOLUJE místo klampnutí.
+
+Pro historii přes hranici dne (#788): cena před týdnem klidně leží stovky bodů
+mimo dnešní obálku ±200 b — klampnutí by ji rozpláclo na okraj pásma a graf by
+lhal. Krok extrapolace = krajní krok mřížky; dnešní vrstvy zůstávají u
+klampující varianty (změna jejich chování sem nepatří).
+*/
+export function fractionalRowUnbounded(strikes: number[], value: number): number | null {
+  if (strikes.length === 0) return null
+  if (strikes.length === 1) return 0
+  const last = strikes.length - 1
+  if (value < strikes[0]) {
+    const step = strikes[1] - strikes[0]
+    return step > 0 ? (value - strikes[0]) / step : 0
+  }
+  if (value > strikes[last]) {
+    const step = strikes[last] - strikes[last - 1]
+    return step > 0 ? last + (value - strikes[last]) / step : last
+  }
+  return fractionalRow(strikes, value)
+}
+
 export interface PolylinePoint {
   minuteIdx: number
   row: number
@@ -319,10 +341,15 @@ export interface PolylinePoint {
 }
 
 /** Cenová křivka → body v souřadnicích buněk (řádek interpolovaný mezi strikes). */
-export function pricePolyline(bars: PriceBar[], strikes: number[]): PolylinePoint[] {
+export function pricePolyline(
+  bars: PriceBar[],
+  strikes: number[],
+  { unbounded = false }: { unbounded?: boolean } = {},
+): PolylinePoint[] {
+  const rowOf = unbounded ? fractionalRowUnbounded : fractionalRow
   const points: PolylinePoint[] = []
   for (const bar of bars) {
-    const row = fractionalRow(strikes, bar.close)
+    const row = rowOf(strikes, bar.close)
     if (row !== null) {
       points.push({ minuteIdx: bar.minuteIdx, row, up: bar.up })
     }
@@ -341,14 +368,19 @@ export interface CandleGeometry {
 }
 
 /** Svíčky → řádkové souřadnice; bary bez kompletního OHLC se přeskakují. */
-export function candleGeometry(bars: PriceBar[], strikes: number[]): CandleGeometry[] {
+export function candleGeometry(
+  bars: PriceBar[],
+  strikes: number[],
+  { unbounded = false }: { unbounded?: boolean } = {},
+): CandleGeometry[] {
+  const rowOf = unbounded ? fractionalRowUnbounded : fractionalRow
   const candles: CandleGeometry[] = []
   for (const bar of bars) {
     if (bar.open === undefined || bar.high === undefined || bar.low === undefined) continue
-    const openRow = fractionalRow(strikes, bar.open)
-    const closeRow = fractionalRow(strikes, bar.close)
-    const highRow = fractionalRow(strikes, bar.high)
-    const lowRow = fractionalRow(strikes, bar.low)
+    const openRow = rowOf(strikes, bar.open)
+    const closeRow = rowOf(strikes, bar.close)
+    const highRow = rowOf(strikes, bar.high)
+    const lowRow = rowOf(strikes, bar.low)
     if (openRow === null || closeRow === null || highRow === null || lowRow === null) continue
     candles.push({
       minuteIdx: bar.minuteIdx,
