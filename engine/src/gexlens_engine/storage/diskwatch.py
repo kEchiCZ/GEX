@@ -190,9 +190,7 @@ class DiskWatch:
             f"PostgreSQL {_gb(snapshot.db_bytes)}",
         ]
         if snapshot.db_bytes is not None and snapshot.db_bytes > self._db_alert:
-            parts.append(
-                f"DB přerostla práh {_gb(self._db_alert)} — plní WSL disk Dockeru"
-            )
+            parts.append(f"DB přerostla práh {_gb(self._db_alert)} — plní WSL disk Dockeru")
         if eaters:
             parts.append(f"největší tabulky: {eaters}")
         parts.append("úklid řeší #757")
