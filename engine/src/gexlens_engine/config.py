@@ -192,6 +192,10 @@ class Settings(BaseSettings):
     # nad 4 833 min historie: pauza CME má medián ~0, aktivní trh p5 ≈ 0,38 —
     # default 0,30 dal na celé historii 0 planých poplachů.
     crosscheck_change_threshold: float = Field(default=0.30, gt=0, le=1)
+    # Aktivní IBKR sonda (#517 fáze B): na alert `ibkr_suspect` jednorázový
+    # snapshot referenčního kontraktu → rozliší výpadek farmy od potichu
+    # mrtvých subskripcí (a ty rovnou cíleně obnoví). Neběží periodicky.
+    probe_enabled: bool = True
 
     batch_timeout_s: float = Field(default=4.0, gt=0)
     # Burzovní čas, po kterém IBKR publikuje kompletní denní OI (#463, #511).

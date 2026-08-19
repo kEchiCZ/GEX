@@ -185,6 +185,37 @@ class ConnectionManager:
         self._client.disconnect()
         self._set_state(ConnectionState.DISCONNECTED, "zastaveno")
 
+    async def resubscribe_now(self) -> bool:
+        """Cílená obnova subskripcí BEZ reconnectu (#517 fáze B).
+
+        Volá ji aktivní sonda, když farma data dodává, ale naše subskripce
+        umřely potichu — přesně incident 26.–27. 7. (15 h zmrzlé ATM greeks
+        při tekoucích cenách). Běží týž řetěz callbacků jako po reconnectu,
+        takže je to jedna ohraničená akce, ne bouře per kontrakt.
+
+        Vrací True při úspěchu. Selhání znamená spojení, přes které nejde
+        obnovit data → disconnect a nechá se supervisor přepojit standardní
+        cestou (heartbeat výpadek pozná).
+        """
+        for resubscribe in self._resubscribe_callbacks:
+            try:
+                await resubscribe()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._set_state(
+                    ConnectionState.RECONNECTING,
+                    f"vynucená obnova subskripcí selhala ({exc}) — přepojuji",
+                )
+                with contextlib.suppress(Exception):
+                    self._client.disconnect()
+                return False
+        logger.info(
+            "Vynucená obnova subskripcí proběhla (%d callbacků)",
+            len(self._resubscribe_callbacks),
+        )
+        return True
+
     def report_market_data_type(self, market_data_type: int) -> None:
         """Fail-fast na delayed data: cokoli jiného než live (1) je chybový stav."""
         if market_data_type != LIVE_MARKET_DATA_TYPE:
