@@ -71,6 +71,8 @@ import {
 import type { WallsMode } from './heatmap/wallsModes'
 import { projectedSessions } from './instrument/sessions'
 import { aggregateDay, aggregateLive } from './replay/aggregate'
+import { buildHistoryView } from './replay/history'
+import { useHistoryBars } from './hooks/useHistoryBars'
 import { sliceGrid, sliceOverlays, slicePanels } from './replay/slice'
 import { useAggregateProfile } from './replay/useAggregateProfile'
 import { EMPTY_LIVE, minuteLabel, useDayData } from './replay/useDayData'
@@ -246,6 +248,14 @@ function MainContent() {
   // Timeframe: agregace 1m dat do košů v paměti (Daily má sloupec = den, koše se nepoužijí)
   const bucketMinutes = timeframe === 'daily' ? 1 : INTERVAL_MINUTES[interval]
   const day = useMemo(() => aggregateDay(modeDay, bucketMinutes), [modeDay, bucketMinutes])
+  // Svíčky přes hranici dne (#788): lazy historie z věčného archivu barů.
+  // Jen cena — heatmapa/panely minulých dnů se nestaví (positioning per den
+  // stojí na jiném 0DTE řetězu; rozhodnutí zadavatele). Daily má vlastní osu.
+  const historyBars = useHistoryBars(symbol, viewDate)
+  const historyView = useMemo(
+    () => (timeframe === 'daily' ? null : buildHistoryView(historyBars.days, bucketMinutes)),
+    [timeframe, historyBars.days, bucketMinutes],
+  )
   // Podkladová plocha (#242 → #204): gamma z /replay balíku; charm/vanna se
   // stahují a odebírají jen když jsou zobrazené (kanál per plocha)
   const greekPlane = useGreekPlane(
@@ -1467,6 +1477,8 @@ function MainContent() {
               onRangeCreateStart={handleRangeCreateStart}
               onRangeCommit={handleRangeCommit}
               rangeCreate={rangeTool}
+              history={historyView}
+              onNeedHistory={timeframe === 'daily' ? undefined : historyBars.requestMore}
             />
             {/* Chip aktivního range (#484): popisek okna + CumΔ okna + zavření */}
             {range && timeframe === 'intraday' && (

@@ -67,6 +67,7 @@ import type {
   StoredAnnotation,
 } from '../annotations/model'
 import { useCrosshair } from '../state/Crosshair'
+import type { HistoryView } from '../replay/history'
 
 const UP_COLOR = '#3ecf8e'
 const DOWN_COLOR = '#f0616d'
@@ -76,6 +77,11 @@ const LABEL_ROW_GAP_PX = 12
 
 /** Tolerance úchopu okraje range (#484) v px — musí jít trefit i při hustší ose. */
 const RANGE_EDGE_TOL_PX = 6
+
+/** Rezerva košů před levým okrajem historie (#788) — další den se dotahuje
+dřív, než uživatel doscrolluje na prázdno; při defaultním pohledu to eagerly
+přednačte jednu seanci, takže první scroll doleva už má co ukázat. */
+const HISTORY_PREFETCH_BUCKETS = 60
 
 // measureText nutí layout — cache šířky per font|text (osy překreslujeme 5×/s při živém spotu)
 // Strop (#509): klíče nesou ceny/časy, za dlouhý běh by mapa rostla donekonečna.
@@ -141,6 +147,8 @@ export function Heatmap({
   onRangeCommit,
   rangeCreate = false,
   forwardMarkers = [],
+  history = null,
+  onNeedHistory,
 }: {
   grid: HeatmapGrid
   /** Dyn GEX pole jako podklad (#242) — kreslí se POD měřeným gridem; průhledné
@@ -228,6 +236,12 @@ export function Heatmap({
   onRangeCommit?: () => void
   /** Nástroj „Rozsah" aktivní — obyčejné tažení vytváří range místo panu. */
   rangeCreate?: boolean
+  /** Historické seance vlevo od dneška (#788): jen cena, ZÁPORNÉ koše
+      (kotva = dnešní koš 0). Heatmapa/panely se pro ně nekreslí. */
+  history?: HistoryView | null
+  /** Levý okraj viewportu se blíží načtené historii — rodič dotáhne další den
+      (lazy, jeden request v letu; #788). */
+  onNeedHistory?: () => void
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -760,54 +774,93 @@ export function Heatmap({
     }
     context.font = '11px sans-serif'
 
-    // 1m cena: křivka s tick barvami, nebo svíčky (přepínač + viditelnost)
-    const points = pricePolyline(overlays.price ?? [], grid.strikes)
-    context.globalAlpha = Math.min(1, Math.max(0, priceOpacity))
-    if (priceStyle === 'candles') {
-      const candles = candleGeometry(overlays.price ?? [], grid.strikes)
-      const bodyWidth = Math.max(2, scaleX * 0.6)
-      // Knoty i těla dávkově po barvě (2 tahy místo N) — jinak N stroke()/snímek
-      // dusí hlavní vlákno při živém spotu (překreslení 5×/s). SPEC 7.2 výkon.
-      context.lineWidth = Math.max(1, scaleX * 0.1)
-      for (const up of [true, false]) {
-        const color = up ? UP_COLOR : DOWN_COLOR
-        context.strokeStyle = color
-        context.beginPath()
-        for (const candle of candles) {
-          if (candle.up !== up) continue
-          const x = minuteToX(candle.minuteIdx)
-          context.moveTo(x, rowToY(candle.highRow))
-          context.lineTo(x, rowToY(candle.lowRow))
+    // 1m cena: křivka s tick barvami, nebo svíčky (přepínač + viditelnost).
+    // Sdíleno s historií (#788) — táž dávková kresba (2 tahy/2 fill po barvě,
+    // jinak N stroke()/snímek dusí hlavní vlákno při živém spotu, SPEC 7.2).
+    const drawPriceSeries = (price: PriceBar[], unbounded: boolean) => {
+      if (priceStyle === 'candles') {
+        const candles = candleGeometry(price, grid.strikes, { unbounded })
+        const bodyWidth = Math.max(2, scaleX * 0.6)
+        context.lineWidth = Math.max(1, scaleX * 0.1)
+        for (const up of [true, false]) {
+          const color = up ? UP_COLOR : DOWN_COLOR
+          context.strokeStyle = color
+          context.beginPath()
+          for (const candle of candles) {
+            if (candle.up !== up) continue
+            const x = minuteToX(candle.minuteIdx)
+            context.moveTo(x, rowToY(candle.highRow))
+            context.lineTo(x, rowToY(candle.lowRow))
+          }
+          context.stroke()
+          // Těla také jedním fill (rect path) místo N fillRect
+          context.fillStyle = color
+          context.beginPath()
+          for (const candle of candles) {
+            if (candle.up !== up) continue
+            const x = minuteToX(candle.minuteIdx)
+            const topY = rowToY(Math.max(candle.openRow, candle.closeRow))
+            const bottomY = rowToY(Math.min(candle.openRow, candle.closeRow))
+            context.rect(x - bodyWidth / 2, topY, bodyWidth, Math.max(1, bottomY - topY))
+          }
+          context.fill()
         }
-        context.stroke()
-        // Těla také jedním fill (rect path) místo N fillRect
-        context.fillStyle = color
-        context.beginPath()
-        for (const candle of candles) {
-          if (candle.up !== up) continue
-          const x = minuteToX(candle.minuteIdx)
-          const topY = rowToY(Math.max(candle.openRow, candle.closeRow))
-          const bottomY = rowToY(Math.min(candle.openRow, candle.closeRow))
-          context.rect(x - bodyWidth / 2, topY, bodyWidth, Math.max(1, bottomY - topY))
+      } else {
+        // Segmenty dávkově po barvě ticku (2 tahy místo N)
+        const points = pricePolyline(price, grid.strikes, { unbounded })
+        context.lineWidth = 1.5
+        for (const up of [true, false]) {
+          context.strokeStyle = up ? UP_COLOR : DOWN_COLOR
+          context.beginPath()
+          for (let index = 1; index < points.length; index += 1) {
+            const current = points[index]
+            if (current.up !== up) continue
+            const previous = points[index - 1]
+            context.moveTo(minuteToX(previous.minuteIdx), rowToY(previous.row))
+            context.lineTo(minuteToX(current.minuteIdx), rowToY(current.row))
+          }
+          context.stroke()
         }
-        context.fill()
-      }
-    } else {
-      // Segmenty dávkově po barvě ticku (2 tahy místo N)
-      context.lineWidth = 1.5
-      for (const up of [true, false]) {
-        context.strokeStyle = up ? UP_COLOR : DOWN_COLOR
-        context.beginPath()
-        for (let index = 1; index < points.length; index += 1) {
-          const current = points[index]
-          if (current.up !== up) continue
-          const previous = points[index - 1]
-          context.moveTo(minuteToX(previous.minuteIdx), rowToY(previous.row))
-          context.lineTo(minuteToX(current.minuteIdx), rowToY(current.row))
-        }
-        context.stroke()
       }
     }
+
+    // Historie přes hranici dne (#788): jen cena, ztlumeně, per den — každý
+    // slice zvlášť, takže křivka NEspojuje hranici dnů (přes roll kontraktu
+    // by spojnice tvrdila falešnou kontinuitu). Řádky extrapolované: cena
+    // před týdnem klidně leží mimo dnešní obálku strikes.
+    const opacity = Math.min(1, Math.max(0, priceOpacity))
+    if (history && history.slices.length > 0) {
+      context.globalAlpha = opacity * 0.55
+      for (const slice of history.slices) drawPriceSeries(slice.price, true)
+      // Předěly dnů + datum — poctivé označení, že vlevo je historie bez
+      // positioningu (stejný princip jako svislice „projekce →", ADR-0006)
+      context.globalAlpha = 1
+      context.strokeStyle = 'rgba(150,150,150,0.5)'
+      context.setLineDash([4, 4])
+      context.lineWidth = 1
+      context.font = '10px sans-serif'
+      context.fillStyle = 'rgba(170,170,170,0.9)'
+      for (const slice of history.slices) {
+        const x = minuteToX(slice.firstBucket - 0.5)
+        context.beginPath()
+        context.moveTo(x, 0)
+        context.lineTo(x, logicalH)
+        context.stroke()
+        context.fillText(slice.date, x + 4, 12)
+      }
+      const xToday = minuteToX(-0.5)
+      context.beginPath()
+      context.moveTo(xToday, 0)
+      context.lineTo(xToday, logicalH)
+      context.stroke()
+      const todayNote = '← historie (jen cena)'
+      context.fillText(todayNote, xToday - measuredWidth(context, todayNote) - 4, 12)
+      context.setLineDash([])
+      context.font = '11px sans-serif'
+    }
+
+    context.globalAlpha = opacity
+    drawPriceSeries(overlays.price ?? [], false)
     context.globalAlpha = 1
 
     // Šipky signálů na cenové křivce (#295, SPEC 9.0): ▲ teal long pod cenou /
@@ -1008,7 +1061,19 @@ export function Heatmap({
     forwardMarkers,
     range,
     rangeB,
+    history,
   ])
+
+  // Dotažení další historické seance (#788): jakmile se levý okraj viewportu
+  // přiblíží k nejlevějšímu načtenému koši, řekne si o další den. Rodič drží
+  // single-flight, takže opakované volání při panu nic nespamuje.
+  useEffect(() => {
+    if (!onNeedHistory) return
+    const { scaleX } = mapping()
+    const firstVisibleBucket = (0 - view.offsetX) / scaleX - 0.5
+    const firstLoaded = history?.firstBucket ?? 0
+    if (firstVisibleBucket < firstLoaded + HISTORY_PREFETCH_BUCKETS) onNeedHistory()
+  }, [view, history, onNeedHistory, mapping])
 
   // 4) DYNAMICKÁ overlay vrstva (#141): živé svíčky ze spotu, značka aktuální ceny
   // a crosshair. Jen pár čar a jedna svíčka — překreslení 5×/s hlavní vlákno neblokuje.
