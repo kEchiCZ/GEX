@@ -102,3 +102,25 @@ describe('useHistoryBars', () => {
     await waitFor(() => expect(result.current.days).toHaveLength(1))
   })
 })
+
+describe('regrese mount race (#788)', () => {
+  it('rerender se stejnými props neresetuje kurzor — další den navazuje, žádná duplicita', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => okPayload(String(url).split('date=')[1])),
+    )
+    const { result, rerender } = renderHook(({ symbol }) => useHistoryBars(symbol, '2026-08-19'), {
+      initialProps: { symbol: 'ES' },
+    })
+    act(() => result.current.requestMore())
+    await waitFor(() => expect(result.current.days).toHaveLength(1))
+
+    rerender({ symbol: 'ES' }) // stejné props — reset NESMÍ proběhnout
+    expect(result.current.days).toHaveLength(1)
+
+    act(() => result.current.requestMore())
+    await waitFor(() => expect(result.current.days).toHaveLength(2))
+    // Původní chyba: kurzor se vrátil na dnešek a 18. 8. se stáhl podruhé
+    expect(result.current.days.map((day) => day.date)).toEqual(['2026-08-18', '2026-08-17'])
+  })
+})
