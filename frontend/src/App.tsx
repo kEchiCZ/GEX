@@ -25,7 +25,8 @@ import { Heatmap } from './components/Heatmap'
 import { InstrumentHeader } from './components/InstrumentHeader'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
-import { BottomPanels } from './components/BottomPanels'
+import { BottomPanels, PANEL_HEIGHT_MAX, PANEL_HEIGHT_MIN } from './components/BottomPanels'
+import type { PanelKey } from './components/BottomPanels'
 import { PlaybackBar } from './components/PlaybackBar'
 import { SettingsView } from './components/SettingsView'
 import { SetupCard } from './components/SetupCard'
@@ -181,7 +182,22 @@ function MainContent() {
   const [panelHeight, setPanelHeight] = usePersistentState(
     'panelHeight',
     84,
-    clampedNumber(50, 320),
+    clampedNumber(PANEL_HEIGHT_MIN, PANEL_HEIGHT_MAX),
+  )
+  // Individuální výšky per panel (#792) — mají přednost před sdílenou;
+  // globální předěl je maže (jedno tažení = zase jednotná výška bloku)
+  const [panelHeights, setPanelHeights] = usePersistentState<Record<string, number>>(
+    'panelHeights',
+    {},
+    clampedNumberMap(PANEL_HEIGHT_MIN, PANEL_HEIGHT_MAX),
+  )
+  const onPanelHeightChange = useCallback(
+    (key: PanelKey, next: number) =>
+      setPanelHeights((previous) => ({
+        ...previous,
+        [key]: Math.min(PANEL_HEIGHT_MAX, Math.max(PANEL_HEIGHT_MIN, Math.round(next))),
+      })),
+    [setPanelHeights],
   )
   const panelDragRef = useRef<{ y: number; height: number } | null>(null)
   // Logická velikost heatmapy — pravý profil sdílí její Y měřítko
@@ -1597,7 +1613,12 @@ function MainContent() {
                     .length,
                 )
                 const next = drag.height + (drag.y - event.clientY) / visibleCount
-                setPanelHeight(Math.min(320, Math.max(50, Math.round(next))))
+                setPanelHeight(
+                  Math.min(PANEL_HEIGHT_MAX, Math.max(PANEL_HEIGHT_MIN, Math.round(next))),
+                )
+                // Globální předěl sjednocuje: individuální výšky (#792) se mažou,
+                // jinak by část panelů tažení ignorovala a hrana bloku poskakovala
+                setPanelHeights((previous) => (Object.keys(previous).length > 0 ? {} : previous))
               }}
               onPointerUp={() => {
                 panelDragRef.current = null
@@ -1613,6 +1634,8 @@ function MainContent() {
             // panely samy kreslí dál jen naměřená data
             totalMinutes={projectedGrid.minutes}
             height={panelHeight}
+            heights={panelHeights}
+            onHeightChange={onPanelHeightChange}
             range={rangeSpan ? { startBucket: rangeSpan.startBucket, endBucket: rangeSpan.endBucket } : null} // prettier-ignore
             rangeB={rangeSpanB ? { startBucket: rangeSpanB.startBucket, endBucket: rangeSpanB.endBucket } : null} // prettier-ignore
           />

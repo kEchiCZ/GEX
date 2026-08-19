@@ -10,7 +10,7 @@ počítá v základním měřítku a transformuje <g>, takže crosshair i sloupc
 pod heatmapou pixel-přesně. SVG má viewBox + preserveAspectRatio="none" —
 CSS roztažení škáluje obsah stejně jako canvas heatmapy.
 */
-import { memo, useState } from 'react'
+import { memo, useRef, useState } from 'react'
 import { baseBucketPx } from '../heatmap/view'
 import { minuteLabel } from '../replay/useDayData'
 import {
@@ -57,6 +57,15 @@ export interface PanelsVisible {
   evoOi: boolean
   sentiment: boolean
 }
+
+/** Klíč panelu — jednotný pro viditelnost i individuální výšky (#792). */
+export type PanelKey = keyof PanelsVisible
+
+/** Meze výšky panelu (#792): minimum je poloviční proti původním 50 px (#169),
+maximum zůstává. Klampuje App (jediný vlastník stavu) — komponenta hodnoty
+jen kreslí a hlásí surové tažení. */
+export const PANEL_HEIGHT_MIN = 25
+export const PANEL_HEIGHT_MAX = 320
 
 /** Časová část transformace hlavního grafu (sdílená osa X). */
 export interface TimeTransform {
@@ -150,6 +159,8 @@ function BottomPanelsBase({
   time = IDENTITY_TIME,
   totalMinutes,
   height = DEFAULT_height,
+  heights,
+  onHeightChange,
   range = null,
   rangeB = null,
 }: {
@@ -163,6 +174,11 @@ function BottomPanelsBase({
   totalMinutes?: number
   /** Výška jednoho panelu — tažitelný předěl v App ji mění za běhu (#169). */
   height?: number
+  /** Individuální výšky per panel (#792) — mají přednost před sdílenou. */
+  heights?: Partial<Record<PanelKey, number>>
+  /** Tažení úchytu na spodní hraně panelu (#792): hlásí SUROVOU cílovou
+  výšku, klampování dělá vlastník stavu (App). Bez handleru se úchyty nekreslí. */
+  onHeightChange?: (key: PanelKey, height: number) => void
   /** Aktivní range (#484) v koších osy — panely mimo okno se ztlumí. */
   range?: { startBucket: number; endBucket: number } | null
   /** Druhé okno B (#489) — dim je komplement sjednocení obou. */
@@ -186,9 +202,39 @@ function BottomPanelsBase({
   // Stejné základní měřítko jako heatmapa — málo dat se neroztahuje na šířku
   const step = baseBucketPx(axisMinutes, width)
   const barWidth = Math.max(0.5, step * 0.8)
+  // Individuální výška panelu (#792): override má přednost před sdílenou (#169)
+  const heightOf = (key: PanelKey): number => heights?.[key] ?? height
+  // Úchyt na spodní hraně panelu (#792) — mění výšku JEN toho jednoho panelu.
+  // Jeden sdílený drag ref: naráz jde táhnout jediný úchyt.
+  const resizeRef = useRef<{ key: PanelKey; y: number; start: number } | null>(null)
+  const resizeHandle = (key: PanelKey, label: string): React.ReactNode => {
+    if (!onHeightChange) return null
+    return (
+      <div
+        className="panel-resize-h"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label={`Výška panelu ${label}`}
+        onPointerDown={(event) => {
+          resizeRef.current = { key, y: event.clientY, start: heightOf(key) }
+          event.currentTarget.setPointerCapture(event.pointerId)
+        }}
+        onPointerMove={(event) => {
+          const drag = resizeRef.current
+          if (!drag || drag.key !== key) return
+          // Úchyt sedí na spodní hraně — tažení dolů panel zvětšuje 1:1
+          onHeightChange(key, Math.round(drag.start + (event.clientY - drag.y)))
+        }}
+        onPointerUp={() => {
+          resizeRef.current = null
+        }}
+      />
+    )
+  }
   // Ztlumení mimo range (#484): dva recty v datovém prostoru — transform <g>
-  // je posune/roztáhne shodně s bary, žádná pixelová aritmetika
-  const rangeDim = (() => {
+  // je posune/roztáhne shodně s bary, žádná pixelová aritmetika. Výška per
+  // panel (#792), zbytek geometrie je pro všechny panely shodný.
+  const rangeDimFor = (panelHeight: number): React.ReactNode => {
     if (range === null || step <= 0) return null
     // Komplement sjednocení oken A a B (#489) — jas znamená „vybráno"
     const intervals = [range, ...(rangeB ? [rangeB] : [])]
@@ -209,13 +255,13 @@ function BottomPanelsBase({
             x={rect.x}
             y={0}
             width={Math.max(0, rect.w)}
-            height={height}
+            height={panelHeight}
             fill="rgba(8,10,15,0.72)"
           />
         ))}
       </>
     )
-  })()
+  }
   const transform = `translate(${time.offsetX} 0) scale(${time.zoomX} 1)`
 
   // Vrcholy pro škály os Y; Opt Vol a Δ Flow sdílí škálu C/P (jednoznačná osa)
@@ -225,30 +271,36 @@ function BottomPanelsBase({
   const cumPeak = seriesPeak(data.cumDelta)
 
   // Pohyb v panelu: crosshair (osa X) + výšková úroveň (osa Y) pro daný panel
-  const handleMove = (key: string) => (event: React.PointerEvent<SVGSVGElement>) => {
-    pointer.onPointerMove(event)
-    const rect = event.currentTarget.getBoundingClientRect()
-    const cssScale = rect.height > 0 ? height / rect.height : 1
-    setHoverY({ key, y: (event.clientY - rect.top) * cssScale })
-  }
+  const handleMove =
+    (key: string, panelHeight: number) => (event: React.PointerEvent<SVGSVGElement>) => {
+      pointer.onPointerMove(event)
+      const rect = event.currentTarget.getBoundingClientRect()
+      const cssScale = rect.height > 0 ? panelHeight / rect.height : 1
+      setHoverY({ key, y: (event.clientY - rect.top) * cssScale })
+    }
   const handleLeave = () => {
     pointer.clear()
     setHoverY(null)
   }
   /** Hodnota na ose Y podle výšky kurzoru (signed = symetrická škála kolem nuly,
   se stejnou rezervou od okrajů jako plocha Cum Δ). */
-  const axisValue = (key: string, peak: number, signed: boolean): React.ReactNode => {
+  const axisValue = (
+    key: string,
+    peak: number,
+    signed: boolean,
+    panelHeight: number,
+  ): React.ReactNode => {
     if (!hoverY || hoverY.key !== key) return null
-    const y = Math.min(height, Math.max(0, hoverY.y))
+    const y = Math.min(panelHeight, Math.max(0, hoverY.y))
     const value = signed
-      ? ((height / 2 - y) / Math.max(1, height / 2 - CUM_DELTA_PAD)) * peak
-      : ((height - y) / (height - 4)) * peak
+      ? ((panelHeight / 2 - y) / Math.max(1, panelHeight / 2 - CUM_DELTA_PAD)) * peak
+      : ((panelHeight - y) / (panelHeight - 4)) * peak
     return <PanelAxisValue y={y}>{signed ? fmtSigned(value, peak) : fmtInt(value)}</PanelAxisValue>
   }
   /** Vodorovná crosshair linka na úrovni kurzoru (jen v najetém panelu, mimo transform). */
-  const axisLineH = (key: string): React.ReactNode => {
+  const axisLineH = (key: string, panelHeight: number): React.ReactNode => {
     if (!hoverY || hoverY.key !== key) return null
-    const y = Math.min(height, Math.max(0, hoverY.y))
+    const y = Math.min(panelHeight, Math.max(0, hoverY.y))
     return (
       <line
         x1={0}
@@ -265,18 +317,20 @@ function BottomPanelsBase({
   const panels: React.ReactNode[] = []
 
   if (visible.vol) {
+    const height = heightOf('vol')
+    const rangeDim = rangeDimFor(height)
     const heights = barHeights(data.vol, height - 4, volPeak)
     panels.push(
       <section key="vol" className="bottom-panel" aria-label="Vol panel">
         <span className="panel-title muted">Vol</span>
         {idx !== null && <PanelValue>{fmtInt(data.vol[idx])}</PanelValue>}
-        {axisValue('vol', volPeak, false)}
+        {axisValue('vol', volPeak, false, height)}
         <svg
           width={width}
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('vol')}
+          onPointerMove={handleMove('vol', height)}
           onPointerLeave={handleLeave}
         >
           <g transform={transform}>
@@ -293,13 +347,16 @@ function BottomPanelsBase({
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
-          {axisLineH('vol')}
+          {axisLineH('vol', height)}
         </svg>
+        {resizeHandle('vol', 'Vol')}
       </section>,
     )
   }
 
   if (visible.optVol) {
+    const height = heightOf('optVol')
+    const rangeDim = rangeDimFor(height)
     const callHeights = barHeights(data.optVolCall, height - 4, optPeak)
     const putHeights = barHeights(data.optVolPut, height - 4, optPeak)
     panels.push(
@@ -312,13 +369,13 @@ function BottomPanelsBase({
             <span style={{ color: COLORS.put }}>P {fmtInt(data.optVolPut[idx])}</span>
           </PanelValue>
         )}
-        {axisValue('optvol', optPeak, false)}
+        {axisValue('optvol', optPeak, false, height)}
         <svg
           width={width}
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('optvol')}
+          onPointerMove={handleMove('optvol', height)}
           onPointerLeave={handleLeave}
         >
           <g transform={transform}>
@@ -347,13 +404,16 @@ function BottomPanelsBase({
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
-          {axisLineH('optvol')}
+          {axisLineH('optvol', height)}
         </svg>
+        {resizeHandle('optVol', 'Opt Vol')}
       </section>,
     )
   }
 
   if (visible.deltaFlow) {
+    const height = heightOf('deltaFlow')
+    const rangeDim = rangeDimFor(height)
     const callHeights = barHeights(data.deltaFlowCall, height - 4, flowPeak)
     const putHeights = barHeights(data.deltaFlowPut, height - 4, flowPeak)
     panels.push(
@@ -366,13 +426,13 @@ function BottomPanelsBase({
             <span style={{ color: COLORS.put }}>P {fmtInt(data.deltaFlowPut[idx])}</span>
           </PanelValue>
         )}
-        {axisValue('deltaflow', flowPeak, false)}
+        {axisValue('deltaflow', flowPeak, false, height)}
         <svg
           width={width}
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('deltaflow')}
+          onPointerMove={handleMove('deltaflow', height)}
           onPointerLeave={handleLeave}
         >
           <g transform={transform}>
@@ -401,13 +461,16 @@ function BottomPanelsBase({
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
-          {axisLineH('deltaflow')}
+          {axisLineH('deltaflow', height)}
         </svg>
+        {resizeHandle('deltaFlow', 'Δ Flow C/P')}
       </section>,
     )
   }
 
   if (visible.evoOi && (data.evoOiCall?.length ?? 0) > 0) {
+    const height = heightOf('evoOi')
+    const rangeDim = rangeDimFor(height)
     const callSeries = evoOiDisplay(data.evoOiCall ?? [], evoOiMode)
     const putSeries = evoOiDisplay(data.evoOiPut ?? [], evoOiMode)
     const evoPeak = Math.max(1, seriesPeak(callSeries), seriesPeak(putSeries))
@@ -448,13 +511,13 @@ function BottomPanelsBase({
             </span>
           </PanelValue>
         )}
-        {axisValue('evooi', evoPeak, signed)}
+        {axisValue('evooi', evoPeak, signed, height)}
         <svg
           width={width}
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('evooi')}
+          onPointerMove={handleMove('evooi', height)}
           onPointerLeave={handleLeave}
         >
           {
@@ -481,13 +544,16 @@ function BottomPanelsBase({
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
-          {axisLineH('evooi')}
+          {axisLineH('evooi', height)}
         </svg>
+        {resizeHandle('evoOi', 'Evo OI')}
       </section>,
     )
   }
 
   if (visible.delta) {
+    const height = heightOf('delta')
+    const rangeDim = rangeDimFor(height)
     const areas = cumDeltaAreas(data.cumDelta, minutes * step, height)
     panels.push(
       <section key="cumdelta" className="bottom-panel" aria-label="Cum Δ panel">
@@ -506,13 +572,13 @@ function BottomPanelsBase({
           )}
         </span>
         {idx !== null && <PanelValue>{fmtSigned(data.cumDelta[idx])}</PanelValue>}
-        {axisValue('cumdelta', cumPeak, true)}
+        {axisValue('cumdelta', cumPeak, true, height)}
         <svg
           width={width}
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('cumdelta')}
+          onPointerMove={handleMove('cumdelta', height)}
           onPointerLeave={handleLeave}
         >
           <line
@@ -529,8 +595,9 @@ function BottomPanelsBase({
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
-          {axisLineH('cumdelta')}
+          {axisLineH('cumdelta', height)}
         </svg>
+        {resizeHandle('delta', 'Cum Δ')}
       </section>,
     )
   }
@@ -538,6 +605,8 @@ function BottomPanelsBase({
   // Daily pohled (#296): svíčky místo plochy — viditelný intradenní rozkmit
   // sentimentu; barvy shodné s cenovými svíčkami (SPEC 7.1)
   if (visible.sentiment && data.sentimentCandles && data.sentimentCandles.length > 0) {
+    const height = heightOf('sentiment')
+    const rangeDim = rangeDimFor(height)
     const candles = data.sentimentCandles
     const { geoms, zeroY } = sentimentCandleGeometry(candles, step, height)
     const peak = Math.max(
@@ -554,13 +623,13 @@ function BottomPanelsBase({
             C {hovered.close.toFixed(2)}
           </PanelValue>
         )}
-        {axisValue('sentiment', peak, true)}
+        {axisValue('sentiment', peak, true, height)}
         <svg
           width={width}
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('sentiment')}
+          onPointerMove={handleMove('sentiment', height)}
           onPointerLeave={handleLeave}
         >
           <line
@@ -593,11 +662,14 @@ function BottomPanelsBase({
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
-          {axisLineH('sentiment')}
+          {axisLineH('sentiment', height)}
         </svg>
+        {resizeHandle('sentiment', 'Sentiment')}
       </section>,
     )
   } else if (visible.sentiment && data.sentiment && data.sentiment.length > 0) {
+    const height = heightOf('sentiment')
+    const rangeDim = rangeDimFor(height)
     const sentiment = data.sentiment
     const areas = cumDeltaAreas(sentiment, minutes * step, height)
     const peak = seriesPeak(sentiment)
@@ -607,13 +679,13 @@ function BottomPanelsBase({
         {idx !== null && sentiment[idx] !== undefined && (
           <PanelValue>{sentiment[idx].toFixed(2)}</PanelValue>
         )}
-        {axisValue('sentiment', peak, true)}
+        {axisValue('sentiment', peak, true, height)}
         <svg
           width={width}
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('sentiment')}
+          onPointerMove={handleMove('sentiment', height)}
           onPointerLeave={handleLeave}
         >
           <g transform={transform}>
@@ -634,8 +706,9 @@ function BottomPanelsBase({
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
-          {axisLineH('sentiment')}
+          {axisLineH('sentiment', height)}
         </svg>
+        {resizeHandle('sentiment', 'Sentiment')}
       </section>,
     )
   }
