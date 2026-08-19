@@ -304,9 +304,7 @@ async def test_start_bez_spojeni_odber_odlozi_a_nespadne() -> None:
         raise AssertionError("na nepřipojeného klienta se nesmí sahat")
 
     callbacks: list[Any] = []
-    manager = SimpleNamespace(
-        state=ConnectionState.RECONNECTING, on_resubscribe=callbacks.append
-    )
+    manager = SimpleNamespace(state=ConnectionState.RECONNECTING, on_resubscribe=callbacks.append)
     ib = _fake_ib(providers)
 
     await engine_main._start_broker_news(
@@ -327,9 +325,7 @@ async def test_pad_spojeni_behem_eager_odberu_nepropadne() -> None:
     async def providers() -> list[Any]:
         raise ConnectionError("Not connected")
 
-    manager = SimpleNamespace(
-        state=ConnectionState.CONNECTED, on_resubscribe=lambda callback: None
-    )
+    manager = SimpleNamespace(state=ConnectionState.CONNECTED, on_resubscribe=lambda callback: None)
 
     await engine_main._start_broker_news(
         cast(IB, _fake_ib(providers)),
