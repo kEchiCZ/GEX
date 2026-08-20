@@ -26,6 +26,7 @@ from collections import defaultdict
 import pandas as pd
 from sqlalchemy import create_engine
 
+from gexlens_engine.compute.gexfield import GexProfile, gamma_edges
 from gexlens_engine.compute.setups import (
     Direction,
     MinuteInputs,
@@ -38,7 +39,6 @@ from gexlens_engine.compute.setups import (
     max_pain_strike,
     r_result,
 )
-from gexlens_engine.compute.gexfield import GexProfile, gamma_edges
 from gexlens_engine.storage.oi_archive import OIEodRepository
 
 DATA = "data/derived"
