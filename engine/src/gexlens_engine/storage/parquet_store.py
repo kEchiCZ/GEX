@@ -51,6 +51,21 @@ TICKS_SCHEMA = pa.schema(
     ]
 )
 
+# Surové opční trady z dxFeed TimeAndSale (#795): učicí data pro #794/#615.
+# `aggressor` je nechaný přesně, jak ho dxFeed poslal (BUY/SELL/UNDEFINED) —
+# klasifikaci dělá až konzument (#615), recorder nic neinterpretuje.
+TASTY_TRADES_SCHEMA = pa.schema(
+    [
+        ("ts", pa.timestamp("us", tz="UTC")),
+        ("streamer_symbol", pa.string()),
+        ("price", pa.float64()),
+        ("size", pa.float64()),
+        ("aggressor", pa.string()),
+        ("spread_leg", pa.bool_()),
+        ("eth", pa.bool_()),
+    ]
+)
+
 # 1min bary podkladu (pro cenový overlay, spot v OTM/ITM módech a replay)
 BARS_SCHEMA = pa.schema(
     [
@@ -411,6 +426,19 @@ class TickRecord:
     side: str
 
 
+@dataclass(frozen=True)
+class TastyTradeRow:
+    """Jeden surový TimeAndSale print z dxFeed (#795) — pole 1:1 se schématem."""
+
+    ts: dt.datetime
+    streamer_symbol: str
+    price: float
+    size: float | None
+    aggressor: str | None
+    spread_leg: bool | None
+    eth: bool | None
+
+
 class _PartitionBuffer:
     """Buffer jedné denní partice: drží celý den v paměti a atomicky přepisuje soubor."""
 
@@ -488,6 +516,16 @@ class SnapshotWriter:
         """Přidá 1min konsolidaci do partice snapshots/{sym}/{expiry}/{date}.parquet."""
         path = self._settings.snapshots_dir / symbol / expiry / f"{day.isoformat()}.parquet"
         buffer = self._buffer(path, SNAPSHOT_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_tasty_trades(self, symbol: str, day: dt.date, rows: Sequence[TastyTradeRow]) -> Path:
+        """Přidá surové TimeAndSale printy do partice trades/{sym}/{date}.parquet (#795).
+
+        Adresář `trades/` retence nezná vůbec (nechodí do něj) — učicí data
+        se nemažou (ADR-0029), jen se počítají do měřeného obsazení disku.
+        """
+        path = self._settings.trades_dir / symbol / f"{day.isoformat()}.parquet"
+        buffer = self._buffer(path, TASTY_TRADES_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_ticks(self, symbol: str, day: dt.date, ticks: Sequence[TickRecord]) -> Path:

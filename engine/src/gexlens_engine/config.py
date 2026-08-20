@@ -141,6 +141,11 @@ class Settings(BaseSettings):
     # (typicky 0DTE do publikace CME) — hodnota IBKR má vždy přednost.
     # Vyžaduje běžící shadow větev (bez ní není z čeho číst).
     tasty_oi_fill: bool = True
+    # Záznam surových TimeAndSale printů opčního řetězu (#795): učicí data pro
+    # samoučící smyčku (#794) a klasifikaci agresora (#615). Jediná data, která
+    # dnes nenávratně mizí — proto default zapnuto; podklad se nezaznamenává
+    # (miliony printů/den, CumΔ podkladu nese IBKR větev).
+    tasty_trades_record: bool = True
     # Dev laboratoř jen s tastytrade (#623, start-dev.ps1 -LiveTasty): engine
     # přeskočí IBKR úplně a jen streamuje chain do cache s heartbeat logem.
     # Produkce se flagu nedotýká — default vypnuto.
@@ -377,6 +382,11 @@ class Settings(BaseSettings):
     @property
     def derived_dir(self) -> Path:
         return self.data_dir / "derived"
+
+    @property
+    def trades_dir(self) -> Path:
+        """Surové opční trady z dxFeed (#795) — mimo retenci (ADR-0029)."""
+        return self.data_dir / "trades"
 
 
 def load_settings() -> Settings:
