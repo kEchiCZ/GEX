@@ -518,9 +518,7 @@ class SnapshotWriter:
         buffer = self._buffer(path, SNAPSHOT_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
-    def write_tasty_trades(
-        self, symbol: str, day: dt.date, rows: Sequence[TastyTradeRow]
-    ) -> Path:
+    def write_tasty_trades(self, symbol: str, day: dt.date, rows: Sequence[TastyTradeRow]) -> Path:
         """Přidá surové TimeAndSale printy do partice trades/{sym}/{date}.parquet (#795).
 
         Adresář `trades/` retence nezná vůbec (nechodí do něj) — učicí data
