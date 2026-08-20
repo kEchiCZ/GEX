@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     # market data line na symbol — proti rezervě 80/≥150 (ADR-0001) nic.
     ibkr_news_enabled: bool = True
     setups_enabled: bool = True
+    # Minutový feature log (#796): vstupní vektor detektoru + ATR + band metriky
+    # do derived/{symbol}/features/ — trénovací matice samoučící smyčky (#794).
+    # Objem ~1 řádek/min/symbol (jednotky KB/den), partice mimo retenci (ADR-0029)
+    feature_log_enabled: bool = True
     # Indikátor tendence (#350) — minutový výpočet + zápis historie
     tendency_enabled: bool = True
     # Sběrač kandidátů T6 Premarket squeeze (#256) — jen sběr, žádný setup
