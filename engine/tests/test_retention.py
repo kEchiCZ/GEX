@@ -3,6 +3,8 @@
 Okno se všude nastavuje explicitně (`RETENTION_DAYS`), ne přes produkční
 default — ten je od ADR-0022 na 90 dnech a konstanty `DAY_*_OLD` stojí na
 hranici 14 dnů. Testuje se mechanika purge, ne konkrétní nakonfigurované okno.
+Mechanické testy proto vypínají věčný archiv učicích dat (ADR-0029) — s ním
+by purge snapshots/derived vůbec nesahal; výjimku samotnou testuje sekce níže.
 """
 
 import datetime as dt
@@ -28,8 +30,18 @@ def make_partition(root: Path, *parts: str, day: dt.date) -> Path:
     return path
 
 
+def mechanics_settings(tmp_path: Path, **overrides: object) -> Settings:
+    """Settings pro testy mechaniky purge — bez věčného archivu učicích dat."""
+    return Settings(
+        retention_days=RETENTION_DAYS,
+        data_dir=tmp_path,
+        keep_learning_data_forever=False,
+        **overrides,  # type: ignore[arg-type]
+    )
+
+
 def test_purge_deletes_15_days_keeps_13_days(tmp_path: Path) -> None:
-    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path)
+    settings = mechanics_settings(tmp_path)
     old_snap = make_partition(settings.snapshots_dir, "ES", "20260716", day=DAY_15_OLD)
     new_snap = make_partition(settings.snapshots_dir, "ES", "20260716", day=DAY_13_OLD)
     old_ticks = make_partition(settings.ticks_dir, "ES", day=DAY_15_OLD)
@@ -49,7 +61,7 @@ def test_purge_deletes_15_days_keeps_13_days(tmp_path: Path) -> None:
 
 
 def test_boundary_day_exactly_retention_is_kept(tmp_path: Path) -> None:
-    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path)
+    settings = mechanics_settings(tmp_path)
     boundary = make_partition(
         settings.snapshots_dir, "ES", "20260716", day=TODAY - dt.timedelta(days=14)
     )
@@ -61,7 +73,7 @@ def test_boundary_day_exactly_retention_is_kept(tmp_path: Path) -> None:
 
 def test_oi_eod_never_touched_by_purge(tmp_path: Path) -> None:
     """AC + R4: purge job se oi_eod nedotkne, ani když jsou data starší než retence."""
-    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path / "data")
+    settings = mechanics_settings(tmp_path / "data")
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'gexlens.db'}")
     repository = OIEodRepository(engine)
     repository.ensure_schema()
@@ -81,7 +93,7 @@ def test_oi_eod_never_touched_by_purge(tmp_path: Path) -> None:
 
 
 def test_unparseable_partition_name_is_kept(tmp_path: Path) -> None:
-    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path)
+    settings = mechanics_settings(tmp_path)
     directory = settings.snapshots_dir / "ES" / "20260716"
     directory.mkdir(parents=True)
     weird = directory / "not-a-date.parquet"
@@ -95,7 +107,7 @@ def test_unparseable_partition_name_is_kept(tmp_path: Path) -> None:
 
 
 def test_empty_partition_dirs_removed(tmp_path: Path) -> None:
-    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path)
+    settings = mechanics_settings(tmp_path)
     old = make_partition(settings.snapshots_dir, "ES", "20260101", day=DAY_15_OLD)
 
     RetentionJob(settings).purge(TODAY)
@@ -105,14 +117,14 @@ def test_empty_partition_dirs_removed(tmp_path: Path) -> None:
 
 
 def test_disk_usage_and_limit_alert(tmp_path: Path) -> None:
-    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path, disk_limit_gb=1.0)
+    settings = mechanics_settings(tmp_path, disk_limit_gb=1.0)
     make_partition(settings.snapshots_dir, "ES", "20260716", day=DAY_13_OLD)
 
     report = RetentionJob(settings).purge(TODAY)
     assert report.disk_usage_bytes >= 1024
     assert not report.disk_limit_exceeded
 
-    tiny_limit = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path, disk_limit_gb=1e-9)
+    tiny_limit = mechanics_settings(tmp_path, disk_limit_gb=1e-9)
     report_exceeded = RetentionJob(tiny_limit).purge(TODAY)
     assert report_exceeded.disk_limit_exceeded  # hard limit → alert
 
@@ -139,7 +151,7 @@ def test_bars_survive_retention_forever(tmp_path: Path) -> None:
     Bez výjimky by se každou noc ztratil jeden den a volume z-score reakčních
     oken (potřebuje 20 seancí) by nikdy nešlo spočítat, protože okno je 14 dní.
     """
-    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path)
+    settings = mechanics_settings(tmp_path)
     ancient_bar = make_partition(
         settings.derived_dir, "ES", "bars", day=TODAY - dt.timedelta(days=400)
     )
@@ -158,9 +170,46 @@ def test_bars_survive_retention_forever(tmp_path: Path) -> None:
 
 def test_bars_exemption_can_be_turned_off(tmp_path: Path) -> None:
     """Vypnutelné konfigurací — kdyby archiv někdy přerostl disk."""
-    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path, keep_bars_forever=False)
+    settings = mechanics_settings(tmp_path, keep_bars_forever=False)
     old_bar = make_partition(settings.derived_dir, "ES", "bars", day=DAY_15_OLD)
 
     RetentionJob(settings).purge(TODAY)
 
     assert not old_bar.exists()
+
+
+# ── Věčný archiv učicích dat (#762, ADR-0029) ────────────────
+
+
+def test_learning_data_survive_retention_by_default(tmp_path: Path) -> None:
+    """Default konfigurace: snapshots/ a derived/ se nemažou, ticks/ ano.
+
+    Nenahraditelná data pro samoučící smyčku (#794) — replay MinuteInputs
+    stojí na snapshots + derived a IBKR historii řetězce zpětně nedá.
+    """
+    settings = Settings(retention_days=RETENTION_DAYS, data_dir=tmp_path)
+    ancient_snap = make_partition(
+        settings.snapshots_dir, "ES", "20260716", day=TODAY - dt.timedelta(days=400)
+    )
+    old_levels = make_partition(settings.derived_dir, "ES", "20260716", "levels", day=DAY_15_OLD)
+    old_ticks = make_partition(settings.ticks_dir, "ES", day=DAY_15_OLD)
+
+    report = RetentionJob(settings).purge(TODAY)
+
+    assert ancient_snap.exists()
+    assert old_levels.exists()
+    assert not old_ticks.exists()  # dopočitatelné řady se mažou dál
+    assert set(report.deleted) == {old_ticks}
+    assert report.kept_files == 2
+
+
+def test_learning_data_exemption_is_independent_of_bars_flag(tmp_path: Path) -> None:
+    """Bary přežijí i s vypnutým archivem učicích dat — výjimky se nestrhávají."""
+    settings = mechanics_settings(tmp_path)  # keep_learning_data_forever=False
+    old_bar = make_partition(settings.derived_dir, "ES", "bars", day=DAY_15_OLD)
+    old_snap = make_partition(settings.snapshots_dir, "ES", "20260716", day=DAY_15_OLD)
+
+    RetentionJob(settings).purge(TODAY)
+
+    assert old_bar.exists()  # S4/#275 platí dál
+    assert not old_snap.exists()  # učicí výjimka vypnutá → mechanika ADR-0022
