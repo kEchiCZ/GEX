@@ -811,6 +811,7 @@ async def create_pipeline(
                     max_stops_per_direction=settings.setup_max_stops_per_direction,
                     direction_block_minutes=settings.setup_direction_block_minutes,
                 ),
+                feature_writer=writer if settings.feature_log_enabled else None,
             )
             if setups_repository is not None
             else None

@@ -8,6 +8,7 @@ vyhodnocuje otevřené proti baru a publikuje alerty + WS kanál setups.{symbol}
 Selhání čehokoli tady nesmí shodit sběr dat — volající balí do try/except.
 """
 
+import asyncio
 import datetime as dt
 import logging
 from collections import deque
@@ -23,6 +24,7 @@ from gexlens_engine.compute.setups import (
     MinuteInputs,
     Outcome,
     SetupParams,
+    average_true_range,
     detect_all,
     evaluate_bar,
     gex_regime,
@@ -33,6 +35,7 @@ from gexlens_engine.compute.setups import (
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIEodRepository
+from gexlens_engine.storage.parquet_store import FeatureRow, SnapshotWriter
 from gexlens_engine.storage.setups_store import SetupsRepository, StoredSetup
 
 logger = logging.getLogger(__name__)
@@ -58,6 +61,9 @@ class SetupEngine:
     oi_repository: OIEodRepository
     publisher: PublisherLike
     params: SetupParams = field(default_factory=SetupParams)
+    # Minutový feature log (#796): trénovací matice pro samoučící smyčku (#794).
+    # None = vypnuto; zapisuje se do derived/{symbol}/features/ (mimo retenci).
+    feature_writer: SnapshotWriter | None = None
 
     def __post_init__(self) -> None:
         self._history: deque[MinuteInputs] = deque(maxlen=HISTORY_MINUTES)
@@ -172,9 +178,54 @@ class SetupEngine:
             gamma_edge_dn=edges.dn if edges else None,
         )
         self._history.append(inputs)
+        if self.feature_writer is not None:
+            await self._log_features(now, runtime, inputs)
 
         await self._evaluate_open(now, inputs, bars)
         await self._detect_new(now, runtime, inputs)
+
+    async def _log_features(
+        self, now: dt.datetime, runtime: EngineRuntime, inputs: MinuteInputs
+    ) -> None:
+        """Minutový feature log (#796): MinuteInputs + ATR + band metriky.
+
+        ONH/ONL, VWAP ani relativní síla se nelogují — jsou dopočitatelné
+        z věčných barů. Chyba zápisu nesmí shodit minutový cyklus.
+        """
+        assert self.feature_writer is not None
+        try:
+            band = band_context(runtime.last_profile, inputs.close)
+            row = FeatureRow(
+                ts=now,
+                expiry=runtime.expiry,
+                open=inputs.open,
+                high=inputs.high,
+                low=inputs.low,
+                close=inputs.close,
+                flip=inputs.flip,
+                call_wall=inputs.call_wall,
+                put_wall=inputs.put_wall,
+                max_pain=inputs.max_pain,
+                cum_delta=inputs.cum_delta,
+                call_flow=inputs.call_flow,
+                put_flow=inputs.put_flow,
+                opt_vol=inputs.opt_vol,
+                minutes_to_expiry=inputs.minutes_to_expiry,
+                call_wall_dom=inputs.call_wall_dom,
+                put_wall_dom=inputs.put_wall_dom,
+                gex_regime=inputs.gex_regime,
+                gamma_edge_up=inputs.gamma_edge_up,
+                gamma_edge_dn=inputs.gamma_edge_dn,
+                atr=average_true_range(self._history, self.params.atr_lookback),
+                band_sharpness=band.get("band_sharpness"),
+                band_sharpness_pct=band.get("band_sharpness_pct"),
+                band_depth=band.get("band_depth"),
+            )
+            await asyncio.to_thread(
+                self.feature_writer.write_features, self.symbol, now.date(), [row]
+            )
+        except Exception:
+            logger.exception("Zápis feature logu selhal — minutový cyklus jede dál")
 
     async def _evaluate_open(
         self,

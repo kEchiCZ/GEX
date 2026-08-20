@@ -51,6 +51,38 @@ TICKS_SCHEMA = pa.schema(
     ]
 )
 
+# Minutový feature log (#796): vstupní vektor setup detektoru per minuta —
+# hotová trénovací matice pro samoučící smyčku (#794), nezávislá na věrnosti
+# rekonstrukce v scripts/backtest_setups.py. Labels dává tabulka setups.
+FEATURES_SCHEMA = pa.schema(
+    [
+        ("ts", pa.timestamp("us", tz="UTC")),
+        ("expiry", pa.string()),
+        ("open", pa.float64()),
+        ("high", pa.float64()),
+        ("low", pa.float64()),
+        ("close", pa.float64()),
+        ("flip", pa.float64()),
+        ("call_wall", pa.float64()),
+        ("put_wall", pa.float64()),
+        ("max_pain", pa.float64()),
+        ("cum_delta", pa.float64()),
+        ("call_flow", pa.float64()),
+        ("put_flow", pa.float64()),
+        ("opt_vol", pa.float64()),
+        ("minutes_to_expiry", pa.float64()),
+        ("call_wall_dom", pa.float64()),
+        ("put_wall_dom", pa.float64()),
+        ("gex_regime", pa.string()),
+        ("gamma_edge_up", pa.float64()),
+        ("gamma_edge_dn", pa.float64()),
+        ("atr", pa.float64()),
+        ("band_sharpness", pa.float64()),
+        ("band_sharpness_pct", pa.float64()),
+        ("band_depth", pa.float64()),
+    ]
+)
+
 # Surové opční trady z dxFeed TimeAndSale (#795): učicí data pro #794/#615.
 # `aggressor` je nechaný přesně, jak ho dxFeed poslal (BUY/SELL/UNDEFINED) —
 # klasifikaci dělá až konzument (#615), recorder nic neinterpretuje.
@@ -439,6 +471,36 @@ class TastyTradeRow:
     eth: bool | None
 
 
+@dataclass(frozen=True)
+class FeatureRow:
+    """Jedna minuta feature logu (#796) — pole 1:1 se FEATURES_SCHEMA."""
+
+    ts: dt.datetime
+    expiry: str
+    open: float
+    high: float
+    low: float
+    close: float
+    flip: float | None
+    call_wall: float | None
+    put_wall: float | None
+    max_pain: float | None
+    cum_delta: float
+    call_flow: float
+    put_flow: float
+    opt_vol: float
+    minutes_to_expiry: float | None
+    call_wall_dom: float | None
+    put_wall_dom: float | None
+    gex_regime: str | None
+    gamma_edge_up: float | None
+    gamma_edge_dn: float | None
+    atr: float | None
+    band_sharpness: float | None
+    band_sharpness_pct: float | None
+    band_depth: float | None
+
+
 class _PartitionBuffer:
     """Buffer jedné denní partice: drží celý den v paměti a atomicky přepisuje soubor."""
 
@@ -517,6 +579,16 @@ class SnapshotWriter:
         path = self._settings.snapshots_dir / symbol / expiry / f"{day.isoformat()}.parquet"
         buffer = self._buffer(path, SNAPSHOT_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_features(self, symbol: str, day: dt.date, rows: Sequence[FeatureRow]) -> Path:
+        """Přidá minuty feature logu do partice derived/{sym}/features/{date}.parquet (#796).
+
+        Upsert per `ts` (vzor barů): restart enginu uprostřed dne by jinak
+        catch-up minutou vyrobil duplicitní řádek téže minuty.
+        """
+        path = self._settings.derived_dir / symbol / "features" / f"{day.isoformat()}.parquet"
+        buffer = self._buffer(path, FEATURES_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows], key="ts")
 
     def write_tasty_trades(self, symbol: str, day: dt.date, rows: Sequence[TastyTradeRow]) -> Path:
         """Přidá surové TimeAndSale printy do partice trades/{sym}/{date}.parquet (#795).

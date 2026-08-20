@@ -26,6 +26,7 @@ from collections import defaultdict
 import pandas as pd
 from sqlalchemy import create_engine
 
+from gexlens_engine.compute.gexfield import GexProfile, gamma_edges
 from gexlens_engine.compute.setups import (
     Direction,
     MinuteInputs,
@@ -113,6 +114,20 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
         frame = frame.merge(flows, on="ts_min", how="left")
     if frame.empty:
         return []
+    # Hranice gamma masy (#600) z uložených Dyn GEX profilů — dřív harness
+    # tohle pole nechával None, takže se live vs. replay lišily (#796)
+    edges_by_ts: dict[object, tuple[float | None, float | None]] = {}
+    profiles = load_series(f"{DATA}/{symbol}/{expiry}/gexprofile/*.parquet")
+    if profiles is not None:
+        for prof in profiles.itertuples():
+            gp = GexProfile(
+                ts_min=prof.ts_min,
+                grid_start=float(prof.grid_start),
+                grid_step=float(prof.grid_step),
+                values=tuple(float(v) for v in prof.values),
+            )
+            edges = gamma_edges(gp)
+            edges_by_ts[prof.ts_min] = (edges.up, edges.dn)
     day = pd.Timestamp(frame.ts_min.iloc[-1]).date()
     pain = max_pain_for(repo, symbol, expiry, day)
     settle = dt.datetime.strptime(expiry, "%Y%m%d").replace(hour=20, tzinfo=dt.UTC)
@@ -146,6 +161,8 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
                     none_if_nan(getattr(row, "flip", None)),
                     float(getattr(row, "total_gex", 0.0) or 0.0),
                 ),
+                gamma_edge_up=edges_by_ts.get(row.ts_min, (None, None))[0],
+                gamma_edge_dn=edges_by_ts.get(row.ts_min, (None, None))[1],
             )
         )
     return minutes
