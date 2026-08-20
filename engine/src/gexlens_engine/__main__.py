@@ -110,6 +110,7 @@ from gexlens_engine.tasty.session import TastyCredentials, TastySession
 from gexlens_engine.tasty.spot_fallback import SpotFallback
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
+from gexlens_engine.tasty.trades_recorder import TradesRecorder
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.volregime import VolRegimeCollector
 
@@ -1051,7 +1052,16 @@ async def main() -> None:
         )
         symbol_map = SymbolMap(tasty_session)
         tasty_cache = TastyChainCache()
-        tasty_stream = DxLinkStream(tasty_session.quote_token, tasty_cache.on_event)
+        # Recorder surových opčních printů (#795): učicí data, která jinak
+        # nenávratně mizí. Fan-out callbacku — cache i recorder vidí tytéž eventy.
+        trades_recorder = TradesRecorder() if settings.tasty_trades_record else None
+
+        def _tasty_event(event_type: str, values: list[object]) -> None:
+            tasty_cache.on_event(event_type, values)
+            if trades_recorder is not None:
+                trades_recorder.on_event(event_type, values)
+
+        tasty_stream = DxLinkStream(tasty_session.quote_token, _tasty_event)
         # Zapisovatel porovnání je VOLITELNÝ odběratel monitoru (#763): bez něj
         # se řádky vůbec nestaví a `feed_comparison` přestane růst, ale tally
         # pro detektor i oba fallbacky běží dál.
@@ -1253,6 +1263,16 @@ async def main() -> None:
                         if front:
                             shadow_front_future[symbol] = front
                             symbols.add(front)
+                    if trades_recorder is not None:
+                        # Jen chain symboly — podklad záměrně ne (viz recorder):
+                        # jeho printy jsou miliony/den a CumΔ podkladu nese IBKR
+                        trades_recorder.set_mapping(
+                            {
+                                streamer: sym
+                                for sym, chain in shadow_chain.items()
+                                for streamer in chain.by_contract.values()
+                            }
+                        )
                     if symbols:
                         await tasty_stream.set_symbols(symbols)
                 except Exception:
@@ -1292,12 +1312,36 @@ async def main() -> None:
                 except Exception:
                     logger.exception("Spot bez pipeline selhal — příští cyklus jede dál")
 
+        async def trades_flush_loop() -> None:
+            """Minutový flush recorderu (#795) do trades/{sym}/{den}.parquet.
+
+            Poslední drain proběhne i po signálu stop — rozdělaná minuta by se
+            jinak ztratila. Parquet zápis je blokující, proto to_thread.
+            """
+            assert trades_recorder is not None
+            while True:
+                stopped = shadow_stop.is_set()
+                if not stopped:
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(shadow_stop.wait(), timeout=60.0)
+                        stopped = True
+                try:
+                    for (root, day), rows in trades_recorder.drain().items():
+                        await asyncio.to_thread(writer.write_tasty_trades, root, day, rows)
+                except Exception:
+                    logger.exception("Flush opčních tradů selhal — příští minuta jede dál")
+                if stopped:
+                    return
+
         shadow_tasks = [
             asyncio.create_task(tasty_stream.run(shadow_stop)),
             asyncio.create_task(monitor.run(shadow_stop)),
             asyncio.create_task(shadow_symbols_loop()),
             asyncio.create_task(orphan_spot_loop()),
         ]
+        if trades_recorder is not None:
+            shadow_tasks.append(asyncio.create_task(trades_flush_loop()))
+            logger.info("Záznam opčních TimeAndSale printů ZAPNUT (#795) → data/trades/")
         # Reference na tasks se drží (RUF006) — GC by je jinak uklidil před doběhem
         logger.info(
             "tastytrade větev ZAPNUTA (%d úloh); porovnání do feed_comparison: %s (#763)",
