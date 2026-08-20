@@ -9,6 +9,13 @@ Jsou to trénovací data — bez nich nejde spočítat volume z-score reakčníc
 (potřebuje 20 seancí, tedy víc než 14denní okno) ani zpětně přepočítat reakce
 na zprávy. Objem je zanedbatelný: 2 symboly × ~1400 barů/den ≈ desítky MB/rok.
 Stejný duch jako věčný OI archiv (ADR-0001).
+
+**Výjimka: snapshots/ a derived/ se nemažou nikdy** (#762, ADR-0029). Jsou to
+nenahraditelná učicí data — IBKR historii řetězce zpětně nedá a samoučící
+smyčka (#794) se nad nimi učí replayem (`scripts/backtest_setups.py` z nich
+rekonstruuje MinuteInputs). Precedens ztráty: #575 nemohl doplnit 495 setupů,
+protože profily byly za retencí. S výjimkou zapnutou purge reálně maže jen
+`ticks/`; výjimka je vypnutelná (`keep_learning_data_forever=False`).
 """
 
 import datetime as dt
@@ -88,14 +95,21 @@ class RetentionJob:
         )
 
     def _is_protected(self, path: Path) -> bool:
-        """Partice vyňatá z retence — věčný archiv 1min barů (S4, #275).
+        """Partice vyňatá z retence — rozhoduje se podle adresáře, ne stáří.
 
-        Rozhoduje se podle adresáře, ne podle stáří: `derived/{symbol}/bars/`
-        drží trénovací data a maže se jen ručně.
+        Dvě nezávislé výjimky: věčný archiv 1min barů (S4, #275,
+        `derived/{symbol}/bars/`) a věčný archiv učicích dat (#762, ADR-0029,
+        celé `snapshots/` a `derived/`). Nezávislé proto, aby vypnutí jedné
+        nestrhlo druhou: bary chrání SentimentLens i při
+        `keep_learning_data_forever=False`.
         """
-        if not self._settings.keep_bars_forever:
-            return False
-        return BARS_DIR_NAME in path.parts
+        if self._settings.keep_bars_forever and BARS_DIR_NAME in path.parts:
+            return True
+        if self._settings.keep_learning_data_forever:
+            for root in (self._settings.snapshots_dir, self._settings.derived_dir):
+                if path.is_relative_to(root):
+                    return True
+        return False
 
     def seconds_until_next_run(self, now: dt.datetime) -> float:
         """Prodleva do dalšího nočního běhu (konfig. čas UTC po zavření US)."""

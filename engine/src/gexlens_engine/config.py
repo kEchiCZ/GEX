@@ -276,8 +276,14 @@ class Settings(BaseSettings):
     # jako u OI archivu. Bez něj nejde volume z-score (20 seancí > 14denní okno)
     # ani zpětný přepočet reakcí na zprávy; objem desítky MB/rok.
     keep_bars_forever: bool = True
-    # 90denní retence vychází na ~1,5 GB (ES+NQ); 2 GB by hlásily falešný alert
-    disk_limit_gb: float = Field(default=5.0, gt=0)
+    # Věčný archiv učicích dat (#762, ADR-0029): snapshots/ a derived/ se nemažou —
+    # jsou nenahraditelné (IBKR je zpětně nedá) a samoučící smyčka (#794) se nad
+    # nimi učí replayem. Objem ~6 GB/rok (změřeno: 491 MB za měsíc ES+NQ).
+    # Retence pak maže jen dopočitatelné řady (ticks/). Vypnutelné jako u barů.
+    keep_learning_data_forever: bool = True
+    # Keep-forever režim (ADR-0029) roste ~6 GB/rok — limit je alert na revizi
+    # (komprese starých partic / větší disk), skutečné volné místo hlídá #773.
+    disk_limit_gb: float = Field(default=20.0, gt=0)
     # Dohled nad volným místem (#773) — jen měření a alerty, úklid řeší #757.
     # Prahy na SKUTEČNÉM volném místě disku s datovým adresářem (bind mount
     # ukazuje čísla hostitele); velikost DB má vlastní práh, protože WSL disk
