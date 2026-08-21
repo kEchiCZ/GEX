@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.9 · srpen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.10 · srpen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -548,6 +548,7 @@ Signál se ukáže jako **šipka na cenové křivce** (▲ Long teal / ▼ Short
 |---|---|
 | **Vlny sentimentu** | Historie RISK ON/OFF vln — hloubka, délka, četnost per směr |
 | **Hit-raty bucketů** | Empirický model reakcí na zprávy: úspěšnost per kategorie × důležitost × překvapení, přepínač **okna reakce** (+5/+15/+30/+60 min) a **režimu** (vše / RiskOn / RiskOff / Neutral / gamma ±), progres ke gate |
+| **Výkon setupů** (v1.10) | **Sharpe ratio a equity křivka** simulace: denní ΣR přes všechny symboly watchlistu (jen aktuální mechanika detektoru), anualizovaný Sharpe celkem + za posledních 30 seancí, max drawdown a **USD simulace** s exekucí micro kontrakty dle kalkulačky (Trading nastavení) včetně nákladů. Do 60 seancí varování o malém vzorku — potvrzení cíle Sharpe > 2 vyžaduje 400+ seancí |
 | **Setupy per režim** | Úspěšnost šablon T1–T7 rozpadlá podle GEX režimu — které setupy fungují v jakém prostředí |
 | **Track record** | Mechanické equity křivky strategií (signály, setupy) + drawdown |
 | **Latence zdrojů** | Jak rychle který zdroj doručuje zprávy (medián, p90, podíl dávek) |
@@ -687,7 +688,8 @@ které se přepne hned.
 |---|---|
 | **IBKR** | Host, port (7496 live / 7497 paper), client ID |
 | **Engine (IBKR pipeline)** | **Rozsah strikes (± body od spotu)** — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB) |
-| **Stav enginu** | Read-only stav: spojení + port, účet (paper), Greeks X/Y + repair fronta, lines % + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console) |
+| **Stav enginu** | Read-only stav: spojení + port, účet (paper), Greeks X/Y + repair fronta, OI řetězu, lines %, **chyby subskripce** (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance" a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console) |
+| **Tastytrade** (v1.10) | Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží |
 | **Alerty** | **Hlásit chyby subskripce market dat** — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert *Chyba subskripce* v kap. 14) |
 | **Trading** | **Traders mode** — přepínač trading vrstev (viz kap. 11e); **velikost účtu + riziko na obchod** pro kalkulačku pozice u setup karty. Vše jen v prohlížeči, na server neodchází |
 | **Vzhled** | Téma **Dark/Light** (přepne se ihned), jazyk |
@@ -696,11 +698,10 @@ které se přepne hned.
 > **Sekce Engine se týká výhradně IBKR.** Velikost dávky i šířka hot zóny
 > jsou odvozené od limitů tvého IBKR účtu (100 market data lines, 5
 > tick-by-tick streamů — ADR-0001), rozsah strikes řídí rotační sweep přes
-> IBKR. **Nastavení pro tastytrade v Settings zatím není** a být nemůže:
-> tastytrade dnes běží jako tichá měřicí větev, která data nikam nepublikuje,
-> jen porovnává s IBKR do tabulky `feed_comparison`. Zapíná se proměnnými v
-> `.env` a vyžaduje restart enginu (viz ADMIN-MANUAL). Sekce v Settings
-> přibude, až se tastytrade stane plnohodnotným zdrojem dat.
+> IBKR. **Tastytrade** je od v1.9 plnohodnotná záloha (cena podkladu i celý
+> řetěz při výpadku IBKR, doplňování OI) — její stav ukazuje read-only blok
+> výše; konfigurace (OAuth tajemství) zůstává v `.env` a vyžaduje restart
+> enginu (viz ADMIN-MANUAL).
 
 ![Settings](img/settings.png)
 

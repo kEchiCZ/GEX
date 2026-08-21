@@ -75,15 +75,16 @@ const ENGINE_FIELDS: NumberField[] = [
     fallback: 90,
     min: 1,
     max: 3650,
-    help: 'Po kolika dnech noční úklid maže snapshoty a odvozené řady. Delší okno = starší dny jdou prohlížet a přehrávat, ale roste místo na disku (~17 MB/den pro ES+NQ). OI archiv, setupy a signály se nemažou nikdy.',
+    help: 'Po kolika dnech noční úklid maže dopočitatelné řady (ticks/). Snapshoty a odvozené řady se od ADR-0029 nemažou nikdy — jsou to učicí data samoučící smyčky (#794); OI archiv, setupy a signály jakbysmet.',
   },
   {
     key: 'disk_limit_gb',
     label: 'Disk limit (GB)',
-    fallback: 5,
+    // Default zrcadlí engine (ADR-0029: 5 → 20 GB, keep-forever režim)
+    fallback: 20,
     min: 0.5,
     max: 1000,
-    help: 'Nad tímto obsazením složky s daty přijde alert. Není to tvrdý strop — data se dál zapisují, jen upozorní. Drž ho nad očekávaným obsazením při zvolené retenci.',
+    help: 'Nad tímto obsazením složky s daty přijde alert. Není to tvrdý strop — data se dál zapisují, jen upozorní. Keep-forever režim (ADR-0029) roste ~6 GB/rok; alert je signál k revizi (komprese starých partic / větší disk), volné místo na disku hlídá zvlášť #773.',
   },
 ]
 

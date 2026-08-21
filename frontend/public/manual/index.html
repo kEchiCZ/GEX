@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.9 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.10 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); od verze 1.9 slouží <strong>tastytrade</strong> jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -721,6 +721,10 @@ víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.</p>
 <td>Empirický model reakcí na zprávy: úspěšnost per kategorie × důležitost × překvapení, přepínač <strong>okna reakce</strong> (+5/+15/+30/+60 min) a <strong>režimu</strong> (vše / RiskOn / RiskOff / Neutral / gamma ±), progres ke gate</td>
 </tr>
 <tr>
+<td><strong>Výkon setupů</strong> (v1.10)</td>
+<td><strong>Sharpe ratio a equity křivka</strong> simulace: denní ΣR přes všechny symboly watchlistu (jen aktuální mechanika detektoru), anualizovaný Sharpe celkem + za posledních 30 seancí, max drawdown a <strong>USD simulace</strong> s exekucí micro kontrakty dle kalkulačky (Trading nastavení) včetně nákladů. Do 60 seancí varování o malém vzorku — potvrzení cíle Sharpe &gt; 2 vyžaduje 400+ seancí</td>
+</tr>
+<tr>
 <td><strong>Setupy per režim</strong></td>
 <td>Úspěšnost šablon T1–T7 rozpadlá podle GEX režimu — které setupy fungují v jakém prostředí</td>
 </tr>
@@ -891,7 +895,11 @@ které se přepne hned.</p>
 </tr>
 <tr>
 <td><strong>Stav enginu</strong></td>
-<td>Read-only stav: spojení + port, účet (paper), Greeks X/Y + repair fronta, lines % + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console)</td>
+<td>Read-only stav: spojení + port, účet (paper), Greeks X/Y + repair fronta, OI řetězu, lines %, <strong>chyby subskripce</strong> (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance&quot; a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console)</td>
+</tr>
+<tr>
+<td><strong>Tastytrade</strong> (v1.10)</td>
+<td>Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží</td>
 </tr>
 <tr>
 <td><strong>Alerty</strong></td>
@@ -914,11 +922,10 @@ které se přepne hned.</p>
 <p><strong>Sekce Engine se týká výhradně IBKR.</strong> Velikost dávky i šířka hot zóny
 jsou odvozené od limitů tvého IBKR účtu (100 market data lines, 5
 tick-by-tick streamů — ADR-0001), rozsah strikes řídí rotační sweep přes
-IBKR. <strong>Nastavení pro tastytrade v Settings zatím není</strong> a být nemůže:
-tastytrade dnes běží jako tichá měřicí větev, která data nikam nepublikuje,
-jen porovnává s IBKR do tabulky <code>feed_comparison</code>. Zapíná se proměnnými v
-<code>.env</code> a vyžaduje restart enginu (viz ADMIN-MANUAL). Sekce v Settings
-přibude, až se tastytrade stane plnohodnotným zdrojem dat.</p>
+IBKR. <strong>Tastytrade</strong> je od v1.9 plnohodnotná záloha (cena podkladu i celý
+řetěz při výpadku IBKR, doplňování OI) — její stav ukazuje read-only blok
+výše; konfigurace (OAuth tajemství) zůstává v <code>.env</code> a vyžaduje restart
+enginu (viz ADMIN-MANUAL).</p>
 </blockquote>
 <p><img src="img/settings.png" alt="Settings"></p>
 <p>Light téma:</p>

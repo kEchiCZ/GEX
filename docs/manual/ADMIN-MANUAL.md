@@ -1,6 +1,6 @@
 # GEXLens — Manuál pro správce a vývojáře
 
-*Verze 1.1 · srpen 2026 · interní dokumentace — není dostupná v aplikaci*
+*Verze 1.2 · srpen 2026 · interní dokumentace — není dostupná v aplikaci*
 
 Technický popis architektury, provozu, konfigurace a vývoje aplikace GEXLens. Uživatelská příručka: `UZIVATELSKY-MANUAL.md`. Zdroj pravdy funkčních požadavků: [`docs/SPEC.md`](../SPEC.md) (v2.0); architektonická rozhodnutí v [`docs/adr/`](../adr/).
 
@@ -112,6 +112,17 @@ Data: Parquet v `./data` (bind mount, sdílené engine↔API), PostgreSQL ve vol
   (Ctrl+Shift+R), nginx drží starý bundle.
 - Shellové skripty mají v `.gitattributes` vynucené `eol=lf` — checkout na
   Windows je nesmí konvertovat na CRLF (kontejner by je nespustil.)
+- **Zaručený exit enginu** (#779, v1.2): fatální výjimka v `main()` končí
+  okamžitým `os._exit(1)` — kontejner spadne a `restart: unless-stopped` ho
+  zvedne. Dřív po pádu zůstal zombie proces (kontejner „Up", mrtvý engine);
+  při podezření na viselce: `docker kill -s USR1 gex-engine-1` vypíše
+  zásobníky všech vláken (#771).
+- **Broker news pásky** (#734, v1.2): kořeny se změřeným Error 200
+  (`BRFUPDN`, `DJ` — `DEAD_TAPES` v `ibkr/newsticks.py`) se přeskakují;
+  Dow Jones broad tape neexistuje v žádné variantě, reálně tečou BRFG a DJNL.
+- **Vyhodnocení shadow porovnání**: `scripts/feed_comparison_report.py`
+  `[--days N] [--symbol ES] [--sessions 2026-08-14,...]` — agregace v DB,
+  rozpad per podklad, filtr čistých seancí (vstup prahů #614).
 
 ---
 
@@ -206,7 +217,9 @@ Odolnost: ConnectionManager watchdog (heartbeat 30/15 s + exponenciální reconn
 
 ## 6. Datové formáty a persistence
 
-### Parquet (`GEXLENS_DATA_DIR`, retence 90 dní — ADR-0022)
+### Parquet (`GEXLENS_DATA_DIR`; retence — ADR-0029)
+
+Od ADR-0029 (v1.2) se **`snapshots/` a `derived/` nemažou nikdy** (`GEXLENS_KEEP_LEARNING_DATA_FOREVER=true`, default) — jsou to nenahraditelná učicí data samoučící smyčky (#794); IBKR historii řetězce zpětně nedá. Noční purge (`RETENTION_DAYS`, ADR-0022: 90 dní) tak reálně maže jen `ticks/`. Objem keep-forever režimu ≈ 6 GB/rok (ES+NQ); `GEXLENS_DISK_LIMIT_GB` (default 20) je alert na revizi, volné místo hlídá #773.
 
 | Partice | Schéma |
 |---|---|
@@ -215,6 +228,8 @@ Odolnost: ConnectionManager watchdog (heartbeat 30/15 s + exponenciální reconn
 | `derived/{sym}/{expiry}/levels/{date}.parquet` | ts_min, flip, call_wall, put_wall, centroid, total_gex |
 | `derived/{sym}/flow/{date}.parquet` | ts_min, flow_delta, cum_delta |
 | `derived/{sym}/bars/{date}.parquet` | ts_min, open, high, low, close, volume — **z purge vyňaté, drží se navždy** (`GEXLENS_KEEP_BARS_FOREVER=true`); ES i NQ mají ~2 roky historie od 2024-07-28 (backfill `scripts/backfill_bars.py`) |
+| `derived/{sym}/features/{date}.parquet` | **Minutový feature log** (#796): vstupní vektor setup detektoru + ATR + band metriky — trénovací matice smyčky #794 |
+| `trades/{sym}/{YYYY-MM-DD}.parquet` | **Surové opční TimeAndSale printy z dxFeed** (#795): ts, streamer_symbol, price, size, aggressorSide, spread_leg, eth. Mimo retenci; podklad budoucí klasifikace agresora (#615). Flag `GEXLENS_TASTY_TRADES_RECORD` (default true) |
 | `derived/{sym}/netflow/{date}.parquet` | Δ-vážený tok per strana (podklad FA odhadu OI) |
 | `derived/{sym}/{expiry}/oiest/{date}.parquet` | FA odhad OI (netflow×α, #232) |
 | `derived/{sym}/{expiry}/gexprofile(fa)/…` + `gexfield(fa)/…` | Dyn profily/pole; `…fa` varianty nad FA odhadem |
