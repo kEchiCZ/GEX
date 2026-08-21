@@ -1040,6 +1040,9 @@ async def main() -> None:
         | None
     ) = None
     chain_verdict_hook: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None
+    # Stav tastytrade větve pro /status a Settings (#706) — None = větev neběží;
+    # nepřítomnost polí je pro UI jiný stav než „běží a je odpojená"
+    tasty_status_fields: Callable[[], dict[str, object]] | None = None
     # Křížová kontrola (#517 A) — None, dokud neběží shadow větev; status ji
     # čte z hlavní smyčky, proto musí být viditelná i při vypnutém shadow
     crosscheck: CrossCheckDetector | None = None
@@ -1063,6 +1066,26 @@ async def main() -> None:
                 trades_recorder.on_event(event_type, values)
 
         tasty_stream = DxLinkStream(tasty_session.quote_token, _tasty_event)
+
+        def _tasty_status() -> dict[str, object]:
+            """Stav větve do /status (#706): spojení, subskripce, pokrytí, čerstvost."""
+            counts = tasty_cache.field_counts()
+            fields: dict[str, object] = {
+                "tasty_connected": tasty_stream.connected,
+                "tasty_reconnects": tasty_stream.reconnects,
+                "tasty_symbols": tasty_cache.symbols_tracked(),
+                "tasty_quotes": counts["quotes"],
+                "tasty_greeks": counts["greeks"],
+                "tasty_oi": counts["summary"],
+                "tasty_trades": counts["trades"],
+            }
+            if tasty_cache.last_event_at is not None:
+                fields["tasty_last_event_ts"] = tasty_cache.last_event_at.isoformat()
+            if trades_recorder is not None:
+                fields["tasty_trades_recorded"] = trades_recorder.recorded
+            return fields
+
+        tasty_status_fields = _tasty_status
         # Zapisovatel porovnání je VOLITELNÝ odběratel monitoru (#763): bez něj
         # se řádky vůbec nestaví a `feed_comparison` přestane růst, ale tally
         # pro detektor i oba fallbacky běží dál.
@@ -1562,6 +1585,8 @@ async def main() -> None:
                 lines_utilization=line_gauge.utilization(settings.market_data_lines),
                 # Křížová kontrola feedů (#517 A) — chybí, když shadow neběží
                 **_crosscheck_status(crosscheck),
+                # Stav tastytrade větve (#706) — pole chybí, když větev neběží
+                **(tasty_status_fields() if tasty_status_fields is not None else {}),
                 # Délka výpadku IBKR spojení (#770) — chybí, když spojení drží
                 **_connection_offline_status(manager),
                 **_chain_source_status(chain_fallback),

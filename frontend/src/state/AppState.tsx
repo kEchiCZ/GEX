@@ -51,6 +51,17 @@ export interface PipelineStatus {
   /** Jak dlouho chybí IBKR spojení v sekundách (#770). Klíč CHYBÍ, když
       spojení drží — nepřítomnost = nic k hlášení. */
   connection_offline_for_s?: number
+  /** Stav tastytrade větve (#706). Klíče CHYBÍ, když větev neběží — to je
+      jiný stav než „běží a je odpojená". */
+  tasty_connected?: boolean
+  tasty_reconnects?: number
+  tasty_symbols?: number
+  tasty_quotes?: number
+  tasty_greeks?: number
+  tasty_oi?: number
+  tasty_trades?: number
+  tasty_trades_recorded?: number
+  tasty_last_event_ts?: string
   updated_at?: number | null
 }
 
