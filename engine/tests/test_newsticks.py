@@ -74,15 +74,16 @@ def test_tape_symbol_builds_provider_wide_feed() -> None:
 
 
 def test_broad_tape_providers_normalizuje_dow_jones_kanaly() -> None:
-    """#546: přesně to, co IBKR vrátilo na produkci 17. 8. 2026.
+    """#546 + #734: přesně to, co IBKR vrátilo na produkci 17. 8. 2026.
 
-    Pět DJ-* kanálů je pro broad tape neplatných (Warning 321, valid are
-    [BRFG, BRFUPDN, DJ, DJNL, BZ, DJTOP, FLY]) — po normalizaci zbude kořen
-    `DJ`, který se do té doby NEODEBÍRAL VŮBEC.
+    Pět DJ-* kanálů je pro broad tape neplatných (Warning 321) → kořen `DJ`.
+    Jenže kontrakt `DJ:DJ_ALL` neexistuje (Error 200, změřeno #734) a
+    `BRFUPDN` taky ne — oba mrtvé kořeny se přeskakují, ať start negeneruje
+    chyby, které vypadají jako porucha. Reálně tečou jen BRFG a DJNL.
     """
     z_ibkr = ["BRFG", "BRFUPDN", "DJ-N", "DJ-RT", "DJ-RTA", "DJ-RTE", "DJ-RTG", "DJNL"]
 
-    assert broad_tape_providers(z_ibkr) == ["BRFG", "BRFUPDN", "DJ", "DJNL"]
+    assert broad_tape_providers(z_ibkr) == ["BRFG", "DJNL"]
 
 
 def test_broad_tape_providers_nechava_kody_bez_pomlcky() -> None:
@@ -90,8 +91,13 @@ def test_broad_tape_providers_nechava_kody_bez_pomlcky() -> None:
 
 
 def test_broad_tape_providers_zahodi_prazdne_a_duplicity() -> None:
-    """Duplicity vzniknou normalizací (DJ-N i DJ-RT → DJ); pořadí se drží."""
-    assert broad_tape_providers(["DJ-RT", "", "  ", "DJ-N", "BRFG", "DJ"]) == ["DJ", "BRFG"]
+    """Duplicity vzniknou normalizací (BZ-PRO i BZ-X → BZ); pořadí se drží."""
+    assert broad_tape_providers(["BZ-PRO", "", "  ", "BZ-X", "BRFG", "BZ"]) == ["BZ", "BRFG"]
+
+
+def test_broad_tape_providers_preskoci_mrtve_pasky() -> None:
+    """#734: BRFUPDN a DJ mají změřený Error 200 — do subskripce nejdou."""
+    assert broad_tape_providers(["BRFUPDN", "DJ", "DJ-N"]) == []
 
 
 def test_subscribe_broad_tape_uses_mdoff_and_covers_every_provider() -> None:

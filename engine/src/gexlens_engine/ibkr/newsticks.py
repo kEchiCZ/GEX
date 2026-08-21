@@ -70,30 +70,53 @@ def tape_symbol(provider: str) -> str:
     return f"{provider}:{provider}{BROAD_TAPE_SUFFIX}"
 
 
+#: Pásky s PROKÁZANÝM Error 200 (#734, sonda 21. 8. 2026): kořen je platný
+#: news zdroj (Warning 321 by řekl opak), ale tape kontrakt `{kód}:{kód}_ALL`
+#: neexistuje — `BRFUPDN` (upgrady/downgrady nemají celofeedovou pásku) a `DJ`
+#: (žádná varianta nefunguje: `DJ` i `DJTOP` → Error 200, `DJ-*` → Warning
+#: 321). Blacklist je tu obhajitelný jinak než whitelist zamítnutý v #546:
+#: přeskakuje se jen to, u čeho je ZMĚŘENO, že vrátí Error 200 — a kdyby IBKR
+#: pásku někdy doplnil, přijdeme o zdroj, který dnes stejně nemáme.
+DEAD_TAPES = frozenset({"BRFUPDN", "DJ"})
+
+
 def broad_tape_providers(codes: Iterable[str]) -> list[str]:
-    """Kódy z `reqNewsProviders` → kódy použitelné pro broad tape (#546).
+    """Kódy z `reqNewsProviders` → kódy použitelné pro broad tape (#546, #734).
 
     `reqNewsProviders` vrací kódy pro **článkové** API (`reqNewsArticle`), kde
     Dow Jones jede v kanálech `DJ-N`, `DJ-RT`, `DJ-RTA`, `DJ-RTE`, `DJ-RTG`.
-    Broad tape ale zná jen kořen `DJ` a varianty s pomlčkou odmítá:
+    Broad tape ale varianty s pomlčkou odmítá:
 
         Warning 321: The entered news source is invalid.
         Valid are: [BRFG, BRFUPDN, DJ, DJNL, BZ, DJTOP, FLY]
 
     Bez téhle normalizace se posílalo pět requestů, které IBKR pokaždé zahodil
-    (odtud pět startovních warningů), a **kořen `DJ` se neodebíral vůbec** — Dow
-    Jones páska nám tedy neteče, ačkoli na ni účet subskripci má. Pomlčka se
-    proto usekne a duplicity slijí; pořadí se zachovává kvůli čitelnosti logu.
+    (odtud pět startovních warningů). Pomlčka se proto usekne a duplicity
+    slijí; pořadí se zachovává kvůli čitelnosti logu.
+
+    Kořeny s prokázaně neexistující páskou (`DEAD_TAPES`, #734) se přeskakují
+    s logem — dva requesty naslepo při každém startu a reconnectu nejsou
+    drahé, ale plnily log chybami, které vypadají jako porucha.
 
     Kódy bez pomlčky (`BRFG`, `DJNL`) procházejí beze změny. Whitelist se
     vědomě NEZAVÁDÍ: platné zdroje závisí na subskripcích účtu, takže by ho
     fixní seznam v kódu buď ořezal, nebo by zastaral.
     """
     normalized: list[str] = []
+    skipped: list[str] = []
     for code in codes:
         root = code.split("-", 1)[0].strip()
-        if root and root not in normalized:
-            normalized.append(root)
+        if not root or root in normalized or root in skipped:
+            continue
+        if root in DEAD_TAPES:
+            skipped.append(root)
+            continue
+        normalized.append(root)
+    if skipped:
+        logger.info(
+            "Broker news: přeskakuji pásky bez tape kontraktu (změřený Error 200, #734): %s",
+            ", ".join(skipped),
+        )
     return normalized
 
 
