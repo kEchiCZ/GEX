@@ -21,7 +21,17 @@ import type {
   WaveRow,
 } from '../api/news'
 import { fetchSettings } from '../api/settings'
-import { CURRENT_MECHANICS_VERSION, fetchSetups, templateLabel } from '../api/setups'
+import { fetchSetups, formatPnlUsd, templateLabel } from '../api/setups'
+import {
+  annualizedSharpe,
+  currentMechanicsVersion,
+  dailyRSeries,
+  equityCurve,
+  maxDrawdownOf,
+  usdSimulation,
+} from '../setups/performance'
+import { sessionDateIso } from '../instrument/tz'
+import { API_BASE } from '../config'
 import type { SetupRow } from '../api/setups'
 import {
   STRATEGY_COLORS,
@@ -161,8 +171,9 @@ function setupRegimeRows(
   setups: SetupRow[],
 ): { template: string; regime: string; n: number; winRate: number }[] {
   const groups = new Map<string, { template: string; regime: string; n: number; wins: number }>()
+  const mechanicsVersion = currentMechanicsVersion(setups)
   for (const setup of setups) {
-    if ((setup.mechanics_version ?? 1) !== CURRENT_MECHANICS_VERSION) continue
+    if ((setup.mechanics_version ?? 1) !== mechanicsVersion) continue
     if (setup.status !== 'closed_target' && setup.status !== 'closed_stop') continue
     const regime = String(setup.context?.gex_regime ?? 'neznámý')
     const key = `${setup.template}|${regime}`
@@ -178,6 +189,103 @@ function setupRegimeRows(
         ? a.regime.localeCompare(b.regime)
         : a.template.localeCompare(b.template),
     )
+}
+
+/** Výkon setupů (#794 fáze 0, ADR-0030): Sharpe, equity R + USD simulace.
+
+Portfolio = uzavřené setupy aktuální mechaniky přes VŠECHNY symboly watchlistu
+(rovným dílem 1R). Sharpe je anualizovaný z denních ΣR per seance; do ~60
+seancí je to ukazatel trendu, ne splněný cíl (potvrzení SR > 2 chce 400+
+seancí — SE ≈ √252/√N). USD větev simuluje exekuci micro kontrakty (#679)
+včetně nákladů a přeskočených obchodů. */
+function SetupsPerformanceSection({
+  rows,
+  accountUsd,
+  riskPct,
+}: {
+  rows: SetupRow[]
+  accountUsd: number
+  riskPct: number
+}) {
+  const rSeries = dailyRSeries(rows, sessionDateIso)
+  if (rSeries.length === 0) {
+    return <p className="muted">Zatím žádné uzavřené setupy aktuální mechaniky</p>
+  }
+  const sharpeAll = annualizedSharpe(rSeries)
+  const sharpe30 = annualizedSharpe(rSeries.slice(-30))
+  const curve = equityCurve(rSeries)
+  const totalR = curve[curve.length - 1].equity
+  const trades = rSeries.reduce((sum, point) => sum + point.trades, 0)
+  const drawdown = maxDrawdownOf(curve)
+  const usd = usdSimulation(rows, sessionDateIso, { accountUsd, riskPct })
+  const usdCurve = usd ? equityCurve(usd.daily) : null
+  const usdSharpe = usd ? annualizedSharpe(usd.daily) : null
+
+  const width = 560
+  const height = 160
+  const equities = curve.map((point) => point.equity)
+  const minEq = Math.min(0, ...equities)
+  const maxEq = Math.max(0, ...equities)
+  const spanEq = Math.max(1e-9, maxEq - minEq)
+  const xOf = (index: number) => (index / Math.max(1, curve.length - 1)) * width
+  const yOf = (equity: number) => height - ((equity - minEq) / spanEq) * (height - 8) - 4
+  const formatSharpe = (result: { sharpe: number | null; days: number }) =>
+    result.sharpe === null ? '—' : result.sharpe.toFixed(2)
+
+  return (
+    <div>
+      <div className="stats-grid">
+        <div className="stats-card">
+          <h3>Sharpe (anualiz.)</h3>
+          <p>
+            {formatSharpe(sharpeAll)}{' '}
+            <span className="muted">celkem · {formatSharpe(sharpe30)} posledních 30 seancí</span>
+          </p>
+        </div>
+        <div className="stats-card">
+          <h3>Bilance</h3>
+          <p>
+            {totalR > 0 ? '+' : ''}
+            {totalR.toFixed(1)} R{' '}
+            <span className="muted">
+              · {sharpeAll.days} seancí · {trades} obchodů · max DD {drawdown.toFixed(1)} R
+            </span>
+          </p>
+        </div>
+        <div className="stats-card">
+          <h3>USD simulace (#679)</h3>
+          {usd && usdCurve && usdCurve.length > 0 ? (
+            <p>
+              {formatPnlUsd(usdCurve[usdCurve.length - 1].equity)}{' '}
+              <span className="muted">
+                · Sharpe {usdSharpe ? formatSharpe(usdSharpe) : '—'} · {usd.traded} obchodů
+                {usd.skipped > 0 ? ` · ${usd.skipped} přeskočeno (0 kontraktů)` : ''}
+              </span>
+            </p>
+          ) : (
+            <p className="muted">Vyplň účet a % rizika v Settings → Trading</p>
+          )}
+        </div>
+      </div>
+      <svg width={width} height={height} role="img" aria-label="Equity setupů v R">
+        <line x1={0} y1={yOf(0)} x2={width} y2={yOf(0)} stroke="#3a4150" strokeDasharray="4 4" />
+        <polyline
+          fill="none"
+          stroke="#4cc38a"
+          strokeWidth={1.5}
+          points={curve.map((point, index) => `${xOf(index)},${yOf(point.equity)}`).join(' ')}
+        />
+      </svg>
+      <p className="muted">
+        {curve[0].session} – {curve[curve.length - 1].session} · mechanika v
+        {currentMechanicsVersion(rows)} · rovným dílem 1R na setup, všechny symboly watchlistu.
+        {sharpeAll.days < 60
+          ? ` Vzorek ${sharpeAll.days} seancí je na Sharpe MALÝ — číslo je orientační;`
+          : ''}{' '}
+        statistické potvrzení cíle SR &gt; 2 vyžaduje 400+ seancí (ADR-0030).
+      </p>
+    </div>
+  )
 }
 
 /** Sekundy → lidský zápis: `42 s`, `4 m 14 s`, `1 h 7 m`. */
@@ -303,7 +411,7 @@ function TrackRecordSection({
 }
 
 export function StatsView() {
-  const { symbol } = useAppState()
+  const { symbol, riskAccountUsd, riskPct } = useAppState()
   const [waves, setWaves] = useState<WaveRow[]>([])
   const [stats, setStats] = useState<ModelStatsRow[]>([])
   const [retro, setRetro] = useState<RetroPassState | null>(null)
@@ -313,6 +421,9 @@ export function StatsView() {
   const [windowMin, setWindowMin] = useState(5)
   const [regime, setRegime] = useState('all')
   const [setups, setSetups] = useState<SetupRow[]>([])
+  // Portfolio pro sekci Výkon (#794): setupy VŠECH symbolů watchlistu — Sharpe
+  // se dle ADR-0030 počítá nad celou simulací, ne per aktivní symbol
+  const [portfolio, setPortfolio] = useState<SetupRow[]>([])
   const [drift, setDrift] = useState<DriftState | null>(null)
 
   useEffect(() => {
@@ -358,6 +469,33 @@ export function StatsView() {
     }
     load()
     const timer = window.setInterval(load, REFRESH_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [symbol])
+
+  // Portfolio Výkonu (#794): symboly z watchlistu; při nedostupném watchlistu
+  // aspoň aktivní symbol, ať sekce neukazuje prázdno kvůli vedlejší chybě
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      let symbols = [symbol]
+      try {
+        const response = await fetch(`${API_BASE}/watchlist`)
+        if (response.ok) {
+          const payload = (await response.json()) as { watchlist?: { symbol: string }[] }
+          const listed = (payload.watchlist ?? []).map((item) => item.symbol)
+          symbols = [...new Set([...listed, symbol])]
+        }
+      } catch {
+        // watchlist nedostupný — fallback na aktivní symbol výše
+      }
+      const lists = await Promise.all(symbols.map((item) => fetchSetups(item)))
+      if (!cancelled) setPortfolio(lists.flat())
+    }
+    void load()
+    const timer = window.setInterval(() => void load(), REFRESH_MS)
     return () => {
       cancelled = true
       window.clearInterval(timer)
@@ -534,11 +672,16 @@ export function StatsView() {
         )}
       </section>
 
+      <section className="stats-section" aria-label="Výkon setupů">
+        <h2>Setupy — výkon a Sharpe (#794 fáze 0)</h2>
+        <SetupsPerformanceSection rows={portfolio} accountUsd={riskAccountUsd} riskPct={riskPct} />
+      </section>
+
       <section className="stats-section" aria-label="Setupy per režim">
         <h2>Setupy — úspěšnost šablon per GEX režim</h2>
         <p className="muted">
-          Uzavřené setupy aktuální mechaniky (v{CURRENT_MECHANICS_VERSION}) rozdělené režimem vzniku
-          (#402). Tentýž vzorec se v pozitivní a negativní gamě chová jinak.
+          Uzavřené setupy aktuální mechaniky (v{currentMechanicsVersion(setups)}) rozdělené režimem
+          vzniku (#402). Tentýž vzorec se v pozitivní a negativní gamě chová jinak.
         </p>
         {setupRegime.length === 0 ? (
           <p className="muted">Zatím žádné uzavřené setupy aktuální mechaniky</p>

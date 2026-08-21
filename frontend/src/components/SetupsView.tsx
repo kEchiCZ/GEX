@@ -4,7 +4,8 @@ Predikce jsou neměnné — jediná mutace je rating (+1/−1) a poznámka; hodn
 je kvalitativní vrstva a nevstupuje do automatické kalibrace confidence.
 */
 import { useState } from 'react'
-import { ACCOUNT_START_USD, CURRENT_MECHANICS_VERSION, STATUS_LABELS, dailyStats, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import { ACCOUNT_START_USD, STATUS_LABELS, dailyStats, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import { currentMechanicsVersion } from '../setups/performance'
 import { sessionDateIso } from '../instrument/tz'
 import type { SetupRow } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
@@ -84,12 +85,15 @@ export function SetupsView() {
     false,
     (value) => (typeof value === 'boolean' ? value : false),
   )
+  // Aktuální mechanika dynamicky z dat (ADR-0030) — natvrdo zapsaná konstanta
+  // zastarala (v2 vs. engine v4) a statistiky týden neviděly aktuální setupy
+  const mechanicsVersion = currentMechanicsVersion(setups)
   const legacyCount = setups.filter(
-    (row) => (row.mechanics_version ?? 1) !== CURRENT_MECHANICS_VERSION,
+    (row) => (row.mechanics_version ?? 1) !== mechanicsVersion,
   ).length
   const visible = allVersions
     ? setups
-    : setups.filter((row) => (row.mechanics_version ?? 1) === CURRENT_MECHANICS_VERSION)
+    : setups.filter((row) => (row.mechanics_version ?? 1) === mechanicsVersion)
 
   const closed = visible.filter((row) => row.status !== 'active')
   const wins = closed.filter((row) => (row.outcome_r ?? 0) > 0).length
