@@ -1423,6 +1423,12 @@ async def main() -> None:
                     symbol,
                 )
                 pipelines.pop(symbol).stop()
+                # Resubskripce nové seance vyrobí nárazově error 354 (#772:
+                # 18./19. 8. skok 5→23 přesně o půlnoci UTC) — očekávaný
+                # přechod, ne porucha; alertovací práh ho nemá počítat
+                subscription_errors.excuse(
+                    settings.subscription_error_rollover_grace_s, now=time.monotonic()
+                )
 
         setup_cooldown.tick()
         eligible = [symbol for symbol in desired if not setup_cooldown.blocked(symbol)]
@@ -1534,8 +1540,20 @@ async def main() -> None:
                 port=settings.ibkr_port,
                 last_tick_ts=now.isoformat(),
                 # Kolikrát TWS za běh odmítla market data (#417) — s platnými
-                # subskripcemi má zůstat na nule, růst je signál k prověření
+                # subskripcemi má zůstat na nule, růst je signál k prověření.
+                # Okno + záznamy (#772): kumulativ od startu nemá měřítko a bez
+                # záznamů se „23" nedalo potvrdit ani vyvrátit
                 subscription_errors=subscription_errors.total,
+                subscription_errors_60m=subscription_errors.window_count(time.monotonic()),
+                subscription_errors_excused=subscription_errors.excused,
+                subscription_error_recent=[
+                    {
+                        "ts": dt.datetime.fromtimestamp(rec.ts, tz=dt.UTC).isoformat(),
+                        "contract": rec.contract,
+                        "symbol": rec.symbol,
+                    }
+                    for rec in subscription_errors.recent_records()
+                ],
                 # Připojený účet (#446): uživatel musí poznat paper od živého
                 account=account.label,
                 account_paper=account.paper,
