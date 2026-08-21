@@ -75,6 +75,13 @@ async def main() -> int:
     return 0
 
 
+#: Kandidati mimo kody uctu (#734): Warning 321 vyjmenoval validni zdroje
+#: [BRFG, BRFUPDN, DJ, DJNL, BZ, DJTOP, FLY] - DJTOP/BZ/FLY reqNewsProviders
+#: nevraci, takze se jejich paska nikdy nezkusila. DJTOP je "Dow Jones Top
+#: News" - pokud funguje, je to nahrada za mrtvou DJ pasku.
+EXTRA_TAPE_CANDIDATES = ["DJTOP", "BZ", "FLY"]
+
+
 async def probe_tapes(host: str, port: int, codes: list[str]) -> None:
     """Zkusi pasku kazdeho SKUTECNEHO kodu a zaznamena, jestli prijde Error 200.
 
@@ -88,18 +95,22 @@ async def probe_tapes(host: str, port: int, codes: list[str]) -> None:
     errors: dict[int, str] = {}
 
     def on_error(req_id: int, code: int, message: str, _contract: object = None) -> None:
-        if code == 200:
-            errors[req_id] = message
+        # Vsechny kody, ne jen 200: puvodni verze by Warning 321 ("invalid
+        # news source") vykazala jako "prijato" a zaver by byl falesny (#734)
+        if req_id >= 0:
+            errors[req_id] = f"kod {code}: {message}"
 
     ib.errorEvent += on_error
     try:
-        for code in codes:
+        candidates = list(codes) + [c for c in EXTRA_TAPE_CANDIDATES if c not in codes]
+        for code in candidates:
             req_id = ib.client.getReqId()
             contract = Contract(secType="NEWS", exchange=code, symbol=tape_symbol(code))
             ib.client.reqMktData(req_id, contract, "mdoff,292", False, False, [])
             await asyncio.sleep(TAPE_SETTLE_S)
-            verdict = "Error 200 - paska neexistuje" if req_id in errors else "prijato"
-            print(f"  {code:<10} {tape_symbol(code):<26} {verdict}")
+            origin = "ucet" if code in codes else "KANDIDAT (#734)"
+            verdict = errors.get(req_id, "prijato (zadny error/warning)")
+            print(f"  {code:<10} {tape_symbol(code):<26} {origin:<16} {verdict}")
             ib.client.cancelMktData(req_id)
             await asyncio.sleep(0.5)
     finally:
