@@ -299,6 +299,39 @@ export function SettingsView() {
                     : '—'}
                 </td>
               </tr>
+              {/* Chyby subskripce (#772): okno dává měřítko, kumulativ trend;
+                  „přechod seance" jsou očekávané nárazy resubskripce o půlnoci */}
+              <tr>
+                <td>Chyby subskripce</td>
+                <td>
+                  {status.subscription_errors != null
+                    ? `${status.subscription_errors_60m ?? 0} za hodinu · ${
+                        status.subscription_errors
+                      } od startu${
+                        (status.subscription_errors_excused ?? 0) > 0
+                          ? ` (z toho ${status.subscription_errors_excused} přechod seance)`
+                          : ''
+                      }`
+                    : '—'}
+                  {status.subscription_error_recent?.length ? (
+                    <details className="subscription-errors">
+                      <summary className="muted">
+                        poslední záznamy ({status.subscription_error_recent.length})
+                      </summary>
+                      <pre aria-label="Poslední chyby subskripce">
+                        {status.subscription_error_recent
+                          .slice()
+                          .reverse()
+                          .map(
+                            (rec) =>
+                              `${new Date(rec.ts).toLocaleTimeString('cs-CZ')} ${rec.contract}`,
+                          )
+                          .join('\n')}
+                      </pre>
+                    </details>
+                  ) : null}
+                </td>
+              </tr>
               {/* Křížová kontrola feedů (#517 A): chybějící pole = neměří se
                   (shadow neběží) — to je jiný stav než „měří se a je ticho" */}
               <tr>

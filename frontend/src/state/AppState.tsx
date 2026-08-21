@@ -24,6 +24,12 @@ export interface PipelineStatus {
   oi_filled?: number
   oi_missing?: number
   lines_utilization?: number
+  /** Chyby subskripce market data (#417, #772): kumulativ od startu, okno
+      60 min, omilostněné přechody seance a poslední záznamy k dohledání. */
+  subscription_errors?: number
+  subscription_errors_60m?: number
+  subscription_errors_excused?: number
+  subscription_error_recent?: { ts: string; contract: string; symbol: string }[]
   disk_usage_bytes?: number
   disk_limit_bytes?: number
   last_tick_ts?: string

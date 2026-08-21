@@ -211,3 +211,40 @@ def test_contract_label_survives_missing_contract() -> None:
     assert contract_label(None) == "neznámý kontrakt"
     assert contract_label(FakeContract()) == "neznámý kontrakt"
     assert contract_label(FakeContract(symbol="ES")) == "ES"
+
+
+# ── Diagnostika a omilostněné okno (#772) ────────────────────────────
+
+
+def test_window_count_and_recent_records() -> None:
+    detector = tracker()
+    detector.observe("ESU6 7500C", "ES", now=0.0, wall_now=1000.0)
+    detector.observe("ESU6 7505C", "ES", now=1800.0, wall_now=2800.0)
+    detector.observe("ESU6 7510C", "ES", now=4000.0, wall_now=5000.0)
+
+    # Hodinové okno: první výskyt (now=0) už vypadl, dva mladší drží
+    assert detector.window_count(4000.0) == 2
+    assert detector.total == 3
+    records = detector.recent_records()
+    assert [rec.contract for rec in records] == ["ESU6 7500C", "ESU6 7505C", "ESU6 7510C"]
+    assert records[0].ts == 1000.0
+
+
+def test_excused_burst_does_not_alert_but_is_counted() -> None:
+    """Resubskripce nové seance (#772): náraz chyb nesmí naplnit práh alertu."""
+    detector = tracker(threshold=3, window_s=60.0)
+    detector.excuse(300.0, now=0.0)
+
+    for i in range(10):
+        assert detector.observe(f"ESU6 {7500 + 5 * i}C", "ES", now=float(i)) is None
+
+    assert detector.total == 10
+    assert detector.excused == 10
+    assert detector.window_count(10.0) == 10  # v diagnostice vidět jsou
+
+    # Po konci okna se práh plní normálně — omilostnění není trvalé
+    assert detector.observe("ESU6 7600C", "ES", now=301.0) is None
+    assert detector.observe("ESU6 7605C", "ES", now=302.0) is None
+    alert = detector.observe("ESU6 7610C", "ES", now=303.0)
+    assert alert is not None
+    assert alert.count == 3  # omilostněné výskyty do prahu nevstoupily

@@ -259,6 +259,10 @@ class Settings(BaseSettings):
     subscription_error_threshold: int = Field(default=5, ge=1)
     subscription_error_window_s: float = Field(default=60.0, gt=0)
     subscription_error_cooldown_s: float = Field(default=900.0, ge=0)
+    # Omilostněné okno po rollu expirace (#772): resubskripce nové seance dává
+    # nárazově ~20× error 354 (změřeno 18./19. 8.: skok 5→23 o půlnoci UTC,
+    # rozprostřený přes ~16 min) — očekávaný přechod se nepočítá do prahu alertu
+    subscription_error_rollover_grace_s: float = Field(default=1200.0, ge=0)
     # Konkurenční relace (#495): error 10197 chodí při přetahované session
     # ~2× za minutu (naměřeno 4. 8., viz connection.py) — sdílený práh 5/60 s
     # by se nikdy nenaplnil a alert competing_session by se neodpálil

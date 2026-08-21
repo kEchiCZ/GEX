@@ -13,6 +13,7 @@ sweep neposlal desítky hlášení o téže věci.
 """
 
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass
 
@@ -23,6 +24,20 @@ NOT_SUBSCRIBED_ERROR_CODE = 354
 
 # Kolik odlišných kontraktů se vypíše do alertu (zbytek se shrne počtem)
 MAX_ALERT_CONTRACTS = 5
+
+# Diagnostika #772: kolik posledních záznamů se drží pro /status a Settings
+RECENT_LIMIT = 50
+# Okno „za poslední hodinu" — kumulativní číslo od startu nemá měřítko
+HOUR_WINDOW_S = 3600.0
+
+
+@dataclass(frozen=True)
+class SubscriptionErrorRecord:
+    """Jeden pozorovaný error 354 pro diagnostiku (#772) — ts je epoch UTC."""
+
+    ts: float
+    contract: str
+    symbol: str
 
 
 @dataclass(frozen=True)
@@ -50,21 +65,70 @@ class SubscriptionErrorTracker:
         self._events: deque[tuple[float, str, str]] = deque()
         self._last_alert_ts: float | None = None
         self._total = 0
+        # Diagnostika #772: posledních N záznamů + hodinové okno. Kumulativní
+        # číslo od startu nemá měřítko („23" po dni běhu neříká nic) a bez
+        # záznamů se nedalo dohledat, KTERÉ kontrakty a KDY selhaly.
+        self._recent: deque[SubscriptionErrorRecord] = deque(maxlen=RECENT_LIMIT)
+        self._hour: deque[float] = deque()
+        # Omilostněné okno (#772): resubskripce nové seance o půlnoci UTC vyrobí
+        # nárazově ~20 chyb — je to očekávaný přechodový stav, ne porucha, a bez
+        # výjimky by alertovací práh (#417) pravidelně o půlnoci falešně střílel.
+        self._excused_until: float | None = None
+        self._excused = 0
 
     @property
     def total(self) -> int:
         """Celkový počet pozorovaných chyb za běh — diagnostika ve status logu."""
         return self._total
 
+    @property
+    def excused(self) -> int:
+        """Kolik výskytů spadlo do omilostněného okna resubskripce (#772)."""
+        return self._excused
+
+    def excuse(self, duration_s: float, *, now: float) -> None:
+        """Omilostni následujících `duration_s` sekund — plánovaná resubskripce.
+
+        Výskyty se dál počítají (total, okno, záznamy), jen neplní alertovací
+        práh: přechod seance je očekávaný, ale v diagnostice vidět být má.
+        """
+        candidate = now + duration_s
+        if self._excused_until is None or candidate > self._excused_until:
+            self._excused_until = candidate
+
+    def window_count(self, now: float) -> int:
+        """Počet výskytů za posledních `HOUR_WINDOW_S` sekund (#772)."""
+        while self._hour and now - self._hour[0] > HOUR_WINDOW_S:
+            self._hour.popleft()
+        return len(self._hour)
+
+    def recent_records(self) -> tuple[SubscriptionErrorRecord, ...]:
+        """Posledních až `RECENT_LIMIT` záznamů, nejnovější poslední (#772)."""
+        return tuple(self._recent)
+
     def observe(
-        self, contract_label: str, symbol: str, *, now: float
+        self, contract_label: str, symbol: str, *, now: float, wall_now: float | None = None
     ) -> SubscriptionErrorAlert | None:
         """Jeden výskyt error 354; vrací alert jen při překročení prahu v okně.
 
         Vrátí `None` i tehdy, když práh překročen je, ale od posledního alertu
         neuplynul `cooldown_s` — jinak by minutový sweep hlásil totéž pořád dokola.
+        `now` je monotonic (okna a prahy), `wall_now` epoch pro záznamy v UI.
         """
         self._total += 1
+        self._recent.append(
+            SubscriptionErrorRecord(
+                ts=wall_now if wall_now is not None else time.time(),
+                contract=contract_label,
+                symbol=symbol,
+            )
+        )
+        self._hour.append(now)
+        if self._excused_until is not None and now < self._excused_until:
+            # Očekávaná chyba přechodu seance: do prahu se nepočítá vůbec —
+            # kdyby jen prošla oknem, doznívající náraz by práh stejně naplnil
+            self._excused += 1
+            return None
         self._events.append((now, contract_label, symbol))
         while self._events and now - self._events[0][0] > self._window_s:
             self._events.popleft()
