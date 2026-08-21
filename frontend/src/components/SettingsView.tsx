@@ -345,6 +345,45 @@ export function SettingsView() {
             </tbody>
           </table>
         </SettingRow>
+        {/* Tastytrade větev (#706): protějšek IBKR stavu — od #614 fáze 2 je
+            tasty skutečný zdroj (spot/chain fallback, OI fill), ne jen měření.
+            Chybějící pole = větev neběží (bez tajemství / vypnutá). */}
+        {status.tasty_connected != null && (
+          <SettingRow help="Stav tastytrade větve (#706): DXLink spojení, subskripce dxFeed a pokrytí polí. Zdroj řetězu a spotu při fallbacku ukazuje řádek výš (#614); záznam printů plní učicí data (#795). Jen ke čtení.">
+            <table className="settings-status" data-testid="tasty-status">
+              <tbody>
+                <tr>
+                  <td>Tastytrade</td>
+                  <td>
+                    {status.tasty_connected ? 'připojeno' : 'ODPOJENO'}
+                    {(status.tasty_reconnects ?? 0) > 0
+                      ? ` · ${status.tasty_reconnects} reconnectů`
+                      : ''}
+                    {status.tasty_last_event_ts
+                      ? ` · poslední event ${new Date(status.tasty_last_event_ts).toLocaleTimeString('cs-CZ')}`
+                      : ''}
+                  </td>
+                </tr>
+                <tr>
+                  <td>Subskripce</td>
+                  <td>
+                    {status.tasty_symbols ?? '—'} symbolů · quotes {status.tasty_quotes ?? '—'} ·
+                    greeks {status.tasty_greeks ?? '—'} · OI {status.tasty_oi ?? '—'}
+                  </td>
+                </tr>
+                <tr>
+                  <td>Trade printy</td>
+                  <td>
+                    {status.tasty_trades ?? '—'} přijato
+                    {status.tasty_trades_recorded != null
+                      ? ` · ${status.tasty_trades_recorded} zaznamenáno (#795)`
+                      : ''}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </SettingRow>
+        )}
         <details className="settings-events">
           <summary className="muted">
             Poslední události (jen tento prohlížeč — po obnovení stránky se maže; serverové logy

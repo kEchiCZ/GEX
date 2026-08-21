@@ -72,6 +72,8 @@ class TastyChainCache:
     def __init__(self, clock: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC)) -> None:
         self._clock = clock
         self._states: dict[str, TastyContractState] = {}
+        #: Čas posledního přijatého eventu (#706) — „jak čerstvá větev je"
+        self.last_event_at: dt.datetime | None = None
 
     def state(self, streamer_symbol: str) -> TastyContractState | None:
         return self._states.get(streamer_symbol)
@@ -99,6 +101,7 @@ class TastyChainCache:
             return
         state = self._states.setdefault(symbol, TastyContractState())
         now = self._clock()
+        self.last_event_at = now
         if event_type == "Quote":
             state.quote = TastyQuote(
                 bid=_number(values[1]),

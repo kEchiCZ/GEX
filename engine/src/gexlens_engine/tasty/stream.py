@@ -69,6 +69,11 @@ class DxLinkStream:
         #: Diagnostika pro shadow report: kolik reconnectů proběhlo
         self.reconnects = 0
 
+    @property
+    def connected(self) -> bool:
+        """Stav spojení pro /status (#706) — True mezi handshake a výpadkem."""
+        return self._ws is not None
+
     async def set_symbols(self, symbols: set[str]) -> None:
         """Cílová množina symbolů; rozdíl se přihlásí/odhlásí za běhu."""
         async with self._lock:

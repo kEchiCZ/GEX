@@ -355,3 +355,13 @@ def test_vypnuty_zapis_porovnani_nevypina_vetev(monkeypatch: pytest.MonkeyPatch)
 
     assert settings.tasty_comparison_write is False
     assert settings.tasty_enabled is True
+
+
+def test_last_event_at_sleduje_cerstvost_vetve() -> None:
+    """#706: /status ukazuje čas posledního eventu — bez něj nejde poznat mrtvou větev."""
+    cache = TastyChainCache(clock=lambda: TS)
+    assert cache.last_event_at is None
+
+    cache.on_event("Quote", ["sym", 1.0, 2.0, 3, 4])
+
+    assert cache.last_event_at == TS
