@@ -26,10 +26,12 @@ export interface SetupRow {
   context?: Record<string, unknown> | null
 }
 
-/** Aktuální verze mechaniky — zrcadlo `SETUP_MECHANICS_VERSION` v enginu (#311).
-Statistiky se defaultně počítají jen z ní, aby se nemíchaly výsledky staré
-(absolutní buffery, RRR 25–47) a nové R-mechaniky. */
-export const CURRENT_MECHANICS_VERSION = 2
+/** Zrcadlo `SETUP_MECHANICS_VERSION` v enginu (#311) — UŽ JEN pro testy.
+
+Filtrování statistik používá `currentMechanicsVersion()` (setups/performance,
+ADR-0030): tahle konstanta zastarala na 2, zatímco engine byl na 4, a
+statistiky Setupů týden neviděly aktuální setupy. */
+export const CURRENT_MECHANICS_VERSION = 4
 
 export const TEMPLATE_LABELS: Record<string, string> = {
   wall_bounce: 'Odraz od zdi',
