@@ -11,7 +11,13 @@ to bylo neškodné; 17. 8. při 8,7 milionu řádcích to vyčerpalo paměť WSL
 jednotky řádků místo milionů.
 
 Spuštění:  python scripts/feed_comparison_report.py [--days 7]
+           [--symbol ES] [--sessions 2026-08-14,2026-08-17,...]
 Prostředí: GEXLENS_DATABASE_URL (stejné jako engine).
+
+Rozšíření pro vyhodnocení M7 fáze 2: `--symbol` (ES a NQ mají jinak velké
+odchylky v bodech — smíchané by prahy nadhodnotily pro ES a podhodnotily
+pro NQ) a `--sessions` (jen čisté seance; 18. 8. má v datech 8h výpadek TWS
+a špinavé dny by p95 nafoukly). Seance = UTC datum řádku.
 """
 
 import argparse
@@ -29,8 +35,10 @@ from gexlens_engine.config import load_settings  # noqa: E402
 #: aby se podle něj ladily prahy.
 MIN_SAMPLES_FOR_P95 = 20
 
-QUERY = text("""
-    select field,
+# `symbol` v tabulce je celý kontrakt („NQ 20260821 29810P") — pro rozpad per
+# podklad se bere kořen před první mezerou
+QUERY_TEMPLATE = """
+    select {select_symbol} field,
            count(*)                                                          as n,
            count(*) filter (where value_ibkr is null)::float / count(*)      as missing_ibkr,
            count(*) filter (where value_tasty is null)::float / count(*)     as missing_tasty,
@@ -44,10 +52,10 @@ QUERY = text("""
            percentile_cont(0.95) within group (
                order by (age_tasty_ms - age_ibkr_ms))                        as p95_age
     from feed_comparison
-    where ts >= :since
-    group by field
-    order by field
-""")
+    where ts >= :since {where_symbol} {where_sessions}
+    group by {group_symbol} field
+    order by {group_symbol} field
+"""
 
 
 def fmt(value: float | None, spec: str = ".5f") -> str:
@@ -57,24 +65,50 @@ def fmt(value: float | None, spec: str = ".5f") -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Report shadow porovnání feedů (#613)")
     parser.add_argument("--days", type=int, default=7)
+    parser.add_argument("--symbol", help="Jen jeden podklad (ES/NQ); default vše s rozpadem")
+    parser.add_argument(
+        "--sessions",
+        help="Čárkami oddělená UTC data čistých seancí — ostatní dny se ignorují",
+    )
     args = parser.parse_args()
+
+    sessions = [day.strip() for day in args.sessions.split(",")] if args.sessions else None
+    query = text(
+        QUERY_TEMPLATE.format(
+            select_symbol="split_part(symbol, ' ', 1) as sym," if args.symbol is None else "",
+            group_symbol="split_part(symbol, ' ', 1)," if args.symbol is None else "",
+            where_symbol="and split_part(symbol, ' ', 1) = :symbol" if args.symbol else "",
+            where_sessions="and ts::date = any((:sessions)::date[])" if sessions else "",
+        )
+    )
+    params: dict[str, object] = {"since": dt.datetime.now(dt.UTC) - dt.timedelta(days=args.days)}
+    if args.symbol:
+        params["symbol"] = args.symbol
+    if sessions:
+        params["sessions"] = sessions
 
     settings = load_settings()
     engine = create_engine(settings.database_url)
-    since = dt.datetime.now(dt.UTC) - dt.timedelta(days=args.days)
     with engine.connect() as conn:
-        rows = conn.execute(QUERY, {"since": since}).fetchall()
+        rows = conn.execute(query, params).fetchall()
 
     total = sum(int(row.n) for row in rows)
-    print(f"feed_comparison za poslednich {args.days} dni: {total} radku")
-    print("pole      n        med|d|      p95|d|    chybi_ib  chybi_ty  stari_med_ms  stari_p95_ms")
+    scope = args.symbol or "vsechny symboly"
+    days_note = f", seance: {args.sessions}" if sessions else ""
+    print(f"feed_comparison za poslednich {args.days} dni ({scope}{days_note}): {total} radku")
+    print(
+        "sym  pole      n        med|d|      p95|d|    chybi_ib  chybi_ty  "
+        "stari_med_ms  stari_p95_ms"
+    )
     for row in rows:
         # p95 se skrývá zvlášť podle počtu vzorků daného sloupce — polí s
         # měřeným stářím je míň než polí s hodnotou (OI má věk vypnutý, #664)
         p95_delta = row.p95_delta if int(row.n_delta) >= MIN_SAMPLES_FOR_P95 else None
         p95_age = row.p95_age if int(row.n_age) >= MIN_SAMPLES_FOR_P95 else None
+        symbol = args.symbol or str(row.sym)
         print(
-            f"{str(row.field):<9} {int(row.n):<8} {fmt(row.med_delta):<11} {fmt(p95_delta):<9} "
+            f"{symbol:<4} {str(row.field):<9} {int(row.n):<8} "
+            f"{fmt(row.med_delta):<11} {fmt(p95_delta):<9} "
             f"{float(row.missing_ibkr):<9.1%} {float(row.missing_tasty):<9.1%} "
             f"{fmt(row.med_age, '.0f'):<13} {fmt(p95_age, '.0f')}"
         )
