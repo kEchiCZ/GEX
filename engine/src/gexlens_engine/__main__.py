@@ -1580,5 +1580,39 @@ async def main() -> None:
             logger.info("Watchlist NOTIFY — okamžité přeplánování instrumentů")
 
 
+async def _guarded_main() -> None:
+    """Zaručený konec procesu po fatální výjimce v main() (#779).
+
+    19. 8. dvakrát po sobě: neošetřená výjimka → asyncio teardown čekal 300 s
+    na join executor vláken, pak PID 1 dál běžel (12 vláken, mrtvý engine) —
+    kontejner „Up", restart policy bez šance. `os._exit` PŘÍMO z běžící smyčky
+    ten teardown přeskočí úplně: parquet zápisy jsou atomické (tmp+rename) a
+    PG transakční, takže tvrdý konec nic nepoškodí a restart je okamžitý.
+    """
+    try:
+        await main()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        raise
+    except BaseException:
+        logger.critical(
+            "Fatální výjimka v main() — vynucený exit 1, ať zabere restart policy (#779)",
+            exc_info=True,
+        )
+        logging.shutdown()
+        os._exit(1)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    exit_code = 0
+    try:
+        asyncio.run(_guarded_main())
+    except KeyboardInterrupt:
+        exit_code = 130
+    except BaseException:
+        # Sem dojde jen výjimka z asyncio.run teardownu — main() kryje guard výš
+        logger.critical("Fatální výjimka při ukončování smyčky (#779)", exc_info=True)
+        exit_code = 1
+    # Pojistka i pro čistý návrat: ne-daemon vlákna (ib_async, psycopg LISTEN)
+    # uměla držet interpreter naživu i poté, co main() skončil
+    logging.shutdown()
+    os._exit(exit_code)
