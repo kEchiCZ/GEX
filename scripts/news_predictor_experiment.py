@@ -20,6 +20,12 @@ nic se nezapíná bez měření).
 
 Spuštění:  python scripts/news_predictor_experiment.py [--symbol ES] [--window 5]
 Prostředí: GEXLENS_DATABASE_URL (stejné jako engine).
+
+Rozšíření pro #749 (korpus 10× větší po #744, plný text po #743):
+  --block N          velikost testovacího bloku (default 500; velký korpus → 2000)
+  --use-body         rysy i z leadu článku (prefix b=), ne jen z titulku
+  --subset live|backfill|all   živý feed vs. Alpaca backfill (ts_ingested − ts_event > 1 den)
+  --exclude-company  vynechat company news (symbols bez indexového ETF) — měří přínos mega caps
 """
 
 import argparse
@@ -58,7 +64,9 @@ MIN_TRAIN = 2000
 BLOCK = 500
 
 QUERY = text("""
-    select e.id, e.ts_event, e.title, e.source, e.category, r.ret_bp,
+    select e.id, e.ts_event, e.title, e.source, e.category, e.body, e.symbols,
+           (e.ts_ingested - e.ts_event > interval '1 day') as is_backfill,
+           r.ret_bp,
            (select c.direction from news_classifications c
              where c.event_id = e.id and c.source = 'rule'
              order by c.version desc limit 1) as rule_direction
@@ -72,6 +80,10 @@ QUERY = text("""
     order by e.ts_event
 """)
 
+#: Indexová ETF — zpráva, jejíž `symbols` obsahuje aspoň jedno, NENÍ company
+#: news, i když vedle stojí jednotlivé tickery (#749 bod 5)
+INDEX_ETFS = {"SPY", "QQQ", "DIA", "IWM", "VOO", "IVV"}
+
 
 @dataclass
 class Sample:
@@ -79,8 +91,16 @@ class Sample:
     title: str
     source: str | None
     category: str | None
+    body: str | None
+    symbols: list[str]
+    is_backfill: bool
     ret_bp: float
     rule_direction: int | None
+
+    @property
+    def is_company_news(self) -> bool:
+        """Zpráva vázaná na jednotlivé tickery bez indexového ETF (mega caps)."""
+        return bool(self.symbols) and not (set(self.symbols) & INDEX_ETFS)
 
 
 def load(symbol: str, window: int) -> list[Sample]:
@@ -100,6 +120,9 @@ def load(symbol: str, window: int) -> list[Sample]:
             title=row.title,
             source=row.source,
             category=row.category,
+            body=row.body,
+            symbols=[str(s) for s in (row.symbols or [])],
+            is_backfill=bool(row.is_backfill),
             ret_bp=float(row.ret_bp),
             rule_direction=row.rule_direction,
         )
@@ -107,27 +130,56 @@ def load(symbol: str, window: int) -> list[Sample]:
     ]
 
 
-def build_rows(samples: list[Sample]) -> list[np.ndarray]:
+def apply_subset(samples: list[Sample], subset: str, exclude_company: bool) -> list[Sample]:
+    """Filtry #749: živý feed vs. backfill a vynechání company news."""
+    if subset == "live":
+        samples = [s for s in samples if not s.is_backfill]
+    elif subset == "backfill":
+        samples = [s for s in samples if s.is_backfill]
+    if exclude_company:
+        samples = [s for s in samples if not s.is_company_news]
+    return samples
+
+
+def build_rows(samples: list[Sample], *, use_body: bool = False) -> list[np.ndarray]:
     return [
-        hash_row(features(s.title, source=s.source, hour_utc=s.ts.astimezone(dt.UTC).hour))
+        hash_row(
+            features(
+                s.title,
+                source=s.source,
+                hour_utc=s.ts.astimezone(dt.UTC).hour,
+                body=s.body if use_body else None,
+            )
+        )
         for s in samples
     ]
 
 
-def walk_forward_blocks(total: int, min_train: int = MIN_TRAIN) -> list[tuple[int, int]]:
-    """Hranice testovacích bloků (index od, index do) po `BLOCK` vzorcích.
+def walk_forward_blocks(
+    total: int, min_train: int = MIN_TRAIN, block: int = BLOCK
+) -> list[tuple[int, int]]:
+    """Hranice testovacích bloků (index od, index do) po `block` vzorcích.
 
     Trénink je vždy vše před `od` — expanding window, takže pozdější bloky se
     učí z víc dat, přesně jako by to dělal provoz.
     """
-    return [(start, min(start + BLOCK, total)) for start in range(min_train, total, BLOCK)]
+    return [(start, min(start + block, total)) for start in range(min_train, total, block)]
 
 
-def evaluate(symbol: str, window: int, min_train: int = MIN_TRAIN) -> None:
-    samples = load(symbol, window)
-    if len(samples) < min_train + BLOCK:
-        raise SystemExit(f"Málo dat: {len(samples)} (potřeba {min_train + BLOCK})")
-    rows = build_rows(samples)
+def evaluate(
+    symbol: str,
+    window: int,
+    min_train: int = MIN_TRAIN,
+    block: int = BLOCK,
+    *,
+    use_body: bool = False,
+    subset: str = "all",
+    exclude_company: bool = False,
+) -> None:
+    samples = apply_subset(load(symbol, window), subset, exclude_company)
+    if len(samples) < min_train + block:
+        raise SystemExit(f"Málo dat: {len(samples)} (potřeba {min_train + block})")
+    rows = build_rows(samples, use_body=use_body)
     returns = np.array([s.ret_bp for s in samples])
     magnitudes = np.abs(returns)
 
@@ -138,7 +190,7 @@ def evaluate(symbol: str, window: int, min_train: int = MIN_TRAIN) -> None:
     category_scores: list[float] = []
     tested_blocks = 0
 
-    for start, end in walk_forward_blocks(len(samples), min_train):
+    for start, end in walk_forward_blocks(len(samples), min_train, block):
         train_rows, test_rows = rows[:start], rows[start:end]
         if not test_rows:
             continue
@@ -207,7 +259,13 @@ def evaluate(symbol: str, window: int, min_train: int = MIN_TRAIN) -> None:
     rule_rate = rule_hits / rule_total if rule_total else float("nan")
     rule_lb = wilson_lower_bound(rule_hits, rule_total)
 
-    print(f"\n=== {symbol}, okno {window} min — walk-forward, {tested_blocks} bloků po {BLOCK} ===")
+    variant = f"subset={subset}, rysy={'titulek+lead' if use_body else 'titulek'}" + (
+        ", bez company news" if exclude_company else ""
+    )
+    print(
+        f"\n=== {symbol}, okno {window} min — walk-forward, "
+        f"{tested_blocks} bloků po {block} ({variant}) ==="
+    )
     print(
         f"vzorků celkem: {len(samples)}  (testováno {len(scores)}), "
         f"období {samples[0].ts:%Y-%m-%d} – {samples[-1].ts:%Y-%m-%d}"
@@ -240,8 +298,24 @@ def main() -> None:
         default=MIN_TRAIN,
         help="Kolik vzorků musí být k dispozici na trénink, než se začne testovat",
     )
+    parser.add_argument("--block", type=int, default=BLOCK, help="Velikost testovacího bloku")
+    parser.add_argument("--use-body", action="store_true", help="Rysy i z leadu článku (#743)")
+    parser.add_argument("--subset", choices=("all", "live", "backfill"), default="all")
+    parser.add_argument(
+        "--exclude-company",
+        action="store_true",
+        help="Vynechat company news (symbols bez indexového ETF) — přínos mega caps",
+    )
     args = parser.parse_args()
-    evaluate(args.symbol, args.window, args.min_train)
+    evaluate(
+        args.symbol,
+        args.window,
+        args.min_train,
+        args.block,
+        use_body=args.use_body,
+        subset=args.subset,
+        exclude_company=args.exclude_company,
+    )
 
 
 if __name__ == "__main__":
