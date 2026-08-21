@@ -97,7 +97,14 @@ class AlpacaNewsStream:
                 await self._session(stop)
                 backoff = RECONNECT_BASE_S  # čisté odpojení → rychlý reconnect
             except Exception as exc:
-                logger.warning("Alpaca WS spadlo (%s) — reconnect za %.0f s", exc, backoff)
+                # repr + typ: str() je u ConnectionClosed/IncompleteReadError
+                # a timeoutů prázdný a v logu zbylo „spadlo ()" (#776)
+                logger.warning(
+                    "Alpaca WS spadlo (%s: %r) — reconnect za %.0f s",
+                    type(exc).__name__,
+                    exc,
+                    backoff,
+                )
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(stop.wait(), timeout=backoff)
                 backoff = min(RECONNECT_MAX_S, backoff * 2)
