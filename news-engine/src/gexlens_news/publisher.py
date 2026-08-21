@@ -39,7 +39,8 @@ class NewsPublisher:
         try:
             await self._client.post("/internal/publish", json={"channel": channel, "data": data})
         except httpx.HTTPError as exc:
-            logger.warning("Publish %s do API selhal: %s", channel, exc)
+            # typ + repr — str() bývá u síťových výjimek prázdný (#776)
+            logger.warning("Publish %s do API selhal (%s: %r)", channel, type(exc).__name__, exc)
 
     async def publish_news(self, events: list[dict[str, Any]]) -> None:
         for event in events:
