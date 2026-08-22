@@ -174,6 +174,13 @@ class Settings(BaseSettings):
     tasty_spot_recover_after_s: float = Field(default=60.0, gt=0)
     # Max stáří tasty kotace, aby se dala použít jako spot
     tasty_spot_max_age_s: float = Field(default=30.0, gt=0)
+    # Greeks validátor (#614 finále, rozhodnuto 22. 8.): tasty × IBKR modely se
+    # hlídají navzájem; prahy per kontrakt jsou MĚŘENÉ konstanty (2× p95 z 5
+    # čistých seancí, tasty/greeks_validator.py). Jen hlásí — žádný zásah.
+    greeks_validator_enabled: bool = True
+    # Alert až při podílu podezřelých párů > share po >= minutes v řadě
+    greeks_suspect_share: float = Field(default=0.20, gt=0, le=1)
+    greeks_suspect_minutes: int = Field(default=3, ge=1)
     # Fallback CELÉHO opčního řetězu (#614 fáze 2b): fáze 2a zachránila cenu,
     # ale heatmapa i GEX stojí na řetězu — bez tohohle graf při výpadku IBKR
     # pořád zamrzne, jen se pod ním hýbe cena. Spouští ho verdikt křížové

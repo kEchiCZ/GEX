@@ -62,6 +62,8 @@ export interface PipelineStatus {
   tasty_trades?: number
   tasty_trades_recorded?: number
   tasty_last_event_ts?: string
+  /** Greeks validátor (#614): podíl párů nad měřeným prahem per podklad. */
+  tasty_greeks_mismatch?: Record<string, number>
   updated_at?: number | null
 }
 

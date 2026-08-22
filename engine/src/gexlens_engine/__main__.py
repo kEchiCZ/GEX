@@ -104,6 +104,7 @@ from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.devrun import run_tasty_only
+from gexlens_engine.tasty.greeks_validator import GreeksAlert, GreeksValidator
 from gexlens_engine.tasty.monitor import FeedMonitor, tracked_symbols
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.session import TastyCredentials, TastySession
@@ -1083,6 +1084,8 @@ async def main() -> None:
                 fields["tasty_last_event_ts"] = tasty_cache.last_event_at.isoformat()
             if trades_recorder is not None:
                 fields["tasty_trades_recorded"] = trades_recorder.recorded
+            if greeks_validator is not None:
+                fields.update(greeks_validator.status_fields())
             return fields
 
         tasty_status_fields = _tasty_status
@@ -1205,6 +1208,27 @@ async def main() -> None:
                 settings.tasty_chain_recover_minutes,
             )
 
+        # Greeks validátor (#614 finále): měřené prahy, jen hlásí (22. 8.)
+        greeks_validator = (
+            GreeksValidator(
+                share_threshold=settings.greeks_suspect_share,
+                minutes_threshold=settings.greeks_suspect_minutes,
+            )
+            if settings.greeks_validator_enabled
+            else None
+        )
+
+        async def _publish_greeks_alert(alert: GreeksAlert) -> None:
+            await publisher.publish(
+                "alerts",
+                {
+                    "kind": "greeks_suspect",
+                    "symbol": alert.symbol,
+                    "message": alert.message,
+                    "ts": dt.datetime.now(dt.UTC).timestamp(),
+                },
+            )
+
         monitor = FeedMonitor(
             comparison_repository,
             tasty_cache,
@@ -1214,6 +1238,8 @@ async def main() -> None:
             detector=crosscheck,
             on_alert=publish_crosscheck,
             on_verdict=chain_verdict_hook,
+            greeks_validator=greeks_validator,
+            on_greeks_alert=_publish_greeks_alert,
         )
 
         def _tasty_spot(symbol: str) -> tuple[float | None, bool]:
