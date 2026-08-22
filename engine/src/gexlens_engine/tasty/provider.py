@@ -64,6 +64,8 @@ class TastyContractState:
     #: TimeAndSale počítadla (pokrytí agresora pro report #612/#615)
     trades: int = 0
     trades_with_aggressor: int = 0
+    #: Cena posledního printu (#616): `last` pro extended snapshoty
+    last_price: float | None = None
 
 
 class TastyChainCache:
@@ -124,6 +126,9 @@ class TastyChainCache:
             state.summary = TastySummary(open_interest=_number(values[1]), updated_at=now)
         elif event_type == "TimeAndSale":
             state.trades += 1
+            price = _number(values[2]) if len(values) > 2 else None
+            if price is not None:
+                state.last_price = price
             aggressor = values[4] if len(values) > 4 else None
             if isinstance(aggressor, str) and aggressor.upper() in ("BUY", "SELL"):
                 state.trades_with_aggressor += 1

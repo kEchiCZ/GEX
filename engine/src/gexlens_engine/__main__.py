@@ -104,8 +104,14 @@ from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.devrun import run_tasty_only
+from gexlens_engine.tasty.extended import (
+    build_snapshot_rows,
+    cadence_due,
+    plan_extended_expiries,
+    validate_disjoint,
+)
 from gexlens_engine.tasty.greeks_validator import GreeksAlert, GreeksValidator
-from gexlens_engine.tasty.monitor import FeedMonitor, tracked_symbols
+from gexlens_engine.tasty.monitor import MAX_AGE_MS, FeedMonitor, tracked_symbols
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.session import TastyCredentials, TastySession
 from gexlens_engine.tasty.spot_fallback import SpotFallback
@@ -1031,6 +1037,9 @@ async def main() -> None:
     # Streamer symbol front futures per instrument (#614) — zdroj spotu, když
     # IBKR přestane posílat (mobil přetáhl market data, výpadek farmy)
     shadow_front_future: dict[str, str] = {}
+    # Extended expirace z tasty (#616 4a): plán per symbol, plní ho denní
+    # obnova chain map; snapshot smyčka z něj čte
+    extended_plan: dict[str, list[str]] = {}
     tasty_spot_lookup: Callable[[str], tuple[float | None, bool]] | None = None
     tasty_oi_lookup: Callable[[OptionContractSpec], float | None] | None = None
     # Fallback celého řetězu (#614 fáze 2b): jedna instance pro celý engine —
@@ -1086,6 +1095,11 @@ async def main() -> None:
                 fields["tasty_trades_recorded"] = trades_recorder.recorded
             if greeks_validator is not None:
                 fields.update(greeks_validator.status_fields())
+            if extended_plan:
+                # Zdroj per expirace (#616, DoD 3): UI musí poznat tasty expirace
+                fields["tasty_extended_expiries"] = {
+                    symbol: list(planned) for symbol, planned in sorted(extended_plan.items())
+                }
             return fields
 
         tasty_status_fields = _tasty_status
@@ -1295,6 +1309,16 @@ async def main() -> None:
             """
             return sorted({*settings.symbol_list, *pipelines})
 
+        def ibkr_expiries_of(symbol: str) -> set[str]:
+            """Expirace držené IBKR pipeline (aktivní + next) — vlastnická množina."""
+            pipeline = pipelines.get(symbol)
+            if pipeline is None:
+                return set()
+            held = {pipeline.runtime.expiry}
+            if pipeline.next_runtime is not None:
+                held.add(pipeline.next_runtime.expiry)
+            return held
+
         async def shadow_symbols_loop() -> None:
             """Denní obnova chain mapy + průběžné dorovnání subskripce."""
             while not shadow_stop.is_set():
@@ -1307,6 +1331,23 @@ async def main() -> None:
                         chain = await symbol_map.chain(symbol, today)
                         shadow_chain[symbol] = chain
                         symbols |= tracked_symbols(list(shadow_contracts().keys()), chain)
+                        # Extended expirace (#616 4a): šířka mimo IBKR množinu —
+                        # disjunktnost hlídá validate_disjoint (překryv = chyba)
+                        if settings.tasty_extended_enabled:
+                            planned = plan_extended_expiries(
+                                chain,
+                                ibkr_expiries_of(symbol),
+                                today=today,
+                                horizon_days=settings.tasty_extended_horizon_days,
+                            )
+                            validate_disjoint(planned, ibkr_expiries_of(symbol))
+                            extended_plan[symbol] = planned
+                            planned_set = set(planned)
+                            symbols |= {
+                                streamer
+                                for (expiry, _s, _r), streamer in chain.by_contract.items()
+                                if expiry in planned_set
+                            }
                         # Podklad (#614): bez něj by při výpadku IBKR zamrzl
                         # cenový graf, i kdyby řetěz z tasty tekl dál
                         front = await symbol_map.front_future(symbol)
@@ -1362,6 +1403,58 @@ async def main() -> None:
                 except Exception:
                     logger.exception("Spot bez pipeline selhal — příští cyklus jede dál")
 
+        async def extended_snapshot_loop() -> None:
+            """Minutová konsolidace extended expirací (#616 4a).
+
+            Řádky vznikají jen z čerstvých tasty kotací — zavřený trh přirozeně
+            nezapisuje nic. Spot bere z tasty front future (nezávislé na IBKR,
+            takže extended šířka žije i při výpadku — duch ADR-0025 dodatku).
+            """
+            while not shadow_stop.is_set():
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(shadow_stop.wait(), timeout=60.0)
+                if shadow_stop.is_set():
+                    return
+                try:
+                    now_utc = dt.datetime.now(dt.UTC)
+                    ts_min = now_utc.replace(second=0, microsecond=0)
+                    minute_of_day = ts_min.hour * 60 + ts_min.minute
+                    for symbol, planned in list(extended_plan.items()):
+                        chain = shadow_chain.get(symbol)
+                        if chain is None or not planned:
+                            continue
+                        spot, fresh = _tasty_spot(symbol)
+                        if spot is None or not fresh:
+                            continue
+                        for expiry in planned:
+                            if not cadence_due(
+                                expiry,
+                                today=now_utc.date(),
+                                minute_of_day=minute_of_day,
+                                near_days=settings.tasty_extended_near_days,
+                                far_interval_min=settings.tasty_extended_far_interval_min,
+                            ):
+                                continue
+                            rows, oi_missing = build_snapshot_rows(
+                                chain,
+                                expiry,
+                                tasty_cache,
+                                ts_min=ts_min,
+                                spot=spot,
+                                now_utc=now_utc,
+                                max_age_s=float(MAX_AGE_MS) / 1000.0,
+                            )
+                            if not rows:
+                                continue
+                            day = ts_min.date()
+                            await asyncio.to_thread(writer.write_minute, symbol, expiry, day, rows)
+                            if oi_missing:
+                                await asyncio.to_thread(
+                                    writer.write_oi_missing, symbol, expiry, day, oi_missing
+                                )
+                except Exception:
+                    logger.exception("Extended snapshoty selhaly — příští minuta jede dál")
+
         async def trades_flush_loop() -> None:
             """Minutový flush recorderu (#795) do trades/{sym}/{den}.parquet.
 
@@ -1392,6 +1485,15 @@ async def main() -> None:
         if trades_recorder is not None:
             shadow_tasks.append(asyncio.create_task(trades_flush_loop()))
             logger.info("Záznam opčních TimeAndSale printů ZAPNUT (#795) → data/trades/")
+        if settings.tasty_extended_enabled:
+            shadow_tasks.append(asyncio.create_task(extended_snapshot_loop()))
+            logger.info(
+                "Extended expirace ZAPNUTY (#616 4a): horizont %d dnů, kadence 1 min/≤%d dnů "
+                "jinak %d min — snapshoty s BS greeks z tasty kotací",
+                settings.tasty_extended_horizon_days,
+                settings.tasty_extended_near_days,
+                settings.tasty_extended_far_interval_min,
+            )
         # Reference na tasks se drží (RUF006) — GC by je jinak uklidil před doběhem
         logger.info(
             "tastytrade větev ZAPNUTA (%d úloh); porovnání do feed_comparison: %s (#763)",
