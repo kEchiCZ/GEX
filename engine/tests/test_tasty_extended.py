@@ -49,12 +49,15 @@ def test_validate_disjoint_prekryv_je_chyba() -> None:
 
 
 def test_cadence_odstupnovana() -> None:
-    kwargs = {"today": TODAY, "near_days": 7, "far_interval_min": 5}
-    # Blízká expirace: každou minutu
-    assert cadence_due("20260825", minute_of_day=871, **kwargs) is True
-    # Vzdálená: jen každou pátou minutu
-    assert cadence_due("20260930", minute_of_day=871, **kwargs) is False
-    assert cadence_due("20260930", minute_of_day=870, **kwargs) is True
+    def due(expiry: str, minute_of_day: int) -> bool:
+        return cadence_due(
+            expiry, today=TODAY, minute_of_day=minute_of_day, near_days=7, far_interval_min=5
+        )
+
+    # Blízká expirace: každou minutu; vzdálená jen každou pátou
+    assert due("20260825", 871) is True
+    assert due("20260930", 871) is False
+    assert due("20260930", 870) is True
 
 
 def test_build_rows_bs_greeks_a_oimissing() -> None:
