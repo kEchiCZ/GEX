@@ -64,6 +64,9 @@ export interface PipelineStatus {
   tasty_last_event_ts?: string
   /** Greeks validátor (#614): podíl párů nad měřeným prahem per podklad. */
   tasty_greeks_mismatch?: Record<string, number>
+  /** Extended expirace z tasty (#616): per symbol seznam expirací, jejichž
+      zdrojem je tastytrade (BS greeks z kotací, bez objemů/flows). */
+  tasty_extended_expiries?: Record<string, string[]>
   updated_at?: number | null
 }
 

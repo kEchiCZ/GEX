@@ -190,3 +190,24 @@ test('demo den nemá měřitelnou osu, takže OHLC badge ani časová značka ne
   expect(screen.queryByTestId('data-stamp')).toBeNull()
   expect(screen.getByTestId('data-source').textContent).toBe('demo data')
 })
+
+test('extended expirace nese badge zdroje tastytrade (#616 4b)', async () => {
+  makeApp()
+  // Expirace z REST; první (20260716) se vybere automaticky
+  expect(await screen.findByRole('option', { name: '20260716' })).toBeDefined()
+
+  const ws = FakeWebSocket.latest()
+  act(() => {
+    ws.open()
+    ws.push('status', {
+      engine: 'online',
+      // 20260717 je vybraná expirace (nejbližší k dnešku vyhrává v AppState)
+      tasty_extended_expiries: { ES: ['20260717'] },
+    })
+  })
+
+  expect(screen.getByRole('option', { name: '20260717 · tasty' })).toBeDefined()
+  expect(screen.getByTestId('expiry-meta').textContent).toContain('zdroj tastytrade')
+  // Druhá expirace (IBKR) badge nemá
+  expect(screen.getByRole('option', { name: '20260716' })).toBeDefined()
+})
