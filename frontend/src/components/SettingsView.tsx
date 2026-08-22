@@ -381,6 +381,20 @@ export function SettingsView() {
                       : ''}
                   </td>
                 </tr>
+                {/* Greeks validátor (#614): podíl párů nad měřeným prahem 2× p95;
+                    za normálu ~1–2 %, alert greeks_suspect od >20 % po 3 min */}
+                {status.tasty_greeks_mismatch &&
+                Object.keys(status.tasty_greeks_mismatch).length > 0 ? (
+                  <tr>
+                    <td>Greeks validátor</td>
+                    <td>
+                      {Object.entries(status.tasty_greeks_mismatch)
+                        .map(([symbol, share]) => `${symbol} ${(share * 100).toFixed(1)} %`)
+                        .join(' · ')}{' '}
+                      <span className="muted">nad prahem (norma ~1–2 %)</span>
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </SettingRow>

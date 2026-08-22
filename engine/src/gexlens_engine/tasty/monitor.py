@@ -30,12 +30,13 @@ import datetime as dt
 import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import CachedQuote
 from gexlens_engine.storage.feed_comparison import ComparisonRow, FeedComparisonRepository
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict, MinuteTally
+from gexlens_engine.tasty.greeks_validator import GreeksAlert, GreeksValidator, is_suspicious
 from gexlens_engine.tasty.provider import TastyChainCache, TastyContractState
 from gexlens_engine.tasty.symbols import ChainSymbols
 
@@ -73,6 +74,11 @@ class MinuteComparison:
     #: z čehož se počítá rozlišovač „hýbe se trh?" (#764) — funkce zůstává
     #: čistá, stav drží FeedMonitor.
     ibkr_values: dict[str, tuple[float | None, ...]]
+    #: Greeks validátor (#614): per PODKLAD počet párů s greeks na obou
+    #: stranách a kolik z nich je nad měřeným prahem. Jen kompletní páry —
+    #: díra tasty greeks (#810) nesmí vypadat jako neshoda modelů.
+    greeks_checked: dict[str, int] = field(default_factory=dict)
+    greeks_suspicious: dict[str, int] = field(default_factory=dict)
 
 
 def compare_minute(
@@ -109,6 +115,8 @@ def compare_minute(
     both_fresh = ibkr_only_dead = tasty_only_dead = both_dead = 0
     ibkr_comparable = ibkr_changed = 0
     ibkr_values: dict[str, tuple[float | None, ...]] = {}
+    greeks_checked: dict[str, int] = {}
+    greeks_suspicious: dict[str, int] = {}
     for spec, cached in ibkr_quotes.items():
         # Mapa per produkt (ES i NQ mají vlastní chain endpoint) — bez toho
         # by se druhý instrument tiše nikdy neporovnal
@@ -127,6 +135,7 @@ def compare_minute(
         # kontrakt vypadal jako živý.
         ibkr_alive = tasty_alive = False
         minute_values: list[float | None] = []
+        greeks_pair: dict[str, tuple[float | None, float | None]] = {}
         for field_name, ibkr_value, tasty_value in _FIELDS:
             value_ibkr = ibkr_value(cached) if ibkr_fresh else None
             minute_values.append(value_ibkr)
@@ -140,6 +149,8 @@ def compare_minute(
                         value_tasty = tasty_value(state)
             ibkr_alive = ibkr_alive or value_ibkr is not None
             tasty_alive = tasty_alive or value_tasty is not None
+            if field_name in ("delta", "gamma", "iv"):
+                greeks_pair[field_name] = (value_ibkr, value_tasty)
             if value_ibkr is None and value_tasty is None:
                 continue  # obě strany mrtvé — nulová informace, jen objem
             if not collect_rows:
@@ -174,6 +185,20 @@ def compare_minute(
                     age_tasty_ms=None,
                 )
             )
+        # Greeks validátor (#614): jen páry kompletní na obou stranách
+        suspicious = is_suspicious(
+            spec.symbol,
+            delta_ibkr=greeks_pair["delta"][0],
+            delta_tasty=greeks_pair["delta"][1],
+            gamma_ibkr=greeks_pair["gamma"][0],
+            gamma_tasty=greeks_pair["gamma"][1],
+            iv_ibkr=greeks_pair["iv"][0],
+            iv_tasty=greeks_pair["iv"][1],
+        )
+        if suspicious is not None:
+            greeks_checked[spec.symbol] = greeks_checked.get(spec.symbol, 0) + 1
+            if suspicious:
+                greeks_suspicious[spec.symbol] = greeks_suspicious.get(spec.symbol, 0) + 1
         if ibkr_alive and tasty_alive:
             both_fresh += 1
         elif tasty_alive:
@@ -207,7 +232,13 @@ def compare_minute(
         ibkr_comparable=ibkr_comparable,
         ibkr_changed=ibkr_changed,
     )
-    return MinuteComparison(rows=rows, tally=tally, ibkr_values=ibkr_values)
+    return MinuteComparison(
+        rows=rows,
+        tally=tally,
+        ibkr_values=ibkr_values,
+        greeks_checked=greeks_checked,
+        greeks_suspicious=greeks_suspicious,
+    )
 
 
 class FeedMonitor:
@@ -235,6 +266,8 @@ class FeedMonitor:
         detector: CrossCheckDetector | None = None,
         on_alert: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None,
         on_verdict: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None,
+        greeks_validator: GreeksValidator | None = None,
+        on_greeks_alert: Callable[[GreeksAlert], Awaitable[None]] | None = None,
     ) -> None:
         self._repository = repository
         self._cache = tasty_cache
@@ -249,6 +282,9 @@ class FeedMonitor:
         # KAŽDÝ verdikt, ne jen alert (#614 fáze 2b): fallback řetězu se musí
         # dozvědět i o čistých minutách, jinak by se nikdy nevrátil na IBKR
         self._on_verdict = on_verdict
+        # Greeks validátor (#614 finále): jen hlásí (rozhodnutí uživatele 22. 8.)
+        self.greeks_validator = greeks_validator
+        self._on_greeks_alert = on_greeks_alert
         #: Diagnostika zátěže: řádků zapsáno od startu
         self.rows_written = 0
         #: IBKR hodnoty minulé minuty (#764) — vstup rozlišovače změn; None
@@ -304,6 +340,13 @@ class FeedMonitor:
                 await self._on_verdict(verdict)
             if verdict.alert and self._on_alert is not None:
                 await self._on_alert(verdict)
+        if self.greeks_validator is not None:
+            for greeks_alert in self.greeks_validator.observe(
+                comparison.greeks_checked, comparison.greeks_suspicious
+            ):
+                logger.warning("Greeks validátor (#614): %s", greeks_alert.message)
+                if self._on_greeks_alert is not None:
+                    await self._on_greeks_alert(greeks_alert)
         if self._repository is None:
             return
         await asyncio.to_thread(self._repository.insert_many, rows)
