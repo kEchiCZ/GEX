@@ -174,6 +174,13 @@ class Settings(BaseSettings):
     tasty_spot_recover_after_s: float = Field(default=60.0, gt=0)
     # Max stáří tasty kotace, aby se dala použít jako spot
     tasty_spot_max_age_s: float = Field(default=30.0, gt=0)
+    # Extended expirace z tasty (#616 fáze 4a, schváleno 22. 8.): expirace mimo
+    # množinu IBKR do horizontu, snapshoty s BS greeks z kotací (#810/#547).
+    # Kadence odstupňovaná: ≤ near_days každou minutu, dál každých far_interval.
+    tasty_extended_enabled: bool = True
+    tasty_extended_horizon_days: int = Field(default=30, ge=0)
+    tasty_extended_near_days: int = Field(default=7, ge=0)
+    tasty_extended_far_interval_min: int = Field(default=5, ge=1)
     # Greeks validátor (#614 finále, rozhodnuto 22. 8.): tasty × IBKR modely se
     # hlídají navzájem; prahy per kontrakt jsou MĚŘENÉ konstanty (2× p95 z 5
     # čistých seancí, tasty/greeks_validator.py). Jen hlásí — žádný zásah.
