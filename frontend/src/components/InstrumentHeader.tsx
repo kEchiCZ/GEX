@@ -141,6 +141,11 @@ export function InstrumentHeader({
     const timer = setInterval(() => setNow(new Date()), 60_000)
     return () => clearInterval(timer)
   }, [])
+  // Zdroj per expirace (#616): expirace mimo IBKR množinu dodává tastytrade —
+  // uživatel to musí poznat (BS greeks z kotací, bez objemů/flows), jinak by
+  // jedna heatmapa tiše míchala dvě pravdy
+  const extendedExpiries = new Set(status.tasty_extended_expiries?.[symbol] ?? [])
+  const selectedIsExtended = selectedExpiry !== null && extendedExpiries.has(selectedExpiry)
   const kind = selectedExpiry ? expiryKind(selectedExpiry) : null
   const countdown = selectedExpiry ? expiryCountdown(selectedExpiry, now) : null
   // Vztah chainu k zobrazené seanci (#352): proběhlá expirace se čte jako
@@ -189,15 +194,24 @@ export function InstrumentHeader({
             {expiries.length === 0 && <option value="">—</option>}
             {expiries.map((expiry) => (
               <option key={expiry} value={expiry}>
-                {expiry}
+                {extendedExpiries.has(expiry) ? `${expiry} · tasty` : expiry}
               </option>
             ))}
           </select>
         </label>
         {kind && (
-          <span className="muted expiry-meta" data-testid="expiry-meta">
+          <span
+            className="muted expiry-meta"
+            data-testid="expiry-meta"
+            title={
+              selectedIsExtended
+                ? 'Expirace mimo IBKR pokrytí — data z tastytrade (dxFeed): kotace + OI, greeks dopočtené BS modelem z mid ceny. Bez objemů a flows (ty nese jen IBKR).'
+                : undefined
+            }
+          >
             {kind}
             {countdown && ` · expiruje ${countdown}`}
+            {selectedIsExtended && ' · zdroj tastytrade'}
             {chainNote && ` · ${chainNote}`}
           </span>
         )}
