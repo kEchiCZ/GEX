@@ -177,10 +177,10 @@ async def test_migrace_doplni_captured_ts_stare_tabulce(tmp_path: Path) -> None:
 
 
 async def test_duplicate_series_merged_by_sum(repository: OIEodRepository) -> None:
-    """#215 (MES): dvě tradingClass série téhož (expiry, strike, right) se sloučí Σ OI.
+    """#215 → #736: série téže expirace mají VLASTNÍ řádky, čtení je sčítá.
 
-    Bez dedupe by duplicitní klíč v jedné dávce shodil PG upsert
-    (CardinalityViolation) a s ním celý pipeline symbolu."""
+    Dřív se slévaly do jednoho (obrana proti CardinalityViolation); od #736
+    nese klíč trading_class, takže se zapíší obě a Σ dělá čtecí strana."""
     base = OptionContractSpec(
         symbol="MES",
         sec_type="FOP",
@@ -206,9 +206,9 @@ async def test_duplicate_series_merged_by_sum(repository: OIEodRepository) -> No
 
     result = await archiver.archive_day([base, twin], DAY_1)
 
-    assert result.written == 1  # jeden řádek po sloučení
-    assert repository.count_for_day("MES", DAY_1) == 1
-    assert repository.get_oi("MES", DAY_1, 7500.0, "C") == 150.0  # Σ obou sérií
+    assert result.written == 2  # každá série má vlastní řádek (#736)
+    assert repository.count_for_day("MES", DAY_1) == 2
+    assert repository.get_oi("MES", DAY_1, 7500.0, "C") == 150.0  # čtení Σ obou sérií
 
 
 async def test_missing_oi_reported_not_written(repository: OIEodRepository) -> None:
