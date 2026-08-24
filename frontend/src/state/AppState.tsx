@@ -405,9 +405,12 @@ export function AppStateProvider({
     oneOf(SIGNAL_MODES),
   )
   // Dřív checkbox dynGexField (#242) — dropdown ploch ho nahrazuje (#204)
+  // Default `gex` (#837): modelované gamma pole je hlavní přidaná hodnota
+  // nástroje — jako `off` zůstávalo schované za dropdownem a uživatel viděl
+  // jen měřené módy s konstantní projekcí
   const [underlayPlane, setUnderlayPlane] = usePersistentState<UnderlayPlane>(
     'underlayPlane',
-    'off',
+    'gex',
     oneOf(UNDERLAY_PLANES),
   )
   const [newsMarkerFilter, setNewsMarkerFilter] = usePersistentState<NewsMarkerFilter>(
