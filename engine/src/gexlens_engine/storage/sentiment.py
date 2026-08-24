@@ -259,6 +259,11 @@ sentiment_daily = Table(
     Column("high", Float, nullable=False),
     Column("low", Float, nullable=False),
     Column("close", Float, nullable=False),
+    # Škálová normalizace (#640, rozhodnuto 24. 8.): σ = std(close) předchozích
+    # 100 seancí (kauzálně, bez dneška), close_z = close/σ. NULL = málo historie
+    # (< 30 seancí) nebo řádek před dopočtem. Surový close zůstává zdrojem pravdy.
+    Column("sigma", Float, nullable=True),
+    Column("close_z", Float, nullable=True),
     Column("update_time", DateTime(timezone=True), nullable=False),
 )
 
@@ -372,6 +377,12 @@ def ensure_sentiment_schema(engine: Engine) -> None:
     # `news_weights` jsou plně derivované (noční full-replace) — při chybějícím
     # sloupci `symbol` (ADR-0026) se tabulka zahodí a založí v novém tvaru;
     # hodnoty doplní příští přepočet vah.
+    if "sentiment_daily" in existing:
+        columns = {column["name"] for column in inspector.get_columns("sentiment_daily")}
+        for name in ("sigma", "close_z"):
+            if name not in columns:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE sentiment_daily ADD COLUMN {name} FLOAT"))
     if "news_weights" in existing:
         columns = {column["name"] for column in inspector.get_columns("news_weights")}
         if "symbol" not in columns:

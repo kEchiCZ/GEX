@@ -145,6 +145,48 @@ class SentIndexJob:
                 )
             )
 
+    def refresh_z(self, symbol: str = "ES") -> int:
+        """Škálová normalizace (#640): σ a close_z pro řádky, kde chybí + dnešek.
+
+        σ(t) = std(close) PŘEDCHOZÍCH 100 seancí (bez dneška — kauzální i
+        intradenně, dnešní průběžný close nesmí ladit vlastní měřítko);
+        < 30 seancí historie → NULL. Deterministická funkce surové řady,
+        takže zpětný dopočet je bezpečný a opakovatelný.
+        """
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(sentiment_daily.c.date, sentiment_daily.c.close, sentiment_daily.c.sigma)
+                .where(sentiment_daily.c.symbol == symbol)
+                .order_by(sentiment_daily.c.date)
+            ).fetchall()
+        if len(rows) < 31:
+            return 0
+        closes = [float(row.close) for row in rows]
+        today = dt.datetime.now(dt.UTC).date()
+        updates: list[tuple[dt.date, float, float]] = []
+        for i, row in enumerate(rows):
+            window = closes[max(0, i - 100) : i]  # bez aktuálního dne
+            if len(window) < 30:
+                continue
+            mean = sum(window) / len(window)
+            sigma = (sum((v - mean) ** 2 for v in window) / len(window)) ** 0.5
+            if sigma <= 0:
+                continue
+            already = row.sigma is not None and abs(float(row.sigma) - sigma) < 1e-12
+            if already and row.date != today:
+                continue  # historie už dopočtená — přepočítává se jen dnešek
+            updates.append((row.date, sigma, closes[i] / sigma))
+        if not updates:
+            return 0
+        with self._engine.begin() as conn:
+            for day, sigma, close_z in updates:
+                conn.execute(
+                    sentiment_daily.update()
+                    .where(sentiment_daily.c.symbol == symbol, sentiment_daily.c.date == day)
+                    .values(sigma=sigma, close_z=close_z)
+                )
+        return len(updates)
+
     def run(self, now: dt.datetime) -> tuple[int, list[TopicIndex]]:
         """Přepočet dneška pro všechny symboly (ADR-0026).
 
@@ -161,6 +203,7 @@ class SentIndexJob:
             if series:
                 self.write_series(now.date(), series, symbol)
                 self.store_daily(now.date(), series, symbol)
+                self.refresh_z(symbol)
                 self.last_values[symbol] = series[-1][1]
             topics = topic_indexes(events, now)
             if order == 0:

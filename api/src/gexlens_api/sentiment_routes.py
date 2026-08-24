@@ -372,7 +372,7 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         """
         engine = engine_factory()
         stmt = (
-            select(sentiment_daily.c.date, sentiment_daily.c.close)
+            select(sentiment_daily.c.date, sentiment_daily.c.close, sentiment_daily.c.sigma)
             .where(sentiment_daily.c.symbol == symbol)
             .order_by(sentiment_daily.c.date)
         )
@@ -395,8 +395,12 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
             assess_state([*completed, provisional]) if provisional is not None else confirmed
         )
         wave = confirmed.wave
+        # Škála #640: poslední známá σ(100) — sparkline v UI dělí minutové
+        # hodnoty touto σ, ať je výchylka čitelná jako „kolik σ od normálu"
+        sigma = next((float(row.sigma) for row in reversed(rows) if row.sigma is not None), None)
         return {
             "symbol": symbol,
+            "sigma": sigma,
             "state": confirmed.state,
             "polarity": confirmed.polarity,
             "unconfirmed": provisional is not None

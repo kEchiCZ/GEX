@@ -16,12 +16,17 @@ const STATE_LABELS: Record<SentimentStateInfo['state'], string> = {
   Neutral: 'NEUTRAL',
 }
 
-/** Sparkline SentIndexu jako SVG polyline; nulová osa čárkovaně. */
-export function Sparkline({ series }: { series: SentimentPoint[] }) {
+/** Sparkline SentIndexu jako SVG polyline; nulová osa čárkovaně.
+
+Se `sigma` (#640) se hodnoty dělí σ(100 seancí) — výchylka se čte jako
+„kolik σ od normálu", srovnatelně napříč érami feedu; surová čísla nese
+dl blok pod grafem, žádná dvojí pravda. */
+export function Sparkline({ series, sigma }: { series: SentimentPoint[]; sigma?: number | null }) {
   const width = 220
   const height = 48
   if (series.length < 2) return <p className="muted">Dnešní index zatím nemá data</p>
-  const values = series.map((point) => point.value)
+  const scale = sigma && sigma > 0 ? sigma : 1
+  const values = series.map((point) => point.value / scale)
   const max = Math.max(...values.map(Math.abs), 0.01)
   const stepX = width / (series.length - 1)
   const y = (value: number) => height / 2 - (value / max) * (height / 2 - 2)
@@ -96,7 +101,13 @@ export function StateChip() {
       </button>
       {open && (
         <div className="state-popover" role="dialog" aria-label="Detail stavu sentimentu">
-          <Sparkline series={series} />
+          <Sparkline series={series} sigma={state.sigma} />
+          {state.sigma != null && state.sigma > 0 && (
+            <p className="muted state-sigma-note">
+              osa v σ (100 seancí, #640) · dnes{' '}
+              {state.last_close != null ? (state.last_close / state.sigma).toFixed(2) : '—'} σ
+            </p>
+          )}
           <dl className="state-metrics">
             <dt>Close</dt>
             <dd>{format(state.last_close)}</dd>
