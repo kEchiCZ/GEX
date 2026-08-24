@@ -1410,6 +1410,7 @@ async def main() -> None:
             nezapisuje nic. Spot bere z tasty front future (nezávislé na IBKR,
             takže extended šířka žije i při výpadku — duch ADR-0025 dodatku).
             """
+            last_idle_log = 0.0
             while not shadow_stop.is_set():
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(shadow_stop.wait(), timeout=60.0)
@@ -1419,12 +1420,16 @@ async def main() -> None:
                     now_utc = dt.datetime.now(dt.UTC)
                     ts_min = now_utc.replace(second=0, microsecond=0)
                     minute_of_day = ts_min.hour * 60 + ts_min.minute
+                    written = 0
+                    gates: dict[str, str] = {}
                     for symbol, planned in list(extended_plan.items()):
                         chain = shadow_chain.get(symbol)
                         if chain is None or not planned:
+                            gates[symbol] = "bez plánu/chainu"
                             continue
                         spot, fresh = _tasty_spot(symbol)
                         if spot is None or not fresh:
+                            gates[symbol] = f"spot={spot!r} fresh={fresh}"
                             continue
                         for expiry in planned:
                             if not cadence_due(
@@ -1448,10 +1453,24 @@ async def main() -> None:
                                 continue
                             day = ts_min.date()
                             await asyncio.to_thread(writer.write_minute, symbol, expiry, day, rows)
+                            written += len(rows)
                             if oi_missing:
                                 await asyncio.to_thread(
                                     writer.write_oi_missing, symbol, expiry, day, oi_missing
                                 )
+                    # Ticho ≠ úspěch (#616 4a smoke): první noc se nezapsalo nic
+                    # a nebylo z čeho poznat proč — brány se proto hlásí. Zapsané
+                    # minuty se nelogují (60×/h by byl spam), jen přechody a ticho.
+                    if written == 0 and time.monotonic() - last_idle_log > 600:
+                        last_idle_log = time.monotonic()
+                        logger.info(
+                            "Extended: tuto minutu 0 řádků — brány: %s (plán %s)",
+                            gates or "prošly, ale build vrátil prázdno",
+                            {s: len(p) for s, p in extended_plan.items()},
+                        )
+                    elif written and last_idle_log:
+                        last_idle_log = 0.0
+                        logger.info("Extended: zápis obnoven (%d řádků tuto minutu)", written)
                 except Exception:
                     logger.exception("Extended snapshoty selhaly — příští minuta jede dál")
 

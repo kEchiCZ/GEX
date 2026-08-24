@@ -216,7 +216,10 @@ class SetupEngine:
                 gex_regime=inputs.gex_regime,
                 gamma_edge_up=inputs.gamma_edge_up,
                 gamma_edge_dn=inputs.gamma_edge_dn,
-                atr=average_true_range(self._history, self.params.atr_lookback),
+                # list(): _history je deque a slicing v average_true_range by
+                # spadl na TypeError — projevilo se až s plnou historií (>15
+                # minut), testy s krátkou historií prošly přes časný return None
+                atr=average_true_range(list(self._history), self.params.atr_lookback),
                 band_sharpness=band.get("band_sharpness"),
                 band_sharpness_pct=band.get("band_sharpness_pct"),
                 band_depth=band.get("band_depth"),
