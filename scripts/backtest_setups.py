@@ -104,6 +104,13 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
     flow = load_series(f"{DATA}/{symbol}/flow/*.parquet")
     if bars is None or levels is None:
         return []
+    # Decision-time konvence (#794 f. 1, změřeno 24. 8.): živý engine v minutě N
+    # rozhoduje nad DOKONČENÝM barem N−1 + stavem (levels/flow/profil) N.
+    # Původní párování bar N + stav N leakovalo minutu budoucí ceny do řádku —
+    # parita s živým feature logem to doložila (bar blok seděl až s posunem +1).
+    # POZOR: mění výsledky backtestů proti kalibracím #394/#434 (běžely s leakem).
+    bars = bars.copy()
+    bars["ts_min"] = bars["ts_min"] + pd.Timedelta(minutes=1)
     frame = bars.merge(levels, on="ts_min", how="inner")
     if dom is not None:
         frame = frame.merge(dom, on="ts_min", how="left")
