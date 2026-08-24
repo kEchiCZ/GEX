@@ -101,6 +101,9 @@ export function PcrPanel({
   const total = result.put + result.call
   const putShare = total > 0 ? result.put / total : 0.5
   const unreliable = result.missingShare > PCR_MISSING_LIMIT
+  // Prémie bez jediné použitelné kotace: rozlišit „nula" od „nevíme" (#835)
+  const premiumUnavailable =
+    effectiveUnit === 'premium' && result.put === 0 && result.call === 0 && rows.length > 0
   const title = windowed
     ? `P/C vybraného okna ${windowLabel} — premium ≈ objem okna × mid k t2 × multiplikátor ` +
       '(aproximace: neváží ceny v okamžicích obchodů). Zmrzlé kotace a striky bez midu vyloučené.' +
@@ -174,13 +177,22 @@ export function PcrPanel({
       <div className="pcr-bar" aria-hidden="true">
         <span className="pcr-bar-put" style={{ width: `${(putShare * 100).toFixed(1)}%` }} />
       </div>
-      <div className="pcr-values">
-        <span className="pcr-put">PUT {format(result.put)}</span>
-        <span className="pcr-ratio" data-testid="pcr-ratio">
-          P/C {result.ratio === null ? '—' : result.ratio.toFixed(2)}
-        </span>
-        <span className="pcr-call">CALL {format(result.call)}</span>
-      </div>
+      {/* Tichá nula je horší než přiznaná díra (#835, týž princip jako
+      oi_missing u #465): když jsou mid ještě nenačtené nebo všechny zmrzlé,
+      panel by ukázal PUT $0 / CALL $0 a vypadalo by to jako měření */}
+      {premiumUnavailable ? (
+        <div className="pcr-values muted" data-testid="pcr-unavailable">
+          Prémie nejsou k dispozici — kotace se načítají nebo jsou zmrzlé
+        </div>
+      ) : (
+        <div className="pcr-values">
+          <span className="pcr-put">PUT {format(result.put)}</span>
+          <span className="pcr-ratio" data-testid="pcr-ratio">
+            P/C {result.ratio === null ? '—' : result.ratio.toFixed(2)}
+          </span>
+          <span className="pcr-call">CALL {format(result.call)}</span>
+        </div>
+      )}
       {/* Sekundární kusový poměr okna (#486) — premium hlavní, kusy vedle */}
       {windowed && contractsResult && (
         <div className="muted pcr-window-contracts" data-testid="pcr-window-contracts">
