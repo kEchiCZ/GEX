@@ -339,3 +339,63 @@ async def test_pad_spojeni_behem_eager_odberu_nepropadne() -> None:
         cast(NewsTickCollector, None),
         _NullPublisher(),
     )
+
+
+# ── Plné znění článků přes reqNewsArticle (#743) ────────────────────
+
+
+class FakeArticleClient:
+    """reqNewsArticleAsync stub: HTML článek pro BRFG, výjimka pro DJNL."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def reqNewsArticleAsync(self, provider: str, article_id: str, _opts=None):
+        self.calls.append((provider, article_id))
+        if provider == "DJNL":
+            raise RuntimeError("article nedostupný")
+
+        class Article:
+            articleType = 1  # HTML
+            articleText = "<p>Fed poprvé <b>naznačil</b> pauzu.</p>"
+
+        return Article()
+
+
+async def test_article_fetcher_doplni_body_a_neprepisuje(tmp_path) -> None:
+    from sqlalchemy import create_engine as ce
+
+    from gexlens_engine.ibkr.newsticks import ArticleFetcher
+    from gexlens_engine.storage.sentiment import ensure_sentiment_schema, news_events
+
+    db = ce(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(db)
+    now = dt.datetime(2026, 8, 24, 6, 0, tzinfo=dt.UTC)
+    with db.begin() as conn:
+        for i, (provider, body) in enumerate([("BRFG", None), ("DJNL", None), ("BRFG", "už má")]):
+            conn.execute(
+                news_events.insert().values(
+                    ts_event=now,
+                    ts_ingested=now,
+                    source=f"ibkr_{provider.lower()}",
+                    kind="broker",
+                    title=f"Titulek {i}",
+                    body=body,
+                    symbols=[],
+                    market_closed=False,
+                    dedup_hash=f"h{i}",
+                    raw={"provider": provider, "article_id": f"a{i}"},
+                )
+            )
+    client = FakeArticleClient()
+    fetcher = ArticleFetcher(client, db, spacing_s=0.0)
+
+    filled = await fetcher.catch_up()
+
+    assert filled == 1  # BRFG bez body doplněn; DJNL selhal; třetí body už měl
+    with db.connect() as conn:
+        rows = {r.title: r.body for r in conn.execute(news_events.select()).fetchall()}
+    assert rows["Titulek 0"] == "Fed poprvé naznačil pauzu."  # HTML pryč
+    assert rows["Titulek 1"] is None  # selhání nechává díru, nevymýšlí
+    assert rows["Titulek 2"] == "už má"  # existující body se NIKDY nepřepisuje
+    assert ("BRFG", "a2") not in client.calls  # s body se ani nefetchuje

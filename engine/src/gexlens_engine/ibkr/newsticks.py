@@ -18,9 +18,10 @@ nezávislá na podkladu. To je pro makro sentiment stejně to, co chceme: zpráv
 hýbající ES/NQ nejsou vázané na jeden kontrakt.
 """
 
+import asyncio
 import datetime as dt
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Awaitable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -30,7 +31,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.marketclock import is_market_closed
-from gexlens_engine.compute.newstext import dedup_hash, normalize_source_uid
+from gexlens_engine.compute.newstext import clip_body, dedup_hash, normalize_source_uid, strip_html
 from gexlens_engine.storage.sentiment import news_events
 
 logger = logging.getLogger(__name__)
@@ -365,3 +366,110 @@ class NewsTickCollector:
                 select(func.count()).select_from(news_events).where(news_events.c.kind == "broker")
             ).scalar()
         return int(total or 0)
+
+
+class ArticleClient(Protocol):
+    """Kus `ib_async.IB` potřebný pro plné znění článku (#743).
+
+    Sync metoda vracející Awaitable — přesně tak ji deklaruje ib_async
+    (async def by strukturálně neseděl).
+    """
+
+    def reqNewsArticleAsync(
+        self, providerCode: str, articleId: str, newsArticleOptions: list[Any] = ...
+    ) -> Awaitable[Any]: ...
+
+
+class ArticleFetcher:
+    """Plné znění broker headlines přes `reqNewsArticle` (#743, poslední kus).
+
+    Titulek chodí páskou hned; článek se dotahuje zvlášť per (provider,
+    articleId) a ukládá do `news_events.body` (HTML se odstraní, ořez na
+    BODY_MAX_CHARS jako u Alpaca #743). `body` se NIKDY nepřepisuje — jen
+    doplňuje tam, kde je NULL. Rozestup mezi requesty drží ohleduplnost
+    k pacing limitům; objem je malý (BRFG ~150 headlines/týden).
+    """
+
+    def __init__(self, ib: ArticleClient, db: Engine, *, spacing_s: float = 0.5) -> None:
+        self._ib = ib
+        self._db = db
+        self._spacing_s = spacing_s
+
+    async def _fetch_body(self, provider: str, article_id: str) -> str | None:
+        article = await self._ib.reqNewsArticleAsync(provider, article_id, [])
+        text = getattr(article, "articleText", "") or ""
+        if int(getattr(article, "articleType", 0) or 0) == 1:  # 1 = HTML
+            text = strip_html(text)
+        cleaned = clip_body(text.strip())
+        return cleaned or None
+
+    def _store_body(self, event_id: int, body: str) -> None:
+        with self._db.begin() as conn:
+            conn.execute(
+                news_events.update()
+                .where(news_events.c.id == event_id, news_events.c.body.is_(None))
+                .values(body=body)
+            )
+
+    async def fetch_for(self, written: Sequence[StoredHeadline]) -> int:
+        """Dotáhne články k právě zapsaným headlines; vrací počet doplněných."""
+        filled = 0
+        for stored in written:
+            provider = stored.headline.provider
+            article_id = stored.headline.article_id
+            if not provider or not article_id or provider == "unknown":
+                continue
+            try:
+                body = await self._fetch_body(provider, article_id)
+            except Exception:
+                # Jeden nedostupný článek nesmí vzít další — titulek už v DB je
+                logger.exception("reqNewsArticle %s/%s selhal", provider, article_id)
+                continue
+            if body is None:
+                continue
+            await asyncio.to_thread(self._store_body, stored.id, body)
+            filled += 1
+            await asyncio.sleep(self._spacing_s)
+        return filled
+
+    async def catch_up(self, limit: int = 1000) -> int:
+        """Doplní články historickým broker headlines bez body (jednou po connectu).
+
+        Pokrývá i zápisy z minutové pojistky a všech předchozích běhů — 436
+        eventů z doby před #743 se tím doplní samo.
+        """
+
+        def _pending() -> list[tuple[int, str, str]]:
+            with self._db.connect() as conn:
+                rows = conn.execute(
+                    select(news_events.c.id, news_events.c.raw)
+                    .where(news_events.c.kind == "broker", news_events.c.body.is_(None))
+                    .order_by(news_events.c.id.desc())
+                    .limit(limit)
+                ).fetchall()
+            out = []
+            for row in rows:
+                raw = row.raw or {}
+                provider = str(raw.get("provider") or "")
+                article_id = str(raw.get("article_id") or "")
+                if provider and article_id and provider != "unknown":
+                    out.append((int(row.id), provider, article_id))
+            return out
+
+        pending = await asyncio.to_thread(_pending)
+        filled = 0
+        for event_id, provider, article_id in pending:
+            try:
+                body = await self._fetch_body(provider, article_id)
+            except Exception:
+                logger.exception("Catch-up reqNewsArticle %s/%s selhal", provider, article_id)
+                continue
+            if body is not None:
+                await asyncio.to_thread(self._store_body, event_id, body)
+                filled += 1
+            await asyncio.sleep(self._spacing_s)
+        if pending:
+            logger.info(
+                "Broker články (#743): catch-up doplnil %d z %d čekajících", filled, len(pending)
+            )
+        return filled
