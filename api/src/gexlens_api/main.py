@@ -1001,6 +1001,11 @@ def _opt_vol_series(
         per_contract = frame.pivot_table(
             index="ts_min", columns=["strike", "right"], values="volume", aggfunc="last"
         )
+        if per_contract.empty:
+            # Extended expirace (#616) zapisují volume=None (flows jsou výhradně
+            # IBKR), takže pivot nad samými NaN je prázdný. Bez téhle stráže
+            # shodí `iloc[0]` celý endpoint včetně dat z IBKR expirací (#827).
+            continue
         increments = per_contract.diff().clip(lower=0.0)
         increments.iloc[0] = 0.0  # první minuta nemá přírůstek
         series = increments.sum(axis=1)
