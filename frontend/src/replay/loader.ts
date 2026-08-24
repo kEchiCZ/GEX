@@ -157,6 +157,10 @@ export interface ReplayInputs {
   putDelta: Float32Array
   callVega: Float32Array
   putVega: Float32Array
+  /** Implikovaná volatilita per buňka (#834): vstup přepočtu gammy pro
+  budoucí okamžiky v projekci. 0 = model IV nedodal. */
+  callIv: Float32Array
+  putIv: Float32Array
   /** Midpoint (bid+ask)/2 per buňka (#469); 0 = kotace chybí. */
   callMid: Float32Array
   putMid: Float32Array
@@ -419,6 +423,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   const deltaColumn = table.getChild('delta')
   const staleColumn = table.getChild('stale_age')
   const vegaColumn = table.getChild('vega') // VEX módy (#201)
+  const ivColumn = table.getChild('iv') // přepočet gammy v projekci (#834)
   const bidColumn = table.getChild('bid') // P/C v prémiích (#469)
   const askColumn = table.getChild('ask')
   if (!tsColumn || !strikeColumn || !rightColumn) {
@@ -458,6 +463,8 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   const callDelta = new Float32Array(size)
   const putDelta = new Float32Array(size)
   const callVega = new Float32Array(size)
+  const callIv = new Float32Array(size)
+  const putIv = new Float32Array(size)
   const putVega = new Float32Array(size)
   const callMid = new Float32Array(size)
   const putMid = new Float32Array(size)
@@ -472,6 +479,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     const volume = Number(volumeColumn?.get(row) ?? 0) || 0
     const delta = Number(deltaColumn?.get(row) ?? 0) || 0
     const vega = Number(vegaColumn?.get(row) ?? 0) || 0
+    const iv = Number(ivColumn?.get(row) ?? 0) || 0
     const bid = Number(bidColumn?.get(row) ?? 0) || 0
     const ask = Number(askColumn?.get(row) ?? 0) || 0
     const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0
@@ -480,12 +488,14 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
       callVolume[index] = volume
       callDelta[index] = delta
       callVega[index] = vega
+      callIv[index] = iv
       callMid[index] = mid
     } else {
       putOi[index] = oi
       putVolume[index] = volume
       putDelta[index] = delta
       putVega[index] = vega
+      putIv[index] = iv
       putMid[index] = mid
     }
     staleAge[index] = Math.max(staleAge[index], Number(staleColumn?.get(row) ?? 0) || 0)
@@ -642,6 +652,8 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     callDelta,
     putDelta,
     callVega,
+    callIv,
+    putIv,
     putVega,
     callMid,
     putMid,
@@ -733,6 +745,8 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   const putDelta = new Float32Array(size)
   const callVega = new Float32Array(size)
   const putVega = new Float32Array(size)
+  const callIv = new Float32Array(size)
+  const putIv = new Float32Array(size)
   const callMid = new Float32Array(size)
   const putMid = new Float32Array(size)
   const staleAge = new Float32Array(size)
@@ -753,6 +767,8 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
       putDelta[to] = inputs.putDelta[from]
       callVega[to] = inputs.callVega[from]
       putVega[to] = inputs.putVega[from]
+      callIv[to] = inputs.callIv[from]
+      putIv[to] = inputs.putIv[from]
       callMid[to] = inputs.callMid[from]
       putMid[to] = inputs.putMid[from]
       staleAge[to] = inputs.staleAge[from]

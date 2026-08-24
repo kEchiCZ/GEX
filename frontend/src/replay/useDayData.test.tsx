@@ -37,6 +37,8 @@ function makeInputs(): ReplayInputs {
     callDelta: new Float32Array([0.5]),
     putDelta: new Float32Array([-0.4]),
     callVega: new Float32Array([0]),
+    callIv: new Float32Array([0]),
+    putIv: new Float32Array([0]),
     putVega: new Float32Array([0]),
     callMid: new Float32Array([0]),
     putMid: new Float32Array([0]),
