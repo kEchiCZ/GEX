@@ -121,8 +121,8 @@ interface LevelsInput {
 interface FlowInput {
   tsIso: string
   cum_delta: number
-  /** CVD podkladu (#829); null = minuta bez dat (běh bez tasty větve). */
-  futures_cvd: number | null
+  /** CVD podkladu (#829); chybí/null = minuta bez dat (běh bez tasty větve). */
+  futures_cvd?: number | null
 }
 interface OiPrevInput {
   strike: number
@@ -231,7 +231,7 @@ export interface LiveMinute {
     final?: boolean
   }
   levels?: Record<string, number | null>
-  flow?: { cum_delta: number; futures_cvd: number | null }
+  flow?: { cum_delta: number; futures_cvd?: number | null }
   /** Dyn GEX profil minuty z WS kanálu gexprofile.* (ADR-0009). */
   gexProfile?: { grid_start: number; grid_step: number; values: number[] }
   /** OI odhady minuty z WS kanálu oiest.* (#232) — jen strany lišící se od měření. */
@@ -1048,7 +1048,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     const minuteIdx = minuteIndex.get(row.tsIso)
     if (minuteIdx !== undefined) {
       cumDeltaByMinute.set(minuteIdx, row.cum_delta)
-      if (row.futures_cvd !== null) cvdByMinute.set(minuteIdx, row.futures_cvd)
+      if (row.futures_cvd != null) cvdByMinute.set(minuteIdx, row.futures_cvd)
     }
   }
   let lastCumDelta = 0
