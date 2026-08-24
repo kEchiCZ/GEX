@@ -2,7 +2,8 @@
 
 Tabulka `oi_eod` se NIKDY nemaže (R4) — repository záměrně nenabízí žádné delete
 API a RetentionJob (issue #12) se jí nesmí dotknout. Zápis je idempotentní upsert
-přes primární klíč (symbol, expiry, strike, right, date).
+přes primární klíč (symbol, expiry, trading_class, strike, right, date) —
+trading_class od #736 rozlišuje weekly/daily série (\"\" = souhrn/legacy).
 
 Od #519 archiv nese vedle OI i denní IV, model greeks, závěrečnou prémii
 a referenční spot — kontrakt je při ranním průchodu stejně subskribovaný,
@@ -30,6 +31,7 @@ from sqlalchemy import (
     inspect,
     select,
     text,
+    tuple_,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -48,6 +50,10 @@ oi_eod_table = Table(
     metadata,
     Column("symbol", String(16), primary_key=True),
     Column("expiry", String(8), primary_key=True),
+    # Série weekly/daily opcí (#736): MES má víc tradingClass se STEJNOU
+    # expirací a bez klíče se jejich OI slévalo. "" = souhrn/legacy (řádky
+    # z doby před migrací) — proto NOT NULL s defaultem, PK nesmí nést NULL.
+    Column("trading_class", String(16), primary_key=True, server_default=""),
     Column("strike", Float, primary_key=True),
     Column("right", String(1), primary_key=True),
     Column("date", Date, primary_key=True),
@@ -89,6 +95,8 @@ class OIRecord:
     vega: float | None = None
     close_prem: float | None = None
     und_price: float | None = None
+    # Série (#736); "" = souhrn/legacy. Na konci kvůli pozičním konstruktorům.
+    trading_class: str = ""
 
 
 @dataclass(frozen=True)
@@ -143,6 +151,37 @@ class OIEodRepository:
     def ensure_schema(self) -> None:
         metadata.create_all(self._engine)
         self._migrate_captured_ts()
+        self._migrate_trading_class()
+
+    def _migrate_trading_class(self) -> None:
+        """Klíč o sérii (#736): ADD COLUMN + přestavba PK — jen PostgreSQL.
+
+        Staré řádky dostanou "" = souhrn přes série (přesně to tehdy zápis
+        ukládal). Sqlite PK přestavět neumí — tam vzniká tabulka vždy čerstvě
+        přes create_all (testy), takže větev chybět nevadí.
+        """
+        inspector = inspect(self._engine)
+        if not inspector.has_table(oi_eod_table.name):
+            return
+        columns = {col["name"] for col in inspector.get_columns(oi_eod_table.name)}
+        if "trading_class" in columns:
+            return
+        with self._engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"ALTER TABLE {oi_eod_table.name} "
+                    "ADD COLUMN trading_class VARCHAR(16) NOT NULL DEFAULT ''"
+                )
+            )
+            if self._engine.dialect.name == "postgresql":
+                conn.execute(text(f"ALTER TABLE {oi_eod_table.name} DROP CONSTRAINT oi_eod_pkey"))
+                conn.execute(
+                    text(
+                        f"ALTER TABLE {oi_eod_table.name} ADD PRIMARY KEY "
+                        "(symbol, expiry, trading_class, strike, right, date)"
+                    )
+                )
+        logger.info("oi_eod: doplněn klíč trading_class (#736) — staré řádky = souhrn ('')")
 
     def _migrate_captured_ts(self) -> None:
         """Aditivní migrace sloupců přidaných po založení tabulky.
@@ -175,6 +214,7 @@ class OIEodRepository:
             {
                 "symbol": r.symbol,
                 "expiry": r.expiry,
+                "trading_class": r.trading_class,
                 "strike": r.strike,
                 "right": r.right,
                 "date": r.day,
@@ -185,7 +225,7 @@ class OIEodRepository:
             for r in records
         ]
         dialect = self._engine.dialect.name
-        primary_key = ["symbol", "expiry", "strike", "right", "date"]
+        primary_key = ["symbol", "expiry", "trading_class", "strike", "right", "date"]
         stmt: Executable
         if dialect == "postgresql":
             pg_stmt = pg_insert(oi_eod_table).values(rows)
@@ -203,6 +243,27 @@ class OIEodRepository:
             raise ValueError(f"Nepodporovaný databázový dialekt pro upsert: {dialect!r}")
         with self._engine.begin() as conn:
             conn.execute(stmt)
+            # Supersede legacy souhrnu (#736, přechodový den migrace): per-class
+            # zápis NAHRAZUJE řádek trading_class='' téhož kontraktu a dne —
+            # jinak by Σ čtení den dvojpočítalo (souhrn + série téhož měření).
+            # Není to mazání historie (R4): dny archivované před migrací se
+            # nikdy znovu nezapisují, takže jejich '' řádky žijí dál.
+            class_keys = {
+                (r.symbol, r.expiry, r.strike, r.right, r.day) for r in records if r.trading_class
+            }
+            if class_keys:
+                conn.execute(
+                    oi_eod_table.delete().where(
+                        oi_eod_table.c.trading_class == "",
+                        tuple_(
+                            oi_eod_table.c.symbol,
+                            oi_eod_table.c.expiry,
+                            oi_eod_table.c.strike,
+                            oi_eod_table.c["right"],
+                            oi_eod_table.c.date,
+                        ).in_(list(class_keys)),
+                    )
+                )
 
     def days(self, symbol: str) -> list[dt.date]:
         stmt = (
@@ -233,16 +294,45 @@ class OIEodRepository:
         return captured if captured.tzinfo is not None else captured.replace(tzinfo=dt.UTC)
 
     def snapshot(self, symbol: str, day: dt.date) -> dict[tuple[str, float, str], float]:
-        """Archivované OI dne podle klíče (expirace, strike, strana) — pro porovnání."""
+        """Archivované OI dne podle klíče (expirace, strike, strana) — pro porovnání.
+
+        Σ přes trading_class (#736): konzument chce celkový OI striku, přesně
+        to, co archiv ukládal před rozlišením sérií.
+        """
+        stmt = (
+            select(
+                oi_eod_table.c.expiry,
+                oi_eod_table.c.strike,
+                oi_eod_table.c["right"],
+                func.sum(oi_eod_table.c.oi).label("oi"),
+            )
+            .where(oi_eod_table.c.symbol == symbol, oi_eod_table.c.date == day)
+            .group_by(oi_eod_table.c.expiry, oi_eod_table.c.strike, oi_eod_table.c["right"])
+        )
+        with self._engine.connect() as conn:
+            return {
+                (row.expiry, float(row.strike), row.right): float(row.oi)
+                for row in conn.execute(stmt)
+            }
+
+    def snapshot_by_class(
+        self, symbol: str, day: dt.date
+    ) -> dict[tuple[str, str, float, str], float]:
+        """OI dne per (expirace, trading_class, strike, strana) — finalita #463.
+
+        Bez agregace: porovnání „změnilo se čtení?" musí srovnávat sérii se
+        sérií; proti Σ přes série by po #736 nikdy nevyšlo shodně.
+        """
         stmt = select(
             oi_eod_table.c.expiry,
+            oi_eod_table.c.trading_class,
             oi_eod_table.c.strike,
             oi_eod_table.c["right"],
             oi_eod_table.c.oi,
         ).where(oi_eod_table.c.symbol == symbol, oi_eod_table.c.date == day)
         with self._engine.connect() as conn:
             return {
-                (row.expiry, float(row.strike), row.right): float(row.oi)
+                (row.expiry, row.trading_class, float(row.strike), row.right): float(row.oi)
                 for row in conn.execute(stmt)
             }
 
@@ -257,13 +347,29 @@ class OIEodRepository:
             result = conn.execute(stmt).scalar_one_or_none()
         return result
 
-    def values_for(self, symbol: str, expiry: str, day: dt.date) -> list[OIRecord]:
-        """Všechny OI záznamy expirace pro daný den (ΔOI vs. předchozí den)."""
-        stmt = select(oi_eod_table.c.strike, oi_eod_table.c.right, oi_eod_table.c.oi).where(
-            oi_eod_table.c.symbol == symbol,
-            oi_eod_table.c.expiry == expiry,
-            oi_eod_table.c.date == day,
+    def values_for(
+        self, symbol: str, expiry: str, day: dt.date, trading_class: str | None = None
+    ) -> list[OIRecord]:
+        """OI záznamy expirace pro daný den (ΔOI, Max Pain).
+
+        Default Σ přes série (#736 — chování před rozlišením); `trading_class`
+        vybere jedinou sérii (datová strana #513).
+        """
+        stmt = (
+            select(
+                oi_eod_table.c.strike,
+                oi_eod_table.c["right"],
+                func.sum(oi_eod_table.c.oi).label("oi"),
+            )
+            .where(
+                oi_eod_table.c.symbol == symbol,
+                oi_eod_table.c.expiry == expiry,
+                oi_eod_table.c.date == day,
+            )
+            .group_by(oi_eod_table.c.strike, oi_eod_table.c["right"])
         )
+        if trading_class is not None:
+            stmt = stmt.where(oi_eod_table.c.trading_class == trading_class)
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
         return [
@@ -278,8 +384,14 @@ class OIEodRepository:
         )
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
-        return [
-            OIRecord(
+        # Agregace přes trading_class (#736): Σ OI, snímkové hodnoty od série
+        # s největším OI — přesně to, co do #736 dělal zápis (write-merge #215),
+        # takže Forward GEX vidí stejná čísla jako nad starou historií.
+        merged: dict[tuple[str, float, str], OIRecord] = {}
+        heaviest: dict[tuple[str, float, str], float] = {}
+        for row in rows:
+            key = (row.expiry, float(row.strike), str(row.right))
+            record = OIRecord(
                 symbol=row.symbol,
                 expiry=row.expiry,
                 strike=float(row.strike),
@@ -294,8 +406,29 @@ class OIEodRepository:
                 close_prem=float(row.close_prem) if row.close_prem is not None else None,
                 und_price=float(row.und_price) if row.und_price is not None else None,
             )
-            for row in rows
-        ]
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = record
+                heaviest[key] = record.oi
+                continue
+            dominant = record if record.oi >= heaviest[key] else existing
+            heaviest[key] = max(heaviest[key], record.oi)
+            merged[key] = OIRecord(
+                symbol=record.symbol,
+                expiry=record.expiry,
+                strike=record.strike,
+                right=record.right,
+                day=record.day,
+                oi=existing.oi + record.oi,
+                iv=dominant.iv,
+                delta=dominant.delta,
+                gamma=dominant.gamma,
+                theta=dominant.theta,
+                vega=dominant.vega,
+                close_prem=dominant.close_prem,
+                und_price=dominant.und_price,
+            )
+        return list(merged.values())
 
     def count_for_day(self, symbol: str, day: dt.date) -> int:
         stmt = (
@@ -312,18 +445,23 @@ class OIEodRepository:
         """OI kontraktu pro daný den; expiry filtr je nutný — archiv od zavedení
         ΔOI drží týž den pro více expirací a bez filtru by dotaz našel víc řádků.
         Bez expiry (starší volání v testech) se bere nejbližší expirace."""
-        stmt = select(oi_eod_table.c.oi).where(
-            oi_eod_table.c.symbol == symbol,
-            oi_eod_table.c.date == day,
-            oi_eod_table.c.strike == strike,
-            oi_eod_table.c.right == right,
+        stmt = (
+            select(oi_eod_table.c.expiry, func.sum(oi_eod_table.c.oi).label("oi"))
+            .where(
+                oi_eod_table.c.symbol == symbol,
+                oi_eod_table.c.date == day,
+                oi_eod_table.c.strike == strike,
+                oi_eod_table.c.right == right,
+            )
+            .group_by(oi_eod_table.c.expiry)
         )
         if expiry is not None:
             stmt = stmt.where(oi_eod_table.c.expiry == expiry)
+        # Σ přes trading_class (#736); bez expiry se bere nejbližší expirace
         stmt = stmt.order_by(oi_eod_table.c.expiry).limit(1)
         with self._engine.connect() as conn:
-            result = conn.execute(stmt).scalar_one_or_none()
-            return float(result) if result is not None else None
+            row = conn.execute(stmt).first()
+            return float(row.oi) if row is not None else None
 
 
 class OIArchiver:
@@ -368,15 +506,16 @@ class OIArchiver:
                             vega=snapshot.vega,
                             close_prem=snapshot.close_prem,
                             und_price=snapshot.und_price,
+                            trading_class=spec.trading_class or "",
                         )
                     )
-        # Dedupe přes klíč archivu (#215): některé podklady (MES) mají víc
-        # tradingClass sérií se STEJNOU expirací a klíč tradingClass nenese —
-        # duplicitní klíč v jedné dávce shodí upsert (CardinalityViolation).
-        # OI sérií se sčítá = celkový open interest na striku.
-        merged: dict[tuple[str, str, float, str], OIRecord] = {}
+        # Dedupe přes klíč archivu (#215 → #736): klíč nově nese trading_class,
+        # takže série se STEJNOU expirací (MES) už se neslévají — každá má svůj
+        # řádek. Merge zůstává jen jako pojistka proti skutečnému duplikátu
+        # (táž série dvakrát v dávce), kde by upsert spadl CardinalityViolation.
+        merged: dict[tuple[str, str, str, float, str], OIRecord] = {}
         for record in records:
-            key = (record.symbol, record.expiry, record.strike, record.right)
+            key = (record.symbol, record.expiry, record.trading_class, record.strike, record.right)
             existing = merged.get(key)
             if existing is None:
                 merged[key] = record
@@ -399,6 +538,7 @@ class OIArchiver:
                     vega=dominant.vega,
                     close_prem=dominant.close_prem,
                     und_price=dominant.und_price,
+                    trading_class=record.trading_class,
                 )
         deduped = list(merged.values())
         if len(deduped) < len(records):
@@ -410,19 +550,29 @@ class OIArchiver:
         # Porovnání s archivem PŘED zápisem (#463): dvě po sobě jdoucí nezměněná
         # čtení znamenají, že IBKR publikaci dokončil a snímek je finální
         previous = (
-            await asyncio.to_thread(self._repository.snapshot, deduped[0].symbol, day)
+            await asyncio.to_thread(self._repository.snapshot_by_class, deduped[0].symbol, day)
             if deduped
             else {}
         )  # prettier-ignore
-        changed = not previous or any(
-            previous.get((r.expiry, r.strike, r.right)) != r.oi for r in deduped
-        )
+
+        def _previous_oi(r: OIRecord) -> float | None:
+            """Hodnota z archivu; legacy '' řádek (před migrací #736) platí jako
+            srovnání pro sérii — u jednoseriových symbolů je to táž hodnota,
+            u víceseriových se Σ od série liší a čtení se korektně obnoví."""
+            exact = previous.get((r.expiry, r.trading_class, r.strike, r.right))
+            if exact is not None:
+                return exact
+            return previous.get((r.expiry, "", r.strike, r.right))
+
+        changed = not previous or any(_previous_oi(r) != r.oi for r in deduped)
         # Kontrakt dřív archivovaný, který teď čtení nedodalo, nejde potvrdit
         # jako nezměněný — neúplné čtení nesmí prohlásit snímek za finální (#494).
         # Trvale chybějící striky (OI bez hodnoty celý den) finalitě nebrání,
         # jinak by se archiv obnovoval donekonečna.
         changed = changed or any(
-            (spec.expiry, spec.strike, spec.right) in previous for spec in missing
+            (spec.expiry, spec.trading_class or "", spec.strike, spec.right) in previous
+            or (spec.expiry, "", spec.strike, spec.right) in previous
+            for spec in missing
         )
         captured_ts = now or dt.datetime.now(dt.UTC)
         await asyncio.to_thread(self._repository.upsert_many, deduped, captured_ts)
