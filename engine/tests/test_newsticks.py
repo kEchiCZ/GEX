@@ -350,7 +350,9 @@ class FakeArticleClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
 
-    async def reqNewsArticleAsync(self, provider: str, article_id: str, _opts=None):
+    async def reqNewsArticleAsync(
+        self, provider: str, article_id: str, _opts: object = None
+    ) -> object:
         self.calls.append((provider, article_id))
         if provider == "DJNL":
             raise RuntimeError("article nedostupný")
@@ -362,7 +364,7 @@ class FakeArticleClient:
         return Article()
 
 
-async def test_article_fetcher_doplni_body_a_neprepisuje(tmp_path) -> None:
+async def test_article_fetcher_doplni_body_a_neprepisuje(tmp_path: Path) -> None:
     from sqlalchemy import create_engine as ce
 
     from gexlens_engine.ibkr.newsticks import ArticleFetcher
