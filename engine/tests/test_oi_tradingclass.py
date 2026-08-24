@@ -1,6 +1,7 @@
 """Testy klíče trading_class v oi_eod (#736) — série se neslévají, čtení Σ."""
 
 import datetime as dt
+from pathlib import Path
 
 from sqlalchemy import create_engine
 
@@ -9,14 +10,14 @@ from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
 DAY = dt.date(2026, 8, 24)
 
 
-def repo(tmp_path):
+def repo(tmp_path: Path) -> OIEodRepository:
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}")
     repository = OIEodRepository(engine)
     repository.ensure_schema()
     return repository
 
 
-def test_dve_serie_teze_expirace_maji_vlastni_radky(tmp_path) -> None:
+def test_dve_serie_teze_expirace_maji_vlastni_radky(tmp_path: Path) -> None:
     """AC #736: CardinalityViolation z #215 se nevrací a série se rozlišují."""
     repository = repo(tmp_path)
     repository.upsert_many(
@@ -33,7 +34,7 @@ def test_dve_serie_teze_expirace_maji_vlastni_radky(tmp_path) -> None:
     assert len(per_class) == 1 and per_class[0].oi == 100.0  # datová strana #513
 
 
-def test_chain_for_day_agreguje_jako_stary_zapis(tmp_path) -> None:
+def test_chain_for_day_agreguje_jako_stary_zapis(tmp_path: Path) -> None:
     """Forward GEX: Σ OI, snímek od série s větším OI (zrcadlo write-merge #215)."""
     repository = repo(tmp_path)
     repository.upsert_many(
@@ -50,7 +51,7 @@ def test_chain_for_day_agreguje_jako_stary_zapis(tmp_path) -> None:
     assert chain[0].iv == 0.2  # dominantní série (větší OI)
 
 
-def test_snapshot_a_values_scitaji(tmp_path) -> None:
+def test_snapshot_a_values_scitaji(tmp_path: Path) -> None:
     repository = repo(tmp_path)
     repository.upsert_many(
         [
