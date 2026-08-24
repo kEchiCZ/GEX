@@ -59,6 +59,26 @@ async def test_feature_log_writes_minute_rows(tmp_path: Path) -> None:
     assert row["atr"] is None
 
 
+async def test_feature_log_atr_po_plne_historii(tmp_path: Path) -> None:
+    """Regrese na deque slicing: ATR spadl až s historií > lookback (#796).
+
+    Krátká historie prošla přes časný `return None` v average_true_range,
+    takže původní testy bug neviděly — produkce padala každou minutu.
+    """
+    engine, settings = make_engine(tmp_path)
+    runtime = cast(EngineRuntime, FakeRuntime())
+
+    for i in range(16):
+        await engine.on_minute(
+            TS + dt.timedelta(minutes=i), 7505, [bar(7505, 7506, 7504, 7505)], runtime
+        )
+
+    path = settings.derived_dir / "ES" / "features" / f"{TS.date().isoformat()}.parquet"
+    rows = pq.read_table(path).to_pylist()
+    assert len(rows) == 16  # žádná minuta nespadla
+    assert rows[-1]["atr"] is not None and rows[-1]["atr"] > 0  # plná historie → ATR
+
+
 async def test_feature_log_upserts_same_minute(tmp_path: Path) -> None:
     """Restart uprostřed dne nesmí vyrobit duplicitní řádek téže minuty."""
     engine, settings = make_engine(tmp_path)
