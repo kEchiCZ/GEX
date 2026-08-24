@@ -132,6 +132,37 @@ test('CVD podkladu je druhá řada panelu, bez dat se nekreslí (#829)', () => {
   ).not.toBeNull()
 })
 
+test('kotva seance: levý okraj osy není nula a panel to přizná (#829)', () => {
+  const vis = {
+    vol: false,
+    optVol: false,
+    delta: true,
+    deltaFlow: false,
+    evoOi: false,
+    sentiment: false,
+  }
+  const { rerender } = render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={{ ...DATA, cumDelta: [-16109, -14000, -12000, -9000] }}
+        visible={vis}
+        width={400}
+      />
+    </CrosshairProvider>,
+  )
+  // Kumulativ běží od Globex open (22:00 UTC), osa začíná půlnocí — bez
+  // přiznání by se výchylka četla proti nule, která na grafu není
+  expect(screen.getByTestId('cumdelta-anchor').textContent).toContain('-16')
+
+  // Den, který začíná od nuly, popisek nemá
+  rerender(
+    <CrosshairProvider>
+      <BottomPanels data={{ ...DATA, cumDelta: [0, 50, -100, 200] }} visible={vis} width={400} />
+    </CrosshairProvider>,
+  )
+  expect(screen.queryByTestId('cumdelta-anchor')).toBeNull()
+})
+
 test('vypnutí panelu přeskládá layout (AC)', () => {
   const { rerender } = renderPanels()
   expect(screen.getAllByRole('region')).toHaveLength(3)
