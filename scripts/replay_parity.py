@@ -94,7 +94,14 @@ def compare(live: pd.DataFrame, replay: pd.DataFrame) -> None:
         f"(jen živě {only_live}, jen replay {only_replay})"
     )
     print(f"{'sloupec':<20} {'shoda':>7}  {'max |Δ|':>12}  pozn.")
-    columns = [*DIRECT_FIELDS, "gex_regime", "atr", "band_sharpness", "band_sharpness_pct", "band_depth"]  # fmt: skip
+    columns = [
+        *DIRECT_FIELDS,
+        "gex_regime",
+        "atr",
+        "band_sharpness",
+        "band_sharpness_pct",
+        "band_depth",
+    ]
     for name in columns:
         a, b = merged[f"{name}_live"], merged[f"{name}_replay"]
         if name == "gex_regime":
