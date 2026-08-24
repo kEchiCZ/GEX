@@ -169,7 +169,7 @@ def extended_streamers(
     planned: list[str],
     *,
     center: float | None,
-    band_points: float,
+    band_pct: float,
 ) -> set[str]:
     """Streamer symboly extended expirací omezené pásmem kolem ceny (#616).
 
@@ -177,6 +177,8 @@ def extended_streamers(
     šířka chainu ≈ 7 400 symbolů jen ES (změřený strop je 6 008/subskripci,
     ADR-0027) — server pak tiše nedodá nic a extended mlčí. ±band kolem
     spotu drží počty ~4–5 tis. a je konzistentní s IBKR obálkou (ADR-0002).
+    Pásmo je v % ceny podkladu, ne v bodech: absolutní šířka by na NQ
+    (cena ~4× ES) ořezala křídla na zlomek ES pokrytí (lekce ADR-0004).
     `center=None` (spot ještě není) → medián striků nejbližší plánované
     expirace jako náhrada; chain je kolem trhu, medián sedí na desítky bodů.
     """
@@ -187,6 +189,7 @@ def extended_streamers(
         center = strikes[len(strikes) // 2] if strikes else None
     if center is None:
         return set()
+    band_points = center * band_pct / 100.0
     return {
         streamer
         for (expiry, strike, _right), streamer in chain.by_contract.items()

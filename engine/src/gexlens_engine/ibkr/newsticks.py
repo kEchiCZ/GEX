@@ -394,6 +394,24 @@ class ArticleFetcher:
         self._ib = ib
         self._db = db
         self._spacing_s = spacing_s
+        # Jedna fronta pro živé i catch-up requesty: dávka headlines by jinak
+        # odpálila N souběžných reqNewsArticle a rozestup by nic nerozestoupil
+        self._lock = asyncio.Lock()
+
+    async def _fetch_and_store(self, event_id: int, provider: str, article_id: str) -> bool:
+        """Jeden článek: request → uložení. Rozestup drží i chybové cesty."""
+        async with self._lock:
+            try:
+                body = await self._fetch_body(provider, article_id)
+                if body is None:
+                    return False
+                await asyncio.to_thread(self._store_body, event_id, body)
+                return True
+            finally:
+                # Uvnitř zámku a ve finally: rozestup platí napříč souběžnými
+                # volajícími a nepřeskočí ho výjimka ani prázdné tělo — chybová
+                # dávka by jinak retry-hammerovala bez rozestupu
+                await asyncio.sleep(self._spacing_s)
 
     async def _fetch_body(self, provider: str, article_id: str) -> str | None:
         article = await self._ib.reqNewsArticleAsync(provider, article_id, [])
@@ -420,20 +438,15 @@ class ArticleFetcher:
             if not provider or not article_id or provider == "unknown":
                 continue
             try:
-                body = await self._fetch_body(provider, article_id)
+                filled += await self._fetch_and_store(stored.id, provider, article_id)
             except Exception:
-                # Jeden nedostupný článek nesmí vzít další — titulek už v DB je
+                # Jeden nedostupný článek (či výpadek DB při ukládání) nesmí
+                # vzít další — titulek už v DB je, body doplní příští catch-up
                 logger.exception("reqNewsArticle %s/%s selhal", provider, article_id)
-                continue
-            if body is None:
-                continue
-            await asyncio.to_thread(self._store_body, stored.id, body)
-            filled += 1
-            await asyncio.sleep(self._spacing_s)
         return filled
 
     async def catch_up(self, limit: int = 1000) -> int:
-        """Doplní články historickým broker headlines bez body (jednou po connectu).
+        """Doplní články historickým broker headlines bez body (po každém connectu).
 
         Pokrývá i zápisy z minutové pojistky a všech předchozích běhů — 436
         eventů z doby před #743 se tím doplní samo.
@@ -460,14 +473,11 @@ class ArticleFetcher:
         filled = 0
         for event_id, provider, article_id in pending:
             try:
-                body = await self._fetch_body(provider, article_id)
+                filled += await self._fetch_and_store(event_id, provider, article_id)
             except Exception:
+                # Chyba jednoho článku (request i uložení) nesmí utnout
+                # zbytek fronty — nevyplněné dožene příští catch-up
                 logger.exception("Catch-up reqNewsArticle %s/%s selhal", provider, article_id)
-                continue
-            if body is not None:
-                await asyncio.to_thread(self._store_body, event_id, body)
-                filled += 1
-            await asyncio.sleep(self._spacing_s)
         if pending:
             logger.info(
                 "Broker články (#743): catch-up doplnil %d z %d čekajících", filled, len(pending)

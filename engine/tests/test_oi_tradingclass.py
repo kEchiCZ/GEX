@@ -5,7 +5,14 @@ from pathlib import Path
 
 from sqlalchemy import create_engine
 
-from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
+from gexlens_engine.config import Settings
+from gexlens_engine.ibkr.discovery import OptionContractSpec
+from gexlens_engine.storage.oi_archive import (
+    ContractSnapshot,
+    OIArchiver,
+    OIEodRepository,
+    OIRecord,
+)
 
 DAY = dt.date(2026, 8, 24)
 
@@ -63,3 +70,56 @@ def test_snapshot_a_values_scitaji(tmp_path: Path) -> None:
     assert repository.snapshot("MES", DAY) == {("20260824", 6400.0, "P"): 15.0}
     values = repository.values_for("MES", "20260824", DAY)
     assert len(values) == 1 and values[0].oi == 15.0
+
+
+def _spec(trading_class: str) -> OptionContractSpec:
+    return OptionContractSpec(
+        symbol="MES",
+        sec_type="FOP",
+        expiry="20260824",
+        strike=6400.0,
+        right="C",
+        exchange="CME",
+        trading_class=trading_class,
+        multiplier="5",
+    )
+
+
+class _Fetcher:
+    """OI per série; série mimo mapu nedodá (missing)."""
+
+    def __init__(self, values: dict[str, float]) -> None:
+        self._values = values
+
+    async def fetch_snapshot(
+        self, spec: OptionContractSpec, timeout_s: float
+    ) -> ContractSnapshot | None:
+        oi = self._values.get(spec.trading_class or "")
+        return None if oi is None else ContractSnapshot(oi=oi)
+
+
+async def test_prechodovy_den_neuplne_cteni_nechava_souhrn(tmp_path: Path) -> None:
+    """Supersede legacy '' řádku smí proběhnout AŽ po úplném per-class čtení.
+
+    Chybějící sesterská série nesmí smazat souhrn (nevratná ztráta jejího Σ
+    příspěvku) a snímek nesmí být finální — čtení se má obnovovat dál.
+    """
+    repository = repo(tmp_path)
+    # Předmigrační zápis dne: souhrn E1A 100 + EX1 40 jako jeden '' řádek
+    repository.upsert_many([OIRecord("MES", "20260824", 6400.0, "C", DAY, 140.0)])
+
+    # Po nasazení #736: E1A dodá, EX1 vypadne (timeout)
+    partial = OIArchiver(repository, _Fetcher({"E1A": 100.0}), Settings())
+    result = await partial.archive_day([_spec("E1A"), _spec("EX1")], DAY)
+
+    assert result.missing == (_spec("EX1"),)
+    assert result.changed is True  # neúplné čtení nesmí snímek finalizovat
+    legacy = repository.values_for("MES", "20260824", DAY, trading_class="")
+    assert len(legacy) == 1 and legacy[0].oi == 140.0  # souhrn přežil
+
+    # Další průchod: obě série dodají → úplné čtení souhrn nahradí
+    complete = OIArchiver(repository, _Fetcher({"E1A": 100.0, "EX1": 40.0}), Settings())
+    await complete.archive_day([_spec("E1A"), _spec("EX1")], DAY)
+
+    assert repository.values_for("MES", "20260824", DAY, trading_class="") == []
+    assert repository.get_oi("MES", DAY, 6400.0, "C") == 140.0  # Σ per-class, bez dvojpočtu
