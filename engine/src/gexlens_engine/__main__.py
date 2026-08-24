@@ -358,10 +358,21 @@ async def _start_broker_news(
         if article_fetcher is not None and written:
             await article_fetcher.fetch_for(written)
 
+    store_tasks: set[asyncio.Task[None]] = set()
+
+    def _report_store(task: asyncio.Task[None]) -> None:
+        store_tasks.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            # Bez callbacku by pád zápisu (např. restart PG) skončil jen
+            # „Task exception was never retrieved" při GC — tichá ztráta
+            logger.error("Zápis broker headline selhal: %r", task.exception())
+
     def on_news_tick(tick: NewsTickLike) -> None:
         # Zápis do DB je blokující; z handleru se jen odpálí úloha, ať se
-        # nebrzdí síťová smyčka ib_async
-        asyncio.create_task(store(tick, dt.datetime.now(dt.UTC)))
+        # nebrzdí síťová smyčka ib_async. Reference se drží (RUF006).
+        task = asyncio.create_task(store(tick, dt.datetime.now(dt.UTC)))
+        store_tasks.add(task)
+        task.add_done_callback(_report_store)
 
     ib.tickNewsEvent += on_news_tick
     manager.on_resubscribe(resubscribe_news)
@@ -1022,18 +1033,29 @@ async def main() -> None:
         await asyncio.to_thread(ensure_sentiment_schema, db)
         news_ticks = NewsTickCollector(db)
         # Plné znění článků (#743): živé headlines hned po pushi, historie
-        # (vč. 436 eventů z doby před #743) jednorázovým catch-upem na pozadí
+        # (vč. eventů z doby před #743 a z výpadků) catch-upem po KAŽDÉM
+        # (re)connectu — jednorázová kontrola při startu by při startu bez
+        # TWS (#756) nechala backlog neplněný do konce běhu procesu
         article_fetcher = ArticleFetcher(ib, db) if settings.ibkr_news_articles_enabled else None
         await _start_broker_news(ib, manager, news_ticks, publisher, article_fetcher)
-        if article_fetcher is not None and manager.state is ConnectionState.CONNECTED:
-            # Reference se drží (RUF006); výjimku hlásí callback, ne tiché zmizení
-            article_catch_up = asyncio.create_task(article_fetcher.catch_up())
+        if article_fetcher is not None:
+            fetcher = article_fetcher
 
             def _report_catch_up(task: asyncio.Task[int]) -> None:
                 if not task.cancelled() and task.exception() is not None:
                     logger.error("Catch-up článků selhal: %r", task.exception())
 
-            article_catch_up.add_done_callback(_report_catch_up)
+            async def _article_catch_up() -> None:
+                nonlocal article_catch_up
+                if article_catch_up is not None and not article_catch_up.done():
+                    return  # předchozí catch-up ještě běží — druhý nefrontovat
+                # Reference se drží (RUF006); výjimku hlásí callback
+                article_catch_up = asyncio.create_task(fetcher.catch_up())
+                article_catch_up.add_done_callback(_report_catch_up)
+
+            manager.on_resubscribe(_article_catch_up)
+            if manager.state is ConnectionState.CONNECTED:
+                await _article_catch_up()
 
     retention = RetentionJob(settings)
     last_purge_date: dt.date | None = None
@@ -1372,7 +1394,7 @@ async def main() -> None:
                                 chain,
                                 planned,
                                 center=spot_price if spot_fresh else None,
-                                band_points=settings.tasty_extended_band_points,
+                                band_pct=settings.tasty_extended_band_pct,
                             )
                         # Podklad (#614): bez něj by při výpadku IBKR zamrzl
                         # cenový graf, i kdyby řetěz z tasty tekl dál

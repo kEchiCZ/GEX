@@ -141,12 +141,12 @@ def report(symbol: str, frame: pd.DataFrame) -> None:
                 continue
             label = "nad zdí " if above else "pod/uvnitř"
             control = group.control_pts.dropna()
+            # Chybějící kontrola nesmí zahodit celý řádek — jen její sloupec
+            control_txt = f"{control.mean():+8.2f}" if len(control) else "       —"
             print(
                 f"T-{hours}h  {label}  {len(group):>3}   {group.drift_pts.mean():+8.2f}   "
                 f"{group.drift_atr.mean():+6.2f}   {(group.drift_pts > 0).mean():5.0%}   "
-                f"{control.mean():+8.2f}"
-                if len(control)
-                else ""
+                f"{control_txt}"
             )
     # Kontrast B: terciliy dávky na okně T-4 (jen skupina nad zdí)
     dose = frame[(frame.window_h == 4) & frame.above & frame.put_share.notna()].copy()

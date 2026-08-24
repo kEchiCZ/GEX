@@ -175,6 +175,13 @@ async def test_migrace_doplni_captured_ts_stare_tabulce(tmp_path: Path) -> None:
     assert repo.get_oi("ES", DAY_1, 7600.0, "C") == 123.0
     assert repo.captured_at("ES", DAY_1) is None
 
+    # Přestavěný PK (#736): upsert přes 6sloupcový klíč musí na staré sqlite
+    # tabulce projít — bez rebuild migrace by ON CONFLICT nenašel constraint
+    record = OIRecord("ES", "20260716", 7600.0, "C", DAY_1, 200.0, trading_class="E1A")
+    repo.upsert_many([record])
+    repo.upsert_many([OIRecord("ES", "20260716", 7600.0, "C", DAY_1, 210.0, trading_class="E1A")])
+    assert repo.get_oi("ES", DAY_1, 7600.0, "C") == 123.0 + 210.0  # '' + série, idempotentně
+
 
 async def test_duplicate_series_merged_by_sum(repository: OIEodRepository) -> None:
     """#215 → #736: série téže expirace mají VLASTNÍ řádky, čtení je sčítá.

@@ -15,7 +15,7 @@ o likviditě — rozhodnutí uživatele 13. 8. 2026).
 import asyncio
 import datetime as dt
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -154,11 +154,13 @@ class OIEodRepository:
         self._migrate_trading_class()
 
     def _migrate_trading_class(self) -> None:
-        """Klíč o sérii (#736): ADD COLUMN + přestavba PK — jen PostgreSQL.
+        """Klíč o sérii (#736): ADD COLUMN + přestavba PK.
 
         Staré řádky dostanou "" = souhrn přes série (přesně to tehdy zápis
-        ukládal). Sqlite PK přestavět neumí — tam vzniká tabulka vždy čerstvě
-        přes create_all (testy), takže větev chybět nevadí.
+        ukládal). PostgreSQL přestaví PK in-place; sqlite ALTER PK neumí,
+        tam se tabulka přestaví přes rename+copy — bez toho by na trvalé
+        dev databázi upsert (ON CONFLICT přes 6sloupcový klíč) padal na
+        původním 5sloupcovém PK.
         """
         inspector = inspect(self._engine)
         if not inspector.has_table(oi_eod_table.name):
@@ -175,12 +177,27 @@ class OIEodRepository:
             )
             if self._engine.dialect.name == "postgresql":
                 conn.execute(text(f"ALTER TABLE {oi_eod_table.name} DROP CONSTRAINT oi_eod_pkey"))
+                # "right" je v PG rezervované slovo — bez uvozovek je DDL
+                # syntax error a celá migrace by se při startu odrollovala
                 conn.execute(
                     text(
                         f"ALTER TABLE {oi_eod_table.name} ADD PRIMARY KEY "
-                        "(symbol, expiry, trading_class, strike, right, date)"
+                        '(symbol, expiry, trading_class, strike, "right", date)'
                     )
                 )
+            else:
+                # _migrate_captured_ts běží dřív, takže tabulka už má všechny
+                # sloupce metadat — kopie jmenovaným výčtem je úplná
+                names = ", ".join(f'"{c.name}"' for c in oi_eod_table.columns)
+                conn.execute(text(f"ALTER TABLE {oi_eod_table.name} RENAME TO oi_eod_migrating"))
+                oi_eod_table.create(conn)
+                conn.execute(
+                    text(
+                        f"INSERT INTO {oi_eod_table.name} ({names}) "
+                        f"SELECT {names} FROM oi_eod_migrating"
+                    )
+                )
+                conn.execute(text("DROP TABLE oi_eod_migrating"))
         logger.info("oi_eod: doplněn klíč trading_class (#736) — staré řádky = souhrn ('')")
 
     def _migrate_captured_ts(self) -> None:
@@ -243,27 +260,34 @@ class OIEodRepository:
             raise ValueError(f"Nepodporovaný databázový dialekt pro upsert: {dialect!r}")
         with self._engine.begin() as conn:
             conn.execute(stmt)
-            # Supersede legacy souhrnu (#736, přechodový den migrace): per-class
-            # zápis NAHRAZUJE řádek trading_class='' téhož kontraktu a dne —
-            # jinak by Σ čtení den dvojpočítalo (souhrn + série téhož měření).
-            # Není to mazání historie (R4): dny archivované před migrací se
-            # nikdy znovu nezapisují, takže jejich '' řádky žijí dál.
-            class_keys = {
-                (r.symbol, r.expiry, r.strike, r.right, r.day) for r in records if r.trading_class
-            }
-            if class_keys:
-                conn.execute(
-                    oi_eod_table.delete().where(
-                        oi_eod_table.c.trading_class == "",
-                        tuple_(
-                            oi_eod_table.c.symbol,
-                            oi_eod_table.c.expiry,
-                            oi_eod_table.c.strike,
-                            oi_eod_table.c["right"],
-                            oi_eod_table.c.date,
-                        ).in_(list(class_keys)),
-                    )
+
+    def supersede_legacy(self, keys: Iterable[tuple[str, str, float, str, dt.date]]) -> None:
+        """Nahrazení legacy souhrnu ('' z doby před #736) per-class čtením.
+
+        Volá se JEN pro kontrakty, jejichž všechny série v průchodu dodaly
+        (OIArchiver.archive_day) — smazání souhrnu při chybějící sesterské
+        sérii by nevratně ztratilo její Σ příspěvek a finalita by ztrátu
+        zamkla. Není to mazání historie (R4): dny archivované před migrací
+        se znovu nezapisují a jejich '' řádky žijí dál; maže se jen souhrn
+        dne, který právě nahradilo ÚPLNÉ per-class měření téže publikace —
+        jinak by Σ čtení den dvojpočítalo (souhrn + série téhož měření).
+        """
+        key_list = list(keys)
+        if not key_list:
+            return
+        with self._engine.begin() as conn:
+            conn.execute(
+                oi_eod_table.delete().where(
+                    oi_eod_table.c.trading_class == "",
+                    tuple_(
+                        oi_eod_table.c.symbol,
+                        oi_eod_table.c.expiry,
+                        oi_eod_table.c.strike,
+                        oi_eod_table.c["right"],
+                        oi_eod_table.c.date,
+                    ).in_(key_list),
                 )
+            )
 
     def days(self, symbol: str) -> list[dt.date]:
         stmt = (
@@ -576,6 +600,19 @@ class OIArchiver:
         )
         captured_ts = now or dt.datetime.now(dt.UTC)
         await asyncio.to_thread(self._repository.upsert_many, deduped, captured_ts)
+        # Supersede legacy souhrnu (#736, přechodový den migrace) — ale AŽ
+        # když všechny série kontraktu dodaly: při chybějící sérii souhrn ''
+        # zůstává (dočasné Σ dvojpočítání na přechodový den je menší zlo než
+        # nevratná ztráta jejího příspěvku) a jeho přítomnost v `previous`
+        # drží snímek nefinální, takže se čtení obnovuje, dokud série nedodá.
+        missing_keys = {(s.symbol, s.expiry, s.strike, s.right) for s in missing}
+        complete_keys = {
+            (r.symbol, r.expiry, r.strike, r.right, r.day)
+            for r in deduped
+            if r.trading_class and (r.symbol, r.expiry, r.strike, r.right) not in missing_keys
+        }
+        if complete_keys:
+            await asyncio.to_thread(self._repository.supersede_legacy, complete_keys)
         if missing:
             logger.warning("OI archivace %s: %d kontraktů bez OI", day, len(missing))
         return ArchiveResult(written=len(deduped), missing=tuple(missing), changed=changed)

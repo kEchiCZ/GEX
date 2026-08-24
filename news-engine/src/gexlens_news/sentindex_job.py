@@ -165,6 +165,10 @@ class SentIndexJob:
         today = dt.datetime.now(dt.UTC).date()
         updates: list[tuple[dt.date, float, float]] = []
         for i, row in enumerate(rows):
+            if row.sigma is not None and row.date != today:
+                # Historie je immutabilní — jednou dopočtený řádek se už
+                # nepřepočítává (ustálený stav = O(1) práce na běh, ne O(n×100))
+                continue
             window = closes[max(0, i - 100) : i]  # bez aktuálního dne
             if len(window) < 30:
                 continue
@@ -172,9 +176,6 @@ class SentIndexJob:
             sigma = (sum((v - mean) ** 2 for v in window) / len(window)) ** 0.5
             if sigma <= 0:
                 continue
-            already = row.sigma is not None and abs(float(row.sigma) - sigma) < 1e-12
-            if already and row.date != today:
-                continue  # historie už dopočtená — přepočítává se jen dnešek
             updates.append((row.date, sigma, closes[i] / sigma))
         if not updates:
             return 0

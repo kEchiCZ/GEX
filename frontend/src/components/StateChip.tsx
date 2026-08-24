@@ -27,7 +27,11 @@ export function Sparkline({ series, sigma }: { series: SentimentPoint[]; sigma?:
   if (series.length < 2) return <p className="muted">Dnešní index zatím nemá data</p>
   const scale = sigma && sigma > 0 ? sigma : 1
   const values = series.map((point) => point.value / scale)
-  const max = Math.max(...values.map(Math.abs), 0.01)
+  // Pevné měřítko osy v σ: bez dna by následná max-normalizace dělení σ
+  // přesně vyrušila (klidný a divoký den by kreslily identickou křivku).
+  // Dno 3σ — klidný den je malá vlnka, čára u kraje = seance ≥ 3 σ.
+  const max =
+    scale === 1 ? Math.max(...values.map(Math.abs), 0.01) : Math.max(...values.map(Math.abs), 3)
   const stepX = width / (series.length - 1)
   const y = (value: number) => height / 2 - (value / max) * (height / 2 - 2)
   const points = values.map((value, index) => `${(index * stepX).toFixed(1)},${y(value).toFixed(1)}`) // prettier-ignore

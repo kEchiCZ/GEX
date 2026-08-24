@@ -106,13 +106,22 @@ def test_extended_streamers_pasmo_a_fallback_centra() -> None:
     }
     chain = ChainSymbols(product="ES", day=TODAY, by_contract=by_contract)
 
-    # Se spotem: jen striky v pásmu
-    subset = extended_streamers(chain, ["20260826"], center=6500.0, band_points=200.0)
+    # Se spotem: jen striky v pásmu (±3,1 % z 6500 = ±201,5 b)
+    subset = extended_streamers(chain, ["20260826"], center=6500.0, band_pct=3.1)
     assert subset == {".ES6300C", ".ES6400C", ".ES6500C", ".ES6600C", ".ES6700C"}
 
-    # Bez spotu: centrum = medián striků nejbližší expirace (6500)
-    fallback = extended_streamers(chain, ["20260826"], center=None, band_points=100.0)
+    # Bez spotu: centrum = medián striků nejbližší expirace (6500), ±1,6 % = ±104 b
+    fallback = extended_streamers(chain, ["20260826"], center=None, band_pct=1.6)
     assert fallback == {".ES6400C", ".ES6500C", ".ES6600C"}
 
     # Neplánovaná expirace = nic
-    assert extended_streamers(chain, [], center=6500.0, band_points=200.0) == set()
+    assert extended_streamers(chain, [], center=6500.0, band_pct=3.1) == set()
+
+    # Procentní pásmo škáluje s cenou podkladu (NQ ~4× ES; absolutní body by
+    # křídla NQ ořezaly na čtvrtinu relativního pokrytí — lekce ADR-0004)
+    nq_contracts = {
+        ("20260826", float(strike), "C"): f".NQ{strike}C" for strike in range(24000, 28001, 400)
+    }
+    nq_chain = ChainSymbols(product="NQ", day=TODAY, by_contract=nq_contracts)
+    nq = extended_streamers(nq_chain, ["20260826"], center=26000.0, band_pct=3.1)
+    assert nq == {".NQ25200C", ".NQ25600C", ".NQ26000C", ".NQ26400C", ".NQ26800C"}
