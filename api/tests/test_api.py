@@ -5,6 +5,7 @@ import datetime as dt
 import io
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -238,6 +239,31 @@ def test_flow_endpoint_series(client: TestClient) -> None:
     # Minutový přírůstek: Σ volume roste o 10*(i+1) na C i P → 10+10+20+20+30+30 = 120
     assert opt_vol[1]["opt_vol"] == pytest.approx(120.0)
     assert [row["vol"] for row in payload["vol"]] == [1000.0, 1000.0, 1000.0]
+
+
+def test_flow_endpoint_prezije_extended_partici_bez_volume(
+    settings: Settings, client: TestClient
+) -> None:
+    """#827: extended expirace (#616) mají volume=None — nesmí shodit celý endpoint.
+
+    Pivot nad samými NaN je prázdný a `iloc[0]` na něm padal IndexErrorem,
+    takže jediná extended partice vzala i data z IBKR expirací.
+    """
+    writer = SnapshotWriter(settings)
+    for minute in range(MINUTES):
+        rows = [
+            replace(row, volume=None)  # přesně tvar zápisu extended snímku
+            for row in snapshot_rows(minute)
+        ]
+        writer.write_minute("ES", "20260918", DAY, rows)
+
+    response = client.get("/flow/ES", params={"date": DAY.isoformat()})
+
+    assert response.status_code == 200
+    payload = response.json()
+    # Řada z IBKR expirace zůstává nedotčená — extended partice se jen přeskočí
+    assert payload["opt_vol"][1]["opt_vol"] == pytest.approx(120.0)
+    assert [row["cum_delta"] for row in payload["flow"]] == [50.0, 100.0, 150.0]
 
 
 def test_replay_bundle(client: TestClient) -> None:
