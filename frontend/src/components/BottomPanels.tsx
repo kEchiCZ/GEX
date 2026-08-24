@@ -17,6 +17,7 @@ import {
   CUM_DELTA_PAD,
   barHeights,
   cumDeltaAreas,
+  cvdLinePoints,
   evoOiDisplay,
   evoOiStepPath,
   sentimentCandleGeometry,
@@ -31,6 +32,10 @@ export interface PanelSeries {
   optVolCall: number[]
   optVolPut: number[]
   cumDelta: number[]
+  /** CVD podkladu (#829): kumulativní tok ve futures (agresivní nákupy −
+  prodeje), druhá řada téhož panelu. null v minutě = data chybí (bez tasty
+  větve); prázdné/chybějící pole = řada se nekreslí vůbec. */
+  futuresCvd?: (number | null)[]
   /** Delta-vážený opční tok per strana (|Δ| × přírůstek volume) — čtení C/P aktivity. */
   deltaFlowCall: number[]
   deltaFlowPut: number[]
@@ -114,6 +119,9 @@ const COLORS = {
   // Svíčky sentimentu (#296): plné barvy shodné s cenovými svíčkami (SPEC 7.1)
   candleUp: '#3ecf8e',
   candleDown: '#f0616d',
+  // CVD podkladu (#829): studený odstín, ať se linka neplete s C/P barvami
+  // opčního toku — jsou to různé veličiny, ne dvě strany téže
+  cvd: '#8ab4f8',
 }
 
 function usePanelPointer(minutes: number, width: number, time: TimeTransform) {
@@ -555,10 +563,26 @@ function BottomPanelsBase({
     const height = heightOf('delta')
     const rangeDim = rangeDimFor(height)
     const areas = cumDeltaAreas(data.cumDelta, minutes * step, height)
+    const cvdSeries = data.futuresCvd ?? []
+    const cvdAt = (index: number) => cvdSeries[index] ?? null
+    const cvdPoints = cvdLinePoints(cvdSeries, minutes * step, height)
+    const hasCvd = cvdPoints.length > 0
     panels.push(
       <section key="cumdelta" className="bottom-panel" aria-label="Cum Δ panel">
         <span className="panel-title muted">
-          Cum Δ
+          <span title="Delta-vážený tok OPČNÍCH obchodů (Σ znaménko × size × Δ × multiplikátor) — ne tok v podkladu">
+            Opt Δ
+          </span>
+          {hasCvd && (
+            <span
+              className="panel-title-cvd"
+              data-testid="cvd-legend"
+              title="CVD podkladu: agresivní nákupy − prodeje ve futures (#829). Vlastní měřítko — čte se tvar a strana od nuly, ne výška."
+            >
+              {' '}
+              · CVD podkladu
+            </span>
+          )}
           {/* Den nezačíná od začátku seance (#518): měření běží až od startu
           enginu — decentní přiznání v legendě, detail v tooltipu */}
           {data.cumDeltaFromIso && (
@@ -571,7 +595,14 @@ function BottomPanelsBase({
             </span>
           )}
         </span>
-        {idx !== null && <PanelValue>{fmtSigned(data.cumDelta[idx])}</PanelValue>}
+        {idx !== null && (
+          <PanelValue>
+            {fmtSigned(data.cumDelta[idx])}
+            {hasCvd && cvdAt(idx) !== null && (
+              <span className="panel-value-cvd"> · CVD {fmtSigned(cvdAt(idx) as number)}</span>
+            )}
+          </PanelValue>
+        )}
         {axisValue('cumdelta', cumPeak, true, height)}
         <svg
           width={width}
@@ -592,6 +623,18 @@ function BottomPanelsBase({
           <g transform={transform}>
             <polygon points={areas.positive} fill={COLORS.positive} data-part="cumdelta-positive" />
             <polygon points={areas.negative} fill={COLORS.negative} data-part="cumdelta-negative" />
+            {/* CVD podkladu (#829) přes plochu opčního toku — rozchod obou
+            řad je informace, kterou ani jedna sama nedá */}
+            {hasCvd && (
+              <polyline
+                points={cvdPoints}
+                fill="none"
+                stroke={COLORS.cvd}
+                strokeWidth={1.5}
+                data-part="cumdelta-cvd"
+                data-testid="cumdelta-cvd"
+              />
+            )}
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>

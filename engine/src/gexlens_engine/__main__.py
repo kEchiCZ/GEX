@@ -26,6 +26,7 @@ from gexlens_engine.adapters import (
     count_ib_lines,
 )
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.diagnostics import install_stack_dump
@@ -534,6 +535,7 @@ async def create_pipeline(
         Callable[[Sequence[OptionContractSpec]], dict[OptionContractSpec, CachedQuote] | None]
         | None
     ) = None,
+    futures_cvd: FuturesCvdTracker | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
     # Provider (#613): svazek datových zdrojů; default = IBKR (jediný zapojený
@@ -752,6 +754,7 @@ async def create_pipeline(
         multiplier=multiplier,
         contracts=contracts,
         cum_delta=CumDeltaTracker(multiplier=multiplier),
+        futures_cvd=futures_cvd,  # CVD podkladu (#829) — jen primární runtime
         push_status=False,  # agregovaný status pushuje orchestrátor
         oi_fallback=oi_fallback,
         chain_fallback=chain_fallback_source,
@@ -1081,6 +1084,9 @@ async def main() -> None:
     # Streamer symbol front futures per instrument (#614) — zdroj spotu, když
     # IBKR přestane posílat (mobil přetáhl market data, výpadek farmy)
     shadow_front_future: dict[str, str] = {}
+    # CVD podkladu (#829): jedna instance pro celý engine, runtimes z ní čtou
+    # minutu. Bez tasty větve zůstane bez registrací → řada je prostě NULL.
+    futures_cvd = FuturesCvdTracker()
     # Extended expirace z tasty (#616 4a): plán per symbol, plní ho denní
     # obnova chain map; snapshot smyčka z něj čte
     extended_plan: dict[str, list[str]] = {}
@@ -1118,6 +1124,9 @@ async def main() -> None:
             tasty_cache.on_event(event_type, values)
             if trades_recorder is not None:
                 trades_recorder.on_event(event_type, values)
+            # CVD podkladu (#829): tracker si sám vybere jen printy
+            # registrovaných front futures, opční projdou bez práce
+            futures_cvd.on_event(event_type, values)
 
         tasty_stream = DxLinkStream(tasty_session.quote_token, _tasty_event)
 
@@ -1402,6 +1411,9 @@ async def main() -> None:
                         if front:
                             shadow_front_future[symbol] = front
                             symbols.add(front)
+                            # CVD podkladu (#829) — registrace zároveň ošetří
+                            # roll kontraktu (starý streamer se odpojí)
+                            futures_cvd.register(symbol, front)
                     if trades_recorder is not None:
                         # Jen chain symboly — podklad záměrně ne (viz recorder):
                         # jeho printy jsou miliony/den a CumΔ podkladu nese IBKR
@@ -1687,6 +1699,7 @@ async def main() -> None:
                     oi_fallback=tasty_oi_lookup,
                     chain_fallback_source=chain_quotes_lookup,
                     spot_fallback_source=tasty_spot_lookup,
+                    futures_cvd=futures_cvd,
                 )
                 setup_cooldown.succeeded(symbol)
             except ConnectionError as exc:

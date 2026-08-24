@@ -116,6 +116,11 @@ FLOW_SCHEMA = pa.schema(
         ("ts_min", pa.timestamp("us", tz="UTC")),
         ("flow_delta", pa.float64()),
         ("cum_delta", pa.float64()),
+        # CVD podkladu (#829): druhá řada téhož panelu — tok ve futures proti
+        # opčnímu delta toku výš. NULL = instrument nemá registrovaný streamer
+        # podkladu (běh bez tasty větve) nebo partice vznikla před #829.
+        ("futures_cvd_delta", pa.float64()),
+        ("futures_cvd", pa.float64()),
     ]
 )
 
@@ -320,6 +325,12 @@ class FlowRowLike(Protocol):
 
     @property
     def cum_delta(self) -> float: ...
+
+    @property
+    def futures_cvd_delta(self) -> float | None: ...
+
+    @property
+    def futures_cvd(self) -> float | None: ...
 
 
 @dataclass(frozen=True)
@@ -839,7 +850,13 @@ class SnapshotWriter:
         buffer = self._buffer(path, FLOW_SCHEMA)
         return buffer.append_and_write(
             [
-                {"ts_min": row.ts_min, "flow_delta": row.flow_delta, "cum_delta": row.cum_delta}
+                {
+                    "ts_min": row.ts_min,
+                    "flow_delta": row.flow_delta,
+                    "cum_delta": row.cum_delta,
+                    "futures_cvd_delta": row.futures_cvd_delta,
+                    "futures_cvd": row.futures_cvd,
+                }
                 for row in rows
             ]
         )

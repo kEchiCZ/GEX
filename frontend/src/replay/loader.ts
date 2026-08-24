@@ -121,6 +121,8 @@ interface LevelsInput {
 interface FlowInput {
   tsIso: string
   cum_delta: number
+  /** CVD podkladu (#829); chybí/null = minuta bez dat (běh bez tasty větve). */
+  futures_cvd?: number | null
 }
 interface OiPrevInput {
   strike: number
@@ -229,7 +231,7 @@ export interface LiveMinute {
     final?: boolean
   }
   levels?: Record<string, number | null>
-  flow?: { cum_delta: number }
+  flow?: { cum_delta: number; futures_cvd?: number | null }
   /** Dyn GEX profil minuty z WS kanálu gexprofile.* (ADR-0009). */
   gexProfile?: { grid_start: number; grid_step: number; values: number[] }
   /** OI odhady minuty z WS kanálu oiest.* (#232) — jen strany lišící se od měření. */
@@ -557,6 +559,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   const flow: FlowInput[] = bundle.flow.map((row) => ({
     tsIso: canonicalTs(row.ts_min),
     cum_delta: Number(row.cum_delta) || 0,
+    futures_cvd: numOrNull(row.futures_cvd),
   }))
 
   // Dyn GEX profily (ADR-0009) — starší API klíč neposílá; FA varianta (#232)
@@ -1037,14 +1040,25 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
   // což je stav, ve kterém jsme opravdu byli.
   const cumDelta = Array.from({ length: minutes }, () => 0)
   const cumDeltaByMinute = new Map<number, number>()
+  // CVD podkladu (#829) drží stejnou logiku děr, ale null zůstává null:
+  // linka se přeruší místo aby předstírala vyrovnaný tok
+  const futuresCvd: (number | null)[] = Array.from({ length: minutes }, () => null)
+  const cvdByMinute = new Map<number, number>()
   for (const row of inputs.flow) {
     const minuteIdx = minuteIndex.get(row.tsIso)
-    if (minuteIdx !== undefined) cumDeltaByMinute.set(minuteIdx, row.cum_delta)
+    if (minuteIdx !== undefined) {
+      cumDeltaByMinute.set(minuteIdx, row.cum_delta)
+      if (row.futures_cvd != null) cvdByMinute.set(minuteIdx, row.futures_cvd)
+    }
   }
   let lastCumDelta = 0
+  let lastCvd: number | null = null
   for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
     lastCumDelta = cumDeltaByMinute.get(minuteIdx) ?? lastCumDelta
     cumDelta[minuteIdx] = lastCumDelta
+    const cvd = cvdByMinute.get(minuteIdx)
+    if (cvd !== undefined) lastCvd = cvd
+    futuresCvd[minuteIdx] = lastCvd
   }
 
   // ΔOI vs. předchozí archivovaný den téže expirace (null = není srovnání)
@@ -1141,7 +1155,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     raw,
     rawFa,
     overlays,
-    panels: { vol, optVolCall, optVolPut, cumDelta, deltaFlowCall, deltaFlowPut, evoOiCall, evoOiPut, cumDeltaFromIso }, // prettier-ignore
+    panels: { vol, optVolCall, optVolPut, cumDelta, futuresCvd, deltaFlowCall, deltaFlowPut, evoOiCall, evoOiPut, cumDeltaFromIso }, // prettier-ignore
     profileByMinute,
     provisionalMinutes,
     gexProfile,

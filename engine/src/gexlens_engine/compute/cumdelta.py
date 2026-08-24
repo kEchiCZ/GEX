@@ -31,6 +31,10 @@ class FlowRow:
     ts_min: dt.datetime
     flow_delta: float
     cum_delta: float
+    # CVD podkladu (#829) — druhá řada panelu, plní ji FuturesCvdTracker.
+    # None = bez tasty větve nebo instrument nemá registrovaný front future.
+    futures_cvd_delta: float | None = None
+    futures_cvd: float | None = None
 
 
 def midpoint_sign(last: float, bid: float, ask: float) -> int:
