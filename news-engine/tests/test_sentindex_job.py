@@ -111,3 +111,68 @@ def test_rerun_overwrites_instead_of_duplicating(tmp_path: Path) -> None:
     assert len(candles) == 2  # upsert per symbol (ES + NQ), ne insert
     files = list((tmp_path / "data" / "derived" / "sentiment" / "ES").glob("*.parquet"))
     assert len(files) == 1
+
+
+def test_refresh_z_kauzalni_sigma_a_minimum_historie(tmp_path: Path) -> None:
+    """#640: σ z PŘEDCHOZÍCH ≤100 seancí (bez dneška), < 30 seancí → NULL."""
+    engine, job = make_job(tmp_path)
+    base = dt.date(2026, 1, 1)
+    with engine.begin() as conn:
+        for i in range(60):
+            close = 0.1 if i % 2 == 0 else -0.1
+            if i == 50:
+                close = 5.0  # skoková výchylka — do VLASTNÍ σ vstoupit nesmí
+            conn.execute(
+                insert(sentiment_daily).values(
+                    date=base + dt.timedelta(days=i),
+                    symbol="ES",
+                    open=close,
+                    high=close,
+                    low=close,
+                    close=close,
+                    update_time=NOW,
+                )
+            )
+
+    updated = job.refresh_z("ES")
+
+    assert updated > 0
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(sentiment_daily.c.date, sentiment_daily.c.sigma, sentiment_daily.c.close_z)
+            .where(sentiment_daily.c.symbol == "ES")
+            .order_by(sentiment_daily.c.date)
+        ).fetchall()
+    # Prvních 30 dní: málo historie → NULL
+    assert all(row.sigma is None for row in rows[:30])
+    assert rows[35].sigma is not None and abs(rows[35].sigma - 0.1) < 1e-3
+    # Kauzalita: den skoku má σ JEŠTĚ z klidné historie → obří z-score…
+    assert rows[50].close_z is not None and rows[50].close_z > 40
+    # …a σ následujícího dne už skok obsahuje (vyskočí nad klidových 0,1)
+    assert rows[51].sigma is not None and rows[51].sigma > 0.5
+
+
+def test_refresh_z_je_idempotentni(tmp_path: Path) -> None:
+    engine, job = make_job(tmp_path)
+    base = dt.date(2026, 1, 1)
+    with engine.begin() as conn:
+        for i in range(40):
+            close = 0.1 if i % 2 == 0 else -0.1
+            conn.execute(
+                insert(sentiment_daily).values(
+                    date=base + dt.timedelta(days=i),
+                    symbol="ES",
+                    open=close,
+                    high=close,
+                    low=close,
+                    close=close,
+                    update_time=NOW,
+                )
+            )
+
+    first = job.refresh_z("ES")
+    second = job.refresh_z("ES")
+
+    assert first > 0
+    # Druhý běh přepočítá nanejvýš „dnešek" — historie se nehoní dokola
+    assert second <= 1

@@ -246,6 +246,8 @@ export interface SentimentStateInfo {
   unconfirmed: boolean
   unconfirmed_state: string
   last_close: number | null
+  /** σ(100 seancí) škály #640 — sparkline dělí hodnoty touto σ; null = málo historie. */
+  sigma?: number | null
   ma5: number | null
   ma10: number | null
   threshold: number | null
