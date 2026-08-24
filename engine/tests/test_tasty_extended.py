@@ -102,7 +102,7 @@ def test_extended_streamers_pasmo_a_fallback_centra() -> None:
     from gexlens_engine.tasty.extended import extended_streamers
 
     by_contract = {
-        ("20260826", strike, "C"): f".ES{strike:g}C" for strike in range(6000, 7001, 100)
+        ("20260826", float(strike), "C"): f".ES{strike}C" for strike in range(6000, 7001, 100)
     }
     chain = ChainSymbols(product="ES", day=TODAY, by_contract=by_contract)
 
