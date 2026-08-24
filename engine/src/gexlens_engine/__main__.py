@@ -107,6 +107,7 @@ from gexlens_engine.tasty.devrun import run_tasty_only
 from gexlens_engine.tasty.extended import (
     build_snapshot_rows,
     cadence_due,
+    extended_streamers,
     plan_extended_expiries,
     validate_disjoint,
 )
@@ -1342,12 +1343,16 @@ async def main() -> None:
                             )
                             validate_disjoint(planned, ibkr_expiries_of(symbol))
                             extended_plan[symbol] = planned
-                            planned_set = set(planned)
-                            symbols |= {
-                                streamer
-                                for (expiry, _s, _r), streamer in chain.by_contract.items()
-                                if expiry in planned_set
-                            }
+                            # Pásmo kolem spotu — bez něj ES (49 expirací × plná
+                            # šířka) přeteče kapacitu subskripce a server tiše
+                            # nedodá NIC (nedělní noc 23. 8.: NQ psalo, ES mlčelo)
+                            spot_price, spot_fresh = _tasty_spot(symbol)
+                            symbols |= extended_streamers(
+                                chain,
+                                planned,
+                                center=spot_price if spot_fresh else None,
+                                band_points=settings.tasty_extended_band_points,
+                            )
                         # Podklad (#614): bez něj by při výpadku IBKR zamrzl
                         # cenový graf, i kdyby řetěz z tasty tekl dál
                         front = await symbol_map.front_future(symbol)

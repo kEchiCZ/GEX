@@ -162,3 +162,33 @@ def build_snapshot_rows(
             )
         )
     return rows, oi_missing
+
+
+def extended_streamers(
+    chain: ChainSymbols,
+    planned: list[str],
+    *,
+    center: float | None,
+    band_points: float,
+) -> set[str]:
+    """Streamer symboly extended expirací omezené pásmem kolem ceny (#616).
+
+    Bez pásma ES přeteče kapacitu subskripce: 20 plánovaných expirací × plná
+    šířka chainu ≈ 7 400 symbolů jen ES (změřený strop je 6 008/subskripci,
+    ADR-0027) — server pak tiše nedodá nic a extended mlčí. ±band kolem
+    spotu drží počty ~4–5 tis. a je konzistentní s IBKR obálkou (ADR-0002).
+    `center=None` (spot ještě není) → medián striků nejbližší plánované
+    expirace jako náhrada; chain je kolem trhu, medián sedí na desítky bodů.
+    """
+    planned_set = set(planned)
+    if center is None and planned:
+        nearest = min(planned)
+        strikes = sorted(strike for (expiry, strike, _r) in chain.by_contract if expiry == nearest)
+        center = strikes[len(strikes) // 2] if strikes else None
+    if center is None:
+        return set()
+    return {
+        streamer
+        for (expiry, strike, _right), streamer in chain.by_contract.items()
+        if expiry in planned_set and abs(strike - center) <= band_points
+    }
