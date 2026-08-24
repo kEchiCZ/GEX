@@ -181,6 +181,10 @@ class Settings(BaseSettings):
     tasty_extended_horizon_days: int = Field(default=30, ge=0)
     tasty_extended_near_days: int = Field(default=7, ge=0)
     tasty_extended_far_interval_min: int = Field(default=5, ge=1)
+    # Pásmo striků extended subskripcí kolem spotu (±body). Bez něj ES chain
+    # (49 expirací × plná šířka ≈ 7 400 symbolů) přeteče změřený strop 6 008
+    # na subskripci (ADR-0027) a dxFeed tiše nedodá nic — nedělní nález 23. 8.
+    tasty_extended_band_points: float = Field(default=200.0, gt=0)
     # Greeks validátor (#614 finále, rozhodnuto 22. 8.): tasty × IBKR modely se
     # hlídají navzájem; prahy per kontrakt jsou MĚŘENÉ konstanty (2× p95 z 5
     # čistých seancí, tasty/greeks_validator.py). Jen hlásí — žádný zásah.

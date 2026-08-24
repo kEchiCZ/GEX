@@ -95,3 +95,24 @@ def test_build_rows_stara_kotace_se_preskoci() -> None:
     )
 
     assert rows == [] and oi_missing == []
+
+
+def test_extended_streamers_pasmo_a_fallback_centra() -> None:
+    """#616 kapacita: subskribuje se jen ±band kolem centra, ne plný chain."""
+    from gexlens_engine.tasty.extended import extended_streamers
+
+    by_contract = {
+        ("20260826", float(strike), "C"): f".ES{strike}C" for strike in range(6000, 7001, 100)
+    }
+    chain = ChainSymbols(product="ES", day=TODAY, by_contract=by_contract)
+
+    # Se spotem: jen striky v pásmu
+    subset = extended_streamers(chain, ["20260826"], center=6500.0, band_points=200.0)
+    assert subset == {".ES6300C", ".ES6400C", ".ES6500C", ".ES6600C", ".ES6700C"}
+
+    # Bez spotu: centrum = medián striků nejbližší expirace (6500)
+    fallback = extended_streamers(chain, ["20260826"], center=None, band_points=100.0)
+    assert fallback == {".ES6400C", ".ES6500C", ".ES6600C"}
+
+    # Neplánovaná expirace = nic
+    assert extended_streamers(chain, [], center=6500.0, band_points=200.0) == set()
