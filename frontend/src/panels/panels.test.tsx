@@ -6,7 +6,7 @@ import { LiveSocket } from '../api/ws'
 import { BottomPanels } from '../components/BottomPanels'
 import { FakeWebSocket } from '../test/fakeWs'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
-import { cumDeltaAreas, barHeights, evoOiDisplay, evoOiStepPath, sentimentCandleGeometry } from './geometry' // prettier-ignore
+import { cumDeltaAreas, barHeights, cvdLinePoints, evoOiDisplay, evoOiStepPath, sentimentCandleGeometry } from './geometry' // prettier-ignore
 import type { PanelSeries } from '../components/BottomPanels'
 
 const DATA: PanelSeries = {
@@ -45,6 +45,18 @@ test('cumDeltaAreas dělí plochu nad/pod nulou a drží rezervu od okrajů (#16
   expect(edge.negative).toContain('150,80')
 })
 
+test('cvdLinePoints má vlastní měřítko a přeruší se na dírách (#829)', () => {
+  // Vlastní normalizace: řada v úplně jiných jednotkách než plocha opčního
+  // toku musí vyplnit pás stejně, jinak by jedna z řad byla plochá u nuly
+  const points = cvdLinePoints([100, -100], 200, 80)
+  expect(points).toBe('50,6 150,74')
+
+  // Minuty bez dat (bez tasty větve) vypadnou — linka se přeruší místo aby
+  // propadla k nule a předstírala vyrovnaný tok
+  expect(cvdLinePoints([100, null, -100], 300, 80)).toBe('50,6 250,74')
+  expect(cvdLinePoints([null, null], 200, 80)).toBe('')
+})
+
 // ── Panely: sdílená osa, C/P barvy, plochy ─────────────────────────
 
 function renderPanels(
@@ -74,6 +86,50 @@ test('vykreslí tři panely; Opt Vol má C/P sloupce, Cum Δ plochy a nulu', () 
   expect(cumDelta.querySelector('[data-part="cumdelta-positive"]')).not.toBeNull()
   expect(cumDelta.querySelector('[data-part="cumdelta-negative"]')).not.toBeNull()
   expect(screen.getByTestId('cumdelta-zero')).toBeDefined()
+})
+
+test('CVD podkladu je druhá řada panelu, bez dat se nekreslí (#829)', () => {
+  const { rerender } = render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={{ ...DATA, futuresCvd: [10, -20, 30, -5] }}
+        visible={{
+          vol: false,
+          optVol: false,
+          delta: true,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: false,
+        }}
+        width={400}
+      />
+    </CrosshairProvider>,
+  )
+  expect(screen.getByTestId('cumdelta-cvd')).toBeDefined()
+  expect(screen.getByTestId('cvd-legend')).toBeDefined()
+
+  // Bez řady (starší data, běh bez tasty) zůstane panel při opčním toku
+  rerender(
+    <CrosshairProvider>
+      <BottomPanels
+        data={DATA}
+        visible={{
+          vol: false,
+          optVol: false,
+          delta: true,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: false,
+        }}
+        width={400}
+      />
+    </CrosshairProvider>,
+  )
+  expect(screen.queryByTestId('cumdelta-cvd')).toBeNull()
+  expect(screen.queryByTestId('cvd-legend')).toBeNull()
+  expect(
+    screen.getByLabelText('Cum Δ panel').querySelector('[data-part="cumdelta-positive"]'),
+  ).not.toBeNull()
 })
 
 test('vypnutí panelu přeskládá layout (AC)', () => {

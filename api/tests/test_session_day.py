@@ -32,6 +32,9 @@ class _Flow:
         self.ts_min = ts_min
         self.flow_delta = flow_delta
         self.cum_delta = cum_delta
+        # CVD podkladu (#829) — fixture běží bez tasty větve
+        self.futures_cvd_delta: float | None = None
+        self.futures_cvd: float | None = None
 
 
 def _snapshot(ts_min: dt.datetime, volume: float) -> SnapshotRow:

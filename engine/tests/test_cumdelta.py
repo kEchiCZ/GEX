@@ -167,8 +167,16 @@ def test_close_minute_series_and_persistence(tmp_path: Path) -> None:
 
     assert path == tmp_path / "derived" / "ES" / "flow" / "2026-07-16.parquet"
     frame = pd.read_parquet(path)
-    assert list(frame.columns) == ["ts_min", "flow_delta", "cum_delta"]
+    # CVD podkladu (#829) je součástí schématu; bez tasty větve zůstává NULL
+    assert list(frame.columns) == [
+        "ts_min",
+        "flow_delta",
+        "cum_delta",
+        "futures_cvd_delta",
+        "futures_cvd",
+    ]
     assert list(frame["cum_delta"]) == [50.0, 25.0]
+    assert frame["futures_cvd"].isna().all()
 
 
 def test_roll_session_resets_only_on_boundary() -> None:

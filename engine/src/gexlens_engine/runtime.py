@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, replace
 
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.flowoi import oi_estimate
+from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.gex import GexEngine, GexInput
 from gexlens_engine.compute.gexfield import (
     GexProfile,
@@ -123,6 +124,9 @@ class EngineRuntime:
     contracts: Sequence[OptionContractSpec]
     gex_engine: GexEngine = field(default_factory=GexEngine)
     cum_delta: CumDeltaTracker | None = None
+    # CVD podkladu (#829): sdílená instance napříč runtimes (drží tok per
+    # instrument), plní ji fan-out tasty eventů. None = běh bez tasty větve.
+    futures_cvd: FuturesCvdTracker | None = None
     # Multi-instrument orchestrátor pushuje agregovaný status sám (ADR-0003)
     push_status: bool = True
     # Sekundární řetěz (následující expirace): jen snapshots + levels —
@@ -285,6 +289,10 @@ class EngineRuntime:
         # minuty nové seance — tentýž okamžik, kdy se překlápí osa dne (#512).
         # První cyklus po startu jen zafixuje seanci; navázání řeší seed níže.
         session_day = trading_session_date(ts_min)
+        if self.futures_cvd is not None and not self.secondary:
+            # Táž kotva jako CumΔ, ať jdou obě řady číst proti sobě (#829).
+            # Sdílená instance napříč runtimes → roluje ji jen primární.
+            self.futures_cvd.roll_session(session_day)
         if tracker.roll_session(session_day):
             self._netflow_seed_pending = False  # nová seance nemá co navazovat
             self._flow_seed_pending = False
@@ -875,6 +883,15 @@ class EngineRuntime:
             )
             return metrics
         flow_row = tracker.close_minute(ts_min)
+        if self.futures_cvd is not None and self.futures_cvd.is_tracking(self.symbol):
+            # CVD podkladu do téže minuty (#829); bez registrovaného front
+            # future zůstávají sloupce NULL a panel kreslí jen opční řadu
+            cvd_row = self.futures_cvd.close_minute(self.symbol, ts_min)
+            flow_row = replace(
+                flow_row,
+                futures_cvd_delta=cvd_row.cvd_delta,
+                futures_cvd=cvd_row.cvd,
+            )
         self.last_flow = flow_row
         await asyncio.to_thread(self.writer.write_flow, self.symbol, day, [flow_row])
 
@@ -906,6 +923,9 @@ class EngineRuntime:
                 "ts_min": ts_min.isoformat(),
                 "flow_delta": flow_row.flow_delta,
                 "cum_delta": flow_row.cum_delta,
+                # CVD podkladu (#829) — aditivní pole, starší klienti ignorují
+                "futures_cvd_delta": flow_row.futures_cvd_delta,
+                "futures_cvd": flow_row.futures_cvd,
             },
         )
 

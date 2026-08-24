@@ -483,7 +483,11 @@ export function useDayData(
       scheduleFlush()
     }
     const onFlow = (data: ChannelData) => {
-      part(minuteKey(data.ts_min)).flow = { cum_delta: Number(data.cum_delta) || 0 }
+      part(minuteKey(data.ts_min)).flow = {
+        cum_delta: Number(data.cum_delta) || 0,
+        // CVD podkladu (#829) — starší engine pole neposílá, pak zůstává null
+        futures_cvd: numOrNull(data.futures_cvd),
+      }
       scheduleFlush()
     }
     // GEX žebřík minuty (#244) — starší engine kanál neposílá

@@ -323,7 +323,13 @@ async def test_one_cycle_produces_full_day_artifacts(
     assert levelsfa["total_gex"].iloc[0] == levels["total_gex"].iloc[0]
     pd.testing.assert_frame_equal(levelsfa, levels)
     flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{day}.parquet")
-    assert list(flow.columns) == ["ts_min", "flow_delta", "cum_delta"]
+    assert list(flow.columns) == [
+        "ts_min",
+        "flow_delta",
+        "cum_delta",
+        "futures_cvd_delta",  # CVD podkladu (#829) — bez tasty větve NULL
+        "futures_cvd",
+    ]
     day_bars = pd.read_parquet(settings.derived_dir / "ES" / "bars" / f"{day}.parquet")
     assert day_bars["close"].iloc[0] == SPOT
 
