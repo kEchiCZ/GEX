@@ -567,6 +567,10 @@ function BottomPanelsBase({
     const cvdAt = (index: number) => cvdSeries[index] ?? null
     const cvdPoints = cvdLinePoints(cvdSeries, minutes * step, height)
     const hasCvd = cvdPoints.length > 0
+    // Kotva seance (#829): kumulativ se resetuje na Globex open (22:00 UTC),
+    // ale osa začíná půlnocí — na levém okraji je proto už nasčítaný tok.
+    // Bez přiznání by se výchylka četla proti nule, která na grafu není.
+    const anchor = data.cumDelta.length > 0 ? data.cumDelta[0] : 0
     panels.push(
       <section key="cumdelta" className="bottom-panel" aria-label="Cum Δ panel">
         <span className="panel-title muted">
@@ -581,6 +585,17 @@ function BottomPanelsBase({
             >
               {' '}
               · CVD podkladu
+            </span>
+          )}
+          {/* Kotva seance (#829): levý okraj osy není nula — kumulativ běží
+          od Globex open (22:00 UTC), zatímco osa začíná půlnocí */}
+          {Math.abs(anchor) > 0.5 && (
+            <span
+              data-testid="cumdelta-anchor"
+              title="Kumulativ se resetuje na open Globex seance (22:00 UTC), ale osa grafu začíná půlnocí — na levém okraji už je nasčítaný tok. Výchylku čtěte proti této hodnotě, ne proti nule."
+            >
+              {' '}
+              · osa od {fmtSigned(anchor)}
             </span>
           )}
           {/* Den nezačíná od začátku seance (#518): měření běží až od startu
