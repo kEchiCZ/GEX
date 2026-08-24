@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     # Živé broker headlines přes generic tick 292 (#291, Tier D). Stojí jednu
     # market data line na symbol — proti rezervě 80/≥150 (ADR-0001) nic.
     ibkr_news_enabled: bool = True
+    # Plné znění broker headlines přes reqNewsArticle (#743): živě po pushi
+    # titulku + jednorázový catch-up historie po connectu. Objem malý.
+    ibkr_news_articles_enabled: bool = True
     setups_enabled: bool = True
     # Minutový feature log (#796): vstupní vektor detektoru + ATR + band metriky
     # do derived/{symbol}/features/ — trénovací matice samoučící smyčky (#794).

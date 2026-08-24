@@ -47,6 +47,7 @@ from gexlens_engine.ibkr.discovery import (
 )
 from gexlens_engine.ibkr.lines import LineGauge
 from gexlens_engine.ibkr.newsticks import (
+    ArticleFetcher,
     NewsTickCollector,
     NewsTickLike,
     broad_tape_providers,
@@ -312,7 +313,11 @@ def _connection_offline_status(manager: ConnectionManager) -> dict[str, object]:
 
 
 async def _start_broker_news(
-    ib: IB, manager: ConnectionManager, collector: NewsTickCollector, publisher: PublisherLike
+    ib: IB,
+    manager: ConnectionManager,
+    collector: NewsTickCollector,
+    publisher: PublisherLike,
+    article_fetcher: ArticleFetcher | None = None,
 ) -> None:
     """Broad tape všech news providerů + okamžitý zápis příchozích headlines (#334).
 
@@ -349,6 +354,9 @@ async def _start_broker_news(
         # zprávu zdrželo o minuty, a syrový titulek je použitelný sám o sobě
         for stored in written:
             await publisher.publish("news", stored.as_news_row())
+        # Plné znění článku (#743) až PO pushi — titulek nesmí čekat na fetch
+        if article_fetcher is not None and written:
+            await article_fetcher.fetch_for(written)
 
     def on_news_tick(tick: NewsTickLike) -> None:
         # Zápis do DB je blokující; z handleru se jen odpálí úloha, ať se
@@ -1009,10 +1017,23 @@ async def main() -> None:
     # Broker headlines z ticku 292 (#291): schéma SentimentLensu sdílí obě
     # služby, engine do něj jen zapisuje
     news_ticks: NewsTickCollector | None = None
+    article_catch_up: asyncio.Task[int] | None = None
     if settings.ibkr_news_enabled:
         await asyncio.to_thread(ensure_sentiment_schema, db)
         news_ticks = NewsTickCollector(db)
-        await _start_broker_news(ib, manager, news_ticks, publisher)
+        # Plné znění článků (#743): živé headlines hned po pushi, historie
+        # (vč. 436 eventů z doby před #743) jednorázovým catch-upem na pozadí
+        article_fetcher = ArticleFetcher(ib, db) if settings.ibkr_news_articles_enabled else None
+        await _start_broker_news(ib, manager, news_ticks, publisher, article_fetcher)
+        if article_fetcher is not None and manager.state is ConnectionState.CONNECTED:
+            # Reference se drží (RUF006); výjimku hlásí callback, ne tiché zmizení
+            article_catch_up = asyncio.create_task(article_fetcher.catch_up())
+
+            def _report_catch_up(task: asyncio.Task[int]) -> None:
+                if not task.cancelled() and task.exception() is not None:
+                    logger.error("Catch-up článků selhal: %r", task.exception())
+
+            article_catch_up.add_done_callback(_report_catch_up)
 
     retention = RetentionJob(settings)
     last_purge_date: dt.date | None = None
