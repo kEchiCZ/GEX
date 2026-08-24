@@ -44,6 +44,10 @@ DIRECT_FIELDS = [
 ]  # fmt: skip
 #: Tolerance floatů (dopočty přes numpy vs. čisté pythony)
 ATOL = 1e-9
+#: Interpolované hrany gamma masy nesou float32 stopu z cesty profilu —
+#: rozdíl na 7. platné číslici (~1e-4 b na hladině 7600). Pro trénink šum,
+#: proto relativní tolerance místo honu na bitovou shodu.
+RTOL_COLUMNS = {"gamma_edge_up": 1e-6, "gamma_edge_dn": 1e-6}
 #: Známé rozdílové sloupce (jiný zdroj živě vs. replay) — reportují se zvlášť
 KNOWN_DIFF = {"call_flow", "put_flow", "opt_vol"}
 
@@ -110,8 +114,9 @@ def compare(live: pd.DataFrame, replay: pd.DataFrame) -> None:
             continue
         both = a.notna() & b.notna()
         diff = (a[both] - b[both]).abs()
+        tolerance = ATOL + RTOL_COLUMNS.get(name, 0.0) * b[both].abs()
         nan_match = (a.isna() == b.isna()).mean()
-        match = ((diff <= ATOL).sum() + (a.isna() & b.isna()).sum()) / len(merged)
+        match = ((diff <= tolerance).sum() + (a.isna() & b.isna()).sum()) / len(merged)
         note = "known-diff (jiný zdroj)" if name in KNOWN_DIFF else ""
         if nan_match < 1.0:
             note += f" NaN neshoda {1 - nan_match:.1%}"
@@ -125,9 +130,9 @@ def main() -> None:
     parser.add_argument(
         "--shift-min",
         type=int,
-        default=1,
-        help="Posun replay ts (min). Živý log razítkuje minutu N barem N-1 — "
-        "změřeno 24. 8.: +1 dává 99,5%% shodu, 0 jen ~15%% (nález #794 f. 1)",
+        default=0,
+        help="Posun replay ts (min). Po opravě decision-time konvence v "
+        "build_minutes (bar N-1 + stav N jako živý engine) je default 0",
     )
     args = parser.parse_args()
     expiry = args.date.replace("-", "")
