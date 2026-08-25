@@ -96,3 +96,34 @@ def wide_records(
             )
         )
     return records
+
+
+def wide_streamers(
+    chain: ChainSymbols,
+    expiry: str,
+    covered: Sequence[OptionContractSpec],
+    *,
+    center: float | None,
+    band_pct: float,
+) -> set[str]:
+    """Streamery aktivní expirace MIMO IBKR obálku (#828).
+
+    Bez nich se široký archiv nemá kde projevit: `Summary` (a tedy OI) chodí
+    jen pro subskribované symboly, a extended plán aktivní expiraci z definice
+    neobsahuje — `plan_extended_expiries` je chain MÍNUS expirace IBKR.
+
+    Disjunktnost se drží na úrovni striků, ne expirací: IBKR čte svoje pásmo,
+    tasty zbytek téže expirace. Pásmo je v % ceny (lekce ADR-0004) a bez
+    známého centra se nevrací nic — slepé pokrytí by jen sežralo kapacitu.
+    """
+    if center is None:
+        return set()
+    covered_keys = {(c.strike, c.right) for c in covered}
+    band_points = center * band_pct / 100.0
+    return {
+        streamer
+        for (chain_expiry, strike, right), streamer in chain.by_contract.items()
+        if chain_expiry == expiry
+        and (strike, right) not in covered_keys
+        and abs(strike - center) <= band_points
+    }
