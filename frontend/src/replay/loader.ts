@@ -15,7 +15,7 @@ import type { PanelSeries } from '../components/BottomPanels'
 import type { HeatmapGrid } from '../heatmap/grid'
 import { buildModeGrid } from '../heatmap/modes'
 import type { RawDay } from '../heatmap/modes'
-import { maxPainSeries } from '../heatmap/maxpain'
+import { maxPainAt } from '../heatmap/maxpain'
 import {
   LEVEL_COLORS,
   OI_WALL_DASH,
@@ -132,12 +132,58 @@ interface OiPrevInput {
   oi: number
 }
 
+/** Zaokrouhlí počet minut na kapacitu matic (#515): rezerva po 64 sloupcích,
+vždy aspoň 1 volný sloupec, aby živý den nerealokoval hned první append. */
+export function minuteCapacityFor(minutes: number): number {
+  return Math.ceil((minutes + 1) / 64) * 64
+}
+
+/** Cache odvozených řad per minuta (#515): sloupce 0..upTo-1 jsou platné,
+zbytek dopočítá `assembleReplayDay` jen pro nové/dotčené minuty. Master pole
+žijí v cache — ven se vždy vrací kopie, aby starší snímky dne nedržely
+odkaz na pole, které další append prodlouží. */
+type MatrixKey =
+  | 'callOi'
+  | 'putOi'
+  | 'callOiEst'
+  | 'putOiEst'
+  | 'callVolume'
+  | 'putVolume'
+  | 'callDelta'
+  | 'putDelta'
+  | 'callVega'
+  | 'putVega'
+  | 'callMid'
+  | 'putMid'
+  | 'staleAge'
+
+interface DerivedSeriesCache {
+  upTo: number
+  maxPain: (number | null)[]
+  optVolCall: number[]
+  optVolPut: number[]
+  deltaFlowCall: number[]
+  deltaFlowPut: number[]
+  evoOiCall: number[]
+  evoOiPut: number[]
+}
+
 /** Rozložený vstup dne — matice per-strike + řádky barů/levels/flow. Roste přes append. */
 export interface ReplayInputs {
   symbol: string
   expiry: string
   date: string
   minutes: string[]
+  /** Stride matic (#515): index = strikeIdx * minuteCapacity + minuteIdx.
+   *
+   * Kapacitní rezerva (bloky po 64) dovoluje připojit živou minutu bez
+   * realokace a překopírování celého dne. INVARIANT: buňky se sloupcem
+   * ≥ minutes.length jsou nulové — redukce přes celé pole (Σ OI) se na to
+   * spoléhají. */
+  minuteCapacity: number
+  /** Memoizace odvozených řad (#515) — mutuje se in-place v assemble;
+   * append jen stáhne `upTo` na první dotčený sloupec. */
+  derived?: DerivedSeriesCache
   /** Paralelně k `minutes`: měla minuta opční snapshot? (#459)
    *
    * Osa X je sjednocení minut ze snapshotů a barů, takže po výpadku sběru
@@ -456,7 +502,9 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   const strikes = [...strikeSet].sort((a, b) => a - b)
   const strikeIndex = new Map(strikes.map((strike, index) => [strike, index]))
   const minutes = minuteKeys.length
-  const size = minutes * strikes.length
+  // Kapacitní rezerva (#515): živé appendy zapisují nové sloupce in-place
+  const capacity = minuteCapacityFor(minutes)
+  const size = capacity * strikes.length
 
   const callOi = new Float32Array(size)
   const putOi = new Float32Array(size)
@@ -473,7 +521,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   for (let row = 0; row < rowCount; row += 1) {
     const minuteIdx = minuteIndex.get(canonicalTs(tsColumn.get(row)))!
     const strikeIdx = strikeIndex.get(Number(strikeColumn.get(row)))!
-    const index = strikeIdx * minutes + minuteIdx
+    const index = strikeIdx * capacity + minuteIdx
     const right = String(rightColumn.get(row)) as 'C' | 'P'
     const oi = Number(oiColumn?.get(row) ?? 0) || 0
     const volume = Number(volumeColumn?.get(row) ?? 0) || 0
@@ -642,7 +690,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     const strikeIdx = strikeIndex.get(Number(row.strike))
     const est = Number(row.oi_est)
     if (minuteIdx === undefined || strikeIdx === undefined || !Number.isFinite(est)) continue
-    const index = strikeIdx * minutes + minuteIdx
+    const index = strikeIdx * capacity + minuteIdx
     if (String(row.right) === 'C') callOiEst[index] = est
     else putOiEst[index] = est
   }
@@ -652,6 +700,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     expiry: bundle.expiry,
     date: bundle.date,
     minutes: minuteKeys,
+    minuteCapacity: capacity,
     snapshotMinutes,
     strikes,
     callOi,
@@ -716,9 +765,6 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     ? [...inputs.minutes.slice(0, targetMinute), tsIso, ...inputs.minutes.slice(targetMinute)]
     : inputs.minutes
   const newMinuteCount = newMinutes.length
-  // Vsunutí doprostřed posouvá všechny minuty za sebou o jedna
-  const shift = (minuteIdx: number): number =>
-    isAppend && minuteIdx >= targetMinute ? minuteIdx + 1 : minuteIdx
   const snapshotMinutes = isAppend
     ? [
         ...inputs.snapshotMinutes.slice(0, targetMinute),
@@ -749,45 +795,54 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   const strikeCount = newStrikes.length
   const newStrikeIndex = new Map(newStrikes.map((strike, index) => [strike, index]))
 
-  const size = strikeCount * newMinuteCount
-  const callOi = new Float32Array(size)
-  const putOi = new Float32Array(size)
-  const callOiEst = new Float32Array(size)
-  const putOiEst = new Float32Array(size)
-  const callVolume = new Float32Array(size)
-  const putVolume = new Float32Array(size)
-  const callDelta = new Float32Array(size)
-  const putDelta = new Float32Array(size)
-  const callVega = new Float32Array(size)
-  const putVega = new Float32Array(size)
-  const callMid = new Float32Array(size)
-  const putMid = new Float32Array(size)
-  const staleAge = new Float32Array(size)
+  // Fast path (#515): běžný živý případ — nový sloupec na konec osy, nebo
+  // přepis existujícího, beze změny striků a s volnou kapacitou. Zapisuje se
+  // IN-PLACE do stávajících matic: dotkne se jen buněk sloupce `targetMinute`
+  // a zápis je idempotentní (tytéž hodnoty, staleAge přes max), takže případné
+  // opakování state updateru nad týmž prev nic nerozbije. Starší snímky dne
+  // připojený sloupec nevidí — jejich `minutes` ho neobsahují. Vsunutí
+  // DOPROSTŘED osy (opožděný bar, #459) jde vždy pomalou cestou: posun
+  // sloupců není idempotentní.
+  const fastPath =
+    !strikesChanged &&
+    newMinuteCount <= inputs.minuteCapacity &&
+    (!isAppend || targetMinute === oldMinutes)
+  const capacity = fastPath ? inputs.minuteCapacity : minuteCapacityFor(newMinuteCount)
 
-  // Přenos starých buněk na nový stride (minutes je násobitel řádku, viz grid.ts)
-  for (let oldStrikeIdx = 0; oldStrikeIdx < inputs.strikes.length; oldStrikeIdx += 1) {
-    const newStrikeIdx = newStrikeIndex.get(inputs.strikes[oldStrikeIdx])!
-    for (let minuteIdx = 0; minuteIdx < oldMinutes; minuteIdx += 1) {
-      const from = oldStrikeIdx * oldMinutes + minuteIdx
-      const to = newStrikeIdx * newMinuteCount + shift(minuteIdx)
-      callOi[to] = inputs.callOi[from]
-      putOi[to] = inputs.putOi[from]
-      callOiEst[to] = inputs.callOiEst[from]
-      putOiEst[to] = inputs.putOiEst[from]
-      callVolume[to] = inputs.callVolume[from]
-      putVolume[to] = inputs.putVolume[from]
-      callDelta[to] = inputs.callDelta[from]
-      putDelta[to] = inputs.putDelta[from]
-      callVega[to] = inputs.callVega[from]
-      putVega[to] = inputs.putVega[from]
-      callMid[to] = inputs.callMid[from]
-      putMid[to] = inputs.putMid[from]
-      staleAge[to] = inputs.staleAge[from]
+  const matrix = (key: MatrixKey): Float32Array => {
+    if (fastPath) return inputs[key]
+    const fresh = new Float32Array(strikeCount * capacity)
+    const old = inputs[key]
+    // Blokový přenos po řádcích striků: segment před vloženým sloupcem a
+    // (jen při vsunutí) segment za ním — memcpy místo skalární smyčky
+    const headLen = isAppend ? targetMinute : oldMinutes
+    for (let oldStrikeIdx = 0; oldStrikeIdx < inputs.strikes.length; oldStrikeIdx += 1) {
+      const src = oldStrikeIdx * inputs.minuteCapacity
+      const dst = newStrikeIndex.get(inputs.strikes[oldStrikeIdx])! * capacity
+      fresh.set(old.subarray(src, src + headLen), dst)
+      if (isAppend && targetMinute < oldMinutes) {
+        fresh.set(old.subarray(src + targetMinute, src + oldMinutes), dst + targetMinute + 1)
+      }
     }
+    return fresh
   }
+  const callOi = matrix('callOi')
+  const putOi = matrix('putOi')
+  const callOiEst = matrix('callOiEst')
+  const putOiEst = matrix('putOiEst')
+  const callVolume = matrix('callVolume')
+  const putVolume = matrix('putVolume')
+  const callDelta = matrix('callDelta')
+  const putDelta = matrix('putDelta')
+  const callVega = matrix('callVega')
+  const putVega = matrix('putVega')
+  const callMid = matrix('callMid')
+  const putMid = matrix('putMid')
+  const staleAge = matrix('staleAge')
+
   // Nová minuta ze snapshot řezu; odhad = měření, dokud ho oiest nepřepíše
   for (const row of minute.rows) {
-    const to = newStrikeIndex.get(row.strike)! * newMinuteCount + targetMinute
+    const to = newStrikeIndex.get(row.strike)! * capacity + targetMinute
     if (row.right === 'C') {
       callOi[to] = row.oi
       callOiEst[to] = row.oi
@@ -809,10 +864,28 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   for (const row of minute.oiEst ?? []) {
     const strikeIdx = newStrikeIndex.get(row.strike)
     if (strikeIdx === undefined || !Number.isFinite(row.oi_est)) continue
-    const to = strikeIdx * newMinuteCount + targetMinute
+    const to = strikeIdx * capacity + targetMinute
     if (row.right === 'C') callOiEst[to] = row.oi_est
     else putOiEst[to] = row.oi_est
   }
+
+  // Cache odvozených řad (#515): platný zůstává prefix před dotčeným sloupcem.
+  // Kopie (ne sdílené pole) — suffix dopočítaný nad novým stavem nesmí zpětně
+  // přepsat řady, které si drží starší snímek dne.
+  const derivedUpTo = Math.min(inputs.derived?.upTo ?? 0, targetMinute)
+  const derived =
+    fastPath && inputs.derived
+      ? {
+          upTo: derivedUpTo,
+          maxPain: inputs.derived.maxPain.slice(0, derivedUpTo),
+          optVolCall: inputs.derived.optVolCall.slice(0, derivedUpTo),
+          optVolPut: inputs.derived.optVolPut.slice(0, derivedUpTo),
+          deltaFlowCall: inputs.derived.deltaFlowCall.slice(0, derivedUpTo),
+          deltaFlowPut: inputs.derived.deltaFlowPut.slice(0, derivedUpTo),
+          evoOiCall: inputs.derived.evoOiCall.slice(0, derivedUpTo),
+          evoOiPut: inputs.derived.evoOiPut.slice(0, derivedUpTo),
+        }
+      : undefined
 
   const bars = minute.bar
     ? upsertRow(inputs.bars, { tsIso, ...minute.bar, volume: minute.bar.volume ?? 0 })
@@ -889,6 +962,8 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     ...inputs,
     catchUpMinutes,
     minutes: newMinutes,
+    minuteCapacity: capacity,
+    derived,
     snapshotMinutes,
     oiLowMinutes,
     strikes: newStrikes,
@@ -962,6 +1037,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
   for (const bar of price) spotSeries[bar.minuteIdx] = bar.close
   const raw: RawDay = {
     minutes,
+    stride: inputs.minuteCapacity,
     strikes,
     callOi: inputs.callOi,
     putOi: inputs.putOi,
@@ -982,9 +1058,17 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
   // Minuta bez snapshotu nese v maticích nuly, ne měření (#459) — Max Pain z
   // nulového OI by ukázal libovolný strike, takže se v díře nekreslí vůbec
   const hasSnapshot = (minuteIdx: number): boolean => inputs.snapshotMinutes[minuteIdx] !== false
-  const maxPain = maxPainSeries(raw).map((value, minuteIdx) =>
-    hasSnapshot(minuteIdx) ? value : null,
-  )
+  // Přírůstkové panely počítají rozdíl vůči PŘEDCHOZÍ MĚŘENÉ minutě, ne vůči
+  // index-1 (#459): sloupec bez snapshotu má nulové kumulativní volume, takže
+  // by za dírou vyskočil falešný špic o velikosti celého dne.
+  // Catch-up minuta (#518) se chová jako první měřená minuta dne — její
+  // kumulativy dohánějí celou dobu výpadku, ne jednu minutu obchodů.
+  const isCatchUp = (minuteIdx: number): boolean => inputs.catchUpMinutes.has(minuteKeys[minuteIdx])
+  const measured = measuredMinutes(inputs.snapshotMinutes, minutes, isCatchUp)
+  // Odvozené řady per minuta (#515): dopočítají se jen sloupce od poslední
+  // změny (append/přepis živé minuty = 1 sloupec) a memoizují se na inputs
+  const series = ensureDerived(inputs, measured, hasSnapshot)
+  const maxPain = series.maxPain.slice(0, minutes)
 
   // Flip na řídké OI páteři (#664): minuty s nadpoloviční dírou v OI se kreslí
   // ztlumeně a je-li řídká i poslední měřená minuta, cenovka nese varování —
@@ -1058,33 +1142,16 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     const minuteIdx = minuteIndex.get(bar.tsIso)
     if (minuteIdx !== undefined) vol[minuteIdx] = bar.volume
   }
-  // Přírůstkové panely počítají rozdíl vůči PŘEDCHOZÍ MĚŘENÉ minutě, ne vůči
-  // index-1 (#459): sloupec bez snapshotu má nulové kumulativní volume, takže
-  // by za dírou vyskočil falešný špic o velikosti celého dne.
-  // Catch-up minuta (#518) se chová jako první měřená minuta dne — její
-  // kumulativy dohánějí celou dobu výpadku, ne jednu minutu obchodů.
-  const isCatchUp = (minuteIdx: number): boolean => inputs.catchUpMinutes.has(minuteKeys[minuteIdx])
-  const measured = measuredMinutes(inputs.snapshotMinutes, minutes, isCatchUp)
-  const optVolCall = optVolSeries(inputs.callVolume, minutes, strikes.length, measured)
-  const optVolPut = optVolSeries(inputs.putVolume, minutes, strikes.length, measured)
+  // Panelové řady z memoizované cache (#515) — kopie, aby si snímek dne
+  // držel stabilní pole i poté, co je další append prodlouží
+  const optVolCall = series.optVolCall.slice(0, minutes)
+  const optVolPut = series.optVolPut.slice(0, minutes)
   // Evo OI (#573): Σ OI přes striky per minuta; minuty bez snapshotu drží
   // předchozí hodnotu (schod) — nula by lhala „pozice zmizely"
-  const evoOiCall = oiTotalSeries(inputs.callOi, minutes, strikes.length, hasSnapshot)
-  const evoOiPut = oiTotalSeries(inputs.putOi, minutes, strikes.length, hasSnapshot)
-  const deltaFlowCall = deltaFlowSeries(
-    inputs.callVolume,
-    inputs.callDelta,
-    minutes,
-    strikes.length,
-    measured,
-  )
-  const deltaFlowPut = deltaFlowSeries(
-    inputs.putVolume,
-    inputs.putDelta,
-    minutes,
-    strikes.length,
-    measured,
-  )
+  const evoOiCall = series.evoOiCall.slice(0, minutes)
+  const evoOiPut = series.evoOiPut.slice(0, minutes)
+  const deltaFlowCall = series.deltaFlowCall.slice(0, minutes)
+  const deltaFlowPut = series.deltaFlowPut.slice(0, minutes)
   // CumΔ je kumulativní: v díře držíme poslední známou hodnotu. Nula by tvrdila,
   // že se tok vynuloval a zase vrátil — plochý úsek říká „nevíme o přírůstku",
   // což je stav, ve kterém jsme opravdu byli.
@@ -1132,7 +1199,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
       if (cached) return cached
       const spotAtMinute = price.find((bar) => bar.minuteIdx === minuteIdx)?.close ?? Number.NaN
       const rows: ProfileRow[] = strikes.map((strike, strikeIdx) => {
-        const index = strikeIdx * minutes + minuteIdx
+        const index = strikeIdx * inputs.minuteCapacity + minuteIdx
         const callAbsDelta = Math.abs(inputs.callDelta[index])
         const putAbsDelta = Math.abs(inputs.putDelta[index])
         return {
@@ -1298,28 +1365,91 @@ function measuredMinutes(
   return { measured, prev }
 }
 
-/** Δ Flow per minuta: Σ přes strikes |delta| × kladný přírůstek volume (SPEC 4.6 váhy). */
-function deltaFlowSeries(
-  volume: Float32Array,
-  delta: Float32Array,
-  minutes: number,
-  strikeCount: number,
+/** Dopočet odvozených řad per minuta s memoizací na `inputs.derived` (#515).
+
+Sloupce 0..upTo-1 jsou z minulého skládání platné (append je nezměnil), takže
+se počítá jen zbytek — v běžném živém provozu JEDEN sloupec místo celého dne.
+Sémantika sloupců je shodná s původními celodenními průchody:
+
+* Max Pain — argmin per sloupec, minuta bez snapshotu null (#459)
+* OptVol / Δ Flow — kladné přírůstky kumulativního volume vůči PŘEDCHOZÍ
+  MĚŘENÉ minutě (#459), Δ Flow vážené |delta| (SPEC 4.6)
+* Evo OI (#573) — Σ OI přes striky; minuta bez snapshotu drží schod
+
+Cache se mutuje in-place — je to čistá memoizace (výsledek téhož vstupu),
+opakované volání nad týmž stavem je no-op. */
+function ensureDerived(
+  inputs: ReplayInputs,
   measured: MeasuredMinutes,
-): number[] {
-  const series = Array.from({ length: minutes }, () => 0)
-  for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
-    for (let minuteIdx = 1; minuteIdx < minutes; minuteIdx += 1) {
-      const previous = measured.prev[minuteIdx]
-      if (previous < 0) continue
-      const index = strikeIdx * minutes + minuteIdx
-      const increment = volume[index] - volume[strikeIdx * minutes + previous]
-      if (increment > 0) series[minuteIdx] += increment * Math.abs(delta[index])
-    }
+  hasSnapshot: (minuteIdx: number) => boolean,
+): DerivedSeriesCache {
+  const minutes = inputs.minutes.length
+  const stride = inputs.minuteCapacity
+  const strikeCount = inputs.strikes.length
+  const cache: DerivedSeriesCache = inputs.derived ?? {
+    upTo: 0,
+    maxPain: [],
+    optVolCall: [],
+    optVolPut: [],
+    deltaFlowCall: [],
+    deltaFlowPut: [],
+    evoOiCall: [],
+    evoOiPut: [],
   }
-  return series
+  for (let minuteIdx = cache.upTo; minuteIdx < minutes; minuteIdx += 1) {
+    const snapshot = hasSnapshot(minuteIdx)
+    cache.maxPain[minuteIdx] = snapshot
+      ? maxPainAt(
+          inputs.strikes,
+          (strikeIdx) => inputs.callOi[strikeIdx * stride + minuteIdx],
+          (strikeIdx) => inputs.putOi[strikeIdx * stride + minuteIdx],
+        )
+      : null
+    if (snapshot) {
+      let call = 0
+      let put = 0
+      for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
+        const index = strikeIdx * stride + minuteIdx
+        call += inputs.callOi[index]
+        put += inputs.putOi[index]
+      }
+      cache.evoOiCall[minuteIdx] = call
+      cache.evoOiPut[minuteIdx] = put
+    } else {
+      cache.evoOiCall[minuteIdx] = minuteIdx > 0 ? cache.evoOiCall[minuteIdx - 1] : 0
+      cache.evoOiPut[minuteIdx] = minuteIdx > 0 ? cache.evoOiPut[minuteIdx - 1] : 0
+    }
+    const previous = minuteIdx > 0 ? measured.prev[minuteIdx] : -1
+    let optVolCall = 0
+    let optVolPut = 0
+    let deltaFlowCall = 0
+    let deltaFlowPut = 0
+    if (previous >= 0) {
+      for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
+        const index = strikeIdx * stride + minuteIdx
+        const prevIndex = strikeIdx * stride + previous
+        const callIncrement = inputs.callVolume[index] - inputs.callVolume[prevIndex]
+        if (callIncrement > 0) {
+          optVolCall += callIncrement
+          deltaFlowCall += callIncrement * Math.abs(inputs.callDelta[index])
+        }
+        const putIncrement = inputs.putVolume[index] - inputs.putVolume[prevIndex]
+        if (putIncrement > 0) {
+          optVolPut += putIncrement
+          deltaFlowPut += putIncrement * Math.abs(inputs.putDelta[index])
+        }
+      }
+    }
+    cache.optVolCall[minuteIdx] = optVolCall
+    cache.optVolPut[minuteIdx] = optVolPut
+    cache.deltaFlowCall[minuteIdx] = deltaFlowCall
+    cache.deltaFlowPut[minuteIdx] = deltaFlowPut
+  }
+  cache.upTo = minutes
+  inputs.derived = cache
+  return cache
 }
 
-/** OptVol per minuta: Σ kladných přírůstků kumulativního volume přes strikes. */
 /** Σ OI přes striky per minuta (#573); minuta bez snapshotu = předchozí hodnota. */
 export function oiTotalSeries(
   oi: Float32Array,
@@ -1338,25 +1468,6 @@ export function oiTotalSeries(
       total += oi[strikeIdx * minutes + minuteIdx]
     }
     series[minuteIdx] = total
-  }
-  return series
-}
-
-function optVolSeries(
-  volume: Float32Array,
-  minutes: number,
-  strikeCount: number,
-  measured: MeasuredMinutes,
-): number[] {
-  const series = Array.from({ length: minutes }, () => 0)
-  for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
-    for (let minuteIdx = 1; minuteIdx < minutes; minuteIdx += 1) {
-      const previous = measured.prev[minuteIdx]
-      if (previous < 0) continue
-      const index = strikeIdx * minutes + minuteIdx
-      const increment = volume[index] - volume[strikeIdx * minutes + previous]
-      if (increment > 0) series[minuteIdx] += increment
-    }
   }
   return series
 }

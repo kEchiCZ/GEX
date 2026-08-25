@@ -1000,11 +1000,95 @@ test('appendMinute přidá nový strike (posun osy) beze ztráty starých buněk
   expect(inputs.strikes).toEqual([7600, 7610, 7620])
   expect(inputs.minutes).toHaveLength(2)
   const day = assembleReplayDay(inputs)
+  // Matice mají kapacitní stride (#515) — index = strikeIdx * stride + minuteIdx
+  const stride = day.raw.stride ?? day.raw.minutes
   // Stará buňka 7610 C v minutě 0 zůstala (strikeIdx 1, minuteIdx 0)
-  const idx7610m0 = 1 * 2 + 0
-  expect(day.raw.callOi[idx7610m0]).toBe(80)
+  expect(day.raw.callOi[1 * stride + 0]).toBe(80)
   // Nový strike 7620 C v minutě 1 (strikeIdx 2, minuteIdx 1)
-  expect(day.raw.callOi[2 * 2 + 1]).toBe(40)
+  expect(day.raw.callOi[2 * stride + 1]).toBe(40)
+})
+
+test('appendMinute (#515): živý append i přepis jedou in-place, bez realokace matic', () => {
+  const inputs = decodeBundle(
+    bundleFor(
+      CELLS.filter((c) => c.ts === M0),
+      [BARS[0]],
+      [LEVELS[0]],
+      [FLOW[0]],
+    ),
+  )
+  const matrixBefore = inputs.callOi
+  const appended = appendMinute(inputs, {
+    tsIso: M1,
+    rows: [{ strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 }],
+  })
+  expect(appended.callOi).toBe(matrixBefore) // tatáž matice, žádná kopie dne
+  expect(appended.minuteCapacity).toBe(inputs.minuteCapacity)
+  // Přepis existující minuty (WS flush) — taky in-place
+  const overwritten = appendMinute(appended, {
+    tsIso: M1,
+    rows: [{ strike: 7600, right: 'C', oi: 100, volume: 35, delta: 0.5 }],
+  })
+  expect(overwritten.callOi).toBe(matrixBefore)
+  // Nový strike osu mění → pomalá cesta s novými maticemi
+  const withNewStrike = appendMinute(overwritten, {
+    tsIso: '2026-07-16T15:02:00Z',
+    rows: [{ strike: 7620, right: 'C', oi: 40, volume: 15, delta: 0.6 }],
+  })
+  expect(withNewStrike.callOi).not.toBe(matrixBefore)
+})
+
+test('appendMinute (#515): překročení kapacity → růst matic a správné hodnoty', () => {
+  let inputs = decodeBundle(
+    bundleFor(
+      CELLS.filter((c) => c.ts === M0),
+      [BARS[0]],
+      [LEVELS[0]],
+      [FLOW[0]],
+    ),
+  )
+  const capacity = inputs.minuteCapacity
+  const isoAt = (i: number): string =>
+    new Date(Date.parse(M0) + i * 60_000).toISOString().replace('.000Z', 'Z')
+  // Dojede přesně za hranici kapacity (osa startuje s 1 minutou)
+  for (let i = 1; i <= capacity; i += 1) {
+    inputs = appendMinute(inputs, {
+      tsIso: isoAt(i),
+      rows: [{ strike: 7600, right: 'C', oi: 100 + i, volume: 10 + i, delta: 0.5 }],
+    })
+  }
+  expect(inputs.minutes).toHaveLength(capacity + 1)
+  expect(inputs.minuteCapacity).toBeGreaterThan(capacity)
+  const day = assembleReplayDay(inputs)
+  const stride = day.raw.stride ?? day.raw.minutes
+  // Poslední minuta nese poslední zapsané OI, první minuta původní data
+  expect(day.raw.callOi[0 * stride + capacity]).toBe(100 + capacity)
+  expect(day.raw.callOi[0 * stride + 0]).toBe(100)
+  // Odvozeniny jedou přes celou (prodlouženou) osu
+  expect(day.panels.evoOiCall!).toHaveLength(capacity + 1)
+  expect(day.panels.evoOiCall!.at(-1)).toBe(100 + capacity)
+  expect(day.panels.optVolCall.at(-1)).toBe(1) // volume roste o 1 na minutu
+})
+
+test('assembleReplayDay (#515): přepis starší minuty invaliduje cache odvozenin', () => {
+  const first = decodeBundle(bundleFor(CELLS, BARS, LEVELS, FLOW))
+  const day1 = assembleReplayDay(first) // naplní cache odvozenin
+  expect(day1.panels.optVolCall).toEqual([0, 32]) // (30−10) + (20−8)
+  // Přepis minuty 0: nižší výchozí volume 7600 C → přírůstek minuty 1 vzroste
+  const overwritten = appendMinute(first, {
+    tsIso: M0,
+    rows: [{ strike: 7600, right: 'C', oi: 100, volume: 2, delta: 0.5 }],
+  })
+  const day2 = assembleReplayDay(overwritten)
+  expect(day2.panels.optVolCall).toEqual([0, 40]) // (30−2) + (20−8)
+  // Plný přepočet bez cache dá totéž — cache nesmí změnit výsledek
+  const fresh = assembleReplayDay({ ...overwritten, derived: undefined })
+  expect(day2.panels).toEqual(fresh.panels)
+  expect(day2.overlays.levels?.find((l) => l.name === 'max_pain')?.series).toEqual(
+    fresh.overlays.levels?.find((l) => l.name === 'max_pain')?.series,
+  )
+  // Snímek dne z doby před přepisem drží původní řady (kopie, ne sdílené pole)
+  expect(day1.panels.optVolCall).toEqual([0, 32])
 })
 
 test('oiTotalSeries: Σ přes striky per minuta, minuta bez snapshotu drží schod (#573)', () => {

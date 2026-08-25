@@ -33,9 +33,13 @@ export const HEATMAP_SCALES = [
 ] as const
 export type HeatmapScale = (typeof HEATMAP_SCALES)[number]['value']
 
-/** Surová snapshot matice dne (index = strikeIdx * minutes + minuteIdx). */
+/** Surová snapshot matice dne (index = strikeIdx * stride + minuteIdx). */
 export interface RawDay {
   minutes: number
+  /** Stride řádku matic (#515): kapacitní rezerva pro živé appendy.
+  Chybí-li, matice jsou kompaktní a stride = minutes. INVARIANT: buňky se
+  sloupcem ≥ minutes jsou nulové. */
+  stride?: number
   strikes: number[]
   callOi: Float32Array
   putOi: Float32Array
@@ -120,6 +124,8 @@ export function buildModeGrid(
   scale: HeatmapScale,
 ): HeatmapGrid {
   const { minutes, strikes } = raw
+  // Kapacitní stride (#515): čte se přes něj, výstupní vrstvy jsou kompaktní
+  const stride = raw.stride ?? minutes
   const size = minutes * strikes.length
   const spots = filledSpots(raw.spotSeries, minutes)
 
@@ -133,8 +139,9 @@ export function buildModeGrid(
   const signed = new Float32Array(size)
   const twoSided = mode !== 'vol_signed' && mode !== 'oi_signed_all' && mode !== 'vex_signed'
   // VEX (#201): vega chybí ve starších bundle/demo datech → nulové vrstvy
-  const callVega = raw.callVega ?? new Float32Array(size)
-  const putVega = raw.putVega ?? new Float32Array(size)
+  // (velikost podle stride — čte se strided indexem)
+  const callVega = raw.callVega ?? new Float32Array(stride * strikes.length)
+  const putVega = raw.putVega ?? new Float32Array(stride * strikes.length)
 
   for (let minuteIdx = 0; minuteIdx < minutes; minuteIdx += 1) {
     const spot = spots[minuteIdx]
@@ -143,7 +150,7 @@ export function buildModeGrid(
     let maxOtm = 0
     if (mode === 'oi_plus_otm') {
       for (let strikeIdx = 0; strikeIdx < strikes.length; strikeIdx += 1) {
-        const index = strikeIdx * minutes + minuteIdx
+        const index = strikeIdx * stride + minuteIdx
         maxOi = Math.max(maxOi, callOi[index], putOi[index])
         if (spot !== null && strikes[strikeIdx] > spot) {
           maxOtm = Math.max(maxOtm, raw.callVolume[index])
@@ -155,41 +162,55 @@ export function buildModeGrid(
     }
     for (let strikeIdx = 0; strikeIdx < strikes.length; strikeIdx += 1) {
       const strike = strikes[strikeIdx]
-      const index = strikeIdx * minutes + minuteIdx
+      const index = strikeIdx * stride + minuteIdx
+      const out = strikeIdx * minutes + minuteIdx
       const callOtm = spot !== null && strike > spot ? raw.callVolume[index] : 0
       const putOtm = spot !== null && strike < spot ? raw.putVolume[index] : 0
       const callItm = spot !== null && strike <= spot ? raw.callVolume[index] : 0
       const putItm = spot !== null && strike >= spot ? raw.putVolume[index] : 0
 
       if (mode === 'oi') {
-        call[index] = callOi[index]
-        put[index] = putOi[index]
+        call[out] = callOi[index]
+        put[out] = putOi[index]
       } else if (mode === 'vol_otm') {
-        call[index] = callOtm
-        put[index] = putOtm
+        call[out] = callOtm
+        put[out] = putOtm
       } else if (mode === 'vol_itm') {
-        call[index] = callItm
-        put[index] = putItm
+        call[out] = callItm
+        put[out] = putItm
       } else if (mode === 'vol_signed') {
-        signed[index] = raw.callVolume[index] - raw.putVolume[index]
+        signed[out] = raw.callVolume[index] - raw.putVolume[index]
       } else if (mode === 'oi_plus_otm') {
         const blend = (oi: number, otm: number): number =>
           OI_WEIGHT * (maxOi > 0 ? oi / maxOi : 0) + VOL_WEIGHT * (maxOtm > 0 ? otm / maxOtm : 0)
-        call[index] = blend(callOi[index], callOtm)
-        put[index] = blend(putOi[index], putOtm)
+        call[out] = blend(callOi[index], callOtm)
+        put[out] = blend(putOi[index], putOtm)
       } else if (mode === 'oi_minus_itm') {
-        call[index] = callOi[index] - callItm
-        put[index] = putOi[index] - putItm
+        call[out] = callOi[index] - callItm
+        put[out] = putOi[index] - putItm
       } else if (mode === 'vex') {
-        call[index] = callVega[index] * raw.callOi[index]
-        put[index] = putVega[index] * raw.putOi[index]
+        call[out] = callVega[index] * raw.callOi[index]
+        put[out] = putVega[index] * raw.putOi[index]
       } else if (mode === 'vex_signed') {
-        signed[index] = callVega[index] * raw.callOi[index] - putVega[index] * raw.putOi[index]
+        signed[out] = callVega[index] * raw.callOi[index] - putVega[index] * raw.putOi[index]
       } else {
-        signed[index] = callOi[index] - putOi[index]
+        signed[out] = callOi[index] - putOi[index]
       }
     }
   }
+
+  // Grid nese staleAge kompaktně (index = strikeIdx * minutes + minuteIdx,
+  // viz grid.ts) — s kapacitním stride je nutná přeskládaná kopie
+  const compactStaleAge = ((): Float32Array | null => {
+    if (!raw.staleAge) return null
+    if (stride === minutes) return raw.staleAge
+    const compact = new Float32Array(size)
+    for (let strikeIdx = 0; strikeIdx < strikes.length; strikeIdx += 1) {
+      const src = strikeIdx * stride
+      compact.set(raw.staleAge.subarray(src, src + minutes), strikeIdx * minutes)
+    }
+    return compact
+  })()
 
   // Škálování i normalizace na místě prostou smyčkou — `Float32Array.from` s callbackem
   // stálo přes 250k buněk desítky ms navíc (#142).
@@ -219,7 +240,7 @@ export function buildModeGrid(
         call: normalize(callScaled, denominator, 0),
         put: normalize(putScaled, denominator, 0),
       },
-      staleAge: raw.staleAge,
+      staleAge: compactStaleAge,
     }
   }
   const signedScaled = transform(signed)
@@ -228,6 +249,6 @@ export function buildModeGrid(
     minutes,
     strikes,
     layers: { signed: normalize(signedScaled, denominator, -1) },
-    staleAge: raw.staleAge,
+    staleAge: compactStaleAge,
   }
 }
