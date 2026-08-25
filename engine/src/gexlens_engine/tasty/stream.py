@@ -22,6 +22,11 @@ import websockets
 
 logger = logging.getLogger(__name__)
 
+#: Rozestup mezi dávkami subskripce (#845). Server odmítá „Your subscription
+#: rate is too high", když dávky letí hned za sebou — odmítnuté symboly pak
+#: tiše mlčely a vypadalo to jako chybějící data u konkrétního kontraktu.
+SUBSCRIPTION_PAUSE_S = 0.25
+
 #: Typy zpráv, které protokol posílá běžně — nelogují se (#845)
 _EXPECTED_TYPES = frozenset({"SETUP", "AUTH_STATE", "CHANNEL_OPENED", "FEED_CONFIG", "KEEPALIVE"})
 KEEPALIVE_INTERVAL_S = 25.0
@@ -71,6 +76,7 @@ class DxLinkStream:
         #: Diagnostika pro shadow report: kolik reconnectů proběhlo
         self.reconnects = 0
         #: Počet ERROR zpráv ze serveru (#845) a poslední text
+        self._priority: frozenset[str] = frozenset()
         self.errors = 0
         self.last_error: str | None = None
 
@@ -130,11 +136,22 @@ class DxLinkStream:
                 raise RuntimeError(f"DXLink ERROR: {message}")
         raise TimeoutError(message_type)
 
+    def set_priority(self, symbols: frozenset[str]) -> None:
+        """Symboly, které se subskribují jako první (#845).
+
+        Při rate limitu server část dávek odmítne, takže na pořadí záleží:
+        podklady ES/NQ nesou cenu a CVD, kdežto o jeden opční strike navíc
+        v křídle nejde.
+        """
+        self._priority = symbols
+
     async def _send_subscription(
         self, add: set[str], remove: frozenset[str] | set[str] = frozenset()
     ) -> None:
+        # Prioritní symboly první, zbytek abecedně (stabilní pořadí)
+        ordered_add = sorted(add, key=lambda symbol: (symbol not in self._priority, symbol))
         entries_add = [
-            {"type": event, "symbol": symbol} for symbol in sorted(add) for event in self._events
+            {"type": event, "symbol": symbol} for symbol in ordered_add for event in self._events
         ]
         entries_remove = [
             {"type": event, "symbol": symbol} for symbol in sorted(remove) for event in self._events
@@ -149,6 +166,10 @@ class DxLinkStream:
                 payload["remove"] = batch_remove
             if batch_add or batch_remove:
                 await self._send(payload)
+                # Bez rozestupu server dávky odmítá (#845) a odmítnuté
+                # symboly pak tiše mlčí — viz `Your subscription rate is
+                # too high` v produkci při ~4 700 symbolech
+                await asyncio.sleep(SUBSCRIPTION_PAUSE_S)
 
     async def _connect_and_read(self, stop: asyncio.Event) -> None:
         url, token = await self._token_source()
