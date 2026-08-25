@@ -728,6 +728,34 @@ export function Heatmap({
       context.setLineDash([])
     }
 
+    // OI zdi mimo viditelný rozsah (#851): leží často stovky bodů od trhu
+    // (naměřeno: call zeď 690 b nad spotem), takže by je uživatel bez
+    // roztažení osy nikdy neviděl. Hladina, kterou nikdo nevidí, je k ničemu
+    // — proto se na příslušném okraji ukáže značka se směrem, hodnotou a
+    // vzdáleností. Slabé zdi sem nedojdou, ty odfiltroval loader prahem.
+    const lowStrike = grid.strikes[0]
+    const highStrike = grid.strikes[strikeCount - 1]
+    context.font = 'bold 10px sans-serif'
+    for (const line of levelLines) {
+      if (!line.name.startsWith('oi_')) continue
+      const value = [...line.series].reverse().find((item) => item !== null) ?? null
+      if (value === null) continue
+      const above = value > highStrike
+      if (!above && value >= lowStrike) continue // je vidět, značka netřeba
+      // Vzdálenost se měří od kraje viditelného rozsahu — spot tu k dispozici
+      // není a okraj je stejně to, od čeho uživatel odečítá
+      const edge = above ? highStrike : lowStrike
+      const distance = Math.round(Math.abs(value - edge))
+      const side = line.name.includes('call') ? 'OI call' : 'OI put'
+      const text = `${side} ${Math.round(value)} ${above ? '↑' : '↓'} +${distance} b`
+      const y = above ? 12 : logicalH - 6
+      const textWidth = context.measureText(text).width
+      context.fillStyle = line.color || LEVEL_DEFAULT_COLOR
+      context.globalAlpha = 0.85
+      context.fillText(text, Math.max(4, logicalW - textWidth - 12), y)
+      context.globalAlpha = 1
+    }
+
     // Horizontální projekce úrovní přes celou šířku s popiskem.
     // Jen pojmenované úrovně (flip/walls/centroid/max pain) — počítané walls řady ne.
     // Popisek bez podkladového obdélníku: hodnota NAD čarou v barvě čáry.

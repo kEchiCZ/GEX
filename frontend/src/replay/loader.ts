@@ -19,6 +19,7 @@ import { maxPainSeries } from '../heatmap/maxpain'
 import {
   LEVEL_COLORS,
   OI_WALL_DASH,
+  OI_WALL_WEAK,
   SECONDARY_WALL_DASH,
   WALL_DOM_WEAK,
   lastLevelValue,
@@ -1019,6 +1020,17 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     const share = lastLevelValue(levelSeries(key))
     return share === null ? undefined : ` · OI ${Math.round(share * 100)} %`
   }
+  // Slabá OI zeď se NEKRESLÍ (#851): pod prahem je profil plochý a „zeď" je
+  // jen nejvyšší z mnoha srovnatelných striků — čára, o kterou se cena nemá
+  // důvod opřít, by graf jen zahustila. Minuty pod prahem padnou na null,
+  // takže se linka přeruší přesně tam, kde zeď ztratila váhu.
+  const strongOnly = (wallKey: string, shareKey: string): (number | null)[] => {
+    const shares = levelSeries(shareKey)
+    return levelSeries(wallKey).map((value, idx) => {
+      const share = shares[idx]
+      return share !== null && share >= OI_WALL_WEAK ? value : null
+    })
+  }
   const walls: LevelLine[] = [
     { name: 'call_wall', color: LEVEL_COLORS.call_wall, series: levelSeries('call_wall'), weak: weakFlags('call_wall_dom'), labelSuffix: domSuffix('call_wall_dom') }, // prettier-ignore
     { name: 'put_wall', color: LEVEL_COLORS.put_wall, series: levelSeries('put_wall'), weak: weakFlags('put_wall_dom'), labelSuffix: domSuffix('put_wall_dom') }, // prettier-ignore
@@ -1030,8 +1042,8 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     // zájmu, tedy jiná veličina (magnet k expiraci vs. hedging teď). Kreslí
     // se tečkovaně a nesou podíl na OI své strany, aby šlo poznat, jestli je
     // to koncentrovaná úroveň, nebo jen nejvyšší z mnoha srovnatelných.
-    { name: 'oi_call_wall', color: LEVEL_COLORS.oi_call_wall, dash: OI_WALL_DASH, series: levelSeries('oi_call_wall'), labelSuffix: shareSuffix('oi_call_share') }, // prettier-ignore
-    { name: 'oi_put_wall', color: LEVEL_COLORS.oi_put_wall, dash: OI_WALL_DASH, series: levelSeries('oi_put_wall'), labelSuffix: shareSuffix('oi_put_share') }, // prettier-ignore
+    { name: 'oi_call_wall', color: LEVEL_COLORS.oi_call_wall, dash: OI_WALL_DASH, series: strongOnly('oi_call_wall', 'oi_call_share'), labelSuffix: shareSuffix('oi_call_share') }, // prettier-ignore
+    { name: 'oi_put_wall', color: LEVEL_COLORS.oi_put_wall, dash: OI_WALL_DASH, series: strongOnly('oi_put_wall', 'oi_put_share'), labelSuffix: shareSuffix('oi_put_share') }, // prettier-ignore
   ]
   const overlays: OverlayData = {
     price,

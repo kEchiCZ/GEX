@@ -40,6 +40,15 @@ export interface LevelLine {
     Zrcadlí engine default `GEXLENS_SETUP_MIN_WALL_DOMINANCE`. */
 export const WALL_DOM_WEAK = 0.15
 
+/** Práh, pod kterým se OI zeď vůbec nekreslí (#851).
+
+Podíl na OI své strany rozlišuje koncentrovanou úroveň od plochého profilu,
+kde je „zeď" jen nejvyšší z mnoha srovnatelných striků. Naměřené rozdělení
+(ES+NQ, 761 minut) je bimodální: hodnoty se drží kolem 11–15 %, pak skočí
+na 22–36 % a mezi tím je prázdno — práh proto leží v té mezeře. Slabá zeď
+by graf jen zahustila čárou, o kterou se cena nemá důvod opřít. */
+export const OI_WALL_WEAK = 0.2
+
 /** Barvy úrovní — jediný zdroj pro graf i legendu (#346).
 
 Dokud byly literály v `loader.ts`, ukázka v legendě se s grafem mohla rozejít
