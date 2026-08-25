@@ -434,6 +434,11 @@ export function useDayData(
         // Vega pro VEX módy (#201) — starší engine pole neposílá → 0
         vega: Number(row.vega) || 0,
         stale_age: Number(row.stale_age) || 0,
+        // Midpoint pro P/C v prémiích (#469, #835): engine ho posílá jako
+        // aditivní pole, ale mapování ho zahazovalo — každá živá minuta pak
+        // měla mid = 0 a prémiový poměr ukazoval $0, dokud se zobrazovala
+        // minuta z WS místo z /replay balíku
+        mid: row.mid === null || row.mid === undefined ? null : Number(row.mid),
       }))
       scheduleFlush()
     }
