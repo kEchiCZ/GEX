@@ -14,6 +14,7 @@ import os
 import sys
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from dataclasses import replace
 from typing import Any
 
 from ib_async import IB, Contract, Future, RealTimeBarList, Ticker
@@ -121,6 +122,7 @@ from gexlens_engine.tasty.spot_fallback import SpotFallback
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
 from gexlens_engine.tasty.trades_recorder import TradesRecorder
+from gexlens_engine.tasty.wideoi import wide_contracts, wide_records
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.volregime import VolRegimeCollector
 
@@ -1466,6 +1468,59 @@ async def main() -> None:
                 except Exception:
                     logger.exception("Spot bez pipeline selhal — příští cyklus jede dál")
 
+        async def wide_oi_once() -> int:
+            """Archivace striků mimo IBKR obálku z tasty Summary (#828).
+
+            Běží v kadenci extended smyčky, ale zapisuje jen kontrakty, které
+            IBKR archiv nepokrývá — `covered` se zjišťuje dotazem na archiv,
+            takže se nemusí protahovat znalost obálky přes celý engine a dva
+            zdroje se nikdy neperou o týž řádek.
+            """
+            if not settings.tasty_wide_oi:
+                return 0
+            today = dt.datetime.now(dt.UTC).date()
+            written = 0
+            for symbol, chain in list(shadow_chain.items()):
+                pipe = pipelines.get(symbol)
+                if pipe is None or not pipe.runtime.contracts:
+                    continue  # bez běžící pipeline není podle čeho poznat obálku
+                # Vzor nese exchange/trading_class/multiplier aktivní expirace
+                sample = pipe.runtime.contracts[0]
+                expiry = pipe.runtime.expiry
+                covered = await asyncio.to_thread(oi_repository.values_for, symbol, expiry, today)
+                covered_specs = [
+                    replace(sample, strike=row.strike, right=row.right) for row in covered
+                ]
+                contracts = wide_contracts(
+                    chain,
+                    expiry,
+                    covered_specs,
+                    symbol=symbol,
+                    exchange=sample.exchange,
+                    multiplier=sample.multiplier,
+                    trading_class=sample.trading_class,
+                )
+                if not contracts:
+                    continue
+                records = wide_records(
+                    contracts,
+                    lambda streamer: (
+                        state.summary.open_interest
+                        if (state := tasty_cache.state(streamer)) is not None
+                        else None
+                    ),
+                    today,
+                )
+                if not records:
+                    continue
+                await asyncio.to_thread(
+                    oi_repository.upsert_many,
+                    records,
+                    tasty_captured_ts=dt.datetime.now(dt.UTC),
+                )
+                written += len(records)
+            return written
+
         async def extended_snapshot_loop() -> None:
             """Minutová konsolidace extended expirací (#616 4a).
 
@@ -1485,6 +1540,17 @@ async def main() -> None:
                     minute_of_day = ts_min.hour * 60 + ts_min.minute
                     written = 0
                     gates: dict[str, str] = {}
+                    # Široký OI (#828) — nezávislé na extended plánu, drží
+                    # se jen chain mapy; chyba tu nesmí vzít extended snímky
+                    try:
+                        wide_written = await wide_oi_once()
+                        if wide_written:
+                            logger.info(
+                                "Široký OI z tasty (#828): %d striků mimo IBKR obálku",
+                                wide_written,
+                            )
+                    except Exception:
+                        logger.exception("Široký OI selhal — extended snímky jedou dál")
                     for symbol, planned in list(extended_plan.items()):
                         chain = shadow_chain.get(symbol)
                         if chain is None or not planned:
