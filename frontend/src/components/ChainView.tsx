@@ -14,7 +14,7 @@ interface ChainSide {
   bid: number | null
   ask: number | null
   last: number | null
-  volume: number
+  volume: number | null
   iv: number | null
   delta: number | null
   gamma: number | null
@@ -23,6 +23,11 @@ interface ChainSide {
   oi: number
   oi_change: number | null
   stale: boolean
+  /** Řádek jen z OI archivu (#849): široký OI z tasty (#828) leží mimo
+  snapshoty, takže denní OI známe, ale minutová data (kotace, greeks,
+  volume) pro něj neexistují. Odlišuje se, aby prázdné buňky nevypadaly
+  jako naměřená nula — týž princip jako oi_missing (#465). */
+  archive_only?: boolean
 }
 
 interface ChainRow {
@@ -50,7 +55,7 @@ function SideCells({ side, mirror }: { side?: ChainSide; mirror: boolean }) {
         fmt(side.bid),
         fmt(side.ask),
         fmt(side.last),
-        String(Math.round(side.volume)),
+        side.volume === null ? '—' : String(Math.round(side.volume)),
         side.iv === null ? '—' : `${(side.iv * 100).toFixed(1)} %`,
         fmt(side.delta, 3),
         fmt(side.gamma, 4),
@@ -65,7 +70,19 @@ function SideCells({ side, mirror }: { side?: ChainSide; mirror: boolean }) {
   return (
     <>
       {ordered.map((text, index) => (
-        <td key={index} className={side?.stale ? 'stale' : undefined}>
+        <td
+          key={index}
+          className={
+            [side?.stale ? 'stale' : '', side?.archive_only ? 'archive-only' : '']
+              .filter(Boolean)
+              .join(' ') || undefined
+          }
+          title={
+            side?.archive_only
+              ? 'Jen denní OI z archivu (#828) — strike leží mimo minutové snímky, kotace ani greeks pro něj nemáme'
+              : undefined
+          }
+        >
           {text}
         </td>
       ))}

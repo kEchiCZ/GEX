@@ -708,6 +708,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             entry = by_strike.setdefault(strike, {"strike": strike})
             entry["call" if row.right == "C" else "put"] = side
 
+        # Striky z OI archivu mimo snapshoty (#849): široký OI z tasty (#828)
+        # pokrývá i křídla, kam IBKR obálka nedosáhne — bez nich čte P/C i
+        # profil jen useknutý řetěz a put strana vychází podhodnocená.
+        # Minutová data (kotace, greeks, volume) tyhle řádky NEMAJÍ a mít
+        # nemůžou: denní OI opravdu známe, minutový vývoj ne. `archive_only`
+        # to říká nahlas, ať je UI odliší místo aby vypadaly jako měřené.
+        try:
+            for record in oi_repository().values_for(symbol, expiry, date):
+                entry = by_strike.setdefault(float(record.strike), {"strike": float(record.strike)})
+                key = "call" if record.right == "C" else "put"
+                if key in entry:
+                    continue  # snapshot má přednost — nese i kotace a greeks
+                prev = oi_prev.get((record.strike, record.right))
+                entry[key] = {
+                    "bid": None,
+                    "ask": None,
+                    "last": None,
+                    "volume": None,
+                    "iv": None,
+                    "delta": None,
+                    "gamma": None,
+                    "theta": None,
+                    "vega": None,
+                    "oi": record.oi,
+                    "stale": False,
+                    "oi_change": None if prev is None else record.oi - prev,
+                    "archive_only": True,
+                }
+        except Exception:
+            pass  # archiv nedostupný — tabulka drží tvar jen ze snapshotů
+
         return {
             "ts": minute.isoformat(),
             "symbol": symbol,
