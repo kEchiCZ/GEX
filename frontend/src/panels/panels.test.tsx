@@ -647,3 +647,22 @@ test('profil nese i striky jen z OI archivu a odliší je (#849)', async () => {
   expect(withArchive.put).toBe(5000)
   expect(withArchive.ratio).toBe(2.5) // bez archivního striku by vyšlo 0
 })
+
+test('slabá OI zeď se nekreslí, silná ano (#851)', async () => {
+  const { OI_WALL_WEAK } = await import('../heatmap/overlays')
+
+  // Práh leží v mezeře naměřeného bimodálního rozdělení (11–15 % vs. 22–36 %)
+  expect(OI_WALL_WEAK).toBeGreaterThan(0.15)
+  expect(OI_WALL_WEAK).toBeLessThan(0.22)
+
+  // Filtr, který používá loader: minuty pod prahem padnou na null, takže se
+  // linka přeruší přesně tam, kde zeď ztratila váhu
+  const walls = [29910, 29910, 27500, 27500]
+  const shares = [0.36, 0.11, null, 0.24]
+  const strong = walls.map((value, idx) => {
+    const share = shares[idx]
+    return share !== null && share >= OI_WALL_WEAK ? value : null
+  })
+
+  expect(strong).toEqual([29910, null, null, 27500])
+})
