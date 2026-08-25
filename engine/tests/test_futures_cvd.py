@@ -106,3 +106,28 @@ def test_restore_cum_navaze_po_restartu() -> None:
     t.on_event("TimeAndSale", trade(FRONT, 200.0, "BUY"))
 
     assert t.close_minute("ES", TS).cvd == -1000.0
+
+
+def test_status_fields_odlisi_tri_pricini_nuly() -> None:
+    """#829: CVD = 0 může znamenat tři různé věci — status je musí rozlišit."""
+    t = tracker()
+
+    # (a) registrováno, ale žádné printy
+    assert t.status_fields() == {
+        "futures_cvd": {
+            "ES": {"streamer": FRONT, "trades_minute": 0, "with_aggressor_minute": 0, "cum": 0.0}
+        }
+    }
+
+    # (b) printy chodí, ale bez agresora → tok zůstane nula, počet ne
+    t.on_event("TimeAndSale", trade(FRONT, 50.0, "UNDEFINED"))
+    es = t.status_fields()["futures_cvd"]["ES"]  # type: ignore[index]
+    assert es == {"streamer": FRONT, "trades_minute": 1, "with_aggressor_minute": 0, "cum": 0.0}
+
+    # (c) plnohodnotný print
+    t.on_event("TimeAndSale", trade(FRONT, 5.0, "BUY"))
+    es = t.status_fields()["futures_cvd"]["ES"]  # type: ignore[index]
+    assert es == {"streamer": FRONT, "trades_minute": 2, "with_aggressor_minute": 1, "cum": 5.0}
+
+    # Neregistrovaný instrument se v diagnostice vůbec neobjeví
+    assert "NQ" not in t.status_fields()["futures_cvd"]  # type: ignore[operator]

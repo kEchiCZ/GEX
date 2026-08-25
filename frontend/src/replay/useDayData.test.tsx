@@ -580,3 +580,33 @@ test('selhané obnovy ukážou stáří dat do 2 cyklů; obnova indikaci smaže 
   })
   expect(result.current.staleData).toBeNull()
 })
+
+test('živá minuta z WS nese mid pro P/C v prémiích (#835)', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+
+  await act(async () => {
+    // Engine `mid` posílá jako aditivní pole (#469); mapování ho dřív
+    // zahazovalo, takže každá živá minuta měla mid = 0 a prémiový P/C
+    // ukazoval $0, dokud se zobrazovala minuta z WS místo z /replay
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: '2026-07-16T15:01:00Z',
+      rows: [
+        { strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5, mid: 12.5 },
+        { strike: 7600, right: 'P', oi: 200, volume: 12, delta: -0.4, mid: 8.25 },
+      ],
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+
+  const rows = result.current.day.profileByMinute!.rowsAt(1)
+  const row = rows.find((r) => r.strike === 7600)!
+  expect(row.callMid).toBe(12.5)
+  expect(row.putMid).toBe(8.25)
+})
