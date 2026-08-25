@@ -1124,14 +1124,28 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
       // JEN denní OI — kotace, greeks a volume pro ně neexistují, takže
       // `archiveOnly` říká UI, ať je odliší místo aby prázdno vypadalo jako
       // naměřená nula (týž princip jako oiMissing, #465).
-      const known = new Set(strikes)
-      const extra = new Map<number, { call: number; put: number }>()
+      const archive = new Map<number, { call: number; put: number }>()
       for (const row of inputs.oiToday) {
-        if (known.has(row.strike)) continue
-        const entry = extra.get(row.strike) ?? { call: 0, put: 0 }
+        const entry = archive.get(row.strike) ?? { call: 0, put: 0 }
         if (row.right === 'C') entry.call = row.oi
         else entry.put = row.oi
-        extra.set(row.strike, entry)
+        archive.set(row.strike, entry)
+      }
+      // Strike může být v gridu (měřil se někdy během dne), ale v TÉHLE minutě
+      // mít OI = 0, protože ho snapshot nepokryl. OI je přitom denní hodnota,
+      // takže archiv je pak pravda — bez toho počítá P/C přes stovky striků
+      // s nulou a ukáže opak reality (naměřeno 0,66 místo 2,92).
+      const known = new Set(strikes)
+      for (const row of rows) {
+        const arch = archive.get(row.strike)
+        if (!arch) continue
+        if (row.callOi === 0 && arch.call > 0) row.callOi = arch.call
+        if (row.putOi === 0 && arch.put > 0) row.putOi = arch.put
+      }
+      const extra = new Map<number, { call: number; put: number }>()
+      for (const [strike, oi] of archive) {
+        if (known.has(strike)) continue
+        extra.set(strike, oi)
       }
       for (const [strike, oi] of extra) {
         rows.push({
