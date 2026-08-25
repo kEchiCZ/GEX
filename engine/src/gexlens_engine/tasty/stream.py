@@ -22,6 +22,8 @@ import websockets
 
 logger = logging.getLogger(__name__)
 
+#: Typy zpráv, které protokol posílá běžně — nelogují se (#845)
+_EXPECTED_TYPES = frozenset({"SETUP", "AUTH_STATE", "CHANNEL_OPENED", "FEED_CONFIG", "KEEPALIVE"})
 KEEPALIVE_INTERVAL_S = 25.0
 SUBSCRIPTION_BATCH = 500
 _BACKOFF_START_S = 1.0
@@ -68,6 +70,9 @@ class DxLinkStream:
         self._ws: websockets.ClientConnection | None = None
         #: Diagnostika pro shadow report: kolik reconnectů proběhlo
         self.reconnects = 0
+        #: Počet ERROR zpráv ze serveru (#845) a poslední text
+        self.errors = 0
+        self.last_error: str | None = None
 
     @property
     def connected(self) -> bool:
@@ -198,9 +203,20 @@ class DxLinkStream:
                     except TimeoutError:
                         continue
                     message = json.loads(raw)
-                    if message.get("type") != "FEED_DATA":
+                    msg_type = str(message.get("type") or "")
+                    if msg_type == "FEED_DATA":
+                        self._dispatch(message.get("data", []))
                         continue
-                    self._dispatch(message.get("data", []))
+                    # Cokoli jiného se dřív tiše zahodilo — včetně ERROR.
+                    # Tiché odmítnutí subskripce pak bylo nerozeznatelné od
+                    # „symbol mlčí" (#845; totéž stálo za nedělním hledáním
+                    # v #616, kdy ES extended mlčelo po přetečení kapacity).
+                    if msg_type == "ERROR":
+                        self.errors += 1
+                        self.last_error = str(message.get("message") or message)
+                        logger.error("DXLink ERROR: %s", message)
+                    elif msg_type not in _EXPECTED_TYPES:
+                        logger.info("DXLink neznámá zpráva %s: %s", msg_type, message)
             finally:
                 self._ws = None
 

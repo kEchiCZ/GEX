@@ -1137,6 +1137,9 @@ async def main() -> None:
             counts = tasty_cache.field_counts()
             fields: dict[str, object] = {
                 "tasty_connected": tasty_stream.connected,
+                # Odmítnutí ze serveru (#845) — dřív se tiše zahazovala
+                "tasty_stream_errors": tasty_stream.errors,
+                "tasty_stream_last_error": tasty_stream.last_error,
                 "tasty_reconnects": tasty_stream.reconnects,
                 "tasty_symbols": tasty_cache.symbols_tracked(),
                 "tasty_quotes": counts["quotes"],
