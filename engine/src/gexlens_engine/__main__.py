@@ -1438,6 +1438,10 @@ async def main() -> None:
                             }
                         )
                     if symbols:
+                        # Podklady první (#845): při rate limitu server část
+                        # dávek odmítne a podklad nese cenu i CVD — o strike
+                        # v křídle navíc nejde
+                        tasty_stream.set_priority(frozenset(shadow_front_future.values()))
                         await tasty_stream.set_symbols(symbols)
                 except Exception:
                     logger.exception("Shadow symbols refresh selhal — zkusí se za minutu")
