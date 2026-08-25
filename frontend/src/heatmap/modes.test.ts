@@ -45,6 +45,53 @@ test('p99Denominator (quickselect) se shoduje s plným tříděním (#142)', () 
   }
 })
 
+test('kapacitní stride (#515): grid i staleAge shodné s kompaktní maticí', () => {
+  // 2 striky × 2 minuty kompaktně vs. tatáž data se stride 5
+  const strided = (values: number[], stride: number): Float32Array => {
+    const result = new Float32Array(2 * stride)
+    values.forEach((value, index) => {
+      result[Math.floor(index / 2) * stride + (index % 2)] = value
+    })
+    return result
+  }
+  const values = {
+    callOi: [100, 120, 300, 310],
+    putOi: [400, 390, 50, 60],
+    callVolume: [5, 6, 20, 21],
+    putVolume: [8, 9, 2, 3],
+    staleAge: [0, 700, 0, 0],
+  }
+  const compact: RawDay = {
+    minutes: 2,
+    strikes: [90, 110],
+    callOi: Float32Array.from(values.callOi),
+    putOi: Float32Array.from(values.putOi),
+    callVolume: Float32Array.from(values.callVolume),
+    putVolume: Float32Array.from(values.putVolume),
+    spotSeries: [100, 101],
+    staleAge: Float32Array.from(values.staleAge),
+  }
+  const withStride: RawDay = {
+    ...compact,
+    stride: 5,
+    callOi: strided(values.callOi, 5),
+    putOi: strided(values.putOi, 5),
+    callVolume: strided(values.callVolume, 5),
+    putVolume: strided(values.putVolume, 5),
+    staleAge: strided(values.staleAge, 5),
+  }
+  for (const mode of ['oi', 'vol_signed', 'oi_plus_otm'] as const) {
+    const a = buildModeGrid(compact, mode, 'linear')
+    const b = buildModeGrid(withStride, mode, 'linear')
+    expect(Array.from(b.layers.call ?? [])).toEqual(Array.from(a.layers.call ?? []))
+    expect(Array.from(b.layers.put ?? [])).toEqual(Array.from(a.layers.put ?? []))
+    expect(Array.from(b.layers.signed ?? [])).toEqual(Array.from(a.layers.signed ?? []))
+    // Grid nese staleAge vždy kompaktně — strided vstup se přeskládá
+    expect(Array.from(b.staleAge!)).toEqual(Array.from(a.staleAge!))
+  }
+  expect(maxPainSeries(withStride)).toEqual(maxPainSeries(compact))
+})
+
 test('OI mód: vrstvy normalizované společným p99', () => {
   const grid = buildModeGrid(raw(), 'oi', 'linear')
   // denom = max(p99 call 300, p99 put 400) = 400

@@ -71,11 +71,12 @@ export function maxPainAt(
 /** Max Pain per minuta ze surové snapshot matice. */
 export function maxPainSeries(raw: RawDay): (number | null)[] {
   const { minutes, strikes } = raw
+  const stride = raw.stride ?? minutes
   return Array.from({ length: minutes }, (_, minuteIdx) =>
     maxPainAt(
       strikes,
-      (strikeIdx) => raw.callOi[strikeIdx * minutes + minuteIdx],
-      (strikeIdx) => raw.putOi[strikeIdx * minutes + minuteIdx],
+      (strikeIdx) => raw.callOi[strikeIdx * stride + minuteIdx],
+      (strikeIdx) => raw.putOi[strikeIdx * stride + minuteIdx],
     ),
   )
 }

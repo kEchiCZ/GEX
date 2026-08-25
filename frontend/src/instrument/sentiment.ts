@@ -15,14 +15,14 @@ export interface PcrPoint {
 function ratioAt(
   put: Float32Array,
   call: Float32Array,
-  minutes: number,
+  stride: number,
   strikeCount: number,
   minuteIdx: number,
 ): number | null {
   let putSum = 0
   let callSum = 0
   for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
-    const index = strikeIdx * minutes + minuteIdx
+    const index = strikeIdx * stride + minuteIdx
     putSum += put[index]
     callSum += call[index]
   }
@@ -36,16 +36,17 @@ export function pcrAt(raw: RawDay, minuteIdx: number): PcrPoint {
     return { volume: null, oi: null }
   }
   return {
-    volume: ratioAt(raw.putVolume, raw.callVolume, raw.minutes, strikeCount, minuteIdx),
-    oi: ratioAt(raw.putOi, raw.callOi, raw.minutes, strikeCount, minuteIdx),
+    volume: ratioAt(raw.putVolume, raw.callVolume, raw.stride ?? raw.minutes, strikeCount, minuteIdx), // prettier-ignore
+    oi: ratioAt(raw.putOi, raw.callOi, raw.stride ?? raw.minutes, strikeCount, minuteIdx),
   }
 }
 
 /** Denní řada PCR(volume) pro mini křivku — vývoj intradenního toku. */
 export function pcrVolumeSeries(raw: RawDay): (number | null)[] {
   const strikeCount = raw.strikes.length
+  const stride = raw.stride ?? raw.minutes
   return Array.from({ length: raw.minutes }, (_, minuteIdx) =>
-    ratioAt(raw.putVolume, raw.callVolume, raw.minutes, strikeCount, minuteIdx),
+    ratioAt(raw.putVolume, raw.callVolume, stride, strikeCount, minuteIdx),
   )
 }
 
