@@ -125,3 +125,35 @@ def test_extended_streamers_pasmo_a_fallback_centra() -> None:
     nq_chain = ChainSymbols(product="NQ", day=TODAY, by_contract=nq_contracts)
     nq = extended_streamers(nq_chain, ["20260826"], center=26000.0, band_pct=3.1)
     assert nq == {".NQ25200C", ".NQ25600C", ".NQ26000C", ".NQ26400C", ".NQ26800C"}
+
+
+def test_odstupnovane_pasmo_siroke_pro_blizke_expirace() -> None:
+    """#828 A: kapacita je konečná, tak se dá tam, kde je masa OTM putů."""
+    from gexlens_engine.tasty.extended import extended_streamers
+
+    by_contract = {}
+    for expiry in ("20260825", "20260915"):
+        for strike in range(6000, 7001, 100):
+            by_contract[(expiry, float(strike), "C")] = f".ES{expiry}{strike}C"
+    chain = ChainSymbols(product="ES", day=TODAY, by_contract=by_contract)
+    planned = ["20260825", "20260915"]
+
+    out = extended_streamers(
+        chain,
+        planned,
+        center=6500.0,
+        band_pct=3.1,  # ±201 b pro vzdálené
+        near_band_pct=8.0,  # ±520 b pro nejbližší
+        near_expiries=frozenset({"20260825"}),
+    )
+
+    near = sorted(s for s in out if "20260825" in s)
+    far = sorted(s for s in out if "20260915" in s)
+    # Blízká expirace sahá hlouběji do křídel než vzdálená
+    assert len(near) > len(far)
+    assert ".ES202608256000C" in near  # −500 b, uvnitř ±8 %
+    assert ".ES202609156000C" not in far  # tentýž strike u vzdálené už ne
+
+    # Bez near_band_pct se chová jako dřív (jedno pásmo pro všechny)
+    uniform = extended_streamers(chain, planned, center=6500.0, band_pct=3.1)
+    assert len([s for s in uniform if "20260825" in s]) == len(far)

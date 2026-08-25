@@ -196,6 +196,12 @@ class Settings(BaseSettings):
     # leží masa OTM putů. Bez něj jsou celořetězové agregáty (P/C, total_gex)
     # systematicky vychýlené — naměřeno: put strana 3× nižší než skutečnost.
     tasty_wide_oi: bool = True
+    # Odstupňované pásmo (#828 varianta A): nejbližší expirace dostanou širší
+    # pokrytí, protože masa OTM putů leží tam; vzdálené se zúží, aby se to
+    # vešlo do stropu 6 008 symbolů. Bez toho se široký OI archiv (#828)
+    # nemá kde projevit — Summary chodí jen pro subskribované symboly.
+    tasty_near_band_pct: float = Field(default=8.0, gt=0)
+    tasty_near_band_expiries: int = Field(default=3, ge=0)
     # Greeks validátor (#614 finále, rozhodnuto 22. 8.): tasty × IBKR modely se
     # hlídají navzájem; prahy per kontrakt jsou MĚŘENÉ konstanty (2× p95 z 5
     # čistých seancí, tasty/greeks_validator.py). Jen hlásí — žádný zásah.

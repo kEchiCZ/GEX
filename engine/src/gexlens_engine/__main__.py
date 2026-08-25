@@ -1404,11 +1404,16 @@ async def main() -> None:
                             # šířka) přeteče kapacitu subskripce a server tiše
                             # nedodá NIC (nedělní noc 23. 8.: NQ psalo, ES mlčelo)
                             spot_price, spot_fresh = _tasty_spot(symbol)
+                            # Nejbližší expirace širší (#828 A) — masa OTM
+                            # putů leží tam, vzdálené se zúží kvůli stropu
+                            near = frozenset(sorted(planned)[: settings.tasty_near_band_expiries])
                             symbols |= extended_streamers(
                                 chain,
                                 planned,
                                 center=spot_price if spot_fresh else None,
                                 band_pct=settings.tasty_extended_band_pct,
+                                near_band_pct=settings.tasty_near_band_pct,
+                                near_expiries=near,
                             )
                         # Podklad (#614): bez něj by při výpadku IBKR zamrzl
                         # cenový graf, i kdyby řetěz z tasty tekl dál
