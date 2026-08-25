@@ -170,6 +170,8 @@ def extended_streamers(
     *,
     center: float | None,
     band_pct: float,
+    near_band_pct: float | None = None,
+    near_expiries: frozenset[str] = frozenset(),
 ) -> set[str]:
     """Streamer symboly extended expirací omezené pásmem kolem ceny (#616).
 
@@ -181,6 +183,12 @@ def extended_streamers(
     (cena ~4× ES) ořezala křídla na zlomek ES pokrytí (lekce ADR-0004).
     `center=None` (spot ještě není) → medián striků nejbližší plánované
     expirace jako náhrada; chain je kolem trhu, medián sedí na desítky bodů.
+
+    Pásmo je odstupňované (#828 varianta A): kapacita subskripce je konečná
+    (6 008 symbolů, ADR-0027), takže se rozděluje podle užitečnosti. Masa
+    OTM putů, kvůli které je široké pokrytí potřeba, leží u nejbližších
+    expirací — u expirace za tři týdny je pro dnešní čtení málo užitečná.
+    `near_expiries` proto dostanou `near_band_pct`, zbytek `band_pct`.
     """
     planned_set = set(planned)
     if center is None and planned:
@@ -189,9 +197,11 @@ def extended_streamers(
         center = strikes[len(strikes) // 2] if strikes else None
     if center is None:
         return set()
-    band_points = center * band_pct / 100.0
+    far_points = center * band_pct / 100.0
+    near_points = center * (near_band_pct if near_band_pct is not None else band_pct) / 100.0
     return {
         streamer
         for (expiry, strike, _right), streamer in chain.by_contract.items()
-        if expiry in planned_set and abs(strike - center) <= band_points
+        if expiry in planned_set
+        and abs(strike - center) <= (near_points if expiry in near_expiries else far_points)
     }
