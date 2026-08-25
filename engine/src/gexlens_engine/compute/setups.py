@@ -48,7 +48,14 @@ from dataclasses import dataclass, field, replace
 #    v4: CumΔ a net objem kotvené na open Globex seance (#638) — dřív se
 #       resetovaly jen restartem enginu, takže cum_delta v context řádcích
 #       v3 a v4 nejsou srovnatelné (jiná základna).
-SETUP_MECHANICS_VERSION = 4
+#    v5: Max Pain se přepočítává při každé změně archivu OI (#826). Do v4
+#       zamrzal na první ranní hodnotě, kdy je archiv nejprázdnější — a
+#       vstupuje do `_nearest_level_above/below`, takže posouval `target`
+#       všech šablon, ne jen T3. Setupy do v4 se tedy učily proti cíli,
+#       který neodpovídal skutečnosti (NQ 24. 8.: tendence celý den 29525,
+#       skutečnost 29200 → 29400 → 29390), a do hodnocení track recordu
+#       nepatří (#859).
+SETUP_MECHANICS_VERSION = 5
 
 
 class SetupTemplate(enum.Enum):
