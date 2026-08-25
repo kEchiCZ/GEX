@@ -895,6 +895,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             # OI archiv nedostupný (např. čerstvá DB) — balík drží tvar bez ΔOI
             bundle["oi_prev"] = []
+
+        # Denní OI dneška vč. striků mimo snapshoty (#849): široký archiv
+        # z tasty (#828) pokrývá i křídla, kam IBKR obálka nedosáhne. Posílá
+        # se jako samostatné pole, NE jako řádky do minutové matice — ty by
+        # pro každou minutu nesly NaN kotace a nafoukly balík (dnes 33–35 MB).
+        bundle["oi_today"] = []
+        try:
+            bundle["oi_today"] = [
+                {"strike": record.strike, "right": record.right, "oi": record.oi}
+                for record in oi_repository().values_for(symbol, expiry, date)
+            ]
+        except Exception:
+            bundle["oi_today"] = []
         return JSONResponse(bundle, headers=cache_headers)
 
     @app.get("/gexplane/{symbol}/{expiry}")

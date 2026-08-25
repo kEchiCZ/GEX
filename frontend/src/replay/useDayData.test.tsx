@@ -22,6 +22,7 @@ function makeInputs(): ReplayInputs {
     date: '2026-07-16',
     minutes: ['2026-07-16T15:00:00.000Z'],
     snapshotMinutes: [true],
+    oiToday: [],
     oiMissing: new Set<string>(),
     oiFilled: new Set<string>(),
     oiLowMinutes: [false],
