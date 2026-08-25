@@ -9,6 +9,10 @@ export interface NewsRow {
   kind: 'scheduled' | 'headline' | 'social' | 'broker'
   category: string | null
   importance: number | null
+  /** Surový záznam zdroje (ForexFactory) — nese `impact` (High/Medium/Low).
+  `importance` na to není spolehlivý proxy: hodnota 3 se v datech objevuje
+  i u Low událostí (#830). */
+  raw?: Record<string, unknown> | null
   title: string
   summary: string | null
   sentiment_dir: number | null
@@ -161,6 +165,16 @@ export function relativeAge(iso: string, nowMs: number): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+/** Je to událost, kvůli které se hýbe celý trh? (#830)
+
+Bere `impact` ze zdroje, `importance` jen jako záložku pro starší záznamy
+bez `raw` — samo o sobě totiž rozlišuje špatně. */
+export function isHighImpact(row: NewsRow): boolean {
+  const impact = row.raw?.impact
+  if (typeof impact === 'string') return impact.toLowerCase() === 'high'
+  return (row.importance ?? 0) >= 3
 }
 
 export async function fetchUpcoming(hours = 24): Promise<NewsRow[]> {
