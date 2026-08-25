@@ -127,6 +127,24 @@ class FuturesCvdTracker:
         """Má instrument registrovaný streamer? Bez něj je řada jen prázdná."""
         return symbol in self._streamers.values()
 
+    def status_fields(self) -> dict[str, object]:
+        """Diagnostika do /status: co který instrument sleduje a kolik toho vidí.
+
+        Bez tohohle nejde odlišit tři různé stavy, které v parquet vypadají
+        stejně (CVD = 0): streamer není registrovaný, registrovaný je ale
+        printy nechodí, nebo chodí bez `aggressorSide`.
+        """
+        per_symbol: dict[str, object] = {}
+        for streamer, symbol in self._streamers.items():
+            trades = self._trades.get(symbol, 0)
+            per_symbol[symbol] = {
+                "streamer": streamer,
+                "trades_minute": trades,
+                "with_aggressor_minute": self._with_aggressor.get(symbol, 0),
+                "cum": round(self._cum.get(symbol, 0.0), 1),
+            }
+        return {"futures_cvd": per_symbol}
+
 
 def _number(value: object) -> float | None:
     try:

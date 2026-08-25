@@ -1148,6 +1148,9 @@ async def main() -> None:
                 fields["tasty_trades_recorded"] = trades_recorder.recorded
             if greeks_validator is not None:
                 fields.update(greeks_validator.status_fields())
+            # CVD podkladu (#829): bez téhle diagnostiky nejde poznat, proč je
+            # řada nulová — jestli chybí registrace, printy, nebo agresor
+            fields.update(futures_cvd.status_fields())
             if extended_plan:
                 # Zdroj per expirace (#616, DoD 3): UI musí poznat tasty expirace
                 fields["tasty_extended_expiries"] = {
