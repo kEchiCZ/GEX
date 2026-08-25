@@ -73,6 +73,13 @@ oi_eod_table = Table(
     Column("close_prem", Float, nullable=True),
     # Spot podkladu, ke kterému se IV/greeks vztahují (undPrice z modelu)
     Column("und_price", Float, nullable=True),
+    # Kdy vznikl TASTY snímek řádku (#828, varianta A). Oddělený od
+    # `captured_ts` schválně: tasty OI teče průběžně, kdežto IBKR chodí
+    # ranním snapshot průchodem — jeden společný čas by rozbil detektor
+    # finality (#463) i invalidaci Max Pain cache (#826), která na
+    # `captured_ts` stojí. NULL = řádek pochází z IBKR archivace, což
+    # zároveň slouží jako rozlišení původu hodnoty.
+    Column("tasty_captured_ts", DateTime(timezone=True), nullable=True),
 )
 
 #: Sloupce denního snímku řetězce (#519) — sdílené migrací i upsertem
@@ -212,7 +219,9 @@ class OIEodRepository:
             return
         columns = {col["name"] for col in inspector.get_columns(oi_eod_table.name)}
         timestamp = "TIMESTAMPTZ" if self._engine.dialect.name == "postgresql" else "TIMESTAMP"
-        additive = {"captured_ts": timestamp} | {name: "FLOAT" for name in SNAPSHOT_COLUMNS}
+        additive = {"captured_ts": timestamp, "tasty_captured_ts": timestamp} | {
+            name: "FLOAT" for name in SNAPSHOT_COLUMNS
+        }
         missing = {name: sql_type for name, sql_type in additive.items() if name not in columns}
         if not missing:
             return
@@ -221,12 +230,22 @@ class OIEodRepository:
                 conn.execute(text(f"ALTER TABLE {oi_eod_table.name} ADD COLUMN {name} {sql_type}"))
 
     def upsert_many(
-        self, records: Sequence[OIRecord], captured_ts: dt.datetime | None = None
+        self,
+        records: Sequence[OIRecord],
+        captured_ts: dt.datetime | None = None,
+        *,
+        tasty_captured_ts: dt.datetime | None = None,
     ) -> None:
-        """Idempotentní zápis: opakovaný běh týž den aktualizuje hodnoty (upsert)."""
+        """Idempotentní zápis: opakovaný běh týž den aktualizuje hodnoty (upsert).
+
+        `tasty_captured_ts` značí řádky pořízené z tasty Summary (#828) —
+        píše se MÍSTO `captured_ts`, aby průběžný tasty zápis nepřepisoval
+        čas ranního IBKR snímku (na něm stojí finalita #463 i Max Pain #826).
+        """
         if not records:
             return
-        updatable = ("oi", "captured_ts", *SNAPSHOT_COLUMNS)
+        stamped = "tasty_captured_ts" if tasty_captured_ts is not None else "captured_ts"
+        updatable = ("oi", stamped, *SNAPSHOT_COLUMNS)
         rows = [
             {
                 "symbol": r.symbol,
@@ -237,6 +256,7 @@ class OIEodRepository:
                 "date": r.day,
                 "oi": r.oi,
                 "captured_ts": captured_ts,
+                "tasty_captured_ts": tasty_captured_ts,
                 **{name: getattr(r, name) for name in SNAPSHOT_COLUMNS},
             }
             for r in records
