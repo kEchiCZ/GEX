@@ -303,3 +303,37 @@ def test_levels_series_persisted_to_derived(tmp_path: Path) -> None:
     assert len(frame) == 2
     assert frame["flip"][0] == pytest.approx(7660.0)
     assert math.isnan(frame["flip"][1])  # None → NaN, řada zůstává čitelná
+
+
+def test_oi_zdi_maji_vlastni_radu_a_nemeni_levels_schema(tmp_path: Path) -> None:
+    """#851 + ADR-0008: nová hladina nesmí rozšířit LEVELS_SCHEMA."""
+    from gexlens_engine.storage.parquet_store import OiWallsRow, SnapshotWriter
+
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    ts = dt.datetime(2026, 8, 25, 15, 0, tzinfo=dt.UTC)
+    path = writer.write_oiwalls(
+        "ES",
+        "20260825",
+        ts.date(),
+        [
+            OiWallsRow(
+                ts_min=ts,
+                oi_call_wall=7900.0,
+                oi_put_wall=7500.0,
+                oi_call_share=0.42,
+                oi_put_share=0.61,
+            )
+        ],
+    )
+
+    frame = pd.read_parquet(path)
+    assert list(frame.columns) == [
+        "ts_min",
+        "oi_call_wall",
+        "oi_put_wall",
+        "oi_call_share",
+        "oi_put_share",
+    ]
+    assert frame["oi_put_wall"].iloc[0] == 7500.0
+    # Řada je oddělená — levels partice tím nedotčená
+    assert path.parent.name == "oiwalls"

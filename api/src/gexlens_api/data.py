@@ -149,6 +149,17 @@ class DataRepository:
         path = self._settings.derived_dir / symbol / expiry / "oiest" / f"{day.isoformat()}.parquet"
         return self._read(path)
 
+    def oiwalls(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """OI zdi (#851) — hladiny z denního OI, vlastní řada vedle levels.
+
+        Jiná veličina než gamma zdi: maximum otevřeného zájmu, ne maximum
+        NetGEX profilu. Kreslí se proto odlišeně a nese vlastní podíl (share).
+        """
+        path = (
+            self._settings.derived_dir / symbol / expiry / "oiwalls" / f"{day.isoformat()}.parquet"
+        )
+        return self._read(path)
+
     def walldom(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
         """Dominance zdí (ADR-0010, #223) — vlastní řada vedle levels."""
         path = (

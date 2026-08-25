@@ -272,6 +272,20 @@ WALLDOM_SCHEMA = pa.schema(
 )
 
 
+# OI zdi (#851) — vlastní řada, protože LEVELS_SCHEMA se rozšiřovat nesmí
+# (ADR-0008 bod 2). Je to jiná veličina než gamma zdi: maximum otevřeného
+# zájmu, ne maximum NetGEX profilu.
+OIWALLS_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("oi_call_wall", pa.float64()),
+        ("oi_put_wall", pa.float64()),
+        ("oi_call_share", pa.float64()),
+        ("oi_put_share", pa.float64()),
+    ]
+)
+
+
 @dataclass(frozen=True)
 class SnapshotRow:
     """Jedna buňka 1min konsolidace: kontrakt (strike, right) v čase ts_min."""
@@ -431,6 +445,22 @@ class WallDomRow:
     put_wall_dom: float | None
     call_wall_2_dom: float | None
     put_wall_2_dom: float | None
+
+
+@dataclass(frozen=True)
+class OiWallsRow:
+    """OI zdi jedné minuty (#851) — None = na dané straně není žádné OI.
+
+    Podíl (`*_share`) říká, jak koncentrovaná zeď je: nízká hodnota znamená,
+    že je to jen nejvyšší z mnoha srovnatelných striků a nemá cenu ji číst
+    jako úroveň.
+    """
+
+    ts_min: dt.datetime
+    oi_call_wall: float | None
+    oi_put_wall: float | None
+    oi_call_share: float | None
+    oi_put_share: float | None
 
 
 @dataclass(frozen=True)
@@ -785,6 +815,16 @@ class SnapshotWriter:
             self._settings.derived_dir / symbol / expiry / "walldom" / f"{day.isoformat()}.parquet"
         )
         buffer = self._buffer(path, WALLDOM_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_oiwalls(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[OiWallsRow]
+    ) -> Path:
+        """Přidá OI zdi minuty do partice derived/{sym}/{exp}/oiwalls (#851)."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "oiwalls" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, OIWALLS_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_gexprofile(

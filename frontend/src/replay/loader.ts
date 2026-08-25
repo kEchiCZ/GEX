@@ -18,6 +18,7 @@ import type { RawDay } from '../heatmap/modes'
 import { maxPainSeries } from '../heatmap/maxpain'
 import {
   LEVEL_COLORS,
+  OI_WALL_DASH,
   SECONDARY_WALL_DASH,
   WALL_DOM_WEAK,
   lastLevelValue,
@@ -102,7 +103,7 @@ export interface LadderMinuteRow {
   putShares: number[]
 }
 
-const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2', 'call_wall_dom', 'put_wall_dom', 'call_wall_2_dom', 'put_wall_2_dom', 'fa_flip', 'fa_call_wall', 'fa_put_wall'] as const // prettier-ignore
+const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2', 'call_wall_dom', 'put_wall_dom', 'call_wall_2_dom', 'put_wall_2_dom', 'fa_flip', 'fa_call_wall', 'fa_put_wall', 'oi_call_wall', 'oi_put_wall', 'oi_call_share', 'oi_put_share'] as const // prettier-ignore
 
 interface BarInput {
   tsIso: string
@@ -278,6 +279,7 @@ interface ReplayBundle {
   levels2?: Array<Record<string, unknown>>
   /** Dominance zdí (ADR-0010, #223) — starší API pole neposílá. */
   walldom?: Array<Record<string, unknown>>
+  oiwalls?: Array<Record<string, unknown>>
   /** Flow-adjusted levels (ADR-0011, #222) — starší API pole neposílá. */
   levelsfa?: Array<Record<string, unknown>>
   /** GEX žebřík (#244) — starší API pole neposílá. */
@@ -534,6 +536,21 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     entry.values.put_wall_2 = numOrNull(row.put_wall_2)
     levelsByTs.set(tsIso, entry)
   }
+  // OI zdi (#851) — vlastní řada, merge per minuta jako levels2. Jiná
+  // veličina než gamma zdi: maximum otevřeného zájmu, ne maximum NetGEX.
+  for (const row of bundle.oiwalls ?? []) {
+    const tsIso = canonicalTs(row.ts_min)
+    const entry = levelsByTs.get(tsIso) ?? {
+      tsIso,
+      values: Object.fromEntries(LEVEL_KEYS.map((key) => [key, null])),
+    }
+    entry.values.oi_call_wall = numOrNull(row.oi_call_wall)
+    entry.values.oi_put_wall = numOrNull(row.oi_put_wall)
+    entry.values.oi_call_share = numOrNull(row.oi_call_share)
+    entry.values.oi_put_share = numOrNull(row.oi_put_share)
+    levelsByTs.set(tsIso, entry)
+  }
+
   // Dominance zdí (ADR-0010, #223) — vlastní řada, merge per minuta jako levels2
   for (const row of bundle.walldom ?? []) {
     const tsIso = canonicalTs(row.ts_min)
@@ -996,6 +1013,12 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     const dom = lastLevelValue(levelSeries(domKey))
     return dom === null ? undefined : ` · ${Math.round(dom * 100)} %`
   }
+  // Podíl OI zdi na své straně (#851) — nízké číslo = plochý profil, „zeď"
+  // je jen nejvyšší z mnoha srovnatelných striků
+  const shareSuffix = (key: string): string | undefined => {
+    const share = lastLevelValue(levelSeries(key))
+    return share === null ? undefined : ` · OI ${Math.round(share * 100)} %`
+  }
   const walls: LevelLine[] = [
     { name: 'call_wall', color: LEVEL_COLORS.call_wall, series: levelSeries('call_wall'), weak: weakFlags('call_wall_dom'), labelSuffix: domSuffix('call_wall_dom') }, // prettier-ignore
     { name: 'put_wall', color: LEVEL_COLORS.put_wall, series: levelSeries('put_wall'), weak: weakFlags('put_wall_dom'), labelSuffix: domSuffix('put_wall_dom') }, // prettier-ignore
@@ -1003,6 +1026,12 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     // po úrovních, nebo zahodí; kreslí se tečkovaně a bez cenovky
     { name: 'call_wall_2', color: LEVEL_COLORS.call_wall_2, dash: SECONDARY_WALL_DASH, series: levelSeries('call_wall_2'), weak: weakFlags('call_wall_2_dom') }, // prettier-ignore
     { name: 'put_wall_2', color: LEVEL_COLORS.put_wall_2, dash: SECONDARY_WALL_DASH, series: levelSeries('put_wall_2'), weak: weakFlags('put_wall_2_dom') }, // prettier-ignore
+    // OI zdi (#851): NEJSOU dopočítané z gammy — jsou to maxima otevřeného
+    // zájmu, tedy jiná veličina (magnet k expiraci vs. hedging teď). Kreslí
+    // se tečkovaně a nesou podíl na OI své strany, aby šlo poznat, jestli je
+    // to koncentrovaná úroveň, nebo jen nejvyšší z mnoha srovnatelných.
+    { name: 'oi_call_wall', color: LEVEL_COLORS.oi_call_wall, dash: OI_WALL_DASH, series: levelSeries('oi_call_wall'), labelSuffix: shareSuffix('oi_call_share') }, // prettier-ignore
+    { name: 'oi_put_wall', color: LEVEL_COLORS.oi_put_wall, dash: OI_WALL_DASH, series: levelSeries('oi_put_wall'), labelSuffix: shareSuffix('oi_put_share') }, // prettier-ignore
   ]
   const overlays: OverlayData = {
     price,

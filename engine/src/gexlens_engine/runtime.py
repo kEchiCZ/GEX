@@ -36,6 +36,7 @@ from gexlens_engine.compute.levelalerts import (
 )
 from gexlens_engine.compute.levels import GexLevels, compute_ladder, compute_levels
 from gexlens_engine.compute.marketclock import is_market_closed
+from gexlens_engine.compute.oiwalls import OiWalls, compute_oi_walls
 from gexlens_engine.compute.settle import session_bounds, settle_ts, trading_session_date
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
@@ -59,6 +60,7 @@ from gexlens_engine.storage.parquet_store import (
     NetFlowRow,
     OiEstRow,
     OiMissingRow,
+    OiWallsRow,
     SnapshotRow,
     SnapshotWriter,
     WallDomRow,
@@ -169,10 +171,37 @@ class EngineRuntime:
     _computed_greeks_logged: int = field(default=0, init=False)
     # Throttle logu OI fillu (#664): loguje se jen změna počtu doplněných
     _oi_filled_logged: int = field(default=0, init=False)
+    # OI zdi (#851): archiv se přes dopoledne dopisuje, takže cache nese
+    # `captured_ts` snímku — klíč jen na den by zamrzl jako Max Pain (#826)
+    _oi_walls_cache: tuple[dt.date, dt.datetime | None, OiWalls | None] | None = field(
+        default=None, init=False
+    )
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
             self.cum_delta = CumDeltaTracker(multiplier=self.multiplier)
+
+    async def _oi_walls(self, day: dt.date, spot: float) -> OiWalls | None:
+        """OI zdi z denního archivu; None = archiv pro den nic nemá (#851).
+
+        Čte se `values_for`, ne OI ze snapshotů: snapshoty pokrývají jen IBKR
+        obálku, kdežto archiv díky #828 i křídla, kvůli kterým hladina vzniká.
+        Cache drží `captured_ts` snímku — archiv se přes dopoledne dopisuje,
+        jak dobíhá publikace CME, takže klíč jen na den by zamrzl (#826).
+        """
+        captured = await asyncio.to_thread(self.oi_repository.captured_at, self.symbol, day)
+        cached = self._oi_walls_cache
+        if cached is not None and cached[0] == day and cached[1] == captured:
+            return cached[2]
+        records = await asyncio.to_thread(
+            self.oi_repository.values_for, self.symbol, self.expiry, day
+        )
+        if not records:
+            self._oi_walls_cache = (day, captured, None)
+            return None
+        walls = compute_oi_walls({(r.strike, r.right): r.oi for r in records}, spot)
+        self._oi_walls_cache = (day, captured, walls)
+        return walls
 
     def _session_partition_days(self, session_day: dt.date) -> list[dt.date]:
         """UTC dny partic, přes které se rozkládá Globex seance `session_day` (#638)."""
@@ -555,6 +584,28 @@ class EngineRuntime:
         await asyncio.to_thread(
             self.writer.write_walldom, self.symbol, self.expiry, day, [walldom_row]
         )
+        # OI zdi (#851): jiná veličina než gamma zdi výš — maximum otevřeného
+        # zájmu, ne maximum NetGEX. Počítá se z denního archivu, který díky
+        # #828 pokrývá i křídla mimo IBKR obálku, kde gamma profil nesahá.
+        # Nic se nedopočítává: bez OI hladina prostě není.
+        oi_walls = await self._oi_walls(day, spot)
+        if oi_walls is not None:
+            await asyncio.to_thread(
+                self.writer.write_oiwalls,
+                self.symbol,
+                self.expiry,
+                day,
+                [
+                    OiWallsRow(
+                        ts_min=ts_min,
+                        oi_call_wall=oi_walls.call,
+                        oi_put_wall=oi_walls.put,
+                        oi_call_share=oi_walls.call_share,
+                        oi_put_share=oi_walls.put_share,
+                    )
+                ],
+            )
+
         self.last_levels = levels_row
         self.last_gex_levels = levels
 

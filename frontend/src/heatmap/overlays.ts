@@ -52,6 +52,10 @@ export const LEVEL_COLORS = {
   put_wall: '#f0616d',
   call_wall_2: 'rgba(62,207,142,0.55)',
   put_wall_2: 'rgba(240,97,109,0.55)',
+  // OI zdi (#851): studenější odstíny než gamma zdi — je to jiná veličina
+  // (maximum otevřeného zájmu, ne maximum NetGEX), ne jejich slabší varianta
+  oi_call_wall: 'rgba(122,210,190,0.85)',
+  oi_put_wall: 'rgba(230,140,160,0.85)',
 } as const
 
 /** Barvy linií navrženého setupu (ADR-0004). */
@@ -63,6 +67,10 @@ export const SETUP_COLORS = {
 
 /** Čárkování sekundární zdi — odlišuje ji od primární. */
 export const SECONDARY_WALL_DASH = [2, 3]
+
+/** Tečkovaná stopa OI zdí (#851) — odlišuje je od plných gamma zdí i od
+čárkovaných FA úrovní; kratší tečky než sekundární zdi. */
+export const OI_WALL_DASH = [1, 4]
 
 /** České názvy úrovní pro popisky v grafu (#342).
 
