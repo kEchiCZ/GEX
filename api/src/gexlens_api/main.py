@@ -842,6 +842,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ("levels", lambda: session(lambda d: repository.levels(symbol, expiry, d), date)),
             ("levels2", lambda: session(lambda d: repository.levels2(symbol, expiry, d), date)),
             ("walldom", lambda: session(lambda d: repository.walldom(symbol, expiry, d), date)),
+            # OI zdi (#851) — vlastní řada, kreslí se odlišeně od gamma zdí
+            ("oiwalls", lambda: session(lambda d: repository.oiwalls(symbol, expiry, d), date)),
             ("levelsfa", lambda: session(lambda d: repository.levelsfa(symbol, expiry, d), date)),
             ("ladder", lambda: session(lambda d: repository.ladder(symbol, expiry, d), date)),
             (

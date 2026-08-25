@@ -10,7 +10,7 @@ Samotné „ukazuje sílu call strany" traderovi nepomůže; potřebuje vědět,
 vypadá, když cena poroste, a jak když bude klesat.
 */
 import { useEffect } from 'react'
-import { LEVEL_COLORS, SECONDARY_WALL_DASH, SETUP_COLORS } from '../heatmap/overlays'
+import { LEVEL_COLORS, OI_WALL_DASH, SECONDARY_WALL_DASH, SETUP_COLORS } from '../heatmap/overlays'
 import { callColor, putColor } from '../heatmap/color'
 
 const UP_COLOR = '#3ecf8e'
@@ -114,6 +114,20 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         what: 'Druhá nejsilnější zeď na dané straně. Zobrazí se jen když existuje — některé dny na jedné straně žádná není.',
         up: 'Po průrazu call zdi je druhá call zeď nejbližší další brzda, tedy přirozený cíl pohybu nahoru.',
         down: 'Po průrazu put zdi míří pokles obvykle na druhou put zeď. Je to nejbližší místo, kde se pád má o co zastavit.',
+      },
+      {
+        name: 'OI zeď (call / put)',
+        swatch: { kind: 'line', color: LEVEL_COLORS.oi_call_wall, dash: [...OI_WALL_DASH] },
+        where: 'Hlavní graf, jemně tečkovaně; studenější odstín než gamma zdi.',
+        what:
+          'Strike s největším OTEVŘENÝM ZÁJMEM na své straně — jiná veličina než call/put zeď výš. ' +
+          'Ty jsou maximem gamma profilu (kde dealeři hedgují teď), tohle je maximum OI (kolik pozic ' +
+          'tam leží). Počítá se z denního archivu, který pokrývá i křídla mimo dosah gamma profilu, ' +
+          'takže OI zeď bývá dál od ceny. Číslo v popisku je podíl na OI své strany: nízké procento ' +
+          'znamená plochý profil, kde je „zeď“ jen nejvyšší z mnoha srovnatelných striků.',
+        up: 'Blíž k expiraci působí velké OI jako magnet — cena k němu bývá tažena, protože se tam zavírají pozice. Shoda OI zdi s call zdí je silná úroveň; když se rozejdou, gamma zeď působí teď, OI zeď až k expiraci.',
+        down: 'Velké put OI pod trhem je místo, kde se pád má o co opřít, i když tam gamma zeď není. Pozor: sám o sobě to není hedging, takže reakce nebývá tak okamžitá jako u put zdi.',
+        how: 'Nic se tu nedopočítává — bez OI se hladina nekreslí. Gamma pro tyhle striky neznáme, takže je záměrně nemícháme mezi gamma zdi.',
       },
       {
         name: 'GEX žebřík',
