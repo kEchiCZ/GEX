@@ -122,7 +122,7 @@ from gexlens_engine.tasty.spot_fallback import SpotFallback
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
 from gexlens_engine.tasty.trades_recorder import TradesRecorder
-from gexlens_engine.tasty.wideoi import wide_contracts, wide_records
+from gexlens_engine.tasty.wideoi import wide_contracts, wide_records, wide_streamers
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.volregime import VolRegimeCollector
 
@@ -1417,6 +1417,20 @@ async def main() -> None:
                                 band_pct=settings.tasty_extended_band_pct,
                                 near_band_pct=settings.tasty_near_band_pct,
                                 near_expiries=near,
+                            )
+                        # Aktivní expirace mimo IBKR obálku (#828): bez téhle
+                        # subskripce se široký OI archiv nemá kde projevit —
+                        # Summary chodí jen pro subskribované symboly a
+                        # extended plán aktivní expiraci z definice nemá
+                        pipe = pipelines.get(symbol)
+                        if settings.tasty_wide_oi and pipe is not None and chain is not None:
+                            spot_price, spot_fresh = _tasty_spot(symbol)
+                            symbols |= wide_streamers(
+                                chain,
+                                pipe.runtime.expiry,
+                                pipe.runtime.contracts,
+                                center=spot_price if spot_fresh else None,
+                                band_pct=settings.tasty_near_band_pct,
                             )
                         # Podklad (#614): bez něj by při výpadku IBKR zamrzl
                         # cenový graf, i kdyby řetěz z tasty tekl dál

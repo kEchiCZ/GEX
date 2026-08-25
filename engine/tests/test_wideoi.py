@@ -85,3 +85,20 @@ def test_tasty_zapis_neprepise_cas_ibkr_snimku(tmp_path: Path) -> None:
     assert repository.captured_at("ES", DAY) == ibkr_at
     # Široký strike je v archivu a vstupuje do Σ čtení
     assert repository.get_oi("ES", DAY, 7400.0, "P", expiry=EXPIRY) == 250.0
+
+
+def test_wide_streamers_bere_jen_striky_mimo_obalku() -> None:
+    """#828: subskripce pro aktivní expiraci — extended plán ji neobsahuje."""
+    from gexlens_engine.tasty.wideoi import wide_streamers
+
+    covered = [spec(7500.0, "C"), spec(7500.0, "P")]
+
+    out = wide_streamers(chain(), EXPIRY, covered, center=7500.0, band_pct=1.5)
+
+    # ±1,5 % z 7500 = ±112 b → 7400 a 7600 uvnitř (100 b), 7700 mimo (200 b)
+    assert ".ES7400C" in out and ".ES7600P" in out
+    assert ".ES7500C" not in out  # pokrývá IBKR
+    assert ".ES7700C" not in out  # mimo pásmo
+
+    # Bez centra se nesubskribuje nic — slepé pokrytí by jen sežralo kapacitu
+    assert wide_streamers(chain(), EXPIRY, covered, center=None, band_pct=1.5) == set()
