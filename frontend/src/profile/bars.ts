@@ -27,6 +27,9 @@ export interface ProfileRow {
   /** Midpoint (bid+ask)/2 pro P/C v prémiích (#469); 0/undefined = kotace chybí. */
   callMid?: number
   putMid?: number
+  /** Řádek jen z denního OI archivu (#849) — minutová data pro něj
+  neexistují, takže se v profilu odliší a do P/C vstupuje jen kusově. */
+  archiveOnly?: boolean
 }
 
 export interface VolLeader {

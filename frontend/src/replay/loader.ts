@@ -165,6 +165,9 @@ export interface ReplayInputs {
   levels: LevelsInput[]
   flow: FlowInput[]
   oiPrev: OiPrevInput[]
+  /** Denní OI dneška vč. striků mimo snapshoty (#849) — široký archiv z tasty
+  (#828). Nese JEN OI: kotace, greeks ani volume pro tyhle striky neexistují. */
+  oiToday: OiPrevInput[]
   gexProfile: GexProfileRow[]
   /** Modelované pole (ADR-0009 fáze 2) — jen poslední stav, starší se zahazuje. */
   gexField: GexFieldRow | null
@@ -298,6 +301,7 @@ interface ReplayBundle {
   bars: Array<Record<string, unknown>>
   /** OI téže expirace z předchozího archivovaného dne (ΔOI vs. včera). */
   oi_prev?: Array<{ strike: number; right: string; oi: number }>
+  oi_today?: Array<{ strike: number; right: string; oi: number }>
 }
 
 export interface DayListing {
@@ -649,6 +653,11 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     bars,
     levels,
     flow,
+    oiToday: (bundle.oi_today ?? []).map((row) => ({
+      strike: Number(row.strike),
+      right: String(row.right),
+      oi: Number(row.oi) || 0,
+    })),
     oiPrev: (bundle.oi_prev ?? []).map((row) => ({
       strike: Number(row.strike),
       right: String(row.right),
@@ -1081,7 +1090,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
       const cached = profileCache.get(minuteIdx)
       if (cached) return cached
       const spotAtMinute = price.find((bar) => bar.minuteIdx === minuteIdx)?.close ?? Number.NaN
-      const rows = strikes.map((strike, strikeIdx) => {
+      const rows: ProfileRow[] = strikes.map((strike, strikeIdx) => {
         const index = strikeIdx * minutes + minuteIdx
         const callAbsDelta = Math.abs(inputs.callDelta[index])
         const putAbsDelta = Math.abs(inputs.putDelta[index])
@@ -1111,6 +1120,38 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
           putOiMissing: inputs.oiMissing.has(oiMissingKey(minuteKeys[minuteIdx], strike, 'P')),
         }
       })
+      // Striky mimo snapshot grid (#849): široký OI z tasty (#828). Nesou
+      // JEN denní OI — kotace, greeks a volume pro ně neexistují, takže
+      // `archiveOnly` říká UI, ať je odliší místo aby prázdno vypadalo jako
+      // naměřená nula (týž princip jako oiMissing, #465).
+      const known = new Set(strikes)
+      const extra = new Map<number, { call: number; put: number }>()
+      for (const row of inputs.oiToday) {
+        if (known.has(row.strike)) continue
+        const entry = extra.get(row.strike) ?? { call: 0, put: 0 }
+        if (row.right === 'C') entry.call = row.oi
+        else entry.put = row.oi
+        extra.set(row.strike, entry)
+      }
+      for (const [strike, oi] of extra) {
+        rows.push({
+          strike,
+          callVolComponent: 0,
+          callOiComponent: 0,
+          putVolComponent: 0,
+          putOiComponent: 0,
+          callVolume: 0,
+          putVolume: 0,
+          callOi: oi.call,
+          putOi: oi.put,
+          distanceFromSpot: Number.isFinite(spotAtMinute) ? strike - spotAtMinute : 0,
+          callOiChange: null,
+          putOiChange: null,
+          staleAge: 0,
+          archiveOnly: true,
+        })
+      }
+      rows.sort((a, b) => a.strike - b.strike)
       profileCache.set(minuteIdx, rows)
       return rows
     },

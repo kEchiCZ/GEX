@@ -603,3 +603,47 @@ test('evoOiDisplay: Δ od začátku osy jako výchozí čtení (#573)', () => {
   expect(evoOiDisplay([100, 100, 130, 90], 'delta')).toEqual([0, 0, 30, -10])
   expect(evoOiDisplay([100, 130], 'abs')).toEqual([100, 130])
 })
+
+test('profil nese i striky jen z OI archivu a odliší je (#849)', async () => {
+  const { computePcr } = await import('../profile/pcr')
+
+  // P/C nad úplným řetězem: archivní strike vstupuje kusově, i když nemá mid
+  const withArchive = computePcr(
+    [
+      {
+        strike: 29000,
+        callVolComponent: 0,
+        callOiComponent: 0,
+        putVolComponent: 0,
+        putOiComponent: 0,
+        callVolume: 0,
+        putVolume: 0,
+        callOi: 0,
+        putOi: 5000,
+        distanceFromSpot: -500,
+        archiveOnly: true,
+      },
+      {
+        strike: 29500,
+        callVolComponent: 0,
+        callOiComponent: 0,
+        putVolComponent: 0,
+        putOiComponent: 0,
+        callVolume: 0,
+        putVolume: 0,
+        callOi: 2000,
+        putOi: 0,
+        distanceFromSpot: 0,
+      },
+    ],
+    'oi',
+    'contracts',
+    20,
+    29500,
+    undefined,
+    'all',
+  )
+
+  expect(withArchive.put).toBe(5000)
+  expect(withArchive.ratio).toBe(2.5) // bez archivního striku by vyšlo 0
+})
