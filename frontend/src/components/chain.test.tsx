@@ -85,3 +85,51 @@ test('obrazovka Řetěz načte chain a vykreslí C/P strany se strikem uprostře
   expect(screen.getByText('+20')).toBeTruthy()
   expect(document.querySelectorAll('td.stale').length).toBeGreaterThan(0)
 })
+
+test('archivní strike se odliší a neukazuje minutová data jako nulu (#849)', async () => {
+  const rows = [
+    {
+      strike: 7000,
+      put: {
+        bid: null,
+        ask: null,
+        last: null,
+        volume: null,
+        iv: null,
+        delta: null,
+        gamma: null,
+        theta: null,
+        vega: null,
+        oi: 4200,
+        oi_change: null,
+        stale: false,
+        archive_only: true,
+      },
+    },
+  ]
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve(
+            String(url).includes('/chain/')
+              ? { ts: '2026-08-25T12:00:00Z', symbol: 'ES', expiry: '20260825', rows }
+              : { expiries: ['20260825'] },
+          ),
+      }),
+    ),
+  )
+
+  const socket = new LiveSocket('ws://test/ws/live', {
+    webSocketFactory: (url) => new FakeWebSocket(url),
+  })
+  render(<App socket={socket} />)
+  fireEvent.click(screen.getByText('Řetěz'))
+
+  const cell = await screen.findByText('4200')
+  // Šrafování říká „denní OI ano, minutová data ne" — prázdno není nula
+  expect(cell.className).toContain('archive-only')
+  expect(cell.getAttribute('title')).toContain('archivu')
+})

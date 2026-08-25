@@ -1214,3 +1214,34 @@ def test_profile_window_pc_summary_golden(client: TestClient) -> None:
     assert summary["put_premium_points"] == pytest.approx(1230.0)
     assert summary["ratio_volume"] == pytest.approx(1.0)
     assert summary["ratio_premium"] == pytest.approx(1.0)
+
+
+def test_chain_nese_i_striky_jen_z_archivu(settings: Settings, client: TestClient) -> None:
+    """#849: široký OI z tasty (#828) leží mimo snapshoty — bez něj čte P/C
+    useknutý řetěz a put strana vychází podhodnocená."""
+    from sqlalchemy import create_engine
+
+    from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
+
+    repo = OIEodRepository(create_engine(settings.database_url))
+    repo.ensure_schema()
+    # Strike hluboko pod obálkou snapshotů (STRIKES jsou 7595–7605)
+    repo.upsert_many(
+        [OIRecord("ES", "20260716", 7000.0, "P", DAY, 4200.0)],
+        tasty_captured_ts=dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC),
+    )
+
+    payload = client.get("/chain/ES/20260716", params={"date": DAY.isoformat()}).json()
+    by_strike = {row["strike"]: row for row in payload["rows"]}
+
+    wide = by_strike[7000.0]["put"]
+    assert wide["oi"] == 4200.0
+    # Minutová data tenhle řádek nemá a mít nemůže — musí to říct nahlas
+    assert wide["archive_only"] is True
+    assert wide["bid"] is None and wide["volume"] is None
+
+    # Řádky ze snapshotů zůstávají nedotčené a bez příznaku
+    measured = by_strike[7600.0]["call"]
+    assert measured["oi"] > 0  # hodnota z fixture, roste s indexem striku
+    assert measured["bid"] is not None  # nese i kotace, na rozdíl od archivních
+    assert "archive_only" not in measured
