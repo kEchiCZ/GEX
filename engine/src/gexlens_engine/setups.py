@@ -77,18 +77,29 @@ class SetupEngine:
         self._direction_stops: dict[str, int] = {}
         self._direction_blocked_until: dict[str, dt.datetime] = {}
         self._max_pain: float | None = None
-        self._max_pain_loaded_for: tuple[str, dt.date] | None = None
+        self._max_pain_loaded_for: tuple[str, dt.date, dt.datetime | None] | None = None
         # Otevřené setupy z DB (restart enginu) — MFE/MAE pokračují od nuly
         for stored in self.repository.active_for(self.symbol):
             self._open.append(_OpenSetup(stored=stored))
 
     def _refresh_max_pain(self, expiry: str, today: dt.date) -> None:
-        if self._max_pain_loaded_for == (expiry, today) and self._max_pain is not None:
+        """Max Pain z denního archivu OI; přepočet při KAŽDÉ změně snímku (#826).
+
+        Cache klíčovaná jen na (expirace, den) zamrzla na prvním ranním
+        načtení, kdy je archiv teprve částečně naplněný — CME publikaci
+        dobíhá engine celé dopoledne (#463). NQ 24. 8.: Max Pain se za den
+        posunul 29200 → 29400 → 29390 (jak Σ OI rostlo 1 570 → 3 459), ale
+        tendence i setupy celý den počítaly s hodnotou z prvního načtení.
+        Klíč proto nese `captured_ts` snímku — mění se jen při novém
+        průchodu archivace (jednotky za den), takže přepočet zůstává levný.
+        """
+        captured = self.oi_repository.captured_at(self.symbol, today)
+        if self._max_pain_loaded_for == (expiry, today, captured) and self._max_pain is not None:
             return
         records = self.oi_repository.values_for(self.symbol, expiry, today)
         oi_map = {(r.strike, r.right): r.oi for r in records}
         self._max_pain = max_pain_strike(oi_map)
-        self._max_pain_loaded_for = (expiry, today)
+        self._max_pain_loaded_for = (expiry, today, captured)
 
     def _flows(self, runtime: EngineRuntime) -> tuple[float, float, float]:
         """Δ-vážené přírůstky volume per strana + surový přírůstek (z cache kotací)."""
