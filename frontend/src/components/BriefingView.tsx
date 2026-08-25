@@ -21,7 +21,7 @@ import {
   usOpenMs,
 } from '../api/briefing'
 import type { CliffToday, LevelsRow, OiDeltaSummary, RangeSummary } from '../api/briefing'
-import { categoryGlyph, fetchSentimentState, fetchUpcoming } from '../api/news'
+import { categoryGlyph, fetchSentimentState, fetchUpcoming, isHighImpact } from '../api/news'
 import type { NewsRow, SentimentStateInfo } from '../api/news'
 import { useGexForward } from '../hooks/useGexForward'
 import { sessionDateIso } from '../instrument/tz'
@@ -86,7 +86,9 @@ export function BriefingView() {
       void fetchOiDelta(symbol, selectedExpiry).then(setOiDelta)
     }
     void fetchCliffToday(symbol).then(setCliff)
-    void fetchUpcoming(24).then(setUpcoming)
+    // Týdenní horizont (#830): bez něj nejde poznat, jestli je dnešek
+    // klidný den, nebo den před velkým tiskem — a to mění čtení positioningu
+    void fetchUpcoming(24 * 7).then(setUpcoming)
     void Promise.all(
       SENTIMENT_SYMBOLS.map(async (sym) => [sym, await fetchSentimentState(sym)] as const),
     ).then((pairs) => setSentiments(pairs.map(([sym, info]) => [sym, info])))
@@ -111,6 +113,15 @@ export function BriefingView() {
       ) // prettier-ignore
       .slice(0, 8)
       .sort((a, b) => a.ts_event.localeCompare(b.ts_event))
+  }, [upcoming, dateIso])
+
+  // Výhled na týden (#830): nejbližší High-impact události PO dnešku —
+  // odpovídá na „kde v týdnu leží těžiště rizika"
+  const weekAhead = useMemo(() => {
+    return upcoming
+      .filter((row) => row.ts_event.slice(0, 10) > dateIso && isHighImpact(row))
+      .sort((a, b) => a.ts_event.localeCompare(b.ts_event))
+      .slice(0, 4)
   }, [upcoming, dateIso])
 
   const createPlan = () => {
@@ -235,6 +246,33 @@ export function BriefingView() {
                   {(row.importance ?? 1) >= 3 ? ' ❗' : ''}
                 </li>
               ))}
+            </ul>
+          )}
+        </Card>
+
+        <Card title="Výhled na týden">
+          {weekAhead.length === 0 ? (
+            <p className="muted">Do konce týdne nic s vysokým dopadem.</p>
+          ) : (
+            <ul className="briefing-list" data-testid="briefing-week-ahead">
+              {weekAhead.map((row) => {
+                const at = new Date(row.ts_event)
+                const days = Math.round((at.getTime() - Date.now()) / 86_400_000)
+                return (
+                  <li key={row.id}>
+                    <span className="muted">
+                      {at.toLocaleDateString([], {
+                        weekday: 'short',
+                        day: 'numeric',
+                        month: 'numeric',
+                      })}{' '}
+                      {at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>{' '}
+                    {categoryGlyph(row.category)} {row.title} ❗
+                    <span className="muted">{days <= 0 ? ' · dnes' : ` · za ${days} d`}</span>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </Card>
