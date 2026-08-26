@@ -1,9 +1,11 @@
 /** Karta aktivního setupu nad grafem (ADR-0004): entry/cíl/stop, RRR, zdůvodnění. */
 import { memo } from 'react'
+import { VOL_BUCKET_LABELS } from '../api/briefing'
+import type { VolRegimeRow } from '../api/briefing'
 import { setupRrr, templateLabel } from '../api/setups'
 import type { SetupRow } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
-import { positionLabel, positionSize } from '../instrument/position'
+import { positionLabel, positionSize, stopVsRange } from '../instrument/position'
 
 /** Čas vzniku setupu (ISO) → lokální datum + čas; prázdné, když chybí/nevalidní. */
 function setupTimestamp(iso: string): string {
@@ -24,12 +26,15 @@ function SetupCardBase({
   onDismiss,
   riskAccountUsd = 0,
   riskPct = 0,
+  volRegime = null,
 }: {
   setups: SetupRow[]
   onDismiss: (id: number) => void
   /** Kalkulačka pozice (#679): účet a % rizika ze Settings → Trading; 0 = skrýt. */
   riskAccountUsd?: number
   riskPct?: number
+  /** Vol režim dne (ADR-0028) pro přepočet stopu na % rozsahu (#874); null = neukazovat. */
+  volRegime?: VolRegimeRow | null
 }) {
   if (setups.length === 0) return null
   return (
@@ -66,8 +71,30 @@ function SetupCardBase({
               accountUsd: riskAccountUsd,
               riskPct,
             })
-            return size === null ? null : (
-              <div className="setup-card-position muted">{positionLabel(size, riskPct)}</div>
+            if (size === null) return null
+            // Stop vůči vol režimu (#874): jen ukazuje, nic nemění (R4)
+            const range = stopVsRange(size.stopPoints, volRegime)
+            const bucketLabel = volRegime
+              ? (VOL_BUCKET_LABELS[volRegime.bucket] ?? volRegime.bucket)
+              : ''
+            return (
+              <>
+                <div className="setup-card-position muted">{positionLabel(size, riskPct)}</div>
+                {range !== null && volRegime !== null && (
+                  <div
+                    className={`setup-card-vol muted${range.caution ? ' caution' : ''}`}
+                    data-testid="setup-vol"
+                    title={
+                      'Stop jako podíl typického denního rozsahu (percentil vlastní historie, ' +
+                      'ADR-0028). Ve zvýšené/krizové volatilitě je fixní bodový stop těsnější ' +
+                      'obchod než obvykle — zvaž menší pozici, nebo širší stop s micro kontrakty.'
+                    }
+                  >
+                    stop = {Math.round(range.share * 100)} % rozsahu · režim {bucketLabel} (p
+                    {Math.round(volRegime.percentile * 100)}){range.caution ? ' ⚠' : ''}
+                  </div>
+                )}
+              </>
             )
           })()}
           {setupTimestamp(setup.created_ts) && (

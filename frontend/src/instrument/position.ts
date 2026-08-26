@@ -50,6 +50,30 @@ export function positionSize(input: {
   }
 }
 
+/** Volatilitní buckety, u kterých je fixní bodový stop těsnější obchod (#874). */
+const CAUTION_BUCKETS = new Set(['elevated', 'crisis'])
+
+export interface StopVsRange {
+  /** Stop jako podíl typického denního rozsahu (session_range vol režimu). */
+  share: number
+  /** Bucket elevated/crisis — zvýraznit, fixní bodový stop je v tomto režimu užší. */
+  caution: boolean
+}
+
+/** Stop vůči typickému rozsahu dne (#874, ADR-0028): stejný stop v bodech je
+v jiném volatilitním režimu úplně jiný obchod. NIC nemění — jen ukazuje;
+adaptace prahů patří do #434/#575. Null = bez vol režimu (žádný default). */
+export function stopVsRange(
+  stopPoints: number,
+  vol: { bucket: string; session_range: number } | null,
+): StopVsRange | null {
+  if (vol === null || vol.session_range <= 0 || stopPoints <= 0) return null
+  return {
+    share: stopPoints / vol.session_range,
+    caution: CAUTION_BUCKETS.has(vol.bucket),
+  }
+}
+
 /** Text do karty setupu: „riziko 50 $ (1 %) · stop 8 b → ES 0× · MES 1ד. */
 export function positionLabel(size: PositionSize, riskPct: number): string {
   const parts = [`${size.symbol} ${size.contracts}×`]
