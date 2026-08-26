@@ -46,6 +46,7 @@ from gexlens_news.ffhistory import FfActualRefreshJob, run_backfill
 from gexlens_news.http import Fetcher, make_fetcher
 from gexlens_news.llm_classifier import GeminiClient, LlmClassificationJob
 from gexlens_news.model_stats_job import ModelStatsJob
+from gexlens_news.ngram_job import NgramShadowJob
 from gexlens_news.pipeline import DedupingWriter
 from gexlens_news.prediction_job import PredictionJob
 from gexlens_news.publisher import NewsPublisher
@@ -177,6 +178,11 @@ async def run(settings: NewsSettings) -> None:
     signal_job = SignalJob(engine, settings.data_dir, symbols=symbols)
     sent_index = SentIndexJob(engine, settings.data_dir, symbols=symbols)
     predictions = PredictionJob(engine)
+    # Ngram magnitudová hlava ve STÍNU (#740 fáze 2): jen klasifikace
+    # source='ngram' + lift do `news_ngram_shadow`; do skóre nic neteče.
+    ngram = NgramShadowJob(engine) if settings.ngram_shadow_enabled else None
+    if ngram is None:
+        logger.info("Ngram shadow vypnut (GEXLENS_NEWS_NGRAM_SHADOW_ENABLED=false)")
     publisher = (
         NewsPublisher(settings.api_base, api_token=settings.api_token)
         if settings.api_base
@@ -313,6 +319,22 @@ async def run(settings: NewsSettings) -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=settings.reaction_interval_s)
 
+    async def ngram_loop() -> None:
+        """Stínová ngram hlava (#740 fáze 2) ve vlastní smyčce.
+
+        Denní retrénink (nad ~100 tis. reakcí) trvá minuty — v reaction_loop
+        by jednou denně zdržel celou pipeline, tady zdrží jen sám sebe.
+        """
+        if ngram is None:
+            return
+        while not stop.is_set():
+            try:
+                await asyncio.to_thread(ngram.run, dt.datetime.now(dt.UTC))
+            except Exception:
+                logger.exception("Ngram shadow selhal — zkusí se příští cyklus")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=settings.ngram_interval_s)
+
     async def llm_loop() -> None:
         """Gemini dávka à `llm_interval_s` — jen při neprázdné frontě (#281).
 
@@ -378,6 +400,7 @@ async def run(settings: NewsSettings) -> None:
         runner.run(stop=stop),
         reaction_loop(),
         llm_loop(),
+        ngram_loop(),
         crowd_loop(),
         ff_actual_loop(),
         alpaca_loop(),

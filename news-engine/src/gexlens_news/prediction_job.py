@@ -64,6 +64,11 @@ class PredictionJob:
                     news_classifications.c.direction,
                     news_classifications.c.strength,
                 )
+                # Stínová ngram hlava (#740 fáze 2) predikce NEzakládá:
+                # direction=0 by plnilo outcomes prohrami a řádek v
+                # `news_weights` by přes `load_weight_map` (dict per kategorie,
+                # bez filtru predictoru) mohl přepsat váhu pravidel
+                .where(news_classifications.c.source != "ngram")
                 .order_by(news_classifications.c.event_id.desc())
                 .limit(limit)
             ).fetchall()
