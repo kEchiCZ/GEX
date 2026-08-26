@@ -184,6 +184,10 @@ Select **Mode** přepíná, co buňky zobrazují (přepočet je okamžitý, bez 
 
 Select **Scale** mění škálu hodnot: **Linear**, **√** (zvýrazní slabší), **Log**, **Pow⅓**. Znaménko se zachovává.
 
+**Nápověda při dominanci jedné strany (v1.12).** Když na Linear jedna strana převyšuje druhou víc než 5 : 1 (na 0DTE běžná situace), slabší struktura splyne do tmy — vypadá to, že pod cenou „nic není", přitom tam koncentrace jsou, jen je přebila normalizace. Vedle Scale se pak objeví hint „cally dominují 12 : 1 — zkus √ nebo Log": klik přepne škálu a slabší strana se vynoří, **aniž by se s daty cokoli dělalo**. Škála se nikdy nepřepíná sama (je to tvoje volba) a hint jde křížkem trvale zavřít.
+
+**Sytost projekce klesá se vzdáleností (v1.12).** Projekční zóna (kap. 18, ADR-0006) je spočítaná ze zmrazeného „teď" — pár košů dopředu je solidní odhad, konec horizontu spíš náčrt. Dřív měla celá projekce jednu sníženou sytost; teď sytost od předělu Today lineárně klesá, takže míra blednutí přímo říká, jak moc modelu věřit. Na denní ose je to nejdůležitější — rozdíl mezi „zítra" a „za měsíc" je zásadní.
+
 ### Walls — detekce zdí
 
 Select **Walls** kreslí bílé čárkované linie počítané z právě zobrazené vrstvy:

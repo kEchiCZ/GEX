@@ -278,6 +278,8 @@ po expiracích, Enter vybírá, Esc zavírá.</li>
 </tr>
 </tbody></table>
 <p>Select <strong>Scale</strong> mění škálu hodnot: <strong>Linear</strong>, <strong>√</strong> (zvýrazní slabší), <strong>Log</strong>, <strong>Pow⅓</strong>. Znaménko se zachovává.</p>
+<p><strong>Nápověda při dominanci jedné strany (v1.12).</strong> Když na Linear jedna strana převyšuje druhou víc než 5 : 1 (na 0DTE běžná situace), slabší struktura splyne do tmy — vypadá to, že pod cenou „nic není&quot;, přitom tam koncentrace jsou, jen je přebila normalizace. Vedle Scale se pak objeví hint „cally dominují 12 : 1 — zkus √ nebo Log&quot;: klik přepne škálu a slabší strana se vynoří, <strong>aniž by se s daty cokoli dělalo</strong>. Škála se nikdy nepřepíná sama (je to tvoje volba) a hint jde křížkem trvale zavřít.</p>
+<p><strong>Sytost projekce klesá se vzdáleností (v1.12).</strong> Projekční zóna (kap. 18, ADR-0006) je spočítaná ze zmrazeného „teď&quot; — pár košů dopředu je solidní odhad, konec horizontu spíš náčrt. Dřív měla celá projekce jednu sníženou sytost; teď sytost od předělu Today lineárně klesá, takže míra blednutí přímo říká, jak moc modelu věřit. Na denní ose je to nejdůležitější — rozdíl mezi „zítra&quot; a „za měsíc&quot; je zásadní.</p>
 <h3>Walls — detekce zdí</h3>
 <p>Select <strong>Walls</strong> kreslí bílé čárkované linie počítané z právě zobrazené vrstvy:</p>
 <ul>

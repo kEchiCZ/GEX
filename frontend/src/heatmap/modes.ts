@@ -71,6 +71,42 @@ export function copysignTransform(value: number, scale: HeatmapScale): number {
 Hledá se JEDEN kvantil, ne celé pořadí, takže stačí quickselect (Hoare) nad kopií
 typed pole — O(n) místo O(n log n) a bez boxování do JS pole. Plné třídění dne
 bylo ~98 % nákladu skládání gridu (#142): 256k buněk 108 ms → 2,5 ms. */
+/** Dominance stran (#580): poměr p99 silnější / slabší strany dvoustranné mřížky.
+
+Sdílený jmenovatel normalizace se v poměru krátí, takže funguje i nad už
+normalizovanými vrstvami (výchozí OI·Linear grid z loaderu). Null = jednostranný
+mód, nebo slabší strana nemá co vynořit (p99 ~ 0 — přepnutí škály by nic
+neukázalo). */
+export function sideDominance(grid: {
+  layers: { call?: Float32Array; put?: Float32Array }
+}): { ratio: number; side: 'call' | 'put' } | null {
+  const { call, put } = grid.layers
+  if (!call || !put) return null
+  const callP99 = p99Denominator(call)
+  const putP99 = p99Denominator(put)
+  const weaker = Math.min(callP99, putP99)
+  if (weaker <= 1e-9) return null
+  return {
+    ratio: Math.max(callP99, putP99) / weaker,
+    side: callP99 >= putP99 ? 'call' : 'put',
+  }
+}
+
+/** Práh dominance pro hint na škálu (#580) — návrh z issue: 5 : 1. */
+export const SCALE_HINT_RATIO = 5
+
+/** Hint na přepnutí škály (#580): jen na Linear, jen nad prahem, jen dokud ho
+uživatel trvale nezavřel. Nikdy škálu nepřepíná — vrací data pro nápovědu. */
+export function scaleHintFor(
+  grid: { layers: { call?: Float32Array; put?: Float32Array } },
+  scale: HeatmapScale,
+  dismissed: boolean,
+): { ratio: number; side: 'call' | 'put' } | null {
+  if (scale !== 'linear' || dismissed) return null
+  const dominance = sideDominance(grid)
+  return dominance !== null && dominance.ratio >= SCALE_HINT_RATIO ? dominance : null
+}
+
 export function p99Denominator(values: Float32Array): number {
   const count = values.length
   if (count === 0) return 0

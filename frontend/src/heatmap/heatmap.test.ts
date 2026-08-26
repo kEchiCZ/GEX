@@ -4,7 +4,7 @@ import { applyStale, blend, callColor, putColor, signedColor } from './color'
 import { contourLevels, marchingSquares, quantile } from './contours'
 import { buildGrid, cellIndex } from './grid'
 import { demoGrid } from './demo'
-import { PROJECTION_ALPHA, gaussianBlur, renderGrid } from './render'
+import { gaussianBlur, projectionAlphaAt, renderGrid } from './render'
 import { projectGrid } from './projection'
 import type { HeatmapGrid } from './grid'
 import type { PixelBuffer } from './render'
@@ -195,7 +195,7 @@ test('renderGrid nad projekcí: výplň řádků je byte-identická s plným vý
         const index = strikeIdx * total + x
         let expected = blend(blend([0, 0, 0, 0], callColor(callRef[index])), putColor(putRef[index])) // prettier-ignore
         if (projected.staleAge![index] > 300) expected = applyStale(expected)
-        if (x >= dataMinutes) expected = [expected[0], expected[1], expected[2], Math.round(expected[3] * PROJECTION_ALPHA)] // prettier-ignore
+        if (x >= dataMinutes) expected = [expected[0], expected[1], expected[2], Math.round(expected[3] * projectionAlphaAt(x, dataMinutes, total))] // prettier-ignore
         const offset = (y * total + x) * 4
         expect(
           [buffer.data[offset], buffer.data[offset + 1], buffer.data[offset + 2], buffer.data[offset + 3]], // prettier-ignore
