@@ -361,6 +361,93 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
             ]
         }
 
+    @router.get("/sentiment/topics/series")
+    def sentiment_topics_series(days: int = Query(7, ge=1, le=400)) -> dict[str, object]:
+        """Kumulativní index per téma v čase + rozpad příspěvků (#566 fáze 1+2).
+
+        Krok řady roste s rozsahem, ať odpověď zůstane malá; eventy se načítají
+        i 2 dny PŘED oknem — jejich dozvuk do okna patří (index nemá reset),
+        po 2 dnech je příspěvek i nejdelšího half-life zanedbatelný.
+        """
+        from gexlens_news.sentindex import ScoredEvent, topic_series, topic_shares
+
+        step = 15 if days <= 2 else 60 if days <= 14 else 240 if days <= 92 else 1440
+        now = dt.datetime.now(dt.UTC)
+        start = now - dt.timedelta(days=days)
+        stmt = select(
+            news_events.c.ts_event,
+            news_events.c.category,
+            news_events.c.importance,
+            news_events.c.sentiment_score,
+        ).where(
+            news_events.c.ts_event >= start - dt.timedelta(days=2),
+            news_events.c.ts_event <= now,
+            news_events.c.sentiment_score.is_not(None),
+            news_events.c.category.is_not(None),
+        )
+        with engine_factory().connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        events = [
+            ScoredEvent(
+                ts_event=r.ts_event if r.ts_event.tzinfo else r.ts_event.replace(tzinfo=dt.UTC),
+                category=r.category,
+                importance=int(r.importance or 1),
+                score=float(r.sentiment_score),
+            )
+            for r in rows
+        ]
+        series = topic_series(events, start, now, step_minutes=step)
+        shares = topic_shares(events, start, now)
+        return {
+            "from": start.isoformat(),
+            "to": now.isoformat(),
+            "step_minutes": step,
+            "topics": [
+                {
+                    "category": share.category,
+                    "events": share.events,
+                    "weight": share.weight,
+                    "share": share.share,
+                    "points": [
+                        {"ts": ts.isoformat(), "value": value}
+                        for ts, value in series.get(share.category, [])
+                    ],
+                }
+                for share in shares
+            ],
+        }
+
+    @router.get("/sentiment/topics/{category}/events")
+    def sentiment_topic_events(
+        category: str,
+        days: int = Query(7, ge=1, le=400),
+        limit: int = Query(50, ge=1, le=200),
+    ) -> dict[str, object]:
+        """Zprávy, které téma v období tvoří (#566 fáze 3) — dohledatelnost hodnoty."""
+        if category not in NEWS_CATEGORIES:
+            raise HTTPException(404, f"Neznámá kategorie: {category!r}")
+        now = dt.datetime.now(dt.UTC)
+        stmt = (
+            select(
+                news_events.c.id,
+                news_events.c.ts_event,
+                news_events.c.title,
+                news_events.c.source,
+                news_events.c.importance,
+                news_events.c.sentiment_dir,
+                news_events.c.sentiment_score,
+            )
+            .where(
+                news_events.c.category == category,
+                news_events.c.ts_event >= now - dt.timedelta(days=days),
+                news_events.c.ts_event <= now,
+                news_events.c.sentiment_score.is_not(None),
+            )
+            .order_by(desc(news_events.c.ts_event))
+            .limit(limit)
+        )
+        return {"category": category, "events": _rows(engine_factory(), stmt)}
+
     @router.get("/sentiment/state")
     def sentiment_state(symbol: str = "ES") -> dict[str, object]:
         """Stav RiskOn/RiskOff/Neutral (#292, SPEC 5.6).

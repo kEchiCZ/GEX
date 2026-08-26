@@ -161,6 +161,77 @@ def topic_indexes(
     return sorted(result, key=lambda topic: abs(topic.value), reverse=True)
 
 
+def topic_series(
+    events: Sequence[ScoredEvent],
+    start: dt.datetime,
+    end: dt.datetime,
+    *,
+    step_minutes: int = 60,
+    overrides: Mapping[str, float] | None = None,
+) -> dict[str, list[tuple[dt.datetime, float]]]:
+    """Kumulativní index per kategorie v čase (#566 fáze 1).
+
+    Tentýž výpočet jako SentIndex, jen filtrovaný na kategorii — téma se kazí
+    postupně a v souhrnném indexu to zanikne (jádro zjištění z #561: index
+    tématu ukázal zhoršování dřív, než ho reflektoval trh). Volající dodá
+    i eventy PŘED `start` — jejich dozvuk do okna patří (index nemá reset).
+    """
+    by_category: dict[str, list[ScoredEvent]] = {}
+    for event in events:
+        by_category.setdefault(event.category, []).append(event)
+    return {
+        category: sent_index_series(
+            items, start, end, step_minutes=step_minutes, overrides=overrides
+        )
+        for category, items in by_category.items()
+    }
+
+
+@dataclass(frozen=True)
+class TopicShare:
+    """Příspěvek tématu k celku za období (#566 fáze 2) — „co trh zrovna řeší"."""
+
+    category: str
+    events: int
+    #: Σ |score| · importance faktor přes eventy období — surová váha tématu
+    weight: float
+    #: weight / Σ vah; 0.0 když období nemá žádnou váhu
+    share: float
+
+
+def topic_shares(
+    events: Sequence[ScoredEvent],
+    start: dt.datetime,
+    end: dt.datetime,
+) -> list[TopicShare]:
+    """Rozpad příspěvku témat za období, seřazený sestupně podle váhy.
+
+    Váha eventu = |score| · IMPORTANCE_FACTOR — velikost bez směru (téma „řeší
+    se" i když se zprávy směrově ruší) a důležitost počítá víc, stejně jako
+    prodlužuje dozvuk v indexu. Decay se tu záměrně neuplatňuje: otázka zní
+    „co období tvořilo", ne „co z něj teď zbývá".
+    """
+    weights: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for event in events:
+        if not (start <= event.ts_event <= end):
+            continue
+        weight = abs(event.score) * IMPORTANCE_FACTOR.get(event.importance, 1.0)
+        weights[event.category] = weights.get(event.category, 0.0) + weight
+        counts[event.category] = counts.get(event.category, 0) + 1
+    total = sum(weights.values())
+    shares = [
+        TopicShare(
+            category=category,
+            events=counts[category],
+            weight=weight,
+            share=weight / total if total > 0 else 0.0,
+        )
+        for category, weight in weights.items()
+    ]
+    return sorted(shares, key=lambda item: item.weight, reverse=True)
+
+
 @dataclass(frozen=True)
 class DailyOhlc:
     date: dt.date

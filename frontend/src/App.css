@@ -1522,6 +1522,116 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   display: block;
 }
 
+/* Témata v čase (#566): rozpad období + sparkline + rozklik na zprávy */
+.topics-panel {
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.topics-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.topics-head h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.topics-ranges {
+  display: flex;
+  gap: 4px;
+}
+
+.topics-ranges button {
+  background: var(--bg-chip);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.topics-ranges button.active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.topics-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.topic-row {
+  display: grid;
+  grid-template-columns: 150px 1fr 130px 160px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  background: none;
+  color: var(--text);
+  border: none;
+  border-radius: 6px;
+  padding: 4px 6px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+}
+
+.topic-row:hover {
+  background: var(--bg-chip);
+}
+
+.topic-share-bar {
+  height: 8px;
+  background: var(--bg-chip);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.topic-share-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+}
+
+.topic-spark {
+  justify-self: end;
+}
+
+.topic-spark-zero {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.topic-spark-up {
+  stroke: var(--up);
+  stroke-width: 1.5;
+}
+
+.topic-spark-down {
+  stroke: var(--down);
+  stroke-width: 1.5;
+}
+
+.topic-events {
+  margin: 2px 0 8px;
+  padding-left: 22px;
+  font-size: 12px;
+}
+
+.topic-events li {
+  margin-bottom: 2px;
+}
+
 .news-upcoming h3 {
   margin: 0 0 4px;
   font-size: 13px;

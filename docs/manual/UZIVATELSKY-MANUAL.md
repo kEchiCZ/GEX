@@ -522,9 +522,35 @@ na kartě; opravy klasifikace (⚠ u titulku) zůstávají.
 
 - **Filtry** nahoře: kategorie a minimální důležitost (vše / 2+ / 3).
 - **„Co hýbe trhem"** — aktivní témata s příspěvkem k indexu (🏛 Fed +0,42 …).
+- **Panel Témata** (v1.12) — viz níže.
 - **Crowd sentiment** — externí kontrariánské ukazatele: Fear & Greed, Put/Call ratio, Reddit průměry.
 - **Nadcházející** — nejbližší plánované události s odpočtem a konsensem (např. „CPI za 1 h 12 m · konsensus 2,9 (min. 3,0)").
 - **Tabulka zpráv** — čas, kategorie, titulek, typ, důležitost, skóre. U řádků s nejistou klasifikací je tužka ✎ — můžeš **ručně opravit směr nebo kategorii** (uloží se jako korekce, model se z ní učí — review fronta).
+
+### Panel Témata — kumulativní index tématu v čase (v1.12)
+
+**Proč z pohledu tradera:** souhrnný SentIndex je jedno číslo — když se v něm
+potká zlepšující se makro se zhoršující se geopolitikou, vzájemně se vyruší
+a nevidíš nic. **Téma se přitom kazí postupně, zatímco cena ještě drží** —
+přesně tenhle náskok byl v referenční analýze vidět u Íránu: index tématu
+ukazoval zhoršování dřív, než to trh reflektoval, a oznámené memorandum
+o porozumění indexem skoro nehnulo (rychlé systémy tomu nevěřily). Rozpad
+po tématech tenhle signál zachraňuje.
+
+**Jak to číst:**
+
+- **Období** přepínáš vpravo nahoře: Den / Týden / Měsíc / Rok.
+- Každý řádek je jedno téma: **pruh = podíl na tom, co trh za období řešil**
+  (váha = |skóre| × důležitost zpráv; směr se nevyruší — téma se „řeší", i když
+  se zprávy směrově hádají), vedle **procento a počet zpráv**.
+- **Sparkline vpravo** je kumulativní index tématu v čase (týž výpočet jako
+  SentIndex, jen filtrovaný na téma; teal = končí kladně, červená záporně,
+  linka uprostřed je nula). Klesající křivka při držící ceně = narativ se
+  kazí dřív, než to trh přiznal — důvod ke zbystření, ne signál sám o sobě.
+- **Klik na řádek** rozbalí zprávy, které téma v období tvoří (čas, titulek,
+  skóre) — hodnota indexu je vždy dohledatelná ke konkrétním zprávám.
+- Panel se obnovuje à 5 minut; období bez skórovaných zpráv řekne poctivě,
+  že není z čeho počítat.
 
 ### Stav RISK ON / RISK OFF
 

@@ -203,6 +203,43 @@ export async function fetchTopics(activeOnly = false): Promise<TopicRow[]> {
   return data.topics
 }
 
+/** Téma v čase (#566): řada kumulativního indexu + podíl na období. */
+export interface TopicSeriesRow {
+  category: string
+  events: number
+  weight: number
+  /** Podíl na Σ vah období (0–1) — „co trh zrovna řeší". */
+  share: number
+  points: { ts: string; value: number }[]
+}
+
+export async function fetchTopicSeries(days: number): Promise<TopicSeriesRow[]> {
+  const data = await getJson<{ topics: TopicSeriesRow[] }>(
+    `/sentiment/topics/series?days=${days}`,
+    { topics: [] },
+  )
+  return data.topics
+}
+
+/** Zpráva tvořící téma (#566 fáze 3) — dohledatelnost hodnoty indexu. */
+export interface TopicEventRow {
+  id: number
+  ts_event: string
+  title: string
+  source: string
+  importance: number | null
+  sentiment_dir: number | null
+  sentiment_score: number | null
+}
+
+export async function fetchTopicEvents(category: string, days: number): Promise<TopicEventRow[]> {
+  const data = await getJson<{ events: TopicEventRow[] }>(
+    `/sentiment/topics/${category}/events?days=${days}`,
+    { events: [] },
+  )
+  return data.events
+}
+
 /** Bod crowd řady (#290, SPEC 2.6) — F&G skóre, PCR, Reddit průměry. */
 export interface CrowdRow {
   ts: string
