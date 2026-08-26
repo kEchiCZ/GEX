@@ -4,15 +4,17 @@
 # API image ani klienta na hostiteli a verze klienta vždy sedí se serverem.
 #
 # Použití:
-#   .\scripts\backup-postgres.ps1                      # do %USERPROFILE%\GEXLens-backup
-#   .\scripts\backup-postgres.ps1 -Target D:\Zalohy    # do vlastní složky
+#   .\scripts\backup-postgres.ps1                      # do D:\Programy\GEX\zalohy-pg
+#   .\scripts\backup-postgres.ps1 -Target E:\Zalohy    # do vlastní složky
 #   .\scripts\backup-postgres.ps1 -Keep 10             # nechat 10 nejnovějších
 #
 # Cíl volit MIMO adresář projektu — záloha uvnitř repa chrání jen před smazáním
 # Docker volume, ne před selháním disku, a do gitu nepatří (obsahuje všechna data).
+# Default na D: (26. 8.): zálohy zabíraly 3,6 GB na systémovém C:, které dochází;
+# historie z %USERPROFILE%\GEXLens-backup je přesunutá sem vč. snapshotu pred-M7.
 [CmdletBinding()]
 param(
-    [string]$Target = (Join-Path $env:USERPROFILE 'GEXLens-backup'),
+    [string]$Target = 'D:\Programy\GEX\zalohy-pg',
     [int]$Keep = 14,
     [string]$Container = 'gex-postgres-1',
     [string]$Database = 'gexlens',
