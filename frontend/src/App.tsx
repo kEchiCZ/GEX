@@ -57,7 +57,7 @@ import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { CHARM_PALETTE, DEFAULT_SIGNED_PALETTE, VANNA_PALETTE } from './heatmap/render'
 import { DEFAULT_VIEW, ZOOM_MAX, ZOOM_MIN, visiblePriceRange } from './heatmap/view'
 import type { ViewTransform } from './heatmap/view'
-import { gexRegime, profileZeroNearest } from './instrument/regime'
+import { gexRegime, profileSignRegime, profileZeroNearest } from './instrument/regime'
 import { settleWatchLevel } from './instrument/settlewatch'
 import { pcrAt, pcrVolumeSeries } from './instrument/sentiment'
 import { dataAgeMinutes, ohlcCoverage, STALE_AFTER_MINUTES } from './instrument/coverage'
@@ -406,10 +406,18 @@ function MainContent() {
     }
     const dynamicFlip =
       lastProfile && liveSpot !== null ? profileZeroNearest(lastProfile, liveSpot) : null
+    // Bez obou flipů (#864): profil celý na jedné straně nuly — režim ze
+    // znaménka profilu u spotu, jinak by badge zmizel právě v nejjednoznačnější situaci
+    const flipState = gexRegime(liveSpot, measuredFlip, dynamicFlip)
+    const signState =
+      flipState === null && lastProfile && liveSpot !== null
+        ? profileSignRegime(lastProfile, liveSpot)
+        : null
     setRegimeInfo({
-      state: gexRegime(liveSpot, measuredFlip, dynamicFlip),
+      state: flipState ?? signState,
       measuredFlip,
       dynamicFlip,
+      fromProfileSign: flipState === null && signState !== null,
     })
     // Settle watch (#603): klíčová zeď dne (silné před slabými, pak nejbližší)
     const wallCandidates = (day.overlays.walls ?? []).map((line) => ({

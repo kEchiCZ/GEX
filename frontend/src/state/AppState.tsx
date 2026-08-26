@@ -137,6 +137,8 @@ export interface RegimeInfo {
   state: GexRegimeState | null
   measuredFlip: number | null
   dynamicFlip: number | null
+  /** Režim odvozen ze znaménka profilu bez flipu (#864) — tooltip to přizná. */
+  fromProfileSign?: boolean
 }
 
 /** Intraday timeframy — agregace 1m dat do košů (SPEC 7.1, TradingView sada). */
@@ -376,7 +378,8 @@ export function AppStateProvider({
     setRegimeInfoState((previous) =>
       previous.state === info.state &&
       previous.measuredFlip === info.measuredFlip &&
-      previous.dynamicFlip === info.dynamicFlip
+      previous.dynamicFlip === info.dynamicFlip &&
+      previous.fromProfileSign === info.fromProfileSign
         ? previous
         : info,
     )

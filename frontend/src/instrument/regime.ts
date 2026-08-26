@@ -31,6 +31,26 @@ export function profileZeroNearest(
   return best
 }
 
+/** Režim ze znaménka profilu, když nulou neprochází (#864).
+
+Celý Dyn GEX profil na jedné straně nuly znamená, že flip leží mimo měřené
+pásmo — režim je přitom v pásmu jednoznačný (typicky 0DTE ráno s dominancí
+putů: celé pásmo negativní). Bere se uzel nejblíž spotu s clampem na okraje
+gridu (spot mimo pásmo přebírá znaménko kraje — stejná extrapolace konstantou
+jako render). Nula/NaN v uzlu → null.
+*/
+export function profileSignRegime(
+  row: { gridStart: number; gridStep: number; values: number[] },
+  spot: number,
+): Extract<GexRegimeState, 'positive' | 'negative'> | null {
+  if (row.values.length === 0 || row.gridStep <= 0) return null
+  const index = Math.round((spot - row.gridStart) / row.gridStep)
+  const clamped = Math.min(row.values.length - 1, Math.max(0, index))
+  const value = row.values[clamped]
+  if (!Number.isFinite(value) || value === 0) return null
+  return value > 0 ? 'positive' : 'negative'
+}
+
 /** Režim z polohy spotu vůči flip zóně; null = nelze určit (chybí spot i flipy).
 
 Zóna = interval mezi měřeným a dynamickým flipem (kap. 18 manuálu: rozjeté

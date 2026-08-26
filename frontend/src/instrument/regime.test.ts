@@ -1,6 +1,6 @@
 /** Testy GEX režimu (#209): poloha spotu vůči flip zóně + dynamický flip z profilu. */
 import { expect, test } from 'vitest'
-import { gexRegime, profileZeroNearest, REGIME_LABELS } from './regime'
+import { gexRegime, profileSignRegime, profileZeroNearest, REGIME_LABELS } from './regime'
 
 test('gexRegime: nad zónou pozitivní, pod negativní, uvnitř flip zóna', () => {
   // Zóna = interval mezi měřeným (7510) a dynamickým (7520) flipem
@@ -27,6 +27,22 @@ test('profileZeroNearest: interpolovaný průchod nulou nejblíž spotu', () => 
   expect(profileZeroNearest(row, 7529)).toBeCloseTo(7524)
   // Bez změny znaménka žádný flip
   expect(profileZeroNearest({ gridStart: 7500, gridStep: 10, values: [10, 20, 30] }, 7510)).toBeNull() // prettier-ignore
+})
+
+test('profileSignRegime (#864): profil bez průchodu nulou dá režim ze znaménka u spotu', () => {
+  // Celý profil záporný (NQ 26. 8. ráno: min −10,1, max −4,5 — flip mimo pásmo)
+  const negative = { gridStart: 29000, gridStep: 2.5, values: [-10, -8, -6, -5] }
+  expect(profileSignRegime(negative, 29003)).toBe('negative')
+  // Celý kladný
+  const positive = { gridStart: 7500, gridStep: 10, values: [10, 20, 30] }
+  expect(profileSignRegime(positive, 7510)).toBe('positive')
+  // Spot mimo grid přebírá znaménko kraje (extrapolace konstantou jako render)
+  expect(profileSignRegime(negative, 28000)).toBe('negative')
+  expect(profileSignRegime(negative, 30000)).toBe('negative')
+  // Nula/NaN v uzlu nebo prázdný profil → null
+  expect(profileSignRegime({ gridStart: 7500, gridStep: 10, values: [0, 0] }, 7500)).toBeNull()
+  expect(profileSignRegime({ gridStart: 7500, gridStep: 10, values: [] }, 7500)).toBeNull()
+  expect(profileSignRegime({ gridStart: 7500, gridStep: 10, values: [Number.NaN] }, 7500)).toBeNull() // prettier-ignore
 })
 
 test('REGIME_LABELS pokrývá všechny stavy', () => {
