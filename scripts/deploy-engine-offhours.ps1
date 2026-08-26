@@ -61,6 +61,20 @@ $healthy = ($state -eq 'running') -and ($restarts -eq 0) -and (-not $crashed)
 
 if ($healthy) {
     Write-Step "OK — engine běží (status $state, restartů $restarts, log čistý)."
+
+    # ── 5b) API + frontend ve stejném okně (#513, 26. 8.) ─────────────
+    # Buildy image na prod daemonu umí daemon shodit (výpadek 26. 8. při
+    # buildu během US RTH) — proto se i api/frontend staví až v pauze
+    # Globexu, kdy případný pád nic nesbíraného nestojí. Selhání téhle
+    # části NEshazuje engine deploy: engine už je zdravý, exit 0 výše
+    # se jen posune za tento blok a chyba se ohlásí warningem.
+    foreach ($svc in @('api', 'frontend')) {
+        docker compose -f compose.yml build $svc
+        if ($LASTEXITCODE -ne 0) { Write-Warning "Build $svc selhal — služba zůstává na staré verzi."; continue }
+        docker compose -f compose.yml up -d --no-deps $svc
+        if ($LASTEXITCODE -ne 0) { Write-Warning "Start $svc selhal — zkontroluj docker logs." }
+        else { Write-Step "OK — $svc nasazen." }
+    }
     exit 0
 }
 
