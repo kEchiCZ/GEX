@@ -6,24 +6,41 @@ práh potvrzení korekce (5.6) — tenhle pohled ho dělá vizuálně čitelným
 */
 import type { WaveRow } from '../api/news'
 
+/** Hloubka vlny ke čtení (#640): σ jednotky, jen když je mají VŠECHNY vlny sady.
+
+Míchat surové hloubky (backfill éra ±0,4) se σ hodnotami (živá éra do ~4)
+by histogramy rozbilo hůř než samotný zlom škály — buď kompletně σ, nebo
+kompletně raw. Vrací (hodnota per vlna, jsouTo σ jednotky). */
+export function depthReading(waves: WaveRow[]): {
+  value: (wave: WaveRow) => number
+  inSigma: boolean
+} {
+  const inSigma = waves.length > 0 && waves.every((wave) => wave.depth_z != null)
+  return { value: (wave) => (inSigma ? (wave.depth_z ?? wave.depth) : wave.depth), inSigma }
+}
+
 export interface DirectionStats {
   count: number
   meanDepth: number
   sigmaDepth: number
   meanLength: number
+  /** Hloubky v jednotkách σ (#640)? Jinak surové (fallback před dopočtem σ). */
+  inSigma: boolean
 }
 
 /** Průměr ± σ hloubky a průměrná délka per směr; σ = 0 pro n < 2. */
 export function waveDirectionStats(waves: WaveRow[], direction: string): DirectionStats {
+  const reading = depthReading(waves)
   const rows = waves.filter((wave) => wave.direction === direction)
   const count = rows.length
-  if (count === 0) return { count: 0, meanDepth: 0, sigmaDepth: 0, meanLength: 0 }
-  const depths = rows.map((wave) => wave.depth)
+  if (count === 0)
+    return { count: 0, meanDepth: 0, sigmaDepth: 0, meanLength: 0, inSigma: reading.inSigma }
+  const depths = rows.map(reading.value)
   const meanDepth = depths.reduce((sum, value) => sum + value, 0) / count
   const variance =
     count > 1 ? depths.reduce((sum, value) => sum + (value - meanDepth) ** 2, 0) / (count - 1) : 0
   const meanLength = rows.reduce((sum, wave) => sum + wave.length_days, 0) / count
-  return { count, meanDepth, sigmaDepth: Math.sqrt(variance), meanLength }
+  return { count, meanDepth, sigmaDepth: Math.sqrt(variance), meanLength, inSigma: reading.inSigma }
 }
 
 export interface HistogramBin {

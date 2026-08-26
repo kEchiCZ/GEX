@@ -714,7 +714,7 @@ víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.</p>
 </thead>
 <tbody><tr>
 <td><strong>Vlny sentimentu</strong></td>
-<td>Historie RISK ON/OFF vln — hloubka, délka, četnost per směr</td>
+<td>Historie RISK ON/OFF vln — hloubka, délka, četnost per směr. Hloubky jsou od v1.11 <strong>v jednotkách σ škály</strong> (#640): řada má dvě éry s různým měřítkem (backfill osciloval v ±0,4, bohatší živý feed dává násobně větší denní součty) a dělení σ(100 seancí) je činí srovnatelnými — 2 σ znamená „dvakrát větší výchylka než běžný den&quot;, ať vlna proběhla loni nebo dnes. Surová hodnota zůstává v textu aktuální vlny</td>
 </tr>
 <tr>
 <td><strong>Hit-raty bucketů</strong></td>

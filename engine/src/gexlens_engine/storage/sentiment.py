@@ -277,6 +277,11 @@ sentiment_waves = Table(
     Column("start_date", Date, nullable=False),
     Column("end_date", Date, nullable=True),  # null = probíhající vlna
     Column("depth", Float, nullable=False),
+    # Hloubka v jednotkách σ(100 seancí) — #640: éry řady mají různá měřítka
+    # (backfill ±0,4 vs. živá do −3,9), σ je sjednocuje. NULL = σ ještě není.
+    Column("depth_z", Float, nullable=True),
+    # Verzování odvozené řady (#640): 'zscore_100'; kalibrace se nemíchají
+    Column("series_variant", String(12), nullable=True),
     Column("length_days", Integer, nullable=False),
     UniqueConstraint("symbol", "direction", "start_date", name="uq_sentiment_wave"),
 )
@@ -405,6 +410,14 @@ def ensure_sentiment_schema(engine: Engine) -> None:
             if name not in columns:
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE sentiment_daily ADD COLUMN {name} FLOAT"))
+    # `sentiment_waves` jsou plně derivované (full-replace per symbol) — při
+    # chybějícím sloupci `depth_z` (#640) se tabulka zahodí a založí v novém
+    # tvaru; vlny doplní příští přepočet WavesJob.
+    if "sentiment_waves" in existing:
+        columns = {column["name"] for column in inspector.get_columns("sentiment_waves")}
+        if "depth_z" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("DROP TABLE sentiment_waves"))
     if "news_weights" in existing:
         columns = {column["name"] for column in inspector.get_columns("news_weights")}
         if "symbol" not in columns:

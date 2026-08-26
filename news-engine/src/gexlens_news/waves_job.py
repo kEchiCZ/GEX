@@ -34,7 +34,7 @@ def wave_payload(wave: Wave | None) -> dict[str, Any] | None:
         "end_date": wave.end.isoformat() if wave.end else None,
         "depth": wave.depth,
         "length_days": wave.length_days,
-    }
+    }  # depth_z doplňuje job (σ zná on) — payload helper je čistá funkce vlny
 
 
 class WavesJob:
@@ -44,16 +44,20 @@ class WavesJob:
         self._engine = engine
         self._symbol = symbol
         self.last_payload: dict[str, Any] | None = None
+        self._sigma_by_date: dict[dt.date, float] = {}
 
     def _points(self, today: dt.date) -> tuple[list[DailyClose], DailyClose | None]:
         """(uzavřené dny, dnešní průběžný close) — dnešek se do vln nepočítá."""
         stmt = (
-            select(sentiment_daily.c.date, sentiment_daily.c.close)
+            select(sentiment_daily.c.date, sentiment_daily.c.close, sentiment_daily.c.sigma)
             .where(sentiment_daily.c.symbol == self._symbol)
             .order_by(sentiment_daily.c.date)
         )
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
+        # σ škály (#640) per den — hloubka vlny se převádí σ platnou v den
+        # jejího konce (kauzálně; probíhající vlna = poslední známá σ)
+        self._sigma_by_date = {row.date: float(row.sigma) for row in rows if row.sigma is not None}
         completed = [
             DailyClose(date=row.date, close=float(row.close)) for row in rows if row.date < today
         ]
@@ -67,25 +71,42 @@ class WavesJob:
         )
         return completed, provisional
 
+    def _wave_sigma(self, wave: Wave) -> float | None:
+        """σ(100) platná v den konce vlny; probíhající vlna = poslední známá σ.
+
+        Kauzální z konstrukce: σ dne D počítá sentindex_job jen z historie ≤ D.
+        Hloubka v σ (#640) sjednocuje éry řady — backfill osciluje v ±0,4,
+        živý feed dává magnitudy i −3,9, surové hloubky se nedají srovnávat.
+        """
+        if not self._sigma_by_date:
+            return None
+        if wave.end is not None and wave.end in self._sigma_by_date:
+            return self._sigma_by_date[wave.end]
+        last_day = max(self._sigma_by_date)
+        return self._sigma_by_date[last_day]
+
     def _store(self, waves: list[Wave]) -> None:
         """Full-replace vln symbolu — id nejsou nikde referencovaná (bez FK)."""
+        rows = []
+        for wave in waves:
+            sigma = self._wave_sigma(wave)
+            depth_z = wave.depth / sigma if sigma and sigma > 0 else None
+            rows.append(
+                {
+                    "symbol": self._symbol,
+                    "direction": wave.direction,
+                    "start_date": wave.start,
+                    "end_date": wave.end,
+                    "depth": wave.depth,
+                    "depth_z": depth_z,
+                    "series_variant": "zscore_100" if depth_z is not None else None,
+                    "length_days": wave.length_days,
+                }
+            )
         with self._engine.begin() as conn:
             conn.execute(delete(sentiment_waves).where(sentiment_waves.c.symbol == self._symbol))
-            if waves:
-                conn.execute(
-                    insert(sentiment_waves),
-                    [
-                        {
-                            "symbol": self._symbol,
-                            "direction": wave.direction,
-                            "start_date": wave.start,
-                            "end_date": wave.end,
-                            "depth": wave.depth,
-                            "length_days": wave.length_days,
-                        }
-                        for wave in waves
-                    ],
-                )
+            if rows:
+                conn.execute(insert(sentiment_waves), rows)
 
     def run(self, now: dt.datetime) -> tuple[dict[str, Any], bool]:
         """Přepočet; vrací (payload stavu, změnil se proti poslednímu?)."""

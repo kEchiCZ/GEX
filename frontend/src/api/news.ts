@@ -365,6 +365,10 @@ export interface WaveRow {
   start_date: string
   end_date: string | null
   depth: number
+  /** Hloubka v jednotkách σ(100 seancí) (#640) — sjednocuje éry řady; null = σ nebyla. */
+  depth_z?: number | null
+  /** Verzování odvozené řady (#640): 'zscore_100'. */
+  series_variant?: string | null
   length_days: number
 }
 
