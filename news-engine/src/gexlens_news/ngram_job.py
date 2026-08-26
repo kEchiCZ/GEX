@@ -251,10 +251,18 @@ class NgramShadowJob:
         Baseline = týž lift s řazením podle průměrné |reakce| kategorie na
         témže subsetu (metodika #749). Model musí porazit baseline na živém
         subsetu, jinak se hlava nezapne.
+
+        Subset `live` počítá JEN PROSPEKTIVNÍ klasifikace — vzniklé dřív,
+        než se reakce vůbec změřila (created_at ≤ ts_event + okno). Dohnaná
+        klasifikace starších eventů je postdikce: jejich reakce už mohla být
+        v tréninku a lift by nafoukl leak (první běh po nasazení: 1,905×
+        z 3denního backlogu vs. poctivá brána). `all`/`backfill` zůstávají
+        in-sample referencí a s #749 se srovnávají jen orientačně.
         """
         stmt = (
             select(
                 news_classifications.c.strength,
+                news_classifications.c.created_at,
                 news_events.c.category,
                 news_events.c.ts_event,
                 news_events.c.ts_ingested,
@@ -282,9 +290,14 @@ class NgramShadowJob:
         for symbol in self._eval_symbols:
             per_symbol = [row for row in rows if row.symbol == symbol]
             subsets: dict[str, list[Any]] = {"all": per_symbol, "live": [], "backfill": []}
+            window_delta = dt.timedelta(minutes=self._window)
             for row in per_symbol:
                 lag = row.ts_ingested - row.ts_event
-                subsets["live" if lag <= LIVE_MAX_LAG else "backfill"].append(row)
+                prospective = row.created_at <= row.ts_event + window_delta
+                if lag <= LIVE_MAX_LAG and prospective:
+                    subsets["live"].append(row)
+                elif lag > LIVE_MAX_LAG:
+                    subsets["backfill"].append(row)
             for subset, items in subsets.items():
                 if len(items) < MIN_EVAL:
                     continue
