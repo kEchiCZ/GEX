@@ -248,3 +248,97 @@ def test_excused_burst_does_not_alert_but_is_counted() -> None:
     alert = detector.observe("ESU6 7610C", "ES", now=303.0)
     assert alert is not None
     assert alert.count == 3  # omilostněné výskyty do prahu nevstoupily
+
+
+# ── Náhrobky reqId → kontrakt (#863) ────────────────────────────────
+
+
+class _FakeTicker:
+    """Hashovatelný ticker (SimpleNamespace jako klíč dictu být nemůže)."""
+
+    def __init__(self, contract: SimpleNamespace) -> None:
+        self.contract = contract
+
+
+def _fake_ib_with_registry(entries: dict[int, SimpleNamespace]) -> SimpleNamespace:
+    """Falešné IB: registr mktData tickerů jako v ib_async wrapperu."""
+    registry = {_FakeTicker(contract): req_id for req_id, contract in entries.items()}
+    return SimpleNamespace(wrapper=SimpleNamespace(ticker2ReqId={"mktData": registry}))
+
+
+def _option(symbol: str, strike: float) -> SimpleNamespace:
+    return SimpleNamespace(
+        symbol=symbol,
+        localSymbol=f"{symbol}U6",
+        right="C",
+        strike=strike,
+        lastTradeDateOrContractMonth="20260828",
+        exchange="CME",
+    )
+
+
+def test_tombstones_lookup_prezije_cancel_a_ttl_vyprsi() -> None:
+    """#863: error 354 po cancelu rotace dohledá kontrakt; po TTL už ne."""
+    from gexlens_engine.ibkr.subscription import ReqIdTombstones
+
+    stones = ReqIdTombstones(ttl_s=900.0, throttle_s=1.0)
+    stones.record_from(_fake_ib_with_registry({42: _option("NQ", 29000.0)}), now=0.0)
+
+    # Po „cancelu" (registr už reqId nemá) lookup pořád funguje
+    hit = stones.lookup(42, now=600.0)
+    assert hit is not None
+    label, symbol = hit
+    assert "NQU6" in label and symbol == "NQ"
+    # Po vypršení TTL se nedohledá
+    assert stones.lookup(42, now=901.0) is None
+    # Neznámý reqId nikdy nic nevrátí
+    assert stones.lookup(7, now=1.0) is None
+
+
+def test_tombstones_skrceni_vzorkovani() -> None:
+    """Vzorkování po každé subskripci se škrtí — druhý záznam do 1 s se nezapíše."""
+    from gexlens_engine.ibkr.subscription import ReqIdTombstones
+
+    stones = ReqIdTombstones(ttl_s=900.0, throttle_s=1.0)
+    stones.record_from(_fake_ib_with_registry({1: _option("ES", 7600.0)}), now=0.0)
+    stones.record_from(_fake_ib_with_registry({2: _option("ES", 7605.0)}), now=0.5)  # škrceno
+    assert stones.lookup(1, now=0.9) is not None
+    assert stones.lookup(2, now=0.9) is None
+    stones.record_from(_fake_ib_with_registry({2: _option("ES", 7605.0)}), now=1.5)
+    assert stones.lookup(2, now=1.6) is not None
+
+
+async def test_error_354_po_cancelu_nese_kontrakt_z_nahrobku(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#863: diagnostika #772 už neukazuje „neznámý kontrakt" s prázdným symbolem."""
+    from gexlens_engine.ibkr.subscription import ReqIdTombstones
+
+    fake_now = {"t": 0.0}
+    monkeypatch.setattr(engine_main.time, "monotonic", lambda: fake_now["t"])
+
+    ib = SimpleNamespace(errorEvent=_FakeErrorEvent())
+    manager = SimpleNamespace(report_error=lambda code, message: None)
+    publisher = _RecordingPublisher()
+    stones = ReqIdTombstones(ttl_s=900.0, throttle_s=0.0)
+    stones.record_from(_fake_ib_with_registry({46068: _option("NQ", 29100.0)}), now=0.0)
+
+    tracker = engine_main._watch_subscription_errors(
+        cast(IB, ib),
+        cast(ConnectionManager, manager),
+        Settings(),
+        publisher,
+        lambda: True,
+        tombstones=stones,
+    )
+
+    fake_now["t"] = 5.0
+    ib.errorEvent.emit(46068, 354, "Requested market data is not subscribed.", None)
+    records = tracker.recent_records()
+    assert len(records) == 1
+    assert "NQU6" in records[0].contract and "(po cancelu)" in records[0].contract
+    assert records[0].symbol == "NQ"
+
+    # Bez náhrobku zůstává poctivé „neznámý kontrakt"
+    ib.errorEvent.emit(99999, 354, "Requested market data is not subscribed.", None)
+    assert tracker.recent_records()[-1].contract == "neznámý kontrakt"

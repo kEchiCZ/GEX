@@ -171,6 +171,60 @@ class SubscriptionErrorTracker:
         )
 
 
+class ReqIdTombstones:
+    """Mapa reqId → (popisek, symbol) přežívající zrušení tickeru (#863).
+
+    Error 354/300 od TWS často dorazí až PO cancelu rotace sweepu — ib_async
+    už reqId nezná, handler dostane `contract=None` a diagnostika #772 pak
+    ukazovala „neznámý kontrakt" s prázdným symbolem (26. 8.: 293 záznamů,
+    všechny anonymní). Náhrobky se plní při vzorkování registru subskripcí
+    (týž hook jako LineGauge #630, škrcený na `throttle_s`) a drží se `ttl_s`,
+    takže opožděná chyba kontrakt dohledá.
+    """
+
+    def __init__(self, *, ttl_s: float = 900.0, throttle_s: float = 1.0) -> None:
+        self._ttl_s = ttl_s
+        self._throttle_s = throttle_s
+        self._entries: dict[int, tuple[float, str, str]] = {}
+        self._last_record: float = float("-inf")
+
+    def record_from(self, ib: object, *, now: float) -> None:
+        """Zaznamená aktivní subskripce z registru ib_async; škrcené na 1 s.
+
+        Iterace přes tisíce tickerů po KAŽDÉ subskripci by sweep brzdila —
+        škrticí ventil stačí: dávka rotace žije sekundy a vzorkuje se
+        vícekrát za život (sample() volá streamer po každém kontraktu dávky).
+        """
+        if now - self._last_record < self._throttle_s:
+            return
+        self._last_record = now
+        wrapper = getattr(ib, "wrapper", None)
+        registry = getattr(wrapper, "ticker2ReqId", {}).get("mktData", {})
+        for ticker, req_id in list(registry.items()):
+            contract = getattr(ticker, "contract", None)
+            label = contract_label(contract)
+            if label == UNKNOWN_CONTRACT:
+                continue
+            symbol = str(getattr(contract, "symbol", "") or "")
+            self._entries[int(req_id)] = (now, label, symbol)
+        self._prune(now)
+
+    def lookup(self, req_id: int, *, now: float) -> tuple[str, str] | None:
+        """(popisek, symbol) pro reqId, nebo None po vypršení TTL/neznámý."""
+        entry = self._entries.get(req_id)
+        if entry is None or now - entry[0] > self._ttl_s:
+            return None
+        return entry[1], entry[2]
+
+    def _prune(self, now: float) -> None:
+        expired = [key for key, (ts, _, _) in self._entries.items() if now - ts > self._ttl_s]
+        for key in expired:
+            del self._entries[key]
+
+
+UNKNOWN_CONTRACT = "neznámý kontrakt"
+
+
 def contract_label(contract: object) -> str:
     """Čitelný popisek kontraktu z ib_async `Contract` (odolný vůči None/neúplným).
 
@@ -178,10 +232,10 @@ def contract_label(contract: object) -> str:
     nesmí handler shodit — vrací se zástupné „neznámý kontrakt".
     """
     if contract is None:
-        return "neznámý kontrakt"
+        return UNKNOWN_CONTRACT
     symbol = getattr(contract, "localSymbol", "") or getattr(contract, "symbol", "")
     if not symbol:
-        return "neznámý kontrakt"
+        return UNKNOWN_CONTRACT
     parts = [str(symbol)]
     right = getattr(contract, "right", "")
     strike = getattr(contract, "strike", 0)

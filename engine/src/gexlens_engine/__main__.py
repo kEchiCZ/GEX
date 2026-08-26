@@ -61,6 +61,7 @@ from gexlens_engine.ibkr.probe import FarmProbe
 from gexlens_engine.ibkr.scheduler import CachedQuote, SubscriptionScheduler
 from gexlens_engine.ibkr.subscription import (
     NOT_SUBSCRIBED_ERROR_CODE,
+    ReqIdTombstones,
     SubscriptionErrorAlert,
     SubscriptionErrorTracker,
     contract_label,
@@ -167,6 +168,7 @@ def _watch_subscription_errors(
     settings: Settings,
     publisher: PublisherLike,
     alert_enabled: Callable[[], bool],
+    tombstones: ReqIdTombstones | None = None,
 ) -> SubscriptionErrorTracker:
     """Zapojení `ib.errorEvent` (#417): delayed data → fail-fast, 354 → hlídání shluků.
 
@@ -225,6 +227,21 @@ def _watch_subscription_errors(
             },
         )
 
+    def _resolve_contract(req_id: int, contract: object) -> tuple[str, str]:
+        """Popisek + symbol; při `contract=None` zkusí náhrobky reqId (#863).
+
+        Error 354/300 po cancelu rotace dorazí bez kontraktu — bez dohledání
+        byla diagnostika #772 plná anonymních „neznámý kontrakt" záznamů.
+        """
+        if contract is not None:
+            return contract_label(contract), str(getattr(contract, "symbol", "") or "")
+        if tombstones is not None:
+            hit = tombstones.lookup(req_id, now=time.monotonic())
+            if hit is not None:
+                label, symbol = hit
+                return f"{label} (po cancelu)", symbol
+        return contract_label(None), ""
+
     def on_error(reqId: int, code: int, message: str, contract: object = None) -> None:
         if code in DELAYED_DATA_ERROR_CODES:
             manager.report_error(code, message)
@@ -234,11 +251,8 @@ def _watch_subscription_errors(
             # dál. Uživatel se to ale dozvědět má, protože při horším průběhu
             # feed mizí úplně (4. 8. tak vypadla data ve 14 cyklech ze 192).
             # Symbol se předává (#495) — alert v UI je vázaný na instrument.
-            alert = competing_sessions.observe(
-                contract_label(contract),
-                str(getattr(contract, "symbol", "") or ""),
-                now=time.monotonic(),
-            )
+            label, symbol = _resolve_contract(reqId, contract)
+            alert = competing_sessions.observe(label, symbol, now=time.monotonic())
             if alert is not None:
                 logger.warning("Konkurenční relace odebírá market data: %s", message)
                 if alert_enabled():
@@ -246,8 +260,7 @@ def _watch_subscription_errors(
             return
         if code != NOT_SUBSCRIBED_ERROR_CODE:
             return  # ostatní kódy loguje ib_async samo
-        label = contract_label(contract)
-        symbol = str(getattr(contract, "symbol", "") or "")
+        label, symbol = _resolve_contract(reqId, contract)
         alert = tracker.observe(label, symbol, now=time.monotonic())
         if alert is None:
             # Ojedinělý výskyt = přechodný výpadek farmy; sweep si kontrakt vezme příště
@@ -951,9 +964,17 @@ async def main() -> None:
         )
     publisher = HttpPublisher(api_base, api_token)
     ib = IB()
+    # Náhrobky reqId → kontrakt (#863): plní se týmž hookem jako LineGauge
+    # (streamer volá sample() po každé subskripci), škrcení řeší třída sama
+    reqid_tombstones = ReqIdTombstones()
+
+    def _sample_active_lines() -> int:
+        reqid_tombstones.record_from(ib, now=time.monotonic())
+        return count_ib_lines(ib)
+
     # Obsazené market data lines (#630): měřené z registru subskripcí,
     # jediný gauge nad sdíleným spojením — strop účtu platí napříč pipeline
-    line_gauge = LineGauge(lambda: count_ib_lines(ib))
+    line_gauge = LineGauge(_sample_active_lines)
     provider = IbkrProvider(ib, line_gauge)
     manager = ConnectionManager(
         ib,
@@ -965,7 +986,12 @@ async def main() -> None:
     # obnovuje v hlavním cyklu, handler errorEvent nesmí sahat do DB
     subscription_alerts = {"enabled": True}
     subscription_errors = _watch_subscription_errors(
-        ib, manager, settings, publisher, lambda: subscription_alerts["enabled"]
+        ib,
+        manager,
+        settings,
+        publisher,
+        lambda: subscription_alerts["enabled"],
+        tombstones=reqid_tombstones,
     )
     # Dlouhý výpadek spojení hlásí zvoneček (#770) — registrace PŘED start(),
     # ať dozor platí od první vteřiny (i pro „TWS po startu stroje neběží")
