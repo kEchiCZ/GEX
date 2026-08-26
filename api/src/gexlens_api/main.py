@@ -61,6 +61,7 @@ from gexlens_engine.gammacliff import read_expiries_at
 from gexlens_engine.storage.emrespect_store import EmRespectRepository
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.gammacliff_store import gamma_cliff_table
+from gexlens_engine.storage.ivrank_store import IvRankRepository
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
@@ -444,6 +445,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             rows = []  # tabulka ještě neexistuje (engine neběžel) — UI drží tvar
         return {"symbol": symbol, "today": today, "rows": rows}
+
+    @app.get("/ivrank/{symbol}")
+    def iv_rank(symbol: str, limit: int = 400) -> dict[str, object]:
+        """IV Rank (#871): tři denní řady IV (ibkr/tasty/own_atm) vedle sebe.
+
+        `latest` = poslední řádek každého zdroje. Řady se nemíchají (jiné
+        konstrukce IV); rank/percentil NULL = málo vzorků (ADR-0028 — žádný
+        default). Zdroj hodnoty je vždy součástí řádku.
+        """
+        try:
+            repository = IvRankRepository(meta_repository.engine())
+            latest = repository.latest(symbol)
+            rows = repository.list_for(symbol, limit=max(1, min(limit, 2000)))
+        except Exception:
+            latest, rows = [], []  # tabulka ještě neexistuje (engine neběžel)
+        return {"symbol": symbol, "latest": latest, "rows": rows}
 
     @app.get("/emrespect/{symbol}")
     def em_respect(symbol: str, limit: int = 365, window_days: int = 90) -> dict[str, object]:
