@@ -31,6 +31,7 @@ from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.diagnostics import install_stack_dump
+from gexlens_engine.emrespect import EmRespectCollector
 from gexlens_engine.gammacliff import GammaCliffCollector
 from gexlens_engine.ibkr.account import classify_accounts
 from gexlens_engine.ibkr.connection import (
@@ -91,6 +92,7 @@ from gexlens_engine.runtime_settings import (
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
 from gexlens_engine.storage.diskwatch import DiskWatch, utcnow_ts
+from gexlens_engine.storage.emrespect_store import EmRespectRepository
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.fa_validation import FaValidationRepository
 from gexlens_engine.storage.feed_comparison import FeedComparisonRepository
@@ -537,6 +539,7 @@ async def create_pipeline(
     t6_repository: T6Repository | None = None,
     gamma_cliff_repository: GammaCliffRepository | None = None,
     vol_regime_repository: VolRegimeRepository | None = None,
+    em_respect_repository: EmRespectRepository | None = None,
     db: Engine | None = None,
     pacing_guard: PacingGuard | None = None,
     fa_repository: FaValidationRepository | None = None,
@@ -903,6 +906,16 @@ async def create_pipeline(
             if vol_regime_repository is not None
             else None
         ),
+        em_respect=(
+            EmRespectCollector(
+                symbol=symbol,
+                repository=em_respect_repository,
+                db=db,
+                data_dir=settings.data_dir,
+            )
+            if em_respect_repository is not None and db is not None
+            else None
+        ),
         news_ticks=news_ticks,
         read_news_ticks=(lambda: list(ib.newsTicks())) if news_ticks else None,
     )
@@ -1055,6 +1068,10 @@ async def main() -> None:
     # Volatilitní režim (ADR-0028): čte jen bary, žádná IBKR linka navíc
     vol_regime_repository = VolRegimeRepository(db)
     await asyncio.to_thread(vol_regime_repository.ensure_schema)
+
+    # Respektování pásma EM (#872): bary + snapshoty + oi_eod, žádná linka navíc
+    em_respect_repository = EmRespectRepository(db)
+    await asyncio.to_thread(em_respect_repository.ensure_schema)
 
     # Broker headlines z ticku 292 (#291): schéma SentimentLensu sdílí obě
     # služby, engine do něj jen zapisuje
@@ -1810,6 +1827,7 @@ async def main() -> None:
                     t6_repository=t6_repository,
                     gamma_cliff_repository=gamma_cliff_repository,
                     vol_regime_repository=vol_regime_repository,
+                    em_respect_repository=em_respect_repository,
                     db=db,
                     pacing_guard=pacing_guard,
                     fa_repository=fa_repository,

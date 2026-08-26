@@ -30,6 +30,7 @@ from gexlens_engine.compute.setupstats import (
 )
 from gexlens_engine.compute.volleaders import detect_concentration
 from gexlens_engine.config import Settings
+from gexlens_engine.emrespect import EmRespectCollector
 from gexlens_engine.gammacliff import GammaCliffCollector
 from gexlens_engine.ibkr.discovery import (
     ChainDiscovery,
@@ -297,6 +298,8 @@ class InstrumentPipeline:
     gamma_cliff: GammaCliffCollector | None = None
     # Volatilitní režim z barů (ADR-0028, #713) — None = vypnuto
     vol_regime: VolRegimeCollector | None = None
+    # Respektování pásma EM (#872, D3) — None = vypnuto
+    em_respect: EmRespectCollector | None = None
     # Denní FA validace po OI archivu (#232) — None = vypnuto
     fa_repository: FaValidationRepository | None = None
     # Ranní kalibrace α po OI archivu (#232 fáze 2) — None = vypnuto
@@ -891,6 +894,12 @@ class InstrumentPipeline:
                 await self.vol_regime.on_minute(now)
             except Exception:
                 logger.exception("Volatilitní režim %s selhal — pokračuji", self.symbol)
+        # Respektování pásma EM (#872) — jednou po settle; pád nesmí shodit sběr
+        if self.em_respect is not None:
+            try:
+                await self.em_respect.on_minute(now)
+            except Exception:
+                logger.exception("EM respect %s selhal — pokračuji", self.symbol)
 
         # Následující expirace v nižší kadenci; její pád nesmí shodit aktivní řetěz
         if (
