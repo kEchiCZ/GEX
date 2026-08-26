@@ -251,9 +251,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             classes = oi_repository().trading_classes_by_expiry(symbol)
         except Exception:
             classes = {}
-        detail = [
-            {"date": expiry, "trading_classes": classes.get(expiry, [])} for expiry in found
-        ]
+        detail = [{"date": expiry, "trading_classes": classes.get(expiry, [])} for expiry in found]
         return {"expiries": found, "detail": detail}
 
     @app.get("/instruments/{symbol}/days")
