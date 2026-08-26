@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 
+from gexlens_engine.compute.bsfallback import BsFallbackWatcher
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.flowoi import oi_estimate
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
@@ -154,6 +155,13 @@ class EngineRuntime:
     last_gex_levels: GexLevels | None = field(default=None, init=False)
     # Cenové alerty na úrovně (#675) — staví se líně z kroku striků řetězce
     _level_watcher: LevelProximityWatcher | None = field(default=None, init=False)
+    # Hlídka objemu BS fallback greeks (#877) — epizody nad prahem do alerts
+    _bs_watcher: BsFallbackWatcher | None = field(default=None, init=False)
+
+    def bs_fallback_status(self) -> dict[str, object] | None:
+        """Podíl BS greeks do /status (#877); None před prvním cyklem."""
+        return self._bs_watcher.status_fields() if self._bs_watcher is not None else None
+
     # Poslední Dyn GEX profil (ADR-0009) — tendency (#350) z něj čte gammu v místě ceny
     last_profile: GexProfile | None = field(default=None, init=False)
     # Charm/vanna profily (#204) — tendency v2 (#397) z nich čte toky v místě ceny
@@ -564,6 +572,24 @@ class EngineRuntime:
                     ts_min.isoformat(),
                     len(greeks_computed),
                 )
+        # Hlídka epizod BS fallbacku (#877): bouře #862 běžela 29 h neviditelně —
+        # podíl nad prahem po dobu epizody jde do zvonku, návrat taky
+        if self._bs_watcher is None:
+            self._bs_watcher = BsFallbackWatcher(symbol=self.symbol)
+        bs_message = self._bs_watcher.observe(
+            bs_count=len(greeks_computed), total=len(rows), now=time.monotonic()
+        )
+        if bs_message is not None:
+            logger.warning("%s", bs_message)
+            await self.publisher.publish(
+                "alerts",
+                {
+                    "kind": "greeks_bs_fallback",
+                    "symbol": self.symbol,
+                    "message": bs_message,
+                    "ts": dt.datetime.now(dt.UTC).timestamp(),
+                },
+            )
         # Sekundární zdi (ADR-0008) — vlastní řada, ať se nemění LEVELS_SCHEMA
         levels2_row = Levels2Row(
             ts_min=ts_min,
