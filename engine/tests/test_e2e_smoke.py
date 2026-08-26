@@ -115,7 +115,11 @@ def test_e2e_engine_storage_api_golden(reference_day: Settings) -> None:
 
     # Instruments + expirace z uložených dat
     assert client.get("/instruments").json() == {"instruments": ["ES"]}
-    assert client.get("/instruments/ES/expiries").json() == {"expiries": ["20260716"]}
+    # `detail` s trading classes (#513) — bez OI archivu prázdné třídy
+    assert client.get("/instruments/ES/expiries").json() == {
+        "expiries": ["20260716"],
+        "detail": [{"date": "20260716", "trading_classes": []}],
+    }
 
     # Snapshoty (raw Arrow): kompletní matice dne
     raw = client.get("/snapshots/ES/20260716", params={"date": day, "raw": "true"})
