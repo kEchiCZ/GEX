@@ -330,6 +330,28 @@ signal_outcomes = Table(
     Column("computed_at", DateTime(timezone=True), nullable=False),
 )
 
+# Stínové vyhodnocení ngram magnitudové hlavy (#740 fáze 2): lift na živém
+# subsetu vs. backfillu vs. celku — brána stejné konstrukce jako Wilson gate.
+# Plně derivovaná (full-replace při každém vyhodnocení); hlava se nezapne,
+# dokud live lift neporazí kategorie baseline na dostatečném vzorku (#749).
+news_ngram_shadow = Table(
+    "news_ngram_shadow",
+    sentiment_metadata,
+    Column("symbol", String(16), primary_key=True),
+    Column("window_min", SmallInteger, primary_key=True),
+    # live (ts_ingested − ts_event ≤ 1 den) | backfill | all
+    Column("subset", String(8), primary_key=True),
+    Column("n", Integer, nullable=False),
+    # Lift = průměrná |reakce| horního decilu podle P(velký pohyb) / celkový průměr
+    Column("lift", Float, nullable=False),
+    # Totéž řazené podle průměru |reakce| kategorie — baseline z #749
+    Column("baseline_lift", Float, nullable=False),
+    Column("top_decile_mean_bp", Float, nullable=False),
+    Column("mean_bp", Float, nullable=False),
+    Column("model_n_train", Integer, nullable=False),
+    Column("computed_at", DateTime(timezone=True), nullable=False),
+)
+
 # Human-in-the-loop (SPEC 5.7): rozpor LLM × empirický model nebo nízká jistota.
 # Neopravené položky se stejně vyhodnotí automaticky — systém funguje i bez
 # ručních zásahů.

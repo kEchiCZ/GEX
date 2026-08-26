@@ -72,6 +72,13 @@ class NewsSettings(BaseSettings):
     llm_daily_limit: int = Field(default=1400, ge=0)
     llm_batch_limit: int = Field(default=200, ge=1, le=500)
 
+    # Ngram magnitudová hlava ve STÍNU (#740 fáze 2): zapisuje jen
+    # `news_classifications` se source='ngram' (direction=0) a lift metriky
+    # do `news_ngram_shadow` — do SentIndexu, vah ani signálů nic neteče.
+    # Default zapnuto: je to měření, ne zásah (R4); vypnutí pro ladění.
+    ngram_shadow_enabled: bool = True
+    ngram_interval_s: float = Field(default=300.0, gt=0)
+
     # Okno rolling deduplikace (#273, #351): musí pokrýt republikace téže story
     # (měřeno Δt 23 min – hodiny), ne jen rozdíl rychlosti zdrojů — 10 min ze
     # SPEC 3.3 propouštělo ~19 duplicit/den přes půlnoc UTC (ADR-0017). Strop
