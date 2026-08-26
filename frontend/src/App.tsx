@@ -658,11 +658,13 @@ function MainContent() {
     },
     [day.minutesIso, bucketMinutes, setJournalDraft, setView],
   )
-  // Expected move dne (#676, Traders mode): ATM straddle v referenční minutě
-  // (první minuta US seance; před openem průběžný odhad z poslední overnight).
-  // Čistě klientský výpočet z mid prémií, které /replay už nese (#469).
-  const expectedMove = useMemo(() => {
-    if (!tradersMode || timeframe !== 'intraday') return null
+  // Expected move dne (#676): ATM straddle v referenční minutě (první minuta
+  // US seance; před openem průběžný odhad z poslední overnight). Čistě
+  // klientský výpočet z mid prémií, které /replay už nese (#469). Bez brány
+  // Traders mode — kartu Volatilita v briefingu (#873) zajímá vždy; EM čáry
+  // v grafu si Traders mode gatuje níž.
+  const dayEm = useMemo(() => {
+    if (timeframe !== 'intraday') return null
     const source = rawDay.profileByMinute
     if (!source || rawDay.minutesIso.length === 0) return null
     return computeExpectedMove({
@@ -671,7 +673,8 @@ function MainContent() {
       rowsAt: (idx) => source.rowsAt(idx),
       usOpenMs: usOpenMs(viewDate),
     })
-  }, [tradersMode, timeframe, rawDay, viewDate])
+  }, [timeframe, rawDay, viewDate])
+  const expectedMove = tradersMode ? dayEm : null
   const emLines = useMemo((): LevelLine[] => {
     if (!expectedMove) return []
     const length = day.minuteLabels.length
@@ -1222,7 +1225,11 @@ function MainContent() {
   if (view === 'chain') return <ChainView />
   if (view === 'news') return <NewsView />
   if (view === 'setups') return <SetupsView />
-  if (view === 'briefing') return <BriefingView />
+  if (view === 'briefing') {
+    // EM jen pro dnešek (#873): briefing je ranní rituál dneška; prohlížený
+    // minulý den by kartě podstrčil cizí straddle
+    return <BriefingView expectedMove={viewDate === sessionDateIso() ? dayEm : null} />
+  }
   if (view === 'journal') return <JournalView />
   if (view === 'stats') return <StatsView />
   if (view === 'settings') return <SettingsView />

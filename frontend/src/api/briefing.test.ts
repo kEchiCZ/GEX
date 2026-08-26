@@ -109,6 +109,33 @@ describe('briefingToPlanText', () => {
     expect(text).toContain('Teze dne:')
   })
 
+  it('volatility box (#873): hodnoty když jsou, checkbox rituálu vždy', () => {
+    const withData = briefingToPlanText({
+      symbol: 'ES',
+      regime: 'pozitivní gamma',
+      levels: null,
+      overnight: null,
+      prevDay: null,
+      cliff: null,
+      vol: { session_date: '2026-08-25', session_range: 42, percentile: 0.54, bucket: 'normal', sample: 252 }, // prettier-ignore
+      em: { em: 38.5, anchor: 7600, preOpen: true },
+    })
+    expect(withData).toContain('Volatilita: normální (p54, 252 seancí) · EM ±38.5 b (0.51 %, pre-open odhad)') // prettier-ignore
+    expect(withData).toContain('- [ ] riziko přizpůsobeno režimu (stop/velikost)')
+
+    const withoutData = briefingToPlanText({
+      symbol: 'ES',
+      regime: 'bez dat',
+      levels: null,
+      overnight: null,
+      prevDay: null,
+      cliff: null,
+    })
+    // Bez dat se říká proč (zásada ADR-0028) — a checkbox zůstává
+    expect(withoutData).toContain('Volatilita: bez dat (málo vzorků nebo chybí straddle)')
+    expect(withoutData).toContain('- [ ] riziko přizpůsobeno režimu')
+  })
+
   it('latestLevels vrací poslední řádek', () => {
     expect(latestLevels([{ ...LEVELS, flip: 1 }, LEVELS])).toBe(LEVELS)
     expect(latestLevels([])).toBeNull()

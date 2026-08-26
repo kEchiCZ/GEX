@@ -8,19 +8,23 @@ instrument. Tlačítko ☀ předvyplní ranní plán deníku (#673).
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
+  VOL_BUCKET_LABELS,
   barsRange,
   briefingToPlanText,
   fetchBars,
   fetchCliffToday,
+  fetchEmRespectSummary,
   fetchLevelsSeries,
   fetchOiDelta,
   fetchStoredDays,
+  fetchVolRegimeLatest,
   gammaRegimeLabel,
   latestLevels,
   previousStoredDay,
   usOpenMs,
 } from '../api/briefing'
-import type { CliffToday, LevelsRow, OiDeltaSummary, RangeSummary } from '../api/briefing'
+import type { CliffToday, EmRespectSummary, LevelsRow, OiDeltaSummary, RangeSummary, VolRegimeRow } from '../api/briefing' // prettier-ignore
+import type { ExpectedMove } from '../instrument/expectedmove'
 import { categoryGlyph, fetchSentimentState, fetchUpcoming, isHighImpact } from '../api/news'
 import type { NewsRow, SentimentStateInfo } from '../api/news'
 import { useGexForward } from '../hooks/useGexForward'
@@ -52,7 +56,7 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-export function BriefingView() {
+export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedMove | null }) {
   const { symbol, selectedExpiry, setJournalDraft, setView } = useAppState()
   const dateIso = sessionDateIso()
 
@@ -65,6 +69,9 @@ export function BriefingView() {
   const [oiDelta, setOiDelta] = useState<OiDeltaSummary | null>(null)
   const [upcoming, setUpcoming] = useState<NewsRow[]>([])
   const [sentiments, setSentiments] = useState<Array<[string, SentimentStateInfo | null]>>([])
+  // Karta Volatilita (#873): vol režim (ADR-0028) + statistika EM respect (#872)
+  const [volRegime, setVolRegime] = useState<VolRegimeRow | null>(null)
+  const [emRespect, setEmRespect] = useState<EmRespectSummary | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const forward = useGexForward(symbol, true)
 
@@ -86,6 +93,8 @@ export function BriefingView() {
       void fetchOiDelta(symbol, selectedExpiry).then(setOiDelta)
     }
     void fetchCliffToday(symbol).then(setCliff)
+    void fetchVolRegimeLatest(symbol).then(setVolRegime)
+    void fetchEmRespectSummary(symbol).then(setEmRespect)
     // Týdenní horizont (#830): bez něj nejde poznat, jestli je dnešek
     // klidný den, nebo den před velkým tiskem — a to mění čtení positioningu
     void fetchUpcoming(24 * 7).then(setUpcoming)
@@ -124,10 +133,24 @@ export function BriefingView() {
       .slice(0, 4)
   }, [upcoming, dateIso])
 
+  // Volatility box (#873): EM z App (bez brány Traders mode), vol režim z API
+  const planEm = expectedMove
+    ? { em: expectedMove.em, anchor: expectedMove.anchor, preOpen: expectedMove.preOpen }
+    : null
+
   const createPlan = () => {
     setJournalDraft({
       tsRef: new Date().toISOString(),
-      text: briefingToPlanText({ symbol, regime, levels, overnight, prevDay, cliff }),
+      text: briefingToPlanText({
+        symbol,
+        regime,
+        levels,
+        overnight,
+        prevDay,
+        cliff,
+        vol: volRegime,
+        em: planEm,
+      }),
     })
     setView('journal')
   }
@@ -174,6 +197,40 @@ export function BriefingView() {
           ) : (
             <p className="muted">Levels dnešní seance zatím nejsou.</p>
           )}
+        </Card>
+
+        {/* Volatilita (#873, D1): vědomé potvrzení volatilitního kontextu před
+        seancí. Hodnoty vedle sebe, ŽÁDNÉ slévání do jedné nálepky; bez dat se
+        říká proč — nikdy se nedosazuje „normal" (zásada ADR-0028). */}
+        <Card title="Volatilita">
+          <table className="briefing-table">
+            <tbody>
+              <tr>
+                <td>Režim (rozsah)</td>
+                <td data-testid="vol-bucket">
+                  {volRegime
+                    ? `${VOL_BUCKET_LABELS[volRegime.bucket] ?? volRegime.bucket} · p${Math.round(volRegime.percentile * 100)} (${volRegime.sample} seancí)`
+                    : 'bez dat — málo vzorků, nebo engine ještě nepočítal'}
+                </td>
+              </tr>
+              <tr>
+                <td>Expected move</td>
+                <td data-testid="vol-em">
+                  {planEm
+                    ? `±${planEm.em.toFixed(1)} b (${((100 * planEm.em) / planEm.anchor).toFixed(2)} % spotu)${planEm.preOpen ? ' · pre-open odhad, openem se zamkne' : ' · zamknuto openem'}`
+                    : 'bez straddlu — čeká na kotace ATM'}
+                </td>
+              </tr>
+              <tr>
+                <td>EM drží</td>
+                <td data-testid="vol-emrespect">
+                  {emRespect
+                    ? `close uvnitř pásma ${Math.round(100 * emRespect.close_in_band_share)} % dnů (n=${emRespect.n}/${emRespect.window_days} d)`
+                    : 'statistika se teprve sbírá (#872)'}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </Card>
 
         <Card title="Včera a overnight">
