@@ -260,6 +260,10 @@ export function InstrumentHeader({
                 regimeInfo.dynamicFlip !== null
                   ? ` Dynamický flip ${regimeInfo.dynamicFlip.toFixed(0)}.`
                   : '',
+                // Fallback bez flipu (#864): profil celý na jedné straně nuly
+                regimeInfo.fromProfileSign
+                  ? ' Flip leží mimo měřené pásmo — celý Dyn GEX profil je na jedné straně nuly, režim je odvozen ze znaménka profilu u spotu.'
+                  : '',
               ].join('')
             }
           >
