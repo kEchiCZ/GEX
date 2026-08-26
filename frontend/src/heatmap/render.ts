@@ -14,6 +14,20 @@ import type { HeatmapGrid } from './grid'
 /** Sytost projektované části (ADR-0006) — musí být na první pohled odlišná od dat. */
 export const PROJECTION_ALPHA = 0.45
 
+/** Sytost na KONCI projekčního horizontu (#580): projekce je spočítaná ze
+zmrazeného teď — pár košů dopředu je solidní, konec horizontu spíš náčrt.
+Jedna konstanta tvrdila, že sloupec za pět minut a za dvacet hodin mají
+stejnou důvěryhodnost. Lineární pokles stačí — je to vizuální signál, ne
+kalibrované měření. */
+export const PROJECTION_ALPHA_FAR = 0.15
+
+/** Alpha faktor projekčního sloupce `x` (lineárně PROJECTION_ALPHA → _FAR). */
+export function projectionAlphaAt(x: number, dataMinutes: number, width: number): number {
+  const span = Math.max(1, width - 1 - dataMinutes)
+  const t = Math.min(1, Math.max(0, (x - dataMinutes) / span))
+  return PROJECTION_ALPHA + (PROJECTION_ALPHA_FAR - PROJECTION_ALPHA) * t
+}
+
 export type HeatmapStyle = 'gradient' | 'blobs'
 
 export interface PixelBuffer {
@@ -168,7 +182,6 @@ export function renderGrid(
     const computeTo = Math.min(width, fillFrom + 1)
     for (let x = 0; x < computeTo; x += 1) {
       const index = strikeIdx * width + x
-      const projected = x >= dataMinutes
       let r = 0
       let g = 0
       let b = 0
@@ -229,9 +242,6 @@ export function renderGrid(
         b = Math.round(b * 0.35 + gray * 0.65)
         a = Math.round(a * 0.55)
       }
-      // Projekce (ADR-0006): stejná barva, nižší sytost — ať je hned poznat,
-      // že vpravo nejsou naměřená data, ale předpoklad „OI se nezmění"
-      if (projected) a = Math.round(a * PROJECTION_ALPHA)
       const offset = (y * width + x) * 4
       buffer[offset] = r
       buffer[offset + 1] = g
@@ -247,6 +257,20 @@ export function renderGrid(
         const chunk = Math.min(filled, rowLength - filled)
         buffer.copyWithin(rowOffset + filled, rowOffset, rowOffset + chunk)
         filled += chunk
+      }
+    }
+  }
+  // Projekce (ADR-0006 + #580): stejná barva, sytost klesající se vzdáleností —
+  // ať je hned poznat, že vpravo nejsou data, a že dál doprava je mapa
+  // spekulativnější. Aplikuje se AŽ NA HOTOVÝ buffer (jen alfa kanál), takže
+  // copyWithin zkratka výše zůstává — barevná pipeline se pro projekční
+  // sloupce dál nepočítá (#155).
+  if (dataMinutes < width) {
+    for (let x = dataMinutes; x < width; x += 1) {
+      const factor = projectionAlphaAt(x, dataMinutes, width)
+      for (let y = 0; y < height; y += 1) {
+        const offset = (y * width + x) * 4 + 3
+        buffer[offset] = Math.round(buffer[offset] * factor)
       }
     }
   }

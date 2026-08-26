@@ -1,6 +1,6 @@
 /** Testy heatmap módů/škál — ručně spočtené hodnoty, zrcadlí engine compute/heatmap.py. */
 import { expect, test } from 'vitest'
-import { HEATMAP_MODES, buildModeGrid, p99Denominator } from './modes'
+import { HEATMAP_MODES, buildModeGrid, p99Denominator, scaleHintFor, sideDominance } from './modes'
 import type { RawDay } from './modes'
 import { maxPainAt, maxPainSeries } from './maxpain'
 
@@ -270,4 +270,33 @@ test('VEX módy: vega × OI per strana, signed rozdíl; bez vega matic nuly (#20
   // Starší data bez vega matic → nulová vrstva, žádný pád
   const noVega = buildModeGrid({ ...raw, callVega: undefined, putVega: undefined }, 'vex', 'linear')
   expect(Array.from(noVega.layers.call!)).toEqual([0, 0])
+})
+
+test('sideDominance (#580): poměr p99 stran, null pro jednostranné a mrtvou stranu', () => {
+  const call = Float32Array.from(Array.from({ length: 100 }, () => 1.0))
+  const put = Float32Array.from(Array.from({ length: 100 }, () => 0.1))
+  const dominance = sideDominance({ layers: { call, put } })
+  expect(dominance?.side).toBe('call')
+  expect(dominance?.ratio).toBeCloseTo(10, 5)
+  // Zrcadlově dominují puty
+  expect(sideDominance({ layers: { call: put, put: call } })?.side).toBe('put')
+  // Signed mód nemá dvě strany
+  expect(sideDominance({ layers: {} })).toBeNull()
+  // Slabší strana ~0: přepnutí škály nemá co vynořit
+  const dead = new Float32Array(100)
+  expect(sideDominance({ layers: { call, put: dead } })).toBeNull()
+})
+
+test('scaleHintFor (#580): jen Linear, jen nad prahem, respektuje trvalé zavření', () => {
+  const call = Float32Array.from(Array.from({ length: 100 }, () => 1.0))
+  const mild = Float32Array.from(Array.from({ length: 100 }, () => 0.5))
+  const weak = Float32Array.from(Array.from({ length: 100 }, () => 0.1))
+  const dominated = { layers: { call, put: weak } }
+  expect(scaleHintFor(dominated, 'linear', false)?.ratio).toBeCloseTo(10, 5)
+  // Pod prahem 5:1 se hint nevnucuje
+  expect(scaleHintFor({ layers: { call, put: mild } }, 'linear', false)).toBeNull()
+  // Na jiné škále už uživatel vidí — hint nemá co říct
+  expect(scaleHintFor(dominated, 'sqrt', false)).toBeNull()
+  // Trvale zavřený zůstává zavřený i při dominanci
+  expect(scaleHintFor(dominated, 'linear', true)).toBeNull()
 })

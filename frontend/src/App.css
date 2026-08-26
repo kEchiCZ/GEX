@@ -2764,3 +2764,28 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   );
   color: var(--muted, #7d8596);
 }
+
+/* Hint na škálu (#580): nenásilný — text v barvě muted, akce jako odkaz */
+.scale-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.scale-hint button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+.scale-hint .scale-hint-close {
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 0 4px;
+}

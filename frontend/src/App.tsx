@@ -38,7 +38,7 @@ import { useSetups } from './hooks/useSetups'
 import { buildGexGrid, projectGexField } from './heatmap/gexmode'
 import { extendDailyGrid, forwardBoundaries, forwardLabels, futureBlocks, projectDailyForward } from './heatmap/dailyforward' // prettier-ignore
 import { useGexForward } from './hooks/useGexForward'
-import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid } from './heatmap/modes'
+import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid, scaleHintFor } from './heatmap/modes'
 import type { HeatmapScale, MeasuredHeatmapMode } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
 import { expirySettleUtc, sessionDateFor } from './instrument/expiry'
@@ -163,6 +163,13 @@ function MainContent() {
     'linear',
     oneOf(HEATMAP_SCALES.map((item) => item.value)),
   )
+  // Hint na škálu (#580): trvale zavíratelný (ADR-0007) — škála je uživatelova
+  // volba, hint se nesmí vnucovat ani škálu tiše přepínat
+  const [scaleHintState, setScaleHintState] = usePersistentState<'on' | 'dismissed'>(
+    'scaleHint',
+    'on',
+    oneOf(['on', 'dismissed']),
+  )
   const [wallsMode, setWallsMode] = usePersistentState<WallsMode>(
     'walls',
     'off',
@@ -262,6 +269,13 @@ function MainContent() {
     if (!faActive && mode === 'oi' && heatScale === 'linear') return rawDay
     return { ...rawDay, grid: buildModeGrid(raw, mode, heatScale) }
   }, [rawDay, mode, heatScale, faActive])
+  // Hint na škálu (#580): při dominanci jedné strany na Linear splývá slabší
+  // struktura do tmy — √/Log ji vynoří, aniž by se s daty cokoli dělalo.
+  // Počítá se nad 1m gridem (nezávislé na timeframe), jen když může být vidět.
+  const scaleDominance = useMemo(
+    () => scaleHintFor(modeDay.grid, heatScale, scaleHintState === 'dismissed'),
+    [modeDay, heatScale, scaleHintState],
+  )
   // Timeframe: agregace 1m dat do košů v paměti (Daily má sloupec = den, koše se nepoužijí)
   const bucketMinutes = timeframe === 'daily' ? 1 : INTERVAL_MINUTES[interval]
   const day = useMemo(() => aggregateDay(modeDay, bucketMinutes), [modeDay, bucketMinutes])
@@ -1273,6 +1287,30 @@ function MainContent() {
             ))}
           </select>
         </label>
+        {/* Hint (#580): p99 poměr stran nad prahem na Linear → slabší strana
+        splývá do tmy. Nikdy nepřepíná samo — škála je uživatelova volba. */}
+        {scaleDominance && (
+          <span className="scale-hint" data-testid="scale-hint">
+            {scaleDominance.side === 'call' ? 'cally' : 'puty'} dominují{' '}
+            {Math.round(scaleDominance.ratio)} : 1 —{' '}
+            <button
+              type="button"
+              title="Přepnout škálu na √ — slabší struktura se vynoří, s daty se nic nedělá"
+              onClick={() => setHeatScale('sqrt')}
+            >
+              zkus √ nebo Log
+            </button>
+            <button
+              type="button"
+              className="scale-hint-close"
+              aria-label="Tuto nápovědu už neukazovat"
+              title="Trvale skrýt"
+              onClick={() => setScaleHintState('dismissed')}
+            >
+              ×
+            </button>
+          </span>
+        )}
         <label className="toggle">
           Walls
           <select
