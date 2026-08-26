@@ -7,6 +7,7 @@ import { formatSettleWatch } from '../instrument/settlewatch'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
 import { GammaCliffChip } from './GammaCliffChip'
+import { IvRankChip } from './IvRankChip'
 import { RelativeStrengthChip } from './RelativeStrengthChip'
 import { StateChip } from './StateChip'
 import { TendencyChip } from './TendencyChip'
@@ -270,6 +271,9 @@ export function InstrumentHeader({
             {REGIME_LABELS[regimeInfo.state]}
           </span>
         )}
+        {/* IV percentil (#871): kontext implied volatility vedle gamma režimu —
+        režim říká TYP obchodu, IVR říká, jak draho trh oceňuje dnešní pohyb */}
+        <IvRankChip />
         {/* Souhrnná tendence ceny (#350) — úplně nahoře, jedním pohledem */}
         <TendencyChip />
         {/* Chip RiskOn/RiskOff/Neutral (#295, SPEC 9.0) — news sentiment vedle GEX režimu */}

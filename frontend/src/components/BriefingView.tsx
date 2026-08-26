@@ -14,16 +14,19 @@ import {
   fetchBars,
   fetchCliffToday,
   fetchEmRespectSummary,
+  fetchIvRankLatest,
   fetchLevelsSeries,
   fetchOiDelta,
   fetchStoredDays,
   fetchVolRegimeLatest,
   gammaRegimeLabel,
+  ivRankPrimary,
+  ivRankTooltip,
   latestLevels,
   previousStoredDay,
   usOpenMs,
 } from '../api/briefing'
-import type { CliffToday, EmRespectSummary, LevelsRow, OiDeltaSummary, RangeSummary, VolRegimeRow } from '../api/briefing' // prettier-ignore
+import type { CliffToday, EmRespectSummary, IvRankRow, LevelsRow, OiDeltaSummary, RangeSummary, VolRegimeRow } from '../api/briefing' // prettier-ignore
 import type { ExpectedMove } from '../instrument/expectedmove'
 import { categoryGlyph, fetchSentimentState, fetchUpcoming, isHighImpact } from '../api/news'
 import type { NewsRow, SentimentStateInfo } from '../api/news'
@@ -72,6 +75,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   // Karta Volatilita (#873): vol režim (ADR-0028) + statistika EM respect (#872)
   const [volRegime, setVolRegime] = useState<VolRegimeRow | null>(null)
   const [emRespect, setEmRespect] = useState<EmRespectSummary | null>(null)
+  const [ivRank, setIvRank] = useState<IvRankRow[]>([])
   const [now, setNow] = useState(() => Date.now())
   const forward = useGexForward(symbol, true)
 
@@ -95,6 +99,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     void fetchCliffToday(symbol).then(setCliff)
     void fetchVolRegimeLatest(symbol).then(setVolRegime)
     void fetchEmRespectSummary(symbol).then(setEmRespect)
+    void fetchIvRankLatest(symbol).then(setIvRank)
     // Týdenní horizont (#830): bez něj nejde poznat, jestli je dnešek
     // klidný den, nebo den před velkým tiskem — a to mění čtení positioningu
     void fetchUpcoming(24 * 7).then(setUpcoming)
@@ -219,6 +224,20 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
                   {planEm
                     ? `±${planEm.em.toFixed(1)} b (${((100 * planEm.em) / planEm.anchor).toFixed(2)} % spotu)${planEm.preOpen ? ' · pre-open odhad, openem se zamkne' : ' · zamknuto openem'}`
                     : 'bez straddlu — čeká na kotace ATM'}
+                </td>
+              </tr>
+              <tr>
+                <td>IV percentil</td>
+                <td data-testid="vol-ivr" title={ivRankTooltip(ivRank)}>
+                  {(() => {
+                    // Primárně percentil z řady ibkr (rozhodnutí 26. 8.);
+                    // rank a tasty kontrola žijí v tooltipu
+                    const primary = ivRankPrimary(ivRank)
+                    if (primary === null) {
+                      return 'bez dat — řada se plní po settle (backfill rok zpět)'
+                    }
+                    return `p${Math.round((primary.iv_percentile ?? 0) * 100)} · IV ${(100 * primary.iv).toFixed(1)} % (${primary.sample} dnů)`
+                  })()}
                 </td>
               </tr>
               <tr>

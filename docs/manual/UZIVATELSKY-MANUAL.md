@@ -687,6 +687,18 @@ Jak číst jednotlivé řádky:
   (kolik trh reálně platí za dnešní pohyb; stejná hodnota jako EM± linie
   v Traders mode, kap. 11e). Před openem jde o průběžný odhad z overnight
   kotací, openem se zamkne. Údaj v % spotu je srovnatelný napříč dny.
+- **IV percentil** (v1.11) — kolik dnů v klouzavém roce mělo NIŽŠÍ implied
+  volatilitu podkladu (30d IV index, řada z IBKR s roční historií). Je to
+  implied protějšek řádku „Režim (rozsah)": režim měří, jak velké pohyby
+  BYLY, IV percentil, jak velké pohyby trh OCEŇUJE do budoucna. Vysoko
+  (p80+) = trh platí za pohyb neobvykle mnoho — typicky před událostmi
+  a v nervózních trzích; nízko (p20−) = prémie levné, trh je klidný
+  (complacent). Neříká směr. V tooltipu je i **IV Rank** (poloha mezi
+  ročním minimem a maximem — číslo známé z retail platforem; percentil
+  je robustnější, jeden spike ho nezkreslí) a křížová kontrola z
+  tastytrade (jiná konstrukce indexu, čísla se záměrně nemíchají).
+  Stejná hodnota je i **chipem v hlavičce** vedle badge gamma režimu:
+  režim říká TYP obchodu, IV percentil říká, jak draho je dnešek oceněný.
 - **EM drží** — kalibrace důvěry: v kolika % posledních seancí skončil
   close uvnitř pásma EM (teoreticky ~68 %; skutečné číslo měří engine
   po každém settle). Vyšší číslo ⇒ fade od hranic pásma má statistiku
