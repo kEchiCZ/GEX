@@ -178,11 +178,12 @@ def test_evaluate_lift_and_subsets(tmp_path: Path) -> None:
     for i in range(MIN_EVAL):
         event_id = i + 1
         big = i % 10 == 0  # 10 % velkých pohybů
+        ts_event = NOW - dt.timedelta(hours=2, minutes=i)
         seed_event(
             engine,
             event_id,
-            ts_event=NOW - dt.timedelta(hours=2, minutes=i),
-            ts_ingested=NOW - dt.timedelta(hours=1, minutes=i),  # live: lag 1 h
+            ts_event=ts_event,
+            ts_ingested=ts_event + dt.timedelta(minutes=1),  # live: lag 1 min
             category="FED" if big else "OTHER",
         )
         with engine.begin() as conn:
@@ -197,11 +198,38 @@ def test_evaluate_lift_and_subsets(tmp_path: Path) -> None:
                         "importance": 3 if big else 1,
                         "direction": 0,
                         "strength": 0.9 if big else float(rng.uniform(0.1, 0.5)),
-                        "created_at": NOW,
+                        # Prospektivní: klasifikace vznikla před uzavřením okna
+                        "created_at": ts_event + dt.timedelta(minutes=2),
                     }
                 ],
             )
         seed_reaction(engine, event_id, 20.0 if big else 2.0)
+    # Postdikce: čerstvý event klasifikovaný až po uzavření okna reakce —
+    # do subsetu `live` nesmí (leak: reakce mohla být v tréninku), do `all` ano
+    seed_event(
+        engine,
+        MIN_EVAL + 2,
+        ts_event=NOW - dt.timedelta(hours=3),
+        ts_ingested=NOW - dt.timedelta(hours=3),
+        category="FED",
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            insert(news_classifications),
+            [
+                {
+                    "event_id": MIN_EVAL + 2,
+                    "version": 1,
+                    "source": "ngram",
+                    "category": "FED",
+                    "importance": 1,
+                    "direction": 0,
+                    "strength": 0.2,
+                    "created_at": NOW,  # 3 h po eventu = postdikce
+                }
+            ],
+        )
+    seed_reaction(engine, MIN_EVAL + 2, 5.0)
     # Jeden backfill vzorek — pod MIN_EVAL, subset se nezapíše
     seed_event(
         engine,
@@ -217,7 +245,8 @@ def test_evaluate_lift_and_subsets(tmp_path: Path) -> None:
         rows = {row.subset: row for row in conn.execute(select(news_ngram_shadow))}
     assert set(rows) == {"all", "live"}
     live = rows["live"]
-    assert live.n == MIN_EVAL
+    assert live.n == MIN_EVAL  # postdikce vyřazena
+    assert rows["all"].n == MIN_EVAL + 1  # ...ale v `all` zůstává
     # Horní decil podle strength = přesně velké pohyby → lift výrazně > 1
     assert live.lift > 2.0
     # Baseline (kategorie) tu velké pohyby taky najde — lift srovnatelný
