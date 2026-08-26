@@ -28,6 +28,30 @@ function ImpactBadge({ row, upcoming }: { row: NewsRow; upcoming: boolean }) {
   return <span className="news-impact neutral">Neutrální</span>
 }
 
+/** Prahy verdiktu — shodné se `surprise_bucket` v news-engine (±0,5σ / ±1,5σ). */
+const SURPRISE_SMALL = 0.5
+const SURPRISE_LARGE = 1.5
+
+/** Verdikt a směr z překvapení (#462 A): čitelný souhrn místo holých čísel.
+
+Exportováno kvůli testům. Vrací null, dokud actual/surprise_z chybí. */
+export function surpriseVerdict(row: NewsRow): {
+  text: string
+  direction: number | null
+} | null {
+  const z = typeof row.surprise_z === 'number' ? row.surprise_z : Number(row.surprise_z)
+  if (row.surprise_z === null || row.surprise_z === undefined || !Number.isFinite(z)) return null
+  const magnitude = Math.abs(z)
+  const sigma = `${z >= 0 ? '+' : ''}${z.toFixed(1)}σ`
+  if (magnitude < SURPRISE_SMALL) return { text: `dle očekávání (${sigma})`, direction: null }
+  const size = magnitude >= SURPRISE_LARGE ? 'výrazně ' : ''
+  const side = z > 0 ? 'vyšší' : 'nižší'
+  // Směr jen při překvapení ≥ 0,5σ — pod prahem je „flat" i pro statistiky
+  // reakcí a šipka by předstírala signál, který tam není
+  const direction = row.surprise_direction ?? null
+  return { text: `${size}${side} než očekávání (${sigma})`, direction }
+}
+
 /** Řádek forecast/previous/actual u scheduled eventů — jinde nemá smysl. */
 function ScheduledNumbers({ row }: { row: NewsRow }) {
   if (row.kind !== 'scheduled') return null
@@ -36,7 +60,29 @@ function ScheduledNumbers({ row }: { row: NewsRow }) {
   if (row.previous !== null) parts.push(`minule ${row.previous}`)
   if (row.actual !== null) parts.push(`výsledek ${row.actual}`)
   if (parts.length === 0) return null
-  return <p className="muted news-dialog-numbers">{parts.join(' · ')}</p>
+  const verdict = surpriseVerdict(row)
+  return (
+    <>
+      <p className="muted news-dialog-numbers">{parts.join(' · ')}</p>
+      {verdict && (
+        <p className="news-dialog-verdict" data-testid="scheduled-verdict">
+          {verdict.text}
+          {verdict.direction !== null && verdict.direction !== 0 && (
+            <span
+              className={verdict.direction > 0 ? 'news-impact long' : 'news-impact short'}
+              title={
+                'Odhad z konvence řady (nižší inflace = risk-on, silnější payrolls = risk-on…). ' +
+                'Polarita je režimově závislá — v období „good news is bad news" se obrací. ' +
+                'Není to signál, jen čtení překvapení.'
+              }
+            >
+              {verdict.direction > 0 ? ' → risk-on ▲' : ' → risk-off ▼'}
+            </span>
+          )}
+        </p>
+      )}
+    </>
+  )
 }
 
 /** ! až !!! podle důležitosti — stejná škála, jakou marker kóduje tloušťkou. */

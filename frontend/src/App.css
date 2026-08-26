@@ -2008,6 +2008,16 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   font-size: 12px;
 }
 
+/* Verdikt překvapení (#462): „nižší než očekávání (−1,4σ) → risk-on ▲" */
+.news-dialog-verdict {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+
+.news-dialog-verdict .news-impact {
+  margin-left: 4px;
+}
+
 .news-impact {
   margin-left: auto;
   padding: 2px 8px;

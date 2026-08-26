@@ -2,10 +2,12 @@
 
 import datetime as dt
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import insert
 
@@ -184,6 +186,26 @@ def test_news_feed_carries_topic_value(client: TestClient) -> None:
     assert by_title["Fed holds rates"]["topic_value"] == pytest.approx(0.4)
     # CPI nemá skóre ani žádnou skórovanou zprávu v kategorii → None
     assert by_title["USD CPI m/m"]["topic_value"] is None
+
+
+def test_news_feed_scheduled_direction(client: TestClient) -> None:
+    """#462 A: směr scheduled eventu z konvence řady (CPI −, payrolls +)."""
+    from sqlalchemy import update
+
+    app = cast(FastAPI, client.app)
+    engine = app.state.meta_repository.engine()
+    # CPI vyšlo níž než konsensus → surprise_z záporné, konvence CPI −1 → risk-on (+1)
+    with engine.begin() as conn:
+        conn.execute(
+            update(news_events)
+            .where(news_events.c.title == "USD CPI m/m")
+            .values(actual=2.7, surprise_z=-1.4)
+        )
+    rows = client.get("/news").json()["news"]
+    by_title = {row["title"]: row for row in rows}
+    assert by_title["USD CPI m/m"]["surprise_direction"] == 1
+    # Headline směr nedostává (klíč úplně chybí — jiný stav než None u scheduled)
+    assert "surprise_direction" not in by_title["Fed holds rates"]
 
 
 def test_topics_series_and_shares(client: TestClient) -> None:
