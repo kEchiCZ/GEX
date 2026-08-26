@@ -315,7 +315,7 @@ async def test_error_354_po_cancelu_nese_kontrakt_z_nahrobku(
     from gexlens_engine.ibkr.subscription import ReqIdTombstones
 
     fake_now = {"t": 0.0}
-    monkeypatch.setattr(engine_main.time, "monotonic", lambda: fake_now["t"])
+    monkeypatch.setattr(engine_main, "time", SimpleNamespace(monotonic=lambda: fake_now["t"]))
 
     ib = SimpleNamespace(errorEvent=_FakeErrorEvent())
     manager = SimpleNamespace(report_error=lambda code, message: None)
