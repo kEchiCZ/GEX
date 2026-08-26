@@ -2340,6 +2340,17 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   margin-top: 2px;
 }
 
+/* Stop vůči vol režimu (#874): zvýraznění pro elevated/crisis — fixní
+   bodový stop je v tom režimu těsnější obchod */
+.setup-card-vol {
+  font-size: 0.82em;
+  margin-top: 2px;
+}
+.setup-card-vol.caution {
+  color: #e8c14b;
+  opacity: 1;
+}
+
 /* Relativní síla ES vs. NQ (#680, Traders mode) */
 .rs-chip {
   white-space: nowrap;

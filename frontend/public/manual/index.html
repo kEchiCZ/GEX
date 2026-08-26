@@ -819,6 +819,17 @@ openu v procentních bodech („RS NQ vede · ES−NQ −0,46 pb&quot;); kladný
 setupu pak pod RRR ukazuje řádek typu <code>riziko 50 $ (1 %) · stop 8 b → ES 0× · MES 1×</code>: počet kontraktů = riziko / (stop v bodech × hodnota bodu),
 vždy zaokrouhleno dolů, vedle plného kontraktu i micro varianta (MES/MNQ).
 Nezávisí na Traders mode — je součástí karty setupu.</p>
+<p><strong>Stop vůči volatilitnímu režimu (v1.11).</strong> Pod kalkulačkou je druhý řádek:
+<code>stop = 20 % rozsahu · režim normální (p54)</code>. <strong>Proč tu je:</strong> stejný stop
+v bodech je v jiném volatilitním režimu úplně jiný obchod — stop 8 b je
+v klidném dni rozumný odstup, v krizovém dni šum, který vystřelí každý
+zákmit. Řádek přepočítává stop na podíl <strong>typického denního rozsahu</strong>
+(vol režim z karty Volatilita, kap. 11f) a ve <strong>zvýšené/krizové</strong> volatilitě
+se zvýrazní s ⚠. <strong>Jak číst:</strong> vysoké procento = konzervativní stop (menší
+pozice, víc prostoru), nízké jednotky procent ve zvýšeném režimu = stop
+těsnější než obvykle — zvaž menší pozici, nebo širší stop s micro kontrakty.
+Řádek NIC nemění automaticky, jen ukazuje; bez spočteného vol režimu se
+nekreslí (žádné dosazování „normálu&quot;).</p>
 <hr>
 <h2>11f. Ranní briefing (sidebar → Briefing)</h2>
 <p>Plán dne na jedné obrazovce před US openem — čistá kompozice dat, která už

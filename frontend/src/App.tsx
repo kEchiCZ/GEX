@@ -52,6 +52,7 @@ import type { RangeSelection } from './instrument/rangeselect'
 import { RANGE_PRESETS, presetDisabledReason, presetRange } from './instrument/rangepresets'
 import type { RangePreset } from './instrument/rangepresets'
 import { useReferenceLevels } from './hooks/useReferenceLevels'
+import { useVolRegime } from './hooks/useVolRegime'
 import { usOpenMs } from './api/briefing'
 import type { LevelLine, PriceStyle } from './heatmap/overlays'
 import { CHARM_PALETTE, DEFAULT_SIGNED_PALETTE, VANNA_PALETTE } from './heatmap/render'
@@ -857,6 +858,8 @@ function MainContent() {
   )
   // Aktivní setupy (ADR-0004): karta nad grafem + úrovně entry/cíl/stop v heatmapě
   const { setups } = useSetups()
+  // Vol režim pro přepočet stopu na % rozsahu v kartě setupu (#874, ADR-0028)
+  const volRegime = useVolRegime(symbol, toggles.setups)
   const [dismissedSetups, setDismissedSetups] = useState<number[]>([])
   const activeSetups = useMemo(
     () =>
@@ -1582,6 +1585,7 @@ function MainContent() {
                 onDismiss={handleDismissSetup}
                 riskAccountUsd={riskAccountUsd}
                 riskPct={riskPct}
+                volRegime={volRegime}
               />
             )}
             {/* Data se nedaří obnovit (#516): zobrazený stav je starý — nikdy

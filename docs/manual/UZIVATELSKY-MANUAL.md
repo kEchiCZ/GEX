@@ -639,6 +639,18 @@ ES 0× · MES 1×`: počet kontraktů = riziko / (stop v bodech × hodnota bodu)
 vždy zaokrouhleno dolů, vedle plného kontraktu i micro varianta (MES/MNQ).
 Nezávisí na Traders mode — je součástí karty setupu.
 
+**Stop vůči volatilitnímu režimu (v1.11).** Pod kalkulačkou je druhý řádek:
+`stop = 20 % rozsahu · režim normální (p54)`. **Proč tu je:** stejný stop
+v bodech je v jiném volatilitním režimu úplně jiný obchod — stop 8 b je
+v klidném dni rozumný odstup, v krizovém dni šum, který vystřelí každý
+zákmit. Řádek přepočítává stop na podíl **typického denního rozsahu**
+(vol režim z karty Volatilita, kap. 11f) a ve **zvýšené/krizové** volatilitě
+se zvýrazní s ⚠. **Jak číst:** vysoké procento = konzervativní stop (menší
+pozice, víc prostoru), nízké jednotky procent ve zvýšeném režimu = stop
+těsnější než obvykle — zvaž menší pozici, nebo širší stop s micro kontrakty.
+Řádek NIC nemění automaticky, jen ukazuje; bez spočteného vol režimu se
+nekreslí (žádné dosazování „normálu").
+
 ---
 
 ## 11f. Ranní briefing (sidebar → Briefing)
