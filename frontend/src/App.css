@@ -247,12 +247,194 @@ body {
   color: var(--text-muted);
 }
 
-.expiry-select select {
+/* Kalendářový selektor expirací (#513) — trigger drží vzhled bývalého selectu */
+.expiry-calendar {
+  position: relative;
+}
+
+.cal-trigger {
   background: var(--bg-chip);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 4px 8px;
+  cursor: pointer;
+}
+
+.cal-trigger:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.cal-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  min-width: 252px;
+}
+
+.cal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.cal-header button {
+  background: var(--bg-chip);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+}
+
+.cal-title {
+  font-weight: 600;
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 32px);
+  gap: 2px;
+  justify-items: stretch;
+}
+
+.cal-weekday {
+  text-align: center;
+  font-size: 11px;
+  padding: 2px 0;
+}
+
+.cal-day {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 12px;
+  position: relative;
+}
+
+.cal-plain {
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.cal-out {
+  opacity: 0.3;
+}
+
+/* Dny s expirací: barva okraje podle druhu (legenda dole) */
+button.cal-day {
+  background: var(--bg-chip);
+  color: var(--text);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+button.cal-day:hover {
+  filter: brightness(1.25);
+}
+
+.cal-kind-daily {
+  border-color: #5a6acf;
+}
+
+.cal-kind-weekly {
+  border-color: #38b2ac;
+}
+
+.cal-kind-eom {
+  border-color: #d69e2e;
+}
+
+.cal-kind-monthly {
+  border-color: #dd6b20;
+}
+
+.cal-kind-quarterly {
+  border-color: #e53e3e;
+}
+
+button.cal-today {
+  outline: 1px dashed var(--text-muted);
+  outline-offset: 1px;
+}
+
+button.cal-selected {
+  background: var(--accent);
+  color: #0c2624;
+  font-weight: 700;
+}
+
+/* Počet sérií u multi-TC dne (MES styl) — droboučký index v rohu */
+.cal-multi {
+  position: absolute;
+  top: -1px;
+  right: 1px;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.cal-legend {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+.cal-legend span {
+  border-bottom: 2px solid;
+  line-height: 1.5;
+}
+
+.cal-legend .cal-kind-daily {
+  border-color: #5a6acf;
+}
+
+.cal-legend .cal-kind-weekly {
+  border-color: #38b2ac;
+}
+
+.cal-legend .cal-kind-eom {
+  border-color: #d69e2e;
+}
+
+.cal-legend .cal-kind-monthly {
+  border-color: #dd6b20;
+}
+
+.cal-legend .cal-kind-quarterly {
+  border-color: #e53e3e;
+}
+
+.cal-tc-step {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.cal-tc-step p {
+  font-size: 11px;
+  margin: 0 0 6px;
+}
+
+.cal-tc-option {
+  background: var(--bg-chip);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 10px;
+  margin-right: 6px;
+  cursor: pointer;
 }
 
 /* GEX režim badge (#209): typ obchodu dle kap. 18 — zelená fade, červená momentum,

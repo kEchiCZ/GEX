@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.11 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.12 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); od verze 1.9 slouží <strong>tastytrade</strong> jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -112,7 +112,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Hlavička — horní řádek</strong></td>
-<td><strong>Kdo a za kolik</strong>: ticker a název instrumentu, <strong>poslední cena + denní změna v %</strong>, <strong>selektor expirace</strong> s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h&quot; — velké expirace nesou velké OI. V selektoru najdeš i <strong>následující expiraci</strong> (sbírá se souběžně — čtení positioningu příští seance).</td>
+<td><strong>Kdo a za kolik</strong>: ticker a název instrumentu, <strong>poslední cena + denní změna v %</strong>, <strong>kalendářový selektor expirace</strong> (v1.12, níže) s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h&quot; — velké expirace nesou velké OI. V selektoru najdeš i <strong>následující expiraci</strong> (sbírá se souběžně — čtení positioningu příští seance).</td>
 </tr>
 <tr>
 <td><strong>Hlavička — spodní řádek</strong></td>
@@ -163,6 +163,27 @@ docker compose up -d        # start na pozadí
 <td>Zdraví datové pipeline — viz kapitola 15.</td>
 </tr>
 </tbody></table>
+<h3>Kalendářový selektor expirace (v1.12)</h3>
+<p>Kliknutí na expiraci v hlavičce otevře <strong>měsíční kalendář</strong> místo plochého
+seznamu dat. <strong>Proč z pohledu tradera:</strong> expirace se čte polohou v týdnu —
+pátek = týdenní (větší OI), třetí pátek = měsíční/kvartální (největší), poslední
+obchodní den = EOM. Seznam <code>YYYYMMDD</code> tuhle informaci schovává; v kalendáři
+vidíš na jeden pohled, <strong>jak daleko je nejbližší „velká&quot; expirace</strong> a jestli
+mezi dneškem a plánovaným držením pozice nějaká neodpadá.</p>
+<p><strong>Jak to číst:</strong></p>
+<ul>
+<li>Dny s expirací jsou tlačítka s <strong>barevným okrajem podle druhu</strong> (legenda dole:
+denní / týdenní / EOM / měsíční / kvartální), dnešek má čárkovaný rámeček,
+vybraná expirace je vyplněná.</li>
+<li>Tooltip dne nese druh + <strong>trading class</strong> série (E4C, EW4, EW…, z OI archivu)
+a případný zdroj tastytrade; trading class vybrané expirace je vidět přímo
+v tlačítku selektoru („20260828 · EW4&quot;).</li>
+<li>Den, kde se obchoduje <strong>víc sérií se stejnou expirací</strong> (např. MES), má v rohu
+počet a po kliknutí nabídne druhý krok s jmenovitým výběrem — heatmapa
+zobrazuje řetěz celého dne (série se slévají do jednoho positioningu).</li>
+<li>Šipky ‹ › (nebo PgUp/PgDn) listují měsíci, šipkové klávesy posouvají fokus
+po expiracích, Enter vybírá, Esc zavírá.</li>
+</ul>
 <hr>
 <h2>5. Heatmapa podrobně</h2>
 <p>Heatmapa zobrazuje matici <strong>čas (osa X) × strike (osa Y)</strong>. Každá buňka je jedna minuta jednoho striku; intenzita barvy odpovídá hodnotě zvolené metriky. <strong>Teal/zelená = call strana, červená = put strana.</strong></p>

@@ -6,6 +6,7 @@ import { expiryCountdown, expiryIsoDate, expiryKind, expirySettleUtc } from '../
 import { formatSettleWatch } from '../instrument/settlewatch'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
+import { ExpiryCalendar } from './ExpiryCalendar'
 import { GammaCliffChip } from './GammaCliffChip'
 import { IvRankChip } from './IvRankChip'
 import { RelativeStrengthChip } from './RelativeStrengthChip'
@@ -124,6 +125,7 @@ export function InstrumentHeader({
     symbol,
     setSymbol,
     expiries,
+    expiryClasses,
     selectedExpiry,
     setSelectedExpiry,
     status,
@@ -185,21 +187,19 @@ export function InstrumentHeader({
             </span>
           )}
         </div>
-        <label className="expiry-select">
+        <div className="expiry-select">
           Expirace
-          <select
-            value={selectedExpiry ?? ''}
-            onChange={(event) => setSelectedExpiry(event.target.value)}
-            disabled={expiries.length === 0}
-          >
-            {expiries.length === 0 && <option value="">—</option>}
-            {expiries.map((expiry) => (
-              <option key={expiry} value={expiry}>
-                {extendedExpiries.has(expiry) ? `${expiry} · tasty` : expiry}
-              </option>
-            ))}
-          </select>
-        </label>
+          {/* Kalendářový popover místo dropdownu (#513, SPEC 3.2) — druh
+          expirace i trading class jsou vidět při výběru, ne až po něm */}
+          <ExpiryCalendar
+            expiries={expiries}
+            expiryClasses={expiryClasses}
+            selected={selectedExpiry}
+            onSelect={setSelectedExpiry}
+            extended={extendedExpiries}
+            now={now}
+          />
+        </div>
         {kind && (
           <span
             className="muted expiry-meta"

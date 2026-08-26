@@ -241,11 +241,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     @app.get("/instruments/{symbol}/expiries")
-    def expiries(symbol: str) -> dict[str, list[str]]:
+    def expiries(symbol: str) -> dict[str, Any]:
         found = repository.list_expiries(symbol)
         if not found:
             raise HTTPException(404, f"Instrument {symbol!r} nemá žádná data")
-        return {"expiries": found}
+        # Trading classes per expirace (#513, SPEC 3.2) — z OI archivu (#736).
+        # PG nedostupná/tabulka chybí = kalendář se obejde bez jmen sérií.
+        try:
+            classes = oi_repository().trading_classes_by_expiry(symbol)
+        except Exception:
+            classes = {}
+        detail = [
+            {"date": expiry, "trading_classes": classes.get(expiry, [])} for expiry in found
+        ]
+        return {"expiries": found, "detail": detail}
 
     @app.get("/instruments/{symbol}/days")
     def days(symbol: str) -> dict[str, list[dict[str, str]]]:

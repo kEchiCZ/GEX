@@ -319,6 +319,26 @@ class OIEodRepository:
         with self._engine.connect() as conn:
             return [row.date for row in conn.execute(stmt)]
 
+    def trading_classes_by_expiry(self, symbol: str) -> dict[str, list[str]]:
+        """Distinct trading classes per expirace (#513) — pro selektor expirací.
+
+        Legacy souhrn "" (řádky z doby před #736) se vynechává: nenese jméno
+        série a v selektoru by matl. Expirace archivovaná jen jako legacy tak
+        vyjde bez tříd — UI ukáže holé datum, což je poctivé (jméno neznáme).
+        """
+        stmt = (
+            select(oi_eod_table.c.expiry, oi_eod_table.c.trading_class)
+            .where(oi_eod_table.c.symbol == symbol, oi_eod_table.c.trading_class != "")
+            .distinct()
+            .order_by(oi_eod_table.c.expiry, oi_eod_table.c.trading_class)
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).all()
+        classes: dict[str, list[str]] = {}
+        for expiry, trading_class in rows:
+            classes.setdefault(expiry, []).append(trading_class)
+        return classes
+
     def captured_at(self, symbol: str, day: dt.date) -> dt.datetime | None:
         """Kdy vznikl snímek dne; None = archiv chybí NEBO je z doby před #463.
 
