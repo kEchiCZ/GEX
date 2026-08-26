@@ -181,6 +181,8 @@ interface AppState {
   /** Přepnutí aktivního tickeru (z watchlistu v sidebaru). */
   setSymbol: (symbol: string) => void
   expiries: string[]
+  /** Trading classes per expirace z OI archivu (#513, SPEC 3.2); prázdné pole = neznámé. */
+  expiryClasses: Record<string, string[]>
   selectedExpiry: string | null
   setSelectedExpiry: (expiry: string) => void
   timeframe: 'intraday' | 'daily'
@@ -318,6 +320,7 @@ export function AppStateProvider({
   // Poslední volby uživatele přežívají refresh (ADR-0007, #167); URL má přednost
   const [symbol, setSymbol] = usePersistentState('symbol', initialSymbol, shortString())
   const [expiries, setExpiries] = useState<string[]>([])
+  const [expiryClasses, setExpiryClasses] = useState<Record<string, string[]>>({})
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
   const [timeframe, setTimeframe] = usePersistentState<'intraday' | 'daily'>(
     'timeframe',
@@ -498,16 +501,28 @@ export function AppStateProvider({
     }
     fetch(`${API_BASE}/instruments/${symbol}/expiries`)
       .then((response) => (response.ok ? response.json() : { expiries: [] }))
-      .then((payload: { expiries: string[] }) => {
-        if (cancelled) return
-        setExpiries(payload.expiries)
-        setSelectedExpiry(defaultExpiry(payload.expiries))
-        if (payload.expiries.length === 0) scheduleRetry()
-      })
+      .then(
+        (payload: {
+          expiries: string[]
+          detail?: { date: string; trading_classes: string[] }[]
+        }) => {
+          if (cancelled) return
+          setExpiries(payload.expiries)
+          // Trading classes do mapy (#513); starší API bez `detail` = prázdno
+          setExpiryClasses(
+            Object.fromEntries(
+              (payload.detail ?? []).map((row) => [row.date, row.trading_classes]),
+            ),
+          )
+          setSelectedExpiry(defaultExpiry(payload.expiries))
+          if (payload.expiries.length === 0) scheduleRetry()
+        },
+      )
       .catch(() => {
         // API neběží — hlavička ukáže placeholder, status bar offline stav
         if (!cancelled) {
           setExpiries([])
+          setExpiryClasses({})
           setSelectedExpiry(null)
           scheduleRetry()
         }
@@ -524,6 +539,7 @@ export function AppStateProvider({
       symbol,
       setSymbol,
       expiries,
+      expiryClasses,
       selectedExpiry,
       setSelectedExpiry,
       timeframe,
@@ -594,6 +610,7 @@ export function AppStateProvider({
       oiSource,
       setOiSource,
       expiries,
+      expiryClasses,
       selectedExpiry,
       timeframe,
       interval,

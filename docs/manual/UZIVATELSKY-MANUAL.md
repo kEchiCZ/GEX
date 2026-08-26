@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.11 · srpen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.12 · srpen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -103,7 +103,7 @@ Obrazovka se skládá z (shora dolů, zleva doprava):
 | Prvek | Popis |
 |---|---|
 | **Sidebar (vlevo)** | Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / Briefing / Deník / News / Stats / Settings), odkaz **Manuál**, přepínač tématu Dark/Light, **editovatelný watchlist** (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový; při chybě se pod formulářem ukáže hláška a seznam se sám srovná se serverem), tlačítko **Legenda** (modál s ukázkami všech prvků grafu a čtením „roste/klesá"), verze. Tlačítkem « se sbalí. |
-| **Hlavička — horní řádek** | **Kdo a za kolik**: ticker a název instrumentu, **poslední cena + denní změna v %**, **selektor expirace** s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h" — velké expirace nesou velké OI. V selektoru najdeš i **následující expiraci** (sbírá se souběžně — čtení positioningu příští seance). |
+| **Hlavička — horní řádek** | **Kdo a za kolik**: ticker a název instrumentu, **poslední cena + denní změna v %**, **kalendářový selektor expirace** (v1.12, níže) s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h" — velké expirace nesou velké OI. V selektoru najdeš i **následující expiraci** (sbírá se souběžně — čtení positioningu příští seance). |
 | **Hlavička — spodní řádek** | **V jakém je to stavu**: **GEX režim badge** (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem), **chip Tendence** (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno"), **chip stavu sentimentu** RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna), **settle watch**, **chip gamma útesu** a vpravo **ukazatele pokrytí dat**, indikátor ● Live / ○ Offline a zvonek notifikací. |
 | **Řádek timeframe** | **Intraday/Daily** a rozlišení **1m, 2m, 3m, 5m, 10m, 15m, 30m, 45m, 1h, 2h, 3h, 4h, 1d**. Intraday agreguje minutová data do zvolených košů (svíčky OHLC, objemy se sčítají); Daily zobrazí sloupec za každý uložený den (roste s historií, max 14 dní). |
 | **Řádek přepínačů** | Dropdown **Dyn plocha** (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18). Checkboxy vrstev: **Zdi** (call/put wall linie), **2. zeď** (druhá nejsilnější koncentrace strany, tečkovaně), **GEX Levels** (flip/centroid/Max Pain), **GEX žebřík** (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), **FA levels** (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI), **Sessions** (automatické markery světových seancí), **Vol / Opt Vol / Delta / Δ Flow C/P** (spodní panely), **Vol + OI Δ**, **Projekce**, **News** (markery zpráv + panel Sentiment) s dropdownem **Vše/Významné** (filtr markerů na importance ≥ 2), dropdown **Signály** (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá. |
@@ -116,6 +116,29 @@ Obrazovka se skládá z (shora dolů, zleva doprava):
 | **Spodní panely** | Vol / Opt Vol / Δ Flow / Cum Δ — viz kapitola 8. |
 | **Playback lišta** | Defaultně skrytá (aplikace jede vždy live) — zobrazí ji tlačítko **⏮ Replay**; viz kapitola 9. |
 | **Stavová lišta** | Zdraví datové pipeline — viz kapitola 15. |
+
+### Kalendářový selektor expirace (v1.12)
+
+Kliknutí na expiraci v hlavičce otevře **měsíční kalendář** místo plochého
+seznamu dat. **Proč z pohledu tradera:** expirace se čte polohou v týdnu —
+pátek = týdenní (větší OI), třetí pátek = měsíční/kvartální (největší), poslední
+obchodní den = EOM. Seznam `YYYYMMDD` tuhle informaci schovává; v kalendáři
+vidíš na jeden pohled, **jak daleko je nejbližší „velká" expirace** a jestli
+mezi dneškem a plánovaným držením pozice nějaká neodpadá.
+
+**Jak to číst:**
+
+- Dny s expirací jsou tlačítka s **barevným okrajem podle druhu** (legenda dole:
+  denní / týdenní / EOM / měsíční / kvartální), dnešek má čárkovaný rámeček,
+  vybraná expirace je vyplněná.
+- Tooltip dne nese druh + **trading class** série (E4C, EW4, EW…, z OI archivu)
+  a případný zdroj tastytrade; trading class vybrané expirace je vidět přímo
+  v tlačítku selektoru („20260828 · EW4").
+- Den, kde se obchoduje **víc sérií se stejnou expirací** (např. MES), má v rohu
+  počet a po kliknutí nabídne druhý krok s jmenovitým výběrem — heatmapa
+  zobrazuje řetěz celého dne (série se slévají do jednoho positioningu).
+- Šipky ‹ › (nebo PgUp/PgDn) listují měsíci, šipkové klávesy posouvají fokus
+  po expiracích, Enter vybírá, Esc zavírá.
 
 ---
 

@@ -123,8 +123,31 @@ def test_openapi_schema_complete(client: TestClient) -> None:
 
 def test_instruments_and_expiries(client: TestClient) -> None:
     assert client.get("/instruments").json() == {"instruments": ["ES"]}
-    assert client.get("/instruments/ES/expiries").json() == {"expiries": ["20260716"]}
+    payload = client.get("/instruments/ES/expiries").json()
+    assert payload["expiries"] == ["20260716"]
+    # Bez OI archivu detail nese prázdné třídy — kalendář se obejde (#513)
+    assert payload["detail"] == [{"date": "20260716", "trading_classes": []}]
     assert client.get("/instruments/SPY/expiries").status_code == 404
+
+
+def test_expiries_detail_trading_classes(settings: Settings) -> None:
+    """#513: detail nese trading classes z OI archivu; multi-TC den má obě."""
+    from gexlens_api.meta_repo import MetaRepository
+    from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
+
+    repo = OIEodRepository(MetaRepository(settings).engine())
+    repo.ensure_schema()
+    repo.upsert_many(
+        [
+            OIRecord("ES", "20260716", 7600.0, "C", DAY, 10.0, trading_class="EW3"),
+            OIRecord("ES", "20260716", 7600.0, "P", DAY, 12.0, trading_class="E3C"),
+            # Legacy souhrn "" se v detailu nesmí objevit
+            OIRecord("ES", "20260716", 7610.0, "C", DAY, 5.0),
+        ]
+    )
+    client = TestClient(create_app(settings))
+    payload = client.get("/instruments/ES/expiries").json()
+    assert payload["detail"] == [{"date": "20260716", "trading_classes": ["E3C", "EW3"]}]
 
 
 def test_days_listing(settings: Settings) -> None:

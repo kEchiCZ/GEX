@@ -39,8 +39,9 @@ test('vykreslí kompletní layout (SPEC 7.1)', async () => {
   expect(screen.getAllByText('Vol + OI Δ').length).toBeGreaterThan(0)
   expect(screen.getByLabelText('Strike profil')).toBeDefined()
 
-  // Expirace načtené z REST
-  expect(await screen.findByRole('option', { name: '20260716' })).toBeDefined()
+  // Expirace načtené z REST — trigger kalendáře (#513) nese vybranou
+  const trigger = await screen.findByTestId('expiry-trigger')
+  expect(trigger.textContent).toContain('20260717')
 })
 
 test('Ctrl+kolečko (pinch) nezoomuje stránku NAD grafem; jinde zůstává (#179, #181)', () => {
@@ -193,8 +194,9 @@ test('demo den nemá měřitelnou osu, takže OHLC badge ani časová značka ne
 
 test('extended expirace nese badge zdroje tastytrade (#616 4b)', async () => {
   makeApp()
-  // Expirace z REST; první (20260716) se vybere automaticky
-  expect(await screen.findByRole('option', { name: '20260716' })).toBeDefined()
+  // Expirace z REST; poslední (20260717) se vybere automaticky
+  const trigger = await screen.findByTestId('expiry-trigger')
+  expect(trigger.textContent).toContain('20260717')
 
   const ws = FakeWebSocket.latest()
   act(() => {
@@ -206,8 +208,12 @@ test('extended expirace nese badge zdroje tastytrade (#616 4b)', async () => {
     })
   })
 
-  expect(screen.getByRole('option', { name: '20260717 · tasty' })).toBeDefined()
+  expect(screen.getByTestId('expiry-trigger').textContent).toContain('20260717 · tasty')
   expect(screen.getByTestId('expiry-meta').textContent).toContain('zdroj tastytrade')
-  // Druhá expirace (IBKR) badge nemá
-  expect(screen.getByRole('option', { name: '20260716' })).toBeDefined()
+  // V kalendáři (#513) nese tasty značku jen extended den, IBKR den ne
+  fireEvent.click(screen.getByTestId('expiry-trigger'))
+  const extendedDay = document.querySelector('button[data-expiry="20260717"]')
+  const ibkrDay = document.querySelector('button[data-expiry="20260716"]')
+  expect(extendedDay?.getAttribute('title')).toContain('tastytrade')
+  expect(ibkrDay?.getAttribute('title')).not.toContain('tastytrade')
 })
