@@ -58,6 +58,7 @@ from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute
 from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.config import Settings, load_settings
 from gexlens_engine.gammacliff import read_expiries_at
+from gexlens_engine.storage.emrespect_store import EmRespectRepository
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.gammacliff_store import gamma_cliff_table
 from gexlens_engine.storage.oi_archive import OIEodRepository
@@ -443,6 +444,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             rows = []  # tabulka ještě neexistuje (engine neběžel) — UI drží tvar
         return {"symbol": symbol, "today": today, "rows": rows}
+
+    @app.get("/emrespect/{symbol}")
+    def em_respect(symbol: str, limit: int = 365, window_days: int = 90) -> dict[str, object]:
+        """Respektování pásma expected move per seance (#872, D3).
+
+        `summary` = podíl close uvnitř pásma + četnost dotyků v okně; None
+        bez dat — nikdy se nedosazuje default (zásada ADR-0028). Řádky nesou
+        zdroj EM (straddle × close prémie) i podíl minut v negativní gammě
+        pro měření #876.
+        """
+        try:
+            repository = EmRespectRepository(meta_repository.engine())
+            rows = repository.list_for(symbol, limit=max(1, min(limit, 1000)))
+            summary = repository.summary(symbol, window_days=max(7, min(window_days, 365)))
+        except Exception:
+            rows, summary = [], None  # tabulka ještě neexistuje (engine neběžel)
+        return {"symbol": symbol, "summary": summary, "rows": rows}
 
     @app.get("/volregime/{symbol}")
     def vol_regime(symbol: str, limit: int = 365) -> dict[str, object]:
