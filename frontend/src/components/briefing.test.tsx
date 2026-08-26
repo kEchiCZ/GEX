@@ -39,6 +39,7 @@ function mockApis(overrides: Record<string, unknown> = {}) {
     if (path.includes('/gexforward/')) return body({ days: [] })
     if (path.includes('/volregime/')) return body(overrides['volregime'] ?? { rows: [] })
     if (path.includes('/emrespect/')) return body(overrides['emrespect'] ?? { summary: null })
+    if (path.includes('/ivrank/')) return body(overrides['ivrank'] ?? { latest: [] })
     return body({})
   })
 }
@@ -77,6 +78,40 @@ test('karta Volatilita (#873): hodnoty z /volregime a /emrespect, EM z prop', as
   expect(screen.getByTestId('vol-em').textContent).toContain('±38.5 b (0.51 % spotu)')
   expect(screen.getByTestId('vol-em').textContent).toContain('pre-open odhad')
   expect(screen.getByTestId('vol-emrespect').textContent).toContain('close uvnitř pásma 75 % dnů (n=12/90 d)') // prettier-ignore
+})
+
+test('IV percentil (#871): primárně ibkr percentil, rank a tasty v tooltipu', async () => {
+  mockApis({
+    ivrank: {
+      latest: [
+        { session_date: '2026-08-26', source: 'ibkr', iv: 0.1191, iv_rank: 0.31, iv_percentile: 0.19, sample: 252 }, // prettier-ignore
+        { session_date: '2026-08-26', source: 'tasty', iv: 0.1557, iv_rank: 0.3119, iv_percentile: 0.1883, sample: 0 }, // prettier-ignore
+      ],
+    },
+  })
+  render(<BriefingView />)
+  await waitFor(() => {
+    expect(screen.getByTestId('vol-ivr').textContent).toContain('p19 · IV 11.9 % (252 dnů)')
+  })
+  const title = screen.getByTestId('vol-ivr').getAttribute('title') ?? ''
+  expect(title).toContain('IV Rank')
+  expect(title).toContain('31')
+  expect(title).toContain('tasty')
+  // Řada pod MIN_SAMPLE (percentil null) se chová jako bez dat
+})
+
+test('IV percentil bez ibkr řady říká, že se plní po settle', async () => {
+  mockApis({
+    ivrank: {
+      latest: [
+        { session_date: '2026-08-26', source: 'ibkr', iv: 0.12, iv_rank: null, iv_percentile: null, sample: 10 }, // prettier-ignore
+      ],
+    },
+  })
+  render(<BriefingView />)
+  await waitFor(() => {
+    expect(screen.getByTestId('vol-ivr').textContent).toContain('bez dat')
+  })
 })
 
 test('karta Volatilita bez dat říká proč — žádný dosazený default (ADR-0028)', async () => {

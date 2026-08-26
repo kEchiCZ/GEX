@@ -119,6 +119,53 @@ export async function fetchVolRegimeLatest(symbol: string): Promise<VolRegimeRow
   return rows.length > 0 ? rows[0] : null
 }
 
+/** Řádek /ivrank — denní IV s kontextem per zdroj (#871). */
+export interface IvRankRow {
+  session_date: string
+  source: string
+  iv: number
+  iv_rank: number | null
+  iv_percentile: number | null
+  sample: number
+}
+
+/** Poslední řádky /ivrank per zdroj (ibkr/tasty/own_atm); prázdné = bez dat. */
+export async function fetchIvRankLatest(symbol: string): Promise<IvRankRow[]> {
+  const data = await getJson<{ latest?: IvRankRow[] }>(`/ivrank/${symbol}?limit=1`, {
+    latest: [],
+  })
+  return data.latest ?? []
+}
+
+/** Primární IVR čtení (rozhodnutí uživatele 26. 8.): percentil z řady `ibkr`
+(plná roční historie, transparentní konstrukce); rank a tasty křížová
+kontrola patří do tooltipu. Null = řada chybí nebo je pod MIN_SAMPLE. */
+export function ivRankPrimary(rows: IvRankRow[]): IvRankRow | null {
+  const ibkr = rows.find((row) => row.source === 'ibkr')
+  return ibkr && ibkr.iv_percentile !== null ? ibkr : null
+}
+
+/** Tooltip IVR: rank + tasty kontrola — vše, co se do řádku nevešlo. */
+export function ivRankTooltip(rows: IvRankRow[]): string {
+  const parts: string[] = [
+    'IV percentil = podíl dnů v klouzavém roce s nižší 30d IV podkladu (řada IBKR). ' +
+      'Vysoko = trh platí za pohyb neobvykle mnoho; nízko = prémie jsou levné. ' +
+      'Neříká směr — jen kolik pohybu se čeká.',
+  ]
+  const ibkr = rows.find((row) => row.source === 'ibkr')
+  if (ibkr?.iv_rank != null) {
+    parts.push(`IV Rank (poloha mezi ročním min–max): ${Math.round(ibkr.iv_rank * 100)}.`)
+  }
+  const tasty = rows.find((row) => row.source === 'tasty')
+  if (tasty) {
+    const pct = tasty.iv_percentile != null ? ` p${Math.round(tasty.iv_percentile * 100)}` : ''
+    parts.push(
+      `Křížová kontrola tasty: IV ${(100 * tasty.iv).toFixed(1)} %${pct} — jiná konstrukce, čísla se záměrně nemíchají.`,
+    )
+  }
+  return parts.join(' ')
+}
+
 /** Souhrn /emrespect — jak často close končí uvnitř pásma EM (#872). */
 export interface EmRespectSummary {
   window_days: number
