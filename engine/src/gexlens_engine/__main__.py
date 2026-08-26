@@ -28,6 +28,7 @@ from gexlens_engine.adapters import (
 )
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
+from gexlens_engine.compute.marketclock import outside_us_rth
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.diagnostics import install_stack_dump
@@ -1913,6 +1914,45 @@ async def main() -> None:
         else:
             run_list = [pipelines[symbol] for symbol in plan.start if symbol in pipelines]
         results = await gather_metrics(run_list, now)
+        # Remediace BS fallbacku (#877, varianta C): plný fallback ≥ 30 min →
+        # 1. pokus resubscribe (bez díry), 2. pokus reconnect — VÝHRADNĚ mimo
+        # US RTH (reconnect je díra ve sběru) a max jeden zásah per cyklus
+        # (spojení je sdílené, druhý symbol by zasahoval do téhož).
+        if settings.bs_fallback_reconnect:
+            for pipeline in run_list:
+                attempt = pipeline.runtime.bs_remediation_due(time.monotonic())
+                if attempt is None:
+                    continue
+                if not outside_us_rth(now):
+                    logger.warning(
+                        "%s: plný BS fallback dozrál k remediaci, ale běží US RTH — čekám",
+                        pipeline.symbol,
+                    )
+                    break
+                if attempt == 1:
+                    action = "vynucená obnova subskripcí"
+                    ok = await manager.resubscribe_now()
+                else:
+                    action = "vynucený reconnect"
+                    manager.force_reconnect(
+                        f"BS fallback {pipeline.symbol} přežil resubscribe (#877)"
+                    )
+                    ok = True
+                message = (
+                    f"{pipeline.symbol}: remediace BS fallbacku (pokus {attempt}/2) — "
+                    f"{action}{'' if ok else ' selhala, supervisor přepojuje'}."
+                )
+                logger.warning("%s", message)
+                await publisher.publish(
+                    "alerts",
+                    {
+                        "kind": "greeks_bs_fallback",
+                        "symbol": pipeline.symbol,
+                        "message": message,
+                        "ts": dt.datetime.now(dt.UTC).timestamp(),
+                    },
+                )
+                break
         # Účty čte ib_async z připojení; po přepojení se mohou změnit (#446)
         account = classify_accounts(ib.managedAccounts())
         # Status se pushuje i BEZ pipelines (#756). Dřív ho podmiňoval neprázdný

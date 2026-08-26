@@ -216,6 +216,16 @@ class ConnectionManager:
         )
         return True
 
+    def force_reconnect(self, reason: str) -> None:
+        """Vynucený reconnect (#877 C, 2. pokus remediace): disconnect klienta,
+        zbytek udělá supervisor standardní cestou (heartbeat výpadek pozná).
+
+        Volat JEN mimo US RTH — reconnect je ~1–2 min díra ve sběru.
+        """
+        self._set_state(ConnectionState.RECONNECTING, f"vynucený reconnect: {reason}")
+        with contextlib.suppress(Exception):
+            self._client.disconnect()
+
     def report_market_data_type(self, market_data_type: int) -> None:
         """Fail-fast na delayed data: cokoli jiného než live (1) je chybový stav."""
         if market_data_type != LIVE_MARKET_DATA_TYPE:
