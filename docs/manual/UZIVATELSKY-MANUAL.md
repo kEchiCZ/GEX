@@ -520,6 +520,14 @@ přičíst téhle zprávě). Dopad se měří pro aktivní symbol (ES/NQ). Naho�
 řádek **Stav: RiskOn/RiskOff · trend ↑/↓/→**. Plný text zprávy je přímo
 na kartě; opravy klasifikace (⚠ u titulku) zůstávají.
 
+Od v1.12 karta nese i **kontext tématu**: badge `téma −0,22` je kumulativní
+index tématu **v okamžiku zprávy** — do jakého narativu zpráva přišla
+(zpráva „Fed drží sazby" čtená do zhoršujícího se tématu je jiná informace
+než táž zpráva do klidu). Referenční formát ukazuje Intraday | Week zvlášť;
+u nás obě okna splývají (poločasy dozvuku máme ≤ 6 h, příspěvky starší než
+den jsou prakticky nulové), proto je hodnota jedna. **Kategorie na kartě je
+proklik** — otevře téma v panelu Témata i se zdrojovými zprávami.
+
 - **Filtry** nahoře: kategorie a minimální důležitost (vše / 2+ / 3).
 - **„Co hýbe trhem"** — aktivní témata s příspěvkem k indexu (🏛 Fed +0,42 …).
 - **Panel Témata** (v1.12) — viz níže.

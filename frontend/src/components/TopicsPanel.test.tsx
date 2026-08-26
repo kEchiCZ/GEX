@@ -87,3 +87,11 @@ test('bez dat panel poctivě řekne, že není z čeho počítat', async () => {
   render(<TopicsPanel />)
   expect(await screen.findByText(/není z čeho spočítat/)).toBeTruthy()
 })
+
+test('focus z karty zprávy otevře téma i zdrojové zprávy (#656 bod 2)', async () => {
+  render(<TopicsPanel focus={{ category: 'FED' }} />)
+  await screen.findByTestId('topic-row-FED')
+  await waitFor(() => {
+    expect(screen.getByTestId('topic-events-FED')).toBeTruthy()
+  })
+})

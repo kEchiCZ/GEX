@@ -74,15 +74,19 @@ function NewsRowItem({
   row,
   review,
   onCorrect,
+  onTopicClick,
 }: {
   row: NewsRow
   review: ReviewRow | undefined
   onCorrect: (eventId: number, correction: { direction?: number; category?: string }) => void
+  /** Proklik na detail tématu v panelu Témata (#656 bod 2). */
+  onTopicClick: (category: string) => void
 }) {
   const score = asNumber(row.sentiment_score)
   const [editing, setEditing] = useState(false)
   const [direction, setDirection] = useState<number>(row.sentiment_dir ?? 0)
   const [category, setCategory] = useState<string>(row.category ?? 'OTHER')
+  const topicValue = asNumber(row.topic_value ?? null)
   return (
     <article
       data-testid={`news-row-${row.id}`}
@@ -90,10 +94,34 @@ function NewsRowItem({
       title={review ? `Ke kontrole: ${REVIEW_REASONS[review.reason] ?? review.reason}` : undefined}
     >
       <div className="news-card-head">
-        <span className="news-category">
-          <span title={categoryLabel(row.category)}>{categoryGlyph(row.category)}</span>{' '}
-          {categoryLabel(row.category)}
-        </span>
+        {row.category ? (
+          <button
+            type="button"
+            className="news-category news-topic-link"
+            title={`Otevřít téma ${categoryLabel(row.category)} v panelu Témata`}
+            data-testid={`topic-link-${row.id}`}
+            onClick={() => onTopicClick(row.category as string)}
+          >
+            <span>{categoryGlyph(row.category)}</span> {categoryLabel(row.category)}
+          </button>
+        ) : (
+          <span className="news-category">
+            <span title={categoryLabel(row.category)}>{categoryGlyph(row.category)}</span>{' '}
+            {categoryLabel(row.category)}
+          </span>
+        )}
+        {/* Index tématu k okamžiku zprávy (#656 bod 5): jak na tom narativ
+        byl, když tohle přišlo. Den/týden u našich poločasů splývají. */}
+        {topicValue !== null && (
+          <span
+            className={scoreClass(topicValue)}
+            data-testid={`topic-value-${row.id}`}
+            title="Kumulativní index tématu v čase zprávy — kontext narativu, do kterého zpráva přišla."
+          >
+            téma {topicValue >= 0 ? '+' : ''}
+            {topicValue.toFixed(2)}
+          </span>
+        )}
         <span className="news-time muted" title={new Date(row.ts_event).toLocaleString()}>
           {relativeAge(row.ts_event, Date.now())}
         </span>
@@ -203,6 +231,9 @@ export function NewsView() {
   const [minImportance, setMinImportance] = useState<number>(0)
   const [crowd, setCrowd] = useState<CrowdRow[]>([])
   const [review, setReview] = useState<ReviewRow[]>([])
+  // Proklik z karty na detail tématu (#656 bod 2) — objekt kvůli retriggeru
+  // efektu při opakovaném kliku na totéž téma
+  const [topicFocus, setTopicFocus] = useState<{ category: string } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -303,7 +334,7 @@ export function NewsView() {
       )}
 
       {/* Témata v čase (#566): rozpad období + průběh tématu + zdrojové zprávy */}
-      <TopicsPanel />
+      <TopicsPanel focus={topicFocus} />
 
       <CrowdBlock rows={crowd} />
 
@@ -341,6 +372,7 @@ export function NewsView() {
               row={row}
               review={reviewByEvent.get(row.id)}
               onCorrect={handleCorrect}
+              onTopicClick={(cat) => setTopicFocus({ category: cat })}
             />
           ))}
         </div>

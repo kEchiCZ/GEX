@@ -176,6 +176,16 @@ def test_topics_computed_from_live_events(client: TestClient) -> None:
     assert client.get("/sentiment/topics", params={"active": 1}).json()["topics"] == []
 
 
+def test_news_feed_carries_topic_value(client: TestClient) -> None:
+    """#656 bod 5: karta nese index tématu k okamžiku zprávy."""
+    rows = client.get("/news").json()["news"]
+    by_title = {row["title"]: row for row in rows}
+    # Jediná zpráva tématu: index v čase zprávy = její vlastní skóre (exp(0))
+    assert by_title["Fed holds rates"]["topic_value"] == pytest.approx(0.4)
+    # CPI nemá skóre ani žádnou skórovanou zprávu v kategorii → None
+    assert by_title["USD CPI m/m"]["topic_value"] is None
+
+
 def test_topics_series_and_shares(client: TestClient) -> None:
     """#566 fáze 1+2: řada per téma + rozpad příspěvků za období."""
     payload = client.get("/sentiment/topics/series", params={"days": 1}).json()

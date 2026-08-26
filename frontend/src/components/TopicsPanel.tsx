@@ -6,7 +6,7 @@ v souhrnném SentIndexu to zanikne) a po rozkliku zprávy, které téma tvoří
 (hodnota musí být dohledatelná ke zdrojům). Vzhled je náš — z reference se
 bere princip, ne rozvržení.
 */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { categoryGlyph, categoryLabel, fetchTopicEvents, fetchTopicSeries } from '../api/news'
 import type { TopicEventRow, TopicSeriesRow } from '../api/news'
 
@@ -89,10 +89,24 @@ function TopicEvents({ category, days }: { category: string; days: number }) {
   )
 }
 
-export function TopicsPanel() {
+export function TopicsPanel({
+  focus = null,
+}: {
+  /** Proklik z karty zprávy (#656 bod 2) — otevře téma a odscrolluje panel;
+  objekt místo stringu, ať opakovaný klik na totéž téma efekt znovu spustí. */
+  focus?: { category: string } | null
+}) {
   const [days, setDays] = useState<number>(7)
   const [topics, setTopics] = useState<TopicSeriesRow[]>([])
   const [openCategory, setOpenCategory] = useState<string | null>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (focus === null) return
+    setOpenCategory(focus.category)
+    // jsdom scrollIntoView neumí — optional call, at testy nepadají
+    panelRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+  }, [focus])
 
   useEffect(() => {
     let cancelled = false
@@ -112,7 +126,7 @@ export function TopicsPanel() {
   const maxShare = useMemo(() => Math.max(...topics.map((topic) => topic.share), 1e-6), [topics])
 
   return (
-    <div className="topics-panel" aria-label="Témata v čase">
+    <div className="topics-panel" aria-label="Témata v čase" ref={panelRef}>
       <div className="topics-head">
         <h3>Témata</h3>
         <div className="topics-ranges" role="group" aria-label="Období">

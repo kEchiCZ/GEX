@@ -27,6 +27,9 @@ export interface NewsRow {
   /** Do některého okna spadl jiný významný event — pohyb nejde přičíst téhle
   zprávě (SPEC 5.1); karta to značí ⚠. */
   reaction_contaminated?: boolean
+  /** Index tématu k okamžiku zprávy (#656 bod 5) — kontext narativu; den
+  a týden u našich poločasů (≤ 6 h) splývají, proto jedna hodnota. */
+  topic_value?: number | null
   actual: number | string | null
 }
 

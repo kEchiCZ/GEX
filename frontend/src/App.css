@@ -1522,6 +1522,21 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   display: block;
 }
 
+/* Proklik z karty zprávy na téma (#656 bod 2) — vypadá jako text, ne tlačítko */
+.news-topic-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.news-topic-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 /* Témata v čase (#566): rozpad období + sparkline + rozklik na zprávy */
 .topics-panel {
   margin-bottom: 12px;
