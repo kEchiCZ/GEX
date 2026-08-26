@@ -41,7 +41,7 @@ import {
   maxDrawdown,
   signalHitRate,
 } from '../stats/trackrecord'
-import { currentWave, histogram, waveDirectionStats } from '../stats/waves'
+import { currentWave, depthReading, histogram, waveDirectionStats } from '../stats/waves'
 import { useAppState } from '../state/AppState'
 import { JournalStats } from './JournalStats'
 
@@ -533,11 +533,16 @@ export function StatsView() {
           <p>
             Aktuální vlna:{' '}
             <span style={{ color: DIRECTION_COLORS[active.direction] }}>{active.direction}</span> od{' '}
-            {active.start_date}, hloubka {active.depth.toFixed(2)} ({active.length_days} d).
+            {active.start_date}, hloubka{' '}
+            {active.depth_z != null
+              ? `${active.depth_z.toFixed(2)} σ (surově ${active.depth.toFixed(2)})`
+              : active.depth.toFixed(2)}{' '}
+            ({active.length_days} d).
             {riskOffStats.count > 0 && (
               <span className="muted">
                 {' '}
-                Práh potvrzení (Ø hloubka RiskOff): {riskOffStats.meanDepth.toFixed(2)}.
+                Práh potvrzení (Ø hloubka RiskOff): {riskOffStats.meanDepth.toFixed(2)}
+                {riskOffStats.inSigma ? ' σ' : ''}.
               </span>
             )}
           </p>
@@ -545,25 +550,29 @@ export function StatsView() {
         <div className="stats-grid">
           {(['RiskOn', 'RiskOff'] as const).map((direction) => {
             const directionStats = waveDirectionStats(symbolWaves, direction)
+            // Hloubky v σ (#640): éry řady mají různá měřítka, σ je sjednocuje —
+            // ale jen když σ mají všechny vlny (míchat jednotky nelze)
+            const reading = depthReading(symbolWaves)
             const depths = symbolWaves
               .filter((wave) => wave.direction === direction)
-              .map((wave) => wave.depth)
+              .map(reading.value)
             const lengths = symbolWaves
               .filter((wave) => wave.direction === direction)
               .map((wave) => wave.length_days)
+            const activeDepth = active?.direction === direction ? reading.value(active) : null
             return (
               <div key={direction} className="stats-card">
                 <h3 style={{ color: DIRECTION_COLORS[direction] }}>{direction}</h3>
                 <p className="muted">
-                  {directionStats.count} vln · hloubka {directionStats.meanDepth.toFixed(2)} ±{' '}
-                  {directionStats.sigmaDepth.toFixed(2)} · délka Ø{' '}
-                  {directionStats.meanLength.toFixed(1)} d
+                  {directionStats.count} vln · hloubka {directionStats.meanDepth.toFixed(2)}
+                  {directionStats.inSigma ? ' σ' : ''} ± {directionStats.sigmaDepth.toFixed(2)} ·
+                  délka Ø {directionStats.meanLength.toFixed(1)} d
                 </p>
-                <h4 className="muted">Hloubky</h4>
+                <h4 className="muted">Hloubky{reading.inSigma ? ' (v σ škály, #640)' : ''}</h4>
                 <HistogramChart
                   values={depths}
                   color={DIRECTION_COLORS[direction]}
-                  marker={active?.direction === direction ? active.depth : null}
+                  marker={activeDepth}
                   ariaLabel={`Histogram hloubek ${direction}`}
                   format={(value) => value.toFixed(1)}
                 />

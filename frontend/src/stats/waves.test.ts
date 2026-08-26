@@ -1,6 +1,6 @@
 /** Testy statistiky vln (#297, SPEC 7.2) — čisté funkce. */
 import { describe, expect, it } from 'vitest'
-import { currentWave, histogram, waveDirectionStats } from './waves'
+import { currentWave, depthReading, histogram, waveDirectionStats } from './waves'
 import type { WaveRow } from '../api/news'
 
 function wave(overrides: Partial<WaveRow>): WaveRow {
@@ -61,5 +61,34 @@ describe('currentWave', () => {
     ]
     expect(currentWave(waves, 'ES')?.id).toBe(3)
     expect(currentWave([wave({})], 'ES')).toBeNull()
+  })
+})
+
+describe('depthReading (#640)', () => {
+  const wave = (depth: number, depth_z: number | null): WaveRow => ({
+    id: 1,
+    symbol: 'ES',
+    direction: 'RiskOn',
+    start_date: '2026-08-01',
+    end_date: '2026-08-05',
+    depth,
+    depth_z,
+    length_days: 4,
+  })
+
+  it('σ jednotky jen když je mají všechny vlny — jednotky se nesmí míchat', () => {
+    const all = depthReading([wave(2, 1), wave(4, 2)])
+    expect(all.inSigma).toBe(true)
+    expect(all.value(wave(4, 2))).toBe(2)
+    const mixed = depthReading([wave(2, 1), wave(4, null)])
+    expect(mixed.inSigma).toBe(false)
+    expect(mixed.value(wave(2, 1))).toBe(2) // fallback na surovou hloubku
+  })
+
+  it('prázdný vstup není σ (fallback raw) a stats nesou příznak', () => {
+    expect(depthReading([]).inSigma).toBe(false)
+    const stats = waveDirectionStats([wave(2, 1), wave(4, 2)], 'RiskOn')
+    expect(stats.inSigma).toBe(true)
+    expect(stats.meanDepth).toBe(1.5) // průměr v σ, ne surový
   })
 })

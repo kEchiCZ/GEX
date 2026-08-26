@@ -105,3 +105,62 @@ def test_confirmed_state_from_closed_days(tmp_path: Path) -> None:
     assert payload["current_wave"]["end_date"] is None
     assert payload["ma5"] == pytest.approx(0.2)
     assert payload["ma10"] == pytest.approx(0.1)
+
+
+def test_depth_z_ze_sigmy_dne_konce_vlny(tmp_path: Path) -> None:
+    """#640: hloubka v σ škály — σ platná v den konce vlny, kauzálně;
+    bez σ zůstává depth_z NULL (žádný default)."""
+    engine = make_db(tmp_path)
+    closes = [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -1.0,
+        -2.0,
+        -3.0,
+        -2.5,
+        -1.0,
+        1.0,
+        2.0,
+        3.0,
+    ]  # prettier-ignore
+    seed_daily(engine, closes)
+    # σ jen pro poslední dny řady — vlny končící dřív σ nemají → NULL
+    start = TODAY - dt.timedelta(days=len(closes))
+    from sqlalchemy import update
+
+    with engine.begin() as conn:
+        for index in range(12, len(closes)):
+            conn.execute(
+                update(sentiment_daily)
+                .where(sentiment_daily.c.date == start + dt.timedelta(days=index))
+                .values(sigma=2.0)
+            )
+    job = WavesJob(engine, symbol="ES")
+    job.run(NOW)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(
+                sentiment_waves.c.depth,
+                sentiment_waves.c.depth_z,
+                sentiment_waves.c.series_variant,
+                sentiment_waves.c.end_date,
+            ).order_by(sentiment_waves.c.start_date)
+        ).fetchall()
+    assert rows, "vlny se musely detekovat"
+    for row in rows:
+        if row.depth_z is not None:
+            # σ = 2.0 → depth_z je přesně polovina surové hloubky
+            assert row.depth_z == pytest.approx(row.depth / 2.0)
+            assert row.series_variant == "zscore_100"
+        else:
+            assert row.series_variant is None
+    # Aspoň jedna vlna σ éry převod má (probíhající bere poslední známou σ)
+    assert any(row.depth_z is not None for row in rows)
