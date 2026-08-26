@@ -691,9 +691,33 @@ na kartě; opravy klasifikace (⚠ u titulku) zůstávají.</p>
 <ul>
 <li><strong>Filtry</strong> nahoře: kategorie a minimální důležitost (vše / 2+ / 3).</li>
 <li><strong>„Co hýbe trhem&quot;</strong> — aktivní témata s příspěvkem k indexu (🏛 Fed +0,42 …).</li>
+<li><strong>Panel Témata</strong> (v1.12) — viz níže.</li>
 <li><strong>Crowd sentiment</strong> — externí kontrariánské ukazatele: Fear &amp; Greed, Put/Call ratio, Reddit průměry.</li>
 <li><strong>Nadcházející</strong> — nejbližší plánované události s odpočtem a konsensem (např. „CPI za 1 h 12 m · konsensus 2,9 (min. 3,0)&quot;).</li>
 <li><strong>Tabulka zpráv</strong> — čas, kategorie, titulek, typ, důležitost, skóre. U řádků s nejistou klasifikací je tužka ✎ — můžeš <strong>ručně opravit směr nebo kategorii</strong> (uloží se jako korekce, model se z ní učí — review fronta).</li>
+</ul>
+<h3>Panel Témata — kumulativní index tématu v čase (v1.12)</h3>
+<p><strong>Proč z pohledu tradera:</strong> souhrnný SentIndex je jedno číslo — když se v něm
+potká zlepšující se makro se zhoršující se geopolitikou, vzájemně se vyruší
+a nevidíš nic. <strong>Téma se přitom kazí postupně, zatímco cena ještě drží</strong> —
+přesně tenhle náskok byl v referenční analýze vidět u Íránu: index tématu
+ukazoval zhoršování dřív, než to trh reflektoval, a oznámené memorandum
+o porozumění indexem skoro nehnulo (rychlé systémy tomu nevěřily). Rozpad
+po tématech tenhle signál zachraňuje.</p>
+<p><strong>Jak to číst:</strong></p>
+<ul>
+<li><strong>Období</strong> přepínáš vpravo nahoře: Den / Týden / Měsíc / Rok.</li>
+<li>Každý řádek je jedno téma: <strong>pruh = podíl na tom, co trh za období řešil</strong>
+(váha = |skóre| × důležitost zpráv; směr se nevyruší — téma se „řeší&quot;, i když
+se zprávy směrově hádají), vedle <strong>procento a počet zpráv</strong>.</li>
+<li><strong>Sparkline vpravo</strong> je kumulativní index tématu v čase (týž výpočet jako
+SentIndex, jen filtrovaný na téma; teal = končí kladně, červená záporně,
+linka uprostřed je nula). Klesající křivka při držící ceně = narativ se
+kazí dřív, než to trh přiznal — důvod ke zbystření, ne signál sám o sobě.</li>
+<li><strong>Klik na řádek</strong> rozbalí zprávy, které téma v období tvoří (čas, titulek,
+skóre) — hodnota indexu je vždy dohledatelná ke konkrétním zprávám.</li>
+<li>Panel se obnovuje à 5 minut; období bez skórovaných zpráv řekne poctivě,
+že není z čeho počítat.</li>
 </ul>
 <h3>Stav RISK ON / RISK OFF</h3>
 <p>Chip v hlavičce (kap. 4) ukazuje stav podle <strong>polohy denního close SentIndexu

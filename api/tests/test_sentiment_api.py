@@ -176,6 +176,29 @@ def test_topics_computed_from_live_events(client: TestClient) -> None:
     assert client.get("/sentiment/topics", params={"active": 1}).json()["topics"] == []
 
 
+def test_topics_series_and_shares(client: TestClient) -> None:
+    """#566 fáze 1+2: řada per téma + rozpad příspěvků za období."""
+    payload = client.get("/sentiment/topics/series", params={"days": 1}).json()
+    assert payload["step_minutes"] == 15
+    topics = payload["topics"]
+    # Jen FED má skóre (CPI je scheduled bez sentimentu) a nese celý podíl
+    assert [t["category"] for t in topics] == ["FED"]
+    fed = topics[0]
+    assert fed["events"] == 1
+    assert fed["share"] == pytest.approx(1.0)
+    assert len(fed["points"]) > 0
+    # Poslední bod řady je kladný (zpráva před hodinou ještě nedozněla)
+    assert fed["points"][-1]["value"] > 0
+
+
+def test_topic_events_listing(client: TestClient) -> None:
+    """#566 fáze 3: dohledatelnost — zprávy, které téma tvoří."""
+    payload = client.get("/sentiment/topics/FED/events", params={"days": 7}).json()
+    assert [e["title"] for e in payload["events"]] == ["Fed holds rates"]
+    assert payload["events"][0]["sentiment_score"] == pytest.approx(0.4)
+    assert client.get("/sentiment/topics/NESMYSL/events").status_code == 404
+
+
 def test_later_milestone_endpoints_hold_shape(client: TestClient) -> None:
     """Signály, review a statistiky existují už teď — N7/N8 mění data, ne API."""
     assert client.get("/signals").json() == {"signals": []}

@@ -169,3 +169,48 @@ def test_topic_value_matches_filtered_index() -> None:
     topics = {t.category: t.value for t in topic_indexes(events, NOON)}
     assert topics["FED"] == pytest.approx(sent_index([events[0]], NOON))
     assert topics["TECH"] == pytest.approx(sent_index([events[1]], NOON))
+
+
+def test_topic_series_splits_by_category() -> None:
+    """#566 fáze 1: řada per téma je index filtrovaný na kategorii."""
+    from gexlens_news.sentindex import topic_series
+
+    events = [
+        event(1.0, minutes_ago=30, category="FED"),
+        event(-0.5, minutes_ago=30, category="ENERGY"),
+    ]
+    series = topic_series(events, NOON - dt.timedelta(minutes=10), NOON, step_minutes=10)
+    assert set(series) == {"FED", "ENERGY"}
+    assert len(series["FED"]) == 2  # start a end při kroku 10 min
+    # Hodnota tématu = sent_index jen z jeho eventů
+    assert series["FED"][-1][1] == pytest.approx(sent_index([events[0]], NOON))
+    assert series["ENERGY"][-1][1] < 0
+
+
+def test_topic_shares_weight_and_order() -> None:
+    """#566 fáze 2: |score|·importance faktor, směr se ruší nesmí — a řadí se sestupně."""
+    from gexlens_news.sentindex import topic_shares
+
+    start, end = NOON - dt.timedelta(hours=2), NOON
+    events = [
+        # FED: dvě zprávy proti sobě — téma se „řeší", i když se směrově ruší
+        event(1.0, minutes_ago=30, category="FED", importance=3),
+        event(-1.0, minutes_ago=40, category="FED", importance=3),
+        event(0.5, minutes_ago=20, category="TECH", importance=1),
+        # Mimo období — nepočítá se
+        event(9.0, minutes_ago=600, category="ENERGY"),
+    ]
+    shares = topic_shares(events, start, end)
+    assert [s.category for s in shares] == ["FED", "TECH"]
+    fed, tech = shares
+    assert fed.events == 2
+    assert fed.weight == pytest.approx(2 * 1.0 * 1.5)  # |±1| · faktor důležitosti 3
+    assert tech.weight == pytest.approx(0.5 * 0.5)
+    assert fed.share + tech.share == pytest.approx(1.0)
+    assert fed.share > tech.share
+
+
+def test_topic_shares_empty_period() -> None:
+    from gexlens_news.sentindex import topic_shares
+
+    assert topic_shares([], NOON - dt.timedelta(hours=1), NOON) == []

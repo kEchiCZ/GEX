@@ -18,6 +18,7 @@ import {
 } from '../api/news'
 import type { CrowdRow, NewsRow, ReviewRow } from '../api/news'
 import { useNews } from '../hooks/useNews'
+import { TopicsPanel } from './TopicsPanel'
 import { useSentimentState } from '../hooks/useSentimentState'
 
 /** Crowd data se mění pomalu (F&G à 1 h, PCR à 5 min) — refresh stačí volný. */
@@ -300,6 +301,9 @@ export function NewsView() {
           ))}
         </div>
       )}
+
+      {/* Témata v čase (#566): rozpad období + průběh tématu + zdrojové zprávy */}
+      <TopicsPanel />
 
       <CrowdBlock rows={crowd} />
 
