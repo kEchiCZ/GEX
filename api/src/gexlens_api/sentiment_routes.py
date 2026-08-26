@@ -130,6 +130,25 @@ def _attach_topic_values(engine: Engine, rows: list[dict[str, Any]]) -> None:
         )
 
 
+def _attach_scheduled_directions(rows: list[dict[str, Any]]) -> None:
+    """Směr scheduled eventu z konvence řady (#462 A).
+
+    `surprise_direction` = sign(surprise_z) × polarita řady (CPI −1, payrolls
+    +1, …). None = neznámá řada nebo chybí překvapení; 0 = přesně na konsensu.
+    Verdikt (dle očekávání / vyšší / nižší) si frontend odvodí ze `surprise_z`
+    sám — prahy ±0,5σ jsou stejné jako `surprise_bucket` v model_stats.
+    """
+    from gexlens_news.conventions import scheduled_direction
+
+    for row in rows:
+        if row.get("kind") != "scheduled":
+            continue
+        z = row.get("surprise_z")
+        row["surprise_direction"] = scheduled_direction(
+            str(row.get("title") or ""), float(z) if isinstance(z, int | float) else None
+        )
+
+
 def _empty_table(engine: Engine, table: Table, **filters: Any) -> list[dict[str, Any]]:
     """Dotaz nad tabulkou pozdějšího milestonu — dnes vrací prázdno, ale tvar drží."""
     stmt = select(table)
@@ -199,6 +218,7 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
                 row["reactions_bp"] = by_event.get(event_id) if isinstance(event_id, int) else None
                 row["reaction_contaminated"] = event_id in contaminated
         _attach_topic_values(engine_factory(), rows)
+        _attach_scheduled_directions(rows)
         return {"news": rows}
 
     @router.get("/news/upcoming")

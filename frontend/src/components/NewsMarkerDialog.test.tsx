@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import type { NewsRow } from '../api/news'
 import type { NewsMarker } from '../heatmap/newsMarkers'
-import { NewsMarkerDialog } from './NewsMarkerDialog'
+import { NewsMarkerDialog, surpriseVerdict } from './NewsMarkerDialog'
 
 function row(overrides: Partial<NewsRow> & { id: number }): NewsRow {
   return {
@@ -74,4 +74,40 @@ test('zavírá se Escape i klikem na pozadí', () => {
   expect(onClose).toHaveBeenCalledTimes(1)
   fireEvent.click(screen.getByRole('presentation'))
   expect(onClose).toHaveBeenCalledTimes(2)
+})
+
+test('surpriseVerdict (#462): prahy, směr jen nad 0,5σ, chybějící data', () => {
+  const base = { id: 9, kind: 'scheduled' as const, title: 'USD CPI m/m' }
+  // Pod prahem: dle očekávání, bez směru i když konvence směr zná
+  expect(surpriseVerdict(row({ ...base, surprise_z: -0.2, surprise_direction: 1 }))).toEqual({
+    text: 'dle očekávání (-0.2σ)',
+    direction: null,
+  })
+  // Nad prahem: nižší + směr z API (CPI −1,4σ → risk-on)
+  expect(surpriseVerdict(row({ ...base, surprise_z: -1.4, surprise_direction: 1 }))).toEqual({
+    text: 'nižší než očekávání (-1.4σ)',
+    direction: 1,
+  })
+  // Velké překvapení: „výrazně"
+  expect(
+    surpriseVerdict(row({ ...base, surprise_z: 1.8, surprise_direction: -1 }))?.text,
+  ).toContain('výrazně vyšší')
+  // Bez surprise_z (actual ještě nedorazil) → nic
+  expect(surpriseVerdict(row({ ...base, surprise_z: null }))).toBeNull()
+})
+
+test('dialog kreslí verdikt se šipkou u vydaného scheduled eventu (#462)', () => {
+  const released = row({
+    id: 11,
+    kind: 'scheduled',
+    title: 'USD CPI m/m',
+    forecast: 2.9,
+    actual: 2.7,
+    surprise_z: -1.4,
+    surprise_direction: 1,
+  })
+  render(<NewsMarkerDialog marker={marker([released])} onClose={() => {}} />)
+  const verdict = screen.getByTestId('scheduled-verdict')
+  expect(verdict.textContent).toContain('nižší než očekávání (-1.4σ)')
+  expect(verdict.textContent).toContain('risk-on ▲')
 })

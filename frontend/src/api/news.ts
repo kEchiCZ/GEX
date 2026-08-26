@@ -21,6 +21,11 @@ export interface NewsRow {
   sentiment_source: string | null
   forecast: number | string | null
   previous: number | string | null
+  /** (actual − forecast) / σ překvapení řady (ADR-0018); jen scheduled. */
+  surprise_z?: number | string | null
+  /** Směr z konvence řady (#462): +1 risk-on / −1 risk-off / 0 na konsensu /
+  null = neznámá řada nebo bez překvapení. Odhad — polarita je režimově závislá. */
+  surprise_direction?: number | null
   /** Naměřený dopad (#656): párovací okno (min) → ret_bp pro symbol feedu;
   null/undefined = okna ještě neuzavřená nebo bez reakce. */
   reactions_bp?: Record<string, number | string> | null
