@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.10 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.11 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); od verze 1.9 slouží <strong>tastytrade</strong> jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -46,7 +46,7 @@
 <h2>1. Co aplikace umí</h2>
 <ul>
 <li><strong>Heatmapa čas × strike</strong> — barevná mapa opčního positioningu přes celý obchodní den. Zelená (teal) = call strana, červená = put strana. Devět přepínatelných metrik (<strong>Mode</strong>: OI, Vol OTM/ITM, Vol ±, OI+OTM, OI−ITM, OI±All, VEX, VEX ±) a čtyři škály (<strong>Scale</strong>: Linear, √, Log, Pow⅓).</li>
-<li><strong>GEX úrovně</strong> — automaticky počítaný <strong>flip</strong> (zero-gamma), <strong>call wall</strong>, <strong>put wall</strong>, <strong>centroid</strong> a <strong>Max Pain</strong>, vykreslované jako časové linie i horizontální úrovně s cenovkami, přepočítávané každou minutu. <strong>Max Pain se během dne posouvá</strong> — počítá se z OI a to publikuje CME po settlementu, takže dopoledne ještě dobíhá; jakmile je publikace úplná, hodnota se ustálí (reálný den: 29200 → 29400 → 29390). Volitelné <strong>Walls</strong> módy (Peak/Center/Smooth/Flip/Ridge).</li>
+<li><strong>GEX úrovně</strong> — automaticky počítaný <strong>flip</strong> (zero-gamma), <strong>call wall</strong>, <strong>put wall</strong>, <strong>centroid</strong> a <strong>Max Pain</strong>, vykreslované jako časové linie i horizontální úrovně s cenovkami, přepočítávané každou minutu. Volitelné <strong>Walls</strong> módy (Peak/Center/Smooth/Flip/Ridge).</li>
 <li><strong>Multi-instrument</strong> — watchlist v sidebaru: přidej ticker (ES, NQ, RTY…) a engine ho začne sbírat <strong>do několika sekund</strong>; svíčky a Vol panel se zpětně doplní za celý den, opční data (OI, Greeks) běží od momentu přidání. Kliknutím přepínáš celou aplikaci.</li>
 <li><strong>Více expirací najednou</strong> — vedle aktivního řetězu se sbírá i následující expirace (čtení positioningu příští seance) a pravý profil umí <strong>Σ souhrn přes expirace</strong>.</li>
 <li><strong>Živý tok</strong> — kumulativní delta flow (Cum Δ) s klasifikací agresora + <strong>Δ Flow C/P</strong> (tok zvlášť za call/put stranu).</li>
@@ -459,39 +459,7 @@ poctivě padají na Vše. Popiska pod pruhem vždy říká, z čeho číslo vzni
 S aktivním časovým oknem (kap. 8b) panel přepne na <strong>okenní režim</strong> — počítá
 jen to, co se zobchodovalo v okně.</p>
 <blockquote>
-<p><strong>Kontrakty vs. Prémie $: proč mají jiný záběr dat.</strong> Řetěz sahá dál, než kam
-dosáhne měření. Striky mimo obálku IBKR nese <strong>denní OI z tastytrade</strong> — známe
-u nich otevřený zájem, ale ne kotace, takže <strong>do Kontraktů vstupují, do Prémií
-ne</strong> (bez midu nejde spočítat, kolik peněz v nich leží). Prémie $ proto může
-ukazovat výrazně jiný poměr a být zašedlá: to není chyba, ale přiznání, že
-peněžní pohled má užší záběr. <strong>Pro čtení celkového pozicování používej
-Kontrakty</strong>; prémie ber jako pohled na to, kde se reálně obchoduje.
-Reálný příklad (ES, 25. 8.): Kontrakty/OI <strong>2,92</strong>, Prémie $ <strong>0,16</strong> —
-tytéž striky, opačný závěr.</p>
-</blockquote>
-<blockquote>
-<p><strong>OI, Vol, nebo Vol + OI?</strong> Každý základ odpovídá na jinou otázku. <strong>OI</strong> =
-co leží v knize z minula (pozicování). <strong>Vol</strong> = co se obchoduje dnes (čerstvý
-tok). <strong>Vol + OI</strong> obojí sčítá — pohodlné, ale míchá dvě veličiny. Zajímavý je
-hlavně <em>rozdíl</em> mezi nimi: je-li Vol výrazně nižší než OI (třeba 0,37 proti
-0,66), dnešní obchodování je callovější než stávající pozice — někdo cally
-kupuje teď, neleží tam z minula.</p>
-</blockquote>
-<blockquote>
-<p><strong>Pozor na ranní hodnoty.</strong> OI publikuje CME po settlementu a aplikace ho
-dobírá celé dopoledne, takže se poměry během dne ještě posouvají. Odpolední
-čísla jsou spolehlivější než ta hned po otevření.</p>
-</blockquote>
-<blockquote>
 <p><strong>Proč večer „zmizí&quot; jedna strana pruhů?</strong> Pruhy jsou <strong>Δ-vážené</strong> — násobí se deltou opce (kolik futures dealer na kontrakt reálně drží). Ke konci seance se delta polarizuje (viz gamma crunch, kap. 18): OTM opce mají deltu skoro 0, ITM skoro 1. Nad spotem proto zbývají hlavně červené (ITM puty) a pod spotem zelené (ITM cally). Není to chyba — surové OI/Vol obou stran pořád vidíš v tooltipu řádku; zapnutím <strong>Σ</strong> se přimíchá zítřejší expirace s měkčími deltami a obě strany se zase objeví.</p>
-</blockquote>
-<hr>
-<blockquote>
-<p><strong>Výhled na týden (Briefing).</strong> Karta <em>Výhled na týden</em> ukazuje nejbližší
-události s vysokým dopadem po dnešku, včetně odpočtu dnů. Odpovídá na otázku,
-kterou samotný poziční obraz nezodpoví: <strong>je dnešek klidný den, nebo den před
-velkým tiskem?</strong> Put-heavy struktura před PCE znamená něco jiného než tatáž
-struktura v prázdném týdnu.</p>
 </blockquote>
 <hr>
 <h2>8. Spodní panely — Vol, Opt Vol, Cum Δ, Evo OI</h2>
@@ -516,8 +484,8 @@ struktura v prázdném týdnu.</p>
 <td>Delta-vážený opční tok zvlášť za call a put stranu (|Δ| × přírůstek volume). Z něj čteš, <strong>na které straně se právě obchoduje</strong> — např. „uzavírání callů&quot; = call sloupce slábnou. Default vypnutý (checkbox Δ Flow C/P).</td>
 </tr>
 <tr>
-<td><strong>Opt Δ</strong><br>(dřív Cum Δ)</td>
-<td>Kumulativní <strong>opční</strong> delta flow jako plocha <strong>nad nulou (zelená) / pod nulou (červená)</strong>. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Plná klasifikace agresora (tick-by-tick v hot zóně, midpoint test jinde). <strong>Přes plochu se kreslí linka „CVD podkladu&quot;</strong> — kumulativní tok ve futures (agresivní nákupy − prodeje), tedy jiná veličina: Opt Δ měří tok v opcích, CVD tok v podkladu. <strong>Rozchod obou řad je informace, kterou ani jedna sama nedá.</strong> Linka má vlastní měřítko (jednotky jsou nesouměřitelné), takže se čte tvar a strana od nuly, ne výška; kde data chybí, přeruší se. Popisek <strong>„osa od …&quot;</strong> v hlavičce přiznává, že kumulativ běží od open Globex seance (22:00 UTC), zatímco osa grafu začíná půlnocí — výchylku čti proti té hodnotě, ne proti nule.</td>
+<td><strong>Cum Δ</strong></td>
+<td>Kumulativní delta flow jako plocha <strong>nad nulou (zelená) / pod nulou (červená)</strong>. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Počítá se s plnou klasifikací agresora (tick-by-tick v hot zóně, midpoint test jinde) a resetuje se na začátku dne.</td>
 </tr>
 <tr>
 <td><strong>Evo OI</strong></td>
@@ -868,6 +836,10 @@ běží <strong>odpočet do US openu</strong> (9:30 New York, DST-korektně).</p
 <td>Pozitivní/negativní gamma + poloha ceny vůči flipu; flip, call/put wall, těžiště</td>
 </tr>
 <tr>
+<td><strong>Volatilita</strong></td>
+<td>Volatilitní režim dne, expected move a jak často EM drží — viz níže</td>
+</tr>
+<tr>
 <td><strong>Včera a overnight</strong></td>
 <td>Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena</td>
 </tr>
@@ -888,10 +860,39 @@ běží <strong>odpočet do US openu</strong> (9:30 New York, DST-korektně).</p
 <td>Stav RiskOn/RiskOff/Neutral per instrument (ES, NQ)</td>
 </tr>
 </tbody></table>
+<h3>Karta Volatilita a volatility box</h3>
+<p><strong>Proč tu je:</strong> stejný stop v bodech je v jiném volatilitním režimu úplně
+jiný obchod — a dlouhé klidné trhy umí špatné návyky maskovat měsíce.
+Karta nutí před seancí <strong>vědomě potvrdit, v jakém prostředí se dnes hraje</strong>;
+říká TYP dne (jak velké pohyby čekat), nikdy směr.</p>
+<p>Jak číst jednotlivé řádky:</p>
+<ul>
+<li><strong>Režim (rozsah)</strong> — percentil včerejšího denního rozsahu ve vlastní
+2leté historii instrumentu (nízká &lt; p25 &lt; normální &lt; p60 &lt; zvýšená
+&lt; p85 &lt; krizová). Není to VIX: měří se rozsah TOHOTO instrumentu proti
+jeho vlastní minulosti, takže čtení je stejné pro ES i NQ. „Zvýšená&quot;
+a výš ⇒ širší stopy, menší pozice, rychlejší cíle.</li>
+<li><strong>Expected move</strong> — očekávaný denní pohyb ±X bodů z ceny ATM straddlu
+(kolik trh reálně platí za dnešní pohyb; stejná hodnota jako EM± linie
+v Traders mode, kap. 11e). Před openem jde o průběžný odhad z overnight
+kotací, openem se zamkne. Údaj v % spotu je srovnatelný napříč dny.</li>
+<li><strong>EM drží</strong> — kalibrace důvěry: v kolika % posledních seancí skončil
+close uvnitř pásma EM (teoreticky ~68 %; skutečné číslo měří engine
+po každém settle). Vyšší číslo ⇒ fade od hranic pásma má statistiku
+na své straně; časté průrazy ⇒ pásmo dnes číst opatrněji. Statistika
+se sbírá průběžně — dokud je vzorek malý, karta to poctivě přizná
+místo dosazování „normálu&quot;.</li>
+</ul>
+<p>Chybí-li data (málo vzorků, chybějící ATM kotace), karta říká proč —
+prázdné pole nikdy neznamená „v normálu&quot;.</p>
 <p>Tlačítko <strong>„☀ Založit ranní plán do deníku&quot;</strong> předvyplní záznam deníku
-(kap. 11e) kostrou plánu — režim, úrovně, včerejšek, overnight, odpad gammy
-a prázdná „Teze dne&quot; k doplnění. Ranní rituál: otevřít Briefing → projít
-karty → ☀ → dopsat tezi.</p>
+(kap. 11e) kostrou plánu — režim, úrovně, <strong>volatility box</strong> (řádek
+Volatilita + odškrtávací položka „riziko přizpůsobeno režimu&quot;), včerejšek,
+overnight, odpad gammy a prázdná „Teze dne&quot; k doplnění. Checkbox je rituál
+po vzoru „musím si odškrtnout volatility box, jinak obchod neudělám&quot;:
+je v kostře VŽDY, i když data chybí — potvrzení, že jste o volatilitě
+přemýšleli, není závislé na tom, jestli ji zrovna bylo z čeho spočítat.
+Ranní rituál: otevřít Briefing → projít karty → ☀ → dopsat tezi.</p>
 <hr>
 <h2>12. IBKR Console — zrušena (sloučeno do Settings)</h2>
 <p>Obrazovka je od srpna 2026 pryč: nenesla nic unikátního a navíc posílala

@@ -93,6 +93,49 @@ export async function fetchStoredDays(symbol: string): Promise<string[]> {
   return data.days.map((day) => day.date)
 }
 
+/** Řádek /volregime — volatilitní režim seance (ADR-0028, #713). */
+export interface VolRegimeRow {
+  session_date: string
+  session_range: number
+  percentile: number
+  bucket: string
+  sample: number
+}
+
+/** České popisky bucketů vol režimu (ADR-0028) pro kartu i plán. */
+export const VOL_BUCKET_LABELS: Record<string, string> = {
+  low: 'nízká',
+  normal: 'normální',
+  elevated: 'zvýšená',
+  crisis: 'krizová',
+}
+
+/** Poslední spočtená seance vol režimu; null = málo vzorků nebo engine neběžel. */
+export async function fetchVolRegimeLatest(symbol: string): Promise<VolRegimeRow | null> {
+  const data = await getJson<{ rows?: VolRegimeRow[] }>(`/volregime/${symbol}?limit=1`, {
+    rows: [],
+  })
+  const rows = data.rows ?? []
+  return rows.length > 0 ? rows[0] : null
+}
+
+/** Souhrn /emrespect — jak často close končí uvnitř pásma EM (#872). */
+export interface EmRespectSummary {
+  window_days: number
+  n: number
+  close_in_band_share: number
+  touch_upper_share: number
+  touch_lower_share: number
+}
+
+export async function fetchEmRespectSummary(symbol: string): Promise<EmRespectSummary | null> {
+  const data = await getJson<{ summary?: EmRespectSummary | null }>(
+    `/emrespect/${symbol}?limit=1`,
+    { summary: null },
+  )
+  return data.summary ?? null
+}
+
 /** US open (9:30 New York) daného dne v epoch ms — DST řeší zoneinfo (#511). */
 export function usOpenMs(dateIso: string): number {
   const [year, month, day] = dateIso.split('-').map(Number)
@@ -143,6 +186,27 @@ export function gammaRegimeLabel(levels: LevelsRow | null, spot: number | null):
   return `${sign}, cena ${side}`
 }
 
+/** EM pro plán/kartu (#873) — jen čísla, výpočet dělá instrument/expectedmove. */
+export interface PlanEm {
+  em: number
+  anchor: number
+  preOpen: boolean
+}
+
+/** Řádek „Volatilita" (#873): vol režim + EM; bez obou poctivé „bez dat". */
+export function volatilityLine(vol: VolRegimeRow | null, em: PlanEm | null): string {
+  const parts: string[] = []
+  if (vol) {
+    const label = VOL_BUCKET_LABELS[vol.bucket] ?? vol.bucket
+    parts.push(`${label} (p${Math.round(vol.percentile * 100)}, ${vol.sample} seancí)`)
+  }
+  if (em) {
+    const pct = (100 * em.em) / em.anchor
+    parts.push(`EM ±${em.em.toFixed(1)} b (${pct.toFixed(2)} %${em.preOpen ? ', pre-open odhad' : ''})`) // prettier-ignore
+  }
+  return parts.length > 0 ? parts.join(' · ') : 'bez dat (málo vzorků nebo chybí straddle)'
+}
+
 /** Text ranního plánu do deníku (#673) — předvyplněná kostra z briefingu. */
 export function briefingToPlanText(input: {
   symbol: string
@@ -151,6 +215,9 @@ export function briefingToPlanText(input: {
   overnight: RangeSummary | null
   prevDay: RangeSummary | null
   cliff: CliffToday | null
+  /** Volatility box (#873): vol režim + EM; undefined = data zatím nedorazila. */
+  vol?: VolRegimeRow | null
+  em?: PlanEm | null
 }): string {
   const lines: string[] = [`Plán dne ${input.symbol}:`, `- Režim: ${input.regime}`]
   const { levels } = input
@@ -160,6 +227,10 @@ export function briefingToPlanText(input: {
       `- Úrovně: flip ${fmt(levels.flip)}, call wall ${fmt(levels.call_wall)}, put wall ${fmt(levels.put_wall)}`,
     )
   }
+  // Volatility box (#873): vědomé potvrzení režimu patří do každého plánu —
+  // řádek s hodnotami jen když jsou, checkbox vždy (rituál, ne data)
+  lines.push(`- Volatilita: ${volatilityLine(input.vol ?? null, input.em ?? null)}`)
+  lines.push('- [ ] riziko přizpůsobeno režimu (stop/velikost)')
   if (input.prevDay) lines.push(`- Včera: settle ${input.prevDay.last}, rozsah ${input.prevDay.low}–${input.prevDay.high}`) // prettier-ignore
   if (input.overnight) lines.push(`- Overnight: ${input.overnight.low}–${input.overnight.high}, teď ${input.overnight.last}`) // prettier-ignore
   if (input.cliff?.cliff_share != null) {

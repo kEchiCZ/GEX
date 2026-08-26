@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.10 · srpen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.11 · srpen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -650,16 +650,49 @@ běží **odpočet do US openu** (9:30 New York, DST-korektně).
 | Karta | Co ukazuje |
 |---|---|
 | **Režim a úrovně** | Pozitivní/negativní gamma + poloha ceny vůči flipu; flip, call/put wall, těžiště |
+| **Volatilita** | Volatilitní režim dne, expected move a jak často EM drží — viz níže |
 | **Včera a overnight** | Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena |
 | **Gamma dnes a přes týden** | Chip „dnes odpadá X % gammy" (kap. 14) + Forward GEX útesy dalších dnů týdne |
 | **Makro kalendář dne** | Dnešní plánované eventy (významné napřed, ❗ = importance ≥ 3) |
 | **ΔOI přes noc** | Změna call/put OI vs. předchozí archivovaný den + top strike movers |
 | **Sentiment** | Stav RiskOn/RiskOff/Neutral per instrument (ES, NQ) |
 
+### Karta Volatilita a volatility box
+
+**Proč tu je:** stejný stop v bodech je v jiném volatilitním režimu úplně
+jiný obchod — a dlouhé klidné trhy umí špatné návyky maskovat měsíce.
+Karta nutí před seancí **vědomě potvrdit, v jakém prostředí se dnes hraje**;
+říká TYP dne (jak velké pohyby čekat), nikdy směr.
+
+Jak číst jednotlivé řádky:
+
+- **Režim (rozsah)** — percentil včerejšího denního rozsahu ve vlastní
+  2leté historii instrumentu (nízká < p25 < normální < p60 < zvýšená
+  < p85 < krizová). Není to VIX: měří se rozsah TOHOTO instrumentu proti
+  jeho vlastní minulosti, takže čtení je stejné pro ES i NQ. „Zvýšená"
+  a výš ⇒ širší stopy, menší pozice, rychlejší cíle.
+- **Expected move** — očekávaný denní pohyb ±X bodů z ceny ATM straddlu
+  (kolik trh reálně platí za dnešní pohyb; stejná hodnota jako EM± linie
+  v Traders mode, kap. 11e). Před openem jde o průběžný odhad z overnight
+  kotací, openem se zamkne. Údaj v % spotu je srovnatelný napříč dny.
+- **EM drží** — kalibrace důvěry: v kolika % posledních seancí skončil
+  close uvnitř pásma EM (teoreticky ~68 %; skutečné číslo měří engine
+  po každém settle). Vyšší číslo ⇒ fade od hranic pásma má statistiku
+  na své straně; časté průrazy ⇒ pásmo dnes číst opatrněji. Statistika
+  se sbírá průběžně — dokud je vzorek malý, karta to poctivě přizná
+  místo dosazování „normálu".
+
+Chybí-li data (málo vzorků, chybějící ATM kotace), karta říká proč —
+prázdné pole nikdy neznamená „v normálu".
+
 Tlačítko **„☀ Založit ranní plán do deníku"** předvyplní záznam deníku
-(kap. 11e) kostrou plánu — režim, úrovně, včerejšek, overnight, odpad gammy
-a prázdná „Teze dne" k doplnění. Ranní rituál: otevřít Briefing → projít
-karty → ☀ → dopsat tezi.
+(kap. 11e) kostrou plánu — režim, úrovně, **volatility box** (řádek
+Volatilita + odškrtávací položka „riziko přizpůsobeno režimu"), včerejšek,
+overnight, odpad gammy a prázdná „Teze dne" k doplnění. Checkbox je rituál
+po vzoru „musím si odškrtnout volatility box, jinak obchod neudělám":
+je v kostře VŽDY, i když data chybí — potvrzení, že jste o volatilitě
+přemýšleli, není závislé na tom, jestli ji zrovna bylo z čeho spočítat.
+Ranní rituál: otevřít Briefing → projít karty → ☀ → dopsat tezi.
 
 ---
 
