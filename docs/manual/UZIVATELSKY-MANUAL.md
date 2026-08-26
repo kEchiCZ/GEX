@@ -659,6 +659,8 @@ Plán dne na jedné obrazovce před US openem — čistá kompozice dat, která 
 aplikace sbírá; nic se tu nepočítá nově. Obnovuje se každou minutu, v hlavičce
 běží **odpočet do US openu** (9:30 New York, DST-korektně).
 
+![Ranní briefing s kartou Volatilita](img/briefing.jpg)
+
 | Karta | Co ukazuje |
 |---|---|
 | **Režim a úrovně** | Pozitivní/negativní gamma + poloha ceny vůči flipu; flip, call/put wall, těžiště |
