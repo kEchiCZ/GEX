@@ -515,6 +515,16 @@ def _spot_source_status(running: Sequence[InstrumentPipeline]) -> dict[str, obje
     return {"spot_source": "tasty" if "tasty" in sources else sorted(sources)[0]}
 
 
+def _bs_fallback_status(running: Sequence[InstrumentPipeline]) -> dict[str, object]:
+    """Podíl BS fallback greeks per symbol (#877) — bouře #862 musí být vidět."""
+    shares = {
+        pipeline.symbol: status
+        for pipeline in running
+        if (status := pipeline.runtime.bs_fallback_status()) is not None
+    }
+    return {"greeks_bs_share": shares} if shares else {}
+
+
 def _chain_source_status(fallback: "ChainFallback | None") -> dict[str, object]:
     """Zdroj opčního řetězu do /status (#614 fáze 2b).
 
@@ -1960,6 +1970,8 @@ async def main() -> None:
                 **_connection_offline_status(manager),
                 **_chain_source_status(chain_fallback),
                 **_spot_source_status(run_list),
+                # Podíl BS fallback greeks per symbol (#877, follow-up #862)
+                **_bs_fallback_status(run_list),
                 # Obsazení disku (#773) — plní i patičku UI, která do teď
                 # ukazovala `disk — / —`; klíče chybí do prvního měření
                 **disk_watch.status_fields(int(settings.disk_limit_gb * 1024**3)),
