@@ -63,3 +63,23 @@ def is_market_closed(ts: dt.datetime) -> bool:
         return True
     # Po–čt (a pátek do 16:00): jen denní přestávka
     return CLOSE_HOUR <= local.hour < OPEN_HOUR
+
+
+#: US RTH 9:30–16:00 New York — okno, ve kterém remediace (#877 C) NESMÍ
+#: zasahovat: reconnect uprostřed hlavní seance = nenahraditelná díra.
+_NY_TZ = ZoneInfo("America/New_York")
+_US_RTH_OPEN = dt.time(9, 30)
+_US_RTH_CLOSE = dt.time(16, 0)
+
+
+def outside_us_rth(ts: dt.datetime) -> bool:
+    """Je čas MIMO US RTH (9:30–16:00 NY, DST-korektně)? Víkend = mimo.
+
+    Používá remediace BS fallbacku (#877, varianta C): zásahy do spojení jen
+    v Globex noci a pauzách, kdy je díra pár minut přijatelná cena.
+    """
+    aware = ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.UTC)
+    local = aware.astimezone(_NY_TZ)
+    if local.weekday() >= 5:
+        return True
+    return not (_US_RTH_OPEN <= local.time() < _US_RTH_CLOSE)

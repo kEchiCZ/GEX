@@ -162,6 +162,11 @@ class EngineRuntime:
         """Podíl BS greeks do /status (#877); None před prvním cyklem."""
         return self._bs_watcher.status_fields() if self._bs_watcher is not None else None
 
+    def bs_remediation_due(self, now: float) -> int | None:
+        """Číslo remediačního pokusu (#877 C), když epizoda plného fallbacku
+        dozrála k zásahu; oprávnění (flag + mimo US RTH) hlídá orchestrátor."""
+        return self._bs_watcher.remediation_due(now=now) if self._bs_watcher is not None else None
+
     # Poslední Dyn GEX profil (ADR-0009) — tendency (#350) z něj čte gammu v místě ceny
     last_profile: GexProfile | None = field(default=None, init=False)
     # Charm/vanna profily (#204) — tendency v2 (#397) z nich čte toky v místě ceny

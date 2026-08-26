@@ -119,6 +119,26 @@ class IvRankCollector:
                 await step(now, session)
             except Exception:
                 logger.exception("IV rank %s: řada %s selhala — pokračuji", self.symbol, label)
+        self._log_crosscheck()
+
+    def _log_crosscheck(self) -> None:
+        """Rozdíl řad ibkr × tasty do logu (#871 AC) — konstrukce se liší
+        a trvalý velký rozdíl by znamenal chybu čtení jedné z nich."""
+        latest = {str(row["source"]): row for row in self.repository.latest(self.symbol)}
+        ibkr = latest.get(SOURCE_IBKR)
+        tasty = latest.get(SOURCE_TASTY)
+        if not ibkr or not tasty:
+            return
+        ibkr_pct = ibkr.get("iv_percentile")
+        tasty_pct = tasty.get("iv_percentile")
+        logger.info(
+            "IV rank %s: křížová kontrola — ibkr IV %.4f (pctl %s) vs. tasty IV %.4f (pctl %s)",
+            self.symbol,
+            float(str(ibkr["iv"])),
+            f"{float(str(ibkr_pct)):.2f}" if ibkr_pct is not None else "—",
+            float(str(tasty["iv"])),
+            f"{float(str(tasty_pct)):.2f}" if tasty_pct is not None else "—",
+        )
 
     # ── ibkr: 30d IV index podkladu ────────────────────────────────
 

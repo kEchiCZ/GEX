@@ -47,3 +47,36 @@ def test_status_fields_a_prazdny_cyklus() -> None:
     watcher.observe(bs_count=25, total=100, now=1.0)
     fields = watcher.status_fields()
     assert fields["share"] == 0.25 and fields["episode"] is True
+
+
+# ── Remediace (#877 varianta C) ──────────────────────────────────────
+
+
+def test_remediace_dva_pokusy_s_rozestupem() -> None:
+    from gexlens_engine.compute.bsfallback import REMEDIATION_AFTER_S
+
+    watcher = BsFallbackWatcher(symbol="NQ")
+    watcher.observe(bs_count=90, total=100, now=0.0)
+    # Před 30 minutami plného fallbacku žádný zásah
+    assert watcher.remediation_due(now=REMEDIATION_AFTER_S - 1.0) is None
+    # 1. pokus po 30 min; hned další minutu se neopakuje
+    assert watcher.remediation_due(now=REMEDIATION_AFTER_S + 1.0) == 1
+    assert watcher.remediation_due(now=REMEDIATION_AFTER_S + 60.0) is None
+    # 2. pokus po dalších 30 min; třetí už nikdy (stav pro člověka)
+    assert watcher.remediation_due(now=2 * REMEDIATION_AFTER_S + 1.0) == 2
+    assert watcher.remediation_due(now=10 * REMEDIATION_AFTER_S) is None
+
+
+def test_remediace_jen_pri_plnem_fallbacku_a_reset_navratem() -> None:
+    from gexlens_engine.compute.bsfallback import REMEDIATION_AFTER_S
+
+    watcher = BsFallbackWatcher(symbol="ES")
+    # 50 % je epizoda (alertuje), ale remediace ne — částečný fallback
+    watcher.observe(bs_count=50, total=100, now=0.0)
+    assert watcher.remediation_due(now=REMEDIATION_AFTER_S + 1.0) is None
+    # Plný fallback → pokus; návrat pod práh resetuje počítadlo
+    watcher.observe(bs_count=90, total=100, now=REMEDIATION_AFTER_S + 2.0)
+    assert watcher.remediation_due(now=2 * REMEDIATION_AFTER_S + 3.0) == 1
+    watcher.observe(bs_count=0, total=100, now=2 * REMEDIATION_AFTER_S + 60.0)
+    watcher.observe(bs_count=90, total=100, now=100_000.0)
+    assert watcher.remediation_due(now=100_000.0 + REMEDIATION_AFTER_S + 1.0) == 1

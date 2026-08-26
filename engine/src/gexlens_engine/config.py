@@ -298,6 +298,11 @@ class Settings(BaseSettings):
     # nárazově ~20× error 354 (změřeno 18./19. 8.: skok 5→23 o půlnoci UTC,
     # rozprostřený přes ~16 min) — očekávaný přechod se nepočítá do prahu alertu
     subscription_error_rollover_grace_s: float = Field(default=1200.0, ge=0)
+    # Auto-remediace epizod BS fallback greeks (#877, varianta C — rozhodnutí
+    # uživatele 26. 8.): při plném fallbacku (>80 % striků ≥ 30 min) zasáhne
+    # engine sám, ale VÝHRADNĚ mimo US RTH — 1. pokus resubscribe (bez díry),
+    # 2. pokus reconnect. Vypnutí vrací čistou variantu „jen alert".
+    bs_fallback_reconnect: bool = True
     # Konkurenční relace (#495): error 10197 chodí při přetahované session
     # ~2× za minutu (naměřeno 4. 8., viz connection.py) — sdílený práh 5/60 s
     # by se nikdy nenaplnil a alert competing_session by se neodpálil

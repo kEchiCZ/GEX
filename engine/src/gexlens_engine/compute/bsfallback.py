@@ -23,6 +23,15 @@ MIN_DURATION_S = 900.0
 #: Připomínka běžící epizody nejdřív po hodině — minutový cyklus nesmí spamovat.
 COOLDOWN_S = 3600.0
 
+#: Remediace (#877 varianta C, rozhodnutí uživatele 26. 8.): zasahuje se až
+#: při PLNÉM fallbacku — částečný podíl může být pár nelikvidních křídel.
+REMEDIATION_SHARE = 0.80
+#: První pokus po 30 min plného fallbacku, druhý po dalších 30 min.
+REMEDIATION_AFTER_S = 1800.0
+#: Max pokusů za epizodu: 1. resubscribe (bez díry), 2. reconnect. Dál už
+#: je to stav pro člověka — zvonek běží dál, zásahy ne.
+REMEDIATION_MAX_ATTEMPTS = 2
+
 
 @dataclass
 class BsFallbackWatcher:
@@ -39,6 +48,8 @@ class BsFallbackWatcher:
     episode_started: float | None = field(default=None, init=False)
     _last_alert: float | None = field(default=None, init=False)
     _alerted: bool = field(default=False, init=False)
+    #: Kolik remediačních pokusů (#877 C) epizoda vyčerpala; reset s návratem.
+    _remediation_attempts: int = field(default=0, init=False)
 
     def observe(self, *, bs_count: int, total: int, now: float) -> str | None:
         """Jeden cyklus: podíl + stav epizody. Vrací zprávu k publikaci, nebo None."""
@@ -48,6 +59,7 @@ class BsFallbackWatcher:
             self.episode_started = None
             self._last_alert = None
             self._alerted = False
+            self._remediation_attempts = 0
             if recovered:
                 return (
                     f"{self.symbol}: TWS model greeks se vrátil — BS fallback skončil "
@@ -69,6 +81,25 @@ class BsFallbackWatcher:
             f"už {minutes} min. TWS model nedodává; při bouři #862 pomohl až restart TWS "
             f"(farmy usopt/usfuture)."
         )
+
+    def remediation_due(self, *, now: float) -> int | None:
+        """Číslo pokusu (1 = resubscribe, 2 = reconnect), když je čas zasáhnout.
+
+        Watcher hlídá JEN epizodu, podíl a rozestupy pokusů; oprávnění zásahu
+        (flag GEXLENS_BS_FALLBACK_RECONNECT + mimo US RTH) hlídá volající —
+        kalendář do čisté počítací třídy nepatří. Pokus se započítá hned při
+        vrácení: neúspěšný zásah se neopakuje každou minutu, další přijde až
+        po dalším REMEDIATION_AFTER_S.
+        """
+        if self.episode_started is None or self.share < REMEDIATION_SHARE:
+            return None
+        if self._remediation_attempts >= REMEDIATION_MAX_ATTEMPTS:
+            return None
+        required = REMEDIATION_AFTER_S * (self._remediation_attempts + 1)
+        if now - self.episode_started < required:
+            return None
+        self._remediation_attempts += 1
+        return self._remediation_attempts
 
     def status_fields(self) -> dict[str, object]:
         """Pole do /status: podíl + případný začátek epizody (epoch ISO nejde
