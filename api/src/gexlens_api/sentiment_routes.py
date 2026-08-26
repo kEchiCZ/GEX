@@ -77,6 +77,59 @@ def _percentile(ordered: list[float], fraction: float) -> float | None:
     return ordered[rank]
 
 
+def _attach_topic_values(engine: Engine, rows: list[dict[str, Any]]) -> None:
+    """Index tématu k okamžiku zprávy na kartu (#656 bod 5).
+
+    Referenční formát nese Intraday | Week, u nás obě okna splývají: poločasy
+    kategorií jsou ≤ 6 h, takže příspěvky starší než den jsou prakticky nulové
+    a dvě čísla by byla vždy stejná. Karta proto nese JEDNU hodnotu — index
+    tématu v čase zprávy (kontext „jak na tom narativ byl, když tohle přišlo").
+    """
+    from gexlens_news.sentindex import ScoredEvent, sent_index
+
+    categories = {row["category"] for row in rows if row.get("category")}
+    stamps = [
+        _utc(dt.datetime.fromisoformat(row["ts_event"]))
+        for row in rows
+        if isinstance(row.get("ts_event"), str)
+    ]
+    if not categories or not stamps:
+        return
+    # Dozvuk: 2 dny před nejstarší kartou je i nejdelší poločas zanedbatelný
+    since = min(stamps) - dt.timedelta(days=2)
+    stmt = select(
+        news_events.c.ts_event,
+        news_events.c.category,
+        news_events.c.importance,
+        news_events.c.sentiment_score,
+    ).where(
+        news_events.c.ts_event >= since,
+        news_events.c.category.in_(categories),
+        news_events.c.sentiment_score.is_not(None),
+    )
+    with engine.connect() as conn:
+        scored = conn.execute(stmt).fetchall()
+    by_category: dict[str, list[ScoredEvent]] = {}
+    for r in scored:
+        by_category.setdefault(r.category, []).append(
+            ScoredEvent(
+                ts_event=_utc(r.ts_event),
+                category=r.category,
+                importance=int(r.importance or 1),
+                score=float(r.sentiment_score),
+            )
+        )
+    for row in rows:
+        category = row.get("category")
+        stamp = row.get("ts_event")
+        events = by_category.get(category) if isinstance(category, str) else None
+        row["topic_value"] = (
+            sent_index(events, _utc(dt.datetime.fromisoformat(stamp)))
+            if events and isinstance(stamp, str)
+            else None
+        )
+
+
 def _empty_table(engine: Engine, table: Table, **filters: Any) -> list[dict[str, Any]]:
     """Dotaz nad tabulkou pozdějšího milestonu — dnes vrací prázdno, ale tvar drží."""
     stmt = select(table)
@@ -145,6 +198,7 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
                 event_id = row.get("id")
                 row["reactions_bp"] = by_event.get(event_id) if isinstance(event_id, int) else None
                 row["reaction_contaminated"] = event_id in contaminated
+        _attach_topic_values(engine_factory(), rows)
         return {"news": rows}
 
     @router.get("/news/upcoming")
