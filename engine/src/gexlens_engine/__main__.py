@@ -81,6 +81,7 @@ from gexlens_engine.instruments import (
     plan_instruments,
     read_watchlist,
 )
+from gexlens_engine.ivrank import IvRankCollector, TastyMetricsLike
 from gexlens_engine.provider import MarketDataProviderLike
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.runtime_settings import (
@@ -97,6 +98,7 @@ from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.fa_validation import FaValidationRepository
 from gexlens_engine.storage.feed_comparison import FeedComparisonRepository
 from gexlens_engine.storage.gammacliff_store import GammaCliffRepository
+from gexlens_engine.storage.ivrank_store import IvRankRepository
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter
@@ -540,6 +542,8 @@ async def create_pipeline(
     gamma_cliff_repository: GammaCliffRepository | None = None,
     vol_regime_repository: VolRegimeRepository | None = None,
     em_respect_repository: EmRespectRepository | None = None,
+    iv_rank_repository: IvRankRepository | None = None,
+    tasty_metrics: TastyMetricsLike | None = None,
     db: Engine | None = None,
     pacing_guard: PacingGuard | None = None,
     fa_repository: FaValidationRepository | None = None,
@@ -916,6 +920,17 @@ async def create_pipeline(
             if em_respect_repository is not None and db is not None
             else None
         ),
+        iv_rank=(
+            IvRankCollector(
+                symbol=symbol,
+                repository=iv_rank_repository,
+                db=db,
+                ib=ib,
+                tasty=tasty_metrics,
+            )
+            if iv_rank_repository is not None and db is not None
+            else None
+        ),
         news_ticks=news_ticks,
         read_news_ticks=(lambda: list(ib.newsTicks())) if news_ticks else None,
     )
@@ -1073,6 +1088,10 @@ async def main() -> None:
     em_respect_repository = EmRespectRepository(db)
     await asyncio.to_thread(em_respect_repository.ensure_schema)
 
+    # IV Rank (#871): tři denní řady IV; historické requesty, žádná linka navíc
+    iv_rank_repository = IvRankRepository(db)
+    await asyncio.to_thread(iv_rank_repository.ensure_schema)
+
     # Broker headlines z ticku 292 (#291): schéma SentimentLensu sdílí obě
     # služby, engine do něj jen zapisuje
     news_ticks: NewsTickCollector | None = None
@@ -1152,6 +1171,7 @@ async def main() -> None:
     # čte z hlavní smyčky, proto musí být viditelná i při vypnutém shadow
     crosscheck: CrossCheckDetector | None = None
     publish_crosscheck: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None
+    tasty_session: TastySession | None = None
     if settings.tasty_enabled and settings.tasty_client_secret and settings.tasty_refresh_token:
         tasty_session = TastySession(
             TastyCredentials(
@@ -1828,6 +1848,8 @@ async def main() -> None:
                     gamma_cliff_repository=gamma_cliff_repository,
                     vol_regime_repository=vol_regime_repository,
                     em_respect_repository=em_respect_repository,
+                    iv_rank_repository=iv_rank_repository,
+                    tasty_metrics=tasty_session,
                     db=db,
                     pacing_guard=pacing_guard,
                     fa_repository=fa_repository,

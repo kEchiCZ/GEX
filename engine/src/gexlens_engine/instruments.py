@@ -47,6 +47,7 @@ from gexlens_engine.ibkr.scheduler import (
     SweepMetrics,
 )
 from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
+from gexlens_engine.ivrank import IvRankCollector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository, collect_alpha_calibration
@@ -300,6 +301,8 @@ class InstrumentPipeline:
     vol_regime: VolRegimeCollector | None = None
     # Respektování pásma EM (#872, D3) — None = vypnuto
     em_respect: EmRespectCollector | None = None
+    # IV Rank — tři denní řady IV (#871) — None = vypnuto
+    iv_rank: IvRankCollector | None = None
     # Denní FA validace po OI archivu (#232) — None = vypnuto
     fa_repository: FaValidationRepository | None = None
     # Ranní kalibrace α po OI archivu (#232 fáze 2) — None = vypnuto
@@ -900,6 +903,12 @@ class InstrumentPipeline:
                 await self.em_respect.on_minute(now)
             except Exception:
                 logger.exception("EM respect %s selhal — pokračuji", self.symbol)
+        # IV Rank (#871) — jednou po settle; historický request, žádná linka
+        if self.iv_rank is not None:
+            try:
+                await self.iv_rank.on_minute(now)
+            except Exception:
+                logger.exception("IV rank %s selhal — pokračuji", self.symbol)
 
         # Následující expirace v nižší kadenci; její pád nesmí shodit aktivní řetěz
         if (
