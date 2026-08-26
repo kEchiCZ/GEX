@@ -333,16 +333,17 @@ class NgramShadowJob:
                     baseline_lift,
                 )
                 written += 1
-        if results:
-            with self._engine.begin() as conn:
-                for entry in results:
-                    conn.execute(
-                        delete(news_ngram_shadow).where(
-                            news_ngram_shadow.c.symbol == entry["symbol"],
-                            news_ngram_shadow.c.window_min == entry["window_min"],
-                            news_ngram_shadow.c.subset == entry["subset"],
-                        )
-                    )
+        # Full-replace VŠECH řádků vyhodnocovaných symbolů, ne jen počítaných
+        # klíčů: subset, který spadl pod MIN_EVAL, by jinak v tabulce nechal
+        # stale hodnotu z minulého běhu (stalo se s leaknutým live po #867)
+        with self._engine.begin() as conn:
+            conn.execute(
+                delete(news_ngram_shadow).where(
+                    news_ngram_shadow.c.symbol.in_(self._eval_symbols),
+                    news_ngram_shadow.c.window_min == self._window,
+                )
+            )
+            if results:
                 conn.execute(insert(news_ngram_shadow), results)
         return written
 

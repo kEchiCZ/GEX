@@ -254,6 +254,33 @@ def test_evaluate_lift_and_subsets(tmp_path: Path) -> None:
     assert live.mean_bp > 0
 
 
+def test_evaluate_full_replace_clears_stale_subsets(tmp_path: Path) -> None:
+    """Subset pod MIN_EVAL nesmí v tabulce nechat stale řádek z minulého běhu."""
+    engine = make_db(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(news_ngram_shadow),
+            [
+                {
+                    "symbol": "ES",
+                    "window_min": 5,
+                    "subset": "live",
+                    "n": 282,
+                    "lift": 1.9,
+                    "baseline_lift": 1.27,
+                    "top_decile_mean_bp": 10.0,
+                    "mean_bp": 5.0,
+                    "model_n_train": 100,
+                    "computed_at": NOW - dt.timedelta(days=1),
+                }
+            ],
+        )
+    job = NgramShadowJob(engine)
+    assert job.evaluate(NOW) == 0  # žádná kvalifikovaná data
+    with engine.connect() as conn:
+        assert conn.execute(select(news_ngram_shadow)).fetchall() == []
+
+
 def test_run_retrains_once_a_day_and_survives_thin_db(tmp_path: Path) -> None:
     """Studená DB: retrénink se vzdá (MIN_TRAIN), run nespadne a nic nezapíše."""
     engine = make_db(tmp_path)
