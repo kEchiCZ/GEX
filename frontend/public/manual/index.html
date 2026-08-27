@@ -520,6 +520,18 @@ jen to, co se zobchodovalo v okně.</p>
 <td>SentIndex z news-engine (zapíná checkbox <strong>News</strong>): intraday spojitá řada kolem nuly (kladná = risk-on tón zpráv, záporná = risk-off), v <strong>Daily</strong> pohledu OHLC svíčka indexu za každý den (open nese overnight zbytek).</td>
 </tr>
 </tbody></table>
+<p><strong>Ovládání panelů (v1.12).</strong> Každý spodní panel jde ovládat myší jako graf:</p>
+<ul>
+<li><strong>vodorovné tažení</strong> posouvá sdílenou časovou osu — hlavní graf i ostatní
+panely jedou s tím (stejné gesto jako tažení v heatmapě),</li>
+<li><strong>svislé tažení</strong> posouvá hodnotovou osu <strong>jen toho jednoho panelu</strong>,
+přirozeným směrem (táhneš dolů → obsah jede dolů),</li>
+<li><strong>kolečko</strong> zoomuje hodnotovou osu <strong>jen toho panelu</strong>, k pozici kurzoru,</li>
+<li><strong>dvojklik</strong> vrátí panel do výchozího pohledu,</li>
+<li>osa vpravo i nulová linka respektují posunutý/zoomlý pohled — čtou pravdu.</li>
+</ul>
+<p>Úchyt na spodní hraně panelu dál mění jeho <strong>výšku</strong> a předěl mezi grafem
+a panely zůstává beze změny.</p>
 <p>Pohyb myší v kterémkoli panelu hýbe crosshairem ve všech panelech i heatmapě. Při najetí navíc uvidíš <strong>hodnoty ukazatele</strong>:</p>
 <ul>
 <li><strong>vpravo nahoře</strong> hodnotu pro <strong>minutu pod crosshairem</strong> (Opt Vol a Δ Flow zvlášť C/P);</li>

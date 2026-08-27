@@ -1693,6 +1693,8 @@ function MainContent() {
             height={panelHeight}
             heights={panelHeights}
             onHeightChange={onPanelHeightChange}
+            // Vodorovné tažení v panelu = posun sdílené časové osy (27. 8.)
+            onTimePan={(dx) => setChartView((view) => ({ ...view, offsetX: view.offsetX + dx }))}
             range={rangeSpan ? { startBucket: rangeSpan.startBucket, endBucket: rangeSpan.endBucket } : null} // prettier-ignore
             rangeB={rangeSpanB ? { startBucket: rangeSpanB.startBucket, endBucket: rangeSpanB.endBucket } : null} // prettier-ignore
           />
