@@ -18,7 +18,9 @@ const TOGGLE_LABELS: Record<keyof Toggles, string> = {
   sessions: 'Sessions',
   vol: 'Vol',
   optVol: 'Opt Vol',
-  delta: 'Delta',
+  // Sjednocení názvů (27. 8.): checkbox „Delta" + panel „Opt Δ" + legenda
+  // „Cum Δ" byly tři jména jedné věci — vyhrává název ze SPEC/legendy
+  delta: 'Cum Δ',
   deltaFlow: 'Δ Flow C/P',
   evoOi: 'Evo OI',
   volOiDelta: 'Vol + OI Δ',

@@ -575,7 +575,7 @@ function BottomPanelsBase({
       <section key="cumdelta" className="bottom-panel" aria-label="Cum Δ panel">
         <span className="panel-title muted">
           <span title="Delta-vážený tok OPČNÍCH obchodů (Σ znaménko × size × Δ × multiplikátor) — ne tok v podkladu">
-            Opt Δ
+            Cum Δ
           </span>
           {hasCvd && (
             <span
