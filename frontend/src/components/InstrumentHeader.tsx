@@ -11,6 +11,7 @@ import { GammaCliffChip } from './GammaCliffChip'
 import { IvRankChip } from './IvRankChip'
 import { RelativeStrengthChip } from './RelativeStrengthChip'
 import { StateChip } from './StateChip'
+import { SymbolSearch } from './SymbolSearch'
 import { TendencyChip } from './TendencyChip'
 
 /** Čas alertu (unix s) → lokální datum + čas; prázdné, když ts chybí/nevalidní. */
@@ -187,6 +188,8 @@ export function InstrumentHeader({
             </span>
           )}
         </div>
+        {/* Vyhledání symbolu (#521 C): ad-hoc pohled přes tasty, bez IBKR linek */}
+        <SymbolSearch />
         <div className="expiry-select">
           Expirace
           {/* Kalendářový popover místo dropdownu (#513, SPEC 3.2) — druh
@@ -283,6 +286,21 @@ export function InstrumentHeader({
         tiché přepnutí zdroje. Chip svítí JEN při fallbacku: za normálního
         provozu by trvalé „zdroj: IBKR" jen zabíralo místo. */}
         <FallbackChip chainSource={status.chain_source} spotSource={status.spot_source} />
+        {/* Ad-hoc pohled (#521 C): symbol jede jen z tastytrade — bez flows,
+        bez Cum Δ, BS greeks z mid. Musí být vidět, na co se člověk dívá. */}
+        {(status.tasty_adhoc ?? []).includes(symbol) && (
+          <span
+            className="fallback-chip"
+            data-testid="adhoc-chip"
+            title={
+              'Ad-hoc pohled (#521): data výhradně z tastytrade — kotace + OI, greeks ' +
+              'BS modelem z mid. Bez objemů, flows a Cum Δ (ty nese jen plný IBKR sběr). ' +
+              'Pohled žije, dokud je otevřený; pro trvalé sledování přidej symbol do watchlistu.'
+            }
+          >
+            ad-hoc · tastytrade
+          </span>
+        )}
         {/* Pravý blok hlavičky (#597): pokrytí dat, Live a zvoneček drží u sebe u pravého
       okraje. Odsazuje je JEDEN `margin-left: auto` na téhle skupině — dva (dřív na badge
       i na zvonečku) si volné místo rozdělily a mezi nimi zbyla mezera. */}

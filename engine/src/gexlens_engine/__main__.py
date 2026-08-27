@@ -113,6 +113,7 @@ from gexlens_engine.storage.t6_store import T6Repository
 from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.storage.volregime_store import VolRegimeRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
+from gexlens_engine.tasty.adhoc import AdhocViewer
 from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow
@@ -1212,6 +1213,14 @@ async def main() -> None:
         # Stínové CumΔ z TimeAndSale (#615 fáze 3, varianta B — rozhodnutí
         # uživatele 27. 8.): měřicí řada per symbol, živé CumΔ se nemění
         dx_shadows: dict[str, DxCumDeltaShadow] = {}
+        # Ad-hoc pohled přes tasty (#521, varianta C): žádné IBKR linky
+        adhoc_viewer = AdhocViewer(
+            db=db,
+            symbol_map=symbol_map,
+            cache=tasty_cache,
+            writer=writer,
+            is_watched=lambda product: product in pipelines,
+        )
 
         def _tasty_event(event_type: str, values: list[object]) -> None:
             tasty_cache.on_event(event_type, values)
@@ -1249,6 +1258,8 @@ async def main() -> None:
                 # Rate limit subskripcí (#863): počet odmítnutí serverem
                 "tasty_rate_limited": tasty_stream.rate_limited,
                 "tasty_symbols": tasty_cache.symbols_tracked(),
+                # Ad-hoc pohledy (#521 C) — UI badge zdroje
+                **({"tasty_adhoc": adhoc_viewer.active()} if adhoc_viewer.active() else {}),
                 # Stínové CumΔ (#615): denní podíly pro spread_leg ADR a fallback
                 **(
                     {
@@ -1612,6 +1623,8 @@ async def main() -> None:
                         # dávek odmítne a podklad nese cenu i CVD — o strike
                         # v křídle navíc nejde
                         tasty_stream.set_priority(frozenset(shadow_front_future.values()))
+                        symbols |= adhoc_viewer.streamers()
+                        purpose.setdefault("adhoc", set()).update(adhoc_viewer.streamers())
                         symbol_breakdown.clear()
                         symbol_breakdown.update(
                             {name: len(values) for name, values in purpose.items()}
@@ -1839,8 +1852,32 @@ async def main() -> None:
                 if stopped:
                     return
 
+        async def adhoc_loop() -> None:
+            """Ad-hoc pohledy (#521 C): refresh à 30 s, spot vzorky à 5 s,
+            minutová uzávěrka snapshotů + kotačních barů."""
+            last_refresh = 0.0
+            last_minute: dt.datetime | None = None
+            while not shadow_stop.is_set():
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(shadow_stop.wait(), timeout=5.0)
+                if shadow_stop.is_set():
+                    return
+                try:
+                    now = dt.datetime.now(dt.UTC)
+                    if time.monotonic() - last_refresh > 30.0:
+                        last_refresh = time.monotonic()
+                        await adhoc_viewer.refresh(now)
+                    adhoc_viewer.sample_spot()
+                    minute = now.replace(second=0, microsecond=0)
+                    if last_minute is not None and minute > last_minute and adhoc_viewer.active():
+                        await adhoc_viewer.write_minute(last_minute, now)
+                    last_minute = minute
+                except Exception:
+                    logger.exception("Ad-hoc smyčka selhala — další tik jede dál")
+
         shadow_tasks = [
             asyncio.create_task(tasty_stream.run(shadow_stop)),
+            asyncio.create_task(adhoc_loop()),
             asyncio.create_task(monitor.run(shadow_stop)),
             asyncio.create_task(shadow_symbols_loop()),
             asyncio.create_task(orphan_spot_loop()),

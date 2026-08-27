@@ -27,7 +27,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from gexlens_api.alerts import AlertEngine
 from gexlens_api.backup import build_backup_router
@@ -239,6 +239,61 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 for state in states
             ]
         }
+
+    # Katalog CME produktů pro vyhledávání (#521): roots + lidské názvy.
+    # Validaci „chain opravdu existuje" dělá engine při stavbě pohledu.
+    CME_PRODUCTS: list[tuple[str, str]] = [
+        ("ES", "E-mini S&P 500"),
+        ("NQ", "E-mini Nasdaq-100"),
+        ("RTY", "E-mini Russell 2000"),
+        ("YM", "E-mini Dow"),
+        ("MES", "Micro E-mini S&P 500"),
+        ("MNQ", "Micro E-mini Nasdaq-100"),
+        ("CL", "Crude Oil"),
+        ("NG", "Natural Gas"),
+        ("GC", "Gold"),
+        ("SI", "Silver"),
+        ("HG", "Copper"),
+        ("ZB", "30Y T-Bond"),
+        ("ZN", "10Y T-Note"),
+        ("ZF", "5Y T-Note"),
+        ("6E", "Euro FX"),
+        ("6J", "Japanese Yen"),
+        ("ZC", "Corn"),
+        ("ZS", "Soybeans"),
+        ("ZW", "Wheat"),
+    ]
+
+    @app.get("/search")
+    def search(q: str = Query("", max_length=16)) -> dict[str, object]:
+        """Našeptávač produktů pro ad-hoc pohled (#521, varianta C)."""
+        needle = q.strip().upper()
+        matches = [
+            {"symbol": root, "name": name}
+            for root, name in CME_PRODUCTS
+            if not needle or needle in root or needle in name.upper()
+        ]
+        return {"matches": matches[:10]}
+
+    @app.post("/adhoc/{symbol}")
+    def adhoc_request(symbol: str) -> dict[str, object]:
+        """Založí/prodlouží ad-hoc pohled — frontend pinguje à 1 min (#521).
+
+        Engine požadavek vyzvedne à 30 s a bez prodloužení ho po ~3 min
+        uklidí (subskripce vypadnou diffem — AC uvolnění kapacity).
+        """
+        root = symbol.strip().upper()
+        if root not in {p for p, _ in CME_PRODUCTS}:
+            raise HTTPException(404, f"Neznámý produkt: {symbol!r}")
+        from gexlens_engine.storage.meta import adhoc_view_table, ensure_meta_schema
+
+        engine = meta_repository.engine()
+        ensure_meta_schema(engine)
+        now = dt.datetime.now(dt.UTC)
+        with engine.begin() as conn:
+            conn.execute(delete(adhoc_view_table).where(adhoc_view_table.c.symbol == root))
+            conn.execute(adhoc_view_table.insert().values(symbol=root, requested_ts=now))
+        return {"symbol": root, "requested_ts": now.isoformat()}
 
     @app.get("/instruments/{symbol}/expiries")
     def expiries(symbol: str) -> dict[str, Any]:

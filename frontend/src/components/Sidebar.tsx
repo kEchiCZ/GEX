@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Legend } from './Legend'
 import { API_BASE, APP_ENV, APP_VERSION } from '../config'
 import { frontContractCode } from '../instrument/expiry'
+import { useAdhocPing } from '../hooks/useAdhocPing'
 import { useAppState } from '../state/AppState'
 import type { AppView } from '../state/AppState'
 
@@ -45,8 +46,21 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
   // Legenda grafu (#346) — modál nad aplikací, ať jde porovnávat s grafem
   const [legendOpen, setLegendOpen] = useState(false)
-  const { view, setView, theme, setTheme, symbol: activeSymbol, setSymbol } = useAppState()
+  const {
+    view,
+    setView,
+    theme,
+    setTheme,
+    symbol: activeSymbol,
+    setSymbol,
+    recentSymbols,
+  } = useAppState()
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
+  // Ad-hoc pohled (#521 C): symbol mimo watchlist se drží naživu pingem
+  useAdhocPing(
+    activeSymbol,
+    watchlist.some((item) => item.symbol === activeSymbol),
+  )
   const [newSymbol, setNewSymbol] = useState('')
   const [watchlistError, setWatchlistError] = useState<string | null>(null)
 
@@ -249,6 +263,28 @@ export function Sidebar() {
               </p>
             )}
           </section>
+          {/* Nedávné (#521): posledních 8 zobrazených symbolů — klik otevře
+          ad-hoc pohled (mimo watchlist jde přes tastytrade, ping drží sidebar) */}
+          {recentSymbols.filter((item) => item !== activeSymbol).length > 0 && (
+            <section className="watchlist" aria-label="Nedávné">
+              <h2>Nedávné</h2>
+              <ul>
+                {recentSymbols
+                  .filter((item) => item !== activeSymbol)
+                  .map((item) => (
+                    <li key={item} className="watchlist-row">
+                      <button
+                        className="watchlist-symbol"
+                        data-testid={`recent-${item}`}
+                        onClick={() => setSymbol(item)}
+                      >
+                        {item}
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            </section>
+          )}
           <button className="nav-item legend-button" onClick={() => setLegendOpen(true)}>
             Legenda
           </button>

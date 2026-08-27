@@ -67,6 +67,8 @@ export interface PipelineStatus {
   /** Extended expirace z tasty (#616): per symbol seznam expirací, jejichž
       zdrojem je tastytrade (BS greeks z kotací, bez objemů/flows). */
   tasty_extended_expiries?: Record<string, string[]>
+  /** Aktivní ad-hoc pohledy přes tasty (#521 C) — hlavička jimi značí zdroj. */
+  tasty_adhoc?: string[]
   updated_at?: number | null
 }
 
@@ -180,6 +182,8 @@ interface AppState {
   symbol: string
   /** Přepnutí aktivního tickeru (z watchlistu v sidebaru). */
   setSymbol: (symbol: string) => void
+  /** Nedávno zobrazené symboly (#521) — sekce v sidebaru, persistováno. */
+  recentSymbols: string[]
   expiries: string[]
   /** Trading classes per expirace z OI archivu (#513, SPEC 3.2); prázdné pole = neznámé. */
   expiryClasses: Record<string, string[]>
@@ -319,6 +323,21 @@ export function AppStateProvider({
   const [live] = useState(() => socket ?? new LiveSocket(WS_URL))
   // Poslední volby uživatele přežívají refresh (ADR-0007, #167); URL má přednost
   const [symbol, setSymbol] = usePersistentState('symbol', initialSymbol, shortString())
+  // Nedávné (#521): posledních 8 zobrazených symbolů, aktivní první
+  const [recentSymbols, setRecentSymbols] = usePersistentState<string[]>(
+    'recentSymbols',
+    [],
+    (value, fallback) =>
+      Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === 'string').slice(0, 8)
+        : fallback,
+  )
+  useEffect(() => {
+    setRecentSymbols((previous) =>
+      [symbol, ...previous.filter((item) => item !== symbol)].slice(0, 8),
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setter z usePersistentState je stabilní
+  }, [symbol])
   const [expiries, setExpiries] = useState<string[]>([])
   const [expiryClasses, setExpiryClasses] = useState<Record<string, string[]>>({})
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
@@ -538,6 +557,7 @@ export function AppStateProvider({
       status,
       symbol,
       setSymbol,
+      recentSymbols,
       expiries,
       expiryClasses,
       selectedExpiry,
@@ -609,6 +629,7 @@ export function AppStateProvider({
       setGexUnits,
       oiSource,
       setOiSource,
+      recentSymbols,
       expiries,
       expiryClasses,
       selectedExpiry,

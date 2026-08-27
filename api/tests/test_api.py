@@ -150,6 +150,21 @@ def test_expiries_detail_trading_classes(settings: Settings) -> None:
     assert payload["detail"] == [{"date": "20260716", "trading_classes": ["E3C", "EW3"]}]
 
 
+def test_search_and_adhoc_request(client: TestClient) -> None:
+    """#521 C: našeptávač katalogu + založení/prodloužení ad-hoc požadavku."""
+    matches = client.get("/search", params={"q": "cru"}).json()["matches"]
+    assert {"symbol": "CL", "name": "Crude Oil"} in matches
+    assert client.get("/search", params={"q": "zzz"}).json()["matches"] == []
+
+    created = client.post("/adhoc/cl").json()
+    assert created["symbol"] == "CL"
+    # Neznámý produkt se odmítá — engine nedostane nesmyslný požadavek
+    assert client.post("/adhoc/NESMYSL").status_code == 404
+    # Prodloužení téhož symbolu přepisuje čas, nedělá duplicitu
+    renewed = client.post("/adhoc/CL").json()
+    assert renewed["requested_ts"] >= created["requested_ts"]
+
+
 def test_days_listing(settings: Settings) -> None:
     """Daily pohled: seznam uložených dnů s expirací per den, seřazený dle data."""
     writer = SnapshotWriter(settings)
