@@ -666,3 +666,66 @@ test('slabá OI zeď se nekreslí, silná ano (#851)', async () => {
 
   expect(strong).toEqual([29910, null, null, 27500])
 })
+
+// ── Pan a zoom per panel (požadavek 27. 8.) ────────────────────────
+
+function renderInteractive() {
+  const onTimePan = vi.fn()
+  render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={DATA}
+        visible={{ vol: true, optVol: true, delta: false, deltaFlow: false, evoOi: false, sentiment: false }} // prettier-ignore
+        width={400}
+        onTimePan={onTimePan}
+      />
+    </CrosshairProvider>,
+  )
+  const volSvg = screen.getByLabelText('Vol panel').querySelector('svg')!
+  const optSvg = screen.getByLabelText('Opt Vol panel').querySelector('svg')!
+  // Vnitřní y-skupina: <g transform={time}><g transform={yTransform}>…
+  const yGroup = (svg: SVGSVGElement) => svg.querySelector('g > g')!
+  return { onTimePan, volSvg, optSvg, yGroup }
+}
+
+test('vodorovné tažení volá onTimePan, svislé posouvá jen tažený panel', () => {
+  const { onTimePan, volSvg, optSvg, yGroup } = renderInteractive()
+  const before = yGroup(volSvg).getAttribute('transform')
+  const beforeOpt = yGroup(optSvg).getAttribute('transform')
+  fireEvent.pointerDown(volSvg, { clientX: 100, clientY: 50, button: 0 })
+  fireEvent.pointerMove(volSvg, { clientX: 130, clientY: 70 })
+  // dx 30 px (jsdom rect má nulové rozměry → cssScale spadne na 1)
+  expect(onTimePan).toHaveBeenCalledWith(30)
+  // Svislý posun: přirozený směr (dolů = +20) a JEN tažený panel
+  const after = yGroup(volSvg).getAttribute('transform')
+  expect(after).not.toBe(before)
+  expect(after).toContain('scale(1 1)')
+  expect(yGroup(optSvg).getAttribute('transform')).toBe(beforeOpt)
+  fireEvent.pointerUp(volSvg)
+})
+
+test('kolečko zoomuje osu Y jen jednoho panelu; dvojklik resetuje', () => {
+  const { volSvg, optSvg, yGroup } = renderInteractive()
+  const beforeOpt = yGroup(optSvg).getAttribute('transform')
+  fireEvent.wheel(volSvg, { deltaY: -100, clientY: 30 })
+  expect(yGroup(volSvg).getAttribute('transform')).toContain('scale(1 1.15)')
+  expect(yGroup(optSvg).getAttribute('transform')).toBe(beforeOpt)
+  fireEvent.doubleClick(volSvg)
+  expect(yGroup(volSvg).getAttribute('transform')).toContain('scale(1 1)')
+})
+
+test('tažení bez onTimePan nepadá a crosshair při tažení stojí', () => {
+  render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={DATA}
+        visible={{ vol: true, optVol: false, delta: false, deltaFlow: false, evoOi: false, sentiment: false }} // prettier-ignore
+        width={400}
+      />
+    </CrosshairProvider>,
+  )
+  const svg = screen.getByLabelText('Vol panel').querySelector('svg')!
+  fireEvent.pointerDown(svg, { clientX: 10, clientY: 10, button: 0 })
+  fireEvent.pointerMove(svg, { clientX: 40, clientY: 30 })
+  fireEvent.pointerUp(svg)
+})

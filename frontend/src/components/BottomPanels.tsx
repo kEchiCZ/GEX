@@ -169,6 +169,7 @@ function BottomPanelsBase({
   height = DEFAULT_height,
   heights,
   onHeightChange,
+  onTimePan,
   range = null,
   rangeB = null,
 }: {
@@ -187,6 +188,9 @@ function BottomPanelsBase({
   /** Tažení úchytu na spodní hraně panelu (#792): hlásí SUROVOU cílovou
   výšku, klampování dělá vlastník stavu (App). Bez handleru se úchyty nekreslí. */
   onHeightChange?: (key: PanelKey, height: number) => void
+  /** Vodorovné tažení v panelu posouvá sdílenou časovou osu (px heatmapy) —
+  hlavní graf jede s tím (požadavek 27. 8.). Bez handleru se netáhne. */
+  onTimePan?: (dxPx: number) => void
   /** Aktivní range (#484) v koších osy — panely mimo okno se ztlumí. */
   range?: { startBucket: number; endBucket: number } | null
   /** Druhé okno B (#489) — dim je komplement sjednocení obou. */
@@ -290,6 +294,78 @@ function BottomPanelsBase({
     pointer.clear()
     setHoverY(null)
   }
+  // Pohled na osu Y per panel (27. 8.): svislé tažení = posun (přirozený směr),
+  // kolečko = zoom k kurzoru, dvojklik = reset. Jen zobrazení daného panelu;
+  // osa X je sdílená s heatmapou (vodorovné tažení volá onTimePan). Předěl
+  // výšky panelu (resizeHandle) zůstává nedotčený.
+  const [yViews, setYViews] = useState<Record<string, { zoomY: number; offsetY: number }>>({})
+  const yViewOf = (key: string) => yViews[key] ?? { zoomY: 1, offsetY: 0 }
+  const yTransform = (key: string, panelHeight: number): string => {
+    const view = yViewOf(key)
+    // Kotva škálování na spodní hraně panelu — bary rostou odspodu
+    return `translate(0 ${panelHeight + view.offsetY}) scale(1 ${view.zoomY}) translate(0 ${-panelHeight})`
+  }
+  /** Obrazovkové Y pevných prvků (nulové linky) pod pohledem panelu. */
+  const applyY = (key: string, panelHeight: number, y: number): number => {
+    const view = yViewOf(key)
+    return (y - panelHeight) * view.zoomY + panelHeight + view.offsetY
+  }
+  /** Inverze pohledu: z kurzoru na datové Y — osa vpravo musí říkat pravdu. */
+  const invertY = (key: string, panelHeight: number, y: number): number => {
+    const view = yViewOf(key)
+    return (y - panelHeight - view.offsetY) / view.zoomY + panelHeight
+  }
+  const clampPanelZoom = (value: number) => Math.min(20, Math.max(0.2, value))
+  const panRef = useRef<{ key: string; x: number; y: number } | null>(null)
+  const panelInteractions = (key: string, panelHeight: number) => ({
+    onPointerDown: (event: React.PointerEvent<SVGSVGElement>) => {
+      if (event.button !== 0) return
+      panRef.current = { key, x: event.clientX, y: event.clientY }
+      // jsdom setPointerCapture nemá — optional call, testy nesmí padat
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+    },
+    onPointerMove: (event: React.PointerEvent<SVGSVGElement>) => {
+      const drag = panRef.current
+      if (drag && drag.key === key) {
+        const rect = event.currentTarget.getBoundingClientRect()
+        const scaleX = rect.width > 0 ? width / rect.width : 1
+        const scaleY = rect.height > 0 ? panelHeight / rect.height : 1
+        const dx = (event.clientX - drag.x) * scaleX
+        const dy = (event.clientY - drag.y) * scaleY
+        drag.x = event.clientX
+        drag.y = event.clientY
+        if (dx !== 0) onTimePan?.(dx)
+        if (dy !== 0)
+          setYViews((prev) => {
+            const view = prev[key] ?? { zoomY: 1, offsetY: 0 }
+            return { ...prev, [key]: { ...view, offsetY: view.offsetY + dy } }
+          })
+        return
+      }
+      handleMove(key, panelHeight)(event)
+    },
+    onPointerUp: () => {
+      panRef.current = null
+    },
+    onPointerLeave: () => {
+      panRef.current = null
+      handleLeave()
+    },
+    onDoubleClick: () => setYViews((prev) => ({ ...prev, [key]: { zoomY: 1, offsetY: 0 } })),
+    onWheel: (event: React.WheelEvent<SVGSVGElement>) => {
+      const rect = event.currentTarget.getBoundingClientRect()
+      const scaleY = rect.height > 0 ? panelHeight / rect.height : 1
+      const cursorY = (event.clientY - rect.top) * scaleY
+      setYViews((prev) => {
+        const view = prev[key] ?? { zoomY: 1, offsetY: 0 }
+        const zoomY = clampPanelZoom(view.zoomY * (event.deltaY < 0 ? 1.15 : 1 / 1.15))
+        // Zoom k kurzoru: bod pod kurzorem zůstává na místě
+        const content = (cursorY - panelHeight - view.offsetY) / view.zoomY + panelHeight
+        const offsetY = cursorY - panelHeight - (content - panelHeight) * zoomY
+        return { ...prev, [key]: { zoomY, offsetY } }
+      })
+    },
+  })
   /** Hodnota na ose Y podle výšky kurzoru (signed = symetrická škála kolem nuly,
   se stejnou rezervou od okrajů jako plocha Cum Δ). */
   const axisValue = (
@@ -299,7 +375,9 @@ function BottomPanelsBase({
     panelHeight: number,
   ): React.ReactNode => {
     if (!hoverY || hoverY.key !== key) return null
-    const y = Math.min(panelHeight, Math.max(0, hoverY.y))
+    // Inverze pohledu panelu (27. 8.): osa musí říkat hodnotu POD kurzorem
+    // i po posunu/zoomu, jinak by lhala
+    const y = Math.min(panelHeight, Math.max(0, invertY(key, panelHeight, hoverY.y)))
     const value = signed
       ? ((panelHeight / 2 - y) / Math.max(1, panelHeight / 2 - CUM_DELTA_PAD)) * peak
       : ((panelHeight - y) / (panelHeight - 4)) * peak
@@ -338,20 +416,21 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('vol', height)}
-          onPointerLeave={handleLeave}
+          {...panelInteractions('vol', height)}
         >
           <g transform={transform}>
-            {heights.map((barHeight, index) => (
-              <rect
-                key={index}
-                x={(index + 0.5) * step - barWidth / 2}
-                y={height - barHeight}
-                width={barWidth}
-                height={barHeight}
-                fill={COLORS.vol}
-              />
-            ))}
+            <g transform={yTransform('vol', height)}>
+              {heights.map((barHeight, index) => (
+                <rect
+                  key={index}
+                  x={(index + 0.5) * step - barWidth / 2}
+                  y={height - barHeight}
+                  width={barWidth}
+                  height={barHeight}
+                  fill={COLORS.vol}
+                />
+              ))}
+            </g>
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
@@ -383,32 +462,33 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('optvol', height)}
-          onPointerLeave={handleLeave}
+          {...panelInteractions('optvol', height)}
         >
           <g transform={transform}>
-            {callHeights.map((barHeight, index) => (
-              <rect
-                key={`c${index}`}
-                data-part="optvol-call"
-                x={(index + 0.5) * step - barWidth / 2}
-                y={height - barHeight}
-                width={barWidth / 2}
-                height={barHeight}
-                fill={COLORS.call}
-              />
-            ))}
-            {putHeights.map((barHeight, index) => (
-              <rect
-                key={`p${index}`}
-                data-part="optvol-put"
-                x={(index + 0.5) * step}
-                y={height - barHeight}
-                width={barWidth / 2}
-                height={barHeight}
-                fill={COLORS.put}
-              />
-            ))}
+            <g transform={yTransform('optvol', height)}>
+              {callHeights.map((barHeight, index) => (
+                <rect
+                  key={`c${index}`}
+                  data-part="optvol-call"
+                  x={(index + 0.5) * step - barWidth / 2}
+                  y={height - barHeight}
+                  width={barWidth / 2}
+                  height={barHeight}
+                  fill={COLORS.call}
+                />
+              ))}
+              {putHeights.map((barHeight, index) => (
+                <rect
+                  key={`p${index}`}
+                  data-part="optvol-put"
+                  x={(index + 0.5) * step}
+                  y={height - barHeight}
+                  width={barWidth / 2}
+                  height={barHeight}
+                  fill={COLORS.put}
+                />
+              ))}
+            </g>
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
@@ -440,32 +520,33 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('deltaflow', height)}
-          onPointerLeave={handleLeave}
+          {...panelInteractions('deltaflow', height)}
         >
           <g transform={transform}>
-            {callHeights.map((barHeight, index) => (
-              <rect
-                key={`c${index}`}
-                data-part="deltaflow-call"
-                x={(index + 0.5) * step - barWidth / 2}
-                y={height - barHeight}
-                width={barWidth / 2}
-                height={barHeight}
-                fill={COLORS.call}
-              />
-            ))}
-            {putHeights.map((barHeight, index) => (
-              <rect
-                key={`p${index}`}
-                data-part="deltaflow-put"
-                x={(index + 0.5) * step}
-                y={height - barHeight}
-                width={barWidth / 2}
-                height={barHeight}
-                fill={COLORS.put}
-              />
-            ))}
+            <g transform={yTransform('deltaflow', height)}>
+              {callHeights.map((barHeight, index) => (
+                <rect
+                  key={`c${index}`}
+                  data-part="deltaflow-call"
+                  x={(index + 0.5) * step - barWidth / 2}
+                  y={height - barHeight}
+                  width={barWidth / 2}
+                  height={barHeight}
+                  fill={COLORS.call}
+                />
+              ))}
+              {putHeights.map((barHeight, index) => (
+                <rect
+                  key={`p${index}`}
+                  data-part="deltaflow-put"
+                  x={(index + 0.5) * step}
+                  y={height - barHeight}
+                  width={barWidth / 2}
+                  height={barHeight}
+                  fill={COLORS.put}
+                />
+              ))}
+            </g>
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
@@ -525,30 +606,31 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('evooi', height)}
-          onPointerLeave={handleLeave}
+          {...panelInteractions('evooi', height)}
         >
           {
             signed &&
-            <line x1={0} y1={height / 2} x2={width} y2={height / 2} stroke="#2c3342" data-testid="evooi-zero" /> // prettier-ignore
+            <line x1={0} y1={applyY('evooi', height, height / 2)} x2={width} y2={applyY('evooi', height, height / 2)} stroke="#2c3342" data-testid="evooi-zero" /> // prettier-ignore
           }
           <g transform={transform}>
-            <path
-              d={evoOiStepPath(callSeries, minutes * step, toY)}
-              fill="none"
-              stroke={COLORS.call}
-              strokeWidth={1.5}
-              vectorEffect="non-scaling-stroke"
-              data-part="evooi-call"
-            />
-            <path
-              d={evoOiStepPath(putSeries, minutes * step, toY)}
-              fill="none"
-              stroke={COLORS.put}
-              strokeWidth={1.5}
-              vectorEffect="non-scaling-stroke"
-              data-part="evooi-put"
-            />
+            <g transform={yTransform('evooi', height)}>
+              <path
+                d={evoOiStepPath(callSeries, minutes * step, toY)}
+                fill="none"
+                stroke={COLORS.call}
+                strokeWidth={1.5}
+                vectorEffect="non-scaling-stroke"
+                data-part="evooi-call"
+              />
+              <path
+                d={evoOiStepPath(putSeries, minutes * step, toY)}
+                fill="none"
+                stroke={COLORS.put}
+                strokeWidth={1.5}
+                vectorEffect="non-scaling-stroke"
+                data-part="evooi-put"
+              />
+            </g>
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
@@ -624,32 +706,41 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('cumdelta', height)}
-          onPointerLeave={handleLeave}
+          {...panelInteractions('cumdelta', height)}
         >
           <line
             x1={0}
-            y1={areas.zeroY}
+            y1={applyY('cumdelta', height, areas.zeroY)}
             x2={width}
-            y2={areas.zeroY}
+            y2={applyY('cumdelta', height, areas.zeroY)}
             stroke="#2c3342"
             data-testid="cumdelta-zero"
           />
           <g transform={transform}>
-            <polygon points={areas.positive} fill={COLORS.positive} data-part="cumdelta-positive" />
-            <polygon points={areas.negative} fill={COLORS.negative} data-part="cumdelta-negative" />
-            {/* CVD podkladu (#829) přes plochu opčního toku — rozchod obou
-            řad je informace, kterou ani jedna sama nedá */}
-            {hasCvd && (
-              <polyline
-                points={cvdPoints}
-                fill="none"
-                stroke={COLORS.cvd}
-                strokeWidth={1.5}
-                data-part="cumdelta-cvd"
-                data-testid="cumdelta-cvd"
+            <g transform={yTransform('cumdelta', height)}>
+              <polygon
+                points={areas.positive}
+                fill={COLORS.positive}
+                data-part="cumdelta-positive"
               />
-            )}
+              <polygon
+                points={areas.negative}
+                fill={COLORS.negative}
+                data-part="cumdelta-negative"
+              />
+              {/* CVD podkladu (#829) přes plochu opčního toku — rozchod obou
+            řad je informace, kterou ani jedna sama nedá */}
+              {hasCvd && (
+                <polyline
+                  points={cvdPoints}
+                  fill="none"
+                  stroke={COLORS.cvd}
+                  strokeWidth={1.5}
+                  data-part="cumdelta-cvd"
+                  data-testid="cumdelta-cvd"
+                />
+              )}
+            </g>
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
@@ -687,36 +778,37 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('sentiment', height)}
-          onPointerLeave={handleLeave}
+          {...panelInteractions('sentiment', height)}
         >
           <line
             x1={0}
-            y1={zeroY}
+            y1={applyY('sentiment', height, zeroY)}
             x2={width}
-            y2={zeroY}
+            y2={applyY('sentiment', height, zeroY)}
             stroke="#2c3342"
             data-testid="sentiment-zero"
           />
           <g transform={transform}>
-            {geoms.map((geom) => (
-              <g key={geom.index} data-part="sentiment-candle">
-                <line
-                  x1={geom.x}
-                  y1={geom.wickY1}
-                  x2={geom.x}
-                  y2={geom.wickY2}
-                  stroke={geom.up ? COLORS.candleUp : COLORS.candleDown}
-                />
-                <rect
-                  x={geom.x - barWidth / 2}
-                  y={geom.bodyY}
-                  width={barWidth}
-                  height={geom.bodyHeight}
-                  fill={geom.up ? COLORS.candleUp : COLORS.candleDown}
-                />
-              </g>
-            ))}
+            <g transform={yTransform('sentiment', height)}>
+              {geoms.map((geom) => (
+                <g key={geom.index} data-part="sentiment-candle">
+                  <line
+                    x1={geom.x}
+                    y1={geom.wickY1}
+                    x2={geom.x}
+                    y2={geom.wickY2}
+                    stroke={geom.up ? COLORS.candleUp : COLORS.candleDown}
+                  />
+                  <rect
+                    x={geom.x - barWidth / 2}
+                    y={geom.bodyY}
+                    width={barWidth}
+                    height={geom.bodyHeight}
+                    fill={geom.up ? COLORS.candleUp : COLORS.candleDown}
+                  />
+                </g>
+              ))}
+            </g>
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>
@@ -743,24 +835,25 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          onPointerMove={handleMove('sentiment', height)}
-          onPointerLeave={handleLeave}
+          {...panelInteractions('sentiment', height)}
         >
           <g transform={transform}>
-            {/* Vizuálně shodné s Cum Δ: trader čte flow a sentiment vedle sebe */}
-            {/* cumDeltaAreas vrací body polygonu, ne path `d` — jako u Cum Δ */}
-            <polygon
-              points={areas.positive}
-              fill={COLORS.positive}
-              opacity={0.75}
-              data-part="sentiment-pos"
-            />
-            <polygon
-              points={areas.negative}
-              fill={COLORS.negative}
-              opacity={0.75}
-              data-part="sentiment-neg"
-            />
+            <g transform={yTransform('sentiment', height)}>
+              {/* Vizuálně shodné s Cum Δ: trader čte flow a sentiment vedle sebe */}
+              {/* cumDeltaAreas vrací body polygonu, ne path `d` — jako u Cum Δ */}
+              <polygon
+                points={areas.positive}
+                fill={COLORS.positive}
+                opacity={0.75}
+                data-part="sentiment-pos"
+              />
+              <polygon
+                points={areas.negative}
+                fill={COLORS.negative}
+                opacity={0.75}
+                data-part="sentiment-neg"
+              />
+            </g>
             {rangeDim}
             <CrosshairLine x={pointer.crosshairX} height={height} />
           </g>

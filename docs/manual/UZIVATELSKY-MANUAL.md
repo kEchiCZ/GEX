@@ -346,6 +346,19 @@ Panely se **sdílenou časovou osou** s heatmapou. Každý zvlášť vypneš che
 | **Evo OI** | Vývoj celkového Open Interest v čase, zvlášť call (teal) a put (červená), **schodovité kreslení**. V Daily ose = hodnota na konci každého dne. Default vypnutý (checkbox Evo OI). Podrobně níže. |
 | **Sentiment** | SentIndex z news-engine (zapíná checkbox **News**): intraday spojitá řada kolem nuly (kladná = risk-on tón zpráv, záporná = risk-off), v **Daily** pohledu OHLC svíčka indexu za každý den (open nese overnight zbytek). |
 
+**Ovládání panelů (v1.12).** Každý spodní panel jde ovládat myší jako graf:
+
+- **vodorovné tažení** posouvá sdílenou časovou osu — hlavní graf i ostatní
+  panely jedou s tím (stejné gesto jako tažení v heatmapě),
+- **svislé tažení** posouvá hodnotovou osu **jen toho jednoho panelu**,
+  přirozeným směrem (táhneš dolů → obsah jede dolů),
+- **kolečko** zoomuje hodnotovou osu **jen toho panelu**, k pozici kurzoru,
+- **dvojklik** vrátí panel do výchozího pohledu,
+- osa vpravo i nulová linka respektují posunutý/zoomlý pohled — čtou pravdu.
+
+Úchyt na spodní hraně panelu dál mění jeho **výšku** a předěl mezi grafem
+a panely zůstává beze změny.
+
 Pohyb myší v kterémkoli panelu hýbe crosshairem ve všech panelech i heatmapě. Při najetí navíc uvidíš **hodnoty ukazatele**:
 
 - **vpravo nahoře** hodnotu pro **minutu pod crosshairem** (Opt Vol a Δ Flow zvlášť C/P);
