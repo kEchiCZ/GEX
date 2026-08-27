@@ -14,7 +14,9 @@ from gexlens_news.model import NewsEvent
 NOW = dt.datetime(2026, 8, 27, 15, 0, tzinfo=dt.UTC)
 
 
-def commit(text: str, *, did: str = "did:plc:abc", langs: list[str] | None = None) -> dict[str, object]:
+def commit(
+    text: str, *, did: str = "did:plc:abc", langs: list[str] | None = None
+) -> dict[str, object]:
     return {
         "kind": "commit",
         "did": did,
@@ -59,7 +61,8 @@ def test_normalize_post_prevede_a_filtruje() -> None:
     assert normalize_post({"kind": "identity"}, NOW) is None
     # Budoucí createdAt (rozbité hodiny klienta) nesmí předběhnout ingest
     future = commit("$SPY test")
-    future["commit"]["record"]["createdAt"] = "2027-01-01T00:00:00Z"
+    record = future["commit"]["record"]  # type: ignore[index]
+    record["createdAt"] = "2027-01-01T00:00:00Z"
     event2 = normalize_post(future, NOW)
     assert event2 is not None and event2.ts_event == NOW
 
