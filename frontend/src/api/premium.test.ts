@@ -45,12 +45,14 @@ test('texty řádku a odřádkovaný tooltip — spread viditelně', () => {
   const rich = premiumReading(iv(0.85), vol(0.4))!
   // Spread přímo v řádku (zpětná vazba 27. 8.): pásma hodnotí rozdíl,
   // ne IV/HV samotné — musí být vidět, které číslo se hodnotí
-  expect(premiumLabel(rich)).toBe('rich: IV p85 − HV p40 = +45 p. b. — trh platí za hedge')
+  // Řádek už IV/HV neopakuje (duplikace, 27. 8.) — jen verdikt + spread;
+  // rozklad žije v tooltipu
+  expect(premiumLabel(rich)).toBe('rich: spread +45 p. b. — trh platí za hedge')
   const tooltip = premiumTooltip(rich)
   expect(tooltip).toContain('\n')
   expect(tooltip).toContain('JEDINÉ číslo')
   expect(tooltip).toContain('p85 − p40 = +45 p. b.')
   expect(tooltip).toContain('NE pro IV ani HV samotné')
   const cheap = premiumReading(iv(0.1), vol(0.6))!
-  expect(premiumLabel(cheap)).toBe('cheap: IV p10 − HV p60 = -50 p. b. — trh pohyb podceňuje')
+  expect(premiumLabel(cheap)).toBe('cheap: spread -50 p. b. — trh pohyb podceňuje')
 })

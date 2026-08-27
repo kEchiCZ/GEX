@@ -1,7 +1,8 @@
 /** Chip IV percentilu v hlavičce (#871) — vpravo vedle chipu sentimentu
 (přesun na žádost uživatele 27. 8.).
 
-Primárně percentil řady `ibkr` (rozhodnutí uživatele 26. 8.: robustní a
+Informační badge (cursor: help jako gamma režim — sjednocení 27. 8.,
+žádná klikací akce). Primárně percentil řady `ibkr` (rozhodnutí uživatele 26. 8.: robustní a
 konzistentní s vol režimem ADR-0028); IV Rank a tasty křížová kontrola žijí
 v tooltipu. Bez dat se chip NEkreslí — hlavička nemá ukazovat prázdné pole
 ani dosazený „normál". Denní hodnota → obnova à 10 min stačí.
@@ -35,7 +36,7 @@ export function IvRankChip() {
   const primary = ivRankPrimary(rows)
   if (primary === null) return null
   return (
-    <span className="chip iv-rank-chip" data-testid="ivrank-chip" title={ivRankTooltip(rows)}>
+    <span className="iv-rank-badge" data-testid="ivrank-chip" title={ivRankTooltip(rows)}>
       IV p{Math.round((primary.iv_percentile ?? 0) * 100)}
     </span>
   )

@@ -244,7 +244,8 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
                 </td>
               </tr>
               <tr>
-                <td>Prémie (IV × HV)</td>
+                {/* „×“ v popisku matlo (metrika je ROZDÍL percentilů) — 27. 8. */}
+                <td>Prémie (IV − HV)</td>
                 <td
                   data-testid="vol-premium"
                   title={(() => {

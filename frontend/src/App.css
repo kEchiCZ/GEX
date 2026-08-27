@@ -2789,3 +2789,17 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   text-decoration: none;
   padding: 0 4px;
 }
+
+/* IV percentil v hlavičce (#871): informační badge, NE klikací chip —
+   stejná konvence jako regime-badge (cursor: help, sjednocení 27. 8.) */
+.iv-rank-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: help;
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: var(--bg-chip);
+  border: 1px solid var(--border);
+}
