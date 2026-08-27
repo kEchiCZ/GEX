@@ -21,9 +21,10 @@ import type {
   WaveRow,
 } from '../api/news'
 import { fetchSettings } from '../api/settings'
-import { fetchSetups, formatPnlUsd, templateLabel } from '../api/setups'
+import { evStats, evTooltip, fetchSetups, formatPnlUsd, templateLabel } from '../api/setups'
 import {
   annualizedSharpe,
+  closedTrades,
   currentMechanicsVersion,
   dailyRSeries,
   equityCurve,
@@ -218,6 +219,8 @@ function SetupsPerformanceSection({
   const totalR = curve[curve.length - 1].equity
   const trades = rSeries.reduce((sum, point) => sum + point.trades, 0)
   const drawdown = maxDrawdownOf(curve)
+  // EV na obchod (#911) v R: identické s Ø R, karta ukazuje ROZKLAD složek
+  const ev = evStats(closedTrades(rows, sessionDateIso).map((trade) => trade.r))
   const usd = usdSimulation(rows, sessionDateIso, { accountUsd, riskPct })
   const usdCurve = usd ? equityCurve(usd.daily) : null
   const usdSharpe = usd ? annualizedSharpe(usd.daily) : null
@@ -252,6 +255,22 @@ function SetupsPerformanceSection({
               · {sharpeAll.days} seancí · {trades} obchodů · max DD {drawdown.toFixed(1)} R
             </span>
           </p>
+        </div>
+        <div className="stats-card">
+          <h3>EV / obchod (#911)</h3>
+          {ev ? (
+            <p data-testid="stats-ev" className="stats-ev" title={evTooltip(ev, 'R')}>
+              {ev.ev >= 0 ? '+' : ''}
+              {ev.ev.toFixed(2)} R{' '}
+              <span className="muted">
+                = {Math.round(100 * ev.winRate)} % × {ev.avgWin.toFixed(2)} R −{' '}
+                {Math.round(100 * ev.lossRate)} % × {ev.avgLoss.toFixed(2)} R · n={ev.n} ·{' '}
+                {ev.ev >= 0 ? 'dlouhodobě vydělává' : 'dlouhodobě ztrácí'}
+              </span>
+            </p>
+          ) : (
+            <p className="muted">Zatím žádné uzavřené obchody</p>
+          )}
         </div>
         <div className="stats-card">
           <h3>USD simulace (#679)</h3>

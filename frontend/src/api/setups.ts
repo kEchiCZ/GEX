@@ -73,6 +73,62 @@ export function setupPnlUsd(
 }
 
 /** Formát P/L se znaménkem („+512.50 $" / „−250 $"). */
+/** Expected Value na obchod (#911): (WinRate × AvgWin) − (LossRate × AvgLoss).
+
+Matematicky ≡ prostý průměr výsledků (v R je to přesně Ø R) — hodnota EV
+dlaždice je v USD vyjádření a ve viditelném ROZKLADU: trader vidí, jestli
+EV táhne win rate, velikost výher, nebo ho zabíjí velikost proher.
+EV > 0 = dlouhodobě vydělává, EV < 0 = dlouhodobě ztrácí. */
+export interface EvStats {
+  ev: number
+  winRate: number
+  lossRate: number
+  avgWin: number
+  /** Průměrná ztráta jako KLADNÉ číslo (vzorec ji odečítá). */
+  avgLoss: number
+  n: number
+}
+
+export function evStats(pnls: number[]): EvStats | null {
+  if (pnls.length === 0) return null
+  const winsList = pnls.filter((value) => value > 0)
+  const lossList = pnls.filter((value) => value <= 0)
+  const winRate = winsList.length / pnls.length
+  const lossRate = lossList.length / pnls.length
+  const avgWin =
+    winsList.length > 0 ? winsList.reduce((sum, value) => sum + value, 0) / winsList.length : 0
+  const avgLoss =
+    lossList.length > 0
+      ? Math.abs(lossList.reduce((sum, value) => sum + value, 0) / lossList.length)
+      : 0
+  return {
+    ev: winRate * avgWin - lossRate * avgLoss,
+    winRate,
+    lossRate,
+    avgWin,
+    avgLoss,
+    n: pnls.length,
+  }
+}
+
+/** Tooltip EV — odřádkovaný (konvence 27. 8.); rozklad + čtení znaménka. */
+export function evTooltip(stats: EvStats, unit: string): string {
+  const pct = (value: number) => `${Math.round(100 * value)} %`
+  return [
+    'Expected Value = průměrný očekávaný výsledek NA OBCHOD:',
+    `(WinRate × AvgWin) − (LossRate × AvgLoss)`,
+    `= ${pct(stats.winRate)} × ${stats.avgWin.toFixed(0)} ${unit} − ${pct(stats.lossRate)} × ${stats.avgLoss.toFixed(0)} ${unit}`,
+    `= ${stats.ev >= 0 ? '+' : ''}${stats.ev.toFixed(0)} ${unit} (n=${stats.n})`,
+    '',
+    'Čtení:',
+    '• EV > 0 — přístup dlouhodobě vydělává peníze',
+    '• EV < 0 — přístup dlouhodobě ztrácí peníze',
+    '',
+    'V jednotkách R je EV totéž co Ø R — tady je v penězích a s rozkladem,',
+    'ať je vidět, KTERÁ složka výsledek táhne.',
+  ].join('\n')
+}
+
 export function formatPnlUsd(value: number): string {
   const rounded = Math.round(value * 100) / 100
   return `${rounded > 0 ? '+' : ''}${rounded} $`

@@ -1208,6 +1208,14 @@ denní bilance v dolarech (na 1 kontrakt, stejná konvence jako Σ P/L
 v historickém souhrnu: zisk zeleně, ztráta červeně), <strong>kolik procent účtu se
 vydělalo nebo prodělalo</strong> a <strong>kolik procent bylo maximálně v riziku</strong>. Řez je
 podle <strong>Globex seance</strong>, ne kalendářního dne, takže nedělní večer patří pondělí.</p>
+<p><strong>EV / obchod (Expected Value):</strong> v historickém souhrnu na Setupech a jako
+karta ve Stats → Výkon setupů. Vzorec: (Win Rate × Avg Win) − (Loss Rate ×
+Avg Loss) — průměrný očekávaný výsledek na jeden obchod. <strong>EV &gt; 0 znamená,
+že přístup dlouhodobě vydělává peníze; EV &lt; 0, že dlouhodobě ztrácí.</strong>
+Na Setupech je EV v dolarech na 1 kontrakt, ve Stats v jednotkách R
+(kde je číselně totéž co Ø R) — přidaná hodnota je v <strong>rozkladu</strong>: na první
+pohled vidíš, jestli výsledek táhne win rate, velikost výher, nebo ho sráží
+velikost proher. Tooltip dlaždice i karty nese celý dosazený výpočet.</p>
 <p><strong>Kontra-režimový filtr:</strong> obchod proti gamma režimu (long v negativní gammě / short v pozitivní — „fade v červeném&quot;, nejčastější ztráta z kap. 18) má u odrazu od zdi a neúspěšného průrazu přísnější podmínky: musí ho potvrdit CumΔ přes delší okno (30 min), jinak setup nevznikne. A po kontra setupu uzavřeném na stop má stejná šablona 45min pauzu na další kontra pokus — brání sérii ztrát v trendovém dni. Potvrzené setupy poznáš v zdůvodnění podle „Kontra-režim potvrzen tokem&quot;.</p>
 <hr>
 <h2>15. Stavová lišta — co znamenají údaje</h2>
