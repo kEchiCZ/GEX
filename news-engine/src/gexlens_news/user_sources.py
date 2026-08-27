@@ -78,9 +78,11 @@ def seed_user_source_settings(engine: Engine) -> int:
 
 
 def read_list_setting(engine: Engine, key: str) -> list[str]:
-    """Seznam řetězců z `settings`; chybějící klíč nebo cizí tvar → prázdno.
+    """AKTIVNÍ položky seznamu z `settings`; chybějící klíč / cizí tvar → prázdno.
 
-    Cizí tvar se loguje — tichý fallback by vypadal jako „uživatel vše smazal".
+    Prefix ``#`` značí VYPNUTOU položku (#918): UI jím umožňuje položku
+    (i defaultní) dočasně vypnout bez mazání — tady se přeskakuje. Cizí tvar
+    se loguje — tichý fallback by vypadal jako „uživatel vše smazal".
     """
     with engine.connect() as conn:
         row = conn.execute(
@@ -90,7 +92,8 @@ def read_list_setting(engine: Engine, key: str) -> list[str]:
         return []
     value = row.value
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        return [item.strip() for item in value if item.strip()]
+        stripped = [item.strip() for item in value if item.strip()]
+        return [item for item in stripped if not item.startswith("#")]
     logger.warning("Klíč %s nemá tvar seznamu řetězců (%r) — ignoruje se", key, type(value))
     return []
 

@@ -31,24 +31,26 @@ const SOURCES = [
 ]
 
 function mockApi() {
+  // Stavový mock: PUT mění settings, další GET je vrací — jako skutečné API.
+  // Bez toho by reload po uložení vrátil editor do původního stavu.
+  const settings: Record<string, unknown> = {
+    news_bluesky_authors: ['cnbc.com', 'did:plc:x'],
+    news_reddit_subreddits: ['wallstreetbets', 'stocks'],
+    news_rss_extra: [],
+  }
   const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
     const target = String(url)
     if (init?.method === 'PATCH') return { ok: true, json: async () => ({}) }
-    if (init?.method === 'PUT') return { ok: true, json: async () => ({}) }
+    if (init?.method === 'PUT') {
+      const key = target.slice(target.lastIndexOf('/') + 1)
+      settings[key] = (JSON.parse(String(init.body)) as { value: unknown }).value
+      return { ok: true, json: async () => ({}) }
+    }
     if (target.includes('/news/sources')) {
       return { ok: true, json: async () => ({ days: 7, sources: SOURCES }) }
     }
     if (target.includes('/settings')) {
-      return {
-        ok: true,
-        json: async () => ({
-          settings: {
-            news_bluesky_authors: ['cnbc.com', 'did:plc:x'],
-            news_reddit_subreddits: ['wallstreetbets', 'stocks'],
-            news_rss_extra: [],
-          },
-        }),
-      }
+      return { ok: true, json: async () => ({ settings: { ...settings } }) }
     }
     return { ok: false, status: 404, json: async () => ({}) }
   })
@@ -85,22 +87,48 @@ test('přepnutí zdroje pošle PATCH /news/sources/{source}', async () => {
   })
 })
 
-test('editor kurátorů: předvyplní uložený seznam, uloží PUT bez prázdných řádků', async () => {
+function lastPutBody(fetchMock: ReturnType<typeof mockApi>): unknown {
+  const puts = fetchMock.mock.calls.filter(
+    ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
+  )
+  const last = puts[puts.length - 1]
+  return last ? JSON.parse(String((last[1] as RequestInit).body)) : undefined
+}
+
+test('editor kurátorů: vypnutí položky je vratné (prefix #), smazání položku odebere', async () => {
   const fetchMock = mockApi()
   render(<NewsSourcesSection />)
-  const editor = (await screen.findByLabelText('Bluesky kurátoři')) as HTMLTextAreaElement
-  await waitFor(() => expect(editor.value).toBe('cnbc.com\ndid:plc:x'))
-  // Uživatel smaže default a přidá vlastní DID — mazání je legální operace
-  fireEvent.change(editor, { target: { value: 'did:plc:muj\n\n  bloomberg.com  \n' } })
-  fireEvent.click(screen.getAllByRole('button', { name: 'Uložit' })[0])
+  // Uložený seznam se předvyplní jako položky s checkboxy (#cnbc.com by byl vypnutý)
+  const toggle = (await screen.findByLabelText(
+    'Bluesky kurátoři: cnbc.com aktivní',
+  )) as HTMLInputElement
+  expect(toggle.checked).toBe(true)
+  // Vypnutí (#918): položka zůstává v seznamu, uloží se s prefixem #
+  fireEvent.click(toggle)
   await waitFor(() => {
-    const put = fetchMock.mock.calls.find(
-      ([, init]) => (init as RequestInit | undefined)?.method === 'PUT',
-    )
-    expect(put).toBeDefined()
-    expect(String(put?.[0])).toContain('/settings/news_bluesky_authors')
-    expect(JSON.parse(String((put?.[1] as RequestInit).body))).toEqual({
-      value: ['did:plc:muj', 'bloomberg.com'],
+    expect(lastPutBody(fetchMock)).toEqual({ value: ['#cnbc.com', 'did:plc:x'] })
+  })
+  // Zpětné zapnutí prefix zase sundá — vypnutí je vratné, na rozdíl od smazání
+  fireEvent.click(screen.getByLabelText('Bluesky kurátoři: cnbc.com aktivní'))
+  await waitFor(() => {
+    expect(lastPutBody(fetchMock)).toEqual({ value: ['cnbc.com', 'did:plc:x'] })
+  })
+  // Smazání ✕ položku odebere úplně
+  fireEvent.click(screen.getByRole('button', { name: 'Smazat did:plc:x' }))
+  await waitFor(() => {
+    expect(lastPutBody(fetchMock)).toEqual({ value: ['cnbc.com'] })
+  })
+})
+
+test('editor kurátorů: přidání nové položky přes input (Enter i tlačítko)', async () => {
+  const fetchMock = mockApi()
+  render(<NewsSourcesSection />)
+  const input = await screen.findByLabelText('Bluesky kurátoři: nová položka')
+  fireEvent.change(input, { target: { value: '  bloomberg.com  ' } })
+  fireEvent.keyDown(input, { key: 'Enter' })
+  await waitFor(() => {
+    expect(lastPutBody(fetchMock)).toEqual({
+      value: ['cnbc.com', 'did:plc:x', 'bloomberg.com'],
     })
   })
 })

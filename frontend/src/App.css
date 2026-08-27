@@ -1551,25 +1551,66 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   gap: 16px;
 }
 
-.news-source-editor label {
+.news-source-editor {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  align-items: flex-start;
 }
 
 .news-source-editor-label {
   cursor: help;
 }
 
-.news-source-editor textarea {
+/* Položky s checkboxem (#918): vypnutí je vratné, mazání ne */
+.news-source-items {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
   min-width: 240px;
-  font-family: inherit;
+}
+
+.news-source-items li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 1px 0;
+}
+
+.news-source-items li label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.news-source-item-off span {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.news-source-item-remove {
+  background: none;
+  border: none;
+  color: var(--text);
+  opacity: 0.5;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.news-source-item-remove:hover {
+  opacity: 1;
+  color: #f0616d;
+}
+
+.news-source-editor-actions input {
+  min-width: 170px;
   font-size: 12px;
   background: var(--panel, #1a1f28);
   color: var(--text);
   border: 1px solid var(--border, #2a2f3a);
   border-radius: 4px;
-  padding: 6px;
+  padding: 4px 6px;
 }
 
 .news-source-editor-actions {
