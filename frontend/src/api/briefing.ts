@@ -173,6 +173,68 @@ export function ivRankTooltip(rows: IvRankRow[]): string {
   return parts.join('\n')
 }
 
+/** Rich/cheap prémie (#875, D5): spread percentilů implied − realized.
+
+Heuristika, ne měření: obě strany jsou percentily RŮZNÝCH veličin (30d IV
+index z #871 vs. rozsah seance z ADR-0028) — spread říká, jestli trh platí
+za pohyb víc, než kolik se ho reálně děje. Práh ±20 p. b. je vědomá volba
+(menší rozdíl je šum percentilů), zdokumentováno v manuálu. */
+export const PREMIUM_SPREAD_THRESHOLD = 0.2
+
+export interface PremiumReading {
+  /** IV percentil − HV percentil, −1..1. */
+  spread: number
+  label: 'rich' | 'neutral' | 'cheap'
+  ivPercentile: number
+  hvPercentile: number
+}
+
+/** Null = chybí IVR nebo vol režim — žádný default (AC #875). */
+export function premiumReading(
+  ivRows: IvRankRow[],
+  vol: VolRegimeRow | null,
+): PremiumReading | null {
+  const primary = ivRankPrimary(ivRows)
+  if (primary?.iv_percentile == null || vol === null) return null
+  const spread = primary.iv_percentile - vol.percentile
+  // Epsilon: p60 − p40 je ve floatech 0,19999… a hrana prahu by uhýbala
+  const eps = 1e-9
+  const label =
+    spread >= PREMIUM_SPREAD_THRESHOLD - eps
+      ? 'rich'
+      : spread <= -(PREMIUM_SPREAD_THRESHOLD - eps)
+        ? 'cheap'
+        : 'neutral'
+  return { spread, label, ivPercentile: primary.iv_percentile, hvPercentile: vol.percentile }
+}
+
+/** Text řádku: „rich: IV p85 vs. HV p40 — trh platí za hedge". */
+export function premiumLabel(reading: PremiumReading): string {
+  const pair = `IV p${Math.round(100 * reading.ivPercentile)} vs. HV p${Math.round(100 * reading.hvPercentile)}`
+  if (reading.label === 'rich') return `rich: ${pair} — trh platí za hedge`
+  if (reading.label === 'cheap') return `cheap: ${pair} — trh pohyb podceňuje`
+  return `neutrální: ${pair}`
+}
+
+/** Tooltip prémie — odřádkovaný (pravidlo 27. 8.), kontext dne, ne signál. */
+export function premiumTooltip(reading: PremiumReading): string {
+  const spreadPb = Math.round(100 * reading.spread)
+  return [
+    'Rich/cheap prémie = spread percentilů: IV percentil (co trh OCEŇUJE, #871)',
+    'minus percentil realizovaného rozsahu seance (co se reálně DĚJE, ADR-0028).',
+    `Dnes: ${spreadPb >= 0 ? '+' : ''}${spreadPb} p. b.`,
+    '',
+    'Čtení (kontext dne — neříká směr ani vstup):',
+    '• rich (≥ +20 p. b.) — trh platí za hedge víc, než kolik se hýbe;',
+    '  typicky intenzivnější dealer hedging flow kolem zdí',
+    '• neutrální (±20 p. b.) — ocenění odpovídá realizovanému pohybu',
+    '• cheap (≤ −20 p. b.) — prémie levná vůči reálnému rozsahu;',
+    '  trh pohyb podceňuje (pozor u průrazů)',
+    '',
+    'Heuristika: obě strany jsou percentily různých veličin — čti jako kontext.',
+  ].join('\n')
+}
+
 /** Souhrn /emrespect — jak často close končí uvnitř pásma EM (#872). */
 export interface EmRespectSummary {
   window_days: number

@@ -769,6 +769,20 @@ Jak číst jednotlivé řádky:
   očekávání, prémie dražší · **p80–100** drahá prémie, stres kolem událostí
   (široké EM). Hranice jsou vodítko, ne signál — p1 tedy čti jako „očekávaný
   pohyb u ročního minima", ne jako pokyn něco udělat.
+- **Prémie (IV × HV)** (v1.12, #875) — spread percentilů: **IV percentil**
+  (co trh do budoucna OCEŇUJE) minus **percentil realizovaného rozsahu
+  seance** (co se reálně DĚJE, řádek „Režim"). **Proč z pohledu tradera:**
+  „rich" prémie znamená, že trh platí za hedge víc, než kolik se hýbe —
+  typicky intenzivnější dealer hedging flow kolem zdí (tlumící mechanika
+  gammy má víc paliva); „cheap" při vysokém realizovaném rozsahu znamená,
+  že trh pohyb podceňuje — pozor u průrazů. **Jak číst:** rich ≥ +20 p. b.,
+  neutrální ±20, cheap ≤ −20; je to **kontext dne, ne signál** — neříká směr
+  ani vstup. Typické kombinace: rich × negativní gamma = nervozita se platí
+  i žije (momentum prostředí), cheap × pozitivní gamma = klid oceněný jako
+  klid (fade prostředí). **Limity:** obě strany jsou percentily různých
+  veličin (30d implied index vs. rozsah jedné seance), spread je heuristika
+  a práh ±20 p. b. vědomá volba — menší rozdíl je šum percentilů. Bez IVR
+  nebo vol režimu řádek poctivě říká „bez dat", nic se nedosazuje.
 - **EM drží** — kalibrace důvěry: v kolika % posledních seancí skončil
   close uvnitř pásma EM (teoreticky ~68 %; skutečné číslo měří engine
   po každém settle). Vyšší číslo ⇒ fade od hranic pásma má statistiku
