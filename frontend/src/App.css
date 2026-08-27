@@ -2274,6 +2274,11 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   font-size: 11px;
 }
 
+/* EV na obchod (#911): tooltip s rozkladem drží konvenci cursor:help */
+.stats-ev {
+  cursor: help;
+}
+
 /* Drift hlídka (#403) */
 .stats-drift-badge {
   color: #e8c14b;

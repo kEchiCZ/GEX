@@ -121,6 +121,10 @@ test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
   // Od „Σ dnes (1 kontrakt)“ (27. 8.) nese text víc dlaždic — stačí, že existují
   expect(screen.getAllByText(/1 kontrakt/).length).toBeGreaterThan(0)
   expect(screen.getByText(/účet 5k/)).toBeDefined()
+  // EV / obchod (#911): jediný uzavřený obchod +696 $ → EV = +696 $, tooltip s rozkladem
+  const evTile = screen.getByTestId('setups-ev')
+  expect(evTile.textContent).toBe('+696 $')
+  expect(evTile.getAttribute('title')).toContain('dlouhodobě vydělává')
 
   // Ruční hodnocení: 👍 pošle PATCH na /setups/ES/7/review
   fireEvent.click(screen.getByRole('button', { name: 'Setup 7 vyšel' }))

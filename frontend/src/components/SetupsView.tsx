@@ -4,7 +4,7 @@ Predikce jsou neměnné — jediná mutace je rating (+1/−1) a poznámka; hodn
 je kvalitativní vrstva a nevstupuje do automatické kalibrace confidence.
 */
 import { useState } from 'react'
-import { ACCOUNT_START_USD, STATUS_LABELS, dailyStats, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import { ACCOUNT_START_USD, STATUS_LABELS, dailyStats, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel , evStats, evTooltip } from '../api/setups' // prettier-ignore
 import { currentMechanicsVersion } from '../setups/performance'
 import { sessionDateIso } from '../instrument/tz'
 import type { SetupRow } from '../api/setups'
@@ -101,6 +101,12 @@ export function SetupsView() {
   // P/L v USD na 1 kontrakt (#185) — CME hodnota bodu instrumentu
   const pointUsd = pointValue(symbol)
   const totalPnl = closed.reduce((sum, row) => sum + (setupPnlUsd(row, pointUsd) ?? 0), 0)
+  // EV na obchod (#911): z týchž uzavřených obchodů jako Σ P/L (1 kontrakt)
+  const ev = evStats(
+    closed
+      .map((row) => setupPnlUsd(row, pointUsd))
+      .filter((value): value is number => value !== null),
+  )
   // % P/L vůči startovnímu účtu 5 000 $ na ticker (#191) — s fixní bází je
   // součet procent setupů roven celkovému zhodnocení účtu
   const totalPct = (totalPnl / ACCOUNT_START_USD) * 100
@@ -151,6 +157,17 @@ export function SetupsView() {
           <span className="stat-label muted">Σ P/L (1 kontrakt)</span>
           <span className={`stat-value ${pnlClass}`} data-testid="setups-total-pnl">
             {closed.length > 0 ? formatPnlUsd(totalPnl) : '—'}
+          </span>
+        </div>
+        <div className="stat">
+          {/* EV na obchod (#911): USD + rozklad v tooltipu; v R ≡ Ø R */}
+          <span className="stat-label muted">EV / obchod</span>
+          <span
+            className={`stat-value ${(ev?.ev ?? 0) >= 0 ? 'r-positive' : 'r-negative'}`}
+            data-testid="setups-ev"
+            title={ev ? evTooltip(ev, '$') : undefined}
+          >
+            {ev ? formatPnlUsd(ev.ev) : '—'}
           </span>
         </div>
         <div className="stat">
