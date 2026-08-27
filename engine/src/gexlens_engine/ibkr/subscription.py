@@ -199,14 +199,20 @@ class ReqIdTombstones:
             return
         self._last_record = now
         wrapper = getattr(ib, "wrapper", None)
-        registry = getattr(wrapper, "ticker2ReqId", {}).get("mktData", {})
-        for ticker, req_id in list(registry.items()):
-            contract = getattr(ticker, "contract", None)
-            label = contract_label(contract)
-            if label == UNKNOWN_CONTRACT:
-                continue
-            symbol = str(getattr(contract, "symbol", "") or "")
-            self._entries[int(req_id)] = (now, label, symbol)
+        # VŠECHNY tickTypes, ne jen "mktData" (27. 8.): tick-by-tick hot zóny
+        # se registruje pod 'AllLast'/'BidAsk' — vzorkování jediného klíče
+        # nechalo 100 % nočních chyb 354/300 anonymních (rotace hot zóny při
+        # pohybu ATM ruší právě tyhle streamy).
+        registries = getattr(wrapper, "ticker2ReqId", {})
+        for tick_type, registry in list(registries.items()):
+            suffix = "" if tick_type == "mktData" else f" [{tick_type}]"
+            for ticker, req_id in list(registry.items()):
+                contract = getattr(ticker, "contract", None)
+                label = contract_label(contract)
+                if label == UNKNOWN_CONTRACT:
+                    continue
+                symbol = str(getattr(contract, "symbol", "") or "")
+                self._entries[int(req_id)] = (now, label + suffix, symbol)
         self._prune(now)
 
     def lookup(self, req_id: int, *, now: float) -> tuple[str, str] | None:

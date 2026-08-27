@@ -27,6 +27,16 @@ logger = logging.getLogger(__name__)
 #: tiše mlčely a vypadalo to jako chybějící data u konkrétního kontraktu.
 SUBSCRIPTION_PAUSE_S = 0.25
 
+#: Strop adaptivního rozestupu po rate limitu (#863): každé odmítnutí rozestup
+#: zdvojí, takže opakovaný resubscribe konverguje k tempu, které server bere.
+SUBSCRIPTION_PAUSE_MAX_S = 2.0
+
+#: Samoléčení po rate limitu (#863): server u odmítnuté dávky neřekne, KTERÉ
+#: symboly zahodil — jediná spolehlivá oprava je poslat celou cílovou množinu
+#: znovu (add je idempotentní). Čeká se na klid po poslední chybě, ať se
+#: neposílá do běžícího limitu.
+RATE_LIMIT_HEAL_QUIET_S = 10.0
+
 #: Typy zpráv, které protokol posílá běžně — nelogují se (#845)
 _EXPECTED_TYPES = frozenset({"SETUP", "AUTH_STATE", "CHANNEL_OPENED", "FEED_CONFIG", "KEEPALIVE"})
 KEEPALIVE_INTERVAL_S = 25.0
@@ -79,6 +89,11 @@ class DxLinkStream:
         self._priority: frozenset[str] = frozenset()
         self.errors = 0
         self.last_error: str | None = None
+        #: Rate limit subskripcí (#863): počet odmítnutí + stav samoléčení
+        self.rate_limited = 0
+        self._pause_s = SUBSCRIPTION_PAUSE_S
+        self._rate_limit_ts: float | None = None
+        self._last_keepalive = 0.0
 
     @property
     def connected(self) -> bool:
@@ -145,6 +160,26 @@ class DxLinkStream:
         """
         self._priority = symbols
 
+    def _note_server_error(self, message: dict[str, object]) -> None:
+        """ERROR ze serveru: počítadla + detekce rate limitu subskripcí (#863).
+
+        Odmítnuté symboly by tiše mlčely — označí se čas pro samoléčení
+        a rozestup dávek se zdvojí (se stropem), ať opakování konverguje.
+        """
+        self.errors += 1
+        self.last_error = str(message.get("message") or message)
+        logger.error("DXLink ERROR: %s", message)
+        if "subscription rate" in self.last_error.lower():
+            self.rate_limited += 1
+            self._rate_limit_ts = time.monotonic()
+            self._pause_s = min(self._pause_s * 2, SUBSCRIPTION_PAUSE_MAX_S)
+
+    def _heal_due(self, now: float) -> bool:
+        """Je čas na samoléčebný resubscribe? Až po zklidnění rate limitu."""
+        return (
+            self._rate_limit_ts is not None and now - self._rate_limit_ts > RATE_LIMIT_HEAL_QUIET_S
+        )
+
     async def _send_subscription(
         self, add: set[str], remove: frozenset[str] | set[str] = frozenset()
     ) -> None:
@@ -168,8 +203,14 @@ class DxLinkStream:
                 await self._send(payload)
                 # Bez rozestupu server dávky odmítá (#845) a odmítnuté
                 # symboly pak tiše mlčí — viz `Your subscription rate is
-                # too high` v produkci při ~4 700 symbolech
-                await asyncio.sleep(SUBSCRIPTION_PAUSE_S)
+                # too high` v produkci při ~4 700 symbolech. Rozestup je
+                # adaptivní (#863): po rate limitu se zdvojí.
+                await asyncio.sleep(self._pause_s)
+                # Dlouhý (zpomalený) resubscribe nesmí prošvihnout keepalive —
+                # se stropem 2 s na dávku trvá plná množina přes minutu (#863)
+                if time.monotonic() - self._last_keepalive > KEEPALIVE_INTERVAL_S:
+                    await self._send({"type": "KEEPALIVE", "channel": 0})
+                    self._last_keepalive = time.monotonic()
 
     async def _connect_and_read(self, stop: asyncio.Event) -> None:
         url, token = await self._token_source()
@@ -214,11 +255,26 @@ class DxLinkStream:
                 async with self._lock:
                     await self._send_subscription(add=set(self._symbols))
 
-                last_keepalive = time.monotonic()
+                self._last_keepalive = time.monotonic()
                 while not stop.is_set():
-                    if time.monotonic() - last_keepalive > KEEPALIVE_INTERVAL_S:
+                    if time.monotonic() - self._last_keepalive > KEEPALIVE_INTERVAL_S:
                         await self._send({"type": "KEEPALIVE", "channel": 0})
-                        last_keepalive = time.monotonic()
+                        self._last_keepalive = time.monotonic()
+                    # Samoléčení po rate limitu (#863): po zklidnění poslat
+                    # celou cílovou množinu znovu (idempotentní add) — server
+                    # nehlásí, které dávky zahodil, a odmítnuté symboly by
+                    # jinak mlčely až do reconnectu. Pomalejší `_pause_s`
+                    # zajistí, že opakování konverguje.
+                    if self._heal_due(time.monotonic()):
+                        self._rate_limit_ts = None
+                        async with self._lock:
+                            targets = set(self._symbols)
+                            logger.warning(
+                                "DXLink rate limit: opakuji subskripci %d symbolů (à %.2f s)",
+                                len(targets),
+                                self._pause_s,
+                            )
+                            await self._send_subscription(add=targets)
                     try:
                         raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
                     except TimeoutError:
@@ -233,9 +289,7 @@ class DxLinkStream:
                     # „symbol mlčí" (#845; totéž stálo za nedělním hledáním
                     # v #616, kdy ES extended mlčelo po přetečení kapacity).
                     if msg_type == "ERROR":
-                        self.errors += 1
-                        self.last_error = str(message.get("message") or message)
-                        logger.error("DXLink ERROR: %s", message)
+                        self._note_server_error(message)
                     elif msg_type not in _EXPECTED_TYPES:
                         logger.info("DXLink neznámá zpráva %s: %s", msg_type, message)
             finally:
