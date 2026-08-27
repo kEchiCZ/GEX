@@ -121,6 +121,70 @@ def band_metrics(profile: GexProfile, price: float) -> BandMetrics | None:
     )
 
 
+@dataclass(frozen=True)
+class BandZone:
+    """Geometrie tlumící zóny v CENÁCH (#577) — kotvy pro T9 probe.
+
+    Kotví se na pásmo, ne na body ani ATR — třetí cesta, kterou hledá #434:
+    šířka zóny je odvozená z profilu positioningu a nese se napříč instrumenty.
+    """
+
+    all_low: float  # spodní hrana All (price)
+    all_high: float  # horní hrana All (price)
+    center: float
+    width: float
+    #: Nejvyšší hodnota váženého profilu NAD cenou / globální maximum (0–1) —
+    #: „leží jádro pásma nad hlavou?" (podmínka 2 z #577)
+    strength_above: float
+
+
+def band_zone(profile: GexProfile, price: float) -> BandZone | None:
+    """Hrany tlumící zóny kolem/nad cenou; None = neurčitelné (kraj mřížky)."""
+    if not profile.values or profile.grid_step <= 0:
+        return None
+    weighted = _weighted(profile)
+    top = max(weighted)
+    if top <= 0.0:
+        return None
+    position = (price - profile.grid_start) / profile.grid_step
+    if position < 0 or position > len(weighted) - 1:
+        return None
+    t_all = BAND_ALL_SHARE * top
+    low = int(position)
+    anchor_idx = (
+        low
+        if weighted[low] >= weighted[min(low + 1, len(weighted) - 1)]
+        else min(low + 1, len(weighted) - 1)
+    )
+    # Hrana zóny může ležet nad cenou (cena pod pásmem) — hledá se od
+    # nejbližšího uzlu S nejvyšší hodnotou směrem vzhůru, pak dolů od něj
+    peak_above = anchor_idx
+    for index in range(anchor_idx, len(weighted)):
+        if weighted[index] > weighted[peak_above]:
+            peak_above = index
+    start = peak_above if weighted[peak_above] > t_all else anchor_idx
+    if weighted[start] <= t_all:
+        return None
+    all_low = _crossing(weighted, start, -1, t_all)
+    all_high = _crossing(weighted, start, 1, t_all)
+    if all_low is None or all_high is None:
+        return None
+    low_price = profile.grid_start + all_low * profile.grid_step
+    high_price = profile.grid_start + all_high * profile.grid_step
+    width = high_price - low_price
+    if width <= 0:
+        return None
+    above = [value for index, value in enumerate(weighted) if index >= position]
+    strength_above = max(above) / top if above else 0.0
+    return BandZone(
+        all_low=low_price,
+        all_high=high_price,
+        center=(low_price + high_price) / 2,
+        width=width,
+        strength_above=round(strength_above, 4),
+    )
+
+
 def band_context(profile: GexProfile | None, price: float) -> dict[str, float]:
     """Klíče do `context` JSON setupu; prázdný dict = nezměřeno (bez lhaní)."""
     if profile is None or not math.isfinite(price):
