@@ -209,6 +209,32 @@ test('crosshair z heatmapy se propaguje do jiného panelu přes kontext', () => 
   expect(reader.textContent).toBe('none')
 })
 
+test('mousemove uvnitř jedné buňky negeneruje React commit (#492)', () => {
+  const grid = demoGrid(100, 10)
+  let renders = 0
+  function CountingReader() {
+    const { position } = useCrosshair()
+    renders += 1
+    return <output data-testid="counting-reader">{position ? position.minuteIdx : 'none'}</output>
+  }
+  render(
+    <CrosshairProvider>
+      <Heatmap grid={grid} style="gradient" contours="off" />
+      <CountingReader />
+    </CrosshairProvider>,
+  )
+  const overlay = screen.getByRole('img', { name: 'GEX heatmapa' })
+  fireEvent.pointerMove(overlay, { clientX: 60, clientY: 66 })
+  const after = renders
+  // Buňka je 12×64 px — pohyb o 3 px zůstává v buňce (minuta 5, týž strike)
+  fireEvent.pointerMove(overlay, { clientX: 63, clientY: 68 })
+  fireEvent.pointerMove(overlay, { clientX: 61, clientY: 70 })
+  expect(renders).toBe(after) // žádný commit konzumenta
+  // Přechod do vedlejší buňky commitne právě jednou
+  fireEvent.pointerMove(overlay, { clientX: 75, clientY: 66 })
+  expect(renders).toBe(after + 1)
+})
+
 test('crosshair drží i mimo svíce (prázdná/budoucí plocha) — issue #109', () => {
   const grid = demoGrid(100, 10) // canvas 1200×640, krok 12 px → data končí na 1200 px
   render(
