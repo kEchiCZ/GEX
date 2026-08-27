@@ -209,6 +209,26 @@ def test_news_feed_scheduled_direction(client: TestClient) -> None:
     assert "surprise_direction" not in by_title["Fed holds rates"]
 
 
+def test_news_sources_report(client: TestClient) -> None:
+    """#578 B: audit pokrytí — registr + realita, neregistrované zdroje viditelně."""
+    app = cast(FastAPI, client.app)
+    engine = app.state.meta_repository.engine()
+    from gexlens_engine.storage.sentiment import seed_news_sources
+
+    seed_news_sources(engine)
+    payload = client.get("/news/sources").json()
+    sources = {row["source"]: row for row in payload["sources"]}
+    # Fixture má rss_news event → počítá se do okna i dneška
+    assert sources["rss_news"]["tier"] == "core"
+    assert sources["rss_news"]["events_window"] >= 1
+    assert sources["rss_news"]["last_event_ts"] is not None
+    # Registrovaný zdroj bez eventů zůstává viditelný s nulou (audit, ne dojem)
+    assert sources["bluesky"]["events_window"] == 0
+    assert sources["bluesky"]["significant_share"] is None
+    # forexfactory event z fixture (scheduled) — zdroj v reportu
+    assert "forexfactory" in sources
+
+
 def test_topics_series_and_shares(client: TestClient) -> None:
     """#566 fáze 1+2: řada per téma + rozpad příspěvků za období."""
     payload = client.get("/sentiment/topics/series", params={"days": 1}).json()

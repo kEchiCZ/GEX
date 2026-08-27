@@ -18,7 +18,7 @@ from typing import Any
 import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import Table, desc, func, insert, select
+from sqlalchemy import Table, case, desc, func, insert, select
 from sqlalchemy import update as sql_update
 from sqlalchemy.engine import Engine
 
@@ -32,6 +32,7 @@ from gexlens_engine.storage.sentiment import (
     news_prediction_outcomes,
     news_predictions,
     news_reactions,
+    news_sources,
     review_queue,
     sentiment_daily,
     sentiment_waves,
@@ -220,6 +221,77 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         _attach_topic_values(engine_factory(), rows)
         _attach_scheduled_directions(rows)
         return {"news": rows}
+
+    @router.get("/news/sources")
+    def news_sources_report(days: int = Query(7, ge=1, le=90)) -> dict[str, object]:
+        """Audit pokrytí zdrojů (#578 B): registr + realita za okno.
+
+        Per zdroj: tier, čekaný denní objem, dnešní počet, denní průměr okna,
+        podíl významných (importance ≥ 2 se skóre) a čas poslední události.
+        Latence vůči prvnímu jinému zdroji téže zprávy tu ZATÍM není — dedup
+        duplicitní kopie zahazuje, páry nejsou uložené (poctivé follow-up,
+        ne tichý dojem).
+        """
+        engine = engine_factory()
+        now = dt.datetime.now(dt.UTC)
+        since = now - dt.timedelta(days=days)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        stmt = (
+            select(
+                news_events.c.source,
+                func.count().label("events"),
+                func.max(news_events.c.ts_event).label("last_ts"),
+                func.sum(
+                    case(
+                        (
+                            (news_events.c.importance >= 2)
+                            & news_events.c.sentiment_score.is_not(None),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("significant"),
+                func.sum(case((news_events.c.ts_event >= today_start, 1), else_=0)).label("today"),
+            )
+            .where(news_events.c.ts_event >= since)
+            .group_by(news_events.c.source)
+        )
+        with engine.connect() as conn:
+            reality = {row.source: row for row in conn.execute(stmt)}
+            registry = [dict(row._mapping) for row in conn.execute(select(news_sources))]
+        known = {entry["source"] for entry in registry}
+        # Zdroje mimo registr se hlásí taky — registr má popisovat realitu
+        for source in reality:
+            if source not in known:
+                registry.append(
+                    {
+                        "source": source,
+                        "tier": "neregistrovaný",
+                        "expected_daily_volume": None,
+                        "enabled": True,
+                        "notes": None,
+                    }
+                )
+        report = []
+        for entry in registry:
+            row = reality.get(entry["source"])
+            events = int(row.events) if row else 0
+            report.append(
+                {
+                    **entry,
+                    "events_window": events,
+                    "events_today": int(row.today) if row else 0,
+                    "daily_avg": round(events / days, 1),
+                    "significant_share": (
+                        round(int(row.significant) / events, 3) if row and events else None
+                    ),
+                    "last_event_ts": (
+                        row.last_ts.isoformat() if row and row.last_ts is not None else None
+                    ),
+                }
+            )
+        report.sort(key=lambda item: -item["events_window"])
+        return {"days": days, "sources": report}
 
     @router.get("/news/upcoming")
     def news_upcoming(hours: int = Query(24, ge=1, le=168)) -> dict[str, object]:

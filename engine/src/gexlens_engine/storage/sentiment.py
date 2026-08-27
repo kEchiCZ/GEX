@@ -130,6 +130,54 @@ news_events = Table(
 # Append-only verzování (S11): každý průchod klasifikace přidá řádek, nikdy
 # nepřepisuje. Umožňuje rekonstruovat, co systém věděl v libovolném okamžiku —
 # bez toho by zpětná reklasifikace tiše měnila minulé predikce.
+# Registr zdrojů (#578 A): popis reality zdrojů — tier se ZATÍM nikam
+# nepropisuje do vah (nejdřív popis, pak měření auditem B, teprve pak váhy).
+news_sources = Table(
+    "news_sources",
+    sentiment_metadata,
+    Column("source", String(32), primary_key=True),
+    # core = páteřní, extra = doplňkový, test = testovací (nový zdroj na zkoušku)
+    Column("tier", String(8), nullable=False),
+    Column("expected_daily_volume", Integer, nullable=True),
+    Column("enabled", Boolean, nullable=False, default=True),
+    Column("notes", Text, nullable=True),
+)
+
+#: Výchozí registr — insert-if-missing, ruční úpravy v DB se nepřepisují
+NEWS_SOURCE_SEED: tuple[tuple[str, str, int | None, str], ...] = (
+    ("forexfactory", "core", 40, "makro kalendář Tier A (forecast/previous/actual)"),
+    ("fed_rss", "core", 5, "oficiální Fed feedy — statements, projevy"),
+    ("rss_news", "core", 300, "agenturní headline redundance (CNBC/MarketWatch/Yahoo)"),
+    ("ibkr", "extra", 100, "broker páska BRFG + DJNL (tick 292)"),
+    ("alpaca", "extra", 800, "Benzinga WS push — vyžaduje klíče"),
+    ("finnhub", "extra", 200, "doplňkový headline zdroj — vyžaduje klíč"),
+    ("bluesky", "test", 200, "Jetstream firehose, přímá komunikace osob (#578, 27. 8.)"),
+    ("reddit_rss", "test", 50, "r/wallstreetbets + r/stocks hot přes nativní RSS (#578)"),
+)
+
+
+def seed_news_sources(engine: Engine) -> int:
+    """Doplní chybějící řádky registru; existující (ručně editované) nechává."""
+    from sqlalchemy import select as _select
+
+    with engine.begin() as conn:
+        existing = {row.source for row in conn.execute(_select(news_sources.c.source))}
+        rows = [
+            {
+                "source": source,
+                "tier": tier,
+                "expected_daily_volume": volume,
+                "enabled": True,
+                "notes": notes,
+            }
+            for source, tier, volume, notes in NEWS_SOURCE_SEED
+            if source not in existing
+        ]
+        if rows:
+            conn.execute(news_sources.insert(), rows)
+    return len(rows)
+
+
 news_classifications = Table(
     "news_classifications",
     sentiment_metadata,

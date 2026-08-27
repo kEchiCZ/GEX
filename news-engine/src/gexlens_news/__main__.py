@@ -19,18 +19,20 @@ from collections.abc import Sequence
 
 from sqlalchemy import create_engine
 
-from gexlens_engine.storage.sentiment import ensure_sentiment_schema
+from gexlens_engine.storage.sentiment import ensure_sentiment_schema, seed_news_sources
 from gexlens_news.anomaly_job import AnomalyJob
 from gexlens_news.bars import BarsRepository
 from gexlens_news.classification_job import RuleClassificationJob
 from gexlens_news.collectors import Collector
 from gexlens_news.collectors.alpaca import AlpacaNewsStream
+from gexlens_news.collectors.bluesky import BlueskyStream
 from gexlens_news.collectors.finnhub import FinnhubCollector
 from gexlens_news.collectors.forexfactory import ForexFactoryCollector
 from gexlens_news.collectors.rss import RssCollector
 from gexlens_news.config import (
     FED_RSS_URLS,
     NEWS_RSS_URLS,
+    REDDIT_RSS_URLS,
     NewsSettings,
     load_news_settings,
 )
@@ -84,6 +86,18 @@ def build_collectors(settings: NewsSettings, fetcher: Fetcher) -> list[Collector
         # Tier B (#272): redundantní headline zdroje; dedup je slučuje (#273)
         RssCollector("rss_news", NEWS_RSS_URLS, fetcher, interval_s=settings.rss_interval_s),
     ]
+    if settings.reddit_rss_enabled:
+        # Reddit nativně přes RSS (#578) — žádný bridge; tier testovací,
+        # audit pokrytí (B) rozhodne, jestli zdroj stojí za váhu
+        collectors.append(
+            RssCollector(
+                "reddit_rss",
+                REDDIT_RSS_URLS,
+                fetcher,
+                interval_s=settings.reddit_rss_interval_s,
+                kind="social",
+            )
+        )
     if settings.finnhub_api_key:
         collectors.append(
             FinnhubCollector(
@@ -98,6 +112,10 @@ def build_collectors(settings: NewsSettings, fetcher: Fetcher) -> list[Collector
 async def run(settings: NewsSettings) -> None:
     engine = create_engine(settings.database_url, pool_pre_ping=True)
     ensure_sentiment_schema(engine)
+    # Registr zdrojů (#578 A): insert-if-missing — ruční editace se nepřepisují
+    seeded = seed_news_sources(engine)
+    if seeded:
+        logger.info("Registr zdrojů: doplněno %d výchozích řádků (#578)", seeded)
     # Pořadí dle SPEC 3.1: normalizer → dedup → writer
     writer = DedupingWriter(NewsWriter(engine), window_minutes=settings.dedup_window_minutes)
     writer.prime_from_db(dt.datetime.now(dt.UTC))
@@ -354,6 +372,32 @@ async def run(settings: NewsSettings) -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=settings.llm_interval_s)
 
+    async def bluesky_loop() -> None:
+        """Bluesky Jetstream (#578) — veřejný firehose, filtr klientsky."""
+        if not settings.bluesky_enabled:
+            logger.info("Bluesky vypnuto (GEXLENS_NEWS_BLUESKY_ENABLED=false)")
+            return
+        curated = [d.strip() for d in settings.bluesky_curated_authors.split(",") if d.strip()]
+        stream = BlueskyStream(writer, curated_authors=curated)
+        task = asyncio.create_task(stream.run(stop))
+        last_seen = -1
+        try:
+            while not stop.is_set():
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=600.0)
+                if stop.is_set():
+                    break
+                if stream.seen != last_seen:
+                    last_seen = stream.seen
+                    logger.info(
+                        "Bluesky: %d postů viděno, %d kurzotvorných, %d nad povodňový strop",
+                        stream.seen,
+                        stream.matched,
+                        stream.flood_dropped,
+                    )
+        finally:
+            await task
+
     async def alpaca_loop() -> None:
         """Alpaca news WS (#387) — push stream s reconnectem; bez klíčů nic."""
         if not settings.alpaca_key_id or not settings.alpaca_secret:
@@ -404,6 +448,7 @@ async def run(settings: NewsSettings) -> None:
         crowd_loop(),
         ff_actual_loop(),
         alpaca_loop(),
+        bluesky_loop(),
     )
     logger.info("news-engine ukončen")
 
