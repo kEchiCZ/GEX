@@ -1,4 +1,5 @@
-/** Chip IV percentilu v hlavičce (#871) — vedle badge gamma režimu.
+/** Chip IV percentilu v hlavičce (#871) — vpravo vedle chipu sentimentu
+(přesun na žádost uživatele 27. 8.).
 
 Primárně percentil řady `ibkr` (rozhodnutí uživatele 26. 8.: robustní a
 konzistentní s vol režimem ADR-0028); IV Rank a tasty křížová kontrola žijí
