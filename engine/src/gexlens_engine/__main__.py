@@ -29,6 +29,7 @@ from gexlens_engine.adapters import (
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import outside_us_rth
+from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.diagnostics import install_stack_dump
@@ -112,6 +113,7 @@ from gexlens_engine.storage.volregime_store import VolRegimeRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
+from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow
 from gexlens_engine.tasty.devrun import run_tasty_only
 from gexlens_engine.tasty.extended import (
     build_snapshot_rows,
@@ -122,12 +124,12 @@ from gexlens_engine.tasty.extended import (
 )
 from gexlens_engine.tasty.greeks_validator import GreeksAlert, GreeksValidator
 from gexlens_engine.tasty.monitor import MAX_AGE_MS, FeedMonitor, tracked_symbols
-from gexlens_engine.tasty.provider import TastyChainCache
+from gexlens_engine.tasty.provider import TastyChainCache, _number
 from gexlens_engine.tasty.session import TastyCredentials, TastySession
 from gexlens_engine.tasty.spot_fallback import SpotFallback
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
-from gexlens_engine.tasty.trades_recorder import TradesRecorder
+from gexlens_engine.tasty.trades_recorder import TradesRecorder, _flag
 from gexlens_engine.tasty.wideoi import wide_contracts, wide_records, wide_streamers
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.volregime import VolRegimeCollector
@@ -1195,11 +1197,28 @@ async def main() -> None:
         # Recorder surových opčních printů (#795): učicí data, která jinak
         # nenávratně mizí. Fan-out callbacku — cache i recorder vidí tytéž eventy.
         trades_recorder = TradesRecorder() if settings.tasty_trades_record else None
+        # Stínové CumΔ z TimeAndSale (#615 fáze 3, varianta B — rozhodnutí
+        # uživatele 27. 8.): měřicí řada per symbol, živé CumΔ se nemění
+        dx_shadows: dict[str, DxCumDeltaShadow] = {}
 
         def _tasty_event(event_type: str, values: list[object]) -> None:
             tasty_cache.on_event(event_type, values)
             if trades_recorder is not None:
                 trades_recorder.on_event(event_type, values)
+            if dx_shadows and event_type == "TimeAndSale" and values:
+                streamer = str(values[0])
+                state = tasty_cache.state(streamer)
+                trade_size = _number(values[3]) if len(values) > 3 else None
+                trade_aggressor = values[4] if len(values) > 4 else None
+                trade_spread = _flag(values[5]) if len(values) > 5 else None
+                for dx_shadow in dx_shadows.values():
+                    dx_shadow.on_trade(
+                        streamer,
+                        size=trade_size,
+                        aggressor=(trade_aggressor if isinstance(trade_aggressor, str) else None),
+                        spread_leg=trade_spread,
+                        delta=state.greeks.delta if state is not None else None,
+                    )
             # CVD podkladu (#829): tracker si sám vybere jen printy
             # registrovaných front futures, opční projdou bez práce
             futures_cvd.on_event(event_type, values)
@@ -1218,6 +1237,17 @@ async def main() -> None:
                 # Rate limit subskripcí (#863): počet odmítnutí serverem
                 "tasty_rate_limited": tasty_stream.rate_limited,
                 "tasty_symbols": tasty_cache.symbols_tracked(),
+                # Stínové CumΔ (#615): denní podíly pro spread_leg ADR a fallback
+                **(
+                    {
+                        "tasty_dx_shadow": {
+                            dx_symbol: dx_shadow.day_stats()
+                            for dx_symbol, dx_shadow in sorted(dx_shadows.items())
+                        }
+                    }
+                    if dx_shadows
+                    else {}
+                ),
                 # Rozpad plánu subskripcí per účel (#863) — až po prvním refreshi
                 **({"tasty_symbol_breakdown": dict(symbol_breakdown)} if symbol_breakdown else {}),
                 "tasty_quotes": counts["quotes"],
@@ -1526,6 +1556,25 @@ async def main() -> None:
                             )
                             purpose["wide"] |= wide_syms
                             symbols |= wide_syms
+                        # Stínové CumΔ (#615 fáze 3): univerzum = aktivní řetěz
+                        # pipeline; spot pro zóny se obnovuje i minutovým flushem
+                        if settings.tasty_dx_cumdelta and pipe is not None:
+                            active_specs = list(pipe.runtime.contracts)
+                            universe = {}
+                            for active_spec in active_specs:
+                                streamer_sym = chain.streamer_symbol(active_spec)
+                                if streamer_sym is not None:
+                                    universe[streamer_sym] = active_spec
+                            if universe:
+                                dx_shadow = dx_shadows.get(symbol)
+                                if dx_shadow is None:
+                                    dx_shadow = DxCumDeltaShadow(
+                                        multiplier=float(active_specs[0].multiplier or 1.0)
+                                    )
+                                    dx_shadows[symbol] = dx_shadow
+                                dx_shadow.set_universe(universe)
+                                spot_price, spot_fresh = _tasty_spot(symbol)
+                                dx_shadow.set_spot(spot_price if spot_fresh else None)
                         # Podklad (#614): bez něj by při výpadku IBKR zamrzl
                         # cenový graf, i kdyby řetěz z tasty tekl dál
                         front = await symbol_map.front_future(symbol)
@@ -1750,6 +1799,34 @@ async def main() -> None:
                 if stopped:
                     return
 
+        async def dx_cum_flush_loop() -> None:
+            """Minutová uzávěrka stínového CumΔ (#615) do derived/cumdelta_dx.
+
+            Spot se obnovuje každou minutu (zóny sledují ATM); roll seance
+            resetuje kumulativy stejně jako živé CumΔ. Poslední uzávěrka
+            proběhne i po stopu, ať se rozdělaná minuta neztratí.
+            """
+            while True:
+                stopped = shadow_stop.is_set()
+                if not stopped:
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(shadow_stop.wait(), timeout=60.0)
+                        stopped = True
+                try:
+                    now = dt.datetime.now(dt.UTC)
+                    session = trading_session_date(now)
+                    minute = now.replace(second=0, microsecond=0)
+                    for dx_symbol, dx_shadow in list(dx_shadows.items()):
+                        spot_price, spot_fresh = _tasty_spot(dx_symbol)
+                        dx_shadow.set_spot(spot_price if spot_fresh else None)
+                        dx_shadow.roll_session(session)
+                        row = dx_shadow.close_minute(minute)
+                        await asyncio.to_thread(writer.write_dx_flow, dx_symbol, session, [row])
+                except Exception:
+                    logger.exception("Uzávěrka stínového CumΔ selhala — příští minuta jede dál")
+                if stopped:
+                    return
+
         shadow_tasks = [
             asyncio.create_task(tasty_stream.run(shadow_stop)),
             asyncio.create_task(monitor.run(shadow_stop)),
@@ -1759,6 +1836,12 @@ async def main() -> None:
         if trades_recorder is not None:
             shadow_tasks.append(asyncio.create_task(trades_flush_loop()))
             logger.info("Záznam opčních TimeAndSale printů ZAPNUT (#795) → data/trades/")
+        if settings.tasty_dx_cumdelta:
+            shadow_tasks.append(asyncio.create_task(dx_cum_flush_loop()))
+            logger.info(
+                "Stínové CumΔ z TimeAndSale ZAPNUTO (#615 fáze 3, shadow) → "
+                "derived/cumdelta_dx/ — živé CumΔ se nemění"
+            )
         if settings.tasty_extended_enabled:
             shadow_tasks.append(asyncio.create_task(extended_snapshot_loop()))
             logger.info(

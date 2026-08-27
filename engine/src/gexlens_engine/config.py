@@ -153,6 +153,9 @@ class Settings(BaseSettings):
     # dnes nenávratně mizí — proto default zapnuto; podklad se nezaznamenává
     # (miliony printů/den, CumΔ podkladu nese IBKR větev).
     tasty_trades_record: bool = True
+    # Stínové CumΔ z TimeAndSale (#615 fáze 3, shadow): paralelní měřicí řada,
+    # živé CumΔ ani detektory se nemění — vypnutí zastaví jen sběr měření
+    tasty_dx_cumdelta: bool = True
     # Dev laboratoř jen s tastytrade (#623, start-dev.ps1 -LiveTasty): engine
     # přeskočí IBKR úplně a jen streamuje chain do cache s heartbeat logem.
     # Produkce se flagu nedotýká — default vypnuto.

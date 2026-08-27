@@ -98,6 +98,26 @@ TASTY_TRADES_SCHEMA = pa.schema(
     ]
 )
 
+# Stínové CumΔ z dxFeed TimeAndSale (#615 fáze 3, shadow) — minutová řada
+# per zóna vlastnictví; živé CumΔ se nemění, tohle je měření před přepnutím
+DX_FLOW_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("flow_ring", pa.float64()),
+        ("cum_ring", pa.float64()),
+        ("flow_ring_outright", pa.float64()),
+        ("cum_ring_outright", pa.float64()),
+        ("flow_hot", pa.float64()),
+        ("cum_hot", pa.float64()),
+        ("trades", pa.int64()),
+        ("spread_trades", pa.int64()),
+        ("unknown_side", pa.int64()),
+        ("volume", pa.float64()),
+        ("spread_volume", pa.float64()),
+        ("dropped_no_context", pa.int64()),
+    ]
+)
+
 # 1min bary podkladu (pro cenový overlay, spot v OTM/ITM módech a replay)
 BARS_SCHEMA = pa.schema(
     [
@@ -883,6 +903,16 @@ class SnapshotWriter:
             ],
             key="ts_min",
         )
+
+    def write_dx_flow(self, symbol: str, day: dt.date, rows: Sequence[object]) -> Path:
+        """Stínové CumΔ minuty (#615) do derived/{sym}/cumdelta_dx/{date}.parquet.
+
+        Retence derived/ (14 dní) tu stačí: řada slouží ~10sekčnímu měření
+        pro spread_leg ADR a vyčíslení rozdílu vs. živé CumΔ.
+        """
+        path = self._settings.derived_dir / symbol / "cumdelta_dx" / f"{day.isoformat()}.parquet"
+        buffer = self._buffer(path, DX_FLOW_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])  # type: ignore[call-overload]
 
     def write_flow(self, symbol: str, day: dt.date, rows: Sequence[FlowRowLike]) -> Path:
         """Přidá flowΔ/CumΔ minuty do partice derived/{sym}/flow/{date}.parquet."""
