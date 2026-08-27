@@ -17,6 +17,7 @@ from gexlens_engine.config import Settings
 from gexlens_engine.storage.sentiment import (
     ensure_sentiment_schema,
     news_events,
+    news_reactions,
     sentiment_daily,
 )
 
@@ -229,6 +230,77 @@ def test_topic_events_listing(client: TestClient) -> None:
     assert [e["title"] for e in payload["events"]] == ["Fed holds rates"]
     assert payload["events"][0]["sentiment_score"] == pytest.approx(0.4)
     assert client.get("/sentiment/topics/NESMYSL/events").status_code == 404
+
+
+def test_stats_newsvol_aggregates_daily(client: TestClient) -> None:
+    """#567: denní průměr |ret_bp|, kontaminované mimo, min_sample filtruje."""
+    app = cast(FastAPI, client.app)
+    engine = app.state.meta_repository.engine()
+    with engine.begin() as conn:
+        # Třetí event téhož dne — PK reakcí je (event, symbol, okno)
+        third = conn.execute(
+            insert(news_events).values(
+                ts_event=NOW - dt.timedelta(minutes=30),
+                ts_ingested=NOW,
+                source="rss_news",
+                kind="headline",
+                title="Kontaminovaná zpráva",
+                category="OTHER",
+                importance=2,
+                symbols=[],
+                market_closed=False,
+                dedup_hash="c",
+                raw={},
+            )
+        ).inserted_primary_key
+        assert third is not None
+        conn.execute(
+            insert(news_reactions),
+            [
+                {
+                    "event_id": 1,
+                    "symbol": "ES",
+                    "window_min": 5,
+                    "ret_bp": 10.0,
+                    "range_bp": 12.0,
+                    "contaminated": False,
+                    "computed_at": NOW,
+                },
+                {
+                    "event_id": 2,
+                    "symbol": "ES",
+                    "window_min": 5,
+                    "ret_bp": -30.0,
+                    "range_bp": 35.0,
+                    "contaminated": False,
+                    "computed_at": NOW,
+                },
+                # Kontaminované okno nesmí do agregace (SPEC 5.1)
+                {
+                    "event_id": int(third[0]),
+                    "symbol": "ES",
+                    "window_min": 5,
+                    "ret_bp": 500.0,
+                    "range_bp": 500.0,
+                    "contaminated": True,
+                    "computed_at": NOW,
+                },
+            ],
+        )
+    payload = client.get("/stats/newsvol", params={"min_sample": 2}).json()
+    assert payload["window_min"] == 5
+    assert len(payload["series"]) == 1
+    point = payload["series"][0]
+    assert point["value"] == pytest.approx(20.0)  # (|10| + |−30|) / 2
+    assert point["sample"] == 2
+    assert payload["bands"] == {
+        "min": point["value"],
+        "max": point["value"],
+        "mean": point["value"],
+    }
+    # min_sample nad počtem reakcí → den vypadne a pásma jsou null
+    empty = client.get("/stats/newsvol", params={"min_sample": 5}).json()
+    assert empty["series"] == [] and empty["bands"] is None
 
 
 def test_later_milestone_endpoints_hold_shape(client: TestClient) -> None:

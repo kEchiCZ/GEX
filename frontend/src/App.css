@@ -2789,3 +2789,20 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   text-decoration: none;
   padding: 0 4px;
 }
+
+/* Index volatility zpráv (#567): řada + pásma průměr/max */
+.newsvol-line {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.newsvol-mean {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+}
+
+.newsvol-max {
+  stroke: var(--down);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}

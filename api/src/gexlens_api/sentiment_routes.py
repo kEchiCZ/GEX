@@ -741,6 +741,58 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
             "strength": strength,
         }
 
+    @router.get("/stats/newsvol")
+    def stats_newsvol(
+        symbol: str = "ES",
+        window: int = Query(5, ge=1, le=14400),
+        min_sample: int = Query(3, ge=1, le=100),
+    ) -> dict[str, object]:
+        """Index volatility zpráv (#567): denní průměr |ret_bp| měřených reakcí.
+
+        Směr a velikost jsou dvě informace — SentIndex říká KAM, tohle JAK MOC
+        trh na zprávy reaguje. Odvozená řada (žádný nový sběr): agreguje se
+        nad `news_reactions` bez kontaminovaných oken (SPEC 5.1); den pod
+        `min_sample` reakcí se vynechává (tenký den by lhal extrémem).
+        Pásma min/max/průměr přes celou historii dávají hodnotě měřítko.
+        """
+        stmt = (
+            select(
+                func.date(news_events.c.ts_event).label("day"),
+                func.avg(func.abs(news_reactions.c.ret_bp)).label("value"),
+                func.count().label("sample"),
+            )
+            .select_from(
+                news_reactions.join(news_events, news_events.c.id == news_reactions.c.event_id)
+            )
+            .where(
+                news_reactions.c.symbol == symbol,
+                news_reactions.c.window_min == window,
+                news_reactions.c.contaminated.is_(False),
+            )
+            .group_by(func.date(news_events.c.ts_event))
+            .order_by(func.date(news_events.c.ts_event))
+        )
+        with engine_factory().connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        series: list[dict[str, object]] = []
+        values: list[float] = []
+        for row in rows:
+            if int(row.sample) < min_sample:
+                continue
+            value = float(row.value)
+            values.append(value)
+            series.append({"date": str(row.day), "value": value, "sample": int(row.sample)})
+        bands = (
+            {
+                "min": min(values),
+                "max": max(values),
+                "mean": sum(values) / len(values),
+            }
+            if values
+            else None
+        )
+        return {"symbol": symbol, "window_min": window, "series": series, "bands": bands}
+
     @router.get("/stats/waves")
     def stats_waves() -> dict[str, object]:
         """Statistika vln — N8 (#297)."""

@@ -42,6 +42,7 @@ import {
   signalHitRate,
 } from '../stats/trackrecord'
 import { currentWave, depthReading, histogram, waveDirectionStats } from '../stats/waves'
+import { NewsVolSection } from './NewsVolSection'
 import { useAppState } from '../state/AppState'
 import { JournalStats } from './JournalStats'
 
@@ -590,6 +591,8 @@ export function StatsView() {
         </div>
       </section>
 
+      {/* Index volatility zpráv (#567): velikost reakcí — směr říká SentIndex */}
+      <NewsVolSection symbol={symbol} />
       <section className="stats-section" aria-label="Hit-raty bucketů">
         <h2>
           Empirický model — hit-raty bucketů ({symbol},{' '}

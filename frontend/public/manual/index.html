@@ -772,6 +772,10 @@ víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.</p>
 <td>Historie RISK ON/OFF vln — hloubka, délka, četnost per směr. Hloubky jsou od v1.11 <strong>v jednotkách σ škály</strong> (#640): řada má dvě éry s různým měřítkem (backfill osciloval v ±0,4, bohatší živý feed dává násobně větší denní součty) a dělení σ(100 seancí) je činí srovnatelnými — 2 σ znamená „dvakrát větší výchylka než běžný den&quot;, ať vlna proběhla loni nebo dnes. Surová hodnota zůstává v textu aktuální vlny</td>
 </tr>
 <tr>
+<td><strong>Volatilita zpráv</strong> (v1.12, #567)</td>
+<td>Denní průměr |naměřené reakce| na zprávy (bp, okno 5 min, kontaminovaná okna mimo) s <strong>dlouhodobými pásmy min/průměr/max</strong> přes celou historii (~2 roky). <strong>Proč:</strong> směr a velikost jsou dvě různé informace — SentIndex říká KAM nálada táhne, tenhle index JAK MOC trh na zprávy reaguje; bez pásem nepoznáš, jestli je číslo velké. <strong>Jak číst:</strong> u minima trh zprávy ignoruje (klid), kolem průměru běžný provoz, u maxima panika/euforie (každá zpráva hýbe trhem) — obdoba Fear &amp; Greed, jen rychlejší. Sekce vypisuje i <strong>největší naměřené vrcholy jmenovitě</strong> — musí sedět na známé epizody (5. 8. 2024 VIX spike apod.), jinak ukazatel nefunguje a poznáš to hned</td>
+</tr>
+<tr>
 <td><strong>Hit-raty bucketů</strong></td>
 <td>Empirický model reakcí na zprávy: úspěšnost per kategorie × důležitost × překvapení, přepínač <strong>okna reakce</strong> (+5/+15/+30/+60 min) a <strong>režimu</strong> (vše / RiskOn / RiskOff / Neutral / gamma ±), progres ke gate</td>
 </tr>
