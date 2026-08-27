@@ -48,6 +48,7 @@ from gexlens_engine.ibkr.scheduler import (
 )
 from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.ivrank import IvRankCollector
+from gexlens_engine.probes import T9ProbeCollector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository, collect_alpha_calibration
@@ -303,6 +304,8 @@ class InstrumentPipeline:
     em_respect: EmRespectCollector | None = None
     # IV Rank — tři denní řady IV (#871) — None = vypnuto
     iv_rank: IvRankCollector | None = None
+    # Sběr výskytů kandidáta T9 (#577, fáze 1 jen měření) — None = vypnuto
+    t9_probes: T9ProbeCollector | None = None
     # Denní FA validace po OI archivu (#232) — None = vypnuto
     fa_repository: FaValidationRepository | None = None
     # Ranní kalibrace α po OI archivu (#232 fáze 2) — None = vypnuto
@@ -873,6 +876,12 @@ class InstrumentPipeline:
                 await self.setup_engine.on_minute(now, spot, bars, self.runtime)
             except Exception:
                 logger.exception("Setup detektor %s selhal — pokračuji", self.symbol)
+        # Kandidát T9 (#577, fáze 1) — tichý sběr, stejný kontrakt pádu
+        if self.t9_probes is not None:
+            try:
+                await self.t9_probes.on_minute(now, spot, bars, self.runtime)
+            except Exception:
+                logger.exception("T9 probe sběr %s selhal — pokračuji", self.symbol)
         # Indikátor tendence (#350) — stejný kontrakt: pád nesmí shodit sběr
         if self.tendency_engine is not None:
             try:
