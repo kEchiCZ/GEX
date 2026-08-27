@@ -118,7 +118,8 @@ test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
   expect(screen.getByTestId('setups-total-pnl').textContent).toBe('+696 $')
   expect(screen.getByTestId('setups-total-pct').textContent).toBe('+13.92 %')
   expect(screen.getByText('Ø R')).toBeDefined()
-  expect(screen.getByText(/1 kontrakt/)).toBeDefined()
+  // Od „Σ dnes (1 kontrakt)“ (27. 8.) nese text víc dlaždic — stačí, že existují
+  expect(screen.getAllByText(/1 kontrakt/).length).toBeGreaterThan(0)
   expect(screen.getByText(/účet 5k/)).toBeDefined()
 
   // Ruční hodnocení: 👍 pošle PATCH na /setups/ES/7/review
