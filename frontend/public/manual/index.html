@@ -953,8 +953,14 @@ a v nervózních trzích; nízko (p20−) = prémie levné, trh je klidný
 ročním minimem a maximem — číslo známé z retail platforem; percentil
 je robustnější, jeden spike ho nezkreslí) a křížová kontrola z
 tastytrade (jiná konstrukce indexu, čísla se záměrně nemíchají).
-Stejná hodnota je i <strong>chipem v hlavičce</strong> vedle badge gamma režimu:
-režim říká TYP obchodu, IV percentil říká, jak draho je dnešek oceněný.</li>
+Stejná hodnota je i <strong>chipem v hlavičce</strong> („IV p11&quot;) vpravo vedle chipu
+sentimentu (od v1.12): režim/tendence/sentiment říkají SMĚR a TYP obchodu,
+IV percentil říká, jak draho je dnešek oceněný. Tooltip chipu nese
+orientační pásma: <strong>p0–20</strong> prémie levné, trh čeká malý pohyb (úzké EM;
+klid umí podcenit riziko) · <strong>p20–50</strong> běžné pásmo · <strong>p50–80</strong> zvýšené
+očekávání, prémie dražší · <strong>p80–100</strong> drahá prémie, stres kolem událostí
+(široké EM). Hranice jsou vodítko, ne signál — p1 tedy čti jako „očekávaný
+pohyb u ročního minima&quot;, ne jako pokyn něco udělat.</li>
 <li><strong>EM drží</strong> — kalibrace důvěry: v kolika % posledních seancí skončil
 close uvnitř pásma EM (teoreticky ~68 %; skutečné číslo měří engine
 po každém settle). Vyšší číslo ⇒ fade od hranic pásma má statistiku

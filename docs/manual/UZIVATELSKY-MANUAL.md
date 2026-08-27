@@ -761,8 +761,14 @@ Jak číst jednotlivé řádky:
   ročním minimem a maximem — číslo známé z retail platforem; percentil
   je robustnější, jeden spike ho nezkreslí) a křížová kontrola z
   tastytrade (jiná konstrukce indexu, čísla se záměrně nemíchají).
-  Stejná hodnota je i **chipem v hlavičce** vedle badge gamma režimu:
-  režim říká TYP obchodu, IV percentil říká, jak draho je dnešek oceněný.
+  Stejná hodnota je i **chipem v hlavičce** („IV p11") vpravo vedle chipu
+  sentimentu (od v1.12): režim/tendence/sentiment říkají SMĚR a TYP obchodu,
+  IV percentil říká, jak draho je dnešek oceněný. Tooltip chipu nese
+  orientační pásma: **p0–20** prémie levné, trh čeká malý pohyb (úzké EM;
+  klid umí podcenit riziko) · **p20–50** běžné pásmo · **p50–80** zvýšené
+  očekávání, prémie dražší · **p80–100** drahá prémie, stres kolem událostí
+  (široké EM). Hranice jsou vodítko, ne signál — p1 tedy čti jako „očekávaný
+  pohyb u ročního minima", ne jako pokyn něco udělat.
 - **EM drží** — kalibrace důvěry: v kolika % posledních seancí skončil
   close uvnitř pásma EM (teoreticky ~68 %; skutečné číslo měří engine
   po každém settle). Vyšší číslo ⇒ fade od hranic pásma má statistiku

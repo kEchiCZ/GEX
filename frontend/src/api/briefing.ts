@@ -148,9 +148,13 @@ export function ivRankPrimary(rows: IvRankRow[]): IvRankRow | null {
 /** Tooltip IVR: rank + tasty kontrola — vše, co se do řádku nevešlo. */
 export function ivRankTooltip(rows: IvRankRow[]): string {
   const parts: string[] = [
-    'IV percentil = podíl dnů v klouzavém roce s nižší 30d IV podkladu (řada IBKR). ' +
-      'Vysoko = trh platí za pohyb neobvykle mnoho; nízko = prémie jsou levné. ' +
-      'Neříká směr — jen kolik pohybu se čeká.',
+    'IV percentil = podíl dnů v klouzavém roce s nižší 30d IV podkladu (řada IBKR): ' +
+      'p1 znamená, že jen 1 % dnů za rok mělo IV níž — dnešní očekávaný pohyb je ' +
+      'u ročního minima. Neříká směr — jen kolik pohybu trh oceňuje.',
+    'Orientační pásma: p0–20 prémie levné, trh čeká malý pohyb (úzké EM — pozor, ' +
+      'klid umí podcenit riziko) · p20–50 běžné pásmo · p50–80 zvýšené očekávání, ' +
+      'prémie dražší · p80–100 drahá prémie, stres kolem událostí (široké EM). ' +
+      'Hranice jsou vodítko, ne signál.',
   ]
   const ibkr = rows.find((row) => row.source === 'ibkr')
   if (ibkr?.iv_rank != null) {

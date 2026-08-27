@@ -271,13 +271,14 @@ export function InstrumentHeader({
             {REGIME_LABELS[regimeInfo.state]}
           </span>
         )}
-        {/* IV percentil (#871): kontext implied volatility vedle gamma režimu —
-        režim říká TYP obchodu, IVR říká, jak draho trh oceňuje dnešní pohyb */}
-        <IvRankChip />
         {/* Souhrnná tendence ceny (#350) — úplně nahoře, jedním pohledem */}
         <TendencyChip />
         {/* Chip RiskOn/RiskOff/Neutral (#295, SPEC 9.0) — news sentiment vedle GEX režimu */}
         <StateChip />
+        {/* IV percentil (#871): jak draho trh oceňuje dnešní pohyb. Vpravo
+        vedle sentimentu (přesun na žádost uživatele 27. 8.) — režim/tendence/
+        sentiment říkají SMĚR a TYP, IVR cenu pohybu */}
+        <IvRankChip />
         {/* Aktivní fallback na tastytrade (#614) — ADR-0025 pravidlo 5 zakazuje
         tiché přepnutí zdroje. Chip svítí JEN při fallbacku: za normálního
         provozu by trvalé „zdroj: IBKR" jen zabíralo místo. */}
