@@ -40,6 +40,14 @@ RATE_LIMIT_HEAL_QUIET_S = 10.0
 #: Typy zpráv, které protokol posílá běžně — nelogují se (#845)
 _EXPECTED_TYPES = frozenset({"SETUP", "AUTH_STATE", "CHANNEL_OPENED", "FEED_CONFIG", "KEEPALIVE"})
 KEEPALIVE_INTERVAL_S = 25.0
+
+#: Transportní ping websockets knihovny (#916). Default ping_timeout=20 s byl
+#: přísnější než trvání plné subskripce (~44 dávek à 2 s ≈ 90 s po rate
+#: limitu): server během subscribe bloku ping nezodpověděl včas, klient
+#: spojení sám zabil a subskripce se NIKDY nedokončila — smyčka reconnectů,
+#: fallback #614 bez dat. Timeout musí subskripci s rezervou přežít; mrtvé
+#: spojení dál hlídá protokolový KEEPALIVE (vyjednaných 60 s) + backoff.
+PING_TIMEOUT_S = 120.0
 SUBSCRIPTION_BATCH = 500
 _BACKOFF_START_S = 1.0
 _BACKOFF_MAX_S = 60.0
@@ -214,7 +222,12 @@ class DxLinkStream:
 
     async def _connect_and_read(self, stop: asyncio.Event) -> None:
         url, token = await self._token_source()
-        async with websockets.connect(url, max_size=2**24) as ws:
+        async with websockets.connect(
+            url,
+            max_size=2**24,
+            ping_interval=KEEPALIVE_INTERVAL_S,
+            ping_timeout=PING_TIMEOUT_S,
+        ) as ws:
             self._ws = ws
             try:
                 await self._send(
@@ -254,6 +267,14 @@ class DxLinkStream:
                 await self._recv_until("FEED_CONFIG")
                 async with self._lock:
                     await self._send_subscription(add=set(self._symbols))
+                    # Dokončení musí být v logu vidět (#916): smyčka smrti se
+                    # poznala až z nepřímých příznaků, protože nedoběhnutá
+                    # subskripce nikde nechyběla
+                    logger.info(
+                        "DXLink subskripce kompletní: %d symbolů (à %.2f s)",
+                        len(self._symbols),
+                        self._pause_s,
+                    )
 
                 self._last_keepalive = time.monotonic()
                 while not stop.is_set():

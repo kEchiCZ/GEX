@@ -86,3 +86,39 @@ async def test_dlouhy_resubscribe_proplete_keepalive(
     await stream._send_subscription(add=symbols)
     keepalives = [payload for payload in sent if payload.get("type") == "KEEPALIVE"]
     assert len(keepalives) >= 1
+
+
+async def test_connect_ma_ping_timeout_prezivajici_subskripci(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#916: transportní ping_timeout musí přežít plnou subskripci.
+
+    Default websockets (20 s) byl kratší než resubscribe na stropu rozestupu
+    (~90 s) — klient spojení zabil dřív, než subskripce doběhla, a stream se
+    točil ve smyčce reconnectů (12:29–? 27. 8., fallback #614 bez dat).
+    """
+    stream, _sent = make_stream()
+    captured: dict[str, object] = {}
+
+    class _FailConnect:
+        def __init__(self, url: str, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+        async def __aenter__(self) -> None:
+            raise RuntimeError("konec testu — zajímají nás jen kwargs")
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+    import websockets
+
+    import gexlens_engine.tasty.stream as stream_module
+
+    monkeypatch.setattr(websockets, "connect", _FailConnect)
+    with pytest.raises(RuntimeError):
+        await stream._connect_and_read(asyncio.Event())
+    assert captured["ping_timeout"] == stream_module.PING_TIMEOUT_S
+    # Timeout musí s rezervou pokrýt nejpomalejší plnou subskripci: všechny
+    # symboly z produkce (#863: ~5 600 × 4 eventy / 500 na dávku) à strop 2 s
+    worst_batches = (5_600 * 4) / SUBSCRIPTION_BATCH
+    assert worst_batches * SUBSCRIPTION_PAUSE_MAX_S < stream_module.PING_TIMEOUT_S
