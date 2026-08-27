@@ -32,12 +32,30 @@ const TIER_LABELS: Record<string, string> = {
   test: 'testovací',
 }
 
-/** Seznam ↔ textarea: řádek = položka; prázdné řádky a mezery se zahazují. */
-function parseLines(text: string): string[] {
-  return text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
+/** Položka seznamu (#918): prefix `#` v uložené hodnotě = vypnutá.
+
+Konvence komentáře drží tvar settings (seznam řetězců) i validaci API beze
+změny; news-engine položky s `#` přeskakuje v `read_list_setting`.
+*/
+interface ListItem {
+  value: string
+  enabled: boolean
+}
+
+function parseItems(stored: string[]): ListItem[] {
+  return stored
+    .map((raw) => raw.trim())
+    .filter((raw) => raw !== '')
+    .map((raw) =>
+      raw.startsWith('#')
+        ? { value: raw.replace(/^#+\s*/, ''), enabled: false }
+        : { value: raw, enabled: true },
+    )
+    .filter((item) => item.value !== '')
+}
+
+function serializeItems(items: ListItem[]): string[] {
+  return items.map((item) => (item.enabled ? item.value : `#${item.value}`))
 }
 
 function ListEditor({
@@ -46,56 +64,97 @@ function ListEditor({
   placeholder,
   hint,
   stored,
-  onSaved,
 }: {
   label: string
   settingKey: string
   placeholder: string
   hint: string
   stored: string[]
-  onSaved: () => void
 }) {
-  const [text, setText] = useState(stored.join('\n'))
-  const [dirty, setDirty] = useState(false)
+  const [items, setItems] = useState<ListItem[]>(parseItems(stored))
+  const [draft, setDraft] = useState('')
+  const [edited, setEdited] = useState(false)
   const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  // Data ze serveru dorazila později / po uložení jinde — needitovaný obsah se sladí
+  // Serverová data dorazila později (první načtení) — needitovaný obsah se sladí.
+  // Po první editaci je autoritativní lokální stav: refetch po uložení může
+  // dorazit opožděně a stale odpověď by tiše vrátila starší verzi seznamu.
   useEffect(() => {
-    if (!dirty) setText(stored.join('\n'))
-  }, [stored, dirty])
+    if (!edited) setItems(parseItems(stored))
+  }, [stored, edited])
 
-  const save = () => {
+  // Každá změna se ukládá hned — checkbox s odloženým „Uložit" sváděl
+  // k zapomenutému stavu jen v prohlížeči
+  const save = (next: ListItem[]) => {
+    setItems(next)
+    setEdited(true)
     setState('saving')
-    putSetting(settingKey, parseLines(text))
-      .then(() => {
-        setState('saved')
-        setDirty(false)
-        onSaved()
-      })
+    putSetting(settingKey, serializeItems(next))
+      .then(() => setState('saved'))
       .catch(() => setState('error'))
+  }
+
+  const add = () => {
+    const value = draft.trim()
+    if (value === '' || items.some((item) => item.value === value)) return
+    setDraft('')
+    save([...items, { value, enabled: true }])
   }
 
   return (
     <div className="news-source-editor">
-      <label>
-        <span title={hint} className="news-source-editor-label">
-          {label}
-        </span>
-        <textarea
-          value={text}
-          rows={Math.min(10, Math.max(3, text.split('\n').length + 1))}
+      <span title={hint} className="news-source-editor-label">
+        {label}
+      </span>
+      <ul className="news-source-items" aria-label={label}>
+        {items.map((item) => (
+          <li key={item.value} className={item.enabled ? '' : 'news-source-item-off'}>
+            <label>
+              <input
+                type="checkbox"
+                checked={item.enabled}
+                aria-label={`${label}: ${item.value} aktivní`}
+                onChange={(event) =>
+                  save(
+                    items.map((other) =>
+                      other.value === item.value
+                        ? { ...other, enabled: event.target.checked }
+                        : other,
+                    ),
+                  )
+                }
+              />
+              <span>{item.value}</span>
+            </label>
+            <button
+              type="button"
+              className="news-source-item-remove"
+              aria-label={`Smazat ${item.value}`}
+              title={
+                'Smazat položku.\nSmazané defaulty se už nevracejí — na dočasné odstavení použij checkbox.'
+              }
+              onClick={() => save(items.filter((other) => other.value !== item.value))}
+            >
+              ✕
+            </button>
+          </li>
+        ))}
+        {items.length === 0 && <li className="muted">žádné položky</li>}
+      </ul>
+      <div className="news-source-editor-actions">
+        <input
+          type="text"
+          value={draft}
           placeholder={placeholder}
-          aria-label={label}
-          onChange={(event) => {
-            setText(event.target.value)
-            setDirty(true)
-            setState('idle')
+          aria-label={`${label}: nová položka`}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') add()
           }}
         />
-      </label>
-      <div className="news-source-editor-actions">
-        <button type="button" onClick={save} disabled={state === 'saving' || !dirty}>
-          Uložit
+        <button type="button" onClick={add} disabled={draft.trim() === ''}>
+          Přidat
         </button>
+        {state === 'saving' && <span className="muted">ukládám…</span>}
         {state === 'saved' && <span className="muted">uloženo</span>}
         {state === 'error' && <span className="news-source-error">uložení selhalo</span>}
       </div>
@@ -213,37 +272,37 @@ export function NewsSourcesSection() {
         <ListEditor
           label="Bluesky kurátoři"
           settingKey="news_bluesky_authors"
-          placeholder={'cnbc.com\ndid:plc:…'}
+          placeholder="handle nebo did:plc:…"
           hint={
-            'Autoři, jejichž KAŽDÝ post se bere (handle nebo did:…), jeden na řádek.\n' +
-            'Defaultní účty smíš smazat — už se nevrátí.\n' +
+            'Autoři, jejichž KAŽDÝ post se bere (handle nebo did:…).\n' +
+            'Checkbox položku dočasně vypne (vratné); ✕ ji smaže —\n' +
+            'smazané defaulty se už nevracejí.\n' +
             'Projeví se za běhu do ~10 minut (bez restartu).'
           }
           stored={lists.news_bluesky_authors ?? []}
-          onSaved={load}
         />
         <ListEditor
           label="Reddit subreddity"
           settingKey="news_reddit_subreddits"
-          placeholder={'wallstreetbets\nstocks'}
+          placeholder="subreddit (bez r/)"
           hint={
-            'Subreddity pro nativní RSS (bez r/), jeden na řádek.\n' +
+            'Subreddity pro nativní RSS (bez r/).\n' +
+            'Checkbox položku dočasně vypne (vratné); ✕ ji smaže.\n' +
             'Projeví se po restartu news-engine.'
           }
           stored={lists.news_reddit_subreddits ?? []}
-          onSaved={load}
         />
         <ListEditor
           label="Vlastní RSS feedy"
           settingKey="news_rss_extra"
           placeholder="https://example.com/feed.xml"
           hint={
-            'Libovolné RSS/Atom feedy (plná URL), jeden na řádek.\n' +
+            'Libovolné RSS/Atom feedy (plná URL).\n' +
+            'Checkbox položku dočasně vypne (vratné); ✕ ji smaže.\n' +
             'V auditu se hlásí jako „Vlastní RSS feedy".\n' +
             'Projeví se po restartu news-engine.'
           }
           stored={lists.news_rss_extra ?? []}
-          onSaved={load}
         />
       </div>
       <p className="muted">

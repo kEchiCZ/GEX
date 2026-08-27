@@ -55,6 +55,12 @@ def test_read_list_setting_hrany() -> None:
         conn.execute(insert(settings_table).values(key="mezery", value=["  a ", "", "b"]))
     assert read_list_setting(engine, "rozbite") == []  # cizí tvar → prázdno + log
     assert read_list_setting(engine, "mezery") == ["a", "b"]
+    # Vypnuté položky (#918): prefix # = ponechaná, ale neaktivní položka
+    with engine.begin() as conn:
+        conn.execute(
+            insert(settings_table).values(key="vypnute", value=["cnbc.com", "#bloomberg.com"])
+        )
+    assert read_list_setting(engine, "vypnute") == ["cnbc.com"]
 
 
 def test_source_enabled_map_cte_registr() -> None:

@@ -564,8 +564,10 @@ proklik** — otevře téma v panelu Témata i se zdrojovými zprávami.
   reálně teče (dnešek / denní průměr, podíl významných zpráv, poslední událost)
   a **přepínač Aktivní** — vypnutý zdroj se při startu news-engine vůbec
   nespustí. Pod tabulkou jsou **editovatelné seznamy**: Bluesky kurátoři
-  (handle nebo `did:…`, jejichž každý post se bere — defaultní US-market účty
-  smíš smazat a už se nevrátí), Reddit subreddity a vlastní RSS feedy.
+  (handle nebo `did:…`, jejichž každý post se bere), Reddit subreddity
+  a vlastní RSS feedy. Každá položka má **checkbox** — vypnutí je **vratné**
+  (položka zůstává v seznamu přeškrtnutá a jde kdykoli zase zapnout);
+  **✕ položku smaže nevratně** — smazané defaulty se už nevracejí.
   Bluesky kurátoři se projeví za běhu do ~10 minut; subreddity, vlastní feedy
   a vypnutí zdroje po restartu news-engine.
 
