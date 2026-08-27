@@ -228,6 +228,22 @@ def test_news_sources_report(client: TestClient) -> None:
     # forexfactory event z fixture (scheduled) — zdroj v reportu
     assert "forexfactory" in sources
 
+    # Vypnutí zdroje (#578): PATCH přepne enabled, neznámý zdroj → 404
+    response = client.patch("/news/sources/bluesky", json={"enabled": False})
+    assert response.status_code == 200
+    payload = client.get("/news/sources").json()
+    sources = {row["source"]: row for row in payload["sources"]}
+    assert sources["bluesky"]["enabled"] is False
+    assert client.patch("/news/sources/neexistuje", json={"enabled": True}).status_code == 404
+
+    # Uživatelské seznamy (#578): validní zápis + čtení zpět přes /settings
+    put = client.put("/settings/news_bluesky_authors", json={"value": ["cnbc.com", "did:plc:x"]})
+    assert put.status_code == 200
+    assert client.put("/settings/news_rss_extra", json={"value": []}).status_code == 200
+    stored = client.get("/settings").json()["settings"]
+    assert stored["news_bluesky_authors"] == ["cnbc.com", "did:plc:x"]
+    assert stored["news_rss_extra"] == []
+
 
 def test_topics_series_and_shares(client: TestClient) -> None:
     """#566 fáze 1+2: řada per téma + rozpad příspěvků za období."""

@@ -61,50 +61,92 @@ from gexlens_news.sentindex_job import SentIndexJob
 from gexlens_news.signal_job import SignalJob
 from gexlens_news.store import NewsWriter
 from gexlens_news.track_record import TrackRecordJob
+from gexlens_news.user_sources import (
+    SETTING_BLUESKY_AUTHORS,
+    SETTING_REDDIT_SUBREDDITS,
+    SETTING_RSS_EXTRA,
+    BlueskyAuthorResolver,
+    read_list_setting,
+    reddit_rss_urls,
+    seed_user_source_settings,
+    source_enabled_map,
+)
 from gexlens_news.waves_job import WavesJob
 
 logger = logging.getLogger("gexlens.news")
 
 
-def build_collectors(settings: NewsSettings, fetcher: Fetcher) -> list[Collector]:
+def build_collectors(
+    settings: NewsSettings,
+    fetcher: Fetcher,
+    *,
+    enabled: dict[str, bool] | None = None,
+    reddit_subreddits: Sequence[str] | None = None,
+    extra_rss_urls: Sequence[str] = (),
+) -> list[Collector]:
     """Sada aktivních collectorů dle konfigurace.
 
     Tier A (#271) nepotřebuje klíče — veřejný kalendář a Fed RSS. Zdroje
     s prázdným klíčem se nezakládají vůbec (S10): vypnutý zdroj není porucha.
+    Registr `news_sources.enabled` (#578) zdroj vypne úplně — `enabled` mapa
+    se čte při startu, zdroj mimo registr je implicitně zapnutý.
     """
-    collectors: list[Collector] = [
-        ForexFactoryCollector(fetcher, interval_s=settings.forexfactory_interval_s),
-        RssCollector(
-            "fed_rss",
-            FED_RSS_URLS,
-            fetcher,
-            interval_s=settings.fed_rss_interval_s,
-            category="FED",
-            importance=3,
-            symbols=["ES", "NQ"],
-        ),
-        # Tier B (#272): redundantní headline zdroje; dedup je slučuje (#273)
-        RssCollector("rss_news", NEWS_RSS_URLS, fetcher, interval_s=settings.rss_interval_s),
-    ]
-    if settings.reddit_rss_enabled:
-        # Reddit nativně přes RSS (#578) — žádný bridge; tier testovací,
-        # audit pokrytí (B) rozhodne, jestli zdroj stojí za váhu
+
+    def on(source: str) -> bool:
+        return (enabled or {}).get(source, True)
+
+    collectors: list[Collector] = []
+    if on("forexfactory"):
+        collectors.append(
+            ForexFactoryCollector(fetcher, interval_s=settings.forexfactory_interval_s)
+        )
+    if on("fed_rss"):
         collectors.append(
             RssCollector(
-                "reddit_rss",
-                REDDIT_RSS_URLS,
+                "fed_rss",
+                FED_RSS_URLS,
                 fetcher,
-                interval_s=settings.reddit_rss_interval_s,
-                kind="social",
+                interval_s=settings.fed_rss_interval_s,
+                category="FED",
+                importance=3,
+                symbols=["ES", "NQ"],
             )
         )
-    if settings.finnhub_api_key:
+    if on("rss_news"):
+        # Tier B (#272): redundantní headline zdroje; dedup je slučuje (#273)
+        collectors.append(
+            RssCollector("rss_news", NEWS_RSS_URLS, fetcher, interval_s=settings.rss_interval_s)
+        )
+    if settings.reddit_rss_enabled and on("reddit_rss"):
+        # Reddit nativně přes RSS (#578) — žádný bridge; tier testovací,
+        # audit pokrytí (B) rozhodne, jestli zdroj stojí za váhu.
+        # Subreddity edituje uživatel (záložka News); default wsb + stocks.
+        urls = (
+            reddit_rss_urls(reddit_subreddits) if reddit_subreddits is not None else REDDIT_RSS_URLS
+        )
+        if urls:
+            collectors.append(
+                RssCollector(
+                    "reddit_rss",
+                    urls,
+                    fetcher,
+                    interval_s=settings.reddit_rss_interval_s,
+                    kind="social",
+                )
+            )
+    if extra_rss_urls and on("rss_user"):
+        # Vlastní feedy uživatele (#578) — vlastní jméno zdroje, ať jsou
+        # v auditu pokrytí vidět odděleně od agenturní redundance
+        collectors.append(
+            RssCollector("rss_user", extra_rss_urls, fetcher, interval_s=settings.rss_interval_s)
+        )
+    if settings.finnhub_api_key and on("finnhub"):
         collectors.append(
             FinnhubCollector(
                 settings.finnhub_api_key, fetcher, interval_s=settings.finnhub_interval_s
             )
         )
-    else:
+    elif not settings.finnhub_api_key:
         logger.info("Finnhub bez klíče — zdroj se nespouští (není to porucha)")
     return collectors
 
@@ -116,11 +158,27 @@ async def run(settings: NewsSettings) -> None:
     seeded = seed_news_sources(engine)
     if seeded:
         logger.info("Registr zdrojů: doplněno %d výchozích řádků (#578)", seeded)
+    # Uživatelské seznamy (#578): seed defaultů insert-if-missing; smazané
+    # položky (vč. defaultních) se uživateli nikdy nevracejí
+    seeded_lists = seed_user_source_settings(engine)
+    if seeded_lists:
+        logger.info("Seznamy zdrojů: doplněno %d výchozích klíčů (#578)", seeded_lists)
+    # `enabled` z registru + seznamy se čtou při STARTU (výjimka: Bluesky
+    # kurátoři mají hot-reload v bluesky_loop) — UI to u editace říká
+    source_on = source_enabled_map(engine)
+    reddit_subreddits = read_list_setting(engine, SETTING_REDDIT_SUBREDDITS)
+    extra_rss = read_list_setting(engine, SETTING_RSS_EXTRA)
     # Pořadí dle SPEC 3.1: normalizer → dedup → writer
     writer = DedupingWriter(NewsWriter(engine), window_minutes=settings.dedup_window_minutes)
     writer.prime_from_db(dt.datetime.now(dt.UTC))
     fetcher = make_fetcher()
-    collectors = build_collectors(settings, fetcher)
+    collectors = build_collectors(
+        settings,
+        fetcher,
+        enabled=source_on,
+        reddit_subreddits=reddit_subreddits,
+        extra_rss_urls=tuple(extra_rss),
+    )
     runner = CollectorRunner(collectors, writer.write)
 
     stop = asyncio.Event()
@@ -373,12 +431,29 @@ async def run(settings: NewsSettings) -> None:
                 await asyncio.wait_for(stop.wait(), timeout=settings.llm_interval_s)
 
     async def bluesky_loop() -> None:
-        """Bluesky Jetstream (#578) — veřejný firehose, filtr klientsky."""
+        """Bluesky Jetstream (#578) — veřejný firehose, filtr klientsky.
+
+        Kurátoři jsou uživatelský seznam (settings, editace v záložce News):
+        handly se resolvují na DID a seznam se za běhu obnovuje à 10 min —
+        jediná uživatelská editace zdrojů, která NEčeká na restart.
+        """
         if not settings.bluesky_enabled:
             logger.info("Bluesky vypnuto (GEXLENS_NEWS_BLUESKY_ENABLED=false)")
             return
-        curated = [d.strip() for d in settings.bluesky_curated_authors.split(",") if d.strip()]
-        stream = BlueskyStream(writer, curated_authors=curated)
+        if not source_on.get("bluesky", True):
+            logger.info("Bluesky vypnuto v registru zdrojů (#578) — stream se nespouští")
+            return
+        resolver = BlueskyAuthorResolver(fetcher)
+
+        async def load_curated() -> frozenset[str]:
+            # Env seznam (DIDs) zůstává podporovaný a přičítá se k uživatelskému
+            env_authors = [
+                d.strip() for d in settings.bluesky_curated_authors.split(",") if d.strip()
+            ]
+            stored = await asyncio.to_thread(read_list_setting, engine, SETTING_BLUESKY_AUTHORS)
+            return await resolver.resolve([*env_authors, *stored])
+
+        stream = BlueskyStream(writer, curated_authors=await load_curated())
         task = asyncio.create_task(stream.run(stop))
         last_seen = -1
         try:
@@ -387,6 +462,10 @@ async def run(settings: NewsSettings) -> None:
                     await asyncio.wait_for(stop.wait(), timeout=600.0)
                 if stop.is_set():
                     break
+                try:
+                    stream.set_curated(await load_curated())
+                except Exception:
+                    logger.exception("Bluesky: reload kurátorů selhal — zkusí se příště")
                 if stream.seen != last_seen:
                     last_seen = stream.seen
                     logger.info(
@@ -402,6 +481,9 @@ async def run(settings: NewsSettings) -> None:
         """Alpaca news WS (#387) — push stream s reconnectem; bez klíčů nic."""
         if not settings.alpaca_key_id or not settings.alpaca_secret:
             logger.info("Alpaca bez klíčů — WS stream se nespouští (není to porucha)")
+            return
+        if not source_on.get("alpaca", True):
+            logger.info("Alpaca vypnuta v registru zdrojů (#578) — stream se nespouští")
             return
         stream = AlpacaNewsStream(settings.alpaca_key_id, settings.alpaca_secret, writer)
         await stream.run(stop)

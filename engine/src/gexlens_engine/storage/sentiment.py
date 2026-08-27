@@ -153,6 +153,7 @@ NEWS_SOURCE_SEED: tuple[tuple[str, str, int | None, str], ...] = (
     ("finnhub", "extra", 200, "doplňkový headline zdroj — vyžaduje klíč"),
     ("bluesky", "test", 200, "Jetstream firehose, přímá komunikace osob (#578, 27. 8.)"),
     ("reddit_rss", "test", 50, "r/wallstreetbets + r/stocks hot přes nativní RSS (#578)"),
+    ("rss_user", "test", None, "vlastní RSS feedy uživatele (#578, editace v záložce News)"),
 )
 
 

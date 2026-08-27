@@ -560,6 +560,14 @@ proklik** — otevře téma v panelu Témata i se zdrojovými zprávami.
 - **Crowd sentiment** — externí kontrariánské ukazatele: Fear & Greed, Put/Call ratio, Reddit průměry.
 - **Nadcházející** — nejbližší plánované události s odpočtem a konsensem (např. „CPI za 1 h 12 m · konsensus 2,9 (min. 3,0)").
 - **Tabulka zpráv** — čas, kategorie, titulek, typ, důležitost, skóre. U řádků s nejistou klasifikací je tužka ✎ — můžeš **ručně opravit směr nebo kategorii** (uloží se jako korekce, model se z ní učí — review fronta).
+- **Zdroje zpráv** (dole) — audit všech používaných zdrojů: co má téct vs. co
+  reálně teče (dnešek / denní průměr, podíl významných zpráv, poslední událost)
+  a **přepínač Aktivní** — vypnutý zdroj se při startu news-engine vůbec
+  nespustí. Pod tabulkou jsou **editovatelné seznamy**: Bluesky kurátoři
+  (handle nebo `did:…`, jejichž každý post se bere — defaultní US-market účty
+  smíš smazat a už se nevrátí), Reddit subreddity a vlastní RSS feedy.
+  Bluesky kurátoři se projeví za běhu do ~10 minut; subreddity, vlastní feedy
+  a vypnutí zdroje po restartu news-engine.
 
 ### Panel Témata — kumulativní index tématu v čase (v1.12)
 

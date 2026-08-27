@@ -293,6 +293,24 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         report.sort(key=lambda item: -item["events_window"])
         return {"days": days, "sources": report}
 
+    class SourceToggleIn(BaseModel):
+        enabled: bool
+
+    @router.patch("/news/sources/{source}")
+    def news_source_toggle(source: str, body: SourceToggleIn) -> dict[str, object]:
+        """Zapnutí/vypnutí zdroje v registru (#578) — projeví se po restartu
+        news-engine (collectory se staví při startu); UI to u přepínače říká."""
+        engine = engine_factory()
+        with engine.begin() as conn:
+            result = conn.execute(
+                sql_update(news_sources)
+                .where(news_sources.c.source == source)
+                .values(enabled=body.enabled)
+            )
+        if result.rowcount == 0:
+            raise HTTPException(404, f"Zdroj {source!r} není v registru")
+        return {"source": source, "enabled": body.enabled}
+
     @router.get("/news/upcoming")
     def news_upcoming(hours: int = Query(24, ge=1, le=168)) -> dict[str, object]:
         """Nadcházející plánované eventy — podklad pro countdown v UI (9.5)."""
