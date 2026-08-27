@@ -1,13 +1,14 @@
 """Uživatelské seznamy zdrojů (#578): seed, čtení, resolve DID, enabled mapa."""
 
 import json
-from dataclasses import dataclass
 
 from sqlalchemy import create_engine, insert, select, update
+from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.meta import ensure_meta_schema, settings_table
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema, seed_news_sources
 from gexlens_engine.storage.sentiment import news_sources as news_sources_table
+from gexlens_news.http import Response
 from gexlens_news.user_sources import (
     DEFAULT_BLUESKY_AUTHORS,
     SETTING_BLUESKY_AUTHORS,
@@ -21,7 +22,7 @@ from gexlens_news.user_sources import (
 )
 
 
-def make_db():  # noqa: ANN201 — sqlite fixture
+def make_db() -> Engine:
     engine = create_engine("sqlite+pysqlite:///:memory:")
     ensure_meta_schema(engine)
     ensure_sentiment_schema(engine)
@@ -80,27 +81,20 @@ def test_reddit_rss_urls_escapuje() -> None:
     )
 
 
-@dataclass
-class _Response:
-    status: int
-    text: str
-    not_modified: bool = False
-
-
 class _FakeFetcher:
     def __init__(self, mapping: dict[str, str | int]) -> None:
         self._mapping = mapping
         self.calls: list[str] = []
 
-    async def get(self, url: str, *, headers: dict[str, str] | None = None) -> _Response:
+    async def get(self, url: str, *, headers: dict[str, str] | None = None) -> Response:
         self.calls.append(url)
         handle = url.rsplit("=", 1)[-1]
         value = self._mapping.get(handle)
         if isinstance(value, int):
-            return _Response(status=value, text="")
+            return Response(status=value, text="")
         if value is None:
-            return _Response(status=400, text="")
-        return _Response(status=200, text=json.dumps({"did": value}))
+            return Response(status=400, text="")
+        return Response(status=200, text=json.dumps({"did": value}))
 
 
 async def test_resolver_did_primo_handle_pres_api_a_cache() -> None:
