@@ -41,13 +41,16 @@ test('bez IVR nebo vol režimu žádný default (AC #875)', () => {
   expect(premiumReading(iv(0.5), null)).toBeNull()
 })
 
-test('texty řádku a odřádkovaný tooltip', () => {
+test('texty řádku a odřádkovaný tooltip — spread viditelně', () => {
   const rich = premiumReading(iv(0.85), vol(0.4))!
-  expect(premiumLabel(rich)).toBe('rich: IV p85 vs. HV p40 — trh platí za hedge')
+  // Spread přímo v řádku (zpětná vazba 27. 8.): pásma hodnotí rozdíl,
+  // ne IV/HV samotné — musí být vidět, které číslo se hodnotí
+  expect(premiumLabel(rich)).toBe('rich: IV p85 − HV p40 = +45 p. b. — trh platí za hedge')
   const tooltip = premiumTooltip(rich)
   expect(tooltip).toContain('\n')
-  expect(tooltip).toContain('+45 p. b.')
-  expect(tooltip).toContain('• rich')
+  expect(tooltip).toContain('JEDINÉ číslo')
+  expect(tooltip).toContain('p85 − p40 = +45 p. b.')
+  expect(tooltip).toContain('NE pro IV ani HV samotné')
   const cheap = premiumReading(iv(0.1), vol(0.6))!
-  expect(premiumLabel(cheap)).toContain('cheap')
+  expect(premiumLabel(cheap)).toBe('cheap: IV p10 − HV p60 = -50 p. b. — trh pohyb podceňuje')
 })

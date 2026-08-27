@@ -775,8 +775,9 @@ Jak číst jednotlivé řádky:
   „rich" prémie znamená, že trh platí za hedge víc, než kolik se hýbe —
   typicky intenzivnější dealer hedging flow kolem zdí (tlumící mechanika
   gammy má víc paliva); „cheap" při vysokém realizovaném rozsahu znamená,
-  že trh pohyb podceňuje — pozor u průrazů. **Jak číst:** rich ≥ +20 p. b.,
-  neutrální ±20, cheap ≤ −20; je to **kontext dne, ne signál** — neříká směr
+  že trh pohyb podceňuje — pozor u průrazů. **Jak číst:** řádek ukazuje přímo výpočet
+  („rich: IV p85 − HV p40 = +45 p. b.“) — pásma platí pro TEN rozdíl, ne pro
+  IV ani HV samostatně: rich ≥ +20 p. b., neutrální ±20, cheap ≤ −20; je to **kontext dne, ne signál** — neříká směr
   ani vstup. Typické kombinace: rich × negativní gamma = nervozita se platí
   i žije (momentum prostředí), cheap × pozitivní gamma = klid oceněný jako
   klid (fade prostředí). **Limity:** obě strany jsou percentily různých

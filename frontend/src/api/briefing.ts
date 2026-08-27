@@ -208,30 +208,35 @@ export function premiumReading(
   return { spread, label, ivPercentile: primary.iv_percentile, hvPercentile: vol.percentile }
 }
 
-/** Text řádku: „rich: IV p85 vs. HV p40 — trh platí za hedge". */
+/** Text řádku s viditelným spreadem (zpětná vazba 27. 8.): pásma hodnotí
+ROZDÍL percentilů, takže řádek ho musí ukazovat — „rich: IV p85 − HV p40
+= +45 p. b. — trh platí za hedge". */
 export function premiumLabel(reading: PremiumReading): string {
-  const pair = `IV p${Math.round(100 * reading.ivPercentile)} vs. HV p${Math.round(100 * reading.hvPercentile)}`
-  if (reading.label === 'rich') return `rich: ${pair} — trh platí za hedge`
-  if (reading.label === 'cheap') return `cheap: ${pair} — trh pohyb podceňuje`
-  return `neutrální: ${pair}`
+  const spreadPb = Math.round(100 * reading.spread)
+  const arithmetic = `IV p${Math.round(100 * reading.ivPercentile)} − HV p${Math.round(100 * reading.hvPercentile)} = ${spreadPb >= 0 ? '+' : ''}${spreadPb} p. b.`
+  if (reading.label === 'rich') return `rich: ${arithmetic} — trh platí za hedge`
+  if (reading.label === 'cheap') return `cheap: ${arithmetic} — trh pohyb podceňuje`
+  return `neutrální: ${arithmetic}`
 }
 
 /** Tooltip prémie — odřádkovaný (pravidlo 27. 8.), kontext dne, ne signál. */
 export function premiumTooltip(reading: PremiumReading): string {
   const spreadPb = Math.round(100 * reading.spread)
+  const ivP = Math.round(100 * reading.ivPercentile)
+  const hvP = Math.round(100 * reading.hvPercentile)
   return [
-    'Rich/cheap prémie = spread percentilů: IV percentil (co trh OCEŇUJE, #871)',
-    'minus percentil realizovaného rozsahu seance (co se reálně DĚJE, ADR-0028).',
-    `Dnes: ${spreadPb >= 0 ? '+' : ''}${spreadPb} p. b.`,
+    'Rich/cheap hodnotí JEDINÉ číslo — spread = IV percentil − HV percentil.',
+    `Dnes: p${ivP} − p${hvP} = ${spreadPb >= 0 ? '+' : ''}${spreadPb} p. b. → ${reading.label === 'neutral' ? 'neutrální' : reading.label}.`,
     '',
-    'Čtení (kontext dne — neříká směr ani vstup):',
-    '• rich (≥ +20 p. b.) — trh platí za hedge víc, než kolik se hýbe;',
+    'Pásma platí pro tento spread (NE pro IV ani HV samotné):',
+    '• rich ≥ +20 p. b. — trh platí za pohyb víc, než kolik se hýbe;',
     '  typicky intenzivnější dealer hedging flow kolem zdí',
-    '• neutrální (±20 p. b.) — ocenění odpovídá realizovanému pohybu',
-    '• cheap (≤ −20 p. b.) — prémie levná vůči reálnému rozsahu;',
-    '  trh pohyb podceňuje (pozor u průrazů)',
+    '• neutrální mezi −20 a +20 p. b.',
+    '• cheap ≤ −20 p. b. — prémie levná vůči reálnému rozsahu (pozor u průrazů)',
     '',
-    'Heuristika: obě strany jsou percentily různých veličin — čti jako kontext.',
+    'IV percentil = co trh do budoucna OCEŇUJE (řádek IV percentil výše).',
+    'HV percentil = co se reálně DĚJE (percentil z řádku Režim).',
+    'Heuristika — percentily různých veličin; kontext dne, ne signál.',
   ].join('\n')
 }
 
