@@ -203,6 +203,17 @@ export function SetupsView() {
           </span>
         </div>
         <div className="stat">
+          {/* Denní bilance v penězích — % účtu vedle je z ní odvozené, ale
+          částku samotnou dlaždice dosud neukazovaly (požadavek 27. 8.) */}
+          <span className="stat-label muted">Σ dnes (1 kontrakt)</span>
+          <span
+            className={`stat-value ${day.pnlUsd >= 0 ? 'r-positive' : 'r-negative'}`}
+            data-testid="day-pnl"
+          >
+            {day.closed > 0 ? formatPnlUsd(day.pnlUsd) : '—'}
+          </span>
+        </div>
+        <div className="stat">
           <span className="stat-label muted">% účtu dnes</span>
           <span
             className={`stat-value ${day.pnlUsd >= 0 ? 'r-positive' : 'r-negative'}`}

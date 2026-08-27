@@ -884,7 +884,9 @@ Když detektor najde setup, přijde alert **Nový setup** a nad grafem se ukáž
 
 **Denní statistika seance** (obrazovka Setupy): nad seznamem je souhrn dnešního
 dne — kolik obchodů proběhlo, kolik úspěšných a kolik ztrátových, úspěšnost
-v %, největší ziskový a největší ztrátový obchod, **kolik procent účtu se
+v %, největší ziskový a největší ztrátový obchod, od v1.12 **Σ dnes** —
+denní bilance v dolarech (na 1 kontrakt, stejná konvence jako Σ P/L
+v historickém souhrnu: zisk zeleně, ztráta červeně), **kolik procent účtu se
 vydělalo nebo prodělalo** a **kolik procent bylo maximálně v riziku**. Řez je
 podle **Globex seance**, ne kalendářního dne, takže nedělní večer patří pondělí.
 
