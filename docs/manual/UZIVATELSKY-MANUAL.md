@@ -460,6 +460,14 @@ mód B−A: „co ta zpráva změnila".
 
 ---
 
+**Strike profil v okně (v1.12, #485).** Při aktivním rozsahu profil defaultně
+ukazuje **jen Vol** — co se v okně skutečně zobchodovalo. OI je totiž statická
+EOD veličina (clearing ji počítá jednou denně; intradenní „změny" z tastytrade
+jsou jen dosypy téhož čísla) a k oknu nepatří. Přepínačem **„jen Vol / OI
+(statické, EOD)"** v hlavičce profilu jde OI složka přimíchat zpět — kreslí se
+ztlumeně se šrafovaným obrysem a tooltip ji značí „statické (EOD), nepatří
+k oknu": kontext „kde OI sedí vůči výběru", ne tvrzení, že se v okně změnilo.
+
 ## 9. Playback — přehrávání dne
 
 **Aplikace defaultně jede vždy live** — replay lišta je skrytá, aby nerušila. Zobrazíš ji tlačítkem **⏮ Replay** v liště grafu:

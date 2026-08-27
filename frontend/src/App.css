@@ -2830,3 +2830,12 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   padding: 4px 8px;
   width: 130px;
 }
+
+/* OI složka profilu v range módu (#485): statické EOD číslo — ztlumené,
+   šrafovaný obrys, ať se neplete s okenním objemem */
+.profile-oi-static {
+  opacity: 0.35;
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+}
