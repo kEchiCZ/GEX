@@ -66,7 +66,7 @@ import type {
   AnnotationTool,
   StoredAnnotation,
 } from '../annotations/model'
-import { useCrosshair } from '../state/Crosshair'
+import { useCrosshairBus } from '../state/Crosshair'
 import type { HistoryView } from '../replay/history'
 
 const UP_COLOR = '#3ecf8e'
@@ -370,8 +370,10 @@ export function Heatmap({
   // pohne jí a ne grafem
   const [hoverAnnotationId, setHoverAnnotationId] = useState<number | null>(null)
   // Surová pozice kurzoru (CSS px) — osové labely crosshairu (cena na Y je spojitá)
-  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null)
-  const { position: crosshair, setPosition: setCrosshair } = useCrosshair()
+  // Crosshair jde VÝHRADNĚ přes imperativní bus (#492): mousemove nevyvolá
+  // žádný React commit heatmapy — dynamická vrstva se překreslí z odběru busu,
+  // tooltip se přepisuje přes ref. Stateovou větev kontextu čtou jen panely.
+  const crosshairBus = useCrosshairBus()
 
   const strikeCount = grid.strikes.length
 
@@ -1205,7 +1207,10 @@ export function Heatmap({
       context.fillText(lastBar.close.toFixed(2), logicalW - 52, y + 4)
     }
 
-    // Crosshair synchronizovaný napříč panely (bez striku jen svislá čára)
+    // Crosshair synchronizovaný napříč panely (bez striku jen svislá čára).
+    // Čte se až TEĎ z busu — hodnota není v deps, překreslení řídí odběr busu.
+    const crosshair = crosshairBus.position
+    const pointer = crosshairBus.pointer
     if (crosshair) {
       const x = minuteToX(crosshair.minuteIdx)
       context.strokeStyle = 'rgba(215,220,230,0.55)'
@@ -1272,8 +1277,7 @@ export function Heatmap({
     liveLabels,
     grid.strikes,
     grid.minutes,
-    crosshair,
-    pointer,
+    crosshairBus,
     priceStyle,
     priceOpacity,
     minuteLabels,
@@ -1562,8 +1566,7 @@ export function Heatmap({
     // Crosshair drží i mimo svíce (prázdná/budoucí plocha po posunu) — nesnapuje
     // se na neexistující bar; strike je null mimo cenové pásmo, minuta smí být mimo rozsah.
     const strike = strikeIdx >= 0 && strikeIdx < strikeCount ? grid.strikes[strikeIdx] : null
-    setCrosshair({ minuteIdx, strike })
-    setPointer({ x, y })
+    crosshairBus.set({ minuteIdx, strike }, { x, y })
     // Anotace pod kurzorem (jen režim Kurzor s povoleným přesunem, #589)
     const hover =
       !annotationTool && onAnnotationMove ? annotationAt(mapping().screenToDataPoint(x, y)) : null
@@ -1629,34 +1632,78 @@ export function Heatmap({
     if (marker) onNewsMarkerClick(marker)
   }
 
-  // Tooltip buňky (čas, strike, hodnoty metrik)
-  const tooltip = useMemo(() => {
-    if (!crosshair) return null
-    if (crosshair.strike === null) return null
-    // Mimo rozsah minut (prázdná/budoucí plocha) tooltip nemá data — jen crosshair
-    if (crosshair.minuteIdx < 0 || crosshair.minuteIdx >= grid.minutes) return null
-    const strikeIdx = grid.strikes.indexOf(crosshair.strike)
-    if (strikeIdx < 0) return null
-    // Díra v ose (#516): sloupec bez zaznamenaných dat — hodnoty by lhaly nulou
-    if (grid.missingMinutes?.[crosshair.minuteIdx]) return 'bez zaznamenaných dat'
-    const index = strikeIdx * grid.minutes + crosshair.minuteIdx
-    const projected = crosshair.minuteIdx >= (grid.dataMinutes ?? grid.minutes)
-    const parts: string[] = [
-      projected ? 'projekce' : `min ${crosshair.minuteIdx}`,
-      `strike ${crosshair.strike}`,
-    ]
-    if (grid.layers.call) parts.push(`call ${grid.layers.call[index].toFixed(2)}`)
-    if (grid.layers.put) parts.push(`put ${grid.layers.put[index].toFixed(2)}`)
-    if (grid.layers.signed) parts.push(`± ${grid.layers.signed[index].toFixed(2)}`)
-    // Signál v minutě crosshairu: režim, zdůvodnění, n, Wilson LB (#295, SPEC 9.0)
-    const signal = signalAt(overlays.signals ?? [], crosshair.minuteIdx)
-    // Absolutní hodnoty VEDLE normalizovaných (#470): 0.52 je jen podíl vůči p99 dne
-    // a o velikosti pozice neřekne nic. Normalizovaná se čte jako barva, absolutní
-    // se rozhoduje. Projekční sloupce měřená data nemají.
-    const absolute = projected ? null : cellAbsolute?.(crosshair.minuteIdx, crosshair.strike)
-    const line = parts.join(' · ')
-    return [line, absolute, signal?.tooltip].filter(Boolean).join('\n')
-  }, [crosshair, grid, overlays.signals, cellAbsolute])
+  // Tooltip buňky (čas, strike, hodnoty metrik) — obsah je čistý string,
+  // takže se přepisuje imperativně přes ref (#492): žádný commit na mousemove
+  const tooltipText = useCallback(
+    (position: { minuteIdx: number; strike: number | null } | null): string | null => {
+      if (!position) return null
+      if (position.strike === null) return null
+      // Mimo rozsah minut (prázdná/budoucí plocha) tooltip nemá data — jen crosshair
+      if (position.minuteIdx < 0 || position.minuteIdx >= grid.minutes) return null
+      const strikeIdx = grid.strikes.indexOf(position.strike)
+      if (strikeIdx < 0) return null
+      // Díra v ose (#516): sloupec bez zaznamenaných dat — hodnoty by lhaly nulou
+      if (grid.missingMinutes?.[position.minuteIdx]) return 'bez zaznamenaných dat'
+      const index = strikeIdx * grid.minutes + position.minuteIdx
+      const projected = position.minuteIdx >= (grid.dataMinutes ?? grid.minutes)
+      const parts: string[] = [
+        projected ? 'projekce' : `min ${position.minuteIdx}`,
+        `strike ${position.strike}`,
+      ]
+      if (grid.layers.call) parts.push(`call ${grid.layers.call[index].toFixed(2)}`)
+      if (grid.layers.put) parts.push(`put ${grid.layers.put[index].toFixed(2)}`)
+      if (grid.layers.signed) parts.push(`± ${grid.layers.signed[index].toFixed(2)}`)
+      // Signál v minutě crosshairu: režim, zdůvodnění, n, Wilson LB (#295, SPEC 9.0)
+      const signal = signalAt(overlays.signals ?? [], position.minuteIdx)
+      // Absolutní hodnoty VEDLE normalizovaných (#470): 0.52 je jen podíl vůči p99 dne
+      // a o velikosti pozice neřekne nic. Normalizovaná se čte jako barva, absolutní
+      // se rozhoduje. Projekční sloupce měřená data nemají.
+      const absolute = projected ? null : cellAbsolute?.(position.minuteIdx, position.strike)
+      const line = parts.join(' · ')
+      return [line, absolute, signal?.tooltip].filter(Boolean).join('\n')
+    },
+    [grid, overlays.signals, cellAbsolute],
+  )
+
+  const tooltipRef = useRef<HTMLDivElement>(null)
+  const applyTooltip = useCallback(() => {
+    const element = tooltipRef.current
+    if (!element) return
+    const text = tooltipText(crosshairBus.position)
+    if (text !== null) {
+      element.textContent = text
+      element.style.display = ''
+    } else {
+      element.textContent = ''
+      element.style.display = 'none'
+    }
+  }, [tooltipText, crosshairBus])
+  // Každý render: data pod klidným kurzorem se mohla změnit a display styl
+  // React u tooltip divu záměrně nespravuje (imperativní vlastnictví)
+  useLayoutEffect(() => {
+    applyTooltip()
+  })
+
+  // Odběr busu (#492): tooltip synchronně (testy i čitelnost), canvas přes
+  // rAF s koalescencí — víc pohybů v jednom snímku = jedno překreslení
+  const drawDynamicRef = useRef(drawDynamic)
+  drawDynamicRef.current = drawDynamic
+  const applyTooltipRef = useRef(applyTooltip)
+  applyTooltipRef.current = applyTooltip
+  const rafPending = useRef(false)
+  useEffect(
+    () =>
+      crosshairBus.subscribe(() => {
+        applyTooltipRef.current()
+        if (rafPending.current) return
+        rafPending.current = true
+        requestAnimationFrame(() => {
+          rafPending.current = false
+          drawDynamicRef.current()
+        })
+      }),
+    [crosshairBus],
+  )
 
   return (
     <div className="heatmap-stack" ref={stackRef}>
@@ -1703,9 +1750,8 @@ export function Heatmap({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerLeave={() => {
-          setCrosshair(null)
+          crosshairBus.set(null, null)
           setAxisHover(null)
-          setPointer(null)
         }}
         onDoubleClick={resetView}
       />
@@ -1726,11 +1772,8 @@ export function Heatmap({
       >
         ⟲
       </button>
-      {tooltip && (
-        <div className="heatmap-tooltip" role="tooltip">
-          {tooltip}
-        </div>
-      )}
+      {/* Always-mounted, obsah i viditelnost drží applyTooltip přes ref (#492) */}
+      <div className="heatmap-tooltip" role="tooltip" ref={tooltipRef} />
     </div>
   )
 }
