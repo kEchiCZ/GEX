@@ -23,6 +23,14 @@ NEWS_RSS_URLS = (
     "https://finance.yahoo.com/news/rssindex",
 )
 
+# Reddit nativní RSS (#578) — burza a sentiment; „hot" řadí komunita, ne my.
+# Bridge není potřeba (Reddit RSS umí sám); nízká kadence — bez přihlášení
+# Reddit rate-limituje agresivně.
+REDDIT_RSS_URLS = (
+    "https://www.reddit.com/r/wallstreetbets/hot/.rss?limit=25",
+    "https://www.reddit.com/r/stocks/hot/.rss?limit=25",
+)
+
 
 class NewsSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="GEXLENS_NEWS_", env_file=".env", extra="ignore")
@@ -49,6 +57,13 @@ class NewsSettings(BaseSettings):
     alpaca_key_id: str = Field(default="")
     alpaca_secret: str = Field(default="")
     rss_interval_s: float = Field(default=60.0, gt=0)
+    # Bluesky Jetstream (#578): veřejný firehose bez klíčů — filtr je klientský.
+    # Kurátorovaní autoři = DID identifikátory (handle se mění, DID ne)
+    bluesky_enabled: bool = Field(default=True)
+    bluesky_curated_authors: str = Field(default="")  # čárkami oddělené DIDs
+    # Reddit přes NATIVNÍ RSS (#578 analýza: bridge není potřeba) — tier testovací
+    reddit_rss_enabled: bool = Field(default=True)
+    reddit_rss_interval_s: float = Field(default=300.0, gt=0)
     # 60 s (#386): FOMC statement je nejcitlivější headline; 1 req/min je zdarma
     fed_rss_interval_s: float = Field(default=60.0, gt=0)
     reddit_interval_s: float = Field(default=900.0, gt=0)
