@@ -22,6 +22,9 @@ import {
   gammaRegimeLabel,
   ivRankPrimary,
   ivRankTooltip,
+  premiumLabel,
+  premiumReading,
+  premiumTooltip,
   latestLevels,
   previousStoredDay,
   usOpenMs,
@@ -237,6 +240,25 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
                       return 'bez dat — řada se plní po settle (backfill rok zpět)'
                     }
                     return `p${Math.round((primary.iv_percentile ?? 0) * 100)} · IV ${(100 * primary.iv).toFixed(1)} % (${primary.sample} dnů)`
+                  })()}
+                </td>
+              </tr>
+              <tr>
+                <td>Prémie (IV × HV)</td>
+                <td
+                  data-testid="vol-premium"
+                  title={(() => {
+                    const reading = premiumReading(ivRank, volRegime)
+                    return reading ? premiumTooltip(reading) : undefined
+                  })()}
+                >
+                  {(() => {
+                    // Rich/cheap (#875, D5): spread implied − realized percentilu.
+                    // Bez IVR nebo vol režimu žádný default — poctivé „bez dat"
+                    const reading = premiumReading(ivRank, volRegime)
+                    return reading
+                      ? premiumLabel(reading)
+                      : 'bez dat — potřebuje IV percentil i vol režim'
                   })()}
                 </td>
               </tr>

@@ -961,6 +961,20 @@ klid umí podcenit riziko) · <strong>p20–50</strong> běžné pásmo · <stro
 očekávání, prémie dražší · <strong>p80–100</strong> drahá prémie, stres kolem událostí
 (široké EM). Hranice jsou vodítko, ne signál — p1 tedy čti jako „očekávaný
 pohyb u ročního minima&quot;, ne jako pokyn něco udělat.</li>
+<li><strong>Prémie (IV × HV)</strong> (v1.12, #875) — spread percentilů: <strong>IV percentil</strong>
+(co trh do budoucna OCEŇUJE) minus <strong>percentil realizovaného rozsahu
+seance</strong> (co se reálně DĚJE, řádek „Režim&quot;). <strong>Proč z pohledu tradera:</strong>
+„rich&quot; prémie znamená, že trh platí za hedge víc, než kolik se hýbe —
+typicky intenzivnější dealer hedging flow kolem zdí (tlumící mechanika
+gammy má víc paliva); „cheap&quot; při vysokém realizovaném rozsahu znamená,
+že trh pohyb podceňuje — pozor u průrazů. <strong>Jak číst:</strong> rich ≥ +20 p. b.,
+neutrální ±20, cheap ≤ −20; je to <strong>kontext dne, ne signál</strong> — neříká směr
+ani vstup. Typické kombinace: rich × negativní gamma = nervozita se platí
+i žije (momentum prostředí), cheap × pozitivní gamma = klid oceněný jako
+klid (fade prostředí). <strong>Limity:</strong> obě strany jsou percentily různých
+veličin (30d implied index vs. rozsah jedné seance), spread je heuristika
+a práh ±20 p. b. vědomá volba — menší rozdíl je šum percentilů. Bez IVR
+nebo vol režimu řádek poctivě říká „bez dat&quot;, nic se nedosazuje.</li>
 <li><strong>EM drží</strong> — kalibrace důvěry: v kolika % posledních seancí skončil
 close uvnitř pásma EM (teoreticky ~68 %; skutečné číslo měří engine
 po každém settle). Vyšší číslo ⇒ fade od hranic pásma má statistiku
