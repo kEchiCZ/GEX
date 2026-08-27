@@ -285,6 +285,39 @@ export async function fetchCrowd(): Promise<CrowdRow[]> {
   return data.crowd
 }
 
+/** Registr + realita zdroje zpráv (#578): audit pokrytí za okno. */
+export interface NewsSourceRow {
+  source: string
+  tier: string
+  expected_daily_volume: number | null
+  enabled: boolean
+  notes: string | null
+  events_window: number
+  events_today: number
+  daily_avg: number
+  significant_share: number | null
+  last_event_ts: string | null
+}
+
+export async function fetchNewsSources(): Promise<NewsSourceRow[]> {
+  const data = await getJson<{ sources: NewsSourceRow[] }>('/news/sources', { sources: [] })
+  return data.sources
+}
+
+/** Zapnutí/vypnutí zdroje v registru (#578); vrací úspěch (UI pak refetchuje). */
+export async function patchNewsSource(source: string, enabled: boolean): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/news/sources/${encodeURIComponent(source)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
 /** Poslední bod každé řady (source|metric|symbol) — pro souhrnný blok v News. */
 export function latestCrowd(rows: CrowdRow[]): Map<string, CrowdRow> {
   const latest = new Map<string, CrowdRow>()

@@ -108,6 +108,15 @@ def test_whitelist_pokryva_vse_co_engine_cte() -> None:
     )
     assert expected == ENGINE_SETTINGS
     assert "theme" in WRITABLE_SETTINGS  # předvolba UI, engine ji nečte
+
+
+def test_seznamy_zdroju_validuji_tvar(client: TestClient) -> None:
+    """#578: news_* klíče berou jen seznam řetězců — jiný tvar by news-engine
+    tiše ignoroval jako 'uživatel vše smazal'. (Validace běží před zápisem,
+    takže fixture bez DB stačí; úspěšný zápis testuje test_sentiment_api.)"""
+    for bad in [{"value": "cnbc.com"}, {"value": [1]}, {"value": [""]}, {"value": ["x" * 301]}]:
+        response = client.put("/settings/news_bluesky_authors", json=bad)
+        assert response.status_code == 422, bad
     assert "retro_pass" not in WRITABLE_SETTINGS  # píše si ho news-engine přímo do DB
 
 

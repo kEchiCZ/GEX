@@ -1522,6 +1522,67 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   display: block;
 }
 
+/* Zdroje zpráv (#578): audit registru + uživatelské seznamy */
+.news-sources {
+  margin-top: 18px;
+  border-top: 1px solid var(--border, #2a2f3a);
+  padding-top: 10px;
+  font-size: 12px;
+}
+
+.news-sources-table {
+  border-collapse: collapse;
+  margin-bottom: 12px;
+}
+
+.news-sources-table th,
+.news-sources-table td {
+  text-align: left;
+  padding: 3px 12px 3px 0;
+}
+
+.news-sources-table th[title] {
+  cursor: help;
+}
+
+.news-sources-editors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.news-source-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.news-source-editor-label {
+  cursor: help;
+}
+
+.news-source-editor textarea {
+  min-width: 240px;
+  font-family: inherit;
+  font-size: 12px;
+  background: var(--panel, #1a1f28);
+  color: var(--text);
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 4px;
+  padding: 6px;
+}
+
+.news-source-editor-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.news-source-error {
+  color: #f0616d;
+}
+
 /* Proklik z karty zprávy na téma (#656 bod 2) — vypadá jako text, ne tlačítko */
 .news-topic-link {
   background: none;

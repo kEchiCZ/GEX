@@ -18,6 +18,7 @@ import {
 } from '../api/news'
 import type { CrowdRow, NewsRow, ReviewRow } from '../api/news'
 import { useNews } from '../hooks/useNews'
+import { NewsSourcesSection } from './NewsSourcesSection'
 import { TopicsPanel } from './TopicsPanel'
 import { useSentimentState } from '../hooks/useSentimentState'
 
@@ -377,6 +378,9 @@ export function NewsView() {
           ))}
         </div>
       )}
+
+      {/* Zdroje zpráv (#578): audit registru + uživatelské seznamy */}
+      <NewsSourcesSection />
     </section>
   )
 }

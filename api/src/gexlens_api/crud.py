@@ -35,8 +35,13 @@ ENGINE_SETTINGS = frozenset(
 # takže nemají bezpečnostní dopad — jen musí projít validací.
 UI_SETTINGS = frozenset(["theme", "language", "sessions"])
 
+# Uživatelské seznamy zdrojů zpráv (#578): edituje záložka News, čte news-engine
+# (Bluesky hot-reload à 10 min, ostatní při startu). Hodnota musí být seznam
+# řetězců — jiný tvar by news-engine tiše ignoroval jako „vše smazáno".
+NEWS_LIST_SETTINGS = frozenset(["news_bluesky_authors", "news_reddit_subreddits", "news_rss_extra"])
+
 # `retro_pass` chybí schválně — ten si news-engine píše přímo do DB, ne přes API.
-WRITABLE_SETTINGS = ENGINE_SETTINGS | UI_SETTINGS
+WRITABLE_SETTINGS = ENGINE_SETTINGS | UI_SETTINGS | NEWS_LIST_SETTINGS
 
 
 class WatchlistItemIn(BaseModel):
@@ -407,6 +412,16 @@ def build_router(repository: MetaRepository) -> APIRouter:
                 f"Neznámý klíč nastavení: {key!r} "
                 f"(povolené: {', '.join(sorted(WRITABLE_SETTINGS))})",
             )
+        if key in NEWS_LIST_SETTINGS:
+            value = setting.value
+            if (
+                not isinstance(value, list)
+                or len(value) > 200
+                or not all(isinstance(item, str) and 0 < len(item) <= 300 for item in value)
+            ):
+                raise HTTPException(
+                    422, f"Klíč {key!r} vyžaduje seznam neprázdných řetězců (max 200 × 300 znaků)"
+                )
         repository.setting_put(key, setting.value)
         return {"key": key, "value": setting.value}
 

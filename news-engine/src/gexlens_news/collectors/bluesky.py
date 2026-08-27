@@ -22,7 +22,7 @@ import datetime as dt
 import json
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any, Protocol
 
 from gexlens_news.model import NewsEvent
@@ -118,17 +118,24 @@ class BlueskyStream:
         writer: EventWriter,
         *,
         url: str = JETSTREAM_URL,
-        curated_authors: Sequence[str] = (),
+        curated_authors: Iterable[str] = (),
     ) -> None:
         self._writer = writer
         self._url = url
         self._curated = frozenset(curated_authors)
+        # Hot-reload (#578): bluesky_loop volá set_curated při změně seznamu
         #: Diagnostika: přijaté / prošlé filtrem / zahozené pojistkou
         self.seen = 0
         self.matched = 0
         self.flood_dropped = 0
         self._minute_window: dt.datetime | None = None
         self._minute_count = 0
+
+    def set_curated(self, curated: frozenset[str]) -> None:
+        """Vymění kurátory za běhu — atomická náhrada, stream nepadá."""
+        if curated != self._curated:
+            self._curated = curated
+            logger.info("Bluesky: kurátoři aktualizováni (%d DID)", len(curated))
 
     async def run(self, stop: asyncio.Event) -> None:
         backoff = RECONNECT_BASE_S
