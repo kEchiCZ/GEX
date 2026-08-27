@@ -965,23 +965,26 @@ a v nervózních trzích; nízko (p20−) = prémie levné, trh je klidný
 ročním minimem a maximem — číslo známé z retail platforem; percentil
 je robustnější, jeden spike ho nezkreslí) a křížová kontrola z
 tastytrade (jiná konstrukce indexu, čísla se záměrně nemíchají).
-Stejná hodnota je i <strong>chipem v hlavičce</strong> („IV p11&quot;) vpravo vedle chipu
-sentimentu (od v1.12): režim/tendence/sentiment říkají SMĚR a TYP obchodu,
+Stejná hodnota je i <strong>informačním štítkem v hlavičce</strong> („IV p11&quot;) vpravo
+vedle chipu sentimentu (od v1.12; jen tooltip — kurzor s otazníčkem jako
+u gamma režimu, žádná klikací akce): režim/tendence/sentiment říkají SMĚR a TYP obchodu,
 IV percentil říká, jak draho je dnešek oceněný. Tooltip chipu nese
 orientační pásma: <strong>p0–20</strong> prémie levné, trh čeká malý pohyb (úzké EM;
 klid umí podcenit riziko) · <strong>p20–50</strong> běžné pásmo · <strong>p50–80</strong> zvýšené
 očekávání, prémie dražší · <strong>p80–100</strong> drahá prémie, stres kolem událostí
 (široké EM). Hranice jsou vodítko, ne signál — p1 tedy čti jako „očekávaný
 pohyb u ročního minima&quot;, ne jako pokyn něco udělat.</li>
-<li><strong>Prémie (IV × HV)</strong> (v1.12, #875) — spread percentilů: <strong>IV percentil</strong>
+<li><strong>Prémie (IV − HV)</strong> (v1.12, #875) — spread percentilů: <strong>IV percentil</strong>
 (co trh do budoucna OCEŇUJE) minus <strong>percentil realizovaného rozsahu
 seance</strong> (co se reálně DĚJE, řádek „Režim&quot;). <strong>Proč z pohledu tradera:</strong>
 „rich&quot; prémie znamená, že trh platí za hedge víc, než kolik se hýbe —
 typicky intenzivnější dealer hedging flow kolem zdí (tlumící mechanika
 gammy má víc paliva); „cheap&quot; při vysokém realizovaném rozsahu znamená,
-že trh pohyb podceňuje — pozor u průrazů. <strong>Jak číst:</strong> řádek ukazuje přímo výpočet
-(„rich: IV p85 − HV p40 = +45 p. b.“) — pásma platí pro TEN rozdíl, ne pro
-IV ani HV samostatně: rich ≥ +20 p. b., neutrální ±20, cheap ≤ −20; je to <strong>kontext dne, ne signál</strong> — neříká směr
+že trh pohyb podceňuje — pozor u průrazů. <strong>Jak číst:</strong> řádek nese verdikt
+a hodnocené číslo („rich: spread +45 p. b.&quot;) — pásma platí pro TEN rozdíl,
+ne pro IV ani HV samostatně (ty mají vlastní řádky výše a řádek je záměrně
+neopakuje); rozklad spreadu je v tooltipu. Rich ≥ +20 p. b., neutrální ±20,
+cheap ≤ −20; je to <strong>kontext dne, ne signál</strong> — neříká směr
 ani vstup. Typické kombinace: rich × negativní gamma = nervozita se platí
 i žije (momentum prostředí), cheap × pozitivní gamma = klid oceněný jako
 klid (fade prostředí). <strong>Limity:</strong> obě strany jsou percentily různých

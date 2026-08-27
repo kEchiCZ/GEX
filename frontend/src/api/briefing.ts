@@ -208,15 +208,15 @@ export function premiumReading(
   return { spread, label, ivPercentile: primary.iv_percentile, hvPercentile: vol.percentile }
 }
 
-/** Text řádku s viditelným spreadem (zpětná vazba 27. 8.): pásma hodnotí
-ROZDÍL percentilů, takže řádek ho musí ukazovat — „rich: IV p85 − HV p40
-= +45 p. b. — trh platí za hedge". */
+/** Text řádku: verdikt + JEN hodnocené číslo (spread). IV/HV percentily
+řádek neopakuje — IV má vlastní řádek výš, HV nese řádek Režim a rozklad
+spreadu je v tooltipu (duplikace vytýkána 27. 8.). */
 export function premiumLabel(reading: PremiumReading): string {
   const spreadPb = Math.round(100 * reading.spread)
-  const arithmetic = `IV p${Math.round(100 * reading.ivPercentile)} − HV p${Math.round(100 * reading.hvPercentile)} = ${spreadPb >= 0 ? '+' : ''}${spreadPb} p. b.`
-  if (reading.label === 'rich') return `rich: ${arithmetic} — trh platí za hedge`
-  if (reading.label === 'cheap') return `cheap: ${arithmetic} — trh pohyb podceňuje`
-  return `neutrální: ${arithmetic}`
+  const spread = `spread ${spreadPb >= 0 ? '+' : ''}${spreadPb} p. b.`
+  if (reading.label === 'rich') return `rich: ${spread} — trh platí za hedge`
+  if (reading.label === 'cheap') return `cheap: ${spread} — trh pohyb podceňuje`
+  return `neutrální: ${spread}`
 }
 
 /** Tooltip prémie — odřádkovaný (pravidlo 27. 8.), kontext dne, ne signál. */
