@@ -342,3 +342,26 @@ async def test_error_354_po_cancelu_nese_kontrakt_z_nahrobku(
     # Bez náhrobku zůstává poctivé „neznámý kontrakt"
     ib.errorEvent.emit(99999, 354, "Requested market data is not subscribed.", None)
     assert tracker.recent_records()[-1].contract == "neznámý kontrakt"
+
+
+def test_tombstones_pokryvaji_vsechny_tick_typy() -> None:
+    """27. 8.: tick-by-tick hot zóny se registruje pod 'AllLast', ne 'mktData' —
+    vzorkování jediného klíče nechávalo rotační chyby 354/300 anonymní."""
+    from gexlens_engine.ibkr.subscription import ReqIdTombstones
+
+    stones = ReqIdTombstones(ttl_s=900.0, throttle_s=1.0)
+    ib = SimpleNamespace(
+        wrapper=SimpleNamespace(
+            ticker2ReqId={
+                "mktData": {_FakeTicker(_option("ES", 7600.0)): 1},
+                "AllLast": {_FakeTicker(_option("NQ", 29400.0)): 2},
+            }
+        )
+    )
+    stones.record_from(ib, now=0.0)
+    mkt = stones.lookup(1, now=1.0)
+    tick = stones.lookup(2, now=1.0)
+    assert mkt is not None and "[" not in mkt[0]  # mktData bez přípony
+    assert tick is not None
+    label, symbol = tick
+    assert "NQU6" in label and "[AllLast]" in label and symbol == "NQ"

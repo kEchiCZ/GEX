@@ -1215,7 +1215,11 @@ async def main() -> None:
                 "tasty_stream_errors": tasty_stream.errors,
                 "tasty_stream_last_error": tasty_stream.last_error,
                 "tasty_reconnects": tasty_stream.reconnects,
+                # Rate limit subskripcí (#863): počet odmítnutí serverem
+                "tasty_rate_limited": tasty_stream.rate_limited,
                 "tasty_symbols": tasty_cache.symbols_tracked(),
+                # Rozpad plánu subskripcí per účel (#863) — až po prvním refreshi
+                **({"tasty_symbol_breakdown": dict(symbol_breakdown)} if symbol_breakdown else {}),
                 "tasty_quotes": counts["quotes"],
                 "tasty_greeks": counts["greeks"],
                 "tasty_oi": counts["summary"],
@@ -1454,6 +1458,10 @@ async def main() -> None:
                 held.add(pipeline.next_runtime.expiry)
             return held
 
+        # Rozpad subskripcí per účel (#863): 9 936 symbolů „nad plán" nešlo
+        # rozklíčovat — bez rozpadu se nepozná, která složka přerostla
+        symbol_breakdown: dict[str, int] = {}
+
         async def shadow_symbols_loop() -> None:
             """Denní obnova chain mapy + průběžné dorovnání subskripce."""
             while not shadow_stop.is_set():
@@ -1462,10 +1470,18 @@ async def main() -> None:
                     # Jedna mapa per produkt; ES i NQ jsou v témže chain endpointu
                     # svých produktů — mapy se drží per symbol pipeline
                     symbols: set[str] = set()
+                    purpose: dict[str, set[str]] = {
+                        "chain": set(),
+                        "extended": set(),
+                        "wide": set(),
+                        "underlying": set(),
+                    }  # noqa: E501
                     for symbol in shadow_target_symbols():
                         chain = await symbol_map.chain(symbol, today)
                         shadow_chain[symbol] = chain
-                        symbols |= tracked_symbols(list(shadow_contracts().keys()), chain)
+                        chain_syms = tracked_symbols(list(shadow_contracts().keys()), chain)
+                        purpose["chain"] |= chain_syms
+                        symbols |= chain_syms
                         # Extended expirace (#616 4a): šířka mimo IBKR množinu —
                         # disjunktnost hlídá validate_disjoint (překryv = chyba)
                         if settings.tasty_extended_enabled:
@@ -1484,7 +1500,7 @@ async def main() -> None:
                             # Nejbližší expirace širší (#828 A) — masa OTM
                             # putů leží tam, vzdálené se zúží kvůli stropu
                             near = frozenset(sorted(planned)[: settings.tasty_near_band_expiries])
-                            symbols |= extended_streamers(
+                            extended_syms = extended_streamers(
                                 chain,
                                 planned,
                                 center=spot_price if spot_fresh else None,
@@ -1492,6 +1508,8 @@ async def main() -> None:
                                 near_band_pct=settings.tasty_near_band_pct,
                                 near_expiries=near,
                             )
+                            purpose["extended"] |= extended_syms
+                            symbols |= extended_syms
                         # Aktivní expirace mimo IBKR obálku (#828): bez téhle
                         # subskripce se široký OI archiv nemá kde projevit —
                         # Summary chodí jen pro subskribované symboly a
@@ -1499,19 +1517,22 @@ async def main() -> None:
                         pipe = pipelines.get(symbol)
                         if settings.tasty_wide_oi and pipe is not None and chain is not None:
                             spot_price, spot_fresh = _tasty_spot(symbol)
-                            symbols |= wide_streamers(
+                            wide_syms = wide_streamers(
                                 chain,
                                 pipe.runtime.expiry,
                                 pipe.runtime.contracts,
                                 center=spot_price if spot_fresh else None,
                                 band_pct=settings.tasty_near_band_pct,
                             )
+                            purpose["wide"] |= wide_syms
+                            symbols |= wide_syms
                         # Podklad (#614): bez něj by při výpadku IBKR zamrzl
                         # cenový graf, i kdyby řetěz z tasty tekl dál
                         front = await symbol_map.front_future(symbol)
                         if front:
                             shadow_front_future[symbol] = front
                             symbols.add(front)
+                            purpose["underlying"].add(front)
                             # CVD podkladu (#829) — registrace zároveň ošetří
                             # roll kontraktu (starý streamer se odpojí)
                             futures_cvd.register(symbol, front)
@@ -1530,6 +1551,11 @@ async def main() -> None:
                         # dávek odmítne a podklad nese cenu i CVD — o strike
                         # v křídle navíc nejde
                         tasty_stream.set_priority(frozenset(shadow_front_future.values()))
+                        symbol_breakdown.clear()
+                        symbol_breakdown.update(
+                            {name: len(values) for name, values in purpose.items()}
+                        )
+                        symbol_breakdown["total"] = len(symbols)
                         await tasty_stream.set_symbols(symbols)
                 except Exception:
                     logger.exception("Shadow symbols refresh selhal — zkusí se za minutu")

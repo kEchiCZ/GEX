@@ -52,5 +52,7 @@ async def test_mezi_davkami_je_rozestup() -> None:
     finally:
         asyncio.sleep = original
 
-    assert len(sent) == 3
+    # Od #863 se mezi dávky umí vklínit KEEPALIVE — počítají se jen subskripce
+    subscriptions = [p for p in sent if p.get("type") == "FEED_SUBSCRIPTION"]
+    assert len(subscriptions) == 3
     assert len(slept) == 3 and all(s > 0 for s in slept)
