@@ -2820,3 +2820,13 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   stroke-width: 1;
   stroke-dasharray: 4 3;
 }
+
+/* Vyhledání symbolu v hlavičce (#521) */
+.symbol-search input {
+  background: var(--bg-chip);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  width: 130px;
+}

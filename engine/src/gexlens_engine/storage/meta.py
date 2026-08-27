@@ -41,6 +41,16 @@ watchlist_table = Table(
     Column("symbol", String(16), nullable=False, unique=True),
 )
 
+# Ad-hoc pohled na symbol přes tastytrade (#521, varianta C): UI zapíše
+# požadavek, engine ho vyzvedne a drží, dokud frontend prodlužuje requested_ts.
+# DB je most UI→engine stejně jako u watchlistu.
+adhoc_view_table = Table(
+    "adhoc_view",
+    meta_metadata,
+    Column("symbol", String(16), primary_key=True),
+    Column("requested_ts", DateTime(timezone=True), nullable=False),
+)
+
 alerts_table = Table(
     "alerts",
     meta_metadata,

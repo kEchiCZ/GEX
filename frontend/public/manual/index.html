@@ -108,11 +108,11 @@ docker compose up -d        # start na pozadí
 </thead>
 <tbody><tr>
 <td><strong>Sidebar (vlevo)</strong></td>
-<td>Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / Briefing / Deník / News / Stats / Settings), odkaz <strong>Manuál</strong>, přepínač tématu Dark/Light, <strong>editovatelný watchlist</strong> (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový; při chybě se pod formulářem ukáže hláška a seznam se sám srovná se serverem), tlačítko <strong>Legenda</strong> (modál s ukázkami všech prvků grafu a čtením „roste/klesá&quot;), verze. Tlačítkem « se sbalí.</td>
+<td>Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / Briefing / Deník / News / Stats / Settings), odkaz <strong>Manuál</strong>, přepínač tématu Dark/Light, <strong>editovatelný watchlist</strong> (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový; při chybě se pod formulářem ukáže hláška a seznam se sám srovná se serverem), tlačítko <strong>Legenda</strong> (modál s ukázkami všech prvků grafu a čtením „roste/klesá&quot;), sekce <strong>Nedávné</strong> (v1.12, #521 — posledních 8 zobrazených symbolů, klik znovu otevře i ad-hoc pohled), verze. Tlačítkem « se sbalí.</td>
 </tr>
 <tr>
 <td><strong>Hlavička — horní řádek</strong></td>
-<td><strong>Kdo a za kolik</strong>: ticker a název instrumentu, <strong>poslední cena + denní změna v %</strong>, <strong>kalendářový selektor expirace</strong> (v1.12, níže) s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h&quot; — velké expirace nesou velké OI. V selektoru najdeš i <strong>následující expiraci</strong> (sbírá se souběžně — čtení positioningu příští seance).</td>
+<td><strong>Kdo a za kolik</strong>: ticker a název instrumentu, <strong>poslední cena + denní změna v %</strong>, <strong>kalendářový selektor expirace</strong> (v1.12, níže) s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h&quot; — velké expirace nesou velké OI. Vedle selektoru je <strong>vyhledání symbolu</strong> (v1.12, #521): našeptávač CME produktů, výběr otevře <strong>ad-hoc pohled přes tastytrade</strong> — positioning libovolného produktu bez přidání do watchlistu a bez spotřeby IBKR linek (kotace + OI + BS greeks z mid; bez objemů, flows a Cum Δ — ty nese jen plný sběr). Takový symbol nese štítek <strong>„ad-hoc · tastytrade“</strong> a žije, dokud je zobrazený (~3 min po odchodu se uklízí); pro trvalé sledování ho přidej do watchlistu. V selektoru najdeš i <strong>následující expiraci</strong> (sbírá se souběžně — čtení positioningu příští seance).</td>
 </tr>
 <tr>
 <td><strong>Hlavička — spodní řádek</strong></td>
@@ -782,6 +782,10 @@ víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.</p>
 <tbody><tr>
 <td><strong>Vlny sentimentu</strong></td>
 <td>Historie RISK ON/OFF vln — hloubka, délka, četnost per směr. Hloubky jsou od v1.11 <strong>v jednotkách σ škály</strong> (#640): řada má dvě éry s různým měřítkem (backfill osciloval v ±0,4, bohatší živý feed dává násobně větší denní součty) a dělení σ(100 seancí) je činí srovnatelnými — 2 σ znamená „dvakrát větší výchylka než běžný den&quot;, ať vlna proběhla loni nebo dnes. Surová hodnota zůstává v textu aktuální vlny</td>
+</tr>
+<tr>
+<td><strong>Volatilita zpráv</strong> (v1.12, #567)</td>
+<td>Denní průměr |naměřené reakce| na zprávy (bp, okno 5 min, kontaminovaná okna mimo) s <strong>dlouhodobými pásmy min/průměr/max</strong> přes celou historii (~2 roky). <strong>Proč:</strong> směr a velikost jsou dvě různé informace — SentIndex říká KAM nálada táhne, tenhle index JAK MOC trh na zprávy reaguje; bez pásem nepoznáš, jestli je číslo velké. <strong>Jak číst:</strong> u minima trh zprávy ignoruje (klid), kolem průměru běžný provoz, u maxima panika/euforie (každá zpráva hýbe trhem) — obdoba Fear &amp; Greed, jen rychlejší. Sekce vypisuje i <strong>největší naměřené vrcholy jmenovitě</strong> — musí sedět na známé epizody (5. 8. 2024 VIX spike apod.), jinak ukazatel nefunguje a poznáš to hned</td>
 </tr>
 <tr>
 <td><strong>Hit-raty bucketů</strong></td>
