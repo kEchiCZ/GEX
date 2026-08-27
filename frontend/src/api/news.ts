@@ -248,6 +248,28 @@ export async function fetchTopicEvents(category: string, days: number): Promise<
   return data.events
 }
 
+/** Index volatility zpráv (#567): denní průměr |ret_bp| měřených reakcí. */
+export interface NewsVolPoint {
+  date: string
+  value: number
+  sample: number
+}
+
+export interface NewsVolBands {
+  min: number
+  max: number
+  mean: number
+}
+
+export async function fetchNewsVol(
+  symbol = 'ES',
+): Promise<{ series: NewsVolPoint[]; bands: NewsVolBands | null }> {
+  return getJson<{ series: NewsVolPoint[]; bands: NewsVolBands | null }>(
+    `/stats/newsvol?symbol=${symbol}`,
+    { series: [], bands: null },
+  )
+}
+
 /** Bod crowd řady (#290, SPEC 2.6) — F&G skóre, PCR, Reddit průměry. */
 export interface CrowdRow {
   ts: string
