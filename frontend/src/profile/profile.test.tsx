@@ -593,3 +593,35 @@ test('stáří pod prahem se netváří jako zmrzlé (běžný sweep křídel)',
   fireEvent.pointerEnter(screen.getByTestId('profile-row-7590'))
   expect(screen.queryByTestId('profile-stale')).toBeNull()
 })
+
+// ── Range mód: OI je statické EOD (#485) ───────────────────────────
+
+test('range mód: default „jen Vol" — OI složky mají nulovou šířku (#485)', () => {
+  const { container } = render(
+    <CrosshairProvider>
+      <StrikeProfile rows={rows()} spot={7600} windowLabel="10:00–11:00" />
+    </CrosshairProvider>,
+  )
+  const toggle = screen.getByTestId('window-oi-toggle')
+  expect(toggle.textContent).toBe('jen Vol')
+  const callOi = container.querySelector('[data-part="call-oi"]')!
+  expect(Number(callOi.getAttribute('width'))).toBe(0)
+  // Zapnutí kombinace: OI se vrátí, ale ztlumené a šrafované (statické, EOD)
+  fireEvent.click(toggle)
+  expect(screen.getByTestId('window-oi-toggle').textContent).toBe('OI (statické, EOD)')
+  const callOiOn = container.querySelector('[data-part="call-oi"]')!
+  expect(Number(callOiOn.getAttribute('width'))).toBeGreaterThan(0)
+  expect(callOiOn.getAttribute('class')).toContain('profile-oi-static')
+})
+
+test('mimo range mód se přepínač nekreslí a OI jede plně (#485)', () => {
+  const { container } = render(
+    <CrosshairProvider>
+      <StrikeProfile rows={rows()} spot={7600} />
+    </CrosshairProvider>,
+  )
+  expect(screen.queryByTestId('window-oi-toggle')).toBeNull()
+  const callOi = container.querySelector('[data-part="call-oi"]')!
+  expect(Number(callOi.getAttribute('width'))).toBeGreaterThan(0)
+  expect(callOi.getAttribute('class')).toBeNull()
+})

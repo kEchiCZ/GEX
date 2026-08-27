@@ -628,6 +628,13 @@ min</strong> (okno reakce na zprávu — tatáž okna, ve kterých se měří do
 pre/post ±15</strong> — nastaví A = 15 min před událostí, B = 15 min po ní a rovnou
 mód B−A: „co ta zpráva změnila&quot;.</p>
 <hr>
+<p><strong>Strike profil v okně (v1.12, #485).</strong> Při aktivním rozsahu profil defaultně
+ukazuje <strong>jen Vol</strong> — co se v okně skutečně zobchodovalo. OI je totiž statická
+EOD veličina (clearing ji počítá jednou denně; intradenní „změny&quot; z tastytrade
+jsou jen dosypy téhož čísla) a k oknu nepatří. Přepínačem <strong>„jen Vol / OI
+(statické, EOD)&quot;</strong> v hlavičce profilu jde OI složka přimíchat zpět — kreslí se
+ztlumeně se šrafovaným obrysem a tooltip ji značí „statické (EOD), nepatří
+k oknu&quot;: kontext „kde OI sedí vůči výběru&quot;, ne tvrzení, že se v okně změnilo.</p>
 <h2>9. Playback — přehrávání dne</h2>
 <p><strong>Aplikace defaultně jede vždy live</strong> — replay lišta je skrytá, aby nerušila. Zobrazíš ji tlačítkem <strong>⏮ Replay</strong> v liště grafu:</p>
 <ul>

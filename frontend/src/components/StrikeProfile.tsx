@@ -131,7 +131,22 @@ function StrikeProfileBase({
   const svgHeight = yView ? bodySize.height : height
 
   // Nejvyšší strike nahoře — stejná orientace jako heatmapa
-  const ordered = useMemo(() => [...rows].sort((a, b) => b.strike - a.strike), [rows])
+  // Range mód (#485): OI je EOD/clearingová veličina a k oknu NEPATŘÍ —
+  // default „jen Vol" (okenní pravda), kombinace je opt-in se ztlumenou OI
+  // složkou a legendou „statické, EOD", ať profil netvrdí, že OI patří výběru
+  const windowMode = windowLabel !== null
+  const [windowOi, setWindowOi] = useState(false)
+  const effectiveRows = useMemo(
+    () =>
+      windowMode && !windowOi
+        ? rows.map((row) => ({ ...row, callOiComponent: 0, putOiComponent: 0 }))
+        : rows,
+    [rows, windowMode, windowOi],
+  )
+  const ordered = useMemo(
+    () => [...effectiveRows].sort((a, b) => b.strike - a.strike),
+    [effectiveRows],
+  )
   // Vol leadeři (#208): top 3 strany podle volume vybrané expirace
   const leaders = useMemo(() => volLeaders(rows), [rows])
   const strikesAscending = useMemo(() => ordered.map((row) => row.strike).reverse(), [ordered])
@@ -272,6 +287,21 @@ function StrikeProfileBase({
           >
             {scaleMode === 'abs' ? 'Abs' : 'Rel'}
           </button>
+          {/* Range mód (#485): OI nepatří k oknu — přepínač jen Vol / +OI */}
+          {windowMode && (
+            <button
+              className={windowOi ? 'chip active' : 'chip'}
+              data-testid="window-oi-toggle"
+              onClick={() => setWindowOi((value) => !value)}
+              title={
+                'V okně se zobchodoval jen OBJEM — OI je statické číslo z ranního EOD ' +
+                'archivu a intradenně se nemění (ani z tastytrade). Zapnutím se OI složka ' +
+                'přimíchá ztlumeně jako kontext „kde OI sedí vůči oknu", k výběru nepatří.'
+              }
+            >
+              {windowOi ? 'OI (statické, EOD)' : 'jen Vol'}
+            </button>
+          )}
           {([1, 2, 4] as const).map((value) => (
             <button
               key={value}
@@ -443,6 +473,7 @@ function StrikeProfileBase({
                     width={bar.callOiWidth}
                     height={barHeight}
                     fill={COLORS.callOi}
+                    className={windowMode ? 'profile-oi-static' : undefined}
                     data-part="call-oi"
                   />
                   {/* put: doleva */}
@@ -460,6 +491,7 @@ function StrikeProfileBase({
                     width={bar.putOiWidth}
                     height={barHeight}
                     fill={COLORS.putOi}
+                    className={windowMode ? 'profile-oi-static' : undefined}
                     data-part="put-oi"
                   />
                   {/* Bez OI (#465): šrafovaná půlka řádku. Prázdno by tvrdilo změřenou
@@ -597,6 +629,7 @@ function StrikeProfileBase({
           <strong>{hovered.strike}</strong>
           <span>
             OI C/P: {hovered.callOi.toFixed(0)} / {hovered.putOi.toFixed(0)}
+            {windowMode && ' — statické (EOD), nepatří k oknu'}
           </span>
           <span>
             Vol C/P: {hovered.callVolume.toFixed(0)} / {hovered.putVolume.toFixed(0)}
