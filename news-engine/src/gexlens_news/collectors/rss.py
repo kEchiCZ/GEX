@@ -28,8 +28,10 @@ from collections.abc import Sequence
 from email.utils import parsedate_to_datetime
 from xml.etree import ElementTree
 
+from httpx import HTTPStatusError
+
 from gexlens_news.collectors import CollectorClock, utc_now
-from gexlens_news.http import Fetcher
+from gexlens_news.http import Fetcher, Response
 from gexlens_news.model import NewsEvent, RawItem
 
 logger = logging.getLogger(__name__)
@@ -103,6 +105,17 @@ def parse_items(xml: str) -> list[dict[str, str | None]]:
     ]
 
 
+def _describe(error: Exception) -> str:
+    """Chyba do souhrnu: u HTTP i status kód (#941).
+
+    Samotné `HTTPStatusError` neřeklo, jestli jde o 429 (rate limit), 404
+    (zrušený feed) nebo 500 — a diagnóza pak stála reprodukci v kontejneru.
+    """
+    if isinstance(error, HTTPStatusError):
+        return f"HTTP {error.response.status_code}"
+    return type(error).__name__
+
+
 class RssCollector:
     """Jeden nebo více RSS/Atom feedů pod společným jménem zdroje."""
 
@@ -141,6 +154,24 @@ class RssCollector:
     def interval_s(self) -> float:
         return self._interval_s
 
+    async def _fetch_with_retry(self, url: str) -> Response:
+        """Jeden pokus navíc při 429 (#941).
+
+        Reddit rate limituje anonymní přístup per IP; občasné odmítnutí je
+        provozní realita, ne porucha feedu. Druhý pokus po rozestupu zachrání
+        cyklus místo toho, aby zdroj hlásil degradaci.
+        """
+        try:
+            return await self._fetcher.get(url)
+        except HTTPStatusError as error:
+            if error.response.status_code != 429 or self._inter_fetch_delay_s <= 0:
+                raise
+            logger.info(
+                "Feed %s vrátil 429 — opakuji za %.0f s (#941)", url, self._inter_fetch_delay_s
+            )
+            await asyncio.sleep(self._inter_fetch_delay_s)
+            return await self._fetcher.get(url)
+
     async def fetch(self) -> Sequence[RawItem]:
         now = self._clock()
         items: list[RawItem] = []
@@ -149,7 +180,7 @@ class RssCollector:
             if index > 0 and self._inter_fetch_delay_s > 0:
                 await asyncio.sleep(self._inter_fetch_delay_s)
             try:
-                response = await self._fetcher.get(url)
+                response = await self._fetch_with_retry(url)
                 if response.not_modified:
                     continue  # 304 — feed se nezměnil, nic k práci
                 entries = parse_items(response.text)
@@ -168,7 +199,7 @@ class RssCollector:
                         RawItem(source=self._name, payload={**entry, "feed": url}, fetched_at=now)
                     )
             except Exception as error:  # noqa: BLE001 — jeden mrtvý feed nezabije ostatní
-                errors.append(f"{url}: {type(error).__name__}")
+                errors.append(f"{url}: {_describe(error)}")
         if errors and not items:
             # Všechny feedy zdroje selhaly → ať to runner započítá do degradace
             raise RuntimeError("; ".join(errors))

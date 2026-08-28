@@ -132,8 +132,9 @@ def build_collectors(
                     fetcher,
                     interval_s=settings.reddit_rss_interval_s,
                     kind="social",
-                    # Reddit 429 na druhý požadavek v bezprostředním sledu (#922)
-                    inter_fetch_delay_s=2.0,
+                    # Reddit rate limituje per IP napříč subreddity (#922/#941):
+                    # 2 s nestačily, změřených 15 s prochází
+                    inter_fetch_delay_s=settings.reddit_rss_feed_delay_s,
                 )
             )
     if extra_rss_urls and on("rss_user"):

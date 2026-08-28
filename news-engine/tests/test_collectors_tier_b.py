@@ -195,3 +195,64 @@ async def test_rss_rozestup_mezi_feedy(monkeypatch: pytest.MonkeyPatch) -> None:
     plain = RssCollector("rss_news", ["https://a/.rss", "https://b/.rss"], fetcher, clock=clock)
     await plain.fetch()
     assert waits == []
+
+
+async def test_rss_retry_pri_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#941: 429 (Reddit rate limit per IP) dostane druhý pokus po rozestupu.
+
+    Reddit odmítá anonymní přístup napříč subreddity — změřeno 29. 8.:
+    5 s stále 429, 15 s prochází. Jeden retry zachrání cyklus.
+    """
+    import asyncio
+
+    import httpx
+
+    waits: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    class _RateLimitedOnce:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get(self, url: str, *, headers: dict[str, str] | None = None) -> Response:
+            self.calls += 1
+            if self.calls == 1:
+                raise httpx.HTTPStatusError(
+                    "429",
+                    request=httpx.Request("GET", url),
+                    response=httpx.Response(429),
+                )
+            return Response(status=200, text="<rss><channel></channel></rss>")
+
+    fetcher = _RateLimitedOnce()
+    collector = RssCollector(
+        "reddit_rss", ["https://a/.rss"], fetcher, inter_fetch_delay_s=15.0, clock=clock
+    )
+    await collector.fetch()  # neselže — druhý pokus prošel
+    assert fetcher.calls == 2
+    assert waits == [15.0]
+
+
+async def test_rss_bez_rozestupu_neretryuje() -> None:
+    """Bez rozestupu (ostatní feedy) se chování nemění — žádný skrytý retry."""
+    import httpx
+
+    class _AlwaysRateLimited:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get(self, url: str, *, headers: dict[str, str] | None = None) -> Response:
+            self.calls += 1
+            raise httpx.HTTPStatusError(
+                "429", request=httpx.Request("GET", url), response=httpx.Response(429)
+            )
+
+    fetcher = _AlwaysRateLimited()
+    collector = RssCollector("rss_news", ["https://a/.rss"], fetcher, clock=clock)
+    with pytest.raises(RuntimeError, match="HTTP 429"):  # status kód v hlášce (#941)
+        await collector.fetch()
+    assert fetcher.calls == 1
