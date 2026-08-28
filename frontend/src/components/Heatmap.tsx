@@ -11,9 +11,9 @@ jsou ostré i na velkých monitorech. Souřadnice událostí = CSS pixely.
 */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useElementSize } from '../hooks/useElementSize'
-import { contourLevels, marchingSquares } from '../heatmap/contours'
 import type { ContoursMode } from '../heatmap/contours'
-import { gaussianBlur, renderGrid } from '../heatmap/render'
+import { useContours } from '../heatmap/useContours'
+import { renderGrid } from '../heatmap/render'
 import type { SignedPalette } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
@@ -377,33 +377,9 @@ export function Heatmap({
 
   const strikeCount = grid.strikes.length
 
-  const contourSegments = useMemo(() => {
-    if (contours === 'off') return []
-    // S Dyn GEX podkladem (#242) obrysují kontury modelované pole;
-    // podklad má z App zaručené shodné rozměry s hlavním gridem
-    const source =
-      underGrid &&
-      underGrid.minutes === grid.minutes &&
-      underGrid.strikes.length === grid.strikes.length
-        ? underGrid
-        : grid
-    const field = source.layers.signed ?? source.layers.call ?? source.layers.put
-    if (!field) return []
-    const smoothed = gaussianBlur(field, source.minutes, strikeCount)
-    // Prahy per strana nad znaménkovým polem (#571); záporná strana jedním
-    // algoritmem nad -field (#570) — u čistě kladných polí je sada prázdná
-    const levels = contourLevels(smoothed, contours)
-    const segments = levels.positive.flatMap((level) =>
-      marchingSquares(smoothed, source.minutes, strikeCount, level),
-    )
-    if (levels.negative.length > 0) {
-      const negated = Float32Array.from(smoothed, (value) => -value)
-      for (const level of levels.negative) {
-        segments.push(...marchingSquares(negated, source.minutes, strikeCount, level))
-      }
-    }
-    return segments
-  }, [grid, underGrid, contours, strikeCount])
+  // Kontury (#493): výpočet ve web workeru + cache per (pole, mód) —
+  // datový update nedropne frame, přepínání módů je cache hit
+  const contourSegments = useContours(grid, underGrid, contours)
 
   // Mapa 1m osy pro anotace (#502) — null = identita index == minuta
   const axisOffsets = useMemo(
