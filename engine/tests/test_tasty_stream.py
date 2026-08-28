@@ -2,6 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -178,7 +179,7 @@ async def test_cileny_heal_posila_jen_mlcici(monkeypatch: pytest.MonkeyPatch) ->
     targets = stream._heal_targets(full) & full if stream._heal_targets else full
     if len(targets) < len(full) / 2:
         await stream._send_subscription(add=targets)
-    entries = [e for p in sent for e in p.get("add", [])]
+    entries = [e for p in sent for e in cast(list[dict[str, str]], p.get("add", []))]
     assert {e["symbol"] for e in entries} == silent  # jen mlčící
 
     # Mlčící většina (výpadek) → plný resubscribe
@@ -188,5 +189,5 @@ async def test_cileny_heal_posila_jen_mlcici(monkeypatch: pytest.MonkeyPatch) ->
     silent2 = stream2._heal_targets(full2) & full2 if stream2._heal_targets else full2
     targets2 = silent2 if len(silent2) < len(full2) / 2 else full2
     await stream2._send_subscription(add=targets2)
-    entries2 = [e for p in sent2 for e in p.get("add", [])]
+    entries2 = [e for p in sent2 for e in cast(list[dict[str, str]], p.get("add", []))]
     assert len({e["symbol"] for e in entries2}) == 10
