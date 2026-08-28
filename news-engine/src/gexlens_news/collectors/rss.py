@@ -131,6 +131,7 @@ class RssCollector:
         importance: int | None = None,
         symbols: Sequence[str] = (),
         inter_fetch_delay_s: float = 0.0,
+        round_robin: bool = False,
         clock: CollectorClock = utc_now,
     ) -> None:
         self._name = name
@@ -141,9 +142,15 @@ class RssCollector:
         self._category = category
         self._importance = importance
         self._symbols = list(symbols)
-        #: Rozestup mezi feedy (#922): Reddit vrací 429 na druhý požadavek
-        #: v bezprostředním sledu — r/stocks tak selhával 92× za noc
+        #: Rozestup mezi feedy (#922) — u zdrojů, které nesnesou dávku za sebou
         self._inter_fetch_delay_s = inter_fetch_delay_s
+        #: Round robin (#941): jeden feed za cyklus místo všech naráz.
+        #: Reddit limituje anonymní přístup per IP a měření 29. 8. ukázalo, že
+        #: potřebuje ~150 s klidu mezi požadavky — při kadenci 300 s tedy projde
+        #: právě jeden. Každý subreddit se tak stáhne à (interval × počet feedů),
+        #: což pro crowd sentiment bohatě stačí.
+        self._round_robin = round_robin
+        self._cursor = 0
         self._clock = clock
 
     @property
@@ -172,11 +179,19 @@ class RssCollector:
             await asyncio.sleep(self._inter_fetch_delay_s)
             return await self._fetcher.get(url)
 
+    def _due_urls(self) -> list[str]:
+        """Feedy k stažení v tomto cyklu (round robin → právě jeden)."""
+        if not self._round_robin or not self._urls:
+            return list(self._urls)
+        url = self._urls[self._cursor % len(self._urls)]
+        self._cursor += 1
+        return [url]
+
     async def fetch(self) -> Sequence[RawItem]:
         now = self._clock()
         items: list[RawItem] = []
         errors: list[str] = []
-        for index, url in enumerate(self._urls):
+        for index, url in enumerate(self._due_urls()):
             if index > 0 and self._inter_fetch_delay_s > 0:
                 await asyncio.sleep(self._inter_fetch_delay_s)
             try:
