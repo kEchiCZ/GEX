@@ -66,6 +66,8 @@ class TastyContractState:
     trades_with_aggressor: int = 0
     #: Cena posledního printu (#616): `last` pro extended snapshoty
     last_price: float | None = None
+    #: Poslední event JAKÉHOKOLI typu (#936) — vstup cíleného healu
+    last_event_at: dt.datetime | None = None
 
 
 class TastyChainCache:
@@ -96,6 +98,22 @@ class TastyChainCache:
             trades += state.trades
         return {"quotes": quotes, "greeks": greeks, "summary": summary, "trades": trades}
 
+    def silent_symbols(self, candidates: set[str], max_age_s: float = 600.0) -> set[str]:
+        """Symboly bez eventu za posledních `max_age_s` (#936).
+
+        Vstup cíleného healu: po rate limitu se opakuje subskripce JEN
+        mlčících symbolů (typicky vzdálená křídla), ne celé množiny —
+        plný resubscribe za RTH trhal limit znovu a smyčka nekonvergovala.
+        Symbol bez záznamu v cache je mlčící z definice.
+        """
+        threshold = self._clock() - dt.timedelta(seconds=max_age_s)
+        silent: set[str] = set()
+        for symbol in candidates:
+            state = self._states.get(symbol)
+            if state is None or state.last_event_at is None or state.last_event_at < threshold:
+                silent.add(symbol)
+        return silent
+
     def on_event(self, event_type: str, values: list[object]) -> None:
         """EventCallback pro DxLinkStream — pořadí polí dle stream.EVENT_FIELDS."""
         symbol = str(values[0]) if values else ""
@@ -104,6 +122,7 @@ class TastyChainCache:
         state = self._states.setdefault(symbol, TastyContractState())
         now = self._clock()
         self.last_event_at = now
+        state.last_event_at = now
         if event_type == "Quote":
             state.quote = TastyQuote(
                 bid=_number(values[1]),

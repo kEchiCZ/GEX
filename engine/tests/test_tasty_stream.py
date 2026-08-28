@@ -2,6 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -122,3 +123,71 @@ async def test_connect_ma_ping_timeout_prezivajici_subskripci(
     # symboly z produkce (#863: ~5 600 × 4 eventy / 500 na dávku) à strop 2 s
     worst_batches = (5_600 * 4) / SUBSCRIPTION_BATCH
     assert worst_batches * SUBSCRIPTION_PAUSE_MAX_S < stream_module.PING_TIMEOUT_S
+
+
+def test_silent_symbols_v_cache() -> None:
+    """#936: cílený heal potřebuje vědět, kdo mlčí — dle stáří posledního eventu."""
+    import datetime as dt
+
+    from gexlens_engine.tasty.provider import TastyChainCache
+
+    now = dt.datetime(2026, 8, 28, 14, 0, tzinfo=dt.UTC)
+    clock = {"now": now - dt.timedelta(seconds=900)}
+    cache = TastyChainCache(clock=lambda: clock["now"])
+    cache.on_event("Quote", [".ESU26C7700", 1.0, 1.2, 1.0, 1.0])  # event před 15 min
+    clock["now"] = now
+    cache.on_event("Quote", [".ESU26C7750", 2.0, 2.2, 1.0, 1.0])  # čerstvý event
+    candidates = {".ESU26C7700", ".ESU26C7750", ".ESU26P7600"}
+    # 7700 zastaralý, 7600 v cache vůbec není, 7750 čerstvý
+    assert cache.silent_symbols(candidates, max_age_s=600) == {".ESU26C7700", ".ESU26P7600"}
+
+
+def make_stream_with_heal(
+    silent: set[str],
+) -> tuple[DxLinkStream, list[dict[str, object]]]:
+    sent: list[dict[str, object]] = []
+
+    async def token() -> tuple[str, str]:
+        return "wss://test", "token"
+
+    stream = DxLinkStream(
+        token, lambda _t, _v: None, events=("Quote",), heal_targets=lambda _full: silent
+    )
+
+    async def fake_send(payload: dict[str, object]) -> None:
+        sent.append(payload)
+
+    stream._send = fake_send  # type: ignore[method-assign]
+    return stream, sent
+
+
+async def test_cileny_heal_posila_jen_mlcici(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#936: heal po rate limitu resubscribuje jen mlčící menšinu, ne vše.
+
+    Plný resubscribe (~39 dávek) za RTH trhal limit znovu — 79 healů za 2 h.
+    """
+
+    async def no_sleep(_s: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    silent = {".ES1", ".ES2"}
+    stream, sent = make_stream_with_heal(silent)
+    stream._symbols = {f".ES{i}" for i in range(1, 11)}  # 10 symbolů, mlčí 2
+    # Simulace heal větve (výřez z _connect_and_read)
+    full = set(stream._symbols)
+    targets = stream._heal_targets(full) & full if stream._heal_targets else full
+    if len(targets) < len(full) / 2:
+        await stream._send_subscription(add=targets)
+    entries = [e for p in sent for e in cast(list[dict[str, str]], p.get("add", []))]
+    assert {e["symbol"] for e in entries} == silent  # jen mlčící
+
+    # Mlčící většina (výpadek) → plný resubscribe
+    stream2, sent2 = make_stream_with_heal({f".ES{i}" for i in range(1, 8)})
+    stream2._symbols = {f".ES{i}" for i in range(1, 11)}
+    full2 = set(stream2._symbols)
+    silent2 = stream2._heal_targets(full2) & full2 if stream2._heal_targets else full2
+    targets2 = silent2 if len(silent2) < len(full2) / 2 else full2
+    await stream2._send_subscription(add=targets2)
+    entries2 = [e for p in sent2 for e in cast(list[dict[str, str]], p.get("add", []))]
+    assert len({e["symbol"] for e in entries2}) == 10

@@ -1244,7 +1244,12 @@ async def main() -> None:
             # registrovaných front futures, opční projdou bez práce
             futures_cvd.on_event(event_type, values)
 
-        tasty_stream = DxLinkStream(tasty_session.quote_token, _tasty_event)
+        tasty_stream = DxLinkStream(
+            tasty_session.quote_token,
+            _tasty_event,
+            # Cílený heal (#936): po rate limitu resubscribe jen mlčících
+            heal_targets=lambda candidates: tasty_cache.silent_symbols(candidates),
+        )
 
         def _tasty_status() -> dict[str, object]:
             """Stav větve do /status (#706): spojení, subskripce, pokrytí, čerstvost."""
@@ -1257,6 +1262,7 @@ async def main() -> None:
                 "tasty_reconnects": tasty_stream.reconnects,
                 # Rate limit subskripcí (#863): počet odmítnutí serverem
                 "tasty_rate_limited": tasty_stream.rate_limited,
+                "tasty_heals": tasty_stream.heals,
                 "tasty_symbols": tasty_cache.symbols_tracked(),
                 # Ad-hoc pohledy (#521 C) — UI badge zdroje
                 **({"tasty_adhoc": adhoc_viewer.active()} if adhoc_viewer.active() else {}),
