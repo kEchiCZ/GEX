@@ -129,8 +129,14 @@ class DxLinkStream:
             if self._ws is not None:
                 try:
                     await self._send_subscription(add=added, remove=removed)
-                except Exception:
-                    logger.exception("Změna subskripce selhala — obnoví ji reconnect")
+                except Exception as error:
+                    # Bez tracebacku (#937 deploy): očekávaný race s reconnectem
+                    # není porucha — traceback v logu trhal deploy health check
+                    logger.warning(
+                        "Změna subskripce selhala (%s: %s) — obnoví ji reconnect",
+                        type(error).__name__,
+                        error,
+                    )
 
     async def run(self, stop: asyncio.Event) -> None:
         """Hlavní smyčka: připojit, subskribovat, číst; při pádu backoff."""
@@ -156,7 +162,10 @@ class DxLinkStream:
     # ── vnitřek ────────────────────────────────────────────────────
 
     async def _send(self, payload: dict[str, object]) -> None:
-        assert self._ws is not None
+        if self._ws is None:
+            # Očekávaný race: reconnect shodil _ws mezi kontrolou a odesláním.
+            # Čistá výjimka bez assertu — volající ji řeší, reconnect obnoví.
+            raise ConnectionError("DXLink spojení není otevřené")
         await self._ws.send(json.dumps(payload))
 
     async def _recv_until(self, message_type: str, timeout: float = 10.0) -> dict[str, object]:
