@@ -132,6 +132,8 @@ def build_collectors(
                     fetcher,
                     interval_s=settings.reddit_rss_interval_s,
                     kind="social",
+                    # Reddit 429 na druhý požadavek v bezprostředním sledu (#922)
+                    inter_fetch_delay_s=2.0,
                 )
             )
     if extra_rss_urls and on("rss_user"):
