@@ -29,7 +29,14 @@ SUBSCRIPTION_PAUSE_S = 0.25
 
 #: Strop adaptivního rozestupu po rate limitu (#863): každé odmítnutí rozestup
 #: zdvojí, takže opakovaný resubscribe konverguje k tempu, které server bere.
+#: Strop musí držet invariant #916: plná subskripce (~45 dávek) × strop
+#: NESMÍ přesáhnout PING_TIMEOUT_S — vyšší strop by vrátil smyčku smrti.
+#: Konvergenci za RTH řeší cílený heal (#936), ne pomalejší plný resubscribe.
 SUBSCRIPTION_PAUSE_MAX_S = 2.0
+
+#: Po jak dlouhém klidu (bez rate limitu) se rozestup zase POVOLUJE (#936) —
+#: bez relaxace by jediná ranní špička zpomalila subskripce na celý den.
+PAUSE_RELAX_AFTER_S = 120.0
 
 #: Samoléčení po rate limitu (#863): server u odmítnuté dávky neřekne, KTERÉ
 #: symboly zahodil — jediná spolehlivá oprava je poslat celou cílovou množinu
@@ -84,6 +91,7 @@ class DxLinkStream:
         on_event: EventCallback,
         *,
         events: tuple[str, ...] = ("Quote", "Greeks", "Summary", "TimeAndSale"),
+        heal_targets: Callable[[set[str]], set[str]] | None = None,
     ) -> None:
         self._token_source = token_source
         self._on_event = on_event
@@ -99,6 +107,10 @@ class DxLinkStream:
         self.last_error: str | None = None
         #: Rate limit subskripcí (#863): počet odmítnutí + stav samoléčení
         self.rate_limited = 0
+        #: Cílený heal (#936): vrátí podmnožinu mlčících symbolů; None = plný
+        self._heal_targets = heal_targets
+        self.heals = 0
+        self._last_rate_limit_seen = 0.0
         self._pause_s = SUBSCRIPTION_PAUSE_S
         self._rate_limit_ts: float | None = None
         self._last_keepalive = 0.0
@@ -180,6 +192,7 @@ class DxLinkStream:
         if "subscription rate" in self.last_error.lower():
             self.rate_limited += 1
             self._rate_limit_ts = time.monotonic()
+            self._last_rate_limit_seen = self._rate_limit_ts
             self._pause_s = min(self._pause_s * 2, SUBSCRIPTION_PAUSE_MAX_S)
 
     def _heal_due(self, now: float) -> bool:
@@ -289,13 +302,38 @@ class DxLinkStream:
                     if self._heal_due(time.monotonic()):
                         self._rate_limit_ts = None
                         async with self._lock:
-                            targets = set(self._symbols)
-                            logger.warning(
-                                "DXLink rate limit: opakuji subskripci %d symbolů (à %.2f s)",
-                                len(targets),
-                                self._pause_s,
-                            )
-                            await self._send_subscription(add=targets)
+                            full = set(self._symbols)
+                            targets = full
+                            if self._heal_targets is not None:
+                                silent = self._heal_targets(full) & full
+                                # Cíleně jen když mlčí menšina — mlčící většina
+                                # znamená výpadek, tam patří plný resubscribe
+                                if len(silent) < len(full) / 2:
+                                    targets = silent
+                            self.heals += 1
+                            if targets:
+                                logger.warning(
+                                    "DXLink rate limit: heal %d/%d symbolů (à %.2f s)",
+                                    len(targets),
+                                    len(full),
+                                    self._pause_s,
+                                )
+                                await self._send_subscription(add=targets)
+                            else:
+                                logger.info(
+                                    "DXLink rate limit: vše dodává, heal netřeba (%d symbolů)",
+                                    len(full),
+                                )
+                    # Relaxace rozestupu (#936): po klidu bez rate limitu se
+                    # pauza vrací k základu — jinak by ranní špička zpomalila
+                    # subskripce na celý den
+                    if (
+                        self._pause_s > SUBSCRIPTION_PAUSE_S
+                        and self._rate_limit_ts is None
+                        and time.monotonic() - self._last_rate_limit_seen > PAUSE_RELAX_AFTER_S
+                    ):
+                        self._pause_s = max(SUBSCRIPTION_PAUSE_S, self._pause_s / 2)
+                        self._last_rate_limit_seen = time.monotonic()
                     try:
                         raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
                     except TimeoutError:
