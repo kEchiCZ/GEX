@@ -256,3 +256,33 @@ async def test_rss_bez_rozestupu_neretryuje() -> None:
     with pytest.raises(RuntimeError, match="HTTP 429"):  # status kód v hlášce (#941)
         await collector.fetch()
     assert fetcher.calls == 1
+
+
+async def test_rss_round_robin_bere_jeden_feed_za_cyklus() -> None:
+    """#941: Reddit chce ~150 s klidu mezi požadavky (změřeno 29. 8.).
+
+    Při kadenci 300 s projde právě jeden — kolektor tedy feedy střídá místo
+    toho, aby je stahoval naráz a bušil do rate limitu.
+    """
+    feed = Response(status=200, text="<rss><channel></channel></rss>")
+    fetcher = RecordingFetcher(feed, feed, feed, feed)
+    collector = RssCollector(
+        "reddit_rss",
+        ["https://a/.rss", "https://b/.rss"],
+        fetcher,
+        round_robin=True,
+        clock=clock,
+    )
+    for _ in range(4):
+        await collector.fetch()
+    assert fetcher.calls == [
+        "https://a/.rss",
+        "https://b/.rss",
+        "https://a/.rss",
+        "https://b/.rss",
+    ]
+    # Bez round robin se chování nemění — všechny feedy v jednom cyklu
+    plain = RssCollector("rss_news", ["https://a/.rss", "https://b/.rss"], fetcher, clock=clock)
+    fetcher.calls.clear()
+    await plain.fetch()
+    assert len(fetcher.calls) == 2
