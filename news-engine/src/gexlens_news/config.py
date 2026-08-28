@@ -64,6 +64,10 @@ class NewsSettings(BaseSettings):
     # Reddit přes NATIVNÍ RSS (#578 analýza: bridge není potřeba) — tier testovací
     reddit_rss_enabled: bool = Field(default=True)
     reddit_rss_interval_s: float = Field(default=300.0, gt=0)
+    # Rozestup mezi reddit feedy (#941). Reddit rate limituje ANONYMNÍ přístup
+    # per IP napříč subreddity — změřeno 29. 8.: 5 s stále 429, 15 s prochází.
+    # Kolektor jede à 300 s, takže i 15 s zdržení je bez dopadu na čerstvost.
+    reddit_rss_feed_delay_s: float = Field(default=15.0, ge=0)
     # 60 s (#386): FOMC statement je nejcitlivější headline; 1 req/min je zdarma
     fed_rss_interval_s: float = Field(default=60.0, gt=0)
     reddit_interval_s: float = Field(default=900.0, gt=0)
