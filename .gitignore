@@ -33,3 +33,6 @@ Thumbs.db
 # Playwright artefakty (#154)
 frontend/test-results/
 frontend/playwright-report/
+scripts/lines_probe_result*.txt
+scripts/lines_probe_result*.log
+scripts/lines_probe_run.log
