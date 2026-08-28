@@ -165,3 +165,33 @@ async def test_same_story_from_finnhub_and_rss_shares_dedup_key() -> None:
     assert from_finnhub is not None and from_rss is not None
     assert from_finnhub.dedup_hash == from_rss.dedup_hash
     assert from_finnhub.source != from_rss.source
+
+
+async def test_rss_rozestup_mezi_feedy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#922: Reddit vrací 429 na druhý požadavek v bezprostředním sledu —
+    kolektor s `inter_fetch_delay_s` mezi feedy čeká (před prvním ne)."""
+    import asyncio
+
+    waits: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    feed = Response(status=200, text="<rss><channel></channel></rss>")
+    fetcher = RecordingFetcher(feed, feed, feed)
+    collector = RssCollector(
+        "reddit_rss",
+        ["https://a/.rss", "https://b/.rss", "https://c/.rss"],
+        fetcher,
+        inter_fetch_delay_s=2.0,
+        clock=clock,
+    )
+    await collector.fetch()
+    assert waits == [2.0, 2.0]  # jen mezi feedy, ne před prvním
+    assert len(fetcher.calls) == 3
+    # Default beze změny chování: žádné čekání
+    waits.clear()
+    plain = RssCollector("rss_news", ["https://a/.rss", "https://b/.rss"], fetcher, clock=clock)
+    await plain.fetch()
+    assert waits == []

@@ -148,7 +148,9 @@ NEWS_SOURCE_SEED: tuple[tuple[str, str, int | None, str], ...] = (
     ("forexfactory", "core", 40, "makro kalendář Tier A (forecast/previous/actual)"),
     ("fed_rss", "core", 5, "oficiální Fed feedy — statements, projevy"),
     ("rss_news", "core", 300, "agenturní headline redundance (CNBC/MarketWatch/Yahoo)"),
-    ("ibkr", "extra", 100, "broker páska BRFG + DJNL (tick 292)"),
+    # Názvy dle reality (#922): engine zapisuje `ibkr_{provider}`, ne „ibkr"
+    ("ibkr_brfg", "extra", 50, "broker páska Briefing.com (tick 292)"),
+    ("ibkr_djnl", "extra", 50, "broker páska Dow Jones Newsletters (tick 292)"),
     ("alpaca", "extra", 800, "Benzinga WS push — vyžaduje klíče"),
     ("finnhub", "extra", 200, "doplňkový headline zdroj — vyžaduje klíč"),
     ("bluesky", "test", 200, "Jetstream firehose, přímá komunikace osob (#578, 27. 8.)"),

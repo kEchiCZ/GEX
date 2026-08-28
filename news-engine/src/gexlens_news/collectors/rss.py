@@ -21,6 +21,7 @@ XML útoky jsou tu pokryté i bez další závislosti:
 Rozhodnutí se tedy neopírá o „riziko je nízké", ale o tři konkrétní zábrany.
 """
 
+import asyncio
 import datetime as dt
 import logging
 from collections.abc import Sequence
@@ -116,6 +117,7 @@ class RssCollector:
         category: str | None = None,
         importance: int | None = None,
         symbols: Sequence[str] = (),
+        inter_fetch_delay_s: float = 0.0,
         clock: CollectorClock = utc_now,
     ) -> None:
         self._name = name
@@ -126,6 +128,9 @@ class RssCollector:
         self._category = category
         self._importance = importance
         self._symbols = list(symbols)
+        #: Rozestup mezi feedy (#922): Reddit vrací 429 na druhý požadavek
+        #: v bezprostředním sledu — r/stocks tak selhával 92× za noc
+        self._inter_fetch_delay_s = inter_fetch_delay_s
         self._clock = clock
 
     @property
@@ -140,7 +145,9 @@ class RssCollector:
         now = self._clock()
         items: list[RawItem] = []
         errors: list[str] = []
-        for url in self._urls:
+        for index, url in enumerate(self._urls):
+            if index > 0 and self._inter_fetch_delay_s > 0:
+                await asyncio.sleep(self._inter_fetch_delay_s)
             try:
                 response = await self._fetcher.get(url)
                 if response.not_modified:
