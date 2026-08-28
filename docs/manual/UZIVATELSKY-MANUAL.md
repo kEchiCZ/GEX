@@ -329,6 +329,22 @@ poctivě padají na Vše. Popiska pod pruhem vždy říká, z čeho číslo vzni
 S aktivním časovým oknem (kap. 8b) panel přepne na **okenní režim** — počítá
 jen to, co se zobchodovalo v okně.
 
+> **Kontrakty vs. Prémie $: proč se liší rozsah dat.** Řetěz sahá dál, než kam
+> dosáhne měření. Striky mimo obálku IBKR nese **denní OI z tastytrade** — u nich
+> známe otevřený zájem, ale ne kotace, takže **do Kontraktů vstupují, do Prémií
+> ne** (bez midu nejde spočítat, kolik peněz v nich leží). Proto může Prémie $
+> ukazovat výrazně jiný poměr než Kontrakty a být zašedlá: to není chyba, ale
+> přiznání, že peněžní pohled má užší záběr. **Pro čtení celkového pozicování
+> používej Kontrakty**, prémie ber jako pohled na to, kde se reálně obchoduje.
+
+> **OI, Vol, nebo Vol + OI?** Každý základ odpovídá na jinou otázku.
+> **OI** = co leží v knize z minula (pozicování). **Vol** = co se obchoduje dnes
+> (čerstvý tok). **Vol + OI** obojí sčítá, což je pohodlné, ale míchá dvě
+> veličiny dohromady. Zajímavý je hlavně _rozdíl_ mezi nimi: když je Vol
+> výrazně nižší než OI (např. 0,37 proti 0,66), dnešní obchodování je
+> callovější než stávající pozice — někdo cally nakupuje teď, neleží tam
+> z minula.
+
 > **Proč večer „zmizí" jedna strana pruhů?** Pruhy jsou **Δ-vážené** — násobí se deltou opce (kolik futures dealer na kontrakt reálně drží). Ke konci seance se delta polarizuje (viz gamma crunch, kap. 18): OTM opce mají deltu skoro 0, ITM skoro 1. Nad spotem proto zbývají hlavně červené (ITM puty) a pod spotem zelené (ITM cally). Není to chyba — surové OI/Vol obou stran pořád vidíš v tooltipu řádku; zapnutím **Σ** se přimíchá zítřejší expirace s měkčími deltami a obě strany se zase objeví.
 
 ---
