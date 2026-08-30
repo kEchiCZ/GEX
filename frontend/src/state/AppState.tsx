@@ -6,6 +6,7 @@ import type { Coverage } from '../instrument/coverage'
 import { API_BASE, WS_URL } from '../config'
 import type { GexRegimeState } from '../instrument/regime'
 import type { SettleWatchInfo } from '../instrument/settlewatch'
+import { sessionDateIso } from '../instrument/tz'
 import { GEX_UNITS } from '../heatmap/units'
 import type { GexUnits } from '../heatmap/units'
 import { FORWARD_RANGES } from '../heatmap/dailyforward'
@@ -268,11 +269,25 @@ const VIEWS: readonly AppView[] = [
   'settings',
 ]
 
-/** Výchozí expirace: dnešní (0DTE řetěz), jinak nejnovější — první dir může být včerejšek. */
-export function defaultExpiry(expiries: string[]): string | null {
+/** Výchozí expirace: nejbližší expirace ≥ den seance (dnešní 0DTE řetěz tím
+dostane přednost sám), a teprve když žádná budoucí není, nejnovější proběhlá.
+
+Původní pravidlo „jinak `at(-1)`" počítalo s tím, že seznam nese jen proběhlé
+expirace, kde poslední = nejnovější minulá. Po zapojení tastytrade extended
+expirací (#610) sahá `/instruments/{symbol}/expiries` daleko DOPŘEDU, takže
+`at(-1)` začalo znamenat „nejvzdálenější budoucí" — měsíční řetěz měsíc dopředu,
+pro který se nic nesbírá. O víkendech a svátcích, kdy den seance mezi
+expiracemi není, tím aplikace tiše spadla na demo data (#945).
+
+Kotva je den seance (#512), ne kalendářní UTC den: nedělní večer už patří
+pondělní ose. `sessionDate` je parametrem kvůli deterministickým testům. */
+export function defaultExpiry(
+  expiries: string[],
+  sessionDate: string = sessionDateIso().replaceAll('-', ''),
+): string | null {
   if (expiries.length === 0) return null
-  const today = new Date().toISOString().slice(0, 10).replaceAll('-', '')
-  return expiries.includes(today) ? today : (expiries.at(-1) ?? null)
+  const sorted = [...expiries].sort()
+  return sorted.find((expiry) => expiry >= sessionDate) ?? sorted.at(-1) ?? null
 }
 
 /** Deep-link: počáteční obrazovka a téma z URL (?view=dashboard&theme=light).
