@@ -48,11 +48,27 @@ beforeEach(() => {
   vi.restoreAllMocks()
 })
 
-test('defaultExpiry: dnešní expirace má přednost, jinak nejnovější', () => {
-  const today = new Date().toISOString().slice(0, 10).replaceAll('-', '')
-  expect(defaultExpiry(['20250101', today, '20991231'])).toBe(today)
-  expect(defaultExpiry(['20250101', '20250102'])).toBe('20250102')
-  expect(defaultExpiry([])).toBeNull()
+test('defaultExpiry: expirace dne seance, jinak NEJBLIŽŠÍ budoucí (#945)', () => {
+  // Den seance je parametr — test nesmí viset na hodinách stroje
+  const session = '20260831'
+
+  // Expirace dne seance vyhrává i mezi budoucími
+  expect(defaultExpiry(['20260828', session, '20260901', '20260925'], session)).toBe(session)
+
+  // Den seance v seznamu chybí (víkend/svátek) → nejbližší BUDOUCÍ, ne poslední
+  // v seznamu. Přesně tenhle případ padal na demo data: `at(-1)` bralo měsíční
+  // expiraci měsíc dopředu, pro kterou se nic nesbírá.
+  expect(defaultExpiry(['20260828', '20260831', '20260901', '20260925'], '20260830')).toBe(
+    '20260831',
+  )
+
+  // Žádná budoucí → nejnovější proběhlá (původní chování pro čistě historický seznam)
+  expect(defaultExpiry(['20250101', '20250102'], '20260830')).toBe('20250102')
+
+  // Nesetříděný vstup nesmí výběr rozhodit
+  expect(defaultExpiry(['20260925', '20260828', '20260901'], '20260830')).toBe('20260901')
+
+  expect(defaultExpiry([], session)).toBeNull()
 })
 
 test('timeframe řádek nabízí celou sadu 1m–1d', () => {
