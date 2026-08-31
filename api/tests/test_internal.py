@@ -72,3 +72,23 @@ def test_internal_publish_routes_to_channel(client: TestClient) -> None:
 
     invalid = client.post("/internal/publish", json={"channel": 42})
     assert invalid.status_code == 422
+
+
+def test_internal_status_vystreli_provozni_alerty(client: TestClient) -> None:
+    """Jádro #949: AlertEngine se nikde nevolal, takže výpadek ani plný disk nezvonily."""
+    hub = client.app.state.live_hub  # type: ignore[attr-defined]
+    subscriber_id, queue = hub.register()
+    hub.subscribe(subscriber_id, ["alerts"])
+
+    client.post("/internal/status", json={"connection": "connected"})
+    client.post("/internal/status", json={"connection": "disconnected"})
+    # Engine posílá jen ZMĚNĚNÉ klíče — disk se proto musí číst ze snímku,
+    # ne z těla requestu, jinak by se alert nikdy nevyhodnotil
+    client.post(
+        "/internal/status",
+        json={"disk_usage_bytes": 9_000_000_000, "disk_limit_bytes": 5_000_000_000},
+    )
+    client.post("/internal/status", json={"greeks_complete": 10})
+
+    messages = [queue.get_nowait()["data"] for _ in range(queue.qsize())]
+    assert [m["kind"] for m in messages] == ["disconnect", "disk_limit"]
