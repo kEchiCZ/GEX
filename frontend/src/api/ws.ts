@@ -20,6 +20,8 @@ export interface LiveSocketOptions {
 export class LiveSocket {
   private handlers = new Map<string, Set<ChannelHandler>>()
   private reconnectHandlers = new Set<() => void>()
+  /** Protokolové rámce serveru (chyba, odmítnuté kanály) — #948. */
+  private noticeHandlers = new Set<(text: string) => void>()
   private ws: WebSocketLike | null = null
   private closedByUser = false
   private opened = false
@@ -68,8 +70,20 @@ export class LiveSocket {
     }
     ws.onmessage = (event) => {
       if (this.ws !== ws) return
-      const message = JSON.parse(event.data) as { channel?: string; data?: ChannelData }
-      if (!message.channel || message.data === undefined) return // ack/error rámce
+      const message = JSON.parse(event.data) as {
+        channel?: string
+        data?: ChannelData
+        type?: string
+        detail?: string
+        action?: string
+        rejected?: string[]
+      }
+      if (!message.channel || message.data === undefined) {
+        // Protokolový rámec (ack/error). Dřív se tiše zahodil, takže odmítnutá
+        // subskripce nebyla nikde vidět a `alerts` 24 dní mlčely (#948).
+        this.notice(message)
+        return
+      }
       for (const handler of this.handlers.get(message.channel) ?? []) {
         handler(message.data)
       }
@@ -109,6 +123,31 @@ export class LiveSocket {
     if (!set) return
     set.delete(handler)
     if (set.size === 0) this.handlers.delete(channel)
+  }
+
+  /** Popíše protokolový rámec a rozešle ho odběratelům; ticho jen u čistého ack. */
+  private notice(message: {
+    type?: string
+    detail?: string
+    action?: string
+    rejected?: string[]
+  }): void {
+    // prettier-ignore
+    let text: string | null = null
+    if (message.type === 'error') {
+      text = `WS chyba: ${message.detail ?? 'bez detailu'}`
+    } else if (message.rejected && message.rejected.length > 0) {
+      text = `WS ${message.action ?? 'subscribe'}: server odmítl kanály ${message.rejected.join(', ')}`
+    }
+    if (text === null) return
+    console.warn(`[ws #948] ${text}`)
+    for (const handler of this.noticeHandlers) handler(text)
+  }
+
+  /** Registruje callback na protokolové rámce serveru (#948); vrací odhlášení. */
+  onNotice(handler: (text: string) => void): () => void {
+    this.noticeHandlers.add(handler)
+    return () => this.noticeHandlers.delete(handler)
   }
 
   /** Registruje callback volaný po RE-connectu (ne prvním připojení); vrací odhlášení. */

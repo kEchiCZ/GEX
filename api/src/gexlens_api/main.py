@@ -8,6 +8,7 @@ import asyncio
 import base64
 import contextlib
 import datetime as dt
+import logging
 import math
 from collections.abc import Callable
 from typing import Annotated, Any
@@ -67,6 +68,8 @@ from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
 from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.storage.volregime_store import VolRegimeRepository
+
+logger = logging.getLogger(__name__)
 
 
 def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
@@ -1073,23 +1076,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 request = await websocket.receive_json()
                 action = request.get("action")
                 try:
-                    channels = parse_channels(request.get("channels", []))
+                    parsed = parse_channels(request.get("channels", []))
                 except ValueError as exc:
                     await websocket.send_json({"type": "error", "detail": str(exc)})
                     continue
+                # Odmítnuté položky rámec neshazují (#948) — ale nesmí zapadnout:
+                # tichý výpadek `alerts` trval 24 dní právě proto, že se nikde neozval
+                if parsed.rejected:
+                    logger.warning(
+                        "WS %s: zahozeny neplatné kanály %s (platné subskribovány)",
+                        action,
+                        parsed.rejected,
+                    )
                 if action == "subscribe":
                     try:
-                        subscribed = live_hub.subscribe(subscriber_id, channels)
+                        subscribed = live_hub.subscribe(subscriber_id, parsed.valid)
                     except TooManyChannels as exc:
                         await websocket.send_json({"type": "error", "detail": str(exc)})
                         continue
                     await websocket.send_json(
-                        {"type": "ack", "action": "subscribe", "channels": sorted(subscribed)}
+                        {
+                            "type": "ack",
+                            "action": "subscribe",
+                            "channels": sorted(subscribed),
+                            "rejected": parsed.rejected,
+                        }
                     )
                 elif action == "unsubscribe":
-                    subscribed = live_hub.unsubscribe(subscriber_id, channels)
+                    subscribed = live_hub.unsubscribe(subscriber_id, parsed.valid)
                     await websocket.send_json(
-                        {"type": "ack", "action": "unsubscribe", "channels": sorted(subscribed)}
+                        {
+                            "type": "ack",
+                            "action": "unsubscribe",
+                            "channels": sorted(subscribed),
+                            "rejected": parsed.rejected,
+                        }
                     )
                 else:
                     await websocket.send_json(

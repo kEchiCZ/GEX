@@ -25,8 +25,12 @@ Message = dict[str, object]
 MAX_SUBSCRIBERS = 64
 MAX_CHANNELS_PER_SUBSCRIBER = 256
 MAX_CHANNEL_LENGTH = 128
-# Frontend odebírá kanály tvaru `levels.ES.20260807` nebo `price.*`
-CHANNEL_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+# Frontend odebírá kanály tvaru `levels.ES.20260807` nebo `price.*`.
+# Hvězdička smí být JEN posledním segmentem — přesně ten tvar umí
+# `channel_matches` níž (prefixová shoda). `*` samotná ani `a.*.b` ne.
+# Původní `[A-Za-z0-9_.\-]+` hvězdičku nepouštělo vůbec, čímž od #542 tiše
+# padal celý úvodní rámec frontendu (`status`, `alerts`, `setups.*`) — #948.
+CHANNEL_RE = re.compile(r"^[A-Za-z0-9_\-]+(\.[A-Za-z0-9_\-]+)*(\.\*)?$")
 
 
 class TooManySubscribers(Exception):
@@ -37,24 +41,44 @@ class TooManyChannels(Exception):
     """Subskribent překročil strop kanálů."""
 
 
-def parse_channels(raw: object) -> list[str]:
-    """Zvaliduje seznam kanálů z klientské zprávy.
+@dataclass(frozen=True)
+class ParsedChannels:
+    """Rozebraný subskripční rámec: co se smí subskribovat a co se zahodilo."""
+
+    valid: list[str]
+    rejected: list[str]
+
+
+def parse_channels(raw: object) -> ParsedChannels:
+    """Rozdělí kanály z klientské zprávy na platné a odmítnuté.
 
     Bez kontroly typu se řetězec `"abc"` iteroval po znacích (subskripce
     kanálů `a`, `b`, `c`) a číslo shodilo spojení neodchyceným TypeError.
+
+    Vadná POLOŽKA rámec neshazuje (#948): dřív se při první neplatné vyhodila
+    výjimka a handler zahodil celý rámec, takže kvůli `setups.*` neprošel ani
+    `status`, ani `alerts` — a klient o tom nevěděl. Neplatné se teď jen
+    vynechají a vrátí v `rejected`, ať je vidět, co se nesubskribovalo.
+    Bezpečnostní vlastnost zůstává: odmítnutý kanál se NEsubskribuje.
+
+    Vadný TVAR celé zprávy (není seznam, přes strop) výjimku vyhazuje dál —
+    tam není co zachraňovat.
     """
     if not isinstance(raw, list):
         raise ValueError("Pole channels musí být seznam řetězců")
     if len(raw) > MAX_CHANNELS_PER_SUBSCRIBER:
         raise ValueError(f"Najednou lze poslat nejvýš {MAX_CHANNELS_PER_SUBSCRIBER} kanálů")
-    channels: list[str] = []
+    valid: list[str] = []
+    rejected: list[str] = []
     for item in raw:
         if not isinstance(item, str) or not item:
-            raise ValueError("Kanál musí být neprázdný řetězec")
+            rejected.append(repr(item)[:MAX_CHANNEL_LENGTH])
+            continue
         if len(item) > MAX_CHANNEL_LENGTH or not CHANNEL_RE.match(item):
-            raise ValueError(f"Neplatný název kanálu: {item[:32]!r}")
-        channels.append(item)
-    return channels
+            rejected.append(item[:MAX_CHANNEL_LENGTH])
+            continue
+        valid.append(item)
+    return ParsedChannels(valid=valid, rejected=rejected)
 
 
 @dataclass
