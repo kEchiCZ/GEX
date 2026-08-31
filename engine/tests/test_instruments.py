@@ -1101,3 +1101,45 @@ async def test_kalibrace_alfa_po_oi_archivu_nastavi_runtime(
     fresh.alpha_repository = alpha_repo
     await fresh._run_alpha_calibration(today)
     assert fresh.runtime.flow_alpha == pytest.approx(0.4)
+
+
+# ── Hlídka Greeks po settle (#959) ─────────────────────────────────
+
+
+def test_greeks_hlidka_po_settle_vypnuta() -> None:
+    """Po settle se expirující řetěz přestane kotovat — není to porucha (#959)."""
+    from gexlens_engine.instruments import greeks_watch_applies
+
+    # Letní čas: settle 16:00 ET = 20:00 UTC
+    pred = dt.datetime(2026, 8, 31, 19, 59, tzinfo=dt.UTC)
+    po = dt.datetime(2026, 8, 31, 20, 1, tzinfo=dt.UTC)
+
+    assert greeks_watch_applies("20260831", pred) is True
+    assert greeks_watch_applies("20260831", po) is False
+
+
+def test_greeks_hlidka_bezi_pro_budouci_expiraci() -> None:
+    """Sekundární řada zítřejší expirace se hlídat MUSÍ — settle má až zítra."""
+    from gexlens_engine.instruments import greeks_watch_applies
+
+    po_settle_dneska = dt.datetime(2026, 8, 31, 20, 1, tzinfo=dt.UTC)
+    assert greeks_watch_applies("20260901", po_settle_dneska) is True
+
+
+def test_greeks_hlidka_respektuje_zimni_cas() -> None:
+    """V zimě je settle 21:00 UTC — pevná hodina by hlídku hodinu zabíjela."""
+    from gexlens_engine.instruments import greeks_watch_applies
+
+    assert (
+        greeks_watch_applies("20261215", dt.datetime(2026, 12, 15, 20, 30, tzinfo=dt.UTC)) is True
+    )
+    assert (
+        greeks_watch_applies("20261215", dt.datetime(2026, 12, 15, 21, 1, tzinfo=dt.UTC)) is False
+    )
+
+
+def test_greeks_hlidka_pri_necitelne_expiraci_zustava() -> None:
+    """Vadný formát nesmí hlídku umlčet — radši falešný poplach než slepota."""
+    from gexlens_engine.instruments import greeks_watch_applies
+
+    assert greeks_watch_applies("nesmysl", dt.datetime(2026, 8, 31, 23, 0, tzinfo=dt.UTC)) is True
