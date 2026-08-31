@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.gexforward import ForwardContract, forward_field
+from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
 from gexlens_engine.compute.setupstats import (
     SetupParamsStats,
@@ -141,6 +142,28 @@ class SetupCooldown:
         self._remaining.clear()
         self._next_cycles.clear()
         return released
+
+
+def greeks_watch_applies(expiry: str, now: dt.datetime) -> bool:
+    """Má se u téhle řady vůbec hlídat výpadek Greeks? (#959)
+
+    Po settle se expirující řetěz přestane kotovat, takže Greeks logicky
+    přestanou chodit. Hlídka to hlásila jako poruchu — každý den po settle,
+    s radou „zvaž restart TWS", která nic neřeší. Pravidelný falešný poplach
+    je horší než žádný: uživatel si na něj zvykne a mine se pak i ten pravý.
+
+    Roll na novou expiraci dělá `expiry_expired` až podle KALENDÁŘNÍHO dne,
+    takže mezi settle a koncem dne pipeline nad mrtvým řetězem legitimně běží
+    dál — právě tam ta hlídka nemá co dělat.
+
+    Nečitelná expirace → True (hlídat; nerozbíjet běh kvůli formátu).
+    """
+    try:
+        expiry_date = dt.datetime.strptime(expiry, "%Y%m%d").date()
+    except ValueError:
+        logger.warning("Nečitelná expirace %r — hlídka Greeks se nechává zapnutá", expiry)
+        return True
+    return now < settle_ts(expiry_date)
 
 
 def expiry_expired(expiry: str, today: dt.date) -> bool:
@@ -961,6 +984,11 @@ class InstrumentPipeline:
         """
         detector = self.greeks_detector
         if detector is None:
+            return
+        # Po settle expirující řady se nehlídá vůbec (#959) — detektor se ani
+        # nekrmí, jinak by si zapamatoval „stalled" a po rollu vystřelil
+        # „recovered" k poplachu, který nikdy neodešel
+        if not greeks_watch_applies(self.runtime.expiry, now):
             return
         event = detector.observe(total=metrics.total, stale=metrics.stale_count)
         if event is None:
