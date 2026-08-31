@@ -89,10 +89,12 @@ from gexlens_engine.provider import MarketDataProviderLike
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.runtime_settings import (
     CONNECTION_SETTINGS,
+    RECONNECT_TARGETS,
     RUNTIME_SETTINGS,
     apply_connection_settings,
     apply_runtime_settings,
     pending_reconnects,
+    seed_reconnects,
 )
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
@@ -1936,8 +1938,17 @@ async def main() -> None:
     desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
     cycle = 0
     force_watchlist = False
-    # Poslední VIDĚNÁ razítka požadavků na přepojení (#950) — viz poll níž
+    # Výchozí stav razítek přepojení (#950). Načíst PŘED smyčkou: jinak nejde
+    # odlišit razítko z doby před restartem (vyřízené) od nového požadavku
+    # a první požadavek po každém startu se ztratí.
     reconnect_seen: dict[str, object] = {}
+    seed_reconnects(
+        await asyncio.to_thread(
+            watchlist_reader.settings_map,
+            [f"reconnect_request_{target}" for target in RECONNECT_TARGETS],
+        ),
+        reconnect_seen,
+    )
     last_full_minute: dt.datetime | None = None
 
     while True:

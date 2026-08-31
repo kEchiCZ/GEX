@@ -10,6 +10,7 @@ from gexlens_engine.runtime_settings import (
     apply_runtime_settings,
     coerce_setting,
     pending_reconnects,
+    seed_reconnects,
 )
 
 
@@ -125,37 +126,52 @@ def test_connection_port_is_clamped_to_valid_range() -> None:
 # ── Ruční přepojení (#950) ─────────────────────────────────────────
 
 
-def test_prvni_poll_po_startu_neprepojuje() -> None:
-    """Razítko v nastavení přežije restart; engine ho nesmí vyřídit podruhé."""
+def test_razitko_z_doby_pred_restartem_se_nevyrizuje_podruhe() -> None:
+    """Razítko v nastavení přežije restart; engine ho nesmí vyřídit znovu."""
     seen: dict[str, object] = {}
     stored = {"reconnect_request_ibkr": 1000.0}
-    assert pending_reconnects(stored, seen) == []  # jen se zapamatuje
-    assert seen == {"ibkr": 1000.0}
+    seed_reconnects(stored, seen)
+    assert pending_reconnects(stored, seen) == []
+
+
+def test_prvni_pozadavek_po_startu_se_NEZTRATI() -> None:
+    """Regrese z živého ověření #950: klíč při startu CHYBĚL, požadavek přišel až
+    potom — lazy varianta ho spolkla jako „první spatření" a nepřepojila."""
+    seen: dict[str, object] = {}
+    seed_reconnects({}, seen)  # start bez razítka
+    assert pending_reconnects({"reconnect_request_tasty": 1788210381.0}, seen) == ["tasty"]
 
 
 def test_zmena_razitka_vyvola_prepojeni() -> None:
     seen: dict[str, object] = {}
-    pending_reconnects({"reconnect_request_ibkr": 1000.0}, seen)  # start
+    seed_reconnects({"reconnect_request_ibkr": 1000.0}, seen)
     assert pending_reconnects({"reconnect_request_ibkr": 1001.0}, seen) == ["ibkr"]
 
 
 def test_stejne_razitko_neprepojuje_dokola() -> None:
     """Hodnota v nastavení zůstává navždy — bez porovnání by se přepojovalo každý poll."""
     seen: dict[str, object] = {}
-    pending_reconnects({"reconnect_request_tasty": 1000.0}, seen)
-    pending_reconnects({"reconnect_request_tasty": 1001.0}, seen)
+    seed_reconnects({"reconnect_request_tasty": 1000.0}, seen)
+    assert pending_reconnects({"reconnect_request_tasty": 1001.0}, seen) == ["tasty"]
     assert pending_reconnects({"reconnect_request_tasty": 1001.0}, seen) == []
     assert pending_reconnects({"reconnect_request_tasty": 1001.0}, seen) == []
 
 
 def test_oba_zdroje_najednou() -> None:
     seen: dict[str, object] = {}
-    pending_reconnects({"reconnect_request_ibkr": 1.0, "reconnect_request_tasty": 1.0}, seen)
+    seed_reconnects({"reconnect_request_ibkr": 1.0, "reconnect_request_tasty": 1.0}, seen)
     due = pending_reconnects({"reconnect_request_ibkr": 2.0, "reconnect_request_tasty": 2.0}, seen)
     assert sorted(due) == ["ibkr", "tasty"]
 
 
 def test_chybejici_klic_nic_nedela() -> None:
     seen: dict[str, object] = {}
+    seed_reconnects({}, seen)
     assert pending_reconnects({}, seen) == []
-    assert seen == {}
+
+
+def test_seed_zapamatuje_i_chybejici_klic() -> None:
+    """Chybějící klíč musí být v `seen` jako None, jinak by se jeho vznik ztratil."""
+    seen: dict[str, object] = {}
+    seed_reconnects({}, seen)
+    assert seen == {"ibkr": None, "tasty": None}
