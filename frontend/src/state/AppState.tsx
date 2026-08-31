@@ -505,8 +505,14 @@ export function AppStateProvider({
     live.subscribe('setups.*', () => {
       setSetupsVersion((previous) => previous + 1)
     })
+    // Odmítnutá subskripce nebo chyba protokolu musí být vidět (#948) — dřív
+    // se zahazovala a `alerts` i `status` 24 dní tiše nechodily
+    const offNotice = live.onNotice((text) => appendLog(text))
     live.connect()
-    return () => live.close()
+    return () => {
+      offNotice()
+      live.close()
+    }
   }, [live, appendLog])
 
   // Počáteční stav pipeline hned z REST — WS push chodí až s dalším cyklem enginu (~60 s)

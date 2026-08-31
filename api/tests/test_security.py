@@ -156,19 +156,54 @@ def test_retezec_kanalu_se_neiteruje_po_znacich() -> None:
         parse_channels("abc")
 
 
-def test_neplatny_typ_kanalu_neshodi_spojeni() -> None:
-    with pytest.raises(ValueError):
-        parse_channels([5])
-    with pytest.raises(ValueError, match="Neplatný název"):
-        parse_channels(["price.ES; rm -rf"])
+def test_neplatny_kanal_se_odmitne_ale_nesubskribuje() -> None:
+    """Vadná položka se zahodí do `rejected`; subskribovat se NESMÍ (#542 H2)."""
+    parsed = parse_channels([5, "price.ES; rm -rf"])
+    assert parsed.valid == []
+    assert len(parsed.rejected) == 2
 
 
-def test_ws_neplatny_kanal_vrati_chybu_a_spojeni_zije(client: TestClient) -> None:
+def test_wildcard_jen_jako_posledni_segment() -> None:
+    """`channel_matches` umí prefix `setups.*` — regex to musí pustit (#948)."""
+    parsed = parse_channels(["setups.*", "levels.ES.20260807", "status", "*", "a.*.b", "price.*.x"])
+    assert parsed.valid == ["setups.*", "levels.ES.20260807", "status"]
+    assert parsed.rejected == ["*", "a.*.b", "price.*.x"]
+
+
+def test_vadna_polozka_neshodi_cely_ramec() -> None:
+    """Jádro #948: kvůli jednomu kanálu se nesmí ztratit ostatní."""
+    parsed = parse_channels(["status", "rm -rf", "alerts"])
+    assert parsed.valid == ["status", "alerts"]
+    assert parsed.rejected == ["rm -rf"]
+
+
+def test_ws_uvodni_ramec_frontendu_subskribuje_vsechny_tri(client: TestClient) -> None:
+    """Regrese #948: `['status','alerts','setups.*']` propadal CELÝ kvůli wildcardu."""
+    with client.websocket_connect("/ws/live") as ws:
+        ws.send_json({"action": "subscribe", "channels": ["status", "alerts", "setups.*"]})
+        ack = ws.receive_json()
+        assert ack["type"] == "ack"
+        assert sorted(ack["channels"]) == ["alerts", "setups.*", "status"]
+        assert ack["rejected"] == []
+
+
+def test_ws_vadny_tvar_zpravy_vrati_chybu_a_spojeni_zije(client: TestClient) -> None:
+    """Vadný TVAR (není seznam) rámec shodit smí — není co zachraňovat."""
     with client.websocket_connect("/ws/live") as ws:
         ws.send_json({"action": "subscribe", "channels": "abc"})
         assert ws.receive_json()["type"] == "error"
         ws.send_json({"action": "subscribe", "channels": ["status"]})
         assert ws.receive_json()["type"] == "ack"
+
+
+def test_ws_odmitnute_kanaly_se_vrati_klientovi(client: TestClient) -> None:
+    """Klient musí mít z čeho poznat, co se nesubskribovalo (#948)."""
+    with client.websocket_connect("/ws/live") as ws:
+        ws.send_json({"action": "subscribe", "channels": ["status", "ne platny"]})
+        ack = ws.receive_json()
+        assert ack["type"] == "ack"
+        assert ack["channels"] == ["status"]
+        assert ack["rejected"] == ["ne platny"]
 
 
 def test_strop_kanalu_na_spojeni() -> None:

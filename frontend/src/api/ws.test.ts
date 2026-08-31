@@ -176,3 +176,51 @@ test('po neplánovaném zavření se znovu připojí', async () => {
     vi.useRealTimers()
   }
 })
+
+test('chybový rámec serveru se nepolyká, ale hlásí přes onNotice (#948)', () => {
+  const socket = makeSocket()
+  const seen: string[] = []
+  socket.onNotice((text) => seen.push(text))
+  socket.subscribe('status', () => {})
+  socket.connect()
+  FakeWebSocket.latest().open()
+
+  // Přesně to, co server posílal na `setups.*` — a klient tiše zahazoval
+  FakeWebSocket.latest().pushRaw({ type: 'error', detail: "Neplatný název kanálu: 'setups.*'" })
+
+  expect(seen).toHaveLength(1)
+  expect(seen[0]).toContain("Neplatný název kanálu: 'setups.*'")
+})
+
+test('ack s odmítnutými kanály se ohlásí; čistý ack mlčí (#948)', () => {
+  const socket = makeSocket()
+  const seen: string[] = []
+  socket.onNotice((text) => seen.push(text))
+  socket.connect()
+  FakeWebSocket.latest().open()
+
+  FakeWebSocket.latest().pushRaw({ type: 'ack', action: 'subscribe', channels: ['status'], rejected: [] }) // prettier-ignore
+  expect(seen).toHaveLength(0) // nic odmítnutého → žádný šum
+
+  FakeWebSocket.latest().pushRaw({ type: 'ack', action: 'subscribe', channels: ['status'], rejected: ['ne platny'] }) // prettier-ignore
+  expect(seen).toHaveLength(1)
+  expect(seen[0]).toContain('ne platny')
+})
+
+test('onNotice jde odhlásit a datové rámce se doručují dál (#948)', () => {
+  const socket = makeSocket()
+  const seen: string[] = []
+  const off = socket.onNotice((text) => seen.push(text))
+  const rows: unknown[] = []
+  socket.subscribe('status', (data) => rows.push(data))
+  socket.connect()
+  FakeWebSocket.latest().open()
+
+  off()
+  FakeWebSocket.latest().pushRaw({ type: 'error', detail: 'cokoli' })
+  expect(seen).toHaveLength(0)
+
+  // Protokolová větev nesmí rozbít běžné doručování
+  FakeWebSocket.latest().push('status', { engine: 'online' })
+  expect(rows).toEqual([{ engine: 'online' }])
+})

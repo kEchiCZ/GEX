@@ -102,6 +102,8 @@ def test_ws_subscribe_receives_updates(tmp_path: Path) -> None:
             "type": "ack",
             "action": "subscribe",
             "channels": ["price.ES", "snapshot.ES.20260716"],
+            # Odmítnuté kanály jsou v acku vždy (#948) — klient tak pozná, co neprošlo
+            "rejected": [],
         }
 
         assert client.post("/_test/publish?channel=flow.ES&value=1").json()["delivered"] == 0

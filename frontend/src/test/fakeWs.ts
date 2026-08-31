@@ -46,4 +46,9 @@ export class FakeWebSocket {
   push(channel: string, data: Record<string, unknown>): void {
     this.onmessage?.({ data: JSON.stringify({ channel, data }) })
   }
+
+  /** Protokolový rámec bez `channel` (ack/error) — pro testy #948. */
+  pushRaw(frame: Record<string, unknown>): void {
+    this.onmessage?.({ data: JSON.stringify(frame) })
+  }
 }
