@@ -15,7 +15,14 @@ ostřejší přechod". Tady se totéž pravidlo počítá nad VÁŽENÝM profile
   A. `band_sharpness` = ostrost / šířka zóny (bezrozměrná, přenositelná),
   B. `band_sharpness_pct` = ostrost jako % ceny (nejblíž čtení z obrazovky),
 - `band_depth` = spojitá poloha: −1 (profil na ceně nulový) … 0 (hrana All)
-  … +1 (hrana Major a hlouběji).
+  … +1 (hrana Major) … +2 (vrchol profilu).
+
+  **Verze 2 (#952):** do verze 1 se hloubka nad hranou Major ořezávala na +1.
+  Jenže setupy vznikají typicky hluboko uvnitř zóny, takže 70 % vzorku mělo
+  přesně 1,0 a metrika v té oblasti nerozlišovala vůbec nic — kalibrace #575
+  na ní kvůli tomu ztroskotala. Pásmo [Major, vrchol] je 35 % rozsahu profilu
+  a nese většinu vzorku, takže se nově mapuje na (1, 2] místo do jediného bodu.
+  Hodnoty v1 a v2 se NESMÍ míchat — proto `band_metrics_version` v contextu.
 
 Žádná brána na hodnotách nestojí — fáze 1 je zapisuje do `context` setupů.
 """
@@ -28,6 +35,13 @@ from gexlens_engine.compute.gexfield import GexProfile, price_weight_per_percent
 # Poměry prahů z kontur #571 (Major/All) — sdílené konstanty čtení
 BAND_MAJOR_SHARE = 0.65
 BAND_ALL_SHARE = 0.40
+
+#: Verze definice metrik (#952). Zvýšit při KAŽDÉ změně významu hodnot —
+#: sdružovat napříč verzemi je stejná chyba jako sdružovat přes
+#: `mechanics_version` (nález z kalibrace #575).
+#: 1 = původní, hloubka ořezaná na +1 nad hranou Major
+#: 2 = hloubka pokračuje k vrcholu profilu (+2)
+BAND_METRICS_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -89,11 +103,16 @@ def band_metrics(profile: GexProfile, price: float) -> BandMetrics | None:
     frac = position - low
     at_price = weighted[low] * (1 - frac) + weighted[min(low + 1, len(weighted) - 1)] * frac
 
-    # Hloubka: pod All lineárně k −1 (profil 0), nad All lineárně k +1 (Major)
+    # Hloubka (#952 v2): pod All lineárně k −1 (profil 0), nad All k +1 (Major)
+    # a DÁL k +2 (vrchol profilu). Ořez na +1 sléval celé pásmo [Major, vrchol]
+    # — 35 % rozsahu a většinu vzorku — do jediné hodnoty.
     if at_price <= t_all:
         depth = max(-1.0, (at_price - t_all) / t_all)
+    elif at_price <= t_major:
+        depth = (at_price - t_all) / (t_major - t_all)
     else:
-        depth = min(1.0, (at_price - t_all) / (t_major - t_all))
+        # top > t_major vždy (t_major = 0,65 × top a top > 0), takže se nedělí nulou
+        depth = min(2.0, 1.0 + (at_price - t_major) / (top - t_major))
 
     # Hrany zóny: průsečíky All a Major na obou stranách od nejbližšího uzlu
     anchor = low if weighted[low] >= at_price else min(low + 1, len(weighted) - 1)
@@ -196,4 +215,7 @@ def band_context(profile: GexProfile | None, price: float) -> dict[str, float]:
         "band_sharpness": metrics.sharpness,
         "band_sharpness_pct": metrics.sharpness_pct,
         "band_depth": metrics.depth,
+        # Bez verze nejde poznat, kterou definicí hloubky byl řádek spočítaný,
+        # a sdružovat je dohromady zkresluje výsledek (#952)
+        "band_metrics_version": BAND_METRICS_VERSION,
     }

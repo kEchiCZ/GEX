@@ -80,6 +80,9 @@ FEATURES_SCHEMA = pa.schema(
         ("band_sharpness", pa.float64()),
         ("band_sharpness_pct", pa.float64()),
         ("band_depth", pa.float64()),
+        # Verze definice pásmových metrik (#952). Trénovací matice #794
+        # nesmí míchat hodnoty z různých definic hloubky.
+        ("band_metrics_version", pa.int64()),
     ]
 )
 
@@ -560,6 +563,7 @@ class FeatureRow:
     band_sharpness: float | None
     band_sharpness_pct: float | None
     band_depth: float | None
+    band_metrics_version: int | None
 
 
 class _PartitionBuffer:

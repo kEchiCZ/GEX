@@ -26,7 +26,13 @@ import datetime as dt
 import logging
 from dataclasses import dataclass, field
 
-from gexlens_engine.compute.bandregime import BAND_MAJOR_SHARE, BandZone, band_metrics, band_zone
+from gexlens_engine.compute.bandregime import (
+    BAND_MAJOR_SHARE,
+    BAND_METRICS_VERSION,
+    BandZone,
+    band_metrics,
+    band_zone,
+)
 from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import Direction, evaluate_bar, r_result
 from gexlens_engine.ibkr.underlying import Bar
@@ -188,6 +194,9 @@ class T9ProbeCollector:
         depth = getattr(metrics, "depth", None)
         if depth is not None:
             context["band_depth"] = depth
+            # Význam hloubky se mění mezi verzemi (#952) — bez značky by šly
+            # sondy z různých verzí sdružit dohromady
+            context["band_metrics_version"] = BAND_METRICS_VERSION
         probe_id = self.repository.insert(
             template=pending.template,
             symbol=self.symbol,
