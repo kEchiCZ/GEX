@@ -9,6 +9,7 @@ from gexlens_engine.runtime_settings import (
     apply_connection_settings,
     apply_runtime_settings,
     coerce_setting,
+    pending_reconnects,
 )
 
 
@@ -119,3 +120,42 @@ def test_connection_port_is_clamped_to_valid_range() -> None:
     settings = base_settings()
     apply_connection_settings(settings, {"ibkr_port": 99999})
     assert settings.ibkr_port == 65535
+
+
+# ── Ruční přepojení (#950) ─────────────────────────────────────────
+
+
+def test_prvni_poll_po_startu_neprepojuje() -> None:
+    """Razítko v nastavení přežije restart; engine ho nesmí vyřídit podruhé."""
+    seen: dict[str, object] = {}
+    stored = {"reconnect_request_ibkr": 1000.0}
+    assert pending_reconnects(stored, seen) == []  # jen se zapamatuje
+    assert seen == {"ibkr": 1000.0}
+
+
+def test_zmena_razitka_vyvola_prepojeni() -> None:
+    seen: dict[str, object] = {}
+    pending_reconnects({"reconnect_request_ibkr": 1000.0}, seen)  # start
+    assert pending_reconnects({"reconnect_request_ibkr": 1001.0}, seen) == ["ibkr"]
+
+
+def test_stejne_razitko_neprepojuje_dokola() -> None:
+    """Hodnota v nastavení zůstává navždy — bez porovnání by se přepojovalo každý poll."""
+    seen: dict[str, object] = {}
+    pending_reconnects({"reconnect_request_tasty": 1000.0}, seen)
+    pending_reconnects({"reconnect_request_tasty": 1001.0}, seen)
+    assert pending_reconnects({"reconnect_request_tasty": 1001.0}, seen) == []
+    assert pending_reconnects({"reconnect_request_tasty": 1001.0}, seen) == []
+
+
+def test_oba_zdroje_najednou() -> None:
+    seen: dict[str, object] = {}
+    pending_reconnects({"reconnect_request_ibkr": 1.0, "reconnect_request_tasty": 1.0}, seen)
+    due = pending_reconnects({"reconnect_request_ibkr": 2.0, "reconnect_request_tasty": 2.0}, seen)
+    assert sorted(due) == ["ibkr", "tasty"]
+
+
+def test_chybejici_klic_nic_nedela() -> None:
+    seen: dict[str, object] = {}
+    assert pending_reconnects({}, seen) == []
+    assert seen == {}

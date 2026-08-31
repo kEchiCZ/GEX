@@ -11,7 +11,8 @@ volbu s okamžitou zpětnou vazbou (AC #167) — čekat u něj na Uložit by má
 import { useEffect, useState } from 'react'
 import { loadApiToken, saveApiToken } from '../api/apiToken'
 import { downloadBackup } from '../api/backup'
-import { useServerSettings } from '../api/settings'
+import { requestReconnect, useServerSettings } from '../api/settings'
+import type { ReconnectTarget } from '../api/settings'
 import { useAppState } from '../state/AppState'
 import type { Theme } from '../state/AppState'
 
@@ -125,6 +126,32 @@ export function SettingsView() {
   const [apiToken, setApiToken] = useState(() => loadApiToken())
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [reconnect, setReconnect] = useState<{ target: ReconnectTarget; note: string } | null>(null)
+
+  // Ruční přepojení (#950). Potvrzení je nutné: přepojení je ~1–2 min díra
+  // ve sběru, takže se nesmí spustit omylem během seance.
+  const askReconnect = (target: ReconnectTarget, label: string) => {
+    if (
+      !window.confirm(`Přepojit ${label}?
+
+Sběr dat se na ~1–2 minuty přeruší.`)
+    )
+      return
+    setReconnect({ target, note: 'vyžádáno…' })
+    void requestReconnect(target)
+      .then(() =>
+        setReconnect({
+          target,
+          note: `vyžádáno v ${new Date().toLocaleTimeString('cs-CZ')} — engine se přepojí do minuty`,
+        }),
+      )
+      .catch((error: unknown) =>
+        setReconnect({
+          target,
+          note: error instanceof Error ? error.message : 'přepojení selhalo',
+        }),
+      )
+  }
 
   const dirtyKeys = Object.keys(draft)
   const value = (key: string, fallback: unknown): unknown =>
@@ -275,6 +302,34 @@ export function SettingsView() {
                   {status.account_paper ? ' (paper)' : ''}
                 </td>
               </tr>
+              {/* Který zdroj právě platí (#950) — u tlačítka Přepojit je to ta
+                  informace, podle které se uživatel rozhoduje. Dosud byla jen
+                  v chipu v hlavičce a v /status. */}
+              <tr>
+                <td>Zdroj dat</td>
+                <td>
+                  řetěz {status.chain_source ?? '—'} · spot {status.spot_source ?? '—'}
+                  {status.spot_source === 'tasty' || status.chain_source === 'tasty'
+                    ? ' — běží fallback na tastytrade (#614)'
+                    : ''}
+                </td>
+              </tr>
+              <tr>
+                <td>Přepojení</td>
+                <td>
+                  <button
+                    type="button"
+                    className="secondary"
+                    data-testid="reconnect-ibkr"
+                    onClick={() => askReconnect('ibkr', 'IBKR')}
+                  >
+                    Přepojit IBKR
+                  </button>
+                  {reconnect?.target === 'ibkr' && (
+                    <span className="muted"> · {reconnect.note}</span>
+                  )}
+                </td>
+              </tr>
               <tr>
                 <td>Greeks</td>
                 <td>
@@ -370,6 +425,22 @@ export function SettingsView() {
                   <td>
                     {status.tasty_symbols ?? '—'} symbolů · quotes {status.tasty_quotes ?? '—'} ·
                     greeks {status.tasty_greeks ?? '—'} · OI {status.tasty_oi ?? '—'}
+                  </td>
+                </tr>
+                <tr>
+                  <td>Přepojení</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="secondary"
+                      data-testid="reconnect-tasty"
+                      onClick={() => askReconnect('tasty', 'tastytrade (DXLink)')}
+                    >
+                      Přepojit tastytrade
+                    </button>
+                    {reconnect?.target === 'tasty' && (
+                      <span className="muted"> · {reconnect.note}</span>
+                    )}
                   </td>
                 </tr>
                 <tr>

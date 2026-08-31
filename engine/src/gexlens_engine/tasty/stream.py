@@ -159,6 +159,20 @@ class DxLinkStream:
                     await asyncio.wait_for(stop.wait(), timeout=backoff)
                 backoff = min(backoff * 2, _BACKOFF_MAX_S)
 
+    async def force_reconnect(self, reason: str) -> None:
+        """Vynucené přepojení DXLink (#950): zavře socket, `run` se připojí znovu.
+
+        Čtecí smyčka na zavřeném socketu vyhodí, `run` to zachytí jako pád
+        spojení a projde standardní cestou včetně resubskripce — žádná druhá
+        cesta k připojení, kterou by bylo potřeba udržovat.
+        """
+        logger.info("DXLink: vynucené přepojení (%s)", reason)
+        ws = self._ws
+        if ws is None:
+            return
+        with contextlib.suppress(Exception):
+            await ws.close()
+
     # ── vnitřek ────────────────────────────────────────────────────
 
     async def _send(self, payload: dict[str, object]) -> None:
