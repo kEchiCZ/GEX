@@ -1,5 +1,6 @@
 """Integrační testy CRUD a alert enginu (issue #21)."""
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -109,8 +110,10 @@ def test_settings_roundtrip(client: TestClient) -> None:
 # ── Provozní alerty (#949 varianta B) ──────────────────────────────
 
 
-def _drain(queue: object) -> list[dict[str, object]]:
-    return [queue.get_nowait()["data"] for _ in range(queue.qsize())]  # type: ignore[attr-defined,index]
+def _drain(queue: asyncio.Queue[dict[str, object]]) -> list[dict[str, object]]:
+    """Vybere všechny alerty z fronty subskribenta a vrátí jejich `data`."""
+    messages = [queue.get_nowait() for _ in range(queue.qsize())]
+    return [message["data"] for message in messages if isinstance(message["data"], dict)]
 
 
 async def test_vypadek_spojeni_strili_jen_na_hrane() -> None:
