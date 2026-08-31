@@ -194,7 +194,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/internal/status", dependencies=[Depends(require_token)])
     async def internal_status(fields: dict[str, object]) -> dict[str, str]:
         status_store.update(**fields)
-        live_hub.publish("status", status_store.snapshot())
+        snapshot = status_store.snapshot()
+        # Provozní alerty (#949 varianta B): status z enginu je jediné místo,
+        # kde se o výpadku spojení a o došlém disku dozvíme. AlertEngine se
+        # do #949 nikdy nevolal, takže obojí bylo neviditelné. Vyhodnocuje se
+        # nad SNÍMKEM, ne nad `fields` — engine posílá jen změněné klíče.
+        connection = snapshot.get("connection")
+        alert_engine.observe_connection(connection if isinstance(connection, str) else None)
+        alert_engine.observe_disk(
+            snapshot.get("disk_usage_bytes"), snapshot.get("disk_limit_bytes")
+        )
+        live_hub.publish("status", snapshot)
         return {"status": "ok"}
 
     @app.post("/internal/publish", dependencies=[Depends(require_token)])
