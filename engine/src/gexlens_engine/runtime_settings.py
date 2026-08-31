@@ -160,25 +160,40 @@ def apply_runtime_settings(settings: Settings, values: dict[str, object]) -> boo
 RECONNECT_TARGETS: tuple[str, ...] = ("ibkr", "tasty")
 
 
+def seed_reconnects(stored: Mapping[str, object], seen: dict[str, object]) -> None:
+    """Zapamatuje výchozí stav razítek při startu enginu.
+
+    Musí se zavolat JEDNOU před hlavní smyčkou. Od té chvíle je každá odchylka
+    od zapamatované hodnoty skutečný požadavek uživatele.
+
+    Bez tohohle kroku nešlo odlišit „razítko tu bylo už před restartem"
+    (vyřízené, nedělat nic) od „razítko přibylo teď" (požadavek, přepojit) —
+    obojí vypadalo jako první spatření klíče. Lazy varianta proto zahodila
+    úplně první požadavek po každém startu, tedy i ten hned po nasazení.
+    Klíč chybějící při startu se zapamatuje jako None, takže jeho pozdější
+    vznik je změna a přepojení proběhne.
+    """
+    for target in RECONNECT_TARGETS:
+        seen[target] = stored.get(f"reconnect_request_{target}")
+
+
 def pending_reconnects(stored: Mapping[str, object], seen: dict[str, object]) -> list[str]:
     """Zdroje, které si uživatel přeje přepojit; `seen` se aktualizuje na místě.
 
-    Reaguje se na ZMĚNU razítka, ne na jeho přítomnost — hodnota v nastavení
-    zůstává navždy, takže „je tam klíč" by znamenalo přepojovat každý poll.
+    Reaguje se na ZMĚNU razítka proti zapamatované hodnotě, ne na jeho
+    přítomnost — hodnota v nastavení zůstává navždy, takže „je tam klíč"
+    by znamenalo přepojovat každý poll.
 
-    První poll po startu enginu se jen zapamatuje a NEPŘEPOJUJE. Bez toho by
-    každý restart skončil zbytečným přepojením kvůli razítku, které si engine
-    už dávno vyřídil před restartem.
+    Předpokládá `seed_reconnects` při startu. Bez něj se první požadavek na
+    zdroj, jehož klíč při startu chyběl, ztratí.
     """
     due: list[str] = []
     for target in RECONNECT_TARGETS:
         requested = stored.get(f"reconnect_request_{target}")
         if requested is None:
             continue
-        first_seen = target not in seen
         if seen.get(target) == requested:
             continue
         seen[target] = requested
-        if not first_seen:
-            due.append(target)
+        due.append(target)
     return due
