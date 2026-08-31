@@ -2,7 +2,11 @@
 
 import datetime as dt
 
-from gexlens_engine.compute.bandregime import band_context, band_metrics
+from gexlens_engine.compute.bandregime import (
+    BAND_METRICS_VERSION,
+    band_context,
+    band_metrics,
+)
 from gexlens_engine.compute.gexfield import GexProfile, price_weight_per_percent
 
 TS = dt.datetime(2026, 8, 13, 14, 0, tzinfo=dt.UTC)
@@ -26,8 +30,9 @@ ZONE = [0.0, 50.0, 100.0, 100.0, 100.0, 100.0, 0.0, 0.0]
 
 def test_hloubka_na_hranach_a_uvnitr() -> None:
     profile = profile_from_weighted(ZONE, 7000.0, 10.0)
-    # Uprostřed plata (7040): hodnota 100 = nad Major → depth +1
-    assert band_metrics(profile, 7040.0).depth == 1.0  # type: ignore[union-attr]
+    # Uprostřed plata (7040): hodnota 100 = vrchol profilu → depth +2 (#952 v2).
+    # Ve verzi 1 se tady ořezávalo na +1 a splývalo to se vším nad Major.
+    assert band_metrics(profile, 7040.0).depth == 2.0  # type: ignore[union-attr]
     # Na úrovni All (40 % ze 100 = 40): náběh 0→50 protíná 40 v 7008 → depth 0
     metrics = band_metrics(profile, 7008.0)
     assert metrics is not None
@@ -69,4 +74,54 @@ def test_krajni_stavy_vraci_none_nebo_prazdno() -> None:
     # band_context: None profil → prázdný dict (setup bez klíčů, žádné lhaní)
     assert band_context(None, 7040.0) == {}
     keys = band_context(profile, 7040.0)
-    assert set(keys) == {"band_sharpness", "band_sharpness_pct", "band_depth"}
+    assert set(keys) == {
+        "band_sharpness",
+        "band_sharpness_pct",
+        "band_depth",
+        "band_metrics_version",  # #952
+    }
+
+
+# ── Hloubka bez ořezu nad hranou Major (#952) ──────────────────────
+
+# Profil se schodovitým vrcholem: hodnoty 70, 85 a 100 jsou VŠECHNY nad
+# Major (65 % ze 100), takže je verze 1 slévala do jediné hodnoty +1.
+#   index:    0    1     2     3      4     5    6
+#   vážené:   0   50    70    85    100    50    0
+PEAK = [0.0, 50.0, 70.0, 85.0, 100.0, 50.0, 0.0]
+
+
+def test_hloubka_nad_major_uz_nesaturuje() -> None:
+    """Jádro #952: tři různé hodnoty nad Major musí dát tři různé hloubky."""
+    profile = profile_from_weighted(PEAK, 7000.0, 10.0)
+    depths = []
+    for price in (7020.0, 7030.0, 7040.0):  # vážené 70, 85, 100
+        metrics = band_metrics(profile, price)
+        assert metrics is not None
+        depths.append(metrics.depth)
+
+    assert len(set(depths)) == 3, f"saturace se vrátila: {depths}"
+    assert depths[0] < depths[1] < depths[2]
+    assert all(1.0 <= d <= 2.0 for d in depths)
+    assert depths[2] == 2.0  # vrchol profilu
+
+
+def test_hloubka_pod_major_se_nezmenila() -> None:
+    """Změna se týká JEN pásma nad Major — pod ním musí zůstat škála −1…+1."""
+    profile = profile_from_weighted(ZONE, 7000.0, 10.0)
+    on_all = band_metrics(profile, 7008.0)  # hrana All
+    below = band_metrics(profile, 7004.0)  # pod zónou
+    assert on_all is not None and below is not None
+    assert abs(on_all.depth) < 0.01
+    assert -1.0 <= below.depth < 0
+
+
+def test_context_nese_verzi_metrik() -> None:
+    """Bez verze nejde poznat, kterou definicí byl řádek spočítaný (#952)."""
+    profile = profile_from_weighted(ZONE, 7000.0, 10.0)
+    context = band_context(profile, 7040.0)
+    assert context["band_metrics_version"] == BAND_METRICS_VERSION
+    assert BAND_METRICS_VERSION >= 2
+
+    # Nezměřeno = žádné klíče, tedy ani verze (verze patří k hodnotám)
+    assert band_context(None, 7040.0) == {}

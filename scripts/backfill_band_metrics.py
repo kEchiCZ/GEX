@@ -1,9 +1,14 @@
 """Backfill pásmových metrik (#575 fáze 1) k historickým setupům.
 
-Pro setupy bez `band_sharpness` v context JSON dohledá Dyn profil minuty
+Pro setupy bez pásmových metrik v context JSON dohledá Dyn profil minuty
 vzniku (partice `derived/{sym}/{exp}/gexprofile/`, retence ~90 dní) a doplní
 obě varianty ostrosti + hloubku toutéž čistou funkcí jako živá cesta.
-Idempotentní — už doplněné setupy přeskakuje.
+
+Idempotentní podle VERZE, ne podle přítomnosti klíče (#952): řádky spočítané
+starší definicí metrik se přepočítají, řádky na aktuální verzi se přeskočí.
+Bez toho by po změně významu hloubky zůstala v tabulce směs dvou definic,
+kterou nejde sdružit — přesně ten confound, na kterém ztroskotala kalibrace
+#575.
 
 Spuštění (v kontejneru enginu nebo lokálně s GEXLENS_DATABASE_URL):
     python scripts/backfill_band_metrics.py [--days 90]
@@ -19,7 +24,10 @@ from sqlalchemy import create_engine, select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine" / "src"))
 
-from gexlens_engine.compute.bandregime import band_context  # noqa: E402
+from gexlens_engine.compute.bandregime import (  # noqa: E402
+    BAND_METRICS_VERSION,
+    band_context,
+)
 from gexlens_engine.compute.gexfield import GexProfile  # noqa: E402
 from gexlens_engine.config import load_settings  # noqa: E402
 from gexlens_engine.storage.setups_store import SetupsRepository, setups_table  # noqa: E402
@@ -72,9 +80,12 @@ def main() -> int:
 
     written = 0
     skipped = 0
+    recomputed = 0
     missing_profile = 0
     for row in rows:
-        if "band_sharpness" in (row.context or {}):
+        context = row.context or {}
+        had_metrics = "band_sharpness" in context
+        if had_metrics and context.get("band_metrics_version") == BAND_METRICS_VERSION:
             skipped += 1
             continue
         created = row.created_ts if row.created_ts.tzinfo else row.created_ts.replace(tzinfo=dt.UTC)
@@ -84,9 +95,13 @@ def main() -> int:
             missing_profile += 1
             continue
         repository.enrich_context(int(row.id), extra)
-        written += 1
+        if had_metrics:
+            recomputed += 1
+        else:
+            written += 1
     print(
-        f"Backfill band metrik: {written} doplněno, {skipped} už mělo, "
+        f"Backfill band metrik (verze {BAND_METRICS_VERSION}): {written} doplněno, "
+        f"{recomputed} přepočítáno ze starší verze, {skipped} už aktuálních, "
         f"{missing_profile} bez profilu/mimo mřížku (z {len(rows)} setupů)"
     )
     return 0

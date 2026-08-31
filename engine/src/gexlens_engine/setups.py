@@ -234,6 +234,11 @@ class SetupEngine:
                 band_sharpness=band.get("band_sharpness"),
                 band_sharpness_pct=band.get("band_sharpness_pct"),
                 band_depth=band.get("band_depth"),
+                # None, když se pásmo nezměřilo — verze patří k HODNOTÁM,
+                # ne k řádku, takže se nesmí vyplnit "pro jistotu" (#952)
+                band_metrics_version=(
+                    int(band["band_metrics_version"]) if "band_metrics_version" in band else None
+                ),
             )
             await asyncio.to_thread(
                 self.feature_writer.write_features, self.symbol, now.date(), [row]
