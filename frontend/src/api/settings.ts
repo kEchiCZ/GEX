@@ -13,6 +13,26 @@ export async function fetchSettings(): Promise<ServerSettings> {
   return payload.settings
 }
 
+export type ReconnectTarget = 'ibkr' | 'tasty' | 'both'
+
+/** Požádá engine o přepojení zdroje dat (#950).
+
+Není to okamžité — engine si požadavek vyzvedne při nejbližším pollu nastavení
+(stejnou cestou jako změnu hostu/portu, #446), takže se vrací čas požadavku
+a UI podle něj hlásí „vyžádáno", ne „hotovo". */
+export async function requestReconnect(target: ReconnectTarget): Promise<number> {
+  const response = await fetch(`${API_BASE}/engine/reconnect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target }),
+  })
+  if (!response.ok) {
+    throw new Error(`Přepojení ${target} selhalo: HTTP ${response.status}`)
+  }
+  const payload = (await response.json()) as { requested_at: number }
+  return payload.requested_at
+}
+
 export async function putSetting(key: string, value: unknown): Promise<void> {
   const response = await fetch(`${API_BASE}/settings/${key}`, {
     method: 'PUT',

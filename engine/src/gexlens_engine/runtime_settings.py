@@ -15,7 +15,7 @@ z invariantů konfigurace, aby uživatel v UI nemohl engine rozbít.
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from gexlens_engine.config import Settings
@@ -153,3 +153,32 @@ def apply_runtime_settings(settings: Settings, values: dict[str, object]) -> boo
         setattr(settings, spec.key, new_value)
         restart = restart or spec.restarts_pipelines
     return restart
+
+
+# Ruční přepojení z UI (#950). Razítko píše API do nastavení, engine ho vyzvedne
+# při nejbližším pollu — stejnou cestou jako změnu hostu/portu (#446).
+RECONNECT_TARGETS: tuple[str, ...] = ("ibkr", "tasty")
+
+
+def pending_reconnects(stored: Mapping[str, object], seen: dict[str, object]) -> list[str]:
+    """Zdroje, které si uživatel přeje přepojit; `seen` se aktualizuje na místě.
+
+    Reaguje se na ZMĚNU razítka, ne na jeho přítomnost — hodnota v nastavení
+    zůstává navždy, takže „je tam klíč" by znamenalo přepojovat každý poll.
+
+    První poll po startu enginu se jen zapamatuje a NEPŘEPOJUJE. Bez toho by
+    každý restart skončil zbytečným přepojením kvůli razítku, které si engine
+    už dávno vyřídil před restartem.
+    """
+    due: list[str] = []
+    for target in RECONNECT_TARGETS:
+        requested = stored.get(f"reconnect_request_{target}")
+        if requested is None:
+            continue
+        first_seen = target not in seen
+        if seen.get(target) == requested:
+            continue
+        seen[target] = requested
+        if not first_seen:
+            due.append(target)
+    return due

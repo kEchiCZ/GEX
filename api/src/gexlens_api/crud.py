@@ -1,6 +1,8 @@
 """CRUD routy /watchlist, /alerts, /annotations, /settings (SPEC kap. 6, issue #21)."""
 
 import datetime as dt
+import enum
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -42,6 +44,25 @@ NEWS_LIST_SETTINGS = frozenset(["news_bluesky_authors", "news_reddit_subreddits"
 
 # `retro_pass` chybí schválně — ten si news-engine píše přímo do DB, ne přes API.
 WRITABLE_SETTINGS = ENGINE_SETTINGS | UI_SETTINGS | NEWS_LIST_SETTINGS
+
+# Ruční přepojení datových zdrojů (#950). Klíče NEJSOU ve WRITABLE_SETTINGS —
+# hodnotu (časové razítko) generuje server, klient smí jen říct KTERÝ zdroj.
+# Engine si klíč přečte při nejbližším pollu nastavení a na změnu zareaguje;
+# stejnou cestou už chodí změna hostu/portu (#446), takže nevzniká nový kanál.
+RECONNECT_SETTING = {
+    "ibkr": "reconnect_request_ibkr",
+    "tasty": "reconnect_request_tasty",
+}
+
+
+class ReconnectTarget(enum.Enum):
+    IBKR = "ibkr"
+    TASTY = "tasty"
+    BOTH = "both"
+
+
+class ReconnectIn(BaseModel):
+    target: ReconnectTarget
 
 
 class WatchlistItemIn(BaseModel):
@@ -399,6 +420,27 @@ def build_router(repository: MetaRepository) -> APIRouter:
             repository.annotation_delete(annotation_id)
         except NotFoundError as exc:
             raise HTTPException(404, str(exc)) from exc
+
+    @router.post("/engine/reconnect")
+    def engine_reconnect(request: ReconnectIn) -> dict[str, Any]:
+        """Požádá engine o přepojení zvoleného zdroje dat (#950).
+
+        Zapíše časové razítko do nastavení; engine ho uvidí při nejbližším pollu
+        a přepojí se. Není to okamžité — proto se vrací i `requested_at`, ať UI
+        pozná, že požadavek prošel, i když se stav změní až za pár sekund.
+
+        Přepojení je ~1–2 min díra ve sběru (viz `force_reconnect` v enginu),
+        takže UI se ptá na potvrzení.
+        """
+        targets = (
+            list(RECONNECT_SETTING)
+            if request.target is ReconnectTarget.BOTH
+            else [request.target.value]
+        )
+        requested_at = time.time()
+        for target in targets:
+            repository.setting_put(RECONNECT_SETTING[target], requested_at)
+        return {"targets": targets, "requested_at": requested_at}
 
     @router.get("/settings")
     def settings_all() -> dict[str, Any]:

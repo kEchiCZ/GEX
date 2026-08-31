@@ -92,6 +92,7 @@ from gexlens_engine.runtime_settings import (
     RUNTIME_SETTINGS,
     apply_connection_settings,
     apply_runtime_settings,
+    pending_reconnects,
 )
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
@@ -1935,6 +1936,8 @@ async def main() -> None:
     desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
     cycle = 0
     force_watchlist = False
+    # Poslední VIDĚNÁ razítka požadavků na přepojení (#950) — viz poll níž
+    reconnect_seen: dict[str, object] = {}
     last_full_minute: dt.datetime | None = None
 
     while True:
@@ -1952,7 +1955,12 @@ async def main() -> None:
             keys = (
                 [spec.key for spec in RUNTIME_SETTINGS]
                 + [spec.key for spec in CONNECTION_SETTINGS]
-                + ["subscription_alert_enabled", "ibkr_host"]
+                + [
+                    "subscription_alert_enabled",
+                    "ibkr_host",
+                    "reconnect_request_ibkr",
+                    "reconnect_request_tasty",
+                ]
             )
             stored = await asyncio.to_thread(watchlist_reader.settings_map, keys)
             subscription_alerts["enabled"] = stored.get("subscription_alert_enabled") is not False
@@ -1972,6 +1980,19 @@ async def main() -> None:
                 # musí zkusit hned, jinak uživatel opraví Settings a graf
                 # zůstane prázdný celý cooldown (#455)
                 setup_cooldown.clear()
+            # Ruční přepojení z UI (#950) — rozhodnutí je čistá funkce, ať jde
+            # otestovat mimo tuhle smyčku
+            for target in pending_reconnects(stored, reconnect_seen):
+                logger.info("Ruční přepojení %s z UI (#950)", target.upper())
+                if target == "ibkr":
+                    # Odpojením se supervisor sám připojí znovu, stejně jako
+                    # u změny hostu/portu výš; subskripce patřily starému spojení
+                    ib.disconnect()
+                    restart_pipelines = True
+                    setup_cooldown.clear()
+                else:
+                    await tasty_stream.force_reconnect("ruční požadavek z UI")
+
             if restart_pipelines:
                 for symbol in list(pipelines):
                     pipelines.pop(symbol).stop()

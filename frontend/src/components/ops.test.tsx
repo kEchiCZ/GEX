@@ -176,3 +176,54 @@ test('přepnutí tématu v sidebaru funguje také (Theme tlačítko)', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Theme: Dark' }))
   expect(document.querySelector('.app')?.getAttribute('data-theme')).toBe('light')
 })
+
+// ── Ruční přepojení (#950) ─────────────────────────────────────────
+
+test('přepojení: potvrzení, POST /engine/reconnect a hláška o vyžádání', async () => {
+  const fetchMock = mockApi()
+  fetchMock.mockImplementation(async (url: unknown) => {
+    const target = String(url)
+    if (target.includes('/engine/reconnect')) {
+      return { ok: true, json: async () => ({ targets: ['ibkr'], requested_at: 1 }) }
+    }
+    if (target.includes('/settings')) {
+      return { ok: true, json: async () => ({ settings: {} }) }
+    }
+    if (target.includes('/expiries')) {
+      return { ok: true, json: async () => ({ expiries: ['20260716'] }) }
+    }
+    return { ok: true, json: async () => ({ watchlist: [], annotations: [] }) }
+  })
+  const confirmMock = vi.fn(() => true)
+  vi.stubGlobal('confirm', confirmMock)
+  renderApp()
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+  fireEvent.click(screen.getByTestId('reconnect-ibkr'))
+
+  // Přepojení je ~1–2 min díra ve sběru → nesmí jít spustit bez potvrzení
+  expect(confirmMock).toHaveBeenCalledTimes(1)
+  await waitFor(() => {
+    const calls = fetchMock.mock.calls.filter(([u]) => String(u).includes('/engine/reconnect'))
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toMatchObject({ method: 'POST' })
+    expect(JSON.parse(String((calls[0][1] as RequestInit).body))).toEqual({ target: 'ibkr' })
+  })
+  expect(screen.getByTestId('engine-status').textContent).toContain('vyžádáno')
+})
+
+test('přepojení: zamítnuté potvrzení nic neposílá', () => {
+  const fetchMock = mockApi()
+  vi.stubGlobal(
+    'confirm',
+    vi.fn(() => false),
+  )
+  renderApp()
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+  fireEvent.click(screen.getByTestId('reconnect-ibkr'))
+
+  expect(
+    fetchMock.mock.calls.filter(([u]) => String(u).includes('/engine/reconnect')),
+  ).toHaveLength(0)
+})

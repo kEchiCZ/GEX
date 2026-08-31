@@ -165,3 +165,40 @@ async def test_disk_bez_pouzitelnych_cisel_nezvoni() -> None:
     assert engine.observe_disk(1_000, None) is False
     assert engine.observe_disk("hodne", "malo") is False
     assert engine.observe_disk(1_000, 0) is False  # limit nenastaven
+
+
+# ── Ruční přepojení (#950) ─────────────────────────────────────────
+
+
+def test_reconnect_zapise_razitko_pro_zvoleny_zdroj(client: TestClient) -> None:
+    response = client.post("/engine/reconnect", json={"target": "ibkr"})
+    assert response.status_code == 200
+    assert response.json()["targets"] == ["ibkr"]
+
+    stored = client.get("/settings").json()["settings"]
+    assert stored["reconnect_request_ibkr"] == response.json()["requested_at"]
+    assert "reconnect_request_tasty" not in stored
+
+
+def test_reconnect_both_zapise_oba(client: TestClient) -> None:
+    response = client.post("/engine/reconnect", json={"target": "both"})
+    assert sorted(response.json()["targets"]) == ["ibkr", "tasty"]
+    stored = client.get("/settings").json()["settings"]
+    assert stored["reconnect_request_ibkr"] == stored["reconnect_request_tasty"]
+
+
+def test_reconnect_odmitne_neznamy_cil(client: TestClient) -> None:
+    assert client.post("/engine/reconnect", json={"target": "teleport"}).status_code == 422
+
+
+def test_kazde_vyzadani_da_nove_razitko(client: TestClient) -> None:
+    """Engine reaguje na ZMĚNU hodnoty — dvě stejná razítka by druhý požadavek ztratila."""
+    first = client.post("/engine/reconnect", json={"target": "tasty"}).json()["requested_at"]
+    second = client.post("/engine/reconnect", json={"target": "tasty"}).json()["requested_at"]
+    assert second > first
+
+
+def test_reconnect_klice_nejdou_nastavit_primo(client: TestClient) -> None:
+    """Razítko generuje server (#542 C4) — klient nesmí podvrhnout hodnotu."""
+    blocked = client.put("/settings/reconnect_request_ibkr", json={"value": 1})
+    assert blocked.status_code == 422
