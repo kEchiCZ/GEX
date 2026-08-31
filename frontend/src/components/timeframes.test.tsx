@@ -4,7 +4,7 @@ import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
-import { INTERVALS, defaultExpiry } from '../state/AppState'
+import { INTERVALS, defaultExpiry, expiryWithData } from '../state/AppState'
 
 function mockApi() {
   const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
@@ -69,6 +69,26 @@ test('defaultExpiry: expirace dne seance, jinak NEJBLIŽŠÍ budoucí (#945)', (
   expect(defaultExpiry(['20260925', '20260828', '20260901'], '20260830')).toBe('20260901')
 
   expect(defaultExpiry([], session)).toBeNull()
+})
+
+test('expiryWithData: mimo obchodování doskočí na poslední den s daty (#946)', () => {
+  // Sobota 29. 8.: #945 vybere pondělní 20260831, ta ale ještě nemá ani minutu
+  const days = [
+    { date: '2026-08-27', expiry: '20260827' },
+    { date: '2026-08-28', expiry: '20260828' },
+  ]
+  expect(expiryWithData('20260831', days)).toBe('20260828') // páteční seance
+
+  // V seanci: vybraná expirace data má → větev se neuplatní
+  const vSeanci = [...days, { date: '2026-08-31', expiry: '20260831' }]
+  expect(expiryWithData('20260831', vSeanci)).toBe('20260831')
+
+  // Nedělní večer po otevření Globexu — den už existuje, drží se živá seance
+  expect(expiryWithData('20260831', [{ date: '2026-08-31', expiry: '20260831' }])).toBe('20260831')
+
+  // Engine teprve začíná sbírat (čerstvý ticker) → necháváme vybranou
+  expect(expiryWithData('20260831', [])).toBe('20260831')
+  expect(expiryWithData(null, days)).toBeNull()
 })
 
 test('timeframe řádek nabízí celou sadu 1m–1d', () => {

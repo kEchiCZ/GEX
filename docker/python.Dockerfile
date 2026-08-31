@@ -40,6 +40,14 @@ RUN uv sync --all-packages --frozen --no-dev
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Migrační a měřicí skripty (#960). Bez nich selhaly dokumentované kroky po
+# nasazení — `backfill_band_metrics.py` (#952) se musel dodělávat přes
+# `docker cp`, protože adresář v image prostě nebyl. Kopíruje se AŽ ZA
+# `uv sync`, aby úprava skriptu neshazovala cache vrstvy se závislostmi.
+# Celý adresář, ne whitelist: ten by se u nového skriptu zapomněl doplnit
+# a selhalo by to zase až při nasazení, tedy v nejdražší možné chvíli.
+COPY scripts/ scripts/
+
 # Neprivilegovaný běh (#542): API je jediná služba dosažitelná zvenčí a má RW
 # bind mount ./data — kompromitace pod rootem by znamenala zápis na hostitelský
 # disk. Přepnutí na UID 10001 dělá entrypoint až po srovnání vlastnictví dat;

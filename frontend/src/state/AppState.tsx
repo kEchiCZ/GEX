@@ -290,6 +290,30 @@ export function defaultExpiry(
   return sorted.find((expiry) => expiry >= sessionDate) ?? sorted.at(-1) ?? null
 }
 
+/** Expirace k otevření: vybraná, nebo — když pro ni nejsou uložená žádná data —
+expirace posledního dne, pro který data JSOU (#946).
+
+Mimo obchodování (sobota, neděle do otevření Globexu, svátky) nemá nejbližší
+budoucí expirace ještě ani minutu dat, takže by aplikace nabídla demo dataset.
+Uživatel v takové chvíli chce vidět poslední odobchodovanou seanci — otevřít
+appku v sobotu a nevidět páteček je proti očekávání.
+
+Nedělní večer se řeší sám: po otevření Globexu (17:00 CT) už data pro aktuální
+seanci existují, takže se fallback nepoužije a otevře se živý den. Stejně tak
+v seanci — tam se tahle větev nikdy neuplatní.
+
+`days` je vzestupný seznam z `/instruments/{symbol}/days`; poslední záznam je
+nejnovější den s daty. Prázdný seznam = necháváme vybranou expiraci (engine
+teprve začíná sbírat, hláška o tom v grafu nelže). */
+export function expiryWithData(
+  selected: string | null,
+  days: { date: string; expiry: string }[],
+): string | null {
+  if (selected === null || days.length === 0) return selected
+  if (days.some((day) => day.expiry === selected)) return selected
+  return days[days.length - 1]?.expiry ?? selected
+}
+
 /** Deep-link: počáteční obrazovka a téma z URL (?view=dashboard&theme=light).
 
 Téma z URL má přednost před uloženou volbou (ADR-0007) — automatizované
@@ -554,8 +578,24 @@ export function AppStateProvider({
               (payload.detail ?? []).map((row) => [row.date, row.trading_classes]),
             ),
           )
-          setSelectedExpiry(defaultExpiry(payload.expiries))
+          const candidate = defaultExpiry(payload.expiries)
+          setSelectedExpiry(candidate)
           if (payload.expiries.length === 0) scheduleRetry()
+          // Mimo obchodování nemá vybraná expirace data (#946) — doskočit na
+          // poslední den, který je má. Jen dotaz navíc, výběr se opraví, až
+          // odpověď dorazí; v seanci se větev neuplatní.
+          if (candidate !== null) {
+            fetch(`${API_BASE}/instruments/${symbol}/days`)
+              .then((response) => (response.ok ? response.json() : { days: [] }))
+              .then((daysPayload: { days: { date: string; expiry: string }[] }) => {
+                if (cancelled) return
+                const withData = expiryWithData(candidate, daysPayload.days ?? [])
+                if (withData !== candidate) setSelectedExpiry(withData)
+              })
+              .catch(() => {
+                // /days nedostupné — zůstává vybraná expirace, graf řekne pravdu
+              })
+          }
         },
       )
       .catch(() => {
