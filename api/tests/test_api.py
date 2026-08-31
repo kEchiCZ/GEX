@@ -3,7 +3,6 @@
 import base64
 import datetime as dt
 import io
-import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -485,9 +484,16 @@ def test_status_store(client: TestClient) -> None:
     assert payload["updated_at"] is not None
 
 
-@pytest.mark.skipif(bool(os.environ.get("CI")), reason="výkonnostní AC se měří lokálně")
 def test_heatmap_180x1440_under_300ms(tmp_path: Path) -> None:
-    """AC: heatmap odpověď pro 180 strikes × 1440 minut < 300 ms lokálně."""
+    """AC: heatmap odpověď pro 180 strikes × 1440 minut < 300 ms.
+
+    Měří se MINIMUM z několika volání, ne jedno (#955). Jednorázové měření
+    kolísalo kolem prahu (ustálený stav 0,21–0,24 s, ojedinělý výskyt 0,310 s),
+    takže test padal nahodile a přestalo se mu věřit. Minimum je standardní
+    odhad pro časování pod šumem: odfiltruje plánovač OS a zbytky líné
+    inicializace, ale skutečné zpomalení kódu neschová — to spadne ve všech
+    vzorcích. Do #955 byl test navíc v CI přeskakovaný, takže nehlídal nic.
+    """
     settings = Settings(data_dir=tmp_path)
     strikes = [7000.0 + 5 * i for i in range(180)]
     minutes = pd.date_range("2026-07-16 00:00", periods=1440, freq="min", tz="UTC")
@@ -514,17 +520,21 @@ def test_heatmap_180x1440_under_300ms(tmp_path: Path) -> None:
     frame.to_parquet(partition / "2026-07-16.parquet")
 
     client = TestClient(create_app(settings))
-    client.get("/snapshots/ES/20260716", params={"date": "2026-07-16"})  # zahřátí importů
+    params = {"date": "2026-07-16", "mode": "oi_signed_all", "scale": "sqrt"}
+    # Zahřátí MĚŘENOU větví — původní zahřátí jelo s výchozími parametry, takže
+    # se líná inicializace `oi_signed_all`/`sqrt` propsala do měřeného volání
+    client.get("/snapshots/ES/20260716", params=params)
 
-    start = time.perf_counter()
-    response = client.get(
-        "/snapshots/ES/20260716",
-        params={"date": "2026-07-16", "mode": "oi_signed_all", "scale": "sqrt"},
-    )
-    elapsed = time.perf_counter() - start
+    elapsed = []
+    for _ in range(3):
+        start = time.perf_counter()
+        response = client.get("/snapshots/ES/20260716", params=params)
+        elapsed.append(time.perf_counter() - start)
+        assert response.status_code == 200
 
-    assert response.status_code == 200
-    assert elapsed < 0.3, f"heatmap odpověď trvala {elapsed:.3f}s"
+    best = min(elapsed)
+    vzorky = ", ".join(f"{value:.3f}" for value in elapsed)
+    assert best < 0.3, f"heatmap odpověď trvala nejméně {best:.3f}s (vzorky: {vzorky})"
 
 
 def test_chain_endpoint_last_minute_with_delta_oi(settings: Settings) -> None:
