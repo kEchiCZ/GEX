@@ -23,6 +23,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $PSScriptRoot '_docker.ps1')
 
 if ($Live -and $LiveTasty) { throw '-Live a -LiveTasty se vylučují: buď plný stack proti TWS, nebo tasty laboratoř.' }
 
@@ -41,8 +42,8 @@ if ($Live) {
     if ($prod) {
         Write-Host 'Režim dev-live: shazuji PRODUKCI (jeden market data účet)…' -ForegroundColor Yellow
         Write-Host 'POZOR: po dobu vývoje produkce nesbírá — v datech vznikne díra (#221).' -ForegroundColor Yellow
-        docker compose down
-        if ($LASTEXITCODE -ne 0) { throw 'Shození produkce selhalo — nepouštím dev engine proti běžícímu prod.' }
+        Invoke-DockerChecked -Arguments @('compose', 'down') `
+            -FailureHint 'Shození produkce selhalo — nepouštím dev engine proti běžícímu prod.'
     }
 }
 
@@ -59,10 +60,10 @@ if ($Build) { $composeArgs += '--build' }
 # news-engine — ten mluví s TWS a srazil by se s produkcí
 if ($LiveTasty) { $composeArgs += @('postgres', 'api', 'frontend', 'engine') }
 
+Assert-DockerReady
 $branch = (git rev-parse --abbrev-ref HEAD 2>$null)
 Write-Host "Startuji DEV$(if ($Live) { ' + engine (live)' } elseif ($LiveTasty) { ' + engine (tasty-only)' }) z větve '$branch'…" -ForegroundColor Cyan
-docker @composeArgs
-if ($LASTEXITCODE -ne 0) { throw 'docker compose selhal — běží Docker Desktop?' }
+Invoke-DockerChecked -Arguments $composeArgs -FailureHint 'Start dev stacku selhal.'
 
 $url = 'http://127.0.0.1:8081/'
 for ($i = 0; $i -lt 60; $i++) {
