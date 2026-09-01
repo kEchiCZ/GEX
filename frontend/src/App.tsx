@@ -41,7 +41,7 @@ import { useGexForward } from './hooks/useGexForward'
 import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid, scaleHintFor } from './heatmap/modes'
 import type { HeatmapScale, MeasuredHeatmapMode } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
-import { expirySettleUtc, sessionDateFor } from './instrument/expiry'
+import { expiryIsoDate, expirySettleUtc, sessionDateFor } from './instrument/expiry'
 import { sessionDateIso } from './instrument/tz'
 import { EM_COLOR, EM_DASH, REF_COLOR, REF_DASH, SETUP_COLORS, VWAP_COLOR, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays' // prettier-ignore
 import { computeExpectedMove, emUsage } from './instrument/expectedmove'
@@ -117,6 +117,7 @@ function MainContent() {
     toggles,
     symbol,
     selectedExpiry,
+    expiryFallback,
     view,
     setView,
     setJournalDraft,
@@ -1628,6 +1629,18 @@ function MainContent() {
             )}
             {/* Data se nedaří obnovit (#516): zobrazený stav je starý — nikdy
                 tiše neukazovat zastaralé jako živé */}
+            {/* Doskok na starší seanci (#946) musí být VIDĚT. O víkendu a o svátku
+                je čekaný, ale ve všední den znamená, že sběr pro dnešek neběžel —
+                a tichá záměna dne za starší je horší než demo, které aspoň
+                křičelo, že něco chybí. Hlásí se fakt, nediagnostikuje se příčina:
+                uživatel podle data sám pozná, jestli je to v pořádku. */}
+            {expiryFallback && (
+              <div className="stale-banner" role="status" data-testid="expiry-fallback-banner">
+                {`Pro ${expiryIsoDate(expiryFallback.requested) ?? expiryFallback.requested} nejsou uložená data — ` +
+                  `zobrazena poslední seance ${expiryIsoDate(expiryFallback.shown) ?? expiryFallback.shown}. ` +
+                  'Mimo obchodní dny je to očekávané; ve všední den to znamená, že sběr neběžel.'}
+              </div>
+            )}
             {staleData && (
               <div className="stale-banner" role="status" data-testid="stale-banner">
                 {`Data se nedaří obnovit (${staleData.failures}× po sobě) — zobrazen stav z ` +
