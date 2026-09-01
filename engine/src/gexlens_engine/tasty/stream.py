@@ -20,6 +20,8 @@ from collections.abc import Awaitable, Callable
 
 import websockets
 
+from gexlens_engine.tasty.dxlink import handshake
+
 logger = logging.getLogger(__name__)
 
 #: Rozestup mezi dávkami subskripce (#845). Server odmítá „Your subscription
@@ -266,41 +268,9 @@ class DxLinkStream:
         ) as ws:
             self._ws = ws
             try:
-                await self._send(
-                    {
-                        "type": "SETUP",
-                        "channel": 0,
-                        "version": "0.1-gexlens",
-                        "keepaliveTimeout": 60,
-                        "acceptKeepaliveTimeout": 60,
-                    }
-                )
-                await self._recv_until("SETUP")
-                state = await self._recv_until("AUTH_STATE")
-                if state.get("state") == "UNAUTHORIZED":
-                    await self._send({"type": "AUTH", "channel": 0, "token": token})
-                    state = await self._recv_until("AUTH_STATE")
-                if state.get("state") != "AUTHORIZED":
-                    raise RuntimeError(f"DXLink autorizace selhala: {state}")
-                await self._send(
-                    {
-                        "type": "CHANNEL_REQUEST",
-                        "channel": 1,
-                        "service": "FEED",
-                        "parameters": {"contract": "AUTO"},
-                    }
-                )
-                await self._recv_until("CHANNEL_OPENED")
-                await self._send(
-                    {
-                        "type": "FEED_SETUP",
-                        "channel": 1,
-                        "acceptAggregationPeriod": 0,
-                        "acceptDataFormat": "COMPACT",
-                        "acceptEventFields": {name: EVENT_FIELDS[name] for name in self._events},
-                    }
-                )
-                await self._recv_until("FEED_CONFIG")
+                # Handshake je sdílený s backfillem svíček (#617) — jedna
+                # implementace, ať se dvě kopie nerozejdou
+                await handshake(ws, token, {name: EVENT_FIELDS[name] for name in self._events})
                 async with self._lock:
                     await self._send_subscription(add=set(self._symbols))
                     # Dokončení musí být v logu vidět (#916): smyčka smrti se

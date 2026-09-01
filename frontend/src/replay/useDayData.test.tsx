@@ -612,3 +612,35 @@ test('živá minuta z WS nese mid pro P/C v prémiích (#835)', async () => {
   expect(row.callMid).toBe(12.5)
   expect(row.putMid).toBe(8.25)
 })
+
+// ── Rekonstruované minuty (#617) ───────────────────────────────────
+
+test('assembleReplayDay vypíše rekonstruované minuty; měřené ne', async () => {
+  const { assembleReplayDay } = await import('./loader')
+  const inputs = makeInputs()
+  inputs.minutes = [
+    '2026-07-16T15:00:00.000Z',
+    '2026-07-16T15:01:00.000Z',
+    '2026-07-16T15:02:00.000Z',
+  ]
+  inputs.minuteCapacity = 3
+  inputs.snapshotMinutes = [true, true, true]
+  inputs.oiLowMinutes = [false, false, false]
+  // Prostřední minuta doplněná backfillem, krajní změřené
+  inputs.bars = [
+    { tsIso: '2026-07-16T15:00:00.000Z', close: 7600, volume: 1 },
+    { tsIso: '2026-07-16T15:01:00.000Z', close: 7601, volume: 1, reconstructed: true },
+    { tsIso: '2026-07-16T15:02:00.000Z', close: 7602, volume: 1 },
+  ]
+
+  const day = assembleReplayDay(inputs)
+
+  // Bez tohohle by doplněná minuta v grafu splynula s měřenou (ADR-0024 dodatek)
+  expect(day.reconstructedIso).toEqual(['2026-07-16T15:01:00.000Z'])
+})
+
+test('den bez rekonstrukce má prázdný seznam (#617)', async () => {
+  const { assembleReplayDay } = await import('./loader')
+  const day = assembleReplayDay(makeInputs())
+  expect(day.reconstructedIso).toEqual([])
+})

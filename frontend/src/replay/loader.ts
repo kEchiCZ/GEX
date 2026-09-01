@@ -83,6 +83,9 @@ export interface ReplayDay {
   /** `minuteIdx` minut, jejichž bar je zatím provizorní (ADR-0005). Živá svíčka
   ze spotu je pro ně přesnější, takže jim v grafu ustupuje až finální bar. */
   provisionalMinutes: number[]
+  /** ISO minuty doplněné backfillem z dxFeed Candle (#617), vzestupně.
+  Doplněná minuta má cenu a objem, ale žádný tok — v UI se musí odlišit. */
+  reconstructedIso: string[]
   /** Dyn GEX profil per minuta (ADR-0009); null = minuta profil nemá. */
   gexProfile: (GexProfileRow | null)[]
   /** Modelované pole budoucích sloupců (ADR-0009 fáze 2); null = bez pole. */
@@ -104,6 +107,10 @@ export interface LadderMinuteRow {
   putShares: number[]
 }
 
+/** Hodnota `source` u minut doplněných backfillem (#617) — musí sedět s enginem
+(`storage/parquet_store.BAR_SOURCE_RECONSTRUCTED`). */
+export const BAR_SOURCE_RECONSTRUCTED = 'tasty_candle'
+
 const LEVEL_KEYS = ['flip', 'centroid', 'call_wall', 'put_wall', 'call_wall_2', 'put_wall_2', 'call_wall_dom', 'put_wall_dom', 'call_wall_2_dom', 'put_wall_2_dom', 'fa_flip', 'fa_call_wall', 'fa_put_wall', 'oi_call_wall', 'oi_put_wall', 'oi_call_share', 'oi_put_share'] as const // prettier-ignore
 
 interface BarInput {
@@ -115,6 +122,9 @@ interface BarInput {
   volume: number
   /** `false` = provizorní bar rozdělané minuty (ADR-0005); chybí-li, bere se jako finální. */
   final?: boolean
+  /** Minuta doplněná backfillem z dxFeed Candle po pozdním startu (#617).
+  Doplněná minuta NENÍ změřená — nese cenu a objem, ale žádný tok (CumΔ). */
+  reconstructed?: boolean
 }
 interface LevelsInput {
   tsIso: string
@@ -564,6 +574,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
       high: Number.isFinite(high) ? high : undefined,
       low: Number.isFinite(low) ? low : undefined,
       final: tsIso !== liveMinuteIso,
+      reconstructed: bar.source === BAR_SOURCE_RECONSTRUCTED,
     }
   })
   // Levels + sekundární zdi (vlastní řada levels2, ADR-0008) sloučené per minuta
@@ -1002,6 +1013,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
   // Overlaye: cena z barů
   const price: PriceBar[] = []
   const provisionalMinutes: number[] = []
+  const reconstructedIso: string[] = []
   let previousClose = Number.NaN
   // Bary se řadí podle osy, ne podle pořadí příchodu (#459): dozadu doplněná
   // minuta (backfill, opožděný bar) by jinak skončila na konci pole a `up` by
@@ -1021,6 +1033,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
         low: bar.low,
       })
       if (bar.final === false) provisionalMinutes.push(minuteIdx)
+      if (bar.reconstructed) reconstructedIso.push(bar.tsIso)
       previousClose = bar.close
     }
   }
@@ -1321,6 +1334,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     panels: { vol, optVolCall, optVolPut, cumDelta, futuresCvd, deltaFlowCall, deltaFlowPut, evoOiCall, evoOiPut, cumDeltaFromIso }, // prettier-ignore
     profileByMinute,
     provisionalMinutes,
+    reconstructedIso,
     gexProfile,
     gexField: inputs.gexField,
     gexProfileFa,

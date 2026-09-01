@@ -33,3 +33,35 @@ agregáty, C) díru jen poctivě označit.
 - Okenní analýza (M6 #483) musí `catch_up` minutu při `vol_window` rozdílech
   přeskočit / přiznat v odpovědi (`stale_age`/flag), jinak by celý skok
   kumulativu přiřkla jedné minutě.
+
+## Dodatek 2026-09-01 (#617): bary podkladu se rekonstruovat ZAČALY
+
+Původní znění vzdávalo rekonstrukci jako celek. **Opční vrstvy se to týká
+dál a beze změny** — bod 1 (zamítnutí varianty A) platí. Změnil se jen jeden
+dílek: **1min bary podkladu**.
+
+dxFeed `Candle` umí historii od `fromTime` a na rozdíl od IBKR historical na
+ni nemá pacing limit, který by dusil živý sběr. Rekonstrukce díry po pozdním
+startu tedy stojí jedno krátké spojení, ne hodinu requestů — a tím padá
+důvod, proč se u barů vzdávala.
+
+**Co se rekonstruuje:** výhradně OHLCV 1min bary podkladu, a to jen minuty,
+které v particii chybí. Zdroj zůstává doplňkem: primární je IBKR historical
+(matice vlastnictví ADR-0025).
+
+**Co se nerekonstruuje a proč:**
+
+* **Opční vrstva** — beze změny, viz bod 1 výše.
+* **CumΔ a cokoli z tick-level toku.** Svíčka nese OHLCV, ne jednotlivé
+  printy s agresorem. Doplněná minuta má cenu a objem, ale žádný tok —
+  poznámka „CumΔ od HH:MM" (bod 3) proto platí dál a nesmí se tvářit, že
+  díru zaplnil backfill barů.
+
+**Jak se pozná rekonstruovaná minuta:** sloupec `source` v particii barů.
+`NULL` = partice pořízená před #617, `"ibkr"` = živá cesta, `"tasty_candle"`
+= doplněno backfillem. Doplněná minuta není totéž co změřená a nesmí v UI
+splynout — je to tentýž princip jako šrafovaná chybějící OI (#465) a bod 2
+tohohle ADR: díra se poctivě ukáže, nedokresluje se.
+
+**Past (ADR-0027):** `/ESU6:XCME` s hlubokým `fromTime` vrací svíčky z roku
+2016. Symbol musí nést plný rok a bere se výhradně z chain endpointu.

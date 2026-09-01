@@ -130,8 +130,19 @@ BARS_SCHEMA = pa.schema(
         ("low", pa.float64()),
         ("close", pa.float64()),
         ("volume", pa.float64()),
+        # Původ minuty (#617). NULL = živá cesta IBKR (tak vypadají všechny
+        # partice před #617), "ibkr" = totéž zapsané výslovně, "tasty_candle" =
+        # REKONSTRUOVÁNO z dxFeed Candle po pozdním startu. Doplněná minuta
+        # není totéž co změřená a nesmí se tak tvářit — proto sloupec, ne
+        # tichý zápis. Staré soubory se čtou dál: pyarrow doplní NULL.
+        ("source", pa.string()),
     ]
 )
+
+#: Hodnota `source` u minut doplněných backfillem (#617) — UI je podle ní odliší
+BAR_SOURCE_RECONSTRUCTED = "tasty_candle"
+#: Živá cesta; NULL v starších particích znamená totéž
+BAR_SOURCE_LIVE = "ibkr"
 
 # Řada flowΔ/CumΔ (SPEC 4.5/5.1: derived/)
 FLOW_SCHEMA = pa.schema(
@@ -902,11 +913,26 @@ class SnapshotWriter:
                     "low": bar.low,
                     "close": bar.close,
                     "volume": bar.volume,
+                    # `getattr`, ne pole v protokolu: bary chodí z IBKR i z
+                    # backfillu a živá cesta o původu nemusí nic vědět
+                    "source": getattr(bar, "source", None) or BAR_SOURCE_LIVE,
                 }
                 for bar in bars
             ],
             key="ts_min",
         )
+
+    def bar_minutes(self, symbol: str, day: dt.date) -> set[dt.datetime]:
+        """Minuty, které v particii barů UŽ jsou (#617).
+
+        Podklad pro doplnění děr: backfill dostane jen to, co chybí, takže
+        se měřená minuta nemá jak přepsat.
+        """
+        path = self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
+        if not path.exists():
+            return set()
+        column = pq.read_table(path, columns=["ts_min"]).column("ts_min").to_pylist()
+        return {ts.replace(tzinfo=dt.UTC) if ts.tzinfo is None else ts for ts in column if ts}
 
     def write_dx_flow(self, symbol: str, day: dt.date, rows: Sequence[object]) -> Path:
         """Stínové CumΔ minuty (#615) do derived/{sym}/cumdelta_dx/{date}.parquet.

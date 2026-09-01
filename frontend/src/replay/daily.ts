@@ -134,6 +134,8 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
   return {
     source: 'replay',
     grid,
+    // Daily skládá DNY — minutová rekonstrukce (#617) se sem nepromítá
+    reconstructedIso: [],
     raw: null, // Daily skládá dny — módy/škály se přepínají jen intraday
     overlays: {
       price,
