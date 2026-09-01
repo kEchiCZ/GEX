@@ -1018,6 +1018,15 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
   // Bary se řadí podle osy, ne podle pořadí příchodu (#459): dozadu doplněná
   // minuta (backfill, opožděný bar) by jinak skončila na konci pole a `up` by
   // se počítalo vůči špatnému sousedovi — svíčka by dostala obrácenou barvu
+  // Rekonstrukce (#617) se sbírá ZE VŠECH barů, ne jen z těch na ose. Osa vzniká
+  // ze snapshotů opcí, které začínají později než Globex — doplněné minuty
+  // z večerního otevření by na ní nebyly a banner by o nich mlčel. Přesně ta
+  // tichá ztráta, kterou má #617 řešit: doplněno ≠ změřeno, a musí to být vidět.
+  for (const bar of inputs.bars) {
+    if (bar.reconstructed) reconstructedIso.push(bar.tsIso)
+  }
+  reconstructedIso.sort()
+
   const orderedBars = [...inputs.bars].sort(
     (a, b) => (minuteIndex.get(a.tsIso) ?? -1) - (minuteIndex.get(b.tsIso) ?? -1),
   )
@@ -1033,7 +1042,6 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
         low: bar.low,
       })
       if (bar.final === false) provisionalMinutes.push(minuteIdx)
-      if (bar.reconstructed) reconstructedIso.push(bar.tsIso)
       previousClose = bar.close
     }
   }

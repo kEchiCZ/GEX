@@ -644,3 +644,21 @@ test('den bez rekonstrukce má prázdný seznam (#617)', async () => {
   const day = assembleReplayDay(makeInputs())
   expect(day.reconstructedIso).toEqual([])
 })
+
+test('rekonstruovaná minuta MIMO osu snapshotů se taky ohlásí (#617)', async () => {
+  const { assembleReplayDay } = await import('./loader')
+  const inputs = makeInputs()
+  // Osa vzniká ze snapshotů opcí a začíná v 15:00. Doplněná minuta z večerního
+  // otevření Globexu na ní není — přesto o ní uživatel musí vědět, jinak by
+  // se ztratila tiše. To byl reálný stav při prvním nasazení #617: všech 119
+  // doplněných minut leželo mimo osu a banner mlčel.
+  inputs.bars = [
+    { tsIso: '2026-07-15T22:00:00.000Z', close: 7590, volume: 1, reconstructed: true },
+    { tsIso: '2026-07-16T15:00:00.000Z', close: 7600.5, volume: 1000 },
+  ]
+
+  const day = assembleReplayDay(inputs)
+
+  expect(day.minutes).not.toContain('2026-07-15T22:00:00.000Z') // opravdu mimo osu
+  expect(day.reconstructedIso).toEqual(['2026-07-15T22:00:00.000Z'])
+})
