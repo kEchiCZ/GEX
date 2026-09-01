@@ -170,6 +170,10 @@ export interface DayData {
   minuteLabels: string[]
   /** ISO čas poslední naměřené minuty — horizont projekce (ADR-0006). */
   lastMinuteIso: string | null
+  /** ISO minuty doplněné backfillem z dxFeed Candle (#617) — vzestupně.
+  Doplněná minuta nese cenu a objem, ale NEmá tok: CumΔ z ní rekonstruovat
+  nejde. Musí být v UI vidět, jinak splyne s měřenou (ADR-0024 dodatek). */
+  reconstructedIso: string[]
   /** ISO časy všech minut osy — zarovnávání externích řad (#204 plochy). */
   minutesIso: string[]
   /** Dyn GEX profil per minuta/koš (ADR-0009); null = bez profilů. */
@@ -208,6 +212,7 @@ function demoDay(): DayData {
     demoProfileRows: demoProfile(grid),
     spotSeries,
     minuteLabels,
+    reconstructedIso: [],
     lastMinuteIso: null, // demo den není ukotvený v čase → bez projekce
     minutesIso: [],
     gexProfile: null,
@@ -237,6 +242,7 @@ function replayToDay(day: ReplayDay): DayData {
     spotSeries,
     minuteLabels,
     lastMinuteIso: day.minutes.at(-1) ?? null,
+    reconstructedIso: day.reconstructedIso,
     minutesIso: day.minutes,
     gexProfile: day.gexProfile,
     gexField: day.gexField,

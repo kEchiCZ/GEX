@@ -29,7 +29,7 @@ from gexlens_engine.adapters import (
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import outside_us_rth
-from gexlens_engine.compute.settle import trading_session_date
+from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.diagnostics import install_stack_dump
@@ -117,6 +117,7 @@ from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.storage.volregime_store import VolRegimeRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.adhoc import AdhocViewer
+from gexlens_engine.tasty.candles import CandleFetcher, backfill_gaps
 from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow
@@ -1177,6 +1178,36 @@ async def main() -> None:
     # Streamer symbol front futures per instrument (#614) — zdroj spotu, když
     # IBKR přestane posílat (mobil přetáhl market data, výpadek farmy)
     shadow_front_future: dict[str, str] = {}
+    # Rekonstrukce děr po pozdním startu (#617) — jednorázově per symbol.
+    # Doplněk k IBKR historical, ne náhrada (ADR-0025).
+    candle_backfilled: set[str] = set()
+
+    async def _candle_gap_backfill(symbol: str, streamer_symbol: str) -> None:
+        """Doplní minuty, které IBKR historical nedodal (#617).
+
+        Běží JEDNOU po startu, mimo hlavní datovou cestu a s vlastním krátkým
+        spojením — sběr nesmí ohrozit. Selhání se jen zaloguje: díra v barech
+        je horší stav, ale pořád lepší než shozená pipeline.
+        """
+        if tasty_session is None:
+            return  # bez tasty větve není z čeho rekonstruovat
+        try:
+            now = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
+            day = trading_session_date(now)
+            since, _ = session_bounds(day)
+            existing = await asyncio.to_thread(writer.bar_minutes, symbol, day)
+            bars = await backfill_gaps(
+                CandleFetcher(tasty_session.quote_token),
+                streamer_symbol=streamer_symbol,
+                existing=existing,
+                since=max(since, now - dt.timedelta(hours=24)),
+                until=now,
+            )
+            if bars:
+                await asyncio.to_thread(writer.write_bars, symbol, day, bars)
+        except Exception:
+            logger.exception("Rekonstrukce barů %s selhala — díra zůstává", symbol)
+
     # CVD podkladu (#829): jedna instance pro celý engine, runtimes z ní čtou
     # minutu. Bez tasty větve zůstane bez registrací → řada je prostě NULL.
     futures_cvd = FuturesCvdTracker()
@@ -1612,6 +1643,9 @@ async def main() -> None:
                         front = await symbol_map.front_future(symbol)
                         if front:
                             shadow_front_future[symbol] = front
+                            if symbol not in candle_backfilled:
+                                candle_backfilled.add(symbol)
+                                asyncio.create_task(_candle_gap_backfill(symbol, front))
                             symbols.add(front)
                             purpose["underlying"].add(front)
                             # CVD podkladu (#829) — registrace zároveň ošetří

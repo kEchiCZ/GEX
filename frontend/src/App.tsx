@@ -1641,6 +1641,17 @@ function MainContent() {
                   'Mimo obchodní dny je to očekávané; ve všední den to znamená, že sběr neběžel.'}
               </div>
             )}
+            {/* Rekonstruovaný úsek (#617) musí být vidět: doplněná minuta nese
+                cenu a objem, ale ŽÁDNÝ tok — CumΔ z ní spočítat nejde. Kdyby
+                splynula s měřenou, uživatel by četl díru jako naměřený klid.
+                Týž princip jako šrafovaná chybějící OI (#465). */}
+            {day.reconstructedIso.length > 0 && (
+              <div className="stale-banner" role="status" data-testid="reconstructed-banner">
+                {`Rekonstruováno ${day.reconstructedIso.length} min z dxFeed ` +
+                  `(${minuteLabel(day.reconstructedIso[0])}–${minuteLabel(day.reconstructedIso[day.reconstructedIso.length - 1])}) ` +
+                  '— cena a objem doplněné po pozdním startu, CumΔ za ten úsek chybí.'}
+              </div>
+            )}
             {staleData && (
               <div className="stale-banner" role="status" data-testid="stale-banner">
                 {`Data se nedaří obnovit (${staleData.failures}× po sobě) — zobrazen stav z ` +

@@ -256,6 +256,8 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
     raw: day.raw, // surová 1m matice se nese dál (módy se aplikují před agregací)
     rawFa: day.rawFa, // FA matice stejně — zdroj OI se přepíná před agregací (#232)
     minutesIso: day.minutesIso, // ISO minut zůstávají 1m — zarovnávání je před agregací
+    // Rozsah rekonstrukce (#617) platí bez ohledu na velikost koše — nese se beze změny
+    reconstructedIso: day.reconstructedIso,
     overlays: aggregateOverlays(day.overlays, plan),
     panels: {
       vol: sumSeries(day.panels.vol, plan),

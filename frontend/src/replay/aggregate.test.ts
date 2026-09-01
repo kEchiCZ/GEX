@@ -22,6 +22,7 @@ function sampleDay(): DayData {
   ]
   return {
     source: 'replay',
+    reconstructedIso: [],
     grid: { minutes: 4, strikes: [100, 105], layers: { call, put }, staleAge: null },
     raw: null,
     rawFa: null,
@@ -278,6 +279,7 @@ test('aggregateLive: koš náběžné hrany je wall-clock hranice (#584)', () =>
 test('buildDailyDay: sloupec = den, denní OHLC svíčka a součty', () => {
   const dayA: ReplayDay = {
     symbol: 'ES',
+    reconstructedIso: [],
     expiry: '20260715',
     date: '2026-07-15',
     minutes: ['a', 'b'],
@@ -355,6 +357,7 @@ test('dayLabel formátuje ISO datum česky', () => {
 function makeReplayDay(date: string): ReplayDay {
   return {
     symbol: 'ES',
+    reconstructedIso: [],
     expiry: date.replaceAll('-', ''),
     date,
     minutes: ['a'],
