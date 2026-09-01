@@ -227,3 +227,45 @@ test('přepojení: zamítnuté potvrzení nic neposílá', () => {
     fetchMock.mock.calls.filter(([u]) => String(u).includes('/engine/reconnect')),
   ).toHaveLength(0)
 })
+
+// ── Doskok na starší seanci musí být vidět (#946) ──────────────────
+
+function mockApiSDny(days: { date: string; expiry: string }[]) {
+  const fetchMock = vi.fn(async (url: unknown) => {
+    const target = String(url)
+    if (target.includes('/days')) return { ok: true, json: async () => ({ days }) }
+    if (target.includes('/expiries')) {
+      return { ok: true, json: async () => ({ expiries: ['20260828', '20260831'] }) }
+    }
+    if (target.includes('/watchlist')) {
+      return { ok: true, json: async () => ({ watchlist: [{ id: 1, symbol: 'ES' }] }) }
+    }
+    return { ok: true, json: async () => ({ annotations: [], settings: {} }) }
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+test('doskok na starší seanci se ohlásí bannerem (#946)', async () => {
+  // Pro vybranou expiraci (20260831) nejsou dny → doskočí na 20260828.
+  // O víkendu je to čekané, ve všední den to znamená výpadek sběru — v obou
+  // případech to uživatel musí vidět, tichá záměna dne je horší než demo.
+  mockApiSDny([{ date: '2026-08-28', expiry: '20260828' }])
+  renderApp()
+
+  const banner = await screen.findByTestId('expiry-fallback-banner')
+  expect(banner.textContent).toContain('2026-08-31')
+  expect(banner.textContent).toContain('2026-08-28')
+  expect(banner.textContent).toContain('sběr neběžel')
+})
+
+test('když data pro vybranou expiraci jsou, banner se neukáže (#946)', async () => {
+  mockApiSDny([
+    { date: '2026-08-28', expiry: '20260828' },
+    { date: '2026-08-31', expiry: '20260831' },
+  ])
+  renderApp()
+
+  await screen.findByLabelText('Heatmapa')
+  expect(screen.queryByTestId('expiry-fallback-banner')).toBeNull()
+})

@@ -190,6 +190,9 @@ interface AppState {
   expiryClasses: Record<string, string[]>
   selectedExpiry: string | null
   setSelectedExpiry: (expiry: string) => void
+  /** Doskok na starší seanci, protože pro vybranou expiraci nejsou data (#946).
+  Null = ukazuje se to, co uživatel/výchozí volba vybrala. */
+  expiryFallback: { requested: string; shown: string } | null
   timeframe: 'intraday' | 'daily'
   setTimeframe: (value: 'intraday' | 'daily') => void
   interval: Interval
@@ -380,6 +383,10 @@ export function AppStateProvider({
   const [expiries, setExpiries] = useState<string[]>([])
   const [expiryClasses, setExpiryClasses] = useState<Record<string, string[]>>({})
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
+  const [expiryFallback, setExpiryFallback] = useState<{
+    requested: string
+    shown: string
+  } | null>(null)
   const [timeframe, setTimeframe] = usePersistentState<'intraday' | 'daily'>(
     'timeframe',
     'intraday',
@@ -590,7 +597,15 @@ export function AppStateProvider({
               .then((daysPayload: { days: { date: string; expiry: string }[] }) => {
                 if (cancelled) return
                 const withData = expiryWithData(candidate, daysPayload.days ?? [])
-                if (withData !== candidate) setSelectedExpiry(withData)
+                // Doskok MUSÍ být vidět (#946): o víkendu je čekaný, ale ve všední
+                // den znamená výpadek sběru — a tichá záměna dne za starší je pak
+                // horší než demo, které aspoň křičelo, že něco chybí
+                if (withData !== candidate && withData !== null) {
+                  setSelectedExpiry(withData)
+                  setExpiryFallback({ requested: candidate, shown: withData })
+                } else {
+                  setExpiryFallback(null)
+                }
               })
               .catch(() => {
                 // /days nedostupné — zůstává vybraná expirace, graf řekne pravdu
@@ -604,6 +619,7 @@ export function AppStateProvider({
           setExpiries([])
           setExpiryClasses({})
           setSelectedExpiry(null)
+          setExpiryFallback(null)
           scheduleRetry()
         }
       })
@@ -622,7 +638,12 @@ export function AppStateProvider({
       expiries,
       expiryClasses,
       selectedExpiry,
-      setSelectedExpiry,
+      // Ruční volba expirace doskok ruší — od té chvíle uživatel ví, na co kouká
+      setSelectedExpiry: (expiry: string) => {
+        setExpiryFallback(null)
+        setSelectedExpiry(expiry)
+      },
+      expiryFallback,
       timeframe,
       setTimeframe,
       interval,
@@ -694,6 +715,7 @@ export function AppStateProvider({
       expiries,
       expiryClasses,
       selectedExpiry,
+      expiryFallback,
       timeframe,
       interval,
       toggles,
