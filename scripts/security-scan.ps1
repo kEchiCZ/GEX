@@ -105,6 +105,66 @@ if ($Images) {
     Write-Host '  Pozn.: nálezy jsou zpravidla OS balíky base image — řeší je rebuild s čerstvou bází.'
 }
 
+# ── 5. tastytrade: výhradně read scope, nikdy heslo (#620, ADR-0025) ───────
+# Statická pojistka na politiku přístupu. gitleaks hlídá UNIKLÉ tajemství,
+# tohle hlídá ZPŮSOB přístupu: scope `trade` nebo přihlášení heslem přes
+# `/sessions` dá tokenu právo obchodovat na živém účtu, i kdyby nikdy neunikl.
+Write-Section 'tastytrade přístup (#620)'
+$srcDirs = @('engine/src', 'api/src', 'news-engine/src', 'scripts') |
+    ForEach-Object { Join-Path $repo $_ } | Where-Object { Test-Path $_ }
+$pySrc = @(Get-ChildItem -Path $srcDirs -Recurse -Include *.py -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -notmatch '__pycache__' })
+
+# `/sessions` jako REÁLNÁ cesta požadavku (v uvozovkách). Zmínky v komentářích
+# a docstringu jsou psané v obrácených apostrofech, takže je tenhle vzor mine
+# a zákaz smí zůstat zdokumentovaný v kódu.
+$sessionHits = @($pySrc | Select-String -Pattern '["'']/sessions' -ErrorAction SilentlyContinue)
+if ($sessionHits.Count -gt 0) {
+    $failures += "tastytrade: přihlášení heslem přes /sessions ($($sessionHits.Count)x)"
+    $sessionHits | ForEach-Object { Write-Host "  ! $($_.Path):$($_.LineNumber)" }
+} else {
+    Write-Host '  OK — nikde se nevolá /sessions (přihlášení heslem)'
+}
+
+# Scope `trade` nebo `write` v jakémkoli požadavku na token
+$scopeHits = @($pySrc | Select-String -Pattern 'scope.{0,60}(trade|write)' -ErrorAction SilentlyContinue)
+if ($scopeHits.Count -gt 0) {
+    $failures += "tastytrade: požadován scope trade/write ($($scopeHits.Count)x)"
+    $scopeHits | ForEach-Object { Write-Host "  ! $($_.Path):$($_.LineNumber)" }
+} else {
+    Write-Host '  OK — nikde se nežádá scope trade ani write'
+}
+
+# `.env.example` musí klíče POJMENOVAT a nechat PRÁZDNÉ — vyplněná hodnota
+# v šabloně je únik, i když vypadá jako placeholder
+$exampleFile = Join-Path $repo '.env.example'
+if (Test-Path $exampleFile) {
+    $exampleOk = $true
+    foreach ($key in @('GEXLENS_TASTY_CLIENT_SECRET', 'GEXLENS_TASTY_REFRESH_TOKEN')) {
+        $line = @(Select-String -Path $exampleFile -Pattern "^$key=" -ErrorAction SilentlyContinue)
+        if ($line.Count -eq 0) {
+            $failures += ".env.example: chybí $key"
+            Write-Host "  ! .env.example neuvádí $key"
+            $exampleOk = $false
+        } elseif ($line[0].Line.Trim() -ne "$key=") {
+            $failures += ".env.example: $key má vyplněnou hodnotu"
+            Write-Host "  ! .env.example má u $key hodnotu — šablona musí zůstat prázdná"
+            $exampleOk = $false
+        }
+    }
+    if ($exampleOk) { Write-Host '  OK — šablona klíče uvádí a nechává prázdné' }
+}
+
+# Skutečný `.env` se nesmí dostat do gitu
+$trackedEnv = @(git -C $repo ls-files --error-unmatch .env .env.dev 2>$null)
+$global:LASTEXITCODE = 0  # `--error-unmatch` hlásí nenalezení kódem, což je tady OČEKÁVANÝ stav
+if ($trackedEnv.Count -gt 0) {
+    $failures += "git sleduje soubor s tajemstvími: $($trackedEnv -join ', ')"
+    Write-Host "  ! git sleduje $($trackedEnv -join ', ')"
+} else {
+    Write-Host '  OK — .env ani .env.dev git nesleduje'
+}
+
 Write-Section 'Souhrn'
 Write-Host "Reporty: $OutDir"
 if ($failures.Count -gt 0) {

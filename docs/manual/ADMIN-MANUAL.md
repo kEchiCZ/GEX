@@ -382,6 +382,45 @@ z `.env.example` nepoužívá nikdo (refresh flow posílá jen `refresh_token`
 `scripts/tasty_probe.py`. Když nastavení „nezabírá", ověř nejdřív, že ten klíč
 engine vůbec zná — seznam je v kapitole 4.
 
+#### Vydání a odvolání grantu (#620)
+
+Granty jsou **dva na jednom účtu** — zvlášť pro dev a zvlášť pro produkci
+(ADR-0025). Jde je odvolat nezávisle, takže zabití dev přístupu nechá produkci
+běžet dál.
+
+**Vydání**
+
+1. V tastytrade **Manage → Create Grant**, potvrdit druhým faktorem.
+2. Zaškrtnout **výhradně scope `read`**. `trade` se nezaškrtne **nikdy** — nejde
+   o důvěru v kód, ale o to, že právo, které aplikace nemá, nelze zneužít.
+   `openid` jen tehdy, pokud ho autorizační tok vyžaduje.
+3. **Client secret se ukáže jen jednou.** Kdo ho v tu chvíli neuloží, musí vydat
+   grant znovu — zpětně se přečíst nedá.
+4. Hodnoty zapsat do `.env` (produkce), resp. `.env.dev` (dev), pod klíči
+   `GEXLENS_TASTY_CLIENT_SECRET` a `GEXLENS_TASTY_REFRESH_TOKEN`. Nikdy do repa
+   ani natvrdo do compose. Před zápisem ověř, že soubor **končí novým řádkem** —
+   append bez něj přilepí klíč k předchozí hodnotě.
+5. Restartovat dotčený stack. Refresh token neexpiruje, access token (15 min) si
+   engine obnovuje sám.
+
+**Ověření, že grant platí**
+
+| co | kde | očekávané |
+|---|---|---|
+| spojení | `GET /status` | `tasty_connected: true` |
+| subskripce | log enginu | `DXLink subskripce kompletní: N symbolů` |
+| politika přístupu | `pwsh scripts/security-scan.ps1` | sekce *tastytrade přístup* bez nálezů |
+
+**Odvolání**
+
+V **Manage** odvolat příslušný grant. Engine tím přijde o obnovu access tokenu,
+tastytrade větev přestane fungovat a s ní i křížová kontrola (#517 A), oba
+fallbacky (#614) a OI fill (#664) — IBKR cesta běží dál. Aktivní zdroj je vidět
+v hlavičce jantarovým chipem, takže ztráta nezůstane tichá (ADR-0025 pravidlo 5).
+
+**Rotace při podezření na únik:** nejdřív **odvolat**, teprve pak vydávat nový.
+Opačné pořadí nechává uniklý token platný po celou dobu, kdy se vyplňuje `.env`.
+
 **Trvalé × dočasné je od #763 rozdělené.** Do té doby hlídal jeden flag
 `GEXLENS_TASTY_SHADOW` obojí, takže nejpřirozenější možná úvaha — „měření
 doběhlo, vypínám ho" — tiše vypnula i křížovou kontrolu, oba fallbacky, OI fill
