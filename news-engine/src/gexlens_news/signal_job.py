@@ -23,6 +23,7 @@ import pyarrow.parquet as pq
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.storage.sentiment import (
     news_classifications,
     news_events,
@@ -53,6 +54,7 @@ CUM_DELTA_SLOPE_MINUTES = 10
 # Důvody odpadnutí, které patří jobu (ne čistým pravidlům) — viz #453
 REJECT_STATE = "stav"  # stav není RiskOn/RiskOff, negeneruje se vůbec
 REJECT_DEDUP = "dedup"  # týž (event, mode) už signál založil
+REJECT_CLOSED = "trh zavřený"  # mimo obchodní dobu (#968)
 
 
 def load_gex_context(data_dir: Any, symbol: str, now: dt.datetime) -> GexContext | None:
@@ -354,9 +356,25 @@ class SignalJob:
         created = 0
         events = self._candidate_events(now)
         seen: set[tuple[int, str]] | None = None
+        # Mimo obchodní dobu se NEGENERUJE (#968). Signál vzniklý o víkendu,
+        # po pátečním zavření nebo v denní pauze CME nejde obchodovat ani
+        # vyhodnotit — outcome se počítá z barů, a ty tam nejsou. Doměřeno:
+        # 21 z 39 signálů vzniklo se zavřeným trhem a ANI JEDEN nemá outcome,
+        # zatímco všech 18 z obchodní doby ho má.
+        #
+        # Rozvrh nechává na `marketclock` (#339): neděle 17:00 CT → pátek
+        # 16:00 CT, denní pauza 16:00–17:00 CT, sobota celý den. Druhá
+        # implementace téhož kalendáře by se dřív nebo později rozešla.
+        closed = is_market_closed(now)
         for symbol in self._symbols:
             state = states.get(symbol, "Neutral")
+            # Expirace běží i se zavřeným trhem — signál z pátku nesmí přežít
+            # změnu stavu jen proto, že se zrovna neobchoduje
             self._expire_on_state_change(symbol, state, now)
+            if closed:
+                # Do rozpadu v logu, ať prázdná `signals` nevypadá jako porucha (#453)
+                self.last_rejects[REJECT_CLOSED] += len(events)
+                continue
             if state not in ("RiskOn", "RiskOff"):
                 # SPEC 6.3: mimo RiskOn/RiskOff se negeneruje — ale ať je
                 # vidět, kolik kandidátů na tomhle jediném filtru zůstalo

@@ -27,15 +27,21 @@ def make_db(tmp_path: Path) -> Engine:
     return engine
 
 
-def seed_event(engine: Engine, event_id: int, *, score: float = 0.6) -> None:
+def seed_event(
+    engine: Engine,
+    event_id: int,
+    *,
+    score: float = 0.6,
+    now: dt.datetime = NOW,
+) -> None:
     with engine.begin() as conn:
         conn.execute(
             insert(news_events),
             [
                 {
                     "id": event_id,
-                    "ts_event": NOW - dt.timedelta(minutes=10),
-                    "ts_ingested": NOW,
+                    "ts_event": now - dt.timedelta(minutes=10),
+                    "ts_ingested": now,
                     "source": "rss_news",
                     "kind": "headline",
                     "category": "FED",
@@ -264,3 +270,51 @@ def test_stavy_per_symbol_a_state_symbol_v_inputs(tmp_path: Path) -> None:
         rows = conn.execute(select(signals)).fetchall()
     assert {row.symbol for row in rows} == {"NQ"}
     assert all(row.inputs["state_symbol"] == "NQ" for row in rows)
+
+
+# ── Mimo obchodní dobu se negeneruje (#968) ────────────────────────
+
+# Rozvrh CME v létě (CDT = UTC−5): 16:00 CT = 21:00 UTC, 17:00 CT = 22:00 UTC.
+# NOW výše je středa 14:00 UTC = 09:00 CT, tedy uprostřed seance.
+SOBOTA = dt.datetime(2026, 8, 1, 14, 0, tzinfo=dt.UTC)  # so — celý den zavřeno
+PATEK_PO_ZAVRENI = dt.datetime(2026, 7, 31, 21, 30, tzinfo=dt.UTC)  # pá 16:30 CT
+DENNI_PAUZA = dt.datetime(2026, 7, 29, 21, 30, tzinfo=dt.UTC)  # st 16:30 CT
+NEDELE_PRED_OTEVRENIM = dt.datetime(2026, 8, 2, 20, 0, tzinfo=dt.UTC)  # ne 15:00 CT
+
+
+@pytest.mark.parametrize(
+    ("kdy", "popis"),
+    [
+        (SOBOTA, "sobota"),
+        (PATEK_PO_ZAVRENI, "pátek po zavření"),
+        (DENNI_PAUZA, "denní pauza CME"),
+        (NEDELE_PRED_OTEVRENIM, "neděle před otevřením Globexu"),
+    ],
+)
+def test_mimo_obchodni_dobu_nevznikne_signal(tmp_path: Path, kdy: dt.datetime, popis: str) -> None:
+    """Signál se zavřeným trhem nejde obchodovat ani vyhodnotit — outcome se
+    počítá z barů a ty tam nejsou (#968)."""
+    engine = make_db(tmp_path)
+    # Event k testovanému okamžiku, ať kandidát SKUTEČNĚ existuje — jinak by
+    # test prošel jen proto, že nebylo co zamítnout
+    seed_event(engine, 1, now=kdy)
+    seed_bucket(engine)
+    job = SignalJob(engine, tmp_path, symbols=("ES",))
+
+    assert job.run(kdy, states={"ES": "RiskOn"}) == 0, f"{popis}: signál neměl vzniknout"
+
+    with engine.connect() as conn:
+        assert conn.execute(select(signals)).fetchall() == []
+    # Musí být vidět v rozpadu, jinak prázdná `signals` vypadá jako porucha (#453)
+    assert job.last_rejects["trh zavřený"] > 0
+
+
+def test_v_obchodni_dobe_se_chovani_nemeni(tmp_path: Path) -> None:
+    """Regrese k #968: tentýž vstup v seanci musí signál vytvořit dál."""
+    engine = make_db(tmp_path)
+    seed_event(engine, 1)
+    seed_bucket(engine)
+    job = SignalJob(engine, tmp_path, symbols=("ES",))
+
+    assert job.run(NOW, states={"ES": "RiskOn"}) == 1
+    assert job.last_rejects["trh zavřený"] == 0
