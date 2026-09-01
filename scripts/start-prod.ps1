@@ -17,6 +17,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $PSScriptRoot '_docker.ps1')
 
 if ($Build -and -not $Force) {
     $branch = (git rev-parse --abbrev-ref HEAD 2>$null)
@@ -38,9 +39,9 @@ if ($devEngine) {
 
 $composeArgs = @('compose', 'up', '-d')
 if ($Build) { $composeArgs += '--build' }
+Assert-DockerReady
 Write-Host 'Startuji PROD…' -ForegroundColor Cyan
-docker @composeArgs
-if ($LASTEXITCODE -ne 0) { throw 'docker compose selhal — běží Docker Desktop?' }
+Invoke-DockerChecked -Arguments $composeArgs -FailureHint 'Start produkce selhal.'
 
 # Čekání na frontend a otevření prohlížeče (zrcadlí původní start-gexlens.cmd)
 $url = 'http://127.0.0.1:8080/'
