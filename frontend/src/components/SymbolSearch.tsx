@@ -69,7 +69,18 @@ export function SymbolSearch() {
         value={query}
         placeholder="Hledat symbol…"
         aria-label="Vyhledat symbol"
-        onChange={(event) => setQuery(event.target.value)}
+        onChange={(event) => {
+          // Výběr položky z našeptávače (#983): prohlížeč hodnotu jen dosadí
+          // (Chrome: inputType `insertReplacementText`), Enter nikdo nedá a
+          // „vyhledávání nefunguje". Nabídnutý symbol se otevře rovnou.
+          const inputType = (event.nativeEvent as InputEvent).inputType
+          const picked = event.target.value.trim().toUpperCase()
+          if (inputType === 'insertReplacementText' && matches.some((m) => m.symbol === picked)) {
+            open(picked)
+            return
+          }
+          setQuery(event.target.value)
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter') submit()
         }}
