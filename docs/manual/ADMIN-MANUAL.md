@@ -600,17 +600,48 @@ Clients*, port **7496** live / **7497** paper, Trusted IPs `127.0.0.1`
 (vypne potvrzovací dialog), *Read-Only API* nechat **zapnuté** — GEXLens jen
 čte, nic neobchoduje.
 
-**Varianta B — dedikovaný IB Gateway (doporučeno pro trvalý provoz):**
+**Varianta B — dedikovaný IB Gateway (doporučeno pro trvalý provoz, #461):**
 
 1. Stable Windows 64-bit: <https://www.interactivebrokers.com/en/trading/ibgateway-stable.php>
-2. Login obrazovka: režim **IB API**, Live/Paper, přihlášení s IB Key.
-3. Configure → Settings → API → Settings: port přepsat z 4001/4002 na
-   **7496/7497** (nebo nechat a upravit `GEXLENS_IBKR_PORT` v `.env`),
-   Trusted IPs `127.0.0.1`, Read-Only API zapnuté.
+2. Login obrazovka: režim **IB API** (ne IB Trader Workstation), Live/Paper,
+   přihlášení s IB Key. Pozor: přihlášení se stejným username **odhlásí
+   běžící TWS** (a naopak, kap. 13.3) — přepojovat mimo seanci.
+3. Configure → Settings → API → Settings:
+   - port nechat **4001** live / **4002** paper (nepřepisovat na 7496 — po
+     #737 poběží TWS vedle Gateway a port by kolidoval);
+   - **Read-Only API** zapnuté;
+   - **Allow connections from localhost only** **vypnout** — engine se
+     připojuje z kontejneru přes `host.docker.internal`, ne z `127.0.0.1`;
+     s výchozím nastavením se nepřipojí;
+   - **Trusted IPs** zkopírovat z dnešní TWS (Edit → Global Configuration →
+     API → Settings) — samotná `127.0.0.1` nestačí, spojení z Dockeru přichází
+     z jiné adresy a bez trusted IP Gateway vyhodí potvrzovací dialog při každém
+     reconnectu;
+   - Master API client ID nechat prázdné.
 4. Configure → Settings → Lock and Exit → **Auto restart**, čas mimo seanci
-   (např. 23:00) — jinak se TWS/GW jednou denně sám odhlásí a engine ztratí
-   spojení přes noc. Jednou týdně (neděle) je i tak nutné plné ruční
-   přihlášení — omezení IBKR.
+   (např. 23:00).
+5. Přepojit engine — obojí, jinak se po příštím vytvoření kontejneru vrátí
+   starý port:
+   - v aplikaci Settings → IBKR → Port `4001`, uložit (engine se přepojí bez
+     restartu a pipeline založí v nejbližším cyklu, #455);
+   - v `.env` `GEXLENS_IBKR_PORT=4001`, pak `docker compose up -d engine`
+     (restart kontejneru nestačí, env se čte při jeho vytvoření). Host v `.env`
+     neměnit — compose ho přepisuje na `host.docker.internal`. News-engine
+     vlastní socket k TWS nemá, nic dalšího se nepřepojuje.
+6. Ověřit: `Test-NetConnection 127.0.0.1 -Port 4001`, stavová lišta
+   `connected :4001` a `● Live`; v logu enginu zkontrolovat, že chodí broker
+   news pásky (`reqMktData` broad tape).
+
+**Denní a týdenní reautentizace (TWS i Gateway stejně):** *Auto restart*
+restartuje aplikaci denně bez zadávání hesla. Týdenní cyklus IBKR začíná
+každé pondělí — po víkendovém resetu serverů se auto restart sám nepřihlásí a
+aplikace čeká na ruční login (potvrzení IB Key push); v logu
+`Login failed = Soft token=0 received instead of expected permanent`. Není to
+vlastnost Gateway, ale session na straně IBKR
+([dokumentace IBKR](https://www.interactivebrokers.com/docs/tws-api/doc/tws-settings/daily-weekly-reauthentication)).
+U TWS to není vidět, protože se do ní během týdne přihlašuje kvůli obchodování
+tak jako tak. **V neděli po auto-restartu (nebo v pondělí ráno před seancí)
+potvrdit IB Key push**, jinak engine v pondělí nasbírá díru až do přihlášení.
 
 ### 13.3 Konflikt jednoho přihlášení ⚠️
 
@@ -632,11 +663,11 @@ varianta A.
 ### 13.5 Ověření a denní provoz
 
 ```powershell
-Test-NetConnection 127.0.0.1 -Port 7496   # TcpTestSucceeded: True = API poslouchá
+Test-NetConnection 127.0.0.1 -Port 7496   # TcpTestSucceeded: True = API poslouchá (Gateway: 4001)
 ```
 
 Každý obchodní den: TWS/Gateway běží a je přihlášený **před startem enginu**;
-stavová lišta aplikace ukazuje `connected :7496` a `● Live` (ne Offline).
+stavová lišta aplikace ukazuje `connected :7496` (Gateway `:4001`) a `● Live` (ne Offline).
 Diagnostika problémů: kap. 12.
 
 ---
