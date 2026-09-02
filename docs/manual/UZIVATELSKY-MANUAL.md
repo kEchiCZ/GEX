@@ -274,6 +274,8 @@ Každá úroveň se navíc promítá jako **horizontální čárkovaná linka p�
 
 ### OI zdi — jiná veličina než gamma zdi (v1.13, #851)
 
+![OI zdi pod GEX Levels — put zeď 29000 s podílem 32 % na OI své strany, druhá 28950 · 19 %](img/oi-zdi.png)
+
 **Call/put zeď** je maximum gamma profilu — kde dealeři hedgují **právě teď**
 a působí okamžitě přes tok. **OI zeď** je strike s největším **otevřeným
 zájmem** na své straně (call nad spotem, put pod ním) — magnet k expiraci
@@ -346,6 +348,8 @@ samy, den po dni, až na začátek archivu. Platí přitom:
   kreslí i mimo pásmo strikes, dnešní vrstvy se dál klampují k pásmu.
 
 ### Rekonstruované minuty po pozdním startu (v1.13, #617)
+
+![Banner rekonstrukce nad grafem — 119 doplněných minut z dxFeed, zavíratelný křížkem](img/banner-rekonstrukce.png)
 
 Když engine naběhne až po otevření seance (restart PC, TWS spuštěná pozdě),
 chybějící minuty barů podkladu se **doplní z dxFeed** (tastytrade) — jedno
@@ -975,6 +979,8 @@ které se přepne hned.
 > enginu (viz ADMIN-MANUAL).
 
 ### Ruční přepojení k IBKR / tastytrade (v1.13, #950)
+
+![Settings → IBKR a Stav enginu s tlačítky Přepojit IBKR / Přepojit tastytrade](img/settings-prepojit.png)
 
 Zaseknuté spojení šlo dřív řešit jen restartem kontejneru enginu, který shodí
 i sběr dat. Nově jsou v **Settings → Stav enginu** tlačítka **Přepojit IBKR**
