@@ -75,7 +75,7 @@ import { projectedSessions } from './instrument/sessions'
 import { aggregateDay, aggregateLive } from './replay/aggregate'
 import { buildHistoryView } from './replay/history'
 import { useHistoryBars } from './hooks/useHistoryBars'
-import { sliceGrid, sliceOverlays, slicePanels } from './replay/slice'
+import { sliceGrid, sliceOverlays, slicePanels, sliceSeries } from './replay/slice'
 import { useAggregateProfile } from './replay/useAggregateProfile'
 import { EMPTY_LIVE, minuteLabel, useDayData } from './replay/useDayData'
 import { usePlayback } from './replay/usePlayback'
@@ -139,7 +139,6 @@ function MainContent() {
     socket,
   } = useAppState()
   // Zprávy a sentiment (#288/#289) — jeden zdroj pro panel, sidebar i chip
-  const newsData = useNews()
   // Stav RiskOn/RiskOff (#295) — varovný badge šipek při unconfirmed změně
   const sentState = useSentimentState()
   // Volby grafu přežívají refresh (ADR-0007, #167); URL deep-link má přednost
@@ -246,6 +245,8 @@ function MainContent() {
   // svíčky do historického dne.
   const viewDate = sessionDateFor(selectedExpiry, today)
   const isHistoricalExpiry = viewDate !== today
+  // Sentiment per zobrazený den (#976) — proto až za `viewDate`
+  const newsData = useNews(viewDate)
   const {
     day: rawDay,
     live,
@@ -778,7 +779,10 @@ function MainContent() {
     // Sentiment přichází z jiného zdroje než bary (news-engine → API), takže
     // se páruje podle času, ne podle indexu (#288)
     const aligned = alignSeriesToLabels(newsData.series, day.minuteLabels, minuteLabel)
-    const sliced = playback.isLive ? aligned : aligned.slice(0, playback.position + 1)
+    // Délka řady se musí zachovat jako u ostatních panelů (#976): zkrácená řada
+    // by se v `cumDeltaAreas` roztáhla na celou osu a s každou minutou přetáčení
+    // by se body posouvaly doleva
+    const sliced = playback.isLive ? aligned : sliceSeries(aligned, playback.position)
     return { ...base, sentiment: sliced }
   }, [
     day.panels,
