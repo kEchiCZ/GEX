@@ -48,7 +48,10 @@ export interface NewsData {
   refresh: () => void
 }
 
-export function useNews(): NewsData {
+/** `date` = zobrazený den (session date). Index se drží v denních UTC
+particích a osa grafu je týž UTC den, takže bez data by historický den dostal
+dnešní řadu — a ta by se podle popisku `HH:MM` přilepila na včerejší ráno (#976). */
+export function useNews(date?: string): NewsData {
   const { symbol, socket } = useAppState()
   const [news, setNews] = useState<NewsRow[]>([])
   const [upcoming, setUpcoming] = useState<NewsRow[]>([])
@@ -64,7 +67,7 @@ export function useNews(): NewsData {
       void Promise.all([
         fetchNews(100, symbol), // dopad zpráv per aktivní symbol (#656)
         fetchUpcoming(),
-        fetchSentimentSeries(symbol),
+        fetchSentimentSeries(symbol, date),
         fetchTopics(),
         fetchSignals(),
         fetchNewsStats(),
@@ -84,7 +87,7 @@ export function useNews(): NewsData {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [symbol, version])
+  }, [symbol, date, version])
 
   // Živý push (#335). Bez něj se nová zpráva objeví až s dalším REST fetchem,
   // takže headline → obrazovka trvalo minuty; teď jde o sekundy.
