@@ -26,7 +26,8 @@ Měřeno 13.–14. 8. 2026 živě (RTH i Globex) sondou `scripts/tasty_probe.py`
 | Summary.openInterest | ✅ plní se pro FOP | **křížová kontrola: 50/50 kontraktů identických s IBKR tick 101** |
 | TimeAndSale.aggressorSide | ✅ BUY/SELL/UNDEFINED | základ R2 (#615); pokrytí doplní shadow report |
 | Candle historie FOP | k zalistování kontraktu (~2 měsíce u weekly) | pro #617 stačí (intraday týž den) |
-| Symboly na 1 subskripci | **6 008 bez degradace** (8 expirací) | strop nenalezen; 60× IBKR limit |
+| Symboly na 1 subskripci | **6 008 bez degradace** (8 expirací, jen Quote) | strop tehdy nenalezen; 60× IBKR limit |
+| **Strop velikosti subskripce** (doplněno 2. 9. 2026, #982) | **25 000 položek symbol × event na spojení** — shodně pro samotné Quote i pro 4 eventy produkce (= 6 250 symbolů) | `tasty_probe.py sizecap`; nad stropem `ERROR BAD_ACTION 'Your subscription size is too big'` a odmítnuté symboly **tiše mlčí** |
 | REST rate limit | ≥ 6,2 req/s sekvenčně bez 429 | strop nenalezen (185 req/30 s) |
 | DXLink keepalive | klient MUSÍ posílat à ≤ 60 s | posíláme à 25 s |
 | Reconnect | SDK neexistuje → vlastní backoff 1→60 s | `tasty/stream.py` |
@@ -56,6 +57,24 @@ Smysl druhého zdroje je odstranit strop, ne přinést nový (#612 zadání):
 - **OI:** tasty Summary je plnohodnotný zdroj OI pro FOP (dokázaná shoda
   s tick 101) — fallback i validátor pro #614; navíc dostupný průběžně,
   bez ranního snapshot průchodu.
+
+## Doplněk 2. 9. 2026 — rozpočet subskripce (#982)
+
+Strop 25 000 položek platí per spojení a počítá se `symbol × typ eventu`.
+Produkce jela na 24 944 položkách (6 236 symbolů × 4 eventy) — vešla se o
+56 položek; ad-hoc pohled z vyhledávání (#521 C, +307 symbolů) přetekl a
+nikdy nedostal data. Rozhodnutí (`tasty/budget.py`):
+
+- **Eventy per účel:** podklad a aktivní řetěz všechny 4; ad-hoc a extended
+  Quote + Greeks + Summary (printy z nich nikdo nečte); wide jen Quote +
+  Summary (jde o OI, Quote drží symbol „živý" pro heal #936). Produkce tím
+  klesá na ~18 400 položek bez ztráty pokrytí.
+- **Rezerva pro ad-hoc** `GEXLENS_TASTY_ADHOC_RESERVE_ENTRIES=2000`
+  (~2 pohledy): wide/extended smí zabrat jen `strop − rezerva`.
+- **Ořez deterministický:** když se plán přesto nevejde, ubírá se extended od
+  nejvzdálenější expirace a striku (v % ceny napříč produkty), pak wide od
+  okraje pásma; řetěz, podklad a ad-hoc se neořezávají. Ořez i přetečení
+  hlásí `/status.tasty_budget` a log.
 
 ## Doplní shadow report (~21. 8., 5 čistých seancí)
 

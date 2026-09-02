@@ -5,7 +5,7 @@ OAuth2 refresh flow (ADR-0025 — /sessions je zakázané). Nic nezapisuje do
 produkčních dat; výstupy jdou na stdout/JSON pro ADR.
 
 Spuštění:  uv run --with websockets,httpx python scripts/tasty_probe.py <krok>
-Kroky: rest | events | limits | reconnect
+Kroky: rest | events | limits | reconnect | sizecap [Quote,Greeks,...]
 Prostředí: GEXLENS_DEV_TASTY_CLIENT_SECRET + GEXLENS_DEV_TASTY_REFRESH_TOKEN
 (dev grant; produkční se sondy netýká).
 """
@@ -321,6 +321,143 @@ async def step_limits(max_expiries: int = 8, hold_s: float = 12.0) -> None:
     print(json.dumps({"zaver": report[-1] if report else None}, ensure_ascii=False))
 
 
+async def step_sizecap(
+    events: list[str],
+    products: tuple[str, ...] = ("ES", "NQ", "CL", "RTY", "GC"),
+    batch: int = 500,
+    max_entries: int = 80_000,
+) -> None:
+    """Strop velikosti subskripce (#982): ramp entries (symbol × event) po dávkách
+    až do `Your subscription size is too big`, pak zjemnění po 50.
+
+    Odpověď na otázku, JAK se limit počítá: spustit jednou s `Quote` a jednou
+    se čtyřmi eventy produkce — shodný strop v entries = limit per entry,
+    shodný v symbolech = limit per symbol.
+    """
+    env = load_env()
+    token = access_token(env)
+    headers = {"Authorization": f"Bearer {token}"}
+    symbols: list[str] = []
+    seen: set[str] = set()
+    for product in products:
+        chains = httpx.get(
+            f"{API}/futures-option-chains/{product}/nested", headers=headers, timeout=30
+        )
+        chains.raise_for_status()
+        for group in chains.json()["data"].get("option-chains", []):
+            for exp in sorted(
+                group.get("expirations", []), key=lambda e: str(e.get("expiration-date"))
+            ):
+                for strike in exp.get("strikes", []):
+                    for key in ("call-streamer-symbol", "put-streamer-symbol"):
+                        sym = strike.get(key)
+                        if sym and sym not in seen:
+                            seen.add(sym)
+                            symbols.append(sym)
+    entries = [{"type": event, "symbol": sym} for sym in symbols for event in events]
+    print(
+        json.dumps({"events": events, "pool_symbolu": len(symbols), "pool_entries": len(entries)}),
+        flush=True,
+    )
+
+    quote = httpx.get(f"{API}/api-quote-tokens", headers=headers, timeout=15).json()["data"]
+    ws, send, recv_until = await dxlink_session(quote["dxlink-url"], quote["token"])
+    await send(
+        {
+            "type": "FEED_SETUP",
+            "channel": 1,
+            "acceptAggregationPeriod": 0,
+            "acceptDataFormat": "COMPACT",
+            "acceptEventFields": {name: EVENT_FIELDS[name] for name in events},
+        }
+    )
+    await recv_until("FEED_CONFIG")
+    last_keepalive = time.monotonic()
+
+    async def drain(seconds: float) -> list[str]:
+        nonlocal last_keepalive
+        errors: list[str] = []
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if time.monotonic() - last_keepalive > 25:
+                await send({"type": "KEEPALIVE", "channel": 0})
+                last_keepalive = time.monotonic()
+            try:
+                raw = await asyncio.wait_for(
+                    ws.recv(), timeout=max(0.05, deadline - time.monotonic())
+                )
+            except TimeoutError:
+                break
+            message = json.loads(raw)
+            if message.get("type") == "ERROR":
+                errors.append(str(message.get("message") or message))
+        return errors
+
+    async def add(chunk: list[dict], hold: float) -> list[str]:
+        await send({"type": "FEED_SUBSCRIPTION", "channel": 1, "add": chunk})
+        errors = await drain(hold)
+        if any("rate" in e.lower() for e in errors):
+            # Rate limit není strop velikosti — počkat a poslat tutéž dávku znovu
+            await asyncio.sleep(3.0)
+            await send({"type": "FEED_SUBSCRIPTION", "channel": 1, "add": chunk})
+            errors = await drain(hold)
+        return errors
+
+    accepted = 0
+    failing: list[dict] | None = None
+    all_errors: list[str] = []
+    limit = min(max_entries, len(entries))
+    for offset in range(0, limit, batch):
+        chunk = entries[offset : offset + batch]
+        errors = await add(chunk, 0.6)
+        all_errors += errors
+        if any("too big" in e.lower() for e in errors):
+            failing = chunk
+            break
+        accepted = offset + len(chunk)
+    if failing is None:
+        # Chyba mohla dorazit se zpožděním — poslední kontrola
+        late = await drain(2.0)
+        all_errors += late
+        if any("too big" in e.lower() for e in late):
+            failing = entries[accepted - batch : accepted]
+            accepted -= batch
+    print(
+        json.dumps({"hrubý_strop_entries": accepted, "dávka": batch, "chyby": all_errors[-3:]}),
+        flush=True,
+    )
+
+    if failing is not None:
+        # Zjemnění: odebrat odmítnutou dávku, přidávat po 50 do další chyby
+        await send({"type": "FEED_SUBSCRIPTION", "channel": 1, "remove": failing})
+        await drain(1.0)
+        fine = accepted
+        for offset in range(0, len(failing), 50):
+            errors = await add(failing[offset : offset + 50], 0.8)
+            if any("too big" in e.lower() for e in errors):
+                break
+            fine = accepted + offset + 50
+        accepted = fine
+
+    per_symbol = accepted / max(1, len(events))
+    print(
+        json.dumps(
+            {
+                "zaver": {
+                    "events": events,
+                    "strop_entries": accepted,
+                    "strop_symbolu_pri_techto_eventech": int(per_symbol),
+                    "strop_nalezen": failing is not None,
+                }
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
+    await send({"type": "FEED_SUBSCRIPTION", "channel": 1, "reset": True})
+    await ws.close()
+
+
 def main() -> int:
     step = sys.argv[1] if len(sys.argv) > 1 else "rest"
     if step == "rest":
@@ -332,6 +469,9 @@ def main() -> int:
     elif step == "limits":
         count = int(sys.argv[2]) if len(sys.argv) > 2 else 8
         asyncio.run(step_limits(count))
+    elif step == "sizecap":
+        events = sys.argv[2].split(",") if len(sys.argv) > 2 else ["Quote"]
+        asyncio.run(step_sizecap(events))
     else:
         print(f"Neznámý krok: {step}")
         return 1

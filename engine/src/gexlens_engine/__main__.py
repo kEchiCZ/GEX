@@ -117,6 +117,7 @@ from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.storage.volregime_store import VolRegimeRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.adhoc import AdhocViewer
+from gexlens_engine.tasty.budget import DistanceGroup, order_by_distance, plan_subscriptions
 from gexlens_engine.tasty.candles import CandleFetcher, backfill_gaps
 from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
@@ -1313,6 +1314,18 @@ async def main() -> None:
                 ),
                 # Rozpad plánu subskripcí per účel (#863) — až po prvním refreshi
                 **({"tasty_symbol_breakdown": dict(symbol_breakdown)} if symbol_breakdown else {}),
+                # Rozpočet položek DXLink (#982): kolik ze stropu 25 000 se
+                # využívá, co se oříznulo a kolikrát server strop nahlásil
+                **(
+                    {
+                        "tasty_budget": {
+                            **budget_state,
+                            "size_exceeded": tasty_stream.size_exceeded,
+                        }
+                    }
+                    if budget_state
+                    else {}
+                ),
                 "tasty_quotes": counts["quotes"],
                 "tasty_greeks": counts["greeks"],
                 "tasty_oi": counts["summary"],
@@ -1554,6 +1567,8 @@ async def main() -> None:
         # Rozpad subskripcí per účel (#863): 9 936 symbolů „nad plán" nešlo
         # rozklíčovat — bez rozpadu se nepozná, která složka přerostla
         symbol_breakdown: dict[str, int] = {}
+        # Rozpočet položek DXLink (#982) — pro /status a log ořezu
+        budget_state: dict[str, object] = {}
 
         async def shadow_symbols_loop() -> None:
             """Denní obnova chain mapy + průběžné dorovnání subskripce."""
@@ -1666,14 +1681,66 @@ async def main() -> None:
                         # dávek odmítne a podklad nese cenu i CVD — o strike
                         # v křídle navíc nejde
                         tasty_stream.set_priority(frozenset(shadow_front_future.values()))
-                        symbols |= adhoc_viewer.streamers()
-                        purpose.setdefault("adhoc", set()).update(adhoc_viewer.streamers())
+                        adhoc_syms = adhoc_viewer.streamers()
+                        symbols |= adhoc_syms
+                        purpose.setdefault("adhoc", set()).update(adhoc_syms)
                         symbol_breakdown.clear()
                         symbol_breakdown.update(
                             {name: len(values) for name, values in purpose.items()}
                         )
                         symbol_breakdown["total"] = len(symbols)
-                        await tasty_stream.set_symbols(symbols)
+                        # Rozpočet položek (#982): strop serveru je 25 000
+                        # symbol × event. Každý účel odebírá jen eventy, které
+                        # čte, a případný ořez bere zezadu — wide a extended
+                        # seřazené od nejbližší expirace a striku ke spotu,
+                        # napříč produkty podle vzdálenosti v % ceny
+                        ordered = {name: sorted(values) for name, values in purpose.items()}
+                        for name in ("wide", "extended"):
+                            if not purpose.get(name):
+                                continue
+                            groups: list[DistanceGroup] = []
+                            claimed: set[str] = set()
+                            for target_symbol in shadow_target_symbols():
+                                target_chain = shadow_chain.get(target_symbol)
+                                if target_chain is None:
+                                    continue
+                                own = purpose[name] & set(target_chain.by_contract.values())
+                                claimed |= own
+                                center, fresh = _tasty_spot(target_symbol)
+                                groups.append((own, target_chain, center if fresh else None))
+                            leftover = purpose[name] - claimed
+                            if leftover:
+                                groups.append((leftover, None, None))
+                            ordered[name] = order_by_distance(groups)
+                        plan = plan_subscriptions(
+                            ordered,
+                            max_entries=settings.tasty_max_entries,
+                            adhoc_reserve=settings.tasty_adhoc_reserve_entries,
+                        )
+                        budget_state.clear()
+                        budget_state.update(
+                            {
+                                "entries": plan.entries,
+                                "max_entries": settings.tasty_max_entries,
+                                "adhoc_reserve": settings.tasty_adhoc_reserve_entries,
+                                "subscribed_symbols": len(plan.subscriptions),
+                                "trimmed": dict(plan.trimmed),
+                            }
+                        )
+                        if plan.trimmed:
+                            logger.warning(
+                                "DXLink rozpočet: %d/%d položek, ořez %s symbolů (#982)",
+                                plan.entries,
+                                settings.tasty_max_entries,
+                                dict(plan.trimmed),
+                            )
+                        if plan.over_hard_cap:
+                            logger.error(
+                                "DXLink rozpočet: neořezatelné účely přesahují strop o %d "
+                                "položek — server část odmítne (#982)",
+                                plan.over_hard_cap,
+                            )
+                        await tasty_stream.set_subscriptions(plan.subscriptions)
                 except Exception:
                     logger.exception("Shadow symbols refresh selhal — zkusí se za minutu")
                 with contextlib.suppress(TimeoutError):
