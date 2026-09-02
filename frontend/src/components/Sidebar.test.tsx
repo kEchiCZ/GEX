@@ -153,3 +153,35 @@ test('položka Nedávné jde vyřadit křížkem a vyřazení přežije remount 
   await screen.findByTestId('recent-NQ')
   expect(screen.queryByTestId('recent-CL')).toBeNull()
 })
+
+test('aktivní ad-hoc symbol není ve watchlistu, ale zvýrazněný v Nedávných (#989)', async () => {
+  // Dřív se přimíchal jako pseudo-řádek watchlistu bez křížku a po přepnutí
+  // jinam zmizel — vypadalo to jako rozbitý watchlist
+  window.localStorage.setItem('gexlens.symbol', JSON.stringify('CL'))
+  window.localStorage.setItem('gexlens.recentSymbols', JSON.stringify(['CL', 'ES']))
+  mockFetch(async () => ({
+    ok: true,
+    json: async () => ({
+      watchlist: [
+        { id: 1, symbol: 'NQ' },
+        { id: 2, symbol: 'ES' },
+      ],
+    }),
+  }))
+  renderSidebar()
+  const watchlist = await screen.findByLabelText('Watchlist')
+  await screen.findByText('NQ')
+  expect(watchlist.textContent).not.toContain('CL')
+  // Každá položka watchlistu má křížek
+  expect(screen.getByRole('button', { name: 'Odebrat NQ' })).toBeDefined()
+  // Nedávné: jen symboly mimo watchlist (ES tam není), aktivní CL zvýrazněný bez křížku
+  const recent = screen.getByTestId('recent-CL')
+  expect(recent.className).toContain('active')
+  expect(screen.queryByTestId('recent-ES')).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Vyřadit CL z nedávných' })).toBeNull()
+
+  // Přepnutí na NQ: CL zůstane v Nedávných, teď už s křížkem
+  fireEvent.click(screen.getByText('NQ'))
+  expect(screen.getByTestId('recent-CL').className).not.toContain('active')
+  expect(screen.getByRole('button', { name: 'Vyřadit CL z nedávných' })).toBeDefined()
+})

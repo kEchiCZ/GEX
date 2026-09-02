@@ -17,7 +17,13 @@ beforeEach(() => {
     'fetch',
     vi.fn().mockResolvedValue({
       ok: true,
-      json: () => Promise.resolve({ expiries: ['20260716', '20260717'] }),
+      // Jeden payload pro všechny routy: expirace i watchlist s ES (#989 —
+      // watchlist už aktivní symbol nepřimíchává, musí ho dodat API)
+      json: () =>
+        Promise.resolve({
+          expiries: ['20260716', '20260717'],
+          watchlist: [{ id: 1, symbol: 'ES' }],
+        }),
     }),
   )
 })
@@ -27,7 +33,7 @@ test('vykreslí kompletní layout (SPEC 7.1)', async () => {
 
   expect(screen.getAllByText('ES').length).toBeGreaterThan(0) // ticker + watchlist
   // Watchlist ukazuje TWS symbol předního kontraktu v závorce (#189)
-  expect(screen.getByText(/\(ES[HMUZ]\d\)/)).toBeDefined()
+  expect(await screen.findByText(/\(ES[HMUZ]\d\)/)).toBeDefined()
   expect(screen.getByLabelText('Hlavní navigace')).toBeDefined()
   expect(screen.getByLabelText('Watchlist')).toBeDefined()
   expect(screen.getByLabelText('Timeframe')).toBeDefined()

@@ -150,12 +150,14 @@ export function Sidebar() {
     }
   }
 
-  // Aktivní symbol vždy viditelný, i když (ještě) není ve watchlistu
-  const rows: Array<{ id: number | null; symbol: string }> = watchlist.some(
-    (item) => item.symbol === activeSymbol,
-  )
-    ? watchlist
-    : [{ id: null, symbol: activeSymbol }, ...watchlist]
+  // Watchlist = jen skutečné položky (#989). Aktivní ad-hoc symbol se dřív
+  // přimíchával jako pseudo-řádek bez křížku a tvářil se jako rozbitý
+  // watchlist; jeho místo je v Nedávných.
+  const rows = watchlist
+  const inWatchlist = new Set(watchlist.map((item) => item.symbol))
+  // Nedávné (#521): zobrazené symboly MIMO watchlist — sekce jsou disjunktní,
+  // aktivní ad-hoc symbol je tu zvýrazněný (jinak by nebyl vidět nikde)
+  const recentRows = recentSymbols.filter((item) => !inWatchlist.has(item))
 
   return (
     <aside className={collapsed ? 'sidebar collapsed' : 'sidebar'} aria-expanded={!collapsed}>
@@ -226,16 +228,14 @@ export function Sidebar() {
                       {entry.symbol}
                       {twsCode && <span className="muted tws-code"> ({twsCode})</span>}
                     </button>
-                    {entry.id !== null && (
-                      <button
-                        className="watchlist-remove"
-                        aria-label={`Odebrat ${entry.symbol}`}
-                        title="Odebrat z watchlistu"
-                        onClick={() => void removeSymbol(entry as WatchlistItem)}
-                      >
-                        ×
-                      </button>
-                    )}
+                    <button
+                      className="watchlist-remove"
+                      aria-label={`Odebrat ${entry.symbol}`}
+                      title="Odebrat z watchlistu"
+                      onClick={() => void removeSymbol(entry)}
+                    >
+                      ×
+                    </button>
                   </li>
                 )
               })}
@@ -266,23 +266,25 @@ export function Sidebar() {
           </section>
           {/* Nedávné (#521): posledních 8 zobrazených symbolů — klik otevře
           ad-hoc pohled (mimo watchlist jde přes tastytrade, ping drží sidebar) */}
-          {recentSymbols.filter((item) => item !== activeSymbol).length > 0 && (
+          {recentRows.length > 0 && (
             <section className="watchlist" aria-label="Nedávné">
               <h2>Nedávné</h2>
               <ul>
-                {recentSymbols
-                  .filter((item) => item !== activeSymbol)
-                  .map((item) => (
-                    <li key={item} className="watchlist-row">
-                      <button
-                        className="watchlist-symbol"
-                        data-testid={`recent-${item}`}
-                        title="Nedávno zobrazený — ad-hoc pohled, ne plný sběr jako watchlist"
-                        onClick={() => setSymbol(item)}
-                      >
-                        {item}
-                      </button>
-                      {/* Křížek (#987): vyhledaný symbol jinak z panelu nešel dostat */}
+                {recentRows.map((item) => (
+                  <li key={item} className="watchlist-row">
+                    <button
+                      className={
+                        item === activeSymbol ? 'watchlist-symbol active' : 'watchlist-symbol'
+                      }
+                      data-testid={`recent-${item}`}
+                      title="Nedávno zobrazený — ad-hoc pohled, ne plný sběr jako watchlist"
+                      onClick={() => setSymbol(item)}
+                    >
+                      {item}
+                    </button>
+                    {/* Křížek (#987): vyhledaný symbol jinak z panelu nešel dostat;
+                        aktivní se nevyřazuje — přepni nejdřív jinam */}
+                    {item !== activeSymbol && (
                       <button
                         className="watchlist-remove"
                         aria-label={`Vyřadit ${item} z nedávných`}
@@ -291,8 +293,9 @@ export function Sidebar() {
                       >
                         ×
                       </button>
-                    </li>
-                  ))}
+                    )}
+                  </li>
+                ))}
               </ul>
             </section>
           )}
