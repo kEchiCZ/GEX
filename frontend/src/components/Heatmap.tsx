@@ -35,6 +35,13 @@ import { journalGlyph, journalMarkerColor, journalMarkerNear } from '../heatmap/
 import type { JournalMarker } from '../heatmap/journalMarkers'
 import { markerColor, markerNear, markerStyle } from '../heatmap/newsMarkers'
 import type { NewsMarker as NewsMarkerType } from '../heatmap/newsMarkers'
+
+/** Pás news markerů u spodní hrany (#980): spodek ticku nad popisky seancí
+(ty sedí v posledních ~20 px), výška ticku a pás, ve kterém klik trefí marker
+(tick + glyf nad ním). */
+const NEWS_MARKER_BAND_BOTTOM = 22
+const NEWS_MARKER_TICK = 12
+const NEWS_MARKER_HIT_BAND = NEWS_MARKER_BAND_BOTTOM + NEWS_MARKER_TICK + 16
 import { signalAt, signalColor } from '../heatmap/signalMarkers'
 import { bucketPhaseMinutes } from '../heatmap/buckets'
 import { gapBands } from '../heatmap/spacing'
@@ -586,30 +593,33 @@ export function Heatmap({
       )
     }
 
-    // Markery zpráv (#287, SPEC 9.1): svislá značka v čase události, barva dle
-    // sentimentu, jas a tloušťka dle důležitosti, glyf kategorie nad horní
-    // hranou. Nadcházející scheduled eventy jsou duté — o dopadu se neví nic.
+    // Markery zpráv (#287, SPEC 9.1): značka v čase události, barva dle
+    // sentimentu, jas a tloušťka dle důležitosti, glyf kategorie nad ní.
+    // Nadcházející scheduled eventy jsou duté — o dopadu se neví nic.
+    // Sedí těsně nad pásem popisků seancí u spodní hrany (#980, styl
+    // TradingView): krátký tick v px, ne podíl výšky — dřív pás od 72 % dolů
+    // konkuroval cenové křivce a při vysokém grafu rostl s ní.
+    const newsTickBottom = logicalH - NEWS_MARKER_BAND_BOTTOM
+    const newsTickTop = newsTickBottom - NEWS_MARKER_TICK
     for (const marker of overlays.newsMarkers ?? []) {
       const x = minuteToX(marker.minuteIdx) - 0.5 * scaleX
       const { alpha, width } = markerStyle(marker)
       context.strokeStyle = markerColor(marker, alpha)
       context.lineWidth = width
-      if (marker.upcoming) context.setLineDash([4, 4])
+      if (marker.upcoming) context.setLineDash([3, 3])
       context.beginPath()
-      // Značka nejde přes celou výšku jako sessions — nesmí konkurovat cenové
-      // křivce; stačí pás u spodní hrany a glyf nahoře
-      context.moveTo(x, logicalH * 0.72)
-      context.lineTo(x, logicalH)
+      context.moveTo(x, newsTickTop)
+      context.lineTo(x, newsTickBottom)
       context.stroke()
       context.setLineDash([])
 
       context.fillStyle = markerColor(marker, Math.min(1, alpha + 0.05))
       context.font = '11px sans-serif'
-      context.fillText(marker.glyph, x - 4, logicalH * 0.72 - 4)
+      context.fillText(marker.glyph, x - 4, newsTickTop - 3)
       if (marker.count > 1) {
         // Cluster: jeden marker s počtem místo změti čar (SPEC 9.1)
         context.font = '9px sans-serif'
-        context.fillText(String(marker.count), x + 6, logicalH * 0.72 - 4)
+        context.fillText(String(marker.count), x + 6, newsTickTop - 3)
       }
     }
 
@@ -1601,7 +1611,9 @@ export function Heatmap({
       }
     }
     if (!onNewsMarkerClick) return
-    if (point.y < logicalH * 0.6) return // news markery žijí jen u spodní hrany
+    // News markery žijí jen v úzkém pásu nad popisky seancí (#980) — klik
+    // výš patří heatmapě, ne dialogu zpráv
+    if (point.y < logicalH - NEWS_MARKER_HIT_BAND) return
     const markers = overlays.newsMarkers ?? []
     if (markers.length === 0) return
     const marker = markerNear(markers, minuteIdx, tolerance)
