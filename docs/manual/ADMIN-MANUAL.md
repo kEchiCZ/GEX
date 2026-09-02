@@ -616,7 +616,9 @@ Clients*, port **7496** live / **7497** paper, Trusted IPs `127.0.0.1`
    - **Trusted IPs** zkopírovat z dnešní TWS (Edit → Global Configuration →
      API → Settings) — samotná `127.0.0.1` nestačí, spojení z Dockeru přichází
      z jiné adresy a bez trusted IP Gateway vyhodí potvrzovací dialog při každém
-     reconnectu;
+     reconnectu. U Docker Desktop (WSL2) je to `192.168.65.254` — přesnou
+     adresu ukáže log enginu (`Connect call failed ('192.168.65.254', 4001)`)
+     nebo potvrzovací dialog Gateway;
    - Master API client ID nechat prázdné.
 4. Configure → Settings → Lock and Exit → **Auto restart**, čas mimo seanci
    (např. 23:00).
@@ -631,6 +633,19 @@ Clients*, port **7496** live / **7497** paper, Trusted IPs `127.0.0.1`
 6. Ověřit: `Test-NetConnection 127.0.0.1 -Port 4001`, stavová lišta
    `connected :4001` a `● Live`; v logu enginu zkontrolovat, že chodí broker
    news pásky (`reqMktData` broad tape).
+
+**Naměřená zátěž (2. 9. 2026, 55 min po startu, Globex před US RTH, ES+NQ,
+3 × 60 s přes `Get-Process ibgateway`):**
+
+| | TWS (4. 8.) | IB Gateway | rozdíl |
+|---|---|---|---|
+| CPU klid (1 jádro = 100 %) | 16 % | 19 % medián, špičky ~38 % | srovnatelné |
+| RAM | 1 003–1 087 MB | 651 MB | −40 % |
+| CPU při konfliktu session (error 10197) | 244 % | — | Gateway neřeší, jen druhý username (#737) |
+
+Gateway tedy šetří paměť, ne procesor; hlavní zdroj zahřívání PC (souběh
+loginů na jednom username) odstraní až druhý username. Provozní důvody
+(bez GUI, auto-restart, žádné okno na ploše) platí dál.
 
 **Denní a týdenní reautentizace (TWS i Gateway stejně):** *Auto restart*
 restartuje aplikaci denně bez zadávání hesla. Týdenní cyklus IBKR začíná
