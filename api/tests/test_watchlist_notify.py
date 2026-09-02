@@ -40,3 +40,18 @@ async def test_watchlist_add_wakes_engine_listener() -> None:
         listener.stop()
         for item_id in created:
             repository.watchlist_remove(item_id)
+
+
+def test_ulozeni_nastaveni_notifikuje_engine(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """#992: PUT /settings musí probudit orchestrátor, jinak se port přepne až za 5 min."""
+    from gexlens_api import meta_repo
+
+    calls: list[str] = []
+    monkeypatch.setattr(meta_repo, "_notify_watchlist", lambda conn, payload: calls.append(payload))
+    repository = MetaRepository(
+        Settings(data_dir=tmp_path, database_url=f"sqlite:///{tmp_path / 'meta.db'}")
+    )
+    repository.setting_put("ibkr_port", 4001)
+    repository.setting_put("ibkr_port", 4002)  # update i insert větev
+
+    assert calls == ["", ""]

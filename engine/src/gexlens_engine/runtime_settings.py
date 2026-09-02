@@ -80,6 +80,18 @@ CONNECTION_SETTINGS: tuple[RuntimeSetting, ...] = (
 )
 
 
+def should_poll_settings(cycle: int, force: bool, poll_cycles: int, connected: bool) -> bool:
+    """Má orchestrátor v tomto cyklu číst watchlist + nastavení z DB?
+
+    Běžně každý k-tý cyklus nebo po NOTIFY. Bez spojení k IBKR **každý cyklus**
+    (#992): uživatel opraví port v Settings, engine sedí v reconnect smyčce na
+    starém portu — a s poll à 5 min se opravy dočká až za 5 minut, přestože UI
+    slibuje „po uložení se engine sám přepojí". Dotaz do DB je levný, výpadek
+    není normální stav.
+    """
+    return force or not connected or cycle % poll_cycles == 0
+
+
 def apply_connection_settings(settings: Settings, values: dict[str, object]) -> bool:
     """Promítne host/port/clientId; `True` = je potřeba se přepojit.
 
