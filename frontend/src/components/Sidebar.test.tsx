@@ -134,3 +134,22 @@ test('opakovaný focus při nedostupném API nemnoží retry řetězy (#506)', a
   })
   expect(calls).toBe(afterInitial + 4)
 })
+
+test('položka Nedávné jde vyřadit křížkem a vyřazení přežije remount (#987)', async () => {
+  // Nedávné = symboly, které uživatel zobrazil (typicky z vyhledávání); bez
+  // křížku z panelu nešly dostat — „CL ve watchlistu bez křížku"
+  window.localStorage.setItem('gexlens.recentSymbols', JSON.stringify(['ES', 'CL', 'NQ']))
+  mockFetch(async () => ({ ok: true, json: async () => ({ watchlist: [] }) }))
+  const { unmount } = renderSidebar()
+  const recent = await screen.findByTestId('recent-CL')
+  expect(recent).toBeDefined()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Vyřadit CL z nedávných' }))
+  expect(screen.queryByTestId('recent-CL')).toBeNull()
+  expect(screen.getByTestId('recent-NQ')).toBeDefined()
+
+  unmount()
+  renderSidebar()
+  await screen.findByTestId('recent-NQ')
+  expect(screen.queryByTestId('recent-CL')).toBeNull()
+})

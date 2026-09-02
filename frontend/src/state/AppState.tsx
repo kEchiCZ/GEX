@@ -185,6 +185,8 @@ interface AppState {
   setSymbol: (symbol: string) => void
   /** Nedávno zobrazené symboly (#521) — sekce v sidebaru, persistováno. */
   recentSymbols: string[]
+  /** Vyřadí symbol z Nedávných (#987) — vyhledaný symbol jinak nešel odebrat. */
+  forgetRecentSymbol: (symbol: string) => void
   expiries: string[]
   /** Trading classes per expirace z OI archivu (#513, SPEC 3.2); prázdné pole = neznámé. */
   expiryClasses: Record<string, string[]>
@@ -380,6 +382,11 @@ export function AppStateProvider({
     )
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setter z usePersistentState je stabilní
   }, [symbol])
+  const forgetRecentSymbol = useCallback(
+    (item: string) => setRecentSymbols((previous) => previous.filter((row) => row !== item)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setter z usePersistentState je stabilní
+    [],
+  )
   const [expiries, setExpiries] = useState<string[]>([])
   const [expiryClasses, setExpiryClasses] = useState<Record<string, string[]>>({})
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
@@ -635,6 +642,7 @@ export function AppStateProvider({
       symbol,
       setSymbol,
       recentSymbols,
+      forgetRecentSymbol,
       expiries,
       expiryClasses,
       selectedExpiry,
@@ -712,6 +720,7 @@ export function AppStateProvider({
       oiSource,
       setOiSource,
       recentSymbols,
+      forgetRecentSymbol,
       expiries,
       expiryClasses,
       selectedExpiry,
