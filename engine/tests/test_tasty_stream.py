@@ -191,3 +191,77 @@ async def test_cileny_heal_posila_jen_mlcici(monkeypatch: pytest.MonkeyPatch) ->
     await stream2._send_subscription(add=targets2)
     entries2 = [e for p in sent2 for e in cast(list[dict[str, str]], p.get("add", []))]
     assert len({e["symbol"] for e in entries2}) == 10
+
+
+# ── Rozpočet položek a strop velikosti subskripce (#982) ──────────────────
+
+
+def size_message() -> dict[str, object]:
+    return {
+        "type": "ERROR",
+        "channel": 1,
+        "error": "BAD_ACTION",
+        "message": "Your subscription size is too big",
+    }
+
+
+def _subscription_payloads(sent: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Jen FEED_SUBSCRIPTION — po dávce může následovat KEEPALIVE."""
+    return [payload for payload in sent if payload.get("type") == "FEED_SUBSCRIPTION"]
+
+
+def _entries(payload: dict[str, object], key: str) -> list[dict[str, str]]:
+    return sorted(cast(list[dict[str, str]], payload.get(key, [])), key=str)
+
+
+async def test_set_subscriptions_posila_jen_rozdil_po_polozkach() -> None:
+    """Symbol, kterému ubyl event, dostane jen `remove` toho eventu."""
+    stream, sent = make_stream()
+    stream._ws = cast(object, SimpleNamespace())  # type: ignore[assignment]
+    await stream.set_subscriptions({"./A": {"Quote", "Summary"}, "./B": {"Quote"}})
+    first = _subscription_payloads(sent)[-1]
+    assert _entries(first, "add") == sorted(
+        [
+            {"type": "Quote", "symbol": "./A"},
+            {"type": "Summary", "symbol": "./A"},
+            {"type": "Quote", "symbol": "./B"},
+        ],
+        key=str,
+    )
+    assert "remove" not in first
+    assert stream.entries_total == 3
+    assert stream._symbols == {"./A", "./B"}
+
+    sent.clear()
+    await stream.set_subscriptions({"./A": {"Quote"}, "./C": {"Greeks"}})
+    second = _subscription_payloads(sent)[-1]
+    assert _entries(second, "add") == [{"type": "Greeks", "symbol": "./C"}]
+    assert _entries(second, "remove") == sorted(
+        [{"type": "Summary", "symbol": "./A"}, {"type": "Quote", "symbol": "./B"}], key=str
+    )
+    assert stream.entries_total == 2
+
+    # Beze změny se nic neposílá
+    sent.clear()
+    await stream.set_subscriptions({"./A": {"Quote"}, "./C": {"Greeks"}})
+    assert _subscription_payloads(sent) == []
+
+
+async def test_set_symbols_znamena_vsechny_eventy_streamu() -> None:
+    """Dev laboratoř (#623) dál volá set_symbols — dostane všechny eventy."""
+    stream, sent = make_stream()
+    stream._ws = cast(object, SimpleNamespace())  # type: ignore[assignment]
+    await stream.set_symbols({"./A"})
+    assert _entries(_subscription_payloads(sent)[-1], "add") == [{"type": "Quote", "symbol": "./A"}]
+
+
+def test_strop_velikosti_se_pocita_zvlast_od_rate_limitu() -> None:
+    """`size too big` není rate limit: heal nepomůže, rozestup se nemění."""
+    stream, _ = make_stream()
+    stream._note_server_error(size_message())
+    assert stream.size_exceeded == 1
+    assert stream.size_exceeded_ts is not None
+    assert stream.rate_limited == 0
+    assert stream._pause_s == SUBSCRIPTION_PAUSE_S
+    assert not stream._heal_due(stream.size_exceeded_ts + 1_000)
+    assert stream.errors == 1

@@ -164,6 +164,12 @@ class Settings(BaseSettings):
     # maximum, ADR-0027: 6 008 změřeno bez degradace). Konzervativní hodnotu
     # nastavuje jen dev (-LiveTasty), aby experimenty neujídaly kapacitu účtu.
     tasty_max_subscriptions: int = Field(default=0, ge=0)
+    # Rozpočet DXLink subskripce (#982): server počítá POLOŽKY symbol × event,
+    # strop 25 000 na spojení (změřeno 2. 9. 2026 sondou sizecap, ADR-0027).
+    # Rezerva drží místo pro ad-hoc pohledy (#521 C): ~2 pohledy à 300
+    # symbolů × 3 eventy. Běžný plán (wide/extended) smí zabrat jen zbytek.
+    tasty_max_entries: int = Field(default=25_000, ge=1_000)
+    tasty_adhoc_reserve_entries: int = Field(default=2_000, ge=0)
     # Křížová kontrola feedů (#517 fáze A): pasivní detektor nad shadow daty,
     # žádný request navíc. Bez běžící shadow větve se tiše nezapne.
     # Prahy jsou MĚŘENÉ na 3 016 minutách shadow historie (13.–16. 8. 2026):

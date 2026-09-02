@@ -16,7 +16,7 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 
 import websockets
 
@@ -98,7 +98,9 @@ class DxLinkStream:
         self._token_source = token_source
         self._on_event = on_event
         self._events = events
-        self._symbols: set[str] = set()
+        #: Cílová subskripce per symbol → eventy (#982): každý účel odebírá
+        #: jen to, co čte; strop serveru je 25 000 položek symbol × event
+        self._subs: dict[str, frozenset[str]] = {}
         self._lock = asyncio.Lock()
         self._ws: websockets.ClientConnection | None = None
         #: Diagnostika pro shadow report: kolik reconnectů proběhlo
@@ -109,6 +111,10 @@ class DxLinkStream:
         self.last_error: str | None = None
         #: Rate limit subskripcí (#863): počet odmítnutí + stav samoléčení
         self.rate_limited = 0
+        #: Přetečení stropu velikosti subskripce (#982): server odmítl dávku
+        #: `Your subscription size is too big` — odmítnuté symboly mlčí
+        self.size_exceeded = 0
+        self.size_exceeded_ts: float | None = None
         #: Cílený heal (#936): vrátí podmnožinu mlčících symbolů; None = plný
         self._heal_targets = heal_targets
         self.heals = 0
@@ -122,12 +128,49 @@ class DxLinkStream:
         """Stav spojení pro /status (#706) — True mezi handshake a výpadkem."""
         return self._ws is not None
 
+    @property
+    def _symbols(self) -> set[str]:
+        """Subskribované symboly (bez ohledu na eventy) — heal a diagnostika."""
+        return set(self._subs)
+
+    @_symbols.setter
+    def _symbols(self, symbols: set[str]) -> None:
+        """Testy a dev laboratoř: množina symbolů = všechny eventy streamu."""
+        self._subs = {symbol: frozenset(self._events) for symbol in symbols}
+
+    @property
+    def entries_total(self) -> int:
+        """Počet položek symbol × event v cílové subskripci (#982)."""
+        return sum(len(events) for events in self._subs.values())
+
     async def set_symbols(self, symbols: set[str]) -> None:
-        """Cílová množina symbolů; rozdíl se přihlásí/odhlásí za běhu."""
+        """Cílová množina symbolů se všemi eventy streamu (dev laboratoř #623)."""
+        await self.set_subscriptions({symbol: self._events for symbol in symbols})
+
+    async def set_subscriptions(self, subscriptions: Mapping[str, Iterable[str]]) -> None:
+        """Cílová subskripce symbol → eventy; rozdíl se přihlásí/odhlásí za běhu.
+
+        Rozdíl se počítá po položkách (#982): symbol, kterému ubyl jeden
+        event, dostane jen `remove` toho eventu — ne odhlášení a nové
+        přihlášení, které by na chvíli umlčelo i zbylé eventy.
+        """
         async with self._lock:
-            added = symbols - self._symbols
-            removed = self._symbols - symbols
-            self._symbols = set(symbols)
+            target = {
+                symbol: frozenset(events)
+                for symbol, events in subscriptions.items()
+                if frozenset(events)
+            }
+            added: dict[str, frozenset[str]] = {}
+            removed: dict[str, frozenset[str]] = {}
+            for symbol, events in target.items():
+                new = events - self._subs.get(symbol, frozenset())
+                if new:
+                    added[symbol] = new
+            for symbol, events in self._subs.items():
+                gone = events - target.get(symbol, frozenset())
+                if gone:
+                    removed[symbol] = gone
+            self._subs = target
             if self._ws is not None:
                 try:
                     await self._send_subscription(add=added, remove=removed)
@@ -214,11 +257,24 @@ class DxLinkStream:
         self.errors += 1
         self.last_error = str(message.get("message") or message)
         logger.error("DXLink ERROR: %s", message)
-        if "subscription rate" in self.last_error.lower():
+        lowered = self.last_error.lower()
+        if "subscription rate" in lowered:
             self.rate_limited += 1
             self._rate_limit_ts = time.monotonic()
             self._last_rate_limit_seen = self._rate_limit_ts
             self._pause_s = min(self._pause_s * 2, SUBSCRIPTION_PAUSE_MAX_S)
+        elif "subscription size" in lowered:
+            # Strop 25 000 položek na spojení (#982): heal tady nepomůže —
+            # opakované přihlášení téže množiny přeteče znovu. Plán musí
+            # zmenšit rozpočet (tasty/budget.py); tohle jen nahlas přizná stav.
+            self.size_exceeded += 1
+            self.size_exceeded_ts = time.monotonic()
+            logger.error(
+                "DXLink strop velikosti subskripce: plán %d položek (%d symbolů) — "
+                "odmítnuté symboly mlčí, zmenšit rozpočet (#982)",
+                self.entries_total,
+                len(self._subs),
+            )
 
     def _heal_due(self, now: float) -> bool:
         """Je čas na samoléčebný resubscribe? Až po zklidnění rate limitu."""
@@ -226,16 +282,32 @@ class DxLinkStream:
             self._rate_limit_ts is not None and now - self._rate_limit_ts > RATE_LIMIT_HEAL_QUIET_S
         )
 
+    def _as_entries(
+        self, subscriptions: Mapping[str, Iterable[str]] | Iterable[str]
+    ) -> dict[str, frozenset[str]]:
+        """Množina symbolů = všechny eventy streamu; mapa = jak je zadaná."""
+        if isinstance(subscriptions, Mapping):
+            return {symbol: frozenset(events) for symbol, events in subscriptions.items()}
+        return {symbol: frozenset(self._events) for symbol in subscriptions}
+
     async def _send_subscription(
-        self, add: set[str], remove: frozenset[str] | set[str] = frozenset()
+        self,
+        add: Mapping[str, Iterable[str]] | Iterable[str],
+        remove: Mapping[str, Iterable[str]] | Iterable[str] = frozenset(),
     ) -> None:
+        add_map = self._as_entries(add)
+        remove_map = self._as_entries(remove)
         # Prioritní symboly první, zbytek abecedně (stabilní pořadí)
-        ordered_add = sorted(add, key=lambda symbol: (symbol not in self._priority, symbol))
+        ordered_add = sorted(add_map, key=lambda symbol: (symbol not in self._priority, symbol))
         entries_add = [
-            {"type": event, "symbol": symbol} for symbol in ordered_add for event in self._events
+            {"type": event, "symbol": symbol}
+            for symbol in ordered_add
+            for event in sorted(add_map[symbol])
         ]
         entries_remove = [
-            {"type": event, "symbol": symbol} for symbol in sorted(remove) for event in self._events
+            {"type": event, "symbol": symbol}
+            for symbol in sorted(remove_map)
+            for event in sorted(remove_map[symbol])
         ]
         for offset in range(0, max(len(entries_add), len(entries_remove)), SUBSCRIPTION_BATCH):
             payload: dict[str, object] = {"type": "FEED_SUBSCRIPTION", "channel": 1}
@@ -272,7 +344,7 @@ class DxLinkStream:
                 # implementace, ať se dvě kopie nerozejdou
                 await handshake(ws, token, {name: EVENT_FIELDS[name] for name in self._events})
                 async with self._lock:
-                    await self._send_subscription(add=set(self._symbols))
+                    await self._send_subscription(add=dict(self._subs))
                     # Dokončení musí být v logu vidět (#916): smyčka smrti se
                     # poznala až z nepřímých příznaků, protože nedoběhnutá
                     # subskripce nikde nechyběla
@@ -295,7 +367,7 @@ class DxLinkStream:
                     if self._heal_due(time.monotonic()):
                         self._rate_limit_ts = None
                         async with self._lock:
-                            full = set(self._symbols)
+                            full = set(self._subs)
                             targets = full
                             if self._heal_targets is not None:
                                 silent = self._heal_targets(full) & full
@@ -311,7 +383,9 @@ class DxLinkStream:
                                     len(full),
                                     self._pause_s,
                                 )
-                                await self._send_subscription(add=targets)
+                                await self._send_subscription(
+                                    add={symbol: self._subs[symbol] for symbol in targets}
+                                )
                             else:
                                 logger.info(
                                     "DXLink rate limit: vše dodává, heal netřeba (%d symbolů)",
