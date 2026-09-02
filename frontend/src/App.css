@@ -2471,6 +2471,27 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   z-index: 6;
   pointer-events: none;
 }
+/* Zavíratelný banner (#977): křížek musí brát klik, zbytek banneru dál
+   nesmí clonit graf pod sebou */
+.stale-banner-closable {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.stale-banner-close {
+  pointer-events: auto;
+  background: none;
+  border: 0;
+  color: #fff;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.stale-banner-close:hover {
+  opacity: 1;
+}
 
 /* Settle watch (#603) — decentní segment v hlavičce */
 .settle-watch {
