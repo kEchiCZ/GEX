@@ -54,6 +54,7 @@ export function Sidebar() {
     symbol: activeSymbol,
     setSymbol,
     recentSymbols,
+    forgetRecentSymbol,
   } = useAppState()
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
   // Ad-hoc pohled (#521 C): symbol mimo watchlist se drží naživu pingem
@@ -276,9 +277,19 @@ export function Sidebar() {
                       <button
                         className="watchlist-symbol"
                         data-testid={`recent-${item}`}
+                        title="Nedávno zobrazený — ad-hoc pohled, ne plný sběr jako watchlist"
                         onClick={() => setSymbol(item)}
                       >
                         {item}
+                      </button>
+                      {/* Křížek (#987): vyhledaný symbol jinak z panelu nešel dostat */}
+                      <button
+                        className="watchlist-remove"
+                        aria-label={`Vyřadit ${item} z nedávných`}
+                        title="Vyřadit z nedávných"
+                        onClick={() => forgetRecentSymbol(item)}
+                      >
+                        ×
                       </button>
                     </li>
                   ))}
