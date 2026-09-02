@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.12 · srpen 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.13 · září 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); od verze 1.9 slouží <strong>tastytrade</strong> jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -108,15 +108,15 @@ docker compose up -d        # start na pozadí
 </thead>
 <tbody><tr>
 <td><strong>Sidebar (vlevo)</strong></td>
-<td>Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / Briefing / Deník / News / Stats / Settings), odkaz <strong>Manuál</strong>, přepínač tématu Dark/Light, <strong>editovatelný watchlist</strong> (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový; při chybě se pod formulářem ukáže hláška a seznam se sám srovná se serverem), tlačítko <strong>Legenda</strong> (modál s ukázkami všech prvků grafu a čtením „roste/klesá&quot;), sekce <strong>Nedávné</strong> (v1.12, #521 — posledních 8 zobrazených symbolů, klik znovu otevře i ad-hoc pohled), verze. Tlačítkem « se sbalí.</td>
+<td>Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / Briefing / Deník / News / Stats / Settings), odkaz <strong>Manuál</strong>, přepínač tématu Dark/Light, <strong>editovatelný watchlist</strong> (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový; při chybě se pod formulářem ukáže hláška a seznam se sám srovná se serverem), tlačítko <strong>Legenda</strong> (modál s ukázkami všech prvků grafu a čtením „roste/klesá&quot;), sekce <strong>Nedávné</strong> (v1.12, #521 — posledních 8 zobrazených symbolů, klik znovu otevře i ad-hoc pohled; od v1.13 jen symboly <strong>mimo watchlist</strong> — aktivní ad-hoc symbol je tu zvýrazněný a do watchlistu se nepřimíchává (#989), ostatní položky mají <strong>křížek ×</strong>, kterým vyhledaný symbol vyřadíš (#987); vyřazení se pamatuje, aktivní symbol vyřadit nejde — nejdřív přepni jinam; tooltip připomíná rozdíl „ad-hoc pohled&quot; vs. „plný sběr jako watchlist&quot;), verze. Tlačítkem « se sbalí.</td>
 </tr>
 <tr>
 <td><strong>Hlavička — horní řádek</strong></td>
-<td><strong>Kdo a za kolik</strong>: ticker a název instrumentu, <strong>poslední cena + denní změna v %</strong>, <strong>kalendářový selektor expirace</strong> (v1.12, níže) s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h&quot; — velké expirace nesou velké OI. Vedle selektoru je <strong>vyhledání symbolu</strong> (v1.12, #521): našeptávač CME produktů, výběr otevře <strong>ad-hoc pohled přes tastytrade</strong> — positioning libovolného produktu bez přidání do watchlistu a bez spotřeby IBKR linek (kotace + OI + BS greeks z mid; bez objemů, flows a Cum Δ — ty nese jen plný sběr). Takový symbol nese štítek <strong>„ad-hoc · tastytrade“</strong> a žije, dokud je zobrazený (~3 min po odchodu se uklízí); pro trvalé sledování ho přidej do watchlistu. V selektoru najdeš i <strong>následující expiraci</strong> (sbírá se souběžně — čtení positioningu příští seance).</td>
+<td><strong>Kdo a za kolik</strong>: ticker a název instrumentu, <strong>poslední cena + denní změna v %</strong>, <strong>kalendářový selektor expirace</strong> (v1.12, níže) s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h&quot; — velké expirace nesou velké OI. Vedle selektoru je <strong>vyhledání symbolu</strong> (v1.12, #521): našeptávač CME produktů, výběr otevře <strong>ad-hoc pohled přes tastytrade</strong> — positioning libovolného produktu bez přidání do watchlistu a bez spotřeby IBKR linek (kotace + OI + BS greeks z mid; bez objemů, flows a Cum Δ — ty nese jen plný sběr). Takový symbol nese štítek <strong>„ad-hoc · tastytrade“</strong> a žije, dokud je zobrazený (~3 min po odchodu se uklízí); pro trvalé sledování ho přidej do watchlistu. <strong>Výběr položky z našeptávače pohled otevře rovnou</strong> — Enter je potřeba jen při ručním dopsání celého symbolu (v1.13, #983). Aby ad-hoc symbol data skutečně dostal, drží si engine ve streamu tastytrade <strong>rezervu na ~2 ad-hoc pohledy</strong> (v1.13, #982; do té doby mohl při plném streamu tiše mlčet). V selektoru najdeš i <strong>následující expiraci</strong> (sbírá se souběžně — čtení positioningu příští seance).</td>
 </tr>
 <tr>
 <td><strong>Hlavička — spodní řádek</strong></td>
-<td><strong>V jakém je to stavu</strong>: <strong>GEX režim badge</strong> (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem), <strong>chip Tendence</strong> (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno&quot;), <strong>chip stavu sentimentu</strong> RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna), <strong>settle watch</strong>, <strong>chip gamma útesu</strong> a vpravo <strong>ukazatele pokrytí dat</strong>, indikátor ● Live / ○ Offline a zvonek notifikací.</td>
+<td><strong>V jakém je to stavu</strong>: <strong>GEX režim badge</strong> (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem; když flip leží <strong>mimo měřené pásmo</strong> — celý Dyn GEX profil je na jedné straně nuly — badge se od v1.13 neztratí, režim se odvodí ze znaménka profilu u spotu a tooltip to přizná, #864), <strong>chip Tendence</strong> (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno&quot;), <strong>chip stavu sentimentu</strong> RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna), <strong>settle watch</strong>, <strong>chip gamma útesu</strong> a vpravo <strong>ukazatele pokrytí dat</strong>, indikátor ● Live / ○ Offline a zvonek notifikací.</td>
 </tr>
 <tr>
 <td><strong>Řádek timeframe</strong></td>
@@ -124,7 +124,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Řádek přepínačů</strong></td>
-<td>Dropdown <strong>Dyn plocha</strong> (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18). Checkboxy vrstev: <strong>Zdi</strong> (call/put wall linie), <strong>2. zeď</strong> (druhá nejsilnější koncentrace strany, tečkovaně), <strong>GEX Levels</strong> (flip/centroid/Max Pain), <strong>GEX žebřík</strong> (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), <strong>FA levels</strong> (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI), <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol / Opt Vol / Cum Δ / Δ Flow C/P</strong> (spodní panely), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong> (markery zpráv + panel Sentiment) s dropdownem <strong>Vše/Významné</strong> (filtr markerů na importance ≥ 2), dropdown <strong>Signály</strong> (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá.</td>
+<td>Dropdown <strong>Dyn plocha</strong> (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18; <strong>výchozí je Dyn GEX</strong> (#837) — modelované gamma pole je hlavní přidaná hodnota nástroje, Off zvol, když chceš jen měřenou mapu). Checkboxy vrstev: <strong>Zdi</strong> (call/put wall linie), <strong>2. zeď</strong> (druhá nejsilnější koncentrace strany, tečkovaně), <strong>GEX Levels</strong> (flip/centroid/Max Pain + <strong>OI zdi</strong>, viz kap. 5), <strong>GEX žebřík</strong> (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), <strong>FA levels</strong> (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI), <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol / Opt Vol / Cum Δ / Δ Flow C/P</strong> (spodní panely), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong> (markery zpráv + panel Sentiment) s dropdownem <strong>Vše/Významné</strong> (filtr markerů na importance ≥ 2), dropdown <strong>Signály</strong> (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá.</td>
 </tr>
 <tr>
 <td><strong>Chipy stavu trhu</strong></td>
@@ -184,6 +184,19 @@ zobrazuje řetěz celého dne (série se slévají do jednoho positioningu).</li
 <li>Šipky ‹ › (nebo PgUp/PgDn) listují měsíci, šipkové klávesy posouvají fokus
 po expiracích, Enter vybírá, Esc zavírá.</li>
 </ul>
+<p><strong>Výchozí expirace a víkend (v1.13).</strong> Po otevření aplikace se vybere
+<strong>nejbližší expirace ≥ den seance</strong> — ve všední den tedy dnešní 0DTE řetěz,
+v neděli po otevření Globexu (17:00 CT) rovnou pondělní (#945; dřív se
+o víkendu omylem vybírala nejvzdálenější expirace z řady tastytrade, pro
+kterou se nic nesbírá, a graf spadl na demo data). Když pro vybranou
+expiraci <strong>není uložený ani jeden den</strong> (sobota, neděle před otevřením,
+svátek), otevře se <strong>poslední seance, která data má</strong> — typicky páteční
+(#946). Doskok se vždy ohlásí bannerem nad grafem s oběma daty: <em>„Pro
+2026-08-31 nejsou uložená data — zobrazena poslední seance 2026-08-28. Mimo
+obchodní dny je to očekávané; ve všední den to znamená, že sběr neběžel.&quot;</em>
+Aplikace nezná kalendář svátků, podle data poznáš sám, jestli je to
+v pořádku; ruční volba expirace v selektoru banner zruší. Čerstvě přidaný
+ticker bez dat zůstává u vybrané expirace s hláškou demo dat.</p>
 <hr>
 <h2>5. Heatmapa podrobně</h2>
 <p>Heatmapa zobrazuje matici <strong>čas (osa X) × strike (osa Y)</strong>. Každá buňka je jedna minuta jednoho striku; intenzita barvy odpovídá hodnotě zvolené metriky. <strong>Teal/zelená = call strana, červená = put strana.</strong></p>
@@ -380,6 +393,11 @@ koncentrací, walls jsou linie vedené zleva doprava.</p>
 <td>2. zeď</td>
 </tr>
 <tr>
+<td><strong>OI zeď (call / put)</strong></td>
+<td>jemně tečkovaná, studenější teal/růžová, v cenovce podíl na OI strany</td>
+<td>GEX Levels (v1.13, níže)</td>
+</tr>
+<tr>
 <td><strong>FA levels</strong></td>
 <td>vlastní odstíny s prefixem FA</td>
 <td>FA levels</td>
@@ -411,8 +429,34 @@ koncentrací, walls jsou linie vedené zleva doprava.</p>
 </tr>
 </tbody></table>
 <p>Každá úroveň se navíc promítá jako <strong>horizontální čárkovaná linka přes celou šířku s barevnou cenovkou</strong> u levého okraje (poslední známá hodnota) — na první pohled vidíš, kde úrovně právě leží. Vpravo na ose je <strong>štítek aktuální ceny</strong>; v pravém dolním rohu <strong>timestamp</strong> posledních dat.</p>
+<h3>OI zdi — jiná veličina než gamma zdi (v1.13, #851)</h3>
+<p><img src="img/oi-zdi.png" alt="OI zdi pod GEX Levels — put zeď 29000 s podílem 32 % na OI své strany, druhá 28950 · 19 %"></p>
+<p><strong>Call/put zeď</strong> je maximum gamma profilu — kde dealeři hedgují <strong>právě teď</strong>
+a působí okamžitě přes tok. <strong>OI zeď</strong> je strike s největším <strong>otevřeným
+zájmem</strong> na své straně (call nad spotem, put pod ním) — magnet k expiraci
+a místo, kde se pozice zavírají. Gamma profil se počítá jen nad obálkou IBKR
+(±200 b, strop market data linek), kdežto denní OI z tastytrade pokrývá celý
+řetěz — masa OTM putů tak často leží <strong>mimo dosah gamma zdí</strong> a trader, který
+podle zdi umisťuje stop, o ní jinak neví.</p>
+<ul>
+<li><strong>Nic se nedopočítává</strong>: žádná IV ani gamma z extrapolace — bez OI se
+hladina prostě nekreslí. Proto se OI zdi nemíchají mezi gamma zdi.</li>
+<li><strong>Cenovka nese podíl na OI své strany</strong>: nízké procento = plochý profil,
+„zeď&quot; je jen nejvyšší z mnoha srovnatelných striků. <strong>Slabé zdi (pod 20 %)
+se nekreslí vůbec</strong> — práh leží v mezeře naměřeného rozdělení (hodnoty se
+drží kolem 11–15 %, pak skočí na 22–36 %).</li>
+<li><strong>Silná zeď mimo výřez</strong> (naměřeno: call OI zeď 690 b nad spotem, put
+1 700 b pod ním) se ukáže jako <strong>značka na horním/spodním okraji</strong> se
+směrem, hodnotou a vzdáleností od kraje rozsahu — hladina, kterou nikdo
+nevidí, je k ničemu.</li>
+<li><strong>Jak číst:</strong> shoda OI zdi s call/put zdí je silná úroveň; když se
+rozejdou, gamma zeď působí teď, OI zeď až k expiraci. Velké put OI pod
+trhem je místo, kde se pád má o co opřít, i bez gamma zdi — reakce ale
+nebývá tak okamžitá, protože to samo o sobě není hedging. Rozdíl obou
+veličin vysvětluje i <strong>Legenda</strong> v sidebaru.</li>
+</ul>
 <h3>News markery — zprávy přímo v grafu</h3>
-<p>Se zapnutým <strong>News</strong> se na časové ose kreslí značky zpráv a makro událostí (pás u spodní hrany + glyf kategorie: 🏛 Fed, 📊 inflace, 👷 trh práce…):</p>
+<p>Se zapnutým <strong>News</strong> se na časové ose kreslí značky zpráv a makro událostí (krátký tick těsně nad pásem popisků seancí u spodní hrany + glyf kategorie nad ním: 🏛 Fed, 📊 inflace, 👷 trh práce…; od v1.13 mají pevnou výšku v pixelech a nerostou s výškou grafu — dřív zabíraly spodní třetinu plochy, #980; klik na marker trefí jen tenhle spodní pás, výš patří klik heatmapě):</p>
 <ul>
 <li><strong>Barva = změřený dopad</strong>: teal kladný sentiment, červená záporný, šedá neutrální/nezměřený. <strong>Jas a tloušťka = důležitost</strong> — okrajová zpráva nekřičí jako FOMC.</li>
 <li>Víc zpráv v téže minutě = <strong>jeden marker s počtem</strong> (cluster).</li>
@@ -432,6 +476,38 @@ koncentrací, walls jsou linie vedené zleva doprava.</p>
 </ul>
 <p>Graf se při načtení <strong>automaticky napasuje na cenové pásmo dne</strong> (svíčky vyplní výšku); okolní zóny heatmapy dosáhneš tažením/kolečkem za osu Y, reset vrací napasovaný pohled. Po startu s <strong>málem dat</strong> (ráno) mají svíčky <strong>fixní šířku</strong> ukotvenou k pravému okraji — neroztahují se přes celý graf jako dřív.</p>
 <p>Posuvníkem <strong>Viditelnost</strong> (10–100 %) cenovou vrstvu zeslabíš, aby nepřebíjela heatmapu pod ní — užitečné hlavně u svíček. <strong>Štítek aktuální ceny zůstává vždy plně viditelný.</strong></p>
+<h3>Historie přes hranici dne — jen cena (v1.13, #788)</h3>
+<p>Bary podkladu se drží navždy (ES i NQ od července 2024), takže graf nekončí
+začátkem dnešní seance: <strong>doscrolluj doleva</strong> a starší seance se dotáhnou
+samy, den po dni, až na začátek archivu. Platí přitom:</p>
+<ul>
+<li><strong>Jen cena.</strong> Heatmapa, profil ani spodní panely se pro minulé dny
+nestaví — positioning každého dne stojí na jiném 0DTE řetězu a míchat ho
+do dnešní osy by lhalo. Historie je <strong>ztlumená</strong> a na hranici dneška je
+popisek „← historie (jen cena)&quot;; mezi dny jsou předěly s datem.</li>
+<li><strong>Kotva na dnešku:</strong> dotažení staršího dne s pohledem nepohne ani o pixel.
+Dny stojí zády k sobě po obchodních minutách — víkend ani pauza CME
+nevyrábí mezeru.</li>
+<li><strong>Křivka nespojuje hranici dnů</strong> — přes roll kontraktu by spojnice tvrdila
+falešnou kontinuitu (ADR-0028). Osa X nese časy i pro historii a crosshair
+ukazuje datum <strong>toho</strong> dne, ne dnešní.</li>
+<li>Cena před týdnem klidně leží mimo dnešní obálku ±200 b — historie se
+kreslí i mimo pásmo strikes, dnešní vrstvy se dál klampují k pásmu.</li>
+</ul>
+<h3>Rekonstruované minuty po pozdním startu (v1.13, #617)</h3>
+<p><img src="img/banner-rekonstrukce.png" alt="Banner rekonstrukce nad grafem — 119 doplněných minut z dxFeed, zavíratelný křížkem"></p>
+<p>Když engine naběhne až po otevření seance (restart PC, TWS spuštěná pozdě),
+chybějící minuty barů podkladu se <strong>doplní z dxFeed</strong> (tastytrade) — jedno
+krátké spojení mimo živou datovou cestu, měřené minuty se nikdy nepřepisují.
+Doplněný úsek ale <strong>není měření</strong> a nesmí splynout s naměřeným klidem, proto
+nad grafem svítí banner: <em>„Rekonstruováno 14 min z dxFeed (12:03–12:16) —
+cena a objem doplněné po pozdním startu, CumΔ za ten úsek chybí.&quot;</em> Ta poslední
+věta je podstatná: svíčka nese OHLCV, ne printy s agresorem, takže <strong>tok se
+rekonstruovat nedá</strong> (stejný princip jako šrafované chybějící OI). Opční vrstva
+(Greeks, snapshoty) se zpětně nedoplňuje vůbec — IBKR ji historicky nedá
+(ADR-0024). Banner jde zavřít křížkem a zůstane zavřený i po obnovení stránky;
+znovu se ukáže jen při <strong>jiné</strong> množině rekonstruovaných minut (další
+backfill, jiný den nebo symbol, #977).</p>
 <p><img src="img/svicky.png" alt="Svíčkový režim"></p>
 <hr>
 <h2>7. Strike profil (pravý panel)</h2>
@@ -535,7 +611,7 @@ z minula.</p>
 </tr>
 <tr>
 <td><strong>Sentiment</strong></td>
-<td>SentIndex z news-engine (zapíná checkbox <strong>News</strong>): intraday spojitá řada kolem nuly (kladná = risk-on tón zpráv, záporná = risk-off), v <strong>Daily</strong> pohledu OHLC svíčka indexu za každý den (open nese overnight zbytek).</td>
+<td>SentIndex z news-engine (zapíná checkbox <strong>News</strong>): intraday spojitá řada kolem nuly (kladná = risk-on tón zpráv, záporná = risk-off), v <strong>Daily</strong> pohledu OHLC svíčka indexu za každý den (open nese overnight zbytek). V replay staršího dne panel od v1.13 ukazuje řadu <strong>zobrazeného dne</strong> a při přetáčení drží osu s ostatními panely (dřív bral dnešní řadu a při přetáčení se posouval doleva, #976).</td>
 </tr>
 </tbody></table>
 <p><strong>Ovládání panelů (v1.12).</strong> Každý spodní panel jde ovládat myší jako graf:</p>
@@ -548,8 +624,9 @@ přirozeným směrem (táhneš dolů → obsah jede dolů),</li>
 <li><strong>dvojklik</strong> vrátí panel do výchozího pohledu,</li>
 <li>osa vpravo i nulová linka respektují posunutý/zoomlý pohled — čtou pravdu.</li>
 </ul>
-<p>Úchyt na spodní hraně panelu dál mění jeho <strong>výšku</strong> a předěl mezi grafem
-a panely zůstává beze změny.</p>
+<p>Úchyt na spodní hraně panelu dál mění jeho <strong>výšku</strong> (každý panel zvlášť,
+minimum 25 px, výšky se pamatují; globální předěl mezi grafem a panely výšky
+opět sjednotí, #792) a předěl mezi grafem a panely zůstává beze změny.</p>
 <p>Pohyb myší v kterémkoli panelu hýbe crosshairem ve všech panelech i heatmapě. Při najetí navíc uvidíš <strong>hodnoty ukazatele</strong>:</p>
 <ul>
 <li><strong>vpravo nahoře</strong> hodnotu pro <strong>minutu pod crosshairem</strong> (Opt Vol a Δ Flow zvlášť C/P);</li>
@@ -805,6 +882,7 @@ víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.</p>
 <li><strong>COMBINED</strong> — totéž se souhlasem GEX kontextu (režim, poloha vůči flipu).</li>
 </ul>
 <p>Signál se ukáže jako <strong>šipka na cenové křivce</strong> (▲ Long teal / ▼ Short červená, sytost = síla) s <strong>vodorovnou stopou platnosti</strong> do své expirace. Tooltip u crosshairu nese režim, zdůvodnění, <strong>n vzorků a Wilson LB</strong>. Při nepotvrzené změně stavu sentimentu nese šipka <strong>⚠</strong>.</p>
+<p><strong>Jen v obchodní době (v1.13, #968).</strong> Signály vznikají výhradně, když se ES/NQ obchodují (neděle 17:00 CT → pátek 16:00 CT, mimo denní pauzu CME 16:00–17:00 CT). Doklad z produkce: 21 z 39 signálů vzniklo se zavřeným trhem a <strong>ani jeden</strong> neměl vyhodnocení — bez barů není z čeho výnos změřit — a hlavně se nedal obchodovat: než trh otevřel, positioning byl jinde. Expirace starších signálů a dopočet jejich výsledků běží dál i o víkendu.</p>
 <p><strong>Empirická gate:</strong> signál z daného typu zprávy se pouští, <strong>až když má bucket n ≥ 30 změřených reakcí a spodní mez úspěšnosti (Wilson LB) &gt; 0,50</strong>. Dokud žádný bucket gate neprošel, u dropdownu běží „⏳ sběr dat X %&quot; — aplikace se přiznaně učí, místo aby střílela od boku. Statistiky jsou <strong>režimově podmíněné</strong> (RiskOn/RiskOff/Neutral, gamma ±): když má režimový pohled dost dat, použije se přednostně, jinak se korektně spadne na celkový.</p>
 <h3>Obrazovka Stats</h3>
 <table>
@@ -1074,7 +1152,7 @@ které se přepne hned.</p>
 </thead>
 <tbody><tr>
 <td><strong>IBKR</strong></td>
-<td>Host, port (7496 live / 7497 paper), client ID</td>
+<td>Host, port (7496 live / 7497 paper; IB Gateway 4001 / 4002), client ID. Změna po Uložit platí <strong>hned</strong> — engine se přepojí do sekund i ve chvíli, kdy spojení nemá a teprve ho hledá (v1.13, #992; dřív až do 5 min). Hodnota uložená tady <strong>přebíjí <code>.env</code></strong> — kdo mění port v <code>.env</code>, musí ho změnit i tady (viz ADMIN-MANUAL)</td>
 </tr>
 <tr>
 <td><strong>Engine (IBKR pipeline)</strong></td>
@@ -1082,11 +1160,11 @@ které se přepne hned.</p>
 </tr>
 <tr>
 <td><strong>Stav enginu</strong></td>
-<td>Read-only stav: spojení + port, účet (paper), Greeks X/Y + repair fronta, OI řetězu, lines %, <strong>chyby subskripce</strong> (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance&quot; a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console)</td>
+<td>Read-only stav: spojení + port (při výpadku IBKR i <strong>„bez spojení X min&quot;</strong>, #770), účet (paper), <strong>Zdroj dat</strong> (v1.13, #950: <code>řetěz ibkr · spot ibkr</code>, při fallbacku upozornění, že běží tastytrade), tlačítko <strong>Přepojit IBKR</strong> (níže), Greeks X/Y + repair fronta, OI řetězu, lines %, <strong>chyby subskripce</strong> (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance&quot; a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console)</td>
 </tr>
 <tr>
 <td><strong>Tastytrade</strong> (v1.10)</td>
-<td>Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží</td>
+<td>Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, tlačítko <strong>Přepojit tastytrade</strong> (v1.13), trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží</td>
 </tr>
 <tr>
 <td><strong>Alerty</strong></td>
@@ -1114,6 +1192,25 @@ IBKR. <strong>Tastytrade</strong> je od v1.9 plnohodnotná záloha (cena podklad
 výše; konfigurace (OAuth tajemství) zůstává v <code>.env</code> a vyžaduje restart
 enginu (viz ADMIN-MANUAL).</p>
 </blockquote>
+<h3>Ruční přepojení k IBKR / tastytrade (v1.13, #950)</h3>
+<p><img src="img/settings-prepojit.png" alt="Settings → IBKR a Stav enginu s tlačítky Přepojit IBKR / Přepojit tastytrade"></p>
+<p>Zaseknuté spojení šlo dřív řešit jen restartem kontejneru enginu, který shodí
+i sběr dat. Nově jsou v <strong>Settings → Stav enginu</strong> tlačítka <strong>Přepojit IBKR</strong>
+a (v bloku Tastytrade) <strong>Přepojit tastytrade</strong>:</p>
+<ul>
+<li>Klik vyžádá potvrzení — přepojení je <strong>~1–2 min díra ve sběru</strong>, takže se
+nesmí spustit omylem během seance. <strong>Volej ho jen mimo US RTH</strong>, pokud to
+není nouze.</li>
+<li>Po potvrzení se u tlačítka objeví „vyžádáno v HH:MM — engine se přepojí do
+minuty&quot;; IBKR se odpojí a supervisor se připojí znovu (včetně restartu
+pipeline), tastytrade zavře DXLink socket a znovu se přihlásí i se všemi
+subskripcemi.</li>
+<li>Rozhoduj se podle řádku <strong>Zdroj dat</strong> nad tlačítkem: když ukazuje <code>tasty</code>,
+IBKR data nedodává a přepojení IBKR je na místě; když je vše <code>ibkr</code> a graf
+přesto stojí, zkus nejdřív tastytrade.</li>
+<li>Uložení nastavení IBKR <strong>beze změny hodnot nepřepojuje</strong> — na to je právě
+tohle tlačítko.</li>
+</ul>
 <p><img src="img/settings.png" alt="Settings"></p>
 <p>Light téma:</p>
 <p><img src="img/light.png" alt="Light téma"></p>
@@ -1155,12 +1252,12 @@ zůstanou ve formuláři. Téma (Dark/Light) se ukládá hned, zbytek přes Ulo�
 <td>Změna striku s největší koncentrací</td>
 </tr>
 <tr>
-<td>Výpadek spojení</td>
-<td>TWS/Gateway nedostupné</td>
+<td><strong>Výpadek spojení</strong></td>
+<td>TWS/Gateway nedostupné — hlásí se <strong>při přechodu</strong> do odpojeného stavu (od v1.13 se skutečně vyhodnocuje, #949; dřív byl alert mrtvý kód). Trvá-li výpadek přes 5 min, přijde navíc <strong>„IBKR spojení chybí už X min — sběr dat stojí&quot;</strong> a opakuje se, dokud se spojení nevrátí (#770); stejná doba je v Settings → Stav enginu jako „bez spojení X min&quot;</td>
 </tr>
 <tr>
-<td>Disk limit</td>
-<td>Překročen limit místa na disku</td>
+<td><strong>Disk limit</strong></td>
+<td>Obsazení dat překročilo limit ze Settings → Engine (hranově, jednou za překročení, #949). Nezaměňovat s alertem <strong>disk_space</strong> (volné místo disku pod 15 / 5 GB + výpis největších tabulek)</td>
 </tr>
 <tr>
 <td><strong>OI nedorazilo</strong></td>
@@ -1196,7 +1293,7 @@ zůstanou ve formuláři. Téma (Dark/Light) se ukládá hned, zbytek přes Ulo�
 </tr>
 <tr>
 <td><strong>Greeks se zasekly / zase jedou</strong></td>
-<td>Kotace opčního řetězu přestaly chodit při živém spotu (obdoba svíček) — hint restart TWS; návrat se ohlásí</td>
+<td>Kotace opčního řetězu přestaly chodit při živém spotu (obdoba svíček) — hint restart TWS; návrat se ohlásí. <strong>Po settle expirující řady se nehlásí</strong> (v1.13, #959): vypořádaný řetěz se přestane kotovat, což je normální stav, ne porucha — dřív alert s radou „restart TWS&quot; chodil každý den po 22:00</td>
 </tr>
 <tr>
 <td><strong>Chyba subskripce</strong></td>
@@ -1318,7 +1415,7 @@ http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelno
 </thead>
 <tbody><tr>
 <td>Stavová lišta <code>IBKR: offline</code></td>
-<td>TWS neběží / není přihlášené / vypnuté API / špatný port. Zkontroluj TWS, pak IBKR Console → Reconnect.</td>
+<td>TWS neběží / není přihlášené / vypnuté API / špatný port. Zkontroluj TWS/Gateway, pak Settings → Stav enginu → <strong>Přepojit IBKR</strong> (kap. 13).</td>
 </tr>
 <tr>
 <td>Alert „delayed market data“</td>
@@ -1338,7 +1435,23 @@ http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelno
 </tr>
 <tr>
 <td>Prázdná heatmapa</td>
-<td>Mimo obchodní hodiny nevznikají nové snapshoty — použij playback pro přehrání posledního dne.</td>
+<td>Mimo obchodní hodiny nevznikají nové snapshoty — použij playback pro přehrání posledního dne. O víkendu se od v1.13 poslední seance s daty otevře sama (kap. 4).</td>
+</tr>
+<tr>
+<td><strong>Banner „Pro … nejsou uložená data — zobrazena poslední seance …&quot;</strong></td>
+<td>Pro vybranou expiraci není uložený žádný den, takže graf ukazuje <strong>jiný den</strong>, než odpovídá kalendáři (#946). O víkendu a svátku je to v pořádku; <strong>ve všední den to znamená, že sběr pro dnešek neběžel</strong> — zkontroluj TWS/Gateway a stav enginu. Ruční volba expirace banner zavře.</td>
+</tr>
+<tr>
+<td><strong>Banner „Rekonstruováno N min z dxFeed …&quot;</strong></td>
+<td>Engine naběhl pozdě a chybějící minuty barů doplnil z tastytrade (kap. 6). Cena a objem za ten úsek jsou doplněné, <strong>CumΔ chybí</strong> — není to porucha, jen přiznaná díra. Křížek banner zavře.</td>
+</tr>
+<tr>
+<td><strong>Po restartu Docker Desktop nejde uložit Settings, watchlist je prázdný</strong></td>
+<td>Frontend držel starou adresu API a vracel 502. Od v1.13 se to spraví samo do ~10 s (#993); u staršího buildu pomůže <code>docker compose restart frontend</code>.</td>
+</tr>
+<tr>
+<td><strong>Změnil jsem port v Settings a engine se nepřepojil</strong></td>
+<td>Od v1.13 platí změna do sekund i bez spojení (#992). Pokud jsi port měnil v <code>.env</code>, hodnota ze Settings ho <strong>přebíjí</strong> — změň ji i tady.</td>
 </tr>
 <tr>
 <td><strong>Neděle večer: žádné svíčky</strong></td>
@@ -1675,6 +1788,10 @@ podkladu</strong>, ne absolutní čísla.</p>
 <tr>
 <td><strong>Call wall / Put wall</strong></td>
 <td>Strike s největší koncentrací NetGEX nad/pod spotem. Pravděpodobnostní úroveň, ne bariéra — tržní význam má jen při dostatečné dominanci vůči zbytku profilu (viz cenovka zdi s %); úrovně se během dne přelévají, u 0DTE výrazně.</td>
+</tr>
+<tr>
+<td><strong>OI zeď</strong></td>
+<td>Strike s největším otevřeným zájmem na své straně (call nad spotem, put pod ním) z denního OI archivu přes celý řetěz — magnet k expiraci, ne hedging teď. Kreslí se jen při podílu ≥ 20 % OI strany; nic se nedopočítává (kap. 5).</td>
 </tr>
 <tr>
 <td><strong>Centroid (HVL)</strong></td>
