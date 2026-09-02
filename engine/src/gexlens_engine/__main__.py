@@ -95,6 +95,7 @@ from gexlens_engine.runtime_settings import (
     apply_runtime_settings,
     pending_reconnects,
     seed_reconnects,
+    should_poll_settings,
 )
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.spot_stream import SpotStreamer
@@ -2058,7 +2059,12 @@ async def main() -> None:
 
         # Watchlist se čte každý k-tý cyklus (uživatel přidal/odebral ticker v UI)
         # nebo hned po NOTIFY probuzení (#207)
-        if force_watchlist or cycle % settings.watchlist_poll_cycles == 0:
+        if should_poll_settings(
+            cycle,
+            force_watchlist,
+            settings.watchlist_poll_cycles,
+            manager.state is ConnectionState.CONNECTED,
+        ):
             force_watchlist = False
             desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
             # Nastavení laditelná za běhu ze Settings UI (#438) — jedním dotazem.
@@ -2081,6 +2087,19 @@ async def main() -> None:
             # sám připojí znovu — už s novým hostem/portem/clientId. Pipeline
             # se musí postavit znovu, subskripce patřily starému spojení.
             if apply_connection_settings(settings, stored):
+                if cycle == 0:
+                    # Hodnota uložená ze Settings UI vyhrává nad `.env` — záměr
+                    # #446, ale uživatel, který právě přepsal `.env` a znovu
+                    # vytvořil kontejner, to jinak nepozná (#992: engine se
+                    # připojil na 4001 a o sekundu později skočil zpět na 7496)
+                    logger.warning(
+                        "Nastavení připojení ze Settings UI (DB) přebíjí .env — "
+                        "engine jde na %s:%d (clientId %d); chceš-li hodnotu "
+                        "z .env, změň ji i v Settings",
+                        settings.ibkr_host,
+                        settings.ibkr_port,
+                        settings.ibkr_client_id,
+                    )
                 logger.info(
                     "Změna připojení k IBKR — přepojuji na %s:%d",
                     settings.ibkr_host,

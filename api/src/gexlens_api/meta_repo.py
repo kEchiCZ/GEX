@@ -358,3 +358,8 @@ class MetaRepository:
             )
             if result.rowcount == 0:
                 conn.execute(insert(settings_table).values(key=key, value=value))
+            # Probudit engine hned (#992): bez NOTIFY četl nastavení až v k-tém
+            # cyklu (5 min), takže „po uložení se engine sám přepojí" platilo
+            # se zpožděním. Stejný kanál jako watchlist — orchestrátor po
+            # probuzení čte obojí jedním průchodem.
+            _notify_watchlist(conn, "")

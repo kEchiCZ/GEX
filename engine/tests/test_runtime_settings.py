@@ -11,6 +11,7 @@ from gexlens_engine.runtime_settings import (
     coerce_setting,
     pending_reconnects,
     seed_reconnects,
+    should_poll_settings,
 )
 
 
@@ -175,3 +176,15 @@ def test_seed_zapamatuje_i_chybejici_klic() -> None:
     seen: dict[str, object] = {}
     seed_reconnects({}, seen)
     assert seen == {"ibkr": None, "tasty": None}
+
+
+def test_bez_spojeni_se_nastaveni_cte_kazdy_cyklus() -> None:
+    """#992: oprava portu v Settings musí platit hned, ne až v k-tém cyklu."""
+    # Připojený engine: jen k-tý cyklus nebo NOTIFY
+    assert should_poll_settings(0, False, 5, connected=True) is True
+    assert should_poll_settings(3, False, 5, connected=True) is False
+    assert should_poll_settings(3, True, 5, connected=True) is True
+    assert should_poll_settings(5, False, 5, connected=True) is True
+    # Odpojený engine: každý cyklus, bez ohledu na čítač
+    for cycle in range(1, 5):
+        assert should_poll_settings(cycle, False, 5, connected=False) is True
