@@ -35,7 +35,7 @@ Technický popis architektury, provozu, konfigurace a vývoje aplikace GEXLens. 
 ┌──────────────▼─────────────────────────────────────────┐
 │ ENGINE (kontejner, python -m gexlens_engine)           │
 │  ConnectionManager · ChainDiscovery · Scheduler        │
-│  HotZoneCollector · ComputeEngine · Writers · Jobs     │
+│  ComputeEngine · Writers · Jobs · tasty (DXLink)       │
 └───────┬──────────────────────────┬─────────────────────┘
         │ Parquet (./data volume)  │ PostgreSQL (kontejner)
         │                          │
@@ -62,7 +62,7 @@ GEX/
 ├─ engine/                  Python 3.12 balík gexlens_engine
 │  └─ src/gexlens_engine/
 │     ├─ config.py          Pydantic Settings (.env, GEXLENS_*)
-│     ├─ ibkr/              connection, discovery, scheduler, hotzone,
+│     ├─ ibkr/              connection, discovery, scheduler,
 │     │                     underlying (bary+pacing), mock (pro testy)
 │     ├─ compute/           gex, levels, heatmap, walls, cumdelta, profile
 │     ├─ storage/           parquet_store, oi_archive, retention, meta
@@ -183,8 +183,6 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_ATM_SWEEP_WIDTH` | 30 | ATM ± N strikes každý cyklus |
 | `GEXLENS_REPAIR_MAX_ATTEMPTS` | 3 | Retry repair fronty za sweep |
 | `GEXLENS_MARKET_DATA_LINES` | 100 | Kapacita market data lines — **tvrdý strop účtu je 100** (změřeno #609; původní odhad „≥ 150" z ADR-0001 neplatil). `batch_size` nikdy nezvyšovat |
-| `GEXLENS_HOT_ZONE_WIDTH` | 15 | Cílová šířka hot zóny (degraduje dle účtu) |
-| `GEXLENS_TICK_BY_TICK_MAX_STREAMS` | 5 | Naměřený limit účtu (ADR-0001) |
 | `GEXLENS_DATABASE_URL` | postgres localhost | V compose směřuje na službu `postgres` |
 | `GEXLENS_DATA_DIR` | data | Kořen Parquet partic |
 | `GEXLENS_RETENTION_DAYS` | **90** | Purge okno (ADR-0022, odchylka od R3). Nemaže se: `oi_eod` ani žádná `bars/` partice |
@@ -230,7 +228,7 @@ Minutový cyklus (`runtime.EngineRuntime.run_cycle`):
 1. **Sweep** — `SubscriptionScheduler` projede řetězec v dávkách (ATM±30 každý cyklus, křídla každý 3.), nekompletní kontrakty přes repair frontu, výsledek do in-memory cache.
 2. **Snapshot** — cache → `SnapshotRow` (OI z ranního archivu) → atomický zápis Parquet.
 3. **Výpočty** — GEX per strike (naivní dealer model, vyměnitelná strategie) → levels (flip interpolovaně, walls, centroid) → zápis do `derived/levels`.
-4. **Cum Δ** — bar větev (ΔVol × midpoint test × Δ × M); hot zóna tick-by-tick přispívá průběžně. `close_minute` → `derived/flow`.
+4. **Cum Δ** — bar větev (ΔVol × midpoint test × Δ × M) pro celý řetěz; trade větev z dxFeed `TimeAndSale` pro ATM ±15 přijde s #615 fází 3 (ADR-0032 — IBKR hot zóna z původního návrhu se nikdy nenapojila, CumΔ do té doby je 100 % midpoint). `close_minute` → `derived/flow`.
 5. **Bary podkladu** — 5s reqRealTimeBars agregované na 1min → `derived/bars`.
 6. **Push do API** — `/internal/status` + kanály `levels.*`, `flow.*`, `price.*`.
 
@@ -394,7 +392,7 @@ Z [ADR-0001](../adr/0001-ibkr-account-limits.md) (měřeno živě na účtu):
 
 | Limit | Hodnota | Dopad |
 |---|---|---|
-| Tick-by-tick streamy | **5** | Hot zóna degraduje z ATM±15 na ~ATM±1; zbytek klasifikuje midpoint test. Rozšíření = IBKR Quote Booster. |
+| Tick-by-tick streamy | **5** | Bez použití od ADR-0032 (3. 9. 2026): klasifikaci agresora dodá dxFeed `TimeAndSale` bez limitu; IBKR tick-by-tick zóna zrušena. |
 | Market data lines | **100** | Naměřený strop účtu (sonda #609). Původní údaj „≥ 150" v ADR-0001 neplatí — dávka 80 jede blízko stropu (~95–100/100), **`batch_size` proto nezvyšovat**. Strukturální řešení přinese #616. |
 | **FOP OI** | **tick 588 nedodává nikdy; tick 101 funguje** | **VYŘEŠENO (issue #65, ADR-0001 v3):** `IbOIFetcher` používá generic tick 101 pro OPT i FOP a čte hodnotu podle strany kontraktu (opačná strana = validní 0.0). Retry à 30 min + volume fallback zůstávají jako pojistka. |
 

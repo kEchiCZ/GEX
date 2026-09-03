@@ -101,10 +101,12 @@ def test_annotations_crud(client: TestClient) -> None:
 def test_settings_roundtrip(client: TestClient) -> None:
     assert client.get("/settings").json() == {"settings": {}}
     client.put("/settings/theme", json={"value": "dark"})
-    client.put("/settings/hot_zone_width", json={"value": 15})
+    client.put("/settings/strike_range_points", json={"value": 200})
     client.put("/settings/theme", json={"value": "light"})  # upsert
 
-    assert client.get("/settings").json() == {"settings": {"theme": "light", "hot_zone_width": 15}}
+    assert client.get("/settings").json() == {
+        "settings": {"theme": "light", "strike_range_points": 200}
+    }
 
 
 # ── Provozní alerty (#949 varianta B) ──────────────────────────────

@@ -91,18 +91,18 @@ test('nastavení se uloží tlačítkem (PUT, bez restartu) a téma se aplikuje 
   renderApp()
 
   fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
-  const hotZone = await screen.findByLabelText('Šířka hot zóny (± strikes)')
-  fireEvent.change(hotZone, { target: { value: '9' } })
+  const batchSize = await screen.findByLabelText('Velikost dávky')
+  fireEvent.change(batchSize, { target: { value: '60' } })
   // Do #445 letěl PUT po každém stisku klávesy — rozepsaná hodnota tak stihla
   // dojet do enginu. Nově se odesílá až potvrzením.
   fireEvent.click(screen.getByRole('button', { name: 'Uložit' }))
 
   await waitFor(() => {
     const putCall = fetchMock.mock.calls.find(
-      ([url, init]) => init?.method === 'PUT' && String(url).endsWith('/settings/hot_zone_width'),
+      ([url, init]) => init?.method === 'PUT' && String(url).endsWith('/settings/batch_size'),
     )
     expect(putCall).toBeDefined()
-    expect(JSON.parse(String(putCall![1]!.body))).toEqual({ value: 9 })
+    expect(JSON.parse(String(putCall![1]!.body))).toEqual({ value: 60 })
   })
 
   // Téma: select přepne data-theme okamžitě (bez reloadu) a uloží se na server

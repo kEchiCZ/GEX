@@ -7,10 +7,15 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from gexlens_engine.compute.cumdelta import CumDeltaTracker, FlowRow, midpoint_sign
+from gexlens_engine.compute.cumdelta import (
+    ClassifiedTrade,
+    CumDeltaTracker,
+    FlowRow,
+    TradeSide,
+    midpoint_sign,
+)
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
-from gexlens_engine.ibkr.hotzone import ClassifiedTrade, TradeSide
 from gexlens_engine.storage.parquet_store import SnapshotWriter
 
 GOLDEN_PATH = Path(__file__).parent / "golden" / "cumdelta_basic.json"

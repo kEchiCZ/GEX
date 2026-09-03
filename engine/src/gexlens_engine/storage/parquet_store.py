@@ -1,7 +1,7 @@
 """Parquet SnapshotWriter (SPEC 5.1): denní partice snapshotů a ticků s atomickým zápisem.
 
 Partice: `snapshots/{symbol}/{expiry}/{YYYY-MM-DD}.parquet` (řádek = ts_min × strike × right)
-a `ticks/{symbol}/{YYYY-MM-DD}.parquet`. Každý zápis přepíše celou denní partici
+Každý zápis přepíše celou denní partici
 přes temp soubor + os.replace — po kill -9 nikdy nezůstane částečný soubor;
 maximálně zůstane osiřelý `.tmp`, který se při dalším zápisu uklidí.
 """
@@ -38,16 +38,6 @@ SNAPSHOT_SCHEMA = pa.schema(
         ("vega", pa.float64()),
         ("oi", pa.float64()),
         ("stale_age", pa.float64()),
-    ]
-)
-
-TICKS_SCHEMA = pa.schema(
-    [
-        ("ts", pa.timestamp("us", tz="UTC")),
-        ("conId", pa.int64()),
-        ("price", pa.float64()),
-        ("size", pa.float64()),
-        ("side", pa.string()),
     ]
 )
 
@@ -533,17 +523,6 @@ class GexFieldRow:
 
 
 @dataclass(frozen=True)
-class TickRecord:
-    """Jeden klasifikovaný trade hot zóny (SPEC 5.1: ts, conId, price, size, side)."""
-
-    ts: dt.datetime
-    con_id: int
-    price: float
-    size: float
-    side: str
-
-
-@dataclass(frozen=True)
 class TastyTradeRow:
     """Jeden surový TimeAndSale print z dxFeed (#795) — pole 1:1 se schématem."""
 
@@ -685,22 +664,6 @@ class SnapshotWriter:
         path = self._settings.trades_dir / symbol / f"{day.isoformat()}.parquet"
         buffer = self._buffer(path, TASTY_TRADES_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
-
-    def write_ticks(self, symbol: str, day: dt.date, ticks: Sequence[TickRecord]) -> Path:
-        """Přidá klasifikované trades do partice ticks/{sym}/{date}.parquet."""
-        path = self._settings.ticks_dir / symbol / f"{day.isoformat()}.parquet"
-        buffer = self._buffer(path, TICKS_SCHEMA)
-        rows = [
-            {
-                "ts": tick.ts,
-                "conId": tick.con_id,
-                "price": tick.price,
-                "size": tick.size,
-                "side": tick.side,
-            }
-            for tick in ticks
-        ]
-        return buffer.append_and_write(rows)
 
     def write_levels(
         self, symbol: str, expiry: str, day: dt.date, rows: Sequence[LevelsRow]

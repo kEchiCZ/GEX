@@ -1,25 +1,46 @@
 """Cum Δ — kumulativní delta flow s plnou klasifikací agresora (SPEC 4.5 + R2).
 
 Dvě větve:
-- **hot zóna (tick-by-tick)**: každý trade už nese Lee–Ready klasifikaci
-  z HotZoneCollectoru → flowΔ = sign · size · Δ(K,s) · M; trades bez
-  klasifikace (unknown) se nezapočítávají.
+- **trade větev**: každý trade nese stranu agresora → flowΔ = sign · size ·
+  Δ(K,s) · M; trades bez určené strany (unknown) se nezapočítávají. Zdrojem
+  je dxFeed `TimeAndSale` pro ATM±15 (ADR-0032, #615 fáze 3); IBKR
+  tick-by-tick zóna z původního návrhu SPEC 3.4 se nikdy nenapojila a byla
+  rozhodnutím 3. 9. 2026 nahrazena (#1006).
 - **zbytek řetězce (1min)**: ΔVol = přírůstek kumulativního volume za minutu,
   znaménko z midpoint testu posledního last vs. aktuální bid/ask
-  → flowΔ = sign · ΔVol · Δ(K,s) · M.
+  → flowΔ = sign · ΔVol · Δ(K,s) · M. Zároveň fallback pro provoz bez
+  tastytrade větve.
 
 Δ(K,s) se bere z posledního platného Greeks snapshotu kontraktu (dodává volající).
 CumΔ se resetuje na začátku obchodního dne (session start řídí engine).
 """
 
 import datetime as dt
+import enum
 import logging
 from dataclasses import dataclass
 
 from gexlens_engine.ibkr.discovery import OptionContractSpec
-from gexlens_engine.ibkr.hotzone import ClassifiedTrade, TradeSide
 
 logger = logging.getLogger(__name__)
+
+
+class TradeSide(enum.Enum):
+    BUY = "buy"
+    SELL = "sell"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class ClassifiedTrade:
+    """Trade s určenou stranou agresora (vstup trade větve CumΔ)."""
+
+    spec: OptionContractSpec
+    price: float
+    size: float
+    ts: float
+    side: TradeSide
+
 
 _TRADE_SIGN = {TradeSide.BUY: 1, TradeSide.SELL: -1, TradeSide.UNKNOWN: 0}
 

@@ -59,16 +59,7 @@ const ENGINE_FIELDS: NumberField[] = [
     min: 10,
     max: 100,
     restarts: true,
-    help: 'Kolik kontraktů se najednou přihlásí k odběru kotací. Nezvyšuj nad 100 — účet má ověřenou kapacitu ~150 souběžných market data lines (ADR-0001) a rezerva patří hot zóně a podkladu.',
-  },
-  {
-    key: 'hot_zone_width',
-    label: 'Šířka hot zóny (± strikes)',
-    fallback: 15,
-    min: 1,
-    max: 50,
-    restarts: true,
-    help: 'Kolik strikes kolem ATM se klasifikuje tick-by-tick (nejpřesnější čtení agresora). Účet zvládne jen 5 souběžných streamů, takže se zóna stejně ořízne od ATM ven — zbytek jede přes midpoint test.',
+    help: 'Kolik kontraktů se najednou přihlásí k odběru kotací. Nezvyšuj nad 100 — účet má ověřenou kapacitu ~150 souběžných market data lines (ADR-0001) a rezerva patří podkladu a sekundárnímu řetězu.',
   },
   {
     key: 'retention_days',
@@ -76,7 +67,7 @@ const ENGINE_FIELDS: NumberField[] = [
     fallback: 90,
     min: 1,
     max: 3650,
-    help: 'Po kolika dnech noční úklid maže dopočitatelné řady (ticks/). Snapshoty a odvozené řady se od ADR-0029 nemažou nikdy — jsou to učicí data samoučící smyčky (#794); OI archiv, setupy a signály jakbysmet.',
+    help: 'Po kolika dnech by noční úklid mazal dopočitatelné řady. Snapshoty a odvozené řady se od ADR-0029 nemažou nikdy — jsou to učicí data samoučící smyčky (#794); OI archiv, setupy a signály jakbysmet.',
   },
   {
     key: 'disk_limit_gb',

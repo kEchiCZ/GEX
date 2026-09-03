@@ -318,10 +318,6 @@ class Settings(BaseSettings):
     competing_session_threshold: int = Field(default=2, ge=1)
     competing_session_window_s: float = Field(default=120.0, gt=0)
 
-    # Hot zóna (SPEC 3.4; limit streamů naměřen v ADR-0001)
-    hot_zone_width: int = Field(default=15, ge=1)
-    tick_by_tick_max_streams: int = Field(default=5, ge=1)
-
     # Storage a retence (SPEC kap. 5)
     # PostgreSQL DSN (OI archiv, metadata); default odpovídá docker compose dev instanci
     database_url: str = "postgresql+psycopg://gexlens:gexlens@localhost:5432/gexlens"
@@ -431,10 +427,6 @@ class Settings(BaseSettings):
     @property
     def snapshots_dir(self) -> Path:
         return self.data_dir / "snapshots"
-
-    @property
-    def ticks_dir(self) -> Path:
-        return self.data_dir / "ticks"
 
     @property
     def derived_dir(self) -> Path:

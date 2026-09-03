@@ -59,11 +59,6 @@ RUNTIME_SETTINGS: tuple[RuntimeSetting, ...] = (
         integer=True,
         restarts_pipelines=True,
     ),
-    # Hot zóna se stejně ořízne na počet pokrytelný tick-by-tick streamy
-    # (ADR-0001: strop 5), širší hodnota jen rozšíří midpoint klasifikaci
-    RuntimeSetting(
-        key="hot_zone_width", minimum=1, maximum=50, integer=True, restarts_pipelines=True
-    ),
     # Retence i disk limit se čtou až nočním purge jobem — restart netřeba
     RuntimeSetting(key="retention_days", minimum=1, maximum=3650, integer=True),
     RuntimeSetting(key="disk_limit_gb", minimum=0.5, maximum=1000.0),
