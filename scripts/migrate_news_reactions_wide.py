@@ -213,7 +213,10 @@ def verify(conn: Connection, source: str = TABLE, target: str = TMP_TABLE) -> di
                 f"FROM {source} WHERE window_min = {window}"
             )
         ).one()
-        vol_expr = f"vol_z_{window}" if reaction_phase(window) == "min" else "NULL"
+        # denní okna vol_z nemají — CAST, jinak je sum(NULL) v PostgreSQL nejednoznačné
+        vol_expr = (
+            f"vol_z_{window}" if reaction_phase(window) == "min" else "CAST(NULL AS FLOAT)"
+        )
         new = conn.execute(
             text(
                 f"SELECT count(ret_{window}) AS n, sum(ret_{window}) AS ret, "
