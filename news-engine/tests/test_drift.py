@@ -9,10 +9,12 @@ from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.meta import meta_metadata
 from gexlens_engine.storage.sentiment import (
+    ReactionWindow,
     ensure_sentiment_schema,
     news_events,
     news_model_stats,
     news_reactions,
+    reaction_row_values,
 )
 from gexlens_engine.storage.setups_store import SetupsRepository, setups_table
 from gexlens_news.drift import RECENT_N, DriftJob, binomial_p_at_most
@@ -89,21 +91,20 @@ def seed_recent_reactions(engine: Engine, *, hits: int, total: int) -> None:
                     }
                 ],
             )
+            window = ReactionWindow(
+                window_min=5,
+                ret_bp=4.0 if hit else -4.0,
+                range_bp=6.0,
+                vol_z=None,
+                contaminated=False,
+                deferred=False,
+                gex_regime=None,
+                computed_at=NOW,
+            )
             conn.execute(
-                insert(news_reactions),
-                [
-                    {
-                        "event_id": event_id,
-                        "symbol": "ES",
-                        "window_min": 5,
-                        "ret_bp": 4.0 if hit else -4.0,
-                        "range_bp": 6.0,
-                        "vol_z": None,
-                        "contaminated": False,
-                        "deferred": False,
-                        "computed_at": NOW,
-                    }
-                ],
+                insert(news_reactions).values(
+                    event_id=event_id, symbol="ES", **reaction_row_values([window])
+                )
             )
 
 

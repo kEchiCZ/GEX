@@ -15,9 +15,11 @@ from gexlens_api.main import create_app
 from gexlens_api.meta_repo import MetaRepository
 from gexlens_engine.config import Settings
 from gexlens_engine.storage.sentiment import (
+    ReactionWindow,
     ensure_sentiment_schema,
     news_events,
     news_reactions,
+    reaction_row_values,
     sentiment_daily,
 )
 
@@ -105,6 +107,25 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         series_dir / "NQ" / f"{NOW.date().isoformat()}.parquet",
     )
     return TestClient(app, headers={"X-GEXLens-Token": INTERNAL_TOKEN})
+
+
+def wide_reaction(*windows: tuple[int, float, float, bool]) -> dict[str, object]:
+    """Sloupce širokého řádku `news_reactions` (#998) z oken (w, ret, range, cont)."""
+    return reaction_row_values(
+        [
+            ReactionWindow(
+                window_min=window_min,
+                ret_bp=ret_bp,
+                range_bp=range_bp,
+                vol_z=None,
+                contaminated=contaminated,
+                deferred=False,
+                gex_regime=None,
+                computed_at=NOW,
+            )
+            for window_min, ret_bp, range_bp, contaminated in windows
+        ]
+    )
 
 
 def test_news_feed_filters(client: TestClient) -> None:
@@ -293,33 +314,13 @@ def test_stats_newsvol_aggregates_daily(client: TestClient) -> None:
         conn.execute(
             insert(news_reactions),
             [
-                {
-                    "event_id": 1,
-                    "symbol": "ES",
-                    "window_min": 5,
-                    "ret_bp": 10.0,
-                    "range_bp": 12.0,
-                    "contaminated": False,
-                    "computed_at": NOW,
-                },
-                {
-                    "event_id": 2,
-                    "symbol": "ES",
-                    "window_min": 5,
-                    "ret_bp": -30.0,
-                    "range_bp": 35.0,
-                    "contaminated": False,
-                    "computed_at": NOW,
-                },
+                {"event_id": 1, "symbol": "ES", **wide_reaction((5, 10.0, 12.0, False))},
+                {"event_id": 2, "symbol": "ES", **wide_reaction((5, -30.0, 35.0, False))},
                 # Kontaminované okno nesmí do agregace (SPEC 5.1)
                 {
                     "event_id": int(third[0]),
                     "symbol": "ES",
-                    "window_min": 5,
-                    "ret_bp": 500.0,
-                    "range_bp": 500.0,
-                    "contaminated": True,
-                    "computed_at": NOW,
+                    **wide_reaction((5, 500.0, 500.0, True)),
                 },
             ],
         )
@@ -455,40 +456,18 @@ def test_news_feed_measured_reactions(tmp_path: Path, monkeypatch: pytest.Monkey
         ).inserted_primary_key
         assert inserted is not None
         event_id = int(inserted[0])
+        # Široký řádek (#998): ES má okna 5 a 15 v jednom řádku, NQ jen 5
         conn.execute(
-            insert(news_reactions),
-            [
-                {
-                    "event_id": event_id,
-                    "symbol": "ES",
-                    "window_min": 5,
-                    "ret_bp": -16.5,
-                    "range_bp": 20.0,
-                    "contaminated": False,
-                    "deferred": False,
-                    "computed_at": NOW,
-                },
-                {
-                    "event_id": event_id,
-                    "symbol": "ES",
-                    "window_min": 15,
-                    "ret_bp": -12.0,
-                    "range_bp": 25.0,
-                    "contaminated": True,
-                    "deferred": False,
-                    "computed_at": NOW,
-                },
-                {
-                    "event_id": event_id,
-                    "symbol": "NQ",
-                    "window_min": 5,
-                    "ret_bp": 99.0,
-                    "range_bp": 30.0,
-                    "contaminated": False,
-                    "deferred": False,
-                    "computed_at": NOW,
-                },
-            ],
+            insert(news_reactions).values(
+                event_id=event_id,
+                symbol="ES",
+                **wide_reaction((5, -16.5, 20.0, False), (15, -12.0, 25.0, True)),
+            )
+        )
+        conn.execute(
+            insert(news_reactions).values(
+                event_id=event_id, symbol="NQ", **wide_reaction((5, 99.0, 30.0, False))
+            )
         )
 
     api = TestClient(app)

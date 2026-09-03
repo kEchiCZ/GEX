@@ -3,14 +3,18 @@
 import datetime as dt
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, insert, select, text
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import (
+    LegacyNewsReactionsError,
+    ReactionWindow,
     ensure_sentiment_schema,
     news_events,
     news_model_stats,
     news_reactions,
+    reaction_row_values,
     sentiment_daily,
 )
 from gexlens_news.model_stats import BucketStats as ModelBucketStats
@@ -62,20 +66,39 @@ def make_db(tmp_path: Path) -> Engine:
     return engine
 
 
-def test_migration_recreates_model_stats_and_extends_reactions(tmp_path: Path) -> None:
+def test_migration_recreates_model_stats(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'old.sqlite'}")
     with engine.begin() as conn:
         conn.execute(text("CREATE TABLE news_model_stats (category TEXT, n INT)"))
-        conn.execute(text("CREATE TABLE news_reactions (event_id INT, ret_bp REAL)"))
-        conn.execute(text("INSERT INTO news_reactions VALUES (1, 5.0)"))
     ensure_sentiment_schema(engine)
     from sqlalchemy import inspect
 
     inspector = inspect(engine)
     assert "regime" in {c["name"] for c in inspector.get_columns("news_model_stats")}
-    assert "gex_regime" in {c["name"] for c in inspector.get_columns("news_reactions")}
+
+
+def test_legacy_reactions_shape_stops_startup(tmp_path: Path) -> None:
+    """#998: starý tvar (řádek per okno) se nemigruje za běhu — jasná chyba s návodem.
+
+    Naměřená data přežijí netknutá; proces nesmí do starého tvaru psát ani
+    vedle něj založit prázdnou širokou tabulku.
+    """
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'old.sqlite'}")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE news_reactions "
+                "(event_id INT, symbol TEXT, window_min INT, ret_bp REAL)"
+            )
+        )
+        conn.execute(text("INSERT INTO news_reactions VALUES (1, 'ES', 5, 5.0)"))
+    with pytest.raises(LegacyNewsReactionsError, match="migrate_news_reactions_wide"):
+        ensure_sentiment_schema(engine)
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    assert "window_min" in {c["name"] for c in inspector.get_columns("news_reactions")}
     with engine.connect() as conn:
-        # Naměřená data přežila (ADD COLUMN, ne drop)
         assert conn.execute(text("SELECT count(*) FROM news_reactions")).scalar() == 1
 
 
@@ -101,22 +124,20 @@ def seed_event_with_reaction(engine: Engine, event_id: int, *, gex_regime: str |
                 }
             ],
         )
+        window = ReactionWindow(
+            window_min=5,
+            ret_bp=6.0,
+            range_bp=8.0,
+            vol_z=None,
+            contaminated=False,
+            deferred=False,
+            gex_regime=gex_regime,
+            computed_at=NOW,
+        )
         conn.execute(
-            insert(news_reactions),
-            [
-                {
-                    "event_id": event_id,
-                    "symbol": "ES",
-                    "window_min": 5,
-                    "ret_bp": 6.0,
-                    "range_bp": 8.0,
-                    "vol_z": None,
-                    "contaminated": False,
-                    "deferred": False,
-                    "gex_regime": gex_regime,
-                    "computed_at": NOW,
-                }
-            ],
+            insert(news_reactions).values(
+                event_id=event_id, symbol="ES", **reaction_row_values([window])
+            )
         )
 
 

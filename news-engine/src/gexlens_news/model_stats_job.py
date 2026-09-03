@@ -18,6 +18,7 @@ from gexlens_engine.storage.sentiment import (
     news_model_stats,
     news_reactions,
     sentiment_daily,
+    unpivot_reaction,
 )
 from gexlens_news.model_stats import BucketStats, ReactionSample, aggregate_by_regime
 
@@ -57,32 +58,29 @@ class ModelStatsJob:
             news_events.c.surprise_z,
             news_events.c.sentiment_dir,
             news_events.c.ts_event,
-            news_reactions.c.symbol,
-            news_reactions.c.window_min,
-            news_reactions.c.ret_bp,
-            news_reactions.c.contaminated,
-            news_reactions.c.deferred,
-            news_reactions.c.gex_regime,
+            news_reactions,
         ).select_from(
             news_reactions.join(news_events, news_events.c.id == news_reactions.c.event_id)
         )
         with self._engine.connect() as conn:
-            rows = conn.execute(stmt).fetchall()
+            rows = conn.execute(stmt).mappings().fetchall()
+        # Široký řádek (#998) = až 8 vzorků (jeden per změřené okno)
         return [
             ReactionSample(
-                category=row.category,
-                importance=row.importance,
-                surprise_z=float(row.surprise_z) if row.surprise_z is not None else None,
-                sentiment_dir=row.sentiment_dir,
-                symbol=row.symbol,
-                window_min=int(row.window_min),
-                ret_bp=float(row.ret_bp),
-                contaminated=bool(row.contaminated),
-                deferred=bool(row.deferred),
-                state=state_by_date.get(row.ts_event.date()),
-                gex_regime=row.gex_regime,
+                category=row["category"],
+                importance=row["importance"],
+                surprise_z=float(row["surprise_z"]) if row["surprise_z"] is not None else None,
+                sentiment_dir=row["sentiment_dir"],
+                symbol=row["symbol"],
+                window_min=window.window_min,
+                ret_bp=window.ret_bp,
+                contaminated=window.contaminated,
+                deferred=window.deferred,
+                state=state_by_date.get(row["ts_event"].date()),
+                gex_regime=window.gex_regime,
             )
             for row in rows
+            for window in unpivot_reaction(row)
         ]
 
     def store(self, stats: list[tuple[str, BucketStats]], now: dt.datetime) -> None:

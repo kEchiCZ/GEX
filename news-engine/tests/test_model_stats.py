@@ -7,10 +7,12 @@ import pytest
 from sqlalchemy import create_engine, insert, select
 
 from gexlens_engine.storage.sentiment import (
+    ReactionWindow,
     ensure_sentiment_schema,
     news_events,
     news_model_stats,
     news_reactions,
+    reaction_row_values,
 )
 from gexlens_news.model_stats import (
     ReactionSample,
@@ -197,22 +199,23 @@ def test_job_recomputes_from_scratch(tmp_path: Path) -> None:
         ).inserted_primary_key
         assert key is not None
         event_id = int(key[0])
+        windows = [
+            ReactionWindow(
+                window_min=window,
+                ret_bp=10.0 * window,
+                range_bp=20.0,
+                vol_z=None,
+                contaminated=window == 60,  # nejdelší okno kontaminované
+                deferred=False,
+                gex_regime=None,
+                computed_at=NOW,
+            )
+            for window in (1, 5, 15, 60)
+        ]
         conn.execute(
-            insert(news_reactions),
-            [
-                {
-                    "event_id": event_id,
-                    "symbol": "ES",
-                    "window_min": window,
-                    "ret_bp": 10.0 * window,
-                    "range_bp": 20.0,
-                    "vol_z": None,
-                    "contaminated": window == 60,  # nejdelší okno kontaminované
-                    "deferred": False,
-                    "computed_at": NOW,
-                }
-                for window in (1, 5, 15, 60)
-            ],
+            insert(news_reactions).values(
+                event_id=event_id, symbol="ES", **reaction_row_values(windows)
+            )
         )
 
     job = ModelStatsJob(engine)

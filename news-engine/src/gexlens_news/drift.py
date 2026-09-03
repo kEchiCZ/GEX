@@ -24,7 +24,14 @@ from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
 from gexlens_engine.storage.meta import settings_table
-from gexlens_engine.storage.sentiment import news_events, news_model_stats, news_reactions
+from gexlens_engine.storage.sentiment import (
+    news_events,
+    news_model_stats,
+    news_reactions,
+    reaction_contaminated,
+    reaction_deferred,
+    reaction_ret,
+)
 from gexlens_engine.storage.setups_store import setups_table
 from gexlens_news.predictions import DEFAULT_PRIMARY_WINDOW_MIN
 from gexlens_news.signal_engine import GATE_MIN_SAMPLES, GATE_WILSON_LB
@@ -93,7 +100,7 @@ class DriftJob:
 
         stmt = (
             select(
-                news_reactions.c.ret_bp,
+                reaction_ret(self._window).label("ret_bp"),
                 news_events.c.sentiment_dir,
                 news_events.c.surprise_z,
             )
@@ -106,9 +113,9 @@ class DriftJob:
                 news_events.c.sentiment_dir.is_not(None),
                 news_events.c.sentiment_dir != 0,
                 news_reactions.c.symbol == bucket.symbol,
-                news_reactions.c.window_min == self._window,
-                news_reactions.c.contaminated.is_(False),
-                news_reactions.c.deferred == bucket.deferred,
+                reaction_ret(self._window).is_not(None),
+                reaction_contaminated(self._window).is_(False),
+                reaction_deferred(self._window) == bucket.deferred,
             )
             .order_by(news_events.c.ts_event.desc())
             .limit(RECENT_N * 3)  # rezerva na surprise filtr níže

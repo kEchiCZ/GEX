@@ -8,12 +8,14 @@ from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import (
+    ReactionWindow,
     ensure_sentiment_schema,
     news_classifications,
     news_events,
     news_ngram_shadow,
     news_predictions,
     news_reactions,
+    reaction_row_values,
 )
 from gexlens_news.ngram_job import MIN_EVAL, NgramShadowJob
 from gexlens_news.prediction_job import PredictionJob
@@ -80,21 +82,21 @@ def seed_rule_classification(engine: Engine, event_id: int) -> None:
 def seed_reaction(
     engine: Engine, event_id: int, ret_bp: float, *, symbol: str = "ES", window: int = 5
 ) -> None:
+    reaction = ReactionWindow(
+        window_min=window,
+        ret_bp=ret_bp,
+        range_bp=abs(ret_bp),
+        vol_z=None,
+        contaminated=False,
+        deferred=False,
+        gex_regime=None,
+        computed_at=NOW,
+    )
     with engine.begin() as conn:
         conn.execute(
-            insert(news_reactions),
-            [
-                {
-                    "event_id": event_id,
-                    "symbol": symbol,
-                    "window_min": window,
-                    "ret_bp": ret_bp,
-                    "range_bp": abs(ret_bp),
-                    "contaminated": False,
-                    "deferred": False,
-                    "computed_at": NOW,
-                }
-            ],
+            insert(news_reactions).values(
+                event_id=event_id, symbol=symbol, **reaction_row_values([reaction])
+            )
         )
 
 

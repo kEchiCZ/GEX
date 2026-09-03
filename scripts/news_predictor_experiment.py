@@ -44,6 +44,7 @@ for _sub in ("news-engine", "engine"):
     if _path.is_dir():
         sys.path.insert(0, str(_path))
 
+from gexlens_engine.storage.sentiment import reaction_phase  # noqa: E402
 from gexlens_news.ngram_model import (  # noqa: E402
     LogisticModel,
     combine,
@@ -63,22 +64,24 @@ MIN_TRAIN = 2000
 #: (data jsou řazená podle `ts_event`) a dá jich řádově deset.
 BLOCK = 500
 
-QUERY = text("""
+#: Široký řádek reakcí (#998): okno = dvojice sloupců `ret_<w>` / `cont_<w>`,
+#: proto se název sloupce dosazuje do textu dotazu (ne jako parametr)
+QUERY_TEMPLATE = """
     select e.id, e.ts_event, e.title, e.source, e.category, e.body, e.symbols,
            (e.ts_ingested - e.ts_event > interval '1 day') as is_backfill,
-           r.ret_bp,
+           r.ret_{window} as ret_bp,
            (select c.direction from news_classifications c
              where c.event_id = e.id and c.source = 'rule'
              order by c.version desc limit 1) as rule_direction
     from news_reactions r
     join news_events e on e.id = r.event_id
     where r.symbol = :symbol
-      and r.window_min = :window
-      and not r.contaminated
+      and r.ret_{window} is not null
+      and not r.cont_{window}
       and e.title is not null
       and e.kind <> 'scheduled'
     order by e.ts_event
-""")
+"""
 
 #: Indexová ETF — zpráva, jejíž `symbols` obsahuje aspoň jedno, NENÍ company
 #: news, i když vedle stojí jednotlivé tickery (#749 bod 5)
@@ -111,9 +114,12 @@ def load(symbol: str, window: int) -> list[Sample]:
     url = os.environ.get("GEXLENS_NEWS_DATABASE_URL") or os.environ.get("GEXLENS_DATABASE_URL")
     if not url:
         raise SystemExit("Chybí GEXLENS_DATABASE_URL ani GEXLENS_NEWS_DATABASE_URL")
+    reaction_phase(window)  # neznámé okno = chyba volajícího, ne tichý prázdný výsledek
     engine = create_engine(url)
     with engine.connect() as conn:
-        rows = conn.execute(QUERY, {"symbol": symbol, "window": window}).fetchall()
+        rows = conn.execute(
+            text(QUERY_TEMPLATE.format(window=window)), {"symbol": symbol}
+        ).fetchall()
     return [
         Sample(
             ts=row.ts_event,
