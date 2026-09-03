@@ -10,7 +10,7 @@
 | # | Rozhodnutí |
 |---|---|
 | R1 | Žádná MVP zjednodušení — všechny moduly ve finální podobě |
-| R2 | Cum Δ s **plnou klasifikací agresora**: tick-by-tick pro hot zónu (ATM ±15 strikes), Lee–Ready midpoint test pro zbytek řetězce |
+| R2 | Cum Δ s **plnou klasifikací agresora**: strana agresora od burzy (dxFeed `TimeAndSale`) pro ATM ±15 strikes, midpoint test pro zbytek řetězce a jako fallback bez tastytrade — *revize ADR-0032 (3. 9. 2026), původně IBKR tick-by-tick hot zóna* |
 | R3 | Retence intraday dat a tick dat: **14 dní** (denní Parquet partice, noční purge job) — *okno prodlouženo na 90 dní, viz ADR-0022* |
 | R4 | **Výjimka: EOD snapshot Open Interest se archivuje bez časového limitu** (řádově KB/den, nenahraditelná data) |
 | R5 | Datový zdroj výhradně IBKR (účet existuje); žádné placené externí feedy — *rozšířeno na brokerské účty s daty zdarma, primární zdroj zůstává IBKR, viz ADR-0025* |
@@ -44,7 +44,7 @@ Primární instrument: ES (E-mini S&P 500) futures opce, všechny weekly/EOM exp
 │  • ConnectionManager (watchdog, reconnect, backoff)    │
 │  • ChainDiscovery (řetězce, trading classes, expirace) │
 │  • SubscriptionScheduler (rotace dávek, repair queue)  │
-│  • HotZoneCollector (tick-by-tick ATM±15)              │
+│  • DxTradeClassifier (TimeAndSale ATM±15, ADR-0032)    │
 │  • SnapshotWriter (1min konsolidace → Parquet)         │
 │  • OIArchiver (EOD, PostgreSQL, bez retence)           │
 │  • ComputeEngine (GEX, levels, walls, profily, CumΔ)   │
@@ -86,11 +86,12 @@ Engine a API server běží jako dva procesy (nebo jeden proces se dvěma asynci
 - Priorita: ATM ± 30 strikes se sweepují každý cyklus, křídla každý k-tý cyklus (konfig.). Cíl: kompletní sweep řetězce ≤ 90 s.
 - Vytížení lines zobrazováno ve stavové liště (`Greeks NN %`).
 
-### 3.4 Hot zóna — tick-by-tick (R2)
-- Dynamická množina: ATM ±15 strikes × C/P (≈ 60 kontraktů), přepočítávaná při pohybu spotu o ≥ 1 strike krok.
-- Pro každý kontrakt hot zóny: `reqTickByTickData("AllLast")` + průběžné bid/ask (z reqMktData streamu hot zóny, který je trvalý — hot zóna se nerotuje).
-- Pozn.: souběžné tick-by-tick streamy jsou limitované účtem — engine musí limit detekovat (error 10190 apod.), degradovat šířku hot zóny a stav reportovat do UI. Skutečný limit ověřit na účtu (issue).
-- Každý trade klasifikován ihned při příjmu: **Lee–Ready** — cena ≥ ask → buy, ≤ bid → sell, jinak vs. mid; přesně na midu tick test (směr poslední změny ceny).
+### 3.4 Klasifikace agresora per trade — dxFeed TimeAndSale (R2, ADR-0032)
+- Zóna: ATM ±15 strikes × C/P, přepočítávaná při pohybu spotu o ≥ 1 strike krok; přesun kontraktu mezi zónami jen na hranici snapshotu (ADR-0025 pravidlo 3).
+- Zdroj: dxFeed `TimeAndSale` přes tastytrade DXLink (ADR-0025/0027) — každý outright trade nese `aggressorSide` **od burzy** (CME tag 5797), `size`, `price`; bez limitu počtu streamů, pokrytí strany 99,95 % (měřeno #615).
+- Trade bez určené strany → midpoint fallback pro danou minutu; kontrakty mimo ±15 a celý řetěz při výpadku tastytrade větve → midpoint test (4.5).
+- Nohy spreadů v `TimeAndSale` nejsou: CME pro legy spread tradů nevysílá Trade Summary, jen objem. CumΔ z trade větve je tedy čistě outright agrese; strukturovaný objem se měří zvlášť (#1007).
+- Původní návrh (IBKR `reqTickByTickData` hot zóna, limit 5 streamů dle ADR-0001) se nikdy nenapojil a byl 3. 9. 2026 nahrazen — ADR-0032.
 
 ### 3.5 Open Interest
 - FOP: generic tick `588` (futures OI, tickType 86); akciové opce: generic tick `101` (tickTypes 27/28). Chování 588 na FOP ověřit na účtu (issue) — fallback EOD hodnota z burzy přes reqMktData snapshot ráno.
@@ -148,8 +149,8 @@ Per snapshot t, strike K (vol = kumulativní denní volume do času t; ΔVol = p
 
 ### 4.5 Cum Δ — plná klasifikace agresora (R2)
 ```
-Hot zóna (tick-by-tick):
-  za každý trade: sign = LeeReady(price, bid, ask, tickTest)
+ATM ±15 (dxFeed TimeAndSale, ADR-0032):
+  za každý trade: sign = aggressorSide (BUY → +1, SELL → −1, jinak midpoint fallback)
   flowΔ += sign · size · Δ(K,s) · M
 
 Zbytek řetězce (1min):
@@ -173,7 +174,7 @@ Skládané pruhy: složka Vol a složka OI Δ vizuálně odlišené odstínem; d
 
 ### 5.1 Parquet snapshoty
 - Partice `data/snapshots/{symbol}/{expiry}/{YYYY-MM-DD}.parquet`, řádek = (ts_min, strike, right) se sloupci: bid, ask, last, volume, iv, delta, gamma, theta, vega, oi, stale_age.
-- Tick data hot zóny: `data/ticks/{symbol}/{YYYY-MM-DD}.parquet` (ts, conId, price, size, side).
+- Trade printy z dxFeed: `data/tasty_trades/{symbol}/{YYYY-MM-DD}.parquet` (ts, streamer_symbol, price, size, aggressor, spread_leg, eth) — #795; původní `data/ticks/` z IBKR hot zóny zrušeno (ADR-0032).
 - Odvozené řady (levels, walls, CumΔ, flowΔ): `data/derived/…` — počítané při zápisu, replay je nečte znovu z raw dat.
 
 ### 5.2 Retence (R3, R4)
@@ -225,7 +226,7 @@ Nástroje šipka / linie / freehand, výběr barvy, mazání; persistence per in
 ### 7.5 Ostatní obrazovky
 - **Dashboard:** karty watchlistu (cena, %, mini NetGEX profil, vzdálenost k walls, stav dat).
 - **IBKR Console:** log API událostí a chyb, správa připojení (host/port/clientId, reconnect tlačítko), přehled subskripcí a repair fronty.
-- **Settings:** IBKR parametry, rozsah strikes, velikost dávky, šířka hot zóny, retence/disk limit, výchozí módy vizualizace, seznam seancí + časová zóna, definice alertů, téma Dark/Light, jazyk (CZ/EN).
+- **Settings:** IBKR parametry, rozsah strikes, velikost dávky, retence/disk limit, výchozí módy vizualizace, seznam seancí + časová zóna, definice alertů, téma Dark/Light, jazyk (CZ/EN).
 - **Notifikace/News:** alert engine (cena × flip/wall cross, změna dominantního striku, skok CumΔ o konfigurovatelný práh, výpadek spojení, disk limit); news headline feed (zdroj: IBKR news subscription, je-li na účtu — jinak modul skrytý).
 
 ---
@@ -235,7 +236,7 @@ Nástroje šipka / linie / freehand, výběr barvy, mazání; persistence per in
 | Oblast | Požadavek |
 |---|---|
 | Latence | Změna módu/škály < 100 ms (data v paměti klienta); live tick < 250 ms end-to-end |
-| Sweep | Kompletní řetězec ≤ 90 s; hot zóna real-time |
+| Sweep | Kompletní řetězec ≤ 90 s; trade printy ATM ±15 real-time (dxFeed) |
 | Integrita | Každá buňka heatmapy nese stáří dat; stale > 5 min vizuálně odlišeno |
 | Odolnost | Reconnect bez ztráty intraday dat; pacing chyby nikdy neshodí engine |
 | Objem | ~30–60 MB/den; 14denní okno < 1 GB; OI archiv růst ~KB/den |
@@ -247,7 +248,7 @@ Nástroje šipka / linie / freehand, výběr barvy, mazání; persistence per in
 
 ## 9. Fáze dodávky (milestones)
 
-1. **M1 Datová vrstva** — připojení, discovery, scheduler+repair, hot zóna, OI archiv, storage+retence. Výstup: data tečou a ukládají se, CLI status.
+1. **M1 Datová vrstva** — připojení, discovery, scheduler+repair, OI archiv, storage+retence (hot zóna z původního plánu nahrazena dxFeed — ADR-0032). Výstup: data tečou a ukládají se, CLI status.
 2. **M2 Výpočty** — GEX, levels, walls, metriky, CumΔ s klasifikací, profily. Výstup: testovaný ComputeEngine + golden testy.
 3. **M3 API** — REST+WS, replay endpoint.
 4. **M4 Frontend** — layout, heatmapa, profil, panely, playback, sessions.
@@ -256,5 +257,5 @@ Nástroje šipka / linie / freehand, výběr barvy, mazání; persistence per in
 ## 10. Otevřené technické ověřovací body (řešené jako první issues)
 1. Skutečné tradingClass ES weeklies z `reqSecDefOptParams`.
 2. Chování generic ticku 588 (OI) na FOP na Romanově účtu.
-3. Limit souběžných tick-by-tick streamů na účtu (šířka hot zóny).
+3. Limit souběžných tick-by-tick streamů na účtu — změřeno 5 (ADR-0001); po ADR-0032 bez použití.
 4. Limit market data lines na účtu (velikost dávky).

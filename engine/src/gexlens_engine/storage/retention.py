@@ -1,6 +1,6 @@
 """RetentionJob (SPEC 5.2 + R3/R4): noční purge Parquet partic starších retention_days.
 
-Maže výhradně denní partice pod `snapshots/`, `ticks/` a `derived/` — k databázi
+Maže výhradně denní partice pod `snapshots/` a `derived/` — k databázi
 (oi_eod, R4) job vůbec nemá přístup, takže ji z principu nemůže poškodit.
 Součástí je monitoring obsazení disku s hard limitem (alert pro UI/notifikace).
 
@@ -58,7 +58,6 @@ class RetentionJob:
         kept = 0
         for root in (
             self._settings.snapshots_dir,
-            self._settings.ticks_dir,
             self._settings.derived_dir,
         ):
             if not root.exists():
@@ -135,7 +134,6 @@ class RetentionJob:
         """Po purge uklidí prázdné adresáře partic (symbol/expirace bez dat)."""
         for root in (
             self._settings.snapshots_dir,
-            self._settings.ticks_dir,
             self._settings.derived_dir,
         ):
             if not root.exists():

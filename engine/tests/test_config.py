@@ -21,11 +21,9 @@ def test_defaults() -> None:
     assert s.ibkr_port == 7496
     assert s.market_data_type == 1
     assert s.batch_size == 80
-    assert s.hot_zone_width == 15
     assert s.retention_days == 90  # ADR-0022 (odchylka od R3)
     assert s.bars_backfill_days == 14  # backfill zůstává nezávislý na retenci
     assert s.snapshots_dir == s.data_dir / "snapshots"
-    assert s.ticks_dir == s.data_dir / "ticks"
     assert s.derived_dir == s.data_dir / "derived"
 
 

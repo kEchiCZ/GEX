@@ -44,20 +44,16 @@ def test_purge_deletes_15_days_keeps_13_days(tmp_path: Path) -> None:
     settings = mechanics_settings(tmp_path)
     old_snap = make_partition(settings.snapshots_dir, "ES", "20260716", day=DAY_15_OLD)
     new_snap = make_partition(settings.snapshots_dir, "ES", "20260716", day=DAY_13_OLD)
-    old_ticks = make_partition(settings.ticks_dir, "ES", day=DAY_15_OLD)
-    new_ticks = make_partition(settings.ticks_dir, "ES", day=DAY_13_OLD)
     old_derived = make_partition(settings.derived_dir, "ES", "20260716", day=DAY_15_OLD)
 
     report = RetentionJob(settings).purge(TODAY)
 
     # AC: partice 15 dní stará smazána, 13 dní ponechána
     assert not old_snap.exists()
-    assert not old_ticks.exists()
     assert not old_derived.exists()
     assert new_snap.exists()
-    assert new_ticks.exists()
-    assert set(report.deleted) == {old_snap, old_ticks, old_derived}
-    assert report.kept_files == 2
+    assert set(report.deleted) == {old_snap, old_derived}
+    assert report.kept_files == 1
 
 
 def test_boundary_day_exactly_retention_is_kept(tmp_path: Path) -> None:
@@ -182,7 +178,7 @@ def test_bars_exemption_can_be_turned_off(tmp_path: Path) -> None:
 
 
 def test_learning_data_survive_retention_by_default(tmp_path: Path) -> None:
-    """Default konfigurace: snapshots/ a derived/ se nemažou, ticks/ ano.
+    """Default konfigurace: snapshots/ a derived/ se nemažou — purge nemá co mazat.
 
     Nenahraditelná data pro samoučící smyčku (#794) — replay MinuteInputs
     stojí na snapshots + derived a IBKR historii řetězce zpětně nedá.
@@ -192,14 +188,12 @@ def test_learning_data_survive_retention_by_default(tmp_path: Path) -> None:
         settings.snapshots_dir, "ES", "20260716", day=TODAY - dt.timedelta(days=400)
     )
     old_levels = make_partition(settings.derived_dir, "ES", "20260716", "levels", day=DAY_15_OLD)
-    old_ticks = make_partition(settings.ticks_dir, "ES", day=DAY_15_OLD)
 
     report = RetentionJob(settings).purge(TODAY)
 
     assert ancient_snap.exists()
     assert old_levels.exists()
-    assert not old_ticks.exists()  # dopočitatelné řady se mažou dál
-    assert set(report.deleted) == {old_ticks}
+    assert report.deleted == ()  # od #1006 není žádná dopočitatelná řada k mazání
     assert report.kept_files == 2
 
 

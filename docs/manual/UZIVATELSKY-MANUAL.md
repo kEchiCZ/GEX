@@ -437,7 +437,7 @@ Panely se **sdílenou časovou osou** s heatmapou. Každý zvlášť vypneš che
 | **Vol** | Minutový objem podkladu (futures) — šedé sloupce |
 | **Opt Vol** | Minutový objem opcí, **barevně call (teal) / put (červená)** vedle sebe |
 | **Δ Flow C/P** | Delta-vážený opční tok zvlášť za call a put stranu (\|Δ\| × přírůstek volume). Z něj čteš, **na které straně se právě obchoduje** — např. „uzavírání callů" = call sloupce slábnou. Default vypnutý (checkbox Δ Flow C/P). |
-| **Cum Δ** | Kumulativní delta flow jako plocha **nad nulou (zelená) / pod nulou (červená)**. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Počítá se s plnou klasifikací agresora (tick-by-tick v hot zóně, midpoint test jinde) a resetuje se na začátku dne. |
+| **Cum Δ** | Kumulativní delta flow jako plocha **nad nulou (zelená) / pod nulou (červená)**. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Znaménko dnes dává minutový midpoint test (poslední cena vs. střed bid/ask) pro celý řetěz; přesnější strana agresora od burzy z dxFeed pro ATM ±15 přijde s #615 (v1.14 — ADR-0032). Resetuje se na začátku obchodního dne. |
 | **Evo OI** | Vývoj celkového Open Interest v čase, zvlášť call (teal) a put (červená), **schodovité kreslení**. V Daily ose = hodnota na konci každého dne. Default vypnutý (checkbox Evo OI). Podrobně níže. |
 | **Sentiment** | SentIndex z news-engine (zapíná checkbox **News**): intraday spojitá řada kolem nuly (kladná = risk-on tón zpráv, záporná = risk-off), v **Daily** pohledu OHLC svíčka indexu za každý den (open nese overnight zbytek). V replay staršího dne panel od v1.13 ukazuje řadu **zobrazeného dne** a při přetáčení drží osu s ostatními panely (dřív bral dnešní řadu a při přetáčení se posouval doleva, #976). |
 
@@ -962,7 +962,7 @@ které se přepne hned.
 | Sekce | Položky |
 |---|---|
 | **IBKR** | Host, port (7496 live / 7497 paper; IB Gateway 4001 / 4002), client ID. Změna po Uložit platí **hned** — engine se přepojí do sekund i ve chvíli, kdy spojení nemá a teprve ho hledá (v1.13, #992; dřív až do 5 min). Hodnota uložená tady **přebíjí `.env`** — kdo mění port v `.env`, musí ho změnit i tady (viz ADMIN-MANUAL) |
-| **Engine (IBKR pipeline)** | **Rozsah strikes (± body od spotu)** — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB) |
+| **Engine (IBKR pipeline)** | **Rozsah strikes (± body od spotu)** — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, retence dat (dny), disk limit (GB). *Šířka hot zóny* zmizela (v1.14, #1006) — přepínač nic neřídil |
 | **Stav enginu** | Read-only stav: spojení + port (při výpadku IBKR i **„bez spojení X min"**, #770), účet (paper), **Zdroj dat** (v1.13, #950: `řetěz ibkr · spot ibkr`, při fallbacku upozornění, že běží tastytrade), tlačítko **Přepojit IBKR** (níže), Greeks X/Y + repair fronta, OI řetězu, lines %, **chyby subskripce** (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance" a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console) |
 | **Tastytrade** (v1.10) | Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, tlačítko **Přepojit tastytrade** (v1.13), trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží |
 | **Alerty** | **Hlásit chyby subskripce market dat** — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert *Chyba subskripce* v kap. 14) |
@@ -970,10 +970,9 @@ které se přepne hned.
 | **Vzhled** | Téma **Dark/Light** (přepne se ihned), jazyk |
 | **Seance** | Historické pole (JSON) — markery seancí se nově generují **automaticky** z časů světových burz; checkbox Sessions v grafu |
 
-> **Sekce Engine se týká výhradně IBKR.** Velikost dávky i šířka hot zóny
-> jsou odvozené od limitů tvého IBKR účtu (100 market data lines, 5
-> tick-by-tick streamů — ADR-0001), rozsah strikes řídí rotační sweep přes
-> IBKR. **Tastytrade** je od v1.9 plnohodnotná záloha (cena podkladu i celý
+> **Sekce Engine se týká výhradně IBKR.** Velikost dávky je odvozená od
+> limitu tvého IBKR účtu (100 market data lines — ADR-0001), rozsah strikes
+> řídí rotační sweep přes IBKR. **Tastytrade** je od v1.9 plnohodnotná záloha (cena podkladu i celý
 > řetěz při výpadku IBKR, doplňování OI) — její stav ukazuje read-only blok
 > výše; konfigurace (OAuth tajemství) zůstává v `.env` a vyžaduje restart
 > enginu (viz ADMIN-MANUAL).
@@ -1389,7 +1388,7 @@ podkladu**, ne absolutní čísla.
 | **$/bod vs. $/1 %** | Jednotka Dyn ploch a GEX křivky. $/bod = surové pole (gamma expozice na 1 bod pohybu). $/1 % = totéž vážené P²/100 — kolik dolarů dealeři přeobchodují při 1% pohybu; srovnatelné napříč cenovými hladinami, proto výchozí. Zdi, levels ani flip přepínač nemění. |
 | **Δ Flow C/P** | Delta-vážený opční tok zvlášť za call/put stranu — na které straně se právě obchoduje. |
 | **Cum Δ** | Kumulativní delta flow — součet (směr obchodu × velikost × delta × multiplikátor) přes den. |
-| **Hot zóna** | Pásmo ATM strikes sledované tick-by-tick pro přesnou klasifikaci agresora. |
+| **Hot zóna** | Historický termín z původního návrhu (IBKR tick-by-tick pásmo ATM ±15) — nikdy nebyl v provozu a od v1.14 je nahrazen: stranu agresora pro ATM ±15 dodá dxFeed `TimeAndSale` (#615, ADR-0032). V textech o řetězu snapshotů znamená „hot zóna“ jen pásmo ATM ±15 strikes, které se sbírá každý cyklus. |
 | **Stale** | Data starší než 5 minut — vizuálně odlišená. |
 | **VEX** (Vega Exposure) | vega × OI per strana — kolik $ přecenění drží dealeři na striku při změně IV o 1 bod. „Volatility walls" před událostmi. |
 | **Charm** | Citlivost delty na čas — zajišťovací toky, které vznikají jen plynutím času k settle. |

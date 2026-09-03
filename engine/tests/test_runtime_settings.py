@@ -44,7 +44,7 @@ def test_batch_size_cannot_exceed_market_data_lines() -> None:
 
 def test_integer_settings_are_rounded() -> None:
     assert coerce_setting(14.6, spec_for("retention_days"), base_settings()) == 15
-    assert isinstance(coerce_setting("30", spec_for("hot_zone_width"), base_settings()), int)
+    assert isinstance(coerce_setting("30", spec_for("batch_size"), base_settings()), int)
 
 
 def test_unusable_values_are_rejected() -> None:
@@ -89,8 +89,8 @@ def test_unchanged_and_missing_values_do_nothing() -> None:
 def test_out_of_range_value_is_clamped_not_ignored() -> None:
     """UI hodnotu neomezuje tvrdě — engine ji musí srovnat, ne zahodit."""
     settings = base_settings()
-    apply_runtime_settings(settings, {"hot_zone_width": 999})
-    assert settings.hot_zone_width == 50
+    apply_runtime_settings(settings, {"retention_days": 99999})
+    assert settings.retention_days == 3650
 
 
 # ── Parametry spojení (#446) ──────────────────────────────────────────
