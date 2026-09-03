@@ -389,7 +389,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {
             "symbol": symbol,
             "date": date.isoformat(),
-            "bars": _records(repository.session_frame(lambda d: repository.bars(symbol, d), date)),
+            "bars": _records(repository.bars_session(symbol, date)),
         }
 
     @app.get("/oidelta/{symbol}/{expiry}")
@@ -986,7 +986,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 lambda: repository.gexfield(symbol, expiry, date, subdir="gexfieldfa"),
             ),
             ("flow", lambda: session(lambda d: repository.flow(symbol, d), date)),
-            ("bars", lambda: session(lambda d: repository.bars(symbol, d), date)),
+            ("bars", lambda: repository.bars_session(symbol, date)),
         ]
         for key, reader in readers:
             try:
@@ -1139,7 +1139,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 def _spot_series(repository: DataRepository, symbol: str, day: dt.date) -> pd.Series | None:
     try:
-        bars = repository.session_frame(lambda d: repository.bars(symbol, d), day)
+        bars = repository.bars_session(symbol, day)
     except PartitionNotFoundError:
         return None
     return bars.set_index("ts_min")["close"]
@@ -1193,7 +1193,7 @@ def _underlying_vol_series(
     repository: DataRepository, symbol: str, day: dt.date
 ) -> list[dict[str, object]]:
     try:
-        bars = repository.session_frame(lambda d: repository.bars(symbol, d), day)
+        bars = repository.bars_session(symbol, day)
     except PartitionNotFoundError:
         return []
     return [

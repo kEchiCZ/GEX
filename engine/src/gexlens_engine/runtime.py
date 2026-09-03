@@ -978,12 +978,14 @@ class EngineRuntime:
         await asyncio.to_thread(self.writer.write_flow, self.symbol, day, [flow_row])
 
         if bars:
-            await asyncio.to_thread(self.writer.write_bars, self.symbol, day, bars)
+            # Podle dne baru, ne cyklu (#1002): bar 23:59 finalizuje cyklus 00:00
+            # a pod `day` by skončil v partici D+1 vedle provizorní kopie v D
+            await asyncio.to_thread(self.writer.write_bars_by_day, self.symbol, bars)
         # Provizorní bar rozdělané minuty (ADR-0005) — zapisuje se až po finálních,
         # aby ho jejich upsert nepřepsal; patří-li jiné minutě, ignoruje se.
         provisional = forming_bar if forming_bar is not None and forming_bar.ts == ts_min else None
         if provisional is not None:
-            await asyncio.to_thread(self.writer.write_bars, self.symbol, day, [provisional])
+            await asyncio.to_thread(self.writer.write_bars_by_day, self.symbol, [provisional])
 
         # 5) Push do API: stav pipeline + live kanály
         if self.push_status:

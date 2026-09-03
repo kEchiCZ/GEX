@@ -9,7 +9,7 @@ maximálně zůstane osiřelý `.tmp`, který se při dalším zápisu uklidí.
 import datetime as dt
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
@@ -143,6 +143,18 @@ BARS_SCHEMA = pa.schema(
 BAR_SOURCE_RECONSTRUCTED = "tasty_candle"
 #: Živá cesta; NULL v starších particích znamená totéž
 BAR_SOURCE_LIVE = "ibkr"
+
+
+def bar_partition_day(ts: dt.datetime) -> dt.date:
+    """UTC den partice, do které bar s časem `ts` patří (#1002).
+
+    Jediné místo, kde se pravidlo „partice = UTC den baru" vyslovuje; runtime,
+    rekonstrukce i čistící skript ho sdílejí.
+    """
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=dt.UTC)
+    return ts.astimezone(dt.UTC).date()
+
 
 # Řada flowΔ/CumΔ (SPEC 4.5/5.1: derived/)
 FLOW_SCHEMA = pa.schema(
@@ -933,6 +945,32 @@ class SnapshotWriter:
             return set()
         column = pq.read_table(path, columns=["ts_min"]).column("ts_min").to_pylist()
         return {ts.replace(tzinfo=dt.UTC) if ts.tzinfo is None else ts for ts in column if ts}
+
+    def write_bars_by_day(self, symbol: str, bars: Sequence[BarLike]) -> list[Path]:
+        """Zapíše bary do partic podle UTC dne **jejich** `ts`, ne podle dne cyklu (#1002).
+
+        Partice barů = UTC kalendářní den. Půlnoční cyklus 00:00 finalizuje bar
+        23:59 dne D — zapsaný pod dnem cyklu skončil v partici D+1 a zdvojil se
+        (provizorní verze zůstala v D). Totéž dělala rekonstrukce #617 s celým
+        blokem 22:00–23:59 dne D−1 zapsaným pod datem seance. Kdo čte partice
+        za sebou (news-engine, sešívání seance v API), dostal objem dvakrát.
+        """
+        by_day: dict[dt.date, list[BarLike]] = {}
+        for bar in bars:
+            by_day.setdefault(bar_partition_day(bar.ts), []).append(bar)
+        return [self.write_bars(symbol, day, group) for day, group in sorted(by_day.items())]
+
+    def bar_minutes_for_days(self, symbol: str, days: Iterable[dt.date]) -> set[dt.datetime]:
+        """Sjednocení `bar_minutes` přes všechny partice, do kterých okno zasahuje (#1002).
+
+        Seance začíná 22:00 UTC předchozího dne, takže její minuty leží ve dvou
+        particích; kontrola jen proti partici dne seance hlásila večerní blok
+        jako chybějící a rekonstrukce ho doplnila podruhé.
+        """
+        minutes: set[dt.datetime] = set()
+        for day in days:
+            minutes |= self.bar_minutes(symbol, day)
+        return minutes
 
     def write_dx_flow(self, symbol: str, day: dt.date, rows: Sequence[object]) -> Path:
         """Stínové CumΔ minuty (#615) do derived/{sym}/cumdelta_dx/{date}.parquet.

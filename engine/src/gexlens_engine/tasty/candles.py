@@ -29,7 +29,7 @@ from dataclasses import dataclass
 
 import websockets
 
-from gexlens_engine.storage.parquet_store import BAR_SOURCE_RECONSTRUCTED
+from gexlens_engine.storage.parquet_store import BAR_SOURCE_RECONSTRUCTED, bar_partition_day
 from gexlens_engine.tasty.dxlink import (
     KEEPALIVE_INTERVAL_S,
     PING_TIMEOUT_S,
@@ -71,6 +71,17 @@ class CandleRange:
     streamer_symbol: str
     since: dt.datetime
     until: dt.datetime
+
+
+def partition_days(since: dt.datetime, until: dt.datetime) -> list[dt.date]:
+    """UTC dny partic, do kterých okno [since, until] zasahuje (#1002).
+
+    Okno rekonstrukce kopíruje seanci (od 22:00 UTC D−1), takže typicky vrací
+    dva dny; kontrola existujících minut musí projít oba.
+    """
+    first = bar_partition_day(since)
+    last = bar_partition_day(until)
+    return [first + dt.timedelta(days=offset) for offset in range((last - first).days + 1)]
 
 
 def missing_minutes(

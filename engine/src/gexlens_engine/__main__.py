@@ -119,7 +119,7 @@ from gexlens_engine.storage.volregime_store import VolRegimeRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.adhoc import AdhocViewer
 from gexlens_engine.tasty.budget import DistanceGroup, order_by_distance, plan_subscriptions
-from gexlens_engine.tasty.candles import CandleFetcher, backfill_gaps
+from gexlens_engine.tasty.candles import CandleFetcher, backfill_gaps, partition_days
 from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow
@@ -1202,17 +1202,23 @@ async def main() -> None:
         try:
             now = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
             day = trading_session_date(now)
-            since, _ = session_bounds(day)
-            existing = await asyncio.to_thread(writer.bar_minutes, symbol, day)
+            session_start, _ = session_bounds(day)
+            since = max(session_start, now - dt.timedelta(hours=24))
+            # Seance sahá do partice D−1 (od 22:00 UTC) — „co už máme" se musí
+            # číst ze všech partic okna, jinak se večerní blok doplní podruhé
+            # a skončí v partici D vedle měřených barů v D−1 (#1002)
+            existing = await asyncio.to_thread(
+                writer.bar_minutes_for_days, symbol, partition_days(since, now)
+            )
             bars = await backfill_gaps(
                 CandleFetcher(tasty_session.quote_token),
                 streamer_symbol=streamer_symbol,
                 existing=existing,
-                since=max(since, now - dt.timedelta(hours=24)),
+                since=since,
                 until=now,
             )
             if bars:
-                await asyncio.to_thread(writer.write_bars, symbol, day, bars)
+                await asyncio.to_thread(writer.write_bars_by_day, symbol, bars)
         except Exception:
             logger.exception("Rekonstrukce barů %s selhala — díra zůstává", symbol)
 

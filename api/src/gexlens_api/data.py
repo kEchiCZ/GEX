@@ -194,6 +194,18 @@ class DataRepository:
         path = self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
         return self._read(path)
 
+    def bars_session(self, symbol: str, day: dt.date) -> pd.DataFrame:
+        """Bary seance sešité z partic D−1 + D, jedna minuta jednou (#1002).
+
+        Engine do 3. 9. 2026 zapisoval půlnoční bar a rekonstruovaný večerní blok
+        i do partice sousedního dne; po sešití byla minuta dvakrát a objem
+        dvojnásobný. Vyhrává první výskyt = partice D−1, kam večerní minuty
+        podle UTC dne patří. Obrana i pro staré partice, které čistící skript
+        `scripts/fix_bar_partitions.py` ještě neprošel.
+        """
+        frame = self.session_frame(lambda d: self.bars(symbol, d), day)
+        return frame.drop_duplicates(subset="ts_min", keep="first").reset_index(drop=True)
+
     def session_frame(
         self,
         read: Callable[[dt.date], pd.DataFrame],
