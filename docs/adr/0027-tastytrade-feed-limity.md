@@ -76,6 +76,29 @@ nikdy nedostal data. Rozhodnutí (`tasty/budget.py`):
   okraje pásma; řetěz, podklad a ad-hoc se neořezávají. Ořez i přetečení
   hlásí `/status.tasty_budget` a log.
 
+## Doplněk 3. 9. 2026 — spread legy nejsou rozlišitelné (#615)
+
+**Měření (23. 8. – 1. 9., 500 080 TimeAndSale printů ES+NQ):** `spreadLeg`
+false ve 100 % případů, nikdy null, `aggressorSide` určen v 99,95 %.
+**Podpora tastytrade po ověření u dxFeed potvrdila:** příznak spread legu
+**není pro CME futures opce podporovaný — je to omezení CME Market Data —
+a žádné alternativní pole neexistuje.** Ani IBKR tick-by-tick takový příznak
+nenese.
+
+**Rozhodnutí (uživatel, 3. 9. 2026):**
+
+1. Fáze 3 (#615, plná klasifikace agresora přes TimeAndSale) pokračuje
+   **bez rozlišování spread legů**. Nohy spreadů jsou v CumΔ stejně jako
+   v dnešní IBKR tick-by-tick řadě — není to regrese, je to vlastnost venue.
+   Track record rozlišuje období před/po změnou vstupu (`mechanics_version`).
+2. Paralelní řada „bez spreadů" (`cum_ring_outright`) a podíl
+   `spread_volume_share` **zrušeny** ze stínového CumΔ, `/status` i schématu
+   `cumdelta_dx` — hodnota 0,0 % byla výstupem mrtvého čidla, ne měřením.
+   Starší partice sloupce mají a čtou se dál; `trades_recorder` surový
+   příznak dál ukládá (záznam feedu, ne odvozená veličina).
+3. Heuristika (shodný čas a velikost napříč striky) **zamítnuta** — jen
+   odhad bez možnosti ověření; nic se na ní nestaví.
+
 ## Doplní shadow report (~21. 8., 5 čistých seancí)
 
 - párovaná latence IBKR × tasty per pole (z `feed_comparison` age sloupců),

@@ -102,21 +102,19 @@ TASTY_TRADES_SCHEMA = pa.schema(
 )
 
 # Stínové CumΔ z dxFeed TimeAndSale (#615 fáze 3, shadow) — minutová řada
-# per zóna vlastnictví; živé CumΔ se nemění, tohle je měření před přepnutím
+# per zóna vlastnictví; živé CumΔ se nemění, tohle je měření před přepnutím.
+# Sloupce *_outright / spread_* zrušeny 3. 9. 2026: příznak spreadLeg CME
+# nenese (ADR-0027 doplněk), starší partice je mají a čtou se dál.
 DX_FLOW_SCHEMA = pa.schema(
     [
         ("ts_min", pa.timestamp("us", tz="UTC")),
         ("flow_ring", pa.float64()),
         ("cum_ring", pa.float64()),
-        ("flow_ring_outright", pa.float64()),
-        ("cum_ring_outright", pa.float64()),
         ("flow_hot", pa.float64()),
         ("cum_hot", pa.float64()),
         ("trades", pa.int64()),
-        ("spread_trades", pa.int64()),
         ("unknown_side", pa.int64()),
         ("volume", pa.float64()),
-        ("spread_volume", pa.float64()),
         ("dropped_no_context", pa.int64()),
     ]
 )

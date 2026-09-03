@@ -138,7 +138,7 @@ from gexlens_engine.tasty.session import TastyCredentials, TastySession
 from gexlens_engine.tasty.spot_fallback import SpotFallback
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
-from gexlens_engine.tasty.trades_recorder import TradesRecorder, _flag
+from gexlens_engine.tasty.trades_recorder import TradesRecorder
 from gexlens_engine.tasty.wideoi import wide_contracts, wide_records, wide_streamers
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.volregime import VolRegimeCollector
@@ -1279,13 +1279,12 @@ async def main() -> None:
                 state = tasty_cache.state(streamer)
                 trade_size = _number(values[3]) if len(values) > 3 else None
                 trade_aggressor = values[4] if len(values) > 4 else None
-                trade_spread = _flag(values[5]) if len(values) > 5 else None
+                # spreadLeg se záměrně nečte: CME ho pro FOP nenese (ADR-0027)
                 for dx_shadow in dx_shadows.values():
                     dx_shadow.on_trade(
                         streamer,
                         size=trade_size,
                         aggressor=(trade_aggressor if isinstance(trade_aggressor, str) else None),
-                        spread_leg=trade_spread,
                         delta=state.greeks.delta if state is not None else None,
                     )
             # CVD podkladu (#829): tracker si sám vybere jen printy
@@ -1314,7 +1313,7 @@ async def main() -> None:
                 "tasty_symbols": tasty_cache.symbols_tracked(),
                 # Ad-hoc pohledy (#521 C) — UI badge zdroje
                 **({"tasty_adhoc": adhoc_viewer.active()} if adhoc_viewer.active() else {}),
-                # Stínové CumΔ (#615): denní podíly pro spread_leg ADR a fallback
+                # Stínové CumΔ (#615): pokrytí aggressorSide rozhoduje o midpoint fallbacku
                 **(
                     {
                         "tasty_dx_shadow": {

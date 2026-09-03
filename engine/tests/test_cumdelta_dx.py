@@ -1,4 +1,4 @@
-"""Stínové CumΔ z TimeAndSale (#615 fáze 3): zóny, spread legy, pokrytí strany."""
+"""Stínové CumΔ z TimeAndSale (#615 fáze 3): zóny a pokrytí strany."""
 
 import datetime as dt
 from pathlib import Path
@@ -36,36 +36,35 @@ def test_zony_hot_prstenec_a_mimo() -> None:
     """Hot ATM±1 zvlášť, prstenec ±15 hlavní řada, dál se nepočítá nic."""
     shadow = make_shadow()
     # ATM strike 7600 → hot; 7605 (±1) → hot; 7610 (±2) → prstenec
-    shadow.on_trade(".ES7600C", size=2, aggressor="BUY", spread_leg=False, delta=0.5)
-    shadow.on_trade(".ES7610C", size=3, aggressor="BUY", spread_leg=False, delta=0.4)
+    shadow.on_trade(".ES7600C", size=2, aggressor="BUY", delta=0.5)
+    shadow.on_trade(".ES7610C", size=3, aggressor="BUY", delta=0.4)
     # ±16 striků od ATM (7600 + 16·5 = 7680) → mimo měření
-    shadow.on_trade(".ES7680C", size=9, aggressor="BUY", spread_leg=False, delta=0.1)
+    shadow.on_trade(".ES7680C", size=9, aggressor="BUY", delta=0.1)
     row = shadow.close_minute(TS)
     assert row.flow_hot == 2 * 0.5 * 50.0
     assert row.flow_ring == 3 * 0.4 * 50.0
     assert row.trades == 1  # počty vede jen prstenec
     # ±15 přesně (7675) do prstence ještě patří
-    shadow.on_trade(".ES7675C", size=1, aggressor="SELL", spread_leg=False, delta=0.2)
+    shadow.on_trade(".ES7675C", size=1, aggressor="SELL", delta=0.2)
     assert shadow.close_minute(TS).flow_ring == -1 * 0.2 * 50.0
 
 
-def test_spread_legy_v_hlavni_rade_ale_ne_v_outright() -> None:
-    """Schváleno 12. 8.: spread legy se počítají dál, outright řada je bez nich."""
+def test_vsechny_trady_prstence_jdou_do_jedne_rady() -> None:
+    """Spread legy se nerozlišují (3. 9. 2026): CME příznak nenese, řada je jedna."""
     shadow = make_shadow()
-    shadow.on_trade(".ES7610C", size=4, aggressor="BUY", spread_leg=False, delta=0.5)
-    shadow.on_trade(".ES7615C", size=6, aggressor="SELL", spread_leg=True, delta=0.5)
+    shadow.on_trade(".ES7610C", size=4, aggressor="BUY", delta=0.5)
+    shadow.on_trade(".ES7615C", size=6, aggressor="SELL", delta=0.5)
     row = shadow.close_minute(TS)
     assert row.flow_ring == (4 - 6) * 0.5 * 50.0
-    assert row.flow_ring_outright == 4 * 0.5 * 50.0
-    assert row.spread_trades == 1
-    assert row.volume == 10 and row.spread_volume == 6
+    assert row.trades == 2
+    assert row.volume == 10
 
 
 def test_neznama_strana_se_nepocita_do_toku_ale_meri_se() -> None:
     """Bez aggressorSide žádný tok — pokrytí rozhoduje o midpoint fallbacku."""
     shadow = make_shadow()
-    shadow.on_trade(".ES7610C", size=5, aggressor=None, spread_leg=False, delta=0.5)
-    shadow.on_trade(".ES7610C", size=5, aggressor="UNDEFINED", spread_leg=False, delta=0.5)
+    shadow.on_trade(".ES7610C", size=5, aggressor=None, delta=0.5)
+    shadow.on_trade(".ES7610C", size=5, aggressor="UNDEFINED", delta=0.5)
     row = shadow.close_minute(TS)
     assert row.flow_ring == 0.0
     assert row.unknown_side == 2
@@ -76,9 +75,9 @@ def test_bez_spotu_nebo_delty_se_trade_zahazuje_a_pocita() -> None:
     """Díra v měření se přizná (dropped_no_context), tok se nevymýšlí."""
     shadow = make_shadow()
     shadow.set_spot(None)
-    shadow.on_trade(".ES7610C", size=1, aggressor="BUY", spread_leg=False, delta=0.5)
+    shadow.on_trade(".ES7610C", size=1, aggressor="BUY", delta=0.5)
     shadow.set_spot(7600.0)
-    shadow.on_trade(".ES7610C", size=1, aggressor="BUY", spread_leg=False, delta=None)
+    shadow.on_trade(".ES7610C", size=1, aggressor="BUY", delta=None)
     row = shadow.close_minute(TS)
     assert row.flow_ring == 0.0
     assert row.dropped_no_context == 2
@@ -86,9 +85,9 @@ def test_bez_spotu_nebo_delty_se_trade_zahazuje_a_pocita() -> None:
 
 def test_kumulativy_a_roll_session() -> None:
     shadow = make_shadow()
-    shadow.on_trade(".ES7610C", size=2, aggressor="BUY", spread_leg=False, delta=0.5)
+    shadow.on_trade(".ES7610C", size=2, aggressor="BUY", delta=0.5)
     shadow.close_minute(TS)
-    shadow.on_trade(".ES7610C", size=2, aggressor="BUY", spread_leg=False, delta=0.5)
+    shadow.on_trade(".ES7610C", size=2, aggressor="BUY", delta=0.5)
     row = shadow.close_minute(TS + dt.timedelta(minutes=1))
     assert row.cum_ring == 2 * (2 * 0.5 * 50.0)
     # Nový den = reset (stejně jako živé CumΔ)
@@ -108,7 +107,7 @@ def test_write_dx_flow_roundtrip(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path)
     writer = SnapshotWriter(settings)
     shadow = make_shadow()
-    shadow.on_trade(".ES7610C", size=4, aggressor="BUY", spread_leg=True, delta=0.5)
+    shadow.on_trade(".ES7610C", size=4, aggressor="BUY", delta=0.5)
     row = shadow.close_minute(TS)
 
     path = writer.write_dx_flow("ES", TS.date(), [row])
@@ -116,6 +115,6 @@ def test_write_dx_flow_roundtrip(tmp_path: Path) -> None:
     assert path == settings.derived_dir / "ES" / "cumdelta_dx" / "2026-08-27.parquet"
     record = pq.read_table(path).to_pylist()[0]
     assert record["flow_ring"] == 4 * 0.5 * 50.0
-    assert record["spread_volume"] == 4.0
-    assert record["cum_ring_outright"] == 0.0
+    assert record["volume"] == 4.0
+    assert "spread_volume" not in record and "cum_ring_outright" not in record
     assert record["ts_min"] == TS
