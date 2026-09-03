@@ -198,7 +198,10 @@ def measure_day(data_dir: Path, symbol: str, day: dt.date, mapping: dict) -> dic
         "day": day,
         "trades": int(len(trades)),
         "unmapped": unmapped,
-        "hours": f"{len(valid)}/{hour_info['hours']} (snap −{hour_info['dead_snap']}, tisk −{hour_info['dead_trades']})",
+        "hours": (
+            f"{len(valid)}/{hour_info['hours']} "
+            f"(snap −{hour_info['dead_snap']}, tisk −{hour_info['dead_trades']})"
+        ),
         "neg_contracts": int(len(negative)),
         "neg_volume": float((negative["printed"] - negative["span"]).sum()),
         "total": share(total),
@@ -228,7 +231,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"\n## {symbol}\n")
         print(
-            "| den | tisků | platné hodiny (vyřazeno) | Σ objem | Σ tisk | **mimo tisk** | tisk > objem (kontrakt-hodin / objem) | RTH | mimo RTH | ATM±2 | ±3..15 | >15 |"
+            "| den | tisků | platné hodiny (vyřazeno) | Σ objem | Σ tisk | **mimo tisk** | "
+            "tisk > objem (kontrakt-hodin / objem) | RTH | mimo RTH | ATM±2 | ±3..15 | >15 |"
         )
         print("|---|---|---|---|---|---|---|---|---|---|---|---|")
         agg = defaultdict(float)
@@ -242,13 +246,16 @@ def main(argv: list[str] | None = None) -> int:
             agg["neg"] += r["neg_volume"]
             b = r["buckets"]
             print(
-                f"| {r['day']} | {r['trades']:,} | {r['hours']} | {s:,.0f} | {p:,.0f} | **{sh:.1%}** | "
-                f"{r['neg_contracts']} / {r['neg_volume']:,.0f} | {r['rth'][2]:.1%} | {r['eth'][2]:.1%} | "
+                f"| {r['day']} | {r['trades']:,} | {r['hours']} | {s:,.0f} | {p:,.0f} | "
+                f"**{sh:.1%}** | {r['neg_contracts']} / {r['neg_volume']:,.0f} | "
+                f"{r['rth'][2]:.1%} | {r['eth'][2]:.1%} | "
                 f"{b['ATM±2'][2]:.1%} | {b['±3..15'][2]:.1%} | {b['>15'][2]:.1%} |"
             )
         if agg["span"]:
+            share_all = (agg["span"] - agg["printed"]) / agg["span"]
             print(
-                f"| **celkem** | | | {agg['span']:,.0f} | {agg['printed']:,.0f} | **{(agg['span'] - agg['printed']) / agg['span']:.1%}** | / {agg['neg']:,.0f} | | | | |"
+                f"| **celkem** | | | {agg['span']:,.0f} | {agg['printed']:,.0f} | "
+                f"**{share_all:.1%}** | / {agg['neg']:,.0f} | | | | |"
             )
     return 0
 
