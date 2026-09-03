@@ -111,7 +111,7 @@ from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter
 from gexlens_engine.storage.probes_store import ProbeRepository
 from gexlens_engine.storage.retention import RetentionJob
-from gexlens_engine.storage.sentiment import ensure_sentiment_schema
+from gexlens_engine.storage.sentiment import LegacyNewsReactionsError, ensure_sentiment_schema
 from gexlens_engine.storage.setups_store import SetupsRepository
 from gexlens_engine.storage.t6_store import T6Repository
 from gexlens_engine.storage.tendency_store import TendencyRepository
@@ -1129,7 +1129,13 @@ async def main() -> None:
     news_ticks: NewsTickCollector | None = None
     article_catch_up: asyncio.Task[int] | None = None
     if settings.ibkr_news_enabled:
-        await asyncio.to_thread(ensure_sentiment_schema, db)
+        try:
+            await asyncio.to_thread(ensure_sentiment_schema, db)
+        except LegacyNewsReactionsError as error:
+            # Engine do reakcí nepíše (jen headlines do `news_events`, které
+            # migrace #998 nemění) — sběr dat nesmí spadnout kvůli tabulce,
+            # kterou nepoužívá; chyba se ale hlasitě hlásí
+            logger.error("SentimentLens: %s", error)
         news_ticks = NewsTickCollector(db)
         # Plné znění článků (#743): živé headlines hned po pushi, historie
         # (vč. eventů z doby před #743 a z výpadků) catch-upem po KAŽDÉM

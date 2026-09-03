@@ -29,6 +29,7 @@ from gexlens_engine.storage.sentiment import (
     news_events,
     news_model_stats,
     news_reactions,
+    reaction_ret,
     review_queue,
 )
 from gexlens_news.model_stats import surprise_bucket
@@ -147,7 +148,7 @@ class ReviewJob:
         # primární okno se zavírá už +5 min a fronta by zmizela dřív, než si
         # jí uživatel všimne; ruční oprava mezitím možná nebyla — nevadí
         measured = select(news_reactions.c.event_id).where(
-            news_reactions.c.window_min == max(DEFAULT_WINDOWS)
+            reaction_ret(max(DEFAULT_WINDOWS)).is_not(None)
         )
         with self._engine.begin() as conn:
             resolved = conn.execute(

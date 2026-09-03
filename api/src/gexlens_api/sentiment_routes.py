@@ -18,13 +18,14 @@ from typing import Any
 import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import Table, case, desc, func, insert, select
+from sqlalchemy import Table, case, desc, func, insert, literal, select
 from sqlalchemy import update as sql_update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.sentwaves import DailyClose, assess_state
 from gexlens_engine.storage.sentiment import (
     NEWS_CATEGORIES,
+    REACTION_ALL_WINDOWS,
     crowd_sentiment,
     news_classifications,
     news_events,
@@ -33,12 +34,15 @@ from gexlens_engine.storage.sentiment import (
     news_predictions,
     news_reactions,
     news_sources,
+    reaction_contaminated,
+    reaction_ret,
     review_queue,
     sentiment_daily,
     sentiment_waves,
     signal_outcomes,
     signals,
     track_record,
+    unpivot_reaction,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,6 +50,38 @@ logger = logging.getLogger(__name__)
 SENTIMENT_SUBDIR = "sentiment"
 DEFAULT_FEED_LIMIT = 200
 MAX_FEED_LIMIT = 1000
+
+
+def _reaction_windows(engine: Engine, event_id: int) -> list[dict[str, Any]]:
+    """Reakce eventu jako řádky per (symbol, okno) — JSON tvar detailu zprávy."""
+    with engine.connect() as conn:
+        rows = (
+            conn.execute(
+                select(news_reactions)
+                .where(news_reactions.c.event_id == event_id)
+                .order_by(news_reactions.c.symbol)
+            )
+            .mappings()
+            .all()
+        )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        for window in unpivot_reaction(row):
+            out.append(
+                {
+                    "event_id": int(row["event_id"]),
+                    "symbol": row["symbol"],
+                    "window_min": window.window_min,
+                    "ret_bp": window.ret_bp,
+                    "range_bp": window.range_bp,
+                    "vol_z": window.vol_z,
+                    "gex_regime": window.gex_regime,
+                    "contaminated": window.contaminated,
+                    "deferred": window.deferred,
+                    "computed_at": window.computed_at.isoformat(),
+                }
+            )
+    return out
 
 
 def _rows(engine: Engine, stmt: Any) -> list[dict[str, Any]]:
@@ -197,23 +233,24 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         event_ids = [row["id"] for row in rows if isinstance(row.get("id"), int)]
         if event_ids:
             with engine_factory().connect() as conn:
-                measured = conn.execute(
-                    select(
-                        news_reactions.c.event_id,
-                        news_reactions.c.window_min,
-                        news_reactions.c.ret_bp,
-                        news_reactions.c.contaminated,
-                    ).where(
-                        news_reactions.c.event_id.in_(event_ids),
-                        news_reactions.c.symbol == symbol,
+                measured = (
+                    conn.execute(
+                        select(news_reactions).where(
+                            news_reactions.c.event_id.in_(event_ids),
+                            news_reactions.c.symbol == symbol,
+                        )
                     )
-                ).all()
+                    .mappings()
+                    .all()
+                )
             by_event: dict[int, dict[str, float]] = {}
             contaminated: set[int] = set()
-            for event_id, window_min, ret_bp, contam in measured:
-                by_event.setdefault(event_id, {})[str(window_min)] = float(ret_bp)
-                if contam:
-                    contaminated.add(event_id)
+            for reaction in measured:
+                measured_id = int(reaction["event_id"])
+                for window in unpivot_reaction(reaction):
+                    by_event.setdefault(measured_id, {})[str(window.window_min)] = window.ret_bp
+                    if window.contaminated:
+                        contaminated.add(measured_id)
             for row in rows:
                 event_id = row.get("id")
                 row["reactions_bp"] = by_event.get(event_id) if isinstance(event_id, int) else None
@@ -419,9 +456,9 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
             )
         return {
             "event": event[0],
-            "reactions": _rows(
-                engine, select(news_reactions).where(news_reactions.c.event_id == event_id)
-            ),
+            # Reakce per (symbol, okno) — tvar z doby před #998 (široký řádek se
+            # rozkládá tady, klient tabulku nezná)
+            "reactions": _reaction_windows(engine, event_id),
             # Historie verzí, ne jen poslední — bez ní nejde rekonstruovat,
             # co systém věděl v okamžiku predikce
             "classifications": _rows(
@@ -845,10 +882,12 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         `min_sample` reakcí se vynechává (tenký den by lhal extrémem).
         Pásma min/max/průměr přes celou historii dávají hodnotě měřítko.
         """
+        if window not in REACTION_ALL_WINDOWS:
+            raise HTTPException(400, f"Neznámé okno {window}; povolená: {REACTION_ALL_WINDOWS}")
         stmt = (
             select(
                 func.date(news_events.c.ts_event).label("day"),
-                func.avg(func.abs(news_reactions.c.ret_bp)).label("value"),
+                func.avg(func.abs(reaction_ret(window))).label("value"),
                 func.count().label("sample"),
             )
             .select_from(
@@ -856,8 +895,8 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
             )
             .where(
                 news_reactions.c.symbol == symbol,
-                news_reactions.c.window_min == window,
-                news_reactions.c.contaminated.is_(False),
+                reaction_ret(window).is_not(None),
+                reaction_contaminated(window).is_(False),
             )
             .group_by(func.date(news_events.c.ts_event))
             .order_by(func.date(news_events.c.ts_event))
@@ -899,7 +938,18 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         engine = engine_factory()
         with engine.connect() as conn:
             events = conn.execute(select(func.count()).select_from(news_events)).scalar() or 0
-            reactions = conn.execute(select(func.count()).select_from(news_reactions)).scalar() or 0
+            # Počet změřených OKEN (jako před #998), ne řádků širokého tvaru
+            reactions = (
+                conn.execute(
+                    select(
+                        sum(
+                            (func.count(reaction_ret(window)) for window in REACTION_ALL_WINDOWS),
+                            start=literal(0),
+                        )
+                    ).select_from(news_reactions)
+                ).scalar()
+                or 0
+            )
             buckets = conn.execute(select(func.count()).select_from(news_model_stats)).scalar() or 0
         return {"events": int(events), "reactions": int(reactions), "model_buckets": int(buckets)}
 

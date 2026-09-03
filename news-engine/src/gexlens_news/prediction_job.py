@@ -24,6 +24,7 @@ from gexlens_engine.storage.sentiment import (
     news_predictions,
     news_reactions,
     news_weights,
+    unpivot_reaction,
 )
 from gexlens_news.predictions import (
     DEFAULT_PRIMARY_WINDOW_MIN,
@@ -101,13 +102,11 @@ class PredictionJob:
             news_prediction_outcomes.c.symbol,
             news_prediction_outcomes.c.window_min,
         )
+        # Široký řádek reakce (#998) → okna v Pythonu; nezměřená okna vypadnou
         stmt = select(
-            news_predictions.c.id,
+            news_predictions.c.id.label("prediction_id"),
             news_predictions.c.predicted_dir,
-            news_reactions.c.symbol,
-            news_reactions.c.window_min,
-            news_reactions.c.ret_bp,
-            news_reactions.c.contaminated,
+            news_reactions,
         ).select_from(
             news_predictions.join(
                 news_reactions, news_reactions.c.event_id == news_predictions.c.event_id
@@ -115,29 +114,31 @@ class PredictionJob:
         )
         with self._engine.connect() as conn:
             done = {(r.prediction_id, r.symbol, r.window_min) for r in conn.execute(measured)}
-            rows = conn.execute(stmt).fetchall()
+            rows = conn.execute(stmt).mappings().fetchall()
 
         pending = []
         for row in rows:
-            # Kontaminované okno neměří reakci na tuhle zprávu — vyhodnocovat
-            # proti němu by predictoru přičítalo cizí pohyb (SPEC 5.1)
-            if row.contaminated:
-                continue
-            key = (int(row.id), row.symbol, int(row.window_min))
-            if key in done:
-                continue
-            ret_bp = float(row.ret_bp)
-            realized = 1 if ret_bp > 0 else (-1 if ret_bp < 0 else 0)
-            pending.append(
-                {
-                    "prediction_id": int(row.id),
-                    "symbol": row.symbol,
-                    "window_min": int(row.window_min),
-                    "realized_dir": realized,
-                    "correct": bool(row.predicted_dir != 0 and row.predicted_dir == realized),
-                    "computed_at": now,
-                }
-            )
+            for window in unpivot_reaction(row):
+                # Kontaminované okno neměří reakci na tuhle zprávu — vyhodnocovat
+                # proti němu by predictoru přičítalo cizí pohyb (SPEC 5.1)
+                if window.contaminated:
+                    continue
+                key = (int(row["prediction_id"]), row["symbol"], window.window_min)
+                if key in done:
+                    continue
+                ret_bp = window.ret_bp
+                realized = 1 if ret_bp > 0 else (-1 if ret_bp < 0 else 0)
+                predicted_dir = row["predicted_dir"]
+                pending.append(
+                    {
+                        "prediction_id": int(row["prediction_id"]),
+                        "symbol": row["symbol"],
+                        "window_min": window.window_min,
+                        "realized_dir": realized,
+                        "correct": bool(predicted_dir != 0 and predicted_dir == realized),
+                        "computed_at": now,
+                    }
+                )
         if not pending:
             return 0
         with self._engine.begin() as conn:

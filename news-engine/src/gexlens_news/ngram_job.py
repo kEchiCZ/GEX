@@ -36,6 +36,8 @@ from gexlens_engine.storage.sentiment import (
     news_events,
     news_ngram_shadow,
     news_reactions,
+    reaction_contaminated,
+    reaction_ret,
 )
 from gexlens_news.ngram_model import LogisticModel, features, hash_row
 
@@ -109,15 +111,15 @@ class NgramShadowJob:
                 news_events.c.source,
                 news_events.c.ts_event,
                 news_events.c.body,
-                news_reactions.c.ret_bp,
+                reaction_ret(self._window).label("ret_bp"),
             )
             .select_from(
                 news_reactions.join(news_events, news_events.c.id == news_reactions.c.event_id)
             )
             .where(
                 news_reactions.c.symbol == self._train_symbol,
-                news_reactions.c.window_min == self._window,
-                news_reactions.c.contaminated.is_(False),
+                reaction_ret(self._window).is_not(None),
+                reaction_contaminated(self._window).is_(False),
                 news_events.c.kind != "scheduled",
                 news_events.c.title.is_not(None),
             )
@@ -267,7 +269,7 @@ class NgramShadowJob:
                 news_events.c.ts_event,
                 news_events.c.ts_ingested,
                 news_reactions.c.symbol,
-                news_reactions.c.ret_bp,
+                reaction_ret(self._window).label("ret_bp"),
             )
             .select_from(
                 news_classifications.join(
@@ -277,8 +279,8 @@ class NgramShadowJob:
             .where(
                 news_classifications.c.source == NGRAM_SOURCE,
                 news_classifications.c.strength.is_not(None),
-                news_reactions.c.window_min == self._window,
-                news_reactions.c.contaminated.is_(False),
+                reaction_ret(self._window).is_not(None),
+                reaction_contaminated(self._window).is_(False),
                 news_reactions.c.symbol.in_(self._eval_symbols),
             )
         )

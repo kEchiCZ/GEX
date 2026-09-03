@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import (
+    ReactionWindow,
     ensure_sentiment_schema,
     news_classifications,
     news_events,
@@ -15,6 +16,7 @@ from gexlens_engine.storage.sentiment import (
     news_predictions,
     news_reactions,
     news_weights,
+    reaction_row_values,
 )
 from gexlens_news.prediction_job import PredictionJob, load_weight_map
 from gexlens_news.predictions import (
@@ -125,17 +127,19 @@ def seed(engine: Engine, *, direction: int, ret_bp: float, contaminated: bool = 
                 created_at=NOW,
             )
         )
+        window = ReactionWindow(
+            window_min=5,
+            ret_bp=ret_bp,
+            range_bp=10.0,
+            vol_z=None,
+            contaminated=contaminated,
+            deferred=False,
+            gex_regime=None,
+            computed_at=NOW,
+        )
         conn.execute(
             insert(news_reactions).values(
-                event_id=event_id,
-                symbol="ES",
-                window_min=5,
-                ret_bp=ret_bp,
-                range_bp=10.0,
-                vol_z=None,
-                contaminated=contaminated,
-                deferred=False,
-                computed_at=NOW,
+                event_id=event_id, symbol="ES", **reaction_row_values([window])
             )
         )
     return event_id

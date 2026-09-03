@@ -40,6 +40,9 @@ Diagnostika v #453 doložila, že přepínač je rozbitý na dvou místech:
    v `news_reactions`, rozdíl definuje SQL view `news_reaction_spread`
    (per event × okno). Materializace by porušila zásadu jednoho zdroje
    pravdy; view je „uložení" ve smyslu AC — dotaz jedním selectem.
+   Od ADR-0031 (#998) je `news_reactions` široká tabulka (řádek per
+   event × symbol) a view je nad ní definované jako UNION ALL per okno —
+   sloupce view zůstávají stejné.
 6. **Mimo rozsah:** `ReviewJob` (fronta je o klasifikaci zprávy, symbol
    nemá), `TrackRecordJob` (SPEC 7.3 definuje stavovou strategii nad ES;
    NQ křivka až po nasbírání NQ track recordu), kadence LLM (klasifikace

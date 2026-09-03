@@ -7,9 +7,11 @@ from sqlalchemy import create_engine, insert
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import (
+    ReactionWindow,
     ensure_sentiment_schema,
     news_events,
     news_reactions,
+    reaction_row_values,
 )
 from gexlens_news.anomaly_job import AnomalyJob, percentile_abs
 
@@ -60,22 +62,21 @@ def seed_reaction(
     computed_at: dt.datetime,
     contaminated: bool = False,
 ) -> None:
+    window = ReactionWindow(
+        window_min=5,
+        ret_bp=ret_bp,
+        range_bp=abs(ret_bp) + 2,
+        vol_z=None,
+        contaminated=contaminated,
+        deferred=False,
+        gex_regime=None,
+        computed_at=computed_at,
+    )
     with engine.begin() as conn:
         conn.execute(
-            insert(news_reactions),
-            [
-                {
-                    "event_id": event_id,
-                    "symbol": "ES",
-                    "window_min": 5,
-                    "ret_bp": ret_bp,
-                    "range_bp": abs(ret_bp) + 2,
-                    "vol_z": None,
-                    "contaminated": contaminated,
-                    "deferred": False,
-                    "computed_at": computed_at,
-                }
-            ],
+            insert(news_reactions).values(
+                event_id=event_id, symbol="ES", **reaction_row_values([window])
+            )
         )
 
 

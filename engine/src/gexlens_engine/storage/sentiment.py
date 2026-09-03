@@ -19,6 +19,11 @@ Klíčové invarianty, které schéma vynucuje:
   okna a víkendové gapy daly z trénovacích statistik vyloučit (SPEC 5.1).
 """
 
+import datetime as dt
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -199,26 +204,187 @@ news_classifications = Table(
 
 # ── Měření reakce trhu ─────────────────────────────────────────────
 
+# Denní okna (#564) se identifikují jako N × 1440 — hodnota je identifikátor
+# okna, ne doslovný počet minut (10 obchodních dní = 14400).
+REACTION_DAILY_WINDOWS = (1440, 2880, 7200, 14400)
+REACTION_ALL_WINDOWS = REACTION_WINDOWS + REACTION_DAILY_WINDOWS
+REACTION_PHASES = ("min", "daily")
+
+
+def reaction_phase(window_min: int) -> str:
+    """Fáze výpočtu okna: `min` (1–60 min, ReactionJob hned) / `daily` (#564)."""
+    if window_min in REACTION_WINDOWS:
+        return "min"
+    if window_min in REACTION_DAILY_WINDOWS:
+        return "daily"
+    raise ValueError(f"Neznámé reakční okno {window_min}; povolená: {REACTION_ALL_WINDOWS}")
+
+
+def _reaction_window_columns() -> list[Column[Any]]:
+    """Sloupce per okno v pevném pořadí: ret, range, vol_z (jen minutová), cont."""
+    columns: list[Column[Any]] = []
+    for window in REACTION_ALL_WINDOWS:
+        columns.append(Column(f"ret_{window}", Float, nullable=True))
+        columns.append(Column(f"range_{window}", Float, nullable=True))
+        if reaction_phase(window) == "min":
+            columns.append(Column(f"vol_z_{window}", Float, nullable=True))
+        columns.append(Column(f"cont_{window}", Boolean, nullable=True))
+    return columns
+
+
+# Jeden řádek per (event, symbol) — široký tvar (#998, ADR-0031). Do #998 byl
+# řádek per okno (PK event_id, symbol, window_min); 8 oken × 2 symboly dělalo
+# 145 B/okno vč. indexu a index bobtnal vkládáním denních oken doprostřed
+# klíče. Široký tvar je bezeztrátový: `deferred`, `gex_regime` i `computed_at`
+# jsou konstantní per (event, symbol, fáze) — ověřeno nad produkcí — proto
+# stačí dvojice sloupců per fázi; `contaminated` se liší per okno, proto
+# `cont_<w>`. Chybějící okno (bez baru) = NULL v celé čtveřici sloupců okna.
 news_reactions = Table(
     "news_reactions",
     sentiment_metadata,
     Column("event_id", Integer, ForeignKey("news_events.id"), primary_key=True),
     Column("symbol", String(16), primary_key=True),
-    Column("window_min", SmallInteger, primary_key=True),
-    Column("ret_bp", Float, nullable=False),
-    Column("range_bp", Float, nullable=False),
-    Column("vol_z", Float, nullable=True),
+    # ret_<w>: změna ceny v bps od ts_event do konce okna; range_<w>: high−low
+    # okna v bps; vol_z_<w>: objem okna vs. baseline téže minuty dne (jen
+    # minutová okna, denní baseline nemá smysl); cont_<w>: do okna spadl jiný
+    # event s importance ≥ 2 → mimo trénovací statistiky (SPEC 5.1). Bez toho
+    # by se všem headlines z Fed day přičetl tentýž pohyb.
+    *_reaction_window_columns(),
+    # Trhy byly zavřené → okna se měří od prvního obchodovaného baru; dynamika
+    # gapu na open je jiná, proto vlastní buckety. Per fáze (minutová/denní).
+    Column("deferred_min", Boolean, nullable=True),
+    Column("deferred_daily", Boolean, nullable=True),
     # GEX režim v čase eventu (#402): positive/negative; None = levels toho dne
     # nejsou (starší data mimo retenci) — podmíněná větev roste od nasazení
-    Column("gex_regime", String(16), nullable=True),
-    # Do okna spadl jiný event s importance ≥ 2 → mimo trénovací statistiky.
-    # Bez toho by se všem headlines z Fed day přičetl tentýž pohyb (SPEC 5.1).
-    Column("contaminated", Boolean, nullable=False, default=False),
-    # Trhy byly zavřené → okno se měří od prvního obchodovaného baru; dynamika
-    # gapu na open je jiná, proto vlastní buckety
-    Column("deferred", Boolean, nullable=False, default=False),
-    Column("computed_at", DateTime(timezone=True), nullable=False),
+    Column("regime_min", String(16), nullable=True),
+    Column("regime_daily", String(16), nullable=True),
+    # Kdy byla fáze spočítána; NULL = fáze zatím nespočítaná (pending dotazy)
+    Column("computed_at_min", DateTime(timezone=True), nullable=True),
+    Column("computed_at_daily", DateTime(timezone=True), nullable=True),
 )
+
+
+@dataclass(frozen=True)
+class ReactionWindow:
+    """Jedno okno reakce — tvar, ve kterém s reakcí pracují joby i API.
+
+    Odpovídá řádku `news_reactions` z doby před #998; široký řádek se na
+    tenhle tvar rozkládá přes `unpivot_reaction` a z něj skládá přes
+    `reaction_row_values`, aby konzumenti neznali názvy sloupců per okno.
+    """
+
+    window_min: int
+    ret_bp: float
+    range_bp: float
+    vol_z: float | None
+    contaminated: bool
+    deferred: bool
+    gex_regime: str | None
+    computed_at: dt.datetime
+
+
+def _window_column(prefix: str, window_min: int) -> Column[Any]:
+    reaction_phase(window_min)  # validace okna — neznámé okno je chyba volajícího
+    return news_reactions.c[f"{prefix}_{window_min}"]
+
+
+def reaction_ret(window_min: int) -> Column[Any]:
+    """Sloupec `ret_<w>` — návrat v bps daného okna."""
+    return _window_column("ret", window_min)
+
+
+def reaction_range(window_min: int) -> Column[Any]:
+    return _window_column("range", window_min)
+
+
+def reaction_vol_z(window_min: int) -> Column[Any] | None:
+    """`vol_z_<w>` minutového okna; denní okna sloupec nemají → None."""
+    if reaction_phase(window_min) != "min":
+        return None
+    return _window_column("vol_z", window_min)
+
+
+def reaction_contaminated(window_min: int) -> Column[Any]:
+    """Sloupec `cont_<w>` — NULL u nezměřeného okna, jinak příznak kontaminace."""
+    return _window_column("cont", window_min)
+
+
+def reaction_deferred(window_min: int) -> Column[Any]:
+    return news_reactions.c[f"deferred_{reaction_phase(window_min)}"]
+
+
+def reaction_regime(window_min: int) -> Column[Any]:
+    return news_reactions.c[f"regime_{reaction_phase(window_min)}"]
+
+
+def reaction_computed_at(window_min: int) -> Column[Any]:
+    return news_reactions.c[f"computed_at_{reaction_phase(window_min)}"]
+
+
+def reaction_row_values(windows: Sequence[ReactionWindow]) -> dict[str, object]:
+    """Sloupce širokého řádku (bez `event_id`/`symbol`) z naměřených oken.
+
+    Okna smí být z obou fází; okna téže fáze musí sdílet `deferred`,
+    `gex_regime` a `computed_at` (invariant širokého tvaru) — porušení je
+    chyba volajícího, ne něco, co by se mělo tiše zprůměrovat. Chybějící okno
+    fáze zůstává NULL; fáze bez jediného okna nedostane ani `computed_at_*`.
+    """
+    values: dict[str, object] = {}
+    phase_meta: dict[str, tuple[bool, str | None, dt.datetime]] = {}
+    seen: set[int] = set()
+    for window in windows:
+        if window.window_min in seen:
+            raise ValueError(f"Okno {window.window_min} je v řádku dvakrát")
+        seen.add(window.window_min)
+        phase = reaction_phase(window.window_min)
+        meta = (window.deferred, window.gex_regime, window.computed_at)
+        if phase_meta.setdefault(phase, meta) != meta:
+            raise ValueError(
+                f"Okno {window.window_min}: deferred/regime/computed_at se liší od "
+                f"ostatních oken fáze {phase}"
+            )
+        values[f"ret_{window.window_min}"] = window.ret_bp
+        values[f"range_{window.window_min}"] = window.range_bp
+        values[f"cont_{window.window_min}"] = window.contaminated
+        if phase == "min":
+            values[f"vol_z_{window.window_min}"] = window.vol_z
+        elif window.vol_z is not None:
+            raise ValueError(f"Denní okno {window.window_min} nemá sloupec vol_z")
+    for phase, (deferred, regime, computed_at) in phase_meta.items():
+        values[f"deferred_{phase}"] = deferred
+        values[f"regime_{phase}"] = regime
+        values[f"computed_at_{phase}"] = computed_at
+    return values
+
+
+def unpivot_reaction(row: Mapping[Any, Any]) -> list[ReactionWindow]:
+    """Široký řádek → naměřená okna (seřazená podle okna); NULL okna vynechá."""
+    windows: list[ReactionWindow] = []
+    for window_min in REACTION_ALL_WINDOWS:
+        ret_bp = row.get(f"ret_{window_min}")
+        if ret_bp is None:
+            continue
+        phase = reaction_phase(window_min)
+        computed_at = row.get(f"computed_at_{phase}")
+        if computed_at is None:
+            raise ValueError(
+                f"Řádek má ret_{window_min}, ale computed_at_{phase} je NULL — porušený invariant"
+            )
+        vol_z = row.get(f"vol_z_{window_min}") if phase == "min" else None
+        windows.append(
+            ReactionWindow(
+                window_min=window_min,
+                ret_bp=float(ret_bp),
+                range_bp=float(row[f"range_{window_min}"]),
+                vol_z=float(vol_z) if vol_z is not None else None,
+                contaminated=bool(row[f"cont_{window_min}"]),
+                deferred=bool(row[f"deferred_{phase}"]),
+                gex_regime=row.get(f"regime_{phase}"),
+                computed_at=computed_at,
+            )
+        )
+    return windows
+
 
 # Empirický model fáze 1 (SPEC 5.2): agregáty per bucket, přepočet nočním jobem.
 # Kontaminovaná okna se sem nezapočítávají.
@@ -483,30 +649,59 @@ def ensure_sentiment_schema(engine: Engine) -> None:
         if "body" not in columns:  # #743: plné znění článku
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE news_events ADD COLUMN body TEXT"))
-    # `news_reactions` jsou naměřená data — jen aditivní ADD COLUMN.
+    # `news_reactions` jsou naměřená data. Starý tvar (řádek per okno, do #998)
+    # se NEmigruje za běhu: 1,85 M řádků pivotuje samostatný skript s kontrolou
+    # bezeztrátovosti. Proces nesmí do starého tvaru tiše psát ani vedle plné
+    # staré tabulky založit prázdnou novou — proto tvrdá chyba s návodem.
     if "news_reactions" in existing:
         columns = {column["name"] for column in inspector.get_columns("news_reactions")}
-        if "gex_regime" not in columns:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE news_reactions ADD COLUMN gex_regime VARCHAR(16)"))
+        if "window_min" in columns or "computed_at_min" not in columns:
+            raise LegacyNewsReactionsError(
+                "Tabulka news_reactions je ve starém tvaru (řádek per okno, #998). "
+                "Spusť `scripts/migrate_news_reactions_wide.py` (nejdřív se zálohou PG); "
+                "do té doby se do reakcí nesmí psát."
+            )
     sentiment_metadata.create_all(engine)
+    ensure_news_reaction_spread_view(engine)
 
-    # Rozdíl reakcí NQ − ES per (event, okno) — míra „technologického
-    # charakteru" zprávy (ADR-0026, #579). View, ne materializace: obě
-    # reakce trvale žijí v `news_reactions`, druhá kopie by lhala při
-    # doplnění oken. PG umí CREATE OR REPLACE, SQLite (testy) jen IF NOT
-    # EXISTS — definice se nemění, takže obojí je idempotentní.
-    view_sql = (
-        "VIEW news_reaction_spread AS "
-        "SELECT nq.event_id AS event_id, nq.window_min AS window_min, "
-        "nq.ret_bp - es.ret_bp AS spread_bp, "
-        "nq.ret_bp AS nq_ret_bp, es.ret_bp AS es_ret_bp, "
-        "(nq.contaminated OR es.contaminated) AS contaminated "
-        "FROM news_reactions nq "
-        "JOIN news_reactions es ON es.event_id = nq.event_id "
-        "AND es.window_min = nq.window_min AND es.symbol = 'ES' "
-        "WHERE nq.symbol = 'NQ'"
-    )
+
+class LegacyNewsReactionsError(RuntimeError):
+    """`news_reactions` je v tvaru před #998 — vyžaduje ruční migraci skriptem."""
+
+
+def news_reaction_spread_view_sql() -> str:
+    """Definice view `news_reaction_spread` bez úvodního `CREATE …`.
+
+    Rozdíl reakcí NQ − ES per (event, okno) — míra „technologického
+    charakteru" zprávy (ADR-0026, #579). View, ne materializace: obě reakce
+    trvale žijí v `news_reactions`, druhá kopie by lhala při doplnění oken.
+    Nad širokým tvarem (#998) je to UNION ALL per okno; sloupce a jejich typy
+    drží tvar z ADR-0026, aby CREATE OR REPLACE v PG prošlo.
+    """
+    parts = []
+    for window in REACTION_ALL_WINDOWS:
+        parts.append(
+            f"SELECT nq.event_id AS event_id, CAST({window} AS SMALLINT) AS window_min, "
+            f"nq.ret_{window} - es.ret_{window} AS spread_bp, "
+            f"nq.ret_{window} AS nq_ret_bp, es.ret_{window} AS es_ret_bp, "
+            f"(nq.cont_{window} OR es.cont_{window}) AS contaminated "
+            "FROM news_reactions nq "
+            "JOIN news_reactions es ON es.event_id = nq.event_id AND es.symbol = 'ES' "
+            f"WHERE nq.symbol = 'NQ' AND nq.ret_{window} IS NOT NULL "
+            f"AND es.ret_{window} IS NOT NULL"
+        )
+    return "VIEW news_reaction_spread AS " + " UNION ALL ".join(parts)
+
+
+def ensure_news_reaction_spread_view(engine: Engine) -> None:
+    """Založí/obnoví view nad `news_reactions` (idempotentní).
+
+    PG umí CREATE OR REPLACE, SQLite (testy) jen IF NOT EXISTS — definice se
+    nemění, takže obojí je idempotentní.
+    """
+    from sqlalchemy import text
+
+    view_sql = news_reaction_spread_view_sql()
     with engine.begin() as conn:
         if engine.dialect.name == "postgresql":
             conn.execute(text("CREATE OR REPLACE " + view_sql))

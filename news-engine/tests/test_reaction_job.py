@@ -9,7 +9,14 @@ import pytest
 from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
-from gexlens_engine.storage.sentiment import ensure_sentiment_schema, news_events, news_reactions
+from gexlens_engine.storage.sentiment import (
+    ReactionWindow,
+    ensure_sentiment_schema,
+    news_events,
+    news_reactions,
+    reaction_ret,
+    unpivot_reaction,
+)
 from gexlens_news.bars import BarsRepository
 from gexlens_news.reaction_job import ReactionJob
 
@@ -69,24 +76,37 @@ def make_env(tmp_path: Path) -> tuple[Engine, ReactionJob]:
     return engine, ReactionJob(engine, BarsRepository(tmp_path / "data"))
 
 
+def reaction_windows(engine: Engine, event_id: int) -> list[tuple[str, ReactionWindow]]:
+    """Naměřená okna eventu jako (symbol, okno) — široký řádek rozložený (#998)."""
+    with engine.connect() as conn:
+        rows = (
+            conn.execute(select(news_reactions).where(news_reactions.c.event_id == event_id))
+            .mappings()
+            .all()
+        )
+    return [(str(row["symbol"]), window) for row in rows for window in unpivot_reaction(row)]
+
+
 def test_job_measures_all_windows_for_both_symbols(tmp_path: Path) -> None:
     engine, job = make_env(tmp_path)
     event_id = add_event(engine, EVENT_TS, importance=1, title="Solo headline")
 
     assert job.run(NOW) == 8  # 4 okna × 2 symboly
 
-    with engine.connect() as conn:
-        rows = conn.execute(
-            select(news_reactions).where(news_reactions.c.event_id == event_id)
-        ).fetchall()
-    by_key = {(r.symbol, r.window_min): r for r in rows}
+    rows = reaction_windows(engine, event_id)
+    by_key = {(symbol, window.window_min): window for symbol, window in rows}
     assert sorted({k[1] for k in by_key}) == [1, 5, 15, 60]
     # ES má drift +20 bps po zprávě, NQ je plochý
     assert by_key[("ES", 5)].ret_bp > 19
     assert abs(by_key[("NQ", 5)].ret_bp) < 0.01
     # Archiv má jen jeden den → baseline nestačí, vol_z zůstává None
-    assert all(r.vol_z is None for r in rows)
-    assert all(not r.deferred for r in rows)
+    assert all(window.vol_z is None for _, window in rows)
+    assert all(not window.deferred for _, window in rows)
+    # Široký tvar: jeden řádek per symbol, denní fáze zatím prázdná
+    with engine.connect() as conn:
+        wide = conn.execute(select(news_reactions)).mappings().all()
+    assert sorted(row["symbol"] for row in wide) == ["ES", "NQ"]
+    assert all(row["computed_at_daily"] is None for row in wide)
 
 
 def test_job_flags_contaminated_windows_only(tmp_path: Path) -> None:
@@ -97,13 +117,11 @@ def test_job_flags_contaminated_windows_only(tmp_path: Path) -> None:
 
     job.run(NOW)
 
-    with engine.connect() as conn:
-        rows = conn.execute(
-            select(news_reactions.c.window_min, news_reactions.c.contaminated).where(
-                news_reactions.c.event_id == event_id, news_reactions.c.symbol == "ES"
-            )
-        ).fetchall()
-    contaminated = {r.window_min: r.contaminated for r in rows}
+    contaminated = {
+        window.window_min: window.contaminated
+        for symbol, window in reaction_windows(engine, event_id)
+        if symbol == "ES"
+    }
     assert contaminated == {1: False, 5: False, 15: True, 60: True}
 
 
@@ -128,11 +146,7 @@ def test_low_importance_event_does_not_contaminate(tmp_path: Path) -> None:
 
     job.run(NOW)
 
-    with engine.connect() as conn:
-        rows = conn.execute(
-            select(news_reactions.c.contaminated).where(news_reactions.c.event_id == event_id)
-        ).fetchall()
-    assert all(not r.contaminated for r in rows)
+    assert all(not window.contaminated for _, window in reaction_windows(engine, event_id))
 
 
 def write_holiday_bars(data_dir: Path, symbol: str, day: dt.date) -> None:
@@ -216,11 +230,8 @@ def test_vikendova_zprava_dostane_deferred_reakci(tmp_path: Path) -> None:
     assert job.run(dt.datetime(2026, 7, 27, 12, 0, tzinfo=dt.UTC)) == 8
 
     with engine.connect() as conn:
-        rows = conn.execute(
-            select(news_reactions).where(news_reactions.c.event_id == event_id)
-        ).fetchall()
         event = conn.execute(select(news_events).where(news_events.c.id == event_id)).fetchone()
-    assert all(row.deferred for row in rows)
+    assert all(window.deferred for _, window in reaction_windows(engine, event_id))
     assert event is not None
     assert event.market_closed is True
 
@@ -239,18 +250,11 @@ def make_daily_env(tmp_path: Path) -> tuple[Engine, ReactionJob]:
 
 
 def daily_rows(engine: Engine, event_id: int) -> list[tuple[str, int, float]]:
-    with engine.connect() as conn:
-        rows = conn.execute(
-            select(
-                news_reactions.c.symbol,
-                news_reactions.c.window_min,
-                news_reactions.c.ret_bp,
-            ).where(
-                news_reactions.c.event_id == event_id,
-                news_reactions.c.window_min >= 1440,
-            )
-        ).fetchall()
-    return sorted((str(r.symbol), int(r.window_min), float(r.ret_bp)) for r in rows)
+    return sorted(
+        (symbol, window.window_min, window.ret_bp)
+        for symbol, window in reaction_windows(engine, event_id)
+        if window.window_min >= 1440
+    )
 
 
 def test_job_dopocita_denni_okna_a_je_idempotentni(tmp_path: Path) -> None:
@@ -272,6 +276,44 @@ def test_job_dopocita_denni_okna_a_je_idempotentni(tmp_path: Path) -> None:
     # Idempotence: druhý běh nic nepřidá
     assert job.run(now + dt.timedelta(minutes=1)) == 0
     assert daily_rows(engine, event_id) == rows
+    # Denní fáze doplnila TENTÝŽ řádek (#998): minutová okna zůstala, obě
+    # fáze mají vlastní computed_at
+    with engine.connect() as conn:
+        es = (
+            conn.execute(
+                select(news_reactions).where(
+                    news_reactions.c.event_id == event_id, news_reactions.c.symbol == "ES"
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert es["ret_5"] is not None
+    assert es["computed_at_min"] is not None
+    assert es["computed_at_daily"] is not None
+
+
+def test_denni_faze_zalozi_radek_eventu_bez_minutovych_oken(tmp_path: Path) -> None:
+    """Event před pokrytím minutových barů dostane jen denní okna (#998 upsert).
+
+    Minutová fáze bez barů nic nezapíše; denní fáze pak musí řádek založit,
+    ne jen aktualizovat — jinak by ~27 k historických dvojic vypadlo.
+    """
+    engine, job = make_daily_env(tmp_path)
+    event_id = add_event(engine, EVENT_TS, importance=2, title="CPI")
+    now = EVENT_TS + dt.timedelta(days=20)
+    # Minutovou fázi obejdeme: řádek neexistuje, denní fáze ho zakládá
+    job._windows = [1, 5, 15, 60]
+    assert job._pending_daily_events(now, limit=10) == [(event_id, EVENT_TS)]
+    assert job._run_daily(now, limit=10) == 4  # 2 okna × 2 symboly
+    with engine.connect() as conn:
+        rows = conn.execute(select(news_reactions)).mappings().all()
+    assert sorted(row["symbol"] for row in rows) == ["ES", "NQ"]
+    assert all(row["computed_at_min"] is None and row["ret_5"] is None for row in rows)
+    # SQLite vrací naivní datetime — porovnání v UTC
+    assert all(row["computed_at_daily"].replace(tzinfo=dt.UTC) == now for row in rows)
+    assert all(row["ret_1440"] is not None for row in rows)
+    assert job._pending_daily_events(now, limit=10) == []
 
 
 def test_job_ceka_na_uzavreni_nejdelsiho_denniho_okna(tmp_path: Path) -> None:
@@ -285,7 +327,7 @@ def test_job_ceka_na_uzavreni_nejdelsiho_denniho_okna(tmp_path: Path) -> None:
         minute_count = conn.execute(
             select(news_reactions.c.event_id).where(
                 news_reactions.c.event_id == event_id,
-                news_reactions.c.window_min < 1440,
+                reaction_ret(5).is_not(None),
             )
         ).fetchall()
     assert len(minute_count) > 0

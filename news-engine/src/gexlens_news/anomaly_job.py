@@ -28,7 +28,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
-from gexlens_engine.storage.sentiment import news_events, news_reactions
+from gexlens_engine.storage.sentiment import (
+    news_events,
+    news_reactions,
+    reaction_computed_at,
+    reaction_contaminated,
+    reaction_deferred,
+    reaction_ret,
+)
 from gexlens_news.model_stats import surprise_bucket
 from gexlens_news.predictions import DEFAULT_PRIMARY_WINDOW_MIN
 
@@ -74,9 +81,9 @@ class AnomalyJob:
             select(
                 news_reactions.c.event_id,
                 news_reactions.c.symbol,
-                news_reactions.c.ret_bp,
-                news_reactions.c.deferred,
-                news_reactions.c.computed_at,
+                reaction_ret(self._window).label("ret_bp"),
+                reaction_deferred(self._window).label("deferred"),
+                reaction_computed_at(self._window).label("computed_at"),
                 news_events.c.title,
                 news_events.c.category,
                 news_events.c.importance,
@@ -84,12 +91,13 @@ class AnomalyJob:
             )
             .join(news_events, news_events.c.id == news_reactions.c.event_id)
             .where(
-                news_reactions.c.computed_at >= self._watermark,
+                # Watermark fáze primárního okna (#998: `computed_at_min`)
+                reaction_computed_at(self._window) >= self._watermark,
                 # Watermark hlídá čas VÝPOČTU; bez druhé podmínky by dopočet
                 # historie (#744) vyslal alert o každém starém pohybu
                 news_events.c.ts_event >= now - MAX_EVENT_AGE,
-                news_reactions.c.window_min == self._window,
-                news_reactions.c.contaminated.is_(False),
+                reaction_ret(self._window).is_not(None),
+                reaction_contaminated(self._window).is_(False),
                 news_events.c.category.is_not(None),
                 news_events.c.importance.is_not(None),
             )
@@ -103,13 +111,13 @@ class AnomalyJob:
             float(fresh["surprise_z"]) if fresh["surprise_z"] is not None else None
         )
         stmt = (
-            select(news_reactions.c.ret_bp, news_events.c.surprise_z)
+            select(reaction_ret(self._window).label("ret_bp"), news_events.c.surprise_z)
             .join(news_events, news_events.c.id == news_reactions.c.event_id)
             .where(
-                news_reactions.c.window_min == self._window,
+                reaction_ret(self._window).is_not(None),
                 news_reactions.c.symbol == fresh["symbol"],
-                news_reactions.c.contaminated.is_(False),
-                news_reactions.c.deferred == bool(fresh["deferred"]),
+                reaction_contaminated(self._window).is_(False),
+                reaction_deferred(self._window) == bool(fresh["deferred"]),
                 news_reactions.c.event_id != fresh["event_id"],
                 news_events.c.category == fresh["category"],
                 news_events.c.importance == fresh["importance"],

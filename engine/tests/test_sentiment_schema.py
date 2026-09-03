@@ -10,13 +10,19 @@ from sqlalchemy.exc import IntegrityError
 
 from gexlens_engine.storage.sentiment import (
     NEWS_CATEGORIES,
+    REACTION_ALL_WINDOWS,
     REACTION_WINDOWS,
+    ReactionWindow,
     crowd_sentiment,
     ensure_sentiment_schema,
     news_classifications,
     news_events,
     news_reactions,
+    reaction_contaminated,
+    reaction_ret,
+    reaction_row_values,
     sentiment_metadata,
+    unpivot_reaction,
 )
 
 TS = dt.datetime(2026, 7, 28, 12, 30, tzinfo=dt.UTC)
@@ -124,30 +130,78 @@ def test_classifications_are_append_only_versions(tmp_path: Path) -> None:
 def test_reactions_carry_contamination_and_deferred_flags(tmp_path: Path) -> None:
     """Anti-šum (SPEC 5.1): okna jdou vyloučit z tréninku podle příznaků."""
     engine = make_engine(tmp_path)
+    windows = [
+        ReactionWindow(
+            window_min=window,
+            ret_bp=1.0 * window,
+            range_bp=2.0,
+            vol_z=0.5,
+            # Delší okna chytila další high-impact event
+            contaminated=window >= 15,
+            deferred=False,
+            gex_regime=None,
+            computed_at=TS,
+        )
+        for window in REACTION_WINDOWS
+    ]
     with engine.begin() as conn:
         key = conn.execute(insert(news_events).values(**event_values())).inserted_primary_key
         assert key is not None
         event_id = int(key[0])
-        for window in REACTION_WINDOWS:
-            conn.execute(
-                insert(news_reactions).values(
-                    event_id=event_id,
-                    symbol="ES",
-                    window_min=window,
-                    ret_bp=1.0 * window,
-                    range_bp=2.0,
-                    vol_z=0.5,
-                    # Delší okna chytila další high-impact event
-                    contaminated=window >= 15,
-                    deferred=False,
-                    computed_at=TS,
-                )
+        conn.execute(
+            insert(news_reactions).values(
+                event_id=event_id, symbol="ES", **reaction_row_values(windows)
             )
+        )
     with engine.connect() as conn:
-        clean = conn.execute(
-            select(news_reactions.c.window_min).where(~news_reactions.c.contaminated)
-        ).fetchall()
-    assert sorted(r.window_min for r in clean) == [1, 5]
+        row = conn.execute(select(news_reactions)).mappings().one()
+        clean = [
+            window
+            for window in REACTION_ALL_WINDOWS
+            if conn.execute(
+                select(news_reactions.c.event_id).where(
+                    reaction_ret(window).is_not(None), reaction_contaminated(window).is_(False)
+                )
+            ).first()
+            is not None
+        ]
+    assert clean == [1, 5]
+    # Denní fáze zatím nespočítaná → její okna i metadata NULL
+    assert row["computed_at_daily"] is None
+    assert row["ret_1440"] is None
+    assert [w.window_min for w in unpivot_reaction(row)] == list(REACTION_WINDOWS)
+
+
+def test_reaction_row_values_guards_phase_invariants() -> None:
+    """Široký tvar (#998) stojí na tom, že fáze sdílí deferred/regime/computed_at."""
+
+    def window(window_min: int, **overrides: object) -> ReactionWindow:
+        values: dict[str, object] = {
+            "window_min": window_min,
+            "ret_bp": 1.0,
+            "range_bp": 2.0,
+            "vol_z": None,
+            "contaminated": False,
+            "deferred": False,
+            "gex_regime": None,
+            "computed_at": TS,
+        }
+        values.update(overrides)
+        return ReactionWindow(**values)  # type: ignore[arg-type]
+
+    values = reaction_row_values([window(5), window(1440, deferred=True, gex_regime="negative")])
+    assert values["deferred_min"] is False
+    assert values["deferred_daily"] is True
+    assert values["regime_daily"] == "negative"
+    assert "vol_z_1440" not in values
+    with pytest.raises(ValueError, match="liší"):
+        reaction_row_values([window(5), window(15, deferred=True)])
+    with pytest.raises(ValueError, match="dvakrát"):
+        reaction_row_values([window(5), window(5)])
+    with pytest.raises(ValueError, match="vol_z"):
+        reaction_row_values([window(1440, vol_z=0.3)])
+    with pytest.raises(ValueError, match="Neznámé"):
+        reaction_row_values([window(7)])
 
 
 def test_crowd_sentiment_is_a_time_series_not_events(tmp_path: Path) -> None:

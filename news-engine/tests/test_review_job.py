@@ -8,11 +8,13 @@ from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import (
+    ReactionWindow,
     ensure_sentiment_schema,
     news_classifications,
     news_events,
     news_model_stats,
     news_reactions,
+    reaction_row_values,
     review_queue,
 )
 from gexlens_news.review_job import ReviewJob
@@ -154,22 +156,19 @@ def test_auto_resolve_after_longest_window_measured(tmp_path: Path) -> None:
     assert queue_rows(engine)[0].resolved_at is None
 
     # Reakce nejdelšího okna (60 min) existuje → auto-uzavření
+    longest = ReactionWindow(
+        window_min=60,
+        ret_bp=5.0,
+        range_bp=8.0,
+        vol_z=None,
+        contaminated=False,
+        deferred=False,
+        gex_regime=None,
+        computed_at=NOW,
+    )
     with engine.begin() as conn:
         conn.execute(
-            insert(news_reactions),
-            [
-                {
-                    "event_id": 1,
-                    "symbol": "ES",
-                    "window_min": 60,
-                    "ret_bp": 5.0,
-                    "range_bp": 8.0,
-                    "vol_z": None,
-                    "contaminated": False,
-                    "deferred": False,
-                    "computed_at": NOW,
-                }
-            ],
+            insert(news_reactions).values(event_id=1, symbol="ES", **reaction_row_values([longest]))
         )
     job.run(NOW + dt.timedelta(minutes=5))
     assert queue_rows(engine)[0].resolved_at is not None

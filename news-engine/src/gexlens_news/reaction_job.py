@@ -11,18 +11,26 @@ import logging
 from collections.abc import Sequence
 from pathlib import Path
 
-from sqlalchemy import and_, insert, not_, select, update
+from sqlalchemy import and_, exists, insert, not_, select, update
 from sqlalchemy.engine import Connection, Engine
 
 from gexlens_engine.compute.settle import settle_ts, trading_session_date
 from gexlens_engine.compute.setups import gex_regime
-from gexlens_engine.storage.sentiment import news_events, news_reactions
+from gexlens_engine.storage.sentiment import (
+    REACTION_DAILY_WINDOWS,
+    REACTION_WINDOWS,
+    ReactionWindow,
+    news_events,
+    news_reactions,
+    reaction_row_values,
+)
 from gexlens_news.bars import BarsRepository
 from gexlens_news.reactions import (
     DAILY_WINDOW_DAYS,
     DEFAULT_WINDOWS,
     MIN_BASELINE_SESSIONS,
     MINUTES_PER_TRADING_DAY,
+    Reaction,
     SessionDaily,
     VolumeBaseline,
     build_volume_baseline,
@@ -122,6 +130,14 @@ class ReactionJob:
         self._windows = list(windows)
         # Denní okna v obchodních dnech (#564); () denní fázi vypíná
         self._daily_window_days = list(daily_window_days)
+        # Široký řádek (#998) má sloupce jen pro známá okna — jiná konfigurace
+        # by neměla kam psát; lepší spadnout při startu než při prvním zápisu
+        unknown = set(self._windows) - set(REACTION_WINDOWS)
+        unknown |= {d * MINUTES_PER_TRADING_DAY for d in self._daily_window_days} - set(
+            REACTION_DAILY_WINDOWS
+        )
+        if unknown:
+            raise ValueError(f"Reakční okna bez sloupce v news_reactions: {sorted(unknown)}")
         # Cache denních sérií per symbol: (počet partic, série) — přestaví se
         # jen když přibude nová partice, jinak by job četl stovky souborů denně
         self._daily_series_cache: dict[str, tuple[int, list[SessionDaily]]] = {}
@@ -129,14 +145,20 @@ class ReactionJob:
         self._regime_reader = LevelsRegimeReader(bars.data_dir)
 
     def _pending_events(self, now: dt.datetime, limit: int) -> list[tuple[int, dt.datetime]]:
-        """Eventy s uzavřeným nejdelším oknem a bez reakcí."""
+        """Eventy s uzavřeným nejdelším oknem a bez reakcí.
+
+        „Bez reakcí" = bez JAKÉHOKOLI řádku, ne jen bez minutové fáze: event,
+        kterému minutová fáze nenašla bary a denní fáze ho pak změřila
+        (~27 k historických dvojic před pokrytím minutových barů), by se jinak
+        vybíral znovu každý cyklus — stejná past jako #655.
+        """
         ready_before = now - dt.timedelta(minutes=max(self._windows))
-        measured = select(news_reactions.c.event_id).distinct()
+        measured = exists().where(news_reactions.c.event_id == news_events.c.id)
         stmt = (
             select(news_events.c.id, news_events.c.ts_event)
             .where(
                 news_events.c.ts_event <= ready_before,
-                not_(news_events.c.id.in_(measured)),
+                not_(measured),
                 # #655: trvale nespočitatelné eventy (před pokrytím barů) se
                 # nevybírají — bez filtru se týchž ~4 800 mrtvých eventů
                 # přescanovávalo každý cyklus donekonečna
@@ -206,16 +228,15 @@ class ReactionJob:
     def _pending_daily_events(self, now: dt.datetime, limit: int) -> list[tuple[int, dt.datetime]]:
         """Eventy bez denních oken, u kterých už šlo uzavřít i nejdelší okno."""
         ready_before = now - dt.timedelta(days=DAILY_READY_CALENDAR_DAYS)
-        measured = (
-            select(news_reactions.c.event_id)
-            .where(news_reactions.c.window_min >= MINUTES_PER_TRADING_DAY)
-            .distinct()
+        measured = exists().where(
+            news_reactions.c.event_id == news_events.c.id,
+            news_reactions.c.computed_at_daily.is_not(None),
         )
         stmt = (
             select(news_events.c.id, news_events.c.ts_event)
             .where(
                 news_events.c.ts_event <= ready_before,
-                not_(news_events.c.id.in_(measured)),
+                not_(measured),
                 # #655: trvale nespočitatelné eventy (před pokrytím barů) se
                 # nevybírají — bez filtru se týchž ~4 800 mrtvých eventů
                 # přescanovávalo každý cyklus donekonečna
@@ -246,7 +267,7 @@ class ReactionJob:
         measured_events = 0
         uncomputable: list[int] = []
         for event_id, ts_event in pending:
-            rows: list[dict[str, object]] = []
+            rows: list[tuple[str, dict[str, object], int]] = []
             wait_for_close = False
             for symbol in self._symbols:
                 bars = self._bars.load_range(
@@ -272,21 +293,7 @@ class ReactionJob:
                     else:
                         break
                 regime = self._regime_reader.regime_at(symbol, ts_event, spot_at_event)
-                for reaction in reactions:
-                    rows.append(
-                        {
-                            "event_id": event_id,
-                            "symbol": symbol,
-                            "window_min": reaction.window_min,
-                            "ret_bp": reaction.ret_bp,
-                            "range_bp": reaction.range_bp,
-                            "vol_z": reaction.vol_z,
-                            "contaminated": reaction.contaminated,
-                            "deferred": reaction.deferred,
-                            "gex_regime": regime,
-                            "computed_at": now,
-                        }
-                    )
+                rows.append((symbol, _phase_values(reactions, regime, now), len(reactions)))
             if wait_for_close:
                 continue  # dočasné — nejdelší okno se uzavře v příštích dnech
             if not rows:
@@ -296,8 +303,12 @@ class ReactionJob:
                 uncomputable.append(event_id)
                 continue
             with self._engine.begin() as conn:
-                conn.execute(insert(news_reactions), rows)
-            written += len(rows)
+                for symbol, values, count in rows:
+                    # Denní fáze doplňuje řádek minutové fáze (UPDATE); řádek
+                    # ještě nemusí existovat — historický event před pokrytím
+                    # minutových barů dostává jen denní okna
+                    _write_phase(conn, event_id, symbol, values)
+                    written += count
             measured_events += 1
         if uncomputable:
             with self._engine.begin() as conn:
@@ -326,7 +337,7 @@ class ReactionJob:
         baselines = {symbol: self._baseline_for(symbol, now.date()) for symbol in self._symbols}
         for event_id, ts_event in pending:
             others = self._contaminating(ts_event)
-            rows: list[dict[str, object]] = []
+            rows: list[tuple[str, dict[str, object], int]] = []
             # Zavřený trh podle skutečně obchodovaných barů, per symbol (#339)
             closed_flags: list[bool] = []
             for symbol in self._symbols:
@@ -356,26 +367,14 @@ class ReactionJob:
                     else:
                         break
                 regime = self._regime_reader.regime_at(symbol, ts_event, spot_at_event)
-                for reaction in reactions:
-                    rows.append(
-                        {
-                            "event_id": event_id,
-                            "symbol": symbol,
-                            "window_min": reaction.window_min,
-                            "ret_bp": reaction.ret_bp,
-                            "range_bp": reaction.range_bp,
-                            "vol_z": reaction.vol_z,
-                            "contaminated": reaction.contaminated,
-                            "deferred": reaction.deferred,
-                            "gex_regime": regime,
-                            "computed_at": now,
-                        }
-                    )
+                if reactions:
+                    rows.append((symbol, _phase_values(reactions, regime, now), len(reactions)))
             if rows:
                 with self._engine.begin() as conn:
-                    conn.execute(insert(news_reactions), rows)
+                    for symbol, values, count in rows:
+                        _write_phase(conn, event_id, symbol, values)
+                        written += count
                     self._correct_market_closed(conn, event_id, closed_flags)
-                written += len(rows)
         if written:
             logger.info("Reakce: zapsáno %d oken pro %d eventů", written, len(pending))
         return written + self._run_daily(now, limit=limit)
@@ -412,6 +411,41 @@ class ReactionJob:
             )
             return None
         return build_volume_baseline(sessions)
+
+
+def _phase_values(
+    reactions: Sequence[Reaction], regime: str | None, now: dt.datetime
+) -> dict[str, object]:
+    """Sloupce jedné fáze širokého řádku (#998) z naměřených oken symbolu."""
+    return reaction_row_values(
+        [
+            ReactionWindow(
+                window_min=reaction.window_min,
+                ret_bp=reaction.ret_bp,
+                range_bp=reaction.range_bp,
+                vol_z=reaction.vol_z,
+                contaminated=reaction.contaminated,
+                deferred=reaction.deferred,
+                gex_regime=regime,
+                computed_at=now,
+            )
+            for reaction in reactions
+        ]
+    )
+
+
+def _write_phase(conn: Connection, event_id: int, symbol: str, values: dict[str, object]) -> None:
+    """Zapíše sloupce fáze do řádku (event, symbol): UPDATE existujícího, jinak INSERT.
+
+    Dialektově neutrální upsert (SQLite v testech, PG v provozu) — hledání
+    po PK je levné a obě fáze tak sdílejí jednu cestu zápisu.
+    """
+    key = and_(news_reactions.c.event_id == event_id, news_reactions.c.symbol == symbol)
+    present = conn.execute(select(news_reactions.c.event_id).where(key)).first()
+    if present is None:
+        conn.execute(insert(news_reactions).values(event_id=event_id, symbol=symbol, **values))
+    else:
+        conn.execute(update(news_reactions).where(key).values(**values))
 
 
 def _as_utc(value: dt.datetime) -> dt.datetime:
