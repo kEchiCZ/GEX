@@ -79,11 +79,20 @@ class BarsRepository:
         """
         day = start.date() - dt.timedelta(days=1)
         last = end.date() + dt.timedelta(days=1)
-        collected: list[Bar] = []
+        # Jedna minuta = jeden bar, i když ji nese víc partic (#1002): engine
+        # dřív zapsal půlnoční bar i rekonstruovaný večerní blok do partice
+        # dne seance vedle měřené kopie v partici UTC dne. Vyhrává řádek z
+        # partice, do které minuta podle UTC dne patří; jinak první nalezený.
+        by_minute: dict[dt.datetime, Bar] = {}
         while day <= last:
-            collected.extend(self.load_day(symbol, day))
+            for bar in self.load_day(symbol, day):
+                if bar.ts not in by_minute or bar.ts.date() == day:
+                    by_minute[bar.ts] = bar
             day += dt.timedelta(days=1)
-        return [bar for bar in collected if start <= bar.ts <= end]
+        return sorted(
+            (bar for bar in by_minute.values() if start <= bar.ts <= end),
+            key=lambda bar: bar.ts,
+        )
 
     def recent_sessions(self, symbol: str, before: dt.date, count: int) -> list[Sequence[Bar]]:
         """Posledních `count` seancí před dnem `before` — podklad volume baseline."""
