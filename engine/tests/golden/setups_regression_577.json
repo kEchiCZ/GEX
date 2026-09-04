@@ -1,0 +1,473 @@
+{
+ "mechanics_version": 5,
+ "candidates": [
+  {
+   "minute": 63,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7502.1547,
+   "target": 7512.0,
+   "stop": 7496.9653,
+   "confidence": 45
+  },
+  {
+   "minute": 67,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.2908,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 68,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.9677,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 70,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.6831,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 72,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.3939,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 106,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7527.3417,
+   "target": 7515.0,
+   "stop": 7533.0854,
+   "confidence": 45
+  },
+  {
+   "minute": 107,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7527.329,
+   "target": 7515.0,
+   "stop": 7533.0822,
+   "confidence": 45
+  },
+  {
+   "minute": 108,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7527.1142,
+   "target": 7515.0,
+   "stop": 7533.0285,
+   "confidence": 45
+  },
+  {
+   "minute": 109,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7527.5634,
+   "target": 7515.0,
+   "stop": 7533.1409,
+   "confidence": 45
+  },
+  {
+   "minute": 110,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7528.695,
+   "target": 7515.0,
+   "stop": 7533.4238,
+   "confidence": 45
+  },
+  {
+   "minute": 112,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7527.9088,
+   "target": 7515.0,
+   "stop": 7533.2272,
+   "confidence": 45
+  },
+  {
+   "minute": 113,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7527.5431,
+   "target": 7515.0,
+   "stop": 7533.1358,
+   "confidence": 45
+  },
+  {
+   "minute": 114,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7528.6137,
+   "target": 7515.0,
+   "stop": 7533.4034,
+   "confidence": 45
+  },
+  {
+   "minute": 116,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7527.8581,
+   "target": 7515.0,
+   "stop": 7533.2145,
+   "confidence": 45
+  },
+  {
+   "minute": 117,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7528.3369,
+   "target": 7515.0,
+   "stop": 7533.3342,
+   "confidence": 45
+  },
+  {
+   "minute": 119,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7527.6979,
+   "target": 7515.0,
+   "stop": 7533.1745,
+   "confidence": 45
+  },
+  {
+   "minute": 151,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.3697,
+   "target": 7512.0,
+   "stop": 7496.8837,
+   "confidence": 45
+  },
+  {
+   "minute": 152,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7502.0312,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 154,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.3718,
+   "target": 7512.0,
+   "stop": 7496.6476,
+   "confidence": 45
+  },
+  {
+   "minute": 155,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7502.3612,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 156,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7502.0126,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 158,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.8114,
+   "target": 7512.0,
+   "stop": 7496.9672,
+   "confidence": 45
+  },
+  {
+   "minute": 159,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7502.0359,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 160,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.3826,
+   "target": 7512.0,
+   "stop": 7496.9775,
+   "confidence": 45
+  },
+  {
+   "minute": 162,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.1881,
+   "target": 7512.0,
+   "stop": 7496.7477,
+   "confidence": 45
+  },
+  {
+   "minute": 194,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7525.839,
+   "target": 7515.0,
+   "stop": 7533.0,
+   "confidence": 45
+  },
+  {
+   "minute": 195,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7527.6409,
+   "target": 7515.0,
+   "stop": 7533.1602,
+   "confidence": 45
+  },
+  {
+   "minute": 196,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7528.6356,
+   "target": 7515.0,
+   "stop": 7534.1989,
+   "confidence": 45
+  },
+  {
+   "minute": 199,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7527.7484,
+   "target": 7515.0,
+   "stop": 7533.6641,
+   "confidence": 45
+  },
+  {
+   "minute": 200,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7528.1628,
+   "target": 7515.0,
+   "stop": 7533.7087,
+   "confidence": 45
+  },
+  {
+   "minute": 203,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7528.7301,
+   "target": 7515.0,
+   "stop": 7533.4543,
+   "confidence": 45
+  },
+  {
+   "minute": 205,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7528.4119,
+   "target": 7515.0,
+   "stop": 7533.4765,
+   "confidence": 45
+  },
+  {
+   "minute": 207,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7528.348,
+   "target": 7515.0,
+   "stop": 7533.337,
+   "confidence": 45
+  },
+  {
+   "minute": 210,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7528.441,
+   "target": 7515.0,
+   "stop": 7533.3602,
+   "confidence": 45
+  },
+  {
+   "minute": 238,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7503.7005,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 239,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7502.1743,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 241,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.3525,
+   "target": 7512.0,
+   "stop": 7495.7563,
+   "confidence": 45
+  },
+  {
+   "minute": 242,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7502.9529,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 243,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.4903,
+   "target": 7512.0,
+   "stop": 7495.8623,
+   "confidence": 45
+  },
+  {
+   "minute": 244,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.2367,
+   "target": 7512.0,
+   "stop": 7495.9256,
+   "confidence": 45
+  },
+  {
+   "minute": 245,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.2531,
+   "target": 7512.0,
+   "stop": 7496.2722,
+   "confidence": 45
+  },
+  {
+   "minute": 246,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7502.369,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 247,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.3307,
+   "target": 7512.0,
+   "stop": 7496.3002,
+   "confidence": 45
+  },
+  {
+   "minute": 249,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7502.1051,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 250,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7501.5546,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 252,
+   "template": "wall_bounce",
+   "direction": "long",
+   "entry": 7502.507,
+   "target": 7512.0,
+   "stop": 7497.0,
+   "confidence": 45
+  },
+  {
+   "minute": 280,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7528.4768,
+   "target": 7515.0,
+   "stop": 7533.3692,
+   "confidence": 45
+  },
+  {
+   "minute": 281,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7528.5976,
+   "target": 7515.0,
+   "stop": 7533.3994,
+   "confidence": 45
+  },
+  {
+   "minute": 348,
+   "template": "gamma_momentum",
+   "direction": "long",
+   "entry": 7517.1058,
+   "target": 7530.0,
+   "stop": 7512.3132,
+   "confidence": 50
+  },
+  {
+   "minute": 349,
+   "template": "gamma_momentum",
+   "direction": "long",
+   "entry": 7519.6264,
+   "target": 7530.0,
+   "stop": 7514.0,
+   "confidence": 50
+  },
+  {
+   "minute": 350,
+   "template": "gamma_momentum",
+   "direction": "long",
+   "entry": 7518.9009,
+   "target": 7530.0,
+   "stop": 7514.0,
+   "confidence": 50
+  },
+  {
+   "minute": 359,
+   "template": "wall_bounce",
+   "direction": "short",
+   "entry": 7527.7107,
+   "target": 7515.0,
+   "stop": 7533.1777,
+   "confidence": 45
+  }
+ ]
+}

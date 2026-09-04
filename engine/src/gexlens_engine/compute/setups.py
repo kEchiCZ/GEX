@@ -15,6 +15,8 @@ import enum
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
+from gexlens_engine.compute.bandregime import BAND_MAJOR_SHARE, BandZone
+
 # Verze mechaniky detektoru (#311). Zvedá se při KAŽDÉ změně sémantiky stopů,
 # cílů nebo filtrů — statistiky a budoucí kalibrace (Fáze 2) počítají jen
 # aktuální verzi, aby se nemíchaly výsledky různých systémů.
@@ -1059,3 +1061,178 @@ def r_result(direction: Direction, entry: float, stop: float, exit_price: float)
         return 0.0
     move = exit_price - entry if direction is Direction.LONG else entry - exit_price
     return move / risk
+
+
+# ── Sondy nezapnutých šablon (#577 fáze 1) ─────────────────────────────────
+#
+# Kandidát T9 „strop nad hlavou" NENÍ setup: nevrací `SetupCandidate`, nejde
+# přes `detect_all` ani R-mechaniku, do `setups` a track recordu nezapisuje
+# nic. Vrací záznam VÝSKYTU s hypotetickým vstupem/cílem/stopem, který
+# sběrač (`gexlens_engine.probes`) i backtest harness vyhodnotí TÝMŽ
+# `evaluate_bar`/`r_result` jako živé setupy — jinak by se fáze 2 neměla
+# s čím porovnat. Čistá funkce nad historií, stejně jako ostatní detektory.
+
+#: Identifikátory sond v tabulce `setup_probes` (T9 dle rejstříku výše)
+PROBE_CEILING = "t9_ceiling"
+PROBE_EXIT = "t9_exit"
+
+
+@dataclass(frozen=True)
+class ProbeMinute:
+    """Minuta pro sondy: dokončený bar + geometrie tlumící zóny při jeho close.
+
+    `zone` = `band_zone(profil minuty, close)` (#575); None = profil chybí
+    nebo je zóna neurčitelná (kraj mřížky) — poloha je pak neznámá a žádný
+    přechod se nepočítá. `band_depth` je jen kontext pro fázi 2.
+    """
+
+    ts: dt.datetime
+    high: float
+    low: float
+    close: float
+    zone: BandZone | None
+    band_depth: float | None = None
+
+
+@dataclass(frozen=True)
+class ProbeParams:
+    """Prahy sond — kotvené na pásmo, ne na body ani ATR (#434)."""
+
+    # Akceptace přechodu v minutách — stejná konvence jako `acceptance_minutes`
+    # T2: N po sobě jdoucích closes na nové straně hrany. Usazení PŘED
+    # přechodem vyžaduje totéž N, aby flicker na hraně nedvojil výskyty.
+    acceptance_minutes: int = 5
+    # Podmínka 2 z #577: jádro pásma nad cenou ≥ podíl globálního maxima
+    # profilu (Major kontura #571) — „leží tlumící struktura nad hlavou?"
+    strength_above_min: float = BAND_MAJOR_SHARE
+    # Stop ceiling sondy: hrana All minus tento podíl šířky zóny (návrat pod
+    # hranu = přechod odmítnut); cíl je střed zóny dle tabulky v #577
+    ceiling_stop_width_share: float = 0.25
+
+
+@dataclass(frozen=True)
+class ProbeOccurrence:
+    """Výskyt kandidáta: hypotetický obchod pro `setup_probes`, žádný setup."""
+
+    template: str
+    direction: Direction
+    ts: dt.datetime
+    entry: float
+    target: float
+    stop: float
+    context: dict[str, object] = field(default_factory=dict)
+
+
+def band_position(zone: BandZone | None, price: float) -> str:
+    """Poloha ceny vůči hranám All zóny: below / in / above / unknown.
+
+    Záměrně přes geometrii zóny (band_zone hledá vrchol i NAD cenou), ne přes
+    band_depth — metrika #575 daleko pod pásmem vrací None (měří jen v místě
+    ceny) a přechod outside → transition by nikdy nenastal.
+    """
+    if zone is None:
+        return "unknown"
+    if price < zone.all_low:
+        return "below"
+    if price > zone.all_high:
+        return "above"
+    return "in"
+
+
+#: Výchozí prahy sond — sdílený singleton (sběrač i harness volají bez params)
+DEFAULT_PROBE_PARAMS = ProbeParams()
+
+
+def detect_damping_ceiling(
+    history: Sequence[ProbeMinute], params: ProbeParams = DEFAULT_PROBE_PARAMS
+) -> ProbeOccurrence | None:
+    """T9 sonda (#577 fáze 1): vstup do tlumící zóny zespodu a zrcadlový výpad.
+
+    Výskyt vzniká v minutě, kdy přechod dosáhne akceptace (N-tá minuta na nové
+    straně hrany), ne v minutě přechodu — každý přechod dá nejvýš jeden výskyt,
+    protože o minutu později už okno usazení obsahuje minutu přechodu.
+
+    - **t9_ceiling** (outside → transition, cena roste): N minut pod hranou All,
+      pak close uvnitř zóny výš než minulý close, jádro pásma nad hlavou
+      (`strength_above` ≥ práh) a dalších N−1 minut cena pod hranu nespadne.
+      Hypotéza: útlum → LONG od hrany, cíl střed zóny, stop pod hranou.
+    - **t9_exit** (inside/transition → outside, cena klesá): N minut uvnitř,
+      pak close pod hranou níž než minulý close a N−1 minut pod hranou.
+      Momentum hypotéza: SHORT, cíl entry − šířka zóny, stop návrat na hranu.
+
+    Geometrie zóny (hrany, střed, šířka) se bere z minuty PŘECHODU — kotvy
+    hypotézy jsou hrana, kterou cena překročila, ne hrana po N minutách
+    přepočtů. Neznámá poloha (bez profilu) přechod přerušuje.
+    """
+    accept = params.acceptance_minutes
+    if accept < 1 or len(history) < 2 * accept:
+        return None
+    holding = history[-accept:]
+    settled = history[-2 * accept : -accept]
+    transition = holding[0]
+    before = settled[-1]
+    now = history[-1]
+    zone = transition.zone
+    if zone is None:
+        return None
+    settled_positions = {band_position(m.zone, m.close) for m in settled}
+    holding_positions = {band_position(m.zone, m.close) for m in holding[1:]}
+    transition_position = band_position(zone, transition.close)
+
+    if (
+        settled_positions == {"below"}
+        and transition_position == "in"
+        and transition.close > before.close
+        and zone.strength_above >= params.strength_above_min
+        and holding_positions <= {"in", "above"}
+    ):
+        entry = now.close
+        target = zone.center
+        stop = zone.all_low - params.ceiling_stop_width_share * zone.width
+        if target <= entry:
+            return None  # cena už je za středem — hypotéza nemá co měřit
+        template, direction = PROBE_CEILING, Direction.LONG
+    elif (
+        settled_positions == {"in"}
+        and transition_position == "below"
+        and transition.close < before.close
+        and holding_positions <= {"below"}
+    ):
+        entry = now.close
+        stop = zone.all_low
+        target = entry - zone.width
+        if stop <= entry:
+            return None  # cena zpět nad hranou — výpad se nekonal
+        template, direction = PROBE_EXIT, Direction.SHORT
+    else:
+        return None
+
+    context: dict[str, object] = {
+        "zone_all_low": zone.all_low,
+        "zone_all_high": zone.all_high,
+        "zone_center": zone.center,
+        "zone_width": zone.width,
+        "strength_above": zone.strength_above,
+        "acceptance_minutes": accept,
+        "transition_ts": transition.ts.isoformat(),
+    }
+    if now.band_depth is not None:
+        context["band_depth"] = now.band_depth
+    return ProbeOccurrence(
+        template=template,
+        direction=direction,
+        ts=now.ts,
+        entry=entry,
+        target=target,
+        stop=stop,
+        context=context,
+    )
+
+
+def probe_excursion(
+    direction: Direction, entry: float, high: float, low: float
+) -> tuple[float, float]:
+    """(příznivý, nepříznivý) pohyb baru od entry v bodech — MFE/MAE sond."""
+    if direction is Direction.LONG:
+        return high - entry, entry - low
+    return entry - low, high - entry
