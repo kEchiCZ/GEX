@@ -75,6 +75,7 @@ import type { WallsMode } from './heatmap/wallsModes'
 import { projectedSessions } from './instrument/sessions'
 import { aggregateDay, aggregateLive } from './replay/aggregate'
 import { buildHistoryView } from './replay/history'
+import { outrightShareAt } from './replay/loader'
 import { useHistoryBars } from './hooks/useHistoryBars'
 import { sliceGrid, sliceOverlays, slicePanels, sliceSeries } from './replay/slice'
 import { useAggregateProfile } from './replay/useAggregateProfile'
@@ -917,6 +918,21 @@ function MainContent() {
       }
     }
     if (!entry) return []
+    // Podíl outright objemu na striku (#1007) k pozici playbacku — jen
+    // informace vedle podílu na síle strany, bez vlivu na styl
+    const raw = day.raw
+    const rawMinute = raw ? Math.min(playback.position, raw.minutes - 1) : -1
+    const outright = (strike: number, side: 'call' | 'put'): string => {
+      if (!raw || rawMinute < 0) return ''
+      const strikeIdx = raw.strikes.indexOf(strike)
+      if (strikeIdx < 0) return ''
+      const share = outrightShareAt(
+        side === 'call' ? raw.callPrinted : raw.putPrinted,
+        side === 'call' ? raw.callStructured : raw.putStructured,
+        strikeIdx * (raw.stride ?? raw.minutes) + rawMinute,
+      )
+      return share === null ? '' : ` · ${Math.round(share * 100)} % outright`
+    }
     const line = (strike: number, share: number, side: 'call' | 'put'): LevelLine => {
       const series: (number | null)[] = Array.from({ length: minutes }, () => null)
       series[minutes - 1] = strike
@@ -925,14 +941,14 @@ function MainContent() {
         color: side === 'call' ? 'rgba(62,207,142,0.85)' : 'rgba(240,97,109,0.85)',
         series,
         dash: [6, 5],
-        labelSuffix: ` · ${Math.round(share * 100)} %`,
+        labelSuffix: ` · ${Math.round(share * 100)} %${outright(strike, side)}`,
       }
     }
     return [
       ...entry.callStrikes.map((strike, i) => line(strike, entry.callShares[i] ?? 0, 'call')),
       ...entry.putStrikes.map((strike, i) => line(strike, entry.putShares[i] ?? 0, 'put')),
     ]
-  }, [toggles.ladder, day.ladder, grid.minutes, playback.position])
+  }, [toggles.ladder, day.ladder, day.raw, grid.minutes, playback.position])
 
   // Σ souhrn přes expirace v pravém profilu (čtení celkového positioningu napříč expiracemi)
   const [aggregateOn, setAggregateOn] = useState(false)

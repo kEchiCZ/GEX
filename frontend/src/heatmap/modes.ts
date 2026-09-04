@@ -48,6 +48,12 @@ export interface RawDay {
   /** Vega matice pro VEX módy (#201); starší data je nemají → nulová vrstva. */
   callVega?: Float32Array
   putVega?: Float32Array
+  /** Podíl objemu mimo tisk (#1007): kumulativní tisky a zbytek bez tisku per
+  buňka; NaN = neznámé. Chybí u dnů bez řady printvol. */
+  callPrinted?: Float32Array
+  putPrinted?: Float32Array
+  callStructured?: Float32Array
+  putStructured?: Float32Array
   /** Spot per minuta (OTM/ITM klasifikace) — díry se forward-fillují. */
   spotSeries: (number | null)[]
   staleAge: Float32Array | null
