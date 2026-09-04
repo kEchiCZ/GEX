@@ -987,6 +987,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
             ("flow", lambda: session(lambda d: repository.flow(symbol, d), date)),
             ("bars", lambda: repository.bars_session(symbol, date)),
+            # Podíl objemu mimo tisk (#1007): profil Vol+OI Δ dělí sloupec na
+            # outright (tisky) a strukturovaný objem
+            ("printvol", lambda: session(lambda d: repository.printvol(symbol, expiry, d), date)),
         ]
         for key, reader in readers:
             try:

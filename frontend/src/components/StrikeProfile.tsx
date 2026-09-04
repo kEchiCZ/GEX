@@ -64,6 +64,9 @@ const COLORS = {
   callOi: 'rgba(20, 184, 166, 0.45)',
   putVol: '#ef4444',
   putOi: 'rgba(239, 68, 68, 0.45)',
+  // Strukturovaný objem (#1007): táž barva strany, nižší sytost — ne šrafování
+  callVolStructured: 'rgba(20, 184, 166, 0.4)',
+  putVolStructured: 'rgba(239, 68, 68, 0.4)',
 }
 
 function StrikeProfileBase({
@@ -433,6 +436,9 @@ function StrikeProfileBase({
               // Kolizní logika popisků hodnot (#181): když se číslo nevejde vedle
               // pruhu (put by zasáhl do strike popisků, call za pravý okraj),
               // překlopí se DOVNITŘ pruhu tmavým textem — nikdy se nepřekrývá
+              // Podíl tisků na objemu strany (#1007); null = nedělit
+              const callSplit = printedShare(row.callPrinted, row.callStructured)
+              const putSplit = printedShare(row.putPrinted, row.putStructured)
               const callText = formatAmount(row.callVolComponent + row.callOiComponent)
               const callEnd = halfWidth + bar.callVolWidth + bar.callOiWidth
               const callOutside = callEnd + 3 + callText.length * VALUE_CHAR_PX <= width - 2
@@ -467,6 +473,20 @@ function StrikeProfileBase({
                     fill={COLORS.callVol}
                     data-part="call-vol"
                   />
+                  {/* Podíl objemu mimo tisk (#1007): část sloupce z tisků plná
+                      sytost, zbytek (spready, bloky) tlumený — BEZ šrafování, to
+                      patří výhradně chybějícím datům (#465). Bez rozkladu se
+                      sloupec nedělí a tooltip řekne proč. */}
+                  {callSplit !== null && (
+                    <rect
+                      x={halfWidth + bar.callVolWidth * callSplit}
+                      y={y}
+                      width={bar.callVolWidth * (1 - callSplit)}
+                      height={barHeight}
+                      fill={COLORS.callVolStructured}
+                      data-part="call-vol-structured"
+                    />
+                  )}
                   <rect
                     x={halfWidth + bar.callVolWidth}
                     y={y}
@@ -485,6 +505,16 @@ function StrikeProfileBase({
                     fill={COLORS.putVol}
                     data-part="put-vol"
                   />
+                  {putSplit !== null && (
+                    <rect
+                      x={halfWidth - bar.putVolWidth}
+                      y={y}
+                      width={bar.putVolWidth * (1 - putSplit)}
+                      height={barHeight}
+                      fill={COLORS.putVolStructured}
+                      data-part="put-vol-structured"
+                    />
+                  )}
                   <rect
                     x={halfWidth - bar.putVolWidth - bar.putOiWidth}
                     y={y}
@@ -634,6 +664,7 @@ function StrikeProfileBase({
           <span>
             Vol C/P: {hovered.callVolume.toFixed(0)} / {hovered.putVolume.toFixed(0)}
           </span>
+          <span data-testid="printvol">{printVolText(hovered)}</span>
           {hovered.callOiChange != null && hovered.putOiChange != null && (
             <span data-testid="oi-change">
               ΔOI vs. včera C/P: {formatSigned(hovered.callOiChange)} /{' '}
@@ -663,3 +694,34 @@ function StrikeProfileBase({
 
 // Memoizace: živý spot překresluje jen graf, ne tento SVG profil
 export const StrikeProfile = memo(StrikeProfileBase)
+
+/** Podíl tisků na objemu strany (#1007) v 0–1; null = rozklad chybí nebo nulový objem. */
+export function printedShare(
+  printed: number | null | undefined,
+  structured: number | null | undefined,
+): number | null {
+  if (printed == null || structured == null) return null
+  const total = printed + structured
+  if (!(total > 0)) return null
+  return Math.min(1, Math.max(0, printed / total))
+}
+
+/** Řádek tooltipu k podílu objemu mimo tisk (#1007). */
+export function printVolText(row: ProfileRow): string {
+  const call = printedShare(row.callPrinted, row.callStructured)
+  const put = printedShare(row.putPrinted, row.putStructured)
+  if (call === null && put === null) {
+    return row.callPrinted === undefined
+      ? 'Outright / struktura: rozdělení nedostupné (den bez řady tisků)'
+      : 'Outright / struktura: rozdělení nedostupné (tisky pro tento strike nedorazily)'
+  }
+  const fmt = (
+    share: number | null,
+    printed: number | null | undefined,
+    structured: number | null | undefined,
+  ) =>
+    share === null
+      ? '—'
+      : `${Math.round(printed ?? 0)} outright (${Math.round(share * 100)} %) · ${Math.round(structured ?? 0)} struktura`
+  return `C: ${fmt(call, row.callPrinted, row.callStructured)} | P: ${fmt(put, row.putPrinted, row.putStructured)}`
+}

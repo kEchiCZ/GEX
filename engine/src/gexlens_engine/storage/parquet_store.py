@@ -274,6 +274,21 @@ NETFLOW_SCHEMA = pa.schema(
     ]
 )
 
+# Podíl objemu mimo tisk (#1007): přírůstek objemu kontraktu za bar rozložený
+# na tisky TimeAndSale (`printed`) a zbytek bez tisku (`structured` — nohy
+# spreadů a bloky, CME je jako trade nevysílá). NULL = trade větev pro
+# instrument neběžela (tasty odpojené); nula by lhala. Jen řádky s přírůstkem.
+PRINTVOL_SCHEMA = pa.schema(
+    [
+        ("ts_min", pa.timestamp("us", tz="UTC")),
+        ("strike", pa.float64()),
+        ("right", pa.string()),
+        ("volume_delta", pa.float64()),
+        ("printed", pa.float64()),
+        ("structured", pa.float64()),
+    ]
+)
+
 # OI odhad z toku (#232): OI_est = max(0, OI_ráno + α·net) — compute/flowoi.py.
 # Zapisují se jen strany, kde se odhad LIŠÍ od měřeného OI; frontend při FA
 # zdroji přepíše měřenou matici těmito buňkami, zbytek minuty zůstává měřený.
@@ -443,6 +458,18 @@ class CatchUpRow:
     """
 
     ts_min: dt.datetime
+
+
+@dataclass(frozen=True)
+class PrintVolRow:
+    """Rozklad přírůstku objemu kontraktu za bar (#1007) — řádek řady printvol."""
+
+    ts_min: dt.datetime
+    strike: float
+    right: str
+    volume_delta: float
+    printed: float | None
+    structured: float | None
 
 
 @dataclass(frozen=True)
@@ -795,6 +822,18 @@ class SnapshotWriter:
             self._settings.derived_dir / symbol / expiry / "netflow" / f"{day.isoformat()}.parquet"
         )
         buffer = self._buffer(path, NETFLOW_SCHEMA)
+        return buffer.append_and_write([asdict(row) for row in rows])
+
+    def write_printvol(
+        self, symbol: str, expiry: str, day: dt.date, rows: Sequence[PrintVolRow]
+    ) -> Path | None:
+        """Přidá rozklad přírůstků objemu minuty do derived/{sym}/{exp}/printvol (#1007)."""
+        if not rows:
+            return None
+        path = (
+            self._settings.derived_dir / symbol / expiry / "printvol" / f"{day.isoformat()}.parquet"
+        )
+        buffer = self._buffer(path, PRINTVOL_SCHEMA)
         return buffer.append_and_write([asdict(row) for row in rows])
 
     def write_oiest(

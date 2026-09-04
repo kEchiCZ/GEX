@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from gexlens_engine.config import Settings
-from gexlens_engine.storage.parquet_store import SnapshotRow, SnapshotWriter
+from gexlens_engine.storage.parquet_store import PrintVolRow, SnapshotRow, SnapshotWriter
 
 DAY = dt.date(2026, 7, 16)
 
@@ -126,3 +126,33 @@ def test_read_last_cum_delta_okno_seance(tmp_path: Path) -> None:
         )
         is None
     )  # noqa: E501
+
+
+def test_printvol_partition_roundtrip(writer: SnapshotWriter, tmp_path: Path) -> None:
+    """#1007: řada printvol per expirace, NULL zůstává NULL (ne 0)."""
+    ts = dt.datetime(2026, 9, 4, 14, 0, tzinfo=dt.UTC)
+    rows = [
+        PrintVolRow(
+            ts_min=ts, strike=7600.0, right="C", volume_delta=15.0, printed=7.0, structured=8.0
+        ),
+        PrintVolRow(
+            ts_min=ts, strike=7600.0, right="P", volume_delta=4.0, printed=None, structured=None
+        ),
+    ]
+    assert writer.write_printvol("ES", "20260904", DAY, []) is None  # prázdno se nezapisuje
+    path = writer.write_printvol("ES", "20260904", DAY, rows)
+
+    assert (
+        path == tmp_path / "derived" / "ES" / "20260904" / "printvol" / f"{DAY.isoformat()}.parquet"
+    )
+    frame = pd.read_parquet(path)
+    assert list(frame.columns) == [
+        "ts_min",
+        "strike",
+        "right",
+        "volume_delta",
+        "printed",
+        "structured",
+    ]
+    assert list(frame["printed"].isna()) == [False, True]
+    assert float(frame["structured"].iloc[0]) == 8.0

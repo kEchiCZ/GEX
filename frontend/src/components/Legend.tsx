@@ -386,7 +386,11 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         swatch: { kind: 'bars', color: UP_COLOR, second: DOWN_COLOR },
         where:
           'Pravý panel, vodorovné pruhy per strike. Sdílí osu Y s grafem, takže pruh je vždy v úrovni svého striku.',
-        what: 'Otevřené kontrakty a objem na každém striku — call zeleně, put červeně.',
+        what:
+          'Otevřené kontrakty a objem na každém striku — call zeleně, put červeně. Objemová část ' +
+          'sloupce má dva tóny (v1.14, #1007): plná sytost = outright obchody, které vytiskly trade ' +
+          'se stranou od burzy; tlumená = strukturovaný a dohodnutý objem (nohy spreadů, bloky), ' +
+          'který CME jako obchod nevysílá. Není to šrafování — to patří jen chybějícímu OI.',
         up: 'Krátké pruhy nad cenou = řídký pozicing = málo odporu nad ní, prostor k růstu.',
         down: 'Nejdelší pruhy jsou přesně ty zdi, které v grafu vidíš jako vodorovné čáry. Dlouhý pruh pod cenou je podpora.',
       },

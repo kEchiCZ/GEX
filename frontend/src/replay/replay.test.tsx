@@ -15,6 +15,7 @@ import {
   oiTotalSeries,
 } from './loader'
 import type { LiveMinute, ReplayDay } from './loader'
+import { accumulatePrintVol } from './loader'
 import { sliceGrid, sliceOverlays, slicePanels, sliceSeries } from './slice'
 import { usePlayback, TICK_MS } from './usePlayback'
 import type { OverlayData } from '../heatmap/overlays'
@@ -1096,4 +1097,33 @@ test('oiTotalSeries: Σ přes striky per minuta, minuta bez snapshotu drží sch
   const oi = Float32Array.from([100, 0, 120, 50, 0, 40]) // strike0: [100,0,120], strike1: [50,0,40]
   const series = oiTotalSeries(oi, 3, 2, (minuteIdx) => minuteIdx !== 1)
   expect(series).toEqual([150, 150, 160])
+})
+
+test('accumulatePrintVol (#1007): kumulativ per buňka, díra dědí, NULL otráví NaN', () => {
+  const capacity = 4
+  const target = {
+    callPrinted: new Float32Array(1 * capacity),
+    putPrinted: new Float32Array(1 * capacity),
+    callStructured: new Float32Array(1 * capacity),
+    putStructured: new Float32Array(1 * capacity),
+  }
+  accumulatePrintVol(
+    [
+      { minuteIdx: 0, strikeIdx: 0, right: 'C', printed: 5, structured: 1 },
+      { minuteIdx: 2, strikeIdx: 0, right: 'C', printed: 3, structured: 2 },
+      { minuteIdx: 1, strikeIdx: 0, right: 'P', printed: null, structured: null },
+      { minuteIdx: 2, strikeIdx: 0, right: 'P', printed: 7, structured: 0 },
+      // neznámý strike/minuta se přeskočí
+      { minuteIdx: undefined, strikeIdx: 0, right: 'C', printed: 99, structured: 99 },
+    ],
+    target,
+    1,
+    capacity,
+    3,
+  )
+  expect(Array.from(target.callPrinted.subarray(0, 3))).toEqual([5, 5, 8])
+  expect(Array.from(target.callStructured.subarray(0, 3))).toEqual([1, 1, 3])
+  expect(target.putPrinted[0]).toBe(0)
+  expect(Number.isNaN(target.putPrinted[1])).toBe(true)
+  expect(Number.isNaN(target.putPrinted[2])).toBe(true) // NaN se dědí i přes další řádek
 })

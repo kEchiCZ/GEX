@@ -24,6 +24,13 @@ export interface ProfileRow {
   ve výpočtech je to nula, ale v panelu se kreslí šrafovaně, ne jako prázdno. */
   callOiMissing?: boolean
   putOiMissing?: boolean
+  /** Podíl objemu mimo tisk (#1007): kumulativní objem z tisků TimeAndSale
+  a zbytek bez tisku (nohy spreadů, bloky). null = rozklad není k dispozici
+  (starší den, trade větev neběžela) — sloupec se pak nedělí. */
+  callPrinted?: number | null
+  callStructured?: number | null
+  putPrinted?: number | null
+  putStructured?: number | null
   /** Midpoint (bid+ask)/2 pro P/C v prémiích (#469); 0/undefined = kotace chybí. */
   callMid?: number
   putMid?: number

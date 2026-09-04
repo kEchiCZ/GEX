@@ -300,3 +300,40 @@ def test_reset_vynuluje_pokryti_i_tisky_od_baru() -> None:
     assert tracker.day_stats()["printed_volume"] == 0.0
     # po resetu první bar jen zakládá stav — tisky před resetem se nepřenesou
     assert tracker.add_bar(contract, 103.0, last=10.3, bid=10.0, ask=10.4, delta=0.4) == 0.0
+
+
+# ── Rozklad přírůstku objemu (#1007 krok 2) ───────────────────────────
+def test_breakdown_rozlozi_prirustek_na_tisky_a_strukturu() -> None:
+    tracker = CumDeltaTracker(multiplier=50.0, source="midpoint")
+    tracker.dx_active = True
+    contract = spec("C")
+    tracker.add_bar(contract, 100.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
+    tracker.add_dx_trade(contract, size=6.0, aggressor="BUY", delta=0.4)
+    tracker.add_dx_trade(contract, size=1.0, aggressor="UNDEFINED", delta=0.4)
+    tracker.add_bar(contract, 115.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
+
+    breakdown = tracker.take_breakdowns()[contract]
+    assert breakdown.volume_delta == 15.0
+    assert breakdown.printed == 7.0  # tisky se stranou i bez
+    assert breakdown.structured == 8.0  # zbytek bez tisku
+    assert tracker.take_breakdowns() == {}  # odběr vyprázdní
+
+
+def test_breakdown_bez_trade_vetve_je_null_ne_nula() -> None:
+    """Tasty odpojené → printed/structured None; nula by tvrdila 100 % strukturu."""
+    tracker = CumDeltaTracker(multiplier=50.0)
+    contract = spec("P")
+    tracker.add_bar(contract, 10.0, last=5.0, bid=5.0, ask=5.4, delta=-0.3)
+    tracker.add_bar(contract, 14.0, last=5.0, bid=5.0, ask=5.4, delta=-0.3)
+    breakdown = tracker.take_breakdowns()[contract]
+    assert breakdown.volume_delta == 4.0
+    assert breakdown.printed is None and breakdown.structured is None
+
+
+def test_breakdown_jen_pri_prirustku() -> None:
+    tracker = CumDeltaTracker(multiplier=50.0)
+    tracker.dx_active = True
+    contract = spec("C")
+    tracker.add_bar(contract, 100.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
+    tracker.add_bar(contract, 100.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
+    assert tracker.take_breakdowns() == {}
