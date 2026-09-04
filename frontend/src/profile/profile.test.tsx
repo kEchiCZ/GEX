@@ -1,7 +1,7 @@
 /** Testy strike profil panelu (issue #25): geometrie, orientace, zoom, crosshair sync. */
 import { fireEvent, render, screen } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
-import { StrikeProfile } from '../components/StrikeProfile'
+import { StrikeProfile, printVolText, printedShare } from '../components/StrikeProfile'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
 import { barGeometry, gexCurvePaths, niceCeil, volLeaders } from './bars'
 import type { ProfileRow } from './bars'
@@ -624,4 +624,45 @@ test('mimo range mód se přepínač nekreslí a OI jede plně (#485)', () => {
   const callOi = container.querySelector('[data-part="call-oi"]')!
   expect(Number(callOi.getAttribute('width'))).toBeGreaterThan(0)
   expect(callOi.getAttribute('class')).toBeNull()
+})
+
+test('podíl objemu mimo tisk (#1007): sloupec objemu se dělí dvěma tóny, bez rozkladu se nedělí', () => {
+  const [first, ...rest] = rows()
+  const split: ProfileRow = {
+    ...first,
+    callPrinted: 60,
+    callStructured: 40,
+    putPrinted: null,
+    putStructured: null,
+  }
+  render(
+    <CrosshairProvider>
+      <StrikeProfile rows={[split, ...rest]} spot={7600} />
+    </CrosshairProvider>,
+  )
+  const panel = screen.getByLabelText('Skládané pruhy strike profilu')
+  // call strana má tlumenou strukturovanou část; put bez rozkladu ne
+  expect(panel.querySelectorAll('[data-part="call-vol-structured"]').length).toBe(1)
+  expect(panel.querySelectorAll('[data-part="put-vol-structured"]').length).toBe(0)
+  // šrafování zůstává výhradně chybějícímu OI
+  expect(panel.querySelectorAll('[data-part="call-oi-missing"]').length).toBe(0)
+})
+
+test('printedShare a tooltip text (#1007)', () => {
+  expect(printedShare(60, 40)).toBeCloseTo(0.6)
+  expect(printedShare(0, 0)).toBeNull()
+  expect(printedShare(null, 40)).toBeNull()
+  expect(printedShare(undefined, undefined)).toBeNull()
+  const row = rows()[0]
+  expect(printVolText(row)).toContain('nedostupné (den bez řady tisků)')
+  expect(printVolText({ ...row, callPrinted: null, callStructured: null })).toContain('nedorazily')
+  expect(
+    printVolText({
+      ...row,
+      callPrinted: 60,
+      callStructured: 40,
+      putPrinted: 10,
+      putStructured: 30,
+    }),
+  ).toBe('C: 60 outright (60 %) · 40 struktura | P: 10 outright (25 %) · 30 struktura')
 })

@@ -149,6 +149,15 @@ class DataRepository:
         path = self._settings.derived_dir / symbol / expiry / "oiest" / f"{day.isoformat()}.parquet"
         return self._read(path)
 
+    def printvol(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
+        """Podíl objemu mimo tisk (#1007): přírůstek per kontrakt a minutu
+        rozložený na tisky TimeAndSale a zbytek (spready, bloky). NULL =
+        trade větev neběžela. Jen řádky s přírůstkem; bez sběru řada chybí."""
+        path = (
+            self._settings.derived_dir / symbol / expiry / "printvol" / f"{day.isoformat()}.parquet"
+        )
+        return self._read(path)
+
     def oiwalls(self, symbol: str, expiry: str, day: dt.date) -> pd.DataFrame:
         """OI zdi (#851) — hladiny z denního OI, vlastní řada vedle levels.
 

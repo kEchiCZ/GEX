@@ -50,6 +50,22 @@ _AGGRESSOR_SIGN = {"BUY": 1, "SELL": -1}
 CUMDELTA_SOURCES = ("midpoint", "dxfeed")
 
 
+@dataclass(frozen=True)
+class BarBreakdown:
+    """Rozklad přírůstku objemu kontraktu za jeden bar (#1007 krok 2).
+
+    `printed` = Σ tisků TimeAndSale (se stranou i bez) od minulého baru,
+    `structured` = přírůstek bez tisku (nohy spreadů, bloky — CME je jako
+    trade nevysílá). Obojí `None`, když trade větev pro kontrakt neběžela
+    (tastytrade odpojené, symbol bez univerza) — nula by lhala „100 %
+    struktura".
+    """
+
+    volume_delta: float
+    printed: float | None
+    structured: float | None
+
+
 @dataclass
 class CumDeltaCoverage:
     """Denní pokrytí toku podle zdroje (#615 fáze 3) — do /status a pro srovnání.
@@ -121,6 +137,10 @@ class CumDeltaTracker:
         self._printed_since_bar: dict[OptionContractSpec, float] = {}
         self._unknown_since_bar: dict[OptionContractSpec, float] = {}
         self._coverage = CumDeltaCoverage()
+        #: Běží trade větev pro tento instrument? Nastavuje orchestrátor každý
+        #: cyklus (tasty připojené + univerzum); bez toho je rozklad NULL.
+        self.dx_active: bool = False
+        self._breakdowns: dict[OptionContractSpec, BarBreakdown] = {}
         # Čistý klasifikovaný objem per kontrakt (buy − sell, v kontraktech) —
         # vstup flow-adjusted OI odhadu (ADR-0011, #222)
         self._net_volume: dict[OptionContractSpec, float] = {}
@@ -138,6 +158,12 @@ class CumDeltaTracker:
     def day_stats(self) -> dict[str, float | str]:
         """Denní pokrytí toku podle zdroje — /status a Settings (#615 krok 5)."""
         return {"source": self._source, **self._coverage.as_dict()}
+
+    def take_breakdowns(self) -> dict[OptionContractSpec, BarBreakdown]:
+        """Rozklady přírůstků od posledního odběru (řada printvol, #1007) — a vyprázdní je."""
+        taken = self._breakdowns
+        self._breakdowns = {}
+        return taken
 
     def net_volume(self, spec: OptionContractSpec) -> float:
         """Denní čistý klasifikovaný objem kontraktu (buy − sell; ADR-0011)."""
@@ -165,6 +191,7 @@ class CumDeltaTracker:
         self._printed_since_bar.clear()
         self._unknown_since_bar.clear()
         self._coverage = CumDeltaCoverage()
+        self._breakdowns.clear()
 
     def roll_session(self, session_date: dt.date) -> bool:
         """Reset kumulativů na hranici Globex seance (#638, SPEC 4.5).
@@ -274,6 +301,13 @@ class CumDeltaTracker:
                 cumulative_volume,
             )
             return 0.0
+        if delta_volume > 0.0:
+            printed_total = printed + unknown
+            self._breakdowns[spec] = BarBreakdown(
+                volume_delta=delta_volume,
+                printed=printed_total if self.dx_active else None,
+                structured=max(delta_volume - printed_total, 0.0) if self.dx_active else None,
+            )
         if self._source == "dxfeed" and printed > 0.0:
             volume_to_sign = min(unknown, delta_volume)
             self._coverage.structured_volume += max(delta_volume - printed - unknown, 0.0)

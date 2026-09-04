@@ -62,6 +62,7 @@ from gexlens_engine.storage.parquet_store import (
     OiEstRow,
     OiMissingRow,
     OiWallsRow,
+    PrintVolRow,
     SnapshotRow,
     SnapshotWriter,
     WallDomRow,
@@ -723,6 +724,43 @@ class EngineRuntime:
             if netflow_rows:
                 await asyncio.to_thread(
                     self.writer.write_netflow, self.symbol, self.expiry, day, netflow_rows
+                )
+            # Řada printvol (#1007): přírůstek objemu per kontrakt rozložený na
+            # tisky a zbytek bez tisku; NULL = trade větev neběžela. Živý push
+            # stejnou cestou jako oiest, ať profil nečeká na další balík.
+            printvol_rows = [
+                PrintVolRow(
+                    ts_min=ts_min,
+                    strike=spec.strike,
+                    right=spec.right,
+                    volume_delta=breakdown.volume_delta,
+                    printed=breakdown.printed,
+                    structured=breakdown.structured,
+                )
+                for spec, breakdown in sorted(
+                    tracker.take_breakdowns().items(),
+                    key=lambda item: (item[0].strike, item[0].right),
+                )
+            ]
+            if printvol_rows:
+                await asyncio.to_thread(
+                    self.writer.write_printvol, self.symbol, self.expiry, day, printvol_rows
+                )
+                await self.publisher.publish(
+                    f"printvol.{self.symbol}.{self.expiry}",
+                    {
+                        "ts_min": ts_min.isoformat(),
+                        "rows": [
+                            {
+                                "strike": row.strike,
+                                "right": row.right,
+                                "volume_delta": row.volume_delta,
+                                "printed": row.printed,
+                                "structured": row.structured,
+                            }
+                            for row in printvol_rows
+                        ],
+                    },
                 )
             # Řada oiest (#232): jen strany, kde se odhad liší od měřeného OI —
             # frontend při FA zdroji přepíše měřenou matici těmito buňkami

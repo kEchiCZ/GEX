@@ -531,6 +531,18 @@ export function useDayData(
       }))
       scheduleFlush()
     }
+    // Rozklad přírůstku objemu minuty (#1007) — starší engine kanál neposílá
+    const onPrintVol = (data: ChannelData) => {
+      const raw = Array.isArray(data.rows) ? (data.rows as Record<string, unknown>[]) : []
+      part(minuteKey(data.ts_min)).printVol = raw.map((row) => ({
+        strike: Number(row.strike),
+        right: String(row.right) === 'C' ? ('C' as const) : ('P' as const),
+        volume_delta: Number(row.volume_delta) || 0,
+        printed: row.printed == null ? null : Number(row.printed),
+        structured: row.structured == null ? null : Number(row.structured),
+      }))
+      scheduleFlush()
+    }
     // FA Dyn GEX profil minuty (#232) — starší engine kanál neposílá
     const onGexProfileFa = (data: ChannelData) => {
       if (!Array.isArray(data.values)) return
@@ -609,6 +621,7 @@ export function useDayData(
     const gexProfileFaCh = `gexprofilefa.${symbol}.${expiry}`
     const gexFieldFaCh = `gexfieldfa.${symbol}.${expiry}`
     const ladderCh = `ladder.${symbol}.${expiry}`
+    const printVolCh = `printvol.${symbol}.${expiry}`
     socket.subscribe(snapshotCh, onSnapshot)
     socket.subscribe(priceCh, onPrice)
     socket.subscribe(levelsCh, onLevels)
@@ -621,6 +634,7 @@ export function useDayData(
     socket.subscribe(gexProfileFaCh, onGexProfileFa)
     socket.subscribe(gexFieldFaCh, onGexFieldFa)
     socket.subscribe(ladderCh, onLadder)
+    socket.subscribe(printVolCh, onPrintVol)
     // Reconnect: dofetchni celý balík (mohli jsme zmeškat minuty)
     const offReconnect = socket.onReconnect(() => setReconcileTick((n) => n + 1))
     return () => {
@@ -637,6 +651,7 @@ export function useDayData(
       socket.unsubscribe(gexProfileFaCh, onGexProfileFa)
       socket.unsubscribe(gexFieldFaCh, onGexFieldFa)
       socket.unsubscribe(ladderCh, onLadder)
+      socket.unsubscribe(printVolCh, onPrintVol)
       offReconnect()
     }
   }, [symbol, expiry, timeframe, socket])

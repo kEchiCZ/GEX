@@ -1241,6 +1241,13 @@ async def main() -> None:
     # Stav tastytrade větve pro /status a Settings (#706) — None = větev neběží;
     # nepřítomnost polí je pro UI jiný stav než „běží a je odpojená"
     tasty_status_fields: Callable[[], dict[str, object]] | None = None
+
+    # Běží trade větev pro instrument? (#1007) Bez tasty větve nikdy — rozklad
+    # přírůstků objemu pak zůstává NULL, ne „100 % struktura"
+    def _dx_print_inactive(_symbol: str) -> bool:
+        return False
+
+    dx_print_active: Callable[[str], bool] = _dx_print_inactive
     # Křížová kontrola (#517 A) — None, dokud neběží shadow větev; status ji
     # čte z hlavní smyčky, proto musí být viditelná i při vypnutém shadow
     crosscheck: CrossCheckDetector | None = None
@@ -1310,6 +1317,11 @@ async def main() -> None:
             # Cílený heal (#936): po rate limitu resubscribe jen mlčících
             heal_targets=lambda candidates: tasty_cache.silent_symbols(candidates),
         )
+
+        def _dx_print_active(active_symbol: str) -> bool:
+            return bool(tasty_stream.connected) and active_symbol in dx_universe
+
+        dx_print_active = _dx_print_active
 
         def _tasty_status() -> dict[str, object]:
             """Stav větve do /status (#706): spojení, subskripce, pokrytí, čerstvost."""
@@ -2257,6 +2269,11 @@ async def main() -> None:
             last_full_minute = now
         else:
             run_list = [pipelines[symbol] for symbol in plan.start if symbol in pipelines]
+        # Rozklad objemu na tisky (#1007) smí říkat „struktura" jen když trade
+        # větev pro instrument opravdu běžela — jinak NULL
+        for run_pipe in run_list:
+            if run_pipe.runtime.cum_delta is not None:
+                run_pipe.runtime.cum_delta.dx_active = dx_print_active(run_pipe.runtime.symbol)
         results = await gather_metrics(run_list, now)
         # Remediace BS fallbacku (#877, varianta C): plný fallback ≥ 30 min →
         # 1. pokus resubscribe (bez díry), 2. pokus reconnect — VÝHRADNĚ mimo

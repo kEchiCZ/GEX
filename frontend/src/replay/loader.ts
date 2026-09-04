@@ -166,6 +166,10 @@ type MatrixKey =
   | 'callMid'
   | 'putMid'
   | 'staleAge'
+  | 'callPrinted'
+  | 'putPrinted'
+  | 'callStructured'
+  | 'putStructured'
 
 interface DerivedSeriesCache {
   upTo: number
@@ -219,6 +223,14 @@ export interface ReplayInputs {
   callMid: Float32Array
   putMid: Float32Array
   staleAge: Float32Array
+  /** Podíl objemu mimo tisk (#1007): kumulativní tisky TimeAndSale a zbytek
+   * bez tisku (spready, bloky) per buňka od začátku dne. NaN = od některé
+   * minuty neznámé (trade větev neběžela) — nula by tvrdila 100 % strukturu. */
+  callPrinted: Float32Array
+  putPrinted: Float32Array
+  callStructured: Float32Array
+  putStructured: Float32Array
+  hasPrintVol: boolean
   bars: BarInput[]
   levels: LevelsInput[]
   flow: FlowInput[]
@@ -297,6 +309,14 @@ export interface LiveMinute {
   gexProfile?: { grid_start: number; grid_step: number; values: number[] }
   /** OI odhady minuty z WS kanálu oiest.* (#232) — jen strany lišící se od měření. */
   oiEst?: Array<{ strike: number; right: 'C' | 'P'; oi_est: number }>
+  /** Rozklad přírůstku objemu minuty z WS kanálu printvol.* (#1007). */
+  printVol?: Array<{
+    strike: number
+    right: 'C' | 'P'
+    volume_delta: number
+    printed: number | null
+    structured: number | null
+  }>
   /** FA Dyn GEX profil minuty z WS kanálu gexprofilefa.* (#232). */
   gexProfileFa?: { grid_start: number; grid_step: number; values: number[] }
   /** GEX žebřík minuty z WS kanálu ladder.* (#244). */
@@ -358,6 +378,8 @@ interface ReplayBundle {
   gexfieldfa?: Array<Record<string, unknown>>
   flow: Array<Record<string, unknown>>
   bars: Array<Record<string, unknown>>
+  /** Podíl objemu mimo tisk (#1007) — starší API klíč neposílá. */
+  printvol?: Array<Record<string, unknown>>
   /** OI téže expirace z předchozího archivovaného dne (ΔOI vs. včera). */
   oi_prev?: Array<{ strike: number; right: string; oi: number }>
   oi_today?: Array<{ strike: number; right: string; oi: number }>
@@ -527,6 +549,10 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   const callMid = new Float32Array(size)
   const putMid = new Float32Array(size)
   const staleAge = new Float32Array(size)
+  const callPrinted = new Float32Array(size)
+  const putPrinted = new Float32Array(size)
+  const callStructured = new Float32Array(size)
+  const putStructured = new Float32Array(size)
 
   for (let row = 0; row < rowCount; row += 1) {
     const minuteIdx = minuteIndex.get(canonicalTs(tsColumn.get(row)))!
@@ -695,6 +721,23 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   // s chováním bez FA vrstvy.
   const callOiEst = callOi.slice()
   const putOiEst = putOi.slice()
+  // Podíl objemu mimo tisk (#1007): přírůstky per minuta → kumulativ per
+  // buňka. Minuta bez rozkladu (NULL) otráví kumulativ NaN od ní dál —
+  // od té chvíle nejde říct, kolik z objemu vytisklo trade.
+  const printvolRows = bundle.printvol ?? []
+  accumulatePrintVol(
+    printvolRows.map((row) => ({
+      minuteIdx: minuteIndex.get(canonicalTs(row.ts_min)),
+      strikeIdx: strikeIndex.get(Number(row.strike)),
+      right: String(row.right) === 'C' ? ('C' as const) : ('P' as const),
+      printed: row.printed == null ? null : Number(row.printed),
+      structured: row.structured == null ? null : Number(row.structured),
+    })),
+    { callPrinted, putPrinted, callStructured, putStructured },
+    strikes.length,
+    capacity,
+    minuteKeys.length,
+  )
   const oiestRows = bundle.oiest ?? []
   for (const row of oiestRows) {
     const minuteIdx = minuteIndex.get(canonicalTs(row.ts_min))
@@ -719,6 +762,11 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     callOiEst,
     putOiEst,
     hasOiEst: oiestRows.length > 0,
+    callPrinted,
+    putPrinted,
+    callStructured,
+    putStructured,
+    hasPrintVol: printvolRows.length > 0,
     callVolume,
     putVolume,
     callDelta,
@@ -850,6 +898,10 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   const callMid = matrix('callMid')
   const putMid = matrix('putMid')
   const staleAge = matrix('staleAge')
+  const callPrinted = matrix('callPrinted')
+  const putPrinted = matrix('putPrinted')
+  const callStructured = matrix('callStructured')
+  const putStructured = matrix('putStructured')
 
   // Nová minuta ze snapshot řezu; odhad = měření, dokud ho oiest nepřepíše
   for (const row of minute.rows) {
@@ -870,6 +922,31 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
       putMid[to] = row.mid ?? 0
     }
     staleAge[to] = Math.max(staleAge[to], row.stale_age ?? 0)
+  }
+  // Podíl objemu mimo tisk (#1007): kumulativ = předchozí sloupec + přírůstek
+  // minuty; sloupec bez řádku dědí předchozí. Vsunutí zpětné minuty (ne
+  // append) kumulativ dál nepřepočítává — vzácné a příští balík to srovná.
+  for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
+    const to = strikeIdx * capacity + targetMinute
+    const from = targetMinute > 0 ? to - 1 : -1
+    callPrinted[to] = from >= 0 ? callPrinted[from] : 0
+    putPrinted[to] = from >= 0 ? putPrinted[from] : 0
+    callStructured[to] = from >= 0 ? callStructured[from] : 0
+    putStructured[to] = from >= 0 ? putStructured[from] : 0
+  }
+  for (const row of minute.printVol ?? []) {
+    const strikeIdx = newStrikeIndex.get(row.strike)
+    if (strikeIdx === undefined) continue
+    const to = strikeIdx * capacity + targetMinute
+    const printed = row.right === 'C' ? callPrinted : putPrinted
+    const structured = row.right === 'C' ? callStructured : putStructured
+    if (row.printed === null || row.structured === null) {
+      printed[to] = Number.NaN
+      structured[to] = Number.NaN
+    } else {
+      printed[to] += row.printed
+      structured[to] += row.structured
+    }
   }
   // OI odhady minuty z kanálu oiest.* (#232) — jen strany lišící se od měření
   for (const row of minute.oiEst ?? []) {
@@ -983,6 +1060,11 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     callOiEst,
     putOiEst,
     hasOiEst: inputs.hasOiEst || (minute.oiEst?.length ?? 0) > 0,
+    callPrinted,
+    putPrinted,
+    callStructured,
+    putStructured,
+    hasPrintVol: inputs.hasPrintVol || (minute.printVol?.length ?? 0) > 0,
     callVolume,
     putVolume,
     callDelta,
@@ -1245,6 +1327,11 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
           callMid: inputs.callMid[index],
           putMid: inputs.putMid[index],
           // Bez dat ≠ nula (#465): panel to kreslí šrafovaně
+          // Podíl objemu mimo tisk (#1007): NaN = neznámé → null, panel nedělí
+          callPrinted: inputs.hasPrintVol ? finiteOrNull(inputs.callPrinted[index]) : null,
+          callStructured: inputs.hasPrintVol ? finiteOrNull(inputs.callStructured[index]) : null,
+          putPrinted: inputs.hasPrintVol ? finiteOrNull(inputs.putPrinted[index]) : null,
+          putStructured: inputs.hasPrintVol ? finiteOrNull(inputs.putStructured[index]) : null,
           callOiMissing: inputs.oiMissing.has(oiMissingKey(minuteKeys[minuteIdx], strike, 'C')),
           putOiMissing: inputs.oiMissing.has(oiMissingKey(minuteKeys[minuteIdx], strike, 'P')),
         }
@@ -1492,4 +1579,65 @@ export function oiTotalSeries(
     series[minuteIdx] = total
   }
   return series
+}
+
+function finiteOrNull(value: number): number | null {
+  return Number.isFinite(value) ? value : null
+}
+
+/** Kumulativ podílu objemu mimo tisk (#1007) z minutových přírůstků.
+
+Řádky jsou řídké (jen minuty s přírůstkem objemu). Pro každou buňku
+(strike × strana) jde kumulativ po sloupcích: sloupec bez řádku dědí
+předchozí hodnotu, řádek s NULL (trade větev neběžela) nastaví NaN a ten se
+dědí dál — od té minuty se podíl nedá poctivě říct. */
+export function accumulatePrintVol(
+  rows: Array<{
+    minuteIdx: number | undefined
+    strikeIdx: number | undefined
+    right: 'C' | 'P'
+    printed: number | null
+    structured: number | null
+  }>,
+  target: {
+    callPrinted: Float32Array
+    putPrinted: Float32Array
+    callStructured: Float32Array
+    putStructured: Float32Array
+  },
+  strikeCount: number,
+  capacity: number,
+  minuteCount: number,
+): void {
+  // přírůstky per buňka; NaN = neznámý
+  const incPrinted = new Float32Array(strikeCount * capacity * 2)
+  const incStructured = new Float32Array(strikeCount * capacity * 2)
+  for (const row of rows) {
+    if (row.minuteIdx === undefined || row.strikeIdx === undefined) continue
+    const cell = (row.right === 'C' ? 0 : strikeCount) * capacity + row.strikeIdx * capacity
+    const at = cell + row.minuteIdx
+    if (row.printed === null || row.structured === null) {
+      incPrinted[at] = Number.NaN
+      incStructured[at] = Number.NaN
+    } else {
+      incPrinted[at] += row.printed
+      incStructured[at] += row.structured
+    }
+  }
+  for (let side = 0; side < 2; side += 1) {
+    const printed = side === 0 ? target.callPrinted : target.putPrinted
+    const structured = side === 0 ? target.callStructured : target.putStructured
+    for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
+      const base = strikeIdx * capacity
+      const incBase = side * strikeCount * capacity + base
+      let cumPrinted = 0
+      let cumStructured = 0
+      for (let minuteIdx = 0; minuteIdx < minuteCount; minuteIdx += 1) {
+        cumPrinted += incPrinted[incBase + minuteIdx]
+        cumStructured += incStructured[incBase + minuteIdx]
+        printed[base + minuteIdx] = cumPrinted
+        structured[base + minuteIdx] = cumStructured
+      }
+    }
+  }
 }
