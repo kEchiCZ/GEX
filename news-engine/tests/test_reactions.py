@@ -6,6 +6,7 @@ import pytest
 
 from gexlens_news.reactions import (
     MIN_BASELINE_SESSIONS,
+    MIN_MINUTE_SAMPLES,
     Bar,
     SessionDaily,
     VolumeBaseline,
@@ -143,6 +144,9 @@ def test_volume_z_score_is_none_without_enough_sessions() -> None:
     """Radši žádná hodnota než z-score z pár dní (SPEC chce 20 seancí)."""
     window = bars(EVENT, [7000.0] * 3)
     assert volume_z_score(window, flat_baseline(sessions=5)) is None
+    # #1001: polovina seancí pro minutu stačí — svátky a díry některé minuty ošidí
+    assert volume_z_score(window, flat_baseline(sessions=MIN_MINUTE_SAMPLES)) is not None
+    assert volume_z_score(window, flat_baseline(sessions=MIN_MINUTE_SAMPLES - 1)) is None
     assert volume_z_score(window, None) is None
     assert volume_z_score([], flat_baseline()) is None
     # Chybějící minuta v baseline taky diskvalifikuje celé okno

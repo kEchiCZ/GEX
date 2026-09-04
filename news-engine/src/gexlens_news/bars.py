@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
+from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_news.reactions import Bar
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,18 @@ class BarsRepository:
         )
 
     def recent_sessions(self, symbol: str, before: dt.date, count: int) -> list[Sequence[Bar]]:
-        """Posledních `count` seancí před dnem `before` — podklad volume baseline."""
-        days = [day for day in self.sessions(symbol) if day < before]
-        return [self.load_day(symbol, day) for day in days[-count:]]
+        """Posledních `count` **obchodních seancí** (Globex, ADR-0023) před dnem `before`.
+
+        Do #1001 se za seanci brala UTC partice: nedělní pahýl (22:00–23:59)
+        i zkrácený pátek se počítaly jako celé seance a žádná minuta dne tak
+        neměla 20 vzorků — baseline nikdy nevyhověla a `vol_z` zůstával NULL.
+        Seance se skládá přes `trading_session_date` (večer partice D−1 + den D),
+        minuta je jednou (dedup v `load_range`, #1002).
+        """
+        end = session_bounds(before)[0] - dt.timedelta(minutes=1)
+        # dost partic na `count` seancí i s víkendy a svátky
+        start = end - dt.timedelta(days=2 * count + 14)
+        by_session: dict[dt.date, list[Bar]] = {}
+        for bar in self.load_range(symbol, start, end):
+            by_session.setdefault(trading_session_date(bar.ts), []).append(bar)
+        return [by_session[day] for day in sorted(by_session)[-count:]]

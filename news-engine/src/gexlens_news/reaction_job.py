@@ -29,6 +29,7 @@ from gexlens_news.reactions import (
     DAILY_WINDOW_DAYS,
     DEFAULT_WINDOWS,
     MIN_BASELINE_SESSIONS,
+    MIN_MINUTE_SAMPLES,
     MINUTES_PER_TRADING_DAY,
     Reaction,
     SessionDaily,
@@ -410,7 +411,21 @@ class ReactionJob:
                 MIN_BASELINE_SESSIONS,
             )
             return None
-        return build_volume_baseline(sessions)
+        baseline = build_volume_baseline(sessions)
+        # Pokrytí musí být vidět (#1001): do té doby volume_z_score mlčky
+        # vracel None a nikdo nevěděl, že baseline nikdy nevyhověla
+        covered = sum(1 for stats in baseline.values() if stats.sessions >= MIN_MINUTE_SAMPLES)
+        logger.info(
+            "Volume baseline %s: %d seancí (%s – %s), %d/%d minut dne s ≥ %d vzorky",
+            symbol,
+            len(sessions),
+            trading_session_date(sessions[0][0].ts).isoformat() if sessions[0] else "?",
+            trading_session_date(sessions[-1][0].ts).isoformat() if sessions[-1] else "?",
+            covered,
+            len(baseline),
+            MIN_MINUTE_SAMPLES,
+        )
+        return baseline
 
 
 def _phase_values(

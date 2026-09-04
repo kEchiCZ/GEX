@@ -32,6 +32,11 @@ MINUTES_PER_TRADING_DAY = 1440
 DEFERRED_GAP_MINUTES = 5
 # Minimální počet seancí pro objemovou baseline (SPEC 5.1 mluví o 20)
 MIN_BASELINE_SESSIONS = 20
+# Minimální počet vzorků pro JEDNU minutu dne uvnitř baseline (#1001): svátky,
+# zkrácené seance a díry v datech některé minuty ošidí — vyžadovat všech 20
+# znamenalo, že vol_z nikdy nevznikl. Polovina seancí dává rozptyl, který
+# ještě něco znamená; méně už ne.
+MIN_MINUTE_SAMPLES = MIN_BASELINE_SESSIONS // 2
 
 
 @dataclass(frozen=True)
@@ -101,7 +106,7 @@ def volume_z_score(
     variance_total = 0.0
     for bar in window_bars:
         stats = baseline.get(bar.ts.timetz().replace(tzinfo=None))
-        if stats is None or stats.sessions < MIN_BASELINE_SESSIONS:
+        if stats is None or stats.sessions < MIN_MINUTE_SAMPLES:
             return None
         mean_total += stats.mean
         variance_total += stats.variance
