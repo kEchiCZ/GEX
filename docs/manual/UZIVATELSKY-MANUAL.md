@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.13 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.14 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -103,7 +103,7 @@ Obrazovka se skládá z (shora dolů, zleva doprava):
 | Prvek | Popis |
 |---|---|
 | **Sidebar (vlevo)** | Přepínání obrazovek (Graf / Dashboard / Řetěz / Setupy / Briefing / Deník / News / Stats / Settings), odkaz **Manuál**, přepínač tématu Dark/Light, **editovatelný watchlist** (kliknutí na ticker přepne instrument, × odebere, políčko dole přidá nový; při chybě se pod formulářem ukáže hláška a seznam se sám srovná se serverem), tlačítko **Legenda** (modál s ukázkami všech prvků grafu a čtením „roste/klesá"), sekce **Nedávné** (v1.12, #521 — posledních 8 zobrazených symbolů, klik znovu otevře i ad-hoc pohled; od v1.13 jen symboly **mimo watchlist** — aktivní ad-hoc symbol je tu zvýrazněný a do watchlistu se nepřimíchává (#989), ostatní položky mají **křížek ×**, kterým vyhledaný symbol vyřadíš (#987); vyřazení se pamatuje, aktivní symbol vyřadit nejde — nejdřív přepni jinam; tooltip připomíná rozdíl „ad-hoc pohled" vs. „plný sběr jako watchlist"), verze. Tlačítkem « se sbalí. |
-| **Hlavička — horní řádek** | **Kdo a za kolik**: ticker a název instrumentu, **poslední cena + denní změna v %**, **kalendářový selektor expirace** (v1.12, níže) s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h" — velké expirace nesou velké OI. Vedle selektoru je **vyhledání symbolu** (v1.12, #521): našeptávač CME produktů, výběr otevře **ad-hoc pohled přes tastytrade** — positioning libovolného produktu bez přidání do watchlistu a bez spotřeby IBKR linek (kotace + OI + BS greeks z mid; bez objemů, flows a Cum Δ — ty nese jen plný sběr). Takový symbol nese štítek **„ad-hoc · tastytrade“** a žije, dokud je zobrazený (~3 min po odchodu se uklízí); pro trvalé sledování ho přidej do watchlistu. **Výběr položky z našeptávače pohled otevře rovnou** — Enter je potřeba jen při ručním dopsání celého symbolu (v1.13, #983). Aby ad-hoc symbol data skutečně dostal, drží si engine ve streamu tastytrade **rezervu na ~2 ad-hoc pohledy** (v1.13, #982; do té doby mohl při plném streamu tiše mlčet). V selektoru najdeš i **následující expiraci** (sbírá se souběžně — čtení positioningu příští seance). |
+| **Hlavička — horní řádek** | **Kdo a za kolik**: ticker a název instrumentu, **poslední cena + denní změna v %**, **kalendářový selektor expirace** (v1.12, níže) s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h" — velké expirace nesou velké OI. Vedle selektoru je **vyhledání symbolu** (v1.12, #521): našeptávač CME produktů, výběr otevře **ad-hoc pohled přes tastytrade** — positioning libovolného produktu bez přidání do watchlistu a bez spotřeby IBKR linek (kotace + OI + BS greeks z mid; bez objemů, flows a Cum Δ — ty nese jen plný sběr). Takový symbol nese štítek **„ad-hoc · tastytrade“** a žije, dokud je zobrazený (~3 min po odchodu se uklízí); pro trvalé sledování ho přidej do watchlistu. Symbol z watchlistu štítek nikdy nemá — od v1.14 ad-hoc pohled ustoupí, jakmile má produkt plnou IBKR pipeline (dřív mohl po restartu enginu chvíli viset i nad daty z IBKR). **Výběr položky z našeptávače pohled otevře rovnou** — Enter je potřeba jen při ručním dopsání celého symbolu (v1.13, #983). Aby ad-hoc symbol data skutečně dostal, drží si engine ve streamu tastytrade **rezervu na ~2 ad-hoc pohledy** (v1.13, #982; do té doby mohl při plném streamu tiše mlčet). V selektoru najdeš i **následující expiraci** (sbírá se souběžně — čtení positioningu příští seance). |
 | **Hlavička — spodní řádek** | **V jakém je to stavu**: **GEX režim badge** (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem; když flip leží **mimo měřené pásmo** — celý Dyn GEX profil je na jedné straně nuly — badge se od v1.13 neztratí, režim se odvodí ze znaménka profilu u spotu a tooltip to přizná, #864), **chip Tendence** (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno"), **chip stavu sentimentu** RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna), **settle watch**, **chip gamma útesu** a vpravo **ukazatele pokrytí dat**, indikátor ● Live / ○ Offline a zvonek notifikací. |
 | **Řádek timeframe** | **Intraday/Daily** a rozlišení **1m, 2m, 3m, 5m, 10m, 15m, 30m, 45m, 1h, 2h, 3h, 4h, 1d**. Intraday agreguje minutová data do zvolených košů (svíčky OHLC, objemy se sčítají); Daily zobrazí sloupec za každý uložený den (roste s historií, max 14 dní). |
 | **Řádek přepínačů** | Dropdown **Dyn plocha** (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18; **výchozí je Dyn GEX** (#837) — modelované gamma pole je hlavní přidaná hodnota nástroje, Off zvol, když chceš jen měřenou mapu). Checkboxy vrstev: **Zdi** (call/put wall linie), **2. zeď** (druhá nejsilnější koncentrace strany, tečkovaně), **GEX Levels** (flip/centroid/Max Pain + **OI zdi**, viz kap. 5), **GEX žebřík** (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), **FA levels** (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI), **Sessions** (automatické markery světových seancí), **Vol / Opt Vol / Cum Δ / Δ Flow C/P** (spodní panely), **Vol + OI Δ**, **Projekce**, **News** (markery zpráv + panel Sentiment) s dropdownem **Vše/Významné** (filtr markerů na importance ≥ 2), dropdown **Signály** (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá. |
@@ -286,6 +286,12 @@ podle zdi umisťuje stop, o ní jinak neví.
 
 - **Nic se nedopočítává**: žádná IV ani gamma z extrapolace — bez OI se
   hladina prostě nekreslí. Proto se OI zdi nemíchají mezi gamma zdi.
+- **Cenovka nese i podíl outright objemu** (v1.14, #1007): `· 74 % outright` říká,
+  kolik dnešního objemu na striku zdi vytiskly outright obchody se stranou od
+  burzy; zbytek je strukturovaný objem (nohy spreadů, bloky). Zeď z outright
+  drží dealer jako plnou pozici, zeď ze spreadů má gammu částečně
+  vykompenzovanou. Zatím jen informace — kreslení zdi to nemění, dokud
+  kalibrace nedoloží rozdíl v chování ceny. Stejné číslo má i GEX žebřík.
 - **Cenovka nese podíl na OI své strany**: nízké procento = plochý profil,
   „zeď" je jen nejvyšší z mnoha srovnatelných striků. **Slabé zdi (pod 20 %)
   se nekreslí vůbec** — práh leží v mezeře naměřeného rozdělení (hodnoty se
@@ -389,6 +395,33 @@ Horizontální skládané pruhy pro každý strike, **na stejné výškové ose 
 - **Šrafovaná půlka řádku** = OI pro tenhle strike **chybí** (IBKR ho nedodalo) — něco jiného než změřená nula, která zůstává prázdná. Šrafura říká „nevíme", prázdno říká „nula".
 
 Čteš z něj na první pohled, **kde sedí dominantní call a put koncentrace** — typicky walls.
+
+### Outright vs. strukturovaný objem v profilu (v1.14, #1007)
+
+Objemová část sloupce v profilu **Vol + OI Δ** má dva tóny téže barvy strany:
+
+- **plná sytost = outright objem** — obchody, které vytiskly trade se stranou
+  agresora od burzy (dxFeed TimeAndSale),
+- **tlumený tón = strukturovaný a dohodnutý objem** — nohy spreadů (vertikály,
+  condory, rolly) a blokové obchody. CME je jako obchod nevysílá, do objemu
+  kontraktu ale patří; rozdíl je tedy účetní, ne odhad.
+
+Není to šrafování — to patří výhradně chybějícímu OI. Když rozdělení chybí
+(starší den bez řady tisků, výpadek tastytrade), sloupec se nedělí a tooltip
+řekne proč. Tooltip jinak ukáže `C: 77 outright (39 %) · 122 struktura | P: …`.
+
+**Jak číst:**
+
+- **Důvěra v Cum Δ na striku.** Cum Δ z tisků popisuje jen outright; u striku,
+  kde 60 % objemu nikdy nevytisklo trade, vypovídá o menšině dění.
+- **Kvalita zdi.** Zeď z outright objemu drží dealer jako plnou pozici, zeď ze
+  spreadů má gammu částečně vykompenzovanou druhou nohou — stejné OI, slabší
+  tlak. Proto totéž číslo nese cenovka OI zdí a žebříku.
+- **Záměr na 0DTE.** Rostoucí strukturovaný objem kolem úrovně = sázka na
+  rozsah; prudce rostoucí outright nad cenou = pokus o průraz.
+
+Poctivé omezení: rozdíl obsahuje i blokové obchody, které směrové být mohou.
+Čti to jako „strukturovaný a dohodnutý objem", ne čistě „spready".
 
 ### PUT / CALL panel (pod profilem)
 
@@ -963,7 +996,7 @@ které se přepne hned.
 |---|---|
 | **IBKR** | Host, port (7496 live / 7497 paper; IB Gateway 4001 / 4002), client ID. Změna po Uložit platí **hned** — engine se přepojí do sekund i ve chvíli, kdy spojení nemá a teprve ho hledá (v1.13, #992; dřív až do 5 min). Hodnota uložená tady **přebíjí `.env`** — kdo mění port v `.env`, musí ho změnit i tady (viz ADMIN-MANUAL) |
 | **Engine (IBKR pipeline)** | **Rozsah strikes (± body od spotu)** — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, retence dat (dny), disk limit (GB). *Šířka hot zóny* zmizela (v1.14, #1006) — přepínač nic neřídil |
-| **Stav enginu** | Read-only stav: spojení + port (při výpadku IBKR i **„bez spojení X min"**, #770), účet (paper), **Zdroj dat** (v1.13, #950: `řetěz ibkr · spot ibkr`, při fallbacku upozornění, že běží tastytrade), tlačítko **Přepojit IBKR** (níže), Greeks X/Y + repair fronta, OI řetězu, lines %, **chyby subskripce** (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance" a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console) |
+| **Stav enginu** | Read-only stav: spojení + port (při výpadku IBKR i **„bez spojení X min"**, #770), účet (paper), **Zdroj dat** (v1.13, #950: `řetěz ibkr · spot ibkr`, při fallbacku upozornění, že běží tastytrade), tlačítko **Přepojit IBKR** (níže), řádek **Cum Δ** (v1.14, #615: zdroj znaménka `midpoint` / `dxfeed` a per symbol podíl objemu, který v dnešním dni přišel z tisků se stranou od burzy — pravdivý ukazatel pokrytí místo dřívější „šířky hot zóny“), Greeks X/Y + repair fronta, OI řetězu, lines %, **chyby subskripce** (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance" a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console) |
 | **Tastytrade** (v1.10) | Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, tlačítko **Přepojit tastytrade** (v1.13), trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží |
 | **Alerty** | **Hlásit chyby subskripce market dat** — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert *Chyba subskripce* v kap. 14) |
 | **Trading** | **Traders mode** — přepínač trading vrstev (viz kap. 11e); **velikost účtu + riziko na obchod** pro kalkulačku pozice u setup karty. Vše jen v prohlížeči, na server neodchází |
