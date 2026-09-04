@@ -104,6 +104,27 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      # Audit endpoint registru npm občas neodpovídá (4. 9. 2026 celé dopoledne
+      # 503/400) — to není nález, ale shazovalo to každý PR i main. Tři pokusy
+      # s pauzou; přetrvávající výpadek endpointu = varování, ne červené CI.
+      # Skutečné zranitelnosti (report + exit 1) dál padají.
       - name: npm audit
         working-directory: frontend
-        run: npm audit --audit-level=high
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npm audit --audit-level=high > audit.log 2>&1; then
+              cat audit.log
+              exit 0
+            fi
+            if grep -q "audit endpoint returned an error" audit.log; then
+              echo "npm audit endpoint nedostupný (pokus $attempt/3)"
+              sleep 30
+              continue
+            fi
+            cat audit.log
+            exit 1
+          done
+          cat audit.log
+          echo "::warning::npm audit endpoint nedostupný po 3 pokusech — audit přeskočen (nález se neprokazuje ani nevylučuje)"
+          exit 0
