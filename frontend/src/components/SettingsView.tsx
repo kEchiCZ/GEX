@@ -305,6 +305,27 @@ Sběr dat se na ~1–2 minuty přeruší.`)
                     : ''}
                 </td>
               </tr>
+              {/* Zdroj znaménka CumΔ (ADR-0032): místo smyšlené „šířky hot zóny"
+                  podíl objemu se stranou od burzy — pravdivý ukazatel pokrytí. */}
+              {status.cumdelta_source && (
+                <tr>
+                  <td>Cum Δ</td>
+                  <td>
+                    zdroj {status.cumdelta_source}
+                    {status.cumdelta_coverage
+                      ? Object.entries(status.cumdelta_coverage)
+                          .map(
+                            ([sym, c]) =>
+                              ` · ${sym}: tisky ${Math.round(c.printed_share * 100)} % objemu`,
+                          )
+                          .join('')
+                      : ''}
+                    {status.cumdelta_source === 'midpoint'
+                      ? ' — znaménko z midpoint testu, tisky zatím jen měří pokrytí'
+                      : ' — znaménko od burzy, midpoint jen jako fallback'}
+                  </td>
+                </tr>
+              )}
               <tr>
                 <td>Přepojení</td>
                 <td>

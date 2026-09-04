@@ -1,0 +1,35 @@
+{
+  "description": "Ručně spočtený golden dataset trade větve (ADR-0032, #615 fáze 3). M=50, jeden call kontrakt Δ=0.4. Režim dxfeed: minuta 1 — bar vol=100 (první, jen založí stav). Minuta 2 — tisky BUY 6 + SELL 2 (se stranou od burzy) + UNDEFINED 1 (bez strany); bar vol=115 last=10.3 bid=10.0 ask=10.4 (mid 10.2 → +1). Tisky: +1*6*0.4*50 = +120, -1*2*0.4*50 = -40. Bar: přírůstek 15, tisky se stranou 8 už v toku, bez strany 1 → midpoint +1*1*0.4*50 = +20, zbytek 15-8-1 = 6 = strukturovaný objem mimo tok. Minuta 3 — žádný tisk, bar vol=125 last=10.0 (mid 10.2 → -1): fallback celý přírůstek 10 → -1*10*0.4*50 = -200. CumΔ = 120-40+20-200 = -100. Pokrytí: printed 8, unknown 1, structured 6, fallback 10. Režim midpoint nad TÝMIŽ vstupy: tisky nic (jen pokrytí), bar2 +1*15*0.4*50 = +300, bar3 -200 → CumΔ = +100.",
+  "multiplier": 50.0,
+  "delta": 0.4,
+  "bars": [
+    { "minute": 1, "volume": 100.0, "last": 10.3, "bid": 10.0, "ask": 10.4 },
+    { "minute": 2, "volume": 115.0, "last": 10.3, "bid": 10.0, "ask": 10.4 },
+    { "minute": 3, "volume": 125.0, "last": 10.0, "bid": 10.0, "ask": 10.4 }
+  ],
+  "trades": [
+    { "minute": 2, "size": 6.0, "aggressor": "BUY", "expected_flow_dxfeed": 120.0 },
+    { "minute": 2, "size": 2.0, "aggressor": "SELL", "expected_flow_dxfeed": -40.0 },
+    { "minute": 2, "size": 1.0, "aggressor": "UNDEFINED", "expected_flow_dxfeed": 0.0 }
+  ],
+  "dxfeed": {
+    "expected_bar_flows": [0.0, 20.0, -200.0],
+    "expected_cum_delta": -100.0,
+    "expected_coverage": {
+      "printed_volume": 8.0,
+      "unknown_volume": 1.0,
+      "structured_volume": 6.0,
+      "fallback_volume": 10.0
+    }
+  },
+  "midpoint": {
+    "expected_bar_flows": [0.0, 300.0, -200.0],
+    "expected_cum_delta": 100.0,
+    "expected_coverage": {
+      "printed_volume": 8.0,
+      "unknown_volume": 1.0,
+      "structured_volume": 0.0,
+      "fallback_volume": 0.0
+    }
+  }
+}

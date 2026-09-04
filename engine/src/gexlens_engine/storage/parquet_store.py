@@ -155,6 +155,9 @@ FLOW_SCHEMA = pa.schema(
         # podkladu (běh bez tasty větve) nebo partice vznikla před #829.
         ("futures_cvd_delta", pa.float64()),
         ("futures_cvd", pa.float64()),
+        # Zdroj znaménka toku (ADR-0032): "midpoint" / "dxfeed"; NULL = partice
+        # před #615 fází 3 (= midpoint). Srovnání řad před/po stojí na něm.
+        ("source", pa.string()),
     ]
 )
 
@@ -379,6 +382,9 @@ class FlowRowLike(Protocol):
 
     @property
     def futures_cvd(self) -> float | None: ...
+
+    @property
+    def source(self) -> str | None: ...
 
 
 @dataclass(frozen=True)
@@ -955,6 +961,7 @@ class SnapshotWriter:
                     "cum_delta": row.cum_delta,
                     "futures_cvd_delta": row.futures_cvd_delta,
                     "futures_cvd": row.futures_cvd,
+                    "source": row.source,
                 }
                 for row in rows
             ]

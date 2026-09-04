@@ -798,7 +798,7 @@ async def create_pipeline(
         expiry=info.expiry,
         multiplier=multiplier,
         contracts=contracts,
-        cum_delta=CumDeltaTracker(multiplier=multiplier),
+        cum_delta=CumDeltaTracker(multiplier=multiplier, source=settings.cumdelta_source),
         futures_cvd=futures_cvd,  # CVD podkladu (#829) — jen primární runtime
         push_status=False,  # agregovaný status pushuje orchestrátor
         oi_fallback=oi_fallback,
@@ -1261,6 +1261,10 @@ async def main() -> None:
         # Stínové CumΔ z TimeAndSale (#615 fáze 3, varianta B — rozhodnutí
         # uživatele 27. 8.): měřicí řada per symbol, živé CumΔ se nemění
         dx_shadows: dict[str, DxCumDeltaShadow] = {}
+        # Živá trade větev (ADR-0032, #615 fáze 3): streamer symbol → spec
+        # aktivního řetězu per instrument; tisky jdou do CumDeltaTrackeru
+        # pipeline. V režimu midpoint tracker jen měří pokrytí.
+        dx_universe: dict[str, dict[str, OptionContractSpec]] = {}
         # Ad-hoc pohled přes tasty (#521, varianta C): žádné IBKR linky
         adhoc_viewer = AdhocViewer(
             db=db,
@@ -1274,19 +1278,28 @@ async def main() -> None:
             tasty_cache.on_event(event_type, values)
             if trades_recorder is not None:
                 trades_recorder.on_event(event_type, values)
-            if dx_shadows and event_type == "TimeAndSale" and values:
+            if (dx_shadows or dx_universe) and event_type == "TimeAndSale" and values:
                 streamer = str(values[0])
                 state = tasty_cache.state(streamer)
                 trade_size = _number(values[3]) if len(values) > 3 else None
                 trade_aggressor = values[4] if len(values) > 4 else None
+                trade_side = trade_aggressor if isinstance(trade_aggressor, str) else None
+                trade_delta = state.greeks.delta if state is not None else None
                 # spreadLeg se záměrně nečte: CME ho pro FOP nenese (ADR-0027)
                 for dx_shadow in dx_shadows.values():
                     dx_shadow.on_trade(
-                        streamer,
-                        size=trade_size,
-                        aggressor=(trade_aggressor if isinstance(trade_aggressor, str) else None),
-                        delta=state.greeks.delta if state is not None else None,
+                        streamer, size=trade_size, aggressor=trade_side, delta=trade_delta
                     )
+                # Živé CumΔ (ADR-0032): tisk patří kontraktu jednoho instrumentu
+                for dx_symbol, universe in dx_universe.items():
+                    dx_spec = universe.get(streamer)
+                    if dx_spec is None:
+                        continue
+                    dx_pipe = pipelines.get(dx_symbol)
+                    if dx_pipe is not None and dx_pipe.runtime.cum_delta is not None:
+                        dx_pipe.runtime.cum_delta.add_dx_trade(
+                            dx_spec, size=trade_size, aggressor=trade_side, delta=trade_delta
+                        )
             # CVD podkladu (#829): tracker si sám vybere jen printy
             # registrovaných front futures, opční projdou bez práce
             futures_cvd.on_event(event_type, values)
@@ -1646,9 +1659,10 @@ async def main() -> None:
                             )
                             purpose["wide"] |= wide_syms
                             symbols |= wide_syms
-                        # Stínové CumΔ (#615 fáze 3): univerzum = aktivní řetěz
-                        # pipeline; spot pro zóny se obnovuje i minutovým flushem
-                        if settings.tasty_dx_cumdelta and pipe is not None:
+                        # Univerzum trade větve (ADR-0032) = aktivní řetěz
+                        # pipeline: streamer symbol → spec. Živé CumΔ ho čte
+                        # v `_tasty_event`; stín (#615 měření) nad týmž.
+                        if pipe is not None:
                             active_specs = list(pipe.runtime.contracts)
                             universe = {}
                             for active_spec in active_specs:
@@ -1656,6 +1670,8 @@ async def main() -> None:
                                 if streamer_sym is not None:
                                     universe[streamer_sym] = active_spec
                             if universe:
+                                dx_universe[symbol] = universe
+                            if universe and settings.tasty_dx_cumdelta:
                                 dx_shadow = dx_shadows.get(symbol)
                                 if dx_shadow is None:
                                     dx_shadow = DxCumDeltaShadow(
@@ -2309,6 +2325,15 @@ async def main() -> None:
                 connection=manager.state.value,
                 port=settings.ibkr_port,
                 last_tick_ts=now.isoformat(),
+                # Zdroj znaménka CumΔ a denní pokrytí tisky (ADR-0032, #615
+                # krok 5) — UI ukazuje podíl objemu se stranou od burzy,
+                # ne smyšlenou šířku zóny
+                cumdelta_source=settings.cumdelta_source,
+                cumdelta_coverage={
+                    pipe_symbol: pipe.runtime.cum_delta.day_stats()
+                    for pipe_symbol, pipe in sorted(pipelines.items())
+                    if pipe.runtime.cum_delta is not None
+                },
                 # Kolikrát TWS za běh odmítla market data (#417) — s platnými
                 # subskripcemi má zůstat na nule, růst je signál k prověření.
                 # Okno + záznamy (#772): kumulativ od startu nemá měřítko a bez

@@ -38,6 +38,8 @@ class _Flow:
         # CVD podkladu (#829) — fixture běží bez tasty větve
         self.futures_cvd_delta: float | None = None
         self.futures_cvd: float | None = None
+        # Zdroj znaménka (ADR-0032) — fixture jako partice před #615 fází 3
+        self.source: str | None = None
 
 
 def ts(minute: int) -> dt.datetime:

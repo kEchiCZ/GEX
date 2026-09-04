@@ -156,6 +156,12 @@ class Settings(BaseSettings):
     # Stínové CumΔ z TimeAndSale (#615 fáze 3, shadow): paralelní měřicí řada,
     # živé CumΔ ani detektory se nemění — vypnutí zastaví jen sběr měření
     tasty_dx_cumdelta: bool = True
+    # Zdroj znaménka živého CumΔ (ADR-0032, #615 fáze 3): "midpoint" = dnešní
+    # minutový test pro celý řetěz; "dxfeed" = tisky TimeAndSale se stranou od
+    # burzy, midpoint jen jako fallback per kontrakt a minutu. Default zůstává
+    # midpoint do vyhodnocení paralelního běhu (≥ 5 seancí) a rozhodnutí
+    # uživatele — přepnutí mění hodnoty CumΔ i vstup detektorů.
+    cumdelta_source: str = Field(default="midpoint", pattern="^(midpoint|dxfeed)$")
     # Dev laboratoř jen s tastytrade (#623, start-dev.ps1 -LiveTasty): engine
     # přeskočí IBKR úplně a jen streamuje chain do cache s heartbeat logem.
     # Produkce se flagu nedotýká — default vypnuto.
