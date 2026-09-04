@@ -3,7 +3,7 @@
 Dvě větve:
 - **trade větev**: každý trade nese stranu agresora → flowΔ = sign · size ·
   Δ(K,s) · M; trades bez určené strany (unknown) se nezapočítávají. Zdrojem
-  je dxFeed `TimeAndSale` pro ATM±15 (ADR-0032, #615 fáze 3); IBKR
+  je dxFeed `TimeAndSale` pro celý sbíraný řetěz (ADR-0032, #615 fáze 3); IBKR
   tick-by-tick zóna z původního návrhu SPEC 3.4 se nikdy nenapojila a byla
   rozhodnutím 3. 9. 2026 nahrazena (#1006).
 - **zbytek řetězce (1min)**: ΔVol = přírůstek kumulativního volume za minutu,

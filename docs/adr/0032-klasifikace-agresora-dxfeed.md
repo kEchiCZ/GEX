@@ -1,6 +1,6 @@
 # ADR-0032: Klasifikace agresora per trade z dxFeed TimeAndSale místo IBKR tick-by-tick hot zóny
 
-**Stav:** accepted · **Datum:** 2026-09-03 · **Rozhodl:** uživatel (issue #1006, #615) · **Mění:** SPEC kap. 0 R2, kap. 3.4, 4.5, 5.1
+**Stav:** accepted · **Datum:** 2026-09-03, doplněk 4. 9. (rozsah zóny) · **Rozhodl:** uživatel (issue #1006, #615) · **Mění:** SPEC kap. 0 R2, kap. 3.4, 4.5, 5.1
 
 ## Kontext
 
@@ -34,20 +34,30 @@ Dvě fakta o CME datech, ověřená 3. 9. (#615):
 
 ## Rozhodnutí
 
-1. **R2 se naplní z dxFeed `TimeAndSale`:** zóna ATM ±15 strikes × C/P (přepočet
-   při pohybu spotu o ≥ 1 strike, přesun kontraktu mezi zónami jen na hranici
-   snapshotu — ADR-0025 pravidlo 3) dostává znaménko z `aggressorSide`
-   (BUY → +1, SELL → −1); trade bez určené strany → midpoint fallback pro danou
-   minutu. Kontrakty mimo ±15 a celý řetěz při výpadku tastytrade větve →
-   midpoint test (SPEC 4.5). Realizace = #615 fáze 3.
+1. **R2 se naplní z dxFeed `TimeAndSale` pro celý sbíraný řetěz:** každý
+   kontrakt, který engine snapshotuje (obálka strikes podle
+   `strike_range_points`, všechny sbírané expirace), dostává znaménko
+   z `aggressorSide` (BUY → +1, SELL → −1). Midpoint test (SPEC 4.5) zůstává
+   jen jako **fallback per kontrakt a minutu**: trade bez určené strany,
+   kontrakt bez tisků v minutě s přírůstkem objemu, a celý řetěz při výpadku
+   tastytrade větve. Realizace = #615 fáze 3.
+
+   *Doplněk 4. 9. 2026:* původní znění „ATM ±15 strikes" bylo dědictví
+   IBKR limitu 5 streamů. U dxFeed žádný limit není a počet striků je
+   nesymetrický mezi symboly (ES krok 5 b → ±1 % spotu; NQ krok 10 b, u ATM
+   5 b → ±0,5 % až ±0,25 %). Zóna proto není definovaná vůbec — trade větev
+   pokrývá vše, co se sbírá. Zamítnuté alternativy: šířka v % spotu nebo
+   v násobcích očekávaného pohybu (zbytečný parametr, hranice v UI a při
+   přepočtu). „Šířka klasifikované zóny" v UI se nahrazuje **podílem
+   kontraktů a objemu, který v minutě přišel z tisků**.
 2. **IBKR tick-by-tick zóna se nezapojuje a ruší se:** `ibkr/hotzone.py`,
    `MockHotZoneClient`, `TICKS_SCHEMA`/`write_ticks`/`data/ticks/`,
    `GEXLENS_HOT_ZONE_WIDTH`, `GEXLENS_TICK_BY_TICK_MAX_STREAMS`, runtime setting
    `hot_zone_width` a jeho pole v Settings UI. Typy `ClassifiedTrade`/`TradeSide`
    zůstávají v `compute/cumdelta.py` jako vstup trade větve.
 3. **Znění R2 ve SPEC:** „strana agresora od burzy (dxFeed TimeAndSale) pro
-   ATM ±15 strikes, midpoint test pro zbytek řetězce a jako fallback bez
-   tastytrade". Kap. 3.4 přepsána, 4.5 a 5.1 upraveny.
+   celý sbíraný řetěz, midpoint test jako fallback per kontrakt a minutu
+   a bez tastytrade". Kap. 3.4 přepsána, 4.5 a 5.1 upraveny.
 4. **Spread legy se nerozlišují** (doplněk ADR-0027, 3. 9.): CumΔ z trade větve
    je čistě outright agrese, což je pro účel CumΔ (směrový tok) žádoucí.
    Strukturovaný objem (spready, bloky) se měří zvlášť jako rozdíl snapshot

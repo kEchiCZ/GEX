@@ -10,7 +10,7 @@
 | # | Rozhodnutí |
 |---|---|
 | R1 | Žádná MVP zjednodušení — všechny moduly ve finální podobě |
-| R2 | Cum Δ s **plnou klasifikací agresora**: strana agresora od burzy (dxFeed `TimeAndSale`) pro ATM ±15 strikes, midpoint test pro zbytek řetězce a jako fallback bez tastytrade — *revize ADR-0032 (3. 9. 2026), původně IBKR tick-by-tick hot zóna* |
+| R2 | Cum Δ s **plnou klasifikací agresora**: strana agresora od burzy (dxFeed `TimeAndSale`) pro **celý sbíraný řetěz**, midpoint test jen jako fallback per kontrakt a minutu a bez tastytrade — *revize ADR-0032 (3.–4. 9. 2026), původně IBKR tick-by-tick hot zóna ATM ±15* |
 | R3 | Retence intraday dat a tick dat: **14 dní** (denní Parquet partice, noční purge job) — *okno prodlouženo na 90 dní, viz ADR-0022* |
 | R4 | **Výjimka: EOD snapshot Open Interest se archivuje bez časového limitu** (řádově KB/den, nenahraditelná data) |
 | R5 | Datový zdroj výhradně IBKR (účet existuje); žádné placené externí feedy — *rozšířeno na brokerské účty s daty zdarma, primární zdroj zůstává IBKR, viz ADR-0025* |
@@ -44,7 +44,7 @@ Primární instrument: ES (E-mini S&P 500) futures opce, všechny weekly/EOM exp
 │  • ConnectionManager (watchdog, reconnect, backoff)    │
 │  • ChainDiscovery (řetězce, trading classes, expirace) │
 │  • SubscriptionScheduler (rotace dávek, repair queue)  │
-│  • DxTradeClassifier (TimeAndSale ATM±15, ADR-0032)    │
+│  • DxTradeClassifier (TimeAndSale, celý řetěz, ADR-0032)│
 │  • SnapshotWriter (1min konsolidace → Parquet)         │
 │  • OIArchiver (EOD, PostgreSQL, bez retence)           │
 │  • ComputeEngine (GEX, levels, walls, profily, CumΔ)   │
@@ -87,9 +87,9 @@ Engine a API server běží jako dva procesy (nebo jeden proces se dvěma asynci
 - Vytížení lines zobrazováno ve stavové liště (`Greeks NN %`).
 
 ### 3.4 Klasifikace agresora per trade — dxFeed TimeAndSale (R2, ADR-0032)
-- Zóna: ATM ±15 strikes × C/P, přepočítávaná při pohybu spotu o ≥ 1 strike krok; přesun kontraktu mezi zónami jen na hranici snapshotu (ADR-0025 pravidlo 3).
+- Rozsah: **celý sbíraný řetěz** (obálka strikes podle `strike_range_points`, všechny sbírané expirace) — žádná zóna; počet striků by byl mezi symboly nesymetrický (ES krok 5 b, NQ 10/5 b) a dxFeed nemá limit streamů (ADR-0032 doplněk 4. 9.).
 - Zdroj: dxFeed `TimeAndSale` přes tastytrade DXLink (ADR-0025/0027) — každý outright trade nese `aggressorSide` **od burzy** (CME tag 5797), `size`, `price`; bez limitu počtu streamů, pokrytí strany 99,95 % (měřeno #615).
-- Trade bez určené strany → midpoint fallback pro danou minutu; kontrakty mimo ±15 a celý řetěz při výpadku tastytrade větve → midpoint test (4.5).
+- Midpoint test (4.5) jen jako fallback per kontrakt a minutu: trade bez určené strany, kontrakt bez tisků v minutě s přírůstkem objemu, celý řetěz při výpadku tastytrade větve.
 - Nohy spreadů v `TimeAndSale` nejsou: CME pro legy spread tradů nevysílá Trade Summary, jen objem. CumΔ z trade větve je tedy čistě outright agrese; strukturovaný objem se měří zvlášť (#1007).
 - Původní návrh (IBKR `reqTickByTickData` hot zóna, limit 5 streamů dle ADR-0001) se nikdy nenapojil a byl 3. 9. 2026 nahrazen — ADR-0032.
 
@@ -149,7 +149,7 @@ Per snapshot t, strike K (vol = kumulativní denní volume do času t; ΔVol = p
 
 ### 4.5 Cum Δ — plná klasifikace agresora (R2)
 ```
-ATM ±15 (dxFeed TimeAndSale, ADR-0032):
+Celý sbíraný řetěz (dxFeed TimeAndSale, ADR-0032):
   za každý trade: sign = aggressorSide (BUY → +1, SELL → −1, jinak midpoint fallback)
   flowΔ += sign · size · Δ(K,s) · M
 
@@ -236,7 +236,7 @@ Nástroje šipka / linie / freehand, výběr barvy, mazání; persistence per in
 | Oblast | Požadavek |
 |---|---|
 | Latence | Změna módu/škály < 100 ms (data v paměti klienta); live tick < 250 ms end-to-end |
-| Sweep | Kompletní řetězec ≤ 90 s; trade printy ATM ±15 real-time (dxFeed) |
+| Sweep | Kompletní řetězec ≤ 90 s; trade printy celého řetězu real-time (dxFeed) |
 | Integrita | Každá buňka heatmapy nese stáří dat; stale > 5 min vizuálně odlišeno |
 | Odolnost | Reconnect bez ztráty intraday dat; pacing chyby nikdy neshodí engine |
 | Objem | ~30–60 MB/den; 14denní okno < 1 GB; OI archiv růst ~KB/den |
