@@ -1337,7 +1337,9 @@ async def main() -> None:
                 "tasty_heals": tasty_stream.heals,
                 "tasty_symbols": tasty_cache.symbols_tracked(),
                 # Ad-hoc pohledy (#521 C) — UI badge zdroje
-                **({"tasty_adhoc": adhoc_viewer.active()} if adhoc_viewer.active() else {}),
+                # Vždy, i prázdný seznam: API status slévá jen poslané klíče, takže
+                # vynechaný klíč nechal v UI chip „ad-hoc" i po úklidu pohledu (4. 9.)
+                "tasty_adhoc": adhoc_viewer.active(),
                 # Stínové CumΔ (#615): pokrytí aggressorSide rozhoduje o midpoint fallbacku
                 **(
                     {
