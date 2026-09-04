@@ -192,7 +192,9 @@ class EngineRuntime:
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
-            self.cum_delta = CumDeltaTracker(multiplier=self.multiplier)
+            self.cum_delta = CumDeltaTracker(
+                multiplier=self.multiplier, source=self.settings.cumdelta_source
+            )
 
     async def _oi_walls(self, day: dt.date, spot: float) -> OiWalls | None:
         """OI zdi z denního archivu; None = archiv pro den nic nemá (#851).

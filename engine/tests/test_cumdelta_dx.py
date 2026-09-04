@@ -3,6 +3,8 @@
 import datetime as dt
 from pathlib import Path
 
+import pytest
+
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow
 
@@ -32,21 +34,19 @@ def make_shadow(spot: float = 7600.0) -> DxCumDeltaShadow:
     return shadow
 
 
-def test_zony_hot_prstenec_a_mimo() -> None:
-    """Hot ATM±1 zvlášť, prstenec ±15 hlavní řada, dál se nepočítá nic."""
+def test_cely_retez_je_jedna_rada_bez_zon() -> None:
+    """ADR-0032 doplněk: každý strike univerza se počítá do hlavní řady, hot je 0."""
     shadow = make_shadow()
-    # ATM strike 7600 → hot; 7605 (±1) → hot; 7610 (±2) → prstenec
-    shadow.on_trade(".ES7600C", size=2, aggressor="BUY", delta=0.5)
+    shadow.on_trade(".ES7600C", size=2, aggressor="BUY", delta=0.5)  # ATM
     shadow.on_trade(".ES7610C", size=3, aggressor="BUY", delta=0.4)
-    # ±16 striků od ATM (7600 + 16·5 = 7680) → mimo měření
-    shadow.on_trade(".ES7680C", size=9, aggressor="BUY", delta=0.1)
+    shadow.on_trade(".ES7680C", size=9, aggressor="BUY", delta=0.1)  # 16 striků od ATM
     row = shadow.close_minute(TS)
-    assert row.flow_hot == 2 * 0.5 * 50.0
-    assert row.flow_ring == 3 * 0.4 * 50.0
-    assert row.trades == 1  # počty vede jen prstenec
-    # ±15 přesně (7675) do prstence ještě patří
-    shadow.on_trade(".ES7675C", size=1, aggressor="SELL", delta=0.2)
-    assert shadow.close_minute(TS).flow_ring == -1 * 0.2 * 50.0
+    assert row.flow_hot == 0.0
+    assert row.flow_ring == pytest.approx((2 * 0.5 + 3 * 0.4 + 9 * 0.1) * 50.0)
+    assert row.trades == 3
+    # symbol mimo univerzum se nepočítá vůbec
+    shadow.on_trade(".ES7800C", size=1, aggressor="SELL", delta=0.2)
+    assert shadow.close_minute(TS).trades == 0
 
 
 def test_vsechny_trady_prstence_jdou_do_jedne_rady() -> None:
@@ -72,15 +72,17 @@ def test_neznama_strana_se_nepocita_do_toku_ale_meri_se() -> None:
 
 
 def test_bez_spotu_nebo_delty_se_trade_zahazuje_a_pocita() -> None:
-    """Díra v měření se přizná (dropped_no_context), tok se nevymýšlí."""
+    """Díra v měření se přizná (dropped_no_context), tok se nevymýšlí.
+
+    Bez spotu se od doplňku ADR-0032 počítá dál — zóny nejsou; bez delty ne."""
     shadow = make_shadow()
     shadow.set_spot(None)
     shadow.on_trade(".ES7610C", size=1, aggressor="BUY", delta=0.5)
     shadow.set_spot(7600.0)
     shadow.on_trade(".ES7610C", size=1, aggressor="BUY", delta=None)
     row = shadow.close_minute(TS)
-    assert row.flow_ring == 0.0
-    assert row.dropped_no_context == 2
+    assert row.flow_ring == pytest.approx(1 * 0.5 * 50.0)
+    assert row.dropped_no_context == 1
 
 
 def test_kumulativy_a_roll_session() -> None:

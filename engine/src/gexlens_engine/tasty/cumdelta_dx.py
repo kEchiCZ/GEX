@@ -28,9 +28,9 @@ from gexlens_engine.ibkr.discovery import OptionContractSpec
 
 logger = logging.getLogger(__name__)
 
-#: Zóny vlastnictví (ADR-0025 + SPEC R2): hot drží IBKR, prstenec by převzal dxFeed
-HOT_ZONE_STRIKES = 1
-RING_ZONE_STRIKES = 15
+#: Doplněk ADR-0032 (4. 9. 2026): trade větev pokrývá celý sbíraný řetěz,
+#: žádné zóny. `flow_ring`/`cum_ring` = celé univerzum, `flow_hot`/`cum_hot`
+#: zůstávají ve schématu kvůli starším particím a jsou 0.
 
 _AGGRESSOR_SIGN = {"BUY": 1, "SELL": -1}
 
@@ -121,23 +121,8 @@ class DxCumDeltaShadow:
         }
 
     def _zone(self, strike: float) -> str | None:
-        """'hot' / 'ring' / None podle vzdálenosti v pořadí striků od ATM."""
-        if self._spot is None or not self._strikes:
-            return None
-        atm_index = min(
-            range(len(self._strikes)),
-            key=lambda index: abs(self._strikes[index] - self._spot),  # type: ignore[operator]
-        )
-        try:
-            strike_index = self._strikes.index(strike)
-        except ValueError:
-            return None
-        distance = abs(strike_index - atm_index)
-        if distance <= HOT_ZONE_STRIKES:
-            return "hot"
-        if distance <= RING_ZONE_STRIKES:
-            return "ring"
-        return None
+        """Celý sbíraný řetěz (ADR-0032 doplněk): každý strike univerza = 'ring'."""
+        return "ring" if strike in self._strikes else None
 
     def on_trade(
         self,
@@ -152,11 +137,7 @@ class DxCumDeltaShadow:
             return
         zone = self._zone(spec.strike)
         if zone is None:
-            # Mimo ±15, nebo bez spotu/strike v žebříku — mimo měření
-            if self._spot is None:
-                self._dropped += 1
-                self._day_dropped += 1
-            return
+            return  # strike mimo univerzum — nemá kam patřit
         if delta is None:
             self._dropped += 1
             self._day_dropped += 1

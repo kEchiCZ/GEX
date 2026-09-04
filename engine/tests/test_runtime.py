@@ -329,7 +329,9 @@ async def test_one_cycle_produces_full_day_artifacts(
         "cum_delta",
         "futures_cvd_delta",  # CVD podkladu (#829) — bez tasty větve NULL
         "futures_cvd",
+        "source",  # ADR-0032: zdroj znaménka toku
     ]
+    assert list(flow["source"]) == ["midpoint"]
     day_bars = pd.read_parquet(settings.derived_dir / "ES" / "bars" / f"{day}.parquet")
     assert day_bars["close"].iloc[0] == SPOT
 

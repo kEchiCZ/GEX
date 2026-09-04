@@ -30,6 +30,20 @@ export interface PipelineStatus {
   subscription_errors?: number
   subscription_errors_60m?: number
   subscription_errors_excused?: number
+  // Zdroj znaménka CumΔ a denní pokrytí tisky (ADR-0032, #615 krok 5)
+  cumdelta_source?: 'midpoint' | 'dxfeed'
+  cumdelta_coverage?: Record<
+    string,
+    {
+      source: string
+      printed_volume: number
+      unknown_volume: number
+      structured_volume: number
+      fallback_volume: number
+      dropped_no_delta: number
+      printed_share: number
+    }
+  >
   subscription_error_recent?: { ts: string; contract: string; symbol: string }[]
   disk_usage_bytes?: number
   disk_limit_bytes?: number

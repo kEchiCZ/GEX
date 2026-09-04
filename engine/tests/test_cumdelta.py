@@ -3,6 +3,7 @@
 import datetime as dt
 import json
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -163,7 +164,9 @@ def test_close_minute_series_and_persistence(tmp_path: Path) -> None:
     tracker.add_trade(trade("C", size=1.0, side="sell"), delta=0.5)  # -25
     row_2 = tracker.close_minute(dt.datetime(2026, 7, 16, 15, 1, tzinfo=dt.UTC))
 
-    assert row_1 == FlowRow(dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC), 50.0, 50.0)
+    assert row_1 == FlowRow(
+        dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC), 50.0, 50.0, source="midpoint"
+    )
     assert row_2.flow_delta == pytest.approx(-25.0)
     assert row_2.cum_delta == pytest.approx(25.0)
 
@@ -179,9 +182,11 @@ def test_close_minute_series_and_persistence(tmp_path: Path) -> None:
         "cum_delta",
         "futures_cvd_delta",
         "futures_cvd",
+        "source",
     ]
     assert list(frame["cum_delta"]) == [50.0, 25.0]
     assert frame["futures_cvd"].isna().all()
+    assert list(frame["source"]) == ["midpoint", "midpoint"]  # ADR-0032: zdroj znaménka v řadě
 
 
 def test_roll_session_resets_only_on_boundary() -> None:
@@ -203,3 +208,95 @@ def test_restore_cum_navazuje_zaklad_po_restartu() -> None:
     tracker.add_trade(trade("C", size=1.0, side="buy"), delta=0.5)  # +25 po restartu
     tracker.restore_cum(1000.0)
     assert tracker.cum_delta == pytest.approx(1025.0)
+
+
+# ── Trade větev z dxFeed (ADR-0032, #615 fáze 3) ──────────────────────
+DXFEED_GOLDEN_PATH = Path(__file__).parent / "golden" / "cumdelta_dxfeed.json"
+
+
+def load_dxfeed_golden() -> dict[str, Any]:
+    data: dict[str, Any] = json.loads(DXFEED_GOLDEN_PATH.read_text(encoding="utf-8"))
+    return data
+
+
+def run_dxfeed_golden(source: str) -> tuple[CumDeltaTracker, list[float]]:
+    golden = load_dxfeed_golden()
+    tracker = CumDeltaTracker(multiplier=float(golden["multiplier"]), source=source)
+    contract = spec("C")
+    delta = float(golden["delta"])
+    bar_flows: list[float] = []
+    for bar in golden["bars"]:
+        for item in golden["trades"]:
+            if item["minute"] == bar["minute"]:
+                flow = tracker.add_dx_trade(
+                    contract, size=item["size"], aggressor=item["aggressor"], delta=delta
+                )
+                expected = item["expected_flow_dxfeed"] if source == "dxfeed" else 0.0
+                assert flow == pytest.approx(expected)
+        bar_flows.append(
+            tracker.add_bar(
+                contract,
+                cumulative_volume=bar["volume"],
+                last=bar["last"],
+                bid=bar["bid"],
+                ask=bar["ask"],
+                delta=delta,
+            )
+        )
+    return tracker, bar_flows
+
+
+@pytest.mark.parametrize("source", ["dxfeed", "midpoint"])
+def test_golden_trade_vetev_dxfeed_vs_midpoint(source: str) -> None:
+    """Golden (CLAUDE.md bod 3): tytéž tisky + bary, dva zdroje znaménka, CumΔ spočtené ručně."""
+    golden = load_dxfeed_golden()
+    expected = golden[source]
+    assert isinstance(expected, dict)
+    tracker, bar_flows = run_dxfeed_golden(source)
+
+    assert bar_flows == pytest.approx(expected["expected_bar_flows"])
+    assert tracker.cum_delta == pytest.approx(expected["expected_cum_delta"])
+    stats = tracker.day_stats()
+    assert stats["source"] == source
+    for key, value in expected["expected_coverage"].items():
+        assert stats[key] == pytest.approx(value), key
+
+
+def test_dxfeed_tisk_bez_delty_necha_objem_baru() -> None:
+    """Tisk bez delty se nepočítá a bar větev jeho objem doklasifikuje midpointem (fallback)."""
+    tracker = CumDeltaTracker(multiplier=50.0, source="dxfeed")
+    contract = spec("C")
+    tracker.add_bar(contract, 100.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
+    assert tracker.add_dx_trade(contract, size=5.0, aggressor="BUY", delta=None) == 0.0
+    flow = tracker.add_bar(contract, 105.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
+    assert flow == pytest.approx(5 * 0.4 * 50.0)  # +1 × 5 × 0.4 × 50
+    stats = tracker.day_stats()
+    assert stats["dropped_no_delta"] == 1
+    assert stats["fallback_volume"] == 5.0
+
+
+def test_dxfeed_net_volume_nese_stranu_od_burzy() -> None:
+    """ADR-0011: čistý objem per kontrakt z tisků (buy − sell); midpoint jen bez tisků."""
+    tracker = CumDeltaTracker(multiplier=50.0, source="dxfeed")
+    contract = spec("P")
+    tracker.add_bar(contract, 10.0, last=5.0, bid=5.0, ask=5.4, delta=-0.3)
+    tracker.add_dx_trade(contract, size=4.0, aggressor="SELL", delta=-0.3)
+    tracker.add_dx_trade(contract, size=1.0, aggressor="BUY", delta=-0.3)
+    tracker.add_bar(contract, 15.0, last=5.0, bid=5.0, ask=5.4, delta=-0.3)
+    assert tracker.net_volume(contract) == pytest.approx(-3.0)
+
+
+def test_tracker_odmitne_neznamy_zdroj() -> None:
+    with pytest.raises(ValueError):
+        CumDeltaTracker(multiplier=50.0, source="tick")
+
+
+def test_reset_vynuluje_pokryti_i_tisky_od_baru() -> None:
+    tracker = CumDeltaTracker(multiplier=50.0, source="dxfeed")
+    contract = spec("C")
+    tracker.add_bar(contract, 100.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
+    tracker.add_dx_trade(contract, size=3.0, aggressor="BUY", delta=0.4)
+    tracker.reset()
+    assert tracker.day_stats()["printed_volume"] == 0.0
+    # po resetu první bar jen zakládá stav — tisky před resetem se nepřenesou
+    assert tracker.add_bar(contract, 103.0, last=10.3, bid=10.0, ask=10.4, delta=0.4) == 0.0
