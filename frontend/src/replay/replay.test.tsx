@@ -15,7 +15,7 @@ import {
   oiTotalSeries,
 } from './loader'
 import type { LiveMinute, ReplayDay } from './loader'
-import { accumulatePrintVol } from './loader'
+import { accumulatePrintVol, outrightShareAt } from './loader'
 import { sliceGrid, sliceOverlays, slicePanels, sliceSeries } from './slice'
 import { usePlayback, TICK_MS } from './usePlayback'
 import type { OverlayData } from '../heatmap/overlays'
@@ -1126,4 +1126,13 @@ test('accumulatePrintVol (#1007): kumulativ per buňka, díra dědí, NULL otrá
   expect(target.putPrinted[0]).toBe(0)
   expect(Number.isNaN(target.putPrinted[1])).toBe(true)
   expect(Number.isNaN(target.putPrinted[2])).toBe(true) // NaN se dědí i přes další řádek
+})
+
+test('outrightShareAt (#1007): podíl tisků, NaN a nulový objem → null', () => {
+  const printed = new Float32Array([60, Number.NaN, 0])
+  const structured = new Float32Array([40, 1, 0])
+  expect(outrightShareAt(printed, structured, 0)).toBeCloseTo(0.6)
+  expect(outrightShareAt(printed, structured, 1)).toBeNull()
+  expect(outrightShareAt(printed, structured, 2)).toBeNull()
+  expect(outrightShareAt(undefined, structured, 0)).toBeNull()
 })

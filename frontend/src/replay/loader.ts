@@ -1150,6 +1150,14 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     putVega: inputs.putVega,
     spotSeries,
     staleAge: inputs.staleAge,
+    ...(inputs.hasPrintVol
+      ? {
+          callPrinted: inputs.callPrinted,
+          putPrinted: inputs.putPrinted,
+          callStructured: inputs.callStructured,
+          putStructured: inputs.putStructured,
+        }
+      : {}),
   }
   const grid = buildModeGrid(raw, 'oi', 'linear')
   // FA zdroj (#232): tatáž matice s OI_est místo měřeného OI — módy heatmapy
@@ -1207,6 +1215,29 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     const share = lastLevelValue(levelSeries(key))
     return share === null ? undefined : ` · OI ${Math.round(share * 100)} %`
   }
+  // Podíl outright objemu na striku zdi (#1007): zeď postavená z tisků
+  // (outright) drží dealer jako plnou pozici, zeď ze spreadů má gammu
+  // částečně vykompenzovanou. Jen informace — žádné ztlumení, dokud
+  // kalibrace (#1007 krok 4) nedoloží, že se to v chování ceny liší.
+  const outrightSuffix = (wallKey: string, side: 'C' | 'P'): string => {
+    if (!inputs.hasPrintVol) return ''
+    const series = levelSeries(wallKey)
+    for (let minuteIdx = series.length - 1; minuteIdx >= 0; minuteIdx -= 1) {
+      const value = series[minuteIdx]
+      if (value === null) continue
+      const strikeIdx = strikes.indexOf(value)
+      if (strikeIdx < 0) return ''
+      const share = outrightShareAt(
+        side === 'C' ? inputs.callPrinted : inputs.putPrinted,
+        side === 'C' ? inputs.callStructured : inputs.putStructured,
+        strikeIdx * inputs.minuteCapacity + minuteIdx,
+      )
+      return share === null ? '' : ` · ${Math.round(share * 100)} % outright`
+    }
+    return ''
+  }
+  const oiWallSuffix = (shareKey: string, wallKey: string, side: 'C' | 'P') =>
+    `${shareSuffix(shareKey) ?? ''}${outrightSuffix(wallKey, side)}` || undefined
   // Slabá OI zeď se NEKRESLÍ (#851): pod prahem je profil plochý a „zeď" je
   // jen nejvyšší z mnoha srovnatelných striků — čára, o kterou se cena nemá
   // důvod opřít, by graf jen zahustila. Minuty pod prahem padnou na null,
@@ -1229,8 +1260,8 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     // zájmu, tedy jiná veličina (magnet k expiraci vs. hedging teď). Kreslí
     // se tečkovaně a nesou podíl na OI své strany, aby šlo poznat, jestli je
     // to koncentrovaná úroveň, nebo jen nejvyšší z mnoha srovnatelných.
-    { name: 'oi_call_wall', color: LEVEL_COLORS.oi_call_wall, dash: OI_WALL_DASH, series: strongOnly('oi_call_wall', 'oi_call_share'), labelSuffix: shareSuffix('oi_call_share') }, // prettier-ignore
-    { name: 'oi_put_wall', color: LEVEL_COLORS.oi_put_wall, dash: OI_WALL_DASH, series: strongOnly('oi_put_wall', 'oi_put_share'), labelSuffix: shareSuffix('oi_put_share') }, // prettier-ignore
+    { name: 'oi_call_wall', color: LEVEL_COLORS.oi_call_wall, dash: OI_WALL_DASH, series: strongOnly('oi_call_wall', 'oi_call_share'), labelSuffix: oiWallSuffix('oi_call_share', 'oi_call_wall', 'C') }, // prettier-ignore
+    { name: 'oi_put_wall', color: LEVEL_COLORS.oi_put_wall, dash: OI_WALL_DASH, series: strongOnly('oi_put_wall', 'oi_put_share'), labelSuffix: oiWallSuffix('oi_put_share', 'oi_put_wall', 'P') }, // prettier-ignore
   ]
   const overlays: OverlayData = {
     price,
@@ -1640,4 +1671,19 @@ export function accumulatePrintVol(
       }
     }
   }
+}
+
+/** Podíl tisků na objemu buňky (#1007): printed / (printed + structured) v 0–1;
+null = rozklad chybí (NaN) nebo nulový objem. Sdílí ho loader (OI zdi) i App (žebřík). */
+export function outrightShareAt(
+  printed: Float32Array | undefined,
+  structured: Float32Array | undefined,
+  index: number,
+): number | null {
+  if (!printed || !structured) return null
+  const p = printed[index]
+  const st = structured[index]
+  if (!Number.isFinite(p) || !Number.isFinite(st)) return null
+  const total = p + st
+  return total > 0 ? Math.min(1, Math.max(0, p / total)) : null
 }
