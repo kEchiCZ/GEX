@@ -437,7 +437,7 @@ Panely se **sdílenou časovou osou** s heatmapou. Každý zvlášť vypneš che
 | **Vol** | Minutový objem podkladu (futures) — šedé sloupce |
 | **Opt Vol** | Minutový objem opcí, **barevně call (teal) / put (červená)** vedle sebe |
 | **Δ Flow C/P** | Delta-vážený opční tok zvlášť za call a put stranu (\|Δ\| × přírůstek volume). Z něj čteš, **na které straně se právě obchoduje** — např. „uzavírání callů" = call sloupce slábnou. Default vypnutý (checkbox Δ Flow C/P). |
-| **Cum Δ** | Kumulativní delta flow jako plocha **nad nulou (zelená) / pod nulou (červená)**. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Znaménko dnes dává minutový midpoint test (poslední cena vs. střed bid/ask) pro celý řetěz; přesnější strana agresora od burzy z dxFeed pro ATM ±15 přijde s #615 (v1.14 — ADR-0032). Resetuje se na začátku obchodního dne. |
+| **Cum Δ** | Kumulativní delta flow jako plocha **nad nulou (zelená) / pod nulou (červená)**. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Znaménko dnes dává minutový midpoint test (poslední cena vs. střed bid/ask) pro celý řetěz; přesnější strana agresora od burzy z dxFeed pro celý sbíraný řetěz přijde s #615 (v1.14 — ADR-0032). Resetuje se na začátku obchodního dne. |
 | **Evo OI** | Vývoj celkového Open Interest v čase, zvlášť call (teal) a put (červená), **schodovité kreslení**. V Daily ose = hodnota na konci každého dne. Default vypnutý (checkbox Evo OI). Podrobně níže. |
 | **Sentiment** | SentIndex z news-engine (zapíná checkbox **News**): intraday spojitá řada kolem nuly (kladná = risk-on tón zpráv, záporná = risk-off), v **Daily** pohledu OHLC svíčka indexu za každý den (open nese overnight zbytek). V replay staršího dne panel od v1.13 ukazuje řadu **zobrazeného dne** a při přetáčení drží osu s ostatními panely (dřív bral dnešní řadu a při přetáčení se posouval doleva, #976). |
 
@@ -1388,7 +1388,7 @@ podkladu**, ne absolutní čísla.
 | **$/bod vs. $/1 %** | Jednotka Dyn ploch a GEX křivky. $/bod = surové pole (gamma expozice na 1 bod pohybu). $/1 % = totéž vážené P²/100 — kolik dolarů dealeři přeobchodují při 1% pohybu; srovnatelné napříč cenovými hladinami, proto výchozí. Zdi, levels ani flip přepínač nemění. |
 | **Δ Flow C/P** | Delta-vážený opční tok zvlášť za call/put stranu — na které straně se právě obchoduje. |
 | **Cum Δ** | Kumulativní delta flow — součet (směr obchodu × velikost × delta × multiplikátor) přes den. |
-| **Hot zóna** | Historický termín z původního návrhu (IBKR tick-by-tick pásmo ATM ±15) — nikdy nebyl v provozu a od v1.14 je nahrazen: stranu agresora pro ATM ±15 dodá dxFeed `TimeAndSale` (#615, ADR-0032). V textech o řetězu snapshotů znamená „hot zóna“ jen pásmo ATM ±15 strikes, které se sbírá každý cyklus. |
+| **Hot zóna** | Historický termín z původního návrhu (IBKR tick-by-tick pásmo ATM ±15) — nikdy nebyl v provozu a od v1.14 je nahrazen: stranu agresora pro celý sbíraný řetěz dodá dxFeed `TimeAndSale` (#615, ADR-0032). V textech o řetězu snapshotů znamená „hot zóna“ jen pásmo ATM ±15 strikes, které se sbírá každý cyklus. |
 | **Stale** | Data starší než 5 minut — vizuálně odlišená. |
 | **VEX** (Vega Exposure) | vega × OI per strana — kolik $ přecenění drží dealeři na striku při změně IV o 1 bod. „Volatility walls" před událostmi. |
 | **Charm** | Citlivost delty na čas — zajišťovací toky, které vznikají jen plynutím času k settle. |

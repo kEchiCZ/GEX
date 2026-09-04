@@ -228,7 +228,7 @@ Minutový cyklus (`runtime.EngineRuntime.run_cycle`):
 1. **Sweep** — `SubscriptionScheduler` projede řetězec v dávkách (ATM±30 každý cyklus, křídla každý 3.), nekompletní kontrakty přes repair frontu, výsledek do in-memory cache.
 2. **Snapshot** — cache → `SnapshotRow` (OI z ranního archivu) → atomický zápis Parquet.
 3. **Výpočty** — GEX per strike (naivní dealer model, vyměnitelná strategie) → levels (flip interpolovaně, walls, centroid) → zápis do `derived/levels`.
-4. **Cum Δ** — bar větev (ΔVol × midpoint test × Δ × M) pro celý řetěz; trade větev z dxFeed `TimeAndSale` pro ATM ±15 přijde s #615 fází 3 (ADR-0032 — IBKR hot zóna z původního návrhu se nikdy nenapojila, CumΔ do té doby je 100 % midpoint). `close_minute` → `derived/flow`.
+4. **Cum Δ** — bar větev (ΔVol × midpoint test × Δ × M) pro celý řetěz; trade větev z dxFeed `TimeAndSale` pro celý sbíraný řetěz přijde s #615 fází 3 (ADR-0032 — IBKR hot zóna z původního návrhu se nikdy nenapojila, CumΔ do té doby je 100 % midpoint). `close_minute` → `derived/flow`.
 5. **Bary podkladu** — 5s reqRealTimeBars agregované na 1min → `derived/bars`.
 6. **Push do API** — `/internal/status` + kanály `levels.*`, `flow.*`, `price.*`.
 
