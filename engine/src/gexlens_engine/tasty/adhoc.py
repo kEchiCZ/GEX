@@ -90,6 +90,18 @@ class AdhocViewer:
             if product not in wanted:
                 self._views.pop(product)
                 logger.info("Ad-hoc pohled %s uklizen (bez prodloužení)", product)
+            elif self.is_watched(product):
+                # Produkt mezitím dostal plnou IBKR pipeline (4. 9.: pohled NQ
+                # vznikl po startu enginu, než se pipeline postavily, a pak
+                # přežíval díky pingům z UI) — ad-hoc ustupuje, řádek pryč,
+                # ať UI nehlásí „ad-hoc · tastytrade" nad IBKR daty
+                self._views.pop(product)
+                wanted.pop(product, None)
+                with self.db.begin() as conn:
+                    conn.execute(
+                        delete(adhoc_view_table).where(adhoc_view_table.c.symbol == product)
+                    )
+                logger.info("Ad-hoc pohled %s uklizen — produkt má plnou pipeline", product)
         for product in wanted:
             if product in self._views or self.is_watched(product):
                 continue

@@ -4,7 +4,7 @@ import datetime as dt
 from pathlib import Path
 from typing import cast
 
-from sqlalchemy import create_engine, insert, select
+from sqlalchemy import create_engine, delete, insert, select
 
 from gexlens_engine.config import Settings
 from gexlens_engine.storage.meta import adhoc_view_table, ensure_meta_schema
@@ -41,13 +41,20 @@ def make_viewer(tmp_path: Path) -> tuple[AdhocViewer, TastyChainCache, object]:
         symbol_map=cast(SymbolMap, _FakeSymbolMap()),
         cache=cache,
         writer=writer,
-        is_watched=lambda product: product in {"ES", "NQ"},
+        is_watched=lambda product: product in WATCHED,
     )
     return viewer, cache, db
 
 
+#: Watchované produkty testů — mutable, ať jde simulovat pipeline, která
+#: vznikla až po založení ad-hoc pohledu
+WATCHED: set[str] = {"ES", "NQ"}
+
+
 def request(db: object, symbol: str, ts: dt.datetime) -> None:
+    """Stejně jako API: opakovaný požadavek řádek přepíše (prodloužení TTL)."""
     with db.begin() as conn:  # type: ignore[attr-defined]
+        conn.execute(delete(adhoc_view_table).where(adhoc_view_table.c.symbol == symbol))
         conn.execute(insert(adhoc_view_table).values(symbol=symbol, requested_ts=ts))
 
 
@@ -66,6 +73,25 @@ async def test_zalozeni_a_uklid_po_ttl(tmp_path: Path) -> None:
     assert viewer.active() == []
     with db.connect() as conn:  # type: ignore[attr-defined]
         assert conn.execute(select(adhoc_view_table)).fetchall() == []
+
+
+async def test_pohled_ustoupi_kdyz_produkt_dostane_pipeline(tmp_path: Path) -> None:
+    """4. 9.: ad-hoc NQ vznikl po startu enginu (pipelines prázdné) a přežíval
+    díky pingům z UI i po návratu IBKR — chip „ad-hoc · tastytrade" nad IBKR daty."""
+    viewer, _cache, db = make_viewer(tmp_path)
+    WATCHED.discard("CL")
+    try:
+        request(db, "CL", NOW)
+        await viewer.refresh(NOW)
+        assert viewer.active() == ["CL"]
+        WATCHED.add("CL")  # pipeline se postavila
+        request(db, "CL", NOW + dt.timedelta(seconds=30))  # UI dál pinguje
+        await viewer.refresh(NOW + dt.timedelta(seconds=31))
+        assert viewer.active() == []
+        with db.connect() as conn:  # type: ignore[attr-defined]
+            assert conn.execute(select(adhoc_view_table)).fetchall() == []
+    finally:
+        WATCHED.discard("CL")
 
 
 async def test_watchovane_symboly_se_nezakladaji(tmp_path: Path) -> None:
