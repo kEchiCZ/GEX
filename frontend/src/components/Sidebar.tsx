@@ -57,10 +57,12 @@ export function Sidebar() {
     forgetRecentSymbol,
   } = useAppState()
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
+  // Než watchlist poprvé dorazí, není jasné, co je ad-hoc — nepingovat (4. 9.)
+  const [watchlistLoaded, setWatchlistLoaded] = useState(false)
   // Ad-hoc pohled (#521 C): symbol mimo watchlist se drží naživu pingem
   useAdhocPing(
     activeSymbol,
-    watchlist.some((item) => item.symbol === activeSymbol),
+    watchlistLoaded ? watchlist.some((item) => item.symbol === activeSymbol) : null,
   )
   const [newSymbol, setNewSymbol] = useState('')
   const [watchlistError, setWatchlistError] = useState<string | null>(null)
@@ -88,6 +90,7 @@ export function Sidebar() {
       if (cancelled) return
       if (list !== null) {
         setWatchlist(list)
+        setWatchlistLoaded(true)
       } else {
         // Souběžný sync (onFocus během čekajícího retry) nesmí timer přepsat
         // bez zrušení — vznikaly by paralelní retry řetězy (#506)
