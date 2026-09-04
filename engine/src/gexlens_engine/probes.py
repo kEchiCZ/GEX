@@ -1,88 +1,67 @@
-"""Kandidát T9 „strop nad hlavou" (#577, fáze 1 — JEN sběr výskytů).
+"""Sběrač výskytů kandidáta T9 „strop nad hlavou" (#577, fáze 1 — JEN sběr).
 
 Referenční čtení: cena přichází zespodu ke spodní hraně tlumící zóny a
 očekávaná mechanika je ÚTLUM, ne odraz — proto se nekotví na strike (T1),
 ale na hranu pásma z #575, a prahy nejsou v bodech ani ATR (obojí #434
 zamítlo), nýbrž v geometrii pásma samotného.
 
-Dva zrcadlové kandidáty, oba jen hypotetické obchody do `setup_probes`:
-
-- **t9_ceiling** — vstup do pásma zespodu (outside → transition, cena roste,
-  jádro pásma nad hlavou). Hypotéza dle tabulky v #577: cena dojde ke STŘEDU
-  tlumící zóny (tam ji drží jádro) → LONG od hrany, cíl = střed zóny, stop
-  = hrana All − ¼ šířky zóny (návrat pod hranu = přechod odmítnut).
-- **t9_exit** — výpad z pásma dolů (transition/inside → outside, cena klesá).
-  Momentum hypotéza: SHORT, cíl = entry − šířka zóny, stop = návrat nad
-  hranu All.
-
-Akceptace: přechod musí vydržet `ACCEPTANCE_MINUTES` minut (konvence T2),
-jinak se kandidát zahazuje — „okamžitě vrácený přechod" není vstup do pásma.
-Výsledky počítá TENTÝŽ `evaluate_bar`/`r_result` jako živé setupy; timeout
-na settle seance. Do `setups`, alertů ani track recordu nejde NIC — fáze 2
-(≥ 30 výskytů na instrument) teprve rozhodne zapnout/sloučit/zavřít.
+Rozhodování dělá čistá funkce `detect_damping_ceiling` v `compute/setups.py`
+(vedle ostatních detektorů, ale MIMO `detect_all`) — tatáž, kterou spouští
+`scripts/backtest_setups.py --probes` nad historií. Tenhle modul je jen
+orchestrace: okno posledních minut, zápis výskytu do `setup_probes`,
+vyhodnocení otevřených sond TÝMŽ `evaluate_bar`/`r_result` jako živé
+setupy a timeout na settle expirace runtime (konvence `SetupEngine`, #259).
+Do `setups`, alertů ani track recordu nejde NIC — fáze 2 (≥ 30 výskytů na
+instrument) teprve rozhodne zapnout/sloučit/zavřít.
 """
 
 import datetime as dt
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 
-from gexlens_engine.compute.bandregime import (
-    BAND_MAJOR_SHARE,
-    BAND_METRICS_VERSION,
-    BandZone,
-    band_metrics,
-    band_zone,
-)
+from gexlens_engine.compute.bandregime import BAND_METRICS_VERSION, band_metrics, band_zone
 from gexlens_engine.compute.settle import settle_ts
-from gexlens_engine.compute.setups import Direction, evaluate_bar, r_result
+from gexlens_engine.compute.setups import (
+    Outcome,
+    ProbeMinute,
+    ProbeOccurrence,
+    ProbeParams,
+    detect_damping_ceiling,
+    evaluate_bar,
+    probe_excursion,
+    r_result,
+)
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime
 from gexlens_engine.storage.probes_store import ProbeRepository
 
 logger = logging.getLogger(__name__)
 
-#: Akceptace přechodu (minuty) — stejná konvence jako `acceptance_minutes` T2
-ACCEPTANCE_MINUTES = 5
-#: Podmínka 2 z #577: jádro pásma nad cenou ≥ podíl globálního maxima profilu
-STRENGTH_ABOVE_MIN = BAND_MAJOR_SHARE
-#: Stop ceiling proby: hrana All minus tento podíl šířky zóny (kotva na pásmo)
-CEILING_STOP_WIDTH_SHARE = 0.25
 
+def probe_settle(expiry: str, fallback_day: dt.date) -> dt.datetime:
+    """Settle expirace runtime (YYYYMMDD) — timeout sond, konvence `SetupEngine`.
 
-def zone_position(zone: BandZone | None, price: float) -> str:
-    """Poloha ceny vůči hranám All zóny: below / in / above / unknown.
-
-    Záměrně přes geometrii zóny (band_zone hledá vrchol i NAD cenou), ne přes
-    band_depth — metrika #575 daleko pod pásmem počvě vrací None (měří jen
-    v místě ceny) a přechod outside→transition by nikdy nenastal.
+    Do zavedení čisté funkce se sondy uzavíraly settlem KALENDÁŘNÍHO dne:
+    výskyt po 20:00 UTC (dead-chain okno před rollem, nebo večerní Globex
+    po rollu) se tak zavřel hned další minutou jako timeout (2 z 11 řádků
+    produkce do 3. 9.). Živé setupy se řídí expirací (#259), sondy teď taky.
+    Nečitelná expirace → settle dne (nerozbíjet sběr kvůli formátu).
     """
-    if zone is None:
-        return "unknown"
-    if price < zone.all_low:
-        return "below"
-    if price > zone.all_high:
-        return "above"
-    return "in"
+    try:
+        day = dt.datetime.strptime(expiry, "%Y%m%d").date()
+    except ValueError:
+        logger.warning("Nečitelná expirace %r — timeout sond podle dne", expiry)
+        day = fallback_day
+    return settle_ts(day)
 
 
 @dataclass
 class _ActiveProbe:
     probe_id: int
-    template: str
-    direction: Direction
-    entry: float
-    target: float
-    stop: float
-    mfe: float
-    mae: float
-
-
-@dataclass
-class _Pending:
-    template: str
-    started: dt.datetime
-    run: int
-    zone: BandZone
+    occurrence: ProbeOccurrence
+    mfe: float = 0.0
+    mae: float = 0.0
 
 
 @dataclass
@@ -91,15 +70,14 @@ class T9ProbeCollector:
 
     symbol: str
     repository: ProbeRepository
+    params: ProbeParams = field(default_factory=ProbeParams)
 
-    _regime: str = field(default="unknown", init=False)
-    #: Kolik minut v řadě drží aktuální poloha — usazení před přechodem.
-    #: Bez toho by odmítnutý vstup do pásma (1 minuta uvnitř) hned generoval
-    #: zrcadlovou exit probu a flicker na hraně by dvojitě počítal výskyty.
-    _regime_run: int = field(default=0, init=False)
-    _last_close: float | None = field(default=None, init=False)
-    _pending: _Pending | None = field(default=None, init=False)
+    _history: deque[ProbeMinute] = field(init=False)
     _active: list[_ActiveProbe] = field(default_factory=list, init=False)
+
+    def __post_init__(self) -> None:
+        # Detektor potřebuje přesně 2 × akceptace minut (usazení + přechod)
+        self._history = deque(maxlen=2 * self.params.acceptance_minutes)
 
     async def on_minute(
         self, now: dt.datetime, spot: float, bars: list[Bar], runtime: EngineRuntime
@@ -107,165 +85,87 @@ class T9ProbeCollector:
         if not bars:
             return
         bar = bars[-1]
-        self._evaluate_active(now, bar.high, bar.low, bar.close)
-        self._timeout_at_settle(now, bar.close)
+        self._evaluate_active(now, bar.high, bar.low)
+        self._timeout_at_settle(now, bar.close, runtime.expiry)
 
         profile = runtime.last_profile
-        metrics = band_metrics(profile, bar.close) if profile is not None else None
         zone = band_zone(profile, bar.close) if profile is not None else None
-        position = zone_position(zone, bar.close)
-        previous_position = self._regime
-        previous_run = self._regime_run
-        previous_close = self._last_close
-        self._regime_run = self._regime_run + 1 if position == previous_position else 1
-        self._regime = position
-        self._last_close = bar.close
-        if position == "unknown" or previous_close is None:
-            self._pending = None
-            return
-
-        # Běžící akceptace: přechod musí vydržet, jinak se kandidát zahazuje
-        if self._pending is not None:
-            holds = (
-                position != "below"
-                if self._pending.template == "t9_ceiling"
-                else position == "below"
+        metrics = band_metrics(profile, bar.close) if profile is not None else None
+        self._history.append(
+            ProbeMinute(
+                ts=now,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                zone=zone,
+                band_depth=metrics.depth if metrics is not None else None,
             )
-            if not holds:
-                self._pending = None
-            else:
-                self._pending.run += 1
-                if self._pending.run >= ACCEPTANCE_MINUTES:
-                    self._open_probe(now, bar.close, metrics, self._pending)
-                    self._pending = None
+        )
+        occurrence = detect_damping_ceiling(list(self._history), self.params)
+        if occurrence is not None:
+            self._open_probe(now, occurrence, runtime.expiry)
 
-        # Nový kandidát ceiling: vstup do pásma zespodu s jádrem nad hlavou
-        if (
-            self._pending is None
-            and previous_position == "below"
-            and previous_run >= ACCEPTANCE_MINUTES
-            and position == "in"
-            and bar.close > previous_close
-            and zone is not None
-            and zone.strength_above >= STRENGTH_ABOVE_MIN
-        ):
-            self._pending = _Pending(template="t9_ceiling", started=now, run=1, zone=zone)
-        # Zrcadlo: výpad z pásma dolů (momentum) — levné měřit současně (#577)
-        elif (
-            self._pending is None
-            and previous_position == "in"
-            and previous_run >= ACCEPTANCE_MINUTES
-            and position == "below"
-            and bar.close < previous_close
-            and zone is not None
-        ):
-            self._pending = _Pending(template="t9_exit", started=now, run=1, zone=zone)
-
-    def _open_probe(
-        self,
-        now: dt.datetime,
-        close: float,
-        metrics: object,
-        pending: _Pending,
-    ) -> None:
-        zone = pending.zone
-        if pending.template == "t9_ceiling":
-            direction = Direction.LONG
-            entry = close
-            target = zone.center
-            stop = zone.all_low - CEILING_STOP_WIDTH_SHARE * zone.width
-            if target <= entry:
-                return  # cena už je za středem — hypotéza nemá co měřit
-        else:
-            direction = Direction.SHORT
-            entry = close
-            stop = zone.all_low
-            target = entry - zone.width
-            if stop <= entry:
-                return  # cena nad hranou — výpad se nekonal
-        context: dict[str, object] = {
-            "zone_all_low": zone.all_low,
-            "zone_all_high": zone.all_high,
-            "zone_center": zone.center,
-            "zone_width": zone.width,
-            "strength_above": zone.strength_above,
-            "acceptance_minutes": ACCEPTANCE_MINUTES,
-        }
-        depth = getattr(metrics, "depth", None)
-        if depth is not None:
-            context["band_depth"] = depth
+    def _open_probe(self, now: dt.datetime, occurrence: ProbeOccurrence, expiry: str) -> None:
+        context = {**occurrence.context, "expiry": expiry}
+        if "band_depth" in context:
             # Význam hloubky se mění mezi verzemi (#952) — bez značky by šly
             # sondy z různých verzí sdružit dohromady
             context["band_metrics_version"] = BAND_METRICS_VERSION
         probe_id = self.repository.insert(
-            template=pending.template,
+            template=occurrence.template,
             symbol=self.symbol,
             session_date=now.date(),
             created_ts=now,
-            direction=direction.value if hasattr(direction, "value") else str(direction),
-            entry=entry,
-            target=target,
-            stop=stop,
+            direction=occurrence.direction.value,
+            entry=occurrence.entry,
+            target=occurrence.target,
+            stop=occurrence.stop,
             context=context,
         )
-        self._active.append(
-            _ActiveProbe(
-                probe_id=probe_id,
-                template=pending.template,
-                direction=direction,
-                entry=entry,
-                target=target,
-                stop=stop,
-                mfe=0.0,
-                mae=0.0,
-            )
-        )
+        self._active.append(_ActiveProbe(probe_id=probe_id, occurrence=occurrence))
         logger.info(
             "T9 probe %s %s (#577): %s entry %.2f cíl %.2f stop %.2f",
-            pending.template,
+            occurrence.template,
             self.symbol,
-            direction,
-            entry,
-            target,
-            stop,
+            occurrence.direction.value,
+            occurrence.entry,
+            occurrence.target,
+            occurrence.stop,
         )
 
-    def _evaluate_active(self, now: dt.datetime, high: float, low: float, close: float) -> None:
+    def _evaluate_active(self, now: dt.datetime, high: float, low: float) -> None:
         still_active: list[_ActiveProbe] = []
         for probe in self._active:
-            favorable = (
-                high - probe.entry if probe.direction is Direction.LONG else probe.entry - low
-            )  # noqa: E501
-            adverse = probe.entry - low if probe.direction is Direction.LONG else high - probe.entry
+            item = probe.occurrence
+            favorable, adverse = probe_excursion(item.direction, item.entry, high, low)
             probe.mfe = max(probe.mfe, favorable)
             probe.mae = max(probe.mae, adverse)
-            outcome = evaluate_bar(
-                probe.direction, probe.entry, probe.target, probe.stop, high, low
-            )  # noqa: E501
+            outcome = evaluate_bar(item.direction, item.entry, item.target, item.stop, high, low)
             if outcome is None:
                 still_active.append(probe)
                 continue
-            exit_price = probe.target if outcome.name == "TARGET" else probe.stop
+            exit_price = item.target if outcome is Outcome.TARGET else item.stop
             self.repository.close(
                 probe.probe_id,
-                status=f"closed_{outcome.name.lower()}",
+                status=outcome.value,
                 closed_ts=now,
-                outcome_r=r_result(probe.direction, probe.entry, probe.stop, exit_price),
+                outcome_r=r_result(item.direction, item.entry, item.stop, exit_price),
                 mfe=probe.mfe,
                 mae=probe.mae,
             )
         self._active = still_active
 
-    def _timeout_at_settle(self, now: dt.datetime, close: float) -> None:
-        """Settle uzavírá vše otevřené za close — stejně jako živé setupy."""
-        if not self._active or now < settle_ts(now.date()):
+    def _timeout_at_settle(self, now: dt.datetime, close: float, expiry: str) -> None:
+        """Settle expirace uzavírá vše otevřené za close — stejně jako živé setupy."""
+        if not self._active or now < probe_settle(expiry, now.date()):
             return
         for probe in self._active:
+            item = probe.occurrence
             self.repository.close(
                 probe.probe_id,
-                status="closed_timeout",
+                status=Outcome.TIMEOUT.value,
                 closed_ts=now,
-                outcome_r=r_result(probe.direction, probe.entry, probe.stop, close),
+                outcome_r=r_result(item.direction, item.entry, item.stop, close),
                 mfe=probe.mfe,
                 mae=probe.mae,
             )

@@ -12,6 +12,12 @@ minutu a kontrakt `volume` i `delta`, což jsou přesně vstupy `SetupEngine._fl
 přírůstek volume proti předchozí minutě téhož kontraktu, vážený |delta|, sečtený
 zvlášť za call a put strany (`opt_vol` je nevážený součet přírůstků). Záporné
 přírůstky (reset volume na přelomu seance) se zahazují, stejně jako v produkci.
+
+Sondy nezapnutých šablon (`--probes`, #577 fáze 1): tatáž čistá funkce
+`detect_damping_ceiling` jako živý sběrač (`gexlens_engine.probes`) nad bary +
+uloženými Dyn profily (`gexprofile/`), vyhodnocení týmž `evaluate_bar`, timeout
+na settle expirace. Bez DB — nic se nezapisuje, výsledek je jen report.
+Datový kořen: `--data` nebo `GEXLENS_DATA_DIR` (default `data`).
 """
 
 import argparse
@@ -21,27 +27,42 @@ import glob
 import json
 import os
 import sys
-from collections import defaultdict
+from collections import defaultdict, deque
 
 import pandas as pd
 from sqlalchemy import create_engine
 
+from gexlens_engine.compute.bandregime import band_metrics, band_zone
 from gexlens_engine.compute.gexfield import GexProfile, gamma_edges
+from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import (
     Direction,
     MinuteInputs,
     Outcome,
+    ProbeMinute,
+    ProbeOccurrence,
+    ProbeParams,
     SetupParams,
     detect_all,
+    detect_damping_ceiling,
     evaluate_bar,
     gex_regime,
     is_counter_regime,
     max_pain_strike,
+    probe_excursion,
     r_result,
 )
 from gexlens_engine.storage.oi_archive import OIEodRepository
 
-DATA = "data/derived"
+ROOT = os.environ.get("GEXLENS_DATA_DIR", "data")
+DATA = f"{ROOT}/derived"
+
+
+def set_data_root(root: str) -> None:
+    """Přepne datový kořen (worktree nemá `data/`, produkce ji má vedle repa)."""
+    global ROOT, DATA
+    ROOT = root.rstrip("/\\")
+    DATA = f"{ROOT}/derived"
 
 
 def load_series(pattern: str) -> pd.DataFrame | None:
@@ -60,7 +81,7 @@ def option_flows(symbol: str, expiry: str) -> pd.DataFrame | None:
     maticí. Kontrakt, který se ve sweepu poprvé objeví, přírůstek nemá (NaN →
     zahodit) — shodné s `previous is None: continue` v produkci.
     """
-    files = sorted(glob.glob(f"data/snapshots/{symbol}/{expiry}/*.parquet"))
+    files = sorted(glob.glob(f"{ROOT}/snapshots/{symbol}/{expiry}/*.parquet"))
     if not files:
         return None
     snap = pd.concat(
@@ -291,6 +312,189 @@ def replay(minutes: list[MinuteInputs], params: SetupParams) -> list[dict]:
     return done
 
 
+def load_profiles(symbol: str, expiry: str) -> dict[object, GexProfile]:
+    """Dyn GEX profily expirace per ts_min (partice `gexprofile/{den}.parquet`)."""
+    profiles = load_series(f"{DATA}/{symbol}/{expiry}/gexprofile/*.parquet")
+    if profiles is None:
+        return {}
+    return {
+        prof.ts_min: GexProfile(
+            ts_min=prof.ts_min,
+            grid_start=float(prof.grid_start),
+            grid_step=float(prof.grid_step),
+            values=tuple(float(v) for v in prof.values),
+        )
+        for prof in profiles.itertuples()
+    }
+
+
+_BARS: dict[str, pd.DataFrame | None] = {}
+
+
+def cached_bars(symbol: str) -> pd.DataFrame | None:
+    """Bary podkladu jsou společné všem expiracím — načíst jednou, ne 50×."""
+    if symbol not in _BARS:
+        _BARS[symbol] = load_series(f"{DATA}/{symbol}/bars/*.parquet")
+    return _BARS[symbol]
+
+
+def build_probe_minutes(symbol: str, expiry: str) -> list[ProbeMinute]:
+    """Minuty seance expirace pro sondy: dokončený bar N−1 + profil N (decision-time).
+
+    Seance = (settle předchozího dne, settle expirace): adresář expirace nese
+    i profily z dob, kdy byla sekundárním řetězem (#442), a minuty po settle
+    jsou mrtvý řetěz před rollem — živý sběrač je sice vidí, ale sonda by se
+    zavřela hned další minutou timeoutem. Obojí se vynechává.
+    """
+    bars = cached_bars(symbol)
+    profiles = load_profiles(symbol, expiry)
+    if bars is None or not profiles:
+        return []
+    expiry_day = dt.datetime.strptime(expiry, "%Y%m%d").date()
+    session_end = settle_ts(expiry_day)
+    session_start = settle_ts(expiry_day - dt.timedelta(days=1))
+    bars = bars.copy()
+    bars["ts_min"] = bars["ts_min"] + pd.Timedelta(minutes=1)  # bar N−1 → rozhodnutí v N
+    minutes: list[ProbeMinute] = []
+    for row in bars.itertuples():
+        profile = profiles.get(row.ts_min)
+        if profile is None:
+            continue
+        ts = pd.Timestamp(row.ts_min).to_pydatetime()
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=dt.UTC)
+        if not (session_start < ts < session_end):
+            continue
+        close = float(row.close)
+        metrics = band_metrics(profile, close)
+        minutes.append(
+            ProbeMinute(
+                ts=ts,
+                high=float(row.high),
+                low=float(row.low),
+                close=close,
+                zone=band_zone(profile, close),
+                band_depth=metrics.depth if metrics is not None else None,
+            )
+        )
+    return minutes
+
+
+@dataclasses.dataclass
+class OpenProbe:
+    occurrence: ProbeOccurrence
+    mfe: float = 0.0
+    mae: float = 0.0
+
+
+def replay_probes(minutes: list[ProbeMinute], params: ProbeParams) -> list[dict]:
+    """Přehraje seanci přes `detect_damping_ceiling`; výsledek týmž `evaluate_bar`.
+
+    Zrcadlo `T9ProbeCollector`: okno 2 × akceptace minut, otevřené sondy se
+    vyhodnocují barem každé další minuty (stop-first), MFE/MAE v R, konec
+    seance = timeout za poslední close (settle expirace).
+    """
+    history: deque[ProbeMinute] = deque(maxlen=2 * params.acceptance_minutes)
+    open_probes: list[OpenProbe] = []
+    done: list[dict] = []
+
+    def close_row(
+        probe: OpenProbe, outcome: Outcome, closed: dt.datetime, exit_price: float
+    ) -> dict:
+        item = probe.occurrence
+        risk = abs(item.entry - item.stop)
+        return {
+            "template": item.template,
+            "direction": item.direction.value,
+            "created": item.ts,
+            "closed": closed,
+            "outcome": outcome.value,
+            "r": r_result(item.direction, item.entry, item.stop, exit_price),
+            "mfe_r": probe.mfe / risk if risk > 0 else None,
+            "mae_r": probe.mae / risk if risk > 0 else None,
+            "context": item.context,
+        }
+
+    for now in minutes:
+        still: list[OpenProbe] = []
+        for probe in open_probes:
+            item = probe.occurrence
+            favorable, adverse = probe_excursion(item.direction, item.entry, now.high, now.low)
+            probe.mfe = max(probe.mfe, favorable)
+            probe.mae = max(probe.mae, adverse)
+            outcome = evaluate_bar(
+                item.direction, item.entry, item.target, item.stop, now.high, now.low
+            )
+            if outcome is None:
+                still.append(probe)
+                continue
+            exit_price = item.stop if outcome is Outcome.STOP else item.target
+            done.append(close_row(probe, outcome, now.ts, exit_price))
+        open_probes = still
+
+        history.append(now)
+        occurrence = detect_damping_ceiling(list(history), params)
+        if occurrence is not None:
+            open_probes.append(OpenProbe(occurrence=occurrence))
+
+    if minutes:
+        last = minutes[-1]
+        for probe in open_probes:
+            done.append(close_row(probe, Outcome.TIMEOUT, last.ts, last.close))
+    return done
+
+
+def summarize_probes(rows: list[dict]) -> dict:
+    """Souhrn sond: n, výsledky, MFE/MAE v R — surovina fáze 2 (#577)."""
+    base = summarize(rows)
+    mfe = [r["mfe_r"] for r in rows if r.get("mfe_r") is not None]
+    mae = [r["mae_r"] for r in rows if r.get("mae_r") is not None]
+    outcomes = defaultdict(int)
+    for row in rows:
+        outcomes[row["outcome"]] += 1
+    return {
+        **base,
+        "Ø MFE R": round(sum(mfe) / len(mfe), 2) if mfe else None,
+        "Ø MAE R": round(sum(mae) / len(mae), 2) if mae else None,
+        "výsledky": dict(sorted(outcomes.items())),
+    }
+
+
+def probe_report(symbols: list[str], params: ProbeParams) -> dict:
+    """Sondy T9 nad všemi expiracemi v `derived/` — per instrument, šablona, směr."""
+    report: dict = {}
+    for symbol in symbols:
+        expiries = sorted(
+            os.path.basename(p)
+            for p in glob.glob(f"{DATA}/{symbol}/*")
+            if os.path.basename(p).isdigit()
+        )
+        rows: list[dict] = []
+        per_day: dict[str, int] = {}
+        days = 0
+        for expiry in expiries:
+            minutes = build_probe_minutes(symbol, expiry)
+            if len(minutes) < 60:
+                continue
+            days += 1
+            day_rows = replay_probes(minutes, params)
+            rows.extend(day_rows)
+            if day_rows:
+                per_day[expiry] = len(day_rows)
+        per_kind: dict[str, list[dict]] = defaultdict(list)
+        for row in rows:
+            per_kind[f"{row['template']} {row['direction']}"].append(row)
+        report[symbol] = {
+            "dnů s daty": days,
+            "výskytů": len(rows),
+            "per šablona a směr": {
+                kind: summarize_probes(krows) for kind, krows in sorted(per_kind.items())
+            },
+            "výskytů po dnech": per_day,
+        }
+    return report
+
+
 def summarize(rows: list[dict]) -> dict:
     closed = [r for r in rows if r["r"] is not None]
     wins = [r for r in closed if r["outcome"] == Outcome.TARGET.value]
@@ -308,7 +512,18 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--symbols", default="ES,NQ")
     parser.add_argument("--db", default=os.environ.get("GEXLENS_DATABASE_URL", ""))
+    parser.add_argument("--data", default=ROOT, help="kořen dat (derived/, snapshots/)")
+    parser.add_argument(
+        "--probes",
+        action="store_true",
+        help="jen sondy T9 (#577) nad bary + profily; bez DB, nic se nezapisuje",
+    )
     args = parser.parse_args()
+    set_data_root(args.data)
+
+    if args.probes:
+        emit(probe_report(args.symbols.split(","), ProbeParams()))
+        return
 
     repo = OIEodRepository(create_engine(args.db)) if args.db else None
 
@@ -354,6 +569,10 @@ def main() -> None:
                 for name, rows in per_config.items()
             },
         }
+    emit(report)
+
+
+def emit(report: dict) -> None:
     out = os.environ.get("BACKTEST_OUT")
     text = json.dumps(report, ensure_ascii=False, indent=2, default=str)
     if out:
