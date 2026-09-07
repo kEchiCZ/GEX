@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.14 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.15 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -914,6 +914,12 @@ Jak číst jednotlivé řádky:
   (kolik trh reálně platí za dnešní pohyb; stejná hodnota jako EM± linie
   v Traders mode, kap. 11e). Před openem jde o průběžný odhad z overnight
   kotací, openem se zamkne. Údaj v % spotu je srovnatelný napříč dny.
+  Jak často pásmo drží, ukazuje řádek „EM respekt" pod ním — a od v1.15
+  (#876) víme, že to řídí volatilitní režim, ne gamma režim: v nízké
+  volatilitě close skončí uvnitř EM v ~94 % seancí, ve zvýšené a krizové
+  v ~36 %, zatímco negativní vs. pozitivní gamma dává 70 % vs. 64 %
+  (rozdíl v šumu). Dotyk hrany přijde v 86 % dnů, takže pásmo čti jako
+  „kde se dnes obchoduje", ne jako zeď; podrobně kap. 18.
 - **IV percentil** (v1.11) — kolik dnů v klouzavém roce mělo NIŽŠÍ implied
   volatilitu podkladu (30d IV index, řada z IBKR s roční historií). Je to
   implied protějšek řádku „Režim (rozsah)": režim měří, jak velké pohyby
@@ -1198,6 +1204,20 @@ Market makeři (dealeři) drží protistranu opcí a průběžně se zajišťuj�
 - **Short gamma (záporný NetGEX, červená):** musí **kupovat do růstu a prodávat do poklesu** → jdou s pohybem, trh **zesilují**. Trendy a prudké pohyby.
 
 **Klíčové pravidlo: režim neříká směr, říká, KTERÝ TYP obchodu dnes funguje.** Zelený režim = obchoduj návraty (fade od hran). Červený režim = obchoduj průrazy (momentum). Nejčastější ztráty = fade v červeném dni, honění breakoutu v zeleném.
+
+**Co režim NEříká: jak velký bude den (v1.15, #876).** Změřeno na 63 seancích
+ES + NQ (20. 7.–4. 9. 2026): close skončil mimo pásmo expected move v **30 %**
+dnů s negativní gammou a v **36 %** dnů s pozitivní — rozdíl −6 p. b.,
+95% interval [−28, +16], průměrný rozsah dne 2,3× vs. 2,4× EM. Hypotéza
+„v červeném režimu se EM proráží častěji" se tedy **nepotvrdila**; pokud něco,
+je to naopak, a rozdíl je v mezích šumu. To, jestli EM dnes drží, říká
+**volatilitní režim** (karta Volatilita, kap. 11f): v nízké volatilitě close
+skončil uvnitř EM v 94 % seancí, ve zvýšené a krizové jen v 36 % — bez ohledu
+na barvu gamma režimu. Prakticky: **režim ti vybírá typ obchodu, vol režim
+vybírá, jak daleko smíš cíl a stop položit.** Zelený den ve zvýšené volatilitě
+znamená fade, ale s cílem uvnitř pásma, které dnes pravděpodobně neudrží —
+tedy dřívější výběr zisku, ne držení k hraně EM. A hrana EM se **dotkne
+v 86 % seancí**: dotyk sám o sobě není zpráva, teprve close mimo ano.
 
 ### Settle a gamma crunch
 
