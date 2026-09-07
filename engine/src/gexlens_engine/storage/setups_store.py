@@ -7,6 +7,7 @@ hodnocení uživatele (rating + poznámka).
 
 import datetime as dt
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -176,11 +177,15 @@ class SetupsRepository:
             result = conn.execute(stmt)
         return result.rowcount > 0
 
-    def enrich_context(self, setup_id: int, extra: dict[str, Any]) -> None:
+    def enrich_context(
+        self, setup_id: int, extra: dict[str, Any], *, drop: Iterable[str] = ()
+    ) -> None:
         """Doplní klíče do `context` JSON — backfill pásmových metrik (#575).
 
         Merge, ne replace: existující klíče (atr, risk, gex_regime…) zůstávají;
-        stejné klíče se přepíšou (idempotentní opakovaný backfill).
+        stejné klíče se přepíšou (idempotentní opakovaný backfill). `drop`
+        odstraní klíče, které nová verze metrik už neměří (#1057: ostrost
+        z v2 nesmí zůstat vedle verze 3 jen proto, že ji v3 nevydala).
         """
         if not extra:
             return
@@ -190,7 +195,8 @@ class SetupsRepository:
             ).fetchone()
             if row is None:
                 return
-            merged = {**(row.context or {}), **json.loads(json.dumps(extra, default=str))}
+            current = {k: v for k, v in (row.context or {}).items() if k not in set(drop)}
+            merged = {**current, **json.loads(json.dumps(extra, default=str))}
             conn.execute(
                 update(setups_table).where(setups_table.c.id == setup_id).values(context=merged)
             )

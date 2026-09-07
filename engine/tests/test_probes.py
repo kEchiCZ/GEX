@@ -13,7 +13,7 @@ from typing import cast
 import pytest
 from sqlalchemy import create_engine, select
 
-from gexlens_engine.compute.bandregime import band_zone
+from gexlens_engine.compute.bandregime import BAND_METRICS_VERSION, band_zone
 from gexlens_engine.compute.gexfield import GexProfile
 from gexlens_engine.compute.setups import ProbeParams, band_position
 from gexlens_engine.ibkr.underlying import Bar
@@ -121,7 +121,7 @@ async def test_ceiling_probe_vznik_a_target() -> None:
     assert probe["stop"] == pytest.approx(zone.all_low - 0.25 * zone.width)
     context = cast(dict[str, object], probe["context"])
     assert context["expiry"] == "20260827"
-    assert context["band_metrics_version"] == 2
+    assert context["band_metrics_version"] == BAND_METRICS_VERSION
     assert "transition_ts" in context
     # Bar protne cíl → uzávěrka stejnou mechanikou jako živé setupy
     minute += dt.timedelta(minutes=1)
