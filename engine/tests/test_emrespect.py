@@ -1,5 +1,6 @@
 """Testy respektování pásma EM (#872): klasifikace, zdroje EM, kolektor."""
 
+import dataclasses
 import datetime as dt
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from gexlens_engine.compute.emrespect import (
     straddle_em,
 )
 from gexlens_engine.compute.settle import ET_TZ, session_time_utc
-from gexlens_engine.emrespect import EmRespectCollector, compute_session
+from gexlens_engine.emrespect import EmRespectCollector, compute_session, load_flips
 from gexlens_engine.storage.emrespect_store import EmRespectRepository, em_respect_metadata
 from gexlens_engine.storage.oi_archive import metadata as oi_metadata
 from gexlens_engine.storage.oi_archive import oi_eod_table
@@ -148,8 +149,15 @@ def seed_session_files(data_dir: Path, symbol: str = "ES") -> None:
             "close": [7600.0, 7640.0, 7610.0],
         },
     )
+    # Levels žijí pod expirací řetězu (SPEC 5.1), ne v derived/{sym}/levels — ta
+    # cesta nikde neexistuje a fixture ji dřív kopírovala i s chybou (#1050)
     write_parquet(
-        data_dir / "derived" / symbol / "levels" / f"{SESSION.isoformat()}.parquet",
+        data_dir
+        / "derived"
+        / symbol
+        / SESSION.strftime("%Y%m%d")
+        / "levels"
+        / f"{SESSION.isoformat()}.parquet",
         {"ts_min": minutes, "flip": [7605.0, 7605.0, 7605.0]},
     )
     write_parquet(
@@ -175,6 +183,51 @@ def make_db(tmp_path: Path) -> Engine:
     oi_metadata.create_all(engine)
     em_respect_metadata.create_all(engine)
     return engine
+
+
+def test_load_flips_bere_levels_pod_expiraci_a_svatek_nejblizsi_pozdejsi(tmp_path: Path) -> None:
+    """#1050: levels jsou v derived/{sym}/{expirace}/levels; bez 0DTE (svátek) další expirace."""
+    seed_session_files(tmp_path)
+    assert len(load_flips(tmp_path, "ES", SESSION)) == 3
+    # Seance bez vlastní expirace (svátek): levels leží pod nejbližší pozdější
+    holiday = SESSION - dt.timedelta(days=1)
+    holiday_open = session_time_utc(holiday, 9, 30, ET_TZ)
+    write_parquet(
+        tmp_path
+        / "derived"
+        / "ES"
+        / SESSION.strftime("%Y%m%d")
+        / "levels"
+        / f"{holiday.isoformat()}.parquet",
+        {"ts_min": [holiday_open], "flip": [7600.0]},
+    )
+    assert load_flips(tmp_path, "ES", holiday) == {holiday_open: 7600.0}
+    # Dřívější expirace se pro seanci nebere; bez levels vůbec → prázdno (→ None podíl)
+    earlier = SESSION - dt.timedelta(days=7)
+    assert load_flips(tmp_path, "ES", earlier) == {}
+    assert load_flips(tmp_path, "NQ", SESSION) == {}
+
+
+async def test_backfill_doplni_chybejici_podil_gammy(tmp_path: Path) -> None:
+    """#1050: řádek s NULL podílem (stará cesta k levels) se při startu přepočítá."""
+    db = make_db(tmp_path)
+    seed_session_files(tmp_path)
+    repository = EmRespectRepository(db)
+    stale = compute_session(tmp_path, db, "ES", SESSION)
+    assert stale is not None
+    repository.upsert(
+        dataclasses.replace(stale, negative_gamma_share=None),
+        session_time_utc(SESSION, 16, 10, ET_TZ),
+    )
+    assert repository.dates_without_gamma("ES") == {SESSION}
+
+    collector = EmRespectCollector(
+        symbol="ES", repository=repository, db=db, data_dir=tmp_path, backfill_days=3
+    )
+    await collector.on_minute(session_time_utc(SESSION + dt.timedelta(days=1), 9, 0, ET_TZ))
+    assert repository.dates_without_gamma("ES") == set()
+    row = next(r for r in repository.list_for("ES") if r["session_date"] == SESSION.isoformat())
+    assert row["negative_gamma_share"] == pytest.approx(1 / 3)
 
 
 def test_compute_session_ze_snapshotu(tmp_path: Path) -> None:

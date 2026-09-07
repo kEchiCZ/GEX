@@ -68,6 +68,15 @@ class EmRespectRepository:
         with self._engine.connect() as conn:
             return {row.session_date for row in conn.execute(stmt)}
 
+    def dates_without_gamma(self, symbol: str) -> set[dt.date]:
+        """Seance bez podílu negativní gammy — kandidáti na doplnění při backfillu (#1050)."""
+        stmt = select(em_respect_table.c.session_date).where(
+            em_respect_table.c.symbol == symbol,
+            em_respect_table.c.negative_gamma_share.is_(None),
+        )
+        with self._engine.connect() as conn:
+            return {row.session_date for row in conn.execute(stmt)}
+
     def upsert(self, record: EmRespect, computed_at: dt.datetime) -> None:
         values = {
             "session_date": record.session_date,

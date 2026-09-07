@@ -98,11 +98,38 @@ def load_session_bars(data_dir: Path, symbol: str, session: dt.date) -> _Session
     return _SessionBars(high=high, low=low, close=close, spots=spots)
 
 
+def _levels_files(data_dir: Path, symbol: str, session: dt.date) -> list[Path]:
+    """Levels partice seance: `derived/{sym}/{expirace}/levels/{den}.parquet`.
+
+    Levels nemají vlastní strom jako bary — žijí pod expirací řetězu, který
+    engine v seanci sledoval (SPEC 5.1, stejně jako gexfield/oiwalls): 0DTE
+    řetěz dne, a když ten den expirace není (svátek — 7. 9. 2026 bez 20260907),
+    nejbližší pozdější. Původní cesta `derived/{sym}/levels/` neexistovala
+    nikde, takže podíl negativní gammy byl od #872 vždy NULL (#1050).
+    """
+    root = data_dir / "derived" / symbol
+    if not root.is_dir():
+        return []
+    session_key = session.strftime("%Y%m%d")
+    expiries = sorted(
+        entry.name
+        for entry in root.iterdir()
+        if entry.is_dir() and len(entry.name) == 8 and entry.name.isdigit()
+    )
+    for expiry in expiries:
+        if expiry < session_key:
+            continue
+        files = _session_files(root / expiry / "levels", session)
+        if files:
+            return files
+    return []
+
+
 def load_flips(data_dir: Path, symbol: str, session: dt.date) -> dict[dt.datetime, float]:
     """Měřený flip per minuta seance (do settle); prázdné = levels nejsou."""
     boundary = settle_ts(session)
     flips: dict[dt.datetime, float] = {}
-    for path in _session_files(data_dir / "derived" / symbol / "levels", session):
+    for path in _levels_files(data_dir, symbol, session):
         try:
             table = pq.read_table(path, columns=["ts_min", "flip"])
         except Exception:
@@ -271,16 +298,38 @@ class EmRespectCollector:
         )
 
     def _backfill(self, now: dt.datetime, current_session: dt.date) -> None:
+        """Doplní chybějící seance a řádky bez podílu negativní gammy (#1050).
+
+        Řádky z doby, kdy se levels hledaly ve špatné cestě, mají NULL podíl;
+        přepočet je upsert téže seance, EM a klasifikace vyjdou stejně.
+        Seance, pro které levels opravdu nejsou, zůstávají NULL a zkouší se
+        znovu při dalším startu — levels se nemažou (#762), takže je to
+        jen cena za start, ne trvalá díra.
+        """
         existing = self.repository.existing_dates(self.symbol)
+        without_gamma = self.repository.dates_without_gamma(self.symbol)
         written = 0
+        refilled = 0
         for offset in range(1, self.backfill_days + 1):
             session = current_session - dt.timedelta(days=offset)
-            if session.weekday() >= 5 or session in existing:
+            if session.weekday() >= 5:
+                continue
+            if session in existing and session not in without_gamma:
                 continue
             record = compute_session(self.data_dir, self.db, self.symbol, session)
             if record is None:
                 continue
+            if session in existing:
+                if record.negative_gamma_share is None:
+                    continue  # levels pořád nejsou — není co doplnit
+                refilled += 1
+            else:
+                written += 1
             self.repository.upsert(record, now)
-            written += 1
-        if written:
-            logger.info("%s: EM respect backfill — %d seancí", self.symbol, written)
+        if written or refilled:
+            logger.info(
+                "%s: EM respect backfill — %d nových seancí, %d doplněných podílů gammy",
+                self.symbol,
+                written,
+                refilled,
+            )
