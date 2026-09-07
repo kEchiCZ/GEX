@@ -84,7 +84,9 @@ def main() -> int:
     missing_profile = 0
     for row in rows:
         context = row.context or {}
-        had_metrics = "band_sharpness" in context
+        # Od v3 (#1057) může řádek nést jen hloubku bez ostrosti — přítomnost
+        # verze je jediný spolehlivý znak, že se metriky někdy měřily
+        had_metrics = "band_metrics_version" in context or "band_sharpness" in context
         if had_metrics and context.get("band_metrics_version") == BAND_METRICS_VERSION:
             skipped += 1
             continue
@@ -94,7 +96,11 @@ def main() -> int:
         if not extra:
             missing_profile += 1
             continue
-        repository.enrich_context(int(row.id), extra)
+        # Klíče, které nová verze nevydala, musí z contextu pryč (v3 měří
+        # ostrost jen tam, kde má hranu) — jinak by vedle verze 3 zůstala
+        # hodnota spočítaná definicí v2
+        stale = {"band_sharpness", "band_sharpness_pct", "band_depth"} - set(extra)
+        repository.enrich_context(int(row.id), extra, drop=stale)
         if had_metrics:
             recomputed += 1
         else:

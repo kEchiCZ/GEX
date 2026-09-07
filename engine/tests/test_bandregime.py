@@ -49,6 +49,7 @@ def test_ostrost_meri_nejblizsi_hranu_a_obe_normalizace() -> None:
     # All (40) kříží v 7056, Major (65) v 7053,5 → spread 2,5 b.
     metrics = band_metrics(profile, 7050.0)
     assert metrics is not None
+    assert metrics.sharpness is not None and metrics.sharpness_pct is not None
     # Šířka zóny: All kříží v 7008 (náběh) a 7056 (sráz) → 48 b
     assert abs(metrics.sharpness - 2.5 / 48.0) < 0.01  # varianta A
     assert abs(metrics.sharpness_pct - 2.5 / 7050.0 * 100.0) < 0.005  # varianta B
@@ -57,6 +58,7 @@ def test_ostrost_meri_nejblizsi_hranu_a_obe_normalizace() -> None:
     # → spread 5 b — levá hrana je 2× měkčí než pravá
     metrics_left = band_metrics(profile, 7015.0)
     assert metrics_left is not None
+    assert metrics_left.sharpness is not None
     assert abs(metrics_left.sharpness - 5.0 / 48.0) < 0.01
     assert metrics_left.sharpness > metrics.sharpness  # měkčí > ostřejší
 
@@ -65,12 +67,9 @@ def test_krajni_stavy_vraci_none_nebo_prazdno() -> None:
     profile = profile_from_weighted(ZONE, 7000.0, 10.0)
     # Cena mimo mřížku
     assert band_metrics(profile, 6900.0) is None
-    # Profil bez kladné části (čistě negativní gamma) — žádná tlumící zóna
+    # Profil bez kladné části (čistě negativní gamma) — žádný profil k měření
     negative = profile_from_weighted([-10.0] * 8, 7000.0, 10.0)
     assert band_metrics(negative, 7040.0) is None
-    # Zóna sahá na kraj mřížky → hrana neurčitelná (konvence #601: neměřit)
-    edge = profile_from_weighted([100.0] * 8, 7000.0, 10.0)
-    assert band_metrics(edge, 7040.0) is None
     # band_context: None profil → prázdný dict (setup bez klíčů, žádné lhaní)
     assert band_context(None, 7040.0) == {}
     keys = band_context(profile, 7040.0)
@@ -80,6 +79,66 @@ def test_krajni_stavy_vraci_none_nebo_prazdno() -> None:
         "band_depth",
         "band_metrics_version",  # #952
     }
+
+
+# ── Verze 3 (#1057): měří se i mimo zónu a u zóny na kraji mřížky ─────
+
+
+def test_cena_daleko_pod_zonou_dostane_hloubku_i_ostrost_nejblizsi_hrany() -> None:
+    """Do v2 vracela cena mimo zónu None (kotva jen v sousedním uzlu) — 33 % setupů."""
+    # Zóna 7020–7060 uprostřed široké mřížky, cena 7100 (4 uzly za pravou hranou)
+    weighted = [0.0, 0.0, 100.0, 100.0, 100.0, 100.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    profile = profile_from_weighted(weighted, 7000.0, 10.0)
+    metrics = band_metrics(profile, 7100.0)
+    assert metrics is not None
+    assert metrics.depth == -1.0  # profil na ceně nulový
+    # Nejbližší hrana je pravý sráz 100→0 na jednom kroku: All v 7056, Major v 7053,5
+    # → spread 2,5 b; šířka zóny All 7014–7056 = 42 b
+    assert metrics.sharpness is not None
+    assert abs(metrics.sharpness - 2.5 / 42.0) < 0.01
+    assert metrics.sharpness_pct is not None
+    assert abs(metrics.sharpness_pct - 2.5 / 7100.0 * 100.0) < 0.005
+    # Cena pod zónou z druhé strany měří levou hranu (stejný sráz zrcadlově → stejný spread)
+    metrics_left = band_metrics(profile, 7000.0)
+    assert metrics_left is not None and metrics_left.depth == -1.0
+    assert metrics_left.sharpness_pct is not None
+
+
+def test_zona_na_kraji_mrizky_meri_druhou_hranu_a_hloubku() -> None:
+    """Hrana na kraji se neměří (#601), ale jen ta hrana — ne celý setup (21 % vzorku)."""
+    # Zóna od levého kraje mřížky až k srázu v indexu 5→6
+    weighted = [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 0.0, 0.0]
+    profile = profile_from_weighted(weighted, 7000.0, 10.0)
+    metrics = band_metrics(profile, 7040.0)
+    assert metrics is not None
+    assert metrics.depth == 2.0  # na vrcholu profilu
+    assert metrics.sharpness is None  # šířka zóny neurčitelná → A nejde
+    assert metrics.sharpness_pct is not None  # pravá hrana je měřitelná → B jde
+    assert abs(metrics.sharpness_pct - 2.5 / 7040.0 * 100.0) < 0.005
+    # Zóna přes celou mřížku: žádná hrana, jen hloubka
+    flat = profile_from_weighted([100.0] * 8, 7000.0, 10.0)
+    metrics_flat = band_metrics(flat, 7040.0)
+    assert metrics_flat is not None
+    assert metrics_flat.depth == 2.0
+    assert metrics_flat.sharpness is None and metrics_flat.sharpness_pct is None
+    # band_context vydá jen změřené klíče + verzi
+    assert set(band_context(flat, 7040.0)) == {"band_depth", "band_metrics_version"}
+    assert set(band_context(profile, 7040.0)) == {
+        "band_depth",
+        "band_sharpness_pct",
+        "band_metrics_version",
+    }
+
+
+def test_profil_s_kladnou_casti_bez_zony_da_hloubku_minus_jedna() -> None:
+    """Slabý profil pod prahem All všude kromě vrcholu: cena mimo vrchol = bez zóny."""
+    # Vrchol 100 v indexu 3, jinde 10 (< All 40): zóna je jen uzel 3
+    weighted = [10.0, 10.0, 10.0, 100.0, 10.0, 10.0, 10.0, 10.0]
+    profile = profile_from_weighted(weighted, 7000.0, 10.0)
+    metrics = band_metrics(profile, 7070.0)
+    assert metrics is not None
+    assert -1.0 <= metrics.depth < 0
+    assert metrics.sharpness_pct is not None  # hrana vrcholu je měřitelná
 
 
 # ── Hloubka bez ořezu nad hranou Major (#952) ──────────────────────

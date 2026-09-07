@@ -41,16 +41,21 @@ BAND_ALL_SHARE = 0.40
 #: `mechanics_version` (nález z kalibrace #575).
 #: 1 = původní, hloubka ořezaná na +1 nad hranou Major
 #: 2 = hloubka pokračuje k vrcholu profilu (+2)
-BAND_METRICS_VERSION = 2
+#: 3 = kotva v nejbližší zóně (cena mimo zónu se měří), hrany per veličina,
+#:     hloubka i bez zóny (#1057) — do v2 vracelo 87 % setupů None
+BAND_METRICS_VERSION = 3
 
 
 @dataclass(frozen=True)
 class BandMetrics:
     """Měřené veličiny pásma pro `context` setupu (#575 fáze 1)."""
 
-    sharpness: float  # varianta A: spread hran / šířka zóny (0–1)
-    sharpness_pct: float  # varianta B: spread hran jako % ceny
-    depth: float  # −1 … +1 (viz modul)
+    #: Varianta A: spread hran / šířka zóny (0–1); None = některá hrana All
+    #: leží na kraji mřížky nebo zóna neexistuje (v3, #1057)
+    sharpness: float | None
+    #: Varianta B: spread hran jako % ceny; None = žádná měřitelná hrana
+    sharpness_pct: float | None
+    depth: float  # −1 … +2 (viz modul) — měří se vždy, i mimo zónu
 
 
 def _weighted(profile: GexProfile) -> list[float]:
@@ -114,30 +119,57 @@ def band_metrics(profile: GexProfile, price: float) -> BandMetrics | None:
         # top > t_major vždy (t_major = 0,65 × top a top > 0), takže se nedělí nulou
         depth = min(2.0, 1.0 + (at_price - t_major) / (top - t_major))
 
-    # Hrany zóny: průsečíky All a Major na obou stranách od nejbližšího uzlu
-    anchor = low if weighted[low] >= at_price else min(low + 1, len(weighted) - 1)
+    # Kotva (v3, #1057) = nejbližší uzel UVNITŘ zóny (nad All) v libovolném
+    # směru — ne jen sousední uzel. Cena mimo zónu tak dostane hranu zóny,
+    # ke které je nejblíž; dřív tu vyšlo None a setup ze vzorku vypadl.
+    anchor = _nearest_inside(weighted, position, t_all)
+    if anchor is None:
+        # Profil má kladnou část, ale nikde nad prahem All — tlumící zóna
+        # neexistuje: hloubka platí (−1 = profil na ceně nulový), ostrost ne
+        return BandMetrics(sharpness=None, sharpness_pct=None, depth=round(depth, 4))
+
+    # Hrany zóny: průsečíky All a Major na obou stranách od kotvy. Hrana na
+    # kraji mřížky se NEMĚŘÍ (zásada #601: na kraji se nelže) — ale jen ta
+    # hrana; druhá hrana a hloubka zůstávají měřitelné.
     edges: list[tuple[float, float]] = []  # (vzdálenost hrany All od ceny, spread)
     for step in (-1, 1):
         all_cross = _crossing(weighted, anchor, step, t_all)
         major_cross = _crossing(weighted, anchor, step, t_major)
         if all_cross is None or major_cross is None:
-            continue  # zóna sahá na kraj mřížky — hrana neurčitelná
+            continue
         edges.append((abs(all_cross - position), abs(all_cross - major_cross) * profile.grid_step))
-    if not edges:
-        return None
+    if not edges or price <= 0:
+        return BandMetrics(sharpness=None, sharpness_pct=None, depth=round(depth, 4))
+    spread = min(edges, key=lambda edge: edge[0])[1]  # hrana nejblíž ceně
+    # Varianta A potřebuje šířku celé zóny — bez obou hran All zůstává None
     all_low = _crossing(weighted, anchor, -1, t_all)
     all_high = _crossing(weighted, anchor, 1, t_all)
-    if all_low is None or all_high is None:
-        return None
-    zone_width = (all_high - all_low) * profile.grid_step
-    if zone_width <= 0 or price <= 0:
-        return None
-    spread = min(edges, key=lambda edge: edge[0])[1]  # hrana nejblíž ceně
+    sharpness: float | None = None
+    if all_low is not None and all_high is not None:
+        zone_width = (all_high - all_low) * profile.grid_step
+        if zone_width > 0:
+            sharpness = round(spread / zone_width, 4)
     return BandMetrics(
-        sharpness=round(spread / zone_width, 4),
+        sharpness=sharpness,
         sharpness_pct=round(spread / price * 100.0, 4),
         depth=round(depth, 4),
     )
+
+
+def _nearest_inside(weighted: list[float], position: float, threshold: float) -> int | None:
+    """Index uzlu nad prahem nejblíž `position`; None = žádný takový uzel.
+
+    Při shodě vzdálenosti vyhrává uzel s vyšší hodnotou (silnější zóna).
+    """
+    best: int | None = None
+    best_key: tuple[float, float] | None = None
+    for index, value in enumerate(weighted):
+        if value <= threshold:
+            continue
+        key = (abs(index - position), -value)
+        if best_key is None or key < best_key:
+            best, best_key = index, key
+    return best
 
 
 @dataclass(frozen=True)
@@ -211,11 +243,14 @@ def band_context(profile: GexProfile | None, price: float) -> dict[str, float]:
     metrics = band_metrics(profile, price)
     if metrics is None:
         return {}
-    return {
-        "band_sharpness": metrics.sharpness,
-        "band_sharpness_pct": metrics.sharpness_pct,
-        "band_depth": metrics.depth,
-        # Bez verze nejde poznat, kterou definicí hloubky byl řádek spočítaný,
-        # a sdružovat je dohromady zkresluje výsledek (#952)
-        "band_metrics_version": BAND_METRICS_VERSION,
-    }
+    # Jen změřené klíče (v3): neměřitelná hrana se nezapisuje jako None, aby
+    # čtenář nemusel rozlišovat „None = nezměřeno" od „klíč chybí = starší verze"
+    context: dict[str, float] = {"band_depth": metrics.depth}
+    if metrics.sharpness is not None:
+        context["band_sharpness"] = metrics.sharpness
+    if metrics.sharpness_pct is not None:
+        context["band_sharpness_pct"] = metrics.sharpness_pct
+    # Bez verze nejde poznat, kterou definicí hloubky byl řádek spočítaný,
+    # a sdružovat je dohromady zkresluje výsledek (#952)
+    context["band_metrics_version"] = BAND_METRICS_VERSION
+    return context
