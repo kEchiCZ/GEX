@@ -95,12 +95,15 @@ def band_metrics(profile: GexProfile, price: float) -> BandMetrics | None:
     if not profile.values or profile.grid_step <= 0:
         return None
     weighted = _weighted(profile)
-    top = max(weighted)
-    if top <= 0.0:
-        return None
     position = (price - profile.grid_start) / profile.grid_step
     if position < 0 or position > len(weighted) - 1:
         return None
+    top = max(weighted)
+    if top <= 0.0:
+        # Profil bez kladné části (čistě negativní gamma): žádná tlumící zóna
+        # nikde. Hloubka −1 je tu plnohodnotná hodnota — „mimo zónu" v nejsilnější
+        # podobě (#1057) — ostrost nemá co měřit.
+        return BandMetrics(sharpness=None, sharpness_pct=None, depth=-1.0)
     t_major = BAND_MAJOR_SHARE * top
     t_all = BAND_ALL_SHARE * top
 
