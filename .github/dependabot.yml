@@ -1,0 +1,85 @@
+# Dependabot (#1029): CI jen hlásí zranitelné závislosti (pip-audit, npm audit),
+# tohle je otevírá jako PR. Pondělí ráno (Europe/Prague) — mimo obchodní seanci,
+# ať PR nepřistávají uprostřed měření. Minor+patch sloučené do jednoho PR na
+# ekosystém, major zvlášť. Bezpečnostní opravy chodí bez ohledu na interval.
+# PR se NEMERGUJÍ automaticky — engine sahá na živá IBKR data, bump ib_async
+# nebo fastapi chceme vidět (viz README, Pravidla větve main).
+version: 2
+updates:
+  # uv workspace (engine/, api/, news-engine/) — jediný uv.lock je v kořeni
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Prague
+    open-pull-requests-limit: 5
+    labels: [dependencies, "prio:P3"]
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Prague
+    open-pull-requests-limit: 5
+    labels: [dependencies, "prio:P3"]
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Prague
+    open-pull-requests-limit: 5
+    labels: [dependencies, "prio:P3"]
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+
+  # Base images v docker/*.Dockerfile (uv/python, node, nginx)
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Prague
+    open-pull-requests-limit: 5
+    labels: [dependencies, "prio:P3"]
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      docker-minor-patch:
+        update-types: [minor, patch]
+
+  # Image v compose.yml / compose.dev.yml (PostgreSQL)
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Prague
+    open-pull-requests-limit: 5
+    labels: [dependencies, "prio:P3"]
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      compose-minor-patch:
+        update-types: [minor, patch]
