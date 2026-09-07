@@ -67,9 +67,14 @@ def test_krajni_stavy_vraci_none_nebo_prazdno() -> None:
     profile = profile_from_weighted(ZONE, 7000.0, 10.0)
     # Cena mimo mřížku
     assert band_metrics(profile, 6900.0) is None
-    # Profil bez kladné části (čistě negativní gamma) — žádný profil k měření
+    # Profil bez kladné části (čistě negativní gamma): hloubka −1 (mimo zónu
+    # v nejsilnější podobě, #1057), ostrost nemá co měřit
     negative = profile_from_weighted([-10.0] * 8, 7000.0, 10.0)
-    assert band_metrics(negative, 7040.0) is None
+    metrics_negative = band_metrics(negative, 7040.0)
+    assert metrics_negative is not None
+    assert metrics_negative.depth == -1.0
+    assert metrics_negative.sharpness is None and metrics_negative.sharpness_pct is None
+    assert set(band_context(negative, 7040.0)) == {"band_depth", "band_metrics_version"}
     # band_context: None profil → prázdný dict (setup bez klíčů, žádné lhaní)
     assert band_context(None, 7040.0) == {}
     keys = band_context(profile, 7040.0)
