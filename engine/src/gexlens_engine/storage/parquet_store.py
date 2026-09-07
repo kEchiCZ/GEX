@@ -9,10 +9,10 @@ maximálně zůstane osiřelý `.tmp`, který se při dalším zápisu uklidí.
 import datetime as dt
 import logging
 import os
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -20,6 +20,40 @@ import pyarrow.parquet as pq
 from gexlens_engine.config import Settings
 
 logger = logging.getLogger(__name__)
+
+#: Klíč řádku snapshot partice — právě jeden řádek na minutu × strike × right.
+#: Partici smí plnit dva zapisovači (IBKR řetěz v runtime a extended tasty
+#: větev, #616 4a) a v minutě předání se trefí oba do téže minuty; bez upsertu
+#: zůstaly dva řádky téhož striku a pivot heatmapy v API padal (#1047).
+SNAPSHOT_KEY: tuple[str, ...] = ("ts_min", "strike", "right")
+
+#: Klíč partice: jeden sloupec (bary, features — `ts`) nebo n-tice sloupců (snapshoty).
+PartitionKey = str | tuple[str, ...]
+
+
+def key_getter(key: PartitionKey) -> Callable[[dict[str, object]], Any]:
+    """Funkce klíče řádku pro upsert a řazení partice."""
+    if isinstance(key, str):
+        return lambda row: row[key]
+    return lambda row: tuple(row[name] for name in key)
+
+
+def dedupe_last(
+    rows: Sequence[dict[str, object]], key: PartitionKey
+) -> tuple[list[dict[str, object]], int]:
+    """Řádky bez duplicit klíče — při shodě vítězí POSLEDNÍ výskyt.
+
+    Poslední = pozdější zápis, u snapshotů řádek IBKR řetězu (s volume), který
+    v minutě předání přepsal řádek extended větve (#1047). Vrací i počet
+    zahozených řádků, ať jde duplicita zalogovat — tiché zahození by skrylo,
+    že se dva zapisovači zase perou o týž řádek.
+    """
+    key_of = key_getter(key)
+    by_key: dict[Any, dict[str, object]] = {}
+    for row in rows:
+        by_key[key_of(row)] = row
+    return list(by_key.values()), len(rows) - len(by_key)
+
 
 # Schéma dle SPEC 5.1 — názvy sloupců záměrně přesně kopírují SPEC
 SNAPSHOT_SCHEMA = pa.schema(
@@ -608,21 +642,25 @@ class _PartitionBuffer:
         self._rows: list[dict[str, object]] = []
         self._loaded = False
 
-    def append_and_write(self, rows: Sequence[dict[str, object]], key: str | None = None) -> Path:
+    def append_and_write(
+        self, rows: Sequence[dict[str, object]], key: PartitionKey | None = None
+    ) -> Path:
         """Přidá řádky a přepíše partici; s `key` nahradí řádky téhož klíče (upsert).
 
         Upsert potřebují bary podkladu: provizorní bar rozdělané minuty se příštím
         cyklem nahrazuje finálním a slepý append by nechal dva řádky téže minuty
-        (ADR-0005).
+        (ADR-0005). Složený klíč drží snapshoty řetězu (`SNAPSHOT_KEY`, #1047):
+        do partice zapisují dva zapisovači a v minutě předání pozdější vítězí.
         """
-        self._ensure_loaded()
+        self._ensure_loaded(key)
         if key is not None:
-            incoming = {row[key] for row in rows}
+            key_of = key_getter(key)
+            incoming = {key_of(row) for row in rows}
             if incoming:
-                self._rows = [row for row in self._rows if row[key] not in incoming]
+                self._rows = [row for row in self._rows if key_of(row) not in incoming]
         self._rows.extend(rows)
         if key is not None:
-            self._rows.sort(key=lambda row: row[key])  # type: ignore[arg-type,return-value]
+            self._rows.sort(key=key_getter(key))
         return self._write()
 
     def replace_and_write(self, rows: Sequence[dict[str, object]]) -> Path:
@@ -644,14 +682,29 @@ class _PartitionBuffer:
         os.replace(tmp_path, self._path)  # atomické zveřejnění — nikdy částečný soubor
         return self._path
 
-    def _ensure_loaded(self) -> None:
-        """Po restartu enginu uprostřed dne naváže na existující partici."""
+    def _ensure_loaded(self, key: PartitionKey | None = None) -> None:
+        """Po restartu enginu uprostřed dne naváže na existující partici.
+
+        S klíčem partici zároveň zbaví duplicit z doby před upsertem (#1047):
+        partice napsaná starším enginem se tak opraví prvním zápisem po
+        nasazení, bez ručního zásahu do dnešního souboru. Duplicita se hlásí —
+        po opravě zápisu by se už objevit neměla.
+        """
         if self._loaded:
             return
         self._loaded = True
         if self._path.exists():
-            existing = pq.read_table(self._path, schema=self._schema)
-            self._rows = existing.to_pylist()
+            existing = pq.read_table(self._path, schema=self._schema).to_pylist()
+            if key is not None:
+                existing, dropped = dedupe_last(existing, key)
+                if dropped:
+                    logger.warning(
+                        "Partice %s nesla %d duplicitních řádků klíče %s — ponechán poslední zápis",
+                        self._path,
+                        dropped,
+                        key,
+                    )
+            self._rows = existing
 
     def _cleanup_stale_tmp(self) -> None:
         """Uklidí osiřelé .tmp soubory po případném kill -9 předchozího procesu."""
@@ -673,10 +726,14 @@ class SnapshotWriter:
     def write_minute(
         self, symbol: str, expiry: str, day: dt.date, rows: Sequence[SnapshotRow]
     ) -> Path:
-        """Přidá 1min konsolidaci do partice snapshots/{sym}/{expiry}/{date}.parquet."""
+        """Přidá 1min konsolidaci do partice snapshots/{sym}/{expiry}/{date}.parquet.
+
+        Upsert per `SNAPSHOT_KEY` (#1047): tutéž minutu smí zapsat IBKR řetěz
+        i extended tasty větev (předání při připojení IBKR) — pozdější vítězí.
+        """
         path = self._settings.snapshots_dir / symbol / expiry / f"{day.isoformat()}.parquet"
         buffer = self._buffer(path, SNAPSHOT_SCHEMA)
-        return buffer.append_and_write([asdict(row) for row in rows])
+        return buffer.append_and_write([asdict(row) for row in rows], key=SNAPSHOT_KEY)
 
     def write_features(self, symbol: str, day: dt.date, rows: Sequence[FeatureRow]) -> Path:
         """Přidá minuty feature logu do partice derived/{sym}/features/{date}.parquet (#796).

@@ -1,13 +1,21 @@
 """Testy SnapshotWriteru (issue #11): schéma dle SPEC, čitelnost pandasem, atomický zápis."""
 
 import datetime as dt
+from dataclasses import asdict
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from gexlens_engine.config import Settings
-from gexlens_engine.storage.parquet_store import PrintVolRow, SnapshotRow, SnapshotWriter
+from gexlens_engine.storage.parquet_store import (
+    SNAPSHOT_SCHEMA,
+    PrintVolRow,
+    SnapshotRow,
+    SnapshotWriter,
+)
 
 DAY = dt.date(2026, 7, 16)
 
@@ -70,6 +78,49 @@ def test_day_of_snapshots_readable_by_pandas(writer: SnapshotWriter, tmp_path: P
     assert len(frame) == 3 * len(strikes) * 2
     assert set(frame["right"].unique()) == {"C", "P"}
     assert frame["ts_min"].dt.tz is not None  # UTC timestampy
+
+
+def test_write_minute_upsert_same_minute_last_writer_wins(
+    writer: SnapshotWriter, tmp_path: Path
+) -> None:
+    """#1047: minutu předání zapíše extended tasty větev i IBKR řetěz — jeden řádek, pozdější."""
+    strikes = [7590.0, 7595.0]
+    first = snapshot_rows(0, strikes)
+    second = [
+        SnapshotRow(**{**asdict(row), "volume": 7.0, "gamma": 0.02})
+        for row in snapshot_rows(0, strikes)
+    ]
+    writer.write_minute("ES", "20260716", DAY, first)
+    path = writer.write_minute("ES", "20260716", DAY, second)
+
+    frame = pd.read_parquet(path)
+    assert len(frame) == len(strikes) * 2
+    assert not frame.duplicated(["ts_min", "strike", "right"]).any()
+    assert set(frame["volume"]) == {7.0}
+    assert set(frame["gamma"]) == {0.02}
+    # pivot heatmapy (api/heatmap.py) na téhle partici nesmí spadnout
+    frame[frame["right"] == "C"].pivot(index="ts_min", columns="strike", values="oi")
+
+
+def test_existing_partition_with_duplicates_is_repaired_on_next_write(tmp_path: Path) -> None:
+    """#1047: partice ze starého enginu s duplicitami se opraví prvním zápisem po nasazení."""
+    strikes = [7590.0]
+    rows = snapshot_rows(0, strikes)
+    stale = [asdict(row) for row in rows] + [
+        {**asdict(row), "volume": 7.0} for row in rows
+    ]  # duplicita klíče; pozdější řádek nese volume IBKR řetězu
+    path = tmp_path / "snapshots" / "ES" / "20260716" / "2026-07-16.parquet"
+    path.parent.mkdir(parents=True)
+    pq.write_table(pa.Table.from_pylist(stale, schema=SNAPSHOT_SCHEMA), path)
+
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    writer.write_minute("ES", "20260716", DAY, snapshot_rows(1, strikes))
+
+    frame = pd.read_parquet(path)
+    assert not frame.duplicated(["ts_min", "strike", "right"]).any()
+    minute_zero = frame[frame["ts_min"] == rows[0].ts_min]
+    assert len(minute_zero) == 2
+    assert set(minute_zero["volume"]) == {7.0}
 
 
 def test_derived_dir_reserved_for_compute(tmp_path: Path) -> None:
