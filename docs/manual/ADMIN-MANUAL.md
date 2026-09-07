@@ -1,6 +1,6 @@
 # GEXLens — Manuál pro správce a vývojáře
 
-*Verze 1.4 · září 2026 · interní dokumentace — není dostupná v aplikaci*
+*Verze 1.5 · září 2026 · interní dokumentace — není dostupná v aplikaci*
 
 Technický popis architektury, provozu, konfigurace a vývoje aplikace GEXLens. Uživatelská příručka: `UZIVATELSKY-MANUAL.md`. Zdroj pravdy funkčních požadavků: [`docs/SPEC.md`](../SPEC.md) (v2.0); architektonická rozhodnutí v [`docs/adr/`](../adr/).
 
@@ -708,6 +708,15 @@ U TWS to není vidět, protože se do ní během týdne přihlašuje kvůli obch
 tak jako tak. **V neděli po auto-restartu (nebo v pondělí ráno před seancí)
 potvrdit IB Key push**, jinak engine v pondělí nasbírá díru až do přihlášení.
 
+**Ověřeno v provozu (7. 9. 2026, #1016):** týdenní cyklus platí přesně takhle —
+pondělní ruční přihlášení s IB Key bylo potřeba, zatímco denní auto restart
+ve 23:00 (4. → 5. 9.) i nedělní start seance (6. 9. 22:00) proběhly bez zásahu
+(bary ES 3.–7. 9. kompletně z IBKR, žádný `tasty_candle` fallback). Výpadek
+z noci 3. → 4. 9. (Gateway skončila ve stavu `PRELOGON`, engine 9 h na
+tastytrade) se neopakoval — byl jednorázový, ne vlastnost auto restartu.
+Provozní rutina je tedy **jednou týdně, v pondělí ráno před seancí**: otevřít
+okno Gateway, potvrdit IB Key push, zkontrolovat `connected :4001` (kap. 13.5).
+
 ### 13.3 Konflikt jednoho přihlášení ⚠️
 
 IBKR povoluje jedno přihlášení na username: Gateway + TWS (či mobil s trading
@@ -731,7 +740,8 @@ varianta A.
 Test-NetConnection 127.0.0.1 -Port 7496   # TcpTestSucceeded: True = API poslouchá (Gateway: 4001)
 ```
 
-Každý obchodní den: TWS/Gateway běží a je přihlášený **před startem enginu**;
+Každé pondělí ráno: potvrdit IB Key push v Gateway (týdenní reautentizace,
+kap. 13.2). Každý obchodní den: TWS/Gateway běží a je přihlášený **před startem enginu**;
 stavová lišta aplikace ukazuje `connected :7496` (Gateway `:4001`) a `● Live` (ne Offline).
 Diagnostika problémů: kap. 12.
 
