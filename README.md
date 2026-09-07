@@ -74,3 +74,24 @@ uv run python -m gexlens_engine   # vyžaduje běžící TWS
 ```
 
 CI (GitHub Actions) spouští lint + testy obou částí na každý PR; Python job má PostgreSQL service pro integrační testy.
+
+### Pravidla větve `main`
+
+Větev `main` chrání GitHub ruleset (Settings → Rules → Rulesets, bez výjimky pro vlastníka):
+
+- změny jdou **jen přes pull request** (schválení se nevyžaduje — solo projekt, ale PR je povinný);
+- merge pustí až **zelené CI na aktuálním commitu PR** — vyžadované checky `python`, `frontend`
+  a `security` (názvy jobů v `.github/workflows/ci.yml`; při přejmenování jobu upravit i ruleset,
+  jinak merge nikdy neprojde);
+- jediná povolená metoda je **squash merge** (jeden commit = jeden PR = jedna nasaditelná jednotka,
+  GitHub doplní „(#N)" do zprávy); merge commit i rebase jsou v nastavení repa vypnuté;
+- **force push a smazání větve jsou zakázané**.
+
+Merge dělá `scripts/merge-when-green.sh <PR>` — čeká na dokončení checků konkrétního SHA
+a squash-merguje jen při samém `success`. Přímý `git push origin main` server odmítne.
+
+Závislosti hlídá Dependabot (`.github/dependabot.yml`): každé pondělí ráno otevře PR
+pro uv workspace, npm, GitHub Actions a Docker images (minor+patch sloučené do jednoho PR
+na ekosystém, major zvlášť, label `dependencies`). Bezpečnostní opravy chodí bez ohledu na
+interval. PR od Dependabota se **nemergují automaticky** — engine sahá na živá IBKR data,
+bump `ib_async` nebo `fastapi` chceme vidět.
