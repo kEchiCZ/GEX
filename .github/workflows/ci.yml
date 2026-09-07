@@ -27,7 +27,7 @@ jobs:
       GEXLENS_TEST_PG_DSN: postgresql+psycopg://gexlens:gexlens@localhost:5432/gexlens
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
       - run: uv sync --all-packages
@@ -92,7 +92,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
             detect --source /repo --redact --verbose
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
       - name: pip-audit
