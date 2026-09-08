@@ -248,3 +248,139 @@ export async function reviewSetup(
   })
   return response.ok
 }
+
+// ── Poloha v tlumící zóně a stínová brána (#1060, fáze 2 z #575) ──────────
+//
+// Engine zapíše do `context` třídu polohy podle `band_depth`, posun confidence
+// (varianta B: +10 uvnitř, 0 přechod, −15 mimo / bez pásma) a verdikty dvou
+// STÍNOVÝCH pravidel — nic se neblokuje, setup vzniká vždy. UI je jen ukazuje;
+// vyhodnocení ~5. 10. 2026 rozhodne, zda se některé pravidlo zapne naostro.
+
+export type BandClass = 'inside' | 'transition' | 'outside' | 'no_zone'
+export type BandGate = 'pass' | 'block' | 'unknown'
+
+export const BAND_CLASS_LABELS: Record<BandClass, string> = {
+  inside: 'uvnitř pásma',
+  transition: 'přechod',
+  outside: 'mimo pásmo',
+  no_zone: 'bez pásma',
+}
+
+export interface BandInfo {
+  bandClass: BandClass
+  /** Posun confidence v bodech procent (může být 0). */
+  adjust: number
+  /** Základní confidence šablony před posunem; null u starších řádků. */
+  confidenceBase: number | null
+  gateSimple: BandGate
+  gateRegime: BandGate
+  depth: number | null
+}
+
+const BAND_CLASSES: readonly string[] = ['inside', 'transition', 'outside', 'no_zone']
+const BAND_GATES: readonly string[] = ['pass', 'block', 'unknown']
+
+function gateOf(value: unknown): BandGate | null {
+  return typeof value === 'string' && BAND_GATES.includes(value) ? (value as BandGate) : null
+}
+
+/** Poloha setupu v zóně z `context`; null = řádek bránu nenese (starší setup,
+minuta bez Dyn profilu) — kreslí se nic, ne „neznámé". */
+export function bandInfo(row: Pick<SetupRow, 'context'>): BandInfo | null {
+  const context = row.context ?? {}
+  const bandClass = context.band_class
+  if (typeof bandClass !== 'string' || !BAND_CLASSES.includes(bandClass)) return null
+  const gateSimple = gateOf(context.band_gate_simple)
+  const gateRegime = gateOf(context.band_gate_regime)
+  if (gateSimple === null || gateRegime === null) return null
+  const adjust = context.confidence_band_adjust
+  const base = context.confidence_base
+  const depth = context.band_depth
+  return {
+    bandClass: bandClass as BandClass,
+    adjust: typeof adjust === 'number' ? adjust : 0,
+    confidenceBase: typeof base === 'number' ? base : null,
+    gateSimple,
+    gateRegime,
+    depth: typeof depth === 'number' ? depth : null,
+  }
+}
+
+/** Štítek polohy s posunem confidence („uvnitř pásma +10", „přechod ±0"). */
+export function bandLabel(info: BandInfo): string {
+  const shift = info.adjust === 0 ? '±0' : `${info.adjust > 0 ? '+' : '−'}${Math.abs(info.adjust)}`
+  return `${BAND_CLASS_LABELS[info.bandClass]} ${shift}`
+}
+
+const GATE_LABELS: Record<BandGate, string> = {
+  pass: 'prošel by',
+  block: 'byl by zablokován',
+  unknown: 'nerozhodnuto (neznámý gamma režim)',
+}
+
+/** Tooltip polohy — odřádkovaný s odrážkami (konvence 27. 8.). */
+export function bandTooltip(info: BandInfo): string {
+  const depth = info.depth === null ? '' : ` (hloubka ${info.depth.toFixed(2)})`
+  const adjusted =
+    info.confidenceBase === null
+      ? ''
+      : ` — základ šablony ${info.confidenceBase} %, po úpravě ${Math.max(0, Math.min(100, info.confidenceBase + info.adjust))} %`
+  return [
+    `Poloha entry v tlumící zóně Dyn GEX: ${BAND_CLASS_LABELS[info.bandClass]}${depth}.`,
+    `Úprava důvěry: ${info.adjust > 0 ? '+' : ''}${info.adjust} b.${adjusted}`,
+    '',
+    'Stínová brána (#1060) — setup vznikl, jen se zapisuje, co by pravidlo udělalo:',
+    `• jen poloha: ${GATE_LABELS[info.gateSimple]}`,
+    `• poloha × gamma režim: ${GATE_LABELS[info.gateRegime]}`,
+    '',
+    'Škála hloubky: −1 bez zóny · 0 hrana All · 1 hrana Major · 2 vrchol profilu.',
+    'Vyhodnocení pass vs. block ~5. 10. 2026 na mechanice v5 rozhodne, zda se pravidlo zapne.',
+  ].join('\n')
+}
+
+export interface GateBucket {
+  n: number
+  avgR: number
+  winRate: number
+}
+
+export interface BandGateStats {
+  simple: { pass: GateBucket; block: GateBucket }
+  regime: { pass: GateBucket; block: GateBucket }
+}
+
+function gateBucket(rows: SetupRow[]): GateBucket {
+  const results = rows.map((row) => row.outcome_r ?? 0)
+  const wins = results.filter((value) => value > 0).length
+  const sum = results.reduce((total, value) => total + value, 0)
+  return {
+    n: rows.length,
+    avgR: rows.length > 0 ? sum / rows.length : 0,
+    winRate: rows.length > 0 ? wins / rows.length : 0,
+  }
+}
+
+/** Rozpad uzavřených setupů podle verdiktu obou stínových pravidel.
+
+Jen uzavřené řádky s bránou v `context`; verdikt `unknown` nevstupuje do
+žádné skupiny (režim nebyl znám, pravidlo nemělo co říct). null = žádný
+uzavřený setup bránu nenese — blok se nekreslí. */
+export function bandGateStats(rows: SetupRow[]): BandGateStats | null {
+  const closed = rows
+    .filter((row) => row.status !== 'active' && row.outcome_r !== null)
+    .map((row) => ({ row, info: bandInfo(row) }))
+    .filter((item): item is { row: SetupRow; info: BandInfo } => item.info !== null)
+  if (closed.length === 0) return null
+  const pick = (rule: 'gateSimple' | 'gateRegime', verdict: BandGate) =>
+    gateBucket(closed.filter((item) => item.info[rule] === verdict).map((item) => item.row))
+  return {
+    simple: { pass: pick('gateSimple', 'pass'), block: pick('gateSimple', 'block') },
+    regime: { pass: pick('gateRegime', 'pass'), block: pick('gateRegime', 'block') },
+  }
+}
+
+/** Text dlaždice skupiny: „n · Ø R" (bez vzorku pomlčka). */
+export function formatGateBucket(bucket: GateBucket): string {
+  if (bucket.n === 0) return '—'
+  return `${bucket.n} · ${bucket.avgR >= 0 ? '+' : ''}${bucket.avgR.toFixed(2)} R`
+}

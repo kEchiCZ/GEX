@@ -2,7 +2,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
-import { CURRENT_MECHANICS_VERSION, formatPct, formatPnlUsd, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import { CURRENT_MECHANICS_VERSION, bandGateStats, bandInfo, bandLabel, formatGateBucket, formatPct, formatPnlUsd, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import type { SetupRow } from '../api/setups'
 import { pointValue } from '../instrument/tick'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
@@ -27,6 +28,17 @@ const SETUP_ROW = {
   user_rating: null,
   user_note: null,
   mechanics_version: CURRENT_MECHANICS_VERSION,
+  // Poloha v tlumící zóně a stínová brána (#1060): T2 základ 55, uvnitř +10 → 65
+  context: {
+    gex_regime: 'negative',
+    band_depth: 1.62,
+    band_metrics_version: 3,
+    band_class: 'inside',
+    confidence_band_adjust: 10,
+    confidence_base: 55,
+    band_gate_simple: 'pass',
+    band_gate_regime: 'pass',
+  },
 }
 
 function mockApi(setups: Array<Record<string, unknown>>) {
@@ -98,6 +110,67 @@ test('P/L v % startovního účtu 5 000 $ na ticker (#191)', () => {
   expect(formatPct(-1.5)).toBe('-1.50 %')
 })
 
+test('poloha v pásmu z contextu setupu (#1060): štítek, chybějící brána, rozpad pass/block', () => {
+  const inside = bandInfo(SETUP_ROW as unknown as SetupRow)
+  expect(inside).not.toBeNull()
+  expect(bandLabel(inside!)).toBe('uvnitř pásma +10')
+  expect(inside!.gateRegime).toBe('pass')
+  // Přechod: posun 0 → „±0"
+  const transition = bandInfo({
+    context: {
+      band_class: 'transition',
+      confidence_band_adjust: 0,
+      band_gate_simple: 'pass',
+      band_gate_regime: 'unknown',
+    },
+  })
+  expect(bandLabel(transition!)).toBe('přechod ±0')
+  // Starší řádek bez brány (nebo bez contextu) → null, nic se nekreslí
+  expect(bandInfo({ context: { gex_regime: 'positive' } })).toBeNull()
+  expect(bandInfo({ context: null })).toBeNull()
+  expect(bandInfo({ context: { band_class: 'inside', band_gate_simple: 'pass' } })).toBeNull()
+
+  const rows = [
+    SETUP_ROW, // inside, pass/pass, +0.48
+    {
+      ...SETUP_ROW,
+      id: 8,
+      outcome_r: -1,
+      status: 'closed_stop',
+      context: {
+        band_class: 'outside',
+        confidence_band_adjust: -15,
+        band_gate_simple: 'block',
+        band_gate_regime: 'block',
+      },
+    },
+    {
+      ...SETUP_ROW,
+      id: 9,
+      outcome_r: 0.5,
+      status: 'closed_target',
+      context: {
+        band_class: 'transition',
+        confidence_band_adjust: 0,
+        band_gate_simple: 'pass',
+        band_gate_regime: 'unknown', // neznámý režim — do regime skupin nevstupuje
+      },
+    },
+    { ...SETUP_ROW, id: 10, status: 'active', outcome_r: null }, // aktivní se nepočítá
+    { ...SETUP_ROW, id: 11, context: null }, // bez brány se nepočítá
+  ] as unknown as SetupRow[]
+  const stats = bandGateStats(rows)
+  expect(stats).not.toBeNull()
+  expect(stats!.simple.pass).toEqual({ n: 2, avgR: 0.49, winRate: 1 })
+  expect(stats!.simple.block).toEqual({ n: 1, avgR: -1, winRate: 0 })
+  expect(stats!.regime.pass.n).toBe(1)
+  expect(stats!.regime.block.n).toBe(1)
+  expect(formatGateBucket(stats!.simple.pass)).toBe('2 · +0.49 R')
+  expect(formatGateBucket({ n: 0, avgR: 0, winRate: 0 })).toBe('—')
+  // Žádný uzavřený setup s bránou → null (blok se nekreslí)
+  expect(bandGateStats([{ ...SETUP_ROW, context: null }] as unknown as SetupRow[])).toBeNull()
+})
+
 test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
   const fetchMock = mockApi([SETUP_ROW])
   renderApp()
@@ -125,6 +198,13 @@ test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
   const evTile = screen.getByTestId('setups-ev')
   expect(evTile.textContent).toBe('+696 $')
   expect(evTile.getAttribute('title')).toContain('dlouhodobě vydělává')
+  // Poloha v pásmu (#1060): sloupec Pásmo se štítkem a stínová brána v dlaždicích
+  const bandCell = document.querySelector('[data-part="band"]')
+  expect(bandCell?.textContent).toBe('uvnitř pásma +10')
+  expect(bandCell?.querySelector('.setup-band')?.getAttribute('title')).toContain('prošel by')
+  expect(screen.getByTestId('gate-simple-pass').textContent).toBe('1 · +0.48 R')
+  expect(screen.getByTestId('gate-simple-block').textContent).toBe('—')
+  expect(screen.getByTestId('gate-regime-pass').textContent).toBe('1 · +0.48 R')
 
   // Ruční hodnocení: 👍 pošle PATCH na /setups/ES/7/review
   fireEvent.click(screen.getByRole('button', { name: 'Setup 7 vyšel' }))
@@ -149,6 +229,10 @@ test('aktivní setup: karta nad grafem s úrovněmi a skrytím', async () => {
   expect(screen.getByText('Entry 7501')).toBeDefined()
   expect(screen.getByText('Cíl 7515')).toBeDefined()
   expect(screen.getByText('Stop 7472')).toBeDefined()
+  // Štítek polohy v pásmu na kartě (#1060) s tooltipem stínové brány
+  const band = screen.getByTestId('setup-band')
+  expect(band.textContent).toBe('uvnitř pásma +10')
+  expect(band.getAttribute('title')).toContain('základ šablony 55 %, po úpravě 65 %')
   // Čas vzniku setupu (created_ts) v kartě: datum + čas v lokální zóně (issue #113/#115)
   const cardTime = screen.getByLabelText('Aktivní setupy').querySelector('.setup-card-time')
   expect(cardTime?.textContent).toMatch(/\d{4}/) // rok = je tam datum

@@ -1,0 +1,24 @@
+{
+ "_comment": "Golden pro bránu podle polohy v zóně (#1060): ručně spočtené případy. depth podle definice v3 (#1057): -1 bez zóny, (-1,0] mimo, (0,1] přechod, (1,2] uvnitř. Confidence B: +10 uvnitř, 0 přechod, -15 mimo/bez zóny. Simple: mimo/bez zóny = block. Regime (varianta C): uvnitř pass, přechod pass jen v negativní gammě (positive = block, neznámý = unknown), mimo/bez zóny block.",
+ "cases": [
+  {"depth": -1.0,  "gex_regime": "positive", "band_class": "no_zone",    "confidence_band_adjust": -15, "band_gate_simple": "block", "band_gate_regime": "block"},
+  {"depth": -1.0,  "gex_regime": null,       "band_class": "no_zone",    "confidence_band_adjust": -15, "band_gate_simple": "block", "band_gate_regime": "block"},
+  {"depth": -0.75, "gex_regime": "negative", "band_class": "outside",    "confidence_band_adjust": -15, "band_gate_simple": "block", "band_gate_regime": "block"},
+  {"depth": -0.01, "gex_regime": "positive", "band_class": "outside",    "confidence_band_adjust": -15, "band_gate_simple": "block", "band_gate_regime": "block"},
+  {"depth": 0.0,   "gex_regime": "negative", "band_class": "outside",    "confidence_band_adjust": -15, "band_gate_simple": "block", "band_gate_regime": "block"},
+  {"depth": 0.01,  "gex_regime": "negative", "band_class": "transition", "confidence_band_adjust": 0,   "band_gate_simple": "pass",  "band_gate_regime": "pass"},
+  {"depth": 0.5,   "gex_regime": "positive", "band_class": "transition", "confidence_band_adjust": 0,   "band_gate_simple": "pass",  "band_gate_regime": "block"},
+  {"depth": 0.5,   "gex_regime": null,       "band_class": "transition", "confidence_band_adjust": 0,   "band_gate_simple": "pass",  "band_gate_regime": "unknown"},
+  {"depth": 1.0,   "gex_regime": "negative", "band_class": "transition", "confidence_band_adjust": 0,   "band_gate_simple": "pass",  "band_gate_regime": "pass"},
+  {"depth": 1.01,  "gex_regime": "positive", "band_class": "inside",     "confidence_band_adjust": 10,  "band_gate_simple": "pass",  "band_gate_regime": "pass"},
+  {"depth": 1.6,   "gex_regime": "negative", "band_class": "inside",     "confidence_band_adjust": 10,  "band_gate_simple": "pass",  "band_gate_regime": "pass"},
+  {"depth": 2.0,   "gex_regime": null,       "band_class": "inside",     "confidence_band_adjust": 10,  "band_gate_simple": "pass",  "band_gate_regime": "pass"}
+ ],
+ "confidence": [
+  {"base": 55, "adjust": 10,  "expected": 65},
+  {"base": 55, "adjust": -15, "expected": 40},
+  {"base": 45, "adjust": 0,   "expected": 45},
+  {"base": 95, "adjust": 10,  "expected": 100},
+  {"base": 10, "adjust": -15, "expected": 0}
+ ]
+}

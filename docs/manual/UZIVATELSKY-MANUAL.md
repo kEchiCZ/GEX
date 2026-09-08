@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.15 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.16 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -1093,7 +1093,7 @@ Druhy alertů:
 
 ### Setupy
 
-Když detektor najde setup, přijde alert **Nový setup** a nad grafem se ukáže **karta setupu** pro daný instrument: směr (LONG/SHORT), šablona, **datum a čas vzniku** (kdy se splnily podmínky), úrovně **Entry / Cíl / Stop**, RRR a důvěra, plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce **Setupy** v sidebaru.
+Když detektor najde setup, přijde alert **Nový setup** a nad grafem se ukáže **karta setupu** pro daný instrument: směr (LONG/SHORT), šablona, **datum a čas vzniku** (kdy se splnily podmínky), úrovně **Entry / Cíl / Stop**, RRR a důvěra, od v1.16 štítek **polohy v tlumící zóně** (uvnitř pásma / přechod / mimo pásmo / bez pásma s posunem důvěry, kap. 18), plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce **Setupy** v sidebaru.
 
 **Denní statistika seance** (obrazovka Setupy): nad seznamem je souhrn dnešního
 dne — kolik obchodů proběhlo, kolik úspěšných a kolik ztrátových, úspěšnost
@@ -1353,6 +1353,44 @@ obchodní dny (přepínač **Projekce dnů**: settle / +1 den / týden):
   nesou dál a přidělit ho jiné mechanice by obě populace spláclo do jedné
   statistiky. Volná čísla se přidělují z jednoho seznamu v kódu, ne podle
   zadání jednotlivých úprav.
+
+### Setupy a poloha v tlumící zóně (v1.16, #1060)
+
+Kalibrace nad 985 uzavřenými setupy (#575) ukázala, že **kde vůči tlumící
+zóně Dyn GEX setup vzniká, odděluje expektanci**: uvnitř pásma Ø +0,21 R
+(úspěšnost 37 %), mimo pásmo −0,24 R (27 %), bez pásma −0,15 R. Hloubka
+polohy je přenositelná mezi ES a NQ — na rozdíl od bodových prahů i ATR.
+
+Poloha se měří hloubkou `band_depth` v místě entry: **−1** profil na ceně
+nulový (bez pásma) · **0** hrana All · **1** hrana Major · **2** vrchol profilu.
+Z ní vzniká štítek na kartě setupu a ve sloupci **Pásmo** obrazovky Setupy:
+
+| Štítek | Hloubka | Posun důvěry | Čtení |
+|---|---|---|---|
+| **uvnitř pásma** | (1, 2] | **+10** | entry nad hranou Major — hedging cenu tlumí, fade šablony tu historicky fungují |
+| **přechod** | (0, 1] | ±0 | mezi hranami All a Major — nerozhodnuto, sleduje se s gamma režimem |
+| **mimo pásmo** | (−1, 0] | **−15** | pod hranou All — tlumení slabé, setupy tu ztrácely |
+| **bez pásma** | −1 | **−15** | profil bez tlumící zóny (čistě negativní gamma) — nejsilnější podoba „mimo" |
+
+**Co se NEděje:** žádný setup se neblokuje a žádná šablona se nevyřazuje
+(rozhodnutí 7. 9. 2026 — tvrdá brána zamítnuta, dokud efekt nepotvrdí jednotná
+mechanika v5; ve v5 zatím vidět není, n = 278). Důvěra je jediné, co se posune;
+základ šablony zůstává v kontextu setupu a v tooltipu štítku.
+
+**Stínová brána.** K setupu se zapisuje, co by udělala dvě kandidátní pravidla —
+tooltip štítku je ukazuje, obrazovka Setupy má pro ně dlaždice se žlutým pruhem
+(počet uzavřených · Ø R per skupina):
+
+- **jen poloha** — mimo pásmo / bez pásma by setup nevznikl (block), zbytek prošel;
+- **poloha × gamma režim** — uvnitř vždy, přechod jen v negativní gammě, mimo
+  nikdy; bez známého režimu je verdikt „nerozhodnuto" a do skupin nevstupuje.
+
+Vyhodnocení **~5. 10. 2026** na mechanice v5 se třemi síty proti šumu (min. 100
+setupů v nejmenší skupině, Wilsonova dolní mez rozdílu nad nulou, permutační
+test interakce poloha × režim). Předregistrovaná předpověď: skupina „block" je
+horší o ≥ 0,2 R než „pass". Potvrdí-li se, zapne se jedno z pravidel naostro
+(per šablona, bez max_pain_pin — ten měl mimo pásmo kladnou expektanci);
+jinak zůstane hloubka jen posunem důvěry.
 
 ### Flip: naměřený vs. dynamický = flip ZÓNA
 

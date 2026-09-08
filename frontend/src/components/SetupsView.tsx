@@ -4,7 +4,7 @@ Predikce jsou neměnné — jediná mutace je rating (+1/−1) a poznámka; hodn
 je kvalitativní vrstva a nevstupuje do automatické kalibrace confidence.
 */
 import { useState } from 'react'
-import { ACCOUNT_START_USD, STATUS_LABELS, dailyStats, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel , evStats, evTooltip } from '../api/setups' // prettier-ignore
+import { ACCOUNT_START_USD, STATUS_LABELS, bandGateStats, bandInfo, bandLabel, bandTooltip, dailyStats, formatGateBucket, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel , evStats, evTooltip } from '../api/setups' // prettier-ignore
 import { currentMechanicsVersion } from '../setups/performance'
 import { sessionDateIso } from '../instrument/tz'
 import type { SetupRow } from '../api/setups'
@@ -115,6 +115,9 @@ export function SetupsView() {
   // Bilance dnešní seance (#748) — nad `visible`, aby ctila přepínač verze
   // mechaniky; jinak by si horní a spodní blok odporovaly
   const day = dailyStats(visible, pointUsd, sessionDateIso(), sessionDateIso)
+  // Stínová brána podle polohy v zóně (#1060): rozpad pass/block per pravidlo
+  // nad týmiž uzavřenými setupy jako bilance výše (ctí přepínač mechaniky)
+  const gates = bandGateStats(visible)
 
   return (
     <section className="setups-view" aria-label="Setupy">
@@ -256,6 +259,45 @@ export function SetupsView() {
           </span>
         </div>
       </div>
+      {gates !== null && (
+        <div
+          className="setups-stats setups-stats-gate"
+          role="group"
+          aria-label="Stínová brána podle polohy v pásmu"
+          title={
+            'Poloha entry v tlumící zóně Dyn GEX (#1060). Nic se neblokuje — u každého ' +
+            'setupu se jen zapisuje, co by pravidlo udělalo. Hodnota: počet uzavřených · Ø R.\n' +
+            '• jen poloha: mimo pásmo / bez pásma = blok\n' +
+            '• poloha × režim: uvnitř vždy, přechod jen v negativní gammě, mimo nikdy\n' +
+            'Vyhodnocení ~5. 10. 2026: blok horší o ≥ 0,2 R než prošel → pravidlo se zapne.'
+          }
+        >
+          <div className="stat">
+            <span className="stat-label muted">Jen poloha · prošel</span>
+            <span className="stat-value" data-testid="gate-simple-pass">
+              {formatGateBucket(gates.simple.pass)}
+            </span>
+          </div>
+          <div className="stat">
+            <span className="stat-label muted">Jen poloha · blok</span>
+            <span className="stat-value" data-testid="gate-simple-block">
+              {formatGateBucket(gates.simple.block)}
+            </span>
+          </div>
+          <div className="stat">
+            <span className="stat-label muted">Poloha × režim · prošel</span>
+            <span className="stat-value" data-testid="gate-regime-pass">
+              {formatGateBucket(gates.regime.pass)}
+            </span>
+          </div>
+          <div className="stat">
+            <span className="stat-label muted">Poloha × režim · blok</span>
+            <span className="stat-value" data-testid="gate-regime-block">
+              {formatGateBucket(gates.regime.block)}
+            </span>
+          </div>
+        </div>
+      )}
       {day.trades === 0 && (
         <p className="muted setups-day-empty">
           Dnešní seance zatím bez obchodu — detektor běží, jen nenastaly podmínky šablon.
@@ -280,6 +322,7 @@ export function SetupsView() {
                 <th>Stop</th>
                 <th>RRR</th>
                 <th>Důvěra</th>
+                <th>Pásmo</th>
                 <th>Stav</th>
                 <th>Uzavřeno</th>
                 <th>R</th>
@@ -301,6 +344,20 @@ export function SetupsView() {
                     <td>{formatLevel(row.stop)}</td>
                     <td>{setupRrr(row).toFixed(1)}</td>
                     <td>{row.confidence} %</td>
+                    <td data-part="band">
+                      {(() => {
+                        const band = bandInfo(row)
+                        if (band === null) return <span className="muted">—</span>
+                        return (
+                          <span
+                            className={`setup-band ${band.bandClass}`}
+                            title={bandTooltip(band)}
+                          >
+                            {bandLabel(band)}
+                          </span>
+                        )
+                      })()}
+                    </td>
                     <td>
                       <span className={`setup-status ${row.status}`}>
                         {STATUS_LABELS[row.status] ?? row.status}
