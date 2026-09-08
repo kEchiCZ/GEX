@@ -593,6 +593,7 @@ Pipeline se založí sama, jakmile se spojení objeví. Restart enginu není pot
 | Disk roste | Retention běží nočně; ručně: smaž staré partice v `./data` (nikdy `oi_eod`). |
 | Reset prostředí | `docker compose down`, smaž `./data` (přijdeš o 14denní okno, ne o OI archiv ve volume `pgdata`), `docker compose up -d --build`. |
 | Málo dat po restartu | Writer navazuje na rozepsaný den — mezera zůstane jen za dobu výpadku. |
+| Potřebuju log enginu z doby PŘED restartem/deployem | Log kontejneru zmizí s jeho recreate. `scripts/deploy-engine-offhours.ps1` ho od #1056 (v1.6) ukládá sám do `data/logs/engine-<YYYYMMDD-HHMM>.log` (a `…-crashed.log` před rollbackem; bez uloženého logu se nenasazuje; retence 30 dní). Při **ručním** `docker compose up -d engine` / `--force-recreate` udělej totéž předem: `docker logs gex-engine-1 > data/logs/engine-$(Get-Date -Format yyyyMMdd-HHmm).log 2>&1`. 7. 9. (#1054) se bez toho hodinu řešil falešný poplach. |
 | Díra ve snapshotech, ale bary v okně jsou | Podívej se na `source` barů v `derived/{sym}/bars/`: `ibkr_hist` = doplněno z IBKR historical při dalším startu → **engine v tu dobu neběžel** (vypnuté PC, zastavený kontejner), ne stall řetězu. Stall vypadá obráceně: bary `ibkr` tečou, snapshoty chybí. Do #1055 (8. 9. 2026) se backfill tvářil jako `ibkr` a 2,5 dne vypnutého PC vyvolalo falešný poplach (#1054). |
 | Změna portu TWS | Settings v aplikaci (platí do sekund i bez spojení, #992), **a zároveň** `.env` + `docker compose up -d engine` — hodnota v DB přebíjí `.env`, takže samotná změna `.env` skončí skokem zpět na starý port (engine to hlásí `WARNING: Nastavení připojení ze Settings UI (DB) přebíjí .env`). |
 | Zaseknuté spojení, restart kontejneru nechci | Settings → Stav enginu → **Přepojit IBKR** / **Přepojit tastytrade** (#950) — 1–2 min díra, mimo US RTH. Uložení nastavení beze změny hodnot nepřepojuje. |
@@ -674,7 +675,7 @@ Clients*, port **7496** live / **7497** paper, Trusted IPs `127.0.0.1`
    starý port:
    - v aplikaci Settings → IBKR → Port `4001`, uložit (engine se přepojí bez
      restartu a pipeline založí v nejbližším cyklu, #455);
-   - v `.env` `GEXLENS_IBKR_PORT=4001`, pak `docker compose up -d engine`
+   - v `.env` `GEXLENS_IBKR_PORT=4001`, pak `docker compose up -d engine` (předtím uložit log kontejneru, kap. 12 / 13.5 — #1056)
      (restart kontejneru nestačí, env se čte při jeho vytvoření). Host v `.env`
      neměnit — compose ho přepisuje na `host.docker.internal`. News-engine
      vlastní socket k TWS nemá, nic dalšího se nepřepojuje. Pořadí je jedno,
@@ -745,6 +746,11 @@ Každé pondělí ráno: potvrdit IB Key push v Gateway (týdenní reautentizace
 kap. 13.2). Každý obchodní den: TWS/Gateway běží a je přihlášený **před startem enginu**;
 stavová lišta aplikace ukazuje `connected :7496` (Gateway `:4001`) a `● Live` (ne Offline).
 Diagnostika problémů: kap. 12.
+
+Restart nebo nasazení enginu: vždy `pwsh scripts/deploy-engine-offhours.ps1`
+(pauza Globexu, rollback, **uložení logu před recreate** — #1056). Ruční
+`docker compose up -d engine` jen s předchozím `docker logs gex-engine-1 >
+data/logs/engine-<YYYYMMDD-HHMM>.log 2>&1`; jinak důkazy o předchozím běhu zmizí.
 
 ---
 
