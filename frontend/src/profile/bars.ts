@@ -34,6 +34,11 @@ export interface ProfileRow {
   /** Midpoint (bid+ask)/2 pro P/C v prémiích (#469); 0/undefined = kotace chybí. */
   callMid?: number
   putMid?: number
+  /** Objem minuty NENÍ k dispozici (#1067): řetěz běžel z tastytrade fallbacku
+  (#614), který denní objem v sémantice IBKR nedodává. `callVolume`/`putVolume`
+  jsou pak 0 jen technicky — panel kreslí jen OI složku a objem popíše pomlčkou,
+  ne nulou. Nezaměňovat s chybějícím OI (#465, šrafování). */
+  volumeMissing?: boolean
   /** Řádek jen z denního OI archivu (#849) — minutová data pro něj
   neexistují, takže se v profilu odliší a do P/C vstupuje jen kusově. */
   archiveOnly?: boolean
@@ -53,6 +58,7 @@ Funguje nad řádky aktuální minuty (kumulativní denní volume) i Σ souhrnem
 export function volLeaders(rows: ProfileRow[], count = 3): VolLeader[] {
   const entries: VolLeader[] = []
   for (const row of rows) {
+    if (row.volumeMissing) continue // bez objemu není co vést (#1067)
     if (row.callVolume > 0) entries.push({ strike: row.strike, right: 'C', volume: row.callVolume })
     if (row.putVolume > 0) entries.push({ strike: row.strike, right: 'P', volume: row.putVolume })
   }

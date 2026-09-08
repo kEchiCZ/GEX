@@ -255,12 +255,30 @@ function StrikeProfileBase({
   const hovered = crosshair
     ? (ordered.find((row) => row.strike === crosshair.strike) ?? null)
     : null
+  // Minuta bez objemu (#1067) — příznak nese každý řádek minuty, stačí jeden
+  const volumeMissing = rows.some((row) => row.volumeMissing === true)
 
   return (
     <aside className="strike-profile" aria-label="Strike profil" style={{ width }}>
       <div className="profile-header">
         {/* Stav Σ nese jen zvýrazněný chip (#415) — popisek se nemění */}
         <span className="muted profile-title">Vol + OI Δ</span>
+        {volumeMissing && (
+          // Objem minuty chybí (#1067): řetěz z tasty fallbacku objem nenese,
+          // pruhy jsou jen OI složka — bez štítku to vypadá jako pokles objemu
+          <span
+            className="profile-flag"
+            data-testid="volume-missing"
+            title={
+              'Objem této minuty není k dispozici — opční řetěz běžel z tastytrade ' +
+              'fallbacku (#614), který denní objem v sémantice IBKR nedodává.\n' +
+              'Pruhy a čísla ukazují jen složku OI Δ; objem se doplní, až se řetěz ' +
+              'vrátí na IBKR. Není to pokles objemu.'
+            }
+          >
+            Vol nedostupný
+          </span>
+        )}
         <div role="toolbar" aria-label="Zoom profilu">
           {aggregate !== null && (
             <button
@@ -662,7 +680,9 @@ function StrikeProfileBase({
             {windowMode && ' — statické (EOD), nepatří k oknu'}
           </span>
           <span>
-            Vol C/P: {hovered.callVolume.toFixed(0)} / {hovered.putVolume.toFixed(0)}
+            {hovered.volumeMissing
+              ? 'Vol C/P: — / — (fallback řetězu, objem nedostupný)'
+              : `Vol C/P: ${hovered.callVolume.toFixed(0)} / ${hovered.putVolume.toFixed(0)}`}
           </span>
           <span data-testid="printvol">{printVolText(hovered)}</span>
           {hovered.callOiChange != null && hovered.putOiChange != null && (

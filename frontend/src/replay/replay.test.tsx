@@ -1136,3 +1136,54 @@ test('outrightShareAt (#1007): podíl tisků, NaN a nulový objem → null', () 
   expect(outrightShareAt(printed, structured, 2)).toBeNull()
   expect(outrightShareAt(undefined, structured, 0)).toBeNull()
 })
+
+test('minuta bez objemu (řetěz z tasty fallbacku) nese volumeMissing, ne nulu (#1067)', () => {
+  // Minuta 0 z IBKR s objemem, minuta 1 z fallbacku: kotace jsou, objem NaN
+  const table = tableFromArrays({
+    ts_min: [
+      '2026-07-16T15:00:00Z',
+      '2026-07-16T15:00:00Z',
+      '2026-07-16T15:01:00Z',
+      '2026-07-16T15:01:00Z',
+    ],
+    strike: Float64Array.from([7600, 7600, 7600, 7600]),
+    right: ['C', 'P', 'C', 'P'],
+    volume: Float64Array.from([10, 5, Number.NaN, Number.NaN]),
+    oi: Float64Array.from([100, 200, 100, 200]),
+    delta: Float64Array.from([0.5, -0.4, 0.5, -0.4]),
+    stale_age: Float64Array.from([0, 0, 0, 0]),
+  })
+  const bundle = {
+    symbol: 'ES',
+    expiry: '20260716',
+    date: '2026-07-16',
+    snapshots_arrow_base64: btoa(String.fromCharCode(...tableToIPC(table, 'stream'))),
+    levels: [],
+    flow: [],
+    bars: [],
+  }
+  const inputs = decodeBundle(bundle)
+  expect(inputs.volumeMissing).toEqual([false, true])
+  // Matice nese technickou nulu, ale řádek profilu ji přizná jako chybějící
+  expect(inputs.callVolume[1]).toBe(0)
+  const day = buildReplayDay(bundle)
+  expect(day.profileByMinute.rowsAt(0)[0].volumeMissing).toBe(false)
+  expect(day.profileByMinute.rowsAt(1)[0].volumeMissing).toBe(true)
+
+  // Živá minuta z WS: objem null = fallback; s číslem = měření
+  const live = appendMinute(inputs, {
+    tsIso: '2026-07-16T15:02:00Z',
+    rows: [
+      { strike: 7600, right: 'C', oi: 100, volume: null, delta: 0.5 },
+      { strike: 7600, right: 'P', oi: 200, volume: null, delta: -0.4 },
+    ],
+  })
+  expect(live.volumeMissing).toEqual([false, true, true])
+  expect(live.callVolume[2]).toBe(0)
+  const recovered = appendMinute(live, {
+    tsIso: '2026-07-16T15:03:00Z',
+    rows: [{ strike: 7600, right: 'C', oi: 100, volume: 44, delta: 0.5 }],
+  })
+  expect(recovered.volumeMissing).toEqual([false, true, true, false])
+  expect(recovered.callVolume[3]).toBe(44)
+})

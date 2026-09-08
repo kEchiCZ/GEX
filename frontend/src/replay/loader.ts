@@ -204,6 +204,11 @@ export interface ReplayInputs {
    * existují sloupce, kde máme jen cenu. Matice tam nesou nuly a ty NEJSOU
    * měření — kdo z nich počítá přírůstky nebo profil, musí je přeskočit. */
   snapshotMinutes: boolean[]
+  /** Paralelně k `minutes`: minuta má snapshot, ale ŽÁDNÝ řádek nenese objem
+   * (#1067). Tak vypadá řetěz z tastytrade fallbacku (#614) — dxFeed denní
+   * objem v sémantice IBKR nedodává. Matice `callVolume`/`putVolume` tam nesou
+   * nuly a ty NEJSOU měření: profil je nesmí popsat jako objem 0. */
+  volumeMissing: boolean[]
   strikes: number[]
   callOi: Float32Array
   putOi: Float32Array
@@ -281,7 +286,8 @@ export interface LiveMinuteRow {
   strike: number
   right: 'C' | 'P'
   oi: number
-  volume: number
+  /** Kumulativní denní objem; null = kotace bez objemu (řetěz z tasty fallbacku, #1067). */
+  volume: number | null
   delta: number
   /** Vega pro VEX módy (#201) — starší engine pole neposílá. */
   vega?: number
@@ -553,6 +559,8 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
   const putPrinted = new Float32Array(size)
   const callStructured = new Float32Array(size)
   const putStructured = new Float32Array(size)
+  // Minuty, kde alespoň jeden řádek objem nese (#1067) — doplněk = fallback
+  const volumeSeen = new Array<boolean>(minutes).fill(false)
 
   for (let row = 0; row < rowCount; row += 1) {
     const minuteIdx = minuteIndex.get(canonicalTs(tsColumn.get(row)))!
@@ -560,7 +568,11 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     const index = strikeIdx * capacity + minuteIdx
     const right = String(rightColumn.get(row)) as 'C' | 'P'
     const oi = Number(oiColumn?.get(row) ?? 0) || 0
-    const volume = Number(volumeColumn?.get(row) ?? 0) || 0
+    const rawVolume = volumeColumn?.get(row)
+    if (rawVolume !== null && rawVolume !== undefined && Number.isFinite(Number(rawVolume))) {
+      volumeSeen[minuteIdx] = true
+    }
+    const volume = Number(rawVolume ?? 0) || 0
     const delta = Number(deltaColumn?.get(row) ?? 0) || 0
     const vega = Number(vegaColumn?.get(row) ?? 0) || 0
     const bid = Number(bidColumn?.get(row) ?? 0) || 0
@@ -756,6 +768,7 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     minutes: minuteKeys,
     minuteCapacity: capacity,
     snapshotMinutes,
+    volumeMissing: snapshotMinutes.map((has, index) => has && !volumeSeen[index]),
     strikes,
     callOi,
     putOi,
@@ -833,6 +846,19 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     : inputs.snapshotMinutes.map((has, index) =>
         index === targetMinute ? has || minute.rows.length > 0 : has,
       )
+  // Objem chybí, když minuta má řádky, ale žádný ho nenese (#1067)
+  const minuteVolumeMissing =
+    minute.rows.length > 0 &&
+    !minute.rows.some((row) => row.volume !== null && Number.isFinite(row.volume))
+  const volumeMissing = isAppend
+    ? [
+        ...inputs.volumeMissing.slice(0, targetMinute),
+        minuteVolumeMissing,
+        ...inputs.volumeMissing.slice(targetMinute),
+      ]
+    : inputs.volumeMissing.map((missing, index) =>
+        index === targetMinute ? minuteVolumeMissing : missing,
+      )
   // Živá minuta oimissing řadu nenese (WS ji neposílá) — stejně jako plný
   // build bez záznamů: minuta se snapshoty = false, bar-only = null. Případnou
   // ranní díru doplní zpětně refetch bundle; živou poctivost nese OI badge
@@ -909,14 +935,14 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     if (row.right === 'C') {
       callOi[to] = row.oi
       callOiEst[to] = row.oi
-      callVolume[to] = row.volume
+      callVolume[to] = row.volume ?? 0
       callDelta[to] = row.delta
       callVega[to] = row.vega ?? 0
       callMid[to] = row.mid ?? 0
     } else {
       putOi[to] = row.oi
       putOiEst[to] = row.oi
-      putVolume[to] = row.volume
+      putVolume[to] = row.volume ?? 0
       putDelta[to] = row.delta
       putVega[to] = row.vega ?? 0
       putMid[to] = row.mid ?? 0
@@ -1053,6 +1079,7 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
     minuteCapacity: capacity,
     derived,
     snapshotMinutes,
+    volumeMissing,
     oiLowMinutes,
     strikes: newStrikes,
     callOi,
@@ -1365,6 +1392,8 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
           putStructured: inputs.hasPrintVol ? finiteOrNull(inputs.putStructured[index]) : null,
           callOiMissing: inputs.oiMissing.has(oiMissingKey(minuteKeys[minuteIdx], strike, 'C')),
           putOiMissing: inputs.oiMissing.has(oiMissingKey(minuteKeys[minuteIdx], strike, 'P')),
+          // Objem minuty není k dispozici (#1067) — panel ho nepopíše jako 0
+          volumeMissing: inputs.volumeMissing[minuteIdx] ?? false,
         }
       })
       // Striky mimo snapshot grid (#849): široký OI z tasty (#828). Nesou

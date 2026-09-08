@@ -1032,6 +1032,16 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
 
 /* Popisek ustupuje toolbaru: při úzkém panelu se zkrátí výpustkou,
    chipy (Σ/GEX/Abs/1×/2×/4×) se nikdy nezalomí na skrytý řádek */
+/* Štítek „Vol nedostupný" (#1067) — stejný jantar jako chip fallbacku v hlavičce */
+.profile-header .profile-flag {
+  padding: 1px 6px;
+  border-radius: 9px;
+  font-size: 10px;
+  white-space: nowrap;
+  color: #f5c542;
+  background: rgba(245, 197, 66, 0.16);
+}
+
 .profile-header .profile-title {
   flex: 1 1 auto;
   min-width: 0;
