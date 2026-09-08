@@ -216,9 +216,23 @@ function BottomPanelsBase({
   const barWidth = Math.max(0.5, step * 0.8)
   // Individuální výška panelu (#792): override má přednost před sdílenou (#169)
   const heightOf = (key: PanelKey): number => heights?.[key] ?? height
-  // Úchyt na spodní hraně panelu (#792) — mění výšku JEN toho jednoho panelu.
+  // Pořadí skutečně vykreslených panelů (plní se níž při skládání `panels`).
+  // Handlery úchytů ho čtou až v okamžiku události, kdy je kompletní.
+  const renderedKeys: PanelKey[] = []
+  // Úchyt na spodní hraně panelu (#792 → #1066): chová se jako SPLITTER mezi
+  // panelem a jeho sousedem pod ním — o kolik jeden vyroste, o tolik se druhý
+  // zmenší. Blok panelů je ukotvený ke spodní hraně layoutu, takže samotná
+  // změna výšky jednoho panelu jeho spodní hranu nepohne: panel rostl nahoru
+  // do heatmapy a předěl pod kurzorem stál (#1066 — „inverzní" tažení).
+  // Poslední panel souseda dole nemá, jeho úchyt nic nedělá (CSS ho skrývá).
   // Jeden sdílený drag ref: naráz jde táhnout jediný úchyt.
-  const resizeRef = useRef<{ key: PanelKey; y: number; start: number } | null>(null)
+  const resizeRef = useRef<{
+    key: PanelKey
+    below: PanelKey
+    y: number
+    start: number
+    startBelow: number
+  } | null>(null)
   const resizeHandle = (key: PanelKey, label: string): React.ReactNode => {
     if (!onHeightChange) return null
     return (
@@ -228,14 +242,31 @@ function BottomPanelsBase({
         aria-orientation="horizontal"
         aria-label={`Výška panelu ${label}`}
         onPointerDown={(event) => {
-          resizeRef.current = { key, y: event.clientY, start: heightOf(key) }
+          const below = renderedKeys[renderedKeys.indexOf(key) + 1]
+          if (below === undefined) return
+          resizeRef.current = {
+            key,
+            below,
+            y: event.clientY,
+            start: heightOf(key),
+            startBelow: heightOf(below),
+          }
           event.currentTarget.setPointerCapture(event.pointerId)
         }}
         onPointerMove={(event) => {
           const drag = resizeRef.current
           if (!drag || drag.key !== key) return
-          // Úchyt sedí na spodní hraně — tažení dolů panel zvětšuje 1:1
-          onHeightChange(key, Math.round(drag.start + (event.clientY - drag.y)))
+          // Předěl sleduje kurzor 1:1; posun je omezený tak, aby ani jeden
+          // z dvojice nevypadl z mezí — jinak by App ořezal jen jednoho a
+          // součet výšek (poloha bloku) by ujel
+          const raw = event.clientY - drag.y
+          const dy = Math.max(
+            PANEL_HEIGHT_MIN - drag.start,
+            drag.startBelow - PANEL_HEIGHT_MAX,
+            Math.min(PANEL_HEIGHT_MAX - drag.start, drag.startBelow - PANEL_HEIGHT_MIN, raw),
+          )
+          onHeightChange(key, Math.round(drag.start + dy))
+          onHeightChange(drag.below, Math.round(drag.startBelow - dy))
         }}
         onPointerUp={() => {
           resizeRef.current = null
@@ -401,12 +432,17 @@ function BottomPanelsBase({
   }
 
   const panels: React.ReactNode[] = []
+  const addPanel = (key: PanelKey, node: React.ReactNode): void => {
+    renderedKeys.push(key)
+    panels.push(node)
+  }
 
   if (visible.vol) {
     const height = heightOf('vol')
     const rangeDim = rangeDimFor(height)
     const heights = barHeights(data.vol, height - 4, volPeak)
-    panels.push(
+    addPanel(
+      'vol',
       <section key="vol" className="bottom-panel" aria-label="Vol panel">
         <span className="panel-title muted">Vol</span>
         {idx !== null && <PanelValue>{fmtInt(data.vol[idx])}</PanelValue>}
@@ -446,7 +482,8 @@ function BottomPanelsBase({
     const rangeDim = rangeDimFor(height)
     const callHeights = barHeights(data.optVolCall, height - 4, optPeak)
     const putHeights = barHeights(data.optVolPut, height - 4, optPeak)
-    panels.push(
+    addPanel(
+      'optVol',
       <section key="optvol" className="bottom-panel" aria-label="Opt Vol panel">
         <span className="panel-title muted">Opt Vol</span>
         {idx !== null && (
@@ -504,7 +541,8 @@ function BottomPanelsBase({
     const rangeDim = rangeDimFor(height)
     const callHeights = barHeights(data.deltaFlowCall, height - 4, flowPeak)
     const putHeights = barHeights(data.deltaFlowPut, height - 4, flowPeak)
-    panels.push(
+    addPanel(
+      'deltaFlow',
       <section key="deltaflow" className="bottom-panel" aria-label="Δ Flow panel">
         <span className="panel-title muted">Δ Flow C/P</span>
         {idx !== null && (
@@ -567,7 +605,8 @@ function BottomPanelsBase({
     const toY = signed
       ? (value: number) => height / 2 - (value / evoPeak) * (height / 2 - CUM_DELTA_PAD)
       : (value: number) => height - (value / evoPeak) * (height - 4)
-    panels.push(
+    addPanel(
+      'evoOi',
       <section
         key="evooi"
         className="bottom-panel"
@@ -653,7 +692,8 @@ function BottomPanelsBase({
     // ale osa začíná půlnocí — na levém okraji je proto už nasčítaný tok.
     // Bez přiznání by se výchylka četla proti nule, která na grafu není.
     const anchor = data.cumDelta.length > 0 ? data.cumDelta[0] : 0
-    panels.push(
+    addPanel(
+      'delta',
       <section key="cumdelta" className="bottom-panel" aria-label="Cum Δ panel">
         <span className="panel-title muted">
           <span title="Delta-vážený tok OPČNÍCH obchodů (Σ znaménko × size × Δ × multiplikátor) — ne tok v podkladu">
@@ -763,7 +803,8 @@ function BottomPanelsBase({
       ...candles.flatMap((candle) => (candle ? [Math.abs(candle.high), Math.abs(candle.low)] : [])),
     )
     const hovered = idx !== null ? candles[idx] : null
-    panels.push(
+    addPanel(
+      'sentiment',
       <section key="sentiment" className="bottom-panel" aria-label="Sentiment panel">
         <span className="panel-title muted">Sentiment</span>
         {hovered && (
@@ -823,7 +864,8 @@ function BottomPanelsBase({
     const sentiment = data.sentiment
     const areas = cumDeltaAreas(sentiment, minutes * step, height)
     const peak = seriesPeak(sentiment)
-    panels.push(
+    addPanel(
+      'sentiment',
       <section key="sentiment" className="bottom-panel" aria-label="Sentiment panel">
         <span className="panel-title muted">Sentiment</span>
         {idx !== null && sentiment[idx] !== undefined && (
