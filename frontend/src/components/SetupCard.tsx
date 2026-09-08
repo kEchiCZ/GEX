@@ -2,7 +2,7 @@
 import { memo } from 'react'
 import { VOL_BUCKET_LABELS } from '../api/briefing'
 import type { VolRegimeRow } from '../api/briefing'
-import { bandInfo, bandLabel, bandTooltip, setupRrr, templateLabel } from '../api/setups'
+import { bandInfo, bandLabel, bandTooltip, confidenceTooltip, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
 import type { SetupRow } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
 import { positionLabel, positionSize, stopVsRange } from '../instrument/position'
@@ -60,7 +60,10 @@ function SetupCardBase({
             <span className="stop">Stop {formatLevel(setup.stop)}</span>
           </div>
           <div className="setup-card-meta">
-            RRR {setupRrr(setup).toFixed(1)} · důvěra {setup.confidence} %
+            RRR {setupRrr(setup).toFixed(1)} ·{' '}
+            <span data-testid="setup-confidence" title={confidenceTooltip(setup) ?? undefined}>
+              důvěra {setup.confidence} %
+            </span>
             {(() => {
               // Poloha v tlumící zóně (#1060): štítek + stínové verdikty v tooltipu
               const band = bandInfo(setup)

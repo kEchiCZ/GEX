@@ -306,6 +306,29 @@ export function bandInfo(row: Pick<SetupRow, 'context'>): BandInfo | null {
   }
 }
 
+/** Tooltip u čísla důvěry (#794 fáze 2B): odkud základ pochází a co se k němu přičetlo.
+Bez `confidence_source` (starší setup) vrací null — nic se nevymýšlí. */
+export function confidenceTooltip(row: Pick<SetupRow, 'confidence' | 'context'>): string | null {
+  const context = row.context ?? {}
+  const source = context.confidence_source
+  if (typeof source !== 'string') return null
+  const base = typeof context.confidence_base === 'number' ? context.confidence_base : null
+  const template =
+    typeof context.confidence_template === 'number' ? context.confidence_template : null
+  const adjust =
+    typeof context.confidence_band_adjust === 'number' ? context.confidence_band_adjust : 0
+  const lines = [
+    `Důvěra ${row.confidence} % = základ${base === null ? '' : ` ${base} %`}${adjust === 0 ? '' : ` ${adjust > 0 ? '+' : '−'}${Math.abs(adjust)} poloha v pásmu`}.`,
+    source === 'constant'
+      ? `Základ = konstanta šablony${template === null ? '' : ` (${template} %)`} — track record koše zatím pod minimem vzorku.`
+      : `Základ = Wilsonova dolní mez úspěšnosti z track recordu (${source.replace(/^wilson /, '')}).`,
+    '',
+    'Kalibrace z uzavřených setupů aktuální mechaniky (#794 fáze 2B); koše od nejkonkrétnějšího:',
+    '• symbol × šablona × gamma režim → šablona × režim → symbol × šablona → šablona.',
+  ]
+  return lines.join('\n')
+}
+
 /** Štítek polohy s posunem confidence („uvnitř pásma +10", „přechod ±0"). */
 export function bandLabel(info: BandInfo): string {
   const shift = info.adjust === 0 ? '±0' : `${info.adjust > 0 ? '+' : '−'}${Math.abs(info.adjust)}`

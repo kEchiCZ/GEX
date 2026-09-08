@@ -4,7 +4,7 @@ Predikce jsou neměnné — jediná mutace je rating (+1/−1) a poznámka; hodn
 je kvalitativní vrstva a nevstupuje do automatické kalibrace confidence.
 */
 import { useState } from 'react'
-import { ACCOUNT_START_USD, STATUS_LABELS, bandGateStats, bandInfo, bandLabel, bandTooltip, dailyStats, formatGateBucket, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel , evStats, evTooltip } from '../api/setups' // prettier-ignore
+import { ACCOUNT_START_USD, STATUS_LABELS, bandGateStats, bandInfo, bandLabel, bandTooltip, confidenceTooltip, dailyStats, formatGateBucket, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel , evStats, evTooltip } from '../api/setups' // prettier-ignore
 import { currentMechanicsVersion } from '../setups/performance'
 import { sessionDateIso } from '../instrument/tz'
 import type { SetupRow } from '../api/setups'
@@ -343,7 +343,7 @@ export function SetupsView() {
                     <td>{formatLevel(row.target)}</td>
                     <td>{formatLevel(row.stop)}</td>
                     <td>{setupRrr(row).toFixed(1)}</td>
-                    <td>{row.confidence} %</td>
+                    <td title={confidenceTooltip(row) ?? undefined}>{row.confidence} %</td>
                     <td data-part="band">
                       {(() => {
                         const band = bandInfo(row)

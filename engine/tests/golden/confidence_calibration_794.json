@@ -1,0 +1,12 @@
+{
+ "_comment": "Golden pro kalibrovanou confidence (#794 fáze 2B, ADR-0033 §6): confidence = round(100 × Wilsonova dolní mez 95 % (z = 1,96) podílu closed_target), spočteno nezávisle ručně/kalkulačkou. Pod min_samples = 30 platí konstanta šablony (fallback 45 v testu).",
+ "buckets": [
+  {"wins": 40,  "n": 100, "wilson_lb": 0.30940, "expected_confidence": 31},
+  {"wins": 20,  "n": 35,  "wilson_lb": 0.40857, "expected_confidence": 41},
+  {"wins": 0,   "n": 30,  "wilson_lb": 0.0,     "expected_confidence": 0},
+  {"wins": 30,  "n": 30,  "wilson_lb": 0.88648, "expected_confidence": 89},
+  {"wins": 12,  "n": 30,  "wilson_lb": 0.24590, "expected_confidence": 25},
+  {"wins": 150, "n": 300, "wilson_lb": 0.44378, "expected_confidence": 44},
+  {"wins": 10,  "n": 29,  "wilson_lb": null,    "expected_confidence": 45}
+ ]
+}
