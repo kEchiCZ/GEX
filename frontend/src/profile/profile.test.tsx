@@ -666,3 +666,35 @@ test('printedShare a tooltip text (#1007)', () => {
     }),
   ).toBe('C: 60 outright (60 %) · 40 struktura | P: 10 outright (25 %) · 30 struktura')
 })
+
+test('minuta bez objemu: štítek v hlavičce, tooltip s pomlčkou, bez Vol leaderů (#1067)', () => {
+  const missing = rows().map((row) => ({
+    ...row,
+    callVolume: 0,
+    putVolume: 0,
+    callVolComponent: 0,
+    putVolComponent: 0,
+    volumeMissing: true,
+  }))
+  // Vol leadeři se z minuty bez objemu nevedou — nula není měření
+  expect(volLeaders(missing)).toEqual([])
+
+  render(
+    <CrosshairProvider>
+      <StrikeProfile rows={missing} spot={7600} />
+    </CrosshairProvider>,
+  )
+  const flag = screen.getByTestId('volume-missing')
+  expect(flag.textContent).toBe('Vol nedostupný')
+  expect(flag.getAttribute('title')).toContain('tastytrade')
+  expect(screen.queryByTestId('vol-leaders')).toBeNull()
+})
+
+test('minuta s objemem štítek nenese (#1067)', () => {
+  render(
+    <CrosshairProvider>
+      <StrikeProfile rows={rows()} spot={7600} />
+    </CrosshairProvider>,
+  )
+  expect(screen.queryByTestId('volume-missing')).toBeNull()
+})

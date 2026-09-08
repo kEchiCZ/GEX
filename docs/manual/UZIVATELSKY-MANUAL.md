@@ -393,6 +393,7 @@ Horizontální skládané pruhy pro každý strike, **na stejné výškové ose 
 - **Profilem ovládáš i cenovou osu Y grafu** — tažení svisle nebo kolečko nad profilem stlačuje/roztahuje ceny stejně jako levý okraj heatmapy (kurzor ↕).
 
 - **Šrafovaná půlka řádku** = OI pro tenhle strike **chybí** (IBKR ho nedodalo) — něco jiného než změřená nula, která zůstává prázdná. Šrafura říká „nevíme", prázdno říká „nula".
+- **Štítek „Vol nedostupný“ v hlavičce** (v1.16, #1067) = objem této minuty není k dispozici: opční řetěz běží z tastytrade fallbacku (kap. 17), který denní objem v sémantice IBKR nedodává. Pruhy a čísla ukazují jen složku OI Δ, tooltip řádku má u Vol pomlčky a Vol leadeři se nevedou. Není to pokles objemu — objem se vrátí s návratem řetězu na IBKR.
 
 Čteš z něj na první pohled, **kde sedí dominantní call a put koncentrace** — typicky walls.
 
