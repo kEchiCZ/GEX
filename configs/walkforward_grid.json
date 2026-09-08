@@ -1,0 +1,35 @@
+{
+ "_comment": "Deklarovaný prostor kandidátů pro walk-forward (#794 fáze 3, ADR-0034). Malý a předem daný — volné prohledávání stovek kombinací najde šum. Kandidát = platná verze store s přepsanými klíči. Přidat kandidáta = úprava tohoto souboru v PR s důvodem (why), ne ad hoc. Bonferroniho korekce počítá s počtem záznamů níže.",
+ "candidates": [
+  {
+   "name": "break_min_atr_2",
+   "params": {"break_min_atr": 2.0},
+   "why": "kalibrace #394 (20. 7.–7. 8.): škálování break_min 2×ATR na ES Σ +24,7 → +44,1 R (lepší v 7 z 9 dnů), na NQ mírně škodilo — nerozhodnuto v #434, walk-forward to rozsoudí out-of-sample"
+  },
+  {
+   "name": "min_rrr_1_5",
+   "params": {"min_rrr": 1.5},
+   "why": "přísnější RRR brána než 1,2 (#302) — hypotéza: odřízne setupy s cílem těsně nad rizikem, které v track recordu končí timeoutem"
+  },
+  {
+   "name": "max_rr_2_5",
+   "params": {"max_rr": 2.5},
+   "why": "kratší částečný cíl než 3× risk (#302) — hypotéza: vyšší úspěšnost při menším Ø R; walk-forward ukáže, jestli to Sharpe pomůže"
+  },
+  {
+   "name": "max_rr_4",
+   "params": {"max_rr": 4.0},
+   "why": "opačný směr k max_rr_2_5 — nechat cíl dál; pár obou hodnot říká, na kterou stranu je dnešní 3,0 citlivé"
+  },
+  {
+   "name": "acceptance_3",
+   "params": {"acceptance_minutes": 3},
+   "why": "rychlejší akceptace průrazu u T2 (5 → 3 minuty) — hypotéza: dřívější reclaim = lepší entry; riziko více falešných"
+  },
+  {
+   "name": "cooldown_20",
+   "params": {"cooldown_minutes": 20},
+   "why": "delší anti-spam per šablona (10 → 20 minut) — hypotéza: méně opakovaných vstupů do téže situace po stopu"
+  }
+ ]
+}
