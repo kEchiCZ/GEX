@@ -120,3 +120,64 @@ def test_write_dx_flow_roundtrip(tmp_path: Path) -> None:
     assert record["volume"] == 4.0
     assert "spread_volume" not in record and "cum_ring_outright" not in record
     assert record["ts_min"] == TS
+
+
+def test_seed_navaze_kumulativ_po_restartu(tmp_path: Path) -> None:
+    """#1070: nový akumulátor pokračuje tam, kde předchozí běh skončil — kumulativy
+    z posledního řádku, denní čítače součtem; roll na další seanci seed zahodí."""
+    from gexlens_engine.config import Settings
+    from gexlens_engine.storage.parquet_store import SnapshotWriter
+
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    first = make_shadow()
+    first.roll_session(TS.date())
+    first.on_trade(".ES7610C", size=2, aggressor="BUY", delta=0.5)  # +50
+    first.on_trade(".ES7610C", size=1, aggressor=None, delta=0.5)  # neznámá strana
+    writer.write_dx_flow("ES", TS.date(), [first.close_minute(TS)])
+    first.on_trade(".ES7610C", size=4, aggressor="SELL", delta=0.5)  # −100
+    writer.write_dx_flow("ES", TS.date(), [first.close_minute(TS + dt.timedelta(minutes=1))])
+    assert first.day_stats()["cum_ring"] == -50.0
+
+    # „Restart": čerstvý akumulátor, první uzávěrka seance
+    second = make_shadow()  # helper seanci už nastavil; v enginu vrací první roll True
+    second.roll_session(TS.date())
+    seed = writer.dx_flow_seed("ES", TS.date())
+    assert seed is not None
+    assert seed.ts_min == TS + dt.timedelta(minutes=1)
+    assert seed.cum_ring == -50.0
+    assert (seed.trades, seed.unknown_side, seed.volume) == (3, 1, 7.0)
+    second.seed(seed)
+    stats = second.day_stats()
+    assert stats["cum_ring"] == -50.0
+    assert stats["trades"] == 3.0
+    assert stats["unknown_side_share"] == pytest.approx(1 / 3)
+    assert stats["seeded_from_ts"] == (TS + dt.timedelta(minutes=1)).isoformat()
+    # Další minuta navazuje, ne od nuly
+    second.on_trade(".ES7610C", size=2, aggressor="BUY", delta=0.5)
+    assert second.close_minute(TS + dt.timedelta(minutes=2)).cum_ring == 0.0
+
+    # Nová seance = reset včetně příznaku navázání
+    assert second.roll_session(TS.date() + dt.timedelta(days=1))
+    assert second.day_stats()["seeded_from_ts"] is None
+    assert second.day_stats()["cum_ring"] == 0.0
+
+    # Bez partice není z čeho navazovat
+    assert writer.dx_flow_seed("NQ", TS.date()) is None
+
+
+def test_write_dx_flow_upsertuje_tutez_minutu(tmp_path: Path) -> None:
+    """#1070: restart uprostřed minuty nesmí minutu zdvojit."""
+    import pyarrow.parquet as pq
+
+    from gexlens_engine.config import Settings
+    from gexlens_engine.storage.parquet_store import SnapshotWriter
+
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    shadow = make_shadow()
+    shadow.on_trade(".ES7610C", size=1, aggressor="BUY", delta=0.5)
+    writer.write_dx_flow("ES", TS.date(), [shadow.close_minute(TS)])
+    shadow.on_trade(".ES7610C", size=3, aggressor="BUY", delta=0.5)
+    path = writer.write_dx_flow("ES", TS.date(), [shadow.close_minute(TS)])
+    rows = pq.read_table(path).to_pylist()
+    assert len(rows) == 1
+    assert rows[0]["volume"] == 3.0

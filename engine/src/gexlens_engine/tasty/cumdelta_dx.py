@@ -25,6 +25,7 @@ import logging
 from dataclasses import dataclass
 
 from gexlens_engine.ibkr.discovery import OptionContractSpec
+from gexlens_engine.storage.parquet_store import DxFlowSeed
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,8 @@ class DxCumDeltaShadow:
         self._day_unknown = 0
         self._day_volume = 0.0
         self._day_dropped = 0
+        #: Minuta, ze které byl kumulativ po restartu navázán (#1070); None = od nuly
+        self._seeded_from: dt.datetime | None = None
 
     def set_universe(self, by_streamer: dict[str, OptionContractSpec]) -> None:
         """Aktivní řetěz: mapa streamer → spec; strikes se odvodí z ní."""
@@ -105,9 +108,25 @@ class DxCumDeltaShadow:
         self._day_unknown = 0
         self._day_volume = 0.0
         self._day_dropped = 0
+        self._seeded_from = None
         return True
 
-    def day_stats(self) -> dict[str, float]:
+    def seed(self, state: DxFlowSeed) -> None:
+        """Navázání po restartu uprostřed seance (#1070) — stejná zásada jako #638.
+
+        Volat hned po `roll_session`, které vrátilo True, s posledním stavem
+        z partice téže seance. Bez toho by stín začal od nuly a den by měl
+        tolik nesouvislých řetězů, kolikrát engine startoval.
+        """
+        self._cum_ring = state.cum_ring
+        self._cum_hot = state.cum_hot
+        self._day_trades = state.trades
+        self._day_unknown = state.unknown_side
+        self._day_volume = state.volume
+        self._day_dropped = state.dropped_no_context
+        self._seeded_from = state.ts_min
+
+    def day_stats(self) -> dict[str, object]:
         """Denní souhrn pro /status: pokrytí strany rozhoduje o midpoint fallbacku."""
         return {
             "cum_ring": self._cum_ring,
@@ -118,6 +137,10 @@ class DxCumDeltaShadow:
                 self._day_unknown / self._day_trades if self._day_trades > 0 else 0.0
             ),
             "dropped_no_context": float(self._day_dropped),
+            # Navázání po restartu (#1070): None = řada dne běží od nuly
+            "seeded_from_ts": (
+                self._seeded_from.isoformat() if self._seeded_from is not None else None
+            ),
         }
 
     def _zone(self, strike: float) -> str | None:
