@@ -286,6 +286,7 @@ Zápis je **atomický** (temp + rename) — po pádu procesu nikdy nezůstane č
 | `feed_comparison_daily` | Zhuštěné souhrny shadow sběru (#965): denní řádky + celkové řádky (`session_date IS NULL`) per symbol × pole s `n`, mediánem a p95 |d| — 40 kB místo 2,5 GB |
 | `sentiment_daily`, `sentiment_waves`, `news_*`, `signals`, `signal_outcomes`, `track_record` | SentimentLens (per symbol od ADR-0026). `news_reactions` je od #998 (ADR-0031) **jeden řádek per event × symbol** se sloupci per okno (`ret_<w>`, `range_<w>`, `vol_z_<w>` jen minutová okna, `cont_<w>`) a per fázi (`deferred_*`, `regime_*`, `computed_at_*`) — 268 → ~56 MB, bez retence (učicí data). Starý tvar (řádek per okno) news-engine při startu odmítne s odkazem na `scripts/migrate_news_reactions_wide.py` (jednorázově, po záloze PG; `--dry-run` napřed); stará tabulka zůstane jako `news_reactions_legacy_<datum>` a maže se ručně až po ověření provozu |
 | `setups` | Setupy vč. `context` JSON (od #575 nese band_sharpness/band_sharpness_pct/band_depth; od #952 i `band_metrics_version` = 2 — hloubka pásma nad Major se mapuje na (1, 2] místo saturace na +1, v1 a v2 se nesmí sdružovat; po rebuildu spustit `scripts/backfill_band_metrics.py`, idempotentní podle verze) a `mechanics_version` (v5 od #859: setupy z doby zamrzlého Max Painu (#826) se nehodnotí — nemažou se, jen se verzí vyřazují ze statistik) |
+| `setup_params` | Verzované prahy šablon setupů (#794 fáze 2, ADR-0033): append-only, poslední řádek platí; `created_by` (`engine` seed / `ui` / `script`), povinná `note`, `mechanics_version`, `params` JSON. Engine při prvním startu založí seed z `.env` + defaultů (od té chvíle **store přebíjí `.env`** klíče `GEXLENS_SETUP_*`), novou verzi přečte po NOTIFY nebo v k-tém cyklu. Setupy nesou `params_version` (NULL = před store). |
 | `adhoc_view` | Most UI → engine pro ad-hoc pohled (#521 C), viz kap. 12 |
 | `watchlist`, `alerts`, `annotations`, `settings` | CRUD přes API |
 
@@ -303,6 +304,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8000/docs` (OpenAPI).
 | `GET /bars/{symbol}?date=` | Lehké 1min OHLCV bary seance (#674/#678) — bez /replay balíku |
 | `GET /oidelta/{symbol}/{expiry}` | ΔOI posledních dvou archivovaných dnů + top movers (#674) |
 | `GET /journal`, `POST/PATCH/DELETE /journal/*` | Deník tradera (#673, fáze A) |
+| `GET /setups/params`, `POST /setups/params` `{params, note, created_by?}` | Parameter store setupů (ADR-0033): platná verze + historie + defaulty; POST založí novou verzi (jen změněné klíče, zbytek defaulty; neznámý klíč/typ = 422, bez `note` = 422) a probudí engine NOTIFY. Autonomie stupeň 1: zapisuje člověk, ne smyčka. |
 | `GET /gammacliff/{symbol}` | Dnešní odpad gammy + historie útesů (#576) |
 | `GET /fa/alpha` | Kalibrovaná α FA odhadu per symbol (#232) |
 | `GET /gexplane/{...}` | Dyn Charm/Vanna plochy (#204) |

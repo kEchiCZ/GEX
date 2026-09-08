@@ -97,7 +97,7 @@ from gexlens_engine.runtime_settings import (
     seed_reconnects,
     should_poll_settings,
 )
-from gexlens_engine.setups import SetupEngine
+from gexlens_engine.setups import SetupEngine, setup_params_from_settings
 from gexlens_engine.spot_stream import SpotStreamer
 from gexlens_engine.storage.diskwatch import DiskWatch, utcnow_ts
 from gexlens_engine.storage.emrespect_store import EmRespectRepository
@@ -112,6 +112,7 @@ from gexlens_engine.storage.parquet_store import SnapshotWriter
 from gexlens_engine.storage.probes_store import ProbeRepository
 from gexlens_engine.storage.retention import RetentionJob
 from gexlens_engine.storage.sentiment import LegacyNewsReactionsError, ensure_sentiment_schema
+from gexlens_engine.storage.setup_params_store import SetupParamsRepository
 from gexlens_engine.storage.setups_store import SetupsRepository
 from gexlens_engine.storage.t6_store import T6Repository
 from gexlens_engine.storage.tendency_store import TendencyRepository
@@ -559,6 +560,8 @@ async def create_pipeline(
     oi_repository: OIEodRepository,
     symbol: str,
     setups_repository: SetupsRepository | None = None,
+    # Prahy šablon z parameter store (#794 fáze 2); None = z .env/defaultů
+    setup_params: tuple[SetupParams, int | None] | None = None,
     tendency_repository: TendencyRepository | None = None,
     t6_repository: T6Repository | None = None,
     gamma_cliff_repository: GammaCliffRepository | None = None,
@@ -876,16 +879,12 @@ async def create_pipeline(
                 repository=setups_repository,
                 oi_repository=oi_repository,
                 publisher=publisher,
-                params=SetupParams(
-                    min_wall_dominance=settings.setup_min_wall_dominance,
-                    counter_flow_lookback=settings.setup_counter_flow_lookback,
-                    counter_stop_cooldown_minutes=settings.setup_counter_stop_cooldown_minutes,
-                    disabled_templates=settings.setup_disabled_template_set,
-                    min_risk_atr=settings.setup_min_risk_atr,
-                    max_rr=settings.setup_max_rr,
-                    max_stops_per_direction=settings.setup_max_stops_per_direction,
-                    direction_block_minutes=settings.setup_direction_block_minutes,
+                params=(
+                    setup_params[0]
+                    if setup_params is not None
+                    else setup_params_from_settings(settings)
                 ),
+                params_version=setup_params[1] if setup_params is not None else None,
                 feature_writer=writer if settings.feature_log_enabled else None,
             )
             if setups_repository is not None
@@ -1084,9 +1083,34 @@ async def main() -> None:
     watchlist_listener = WatchlistListener(settings.database_url)
     watchlist_listener.start()
     setups_repository: SetupsRepository | None = None
+    setup_params_repository: SetupParamsRepository | None = None
+    # Platná verze prahů šablon (#794 fáze 2, ADR-0033); None = bez store
+    setup_params_current: tuple[SetupParams, int | None] | None = None
     if settings.setups_enabled:
         setups_repository = SetupsRepository(db)
         await asyncio.to_thread(setups_repository.ensure_schema)
+        setup_params_repository = SetupParamsRepository(db)
+        await asyncio.to_thread(setup_params_repository.ensure_schema)
+        stored_params = await asyncio.to_thread(setup_params_repository.latest)
+        if stored_params is None:
+            # První start se store: seed = přesně to, s čím by engine jel bez
+            # něj (.env + defaulty) → nasazení nezmění chování ani o vlas
+            stored_params = await asyncio.to_thread(
+                setup_params_repository.save,
+                setup_params_from_settings(settings),
+                note="seed při startu enginu z .env a defaultů (#794 fáze 2)",
+                created_by="engine",
+            )
+            logger.info("Parametry setupů: založena verze %d (seed)", stored_params.version)
+        else:
+            logger.info(
+                "Parametry setupů: verze %d z %s (%s: %s)",
+                stored_params.version,
+                stored_params.created_ts.isoformat(),
+                stored_params.created_by,
+                stored_params.note,
+            )
+        setup_params_current = (stored_params.params, stored_params.version)
     tendency_repository: TendencyRepository | None = None
     if settings.tendency_enabled:
         tendency_repository = TendencyRepository(db)
@@ -2138,6 +2162,26 @@ async def main() -> None:
             stored = await asyncio.to_thread(watchlist_reader.settings_map, keys)
             subscription_alerts["enabled"] = stored.get("subscription_alert_enabled") is not False
             restart_pipelines = apply_runtime_settings(settings, stored)
+            # Nová verze prahů šablon (#794 fáze 2): API po zápisu pošle NOTIFY
+            # na týž kanál, takže se přepne do sekund; jinak v k-tém cyklu
+            if setup_params_repository is not None:
+                latest_version = await asyncio.to_thread(setup_params_repository.latest_version)
+                current_version = setup_params_current[1] if setup_params_current else None
+                if latest_version is not None and latest_version != current_version:
+                    stored_params = await asyncio.to_thread(setup_params_repository.latest)
+                    if stored_params is not None:
+                        setup_params_current = (stored_params.params, stored_params.version)
+                        for pipeline in pipelines.values():
+                            if pipeline.setup_engine is not None:
+                                pipeline.setup_engine.apply_params(
+                                    stored_params.params, stored_params.version
+                                )
+                        logger.info(
+                            "Parametry setupů přepnuty na verzi %d (%s: %s)",
+                            stored_params.version,
+                            stored_params.created_by,
+                            stored_params.note,
+                        )
             # Změna spojení (#446): odpojením se supervisor ConnectionManageru
             # sám připojí znovu — už s novým hostem/portem/clientId. Pipeline
             # se musí postavit znovu, subskripce patřily starému spojení.
@@ -2225,6 +2269,7 @@ async def main() -> None:
                     oi_repository,
                     symbol,
                     setups_repository=setups_repository,
+                    setup_params=setup_params_current,
                     tendency_repository=tendency_repository,
                     t6_repository=t6_repository,
                     gamma_cliff_repository=gamma_cliff_repository,

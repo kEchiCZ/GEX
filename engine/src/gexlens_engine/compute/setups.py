@@ -12,8 +12,9 @@ nikam nekopíruje; kopie zastarají a přesně tak vznikla kolize dvou T7.
 
 import datetime as dt
 import enum
+import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 
 from gexlens_engine.compute.bandregime import BAND_MAJOR_SHARE, BandZone
 
@@ -285,6 +286,72 @@ class SetupParams:
     # z jediného živého případu (24. 7.), edge nepotvrdila. Kód zůstává, aby
     # šlo šablonu přeměřit po opravě R-mechaniky (#302).
     disabled_templates: frozenset[str] = frozenset({SetupTemplate.DIVERGENCE_SPRING.value})
+
+
+#: Pole SetupParams, která se do parameter store (#794 fáze 2) neukládají —
+#: žádná taková dnes nejsou; seznam existuje, aby se výjimka musela vyslovit.
+PARAMS_EXCLUDED_FIELDS: frozenset[str] = frozenset()
+
+
+def params_to_dict(params: SetupParams) -> dict[str, object]:
+    """SetupParams → plochý JSON-friendly dict (frozenset → seřazený seznam).
+
+    Jediná serializace pro parameter store i API (#794 fáze 2): klíče = názvy
+    polí dataclass, hodnoty číslo nebo seznam řetězců.
+    """
+    result: dict[str, object] = {}
+    for name in _params_field_names():
+        value = getattr(params, name)
+        result[name] = sorted(value) if isinstance(value, frozenset) else value
+    return result
+
+
+def params_from_dict(values: Mapping[str, object]) -> SetupParams:
+    """Dict → SetupParams s validací: neznámý klíč nebo špatný typ = ValueError.
+
+    Chybějící klíče berou defaulty (starší verze parametrů se tak dá načíst
+    novějším kódem); `bool` se za číslo neuznává (True by tiše prošlo jako 1).
+    """
+    names = _params_field_names()
+    unknown = sorted(set(values) - set(names))
+    if unknown:
+        raise ValueError(f"Neznámé parametry setupů: {', '.join(unknown)}")
+    defaults = SetupParams()
+    kwargs: dict[str, object] = {}
+    for name in names:
+        if name not in values:
+            continue
+        value = values[name]
+        current = getattr(defaults, name)
+        if isinstance(current, frozenset):
+            if not isinstance(value, (list, tuple, set, frozenset)) or not all(
+                isinstance(item, str) for item in value
+            ):
+                raise ValueError(f"Parametr {name} musí být seznam řetězců")
+            kwargs[name] = frozenset(value)
+        elif isinstance(current, bool):
+            if not isinstance(value, bool):
+                raise ValueError(f"Parametr {name} musí být bool")
+            kwargs[name] = value
+        elif isinstance(current, int):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"Parametr {name} musí být celé číslo")
+            if float(value) != int(value):
+                raise ValueError(f"Parametr {name} musí být celé číslo, ne {value!r}")
+            kwargs[name] = int(value)
+        elif isinstance(current, float):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"Parametr {name} musí být číslo")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"Parametr {name} musí být konečné číslo")
+            kwargs[name] = float(value)
+        else:  # pragma: no cover — nový typ pole by sem neměl dojít bez úpravy
+            raise ValueError(f"Parametr {name} má nepodporovaný typ {type(current).__name__}")
+    return SetupParams(**kwargs)  # type: ignore[arg-type]
+
+
+def _params_field_names() -> tuple[str, ...]:
+    return tuple(f.name for f in fields(SetupParams) if f.name not in PARAMS_EXCLUDED_FIELDS)
 
 
 @dataclass(frozen=True)

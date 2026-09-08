@@ -36,6 +36,7 @@ from gexlens_engine.compute.setups import (
     max_pain_strike,
     r_result,
 )
+from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIEodRepository
@@ -45,6 +46,22 @@ from gexlens_engine.storage.setups_store import SetupsRepository, StoredSetup
 logger = logging.getLogger(__name__)
 
 HISTORY_MINUTES = 400
+
+
+def setup_params_from_settings(settings: Settings) -> SetupParams:
+    """Prahy šablon z `.env`/defaultů — seed parameter store při prvním startu
+    a fallback pro běh bez DB (#794 fáze 2). Jediné místo, kde se `.env` klíče
+    `setup_*` mapují na pole SetupParams."""
+    return SetupParams(
+        min_wall_dominance=settings.setup_min_wall_dominance,
+        counter_flow_lookback=settings.setup_counter_flow_lookback,
+        counter_stop_cooldown_minutes=settings.setup_counter_stop_cooldown_minutes,
+        disabled_templates=settings.setup_disabled_template_set,
+        min_risk_atr=settings.setup_min_risk_atr,
+        max_rr=settings.setup_max_rr,
+        max_stops_per_direction=settings.setup_max_stops_per_direction,
+        direction_block_minutes=settings.setup_direction_block_minutes,
+    )
 
 
 @dataclass
@@ -65,9 +82,25 @@ class SetupEngine:
     oi_repository: OIEodRepository
     publisher: PublisherLike
     params: SetupParams = field(default_factory=SetupParams)
+    # Verze parametrů z parameter store (#794 fáze 2, ADR-0033); None = params
+    # přišly z .env/defaultů bez store (testy, vypnutá DB) → setup nese NULL
+    params_version: int | None = None
     # Minutový feature log (#796): trénovací matice pro samoučící smyčku (#794).
     # None = vypnuto; zapisuje se do derived/{symbol}/features/ (mimo retenci).
     feature_writer: SnapshotWriter | None = None
+
+    def apply_params(self, params: SetupParams, version: int | None) -> bool:
+        """Přepne prahy za běhu (nová verze ve store). Vrací True při změně.
+
+        Detektory čtou `self.params` při každé minutě, takže stačí vyměnit
+        odkaz; otevřené setupy dojedou s úrovněmi, se kterými vznikly (ty jsou
+        uložené v řádku), cooldowny a blokace směru se nemažou.
+        """
+        if params == self.params and version == self.params_version:
+            return False
+        self.params = params
+        self.params_version = version
+        return True
 
     def __post_init__(self) -> None:
         self._history: deque[MinuteInputs] = deque(maxlen=HISTORY_MINUTES)
@@ -449,6 +482,7 @@ class SetupEngine:
                 confidence=confidence,
                 reason=candidate.reason,
                 context=context,
+                params_version=self.params_version,
             )
             self._last_created[template] = now
             self._open.append(

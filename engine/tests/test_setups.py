@@ -648,6 +648,8 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     engine = SetupEngine(
         symbol="ES", repository=repository, oi_repository=oi_repo, publisher=publisher
     )
+    # Verze prahů z parameter store (#794 fáze 2) — setup ji nese v řádku
+    engine.params_version = 4
 
     def bar(o: float, h: float, low: float, c: float) -> Bar:
         return Bar(ts=TS, open=o, high=h, low=low, close=c, volume=100.0)
@@ -681,6 +683,7 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     # pravidla se zapisují, setup vzniká bez ohledu na verdikt
     assert active[0].confidence == 65
     created_ctx = repository.list_for("ES")[0]["context"]
+    assert repository.list_for("ES")[0]["params_version"] == 4
     assert created_ctx["confidence_base"] == 55
     assert created_ctx["confidence_band_adjust"] == 10
     assert created_ctx["band_class"] == "inside"

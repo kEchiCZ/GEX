@@ -91,6 +91,12 @@ class MetaRepository:
         """Sdílený DB engine (lazy) — např. pro čtení OI archivu v /replay."""
         return self._db()
 
+    def notify_engine(self, payload: str = "") -> None:
+        """Probudí orchestrátor enginu (kanál watchlistu) — zápisy mimo `settings`,
+        které má engine přečíst hned (verze parametrů setupů, #794 fáze 2)."""
+        with self._db().begin() as conn:
+            _notify_watchlist(conn, payload)
+
     # ── watchlist ──────────────────────────────────────────────────
 
     def watchlist(self) -> list[dict[str, Any]]:
