@@ -291,7 +291,7 @@ test('vodorovný předěl mění výšku spodních panelů tažením (#169)', ()
   expect(window.localStorage.getItem('gexlens.panelHeight')).toBe('25')
 })
 
-test('úchyt panelu mění výšku jen jemu; globální předěl výšky sjednotí (#792)', () => {
+test('úchyt panelu je splitter se sousedem pod ním; globální předěl výšky sjednotí (#792, #1066)', () => {
   const socket = new LiveSocket('ws://test/ws/live', {
     webSocketFactory: (url) => new FakeWebSocket(url),
   })
@@ -300,21 +300,41 @@ test('úchyt panelu mění výšku jen jemu; globální předěl výšky sjednot
   const optSvg = () => screen.getByLabelText('Opt Vol panel').querySelector('svg')!
   expect(volSvg().getAttribute('height')).toBe('84')
 
-  // Úchyt na spodní hraně Vol panelu: tažení dolů zvětšuje 1:1 JEN Vol
+  // Úchyt mezi Vol a Opt Vol: tažení dolů o 40 px zvětší Vol A ZMENŠÍ Opt Vol
+  // o totéž — součet stojí, předěl sleduje kurzor (#1066: blok je ukotvený
+  // dole, samotné zvětšení Vol ho hnalo nahoru do heatmapy)
   const handle = screen.getByRole('separator', { name: 'Výška panelu Vol' })
   fireEvent.pointerDown(handle, { clientY: 100, pointerId: 1 })
   fireEvent.pointerMove(handle, { clientY: 140, pointerId: 1 })
   fireEvent.pointerUp(handle, { pointerId: 1 })
   expect(volSvg().getAttribute('height')).toBe('124')
-  expect(optSvg().getAttribute('height')).toBe('84')
+  expect(optSvg().getAttribute('height')).toBe('44')
 
-  // Klamp na nové minimum 25 (#792)
+  // Soused na minimu 25 (#792) posun zastaví: z 44 zbývá 19 px, ne 100
   fireEvent.pointerDown(handle, { clientY: 500, pointerId: 1 })
-  fireEvent.pointerMove(handle, { clientY: 100, pointerId: 1 })
+  fireEvent.pointerMove(handle, { clientY: 600, pointerId: 1 })
+  fireEvent.pointerUp(handle, { pointerId: 1 })
+  expect(volSvg().getAttribute('height')).toBe('143')
+  expect(optSvg().getAttribute('height')).toBe('25')
+
+  // Opačným směrem klampuje minimum taženého panelu; soused dostane zbytek
+  fireEvent.pointerDown(handle, { clientY: 500, pointerId: 1 })
+  fireEvent.pointerMove(handle, { clientY: 0, pointerId: 1 })
   fireEvent.pointerUp(handle, { pointerId: 1 })
   expect(volSvg().getAttribute('height')).toBe('25')
+  expect(optSvg().getAttribute('height')).toBe('143')
   // Individuální výšky se persistují (ADR-0007)
   expect(JSON.parse(window.localStorage.getItem('gexlens.panelHeights') ?? '{}').vol).toBe(25)
+
+  // Poslední panel souseda dole nemá — jeho úchyt nic nemění (#1066)
+  const separators = screen.getAllByRole('separator', { name: /Výška panelu/ })
+  const last = separators[separators.length - 1]
+  const lastSvg = last.parentElement!.querySelector('svg')!
+  const before = lastSvg.getAttribute('height')
+  fireEvent.pointerDown(last, { clientY: 100, pointerId: 1 })
+  fireEvent.pointerMove(last, { clientY: 160, pointerId: 1 })
+  fireEvent.pointerUp(last, { pointerId: 1 })
+  expect(lastSvg.getAttribute('height')).toBe(before)
 
   // Globální předěl individuální výšky maže — blok je zase jednotný
   const divider = screen.getByRole('separator', { name: 'Výška spodních panelů' })

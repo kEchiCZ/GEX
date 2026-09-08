@@ -1708,10 +1708,11 @@ function MainContent() {
                 // Tažení nahoru panely zvětšuje (předěl sedí nad nimi). Delta myši
                 // se dělí počtem viditelných panelů — mění se výška KAŽDÉHO z nich,
                 // takže hrana bloku jinak utíká N× rychleji než kurzor (#177)
+                // Počítají se VŠECHNY zapnuté panely (i Evo OI a Sentiment) —
+                // do #1066 jen čtyři, takže se šesti panely hrana utíkala 1,5×
                 const visibleCount = Math.max(
                   1,
-                  [toggles.vol, toggles.optVol, toggles.delta, toggles.deltaFlow].filter(Boolean)
-                    .length,
+                  Object.values(panelsVisible).filter(Boolean).length,
                 )
                 const next = drag.height + (drag.y - event.clientY) / visibleCount
                 setPanelHeight(

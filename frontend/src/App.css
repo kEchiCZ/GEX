@@ -988,6 +988,13 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   background: var(--accent);
 }
 
+/* Poslední panel nemá souseda dole a jeho spodní hrana je ukotvená k okraji
+   layoutu — úchyt by neměl co posouvat (#1066); výšku mění úchyt nad ním
+   nebo globální předěl */
+.bottom-panel:last-child > .panel-resize-h {
+  display: none;
+}
+
 /* Proklikávací setup alert ve zvonečku (#186) — vypadá jako řádek, chová se jako odkaz */
 .alert-link {
   display: block;
