@@ -8,8 +8,9 @@ vedle měřených barů v D−1. Tady se z existujících partic spočítá, co 
 patří a který duplikát vyhrává; zápis dělá `scripts/fix_bar_partitions.py`.
 
 Kdo vyhrává, když tutéž minutu nese víc řádků:
-1. měřený bar (`source` NULL/`ibkr`) před rekonstruovaným (`tasty_candle`) —
-   doplněná minuta není totéž co změřená (#617),
+1. původ (`bar_source_rank`): měřený bar (`source` NULL/`ibkr`) před doplněným
+   z IBKR historical (`ibkr_hist`, #1055) a ten před rekonstruovaným
+   (`tasty_candle`) — doplněná minuta není totéž co změřená (#617),
 2. větší objem — finální bar má ≥ objem než provizorní (ADR-0005),
 3. řádek z partice, kam minuta patří.
 """
@@ -20,7 +21,7 @@ import datetime as dt
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from gexlens_engine.storage.parquet_store import BAR_SOURCE_RECONSTRUCTED, bar_partition_day
+from gexlens_engine.storage.parquet_store import bar_partition_day, bar_source_rank
 
 BarRow = Mapping[str, object]
 
@@ -47,7 +48,7 @@ def _ts(row: BarRow) -> dt.datetime:
 
 def bar_rank(row: BarRow, file_day: dt.date) -> tuple[int, float, int]:
     """Řadicí klíč duplikátů — vyšší vyhrává (viz docstring modulu)."""
-    measured = 0 if row.get("source") == BAR_SOURCE_RECONSTRUCTED else 1
+    measured = bar_source_rank(row.get("source"))
     volume = float(row.get("volume") or 0.0)  # type: ignore[arg-type]
     at_home = 1 if bar_partition_day(_ts(row)) == file_day else 0
     return (measured, volume, at_home)

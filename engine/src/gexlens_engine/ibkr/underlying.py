@@ -11,11 +11,12 @@ import asyncio
 import datetime as dt
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.pacing import PacingGuard
+from gexlens_engine.storage.parquet_store import BAR_SOURCE_HISTORICAL
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,10 @@ class Bar:
     low: float
     close: float
     volume: float
+    #: Původ minuty (#1055): None = živá cesta (writer zapíše `ibkr`),
+    #: `ibkr_hist` = doplněno z IBKR historical — platná cena, ale v tu dobu
+    #: engine neměřil. Živá agregace pole nevyplňuje.
+    source: str | None = None
 
 
 class HistoricalClientLike(Protocol):
@@ -178,6 +183,11 @@ class UnderlyingBackfiller:
         )
 
     async def _fetch_day(self, symbol: str, day: dt.date) -> list[Bar]:
-        bars = list(await self._client.fetch_day_bars(symbol, day))
+        # Původ se razí tady, ne v klientovi (#1055): každý bar z historical
+        # cesty je doplněný, ať ho dodal živý IBKR klient nebo mock
+        bars = [
+            replace(bar, source=BAR_SOURCE_HISTORICAL)
+            for bar in await self._client.fetch_day_bars(symbol, day)
+        ]
         logger.debug("Backfill %s %s: %d barů", symbol, day, len(bars))
         return bars
