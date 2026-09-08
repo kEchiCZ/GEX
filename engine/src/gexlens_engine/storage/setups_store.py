@@ -60,6 +60,10 @@ setups_table = Table(
     # počítají jen aktuální, aby se nemíchaly výsledky různých systémů.
     # Řádky z doby před zavedením sloupce dostanou 1 (viz `ensure_schema`).
     Column("mechanics_version", Integer, nullable=False, server_default="1"),
+    # Verze parametrů (#794 fáze 2, ADR-0033): prahy šablon, se kterými setup
+    # vznikl. Odděleno od mechaniky — změna prahů srovnatelnost neláme, jen
+    # dovolí track record rozdělit podle verzí. NULL = před parameter store.
+    Column("params_version", Integer, nullable=True),
 )
 
 
@@ -88,6 +92,18 @@ class SetupsRepository:
     def ensure_schema(self) -> None:
         setups_metadata.create_all(self._engine)
         self._ensure_mechanics_version()
+        self._ensure_column("params_version", "INTEGER NULL")
+
+    def _ensure_column(self, name: str, ddl_type: str) -> None:
+        """Idempotentní ALTER pro sloupce přidané po vzniku tabulky (vzor #311)."""
+        inspector = inspect(self._engine)
+        if not inspector.has_table(setups_table.name):
+            return
+        columns = {col["name"] for col in inspector.get_columns(setups_table.name)}
+        if name in columns:
+            return
+        with self._engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {setups_table.name} ADD COLUMN {name} {ddl_type}"))
 
     def _ensure_mechanics_version(self) -> None:
         """Doplní sloupec `mechanics_version` do existující tabulky (#311).
@@ -126,6 +142,7 @@ class SetupsRepository:
         confidence: int,
         reason: str,
         context: dict[str, Any],
+        params_version: int | None = None,
     ) -> int:
         stmt = insert(setups_table).values(
             symbol=symbol,
@@ -141,6 +158,7 @@ class SetupsRepository:
             context=json.loads(json.dumps(context, default=str)),
             status="active",
             mechanics_version=SETUP_MECHANICS_VERSION,
+            params_version=params_version,
         )
         with self._engine.begin() as conn:
             result = conn.execute(stmt)

@@ -28,6 +28,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
 from gexlens_api.alerts import AlertEngine
@@ -57,6 +58,12 @@ from gexlens_engine.compute.gammacliff import build_cliff
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
 from gexlens_engine.compute.settle import trading_session_date
+from gexlens_engine.compute.setups import (
+    SETUP_MECHANICS_VERSION,
+    SetupParams,
+    params_from_dict,
+    params_to_dict,
+)
 from gexlens_engine.config import Settings, load_settings
 from gexlens_engine.gammacliff import read_expiries_at
 from gexlens_engine.storage.emrespect_store import EmRespectRepository
@@ -65,6 +72,7 @@ from gexlens_engine.storage.gammacliff_store import gamma_cliff_table
 from gexlens_engine.storage.ivrank_store import IvRankRepository
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
+from gexlens_engine.storage.setup_params_store import SetupParamsRepository
 from gexlens_engine.storage.setups_store import SetupsRepository
 from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.storage.volregime_store import VolRegimeRepository
@@ -123,6 +131,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             repo.ensure_schema()
             setups_repository_ref.append(repo)
         return setups_repository_ref[0]
+
+    setup_params_repository_ref: list[SetupParamsRepository] = []
+
+    def setup_params_repository() -> SetupParamsRepository:
+        if not setup_params_repository_ref:
+            repo = SetupParamsRepository(meta_repository.engine())
+            repo.ensure_schema()
+            setup_params_repository_ref.append(repo)
+        return setup_params_repository_ref[0]
 
     tendency_repository_ref: list[TendencyRepository] = []
 
@@ -438,6 +455,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "put_delta": deltas.get("P", 0.0),
             "movers": rows[: max(0, movers)],
         }
+
+    @app.get("/setups/params")
+    def setup_params_get(limit: int = 20) -> dict[str, object]:
+        """Parametry setupů (#794 fáze 2, ADR-0033): platná verze + historie + defaulty.
+
+        `defaults` = hodnoty zapsané v kódu (ADR-0004) pro srovnání s platnou
+        verzí; `current` je None jen před prvním startem enginu (seed dělá on).
+        """
+        repo = setup_params_repository()
+        history = repo.history(limit=max(1, min(limit, 200)))
+        return {
+            "current": history[0].as_dict() if history else None,
+            "history": [row.as_dict() for row in history],
+            "defaults": params_to_dict(SetupParams()),
+            "mechanics_version": SETUP_MECHANICS_VERSION,
+        }
+
+    class SetupParamsIn(BaseModel):
+        params: dict[str, object]
+        note: str = Field(min_length=3, max_length=500)
+        created_by: str = Field(default="ui", min_length=1, max_length=32)
+
+    @app.post("/setups/params", status_code=201)
+    def setup_params_post(body: SetupParamsIn) -> dict[str, object]:
+        """Nová verze prahů šablon — append-only, s povinným důvodem (audit).
+
+        Neznámý klíč nebo špatný typ = 422 (validace `params_from_dict`);
+        chybějící klíče berou defaulty. Engine přepne do sekund (NOTIFY).
+        Autonomie stupeň 1 (#794): tohle je ruční/schválený zápis, smyčka
+        sama sem nezapisuje.
+        """
+        try:
+            params = params_from_dict(body.params)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        repo = setup_params_repository()
+        stored = repo.save(params, note=body.note, created_by=body.created_by)
+        meta_repository.notify_engine("setup_params")
+        return stored.as_dict()
 
     @app.get("/setups/{symbol}")
     def setups_list(
