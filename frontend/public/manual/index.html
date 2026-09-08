@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.13 · září 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.16 · září 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); od verze 1.9 slouží <strong>tastytrade</strong> jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -112,7 +112,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Hlavička — horní řádek</strong></td>
-<td><strong>Kdo a za kolik</strong>: ticker a název instrumentu, <strong>poslední cena + denní změna v %</strong>, <strong>kalendářový selektor expirace</strong> (v1.12, níže) s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h&quot; — velké expirace nesou velké OI. Vedle selektoru je <strong>vyhledání symbolu</strong> (v1.12, #521): našeptávač CME produktů, výběr otevře <strong>ad-hoc pohled přes tastytrade</strong> — positioning libovolného produktu bez přidání do watchlistu a bez spotřeby IBKR linek (kotace + OI + BS greeks z mid; bez objemů, flows a Cum Δ — ty nese jen plný sběr). Takový symbol nese štítek <strong>„ad-hoc · tastytrade“</strong> a žije, dokud je zobrazený (~3 min po odchodu se uklízí); pro trvalé sledování ho přidej do watchlistu. <strong>Výběr položky z našeptávače pohled otevře rovnou</strong> — Enter je potřeba jen při ručním dopsání celého symbolu (v1.13, #983). Aby ad-hoc symbol data skutečně dostal, drží si engine ve streamu tastytrade <strong>rezervu na ~2 ad-hoc pohledy</strong> (v1.13, #982; do té doby mohl při plném streamu tiše mlčet). V selektoru najdeš i <strong>následující expiraci</strong> (sbírá se souběžně — čtení positioningu příští seance).</td>
+<td><strong>Kdo a za kolik</strong>: ticker a název instrumentu, <strong>poslední cena + denní změna v %</strong>, <strong>kalendářový selektor expirace</strong> (v1.12, níže) s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h&quot; — velké expirace nesou velké OI. Vedle selektoru je <strong>vyhledání symbolu</strong> (v1.12, #521): našeptávač CME produktů, výběr otevře <strong>ad-hoc pohled přes tastytrade</strong> — positioning libovolného produktu bez přidání do watchlistu a bez spotřeby IBKR linek (kotace + OI + BS greeks z mid; bez objemů, flows a Cum Δ — ty nese jen plný sběr). Takový symbol nese štítek <strong>„ad-hoc · tastytrade“</strong> a žije, dokud je zobrazený (~3 min po odchodu se uklízí); pro trvalé sledování ho přidej do watchlistu. Symbol z watchlistu štítek nikdy nemá — od v1.14 ad-hoc pohled ustoupí, jakmile má produkt plnou IBKR pipeline (dřív mohl po restartu enginu chvíli viset i nad daty z IBKR). <strong>Výběr položky z našeptávače pohled otevře rovnou</strong> — Enter je potřeba jen při ručním dopsání celého symbolu (v1.13, #983). Aby ad-hoc symbol data skutečně dostal, drží si engine ve streamu tastytrade <strong>rezervu na ~2 ad-hoc pohledy</strong> (v1.13, #982; do té doby mohl při plném streamu tiše mlčet). V selektoru najdeš i <strong>následující expiraci</strong> (sbírá se souběžně — čtení positioningu příští seance).</td>
 </tr>
 <tr>
 <td><strong>Hlavička — spodní řádek</strong></td>
@@ -441,6 +441,12 @@ podle zdi umisťuje stop, o ní jinak neví.</p>
 <ul>
 <li><strong>Nic se nedopočítává</strong>: žádná IV ani gamma z extrapolace — bez OI se
 hladina prostě nekreslí. Proto se OI zdi nemíchají mezi gamma zdi.</li>
+<li><strong>Cenovka nese i podíl outright objemu</strong> (v1.14, #1007): <code>· 74 % outright</code> říká,
+kolik dnešního objemu na striku zdi vytiskly outright obchody se stranou od
+burzy; zbytek je strukturovaný objem (nohy spreadů, bloky). Zeď z outright
+drží dealer jako plnou pozici, zeď ze spreadů má gammu částečně
+vykompenzovanou. Zatím jen informace — kreslení zdi to nemění, dokud
+kalibrace nedoloží rozdíl v chování ceny. Stejné číslo má i GEX žebřík.</li>
 <li><strong>Cenovka nese podíl na OI své strany</strong>: nízké procento = plochý profil,
 „zeď&quot; je jen nejvyšší z mnoha srovnatelných striků. <strong>Slabé zdi (pod 20 %)
 se nekreslí vůbec</strong> — práh leží v mezeře naměřeného rozdělení (hodnoty se
@@ -543,6 +549,30 @@ backfill, jiný den nebo symbol, #977).</p>
 </li>
 </ul>
 <p>Čteš z něj na první pohled, <strong>kde sedí dominantní call a put koncentrace</strong> — typicky walls.</p>
+<h3>Outright vs. strukturovaný objem v profilu (v1.14, #1007)</h3>
+<p>Objemová část sloupce v profilu <strong>Vol + OI Δ</strong> má dva tóny téže barvy strany:</p>
+<ul>
+<li><strong>plná sytost = outright objem</strong> — obchody, které vytiskly trade se stranou
+agresora od burzy (dxFeed TimeAndSale),</li>
+<li><strong>tlumený tón = strukturovaný a dohodnutý objem</strong> — nohy spreadů (vertikály,
+condory, rolly) a blokové obchody. CME je jako obchod nevysílá, do objemu
+kontraktu ale patří; rozdíl je tedy účetní, ne odhad.</li>
+</ul>
+<p>Není to šrafování — to patří výhradně chybějícímu OI. Když rozdělení chybí
+(starší den bez řady tisků, výpadek tastytrade), sloupec se nedělí a tooltip
+řekne proč. Tooltip jinak ukáže <code>C: 77 outright (39 %) · 122 struktura | P: …</code>.</p>
+<p><strong>Jak číst:</strong></p>
+<ul>
+<li><strong>Důvěra v Cum Δ na striku.</strong> Cum Δ z tisků popisuje jen outright; u striku,
+kde 60 % objemu nikdy nevytisklo trade, vypovídá o menšině dění.</li>
+<li><strong>Kvalita zdi.</strong> Zeď z outright objemu drží dealer jako plnou pozici, zeď ze
+spreadů má gammu částečně vykompenzovanou druhou nohou — stejné OI, slabší
+tlak. Proto totéž číslo nese cenovka OI zdí a žebříku.</li>
+<li><strong>Záměr na 0DTE.</strong> Rostoucí strukturovaný objem kolem úrovně = sázka na
+rozsah; prudce rostoucí outright nad cenou = pokus o průraz.</li>
+</ul>
+<p>Poctivé omezení: rozdíl obsahuje i blokové obchody, které směrové být mohou.
+Čti to jako „strukturovaný a dohodnutý objem&quot;, ne čistě „spready&quot;.</p>
 <h3>PUT / CALL panel (pod profilem)</h3>
 <p>Poměr obou stran vybrané expirace ve třech jednotkách (dropdown): <strong>Kontrakty</strong>
 (kusy), <strong>Prémie $</strong> (kolik peněz za pozice někdo zaplatil — mid × kontrakty ×
@@ -603,7 +633,7 @@ z minula.</p>
 </tr>
 <tr>
 <td><strong>Cum Δ</strong></td>
-<td>Kumulativní delta flow jako plocha <strong>nad nulou (zelená) / pod nulou (červená)</strong>. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Počítá se s plnou klasifikací agresora (tick-by-tick v hot zóně, midpoint test jinde) a resetuje se na začátku dne.</td>
+<td>Kumulativní delta flow jako plocha <strong>nad nulou (zelená) / pod nulou (červená)</strong>. Roste = agresivní kupci call delty / prodejci put delty; klesá = opačně. Znaménko dnes dává minutový midpoint test (poslední cena vs. střed bid/ask) pro celý řetěz; přesnější strana agresora od burzy z dxFeed pro celý sbíraný řetěz přijde s #615 (v1.14 — ADR-0032). Resetuje se na začátku obchodního dne.</td>
 </tr>
 <tr>
 <td><strong>Evo OI</strong></td>
@@ -1071,7 +1101,13 @@ a výš ⇒ širší stopy, menší pozice, rychlejší cíle.</li>
 <li><strong>Expected move</strong> — očekávaný denní pohyb ±X bodů z ceny ATM straddlu
 (kolik trh reálně platí za dnešní pohyb; stejná hodnota jako EM± linie
 v Traders mode, kap. 11e). Před openem jde o průběžný odhad z overnight
-kotací, openem se zamkne. Údaj v % spotu je srovnatelný napříč dny.</li>
+kotací, openem se zamkne. Údaj v % spotu je srovnatelný napříč dny.
+Jak často pásmo drží, ukazuje řádek „EM respekt&quot; pod ním — a od v1.15
+(#876) víme, že to řídí volatilitní režim, ne gamma režim: v nízké
+volatilitě close skončí uvnitř EM v ~94 % seancí, ve zvýšené a krizové
+v ~36 %, zatímco negativní vs. pozitivní gamma dává 70 % vs. 64 %
+(rozdíl v šumu). Dotyk hrany přijde v 86 % dnů, takže pásmo čti jako
+„kde se dnes obchoduje&quot;, ne jako zeď; podrobně kap. 18.</li>
 <li><strong>IV percentil</strong> (v1.11) — kolik dnů v klouzavém roce mělo NIŽŠÍ implied
 volatilitu podkladu (30d IV index, řada z IBKR s roční historií). Je to
 implied protějšek řádku „Režim (rozsah)&quot;: režim měří, jak velké pohyby
@@ -1156,11 +1192,11 @@ které se přepne hned.</p>
 </tr>
 <tr>
 <td><strong>Engine (IBKR pipeline)</strong></td>
-<td><strong>Rozsah strikes (± body od spotu)</strong> — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, šířka hot zóny, retence dat (dny), disk limit (GB)</td>
+<td><strong>Rozsah strikes (± body od spotu)</strong> — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, retence dat (dny), disk limit (GB). <em>Šířka hot zóny</em> zmizela (v1.14, #1006) — přepínač nic neřídil</td>
 </tr>
 <tr>
 <td><strong>Stav enginu</strong></td>
-<td>Read-only stav: spojení + port (při výpadku IBKR i <strong>„bez spojení X min&quot;</strong>, #770), účet (paper), <strong>Zdroj dat</strong> (v1.13, #950: <code>řetěz ibkr · spot ibkr</code>, při fallbacku upozornění, že běží tastytrade), tlačítko <strong>Přepojit IBKR</strong> (níže), Greeks X/Y + repair fronta, OI řetězu, lines %, <strong>chyby subskripce</strong> (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance&quot; a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console)</td>
+<td>Read-only stav: spojení + port (při výpadku IBKR i <strong>„bez spojení X min&quot;</strong>, #770), účet (paper), <strong>Zdroj dat</strong> (v1.13, #950: <code>řetěz ibkr · spot ibkr</code>, při fallbacku upozornění, že běží tastytrade), tlačítko <strong>Přepojit IBKR</strong> (níže), řádek <strong>Cum Δ</strong> (v1.14, #615: zdroj znaménka <code>midpoint</code> / <code>dxfeed</code> a per symbol podíl objemu, který v dnešním dni přišel z tisků se stranou od burzy — pravdivý ukazatel pokrytí místo dřívější „šířky hot zóny“), Greeks X/Y + repair fronta, OI řetězu, lines %, <strong>chyby subskripce</strong> (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance&quot; a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console)</td>
 </tr>
 <tr>
 <td><strong>Tastytrade</strong> (v1.10)</td>
@@ -1184,10 +1220,9 @@ které se přepne hned.</p>
 </tr>
 </tbody></table>
 <blockquote>
-<p><strong>Sekce Engine se týká výhradně IBKR.</strong> Velikost dávky i šířka hot zóny
-jsou odvozené od limitů tvého IBKR účtu (100 market data lines, 5
-tick-by-tick streamů — ADR-0001), rozsah strikes řídí rotační sweep přes
-IBKR. <strong>Tastytrade</strong> je od v1.9 plnohodnotná záloha (cena podkladu i celý
+<p><strong>Sekce Engine se týká výhradně IBKR.</strong> Velikost dávky je odvozená od
+limitu tvého IBKR účtu (100 market data lines — ADR-0001), rozsah strikes
+řídí rotační sweep přes IBKR. <strong>Tastytrade</strong> je od v1.9 plnohodnotná záloha (cena podkladu i celý
 řetěz při výpadku IBKR, doplňování OI) — její stav ukazuje read-only blok
 výše; konfigurace (OAuth tajemství) zůstává v <code>.env</code> a vyžaduje restart
 enginu (viz ADMIN-MANUAL).</p>
@@ -1325,7 +1360,7 @@ zůstanou ve formuláři. Téma (Dark/Light) se ukládá hned, zbytek přes Ulo�
 </tr>
 </tbody></table>
 <h3>Setupy</h3>
-<p>Když detektor najde setup, přijde alert <strong>Nový setup</strong> a nad grafem se ukáže <strong>karta setupu</strong> pro daný instrument: směr (LONG/SHORT), šablona, <strong>datum a čas vzniku</strong> (kdy se splnily podmínky), úrovně <strong>Entry / Cíl / Stop</strong>, RRR a důvěra, plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce <strong>Setupy</strong> v sidebaru.</p>
+<p>Když detektor najde setup, přijde alert <strong>Nový setup</strong> a nad grafem se ukáže <strong>karta setupu</strong> pro daný instrument: směr (LONG/SHORT), šablona, <strong>datum a čas vzniku</strong> (kdy se splnily podmínky), úrovně <strong>Entry / Cíl / Stop</strong>, RRR a důvěra, od v1.16 štítek <strong>polohy v tlumící zóně</strong> (uvnitř pásma / přechod / mimo pásmo / bez pásma s posunem důvěry, kap. 18), plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce <strong>Setupy</strong> v sidebaru.</p>
 <p><strong>Denní statistika seance</strong> (obrazovka Setupy): nad seznamem je souhrn dnešního
 dne — kolik obchodů proběhlo, kolik úspěšných a kolik ztrátových, úspěšnost
 v %, největší ziskový a největší ztrátový obchod, od v1.12 <strong>Σ dnes</strong> —
@@ -1506,6 +1541,19 @@ kumulativy <strong>nenuluje</strong> (dopočtou se od otevření seance).</p>
 <li><strong>Short gamma (záporný NetGEX, červená):</strong> musí <strong>kupovat do růstu a prodávat do poklesu</strong> → jdou s pohybem, trh <strong>zesilují</strong>. Trendy a prudké pohyby.</li>
 </ul>
 <p><strong>Klíčové pravidlo: režim neříká směr, říká, KTERÝ TYP obchodu dnes funguje.</strong> Zelený režim = obchoduj návraty (fade od hran). Červený režim = obchoduj průrazy (momentum). Nejčastější ztráty = fade v červeném dni, honění breakoutu v zeleném.</p>
+<p><strong>Co režim NEříká: jak velký bude den (v1.15, #876).</strong> Změřeno na 63 seancích
+ES + NQ (20. 7.–4. 9. 2026): close skončil mimo pásmo expected move v <strong>30 %</strong>
+dnů s negativní gammou a v <strong>36 %</strong> dnů s pozitivní — rozdíl −6 p. b.,
+95% interval [−28, +16], průměrný rozsah dne 2,3× vs. 2,4× EM. Hypotéza
+„v červeném režimu se EM proráží častěji&quot; se tedy <strong>nepotvrdila</strong>; pokud něco,
+je to naopak, a rozdíl je v mezích šumu. To, jestli EM dnes drží, říká
+<strong>volatilitní režim</strong> (karta Volatilita, kap. 11f): v nízké volatilitě close
+skončil uvnitř EM v 94 % seancí, ve zvýšené a krizové jen v 36 % — bez ohledu
+na barvu gamma režimu. Prakticky: <strong>režim ti vybírá typ obchodu, vol režim
+vybírá, jak daleko smíš cíl a stop položit.</strong> Zelený den ve zvýšené volatilitě
+znamená fade, ale s cílem uvnitř pásma, které dnes pravděpodobně neudrží —
+tedy dřívější výběr zisku, ne držení k hraně EM. A hrana EM se <strong>dotkne
+v 86 % seancí</strong>: dotyk sám o sobě není zpráva, teprve close mimo ano.</p>
 <h3>Settle a gamma crunch</h3>
 <p><strong>Settle</strong> = vypořádání expirace: u denních ES/NQ opcí <strong>20:00 UTC (22:00 SELČ, 16:00 New York)</strong>. V tu chvíli opce zaniknou a jejich gamma z trhu zmizí — model i mapa počítají právě do tohoto okamžiku.</p>
 <p><strong>Gamma crunch:</strong> gamma opce je největší přesně na striku a čím méně času zbývá, tím je špičatější — ráno široký kopec přes několik strikes, večer úzká jehla na jednom striku. Zajišťovací toky tak mají poslední 1–2 hodiny největší páku: cena se buď <strong>přilepí</strong> k velkému striku (pin), nebo po proražení <strong>prudce akceleruje</strong>. V Dyn GEX mapě to vidíš jako stahování barev do tenkých jasných pásů směrem doprava.</p>
@@ -1652,6 +1700,66 @@ nesou dál a přidělit ho jiné mechanice by obě populace spláclo do jedné
 statistiky. Volná čísla se přidělují z jednoho seznamu v kódu, ne podle
 zadání jednotlivých úprav.</li>
 </ul>
+<h3>Setupy a poloha v tlumící zóně (v1.16, #1060)</h3>
+<p>Kalibrace nad 985 uzavřenými setupy (#575) ukázala, že <strong>kde vůči tlumící
+zóně Dyn GEX setup vzniká, odděluje expektanci</strong>: uvnitř pásma Ø +0,21 R
+(úspěšnost 37 %), mimo pásmo −0,24 R (27 %), bez pásma −0,15 R. Hloubka
+polohy je přenositelná mezi ES a NQ — na rozdíl od bodových prahů i ATR.</p>
+<p>Poloha se měří hloubkou <code>band_depth</code> v místě entry: <strong>−1</strong> profil na ceně
+nulový (bez pásma) · <strong>0</strong> hrana All · <strong>1</strong> hrana Major · <strong>2</strong> vrchol profilu.
+Z ní vzniká štítek na kartě setupu a ve sloupci <strong>Pásmo</strong> obrazovky Setupy:</p>
+<table>
+<thead>
+<tr>
+<th>Štítek</th>
+<th>Hloubka</th>
+<th>Posun důvěry</th>
+<th>Čtení</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>uvnitř pásma</strong></td>
+<td>(1, 2]</td>
+<td><strong>+10</strong></td>
+<td>entry nad hranou Major — hedging cenu tlumí, fade šablony tu historicky fungují</td>
+</tr>
+<tr>
+<td><strong>přechod</strong></td>
+<td>(0, 1]</td>
+<td>±0</td>
+<td>mezi hranami All a Major — nerozhodnuto, sleduje se s gamma režimem</td>
+</tr>
+<tr>
+<td><strong>mimo pásmo</strong></td>
+<td>(−1, 0]</td>
+<td><strong>−15</strong></td>
+<td>pod hranou All — tlumení slabé, setupy tu ztrácely</td>
+</tr>
+<tr>
+<td><strong>bez pásma</strong></td>
+<td>−1</td>
+<td><strong>−15</strong></td>
+<td>profil bez tlumící zóny (čistě negativní gamma) — nejsilnější podoba „mimo&quot;</td>
+</tr>
+</tbody></table>
+<p><strong>Co se NEděje:</strong> žádný setup se neblokuje a žádná šablona se nevyřazuje
+(rozhodnutí 7. 9. 2026 — tvrdá brána zamítnuta, dokud efekt nepotvrdí jednotná
+mechanika v5; ve v5 zatím vidět není, n = 278). Důvěra je jediné, co se posune;
+základ šablony zůstává v kontextu setupu a v tooltipu štítku.</p>
+<p><strong>Stínová brána.</strong> K setupu se zapisuje, co by udělala dvě kandidátní pravidla —
+tooltip štítku je ukazuje, obrazovka Setupy má pro ně dlaždice se žlutým pruhem
+(počet uzavřených · Ø R per skupina):</p>
+<ul>
+<li><strong>jen poloha</strong> — mimo pásmo / bez pásma by setup nevznikl (block), zbytek prošel;</li>
+<li><strong>poloha × gamma režim</strong> — uvnitř vždy, přechod jen v negativní gammě, mimo
+nikdy; bez známého režimu je verdikt „nerozhodnuto&quot; a do skupin nevstupuje.</li>
+</ul>
+<p>Vyhodnocení <strong>~5. 10. 2026</strong> na mechanice v5 se třemi síty proti šumu (min. 100
+setupů v nejmenší skupině, Wilsonova dolní mez rozdílu nad nulou, permutační
+test interakce poloha × režim). Předregistrovaná předpověď: skupina „block&quot; je
+horší o ≥ 0,2 R než „pass&quot;. Potvrdí-li se, zapne se jedno z pravidel naostro
+(per šablona, bez max_pain_pin — ten měl mimo pásmo kladnou expektanci);
+jinak zůstane hloubka jen posunem důvěry.</p>
 <h3>Flip: naměřený vs. dynamický = flip ZÓNA</h3>
 <p>V aplikaci jsou dva flipy — <strong>obě čáry měří totéž dvěma metodami</strong>:</p>
 <table>
@@ -1831,7 +1939,7 @@ podkladu</strong>, ne absolutní čísla.</p>
 </tr>
 <tr>
 <td><strong>Hot zóna</strong></td>
-<td>Pásmo ATM strikes sledované tick-by-tick pro přesnou klasifikaci agresora.</td>
+<td>Historický termín z původního návrhu (IBKR tick-by-tick pásmo ATM ±15) — nikdy nebyl v provozu a od v1.14 je nahrazen: stranu agresora pro celý sbíraný řetěz dodá dxFeed <code>TimeAndSale</code> (#615, ADR-0032). V textech o řetězu snapshotů znamená „hot zóna“ jen pásmo ATM ±15 strikes, které se sbírá každý cyklus.</td>
 </tr>
 <tr>
 <td><strong>Stale</strong></td>
