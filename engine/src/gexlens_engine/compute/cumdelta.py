@@ -109,6 +109,15 @@ class FlowRow:
     # Zdroj znaménka (ADR-0032): partice před fází 3 mají NULL = midpoint.
     # Srovnání řad před/po přepnutí stojí na tomhle sloupci, ne na datu.
     source: str | None = None
+    # Pokrytí trade větví ZA TUTO MINUTU (#1071): kontrakty s tiskem se stranou,
+    # bez strany, bez tisku (struktura) a bez jediného tisku (fallback midpointem),
+    # plus tisky zahozené pro chybějící deltu. None = trade větev neběžela
+    # (tasty odpojené) — nula by tvrdila „nic nepokryto", což není měření.
+    printed_volume: float | None = None
+    unknown_volume: float | None = None
+    structured_volume: float | None = None
+    fallback_volume: float | None = None
+    dropped_no_delta: int | None = None
 
 
 def midpoint_sign(last: float, bid: float, ask: float) -> int:
@@ -137,6 +146,8 @@ class CumDeltaTracker:
         self._printed_since_bar: dict[OptionContractSpec, float] = {}
         self._unknown_since_bar: dict[OptionContractSpec, float] = {}
         self._coverage = CumDeltaCoverage()
+        # Stav pokrytí při poslední uzávěrce minuty — FlowRow nese přírůstek (#1071)
+        self._coverage_at_close = CumDeltaCoverage()
         #: Běží trade větev pro tento instrument? Nastavuje orchestrátor každý
         #: cyklus (tasty připojené + univerzum); bez toho je rozklad NULL.
         self.dx_active: bool = False
@@ -191,6 +202,7 @@ class CumDeltaTracker:
         self._printed_since_bar.clear()
         self._unknown_since_bar.clear()
         self._coverage = CumDeltaCoverage()
+        self._coverage_at_close = CumDeltaCoverage()
         self._breakdowns.clear()
 
     def roll_session(self, session_date: dt.date) -> bool:
@@ -308,13 +320,19 @@ class CumDeltaTracker:
                 printed=printed_total if self.dx_active else None,
                 structured=max(delta_volume - printed_total, 0.0) if self.dx_active else None,
             )
+        # Pokrytí (#1071) se měří NEZÁVISLE na zdroji znaménka: v režimu midpoint
+        # říká, co by trade větev pokryla, kdyby se přepnula — jinak by verdikt
+        # #1018 stál na číslech, která se začnou počítat až po přepnutí.
+        # Fallback se počítá jen s běžící trade větví (nebo v režimu dxfeed):
+        # bez tasty je „bez tisku" každý kontrakt a číslo by nic neměřilo.
+        if printed > 0.0:
+            self._coverage.structured_volume += max(delta_volume - printed - unknown, 0.0)
+        elif self.dx_active or self._source == "dxfeed":
+            self._coverage.fallback_volume += delta_volume
         if self._source == "dxfeed" and printed > 0.0:
             volume_to_sign = min(unknown, delta_volume)
-            self._coverage.structured_volume += max(delta_volume - printed - unknown, 0.0)
         else:
             volume_to_sign = delta_volume
-            if self._source == "dxfeed":
-                self._coverage.fallback_volume += delta_volume
         if volume_to_sign <= 0.0:
             return 0.0
         sign = midpoint_sign(last, bid, ask)
@@ -324,10 +342,27 @@ class CumDeltaTracker:
         return flow
 
     def close_minute(self, ts_min: dt.datetime) -> FlowRow:
-        """Uzavře minutu: vrátí bod řady (flowΔ minuty, průběžná CumΔ) a vynuluje minutu."""
+        """Uzavře minutu: vrátí bod řady (flowΔ minuty, průběžná CumΔ) a vynuluje minutu.
+
+        Pokrytí za minutu (#1071) = rozdíl denních čítačů od poslední uzávěrky;
+        bez trade větve (a mimo režim dxfeed) zůstává NULL.
+        """
+        measured = self.dx_active or self._source == "dxfeed"
+        now, last = self._coverage, self._coverage_at_close
         row = FlowRow(
-            ts_min=ts_min, flow_delta=self._minute_flow, cum_delta=self._cum, source=self._source
+            ts_min=ts_min,
+            flow_delta=self._minute_flow,
+            cum_delta=self._cum,
+            source=self._source,
+            printed_volume=now.printed_volume - last.printed_volume if measured else None,
+            unknown_volume=now.unknown_volume - last.unknown_volume if measured else None,
+            structured_volume=(
+                now.structured_volume - last.structured_volume if measured else None
+            ),
+            fallback_volume=now.fallback_volume - last.fallback_volume if measured else None,
+            dropped_no_delta=now.dropped_no_delta - last.dropped_no_delta if measured else None,
         )
+        self._coverage_at_close = CumDeltaCoverage(**vars(now))
         self._minute_flow = 0.0
         return row
 

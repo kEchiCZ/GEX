@@ -330,8 +330,15 @@ async def test_one_cycle_produces_full_day_artifacts(
         "futures_cvd_delta",  # CVD podkladu (#829) — bez tasty větve NULL
         "futures_cvd",
         "source",  # ADR-0032: zdroj znaménka toku
+        # Pokrytí trade větví za minutu (#1071) — bez tasty větve NULL, ne nuly
+        "printed_volume",
+        "unknown_volume",
+        "structured_volume",
+        "fallback_volume",
+        "dropped_no_delta",
     ]
     assert list(flow["source"]) == ["midpoint"]
+    assert flow["printed_volume"].isna().all() and flow["fallback_volume"].isna().all()
     day_bars = pd.read_parquet(settings.derived_dir / "ES" / "bars" / f"{day}.parquet")
     assert day_bars["close"].iloc[0] == SPOT
 

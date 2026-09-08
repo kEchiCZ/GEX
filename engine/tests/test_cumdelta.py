@@ -183,6 +183,12 @@ def test_close_minute_series_and_persistence(tmp_path: Path) -> None:
         "futures_cvd_delta",
         "futures_cvd",
         "source",
+        # Pokrytí trade větví za minutu (#1071)
+        "printed_volume",
+        "unknown_volume",
+        "structured_volume",
+        "fallback_volume",
+        "dropped_no_delta",
     ]
     assert list(frame["cum_delta"]) == [50.0, 25.0]
     assert frame["futures_cvd"].isna().all()
@@ -337,3 +343,46 @@ def test_breakdown_jen_pri_prirustku() -> None:
     tracker.add_bar(contract, 100.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
     tracker.add_bar(contract, 100.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
     assert tracker.take_breakdowns() == {}
+
+
+# ── Pokrytí per minuta do řady flow (#1071) ───────────────────────────
+def test_pokryti_se_meri_v_rezimu_midpoint_a_jde_do_flow_row_po_minutach() -> None:
+    """#1071: v režimu midpoint se pokrytí měří jako v dxfeed (co by trade větev
+    pokryla) a FlowRow nese přírůstek za minutu, ne denní kumulativ."""
+    tracker = CumDeltaTracker(multiplier=50.0, source="midpoint")
+    tracker.dx_active = True
+    c = spec("C")
+    tracker.add_bar(c, 100.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
+    # minuta 1: 6 tisků se stranou + 1 bez strany, přírůstek baru 15 → struktura 8
+    tracker.add_dx_trade(c, size=6.0, aggressor="BUY", delta=0.4)
+    tracker.add_dx_trade(c, size=1.0, aggressor="UNDEFINED", delta=0.4)
+    tracker.add_dx_trade(c, size=2.0, aggressor="BUY", delta=None)  # bez delty
+    tracker.add_bar(c, 115.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
+    row_1 = tracker.close_minute(dt.datetime(2026, 9, 8, 14, 0, tzinfo=dt.UTC))
+    assert (row_1.printed_volume, row_1.unknown_volume) == (6.0, 1.0)
+    assert row_1.structured_volume == 8.0
+    assert row_1.fallback_volume == 0.0
+    assert row_1.dropped_no_delta == 1
+    # tok v režimu midpoint je dál z celého přírůstku baru — zdroj znaménka se nemění
+    assert row_1.flow_delta == pytest.approx(15 * 0.4 * 50.0)
+    # minuta 2: bar bez jediného tisku → fallback 5, ostatní přírůstky 0
+    tracker.add_bar(c, 120.0, last=10.3, bid=10.0, ask=10.4, delta=0.4)
+    row_2 = tracker.close_minute(dt.datetime(2026, 9, 8, 14, 1, tzinfo=dt.UTC))
+    assert (row_2.printed_volume, row_2.structured_volume) == (0.0, 0.0)
+    assert row_2.fallback_volume == 5.0
+    assert row_2.dropped_no_delta == 0
+    # denní součet ve /status zůstává kumulativní
+    stats = tracker.day_stats()
+    assert stats["structured_volume"] == 8.0 and stats["fallback_volume"] == 5.0
+
+
+def test_pokryti_bez_trade_vetve_je_null() -> None:
+    """Tasty odpojené v režimu midpoint → sloupce NULL, ne nuly (nula = „nic nepokryto")."""
+    tracker = CumDeltaTracker(multiplier=50.0)
+    c = spec("P")
+    tracker.add_bar(c, 10.0, last=5.0, bid=5.0, ask=5.4, delta=-0.3)
+    tracker.add_bar(c, 14.0, last=5.0, bid=5.0, ask=5.4, delta=-0.3)
+    row = tracker.close_minute(dt.datetime(2026, 9, 8, 14, 0, tzinfo=dt.UTC))
+    assert row.printed_volume is None and row.fallback_volume is None
+    assert row.dropped_no_delta is None
+    assert tracker.day_stats()["fallback_volume"] == 0.0  # bez větve se fallback neměří
