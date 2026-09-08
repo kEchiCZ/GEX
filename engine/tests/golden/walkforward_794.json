@@ -1,0 +1,28 @@
+{
+ "_comment": "Golden pro walk-forward (#794 fáze 3, ADR-0034): 12 seancí, in-sample 4, out-of-sample 2, metrika sum_r. Ručně: fold 1 IS d1–d4 (base 4, A 8, B 2) → A; OOS d5–d6 A = 4, base 2. Fold 2 IS d3–d6 (A 8) → A; OOS d7–d8 A = 0, base 2. Fold 3 IS d5–d8 (base 4, A 4 = shoda → baseline) → base; OOS d9–d10 2/2. Fold 4 IS d7–d10 (base 4, A 0, B 2) → base; OOS d11–d12 2/2. OOS strategie Σ 8 = baseline Σ 8, Ø Δ 0 → žádný návrh. Podíl foldů A 50 %, base 50 %, B 0 %.",
+ "params": {"in_sample_days": 4, "out_sample_days": 2, "metric": "sum_r", "min_oos_days": 4},
+ "baseline": "base",
+ "series": {
+  "base": {"2026-08-03": 1, "2026-08-04": 1, "2026-08-05": 1, "2026-08-06": 1, "2026-08-07": 1, "2026-08-10": 1, "2026-08-11": 1, "2026-08-12": 1, "2026-08-13": 1, "2026-08-14": 1, "2026-08-17": 1, "2026-08-18": 1},
+  "A":    {"2026-08-03": 2, "2026-08-04": 2, "2026-08-05": 2, "2026-08-06": 2, "2026-08-07": 2, "2026-08-10": 2, "2026-08-11": 0, "2026-08-12": 0, "2026-08-13": 0, "2026-08-14": 0, "2026-08-17": 0, "2026-08-18": 0},
+  "B":    {"2026-08-03": 0.5, "2026-08-04": 0.5, "2026-08-05": 0.5, "2026-08-06": 0.5, "2026-08-07": 0.5, "2026-08-10": 0.5, "2026-08-11": 0.5, "2026-08-12": 0.5, "2026-08-13": 0.5, "2026-08-14": 0.5, "2026-08-17": 0.5, "2026-08-18": 0.5}
+ },
+ "expected": {
+  "folds": [
+   {"in": ["2026-08-03", "2026-08-06"], "out": ["2026-08-07", "2026-08-10"], "chosen": "A", "in_metric": 8.0, "out_sum_r": 4.0, "baseline_out_sum_r": 2.0},
+   {"in": ["2026-08-05", "2026-08-10"], "out": ["2026-08-11", "2026-08-12"], "chosen": "A", "in_metric": 8.0, "out_sum_r": 0.0, "baseline_out_sum_r": 2.0},
+   {"in": ["2026-08-07", "2026-08-12"], "out": ["2026-08-13", "2026-08-14"], "chosen": "base", "in_metric": 4.0, "out_sum_r": 2.0, "baseline_out_sum_r": 2.0},
+   {"in": ["2026-08-11", "2026-08-14"], "out": ["2026-08-17", "2026-08-18"], "chosen": "base", "in_metric": 4.0, "out_sum_r": 2.0, "baseline_out_sum_r": 2.0}
+  ],
+  "oos_days": 8,
+  "oos_sum_r": 8.0,
+  "oos_baseline_sum_r": 8.0,
+  "mean_diff_per_day": 0.0,
+  "t_stat": 0.0,
+  "p_value": 1.0,
+  "alpha_bonferroni": 0.025,
+  "chosen_share": {"base": 0.5, "A": 0.5, "B": 0.0},
+  "proposal": null
+ },
+ "sharpe_check": {"_comment": "[1, 2, 3, 4]: mean 2,5, výběrová σ 1,29099, × √252 = 30,741", "values": [1, 2, 3, 4], "expected": 30.741}
+}
