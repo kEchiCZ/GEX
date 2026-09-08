@@ -1075,15 +1075,26 @@ class SnapshotWriter:
             minutes |= self.bar_minutes(symbol, day)
         return minutes
 
+    def dx_flow_path(self, symbol: str, day: dt.date) -> Path:
+        """Partice stínové řady CumΔ (#615): den = obchodní seance, ne UTC den."""
+        return self._settings.derived_dir / symbol / "cumdelta_dx" / f"{day.isoformat()}.parquet"
+
     def write_dx_flow(self, symbol: str, day: dt.date, rows: Sequence[object]) -> Path:
         """Stínové CumΔ minuty (#615) do derived/{sym}/cumdelta_dx/{date}.parquet.
 
         Retence derived/ (14 dní) tu stačí: řada slouží ~10sekčnímu měření
-        pro spread_leg ADR a vyčíslení rozdílu vs. živé CumΔ.
+        pro spread_leg ADR a vyčíslení rozdílu vs. živé CumΔ. Upsert podle
+        `ts_min` (#1070): restart uprostřed minuty by jinak zapsal minutu dvakrát.
         """
-        path = self._settings.derived_dir / symbol / "cumdelta_dx" / f"{day.isoformat()}.parquet"
-        buffer = self._buffer(path, DX_FLOW_SCHEMA)
-        return buffer.append_and_write([asdict(row) for row in rows])  # type: ignore[call-overload]
+        buffer = self._buffer(self.dx_flow_path(symbol, day), DX_FLOW_SCHEMA)
+        return buffer.append_and_write(
+            [asdict(row) for row in rows],  # type: ignore[call-overload]
+            key="ts_min",
+        )
+
+    def dx_flow_seed(self, symbol: str, day: dt.date) -> "DxFlowSeed | None":
+        """Navázání stínu po restartu (#1070) — viz `read_dx_flow_seed`. Blokující."""
+        return read_dx_flow_seed(self.dx_flow_path(symbol, day))
 
     def write_flow(self, symbol: str, day: dt.date, rows: Sequence[FlowRowLike]) -> Path:
         """Přidá flowΔ/CumΔ minuty do partice derived/{sym}/flow/{date}.parquet."""
@@ -1144,6 +1155,62 @@ def read_netflow_latest(
         if current is None or ts >= current[0]:
             latest[key] = (ts, float(net) if net is not None else 0.0)
     return {key: net for key, (_, net) in latest.items()}
+
+
+@dataclass(frozen=True)
+class DxFlowSeed:
+    """Stav stínové řady CumΔ z uložené partice seance (#1070).
+
+    Kumulativy jsou z posledního řádku, denní čítače součet přes všechny řádky
+    — přesně to, co by akumulátor držel, kdyby engine neběžel od nuly.
+    """
+
+    ts_min: dt.datetime
+    cum_ring: float
+    cum_hot: float
+    trades: int
+    unknown_side: int
+    volume: float
+    dropped_no_context: int
+
+
+def read_dx_flow_seed(path: Path) -> DxFlowSeed | None:
+    """Poslední stav stínové řady z partice `cumdelta_dx` (#1070); None = bez řádků.
+
+    Stín do #1070 začínal po každém restartu enginu od nuly (1–4× denně), takže
+    uložené kumulativy nešly hladinově srovnat s živou řadou, která se navazuje
+    podle #638. Partice stínu je per obchodní seance, takže okno není třeba —
+    všechny řádky patří do téže seance. Blokující čtení — volat přes to_thread.
+    """
+    if not path.exists():
+        return None
+    table = pq.read_table(path, schema=DX_FLOW_SCHEMA)
+    if table.num_rows == 0:
+        return None
+    ts_col = table.column("ts_min").to_pylist()
+    cum_ring = table.column("cum_ring").to_pylist()
+    cum_hot = table.column("cum_hot").to_pylist()
+    last_idx: int | None = None
+    for idx, ts in enumerate(ts_col):
+        if ts is None:
+            continue
+        if last_idx is None or ts >= ts_col[last_idx]:
+            last_idx = idx
+    if last_idx is None:
+        return None
+
+    def total(name: str) -> float:
+        return float(sum(value or 0 for value in table.column(name).to_pylist()))
+
+    return DxFlowSeed(
+        ts_min=ts_col[last_idx],
+        cum_ring=float(cum_ring[last_idx] or 0.0),
+        cum_hot=float(cum_hot[last_idx] or 0.0),
+        trades=int(total("trades")),
+        unknown_side=int(total("unknown_side")),
+        volume=total("volume"),
+        dropped_no_context=int(total("dropped_no_context")),
+    )
 
 
 def read_last_cum_delta(

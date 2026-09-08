@@ -1996,7 +1996,21 @@ async def main() -> None:
                     for dx_symbol, dx_shadow in list(dx_shadows.items()):
                         spot_price, spot_fresh = _tasty_spot(dx_symbol)
                         dx_shadow.set_spot(spot_price if spot_fresh else None)
-                        dx_shadow.roll_session(session)
+                        if dx_shadow.roll_session(session):
+                            # Navázání po restartu uprostřed seance (#1070): partice
+                            # stínu je per seance, takže její poslední řádek je
+                            # přesně stav, ve kterém předchozí běh skončil
+                            seed = await asyncio.to_thread(writer.dx_flow_seed, dx_symbol, session)
+                            if seed is not None and seed.ts_min < minute:
+                                dx_shadow.seed(seed)
+                                logger.info(
+                                    "Stín CumΔ %s navázán z partice %s (cum_ring %.0f, %d tradů)"
+                                    " — restart uprostřed seance",
+                                    dx_symbol,
+                                    seed.ts_min.isoformat(),
+                                    seed.cum_ring,
+                                    seed.trades,
+                                )
                         row = dx_shadow.close_minute(minute)
                         await asyncio.to_thread(writer.write_dx_flow, dx_symbol, session, [row])
                 except Exception:
