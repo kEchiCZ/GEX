@@ -282,3 +282,71 @@ def test_script_prints_markdown_and_json(tmp_path: Path) -> None:
     assert js.returncode == 0, js.stderr
     assert '"sign_agree_close": true' in js.stdout
     assert f'"session": "{SESSION.isoformat()}"' in js.stdout
+
+
+def test_live_coverage_is_summed_from_flow_partition(tmp_path: Path) -> None:
+    """#1071: pokrytí z živé partice — podíl tisků, fallback v RTH, zahozené tisky;
+    partice bez sloupců (před #1071) dává None místo nul."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import pytest
+
+    from gexlens_engine.storage.cumdelta_compare import load_live_series
+
+    derived = tmp_path / "derived"
+    session = dt.date(2026, 9, 10)
+    # 14:00 UTC = RTH (léto), 02:00 UTC = mimo RTH
+    rth = dt.datetime(2026, 9, 10, 14, 0, tzinfo=dt.UTC)
+    night = dt.datetime(2026, 9, 10, 2, 0, tzinfo=dt.UTC)
+    rows = [
+        {
+            "ts_min": rth,
+            "flow_delta": 1.0,
+            "cum_delta": 1.0,
+            "printed_volume": 60.0,
+            "unknown_volume": 10.0,
+            "structured_volume": 5.0,
+            "fallback_volume": 30.0,
+            "dropped_no_delta": 2,
+        },
+        {
+            "ts_min": night,
+            "flow_delta": 1.0,
+            "cum_delta": 2.0,
+            "printed_volume": 20.0,
+            "unknown_volume": 0.0,
+            "structured_volume": 0.0,
+            "fallback_volume": 80.0,
+            "dropped_no_delta": 1,
+        },
+        {"ts_min": rth + dt.timedelta(minutes=1), "flow_delta": 0.0, "cum_delta": 2.0},
+    ]
+    path = derived / "ES" / "flow" / f"{session.isoformat()}.parquet"
+    path.parent.mkdir(parents=True)
+    pq.write_table(pa.Table.from_pylist(rows, schema=FLOW_SCHEMA), path)
+
+    series, coverage = load_live_series(derived, "ES", session)
+    assert len(series) == 3
+    assert coverage is not None
+    assert coverage.printed_share == pytest.approx(80 / 200)  # (60+20) / (80+10+110)
+    assert coverage.fallback_share_rth == pytest.approx(30 / 100)  # jen minuta 14:00
+    assert coverage.dropped_no_delta == 3
+
+    # Partice před #1071: sloupce chybí → None
+    old = derived / "NQ" / "flow" / f"{session.isoformat()}.parquet"
+    old.parent.mkdir(parents=True)
+    legacy_schema = pa.schema(
+        [
+            ("ts_min", pa.timestamp("us", tz="UTC")),
+            ("flow_delta", pa.float64()),
+            ("cum_delta", pa.float64()),
+        ]
+    )
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"ts_min": rth, "flow_delta": 1.0, "cum_delta": 1.0}], schema=legacy_schema
+        ),
+        old,
+    )
+    _, none_coverage = load_live_series(derived, "NQ", session)
+    assert none_coverage is None

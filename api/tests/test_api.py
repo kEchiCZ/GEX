@@ -40,6 +40,12 @@ class _Flow:
         self.futures_cvd: float | None = None
         # Zdroj znaménka (ADR-0032) — fixture jako partice před #615 fází 3
         self.source: str | None = None
+        # Pokrytí trade větví (#1071) — fixture bez tasty větve = NULL
+        self.printed_volume: float | None = None
+        self.unknown_volume: float | None = None
+        self.structured_volume: float | None = None
+        self.fallback_volume: float | None = None
+        self.dropped_no_delta: int | None = None
 
 
 def ts(minute: int) -> dt.datetime:

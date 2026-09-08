@@ -101,9 +101,10 @@ def session_table(results: Sequence[SessionComparison]) -> str:
         "| Seance | Sym | Min. spol. (jen dx / jen live) | max |Δ| | max |Δ| % rozsahu | "
         "tvar. odch. | rozsah dx/live | r hladiny | r přírůstky | r přír. RTH | "
         "r přír. mimo RTH | max |Δ| RTH / mimo | opačné zn. | close dx / live | zn. close | "
-        "tisky (bez strany / bez kontextu) | řetěz dx/live | r přír. nejl. lag | poznámka |"
+        "tisky (bez strany / bez kontextu) | pokrytí tisky | fallback RTH | "
+        "řetěz dx/live | r přír. nejl. lag | poznámka |"
     )
-    sep = "|" + "|".join(["---"] * 19) + "|"
+    sep = "|" + "|".join(["---"] * 21) + "|"
     lines = [header, sep]
     for r in results:
         note_parts = list(r.notes)
@@ -129,6 +130,9 @@ def session_table(results: Sequence[SessionComparison]) -> str:
                     f"{_fmt(r.close_dx, 0)} / {_fmt(r.close_live, 0)}",
                     _fmt_bool(r.sign_agree_close),
                     f"{r.dx_trades} ({r.dx_unknown_side} / {r.dx_dropped_no_context})",
+                    # Pokrytí z živé partice (#1071); „—" = partice před #1071
+                    _pct(r.live_printed_share),
+                    _pct(r.live_fallback_share_rth),
                     f"{r.dx_chain_breaks} / {r.live_chain_breaks}",
                     _fmt_best_lag(r),
                     "; ".join(note_parts) if note_parts else "",

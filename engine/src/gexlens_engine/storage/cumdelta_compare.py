@@ -128,12 +128,18 @@ class SessionComparison:
     corr_increments_by_lag: tuple[tuple[int, float | None], ...]
     #: k s nejvyšší korelací přírůstků (None, když žádná není spočitatelná)
     best_lag: int | None
-    #: Pokrytí ze stínové partice (jen to, co se ukládá — `printed_share`,
-    #: `fallback_volume`, `dropped_no_delta` jsou pouze v živém `/status`)
+    #: Pokrytí ze stínové partice
     dx_trades: int
     dx_unknown_side: int
     dx_dropped_no_context: int
     dx_volume: float
+    #: Pokrytí trade větví z živé partice `flow` (#1071): podíl klasifikovaného
+    #: objemu s tiskem se stranou, podíl fallbacku (bez jediného tisku) v RTH
+    #: a tisky zahozené pro chybějící deltu. None = partice sloupce nenese
+    #: (před #1071) nebo trade větev celou seanci neběžela.
+    live_printed_share: float | None
+    live_fallback_share_rth: float | None
+    live_dropped_no_delta: int | None
     #: Proč seance nepatří do souhrnu; None = použitelná
     unusable_reason: str | None
     notes: tuple[str, ...] = field(default_factory=tuple)
@@ -312,12 +318,37 @@ def load_dx_series(
     return series, coverage, zoned
 
 
+@dataclass(frozen=True)
+class LiveCoverage:
+    """Součty pokrytí trade větví za seanci z partice `flow` (#1071)."""
+
+    printed: float
+    unknown: float
+    fallback: float
+    fallback_rth: float
+    classified_rth: float
+    dropped_no_delta: int
+
+    @property
+    def printed_share(self) -> float | None:
+        classified = self.printed + self.unknown + self.fallback
+        return self.printed / classified if classified > 0 else None
+
+    @property
+    def fallback_share_rth(self) -> float | None:
+        return self.fallback_rth / self.classified_rth if self.classified_rth > 0 else None
+
+
 def load_live_series(
     derived_dir: Path, symbol: str, session: dt.date
-) -> dict[dt.datetime, tuple[float, float]]:
-    """Živá řada seance: ts → (cum_delta, flow_delta) z partic UTC dnů D−1 + D."""
+) -> tuple[dict[dt.datetime, tuple[float, float]], LiveCoverage | None]:
+    """Živá řada seance: ts → (cum_delta, flow_delta) z partic UTC dnů D−1 + D,
+    plus součty pokrytí trade větví (#1071); None = žádná minuta pokrytí nenese."""
     bounds = session_bounds(session)
     series: dict[dt.datetime, tuple[float, float]] = {}
+    printed = unknown = fallback = fallback_rth = classified_rth = 0.0
+    dropped = 0
+    measured = False
     for offset in (-1, 0):
         day = session + dt.timedelta(days=offset)
         path = derived_dir / symbol / "flow" / f"{day.isoformat()}.parquet"
@@ -328,7 +359,25 @@ def load_live_series(
             cum = float(row.get("cum_delta") or 0.0)  # type: ignore[arg-type]
             flow = float(row.get("flow_delta") or 0.0)  # type: ignore[arg-type]
             series[ts] = (cum, flow)
-    return series
+            if row.get("printed_volume") is None:
+                continue  # minuta bez trade větve / partice před #1071
+            measured = True
+            p = float(row.get("printed_volume") or 0.0)  # type: ignore[arg-type]
+            u = float(row.get("unknown_volume") or 0.0)  # type: ignore[arg-type]
+            f = float(row.get("fallback_volume") or 0.0)  # type: ignore[arg-type]
+            printed += p
+            unknown += u
+            fallback += f
+            dropped += int(float(row.get("dropped_no_delta") or 0))  # type: ignore[arg-type]
+            if not outside_us_rth(ts):
+                fallback_rth += f
+                classified_rth += p + u + f
+    coverage = (
+        LiveCoverage(printed, unknown, fallback, fallback_rth, classified_rth, dropped)
+        if measured
+        else None
+    )
+    return series, coverage
 
 
 def compare_series(
@@ -340,6 +389,7 @@ def compare_series(
     coverage: Mapping[str, float] | None = None,
     zoned: bool = False,
     rechain_series: bool = False,
+    live_coverage: LiveCoverage | None = None,
 ) -> SessionComparison:
     """Metriky shody nad již načtenými řadami (testovatelné bez disku)."""
     common = sorted(set(dx) & set(live))
@@ -407,6 +457,9 @@ def compare_series(
         dx_unknown_side=int(cov.get("unknown_side", 0.0)),
         dx_dropped_no_context=int(cov.get("dropped_no_context", 0.0)),
         dx_volume=float(cov.get("volume", 0.0)),
+        live_printed_share=live_coverage.printed_share if live_coverage else None,
+        live_fallback_share_rth=live_coverage.fallback_share_rth if live_coverage else None,
+        live_dropped_no_delta=live_coverage.dropped_no_delta if live_coverage else None,
         unusable_reason=unusable,
         notes=tuple(notes),
     )
@@ -416,9 +469,16 @@ def compare_session(
     derived_dir: Path, symbol: str, session: dt.date, *, rechain_series: bool = False
 ) -> SessionComparison:
     dx, coverage, zoned = load_dx_series(derived_dir, symbol, session)
-    live = load_live_series(derived_dir, symbol, session)
+    live, live_coverage = load_live_series(derived_dir, symbol, session)
     return compare_series(
-        symbol, session, dx, live, coverage=coverage, zoned=zoned, rechain_series=rechain_series
+        symbol,
+        session,
+        dx,
+        live,
+        coverage=coverage,
+        zoned=zoned,
+        rechain_series=rechain_series,
+        live_coverage=live_coverage,
     )
 
 

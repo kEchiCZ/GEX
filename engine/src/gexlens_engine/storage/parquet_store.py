@@ -211,6 +211,14 @@ FLOW_SCHEMA = pa.schema(
         # Zdroj znaménka toku (ADR-0032): "midpoint" / "dxfeed"; NULL = partice
         # před #615 fází 3 (= midpoint). Srovnání řad před/po stojí na něm.
         ("source", pa.string()),
+        # Pokrytí trade větví za minutu (#1071): do teď jen v živém /status
+        # (od startu enginu, restart nuluje) — verdikt #1018 potřebuje řadu.
+        # NULL = trade větev neběžela nebo partice před #1071.
+        ("printed_volume", pa.float64()),
+        ("unknown_volume", pa.float64()),
+        ("structured_volume", pa.float64()),
+        ("fallback_volume", pa.float64()),
+        ("dropped_no_delta", pa.int64()),
     ]
 )
 
@@ -453,6 +461,21 @@ class FlowRowLike(Protocol):
 
     @property
     def source(self) -> str | None: ...
+
+    @property
+    def printed_volume(self) -> float | None: ...
+
+    @property
+    def unknown_volume(self) -> float | None: ...
+
+    @property
+    def structured_volume(self) -> float | None: ...
+
+    @property
+    def fallback_volume(self) -> float | None: ...
+
+    @property
+    def dropped_no_delta(self) -> int | None: ...
 
 
 @dataclass(frozen=True)
@@ -1109,6 +1132,11 @@ class SnapshotWriter:
                     "futures_cvd_delta": row.futures_cvd_delta,
                     "futures_cvd": row.futures_cvd,
                     "source": row.source,
+                    "printed_volume": row.printed_volume,
+                    "unknown_volume": row.unknown_volume,
+                    "structured_volume": row.structured_volume,
+                    "fallback_volume": row.fallback_volume,
+                    "dropped_no_delta": row.dropped_no_delta,
                 }
                 for row in rows
             ]
