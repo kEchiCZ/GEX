@@ -21,6 +21,32 @@ Set-Location $repo
 
 function Write-Step($text) { Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $text" }
 
+# Log běžícího kontejneru zmizí s jeho recreate (json-file driver žije s
+# kontejnerem). 7. 9. (#1054) tak po deployi nešlo dohledat, co engine dělal
+# v pátek, a falešný poplach se řešil hodinu bez důkazu. Proto se před KAŽDÝM
+# recreate log uloží do data/logs/ — a když se uložit nedá, deploy se zastaví:
+# log je důkaz, ne volitelný krok (#1056).
+function Save-EngineLog([string]$Suffix = '') {
+    $dir = Join-Path $repo 'data/logs'
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
+    $path = Join-Path $dir "engine-$stamp$Suffix.log"
+    docker logs gex-engine-1 2>&1 | Out-File -FilePath $path -Encoding utf8
+    if ($LASTEXITCODE -ne 0) {
+        throw "Uložení logu enginu do $path selhalo (docker logs exit $LASTEXITCODE) — bez důkazu se nenasazuje (#1056)."
+    }
+    $size = (Get-Item $path).Length
+    if ($size -eq 0) {
+        throw "Log enginu je prázdný ($path) — kontejner gex-engine-1 neběží nebo nic nezapsal; ověř ručně, než ho nahradíš (#1056)."
+    }
+    Write-Step "Log enginu uložen: $path ($([math]::Round($size / 1KB)) kB)"
+    # Retence 30 dní — data/logs/ je mimo retention job enginu (ten sahá jen
+    # na snapshots/ a derived/), takže úklid dělá skript sám
+    Get-ChildItem $dir -Filter 'engine-*.log' |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } |
+        Remove-Item -Force
+}
+
 # ── 1) Je trh zavřený? ────────────────────────────────────────────────
 # Globex jede neděle 17:00 CT → pátek 16:00 CT s denní pauzou 16:00–17:00 CT.
 $ct = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, 'Central Standard Time')
@@ -44,6 +70,9 @@ docker tag gex-engine:latest "gex-engine:$BackupTag"
 Write-Step "Záloha image: gex-engine:$BackupTag"
 docker compose -f compose.yml build engine
 if ($LASTEXITCODE -ne 0) { throw 'Build enginu selhal — nic se nerestartovalo.' }
+
+# ── 3a) Log dosavadního běhu, než ho recreate smaže (#1056) ───────────
+Save-EngineLog
 
 # ── 4) Restart jen enginu ─────────────────────────────────────────────
 # --no-deps: API, Postgres ani news-engine se nedotýkáme
@@ -80,6 +109,9 @@ if ($healthy) {
 
 # ── 6) Rollback ───────────────────────────────────────────────────────
 Write-Warning "Engine není zdravý (status $state, restartů $restarts, pád v logu: $crashed) — vracím $BackupTag."
+# Log padlé verze je přesně to, co se bude zítra ladit — uložit, než ho
+# force-recreate zahodí (#1056); selhání uložení tady rollback NEzastaví
+try { Save-EngineLog -Suffix '-crashed' } catch { Write-Warning "Log padlé verze se nepodařilo uložit: $_" }
 docker tag "gex-engine:$BackupTag" gex-engine:latest
 docker compose -f compose.yml up -d --no-deps --force-recreate engine
 Start-Sleep -Seconds 20
