@@ -16,7 +16,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
-from gexlens_engine.compute.bandregime import band_context
+from gexlens_engine.compute.bandregime import (
+    adjusted_confidence,
+    band_context,
+    band_gate_context,
+)
 from gexlens_engine.compute.gexfield import gamma_edges
 from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import (
@@ -417,8 +421,22 @@ class SetupEngine:
                 if last_stop is not None and (now - last_stop).total_seconds() < stop_cooldown_s:
                     continue
             # Pásmové metriky (#575 fáze 1): obě varianty ostrosti + hloubka
-            # z Dyn profilu minuty — jen měření, brána se nemění
-            context = {**candidate.context, **band_context(runtime.last_profile, candidate.entry)}
+            # z Dyn profilu minuty. Nad hloubkou stojí (#1060, fáze 2) úprava
+            # confidence a dvě stínová pravidla brány — setup vzniká vždy,
+            # k řádku se jen zapíše, co by každé pravidlo udělalo.
+            band = band_context(runtime.last_profile, candidate.entry)
+            depth = band.get("band_depth")
+            gate = band_gate_context(
+                depth if isinstance(depth, float) else None,
+                cast(str | None, candidate.context.get("gex_regime")),
+            )
+            confidence = adjusted_confidence(candidate.confidence, gate)
+            context: dict[str, object] = {
+                **candidate.context,
+                **band,
+                **gate,
+                "confidence_base": candidate.confidence,
+            }
             setup_id = self.repository.create(
                 symbol=self.symbol,
                 expiry=runtime.expiry,
@@ -428,7 +446,7 @@ class SetupEngine:
                 entry=candidate.entry,
                 target=candidate.target,
                 stop=candidate.stop,
-                confidence=candidate.confidence,
+                confidence=confidence,
                 reason=candidate.reason,
                 context=context,
             )
@@ -445,7 +463,7 @@ class SetupEngine:
                         entry=candidate.entry,
                         target=candidate.target,
                         stop=candidate.stop,
-                        confidence=candidate.confidence,
+                        confidence=confidence,
                         reason=candidate.reason,
                         status="active",
                     ),
@@ -463,7 +481,7 @@ class SetupEngine:
                     "symbol": self.symbol,
                     "message": f"Nový setup {side} ({template}): entry {candidate.entry:g}, "
                     f"cíl {candidate.target:g}, stop {candidate.stop:g} "
-                    f"(RRR {candidate.rrr:.1f}, conf. {candidate.confidence} %). "
+                    f"(RRR {candidate.rrr:.1f}, conf. {confidence} %). "
                     f"{candidate.reason}",
                     "ts": now.timestamp(),
                 },

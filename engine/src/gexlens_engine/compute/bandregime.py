@@ -24,10 +24,13 @@ ostřejší přechod". Tady se totéž pravidlo počítá nad VÁŽENÝM profile
   a nese většinu vzorku, takže se nově mapuje na (1, 2] místo do jediného bodu.
   Hodnoty v1 a v2 se NESMÍ míchat — proto `band_metrics_version` v contextu.
 
-Žádná brána na hodnotách nestojí — fáze 1 je zapisuje do `context` setupů.
+Fáze 1 hodnoty jen zapisovala do `context` setupů; od #1060 (fáze 2) na
+`band_depth` stojí úprava confidence a dvě STÍNOVÁ pravidla brány (nic
+se neblokuje) — viz sekce „Brána podle polohy v zóně" níže.
 """
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from gexlens_engine.compute.gexfield import GexProfile, price_weight_per_percent
@@ -44,6 +47,100 @@ BAND_ALL_SHARE = 0.40
 #: 3 = kotva v nejbližší zóně (cena mimo zónu se měří), hrany per veličina,
 #:     hloubka i bez zóny (#1057) — do v2 vracelo 87 % setupů None
 BAND_METRICS_VERSION = 3
+
+
+# ── Brána podle polohy v zóně (#1060 — fáze 2 z #575) ───────────────────────
+#
+# Rozhodnutí uživatele 7. 9. 2026: varianta B (confidence) + varianta C ve
+# stínu, tvrdá brána A zamítnuta. Nic se neblokuje a žádná šablona se
+# nevyřazuje — poloha jen posune confidence a k setupu se zapíše, co by
+# udělalo každé ze dvou kandidátních pravidel. Vyhodnocení ~5. 10. 2026 na
+# mechanice v5 (min. 100 setupů v nejmenší skupině, Wilsonova mez, permutační
+# test interakce poloha × režim) rozhodne, zda se některé pravidlo zapne.
+
+#: Třídy polohy podle `band_depth` (hranice z kalibrace #575 fáze 1)
+BAND_CLASS_INSIDE = "inside"  # (1, 2] — nad hranou Major až k vrcholu
+BAND_CLASS_TRANSITION = "transition"  # (0, 1] — mezi hranami All a Major
+BAND_CLASS_OUTSIDE = "outside"  # (−1, 0] — pod hranou All, profil na ceně > 0
+BAND_CLASS_NO_ZONE = "no_zone"  # −1 — profil na ceně nulový / bez tlumící zóny
+
+#: Úprava confidence per třída (varianta B, body procent)
+BAND_CONFIDENCE_ADJUST: dict[str, int] = {
+    BAND_CLASS_INSIDE: 10,
+    BAND_CLASS_TRANSITION: 0,
+    BAND_CLASS_OUTSIDE: -15,
+    BAND_CLASS_NO_ZONE: -15,
+}
+
+GATE_PASS = "pass"
+GATE_BLOCK = "block"
+#: Pravidlo potřebuje gamma režim a ten není znám — verdikt se nevymýšlí
+GATE_UNKNOWN = "unknown"
+
+
+def band_class(depth: float) -> str:
+    """Třída polohy z hloubky −1 … +2 (definice v3, #1057).
+
+    Hranice jsou uzavřené shora: hrana All (0) je ještě `outside`, hrana
+    Major (1) ještě `transition` — stejné koše jako v kalibraci #575, aby se
+    verdikt ~5. 10. dal srovnat s fází 1.
+    """
+    if depth <= -1.0:
+        return BAND_CLASS_NO_ZONE
+    if depth <= 0.0:
+        return BAND_CLASS_OUTSIDE
+    if depth <= 1.0:
+        return BAND_CLASS_TRANSITION
+    return BAND_CLASS_INSIDE
+
+
+def band_gate_simple(position: str) -> str:
+    """Kandidát 1: jen poloha — mimo zónu / bez zóny by setup nevznikl."""
+    if position in (BAND_CLASS_OUTSIDE, BAND_CLASS_NO_ZONE):
+        return GATE_BLOCK
+    return GATE_PASS
+
+
+def band_gate_regime(position: str, gex_regime: str | None) -> str:
+    """Kandidát 2 (obsah varianty C): poloha × gamma režim.
+
+    Uvnitř vždy, přechod jen v negativní gammě, mimo zónu nikdy. Bez známého
+    režimu je verdikt přechodu `unknown` — do statistik pass/block nevstupuje.
+    """
+    if position == BAND_CLASS_INSIDE:
+        return GATE_PASS
+    if position == BAND_CLASS_TRANSITION:
+        if gex_regime == "negative":
+            return GATE_PASS
+        if gex_regime == "positive":
+            return GATE_BLOCK
+        return GATE_UNKNOWN
+    return GATE_BLOCK
+
+
+def band_gate_context(depth: float | None, gex_regime: str | None) -> dict[str, object]:
+    """Klíče brány do `context` setupu; prázdný dict = hloubka nezměřena.
+
+    `confidence_band_adjust` je posun, který engine přičte k základní
+    confidence šablony (základ zůstává v `confidence_base`, aby šla úprava
+    kdykoli odečíst — #794 se učí nad oběma čísly).
+    """
+    if depth is None:
+        return {}
+    position = band_class(depth)
+    return {
+        "band_class": position,
+        "confidence_band_adjust": BAND_CONFIDENCE_ADJUST[position],
+        "band_gate_simple": band_gate_simple(position),
+        "band_gate_regime": band_gate_regime(position, gex_regime),
+    }
+
+
+def adjusted_confidence(base: int, gate: Mapping[str, object]) -> int:
+    """Confidence po úpravě polohou, ořezaná na 0–100 (procenta nepřetečou)."""
+    adjust = gate.get("confidence_band_adjust", 0)
+    shift = int(adjust) if isinstance(adjust, (int, float)) else 0
+    return max(0, min(100, base + shift))
 
 
 @dataclass(frozen=True)

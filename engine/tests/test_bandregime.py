@@ -1,10 +1,15 @@
 """Pásmové metriky (#575 fáze 1): ostrost obou variant, hloubka, krajní stavy."""
 
 import datetime as dt
+import json
+from pathlib import Path
+from typing import cast
 
 from gexlens_engine.compute.bandregime import (
     BAND_METRICS_VERSION,
+    adjusted_confidence,
     band_context,
+    band_gate_context,
     band_metrics,
 )
 from gexlens_engine.compute.gexfield import GexProfile, price_weight_per_percent
@@ -189,3 +194,56 @@ def test_context_nese_verzi_metrik() -> None:
 
     # Nezměřeno = žádné klíče, tedy ani verze (verze patří k hodnotám)
     assert band_context(None, 7040.0) == {}
+
+
+# ── Brána podle polohy v zóně (#1060 — B + C ve stínu) ─────────────────────
+
+
+def _golden_1060() -> dict[str, list[dict[str, object]]]:
+    path = Path(__file__).parent / "golden" / "band_gate_1060.json"
+    data: dict[str, list[dict[str, object]]] = json.loads(path.read_text(encoding="utf-8"))
+    return data
+
+
+def test_band_gate_golden_1060() -> None:
+    """Třída polohy, posun confidence a obě stínová pravidla proti ručně
+    spočtenému golden datasetu — hranice košů jsou uzavřené shora."""
+    for case in _golden_1060()["cases"]:
+        depth = float(cast(float, case["depth"]))
+        regime = cast(str | None, case["gex_regime"])
+        result = band_gate_context(depth, regime)
+        expected = {
+            key: case[key]
+            for key in (
+                "band_class",
+                "confidence_band_adjust",
+                "band_gate_simple",
+                "band_gate_regime",
+            )
+        }
+        assert result == expected, f"depth={depth} regime={regime}"
+
+
+def test_adjusted_confidence_golden_1060() -> None:
+    for case in _golden_1060()["confidence"]:
+        gate = {"confidence_band_adjust": case["adjust"]}
+        assert adjusted_confidence(int(cast(int, case["base"])), gate) == case["expected"]
+
+
+def test_band_gate_bez_hloubky_nic_nemeni() -> None:
+    """Profil chybí → žádné klíče brány a confidence beze změny (nelže se)."""
+    assert band_gate_context(None, "positive") == {}
+    assert adjusted_confidence(55, {}) == 55
+
+
+def test_band_gate_nad_skutecnym_profilem() -> None:
+    """Hloubka z `band_metrics` prochází bránou stejně jako ručně dosazená:
+    plato zóny = inside (+10), sráz pod All = outside (−15)."""
+    profile = profile_from_weighted(ZONE, 7000.0, 10.0)
+    inside = band_gate_context(band_metrics(profile, 7040.0).depth, "positive")  # type: ignore[union-attr]
+    assert inside["band_class"] == "inside"
+    assert inside["band_gate_regime"] == "pass"
+    outside = band_gate_context(band_metrics(profile, 7004.0).depth, "negative")  # type: ignore[union-attr]
+    assert outside["band_class"] == "outside"
+    assert outside["band_gate_simple"] == "block"
+    assert outside["confidence_band_adjust"] == -15

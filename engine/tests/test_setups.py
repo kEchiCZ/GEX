@@ -8,6 +8,7 @@ from typing import cast
 import pytest
 from sqlalchemy import create_engine, text
 
+from gexlens_engine.compute.gexfield import GexProfile
 from gexlens_engine.compute.levels import GexLevels
 from gexlens_engine.compute.setups import (
     SETUP_MECHANICS_VERSION,
@@ -620,7 +621,7 @@ class FakeRuntime:
         )
         # Dyn GEX profil minuty — SetupEngine z něj počítá hranice gamma masy (#600).
         # None = minuta profil nemá; orchestrační testy na hranicích nestojí.
-        self.last_profile = None
+        self.last_profile: GexProfile | None = None
 
     def current_quotes(self) -> dict[object, object]:
         """Aktivní zdroj řetězu (#614 fáze 2b) — bez fallbacku prostě sweep cache."""
@@ -635,6 +636,14 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     oi_repo.ensure_schema()
     publisher = RecordingPublisher()
     fake = FakeRuntime()
+    # Dyn profil s plochou tlumící zónou 7490–7520 (#1060): entry 7501 leží
+    # hluboko uvnitř → brána B zvedne confidence šablony o 10 bodů
+    fake.last_profile = GexProfile(
+        ts_min=TS,
+        grid_start=7470.0,
+        grid_step=10.0,
+        values=(0.0, 0.0, 100.0, 100.0, 100.0, 100.0, 0.0, 0.0),
+    )
     runtime = cast(EngineRuntime, fake)
     engine = SetupEngine(
         symbol="ES", repository=repository, oi_repository=oi_repo, publisher=publisher
@@ -668,9 +677,19 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     assert active[0].template == "failed_break"
     assert active[0].direction == "long"
     assert active[0].stop == 7493  # dno 7494 − 1
+    # Brána podle polohy (#1060): T2 má základ 55, uvnitř zóny +10; stínová
+    # pravidla se zapisují, setup vzniká bez ohledu na verdikt
+    assert active[0].confidence == 65
+    created_ctx = repository.list_for("ES")[0]["context"]
+    assert created_ctx["confidence_base"] == 55
+    assert created_ctx["confidence_band_adjust"] == 10
+    assert created_ctx["band_class"] == "inside"
+    assert created_ctx["band_gate_simple"] == "pass"
+    assert created_ctx["band_gate_regime"] == "pass"
 
     created_alerts = [d for ch, d in publisher.messages if ch == "alerts"]
     assert any("Nový setup LONG" in str(a["message"]) for a in created_alerts)
+    assert any("conf. 65 %" in str(a["message"]) for a in created_alerts)
     # Proklik ve zvonečku (#186): nový setup nese event=created
     assert any(a.get("event") == "created" for a in created_alerts)
     assert any(ch == "setups.ES" for ch, _ in publisher.messages)

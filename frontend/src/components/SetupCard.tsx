@@ -2,7 +2,7 @@
 import { memo } from 'react'
 import { VOL_BUCKET_LABELS } from '../api/briefing'
 import type { VolRegimeRow } from '../api/briefing'
-import { setupRrr, templateLabel } from '../api/setups'
+import { bandInfo, bandLabel, bandTooltip, setupRrr, templateLabel } from '../api/setups'
 import type { SetupRow } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
 import { positionLabel, positionSize, stopVsRange } from '../instrument/position'
@@ -61,6 +61,23 @@ function SetupCardBase({
           </div>
           <div className="setup-card-meta">
             RRR {setupRrr(setup).toFixed(1)} · důvěra {setup.confidence} %
+            {(() => {
+              // Poloha v tlumící zóně (#1060): štítek + stínové verdikty v tooltipu
+              const band = bandInfo(setup)
+              if (band === null) return null
+              return (
+                <>
+                  {' · '}
+                  <span
+                    className={`setup-band ${band.bandClass}`}
+                    data-testid="setup-band"
+                    title={bandTooltip(band)}
+                  >
+                    {bandLabel(band)}
+                  </span>
+                </>
+              )
+            })()}
           </div>
           {(() => {
             // Kalkulačka pozice (#679): čistě klientský výpočet, nic na server

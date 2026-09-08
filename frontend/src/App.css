@@ -1381,6 +1381,37 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   background: rgba(224, 85, 99, 0.25);
 }
 
+/* Poloha v tlumící zóně (#1060): chip jako stav setupu; barva = třída
+   polohy (uvnitř zeleně, přechod neutrálně, mimo / bez pásma červeně) */
+.setup-band {
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 11px;
+  white-space: nowrap;
+  background: var(--bg-chip);
+}
+
+.setup-band.inside {
+  background: rgba(63, 191, 111, 0.25);
+}
+
+.setup-band.outside,
+.setup-band.no_zone {
+  background: rgba(224, 85, 99, 0.25);
+}
+
+/* Stínová brána (#1060): menší dlaždice se žlutým pruhem — je to měření
+   kandidátního pravidla, ne bilance; nesmí splývat s Ø R nad ním */
+.setups-stats-gate .stat {
+  padding: 6px 12px;
+  min-width: 84px;
+  border-left: 3px solid rgba(255, 196, 0, 0.7);
+}
+
+.setups-stats-gate .stat-value {
+  font-size: 15px;
+}
+
 .setup-review {
   display: flex;
   gap: 4px;
