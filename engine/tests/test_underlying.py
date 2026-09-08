@@ -230,3 +230,24 @@ async def test_backfill_skips_failed_day_and_continues() -> None:
     assert len(result) == 15
     assert result[TODAY - dt.timedelta(days=3)] == []  # selhaný den = prázdný, ne výjimka
     assert sum(1 for bars in result.values() if bars) == 14
+
+
+async def test_backfill_razi_puvod_ibkr_hist() -> None:
+    """#1055: každý bar z historical cesty nese `source = ibkr_hist` — obě
+    veřejné metody (okno i jednodenní re-backfill); živá agregace pole nevyplňuje."""
+    from gexlens_engine.storage.parquet_store import BAR_SOURCE_HISTORICAL
+
+    client = MockHistoricalClient(max_requests=60, window_s=600, bars_per_day=3)
+    backfiller = UnderlyingBackfiller(client, PacingGuard(), Settings())
+
+    window = await backfiller.backfill("ES", TODAY)
+    assert all(bar.source == BAR_SOURCE_HISTORICAL for bars in window.values() for bar in bars)
+    single = await backfiller.backfill_day("ES", TODAY)
+    assert single and all(bar.source == BAR_SOURCE_HISTORICAL for bar in single)
+    # Živá cesta: agregátor staví bary bez původu (writer je zapíše jako `ibkr`)
+    assert (
+        Bar(
+            ts=dt.datetime(2026, 7, 16, tzinfo=dt.UTC), open=1, high=1, low=1, close=1, volume=1
+        ).source
+        is None
+    )

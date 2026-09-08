@@ -8,8 +8,9 @@ import pytest
 
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.underlying import Bar
-from gexlens_engine.storage.bar_partitions import plan_repartition
+from gexlens_engine.storage.bar_partitions import bar_rank, plan_repartition
 from gexlens_engine.storage.parquet_store import (
+    BAR_SOURCE_HISTORICAL,
     BAR_SOURCE_LIVE,
     BAR_SOURCE_RECONSTRUCTED,
     SnapshotWriter,
@@ -131,3 +132,51 @@ def test_bar_minutes_for_days_sjednoti_partice(writer: SnapshotWriter) -> None:
 
     assert writer.bar_minutes_for_days("ES", [D, D1]) == {evening.ts, morning.ts}
     assert writer.bar_minutes_for_days("ES", [D1]) == {morning.ts}
+
+
+def hist(ts: dt.datetime, volume: float) -> Bar:
+    return Bar(
+        ts=ts, open=1.0, high=2.0, low=0.5, close=1.5, volume=volume, source=BAR_SOURCE_HISTORICAL
+    )
+
+
+def _sources(writer: SnapshotWriter, day: dt.date) -> dict[dt.datetime, tuple[str, float]]:
+    frame = pd.read_parquet(
+        writer._settings.derived_dir / "ES" / "bars" / f"{day.isoformat()}.parquet"
+    )
+    return {
+        ts.to_pydatetime().replace(tzinfo=dt.UTC): (src, float(vol))
+        for ts, src, vol in zip(frame["ts_min"], frame["source"], frame["volume"], strict=True)
+    }
+
+
+def test_backfill_z_ibkr_historical_neprepise_zmerenou_minutu(writer: SnapshotWriter) -> None:
+    """#1055 AC2: živý zápis historickou hodnotu nahradí, obráceně ne."""
+    t0 = dt.datetime(2026, 9, 1, 14, 0, tzinfo=dt.UTC)
+    t1 = t0 + dt.timedelta(minutes=1)
+    t2 = t0 + dt.timedelta(minutes=2)
+    # Živě změřeno t0; t2 rekonstruováno z dxFeed
+    writer.write_bars("ES", D, [bar(t0, 10.0), candle(t2, 1.0)])
+    # Backfill přinese všechny tři minuty
+    writer.write_bars("ES", D, [hist(t0, 99.0), hist(t1, 5.0), hist(t2, 7.0)])
+    rows = _sources(writer, D)
+    assert rows[t0] == (BAR_SOURCE_LIVE, 10.0)  # změřená minuta zůstala
+    assert rows[t1] == (BAR_SOURCE_HISTORICAL, 5.0)  # díra se doplnila
+    assert rows[t2] == (BAR_SOURCE_HISTORICAL, 7.0)  # historical přebil rekonstrukci
+    # Živý zápis téže minuty historickou hodnotu nahradí
+    writer.write_bars("ES", D, [bar(t1, 6.0)])
+    assert _sources(writer, D)[t1] == (BAR_SOURCE_LIVE, 6.0)
+    # Provizorní → finální bar téže minuty (ADR-0005) se dál nahrazuje
+    writer.write_bars("ES", D, [bar(t1, 8.0)])
+    assert _sources(writer, D)[t1] == (BAR_SOURCE_LIVE, 8.0)
+
+
+def test_bar_rank_puvod_pred_objemem() -> None:
+    """Plán opravy partic (#1002) řadí měřený > ibkr_hist > tasty_candle, teprve pak objem."""
+    ts = dt.datetime(2026, 9, 1, 14, 0, tzinfo=dt.UTC)
+    live = row(ts, 1.0)
+    old_null = row(ts, 1.0, source=None)
+    historical = row(ts, 100.0, source=BAR_SOURCE_HISTORICAL)
+    reconstructed = row(ts, 1000.0, source=BAR_SOURCE_RECONSTRUCTED)
+    assert bar_rank(live, D) > bar_rank(historical, D) > bar_rank(reconstructed, D)
+    assert bar_rank(old_null, D)[0] == bar_rank(live, D)[0]

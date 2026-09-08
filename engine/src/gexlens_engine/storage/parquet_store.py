@@ -165,6 +165,25 @@ BARS_SCHEMA = pa.schema(
 BAR_SOURCE_RECONSTRUCTED = "tasty_candle"
 #: Živá cesta; NULL v starších particích znamená totéž
 BAR_SOURCE_LIVE = "ibkr"
+#: Doplněno z IBKR historical (`UnderlyingBackfiller`, #1055): platná cena téhož
+#: zdroje jako živá cesta, ale minuta NEBYLA změřena za běhu — engine v tu
+#: dobu neběžel nebo stream stál. Do #1055 se zapisovala jako `ibkr` a 2,5 dne
+#: vypnutého PC vypadalo jako „bary tekly, řetěz stál" (#1054).
+BAR_SOURCE_HISTORICAL = "ibkr_hist"
+
+
+def bar_source_rank(source: object) -> int:
+    """Přednost původu baru při střetu téže minuty — vyšší vyhrává.
+
+    Změřená minuta (živá cesta, i NULL ze starých partic) přebije doplněnou;
+    IBKR historical přebije rekonstrukci z dxFeed (stejný zdroj jako živá
+    data, jen dotažený zpětně); rekonstrukce nepřebije nic.
+    """
+    if source == BAR_SOURCE_RECONSTRUCTED:
+        return 0
+    if source == BAR_SOURCE_HISTORICAL:
+        return 1
+    return 2
 
 
 def bar_partition_day(ts: dt.datetime) -> dt.date:
@@ -643,7 +662,11 @@ class _PartitionBuffer:
         self._loaded = False
 
     def append_and_write(
-        self, rows: Sequence[dict[str, object]], key: PartitionKey | None = None
+        self,
+        rows: Sequence[dict[str, object]],
+        key: PartitionKey | None = None,
+        *,
+        keep_existing: Callable[[dict[str, object], dict[str, object]], bool] | None = None,
     ) -> Path:
         """Přidá řádky a přepíše partici; s `key` nahradí řádky téhož klíče (upsert).
 
@@ -651,10 +674,22 @@ class _PartitionBuffer:
         cyklem nahrazuje finálním a slepý append by nechal dva řádky téže minuty
         (ADR-0005). Složený klíč drží snapshoty řetězu (`SNAPSHOT_KEY`, #1047):
         do partice zapisují dva zapisovači a v minutě předání pozdější vítězí.
+
+        `keep_existing(existing, incoming)` = True nechá stávající řádek a
+        příchozí zahodí (#1055: doplněná minuta nepřepíše změřenou). Bez něj
+        pozdější zápis vítězí vždy.
         """
         self._ensure_loaded(key)
         if key is not None:
             key_of = key_getter(key)
+            if keep_existing is not None:
+                existing_by_key = {key_of(row): row for row in self._rows}
+                rows = [
+                    row
+                    for row in rows
+                    if (current := existing_by_key.get(key_of(row))) is None
+                    or not keep_existing(current, row)
+                ]
             incoming = {key_of(row) for row in rows}
             if incoming:
                 self._rows = [row for row in self._rows if key_of(row) not in incoming]
@@ -975,7 +1010,9 @@ class SnapshotWriter:
         """Zapíše 1min bary podkladu do partice derived/{sym}/bars/{date}.parquet.
 
         Upsert podle `ts_min`: provizorní bar rozdělané minuty (ADR-0005) se
-        příštím cyklem nahradí finálním, ne zdvojí.
+        příštím cyklem nahradí finálním, ne zdvojí. Původ rozhoduje střet
+        (#1055): změřená minuta zůstává, i když backfill z IBKR historical
+        přinese tutéž minutu — živý zápis historickou hodnotu nahradí, obráceně ne.
         """
         path = self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
         buffer = self._buffer(path, BARS_SCHEMA)
@@ -995,6 +1032,9 @@ class SnapshotWriter:
                 for bar in bars
             ],
             key="ts_min",
+            keep_existing=lambda existing, incoming: (
+                bar_source_rank(existing.get("source")) > bar_source_rank(incoming.get("source"))
+            ),
         )
 
     def bar_minutes(self, symbol: str, day: dt.date) -> set[dt.datetime]:
