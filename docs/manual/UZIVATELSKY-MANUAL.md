@@ -1094,7 +1094,7 @@ Druhy alertů:
 
 ### Setupy
 
-Když detektor najde setup, přijde alert **Nový setup** a nad grafem se ukáže **karta setupu** pro daný instrument: směr (LONG/SHORT), šablona, **datum a čas vzniku** (kdy se splnily podmínky), úrovně **Entry / Cíl / Stop**, RRR a důvěra, od v1.16 štítek **polohy v tlumící zóně** (uvnitř pásma / přechod / mimo pásmo / bez pásma s posunem důvěry, kap. 18), plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce **Setupy** v sidebaru.
+Když detektor najde setup, přijde alert **Nový setup** a nad grafem se ukáže **karta setupu** pro daný instrument: směr (LONG/SHORT), šablona, **datum a čas vzniku** (kdy se splnily podmínky), úrovně **Entry / Cíl / Stop**, RRR a důvěra (od v1.16 **kalibrovaná z track recordu**: Wilsonova dolní mez úspěšnosti šablony v daném gamma režimu při ≥ 30 uzavřených setupech, jinak konstanta šablony — najetím na číslo zjistíš zdroj), od v1.16 štítek **polohy v tlumící zóně** (uvnitř pásma / přechod / mimo pásmo / bez pásma s posunem důvěry, kap. 18), plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce **Setupy** v sidebaru.
 
 **Denní statistika seance** (obrazovka Setupy): nad seznamem je souhrn dnešního
 dne — kolik obchodů proběhlo, kolik úspěšných a kolik ztrátových, úspěšnost

@@ -36,6 +36,8 @@ const SETUP_ROW = {
     band_class: 'inside',
     confidence_band_adjust: 10,
     confidence_base: 55,
+    confidence_template: 55,
+    confidence_source: 'wilson ES·failed_break·negative n=35',
     band_gate_simple: 'pass',
     band_gate_regime: 'pass',
   },
@@ -229,6 +231,11 @@ test('aktivní setup: karta nad grafem s úrovněmi a skrytím', async () => {
   expect(screen.getByText('Entry 7501')).toBeDefined()
   expect(screen.getByText('Cíl 7515')).toBeDefined()
   expect(screen.getByText('Stop 7472')).toBeDefined()
+  // Zdroj důvěry (#794 fáze 2B) v tooltipu čísla
+  const confidence = screen.getByTestId('setup-confidence')
+  expect(confidence.textContent).toBe('důvěra 55 %')
+  expect(confidence.getAttribute('title')).toContain('Wilsonova dolní mez')
+  expect(confidence.getAttribute('title')).toContain('ES·failed_break·negative n=35')
   // Štítek polohy v pásmu na kartě (#1060) s tooltipem stínové brány
   const band = screen.getByTestId('setup-band')
   expect(band.textContent).toBe('uvnitř pásma +10')

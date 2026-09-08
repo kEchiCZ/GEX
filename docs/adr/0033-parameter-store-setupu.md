@@ -62,6 +62,22 @@ Podle #794 (stupeň 1) zapisuje verze **jen člověk** (API `POST /setups/params
 s důvodem). Optimalizační smyčka (fáze 3) bude verze **navrhovat** — zápis
 pod `created_by = loop` přijde až s promotion gate fáze 4.
 
+### 6. Fáze 2B — confidence z track recordu (rozhodnutí uživatele 9. 9. 2026)
+
+Základ `confidence` už není konstanta šablony (45–60, ADR-0004), ale
+**Wilsonova dolní mez 95 % intervalu úspěšnosti** (podíl `closed_target`,
+stejná definice jako `setupstats`) nad uzavřenými setupy aktuální mechaniky,
+v koších od nejkonkrétnějšího: symbol × šablona × gamma režim → šablona × režim
+→ symbol × šablona → šablona. Použije se první koš s **n ≥ `confidence_min_samples`**
+(parametr store, default 30); jinak zůstává konstanta šablony. Posun podle
+polohy v pásmu (#1060) se přičítá **navrch** základu. Kontext setupu nese
+`confidence_base` (kalibrovaný základ), `confidence_template` (konstanta) a
+`confidence_source` (koš + n, nebo `constant`). Tabulka košů se čte při startu
+a obnovuje nejvýš jednou za 10 minut (`compute/confidence.py`).
+
+Důsledek: čísla důvěry u nových setupů klesnou z 45–60 na kalibrovaná
+(při dnešní úspěšnosti typicky 25–40). Není to zhoršení, ale první poctivé číslo.
+
 ## Důsledky
 
 - Fáze 2B (confidence z Wilsonovy dolní meze per šablona × režim) se opře o

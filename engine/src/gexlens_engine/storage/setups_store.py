@@ -29,6 +29,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.confidence import CalibrationRow
 from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
 from gexlens_engine.compute.setupstats import ClosedSetup
 
@@ -278,6 +279,37 @@ class SetupsRepository:
             )
             for row in rows
         ]
+
+    def closed_for_calibration(self, *, mechanics_version: int) -> list[CalibrationRow]:
+        """Uzavřené setupy aktuální mechaniky napříč symboly (#794 fáze 2B).
+
+        Výhra = `closed_target` (stejně jako `setupstats`); gamma režim z
+        `context.gex_regime` (None u řádků bez něj). Timeout není výhra.
+        """
+        stmt = select(
+            setups_table.c.symbol,
+            setups_table.c.template,
+            setups_table.c.status,
+            setups_table.c.context,
+        ).where(
+            setups_table.c.status != "active",
+            setups_table.c.mechanics_version == mechanics_version,
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        result: list[CalibrationRow] = []
+        for row in rows:
+            context = row.context if isinstance(row.context, dict) else {}
+            regime = context.get("gex_regime")
+            result.append(
+                CalibrationRow(
+                    symbol=str(row.symbol),
+                    template=str(row.template),
+                    gex_regime=str(regime) if isinstance(regime, str) else None,
+                    win=row.status == "closed_target",
+                )
+            )
+        return result
 
     def list_for(
         self,

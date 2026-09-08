@@ -21,9 +21,11 @@ from gexlens_engine.compute.bandregime import (
     band_context,
     band_gate_context,
 )
+from gexlens_engine.compute.confidence import ConfidenceTable, build_confidence_table
 from gexlens_engine.compute.gexfield import gamma_edges
 from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import (
+    SETUP_MECHANICS_VERSION,
     Direction,
     MinuteInputs,
     Outcome,
@@ -46,6 +48,8 @@ from gexlens_engine.storage.setups_store import SetupsRepository, StoredSetup
 logger = logging.getLogger(__name__)
 
 HISTORY_MINUTES = 400
+#: Jak často se znovu čte track record pro kalibraci confidence (#794 fáze 2B)
+CALIBRATION_REFRESH = dt.timedelta(minutes=10)
 
 
 def setup_params_from_settings(settings: Settings) -> SetupParams:
@@ -103,6 +107,10 @@ class SetupEngine:
         return True
 
     def __post_init__(self) -> None:
+        # Kalibrovaná confidence z track recordu (#794 fáze 2B): tabulka košů,
+        # obnovuje se při startu a pak nejvýš jednou za CALIBRATION_REFRESH
+        self._calibration: ConfidenceTable | None = None
+        self._calibration_ts: dt.datetime | None = None
         self._history: deque[MinuteInputs] = deque(maxlen=HISTORY_MINUTES)
         self._prev_volumes: dict[object, float] = {}
         self._open: list[_OpenSetup] = []
@@ -429,9 +437,30 @@ class SetupEngine:
         until = self._direction_blocked_until.get(direction)
         return until is not None and now < until
 
+    def _load_calibration(self) -> ConfidenceTable:
+        """Blokující čtení track recordu — volat přes to_thread."""
+        rows = self.repository.closed_for_calibration(mechanics_version=SETUP_MECHANICS_VERSION)
+        return build_confidence_table(rows, min_samples=self.params.confidence_min_samples)
+
+    async def _refresh_calibration(self, now: dt.datetime) -> None:
+        """Obnoví koše confidence nejvýš jednou za CALIBRATION_REFRESH; chyba DB
+        nechá platit poslední tabulku (nebo konstanty) — detekce jede dál."""
+        if (
+            self._calibration_ts is not None
+            and now - self._calibration_ts < CALIBRATION_REFRESH
+            and self._calibration is not None
+        ):
+            return
+        try:
+            self._calibration = await asyncio.to_thread(self._load_calibration)
+            self._calibration_ts = now
+        except Exception:
+            logger.exception("Kalibrace confidence selhala — platí poslední tabulka")
+
     async def _detect_new(
         self, now: dt.datetime, runtime: EngineRuntime, inputs: MinuteInputs
     ) -> None:
+        await self._refresh_calibration(now)
         open_templates = {item.stored.template for item in self._open}
         for candidate in detect_all(list(self._history), self.params):
             template = candidate.template.value
@@ -459,16 +488,24 @@ class SetupEngine:
             # k řádku se jen zapíše, co by každé pravidlo udělalo.
             band = band_context(runtime.last_profile, candidate.entry)
             depth = band.get("band_depth")
-            gate = band_gate_context(
-                depth if isinstance(depth, float) else None,
-                cast(str | None, candidate.context.get("gex_regime")),
-            )
-            confidence = adjusted_confidence(candidate.confidence, gate)
+            regime = cast(str | None, candidate.context.get("gex_regime"))
+            gate = band_gate_context(depth if isinstance(depth, float) else None, regime)
+            # Základ confidence z track recordu (#794 fáze 2B), konstanta šablony
+            # jen jako fallback pod minimem vzorku; posun podle pásma (#1060) navrch
+            if self._calibration is not None:
+                base, source = self._calibration.confidence(
+                    self.symbol, template, regime, candidate.confidence
+                )
+            else:
+                base, source = candidate.confidence, "constant"
+            confidence = adjusted_confidence(base, gate)
             context: dict[str, object] = {
                 **candidate.context,
                 **band,
                 **gate,
-                "confidence_base": candidate.confidence,
+                "confidence_base": base,
+                "confidence_template": candidate.confidence,
+                "confidence_source": source,
             }
             setup_id = self.repository.create(
                 symbol=self.symbol,

@@ -280,6 +280,9 @@ class SetupParams:
     # stoupajícímu NQ). Po N stopech v řadě v jednom směru se směr zablokuje;
     # počítadlo maže až výhra v tom směru, takže po sérii jde 1 pokus za okno.
     max_stops_per_direction: int = 3
+    # Kalibrovaná confidence (#794 fáze 2B): minimum uzavřených setupů v koši
+    # track recordu, pod které zůstává konstanta šablony. Rozhodnutí 9. 9. 2026.
+    confidence_min_samples: int = 30
     direction_block_minutes: int = 90
     # Vypnuté šablony (#303): kandidát vznikne, ale zahodí se v `detect_all`.
     # T5 divergence_spring má 8,7 % úspěšnost a Ø −0,69R za 23 setupů — vznikla

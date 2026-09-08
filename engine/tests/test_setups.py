@@ -635,6 +635,30 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
     oi_repo.ensure_schema()
     publisher = RecordingPublisher()
+    # Track record pro kalibraci confidence (#794 fáze 2B): 35 uzavřených
+    # failed_break v negativní gammě, 20 cílů → Wilson LB 0,4086 → základ 41
+    for i in range(35):
+        seeded = repository.create(
+            symbol="ES",
+            expiry="20260715",
+            template="failed_break",
+            direction="long",
+            created_ts=TS - dt.timedelta(days=1, minutes=i),
+            entry=7500.0,
+            target=7510.0,
+            stop=7495.0,
+            confidence=55,
+            reason="historie",
+            context={"gex_regime": "negative"},
+        )
+        repository.close(
+            seeded,
+            status="closed_target" if i < 20 else "closed_stop",
+            closed_ts=TS - dt.timedelta(days=1),
+            outcome_r=2.0 if i < 20 else -1.0,
+            mfe=1.0,
+            mae=0.5,
+        )
     fake = FakeRuntime()
     # Dyn profil s plochou tlumící zónou 7490–7520 (#1060): entry 7501 leží
     # hluboko uvnitř → brána B zvedne confidence šablony o 10 bodů
@@ -679,12 +703,15 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     assert active[0].template == "failed_break"
     assert active[0].direction == "long"
     assert active[0].stop == 7493  # dno 7494 − 1
-    # Brána podle polohy (#1060): T2 má základ 55, uvnitř zóny +10; stínová
-    # pravidla se zapisují, setup vzniká bez ohledu na verdikt
-    assert active[0].confidence == 65
+    # Confidence (#794 fáze 2B + #1060): základ z track recordu 41 (Wilson LB
+    # 20/35 v negativní gammě), uvnitř zóny +10 → 51; konstanta šablony 55 zůstává
+    # v contextu; stínová pravidla se zapisují, setup vzniká bez ohledu na verdikt
+    assert active[0].confidence == 51
     created_ctx = repository.list_for("ES")[0]["context"]
     assert repository.list_for("ES")[0]["params_version"] == 4
-    assert created_ctx["confidence_base"] == 55
+    assert created_ctx["confidence_base"] == 41
+    assert created_ctx["confidence_template"] == 55
+    assert created_ctx["confidence_source"] == "wilson ES·failed_break·negative n=35"
     assert created_ctx["confidence_band_adjust"] == 10
     assert created_ctx["band_class"] == "inside"
     assert created_ctx["band_gate_simple"] == "pass"
@@ -692,7 +719,7 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
 
     created_alerts = [d for ch, d in publisher.messages if ch == "alerts"]
     assert any("Nový setup LONG" in str(a["message"]) for a in created_alerts)
-    assert any("conf. 65 %" in str(a["message"]) for a in created_alerts)
+    assert any("conf. 51 %" in str(a["message"]) for a in created_alerts)
     # Proklik ve zvonečku (#186): nový setup nese event=created
     assert any(a.get("event") == "created" for a in created_alerts)
     assert any(ch == "setups.ES" for ch, _ in publisher.messages)
