@@ -279,7 +279,7 @@ test('dropdown Panely řadí položky jako BottomPanels shora dolů; Vrstvy maj�
   const layerLabels = Array.from(
     screen.getByRole('group', { name: 'Výběr vrstev grafu' }).querySelectorAll('label'),
   ).map((node) => node.textContent)
-  expect(layerLabels).toEqual(['Zdi', '2. zeď', 'GEX Levels', 'GEX žebřík', 'FA levels'])
+  expect(layerLabels).toEqual(['GEX Levels', 'GEX žebřík', 'Zdi', '2. zeď', 'FA levels'])
   fireEvent.click(screen.getByLabelText('Zdi'))
   expect(layers.textContent).toContain('(2)')
 })
