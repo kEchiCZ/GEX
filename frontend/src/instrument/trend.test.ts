@@ -148,6 +148,7 @@ describe('assessTrends', () => {
     expect(report.expected).toBeNull()
     expect(report.reading).toContain('konsolidace uvnitř týdenního trendu')
     expect(report.reading).toContain('Vyšší TF bez trendu')
+    expect(report.reading).not.toContain('Vyšší TF: bez trendu.') // věta by se zdvojila
   })
 
   test('vyšší TF bez trendu → bez převahy', () => {

@@ -59,9 +59,14 @@ describe('turnLevels', () => {
     expect(levels.map((row) => row.distance)).toEqual([...levels.map((row) => row.distance)].sort((a, b) => a - b)) // prettier-ignore
     const callWall = levels.find((row) => row.label === 'Call wall')!
     expect(callWall.role).toBe('odpor')
-    expect(callWall.confluence).toEqual(['PDH', '+EM']) // 7651 a 7640 do 0,25 % od 7650
+    expect(callWall.confluence).toEqual(['PDH']) // 7651 do 0,1 % od 7650, +EM 7640 už ne
     expect(levels.find((row) => row.label === 'ONH (běží)')).toBeDefined()
     expect(levels.find((row) => row.label === '+EM')?.price).toBe(7640)
+  })
+
+  test('cena úrovně se zaokrouhlí na setiny', () => {
+    const [flip] = turnLevels({ price: 29500, levels: { ts_min: '', flip: 29496.89431806286, call_wall: null, put_wall: null, centroid: null, total_gex: 1 }, reference: null, em: null, dailyEma20: null }) // prettier-ignore
+    expect(flip.price).toBe(29496.89)
   })
 
   test('bez ceny nebo bez vstupů prázdný seznam', () => {
@@ -93,8 +98,9 @@ describe('newsExpectations', () => {
       [
         newsRow({ id: 2, title: 'Fed speech', category: 'FED', raw: { impact: 'Low' }, importance: 1, ts_event: '2026-09-09T09:00:00Z' }), // prettier-ignore
         newsRow({ id: 3, ts_event: '2026-09-09T15:00:00Z' }),
+        newsRow({ id: 4, title: 'Bond Auction', category: 'OTHER', raw: { impact: 'Low' }, importance: 1, ts_event: '2026-09-09T10:00:00Z' }), // prettier-ignore
       ],
-      [],
+      [{ category: 'OTHER', windows: { '5': { median_abs_bp: 3, n: 4499 } } }],
       usOpen,
       now,
     )
@@ -102,6 +108,8 @@ describe('newsExpectations', () => {
     expect(rows[1].direction).toBe('směr překvapení bez konvence řady')
     expect(rows[1].magnitude).toBe('bez měřené reakce')
     expect(rows[0].beforeOpen).toBe(false) // po openu
+    // Kategorie OTHER má tisíce měření, ale medián přes „ostatní" nic neříká
+    expect(rows[2].magnitude).toBe('bez měřené reakce')
   })
 
   test('pragueTime respektuje zimní čas', () => {

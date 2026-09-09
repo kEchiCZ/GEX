@@ -321,7 +321,11 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
                       </span>{' '}
                       {level.label} · {level.role}
                       {level.confluence.length > 0 ? (
-                        <span className="muted"> · konfluence: {level.confluence.join(', ')}</span>
+                        <span className="muted">
+                          {' '}
+                          · konfluence: {level.confluence.slice(0, 3).join(', ')}
+                          {level.confluence.length > 3 ? ` +${level.confluence.length - 3}` : ''}
+                        </span>
                       ) : null}
                     </li>
                   ))}

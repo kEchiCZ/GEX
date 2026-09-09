@@ -310,7 +310,7 @@ function buildReading(input: {
     parts.push(
       `Týden ${directionLabel(week)}, den ${directionLabel(day)} — denní trend je korekce uvnitř týdenního.`,
     )
-  } else if (higher !== null) {
+  } else if (higher !== null && higher !== 'range') {
     parts.push(`Vyšší TF: ${directionLabel(higher)}.`)
   }
   if (higher === null || higher === 'range') {
