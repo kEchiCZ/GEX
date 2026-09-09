@@ -24,6 +24,8 @@ data-dev/
 # Prostředí a secrets
 .env
 !.env.example
+# Docker secrets pro server (#1094): heslo datového IBKR usernamu
+secrets/
 
 # IDE / OS
 .vscode/

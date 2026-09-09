@@ -8,6 +8,11 @@
 # port publikovaný bez adresy je na VPS veřejný i se „zapnutým firewallem".
 # Adresa se řídí GEXLENS_BIND_ADDR (default loopback); na serveru se nastaví na
 # Tailscale IP, aby UI viselo jen v tunelu.
+# Název projektu natvrdo (#1094): deploy skript i manuál pracují s názvy
+# gex-engine-1 / image gex-engine — bez `name:` by je odvozený název adresáře
+# na serveru (/srv/gexlens) tiše změnil a rollback by sahal na neexistující tag.
+name: gex
+
 x-logging: &default-logging
   # Bez limitu roste json-file donekonečna (engine loguje každý sweep)
   driver: json-file

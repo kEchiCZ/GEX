@@ -1,0 +1,19 @@
+# Noční walk-forward na Linux serveru (#1094) — náhrada Task Scheduleru
+# (scripts/register-walkforward-task.ps1). Instalace:
+#   sudo cp scripts/systemd/gexlens-walkforward.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now gexlens-walkforward.timer
+# Cesta /srv/gexlens a uživatel gex odpovídají postupu v #1094; jinak upravit.
+[Unit]
+Description=GEXLens: noční walk-forward parametrů setupů (#794, ADR-0034) — jen report, nic nezapisuje
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=gex
+WorkingDirectory=/srv/gexlens
+# Skript sám ověří běžící gex-postgres-1 a bez něj tiše skončí (exit 0)
+ExecStart=/usr/bin/pwsh -NoProfile -File /srv/gexlens/scripts/walkforward-nightly.ps1
+StandardOutput=append:/srv/gexlens/data/reports/walkforward-nightly.log
+StandardError=append:/srv/gexlens/data/reports/walkforward-nightly.log
+TimeoutStartSec=2h

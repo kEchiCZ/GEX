@@ -88,6 +88,9 @@ jobs:
           touch .env
           GEXLENS_PG_PASSWORD=ci GEXLENS_API_TOKEN=ci docker compose -f compose.yml config -q
           GEXLENS_PG_PASSWORD=ci GEXLENS_API_TOKEN=ci docker compose -f compose.dev.yml config -q
+          # Server override (#1094): IB Gateway kontejner + secret ze souboru
+          mkdir -p secrets && echo ci > secrets/ibkr_password
+          GEXLENS_PG_PASSWORD=ci GEXLENS_API_TOKEN=ci IBKR_DATA_USERID=ci             docker compose -f compose.yml -f compose.server.yml config -q
       - name: gitleaks
         run: |
           docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \

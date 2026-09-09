@@ -809,6 +809,24 @@ nástroje na hostiteli (zálohy, sondy) — pro provoz je potřeba nemá.
    ukazuje `engine: online`) — chybějící token se pozná tak, že UI zůstane bez
    živých dat a engine loguje chybu hned při startu.
 
+### Linux server: IB Gateway v kontejneru a rozdíly proti PC (#1094)
+
+Postup zprovoznění krok za krokem (netcup RS 1000 G12, Tailscale, přenos dat,
+přepnutí v pauze Globexu) je v issue #1094. Co k tomu má repo:
+
+| Co | Kde | Poznámka |
+|---|---|---|
+| IB Gateway jako služba | `compose.server.yml` | vždy `-f compose.yml -f compose.server.yml`; image `ghcr.io/gnzsnz/ib-gateway:stable` (IBC + Xvfb), **API na `ib-gateway:4003`** (socat relay — 4001 je uvnitř kontejneru jen localhost), nic nepublikuje, VNC vypnuté |
+| Username a heslo | `.env` → `IBKR_DATA_USERID`; `secrets/ibkr_password` (mimo git, chmod 600) | **druhý (datový) username** účtu (#737), nikdy hlavní — souběh s mobilem by shodil Gateway |
+| Reautentizace | `AUTO_RESTART_TIME` 23:05, `TWS_COLD_RESTART` neděle 22:30 (TZ kontejneru Europe/Prague) | pondělní IB Key push zůstává ruční (kap. 13.2); `TWOFA_TIMEOUT_ACTION=restart` login opakuje, dokud push nepřijde |
+| Past host/port v DB | Settings UI → host `ib-gateway`, port `4003` | hodnota z DB přebíjí `.env` i compose (#446/#992); po obnově dumpu z PC tam zůstal domácí `4001` |
+| Název projektu | `compose.yml` → `name: gex` | kontejnery `gex-*` a image `gex-engine` nezávisle na názvu adresáře (`/srv/gexlens`) — deploy skript a rollback tag s nimi počítají |
+| Deploy | `pwsh scripts/deploy-engine-offhours.ps1 -Server` | `-Server` přidá override; zóna Chicago se hledá jako `America/Chicago` i `Central Standard Time` |
+| Walk-forward | `scripts/systemd/gexlens-walkforward.{service,timer}` | náhrada Task Scheduleru; po–pá 23:30, `Persistent=true` |
+| Přístup k UI | `tailscale serve --bg --https=443 localhost:8080` | `GEXLENS_BIND_ADDR` zůstává loopback, `GEXLENS_ALLOWED_ORIGINS=https://<host>.<tailnet>.ts.net`; UFW nepouští nic, SSH přes Tailscale |
+| Docker × UFW | řetězec `DOCKER-USER` v `/etc/ufw/after.rules` zahazuje vše z veřejného rozhraní do kontejnerů | druhá pojistka vedle loopback bindu; kontrola vždy `nmap` zvenčí |
+| Swap na 8 GB | `zram-tools`, `PERCENT=25` | naměřeno 5,3 GB (kap. 13.2 + `docker stats` 9. 9. 2026); zram kryje špičky RTH, práh pro větší plán je 85 % |
+
 ### Návrat zpět (rollback)
 
 Rotace hesla nesahá na data — mění jen přihlašovací údaj, `pgdata` volume ani parquety se nedotkne. Vrátit ji lze kdykoli:
