@@ -30,6 +30,8 @@ export interface PipelineStatus {
       60 min, omilostněné přechody seance a poslední záznamy k dohledání. */
   subscription_errors?: number
   subscription_errors_60m?: number
+  /** Odpovědi 354 na už zrušené requesty (#1088) — diagnostika, ne alert. */
+  subscription_errors_after_cancel?: number
   subscription_errors_excused?: number
   // Zdroj znaménka CumΔ a denní pokrytí tisky (ADR-0032, #615 krok 5)
   cumdelta_source?: 'midpoint' | 'dxfeed'

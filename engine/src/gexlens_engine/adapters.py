@@ -8,6 +8,7 @@ import asyncio
 import datetime as dt
 import logging
 import math
+import time
 from typing import Any, cast
 
 import httpx
@@ -16,6 +17,7 @@ from ib_async import IB, Contract, FuturesOption, Option, RealTimeBarList
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.lines import LineGauge
 from gexlens_engine.ibkr.scheduler import PartialQuote, QuoteSnapshot
+from gexlens_engine.ibkr.subscription import ReqIdTombstones, contract_label
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import PublisherLike
 from gexlens_engine.storage.oi_archive import ContractSnapshot
@@ -55,12 +57,43 @@ def count_ib_lines(ib: IB) -> int:
 
 
 class IbQuoteStreamer:
-    """QuoteStreamerLike nad reqMktData: subskribce → kompletní sada → odsubskribce."""
+    """QuoteStreamerLike nad reqMktData: subskribce → kompletní sada → odsubskribce.
 
-    def __init__(self, ib: IB, line_gauge: LineGauge | None = None) -> None:
+    Čerstvost (#1088): ib_async drží `Ticker` per conId napříč subskripcemi
+    (`Wrapper.startTicker` vrací existující objekt i s hodnotami z minula,
+    `cancelMktData` je nemaže). Bez kontroly by kontrakt, pro který TWS nic
+    nepošle (např. 354 „not subscribed" doručené až po odhlášení), prošel jako
+    kompletní se starými čísly. Proto se hodnoty přijímají jen tehdy, když po
+    requestu dorazil aspoň jeden tick (`ticker.time` se posune — nastavuje ho
+    wrapper po každé dávce ticků). TWS po subskripci posílá aktuální snapshot
+    bid/ask/last/greeks i bez změny ceny, takže živý kontrakt tím neutrpí.
+    """
+
+    def __init__(
+        self,
+        ib: IB,
+        line_gauge: LineGauge | None = None,
+        tombstones: ReqIdTombstones | None = None,
+    ) -> None:
         self._ib = ib
         self._line_gauge = line_gauge
+        self._tombstones = tombstones
         self._qualified: dict[OptionContractSpec, Contract] = {}
+
+    def remember(self, ticker: Any, contract: Contract) -> None:
+        """Náhrobek reqId → kontrakt hned při requestu (#1088, viz ReqIdTombstones.put)."""
+        if self._tombstones is None:
+            return
+        registry = getattr(getattr(self._ib, "wrapper", None), "ticker2ReqId", {})
+        req_id = registry.get("mktData", {}).get(ticker)
+        if req_id is None:
+            return
+        self._tombstones.put(
+            int(req_id),
+            contract_label(contract),
+            str(getattr(contract, "symbol", "") or ""),
+            now=time.monotonic(),
+        )
 
     async def _contract(self, spec: OptionContractSpec) -> Contract | None:
         cached = self._qualified.get(spec)
@@ -82,12 +115,18 @@ class IbQuoteStreamer:
         if contract is None:
             return None
         ticker = self._ib.reqMktData(contract, "", False, False)
+        self.remember(ticker, contract)
         if self._line_gauge is not None:
             self._line_gauge.sample()
+        # Čas posledního ticku PŘED touto subskripcí (#1088): dokud se neposune,
+        # jsou hodnoty v tickeru z minulé subskripce, ne z téhle
+        stale_time = ticker.time
         try:
             deadline = asyncio.get_running_loop().time() + timeout_s
             while asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(0.25)
+                if ticker.time == stale_time:
+                    continue
                 greeks = ticker.modelGreeks
                 if greeks is None:
                     continue
@@ -114,8 +153,8 @@ class IbQuoteStreamer:
             # Timeout bez modelGreeks (#547): kotace můžou žít i tak — TWS
             # opční model umí pro část striků trvale mlčet (7. 8.: ATM pásmo
             # NQ QN1). Částečná kotace umožní scheduleru dopočítat vlastní
-            # BS greeks místo věčně nekompletního striku.
-            if _valid(ticker.bid) and _valid(ticker.ask):
+            # BS greeks místo věčně nekompletního striku. Ale jen čerstvá (#1088).
+            if ticker.time != stale_time and _valid(ticker.bid) and _valid(ticker.ask):
                 return PartialQuote(
                     bid=ticker.bid,
                     ask=ticker.ask,
@@ -156,14 +195,18 @@ class IbOIFetcher:
         if contract is None:
             return None
         ticker = self._ib.reqMktData(contract, "101", False, False)
+        self._streamer.remember(ticker, contract)
         if self._streamer._line_gauge is not None:
             self._streamer._line_gauge.sample()
+        stale_time = ticker.time  # čerstvost jako u kotací (#1088)
         try:
             loop = asyncio.get_running_loop()
             deadline = loop.time() + timeout_s
             oi: float | None = None
             while loop.time() < deadline:
                 await asyncio.sleep(0.25)
+                if ticker.time == stale_time:
+                    continue
                 value = (
                     getattr(ticker, "callOpenInterest", None)
                     if spec.right == "C"
@@ -272,9 +315,14 @@ class IbkrProvider:
 
     name = "ibkr"
 
-    def __init__(self, ib: IB, line_gauge: LineGauge | None = None) -> None:
+    def __init__(
+        self,
+        ib: IB,
+        line_gauge: LineGauge | None = None,
+        tombstones: ReqIdTombstones | None = None,
+    ) -> None:
         self._ib = ib
-        self._streamer = IbQuoteStreamer(ib, line_gauge)
+        self._streamer = IbQuoteStreamer(ib, line_gauge, tombstones)
         self._oi_fetcher = IbOIFetcher(ib, self._streamer)
 
     def quote_streamer(self) -> IbQuoteStreamer:
