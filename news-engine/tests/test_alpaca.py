@@ -111,3 +111,44 @@ def test_bez_content_zustane_body_prazdne() -> None:
 
     assert event is not None
     assert event.body is None
+
+
+class _QuietWs:
+    """Socket, který mlčí, ale žije: recv nikdy nevrátí, ping dostane pong."""
+
+    def __init__(self) -> None:
+        self.pings = 0
+
+    async def recv(self) -> str:
+        await asyncio.sleep(3600)
+        return ""
+
+    async def ping(self) -> asyncio.Future[None]:
+        self.pings += 1
+        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        future.set_result(None)
+        return future
+
+
+class _DeadWs(_QuietWs):
+    async def ping(self) -> asyncio.Future[None]:
+        self.pings += 1
+        return asyncio.get_running_loop().create_future()  # pong nikdy nepřijde
+
+
+@pytest.mark.asyncio
+async def test_ticho_na_pasce_se_overi_pingem_a_neshodi_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1101: 90 s bez rámce = ping, ne pád; mrtvý socket pozná chybějící pong."""
+    from gexlens_news.collectors import alpaca as module
+
+    monkeypatch.setattr(module, "RECV_IDLE_S", 0.01)
+    monkeypatch.setattr(module, "PING_TIMEOUT_S", 0.01)
+    stream = AlpacaNewsStream(key_id="k", secret="s", writer=RecordingWriter())
+    quiet = _QuietWs()
+    assert await stream._receive(quiet) is None
+    assert quiet.pings == 1
+    dead = _DeadWs()
+    with pytest.raises(TimeoutError):
+        await stream._receive(dead)
