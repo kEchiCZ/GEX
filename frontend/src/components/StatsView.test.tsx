@@ -77,18 +77,25 @@ beforeEach(() => {
           ? { waves: WAVES }
           : url.includes('/news/stats')
             ? { stats: STATS }
-            : url.includes('/settings')
+            : url.includes('/briefing/verdicts/stats')
               ? {
-                  settings: {
-                    retro_pass: {
-                      ran_at: '2026-07-29T05:00:00+00:00',
-                      classified: 12,
-                      reactions: 96,
-                      index_points: 480,
-                    },
-                  },
+                  evaluated: 3,
+                  min_samples: 30,
+                  by_verdict: { long: { n: 3, hits: 2, unscored: 0, hit_rate: 0.667, wilson_lb: 0.208, gate_open: false } }, // prettier-ignore
+                  by_vote: { trend_higher: { n: 3, hits: 3, hit_rate: 1, wilson_lb: 0.439, gate_open: false } }, // prettier-ignore
                 }
-              : {}
+              : url.includes('/settings')
+                ? {
+                    settings: {
+                      retro_pass: {
+                        ran_at: '2026-07-29T05:00:00+00:00',
+                        classified: 12,
+                        reactions: 96,
+                        index_points: 480,
+                      },
+                    },
+                  }
+                : {}
       return Promise.resolve({ ok: true, json: () => Promise.resolve(body) })
     }),
   )
@@ -155,4 +162,14 @@ test('přepnutí symbolu refetchne tabulku setupů s novým symbolem (#500)', as
 
   fireEvent.click(screen.getByText('Přepnout na NQ'))
   await waitFor(() => expect(setupCalls().some((url) => url.includes('/setups/NQ'))).toBe(true))
+})
+
+test('sekce Verdikt dne (#1091): tabulky per verdikt a složku, brána sběr', async () => {
+  makeView()
+  await waitFor(() => expect(screen.getByTestId('verdict-stats')).toBeTruthy())
+  const text = screen.getByTestId('verdict-stats').textContent ?? ''
+  expect(text).toContain('spíše long')
+  expect(text).toContain('67 %')
+  expect(text).toContain('sběr (3/30)')
+  expect(text).toContain('trend_higher')
 })

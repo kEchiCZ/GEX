@@ -73,3 +73,30 @@ def test_verdicts_per_symbol_a_okno_dnu(client: TestClient) -> None:
 def test_verdict_validace(client: TestClient) -> None:
     assert client.post("/briefing/verdicts", json=_payload(verdict="maybe")).status_code == 422
     assert client.post("/briefing/verdicts", json=_payload(score=99)).status_code == 422
+
+
+def test_verdict_stats_prazdne_a_po_vyhodnoceni(client: TestClient) -> None:
+    """#1091: statistiky bez výsledků jsou prázdné; s výsledkem počítají hit-rate."""
+    empty = client.get("/briefing/verdicts/stats").json()
+    assert empty["evaluated"] == 0 and empty["by_verdict"] == {} and empty["min_samples"] == 30
+
+    created = client.post("/briefing/verdicts", json=_payload()).json()
+    from gexlens_engine.storage.briefing_verdicts_store import (
+        BriefingVerdictRepository,
+        VerdictOutcome,
+    )
+
+    repo = BriefingVerdictRepository(client.app.state.meta_repository.engine())  # type: ignore[attr-defined]  # noqa: E501
+    repo.ensure_schema()
+    repo.update_outcome(
+        created["id"],
+        VerdictOutcome(
+            open=7000.0, us_open=7010.0, close=7040.0, move_pts=30.0, move_em=0.75, hit=True
+        ),
+        dt.datetime.now(dt.UTC),
+    )
+    stats = client.get("/briefing/verdicts/stats", params={"symbol": "ES"}).json()
+    assert stats["evaluated"] == 1
+    assert stats["by_verdict"]["long"]["hits"] == 1
+    assert stats["by_vote"]["trend_higher"] == {"n": 1, "hits": 1, "hit_rate": 1.0, "wilson_lb": pytest.approx(0.207, abs=0.01), "gate_open": False}  # fmt: skip  # noqa: E501
+    assert client.get("/briefing/verdicts/stats", params={"symbol": "NQ"}).json()["evaluated"] == 0

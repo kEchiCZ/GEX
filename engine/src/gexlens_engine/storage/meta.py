@@ -301,6 +301,15 @@ briefing_verdicts_table = Table(
     Column("rules_version", Integer, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    # Výsledek seance (#1091) — doplňuje engine po settle; aditivní sloupce,
+    # do tabulek založených před #1091 je přidá BriefingVerdictRepository.ensure_schema
+    Column("outcome_open", Float, nullable=True),
+    Column("outcome_us_open", Float, nullable=True),
+    Column("outcome_close", Float, nullable=True),
+    Column("outcome_move_pts", Float, nullable=True),
+    Column("outcome_move_em", Float, nullable=True),
+    Column("outcome_hit", Boolean, nullable=True),
+    Column("outcome_computed_at", DateTime(timezone=True), nullable=True),
     UniqueConstraint("session_date", "symbol", name="uq_briefing_verdicts_session_symbol"),
 )
 
