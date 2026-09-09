@@ -1,0 +1,69 @@
+# GEXLens — override pro Linux server (#1094): IB Gateway jako kontejner.
+#
+# Použití (vždy S produkčním compose.yml, pořadí je závazné):
+#   docker compose -f compose.yml -f compose.server.yml up -d
+#
+# Na PC (Docker Desktop) se TENTO soubor nepoužívá — tam TWS/Gateway běží na
+# hostiteli a engine chodí přes host.docker.internal (compose.yml).
+#
+# Gateway = image gnzsnz/ib-gateway (IB Gateway + IBC + Xvfb):
+#   - API IB Gateway poslouchá uvnitř kontejneru jen na localhost:4001; ven do
+#     compose sítě ho vystavuje socat na portu 4003 (live) / 4004 (paper).
+#     Engine se proto připojuje na ib-gateway:4003, NE 4001.
+#   - Nic se nepublikuje na hostitele: API port je jen na compose síti, VNC se
+#     nezapíná vůbec (kap. 14 ADMIN-MANUAL: VNC nikdy veřejně; při potřebě
+#     dočasně přidat VNC_SERVER_PASSWORD a SSH tunel).
+#   - Heslo jde Docker secretem ze souboru secrets/ibkr_password (mimo git,
+#     chmod 600, jeden řádek bez koncového newline). Username je v .env jako
+#     IBKR_DATA_USERID — DRUHÝ username účtu (#737), nikdy hlavní.
+#   - Reautentizace IBKR: denní AUTO_RESTART_TIME bez hesla, týdenní cyklus
+#     řeší nedělní TWS_COLD_RESTART + potvrzení IB Key push na telefonu
+#     (kap. 13.2). TWOFA_TIMEOUT_ACTION=restart: bez potvrzení se login
+#     opakuje, dokud push nepřijde.
+#
+# PAST (#446/#992): ibkr_host/ibkr_port uložené v DB ze Settings UI přebíjejí
+# hodnoty odsud. Po obnově dumpu z PC tam zůstává domácí host/port — po prvním
+# startu nastavit v Settings host `ib-gateway`, port `4003`.
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    environment:
+      TWS_USERID: ${IBKR_DATA_USERID:?chybí IBKR_DATA_USERID — druhý datový username IBKR, viz issue 737}
+      TWS_PASSWORD_FILE: /run/secrets/ibkr_password
+      TRADING_MODE: ${IBKR_TRADING_MODE:-live}
+      # GEXLens jen čte — obchodní API vypnuté i kdyby username práva měl
+      READ_ONLY_API: "yes"
+      TWOFA_TIMEOUT_ACTION: restart
+      # Časy platí v TZ kontejneru (níže Europe/Prague): denní restart v pauze
+      # Globexu (23:00–24:00 CET), plný login v neděli před otevřením seance
+      AUTO_RESTART_TIME: "11:05 PM"
+      TWS_COLD_RESTART: "22:30"
+      TZ: ${IBKR_GATEWAY_TZ:-Europe/Prague}
+      JAVA_HEAP_SIZE: 768
+      TWS_SETTINGS_PATH: /home/ibgateway/tws_settings
+    volumes:
+      # Nastavení Gateway (přijaté API dialogy, Trusted IPs) přežije recreate
+      - ibgw_settings:/home/ibgateway/tws_settings
+    secrets:
+      - ibkr_password
+
+  engine:
+    environment:
+      GEXLENS_IBKR_HOST: ib-gateway
+      GEXLENS_IBKR_PORT: "4003"
+    depends_on:
+      ib-gateway:
+        condition: service_started
+
+secrets:
+  ibkr_password:
+    file: ./secrets/ibkr_password
+
+volumes:
+  ibgw_settings:

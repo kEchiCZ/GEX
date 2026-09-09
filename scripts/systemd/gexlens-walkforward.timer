@@ -1,0 +1,13 @@
+# Po–pá 23:30 místního času serveru (po settle 22:00 CET); zmeškaný start se
+# dožene po rebootu (Persistent) — stejná sémantika jako StartWhenAvailable
+# v Task Scheduleru.
+[Unit]
+Description=GEXLens walk-forward — po–pá 23:30
+
+[Timer]
+OnCalendar=Mon..Fri 23:30
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

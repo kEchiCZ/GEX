@@ -13,11 +13,18 @@ param(
     # Jak dlouho po startu se čeká, než se kontroluje stav (s)
     [int]$SettleSeconds = 90,
     # Přeskočí kontrolu obchodních hodin (jen pro ruční nasazení mimo okno)
-    [switch]$Force
+    [switch]$Force,
+    # Linux server (#1094): přidá compose.server.yml (IB Gateway jako kontejner)
+    [switch]$Server
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
+
+# Sada compose souborů (#1094): na PC jen compose.yml, na serveru navíc override
+# s IB Gateway — bez něj by `up -d engine` vrátil engine na host.docker.internal
+$composeArgs = @('-f', 'compose.yml')
+if ($Server) { $composeArgs += @('-f', 'compose.server.yml') }
 
 function Write-Step($text) { Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $text" }
 
@@ -49,7 +56,15 @@ function Save-EngineLog([string]$Suffix = '') {
 
 # ── 1) Je trh zavřený? ────────────────────────────────────────────────
 # Globex jede neděle 17:00 CT → pátek 16:00 CT s denní pauzou 16:00–17:00 CT.
-$ct = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, 'Central Standard Time')
+# Id zóny: Windows zná 'Central Standard Time', Linux (pwsh bez ICU konverze)
+# jen IANA 'America/Chicago' — zkusí se obojí, jinak by deploy na serveru spadl
+# dřív, než cokoli zkontroluje (#1094)
+$tz = $null
+foreach ($id in @('America/Chicago', 'Central Standard Time')) {
+    try { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById($id); break } catch { }
+}
+if (-not $tz) { throw "Časová zóna Chicago není v systému (zkoušeno America/Chicago, Central Standard Time) — bez ní nejde určit pauzu Globexu." }
+$ct = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tz)
 $closed = $ct.DayOfWeek -eq 'Saturday' `
     -or ($ct.DayOfWeek -eq 'Sunday' -and $ct.Hour -lt 17) `
     -or ($ct.DayOfWeek -eq 'Friday' -and $ct.Hour -ge 16) `
@@ -68,7 +83,7 @@ Write-Step "main na $((git rev-parse --short HEAD).Trim())"
 # ── 3) Záloha běžícího image + build ──────────────────────────────────
 docker tag gex-engine:latest "gex-engine:$BackupTag"
 Write-Step "Záloha image: gex-engine:$BackupTag"
-docker compose -f compose.yml build engine
+docker compose @composeArgs build engine
 if ($LASTEXITCODE -ne 0) { throw 'Build enginu selhal — nic se nerestartovalo.' }
 
 # ── 3a) Log dosavadního běhu, než ho recreate smaže (#1056) ───────────
@@ -76,7 +91,7 @@ Save-EngineLog
 
 # ── 4) Restart jen enginu ─────────────────────────────────────────────
 # --no-deps: API, Postgres ani news-engine se nedotýkáme
-docker compose -f compose.yml up -d --no-deps engine
+docker compose @composeArgs up -d --no-deps engine
 if ($LASTEXITCODE -ne 0) { throw 'Start enginu selhal.' }
 Write-Step "Engine nastartován, čekám ${SettleSeconds} s na ustálení."
 Start-Sleep -Seconds $SettleSeconds
@@ -98,9 +113,9 @@ if ($healthy) {
     # části NEshazuje engine deploy: engine už je zdravý, exit 0 výše
     # se jen posune za tento blok a chyba se ohlásí warningem.
     foreach ($svc in @('api', 'frontend')) {
-        docker compose -f compose.yml build $svc
+        docker compose @composeArgs build $svc
         if ($LASTEXITCODE -ne 0) { Write-Warning "Build $svc selhal — služba zůstává na staré verzi."; continue }
-        docker compose -f compose.yml up -d --no-deps $svc
+        docker compose @composeArgs up -d --no-deps $svc
         if ($LASTEXITCODE -ne 0) { Write-Warning "Start $svc selhal — zkontroluj docker logs." }
         else { Write-Step "OK — $svc nasazen." }
     }
@@ -113,7 +128,7 @@ Write-Warning "Engine není zdravý (status $state, restartů $restarts, pád v 
 # force-recreate zahodí (#1056); selhání uložení tady rollback NEzastaví
 try { Save-EngineLog -Suffix '-crashed' } catch { Write-Warning "Log padlé verze se nepodařilo uložit: $_" }
 docker tag "gex-engine:$BackupTag" gex-engine:latest
-docker compose -f compose.yml up -d --no-deps --force-recreate engine
+docker compose @composeArgs up -d --no-deps --force-recreate engine
 Start-Sleep -Seconds 20
 $after = (docker inspect -f '{{.State.Status}}' gex-engine-1).Trim()
 Write-Step "Po rollbacku: $after"
