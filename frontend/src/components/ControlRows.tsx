@@ -11,7 +11,8 @@ import type { SignalGateInfo } from '../api/news'
 /** Přepínače schované za dropdowny (#1084): vrstvy v grafu a spodní panely,
 každá skupina má vlastní tlačítko. Pořadí panelů = pořadí, v jakém je
 BottomPanels kreslí shora dolů. */
-const LAYER_KEYS = ['dynGex', 'secondaryWall', 'gexLevels', 'ladder', 'flowAdjusted'] as const
+// Pořadí vrstev = přání uživatele (#1084): levels, žebřík, zdi, 2. zeď, FA
+const LAYER_KEYS = ['gexLevels', 'ladder', 'dynGex', 'secondaryWall', 'flowAdjusted'] as const
 const PANEL_KEYS = ['vol', 'optVol', 'deltaFlow', 'evoOi', 'delta', 'sentiment'] as const
 type DropdownToggle = (typeof LAYER_KEYS)[number] | (typeof PANEL_KEYS)[number]
 
