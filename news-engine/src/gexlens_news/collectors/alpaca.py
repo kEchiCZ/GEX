@@ -14,6 +14,7 @@ import contextlib
 import datetime as dt
 import json
 import logging
+import time
 from collections.abc import Sequence
 from typing import Any, Protocol
 
@@ -28,6 +29,12 @@ SOURCE_NAME = "alpaca"
 # Backoff reconnectu: start 5 s, zdvojnásobování do stropu
 RECONNECT_BASE_S = 5.0
 RECONNECT_MAX_S = 60.0
+# Ticho na pásce (#1101): po tolika sekundách bez rámce se spojení ověří pingem,
+# ne pádem — noc a prázdné minuty jsou u zpráv normální stav
+RECV_IDLE_S = 90.0
+PING_TIMEOUT_S = 20.0
+# Session, která vydržela aspoň tolik, resetuje backoff (byla zdravá, ne zacyklená)
+HEALTHY_SESSION_S = 60.0
 
 
 class EventWriter(Protocol):
@@ -93,10 +100,15 @@ class AlpacaNewsStream:
         """Smyčka spojení s backoffem; končí až se stop eventem."""
         backoff = RECONNECT_BASE_S
         while not stop.is_set():
+            started = time.monotonic()
             try:
                 await self._session(stop)
                 backoff = RECONNECT_BASE_S  # čisté odpojení → rychlý reconnect
             except Exception as exc:
+                # Zdravá session (#1101): pád po hodině provozu není zacyklení,
+                # backoff se nesmí držet na stropu z minulých pokusů
+                if time.monotonic() - started >= HEALTHY_SESSION_S:
+                    backoff = RECONNECT_BASE_S
                 # repr + typ: str() je u ConnectionClosed/IncompleteReadError
                 # a timeoutů prázdný a v logu zbylo „spadlo ()" (#776)
                 logger.warning(
@@ -119,8 +131,25 @@ class AlpacaNewsStream:
             await ws.send(json.dumps({"action": "subscribe", "news": ["*"]}))
             logger.info("Alpaca news WS připojeno (subscribe news: *)")
             while not stop.is_set():
-                raw = await asyncio.wait_for(ws.recv(), timeout=90)
+                raw = await self._receive(ws)
+                if raw is None:
+                    continue
                 await self._handle(raw)
+
+    async def _receive(self, ws: Any) -> str | bytes | None:
+        """Další rámec, nebo None po tichu ověřeném pingem (#1101).
+
+        Dřív každé ticho > 90 s shodilo session a reconnect s backoffem na
+        stropu 60 s stál minutu slepoty — 24× za tři hodiny 9. 9. 2026.
+        Mrtvý socket pozná pong s timeoutem (ConnectionClosed/TimeoutError
+        letí ven a reconnect zůstává správnou reakcí).
+        """
+        try:
+            return await asyncio.wait_for(ws.recv(), timeout=RECV_IDLE_S)
+        except TimeoutError:
+            pong = await ws.ping()
+            await asyncio.wait_for(pong, timeout=PING_TIMEOUT_S)
+            return None
 
     async def _handle(self, raw: str | bytes) -> None:
         try:
