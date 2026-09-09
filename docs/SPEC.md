@@ -197,6 +197,7 @@ Tabulky: `instruments`, `expiries`, `oi_eod`, `watchlist`, `alerts`, `annotation
 - `GET /profile/{sym}/{expiry}?ts=` — strike profil k okamžiku
 - `GET /flow/{sym}?date=` — Vol, OptVol, CumΔ řady
 - `GET /replay/{sym}/{expiry}/{date}` — kompletní denní balík pro playback
+- `GET /candles/{sym}?tf=W|D|240|60|15&limit=` — svíčky vyšších timeframů z 1min barů (D = Globex seance, W z denních, intradenní koše od otevření seance; ADR-0035, #1089)
 - `GET /status` — stav pipeline (greeks progress, repair, lines, disk)
 - CRUD `/watchlist`, `/alerts`, `/annotations`, `/settings`
 

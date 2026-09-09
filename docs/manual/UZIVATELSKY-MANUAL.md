@@ -889,6 +889,7 @@ běží **odpočet do US openu** (9:30 New York, DST-korektně).
 
 | Karta | Co ukazuje |
 |---|---|
+| **Trend** (v1.16, #1089) | Trend podkladu **shora dolů**: týden, den, 4h, 1h, 15m — per timeframe struktura trhu (HH/HL = rostoucí, LH/LL = klesající) a EMA20/EMA50; ● = struktura i EMA souhlasí, ○ = jen jedna z nich. Nad tabulkou čtení pro den: vyšší TF (týden, den) určuje směr, nižší načasování — souhlas = obchodovat ve směru, nesoulad = nižší TF korigují, čekat na návrat. Málo svíček = „málo dat", nic se nedosazuje. Metoda v ADR-0035. |
 | **Režim a úrovně** | Pozitivní/negativní gamma + poloha ceny vůči flipu; flip, call/put wall, těžiště |
 | **Volatilita** | Volatilitní režim dne, expected move a jak často EM drží — viz níže |
 | **Včera a overnight** | Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena |

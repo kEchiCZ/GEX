@@ -12,15 +12,23 @@ započtení na hranici z konstrukce).
 """
 
 import datetime as dt
+import logging
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
+
+from gexlens_api.candles import partials_from_frame
 
 # Jedna sdílená definice hranic (ADR-0023 bod 1): seanci definuje engine
 # compute/settle; API ji jen re-exportuje pro své testy a konzumenty (#638)
 from gexlens_engine.compute.settle import session_bounds
 from gexlens_engine.config import Settings
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DataRepository",
@@ -42,9 +50,24 @@ class OutsideDataDirError(PartitionNotFoundError):
     """
 
 
+#: Paralelní čtení partic při studeném průchodu svíček (#1089); pyarrow pouští GIL.
+PARTITION_READ_WORKERS = 8
+#: Partice mladší než tolik dnů se považují za dopisované (stat mtime), starší za neměnné.
+MUTABLE_PARTITION_DAYS = 3
+#: Výpis adresáře partic se drží tolik sekund.
+LISTING_TTL_S = 60.0
+#: Surové partice pro intradenní svíčky — jednotky souborů per symbol, strop napříč symboly.
+BARS_FRAME_CACHE_MAX = 64
+
+
 class DataRepository:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        # Cache pro svíčky (#1089): denní agregáty per partice, surové partice
+        # posledních dnů pro intradenní koše, výpis adresáře s TTL
+        self._daily_partials_cache: dict[tuple[Path, int], pd.DataFrame] = {}
+        self._bars_frame_cache: dict[tuple[Path, int], pd.DataFrame] = {}
+        self._listing_cache: dict[str, tuple[float, list[dt.date]]] = {}
 
     def _resolve(self, path: Path) -> Path:
         """Ověří, že cesta zůstala uvnitř datového adresáře.
@@ -202,6 +225,127 @@ class DataRepository:
     def bars(self, symbol: str, day: dt.date) -> pd.DataFrame:
         path = self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
         return self._read(path)
+
+    def bars_partition_days(self, symbol: str) -> list[dt.date]:
+        """UTC dny, pro které existuje partice barů (vzestupně).
+
+        Výpis adresáře se drží `LISTING_TTL_S` — přes bind mount Docker Desktopu
+        stojí každý souborový syscall milisekundy a Briefing se ptá každou minutu.
+        """
+        cached = self._listing_cache.get(symbol)
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < LISTING_TTL_S:
+            return cached[1]
+        root = self._settings.derived_dir / symbol / "bars"
+        try:
+            resolved = self._resolve(root)
+        except OutsideDataDirError:
+            return []
+        if not resolved.exists():
+            return []
+        days: list[dt.date] = []
+        for entry in resolved.iterdir():
+            if entry.suffix != ".parquet":
+                continue
+            try:
+                days.append(dt.date.fromisoformat(entry.stem))
+            except ValueError:
+                continue
+        days.sort()
+        self._listing_cache[symbol] = (now, days)
+        return days
+
+    def _partition_key(self, symbol: str, day: dt.date) -> tuple[Path, int] | None:
+        """Klíč cache partice: (cesta, mtime) jen pro dopisované dny, jinak (cesta, 0).
+
+        Engine přepisuje jen dnešní partici a backfill po výpadku nejbližší dny
+        (#221) — starší jsou neměnné a stat per soubor by přes bind mount stál
+        víc než samotné čtení (změřeno 9. 9.: 563 statů ≈ 12 s). None = soubor zmizel.
+        """
+        path = self._bars_path(symbol, day)
+        if day < dt.datetime.now(dt.UTC).date() - dt.timedelta(days=MUTABLE_PARTITION_DAYS):
+            return (path, 0)
+        try:
+            return (path, self._resolve(path).stat().st_mtime_ns)
+        except FileNotFoundError:
+            return None
+
+    def _forget_other_versions(
+        self, cache: dict[tuple[Path, int], Any], key: tuple[Path, int]
+    ) -> None:
+        """Přepsaná partice: zahodí záznamy téže cesty s jiným mtime."""
+        for other in [k for k in cache if k[0] == key[0] and k != key]:
+            del cache[other]
+
+    def _bars_path(self, symbol: str, day: dt.date) -> Path:
+        return self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
+
+    def bars_recent(self, symbol: str, calendar_days: int) -> pd.DataFrame:
+        """Bary posledních `calendar_days` partic sešité vzestupně (#1089).
+
+        Pro intradenní svíčky — jednotky partic, čte se rovnou. Bez jediné
+        partice → 404 jako jinde.
+        """
+        days = self.bars_partition_days(symbol)[-calendar_days:]
+        if not days:
+            raise PartitionNotFoundError(f"{symbol}/bars")
+        frames: list[pd.DataFrame] = []
+        for day in days:
+            key = self._partition_key(symbol, day)
+            if key is None:
+                continue
+            frame = self._bars_frame_cache.get(key)
+            if frame is None:
+                frame = self._read(key[0])
+                self._forget_other_versions(self._bars_frame_cache, key)
+                if len(self._bars_frame_cache) >= BARS_FRAME_CACHE_MAX:
+                    self._bars_frame_cache.pop(next(iter(self._bars_frame_cache)))
+                self._bars_frame_cache[key] = frame
+            frames.append(frame)
+        if not frames:
+            raise PartitionNotFoundError(f"{symbol}/bars")
+        return pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+
+    def daily_partials(self, symbol: str, calendar_days: int) -> pd.DataFrame:
+        """Denní agregáty per partice pro posledních `calendar_days` dnů (#1089).
+
+        Partice se ke svíčkám D/W redukuje na ≤ 2 řádky (část seance D, část
+        seance D+1) a ty se drží v paměti pod klíčem (cesta, mtime) — týdenní
+        trend z 2 let barů tak nečte 500 souborů při každém obnovení Briefingu.
+        Klíč přes mtime drží cache správnou i pro dnešní dopisovanou partici.
+        Studený průchod čte paralelně (pyarrow pouští GIL).
+        """
+        days = self.bars_partition_days(symbol)[-calendar_days:]
+        if not days:
+            raise PartitionNotFoundError(f"{symbol}/bars")
+        keys = [key for key in (self._partition_key(symbol, day) for day in days) if key]
+        missing = [key for key in keys if key not in self._daily_partials_cache]
+        if missing:
+            with ThreadPoolExecutor(max_workers=PARTITION_READ_WORKERS) as pool:
+                loaded = list(
+                    pool.map(lambda key: partials_from_frame(self._read(key[0])), missing)
+                )
+            for key, partial in zip(missing, loaded, strict=True):
+                self._forget_other_versions(self._daily_partials_cache, key)
+                self._daily_partials_cache[key] = partial
+        frames = [self._daily_partials_cache[key] for key in keys]
+        return (
+            pd.concat(frames, ignore_index=True) if frames else partials_from_frame(pd.DataFrame())
+        )
+
+    def warm_daily_partials(self) -> None:
+        """Zahřeje cache denních agregátů pro všechny symboly s bary (start API).
+
+        Běží v démonovém vlákně při startu; chyby jen loguje — Briefing si
+        chybějící partici přečte sám při prvním dotazu.
+        """
+        for symbol in self._list_dirs(self._settings.derived_dir):
+            if not self.bars_partition_days(symbol):
+                continue
+            try:
+                self.daily_partials(symbol, 10_000)
+            except Exception:  # noqa: BLE001 — zahřátí nesmí shodit start
+                logger.exception("Zahřátí cache svíček %s selhalo", symbol)
 
     def bars_session(self, symbol: str, day: dt.date) -> pd.DataFrame:
         """Bary seance sešité z partic D−1 + D, jedna minuta jednou (#1002).
