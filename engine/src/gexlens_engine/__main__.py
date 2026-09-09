@@ -244,20 +244,22 @@ def _watch_subscription_errors(
             },
         )
 
-    def _resolve_contract(req_id: int, contract: object) -> tuple[str, str]:
-        """Popisek + symbol; při `contract=None` zkusí náhrobky reqId (#863).
+    def _resolve_contract(req_id: int, contract: object) -> tuple[str, str, bool]:
+        """Popisek, symbol a příznak „po cancelu"; bez kontraktu zkusí náhrobky (#863).
 
-        Error 354/300 po cancelu rotace dorazí bez kontraktu — bez dohledání
-        byla diagnostika #772 plná anonymních „neznámý kontrakt" záznamů.
+        `contract=None` znamená, že ib_async reqId už nezná — request byl
+        zrušen dřív, než TWS odpověděla (#1088: sekundární sweep, 354 chodí
+        ~10 s po cancelu). Taková chyba není mrtvá subskripce a do alertu
+        nepatří; jméno kontraktu dodá náhrobek, jinak poctivé „neznámý kontrakt".
         """
         if contract is not None:
-            return contract_label(contract), str(getattr(contract, "symbol", "") or "")
+            return contract_label(contract), str(getattr(contract, "symbol", "") or ""), False
         if tombstones is not None:
             hit = tombstones.lookup(req_id, now=time.monotonic())
             if hit is not None:
                 label, symbol = hit
-                return f"{label} (po cancelu)", symbol
-        return contract_label(None), ""
+                return f"{label} (po cancelu)", symbol, True
+        return contract_label(None), "", True
 
     def on_error(reqId: int, code: int, message: str, contract: object = None) -> None:
         if code in DELAYED_DATA_ERROR_CODES:
@@ -268,7 +270,7 @@ def _watch_subscription_errors(
             # dál. Uživatel se to ale dozvědět má, protože při horším průběhu
             # feed mizí úplně (4. 8. tak vypadla data ve 14 cyklech ze 192).
             # Symbol se předává (#495) — alert v UI je vázaný na instrument.
-            label, symbol = _resolve_contract(reqId, contract)
+            label, symbol, _after_cancel = _resolve_contract(reqId, contract)
             alert = competing_sessions.observe(label, symbol, now=time.monotonic())
             if alert is not None:
                 logger.warning("Konkurenční relace odebírá market data: %s", message)
@@ -277,8 +279,12 @@ def _watch_subscription_errors(
             return
         if code != NOT_SUBSCRIBED_ERROR_CODE:
             return  # ostatní kódy loguje ib_async samo
-        label, symbol = _resolve_contract(reqId, contract)
-        alert = tracker.observe(label, symbol, now=time.monotonic())
+        label, symbol, after_cancel = _resolve_contract(reqId, contract)
+        alert = tracker.observe(label, symbol, now=time.monotonic(), after_cancel=after_cancel)
+        if after_cancel:
+            # Diagnostika ano, alert ne (#1088): request už neběží, subskripce žijí
+            logger.debug("IBKR error 354 po cancelu (reqId %s): %s", reqId, label)
+            return
         if alert is None:
             # Ojedinělý výskyt = přechodný výpadek farmy; sweep si kontrakt vezme příště
             logger.debug("IBKR error 354 (reqId %s): %s — %s", reqId, label, message)
@@ -1049,7 +1055,9 @@ async def main() -> None:
     # Obsazené market data lines (#630): měřené z registru subskripcí,
     # jediný gauge nad sdíleným spojením — strop účtu platí napříč pipeline
     line_gauge = LineGauge(_sample_active_lines)
-    provider = IbkrProvider(ib, line_gauge)
+    # Náhrobky plní i streamer přímo při requestu (#1088) — vzorkování výše
+    # zachytí z dávky nejvýš první kontrakt
+    provider = IbkrProvider(ib, line_gauge, tombstones=reqid_tombstones)
     manager = ConnectionManager(
         ib,
         settings,
@@ -2438,6 +2446,8 @@ async def main() -> None:
                 subscription_errors=subscription_errors.total,
                 subscription_errors_60m=subscription_errors.window_count(time.monotonic()),
                 subscription_errors_excused=subscription_errors.excused,
+                # Odpovědi na už zrušené requesty (#1088) — v diagnostice, mimo alert
+                subscription_errors_after_cancel=subscription_errors.after_cancel,
                 subscription_error_recent=[
                     {
                         "ts": dt.datetime.fromtimestamp(rec.ts, tz=dt.UTC).isoformat(),

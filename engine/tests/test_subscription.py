@@ -365,3 +365,53 @@ def test_tombstones_pokryvaji_vsechny_tick_typy() -> None:
     assert tick is not None
     label, symbol = tick
     assert "NQU6" in label and "[AllLast]" in label and symbol == "NQ"
+
+
+def test_after_cancel_se_pocita_ale_nealertuje() -> None:
+    """#1088: 354 po odhlášení jde do diagnostiky, do prahu ne — i nad prahem."""
+    t = tracker(threshold=2)
+    for i in range(5):
+        assert t.observe("ESU6 7600C (po cancelu)", "ES", now=float(i), after_cancel=True) is None
+    assert t.after_cancel == 5
+    assert t.total == 5
+    assert len(t.recent_records()) == 5
+    # Živé chyby prah plní dál
+    assert t.observe("NQU6 29000C", "NQ", now=10.0) is None
+    assert t.observe("NQU6 29000C", "NQ", now=11.0) is not None
+
+
+def test_tombstones_put_zapisuje_bez_skrceni() -> None:
+    from gexlens_engine.ibkr.subscription import UNKNOWN_CONTRACT, ReqIdTombstones
+
+    stones = ReqIdTombstones(ttl_s=900.0, throttle_s=1.0)
+    stones.put(1, "ESU6 7600C", "ES", now=0.0)
+    stones.put(2, "ESU6 7605C", "ES", now=0.001)
+    stones.put(3, UNKNOWN_CONTRACT, "", now=0.002)  # anonymní náhrobek nemá cenu
+    assert stones.lookup(1, now=0.5) == ("ESU6 7600C", "ES")
+    assert stones.lookup(2, now=0.5) == ("ESU6 7605C", "ES")
+    assert stones.lookup(3, now=0.5) is None
+
+
+async def test_error_354_po_cancelu_nespusti_alert(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1088: pět 354 bez kontraktu (request už zrušený) nesmí vyrobit alert."""
+    from gexlens_engine.ibkr.subscription import ReqIdTombstones
+
+    fake_now = {"t": 0.0}
+    monkeypatch.setattr(engine_main, "time", SimpleNamespace(monotonic=lambda: fake_now["t"]))
+    ib = SimpleNamespace(errorEvent=_FakeErrorEvent())
+    manager = SimpleNamespace(report_error=lambda code, message: None)
+    publisher = _RecordingPublisher()
+    stones = ReqIdTombstones(ttl_s=900.0, throttle_s=0.0)
+    for req_id in range(21252, 21257):
+        stones.put(req_id, f"E2CU6 {7500 + req_id % 10 * 5}C 20260910 @CME", "ES", now=0.0)
+
+    tracker_ = engine_main._watch_subscription_errors(
+        cast(IB, ib), cast(ConnectionManager, manager), Settings(), publisher, lambda: True,
+        tombstones=stones,
+    )  # fmt: skip
+    fake_now["t"] = 10.0
+    for req_id in range(21252, 21257):
+        ib.errorEvent.emit(req_id, 354, "Requested market data is not subscribed.", None)
+    assert tracker_.after_cancel == 5
+    assert tracker_.recent_records()[0].contract.endswith("(po cancelu)")
+    assert publisher.messages == []  # žádný alert subscription_error

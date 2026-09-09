@@ -379,6 +379,10 @@ Sběr dat se na ~1–2 minuty přeruší.`)
                         (status.subscription_errors_excused ?? 0) > 0
                           ? ` (z toho ${status.subscription_errors_excused} přechod seance)`
                           : ''
+                      }${
+                        (status.subscription_errors_after_cancel ?? 0) > 0
+                          ? ` · ${status.subscription_errors_after_cancel} po odhlášení (bez alertu, #1088)`
+                          : ''
                       }`
                     : '—'}
                   {status.subscription_error_recent?.length ? (

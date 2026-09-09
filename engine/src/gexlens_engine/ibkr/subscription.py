@@ -75,6 +75,10 @@ class SubscriptionErrorTracker:
         # výjimky by alertovací práh (#417) pravidelně o půlnoci falešně střílel.
         self._excused_until: float | None = None
         self._excused = 0
+        # Chyby po odhlášení (#1088): TWS odpoví 354 na request, který engine
+        # už zrušil (sekundární sweep, ~10 s po cancelu). Nejde o mrtvou
+        # subskripci, do alertovacího prahu nepatří — ale v diagnostice být musí.
+        self._after_cancel = 0
 
     @property
     def total(self) -> int:
@@ -85,6 +89,11 @@ class SubscriptionErrorTracker:
     def excused(self) -> int:
         """Kolik výskytů spadlo do omilostněného okna resubskripce (#772)."""
         return self._excused
+
+    @property
+    def after_cancel(self) -> int:
+        """Kolik výskytů přišlo až po odhlášení kontraktu (#1088)."""
+        return self._after_cancel
 
     def excuse(self, duration_s: float, *, now: float) -> None:
         """Omilostni následujících `duration_s` sekund — plánovaná resubskripce.
@@ -107,13 +116,21 @@ class SubscriptionErrorTracker:
         return tuple(self._recent)
 
     def observe(
-        self, contract_label: str, symbol: str, *, now: float, wall_now: float | None = None
+        self,
+        contract_label: str,
+        symbol: str,
+        *,
+        now: float,
+        wall_now: float | None = None,
+        after_cancel: bool = False,
     ) -> SubscriptionErrorAlert | None:
         """Jeden výskyt error 354; vrací alert jen při překročení prahu v okně.
 
         Vrátí `None` i tehdy, když práh překročen je, ale od posledního alertu
         neuplynul `cooldown_s` — jinak by minutový sweep hlásil totéž pořád dokola.
         `now` je monotonic (okna a prahy), `wall_now` epoch pro záznamy v UI.
+        `after_cancel` (#1088): chyba k requestu, který engine už zrušil — počítá
+        se do diagnostiky, do alertovacího prahu ne (subskripce nejsou mrtvé).
         """
         self._total += 1
         self._recent.append(
@@ -124,6 +141,9 @@ class SubscriptionErrorTracker:
             )
         )
         self._hour.append(now)
+        if after_cancel:
+            self._after_cancel += 1
+            return None
         if self._excused_until is not None and now < self._excused_until:
             # Očekávaná chyba přechodu seance: do prahu se nepočítá vůbec —
             # kdyby jen prošla oknem, doznívající náraz by práh stejně naplnil
@@ -214,6 +234,18 @@ class ReqIdTombstones:
                 symbol = str(getattr(contract, "symbol", "") or "")
                 self._entries[int(req_id)] = (now, label + suffix, symbol)
         self._prune(now)
+
+    def put(self, req_id: int, label: str, symbol: str, *, now: float) -> None:
+        """Náhrobek přímo při requestu (#1088) — O(1), bez škrcení.
+
+        Vzorkování registru (`record_from`) zachytí z dávky 80 subskripcí
+        nejvýš první: dávka se přihlásí během milisekund a odhlásí do 0,25–4 s,
+        vzorek je škrcený na 1 s. Streamer proto zapisuje reqId sám, hned
+        po `reqMktData`; vzorkování zůstává jen pro tick-by-tick registry.
+        """
+        if label == UNKNOWN_CONTRACT:
+            return
+        self._entries[int(req_id)] = (now, label, symbol)
 
     def lookup(self, req_id: int, *, now: float) -> tuple[str, str] | None:
         """(popisek, symbol) pro reqId, nebo None po vypršení TTL/neznámý."""
