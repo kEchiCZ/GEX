@@ -16,8 +16,8 @@ import { directionLabel } from './trend'
 export const VERDICT_RULES_VERSION = 1
 /** Skóre ≥ +3 = spíše long, ≤ −3 = spíše short (ADR-0035 §3). */
 export const VERDICT_THRESHOLD = 3
-/** Konfluence: dvě úrovně do 0,25 % ceny od sebe. */
-export const CONFLUENCE_SHARE = 0.0025
+/** Konfluence: dvě úrovně do 0,1 % ceny od sebe (NQ ≈ 30 b, ES ≈ 8 b). */
+export const CONFLUENCE_SHARE = 0.001
 /** ΔOI hlasuje jen při rozdílu ≥ 10 % většího z totálů. */
 export const OI_DELTA_MIN_SHARE = 0.1
 
@@ -76,8 +76,10 @@ export function turnLevels(input: TurnLevelInput): TurnLevel[] {
     (row): row is RawLevel & { price: number } =>
       typeof row.price === 'number' && Number.isFinite(row.price),
   )
+  // Levels z enginu nesou plný float (flip 29496.894…) — do seznamu jde cena
+  // zaokrouhlená na setiny, jinak řádek nejde přečíst
   const result: TurnLevel[] = present.map((row) => ({
-    price: row.price,
+    price: Math.round(row.price * 100) / 100,
     label: row.label,
     kind: row.kind,
     role: row.price >= price ? 'odpor' : 'podpora',
@@ -131,8 +133,13 @@ function directionText(row: NewsRow): string {
   return 'směr překvapení bez konvence řady'
 }
 
+/** Kategorie bez vlastní řady — medián přes všechno „ostatní" nic neříká. */
+const UNTYPED_CATEGORIES = new Set(['OTHER'])
+
 function magnitudeText(row: NewsRow, typical: TypicalReaction[]): string {
-  const match = row.category ? typical.find((item) => item.category === row.category) : undefined
+  const category = row.category
+  if (!category || UNTYPED_CATEGORIES.has(category)) return 'bez měřené reakce'
+  const match = typical.find((item) => item.category === category)
   if (!match) return 'bez měřené reakce'
   const parts = Object.entries(match.windows)
     .sort((a, b) => Number(a[0]) - Number(b[0]))

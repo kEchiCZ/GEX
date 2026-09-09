@@ -59,7 +59,7 @@ zpětné vazby — to projekt nedělá (srov. ADR-0033, ADR-0034).
 ### 4. Úrovně obratu a zprávy dne
 Jeden seznam úrovní seřazený podle vzdálenosti od ceny: gamma (flip, zdi,
 těžiště), referenční (PDH/PDL/PDC, ONH/ONL), ±EM a denní EMA20; konfluence dvou
-úrovní do 0,25 % ceny se zvýrazní. Zprávy dne s časem v Europe/Prague; očekávaná
+úrovní do 0,1 % ceny se zvýrazní. Zprávy dne s časem v Europe/Prague; očekávaná
 reakce = směr z konvence řady (`gexlens_news.conventions`, #462) + medián |ret|
 naměřených reakcí téže kategorie (ADR-0031); pod 10 měření „bez měřené reakce".
 
