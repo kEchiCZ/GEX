@@ -344,6 +344,8 @@ class InstrumentPipeline:
     read_news_ticks: Callable[[], Sequence[NewsTickLike]] | None = None
     # Re-backfill dnešních barů po návratu streamu (#221); None = backfill nezapojen
     backfill_today: Callable[[], Awaitable[None]] | None = None
+    # Obnova mrtvého reqRealTimeBars streamu po stall (#1082); None = jen alert
+    restart_bars: Callable[[], Awaitable[None]] | None = None
     _cycles_since_oi: int = field(default=0, repr=False)
     # Den, ke kterému patří `oi_available`/`oi_final` (#494): pipeline symbolu
     # s nedenní nejbližší expirací přežije půlnoc a bez resetu by včerejší
@@ -1102,8 +1104,8 @@ class InstrumentPipeline:
         if event == "stalled":
             logger.error(
                 "Real-time bary %s nechodí ≥ %d min při živém spotu — mrtvý "
-                "reqRealTimeBars stream (výpadek TWS farem?); svíčky se nekreslí, "
-                "zvaž restart TWS",
+                "reqRealTimeBars stream (výpadek TWS farem / Error 1100?); "
+                "svíčky se nekreslí, stream se obnovuje",
                 self.symbol,
                 self.settings.bars_stall_alert_minutes,
             )
@@ -1114,11 +1116,19 @@ class InstrumentPipeline:
                     "symbol": self.symbol,
                     "message": f"Svíčky {self.symbol} se přestaly kreslit — real-time "
                     f"bary z TWS nechodí ≥ {self.settings.bars_stall_alert_minutes} min, "
-                    "spot přitom žije (mrtvé TWS farmy?). Pomáhá restart TWS; díra se "
-                    "po návratu doplní backfillem.",
+                    "spot přitom žije. Engine stream obnovuje sám; když to nepomůže, "
+                    "pomáhá restart TWS. Díra se po návratu doplní backfillem.",
                     "ts": now.timestamp(),
                 },
             )
+            await self._restart_bars_stream()
+        elif event == "still_stalled":
+            # Obnova nepomohla — další pokus, alert se neopakuje (anti-spam)
+            logger.warning(
+                "Real-time bary %s nechodí ani po obnově streamu — zkouším znovu",
+                self.symbol,
+            )
+            await self._restart_bars_stream()
         elif event == "recovered":
             logger.info("Real-time bary %s zase chodí — díra se doplní backfillem", self.symbol)
             await self.publisher.publish(
@@ -1137,6 +1147,19 @@ class InstrumentPipeline:
                 task: asyncio.Task[None] = asyncio.ensure_future(self.backfill_today())
                 task.add_done_callback(self._log_backfill_result)
                 self._backfill_task = task
+
+    async def _restart_bars_stream(self) -> None:
+        """Zruší mrtvý reqRealTimeBars stream a založí nový (#1082).
+
+        Selhání obnovy nesmí shodit minutový cyklus — zaloguje se a další
+        pokus přijde po dalším prahu detektoru (`still_stalled`).
+        """
+        if self.restart_bars is None:
+            return
+        try:
+            await self.restart_bars()
+        except Exception:
+            logger.exception("Obnova real-time barů %s selhala", self.symbol)
 
     async def _check_vol_concentration(self, now: dt.datetime) -> None:
         """Alert na neobvyklou koncentraci volume na příští expiraci (#208).

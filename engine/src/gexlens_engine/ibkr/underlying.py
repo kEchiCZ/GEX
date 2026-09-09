@@ -109,6 +109,11 @@ class BarsStallDetector:
     nedorazil; po prahu ohlásí `"stalled"`, po návratu barů `"recovered"`.
     Bez pohybu spotu (zavřený trh, noční přestávka CME) se čítač nezvyšuje —
     chybějící bary tam nejsou závada.
+
+    Po `"stalled"` pipeline stream sama obnoví (#1082: Error 1100/1102 zabije
+    `reqRealTimeBars`, aniž by spadlo API spojení, takže reconnect hook neběží).
+    Když bary nechodí ani po obnově, po každém dalším prahu se vrací
+    `"still_stalled"` — další pokus o obnovu, bez opakování alertu.
     """
 
     def __init__(self, stall_minutes: int) -> None:
@@ -131,10 +136,15 @@ class BarsStallDetector:
         if not spot_moving:
             return None
         self._quiet_cycles += 1
-        if not self._stalled and self._quiet_cycles >= self._stall_minutes:
-            self._stalled = True
-            return "stalled"
-        return None
+        if self._quiet_cycles < self._stall_minutes:
+            return None
+        # Práh dosažen: čítač jede od nuly, ať se každý další pokus o obnovu
+        # streamu odehraje po stejné době ticha jako ten první
+        self._quiet_cycles = 0
+        if self._stalled:
+            return "still_stalled"
+        self._stalled = True
+        return "stalled"
 
 
 class UnderlyingBackfiller:

@@ -96,6 +96,22 @@ def test_stall_detector_recovers_once() -> None:
     assert detector.observe(bar_activity=False, spot_moving=True) == "stalled"
 
 
+def test_stall_detector_repeats_after_failed_restart() -> None:
+    """#1082: obnova streamu nepomohla → po dalším prahu `still_stalled` (další pokus)."""
+    detector = BarsStallDetector(stall_minutes=2)
+    assert detector.observe(bar_activity=False, spot_moving=True) is None
+    assert detector.observe(bar_activity=False, spot_moving=True) == "stalled"
+    # Čítač jede od nuly: další pokus až po stejné době ticha
+    assert detector.observe(bar_activity=False, spot_moving=True) is None
+    assert detector.observe(bar_activity=False, spot_moving=True) == "still_stalled"
+    assert detector.observe(bar_activity=False, spot_moving=True) is None
+    assert detector.observe(bar_activity=False, spot_moving=True) == "still_stalled"
+    assert detector.stalled is True
+    # Návrat barů hlásí recovery jednou, bez ohledu na počet pokusů
+    assert detector.observe(bar_activity=True, spot_moving=True) == "recovered"
+    assert detector.stalled is False
+
+
 # ── PacingGuard ────────────────────────────────────────────────────
 
 

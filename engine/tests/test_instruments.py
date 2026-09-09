@@ -739,6 +739,38 @@ async def test_bars_stall_alert_and_recovery_backfill(
     assert backfills == [True]
 
 
+async def test_bars_stall_restarts_stream(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1082: po stall se stream obnoví sám; bez návratu barů další pokus bez alertu."""
+    settings, writer, repository, publisher = env
+    settings.bars_stall_alert_minutes = 2
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    restarts: list[int] = []
+
+    async def fake_restart() -> None:
+        restarts.append(len(restarts) + 1)
+        if len(restarts) == 1:
+            # První obnova selže (TWS ještě bez farem) — cyklus nesmí spadnout
+            raise RuntimeError("Not connected")
+
+    pipeline.restart_bars = fake_restart
+    ticker = pipeline.ticker
+    assert isinstance(ticker, FakeTicker)
+
+    await pipeline.run_minute(TS)
+    for minute in range(1, 7):
+        ticker.last = 7600.0 + minute
+        await pipeline.run_minute(TS + dt.timedelta(minutes=minute))
+
+    # Práh 2 min: stall v cyklu 2, další pokusy v cyklech 4 a 6
+    assert restarts == [1, 2, 3]
+    alerts = [data for channel, data in publisher.messages if channel == "alerts"]
+    assert [a["kind"] for a in alerts] == ["bars_stalled"]
+    assert "obnovuje sám" in str(alerts[0]["message"])
+
+
 async def test_strikes_stalled_alert_a_recovery(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:
