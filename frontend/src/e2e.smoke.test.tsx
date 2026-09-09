@@ -87,6 +87,14 @@ test('App vyrenderuje celý den z /replay balíku (heatmapa, profil, panely, pla
   // Data source se přepne z demo na replay (jediný fetch balíku)
   await waitFor(() => expect(screen.getByTestId('data-source').textContent).toContain('replay'))
 
+  // Hlavička z reálného balíku nese cenu a denní změnu (#1096: z demo dne ne);
+  // priceInfo se počítá v efektu po renderu balíku, proto waitFor
+  await waitFor(() => {
+    expect(document.querySelector('.instrument-price .last')?.textContent).not.toBe('—')
+  })
+  expect(
+    document.querySelector('.instrument-price .change-up, .instrument-price .change-down'),
+  ).not.toBeNull()
   // Heatmapa + profil + spodní panely nad reálným balíkem
   expect(screen.getByLabelText('Heatmapa')).toBeDefined()
   expect(screen.getByTestId('profile-row-7600')).toBeDefined()
