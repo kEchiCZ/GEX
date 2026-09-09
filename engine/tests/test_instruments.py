@@ -768,7 +768,7 @@ async def test_bars_stall_restarts_stream(
     assert restarts == [1, 2, 3]
     alerts = [data for channel, data in publisher.messages if channel == "alerts"]
     assert [a["kind"] for a in alerts] == ["bars_stalled"]
-    assert "obnovuje sám" in alerts[0]["message"]
+    assert "obnovuje sám" in str(alerts[0]["message"])
 
 
 async def test_strikes_stalled_alert_a_recovery(
