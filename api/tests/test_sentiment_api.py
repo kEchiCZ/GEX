@@ -492,3 +492,59 @@ def test_news_feed_measured_reactions(tmp_path: Path, monkeypatch: pytest.Monkey
     )
     assert nq["reactions_bp"] == {"5": 99.0}
     assert nq["reaction_contaminated"] is False
+
+
+def test_upcoming_nese_konvenci_rady(client: TestClient) -> None:
+    """#1090: nadcházející scheduled event říká, kterým směrem trh čte překvapení."""
+    rows = client.get("/news/upcoming").json()["upcoming"]
+    cpi = next(row for row in rows if row["title"] == "USD CPI m/m")
+    assert cpi["series_name"] == "inflace"
+    assert cpi["series_sign"] == -1  # vyšší inflace = risk-off
+
+
+def test_typicka_reakce_per_kategorie(client: TestClient) -> None:
+    """#1090: medián |ret_bp| scheduled eventů kategorie; pod 10 měření nic."""
+    engine = client.app.state.meta_repository.engine()  # type: ignore[attr-defined]
+    with engine.begin() as conn:
+        event_ids: list[int] = []
+        for index in range(12):
+            key = conn.execute(
+                insert(news_events).values(
+                    ts_event=NOW - dt.timedelta(days=index + 1),
+                    ts_ingested=NOW,
+                    source="forexfactory",
+                    kind="scheduled",
+                    title=f"USD CPI m/m #{index}",
+                    category="MACRO_INFLATION",
+                    importance=3,
+                    symbols=[],
+                    market_closed=False,
+                    dedup_hash=f"cpi-{index}",
+                    raw={},
+                )
+            ).inserted_primary_key
+            assert key is not None
+            event_ids.append(int(key[0]))
+        conn.execute(
+            insert(news_reactions),
+            [
+                {
+                    "event_id": event_id,
+                    "symbol": "ES",
+                    # |ret| 10..21 bp v 5 min; 15min okno u dvou kontaminované
+                    **wide_reaction(
+                        (5, float(10 + index) * (-1 if index % 2 else 1), 30.0, False),
+                        (15, 40.0, 50.0, index < 2),
+                    ),
+                }
+                for index, event_id in enumerate(event_ids)
+            ],
+        )
+    payload = client.get("/news/reactions/typical", params={"symbol": "ES"}).json()
+    [row] = payload["typical"]
+    assert row["category"] == "MACRO_INFLATION"
+    assert row["windows"]["5"] == {"median_abs_bp": pytest.approx(15.5), "n": 12}
+    assert row["windows"]["15"]["n"] == 10  # dvě kontaminovaná okna vynechaná
+    assert "60" not in row["windows"]  # neměřené okno se nevrací
+    # Jiný symbol bez měření → prázdno, žádný dosazený default
+    assert client.get("/news/reactions/typical", params={"symbol": "NQ"}).json()["typical"] == []

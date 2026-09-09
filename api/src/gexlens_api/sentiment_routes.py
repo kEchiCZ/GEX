@@ -13,6 +13,7 @@ import datetime as dt
 import logging
 from decimal import Decimal
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 import pyarrow.parquet as pq
@@ -165,6 +166,29 @@ def _attach_topic_values(engine: Engine, rows: list[dict[str, Any]]) -> None:
             if events and isinstance(stamp, str)
             else None
         )
+
+
+#: Okna typické reakce (#1090): rychlá (5), doznívající (15), hodinová (60)
+TYPICAL_WINDOWS = (5, 15, 60)
+#: Minimum měření per kategorie × okno, aby medián něco říkal
+TYPICAL_MIN_SAMPLES = 10
+
+
+def _attach_series_conventions(rows: list[dict[str, Any]]) -> None:
+    """Konvence řady pro nadcházející eventy (#1090): `series_name`, `series_sign`.
+
+    +1 = hodnota nad konsensem je pro riziková aktiva pozitivní, −1 negativní,
+    None = řada není v mapě. Před tiskem směr neexistuje — tohle říká jen,
+    kterým směrem překvapení trh čte (režimově závislé, viz conventions.py).
+    """
+    from gexlens_news.conventions import match_series
+
+    for row in rows:
+        if row.get("kind") != "scheduled":
+            continue
+        convention = match_series(str(row.get("title") or ""))
+        row["series_name"] = convention.name if convention else None
+        row["series_sign"] = convention.sign if convention else None
 
 
 def _attach_scheduled_directions(rows: list[dict[str, Any]]) -> None:
@@ -361,7 +385,47 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
             )
             .order_by(news_events.c.ts_event)
         )
-        return {"upcoming": _rows(engine_factory(), stmt)}
+        rows = _rows(engine_factory(), stmt)
+        _attach_series_conventions(rows)
+        return {"upcoming": rows}
+
+    @router.get("/news/reactions/typical")
+    def news_reactions_typical(symbol: str = "ES") -> dict[str, object]:
+        """Typická naměřená reakce per kategorie plánovaných eventů (#1090).
+
+        Medián |ret_bp| v oknech 5/15/60 min z `news_reactions` (ADR-0031)
+        pro scheduled eventy dané kategorie, bez kontaminovaných oken (SPEC 5.1).
+        Pod `TYPICAL_MIN_SAMPLES` měření se kategorie nevrací — Briefing pak
+        poctivě říká „bez měřené reakce", nic se nedosazuje.
+        """
+        stmt = (
+            select(news_reactions, news_events.c.category)
+            .join(news_events, news_events.c.id == news_reactions.c.event_id)
+            .where(news_events.c.kind == "scheduled", news_reactions.c.symbol == symbol)
+        )
+        with engine_factory().connect() as conn:
+            measured = conn.execute(stmt).mappings().all()
+        samples: dict[str, dict[int, list[float]]] = {}
+        for reaction in measured:
+            category = reaction["category"]
+            if not isinstance(category, str):
+                continue
+            for window in unpivot_reaction(reaction):
+                if window.contaminated or window.window_min not in TYPICAL_WINDOWS:
+                    continue
+                samples.setdefault(category, {}).setdefault(window.window_min, []).append(
+                    abs(window.ret_bp)
+                )
+        typical: list[dict[str, object]] = []
+        for category, by_window in sorted(samples.items()):
+            windows = {
+                str(window_min): {"median_abs_bp": median(values), "n": len(values)}
+                for window_min, values in sorted(by_window.items())
+                if len(values) >= TYPICAL_MIN_SAMPLES
+            }
+            if windows:
+                typical.append({"category": category, "windows": windows})
+        return {"symbol": symbol, "typical": typical}
 
     @router.get("/news/stats")
     def news_stats(regime: str | None = None) -> dict[str, object]:

@@ -19,7 +19,9 @@ import {
   fetchLevelsSeries,
   fetchOiDelta,
   fetchStoredDays,
+  fetchTypicalReactions,
   fetchVolRegimeLatest,
+  postVerdict,
   gammaRegimeLabel,
   ivRankPrimary,
   ivRankTooltip,
@@ -30,7 +32,11 @@ import {
   previousStoredDay,
   usOpenMs,
 } from '../api/briefing'
-import type { CliffToday, EmRespectSummary, IvRankRow, LevelsRow, OiDeltaSummary, RangeSummary, VolRegimeRow } from '../api/briefing' // prettier-ignore
+import type { BarRow, CliffToday, EmRespectSummary, IvRankRow, LevelsRow, OiDeltaSummary, RangeSummary, VolRegimeRow } from '../api/briefing' // prettier-ignore
+import { fetchTendency } from '../api/tendency'
+import { VERDICT_RULES_VERSION, dayVerdict, newsExpectations, turnLevels } from '../instrument/daysummary' // prettier-ignore
+import type { TypicalReaction } from '../instrument/daysummary'
+import { computeReferenceLevels } from '../instrument/referencelevels'
 import type { ExpectedMove } from '../instrument/expectedmove'
 import { categoryGlyph, fetchSentimentState, fetchUpcoming, isHighImpact } from '../api/news'
 import type { NewsRow, SentimentStateInfo } from '../api/news'
@@ -72,6 +78,11 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   const [bars, setBars] = useState<RangeSummary | null>(null)
   const [overnight, setOvernight] = useState<RangeSummary | null>(null)
   const [prevDay, setPrevDay] = useState<RangeSummary | null>(null)
+  // Surové bary pro referenční úrovně shrnutí (#1090): PDH/PDL/PDC, ONH/ONL
+  const [todayBars, setTodayBars] = useState<BarRow[]>([])
+  const [prevBars, setPrevBars] = useState<BarRow[]>([])
+  const [tendencyBand, setTendencyBand] = useState<string | null>(null)
+  const [typical, setTypical] = useState<TypicalReaction[]>([])
   const [prevDate, setPrevDate] = useState<string | null>(null)
   const [levels, setLevels] = useState<LevelsRow | null>(null)
   const [cliff, setCliff] = useState<CliffToday | null>(null)
@@ -92,12 +103,20 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     void fetchBars(symbol, dateIso).then((rows) => {
       setBars(barsRange(rows))
       setOvernight(barsRange(rows, openMs))
+      setTodayBars(rows)
     })
     void fetchStoredDays(symbol).then(async (days) => {
       const previous = previousStoredDay(days, dateIso)
       setPrevDate(previous)
-      setPrevDay(previous ? barsRange(await fetchBars(symbol, previous)) : null)
+      const previousBars = previous ? await fetchBars(symbol, previous) : []
+      setPrevDay(previous ? barsRange(previousBars) : null)
+      setPrevBars(previousBars)
     })
+    // Tendence (#350) a typická reakce zpráv (#1090) pro verdikt a zprávy dne
+    void fetchTendency(symbol).then((rows) =>
+      setTendencyBand(rows.length > 0 ? rows[rows.length - 1].band : null),
+    )
+    void fetchTypicalReactions(symbol).then(setTypical)
     if (selectedExpiry) {
       void fetchLevelsSeries(symbol, selectedExpiry, dateIso).then((rows) =>
         setLevels(latestLevels(rows)),
@@ -154,6 +173,56 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     ? { em: expectedMove.em, anchor: expectedMove.anchor, preOpen: expectedMove.preOpen }
     : null
 
+  // Shrnutí dne (#1090, ADR-0035): úrovně obratu, zprávy s reakcí, verdikt hlasováním
+  const reference = useMemo(
+    () =>
+      todayBars.length > 0 || prevBars.length > 0
+        ? computeReferenceLevels({ todayBars, prevDayBars: prevBars, usOpenMs: usOpenMs(dateIso), nowMs: now }) // prettier-ignore
+        : null,
+    [todayBars, prevBars, dateIso, now],
+  )
+  const dailyEma20 = trend?.byTimeframe.find((row) => row.tf === 'D')?.ema?.ema20 ?? null
+  const levelsForTurn = useMemo(
+    () => turnLevels({ price: bars?.last ?? null, levels, reference, em: planEm, dailyEma20 }),
+    [bars, levels, reference, planEm, dailyEma20],
+  )
+  const newsToday = useMemo(
+    () => newsExpectations(todayEvents, typical, usOpenMs(dateIso), now),
+    [todayEvents, typical, dateIso, now],
+  )
+  const symbolSentiment = sentiments.find(([sym]) => sym === symbol)?.[1] ?? null
+  const verdict = useMemo(
+    () =>
+      dayVerdict({
+        trend,
+        positiveGamma: levels ? levels.total_gex >= 0 : null,
+        tendencyBand,
+        sentiment: symbolSentiment,
+        price: bars?.last ?? null,
+        prevClose: prevDay?.last ?? null,
+        oiDelta,
+        newsBeforeOpen: newsToday.some((item) => item.highImpact && item.beforeOpen),
+      }),
+    [trend, levels, tendencyBand, symbolSentiment, bars, prevDay, oiDelta, newsToday],
+  )
+  // Uložení verdiktu (#1090): až když dorazily svíčky trendu (jinak by se
+  // zapsal prázdný hlas); server přepisuje per seance × symbol
+  const verdictKey =
+    trend === null ? null : `${dateIso}|${symbol}|${verdict.verdict}|${verdict.score}`
+  useEffect(() => {
+    if (verdictKey === null) return
+    void postVerdict({
+      session_date: dateIso,
+      symbol,
+      verdict: verdict.verdict,
+      score: verdict.score,
+      votes: verdict.votes,
+      rules_version: VERDICT_RULES_VERSION,
+    })
+    // Klíč nese vše, co zápis mění — ostatní závislosti by jen opakovaly týž POST
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verdictKey])
+
   const createPlan = () => {
     setJournalDraft({
       tsRef: new Date().toISOString(),
@@ -166,6 +235,10 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
         cliff,
         vol: volRegime,
         em: planEm,
+        trend,
+        verdict: trend === null ? null : verdict,
+        turnLevels: levelsForTurn,
+        news: newsToday,
       }),
     })
     setView('journal')
@@ -187,6 +260,87 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
       </header>
 
       <div className="briefing-grid">
+        {/* Shrnutí dne (#1090, ADR-0035): trend a směr, úrovně obratu, zprávy dne
+        s očekávanou reakcí, verdikt hlasováním s vypsanými důvody. Heuristika —
+        proto se verdikt ukládá a vyhodnocuje (#1091). */}
+        <section className="briefing-card briefing-summary" aria-label="Shrnutí dne">
+          <h3>Shrnutí dne</h3>
+          <div className="briefing-summary-grid">
+            <div>
+              <h4>Trend a směr</h4>
+              <p data-testid="summary-trend">
+                {trend === null ? 'Svíčky trendu se načítají.' : trend.reading}
+              </p>
+              <h4>Verdikt dne</h4>
+              <p
+                className={`briefing-verdict verdict-${verdict.verdict}`}
+                data-testid="summary-verdict"
+                title="Hlasování s pevnými vahami (ADR-0035 §3) — heuristika, verdikt se ukládá a vyhodnocuje (#1091)"
+              >
+                {trend === null ? 'čeká na trend' : verdict.label}
+              </p>
+              <p className="muted" data-testid="summary-verdict-text">
+                {trend === null ? '' : verdict.summary}
+              </p>
+              <ul className="briefing-list briefing-votes">
+                {verdict.votes.map((vote) => (
+                  <li key={vote.name}>
+                    <span
+                      className={
+                        vote.vote > 0 ? 'trend-up' : vote.vote < 0 ? 'trend-down' : 'muted'
+                      }
+                    >
+                      {vote.vote > 0 ? `+${vote.vote}` : vote.vote}
+                    </span>{' '}
+                    {vote.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <h4>Úrovně obratu</h4>
+              {levelsForTurn.length === 0 ? (
+                <p className="muted">Bez ceny a úrovní zatím nic.</p>
+              ) : (
+                <ul className="briefing-list" data-testid="summary-levels">
+                  {levelsForTurn.slice(0, 8).map((level) => (
+                    <li key={`${level.label}-${level.price}`} title={level.note}>
+                      <span className={level.role === 'odpor' ? 'trend-down' : 'trend-up'}>
+                        {level.price}
+                      </span>{' '}
+                      {level.label} · {level.role}
+                      {level.confluence.length > 0 ? (
+                        <span className="muted"> · konfluence: {level.confluence.join(', ')}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <h4>Zprávy dne</h4>
+              {newsToday.length === 0 ? (
+                <p className="muted">Dnes žádné plánované eventy.</p>
+              ) : (
+                <ul className="briefing-list" data-testid="summary-news">
+                  {newsToday.slice(0, 6).map((item) => (
+                    <li key={item.row.id}>
+                      <strong>{item.timeLabel}</strong> {categoryGlyph(item.row.category)}{' '}
+                      {item.row.title}
+                      {item.highImpact ? ' ❗' : ''}
+                      {item.beforeOpen ? <span className="muted"> · před US openem</span> : null}
+                      <br />
+                      <span className="muted">
+                        {item.direction} · {item.magnitude}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </section>
+
         {/* Trend napříč timeframy (#1089): vyšší TF určuje směr, nižší načasování.
         Struktura (HH/HL vs. LH/LL) a EMA20/50 per TF; bez dostatku svíček se
         nic nedosazuje — řádek říká „málo dat". */}
