@@ -215,8 +215,13 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   // (VERDICT_POST_DELAY_MS) — při načítání se vstupy sypou po jednom a dva
   // POSTy v letu by mohly dorazit v opačném pořadí; server přepisuje per
   // seance × symbol, takže platí poslední
+  // Klíč nese i hlasy (9. 9. na produkci: skóre zůstalo 0 — tendence +1,
+  // sentiment −1 — i po doplnění overnight/ΔOI/gamma, takže se nový POST
+  // neposlal a v DB zůstaly důvody „bez dat" z mezistavu načítání)
   const verdictKey =
-    trend === null ? null : `${dateIso}|${symbol}|${verdict.verdict}|${verdict.score}`
+    trend === null
+      ? null
+      : `${dateIso}|${symbol}|${verdict.verdict}|${verdict.score}|${verdict.votes.map((vote) => `${vote.name}=${vote.vote}:${vote.reason}`).join(';')}`
   useEffect(() => {
     if (verdictKey === null) return
     const timer = window.setTimeout(() => {
