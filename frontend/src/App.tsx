@@ -763,10 +763,10 @@ function MainContent() {
   // Progres ke gate pro dropdown (SPEC 9.0 „collecting data")
   const signalGate = useMemo(() => signalGateInfo(newsData.stats, symbol), [newsData.stats, symbol])
   // Daily OHLC SentIndexu (#296) — jen když je Daily pohled a panel zapnutý
-  const sentimentDaily = useSentimentDaily(symbol, timeframe === 'daily' && toggles.news)
+  const sentimentDaily = useSentimentDaily(symbol, timeframe === 'daily' && toggles.sentiment)
   const panelSeries = useMemo(() => {
     const base = playback.isLive ? day.panels : slicePanels(day.panels, playback.position)
-    if (!toggles.news) return base
+    if (!toggles.sentiment) return base
     // Daily pohled (#296): svíčka per sloupec-den, párovaná datem přes týž
     // formatter, kterým vznikly popisky osy (vzor alignSeriesToLabels)
     if (timeframe === 'daily') {
@@ -794,7 +794,7 @@ function MainContent() {
     timeframe,
     playback.isLive,
     playback.position,
-    toggles.news,
+    toggles.sentiment,
   ])
   const allOverlays = useMemo(
     () => (playback.isLive ? staticOverlays : sliceOverlays(staticOverlays, playback.position)),
@@ -845,11 +845,10 @@ function MainContent() {
       delta: toggles.delta,
       deltaFlow: toggles.deltaFlow,
       evoOi: toggles.evoOi,
-      // Checkbox News zapíná zároveň panel Sentiment (#288); markery v grafu
-      // se na něj navěsí v #287
-      sentiment: toggles.news,
+      // Sentiment má od #1084 vlastní přepínač (dřív jel s checkboxem News, #288)
+      sentiment: toggles.sentiment,
     }),
-    [toggles.vol, toggles.optVol, toggles.delta, toggles.deltaFlow, toggles.evoOi, toggles.news],
+    [toggles.vol, toggles.optVol, toggles.delta, toggles.deltaFlow, toggles.evoOi, toggles.sentiment], // prettier-ignore
   )
   const panelTime = useMemo(
     () => ({ offsetX: chartView.offsetX, zoomX: chartView.zoomX }),

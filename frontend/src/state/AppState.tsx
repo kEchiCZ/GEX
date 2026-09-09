@@ -12,6 +12,7 @@ import type { GexUnits } from '../heatmap/units'
 import { FORWARD_RANGES } from '../heatmap/dailyforward'
 import type { ForwardRange } from '../heatmap/dailyforward'
 import { clampedNumber, enumMap, mergedBooleans, oneOf, shortString, usePersistentState } from './persist' // prettier-ignore
+import type { Revive } from './persist'
 
 export interface PipelineStatus {
   engine: string
@@ -113,6 +114,8 @@ export interface Toggles {
   /** Panel Evo OI (#573): vývoj celkového call/put OI. */
   evoOi: boolean
   volOiDelta: boolean
+  /** Panel Sentiment (#1084): dřív navěšený na `news`, teď vlastní přepínač. */
+  sentiment: boolean
   /** Projekce heatmapy do settle (ADR-0006) — jen intraday. */
   projection: boolean
   news: boolean
@@ -361,9 +364,27 @@ const DEFAULT_TOGGLES: Toggles = {
   deltaFlow: false,
   evoOi: false,
   volOiDelta: true,
+  sentiment: false,
   projection: true,
   news: false,
   setups: true,
+}
+
+/** Reviver přepínačů: k `mergedBooleans` přidává migraci #1084 — panel
+Sentiment byl dřív navěšený na checkbox News, takže uložený stav bez klíče
+`sentiment` převezme hodnotu `news`, ať uživateli panel po nasazení nezmizí. */
+function revivedToggles(): Revive<Toggles> {
+  const base = mergedBooleans<Toggles>()
+  return (value, fallback) => {
+    const result = base(value, fallback)
+    if (typeof value === 'object' && value !== null) {
+      const stored = value as Record<string, unknown>
+      if (typeof stored.sentiment !== 'boolean' && typeof stored.news === 'boolean') {
+        result.sentiment = stored.news
+      }
+    }
+    return result
+  }
 }
 
 export function AppStateProvider({
@@ -488,7 +509,7 @@ export function AppStateProvider({
   const [toggles, setToggles] = usePersistentState<Toggles>(
     'toggles',
     DEFAULT_TOGGLES,
-    mergedBooleans<Toggles>(),
+    revivedToggles(),
   )
   // Režim signálů je string, do `Toggles` (jen booleany) nepatří
   const [signalMode, setSignalMode] = usePersistentState<SignalMode>(

@@ -621,6 +621,31 @@ button.cal-selected {
   accent-color: var(--accent);
 }
 
+/* Dropdown spodních panelů (#1084) — tlačítko v liště + popover s checkboxy */
+.panels-dropdown-wrap {
+  position: relative;
+}
+
+.panels-dropdown-button {
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+.panels-dropdown {
+  position: absolute;
+  left: 0;
+  top: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 140px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  z-index: 10;
+}
+
 /* ── Hlavní plocha a stavová lišta ───────────────────────── */
 .chart-row {
   flex: 1;

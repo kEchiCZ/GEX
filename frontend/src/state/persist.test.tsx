@@ -1,5 +1,5 @@
 /** Testy persistence UI voleb (ADR-0007, #167): revivery, hook, obnovení v App. */
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
@@ -130,7 +130,21 @@ test('App po refreshi naskočí s uloženými volbami (#167)', () => {
   expect((screen.getByLabelText('Škála heatmapy') as HTMLSelectElement).value).toBe('sqrt')
   expect((screen.getByLabelText('Styl ceny') as HTMLSelectElement).value).toBe('line')
   expect((screen.getByLabelText('Sessions') as HTMLInputElement).checked).toBe(true)
+  fireEvent.click(screen.getByLabelText('Výběr spodních panelů')) // checkboxy panelů jsou v dropdownu (#1084)
   expect((screen.getByLabelText('Vol') as HTMLInputElement).checked).toBe(false)
   // Neuložené volby drží default
   expect((screen.getByLabelText('Walls mód') as HTMLSelectElement).value).toBe('off')
+})
+
+test('uložený stav bez klíče sentiment převezme hodnotu news (migrace #1084)', () => {
+  window.localStorage.setItem('gexlens.toggles', JSON.stringify({ news: true }))
+  mockApi()
+  const socket = new LiveSocket('ws://test/ws/live', {
+    webSocketFactory: (url) => new FakeWebSocket(url),
+  })
+  render(<App socket={socket} />)
+
+  fireEvent.click(screen.getByLabelText('Výběr spodních panelů'))
+  expect((screen.getByLabelText('Sentiment') as HTMLInputElement).checked).toBe(true)
+  expect((screen.getByLabelText('News') as HTMLInputElement).checked).toBe(true)
 })
