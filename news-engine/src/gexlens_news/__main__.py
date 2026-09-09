@@ -19,6 +19,7 @@ from collections.abc import Sequence
 
 from sqlalchemy import create_engine
 
+from gexlens_engine.memwatch import MemoryWatch
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema, seed_news_sources
 from gexlens_news.anomaly_job import AnomalyJob
 from gexlens_news.bars import BarsRepository
@@ -263,6 +264,7 @@ async def run(settings: NewsSettings) -> None:
     ngram = NgramShadowJob(engine) if settings.ngram_shadow_enabled else None
     if ngram is None:
         logger.info("Ngram shadow vypnut (GEXLENS_NEWS_NGRAM_SHADOW_ENABLED=false)")
+    memory_watch = MemoryWatch.from_env("news-engine", logger)
     publisher = (
         NewsPublisher(settings.api_base, api_token=settings.api_token)
         if settings.api_base
@@ -285,6 +287,7 @@ async def run(settings: NewsSettings) -> None:
         nonlocal last_stats_day
         while not stop.is_set():
             now = dt.datetime.now(dt.UTC)
+            memory_watch.sample()  # #1105: RSS do logu à 10 min, tracemalloc za flagem
             # Pravidlová klasifikace první — bez kategorie a importance by
             # event do empirického modelu vůbec nevstoupil (SPEC 2.4)
             try:
