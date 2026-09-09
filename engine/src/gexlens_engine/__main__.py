@@ -711,6 +711,24 @@ async def create_pipeline(
         rt_bars = bars_list
         return ticker
 
+    async def restart_bars() -> None:
+        """Obnova mrtvého reqRealTimeBars streamu po stall (#1082).
+
+        Error 1100/1102 (TWS ztratí a obnoví spojení s IBKR) zabije stream
+        barů, aniž by spadlo API spojení — `resubscribe` po reconnectu tedy
+        neběží. Spot ticker se nechává být (tiky chodí, jinak by detektor
+        stall nehlásil); obnovuje se jen stream barů.
+        """
+        nonlocal rt_bars
+        if stopped:
+            return
+        if rt_bars is not None:
+            ib.cancelRealTimeBars(rt_bars)
+        bars_list = ib.reqRealTimeBars(front, 5, "TRADES", False)
+        bars_list.updateEvent += on_bar_update
+        rt_bars = bars_list
+        logger.info("Obnoven reqRealTimeBars stream %s po stall", symbol)
+
     fut_ticker = subscribe_underlying()
     await asyncio.sleep(3)
     # Spot: live cena → marketPrice → poslední závěrečná (víkend/zavřený trh,
@@ -871,6 +889,7 @@ async def create_pipeline(
         next_info=next_info,
         next_band=next_band,
         backfill_today=backfill_today,
+        restart_bars=restart_bars,
         fa_repository=fa_repository,
         alpha_repository=alpha_repository,
         setup_engine=(
