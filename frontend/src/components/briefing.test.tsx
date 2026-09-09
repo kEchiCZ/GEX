@@ -40,9 +40,62 @@ function mockApis(overrides: Record<string, unknown> = {}) {
     if (path.includes('/volregime/')) return body(overrides['volregime'] ?? { rows: [] })
     if (path.includes('/emrespect/')) return body(overrides['emrespect'] ?? { summary: null })
     if (path.includes('/ivrank/')) return body(overrides['ivrank'] ?? { latest: [] })
+    if (path.includes('/candles/')) {
+      const tf = new URL(path, 'http://x').searchParams.get('tf') ?? 'D'
+      const byTf = (overrides['candles'] ?? {}) as Record<string, unknown[]>
+      return body({ candles: byTf[tf] ?? [] })
+    }
     return body({})
   })
 }
+
+/** Rostoucí zigzag: swingy > trend, ať struktura HH/HL vyjde (viz trend.test.ts). */
+function risingCandles(count: number, step = 2): Array<Record<string, unknown>> {
+  return Array.from({ length: count }, (_, i) => {
+    const phase = (i % 8) / 8
+    const swing = (phase < 0.5 ? phase * 2 : (1 - phase) * 2) * 12
+    const close = 6000 + step * i + swing
+    return {
+      ts: new Date(Date.UTC(2026, 7, 1) + i * 3_600_000).toISOString(),
+      open: close,
+      high: close + 1,
+      low: close - 1,
+      close,
+      volume: 100,
+      partial: false,
+    }
+  })
+}
+
+test('karta Trend (#1089): směr per timeframe a čtení shora dolů', async () => {
+  mockApis({
+    candles: {
+      W: risingCandles(60),
+      D: risingCandles(60),
+      '240': risingCandles(60),
+      '60': risingCandles(60, -2),
+      '15': risingCandles(5),
+    },
+  })
+  render(<BriefingView />)
+  await waitFor(() => {
+    expect(screen.getByTestId('trend-reading').textContent).toContain('Vyšší TF: rostoucí.')
+  })
+  expect(screen.getByTestId('trend-row-W').textContent).toContain('rostoucí ●')
+  expect(screen.getByTestId('trend-row-60').textContent).toContain('klesající')
+  // Málo dat se přizná, nic se nedosazuje
+  expect(screen.getByTestId('trend-row-15').textContent).toContain('málo dat (5/20 svíček)')
+})
+
+test('karta Trend bez svíček říká, že se načítají / chybí', async () => {
+  mockApis()
+  render(<BriefingView />)
+  await waitFor(() => {
+    expect(screen.getByTestId('trend-reading').textContent).toBe(
+      'Zatím málo svíček pro čtení trendu.',
+    )
+  })
+})
 
 test('prázdný stav drží tvar — všechny karty s fallback texty', async () => {
   mockApis()

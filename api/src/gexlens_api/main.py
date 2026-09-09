@@ -10,6 +10,7 @@ import contextlib
 import datetime as dt
 import logging
 import math
+import threading
 from collections.abc import Callable
 from typing import Annotated, Any
 
@@ -33,6 +34,12 @@ from sqlalchemy import delete, select
 
 from gexlens_api.alerts import AlertEngine
 from gexlens_api.backup import build_backup_router
+from gexlens_api.candles import (
+    TIMEFRAMES,
+    build_candles,
+    build_daily_candles,
+    calendar_days_needed,
+)
 from gexlens_api.crud import build_router
 from gexlens_api.data import DataRepository, PartitionNotFoundError, session_bounds
 from gexlens_api.heatmap import (
@@ -172,6 +179,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.live_hub = live_hub
     app.state.meta_repository = meta_repository
     app.state.alert_engine = alert_engine
+    # Svíčky D/W (#1089): denní agregáty ~2 let partic se zahřejí na pozadí,
+    # ať první otevření Briefingu nečeká na 500 souborů
+    threading.Thread(
+        target=repository.warm_daily_partials, name="candles-warmup", daemon=True
+    ).start()
     app.include_router(build_router(meta_repository))
     # SentimentLens (#285) — vlastní router, ať main.py nenaroste o dalších
     # 200 řádků; schéma se zakládá lazy při prvním dotazu
@@ -408,6 +420,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "date": date.isoformat(),
             "bars": _records(repository.bars_session(symbol, date)),
         }
+
+    @app.get("/candles/{symbol}")
+    def candles(
+        symbol: str,
+        tf: str = Query("D"),
+        limit: int = Query(120, ge=1, le=600),
+    ) -> dict[str, object]:
+        """Svíčky vyšších timeframů složené z 1min barů (#1089, karta Trend).
+
+        `tf` = W | D | 240 | 60 | 15. Denní svíčka = Globex seance, intradenní
+        koše zarovnané na její otevření, týden z denních podle ISO týdne.
+        Vrací posledních `limit` svíček vzestupně; rozdělaná má `partial: true`.
+        """
+        if tf not in TIMEFRAMES:
+            raise HTTPException(422, f"tf musí být jedno z {', '.join(TIMEFRAMES)}")
+        days = calendar_days_needed(tf, limit)
+        if tf in ("D", "W"):
+            rows = build_daily_candles(repository.daily_partials(symbol, days), tf, limit)
+        else:
+            rows = build_candles(repository.bars_recent(symbol, days), tf, limit)
+        return {"symbol": symbol, "tf": tf, "candles": rows}
 
     @app.get("/oidelta/{symbol}/{expiry}")
     def oi_delta(symbol: str, expiry: str, movers: int = 10) -> dict[str, object]:

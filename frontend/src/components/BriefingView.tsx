@@ -12,6 +12,7 @@ import {
   barsRange,
   briefingToPlanText,
   fetchBars,
+  fetchCandlesByTimeframe,
   fetchCliffToday,
   fetchEmRespectSummary,
   fetchIvRankLatest,
@@ -34,6 +35,8 @@ import type { ExpectedMove } from '../instrument/expectedmove'
 import { categoryGlyph, fetchSentimentState, fetchUpcoming, isHighImpact } from '../api/news'
 import type { NewsRow, SentimentStateInfo } from '../api/news'
 import { useGexForward } from '../hooks/useGexForward'
+import { TIMEFRAME_LABELS, assessTrends, directionLabel } from '../instrument/trend'
+import type { Candle, TimeframeKey } from '../instrument/trend'
 import { sessionDateIso } from '../instrument/tz'
 import { useAppState } from '../state/AppState'
 
@@ -79,6 +82,8 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   const [volRegime, setVolRegime] = useState<VolRegimeRow | null>(null)
   const [emRespect, setEmRespect] = useState<EmRespectSummary | null>(null)
   const [ivRank, setIvRank] = useState<IvRankRow[]>([])
+  // Trend napříč timeframy (#1089): svíčky W/D/4h/1h/15m z /candles
+  const [candles, setCandles] = useState<Partial<Record<TimeframeKey, Candle[]>> | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const forward = useGexForward(symbol, true)
 
@@ -103,6 +108,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     void fetchVolRegimeLatest(symbol).then(setVolRegime)
     void fetchEmRespectSummary(symbol).then(setEmRespect)
     void fetchIvRankLatest(symbol).then(setIvRank)
+    void fetchCandlesByTimeframe(symbol).then(setCandles)
     // Týdenní horizont (#830): bez něj nejde poznat, jestli je dnešek
     // klidný den, nebo den před velkým tiskem — a to mění čtení positioningu
     void fetchUpcoming(24 * 7).then(setUpcoming)
@@ -119,6 +125,8 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   }, [reload])
 
   const regime = useMemo(() => gammaRegimeLabel(levels, bars?.last ?? null), [levels, bars])
+  // Čtení trendu shora dolů (#1089): null, dokud svíčky nedorazí
+  const trend = useMemo(() => (candles === null ? null : assessTrends(candles)), [candles])
 
   // Makro dne: jen dnešní seance, významné (importance ≥ 2) napřed
   const todayEvents = useMemo(() => {
@@ -179,6 +187,39 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
       </header>
 
       <div className="briefing-grid">
+        {/* Trend napříč timeframy (#1089): vyšší TF určuje směr, nižší načasování.
+        Struktura (HH/HL vs. LH/LL) a EMA20/50 per TF; bez dostatku svíček se
+        nic nedosazuje — řádek říká „málo dat". */}
+        <Card title="Trend">
+          {trend === null ? (
+            <p className="muted">Svíčky trendu se načítají.</p>
+          ) : (
+            <>
+              <p className="briefing-em" data-testid="trend-reading">
+                {trend.reading}
+              </p>
+              <table className="briefing-table briefing-trend-table">
+                <tbody>
+                  {trend.byTimeframe.map((row) => (
+                    <tr key={row.tf} data-testid={`trend-row-${row.tf}`}>
+                      <td>{TIMEFRAME_LABELS[row.tf]}</td>
+                      <td className={row.direction ? `trend-${row.direction}` : 'muted'}>
+                        {directionLabel(row.direction)}
+                        {row.strength === 'strong' ? ' ●' : row.strength === 'weak' ? ' ○' : ''}
+                      </td>
+                      <td className="muted trend-note">{row.note}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="muted trend-legend">
+                ● struktura i EMA souhlasí · ○ jen jedna z nich · vyšší TF (týden, den) určuje směr,
+                nižší načasování
+              </p>
+            </>
+          )}
+        </Card>
+
         <Card title="Režim a úrovně">
           <p className="briefing-em">{regime}</p>
           {levels ? (

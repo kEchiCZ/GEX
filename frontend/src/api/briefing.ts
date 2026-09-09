@@ -7,6 +7,8 @@ overnight rozsah a včerejší settle. US open se počítá DST-korektně přes
 zonedTimeUtc (#511).
 */
 import { API_BASE } from '../config'
+import { TIMEFRAMES } from '../instrument/trend'
+import type { Candle, TimeframeKey } from '../instrument/trend'
 import { zonedTimeUtc } from '../instrument/tz'
 
 export interface BarRow {
@@ -52,6 +54,42 @@ async function getJson<T>(path: string, fallback: T): Promise<T> {
   } catch {
     return fallback
   }
+}
+
+/** Svíčky vyššího timeframe (#1089): `GET /candles/{sym}?tf=&limit=` — D = Globex
+seance, W z denních, intradenní koše od otevření seance; poslední může být `partial`. */
+export async function fetchCandles(
+  symbol: string,
+  tf: TimeframeKey,
+  limit: number,
+): Promise<Candle[]> {
+  // prettier-ignore
+  const data = await getJson<{ candles: Candle[] }>(`/candles/${symbol}?tf=${tf}&limit=${limit}`, {
+    candles: [],
+  })
+  return data.candles
+}
+
+/** Kolik svíček per timeframe stáhnout: EMA50 + rezerva na pivoty; týden má
+z 2 let barů ~100 svíček, intradenní koše jen pár seancí (limit endpointu 600). */
+export const CANDLE_LIMITS: Record<TimeframeKey, number> = {
+  W: 80,
+  D: 120,
+  '240': 90,
+  '60': 120,
+  '15': 120,
+}
+
+/** Stáhne svíčky všech timeframů; chybějící TF (chyba, 404) nechá prázdný. */
+export async function fetchCandlesByTimeframe(
+  symbol: string,
+): Promise<Partial<Record<TimeframeKey, Candle[]>>> {
+  const pairs = await Promise.all(
+    TIMEFRAMES.map(async (tf) => [tf, await fetchCandles(symbol, tf, CANDLE_LIMITS[tf])] as const),
+  )
+  const result: Partial<Record<TimeframeKey, Candle[]>> = {}
+  for (const [tf, candles] of pairs) if (candles.length > 0) result[tf] = candles
+  return result
 }
 
 export async function fetchBars(symbol: string, dateIso: string): Promise<BarRow[]> {

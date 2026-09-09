@@ -2853,6 +2853,35 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   font-size: 0.9em;
 }
 
+/* Karta Trend (#1089): směr per timeframe, poznámka vlevo zarovnaná */
+.briefing-trend-table td:last-child {
+  text-align: left;
+  font-variant-numeric: normal;
+  font-size: 0.82em;
+  padding-left: 8px;
+}
+.briefing-trend-table td:first-child {
+  padding-right: 10px;
+  white-space: nowrap;
+}
+.briefing-trend-table td:nth-child(2) {
+  white-space: nowrap;
+  font-weight: 600;
+}
+.trend-up {
+  color: #3ecf8e;
+}
+.trend-down {
+  color: #f0616d;
+}
+.trend-range {
+  color: #e8c14b;
+}
+.trend-legend {
+  margin: 6px 0 0;
+  font-size: 0.78em;
+}
+
 /* Kalkulačka pozice u setup karty (#679) */
 .setup-card-position {
   font-size: 0.82em;
