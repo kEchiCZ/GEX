@@ -162,6 +162,103 @@ def test_read_expiries_at_bere_posledni_radek_do_settle(tmp_path: Path) -> None:
         ("20260720", -600.0, 7600.0),
         ("20260721", 400.0, 7580.0),
     ]
+    # Bez profilu partice hrubá gamma chybí → build_cliff spadne na |NetGEX|
+    assert [e.gross_gex for e in expiries] == [None, None]
+
+
+def test_hruba_gamma_z_profilu_prebije_vynulovany_netgex(tmp_path: Path) -> None:
+    """#576 fix: ES OPEX 21. 8. měl NetGEX řetězu ~0 (call/put se vynulovaly), profil ne."""
+    from gexlens_engine.compute.gammacliff import gex_magnitude
+    from gexlens_engine.storage.parquet_store import GexProfileRow
+
+    settings = Settings(data_dir=tmp_path)
+    seed_levels(settings, "ES", "20260720", SESSION, gex=62.0, flip=7600.0)  # net skoro nula
+    seed_levels(settings, "ES", "20260721", SESSION, gex=400.0, flip=7580.0)
+    writer = SnapshotWriter(settings)
+    at_settle = dt.datetime(2026, 7, 20, 20, 0, tzinfo=dt.UTC)
+    # Profil settlující expirace: +3000 nad cenou, −3000 pod ní → net 0, hrubá 6000
+    writer.write_gexprofile(
+        "ES",
+        "20260720",
+        SESSION,
+        [
+            GexProfileRow(
+                ts_min=at_settle - dt.timedelta(minutes=2),
+                grid_start=7500.0,
+                grid_step=50.0,
+                values=[-1000.0, -2000.0, 2000.0, 1000.0],
+            ),  # noqa: E501
+            GexProfileRow(
+                ts_min=at_settle + dt.timedelta(minutes=30),
+                grid_start=7500.0,
+                grid_step=50.0,
+                values=[0.0, 0.0, 0.0, 0.0],
+            ),  # po settle se nepočítá  # noqa: E501
+        ],
+    )
+    writer.write_gexprofile(
+        "ES",
+        "20260721",
+        SESSION,
+        [
+            GexProfileRow(
+                ts_min=at_settle - dt.timedelta(minutes=1),
+                grid_start=7500.0,
+                grid_step=50.0,
+                values=[100.0, 300.0],
+            )
+        ],  # noqa: E501
+    )
+    expiries = read_expiries_at(tmp_path, "ES", SESSION, at_settle)
+    assert [e.gross_gex for e in expiries] == [6000.0, 400.0]
+    assert gex_magnitude(expiries[0]) == 6000.0
+    record = build_cliff(SESSION, "ES", expiries)
+    assert record is not None
+    assert record.gex_expiring == pytest.approx(6000.0)
+    assert record.cliff_share == pytest.approx(6000.0 / 6400.0)
+
+
+def test_recompute_prepise_historii_a_necha_next_metriky(tmp_path: Path) -> None:
+    from gexlens_engine.storage.parquet_store import GexProfileRow
+
+    settings = Settings(
+        data_dir=tmp_path, database_url=f"sqlite+pysqlite:///{tmp_path / 'm.sqlite'}"
+    )
+    engine = create_engine(settings.database_url)
+    repository = GammaCliffRepository(engine)
+    repository.ensure_schema()
+    seed_levels(settings, "ES", "20260720", SESSION, gex=62.0, flip=7600.0)
+    seed_levels(settings, "ES", "20260721", SESSION, gex=400.0, flip=7580.0)
+    now = dt.datetime(2026, 7, 21, 12, 0, tzinfo=dt.UTC)
+    collector = GammaCliffCollector(
+        symbol="ES", repository=repository, db=engine, data_dir=tmp_path
+    )
+    collector._run_backfill(now)
+    repository.update_next_metrics(SESSION, "ES", next_range_atr=1.3, next_setups=None)
+    # Profil dorazí (např. nový výpočet) → přepočet změní cliff_share, next_range_atr zůstane
+    SnapshotWriter(settings).write_gexprofile(
+        "ES",
+        "20260720",
+        SESSION,
+        [
+            GexProfileRow(
+                ts_min=dt.datetime(2026, 7, 20, 19, 59, tzinfo=dt.UTC),
+                grid_start=7500.0,
+                grid_step=50.0,
+                values=[-3000.0, 3000.0],
+            )
+        ],  # noqa: E501
+    )
+    assert collector.recompute(now) == 1
+    from sqlalchemy import select
+
+    from gexlens_engine.storage.gammacliff_store import gamma_cliff_table
+
+    with engine.connect() as conn:
+        row = conn.execute(select(gamma_cliff_table)).mappings().one()
+    assert row["gex_expiring"] == pytest.approx(6000.0)
+    assert row["cliff_share"] == pytest.approx(6000.0 / 6400.0)
+    assert row["next_range_atr"] == pytest.approx(1.3)
 
 
 def test_collector_zapise_seanci_backfill_i_next_metriky(tmp_path: Path) -> None:

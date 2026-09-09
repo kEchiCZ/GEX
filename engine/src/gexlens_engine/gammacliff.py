@@ -79,9 +79,37 @@ def read_expiries_at(
                 flip=float(last["flip"]) if last["flip"] is not None else None,  # type: ignore[arg-type]
                 call_wall=float(last["call_wall"]) if last["call_wall"] is not None else None,  # type: ignore[arg-type]
                 put_wall=float(last["put_wall"]) if last["put_wall"] is not None else None,  # type: ignore[arg-type]
+                gross_gex=read_gross_gex_at(expiry_dir / "gexprofile", session_date, at_ts),
             )
         )
     return out
+
+
+def read_gross_gex_at(profile_dir: Path, session_date: dt.date, at_ts: dt.datetime) -> float | None:
+    """Σ|NetGEX| přes cenovou mřížku z poslední minuty profilu ≤ `at_ts` (#576 fix).
+
+    None = partice profilu pro seanci chybí (starší data před ADR-0009) — volající
+    pak spadne na |NetGEX| řetězu, ať historie nezmizí.
+    """
+    path = profile_dir / f"{session_date.isoformat()}.parquet"
+    if not path.exists():
+        return None
+    try:
+        table = pq.read_table(path, columns=["ts_min", "values"])
+    except Exception:
+        logger.exception("Profil partice %s nečitelná — hrubá gamma se nedoplní", path)
+        return None
+    last_ts: dt.datetime | None = None
+    last_values: list[float] | None = None
+    for record in table.to_pylist():
+        ts = record["ts_min"]
+        if ts is None or ts > at_ts:
+            continue
+        if last_ts is None or ts >= last_ts:
+            last_ts, last_values = ts, record["values"]
+    if not last_values:
+        return None
+    return float(sum(abs(float(value)) for value in last_values if value is not None))
 
 
 def _levels_days(data_dir: Path, symbol: str) -> list[dt.date]:
@@ -171,6 +199,24 @@ class GammaCliffCollector:
     def _build_for(self, session: dt.date) -> CliffRecord | None:
         expiries = read_expiries_at(self.data_dir, self.symbol, session, settle_ts(session))
         return build_cliff(session, self.symbol, expiries)
+
+    def recompute(self, now: dt.datetime) -> int:
+        """Přepočítá VŠECHNY seance z levels + profil partic (změna metody měření, #576).
+
+        Metriky následující seance (`next_*`) zůstávají — mění se jen
+        `gex_before` / `gex_expiring` / `cliff_share` a posuny.
+        """
+        written = 0
+        for day in _levels_days(self.data_dir, self.symbol):
+            if settle_ts(day) > now:
+                continue
+            record = self._build_for(day)
+            if record is None:
+                continue
+            self.repository.upsert(record, now)
+            written += 1
+        logger.info("%s: gamma útes přepočítán — %d seancí", self.symbol, written)
+        return written
 
     def _run_backfill(self, now: dt.datetime) -> None:
         existing = self.repository.existing_dates(self.symbol)

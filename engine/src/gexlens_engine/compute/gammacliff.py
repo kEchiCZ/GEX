@@ -27,6 +27,11 @@ class ExpiryAtSettle:
     flip: float | None
     call_wall: float | None
     put_wall: float | None
+    #: Hrubá gamma Σ|NetGEX| přes cenovou mřížku profilu (#576 fáze 1 fix):
+    #: NetGEX řetězu umí u 0DTE těsně před settle vynulovat call/put strany
+    #: (ES OPEX 21. 8. 2026: net −3 843 → +62 během minut, cliff_share 0,028),
+    #: velikost gammy, která odpadne, ale nezmizí. None = profil partice chybí.
+    gross_gex: float | None = None
 
 
 @dataclass(frozen=True)
@@ -59,13 +64,19 @@ def _shift(new: float | None, old: float | None) -> float | None:
     return new - old
 
 
+def gex_magnitude(item: ExpiryAtSettle) -> float:
+    """Velikost gammy expirace: hrubá z profilu, jinak |NetGEX| (starší partice bez profilu)."""
+    return item.gross_gex if item.gross_gex is not None else abs(item.total_gex)
+
+
 def build_cliff(
     session_date: dt.date, symbol: str, expiries: list[ExpiryAtSettle]
 ) -> CliffRecord | None:
     """Záznam útesu ze stavů sledovaných expirací k settle; None = nejde spočítat.
 
-    Settlující expirace = ta s datem seance (0DTE). `gex_before` je Σ|NetGEX|
-    přes všechny sledované expirace — poctivá poznámka: sweepujeme aktivní +
+    Settlující expirace = ta s datem seance (0DTE). `gex_before` je Σ hrubé gammy
+    (Σ|NetGEX| přes mřížku profilu; bez profilu |NetGEX| řetězu) přes všechny
+    sledované expirace — poctivá poznámka: sweepujeme aktivní +
     následující expiraci (PR #94/#95), takže „všechny" znamená obě; vzdálenější
     řetězce nevidíme (odblokuje až M7 #616) a `cliff_share` je tím pádem horní
     odhad podílu.
@@ -77,8 +88,8 @@ def build_cliff(
     settling = next((item for item in expiries if item.expiry == settling_key), None)
     if settling is None:
         return None
-    gex_before = sum(abs(item.total_gex) for item in expiries)
-    gex_expiring = abs(settling.total_gex)
+    gex_before = sum(gex_magnitude(item) for item in expiries)
+    gex_expiring = gex_magnitude(settling)
     survivors = sorted(
         (item for item in expiries if item.expiry != settling_key), key=lambda item: item.expiry
     )
