@@ -108,16 +108,19 @@ test('Shrnutí dne (#1090): verdikt z hlasování, úrovně obratu, zprávy s re
   const levelsText = screen.getByTestId('summary-levels').textContent ?? ''
   expect(levelsText).toContain('Těžiště GEX · podpora')
   expect(levelsText).toContain('Call wall · odpor')
-  // Verdikt se uložil přes POST /briefing/verdicts
-  await waitFor(() => {
-    const post = fetchMock.mock.calls.find(
-      (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
-    )
-    expect(post).toBeDefined()
-    const payload = JSON.parse(String(post![1].body)) as { verdict: string; rules_version: number }
-    expect(payload.verdict).toBe('long')
-    expect(payload.rules_version).toBe(1)
-  })
+  // Verdikt se uložil přes POST /briefing/verdicts — až po ustálení (2 s debounce)
+  await waitFor(
+    () => {
+      const post = fetchMock.mock.calls.find(
+        (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
+      )
+      expect(post).toBeDefined()
+      const payload = JSON.parse(String(post![1].body)) as { verdict: string; rules_version: number } // prettier-ignore
+      expect(payload.verdict).toBe('long')
+      expect(payload.rules_version).toBe(1)
+    },
+    { timeout: 5_000 },
+  )
 })
 
 test('karta Trend bez svíček říká, že se načítají / chybí', async () => {

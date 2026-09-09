@@ -47,6 +47,8 @@ import { sessionDateIso } from '../instrument/tz'
 import { useAppState } from '../state/AppState'
 
 const REFRESH_MS = 60_000
+/** Verdikt se ukládá až po ustálení vstupů (#1090) — viz useEffect níže. */
+const VERDICT_POST_DELAY_MS = 2_000
 /** Instrumenty se stavem sentimentu — per symbol od ADR-0026. */
 const SENTIMENT_SYMBOLS = ['ES', 'NQ'] as const
 
@@ -169,9 +171,13 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   }, [upcoming, dateIso])
 
   // Volatility box (#873): EM z App (bez brány Traders mode), vol režim z API
-  const planEm = expectedMove
-    ? { em: expectedMove.em, anchor: expectedMove.anchor, preOpen: expectedMove.preOpen }
-    : null
+  const planEm = useMemo(
+    () =>
+      expectedMove
+        ? { em: expectedMove.em, anchor: expectedMove.anchor, preOpen: expectedMove.preOpen }
+        : null,
+    [expectedMove],
+  )
 
   // Shrnutí dne (#1090, ADR-0035): úrovně obratu, zprávy s reakcí, verdikt hlasováním
   const reference = useMemo(
@@ -205,20 +211,25 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
       }),
     [trend, levels, tendencyBand, symbolSentiment, bars, prevDay, oiDelta, newsToday],
   )
-  // Uložení verdiktu (#1090): až když dorazily svíčky trendu (jinak by se
-  // zapsal prázdný hlas); server přepisuje per seance × symbol
+  // Uložení verdiktu (#1090): až když dorazily svíčky trendu a stav se ustálí
+  // (VERDICT_POST_DELAY_MS) — při načítání se vstupy sypou po jednom a dva
+  // POSTy v letu by mohly dorazit v opačném pořadí; server přepisuje per
+  // seance × symbol, takže platí poslední
   const verdictKey =
     trend === null ? null : `${dateIso}|${symbol}|${verdict.verdict}|${verdict.score}`
   useEffect(() => {
     if (verdictKey === null) return
-    void postVerdict({
-      session_date: dateIso,
-      symbol,
-      verdict: verdict.verdict,
-      score: verdict.score,
-      votes: verdict.votes,
-      rules_version: VERDICT_RULES_VERSION,
-    })
+    const timer = window.setTimeout(() => {
+      void postVerdict({
+        session_date: dateIso,
+        symbol,
+        verdict: verdict.verdict,
+        score: verdict.score,
+        votes: verdict.votes,
+        rules_version: VERDICT_RULES_VERSION,
+      })
+    }, VERDICT_POST_DELAY_MS)
+    return () => window.clearTimeout(timer)
     // Klíč nese vše, co zápis mění — ostatní závislosti by jen opakovaly týž POST
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [verdictKey])
