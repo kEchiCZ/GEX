@@ -4,7 +4,8 @@ Hrubá gamma z profilu místo |NetGEX| řetězu — historické řádky se přep
 metriky následující seance zůstávají. Spouští se z hostitele proti compose PG
 (port 55432), data z `data/`:
 
-    uv run python scripts/recompute_gamma_cliff.py \n        --db "postgresql+psycopg://gexlens:…@127.0.0.1:55432/gexlens" --data-dir data
+    uv run python scripts/recompute_gamma_cliff.py --data-dir data \
+        --db "postgresql+psycopg://gexlens:…@127.0.0.1:55432/gexlens"
 
 Heslo nikdy nevypisuje ani neloguje.
 """
