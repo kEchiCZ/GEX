@@ -20,6 +20,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     func,
     inspect,
     select,
@@ -285,6 +286,23 @@ DEFAULT_PLAYBOOK: tuple[dict[str, str], ...] = (
     },
 )
 
+
+# Verdikt dne z Briefingu (#1090, ADR-0035 §3): jeden řádek per seance a symbol,
+# ať jde heuristika později poctivě vyhodnotit proti průběhu seance (#1091).
+briefing_verdicts_table = Table(
+    "briefing_verdicts",
+    meta_metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("session_date", Date, nullable=False),
+    Column("symbol", String(16), nullable=False),
+    Column("verdict", String(16), nullable=False),  # long | short | none | wait_news
+    Column("score", Integer, nullable=False),
+    Column("votes", JSON, nullable=False, default=list),
+    Column("rules_version", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("session_date", "symbol", name="uq_briefing_verdicts_session_symbol"),
+)
 
 settings_table = Table(
     "settings",

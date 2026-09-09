@@ -40,6 +40,9 @@ function mockApis(overrides: Record<string, unknown> = {}) {
     if (path.includes('/volregime/')) return body(overrides['volregime'] ?? { rows: [] })
     if (path.includes('/emrespect/')) return body(overrides['emrespect'] ?? { summary: null })
     if (path.includes('/ivrank/')) return body(overrides['ivrank'] ?? { latest: [] })
+    if (path.includes('/tendency/')) return body(overrides['tendency'] ?? { tendency: [] })
+    if (path.includes('/news/reactions/typical')) return body(overrides['typical'] ?? { typical: [] }) // prettier-ignore
+    if (path.includes('/briefing/verdicts')) return body({ id: 1 })
     if (path.includes('/candles/')) {
       const tf = new URL(path, 'http://x').searchParams.get('tf') ?? 'D'
       const byTf = (overrides['candles'] ?? {}) as Record<string, unknown[]>
@@ -85,6 +88,39 @@ test('karta Trend (#1089): směr per timeframe a čtení shora dolů', async () 
   expect(screen.getByTestId('trend-row-60').textContent).toContain('klesající')
   // Málo dat se přizná, nic se nedosazuje
   expect(screen.getByTestId('trend-row-15').textContent).toContain('málo dat (5/20 svíček)')
+})
+
+test('Shrnutí dne (#1090): verdikt z hlasování, úrovně obratu, zprávy s reakcí, uložení', async () => {
+  const rising = risingCandles(60)
+  mockApis({
+    candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising },
+    bars: { bars: [{ ts_min: '2026-08-13T13:00:00Z', open: 6440, high: 6450, low: 6430, close: 6446, volume: 10 }] }, // prettier-ignore
+    levels: { levels: [{ ts_min: '2026-08-13T14:00:00Z', flip: 6430, call_wall: 6500, put_wall: 6400, centroid: 6445, total_gex: -900 }] }, // prettier-ignore
+    tendency: { tendency: [{ ts_min: '', symbol: 'ES', score: 0.6, band: 'long', votes: [], weights_version: 1 }] }, // prettier-ignore
+    typical: { typical: [{ category: 'MACRO_INFLATION', windows: { '5': { median_abs_bp: 15, n: 12 } } }] }, // prettier-ignore
+  })
+  render(<BriefingView />)
+  await waitFor(() => {
+    expect(screen.getByTestId('summary-verdict').textContent).toBe('Spíše LONG den')
+  })
+  // trend 2+1, tendence 1, gamma negativní +1 = 5 (sentiment/overnight/ΔOI bez dat)
+  expect(screen.getByTestId('summary-verdict-text').textContent).toContain('skóre +5')
+  const levelsText = screen.getByTestId('summary-levels').textContent ?? ''
+  expect(levelsText).toContain('Těžiště GEX · podpora')
+  expect(levelsText).toContain('Call wall · odpor')
+  // Verdikt se uložil přes POST /briefing/verdicts — až po ustálení (2 s debounce)
+  await waitFor(
+    () => {
+      const post = fetchMock.mock.calls.find(
+        (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
+      )
+      expect(post).toBeDefined()
+      const payload = JSON.parse(String(post![1].body)) as { verdict: string; rules_version: number } // prettier-ignore
+      expect(payload.verdict).toBe('long')
+      expect(payload.rules_version).toBe(1)
+    },
+    { timeout: 5_000 },
+  )
 })
 
 test('karta Trend bez svíček říká, že se načítají / chybí', async () => {

@@ -1,7 +1,8 @@
 # ADR-0035: Trend napříč timeframy a verdikt dne v Briefingu
 
 **Stav:** navrženo (2026-09-09, issues #1089, #1090, #1091 — zadal uživatel; pravidla
-a váhy níže jsou volba implementace, čeká na potvrzení, PR nese `needs-decision`)
+a váhy níže jsou volba implementace, čeká na potvrzení, PR nesou `needs-decision`).
+Implementováno: §1–2 v PR #1092 (#1089), §3–4 v PR pro #1090; vyhodnocení §3 čeká na #1091.
 **Kontext:** Briefing (#674) říká TYP dne (gamma režim, volatilita), ale ne **v jakém
 trendu trh je**, a nenabízí odpověď na „čekat spíš long, nebo short den". SPEC v2.0
 pojem trendu podkladu nezná — jediné směrové čtení je indikátor tendence (#350),
@@ -64,7 +65,7 @@ naměřených reakcí téže kategorie (ADR-0031); pod 10 měření „bez měř
 
 ## Důsledky
 - Nový endpoint `/candles` (SPEC kap. 6); frontend `instrument/trend.ts`
-  a `briefing/summary.ts` jsou čisté funkce s testy.
+  a `instrument/daysummary.ts` jsou čisté funkce s testy.
 - Karta Trend a karta Shrnutí dne v Briefingu; plán do deníku nese tytéž řádky.
 - Verdikt je heuristika. Manuál to říká výslovně a odkazuje na vyhodnocení (#1091);
   do té doby se váhy nemění bez ADR dodatku.

@@ -34,6 +34,7 @@ from sqlalchemy import delete, select
 
 from gexlens_api.alerts import AlertEngine
 from gexlens_api.backup import build_backup_router
+from gexlens_api.briefing_routes import build_briefing_router
 from gexlens_api.candles import (
     TIMEFRAMES,
     build_candles,
@@ -185,6 +186,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         target=repository.warm_daily_partials, name="candles-warmup", daemon=True
     ).start()
     app.include_router(build_router(meta_repository))
+    app.include_router(build_briefing_router(meta_repository))
     # SentimentLens (#285) — vlastní router, ať main.py nenaroste o dalších
     # 200 řádků; schéma se zakládá lazy při prvním dotazu
     sentiment_ready: list[bool] = []

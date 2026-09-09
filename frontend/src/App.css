@@ -2853,6 +2853,45 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   font-size: 0.9em;
 }
 
+/* Shrnutí dne (#1090): přes celou šířku mřížky, tři sloupce */
+.briefing-summary {
+  grid-column: 1 / -1;
+  border-left-color: #3ecf8e;
+}
+.briefing-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.briefing-summary h4 {
+  margin: 0 0 4px;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.briefing-summary p {
+  margin: 0 0 8px;
+}
+.briefing-verdict {
+  font-weight: 700;
+  font-size: 1.05em;
+}
+.verdict-long {
+  color: #3ecf8e;
+}
+.verdict-short {
+  color: #f0616d;
+}
+.verdict-none {
+  color: #e8c14b;
+}
+.verdict-wait_news {
+  color: #e8c14b;
+}
+.briefing-votes {
+  font-size: 0.82em;
+}
+
 /* Karta Trend (#1089): směr per timeframe, poznámka vlevo zarovnaná */
 .briefing-trend-table td:last-child {
   text-align: left;

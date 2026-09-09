@@ -36,6 +36,9 @@ export interface NewsRow {
   a týden u našich poločasů (≤ 6 h) splývají, proto jedna hodnota. */
   topic_value?: number | null
   actual: number | string | null
+  /** Konvence řady (#1090, #462): +1 = nad konsensem risk-on, −1 = risk-off; null = řada bez mapy. */
+  series_sign?: number | null
+  series_name?: string | null
 }
 
 export interface SentimentPoint {

@@ -7,8 +7,9 @@ overnight rozsah a včerejší settle. US open se počítá DST-korektně přes
 zonedTimeUtc (#511).
 */
 import { API_BASE } from '../config'
+import type { DayVerdict, NewsExpectation, TurnLevel, TypicalReaction, VerdictKind, VerdictVote } from '../instrument/daysummary' // prettier-ignore
 import { TIMEFRAMES } from '../instrument/trend'
-import type { Candle, TimeframeKey } from '../instrument/trend'
+import type { Candle, TimeframeKey, TrendReport } from '../instrument/trend'
 import { zonedTimeUtc } from '../instrument/tz'
 
 export interface BarRow {
@@ -90,6 +91,37 @@ export async function fetchCandlesByTimeframe(
   const result: Partial<Record<TimeframeKey, Candle[]>> = {}
   for (const [tf, candles] of pairs) if (candles.length > 0) result[tf] = candles
   return result
+}
+
+/** Typická reakce per kategorie (#1090): medián |ret_bp| měřených reakcí v oknech. */
+export async function fetchTypicalReactions(symbol: string): Promise<TypicalReaction[]> {
+  const data = await getJson<{ typical: TypicalReaction[] }>(
+    `/news/reactions/typical?symbol=${symbol}`,
+    { typical: [] },
+  )
+  return data.typical
+}
+
+/** Uloží verdikt dne (#1090) — jeden řádek per seance a symbol, přepis idempotentní.
+Chyba se polyká: karta má žít i bez DB, vyhodnocení (#1091) pak den prostě nemá. */
+export async function postVerdict(payload: {
+  session_date: string
+  symbol: string
+  verdict: VerdictKind
+  score: number
+  votes: VerdictVote[]
+  rules_version: number
+}): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/briefing/verdicts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
 }
 
 export async function fetchBars(symbol: string, dateIso: string): Promise<BarRow[]> {
@@ -377,6 +409,11 @@ export function briefingToPlanText(input: {
   /** Volatility box (#873): vol režim + EM; undefined = data zatím nedorazila. */
   vol?: VolRegimeRow | null
   em?: PlanEm | null
+  /** Shrnutí dne (#1090): trend, verdikt, úrovně obratu, zprávy — jen když jsou. */
+  trend?: TrendReport | null
+  verdict?: DayVerdict | null
+  turnLevels?: TurnLevel[]
+  news?: NewsExpectation[]
 }): string {
   const lines: string[] = [`Plán dne ${input.symbol}:`, `- Režim: ${input.regime}`]
   const { levels } = input
@@ -396,6 +433,21 @@ export function briefingToPlanText(input: {
     const pct = Math.round(input.cliff.cliff_share * 100)
     lines.push(`- Dnes odpadá ~${pct} % gammy${input.cliff.is_opex ? ' (OPEX!)' : ''}`)
   }
+  // Shrnutí dne (#1090): trend shora dolů, úrovně obratu, zprávy s časem, verdikt
+  if (input.trend && input.trend.decided > 0) lines.push(`- Trend: ${input.trend.reading}`)
+  const nearest = (input.turnLevels ?? []).slice(0, 6)
+  if (nearest.length > 0) {
+    lines.push(
+      `- Úrovně obratu: ${nearest.map((level) => `${level.label} ${level.price} (${level.role})`).join(', ')}`,
+    )
+  }
+  const news = (input.news ?? []).filter((item) => item.highImpact).slice(0, 4)
+  if (news.length > 0) {
+    lines.push(
+      `- Zprávy: ${news.map((item) => `${item.timeLabel} ${item.row.title} — ${item.magnitude}`).join('; ')}`,
+    )
+  }
+  if (input.verdict) lines.push(`- Verdikt dne: ${input.verdict.summary}`)
   lines.push('- Teze dne: ')
   return lines.join('\n')
 }
