@@ -639,6 +639,7 @@ button.cal-selected {
   flex-direction: column;
   gap: 6px;
   min-width: 140px;
+  white-space: nowrap;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 8px;

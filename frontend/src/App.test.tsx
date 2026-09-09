@@ -39,7 +39,10 @@ test('vykreslí kompletní layout (SPEC 7.1)', async () => {
   expect(screen.getByLabelText('Timeframe')).toBeDefined()
   expect(screen.getByLabelText('Přepínače vizualizace')).toBeDefined()
   expect(screen.getByLabelText('Stav pipeline')).toBeDefined()
-  expect(screen.getByText('Zdi')).toBeDefined() // přepínač zdí (dřív „Dyn GEX")
+  // Přepínač zdí (dřív „Dyn GEX") je od #1084 v dropdownu Vrstvy
+  fireEvent.click(screen.getByLabelText('Výběr vrstev grafu'))
+  expect(screen.getByText('Zdi')).toBeDefined()
+  fireEvent.keyDown(document, { key: 'Escape' })
   expect(screen.getByText('Dyn GEX')).toBeDefined() // přepínač podkladové vrstvy (#242)
   // "Vol + OI Δ" je v přepínačích i v hlavičce strike profilu
   expect(screen.getAllByText('Vol + OI Δ').length).toBeGreaterThan(0)
