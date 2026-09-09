@@ -396,21 +396,31 @@ function MainContent() {
     [day.overlays, staticPrice],
   )
 
+  // Demo den (#1096) je jen kulisa grafu, dokud nedorazí balík dne nebo když API
+  // neběží — z jeho čísel se NESMÍ počítat nic, co hlavička ukazuje jako fakt
+  // (cena, změna, gamma režim, settle watch). Živé ticky spotu jsou skutečné.
+  const realDay = day.source !== 'demo'
   // Hlavička: poslední cena + denní změna vs. otevření dne (živá cena má přednost)
   useEffect(() => {
-    const spots = day.spotSeries.filter((value): value is number => value !== null)
+    const spots = realDay ? day.spotSeries.filter((value): value is number => value !== null) : [] // prettier-ignore
     const last = liveOverlay.bars.at(-1)?.close ?? spots.at(-1) ?? null
     const open = spots[0] ?? null
     setPriceInfo({
       last,
       changePct: last !== null && open !== null && open !== 0 ? ((last - open) / open) * 100 : null,
     })
-  }, [day.spotSeries, liveOverlay.bars, setPriceInfo])
+  }, [realDay, day.spotSeries, liveOverlay.bars, setPriceInfo])
   // GEX režim badge (#209): živý spot vůči flip zóně (měřený × dynamický flip).
   // Živé hodnoty, ne playback řez — badge je kontext „teď", stejně jako priceInfo.
   // Záměrně NEzvážený profil (#569): flip je cenová úroveň a nesmí záviset
   // na zobrazovací jednotce (P²/100 nuly nemění, ale interpolaci mezi uzly ano).
   useEffect(() => {
+    if (!realDay) {
+      // Demo den (#1096): žádný badge ani settle watch ze smyšlených úrovní
+      setRegimeInfo({ state: null, measuredFlip: null, dynamicFlip: null, fromProfileSign: false })
+      setSettleWatch(null)
+      return
+    }
     const spots = day.spotSeries.filter((value): value is number => value !== null)
     const liveSpot = liveOverlay.bars.at(-1)?.close ?? spots.at(-1) ?? null
     const flipSeries = day.overlays.levels?.find((line) => line.name === 'flip')?.series
@@ -445,7 +455,7 @@ function MainContent() {
       weak: line.weak ? (lastWeakFlag(line.weak) ?? null) : null,
     }))
     setSettleWatch(settleWatchLevel(wallCandidates, liveSpot))
-  }, [day.spotSeries, day.overlays.levels, day.overlays.walls, day.gexProfile, liveOverlay.bars, setRegimeInfo, setSettleWatch]) // prettier-ignore
+  }, [realDay, day.spotSeries, day.overlays.levels, day.overlays.walls, day.gexProfile, liveOverlay.bars, setRegimeInfo, setSettleWatch]) // prettier-ignore
   // Pokrytí OHLC do hlavičky (#470) — počítá se nad 1m osou, ne nad koši, aby
   // číslo znamenalo minuty dne bez ohledu na zvolený timeframe
   useEffect(() => {

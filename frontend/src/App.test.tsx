@@ -201,6 +201,16 @@ test('demo den nemá měřitelnou osu, takže OHLC badge ani časová značka ne
   expect(screen.getByTestId('data-source').textContent).toBe('demo data')
 })
 
+test('demo den neprosakuje do hlavičky: bez ceny, změny, gamma režimu a settle watch (#1096)', () => {
+  // 9. 9. 2026 na produkci: NQ · 7573.17 — poslední close demo datasetu ukázaný
+  // jako skutečná cena, dokud se načítal balík dne. Hlavička smí lhát pomlčkou, ne číslem.
+  const { container } = makeApp()
+  expect(screen.getByTestId('data-source').textContent).toBe('demo data')
+  expect(container.querySelector('.instrument-price .last')?.textContent).toBe('—')
+  expect(container.querySelector('.regime-badge')).toBeNull()
+  expect(screen.queryByText(/settle .* · (nad|pod) /)).toBeNull()
+})
+
 test('extended expirace nese badge zdroje tastytrade (#616 4b)', async () => {
   makeApp()
   // Expirace z REST; poslední (20260717) se vybere automaticky
