@@ -2,7 +2,7 @@
 
 **Stav:** navrženo (2026-09-09, issues #1089, #1090, #1091 — zadal uživatel; pravidla
 a váhy níže jsou volba implementace, čeká na potvrzení, PR nesou `needs-decision`).
-Implementováno: §1–2 v PR #1092 (#1089), §3–4 v PR pro #1090; vyhodnocení §3 čeká na #1091.
+Implementováno: §1–2 v PR #1092 (#1089), §3–4 v PR #1093 (#1090); vyhodnocení §3 = #1091 (engine doplní po settle výsledek US open → settle v bodech i EM, `GET /briefing/verdicts/stats`, karta ve Stats; brána n ≥ 30, pak návrh vah).
 **Kontext:** Briefing (#674) říká TYP dne (gamma režim, volatilita), ale ne **v jakém
 trendu trh je**, a nenabízí odpověď na „čekat spíš long, nebo short den". SPEC v2.0
 pojem trendu podkladu nezná — jediné směrové čtení je indikátor tendence (#350),

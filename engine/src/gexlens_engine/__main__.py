@@ -26,6 +26,7 @@ from gexlens_engine.adapters import (
     IbkrProvider,
     count_ib_lines,
 )
+from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import outside_us_rth
@@ -99,6 +100,7 @@ from gexlens_engine.runtime_settings import (
 )
 from gexlens_engine.setups import SetupEngine, setup_params_from_settings
 from gexlens_engine.spot_stream import SpotStreamer
+from gexlens_engine.storage.briefing_verdicts_store import BriefingVerdictRepository
 from gexlens_engine.storage.diskwatch import DiskWatch, utcnow_ts
 from gexlens_engine.storage.emrespect_store import EmRespectRepository
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
@@ -573,6 +575,7 @@ async def create_pipeline(
     gamma_cliff_repository: GammaCliffRepository | None = None,
     vol_regime_repository: VolRegimeRepository | None = None,
     em_respect_repository: EmRespectRepository | None = None,
+    briefing_verdict_repository: BriefingVerdictRepository | None = None,
     iv_rank_repository: IvRankRepository | None = None,
     probe_repository: ProbeRepository | None = None,
     tasty_metrics: TastyMetricsLike | None = None,
@@ -967,6 +970,16 @@ async def create_pipeline(
             if em_respect_repository is not None and db is not None
             else None
         ),
+        briefing_verdicts=(
+            BriefingVerdictCollector(
+                symbol=symbol,
+                repository=briefing_verdict_repository,
+                db=db,
+                data_dir=settings.data_dir,
+            )
+            if briefing_verdict_repository is not None and db is not None
+            else None
+        ),
         iv_rank=(
             IvRankCollector(
                 symbol=symbol,
@@ -1166,6 +1179,10 @@ async def main() -> None:
     # Respektování pásma EM (#872): bary + snapshoty + oi_eod, žádná linka navíc
     em_respect_repository = EmRespectRepository(db)
     await asyncio.to_thread(em_respect_repository.ensure_schema)
+
+    # Verdikty dne (#1091): výsledek seance k uloženému verdiktu, jen bary + em_respect
+    briefing_verdict_repository = BriefingVerdictRepository(db)
+    await asyncio.to_thread(briefing_verdict_repository.ensure_schema)
 
     # IV Rank (#871): tři denní řady IV; historické requesty, žádná linka navíc
     iv_rank_repository = IvRankRepository(db)
@@ -2302,6 +2319,7 @@ async def main() -> None:
                     gamma_cliff_repository=gamma_cliff_repository,
                     vol_regime_repository=vol_regime_repository,
                     em_respect_repository=em_respect_repository,
+                    briefing_verdict_repository=briefing_verdict_repository,
                     iv_rank_repository=iv_rank_repository,
                     probe_repository=probe_repository,
                     tasty_metrics=tasty_session,

@@ -20,6 +20,7 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
 from gexlens_engine.compute.gexforward import ForwardContract, forward_field
 from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
@@ -325,6 +326,8 @@ class InstrumentPipeline:
     vol_regime: VolRegimeCollector | None = None
     # Respektování pásma EM (#872, D3) — None = vypnuto
     em_respect: EmRespectCollector | None = None
+    #: Vyhodnocení verdiktů dne po settle (#1091)
+    briefing_verdicts: BriefingVerdictCollector | None = None
     # IV Rank — tři denní řady IV (#871) — None = vypnuto
     iv_rank: IvRankCollector | None = None
     # Sběr výskytů kandidáta T9 (#577, fáze 1 jen měření) — None = vypnuto
@@ -937,6 +940,12 @@ class InstrumentPipeline:
                 await self.em_respect.on_minute(now)
             except Exception:
                 logger.exception("EM respect %s selhal — pokračuji", self.symbol)
+        # Verdikty dne (#1091) — jednou po settle, čte jen bary a em_respect
+        if self.briefing_verdicts is not None:
+            try:
+                await self.briefing_verdicts.on_minute(now)
+            except Exception:
+                logger.exception("Vyhodnocení verdiktů %s selhalo — pokračuji", self.symbol)
         # IV Rank (#871) — jednou po settle; historický request, žádná linka
         if self.iv_rank is not None:
             try:

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from gexlens_api.meta_repo import MetaRepository
+from gexlens_engine.storage.briefing_verdicts_store import BriefingVerdictRepository, verdict_stats
 
 VerdictKind = Literal["long", "short", "none", "wait_news"]
 
@@ -43,6 +44,17 @@ def build_briefing_router(repository: MetaRepository) -> APIRouter:
         values = payload.model_dump()
         values["votes"] = [vote.model_dump() for vote in payload.votes]
         return repository.briefing_verdict_upsert(values)
+
+    @router.get("/briefing/verdicts/stats")
+    def verdicts_stats(
+        symbol: str | None = None, days: int = Query(120, ge=1, le=400)
+    ) -> dict[str, object]:
+        """Track record verdiktů (#1091): hit-rate per verdikt a per složka hlasování."""
+        repository_ = BriefingVerdictRepository(repository.engine())
+        repository_.ensure_schema()
+        since = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=days)
+        rows = repository_.evaluated(symbol, since=since)
+        return {"symbol": symbol, "days": days, **verdict_stats(rows)}
 
     @router.get("/briefing/verdicts")
     def verdicts_list(

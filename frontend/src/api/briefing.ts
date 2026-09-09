@@ -124,6 +124,35 @@ export async function postVerdict(payload: {
   }
 }
 
+/** Track record verdiktů dne (#1091): hit-rate per verdikt a per složka, Wilson LB, brána n ≥ 30. */
+export interface VerdictStatBucket {
+  n: number
+  hits: number
+  unscored?: number
+  hit_rate: number | null
+  wilson_lb: number | null
+  gate_open: boolean
+}
+
+export interface VerdictStats {
+  evaluated: number
+  min_samples: number
+  by_verdict: Record<string, VerdictStatBucket>
+  by_vote: Record<string, VerdictStatBucket>
+}
+
+export async function fetchVerdictStats(symbol?: string): Promise<VerdictStats> {
+  const query = symbol ? `?symbol=${symbol}` : ''
+  const data = await getJson<Partial<VerdictStats>>(`/briefing/verdicts/stats${query}`, {})
+  // Tvar se drží i při neúplné odpovědi (starší API, výpadek) — sekce nesmí shodit Stats
+  return {
+    evaluated: typeof data.evaluated === 'number' ? data.evaluated : 0,
+    min_samples: typeof data.min_samples === 'number' ? data.min_samples : 30,
+    by_verdict: data.by_verdict ?? {},
+    by_vote: data.by_vote ?? {},
+  }
+}
+
 export async function fetchBars(symbol: string, dateIso: string): Promise<BarRow[]> {
   const data = await getJson<{ bars: BarRow[] }>(`/bars/${symbol}?date=${dateIso}`, { bars: [] })
   return data.bars

@@ -31,6 +31,8 @@ import {
   maxDrawdownOf,
   usdSimulation,
 } from '../setups/performance'
+import { fetchVerdictStats } from '../api/briefing'
+import type { VerdictStatBucket, VerdictStats } from '../api/briefing'
 import { sessionDateIso } from '../instrument/tz'
 import { API_BASE } from '../config'
 import type { SetupRow } from '../api/setups'
@@ -318,6 +320,65 @@ export function formatSeconds(value: number | null): string {
 }
 
 /** Equity a drawdown křivky + souhrn (CAGR, max DD, hit-rate) — SPEC 7.3. */
+/** Track record verdiktů dne (#1091): tabulky per verdikt a per složka hlasování. */
+function VerdictStatsSection({ stats }: { stats: VerdictStats | null }) {
+  if (stats === null) return <p className="muted">Načítám…</p>
+  if (stats.evaluated === 0) {
+    return (
+      <p className="muted">Zatím žádná vyhodnocená seance — výsledek doplní engine po settle.</p>
+    )
+  }
+  const pct = (value: number | null) => (value === null ? '—' : `${Math.round(value * 100)} %`)
+  const row = (name: string, bucket: VerdictStatBucket) => (
+    <tr key={name} className={bucket.gate_open ? undefined : 'muted'}>
+      <td>{name}</td>
+      <td>{bucket.n}</td>
+      <td>{pct(bucket.hit_rate)}</td>
+      <td>{pct(bucket.wilson_lb)}</td>
+      <td>{bucket.gate_open ? 'ano' : `sběr (${bucket.n}/${stats.min_samples})`}</td>
+    </tr>
+  )
+  return (
+    <div className="verdict-stats" data-testid="verdict-stats">
+      <table className="briefing-table">
+        <thead>
+          <tr>
+            <th>verdikt</th>
+            <th>n</th>
+            <th>zásah</th>
+            <th>Wilson LB</th>
+            <th>brána</th>
+          </tr>
+        </thead>
+        <tbody>
+          {Object.entries(stats.by_verdict).map(([name, bucket]) =>
+            row(VERDICT_NAMES[name] ?? name, bucket),
+          )}
+        </tbody>
+      </table>
+      <table className="briefing-table">
+        <thead>
+          <tr>
+            <th>složka hlasování</th>
+            <th>n</th>
+            <th>souhlas se seancí</th>
+            <th>Wilson LB</th>
+            <th>brána</th>
+          </tr>
+        </thead>
+        <tbody>{Object.entries(stats.by_vote).map(([name, bucket]) => row(name, bucket))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+const VERDICT_NAMES: Record<string, string> = {
+  long: 'spíše long',
+  short: 'spíše short',
+  none: 'bez převahy',
+  wait_news: 'počkat na tisk',
+}
+
 function TrackRecordSection({
   curves,
   signals,
@@ -445,6 +506,7 @@ export function StatsView() {
   // se dle ADR-0030 počítá nad celou simulací, ne per aktivní symbol
   const [portfolio, setPortfolio] = useState<SetupRow[]>([])
   const [drift, setDrift] = useState<DriftState | null>(null)
+  const [verdictStats, setVerdictStats] = useState<VerdictStats | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -457,18 +519,23 @@ export function StatsView() {
         fetchTrackRecord(),
         fetchSignals(1000),
         fetchSourceLatency(),
-      ]).then(([waveRows, statsRows, settings, trackRows, signalRows, latencyPayload]) => {
-        if (cancelled) return
-        setWaves(waveRows)
-        setStats(statsRows)
-        const retroValue = settings.retro_pass
-        setRetro(isRetroState(retroValue) ? retroValue : null)
-        const driftValue = settings.drift_state
-        setDrift(isDriftState(driftValue) ? driftValue : null)
-        setTrack(trackRows)
-        setSignals(signalRows)
-        setLatency(latencyPayload.latency)
-      })
+        fetchVerdictStats(),
+      ]).then(
+        ([waveRows, statsRows, settings, trackRows, signalRows, latencyPayload, verdicts]) => {
+          // prettier-ignore
+          if (cancelled) return
+          setVerdictStats(verdicts)
+          setWaves(waveRows)
+          setStats(statsRows)
+          const retroValue = settings.retro_pass
+          setRetro(isRetroState(retroValue) ? retroValue : null)
+          const driftValue = settings.drift_state
+          setDrift(isDriftState(driftValue) ? driftValue : null)
+          setTrack(trackRows)
+          setSignals(signalRows)
+          setLatency(latencyPayload.latency)
+        },
+      )
     }
     load()
     const timer = window.setInterval(load, REFRESH_MS)
@@ -741,6 +808,18 @@ export function StatsView() {
       </section>
 
       <JournalStats symbol={symbol} />
+
+      {/* Verdikt dne (#1091): track record heuristiky z Briefingu — per verdikt
+          i per složka hlasování; pod branou n ≥ 30 jen počty, žádné závěry */}
+      <section className="stats-section" aria-label="Verdikt dne">
+        <h2>Verdikt dne — track record (#1091)</h2>
+        <p className="muted">
+          Zásah verdiktu z Briefingu proti pohybu US open → settle (bez převahy = close do ±0,5 EM).
+          Složka „nese informaci", když její hlas souhlasí se směrem seance. Brána n ≥{' '}
+          {verdictStats?.min_samples ?? 30} jako u signálů; do té doby jen sběr.
+        </p>
+        <VerdictStatsSection stats={verdictStats} />
+      </section>
 
       <section className="stats-section" aria-label="Track record">
         <h2>Track record — mechanické equity křivky</h2>
