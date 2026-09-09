@@ -85,6 +85,7 @@ from gexlens_engine.instruments import (
     read_watchlist,
 )
 from gexlens_engine.ivrank import IvRankCollector, TastyMetricsLike
+from gexlens_engine.memwatch import MemoryWatch
 from gexlens_engine.probes import T9ProbeCollector
 from gexlens_engine.provider import MarketDataProviderLike
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
@@ -2148,6 +2149,9 @@ async def main() -> None:
         )
     # Symboly po selhaném setupu: cooldown v cyklech do dalšího pokusu
     setup_cooldown = SetupCooldown()
+    # Hlídka paměti (#1105): RSS každých 10 min do logu, do /status vždy;
+    # tracemalloc jen s GEXLENS_MEMORY_TRACE=1 (drahé, na dobu hledání viníka)
+    memory_watch = MemoryWatch.from_env("engine", logger)
 
     async def release_cooldown_after_reconnect() -> None:
         """Po reconnectu se setup zkusí hned (#455).
@@ -2443,11 +2447,14 @@ async def main() -> None:
                             "ts": now.timestamp(),
                         },
                     )
+            memory_watch.sample()
             await publisher.status(
                 engine="online",
                 connection=manager.state.value,
                 port=settings.ibkr_port,
                 last_tick_ts=now.isoformat(),
+                # Paměť procesu (#1105) — růst RSS byl 9. 9. neviditelný až do restartu PC
+                memory_rss_mb=memory_watch.last_rss_mb,
                 # Zdroj znaménka CumΔ a denní pokrytí tisky (ADR-0032, #615
                 # krok 5) — UI ukazuje podíl objemu se stranou od burzy,
                 # ne smyšlenou šířku zóny

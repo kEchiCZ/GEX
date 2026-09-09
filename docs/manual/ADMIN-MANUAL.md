@@ -737,7 +737,17 @@ varianta A.
   3.12, Node.js ≥20, PostgreSQL 16 + `make run` (kap. 9).
 - Volné místo: ~1 GB pro 14denní datové okno; WSL2 limit paměti viz
   `C:\Users\<user>\.wslconfig` (`[wsl2] memory=6GB` — pojistka proti
-  nafouknutí vmmem).
+  nafouknutí vmmem). Od 9. 9. 2026 (#1105) navíc `autoMemoryReclaim=gradual`
+  (VM vrací nevyužitou cache Windows, jinak vmmem sedí trvale na stropu)
+  a `sparseVhd=true` (virtuální disk uvolňuje smazaná data); platí po
+  `wsl --shutdown` nebo restartu PC.
+- **Paměť procesů (#1105):** engine i news-engine logují RSS každých 10 min
+  (`engine: RSS 1234 MB`) a engine ho hlásí do `/status.memory_rss_mb`
+  (Settings → „Paměť enginu"). Při hledání viníka nastav
+  `GEXLENS_MEMORY_TRACE=1` (tracemalloc, top-10 řádků kódu podle přírůstku;
+  dražší běh, jen dočasně). Hygiena: dev stack (`compose.dev.yml`) nikdy
+  nenechávat běžet vedle produkce, prohlížeč s heatmapou na jednom tabu —
+  PC s 16 GB má po 6 GB pro Docker a IB Gateway málo rezervy.
 
 ### 13.5 Ověření a denní provoz
 

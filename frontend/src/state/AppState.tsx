@@ -26,6 +26,8 @@ export interface PipelineStatus {
   oi_filled?: number
   oi_missing?: number
   lines_utilization?: number
+  /** RSS procesu enginu v MB (#1105) — růst = hledat viníka v logu (tracemalloc). */
+  memory_rss_mb?: number | null
   /** Chyby subskripce market data (#417, #772): kumulativ od startu, okno
       60 min, omilostněné přechody seance a poslední záznamy k dohledání. */
   subscription_errors?: number

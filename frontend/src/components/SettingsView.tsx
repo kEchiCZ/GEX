@@ -367,6 +367,15 @@ Sběr dat se na ~1–2 minuty přeruší.`)
                     : '—'}
                 </td>
               </tr>
+              {/* Paměť enginu (#1105): RSS procesu; nad ~2,5 GB tlačí na 6GB strop WSL */}
+              <tr>
+                <td>Paměť enginu (RSS)</td>
+                <td data-testid="status-memory">
+                  {status.memory_rss_mb != null
+                    ? `${Math.round(status.memory_rss_mb)} MB${status.memory_rss_mb > 2500 ? ' · vysoká, viz #1105' : ''}`
+                    : '—'}
+                </td>
+              </tr>
               {/* Chyby subskripce (#772): okno dává měřítko, kumulativ trend;
                   „přechod seance" jsou očekávané nárazy resubskripce o půlnoci */}
               <tr>
