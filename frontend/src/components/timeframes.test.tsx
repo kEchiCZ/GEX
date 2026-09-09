@@ -177,14 +177,16 @@ test('Mode/Scale selecty jsou nad demo daty zakázané; Walls select přepíná 
   fireEvent.change(walls, { target: { value: 'off' } })
 })
 
-test('hlavička ukazuje poslední cenu a denní změnu z dat dne', () => {
+test('hlavička z demo dne neukazuje cenu ani změnu (#1096); z reálných dat viz e2e.smoke', () => {
+  // Dřív test vyžadoval cenu z demo dne — přesně ta na produkci vypadala jako
+  // skutečná (NQ · 7573.17). Demo je kulisa grafu, hlavička říká pomlčku.
   mockApi()
   renderApp()
   const last = document.querySelector('.instrument-price .last')
-  expect(last?.textContent).not.toBe('—')
+  expect(last?.textContent).toBe('—')
   expect(
     document.querySelector('.instrument-price .change-up, .instrument-price .change-down'),
-  ).not.toBeNull()
+  ).toBeNull()
 })
 
 test('předěl mezi grafem a pravým panelem mění šířku profilu tažením', () => {
