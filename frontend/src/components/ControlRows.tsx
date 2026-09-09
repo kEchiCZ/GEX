@@ -1,4 +1,5 @@
 /** Řádky timeframe a přepínačů vizualizace (SPEC 7.1). */
+import { useEffect, useRef, useState } from 'react'
 import { GEX_UNITS, GEX_UNIT_LABELS } from '../heatmap/units'
 import type { GexUnits } from '../heatmap/units'
 import { FORWARD_RANGES, FORWARD_RANGE_LABELS } from '../heatmap/dailyforward'
@@ -7,7 +8,24 @@ import { INTERVALS, useAppState } from '../state/AppState'
 import type { NewsMarkerFilter, OiSource, SignalMode, Toggles, UnderlayPlane } from '../state/AppState' // prettier-ignore
 import type { SignalGateInfo } from '../api/news'
 
-const TOGGLE_LABELS: Record<keyof Toggles, string> = {
+/** Spodní panely pod grafem (#1084): místo šesti checkboxů jeden dropdown
+s multi-výběrem. Pořadí = pořadí panelů shora dolů. */
+const PANEL_KEYS = ['vol', 'optVol', 'deltaFlow', 'delta', 'evoOi', 'sentiment'] as const
+type PanelToggle = (typeof PANEL_KEYS)[number]
+
+const PANEL_LABELS: Record<PanelToggle, string> = {
+  vol: 'Vol',
+  optVol: 'Opt Vol',
+  deltaFlow: 'Δ Flow C/P',
+  // Sjednocení názvů (27. 8.): checkbox „Delta" + panel „Opt Δ" + legenda
+  // „Cum Δ" byly tři jména jedné věci — vyhrává název ze SPEC/legendy
+  delta: 'Cum Δ',
+  evoOi: 'Evo OI',
+  sentiment: 'Sentiment',
+}
+
+/** Přepínače vrstev přímo v grafu — zůstávají jako checkboxy v liště. */
+const TOGGLE_LABELS: Record<Exclude<keyof Toggles, PanelToggle>, string> = {
   // Historicky „Dyn GEX", ale přepínač ukazuje zdi — název teď patří
   // modelované vrstvě, ať se nepletou
   dynGex: 'Zdi',
@@ -16,19 +34,71 @@ const TOGGLE_LABELS: Record<keyof Toggles, string> = {
   ladder: 'GEX žebřík',
   flowAdjusted: 'FA levels',
   sessions: 'Sessions',
-  vol: 'Vol',
-  optVol: 'Opt Vol',
-  // Sjednocení názvů (27. 8.): checkbox „Delta" + panel „Opt Δ" + legenda
-  // „Cum Δ" byly tři jména jedné věci — vyhrává název ze SPEC/legendy
-  delta: 'Cum Δ',
-  deltaFlow: 'Δ Flow C/P',
-  evoOi: 'Evo OI',
   volOiDelta: 'Vol + OI Δ',
   projection: 'Projekce',
   news: 'News',
   // Vrstva setupů (#399): na konci řádku vedle dropdownu Signály — skupina
   // „nápovědy". Skryje kartu i entry/cíl/stop linie; detektor běží dál
   setups: 'Setupy',
+}
+
+/** Dropdown spodních panelů (#1084): tlačítko s počtem zapnutých, popover
+s checkboxy. Zavírá se klikem mimo nebo Escape; volba se persistuje
+v `toggles` jako dřív, takže uložený stav uživatele zůstává platný. */
+function PanelsDropdown() {
+  const { toggles, setToggle } = useAppState()
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open])
+  const active = PANEL_KEYS.filter((key) => toggles[key])
+  const summary = active.length === 0 ? 'žádný' : String(active.length)
+  return (
+    <div className="panels-dropdown-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className={open ? 'chip panels-dropdown-button active' : 'chip panels-dropdown-button'}
+        aria-label="Výběr spodních panelů"
+        aria-haspopup="true"
+        aria-expanded={open}
+        title={
+          active.length === 0
+            ? 'Žádný spodní panel není zapnutý'
+            : `Zapnuté panely: ${active.map((key) => PANEL_LABELS[key]).join(', ')}`
+        }
+        onClick={() => setOpen((value) => !value)}
+      >
+        Panely <span className="muted">({summary})</span> ▾
+      </button>
+      {open && (
+        <div className="panels-dropdown" role="group" aria-label="Zapnuté spodní panely">
+          {PANEL_KEYS.map((key) => (
+            <label key={key} className="toggle">
+              <input
+                type="checkbox"
+                checked={toggles[key]}
+                onChange={(event) => setToggle(key, event.target.checked)}
+              />
+              {PANEL_LABELS[key]}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function TimeframeRow() {
@@ -179,7 +249,7 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
           ))}
         </select>
       </label>
-      {(Object.keys(TOGGLE_LABELS) as (keyof Toggles)[]).map((key) => (
+      {(Object.keys(TOGGLE_LABELS) as (keyof typeof TOGGLE_LABELS)[]).map((key) => (
         <label key={key} className="toggle">
           <input
             type="checkbox"
@@ -189,6 +259,8 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
           {TOGGLE_LABELS[key]}
         </label>
       ))}
+      {/* Spodní panely (#1084): jeden dropdown místo šesti checkboxů */}
+      <PanelsDropdown />
       {/* Filtr news markerů (#408): jen významné zprávy (importance ≥ 2),
           ať plocha grafu nekřičí okrajovými titulky; jen když je News zapnuté */}
       {toggles.news && (

@@ -227,16 +227,36 @@ test('Δ Flow panel: C/P delta-vážené sloupce, zapíná se checkboxem', () =>
   expect(panel.querySelectorAll('[data-part="deltaflow-put"]')).toHaveLength(4)
 })
 
-test('checkboxy v horní liště řídí panely (integrace přes App)', async () => {
+test('dropdown Panely v horní liště řídí panely (integrace přes App, #1084)', async () => {
   const socket = new LiveSocket('ws://test/ws/live', {
     webSocketFactory: (url) => new FakeWebSocket(url),
   })
   render(<App socket={socket} />)
 
+  // Checkboxy nejsou v liště přímo — schované za tlačítkem s počtem zapnutých
+  expect(screen.queryByLabelText('Vol')).toBeNull()
+  const button = screen.getByLabelText('Výběr spodních panelů')
+  expect(button.textContent).toContain('(3)') // default Vol, Opt Vol, Cum Δ
   expect(screen.getByLabelText('Vol panel')).toBeDefined()
+  fireEvent.click(button)
   fireEvent.click(screen.getByLabelText('Vol'))
   expect(screen.queryByLabelText('Vol panel')).toBeNull()
   expect(screen.getByLabelText('Opt Vol panel')).toBeDefined() // ostatní zůstávají
+  expect(button.textContent).toContain('(2)')
+  // Sentiment má vlastní přepínač nezávislý na News (#1084)
+  expect((screen.getByLabelText('Sentiment') as HTMLInputElement).checked).toBe(false)
+  expect((screen.getByLabelText('News') as HTMLInputElement).checked).toBe(false)
+  // Escape popover zavře; vypnutí všech ukazuje „žádný"
+  fireEvent.keyDown(document, { key: 'Escape' })
+  expect(screen.queryByLabelText('Vol')).toBeNull()
+  fireEvent.click(button)
+  fireEvent.click(screen.getByLabelText('Opt Vol'))
+  fireEvent.click(screen.getByLabelText('Cum Δ'))
+  expect(button.textContent).toContain('(žádný)')
+  expect(document.querySelectorAll('.bottom-panel')).toHaveLength(0)
+  // Klik mimo dropdown ho zavře
+  fireEvent.mouseDown(document.body)
+  expect(screen.queryByLabelText('Vol')).toBeNull()
 })
 
 test('panely respektují výšku z props (#169)', () => {
