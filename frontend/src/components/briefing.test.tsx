@@ -123,6 +123,53 @@ test('Shrnutí dne (#1090): verdikt z hlasování, úrovně obratu, zprávy s re
   )
 })
 
+test('verdikt se přepíše, když se změní hlasy i při stejném skóre (#1090)', async () => {
+  const rising = risingCandles(60)
+  // 1. render: bez levels → gamma „bez dat"; skóre = trend 3 + tendence 0 = 3
+  mockApis({
+    candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising },
+    bars: { bars: [{ ts_min: '2026-08-13T13:00:00Z', open: 6440, high: 6450, low: 6430, close: 6446, volume: 10 }] }, // prettier-ignore
+  })
+  const { rerender } = render(<BriefingView />)
+  await waitFor(
+    () => {
+      expect(
+        fetchMock.mock.calls.filter(
+          (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
+        ),
+      ).toHaveLength(1)
+    },
+    { timeout: 5_000 },
+  )
+  const first = JSON.parse(String(fetchMock.mock.calls.find((c) => c[1]?.method === 'POST')![1].body)) as { score: number; votes: Array<{ name: string; reason: string }> } // prettier-ignore
+  expect(first.votes.find((vote) => vote.name === 'gamma')?.reason).toBe('gamma režim bez dat')
+
+  // 2. levels dorazí (pozitivní gamma −1, tendence long +1) → skóre pořád 3,
+  // ale hlasy jiné → musí se uložit znovu
+  mockApis({
+    candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising },
+    bars: { bars: [{ ts_min: '2026-08-13T13:00:00Z', open: 6440, high: 6450, low: 6430, close: 6446, volume: 10 }] }, // prettier-ignore
+    levels: { levels: [{ ts_min: '2026-08-13T14:00:00Z', flip: 6430, call_wall: 6500, put_wall: 6400, centroid: 6445, total_gex: 900 }] }, // prettier-ignore
+    tendency: { tendency: [{ ts_min: '', symbol: 'ES', score: 0.6, band: 'long', votes: [], weights_version: 1 }] }, // prettier-ignore
+  })
+  useAppStateMock.mockReturnValue({ symbol: 'ES', selectedExpiry: '20260814', setJournalDraft, setView }) // prettier-ignore
+  rerender(<BriefingView />)
+  await waitFor(
+    () => {
+      const posts = fetchMock.mock.calls.filter(
+        (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
+      )
+      expect(posts).toHaveLength(2)
+      const second = JSON.parse(String(posts[1][1].body)) as { score: number; votes: Array<{ name: string; reason: string }> } // prettier-ignore
+      expect(second.score).toBe(first.score)
+      expect(second.votes.find((vote) => vote.name === 'gamma')?.reason).toContain(
+        'pozitivní gamma',
+      )
+    },
+    { timeout: 6_000 },
+  )
+})
+
 test('karta Trend bez svíček říká, že se načítají / chybí', async () => {
   mockApis()
   render(<BriefingView />)
