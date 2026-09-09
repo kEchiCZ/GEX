@@ -4,7 +4,8 @@
 # zapíše markdown do data/reports/walkforward-<datum>.md. NIC nezapisuje do DB —
 # autonomie stupeň 1: případný návrh verze parametrů schvaluje a odesílá člověk.
 #
-# Spouštět po settle (např. 23:30) ručně nebo z Task Scheduleru:
+# Spouštět po settle (např. 23:30) ručně nebo z Task Scheduleru (registrace:
+# `scripts/register-walkforward-task.ps1`, úloha „GEXLens walk-forward"):
 #   pwsh -NoProfile -File scripts/walkforward-nightly.ps1
 # Připojení k DB: GEXLENS_HOST_DATABASE_URL, jinak se složí z GEXLENS_PG_PASSWORD
 # (prostředí nebo .env) a portu 55432; hodnotu nikdy nevypisuje.
@@ -22,6 +23,15 @@ $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
 function Write-Step($text) { Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $text" }
+
+# Běží aplikace? Bez PG kontejneru není z čeho číst (Max Pain, baseline ze store)
+# — Task Scheduler pouští úlohu i po probuzení PC, kdy compose ještě nejede.
+# Tichý konec s hláškou, ne chyba: „nic k měření" není porucha.
+$pg = docker ps --filter 'name=gex-postgres-1' --filter 'status=running' --format '{{.Names}}' 2>$null
+if (-not $pg) {
+    Write-Step 'gex-postgres-1 neběží (aplikace vypnutá) — walk-forward se přeskakuje.'
+    exit 0
+}
 
 # Připojení z HOSTITELE: compose publikuje PG na 55432 (na vývojovém PC běží na 5432
 # nativní PostgreSQL — kap. 4 ADMIN manuálu), takže GEXLENS_DATABASE_URL z .env
