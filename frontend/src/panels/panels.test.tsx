@@ -259,6 +259,31 @@ test('dropdown Panely v horní liště řídí panely (integrace přes App, #108
   expect(screen.queryByLabelText('Vol')).toBeNull()
 })
 
+test('dropdown Panely řadí položky jako BottomPanels shora dolů; Vrstvy mají vlastní dropdown (#1084)', () => {
+  const socket = new LiveSocket('ws://test/ws/live', {
+    webSocketFactory: (url) => new FakeWebSocket(url),
+  })
+  render(<App socket={socket} />)
+
+  fireEvent.click(screen.getByLabelText('Výběr spodních panelů'))
+  const panelLabels = Array.from(
+    screen.getByRole('group', { name: 'Výběr spodních panelů' }).querySelectorAll('label'),
+  ).map((node) => node.textContent)
+  expect(panelLabels).toEqual(['Vol', 'Opt Vol', 'Δ Flow C/P', 'Evo OI', 'Cum Δ', 'Sentiment'])
+
+  // Vrstvy grafu jsou ve druhém dropdownu, v liště nejsou jako checkboxy
+  expect(screen.queryByLabelText('Zdi')).toBeNull()
+  const layers = screen.getByLabelText('Výběr vrstev grafu')
+  expect(layers.textContent).toContain('(3)') // default Zdi, 2. zeď, GEX Levels
+  fireEvent.click(layers)
+  const layerLabels = Array.from(
+    screen.getByRole('group', { name: 'Výběr vrstev grafu' }).querySelectorAll('label'),
+  ).map((node) => node.textContent)
+  expect(layerLabels).toEqual(['Zdi', '2. zeď', 'GEX Levels', 'GEX žebřík', 'FA levels'])
+  fireEvent.click(screen.getByLabelText('Zdi'))
+  expect(layers.textContent).toContain('(2)')
+})
+
 test('panely respektují výšku z props (#169)', () => {
   render(
     <CrosshairProvider>
