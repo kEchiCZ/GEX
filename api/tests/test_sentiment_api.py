@@ -294,31 +294,41 @@ def test_stats_newsvol_aggregates_daily(client: TestClient) -> None:
     app = cast(FastAPI, client.app)
     engine = app.state.meta_repository.engine()
     with engine.begin() as conn:
-        # Třetí event téhož dne — PK reakcí je (event, symbol, okno)
-        third = conn.execute(
-            insert(news_events).values(
-                ts_event=NOW - dt.timedelta(minutes=30),
-                ts_ingested=NOW,
-                source="rss_news",
-                kind="headline",
-                title="Kontaminovaná zpráva",
-                category="OTHER",
-                importance=2,
-                symbols=[],
-                market_closed=False,
-                dedup_hash="c",
-                raw={},
-            )
-        ).inserted_primary_key
-        assert third is not None
+        # Další eventy TÉHOŽ UTC dne jako event 1 (NOW − 1 h) — PK reakcí je
+        # (event, symbol, okno). Event 2 z fixture leží v NOW + 30 min, takže
+        # kolem půlnoci UTC padal na jiný den, agregace se rozpadla na dva
+        # jednovzorkové dny a min_sample=2 je oba vyřadil (CI 00:10 UTC, #1079).
+        same_day = NOW - dt.timedelta(hours=1)
+
+        def event(title: str, dedup: str) -> int:
+            key = conn.execute(
+                insert(news_events).values(
+                    ts_event=same_day,
+                    ts_ingested=NOW,
+                    source="rss_news",
+                    kind="headline",
+                    title=title,
+                    category="OTHER",
+                    importance=2,
+                    symbols=[],
+                    market_closed=False,
+                    dedup_hash=dedup,
+                    raw={},
+                )
+            ).inserted_primary_key
+            assert key is not None
+            return int(key[0])
+
+        third = event("Kontaminovaná zpráva", "c")
+        fourth = event("Druhá čistá zpráva", "d")
         conn.execute(
             insert(news_reactions),
             [
                 {"event_id": 1, "symbol": "ES", **wide_reaction((5, 10.0, 12.0, False))},
-                {"event_id": 2, "symbol": "ES", **wide_reaction((5, -30.0, 35.0, False))},
+                {"event_id": fourth, "symbol": "ES", **wide_reaction((5, -30.0, 35.0, False))},
                 # Kontaminované okno nesmí do agregace (SPEC 5.1)
                 {
-                    "event_id": int(third[0]),
+                    "event_id": third,
                     "symbol": "ES",
                     **wide_reaction((5, 500.0, 500.0, True)),
                 },
