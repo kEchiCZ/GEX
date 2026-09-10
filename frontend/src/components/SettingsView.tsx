@@ -13,6 +13,13 @@ import { loadApiToken, saveApiToken } from '../api/apiToken'
 import { downloadBackup } from '../api/backup'
 import { requestReconnect, useServerSettings } from '../api/settings'
 import type { ReconnectTarget } from '../api/settings'
+import {
+  providerButtonLabel,
+  providerRoleText,
+  providerState,
+  REQUEST_WINDOW_MS,
+} from '../instrument/providerstate'
+import type { ProviderState } from '../instrument/providerstate'
 import { useAppState } from '../state/AppState'
 import type { Theme } from '../state/AppState'
 
@@ -118,6 +125,33 @@ export function SettingsView() {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
   const [reconnect, setReconnect] = useState<{ target: ReconnectTarget; note: string } | null>(null)
+  // Stavová tlačítka providerů (#1108): po kliku běží okno „přepojuji", které
+  // zavře až engine tím, že spojení prokazatelně přepojí (IBKR: `connection`
+  // opustí connected; tasty: vzroste `tasty_reconnects` nebo odpadne spojení).
+  const [requestedAt, setRequestedAt] = useState<Partial<Record<ReconnectTarget, number>>>({})
+  const [progressSeen, setProgressSeen] = useState<Partial<Record<ReconnectTarget, boolean>>>({})
+  const [tastyBaseline, setTastyBaseline] = useState<number | null>(null)
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  const windowOpen = Object.values(requestedAt).some(
+    (at) => at !== undefined && nowMs - at < REQUEST_WINDOW_MS,
+  )
+  useEffect(() => {
+    if (!windowOpen) return
+    const timer = window.setInterval(() => setNowMs(Date.now()), 5_000)
+    return () => window.clearInterval(timer)
+  }, [windowOpen])
+  useEffect(() => {
+    if (requestedAt.ibkr !== undefined && status.connection && status.connection !== 'connected') {
+      setProgressSeen((prev) => (prev.ibkr ? prev : { ...prev, ibkr: true }))
+    }
+    if (
+      requestedAt.tasty !== undefined &&
+      (status.tasty_connected === false ||
+        (tastyBaseline !== null && (status.tasty_reconnects ?? 0) > tastyBaseline))
+    ) {
+      setProgressSeen((prev) => (prev.tasty ? prev : { ...prev, tasty: true }))
+    }
+  }, [status, requestedAt, tastyBaseline])
 
   // Ruční přepojení (#950). Potvrzení je nutné: přepojení je ~1–2 min díra
   // ve sběru, takže se nesmí spustit omylem během seance.
@@ -129,6 +163,10 @@ Sběr dat se na ~1–2 minuty přeruší.`)
     )
       return
     setReconnect({ target, note: 'vyžádáno…' })
+    setRequestedAt((prev) => ({ ...prev, [target]: Date.now() }))
+    setProgressSeen((prev) => ({ ...prev, [target]: false }))
+    setNowMs(Date.now())
+    if (target === 'tasty') setTastyBaseline(status.tasty_reconnects ?? 0)
     void requestReconnect(target)
       .then(() =>
         setReconnect({
@@ -143,6 +181,44 @@ Sběr dat se na ~1–2 minuty přeruší.`)
         }),
       )
   }
+
+  const ibkrState = providerState({
+    connected: status.connection ? status.connection === 'connected' : null,
+    reconnecting: status.connection === 'reconnecting' || status.connection === 'connecting',
+    requestedAtMs: requestedAt.ibkr ?? null,
+    progressSeen: progressSeen.ibkr ?? false,
+    nowMs,
+  })
+  const tastyState = providerState({
+    connected: status.tasty_connected ?? null,
+    reconnecting: false,
+    requestedAtMs: requestedAt.tasty ?? null,
+    progressSeen: progressSeen.tasty ?? false,
+    nowMs,
+  })
+  // Poslední požadavek přežívá refresh: server ho razítkuje do nastavení (#950)
+  const lastRequestText = (target: ReconnectTarget): string | null => {
+    const stamp = values[`reconnect_request_${target}`]
+    if (typeof stamp !== 'number') return null
+    return `poslední požadavek ${new Date(stamp * 1000).toLocaleString('cs-CZ')}`
+  }
+  const providerButton = (
+    target: ReconnectTarget,
+    name: string,
+    state: ProviderState,
+    confirmLabel: string,
+  ) => (
+    <button
+      type="button"
+      className={`secondary provider-button provider-${state}`}
+      data-testid={`reconnect-${target}`}
+      data-state={state}
+      disabled={state === 'reconnecting'}
+      onClick={() => askReconnect(target, confirmLabel)}
+    >
+      {providerButtonLabel(state, name)}
+    </button>
+  )
 
   const dirtyKeys = Object.keys(draft)
   const value = (key: string, fallback: unknown): unknown =>
@@ -327,18 +403,19 @@ Sběr dat se na ~1–2 minuty přeruší.`)
                 </tr>
               )}
               <tr>
-                <td>Přepojení</td>
+                <td>IBKR</td>
                 <td>
-                  <button
-                    type="button"
-                    className="secondary"
-                    data-testid="reconnect-ibkr"
-                    onClick={() => askReconnect('ibkr', 'IBKR')}
-                  >
-                    Přepojit IBKR
-                  </button>
-                  {reconnect?.target === 'ibkr' && (
+                  {providerButton('ibkr', 'IBKR', ibkrState, 'IBKR')}
+                  <span className="muted" data-testid="provider-role-ibkr">
+                    {' · '}
+                    {providerRoleText('ibkr', status.chain_source, status.spot_source)}
+                  </span>
+                  {reconnect?.target === 'ibkr' ? (
                     <span className="muted"> · {reconnect.note}</span>
+                  ) : (
+                    lastRequestText('ibkr') && (
+                      <span className="muted"> · {lastRequestText('ibkr')}</span>
+                    )
                   )}
                 </td>
               </tr>
@@ -453,18 +530,19 @@ Sběr dat se na ~1–2 minuty přeruší.`)
                   </td>
                 </tr>
                 <tr>
-                  <td>Přepojení</td>
+                  <td>tastytrade</td>
                   <td>
-                    <button
-                      type="button"
-                      className="secondary"
-                      data-testid="reconnect-tasty"
-                      onClick={() => askReconnect('tasty', 'tastytrade (DXLink)')}
-                    >
-                      Přepojit tastytrade
-                    </button>
-                    {reconnect?.target === 'tasty' && (
+                    {providerButton('tasty', 'tastytrade', tastyState, 'tastytrade (DXLink)')}
+                    <span className="muted" data-testid="provider-role-tasty">
+                      {' · '}
+                      {providerRoleText('tasty', status.chain_source, status.spot_source)}
+                    </span>
+                    {reconnect?.target === 'tasty' ? (
                       <span className="muted"> · {reconnect.note}</span>
+                    ) : (
+                      lastRequestText('tasty') && (
+                        <span className="muted"> · {lastRequestText('tasty')}</span>
+                      )
                     )}
                   </td>
                 </tr>
