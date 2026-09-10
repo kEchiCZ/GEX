@@ -1005,8 +1005,8 @@ které se přepne hned.
 |---|---|
 | **IBKR** | Host, port (7496 live / 7497 paper; IB Gateway 4001 / 4002), client ID. Změna po Uložit platí **hned** — engine se přepojí do sekund i ve chvíli, kdy spojení nemá a teprve ho hledá (v1.13, #992; dřív až do 5 min). Hodnota uložená tady **přebíjí `.env`** — kdo mění port v `.env`, musí ho změnit i tady (viz ADMIN-MANUAL) |
 | **Engine (IBKR pipeline)** | **Rozsah strikes (± body od spotu)** — engine si změnu přebere do 5 minut za běhu a rozšíří sbírané pásmo (max 400; vidět vzdálená křídla à la pojistky hluboko OTM), velikost dávky subskripcí, retence dat (dny), disk limit (GB). *Šířka hot zóny* zmizela (v1.14, #1006) — přepínač nic neřídil |
-| **Stav enginu** | Read-only stav: spojení + port (při výpadku IBKR i **„bez spojení X min"**, #770), účet (paper), **Zdroj dat** (v1.13, #950: `řetěz ibkr · spot ibkr`, při fallbacku upozornění, že běží tastytrade), tlačítko **Přepojit IBKR** (níže), řádek **Cum Δ** (v1.14, #615: zdroj znaménka `midpoint` / `dxfeed` a per symbol podíl objemu, který v dnešním dni přišel z tisků se stranou od burzy — pravdivý ukazatel pokrytí místo dřívější „šířky hot zóny“), Greeks X/Y + repair fronta, OI řetězu, lines %, **chyby subskripce** (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance" a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console) |
-| **Tastytrade** (v1.10) | Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, tlačítko **Přepojit tastytrade** (v1.13), trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží |
+| **Stav enginu** | Read-only stav: spojení + port (při výpadku IBKR i **„bez spojení X min"**, #770), účet (paper), **Zdroj dat** (v1.13, #950: `řetěz ibkr · spot ibkr`, při fallbacku upozornění, že běží tastytrade), řádek **IBKR** se stavovým tlačítkem (v1.16, #1108: zelené **Připojeno · IBKR**, oranžové **Přepojuji…** zamčené do odpovědi enginu, červené **Odpojeno — přepojit**; stav je podle enginu, ne podle kliknutí, zelená i červená jsou klikatelné) + co provider dodává a **badge aktivního zdroje řetězu/spotu** (u druhého „záloha“) + čas posledního požadavku, řádek **Cum Δ** (v1.14, #615: zdroj znaménka `midpoint` / `dxfeed` a per symbol podíl objemu, který v dnešním dni přišel z tisků se stranou od burzy — pravdivý ukazatel pokrytí místo dřívější „šířky hot zóny“), Greeks X/Y + repair fronta, OI řetězu, lines %, **chyby subskripce** (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance" a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console) |
+| **Tastytrade** (v1.10) | Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, řádek **tastytrade** se stavovým tlačítkem a badgem zdroje (v1.16, #1108; obě větve běží záměrně souběžně — IBKR primární, tastytrade OI fill, tisky, extended expirace a záloha řetězu/spotu), trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží |
 | **Alerty** | **Hlásit chyby subskripce market dat** — zapnuto; vypni, pokud ti hlášky o odmítnutých kontraktech nevyhovují (viz alert *Chyba subskripce* v kap. 14) |
 | **Trading** | **Traders mode** — přepínač trading vrstev (viz kap. 11e); **velikost účtu + riziko na obchod** pro kalkulačku pozice u setup karty. Vše jen v prohlížeči, na server neodchází |
 | **Vzhled** | Téma **Dark/Light** (přepne se ihned), jazyk |
@@ -1039,6 +1039,24 @@ a (v bloku Tastytrade) **Přepojit tastytrade**:
   přesto stojí, zkus nejdřív tastytrade.
 - Uložení nastavení IBKR **beze změny hodnot nepřepojuje** — na to je právě
   tohle tlačítko.
+
+**Stavová tlačítka (v1.16, #1108).** Tlačítka mají barvu a text podle toho,
+co hlásí engine — ne podle toho, na co jsi klikl:
+
+- 🟢 **Připojeno · IBKR** / **Připojeno · tastytrade** — spojení běží;
+  tlačítko zůstává klikatelné (nouzová páka i na připojeném spojení).
+- 🟠 **Přepojuji …** — zamčené: buď engine sám hlásí přepojování, nebo běží
+  okno po kliknutí (max. 2 min), které se zavře, jakmile engine spojení
+  prokazatelně přepojí (odpadne a vrátí se, u tastytrade vzroste čítač
+  reconnectů). Kdyby engine mlčel, tlačítko se po okně odemkne samo.
+- 🔴 **Odpojeno · … — přepojit** — spojení neběží, klik ho zkusí obnovit.
+
+Vedle tlačítka je, co provider právě dodává: **řetěz ✔ aktivní / záloha**
+a **spot ✔ aktivní / záloha** podle skutečného zdroje (fallback #614),
+u IBKR navíc bary a OI archiv, u tastytrade OI fill, tisky (Cum Δ), extended
+expirace a ad-hoc pohledy. **Obě spojení běží záměrně souběžně** — tlačítka
+nevybírají zdroj dat, jen obnovují spojení. Bez rozepsané hlášky ukazuje řádek
+čas posledního požadavku (přežije refresh, razítkuje ho server).
 
 ![Settings](img/settings.png)
 

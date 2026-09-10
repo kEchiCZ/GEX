@@ -2892,6 +2892,22 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   font-size: 0.82em;
 }
 
+/* Stavová tlačítka providerů v Settings (#1108): barva = stav podle enginu */
+.provider-button.provider-connected {
+  color: #3ecf8e;
+  border-color: #3ecf8e;
+}
+.provider-button.provider-reconnecting {
+  color: #e8c14b;
+  border-color: #e8c14b;
+  cursor: wait;
+  opacity: 0.85;
+}
+.provider-button.provider-disconnected {
+  color: #f0616d;
+  border-color: #f0616d;
+}
+
 /* Karta Trend (#1089): směr per timeframe, poznámka vlevo zarovnaná */
 .briefing-trend-table td:last-child {
   text-align: left;

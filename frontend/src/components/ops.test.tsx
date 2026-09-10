@@ -212,6 +212,104 @@ test('přepojení: potvrzení, POST /engine/reconnect a hláška o vyžádání'
   expect(screen.getByTestId('engine-status').textContent).toContain('vyžádáno')
 })
 
+test('tlačítka providerů (#1108): stav podle enginu, oranžová zamčená, badge zdroje', () => {
+  mockApi()
+  renderApp()
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+  const ws = FakeWebSocket.latest()
+  const ibkr = () => screen.getByTestId('reconnect-ibkr') as HTMLButtonElement
+  const tasty = () => screen.getByTestId('reconnect-tasty') as HTMLButtonElement
+
+  // Bez stavu enginu neutrální „Přepojit"
+  expect(ibkr().textContent).toBe('Přepojit IBKR')
+  expect(ibkr().disabled).toBe(false)
+
+  act(() => {
+    ws.open()
+    ws.push('status', {
+      engine: 'online',
+      connection: 'connected',
+      last_tick_ts: new Date().toISOString(),
+      chain_source: 'ibkr',
+      spot_source: 'ibkr',
+      tasty_connected: false,
+      tasty_symbols: 10,
+    })
+  })
+  expect(ibkr().textContent).toBe('Připojeno · IBKR')
+  expect(ibkr().dataset.state).toBe('connected')
+  expect(ibkr().disabled).toBe(false) // zelené zůstává klikatelné (nouzová páka)
+  expect(screen.getByTestId('provider-role-ibkr').textContent).toContain('řetěz ✔ aktivní')
+  expect(tasty().textContent).toBe('Odpojeno · tastytrade — přepojit')
+  expect(tasty().disabled).toBe(false)
+  expect(screen.getByTestId('provider-role-tasty').textContent).toContain('řetěz záloha')
+
+  // Engine přepojuje → oranžová, zamčená
+  act(() => {
+    ws.push('status', { engine: 'online', connection: 'reconnecting', last_tick_ts: new Date().toISOString() }) // prettier-ignore
+  })
+  expect(ibkr().textContent).toBe('Přepojuji IBKR…')
+  expect(ibkr().disabled).toBe(true)
+
+  // Fallback řetězu na tasty → badge se přesune
+  act(() => {
+    ws.push('status', { engine: 'online', connection: 'connected', last_tick_ts: new Date().toISOString(), chain_source: 'tasty', spot_source: 'ibkr', tasty_connected: true }) // prettier-ignore
+  })
+  expect(screen.getByTestId('provider-role-tasty').textContent).toContain('řetěz ✔ aktivní')
+  expect(screen.getByTestId('provider-role-ibkr').textContent).toContain('řetěz záloha')
+  expect(tasty().textContent).toBe('Připojeno · tastytrade')
+})
+
+test('tlačítka providerů (#1108): po kliku oranžová, zelená až když engine skutečně přepojí', async () => {
+  const fetchMock = mockApi()
+  fetchMock.mockImplementation(async (url: unknown) => {
+    const target = String(url)
+    if (target.includes('/engine/reconnect')) {
+      return { ok: true, json: async () => ({ targets: ['ibkr'], requested_at: 1 }) }
+    }
+    if (target.includes('/settings')) {
+      return { ok: true, json: async () => ({ settings: {} }) }
+    }
+    if (target.includes('/expiries')) {
+      return { ok: true, json: async () => ({ expiries: ['20260716'] }) }
+    }
+    return { ok: true, json: async () => ({ watchlist: [], annotations: [] }) }
+  })
+  vi.stubGlobal(
+    'confirm',
+    vi.fn(() => true),
+  )
+  renderApp()
+  const ws = FakeWebSocket.latest()
+  const ibkr = () => screen.getByTestId('reconnect-ibkr') as HTMLButtonElement
+  act(() => {
+    ws.open()
+    ws.push('status', { engine: 'online', connection: 'connected' })
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+  expect(ibkr().dataset.state).toBe('connected')
+
+  fireEvent.click(ibkr())
+  await screen.findByText(/engine se přepojí do minuty/)
+  // Engine ještě nezareagoval — pořád hlásí connected z doby před klikem
+  act(() => {
+    ws.push('status', { engine: 'online', connection: 'connected' })
+  })
+  expect(ibkr().dataset.state).toBe('reconnecting')
+  expect(ibkr().disabled).toBe(true)
+
+  // Engine požadavek vyřídil: spojení odpadlo a je zpět → zelená, odemčeno
+  act(() => {
+    ws.push('status', { engine: 'online', connection: 'reconnecting' })
+  })
+  expect(ibkr().dataset.state).toBe('reconnecting')
+  act(() => {
+    ws.push('status', { engine: 'online', connection: 'connected' })
+  })
+  expect(ibkr().dataset.state).toBe('connected')
+  expect(ibkr().disabled).toBe(false)
+})
+
 test('přepojení: zamítnuté potvrzení nic neposílá', () => {
   const fetchMock = mockApi()
   vi.stubGlobal(
