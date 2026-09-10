@@ -2892,20 +2892,33 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   font-size: 0.82em;
 }
 
-/* Stavová tlačítka providerů v Settings (#1108): barva = stav podle enginu */
+/* Stavová tlačítka providerů v Settings (#1108): barevný je JEN text, pozadí
+   tmavé jako chip a rámeček neutrální — barevný rámeček + výchozí světlé pozadí
+   prohlížeče byly špatně čitelné (uživatel 10. 9.). */
+.provider-button {
+  background: var(--bg-chip);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.provider-button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
 .provider-button.provider-connected {
   color: #3ecf8e;
-  border-color: #3ecf8e;
 }
 .provider-button.provider-reconnecting {
   color: #e8c14b;
-  border-color: #e8c14b;
   cursor: wait;
   opacity: 0.85;
 }
 .provider-button.provider-disconnected {
   color: #f0616d;
-  border-color: #f0616d;
+}
+.provider-button.provider-unknown {
+  color: var(--text);
 }
 
 /* Karta Trend (#1089): směr per timeframe, poznámka vlevo zarovnaná */
