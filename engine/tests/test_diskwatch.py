@@ -118,3 +118,14 @@ def test_sqlite_backend_bez_pg_cisel(tmp_path: Path) -> None:
     report = w.measure(0.0)
     assert report.db_bytes is None
     assert report.top_tables == ()
+
+
+def test_data_dir_bytes_projde_strom_bez_rglob(tmp_path: Path) -> None:
+    """#1105: součet přes scandir sedí, symlinky a mizící soubory neshodí měření."""
+    (tmp_path / "derived" / "ES" / "bars").mkdir(parents=True)
+    (tmp_path / "derived" / "ES" / "bars" / "a.parquet").write_bytes(b"x" * 1000)
+    (tmp_path / "derived" / "ES" / "bars" / "b.parquet").write_bytes(b"y" * 24)
+    (tmp_path / "snapshots").mkdir()
+    (tmp_path / "snapshots" / "c.bin").write_bytes(b"z" * 6)
+    assert watch(tmp_path)._data_dir_bytes() == 1030
+    assert watch(tmp_path / "neexistuje")._data_dir_bytes() == 0

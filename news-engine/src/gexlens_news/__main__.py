@@ -383,9 +383,11 @@ async def run(settings: NewsSettings) -> None:
             if last_stats_day != now.date():
                 try:
                     await asyncio.to_thread(model_stats.run, now)
+                    memory_watch.note("model stats")  # #1105: co po jobu zůstalo v RSS
                     # Track record po model stats — čte tytéž noční vstupy
                     try:
                         await asyncio.to_thread(track.run, now)
+                        memory_watch.note("track record")
                     except Exception:
                         logger.exception("Track record selhal — zkusí se příští den")
                     # Drift hlídka (#403) po čerstvých agregátech
@@ -410,9 +412,14 @@ async def run(settings: NewsSettings) -> None:
         """
         if ngram is None:
             return
+        ngram_noted_day: dt.date | None = None
         while not stop.is_set():
             try:
-                await asyncio.to_thread(ngram.run, dt.datetime.now(dt.UTC))
+                ngram_now = dt.datetime.now(dt.UTC)
+                await asyncio.to_thread(ngram.run, ngram_now)
+                if ngram_noted_day != ngram_now.date():
+                    ngram_noted_day = ngram_now.date()
+                    memory_watch.note("ngram")  # #1105: denní trénink drží největší matice
             except Exception:
                 logger.exception("Ngram shadow selhal — zkusí se příští cyklus")
             with contextlib.suppress(TimeoutError):
