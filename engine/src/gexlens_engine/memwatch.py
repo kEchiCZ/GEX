@@ -15,6 +15,7 @@ restartoval. Kde paměť roste, nevíme — a bez měření by oprava byla hád�
 Sdílí ho engine i news-engine (news-engine z balíku engine už importuje).
 """
 
+import gc
 import logging
 import os
 import time
@@ -98,6 +99,14 @@ class MemoryWatch:
         if self._trace:
             for line in self.top_lines():
                 self._logger.info("%s: tracemalloc %s", self._name, line)
+        return self.last_rss_mb
+
+    def note(self, label: str) -> float | None:
+        """Vzorek bez škrcení — po těžkém jobu (#1105 bod 2), s `gc.collect()` před ním."""
+        gc.collect()
+        self.last_rss_mb = self._rss()
+        if self.last_rss_mb is not None:
+            self._logger.info("%s: RSS %.0f MB po %s", self._name, self.last_rss_mb, label)
         return self.last_rss_mb
 
     def top_lines(self, limit: int = TOP_LINES) -> list[str]:

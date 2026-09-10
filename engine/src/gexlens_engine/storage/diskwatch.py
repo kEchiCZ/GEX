@@ -27,7 +27,9 @@ nejvýš jednou za cooldown; návrat do pořádku úrovně re-armuje.
 
 import datetime as dt
 import logging
+import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 #: Kolik největších tabulek se vypisuje do alertu — žrouti se nemají hledat ručně
 TOP_TABLES = 5
+#: Nad tolik sekund se průchod datového adresáře zaloguje (#1105) — měřítko bind mountu
+SLOW_WALK_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -130,9 +134,42 @@ class DiskWatch:
         )
 
     def _data_dir_bytes(self) -> int:
+        """Součet velikostí souborů pod datovým adresářem (#1105 bod 1).
+
+        Dřív `Path.rglob("*")` + `f.stat()`: pathlib si pro každý adresář
+        materializuje seznamy a na každý soubor dělá další stat — nad ~2 roky
+        partic přes bind mount to byla nejdražší alokace v enginu a 10. 9.
+        00:40 UTC první, která při plné VM spadla (`Cannot allocate memory`).
+        `os.scandir` vrací DirEntry se stat z výpisu adresáře (bez extra
+        syscallu) a zásobník drží jen cesty adresářů, ne seznamy souborů.
+        """
         if not self._data_dir.exists():
             return 0
-        return sum(f.stat().st_size for f in self._data_dir.rglob("*") if f.is_file())
+        started = time.monotonic()
+        total = 0
+        stack = [str(self._data_dir)]
+        while stack:
+            current = stack.pop()
+            try:
+                with os.scandir(current) as entries:
+                    for entry in entries:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(entry.path)
+                            elif entry.is_file(follow_symlinks=False):
+                                total += entry.stat(follow_symlinks=False).st_size
+                        except OSError:
+                            continue  # soubor zmizel mezi výpisem a statem — přeskočit
+            except OSError as exc:
+                logger.warning("Adresář %s se nepodařilo projít: %s", current, exc)
+        elapsed = time.monotonic() - started
+        if elapsed > SLOW_WALK_S:
+            logger.info(
+                "Velikost datového adresáře změřena za %.1f s (%.1f GB) — pomalý bind mount",
+                elapsed,
+                total / 1024**3,
+            )
+        return total
 
     def _measure_db(self) -> tuple[int | None, tuple[tuple[str, int], ...]]:
         with self._db.connect() as conn:  # type: ignore[union-attr]

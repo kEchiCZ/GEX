@@ -231,3 +231,25 @@ def test_job_recomputes_from_scratch(tmp_path: Path) -> None:
     assert job.run(NOW) == 3
     with engine.connect() as conn:
         assert len(conn.execute(select(news_model_stats)).fetchall()) == 3
+
+
+def test_aggregate_by_regime_bere_stream_a_dava_totez_co_seznam() -> None:
+    """#1105: jednoprůchodová agregace nad generátorem = stejný výsledek jako dřív."""
+    from dataclasses import replace
+
+    from gexlens_news.model_stats import aggregate_by_regime
+
+    rows = [
+        replace(sample(10.0, sentiment_dir=1), state="RiskOn", gex_regime="positive"),
+        replace(sample(-5.0, sentiment_dir=1), state="RiskOn", gex_regime="negative"),
+        replace(sample(7.0, sentiment_dir=-1), state="Neutral"),
+        replace(sample(3.0, contaminated=True), state="RiskOn"),
+        sample(4.0, category=None),
+    ]
+    from_list = aggregate_by_regime(rows)
+    from_stream = aggregate_by_regime(iter(rows))
+    assert from_stream == from_list
+    regimes = [regime for regime, _ in from_list]
+    assert regimes == ["all", "RiskOn", "Neutral", "gamma_positive", "gamma_negative"]
+    all_stats = next(item for regime, item in from_list if regime == "all")
+    assert all_stats.n == 3 and all_stats.hit_rate == pytest.approx(1 / 3)

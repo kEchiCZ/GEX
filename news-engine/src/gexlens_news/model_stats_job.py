@@ -8,6 +8,7 @@ nejistota.
 
 import datetime as dt
 import logging
+from collections.abc import Iterator
 
 from sqlalchemy import delete, insert, select
 from sqlalchemy.engine import Engine
@@ -23,6 +24,9 @@ from gexlens_engine.storage.sentiment import (
 from gexlens_news.model_stats import BucketStats, ReactionSample, aggregate_by_regime
 
 logger = logging.getLogger(__name__)
+
+#: Velikost dávky serverového kurzoru (#1105) — řádky se drží jen po dávkách
+YIELD_PER = 5000
 
 
 class ModelStatsJob:
@@ -51,6 +55,15 @@ class ModelStatsJob:
         return out
 
     def load_samples(self) -> list[ReactionSample]:
+        """Všechny vzorky v paměti — jen pro testy a malé DB; job používá `iter_samples`."""
+        return list(self.iter_samples())
+
+    def iter_samples(self) -> Iterator[ReactionSample]:
+        """Vzorky jako stream (#1105 bod 2): serverový kurzor po `YIELD_PER` řádcích.
+
+        `fetchall()` přes join reakcí a eventů držel ~290 k širokých řádků
+        a z nich 2 M vzorků naráz; agregace teď spotřebovává stream.
+        """
         state_by_date = self._state_by_date()
         stmt = select(
             news_events.c.category,
@@ -63,25 +76,25 @@ class ModelStatsJob:
             news_reactions.join(news_events, news_events.c.id == news_reactions.c.event_id)
         )
         with self._engine.connect() as conn:
-            rows = conn.execute(stmt).mappings().fetchall()
-        # Široký řádek (#998) = až 8 vzorků (jeden per změřené okno)
-        return [
-            ReactionSample(
-                category=row["category"],
-                importance=row["importance"],
-                surprise_z=float(row["surprise_z"]) if row["surprise_z"] is not None else None,
-                sentiment_dir=row["sentiment_dir"],
-                symbol=row["symbol"],
-                window_min=window.window_min,
-                ret_bp=window.ret_bp,
-                contaminated=window.contaminated,
-                deferred=window.deferred,
-                state=state_by_date.get(row["ts_event"].date()),
-                gex_regime=window.gex_regime,
-            )
-            for row in rows
-            for window in unpivot_reaction(row)
-        ]
+            result = conn.execution_options(yield_per=YIELD_PER).execute(stmt).mappings()
+            # Široký řádek (#998) = až 8 vzorků (jeden per změřené okno)
+            for row in result:
+                state = state_by_date.get(row["ts_event"].date())
+                surprise = float(row["surprise_z"]) if row["surprise_z"] is not None else None
+                for window in unpivot_reaction(row):
+                    yield ReactionSample(
+                        category=row["category"],
+                        importance=row["importance"],
+                        surprise_z=surprise,
+                        sentiment_dir=row["sentiment_dir"],
+                        symbol=row["symbol"],
+                        window_min=window.window_min,
+                        ret_bp=window.ret_bp,
+                        contaminated=window.contaminated,
+                        deferred=window.deferred,
+                        state=state,
+                        gex_regime=window.gex_regime,
+                    )
 
     def store(self, stats: list[tuple[str, BucketStats]], now: dt.datetime) -> None:
         """Nahradí celou tabulku — přepočet je vždy úplný."""
@@ -111,8 +124,15 @@ class ModelStatsJob:
 
     def run(self, now: dt.datetime) -> int:
         """Přepočet; vrací počet bucketů."""
-        samples = self.load_samples()
-        stats = aggregate_by_regime(samples)
+        seen = 0
+
+        def counted() -> Iterator[ReactionSample]:
+            nonlocal seen
+            for sample in self.iter_samples():
+                seen += 1
+                yield sample
+
+        stats = aggregate_by_regime(counted())
         self.store(stats, now)
         if stats:
             unconditional = sum(1 for regime, _ in stats if regime == "all")
@@ -120,7 +140,7 @@ class ModelStatsJob:
                 "Model stats: %d řádků (%d nepodmíněných bucketů) z %d oken",
                 len(stats),
                 unconditional,
-                len(samples),
+                seen,
             )
         else:
             logger.info(

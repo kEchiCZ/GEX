@@ -17,7 +17,7 @@ bodová úspěšnost při malém n je nerozlišitelná od mince.
 """
 
 import statistics
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from gexlens_engine.compute.setupstats import wilson_lower_bound
@@ -167,18 +167,81 @@ def lookup(
     return None
 
 
-def aggregate_by_regime(samples: Sequence[ReactionSample]) -> list[tuple[str, BucketStats]]:
+REGIME_ORDER = ("all", "RiskOn", "RiskOff", "Neutral", "gamma_positive", "gamma_negative")
+_GAMMA_LABELS = {"positive": "gamma_positive", "negative": "gamma_negative"}
+
+
+class _Accumulator:
+    """Minimum, co bucket potřebuje: výnosy a počty zásahů — ne celé vzorky."""
+
+    __slots__ = ("hits", "judged", "returns")
+
+    def __init__(self) -> None:
+        self.returns: list[float] = []
+        self.judged = 0
+        self.hits = 0
+
+    def add(self, sample: ReactionSample) -> None:
+        self.returns.append(sample.ret_bp)
+        if sample.sentiment_dir in (-1, 1):
+            self.judged += 1
+            if (sample.ret_bp > 0 and sample.sentiment_dir == 1) or (
+                sample.ret_bp < 0 and sample.sentiment_dir == -1
+            ):
+                self.hits += 1
+
+    def stats(self, key: BucketKey) -> BucketStats:
+        returns = self.returns
+        return BucketStats(
+            key=key,
+            n=len(returns),
+            ret_mean_bp=statistics.fmean(returns),
+            ret_median_bp=statistics.median(returns),
+            ret_sigma_bp=statistics.pstdev(returns) if len(returns) > 1 else 0.0,
+            hit_rate=self.hits / self.judged if self.judged else None,
+            hit_rate_lb=wilson_lower_bound(self.hits, self.judged) if self.judged else None,
+        )
+
+
+def aggregate_by_regime(samples: Iterable[ReactionSample]) -> list[tuple[str, BucketStats]]:
     """Agregáty per režim (#402): 'all' + per stav + per GEX režim.
 
     Podmíněné pohledy jsou PARALELNÍ k nepodmíněnému, ne náhrada — dělení
     ředí n a Wilson gate si každý pohled hlídá sám. Vzorky bez zjištěného
     režimu do dané podmíněné větve prostě nevstupují (žádné dopočítávání).
+
+    Jeden průchod nad streamem (#1105 bod 2): dřív se všech ~2 M oken drželo
+    jako seznam dataclass objektů a pak se 5× filtrovalo do dalších seznamů —
+    ~1 GB RSS news-engine po půlnoci. Teď bucket drží jen výnosy a čítače.
     """
-    out: list[tuple[str, BucketStats]] = [("all", item) for item in aggregate_samples(samples)]
-    for state in ("RiskOn", "RiskOff", "Neutral"):
-        subset = [sample for sample in samples if sample.state == state]
-        out.extend((state, item) for item in aggregate_samples(subset))
-    for regime, label in (("positive", "gamma_positive"), ("negative", "gamma_negative")):
-        subset = [sample for sample in samples if sample.gex_regime == regime]
-        out.extend((label, item) for item in aggregate_samples(subset))
+    grouped: dict[tuple[str, BucketKey], _Accumulator] = {}
+    for sample in samples:
+        if sample.contaminated:
+            continue
+        if sample.category is None or sample.importance is None:
+            continue
+        key = BucketKey(
+            category=sample.category,
+            importance=sample.importance,
+            surprise_bucket=surprise_bucket(sample.surprise_z),
+            deferred=sample.deferred,
+            window_min=sample.window_min,
+            symbol=sample.symbol,
+        )
+        regimes = ["all"]
+        if sample.state in ("RiskOn", "RiskOff", "Neutral"):
+            regimes.append(sample.state)
+        gamma = _GAMMA_LABELS.get(sample.gex_regime or "")
+        if gamma is not None:
+            regimes.append(gamma)
+        for regime in regimes:
+            acc = grouped.get((regime, key))
+            if acc is None:
+                acc = grouped[(regime, key)] = _Accumulator()
+            acc.add(sample)
+    out: list[tuple[str, BucketStats]] = []
+    for regime in REGIME_ORDER:
+        items = [acc.stats(key) for (group, key), acc in grouped.items() if group == regime]
+        items.sort(key=lambda s: (s.key.category, s.key.importance, s.key.window_min))
+        out.extend((regime, item) for item in items)
     return out

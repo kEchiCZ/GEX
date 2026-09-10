@@ -55,3 +55,14 @@ def test_trace_flag_a_top_lines() -> None:
         tracemalloc.stop()
     untraced = MemoryWatch("y", logging.getLogger("test.memwatch"), rss_provider=lambda: 1.0)
     assert untraced.top_lines() == []
+
+
+def test_note_loguje_hned_bez_skrceni(caplog: pytest.LogCaptureFixture) -> None:
+    values = iter([100.0, 120.0])
+    watch = MemoryWatch(
+        "news-engine", logging.getLogger("test.memwatch"), rss_provider=lambda: next(values)
+    )  # noqa: E501
+    with caplog.at_level(logging.INFO, logger="test.memwatch"):
+        watch.sample()
+        assert watch.note("model stats") == 120.0
+    assert [r.getMessage() for r in caplog.records][-1] == "news-engine: RSS 120 MB po model stats"
