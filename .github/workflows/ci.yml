@@ -60,7 +60,7 @@ jobs:
       # runtime chyba viditelná jen v produkci (#146, bílá stránka) by prošla
       # Cache Chromia (#782): download z Playwright CDN opakovaně visí desítky
       # minut. Klíč z package-lock — nová verze @playwright/test = nový download
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
