@@ -15,7 +15,14 @@ levels partice; ~90 dní na fázi 2 bohatě stačí.
 """
 
 import datetime as dt
+from collections.abc import Sequence
 from dataclasses import dataclass
+
+from gexlens_engine.compute.bandregime import (
+    BAND_CLASS_NO_ZONE,
+    BAND_CLASS_OUTSIDE,
+    band_class,
+)
 
 
 @dataclass(frozen=True)
@@ -122,3 +129,28 @@ def range_in_atr(
     if average <= 0:
         return None
     return session_range / average
+
+
+def is_outside_band(depth: float) -> bool:
+    """Minuta „mimo tlumící zónu" — TOTÉŽ pravidlo jako stínová brána #1060.
+
+    `band_class` ∈ {outside, no_zone}, tj. hloubka ≤ 0 (pod hranou All; hrana
+    sama je ještě outside). Žádný vlastní práh: vzorec hloubky pod hranou All
+    je ve všech verzích metrik (v1–v3, #952/#1057) shodný, takže znaménko —
+    a tím tato třída — na `band_metrics_version` nezávisí.
+    """
+    return band_class(depth) in (BAND_CLASS_OUTSIDE, BAND_CLASS_NO_ZONE)
+
+
+def outside_share(depths: Sequence[float | None]) -> float | None:
+    """Podíl minut mimo tlumící zónu (#1115, osa 2 fáze 2 #576).
+
+    Jmenovatel = minuty se ZMĚŘENOU hloubkou (None = pásmo se v minutě
+    nezměřilo, např. chybějící profil — nepočítá se ani do jmenovatele, aby
+    díra v datech nevypadala jako „uvnitř zóny"). None = žádná změřená minuta.
+    """
+    measured = [depth for depth in depths if depth is not None]
+    if not measured:
+        return None
+    outside = sum(1 for depth in measured if is_outside_band(depth))
+    return outside / len(measured)

@@ -2,8 +2,9 @@
 
 Denní záznam odpadu gammy per (seance, symbol) + metriky následující seance
 (dopočítávané o den později). PostgreSQL navždy — fáze 2 kalibruje z historie.
-`next_outside_share` (podíl minut `band_regime = outside`) se začne plnit až
-s #575; sloupec existuje od začátku, ať se schéma nemusí měnit.
+`next_outside_share` (podíl minut mimo tlumící zónu, `band_depth ≤ 0`) plní
+od #1115 tentýž dopočet jako `next_range_atr` — z feature logu (#796)
+následující seance; řádky bez feature logu zůstávají NULL.
 """
 
 import datetime as dt
@@ -18,6 +19,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    or_,
     select,
     update,
 )
@@ -43,7 +45,8 @@ gamma_cliff_table = Table(
     Column("next_range_atr", Float, nullable=True),
     # {template: {count, sum_r, wins, closed}} — setupy následující seance
     Column("next_setups", JSON, nullable=True),
-    # Podíl minut band_regime=outside následující seance — plní až #575
+    # Podíl minut mimo tlumící zónu (band_class outside/no_zone) následující
+    # seance z feature logu (#1115); NULL = feature log seance chybí
     Column("next_outside_share", Float, nullable=True),
     Column("computed_at", DateTime(timezone=True), nullable=False),
 )
@@ -89,12 +92,20 @@ class GammaCliffRepository:
                 conn.execute(gamma_cliff_table.insert().values(**values))
 
     def missing_next_metrics(self, symbol: str) -> list[dt.date]:
-        """Seance bez dopočtených metrik následujícího dne, vzestupně."""
+        """Seance bez dopočtených metrik následujícího dne, vzestupně.
+
+        Chybějící `next_outside_share` počítá taky (#1115): řádky z doby před
+        jeho dopočtem se doplní při prvním běhu; kde feature log není, zůstane
+        NULL a řádek se zkouší dál — kontrola existence partice je levná.
+        """
         stmt = (
             select(gamma_cliff_table.c.session_date)
             .where(
                 gamma_cliff_table.c.symbol == symbol,
-                gamma_cliff_table.c.next_range_atr.is_(None),
+                or_(
+                    gamma_cliff_table.c.next_range_atr.is_(None),
+                    gamma_cliff_table.c.next_outside_share.is_(None),
+                ),
             )
             .order_by(gamma_cliff_table.c.session_date)
         )
@@ -108,6 +119,7 @@ class GammaCliffRepository:
         *,
         next_range_atr: float | None,
         next_setups: dict[str, dict[str, float]] | None,
+        next_outside_share: float | None = None,
     ) -> None:
         with self._engine.begin() as conn:
             conn.execute(
@@ -116,5 +128,9 @@ class GammaCliffRepository:
                     gamma_cliff_table.c.session_date == session_date,
                     gamma_cliff_table.c.symbol == symbol,
                 )
-                .values(next_range_atr=next_range_atr, next_setups=next_setups)
+                .values(
+                    next_range_atr=next_range_atr,
+                    next_setups=next_setups,
+                    next_outside_share=next_outside_share,
+                )
             )
