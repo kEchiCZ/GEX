@@ -94,6 +94,9 @@ services:
       api:
         condition: service_started
     restart: unless-stopped
+    # Strop CPU (11. 9. 2026): notebook i5-10300H běží při špičkách přes 90 °C;
+    # v klidu bere služba jednotky %, limit tlumí jen nárazy (sweepy, noční joby).
+    cpus: 2.0
 
   # SentimentLens news-engine (SPEC S1) — samostatný proces nad stejnou PG.
   # Startuje spolu s GEXLens (SPEC kap. 10, Provoz); dokud nejsou zapojené
@@ -126,6 +129,9 @@ services:
       api:
         condition: service_started
     restart: unless-stopped
+    # Strop CPU (11. 9. 2026): notebook i5-10300H běží při špičkách přes 90 °C;
+    # v klidu bere služba jednotky %, limit tlumí jen nárazy (sweepy, noční joby).
+    cpus: 1.5
 
   frontend:
     restart: unless-stopped

@@ -26,5 +26,8 @@ export default defineConfig({
     setupFiles: ['src/test/setup.ts'],
     // Jen jednotkové testy v src — e2e/*.spec.ts patří Playwrightu (#154)
     include: ['src/**/*.test.{ts,tsx}'],
+    // Max. 2 workery (11. 9. 2026): 95 jsdom souborů na všech 8 vláknech topilo
+    // notebook přes 90 °C; CI runner má stejně 2–4 jádra, doba běhu se nemění.
+    maxWorkers: 2,
   },
 })
