@@ -18,7 +18,12 @@ export default tseslint.config(
       'react-refresh': reactRefresh,
     },
     rules: {
-      ...reactHooks.configs.recommended.rules,
+      // Stejná sada jako u eslint-plugin-react-hooks 5.x. Od 6.x `recommended`
+      // přibaluje i pravidla React Compileru (set-state-in-effect, refs,
+      // purity, immutability…) — ta na kódu hlásí desítky chyb a jejich
+      // zavedení je samostatná práce, ne součást bumpu ESLintu.
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
     },
   },
