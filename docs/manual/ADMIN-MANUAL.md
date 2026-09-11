@@ -745,7 +745,11 @@ varianta A.
   (`engine: RSS 1234 MB`) a engine ho hlásí do `/status.memory_rss_mb`
   (Settings → „Paměť enginu"). Při hledání viníka nastav
   `GEXLENS_MEMORY_TRACE=1` (tracemalloc, top-10 řádků kódu podle přírůstku;
-  dražší běh, jen dočasně). Hygiena: dev stack (`compose.dev.yml`) nikdy
+  dražší běh, jen dočasně). Noc 10./11. 9. 2026 ukázala, že RSS roste mimo
+  Python heap (glibc drží uvolněné bloky v arénách) — hlídka proto po každém
+  vzorku volá `malloc_trim(0)` a loguje, kolik MB vrátila (`malloc_trim vrátil
+  N MB`, vypnutí `GEXLENS_MALLOC_TRIM=0`), a compose nastavuje
+  `MALLOC_ARENA_MAX=2` pro engine i news-engine. Hygiena: dev stack (`compose.dev.yml`) nikdy
   nenechávat běžet vedle produkce, prohlížeč s heatmapou na jednom tabu —
   PC s 16 GB má po 6 GB pro Docker a IB Gateway málo rezervy.
 
