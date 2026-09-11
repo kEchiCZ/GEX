@@ -23,6 +23,7 @@ from gexlens_engine.compute.gammacliff import (
     CliffRecord,
     ExpiryAtSettle,
     build_cliff,
+    outside_share,
     range_in_atr,
 )
 from gexlens_engine.compute.settle import session_bounds, settle_ts, trading_session_date
@@ -159,6 +160,35 @@ def session_ranges(data_dir: Path, symbol: str) -> list[tuple[dt.date, float]]:
     return [(day, highs[day] - lows[day]) for day in sorted(highs)]
 
 
+def session_band_depths(data_dir: Path, symbol: str, session: dt.date) -> list[float | None]:
+    """`band_depth` per minutu seance z feature logu (#796) — zdroj `next_outside_share`.
+
+    Stejné hranice jako `session_ranges`: minuta patří seanci dle ADR-0023 a
+    počítá se jen do settle. Globex seance začíná v 17:00 CT předchozího dne,
+    takže leží ve dvou UTC particích (feature log se klíčuje UTC datem).
+    Prázdný seznam = feature log seance chybí (řádek zůstane NULL).
+    """
+    features_dir = data_dir / "derived" / symbol / "features"
+    boundary = settle_ts(session)
+    depths: list[float | None] = []
+    for day in (session - dt.timedelta(days=1), session):
+        path = features_dir / f"{day.isoformat()}.parquet"
+        if not path.exists():
+            continue
+        try:
+            table = pq.read_table(path, columns=["ts", "band_depth"])
+        except Exception:
+            logger.exception("Feature partice %s nečitelná — přeskočena", path)
+            continue
+        for record in table.to_pylist():
+            ts = record["ts"]
+            if ts is None or ts > boundary or trading_session_date(ts) != session:
+                continue
+            depth = record["band_depth"]
+            depths.append(float(depth) if depth is not None else None)
+    return depths
+
+
 @dataclass
 class GammaCliffCollector:
     """Jednou po settle spočítá záznam seance; průběžně dopočítává následující den."""
@@ -253,6 +283,10 @@ class GammaCliffCollector:
                 self.symbol,
                 next_range_atr=range_in_atr(next_range, previous),
                 next_setups=self._setup_stats(next_day),
+                # Osa 2 fáze 2 (#1115): podíl minut mimo tlumící zónu z téže seance
+                next_outside_share=outside_share(
+                    session_band_depths(self.data_dir, self.symbol, next_day)
+                ),
             )
 
     def _setup_stats(self, session: dt.date) -> dict[str, dict[str, float]] | None:

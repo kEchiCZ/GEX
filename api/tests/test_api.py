@@ -624,6 +624,24 @@ def test_gammacliff_endpoint(settings: Settings) -> None:
     assert payload["today"]["cliff_share"] == pytest.approx(0.6)
     assert payload["rows"] == []  # engine tabulku ještě nezaložil — tvar drží
 
+    # Historie nese i osu 2 fáze 2 — podíl minut mimo tlumící zónu (#1115)
+    from sqlalchemy import create_engine as sa_create_engine
+
+    from gexlens_engine.compute.gammacliff import CliffRecord
+    from gexlens_engine.storage.gammacliff_store import GammaCliffRepository
+
+    repo = GammaCliffRepository(sa_create_engine(settings.database_url))
+    repo.ensure_schema()
+    previous = session - dt.timedelta(days=7)
+    repo.upsert(CliffRecord(previous, "ES", 1000.0, 600.0, 0.6, False, None, None, None), today)
+    repo.update_next_metrics(
+        previous, "ES", next_range_atr=1.4, next_setups=None, next_outside_share=0.25
+    )
+    rows = client.get("/gammacliff/ES").json()["rows"]
+    assert rows[0]["session_date"] == previous.isoformat()
+    assert rows[0]["next_range_atr"] == pytest.approx(1.4)
+    assert rows[0]["next_outside_share"] == pytest.approx(0.25)
+
 
 def test_gexforward_endpoint(settings: Settings) -> None:
     """Forward GEX (#519): bloky per den z partice; NaN dropped_share → None."""
