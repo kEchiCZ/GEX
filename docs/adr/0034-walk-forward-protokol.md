@@ -65,6 +65,25 @@ walk-forward nesmí učit přes takovou hranici. Do zavedení „epochy" ve stor
 platí: po takové změně se report čte jen od data změny (`--from` v příštím
 kroku) a kandidáti závislí na CumΔ se přeměří.
 
+**Doplněk 11. 9. 2026 (#1112 bod A) — změny mechaniky se dávkují.** Oddělená
+„epocha vstupů" vedle `mechanics_version` se **nezavádí**: CumΔ vstupuje do
+všech šablon (potvrzení odrazu T1, divergence T2/T7, kvantilová brána T4),
+takže by šlo jen o další verzi mechaniky pod jiným jménem. Místo toho platí
+pravidlo o pořadí:
+
+1. Každé zvednutí `SETUP_MECHANICS_VERSION` (změna sémantiky stopů/cílů,
+   filtru šablony **nebo zdroje vstupní řady**) nuluje vzorek pro confidence
+   (ADR-0033 2B, n ≥ 30), pro stínové brány (#1064, ≥ 100 v nejmenší skupině)
+   i pro walk-forward (≥ 20 OOS seancí). Ty vzorky potřebují 4–6 týdnů; při
+   kadenci v1–v5 (5 verzí za 7 týdnů) se nenaplní nikdy.
+2. Proto se změny mechaniky **hromadí do jednoho bumpu v okně mezi
+   měřeními**: verdikt měření (např. #1018) se vysloví v termínu, ale nasazení
+   počká, až doběhnou rozběhnutá okna (#1064, #1081), a nasadí se společně
+   s dalšími odsouhlasenými změnami (např. zapnutí brány z #1064).
+3. Výjimka je jen oprava chyby, která data znehodnocuje (precedens v5, #859 —
+   Max Pain zamrzlý na ranní hodnotě): ta se nasazuje hned a rozběhnutá
+   měření se explicitně restartují s poznámkou v jejich issue.
+
 ## Důsledky
 
 - Noční běh: `scripts/walkforward-nightly.ps1` (Task Scheduler nebo ručně)
