@@ -9,7 +9,7 @@ Propagace změn: Bluesky kurátory si news-engine přenačítá za běhu (~10 mi
 subreddity, vlastní RSS a vypnutí zdroje se čtou při startu → po restartu
 news-engine. UI to říká u každého ovládacího prvku, žádné tiché dojmy.
 */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fetchNewsSources, patchNewsSource } from '../api/news'
 import type { NewsSourceRow } from '../api/news'
 import { fetchSettings, putSetting } from '../api/settings'
@@ -31,6 +31,12 @@ const TIER_LABELS: Record<string, string> = {
   extra: 'doplněk',
   test: 'testovací',
 }
+
+/** Stabilní prázdný seznam — ať `?? []` nevyrábí nový objekt při každém renderu. */
+const EMPTY_LIST: string[] = []
+
+/** Klíče settings s uživatelskými seznamy (pořadí = pořadí editorů). */
+const LIST_KEYS = ['news_bluesky_authors', 'news_reddit_subreddits', 'news_rss_extra'] as const
 
 /** Položka seznamu (#918): prefix `#` v uložené hodnotě = vypnutá.
 
@@ -60,35 +66,32 @@ function serializeItems(items: ListItem[]): string[] {
 
 function ListEditor({
   label,
-  settingKey,
   placeholder,
   hint,
   stored,
+  onSave,
 }: {
   label: string
-  settingKey: string
   placeholder: string
   hint: string
   stored: string[]
+  onSave: (next: string[]) => Promise<void>
 }) {
-  const [items, setItems] = useState<ListItem[]>(parseItems(stored))
+  // Seznam se odvozuje z props při každém renderu — jediný stav drží rodič.
+  // Dřívější kopie do useState + „sladění" přes useEffect(!edited) měla
+  // souběh: pasivní efekt z commitu, který seznam poprvé vykreslil, React
+  // spouští až v dalším tasku scheduleru; klikl-li uživatel dřív (na pomalém
+  // CI běžně), efekt s uzávěrem edited=false doběhl až za jeho updatem
+  // a vrátil seznam do původní podoby — PUT odešel, UI ho ale nezobrazilo.
+  const items = parseItems(stored)
   const [draft, setDraft] = useState('')
-  const [edited, setEdited] = useState(false)
   const [state, setState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
-  // Serverová data dorazila později (první načtení) — needitovaný obsah se sladí.
-  // Po první editaci je autoritativní lokální stav: refetch po uložení může
-  // dorazit opožděně a stale odpověď by tiše vrátila starší verzi seznamu.
-  useEffect(() => {
-    if (!edited) setItems(parseItems(stored))
-  }, [stored, edited])
 
   // Každá změna se ukládá hned — checkbox s odloženým „Uložit" sváděl
   // k zapomenutému stavu jen v prohlížeči
   const save = (next: ListItem[]) => {
-    setItems(next)
-    setEdited(true)
     setState('saving')
-    putSetting(settingKey, serializeItems(next))
+    onSave(serializeItems(next))
       .then(() => setState('saved'))
       .catch(() => setState('error'))
   }
@@ -165,6 +168,9 @@ function ListEditor({
 export function NewsSourcesSection() {
   const [sources, setSources] = useState<NewsSourceRow[]>([])
   const [lists, setLists] = useState<Record<string, string[]>>({})
+  // Klíče, které uživatel už editoval: opožděná odpověď prvního načtení
+  // (editory se vykreslí i před ní) je nesmí tiše přepsat starší verzí.
+  const editedKeys = useRef(new Set<string>())
 
   const load = () => {
     void fetchNewsSources().then(setSources)
@@ -175,10 +181,12 @@ export function NewsSourcesSection() {
           ? value.filter((item): item is string => typeof item === 'string')
           : []
       }
-      setLists({
-        news_bluesky_authors: listOf('news_bluesky_authors'),
-        news_reddit_subreddits: listOf('news_reddit_subreddits'),
-        news_rss_extra: listOf('news_rss_extra'),
+      setLists((previous) => {
+        const next: Record<string, string[]> = {}
+        for (const key of LIST_KEYS) {
+          next[key] = editedKeys.current.has(key) ? (previous[key] ?? []) : listOf(key)
+        }
+        return next
       })
     }
     // API nedostupné → editory zůstanou prázdné, sekce se nerozbije
@@ -187,6 +195,12 @@ export function NewsSourcesSection() {
       .catch(() => {})
   }
   useEffect(load, [])
+
+  const saveList = (key: string, next: string[]): Promise<void> => {
+    editedKeys.current.add(key)
+    setLists((previous) => ({ ...previous, [key]: next }))
+    return putSetting(key, next)
+  }
 
   const toggle = (source: string, enabled: boolean) => {
     void patchNewsSource(source, enabled).then((ok) => {
@@ -271,7 +285,6 @@ export function NewsSourcesSection() {
       <div className="news-sources-editors">
         <ListEditor
           label="Bluesky kurátoři"
-          settingKey="news_bluesky_authors"
           placeholder="handle nebo did:plc:…"
           hint={
             'Autoři, jejichž KAŽDÝ post se bere (handle nebo did:…).\n' +
@@ -279,22 +292,22 @@ export function NewsSourcesSection() {
             'smazané defaulty se už nevracejí.\n' +
             'Projeví se za běhu do ~10 minut (bez restartu).'
           }
-          stored={lists.news_bluesky_authors ?? []}
+          stored={lists.news_bluesky_authors ?? EMPTY_LIST}
+          onSave={(next) => saveList('news_bluesky_authors', next)}
         />
         <ListEditor
           label="Reddit subreddity"
-          settingKey="news_reddit_subreddits"
           placeholder="subreddit (bez r/)"
           hint={
             'Subreddity pro nativní RSS (bez r/).\n' +
             'Checkbox položku dočasně vypne (vratné); ✕ ji smaže.\n' +
             'Projeví se po restartu news-engine.'
           }
-          stored={lists.news_reddit_subreddits ?? []}
+          stored={lists.news_reddit_subreddits ?? EMPTY_LIST}
+          onSave={(next) => saveList('news_reddit_subreddits', next)}
         />
         <ListEditor
           label="Vlastní RSS feedy"
-          settingKey="news_rss_extra"
           placeholder="https://example.com/feed.xml"
           hint={
             'Libovolné RSS/Atom feedy (plná URL).\n' +
@@ -302,7 +315,8 @@ export function NewsSourcesSection() {
             'V auditu se hlásí jako „Vlastní RSS feedy".\n' +
             'Projeví se po restartu news-engine.'
           }
-          stored={lists.news_rss_extra ?? []}
+          stored={lists.news_rss_extra ?? EMPTY_LIST}
+          onSave={(next) => saveList('news_rss_extra', next)}
         />
       </div>
       <p className="muted">
