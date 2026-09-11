@@ -84,6 +84,8 @@ services:
       GEXLENS_DATA_DIR: /app/data
       GEXLENS_API_BASE: http://api:8000
       GEXLENS_API_TOKEN: ${GEXLENS_API_TOKEN:?}
+      # glibc: méně malloc arén = méně fragmentace RSS (#1105, noc 10./11. 9.)
+      MALLOC_ARENA_MAX: "2"
     volumes:
       - ./data:/app/data
     depends_on:
@@ -112,6 +114,8 @@ services:
       # V Dockeru je localhost sám kontejner — WS push musí mířit na službu api
       GEXLENS_NEWS_API_BASE: http://api:8000
       GEXLENS_NEWS_API_TOKEN: ${GEXLENS_API_TOKEN:?}
+      # glibc: méně malloc arén = méně fragmentace RSS (#1105, noc 10./11. 9.)
+      MALLOC_ARENA_MAX: "2"
     volumes:
       # Bary čte (zapisuje je datový engine, #276), do derived/sentiment/ píše
       # vlastní řadu SentIndexu (#283) — adresář je rozdělený podle vlastnictví
