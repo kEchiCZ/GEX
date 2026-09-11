@@ -83,3 +83,9 @@ updates:
     groups:
       compose-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # Major PostgreSQL = jiný formát datového adresáře; pouhý bump image by
+      # kontejner nenastartoval nad daty v16 (pg_upgrade / dump+restore je
+      # ruční migrace s vlastním issue, ne PR od dependabota) — #1033.
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
