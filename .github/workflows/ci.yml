@@ -26,7 +26,7 @@ jobs:
     env:
       GEXLENS_TEST_PG_DSN: postgresql+psycopg://gexlens:gexlens@localhost:5432/gexlens
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
@@ -45,7 +45,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -78,7 +78,7 @@ jobs:
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # gitleaks skenuje celou historii, ne jen špičku
       # Compose smoke (#696): interpolace a env_file obou stacků musí projít
