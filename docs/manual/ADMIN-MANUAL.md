@@ -749,7 +749,12 @@ varianta A.
   Python heap (glibc drží uvolněné bloky v arénách) — hlídka proto po každém
   vzorku volá `malloc_trim(0)` a loguje, kolik MB vrátila (`malloc_trim vrátil
   N MB`, vypnutí `GEXLENS_MALLOC_TRIM=0`), a compose nastavuje
-  `MALLOC_ARENA_MAX=2` pro engine i news-engine. Hygiena: dev stack (`compose.dev.yml`) nikdy
+  `MALLOC_ARENA_MAX=2` pro engine i news-engine. **CPU a teplota** (11. 9.
+  2026, notebook i5-10300H přes 90 °C při špičkách): `.wslconfig`
+  `processors=4` (VM dostane polovinu vláken, Docker buildy a testy nesaturují
+  celý procesor), compose `cpus: 2.0` engine / `1.5` news-engine (tlumí jen
+  nárazy, v klidu služby berou jednotky %), vitest `maxWorkers: 2`; testovací
+  sady a buildy pouštět po jednom, ne paralelně ve více worktree. Hygiena: dev stack (`compose.dev.yml`) nikdy
   nenechávat běžet vedle produkce, prohlížeč s heatmapou na jednom tabu —
   PC s 16 GB má po 6 GB pro Docker a IB Gateway málo rezervy.
 
