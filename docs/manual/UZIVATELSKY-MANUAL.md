@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.16 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.17 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -1405,6 +1405,8 @@ tooltip štítku je ukazuje, obrazovka Setupy má pro ně dlaždice se žlutým 
 - **jen poloha** — mimo pásmo / bez pásma by setup nevznikl (block), zbytek prošel;
 - **poloha × gamma režim** — uvnitř vždy, přechod jen v negativní gammě, mimo
   nikdy; bez známého režimu je verdikt „nerozhodnuto" a do skupin nevstupuje.
+
+![Setupy — dlaždice stínové brány (žlutý pruh) a sloupec Pásmo se štítky polohy](img/setupy-pasmo.png)
 
 Vyhodnocení **~5. 10. 2026** na mechanice v5 se třemi síty proti šumu (min. 100
 setupů v nejmenší skupině, Wilsonova dolní mez rozdílu nad nulou, permutační

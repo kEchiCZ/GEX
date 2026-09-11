@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.16 · září 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.17 · září 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); od verze 1.9 slouží <strong>tastytrade</strong> jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -124,7 +124,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Řádek přepínačů</strong></td>
-<td>Dropdown <strong>Dyn plocha</strong> (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18; <strong>výchozí je Dyn GEX</strong> (#837) — modelované gamma pole je hlavní přidaná hodnota nástroje, Off zvol, když chceš jen měřenou mapu). Checkboxy vrstev: <strong>Zdi</strong> (call/put wall linie), <strong>2. zeď</strong> (druhá nejsilnější koncentrace strany, tečkovaně), <strong>GEX Levels</strong> (flip/centroid/Max Pain + <strong>OI zdi</strong>, viz kap. 5), <strong>GEX žebřík</strong> (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), <strong>FA levels</strong> (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI), <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol / Opt Vol / Cum Δ / Δ Flow C/P</strong> (spodní panely), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong> (markery zpráv + panel Sentiment) s dropdownem <strong>Vše/Významné</strong> (filtr markerů na importance ≥ 2), dropdown <strong>Signály</strong> (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá.</td>
+<td>Dropdown <strong>Dyn plocha</strong> (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18; <strong>výchozí je Dyn GEX</strong> (#837) — modelované gamma pole je hlavní přidaná hodnota nástroje, Off zvol, když chceš jen měřenou mapu). Dropdown <strong>Vrstvy (n)</strong> (v1.16, #1084) — multi-výběr vrstev v grafu: <strong>GEX Levels</strong> (flip/centroid/Max Pain + <strong>OI zdi</strong>, viz kap. 5), <strong>GEX žebřík</strong> (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), <strong>Zdi</strong> (call/put wall linie), <strong>2. zeď</strong> (druhá nejsilnější koncentrace strany, tečkovaně), <strong>FA levels</strong> (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI). Dropdown <strong>Panely (n)</strong> (v1.16, #1084) — multi-výběr spodních panelů v pořadí, jak se kreslí shora dolů: <strong>Vol / Opt Vol / Δ Flow C/P / Evo OI / Cum Δ / Sentiment</strong>; panel Sentiment má vlastní položku, nezávislou na checkboxu News. Závorka u obou dropdownů ukazuje počet zapnutých („žádný“ = nic). Checkboxy přímo v liště: <strong>Sessions</strong> (automatické markery světových seancí), <strong>Vol + OI Δ</strong>, <strong>Projekce</strong>, <strong>News</strong> (markery zpráv) s dropdownem <strong>Vše/Významné</strong> (filtr markerů na importance ≥ 2), dropdown <strong>Signály</strong> (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá.</td>
 </tr>
 <tr>
 <td><strong>Chipy stavu trhu</strong></td>
@@ -546,6 +546,8 @@ backfill, jiný den nebo symbol, #977).</p>
 <li><p><strong>Profilem ovládáš i cenovou osu Y grafu</strong> — tažení svisle nebo kolečko nad profilem stlačuje/roztahuje ceny stejně jako levý okraj heatmapy (kurzor ↕).</p>
 </li>
 <li><p><strong>Šrafovaná půlka řádku</strong> = OI pro tenhle strike <strong>chybí</strong> (IBKR ho nedodalo) — něco jiného než změřená nula, která zůstává prázdná. Šrafura říká „nevíme&quot;, prázdno říká „nula&quot;.</p>
+</li>
+<li><p><strong>Štítek „Vol nedostupný“ v hlavičce</strong> (v1.16, #1067) = objem této minuty není k dispozici: opční řetěz běží z tastytrade fallbacku (kap. 17), který denní objem v sémantice IBKR nedodává. Pruhy a čísla ukazují jen složku OI Δ, tooltip řádku má u Vol pomlčky a Vol leadeři se nevedou. Není to pokles objemu — objem se vrátí s návratem řetězu na IBKR.</p>
 </li>
 </ul>
 <p>Čteš z něj na první pohled, <strong>kde sedí dominantní call a put koncentrace</strong> — typicky walls.</p>
@@ -1058,6 +1060,14 @@ běží <strong>odpočet do US openu</strong> (9:30 New York, DST-korektně).</p
 </tr>
 </thead>
 <tbody><tr>
+<td><strong>Shrnutí dne</strong> (v1.16, #1090)</td>
+<td>Přes celou šířku nahoře. <strong>Trend a směr</strong> (čtení z karty Trend); <strong>Verdikt dne</strong> — <em>Spíše LONG den / Spíše SHORT den / Bez převahy / Počkat na tisk</em> z hlasování s pevnými vahami (ADR-0035 §3: trend vyšších TF ±2, nižších ±1, tendence ±1/±2, potvrzený sentiment ±1, overnight vs. včerejší close ±1, ΔOI ±1 při převaze ≥ 10 %, gamma: negativní +1 ve směru trendu, pozitivní táhne skóre k nule; práh ±3) — každý hlas má vypsaný důvod, chybějící data = nulový hlas „bez dat&quot;; High-impact zpráva před US openem = „Počkat na tisk&quot;. <strong>Úrovně obratu</strong> — jeden seznam podle vzdálenosti od ceny: gamma (flip, zdi, těžiště), PDH/PDL/PDC, ONH/ONL, ±EM, denní EMA20; role odpor/podpora, konfluence úrovní do 0,1 % ceny. <strong>Zprávy dne</strong> — čas v Praze, směr překvapení z konvence řady („nad konsensem = risk-off&quot;), typická velikost z naměřených reakcí kategorie (medián |ret| v 5/15/60 min, n), nebo poctivé „bez měřené reakce&quot;. Verdikt je <strong>heuristika</strong> — ukládá se per seance a symbol a engine po settle doplní výsledek (pohyb US open → settle v bodech i v EM, zásah verdiktu); track record je ve <strong>Stats → Verdikt dne</strong> (zásah per verdikt, souhlas per složka hlasování, Wilsonova dolní mez, brána n ≥ 30 seancí); váhy se mění jen dodatkem ADR (#1091). Tlačítko ☀ dává tytéž řádky do plánu v deníku.</td>
+</tr>
+<tr>
+<td><strong>Trend</strong> (v1.16, #1089)</td>
+<td>Trend podkladu <strong>shora dolů</strong>: týden, den, 4h, 1h, 15m — per timeframe struktura trhu (HH/HL = rostoucí, LH/LL = klesající) a EMA20/EMA50; ● = struktura i EMA souhlasí, ○ = jen jedna z nich. Nad tabulkou čtení pro den: vyšší TF (týden, den) určuje směr, nižší načasování — souhlas = obchodovat ve směru, nesoulad = nižší TF korigují, čekat na návrat. Málo svíček = „málo dat&quot;, nic se nedosazuje. Metoda v ADR-0035.</td>
+</tr>
+<tr>
 <td><strong>Režim a úrovně</strong></td>
 <td>Pozitivní/negativní gamma + poloha ceny vůči flipu; flip, call/put wall, těžiště</td>
 </tr>
@@ -1196,11 +1206,11 @@ které se přepne hned.</p>
 </tr>
 <tr>
 <td><strong>Stav enginu</strong></td>
-<td>Read-only stav: spojení + port (při výpadku IBKR i <strong>„bez spojení X min&quot;</strong>, #770), účet (paper), <strong>Zdroj dat</strong> (v1.13, #950: <code>řetěz ibkr · spot ibkr</code>, při fallbacku upozornění, že běží tastytrade), tlačítko <strong>Přepojit IBKR</strong> (níže), řádek <strong>Cum Δ</strong> (v1.14, #615: zdroj znaménka <code>midpoint</code> / <code>dxfeed</code> a per symbol podíl objemu, který v dnešním dni přišel z tisků se stranou od burzy — pravdivý ukazatel pokrytí místo dřívější „šířky hot zóny“), Greeks X/Y + repair fronta, OI řetězu, lines %, <strong>chyby subskripce</strong> (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance&quot; a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console)</td>
+<td>Read-only stav: spojení + port (při výpadku IBKR i <strong>„bez spojení X min&quot;</strong>, #770), účet (paper), <strong>Zdroj dat</strong> (v1.13, #950: <code>řetěz ibkr · spot ibkr</code>, při fallbacku upozornění, že běží tastytrade), řádek <strong>IBKR</strong> se stavovým tlačítkem (v1.16, #1108: zelené <strong>Připojeno · IBKR</strong>, oranžové <strong>Přepojuji…</strong> zamčené do odpovědi enginu, červené <strong>Odpojeno — přepojit</strong>; stav je podle enginu, ne podle kliknutí, zelená i červená jsou klikatelné) + co provider dodává a <strong>badge aktivního zdroje řetězu/spotu</strong> (u druhého „záloha“) + čas posledního požadavku, řádek <strong>Cum Δ</strong> (v1.14, #615: zdroj znaménka <code>midpoint</code> / <code>dxfeed</code> a per symbol podíl objemu, který v dnešním dni přišel z tisků se stranou od burzy — pravdivý ukazatel pokrytí místo dřívější „šířky hot zóny“), Greeks X/Y + repair fronta, OI řetězu, lines %, <strong>chyby subskripce</strong> (v1.10: za hodinu · od startu · rozbalovací výpis posledních záznamů; půlnoční náraz resubskripce nové seance je označen „přechod seance&quot; a alert nespouští), křížová kontrola feedů + sbalený log událostí prohlížeče (náhrada zrušené IBKR Console)</td>
 </tr>
 <tr>
 <td><strong>Tastytrade</strong> (v1.10)</td>
-<td>Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, tlačítko <strong>Přepojit tastytrade</strong> (v1.13), trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží</td>
+<td>Read-only blok pod stavem enginu — DXLink spojení + reconnecty + čas posledního eventu, počet subskripcí s pokrytím quotes/greeks/OI, řádek <strong>tastytrade</strong> se stavovým tlačítkem a badgem zdroje (v1.16, #1108; obě větve běží záměrně souběžně — IBKR primární, tastytrade OI fill, tisky, extended expirace a záloha řetězu/spotu), trade printy (přijaté a zaznamenané do učicích dat). Blok se ukazuje, jen když větev běží</td>
 </tr>
 <tr>
 <td><strong>Alerty</strong></td>
@@ -1246,6 +1256,23 @@ přesto stojí, zkus nejdřív tastytrade.</li>
 <li>Uložení nastavení IBKR <strong>beze změny hodnot nepřepojuje</strong> — na to je právě
 tohle tlačítko.</li>
 </ul>
+<p><strong>Stavová tlačítka (v1.16, #1108).</strong> Tlačítka mají barvu a text podle toho,
+co hlásí engine — ne podle toho, na co jsi klikl:</p>
+<ul>
+<li>🟢 <strong>Připojeno · IBKR</strong> / <strong>Připojeno · tastytrade</strong> — spojení běží;
+tlačítko zůstává klikatelné (nouzová páka i na připojeném spojení).</li>
+<li>🟠 <strong>Přepojuji …</strong> — zamčené: buď engine sám hlásí přepojování, nebo běží
+okno po kliknutí (max. 2 min), které se zavře, jakmile engine spojení
+prokazatelně přepojí (odpadne a vrátí se, u tastytrade vzroste čítač
+reconnectů). Kdyby engine mlčel, tlačítko se po okně odemkne samo.</li>
+<li>🔴 <strong>Odpojeno · … — přepojit</strong> — spojení neběží, klik ho zkusí obnovit.</li>
+</ul>
+<p>Vedle tlačítka je, co provider právě dodává: <strong>řetěz ✔ aktivní / záloha</strong>
+a <strong>spot ✔ aktivní / záloha</strong> podle skutečného zdroje (fallback #614),
+u IBKR navíc bary a OI archiv, u tastytrade OI fill, tisky (Cum Δ), extended
+expirace a ad-hoc pohledy. <strong>Obě spojení běží záměrně souběžně</strong> — tlačítka
+nevybírají zdroj dat, jen obnovují spojení. Bez rozepsané hlášky ukazuje řádek
+čas posledního požadavku (přežije refresh, razítkuje ho server).</p>
 <p><img src="img/settings.png" alt="Settings"></p>
 <p>Light téma:</p>
 <p><img src="img/light.png" alt="Light téma"></p>
@@ -1360,7 +1387,7 @@ zůstanou ve formuláři. Téma (Dark/Light) se ukládá hned, zbytek přes Ulo�
 </tr>
 </tbody></table>
 <h3>Setupy</h3>
-<p>Když detektor najde setup, přijde alert <strong>Nový setup</strong> a nad grafem se ukáže <strong>karta setupu</strong> pro daný instrument: směr (LONG/SHORT), šablona, <strong>datum a čas vzniku</strong> (kdy se splnily podmínky), úrovně <strong>Entry / Cíl / Stop</strong>, RRR a důvěra, od v1.16 štítek <strong>polohy v tlumící zóně</strong> (uvnitř pásma / přechod / mimo pásmo / bez pásma s posunem důvěry, kap. 18), plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce <strong>Setupy</strong> v sidebaru.</p>
+<p>Když detektor najde setup, přijde alert <strong>Nový setup</strong> a nad grafem se ukáže <strong>karta setupu</strong> pro daný instrument: směr (LONG/SHORT), šablona, <strong>datum a čas vzniku</strong> (kdy se splnily podmínky), úrovně <strong>Entry / Cíl / Stop</strong>, RRR a důvěra (od v1.16 <strong>kalibrovaná z track recordu</strong>: Wilsonova dolní mez úspěšnosti šablony v daném gamma režimu při ≥ 30 uzavřených setupech, jinak konstanta šablony — najetím na číslo zjistíš zdroj), od v1.16 štítek <strong>polohy v tlumící zóně</strong> (uvnitř pásma / přechod / mimo pásmo / bez pásma s posunem důvěry, kap. 18), plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce <strong>Setupy</strong> v sidebaru.</p>
 <p><strong>Denní statistika seance</strong> (obrazovka Setupy): nad seznamem je souhrn dnešního
 dne — kolik obchodů proběhlo, kolik úspěšných a kolik ztrátových, úspěšnost
 v %, největší ziskový a největší ztrátový obchod, od v1.12 <strong>Σ dnes</strong> —
@@ -1754,6 +1781,7 @@ tooltip štítku je ukazuje, obrazovka Setupy má pro ně dlaždice se žlutým 
 <li><strong>poloha × gamma režim</strong> — uvnitř vždy, přechod jen v negativní gammě, mimo
 nikdy; bez známého režimu je verdikt „nerozhodnuto&quot; a do skupin nevstupuje.</li>
 </ul>
+<p><img src="img/setupy-pasmo.png" alt="Setupy — dlaždice stínové brány (žlutý pruh) a sloupec Pásmo se štítky polohy"></p>
 <p>Vyhodnocení <strong>~5. 10. 2026</strong> na mechanice v5 se třemi síty proti šumu (min. 100
 setupů v nejmenší skupině, Wilsonova dolní mez rozdílu nad nulou, permutační
 test interakce poloha × režim). Předregistrovaná předpověď: skupina „block&quot; je
