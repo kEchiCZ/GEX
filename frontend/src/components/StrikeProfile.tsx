@@ -22,9 +22,13 @@ import { GEX_UNIT_LABELS, weightProfileRow } from '../heatmap/units'
 import { PcrPanel } from './PcrPanel'
 import { diffPeak } from '../profile/diff'
 import type { DiffRow } from '../profile/diff'
+import { PCR_MISSING_LIMIT, formatMoney } from '../profile/pcr'
+import { PROFILE_UNITS, PROFILE_UNIT_LABELS, premiumRows } from '../profile/premium'
+import type { ProfileUnit } from '../profile/premium'
+import { pointValue } from '../instrument/tick'
 import type { GexUnits } from '../heatmap/units'
 import type { GexProfileRow } from '../replay/loader'
-import { usePersistentState } from '../state/persist'
+import { oneOf, usePersistentState } from '../state/persist'
 import { useCrosshair } from '../state/Crosshair'
 
 /** Y transformace hlavního grafu: strike → obrazovková výška (sdílená osa). */
@@ -139,19 +143,53 @@ function StrikeProfileBase({
   // složkou a legendou „statické, EOD", ať profil netvrdí, že OI patří výběru
   const windowMode = windowLabel !== null
   const [windowOi, setWindowOi] = useState(false)
+  // Jednotka pruhů (#1126 bod 3c): Δ-vážené kontrakty, nebo prémie v $
+  // (volume × mid × multiplikátor per strana, OI složka oceněná týmž midem —
+  // pravidlo sdílené s P/C panelem v `profile/premium.ts`). Volba přežívá
+  // refresh (ADR-0007); v diferenčním módu (#489) se neuplatní, rozdíl oken
+  // zůstává v kontraktech.
+  const [unit, setUnit] = usePersistentState<ProfileUnit>(
+    'profileUnit',
+    'contracts',
+    oneOf(PROFILE_UNITS),
+  )
+  const premium = useMemo(
+    () => (unit === 'premium' && !diffRows ? premiumRows(rows, pointValue(symbol)) : null),
+    [unit, diffRows, rows, symbol],
+  )
+  // Bez jediného použitelného midu (Σ souhrn z API mid nenese, replay bez
+  // kotací, načítání) profil spadne na kontrakty a řekne to štítkem — tichý
+  // přepad by vypadal jako měření v $
+  const premiumActive = premium !== null && premium.available
+  const premiumFallback = premium !== null && !premium.available
+  const unitRows = premiumActive ? premium.rows : rows
+  const formatValue = premiumActive ? formatMoney : formatAmount
   const effectiveRows = useMemo(
     () =>
       windowMode && !windowOi
-        ? rows.map((row) => ({ ...row, callOiComponent: 0, putOiComponent: 0 }))
-        : rows,
-    [rows, windowMode, windowOi],
+        ? unitRows.map((row) => ({ ...row, callOiComponent: 0, putOiComponent: 0 }))
+        : unitRows,
+    [unitRows, windowMode, windowOi],
   )
   const ordered = useMemo(
     () => [...effectiveRows].sort((a, b) => b.strike - a.strike),
     [effectiveRows],
   )
-  // Vol leadeři (#208): top 3 strany podle volume vybrané expirace
-  const leaders = useMemo(() => volLeaders(rows), [rows])
+  // Vol leadeři (#208): top 3 strany podle volume vybrané expirace; v prémii
+  // podle proteklých $ (Vol složka přepočtených řádků = volume × mid × mult)
+  const leaders = useMemo(
+    () =>
+      volLeaders(
+        premiumActive
+          ? unitRows.map((row) => ({
+              ...row,
+              callVolume: row.callVolComponent,
+              putVolume: row.putVolComponent,
+            }))
+          : rows,
+      ),
+    [premiumActive, unitRows, rows],
+  )
   const strikesAscending = useMemo(() => ordered.map((row) => row.strike).reverse(), [ordered])
   // Osa Y (#213): se sdíleným pohledem VŽDY strikes heatmapy — vlastní řádky
   // (Σ souhrn přes expirace) můžou mít jinou sadu/počet a osa by se rozjela
@@ -279,6 +317,36 @@ function StrikeProfileBase({
             Vol nedostupný
           </span>
         )}
+        {premiumFallback && (
+          // Prémie bez jediného použitelného midu (#1126 bod 3c): Σ souhrn
+          // z API mid nenese, replay bez kotací — pruhy jsou v kontraktech
+          <span
+            className="profile-flag"
+            data-testid="premium-unavailable"
+            title={
+              'Prémie $ nejsou k dispozici — žádný strike nemá použitelný mid ' +
+              '(Σ souhrn přes expirace mid nenese, v replay mohou kotace chybět, ' +
+              'nebo se ještě načítají). Pruhy a čísla jsou v Δ-vážených kontraktech.'
+            }
+          >
+            Prémie nedostupné → kontrakty
+          </span>
+        )}
+        {premium !== null && premium.available && premium.missingShare > PCR_MISSING_LIMIT && (
+          // Velká část kontraktů bez midu (zmrzlé kotace, ADR-0015) — prémie
+          // je k vidění, ale může být zavádějící; týž práh jako P/C panel
+          <span
+            className="profile-flag"
+            data-testid="premium-missing"
+            title={
+              `${Math.round(premium.missingShare * 100)} % kontraktů (Vol + OI) je z prémie ` +
+              'vyloučeno — jejich strana nemá použitelný mid (zmrzlá kotace nad práh ' +
+              'ADR-0015 nebo kotace chybí). Tyto strany mají pruh nulový, ne změřený.'
+            }
+          >
+            bez midu {Math.round(premium.missingShare * 100)} %
+          </span>
+        )}
         <div role="toolbar" aria-label="Zoom profilu">
           {aggregate !== null && (
             <button
@@ -308,6 +376,28 @@ function StrikeProfileBase({
           >
             {scaleMode === 'abs' ? 'Abs' : 'Rel'}
           </button>
+          {/* Jednotka pruhů (#1126 bod 3c): kontrakty / prémie $ — v diferenčním
+              módu (#489) se neuplatní, rozdíl oken zůstává v kontraktech */}
+          {!diffRows && (
+            <button
+              className={unit === 'premium' ? 'chip active' : 'chip'}
+              data-testid="profile-unit-toggle"
+              onClick={() => setUnit((value) => (value === 'premium' ? 'contracts' : 'premium'))}
+              aria-label="Jednotka profilu: kontrakty / prémie $"
+              title={
+                'Kontrakty = Δ-vážené počty (volume × |Δ|, OI × |Δ|): levné OTM křídlo váží ' +
+                'stejně jako ATM pozice.\n' +
+                'Prémie $ = volume × mid × multiplikátor per strana — kam tekly peníze; ' +
+                'OI složka = OI × týž mid (co držené pozice stojí dnešní cenou). ' +
+                'Mid (bid+ask)/2 k zobrazené minutě je u volume aproximace (neváží cenu ' +
+                'v okamžiku obchodu). Strana se zmrzlou kotací (ADR-0015) nebo bez midu ' +
+                'má pruh nulový; bez jediného midu profil spadne na kontrakty a řekne to ' +
+                'štítkem. Vol leadeři sledují zvolenou jednotku.'
+              }
+            >
+              {PROFILE_UNIT_LABELS[unit]}
+            </button>
+          )}
           {/* Range mód (#485): OI nepatří k oknu — přepínač jen Vol / +OI */}
           {windowMode && (
             <button
@@ -340,11 +430,16 @@ function StrikeProfileBase({
         <div
           className="profile-leaders muted"
           data-testid="vol-leaders"
-          title="Top 3 strany podle opčního volume vybrané expirace — dominantní strike = úroveň, kde se trh zajišťuje (put pod trhem pojistka/magnet, call nad trhem strop)"
+          title={
+            (premiumActive
+              ? 'Top 3 strany podle proteklé prémie $ (volume × mid × multiplikátor) vybrané expirace'
+              : 'Top 3 strany podle opčního volume vybrané expirace') +
+            ' — dominantní strike = úroveň, kde se trh zajišťuje (put pod trhem pojistka/magnet, call nad trhem strop)'
+          }
         >
           Vol leadeři:{' '}
           {leaders
-            .map((leader) => `${leader.strike}${leader.right} ${formatAmount(leader.volume)}`)
+            .map((leader) => `${leader.strike}${leader.right} ${formatValue(leader.volume)}`)
             .join(' · ')}
         </div>
       )}
@@ -457,10 +552,10 @@ function StrikeProfileBase({
               // Podíl tisků na objemu strany (#1007); null = nedělit
               const callSplit = printedShare(row.callPrinted, row.callStructured)
               const putSplit = printedShare(row.putPrinted, row.putStructured)
-              const callText = formatAmount(row.callVolComponent + row.callOiComponent)
+              const callText = formatValue(row.callVolComponent + row.callOiComponent)
               const callEnd = halfWidth + bar.callVolWidth + bar.callOiWidth
               const callOutside = callEnd + 3 + callText.length * VALUE_CHAR_PX <= width - 2
-              const putText = formatAmount(row.putVolComponent + row.putOiComponent)
+              const putText = formatValue(row.putVolComponent + row.putOiComponent)
               const putEnd = halfWidth - bar.putVolWidth - bar.putOiWidth
               const putOutside = putEnd - 3 - putText.length * VALUE_CHAR_PX >= STRIKE_LABEL_RESERVE
               return (
@@ -564,7 +659,7 @@ function StrikeProfileBase({
                       data-part="put-oi-missing"
                     />
                   )}
-                  {/* Číselné hodnoty (Δ-vážené kontrakty) u konce pruhů — každý k-tý řádek */}
+                  {/* Číselné hodnoty (Δ-vážené kontrakty, nebo $ v prémii) u konce pruhů — každý k-tý řádek */}
                   {index % labelEvery === 0 && row.callVolComponent + row.callOiComponent > 0 && (
                     <text
                       x={callOutside ? callEnd + 3 : callEnd - 3}
@@ -592,7 +687,7 @@ function StrikeProfileBase({
                 </g>
               )
             })}
-          {/* Osa množství (Δ-vážené kontrakty) + strany Put/Call — dole nad okrajem */}
+          {/* Osa množství (Δ-vážené kontrakty, nebo $ v prémii) + strany Put/Call — dole nad okrajem */}
           {axisFull > 0 && (
             <g data-part="amount-axis" fontSize={9} fill="#7d8596">
               <text x={6} y={12} fill="#ef4444">
@@ -617,7 +712,7 @@ function StrikeProfileBase({
                   textAnchor={tick.anchor}
                   data-part="amount-tick"
                 >
-                  {formatAmount(tick.value)}
+                  {formatValue(tick.value)}
                 </text>
               ))}
             </g>
@@ -685,6 +780,11 @@ function StrikeProfileBase({
               : `Vol C/P: ${hovered.callVolume.toFixed(0)} / ${hovered.putVolume.toFixed(0)}`}
           </span>
           <span data-testid="printvol">{printVolText(hovered)}</span>
+          {premiumActive && (
+            // Prémie per složka (#1126 bod 3c): pomlčka = strana bez použitelného
+            // midu (zmrzlá/chybějící kotace), ne nula
+            <span data-testid="premium-values">{premiumText(hovered)}</span>
+          )}
           {hovered.callOiChange != null && hovered.putOiChange != null && (
             <span data-testid="oi-change">
               ΔOI vs. včera C/P: {formatSigned(hovered.callOiChange)} /{' '}
@@ -744,4 +844,20 @@ export function printVolText(row: ProfileRow): string {
       ? '—'
       : `${Math.round(printed ?? 0)} outright (${Math.round(share * 100)} %) · ${Math.round(structured ?? 0)} struktura`
   return `C: ${fmt(call, row.callPrinted, row.callStructured)} | P: ${fmt(put, row.putPrinted, row.putStructured)}`
+}
+
+/** Řádek tooltipu s prémií v $ per složka (#1126 bod 3c): Vol = volume × mid ×
+multiplikátor, OI = OI × mid × multiplikátor. Řádek už nese přepočtené
+komponenty; strana bez použitelného midu má komponenty 0 při nenulových
+kontraktech → pomlčka, ne „$0“. Mid je k zobrazené minutě (aproximace). */
+export function premiumText(row: ProfileRow): string {
+  const side = (vol: number, oi: number, volume: number, openInterest: number): string =>
+    vol === 0 && oi === 0 && volume + openInterest > 0
+      ? '— (bez midu)'
+      : `Vol ${formatMoney(vol)} · OI ${formatMoney(oi)}`
+  return (
+    `Prémie C: ${side(row.callVolComponent, row.callOiComponent, row.callVolume, row.callOi)} | ` +
+    `P: ${side(row.putVolComponent, row.putOiComponent, row.putVolume, row.putOi)} ` +
+    '(mid k zobrazené minutě)'
+  )
 }

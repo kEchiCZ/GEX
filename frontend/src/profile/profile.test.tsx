@@ -698,3 +698,75 @@ test('minuta s objemem štítek nenese (#1067)', () => {
   )
   expect(screen.queryByTestId('volume-missing')).toBeNull()
 })
+
+// ── Jednotka Prémie $ (#1126 bod 3c) ───────────────────────────────
+
+test('přepínač Kontrakty / Prémie $: popisky, osa a leadeři přejdou na $ (#1126 bod 3c)', () => {
+  // ES multiplikátor 50; 7590: C mid 2 → Vol 100×2×50 = $10k, OI 500×2×50 = $50k
+  const priced = rows().map((row) => ({ ...row, staleAge: 4, callMid: 2, putMid: 4 }))
+  render(
+    <CrosshairProvider>
+      <StrikeProfile rows={priced} spot={7595} height={200} symbol="ES" />
+    </CrosshairProvider>,
+  )
+  const panel = () => screen.getByLabelText('Skládané pruhy strike profilu')
+  const putVals = () =>
+    [...panel().querySelectorAll('[data-part="value-put"]')].map((n) => n.textContent)
+  const ticks = () =>
+    [...panel().querySelectorAll('[data-part="amount-tick"]')].map((n) => n.textContent)
+  expect(putVals()).toContain('60') // kontrakty (Δ-vážené)
+  const toggle = screen.getByTestId('profile-unit-toggle')
+  expect(toggle.textContent).toBe('Kontrakty')
+  fireEvent.click(toggle)
+  expect(toggle.textContent).toBe('Prémie $')
+  // 7590 put: Vol 400×4×50 = $80k + OI 2000×4×50 = $400k → $480k
+  expect(putVals()).toContain('$480.0k')
+  expect(ticks()[0]).toMatch(/^\$/)
+  expect(ticks()[2]).toBe('$0')
+  // Vol leadeři sledují jednotku: 7590P = 400 × 4 × 50 = $80k
+  expect(screen.getByTestId('vol-leaders').textContent).toContain('7590P $80.0k')
+  expect(screen.queryByTestId('premium-unavailable')).toBeNull()
+  // Tooltip řádku nese prémii per složka
+  fireEvent.pointerEnter(screen.getByTestId('profile-row-7590'))
+  expect(screen.getByTestId('premium-values').textContent).toContain('Vol $80.0k · OI $400.0k')
+  // Zpět na kontrakty
+  fireEvent.click(toggle)
+  expect(putVals()).toContain('60')
+})
+
+test('Prémie $ bez jediného midu spadne na kontrakty se štítkem (#1126 bod 3c)', () => {
+  // Σ souhrn / replay bez kotací: řádky bez callMid/putMid
+  render(
+    <CrosshairProvider>
+      <StrikeProfile rows={rows()} spot={7595} height={200} />
+    </CrosshairProvider>,
+  )
+  fireEvent.click(screen.getByTestId('profile-unit-toggle'))
+  const flag = screen.getByTestId('premium-unavailable')
+  expect(flag.textContent).toBe('Prémie nedostupné → kontrakty')
+  const panel = screen.getByLabelText('Skládané pruhy strike profilu')
+  const putVals = [...panel.querySelectorAll('[data-part="value-put"]')].map((n) => n.textContent)
+  expect(putVals).toContain('60')
+  expect(screen.getByTestId('vol-leaders').textContent).not.toContain('$')
+})
+
+test('Prémie $: zmrzlá strana má nulový pruh a štítek podílu bez midu (#1126 bod 3c)', () => {
+  const priced = rows().map((row) => ({
+    ...row,
+    staleAge: row.strike === 7590 ? 9999 : 4,
+    callMid: 2,
+    putMid: 4,
+  }))
+  render(
+    <CrosshairProvider>
+      <StrikeProfile rows={priced} spot={7595} height={200} />
+    </CrosshairProvider>,
+  )
+  fireEvent.click(screen.getByTestId('profile-unit-toggle'))
+  // 7590 (3000 kontraktů z 5400 celkem) je zmrzlý → 56 % bez midu, nad prahem
+  expect(screen.getByTestId('premium-missing').textContent).toBe('bez midu 56 %')
+  const row7590 = screen.getByTestId('profile-row-7590')
+  expect(row7590.querySelector('[data-part="value-put"]')).toBeNull()
+  fireEvent.pointerEnter(row7590)
+  expect(screen.getByTestId('premium-values').textContent).toContain('C: — (bez midu)')
+})
