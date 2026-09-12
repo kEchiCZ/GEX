@@ -13,11 +13,13 @@ from gexlens_engine.storage.sentiment import (
     news_classifications,
     news_events,
     news_ngram_shadow,
+    news_ngram_shadow_history,
     news_predictions,
     news_reactions,
     reaction_row_values,
 )
-from gexlens_news.ngram_job import MIN_EVAL, NgramShadowJob
+from gexlens_news.ngram_job import MIN_EVAL, NgramShadowJob, TrainedMagnitude
+from gexlens_news.ngram_model import LogisticModel
 from gexlens_news.prediction_job import PredictionJob
 
 NOW = dt.datetime(2026, 8, 26, 12, 0, tzinfo=dt.UTC)
@@ -254,6 +256,33 @@ def test_evaluate_lift_and_subsets(tmp_path: Path) -> None:
     # Baseline (kategorie) tu velké pohyby taky najde — lift srovnatelný
     assert live.baseline_lift > 2.0
     assert live.mean_bp > 0
+    # Bez natrénovaného modelu je baseline in-sample a historie to přizná
+    with engine.connect() as conn:
+        hist = list(conn.execute(select(news_ngram_shadow_history)))
+    assert {row.subset for row in hist} == {"all", "live"}
+    assert {row.baseline_source for row in hist} == {"sample"}
+
+    # OOS baseline (#740 varianta B): průměry kategorií z tréninku, ne ze vzorku —
+    # trénink říká, že OTHER hýbe víc než FED (opak vzorku) → baseline řadí
+    # OTHER nahoru a lift baseline spadne k 1, lift modelu se nemění
+    job.trained = TrainedMagnitude(
+        model=LogisticModel(),
+        threshold_mid=0.5,
+        threshold_high=0.9,
+        n_train=5000,
+        trained_at=NOW,
+        category_mean={"FED": 1.0, "OTHER": 9.0},
+    )
+    assert job.evaluate(NOW) == 2
+    with engine.connect() as conn:
+        rows = {row.subset: row for row in conn.execute(select(news_ngram_shadow))}
+        hist = list(conn.execute(select(news_ngram_shadow_history)))
+    assert rows["live"].lift > 2.0
+    assert rows["live"].baseline_lift < 1.0
+    assert rows["live"].model_n_train == 5000
+    # historie je append-only: první běh (sample) + druhý (training)
+    assert len(hist) == 4
+    assert {row.baseline_source for row in hist} == {"sample", "training"}
 
 
 def test_evaluate_full_replace_clears_stale_subsets(tmp_path: Path) -> None:

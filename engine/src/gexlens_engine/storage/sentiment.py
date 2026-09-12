@@ -574,6 +574,29 @@ news_ngram_shadow = Table(
     Column("computed_at", DateTime(timezone=True), nullable=False),
 )
 
+# Historie běhů stínu (#740 varianta B, 12. 9. 2026): `news_ngram_shadow` se
+# při každém vyhodnocení přepisuje, takže trend liftu za týdny stínu nešel
+# doložit jinak než z logu kontejneru (který restart smaže). Sem se každý běh
+# připíše; `baseline_source` říká, odkud baseline je (training = out-of-sample
+# průměry kategorií z trénovacích řádků, sample = in-sample z hodnoceného
+# vzorku — jen fallback, když model ještě nebyl natrénován).
+news_ngram_shadow_history = Table(
+    "news_ngram_shadow_history",
+    sentiment_metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("symbol", String(16), nullable=False),
+    Column("window_min", SmallInteger, nullable=False),
+    Column("subset", String(8), nullable=False),
+    Column("n", Integer, nullable=False),
+    Column("lift", Float, nullable=False),
+    Column("baseline_lift", Float, nullable=False),
+    Column("baseline_source", String(8), nullable=False),
+    Column("top_decile_mean_bp", Float, nullable=False),
+    Column("mean_bp", Float, nullable=False),
+    Column("model_n_train", Integer, nullable=False),
+    Column("computed_at", DateTime(timezone=True), nullable=False, index=True),
+)
+
 # Human-in-the-loop (SPEC 5.7): rozpor LLM × empirický model nebo nízká jistota.
 # Neopravené položky se stejně vyhodnotí automaticky — systém funguje i bez
 # ručních zásahů.
