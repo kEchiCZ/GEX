@@ -119,6 +119,17 @@ if ($healthy) {
         if ($LASTEXITCODE -ne 0) { Write-Warning "Start $svc selhal — zkontroluj docker logs." }
         else { Write-Step "OK — $svc nasazen." }
     }
+
+    # ── 5c) Úklid Dockeru (#1127) ──────────────────────────────────────
+    # Každý deploy přidá rollback tag a vrstvy do build cache; 12. 9. 2026
+    # to narostlo na 71 GB, zaplnilo disk a shodilo containerd. Úklid maže
+    # jen rollback tagy (nechá 3), build cache > 7 dnů a osiřelé image —
+    # volumes nikdy. Selhání úklidu deploy NEshazuje (engine už je zdravý),
+    # nedostatek místa hlásí skript sám alertem do zvonku.
+    try {
+        & (Join-Path $PSScriptRoot 'docker-cleanup.ps1') -KeepTags 3 -CacheAgeHours 168
+        if ($LASTEXITCODE -eq 2) { Write-Warning 'Úklid Dockeru: málo místa — viz alert disk_low a scripts/compact-docker-vhdx.ps1.' }
+    } catch { Write-Warning "Úklid Dockeru selhal: $_" }
     exit 0
 }
 
