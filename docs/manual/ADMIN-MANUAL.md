@@ -596,6 +596,7 @@ Pipeline se založí sama, jakmile se spojení objeví. Restart enginu není pot
 | Reset prostředí | `docker compose down`, smaž `./data` (přijdeš o 14denní okno, ne o OI archiv ve volume `pgdata`), `docker compose up -d --build`. |
 | Málo dat po restartu | Writer navazuje na rozepsaný den — mezera zůstane jen za dobu výpadku. |
 | Potřebuju log enginu z doby PŘED restartem/deployem | Log kontejneru zmizí s jeho recreate. `scripts/deploy-engine-offhours.ps1` ho od #1056 (v1.6) ukládá sám do `data/logs/engine-<YYYYMMDD-HHMM>.log` (a `…-crashed.log` před rollbackem; bez uloženého logu se nenasazuje; retence 30 dní). Při **ručním** `docker compose up -d engine` / `--force-recreate` udělej totéž předem: `docker logs gex-engine-1 > data/logs/engine-$(Get-Date -Format yyyyMMdd-HHmm).log 2>&1`. 7. 9. (#1054) se bez toho hodinu řešil falešný poplach. |
+| Docker roste / disk D: dochází / Docker Desktop se nerozjede | `pwsh scripts/docker-cleanup.ps1` (rollback tagy, build cache > 7 d, dangling; `-WhatIf` jen ukáže) → když VHDX zůstane velký, `pwsh -File scripts/compact-docker-vhdx.ps1` jako správce při zavřeném trhu (12. 9. 2026: 70,9 → 24,9 GB). Nikdy `docker volume prune` ani reset Docker Desktopu — Postgres je uvnitř VHDX. Podrobně kap. 13.4. |
 | Díra ve snapshotech, ale bary v okně jsou | Podívej se na `source` barů v `derived/{sym}/bars/`: `ibkr_hist` = doplněno z IBKR historical při dalším startu → **engine v tu dobu neběžel** (vypnuté PC, zastavený kontejner), ne stall řetězu. Stall vypadá obráceně: bary `ibkr` tečou, snapshoty chybí. Do #1055 (8. 9. 2026) se backfill tvářil jako `ibkr` a 2,5 dne vypnutého PC vyvolalo falešný poplach (#1054). |
 | Změna portu TWS | Settings v aplikaci (platí do sekund i bez spojení, #992), **a zároveň** `.env` + `docker compose up -d engine` — hodnota v DB přebíjí `.env`, takže samotná změna `.env` skončí skokem zpět na starý port (engine to hlásí `WARNING: Nastavení připojení ze Settings UI (DB) přebíjí .env`). |
 | Zaseknuté spojení, restart kontejneru nechci | Settings → Stav enginu → **Přepojit IBKR** / **Přepojit tastytrade** (#950) — 1–2 min díra, mimo US RTH. Uložení nastavení beze změny hodnot nepřepojuje. |
@@ -751,12 +752,38 @@ varianta A.
   N MB`, vypnutí `GEXLENS_MALLOC_TRIM=0`), a compose nastavuje
   `MALLOC_ARENA_MAX=2` pro engine i news-engine. **CPU a teplota** (11. 9.
   2026, notebook i5-10300H přes 90 °C při špičkách): `.wslconfig`
-  `processors=4` (VM dostane polovinu vláken, Docker buildy a testy nesaturují
-  celý procesor), compose `cpus: 2.0` engine / `1.5` news-engine (tlumí jen
-  nárazy, v klidu služby berou jednotky %), vitest `maxWorkers: 2`; testovací
-  sady a buildy pouštět po jednom, ne paralelně ve více worktree. Hygiena: dev stack (`compose.dev.yml`) nikdy
-  nenechávat běžet vedle produkce, prohlížeč s heatmapou na jednom tabu —
-  PC s 16 GB má po 6 GB pro Docker a IB Gateway málo rezervy.
+  `processors=4` v sekci `[wsl2]` (VM dostane polovinu vláken, Docker buildy
+  a testy nesaturují celý procesor), compose `cpus: 2.0` engine / `1.5`
+  news-engine (tlumí jen nárazy, v klidu služby berou jednotky %), vitest
+  `maxWorkers: 2`; testovací sady a buildy pouštět po jednom, ne paralelně ve
+  více worktree. **Pozor na sekce `.wslconfig`:** `autoMemoryReclaim=gradual`
+  a `sparseVhd=true` patří do `[experimental]` — v `[wsl2]` je WSL 2.7 hlásí
+  „Neznámá klávesa“ a ignoruje (12. 9. 2026 se tak zjistilo, že bod B z #1105
+  doteď neplatil; ověření: `wsl -d docker-desktop -e true` nesmí vypsat
+  varování). Změny platí po `wsl --shutdown` (= restart stacku, jen v okně).
+  Hygiena: dev stack (`compose.dev.yml`) nikdy nenechávat běžet vedle
+  produkce, prohlížeč s heatmapou na jednom tabu — PC s 16 GB má po 6 GB pro
+  Docker a IB Gateway málo rezervy.
+
+**Disk Dockeru (VHDX) a úklid (#1127).** Datový disk Docker Desktopu
+(`D:\Programy\Docker\DockerDesktopWSL\disk\docker_data.vhdx`, cesta v
+Settings → Resources) **jen roste**: každý build přidá vrstvy do build cache a
+každý deploy rollback tag `gex-*:pre-<issue>`. 12. 9. 2026 měl 71 GB (43 GB
+build cache, 36 rollback tagů), build zaplnil disk D: na 0 B, containerd ve VM
+spadl a Docker Desktop se nerozjel („Reset to factory defaults“ NIKDY — pgdata
+je uvnitř VHDX). Proto:
+- `scripts/docker-cleanup.ps1` maže jen rollback tagy (nechá 3 na službu),
+  build cache starší 7 dnů a osiřelé image; volumes se nedotýká. Běží po
+  každém úspěšném deployi (`deploy-engine-offhours.ps1` krok 5c) a týdně v
+  sobotu 08:00 (Task Scheduler „GEXLens docker úklid“,
+  `scripts/register-docker-cleanup-task.ps1`, log `data/logs/docker-cleanup.log`).
+  Při < 15 GB volných na disku s VHDX nebo VHDX > 40 GB pošle alert
+  `disk_low` do zvonku a skončí s exit 2.
+- Smazaná data VHDX **sám nevrátí** — místo uvolní až kompakce:
+  `pwsh -File scripts/compact-docker-vhdx.ps1` **jako správce** (diskpart),
+  Docker při ní 2–5 min stojí → jen při zavřeném trhu; stack naběhne sám.
+- Build image jen **po jedné službě** (`docker compose build engine`, pak
+  `frontend`), nikdy všechny naráz, a před buildem zkontrolovat volné místo.
 
 ### 13.5 Ověření a denní provoz
 
