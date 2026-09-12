@@ -11,6 +11,7 @@ notional mid nepotřebují, tam se nevylučuje nic.
 */
 import { STALE_THRESHOLD_S } from '../heatmap/color'
 import type { ProfileRow } from './bars'
+import { usableMid } from './premium'
 
 export type PcrBasis = 'vol_oi' | 'vol' | 'oi'
 export type PcrUnit = 'contracts' | 'premium' | 'notional'
@@ -96,9 +97,9 @@ export function computePcr(
       continue
     }
     // Prémie: mid per strana; zmrzlý/chybějící mid stranu vylučuje z výpočtu
-    const stale = (row.staleAge ?? 0) > staleThresholdS
-    let callMid = !stale && (row.callMid ?? 0) > 0 ? (row.callMid ?? 0) : null
-    let putMid = !stale && (row.putMid ?? 0) > 0 ? (row.putMid ?? 0) : null
+    // (pravidlo sdílené se strike profilem, `premium.ts`)
+    let callMid = usableMid(row, 'call', staleThresholdS)
+    let putMid = usableMid(row, 'put', staleThresholdS)
     // Čas. hodnota (#645): mid − intrinsic — z ITM prémie zbyde jen sázka na čas
     if (scoped === 'timevalue' && spot !== null) {
       if (callMid !== null) callMid = Math.max(0, callMid - Math.max(0, spot - row.strike))
@@ -160,10 +161,9 @@ export function topPremiumStrikes(
   let total = 0
   const scoped = spot !== null && Number.isFinite(spot) ? scope : 'all'
   for (const row of rows) {
-    const stale = (row.staleAge ?? 0) > staleThresholdS
-    if (stale) continue
-    let callMid = row.callMid ?? 0
-    let putMid = row.putMid ?? 0
+    // Zmrzlá/chybějící kotace → 0 → strana níže neprojde (`> 0`)
+    let callMid = usableMid(row, 'call', staleThresholdS) ?? 0
+    let putMid = usableMid(row, 'put', staleThresholdS) ?? 0
     // Táž pravidla rozsahu jako computePcr (#645) — tooltip nesmí ukazovat
     // jiné složení než hlavní číslo
     const callIn = scoped !== 'otm' || row.strike > (spot as number)
