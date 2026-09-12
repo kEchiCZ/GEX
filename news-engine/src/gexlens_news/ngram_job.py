@@ -24,7 +24,7 @@ zdroj, hodina), skóre se vyhodnocuje proti reakcím ES i NQ zvlášť.
 import datetime as dt
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -35,6 +35,7 @@ from gexlens_engine.storage.sentiment import (
     news_classifications,
     news_events,
     news_ngram_shadow,
+    news_ngram_shadow_history,
     news_reactions,
     reaction_contaminated,
     reaction_ret,
@@ -66,6 +67,11 @@ class TrainedMagnitude:
     threshold_high: float
     n_train: int
     trained_at: dt.datetime
+    #: Průměr |reakce| per kategorie z TRÉNOVACÍCH řádků — out-of-sample baseline
+    #: pro `evaluate` (#740 varianta B): baseline z hodnoceného vzorku byla
+    #: in-sample, tedy pro model nepoctivě přísná i shovívavá zároveň (znala
+    #: odpovědi). Klíč None = události bez kategorie.
+    category_mean: dict[str | None, float] = field(default_factory=dict)
 
     def importance(self, p_big: float) -> int:
         if p_big >= self.threshold_high:
@@ -104,7 +110,9 @@ class NgramShadowJob:
 
     # ── 1) Trénink ─────────────────────────────────────────────────
 
-    def _training_rows(self) -> list[tuple[str, str | None, dt.datetime, str | None, float]]:
+    def _training_rows(
+        self,
+    ) -> list[tuple[str, str | None, dt.datetime, str | None, float, str | None]]:
         stmt = (
             select(
                 news_events.c.title,
@@ -112,6 +120,7 @@ class NgramShadowJob:
                 news_events.c.ts_event,
                 news_events.c.body,
                 reaction_ret(self._window).label("ret_bp"),
+                news_events.c.category,
             )
             .select_from(
                 news_reactions.join(news_events, news_events.c.id == news_reactions.c.event_id)
@@ -126,7 +135,7 @@ class NgramShadowJob:
         )
         with self._engine.connect() as conn:
             return [
-                (row.title, row.source, row.ts_event, row.body, float(row.ret_bp))
+                (row.title, row.source, row.ts_event, row.body, float(row.ret_bp), row.category)
                 for row in conn.execute(stmt)
             ]
 
@@ -141,8 +150,13 @@ class NgramShadowJob:
                 MIN_TRAIN,
             )
             return False
-        rows = [_feature_row(title, source, ts, body) for title, source, ts, body, _ in samples]
-        magnitudes = np.abs(np.array([ret for *_, ret in samples]))
+        rows = [_feature_row(title, source, ts, body) for title, source, ts, body, *_ in samples]
+        magnitudes = np.abs(np.array([ret for *_, ret, _cat in samples]))
+        # OOS baseline pro evaluate: průměr |reakce| kategorie z týchž trénovacích řádků
+        by_category: dict[str | None, list[float]] = {}
+        for (*_, category), magnitude in zip(samples, magnitudes, strict=True):
+            by_category.setdefault(category, []).append(float(magnitude))
+        category_mean = {cat: float(np.mean(vals)) for cat, vals in by_category.items()}
         labels = (magnitudes > float(np.median(magnitudes))).astype(np.float64)
         model = LogisticModel().fit(rows, labels)
         train_probs = model.predict_proba(rows)
@@ -152,6 +166,7 @@ class NgramShadowJob:
             threshold_high=float(np.quantile(train_probs, IMPORTANCE_HIGH_Q)),
             n_train=len(samples),
             trained_at=now,
+            category_mean=category_mean,
         )
         logger.info(
             "Ngram shadow: natrénováno na %d vzorcích za %.0f s (prahy importance %.3f/%.3f)",
@@ -250,9 +265,14 @@ class NgramShadowJob:
     def evaluate(self, now: dt.datetime) -> int:
         """Přepočte lift per (symbol, subset) do `news_ngram_shadow`.
 
-        Baseline = týž lift s řazením podle průměrné |reakce| kategorie na
-        témže subsetu (metodika #749). Model musí porazit baseline na živém
-        subsetu, jinak se hlava nezapne.
+        Baseline = týž lift s řazením podle průměrné |reakce| kategorie
+        (metodika #749). Od 12. 9. 2026 (#740 varianta B) jsou průměry
+        kategorií z TRÉNOVACÍCH řádků (`baseline_source = training`, out-of-
+        sample stejně jako model); z hodnoceného vzorku (`sample`) jen když
+        model natrénovaný není. Kategorie, kterou trénink nezná, dostane
+        celkový průměr tréninku. Model musí porazit baseline na živém subsetu,
+        jinak se hlava nezapne. Každý běh se navíc připíše do
+        `news_ngram_shadow_history`, aby šel doložit trend za týdny stínu.
 
         Subset `live` počítá JEN PROSPEKTIVNÍ klasifikace — vzniklé dřív,
         než se reakce vůbec změřila (created_at ≤ ts_event + okno). Dohnaná
@@ -289,6 +309,7 @@ class NgramShadowJob:
         written = 0
         n_train = self.trained.n_train if self.trained else 0
         results: list[dict[str, object]] = []
+        history: list[dict[str, object]] = []
         for symbol in self._eval_symbols:
             per_symbol = [row for row in rows if row.symbol == symbol]
             subsets: dict[str, list[Any]] = {"all": per_symbol, "live": [], "backfill": []}
@@ -305,11 +326,18 @@ class NgramShadowJob:
                     continue
                 magnitudes = np.abs(np.array([float(row.ret_bp) for row in items]))
                 scores = np.array([float(row.strength) for row in items])
-                grouped: dict[str | None, list[float]] = {}
-                for row, magnitude in zip(items, magnitudes, strict=True):
-                    grouped.setdefault(row.category, []).append(float(magnitude))
-                cat_mean = {cat: float(np.mean(vals)) for cat, vals in grouped.items()}
-                baseline_scores = np.array([cat_mean[row.category] for row in items])
+                if self.trained is not None and self.trained.category_mean:
+                    baseline_source = "training"
+                    cat_mean = self.trained.category_mean
+                    fallback = float(np.mean(list(cat_mean.values())))
+                else:
+                    baseline_source = "sample"
+                    grouped: dict[str | None, list[float]] = {}
+                    for row, magnitude in zip(items, magnitudes, strict=True):
+                        grouped.setdefault(row.category, []).append(float(magnitude))
+                    cat_mean = {cat: float(np.mean(vals)) for cat, vals in grouped.items()}
+                    fallback = float(magnitudes.mean())
+                baseline_scores = np.array([cat_mean.get(row.category, fallback) for row in items])
                 lift, top_mean, overall = self._lift(magnitudes, scores)
                 baseline_lift, _, _ = self._lift(magnitudes, baseline_scores)
                 results.append(
@@ -326,13 +354,15 @@ class NgramShadowJob:
                         "computed_at": now,
                     }
                 )
+                history.append({**results[-1], "baseline_source": baseline_source})
                 logger.info(
-                    "Ngram shadow %s/%s: n=%d, lift %.3f× (baseline %.3f×)",
+                    "Ngram shadow %s/%s: n=%d, lift %.3f× (baseline %.3f× z %s)",
                     symbol,
                     subset,
                     len(items),
                     lift,
                     baseline_lift,
+                    baseline_source,
                 )
                 written += 1
         # Full-replace VŠECH řádků vyhodnocovaných symbolů, ne jen počítaných
@@ -347,6 +377,8 @@ class NgramShadowJob:
             )
             if results:
                 conn.execute(insert(news_ngram_shadow), results)
+            if history:
+                conn.execute(insert(news_ngram_shadow_history), history)
         return written
 
     # ── Orchestrace ────────────────────────────────────────────────
