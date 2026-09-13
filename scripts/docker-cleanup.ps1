@@ -41,7 +41,9 @@ function Write-Step($text) { Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $text"
 Assert-DockerReady
 
 # ── 1) Rollback tagy: nechat jen $KeepTags nejnovějších na službu ───────
-$services = @('gex-engine', 'gex-api', 'gex-news-engine', 'gex-frontend')
+# gex-python/gex-frontend = rollback tagy od #1139 (image z GHCR); gex-engine…
+# = starší lokální jména, ať se dočistí i pozůstatky
+$services = @('gex-python', 'gex-frontend', 'gex-engine', 'gex-api', 'gex-news-engine')
 $removedTags = 0
 foreach ($svc in $services) {
     $tags = docker images --format '{{.CreatedAt}}|{{.Repository}}:{{.Tag}}' |

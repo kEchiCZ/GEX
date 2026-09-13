@@ -1,0 +1,100 @@
+# Image pro produkci se staví v CI, ne na notebooku (#1139): lokální build
+# (uv sync + vite) bral 2–3 GB paměti a 5–15 min plné zátěže vedle běžícího
+# enginu, 12. 9. 2026 zaplnil disk a shodil containerd. Po mergi do main se tu
+# postaví python image (engine/api/news-engine sdílejí jeden Dockerfile) a
+# frontend image a pushnou do GHCR; doma pak stačí `docker compose pull`.
+#
+# Bezpečnost: repo je veřejné → Actions minuty i veřejné balíčky GHCR jsou
+# zdarma. Do image jde jen to, co Dockerfile explicitně kopíruje (zdrojáky,
+# lockfile) — `.env*`, `data/` a `docs/` vylučuje `.dockerignore` a Dockerfile
+# nemá žádný `COPY . .`. Push používá automatický GITHUB_TOKEN workflow
+# (jen `packages: write` pro tento repozitář), žádný osobní token.
+name: Images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "engine/**"
+      - "api/**"
+      - "news-engine/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "frontend/**"
+      - "docker/**"
+      - ".github/workflows/images.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  # GHCR vyžaduje malá písmena; github.repository_owner je "kEchiCZ"
+  OWNER: kechicz
+
+jobs:
+  python:
+    name: python image (engine, api, news-engine)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/gex-python
+          # `latest` = aktuální main; `sha-<7>` = přesná revize pro rollback
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=gexlens-python
+            org.opencontainers.image.description=GEXLens engine / api / news-engine (jeden image, tři služby)
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/python.Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=python
+          cache-to: type=gha,scope=python,mode=max
+
+  frontend:
+    name: frontend image (nginx)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/gex-frontend
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=gexlens-frontend
+            org.opencontainers.image.description=GEXLens frontend (statický bundle za nginx, /api proxy)
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/frontend.Dockerfile
+          push: true
+          # Produkční hodnoty = výchozí ARG v Dockerfile (VITE_API_BASE=/api, bez VITE_GEXLENS_ENV)
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max

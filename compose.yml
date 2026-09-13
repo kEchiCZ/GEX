@@ -43,6 +43,9 @@ services:
 
   api:
     restart: unless-stopped
+    # Image z CI (#1139): `docker compose pull` stáhne ghcr.io; `build:` je jen
+    # lokální fallback (`--build` / deploy -Build). Jeden python image pro tři služby.
+    image: ghcr.io/kechicz/gex-python:latest
     build:
       context: .
       dockerfile: docker/python.Dockerfile
@@ -66,6 +69,9 @@ services:
         condition: service_healthy
 
   engine:
+    # Image z CI (#1139): `docker compose pull` stáhne ghcr.io; `build:` je jen
+    # lokální fallback (`--build` / deploy -Build). Jeden python image pro tři služby.
+    image: ghcr.io/kechicz/gex-python:latest
     build:
       context: .
       dockerfile: docker/python.Dockerfile
@@ -102,6 +108,9 @@ services:
   # Startuje spolu s GEXLens (SPEC kap. 10, Provoz); dokud nejsou zapojené
   # collectory (#271/#272), jen běží a drží schéma.
   news-engine:
+    # Image z CI (#1139): `docker compose pull` stáhne ghcr.io; `build:` je jen
+    # lokální fallback (`--build` / deploy -Build). Jeden python image pro tři služby.
+    image: ghcr.io/kechicz/gex-python:latest
     build:
       context: .
       dockerfile: docker/python.Dockerfile
@@ -135,6 +144,7 @@ services:
 
   frontend:
     restart: unless-stopped
+    image: ghcr.io/kechicz/gex-frontend:latest
     build:
       context: .
       dockerfile: docker/frontend.Dockerfile
