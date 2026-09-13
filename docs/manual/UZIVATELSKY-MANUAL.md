@@ -33,7 +33,7 @@ GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME 
 ## 1. Co aplikace umí
 
 - **Heatmapa čas × strike** — barevná mapa opčního positioningu přes celý obchodní den. Zelená (teal) = call strana, červená = put strana. Devět přepínatelných metrik (**Mode**: OI, Vol OTM/ITM, Vol ±, OI+OTM, OI−ITM, OI±All, VEX, VEX ±) a čtyři škály (**Scale**: Linear, √, Log, Pow⅓).
-- **GEX úrovně** — automaticky počítaný **flip** (zero-gamma), **call wall**, **put wall**, **centroid** a **Max Pain**, vykreslované jako časové linie i horizontální úrovně s cenovkami, přepočítávané každou minutu. Volitelné **Walls** módy (Peak/Center/Smooth/Flip/Ridge).
+- **GEX úrovně** — automaticky počítaný **flip** (zero-gamma), **call wall**, **put wall**, **centroid** a **Max Pain**, vykreslované jako časové linie i horizontální úrovně s cenovkami, přepočítávané každou minutu. Volitelné **Walls** módy (Peak/Center/Smooth/Flip/Ridge vše/Ridge dominantní) a preset **✦ Čistý pohled** (dominantní hřeben + Max Pain + cena jedním kliknutím).
 - **Multi-instrument** — watchlist v sidebaru: přidej ticker (ES, NQ, RTY…) a engine ho začne sbírat **do několika sekund**; svíčky a Vol panel se zpětně doplní za celý den, opční data (OI, Greeks) běží od momentu přidání. Kliknutím přepínáš celou aplikaci.
 - **Více expirací najednou** — vedle aktivního řetězu se sbírá i následující expirace (čtení positioningu příští seance) a pravý profil umí **Σ souhrn přes expirace**.
 - **Živý tok** — kumulativní delta flow (Cum Δ) s klasifikací agresora + **Δ Flow C/P** (tok zvlášť za call/put stranu).
@@ -110,7 +110,17 @@ Obrazovka se skládá z (shora dolů, zleva doprava):
 | **Chipy stavu trhu** | **Settle watch** — segment „settle 22:00 · nad/pod X ±d b": klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?" na jeden pohled. **Chip „odpadá X % gammy"** — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. |
 | **Ukazatele pokrytí dat** | Tři drobné proužky **Greeks**, **OI** a **OHLC** s podílem „kolik z kolika". Zelený = úplné, žlutý = díra (část striků čeká na dopočet, nebo chybí svíčky), **ztlumený s pomlčkou = hodnotu teď nelze změřit** (typicky odpojené IBKR nebo pár vteřin po startu). Prvky **nemizí** — ukazatel, který zmizí, vypadá jako rozbité rozhraní, ne jako chybějící data. |
 | **Přepínač OI** | **Měřené / FA odhad** — zdroj Open Interest pro heatmapu i profil (persistováno per symbol, default Měřené). FA odhad = OI dopočtené z klasifikovaného toku (netflow×α): k dispozici dřív než publikovaný archiv, ale je to odhad — při pochybnosti věř Měřeným. FA má i vlastní Dyn GEX plochu v dropdownu Dyn plocha a vlastní FA levels. |
-| **Lišta grafu** | **Mode** (7 metrik heatmapy), **Scale** (Linear/√/Log/Pow⅓), **Walls** (Off/Peak/Center/Smooth/Flip/Ridge), Styl (Gradient/Blobs), Contours (Off/Major/All), **Cena** (Svíčky/Křivka) + **Viditelnost**, nástroje anotací + barva, indikátor zdroje dat, tlačítko **⏮ Replay**. |
+| **Lišta grafu** | **Mode** (7 metrik heatmapy), **Scale** (Linear/√/Log/Pow⅓), **Walls** (Off/Peak/Center/Smooth/Flip/Ridge vše/Ridge dominantní), Styl (Gradient/Blobs), Contours (Off/Major/All), **Cena** (Svíčky/Křivka) + **Viditelnost**, nástroje anotací + barva, **⧉ Rozsah** a **Preset…** (kap. 8b), tlačítko **✦ Čistý pohled** (níže), indikátor zdroje dat, tlačítko **⏮ Replay**. |
+
+**✦ Čistý pohled (#238).** Jedno tlačítko v liště grafu pro rychlé event čtení
+„kde je největší sázka" bez přepínání šesti checkboxů: zapne **Walls = Ridge
+dominantní**, z GEX Levels nechá jen **Max Pain**, vypne Contours, Zdi, 2. zeď,
+GEX žebřík, FA levels, Projekci, Sessions, News i Setupy a cenu přepne na
+svíčky; Dyn plocha zůstává, jak ji máš. Před zapnutím si aplikace **uloží
+snímek všech dotčených voleb** a druhé kliknutí je vrátí přesně — včetně
+nevýchozích hodnot. Aktivní preset (tlačítko svítí) i snímek přežijí refresh
+prohlížeče (ukládají se s ostatními volbami grafu), takže se k původnímu
+nastavení vždycky dostaneš zpět.
 | **Heatmapa** | Hlavní plocha — viz kapitola 5. |
 | **Strike profil** | Pravý panel; **předěl mezi grafem a panelem jde táhnout** (kurzor ↔) — viz kapitola 7. |
 | **Spodní panely** | Vol / Opt Vol / Δ Flow / Cum Δ — viz kapitola 8. |
@@ -210,7 +220,18 @@ Select **Walls** kreslí bílé čárkované linie počítané z právě zobraze
 - **Center** — vážené těžiště per minuta
 - **Smooth** — vyhlazený Peak (EMA 15 minut)
 - **Flip** — kopie zero-gamma řady
-- **Ridge** — souběžné hřebeny koncentrací (víc zdí najednou, s filtrem šumu)
+- **Ridge vše** — souběžné hřebeny koncentrací (víc zdí najednou, s filtrem šumu)
+- **Ridge dominantní** (#238) — jediný nejsilnější hřeben dne
+
+**Ridge vše vs. Ridge dominantní.** „Vše" kreslí každý lokální hřeben s
+prominencí aspoň 10 % maxima — v hustém 0DTE dni to bývá i dvacet souběžných
+čárkovaných čar, které sice nesou informaci, ale při rychlém čtení splývají.
+„Dominantní" z nich vybere jeden: hřeben s **největší kumulovanou hodnotou
+přes den** (síla × doba trvání — dlouhý pás se střední koncentrací poráží
+krátký špičkový záblesk; při shodě vyhrává hřeben blíž aktuální ceně). Je to
+odpověď na otázku „kde sedí největší sázka", bez šumu; když chceš vidět i
+vedlejší koncentrace, přepni zpět na Vše. Dřív uložená volba Ridge se po
+aktualizaci chová jako Ridge vše.
 
 ### Styl vykreslení
 
@@ -271,6 +292,13 @@ kontury *jak ostrá* je.
 | **Cenová vrstva** | zelená/červená | vždy (viz kap. 6) |
 
 Každá úroveň se navíc promítá jako **horizontální čárkovaná linka přes celou šířku s barevnou cenovkou** u levého okraje (poslední známá hodnota) — na první pohled vidíš, kde úrovně právě leží. Vpravo na ose je **štítek aktuální ceny**; v pravém dolním rohu **timestamp** posledních dat.
+
+**Stohování cenovek (#238).** Když dvě pojmenované úrovně padnou na tentýž
+strike (typicky Max Pain = call zeď na 0DTE), jejich cenovky by se překreslily
+a jedna by nešla číst. Kolidující štítky se proto řadí **pod sebe** jako
+popisky seancí — výš položená úroveň má štítek výš, každý další se odsune jen
+o nejmenší nutný kus, nekolidující štítky zůstávají u své čáry. Sloupec u
+levého okraje a štítek Max Pain vpravo se stohují každý zvlášť.
 
 ### OI zdi — jiná veličina než gamma zdi (v1.13, #851)
 
