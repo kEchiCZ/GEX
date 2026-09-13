@@ -898,3 +898,25 @@ base image — řeší je rebuild s čerstvou bází, ne zásah do kódu, proto 
 ---
 
 *Interní dokument. Uživatelská příručka: `UZIVATELSKY-MANUAL.md` (dostupná i v aplikaci jako Wiki).*
+
+### 14.9 Přepnutí repozitáře na soukromé — co se rozbije a co udělat
+
+Repo je od září 2026 veřejné a část provozu na tom stojí (13. 9. 2026, #1139).
+Před přepnutím na *Private* (Settings → General → Danger Zone → Change
+visibility) projít tento seznam; body 1–3 jsou povinné, jinak přestane
+fungovat nasazení nebo ochrana `main`.
+
+| co | dnes (veřejné) | po přepnutí (soukromé, plán GitHub Free) | co udělat |
+|---|---|---|---|
+| **Image v GHCR** (`gex-python`, `gex-frontend`) | veřejné balíčky, zdarma, pull bez přihlášení | balíček navázaný na repo **zůstane veřejný** (viditelnost balíčku je nezávislá) — pokud ho přepneš na private, platí limit **500 MB úložiště + 1 GB přenosu/měs.**, což dva image (~360 MB komprimovaně) s tagy `sha-*` přerostou během týdne | **1.** Buď nechat balíčky veřejné (kód je z image stejně dohledatelný jen jako bytecode; tajemství v nich nejsou, kap. 14.1), nebo při private: přidat do workflow *Images* krok `actions/delete-package-versions` (nechat `latest` + 3 poslední `sha-*`) a na každém stroji, který táhne image, `docker login ghcr.io` (PAT classic s **jen** `read:packages`, uložit do `.env` jako `GHCR_TOKEN`, nikdy do repa; `echo $env:GHCR_TOKEN \| docker login ghcr.io -u kEchiCZ --password-stdin`) |
+| **GitHub Actions** (CI + Images) | minuty zdarma bez limitu | **2 000 min/měs.** zdarma; CI ~5 min na PR + Images ~6 min na merge ⇒ ~10–15 min na PR, tj. cca 130 PR/měs. v limitu | **2.** Sledovat Settings → Billing → Actions; při přiblížení limitu vypnout Images pro PR (dnes běží jen na main — OK) a sloučit CI joby |
+| **Ruleset `main`** (PR + zelené CI + jen squash, žádný force push) | vymáhá GitHub | **rulesety a branch protection na soukromém repu vyžadují GitHub Pro** — na Free se přestanou vymáhat (zůstanou uložené, ale neaktivní) | **3.** Buď GitHub Pro (~4 $/měs.), nebo se spolehnout na `scripts/merge-when-green.sh` (merguje jen po zeleném CI) a na kázeň: nikdy `git push origin main` přímo. Automatické mazání větví po merge funguje dál |
+| Dependabot, gitleaks, pip-audit, npm audit | běží | běží stejně (Dependabot i CI jsou na Free pro soukromá repa) | nic |
+| Odkazy na soubory/obrázky v issues a wiki | veřejné URL `raw.githubusercontent.com` | fungují jen přihlášeným | nic (wiki v aplikaci má obrázky u sebe v `frontend/public/manual/img`) |
+| `gh` CLI v tomto počítači | token `repo` stačí | totéž; pro balíčky navíc `read:packages` (bod 1) | `gh auth refresh -s read:packages` jen při private balíčcích |
+
+Co se **nemění**: tajemství zůstávají výhradně v `.env` (kap. 14.1), image je
+neobsahují, `docker compose pull` + deploy skript fungují beze změny, pokud
+zůstanou balíčky veřejné. Pořadí při přepnutí: nejdřív rozhodnout bod 1
+(balíčky), pak bod 3 (ochrana `main`), teprve pak přepnout viditelnost repa
+a ověřit `docker compose pull frontend` na produkci.
