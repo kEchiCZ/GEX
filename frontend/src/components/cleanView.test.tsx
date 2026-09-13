@@ -52,7 +52,8 @@ const layerCheckbox = (label: string) => {
   fireEvent.click(screen.getByRole('button', { name: 'Výběr vrstev grafu' }))
   return screen.getByLabelText(label) as HTMLInputElement
 }
-const stored = (name: string) => JSON.parse(window.localStorage.getItem(`gexlens.${name}`) ?? 'null')
+const stored = (name: string) =>
+  JSON.parse(window.localStorage.getItem(`gexlens.${name}`) ?? 'null')
 
 beforeEach(() => {
   FakeWebSocket.reset()
