@@ -67,11 +67,12 @@ import { priceTick } from './instrument/tick'
 import {
   WALLS_MODES,
   centerSeries,
+  dominantRidgeTrack,
   peakSeries,
   ridgeTracks,
   smoothSeries,
 } from './heatmap/wallsModes'
-import type { WallsMode } from './heatmap/wallsModes'
+import type { RidgePoint, WallsMode } from './heatmap/wallsModes'
 import { projectedSessions } from './instrument/sessions'
 import { aggregateDay, aggregateLive } from './replay/aggregate'
 import { buildHistoryView } from './replay/history'
@@ -84,6 +85,8 @@ import { usePlayback } from './replay/usePlayback'
 import { AppStateProvider, INTERVAL_MINUTES, useAppState } from './state/AppState'
 import { CrosshairProvider } from './state/Crosshair'
 import { clampedNumber, clampedNumberMap, oneOf, priceRangeMap, usePersistentState } from './state/persist' // prettier-ignore
+import { CLEAN_VIEW_OFF, CLEAN_VIEW_TARGET, CLEAN_VIEW_TOGGLE_KEYS, CLEAN_VIEW_TOOLTIP, cleanViewLevels, revivedCleanView, snapshotCleanView } from './state/cleanView' // prettier-ignore
+import type { CleanViewSettings, CleanViewState } from './state/cleanView'
 import type { ActiveTool } from './annotations/model'
 import type { ContoursMode } from './heatmap/contours'
 import type { HeatmapStyle } from './heatmap/render'
@@ -139,6 +142,7 @@ function MainContent() {
     gexUnits,
     oiSource,
     socket,
+    setToggle,
   } = useAppState()
   // Zprávy a sentiment (#288/#289) — jeden zdroj pro panel, sidebar i chip
   // Stav RiskOn/RiskOff (#295) — varovný badge šipek při unconfirmed změně
@@ -227,6 +231,33 @@ function MainContent() {
     clampedNumber(0.1, 1),
     Number.isFinite(urlOpacity) && urlOpacity >= 10 && urlOpacity <= 100 ? urlOpacity / 100 : null,
   )
+  // Preset „Čistý pohled" (#238): příznak + snímek voleb před zapnutím se
+  // persistují spolu, ať druhé kliknutí vrací původní volby i po refreshi
+  const [cleanView, setCleanView] = usePersistentState<CleanViewState>(
+    'cleanView',
+    CLEAN_VIEW_OFF,
+    revivedCleanView(),
+  )
+  const applyCleanViewSettings = useCallback(
+    (settings: CleanViewSettings) => {
+      setWallsMode(settings.walls)
+      setContours(settings.contours)
+      setPriceStyle(settings.priceStyle)
+      for (const key of CLEAN_VIEW_TOGGLE_KEYS) setToggle(key, settings.toggles[key])
+    },
+    [setWallsMode, setContours, setPriceStyle, setToggle],
+  )
+  const toggleCleanView = useCallback(() => {
+    if (cleanView.active) {
+      // Vypnutí = přesné vrácení snímku (reviver aktivní stav bez snímku nepustí)
+      if (cleanView.snapshot) applyCleanViewSettings(cleanView.snapshot)
+      setCleanView(CLEAN_VIEW_OFF)
+      return
+    }
+    const snapshot = snapshotCleanView({ walls: wallsMode, contours, priceStyle, toggles })
+    applyCleanViewSettings(CLEAN_VIEW_TARGET)
+    setCleanView({ active: true, snapshot })
+  }, [cleanView, applyCleanViewSettings, setCleanView, wallsMode, contours, priceStyle, toggles])
 
   // Denní dataset: /replay balík (jediný fetch), fallback demo (AC #27: bez fetch per frame).
   // `rawDay` je identitou stabilní napříč spot ticky, živá cena jde zvlášť v `live` (#141).
@@ -1189,7 +1220,36 @@ function MainContent() {
     )
   }, [toggles.sessions, projectionExtra, playback.isLive, selectedExpiry, timeframe, day.lastMinuteIso, bucketMinutes, day.grid.minutes]) // prettier-ignore
 
-  // Walls módy (SPEC 4.4): bílé čárkované linie počítané z aktuální vrstvy gridu
+  // Walls módy (SPEC 4.4): bílé čárkované linie počítané z aktuální vrstvy gridu.
+  // Call/put strana vrstvy: signed vrstva se dělí na kladnou a zápornou část.
+  const wallsLayers = useMemo(() => {
+    if (wallsMode === 'off' || wallsMode === 'flip') return null
+    const { layers } = grid
+    const callLayer =
+      layers.call ??
+      (layers.signed ? Float32Array.from(layers.signed, (v) => Math.max(0, v)) : null)
+    const putLayer =
+      layers.put ??
+      (layers.signed ? Float32Array.from(layers.signed, (v) => Math.max(0, -v)) : null)
+    return callLayer && putLayer ? { callLayer, putLayer } : null
+  }, [wallsMode, grid])
+  // Hřebeny se počítají jen nad gridem — výběr dominantního (závislý na spotu)
+  // je zvlášť, ať živý tick nepřepočítává ridge přes celý den
+  const ridgeData = useMemo(() => {
+    if ((wallsMode !== 'ridge' && wallsMode !== 'ridge_dominant') || !wallsLayers) return null
+    const { callLayer, putLayer } = wallsLayers
+    const magnitude = Float32Array.from(callLayer, (v, i) => v + putLayer[i])
+    const tracks = ridgeTracks(magnitude, grid.minutes, grid.strikes).filter(
+      (track) => track.length >= 2, // osamocený bod není hřeben
+    )
+    return { magnitude, tracks }
+  }, [wallsMode, wallsLayers, grid.minutes, grid.strikes])
+  // Dominantní hřeben (#238): jediný nejsilnější track, při shodě ten blíž spotu
+  const dominantRidge = useMemo<RidgePoint[][]>(() => {
+    if (wallsMode !== 'ridge_dominant' || !ridgeData) return []
+    const track = dominantRidgeTrack(ridgeData.magnitude, grid.minutes, grid.strikes, ridgeData.tracks, spot) // prettier-ignore
+    return track ? [track] : []
+  }, [wallsMode, ridgeData, grid.minutes, grid.strikes, spot])
   const computedWalls = useMemo<LevelLine[]>(() => {
     if (wallsMode === 'off') return []
     const white = 'rgba(255,255,255,0.85)'
@@ -1198,24 +1258,15 @@ function MainContent() {
       const flip = allOverlays.levels?.find((line) => line.name === 'flip')
       return flip ? [{ name: 'walls:flip', color: white, dash, series: flip.series }] : []
     }
-    const { minutes, strikes, layers } = grid
-    // Signed vrstva se dělí na kladnou (call) a zápornou (put) stranu
-    const callLayer =
-      layers.call ??
-      (layers.signed ? Float32Array.from(layers.signed, (v) => Math.max(0, v)) : null)
-    const putLayer =
-      layers.put ??
-      (layers.signed ? Float32Array.from(layers.signed, (v) => Math.max(0, -v)) : null)
-    if (!callLayer || !putLayer) return []
-    if (wallsMode === 'ridge') {
-      const magnitude = Float32Array.from(callLayer, (v, i) => v + putLayer[i])
-      return ridgeTracks(magnitude, minutes, strikes)
-        .filter((track) => track.length >= 2) // osamocený bod není hřeben
-        .map((track, index) => {
-          const series: (number | null)[] = Array.from({ length: minutes }, () => null)
-          for (const point of track) series[point.minuteIdx] = point.strike
-          return { name: `walls:ridge-${index}`, color: white, dash, series }
-        })
+    if (!wallsLayers) return []
+    const { minutes, strikes } = grid
+    if (wallsMode === 'ridge' || wallsMode === 'ridge_dominant') {
+      const drawn = wallsMode === 'ridge_dominant' ? dominantRidge : (ridgeData?.tracks ?? [])
+      return drawn.map((track, index) => {
+        const series: (number | null)[] = Array.from({ length: minutes }, () => null)
+        for (const point of track) series[point.minuteIdx] = point.strike
+        return { name: `walls:ridge-${index}`, color: white, dash, series }
+      })
     }
     const seriesOf = (layer: Float32Array): (number | null)[] => {
       if (wallsMode === 'peak') return peakSeries(layer, minutes, strikes)
@@ -1223,10 +1274,10 @@ function MainContent() {
       return smoothSeries(peakSeries(layer, minutes, strikes))
     }
     return [
-      { name: 'walls:call', color: white, dash, series: seriesOf(callLayer) },
-      { name: 'walls:put', color: white, dash, series: seriesOf(putLayer) },
+      { name: 'walls:call', color: white, dash, series: seriesOf(wallsLayers.callLayer) },
+      { name: 'walls:put', color: white, dash, series: seriesOf(wallsLayers.putLayer) },
     ]
-  }, [wallsMode, grid, allOverlays.levels])
+  }, [wallsMode, grid, allOverlays.levels, wallsLayers, ridgeData, dominantRidge])
 
   const overlays = useMemo(
     () => ({
@@ -1236,7 +1287,11 @@ function MainContent() {
         ...resolveSecondaryWalls(baseOverlays.walls ?? [], toggles.secondaryWall),
         ...computedWalls,
       ],
-      levels: [...(baseOverlays.levels ?? []), ...setupLines, ...ladderLines, ...emLines, ...refLines], // prettier-ignore
+      // Čistý pohled (#238): z úrovní zbývá jen Max Pain — GEX Levels jsou jeden
+      // checkbox (flip + těžiště + Max Pain), zúžení řeší filtr, ne nový přepínač
+      levels: cleanView.active
+        ? cleanViewLevels(baseOverlays.levels ?? [])
+        : [...(baseOverlays.levels ?? []), ...setupLines, ...ladderLines, ...emLines, ...refLines], // prettier-ignore
       // Budoucí seance v projekci (#195)
       sessions: [...(baseOverlays.sessions ?? []), ...projectedSessionMarkers],
       // Markery zpráv (#287) — osa nese i projekční část, takže nadcházející
@@ -1249,7 +1304,7 @@ function MainContent() {
         ? signalMarkers
         : signalMarkers.filter((signal) => signal.minuteIdx <= playback.position),
     }),
-    [baseOverlays, computedWalls, setupLines, ladderLines, emLines, refLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, journalMarkers, signalMarkers, playback.isLive, playback.position], // prettier-ignore
+    [baseOverlays, computedWalls, setupLines, ladderLines, emLines, refLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, journalMarkers, signalMarkers, playback.isLive, playback.position, cleanView.active], // prettier-ignore
   )
 
   if (view === 'dashboard') {
@@ -1450,6 +1505,17 @@ function MainContent() {
             })}
           </select>
         )}
+        {/* Preset „Čistý pohled" (#238): dominantní ridge + Max Pain + cena,
+            druhé kliknutí vrátí snímek voleb */}
+        <button
+          className={cleanView.active ? 'chip active' : 'chip'}
+          aria-pressed={cleanView.active}
+          onClick={toggleCleanView}
+          title={CLEAN_VIEW_TOOLTIP}
+          data-testid="clean-view-toggle"
+        >
+          ✦ Čistý pohled
+        </button>
         <input
           type="color"
           aria-label="Barva anotace"

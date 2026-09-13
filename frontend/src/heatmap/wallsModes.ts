@@ -1,6 +1,11 @@
 /** Walls módy (SPEC 4.4) — TS zrcadlo engine compute/walls.py: Peak, Center,
 Smooth (EMA span 15), Flip (řada z levels), Ridge (lokální maxima s prominence
 filtrem spojená nejbližším strikem). Čisté funkce nad vrstvou gridu.
+
+Ridge má dvě hustoty (#238): „vše" kreslí každý hřeben nad prahem prominence
+(klidně 20 souběžných čar), „dominantní" jen jediný nejsilnější track — rychlé
+čtení „kde je největší sázka" bez čárového šumu. Uložená hodnota `ridge`
+zůstává (= Ridge vše), takže starší localStorage se nerozbije.
 */
 
 export const WALLS_MODES = [
@@ -9,7 +14,8 @@ export const WALLS_MODES = [
   { value: 'center', label: 'Center' },
   { value: 'smooth', label: 'Smooth' },
   { value: 'flip', label: 'Flip' },
-  { value: 'ridge', label: 'Ridge' },
+  { value: 'ridge', label: 'Ridge vše' },
+  { value: 'ridge_dominant', label: 'Ridge dominantní' },
 ] as const
 export type WallsMode = (typeof WALLS_MODES)[number]['value']
 
@@ -147,4 +153,37 @@ export function ridgeTracks(
     openTracks = openTracks.filter((track) => track[track.length - 1].minuteIdx === t)
   }
   return tracks
+}
+
+/** Dominantní hřeben (#238): track s největší kumulovanou hodnotou vrstvy přes
+všechny své body (síla × trvání — dlouhý pás se středně silnou koncentrací
+poráží krátký špičkový záblesk). Při shodě vyhrává hřeben s poslední hodnotou
+blíž referenční ceně (spot); bez ceny první v pořadí vzniku. Prázdný vstup → null. */
+export function dominantRidgeTrack(
+  layer: Float32Array,
+  minutes: number,
+  strikes: number[],
+  tracks: RidgePoint[][],
+  referencePrice: number | null = null,
+): RidgePoint[] | null {
+  let best: RidgePoint[] | null = null
+  let bestMass = -Infinity
+  let bestDistance = Infinity
+  for (const track of tracks) {
+    if (track.length === 0) continue
+    let mass = 0
+    for (const point of track) {
+      const strikeIdx = strikes.indexOf(point.strike)
+      if (strikeIdx < 0) continue
+      mass += columnValue(layer, minutes, strikeIdx, point.minuteIdx)
+    }
+    const lastStrike = track[track.length - 1].strike
+    const distance = referencePrice === null ? Infinity : Math.abs(lastStrike - referencePrice)
+    if (mass > bestMass || (mass === bestMass && distance < bestDistance)) {
+      best = track
+      bestMass = mass
+      bestDistance = distance
+    }
+  }
+  return best
 }

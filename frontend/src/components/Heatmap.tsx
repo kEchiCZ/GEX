@@ -31,6 +31,7 @@ import {
   tickIndices,
 } from '../heatmap/overlays'
 import type { OverlayData, PriceBar, PriceStyle } from '../heatmap/overlays'
+import { stackLabelRows } from '../heatmap/labelStack'
 import { journalGlyph, journalMarkerColor, journalMarkerNear } from '../heatmap/journalMarkers'
 import type { JournalMarker } from '../heatmap/journalMarkers'
 import { markerColor, markerNear, markerStyle } from '../heatmap/newsMarkers'
@@ -749,9 +750,10 @@ export function Heatmap({
     // Popisek bez podkladového obdélníku: hodnota NAD čarou v barvě čáry.
     // Max Pain je plnou čarou s textem „Max Pain" vpravo před osou Y.
     context.font = 'bold 10px sans-serif'
-    // Popisky blízkých úrovní by se překrývaly — každý další se odsune vpravo
-    // za ten předchozí. S názvy (#342) jsou širší, takže bez toho splývají.
-    const drawnLabels: { y: number; endX: number }[] = []
+    // Popisky blízkých úrovní by se překrývaly (dvě úrovně na témže striku,
+    // #238; širší názvy #342) — kreslí se až po čarách, stohované pod sebe
+    // jako popisky seancí (#193): levý sloupec a pravý (Max Pain) zvlášť.
+    const pendingLabels: { text: string; color: string; y: number; x: number; right: boolean }[] = [] // prettier-ignore
     for (const line of levelLines) {
       if (!hasLevelProjection(line.name)) continue
       const name = levelLabel(line.name)
@@ -774,19 +776,25 @@ export function Heatmap({
       const label =
         (name === null ? '' : `${name} `) + formatLevel(value) + (line.labelSuffix ?? '')
       const width = measuredWidth(context, label)
-      context.fillStyle = color
-      if (isMaxPain) {
-        context.fillText(label, logicalW - width - 6, y - 4)
-      } else {
-        let x = 50
-        for (const drawn of drawnLabels) {
-          if (Math.abs(drawn.y - y) < LABEL_ROW_GAP_PX && drawn.endX + 8 > x) {
-            x = drawn.endX + 8
-          }
-        }
-        context.fillText(label, x, y - 4)
-        drawnLabels.push({ y, endX: x + width })
-      }
+      pendingLabels.push({
+        text: label,
+        color,
+        y,
+        x: isMaxPain ? logicalW - width - 6 : 50,
+        right: isMaxPain,
+      })
+    }
+    // Stohování (#238): box štítku = řádek LABEL_ROW_GAP_PX nad čarou (text
+    // sedí na účaří y − 4); kolize se řeší posunem dolů, každý sloupec zvlášť
+    for (const right of [false, true]) {
+      const column = pendingLabels.filter((item) => item.right === right)
+      const tops = stackLabelRows(
+        column.map((item) => ({ y: item.y - 4 - LABEL_ROW_GAP_PX, height: LABEL_ROW_GAP_PX })),
+      )
+      column.forEach((item, index) => {
+        context.fillStyle = item.color
+        context.fillText(item.text, item.x, tops[index] + LABEL_ROW_GAP_PX)
+      })
     }
     context.font = '11px sans-serif'
 
