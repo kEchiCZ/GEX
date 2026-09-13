@@ -46,7 +46,7 @@
 <h2>1. Co aplikace umí</h2>
 <ul>
 <li><strong>Heatmapa čas × strike</strong> — barevná mapa opčního positioningu přes celý obchodní den. Zelená (teal) = call strana, červená = put strana. Devět přepínatelných metrik (<strong>Mode</strong>: OI, Vol OTM/ITM, Vol ±, OI+OTM, OI−ITM, OI±All, VEX, VEX ±) a čtyři škály (<strong>Scale</strong>: Linear, √, Log, Pow⅓).</li>
-<li><strong>GEX úrovně</strong> — automaticky počítaný <strong>flip</strong> (zero-gamma), <strong>call wall</strong>, <strong>put wall</strong>, <strong>centroid</strong> a <strong>Max Pain</strong>, vykreslované jako časové linie i horizontální úrovně s cenovkami, přepočítávané každou minutu. Volitelné <strong>Walls</strong> módy (Peak/Center/Smooth/Flip/Ridge).</li>
+<li><strong>GEX úrovně</strong> — automaticky počítaný <strong>flip</strong> (zero-gamma), <strong>call wall</strong>, <strong>put wall</strong>, <strong>centroid</strong> a <strong>Max Pain</strong>, vykreslované jako časové linie i horizontální úrovně s cenovkami, přepočítávané každou minutu. Volitelné <strong>Walls</strong> módy (Peak/Center/Smooth/Flip/Ridge vše/Ridge dominantní) a preset <strong>✦ Čistý pohled</strong> (dominantní hřeben + Max Pain + cena jedním kliknutím).</li>
 <li><strong>Multi-instrument</strong> — watchlist v sidebaru: přidej ticker (ES, NQ, RTY…) a engine ho začne sbírat <strong>do několika sekund</strong>; svíčky a Vol panel se zpětně doplní za celý den, opční data (OI, Greeks) běží od momentu přidání. Kliknutím přepínáš celou aplikaci.</li>
 <li><strong>Více expirací najednou</strong> — vedle aktivního řetězu se sbírá i následující expirace (čtení positioningu příští seance) a pravý profil umí <strong>Σ souhrn přes expirace</strong>.</li>
 <li><strong>Živý tok</strong> — kumulativní delta flow (Cum Δ) s klasifikací agresora + <strong>Δ Flow C/P</strong> (tok zvlášť za call/put stranu).</li>
@@ -140,29 +140,23 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Lišta grafu</strong></td>
-<td><strong>Mode</strong> (7 metrik heatmapy), <strong>Scale</strong> (Linear/√/Log/Pow⅓), <strong>Walls</strong> (Off/Peak/Center/Smooth/Flip/Ridge), Styl (Gradient/Blobs), Contours (Off/Major/All), <strong>Cena</strong> (Svíčky/Křivka) + <strong>Viditelnost</strong>, nástroje anotací + barva, indikátor zdroje dat, tlačítko <strong>⏮ Replay</strong>.</td>
-</tr>
-<tr>
-<td><strong>Heatmapa</strong></td>
-<td>Hlavní plocha — viz kapitola 5.</td>
-</tr>
-<tr>
-<td><strong>Strike profil</strong></td>
-<td>Pravý panel; <strong>předěl mezi grafem a panelem jde táhnout</strong> (kurzor ↔) — viz kapitola 7.</td>
-</tr>
-<tr>
-<td><strong>Spodní panely</strong></td>
-<td>Vol / Opt Vol / Δ Flow / Cum Δ — viz kapitola 8.</td>
-</tr>
-<tr>
-<td><strong>Playback lišta</strong></td>
-<td>Defaultně skrytá (aplikace jede vždy live) — zobrazí ji tlačítko <strong>⏮ Replay</strong>; viz kapitola 9.</td>
-</tr>
-<tr>
-<td><strong>Stavová lišta</strong></td>
-<td>Zdraví datové pipeline — viz kapitola 15.</td>
+<td><strong>Mode</strong> (7 metrik heatmapy), <strong>Scale</strong> (Linear/√/Log/Pow⅓), <strong>Walls</strong> (Off/Peak/Center/Smooth/Flip/Ridge vše/Ridge dominantní), Styl (Gradient/Blobs), Contours (Off/Major/All), <strong>Cena</strong> (Svíčky/Křivka) + <strong>Viditelnost</strong>, nástroje anotací + barva, <strong>⧉ Rozsah</strong> a <strong>Preset…</strong> (kap. 8b), tlačítko <strong>✦ Čistý pohled</strong> (níže), indikátor zdroje dat, tlačítko <strong>⏮ Replay</strong>.</td>
 </tr>
 </tbody></table>
+<p><strong>✦ Čistý pohled (#238).</strong> Jedno tlačítko v liště grafu pro rychlé event čtení
+„kde je největší sázka&quot; bez přepínání šesti checkboxů: zapne <strong>Walls = Ridge
+dominantní</strong>, z GEX Levels nechá jen <strong>Max Pain</strong>, vypne Contours, Zdi, 2. zeď,
+GEX žebřík, FA levels, Projekci, Sessions, News i Setupy a cenu přepne na
+svíčky; Dyn plocha zůstává, jak ji máš. Před zapnutím si aplikace <strong>uloží
+snímek všech dotčených voleb</strong> a druhé kliknutí je vrátí přesně — včetně
+nevýchozích hodnot. Aktivní preset (tlačítko svítí) i snímek přežijí refresh
+prohlížeče (ukládají se s ostatními volbami grafu), takže se k původnímu
+nastavení vždycky dostaneš zpět.
+| <strong>Heatmapa</strong> | Hlavní plocha — viz kapitola 5. |
+| <strong>Strike profil</strong> | Pravý panel; <strong>předěl mezi grafem a panelem jde táhnout</strong> (kurzor ↔) — viz kapitola 7. |
+| <strong>Spodní panely</strong> | Vol / Opt Vol / Δ Flow / Cum Δ — viz kapitola 8. |
+| <strong>Playback lišta</strong> | Defaultně skrytá (aplikace jede vždy live) — zobrazí ji tlačítko <strong>⏮ Replay</strong>; viz kapitola 9. |
+| <strong>Stavová lišta</strong> | Zdraví datové pipeline — viz kapitola 15. |</p>
 <h3>Kalendářový selektor expirace (v1.12)</h3>
 <p>Kliknutí na expiraci v hlavičce otevře <strong>měsíční kalendář</strong> místo plochého
 seznamu dat. <strong>Proč z pohledu tradera:</strong> expirace se čte polohou v týdnu —
@@ -300,8 +294,18 @@ ticker bez dat zůstává u vybrané expirace s hláškou demo dat.</p>
 <li><strong>Center</strong> — vážené těžiště per minuta</li>
 <li><strong>Smooth</strong> — vyhlazený Peak (EMA 15 minut)</li>
 <li><strong>Flip</strong> — kopie zero-gamma řady</li>
-<li><strong>Ridge</strong> — souběžné hřebeny koncentrací (víc zdí najednou, s filtrem šumu)</li>
+<li><strong>Ridge vše</strong> — souběžné hřebeny koncentrací (víc zdí najednou, s filtrem šumu)</li>
+<li><strong>Ridge dominantní</strong> (#238) — jediný nejsilnější hřeben dne</li>
 </ul>
+<p><strong>Ridge vše vs. Ridge dominantní.</strong> „Vše&quot; kreslí každý lokální hřeben s
+prominencí aspoň 10 % maxima — v hustém 0DTE dni to bývá i dvacet souběžných
+čárkovaných čar, které sice nesou informaci, ale při rychlém čtení splývají.
+„Dominantní&quot; z nich vybere jeden: hřeben s <strong>největší kumulovanou hodnotou
+přes den</strong> (síla × doba trvání — dlouhý pás se střední koncentrací poráží
+krátký špičkový záblesk; při shodě vyhrává hřeben blíž aktuální ceně). Je to
+odpověď na otázku „kde sedí největší sázka&quot;, bez šumu; když chceš vidět i
+vedlejší koncentrace, přepni zpět na Vše. Dřív uložená volba Ridge se po
+aktualizaci chová jako Ridge vše.</p>
 <h3>Styl vykreslení</h3>
 <ul>
 <li><strong>Gradient</strong> — hladké bilineární přechody (výchozí)</li>
@@ -429,6 +433,12 @@ koncentrací, walls jsou linie vedené zleva doprava.</p>
 </tr>
 </tbody></table>
 <p>Každá úroveň se navíc promítá jako <strong>horizontální čárkovaná linka přes celou šířku s barevnou cenovkou</strong> u levého okraje (poslední známá hodnota) — na první pohled vidíš, kde úrovně právě leží. Vpravo na ose je <strong>štítek aktuální ceny</strong>; v pravém dolním rohu <strong>timestamp</strong> posledních dat.</p>
+<p><strong>Stohování cenovek (#238).</strong> Když dvě pojmenované úrovně padnou na tentýž
+strike (typicky Max Pain = call zeď na 0DTE), jejich cenovky by se překreslily
+a jedna by nešla číst. Kolidující štítky se proto řadí <strong>pod sebe</strong> jako
+popisky seancí — výš položená úroveň má štítek výš, každý další se odsune jen
+o nejmenší nutný kus, nekolidující štítky zůstávají u své čáry. Sloupec u
+levého okraje a štítek Max Pain vpravo se stohují každý zvlášť.</p>
 <h3>OI zdi — jiná veličina než gamma zdi (v1.13, #851)</h3>
 <p><img src="img/oi-zdi.png" alt="OI zdi pod GEX Levels — put zeď 29000 s podílem 32 % na OI své strany, druhá 28950 · 19 %"></p>
 <p><strong>Call/put zeď</strong> je maximum gamma profilu — kde dealeři hedgují <strong>právě teď</strong>
