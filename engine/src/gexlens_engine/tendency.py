@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 # Okno sklonů (Cum Δ, cena, SentIndex) — shodné s CumΔ oknem signal enginu
 SLOPE_LOOKBACK_MIN = 10
 SENTIMENT_SUBDIR = "sentiment"
+#: Škrcení warningu o chybějící partici SentIndexu (#1136)
+SENTIMENT_MISSING_WARN_MIN = 30
 # Sklon ATM IV pro vanna hlas (#397) — delší okno, IV se hýbe pomaleji než cena
 IV_LOOKBACK_MIN = 30
 
@@ -48,6 +50,7 @@ class TendencyEngine:
         self._max_pain_loaded_for: tuple[str, dt.date, dt.datetime | None] | None = None
         # Cache dnešní parquet řady SentIndexu (přepisuje se celá každý cyklus)
         self._sent_cache: tuple[Path, float, list[tuple[dt.datetime, float]]] | None = None
+        self._sent_missing_warned_at: dt.datetime | None = None
         # ATM IV historie pro vanna hlas (#397)
         self._iv_history: deque[tuple[dt.datetime, float]] = deque(maxlen=IV_LOOKBACK_MIN + 1)
         # Hystereze pásma (#394) — resetuje se na přelomu dne (nový den nemá
@@ -133,12 +136,25 @@ class TendencyEngine:
         return (settle_ts(now.date()) - now).total_seconds() / 60.0
 
     def _sentiment(self, now: dt.datetime) -> tuple[float | None, float | None]:
-        """Aktuální hodnota SentIndexu + hodnota před oknem z denní parquet partice."""
+        """Aktuální hodnota SentIndexu + hodnota před oknem z denní parquet partice.
+
+        Partice píše news-engine per symbol: `derived/sentiment/{SYMBOL}/{den}.parquet`
+        (ADR-0026, PR #658). Do 13. 9. 2026 se tu četla plochá cesta bez symbolu,
+        která existovala jen do 31. 7. — hlas `sentindex` byl od 13. 8. tiše nula
+        (#1136). Chybějící partice se proto loguje (škrceně), ne mlčí.
+        """
         if self.data_dir is None:
             return None, None
-        path = self.data_dir / "derived" / SENTIMENT_SUBDIR / f"{now.date().isoformat()}.parquet"
+        path = (
+            self.data_dir
+            / "derived"
+            / SENTIMENT_SUBDIR
+            / self.symbol
+            / f"{now.date().isoformat()}.parquet"
+        )
         try:
             if not path.exists():
+                self._warn_missing_sentiment(now, path)
                 return None, None
             mtime = path.stat().st_mtime
             if (
@@ -165,6 +181,18 @@ class TendencyEngine:
                 then = value
                 break
         return current, then
+
+    def _warn_missing_sentiment(self, now: dt.datetime, path: Path) -> None:
+        """Warning nejvýš jednou za `SENTIMENT_MISSING_WARN_MIN` — tichý výpadek vstupu
+        vydržel měsíc (#1136); log ho zviditelní, ale nesmí zaplavit každou minutu."""
+        last = self._sent_missing_warned_at
+        if last is not None and now - last < dt.timedelta(minutes=SENTIMENT_MISSING_WARN_MIN):
+            return
+        self._sent_missing_warned_at = now
+        logger.warning(
+            "SentIndex partice %s neexistuje — hlas sentindex je 0 (news-engine ji nepíše?)",
+            path,
+        )
 
     async def on_minute(self, now: dt.datetime, spot: float, runtime: EngineRuntime) -> None:
         levels = runtime.last_gex_levels

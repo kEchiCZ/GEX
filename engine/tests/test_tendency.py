@@ -1,6 +1,7 @@
 """Testy indikátoru tendence (#350): hlasy složek, strop, pásma, storage."""
 
 import datetime as dt
+import logging
 from pathlib import Path
 
 import pytest
@@ -237,3 +238,50 @@ def test_minutes_to_close_odvozene_ze_settle_burzovni_zony() -> None:
     assert TendencyEngine._minutes_to_close(winter) == 60.0  # fixních 20:00 UTC by dalo 0
     po_close = dt.datetime(2026, 1, 15, 21, 30, tzinfo=dt.UTC)
     assert TendencyEngine._minutes_to_close(po_close) == -30.0
+
+
+def test_sentiment_reads_per_symbol_partition_and_warns_when_missing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1136: partice leží v derived/sentiment/{SYMBOL}/{den}.parquet (ADR-0026),
+    plochá cesta bez symbolu se nečte; chybějící partice = warning (škrcený), ne ticho."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from gexlens_engine.tendency import SENTIMENT_SUBDIR, TendencyEngine
+
+    now = dt.datetime(2026, 9, 11, 15, 0, tzinfo=dt.UTC)
+    day = now.date().isoformat()
+    # Plochá (stará) cesta existuje, ale je to jiná hodnota — nesmí se použít
+    flat = tmp_path / "derived" / SENTIMENT_SUBDIR
+    flat.mkdir(parents=True)
+    pq.write_table(pa.table({"ts_min": [now], "value": [9.9]}), flat / f"{day}.parquet")
+    per_symbol = flat / "ES"
+    per_symbol.mkdir()
+    pq.write_table(
+        pa.table(
+            {
+                "ts_min": [now - dt.timedelta(minutes=45), now - dt.timedelta(minutes=1)],
+                "value": [0.10, 0.25],
+            }
+        ),
+        per_symbol / f"{day}.parquet",
+    )
+    engine = TendencyEngine.__new__(TendencyEngine)
+    engine.symbol = "ES"
+    engine.data_dir = tmp_path
+    engine._sent_cache = None
+    engine._sent_missing_warned_at = None
+    current, then = engine._sentiment(now)
+    assert current == pytest.approx(0.25)
+    assert then == pytest.approx(0.10)
+
+    # NQ partici nemá → (None, None) + jeden warning, druhé volání v okně mlčí
+    engine.symbol = "NQ"
+    engine._sent_cache = None
+    with caplog.at_level(logging.WARNING, logger="gexlens_engine.tendency"):
+        assert engine._sentiment(now) == (None, None)
+        assert engine._sentiment(now + dt.timedelta(minutes=5)) == (None, None)
+    warnings = [r for r in caplog.records if "SentIndex partice" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "NQ" in warnings[0].getMessage()
