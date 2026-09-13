@@ -50,4 +50,19 @@ if [ "$failed" -ne 0 ]; then
 fi
 
 echo "CI zelené ($total checků) — merguju"
-gh pr merge "$pr" --squash --delete-branch
+head=$(gh pr view "$pr" --json headRefName --jq .headRefName)
+gh pr merge "$pr" --squash
+# Vzdálenou větev mažeme sami (13. 9. 2026): `--delete-branch` selhávalo, když
+# skript běžel z worktree nebo když je main checkoutnutý jinde — merge proběhl,
+# ale větev zůstala (28 pozůstalých). Repo má navíc zapnuté automatické mazání
+# head branchí po merge, takže tady jde jen o pojistku; už smazaná = OK.
+if git ls-remote --exit-code --heads origin "$head" >/dev/null 2>&1; then
+    git push origin --delete "$head" && echo "Vzdálená větev $head smazána"
+else
+    echo "Vzdálená větev $head už neexistuje (smazal GitHub)"
+fi
+# Lokální větev jen když není checkoutnutá (worktree ji drží zamčenou)
+if git show-ref --verify --quiet "refs/heads/$head" && ! git worktree list | grep -q "\[$head\]"; then
+    git branch -D "$head" >/dev/null && echo "Lokální větev $head smazána"
+fi
+git fetch -q --prune
