@@ -15,7 +15,11 @@ param(
     # Přeskočí kontrolu obchodních hodin (jen pro ruční nasazení mimo okno)
     [switch]$Force,
     # Linux server (#1094): přidá compose.server.yml (IB Gateway jako kontejner)
-    [switch]$Server
+    [switch]$Server,
+    # Lokální build místo stažení image z GHCR (#1139) — jen nouzově (CI nefunguje)
+    [switch]$Build,
+    # Jak dlouho čekat, než CI dodá image pro HEAD main (s)
+    [int]$ImageWaitSeconds = 900
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -27,6 +31,41 @@ $composeArgs = @('-f', 'compose.yml')
 if ($Server) { $composeArgs += @('-f', 'compose.server.yml') }
 
 function Write-Step($text) { Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $text" }
+
+# Image se staví v CI (#1139) — doma se jen stahují. `latest` v GHCR může
+# být ještě z předchozího mergu (workflow běží ~5 min), proto se po pullu
+# porovná label revize image s HEAD main a čeká se, dokud nesedí.
+$script:Images = @{
+    engine   = 'ghcr.io/kechicz/gex-python:latest'
+    api      = 'ghcr.io/kechicz/gex-python:latest'
+    frontend = 'ghcr.io/kechicz/gex-frontend:latest'
+}
+function Get-ImageRevision([string]$Image) {
+    $rev = docker image inspect $Image --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return ($rev | Out-String).Trim()
+}
+function Update-ServiceImage([string]$Service, [string]$Head) {
+    <# Stáhne image služby z GHCR a počká, až jeho revize odpovídá HEAD main.
+       Vrací $true při shodě; $false po vypršení (volající rozhodne). #>
+    if ($Build) {
+        docker compose @composeArgs build $Service
+        return ($LASTEXITCODE -eq 0)
+    }
+    $deadline = (Get-Date).AddSeconds($ImageWaitSeconds)
+    while ($true) {
+        docker compose @composeArgs pull --quiet $Service
+        if ($LASTEXITCODE -ne 0) { Write-Warning "Pull $Service selhal (GHCR nedostupné? balíček neveřejný?)"; return $false }
+        $rev = Get-ImageRevision $script:Images[$Service]
+        if ($rev -and $Head.StartsWith($rev)) { Write-Step "Image $Service = revize $($rev.Substring(0, 7)) (HEAD main)."; return $true }
+        if ((Get-Date) -gt $deadline) {
+            Write-Warning "Image $Service má revizi '$rev', HEAD main je $($Head.Substring(0, 7)) — CI ještě nedoběhlo nebo selhalo (workflow Images)."
+            return $false
+        }
+        Write-Step "Image $Service zatím z revize '$rev' — čekám na CI (do $($deadline.ToString('HH:mm:ss')))..."
+        Start-Sleep -Seconds 30
+    }
+}
 
 # Log běžícího kontejneru zmizí s jeho recreate (json-file driver žije s
 # kontejnerem). 7. 9. (#1054) tak po deployi nešlo dohledat, co engine dělal
@@ -78,13 +117,14 @@ Write-Step "Trh zavřený (CT $($ct.ToString('ddd HH:mm'))) — pokračuju."
 $branch = (git rev-parse --abbrev-ref HEAD).Trim()
 if ($branch -ne 'main') { throw "Nasazuje se výhradně z main (jsi na '$branch')." }
 git pull --ff-only
-Write-Step "main na $((git rev-parse --short HEAD).Trim())"
+$head = (git rev-parse HEAD).Trim()
+Write-Step "main na $($head.Substring(0, 7))"
 
-# ── 3) Záloha běžícího image + build ──────────────────────────────────
-docker tag gex-engine:latest "gex-engine:$BackupTag"
-Write-Step "Záloha image: gex-engine:$BackupTag"
-docker compose @composeArgs build engine
-if ($LASTEXITCODE -ne 0) { throw 'Build enginu selhal — nic se nerestartovalo.' }
+# ── 3) Záloha běžícího image + stažení nového z GHCR (#1139) ──────────
+# Rollback tag na lokálním jménu `gex-python:pre-*` (docker-cleanup.ps1 nechá 3)
+docker tag $script:Images.engine "gex-python:$BackupTag"
+Write-Step "Záloha image: gex-python:$BackupTag"
+if (-not (Update-ServiceImage 'engine' $head)) { throw 'Image enginu pro HEAD main není k dispozici — nic se nerestartovalo. (Nouzově: -Build.)' }
 
 # ── 3a) Log dosavadního běhu, než ho recreate smaže (#1056) ───────────
 Save-EngineLog
@@ -113,8 +153,7 @@ if ($healthy) {
     # části NEshazuje engine deploy: engine už je zdravý, exit 0 výše
     # se jen posune za tento blok a chyba se ohlásí warningem.
     foreach ($svc in @('api', 'frontend')) {
-        docker compose @composeArgs build $svc
-        if ($LASTEXITCODE -ne 0) { Write-Warning "Build $svc selhal — služba zůstává na staré verzi."; continue }
+        if (-not (Update-ServiceImage $svc $head)) { Write-Warning "Image $svc pro HEAD main není k dispozici — služba zůstává na staré verzi."; continue }
         docker compose @composeArgs up -d --no-deps $svc
         if ($LASTEXITCODE -ne 0) { Write-Warning "Start $svc selhal — zkontroluj docker logs." }
         else { Write-Step "OK — $svc nasazen." }
@@ -138,7 +177,7 @@ Write-Warning "Engine není zdravý (status $state, restartů $restarts, pád v 
 # Log padlé verze je přesně to, co se bude zítra ladit — uložit, než ho
 # force-recreate zahodí (#1056); selhání uložení tady rollback NEzastaví
 try { Save-EngineLog -Suffix '-crashed' } catch { Write-Warning "Log padlé verze se nepodařilo uložit: $_" }
-docker tag "gex-engine:$BackupTag" gex-engine:latest
+docker tag "gex-python:$BackupTag" $script:Images.engine
 docker compose @composeArgs up -d --no-deps --force-recreate engine
 Start-Sleep -Seconds 20
 $after = (docker inspect -f '{{.State.Status}}' gex-engine-1).Trim()

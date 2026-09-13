@@ -370,7 +370,8 @@ Vedle produkčního stacku (`compose.yml`, :8080) existuje dev stack (`compose.d
 Pravidla:
 
 - **Produkce pouští výhradně `main`.** `start-prod.ps1 -Build` odmítne stavět z jiné větve nebo ze špinavého stromu (`-Force` = vědomé obejití). Bez `-Build` se jen startují dřív postavené image. Dev pouští libovolnou rozpracovanou větev.
-- **Nasazení po mergi:** `git checkout main && git pull`, pak `.\scripts\start-prod.ps1 -Build`. Před nasazením, které sahá na schéma DB, vždy `.\scripts\backup-postgres.ps1` — izolace dev to nenahrazuje, je to druhá vrstva. Výchozí cíl záloh je od #439 (26. 8.) `D:\Programy\GEX\zalohy-pg` (dumpy zabíraly 3,6 GB na systémovém C:), vlastní složka přes `-Target`.
+- **Image se staví v CI, ne doma (#1139, 13. 9. 2026):** po mergi do `main` workflow *Images* postaví `ghcr.io/kechicz/gex-python` (engine, api, news-engine) a `ghcr.io/kechicz/gex-frontend` (tagy `latest` + `sha-<7>`, label `org.opencontainers.image.revision`). Doma se image jen stahují (`docker compose pull`), lokální build zůstává nouzový (`deploy-engine-offhours.ps1 -Build`, `start-prod.ps1 -Build`). Balíčky jsou **veřejné** (repo je veřejné, veřejné balíčky jsou zdarma bez limitu; soukromé by narazily na 500 MB) — stažení nevyžaduje přihlášení. Jednorázově po prvním pushi: na stránce balíčku (GitHub → Packages → gex-python / gex-frontend → Package settings → Change visibility → Public). Do image jde jen to, co Dockerfile kopíruje; `.env*`, `data/`, `docs/` vylučuje `.dockerignore`.
+- **Nasazení po mergi:** `git checkout main && git pull`, pak `.\scripts\deploy-engine-offhours.ps1` (stáhne image, počká na revizi HEAD, restartuje v okně). Starší cesta `.\scripts\start-prod.ps1 -Build` staví lokálně. Před nasazením, které sahá na schéma DB, vždy `.\scripts\backup-postgres.ps1` — izolace dev to nenahrazuje, je to druhá vrstva. Výchozí cíl záloh je od #439 (26. 8.) `D:\Programy\GEX\zalohy-pg` (dumpy zabíraly 3,6 GB na systémovém C:), vlastní složka přes `-Target`.
 - Dev frontend nese v sidebaru oranžový badge **DEV** (build arg `VITE_GEXLENS_ENV`), ať se okna prohlížeče nespletou.
 - Dev stack je jednorázový: rozbitý dev = `docker compose -f compose.dev.yml down -v`, smazat `data-dev/`, `seed-dev.ps1` znovu.
 - Dev engine má výchozí `clientId 2` (`GEXLENS_DEV_IBKR_CLIENT_ID`), aby se v TWS nepotkal s produkční jedničkou.
@@ -782,8 +783,9 @@ je uvnitř VHDX). Proto:
 - Smazaná data VHDX **sám nevrátí** — místo uvolní až kompakce:
   `pwsh -File scripts/compact-docker-vhdx.ps1` **jako správce** (diskpart),
   Docker při ní 2–5 min stojí → jen při zavřeném trhu; stack naběhne sám.
-- Build image jen **po jedné službě** (`docker compose build engine`, pak
-  `frontend`), nikdy všechny naráz, a před buildem zkontrolovat volné místo.
+- Lokální build image jen nouzově a **po jedné službě** (`docker compose build engine`,
+  pak `frontend`), nikdy všechny naráz, a před buildem zkontrolovat volné místo;
+  standardně image dodává CI (#1139, kap. 3).
 
 ### 13.5 Ověření a denní provoz
 
