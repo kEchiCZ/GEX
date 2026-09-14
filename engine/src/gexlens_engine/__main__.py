@@ -1802,6 +1802,7 @@ async def main() -> None:
                     return None
                 # Všechny specs jedné pipeline sdílejí symbol; mapa je per produkt
                 chain = shadow_chain.get(specs[0].symbol)
+                last_event = tasty_cache.last_event_at
                 return tasty_chain_quotes(
                     specs,
                     chain,
@@ -1809,6 +1810,9 @@ async def main() -> None:
                     now_utc_ts=dt.datetime.now(dt.UTC).timestamp(),
                     now_monotonic=time.monotonic(),
                     max_age_ms=int(settings.tasty_chain_max_age_s * 1000),
+                    # dxFeed je event-on-change: stáří měří živost streamu,
+                    # ne poslední změnu kontraktu (jinak fallback ztrácel OTM striky)
+                    stream_alive_ts=last_event.timestamp() if last_event is not None else None,
                 )
 
             chain_quotes_lookup = _chain_quotes

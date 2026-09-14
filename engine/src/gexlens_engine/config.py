@@ -233,7 +233,8 @@ class Settings(BaseSettings):
     # série (crosscheck_minutes): přepnutí zdroje překreslí celý profil, takže
     # kmitání stojí víc než o pár minut pozdější návrat.
     tasty_chain_recover_minutes: int = Field(default=5, ge=1)
-    # Max stáří tasty hodnoty, aby kontrakt vstoupil do fallbackového řetězu
+    # Max stáří tasty STREAMU (poslední event), aby fallbackový řetěz platil;
+    # dxFeed je event-on-change, nezměněná kotace na živém streamu je aktuální
     tasty_chain_max_age_s: float = Field(default=120.0, gt=0)
 
     # Jak dlouho se při startu čeká na IBKR, než engine rozjede zbytek i bez něj

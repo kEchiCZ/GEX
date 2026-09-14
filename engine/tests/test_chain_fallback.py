@@ -284,3 +284,42 @@ def test_bez_chain_mapy_se_nevrati_nic() -> None:
         )
         == {}
     )
+
+
+def test_zivy_stream_potvrzuje_i_nezmenene_hodnoty() -> None:
+    """dxFeed je event-on-change: deep OTM strike bez změny 5 min je na živém
+    streamu aktuální — se `stream_alive_ts` se bere, stáří = stáří streamu."""
+    specs = [spec(5900.0)]
+    chain = chain_for(specs)
+    clock = FrozenClock(NOW)
+    cache = TastyChainCache(clock)
+    fill_cache(cache, clock, chain, specs, quote_at=NOW - dt.timedelta(minutes=5))
+
+    quotes = tasty_chain_quotes(
+        specs,
+        chain,
+        cache,
+        now_utc_ts=NOW.timestamp(),
+        now_monotonic=1000.0,
+        stream_alive_ts=(NOW - dt.timedelta(seconds=10)).timestamp(),
+    )
+    assert set(quotes) == set(specs)
+    assert quotes[specs[0]].age_s(1000.0) == 10.0
+
+
+def test_mrtvy_stream_nevrati_nic_ani_s_cerstvymi_hodnotami() -> None:
+    specs = [spec(5900.0)]
+    chain = chain_for(specs)
+    clock = FrozenClock(NOW)
+    cache = TastyChainCache(clock)
+    fill_cache(cache, clock, chain, specs)
+
+    quotes = tasty_chain_quotes(
+        specs,
+        chain,
+        cache,
+        now_utc_ts=NOW.timestamp(),
+        now_monotonic=1000.0,
+        stream_alive_ts=(NOW - dt.timedelta(minutes=5)).timestamp(),
+    )
+    assert quotes == {}
