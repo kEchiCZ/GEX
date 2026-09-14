@@ -1803,6 +1803,10 @@ async def main() -> None:
                 # Všechny specs jedné pipeline sdílejí symbol; mapa je per produkt
                 chain = shadow_chain.get(specs[0].symbol)
                 last_event = tasty_cache.last_event_at
+                # Spot pipeline (i z tasty fallbacku) pro BS dopočet greeks tam,
+                # kde dxFeed Greeks nechodí (deep OTM 0DTE — právě striky zdí)
+                owner = pipelines.get(specs[0].symbol)
+                spot_value = owner.spot if owner is not None and owner.spot > 0 else None
                 return tasty_chain_quotes(
                     specs,
                     chain,
@@ -1813,6 +1817,7 @@ async def main() -> None:
                     # dxFeed je event-on-change: stáří měří živost streamu,
                     # ne poslední změnu kontraktu (jinak fallback ztrácel OTM striky)
                     stream_alive_ts=last_event.timestamp() if last_event is not None else None,
+                    spot=spot_value,
                 )
 
             chain_quotes_lookup = _chain_quotes

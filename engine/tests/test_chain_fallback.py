@@ -323,3 +323,28 @@ def test_mrtvy_stream_nevrati_nic_ani_s_cerstvymi_hodnotami() -> None:
         stream_alive_ts=(NOW - dt.timedelta(minutes=5)).timestamp(),
     )
     assert quotes == {}
+
+
+def test_kontrakt_bez_greeks_dostane_bs_dopocet_se_spotem() -> None:
+    """#810/#547: dxFeed Greeks na deep OTM nechodí — se spotem se dopočtou z mid,
+    zdroj `computed`; bez spotu se kontrakt dál vynechá celý (pravidlo 2)."""
+    specs = [spec(5900.0)]
+    chain = chain_for(specs)
+    clock = FrozenClock(NOW)
+    cache = TastyChainCache(clock)
+    streamer = chain.streamer_symbol(specs[0])
+    assert streamer is not None
+    cache.on_event("Quote", [streamer, 10.0, 10.5, 3, 4])  # greeks nedorazily
+
+    without_spot = tasty_chain_quotes(
+        specs, chain, cache, now_utc_ts=NOW.timestamp(), now_monotonic=1000.0
+    )
+    assert without_spot == {}
+    with_spot = tasty_chain_quotes(
+        specs, chain, cache, now_utc_ts=NOW.timestamp(), now_monotonic=1000.0, spot=5905.0
+    )
+    quote = with_spot[specs[0]]
+    assert quote.source == "computed"
+    assert quote.snapshot.gamma > 0
+    assert 0.0 < quote.snapshot.iv < 5.0
+    assert quote.feed == FEED_TASTY

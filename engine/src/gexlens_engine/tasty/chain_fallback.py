@@ -26,14 +26,18 @@ Během fallbacku proto tyhle řady stojí a v snímku jsou `None` — díra, kte
 je vidět, místo nuly, která lže (#465).
 """
 
+import datetime as dt
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from gexlens_engine.compute.gexfield import fallback_greeks
+from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import (
     FEED_TASTY,
+    GREEKS_SOURCE_COMPUTED,
     GREEKS_SOURCE_MODEL,
     CachedQuote,
     QuoteSnapshot,
@@ -130,6 +134,7 @@ def tasty_chain_quotes(
     now_monotonic: float,
     max_age_ms: int = MAX_AGE_MS,
     stream_alive_ts: float | None = None,
+    spot: float | None = None,
 ) -> dict[OptionContractSpec, CachedQuote]:
     """Cache kotací poskládaná z tasty stavů — tvarem shodná se `scheduler.quotes()`.
 
@@ -147,6 +152,12 @@ def tasty_chain_quotes(
     se za stáří bere ŽIVOST STREAMU: mrtvý stream (> max_age) = nic, živý
     stream = všechny kontrakty s hodnotami, `updated_at` nese stáří streamu,
     takže `stale_age` snímku i práh `quote_max_age_s` dál něco měří.
+
+    Greeks: dxFeed Greeks na řídkých / deep OTM sériích nechodí (#810) — se
+    `spot` se pro kontrakt s kotací bez greeks dopočtou vlastní BS greeks
+    z mid (#547, `fallback_greeks`, `source = computed`), stejně jako to dělá
+    IBKR cesta i extended expirace (#616). Bez spotu se kontrakt vynechá celý
+    (ADR-0025 pravidlo 2: půl hodnoty odjinud nikdy).
     """
     if chain is None:
         return {}
@@ -156,6 +167,8 @@ def tasty_chain_quotes(
         if stream_age_ms > max_age_ms:
             return {}  # stream mrtvý — poslední hodnoty už nikdo nepotvrzuje
     quotes: dict[OptionContractSpec, CachedQuote] = {}
+    now_utc = dt.datetime.fromtimestamp(now_utc_ts, tz=dt.UTC)
+    settle_by_expiry: dict[str, dt.datetime] = {}
     for spec in specs:
         streamer = chain.streamer_symbol(spec)
         if streamer is None:
@@ -164,22 +177,59 @@ def tasty_chain_quotes(
         if state is None:
             continue
         quote, greeks = state.quote, state.greeks
-        if quote.updated_at is None or greeks.updated_at is None:
+        if quote.updated_at is None or quote.bid is None or quote.ask is None:
             continue
         quote_age_ms = (now_utc_ts - quote.updated_at.timestamp()) * 1000
-        greeks_age_ms = (now_utc_ts - greeks.updated_at.timestamp()) * 1000
+        greeks_age_ms = (
+            (now_utc_ts - greeks.updated_at.timestamp()) * 1000
+            if greeks.updated_at is not None
+            else None
+        )
         if stream_age_ms is not None:
             # Živý stream potvrzuje i nezměněné hodnoty — stáří = stáří streamu
-            quote_age_ms = greeks_age_ms = stream_age_ms
-        elif quote_age_ms > max_age_ms or greeks_age_ms > max_age_ms:
+            quote_age_ms = stream_age_ms
+            if greeks_age_ms is not None:
+                greeks_age_ms = stream_age_ms
+        elif quote_age_ms > max_age_ms:
             continue
-        if quote.bid is None or quote.ask is None:
-            continue
-        if greeks.iv is None or greeks.delta is None or greeks.gamma is None:
-            continue
-        if greeks.theta is None or greeks.vega is None:
-            continue
-        oldest_age_s = max(quote_age_ms, greeks_age_ms) / 1000
+        greeks_ok = (
+            greeks_age_ms is not None
+            and greeks_age_ms <= max_age_ms
+            and greeks.iv is not None
+            and greeks.delta is not None
+            and greeks.gamma is not None
+            and greeks.theta is not None
+            and greeks.vega is not None
+        )
+        source = GREEKS_SOURCE_MODEL
+        if greeks_ok:
+            assert greeks.iv is not None and greeks.delta is not None  # greeks_ok
+            assert greeks.gamma is not None and greeks.theta is not None
+            assert greeks.vega is not None
+            iv, delta, gamma = greeks.iv, greeks.delta, greeks.gamma
+            theta, vega = greeks.theta, greeks.vega
+            oldest_age_s = max(quote_age_ms, greeks_age_ms or 0.0) / 1000
+        else:
+            if spot is None or quote.bid <= 0.0 or quote.ask < quote.bid:
+                continue
+            settle = settle_by_expiry.get(spec.expiry)
+            if settle is None:
+                settle = settle_ts(dt.datetime.strptime(spec.expiry, "%Y%m%d").date())
+                settle_by_expiry[spec.expiry] = settle
+            computed = fallback_greeks(
+                spot=spot,
+                strike=spec.strike,
+                right=spec.right,
+                mid=(quote.bid + quote.ask) / 2.0,
+                settle=settle,
+                now=now_utc,
+            )
+            if computed is None:
+                continue  # mimo no-arbitrage pásmo / nekonvergence — díra, ne výmysl
+            iv, delta, gamma = computed.iv, computed.delta, computed.gamma
+            theta, vega = computed.theta, computed.vega
+            source = GREEKS_SOURCE_COMPUTED
+            oldest_age_s = quote_age_ms / 1000
         quotes[spec] = CachedQuote(
             snapshot=QuoteSnapshot(
                 bid=quote.bid,
@@ -188,16 +238,16 @@ def tasty_chain_quotes(
                 # nejde získat ve stejné sémantice jako z IBKR — viz modul
                 last=None,
                 volume=None,
-                iv=greeks.iv,
-                delta=greeks.delta,
-                gamma=greeks.gamma,
-                theta=greeks.theta,
-                vega=greeks.vega,
+                iv=iv,
+                delta=delta,
+                gamma=gamma,
+                theta=theta,
+                vega=vega,
             ),
             updated_at=now_monotonic - oldest_age_s,
             stale=False,
-            # Greeks jsou měřené dxFeedem, ne dopočtené naším BS modelem
-            source=GREEKS_SOURCE_MODEL,
+            # model = měřené dxFeedem; computed = vlastní BS z mid (#547)
+            source=source,
             feed=FEED_TASTY,
         )
     return quotes
