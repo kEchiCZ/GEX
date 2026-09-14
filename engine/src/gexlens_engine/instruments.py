@@ -300,6 +300,9 @@ class InstrumentPipeline:
     # Status ho agreguje do UI — tiché přepnutí zdroje zakazuje ADR-0025
     # pravidlo 5, takže uživatel musí poznat, odkud se dívá.
     spot_source: Callable[[], str] = lambda: "ibkr"
+    # Cena z aktivního fallbacku (#614): během výpadku IBKR je ticker zamrzlý
+    # a cyklus by počítal nad cenou z doby výpadku; None = fallback neběží
+    spot_override: Callable[[], float | None] = lambda: None
     oi_available: bool = False
     # Snímek OI je definitivní (#463): pořízený po publikačním okně a potvrzený
     # druhým nezměněným čtením. Dokud ne, engine ho po okně obnovuje — jinak by
@@ -349,6 +352,9 @@ class InstrumentPipeline:
     backfill_today: Callable[[], Awaitable[None]] | None = None
     # Obnova mrtvého reqRealTimeBars streamu po stall (#1082); None = jen alert
     restart_bars: Callable[[], Awaitable[None]] | None = None
+    # Živý fallback barů z dxFeed Candle během stall (#614 doplněk): doplní
+    # minuty [since, until) chybějící v particích; None = bez tasty větve
+    bar_gap_fill: Callable[[dt.datetime, dt.datetime], Awaitable[int]] | None = None
     _cycles_since_oi: int = field(default=0, repr=False)
     # Den, ke kterému patří `oi_available`/`oi_final` (#494): pipeline symbolu
     # s nedenní nejbližší expirací přežije půlnoc a bez resetu by včerejší
@@ -357,6 +363,9 @@ class InstrumentPipeline:
     _minute_count: int = field(default=0, repr=False)
     _last_spot: float = field(default=float("nan"), repr=False)
     _backfill_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _gap_fill_task: asyncio.Task[int] | None = field(default=None, repr=False)
+    # Kolik barů zatím doplnil tasty fallback během běžícího stall (do logu při zotavení)
+    _gap_filled: int = field(default=0, repr=False)
     # Vol koncentrace (#208): už ohlášené strany (expirace, strike, right) —
     # jeden alert per leader; pipeline se denně překlápí, reset je přirozený
     _vol_alerted: set[tuple[str, float, str]] = field(default_factory=set, repr=False)
@@ -833,6 +842,10 @@ class InstrumentPipeline:
         )
 
     def _current_spot(self) -> float:
+        override = self.spot_override()
+        if override is not None and override == override:
+            self.spot = override
+            return override
         last = self.ticker.last
         if last == last:  # není NaN
             self.spot = last
@@ -1139,7 +1152,13 @@ class InstrumentPipeline:
             )
             await self._restart_bars_stream()
         elif event == "recovered":
-            logger.info("Real-time bary %s zase chodí — díra se doplní backfillem", self.symbol)
+            logger.info(
+                "Real-time bary %s zase chodí — díra se doplní backfillem (tasty zatím "
+                "doplnila %d barů)",
+                self.symbol,
+                self._gap_filled,
+            )
+            self._gap_filled = 0
             await self.publisher.publish(
                 "alerts",
                 {
@@ -1156,6 +1175,39 @@ class InstrumentPipeline:
                 task: asyncio.Task[None] = asyncio.ensure_future(self.backfill_today())
                 task.add_done_callback(self._log_backfill_result)
                 self._backfill_task = task
+        # Dokud stall trvá, svíčky doplňuje tasty (#614 doplněk) — každý cyklus
+        # minuty, které v particích chybí; měřené bary při návratu IBKR vyhrají
+        if detector.stalled and self.bar_gap_fill is not None:
+            self._schedule_gap_fill(now)
+
+    def _schedule_gap_fill(self, now: dt.datetime) -> None:
+        """Jedno doplnění naráz; okno = poslední stall práh + rezerva, ne celý den
+        (celodenní díry patří backfillu při návratu, tohle drží graf živý)."""
+        if self._gap_fill_task is not None and not self._gap_fill_task.done():
+            return
+        if self.bar_gap_fill is None:
+            return
+        until = now.replace(second=0, microsecond=0)
+        since = until - dt.timedelta(minutes=max(self.settings.bars_stall_alert_minutes, 3) + 5)
+        task: asyncio.Task[int] = asyncio.ensure_future(self.bar_gap_fill(since, until))
+        task.add_done_callback(self._log_gap_fill_result)
+        self._gap_fill_task = task
+
+    def _log_gap_fill_result(self, task: asyncio.Task[int]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.warning("Doplnění barů %s z tasty během stall selhalo: %s", self.symbol, exc)
+            return
+        filled = task.result()
+        if filled and self._gap_filled == 0:
+            logger.warning(
+                "Svíčky %s během výpadku IBKR doplňuje tastytrade (#614) — úsek je "
+                "v UI označený jako doplněný, ne měřený",
+                self.symbol,
+            )
+        self._gap_filled += filled
 
     async def _restart_bars_stream(self) -> None:
         """Zruší mrtvý reqRealTimeBars stream a založí nový (#1082).
@@ -1236,6 +1288,8 @@ class InstrumentPipeline:
         """Odhlášení market dat podkladu (kontrakty řetězce rotuje scheduler sám)."""
         if self._backfill_task is not None:
             self._backfill_task.cancel()
+        if self._gap_fill_task is not None:
+            self._gap_fill_task.cancel()
         try:
             self.on_stop()
         except Exception:

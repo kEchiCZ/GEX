@@ -1175,3 +1175,55 @@ def test_greeks_hlidka_pri_necitelne_expiraci_zustava() -> None:
     from gexlens_engine.instruments import greeks_watch_applies
 
     assert greeks_watch_applies("nesmysl", dt.datetime(2026, 8, 31, 23, 0, tzinfo=dt.UTC)) is True
+
+
+async def test_bars_stall_dopnuje_tasty_a_spot_override_hyba_detektorem(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#614 doplněk: IBKR mlčí celý (ticker zamrzlý), spot jede z tasty přes
+    `spot_override` → hlídač barů stall pozná a každý cyklus doplní minuty z tasty;
+    po návratu barů se doplňování zastaví."""
+    settings, writer, repository, publisher = env
+    settings.bars_stall_alert_minutes = 2
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    fills: list[tuple[dt.datetime, dt.datetime]] = []
+    tasty_price = 7600.0
+
+    async def fake_fill(since: dt.datetime, until: dt.datetime) -> int:
+        fills.append((since, until))
+        return 3
+
+    pipeline.bar_gap_fill = fake_fill
+    pipeline.spot_override = lambda: tasty_price
+    ticker = pipeline.ticker
+    assert isinstance(ticker, FakeTicker)
+    ticker.last = float("nan")  # IBKR ticker mlčí
+
+    await pipeline.run_minute(TS)
+    for minute in range(1, 5):
+        tasty_price = 7600.0 + minute  # spot z tasty se hýbe, IBKR ticker ne
+        await pipeline.run_minute(TS + dt.timedelta(minutes=minute))
+        if pipeline._gap_fill_task is not None:
+            await pipeline._gap_fill_task
+
+    # Cyklus pipeline počítá nad tasty cenou, ne nad zamrzlým tickerem
+    assert pipeline.spot == pytest.approx(7604.0)
+    # Stall v cyklu 2; doplnění v cyklech 2, 3, 4 s klouzavým oknem do aktuální minuty
+    assert len(fills) == 3
+    assert fills[-1][1] == TS + dt.timedelta(minutes=4)
+    # Okno = max(práh, 3) + 5 min rezervy — jen čerstvá díra, ne celý den
+    assert fills[-1][0] == fills[-1][1] - dt.timedelta(minutes=8)
+    assert pipeline._gap_filled == 9
+    alerts = [data for channel, data in publisher.messages if channel == "alerts"]
+    assert [a["kind"] for a in alerts] == ["bars_stalled"]
+
+    # Návrat barů → recovery, počítadlo doplněných se nuluje, další cyklus už nedoplňuje
+    now = TS + dt.timedelta(minutes=5)
+    pipeline.minute_bars.append(
+        Bar(ts=now, open=7603.0, high=7605.0, low=7602.0, close=7604.0, volume=10.0)
+    )
+    tasty_price = 7605.0
+    await pipeline.run_minute(now)
+    assert pipeline._gap_filled == 0
+    assert len(fills) == 3
