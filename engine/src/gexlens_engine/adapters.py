@@ -122,7 +122,10 @@ class IbQuoteStreamer:
                     timeout=QUALIFY_TIMEOUT_S,
                 ),
             )
-        except TimeoutError:
+        except (TimeoutError, ConnectionError):
+            # ConnectionError = API socket dolů (Gateway vyhozená souběhem
+            # s mobilem): totéž co mrtvá farma, jen bez čekání — bez odchycení
+            # by OI archiv zalogoval traceback per kontrakt
             if (
                 self._qualify_dead_since is None
                 or time.monotonic() - self._qualify_dead_since >= QUALIFY_DEAD_FOR_S

@@ -178,6 +178,16 @@ def _front_to_cache(front: Contract, symbol: str) -> FrontFuture:
     )
 
 
+def _cancel_quietly(ib: IB, contract: Contract) -> None:
+    """Odhlášení podkladu při neúspěšném setupu — bez spojení nemá co rušit."""
+    if not ib.isConnected():
+        return
+    try:
+        ib.cancelMktData(contract)
+    except Exception:
+        logger.debug("cancelMktData %s při neúspěšném setupu selhal", contract.localSymbol)
+
+
 def _contract_from_cache(front: FrontFuture) -> Contract:
     """ib_async kontrakt z cache — conId stačí pro reqMktData/reqRealTimeBars,
     ostatní pole nese kvůli logům a `parse_multiplier`."""
@@ -647,16 +657,30 @@ async def create_pipeline(
     today = dt.datetime.now(dt.UTC).date()
     cached: CachedDiscovery | None = None
     degraded_reasons: list[str] = []
-    try:
-        front = await _resolve_front_future(ib, symbol)
-    except InstrumentSetupError as exc:
+    # API socket k TWS/Gateway dolů (Gateway vyhozená souběhem s mobilem,
+    # zavřená): každé IBKR volání by hodilo ConnectionError — jde se rovnou
+    # do cache a IBKR subskripce se založí až v `resubscribe` po reconnectu
+    ib_connected = ib.isConnected()
+    if not ib_connected:
         cached = discovery_cache.load(symbol, today=today) if discovery_cache else None
         if cached is None:
-            raise
-        degraded_reasons.append(f"discovery podkladu ({exc})")
+            raise InstrumentSetupError(
+                f"{symbol}: IBKR odpojeno a bez cache discovery není z čeho pipeline založit"
+            )
+        degraded_reasons.append("IBKR API odpojeno")
         front = _contract_from_cache(cached.front)
+    else:
+        try:
+            front = await _resolve_front_future(ib, symbol)
+        except InstrumentSetupError as exc:
+            cached = discovery_cache.load(symbol, today=today) if discovery_cache else None
+            if cached is None:
+                raise
+            degraded_reasons.append(f"discovery podkladu ({exc})")
+            front = _contract_from_cache(cached.front)
+    if cached is not None:
         logger.warning(
-            "Discovery %s selhalo — beru poslední známý kontrakt %s z cache (%s)",
+            "IBKR discovery %s nedostupné — beru poslední známý kontrakt %s z cache (%s)",
             symbol,
             cached.front.local_symbol,
             cached.stored_at.date(),
@@ -814,8 +838,13 @@ async def create_pipeline(
         rt_bars = bars_list
         logger.info("Obnoven reqRealTimeBars stream %s po stall", symbol)
 
-    fut_ticker = subscribe_underlying()
-    await asyncio.sleep(3)
+    if ib_connected:
+        fut_ticker = subscribe_underlying()
+        await asyncio.sleep(3)
+    else:
+        # Prázdný ticker (samé NaN) — spot dodá tasty, IBKR ticker nasadí
+        # `resubscribe` po reconnectu
+        fut_ticker = Ticker(contract=front)
     # Spot: live cena → marketPrice → poslední závěrečná (víkend/zavřený trh,
     # jinak by pipeline nešla založit mimo obchodní hodiny)
     spot = next(
@@ -834,27 +863,32 @@ async def create_pipeline(
             spot = tasty_price
             degraded_reasons.append("úvodní spot z tasty")
     if spot != spot:
-        ib.cancelMktData(front)
+        _cancel_quietly(ib, front)
         raise InstrumentSetupError(f"{symbol}: nedorazila cena podkladu (subskripce dat?)")
 
     discovery = ChainDiscovery(ib, settings)
     underlying = Underlying(
         symbol=symbol, sec_type="FUT", exchange=front.exchange, con_id=front.conId
     )
-    try:
-        infos = await asyncio.wait_for(
-            discovery.discover(underlying), timeout=CHAIN_DISCOVERY_TIMEOUT_S
-        )
-    except TimeoutError:
-        logger.warning("Discovery řetězu %s timeout (%.0f s)", symbol, CHAIN_DISCOVERY_TIMEOUT_S)
-        infos = []
+    infos: list[ExpiryInfo] = []
+    if ib_connected:
+        try:
+            infos = await asyncio.wait_for(
+                discovery.discover(underlying), timeout=CHAIN_DISCOVERY_TIMEOUT_S
+            )
+        except TimeoutError:
+            logger.warning(
+                "Discovery řetězu %s timeout (%.0f s)", symbol, CHAIN_DISCOVERY_TIMEOUT_S
+            )
+        except ConnectionError as exc:
+            logger.warning("Discovery řetězu %s bez spojení (%s)", symbol, exc)
     if infos and discovery_cache is not None:
         discovery_cache.store(_front_to_cache(front, symbol), infos)
     if not infos:
         if cached is None and discovery_cache is not None:
             cached = discovery_cache.load(symbol, today=today)
         if cached is None:
-            ib.cancelMktData(front)
+            _cancel_quietly(ib, front)
             raise InstrumentSetupError(f"{symbol}: žádný FOP řetězec na {front.exchange}")
         infos = list(cached.unexpired(today))
         degraded_reasons.append(f"řetěz z cache ({cached.stored_at.date()})")
@@ -1382,6 +1416,19 @@ async def main() -> None:
     pacing_guard = PacingGuard()
     # Poslední úspěšné discovery per symbol (#1153) — start bez IBKR sec-def
     discovery_cache = DiscoveryCache(settings.derived_dir / CACHE_FILENAME)
+
+    def degraded_start_possible(symbol: str) -> bool:
+        """Pipeline jde založit i bez API socketu: cache discovery + čerstvý tasty spot.
+
+        Bez toho by se při vyhozené Gateway (souběh s mobilem) nezaložila žádná
+        pipeline, i když tasty má spot, řetěz, OI i svíčky (#1153).
+        """
+        if tasty_spot_lookup is None:
+            return False
+        if discovery_cache.load(symbol, today=dt.datetime.now(dt.UTC).date()) is None:
+            return False
+        price, fresh = tasty_spot_lookup(symbol)
+        return price is not None and fresh
 
     pipelines: dict[str, InstrumentPipeline] = {}
 
@@ -2494,8 +2541,10 @@ async def main() -> None:
             # na ConnectionError a zaplnil log. Existující pipeline se NEruší —
             # `plan.stop` se řídí watchlistem, ne stavem spojení, aby krátký
             # výpadek nezboural běžící instrumenty.
-            if manager.state is not ConnectionState.CONNECTED:
-                break
+            if manager.state is not ConnectionState.CONNECTED and not degraded_start_possible(
+                symbol
+            ):
+                continue
             try:
                 pipelines[symbol] = await create_pipeline(
                     ib,
