@@ -237,3 +237,50 @@ i prod čtou tentýž soubor") vyřešen: dev stack čte `.env` + volitelný
 `.env.dev`, dev grant se ukládá do `.env.dev` pod standardními názvy
 `GEXLENS_TASTY_*`. Oddělené soubory = oddělený blast radius; na VPS (#539)
 pojede jen prod `.env`.
+
+## Dodatek 14. 9. 2026 — degradovaný start a plný přechod na tastytrade (#1153, #614 doplňky)
+
+**Rozhodnutí uživatele (14. 9., #1153 varianta A):** po ztrátě IBKR má aplikace
+**plynule přejít na tastytrade včetně spotu, zdí, OI a všeho, co tasty umí dodat**
+— i tehdy, když IBKR vypadne dřív, než se pipeline založí. Dodatek z 12. 8.
+řešil jen běžící pipeline; 14. 9. při souběhu s mobilem TWS ztratila spojení
+s IBKR celé (Error 1100, sec-def farma „broken", později i Gateway vyhozená —
+`connection refused`) a NQ, jehož pipeline padla s API socketem, stál celé
+odpoledne bez grafu, zatímco ES založený minutu před výpadkem jel z tasty.
+
+### Co se změnilo (PR #1154–#1164, engine `260efa2`)
+
+| Vrstva | Do 14. 9. | Od 14. 9. |
+| --- | --- | --- |
+| Založení pipeline | výhradně IBKR sec-def (discovery front futures, `reqSecDefOptParams`, spot z IBKR tickeru); bez API socketu se nezakládá | **degradovaný start**: kontrakt a řetěz z `derived/discovery_cache.json` (poslední úspěšné discovery, ≤ 14 dní, neexpirovaný front kontrakt), úvodní spot z tasty; bez socketu prázdný ticker a IBKR subskripce až v `resubscribe` po reconnectu; alert `degraded_start` |
+| Spot v cyklu pipeline | IBKR ticker (za fallbacku zamrzlý → GEX a hlídač barů nad cenou z doby výpadku) | `spot_override` z tasty, dokud fallback spotu běží |
+| 1min bary podkladu | jen IBKR real-time bary; za výpadku svíčky stály | při stall každou minutu doplnění chybějících minut z dxFeed Candle (`source = tasty_candle`, UI úsek odliší); jedno pomocné DXLink spojení naráz |
+| Plán tasty chain subskripcí | z IBKR quote cache (prázdná u pipeline založené za výpadku → 0 tasty symbolů → 0 snapshotů) | z **kontraktů, které pipeline drží** + symboly z konfigurace i watchlistu bez pipeline |
+| Křížová kontrola | držené kontrakty bez IBKR kotace = „sledováno 0" → `insufficient`, fallback řetězu se po restartu nikdy nezapnul | takový kontrakt = mrtvá IBKR strana (`_DEAD_IBKR_QUOTE`) → při čerstvé tasty `ibkr_suspect` → fallback |
+| Stáří tasty hodnot | „kotace i greeks změněné do 120 s" → deep OTM striky (bez změny minuty) vypadávaly, ES 116/160 | **živost streamu** (poslední event streamu ≤ `GEXLENS_TASTY_CHAIN_MAX_AGE_S`): dxFeed je event-on-change, nezměněná kotace na živém streamu je aktuální |
+| Greeks | kontrakt bez dxFeed Greeks vynechán celý | BS greeks z mid (`fallback_greeks`, `source = computed`) jako v IBKR cestě (#547) a extended expiracích (#616); bid 0 s ask > 0 → BS z ask/2, při nekonvergenci limitní nula |
+| IBKR sec-def bez odpovědi | `qualifyContractsAsync` bez stropu → OI archiv i orchestrátor viseli navěky | strop 20 s, po timeoutu 60 s fail-fast; discovery řetězu 30 s |
+
+### Ověření na prod 14. 9.
+
+Degradovaný start ES/NQ při Error 1100 (17:15 UTC): 160/160 a 96/96 snapshotů
+s greeks a OI z tasty; návrat IBKR (1102, 17:18) → spot i řetěz zpět za minutu.
+Restart bez Gateway (18:34) → ES z cache, po reconnectu subskripce obnoveny.
+Večer na tasty (20:03): ES 15. 9. **159/160**, NQ **96/96**, spot i svíčky z tasty.
+
+### Co z tasty vědomě NENÍ (beze změny)
+
+Kumulativní denní opční objem, Prémie $ (objem × mid), CumΔ podkladu z IBKR
+tick-by-tick (stín z dxFeed TimeAndSale řeší #615) a broker news. Během fallbacku
+tedy stojí panely Vol, OptVol, CumΔ a Delta flow a sloupce objemu ve strike
+profilu; nic z toho se nedosazuje (pravidlo 2, #465).
+
+### Meze
+
+- Čistá instalace bez jediného úspěšného discovery: cache je prázdná, pipeline čeká
+  na IBKR. Cache se naplní prvním normálním startem.
+- Roll front kontraktu během výpadku: záznam s expirovaným front kontraktem se
+  nepoužije — pipeline čeká na IBKR.
+- Degradovaný start trvá ~2 min (3× timeout discovery podkladu) — vědomě,
+  transientní výpadky sec-def farmy mají retry přednost.
+
