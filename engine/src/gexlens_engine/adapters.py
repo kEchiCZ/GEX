@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 
 #: Strop kvalifikace kontraktu (sec-def) — jinak při mrtvé farmě visí navždy
 QUALIFY_TIMEOUT_S = 20.0
+#: Po timeoutu se sec-def považuje za mrtvou a další kvalifikace selhávají
+#: hned: OI archiv kvalifikuje po dávkách 80 kontraktů a 5 dávek × 20 s by
+#: degradovaný start (#1153) natáhlo o 100 s per symbol
+QUALIFY_DEAD_FOR_S = 60.0
 
 
 def spec_to_contract(spec: OptionContractSpec) -> Contract:
@@ -82,6 +86,8 @@ class IbQuoteStreamer:
         self._line_gauge = line_gauge
         self._tombstones = tombstones
         self._qualified: dict[OptionContractSpec, Contract] = {}
+        # monotonic čas posledního timeoutu kvalifikace; None = farma odpovídá
+        self._qualify_dead_since: float | None = None
 
     def remember(self, ticker: Any, contract: Contract) -> None:
         """Náhrobek reqId → kontrakt hned při requestu (#1088, viz ReqIdTombstones.put)."""
@@ -102,6 +108,9 @@ class IbQuoteStreamer:
         cached = self._qualified.get(spec)
         if cached is not None:
             return cached
+        dead_since = self._qualify_dead_since
+        if dead_since is not None and time.monotonic() - dead_since < QUALIFY_DEAD_FOR_S:
+            return None  # farma před chvílí mlčela — nečekat znovu 20 s per kontrakt
         try:
             # Kvalifikace jde přes sec-def farmu; při Error 1100 (souběh
             # s mobilem) neodpoví nikdy a bez stropu visí celý OI archiv
@@ -114,10 +123,20 @@ class IbQuoteStreamer:
                 ),
             )
         except TimeoutError:
-            logger.warning(
-                "Kvalifikace %s timeout (%.0f s) — sec-def farma mlčí", spec, QUALIFY_TIMEOUT_S
-            )
+            if (
+                self._qualify_dead_since is None
+                or time.monotonic() - self._qualify_dead_since >= QUALIFY_DEAD_FOR_S
+            ):
+                logger.warning(
+                    "Kvalifikace %s timeout (%.0f s) — sec-def farma mlčí, dalších %.0f s "
+                    "se kontrakty nekvalifikují",
+                    spec,
+                    QUALIFY_TIMEOUT_S,
+                    QUALIFY_DEAD_FOR_S,
+                )
+            self._qualify_dead_since = time.monotonic()
             return None
+        self._qualify_dead_since = None
         first = results[0] if results else None
         if first is None or not first.conId:
             return None
