@@ -814,7 +814,13 @@ function MainContent() {
       const byLabel = new Map(sentimentDaily.map((row) => [dayLabel(row.date), row]))
       const candles = day.minuteLabels.map((label) => {
         const row = byLabel.get(label)
-        return row ? { open: row.open, high: row.high, low: row.low, close: row.close } : null
+        if (!row) return null
+        // Práh korekce (#565) v σ → surové jednotky svíčky σ téhož dne (#640)
+        const threshold =
+          row.correction_level_z != null && row.sigma != null && row.sigma > 0
+            ? row.correction_level_z * row.sigma
+            : null
+        return { open: row.open, high: row.high, low: row.low, close: row.close, threshold }
       })
       const sliced = playback.isLive ? candles : candles.slice(0, playback.position + 1)
       return { ...base, sentimentCandles: sliced }

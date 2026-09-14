@@ -503,6 +503,27 @@ sentiment_waves = Table(
     UniqueConstraint("symbol", "direction", "start_date", name="uq_sentiment_wave"),
 )
 
+# Korekční epizody SentIndexu (#565, ADR-0037): pokus (zahlazeno do H dní)
+# vs. negace. Plně derivované — WavesJob full-replace per symbol z denních
+# close_z; parametry D/H nese `params_version` (změna = nová verze + přepočet).
+sentiment_episodes = Table(
+    "sentiment_episodes",
+    sentiment_metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("symbol", String(16), nullable=False),
+    Column("start_date", Date, nullable=False),
+    Column("end_date", Date, nullable=True),  # null = probíhající (třída neznámá)
+    # Referenční úroveň = 20denní maximum close_z v den startu (σ)
+    Column("ref_level_z", Float, nullable=False),
+    # Největší pokles pod referenční úroveň během epizody (σ)
+    Column("depth_z", Float, nullable=False),
+    Column("label", String(8), nullable=True),  # attempt / negation / null
+    Column("length_days", Integer, nullable=False),  # obchodní dny do rozhodnutí
+    Column("params_version", Integer, nullable=False),
+    Column("series_variant", String(12), nullable=False),  # 'zscore_100'
+    UniqueConstraint("symbol", "start_date", "params_version", name="uq_sentiment_episode"),
+)
+
 # Crowd sentiment (SPEC 2.6, 5.8): kontinuální řady, NE diskrétní eventy —
 # proto vlastní tabulka a záměrně mimo SentIndex (vlna WSB postů by index
 # utopila víc než CPI a crowd bývá kontrariánský).

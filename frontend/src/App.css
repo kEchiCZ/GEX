@@ -690,6 +690,14 @@ button.cal-selected {
   pointer-events: none;
 }
 
+/* Popisek prahu korekce v titulku panelu Sentiment (#565) — tooltip musí jít
+   otevřít, titulek sám je pointer-events: none */
+.panel-subtitle {
+  color: #e8c14b;
+  pointer-events: auto;
+  cursor: help;
+}
+
 .panel-value {
   position: absolute;
   top: 2px;
@@ -2083,6 +2091,35 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   margin-left: 5px;
   color: #e8c14b;
   animation: state-dot-pulse 1.6s ease-in-out infinite;
+}
+
+/* Badge korekční epizody (#565): open = probíhá (žlutá), attempt = zahlazeno
+   (zelená), negation = korekce pokračuje (červená); vždy „předběžné" */
+.state-episode {
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+  border: 1px dashed rgba(125, 133, 150, 0.6);
+  color: var(--text-muted);
+}
+
+.state-episode-open {
+  color: #e8c14b;
+  border-color: rgba(232, 193, 75, 0.6);
+}
+
+.state-episode-attempt {
+  color: #3ecf8e;
+  border-color: rgba(62, 207, 142, 0.6);
+}
+
+.state-episode-negation {
+  color: #f0616d;
+  border-color: rgba(240, 97, 109, 0.6);
 }
 
 /* Polarita trendu MA5×MA10 (#563) — decentní, barvu nese stav chipu */

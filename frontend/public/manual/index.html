@@ -911,6 +911,30 @@ smí říct jen kalibrovaný signál, nikdy samotné jméno stavu.</p>
 oddělený index, vlny i stav (chip se přepíná se zobrazeným instrumentem;
 tatáž zpráva hýbe každým podkladem jinak — technologická zpráva pohne NQ
 víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.</p>
+<h3>Korekce nálady — pokus vs. negace (v1.17, #565)</h3>
+<p>Vedle chipu stavu se objeví <strong>badge KOREKCE n d / POKUS / NEGACE</strong>, když
+nálada spadne. Vlna RISK OFF trvá průměrně den a půl, takže sama o sobě
+korekci neměří — badge sleduje <strong>epizodu</strong>: denní close SentIndexu v σ
+(stejná škála jako sparkline) klesne o ≥ 1 σ pod své <strong>20denní maximum</strong>.
+Pak se čeká, co z toho bude:</p>
+<ul>
+<li><strong>KOREKCE n d</strong> — epizoda probíhá n-tý obchodní den, výsledek ještě není
+znám (tooltip nese hloubku v σ a dnešní práh).</li>
+<li><strong>POKUS</strong> — index se vrátil nad maximum, ze kterého spadl, do 10 obchodních
+dní; korekce se „zahladila&quot;. Badge svítí jen v den zahlazení.</li>
+<li><strong>NEGACE</strong> — do 10 dní se nevrátil; korekce pokračuje a badge drží, dokud
+se index nad původní maximum nedostane.</li>
+</ul>
+<p>Ve spodním panelu <strong>Sentiment</strong> v Daily pohledu je <strong>čárkovaná linie prahu</strong>
+(20denní maximum − 1 σ přepočtené na jednotky svíček) — pokles close pod ni
+= start epizody. Na obrazovce <strong>Stats</strong> je blok <em>Korekční epizody</em> s počty
+pokusů/negací a tabulkou posledních epizod.</p>
+<p><strong>Čti to jako předběžné.</strong> Práh 1 σ a horizont 10 dní jsou zástupné
+parametry z prvního měření (září 2026, 7 týdnů živých dat); kalibrace
+proběhne, až bude aspoň 20 rozhodnutých epizod na instrument a σ škála
+čistě z živých dat (~listopad 2026). Stejně jako u stavu jde o <strong>náladu
+zpráv, ne o směr ceny</strong> — vztah k následnému pohybu trhu měření
+nepotvrdilo. Detail v tooltipu badge.</p>
 <h3>Kde se sentiment potkává s grafem</h3>
 <ul>
 <li><strong>News markery</strong> na časové ose + dialog po kliknutí (kap. 5).</li>
@@ -937,6 +961,10 @@ víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.</p>
 </tr>
 </thead>
 <tbody><tr>
+<td><strong>Korekční epizody sentimentu</strong> (v1.17, #565)</td>
+<td>Pokusy vs. negace korekce nálady (viz kap. o stavu RISK ON/OFF): počet, průměrná hloubka v σ a délka per třída, probíhající epizody, tabulka posledních deseti (start, rozhodnutí, třída, hloubka, referenční úroveň). Označeno <strong>předběžné</strong>, dokud není 20 rozhodnutých epizod — parametry jsou zástupné, ne kalibrované</td>
+</tr>
+<tr>
 <td><strong>Vlny sentimentu</strong></td>
 <td>Historie RISK ON/OFF vln — hloubka, délka, četnost per směr. Hloubky jsou od v1.11 <strong>v jednotkách σ škály</strong> (#640): řada má dvě éry s různým měřítkem (backfill osciloval v ±0,4, bohatší živý feed dává násobně větší denní součty) a dělení σ(100 seancí) je činí srovnatelnými — 2 σ znamená „dvakrát větší výchylka než běžný den&quot;, ať vlna proběhla loni nebo dnes. Surová hodnota zůstává v textu aktuální vlny</td>
 </tr>
@@ -2008,6 +2036,10 @@ podkladu</strong>, ne absolutní čísla.</p>
 <tr>
 <td><strong>RISK ON / RISK OFF</strong></td>
 <td>Stav SentIndexu vůči MA5/MA10 s potvrzením; historie přepnutí = vlny (Stats).</td>
+</tr>
+<tr>
+<td><strong>Korekční epizoda (pokus / negace)</strong></td>
+<td>Pokles denního SentIndexu o ≥ 1 σ pod 20denní maximum; pokus = zahlazeno do 10 obchodních dní, negace = ne. Předběžné parametry (v1.17, #565).</td>
 </tr>
 <tr>
 <td><strong>Signál (NEWS/COMBINED)</strong></td>

@@ -9,7 +9,10 @@ implementace, žádný dvojí výklad). Tenhle job je drží aktuální v DB:
 * spočítá potvrzený stav (jen UZAVŘENÉ dny — přechody se detekují na denním
   close, SPEC 5.6) a intradenní „unconfirmed" indikaci z dnešní průběžné
   hodnoty,
-* změnu stavu hlásí volajícímu, který ji publikuje do WS `sentiment.state`.
+* změnu stavu hlásí volajícímu, který ji publikuje do WS `sentiment.state`,
+* přepočítá korekční epizody (#565, ADR-0037) z denních `close_z` a uloží je
+  do `sentiment_episodes` (full-replace per symbol, verzované parametry);
+  epizodový stav jde do téhož payloadu.
 """
 
 import datetime as dt
@@ -19,8 +22,19 @@ from typing import Any
 from sqlalchemy import delete, insert, select
 from sqlalchemy.engine import Engine
 
-from gexlens_engine.compute.sentwaves import DailyClose, Wave, assess_state, detect_waves
-from gexlens_engine.storage.sentiment import sentiment_daily, sentiment_waves
+from gexlens_engine.compute.sentwaves import (
+    EPISODE_SERIES_VARIANT,
+    DailyClose,
+    DailyZ,
+    Episode,
+    EpisodeAssessment,
+    Wave,
+    assess_episode,
+    assess_state,
+    detect_episodes,
+    detect_waves,
+)
+from gexlens_engine.storage.sentiment import sentiment_daily, sentiment_episodes, sentiment_waves
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +51,33 @@ def wave_payload(wave: Wave | None) -> dict[str, Any] | None:
     }  # depth_z doplňuje job (σ zná on) — payload helper je čistá funkce vlny
 
 
+def episode_payload(episode: Episode | None) -> dict[str, Any] | None:
+    """Epizoda pro API/WS — sdílený tvar s `/sentiment/state` (#565)."""
+    if episode is None:
+        return None
+    return {
+        "start_date": episode.start.isoformat(),
+        "end_date": episode.end.isoformat() if episode.end else None,
+        "ref_level_z": episode.ref_level,
+        "depth_z": episode.depth_z,
+        "label": episode.label,
+        "length_days": episode.length_days,
+    }
+
+
+def episode_state_payload(assessment: EpisodeAssessment) -> dict[str, Any]:
+    """Epizodová část stavu: `episode` = aktuální (status ≠ none), práh v σ."""
+    return {
+        "episode_status": assessment.status,
+        "episode": episode_payload(assessment.episode),
+        "last_episode": episode_payload(assessment.last_resolved),
+        "correction_threshold": assessment.correction_threshold,
+        "correction_threshold_d": assessment.threshold_d,
+        "episode_horizon_h": assessment.horizon_h,
+        "episode_params_version": assessment.params_version,
+    }
+
+
 class WavesJob:
     """Přepočet vln + stavu; `last_payload` drží poslední publikovaný stav."""
 
@@ -45,11 +86,18 @@ class WavesJob:
         self._symbol = symbol
         self.last_payload: dict[str, Any] | None = None
         self._sigma_by_date: dict[dt.date, float] = {}
+        # Uzavřené dny se škálou #640 — vstup korekčních epizod (#565)
+        self._z_points: list[DailyZ] = []
 
     def _points(self, today: dt.date) -> tuple[list[DailyClose], DailyClose | None]:
         """(uzavřené dny, dnešní průběžný close) — dnešek se do vln nepočítá."""
         stmt = (
-            select(sentiment_daily.c.date, sentiment_daily.c.close, sentiment_daily.c.sigma)
+            select(
+                sentiment_daily.c.date,
+                sentiment_daily.c.close,
+                sentiment_daily.c.sigma,
+                sentiment_daily.c.close_z,
+            )
             .where(sentiment_daily.c.symbol == self._symbol)
             .order_by(sentiment_daily.c.date)
         )
@@ -58,6 +106,15 @@ class WavesJob:
         # σ škály (#640) per den — hloubka vlny se převádí σ platnou v den
         # jejího konce (kauzálně; probíhající vlna = poslední známá σ)
         self._sigma_by_date = {row.date: float(row.sigma) for row in rows if row.sigma is not None}
+        self._z_points = [
+            DailyZ(
+                date=row.date,
+                close=float(row.close),
+                z=float(row.close_z) if row.close_z is not None else None,
+            )
+            for row in rows
+            if row.date < today
+        ]
         completed = [
             DailyClose(date=row.date, close=float(row.close)) for row in rows if row.date < today
         ]
@@ -108,12 +165,38 @@ class WavesJob:
             if rows:
                 conn.execute(insert(sentiment_waves), rows)
 
+    def _store_episodes(self, episodes: list[Episode], assessment: EpisodeAssessment) -> None:
+        """Full-replace epizod symbolu (#565) — verze parametrů v každém řádku."""
+        rows = [
+            {
+                "symbol": self._symbol,
+                "start_date": episode.start,
+                "end_date": episode.end,
+                "ref_level_z": episode.ref_level,
+                "depth_z": episode.depth_z,
+                "label": episode.label,
+                "length_days": episode.length_days,
+                "params_version": assessment.params_version,
+                "series_variant": EPISODE_SERIES_VARIANT,
+            }
+            for episode in episodes
+        ]
+        with self._engine.begin() as conn:
+            conn.execute(
+                delete(sentiment_episodes).where(sentiment_episodes.c.symbol == self._symbol)
+            )
+            if rows:
+                conn.execute(insert(sentiment_episodes), rows)
+
     def run(self, now: dt.datetime) -> tuple[dict[str, Any], bool]:
         """Přepočet; vrací (payload stavu, změnil se proti poslednímu?)."""
         today = now.date()
         completed, provisional = self._points(today)
         waves = detect_waves(completed)
         self._store(waves)
+        episodes = detect_episodes(self._z_points)
+        episode_assessment = assess_episode(self._z_points)
+        self._store_episodes(episodes, episode_assessment)
 
         confirmed = assess_state(completed)
         provisional_assessment = (
@@ -134,6 +217,7 @@ class WavesJob:
             "ma10": confirmed.ma10,
             "threshold": confirmed.threshold,
             "current_wave": wave_payload(confirmed.wave),
+            **episode_state_payload(episode_assessment),
             "ts": now.isoformat(),
         }
         comparable = {k: v for k, v in payload.items() if k != "ts"}

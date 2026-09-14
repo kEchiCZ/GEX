@@ -38,6 +38,7 @@ EXPECTED_TABLES = {
     "news_prediction_outcomes",
     "sentiment_daily",
     "sentiment_waves",
+    "sentiment_episodes",
     "crowd_sentiment",
     "signals",
     "review_queue",

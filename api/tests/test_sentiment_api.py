@@ -191,6 +191,71 @@ def test_daily_candles_and_state(client: TestClient) -> None:
     assert state["unconfirmed"] is False
     assert state["last_close"] == pytest.approx(0.5)
     assert state["current_wave"] is None
+    # Epizodová část (#565): bez close_z historie žádná epizoda, ale tvar drží
+    assert state["episode_status"] == "none"
+    assert state["episode"] is None
+    assert state["correction_threshold"] is None
+    assert state["correction_threshold_d"] == pytest.approx(1.0)
+    assert state["episode_params_version"] == 1
+
+
+def test_episodes_and_correction_levels(client: TestClient) -> None:
+    """#565: uzavřené dny s close_z → epizoda `open` ve stavu, práh per den
+    v `/sentiment/daily`, řádky `/stats/episodes` z tabulky."""
+    from gexlens_engine.storage.sentiment import sentiment_episodes
+
+    app = cast(FastAPI, client.app)
+    engine = app.state.meta_repository.engine()
+    today = NOW.date()
+    rows = []
+    z_values = [0.0] * 25 + [-2.0, -1.5]
+    for offset, z in enumerate(reversed(z_values), start=1):
+        day = today - dt.timedelta(days=offset)
+        rows.append(
+            {
+                "date": day,
+                "symbol": "NQ",
+                "open": z,
+                "high": z,
+                "low": z,
+                "close": z * 2.0,
+                "sigma": 2.0,
+                # Nejstarší řádek bez škály (jako začátek řady před #640)
+                "close_z": None if offset == len(z_values) else z,
+                "update_time": NOW,
+            }
+        )
+    with engine.begin() as conn:
+        conn.execute(insert(sentiment_daily), rows)
+        conn.execute(
+            insert(sentiment_episodes).values(
+                symbol="NQ",
+                start_date=today - dt.timedelta(days=2),
+                end_date=None,
+                ref_level_z=0.0,
+                depth_z=2.0,
+                label=None,
+                length_days=1,
+                params_version=1,
+                series_variant="zscore_100",
+            )
+        )
+    state = client.get("/sentiment/state?symbol=NQ").json()
+    assert state["episode_status"] == "open"
+    assert state["episode"]["depth_z"] == pytest.approx(2.0)
+    assert state["episode"]["start_date"] == (today - dt.timedelta(days=2)).isoformat()
+    # Práh = 20denní maximum close_z (0) − D (1)
+    assert state["correction_threshold"] == pytest.approx(-1.0)
+
+    daily = client.get("/sentiment/daily?symbol=NQ").json()["daily"]
+    assert daily[-1]["correction_level_z"] == pytest.approx(-1.0)
+    # Okno 20 řádků obsahuje řádek bez close_z → práh není definovaný
+    assert daily[0]["correction_level_z"] is None
+    assert daily[5]["correction_level_z"] is None
+
+    episodes = client.get("/stats/episodes?symbol=NQ").json()["episodes"]
+    assert len(episodes) == 1 and episodes[0]["params_version"] == 1
+    assert client.get("/stats/episodes?symbol=ES").json() == {"episodes": []}
 
 
 def test_topics_computed_from_live_events(client: TestClient) -> None:

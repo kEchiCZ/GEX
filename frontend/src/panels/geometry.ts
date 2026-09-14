@@ -94,6 +94,9 @@ export interface SentimentCandle {
   high: number
   low: number
   close: number
+  /** Práh korekce (#565) v SUROVÝCH jednotkách svíčky = correction_level_z × σ dne;
+  null = škála nebo práh chybí. V σ ho nese popisek, ne osa (éry řady, #640). */
+  threshold?: number | null
 }
 
 export interface CandleGeom {
@@ -114,13 +117,18 @@ export function sentimentCandleGeometry(
   step: number,
   height: number,
   pad = CUM_DELTA_PAD,
-): { geoms: CandleGeom[]; zeroY: number } {
+): { geoms: CandleGeom[]; zeroY: number; thresholdPoints: string } {
   const zeroY = height / 2
   const present = candles.filter((candle): candle is SentimentCandle => candle !== null)
-  if (present.length === 0) return { geoms: [], zeroY }
+  if (present.length === 0) return { geoms: [], zeroY, thresholdPoints: '' }
+  // Špička osy včetně prahu: linie mimo rozsah svíček by se ořízla, ne nakreslila
   const peak = Math.max(
     1e-9,
-    ...present.flatMap((candle) => [Math.abs(candle.high), Math.abs(candle.low)]),
+    ...present.flatMap((candle) => [
+      Math.abs(candle.high),
+      Math.abs(candle.low),
+      ...(candle.threshold != null ? [Math.abs(candle.threshold)] : []),
+    ]),
   )
   const scale = Math.max(0, zeroY - pad) / peak
   const y = (value: number) => zeroY - value * scale
@@ -139,7 +147,28 @@ export function sentimentCandleGeometry(
       up: candle.close >= candle.open,
     })
   })
-  return { geoms, zeroY }
+  return { geoms, zeroY, thresholdPoints: sentimentThresholdPoints(candles, step, y) }
+}
+
+/** Schodovitá linie prahu korekce (#565) přes sloupce-dny: každý den má vlastní
+úroveň (20denní maximum se posouvá), takže „H → V" segmenty jako u Evo OI —
+šikmá spojnice by tvrdila průběh, který neexistuje. Dny bez prahu linii přeruší
+(prázdný řetězec = žádná linie). */
+export function sentimentThresholdPoints(
+  candles: (SentimentCandle | null)[],
+  step: number,
+  toY: (value: number) => number,
+): string {
+  const parts: string[] = []
+  candles.forEach((candle, index) => {
+    const value = candle?.threshold
+    if (value == null) return
+    const yValue = toY(value).toFixed(1)
+    parts.push(
+      `${(index * step).toFixed(1)},${yValue} ${((index + 1) * step).toFixed(1)},${yValue}`,
+    )
+  })
+  return parts.join(' ')
 }
 
 // ── Evo OI (#573) ──────────────────────────────────────────────────

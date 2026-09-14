@@ -340,6 +340,11 @@ export interface SentimentDailyRow {
   high: number
   low: number
   close: number
+  /** σ(100 seancí) škály #640; null = málo historie. */
+  sigma?: number | null
+  close_z?: number | null
+  /** Práh korekce v σ (#565): 20denní maximum close_z − D; jen s `symbol` v dotazu. */
+  correction_level_z?: number | null
 }
 
 export async function fetchSentimentDaily(
@@ -375,6 +380,110 @@ export interface SentimentStateInfo {
     depth: number
     length_days: number
   } | null
+  /** Korekční epizoda (#565, ADR-0037): open = probíhá, attempt = zahlazeno dnes,
+  negation = trvá bez návratu nad referenční úroveň, none = nic. */
+  episode_status?: EpisodeStatus
+  episode?: EpisodeInfo | null
+  last_episode?: EpisodeInfo | null
+  /** Aktuální práh korekce v σ (20denní maximum close_z − D); null bez škály. */
+  correction_threshold?: number | null
+  correction_threshold_d?: number
+  episode_horizon_h?: number
+  episode_params_version?: number
+}
+
+export type EpisodeStatus = 'open' | 'attempt' | 'negation' | 'none'
+
+export interface EpisodeInfo {
+  start_date: string
+  end_date: string | null
+  ref_level_z: number
+  depth_z: number
+  label: 'attempt' | 'negation' | null
+  length_days: number
+}
+
+/** Řádek `sentiment_episodes` (#565) — `/stats/episodes`. */
+export interface EpisodeRow extends EpisodeInfo {
+  id: number
+  symbol: string
+  params_version: number
+  series_variant: string
+}
+
+export async function fetchEpisodes(symbol?: string): Promise<EpisodeRow[]> {
+  const query = symbol ? `?symbol=${symbol}` : ''
+  const data = await getJson<{ episodes: EpisodeRow[] }>(`/stats/episodes${query}`, {
+    episodes: [],
+  })
+  return data.episodes ?? []
+}
+
+/** Pod tolik rozhodnutých epizod je klasifikace „předběžná" — první měření
+(14. 9. 2026) mělo 2–3 epizody per symbol, práh D 1 σ je placeholder, ne kalibrace. */
+export const EPISODE_PRELIMINARY_MIN = 20
+
+export const EPISODE_STATUS_LABELS: Record<EpisodeStatus, string> = {
+  open: 'KOREKCE',
+  attempt: 'POKUS',
+  negation: 'NEGACE',
+  none: '',
+}
+
+/** Text badge epizody v chipu; prázdný = nic nekreslit. */
+export function episodeBadge(state: SentimentStateInfo): string {
+  const status = state.episode_status ?? 'none'
+  const label = EPISODE_STATUS_LABELS[status]
+  if (!label) return ''
+  const episode = state.episode
+  return status === 'open' && episode ? `${label} ${episode.length_days} d` : label
+}
+
+/** Tooltip epizody — vzor ivRankTooltip: odrážky pod sebou, ne odstavec. */
+export function episodeTooltip(state: SentimentStateInfo, resolvedCount: number | null): string {
+  const d = state.correction_threshold_d ?? 1
+  const h = state.episode_horizon_h ?? 10
+  const parts: string[] = [
+    `Korekce sentimentu (#565): pokles denního close_z o ≥ ${d.toFixed(1)} σ pod 20denní maximum.`,
+    `Pokus = zahlazeno (zpět nad maximum) do ${h} obchodních dní; negace = korekce pokračuje.`,
+    '',
+  ]
+  const episode = state.episode
+  const status = state.episode_status ?? 'none'
+  if (episode && status === 'open') {
+    parts.push(
+      `• Probíhá od ${episode.start_date}: ${episode.length_days} d, hloubka ${episode.depth_z.toFixed(2)} σ (třída až po zahlazení nebo ${h}. dni)`,
+    )
+  } else if (episode && status === 'attempt') {
+    parts.push(
+      `• Pokus: zahlazeno ${episode.end_date ?? ''} za ${episode.length_days} d, hloubka ${episode.depth_z.toFixed(2)} σ`,
+    )
+  } else if (episode && status === 'negation') {
+    parts.push(
+      `• Negace od ${episode.start_date}: bez návratu nad ${episode.ref_level_z.toFixed(2)} σ, hloubka ${episode.depth_z.toFixed(2)} σ`,
+    )
+  } else {
+    parts.push('• Žádná epizoda neprobíhá')
+  }
+  if (state.correction_threshold != null) {
+    parts.push(
+      `• Práh dnes: ${state.correction_threshold.toFixed(2)} σ (20denní max − ${d.toFixed(1)} σ)`,
+    )
+  }
+  const last = state.last_episode
+  if (last && status !== 'attempt' && status !== 'negation') {
+    parts.push(
+      `• Poslední rozhodnutá: ${last.label === 'attempt' ? 'pokus' : 'negace'} ${last.start_date} → ${last.end_date ?? ''}, ${last.depth_z.toFixed(2)} σ`,
+    )
+  }
+  parts.push('')
+  const version = state.episode_params_version ?? 1
+  const sample = resolvedCount === null ? '' : ` (rozhodnutých epizod: ${resolvedCount})`
+  parts.push(
+    `Předběžné: parametry v${version} jsou placeholder z prvního měření, ne kalibrace${sample}. ` +
+      `Nálada, ne směr ceny — vztah k ceně měření nepotvrdilo.`,
+  )
+  return parts.join('\n')
 }
 
 export async function fetchSentimentState(symbol: string): Promise<SentimentStateInfo | null> {

@@ -164,3 +164,40 @@ def test_depth_z_ze_sigmy_dne_konce_vlny(tmp_path: Path) -> None:
             assert row.series_variant is None
     # Aspoň jedna vlna σ éry převod má (probíhající bere poslední známou σ)
     assert any(row.depth_z is not None for row in rows)
+
+
+def test_epizody_se_ukladaji_full_replace_a_jdou_do_payloadu(tmp_path: Path) -> None:
+    """#565: epizoda z drawdownu close_z ≥ 1 σ pod 20denním maximem; full-replace,
+    verze parametrů v řádku, epizodový stav v payloadu (probíhá → `open`)."""
+    from sqlalchemy import update
+
+    from gexlens_engine.storage.sentiment import sentiment_episodes
+
+    engine = make_db(tmp_path)
+    closes = [0.0] * 25 + [-4.0, -3.0]
+    seed_daily(engine, closes)
+    start = TODAY - dt.timedelta(days=len(closes))
+    with engine.begin() as conn:
+        for index, close in enumerate(closes):
+            conn.execute(
+                update(sentiment_daily)
+                .where(sentiment_daily.c.date == start + dt.timedelta(days=index))
+                .values(sigma=2.0, close_z=close / 2.0)
+            )
+    job = WavesJob(engine, symbol="ES")
+    payload, _ = job.run(NOW)
+    with engine.connect() as conn:
+        rows = conn.execute(select(sentiment_episodes)).fetchall()
+    assert len(rows) == 1
+    assert rows[0].start_date == start + dt.timedelta(days=25)
+    assert rows[0].end_date is None and rows[0].label is None
+    assert float(rows[0].depth_z) == pytest.approx(2.0)
+    assert rows[0].params_version == 1 and rows[0].series_variant == "zscore_100"
+    assert payload["episode_status"] == "open"
+    assert payload["episode"]["depth_z"] == pytest.approx(2.0)
+    assert payload["correction_threshold"] == pytest.approx(-1.0)
+    assert payload["correction_threshold_d"] == pytest.approx(1.0)
+    # Druhý běh: full-replace bez duplicit
+    job.run(NOW)
+    with engine.connect() as conn:
+        assert len(conn.execute(select(sentiment_episodes)).fetchall()) == 1

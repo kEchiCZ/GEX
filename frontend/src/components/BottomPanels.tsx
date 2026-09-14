@@ -797,20 +797,43 @@ function BottomPanelsBase({
     const height = heightOf('sentiment')
     const rangeDim = rangeDimFor(height)
     const candles = data.sentimentCandles
-    const { geoms, zeroY } = sentimentCandleGeometry(candles, step, height)
+    const { geoms, zeroY, thresholdPoints } = sentimentCandleGeometry(candles, step, height)
     const peak = Math.max(
       1e-9,
-      ...candles.flatMap((candle) => (candle ? [Math.abs(candle.high), Math.abs(candle.low)] : [])),
+      ...candles.flatMap((candle) =>
+        candle
+          ? [
+              Math.abs(candle.high),
+              Math.abs(candle.low),
+              ...(candle.threshold != null ? [Math.abs(candle.threshold)] : []),
+            ]
+          : [],
+      ),
     )
     const hovered = idx !== null ? candles[idx] : null
+    // Práh korekce (#565): popisek nese σ jednotky, osa je surová (éry, #640)
+    const lastThreshold = [...candles].reverse().find((candle) => candle?.threshold != null)
     addPanel(
       'sentiment',
       <section key="sentiment" className="bottom-panel" aria-label="Sentiment panel">
-        <span className="panel-title muted">Sentiment</span>
+        <span className="panel-title muted">
+          Sentiment
+          {lastThreshold?.threshold != null && (
+            <span
+              className="panel-subtitle"
+              data-testid="sentiment-threshold-label"
+              title="Práh korekce (#565, předběžné): 20denní maximum close_z − 1 σ. Pokles close pod linii = start korekční epizody; zahlazení do 10 obchodních dní = pokus, jinak negace."
+            >
+              {' '}
+              · práh korekce (−1 σ pod 20d max)
+            </span>
+          )}
+        </span>
         {hovered && (
           <PanelValue>
             O {hovered.open.toFixed(2)} · H {hovered.high.toFixed(2)} · L {hovered.low.toFixed(2)} ·
             C {hovered.close.toFixed(2)}
+            {hovered.threshold != null && ` · práh ${hovered.threshold.toFixed(2)}`}
           </PanelValue>
         )}
         {axisValue('sentiment', peak, true, height)}
@@ -831,6 +854,16 @@ function BottomPanelsBase({
           />
           <g transform={transform}>
             <g transform={yTransform('sentiment', height)}>
+              {thresholdPoints && (
+                <polyline
+                  points={thresholdPoints}
+                  fill="none"
+                  stroke="#e8c14b"
+                  strokeWidth={1}
+                  strokeDasharray="4 3"
+                  data-testid="sentiment-threshold"
+                />
+              )}
               {geoms.map((geom) => (
                 <g key={geom.index} data-part="sentiment-candle">
                   <line
