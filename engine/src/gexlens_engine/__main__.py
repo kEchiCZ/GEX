@@ -594,6 +594,7 @@ async def create_pipeline(
         | None
     ) = None,
     futures_cvd: FuturesCvdTracker | None = None,
+    bar_gap_fill: Callable[[str, dt.datetime, dt.datetime], Awaitable[int]] | None = None,
 ) -> InstrumentPipeline:
     """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
     # Provider (#613): svazek datových zdrojů; default = IBKR (jediný zapojený
@@ -652,13 +653,25 @@ async def create_pipeline(
             )
         )
 
+    # Poslední cena z tasty během fallbacku — minutový cyklus pipeline ji bere
+    # místo zamrzlého IBKR tickeru (#614): jinak by GEX i hlídač barů počítaly
+    # nad cenou z doby výpadku, zatímco UI už vidí živý spot z tasty
+    fallback_price: float | None = None
+
+    def spot_override() -> float | None:
+        if spot_fallback is None or spot_fallback.active_source != "tasty":
+            return None
+        return fallback_price
+
     def on_spot_tick(ticker: Ticker) -> None:
+        nonlocal fallback_price
         if stopped:
             return
         price = ticker.last if ticker.last == ticker.last else ticker.marketPrice()
         if spot_fallback is not None:
             decision = spot_fallback.on_ibkr(price, loop.time())
             if decision.switched:
+                fallback_price = None
                 logger.info("Spot %s: zpět na IBKR (feed se zotavil, #614)", symbol)
             if decision.price is None:
                 return  # během fallbacku se IBKR ticky nepublikují
@@ -674,11 +687,14 @@ async def create_pipeline(
         Bez vlastní smyčky by se výpadek nepoznal: `on_spot_tick` se při
         mlčícím feedu prostě nevolá, takže rozhodnutí musí přijít odjinud.
         """
+        nonlocal fallback_price
         while not stopped and spot_fallback is not None and tasty_spot is not None:
             await asyncio.sleep(SPOT_FALLBACK_POLL_S)
             try:
                 price, fresh = tasty_spot(symbol)
                 decision = spot_fallback.resolve(loop.time(), tasty_price=price, tasty_fresh=fresh)
+                if decision.source == "tasty" and decision.price is not None:
+                    fallback_price = decision.price
                 if decision.switched:
                     logger.warning(
                         "Spot %s: IBKR mlčí, přebírá tastytrade (#614) — "
@@ -894,6 +910,12 @@ async def create_pipeline(
         on_stop=on_stop,
         spot=spot,
         spot_source=(lambda: spot_fallback.active_source if spot_fallback else "ibkr"),
+        spot_override=spot_override,
+        bar_gap_fill=(
+            (lambda since, until: bar_gap_fill(symbol, since, until))
+            if bar_gap_fill is not None
+            else None
+        ),
         archive_contracts=archive_contracts,
         next_runtime=next_runtime,
         next_info=next_info,
@@ -1259,37 +1281,62 @@ async def main() -> None:
     # Doplněk k IBKR historical, ne náhrada (ADR-0025).
     candle_backfilled: set[str] = set()
 
+    async def _fill_bar_gaps(
+        symbol: str, streamer_symbol: str, since: dt.datetime, until: dt.datetime
+    ) -> int:
+        """Doplní z dxFeed Candle minuty [since, until), které v particích chybí (#617).
+
+        Doplněk k IBKR, ne náhrada (ADR-0025): měřené minuty se nepřepisují
+        (`bar_source_rank`), doplněné nesou `source` rekonstrukce a UI je odliší.
+        Vlastní krátké spojení mimo hlavní datovou cestu — sběr nesmí ohrozit.
+        Vrací počet zapsaných barů.
+        """
+        if tasty_session is None:
+            return 0  # bez tasty větve není z čeho rekonstruovat
+        # Seance sahá do partice D−1 (od 22:00 UTC) — „co už máme" se musí
+        # číst ze všech partic okna, jinak se večerní blok doplní podruhé
+        # a skončí v partici D vedle měřených barů v D−1 (#1002)
+        existing = await asyncio.to_thread(
+            writer.bar_minutes_for_days, symbol, partition_days(since, until)
+        )
+        bars = await backfill_gaps(
+            CandleFetcher(tasty_session.quote_token),
+            streamer_symbol=streamer_symbol,
+            existing=existing,
+            since=since,
+            until=until,
+        )
+        if bars:
+            await asyncio.to_thread(writer.write_bars_by_day, symbol, bars)
+        return len(bars)
+
     async def _candle_gap_backfill(symbol: str, streamer_symbol: str) -> None:
         """Doplní minuty, které IBKR historical nedodal (#617).
 
-        Běží JEDNOU po startu, mimo hlavní datovou cestu a s vlastním krátkým
-        spojením — sběr nesmí ohrozit. Selhání se jen zaloguje: díra v barech
+        Běží JEDNOU po startu. Selhání se jen zaloguje: díra v barech
         je horší stav, ale pořád lepší než shozená pipeline.
         """
-        if tasty_session is None:
-            return  # bez tasty větve není z čeho rekonstruovat
         try:
             now = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
             day = trading_session_date(now)
             session_start, _ = session_bounds(day)
             since = max(session_start, now - dt.timedelta(hours=24))
-            # Seance sahá do partice D−1 (od 22:00 UTC) — „co už máme" se musí
-            # číst ze všech partic okna, jinak se večerní blok doplní podruhé
-            # a skončí v partici D vedle měřených barů v D−1 (#1002)
-            existing = await asyncio.to_thread(
-                writer.bar_minutes_for_days, symbol, partition_days(since, now)
-            )
-            bars = await backfill_gaps(
-                CandleFetcher(tasty_session.quote_token),
-                streamer_symbol=streamer_symbol,
-                existing=existing,
-                since=since,
-                until=now,
-            )
-            if bars:
-                await asyncio.to_thread(writer.write_bars_by_day, symbol, bars)
+            await _fill_bar_gaps(symbol, streamer_symbol, since, now)
         except Exception:
             logger.exception("Rekonstrukce barů %s selhala — díra zůstává", symbol)
+
+    async def _live_bar_gap_fill(symbol: str, since: dt.datetime, until: dt.datetime) -> int:
+        """Živý fallback barů při mlčícím IBKR (#614 doplněk): svíčky z dxFeed.
+
+        Volá pipeline z hlídače stall (`_watch_bars`), dokud real-time bary
+        z TWS nechodí — typicky souběh s mobilem (10197) nebo Error 1100, kdy
+        IBKR mlčí celý (spot i bary) a spot už dávno jede z tasty. Bez tohoto
+        by graf během výpadku stál, i když druhý zdroj data má.
+        """
+        streamer_symbol = shadow_front_future.get(symbol)
+        if streamer_symbol is None:
+            return 0
+        return await _fill_bar_gaps(symbol, streamer_symbol, since, until)
 
     # CVD podkladu (#829): jedna instance pro celý engine, runtimes z ní čtou
     # minutu. Bez tasty větve zůstane bez registrací → řada je prostě NULL.
@@ -1322,6 +1369,8 @@ async def main() -> None:
     crosscheck: CrossCheckDetector | None = None
     publish_crosscheck: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None
     tasty_session: TastySession | None = None
+    # Živý fallback barů (#614 doplněk): funkce sama bez tasty větve vrací 0
+    bar_gap_fill: Callable[[str, dt.datetime, dt.datetime], Awaitable[int]] = _live_bar_gap_fill
     if settings.tasty_enabled and settings.tasty_client_secret and settings.tasty_refresh_token:
         tasty_session = TastySession(
             TastyCredentials(
@@ -2337,6 +2386,7 @@ async def main() -> None:
                     oi_fallback=tasty_oi_lookup,
                     chain_fallback_source=chain_quotes_lookup,
                     spot_fallback_source=tasty_spot_lookup,
+                    bar_gap_fill=bar_gap_fill,
                     futures_cvd=futures_cvd,
                 )
                 setup_cooldown.succeeded(symbol)
