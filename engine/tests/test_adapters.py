@@ -82,3 +82,10 @@ async def test_kvalifikace_kontraktu_ma_strop(monkeypatch: Any) -> None:
     streamer = IbQuoteStreamer(cast(IB, HangingIB()))
     spec = OptionContractSpec("ES", "FOP", "20260914", 7600.0, "C", "CME", "E2A", "50")
     assert await streamer._contract(spec) is None
+    # Po timeoutu farma platí za mrtvou: další kontrakt selže hned, bez čekání
+    import time
+
+    other = OptionContractSpec("ES", "FOP", "20260914", 7605.0, "P", "CME", "E2A", "50")
+    started = time.monotonic()
+    assert await streamer._contract(other) is None
+    assert time.monotonic() - started < 0.04
