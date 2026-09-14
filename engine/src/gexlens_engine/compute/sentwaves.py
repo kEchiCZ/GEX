@@ -24,6 +24,7 @@ intradenní hodnota dneška dává jen „unconfirmed" indikaci (SPEC 5.6).
 """
 
 import datetime as dt
+from collections.abc import Callable
 from dataclasses import dataclass
 
 MA_SHORT = 5
@@ -218,4 +219,270 @@ def assess_state(points: list[DailyClose]) -> StateAssessment:
         wave=ongoing,
         threshold=threshold,
         polarity=trend_polarity(ma5, ma10),
+    )
+
+
+# ── Korekční epizody (#565, ADR-0037) ──────────────────────────────────────
+#
+# Vrstva VEDLE vln a stavu, ne jejich náhrada: vlna trvá Ø 1,5 dne (šum),
+# epizoda je korekce nálady měřená jako pokles pod klouzavé maximum v σ.
+# Parametry jsou PLACEHOLDER z prvního měření (data/reports/
+# sentiment-episodes-2026-09-14.md): σ(100) byla do ~11/2026 kontaminovaná
+# backfillem, takže D z gridu {0,5…3} nic nerozlišovalo — 1 σ nic nekazí,
+# ale není kalibrace. Změna = nová `EPISODE_PARAMS_VERSION` + full-replace
+# přepočet (WavesJob), historie se nemíchá.
+
+EPISODE_PARAMS_VERSION = 1
+# Práh D (σ): pokles close_z pod 20denní maximum, který epizodu zakládá
+EPISODE_THRESHOLD_D = 1.0
+# Horizont H (obchodní dny): do kdy se korekce musí zahladit, aby byla „pokus"
+EPISODE_HORIZON_H = 10
+# Okno klouzavého maxima close_z (řádky `sentiment_daily`, tj. kalendářní dny)
+EPISODE_MAX_WINDOW = 20
+EPISODE_SERIES_VARIANT = "zscore_100"
+
+EPISODE_ATTEMPT = "attempt"
+EPISODE_NEGATION = "negation"
+# Probíhající epizoda: třída je známá až dnem zahlazení nebo horizontem
+EPISODE_OPEN = "open"
+EPISODE_NONE = "none"
+
+
+@dataclass(frozen=True)
+class DailyZ:
+    """Denní close SentIndexu se škálou #640 (řádek `sentiment_daily` s close_z)."""
+
+    date: dt.date
+    close: float
+    z: float | None
+
+
+@dataclass(frozen=True)
+class Episode:
+    """Korekční epizoda (#565): `end` None = probíhá, `label` None = nerozhodnuto."""
+
+    start: dt.date
+    end: dt.date | None
+    # Referenční úroveň = 20denní maximum close_z v den začátku (σ)
+    ref_level: float
+    # Největší pokles pod referenční úroveň během epizody (σ)
+    depth_z: float
+    label: str | None  # EPISODE_ATTEMPT / EPISODE_NEGATION / None
+    # Obchodní dny od začátku do rozhodnutí (u probíhající: dosud)
+    length_days: int
+
+
+@dataclass(frozen=True)
+class EpisodeAssessment:
+    """Epizodová část stavu k poslednímu dni řady (pro API/WS)."""
+
+    # Třída aktuální epizody: attempt / negation / open / none
+    status: str
+    episode: Episode | None
+    # Poslední rozhodnutá epizoda (attempt/negation) — pro tooltip a Stats
+    last_resolved: Episode | None
+    # Aktuální práh v σ: 20denní maximum close_z − D; None bez close_z
+    correction_threshold: float | None
+    threshold_d: float = EPISODE_THRESHOLD_D
+    horizon_h: int = EPISODE_HORIZON_H
+    params_version: int = EPISODE_PARAMS_VERSION
+
+
+def is_weekday(day: dt.date) -> bool:
+    """Výchozí obchodní den = pondělí–pátek (svátky se NEgatují; rozdíl proti
+    skutečným seancím podkladu je nejvýš den kolem svátku, viz ADR-0037)."""
+    return day.weekday() < 5
+
+
+def rolling_max_z(points: list[DailyZ], window: int = EPISODE_MAX_WINDOW) -> list[float | None]:
+    """Klouzavé maximum close_z posledních `window` řádků včetně aktuálního.
+
+    None, dokud v okně chybí byť jediná hodnota (začátek řady bez σ) —
+    částečné okno by dávalo falešně nízké maximum a tím falešný start.
+    """
+    values = [point.z for point in points]
+    out: list[float | None] = []
+    for index, value in enumerate(values):
+        chunk = values[max(0, index - window + 1) : index + 1]
+        if value is None or any(v is None for v in chunk):
+            out.append(None)
+        else:
+            out.append(max(v for v in chunk if v is not None))
+    return out
+
+
+def correction_levels(
+    points: list[DailyZ],
+    *,
+    threshold_d: float = EPISODE_THRESHOLD_D,
+    window: int = EPISODE_MAX_WINDOW,
+) -> list[float | None]:
+    """Práh korekce per den v σ: klouzavé maximum − D (linie v UI, #565 bod 9)."""
+    return [None if peak is None else peak - threshold_d for peak in rolling_max_z(points, window)]
+
+
+def detect_episodes(
+    points: list[DailyZ],
+    *,
+    threshold_d: float = EPISODE_THRESHOLD_D,
+    horizon_h: int = EPISODE_HORIZON_H,
+    window: int = EPISODE_MAX_WINDOW,
+    is_trading_day: Callable[[dt.date], bool] = is_weekday,
+) -> list[Episode]:
+    """Epizody nad chronologickou řadou (pinnutá definice, ADR-0037).
+
+    * Start = den, kdy close_z klesne pod klouzavé maximum o ≥ D σ. Další
+      start až po „odjištění" (drawdown < D) — jinak by negace zakládala
+      epizodu každý den. Epizody se nepřekrývají: nový start až po dni
+      rozhodnutí předchozí.
+    * Zahlazení (pokus) = close_z ZPĚT NAD referenční úrovní (maximum v den
+      startu), hodnoceno od dne po startu. Varianta „nad úroveň startu nebo nad
+      MA10" byla při měření degenerovaná (0 negací) — nepoužívá se.
+    * Negace = bez zahlazení do H obchodních dní; rozhodnutí = H-tý obchodní
+      den po startu. Řada s méně dny = epizoda probíhá (`end` None).
+    """
+    maxima = rolling_max_z(points, window)
+    episodes: list[Episode] = []
+    armed = True
+    index = 0
+    while index < len(points):
+        point = points[index]
+        peak = maxima[index]
+        if point.z is None or peak is None:
+            index += 1
+            continue
+        drawdown = peak - point.z
+        if drawdown < threshold_d:
+            armed = True
+            index += 1
+            continue
+        if not armed:
+            index += 1
+            continue
+        episode, next_index = _resolve_episode(
+            points, index, peak, horizon_h=horizon_h, is_trading_day=is_trading_day
+        )
+        episodes.append(episode)
+        # Den rozhodnutí se projde znovu jen kvůli odjištění (zahlazení = nové
+        # maximum, drawdown 0) — nový start je v něm vyloučený (armed=False)
+        armed = False
+        index = next_index
+    return episodes
+
+
+def _resolve_episode(
+    points: list[DailyZ],
+    start_index: int,
+    ref_level: float,
+    *,
+    horizon_h: int,
+    is_trading_day: Callable[[dt.date], bool],
+) -> tuple[Episode, int]:
+    """(epizoda, index dne rozhodnutí; u probíhající délka řady)."""
+    start = points[start_index]
+    start_z = start.z if start.z is not None else ref_level
+    depth = max(0.0, ref_level - start_z)
+    trading_days = 0
+    for index in range(start_index + 1, len(points)):
+        point = points[index]
+        if is_trading_day(point.date):
+            trading_days += 1
+        if point.z is not None:
+            depth = max(depth, ref_level - point.z)
+            if point.z > ref_level:
+                return (
+                    Episode(
+                        start=start.date,
+                        end=point.date,
+                        ref_level=ref_level,
+                        depth_z=depth,
+                        label=EPISODE_ATTEMPT,
+                        length_days=trading_days,
+                    ),
+                    index,
+                )
+        if trading_days >= horizon_h:
+            return (
+                Episode(
+                    start=start.date,
+                    end=point.date,
+                    ref_level=ref_level,
+                    depth_z=depth,
+                    label=EPISODE_NEGATION,
+                    length_days=trading_days,
+                ),
+                index,
+            )
+    return (
+        Episode(
+            start=start.date,
+            end=None,
+            ref_level=ref_level,
+            depth_z=depth,
+            label=None,
+            length_days=trading_days,
+        ),
+        len(points),
+    )
+
+
+def assess_episode(
+    points: list[DailyZ],
+    *,
+    threshold_d: float = EPISODE_THRESHOLD_D,
+    horizon_h: int = EPISODE_HORIZON_H,
+    window: int = EPISODE_MAX_WINDOW,
+    is_trading_day: Callable[[dt.date], bool] = is_weekday,
+) -> EpisodeAssessment:
+    """Epizodový stav k poslednímu dni řady.
+
+    `status`: `open` = epizoda probíhá; `negation` = poslední epizoda skončila
+    negací a close_z se od té doby nevrátil nad její referenční úroveň
+    (korekce trvá); `attempt` = zahlazeno v poslední den řady; jinak `none`.
+    Pokus se tedy hlásí jen v den zahlazení — poté je korekce pryč a stav
+    nemá co tvrdit; historie zůstává v `last_resolved` a tabulce epizod.
+    """
+    episodes = detect_episodes(
+        points,
+        threshold_d=threshold_d,
+        horizon_h=horizon_h,
+        window=window,
+        is_trading_day=is_trading_day,
+    )
+    levels = correction_levels(points, threshold_d=threshold_d, window=window)
+    threshold = levels[-1] if levels else None
+    resolved = [episode for episode in episodes if episode.label is not None]
+    last_resolved = resolved[-1] if resolved else None
+    if not episodes:
+        return EpisodeAssessment(
+            status=EPISODE_NONE,
+            episode=None,
+            last_resolved=None,
+            correction_threshold=threshold,
+            threshold_d=threshold_d,
+            horizon_h=horizon_h,
+        )
+    last = episodes[-1]
+    last_date = points[-1].date
+    status = EPISODE_NONE
+    current: Episode | None = None
+    if last.end is None:
+        status, current = EPISODE_OPEN, last
+    elif last.label == EPISODE_ATTEMPT and last.end == last_date:
+        status, current = EPISODE_ATTEMPT, last
+    elif last.label == EPISODE_NEGATION:
+        recovered = any(
+            point.z is not None and point.z > last.ref_level
+            for point in points
+            if last.end is not None and point.date > last.end
+        )
+        if not recovered:
+            status, current = EPISODE_NEGATION, last
+    return EpisodeAssessment(
+        status=status,
+        episode=current,
+        last_resolved=last_resolved,
+        correction_threshold=threshold,
+        threshold_d=threshold_d,
+        horizon_h=horizon_h,
     )

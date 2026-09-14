@@ -23,7 +23,13 @@ from sqlalchemy import Table, case, desc, func, insert, literal, select
 from sqlalchemy import update as sql_update
 from sqlalchemy.engine import Engine
 
-from gexlens_engine.compute.sentwaves import DailyClose, assess_state
+from gexlens_engine.compute.sentwaves import (
+    DailyClose,
+    DailyZ,
+    assess_episode,
+    assess_state,
+    correction_levels,
+)
 from gexlens_engine.storage.sentiment import (
     NEWS_CATEGORIES,
     REACTION_ALL_WINDOWS,
@@ -39,6 +45,7 @@ from gexlens_engine.storage.sentiment import (
     reaction_ret,
     review_queue,
     sentiment_daily,
+    sentiment_episodes,
     sentiment_waves,
     signal_outcomes,
     signals,
@@ -570,7 +577,13 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         from_date: dt.date | None = Query(None, alias="from"),
         to_date: dt.date | None = Query(None, alias="to"),
     ) -> dict[str, object]:
-        """OHLC svíčky sentimentu (SPEC 7.1) — zdroj pro Daily pohled i vlny."""
+        """OHLC svíčky sentimentu (SPEC 7.1) — zdroj pro Daily pohled i vlny.
+
+        Se `symbol` nese každý řádek i `correction_level_z` (#565): práh korekce
+        v σ = 20denní maximum close_z − D, spočtený sdílenou funkcí nad CELOU
+        řadou symbolu (okno potřebuje historii před `from`), ať UI nekreslí
+        vlastní výklad prahu.
+        """
         stmt = select(sentiment_daily).order_by(sentiment_daily.c.date)
         if symbol is not None:
             stmt = stmt.where(sentiment_daily.c.symbol == symbol)
@@ -578,7 +591,29 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
             stmt = stmt.where(sentiment_daily.c.date >= from_date)
         if to_date is not None:
             stmt = stmt.where(sentiment_daily.c.date <= to_date)
-        return {"daily": _rows(engine_factory(), stmt)}
+        rows = _rows(engine_factory(), stmt)
+        if symbol is not None and rows:
+            z_stmt = (
+                select(sentiment_daily.c.date, sentiment_daily.c.close, sentiment_daily.c.close_z)
+                .where(sentiment_daily.c.symbol == symbol)
+                .order_by(sentiment_daily.c.date)
+            )
+            with engine_factory().connect() as conn:
+                z_rows = conn.execute(z_stmt).fetchall()
+            points = [
+                DailyZ(
+                    date=r.date,
+                    close=float(r.close),
+                    z=float(r.close_z) if r.close_z is not None else None,
+                )
+                for r in z_rows
+            ]
+            levels = dict(
+                zip((p.date.isoformat() for p in points), correction_levels(points), strict=True)
+            )
+            for row in rows:
+                row["correction_level_z"] = levels.get(str(row.get("date")))
+        return {"daily": rows}
 
     @router.get("/sentiment/topics")
     def sentiment_topics(active: int = Query(0)) -> dict[str, object]:
@@ -722,9 +757,16 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         stojí jen na UZAVŘENÝCH dnech; dnešní průběžný close dává pouze
         „unconfirmed" indikaci.
         """
+        from gexlens_news.waves_job import episode_state_payload
+
         engine = engine_factory()
         stmt = (
-            select(sentiment_daily.c.date, sentiment_daily.c.close, sentiment_daily.c.sigma)
+            select(
+                sentiment_daily.c.date,
+                sentiment_daily.c.close,
+                sentiment_daily.c.sigma,
+                sentiment_daily.c.close_z,
+            )
             .where(sentiment_daily.c.symbol == symbol)
             .order_by(sentiment_daily.c.date)
         )
@@ -734,6 +776,18 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
         completed = [
             DailyClose(date=row.date, close=float(row.close)) for row in rows if row.date < today
         ]
+        # Korekční epizody (#565) — jen uzavřené dny, stejně jako vlny
+        episode_assessment = assess_episode(
+            [
+                DailyZ(
+                    date=row.date,
+                    close=float(row.close),
+                    z=float(row.close_z) if row.close_z is not None else None,
+                )
+                for row in rows
+                if row.date < today
+            ]
+        )
         provisional = next(
             (
                 DailyClose(date=row.date, close=float(row.close))
@@ -771,6 +825,7 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
             }
             if wave is not None
             else None,
+            **episode_state_payload(episode_assessment),
         }
 
     @router.get("/sentiment/crowd")
@@ -990,6 +1045,20 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
     def stats_waves() -> dict[str, object]:
         """Statistika vln — N8 (#297)."""
         return {"waves": _empty_table(engine_factory(), sentiment_waves)}
+
+    @router.get("/stats/episodes")
+    def stats_episodes(symbol: str | None = None) -> dict[str, object]:
+        """Korekční epizody SentIndexu (#565, ADR-0037) — řádky `sentiment_episodes`.
+
+        Plní WavesJob full-replace; `params_version` v řádku říká, pod jakými
+        D/H epizoda vznikla (v1 = placeholder z prvního měření, ne kalibrace).
+        """
+        stmt = select(sentiment_episodes).order_by(
+            sentiment_episodes.c.symbol, sentiment_episodes.c.start_date
+        )
+        if symbol is not None:
+            stmt = stmt.where(sentiment_episodes.c.symbol == symbol)
+        return {"episodes": _rows(engine_factory(), stmt)}
 
     @router.get("/stats/trackrecord")
     def stats_trackrecord(strategy: str | None = None) -> dict[str, object]:

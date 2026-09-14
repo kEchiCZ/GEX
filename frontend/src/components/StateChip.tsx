@@ -3,9 +3,18 @@
 Zelený RISK ON / červený RISK OFF / šedý NEUTRAL; tečka při nepotvrzené
 intradenní změně. Klik otevírá popover se sparkline dnešního SentIndexu,
 MA5/MA10 a aktivními topicy — data popoveru se stahují až při otevření.
+Vedle stavu badge korekční epizody (#565): KOREKCE n d / POKUS / NEGACE —
+předběžné (parametry v1 = placeholder z prvního měření), tooltip to říká.
 */
 import { useEffect, useState } from 'react'
-import { categoryLabel, fetchSentimentSeries, fetchTopics } from '../api/news'
+import {
+  categoryLabel,
+  episodeBadge,
+  episodeTooltip,
+  fetchEpisodes,
+  fetchSentimentSeries,
+  fetchTopics,
+} from '../api/news'
 import type { SentimentPoint, SentimentStateInfo, TopicRow } from '../api/news'
 import { useAppState } from '../state/AppState'
 import { useSentimentState } from '../hooks/useSentimentState'
@@ -60,16 +69,19 @@ export function StateChip() {
   const [open, setOpen] = useState(false)
   const [series, setSeries] = useState<SentimentPoint[]>([])
   const [topics, setTopics] = useState<TopicRow[]>([])
+  // Počet rozhodnutých epizod (tooltip „předběžné (n)") — až při otevření
+  const [resolvedEpisodes, setResolvedEpisodes] = useState<number | null>(null)
 
   // Data popoveru až při otevření — chip sám žádný fetch navíc nepotřebuje
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    void Promise.all([fetchSentimentSeries(symbol), fetchTopics(true)]).then(
-      ([points, topicRows]) => {
+    void Promise.all([fetchSentimentSeries(symbol), fetchTopics(true), fetchEpisodes(symbol)]).then(
+      ([points, topicRows, episodeRows]) => {
         if (cancelled) return
         setSeries(points)
         setTopics(topicRows)
+        setResolvedEpisodes(episodeRows.filter((row) => row.label !== null).length)
       },
     )
     return () => {
@@ -79,6 +91,8 @@ export function StateChip() {
 
   if (!state) return null
   const format = (value: number | null) => (value === null ? '—' : value.toFixed(2))
+  const badge = episodeBadge(state)
+  const episodeStatus = state.episode_status ?? 'none'
   return (
     <div className="state-chip-wrap">
       <button
@@ -103,6 +117,15 @@ export function StateChip() {
         )}
         {state.unconfirmed && <span className="state-dot">●</span>}
       </button>
+      {badge && (
+        <span
+          className={`state-episode state-episode-${episodeStatus}`}
+          data-testid="state-episode"
+          title={episodeTooltip(state, resolvedEpisodes)}
+        >
+          {badge}
+        </span>
+      )}
       {open && (
         <div className="state-popover" role="dialog" aria-label="Detail stavu sentimentu">
           <Sparkline series={series} sigma={state.sigma} />
@@ -121,7 +144,21 @@ export function StateChip() {
             <dd>{format(state.ma10)}</dd>
             <dt>Práh</dt>
             <dd>{format(state.threshold)}</dd>
+            <dt title={episodeTooltip(state, resolvedEpisodes)}>Korekce</dt>
+            <dd title={episodeTooltip(state, resolvedEpisodes)} data-testid="state-episode-row">
+              {state.correction_threshold != null
+                ? `práh ${state.correction_threshold.toFixed(2)} σ`
+                : 'práh —'}
+              {state.episode && episodeStatus !== 'none'
+                ? ` · ${badge.toLowerCase()} ${state.episode.depth_z.toFixed(2)} σ`
+                : ' · žádná'}
+            </dd>
           </dl>
+          <p className="muted state-sigma-note">
+            korekce: předběžné (v{state.episode_params_version ?? 1}, placeholder D{' '}
+            {(state.correction_threshold_d ?? 1).toFixed(1)} σ / H {state.episode_horizon_h ?? 10}{' '}
+            d)
+          </p>
           {topics.length > 0 && (
             <div className="state-topics">
               {topics.map((topic) => (

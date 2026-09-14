@@ -6,6 +6,7 @@ tabulka má nízké stovky řádků).
 */
 import { useEffect, useMemo, useState } from 'react'
 import {
+  fetchEpisodes,
   fetchNewsStats,
   fetchSignals,
   fetchSourceLatency,
@@ -14,6 +15,7 @@ import {
 } from '../api/news'
 import { categoryLabel, GATE_MIN_SAMPLES, GATE_WILSON_LB } from '../api/news'
 import type {
+  EpisodeRow,
   ModelStatsRow,
   SignalRow,
   SourceLatencyRow,
@@ -45,6 +47,7 @@ import {
   signalHitRate,
 } from '../stats/trackrecord'
 import { currentWave, depthReading, histogram, waveDirectionStats } from '../stats/waves'
+import { episodeLabelText, episodeStats, recentEpisodes } from '../stats/episodes'
 import { NewsVolSection } from './NewsVolSection'
 import { useAppState } from '../state/AppState'
 import { JournalStats } from './JournalStats'
@@ -494,6 +497,8 @@ function TrackRecordSection({
 export function StatsView() {
   const { symbol, riskAccountUsd, riskPct } = useAppState()
   const [waves, setWaves] = useState<WaveRow[]>([])
+  // Korekční epizody (#565) — per symbol, plní WavesJob
+  const [episodes, setEpisodes] = useState<EpisodeRow[]>([])
   const [stats, setStats] = useState<ModelStatsRow[]>([])
   const [retro, setRetro] = useState<RetroPassState | null>(null)
   const [track, setTrack] = useState<TrackRecordRow[]>([])
@@ -545,14 +550,18 @@ export function StatsView() {
     }
   }, [])
 
-  // Setupy závisí na symbolu — vlastní efekt, aby přepnutí symbolu refetchlo tabulku (#500)
+  // Setupy a epizody (#565) závisí na symbolu — vlastní efekt, aby přepnutí
+  // symbolu refetchlo tabulky (#500)
   useEffect(() => {
     let cancelled = false
     const load = () => {
-      void fetchSetups(symbol).then((setupRows) => {
-        if (cancelled) return
-        setSetups(setupRows)
-      })
+      void Promise.all([fetchSetups(symbol), fetchEpisodes(symbol)]).then(
+        ([setupRows, episodeRows]) => {
+          if (cancelled) return
+          setSetups(setupRows)
+          setEpisodes(episodeRows)
+        },
+      )
     }
     load()
     const timer = window.setInterval(load, REFRESH_MS)
@@ -591,6 +600,8 @@ export function StatsView() {
 
   const symbolWaves = useMemo(() => waves.filter((wave) => wave.symbol === symbol), [waves, symbol])
   const active = currentWave(symbolWaves, symbol)
+  const episodeSummary = useMemo(() => episodeStats(episodes), [episodes])
+  const lastEpisodes = useMemo(() => recentEpisodes(episodes, 10), [episodes])
   // Adaptivní práh potvrzení korekce (5.6) = průměrná hloubka RiskOff vln
   const riskOffStats = waveDirectionStats(symbolWaves, 'RiskOff')
 
@@ -675,6 +686,70 @@ export function StatsView() {
             )
           })}
         </div>
+      </section>
+
+      {/* Korekční epizody SentIndexu (#565, ADR-0037) — vrstva vedle vln */}
+      <section className="stats-section" aria-label="Korekční epizody">
+        <h2>Korekční epizody sentimentu — {symbol}</h2>
+        <p className="muted">
+          Epizoda = pokles denního close_z pod 20denní maximum o ≥ 1 σ; <b>pokus</b> = zahlazeno
+          (zpět nad maximum) do 10 obchodních dní, <b>negace</b> = korekce pokračuje.{' '}
+          {episodeSummary.preliminary && (
+            <span className="tendency-uncalibrated" data-testid="episodes-preliminary">
+              předběžné ({episodeSummary.resolved} rozhodnutých, kalibrace od 20; parametry v
+              {episodeSummary.paramsVersion ?? 1} = placeholder z měření 14. 9. 2026)
+            </span>
+          )}
+        </p>
+        {episodes.length === 0 ? (
+          <p className="muted">Zatím žádná epizoda (řada potřebuje σ škálu a 20 dní historie).</p>
+        ) : (
+          <>
+            <div className="stats-grid">
+              {(['attempts', 'negations'] as const).map((key) => {
+                const block = episodeSummary[key]
+                const color =
+                  key === 'attempts' ? DIRECTION_COLORS.RiskOn : DIRECTION_COLORS.RiskOff
+                return (
+                  <div key={key} className="stats-card">
+                    <h3 style={{ color }}>{key === 'attempts' ? 'Pokusy' : 'Negace'}</h3>
+                    <p className="muted">
+                      {block.count} epizod · hloubka Ø {block.meanDepth.toFixed(2)} σ · délka Ø{' '}
+                      {block.meanLength.toFixed(1)} d
+                    </p>
+                  </div>
+                )
+              })}
+            </div>
+            {episodeSummary.open > 0 && (
+              <p className="muted">Probíhá: {episodeSummary.open} (třída až po rozhodnutí).</p>
+            )}
+            <table className="stats-table" data-testid="episodes-table">
+              <thead>
+                <tr>
+                  <th>Start</th>
+                  <th>Rozhodnutí</th>
+                  <th>Třída</th>
+                  <th>Hloubka σ</th>
+                  <th>Dní</th>
+                  <th>Ref. σ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lastEpisodes.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.start_date}</td>
+                    <td>{row.end_date ?? '—'}</td>
+                    <td>{episodeLabelText(row.label)}</td>
+                    <td>{row.depth_z.toFixed(2)}</td>
+                    <td>{row.length_days}</td>
+                    <td>{row.ref_level_z.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
       </section>
 
       {/* Index volatility zpráv (#567): velikost reakcí — směr říká SentIndex */}

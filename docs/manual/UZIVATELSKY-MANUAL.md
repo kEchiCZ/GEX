@@ -773,6 +773,33 @@ oddělený index, vlny i stav (chip se přepíná se zobrazeným instrumentem;
 tatáž zpráva hýbe každým podkladem jinak — technologická zpráva pohne NQ
 víc než ES). Karty na Dashboardu ukazují stav obou vedle sebe.
 
+### Korekce nálady — pokus vs. negace (v1.17, #565)
+
+Vedle chipu stavu se objeví **badge KOREKCE n d / POKUS / NEGACE**, když
+nálada spadne. Vlna RISK OFF trvá průměrně den a půl, takže sama o sobě
+korekci neměří — badge sleduje **epizodu**: denní close SentIndexu v σ
+(stejná škála jako sparkline) klesne o ≥ 1 σ pod své **20denní maximum**.
+Pak se čeká, co z toho bude:
+
+- **KOREKCE n d** — epizoda probíhá n-tý obchodní den, výsledek ještě není
+  znám (tooltip nese hloubku v σ a dnešní práh).
+- **POKUS** — index se vrátil nad maximum, ze kterého spadl, do 10 obchodních
+  dní; korekce se „zahladila". Badge svítí jen v den zahlazení.
+- **NEGACE** — do 10 dní se nevrátil; korekce pokračuje a badge drží, dokud
+  se index nad původní maximum nedostane.
+
+Ve spodním panelu **Sentiment** v Daily pohledu je **čárkovaná linie prahu**
+(20denní maximum − 1 σ přepočtené na jednotky svíček) — pokles close pod ni
+= start epizody. Na obrazovce **Stats** je blok *Korekční epizody* s počty
+pokusů/negací a tabulkou posledních epizod.
+
+**Čti to jako předběžné.** Práh 1 σ a horizont 10 dní jsou zástupné
+parametry z prvního měření (září 2026, 7 týdnů živých dat); kalibrace
+proběhne, až bude aspoň 20 rozhodnutých epizod na instrument a σ škála
+čistě z živých dat (~listopad 2026). Stejně jako u stavu jde o **náladu
+zpráv, ne o směr ceny** — vztah k následnému pohybu trhu měření
+nepotvrdilo. Detail v tooltipu badge.
+
 ### Kde se sentiment potkává s grafem
 
 - **News markery** na časové ose + dialog po kliknutí (kap. 5).
@@ -800,6 +827,7 @@ Signál se ukáže jako **šipka na cenové křivce** (▲ Long teal / ▼ Short
 
 | Sekce | Co ukazuje |
 |---|---|
+| **Korekční epizody sentimentu** (v1.17, #565) | Pokusy vs. negace korekce nálady (viz kap. o stavu RISK ON/OFF): počet, průměrná hloubka v σ a délka per třída, probíhající epizody, tabulka posledních deseti (start, rozhodnutí, třída, hloubka, referenční úroveň). Označeno **předběžné**, dokud není 20 rozhodnutých epizod — parametry jsou zástupné, ne kalibrované |
 | **Vlny sentimentu** | Historie RISK ON/OFF vln — hloubka, délka, četnost per směr. Hloubky jsou od v1.11 **v jednotkách σ škály** (#640): řada má dvě éry s různým měřítkem (backfill osciloval v ±0,4, bohatší živý feed dává násobně větší denní součty) a dělení σ(100 seancí) je činí srovnatelnými — 2 σ znamená „dvakrát větší výchylka než běžný den", ať vlna proběhla loni nebo dnes. Surová hodnota zůstává v textu aktuální vlny |
 | **Volatilita zpráv** (v1.12, #567) | Denní průměr \|naměřené reakce\| na zprávy (bp, okno 5 min, kontaminovaná okna mimo) s **dlouhodobými pásmy min/průměr/max** přes celou historii (~2 roky). **Proč:** směr a velikost jsou dvě různé informace — SentIndex říká KAM nálada táhne, tenhle index JAK MOC trh na zprávy reaguje; bez pásem nepoznáš, jestli je číslo velké. **Jak číst:** u minima trh zprávy ignoruje (klid), kolem průměru běžný provoz, u maxima panika/euforie (každá zpráva hýbe trhem) — obdoba Fear & Greed, jen rychlejší. Sekce vypisuje i **největší naměřené vrcholy jmenovitě** — musí sedět na známé epizody (5. 8. 2024 VIX spike apod.), jinak ukazatel nefunguje a poznáš to hned |
 | **Hit-raty bucketů** | Empirický model reakcí na zprávy: úspěšnost per kategorie × důležitost × překvapení, přepínač **okna reakce** (+5/+15/+30/+60 min) a **režimu** (vše / RiskOn / RiskOff / Neutral / gamma ±), progres ke gate |
@@ -1539,6 +1567,7 @@ podkladu**, ne absolutní čísla.
 | **FA levels** (flow-adjusted) | Flip/walls počítané z odhadu OI = ranní OI + dnešní klasifikovaný tok — ukazují stěhování úrovní dřív, než to potvrdí zítřejší OI archiv. |
 | **SentIndex** | Souhrnný sentiment zpráv z news-engine — vážený součet klasifikovaných událostí s rozpadem po tématech; kladný risk-on, záporný risk-off. |
 | **RISK ON / RISK OFF** | Stav SentIndexu vůči MA5/MA10 s potvrzením; historie přepnutí = vlny (Stats). |
+| **Korekční epizoda (pokus / negace)** | Pokles denního SentIndexu o ≥ 1 σ pod 20denní maximum; pokus = zahlazeno do 10 obchodních dní, negace = ne. Předběžné parametry (v1.17, #565). |
 | **Signál (NEWS/COMBINED)** | Empiricky gate-ovaná Long/Short nápověda z reakcí na zprávy; COMBINED navíc vyžaduje souhlas GEX kontextu. |
 | **Gate / Wilson LB** | Podmínka spuštění signálů: bucket musí mít n ≥ 30 reakcí a spodní mez 95% intervalu úspěšnosti (Wilson lower bound) > 0,50. |
 | **Tendence** | Souhrnný chip Strong Short … Strong Long z 12 složek positioningu a toku (flip, zdi, CumΔ, charm/vanna tok…); orientační, váhy zatím nekalibrované. |

@@ -656,6 +656,37 @@ test('panel Sentiment kreslí svíčky místo plochy, když dorazí Daily OHLC (
   expect(screen.getByTestId('sentiment-zero')).toBeDefined()
 })
 
+test('práh korekce (#565): schodovitá linie přes dny s prahem, špička osy ho zahrne', () => {
+  const candles = [
+    { open: 0, high: 1, low: -0.5, close: 0.5, threshold: -2 },
+    { open: 0.5, high: 0.6, low: -0.2, close: -0.1, threshold: null },
+    { open: 0, high: 0.2, low: -0.3, close: 0.1, threshold: -1 },
+  ]
+  const { geoms, thresholdPoints } = sentimentCandleGeometry(candles, 10, 80, 0)
+  // Peak = |−2| (práh) → −2 sedí na spodní hraně, svíčky nejsou přeškálované mimo
+  expect(thresholdPoints).toBe('0.0,80.0 10.0,80.0 20.0,60.0 30.0,60.0')
+  expect(geoms[0].wickY1).toBe(20) // high 1 při peaku 2 → 40 − 1·20
+  const { container } = render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={{ ...DATA, sentimentCandles: candles }}
+        visible={{
+          vol: false,
+          optVol: false,
+          delta: false,
+          deltaFlow: false,
+          evoOi: false,
+          sentiment: true,
+        }}
+        width={400}
+      />
+    </CrosshairProvider>,
+  )
+  expect(screen.getByTestId('sentiment-threshold')).toBeDefined()
+  expect(screen.getByTestId('sentiment-threshold-label').textContent).toContain('práh korekce')
+  expect(container.querySelectorAll('[data-part="sentiment-candle"]')).toHaveLength(3)
+})
+
 // ── Evo OI (#573) ──────────────────────────────────────────────────
 
 test('evoOiStepPath: schodovitá cesta bez interpolace (#573)', () => {

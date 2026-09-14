@@ -5,11 +5,13 @@ import {
   categoryGlyph,
   categoryLabel,
   countdownLabel,
+  episodeBadge,
+  episodeTooltip,
   latestCrowd,
   primaryReaction,
   relativeAge,
 } from './news'
-import type { NewsRow } from './news'
+import type { NewsRow, SentimentStateInfo } from './news'
 
 function point(hour: number, minute: number, value: number) {
   const at = new Date(2026, 6, 28, hour, minute)
@@ -121,5 +123,83 @@ describe('karta zprávy (#656)', () => {
     expect(relativeAge('2026-08-14T11:57:30Z', now)).toBe('před 3 min')
     expect(relativeAge('2026-08-14T10:00:30Z', now)).toBe('před 2 h')
     expect(relativeAge('2026-08-12T10:00:30Z', now)).toMatch(/\d/) // starší = datum+čas
+  })
+})
+
+describe('korekční epizody (#565)', () => {
+  const base: SentimentStateInfo = {
+    symbol: 'ES',
+    state: 'Neutral',
+    unconfirmed: false,
+    unconfirmed_state: 'Neutral',
+    last_close: -2.8,
+    ma5: -3.2,
+    ma10: -2.7,
+    threshold: 0,
+    current_wave: null,
+    correction_threshold: -1.11,
+    correction_threshold_d: 1,
+    episode_horizon_h: 10,
+    episode_params_version: 1,
+  }
+
+  it('badge: KOREKCE n d při probíhající, POKUS/NEGACE po rozhodnutí, nic bez epizody', () => {
+    expect(episodeBadge({ ...base, episode_status: 'none', episode: null })).toBe('')
+    expect(episodeBadge({ ...base })).toBe('')
+    const open = {
+      start_date: '2026-09-13',
+      end_date: null,
+      ref_level_z: 0.11,
+      depth_z: 1.32,
+      label: null,
+      length_days: 1,
+    }
+    expect(episodeBadge({ ...base, episode_status: 'open', episode: open })).toBe('KOREKCE 1 d')
+    expect(
+      episodeBadge({ ...base, episode_status: 'attempt', episode: { ...open, label: 'attempt' } }),
+    ).toBe('POKUS')
+    expect(
+      episodeBadge({
+        ...base,
+        episode_status: 'negation',
+        episode: { ...open, label: 'negation' },
+      }),
+    ).toBe('NEGACE')
+  })
+
+  it('tooltip: odrážky pod sebou, práh v σ, předběžnost s počtem rozhodnutých', () => {
+    const text = episodeTooltip(
+      {
+        ...base,
+        episode_status: 'open',
+        episode: {
+          start_date: '2026-09-13',
+          end_date: null,
+          ref_level_z: 0.11,
+          depth_z: 1.32,
+          label: null,
+          length_days: 1,
+        },
+        last_episode: {
+          start_date: '2026-08-28',
+          end_date: '2026-09-11',
+          ref_level_z: 0.01,
+          depth_z: 3.41,
+          label: 'attempt',
+          length_days: 10,
+        },
+      },
+      3,
+    )
+    const lines = text.split('\n')
+    expect(lines[0]).toContain('≥ 1.0 σ pod 20denní maximum')
+    expect(lines).toContain(
+      '• Probíhá od 2026-09-13: 1 d, hloubka 1.32 σ (třída až po zahlazení nebo 10. dni)',
+    )
+    expect(lines).toContain('• Práh dnes: -1.11 σ (20denní max − 1.0 σ)')
+    expect(lines).toContain('• Poslední rozhodnutá: pokus 2026-08-28 → 2026-09-11, 3.41 σ')
+    expect(lines[lines.length - 1]).toContain(
+      'placeholder z prvního měření, ne kalibrace (rozhodnutých epizod: 3)',
+    )
   })
 })
