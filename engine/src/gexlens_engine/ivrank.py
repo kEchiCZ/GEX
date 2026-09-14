@@ -147,7 +147,10 @@ class IvRankCollector:
 
         if self.ib is None:
             return None
-        details = await self.ib.reqContractDetailsAsync(Future(self.symbol, exchange="CME"))
+        # Sec-def farma při Error 1100 neodpoví nikdy — bez stropu by sběr visel (#1153)
+        details = await asyncio.wait_for(
+            self.ib.reqContractDetailsAsync(Future(self.symbol, exchange="CME")), timeout=30.0
+        )
         today = dt.date.today().strftime("%Y%m%d")
         candidates = sorted(
             (item.contract for item in details if item.contract is not None),

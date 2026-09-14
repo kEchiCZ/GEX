@@ -62,3 +62,23 @@ async def test_today_clamps_end_to_now() -> None:
 
     assert ib.end_date_times == [""]
     assert len(bars) == 1
+
+
+async def test_kvalifikace_kontraktu_ma_strop(monkeypatch: Any) -> None:
+    """#1153: sec-def farma při Error 1100 neodpoví nikdy — kvalifikace musí
+    skončit timeoutem a vrátit None, ne držet setup pipeline navěky."""
+    import asyncio
+
+    from gexlens_engine import adapters
+    from gexlens_engine.adapters import IbQuoteStreamer
+    from gexlens_engine.ibkr.discovery import OptionContractSpec
+
+    class HangingIB:
+        async def qualifyContractsAsync(self, *contracts: Any) -> list[Any]:
+            await asyncio.sleep(3600)
+            return []
+
+    monkeypatch.setattr(adapters, "QUALIFY_TIMEOUT_S", 0.05)
+    streamer = IbQuoteStreamer(cast(IB, HangingIB()))
+    spec = OptionContractSpec("ES", "FOP", "20260914", 7600.0, "C", "CME", "E2A", "50")
+    assert await streamer._contract(spec) is None
