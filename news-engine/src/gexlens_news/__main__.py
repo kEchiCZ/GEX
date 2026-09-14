@@ -57,7 +57,7 @@ from gexlens_news.reaction_job import ReactionJob
 from gexlens_news.retro_pass import RetroPass, store_retro_result
 from gexlens_news.review_job import ReviewJob
 from gexlens_news.runner import CollectorRunner
-from gexlens_news.sentiment_backfill import backfill_sentiment_daily
+from gexlens_news.sentiment_backfill import backfill_sentiment_daily, recompute_sentindex
 from gexlens_news.sentindex_job import SentIndexJob
 from gexlens_news.signal_job import SignalJob
 from gexlens_news.store import NewsWriter
@@ -594,6 +594,31 @@ def backfill_sentiment(settings: NewsSettings) -> int:
     return 0
 
 
+def recompute_sentindex_cli(settings: NewsSettings, start: str | None, end: str | None) -> int:
+    """Retro přepočet SentIndexu za interval dnů (#1150, CLI příkaz).
+
+    Partice `derived/sentiment/{SYMBOL}/{den}.parquet` i svíčky `sentiment_daily`
+    se přepíšou z eventů s aktuálními vahami; σ/close_z od `--from` dál znovu.
+    """
+    if not start:
+        print("recompute-sentindex vyžaduje --from YYYY-MM-DD", file=sys.stderr)
+        return 2
+    first = dt.date.fromisoformat(start)
+    last = dt.date.fromisoformat(end) if end else dt.datetime.now(dt.UTC).date()
+    engine = create_engine(settings.database_url, pool_pre_ping=True)
+    ensure_sentiment_schema(engine)
+    symbols = tuple(s.strip().upper() for s in settings.signal_symbols.split(",") if s.strip())
+    stats = recompute_sentindex(engine, settings.data_dir, start=first, end=last, symbols=symbols)
+    print(f"Retro SentIndex {first} – {last} ({', '.join(symbols)}): {stats.describe()}")
+    for symbol in symbols:
+        payload, _changed = WavesJob(engine, symbol=symbol).run(dt.datetime.now(dt.UTC))
+        print(
+            f"Stav {symbol}: {payload['state']} (unconfirmed={payload['unconfirmed']}), "
+            f"close={payload['last_close']}, MA5={payload['ma5']}, MA10={payload['ma10']}"
+        )
+    return 0
+
+
 def backfill_ff(settings: NewsSettings, weeks: int | None) -> int:
     """Jednorázový backfill historického FF kalendáře (#277, CLI příkaz)."""
     engine = create_engine(settings.database_url, pool_pre_ping=True)
@@ -607,7 +632,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gexlens_news", description="SentimentLens news-engine")
     parser.add_argument(
         "command",
-        choices=("run", "status", "backfill-ff", "backfill-sentiment-daily"),
+        choices=("run", "status", "backfill-ff", "backfill-sentiment-daily", "recompute-sentindex"),
         nargs="?",
         default="run",
     )
@@ -616,6 +641,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=int,
         default=None,
         help="backfill-ff: kolik týdnů historie stáhnout (default z konfigurace)",
+    )
+    parser.add_argument(
+        "--from",
+        dest="start",
+        default=None,
+        help="recompute-sentindex: první den (YYYY-MM-DD, UTC)",
+    )
+    parser.add_argument(
+        "--to",
+        dest="end",
+        default=None,
+        help="recompute-sentindex: poslední den (default dnešek)",
     )
     args = parser.parse_args(argv)
 
@@ -634,6 +671,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return backfill_ff(settings, args.weeks)
     if args.command == "backfill-sentiment-daily":
         return backfill_sentiment(settings)
+    if args.command == "recompute-sentindex":
+        return recompute_sentindex_cli(settings, args.start, args.end)
     try:
         asyncio.run(run(settings))
     except KeyboardInterrupt:

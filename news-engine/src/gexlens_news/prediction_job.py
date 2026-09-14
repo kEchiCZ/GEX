@@ -66,9 +66,8 @@ class PredictionJob:
                     news_classifications.c.strength,
                 )
                 # Stínová ngram hlava (#740 fáze 2) predikce NEzakládá:
-                # direction=0 by plnilo outcomes prohrami a řádek v
-                # `news_weights` by přes `load_weight_map` (dict per kategorie,
-                # bez filtru predictoru) mohl přepsat váhu pravidel
+                # direction=0 by plnilo outcomes prohrami; stín se hodnotí
+                # vlastní cestou (ngram_job), ne přes `news_weights`
                 .where(news_classifications.c.source != "ngram")
                 .order_by(news_classifications.c.event_id.desc())
                 .limit(limit)
@@ -233,16 +232,29 @@ class PredictionJob:
         return created, evaluated, weights
 
 
-def load_weight_map(engine: Engine, symbol: str = "ES") -> dict[str, float]:
-    """Váhy per kategorie pro škálování skóre (SPEC 5.3), per symbol (ADR-0026).
+WeightMap = dict[tuple[str, str], float]
 
-    Chybějící váha = neutrální 1.0. Do kalibrace se tedy skóre nezkresluje ani
-    nenuluje — jen se nezpřesňuje.
+
+def load_weight_map(engine: Engine, symbol: str = "ES") -> WeightMap:
+    """Váhy per (kategorie, predictor) pro škálování skóre (SPEC 5.3), per symbol.
+
+    Klíč je dvojice — `news_weights` má řádek pro každý predictor (rule, llm)
+    a event se váží vahou toho, kdo mu skóre dal (`news_events.sentiment_source`).
+    Dict jen per kategorie (do #1150) nechal vyhrát libovolný poslední řádek.
+    Chybějící váha = neutrální 1.0 (`event_weight`); od ADR-0036 je 1.0 zároveň
+    hodnota pro kategorii na úrovni mince, takže mapa nikdy nic nenuluje.
     """
     with engine.connect() as conn:
         rows = conn.execute(
-            select(news_weights.c.category, news_weights.c.weight).where(
+            select(news_weights.c.category, news_weights.c.predictor, news_weights.c.weight).where(
                 news_weights.c.symbol == symbol
             )
         ).fetchall()
-    return {row.category: float(row.weight) for row in rows}
+    return {(row.category, row.predictor): float(row.weight) for row in rows}
+
+
+def event_weight(weights: WeightMap, category: str, sentiment_source: str | None) -> float:
+    """Váha eventu = váha (kategorie, zdroj skóre); bez zdroje nebo bez řádku 1.0."""
+    if sentiment_source is None:
+        return 1.0
+    return weights.get((category, sentiment_source), 1.0)

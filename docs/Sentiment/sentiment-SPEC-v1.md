@@ -169,6 +169,7 @@ Po uzavření oken se predikce (LLM i empirická) porovná s realitou → `news_
 - hit-rate per kategorie a per predictor **na primárním okně** (default +5 min, per-kategorie konfig) → **váhy** w_cat (rolling okno 90 dní),
 - kalibraci strength vs. skutečná velikost reakce.
 Sentiment skóre eventu se pak počítá jako `direction × strength × w_cat × decay(t, half_life)`.
+*(Rev. 2026-09-14, ADR-0036 / #1150 — `w_cat` je per (kategorie, predictor, symbol) a mapuje se z Wilsonovy dolní meze jako `clamp(1 + 2·(2·LB − 1), 0,25, 2,0)`: LB = 0,5 dává přesně 1,0 (= neutrál chybějící váhy), edge nad mincí zesiluje až 2×, pod mincí tlumí nejméně na 0,25, **nikdy na nulu**. Původní `max(0, 2·LB − 1)` nulovalo každou kategorii bez edge — a protože edge neměla žádná, SentIndex byl od 10. 9. 2026 identicky 0.)*
 
 ### 5.4 Sentiment index
 ```

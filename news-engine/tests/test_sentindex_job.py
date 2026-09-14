@@ -7,7 +7,12 @@ import pyarrow.parquet as pq
 from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
-from gexlens_engine.storage.sentiment import ensure_sentiment_schema, news_events, sentiment_daily
+from gexlens_engine.storage.sentiment import (
+    ensure_sentiment_schema,
+    news_events,
+    news_weights,
+    sentiment_daily,
+)
 from gexlens_news.sentindex_job import SentIndexJob
 
 NOW = dt.datetime(2026, 7, 28, 6, 0, tzinfo=dt.UTC)
@@ -83,6 +88,41 @@ def test_job_writes_series_and_daily_candle(tmp_path: Path) -> None:
 
     assert {t.category for t in topics} == {"GEOPOLITICS", "FED"}
     assert all(not t.active for t in topics)  # po jedné zprávě se topic neaktivuje
+
+
+def test_events_are_weighted_by_category_and_their_own_predictor(tmp_path: Path) -> None:
+    """#1150: váha (kategorie, sentiment_source) per symbol; jiný predictor ani
+    chybějící řádek event nenulují (neutrál 1.0)."""
+    engine, job = make_job(tmp_path)
+    ts = NOW - dt.timedelta(minutes=1)
+    add_event(engine, ts, category="FED", score=0.4, key="rule-fed")
+    with engine.begin() as conn:
+        conn.execute(
+            insert(news_weights),
+            [
+                {
+                    "category": "FED",
+                    "predictor": predictor,
+                    "window_min": 5,
+                    "symbol": symbol,
+                    "n": 50,
+                    "hit_rate": 0.5,
+                    "hit_rate_lb": 0.4,
+                    "weight": weight,
+                    "computed_at": NOW,
+                }
+                for symbol, predictor, weight in (
+                    ("ES", "rule", 0.5),
+                    ("ES", "llm", 2.0),  # jiný predictor — na rule event nesmí sáhnout
+                    ("NQ", "llm", 2.0),  # NQ pro rule žádný řádek → 1.0
+                )
+            ],
+        )
+
+    es = job.load_events(NOW, "ES")
+    nq = job.load_events(NOW, "NQ")
+    assert [e.score for e in es] == [0.4 * 0.5]
+    assert [e.score for e in nq] == [0.4]
 
 
 def test_unclassified_events_do_not_enter_the_index(tmp_path: Path) -> None:
