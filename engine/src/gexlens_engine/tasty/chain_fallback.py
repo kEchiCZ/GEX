@@ -129,21 +129,32 @@ def tasty_chain_quotes(
     now_utc_ts: float,
     now_monotonic: float,
     max_age_ms: int = MAX_AGE_MS,
+    stream_alive_ts: float | None = None,
 ) -> dict[OptionContractSpec, CachedQuote]:
     """Cache kotací poskládaná z tasty stavů — tvarem shodná se `scheduler.quotes()`.
 
-    Kontrakt se vezme jen s ČERSTVOU kotací i greeks (ADR-0025 pravidlo 2:
+    Kontrakt se vezme jen s kotací i greeks pohromadě (ADR-0025 pravidlo 2:
     vlastník dodá hodnotu celou, nebo nedodá nic). Chybějící kontrakt se
     prostě nevrátí — runtime takový spec přeskakuje stejně jako u IBKR,
     takže se nikde nemusí řešit zvláštní případ.
 
-    `updated_at` odpovídá stáří NEJSTARŠÍ použité hodnoty, ne okamžiku „teď":
-    stáří kotace se propisuje do `stale_age` snímku i do prahu
-    `quote_max_age_s`, takže tvrdit u dvě minuty staré tasty hodnoty nulové
-    stáří by obešlo ochranu #306.
+    Stáří (#306 vs. dxFeed): dxFeed posílá Quote/Greeks JEN při změně
+    (event-on-change, žádné periodické snímky), takže kotace deep OTM striku
+    nezměněná 20 min je na živém streamu pořád aktuální. Bez `stream_alive_ts`
+    platí přísné pravidlo „hodnota mladší než `max_age_ms`" (14. 9. 2026 tím
+    ES při fallbacku ztrácel 44 ze 160 kontraktů a zdi z OI těch striků
+    zmizely). Se `stream_alive_ts` (UTC ts posledního eventu celého streamu)
+    se za stáří bere ŽIVOST STREAMU: mrtvý stream (> max_age) = nic, živý
+    stream = všechny kontrakty s hodnotami, `updated_at` nese stáří streamu,
+    takže `stale_age` snímku i práh `quote_max_age_s` dál něco měří.
     """
     if chain is None:
         return {}
+    stream_age_ms: float | None = None
+    if stream_alive_ts is not None:
+        stream_age_ms = (now_utc_ts - stream_alive_ts) * 1000
+        if stream_age_ms > max_age_ms:
+            return {}  # stream mrtvý — poslední hodnoty už nikdo nepotvrzuje
     quotes: dict[OptionContractSpec, CachedQuote] = {}
     for spec in specs:
         streamer = chain.streamer_symbol(spec)
@@ -157,7 +168,10 @@ def tasty_chain_quotes(
             continue
         quote_age_ms = (now_utc_ts - quote.updated_at.timestamp()) * 1000
         greeks_age_ms = (now_utc_ts - greeks.updated_at.timestamp()) * 1000
-        if quote_age_ms > max_age_ms or greeks_age_ms > max_age_ms:
+        if stream_age_ms is not None:
+            # Živý stream potvrzuje i nezměněné hodnoty — stáří = stáří streamu
+            quote_age_ms = greeks_age_ms = stream_age_ms
+        elif quote_age_ms > max_age_ms or greeks_age_ms > max_age_ms:
             continue
         if quote.bid is None or quote.ask is None:
             continue
