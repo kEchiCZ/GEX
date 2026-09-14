@@ -210,7 +210,7 @@ def tasty_chain_quotes(
             theta, vega = greeks.theta, greeks.vega
             oldest_age_s = max(quote_age_ms, greeks_age_ms or 0.0) / 1000
         else:
-            if spot is None or quote.bid <= 0.0 or quote.ask < quote.bid:
+            if spot is None or quote.bid < 0.0 or quote.ask <= 0.0 or quote.ask < quote.bid:
                 continue
             settle = settle_by_expiry.get(spec.expiry)
             if settle is None:
@@ -224,10 +224,18 @@ def tasty_chain_quotes(
                 settle=settle,
                 now=now_utc,
             )
-            if computed is None:
+            if computed is not None:
+                iv, delta, gamma = computed.iv, computed.delta, computed.gamma
+                theta, vega = computed.theta, computed.vega
+            elif quote.bid == 0.0:
+                # Bid 0 (deep OTM, 0DTE před uzavřením): kontrakt je numericky
+                # bezcenný a jeho greeks jsou limitně nula — to není nezměřená
+                # nula (#465), ale hodnota, ke které BS při ceně → 0 konverguje.
+                # IBKR cesta takový kontrakt se strojovými ~0 greeks ve snímku
+                # má; bez řádku by ze strike profilu zmizelo i jeho OI (zdi).
+                iv = delta = gamma = theta = vega = 0.0
+            else:
                 continue  # mimo no-arbitrage pásmo / nekonvergence — díra, ne výmysl
-            iv, delta, gamma = computed.iv, computed.delta, computed.gamma
-            theta, vega = computed.theta, computed.vega
             source = GREEKS_SOURCE_COMPUTED
             oldest_age_s = quote_age_ms / 1000
         quotes[spec] = CachedQuote(

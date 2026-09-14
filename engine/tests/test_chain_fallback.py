@@ -348,3 +348,26 @@ def test_kontrakt_bez_greeks_dostane_bs_dopocet_se_spotem() -> None:
     assert quote.snapshot.gamma > 0
     assert 0.0 < quote.snapshot.iv < 5.0
     assert quote.feed == FEED_TASTY
+
+
+def test_bid_nula_deep_otm_zustava_ve_snimku_s_nulovymi_greeks() -> None:
+    """Bezcenný 0DTE kontrakt (bid 0, ask 0.05) má greeks limitně 0 — řádek musí
+    zůstat, jinak ze strike profilu zmizí i jeho OI (zdi). Bez spotu se vynechá."""
+    specs = [spec(9900.0)]  # daleko OTM call
+    chain = chain_for(specs)
+    cache = TastyChainCache(FrozenClock(NOW))
+    streamer = chain.streamer_symbol(specs[0])
+    assert streamer is not None
+    cache.on_event("Quote", [streamer, 0.0, 0.05, 0, 40])
+
+    quotes = tasty_chain_quotes(
+        specs, chain, cache, now_utc_ts=NOW.timestamp(), now_monotonic=1000.0, spot=5905.0
+    )
+    quote = quotes[specs[0]]
+    assert quote.source == "computed"
+    assert quote.snapshot.bid == 0.0 and quote.snapshot.ask == 0.05
+    assert quote.snapshot.gamma >= 0.0 and quote.snapshot.gamma < 1e-3
+    assert (
+        tasty_chain_quotes(specs, chain, cache, now_utc_ts=NOW.timestamp(), now_monotonic=1000.0)
+        == {}
+    )
