@@ -68,7 +68,7 @@ from gexlens_engine.ibkr.newsticks import (
 )
 from gexlens_engine.ibkr.pacing import PacingGuard
 from gexlens_engine.ibkr.probe import FarmProbe
-from gexlens_engine.ibkr.scheduler import CachedQuote, SubscriptionScheduler
+from gexlens_engine.ibkr.scheduler import CachedQuote, QuoteSnapshot, SubscriptionScheduler
 from gexlens_engine.ibkr.subscription import (
     NOT_SUBSCRIBED_ERROR_CODE,
     ReqIdTombstones,
@@ -176,6 +176,26 @@ def _front_to_cache(front: Contract, symbol: str) -> FrontFuture:
         local_symbol=str(front.localSymbol),
         trading_class=str(front.tradingClass),
     )
+
+
+#: Zástupná „nikdy nekótovaná" IBKR strana pro křížovou kontrolu (#1153):
+#: updated_at hluboko v minulosti (ne −∞: `int(inf)` by spadl) + stale → nikdy
+#: čerstvá, hodnoty se nečtou (NaN jen pro typ)
+_DEAD_IBKR_QUOTE = CachedQuote(
+    snapshot=QuoteSnapshot(
+        bid=float("nan"),
+        ask=float("nan"),
+        last=None,
+        volume=None,
+        iv=float("nan"),
+        delta=float("nan"),
+        gamma=float("nan"),
+        theta=float("nan"),
+        vega=float("nan"),
+    ),
+    updated_at=-1e9,
+    stale=True,
+)
 
 
 def _cancel_quietly(ib: IB, contract: Contract) -> None:
@@ -831,6 +851,8 @@ async def create_pipeline(
         nonlocal rt_bars
         if stopped:
             return
+        if not ib.isConnected():
+            return  # bez socketu není co obnovovat — nasadí `resubscribe` po reconnectu
         if rt_bars is not None:
             ib.cancelRealTimeBars(rt_bars)
         bars_list = ib.reqRealTimeBars(front, 5, "TRADES", False)
@@ -1683,12 +1705,23 @@ async def main() -> None:
             await asyncio.to_thread(comparison_repository.ensure_schema)
 
         def shadow_contracts() -> dict[OptionContractSpec, CachedQuote]:
-            """IBKR kotace všech pipeline — vstup křížové kontroly (potřebuje obě strany)."""
+            """IBKR strana křížové kontroly: kotace všech pipeline + držené kontrakty
+            bez jediné kotace jako MRTVÉ (#1153).
+
+            Pipeline založená bez IBKR (degradovaný start) nemá v cache nic —
+            do 14. 9. 2026 to křížová kontrola četla jako „sledováno 0 kontraktů,
+            na výrok málo" a fallback řetězu se po restartu nikdy nezapnul
+            (ES 18:34 UTC: 0 snapshotů, chain_source ibkr). Kontrakt, který
+            pipeline drží a IBKR pro něj nic nedodal, je přesně případ „IBKR mlčí".
+            """
             merged: dict[OptionContractSpec, CachedQuote] = {}
             for pipeline in pipelines.values():
                 merged.update(pipeline.runtime.scheduler.quotes())
                 if pipeline.next_runtime is not None:
                     merged.update(pipeline.next_runtime.scheduler.quotes())
+            for spec in shadow_contract_specs():
+                if spec not in merged:
+                    merged[spec] = _DEAD_IBKR_QUOTE
             return merged
 
         def shadow_contract_specs() -> list[OptionContractSpec]:

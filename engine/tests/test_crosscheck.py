@@ -531,3 +531,36 @@ def test_simulovany_vypadek_tasty_pri_bezicim_ibkr_alertuje() -> None:
     assert [v.backup_dead for v in verdicts] == [False, False, False, True]
     assert verdicts[-1].alert is True
     assert "fallback" in verdicts[-1].message.lower()
+
+
+def test_nikdy_nekotovany_kontrakt_je_mrtve_ibkr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1153: pipeline založená bez IBKR nemá v cache žádnou kotaci; zástupná
+    „mrtvá" IBKR strana z orchestrátoru musí tally posunout k `ibkr_only_dead`,
+    jinak křížová kontrola hlásí „málo kontraktů" a fallback řetězu se nezapne."""
+    from gexlens_engine.__main__ import _DEAD_IBKR_QUOTE
+
+    now_mono = time.monotonic()
+    spec = OptionContractSpec("ES", "FOP", "20260813", 7775.0, "C", "CME", "E2D", "50")
+    chain = ChainSymbols(
+        product="ES", day=TS.date(), by_contract={("20260813", 7775.0, "C"): "./E2DQ26C7775:XCME"}
+    )
+    cache = TastyChainCache(clock=lambda: TS - dt.timedelta(seconds=3))
+    feed_quote(cache, "./E2DQ26C7775:XCME", 18.1, 18.6)
+    feed_greeks(cache, "./E2DQ26C7775:XCME", 0.127, 0.53, 0.0113)
+
+    result = compare_minute(
+        TS, {spec: _DEAD_IBKR_QUOTE}, cache, {"ES": chain}, now_monotonic=now_mono, now_utc=TS
+    )
+    assert result.tally.contracts == 1
+    assert result.tally.ibkr_only_dead == 1
+    assert result.tally.ibkr_dead_share == 1.0
+    # A bez tasty strany „tichý trh", ne výpadek
+    quiet = compare_minute(
+        TS,
+        {spec: _DEAD_IBKR_QUOTE},
+        TastyChainCache(clock=lambda: TS),
+        {"ES": chain},
+        now_monotonic=now_mono,
+        now_utc=TS,
+    )
+    assert quiet.tally.both_dead == 1
