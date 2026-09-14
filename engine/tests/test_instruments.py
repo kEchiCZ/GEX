@@ -681,7 +681,17 @@ async def test_watchdog_prerusi_visici_cyklus(
         await asyncio.sleep(3600)
         raise AssertionError("nedosažitelné")
 
+    async def quick(now: dt.datetime) -> SweepMetrics:
+        # Zdravý cyklus jako stub: test měří, že visící pipeline nezastaví
+        # smyčku, ne rychlost skutečného cyklu — ten při zátěži CI/notebooku
+        # 0,2 s neplnil a test padal náhodně (14. 9. 2026, 1 z 5 běhů)
+        await asyncio.sleep(0)
+        return SweepMetrics(
+            total=1, greeks_complete=1, repair_count=0, stale_count=0, sweep_duration_s=0.0
+        )
+
     stuck.run_minute = hang  # type: ignore[method-assign]
+    healthy.run_minute = quick  # type: ignore[method-assign]
 
     results = dict(await gather_metrics([stuck, healthy], TS, timeout_s=0.2))
 

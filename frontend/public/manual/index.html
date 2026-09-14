@@ -1568,16 +1568,16 @@ http://127.0.0.1:8080/?price=line&amp;opacity=60   # cenová křivka s viditelno
 <td>Prohlížeč drží starý build v cache — dej <strong>Ctrl+Shift+R</strong> (hard reload).</td>
 </tr>
 <tr>
-<td>TWS spadlo po přihlášení na mobilu</td>
-<td>Limit jednoho přihlášení IBKR. Znovu se přihlas v TWS; aplikace se sama připojí.</td>
+<td>TWS/Gateway spadlo po přihlášení na mobilu</td>
+<td>Limit jednoho přihlášení IBKR. Od v1.17 aplikace jede dál z tastytrade (pipeline se založí z posledního známého řetězu, cena, zdi, OI i svíčky z tasty); po opětovném přihlášení v TWS/Gateway se sama vrátí k IBKR.</td>
 </tr>
 <tr>
 <td><strong>Přihlásil jsem se na mobilu a data stála</strong></td>
-<td>Market data jsou u IBKR <strong>per uživatel</strong>, takže je mobil přetáhne k sobě (error 10197) — aplikace zůstane připojená, jen jí přestanou chodit ticky. Nově to řeší sama: do <strong>30 s</strong> převezme cenu a do <strong>3 minut</strong> celý opční řetěz <strong>tastytrade</strong> a v hlavičce se rozsvítí jantarový chip. Po návratu IBKR se přepne zpátky. Dělat nemusíš nic.</td>
+<td>Market data jsou u IBKR <strong>per uživatel</strong>, takže je mobil přetáhne k sobě (error 10197) — aplikace zůstane připojená, jen jí přestanou chodit ticky. Řeší to sama: do <strong>30 s</strong> převezme cenu a do <strong>3 minut</strong> celý opční řetěz <strong>tastytrade</strong> a v hlavičce se rozsvítí jantarový chip; od v1.17 se od 3. minuty doplňují i <strong>svíčky</strong> (úsek označený jako doplněný) a když mobil shodí i Gateway, pipeline se založí z posledního známého řetězu a tasty (alert „degradovaný start&quot;). Po návratu IBKR se přepne zpátky (cena po 60 s, řetěz po 5 čistých minutách). Dělat nemusíš nic. <strong>Co z tasty není:</strong> opční objem a Prémie $ ve strike profilu, panely Vol, OptVol, CumΔ a Delta flow — stojí do návratu IBKR.</td>
 </tr>
 <tr>
 <td><strong>Chip „⤳ řetěz: tastytrade&quot; v hlavičce</strong></td>
-<td>Běží záložní zdroj dat (viz řádek výše). Graf, heatmapa i GEX úrovně jedou dál. <strong>Stojí ale CumΔ a net objem</strong> — tastytrade denní objem ve stejném významu nedodává a vymyslet ho by bylo horší než ho přiznat. Rozjedou se samy po návratu na IBKR.</td>
+<td>Běží záložní zdroj dat (viz řádek výše). Graf, heatmapa, zdi, GEX úrovně, OI i greeks jedou dál (greeks na strikech, kde je dxFeed neposílá, dopočítává BS model — v řadě zdrojů greeks jako <code>computed</code>). <strong>Stojí ale CumΔ a net objem</strong> — tastytrade denní objem ve stejném významu nedodává a vymyslet ho by bylo horší než ho přiznat. Rozjedou se samy po návratu na IBKR.</td>
 </tr>
 <tr>
 <td><strong>Ukazatel Greeks/OI/OHLC má pomlčku</strong></td>

@@ -564,6 +564,45 @@ sám o sobě dál nealertuje (41 planých epizod v noci), ale rozlišovač
 hodnoty se mění) a tasty přitom mlčí → alert `feed_backup_dead`. Záloha, která
 umřela za běhu, se tak pozná dřív než při výpadku IBKR.
 
+#### Degradovaný start a co ještě přebírá tasty (v1.17, #1153, ADR-0025 dodatek 14. 9.)
+
+Fallback výše řešil jen **běžící** pipeline. Od 14. 9. přechod na tasty platí
+i tehdy, když IBKR vypadne dřív, než se pipeline založí (Error 1100 = TWS bez
+spojení s IBKR, nebo Gateway vyhozená souběhem s mobilem — API port odmítá):
+
+- **Cache discovery** `data/derived/discovery_cache.json` — per symbol front
+  futures kontrakt + všechny expirace a striky z posledního úspěšného IBKR
+  discovery (přepisuje se při každém úspěchu). Při selhání discovery nebo bez
+  API socketu se z ní pipeline založí („degradovaný start", alert
+  `degraded_start`, log `Degradovaný start ES (#1153): …`), úvodní spot dá
+  tasty, řetěz/OI/svíčky fallbacky. Záznam se nepoužije, když je starší než
+  14 dní, front kontrakt expiroval nebo nemá dnešní expiraci → pipeline pak
+  čeká na IBKR (čistá instalace, roll během výpadku).
+- **Cyklus pipeline bere spot z tasty** (`spot_override`), takže GEX ani hlídač
+  barů nepočítají nad cenou z doby výpadku.
+- **Svíčky podkladu**: při stall (3 min bez real-time barů při živém spotu)
+  engine každou minutu doplní chybějící minuty z dxFeed Candle
+  (`source = tasty_candle`, banner „doplněno" v UI); jedno pomocné DXLink
+  spojení naráz (souběžný fetch ES+NQ nechával druhý bez svíček).
+- **Tasty subskripce řetězu** se plánují z kontraktů, které pipeline drží,
+  a pro symboly z konfigurace i watchlistu bez pipeline; kontrakt bez IBKR
+  kotace je pro křížovou kontrolu mrtvá IBKR strana (jinak by po restartu
+  bez IBKR hlásila „sledováno 0 kontraktů" a fallback řetězu se nezapnul).
+- **Stáří tasty hodnot = živost streamu** (`GEXLENS_TASTY_CHAIN_MAX_AGE_S`
+  je práh posledního eventu STREAMU): dxFeed posílá jen změny, deep OTM strike
+  nezměněný 20 min je na živém streamu aktuální. Kontrakt bez dxFeed Greeks
+  dostane BS greeks z mid (`greekssource = computed`), bid 0 zůstává ve snímku
+  (limitně nulové greeks) — jinak ze strike profilu mizelo OI těch striků.
+- **IBKR volání mají stropy**: discovery podkladu 3×30 s, discovery řetězu
+  30 s, kvalifikace kontraktu 20 s a po timeoutu 60 s fail-fast (do 14. 9.
+  `qualifyContractsAsync` bez stropu držel OI archiv i celý orchestrátor).
+
+Diagnostika: `/status.spot_source`, `chain_source`, `feed_crosscheck`,
+`tasty_symbol_breakdown.chain` (má odpovídat počtu držených kontraktů, 0 =
+fallback nemá z čeho brát); log `Cyklus ES …: N snapshotů` má za fallbacku
+odpovídat obálce (ES 160, NQ 96; `greeks 0/160` v tomtéž řádku počítá jen
+IBKR modelGreeks, tasty greeks jsou ve snímku).
+
 ### Start bez běžícího TWS (#756)
 
 Engine na IBKR čeká **nejvýš `GEXLENS_STARTUP_CONNECT_WAIT_S`** (default 60 s)
@@ -573,8 +612,9 @@ startu Windows bez spuštěné TWS neběželo nic.
 
 Co platí po vypršení stropu:
 
-- pipeline se **nezakládá** (discovery i subskripce jsou IBKR volání), ale
-  existující se **neruší** — `plan.stop` se řídí watchlistem, ne spojením,
+- pipeline se zakládá jen **degradovaně** z cache discovery + tasty spotu
+  (v1.17, #1153 — viz výše); bez cache se nezakládá; existující se **neruší** —
+  `plan.stop` se řídí watchlistem, ne spojením,
 - tasty se odebírá i pro instrumenty **bez** pipeline, jinak by fallback neměl
   z čeho stavět,
 - cenu publikuje samostatná smyčka, která pro symbol s běžící pipeline umlkne,
@@ -597,6 +637,7 @@ Pipeline se založí sama, jakmile se spojení objeví. Restart enginu není pot
 | Panel Sentiment plochý na nule (ES/NQ) | Ověř váhy: `docker compose exec postgres psql -U gexlens -c "select symbol, category, predictor, round(weight::numeric,3) from news_weights order by 1,2,3"` — od ADR-0036 (#1150) je váha vždy v [0,25; 2,0], mince = 1,0; samé nuly znamenají image před #1150. Řadu zpětně spraví `docker compose exec news-engine python -m gexlens_news recompute-sentindex --from YYYY-MM-DD [--to YYYY-MM-DD]` (přepíše partice `derived/sentiment/{SYM}/` i svíčky `sentiment_daily` toutéž mechanikou jako živý job, σ/close_z od `--from` dál dopočte znovu; dnešek jen do „teď“). Bez eventů se skórem (`select count(*) from news_events where sentiment_score <> 0 and ts_event > now() - interval '1 day'`) je problém v klasifikaci, ne ve vahách. |
 | Reset prostředí | `docker compose down`, smaž `./data` (přijdeš o 14denní okno, ne o OI archiv ve volume `pgdata`), `docker compose up -d --build`. |
 | Málo dat po restartu | Writer navazuje na rozepsaný den — mezera zůstane jen za dobu výpadku. |
+| Souběh s mobilem: graf stojí déle než ~4 min | `/status` → `spot_source`/`chain_source` mají být `tasty`, `tasty_symbol_breakdown.chain` > 0; log `grep -E "Degradovan\|Fallback řetězu\|Rekonstrukce\|Setup .* selhal"`. `Setup … nedorazila cena podkladu` = tasty nemá čerstvý spot symbolu (front future není v subskripci — od #1163 se odebírá i pro watchlist); `0 snapshotů` s `chain_source: tasty` = chybí tasty chain subskripce (`chain: 0`). Cache discovery: `python -c "import json;print(json.load(open('data/derived/discovery_cache.json')).keys())"`. Nerestartovat engine bez příčiny — restart během výpadku IBKR = degradovaný start (~2–3 min). |
 | Potřebuju log enginu z doby PŘED restartem/deployem | Log kontejneru zmizí s jeho recreate. `scripts/deploy-engine-offhours.ps1` ho od #1056 (v1.6) ukládá sám do `data/logs/engine-<YYYYMMDD-HHMM>.log` (a `…-crashed.log` před rollbackem; bez uloženého logu se nenasazuje; retence 30 dní). Při **ručním** `docker compose up -d engine` / `--force-recreate` udělej totéž předem: `docker logs gex-engine-1 > data/logs/engine-$(Get-Date -Format yyyyMMdd-HHmm).log 2>&1`. 7. 9. (#1054) se bez toho hodinu řešil falešný poplach. |
 | Docker roste / disk D: dochází / Docker Desktop se nerozjede | `pwsh scripts/docker-cleanup.ps1` (rollback tagy, build cache > 7 d, dangling; `-WhatIf` jen ukáže) → když VHDX zůstane velký, `pwsh -File scripts/compact-docker-vhdx.ps1` jako správce při zavřeném trhu (12. 9. 2026: 70,9 → 24,9 GB). Nikdy `docker volume prune` ani reset Docker Desktopu — Postgres je uvnitř VHDX. Podrobně kap. 13.4. |
 | Díra ve snapshotech, ale bary v okně jsou | Podívej se na `source` barů v `derived/{sym}/bars/`: `ibkr_hist` = doplněno z IBKR historical při dalším startu → **engine v tu dobu neběžel** (vypnuté PC, zastavený kontejner), ne stall řetězu. Stall vypadá obráceně: bary `ibkr` tečou, snapshoty chybí. Do #1055 (8. 9. 2026) se backfill tvářil jako `ibkr` a 2,5 dne vypnutého PC vyvolalo falešný poplach (#1054). |
