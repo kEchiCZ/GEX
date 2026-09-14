@@ -214,6 +214,9 @@ test('mousemove uvnitř jedné buňky negeneruje React commit (#492)', () => {
   let renders = 0
   function CountingReader() {
     const { position } = useCrosshair()
+    // Test počítá commity záměrně přes vnější čítač — přesně to, co pravidlo
+    // React Compileru zakazuje v produkčním kódu (#1123)
+    // eslint-disable-next-line react-hooks/globals
     renders += 1
     return <output data-testid="counting-reader">{position ? position.minuteIdx : 'none'}</output>
   }

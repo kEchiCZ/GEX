@@ -918,6 +918,10 @@ function MainContent() {
     },
     [projectedGrid.strikes, heatSize.height, storeYRange],
   )
+  // Stavy deklarované PŘED callbacky, které je mění (react-hooks/immutability, #1123)
+  const [dismissedSetups, setDismissedSetups] = useState<number[]>([])
+  // Σ souhrn přes expirace v pravém profilu (čtení celkového positioningu napříč expiracemi)
+  const [aggregateOn, setAggregateOn] = useState(false)
   const handleAggregateToggle = useCallback(() => setAggregateOn((value) => !value), [])
   const handleDismissSetup = useCallback(
     (id: number) => setDismissedSetups((previous) => [...previous, id]),
@@ -927,7 +931,6 @@ function MainContent() {
   const { setups } = useSetups()
   // Vol režim pro přepočet stopu na % rozsahu v kartě setupu (#874, ADR-0028)
   const volRegime = useVolRegime(symbol, toggles.setups)
-  const [dismissedSetups, setDismissedSetups] = useState<number[]>([])
   const activeSetups = useMemo(
     () =>
       setups.filter((setup) => setup.status === 'active' && !dismissedSetups.includes(setup.id)),
@@ -996,8 +999,6 @@ function MainContent() {
     ]
   }, [toggles.ladder, day.ladder, day.raw, grid.minutes, playback.position])
 
-  // Σ souhrn přes expirace v pravém profilu (čtení celkového positioningu napříč expiracemi)
-  const [aggregateOn, setAggregateOn] = useState(false)
   const aggregateRows = useAggregateProfile(
     symbol,
     viewDate,
