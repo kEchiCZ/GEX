@@ -8,7 +8,11 @@ takže zpětná reklasifikace nikdy nemění minulé odhady. Vyhodnocení je
 jediný příznak `correct` by neřekl, vůči čemu platí.
 
 Váha predictoru se odvozuje z **Wilsonovy dolní meze**, ne z bodové úspěšnosti:
-55 % z dvaceti pokusů je nerozlišitelné od mince a nemá dostat žádnou váhu.
+55 % z dvaceti pokusů je nerozlišitelné od mince a nemá dostat žádný bonus.
+Mapování je **centrované na 1,0** (ADR-0036, #1150): mince = neutrál stejně
+jako chybějící váha, edge nad mincí zesiluje, pod mincí tlumí — ale nikdy
+na nulu. Původní `max(0, 2·LB − 1)` nulovalo každou kategorii bez edge,
+a protože bez edge byly všechny, SentIndex byl od 10. 9. 2026 identicky 0.
 """
 
 from collections.abc import Sequence
@@ -23,6 +27,12 @@ DEFAULT_PRIMARY_WINDOW_MIN = 5
 DEFAULT_ROLLING_DAYS = 90
 # Minimum vyhodnocení, aby váha nevznikla z hrstky případů
 MIN_SAMPLES_FOR_WEIGHT = 20
+# Mapování dolní meze hit-rate na váhu (ADR-0036): w = 1 + GAIN·(2·LB − 1),
+# oříznuté do [WEIGHT_MIN, WEIGHT_MAX]. LB = 0,5 (mince) dává přesně 1,0 —
+# totéž co chybějící váha, takže dosažení MIN_SAMPLES nedělá skok.
+WEIGHT_EDGE_GAIN = 2.0
+WEIGHT_MIN = 0.25
+WEIGHT_MAX = 2.0
 
 
 @dataclass(frozen=True)
@@ -61,14 +71,18 @@ class PredictorWeight:
 
 
 def weight_from_hit_rate(hit_rate_lb: float) -> float:
-    """Váha z dolní meze úspěšnosti: 0 na úrovni mince, 1 při jistotě.
+    """Váha z dolní meze úspěšnosti: přesně 1,0 na úrovni mince (ADR-0036).
 
-    `2·LB − 1` škáluje edge nad 50 % do intervalu 0–1 a **záporné hodnoty
-    ořezává na nulu**: predictor, který trefuje hůř než mince, nemá dostat
-    zápornou váhu a otáčet znaménko — to už by nebyla kalibrace, ale
-    přefitování na historii.
+    `2·LB − 1` je edge nad mincí v intervalu −1…1; `1 + GAIN·edge` z něj dělá
+    násobitel kolem neutrálu 1,0, oříznutý do [WEIGHT_MIN, WEIGHT_MAX]:
+    - LB = 0,5 → 1,0 (kategorie bez edge váží stejně jako kategorie bez dat),
+    - LB = 1,0 → WEIGHT_MAX (jistota zesiluje),
+    - LB → 0 → WEIGHT_MIN, **nikdy nula ani záporná**: predictor horší než
+      mince se tlumí, ale neotáčí znaménko (to by bylo přefitování) a
+      nevymaže kategorii z indexu (to zabilo SentIndex, #1150).
     """
-    return max(0.0, min(1.0, 2.0 * hit_rate_lb - 1.0))
+    edge = 2.0 * hit_rate_lb - 1.0
+    return max(WEIGHT_MIN, min(WEIGHT_MAX, 1.0 + WEIGHT_EDGE_GAIN * edge))
 
 
 def compute_weights(
