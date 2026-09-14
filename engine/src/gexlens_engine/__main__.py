@@ -1397,6 +1397,11 @@ async def main() -> None:
     # Doplněk k IBKR historical, ne náhrada (ADR-0025).
     candle_backfilled: set[str] = set()
 
+    # Jedno pomocné DXLink spojení naráz: souběžné fetche ES a NQ (každou minutu
+    # při stall obou) nechávaly druhý handshake bez odpovědi → TimeoutError 60 s
+    # a NQ svíčky se nedoplňovaly (14. 9. 17:58 UTC), ES 3 s předtím prošel
+    candle_fetch_lock = asyncio.Lock()
+
     async def _fill_bar_gaps(
         symbol: str, streamer_symbol: str, since: dt.datetime, until: dt.datetime
     ) -> int:
@@ -1412,18 +1417,19 @@ async def main() -> None:
         # Seance sahá do partice D−1 (od 22:00 UTC) — „co už máme" se musí
         # číst ze všech partic okna, jinak se večerní blok doplní podruhé
         # a skončí v partici D vedle měřených barů v D−1 (#1002)
-        existing = await asyncio.to_thread(
-            writer.bar_minutes_for_days, symbol, partition_days(since, until)
-        )
-        bars = await backfill_gaps(
-            CandleFetcher(tasty_session.quote_token),
-            streamer_symbol=streamer_symbol,
-            existing=existing,
-            since=since,
-            until=until,
-        )
-        if bars:
-            await asyncio.to_thread(writer.write_bars_by_day, symbol, bars)
+        async with candle_fetch_lock:
+            existing = await asyncio.to_thread(
+                writer.bar_minutes_for_days, symbol, partition_days(since, until)
+            )
+            bars = await backfill_gaps(
+                CandleFetcher(tasty_session.quote_token),
+                streamer_symbol=streamer_symbol,
+                existing=existing,
+                since=since,
+                until=until,
+            )
+            if bars:
+                await asyncio.to_thread(writer.write_bars_by_day, symbol, bars)
         return len(bars)
 
     async def _candle_gap_backfill(symbol: str, streamer_symbol: str) -> None:
