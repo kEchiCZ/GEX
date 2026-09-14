@@ -24,6 +24,9 @@ from gexlens_engine.storage.oi_archive import ContractSnapshot
 
 logger = logging.getLogger(__name__)
 
+#: Strop kvalifikace kontraktu (sec-def) — jinak při mrtvé farmě visí navždy
+QUALIFY_TIMEOUT_S = 20.0
+
 
 def spec_to_contract(spec: OptionContractSpec) -> Contract:
     if spec.sec_type == "FOP":
@@ -99,9 +102,22 @@ class IbQuoteStreamer:
         cached = self._qualified.get(spec)
         if cached is not None:
             return cached
-        results = cast(
-            "list[Contract | None]", await self._ib.qualifyContractsAsync(spec_to_contract(spec))
-        )
+        try:
+            # Kvalifikace jde přes sec-def farmu; při Error 1100 (souběh
+            # s mobilem) neodpoví nikdy a bez stropu visí celý OI archiv
+            # i setup pipeline (#1153: engine 14. 9. stál 10 min bez cyklů)
+            results = cast(
+                "list[Contract | None]",
+                await asyncio.wait_for(
+                    self._ib.qualifyContractsAsync(spec_to_contract(spec)),
+                    timeout=QUALIFY_TIMEOUT_S,
+                ),
+            )
+        except TimeoutError:
+            logger.warning(
+                "Kvalifikace %s timeout (%.0f s) — sec-def farma mlčí", spec, QUALIFY_TIMEOUT_S
+            )
+            return None
         first = results[0] if results else None
         if first is None or not first.conId:
             return None
