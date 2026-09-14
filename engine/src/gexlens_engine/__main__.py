@@ -34,6 +34,12 @@ from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.diagnostics import install_stack_dump
+from gexlens_engine.discovery_cache import (
+    CACHE_FILENAME,
+    CachedDiscovery,
+    DiscoveryCache,
+    FrontFuture,
+)
 from gexlens_engine.emrespect import EmRespectCollector
 from gexlens_engine.gammacliff import GammaCliffCollector
 from gexlens_engine.ibkr.account import classify_accounts
@@ -155,6 +161,35 @@ SPOT_FALLBACK_POLL_S = 5.0
 
 # Hlavní US futures burzy — filtr discovery podkladu (QBALGO apod. vynecháváme)
 FUTURES_EXCHANGES = ("CME", "CBOT", "NYMEX", "COMEX")
+#: reqSecDefOptParams nemá vlastní timeout; při mrtvé sec-def farmě by setup
+#: visel donekonečna a cooldown by se nikdy nedostal ke slovu (#1153)
+CHAIN_DISCOVERY_TIMEOUT_S = 30.0
+
+
+def _front_to_cache(front: Contract, symbol: str) -> FrontFuture:
+    return FrontFuture(
+        symbol=symbol,
+        con_id=int(front.conId),
+        exchange=str(front.exchange),
+        multiplier=str(front.multiplier),
+        last_trade_date=str(front.lastTradeDateOrContractMonth),
+        local_symbol=str(front.localSymbol),
+        trading_class=str(front.tradingClass),
+    )
+
+
+def _contract_from_cache(front: FrontFuture) -> Contract:
+    """ib_async kontrakt z cache — conId stačí pro reqMktData/reqRealTimeBars,
+    ostatní pole nese kvůli logům a `parse_multiplier`."""
+    return Future(
+        symbol=front.symbol,
+        lastTradeDateOrContractMonth=front.last_trade_date,
+        exchange=front.exchange,
+        multiplier=front.multiplier,
+        localSymbol=front.local_symbol,
+        tradingClass=front.trading_class,
+        conId=front.con_id,
+    )
 
 
 async def _resolve_front_future(ib: IB, symbol: str) -> Contract:
@@ -595,13 +630,37 @@ async def create_pipeline(
     ) = None,
     futures_cvd: FuturesCvdTracker | None = None,
     bar_gap_fill: Callable[[str, dt.datetime, dt.datetime], Awaitable[int]] | None = None,
+    discovery_cache: DiscoveryCache | None = None,
 ) -> InstrumentPipeline:
-    """Produkční sestavení pipeline jednoho podkladu nad ib_async."""
+    """Produkční sestavení pipeline jednoho podkladu nad ib_async.
+
+    Degradovaný start (#1153 A): když IBKR discovery selže (sec-def farma
+    „broken" při Error 1100 = souběh s mobilem), pipeline se založí z posledního
+    úspěšného discovery v `discovery_cache` a z tasty spotu; opční řetěz, OI
+    i svíčky dodají fallbacky #614/#1154, IBKR převezme po zotavení. Bez cache
+    (čistá instalace) se chová jako dřív — chyba a další pokus.
+    """
     # Provider (#613): svazek datových zdrojů; default = IBKR (jediný zapojený
     # do výpočtů, dokud shadow fáze M7 neskončí)
     if provider is None:
         provider = IbkrProvider(ib, line_gauge)
-    front = await _resolve_front_future(ib, symbol)
+    today = dt.datetime.now(dt.UTC).date()
+    cached: CachedDiscovery | None = None
+    degraded_reasons: list[str] = []
+    try:
+        front = await _resolve_front_future(ib, symbol)
+    except InstrumentSetupError as exc:
+        cached = discovery_cache.load(symbol, today=today) if discovery_cache else None
+        if cached is None:
+            raise
+        degraded_reasons.append(f"discovery podkladu ({exc})")
+        front = _contract_from_cache(cached.front)
+        logger.warning(
+            "Discovery %s selhalo — beru poslední známý kontrakt %s z cache (%s)",
+            symbol,
+            cached.front.local_symbol,
+            cached.stored_at.date(),
+        )
     multiplier = parse_multiplier(front.multiplier)
     if pacing_guard is None:
         pacing_guard = PacingGuard()
@@ -767,6 +826,13 @@ async def create_pipeline(
         ),
         float("nan"),
     )
+    if spot != spot and tasty_spot is not None:
+        # IBKR ticker mlčí (souběh s mobilem / 1100) — úvodní spot z tasty,
+        # ale jen čerstvý: stará cena z cache by pipeline založila vedle trhu
+        tasty_price, tasty_fresh = tasty_spot(symbol)
+        if tasty_price is not None and tasty_fresh:
+            spot = tasty_price
+            degraded_reasons.append("úvodní spot z tasty")
     if spot != spot:
         ib.cancelMktData(front)
         raise InstrumentSetupError(f"{symbol}: nedorazila cena podkladu (subskripce dat?)")
@@ -775,10 +841,42 @@ async def create_pipeline(
     underlying = Underlying(
         symbol=symbol, sec_type="FUT", exchange=front.exchange, con_id=front.conId
     )
-    infos = await discovery.discover(underlying)
+    try:
+        infos = await asyncio.wait_for(
+            discovery.discover(underlying), timeout=CHAIN_DISCOVERY_TIMEOUT_S
+        )
+    except TimeoutError:
+        logger.warning("Discovery řetězu %s timeout (%.0f s)", symbol, CHAIN_DISCOVERY_TIMEOUT_S)
+        infos = []
+    if infos and discovery_cache is not None:
+        discovery_cache.store(_front_to_cache(front, symbol), infos)
     if not infos:
-        ib.cancelMktData(front)
-        raise InstrumentSetupError(f"{symbol}: žádný FOP řetězec na {front.exchange}")
+        if cached is None and discovery_cache is not None:
+            cached = discovery_cache.load(symbol, today=today)
+        if cached is None:
+            ib.cancelMktData(front)
+            raise InstrumentSetupError(f"{symbol}: žádný FOP řetězec na {front.exchange}")
+        infos = list(cached.unexpired(today))
+        degraded_reasons.append(f"řetěz z cache ({cached.stored_at.date()})")
+    if degraded_reasons:
+        logger.warning(
+            "Degradovaný start %s (#1153): %s — IBKR převezme po zotavení",
+            symbol,
+            "; ".join(degraded_reasons),
+        )
+        await publisher.publish(
+            "alerts",
+            {
+                "kind": "degraded_start",
+                "symbol": symbol,
+                "message": (
+                    f"{symbol}: IBKR neodpovídá, pipeline založena z posledního známého "
+                    f"discovery a tastytrade ({'; '.join(degraded_reasons)}). Spot, řetěz, "
+                    "OI i svíčky jedou z tasty, IBKR převezme po zotavení."
+                ),
+                "ts": dt.datetime.now(dt.UTC).timestamp(),
+            },
+        )
     info = infos[0]
     band = discovery.initial_band(info, spot)
     contracts = build_contracts(underlying, info, band)
@@ -880,6 +978,22 @@ async def create_pipeline(
         )
 
     backfill_task = asyncio.create_task(initial_backfill())
+    if degraded_reasons and bar_gap_fill is not None:
+        # IBKR historical backfill teď selže — díru od začátku seance doplní
+        # tasty svíčky hned, ne až po 3 min stall (#1154 kryje jen čerstvé minuty)
+        now_utc = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
+        session_start, _ = session_bounds(trading_session_date(now_utc))
+
+        async def _degraded_gap_fill() -> None:
+            try:
+                filled = await bar_gap_fill(
+                    symbol, max(session_start, now_utc - dt.timedelta(hours=24)), now_utc
+                )
+                logger.info("Degradovaný start %s: z tasty doplněno %d barů", symbol, filled)
+            except Exception:
+                logger.exception("Doplnění barů %s při degradovaném startu selhalo", symbol)
+
+        asyncio.create_task(_degraded_gap_fill())
     # Hlídač mlčícího IBKR spotu (#614); bez fallbacku se úloha nezakládá
     fallback_task = asyncio.create_task(spot_fallback_loop()) if spot_fallback is not None else None
 
@@ -1266,6 +1380,8 @@ async def main() -> None:
     )
     # Globální rate limiter historical requestů (SPEC 3.6) — sdílený všemi pipeline
     pacing_guard = PacingGuard()
+    # Poslední úspěšné discovery per symbol (#1153) — start bez IBKR sec-def
+    discovery_cache = DiscoveryCache(settings.derived_dir / CACHE_FILENAME)
 
     pipelines: dict[str, InstrumentPipeline] = {}
 
@@ -1514,12 +1630,30 @@ async def main() -> None:
             await asyncio.to_thread(comparison_repository.ensure_schema)
 
         def shadow_contracts() -> dict[OptionContractSpec, CachedQuote]:
+            """IBKR kotace všech pipeline — vstup křížové kontroly (potřebuje obě strany)."""
             merged: dict[OptionContractSpec, CachedQuote] = {}
             for pipeline in pipelines.values():
                 merged.update(pipeline.runtime.scheduler.quotes())
                 if pipeline.next_runtime is not None:
                     merged.update(pipeline.next_runtime.scheduler.quotes())
             return merged
+
+        def shadow_contract_specs() -> list[OptionContractSpec]:
+            """Kontrakty, které pipeline DRŽÍ — vstup plánu tasty subskripcí (#1153).
+
+            Do 14. 9. 2026 se plán odvozoval z `scheduler.quotes()`, tj. z toho,
+            co IBKR už nakótovalo. Pipeline založená během výpadku IBKR měla
+            cache prázdnou → 0 chain symbolů v tasty → fallback řetězu neměl
+            z čeho brát a ES jel celé odpoledne s 0 snapshoty, ačkoli
+            `chain_source` hlásil tasty. Množina kontraktů je vlastnost
+            pipeline, ne stavu IBKR feedu.
+            """
+            specs: list[OptionContractSpec] = []
+            for pipeline in pipelines.values():
+                specs.extend(pipeline.runtime.contracts)
+                if pipeline.next_runtime is not None:
+                    specs.extend(pipeline.next_runtime.contracts)
+            return specs
 
         def shadow_oi_snapshot() -> dict[tuple[str, str, float, str], float]:
             """Denní archiv IBKR pro OI porovnání (#664) — klíč (symbol, expiry, strike, right)."""
@@ -1744,7 +1878,7 @@ async def main() -> None:
                     for symbol in shadow_target_symbols():
                         chain = await symbol_map.chain(symbol, today)
                         shadow_chain[symbol] = chain
-                        chain_syms = tracked_symbols(list(shadow_contracts().keys()), chain)
+                        chain_syms = tracked_symbols(shadow_contract_specs(), chain)
                         purpose["chain"] |= chain_syms
                         symbols |= chain_syms
                         # Extended expirace (#616 4a): šířka mimo IBKR množinu —
@@ -2388,6 +2522,7 @@ async def main() -> None:
                     spot_fallback_source=tasty_spot_lookup,
                     bar_gap_fill=bar_gap_fill,
                     futures_cvd=futures_cvd,
+                    discovery_cache=discovery_cache,
                 )
                 setup_cooldown.succeeded(symbol)
             except ConnectionError as exc:
