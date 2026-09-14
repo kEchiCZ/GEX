@@ -437,6 +437,30 @@ export function Heatmap({
     }
   }, [grid.minutes, grid.strikes, strikeCount, view, logicalW, logicalH, bucketMinutes, bucketPhase, axisOffsets]) // prettier-ignore
 
+  // 2) Bitmapa → viditelný canvas (pan/zoom)
+  const drawData = useCallback(() => {
+    const canvas = canvasRef.current
+    const offscreen = offscreenRef.current
+    if (!canvas || !offscreen) return
+    const context = canvas.getContext('2d')
+    if (!context) return
+    context.setTransform(1, 0, 0, 1, 0, 0)
+    context.clearRect(0, 0, canvas.width, canvas.height)
+    context.imageSmoothingEnabled = true // bilineární interpolace Gradient stylu
+    const scaleX = baseBucketPx(offscreen.width, logicalW) * view.zoomX
+    const scaleY = (logicalH / offscreen.height) * view.zoomY
+    context.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, dpr * view.offsetX, dpr * view.offsetY)
+    context.drawImage(offscreen, 0, 0)
+    // Děravá strike osa (#548): natažený bitmap by data roztáhl přes díru —
+    // pásmo díry se vymaže (zůstane tmavé) a krajní buňky drží cap na medián
+    // rozestupů; platí i pro Dyn GEX podklad (#242), sdílí tutéž osu
+    context.setTransform(dpr, 0, 0, dpr, 0, 0)
+    for (const band of gapBands(grid.strikes, scaleY, view.offsetY)) {
+      context.clearRect(0, band.top, logicalW, band.bottom - band.top)
+    }
+    context.setTransform(1, 0, 0, 1, 0, 0)
+  }, [view, logicalW, logicalH, dpr, grid.strikes])
+
   // 1) Data → offscreen bitmapa (jen při změně dat/stylu). S Dyn GEX podkladem
   // (#242) se pole kreslí PRVNÍ a měřený grid přes něj — putImageData by podklad
   // přepsala, měřená vrstva proto jde přes drawImage (alfa kompozice).
@@ -473,30 +497,6 @@ export function Heatmap({
     drawData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grid, underGrid, style, underPalette])
-
-  // 2) Bitmapa → viditelný canvas (pan/zoom)
-  const drawData = useCallback(() => {
-    const canvas = canvasRef.current
-    const offscreen = offscreenRef.current
-    if (!canvas || !offscreen) return
-    const context = canvas.getContext('2d')
-    if (!context) return
-    context.setTransform(1, 0, 0, 1, 0, 0)
-    context.clearRect(0, 0, canvas.width, canvas.height)
-    context.imageSmoothingEnabled = true // bilineární interpolace Gradient stylu
-    const scaleX = baseBucketPx(offscreen.width, logicalW) * view.zoomX
-    const scaleY = (logicalH / offscreen.height) * view.zoomY
-    context.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, dpr * view.offsetX, dpr * view.offsetY)
-    context.drawImage(offscreen, 0, 0)
-    // Děravá strike osa (#548): natažený bitmap by data roztáhl přes díru —
-    // pásmo díry se vymaže (zůstane tmavé) a krajní buňky drží cap na medián
-    // rozestupů; platí i pro Dyn GEX podklad (#242), sdílí tutéž osu
-    context.setTransform(dpr, 0, 0, dpr, 0, 0)
-    for (const band of gapBands(grid.strikes, scaleY, view.offsetY)) {
-      context.clearRect(0, band.top, logicalW, band.bottom - band.top)
-    }
-    context.setTransform(1, 0, 0, 1, 0, 0)
-  }, [view, logicalW, logicalH, dpr, grid.strikes])
 
   // 3) STATICKÁ overlay vrstva: kontury, uzavřené svíčky, sessions, levels/walls,
   // anotace, popisky os, timestamp. Překresluje se jen při změně dat/pohledu — NE

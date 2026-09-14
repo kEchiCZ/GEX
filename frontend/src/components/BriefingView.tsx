@@ -571,7 +571,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
             <ul className="briefing-list" data-testid="briefing-week-ahead">
               {weekAhead.map((row) => {
                 const at = new Date(row.ts_event)
-                const days = Math.round((at.getTime() - Date.now()) / 86_400_000)
+                const days = Math.round((at.getTime() - now) / 86_400_000)
                 return (
                   <li key={row.id}>
                     <span className="muted">
