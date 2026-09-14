@@ -1453,6 +1453,9 @@ async def main() -> None:
         return price is not None and fresh
 
     pipelines: dict[str, InstrumentPipeline] = {}
+    # Cílová sada instrumentů (konfigurace + watchlist) — pro tasty větev, ať
+    # front future a řetěz drží i pro symbol, jehož pipeline zrovna neběží
+    desired_symbols: list[str] = []
 
     # ── tastytrade shadow (#613) — měří do feed_comparison; k tomu OI fill
     # (#664, předsunutý kus #614): chybějící archivní OI doplní Summary ──
@@ -1934,11 +1937,12 @@ async def main() -> None:
 
             Nejen běžící pipelines (#756): bez připojeného IBKR neběží žádná,
             takže by se řetěz ani front future nikdy neodebraly a fallback by
-            při startu bez TWS neměl z čeho stavět. Konfigurovaný seznam je
-            dostupný vždy; symboly přidané do watchlistu se přidají, jakmile
-            jejich pipeline naskočí.
+            při startu bez TWS neměl z čeho stavět. Sada = konfigurace +
+            watchlist + běžící pipelines (#1153: NQ z watchlistu bez pipeline
+            neměl v tasty front future → „nedorazila cena podkladu" a
+            degradovaný start nešel — kuře a vejce).
             """
-            return sorted({*settings.symbol_list, *pipelines})
+            return sorted({*settings.symbol_list, *desired_symbols, *pipelines})
 
         def ibkr_expiries_of(symbol: str) -> set[str]:
             """Expirace držené IBKR pipeline (aktivní + next) — vlastnická množina."""
@@ -2443,6 +2447,7 @@ async def main() -> None:
 
     manager.on_resubscribe(release_cooldown_after_reconnect)
     desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
+    desired_symbols[:] = desired
     cycle = 0
     force_watchlist = False
     # Výchozí stav razítek přepojení (#950). Načíst PŘED smyčkou: jinak nejde
@@ -2472,6 +2477,7 @@ async def main() -> None:
         ):
             force_watchlist = False
             desired = merge_symbols(settings.symbol_list, await read_watchlist(watchlist_reader))
+            desired_symbols[:] = desired
             # Nastavení laditelná za běhu ze Settings UI (#438) — jedním dotazem.
             # Do #438 se četl jen rozsah strikes; retence, disk limit, velikost
             # dávky a hot zóna se uložily, ale engine je nikdy nepřečetl.
