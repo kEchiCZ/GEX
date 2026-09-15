@@ -133,6 +133,7 @@ export function Heatmap({
   onAnnotationCreate,
   onAnnotationErase,
   onAnnotationMove,
+  onSnapshotReady,
   cellAbsolute,
   view: controlledView,
   initialZoomX = null,
@@ -193,6 +194,9 @@ export function Heatmap({
   minutesIso?: string[]
   onAnnotationCreate?: (payload: AnnotationPayload) => void
   onAnnotationErase?: (id: number) => void
+  /** Snímek grafu (#1173): rodič dostane funkci, která složí statické plátno,
+      overlay (anotace) a dynamickou vrstvu do jednoho PNG s vodoznakem. */
+  onSnapshotReady?: (snapshot: ((label: string) => Promise<Blob | null>) | null) => void
   /** Přesun anotace tažením v režimu Kurzor (#589); bez handleru se tažení
       chová jako dosud (pan plochy) a anotace se nezvýrazňují. */
   onAnnotationMove?: (id: number, payload: AnnotationPayload) => void
@@ -1703,6 +1707,36 @@ export function Heatmap({
   useLayoutEffect(() => {
     applyTooltip()
   })
+
+  // Snímek grafu pro scénář dne (#1173): tři plátna v pořadí kreslení + vodoznak.
+  // Přes ref, ne přes state — rodič volá jen na kliknutí, render nic nemění.
+  useEffect(() => {
+    if (!onSnapshotReady) return
+    const snapshot = async (label: string): Promise<Blob | null> => {
+      const layers = [canvasRef.current, overlayRef.current, dynamicRef.current]
+      const base = layers[0]
+      if (!base || base.width === 0 || base.height === 0) return null
+      const target = document.createElement('canvas')
+      target.width = base.width
+      target.height = base.height
+      const context = target.getContext('2d')
+      if (!context) return null
+      context.fillStyle = '#0b0d12'
+      context.fillRect(0, 0, target.width, target.height)
+      for (const layer of layers) {
+        if (layer && layer.width > 0) context.drawImage(layer, 0, 0, target.width, target.height)
+      }
+      context.font = `${Math.max(11, Math.round(target.height / 48))}px sans-serif`
+      context.fillStyle = 'rgba(255,255,255,0.75)'
+      context.textAlign = 'right'
+      context.textBaseline = 'top'
+      // Vpravo nahoře: dole by přepsal popisky časové osy
+      context.fillText(label, target.width - 40, 6)
+      return new Promise((resolve) => target.toBlob((blob) => resolve(blob), 'image/png'))
+    }
+    onSnapshotReady(snapshot)
+    return () => onSnapshotReady(null)
+  }, [onSnapshotReady])
 
   // Odběr busu (#492): tooltip synchronně (testy i čitelnost), canvas přes
   // rAF s koalescencí — víc pohybů v jednom snímku = jedno překreslení

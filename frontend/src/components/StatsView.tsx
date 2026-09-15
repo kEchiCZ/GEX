@@ -34,6 +34,7 @@ import {
   usdSimulation,
 } from '../setups/performance'
 import { fetchVerdictStats } from '../api/briefing'
+import { ScenarioStatsSection } from './ScenarioStatsSection'
 import type { VerdictStatBucket, VerdictStats } from '../api/briefing'
 import { sessionDateIso } from '../instrument/tz'
 import { API_BASE } from '../config'
@@ -895,6 +896,8 @@ export function StatsView() {
         </p>
         <VerdictStatsSection stats={verdictStats} />
       </section>
+
+      <ScenarioStatsSection symbol={symbol} />
 
       <section className="stats-section" aria-label="Track record">
         <h2>Track record — mechanické equity křivky</h2>

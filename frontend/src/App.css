@@ -3111,6 +3111,77 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   white-space: pre-wrap;
 }
 
+/* Scénář dne (#1173): dialog nad grafem, karty v Briefingu/Stats, toast */
+.scenario-dialog {
+  margin: 6px 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 720px;
+}
+.scenario-dialog h3 {
+  margin: 0;
+}
+.scenario-dialog label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scenario-dialog input {
+  flex: 1;
+}
+.scenario-toast {
+  margin: 4px 14px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: rgba(46, 204, 113, 0.18);
+  color: var(--up);
+  font-size: 12px;
+}
+.scenario-card {
+  border-top: 1px solid var(--border);
+  padding: 6px 0;
+  font-size: 12px;
+}
+.scenario-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.scenario-verdict {
+  padding: 1px 6px;
+  border-radius: 9px;
+  font-size: 10px;
+}
+.scenario-pending {
+  background: rgba(125, 133, 150, 0.25);
+}
+.scenario-hit {
+  background: rgba(46, 204, 113, 0.25);
+  color: var(--up);
+}
+.scenario-partial {
+  background: rgba(245, 197, 66, 0.2);
+  color: #f5c542;
+}
+.scenario-miss {
+  background: rgba(231, 76, 60, 0.22);
+  color: var(--down);
+}
+.scenario-image {
+  display: block;
+  margin-top: 6px;
+  max-width: 100%;
+  max-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
 /* Push kategorie (#1175) — jeden řádek na kategorii, tooltip nese popis */
 .push-category {
   display: flex;

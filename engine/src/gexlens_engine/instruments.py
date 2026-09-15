@@ -52,6 +52,7 @@ from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.ivrank import IvRankCollector
 from gexlens_engine.probes import T9ProbeCollector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
+from gexlens_engine.scenarios import ScenarioCollector
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository, collect_alpha_calibration
 from gexlens_engine.storage.fa_validation import FaValidationRepository, collect_fa_validation
@@ -325,6 +326,8 @@ class InstrumentPipeline:
     t6_collector: T6Collector | None = None
     # Gamma útes po expiraci (#576, fáze 1 jen měření) — None = vypnuto
     gamma_cliff: GammaCliffCollector | None = None
+    # Scénář dne (#1173) — vyhodnocení po termínu, jednou po settle
+    scenario_collector: ScenarioCollector | None = None
     # Volatilitní režim z barů (ADR-0028, #713) — None = vypnuto
     vol_regime: VolRegimeCollector | None = None
     # Respektování pásma EM (#872, D3) — None = vypnuto
@@ -941,6 +944,12 @@ class InstrumentPipeline:
                 await self.gamma_cliff.on_minute(now)
             except Exception:
                 logger.exception("Gamma útes %s selhal — pokračuji", self.symbol)
+        # Scénáře dne (#1173) — jednou po settle, jen scénáře po termínu
+        if self.scenario_collector is not None:
+            try:
+                await self.scenario_collector.on_minute(now)
+            except Exception:
+                logger.exception("Vyhodnocení scénářů %s selhalo — pokračuji", self.symbol)
         # Volatilitní režim (ADR-0028) — jednou po settle, čte jen bary
         if self.vol_regime is not None:
             try:

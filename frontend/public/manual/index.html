@@ -825,6 +825,24 @@ k oknu&quot;: kontext „kde OI sedí vůči výběru&quot;, ne tvrzení, že se
 </tbody></table>
 <p>Vedle nástrojů je <strong>výběr barvy</strong>. Anotace jsou ukotvené k <strong>času a striku</strong> (ne k pixelům) — drží na svém místě při zoomu, panu i přetáčení, <strong>přežijí restart aplikace</strong> a jsou uložené zvlášť pro každý instrument a den.</p>
 <hr>
+<h3>Scénář dne — nakreslená cesta s vyhodnocením (v1.18, #1173)</h3>
+<p>Nakresli na <strong>živém</strong> grafu očekávanou cestu ceny (šipka nebo freehand) a
+klikni <strong>✎ Scénář</strong>: aplikace pořídí snímek grafu s anotací, z geometrie
+odvodí <strong>cíle v pořadí</strong> (obraty cesty + koncový bod, jdou upravit, max 3),
+nabídne <strong>termín</strong> (settle dnešního dne nebo zvolené budoucí datum, do 60
+dní) a poznámku. Po termínu engine scénář <strong>sám vyhodnotí</strong>: zásah cíle 1,
+cíle 2 (až po cíli 1 — cesta má pořadí), zda pořadí drželo, a největší
+odchylku close od nakreslené cesty v bodech i násobcích EM dne vzniku.
+Výsledek: <strong>trefa</strong> (cíl 1 a případný cíl 2 po něm), <strong>částečně</strong> (cíl 1 ano,
+cíl 2 ne), <strong>mimo</strong> (cíl 1 ne). Kde to vidíš: <strong>Briefing → Scénář dne</strong>
+(otevřené scénáře se snímkem + poslední vyhodnocené), <strong>Stats → Scénáře dne</strong>
+(track record: hit rate cílů, pořadí, medián odchylky — brána n ≥ 30 jako
+u verdiktu dne), alert ve zvonku (a Telegramu) po vyhodnocení.</p>
+<p>Zásady: scénář vzniká <strong>jen dopředu</strong> — na živém dni (v replay minulého dne
+tlačítko není) a vyhodnocuje se výhradně z barů po jeho vzniku; nic se
+nedopočítává zpětně. Snímky leží na disku (<code>data/scenarios/</code>); nad <strong>1 GB</strong>
+přijde alert „pročisti&quot; — mazání je ruční v Settings → Scénáře dne (mizí jen
+PNG, výsledky zůstávají).</p>
 <h3>Technická poznámka k ukotvení</h3>
 <p>Anotace se vážou na <strong>absolutní minutu dne × cenu</strong> — přepnutí timeframe
 (1m ↔ 15m) s nimi nehne. Kreslí se jen v den svého vzniku (per instrument

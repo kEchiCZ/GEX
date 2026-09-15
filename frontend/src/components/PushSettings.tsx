@@ -20,8 +20,8 @@ export interface PushStatus {
 export const PUSH_CATEGORIES: readonly { key: string; label: string; help: string }[] = [
   {
     key: 'setup',
-    label: 'Setupy',
-    help: 'Vznik setupu (T1–T9 z registru), práh confidence z .env (GEXLENS_PUSH_SETUP_MIN_CONFIDENCE).',
+    label: 'Setupy a scénáře',
+    help: 'Vznik setupu (T1–T9 z registru, práh confidence z .env) a výsledek scénáře dne po termínu.',
   },
   {
     key: 'ops',
