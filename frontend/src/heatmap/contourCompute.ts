@@ -3,7 +3,7 @@
 Vytaženo z Heatmap.tsx do čisté funkce, aby týž kód běžel ve web workeru
 (hlavní cesta) i synchronně (fallback bez Workeru — jsdom testy, SSR).
 */
-import { contourLevels, marchingSquares } from './contours'
+import { contourLevels, flipSegments, marchingSquares } from './contours'
 import type { ContoursMode, Segment } from './contours'
 import { gaussianBlur } from './render'
 
@@ -15,6 +15,9 @@ export function computeContourSegments(
 ): Segment[] {
   if (mode === 'off') return []
   const smoothed = gaussianBlur(field, width, height)
+  // Kontura flipu (#1174) jde vždy samostatným výpočtem (jiný styl čáry) —
+  // kombinované módy sem posílá hook rozložené na hladiny + 'flip'
+  if (mode === 'flip') return flipSegments(smoothed, width, height)
   // Prahy per strana nad znaménkovým polem (#571); záporná strana jedním
   // algoritmem nad -field (#570) — u čistě kladných polí je sada prázdná
   const levels = contourLevels(smoothed, mode)

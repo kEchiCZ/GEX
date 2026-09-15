@@ -246,6 +246,13 @@ tedy vždy uvidíš dvě čáry bez ohledu na to, jak silný den je:
 - **Off** — vypnuto
 - **Major** — úrovně 65 % a 95 % — jen jádra koncentrací
 - **All** — úrovně 40 % a 70 % — širší obrys struktury
+- **Flip** (v1.18, #1174) — **kontura flipu v čase**: jediná silnější
+  čárkovaná bílá čára tam, kde zobrazené pole **mění znaménko** (z tlumení
+  do zesilování) — přes celou osu včetně projekce do zbytku dne. Je to
+  nulová izolinie **modelu** (Dyn GEX pole), tedy něco jiného než žlutá
+  **Gamma Flip** linie z vrstev, která je změřený flip aktuálního řetězu
+  per minuta; kde se ty dvě rozcházejí, model a měření nesouhlasí.
+- **Major + Flip / All + Flip** — obojí naráz
 
 **Major a All nejsou „důležité vs. všechny" úrovně — je to jen posun obou
 prahů.** Major kreslí užší obrys kolem nejsilnějších jader, All zachytí i

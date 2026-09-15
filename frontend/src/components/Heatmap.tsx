@@ -11,6 +11,7 @@ jsou ostré i na velkých monitorech. Souřadnice událostí = CSS pixely.
 */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useElementSize } from '../hooks/useElementSize'
+import { splitContoursMode } from '../heatmap/contours'
 import type { ContoursMode } from '../heatmap/contours'
 import { useContours } from '../heatmap/useContours'
 import { renderGrid } from '../heatmap/render'
@@ -392,7 +393,10 @@ export function Heatmap({
 
   // Kontury (#493): výpočet ve web workeru + cache per (pole, mód) —
   // datový update nedropne frame, přepínání módů je cache hit
-  const contourSegments = useContours(grid, underGrid, contours)
+  // Hladiny a flip zvlášť (#1174): jiný styl čáry, vlastní cache per mód
+  const contoursSplit = splitContoursMode(contours)
+  const contourSegments = useContours(grid, underGrid, contoursSplit.levels)
+  const flipContourSegments = useContours(grid, underGrid, contoursSplit.flip ? 'flip' : 'off')
 
   // Mapa 1m osy pro anotace (#502) — null = identita index == minuta
   const axisOffsets = useMemo(
@@ -552,6 +556,22 @@ export function Heatmap({
       }
       context.stroke()
       context.setLineDash([])
+    }
+    // Kontura flipu (#1174): nulová izolinie modelu — plná bílá, silnější,
+    // ať se liší od hladin (tenké čárkované) i od žluté Gamma Flip linie
+    // z měřeného řetězu (levels)
+    if (flipContourSegments.length > 0) {
+      context.strokeStyle = 'rgba(255,255,255,0.95)'
+      context.setLineDash([10, 5])
+      context.lineWidth = 1.75
+      context.beginPath()
+      for (const [x1, y1, x2, y2] of flipContourSegments) {
+        context.moveTo(minuteToX(x1 - 0.5), rowToY(y1))
+        context.lineTo(minuteToX(x2 - 0.5), rowToY(y2))
+      }
+      context.stroke()
+      context.setLineDash([])
+      context.lineWidth = 1
     }
 
     // Sessions markery (svislé čáry s popisky): všechny popisky zarovnané

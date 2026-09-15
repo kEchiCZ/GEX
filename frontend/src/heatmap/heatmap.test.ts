@@ -1,7 +1,13 @@
 /** Testy heatmap jádra (issue #23): barvy, grid, render snapshoty, contours, výkon. */
 import { describe, expect, test } from 'vitest'
 import { applyStale, blend, callColor, putColor, signedColor } from './color'
-import { contourLevels, marchingSquares, quantile } from './contours'
+import {
+  contourLevels,
+  flipSegments,
+  marchingSquares,
+  quantile,
+  splitContoursMode,
+} from './contours'
 import { buildGrid, cellIndex } from './grid'
 import { demoGrid } from './demo'
 import { gaussianBlur, projectionAlphaAt, renderGrid } from './render'
@@ -290,6 +296,36 @@ test('marching squares nad -field: symetrické pole dá stejný počet segmentů
   const negative = levels.negative.flatMap((level) => marchingSquares(negated, 6, 5, level))
   expect(positive.length).toBeGreaterThan(0)
   expect(negative.length).toBe(positive.length)
+})
+
+test('flipSegments: nulová izolinie jen tam, kde se mění znaménko (#1174)', () => {
+  // Sloupce 0–1 kladné, 2–3 záporné → svislá čára mezi nimi (v každém řádku)
+  const width = 4
+  const height = 3
+  const field = Float32Array.from([1, 1, -1, -1, 2, 2, -2, -2, 1, 1, -1, -1])
+  const segments = flipSegments(field, width, height)
+  expect(segments.length).toBe(height - 1)
+  for (const [x1, , x2] of segments) {
+    expect(x1).toBeCloseTo(1.5) // přesně uprostřed mezi sloupci 1 a 2
+    expect(x2).toBeCloseTo(1.5)
+  }
+  // Nuly jen na jedné straně (okraj dat) čáru nedají — jinak by falešný flip
+  // obklopil každou prázdnou oblast
+  const oneSided = Float32Array.from([0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1])
+  expect(flipSegments(oneSided, width, height)).toEqual([])
+  expect(flipSegments(new Float32Array(width * height), width, height)).toEqual([])
+})
+
+test('splitContoursMode rozkládá kombinované módy; hladiny módu flip jsou prázdné (#1174)', () => {
+  expect(splitContoursMode('off')).toEqual({ levels: 'off', flip: false })
+  expect(splitContoursMode('major')).toEqual({ levels: 'major', flip: false })
+  expect(splitContoursMode('flip')).toEqual({ levels: 'off', flip: true })
+  expect(splitContoursMode('major+flip')).toEqual({ levels: 'major', flip: true })
+  expect(splitContoursMode('all+flip')).toEqual({ levels: 'all', flip: true })
+  expect(contourLevels(Float32Array.from([1, -1]), 'flip')).toEqual({ positive: [], negative: [] })
+  expect(contourLevels(Float32Array.from([1, -1]), 'all+flip')).toEqual(
+    contourLevels(Float32Array.from([1, -1]), 'all'),
+  )
 })
 
 test('marching squares najde hranici kolem vrcholu', () => {
