@@ -55,6 +55,7 @@ from gexlens_api.heatmap import (
 from gexlens_api.live import LiveHub, TooManyChannels, TooManySubscribers, parse_channels
 from gexlens_api.meta_repo import MetaRepository
 from gexlens_api.news_explain import ExplainOptions
+from gexlens_api.push_telegram import PushOptions, TelegramPush
 from gexlens_api.security import (
     build_token_guard,
     load_allowed_origins,
@@ -124,6 +125,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     live_hub = LiveHub()
     meta_repository = MetaRepository(settings)
     alert_engine = AlertEngine(live_hub)
+    # Push na Telegram (#1175): posluchač kanálu alerts, přepínače kategorií
+    # ze serverových nastavení; bez přihlašovacích údajů v .env jen loguje
+    telegram_push = TelegramPush(PushOptions.from_settings(settings), meta_repository.settings_all)
+    live_hub.alert_listeners.append(telegram_push.handle)
+    app_push = telegram_push
     # OI archiv (PG, lazy) — ΔOI vs. předchozí den v /replay balíku
     oi_repository_ref: list[OIEodRepository] = []
 
@@ -217,6 +223,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def health() -> dict[str, str]:
         """Liveness check pro monitoring a smoke testy."""
         return {"status": "ok"}
+
+    @app.get("/push/status")
+    def push_status() -> dict[str, object]:
+        """Stav push notifikací (#1175): nakonfigurováno, odesláno dnes, poslední chyba."""
+        return app_push.status()
 
     @app.get("/status")
     def status() -> dict[str, object]:

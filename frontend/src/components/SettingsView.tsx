@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import { loadApiToken, saveApiToken } from '../api/apiToken'
 import { downloadBackup } from '../api/backup'
 import { requestReconnect, useServerSettings } from '../api/settings'
+import { PushSettings } from './PushSettings'
 import type { ReconnectTarget } from '../api/settings'
 import {
   providerButtonLabel,
@@ -743,6 +744,9 @@ Sběr dat se na ~1–2 minuty přeruší.`)
           </label>
         </SettingRow>
       </section>
+
+      {/* Push na Telegram (#1175): přepínače kategorií = serverová nastavení */}
+      <PushSettings values={values} put={put} />
 
       <section aria-label="Vzhled">
         <h2>Vzhled</h2>

@@ -1343,6 +1343,18 @@ zůstanou ve formuláři. Téma (Dark/Light) se ukládá hned, zbytek přes Ulo�
 <hr>
 <h2>14. Notifikace a alerty</h2>
 <p><strong>Zvonek</strong> v hlavičce ukazuje badge s počtem nepřečtených alertů; kliknutím otevřeš historii (otevření badge vynuluje). Alerty chodí i za běhu do IBKR Console logu.</p>
+<p><strong>Push na Telegram (v1.18, #1175):</strong> totéž, co zvoní ve zvonku, může chodit i na
+mobil přes Telegram bota — jedna fronta, dva výstupy, žádná jiná logika.
+V Settings → <strong>Notifikace (Telegram)</strong> přepínáš kategorie: <strong>Setupy</strong> (vznik
+setupu, práh confidence v <code>.env</code>), <strong>Provoz</strong> (výpadek IBKR, degradovaný start,
+přetažení mobilem, disk, zaseknuté greeks — chodí i v tichých hodinách),
+<strong>Zprávy</strong> (anomálie, koncentrace opčního objemu), <strong>Ostatní</strong> (FA validace,
+drift, blízkost úrovně — default vypnuto). Tiché hodiny 23:00–06:00 (lokálně),
+duplicitní alert do 10 min se neposílá, denní strop 200. Nastavení bota
+(přihlašovací údaje, chat id) dělá správce v <code>.env</code> — bez něj Settings ukážou
+„Telegram bot není nastaven&quot;. <strong>Když se přihlásíš na mobilu k IBKR</strong>, engine
+jede z tastytrade a CumΔ stojí: setupy s potvrzením tokem (T1, T4, T8)
+nevznikají, T2/T3/T7 a zprávy chodí dál; provozní alert o přetažení dostaneš.</p>
 <p>Zvonek je <strong>globální — sbírá alerty napříč všemi instrumenty</strong> ve watchlistu, ne jen z toho na grafu. Proto je u každého alertu <strong>datum + čas</strong> notifikace a <strong>symbol instrumentu</strong> (např. <code>[NQ · setup]</code>). Naproti tomu <strong>karty a linie setupů přímo v grafu jsou jen pro instrument, který máš zobrazený.</strong></p>
 <p>Druhy alertů:</p>
 <table>

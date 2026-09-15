@@ -12,7 +12,7 @@ import asyncio
 import contextlib
 import logging
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -102,6 +102,10 @@ class LiveHub:
         self._max_subscribers = max_subscribers
         self._subscribers: dict[int, _Subscriber] = {}
         self._next_id = 0
+        # Posluchači kanálu `alerts` mimo WS (#1175 push): jedna fronta, dva
+        # výstupy — co zvoní, dostane i posluchač; výjimka posluchače nesmí
+        # shodit publish (WS klienti mají přednost)
+        self.alert_listeners: list[Callable[[Message], None]] = []
 
     def register(self) -> tuple[int, asyncio.Queue[Message]]:
         if len(self._subscribers) >= self._max_subscribers:
@@ -137,6 +141,12 @@ class LiveHub:
         (SPEC: backpressure — drop starých framů).
         """
         message: Message = {"channel": channel, "data": payload}
+        if channel == "alerts":
+            for listener in list(self.alert_listeners):
+                try:
+                    listener(payload)
+                except Exception:  # noqa: BLE001 — posluchač je doplněk, ne cesta k UI
+                    logger.exception("Posluchač alertů selhal")
         delivered = 0
         for subscriber in list(self._subscribers.values()):
             if not channel_matches(subscriber.channels, channel):
