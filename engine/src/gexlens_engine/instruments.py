@@ -52,6 +52,7 @@ from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.ivrank import IvRankCollector
 from gexlens_engine.probes import T9ProbeCollector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
+from gexlens_engine.scenario_auto import ScenarioGenerator
 from gexlens_engine.scenarios import ScenarioCollector
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository, collect_alpha_calibration
@@ -328,6 +329,8 @@ class InstrumentPipeline:
     gamma_cliff: GammaCliffCollector | None = None
     # Scénář dne (#1173) — vyhodnocení po termínu, jednou po settle
     scenario_collector: ScenarioCollector | None = None
+    # Automatický scénář z verdiktu dne (#1173 A) — jednou před US openem
+    scenario_generator: ScenarioGenerator | None = None
     # Volatilitní režim z barů (ADR-0028, #713) — None = vypnuto
     vol_regime: VolRegimeCollector | None = None
     # Respektování pásma EM (#872, D3) — None = vypnuto
@@ -944,6 +947,12 @@ class InstrumentPipeline:
                 await self.gamma_cliff.on_minute(now)
             except Exception:
                 logger.exception("Gamma útes %s selhal — pokračuji", self.symbol)
+        # Automatický scénář dne (#1173 A) — jednou před US openem
+        if self.scenario_generator is not None:
+            try:
+                await self.scenario_generator.on_minute(now, spot, self.runtime)
+            except Exception:
+                logger.exception("Automatický scénář %s selhal — pokračuji", self.symbol)
         # Scénáře dne (#1173) — jednou po settle, jen scénáře po termínu
         if self.scenario_collector is not None:
             try:

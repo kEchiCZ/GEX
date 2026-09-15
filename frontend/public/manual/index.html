@@ -825,19 +825,33 @@ k oknu&quot;: kontext „kde OI sedí vůči výběru&quot;, ne tvrzení, že se
 </tbody></table>
 <p>Vedle nástrojů je <strong>výběr barvy</strong>. Anotace jsou ukotvené k <strong>času a striku</strong> (ne k pixelům) — drží na svém místě při zoomu, panu i přetáčení, <strong>přežijí restart aplikace</strong> a jsou uložené zvlášť pro každý instrument a den.</p>
 <hr>
-<h3>Scénář dne — nakreslená cesta s vyhodnocením (v1.18, #1173)</h3>
-<p>Nakresli na <strong>živém</strong> grafu očekávanou cestu ceny (šipka nebo freehand) a
-klikni <strong>✎ Scénář</strong>: aplikace pořídí snímek grafu s anotací, z geometrie
-odvodí <strong>cíle v pořadí</strong> (obraty cesty + koncový bod, jdou upravit, max 3),
-nabídne <strong>termín</strong> (settle dnešního dne nebo zvolené budoucí datum, do 60
-dní) a poznámku. Po termínu engine scénář <strong>sám vyhodnotí</strong>: zásah cíle 1,
+<h3>Scénář dne — automaticky z verdiktu dne, nebo nakreslený (v1.18, #1173)</h3>
+<p><strong>Automatický scénář</strong> (výchozí, varianta A): 15 minut před US openem engine
+sám sestaví scénář pro každý symbol z <strong>verdiktu dne</strong> — stejné hlasování,
+jaké vidíš v Briefingu (trend vyšších a nižších TF, tendence, sentiment,
+cena vs. včerejší close, ΔOI přes noc, gamma režim). Při verdiktu long/short
+jsou cíle <strong>nejbližší úrovně obratu ve směru</strong> (zdi, flip, těžiště, PDH/PDL/
+PDC, ONH/ONL, ±EM; max 2), cesta vstup → cíl 1 → cíl 2, termín settle dne.
+Při verdiktu „bez převahy&quot; nebo „čekat na zprávu&quot; scénář nevznikne a log
+enginu řekne proč. Cesta se <strong>kreslí živě do heatmapy</strong> (modrá čárkovaná
+čára) a snímek PNG si aplikace pořídí sama, jakmile máš graf otevřený. Karta
+scénáře nese štítek <strong>auto</strong> a rozbalovací <strong>hlasy verdiktu</strong> (proč právě
+tenhle směr a cíle). Nastavení: <code>GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN</code>
+(ADMIN manuál; 0 = vypnuto).</p>
+<p><strong>Ruční scénář</strong> (doplněk, štítek „ručně&quot;): nakresli na <strong>živém</strong> grafu
+očekávanou cestu ceny (šipka nebo freehand) a klikni <strong>✎ Scénář</strong>: aplikace
+pořídí snímek grafu s anotací, z geometrie odvodí <strong>cíle v pořadí</strong> (obraty
+cesty + koncový bod, jdou upravit, max 3), nabídne <strong>termín</strong> (settle
+dnešního dne nebo zvolené budoucí datum, do 60 dní) a poznámku.</p>
+<p>Po termínu engine každý scénář <strong>sám vyhodnotí</strong>: zásah cíle 1,
 cíle 2 (až po cíli 1 — cesta má pořadí), zda pořadí drželo, a největší
 odchylku close od nakreslené cesty v bodech i násobcích EM dne vzniku.
 Výsledek: <strong>trefa</strong> (cíl 1 a případný cíl 2 po něm), <strong>částečně</strong> (cíl 1 ano,
 cíl 2 ne), <strong>mimo</strong> (cíl 1 ne). Kde to vidíš: <strong>Briefing → Scénář dne</strong>
 (otevřené scénáře se snímkem + poslední vyhodnocené), <strong>Stats → Scénáře dne</strong>
-(track record: hit rate cílů, pořadí, medián odchylky — brána n ≥ 30 jako
-u verdiktu dne), alert ve zvonku (a Telegramu) po vyhodnocení.</p>
+(track record <strong>zvlášť pro auto a ruční</strong> scénáře: hit rate cílů, pořadí,
+medián odchylky — brána n ≥ 30 jako u verdiktu dne), alert ve zvonku
+(a Telegramu) při vzniku i po vyhodnocení.</p>
 <p>Zásady: scénář vzniká <strong>jen dopředu</strong> — na živém dni (v replay minulého dne
 tlačítko není) a vyhodnocuje se výhradně z barů po jeho vzniku; nic se
 nedopočítává zpětně. Snímky leží na disku (<code>data/scenarios/</code>); nad <strong>1 GB</strong>

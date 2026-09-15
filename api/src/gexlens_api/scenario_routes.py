@@ -43,6 +43,10 @@ class ScenarioPathPoint(BaseModel):
     price: float
 
 
+class ScenarioImageIn(BaseModel):
+    image_png_base64: str
+
+
 class ScenarioIn(BaseModel):
     symbol: str = Field(min_length=1, max_length=16)
     entry: float
@@ -158,15 +162,54 @@ def build_scenario_router(
 
     @router.get("/scenarios")
     def scenarios_list(
-        symbol: str | None = None, limit: int = Query(50, ge=1, le=500)
+        symbol: str | None = None,
+        limit: int = Query(50, ge=1, le=500),
+        source: str | None = Query(None, pattern="^(manual|auto)$"),
     ) -> dict[str, Any]:
-        return {"scenarios": [row.as_dict() for row in repo().list_for(symbol, limit=limit)]}
+        return {
+            "scenarios": [
+                row.as_dict() for row in repo().list_for(symbol, limit=limit, source=source)
+            ]
+        }
 
     @router.get("/scenarios/stats")
     def scenarios_stats(symbol: str | None = None) -> dict[str, Any]:
-        """Track record scénářů; `preliminary` dokud n < 30 (stejná brána jako verdikt dne)."""
-        stats = repo().stats(symbol)
-        return {"symbol": symbol, "preliminary": stats["n"] < 30, **stats}
+        """Track record scénářů per zdroj (auto = verdikt dne, manual = nakreslené);
+        `preliminary` dokud n < 30 (stejná brána jako verdikt dne)."""
+        total = repo().stats(symbol)
+        by_source = {
+            source: repo().stats(symbol, source=source) for source in ("auto", "manual")
+        }
+        return {
+            "symbol": symbol,
+            "preliminary": total["n"] < 30,
+            **total,
+            "by_source": {
+                key: {**value, "preliminary": value["n"] < 30} for key, value in by_source.items()
+            },
+        }
+
+    @router.put("/scenarios/{scenario_id}/image")
+    def scenario_image_put(scenario_id: int, payload: ScenarioImageIn) -> dict[str, Any]:
+        """Snímek k automatickému scénáři dodá frontend, jakmile má graf otevřený
+        (#1173 A); ruční scénář ho má od založení. Jen jednou — druhý pokus 409."""
+        row = repo().get(scenario_id)
+        if row is None:
+            raise HTTPException(404, f"Scénář {scenario_id} neexistuje")
+        if row.image_path:
+            raise HTTPException(409, "Scénář už snímek má")
+        image = _decode_png(payload.image_png_base64)
+        if image is None:
+            raise HTTPException(422, "Chybí snímek")
+        relative = Path(SCENARIOS_SUBDIR) / row.symbol / row.day.isoformat() / f"{scenario_id}.png"
+        target = data_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(image)
+        repo().set_image(scenario_id, relative.as_posix(), len(image))
+        _check_disk()
+        updated = repo().get(scenario_id)
+        assert updated is not None
+        return updated.as_dict()
 
     @router.get("/scenarios/disk")
     def scenarios_disk() -> dict[str, Any]:

@@ -126,6 +126,7 @@ export function Heatmap({
   priceStyle = 'line',
   priceOpacity = 1,
   annotations = [],
+  ghostAnnotations = [],
   annotationTool = null,
   annotationColor = '#e8c14b',
   bucketMinutes = 1,
@@ -192,6 +193,8 @@ export function Heatmap({
       přes tuhle mapu, ne aritmetikou indexu. Bez ní platí identita
       (demo data, Daily pohled). */
   minutesIso?: string[]
+  /** Cesty scénářů dne (#1173): kreslí se čárkovaně, nejdou chytit ani mazat. */
+  ghostAnnotations?: AnnotationPayload[]
   onAnnotationCreate?: (payload: AnnotationPayload) => void
   onAnnotationErase?: (id: number) => void
   /** Snímek grafu (#1173): rodič dostane funkci, která složí statické plátno,
@@ -1011,6 +1014,14 @@ export function Heatmap({
         context.lineTo(x2 - head * Math.cos(angle + 0.5), y2 - head * Math.sin(angle + 0.5))
         context.stroke()
       }
+    }
+    // Cesty scénářů (#1173): čárkované, pod ručními anotacemi, bez interakce
+    if (ghostAnnotations.length > 0) {
+      context.setLineDash([6, 4])
+      for (const ghost of ghostAnnotations) {
+        drawAnnotation(ghost.tool, ghost.color, ghost.points)
+      }
+      context.setLineDash([])
     }
     for (const annotation of annotations) {
       // Přesouvaná anotace se kreslí na rozpracované pozici, ne na uložené (#589)

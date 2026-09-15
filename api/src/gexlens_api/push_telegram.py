@@ -74,7 +74,7 @@ NEWS_KINDS: frozenset[str] = frozenset({"news_anomaly", "vol_concentration"})
 
 def category_of(kind: str) -> str:
     # Výsledek scénáře dne (#1173) patří k obchodním věcem uživatele — s setupy
-    if kind in ("setup", "scenario_result"):
+    if kind in ("setup", "scenario_result", "scenario_created"):
         return "setup"
     if kind in OPS_KINDS:
         return "ops"

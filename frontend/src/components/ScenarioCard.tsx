@@ -30,12 +30,42 @@ export function ScenarioCard({
         </strong>
         <span className="muted"> → termín {scenario.deadline}</span>
         <span className={cls}>{verdictLabel(result)}</span>
+        <span
+          className="scenario-source"
+          title={
+            scenario.source === 'auto'
+              ? 'Založil engine z verdiktu dne (15 min před US openem)'
+              : 'Nakreslený ručně (✎ Scénář)'
+          }
+        >
+          {scenario.source === 'auto' ? 'auto' : 'ručně'}
+        </span>
       </div>
       <div className="muted">
         vstup {scenario.entry.toFixed(2)} · cíle{' '}
         {scenario.targets.map((t) => t.toFixed(2)).join(' → ')}
         {scenario.note ? ` · ${scenario.note}` : ''}
       </div>
+      {scenario.rationale && (
+        <details className="scenario-rationale">
+          <summary className="muted">
+            verdikt {scenario.rationale.verdict} · skóre {scenario.rationale.score >= 0 ? '+' : ''}
+            {scenario.rationale.score}
+            {scenario.rationale.targets ? ` · cíle ${scenario.rationale.targets.join(' → ')}` : ''}
+          </summary>
+          <ul>
+            {scenario.rationale.votes.map((vote) => (
+              <li key={vote.name}>
+                {vote.vote >= 0 ? '+' : ''}
+                {vote.vote} {vote.reason}
+              </li>
+            ))}
+            {scenario.rationale.missing.length > 0 && (
+              <li className="muted">chybělo: {scenario.rationale.missing.join(', ')}</li>
+            )}
+          </ul>
+        </details>
+      )}
       {result && (
         <div className="muted" data-testid={`scenario-result-${scenario.id}`}>
           cíl 1 {result.hit1 ? 'ano' : 'ne'}

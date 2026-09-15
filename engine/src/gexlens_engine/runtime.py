@@ -151,6 +151,8 @@ class EngineRuntime:
     ) = None
     # Poslední spočtené hodnoty cyklu — čte je SetupEngine (ADR-0004)
     last_levels: LevelsRow | None = field(default=None, init=False)
+    # Poslední pásmo tendence (#350) — vstup verdiktu dne pro automatický scénář (#1173 A)
+    tendency_band: str | None = field(default=None, init=False)
     last_flow: FlowRowLike | None = field(default=None, init=False)
     # Kompletní levels vč. dominance zdí (ADR-0010, #223) — LevelsRow je nenese
     last_gex_levels: GexLevels | None = field(default=None, init=False)

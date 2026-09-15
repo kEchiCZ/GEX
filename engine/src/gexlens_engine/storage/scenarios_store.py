@@ -54,6 +54,10 @@ scenarios_table = Table(
     Column("image_bytes", Integer, nullable=False, default=0),
     Column("evaluated_at", DateTime(timezone=True), nullable=True),
     Column("result", JSON, nullable=True),
+    # Zdroj (#1173 A): "manual" = nakreslený uživatelem, "auto" = verdikt dne;
+    # track record se vede zvlášť. `rationale` = hlasy verdiktu a chybějící vstupy
+    Column("source", String(16), nullable=False, default="manual"),
+    Column("rationale", JSON, nullable=True),
 )
 
 
@@ -74,6 +78,8 @@ class ScenarioRow:
     image_bytes: int
     evaluated_at: dt.datetime | None
     result: dict[str, Any] | None
+    source: str = "manual"
+    rationale: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +98,8 @@ class ScenarioRow:
             "image_bytes": self.image_bytes,
             "evaluated_at": self.evaluated_at.isoformat() if self.evaluated_at else None,
             "result": self.result,
+            "source": self.source,
+            "rationale": self.rationale,
         }
 
 
@@ -122,6 +130,8 @@ def _row(mapping: Any) -> ScenarioRow:
         image_bytes=int(mapping["image_bytes"] or 0),
         evaluated_at=evaluated,
         result=mapping["result"],
+        source=str(mapping["source"] or "manual"),
+        rationale=mapping["rationale"],
     )
 
 
@@ -130,7 +140,18 @@ class ScenariosRepository:
         self._engine = engine
 
     def ensure_schema(self) -> None:
+        from sqlalchemy import inspect, text
+
         scenarios_metadata.create_all(self._engine)
+        # Dopředná migrace (#1173 A): sloupce source/rationale k řádkům z první verze
+        columns = {column["name"] for column in inspect(self._engine).get_columns("scenarios")}
+        with self._engine.begin() as conn:
+            if "source" not in columns:
+                conn.execute(
+                    text("ALTER TABLE scenarios ADD COLUMN source VARCHAR(16) DEFAULT 'manual'")
+                )
+            if "rationale" not in columns:
+                conn.execute(text("ALTER TABLE scenarios ADD COLUMN rationale JSON"))
 
     def create(
         self,
@@ -145,6 +166,8 @@ class ScenariosRepository:
         path: list[dict[str, Any]],
         annotation_id: int | None,
         note: str | None,
+        source: str = "manual",
+        rationale: dict[str, Any] | None = None,
     ) -> int:
         with self._engine.begin() as conn:
             result = conn.execute(
@@ -161,6 +184,8 @@ class ScenariosRepository:
                     note=note,
                     image_path=None,
                     image_bytes=0,
+                    source=source,
+                    rationale=rationale,
                 )
             )
             key = result.inserted_primary_key
@@ -185,12 +210,41 @@ class ScenariosRepository:
             )
         return _row(row) if row is not None else None
 
-    def list_for(self, symbol: str | None, *, limit: int = 50) -> list[ScenarioRow]:
+    def list_for(
+        self, symbol: str | None, *, limit: int = 50, source: str | None = None
+    ) -> list[ScenarioRow]:
         stmt = select(scenarios_table).order_by(scenarios_table.c.created_at.desc()).limit(limit)
         if symbol:
             stmt = stmt.where(scenarios_table.c.symbol == symbol)
+        if source:
+            stmt = stmt.where(scenarios_table.c.source == source)
         with self._engine.connect() as conn:
             return [_row(row) for row in conn.execute(stmt).mappings()]
+
+    def exists_auto(self, symbol: str, day: dt.date) -> bool:
+        stmt = select(func.count(scenarios_table.c.id)).where(
+            scenarios_table.c.symbol == symbol,
+            scenarios_table.c.day == day,
+            scenarios_table.c.source == "auto",
+        )
+        with self._engine.connect() as conn:
+            return int(conn.execute(stmt).scalar_one()) > 0
+
+    def em_reference(self, symbol: str, session: dt.date) -> tuple[float | None, float | None]:
+        """Kotva a EM seance z `em_respect` (pokud už existuje); jinak (None, None)."""
+        from gexlens_engine.storage.emrespect_store import em_respect_table
+
+        stmt = select(em_respect_table.c.anchor, em_respect_table.c.em_points).where(
+            em_respect_table.c.symbol == symbol, em_respect_table.c.session_date == session
+        )
+        try:
+            with self._engine.connect() as conn:
+                row = conn.execute(stmt).first()
+        except Exception:  # noqa: BLE001 — tabulka nemusí existovat, EM je doplněk
+            return None, None
+        if row is None:
+            return None, None
+        return float(row[0]), float(row[1])
 
     def pending(self, symbol: str, now: dt.datetime) -> list[ScenarioRow]:
         """Scénáře po termínu bez výsledku — vstup večerního vyhodnocení."""
@@ -242,11 +296,13 @@ class ScenariosRepository:
             total, rows, images = conn.execute(stmt).one()
         return {"bytes": int(total), "scenarios": int(rows), "images": int(images)}
 
-    def stats(self, symbol: str | None) -> dict[str, Any]:
+    def stats(self, symbol: str | None, source: str | None = None) -> dict[str, Any]:
         """Track record vyhodnocených scénářů: hit rate cílů, pořadí, medián odchylky."""
         stmt = select(scenarios_table).where(scenarios_table.c.result.is_not(None))
         if symbol:
             stmt = stmt.where(scenarios_table.c.symbol == symbol)
+        if source:
+            stmt = stmt.where(scenarios_table.c.source == source)
         with self._engine.connect() as conn:
             rows = [_row(row) for row in conn.execute(stmt).mappings()]
         results = [row.result for row in rows if row.result]

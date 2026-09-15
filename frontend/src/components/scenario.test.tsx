@@ -95,6 +95,15 @@ const SCENARIO: Scenario = {
   has_image: true,
   image_bytes: 1000,
   evaluated_at: '2026-09-15T20:16:00Z',
+  source: 'auto',
+  rationale: {
+    rules_version: 1,
+    verdict: 'short',
+    score: -4,
+    votes: [{ name: 'trend_higher', vote: -2, reason: 'vyšší TF klesající' }],
+    missing: [],
+    targets: ['ONL', 'Put wall'],
+  },
   result: {
     hit1: true,
     hit2: false,
@@ -111,6 +120,9 @@ const SCENARIO: Scenario = {
 test('karta ukazuje verdikt, výsledek a snímek', () => {
   render(<ScenarioCard scenario={SCENARIO} />)
   expect(screen.getByText('částečně')).toBeDefined()
+  expect(screen.getByText('auto')).toBeDefined()
+  expect(screen.getByText(/verdikt short · skóre -4 · cíle ONL → Put wall/)).toBeDefined()
+  expect(screen.getByText('-2 vyšší TF klesající')).toBeDefined()
   expect(screen.getByTestId('scenario-result-7').textContent).toContain(
     'cíl 1 ano · cíl 2 ne · pořadí ne · max. odchylka 42.5 b (0.31 EM)',
   )

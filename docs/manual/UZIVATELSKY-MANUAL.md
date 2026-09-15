@@ -664,20 +664,36 @@ Vedle nástrojů je **výběr barvy**. Anotace jsou ukotvené k **času a striku
 
 ---
 
-### Scénář dne — nakreslená cesta s vyhodnocením (v1.18, #1173)
+### Scénář dne — automaticky z verdiktu dne, nebo nakreslený (v1.18, #1173)
 
-Nakresli na **živém** grafu očekávanou cestu ceny (šipka nebo freehand) a
-klikni **✎ Scénář**: aplikace pořídí snímek grafu s anotací, z geometrie
-odvodí **cíle v pořadí** (obraty cesty + koncový bod, jdou upravit, max 3),
-nabídne **termín** (settle dnešního dne nebo zvolené budoucí datum, do 60
-dní) a poznámku. Po termínu engine scénář **sám vyhodnotí**: zásah cíle 1,
+**Automatický scénář** (výchozí, varianta A): 15 minut před US openem engine
+sám sestaví scénář pro každý symbol z **verdiktu dne** — stejné hlasování,
+jaké vidíš v Briefingu (trend vyšších a nižších TF, tendence, sentiment,
+cena vs. včerejší close, ΔOI přes noc, gamma režim). Při verdiktu long/short
+jsou cíle **nejbližší úrovně obratu ve směru** (zdi, flip, těžiště, PDH/PDL/
+PDC, ONH/ONL, ±EM; max 2), cesta vstup → cíl 1 → cíl 2, termín settle dne.
+Při verdiktu „bez převahy" nebo „čekat na zprávu" scénář nevznikne a log
+enginu řekne proč. Cesta se **kreslí živě do heatmapy** (modrá čárkovaná
+čára) a snímek PNG si aplikace pořídí sama, jakmile máš graf otevřený. Karta
+scénáře nese štítek **auto** a rozbalovací **hlasy verdiktu** (proč právě
+tenhle směr a cíle). Nastavení: `GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN`
+(ADMIN manuál; 0 = vypnuto).
+
+**Ruční scénář** (doplněk, štítek „ručně"): nakresli na **živém** grafu
+očekávanou cestu ceny (šipka nebo freehand) a klikni **✎ Scénář**: aplikace
+pořídí snímek grafu s anotací, z geometrie odvodí **cíle v pořadí** (obraty
+cesty + koncový bod, jdou upravit, max 3), nabídne **termín** (settle
+dnešního dne nebo zvolené budoucí datum, do 60 dní) a poznámku.
+
+Po termínu engine každý scénář **sám vyhodnotí**: zásah cíle 1,
 cíle 2 (až po cíli 1 — cesta má pořadí), zda pořadí drželo, a největší
 odchylku close od nakreslené cesty v bodech i násobcích EM dne vzniku.
 Výsledek: **trefa** (cíl 1 a případný cíl 2 po něm), **částečně** (cíl 1 ano,
 cíl 2 ne), **mimo** (cíl 1 ne). Kde to vidíš: **Briefing → Scénář dne**
 (otevřené scénáře se snímkem + poslední vyhodnocené), **Stats → Scénáře dne**
-(track record: hit rate cílů, pořadí, medián odchylky — brána n ≥ 30 jako
-u verdiktu dne), alert ve zvonku (a Telegramu) po vyhodnocení.
+(track record **zvlášť pro auto a ruční** scénáře: hit rate cílů, pořadí,
+medián odchylky — brána n ≥ 30 jako u verdiktu dne), alert ve zvonku
+(a Telegramu) při vzniku i po vyhodnocení.
 
 Zásady: scénář vzniká **jen dopředu** — na živém dni (v replay minulého dne
 tlačítko není) a vyhodnocuje se výhradně z barů po jeho vzniku; nic se
