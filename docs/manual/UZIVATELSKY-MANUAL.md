@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.17 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.18 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -417,6 +417,7 @@ Horizontální skládané pruhy pro každý strike, **na stejné výškové ose 
 - Tlačítka **1× / 2× / 4×** zvětšují měřítko pruhů
 - Tlačítko **Kontrakty / Prémie $** (v1.17, #1126) přepíná jednotku pruhů, čísel, osy i Vol leaderů. **Kontrakty** = Δ-vážené počty (výchozí). **Prémie $** = `volume × mid × multiplikátor` per strana a strike (OI složka = OI × týž mid) — říká, **kam tekly peníze, ne kolik kontraktů**: 1 000 kontraktů levných křídel za pár dolarů nepřebije 100 ATM kontraktů za násobně víc. Stejná definice jako jednotka Prémie $ v panelu PUT / CALL: mid (bid+ask)/2 je k zobrazené minutě, u objemu tedy aproximace (neváží cenu v okamžiku obchodu). Strana se zmrzlou kotací nebo bez midu má pruh nulový (tooltip řádku ukáže „— (bez midu)“); je-li takových kontraktů přes 30 %, hlavička nese štítek **bez midu N %**. Bez jediného použitelného midu (Σ souhrn přes expirace, replay bez kotací, načítání) profil spadne zpět na kontrakty a řekne to štítkem **Prémie nedostupné → kontrakty**. Dvoutónový rozklad outright/struktura (níže) platí v obou jednotkách; v diferenčním módu B−A (kap. 8b) zůstává rozdíl v kontraktech. Volba se pamatuje.
 - Tlačítko **Σ** = souhrn přes všechny sbírané expirace tohoto instrumentu (pondělní + úterní řetěz…). Hlavička se změní na „Σ expirací"; heatmapa zůstává u zvolené expirace. Celkový positioning bez přepínání.
+- **ⓘ v hlavičce** (v1.18, #1126) = **Metodika**: najetím odpověď na nejčastější otázku „odkud ta čísla jsou" — OI z ranního archivu CME přes IBKR (jednou denně, přes den se nemění; striky mimo obálku IBKR nesou denní OI z tastytrade), FA odhad `OI_est = ranní OI + α·klasifikovaný tok` jako model, Vol a OI Δ jako Δ-vážené složky (proto „kontrakty" ≠ hrubé počty), Prémie $ = objem × mid × multiplikátor. Kliknutí otevře tento manuál.
 - Najetí myší na řádek zvýrazní strike v celé aplikaci (crosshair) a dole zobrazí **tooltip**: OI call/put, Vol call/put, **ΔOI vs. včera C/P** (kde přes noc přibyly/ubyly pozice; jen per expirace, v Σ režimu se neukazuje), vzdálenost od spotu
 - **Šířku panelu změníš tažením předělu** mezi grafem a panelem (kurzor ↔). Panel jde roztáhnout hodně doleva (až ~360 px zbyde na graf), aby byla vidět celá délka pruhu i s číslem.
 - **Profilem ovládáš i cenovou osu Y grafu** — tažení svisle nebo kolečko nad profilem stlačuje/roztahuje ceny stejně jako levý okraj heatmapy (kurzor ↕).
@@ -629,12 +630,12 @@ k oknu": kontext „kde OI sedí vůči výběru", ne tvrzení, že se v okně z
 
 ## 9. Playback — přehrávání dne
 
-**Aplikace defaultně jede vždy live** — replay lišta je skrytá, aby nerušila. Zobrazíš ji tlačítkem **⏮ Replay** v liště grafu:
+**Aplikace defaultně jede vždy live** — ovládání replaye je skryté, aby nerušilo. Zobrazíš ho tlačítkem **⏮ Replay** v liště grafu; od v1.18 (#1126) se rozbalí **přímo v liště vedle tlačítka** (▶, rychlosti, slider, Live), ne jako samostatný pruh pod spodními panely — graf ani panely se neposunou:
 
 - **Slider** — táhni kamkoli v dni; heatmapa, strike profil i spodní panely se **synchronně přetočí** k danému okamžiku
 - **▶ / ⏸** — automatické přehrávání; rychlosti **1× / 5× / 20×** (1× = 2 minuty dne za sekundu)
 - **● Live** — skok zpět na aktuální okamžik; přehrávání na konci dne se zastaví samo
-- **Zavření lišty** (druhý klik na ⏮ Replay) graf automaticky vrátí na live
+- **Zavření ovládání** (druhý klik na ⏮ Replay) graf automaticky vrátí na live
 
 Celý den je po načtení v paměti — přetáčení je okamžité, bez čekání na server. Při přepnutí timeframe zůstává live pozice live a rozehraný replay se přemapuje proporcionálně.
 

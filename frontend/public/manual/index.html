@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.17 · září 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.18 · září 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); od verze 1.9 slouží <strong>tastytrade</strong> jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -551,6 +551,8 @@ backfill, jiný den nebo symbol, #977).</p>
 </li>
 <li><p>Tlačítko <strong>Σ</strong> = souhrn přes všechny sbírané expirace tohoto instrumentu (pondělní + úterní řetěz…). Hlavička se změní na „Σ expirací&quot;; heatmapa zůstává u zvolené expirace. Celkový positioning bez přepínání.</p>
 </li>
+<li><p><strong>ⓘ v hlavičce</strong> (v1.18, #1126) = <strong>Metodika</strong>: najetím odpověď na nejčastější otázku „odkud ta čísla jsou&quot; — OI z ranního archivu CME přes IBKR (jednou denně, přes den se nemění; striky mimo obálku IBKR nesou denní OI z tastytrade), FA odhad <code>OI_est = ranní OI + α·klasifikovaný tok</code> jako model, Vol a OI Δ jako Δ-vážené složky (proto „kontrakty&quot; ≠ hrubé počty), Prémie $ = objem × mid × multiplikátor. Kliknutí otevře tento manuál.</p>
+</li>
 <li><p>Najetí myší na řádek zvýrazní strike v celé aplikaci (crosshair) a dole zobrazí <strong>tooltip</strong>: OI call/put, Vol call/put, <strong>ΔOI vs. včera C/P</strong> (kde přes noc přibyly/ubyly pozice; jen per expirace, v Σ režimu se neukazuje), vzdálenost od spotu</p>
 </li>
 <li><p><strong>Šířku panelu změníš tažením předělu</strong> mezi grafem a panelem (kurzor ↔). Panel jde roztáhnout hodně doleva (až ~360 px zbyde na graf), aby byla vidět celá délka pruhu i s číslem.</p>
@@ -775,12 +777,12 @@ jsou jen dosypy téhož čísla) a k oknu nepatří. Přepínačem <strong>„je
 ztlumeně se šrafovaným obrysem a tooltip ji značí „statické (EOD), nepatří
 k oknu&quot;: kontext „kde OI sedí vůči výběru&quot;, ne tvrzení, že se v okně změnilo.</p>
 <h2>9. Playback — přehrávání dne</h2>
-<p><strong>Aplikace defaultně jede vždy live</strong> — replay lišta je skrytá, aby nerušila. Zobrazíš ji tlačítkem <strong>⏮ Replay</strong> v liště grafu:</p>
+<p><strong>Aplikace defaultně jede vždy live</strong> — ovládání replaye je skryté, aby nerušilo. Zobrazíš ho tlačítkem <strong>⏮ Replay</strong> v liště grafu; od v1.18 (#1126) se rozbalí <strong>přímo v liště vedle tlačítka</strong> (▶, rychlosti, slider, Live), ne jako samostatný pruh pod spodními panely — graf ani panely se neposunou:</p>
 <ul>
 <li><strong>Slider</strong> — táhni kamkoli v dni; heatmapa, strike profil i spodní panely se <strong>synchronně přetočí</strong> k danému okamžiku</li>
 <li><strong>▶ / ⏸</strong> — automatické přehrávání; rychlosti <strong>1× / 5× / 20×</strong> (1× = 2 minuty dne za sekundu)</li>
 <li><strong>● Live</strong> — skok zpět na aktuální okamžik; přehrávání na konci dne se zastaví samo</li>
-<li><strong>Zavření lišty</strong> (druhý klik na ⏮ Replay) graf automaticky vrátí na live</li>
+<li><strong>Zavření ovládání</strong> (druhý klik na ⏮ Replay) graf automaticky vrátí na live</li>
 </ul>
 <p>Celý den je po načtení v paměti — přetáčení je okamžité, bez čekání na server. Při přepnutí timeframe zůstává live pozice live a rozehraný replay se přemapuje proporcionálně.</p>
 <hr>
