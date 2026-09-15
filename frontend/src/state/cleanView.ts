@@ -7,6 +7,7 @@ zapnutím se uloží snímek všeho, na co sahá, a vypnutí snímek vrátí př
 (i nevýchozí hodnoty). Obojí — příznak i snímek — se persistuje (ADR-0007),
 takže refresh nechá pohled zapnutý a druhé kliknutí pořád vrací původní volby.
 Čisté funkce, bez Reactu — App.tsx jen drží stav a volá settery. */
+import { CONTOURS_MODES } from '../heatmap/contours'
 import type { ContoursMode } from '../heatmap/contours'
 import type { PriceStyle } from '../heatmap/overlays'
 import { WALLS_MODES } from '../heatmap/wallsModes'
@@ -93,7 +94,7 @@ export function cleanViewLevels<T extends { name: string }>(levels: T[]): T[] {
 }
 
 const WALLS_VALUES: readonly string[] = WALLS_MODES.map((item) => item.value)
-const CONTOURS_VALUES: readonly string[] = ['off', 'major', 'all']
+const CONTOURS_VALUES: readonly string[] = CONTOURS_MODES
 const PRICE_STYLES: readonly string[] = ['line', 'candles']
 
 function reviveSettings(value: unknown): CleanViewSettings | null {

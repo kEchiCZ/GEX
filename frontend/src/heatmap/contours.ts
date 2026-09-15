@@ -8,7 +8,38 @@ nestlačila prahy k nule — a protože p99 je i jmenovatel barev (modes.ts),
 kontury sedí na barvu. Jmenovatel se počítá ZVLÁŠŤ per strana (#570): při
 dominanci jedné strany by slabší jinak neměla ani jednu čáru. */
 
-export type ContoursMode = 'off' | 'major' | 'all'
+/** Módy: hladiny (Major/All, #571), kontura flipu (#1174: nulová izolinie
+znaménkového pole — kde model přechází z tlumení do zesilování, v čase i přes
+projekci) a kombinace. `flip` sám je i interní mód pro výpočet flip segmentů. */
+export type ContoursMode = 'off' | 'major' | 'all' | 'flip' | 'major+flip' | 'all+flip'
+export const CONTOURS_MODES: readonly ContoursMode[] = [
+  'off',
+  'major',
+  'all',
+  'flip',
+  'major+flip',
+  'all+flip',
+]
+
+/** Rozklad módu na hladiny (Major/All/off) a příznak flipu — kreslí se
+každé jiným stylem, proto dva samostatné výpočty (#1174). */
+export function splitContoursMode(mode: ContoursMode): {
+  levels: 'off' | 'major' | 'all'
+  flip: boolean
+} {
+  switch (mode) {
+    case 'major':
+    case 'major+flip':
+      return { levels: 'major', flip: mode !== 'major' }
+    case 'all':
+    case 'all+flip':
+      return { levels: 'all', flip: mode !== 'all' }
+    case 'flip':
+      return { levels: 'off', flip: true }
+    default:
+      return { levels: 'off', flip: false }
+  }
+}
 
 /** Úsečka v souřadnicích buněk: [x1, y1, x2, y2]. */
 export type Segment = [number, number, number, number]
@@ -36,8 +67,9 @@ export interface ContourLevels {
 }
 
 export function contourLevels(field: ArrayLike<number>, mode: ContoursMode): ContourLevels {
-  if (mode === 'off') return { positive: [], negative: [] }
-  const shares = mode === 'major' ? CONTOUR_MAJOR : CONTOUR_ALL
+  const { levels: base } = splitContoursMode(mode)
+  if (base === 'off') return { positive: [], negative: [] }
+  const shares = base === 'major' ? CONTOUR_MAJOR : CONTOUR_ALL
   const positives: number[] = []
   const negatives: number[] = []
   for (let index = 0; index < field.length; index += 1) {
@@ -57,6 +89,24 @@ function interpolate(level: number, a: number, b: number): number {
   return a === b ? 0.5 : (level - a) / (b - a)
 }
 
+/** Kontura flipu (#1174): nulová izolinie znaménkového pole, ale jen tam,
+kde znaménko OPRAVDU mění strany — čtverec musí mít aspoň jeden roh kladný
+a jeden záporný. Čtverce s nulami jen na jedné straně (okraj dat, striky bez
+gammy) se přeskočí, jinak by kolem každé prázdné oblasti vznikla falešná
+čára. Interpolace k nule je táž jako u hladin. */
+export function flipSegments(field: Float32Array, width: number, height: number): Segment[] {
+  const segments: Segment[] = []
+  const at = (x: number, y: number) => field[y * width + x]
+  for (let y = 0; y < height - 1; y += 1) {
+    for (let x = 0; x < width - 1; x += 1) {
+      const corners = [at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1)]
+      if (!corners.some((value) => value > 0) || !corners.some((value) => value < 0)) continue
+      segments.push(...marchingSquaresCell(field, width, x, y, 0))
+    }
+  }
+  return segments
+}
+
 /** Marching squares: vrací úsečky izolinie pro danou úroveň. */
 export function marchingSquares(
   field: Float32Array,
@@ -65,65 +115,76 @@ export function marchingSquares(
   level: number,
 ): Segment[] {
   const segments: Segment[] = []
-  const at = (x: number, y: number) => field[y * width + x]
-
   for (let y = 0; y < height - 1; y += 1) {
     for (let x = 0; x < width - 1; x += 1) {
-      const topLeft = at(x, y)
-      const topRight = at(x + 1, y)
-      const bottomRight = at(x + 1, y + 1)
-      const bottomLeft = at(x, y + 1)
-      let caseIndex = 0
-      if (topLeft >= level) caseIndex |= 8
-      if (topRight >= level) caseIndex |= 4
-      if (bottomRight >= level) caseIndex |= 2
-      if (bottomLeft >= level) caseIndex |= 1
-      if (caseIndex === 0 || caseIndex === 15) continue
-
-      // Body na hranách buňky (parametricky interpolované)
-      const top: [number, number] = [x + interpolate(level, topLeft, topRight), y]
-      const right: [number, number] = [x + 1, y + interpolate(level, topRight, bottomRight)]
-      const bottom: [number, number] = [x + interpolate(level, bottomLeft, bottomRight), y + 1]
-      const left: [number, number] = [x, y + interpolate(level, topLeft, bottomLeft)]
-
-      const add = (a: [number, number], b: [number, number]) =>
-        segments.push([a[0], a[1], b[0], b[1]])
-
-      switch (caseIndex) {
-        case 1:
-        case 14:
-          add(left, bottom)
-          break
-        case 2:
-        case 13:
-          add(bottom, right)
-          break
-        case 3:
-        case 12:
-          add(left, right)
-          break
-        case 4:
-        case 11:
-          add(top, right)
-          break
-        case 5:
-          add(left, top)
-          add(bottom, right)
-          break
-        case 6:
-        case 9:
-          add(top, bottom)
-          break
-        case 7:
-        case 8:
-          add(left, top)
-          break
-        case 10:
-          add(top, right)
-          add(left, bottom)
-          break
-      }
+      segments.push(...marchingSquaresCell(field, width, x, y, level))
     }
+  }
+  return segments
+}
+
+/** Jeden čtverec marching squares — sdílí ho hladinová i flip kontura. */
+function marchingSquaresCell(
+  field: Float32Array,
+  width: number,
+  x: number,
+  y: number,
+  level: number,
+): Segment[] {
+  const at = (px: number, py: number) => field[py * width + px]
+  const topLeft = at(x, y)
+  const topRight = at(x + 1, y)
+  const bottomRight = at(x + 1, y + 1)
+  const bottomLeft = at(x, y + 1)
+  let caseIndex = 0
+  if (topLeft >= level) caseIndex |= 8
+  if (topRight >= level) caseIndex |= 4
+  if (bottomRight >= level) caseIndex |= 2
+  if (bottomLeft >= level) caseIndex |= 1
+  if (caseIndex === 0 || caseIndex === 15) return []
+
+  // Body na hranách buňky (parametricky interpolované)
+  const top: [number, number] = [x + interpolate(level, topLeft, topRight), y]
+  const right: [number, number] = [x + 1, y + interpolate(level, topRight, bottomRight)]
+  const bottom: [number, number] = [x + interpolate(level, bottomLeft, bottomRight), y + 1]
+  const left: [number, number] = [x, y + interpolate(level, topLeft, bottomLeft)]
+
+  const segments: Segment[] = []
+  const add = (a: [number, number], b: [number, number]) => segments.push([a[0], a[1], b[0], b[1]])
+
+  switch (caseIndex) {
+    case 1:
+    case 14:
+      add(left, bottom)
+      break
+    case 2:
+    case 13:
+      add(bottom, right)
+      break
+    case 3:
+    case 12:
+      add(left, right)
+      break
+    case 4:
+    case 11:
+      add(top, right)
+      break
+    case 5:
+      add(left, top)
+      add(bottom, right)
+      break
+    case 6:
+    case 9:
+      add(top, bottom)
+      break
+    case 7:
+    case 8:
+      add(left, top)
+      break
+    case 10:
+      add(top, right)
+      add(left, bottom)
+      break
   }
   return segments
 }

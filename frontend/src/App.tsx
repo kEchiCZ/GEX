@@ -88,6 +88,7 @@ import { clampedNumber, clampedNumberMap, oneOf, priceRangeMap, usePersistentSta
 import { CLEAN_VIEW_OFF, CLEAN_VIEW_TARGET, CLEAN_VIEW_TOGGLE_KEYS, CLEAN_VIEW_TOOLTIP, cleanViewLevels, revivedCleanView, snapshotCleanView } from './state/cleanView' // prettier-ignore
 import type { CleanViewSettings, CleanViewState } from './state/cleanView'
 import type { ActiveTool } from './annotations/model'
+import { CONTOURS_MODES } from './heatmap/contours'
 import type { ContoursMode } from './heatmap/contours'
 import type { HeatmapStyle } from './heatmap/render'
 import type { LiveSocket } from './api/ws'
@@ -156,7 +157,7 @@ function MainContent() {
   const [contours, setContours] = usePersistentState<ContoursMode>(
     'contours',
     'off',
-    oneOf(['off', 'major', 'all']),
+    oneOf(CONTOURS_MODES),
   )
   // Persistovaný 'dyn_gex' z dob módu spadne reviverem na 'oi' (#242)
   const [mode, setMode] = usePersistentState<MeasuredHeatmapMode>(
@@ -1438,6 +1439,9 @@ function MainContent() {
             <option value="off">Off</option>
             <option value="major">Major</option>
             <option value="all">All</option>
+            <option value="flip">Flip</option>
+            <option value="major+flip">Major + Flip</option>
+            <option value="all+flip">All + Flip</option>
           </select>
         </label>
         <label className="toggle">
