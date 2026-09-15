@@ -10,6 +10,7 @@ import { categoryGlyph, categoryLabel, countdownLabel } from '../api/news'
 import type { NewsRow } from '../api/news'
 import { REACTION_RANGE_MINUTES } from '../instrument/rangeselect'
 import { expectedImpact } from '../heatmap/newsMarkers'
+import { NewsExplain } from './NewsExplain'
 import type { NewsMarker } from '../heatmap/newsMarkers'
 
 /** Čas události v lokální zóně uživatele (osa grafu je ve stejné zóně). */
@@ -154,6 +155,8 @@ export function NewsMarkerDialog({
                 <p className="news-dialog-title">{row.title}</p>
                 {row.summary && <p className="muted news-dialog-summary">{row.summary}</p>}
                 <ScheduledNumbers row={row} />
+                {/* Vysvětlení zprávy přímo z grafu (#1126 3d, rozhodnutí uživatele 15. 9.) */}
+                <NewsExplain eventId={row.id} title={row.title} />
                 {/* Range na reakční okno (#488) — u budoucích eventů okno ještě
                     neexistuje, tlačítka nemají co vybrat */}
                 {onSetRange && !marker.upcoming && (

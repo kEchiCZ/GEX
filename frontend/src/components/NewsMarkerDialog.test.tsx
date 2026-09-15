@@ -1,5 +1,5 @@
 /** Testy dialogu news markeru (#408): obsah, dopad Long/Short, zavírání. */
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import type { NewsRow } from '../api/news'
 import type { NewsMarker } from '../heatmap/newsMarkers'
@@ -110,4 +110,30 @@ test('dialog kreslí verdikt se šipkou u vydaného scheduled eventu (#462)', ()
   const verdict = screen.getByTestId('scheduled-verdict')
   expect(verdict.textContent).toContain('nižší než očekávání (-1.4σ)')
   expect(verdict.textContent).toContain('risk-on ▲')
+})
+
+test('dialog markeru nabízí Vysvětlit u každé zprávy a ukáže text z API (#1126 3d)', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: unknown, init?: RequestInit) => {
+      expect(String(url)).toContain('/news/1/explain')
+      expect(init?.method).toBe('POST')
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          event_id: 1,
+          model: 'gemini-3.8-flash',
+          text: 'Fed drží sazby.',
+          cached: true,
+        }),
+      }
+    }),
+  )
+  render(<NewsMarkerDialog marker={marker([row({ id: 1 })])} onClose={() => undefined} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Vysvětlit zprávu: Zpráva 1' }))
+  await waitFor(() =>
+    expect(screen.getByTestId('news-explain-1').textContent).toBe('Fed drží sazby.'),
+  )
+  vi.unstubAllGlobals()
 })

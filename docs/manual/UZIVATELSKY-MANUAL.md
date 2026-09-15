@@ -756,7 +756,8 @@ může hýbat ES/NQ** — z modelu Gemini (free tier, žádný placený model), 
 **neříká směr ani nedává doporučení** (to měří aplikace z reakce trhu) a do
 SentIndexu, vah ani signálů nijak neteče — je to nápověda pro porozumění,
 ne signál. Jednou vysvětlená zpráva se pamatuje (druhé kliknutí text jen
-sbalí/rozbalí, nic nestojí). Funkce vyžaduje Gemini klíč v `.env`
+sbalí/rozbalí, nic nestojí). Totéž tlačítko je i **přímo v grafu**: klik na
+news marker otevře dialog zpráv v té minutě a každá má své **Vysvětlit**. Funkce vyžaduje Gemini klíč v `.env`
 (ADMIN manuál, týž jako u klasifikace); bez něj tlačítko odpoví „Vysvětlení
 není k dispozici". Při přetížení modelu (free tier) přijde „zkus za chvíli".
 
