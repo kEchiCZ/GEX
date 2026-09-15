@@ -645,6 +645,38 @@ export async function fetchReview(): Promise<ReviewRow[]> {
 }
 
 /** Ruční korekce směru/kategorie → nová verze klasifikace (source=manual). */
+/** Vysvětlení zprávy na vyžádání (#1126 3d): text z Claude, cache na serveru
+navždy. Informativní vrstva — do SentIndexu, vah ani signálů neteče. */
+export interface NewsExplanation {
+  event_id: number
+  model: string
+  text: string
+  cached: boolean
+}
+
+export type NewsExplainResult =
+  { ok: true; explanation: NewsExplanation } | { ok: false; error: string }
+
+export async function explainNews(eventId: number): Promise<NewsExplainResult> {
+  try {
+    const response = await fetch(`${API_BASE}/news/${eventId}/explain`, { method: 'POST' })
+    if (!response.ok) {
+      // 503 = vypnuto / bez klíče / odmítnuto, 429 = denní strop — API nese důvod
+      let detail = `HTTP ${response.status}`
+      try {
+        const payload = (await response.json()) as { detail?: unknown }
+        if (typeof payload.detail === 'string') detail = payload.detail
+      } catch {
+        // tělo bez JSON — zůstává stavový kód
+      }
+      return { ok: false, error: detail }
+    }
+    return { ok: true, explanation: (await response.json()) as NewsExplanation }
+  } catch {
+    return { ok: false, error: 'API nedostupné' }
+  }
+}
+
 export async function submitReview(
   eventId: number,
   correction: { direction?: number; category?: string },

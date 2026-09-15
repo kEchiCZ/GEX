@@ -162,6 +162,14 @@ class Settings(BaseSettings):
     # midpoint do vyhodnocení paralelního běhu (≥ 5 seancí) a rozhodnutí
     # uživatele — přepnutí mění hodnoty CumΔ i vstup detektorů.
     cumdelta_source: str = Field(default="midpoint", pattern="^(midpoint|dxfeed)$")
+    # Vysvětlení zprávy na vyžádání (#1126 bod 3d, API): tlačítko u karty
+    # zprávy zavolá Claude a odpověď se uloží navždy do `news_explanations`.
+    # Klíč čte SDK z ANTHROPIC_API_KEY (bez prefixu). Denní strop je součet
+    # input+output tokenů za UTC den — po překročení API odmítne, cache jede
+    # dál. Nic z toho neteče do SentIndexu, vah ani signálů (R4, #740 fáze 0).
+    news_explain_enabled: bool = False
+    news_explain_model: str = "claude-opus-5"
+    news_explain_daily_tokens: int = Field(default=300_000, ge=0)
     # Dev laboratoř jen s tastytrade (#623, start-dev.ps1 -LiveTasty): engine
     # přeskočí IBKR úplně a jen streamuje chain do cache s heartbeat logem.
     # Produkce se flagu nedotýká — default vypnuto.

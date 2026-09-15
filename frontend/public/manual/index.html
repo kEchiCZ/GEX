@@ -851,6 +851,14 @@ všechna okna a ⚠, když do okna spadl jiný významný event a pohyb nejde
 přičíst téhle zprávě). Dopad se měří pro aktivní symbol (ES/NQ). Nahoře
 řádek <strong>Stav: RiskOn/RiskOff · trend ↑/↓/→</strong>. Plný text zprávy je přímo
 na kartě; opravy klasifikace (⚠ u titulku) zůstávají.</p>
+<p>Od v1.18 (#1126) má karta tlačítko <strong>Vysvětlit</strong>: na kliknutí přijde česky
+ve 2–4 větách, <strong>co ta zpráva je, kdo za ní stojí a přes jaký mechanismus
+může hýbat ES/NQ</strong> — z modelu Claude, jen na vyžádání. Vysvětlení záměrně
+<strong>neříká směr ani nedává doporučení</strong> (to měří aplikace z reakce trhu) a do
+SentIndexu, vah ani signálů nijak neteče — je to nápověda pro porozumění,
+ne signál. Jednou vysvětlená zpráva se pamatuje (druhé kliknutí text jen
+sbalí/rozbalí, nic nestojí). Funkce vyžaduje klíč Anthropic v <code>.env</code>
+(ADMIN manuál); bez něj tlačítko odpoví „Vysvětlení není k dispozici&quot;.</p>
 <p>Od v1.12 karta nese i <strong>kontext tématu</strong>: badge <code>téma −0,22</code> je kumulativní
 index tématu <strong>v okamžiku zprávy</strong> — do jakého narativu zpráva přišla
 (zpráva „Fed drží sazby&quot; čtená do zhoršujícího se tématu je jiná informace

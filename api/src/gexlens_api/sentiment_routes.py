@@ -23,6 +23,13 @@ from sqlalchemy import Table, case, desc, func, insert, literal, select
 from sqlalchemy import update as sql_update
 from sqlalchemy.engine import Engine
 
+from gexlens_api.news_explain import (
+    ExplainBudgetExceeded,
+    ExplainDisabled,
+    ExplainEventMissing,
+    ExplainOptions,
+    explain_event,
+)
 from gexlens_engine.compute.sentwaves import (
     DailyClose,
     DailyZ,
@@ -226,8 +233,14 @@ def _empty_table(engine: Engine, table: Table, **filters: Any) -> list[dict[str,
     return _rows(engine, stmt)
 
 
-def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
-    """Router; `engine_factory` vrací SQLAlchemy Engine (lazy, sdílený s API)."""
+def build_sentiment_router(
+    engine_factory: Any, data_dir: Path, explain: ExplainOptions | None = None
+) -> APIRouter:
+    """Router; `engine_factory` vrací SQLAlchemy Engine (lazy, sdílený s API).
+
+    `explain` = konfigurace vysvětlení zpráv (#1126 3d); None = vypnuto.
+    """
+    explain_options = explain if explain is not None else ExplainOptions()
     router = APIRouter(tags=["sentiment"])
 
     # ── Feed zpráv ─────────────────────────────────────────────────
@@ -540,6 +553,38 @@ def build_sentiment_router(engine_factory: Any, data_dir: Path) -> APIRouter:
             ),
             "predictions": predictions,
             "outcomes": outcomes,
+        }
+
+    @router.post("/news/{event_id}/explain")
+    def news_explain(event_id: int) -> dict[str, object]:
+        """Vysvětlení zprávy na vyžádání (#1126 3d): cache navždy, jinak Claude.
+
+        Informativní vrstva pro člověka — do SentIndexu, vah ani signálů
+        neteče. 503 = vypnuto/bez klíče/odmítnuto, 429 = denní strop tokenů.
+        """
+        try:
+            result = explain_event(
+                engine_factory(),
+                event_id,
+                enabled=explain_options.enabled,
+                model=explain_options.model,
+                daily_tokens=explain_options.daily_tokens,
+                api_key_present=explain_options.api_key_present,
+            )
+        except ExplainEventMissing as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ExplainBudgetExceeded as exc:
+            raise HTTPException(429, str(exc)) from exc
+        except ExplainDisabled as exc:
+            raise HTTPException(503, str(exc)) from exc
+        return {
+            "event_id": result.event_id,
+            "model": result.model,
+            "text": result.text,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+            "created_at": result.created_at.isoformat(),
+            "cached": result.cached,
         }
 
     # ── Sentiment ──────────────────────────────────────────────────
