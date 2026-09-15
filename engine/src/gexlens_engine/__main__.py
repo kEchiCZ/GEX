@@ -2743,6 +2743,9 @@ async def main() -> None:
                 last_tick_ts=now.isoformat(),
                 # Paměť procesu (#1105) — růst RSS byl 9. 9. neviditelný až do restartu PC
                 memory_rss_mb=memory_watch.last_rss_mb,
+                # Podíl Arrow poolu na RSS (#1105, 15. 9.) — kolik z paměti
+                # enginu drží pyarrow (partice), ne Python
+                memory_arrow_mb=memory_watch.last_arrow_mb,
                 # Zdroj znaménka CumΔ a denní pokrytí tisky (ADR-0032, #615
                 # krok 5) — UI ukazuje podíl objemu se stranou od burzy,
                 # ne smyšlenou šířku zóny
