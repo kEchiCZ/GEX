@@ -275,4 +275,4 @@ async def test_setup_engine_zapisuje_risk_kontext_a_brzdu(tmp_path: Path) -> Non
     await engine._alert_brake(brakes, now + dt.timedelta(minutes=5))
     brake_alerts = [e for e in publisher.events if e.get("kind") == "risk_brake"]
     assert len(brake_alerts) == 1 and brake_alerts[0]["event"] == "daily_brake"
-    assert "−3.0 R" in brake_alerts[0]["message"].replace("-", "−")
+    assert "-3.0 R" in str(brake_alerts[0]["message"])
