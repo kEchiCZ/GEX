@@ -703,14 +703,14 @@ class EngineRuntime:
         # profil/pole i řady netflow/oiest — všechno je TENTÝŽ model.
         alpha = self.flow_alpha if self.flow_alpha is not None else self.settings.flow_oi_alpha
         fa_oi: dict[OptionContractSpec, float] = {}
-        if not self.secondary and alpha > 0.0:
+        if not self.secondary:
             # Po restartu uprostřed dne naváže kumulativ z partice netflow —
             # jinak by odhad začínal od nuly a zahodil celý dopolední tok
             await self._seed_net_volume(session_day)
-            fa_oi = {
-                spec: oi_estimate(inp.oi, tracker.net_volume(spec), alpha)
-                for inp, spec in zip(gex_inputs, gex_specs, strict=True)
-            }
+            # Netflow a printvol jsou MĚŘENÁ data — píší se bez ohledu na α
+            # (#1172): dřív visely pod `alpha > 0`, takže jakmile kalibrace
+            # srazila α na 0, přestal se sbírat i její vlastní vstup a α už
+            # nikdy nevyrostla. Na α závisí jen odhad (oiest, FA profily).
             # Persistence netflow (#232): kumulativ dne per strana — vstup ranní
             # kalibrace α a zpětné validace směru (znaménko net vs. ΔOI)
             netflow_rows = [
@@ -762,6 +762,11 @@ class EngineRuntime:
                         ],
                     },
                 )
+        if not self.secondary and alpha > 0.0:
+            fa_oi = {
+                spec: oi_estimate(inp.oi, tracker.net_volume(spec), alpha)
+                for inp, spec in zip(gex_inputs, gex_specs, strict=True)
+            }
             # Řada oiest (#232): jen strany, kde se odhad liší od měřeného OI —
             # frontend při FA zdroji přepíše měřenou matici těmito buňkami
             oiest_rows = [

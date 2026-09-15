@@ -214,6 +214,19 @@ def collect_alpha_calibration(
         previous = oi_repository.latest_day_before(symbol, expiry, today)
         if previous is None or alpha_repository.history_exists(symbol, previous):
             continue
+        # Řetěz, který v den netflow (nebo dřív) expiroval, žádné „ΔOI do
+        # dalšího dne" nemá — archiv D+1 pro něj buď chybí, nebo nese tytéž
+        # hodnoty (ΔOI = 0 na všech stranách). Aktivní řetěz ES/NQ je každý den
+        # 0DTE, takže tudy kalibrace neprojde nikdy; poctivý vstup je jen
+        # řetěz s expirací po dni netflow (#1172).
+        if dt.datetime.strptime(expiry, "%Y%m%d").date() <= previous:
+            logger.info(
+                "Kalibrace α %s %s %s: řetěz v den netflow expiroval — bez ΔOI, přeskočeno",
+                symbol,
+                expiry,
+                previous,
+            )
+            continue
         netflow_path = netflow_dir / f"{previous.isoformat()}.parquet"
         if not netflow_path.exists():
             continue
@@ -226,10 +239,22 @@ def collect_alpha_calibration(
             (r.strike, r.right): r.oi for r in oi_repository.values_for(symbol, expiry, previous)
         }
         netflow = netflow_at_cutoff(netflow_path, previous)
+        # ΔOI jen pro strany, které aspoň jeden archiv nese; strany jen
+        # z netflow zůstávají bez klíče a kalibrace je přeskočí (#1172)
         doi = {
             key: float(oi_after.get(key, 0.0)) - float(oi_before.get(key, 0.0))
-            for key in set(netflow) | set(oi_before) | set(oi_after)
+            for key in set(oi_before) | set(oi_after)
         }
+        if all(value == 0.0 for value in doi.values()):
+            logger.info(
+                "Kalibrace α %s %s %s: archivy %s a %s jsou shodné (ΔOI všude 0) — bod se neukládá",
+                symbol,
+                expiry,
+                previous,
+                previous,
+                today,
+            )
+            continue
         point = calibrate_alpha(netflow, doi)
         if point is None:
             logger.info(
@@ -240,6 +265,27 @@ def collect_alpha_calibration(
             )
             continue
         state = alpha_repository.get(symbol)
+        if point.ratio_median <= 0.0:
+            # Nulový nebo záporný medián = tok se do OI nepropsal nebo jsou
+            # data rozbitá; není to důkaz pro α = 0 (vypnutí vrstvy). Bod jde
+            # do historie pro audit, α i počet dnů zůstávají (#1172).
+            logger.warning(
+                "Kalibrace α %s %s %s: medián %.3f ≤ 0 (%d stran) — α beze změny",
+                symbol,
+                expiry,
+                previous,
+                point.ratio_median,
+                point.samples,
+            )
+            alpha_repository.record(
+                symbol,
+                previous,
+                expiry,
+                point,
+                state.alpha if state else 0.0,
+                state.days if state else 0,
+            )
+            continue
         alpha_after = update_alpha(state.alpha if state else None, point.ratio_median)
         days = (state.days if state else 0) + 1
         alpha_repository.record(symbol, previous, expiry, point, alpha_after, days)

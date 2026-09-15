@@ -52,7 +52,8 @@ def calibrate_alpha(
 
     Poměr se počítá se znaménkem: net nákup s poklesem OI dává záporný poměr
     a medián ho po právu stáhne dolů. Vrací None při nedostatečném vzorku —
-    takový den se do kalibrace nezapočítá.
+    takový den se do kalibrace nezapočítá. Strany, pro které `doi` klíč nemá
+    (kontrakt v žádném z archivů), se přeskakují — chybějící měření není nula.
     """
     ratios: list[float] = []
     buy_ratios: list[float] = []
@@ -60,7 +61,11 @@ def calibrate_alpha(
     for key, net in netflow.items():
         if abs(net) < min_abs_net:
             continue
-        ratio = float(doi.get(key, 0.0)) / float(net)
+        # Strana bez ΔOI v archivech = „nevíme", ne nula (#1172): nula by
+        # medián stáhla k 0 a α vypnula — přesně to se stalo 7. a 14. 9. 2026
+        if key not in doi:
+            continue
+        ratio = float(doi[key]) / float(net)
         ratios.append(ratio)
         if net > 0:
             buy_ratios.append(ratio)
