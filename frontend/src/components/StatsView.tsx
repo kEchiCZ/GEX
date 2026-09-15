@@ -23,7 +23,7 @@ import type {
   WaveRow,
 } from '../api/news'
 import { fetchSettings } from '../api/settings'
-import { evStats, evTooltip, fetchSetups, formatPnlUsd, templateLabel } from '../api/setups'
+import { accountStats, evStats, evTooltip, fetchSetups, formatPnlUsd, templateLabel } from '../api/setups' // prettier-ignore
 import {
   annualizedSharpe,
   closedTrades,
@@ -230,6 +230,9 @@ function SetupsPerformanceSection({
   const usd = usdSimulation(rows, sessionDateIso, { accountUsd, riskPct })
   const usdCurve = usd ? equityCurve(usd.daily) : null
   const usdSharpe = usd ? annualizedSharpe(usd.daily) : null
+  // Bilance účtu ze serverového sizingu (#1185): jen obchodovatelné setupy,
+  // kontrakty × R × stop × bod − poplatky; null před prvním setupem s pravidly
+  const account = accountStats(rows)
 
   const width = 560
   const height = 160
@@ -290,6 +293,31 @@ function SetupsPerformanceSection({
             </p>
           ) : (
             <p className="muted">Vyplň účet a % rizika v Settings → Trading</p>
+          )}
+        </div>
+        <div className="stats-card">
+          <h3>Účet 50k — obchodovatelné (#1185)</h3>
+          {account && account.n > 0 ? (
+            <p
+              data-testid="stats-account"
+              title={
+                'Serverový sizing (1 % rizika, brzdy, brána šablon): jen setupy označené jako ' +
+                'obchodovatelné.' +
+                '\nReálně na MES/MNQ jsou dolary ÷ 10.'
+              }
+            >
+              {formatPnlUsd(account.pnlUsd)}{' '}
+              <span className="muted">
+                · {account.n} obchodů · stín {account.shadow} · poplatky{' '}
+                {Math.round(account.feesUsd)} $ · max DD {Math.round(account.maxDrawdownUsd)} $
+              </span>
+            </p>
+          ) : (
+            <p className="muted">
+              {account
+                ? `Zatím bez uzavřeného obchodovatelného setupu (stín ${account.shadow})`
+                : 'Zatím žádný setup s risk pravidly'}
+            </p>
           )}
         </div>
       </div>

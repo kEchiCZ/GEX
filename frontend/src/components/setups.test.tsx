@@ -102,10 +102,10 @@ test('P/L setupu v USD na 1 kontrakt (#185)', () => {
   expect(formatPnlUsd(-580.125)).toBe('-580.12 $') // Math.round půlí k +∞
 })
 
-test('P/L v % startovního účtu 5 000 $ na ticker (#191)', () => {
-  // 0.48 R × 29 b × 50 $ = 696 $ na účtu 5 000 $ → +13.92 %
+test('P/L v % startovního účtu 50 000 $ v jednotkách aplikace (#191, #1185)', () => {
+  // 0.48 R × 29 b × 50 $ = 696 $ na účtu 50 000 $ → +1.392 %
   expect(setupPnlPct({ entry: 7501, stop: 7472, outcome_r: 0.48 }, pointValue('ES'))).toBeCloseTo(
-    13.92,
+    1.392,
   )
   expect(setupPnlPct({ entry: 7501, stop: 7472, outcome_r: null }, 50)).toBeNull()
   expect(formatPct(13.92)).toBe('+13.92 %')
@@ -186,16 +186,16 @@ test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
   // Čas uzavření a P/L v USD na 1 kontrakt (#185): 0.48 R × 29 b × 50 $ = 696 $
   const closedCell = document.querySelector('[data-part="closed-ts"]')
   expect(closedCell?.textContent).toMatch(/\d{1,2}:\d{2}/) // closed_ts se zobrazuje
-  // P/L buňka nese dolary i % účtu 5 000 $ (#191)
+  // P/L buňka nese dolary i % účtu 50 000 $ (#191, #1185)
   expect(document.querySelector('[data-part="pnl"]')?.textContent).toContain('+696 $')
-  expect(document.querySelector('[data-part="pnl"]')?.textContent).toContain('+13.92 %')
+  expect(document.querySelector('[data-part="pnl"]')?.textContent).toContain('+1.39 %')
   // Zvýrazněné souhrnné statistiky (#189/#191): Ø R, Σ P/L, % P/L vůči účtu
   expect(screen.getByTestId('setups-total-pnl').textContent).toBe('+696 $')
-  expect(screen.getByTestId('setups-total-pct').textContent).toBe('+13.92 %')
+  expect(screen.getByTestId('setups-total-pct').textContent).toBe('+1.39 %')
   expect(screen.getByText('Ø R')).toBeDefined()
   // Od „Σ dnes (1 kontrakt)“ (27. 8.) nese text víc dlaždic — stačí, že existují
   expect(screen.getAllByText(/1 kontrakt/).length).toBeGreaterThan(0)
-  expect(screen.getByText(/účet 5k/)).toBeDefined()
+  expect(screen.getByText(/účet 50k/)).toBeDefined()
   // EV / obchod (#911): jediný uzavřený obchod +696 $ → EV = +696 $, tooltip s rozkladem
   const evTile = screen.getByTestId('setups-ev')
   expect(evTile.textContent).toBe('+696 $')
@@ -349,4 +349,49 @@ test('statistiky počítají jen aktuální mechaniku, starší jde zapnout (#31
   // Po zapnutí se přidá i starý setup
   fireEvent.click(toggle)
   await waitFor(() => expect(screen.getAllByRole('row').length - 1).toBe(2))
+})
+
+test('obrazovka Setupy: risk sloupec (#1185) — obchodovatelný vs. stín a filtr', async () => {
+  const risk = {
+    account_equity_usd: 50000,
+    risk_budget_usd: 500,
+    stop_points: 29,
+    contracts: 0,
+    max_loss_usd: 0,
+    fee_usd: 0,
+    affordable: false,
+    tradeable: false,
+    trade_block: 'stop_over_budget',
+    template_gate: 'pass',
+  }
+  const tradeable = {
+    ...SETUP_ROW,
+    id: 8,
+    stop: 7493,
+    context: {
+      ...risk,
+      stop_points: 8,
+      contracts: 1,
+      max_loss_usd: 400,
+      fee_usd: 10,
+      affordable: true,
+      tradeable: true,
+      trade_block: null,
+    },
+  }
+  mockApi([SETUP_ROW, { ...SETUP_ROW, id: 9, context: risk }, tradeable])
+  renderApp()
+  fireEvent.click(screen.getByRole('button', { name: 'Setupy' }))
+  await screen.findAllByText('Neúspěšný průraz')
+  const cells = Array.from(document.querySelectorAll('[data-part="risk"]')).map(
+    (c) => c.textContent,
+  )
+  // Bez pravidel „—", stín s důvodem (ztlumený řádek), obchodovatelný s P/L účtu 0.48 × 400 − 10
+  expect(cells).toEqual(['—', 'stín: stop nad rozpočtem rizika', '1 ks · 400 $ +182 $'])
+  expect(document.querySelectorAll('tr.setup-shadow').length).toBe(1)
+  expect(screen.getByTestId('setups-account-pnl').textContent).toContain('+182 $')
+  // Filtr „jen obchodovatelné" schová stín, řádek bez pravidel zůstává
+  fireEvent.click(screen.getByTestId('setups-tradeable-only'))
+  await waitFor(() => expect(document.querySelectorAll('[data-part="risk"]').length).toBe(2))
+  expect(document.querySelectorAll('tr.setup-shadow').length).toBe(0)
 })

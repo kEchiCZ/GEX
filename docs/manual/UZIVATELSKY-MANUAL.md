@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.18 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.19 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -978,6 +978,11 @@ ES 0× · MES 1×`: počet kontraktů = riziko / (stop v bodech × hodnota bodu)
 vždy zaokrouhleno dolů, vedle plného kontraktu i micro varianta (MES/MNQ).
 Nezávisí na Traders mode — je součástí karty setupu.
 
+Od v1.19 vedle toho běží **serverový sizing** (#1185, kap. 18) — ten počítá
+s účtem 50 000 $ v jednotkách aplikace a rozhoduje, zda je setup vůbec
+obchodovatelný; kalkulačka v prohlížeči zůstává jako rychlý přepočet na tvůj
+reálný účet a mikro kontrakty.
+
 **Stop vůči volatilitnímu režimu (v1.11).** Pod kalkulačkou je druhý řádek:
 `stop = 20 % rozsahu · režim normální (p54)`. **Proč tu je:** stejný stop
 v bodech je v jiném volatilitním režimu úplně jiný obchod — stop 8 b je
@@ -1540,6 +1545,56 @@ test interakce poloha × režim). Předregistrovaná předpověď: skupina „bl
 horší o ≥ 0,2 R než „pass". Potvrdí-li se, zapne se jedno z pravidel naostro
 (per šablona, bez max_pain_pin — ten měl mimo pásmo kladnou expektanci);
 jinak zůstane hloubka jen posunem důvěry.
+
+### Risk management malého účtu (v1.19, #1185)
+
+Účet se v aplikaci vede v jednotkách **plného kontraktu** (ES 50 $/b, NQ
+20 $/b) jako **50 000 $**. Ty obchoduješ **MES/MNQ** (1/10 plného kontraktu):
+reálných 5 000 $ ≡ 50 000 $ v aplikaci, **1 kontrakt v aplikaci = 1 mikro
+reálně**, body sedí 1:1, dolary jsou ×10 (reálně ÷ 10). Rozhodnutí z 15. 9.
+2026 po analýze 1 128 setupů: 71 z nich ztratilo přes 1 000 $ na plný kontrakt —
+všechny kvůli stopu ≥ 32 b ES / ≥ 73 b NQ, a setupy s velkým stopem byly
+zároveň nejhorší obchody (v5: −0,34 R vs. +0,06 R se stopem v rozpočtu).
+
+**Pravidla, která engine počítá u každého setupu** (Settings → Risk management):
+
+| Pravidlo | Default | Co dělá |
+|---|---|---|
+| **Riziko na setup** | **1 %** = 500 $ (50 $ reálně) | kontrakty = ⌊rozpočet / (stop b × hodnota bodu)⌋ → 1 kontrakt při stopu ≤ **10 b ES / ≤ 25 b NQ**; těsnější stop = víc kontraktů (ES 4 b → 2 ks) |
+| **Tvrdý strop** | 2 % = 1 000 $ | ztráta jednoho setupu nikdy nad 2 % účtu, i kdyby se riziko zvedlo |
+| **Denní brzda** | −3 R | po realizované ztrátě −3 R za seanci (obchodovatelné setupy, ES i NQ) nové setupy jen **stínově** do settle; alert do zvonku a pushe |
+| **Týdenní brzda** | −6 R | totéž za obchodní týden (od pondělní seance) |
+| **Strop stopů šablony** | 2 / den | třetí pokus téže šablony po dvou stopech za seanci je stín |
+| **Brána šablon** | zapnuta, n ≥ 30, okno 60 seancí | obchodovatelná je jen šablona, jejíž **dolní mez očekávání** (jednostranný 95% interval Ø R ze setupů se stopem v rozpočtu) je kladná; ostatní se dál měří, ale neobchodují |
+
+**Stín vs. obchodovatelný.** Setup **vzniká vždy** (měření nesmí přestat —
+právě velké stopy chceme dál vidět), ale nese verdikt: sloupec **Účet** v
+obrazovce Setupy ukazuje `1 ks · 400 $` (kontrakty · ztráta na stopu) u
+obchodovatelného, nebo `stín: stop nad rozpočtem rizika` / `denní brzda` /
+`šablona bez prokázaného edge` u stínu. Stínový řádek je ztlumený, **nechodí
+do pushe** a nevstupuje do bilance účtu; přepínač **Jen obchodovatelné** je
+schová. Tooltip štítku nese rozpočet, stop v bodech, verdikt brány (n, dolní
+mez) a stav brzd (dnes / týden v R).
+
+**Bilance účtu.** Dlaždice **Účet (obchodovatelné)** v Setupech a karta
+**Účet 50k** ve Stats → Výkon setupů: Σ (kontrakty × R × stop × bod −
+poplatky), počet obchodů, počet stínů, poplatky a max drawdown v $. Poplatek
+je default 10 $ za kontrakt a obchod v jednotkách aplikace (= 1 $ reálně).
+Vedle toho zůstává **USD simulace (#679)** z kalkulačky v prohlížeči — ta
+počítá s tvým reálným účtem a mikro kontrakty.
+
+**Co to (ne)slibuje.** Pravidla zaručují, že účet přežije sérii ztrát (1 %:
+max drawdown ~19 % v simulaci nad v5; 2 %: ~39 %) a že ztráta přes 1 000 $
+v aplikaci (100 $ reálně) je z definice nemožná. **Nezaručují zisk** — edge
+mechaniky v5 je dnes ≈ 0 R, proto brána šablon zpočátku většinu setupů
+označí za stín. Živé obchodování má smysl až po ~60 seancích, kdy bilance
+obchodovatelných setupů drží nad nulou. Přepnutí na 2 % až po ≥ 50 živých
+obchodech s edge ≥ +0,2 R. Zvětšovat stop kvůli sizingu je špatně — stop se
+nezvětšuje, zpřesňuje se vstup.
+
+**Změna parametrů.** Settings → Risk management: každé uložení založí novou
+verzi parametrů setupů s povinným důvodem (audit), engine ji převezme do
+sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly.
 
 ### Flip: naměřený vs. dynamický = flip ZÓNA
 

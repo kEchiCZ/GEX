@@ -289,6 +289,21 @@ class SetupParams:
     # z jediného živého případu (24. 7.), edge nepotvrdila. Kód zůstává, aby
     # šlo šablonu přeměřit po opravě R-mechaniky (#302).
     disabled_templates: frozenset[str] = frozenset({SetupTemplate.DIVERGENCE_SPRING.value})
+    # Risk framework malého účtu (#1185, rozhodnutí uživatele 15. 9. 2026; viz
+    # compute.risk): účet v jednotkách plného kontraktu (50 000 $ ≡ 5 000 $ na
+    # mikro), riziko 1 % na setup, tvrdý strop 2 %, poplatek za kontrakt a
+    # obchod tamtéž (1 $ reálně na mikro × 10). Brzdy v R obchodovatelných
+    # setupů, brána šablon nad posledními N seancemi.
+    account_equity_usd: float = 50000.0
+    risk_pct: float = 1.0
+    risk_max_pct: float = 2.0
+    fee_per_contract_usd: float = 10.0
+    daily_brake_r: float = 3.0
+    weekly_brake_r: float = 6.0
+    max_template_stops_per_day: int = 2
+    template_gate_enabled: bool = True
+    template_gate_min_samples: int = 30
+    template_gate_days: int = 60
 
 
 #: Pole SetupParams, která se do parameter store (#794 fáze 2) neukládají —

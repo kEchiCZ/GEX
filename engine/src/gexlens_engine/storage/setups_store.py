@@ -30,6 +30,7 @@ from sqlalchemy import (
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.confidence import CalibrationRow
+from gexlens_engine.compute.risk import RealizedSetup
 from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
 from gexlens_engine.compute.setupstats import ClosedSetup
 
@@ -279,6 +280,49 @@ class SetupsRepository:
             )
             for row in rows
         ]
+
+    def realized_since(self, since: dt.datetime, *, mechanics_version: int) -> list[RealizedSetup]:
+        """Uzavřené setupy napříč symboly s `closed_ts >= since` — brzdy a brána
+        šablon (#1185). `tradeable` z kontextu; řádky před pravidly nesou None."""
+        stmt = select(
+            setups_table.c.symbol,
+            setups_table.c.template,
+            setups_table.c.status,
+            setups_table.c.outcome_r,
+            setups_table.c.closed_ts,
+            setups_table.c.entry,
+            setups_table.c.stop,
+            setups_table.c.context,
+        ).where(
+            setups_table.c.status != "active",
+            setups_table.c.closed_ts.is_not(None),
+            setups_table.c.closed_ts >= since,
+            setups_table.c.mechanics_version == mechanics_version,
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        result: list[RealizedSetup] = []
+        for row in rows:
+            context = row.context if isinstance(row.context, dict) else {}
+            tradeable = context.get("tradeable")
+            affordable = context.get("affordable")
+            closed_ts = row.closed_ts
+            if closed_ts.tzinfo is None:  # sqlite vrací naivní čas
+                closed_ts = closed_ts.replace(tzinfo=dt.UTC)
+            result.append(
+                RealizedSetup(
+                    symbol=str(row.symbol),
+                    template=str(row.template),
+                    status=str(row.status),
+                    outcome_r=float(row.outcome_r or 0.0),
+                    closed_ts=closed_ts,
+                    tradeable=tradeable if isinstance(tradeable, bool) else None,
+                    affordable=affordable if isinstance(affordable, bool) else None,
+                    entry=float(row.entry),
+                    stop=float(row.stop),
+                )
+            )
+        return result
 
     def closed_for_calibration(self, *, mechanics_version: int) -> list[CalibrationRow]:
         """Uzavřené setupy aktuální mechaniky napříč symboly (#794 fáze 2B).

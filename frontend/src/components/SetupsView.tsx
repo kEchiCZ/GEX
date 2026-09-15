@@ -4,7 +4,7 @@ Predikce jsou neměnné — jediná mutace je rating (+1/−1) a poznámka; hodn
 je kvalitativní vrstva a nevstupuje do automatické kalibrace confidence.
 */
 import { useState } from 'react'
-import { ACCOUNT_START_USD, STATUS_LABELS, bandGateStats, bandInfo, bandLabel, bandTooltip, confidenceTooltip, dailyStats, formatGateBucket, formatPct, formatPnlUsd, reviewSetup, setupPnlPct, setupPnlUsd, setupRrr, templateLabel , evStats, evTooltip } from '../api/setups' // prettier-ignore
+import { ACCOUNT_START_USD, STATUS_LABELS, accountPnlUsd, accountStats, bandGateStats, bandInfo, bandLabel, bandTooltip, confidenceTooltip, dailyStats, formatGateBucket, formatPct, formatPnlUsd, reviewSetup, riskInfo, riskLabel, riskTooltip, setupPnlPct, setupPnlUsd, setupRrr, templateLabel , evStats, evTooltip } from '../api/setups' // prettier-ignore
 import { currentMechanicsVersion } from '../setups/performance'
 import { sessionDateIso } from '../instrument/tz'
 import type { SetupRow } from '../api/setups'
@@ -91,9 +91,20 @@ export function SetupsView() {
   const legacyCount = setups.filter(
     (row) => (row.mechanics_version ?? 1) !== mechanicsVersion,
   ).length
-  const visible = allVersions
+  // Jen obchodovatelné (#1185): skryje stínové setupy (stop nad rozpočtem,
+  // brzda, brána); řádky bez risk kontextu (před pravidly) zůstávají vidět
+  const [tradeableOnly, setTradeableOnly] = usePersistentState<boolean>(
+    'setupsTradeableOnly',
+    false,
+    (value) => (typeof value === 'boolean' ? value : false),
+  )
+  const byVersion = allVersions
     ? setups
     : setups.filter((row) => (row.mechanics_version ?? 1) === mechanicsVersion)
+  const shadowCount = byVersion.filter((row) => riskInfo(row)?.tradeable === false).length
+  const visible = tradeableOnly
+    ? byVersion.filter((row) => riskInfo(row)?.tradeable !== false)
+    : byVersion
 
   const closed = visible.filter((row) => row.status !== 'active')
   const wins = closed.filter((row) => (row.outcome_r ?? 0) > 0).length
@@ -111,6 +122,9 @@ export function SetupsView() {
   // součet procent setupů roven celkovému zhodnocení účtu
   const totalPct = (totalPnl / ACCOUNT_START_USD) * 100
   const averageR = closed.length > 0 ? totalR / closed.length : 0
+  // Bilance ÚČTU (#1185): jen obchodovatelné uzavřené, kontrakty × R × stop ×
+  // bod − poplatky; null = žádný řádek risk kontext nenese (před pravidly)
+  const account = accountStats(byVersion)
   const pnlClass = totalPnl >= 0 ? 'r-positive' : 'r-negative'
   // Bilance dnešní seance (#748) — nad `visible`, aby ctila přepínač verze
   // mechaniky; jinak by si horní a spodní blok odporovaly
@@ -131,6 +145,17 @@ export function SetupsView() {
               onChange={(event) => setAllVersions(event.target.checked)}
             />
             Včetně starší mechaniky ({legacyCount})
+          </label>
+        )}
+        {shadowCount > 0 && (
+          <label className="setups-version-toggle">
+            <input
+              type="checkbox"
+              checked={tradeableOnly}
+              onChange={(event) => setTradeableOnly(event.target.checked)}
+              data-testid="setups-tradeable-only"
+            />
+            Jen obchodovatelné (stín {shadowCount})
           </label>
         )}
       </header>
@@ -174,11 +199,30 @@ export function SetupsView() {
           </span>
         </div>
         <div className="stat">
-          <span className="stat-label muted">% P/L (účet 5k)</span>
+          <span className="stat-label muted">% P/L (účet 50k)</span>
           <span className={`stat-value ${pnlClass}`} data-testid="setups-total-pct">
             {closed.length > 0 ? formatPct(totalPct) : '—'}
           </span>
         </div>
+        {account !== null && (
+          <div className="stat">
+            <span className="stat-label muted">Účet (obchodovatelné)</span>
+            <span
+              className={`stat-value ${account.pnlUsd >= 0 ? 'r-positive' : 'r-negative'}`}
+              data-testid="setups-account-pnl"
+              title={
+                'Bilance účtu 50 000 $ z OBCHODOVATELNÝCH uzavřených setupů (#1185): ' +
+                'kontrakty × R × stop × bod − poplatky.\n' +
+                `• obchodů ${account.n} · stínových ${account.shadow} (neobchodují se)\n` +
+                `• poplatky ${Math.round(account.feesUsd)} $ · max DD ${Math.round(account.maxDrawdownUsd)} $\n` +
+                'Reálně na MES/MNQ jsou dolary ÷ 10.'
+              }
+            >
+              {account.n > 0 ? formatPnlUsd(account.pnlUsd) : '—'}
+              <span className="pnl-pct muted"> {account.n} obch.</span>
+            </span>
+          </div>
+        )}
       </div>
       {/* Bilance dnešní SEANCE (#748) — oddělená od celkové historie výše.
           Den je Globex seance (#512), ne kalendářní datum. */}
@@ -323,6 +367,7 @@ export function SetupsView() {
                 <th>RRR</th>
                 <th>Důvěra</th>
                 <th>Pásmo</th>
+                <th>Účet</th>
                 <th>Stav</th>
                 <th>Uzavřeno</th>
                 <th>R</th>
@@ -334,8 +379,14 @@ export function SetupsView() {
               {visible.map((row) => {
                 const pnl = setupPnlUsd(row, pointUsd)
                 const pct = setupPnlPct(row, pointUsd)
+                const risk = riskInfo(row)
+                const accountPnl = accountPnlUsd(row)
                 return (
-                  <tr key={row.id} title={row.reason}>
+                  <tr
+                    key={row.id}
+                    title={row.reason}
+                    className={risk !== null && !risk.tradeable ? 'setup-shadow' : undefined}
+                  >
                     <td>{formatTs(row.created_ts)}</td>
                     <td>{templateLabel(row.template)}</td>
                     <td className={row.direction}>{row.direction === 'long' ? 'LONG' : 'SHORT'}</td>
@@ -357,6 +408,26 @@ export function SetupsView() {
                           </span>
                         )
                       })()}
+                    </td>
+                    <td data-part="risk">
+                      {risk === null ? (
+                        <span className="muted">—</span>
+                      ) : (
+                        <span
+                          className={`setup-risk ${risk.tradeable ? 'tradeable' : 'shadow'}`}
+                          title={riskTooltip(risk)}
+                        >
+                          {riskLabel(risk)}
+                          {accountPnl !== null && (
+                            <span
+                              className={`pnl-pct ${accountPnl >= 0 ? 'r-positive' : 'r-negative'}`}
+                            >
+                              {' '}
+                              {formatPnlUsd(accountPnl)}
+                            </span>
+                          )}
+                        </span>
+                      )}
                     </td>
                     <td>
                       <span className={`setup-status ${row.status}`}>
