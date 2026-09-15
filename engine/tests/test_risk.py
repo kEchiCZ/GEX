@@ -18,6 +18,7 @@ from gexlens_engine.compute.risk import (
 )
 from gexlens_engine.compute.settle import session_bounds
 from gexlens_engine.compute.setups import SetupParams, params_from_dict, params_to_dict
+from gexlens_engine.runtime import PublisherLike
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.setups_store import SetupsRepository
@@ -186,12 +187,15 @@ def test_risk_parametry_jsou_ve_store() -> None:
         params_from_dict({"template_gate_enabled": 1})
 
 
-class _Publisher:
+class _Publisher(PublisherLike):
     def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
+        self.events: list[dict[str, object]] = []
 
-    async def publish(self, channel: str, payload: dict[str, Any]) -> None:
-        self.events.append({"channel": channel, **payload})
+    async def status(self, **fields: object) -> None:  # pragma: no cover
+        pass
+
+    async def publish(self, channel: str, data: dict[str, object]) -> None:
+        self.events.append({"channel": channel, **data})
 
 
 async def test_setup_engine_zapisuje_risk_kontext_a_brzdu(tmp_path: Path) -> None:
