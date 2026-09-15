@@ -136,7 +136,6 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     void Promise.all(
       SENTIMENT_SYMBOLS.map(async (sym) => [sym, await fetchSentimentState(sym)] as const),
     ).then((pairs) => setSentiments(pairs.map(([sym, info]) => [sym, info])))
-    setNow(Date.now())
   }, [symbol, selectedExpiry, dateIso])
 
   useEffect(() => {
@@ -144,6 +143,12 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     const timer = window.setInterval(reload, REFRESH_MS)
     return () => window.clearInterval(timer)
   }, [reload])
+  // „Teď" je nástěnné, ne per symbol — tiká vlastním intervalem ve stejné
+  // kadenci jako obnova dat; render ani reload na Date.now nesahají (#1123)
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), REFRESH_MS)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const regime = useMemo(() => gammaRegimeLabel(levels, bars?.last ?? null), [levels, bars])
   // Čtení trendu shora dolů (#1089): null, dokud svíčky nedorazí

@@ -348,55 +348,75 @@ function BottomPanelsBase({
   }
   const clampPanelZoom = (value: number) => Math.min(20, Math.max(0.2, value))
   const panRef = useRef<{ key: string; x: number; y: number } | null>(null)
-  const panelInteractions = (key: string, panelHeight: number) => ({
-    onPointerDown: (event: React.PointerEvent<SVGSVGElement>) => {
-      if (event.button !== 0) return
-      panRef.current = { key, x: event.clientX, y: event.clientY }
-      // jsdom setPointerCapture nemá — optional call, testy nesmí padat
-      event.currentTarget.setPointerCapture?.(event.pointerId)
-    },
-    onPointerMove: (event: React.PointerEvent<SVGSVGElement>) => {
-      const drag = panRef.current
-      if (drag && drag.key === key) {
-        const rect = event.currentTarget.getBoundingClientRect()
-        const scaleX = rect.width > 0 ? width / rect.width : 1
-        const scaleY = rect.height > 0 ? panelHeight / rect.height : 1
-        const dx = (event.clientX - drag.x) * scaleX
-        const dy = (event.clientY - drag.y) * scaleY
-        drag.x = event.clientX
-        drag.y = event.clientY
-        if (dx !== 0) onTimePan?.(dx)
-        if (dy !== 0)
-          setYViews((prev) => {
-            const view = prev[key] ?? { zoomY: 1, offsetY: 0 }
-            return { ...prev, [key]: { ...view, offsetY: view.offsetY + dy } }
-          })
-        return
-      }
-      handleMove(key, panelHeight)(event)
-    },
-    onPointerUp: () => {
-      panRef.current = null
-    },
-    onPointerLeave: () => {
-      panRef.current = null
-      handleLeave()
-    },
-    onDoubleClick: () => setYViews((prev) => ({ ...prev, [key]: { zoomY: 1, offsetY: 0 } })),
-    onWheel: (event: React.WheelEvent<SVGSVGElement>) => {
-      const rect = event.currentTarget.getBoundingClientRect()
-      const scaleY = rect.height > 0 ? panelHeight / rect.height : 1
-      const cursorY = (event.clientY - rect.top) * scaleY
-      setYViews((prev) => {
-        const view = prev[key] ?? { zoomY: 1, offsetY: 0 }
-        const zoomY = clampPanelZoom(view.zoomY * (event.deltaY < 0 ? 1.15 : 1 / 1.15))
-        // Zoom k kurzoru: bod pod kurzorem zůstává na místě
-        const content = (cursorY - panelHeight - view.offsetY) / view.zoomY + panelHeight
-        const offsetY = cursorY - panelHeight - (content - panelHeight) * zoomY
-        return { ...prev, [key]: { zoomY, offsetY } }
-      })
-    },
+  // Handlery čtou klíč a výšku panelu z data atributů SVG, ne z uzávěru per
+  // panel: továrna volaná při renderu, která vrací uzávěry nad `panRef`, je
+  // pro React Compiler přístup k ref během renderu (#1123). Takhle je to
+  // jedna sada handlerů rozprostřená do každého SVG bez volání při renderu.
+  const panelOf = (target: SVGSVGElement) => ({
+    key: target.dataset.panelKey ?? '',
+    panelHeight: Number(target.dataset.panelHeight) || 0,
   })
+  const onPanelPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (event.button !== 0) return
+    const { key } = panelOf(event.currentTarget)
+    panRef.current = { key, x: event.clientX, y: event.clientY }
+    // jsdom setPointerCapture nemá — optional call, testy nesmí padat
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+  const onPanelPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    const { key, panelHeight } = panelOf(event.currentTarget)
+    const drag = panRef.current
+    if (drag && drag.key === key) {
+      const rect = event.currentTarget.getBoundingClientRect()
+      const scaleX = rect.width > 0 ? width / rect.width : 1
+      const scaleY = rect.height > 0 ? panelHeight / rect.height : 1
+      const dx = (event.clientX - drag.x) * scaleX
+      const dy = (event.clientY - drag.y) * scaleY
+      drag.x = event.clientX
+      drag.y = event.clientY
+      if (dx !== 0) onTimePan?.(dx)
+      if (dy !== 0)
+        setYViews((prev) => {
+          const view = prev[key] ?? { zoomY: 1, offsetY: 0 }
+          return { ...prev, [key]: { ...view, offsetY: view.offsetY + dy } }
+        })
+      return
+    }
+    handleMove(key, panelHeight)(event)
+  }
+  const onPanelPointerUp = () => {
+    panRef.current = null
+  }
+  const onPanelPointerLeave = () => {
+    panRef.current = null
+    handleLeave()
+  }
+  const onPanelDoubleClick = (event: React.MouseEvent<SVGSVGElement>) => {
+    const { key } = panelOf(event.currentTarget)
+    setYViews((prev) => ({ ...prev, [key]: { zoomY: 1, offsetY: 0 } }))
+  }
+  const onPanelWheel = (event: React.WheelEvent<SVGSVGElement>) => {
+    const { key, panelHeight } = panelOf(event.currentTarget)
+    const rect = event.currentTarget.getBoundingClientRect()
+    const scaleY = rect.height > 0 ? panelHeight / rect.height : 1
+    const cursorY = (event.clientY - rect.top) * scaleY
+    setYViews((prev) => {
+      const view = prev[key] ?? { zoomY: 1, offsetY: 0 }
+      const zoomY = clampPanelZoom(view.zoomY * (event.deltaY < 0 ? 1.15 : 1 / 1.15))
+      // Zoom k kurzoru: bod pod kurzorem zůstává na místě
+      const content = (cursorY - panelHeight - view.offsetY) / view.zoomY + panelHeight
+      const offsetY = cursorY - panelHeight - (content - panelHeight) * zoomY
+      return { ...prev, [key]: { zoomY, offsetY } }
+    })
+  }
+  const panelInteractions = {
+    onPointerDown: onPanelPointerDown,
+    onPointerMove: onPanelPointerMove,
+    onPointerUp: onPanelPointerUp,
+    onPointerLeave: onPanelPointerLeave,
+    onDoubleClick: onPanelDoubleClick,
+    onWheel: onPanelWheel,
+  }
   /** Hodnota na ose Y podle výšky kurzoru (signed = symetrická škála kolem nuly,
   se stejnou rezervou od okrajů jako plocha Cum Δ). */
   const axisValue = (
@@ -452,7 +472,9 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          {...panelInteractions('vol', height)}
+          data-panel-key="vol"
+          data-panel-height={height}
+          {...panelInteractions}
         >
           <g transform={transform}>
             <g transform={yTransform('vol', height)}>
@@ -499,7 +521,9 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          {...panelInteractions('optvol', height)}
+          data-panel-key="optvol"
+          data-panel-height={height}
+          {...panelInteractions}
         >
           <g transform={transform}>
             <g transform={yTransform('optvol', height)}>
@@ -558,7 +582,9 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          {...panelInteractions('deltaflow', height)}
+          data-panel-key="deltaflow"
+          data-panel-height={height}
+          {...panelInteractions}
         >
           <g transform={transform}>
             <g transform={yTransform('deltaflow', height)}>
@@ -645,7 +671,9 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          {...panelInteractions('evooi', height)}
+          data-panel-key="evooi"
+          data-panel-height={height}
+          {...panelInteractions}
         >
           {
             signed &&
@@ -746,7 +774,9 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          {...panelInteractions('cumdelta', height)}
+          data-panel-key="cumdelta"
+          data-panel-height={height}
+          {...panelInteractions}
         >
           <line
             x1={0}
@@ -842,7 +872,9 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          {...panelInteractions('sentiment', height)}
+          data-panel-key="sentiment"
+          data-panel-height={height}
+          {...panelInteractions}
         >
           <line
             x1={0}
@@ -910,7 +942,9 @@ function BottomPanelsBase({
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           preserveAspectRatio="none"
-          {...panelInteractions('sentiment', height)}
+          data-panel-key="sentiment"
+          data-panel-height={height}
+          {...panelInteractions}
         >
           <g transform={transform}>
             <g transform={yTransform('sentiment', height)}>

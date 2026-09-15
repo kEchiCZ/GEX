@@ -56,12 +56,17 @@ export function useGreekPlane(
   plane: UnderlayPlane,
   socket?: LiveSocket,
 ): GreekPlaneData {
-  const [data, setData] = useState<GreekPlaneData>(EMPTY)
+  // Data nesou klíč plocha×instrument×den, pro který platí: přepnutí nesmí
+  // ukázat cizí data — řeší se odvozením při renderu a v updaterech, ne
+  // resetem stavu v efektu (#1123)
+  const key = `${symbol}|${expiry}|${date}|${plane}`
+  const [data, setData] = useState<{ key: string; value: GreekPlaneData }>({ key, value: EMPTY })
   const active = (plane === 'charm' || plane === 'vanna') && expiry !== null
 
   useEffect(() => {
-    setData(EMPTY) // přepnutí plochy/instrumentu nesmí ukázat cizí data
     if (!active || !expiry) return
+    const update = (next: (previous: GreekPlaneData) => GreekPlaneData) =>
+      setData((stored) => ({ key, value: next(stored.key === key ? stored.value : EMPTY) }))
     let cancelled = false
     fetch(`${API_BASE}/gexplane/${symbol}/${expiry}?greek=${plane}&date=${date}`)
       .then((response) => (response.ok ? response.json() : null))
@@ -74,7 +79,7 @@ export function useGreekPlane(
         // Fetch a WS subscribe běží souběžně — minuty došlé z WS mezi vyžádáním
         // a vyřízením fetche nesmí náhrada celého objektu zahodit (#504).
         // Merge podle tsIso; při duplicitě vyhrává WS řádek (dorazil později).
-        setData((previous) => {
+        update((previous) => {
           const wsTs = new Set(previous.profiles.map((row) => row.tsIso))
           const onlyFetched = fetched.filter((row) => !wsTs.has(row.tsIso))
           const field =
@@ -90,16 +95,18 @@ export function useGreekPlane(
     return () => {
       cancelled = true
     }
-  }, [active, symbol, expiry, date, plane])
+  }, [active, symbol, expiry, date, plane, key])
 
   useEffect(() => {
     if (!active || !socket || !expiry) return
+    const update = (next: (previous: GreekPlaneData) => GreekPlaneData) =>
+      setData((stored) => ({ key, value: next(stored.key === key ? stored.value : EMPTY) }))
     const profileChannel = `${plane}profile.${symbol}.${expiry}`
     const fieldChannel = `${plane}field.${symbol}.${expiry}`
     const onProfile = (raw: Record<string, unknown>) => {
       const row = parseProfile(raw)
       if (!row) return
-      setData((previous) => ({
+      update((previous) => ({
         ...previous,
         profiles: [...previous.profiles.filter((item) => item.tsIso !== row.tsIso), row],
       }))
@@ -107,7 +114,7 @@ export function useGreekPlane(
     const onField = (raw: Record<string, unknown>) => {
       const row = parseField(raw)
       if (!row) return
-      setData((previous) => ({ ...previous, field: row }))
+      update((previous) => ({ ...previous, field: row }))
     }
     socket.subscribe(profileChannel, onProfile)
     socket.subscribe(fieldChannel, onField)
@@ -115,9 +122,9 @@ export function useGreekPlane(
       socket.unsubscribe(profileChannel, onProfile)
       socket.unsubscribe(fieldChannel, onField)
     }
-  }, [active, socket, symbol, expiry, plane])
+  }, [active, socket, symbol, expiry, plane, key])
 
-  return active ? data : EMPTY
+  return active && data.key === key ? data.value : EMPTY
 }
 
 /** Sparse zarovnání řádků plochy na minutovou osu dne (vzor loaderu). */

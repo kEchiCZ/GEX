@@ -18,11 +18,10 @@ export function RelativeStrengthChip() {
   const { tradersMode } = useAppState()
   const [rs, setRs] = useState<RelativeStrength | null>(null)
 
+  // Mimo Traders mode se hodnota při renderu nepoužije; reset stavu v efektu
+  // není potřeba (#1123)
   useEffect(() => {
-    if (!tradersMode) {
-      setRs(null)
-      return
-    }
+    if (!tradersMode) return
     let cancelled = false
     const load = () => {
       const dateIso = sessionDateIso()

@@ -40,7 +40,6 @@ import {
   EMPTY_PLAN,
   cleanScenarios,
   emptyReview,
-  isPlanLocked,
   planToText,
   previousGoal,
   reviewToText,
@@ -246,8 +245,8 @@ export function JournalView() {
   const [playbook, setPlaybook] = useState<PlaybookItem[]>([])
   const [setups, setSetups] = useState<SetupRow[]>([])
   const [showPlaybook, setShowPlaybook] = useState(false)
-  const [plan, setPlan] = useState<DailyPlan>(EMPTY_PLAN)
-  const [review, setReview] = useState<DailyReview | null>(null)
+  const [planDraft, setPlanDraft] = useState<DailyPlan>(EMPTY_PLAN)
+  const [reviewDraft, setReviewDraft] = useState<DailyReview | null>(null)
   // null = uživatel profil neměnil, drží se odvození ze symbolu
   const [profileOverride, setProfileOverride] = useState<JournalProfile | null>(null)
 
@@ -304,8 +303,13 @@ export function JournalView() {
     void fetchSetups(symbol).then(setSetups)
   }, [symbol])
 
+  // Schránka z jiného pohledu (Briefing, heatmapa): jednorázově se přelije do
+  // formuláře a vyprázdní. setState v efektu vědomě (#1123) — spotřeba zprávy
+  // z cizího stavu není odvoditelná při renderu a její smazání je zápis do
+  // AppState, který při renderu nesmí proběhnout.
   useEffect(() => {
     if (journalDraft) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- spotřeba schránky, viz výše
       setFormTs(toLocalInput(journalDraft.tsRef))
       // Briefing (#674) předvyplní kostru ranního plánu
       if (journalDraft.text !== undefined) {
@@ -384,22 +388,19 @@ export function JournalView() {
   }, [profile, formDayIso])
 
   // Cíl z posledního vyhodnocení PŘED dneškem — bez navázání je to jen
-  // seznam přání (Steenbarger)
-  useEffect(() => {
-    setPlan((current) =>
-      isPlanLocked(current)
-        ? current
-        : { ...current, prev_goal: previousGoal(entries, formDayIso) },
-    )
-  }, [entries, formDayIso])
+  // seznam přání (Steenbarger). Odvozeno při renderu nad rozepsaným plánem;
+  // stav drží jen odemčený koncept (zamčený plán vzniká až při odeslání).
+  const plan = useMemo<DailyPlan>(
+    () => ({ ...planDraft, prev_goal: previousGoal(entries, formDayIso) }),
+    [planDraft, entries, formDayIso],
+  )
 
-  // Report card se zakládá až na vyžádání, ať prázdný formulář nekřičí
-  useEffect(() => {
-    if (formType !== 'retro_dne') return
-    setReview((current) =>
-      current === null ? emptyReview(daySegments(profile, formDayIso).map((s) => s.key)) : current,
-    )
-  }, [formType, profile, formDayIso])
+  // Report card se nabízí jen u typu retro_dne, ať prázdný formulář nekřičí;
+  // prázdná kostra se odvozuje při renderu, dokud uživatel nic nevyplní
+  const review = useMemo<DailyReview | null>(() => {
+    if (formType !== 'retro_dne') return null
+    return reviewDraft ?? emptyReview(daySegments(profile, formDayIso).map((s) => s.key))
+  }, [formType, reviewDraft, profile, formDayIso])
 
   // Struktura je nabídka, ne povinnost — rychlý textový plán musí dál fungovat,
   // jinak se deník přestane používat (Jigsaw: over-dokumentace ho zabije).
@@ -423,14 +424,14 @@ export function JournalView() {
     }
     const text = formText.trim() !== '' ? formText.trim() : planToText(locked)
     await submit('retro_dne', 'plan', { plan: locked }, text)
-    setPlan({ ...EMPTY_PLAN, prev_goal: locked.prev_goal })
+    setPlanDraft(EMPTY_PLAN)
   }
 
   const submitReview = async () => {
     if (review === null) return
     const text = formText.trim() !== '' ? formText.trim() : reviewToText(review, segmentLabels)
     await submit('retro_dne', 'vyhodnoceni', { review }, text)
-    setReview(emptyReview(daySegments(profile, formDayIso).map((segment) => segment.key)))
+    setReviewDraft(null)
   }
 
   const exportMd = () => {
@@ -523,11 +524,11 @@ export function JournalView() {
         )}
         {formType === 'retro_dne' && (
           <>
-            <JournalPlanFields plan={plan} onChange={setPlan} />
+            <JournalPlanFields plan={plan} onChange={setPlanDraft} />
             {review !== null && (
               <JournalReviewFields
                 review={review}
-                onChange={setReview}
+                onChange={setReviewDraft}
                 profile={profile}
                 dateIso={formDayIso}
               />

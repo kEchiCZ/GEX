@@ -9,18 +9,19 @@ import type { ForwardBlock } from '../heatmap/dailyforward'
 
 const REFRESH_MS = 10 * 60_000
 
+const EMPTY: ForwardBlock[] = []
+
 export function useGexForward(symbol: string, enabled: boolean): ForwardBlock[] {
-  const [blocks, setBlocks] = useState<ForwardBlock[]>([])
+  // Výsledek nese symbol, pro který platí: při přepnutí symbolu se vrací
+  // prázdno odvozením, ne resetem stavu v efektu (#1123)
+  const [loaded, setLoaded] = useState<{ symbol: string; blocks: ForwardBlock[] } | null>(null)
 
   useEffect(() => {
-    if (!enabled) {
-      setBlocks([])
-      return
-    }
+    if (!enabled) return
     let cancelled = false
     const load = () => {
       void fetchGexForward(symbol).then((result) => {
-        if (!cancelled) setBlocks(result)
+        if (!cancelled) setLoaded({ symbol, blocks: result })
       })
     }
     load()
@@ -31,5 +32,5 @@ export function useGexForward(symbol: string, enabled: boolean): ForwardBlock[] 
     }
   }, [symbol, enabled])
 
-  return blocks
+  return enabled && loaded?.symbol === symbol ? loaded.blocks : EMPTY
 }

@@ -47,17 +47,19 @@ export function useAnnotations(symbol: string, date: string): AnnotationsState {
   // se propisují jen jejich hloubky — víc React vědět nepotřebuje
   const undoRef = useRef<HistoryEntry[]>([])
   const redoRef = useRef<HistoryEntry[]>([])
-  const [depth, setDepth] = useState({ undo: 0, redo: 0 })
+  // Hloubky nesou klíč plochy (symbol|den): historie cizí plochy se při
+  // renderu čte jako prázdná, bez resetu stavu v efektu (#1123)
+  const key = `${symbol}|${date}`
+  const [depth, setDepth] = useState({ key, undo: 0, redo: 0 })
   const syncDepth = useCallback(() => {
-    setDepth({ undo: undoRef.current.length, redo: redoRef.current.length })
-  }, [])
+    setDepth({ key, undo: undoRef.current.length, redo: redoRef.current.length })
+  }, [key])
 
   useEffect(() => {
     let cancelled = false
     // Jiný instrument/den = jiná plocha; historie té staré by mířila mimo
     undoRef.current = []
     redoRef.current = []
-    setDepth({ undo: 0, redo: 0 })
     listAnnotations(symbol, date)
       .then((loaded) => {
         if (!cancelled) setAnnotations(loaded)
@@ -214,7 +216,7 @@ export function useAnnotations(symbol: string, date: string): AnnotationsState {
     move,
     undo,
     redo,
-    canUndo: depth.undo > 0,
-    canRedo: depth.redo > 0,
+    canUndo: depth.key === key && depth.undo > 0,
+    canRedo: depth.key === key && depth.redo > 0,
   }
 }

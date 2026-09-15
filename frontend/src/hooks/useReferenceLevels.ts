@@ -16,13 +16,13 @@ export function useReferenceLevels(
   dateIso: string,
   enabled: boolean,
 ): ReferenceLevels | null {
-  const [levels, setLevels] = useState<ReferenceLevels | null>(null)
+  // Úrovně nesou klíč symbol|den, pro který platí: jiný klíč = null
+  // odvozením při renderu, ne resetem stavu v efektu (#1123)
+  const key = `${symbol}|${dateIso}`
+  const [loaded, setLoaded] = useState<{ key: string; levels: ReferenceLevels | null } | null>(null)
 
   useEffect(() => {
-    if (!enabled) {
-      setLevels(null)
-      return
-    }
+    if (!enabled) return
     let cancelled = false
     const load = async () => {
       const [todayBars, days] = await Promise.all([
@@ -32,14 +32,15 @@ export function useReferenceLevels(
       const previous = previousStoredDay(days, dateIso)
       const prevDayBars = previous ? await fetchBars(symbol, previous) : []
       if (cancelled) return
-      setLevels(
-        computeReferenceLevels({
+      setLoaded({
+        key,
+        levels: computeReferenceLevels({
           todayBars,
           prevDayBars,
           usOpenMs: usOpenMs(dateIso),
           nowMs: Date.now(),
         }),
-      )
+      })
     }
     void load()
     const timer = window.setInterval(() => void load(), REFRESH_MS)
@@ -47,7 +48,7 @@ export function useReferenceLevels(
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [symbol, dateIso, enabled])
+  }, [symbol, dateIso, key, enabled])
 
-  return levels
+  return enabled && loaded?.key === key ? loaded.levels : null
 }

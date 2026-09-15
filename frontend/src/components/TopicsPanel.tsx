@@ -56,17 +56,20 @@ function eventStamp(ts: string): string {
 
 /** Detail rozkliknutého tématu: zprávy, které ho v období tvoří. */
 function TopicEvents({ category, days }: { category: string; days: number }) {
-  const [events, setEvents] = useState<TopicEventRow[] | null>(null)
+  // Zprávy nesou klíč téma|období: jiný klíč = „načítám" odvozením při
+  // renderu, ne resetem stavu v efektu (#1123)
+  const key = `${category}|${days}`
+  const [loaded, setLoaded] = useState<{ key: string; rows: TopicEventRow[] } | null>(null)
+  const events = loaded?.key === key ? loaded.rows : null
   useEffect(() => {
     let cancelled = false
-    setEvents(null)
     void fetchTopicEvents(category, days).then((rows) => {
-      if (!cancelled) setEvents(rows)
+      if (!cancelled) setLoaded({ key, rows })
     })
     return () => {
       cancelled = true
     }
-  }, [category, days])
+  }, [category, days, key])
   if (events === null) return <p className="muted">Načítám zprávy…</p>
   if (events.length === 0) return <p className="muted">Období nemá skórované zprávy.</p>
   return (
@@ -98,12 +101,20 @@ export function TopicsPanel({
 }) {
   const [days, setDays] = useState<number>(7)
   const [topics, setTopics] = useState<TopicSeriesRow[]>([])
-  const [openCategory, setOpenCategory] = useState<string | null>(null)
+  // Rozbalené téma: proklik z karty (`focus`) ho otevře, ruční volba platí
+  // jen pod tím `focus`, pod kterým vznikla — nový proklik ji přebije.
+  // Odvození při renderu místo setState v efektu (#1123).
+  const [choice, setChoice] = useState<{ under: typeof focus; category: string | null }>({
+    under: null,
+    category: null,
+  })
+  const openCategory = choice.under === focus ? choice.category : (focus?.category ?? null)
+  const toggleCategory = (category: string) =>
+    setChoice({ under: focus, category: openCategory === category ? null : category })
   const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (focus === null) return
-    setOpenCategory(focus.category)
     // jsdom scrollIntoView neumí — optional call, at testy nepadají
     panelRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
   }, [focus])
@@ -153,9 +164,7 @@ export function TopicsPanel({
                 className="topic-row"
                 data-testid={`topic-row-${topic.category}`}
                 aria-expanded={openCategory === topic.category}
-                onClick={() =>
-                  setOpenCategory((prev) => (prev === topic.category ? null : topic.category))
-                }
+                onClick={() => toggleCategory(topic.category)}
               >
                 <span className="topic-name">
                   {categoryGlyph(topic.category)} {categoryLabel(topic.category)}

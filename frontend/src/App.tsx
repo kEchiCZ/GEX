@@ -685,12 +685,11 @@ function MainContent() {
   // Značky deníku v ose (#673, Traders mode): záznamy symbolu se párují na osu
   // stejným formatterem jako popisky (vzor news markerů). Refetch i při návratu
   // z Deníku (změna view) — nový záznam se má ukázat hned.
+  // Mimo Traders mode se záznamy nečtou (viz journalMarkers) — reset stavu
+  // v efektu není potřeba (#1123)
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([])
   useEffect(() => {
-    if (!tradersMode) {
-      setJournalEntries([])
-      return
-    }
+    if (!tradersMode) return
     let cancelled = false
     void fetchJournal({ symbol }).then((rows) => {
       if (!cancelled) setJournalEntries(rows)
@@ -1138,10 +1137,15 @@ function MainContent() {
     },
     [presetInputs, playback.isLive],
   )
-  // Klouzavé okno: nová minuta dne → posun přesně 1×/min (AC #487)
+  // Klouzavé okno: nová minuta dne → posun přesně 1×/min (AC #487).
+  // setState v efektu vědomě (#1123): okno je uložený stav (URL share, ruční
+  // gesta, zmrazení při startu replaye) a příchod minuty nemá handler —
+  // odvození při renderu by při přechodu do replaye vrátilo okno z doby
+  // zapnutí presetu místo posledního posunutého.
   useEffect(() => {
     if (rangePresetMode !== 'last30' || !presetInputs || !playback.isLive) return
     const result = presetRange('last30', presetInputs)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- posun okna s minutou, viz výše
     if (result) setRange(result)
   }, [rangePresetMode, presetInputs, playback.isLive])
   // Okenní profil V KLIENTOVI (posudek #484): diff kumulativních řádků t2 − t1,
@@ -1758,7 +1762,7 @@ function MainContent() {
               <div className="stale-banner" role="status" data-testid="stale-banner">
                 {`Data se nedaří obnovit (${staleData.failures}× po sobě) — zobrazen stav z ` +
                   (staleData.lastMinuteIso
-                    ? `${new Date(staleData.lastMinuteIso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${Math.max(0, Math.round((Date.now() - new Date(staleData.lastMinuteIso).getTime()) / 60000))} min staré)`
+                    ? `${new Date(staleData.lastMinuteIso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${Math.max(0, Math.round((staleData.atMs - new Date(staleData.lastMinuteIso).getTime()) / 60000))} min staré)`
                     : 'neznámého času')}
               </div>
             )}
