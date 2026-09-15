@@ -219,7 +219,7 @@ def test_endpoint_mapuje_chyby_na_stavove_kody(
     _second_event(engine, 7, "CPI")
     fake = FakePost(text="Inflace.")
     # Endpoint nesmí volat skutečné API — atrapa místo httpx.post na modulu
-    monkeypatch.setattr(news_explain.httpx, "post", fake)
+    monkeypatch.setattr(httpx, "post", fake)
     client = TestClient(app)
     ok = client.post("/news/7/explain")
     assert ok.status_code == 200, ok.text
@@ -230,7 +230,7 @@ def test_endpoint_mapuje_chyby_na_stavove_kody(
     assert len(fake.calls) == 1
     assert client.post("/news/404/explain").status_code == 404
     _second_event(engine, 8, "X")
-    monkeypatch.setattr(news_explain.httpx, "post", FakePost(blocked=True))
+    monkeypatch.setattr(httpx, "post", FakePost(blocked=True))
     assert client.post("/news/8/explain").status_code == 503
-    monkeypatch.setattr(news_explain.httpx, "post", FakePost(status=429))
+    monkeypatch.setattr(httpx, "post", FakePost(status=429))
     assert client.post("/news/8/explain").status_code == 429
