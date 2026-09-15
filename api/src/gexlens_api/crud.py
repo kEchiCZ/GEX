@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from gexlens_api.alerts import AlertKind
 from gexlens_api.meta_repo import DuplicateEntryError, MetaRepository, NotFoundError
+from gexlens_api.push_telegram import PUSH_SETTING_KEYS
 from gexlens_engine.runtime_settings import CONNECTION_SETTINGS, RUNTIME_SETTINGS
 from gexlens_engine.storage.meta import (
     FAILURE_MODES,
@@ -42,8 +43,9 @@ UI_SETTINGS = frozenset(["theme", "language", "sessions"])
 # řetězců — jiný tvar by news-engine tiše ignoroval jako „vše smazáno".
 NEWS_LIST_SETTINGS = frozenset(["news_bluesky_authors", "news_reddit_subreddits", "news_rss_extra"])
 
+# Přepínače kategorií push notifikací (#1175): booleany, čte je API při každém alertu
 # `retro_pass` chybí schválně — ten si news-engine píše přímo do DB, ne přes API.
-WRITABLE_SETTINGS = ENGINE_SETTINGS | UI_SETTINGS | NEWS_LIST_SETTINGS
+WRITABLE_SETTINGS = ENGINE_SETTINGS | UI_SETTINGS | NEWS_LIST_SETTINGS | PUSH_SETTING_KEYS
 
 # Ruční přepojení datových zdrojů (#950). Klíče NEJSOU ve WRITABLE_SETTINGS —
 # hodnotu (časové razítko) generuje server, klient smí jen říct KTERÝ zdroj.
@@ -454,6 +456,8 @@ def build_router(repository: MetaRepository) -> APIRouter:
                 f"Neznámý klíč nastavení: {key!r} "
                 f"(povolené: {', '.join(sorted(WRITABLE_SETTINGS))})",
             )
+        if key in PUSH_SETTING_KEYS and not isinstance(setting.value, bool):
+            raise HTTPException(422, f"Klíč {key!r} vyžaduje true/false")
         if key in NEWS_LIST_SETTINGS:
             value = setting.value
             if (

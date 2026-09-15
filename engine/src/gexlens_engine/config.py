@@ -171,6 +171,14 @@ class Settings(BaseSettings):
     # překročení API odmítne, cache jede dál. Nic z toho neteče do SentIndexu,
     # vah ani signálů (R4, #740 fáze 0).
     news_gemini_api_key: str = ""
+    # Push na Telegram (#1175, API): přihlašovací údaje bota a chat id jen
+    # z .env; tiché hodiny lokálně (Europe/Prague), provozní alerty jdou
+    # i v nich; denní strop zpráv a minimální confidence setupu (0 = všechny)
+    push_telegram_token: str = ""
+    push_telegram_chat_id: str = ""
+    push_quiet_hours: str = "23:00-06:00"
+    push_daily_cap: int = Field(default=200, ge=0)
+    push_setup_min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     news_explain_enabled: bool = False
     # Řetěz modelů oddělený čárkou: free tier vrací často 503 „high demand",
     # při něm se hned zkusí další (změřeno 15. 9. 2026)

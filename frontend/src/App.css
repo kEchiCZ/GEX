@@ -3111,6 +3111,14 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   white-space: pre-wrap;
 }
 
+/* Push kategorie (#1175) — jeden řádek na kategorii, tooltip nese popis */
+.push-category {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+
 /* Stav enginu v Settings (#705 — náhrada IBKR Console) */
 .settings-status td {
   padding: 2px 12px 2px 0;

@@ -550,6 +550,9 @@ class SetupEngine:
                     # Proklik ve zvonečku (#186): nový setup vede na graf instrumentu
                     "event": "created",
                     "symbol": self.symbol,
+                    # Číselná confidence pro práh push notifikací (#1175) — text
+                    # zprávy ji nese jen v procentech
+                    "confidence": confidence,
                     "message": f"Nový setup {side} ({template}): entry {candidate.entry:g}, "
                     f"cíl {candidate.target:g}, stop {candidate.stop:g} "
                     f"(RRR {candidate.rrr:.1f}, conf. {confidence} %). "
