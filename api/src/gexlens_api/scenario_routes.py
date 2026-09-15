@@ -177,9 +177,7 @@ def build_scenario_router(
         """Track record scénářů per zdroj (auto = verdikt dne, manual = nakreslené);
         `preliminary` dokud n < 30 (stejná brána jako verdikt dne)."""
         total = repo().stats(symbol)
-        by_source = {
-            source: repo().stats(symbol, source=source) for source in ("auto", "manual")
-        }
+        by_source = {source: repo().stats(symbol, source=source) for source in ("auto", "manual")}
         return {
             "symbol": symbol,
             "preliminary": total["n"] < 30,
