@@ -10,7 +10,7 @@ dependencies = [
     "pandas>=2.2",
     "pyarrow>=18",
     "uvicorn[standard]>=0.32",
-    "anthropic>=1.0",
+    "httpx>=0.28",
 ]
 
 [tool.uv.sources]

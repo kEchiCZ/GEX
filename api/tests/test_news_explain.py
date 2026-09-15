@@ -1,10 +1,10 @@
-"""Vysvětlení zprávy na vyžádání (#1126 3d): cache, flag, strop tokenů, prompt hardening."""
+"""Vysvětlení zprávy na vyžádání (#1126 3d, Gemini): cache, flag, strop tokenů, prompt hardening."""
 
 import datetime as dt
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import insert, select
@@ -30,23 +30,33 @@ from gexlens_engine.storage.sentiment import (
 NOW = dt.datetime(2026, 9, 15, 10, 0, tzinfo=dt.UTC)
 
 
-class FakeClient:
-    """Atrapa SDK: zaznamená request a vrátí pevnou odpověď ve tvaru Message."""
+class FakePost:
+    """Atrapa `httpx.post`: zaznamená request a vrátí pevnou odpověď Gemini."""
 
-    def __init__(self, text: str = "Fed drží sazby.", stop_reason: str = "end_turn") -> None:
+    def __init__(self, text: str = "Fed drží sazby.", status: int = 200, blocked: bool = False):
         self.calls: list[dict[str, Any]] = []
         self._text = text
-        self._stop = stop_reason
-        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
+        self._status = status
+        self._blocked = blocked
 
-    def _create(self, **kwargs: Any) -> Any:
-        self.calls.append(kwargs)
-        return SimpleNamespace(
-            stop_reason=self._stop,
-            model="claude-opus-5",
-            content=[SimpleNamespace(type="text", text=self._text)],
-            usage=SimpleNamespace(input_tokens=120, output_tokens=40, cache_read_input_tokens=300),
-        )
+    def __call__(self, url: str, **kwargs: Any) -> httpx.Response:
+        self.calls.append({"url": url, **kwargs})
+        if self._status != 200:
+            return httpx.Response(self._status, json={"error": {"message": "x"}})
+        if self._blocked:
+            payload: dict[str, Any] = {"promptFeedback": {"blockReason": "SAFETY"}}
+        else:
+            payload = {
+                "candidates": [
+                    {"content": {"parts": [{"text": self._text}]}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 400,
+                    "candidatesTokenCount": 40,
+                    "thoughtsTokenCount": 20,
+                },
+            }
+        return httpx.Response(200, json=payload)
 
 
 @pytest.fixture
@@ -78,81 +88,78 @@ def engine(tmp_path: Path) -> Engine:
     return engine
 
 
-def _explain(engine: Engine, client: FakeClient, **overrides: Any) -> news_explain.Explanation:
+def _explain(engine: Engine, post: FakePost, **overrides: Any) -> news_explain.Explanation:
     kwargs: dict[str, Any] = {
         "enabled": True,
-        "model": "claude-opus-5",
+        "model": "gemini-3.8-flash",
         "daily_tokens": 10_000,
-        "api_key_present": True,
-        "client_factory": lambda: client,
+        "api_key": "k",
+        "post": post,
         "now": lambda: NOW,
     }
     kwargs.update(overrides)
-    return explain_event(engine, 1, **kwargs)
+    return explain_event(engine, kwargs.pop("event_id", 1), **kwargs)
 
 
 def test_prvni_volani_jde_do_modelu_a_druhe_z_cache(engine: Engine) -> None:
-    client = FakeClient()
-    first = _explain(engine, client)
+    post = FakePost()
+    first = _explain(engine, post)
     assert first.cached is False
     assert first.text == "Fed drží sazby."
-    # Tokeny včetně cache čtení — strop má měřit skutečnou spotřebu
-    assert (first.input_tokens, first.output_tokens) == (420, 40)
-    second = _explain(engine, client)
+    # Tokeny včetně přemýšlení — strop má měřit skutečnou spotřebu
+    assert (first.input_tokens, first.output_tokens) == (400, 60)
+    second = _explain(engine, post)
     assert second.cached is True and second.text == first.text
-    assert len(client.calls) == 1  # druhé kliknutí model nevolá
+    assert len(post.calls) == 1  # druhé kliknutí model nevolá
 
-    request = client.calls[0]
-    assert request["model"] == "claude-opus-5"
-    assert request["fallbacks"] == "default"
-    assert request["system"][0]["cache_control"] == {"type": "ephemeral"}
-    user_text = request["messages"][0]["content"]
+    request = post.calls[0]
+    assert request["url"].endswith("/models/gemini-3.8-flash:generateContent")
+    assert request["headers"] == {"x-goog-api-key": "k"}  # klíč v hlavičce, ne v URL
+    assert "k" not in request["url"].split("models/")[0]
+    body = request["json"]
+    assert "NEPŘEDPOVÍDEJ směr" in body["systemInstruction"]["parts"][0]["text"]
+    user_text = body["contents"][0]["parts"][0]["text"]
     # Titulek je obalený jako data, tělo zkrácené na strop
     assert user_text.startswith("<zprava>\n") and user_text.endswith("\n</zprava>")
     assert "IGNORE PREVIOUS INSTRUCTIONS" in user_text
     assert "…(zkráceno)" in user_text and "x" * 2_001 not in user_text
-    assert "NEPŘEDPOVÍDEJ směr" in request["system"][0]["text"]
+    assert body["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}
 
 
 def test_cache_funguje_i_s_vypnutou_funkci_a_bez_klice(engine: Engine) -> None:
     with pytest.raises(ExplainDisabled):
-        _explain(engine, FakeClient(), enabled=False)
+        _explain(engine, FakePost(), enabled=False)
     with pytest.raises(ExplainDisabled):
-        _explain(engine, FakeClient(), api_key_present=False)
-    _explain(engine, FakeClient())
-    assert _explain(engine, FakeClient(), enabled=False).cached is True
+        _explain(engine, FakePost(), api_key="")
+    _explain(engine, FakePost())
+    assert _explain(engine, FakePost(), enabled=False).cached is True
 
 
-def test_denni_strop_tokenu_a_chybejici_udalost(engine: Engine) -> None:
+def _second_event(engine: Engine, event_id: int, title: str) -> None:
     with engine.begin() as conn:
         conn.execute(
             insert(news_events).values(
-                id=2,
+                id=event_id,
                 ts_event=NOW,
                 ts_ingested=NOW,
                 source="rss_news",
                 kind="headline",
-                title="Druhá zpráva",
+                title=title,
                 symbols=[],
                 market_closed=False,
-                dedup_hash="b",
+                dedup_hash=f"h{event_id}",
                 raw={},
             )
         )
-    client = FakeClient()
-    _explain(engine, client, daily_tokens=500)  # 460 tokenů — pod stropem
+
+
+def test_denni_strop_tokenu_a_chybejici_udalost(engine: Engine) -> None:
+    _second_event(engine, 2, "Druhá zpráva")
+    post = FakePost()
+    _explain(engine, post, daily_tokens=500)  # 460 tokenů — pod stropem
     with pytest.raises(ExplainBudgetExceeded):
-        explain_event(
-            engine,
-            2,
-            enabled=True,
-            model="claude-opus-5",
-            daily_tokens=460,
-            api_key_present=True,
-            client_factory=lambda: client,
-            now=lambda: NOW,
-        )
-    assert len(client.calls) == 1
+        _explain(engine, post, event_id=2, daily_tokens=460)
+    assert len(post.calls) == 1
     # Včerejší spotřeba se do dnešního stropu nepočítá
     with engine.begin() as conn:
         conn.execute(
@@ -160,44 +167,40 @@ def test_denni_strop_tokenu_a_chybejici_udalost(engine: Engine) -> None:
             .where(news_explanations.c.event_id == 1)
             .values(created_at=NOW - dt.timedelta(days=1))
         )
-    explain_event(
-        engine,
-        2,
-        enabled=True,
-        model="claude-opus-5",
-        daily_tokens=460,
-        api_key_present=True,
-        client_factory=lambda: client,
-        now=lambda: NOW,
-    )
-    assert len(client.calls) == 2
+    _explain(engine, post, event_id=2, daily_tokens=460)
+    assert len(post.calls) == 2
     with pytest.raises(ExplainEventMissing):
-        explain_event(
-            engine,
-            999,
-            enabled=True,
-            model="claude-opus-5",
-            daily_tokens=0,
-            api_key_present=True,
-            client_factory=lambda: client,
-        )
+        _explain(engine, post, event_id=999, daily_tokens=0)
 
 
-def test_odmitnuti_modelu_se_neuklada(engine: Engine) -> None:
+def test_kvota_429_a_filtr_se_neukladaji(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(news_explain, "sleep", lambda _s: None)
+    with pytest.raises(ExplainBudgetExceeded):
+        _explain(engine, FakePost(status=429))
+    # 503 „high demand" se zkusí jednou znovu; trvalé 503 = srozumitelná chyba
+    overloaded = FakePost(status=503)
+    with pytest.raises(ExplainDisabled, match="přetížený"):
+        _explain(engine, overloaded)
+    assert len(overloaded.calls) == 2
     with pytest.raises(ExplainDisabled):
-        _explain(engine, FakeClient(stop_reason="refusal"))
+        _explain(engine, FakePost(blocked=True))
+    with pytest.raises(ExplainDisabled):
+        _explain(engine, FakePost(status=400))
     with engine.connect() as conn:
         assert conn.execute(select(news_explanations)).first() is None
 
 
-def test_options_ze_settings_nenese_hodnotu_klice() -> None:
+def test_options_ze_settings_nenese_klic_v_repr() -> None:
     settings = Settings(
-        news_explain_enabled=True, news_explain_model="claude-opus-5", news_explain_daily_tokens=5
+        news_explain_enabled=True,
+        news_explain_model="gemini-3.8-flash",
+        news_explain_daily_tokens=5,
+        news_gemini_api_key=" sk-tajne ",
     )
-    options = ExplainOptions.from_settings(settings, {"ANTHROPIC_API_KEY": "sk-tajne"})
-    assert options == ExplainOptions(True, "claude-opus-5", 5, True)
+    options = ExplainOptions.from_settings(settings)
+    assert options.api_key == "sk-tajne" and options.enabled and options.daily_tokens == 5
     assert "sk-tajne" not in repr(options)
-    assert ExplainOptions.from_settings(settings, {}).api_key_present is False
+    assert ExplainOptions.from_settings(Settings()).api_key == ""
 
 
 def test_endpoint_mapuje_chyby_na_stavove_kody(
@@ -205,7 +208,7 @@ def test_endpoint_mapuje_chyby_na_stavove_kody(
 ) -> None:
     monkeypatch.setenv("GEXLENS_API_TOKEN", "t")
     monkeypatch.setenv("GEXLENS_NEWS_EXPLAIN_ENABLED", "true")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("GEXLENS_NEWS_GEMINI_API_KEY", "k")
     settings = Settings(
         data_dir=tmp_path / "data",
         database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}",
@@ -213,46 +216,21 @@ def test_endpoint_mapuje_chyby_na_stavove_kody(
     app = create_app(settings)
     engine = MetaRepository(settings).engine()
     ensure_sentiment_schema(engine)
-    with engine.begin() as conn:
-        conn.execute(
-            insert(news_events).values(
-                id=7,
-                ts_event=NOW,
-                ts_ingested=NOW,
-                source="rss_news",
-                kind="headline",
-                title="CPI",
-                symbols=[],
-                market_closed=False,
-                dedup_hash="c",
-                raw={},
-            )
-        )
-    fake = FakeClient(text="Inflace.")
-    monkeypatch.setattr(news_explain, "_default_client_factory", lambda: fake)
+    _second_event(engine, 7, "CPI")
+    fake = FakePost(text="Inflace.")
+    # Endpoint nesmí volat skutečné API — atrapa místo httpx.post na modulu
+    monkeypatch.setattr(news_explain.httpx, "post", fake)
     client = TestClient(app)
     ok = client.post("/news/7/explain")
     assert ok.status_code == 200, ok.text
     body = ok.json()
     assert body["text"] == "Inflace." and body["cached"] is False
+    assert body["model"] == "gemini-3.8-flash"
     assert client.post("/news/7/explain").json()["cached"] is True
+    assert len(fake.calls) == 1
     assert client.post("/news/404/explain").status_code == 404
-    monkeypatch.setattr(
-        news_explain, "_default_client_factory", lambda: FakeClient(stop_reason="refusal")
-    )
-    with engine.begin() as conn:
-        conn.execute(
-            insert(news_events).values(
-                id=8,
-                ts_event=NOW,
-                ts_ingested=NOW,
-                source="rss_news",
-                kind="headline",
-                title="X",
-                symbols=[],
-                market_closed=False,
-                dedup_hash="d",
-                raw={},
-            )
-        )
+    _second_event(engine, 8, "X")
+    monkeypatch.setattr(news_explain.httpx, "post", FakePost(blocked=True))
     assert client.post("/news/8/explain").status_code == 503
+    monkeypatch.setattr(news_explain.httpx, "post", FakePost(status=429))
+    assert client.post("/news/8/explain").status_code == 429
