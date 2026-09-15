@@ -3075,6 +3075,22 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   border-radius: 8px;
   padding: 8px 12px;
 }
+/* Vysvětlení zprávy (#1126 3d): tlačítko pod titulkem, text pod ním */
+.news-explain-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: 4px;
+}
+.news-explain-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  border-left: 2px solid var(--accent);
+  padding-left: 8px;
+}
+
 .news-card-head {
   display: flex;
   gap: 10px;

@@ -54,6 +54,7 @@ from gexlens_api.heatmap import (
 )
 from gexlens_api.live import LiveHub, TooManyChannels, TooManySubscribers, parse_channels
 from gexlens_api.meta_repo import MetaRepository
+from gexlens_api.news_explain import ExplainOptions
 from gexlens_api.security import (
     build_token_guard,
     load_allowed_origins,
@@ -198,7 +199,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             sentiment_ready.append(True)
         return engine
 
-    app.include_router(build_sentiment_router(sentiment_engine, settings.data_dir))
+    app.include_router(
+        build_sentiment_router(
+            sentiment_engine, settings.data_dir, ExplainOptions.from_settings(settings)
+        )
+    )
     # Záloha PostgreSQL (#438): parquety má uživatel na disku, DB je ve volume.
     # Dump nese celý archiv, takže jen s tokenem (#542 C3).
     app.include_router(build_backup_router(settings.database_url, require_token))

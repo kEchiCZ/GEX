@@ -630,6 +630,20 @@ review_queue = Table(
     Column("resolved_at", DateTime(timezone=True), nullable=True),
 )
 
+# Vysvětlení zprávy na vyžádání (#1126 bod 3d): text z LLM per událost, cache
+# navždy (zpráva se nemění). Čistě informativní vrstva pro člověka — do
+# SentIndexu, vah, klasifikací ani signálů NIKDY neteče (R4, #740 fáze 0).
+news_explanations = Table(
+    "news_explanations",
+    sentiment_metadata,
+    Column("event_id", Integer, ForeignKey("news_events.id"), primary_key=True),
+    Column("model", String(64), nullable=False),
+    Column("text", Text, nullable=False),
+    Column("input_tokens", Integer, nullable=False),
+    Column("output_tokens", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
 # Mechanické backtestové křivky (SPEC 7.3) — point-in-time, kalibrační období
 # se z reportu vylučuje; vstup na následující open po potvrzovacím close.
 track_record = Table(

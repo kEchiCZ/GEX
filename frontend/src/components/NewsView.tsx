@@ -13,6 +13,7 @@ import {
   fetchReview,
   latestCrowd,
   primaryReaction,
+  explainNews,
   relativeAge,
   submitReview,
 } from '../api/news'
@@ -71,7 +72,7 @@ function ImpactValue({ row }: { row: NewsRow }) {
   )
 }
 
-function NewsRowItem({
+export function NewsRowItem({
   row,
   review,
   nowMs,
@@ -91,6 +92,29 @@ function NewsRowItem({
   const [direction, setDirection] = useState<number>(row.sentiment_dir ?? 0)
   const [category, setCategory] = useState<string>(row.category ?? 'OTHER')
   const topicValue = asNumber(row.topic_value ?? null)
+  // Vysvětlení na vyžádání (#1126 3d): stav tlačítka per karta; text přijde
+  // z API (cache na serveru), chyba se ukáže místo textu
+  const [explain, setExplain] = useState<
+    | { state: 'idle' }
+    | { state: 'loading' }
+    | { state: 'done'; text: string }
+    | { state: 'error'; error: string }
+  >({ state: 'idle' })
+  const askExplain = () => {
+    if (explain.state === 'loading') return
+    if (explain.state === 'done') {
+      setExplain({ state: 'idle' }) // druhé kliknutí text sbalí
+      return
+    }
+    setExplain({ state: 'loading' })
+    void explainNews(row.id).then((result) =>
+      setExplain(
+        result.ok
+          ? { state: 'done', text: result.explanation.text }
+          : { state: 'error', error: result.error },
+      ),
+    )
+  }
   return (
     <article
       data-testid={`news-row-${row.id}`}
@@ -154,6 +178,32 @@ function NewsRowItem({
         {row.title}
       </p>
       {row.summary && <p className="muted news-card-summary">{row.summary}</p>}
+      <div className="news-explain-row">
+        <button
+          type="button"
+          className={
+            explain.state === 'done'
+              ? 'chip active news-explain-button'
+              : 'chip news-explain-button'
+          }
+          aria-label={`Vysvětlit zprávu: ${row.title}`}
+          title="Co ta zpráva je, kdo za ní stojí a proč může hýbat ES/NQ — vysvětlení z Claude (česky, 2–4 věty). Bez předpovědi směru; do SentIndexu ani signálů neteče. Jednou vysvětlená zpráva se pamatuje."
+          disabled={explain.state === 'loading'}
+          onClick={askExplain}
+        >
+          {explain.state === 'loading' ? 'Vysvětluji…' : 'Vysvětlit'}
+        </button>
+        {explain.state === 'done' && (
+          <p className="news-explain-text" data-testid={`news-explain-${row.id}`}>
+            {explain.text}
+          </p>
+        )}
+        {explain.state === 'error' && (
+          <p className="muted news-explain-text" data-testid={`news-explain-${row.id}`}>
+            Vysvětlení není k dispozici: {explain.error}
+          </p>
+        )}
+      </div>
       {editing && review && (
         <span className="news-review-edit">
           <select
