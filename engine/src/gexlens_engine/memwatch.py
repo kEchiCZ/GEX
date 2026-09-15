@@ -20,6 +20,15 @@ restartoval. Kde paměť roste, nevíme — a bez měření by oprava byla hád�
   velký pokles = fragmentace, ne únik. Vypnutí `GEXLENS_MALLOC_TRIM=0`.
   Doplněk v compose: `MALLOC_ARENA_MAX=2` (méně arén = méně fragmentace).
 
+- Arrow pool (15. 9.): trim vrací u news-engine ~280 MB za vzorek (RSS spadlo
+  z 3,1 GB na 0,4–0,7 GB), u enginu jen ~45 MB — jeho ~3 GB je držená paměť,
+  ne fragmentace glibc. Python heap byl podle tracemalloc ~230 MB, zbytek je
+  nativní a největší kandidát je pyarrow: parquet čtení/zápis partic jede
+  přes vlastní pool (mimalloc), který uvolněné bloky drží stranou glibc, takže
+  `malloc_trim` na ně nedosáhne. Po každém vzorku se proto zaloguje
+  `bytes_allocated` / `max_memory` poolu (kolik z RSS je Arrow) a zavolá
+  `release_unused()` s měřením vráceného RSS. Vypnutí `GEXLENS_ARROW_RELEASE=0`.
+
 Sdílí ho engine i news-engine (news-engine z balíku engine už importuje).
 """
 
@@ -31,11 +40,14 @@ import time
 import tracemalloc
 from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol
 
 #: Env přepínač pro tracemalloc (1/true/yes); bez něj se loguje jen RSS
 TRACE_ENV = "GEXLENS_MEMORY_TRACE"
 #: Env přepínač pro glibc malloc_trim po vzorku (default zapnuto; 0/false vypne)
 TRIM_ENV = "GEXLENS_MALLOC_TRIM"
+#: Env přepínač pro měření Arrow poolu + release_unused po vzorku (default zapnuto)
+ARROW_ENV = "GEXLENS_ARROW_RELEASE"
 #: Pokles RSS po trimu, od kterého se loguje samostatný řádek (šum pod tím mlčí)
 TRIM_LOG_MIN_MB = 20.0
 DEFAULT_INTERVAL_S = 600.0
@@ -68,6 +80,38 @@ def trim_enabled(environ: dict[str, str] | None = None) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def arrow_release_enabled(environ: dict[str, str] | None = None) -> bool:
+    """`GEXLENS_ARROW_RELEASE` — default zapnuto; vypíná jen výslovné 0/false/no/off."""
+    value = (environ if environ is not None else os.environ).get(ARROW_ENV, "1")
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+class ArrowPool(Protocol):
+    """Podmnožina `pyarrow.MemoryPool`, kterou hlídka používá (test si podstrčí atrapu)."""
+
+    @property
+    def backend_name(self) -> str: ...
+
+    def bytes_allocated(self) -> int: ...
+
+    def max_memory(self) -> int: ...
+
+    def release_unused(self) -> None: ...
+
+
+def _load_arrow_pool() -> ArrowPool | None:
+    """Výchozí pool pyarrow; None bez pyarrow (news-engine ho nemusí mít) — nikdy výjimka."""
+    try:
+        import pyarrow as pa
+    except ImportError:
+        return None
+    try:
+        pool: ArrowPool = pa.default_memory_pool()
+    except Exception:  # noqa: BLE001 — diagnostika nesmí shodit start
+        return None
+    return pool
+
+
 def _load_malloc_trim() -> Callable[[], int] | None:
     """`malloc_trim(0)` z glibc; None mimo glibc (musl, macOS, Windows) — nikdy výjimka."""
     try:
@@ -95,9 +139,11 @@ class MemoryWatch:
         interval_s: float = DEFAULT_INTERVAL_S,
         trace: bool = False,
         trim: bool = False,
+        arrow: bool = False,
         rss_provider: Callable[[], float | None] = rss_mb,
         clock: Callable[[], float] = time.monotonic,
         malloc_trim: Callable[[], int] | None = None,
+        arrow_pool: ArrowPool | None = None,
     ) -> None:
         self._name = name
         self._logger = logger
@@ -113,6 +159,14 @@ class MemoryWatch:
                 logger.info("%s: malloc_trim nedostupný (není glibc) — přeskočen", name)
         #: Kolik MB vrátil poslední malloc_trim (do /status; None = nevolán)
         self.last_trim_mb: float | None = None
+        # Arrow pool jen když je zapnutý A pyarrow je k dispozici
+        self._arrow_pool: ArrowPool | None = None
+        if arrow:
+            self._arrow_pool = arrow_pool if arrow_pool is not None else _load_arrow_pool()
+            if self._arrow_pool is None:
+                logger.info("%s: Arrow pool nedostupný (bez pyarrow) — přeskočen", name)
+        #: Alokace Arrow poolu při posledním vzorku v MB (do /status; None = neměřeno)
+        self.last_arrow_mb: float | None = None
         self._last_sample: float | None = None
         self._baseline: tracemalloc.Snapshot | None = None
         #: Poslední změřené RSS — do /status bez dalšího čtení /proc
@@ -128,7 +182,13 @@ class MemoryWatch:
 
     @classmethod
     def from_env(cls, name: str, logger: logging.Logger) -> "MemoryWatch":
-        return cls(name, logger, trace=trace_enabled(), trim=trim_enabled())
+        return cls(
+            name,
+            logger,
+            trace=trace_enabled(),
+            trim=trim_enabled(),
+            arrow=arrow_release_enabled(),
+        )
 
     def sample(self) -> float | None:
         """Změří RSS; loguje nejvýš jednou za interval. Vrací aktuální RSS."""
@@ -144,8 +204,40 @@ class MemoryWatch:
         if self._trace:
             for line in self.top_lines():
                 self._logger.info("%s: tracemalloc %s", self._name, line)
+        # Nejdřív Arrow (vrátí bloky svému alokátoru / OS), pak glibc trim —
+        # v opačném pořadí by trim neměl na co sáhnout
+        self._arrow_release_and_log()
         self._trim_and_log()
         return self.last_rss_mb
+
+    def _arrow_release_and_log(self) -> None:
+        """Podíl Arrow poolu na RSS + `release_unused()` s měřením vráceného RSS (#1105)."""
+        pool = self._arrow_pool
+        if pool is None or self.last_rss_mb is None:
+            return
+        before = self.last_rss_mb
+        try:
+            allocated_mb = pool.bytes_allocated() / 1024 / 1024
+            peak_mb = pool.max_memory() / 1024 / 1024
+            backend = pool.backend_name
+            pool.release_unused()
+        except Exception:  # noqa: BLE001 — diagnostika nesmí shodit sběr
+            self._logger.exception("%s: Arrow pool selhal — vypínám", self._name)
+            self._arrow_pool = None
+            return
+        self.last_arrow_mb = round(allocated_mb, 1)
+        after = self._rss()
+        if after is not None:
+            self.last_rss_mb = after
+        released = before - after if after is not None else 0.0
+        self._logger.info(
+            "%s: Arrow pool (%s) alokováno %.0f MB, max %.0f MB; release_unused vrátil %.0f MB",
+            self._name,
+            backend,
+            allocated_mb,
+            peak_mb,
+            released,
+        )
 
     def _trim_and_log(self) -> None:
         """glibc `malloc_trim(0)` + měření, kolik RSS se vrátilo OS (#1105)."""

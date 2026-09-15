@@ -4,7 +4,13 @@ import logging
 
 import pytest
 
-from gexlens_engine.memwatch import MemoryWatch, rss_mb, trace_enabled, trim_enabled
+from gexlens_engine.memwatch import (
+    MemoryWatch,
+    arrow_release_enabled,
+    rss_mb,
+    trace_enabled,
+    trim_enabled,
+)
 
 
 def test_sample_loguje_jednou_za_interval(caplog: pytest.LogCaptureFixture) -> None:
@@ -138,3 +144,88 @@ def test_malloc_trim_vyjimka_vypne_trim_a_nezhodi_sber(caplog: pytest.LogCapture
         assert watch.sample() == 10.0
     assert watch.last_trim_mb is None
     assert any("malloc_trim selhal" in r.getMessage() for r in caplog.records)
+
+
+def test_arrow_pool_meri_podil_a_release_vraci_rss(caplog: pytest.LogCaptureFixture) -> None:
+    """Po vzorku se zaloguje podíl Arrow poolu, zavolá release_unused a změří vrácené RSS;
+    glibc trim jde až po něm (pořadí: RSS → Arrow → trim)."""
+    values = iter([3000.0, 2600.0, 2550.0])
+    calls: list[str] = []
+
+    class FakePool:
+        backend_name = "mimalloc"
+
+        def bytes_allocated(self) -> int:
+            return 1200 * 1024 * 1024
+
+        def max_memory(self) -> int:
+            return 1800 * 1024 * 1024
+
+        def release_unused(self) -> None:
+            calls.append("arrow")
+
+    def fake_trim() -> int:
+        calls.append("trim")
+        return 1
+
+    watch = MemoryWatch(
+        "engine",
+        logging.getLogger("test.memwatch"),
+        trim=True,
+        arrow=True,
+        rss_provider=lambda: next(values),
+        clock=lambda: 0.0,
+        malloc_trim=fake_trim,
+        arrow_pool=FakePool(),
+    )
+    with caplog.at_level(logging.INFO, logger="test.memwatch"):
+        assert watch.sample() == 2550.0
+    assert calls == ["arrow", "trim"]
+    assert watch.last_arrow_mb == 1200.0
+    assert watch.last_trim_mb == 50.0
+    logged = [r.getMessage() for r in caplog.records]
+    assert logged == [
+        "engine: RSS 3000 MB",
+        "engine: Arrow pool (mimalloc) alokováno 1200 MB, max 1800 MB; "
+        "release_unused vrátil 400 MB",
+        "engine: malloc_trim vrátil 50 MB (RSS 2600 → 2550 MB)",
+    ]
+
+
+def test_arrow_pool_vyjimka_vypne_mereni_a_nezhodi_sber(caplog: pytest.LogCaptureFixture) -> None:
+    class BrokenPool:
+        backend_name = "system"
+
+        def bytes_allocated(self) -> int:
+            raise RuntimeError("pool pryč")
+
+        def max_memory(self) -> int:
+            return 0
+
+        def release_unused(self) -> None:
+            return None
+
+    values = iter([100.0, 100.0, 100.0, 100.0])
+    watch = MemoryWatch(
+        "engine",
+        logging.getLogger("test.memwatch"),
+        arrow=True,
+        rss_provider=lambda: next(values),
+        clock=lambda: 0.0,
+        arrow_pool=BrokenPool(),
+    )
+    with caplog.at_level(logging.INFO, logger="test.memwatch"):
+        assert watch.sample() == 100.0
+        assert watch.last_arrow_mb is None
+    assert any("Arrow pool selhal" in r.getMessage() for r in caplog.records)
+
+
+def test_arrow_release_flag_default_zapnuto() -> None:
+    assert arrow_release_enabled({}) is True
+    assert arrow_release_enabled({"GEXLENS_ARROW_RELEASE": "0"}) is False
+    assert arrow_release_enabled({"GEXLENS_ARROW_RELEASE": "off"}) is False
+    # Skutečný pool pyarrow: hlídka ho načte sama a vzorek projde bez výjimky
+    watch = MemoryWatch(
+        "engine", logging.getLogger("test.memwatch"), arrow=True, rss_provider=lambda: 1.0
+    )
+    assert watch.sample() == 1.0
