@@ -557,10 +557,10 @@ def build_sentiment_router(
 
     @router.post("/news/{event_id}/explain")
     def news_explain(event_id: int) -> dict[str, object]:
-        """Vysvětlení zprávy na vyžádání (#1126 3d): cache navždy, jinak Claude.
+        """Vysvětlení zprávy na vyžádání (#1126 3d): cache navždy, jinak Gemini.
 
         Informativní vrstva pro člověka — do SentIndexu, vah ani signálů
-        neteče. 503 = vypnuto/bez klíče/odmítnuto, 429 = denní strop tokenů.
+        neteče. 503 = vypnuto/bez klíče/filtr, 429 = denní strop nebo kvóta.
         """
         try:
             result = explain_event(
@@ -569,7 +569,7 @@ def build_sentiment_router(
                 enabled=explain_options.enabled,
                 model=explain_options.model,
                 daily_tokens=explain_options.daily_tokens,
-                api_key_present=explain_options.api_key_present,
+                api_key=explain_options.api_key,
             )
         except ExplainEventMissing as exc:
             raise HTTPException(404, str(exc)) from exc

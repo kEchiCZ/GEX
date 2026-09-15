@@ -645,7 +645,7 @@ export async function fetchReview(): Promise<ReviewRow[]> {
 }
 
 /** Ruční korekce směru/kategorie → nová verze klasifikace (source=manual). */
-/** Vysvětlení zprávy na vyžádání (#1126 3d): text z Claude, cache na serveru
+/** Vysvětlení zprávy na vyžádání (#1126 3d): text z Gemini (free tier), cache na serveru
 navždy. Informativní vrstva — do SentIndexu, vah ani signálů neteče. */
 export interface NewsExplanation {
   event_id: number

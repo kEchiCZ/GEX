@@ -708,12 +708,13 @@ na kartě; opravy klasifikace (⚠ u titulku) zůstávají.
 
 Od v1.18 (#1126) má karta tlačítko **Vysvětlit**: na kliknutí přijde česky
 ve 2–4 větách, **co ta zpráva je, kdo za ní stojí a přes jaký mechanismus
-může hýbat ES/NQ** — z modelu Claude, jen na vyžádání. Vysvětlení záměrně
+může hýbat ES/NQ** — z modelu Gemini (free tier, žádný placený model), jen na vyžádání. Vysvětlení záměrně
 **neříká směr ani nedává doporučení** (to měří aplikace z reakce trhu) a do
 SentIndexu, vah ani signálů nijak neteče — je to nápověda pro porozumění,
 ne signál. Jednou vysvětlená zpráva se pamatuje (druhé kliknutí text jen
-sbalí/rozbalí, nic nestojí). Funkce vyžaduje klíč Anthropic v `.env`
-(ADMIN manuál); bez něj tlačítko odpoví „Vysvětlení není k dispozici".
+sbalí/rozbalí, nic nestojí). Funkce vyžaduje Gemini klíč v `.env`
+(ADMIN manuál, týž jako u klasifikace); bez něj tlačítko odpoví „Vysvětlení
+není k dispozici". Při přetížení modelu (free tier) přijde „zkus za chvíli".
 
 Od v1.12 karta nese i **kontext tématu**: badge `téma −0,22` je kumulativní
 index tématu **v okamžiku zprávy** — do jakého narativu zpráva přišla

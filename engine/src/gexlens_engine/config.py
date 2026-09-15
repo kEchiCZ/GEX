@@ -163,12 +163,16 @@ class Settings(BaseSettings):
     # uživatele — přepnutí mění hodnoty CumΔ i vstup detektorů.
     cumdelta_source: str = Field(default="midpoint", pattern="^(midpoint|dxfeed)$")
     # Vysvětlení zprávy na vyžádání (#1126 bod 3d, API): tlačítko u karty
-    # zprávy zavolá Claude a odpověď se uloží navždy do `news_explanations`.
-    # Klíč čte SDK z ANTHROPIC_API_KEY (bez prefixu). Denní strop je součet
-    # input+output tokenů za UTC den — po překročení API odmítne, cache jede
-    # dál. Nic z toho neteče do SentIndexu, vah ani signálů (R4, #740 fáze 0).
+    # zprávy zavolá Gemini (free tier, týž klíč jako zakonzervovaná
+    # klasifikace #281 — rozhodnutí uživatele 15. 9.: žádný placený model)
+    # a odpověď se uloží navždy do `news_explanations`. Model pinovaný na
+    # konkrétní verzi (alias `gemini-flash-latest` už jednou rozbil požadavek,
+    # #738). Denní strop je součet prompt+output tokenů za UTC den — po
+    # překročení API odmítne, cache jede dál. Nic z toho neteče do SentIndexu,
+    # vah ani signálů (R4, #740 fáze 0).
+    news_gemini_api_key: str = ""
     news_explain_enabled: bool = False
-    news_explain_model: str = "claude-opus-5"
+    news_explain_model: str = "gemini-3.8-flash"
     news_explain_daily_tokens: int = Field(default=300_000, ge=0)
     # Dev laboratoř jen s tastytrade (#623, start-dev.ps1 -LiveTasty): engine
     # přeskočí IBKR úplně a jen streamuje chain do cache s heartbeat logem.

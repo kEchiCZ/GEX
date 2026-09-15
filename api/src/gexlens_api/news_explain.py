@@ -1,4 +1,4 @@
-"""Vysvětlení zprávy na vyžádání (#1126 bod 3d) — Claude přes oficiální SDK.
+"""Vysvětlení zprávy na vyžádání (#1126 bod 3d) — Gemini free tier přes REST.
 
 Účel je porozumění, ne predikce: LLM větev pro SMĚR neprošla (#740), tohle
 je jiná věc — „co ta zpráva je, kdo za ní stojí a proč hýbe ES/NQ". Text je
@@ -12,8 +12,12 @@ Pravidla:
   za UTC den): po překročení 429, cache dál funguje. Měříme, kolik se to
   používá — rozhodnutí o automatickém běhu (varianta B) až podle čísel.
 - Titulek i text zprávy jsou untrusted vstup: v promptu jsou obalené
-  oddělovači s instrukcí „data, ne příkazy" (stejně jako Gemini větev #281).
+  oddělovači s instrukcí „data, ne příkazy" (stejně jako klasifikace #281).
   Do modelu jdou jen veřejné titulky/texty (S10) — nikdy klíče ani účty.
+- Rozhodnutí uživatele 15. 9.: žádný placený model. Používá se týž Gemini
+  klíč jako zakonzervovaná klasifikace (`GEXLENS_NEWS_GEMINI_API_KEY`),
+  requestem přes httpx jako `llm_classifier` (klíč v hlavičce, ne v URL);
+  model pinovaný na konkrétní verzi (#738).
 - Model má výslovně ZAKÁZÁNO předpovídat směr a dávat obchodní doporučení —
   vysvětlení nesmí vypadat jako signál.
 """
@@ -21,9 +25,11 @@ Pravidla:
 import datetime as dt
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from time import sleep
 from typing import Any
 
+import httpx
 from sqlalchemy import func, insert, select
 from sqlalchemy.engine import Engine
 
@@ -35,6 +41,13 @@ logger = logging.getLogger(__name__)
 #: ne rozbor celého článku; strop drží náklady předvídatelné
 BODY_MAX_CHARS = 2_000
 MAX_OUTPUT_TOKENS = 600
+#: Gemini 3.x: `thinkingLevel` místo thinkingBudget (2.5). Nejnižší úroveň,
+#: kterou gemini-3.8-flash bere, je `low` — `minimal` vrací 400 (ověřeno
+#: 15. 9. 2026, stejná past jako #738); vysvětlení ve 2–4 větách víc nepotřebuje
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+REQUEST_TIMEOUT_S = 60.0
+RETRY_STATUSES = frozenset({500, 502, 503, 504})
+RETRY_DELAY_S = 2.0
 
 #: Stabilní systémový prompt — cachovaný prefix (cache_control), za ním
 #: proměnlivá zpráva. Česky, protože čtenář je český trader.
@@ -55,25 +68,20 @@ SYSTEM_PROMPT = (
 
 @dataclass(frozen=True)
 class ExplainOptions:
-    """Konfigurace z `Settings` + přítomnost klíče (hodnota klíče se nikam nenese)."""
+    """Konfigurace z `Settings`; klíč je mimo repr, ať se nedostane do logu."""
 
     enabled: bool = False
-    model: str = "claude-opus-5"
+    model: str = "gemini-3.8-flash"
     daily_tokens: int = 0
-    api_key_present: bool = False
+    api_key: str = field(default="", repr=False)
 
     @classmethod
-    def from_settings(
-        cls, settings: Any, environ: dict[str, str] | None = None
-    ) -> "ExplainOptions":
-        import os
-
-        env = environ if environ is not None else os.environ
+    def from_settings(cls, settings: Any) -> "ExplainOptions":
         return cls(
             enabled=bool(settings.news_explain_enabled),
             model=str(settings.news_explain_model),
             daily_tokens=int(settings.news_explain_daily_tokens),
-            api_key_present=bool(env.get("ANTHROPIC_API_KEY", "").strip()),
+            api_key=str(settings.news_gemini_api_key or "").strip(),
         )
 
 
@@ -137,10 +145,61 @@ def _tokens_used_today(engine: Engine, now: dt.datetime) -> int:
         return int(conn.execute(stmt).scalar_one())
 
 
-def _default_client_factory() -> Any:
-    import anthropic
+def _gemini_generate(
+    post: Callable[..., httpx.Response], *, api_key: str, model: str, prompt: str
+) -> tuple[str, int, int, str]:
+    """Jeden generateContent request → (text, prompt tokeny, výstupní tokeny, stop).
 
-    return anthropic.Anthropic()
+    Chybové tělo jde do logu (bez klíče — ten je v hlavičce, ne v URL, #738).
+    """
+    body = {
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": MAX_OUTPUT_TOKENS,
+            "thinkingConfig": {"thinkingLevel": "low"},
+        },
+    }
+    # Free tier flash modely vrací občas 503 „high demand" (změřeno 15. 9.
+    # 2026 na gemini-3.8-flash: dva requesty po sobě, 200 a 503) — jeden
+    # opakovaný pokus po krátké pauze; uživatel kliká ručně, další čekání ne
+    response = post(
+        GEMINI_URL.format(model=model),
+        json=body,
+        headers={"x-goog-api-key": api_key},
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    if response.status_code in RETRY_STATUSES:
+        sleep(RETRY_DELAY_S)
+        response = post(
+            GEMINI_URL.format(model=model),
+            json=body,
+            headers={"x-goog-api-key": api_key},
+            timeout=REQUEST_TIMEOUT_S,
+        )
+    if response.status_code == 429:
+        raise ExplainBudgetExceeded("Gemini 429 — denní kvóta free tieru vyčerpána, zkus později")
+    if response.status_code in RETRY_STATUSES:
+        raise ExplainDisabled(f"Gemini je přetížený ({response.status_code}) — zkus za chvíli")
+    if response.status_code >= 400:
+        logger.error("Gemini %d pro model %s: %.500s", response.status_code, model, response.text)
+        raise ExplainDisabled(f"Gemini odpověděl {response.status_code}")
+    payload = response.json()
+    try:
+        candidate = payload["candidates"][0]
+        parts = candidate.get("content", {}).get("parts", [])
+        text = "".join(str(part.get("text", "")) for part in parts).strip()
+        finish = str(candidate.get("finishReason", ""))
+    except (KeyError, IndexError, TypeError):
+        # Bez kandidáta = zablokováno filtrem (promptFeedback) nebo prázdno
+        text, finish = "", str(payload.get("promptFeedback", {}).get("blockReason", ""))
+    usage = payload.get("usageMetadata", {}) if isinstance(payload, dict) else {}
+    prompt_tokens = int(usage.get("promptTokenCount", 0) or 0)
+    output_tokens = int(usage.get("candidatesTokenCount", 0) or 0) + int(
+        usage.get("thoughtsTokenCount", 0) or 0
+    )
+    return text, prompt_tokens, output_tokens, finish
 
 
 def explain_event(
@@ -150,8 +209,8 @@ def explain_event(
     enabled: bool,
     model: str,
     daily_tokens: int,
-    api_key_present: bool,
-    client_factory: Callable[[], Any] | None = None,
+    api_key: str,
+    post: Callable[..., httpx.Response] | None = None,
     now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
 ) -> Explanation:
     """Vrátí vysvětlení události — z cache, nebo nové z modelu (a uloží ho).
@@ -178,8 +237,8 @@ def explain_event(
         )
     if not enabled:
         raise ExplainDisabled("Vysvětlení zpráv je vypnuté (GEXLENS_NEWS_EXPLAIN_ENABLED)")
-    if not api_key_present:
-        raise ExplainDisabled("Chybí ANTHROPIC_API_KEY v .env")
+    if not api_key:
+        raise ExplainDisabled("Chybí GEXLENS_NEWS_GEMINI_API_KEY v .env")
     with engine.connect() as conn:
         event = (
             conn.execute(select(news_events).where(news_events.c.id == event_id)).mappings().first()
@@ -193,39 +252,18 @@ def explain_event(
             f"Denní strop {daily_tokens} tokenů vyčerpán ({used} použito) — zkus zítra"
         )
 
-    # Továrna se řeší až tady (ne v defaultu parametru), ať jde v testech
-    # podstrčit atrapa přes modul — jinak by test volal skutečné API
-    client = (client_factory or _default_client_factory)()
-    # Server-side fallback při odmítnutí (zprávy o válce, sankcích apod. jsou
-    # legitimní vstup, ale klasifikátor je může zastavit) — jeden request,
-    # bez vlastního seznamu modelů. Nízké úsilí: 2–4 věty, ne analýza.
-    response = client.beta.messages.create(
+    # `post` se řeší až tady (ne v defaultu parametru), ať jde v testech
+    # podstrčit atrapa — jinak by test volal skutečné API
+    text, input_tokens, output_tokens, finish = _gemini_generate(
+        post or httpx.post,
+        api_key=api_key,
         model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        output_config={"effort": "low"},
-        system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        messages=[
-            {
-                "role": "user",
-                "content": f"<zprava>\n{_event_text(dict(event))}\n</zprava>",
-            }
-        ],
+        prompt=f"<zprava>\n{_event_text(dict(event))}\n</zprava>",
     )
-    if response.stop_reason == "refusal":
-        raise ExplainDisabled("Model vysvětlení odmítl (bezpečnostní klasifikátor)")
-    text = "".join(block.text for block in response.content if block.type == "text").strip()
     if not text:
-        raise ExplainDisabled("Model nevrátil text")
-    usage = response.usage
-    input_tokens = (
-        int(usage.input_tokens or 0)
-        + int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-        + int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
-    )
-    output_tokens = int(usage.output_tokens or 0)
-    served_by = str(getattr(response, "model", model) or model)
+        # Bezpečnostní filtr nebo prázdná odpověď — neukládá se, ať jde zkusit znovu
+        raise ExplainDisabled(f"Model text nevrátil ({finish or 'bez důvodu'})")
+    served_by = model
     with engine.begin() as conn:
         conn.execute(
             insert(news_explanations).values(

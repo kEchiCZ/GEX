@@ -187,7 +187,7 @@ export function NewsRowItem({
               : 'chip news-explain-button'
           }
           aria-label={`Vysvětlit zprávu: ${row.title}`}
-          title="Co ta zpráva je, kdo za ní stojí a proč může hýbat ES/NQ — vysvětlení z Claude (česky, 2–4 věty). Bez předpovědi směru; do SentIndexu ani signálů neteče. Jednou vysvětlená zpráva se pamatuje."
+          title="Co ta zpráva je, kdo za ní stojí a proč může hýbat ES/NQ — vysvětlení z Gemini (česky, 2–4 věty). Bez předpovědi směru; do SentIndexu ani signálů neteče. Jednou vysvětlená zpráva se pamatuje."
           disabled={explain.state === 'loading'}
           onClick={askExplain}
         >
