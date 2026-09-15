@@ -93,6 +93,35 @@ const DEFAULT_SESSIONS = [
 ]
 
 /** Parametr vlevo, nápověda vpravo (#445). */
+/** Tlačítko přepojení zdroje (#950). Samostatná komponenta, ne továrna
+ * volaná při renderu — handler s Date.now by jinak platil za nečistý render. */
+function ProviderButton({
+  target,
+  name,
+  state,
+  confirmLabel,
+  onAsk,
+}: {
+  target: ReconnectTarget
+  name: string
+  state: ProviderState
+  confirmLabel: string
+  onAsk: (target: ReconnectTarget, label: string) => void
+}) {
+  return (
+    <button
+      type="button"
+      className={`secondary provider-button provider-${state}`}
+      data-testid={`reconnect-${target}`}
+      data-state={state}
+      disabled={state === 'reconnecting'}
+      onClick={() => onAsk(target, confirmLabel)}
+    >
+      {providerButtonLabel(state, name)}
+    </button>
+  )
+}
+
 function SettingRow({ children, help }: { children: React.ReactNode; help: React.ReactNode }) {
   return (
     <div className="setting-row">
@@ -140,8 +169,11 @@ export function SettingsView() {
     const timer = window.setInterval(() => setNowMs(Date.now()), 5_000)
     return () => window.clearInterval(timer)
   }, [windowOpen])
+  // Západka „přepojení už začalo": zachytí přechodný stav odpojení, který
+  // z aktuálního statusu později odvodit nejde — setState v efektu vědomě (#1123)
   useEffect(() => {
     if (requestedAt.ibkr !== undefined && status.connection && status.connection !== 'connected') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- západka nad přechodným stavem, viz výše
       setProgressSeen((prev) => (prev.ibkr ? prev : { ...prev, ibkr: true }))
     }
     if (
@@ -162,10 +194,13 @@ export function SettingsView() {
 Sběr dat se na ~1–2 minuty přeruší.`)
     )
       return
+    // Jeden odečet času: updater stavu musí být čistý (React ho smí volat
+    // opakovaně), Date.now patří do handleru
+    const now = Date.now()
     setReconnect({ target, note: 'vyžádáno…' })
-    setRequestedAt((prev) => ({ ...prev, [target]: Date.now() }))
+    setRequestedAt((prev) => ({ ...prev, [target]: now }))
     setProgressSeen((prev) => ({ ...prev, [target]: false }))
-    setNowMs(Date.now())
+    setNowMs(now)
     if (target === 'tasty') setTastyBaseline(status.tasty_reconnects ?? 0)
     void requestReconnect(target)
       .then(() =>
@@ -202,24 +237,6 @@ Sběr dat se na ~1–2 minuty přeruší.`)
     if (typeof stamp !== 'number') return null
     return `poslední požadavek ${new Date(stamp * 1000).toLocaleString('cs-CZ')}`
   }
-  const providerButton = (
-    target: ReconnectTarget,
-    name: string,
-    state: ProviderState,
-    confirmLabel: string,
-  ) => (
-    <button
-      type="button"
-      className={`secondary provider-button provider-${state}`}
-      data-testid={`reconnect-${target}`}
-      data-state={state}
-      disabled={state === 'reconnecting'}
-      onClick={() => askReconnect(target, confirmLabel)}
-    >
-      {providerButtonLabel(state, name)}
-    </button>
-  )
-
   const dirtyKeys = Object.keys(draft)
   const value = (key: string, fallback: unknown): unknown =>
     key in draft ? draft[key] : (values[key] ?? fallback)
@@ -405,7 +422,13 @@ Sběr dat se na ~1–2 minuty přeruší.`)
               <tr>
                 <td>IBKR</td>
                 <td>
-                  {providerButton('ibkr', 'IBKR', ibkrState, 'IBKR')}
+                  <ProviderButton
+                    target="ibkr"
+                    name="IBKR"
+                    state={ibkrState}
+                    confirmLabel="IBKR"
+                    onAsk={askReconnect}
+                  />
                   <span className="muted" data-testid="provider-role-ibkr">
                     {' · '}
                     {providerRoleText('ibkr', status.chain_source, status.spot_source)}
@@ -532,7 +555,13 @@ Sběr dat se na ~1–2 minuty přeruší.`)
                 <tr>
                   <td>tastytrade</td>
                   <td>
-                    {providerButton('tasty', 'tastytrade', tastyState, 'tastytrade (DXLink)')}
+                    <ProviderButton
+                      target="tasty"
+                      name="tastytrade"
+                      state={tastyState}
+                      confirmLabel="tastytrade (DXLink)"
+                      onAsk={askReconnect}
+                    />
                     <span className="muted" data-testid="provider-role-tasty">
                       {' · '}
                       {providerRoleText('tasty', status.chain_source, status.spot_source)}

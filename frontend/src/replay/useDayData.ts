@@ -119,7 +119,10 @@ export const EMPTY_LIVE: LiveOverlay = { bars: [], labels: [], minutesIso: [] }
 function splitSpotBars(day: ReplayDay, spotBars: SpotBar[]): LiveOverlay {
   if (spotBars.length === 0) return EMPTY_LIVE
   const minuteIndex = new Map(day.minutes.map((iso, index) => [iso, index]))
-  // Provizorní bar (ADR-0005) minutu nepokrývá — rozdělaná svíčka ze spotu je živější
+  // Provizorní bar (ADR-0005) minutu nepokrývá — rozdělaná svíčka ze spotu je živější.
+  // Minuta s FINÁLNÍM barem se tu přeskočí: spot záloha končí příchodem baru
+  // (#143), samotný snapshot nestačí. Stav `spotBars` se neprořezává
+  // (bounded SPOT_BARS_KEEP), filtr je jen tady (#1123).
   const provisional = new Set(day.provisionalMinutes)
   const covered = new Set(
     (day.overlays.price ?? [])
@@ -262,7 +265,7 @@ export interface DayFeed {
   live: LiveOverlay
   /** Data se nedaří obnovit (#516): ≥ N selhání po sobě → banner se stářím.
   Null = obnovy fungují (nebo není co obnovovat — demo/daily). */
-  staleData: { failures: number; lastMinuteIso: string | null } | null
+  staleData: { failures: number; lastMinuteIso: string | null; atMs: number } | null
 }
 
 export function useDayData(
@@ -280,20 +283,26 @@ export function useDayData(
     inputsRef.current = inputs
   }, [inputs])
   const [daily, setDaily] = useState<DayData | null>(null)
-  // Selhané obnovy po sobě (#516) — banner „zobrazen stav z HH:MM" po prahu
-  const [refreshFailures, setRefreshFailures] = useState(0)
+  // Selhané obnovy po sobě (#516) — banner „zobrazen stav z HH:MM" po prahu;
+  // `atMs` = čas posledního selhání, ze kterého banner počítá stáří dat
+  // (render nesmí sahat na Date.now, #1123)
+  const [refreshFailures, setRefreshFailures] = useState({ count: 0, atMs: 0 })
   // Živý spot (#128, #143): rozdělaná svíčka aktuální minuty + záložní bary minut bez skutečného baru
   const [spotBars, setSpotBars] = useState<SpotBar[]>([])
 
   // Změna instrumentu/expirace: starý dataset nesmí přežít — ale návrat na
-  // kešovaný klíč (#514) renderuje okamžitě z LRU místo demo + plného stažení
+  // kešovaný klíč (#514) renderuje okamžitě z LRU místo demo + plného stažení.
+  // Reset v efektu vědomě (#1123): čtyři stavy + ref sdílí jeden klíč a
+  // odvozování při renderu by prošlo všemi updatery WS appendu; jedno
+  // překreslení navíc při přepnutí symbolu je levnější než to riziko.
   useEffect(() => {
     const cached = expiry ? getCachedBundle(bundleCacheKey(symbol, expiry, date)) : null
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset per klíč, viz výše
     setInputs(cached)
     inputsRef.current = cached
     setDaily(null)
     setSpotBars([])
-    setRefreshFailures(0)
+    setRefreshFailures({ count: 0, atMs: 0 })
     if (import.meta.env.DEV) {
       console.debug(`[replay-cache #514] ${symbol}|${expiry}|${date}: ${cached ? 'hit — okamžitý render' : 'miss — plný fetch'}`) // prettier-ignore
     }
@@ -308,19 +317,6 @@ export function useDayData(
       storeCachedBundle(bundleCacheKey(symbol, expiry, date), inputs)
     }
   }, [inputs, symbol, expiry, date])
-
-  // Jakmile pro minutu dorazí FINÁLNÍ bar (price kanál), spot záloha končí.
-  // Pouhý snapshot minuty nestačí — jinak by svíčka do příchodu baru chyběla (#143).
-  // Provizorní bar ji taky neruší, aby rozdělaná minuta zůstala živá (ADR-0005).
-  useEffect(() => {
-    if (spotBars.length === 0 || !inputs) return
-    const withFinalBar = new Set(
-      inputs.bars.filter((bar) => bar.final !== false).map((bar) => bar.tsIso),
-    )
-    if (spotBars.some((spot) => withFinalBar.has(spot.minuteIso))) {
-      setSpotBars((previous) => previous.filter((spot) => !withFinalBar.has(spot.minuteIso)))
-    }
-  }, [inputs, spotBars])
 
   const [retry, setRetry] = useState(0)
   // Hodinová pojistka: plný refetch srovná mezery / OI archiv / stale opravy (#127).
@@ -347,17 +343,19 @@ export function useDayData(
         // Prázdný den (0 minut) nesmí přepsat poslední živý stav při přechodném výpadku
         if (loaded.minutes.length > 0) {
           setInputs(loaded)
-          setRefreshFailures(0)
+          setRefreshFailures({ count: 0, atMs: 0 })
         } else {
           // Prázdná odpověď = neúspěšná obnova (#516) — počítá se a zkouší znovu
-          setRefreshFailures((n) => n + 1)
+          const atMs = Date.now()
+          setRefreshFailures((prev) => ({ count: prev.count + 1, atMs }))
           timer = setTimeout(() => setRetry((n) => n + 1), 30_000)
         }
       })
       .catch(() => {
         // Den (zatím) neexistuje — např. čerstvě přidaný ticker; zkusit znovu za 30 s
         if (cancelled) return
-        setRefreshFailures((n) => n + 1)
+        const atMs = Date.now()
+        setRefreshFailures((prev) => ({ count: prev.count + 1, atMs }))
         timer = setTimeout(() => setRetry((n) => n + 1), 30_000)
       })
     return () => {
@@ -694,8 +692,12 @@ export function useDayData(
     [baseReplay, spotBars],
   )
   const staleData =
-    timeframe === 'intraday' && inputs && refreshFailures >= STALE_FAILURES_THRESHOLD
-      ? { failures: refreshFailures, lastMinuteIso: inputs.minutes.at(-1) ?? null }
+    timeframe === 'intraday' && inputs && refreshFailures.count >= STALE_FAILURES_THRESHOLD
+      ? {
+          failures: refreshFailures.count,
+          lastMinuteIso: inputs.minutes.at(-1) ?? null,
+          atMs: refreshFailures.atMs,
+        }
       : null
   if (timeframe === 'daily') return { day: daily ?? fallback, live: EMPTY_LIVE, staleData: null }
   return { day: replayDay ?? fallback, live: replayDay ? live : EMPTY_LIVE, staleData }

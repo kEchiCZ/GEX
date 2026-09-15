@@ -74,11 +74,14 @@ function ImpactValue({ row }: { row: NewsRow }) {
 function NewsRowItem({
   row,
   review,
+  nowMs,
   onCorrect,
   onTopicClick,
 }: {
   row: NewsRow
   review: ReviewRow | undefined
+  /** Tikající „teď" z NewsView — relativní stáří bez Date.now v renderu. */
+  nowMs: number
   onCorrect: (eventId: number, correction: { direction?: number; category?: string }) => void
   /** Proklik na detail tématu v panelu Témata (#656 bod 2). */
   onTopicClick: (category: string) => void
@@ -124,7 +127,7 @@ function NewsRowItem({
           </span>
         )}
         <span className="news-time muted" title={new Date(row.ts_event).toLocaleString()}>
-          {relativeAge(row.ts_event, Date.now())}
+          {relativeAge(row.ts_event, nowMs)}
         </span>
         <span className="muted">{KIND_LABELS[row.kind] ?? row.kind}</span>
         <span className="muted" title={`Důležitost ${row.importance ?? 1}/3`}>
@@ -235,6 +238,12 @@ export function NewsView() {
   // Proklik z karty na detail tématu (#656 bod 2) — objekt kvůli retriggeru
   // efektu při opakovaném kliku na totéž téma
   const [topicFocus, setTopicFocus] = useState<{ category: string } | null>(null)
+  // Relativní stáří zpráv („před 3 min") tiká po minutě; render je čistý (#1123)
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -372,6 +381,7 @@ export function NewsView() {
               key={row.id}
               row={row}
               review={reviewByEvent.get(row.id)}
+              nowMs={nowMs}
               onCorrect={handleCorrect}
               onTopicClick={(cat) => setTopicFocus({ category: cat })}
             />

@@ -331,11 +331,16 @@ export function Heatmap({
   // Poslední programově aplikovaný pohled — dokud se od něj uživatel neodchýlí
   // (gesto, resize kompenzace), je pohled v „auto režimu" a smí se sám dolaďovat
   const appliedViewRef = useRef<ViewTransform | null>(null)
+  // setState v efektu vědomě (#1123): pohled vlastní rodič (persistentní
+  // stav) a fit se váže na PRVNÍ reálná data datasetu — klíč posledního fitu
+  // žije v refu, který při renderu číst nesmíme; odvození by navíc obešlo
+  // zmrazení pohledu prvním gestem (#423, #428).
   useEffect(() => {
     if (fittedKeyRef.current === resetKey) return
     if (!fitRange) return // počkej na reálná data (cenové pásmo dne)
     fittedKeyRef.current = resetKey
     appliedViewRef.current = initialView
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- jednorázový fit na dataset, viz výše
     setView(() => initialView)
   }, [resetKey, fitRange, initialView, setView])
   // Auto režim (#423, #428): fit proběhne na PRVNÍ data po přepnutí datasetu,
@@ -1087,7 +1092,6 @@ export function Heatmap({
     priceOpacity,
     minuteLabels,
     strikeCount,
-    grid.minutes,
     grid.dataMinutes,
     logicalW,
     logicalH,
@@ -1682,10 +1686,15 @@ export function Heatmap({
 
   // Odběr busu (#492): tooltip synchronně (testy i čitelnost), canvas přes
   // rAF s koalescencí — víc pohybů v jednom snímku = jedno překreslení
+  // Latest-ref se plní v layout efektu, ne při renderu (React Compiler,
+  // #1123): odběratel busu běží jen z pointer událostí mezi commity, takže
+  // po commitu vidí vždy aktuální uzávěry.
   const drawDynamicRef = useRef(drawDynamic)
-  drawDynamicRef.current = drawDynamic
   const applyTooltipRef = useRef(applyTooltip)
-  applyTooltipRef.current = applyTooltip
+  useLayoutEffect(() => {
+    drawDynamicRef.current = drawDynamic
+    applyTooltipRef.current = applyTooltip
+  })
   const rafPending = useRef(false)
   useEffect(
     () =>

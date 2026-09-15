@@ -9,7 +9,7 @@
   main threadu; chování testů beze změny.
 - Během asynchronního výpočtu se drží PŘEDCHOZÍ segmenty — kontury nebliknou.
 */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ContoursMode, Segment } from './contours'
 import { computeContourSegments, flatToSegments } from './contourCompute'
 import type { HeatmapGrid } from './grid'
@@ -75,27 +75,44 @@ function sourceField(
   return { field, width: source.minutes, height: source.strikes.length }
 }
 
+function workerAvailable(): boolean {
+  return !workerFailed && typeof Worker !== 'undefined'
+}
+
+function storeSegments(field: Float32Array, mode: ContoursMode, segments: Segment[]): void {
+  const perMode = cache.get(field) ?? new Map<ContoursMode, Segment[]>()
+  perMode.set(mode, segments)
+  cache.set(field, perMode)
+}
+
 export function useContours(
   grid: HeatmapGrid,
   underGrid: HeatmapGrid | null | undefined,
   mode: ContoursMode,
 ): Segment[] {
   const { field, width, height } = sourceField(grid, underGrid)
-  const [, forceRender] = useState(0)
-  const lastRef = useRef<Segment[]>(EMPTY)
+  // Poslední segmenty doručené workerem — během asynchronního výpočtu se
+  // drží (kontury nebliknou). Stav místo ref čteného při renderu (#1123).
+  const [delivered, setDelivered] = useState<Segment[]>(EMPTY)
 
-  const cached = field ? cache.get(field)?.get(mode) : undefined
+  let cached = field ? cache.get(field)?.get(mode) : undefined
+  if (!cached && mode !== 'off' && field && !workerAvailable()) {
+    // Sync fallback přímo v renderu: výsledek jde do cache per pole × mód,
+    // takže je to memoizace (další render ji čte), ne vedlejší efekt
+    cached = computeContourSegments(field, width, height, mode)
+    storeSegments(field, mode, cached)
+  }
 
   useEffect(() => {
     if (mode === 'off' || !field || cached) return
     const target = getWorker()
     if (target === null) {
-      // Sync fallback: spočítat hned a uložit do cache (další render ji čte)
+      // Konstruktor workeru právě selhal (CSP, build): jednorázově spočítat
+      // synchronně, další rendery už jdou sync fallbackem výše
       const segments = computeContourSegments(field, width, height, mode)
-      const perMode = cache.get(field) ?? new Map<ContoursMode, Segment[]>()
-      perMode.set(mode, segments)
-      cache.set(field, perMode)
-      forceRender((tick) => tick + 1)
+      storeSegments(field, mode, segments)
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- jediná cesta k překreslení po selhání workeru
+      setDelivered(segments)
       return
     }
     let cancelled = false
@@ -104,10 +121,8 @@ export function useContours(
     pending.set(id, (flat) => {
       if (cancelled) return
       const segments = flatToSegments(flat)
-      const perMode = cache.get(field) ?? new Map<ContoursMode, Segment[]>()
-      perMode.set(mode, segments)
-      cache.set(field, perMode)
-      forceRender((tick) => tick + 1)
+      storeSegments(field, mode, segments)
+      setDelivered(segments)
     })
     // Kopie pole: originál drží render heatmapy, transfer by ho odpojil
     const copy = Float32Array.from(field)
@@ -118,14 +133,7 @@ export function useContours(
     }
   }, [field, width, height, mode, cached])
 
-  if (mode === 'off' || !field) {
-    lastRef.current = EMPTY
-    return EMPTY
-  }
-  if (cached) {
-    lastRef.current = cached
-    return cached
-  }
-  // Výpočet běží — držet předchozí segmenty (žádné bliknutí při updatu dat)
-  return lastRef.current
+  if (mode === 'off' || !field) return EMPTY
+  // Výpočet běží — držet předchozí doručené segmenty
+  return cached ?? delivered
 }

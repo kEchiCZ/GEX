@@ -27,19 +27,19 @@ export function useAggregateProfile(
   enabled: boolean,
   spot: number | null,
 ): ProfileRow[] | null {
-  const [rows, setRows] = useState<AggregateRow[] | null>(null)
+  // Řádky nesou klíč symbol|den, pro který platí: vypnutí Σ nebo jiný den
+  // dává null odvozením při renderu, ne resetem stavu v efektu (#1123)
+  const key = `${symbol}|${date}`
+  const [loaded, setLoaded] = useState<{ key: string; rows: AggregateRow[] } | null>(null)
 
   useEffect(() => {
-    if (!enabled) {
-      setRows(null)
-      return
-    }
+    if (!enabled) return
     let cancelled = false
     const load = () => {
       fetch(`${API_BASE}/profile/${symbol}/aggregate?date=${date}`)
         .then((response) => (response.ok ? response.json() : null))
         .then((payload: { rows: AggregateRow[] } | null) => {
-          if (!cancelled && payload) setRows(payload.rows)
+          if (!cancelled && payload) setLoaded({ key, rows: payload.rows })
         })
         .catch(() => {
           // API nedostupné — panel zůstává na per-expiračních datech
@@ -51,10 +51,10 @@ export function useAggregateProfile(
       cancelled = true
       clearInterval(timer)
     }
-  }, [symbol, date, enabled])
+  }, [symbol, date, key, enabled])
 
-  if (!enabled || rows === null) return null
-  return rows.map((row) => ({
+  if (!enabled || loaded === null || loaded.key !== key) return null
+  return loaded.rows.map((row) => ({
     ...row,
     distanceFromSpot: spot !== null ? row.strike - spot : 0,
     callOiChange: null, // ΔOI je per expirace — v souhrnu se nezobrazuje

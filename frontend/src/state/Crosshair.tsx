@@ -9,7 +9,7 @@ Dvě cesty k témuž údaji (#492):
   per buňka (minuteIdx + strike): pohyb uvnitř jedné buňky negeneruje commit,
   přechod mezi buňkami commitne jen lehké konzumenty (SVG linky, odečty).
 */
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 
 export interface CrosshairPosition {
@@ -66,9 +66,9 @@ function sameCell(a: CrosshairPosition | null, b: CrosshairPosition | null): boo
 }
 
 export function CrosshairProvider({ children }: { children: ReactNode }) {
-  const busRef = useRef<CrosshairBusImpl | null>(null)
-  busRef.current ??= new CrosshairBusImpl()
-  const bus = busRef.current
+  // Bus vzniká jednou per provider; líný inicializátor stavu místo useRef
+  // čteného při renderu (React Compiler, #1123)
+  const [bus] = useState(() => new CrosshairBusImpl())
   const [position, setPositionState] = useState<CrosshairPosition | null>(null)
 
   // Zrcadlení bus → state s dedupe per buňka: panely dostanou commit jen

@@ -23,18 +23,20 @@ export async function requestAdhoc(symbol: string): Promise<void> {
   }
 }
 
+const NO_MATCHES: SearchMatch[] = []
+
 export function SymbolSearch() {
   const { setSymbol } = useAppState()
   const [query, setQuery] = useState('')
-  const [matches, setMatches] = useState<SearchMatch[]>([])
+  const [fetched, setMatches] = useState<SearchMatch[]>([])
+  // Prázdný dotaz = žádná nabídka, odvozeno při renderu (ne reset v efektu,
+  // #1123); při psaní zůstává poslední seznam, než doběhne debounce
+  const matches = query.trim() === '' ? NO_MATCHES : fetched
   const debounce = useRef<number | null>(null)
 
   useEffect(() => {
     if (debounce.current !== null) window.clearTimeout(debounce.current)
-    if (query.trim() === '') {
-      setMatches([])
-      return
-    }
+    if (query.trim() === '') return
     debounce.current = window.setTimeout(() => {
       void fetch(`${API_BASE}/search?q=${encodeURIComponent(query.trim())}`)
         .then((response) => (response.ok ? response.json() : { matches: [] }))

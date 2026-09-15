@@ -8,14 +8,15 @@ const REFRESH_MS = 60_000
 
 export function useTendency(): TendencyRow | null {
   const { symbol, socket } = useAppState()
-  const [row, setRow] = useState<TendencyRow | null>(null)
+  // Hodnota nese symbol, pro který platí — přepnutí symbolu nesmí ukazovat
+  // cizí hodnotu, a to odvozením při renderu, ne resetem v efektu (#1123)
+  const [loaded, setLoaded] = useState<{ symbol: string; row: TendencyRow } | null>(null)
 
   useEffect(() => {
-    setRow(null) // přepnutí symbolu nesmí ukazovat cizí hodnotu
     let cancelled = false
     const load = () => {
       void fetchTendency(symbol).then((rows) => {
-        if (!cancelled && rows.length > 0) setRow(rows[rows.length - 1])
+        if (!cancelled && rows.length > 0) setLoaded({ symbol, row: rows[rows.length - 1] })
       })
     }
     load()
@@ -29,11 +30,11 @@ export function useTendency(): TendencyRow | null {
   useEffect(() => {
     const handler = (data: Record<string, unknown>) => {
       if (typeof data.band !== 'string' || typeof data.score !== 'number') return
-      setRow(data as unknown as TendencyRow)
+      setLoaded({ symbol, row: data as unknown as TendencyRow })
     }
     socket.subscribe(`tendency.${symbol}`, handler)
     return () => socket.unsubscribe(`tendency.${symbol}`, handler)
   }, [socket, symbol])
 
-  return row
+  return loaded?.symbol === symbol ? loaded.row : null
 }

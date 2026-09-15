@@ -11,17 +11,16 @@ import type { VolRegimeRow } from '../api/briefing'
 const REFRESH_MS = 10 * 60_000
 
 export function useVolRegime(symbol: string, enabled: boolean): VolRegimeRow | null {
-  const [row, setRow] = useState<VolRegimeRow | null>(null)
+  // Hodnota nese symbol, pro který platí: cizí symbol se odfiltruje při
+  // renderu, ne resetem stavu v efektu (#1123)
+  const [loaded, setLoaded] = useState<{ symbol: string; row: VolRegimeRow | null } | null>(null)
 
   useEffect(() => {
-    if (!enabled) {
-      setRow(null)
-      return
-    }
+    if (!enabled) return
     let cancelled = false
     const load = () => {
       void fetchVolRegimeLatest(symbol).then((result) => {
-        if (!cancelled) setRow(result)
+        if (!cancelled) setLoaded({ symbol, row: result })
       })
     }
     load()
@@ -32,5 +31,5 @@ export function useVolRegime(symbol: string, enabled: boolean): VolRegimeRow | n
     }
   }, [symbol, enabled])
 
-  return row
+  return enabled && loaded?.symbol === symbol ? loaded.row : null
 }
