@@ -26,7 +26,6 @@ import datetime as dt
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from time import sleep
 from typing import Any
 
 import httpx
@@ -47,7 +46,6 @@ MAX_OUTPUT_TOKENS = 600
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 REQUEST_TIMEOUT_S = 60.0
 RETRY_STATUSES = frozenset({500, 502, 503, 504})
-RETRY_DELAY_S = 2.0
 
 #: Stabilní systémový prompt — cachovaný prefix (cache_control), za ním
 #: proměnlivá zpráva. Česky, protože čtenář je český trader.
@@ -108,6 +106,15 @@ class ExplainEventMissing(LookupError):
     """Událost s daným id neexistuje."""
 
 
+class GeminiOverloaded(RuntimeError):
+    """5xx „high demand" — zkusí se další model v řetězu."""
+
+
+def model_chain(models: str) -> list[str]:
+    """`GEXLENS_NEWS_EXPLAIN_MODEL` = jeden model nebo seznam oddělený čárkou."""
+    return [item.strip() for item in models.split(",") if item.strip()]
+
+
 def _event_text(event: dict[str, Any]) -> str:
     """Vstup pro model: metadata + titulek + (zkrácený) text, vše jako data."""
     lines = [
@@ -161,27 +168,16 @@ def _gemini_generate(
             "thinkingConfig": {"thinkingLevel": "low"},
         },
     }
-    # Free tier flash modely vrací občas 503 „high demand" (změřeno 15. 9.
-    # 2026 na gemini-3.8-flash: dva requesty po sobě, 200 a 503) — jeden
-    # opakovaný pokus po krátké pauze; uživatel kliká ručně, další čekání ne
     response = post(
         GEMINI_URL.format(model=model),
         json=body,
         headers={"x-goog-api-key": api_key},
         timeout=REQUEST_TIMEOUT_S,
     )
-    if response.status_code in RETRY_STATUSES:
-        sleep(RETRY_DELAY_S)
-        response = post(
-            GEMINI_URL.format(model=model),
-            json=body,
-            headers={"x-goog-api-key": api_key},
-            timeout=REQUEST_TIMEOUT_S,
-        )
     if response.status_code == 429:
         raise ExplainBudgetExceeded("Gemini 429 — denní kvóta free tieru vyčerpána, zkus později")
     if response.status_code in RETRY_STATUSES:
-        raise ExplainDisabled(f"Gemini je přetížený ({response.status_code}) — zkus za chvíli")
+        raise GeminiOverloaded(f"Gemini {model} je přetížený ({response.status_code})")
     if response.status_code >= 400:
         logger.error("Gemini %d pro model %s: %.500s", response.status_code, model, response.text)
         raise ExplainDisabled(f"Gemini odpověděl {response.status_code}")
@@ -253,17 +249,32 @@ def explain_event(
         )
 
     # `post` se řeší až tady (ne v defaultu parametru), ať jde v testech
-    # podstrčit atrapa — jinak by test volal skutečné API
-    text, input_tokens, output_tokens, finish = _gemini_generate(
-        post or httpx.post,
-        api_key=api_key,
-        model=model,
-        prompt=f"<zprava>\n{_event_text(dict(event))}\n</zprava>",
-    )
+    # podstrčit atrapa — jinak by test volal skutečné API.
+    # Free tier flash modely vrací často 503 „high demand" (změřeno 15. 9.
+    # 2026: 3.8-flash 200/503/503 po sobě, 3.7-flash 503, 3.6 a 3.5 200) —
+    # proto řetěz modelů: při 5xx se hned zkusí další, uživatel kliká ručně
+    # a čekání na tentýž přetížený model by nic nezlepšilo.
+    prompt = f"<zprava>\n{_event_text(dict(event))}\n</zprava>"
+    chain = model_chain(model) or [model]
+    last_error: GeminiOverloaded | None = None
+    served_by = chain[0]
+    text, input_tokens, output_tokens, finish = "", 0, 0, ""
+    for candidate in chain:
+        try:
+            text, input_tokens, output_tokens, finish = _gemini_generate(
+                post or httpx.post, api_key=api_key, model=candidate, prompt=prompt
+            )
+        except GeminiOverloaded as exc:
+            logger.info("%s — zkouším další model v řetězu", exc)
+            last_error = exc
+            continue
+        served_by = candidate
+        break
+    else:
+        raise ExplainDisabled(f"Všechny modely přetížené ({last_error}) — zkus za chvíli")
     if not text:
         # Bezpečnostní filtr nebo prázdná odpověď — neukládá se, ať jde zkusit znovu
         raise ExplainDisabled(f"Model text nevrátil ({finish or 'bez důvodu'})")
-    served_by = model
     with engine.begin() as conn:
         conn.execute(
             insert(news_explanations).values(

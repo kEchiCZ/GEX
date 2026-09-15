@@ -173,21 +173,42 @@ def test_denni_strop_tokenu_a_chybejici_udalost(engine: Engine) -> None:
         _explain(engine, post, event_id=999, daily_tokens=0)
 
 
-def test_kvota_429_a_filtr_se_neukladaji(engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(news_explain, "sleep", lambda _s: None)
+def test_kvota_429_a_filtr_se_neukladaji(engine: Engine) -> None:
     with pytest.raises(ExplainBudgetExceeded):
         _explain(engine, FakePost(status=429))
-    # 503 „high demand" se zkusí jednou znovu; trvalé 503 = srozumitelná chyba
+    # 503 „high demand" → další model v řetězu; když jsou přetížené všechny,
+    # srozumitelná chyba a nic se neukládá
     overloaded = FakePost(status=503)
-    with pytest.raises(ExplainDisabled, match="přetížený"):
-        _explain(engine, overloaded)
-    assert len(overloaded.calls) == 2
+    with pytest.raises(ExplainDisabled, match="přetížené"):
+        _explain(engine, overloaded, model="gemini-3.8-flash,gemini-3.6-flash")
+    assert [c["url"].split("models/")[1].split(":")[0] for c in overloaded.calls] == [
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
+    ]
     with pytest.raises(ExplainDisabled):
         _explain(engine, FakePost(blocked=True))
     with pytest.raises(ExplainDisabled):
         _explain(engine, FakePost(status=400))
     with engine.connect() as conn:
         assert conn.execute(select(news_explanations)).first() is None
+
+
+def test_retez_modelu_prepne_pri_503_a_ulozi_model_ktery_odpovedel(engine: Engine) -> None:
+    class Chain:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def __call__(self, url: str, **kwargs: Any) -> httpx.Response:
+            model = url.split("models/")[1].split(":")[0]
+            self.calls.append(model)
+            if model == "gemini-3.8-flash":
+                return httpx.Response(503, json={"error": {"message": "high demand"}})
+            return FakePost(text="Z náhradního modelu.")(url, **kwargs)
+
+    chain = Chain()
+    result = _explain(engine, chain, model="gemini-3.8-flash, gemini-3.6-flash")  # type: ignore[arg-type]
+    assert chain.calls == ["gemini-3.8-flash", "gemini-3.6-flash"]
+    assert result.model == "gemini-3.6-flash" and result.text == "Z náhradního modelu."
 
 
 def test_options_ze_settings_nenese_klic_v_repr() -> None:
