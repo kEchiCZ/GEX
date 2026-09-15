@@ -14,6 +14,7 @@ import { downloadBackup } from '../api/backup'
 import { requestReconnect, useServerSettings } from '../api/settings'
 import { PushSettings } from './PushSettings'
 import { ScenarioSettings } from './ScenarioSettings'
+import { RiskSettings } from './RiskSettings'
 import type { ReconnectTarget } from '../api/settings'
 import {
   providerButtonLabel,
@@ -745,6 +746,9 @@ Sběr dat se na ~1–2 minuty přeruší.`)
           </label>
         </SettingRow>
       </section>
+
+      {/* Risk management (#1185): sizing, brzdy a brána = verze parametrů setupů */}
+      <RiskSettings />
 
       {/* Push na Telegram (#1175): přepínače kategorií = serverová nastavení */}
       <PushSettings values={values} put={put} />

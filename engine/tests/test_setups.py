@@ -605,6 +605,7 @@ class FakeFlow:
 class FakeRuntime:
     def __init__(self) -> None:
         self.expiry = "20991231"  # daleko — žádný timeout
+        self.multiplier = 50.0  # hodnota bodu ES — sizing (#1185)
         self.scheduler = FakeScheduler()
         self.last_levels = LevelsRow(TS, 7515.0, 7530.0, 7500.0, 7512.0, 100.0)
         self.last_flow = FakeFlow(0.0)

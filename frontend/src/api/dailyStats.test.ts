@@ -59,7 +59,7 @@ describe('dailyStats', () => {
     expect(stats.bestUsd).toBe(750)
     expect(stats.worstUsd).toBe(-250)
     expect(stats.pnlUsd).toBe(1000)
-    expect(stats.pnlPct).toBeCloseTo(20, 5) // 1000 / 5000
+    expect(stats.pnlPct).toBeCloseTo(2, 5) // 1000 / 50 000 (#1185)
   })
 
   it('počítá riziko i z aktivních pozic', () => {
@@ -76,8 +76,8 @@ describe('dailyStats', () => {
     expect(stats.active).toBe(1)
     expect(stats.closed).toBe(1)
     // „Kolik bylo v sázce" je otázka o vstupu, ne o výsledku
-    expect(stats.maxRiskPct).toBeCloseTo(5, 5)
-    expect(stats.totalRiskPct).toBeCloseTo(10, 5)
+    expect(stats.maxRiskPct).toBeCloseTo(0.5, 5) // účet 50 000 $ (#1185)
+    expect(stats.totalRiskPct).toBeCloseTo(1, 5)
   })
 
   it('prázdný den nevydává za ztrátový', () => {

@@ -74,7 +74,7 @@ NEWS_KINDS: frozenset[str] = frozenset({"news_anomaly", "vol_concentration"})
 
 def category_of(kind: str) -> str:
     # Výsledek scénáře dne (#1173) patří k obchodním věcem uživatele — s setupy
-    if kind in ("setup", "scenario_result", "scenario_created"):
+    if kind in ("setup", "scenario_result", "scenario_created", "risk_brake"):
         return "setup"
     if kind in OPS_KINDS:
         return "ops"
@@ -208,6 +208,9 @@ class TelegramPush:
         if kind == "setup":
             if payload.get("event") not in (None, "created"):
                 return "setup: jen vznik"
+            # Stínový setup (#1185: stop nad rozpočtem, brzda, brána) push nedostane
+            if payload.get("tradeable") is False:
+                return "setup: neobchodovatelný (stín)"
             confidence = payload.get("confidence")
             if (
                 isinstance(confidence, int | float)

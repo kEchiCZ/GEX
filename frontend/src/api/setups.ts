@@ -134,10 +134,14 @@ export function formatPnlUsd(value: number): string {
   return `${rounded > 0 ? '+' : ''}${rounded} $`
 }
 
-/** Startovní kapitál účtu na jeden ticker (#191, zadání uživatele) — báze procent. */
-export const ACCOUNT_START_USD = 5000
+/** Startovní kapitál účtu v jednotkách aplikace (#191 → #1185, rozhodnutí 15. 9. 2026).
 
-/** P/L setupu v % startovního účtu (#191): pnl $ / 5 000 $ na ticker.
+Aplikace počítá v plných kontraktech ES/NQ, uživatel obchoduje MES/MNQ (1/10):
+reálných 5 000 $ na mikro ≡ 50 000 $ v aplikaci, 1 kontrakt aplikace = 1 mikro.
+Body sedí 1:1, dolary jsou ×10. Báze procent P/L. */
+export const ACCOUNT_START_USD = 50000
+
+/** P/L setupu v % startovního účtu (#191): pnl $ / 50 000 $ (jednotky aplikace).
 
 S fixní bází je součet procent setupů roven celkovému zhodnocení účtu. */
 export function setupPnlPct(
@@ -406,4 +410,211 @@ export function bandGateStats(rows: SetupRow[]): BandGateStats | null {
 export function formatGateBucket(bucket: GateBucket): string {
   if (bucket.n === 0) return '—'
   return `${bucket.n} · ${bucket.avgR >= 0 ? '+' : ''}${bucket.avgR.toFixed(2)} R`
+}
+
+// ── Risk framework malého účtu (#1185, varianta A) ─────────────────────────
+//
+// Engine u každého setupu spočítá sizing (kontrakty = ⌊účet × riziko % /
+// (stop b × hodnota bodu)⌋), brzdy (−3 R den, −6 R týden, 2 stopy šablony za
+// den) a bránu šablon (dolní mez očekávání > 0 při n ≥ 30 za 60 seancí).
+// Setup vzniká vždy; `tradeable` říká, zda se dá zobchodovat, `trade_block`
+// proč ne. UI jen zobrazuje — nic nepřepočítává.
+
+export type TradeBlock =
+  'stop_over_budget' | 'stop_over_cap' | 'daily_brake' | 'weekly_brake' | 'template_stops' | 'gate'
+
+export const TRADE_BLOCK_LABELS: Record<TradeBlock, string> = {
+  stop_over_budget: 'stop nad rozpočtem rizika',
+  stop_over_cap: 'stop nad tvrdým stropem',
+  daily_brake: 'denní brzda',
+  weekly_brake: 'týdenní brzda',
+  template_stops: 'strop stopů šablony',
+  gate: 'šablona bez prokázaného edge',
+}
+
+const TRADE_BLOCKS: readonly string[] = Object.keys(TRADE_BLOCK_LABELS)
+
+export type GateVerdict = 'pass' | 'block' | 'insufficient' | 'off'
+
+export interface RiskInfo {
+  tradeable: boolean
+  affordable: boolean
+  block: TradeBlock | null
+  contracts: number
+  riskBudgetUsd: number
+  maxLossUsd: number
+  feeUsd: number
+  stopPoints: number
+  accountUsd: number
+  gate: GateVerdict | null
+  gateN: number | null
+  gateLb: number | null
+  dayR: number | null
+  weekR: number | null
+}
+
+/** Risk kontext setupu (#1185); null = řádek vznikl před pravidly — nic se nevymýšlí. */
+export function riskInfo(row: Pick<SetupRow, 'context'>): RiskInfo | null {
+  const context = row.context ?? {}
+  if (typeof context.tradeable !== 'boolean' || typeof context.contracts !== 'number') return null
+  const num = (key: string): number | null =>
+    typeof context[key] === 'number' ? (context[key] as number) : null
+  const block = context.trade_block
+  const gate = context.template_gate
+  return {
+    tradeable: context.tradeable,
+    affordable: context.affordable === true,
+    block: typeof block === 'string' && TRADE_BLOCKS.includes(block) ? (block as TradeBlock) : null,
+    contracts: context.contracts,
+    riskBudgetUsd: num('risk_budget_usd') ?? 0,
+    maxLossUsd: num('max_loss_usd') ?? 0,
+    feeUsd: num('fee_usd') ?? 0,
+    stopPoints: num('stop_points') ?? 0,
+    accountUsd: num('account_equity_usd') ?? ACCOUNT_START_USD,
+    gate:
+      gate === 'pass' || gate === 'block' || gate === 'insufficient' || gate === 'off'
+        ? gate
+        : null,
+    gateN: num('template_gate_n'),
+    gateLb: num('template_gate_lb'),
+    dayR: num('realized_day_r'),
+    weekR: num('realized_week_r'),
+  }
+}
+
+function blockText(info: RiskInfo): string {
+  return info.block === null ? 'neobchodovatelný' : TRADE_BLOCK_LABELS[info.block]
+}
+
+/** Štítek do tabulky: „1 ks · 500 $" nebo „stín: denní brzda". */
+export function riskLabel(info: RiskInfo): string {
+  if (info.tradeable) return `${info.contracts} ks · ${Math.round(info.maxLossUsd)} $`
+  return `stín: ${blockText(info)}`
+}
+
+/** P/L uzavřeného setupu pro ÚČET (kontrakty × R × stop × bod − poplatky); null u stínu/aktivního. */
+export function accountPnlUsd(row: Pick<SetupRow, 'outcome_r' | 'context'>): number | null {
+  const info = riskInfo(row)
+  if (info === null || !info.tradeable || row.outcome_r === null) return null
+  return row.outcome_r * info.maxLossUsd - info.feeUsd
+}
+
+const GATE_TEXT: Record<GateVerdict, string> = {
+  pass: 'prošla (dolní mez očekávání > 0)',
+  block: 'zablokována (dolní mez očekávání ≤ 0)',
+  insufficient: 'nedostatek vzorku (n < minimum)',
+  off: 'vypnuta',
+}
+
+function signed(value: number, digits: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`
+}
+
+/** Tooltip risk štítku — odřádkovaný s odrážkami (konvence 27. 8.). */
+export function riskTooltip(info: RiskInfo): string {
+  const gate =
+    info.gate === null
+      ? '—'
+      : `${GATE_TEXT[info.gate]}${info.gateN === null ? '' : ` · n=${info.gateN}`}${info.gateLb === null ? '' : ` · LB ${signed(info.gateLb, 2)} R`}`
+  const day = info.dayR === null ? '—' : `${signed(info.dayR, 1)} R`
+  const week = info.weekR === null ? '—' : `${signed(info.weekR, 1)} R`
+  return [
+    info.tradeable
+      ? `Obchodovatelný: ${info.contracts} kontrakt(y), ztráta na stopu ${Math.round(info.maxLossUsd)} $ (+ poplatky ${Math.round(info.feeUsd)} $).`
+      : `Stínový setup — neobchodovat: ${blockText(info)}.`,
+    `Rozpočet rizika ${Math.round(info.riskBudgetUsd)} $ z účtu ${Math.round(info.accountUsd)} $ (aplikace = plné kontrakty; 1 kontrakt zde = 1 MES/MNQ reálně, dolary ÷ 10).`,
+    `Stop ${info.stopPoints.toFixed(2)} b.`,
+    '',
+    'Pravidla (#1185):',
+    `• brána šablony: ${gate}`,
+    `• brzdy: dnes ${day}, týden ${week} (−3 R den / −6 R týden zastaví nové obchody do settle)`,
+    '• stínové setupy se dál měří, jen se neobchodují a nechodí do pushe',
+  ].join('\n')
+}
+
+export interface AccountStats {
+  n: number
+  shadow: number
+  pnlUsd: number
+  feesUsd: number
+  maxDrawdownUsd: number
+}
+
+/** Bilance účtu z obchodovatelných uzavřených setupů (chronologicky podle uzavření).
+null = žádný řádek nenese risk kontext (před #1185) — blok se nekreslí. */
+export function accountStats(rows: SetupRow[]): AccountStats | null {
+  const withRisk = rows
+    .map((row) => ({ row, info: riskInfo(row) }))
+    .filter((item): item is { row: SetupRow; info: RiskInfo } => item.info !== null)
+  if (withRisk.length === 0) return null
+  const closed = withRisk
+    .filter((item) => item.info.tradeable && item.row.outcome_r !== null && item.row.closed_ts)
+    .sort((a, b) => Date.parse(a.row.closed_ts ?? '') - Date.parse(b.row.closed_ts ?? ''))
+  let equity = 0
+  let peak = 0
+  let worst = 0
+  let fees = 0
+  for (const item of closed) {
+    fees += item.info.feeUsd
+    equity += accountPnlUsd(item.row) ?? 0
+    if (equity > peak) peak = equity
+    if (equity - peak < worst) worst = equity - peak
+  }
+  return {
+    n: closed.length,
+    shadow: withRisk.filter((item) => !item.info.tradeable).length,
+    pnlUsd: equity,
+    feesUsd: fees,
+    maxDrawdownUsd: worst,
+  }
+}
+
+// ── Parametry setupů (#794 fáze 2) vč. risk parametrů (#1185) ─────────────
+
+export interface SetupParamsVersion {
+  version: number
+  created_ts: string
+  created_by: string
+  note: string
+  params: Record<string, unknown>
+}
+
+export interface SetupParamsResponse {
+  current: SetupParamsVersion | null
+  defaults: Record<string, unknown>
+}
+
+export async function fetchSetupParams(): Promise<SetupParamsResponse | null> {
+  try {
+    const response = await fetch(`${API_BASE}/setups/params`)
+    if (!response.ok) return null
+    const payload = (await response.json()) as Partial<SetupParamsResponse> | null
+    if (!payload || typeof payload !== 'object' || typeof payload.defaults !== 'object') return null
+    return { current: payload.current ?? null, defaults: payload.defaults ?? {} }
+  } catch {
+    return null
+  }
+}
+
+/** Nová verze parametrů (append-only, povinný důvod); chyba jako text, ne výjimka. */
+export async function saveSetupParams(
+  params: Record<string, unknown>,
+  note: string,
+): Promise<{ ok: true; version: number } | { ok: false; error: string }> {
+  try {
+    const response = await fetch(`${API_BASE}/setups/params`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ params, note, created_by: 'ui' }),
+    })
+    if (!response.ok) {
+      const detail = (await response.json().catch(() => ({}))) as { detail?: unknown }
+      const error = typeof detail.detail === 'string' ? detail.detail : `HTTP ${response.status}`
+      return { ok: false, error }
+    }
+    const stored = (await response.json()) as { version?: number }
+    return { ok: true, version: stored.version ?? 0 }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
 }

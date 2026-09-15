@@ -95,6 +95,11 @@ def test_prah_confidence_a_prepinace_kategorii() -> None:
     push = _push(post, setup_min_confidence=0.5, stored={"push_telegram_news": False})
     assert push.decide({"kind": "setup", "symbol": "ES", "message": "x", "confidence": 0.4})
     assert push.decide({"kind": "setup", "symbol": "ES", "message": "x", "confidence": 0.6}) is None
+    # Stínový setup (#1185) nejde ven; brzda účtu patří do kategorie setup
+    assert push.decide(
+        {"kind": "setup", "symbol": "ES", "message": "y", "confidence": 0.9, "tradeable": False}
+    )
+    assert push.decide({"kind": "risk_brake", "symbol": "ES", "message": "brzda"}) is None
     assert push.decide({"kind": "news_anomaly", "symbol": "ES", "message": "y"}) == (
         "kategorie news vypnuta"
     )

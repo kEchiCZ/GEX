@@ -23,7 +23,17 @@ from gexlens_engine.compute.bandregime import (
 )
 from gexlens_engine.compute.confidence import ConfidenceTable, build_confidence_table
 from gexlens_engine.compute.gexfield import gamma_edges
-from gexlens_engine.compute.settle import settle_ts
+from gexlens_engine.compute.risk import (
+    RISK_RULES_VERSION,
+    BrakeState,
+    RealizedSetup,
+    affordable_results,
+    brake_state,
+    position_size,
+    template_gate,
+    week_start,
+)
+from gexlens_engine.compute.settle import settle_ts, trading_session_date
 from gexlens_engine.compute.setups import (
     SETUP_MECHANICS_VERSION,
     Direction,
@@ -77,6 +87,22 @@ class _OpenSetup:
     # Setupy načtené z DB po restartu flag nemají (kontext se nenačítá) — žebřík
     # ztrát se po restartu hlídá až od prvního nově vzniklého setupu.
     counter: bool = False
+    # Obchodovatelný podle risk pravidel (#1185) — po uzavření se zkontrolují brzdy
+    tradeable: bool = False
+
+
+BRAKE_LABELS: dict[str, str] = {
+    "daily_brake": "denní brzda",
+    "weekly_brake": "týdenní brzda",
+    "template_stops": "strop stopů šablony",
+}
+
+TRADE_BLOCK_LABELS: dict[str, str] = {
+    **BRAKE_LABELS,
+    "stop_over_budget": "stop nad rozpočtem rizika",
+    "stop_over_cap": "stop nad tvrdým stropem",
+    "gate": "šablona bez prokázaného edge",
+}
 
 
 @dataclass
@@ -92,6 +118,9 @@ class SetupEngine:
     # Minutový feature log (#796): trénovací matice pro samoučící smyčku (#794).
     # None = vypnuto; zapisuje se do derived/{symbol}/features/ (mimo retenci).
     feature_writer: SnapshotWriter | None = None
+    # Hodnota bodu per symbol (#1185) — sdílený slovník všech instancí, aby brána
+    # šablon uměla dopočítat obchodovatelnost starších řádků cizího symbolu
+    point_values: dict[str, float] = field(default_factory=dict)
 
     def apply_params(self, params: SetupParams, version: int | None) -> bool:
         """Přepne prahy za běhu (nová verze ve store). Vrací True při změně.
@@ -122,6 +151,9 @@ class SetupEngine:
         self._direction_stops: dict[str, int] = {}
         self._direction_blocked_until: dict[str, dt.datetime] = {}
         self._max_pain: float | None = None
+        # Brzdy (#1185): alert jednou per (brzda, seance); realizované řádky
+        # týdne se čtou z DB jen když je co rozhodovat
+        self._brake_alerted: dict[str, dt.date] = {}
         self._max_pain_loaded_for: tuple[str, dt.date, dt.datetime | None] | None = None
         # Otevřené setupy z DB (restart enginu) — MFE/MAE pokračují od nuly
         for stored in self.repository.active_for(self.symbol):
@@ -194,6 +226,7 @@ class SetupEngine:
     ) -> None:
         levels = runtime.last_levels
         flow = runtime.last_flow
+        self.point_values[self.symbol] = float(runtime.multiplier)
         self._refresh_max_pain(runtime.expiry, now.date())
         call_flow, put_flow, raw_flow = self._flows(runtime)
 
@@ -318,6 +351,7 @@ class SetupEngine:
             ]
         )
         still_open: list[_OpenSetup] = []
+        closed_tradeable = False
         for item in self._open:
             direction = Direction(item.stored.direction)
             settle = self._settle_ts(item.stored.expiry)
@@ -369,6 +403,7 @@ class SetupEngine:
                 exit_price = inputs.close
                 closed_ts = now
             result = r_result(direction, item.stored.entry, item.stored.stop, exit_price)
+            closed_tradeable = closed_tradeable or item.tradeable
             # Stop kontra-setupu (#252 C): další kontra pokus téže šablony až po
             # delším cooldownu — brání žebříku ztrát (24. 7.: 4 stopy za hodinu)
             if outcome is Outcome.STOP and item.counter:
@@ -403,6 +438,122 @@ class SetupEngine:
                 f"setups.{self.symbol}", {"event": "closed", "id": item.stored.id}
             )
         self._open = still_open
+        if closed_tradeable:
+            await self._check_brakes(now)
+
+    def _gate_since(self, now: dt.datetime) -> dt.datetime:
+        # N seancí ≈ N × 7/5 kalendářních dnů
+        return now - dt.timedelta(days=self.params.template_gate_days * 7 / 5)
+
+    def _load_realized(self, now: dt.datetime) -> list[RealizedSetup]:
+        """Blokující čtení uzavřených setupů týdne a okna brány — volat přes to_thread."""
+        since = min(week_start(trading_session_date(now)), self._gate_since(now))
+        return self.repository.realized_since(since, mechanics_version=SETUP_MECHANICS_VERSION)
+
+    def _brakes(
+        self, realized: Sequence[RealizedSetup], template: str, now: dt.datetime
+    ) -> BrakeState:
+        return brake_state(
+            realized,
+            template,
+            session_day=trading_session_date(now),
+            daily_brake_r=self.params.daily_brake_r,
+            weekly_brake_r=self.params.weekly_brake_r,
+            max_template_stops_per_day=self.params.max_template_stops_per_day,
+        )
+
+    async def _check_brakes(self, now: dt.datetime) -> None:
+        """Po uzavření obchodovatelného setupu: dosažená denní/týdenní brzda se
+        ohlásí hned, ne až u dalšího kandidáta (#1185). Chyba DB = bez alertu."""
+        try:
+            realized = await asyncio.to_thread(self._load_realized, now)
+        except Exception:
+            logger.exception("Kontrola brzd selhala — bez alertu")
+            return
+        await self._alert_brake(self._brakes(realized, "", now), now)
+
+    async def _alert_brake(self, state: BrakeState, now: dt.datetime) -> None:
+        if state.block is None or state.block == "template_stops":
+            return  # strop šablony je tichý — vidět je v kontextu setupu
+        session_day = trading_session_date(now)
+        if self._brake_alerted.get(state.block) == session_day:
+            return
+        self._brake_alerted[state.block] = session_day
+        value = state.day_r if state.block == "daily_brake" else state.week_r
+        await self.publisher.publish(
+            "alerts",
+            {
+                "kind": "risk_brake",
+                "event": state.block,
+                "symbol": self.symbol,
+                "message": f"{BRAKE_LABELS[state.block].capitalize()}: {value:+.1f} R — "
+                "nové setupy jen stínově (neobchodovat) do settle",
+                "ts": now.timestamp(),
+            },
+        )
+        logger.info(
+            "Risk brzda %s: den %+.2f R, týden %+.2f R", state.block, state.day_r, state.week_r
+        )
+
+    def _risk_context(
+        self,
+        realized: Sequence[RealizedSetup],
+        template: str,
+        entry: float,
+        stop: float,
+        point_value: float,
+        now: dt.datetime,
+    ) -> tuple[dict[str, object], BrakeState]:
+        """Sizing, brzdy a brána (#1185) → klíče kontextu setupu + stav brzd."""
+        params = self.params
+        size = position_size(
+            entry,
+            stop,
+            point_value,
+            account_equity_usd=params.account_equity_usd,
+            risk_pct=params.risk_pct,
+            risk_max_pct=params.risk_max_pct,
+        )
+        brakes = self._brakes(realized, template, now)
+        gate = template_gate(
+            affordable_results(
+                realized,
+                template,
+                since=self._gate_since(now),
+                point_values=self.point_values,
+                account_equity_usd=params.account_equity_usd,
+                risk_pct=params.risk_pct,
+                risk_max_pct=params.risk_max_pct,
+            ),
+            min_samples=params.template_gate_min_samples,
+            enabled=params.template_gate_enabled,
+        )
+        block: str | None = size.block
+        if block is None:
+            block = brakes.block
+        if block is None and gate.verdict in ("block", "insufficient"):
+            block = "gate"
+        return (
+            {
+                "risk_rules_version": RISK_RULES_VERSION,
+                "account_equity_usd": params.account_equity_usd,
+                "point_value_usd": point_value,
+                "risk_budget_usd": size.risk_budget_usd,
+                "stop_points": size.stop_points,
+                "contracts": size.contracts,
+                "max_loss_usd": size.max_loss_usd,
+                "fee_usd": size.contracts * params.fee_per_contract_usd,
+                "affordable": size.affordable,
+                "tradeable": block is None,
+                "trade_block": block,
+                "template_gate": gate.verdict,
+                "template_gate_n": gate.n,
+                "template_gate_lb": gate.lower_bound,
+                "realized_day_r": brakes.day_r,
+                "realized_week_r": brakes.week_r,
+            },
+            brakes,
+        )
 
     def _track_direction_streak(
         self, direction: str, outcome: Outcome, closed_ts: dt.datetime
@@ -462,6 +613,7 @@ class SetupEngine:
     ) -> None:
         await self._refresh_calibration(now)
         open_templates = {item.stored.template for item in self._open}
+        realized: list[RealizedSetup] | None = None
         for candidate in detect_all(list(self._history), self.params):
             template = candidate.template.value
             if template in open_templates:
@@ -499,10 +651,25 @@ class SetupEngine:
             else:
                 base, source = candidate.confidence, "constant"
             confidence = adjusted_confidence(base, gate)
+            # Risk pravidla (#1185): sizing, brzdy, brána — setup vzniká vždy,
+            # jen nese, zda se dá zobchodovat. Řádky týdne se čtou jednou za
+            # minutu s kandidátem; chyba DB = bez brzd (tradeable jen ze sizingu)
+            if realized is None:
+                try:
+                    realized = await asyncio.to_thread(self._load_realized, now)
+                except Exception:
+                    logger.exception("Čtení realizovaných setupů selhalo — brzdy neplatí")
+                    realized = []
+            risk, brakes = self._risk_context(
+                realized, template, candidate.entry, candidate.stop, float(runtime.multiplier), now
+            )
+            await self._alert_brake(brakes, now)
+            tradeable = bool(risk["tradeable"])
             context: dict[str, object] = {
                 **candidate.context,
                 **band,
                 **gate,
+                **risk,
                 "confidence_base": base,
                 "confidence_template": candidate.confidence,
                 "confidence_source": source,
@@ -539,10 +706,17 @@ class SetupEngine:
                         status="active",
                     ),
                     counter=counter,
+                    tradeable=tradeable,
                 )
             )
             open_templates.add(template)
             side = "LONG" if candidate.direction is Direction.LONG else "SHORT"
+            block = risk["trade_block"]
+            risk_note = (
+                f"{risk['contracts']} kontr., riziko {risk['max_loss_usd']:.0f} $"
+                if tradeable
+                else f"stín: {TRADE_BLOCK_LABELS.get(str(block), str(block))}"
+            )
             await self.publisher.publish(
                 "alerts",
                 {
@@ -553,9 +727,11 @@ class SetupEngine:
                     # Číselná confidence pro práh push notifikací (#1175) — text
                     # zprávy ji nese jen v procentech
                     "confidence": confidence,
+                    # Neobchodovatelný setup (#1185) push nedostane
+                    "tradeable": tradeable,
                     "message": f"Nový setup {side} ({template}): entry {candidate.entry:g}, "
                     f"cíl {candidate.target:g}, stop {candidate.stop:g} "
-                    f"(RRR {candidate.rrr:.1f}, conf. {confidence} %). "
+                    f"(RRR {candidate.rrr:.1f}, conf. {confidence} %, {risk_note}). "
                     f"{candidate.reason}",
                     "ts": now.timestamp(),
                 },

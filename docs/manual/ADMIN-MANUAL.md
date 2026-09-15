@@ -1,6 +1,6 @@
 # GEXLens — Manuál pro správce a vývojáře
 
-*Verze 1.7 · září 2026 · interní dokumentace — není dostupná v aplikaci*
+*Verze 1.8 · září 2026 · interní dokumentace — není dostupná v aplikaci*
 
 Technický popis architektury, provozu, konfigurace a vývoje aplikace GEXLens. Uživatelská příručka: `UZIVATELSKY-MANUAL.md`. Zdroj pravdy funkčních požadavků: [`docs/SPEC.md`](../SPEC.md) (v2.0); architektonická rozhodnutí v [`docs/adr/`](../adr/).
 
@@ -316,6 +316,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8000/docs` (OpenAPI).
 | `GET /oidelta/{symbol}/{expiry}` | ΔOI posledních dvou archivovaných dnů + top movers (#674) |
 | `GET /journal`, `POST/PATCH/DELETE /journal/*` | Deník tradera (#673, fáze A) |
 | `GET /setups/params`, `POST /setups/params` `{params, note, created_by?}` | Parameter store setupů (ADR-0033): platná verze + historie + defaulty; POST založí novou verzi (jen změněné klíče, zbytek defaulty; neznámý klíč/typ = 422, bez `note` = 422) a probudí engine NOTIFY. Autonomie stupeň 1: zapisuje člověk, ne smyčka. |
+| — risk parametry (#1185) | Součást téže verze parametrů: `account_equity_usd` (50000), `risk_pct` (1), `risk_max_pct` (2), `fee_per_contract_usd` (10), `daily_brake_r` (3), `weekly_brake_r` (6), `max_template_stops_per_day` (2), `template_gate_enabled` (true), `template_gate_min_samples` (30), `template_gate_days` (60). Engine u každého setupu zapíše do `context`: `risk_rules_version`, `contracts`, `risk_budget_usd`, `max_loss_usd`, `fee_usd`, `affordable`, `tradeable`, `trade_block` (`stop_over_budget` / `stop_over_cap` / `daily_brake` / `weekly_brake` / `template_stops` / `gate`), `template_gate` (+ `_n`, `_lb`), `realized_day_r`, `realized_week_r`. Brzdy čtou uzavřené setupy napříč symboly (`tradeable` = true) od pondělní seance; brána šablon setupy se stopem v rozpočtu za `template_gate_days` seancí (starší řádky bez kontextu se dopočítají z entry/stop a hodnoty bodu). Alert `risk_brake` (kategorie push `setup`), setup alert nese `tradeable` — stín do pushe nejde. UI: Settings → Risk management (POST téže cesty). |
 | `GET /gammacliff/{symbol}` | Dnešní odpad gammy + historie útesů (#576) |
 | `GET /fa/alpha` | Kalibrovaná α FA odhadu per symbol (#232) |
 | `GET /gexplane/{...}` | Dyn Charm/Vanna plochy (#204) |

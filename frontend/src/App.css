@@ -1474,6 +1474,40 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   background: rgba(224, 85, 99, 0.25);
 }
 
+/* Settings → Risk management (#1185): mřížka polí */
+.risk-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 8px 16px;
+  margin-bottom: 8px;
+}
+
+/* Risk framework (#1185): obchodovatelný setup zeleně (kontrakty · ztráta na
+   stopu), stínový šedě; celý stínový řádek ztlumený, ať neláká k obchodu */
+.setup-risk {
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 11px;
+  white-space: nowrap;
+  background: var(--bg-chip);
+}
+
+.setup-risk.tradeable {
+  background: rgba(63, 191, 111, 0.25);
+}
+
+.setup-risk.shadow {
+  opacity: 0.85;
+}
+
+tr.setup-shadow td {
+  opacity: 0.55;
+}
+
+tr.setup-shadow td[data-part='risk'] {
+  opacity: 0.9;
+}
+
 /* Stínová brána (#1060): menší dlaždice se žlutým pruhem — je to měření
    kandidátního pravidla, ne bilance; nesmí splývat s Ø R nad ním */
 .setups-stats-gate .stat {
