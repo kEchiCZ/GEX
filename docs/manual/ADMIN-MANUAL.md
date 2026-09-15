@@ -1,6 +1,6 @@
 # GEXLens — Manuál pro správce a vývojáře
 
-*Verze 1.6 · září 2026 · interní dokumentace — není dostupná v aplikaci*
+*Verze 1.7 · září 2026 · interní dokumentace — není dostupná v aplikaci*
 
 Technický popis architektury, provozu, konfigurace a vývoje aplikace GEXLens. Uživatelská příručka: `UZIVATELSKY-MANUAL.md`. Zdroj pravdy funkčních požadavků: [`docs/SPEC.md`](../SPEC.md) (v2.0); architektonická rozhodnutí v [`docs/adr/`](../adr/).
 
@@ -793,7 +793,15 @@ varianta A.
   Python heap (glibc drží uvolněné bloky v arénách) — hlídka proto po každém
   vzorku volá `malloc_trim(0)` a loguje, kolik MB vrátila (`malloc_trim vrátil
   N MB`, vypnutí `GEXLENS_MALLOC_TRIM=0`), a compose nastavuje
-  `MALLOC_ARENA_MAX=2` pro engine i news-engine. **CPU a teplota** (11. 9.
+  `MALLOC_ARENA_MAX=2` pro engine i news-engine. Vyhodnocení 15. 9.: u
+  news-engine to stačilo (trim vrací ~280 MB na vzorek, RSS z 3,1 GB na
+  0,4–0,7 GB), engine drží ~3 GB nezávisle na trimu (~45 MB na vzorek) —
+  proto hlídka od 15. 9. po každém vzorku loguje i **Arrow pool** pyarrow
+  (`Arrow pool (mimalloc) alokováno N MB, max M MB; release_unused vrátil
+  K MB`), volá `release_unused()` před glibc trimem a podíl hlásí do
+  `/status.memory_arrow_mb`; vypnutí `GEXLENS_ARROW_RELEASE=0`. Čtení:
+  velký `release_unused` = cache Arrow (partice), malý = paměť drží Python
+  objekty a numpy pole. **CPU a teplota** (11. 9.
   2026, notebook i5-10300H přes 90 °C při špičkách): `.wslconfig`
   `processors=4` v sekci `[wsl2]` (VM dostane polovinu vláken, Docker buildy
   a testy nesaturují celý procesor), compose `cpus: 2.0` engine / `1.5`
