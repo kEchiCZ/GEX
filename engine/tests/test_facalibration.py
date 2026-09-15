@@ -22,7 +22,9 @@ from gexlens_engine.storage.parquet_store import NetFlowRow, SnapshotWriter
 
 PREV = dt.date(2026, 8, 5)
 TODAY = dt.date(2026, 8, 6)
-EXPIRY = "20260805"
+# Expirace PO dni netflow — 0DTE řetěz (expirace = PREV) kalibrace od #1172 přeskočí
+EXPIRY = "20260807"
+EXPIRY_0DTE = "20260805"
 
 
 def test_calibrate_alpha_median_a_strany() -> None:
@@ -117,7 +119,12 @@ def test_netflow_at_cutoff_rez_21_utc(tmp_path: Path) -> None:
 
 
 def _seed_day(
-    settings: Settings, oi_repo: OIEodRepository, *, net: float = 100.0, doi: float = 40.0
+    settings: Settings,
+    oi_repo: OIEodRepository,
+    *,
+    net: float = 100.0,
+    doi: float = 40.0,
+    expiry: str = EXPIRY,
 ) -> None:
     """Včerejší netflow (5 stran) + archivy obou dnů s ΔOI = doi na stranu."""
     writer = SnapshotWriter(settings)
@@ -125,14 +132,59 @@ def _seed_day(
     strikes = [7500.0 + 10 * i for i in range(5)]
     writer.write_netflow(
         "ES",
-        EXPIRY,
+        expiry,
         PREV,
         [NetFlowRow(ts_min=ts, strike=strike, right="C", net_volume=net) for strike in strikes],
     )
-    oi_repo.upsert_many([OIRecord("ES", EXPIRY, strike, "C", PREV, 1000.0) for strike in strikes])
+    oi_repo.upsert_many([OIRecord("ES", expiry, strike, "C", PREV, 1000.0) for strike in strikes])
     oi_repo.upsert_many(
-        [OIRecord("ES", EXPIRY, strike, "C", TODAY, 1000.0 + doi) for strike in strikes]
+        [OIRecord("ES", expiry, strike, "C", TODAY, 1000.0 + doi) for strike in strikes]
     )
+
+
+def _repos(tmp_path: Path) -> tuple[Settings, OIEodRepository, FaAlphaRepository]:
+    settings = Settings(data_dir=tmp_path)
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
+    oi_repo = OIEodRepository(db)
+    oi_repo.ensure_schema()
+    alpha_repo = FaAlphaRepository(db)
+    alpha_repo.ensure_schema()
+    return settings, oi_repo, alpha_repo
+
+
+def test_calibrate_alpha_chybejici_doi_neni_nula() -> None:
+    """Strana bez ΔOI v archivech se přeskočí — nula by medián stáhla k 0 (#1172)."""
+    netflow = {(7500.0 + i, "C"): 100.0 for i in range(6)}
+    doi = {(7500.0 + i, "C"): 40.0 for i in range(5)}  # šestá strana bez klíče
+    point = calibrate_alpha(netflow, doi)
+    assert point is not None
+    assert point.samples == 5 and point.ratio_median == pytest.approx(0.4)
+    # Bez jediného klíče ΔOI vzorek nestačí — None místo falešné nuly
+    assert calibrate_alpha(netflow, {}) is None
+
+
+def test_collect_preskoci_0dte_retez_a_shodne_archivy(tmp_path: Path) -> None:
+    """Řetěz expirující v den netflow nemá ΔOI do D+1; shodné archivy = žádný bod (#1172)."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    _seed_day(settings, oi_repo, expiry=EXPIRY_0DTE)
+    assert collect_alpha_calibration("ES", settings.derived_dir, oi_repo, alpha_repo, TODAY) is None
+    assert alpha_repo.get("ES") is None
+    # Platná expirace, ale archiv D+1 nese tytéž hodnoty (ΔOI všude 0) — také nic
+    _seed_day(settings, oi_repo, doi=0.0)
+    assert collect_alpha_calibration("ES", settings.derived_dir, oi_repo, alpha_repo, TODAY) is None
+    assert alpha_repo.get("ES") is None
+
+
+def test_collect_zaporny_median_alfu_nemeni(tmp_path: Path) -> None:
+    """Medián ≤ 0 jde do historie pro audit, ale α ani počet dnů nemění (#1172)."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    point = AlphaCalibrationPoint(samples=6, ratio_median=0.45, ratio_buy=0.45, ratio_sell=None)
+    alpha_repo.record("ES", PREV - dt.timedelta(days=1), EXPIRY, point, alpha_after=0.45, days=1)
+    _seed_day(settings, oi_repo, doi=-40.0)
+    assert collect_alpha_calibration("ES", settings.derived_dir, oi_repo, alpha_repo, TODAY) is None
+    state = alpha_repo.get("ES")
+    assert state is not None and state.alpha == 0.45 and state.days == 1
+    assert alpha_repo.history_exists("ES", PREV)  # bod zapsán pro audit, dedup drží
 
 
 def test_collect_alpha_calibration_a_dedup(tmp_path: Path) -> None:
