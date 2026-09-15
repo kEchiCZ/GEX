@@ -39,7 +39,7 @@ export function ScenarioStatsSection({ symbol }: { symbol: string }) {
         <table className="briefing-table" data-testid="scenario-stats">
           <thead>
             <tr>
-              <th>n</th>
+              <th>zdroj · n</th>
               <th>cíl 1</th>
               <th>cíl 2 (z n₂)</th>
               <th>pořadí (z n₀)</th>
@@ -48,8 +48,28 @@ export function ScenarioStatsSection({ symbol }: { symbol: string }) {
             </tr>
           </thead>
           <tbody>
+            {(['auto', 'manual'] as const).map((key) => {
+              const row = stats.by_source?.[key]
+              if (!row) return null
+              return (
+                <tr key={key} data-testid={`scenario-stats-${key}`}>
+                  <td>
+                    {key === 'auto' ? 'auto' : 'ručně'} · {row.n}
+                  </td>
+                  <td>{pct(row.hit1_rate)}</td>
+                  <td>
+                    {pct(row.hit2_rate)} ({row.n_second})
+                  </td>
+                  <td>
+                    {pct(row.order_rate)} ({row.n_order})
+                  </td>
+                  <td>{row.median_dev_em === null ? '—' : `${row.median_dev_em.toFixed(2)} EM`}</td>
+                  <td>{row.preliminary ? `sběr (${row.n}/30)` : 'platné'}</td>
+                </tr>
+              )
+            })}
             <tr>
-              <td>{stats.n}</td>
+              <td>celkem · {stats.n}</td>
               <td>{pct(stats.hit1_rate)}</td>
               <td>
                 {pct(stats.hit2_rate)} ({stats.n_second})

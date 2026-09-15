@@ -256,6 +256,7 @@ class TendencyEngine:
         result = evaluate_tendency(inputs, self._hysteresis)
         if result is None:
             return
+        runtime.tendency_band = result.band
         self.repository.upsert(self.symbol, result)
         await self.publisher.publish(
             f"tendency.{self.symbol}",

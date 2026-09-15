@@ -105,6 +105,7 @@ from gexlens_engine.runtime_settings import (
     seed_reconnects,
     should_poll_settings,
 )
+from gexlens_engine.scenario_auto import ApiReader, ScenarioGenerator
 from gexlens_engine.scenarios import ScenarioCollector
 from gexlens_engine.setups import SetupEngine, setup_params_from_settings
 from gexlens_engine.spot_stream import SpotStreamer
@@ -642,6 +643,8 @@ async def create_pipeline(
     t6_repository: T6Repository | None = None,
     gamma_cliff_repository: GammaCliffRepository | None = None,
     scenarios_repository: ScenariosRepository | None = None,
+    scenario_api: ApiReader | None = None,
+    scenario_auto_minutes: int = 15,
     vol_regime_repository: VolRegimeRepository | None = None,
     em_respect_repository: EmRespectRepository | None = None,
     briefing_verdict_repository: BriefingVerdictRepository | None = None,
@@ -1158,6 +1161,19 @@ async def create_pipeline(
             if scenarios_repository is not None and db is not None
             else None
         ),
+        scenario_generator=(
+            ScenarioGenerator(
+                symbol=symbol,
+                repository=scenarios_repository,
+                api=scenario_api,
+                publisher=publisher,
+                minutes_before_open=scenario_auto_minutes,
+            )
+            if scenarios_repository is not None
+            and scenario_api is not None
+            and scenario_auto_minutes > 0
+            else None
+        ),
         vol_regime=(
             VolRegimeCollector(
                 symbol=symbol,
@@ -1381,6 +1397,8 @@ async def main() -> None:
     # Scénáře dne (#1173): tabulku zakládá i API, tady jen pro jistotu při startu
     scenarios_repository = ScenariosRepository(db)
     await asyncio.to_thread(scenarios_repository.ensure_schema)
+    # Vstupy verdiktu dne z API (svíčky, bary, ΔOI, sentiment, kalendář) — #1173 A
+    scenario_api = ApiReader(api_base)
 
     # Volatilitní režim (ADR-0028): čte jen bary, žádná IBKR linka navíc
     vol_regime_repository = VolRegimeRepository(db)
@@ -2625,6 +2643,8 @@ async def main() -> None:
                     t6_repository=t6_repository,
                     gamma_cliff_repository=gamma_cliff_repository,
                     scenarios_repository=scenarios_repository,
+                    scenario_api=scenario_api,
+                    scenario_auto_minutes=settings.scenario_auto_minutes_before_open,
                     vol_regime_repository=vol_regime_repository,
                     em_respect_repository=em_respect_repository,
                     briefing_verdict_repository=briefing_verdict_repository,

@@ -31,8 +31,15 @@ import type { PanelKey } from './components/BottomPanels'
 import { PlaybackBar } from './components/PlaybackBar'
 import { ScenarioDialog } from './components/ScenarioDialog'
 import type { ScenarioDraft } from './components/ScenarioDialog'
-import { createScenario, pathFromAnnotation, targetsFromPath } from './api/scenarios'
-import type { ScenarioPathPoint } from './api/scenarios'
+import {
+  annotationFromScenario,
+  createScenario,
+  fetchScenarios,
+  pathFromAnnotation,
+  targetsFromPath,
+  uploadScenarioImage,
+} from './api/scenarios'
+import type { Scenario, ScenarioPathPoint } from './api/scenarios'
 import { SettingsView } from './components/SettingsView'
 import { SetupCard } from './components/SetupCard'
 import { ChainView } from './components/ChainView'
@@ -604,6 +611,65 @@ function MainContent() {
   const [scenarioBusy, setScenarioBusy] = useState(false)
   const [scenarioError, setScenarioError] = useState<string | null>(null)
   const [scenarioToast, setScenarioToast] = useState<string | null>(null)
+  // Otevřené scénáře dne (auto i ruční) — kreslí se živě do heatmapy; obnova
+  // à 60 s a po každém uložení. Jen živý den: v replay minulého dne nic.
+  const [openScenarios, setOpenScenarios] = useState<Scenario[]>([])
+  const [scenarioTick, setScenarioTick] = useState(0)
+  useEffect(() => {
+    if (isHistoricalExpiry) return
+    let cancelled = false
+    const load = () => {
+      void fetchScenarios(symbol, 20).then((rows) => {
+        if (cancelled) return
+        setOpenScenarios(rows.filter((row) => row.evaluated_at === null && row.day === today))
+      })
+    }
+    load()
+    const timer = window.setInterval(load, 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [symbol, today, isHistoricalExpiry, scenarioTick])
+  const scenarioGhosts = useMemo(
+    () =>
+      isHistoricalExpiry
+        ? []
+        : openScenarios
+            .map((row) => annotationFromScenario(row, day.minutesIso))
+            .filter((item): item is NonNullable<typeof item> => item !== null),
+    [openScenarios, day.minutesIso, isHistoricalExpiry],
+  )
+  // Automatický scénář vzniká v enginu bez grafu — snímek dodá první otevřený
+  // tab: jednou per id, až když je scénář vykreslený (ghost) a data živá
+  const uploadedImagesRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    if (isHistoricalExpiry || day.source !== 'replay' || scenarioGhosts.length === 0) return
+    const pending = openScenarios.find(
+      (row) => row.source === 'auto' && !row.has_image && !uploadedImagesRef.current.has(row.id),
+    )
+    if (!pending) return
+    uploadedImagesRef.current.add(pending.id)
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const stamp = new Date().toLocaleString('cs-CZ', {
+          day: '2-digit',
+          month: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+        const blob = snapshotRef.current
+          ? await snapshotRef.current(`GEXLens · ${symbol} · scénář #${pending.id} · ${stamp}`)
+          : null
+        if (!blob) return
+        const buffer = new Uint8Array(await blob.arrayBuffer())
+        let binary = ''
+        for (const byte of buffer) binary += String.fromCharCode(byte)
+        if (await uploadScenarioImage(pending.id, btoa(binary))) setScenarioTick((n) => n + 1)
+      })()
+    }, 1500) // po vykreslení ghostu (rAF) — snímek má cestu v sobě
+    return () => window.clearTimeout(timer)
+  }, [openScenarios, scenarioGhosts, isHistoricalExpiry, day.source, symbol])
   // Ctrl+Z / Ctrl+Shift+Z nad kreslením (#590) — tlačítka ↶ ↷ dělají totéž
   const { undo: undoAnnotation, redo: redoAnnotation } = annotationsState
   useEffect(() => {
@@ -1719,6 +1785,7 @@ function MainContent() {
                 return
               }
               setScenarioDialog(null)
+              setScenarioTick((n) => n + 1)
               setScenarioToast(
                 `Scénář #${result.scenario.id} uložen · cíle ${result.scenario.targets.join(' → ')} · termín ${result.scenario.deadline}`,
               )
@@ -1750,6 +1817,7 @@ function MainContent() {
               priceStyle={priceStyle}
               priceOpacity={priceOpacity}
               annotations={annotationsState.annotations}
+              ghostAnnotations={scenarioGhosts}
               bucketMinutes={bucketMinutes}
               minutesIso={day.minutesIso}
               annotationTool={annotationTool}

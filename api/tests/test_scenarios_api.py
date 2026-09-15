@@ -111,3 +111,49 @@ def test_alert_nad_limitem_a_uklid_snimku(tmp_path: Path, monkeypatch: Any) -> N
     assert client.get("/scenarios/disk").json()["images"] == 0
     stats = client.get("/scenarios/stats?symbol=ES").json()
     assert stats["n"] == 0 and stats["preliminary"] is True
+
+
+def test_auto_scenar_dostane_snimek_pres_put_a_stats_per_zdroj(tmp_path: Path) -> None:
+    client, repo = _app(tmp_path, [])
+    auto_id = repo.create(
+        symbol="ES",
+        day=NOW.date(),
+        created_at=NOW,
+        deadline=NOW.date(),
+        deadline_ts=NOW.replace(hour=20),
+        entry=7590.0,
+        targets=[7576.75, 7550.0],
+        path=[{"ts": NOW.isoformat(), "price": 7590.0}],
+        annotation_id=None,
+        note=None,
+        source="auto",
+        rationale={"verdict": "short", "score": -4, "votes": [], "missing": []},
+    )
+    listed = client.get("/scenarios?symbol=ES&source=auto").json()["scenarios"]
+    assert [row["id"] for row in listed] == [auto_id] and listed[0]["source"] == "auto"
+    assert listed[0]["rationale"]["verdict"] == "short" and listed[0]["has_image"] is False
+    assert client.get("/scenarios?symbol=ES&source=manual").json()["scenarios"] == []
+    assert client.get("/scenarios?source=x").status_code == 422
+    put = client.put(
+        f"/scenarios/{auto_id}/image", json={"image_png_base64": base64.b64encode(PNG).decode()}
+    )
+    assert put.status_code == 200 and put.json()["has_image"] is True
+    assert client.get(f"/scenarios/{auto_id}/image").content == PNG
+    # Podruhé už ne (409), neexistující 404, ne-PNG 422
+    assert (
+        client.put(
+            f"/scenarios/{auto_id}/image", json={"image_png_base64": base64.b64encode(PNG).decode()}
+        ).status_code
+        == 409
+    )
+    assert client.put("/scenarios/999/image", json={"image_png_base64": "AAAA"}).status_code == 404
+    repo.record_result(
+        auto_id,
+        {"hit1": True, "hit2": None, "order_ok": None, "max_dev_em": 0.2, "verdict": "hit"},
+        NOW,
+    )
+    stats = client.get("/scenarios/stats?symbol=ES").json()
+    assert stats["n"] == 1 and stats["by_source"]["auto"]["n"] == 1
+    assert (
+        stats["by_source"]["manual"]["n"] == 0 and stats["by_source"]["auto"]["preliminary"] is True
+    )

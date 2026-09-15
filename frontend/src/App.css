@@ -3173,6 +3173,20 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   background: rgba(231, 76, 60, 0.22);
   color: var(--down);
 }
+.scenario-source {
+  padding: 1px 6px;
+  border-radius: 9px;
+  font-size: 10px;
+  background: rgba(125, 211, 252, 0.18);
+  color: #7dd3fc;
+}
+.scenario-rationale summary {
+  cursor: pointer;
+}
+.scenario-rationale ul {
+  margin: 2px 0 4px;
+  padding-left: 18px;
+}
 .scenario-image {
   display: block;
   margin-top: 6px;

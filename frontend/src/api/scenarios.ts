@@ -39,6 +39,24 @@ export interface Scenario {
   image_bytes: number
   evaluated_at: string | null
   result: ScenarioResult | null
+  /** auto = z verdiktu dne (engine, #1173 A), manual = nakreslený uživatelem. */
+  source: 'auto' | 'manual'
+  rationale: ScenarioRationale | null
+}
+
+export interface ScenarioVote {
+  name: string
+  vote: number
+  reason: string
+}
+
+export interface ScenarioRationale {
+  rules_version: number
+  verdict: string
+  score: number
+  votes: ScenarioVote[]
+  missing: string[]
+  targets?: string[]
 }
 
 export interface ScenarioStats {
@@ -54,6 +72,7 @@ export interface ScenarioStats {
   order_ok: number
   order_rate: number | null
   median_dev_em: number | null
+  by_source?: Record<string, ScenarioStats>
 }
 
 export interface ScenarioDisk {
@@ -192,6 +211,38 @@ export async function cleanupScenarioImages(
     return (await response.json()) as { removed: number; freed_bytes: number }
   } catch {
     return null
+  }
+}
+
+/** Cesta scénáře → body anotace (minuta osy × cena) pro živé vykreslení v heatmapě. */
+export function annotationFromScenario(
+  scenario: Scenario,
+  minutesIso: string[],
+): AnnotationPayload | null {
+  if (minutesIso.length === 0 || scenario.path.length < 2) return null
+  const start = Date.parse(minutesIso[0])
+  if (Number.isNaN(start)) return null
+  return {
+    tool: 'line',
+    color: scenario.source === 'auto' ? '#7dd3fc' : '#e8c14b',
+    points: scenario.path.map((point) => ({
+      minute: (Date.parse(point.ts) - start) / 60_000,
+      strike: point.price,
+    })),
+  }
+}
+
+/** Snímek k automatickému scénáři doplní frontend, jakmile má graf otevřený (#1173 A). */
+export async function uploadScenarioImage(id: number, imagePngBase64: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE}/scenarios/${id}/image`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_png_base64: imagePngBase64 }),
+    })
+    return response.ok
+  } catch {
+    return false
   }
 }
 
