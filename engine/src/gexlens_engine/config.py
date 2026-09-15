@@ -172,7 +172,9 @@ class Settings(BaseSettings):
     # vah ani signálů (R4, #740 fáze 0).
     news_gemini_api_key: str = ""
     news_explain_enabled: bool = False
-    news_explain_model: str = "gemini-3.8-flash"
+    # Řetěz modelů oddělený čárkou: free tier vrací často 503 „high demand",
+    # při něm se hned zkusí další (změřeno 15. 9. 2026)
+    news_explain_model: str = "gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash"
     news_explain_daily_tokens: int = Field(default=300_000, ge=0)
     # Dev laboratoř jen s tastytrade (#623, start-dev.ps1 -LiveTasty): engine
     # přeskočí IBKR úplně a jen streamuje chain do cache s heartbeat logem.
