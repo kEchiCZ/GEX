@@ -29,6 +29,10 @@ import { StatusBar } from './components/StatusBar'
 import { BottomPanels, PANEL_HEIGHT_MAX, PANEL_HEIGHT_MIN } from './components/BottomPanels'
 import type { PanelKey } from './components/BottomPanels'
 import { PlaybackBar } from './components/PlaybackBar'
+import { ScenarioDialog } from './components/ScenarioDialog'
+import type { ScenarioDraft } from './components/ScenarioDialog'
+import { createScenario, pathFromAnnotation, targetsFromPath } from './api/scenarios'
+import type { ScenarioPathPoint } from './api/scenarios'
 import { SettingsView } from './components/SettingsView'
 import { SetupCard } from './components/SetupCard'
 import { ChainView } from './components/ChainView'
@@ -579,6 +583,27 @@ function MainContent() {
   }, [day.overlays.price])
   // Anotace: persistence per instrument + den (SPEC 7.4)
   const annotationsState = useAnnotations(symbol, viewDate)
+  // Scénář dne (#1173): jen na živém dni z poslední anotace; snímek si bere
+  // z Heatmapy přes callback (ref, ne state — render nic nemění)
+  const snapshotRef = useRef<((label: string) => Promise<Blob | null>) | null>(null)
+  const onSnapshotReady = useCallback(
+    (snapshot: ((label: string) => Promise<Blob | null>) | null) => {
+      snapshotRef.current = snapshot
+    },
+    [],
+  )
+  const [scenarioDialog, setScenarioDialog] = useState<{
+    annotationId: number
+    path: ScenarioPathPoint[]
+    entry: number
+    targets: number[]
+    // Snímek se pořizuje při kliknutí, PŘED otevřením dialogu — dialog graf
+    // zmenší a snímek by byl pár desítek pixelů vysoký
+    image: string | null
+  } | null>(null)
+  const [scenarioBusy, setScenarioBusy] = useState(false)
+  const [scenarioError, setScenarioError] = useState<string | null>(null)
+  const [scenarioToast, setScenarioToast] = useState<string | null>(null)
   // Ctrl+Z / Ctrl+Shift+Z nad kreslením (#590) — tlačítka ↶ ↷ dělají totéž
   const { undo: undoAnnotation, redo: redoAnnotation } = annotationsState
   useEffect(() => {
@@ -1480,6 +1505,53 @@ function MainContent() {
             {label}
           </button>
         ))}
+        {/* Scénář dne (#1173): z poslední anotace, jen živý den — nikdy do minulosti */}
+        <button
+          className="chip"
+          data-testid="scenario-button"
+          disabled={
+            isHistoricalExpiry ||
+            day.source !== 'replay' ||
+            annotationsState.annotations.length === 0 ||
+            spot === null
+          }
+          title="Uloží poslední nakreslenou anotaci jako scénář dne: snímek grafu, cíle v pořadí (z geometrie, jde upravit) a termín (dnes nebo později). Po termínu engine vyhodnotí zásah cílů a odchylku od cesty; výsledek v Briefingu a Stats. Jen na živém dni."
+          onClick={() => {
+            const last = annotationsState.annotations[annotationsState.annotations.length - 1]
+            if (!last || spot === null) return
+            const path = pathFromAnnotation(last.payload, day.minutesIso)
+            if (path.length === 0) return
+            setScenarioError(null)
+            const entry = spot
+            void (async () => {
+              const stamp = new Date().toLocaleString('cs-CZ', {
+                day: '2-digit',
+                month: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+              const blob = snapshotRef.current
+                ? await snapshotRef.current(`GEXLens · ${symbol} · ${stamp}`)
+                : null
+              let image: string | null = null
+              if (blob) {
+                const buffer = new Uint8Array(await blob.arrayBuffer())
+                let binary = ''
+                for (const byte of buffer) binary += String.fromCharCode(byte)
+                image = btoa(binary)
+              }
+              setScenarioDialog({
+                annotationId: last.id,
+                path,
+                entry,
+                targets: targetsFromPath(path, entry),
+                image,
+              })
+            })()
+          }}
+        >
+          ✎ Scénář
+        </button>
         {/* Range selector (#484): tažením vyber okno [t1, t2] */}
         <button
           className={rangeTool ? 'chip active' : 'chip'}
@@ -1616,6 +1688,50 @@ function MainContent() {
           ✎
         </button>
       </div>
+      {scenarioDialog && (
+        <ScenarioDialog
+          symbol={symbol}
+          entry={scenarioDialog.entry}
+          path={scenarioDialog.path}
+          suggestedTargets={scenarioDialog.targets}
+          today={today}
+          busy={scenarioBusy}
+          error={scenarioError}
+          onCancel={() => setScenarioDialog(null)}
+          onConfirm={(draft: ScenarioDraft) => {
+            const pending = scenarioDialog
+            setScenarioBusy(true)
+            setScenarioError(null)
+            void (async () => {
+              const result = await createScenario({
+                symbol,
+                entry: pending.entry,
+                path: pending.path,
+                targets: draft.targets,
+                deadline: draft.deadline,
+                annotation_id: pending.annotationId,
+                note: draft.note || null,
+                image_png_base64: pending.image,
+              })
+              setScenarioBusy(false)
+              if (!result.ok) {
+                setScenarioError(result.error)
+                return
+              }
+              setScenarioDialog(null)
+              setScenarioToast(
+                `Scénář #${result.scenario.id} uložen · cíle ${result.scenario.targets.join(' → ')} · termín ${result.scenario.deadline}`,
+              )
+              window.setTimeout(() => setScenarioToast(null), 6000)
+            })()
+          }}
+        />
+      )}
+      {scenarioToast && (
+        <div className="scenario-toast" role="status">
+          {scenarioToast}
+        </div>
+      )}
       <div className="chart-row">
         <div className="chart-column">
           <main className="chart-area" aria-label="Heatmapa">
@@ -1641,6 +1757,7 @@ function MainContent() {
               onAnnotationCreate={(payload) => void annotationsState.create(payload)}
               onAnnotationErase={(id) => void annotationsState.erase(id)}
               onAnnotationMove={(id, payload) => void annotationsState.move(id, payload)}
+              onSnapshotReady={onSnapshotReady}
               view={chartView}
               onViewChange={setChartView}
               initialZoomX={savedZoomX}

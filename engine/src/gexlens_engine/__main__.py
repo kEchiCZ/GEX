@@ -105,6 +105,7 @@ from gexlens_engine.runtime_settings import (
     seed_reconnects,
     should_poll_settings,
 )
+from gexlens_engine.scenarios import ScenarioCollector
 from gexlens_engine.setups import SetupEngine, setup_params_from_settings
 from gexlens_engine.spot_stream import SpotStreamer
 from gexlens_engine.storage.briefing_verdicts_store import BriefingVerdictRepository
@@ -120,6 +121,7 @@ from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter
 from gexlens_engine.storage.probes_store import ProbeRepository
 from gexlens_engine.storage.retention import RetentionJob
+from gexlens_engine.storage.scenarios_store import ScenariosRepository
 from gexlens_engine.storage.sentiment import LegacyNewsReactionsError, ensure_sentiment_schema
 from gexlens_engine.storage.setup_params_store import SetupParamsRepository
 from gexlens_engine.storage.setups_store import SetupsRepository
@@ -639,6 +641,7 @@ async def create_pipeline(
     tendency_repository: TendencyRepository | None = None,
     t6_repository: T6Repository | None = None,
     gamma_cliff_repository: GammaCliffRepository | None = None,
+    scenarios_repository: ScenariosRepository | None = None,
     vol_regime_repository: VolRegimeRepository | None = None,
     em_respect_repository: EmRespectRepository | None = None,
     briefing_verdict_repository: BriefingVerdictRepository | None = None,
@@ -1144,6 +1147,17 @@ async def create_pipeline(
             if gamma_cliff_repository is not None and db is not None
             else None
         ),
+        scenario_collector=(
+            ScenarioCollector(
+                symbol=symbol,
+                repository=scenarios_repository,
+                db=db,
+                data_dir=settings.data_dir,
+                publisher=publisher,
+            )
+            if scenarios_repository is not None and db is not None
+            else None
+        ),
         vol_regime=(
             VolRegimeCollector(
                 symbol=symbol,
@@ -1364,6 +1378,9 @@ async def main() -> None:
     if settings.gamma_cliff_enabled:
         gamma_cliff_repository = GammaCliffRepository(db)
         await asyncio.to_thread(gamma_cliff_repository.ensure_schema)
+    # Scénáře dne (#1173): tabulku zakládá i API, tady jen pro jistotu při startu
+    scenarios_repository = ScenariosRepository(db)
+    await asyncio.to_thread(scenarios_repository.ensure_schema)
 
     # Volatilitní režim (ADR-0028): čte jen bary, žádná IBKR linka navíc
     vol_regime_repository = VolRegimeRepository(db)
@@ -2607,6 +2624,7 @@ async def main() -> None:
                     tendency_repository=tendency_repository,
                     t6_repository=t6_repository,
                     gamma_cliff_repository=gamma_cliff_repository,
+                    scenarios_repository=scenarios_repository,
                     vol_regime_repository=vol_regime_repository,
                     em_respect_repository=em_respect_repository,
                     briefing_verdict_repository=briefing_verdict_repository,

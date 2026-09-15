@@ -41,6 +41,9 @@ import type { ExpectedMove } from '../instrument/expectedmove'
 import { categoryGlyph, fetchSentimentState, fetchUpcoming, isHighImpact } from '../api/news'
 import type { NewsRow, SentimentStateInfo } from '../api/news'
 import { useGexForward } from '../hooks/useGexForward'
+import { fetchScenarios } from '../api/scenarios'
+import type { Scenario } from '../api/scenarios'
+import { ScenarioCard } from './ScenarioCard'
 import { TIMEFRAME_LABELS, assessTrends, directionLabel } from '../instrument/trend'
 import type { Candle, TimeframeKey } from '../instrument/trend'
 import { sessionDateIso } from '../instrument/tz'
@@ -62,6 +65,41 @@ function formatCountdown(msLeft: number): string {
 function formatSigned(value: number): string {
   const rounded = Math.round(value)
   return `${rounded >= 0 ? '+' : ''}${rounded.toLocaleString('cs-CZ')}`
+}
+
+/** Scénáře dne (#1173): otevřené (termín ≥ dnes) a poslední vyhodnocené. */
+function ScenarioBlock({ symbol }: { symbol: string }) {
+  const [rows, setRows] = useState<Scenario[]>([])
+  useEffect(() => {
+    let cancelled = false
+    void fetchScenarios(symbol, 20).then((items) => {
+      if (!cancelled) setRows(items)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [symbol])
+  const open = rows.filter((row) => row.evaluated_at === null)
+  const recent = rows.filter((row) => row.evaluated_at !== null).slice(0, 3)
+  if (open.length === 0 && recent.length === 0) {
+    return (
+      <p className="muted">
+        Žádný scénář. Nakresli na živém grafu očekávanou cestu (šipka/freehand) a ulož ji tlačítkem
+        ✎ Scénář — po termínu se vyhodnotí sama.
+      </p>
+    )
+  }
+  return (
+    <>
+      {open.map((row) => (
+        <ScenarioCard key={row.id} scenario={row} />
+      ))}
+      {recent.length > 0 && <p className="muted">Poslední vyhodnocené</p>}
+      {recent.map((row) => (
+        <ScenarioCard key={row.id} scenario={row} compact />
+      ))}
+    </>
+  )
 }
 
 function Card({ title, children }: { title: string; children: ReactNode }) {
@@ -284,6 +322,9 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
         {/* Shrnutí dne (#1090, ADR-0035): trend a směr, úrovně obratu, zprávy dne
         s očekávanou reakcí, verdikt hlasováním s vypsanými důvody. Heuristika —
         proto se verdikt ukládá a vyhodnocuje (#1091). */}
+        <Card title="Scénář dne">
+          <ScenarioBlock symbol={symbol} />
+        </Card>
         <section className="briefing-card briefing-summary" aria-label="Shrnutí dne">
           <h3>Shrnutí dne</h3>
           <div className="briefing-summary-grid">

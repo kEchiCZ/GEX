@@ -66,13 +66,15 @@ OPS_KINDS: frozenset[str] = frozenset(
         "chain_fallback",
         "broker",
         "setup_degraded",
+        "scenario_disk",
     }
 )
 NEWS_KINDS: frozenset[str] = frozenset({"news_anomaly", "vol_concentration"})
 
 
 def category_of(kind: str) -> str:
-    if kind == "setup":
+    # Výsledek scénáře dne (#1173) patří k obchodním věcem uživatele — s setupy
+    if kind in ("setup", "scenario_result"):
         return "setup"
     if kind in OPS_KINDS:
         return "ops"

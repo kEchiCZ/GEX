@@ -56,6 +56,7 @@ from gexlens_api.live import LiveHub, TooManyChannels, TooManySubscribers, parse
 from gexlens_api.meta_repo import MetaRepository
 from gexlens_api.news_explain import ExplainOptions
 from gexlens_api.push_telegram import PushOptions, TelegramPush
+from gexlens_api.scenario_routes import build_scenario_router
 from gexlens_api.security import (
     build_token_guard,
     load_allowed_origins,
@@ -81,6 +82,7 @@ from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.gammacliff_store import gamma_cliff_table
 from gexlens_engine.storage.ivrank_store import IvRankRepository
 from gexlens_engine.storage.oi_archive import OIEodRepository
+from gexlens_engine.storage.scenarios_store import ScenariosRepository
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema
 from gexlens_engine.storage.setup_params_store import SetupParamsRepository
 from gexlens_engine.storage.setups_store import SetupsRepository
@@ -194,6 +196,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ).start()
     app.include_router(build_router(meta_repository))
     app.include_router(build_briefing_router(meta_repository))
+    # Scénář dne (#1173): tabulka sdílená s enginem (vyhodnocení), snímky na disku
+    app.include_router(
+        build_scenario_router(
+            lambda: ScenariosRepository(meta_repository.engine()),
+            settings.data_dir,
+            lambda payload: live_hub.publish("alerts", payload),
+        )
+    )
     # SentimentLens (#285) — vlastní router, ať main.py nenaroste o dalších
     # 200 řádků; schéma se zakládá lazy při prvním dotazu
     sentiment_ready: list[bool] = []
