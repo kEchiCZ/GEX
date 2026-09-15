@@ -728,6 +728,16 @@ button.cal-selected {
   accent-color: var(--accent);
 }
 
+/* Replay v liště grafu (#1126 3f): flex prvek, který si vezme zbytek řádku
+   a při úzkém okně se zalomí celý; žádný vlastní okraj ani padding */
+.playback-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 320px;
+  min-width: 260px;
+}
+
 .live-chip.active {
   color: var(--up);
   border-color: var(--up);
@@ -1074,6 +1084,19 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   white-space: nowrap;
   color: #f5c542;
   background: rgba(245, 197, 66, 0.16);
+}
+
+/* Odkaz „Metodika" (#1126 3f): tichý, tečkovaně podtržený, drží se u titulku */
+.profile-header .profile-method {
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: help;
+}
+.profile-header .profile-method:hover {
+  color: var(--text);
 }
 
 .profile-header .profile-title {

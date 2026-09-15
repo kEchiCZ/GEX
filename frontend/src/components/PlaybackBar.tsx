@@ -1,9 +1,24 @@
-/** Ovládání playbacku (SPEC 7.3): slider přes den, ▶ 1×/5×/20×, live indikátor. */
+/** Ovládání playbacku (SPEC 7.3): slider přes den, ▶ 1×/5×/20×, live indikátor.
+
+`inline` = vložené do lišty grafu jako jeden flex prvek (#1126 3f), bez
+vlastního řádku s okrajem; bez `inline` je to samostatný pruh (`row`). */
 import type { Playback, PlaybackSpeed } from '../replay/usePlayback'
 
-export function PlaybackBar({ playback, label }: { playback: Playback; label?: string }) {
+export function PlaybackBar({
+  playback,
+  label,
+  inline = false,
+}: {
+  playback: Playback
+  label?: string
+  inline?: boolean
+}) {
   return (
-    <div className="row playback-bar" role="toolbar" aria-label="Playback">
+    <div
+      className={inline ? 'playback-bar playback-inline' : 'row playback-bar'}
+      role="toolbar"
+      aria-label="Playback"
+    >
       <button
         className="chip"
         aria-label={playback.playing ? 'Pauza' : 'Přehrát'}

@@ -1593,6 +1593,9 @@ function MainContent() {
         >
           ⏮ Replay
         </button>
+        {/* Ovládání replaye přímo v liště grafu (#1126 3f), ne jako samostatný
+            pruh pod panely — slider je vedle tlačítka, které ho zapnulo */}
+        {showReplay && <PlaybackBar playback={playback} inline />}
         {/* Rychlý vstup do deníku (#673): okamžik = minuta pod playbackem */}
         <button
           className="chip"
@@ -1829,7 +1832,6 @@ function MainContent() {
             range={rangeSpan ? { startBucket: rangeSpan.startBucket, endBucket: rangeSpan.endBucket } : null} // prettier-ignore
             rangeB={rangeSpanB ? { startBucket: rangeSpanB.startBucket, endBucket: rangeSpanB.endBucket } : null} // prettier-ignore
           />
-          {showReplay && <PlaybackBar playback={playback} />}
         </div>
         <div
           className="panel-divider"

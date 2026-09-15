@@ -301,6 +301,28 @@ function StrikeProfileBase({
       <div className="profile-header">
         {/* Stav Σ nese jen zvýrazněný chip (#415) — popisek se nemění */}
         <span className="muted profile-title">Vol + OI Δ</span>
+        {/* Odkud jsou čísla (#1126 3f): nejčastější dotaz z diskusí — odpověď
+            v tooltipu, proklik na manuál (kap. 5 a 7). Jen glyf: hlavička je
+            při běžné šířce panelu plná a slovo by vytlačilo titulek. */}
+        <a
+          className="profile-method"
+          href="/manual/index.html"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Metodika"
+          data-testid="profile-method"
+          title={
+            'Odkud jsou čísla v profilu (manuál kap. 5 a 7):\n' +
+            '• OI = open interest z ranního archivu CME přes IBKR — jednou denně ráno, ' +
+            'přes den se nemění; striky mimo obálku IBKR nesou denní OI z tastytrade\n' +
+            '• FA odhad (přepínač OI) = OI_est = ranní OI + α·klasifikovaný tok — model, ne měření\n' +
+            '• Vol = opční objem dne per strike z živého řetězu; OI Δ = open interest ' +
+            'vážený |delta| opce (obě složky Δ-vážené, proto „kontrakty“ ≠ hrubé počty)\n' +
+            '• Prémie $ = objem × mid × multiplikátor — kam tekly peníze, ne kolik kontraktů'
+          }
+        >
+          ⓘ
+        </a>
         {volumeMissing && (
           // Objem minuty chybí (#1067): řetěz z tasty fallbacku objem nenese,
           // pruhy jsou jen OI složka — bez štítku to vypadá jako pokles objemu

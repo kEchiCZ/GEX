@@ -57,6 +57,22 @@ test('Vol leadeři readout se vykreslí v hlavičce profilu (#208)', () => {
   expect(readout.textContent).toContain('7590P')
 })
 
+test('hlavička profilu nese odkaz Metodika na manuál s vysvětlením zdrojů (#1126 3f)', () => {
+  render(
+    <CrosshairProvider>
+      <StrikeProfile rows={rows()} spot={7600} />
+    </CrosshairProvider>,
+  )
+  const link = screen.getByTestId('profile-method') as HTMLAnchorElement
+  expect(link.getAttribute('aria-label')).toBe('Metodika')
+  expect(link.getAttribute('href')).toBe('/manual/index.html')
+  expect(link.target).toBe('_blank')
+  // Tooltip odpovídá na „odkud je OI a Vol" — měřené OI, FA odhad, objem, prémie
+  expect(link.title).toContain('OI = open interest')
+  expect(link.title).toContain('FA odhad')
+  expect(link.title).toContain('Prémie $')
+})
+
 test('barGeometry normalizuje největší stranou a zoom násobí šířky', () => {
   const base = barGeometry(rows(), 130, 1)
   const first = base.find((bar) => bar.strike === 7590)
