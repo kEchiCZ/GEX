@@ -564,3 +564,24 @@ def test_nikdy_nekotovany_kontrakt_je_mrtve_ibkr(monkeypatch: pytest.MonkeyPatch
         now_utc=TS,
     )
     assert quiet.tally.both_dead == 1
+
+
+def test_zamrzle_ibkr_pri_castecnem_pokryti_tasty_spusti_fallback() -> None:
+    """#1195 (16. 9. 2026): souběh s mobilem — IBKR mlčí na 100 % kontraktů, ale tasty
+    čerstvě pokrývá jen 68 % řetězu (zbytek obojí mrtvé) → přes celý řetěz 67,8 %
+    < 70 %. Mezi kontrakty, které tasty má, je IBKR mrtvé na 100 % a IBKR se nehýbe
+    → po 3 minutách ibkr_suspect. Rotační artefakt (IBKR se hýbe) neprojde."""
+    detector = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3)
+    frozen = tally(ibkr_dead=404, both_dead=192, comparable=300, changed=0)
+    assert round(frozen.ibkr_dead_share, 3) == 0.678
+    assert frozen.ibkr_dead_among_tasty_fresh == 1.0
+    verdicts = [detector.observe(frozen) for _ in range(3)]
+    assert verdicts[2].state == "ibkr_suspect" and verdicts[2].alert is True
+    # Rotační artefakt: 58 % mrtvých přes řetěz, ale IBKR se na zbytku hýbe → ok
+    rotation = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3)
+    artefact = tally(ibkr_dead=58, ok=42, comparable=42, changed=20)
+    assert all(rotation.observe(artefact).state == "ok" for _ in range(5))
+    # Málo mrtvých kontraktů (pod min_contracts) nestačí, i když je podíl 100 %
+    small = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3)
+    tiny = tally(ibkr_dead=10, both_dead=40, comparable=5, changed=0)
+    assert all(small.observe(tiny).state != "ibkr_suspect" for _ in range(5))
