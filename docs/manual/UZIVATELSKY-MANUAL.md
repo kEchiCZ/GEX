@@ -1596,6 +1596,8 @@ nezvětšuje, zpřesňuje se vstup.
 verzi parametrů setupů s povinným důvodem (audit), engine ji převezme do
 sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly.
 
+![Settings → Risk management a Notifikace (Telegram)](img/settings-risk-management.jpg)
+
 ### Flip: naměřený vs. dynamický = flip ZÓNA
 
 V aplikaci jsou dva flipy — **obě čáry měří totéž dvěma metodami**:
@@ -1636,6 +1638,8 @@ kolik R stály, s konkrétní radou („po stopu 15 minut pauza"). Kouč nic
 nehádá: každá věta je číslo z deníku; posun stopu a zvětšování po sérii
 výher přibudou, až paper ordery ponesou historii změn.
 
+![Deník — panel Kouč (den bez obchodu: skóre —, shrnutí)](img/denik-kouc.png)
+
 ### Paper účet v aplikaci — fáze 1 (v1.20, #1187, ADR-0040)
 
 Trénink obchodování bez brokera: ordery se zadávají do aplikace, fily
@@ -1665,6 +1669,8 @@ open dalšího baru) a tlačítko **KILL** (zavře vše, zablokuje nové; pak
 „Odblokovat"). Entry/stop/cíl otevřeného orderu se kreslí v grafu jako
 čárkované čáry (bílá/červená/zelená).
 
+![Paper order ticket nad grafem: entry ze spotu, stop/cíl, kontrakty ze sizingu](img/paper-ticket.jpg)
+
 ### Kvartální expirační týden — roll, OPEX, SOQ (v1.20, #1189)
 
 Třikrát… čtyřikrát do roka (3. pátek března, června, září a prosince) se
@@ -1687,6 +1693,12 @@ ESU6: RTH objem na sledovaném kontraktu spadl z ~1,07 M (11. 9.) na 176 k,
 tisky 1/min — a úrovně byly v ceně, která se od obchodované (Z6) lišila
 o ~275 b na NQ. Od v1.20 se front kontrakt volí podle roll date, ne podle
 nejbližší expirace (`GEXLENS_FRONT_ROLL_DAYS`, default 8).
+
+![Hlavička v OPEX týdnu: chip ⌛ kalendáře a chip 📒 paper účtu](img/hlavicka-kalendar-paper.png)
+
+![⌛ v ose grafu na minutě expirace (VIX 15:30)](img/graf-expiry-marker.png)
+
+![Briefing — karta Expirační týden](img/briefing-expiracni-tyden.jpg)
 
 ### Playbook: zelený režim (spot NAD flip zónou)
 
