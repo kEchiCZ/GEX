@@ -100,6 +100,7 @@ def test_prah_confidence_a_prepinace_kategorii() -> None:
         {"kind": "setup", "symbol": "ES", "message": "y", "confidence": 0.9, "tradeable": False}
     )
     assert push.decide({"kind": "risk_brake", "symbol": "ES", "message": "brzda"}) is None
+    assert category_of("expiry_calendar") == "news"
     assert push.decide({"kind": "news_anomaly", "symbol": "ES", "message": "y"}) == (
         "kategorie news vypnuta"
     )

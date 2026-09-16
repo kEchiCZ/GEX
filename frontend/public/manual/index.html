@@ -17,7 +17,7 @@
   a { color: #0d8f85; }
   @media print { body { max-width: none; } h2 { page-break-after: avoid; } }
 </style></head><body><h1>GEXLens — Uživatelský manuál</h1>
-<p><em>Verze 1.18 · září 2026 · pro aplikaci GEXLens v0.1</em></p>
+<p><em>Verze 1.20 · září 2026 · pro aplikaci GEXLens v0.1</em></p>
 <p>GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje <strong>opční positioning</strong> — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u <strong>Interactive Brokers</strong> (TWS/IB Gateway API); od verze 1.9 slouží <strong>tastytrade</strong> jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.</p>
 <hr>
 <h2>Obsah</h2>
@@ -128,7 +128,7 @@ docker compose up -d        # start na pozadí
 </tr>
 <tr>
 <td><strong>Chipy stavu trhu</strong></td>
-<td><strong>Settle watch</strong> — segment „settle 22:00 · nad/pod X ±d b&quot;: klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?&quot; na jeden pohled. <strong>Chip „odpadá X % gammy&quot;</strong> — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat.</td>
+<td><strong>Settle watch</strong> — segment „settle 22:00 · nad/pod X ±d b&quot;: klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?&quot; na jeden pohled. <strong>Chip „odpadá X % gammy&quot;</strong> — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. <strong>Chip ⌛ kalendáře expirací</strong> (v1.20, #1189) — jen v kvartálním expiračním týdnu: „roll proběhl 10. 9. · expirace U6 pá 18. 9. 15:30&quot;, „OPEX týden&quot;, „kvartální expirace U6 dnes 15:30 (SOQ)&quot;, „po OPEXu — bez opční podpory&quot;; tooltip vysvětluje, co fáze znamená. Stejné ⌛ jsou v ose grafu (jako TradingView) a v Briefingu je karta <strong>Expirační týden</strong>.</td>
 </tr>
 <tr>
 <td><strong>Ukazatele pokrytí dat</strong></td>
@@ -1126,6 +1126,10 @@ openu v procentních bodech („RS NQ vede · ES−NQ −0,46 pb&quot;); kladný
 setupu pak pod RRR ukazuje řádek typu <code>riziko 50 $ (1 %) · stop 8 b → ES 0× · MES 1×</code>: počet kontraktů = riziko / (stop v bodech × hodnota bodu),
 vždy zaokrouhleno dolů, vedle plného kontraktu i micro varianta (MES/MNQ).
 Nezávisí na Traders mode — je součástí karty setupu.</p>
+<p>Od v1.19 vedle toho běží <strong>serverový sizing</strong> (#1185, kap. 18) — ten počítá
+s účtem 50 000 $ v jednotkách aplikace a rozhoduje, zda je setup vůbec
+obchodovatelný; kalkulačka v prohlížeči zůstává jako rychlý přepočet na tvůj
+reálný účet a mikro kontrakty.</p>
 <p><strong>Stop vůči volatilitnímu režimu (v1.11).</strong> Pod kalkulačkou je druhý řádek:
 <code>stop = 20 % rozsahu · režim normální (p54)</code>. <strong>Proč tu je:</strong> stejný stop
 v bodech je v jiném volatilitním režimu úplně jiný obchod — stop 8 b je
@@ -1891,6 +1895,79 @@ test interakce poloha × režim). Předregistrovaná předpověď: skupina „bl
 horší o ≥ 0,2 R než „pass&quot;. Potvrdí-li se, zapne se jedno z pravidel naostro
 (per šablona, bez max_pain_pin — ten měl mimo pásmo kladnou expektanci);
 jinak zůstane hloubka jen posunem důvěry.</p>
+<h3>Risk management malého účtu (v1.19, #1185)</h3>
+<p>Účet se v aplikaci vede v jednotkách <strong>plného kontraktu</strong> (ES 50 $/b, NQ
+20 $/b) jako <strong>50 000 $</strong>. Ty obchoduješ <strong>MES/MNQ</strong> (1/10 plného kontraktu):
+reálných 5 000 $ ≡ 50 000 $ v aplikaci, <strong>1 kontrakt v aplikaci = 1 mikro
+reálně</strong>, body sedí 1:1, dolary jsou ×10 (reálně ÷ 10). Rozhodnutí z 15. 9.
+2026 po analýze 1 128 setupů: 71 z nich ztratilo přes 1 000 $ na plný kontrakt —
+všechny kvůli stopu ≥ 32 b ES / ≥ 73 b NQ, a setupy s velkým stopem byly
+zároveň nejhorší obchody (v5: −0,34 R vs. +0,06 R se stopem v rozpočtu).</p>
+<p><strong>Pravidla, která engine počítá u každého setupu</strong> (Settings → Risk management):</p>
+<table>
+<thead>
+<tr>
+<th>Pravidlo</th>
+<th>Default</th>
+<th>Co dělá</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Riziko na setup</strong></td>
+<td><strong>1 %</strong> = 500 $ (50 $ reálně)</td>
+<td>kontrakty = ⌊rozpočet / (stop b × hodnota bodu)⌋ → 1 kontrakt při stopu ≤ <strong>10 b ES / ≤ 25 b NQ</strong>; těsnější stop = víc kontraktů (ES 4 b → 2 ks)</td>
+</tr>
+<tr>
+<td><strong>Tvrdý strop</strong></td>
+<td>2 % = 1 000 $</td>
+<td>ztráta jednoho setupu nikdy nad 2 % účtu, i kdyby se riziko zvedlo</td>
+</tr>
+<tr>
+<td><strong>Denní brzda</strong></td>
+<td>−3 R</td>
+<td>po realizované ztrátě −3 R za seanci (obchodovatelné setupy, ES i NQ) nové setupy jen <strong>stínově</strong> do settle; alert do zvonku a pushe</td>
+</tr>
+<tr>
+<td><strong>Týdenní brzda</strong></td>
+<td>−6 R</td>
+<td>totéž za obchodní týden (od pondělní seance)</td>
+</tr>
+<tr>
+<td><strong>Strop stopů šablony</strong></td>
+<td>2 / den</td>
+<td>třetí pokus téže šablony po dvou stopech za seanci je stín</td>
+</tr>
+<tr>
+<td><strong>Brána šablon</strong></td>
+<td>zapnuta, n ≥ 30, okno 60 seancí</td>
+<td>obchodovatelná je jen šablona, jejíž <strong>dolní mez očekávání</strong> (jednostranný 95% interval Ø R ze setupů se stopem v rozpočtu) je kladná; ostatní se dál měří, ale neobchodují</td>
+</tr>
+</tbody></table>
+<p><strong>Stín vs. obchodovatelný.</strong> Setup <strong>vzniká vždy</strong> (měření nesmí přestat —
+právě velké stopy chceme dál vidět), ale nese verdikt: sloupec <strong>Účet</strong> v
+obrazovce Setupy ukazuje <code>1 ks · 400 $</code> (kontrakty · ztráta na stopu) u
+obchodovatelného, nebo <code>stín: stop nad rozpočtem rizika</code> / <code>denní brzda</code> /
+<code>šablona bez prokázaného edge</code> u stínu. Stínový řádek je ztlumený, <strong>nechodí
+do pushe</strong> a nevstupuje do bilance účtu; přepínač <strong>Jen obchodovatelné</strong> je
+schová. Tooltip štítku nese rozpočet, stop v bodech, verdikt brány (n, dolní
+mez) a stav brzd (dnes / týden v R).</p>
+<p><strong>Bilance účtu.</strong> Dlaždice <strong>Účet (obchodovatelné)</strong> v Setupech a karta
+<strong>Účet 50k</strong> ve Stats → Výkon setupů: Σ (kontrakty × R × stop × bod −
+poplatky), počet obchodů, počet stínů, poplatky a max drawdown v $. Poplatek
+je default 10 $ za kontrakt a obchod v jednotkách aplikace (= 1 $ reálně).
+Vedle toho zůstává <strong>USD simulace (#679)</strong> z kalkulačky v prohlížeči — ta
+počítá s tvým reálným účtem a mikro kontrakty.</p>
+<p><strong>Co to (ne)slibuje.</strong> Pravidla zaručují, že účet přežije sérii ztrát (1 %:
+max drawdown ~19 % v simulaci nad v5; 2 %: ~39 %) a že ztráta přes 1 000 $
+v aplikaci (100 $ reálně) je z definice nemožná. <strong>Nezaručují zisk</strong> — edge
+mechaniky v5 je dnes ≈ 0 R, proto brána šablon zpočátku většinu setupů
+označí za stín. Živé obchodování má smysl až po ~60 seancích, kdy bilance
+obchodovatelných setupů drží nad nulou. Přepnutí na 2 % až po ≥ 50 živých
+obchodech s edge ≥ +0,2 R. Zvětšovat stop kvůli sizingu je špatně — stop se
+nezvětšuje, zpřesňuje se vstup.</p>
+<p><strong>Změna parametrů.</strong> Settings → Risk management: každé uložení založí novou
+verzi parametrů setupů s povinným důvodem (audit), engine ji převezme do
+sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly.</p>
 <h3>Flip: naměřený vs. dynamický = flip ZÓNA</h3>
 <p>V aplikaci jsou dva flipy — <strong>obě čáry měří totéž dvěma metodami</strong>:</p>
 <table>
@@ -1940,6 +2017,51 @@ jinak zůstane hloubka jen posunem důvěry.</p>
 </tr>
 </tbody></table>
 <p><strong>Rozdíl obou čar ber jako flip ZÓNU.</strong> Blízko sebe = ostrá hranice režimů, signály čitelné. Rozjeté = hranice rozmazaná → <strong>uvnitř zóny neobchoduj</strong>, čekej, až cena opustí celé pásmo.</p>
+<h3>Kvartální expirační týden — roll, OPEX, SOQ (v1.20, #1189)</h3>
+<p>Třikrát… čtyřikrát do roka (3. pátek března, června, září a prosince) se
+trh chová jinak než jindy a aplikace to od v1.20 ví:</p>
+<table>
+<thead>
+<tr>
+<th>Kdy</th>
+<th>Co se děje</th>
+<th>Co ukazuje aplikace</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Roll date</strong> — čtvrtek 8 dní před expirací (CME)</td>
+<td>Objem a likvidita přecházejí do dalšího kontraktu (U6 → Z6). Starý kontrakt dobíhá: drží ho hedgeři AM-settled SPX opcí a ti, kdo chtějí cash settlement.</td>
+<td>Engine od tohoto dne jede <strong>na novém kontraktu</strong> (bary, CumΔ, spot, řetěz) — cena v grafu sedí s tím, co obchoduješ na MES/MNQ. Chip ⌛ „roll proběhl&quot;, ⌛ v ose, alert.</td>
+</tr>
+<tr>
+<td><strong>OPEX týden</strong> (po–čt)</td>
+<td>Cena tažená hedgingem dealerů, ne náladou: nad flipem long gamma = lepení ke strikům a stlačená volatilita, pod flipem short gamma = vzduchové kapsy a ostré odrazy. Ve středu ráno expiruje VIX (odejde gamma tlumící VIX); FOMC v tomto týdnu dopadá na trh s plnou opční pozicí.</td>
+<td>Chip ⌛ „OPEX týden&quot;, karta <strong>Expirační týden</strong> v Briefingu se scénářem A (špatná nálada) / B (dobrá nálada) a tím, co sledovat. <strong>Sentiment ber v OPEX týdnu jako šum.</strong></td>
+</tr>
+<tr>
+<td><strong>Pátek 9:30 ET (15:30 CEST) — SOQ</strong></td>
+<td>Kvartální futures a kvartální opce se vypořádají z <strong>otevíracích cen všech 500 akcií</strong> (Special Opening Quotation) — velká část „witchingu&quot; proběhne ráno, ne odpoledne. Open bývá rozhozený proti noční ceně futures.</td>
+<td>Odpočet v hlavičce míří na 9:30 ET, ne 16:00 ET. Po SOQ engine přepne na další expiraci (už na novém kontraktu). Alert „kvartální expirace proběhla&quot;.</td>
+</tr>
+<tr>
+<td><strong>Pátek odpoledne / close</strong></td>
+<td>Tichý drift k velkým strikům (pinning); v 16:00 ET expirují akciové opce, SPY, SPXW a probíhá kvartální rebalance S&amp;P 500 — objemově největší den kvartálu.</td>
+<td>Forward GEX ukazuje strukturu <strong>po</strong> expiraci (dnešní OI minus to, co odpadne); chip „odpadá X % gammy&quot;.</td>
+</tr>
+<tr>
+<td><strong>Pondělí po</strong></td>
+<td>Bez opční podpory: put wall, který držel, zmizel; trh, který do OPEXu trendoval, se zastaví nebo obrátí; týden po zářijové expiraci je sezónně jeden z nejslabších. Nálada se do ceny propisuje až teď.</td>
+<td>Chip ⌛ „po OPEXu — bez opční podpory&quot;.</td>
+</tr>
+</tbody></table>
+<p><strong>Dvě čísla, která rozhodují:</strong> flip / put wall (zlom režimu) a dno negativní
+gamma zóny pod ním. Směr po expiraci = kombinace toho, co udělá Fed, a kde
+vůči flipu trh v pátek zavře.</p>
+<p><strong>Proč to není jen zajímavost.</strong> 15. 9. 2026 jel engine ještě na dobíhajícím
+ESU6: RTH objem na sledovaném kontraktu spadl z ~1,07 M (11. 9.) na 176 k,
+tisky 1/min — a úrovně byly v ceně, která se od obchodované (Z6) lišila
+o ~275 b na NQ. Od v1.20 se front kontrakt volí podle roll date, ne podle
+nejbližší expirace (<code>GEXLENS_FRONT_ROLL_DAYS</code>, default 8).</p>
 <h3>Playbook: zelený režim (spot NAD flip zónou)</h3>
 <ul>
 <li><strong>LONG:</strong> cena spadne na hranu silné zelené zóny / put wall. Potvrzení: svíčky se zkracují, dolní knoty, CumΔ prodejní tlak zpomaluje nebo diverguje. Vstup od hrany, cíl střed pásma / nejbližší silný strike, <strong>stop kousek POD zelenou zónu</strong> (když brzda selže, nemáš tam co dělat).</li>

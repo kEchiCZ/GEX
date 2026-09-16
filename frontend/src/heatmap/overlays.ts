@@ -1,5 +1,6 @@
 /** Overlaye heatmapy (SPEC 7.2): cenová křivka, sessions, levels, walls — čisté helpery. */
 
+import type { ExpiryMarker } from './expiryMarkers'
 import type { JournalMarker } from './journalMarkers'
 import type { NewsMarker } from './newsMarkers'
 import type { SignalMarker } from './signalMarkers'
@@ -159,6 +160,8 @@ export interface OverlayData {
   newsMarkers?: NewsMarker[]
   /** Značky deníku u horní hrany (#673); prázdné = Traders mode vypnutý. */
   journalMarkers?: JournalMarker[]
+  /** ⌛ kalendář expirací v ose (#1189): roll, kvartální expirace (SOQ), měsíční OPEX, VIX. */
+  expiryMarkers?: ExpiryMarker[]
   /** Šipky signálů na cenové křivce (#295); prázdné = režim OFF. */
   signals?: SignalMarker[]
   levels?: LevelLine[]

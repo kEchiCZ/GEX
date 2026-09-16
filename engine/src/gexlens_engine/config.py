@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     symbols: str = "ES"
     # Strop souběžně běžících instrumentů (market data lines rozpočet, ADR-0001/0003)
     max_instruments: int = Field(default=3, ge=1)
+    # Roll front kontraktu (#1189, ADR-0039): kontrakt je front, dokud má do
+    # expirace VÍC než N dní — CME roll date je 8 dní před expirací a od něj
+    # jsou objem i likvidita v dalším kontraktu (15. 9. 2026: RTH objem na
+    # dobíhajícím ESU6 176 k vs. ~1,07 M týden předtím). 0 = původní chování.
+    front_roll_days: int = Field(default=8, ge=0, le=30)
     # Watchlist z DB se čte každý k-tý minutový cyklus
     watchlist_poll_cycles: int = Field(default=5, ge=1)
     # Ranní OI archiv pokrývá N nejbližších expirací (ΔOI vs. včera potřebuje

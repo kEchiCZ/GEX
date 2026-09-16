@@ -28,6 +28,7 @@ from typing import Any, Protocol
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.compute.settle import settle_ts, trading_session_date
 from gexlens_engine.compute.volregime import percentile_of
 from gexlens_engine.storage.ivrank_store import (
@@ -97,6 +98,8 @@ class IvRankCollector:
     db: Engine
     ib: Any | None = None
     tasty: TastyMetricsLike | None = None
+    # Roll pravidlo front kontraktu (#1189) — shodné s pipeline
+    front_roll_days: int = 8
 
     _evaluated_for: dt.date | None = field(default=None, init=False)
     _ibkr_backfilled: bool = field(default=False, init=False)
@@ -151,13 +154,20 @@ class IvRankCollector:
         details = await asyncio.wait_for(
             self.ib.reqContractDetailsAsync(Future(self.symbol, exchange="CME")), timeout=30.0
         )
-        today = dt.date.today().strftime("%Y%m%d")
+        today = dt.date.today()
         candidates = sorted(
             (item.contract for item in details if item.contract is not None),
             key=lambda contract: str(contract.lastTradeDateOrContractMonth),
         )
         for contract in candidates:
-            if str(contract.lastTradeDateOrContractMonth)[:8] >= today:
+            # Roll pravidlo (#1189): stejný kontrakt jako pipeline, ne dobíhající
+            try:
+                last = dt.datetime.strptime(
+                    str(contract.lastTradeDateOrContractMonth)[:8], "%Y%m%d"
+                ).date()
+            except ValueError:
+                continue
+            if front_contract_eligible(last, today, self.front_roll_days):
                 return contract
         return None
 

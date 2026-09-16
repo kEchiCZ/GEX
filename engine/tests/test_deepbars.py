@@ -3,6 +3,7 @@
 import datetime as dt
 from pathlib import Path
 
+from gexlens_engine.compute.settle import quarterly_expiry
 from gexlens_engine.ibkr.deepbars import (
     CHUNK_CALENDAR_DAYS,
     FetchTask,
@@ -12,7 +13,6 @@ from gexlens_engine.ibkr.deepbars import (
     chunk_tasks,
     existing_days,
     front_windows,
-    quarterly_expiry,
     task_is_covered,
 )
 from gexlens_engine.ibkr.underlying import Bar

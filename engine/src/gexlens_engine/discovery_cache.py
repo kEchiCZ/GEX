@@ -28,7 +28,9 @@ import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.ibkr.discovery import ExpiryInfo
+from gexlens_engine.instruments import expiry_expired
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +59,10 @@ class CachedDiscovery:
     front: FrontFuture
     expiries: tuple[ExpiryInfo, ...]
 
-    def unexpired(self, today: dt.date) -> tuple[ExpiryInfo, ...]:
-        """Expirace, které dnes ještě platí (řazení discovery = podle expirace)."""
-        return tuple(info for info in self.expiries if info.expiry >= today.strftime("%Y%m%d"))
+    def unexpired(self, today: dt.date, now: dt.datetime | None = None) -> tuple[ExpiryInfo, ...]:
+        """Expirace, které dnes ještě platí (řazení discovery = podle expirace);
+        kvartální po SOQ už ne (#1189)."""
+        return tuple(info for info in self.expiries if not expiry_expired(info.expiry, today, now))
 
 
 class DiscoveryCache:
@@ -103,8 +106,16 @@ class DiscoveryCache:
         except OSError as exc:
             logger.warning("Discovery cache %s nejde zapsat: %s", self._path, exc)
 
-    def load(self, symbol: str, *, today: dt.date) -> CachedDiscovery | None:
-        """Záznam symbolu, pokud není starší než MAX_AGE_DAYS a má dnešní expiraci."""
+    def load(
+        self,
+        symbol: str,
+        *,
+        today: dt.date,
+        now: dt.datetime | None = None,
+        front_roll_days: int = 0,
+    ) -> CachedDiscovery | None:
+        """Záznam symbolu, pokud není starší než MAX_AGE_DAYS, má platnou expiraci
+        a front kontrakt je ještě nad roll oknem (#1189)."""
         raw = self._read_all().get(symbol)
         if not isinstance(raw, dict):
             return None
@@ -140,9 +151,14 @@ class DiscoveryCache:
         if (dt.datetime.now(dt.UTC) - stored_at).days > MAX_AGE_DAYS:
             return None
         cached = CachedDiscovery(symbol=symbol, stored_at=stored_at, front=front, expiries=expiries)
-        if not cached.unexpired(today):
+        if not cached.unexpired(today, now):
             return None
-        # Front kontrakt po expiraci je k ničemu — spot by ukazoval mrtvý kontrakt
-        if front.last_trade_date < today.strftime("%Y%m%d"):
+        # Front kontrakt po expiraci nebo po roll date je k ničemu — spot i tok
+        # by šly z mrtvého/dobíhajícího kontraktu (#1189)
+        try:
+            last_trade = dt.datetime.strptime(front.last_trade_date, "%Y%m%d").date()
+        except ValueError:
+            return None
+        if not front_contract_eligible(last_trade, today, front_roll_days):
             return None
         return cached

@@ -78,7 +78,8 @@ def category_of(kind: str) -> str:
         return "setup"
     if kind in OPS_KINDS:
         return "ops"
-    if kind in NEWS_KINDS:
+    # Kalendář expirací (#1189): roll, OPEX týden, SOQ — tržní událost jako zpráva
+    if kind in NEWS_KINDS or kind == "expiry_calendar":
         return "news"
     return "info"
 

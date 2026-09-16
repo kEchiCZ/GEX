@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.19 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.20 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -107,7 +107,7 @@ Obrazovka se skládá z (shora dolů, zleva doprava):
 | **Hlavička — spodní řádek** | **V jakém je to stavu**: **GEX režim badge** (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem; když flip leží **mimo měřené pásmo** — celý Dyn GEX profil je na jedné straně nuly — badge se od v1.13 neztratí, režim se odvodí ze znaménka profilu u spotu a tooltip to přizná, #864), **chip Tendence** (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno"), **chip stavu sentimentu** RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna), **settle watch**, **chip gamma útesu** a vpravo **ukazatele pokrytí dat**, indikátor ● Live / ○ Offline a zvonek notifikací. |
 | **Řádek timeframe** | **Intraday/Daily** a rozlišení **1m, 2m, 3m, 5m, 10m, 15m, 30m, 45m, 1h, 2h, 3h, 4h, 1d**. Intraday agreguje minutová data do zvolených košů (svíčky OHLC, objemy se sčítají); Daily zobrazí sloupec za každý uložený den (roste s historií, max 14 dní). |
 | **Řádek přepínačů** | Dropdown **Dyn plocha** (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18; **výchozí je Dyn GEX** (#837) — modelované gamma pole je hlavní přidaná hodnota nástroje, Off zvol, když chceš jen měřenou mapu). Dropdown **Vrstvy (n)** (v1.16, #1084) — multi-výběr vrstev v grafu: **GEX Levels** (flip/centroid/Max Pain + **OI zdi**, viz kap. 5), **GEX žebřík** (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), **Zdi** (call/put wall linie), **2. zeď** (druhá nejsilnější koncentrace strany, tečkovaně), **FA levels** (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI). Dropdown **Panely (n)** (v1.16, #1084) — multi-výběr spodních panelů v pořadí, jak se kreslí shora dolů: **Vol / Opt Vol / Δ Flow C/P / Evo OI / Cum Δ / Sentiment**; panel Sentiment má vlastní položku, nezávislou na checkboxu News. Závorka u obou dropdownů ukazuje počet zapnutých („žádný“ = nic). Checkboxy přímo v liště: **Sessions** (automatické markery světových seancí), **Vol + OI Δ**, **Projekce**, **News** (markery zpráv) s dropdownem **Vše/Významné** (filtr markerů na importance ≥ 2), dropdown **Signály** (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá. |
-| **Chipy stavu trhu** | **Settle watch** — segment „settle 22:00 · nad/pod X ±d b": klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?" na jeden pohled. **Chip „odpadá X % gammy"** — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. |
+| **Chipy stavu trhu** | **Settle watch** — segment „settle 22:00 · nad/pod X ±d b": klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?" na jeden pohled. **Chip „odpadá X % gammy"** — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. **Chip ⌛ kalendáře expirací** (v1.20, #1189) — jen v kvartálním expiračním týdnu: „roll proběhl 10. 9. · expirace U6 pá 18. 9. 15:30", „OPEX týden", „kvartální expirace U6 dnes 15:30 (SOQ)", „po OPEXu — bez opční podpory"; tooltip vysvětluje, co fáze znamená. Stejné ⌛ jsou v ose grafu (jako TradingView) a v Briefingu je karta **Expirační týden**. |
 | **Ukazatele pokrytí dat** | Tři drobné proužky **Greeks**, **OI** a **OHLC** s podílem „kolik z kolika". Zelený = úplné, žlutý = díra (část striků čeká na dopočet, nebo chybí svíčky), **ztlumený s pomlčkou = hodnotu teď nelze změřit** (typicky odpojené IBKR nebo pár vteřin po startu). Prvky **nemizí** — ukazatel, který zmizí, vypadá jako rozbité rozhraní, ne jako chybějící data. |
 | **Přepínač OI** | **Měřené / FA odhad** — zdroj Open Interest pro heatmapu i profil (persistováno per symbol, default Měřené). FA odhad = OI dopočtené z klasifikovaného toku (netflow×α): k dispozici dřív než publikovaný archiv, ale je to odhad — při pochybnosti věř Měřeným. FA má i vlastní Dyn GEX plochu v dropdownu Dyn plocha a vlastní FA levels. |
 | **Lišta grafu** | **Mode** (7 metrik heatmapy), **Scale** (Linear/√/Log/Pow⅓), **Walls** (Off/Peak/Center/Smooth/Flip/Ridge vše/Ridge dominantní), Styl (Gradient/Blobs), Contours (Off/Major/All), **Cena** (Svíčky/Křivka) + **Viditelnost**, nástroje anotací + barva, **⧉ Rozsah** a **Preset…** (kap. 8b), tlačítko **✦ Čistý pohled** (níže), indikátor zdroje dat, tlačítko **⏮ Replay**. |
@@ -1610,6 +1610,29 @@ V aplikaci jsou dva flipy — **obě čáry měří totéž dvěma metodami**:
 | **Dynamický flip** | pravý panel (+ rozhraní barev v Dyn GEX mapě) | žlutá čárkovaná (slabší) | nula Black-Scholes modelu na jemnější mřížce — hladší odhad „teď" |
 
 **Rozdíl obou čar ber jako flip ZÓNU.** Blízko sebe = ostrá hranice režimů, signály čitelné. Rozjeté = hranice rozmazaná → **uvnitř zóny neobchoduj**, čekej, až cena opustí celé pásmo.
+
+### Kvartální expirační týden — roll, OPEX, SOQ (v1.20, #1189)
+
+Třikrát… čtyřikrát do roka (3. pátek března, června, září a prosince) se
+trh chová jinak než jindy a aplikace to od v1.20 ví:
+
+| Kdy | Co se děje | Co ukazuje aplikace |
+|---|---|---|
+| **Roll date** — čtvrtek 8 dní před expirací (CME) | Objem a likvidita přecházejí do dalšího kontraktu (U6 → Z6). Starý kontrakt dobíhá: drží ho hedgeři AM-settled SPX opcí a ti, kdo chtějí cash settlement. | Engine od tohoto dne jede **na novém kontraktu** (bary, CumΔ, spot, řetěz) — cena v grafu sedí s tím, co obchoduješ na MES/MNQ. Chip ⌛ „roll proběhl", ⌛ v ose, alert. |
+| **OPEX týden** (po–čt) | Cena tažená hedgingem dealerů, ne náladou: nad flipem long gamma = lepení ke strikům a stlačená volatilita, pod flipem short gamma = vzduchové kapsy a ostré odrazy. Ve středu ráno expiruje VIX (odejde gamma tlumící VIX); FOMC v tomto týdnu dopadá na trh s plnou opční pozicí. | Chip ⌛ „OPEX týden", karta **Expirační týden** v Briefingu se scénářem A (špatná nálada) / B (dobrá nálada) a tím, co sledovat. **Sentiment ber v OPEX týdnu jako šum.** |
+| **Pátek 9:30 ET (15:30 CEST) — SOQ** | Kvartální futures a kvartální opce se vypořádají z **otevíracích cen všech 500 akcií** (Special Opening Quotation) — velká část „witchingu" proběhne ráno, ne odpoledne. Open bývá rozhozený proti noční ceně futures. | Odpočet v hlavičce míří na 9:30 ET, ne 16:00 ET. Po SOQ engine přepne na další expiraci (už na novém kontraktu). Alert „kvartální expirace proběhla". |
+| **Pátek odpoledne / close** | Tichý drift k velkým strikům (pinning); v 16:00 ET expirují akciové opce, SPY, SPXW a probíhá kvartální rebalance S&P 500 — objemově největší den kvartálu. | Forward GEX ukazuje strukturu **po** expiraci (dnešní OI minus to, co odpadne); chip „odpadá X % gammy". |
+| **Pondělí po** | Bez opční podpory: put wall, který držel, zmizel; trh, který do OPEXu trendoval, se zastaví nebo obrátí; týden po zářijové expiraci je sezónně jeden z nejslabších. Nálada se do ceny propisuje až teď. | Chip ⌛ „po OPEXu — bez opční podpory". |
+
+**Dvě čísla, která rozhodují:** flip / put wall (zlom režimu) a dno negativní
+gamma zóny pod ním. Směr po expiraci = kombinace toho, co udělá Fed, a kde
+vůči flipu trh v pátek zavře.
+
+**Proč to není jen zajímavost.** 15. 9. 2026 jel engine ještě na dobíhajícím
+ESU6: RTH objem na sledovaném kontraktu spadl z ~1,07 M (11. 9.) na 176 k,
+tisky 1/min — a úrovně byly v ceně, která se od obchodované (Z6) lišila
+o ~275 b na NQ. Od v1.20 se front kontrakt volí podle roll date, ne podle
+nejbližší expirace (`GEXLENS_FRONT_ROLL_DAYS`, default 8).
 
 ### Playbook: zelený režim (spot NAD flip zónou)
 

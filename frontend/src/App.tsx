@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { alignSeriesToLabels, signalGateInfo } from './api/news'
 import type { NewsRow } from './api/news'
+import { axisDatesOf, buildExpiryMarkers } from './heatmap/expiryMarkers'
 import { buildNewsMarkers, significantOnly } from './heatmap/newsMarkers'
 import type { NewsMarker } from './heatmap/newsMarkers'
 import { buildJournalMarkers } from './heatmap/journalMarkers'
@@ -92,6 +93,7 @@ import { useHistoryBars } from './hooks/useHistoryBars'
 import { sliceGrid, sliceOverlays, slicePanels, sliceSeries } from './replay/slice'
 import { useAggregateProfile } from './replay/useAggregateProfile'
 import { EMPTY_LIVE, minuteLabel, useDayData } from './replay/useDayData'
+import { useExpiryCalendar } from './components/ExpiryPhaseChip'
 import { usePlayback } from './replay/usePlayback'
 import { AppStateProvider, INTERVAL_MINUTES, useAppState } from './state/AppState'
 import { CrosshairProvider } from './state/Crosshair'
@@ -796,6 +798,15 @@ function MainContent() {
     const format = timeframe === 'daily' ? (iso: string) => dayLabel(iso.slice(0, 10)) : minuteLabel
     return buildJournalMarkers(journalEntries, chartLabels, format)
   }, [tradersMode, journalEntries, chartLabels, timeframe])
+  // ⌛ kalendář expirací v ose (#1189): roll, kvartální expirace (SOQ), VIX,
+  // měsíční OPEX — intraday jen ze dnů, které osa nese; Daily přes celou osu
+  const expiryCalendar = useExpiryCalendar()
+  const expiryMarkers = useMemo(() => {
+    if (expiryCalendar === null) return []
+    const format = timeframe === 'daily' ? (iso: string) => dayLabel(iso.slice(0, 10)) : minuteLabel
+    const axisDates = timeframe === 'daily' ? null : axisDatesOf(day.minutesIso)
+    return buildExpiryMarkers(expiryCalendar.markers, chartLabels, format, axisDates)
+  }, [expiryCalendar, chartLabels, timeframe, day.minutesIso])
   // Shift+klik do plochy (#673): rychlý zápis k minutě pod kurzorem — myšlenka
   // přijde většinou až s odstupem od okamžiku, ✎ u Replay nese jen minutu playbacku
   const handleJournalQuickAdd = useCallback(
@@ -1402,12 +1413,14 @@ function MainContent() {
       newsMarkers,
       // Značky deníku (#673) — jen v Traders mode (memo je bez něj prázdné)
       journalMarkers,
+      // ⌛ kalendář expirací (#1189)
+      expiryMarkers,
       // Šipky signálů (#295): při přetáčení jen ty, co v čase pozice existovaly
       signals: playback.isLive
         ? signalMarkers
         : signalMarkers.filter((signal) => signal.minuteIdx <= playback.position),
     }),
-    [baseOverlays, computedWalls, setupLines, ladderLines, emLines, refLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, journalMarkers, signalMarkers, playback.isLive, playback.position, cleanView.active], // prettier-ignore
+    [baseOverlays, computedWalls, setupLines, ladderLines, emLines, refLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, journalMarkers, expiryMarkers, signalMarkers, playback.isLive, playback.position, cleanView.active], // prettier-ignore
   )
 
   if (view === 'dashboard') {

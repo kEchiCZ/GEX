@@ -28,6 +28,7 @@ from gexlens_engine.adapters import (
 )
 from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import outside_us_rth
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
@@ -41,6 +42,7 @@ from gexlens_engine.discovery_cache import (
     FrontFuture,
 )
 from gexlens_engine.emrespect import EmRespectCollector
+from gexlens_engine.expiry_alerts import ExpiryCalendarAlerts
 from gexlens_engine.gammacliff import GammaCliffCollector
 from gexlens_engine.ibkr.account import classify_accounts
 from gexlens_engine.ibkr.connection import (
@@ -225,8 +227,13 @@ def _contract_from_cache(front: FrontFuture) -> Contract:
     )
 
 
-async def _resolve_front_future(ib: IB, symbol: str) -> Contract:
-    """Front futures kontrakt podkladu; timeout + omezený retry (sec-def farm výpadky)."""
+async def _resolve_front_future(ib: IB, symbol: str, *, front_roll_days: int = 0) -> Contract:
+    """Front futures kontrakt podkladu; timeout + omezený retry (sec-def farm výpadky).
+
+    Roll pravidlo (#1189, ADR-0039): kontrakt musí mít do expirace víc než
+    `front_roll_days` dní — od CME roll date je front ten další.
+    """
+    today = dt.datetime.now(dt.UTC).date()
     for attempt in range(3):
         try:
             details = await asyncio.wait_for(
@@ -242,6 +249,22 @@ async def _resolve_front_future(ib: IB, symbol: str) -> Contract:
         ]
         if contracts:
             contracts.sort(key=lambda c: c.lastTradeDateOrContractMonth)
+            for contract in contracts:
+                try:
+                    last_trade = dt.datetime.strptime(
+                        str(contract.lastTradeDateOrContractMonth)[:8], "%Y%m%d"
+                    ).date()
+                except ValueError:
+                    continue
+                if front_contract_eligible(last_trade, today, front_roll_days):
+                    logger.info(
+                        "Front future %s: %s (expirace %s, roll okno %d d)",
+                        symbol,
+                        contract.localSymbol,
+                        last_trade,
+                        front_roll_days,
+                    )
+                    return contract
             return contracts[0]
         await asyncio.sleep(5)
     raise InstrumentSetupError(
@@ -688,7 +711,16 @@ async def create_pipeline(
     # do cache a IBKR subskripce se založí až v `resubscribe` po reconnectu
     ib_connected = ib.isConnected()
     if not ib_connected:
-        cached = discovery_cache.load(symbol, today=today) if discovery_cache else None
+        cached = (
+            discovery_cache.load(
+                symbol,
+                today=today,
+                now=dt.datetime.now(dt.UTC),
+                front_roll_days=settings.front_roll_days,
+            )
+            if discovery_cache
+            else None
+        )
         if cached is None:
             raise InstrumentSetupError(
                 f"{symbol}: IBKR odpojeno a bez cache discovery není z čeho pipeline založit"
@@ -697,9 +729,20 @@ async def create_pipeline(
         front = _contract_from_cache(cached.front)
     else:
         try:
-            front = await _resolve_front_future(ib, symbol)
+            front = await _resolve_front_future(
+                ib, symbol, front_roll_days=settings.front_roll_days
+            )
         except InstrumentSetupError as exc:
-            cached = discovery_cache.load(symbol, today=today) if discovery_cache else None
+            cached = (
+                discovery_cache.load(
+                    symbol,
+                    today=today,
+                    now=dt.datetime.now(dt.UTC),
+                    front_roll_days=settings.front_roll_days,
+                )
+                if discovery_cache
+                else None
+            )
             if cached is None:
                 raise
             degraded_reasons.append(f"discovery podkladu ({exc})")
@@ -914,7 +957,12 @@ async def create_pipeline(
         discovery_cache.store(_front_to_cache(front, symbol), infos)
     if not infos:
         if cached is None and discovery_cache is not None:
-            cached = discovery_cache.load(symbol, today=today)
+            cached = discovery_cache.load(
+                symbol,
+                today=today,
+                now=dt.datetime.now(dt.UTC),
+                front_roll_days=settings.front_roll_days,
+            )
         if cached is None:
             _cancel_quietly(ib, front)
             raise InstrumentSetupError(f"{symbol}: žádný FOP řetězec na {front.exchange}")
@@ -1210,6 +1258,7 @@ async def create_pipeline(
                 db=db,
                 ib=ib,
                 tasty=tasty_metrics,
+                front_roll_days=settings.front_roll_days,
             )
             if iv_rank_repository is not None and db is not None
             else None
@@ -1482,7 +1531,14 @@ async def main() -> None:
         """
         if tasty_spot_lookup is None:
             return False
-        if discovery_cache.load(symbol, today=dt.datetime.now(dt.UTC).date()) is None:
+        if (
+            discovery_cache.load(
+                symbol,
+                today=dt.datetime.now(dt.UTC).date(),
+                front_roll_days=settings.front_roll_days,
+            )
+            is None
+        ):
             return False
         price, fresh = tasty_spot_lookup(symbol)
         return price is not None and fresh
@@ -1607,7 +1663,7 @@ async def main() -> None:
                 refresh_token=settings.tasty_refresh_token,
             )
         )
-        symbol_map = SymbolMap(tasty_session)
+        symbol_map = SymbolMap(tasty_session, front_roll_days=settings.front_roll_days)
         tasty_cache = TastyChainCache()
         # Recorder surových opčních printů (#795): učicí data, která jinak
         # nenávratně mizí. Fan-out callbacku — cache i recorder vidí tytéž eventy.
@@ -2469,6 +2525,8 @@ async def main() -> None:
     # Hlídka paměti (#1105): RSS každých 10 min do logu, do /status vždy;
     # tracemalloc jen s GEXLENS_MEMORY_TRACE=1 (drahé, na dobu hledání viníka)
     memory_watch = MemoryWatch.from_env("engine", logger)
+    # Alerty kalendáře expirací (#1189): roll, OPEX týden, SOQ — jednou za událost
+    calendar_alerts = ExpiryCalendarAlerts()
 
     async def release_cooldown_after_reconnect() -> None:
         """Po reconnectu se setup zkusí hned (#455).
@@ -2597,7 +2655,7 @@ async def main() -> None:
         # Denní roll expirace (0DTE): vypršelou pipeline zastavit — plán ji založí
         # znovu a discovery vybere novou nejbližší expiraci
         for symbol in list(pipelines):
-            if expiry_expired(pipelines[symbol].runtime.expiry, now.date()):
+            if expiry_expired(pipelines[symbol].runtime.expiry, now.date(), now):
                 logger.info(
                     "Expirace %s pipeline %s vypršela — roll na novou",
                     pipelines[symbol].runtime.expiry,
@@ -2773,6 +2831,10 @@ async def main() -> None:
                             "ts": now.timestamp(),
                         },
                     )
+            try:
+                await calendar_alerts.on_minute(now, publisher)
+            except Exception:
+                logger.exception("Alert kalendáře expirací selhal — cyklus jede dál")
             memory_watch.sample()
             await publisher.status(
                 engine="online",
