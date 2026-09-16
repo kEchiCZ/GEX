@@ -24,6 +24,7 @@ from gexlens_engine.compute.coach_setups import (
     setups_report,
     time_of_day_profile,
 )
+from gexlens_engine.compute.coach_summary import coach_summary
 from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setups import SetupParams
 
@@ -109,6 +110,18 @@ def build_coach_router(
         since = until - dt.timedelta(days=max(1, min(days, 365)))
         rows = setups_reader(since, until, symbol or None)
         return [s for s in (setup_from_row(row) for row in rows) if s is not None]
+
+    @router.get("/summary")
+    def summary(symbol: str | None = None, days: int = 60) -> dict[str, Any]:
+        """Shrnutí kouče: týden (deník), okna dne (obchody i setupy), doporučení
+        pro setupy → 4–6 vět + „na co si dnes dát pozor" (Briefing)."""
+        weekly_payload = weekly(None, symbol)
+        hours_payload = hours(days, symbol)
+        setups_payload = setups(days, symbol)
+        result = coach_summary(weekly_payload, hours_payload, setups_payload)
+        result["symbol"] = symbol
+        result["days"] = days
+        return result
 
     @router.get("/setups")
     def setups(days: int = 60, symbol: str | None = None) -> dict[str, Any]:

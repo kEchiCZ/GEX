@@ -45,6 +45,7 @@ import { fetchScenarios } from '../api/scenarios'
 import { contractCode, nextContractCode, shortDate } from '../api/calendar'
 import type { ExpiryPhase } from '../api/calendar'
 import { useExpiryCalendar } from './ExpiryPhaseChip'
+import { CoachWatchCard } from './CoachWatchCard'
 import type { Scenario } from '../api/scenarios'
 import { ScenarioCard } from './ScenarioCard'
 import { TIMEFRAME_LABELS, assessTrends, directionLabel } from '../instrument/trend'
@@ -374,6 +375,8 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
         {/* Shrnutí dne (#1090, ADR-0035): trend a směr, úrovně obratu, zprávy dne
         s očekávanou reakcí, verdikt hlasováním s vypsanými důvody. Heuristika —
         proto se verdikt ukládá a vyhodnocuje (#1091). */}
+        {/* Kouč (#1201): pravidla a okna dne před openem */}
+        <CoachWatchCard symbol={symbol} />
         {/* Expirační týden (#1189): jen v roll/OPEX/SOQ/post fázi */}
         <ExpiryWeekCard />
         <Card title="Scénář dne">

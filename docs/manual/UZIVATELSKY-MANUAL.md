@@ -1655,6 +1655,12 @@ hour · Posledních 30 min · Po close) s Ø R, n, úspěšností a Σ R, nejlep
 zeleně, nejhorší červeně; okna pod 20 vzorků jsou označená jako malý vzorek.
 Hodiny se počítají v pražském čase.
 
+**Shrnutí kouče.** Nahoře v panelu Kouč (Deník) je 4–6 vět složených jen
+z čísel: týden (obchody, Σ R, úspěšnost, disciplína), nejdražší chyba, tvoje
+nejlepší/nejhorší okno dne, okna setupů detektoru a hlavní doporučení pro
+setupy. V **Briefingu** je ráno karta **🎓 Kouč — na co si dnes dát pozor**:
+1–4 body (pravidla z týdenního reportu, prodělečné okno dne, setup k vypnutí).
+
 ### Paper účet v aplikaci — fáze 1 (v1.20, #1187, ADR-0040)
 
 Trénink obchodování bez brokera: ordery se zadávají do aplikace, fily

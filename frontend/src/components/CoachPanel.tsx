@@ -5,12 +5,19 @@ import { useEffect, useState } from 'react'
 import {
   fetchCoachHours,
   fetchCoachReview,
+  fetchCoachSummary,
   fetchCoachWeekly,
   formatR,
   rankedWindows,
   scoreTone,
 } from '../api/coach'
-import type { CoachDaily, CoachHours, CoachTimeProfile, CoachWeekly } from '../api/coach'
+import type {
+  CoachDaily,
+  CoachHours,
+  CoachSummary,
+  CoachTimeProfile,
+  CoachWeekly,
+} from '../api/coach'
 
 /** Tabulka segmentů seance s Ø R — nejlepší/nejhorší okno zvýrazněné (#1201). */
 function TimeTable({
@@ -74,6 +81,7 @@ export function CoachPanel({
   const [daily, setDaily] = useState<CoachDaily | null>(null)
   const [weekly, setWeekly] = useState<CoachWeekly | null>(null)
   const [hours, setHours] = useState<CoachHours | null>(null)
+  const [summary, setSummary] = useState<CoachSummary | null>(null)
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
@@ -82,11 +90,13 @@ export function CoachPanel({
       fetchCoachReview(date || undefined, symbol || undefined),
       fetchCoachWeekly(date || undefined, symbol || undefined),
       fetchCoachHours(60, symbol || undefined),
-    ]).then(([review, report, timeProfile]) => {
+      fetchCoachSummary(symbol || undefined),
+    ]).then(([review, report, timeProfile, overview]) => {
       if (cancelled) return
       setDaily(review)
       setWeekly(report)
       setHours(timeProfile)
+      setSummary(overview)
       setLoaded(true)
     })
     return () => {
@@ -106,6 +116,13 @@ export function CoachPanel({
           </span>
         )}
       </h3>
+      {summary && summary.lines.length > 0 && (
+        <ul className="coach-overview" data-testid="coach-overview">
+          {summary.lines.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
       {daily === null ? (
         <p className="muted">Kouč není dostupný (API).</p>
       ) : (

@@ -2719,6 +2719,20 @@ tr.setup-shadow td[data-part='risk'] {
   color: #f0c36d;
 }
 
+.coach-overview {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+}
+
+.coach-overview li {
+  margin-bottom: 2px;
+}
+
+.briefing-coach ol {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
 .coach-time-table {
   border-collapse: collapse;
   font-size: 12px;
