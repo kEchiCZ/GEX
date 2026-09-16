@@ -106,3 +106,20 @@ def test_setups_a_hours() -> None:
     hours = client.get("/coach/hours").json()
     assert hours["setups"]["n"] == 30 and hours["trades"]["n"] == 1
     assert hours["setups"]["segments"]["open30"]["n"] == 30
+
+
+def test_summary_sklada_vety() -> None:
+    app = FastAPI()
+    app.include_router(
+        build_coach_router(
+            lambda since, until: [_row(1)],
+            _bars,
+            SetupParams,
+            lambda since, until, symbol: [],
+            now=lambda: NOW,
+        )
+    )
+    client = TestClient(app)
+    summary = client.get("/coach/summary").json()
+    assert summary["lines"][0].startswith("Tento týden 1 obchodů")
+    assert summary["watch"] and summary["days"] == 60

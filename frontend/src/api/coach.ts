@@ -110,6 +110,29 @@ export interface CoachSetupsReport {
   recommendations: CoachRecommendation[]
 }
 
+export interface CoachSummary {
+  lines: string[]
+  /** Na co si dnes dát pozor — pravidla a okna (Briefing). */
+  watch: string[]
+  symbol: string | null
+  days: number
+}
+
+function isSummary(value: unknown): value is CoachSummary {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as CoachSummary).lines) &&
+    Array.isArray((value as CoachSummary).watch)
+  )
+}
+
+export function fetchCoachSummary(symbol?: string, days = 60): Promise<CoachSummary | null> {
+  const params = new URLSearchParams({ days: String(days) })
+  if (symbol) params.set('symbol', symbol)
+  return getJson(`${API_BASE}/coach/summary?${params.toString()}`, isSummary)
+}
+
 function isHours(value: unknown): value is CoachHours {
   return (
     typeof value === 'object' &&
