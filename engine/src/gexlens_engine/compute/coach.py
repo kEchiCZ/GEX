@@ -17,9 +17,9 @@ Katalog příznaků v1 (měřitelné z dat, viz #1187 bod 4):
 | `after_brake` | vstup po dosažení denní brzdy (jen ruční obchody — paper blokuje) |
 | `overtrading` | víc obchodů za seanci než práh (default 4) |
 | `big_loss` | realizované R pod −1,2 (stop nedodržen / posunut) |
+| `stop_moved` | stop posunutý dál od entry (historie změn paper orderu) |
 
-Posun stopu a zvětšování po sérii výher přijdou, až paper ordery ponesou
-historii změn (fáze 4).
+Zvětšování po sérii výher přijde s fází 5.
 """
 
 import datetime as dt
@@ -37,6 +37,7 @@ PENALTIES: dict[str, int] = {
     "after_brake": 25,
     "revenge": 15,
     "big_loss": 15,
+    "stop_moved": 20,
     "no_setup": 10,
     "low_rr": 10,
     "early_exit": 10,
@@ -52,6 +53,7 @@ FLAG_LABELS: dict[str, str] = {
     "after_brake": "vstup po dosažení denní brzdy",
     "overtrading": "příliš mnoho obchodů za seanci",
     "big_loss": "ztráta nad plánované riziko (stop nedodržen)",
+    "stop_moved": "stop posunutý dál od entry",
 }
 
 ADVICE: dict[str, str] = {
@@ -64,6 +66,8 @@ ADVICE: dict[str, str] = {
     "after_brake": "Po denní brzdě (−3 R) den končí; nové obchody až zítra.",
     "overtrading": "Max 4 obchody za seanci; pátý je skoro vždy horší než první.",
     "big_loss": "Stop se nepřesouvá dál; ztráta přes −1,2 R znamená, že plán nebyl dodržen.",
+    "stop_moved": "Stop se po vstupu jen přitahuje, nikdy neposouvá dál — "
+    "širší stop = setup bez struktury.",
 }
 
 
@@ -104,6 +108,8 @@ class Trade:
     r_multiple: float | None = None
     day_r_at_entry: float | None = None
     tags: tuple[str, ...] = ()
+    #: Body, o které se stop posunul dál od entry (paper historie změn, #1187 fáze 4)
+    stop_widened_points: float | None = None
 
     @property
     def sign(self) -> float:
@@ -187,6 +193,7 @@ def trade_from_journal(row: dict[str, Any]) -> Trade | None:
         r_multiple=num(context.get("r_multiple")),
         day_r_at_entry=num(context.get("day_r_at_entry")),
         tags=tags,
+        stop_widened_points=num(context.get("stop_widened_points")),
     )
 
 
@@ -282,6 +289,14 @@ def review_trade(
     if realized is not None and realized < params.big_loss_r:
         flags.append(
             Flag("big_loss", f"realizováno {realized:+.2f} R (stop = −1 R)", realized + 1.0)
+        )
+    if trade.stop_widened_points is not None and trade.stop_widened_points > 0:
+        flags.append(
+            Flag(
+                "stop_moved",
+                f"stop posunut o {trade.stop_widened_points:g} b dál od entry",
+                realized if realized is not None and realized < 0 else None,
+            )
         )
     if trade.day_r_at_entry is not None and trade.day_r_at_entry <= -params.daily_brake_r:
         flags.append(

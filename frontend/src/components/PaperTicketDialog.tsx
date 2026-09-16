@@ -7,16 +7,20 @@ import type { PlaybookItem } from '../api/journal'
 import { maxContracts, placePaperOrder, rewardRisk, riskUsd } from '../api/paper'
 import type { PaperAccount, PaperOrderType, PaperSide } from '../api/paper'
 import { pointValue } from '../instrument/tick'
+import { loadJournalContext } from '../journal/context'
 
 export function PaperTicketDialog({
   symbol,
   account,
   spot,
+  expiry = null,
   onPlaced,
   onCancel,
 }: {
   symbol: string
   account: PaperAccount
+  /** Vybraná expirace — pro snímek kontextu (úrovně řetězu) do deníku. */
+  expiry?: string | null
   /** Aktuální cena — výchozí entry; null = ticket bez předvyplnění. */
   spot: number | null
   onPlaced: () => void
@@ -212,22 +216,37 @@ export function PaperTicketDialog({
             if (entryValue === null || stopValue === null) return
             setBusy(true)
             setError(null)
-            void placePaperOrder({
+            // Snímek kontextu jako u ručního záznamu deníku (#711/#932): režim,
+            // flip/zdi, tendence, seance — do orderu a přes něj do deníku
+            void loadJournalContext({
               symbol,
-              side,
-              qty,
-              order_type: orderType,
-              entry_price: entryValue,
-              stop_price: stopValue,
-              target_price: targetValue,
-              setup_key: setupKey || null,
-              note: note.trim() || null,
-              context: { spot_at_ticket: spot },
-            }).then((result) => {
-              setBusy(false)
-              if (result.ok) onPlaced()
-              else setError(result.error)
+              expiry,
+              tsRef: new Date().toISOString(),
+              profile: 'futures',
             })
+              .catch(() => null)
+              .then((journalContext) =>
+                placePaperOrder({
+                  symbol,
+                  side,
+                  qty,
+                  order_type: orderType,
+                  entry_price: entryValue,
+                  stop_price: stopValue,
+                  target_price: targetValue,
+                  setup_key: setupKey || null,
+                  note: note.trim() || null,
+                  context: {
+                    spot_at_ticket: spot,
+                    ...((journalContext as unknown as Record<string, unknown> | null) ?? {}),
+                  },
+                }),
+              )
+              .then((result) => {
+                setBusy(false)
+                if (result.ok) onPlaced()
+                else setError(result.error)
+              })
           }}
         >
           {busy ? 'Podávám…' : `Podat ${side.toUpperCase()} ${qty}×`}

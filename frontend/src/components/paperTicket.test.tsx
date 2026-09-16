@@ -99,8 +99,10 @@ test('ticket předvyplní entry ze spotu, spočítá max kontrakty a podá order
   fireEvent.change(screen.getByLabelText('Setup'), { target: { value: 'failed_break' } })
   fireEvent.click(screen.getByTestId('paper-submit'))
   await waitFor(() => expect(onPlaced).toHaveBeenCalled())
-  expect(calls[0].url).toContain('/paper/orders')
-  expect(calls[0].body).toMatchObject({
+  // Před podáním se stáhne snímek kontextu (#932) — order je poslední volání
+  const placed = calls.find((call) => call.url.includes('/paper/orders'))
+  expect(placed).toBeDefined()
+  expect(placed?.body).toMatchObject({
     symbol: 'ES',
     side: 'long',
     qty: 1,

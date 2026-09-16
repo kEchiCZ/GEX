@@ -1821,6 +1821,7 @@ function MainContent() {
           symbol={symbol}
           account={paperAccount}
           spot={paperSpot.last}
+          expiry={selectedExpiry}
           onPlaced={() => {
             setPaperTicket(false)
             refreshPaper()
