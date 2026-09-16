@@ -100,6 +100,21 @@ class MinuteTally:
         return self.ibkr_only_dead / self.contracts
 
     @property
+    def ibkr_dead_among_tasty_fresh(self) -> float:
+        """Podíl kontraktů s mrtvým IBKR mezi těmi, které tasty čerstvě má (#1195).
+
+        Jmenovatel bez „obojí mrtvé": při zamrznutí IBKR (souběh s mobilem,
+        error 10197) mlčí IBKR na 100 % kontraktů, ale `ibkr_dead_share`
+        ukáže jen tasty pokrytí řetězu (16. 9. 2026: 67,8 % < práh 70 %) —
+        fallback se nespustil a graf stál. Tahle míra říká „z toho, co záloha
+        umí dodat, kolik IBKR nedodává".
+        """
+        pool = self.ibkr_only_dead + self.both_fresh
+        if pool <= 0:
+            return 0.0
+        return self.ibkr_only_dead / pool
+
+    @property
     def tasty_dead_share(self) -> float:
         if self.contracts <= 0:
             return 0.0
@@ -189,7 +204,15 @@ class CrossCheckDetector:
                 f"Sledováno jen {tally.contracts} kontraktů — na výrok je to málo",
             )
 
-        if tally.ibkr_dead_share >= self._share_threshold:
+        # Zamrzlé IBKR při částečném pokrytí zálohou (#1195): IBKR se nehýbe
+        # (změny pod prahem živého trhu) a mezi kontrakty, které tasty čerstvě
+        # má, mlčí nad prahem — i když přes celý řetěz je podíl pod 70 %
+        frozen = (
+            tally.ibkr_dead_among_tasty_fresh >= self._share_threshold
+            and tally.ibkr_changed_share < self._change_threshold
+            and tally.ibkr_only_dead >= self._min_contracts
+        )
+        if tally.ibkr_dead_share >= self._share_threshold or frozen:
             self._ibkr_streak += 1
             self._tasty_streak = 0
             self._backup_streak = 0
