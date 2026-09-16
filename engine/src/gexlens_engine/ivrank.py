@@ -169,6 +169,11 @@ class IvRankCollector:
                 continue
             if front_contract_eligible(last, today, self.front_roll_days):
                 return contract
+        # Nic nad roll oknem (sec-def vrátil jen dobíhající kontrakt) → nejbližší
+        # nepropadlý, stejně jako pipeline; None jen bez použitelného kontraktu
+        for contract in candidates:
+            if str(contract.lastTradeDateOrContractMonth)[:8] >= today.strftime("%Y%m%d"):
+                return contract
         return None
 
     async def _collect_ibkr(self, now: dt.datetime, session: dt.date) -> None:
