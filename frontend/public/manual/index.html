@@ -2033,9 +2033,17 @@ MFE/MAE, výsledek v R i $ — a je tak vstupem kouče.</li>
 odpověď říká proč a kolik kontraktů by prošlo. Jedna pozice/order na
 symbol, vše denní (v settle se pozice zavřou). Kill switch zavře vše
 a zablokuje nové ordery, dokud ho neodblokuješ.</p>
-<p>Ve fázi 1 se ordery zadávají přes API (<code>POST /paper/orders</code>, viz admin
-manuál); <strong>order ticket přímo v grafu, karta pozice a kill switch v UI
-jsou fáze 2</strong> (#1187).</p>
+<p><strong>Ovládání (fáze 2):</strong> tlačítko <strong>⚡ Order</strong> v liště grafu otevře ticket
+nad grafem — LONG/SHORT, typ (limit / market / stop-průraz), entry
+(předvyplněný aktuální cenou), stop a cíl (výchozí −10/+20 b ES, −25/+50 b
+NQ), počet kontraktů se dopočítá z rozpočtu (ukáže „riziko X $ · max N ks
+· RRR&quot;), setup z playbooku a poznámka. Nad rozpočtem nebo při brzdě je
+tlačítko Podat zakázané s důvodem; odmítnutí serverem se vypíše. V hlavičce
+je <strong>chip 📒 paper účtu</strong>: equity, R dne, brzda/KILL, pozice nebo čekající
+order aktuálního symbolu s tlačítkem <strong>✕ Zavřít/Zrušit</strong> (provede se na
+open dalšího baru) a tlačítko <strong>KILL</strong> (zavře vše, zablokuje nové; pak
+„Odblokovat&quot;). Entry/stop/cíl otevřeného orderu se kreslí v grafu jako
+čárkované čáry (bílá/červená/zelená).</p>
 <h3>Kvartální expirační týden — roll, OPEX, SOQ (v1.20, #1189)</h3>
 <p>Třikrát… čtyřikrát do roka (3. pátek března, června, září a prosince) se
 trh chová jinak než jindy a aplikace to od v1.20 ví:</p>

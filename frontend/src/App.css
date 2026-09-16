@@ -2667,6 +2667,52 @@ tr.setup-shadow td[data-part='risk'] {
   white-space: nowrap;
 }
 
+/* Paper účet (#1187): chip s equity/R dne, pozice a kill switch */
+.paper-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.paper-chip.paper-up > .muted {
+  color: #7fd9a8;
+}
+
+.paper-chip.paper-down > .muted {
+  color: #e39a9a;
+}
+
+.paper-chip.paper-braked > .muted,
+.paper-chip.paper-halted > .muted {
+  color: #f0c36d;
+  font-weight: 600;
+}
+
+.paper-position {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--bg-chip);
+}
+
+.paper-chip .chip {
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.paper-chip .paper-kill {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+.paper-ticket select {
+  flex: 1;
+}
+
 /* Kalendář expirací (#1189): šedý chip ⌛ jako TradingView; v den expirace výraznější */
 .expiry-phase-chip {
   font-size: 12px;

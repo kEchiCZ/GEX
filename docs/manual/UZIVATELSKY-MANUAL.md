@@ -1628,9 +1628,17 @@ odpověď říká proč a kolik kontraktů by prošlo. Jedna pozice/order na
 symbol, vše denní (v settle se pozice zavřou). Kill switch zavře vše
 a zablokuje nové ordery, dokud ho neodblokuješ.
 
-Ve fázi 1 se ordery zadávají přes API (`POST /paper/orders`, viz admin
-manuál); **order ticket přímo v grafu, karta pozice a kill switch v UI
-jsou fáze 2** (#1187).
+**Ovládání (fáze 2):** tlačítko **⚡ Order** v liště grafu otevře ticket
+nad grafem — LONG/SHORT, typ (limit / market / stop-průraz), entry
+(předvyplněný aktuální cenou), stop a cíl (výchozí −10/+20 b ES, −25/+50 b
+NQ), počet kontraktů se dopočítá z rozpočtu (ukáže „riziko X $ · max N ks
+· RRR"), setup z playbooku a poznámka. Nad rozpočtem nebo při brzdě je
+tlačítko Podat zakázané s důvodem; odmítnutí serverem se vypíše. V hlavičce
+je **chip 📒 paper účtu**: equity, R dne, brzda/KILL, pozice nebo čekající
+order aktuálního symbolu s tlačítkem **✕ Zavřít/Zrušit** (provede se na
+open dalšího baru) a tlačítko **KILL** (zavře vše, zablokuje nové; pak
+„Odblokovat"). Entry/stop/cíl otevřeného orderu se kreslí v grafu jako
+čárkované čáry (bílá/červená/zelená).
 
 ### Kvartální expirační týden — roll, OPEX, SOQ (v1.20, #1189)
 

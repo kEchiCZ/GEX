@@ -30,6 +30,8 @@ import { StatusBar } from './components/StatusBar'
 import { BottomPanels, PANEL_HEIGHT_MAX, PANEL_HEIGHT_MIN } from './components/BottomPanels'
 import type { PanelKey } from './components/BottomPanels'
 import { PlaybackBar } from './components/PlaybackBar'
+import { PaperTicketDialog } from './components/PaperTicketDialog'
+import { usePaperAccount } from './hooks/usePaperAccount'
 import { ScenarioDialog } from './components/ScenarioDialog'
 import type { ScenarioDraft } from './components/ScenarioDialog'
 import {
@@ -611,6 +613,10 @@ function MainContent() {
     image: string | null
   } | null>(null)
   const [scenarioBusy, setScenarioBusy] = useState(false)
+  // Paper účet (#1187 fáze 2): ticket nad grafem + čáry orderu v grafu
+  const [paperTicket, setPaperTicket] = useState(false)
+  const { account: paperAccount, refresh: refreshPaper } = usePaperAccount()
+  const { priceInfo: paperSpot } = useAppState()
   const [scenarioError, setScenarioError] = useState<string | null>(null)
   const [scenarioToast, setScenarioToast] = useState<string | null>(null)
   // Otevřené scénáře dne (auto i ruční) — kreslí se živě do heatmapy; obnova
@@ -865,6 +871,39 @@ function MainContent() {
     viewDate,
     tradersMode && timeframe === 'intraday',
   )
+  // Čáry paper orderu symbolu (#1187): entry bíle, stop červeně, cíl zeleně
+  const paperLines = useMemo((): LevelLine[] => {
+    if (!paperAccount) return []
+    const length = day.minuteLabels.length
+    const orders = [...paperAccount.open, ...paperAccount.working].filter(
+      (order) => order.symbol === symbol,
+    )
+    const line = (name: string, value: number, color: string, suffix: string): LevelLine => ({
+      name,
+      color,
+      dash: [4, 3],
+      series: Array.from({ length }, () => value),
+      labelSuffix: suffix,
+    })
+    return orders.flatMap((order) => {
+      const tag = `${order.side.toUpperCase()} ${order.qty}×`
+      const lines = [
+        line(
+          `paper_entry_${order.id}`,
+          order.fill_price ?? order.entry_price,
+          'rgba(235,238,245,0.85)',
+          ` · ${tag}${order.status === 'open' ? '' : ' čeká'}`,
+        ),
+        line(`paper_stop_${order.id}`, order.stop_price, 'rgba(239,68,68,0.9)', ' · stop'),
+      ]
+      if (order.target_price !== null) {
+        lines.push(
+          line(`paper_target_${order.id}`, order.target_price, 'rgba(20,184,166,0.9)', ' · cíl'),
+        )
+      }
+      return lines
+    })
+  }, [paperAccount, symbol, day.minuteLabels.length])
   const refLines = useMemo((): LevelLine[] => {
     if (!referenceLevels) return []
     const length = day.minuteLabels.length
@@ -1405,7 +1444,7 @@ function MainContent() {
       // checkbox (flip + těžiště + Max Pain), zúžení řeší filtr, ne nový přepínač
       levels: cleanView.active
         ? cleanViewLevels(baseOverlays.levels ?? [])
-        : [...(baseOverlays.levels ?? []), ...setupLines, ...ladderLines, ...emLines, ...refLines], // prettier-ignore
+        : [...(baseOverlays.levels ?? []), ...setupLines, ...ladderLines, ...emLines, ...refLines, ...paperLines], // prettier-ignore
       // Budoucí seance v projekci (#195)
       sessions: [...(baseOverlays.sessions ?? []), ...projectedSessionMarkers],
       // Markery zpráv (#287) — osa nese i projekční část, takže nadcházející
@@ -1420,7 +1459,7 @@ function MainContent() {
         ? signalMarkers
         : signalMarkers.filter((signal) => signal.minuteIdx <= playback.position),
     }),
-    [baseOverlays, computedWalls, setupLines, ladderLines, emLines, refLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, journalMarkers, expiryMarkers, signalMarkers, playback.isLive, playback.position, cleanView.active], // prettier-ignore
+    [baseOverlays, computedWalls, setupLines, ladderLines, emLines, refLines, toggles.secondaryWall, projectedSessionMarkers, newsMarkers, journalMarkers, expiryMarkers, signalMarkers, paperLines, playback.isLive, playback.position, cleanView.active], // prettier-ignore
   )
 
   if (view === 'dashboard') {
@@ -1631,6 +1670,16 @@ function MainContent() {
         >
           ✎ Scénář
         </button>
+        {/* Paper order (#1187): ticket nad grafem, fily dělá engine */}
+        <button
+          className={paperTicket ? 'chip active' : 'chip'}
+          data-testid="paper-ticket-button"
+          title="Paper order: vstup, stop, cíl, kontrakty ze sizingu — fily simuluje engine proti živé ceně, risk vrstva blokuje"
+          disabled={paperAccount === null}
+          onClick={() => setPaperTicket((value) => !value)}
+        >
+          ⚡ Order
+        </button>
         {/* Range selector (#484): tažením vyber okno [t1, t2] */}
         <button
           className={rangeTool ? 'chip active' : 'chip'}
@@ -1767,6 +1816,18 @@ function MainContent() {
           ✎
         </button>
       </div>
+      {paperTicket && paperAccount && (
+        <PaperTicketDialog
+          symbol={symbol}
+          account={paperAccount}
+          spot={paperSpot.last}
+          onPlaced={() => {
+            setPaperTicket(false)
+            refreshPaper()
+          }}
+          onCancel={() => setPaperTicket(false)}
+        />
+      )}
       {scenarioDialog && (
         <ScenarioDialog
           symbol={symbol}
