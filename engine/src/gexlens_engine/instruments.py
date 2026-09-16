@@ -54,6 +54,7 @@ from gexlens_engine.ibkr.scheduler import (
 )
 from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.ivrank import IvRankCollector
+from gexlens_engine.paper import PaperBroker
 from gexlens_engine.probes import T9ProbeCollector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.scenario_auto import ScenarioGenerator
@@ -337,6 +338,8 @@ class InstrumentPipeline:
     gamma_cliff: GammaCliffCollector | None = None
     # Scénář dne (#1173) — vyhodnocení po termínu, jednou po settle
     scenario_collector: ScenarioCollector | None = None
+    # Paper účet (#1187 fáze 1): fily orderů proti barům minuty — None = vypnuto
+    paper_broker: PaperBroker | None = None
     # Automatický scénář z verdiktu dne (#1173 A) — jednou před US openem
     scenario_generator: ScenarioGenerator | None = None
     # Volatilitní režim z barů (ADR-0028, #713) — None = vypnuto
@@ -967,6 +970,12 @@ class InstrumentPipeline:
                 await self.scenario_collector.on_minute(now)
             except Exception:
                 logger.exception("Vyhodnocení scénářů %s selhalo — pokračuji", self.symbol)
+        # Paper účet (#1187): fily proti barům minuty — pád nesmí shodit sběr dat
+        if self.paper_broker is not None:
+            try:
+                await self.paper_broker.on_minute(now, spot, bars, self.runtime)
+            except Exception:
+                logger.exception("Paper účet %s selhal — pokračuji", self.symbol)
         # Volatilitní režim (ADR-0028) — jednou po settle, čte jen bary
         if self.vol_regime is not None:
             try:
