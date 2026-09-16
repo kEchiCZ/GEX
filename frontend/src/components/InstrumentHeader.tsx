@@ -8,6 +8,8 @@ import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
 import { ExpiryCalendar } from './ExpiryCalendar'
 import { ExpiryPhaseChip, useExpiryCalendar } from './ExpiryPhaseChip'
+import { PaperChip } from './PaperChip'
+import { usePaperAccount } from '../hooks/usePaperAccount'
 import { GammaCliffChip } from './GammaCliffChip'
 import { IvRankChip } from './IvRankChip'
 import { RelativeStrengthChip } from './RelativeStrengthChip'
@@ -139,6 +141,7 @@ export function InstrumentHeader({
     settleWatch,
   } = useAppState()
   const expiryPhaseCalendar = useExpiryCalendar()
+  const { account: paperAccount, refresh: refreshPaper } = usePaperAccount()
   const [alertsOpen, setAlertsOpen] = useState(false)
   const live = status.engine === 'online'
   // Odpočet do expirace se obnovuje po minutě (velké expirace = velké OI)
@@ -229,6 +232,8 @@ export function InstrumentHeader({
       <div className="header-row header-row-context">
         {/* Kalendář expirací (#1189): roll / OPEX týden / SOQ / po OPEXu — ⌛ jako TradingView */}
         <ExpiryPhaseChip calendar={expiryPhaseCalendar} />
+        {/* Paper účet (#1187): equity, R dne, pozice symbolu, kill switch */}
+        <PaperChip account={paperAccount} symbol={symbol} onChanged={refreshPaper} />
         {/* Gamma útes (#576): kolik gammy dnešní expirací odpadne — jen informace */}
         <GammaCliffChip symbol={symbol} />
         {/* Relativní síla ES vs. NQ (#680, Traders mode) — widget na zkoušku */}
