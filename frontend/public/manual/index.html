@@ -1968,6 +1968,7 @@ nezvětšuje, zpřesňuje se vstup.</p>
 <p><strong>Změna parametrů.</strong> Settings → Risk management: každé uložení založí novou
 verzi parametrů setupů s povinným důvodem (audit), engine ji převezme do
 sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly.</p>
+<p><img src="img/settings-risk-management.jpg" alt="Settings → Risk management a Notifikace (Telegram)"></p>
 <h3>Flip: naměřený vs. dynamický = flip ZÓNA</h3>
 <p>V aplikaci jsou dva flipy — <strong>obě čáry měří totéž dvěma metodami</strong>:</p>
 <table>
@@ -2077,6 +2078,7 @@ pohybu a <strong>1–3 pravidla na příští týden</strong> — příznaky se�
 kolik R stály, s konkrétní radou („po stopu 15 minut pauza&quot;). Kouč nic
 nehádá: každá věta je číslo z deníku; posun stopu a zvětšování po sérii
 výher přibudou, až paper ordery ponesou historii změn.</p>
+<p><img src="img/denik-kouc.png" alt="Deník — panel Kouč (den bez obchodu: skóre —, shrnutí)"></p>
 <h3>Paper účet v aplikaci — fáze 1 (v1.20, #1187, ADR-0040)</h3>
 <p>Trénink obchodování bez brokera: ordery se zadávají do aplikace, fily
 simuluje engine proti živé ceně (1min bary; market na open dalšího baru</p>
@@ -2104,6 +2106,7 @@ order aktuálního symbolu s tlačítkem <strong>✕ Zavřít/Zrušit</strong> (
 open dalšího baru) a tlačítko <strong>KILL</strong> (zavře vše, zablokuje nové; pak
 „Odblokovat&quot;). Entry/stop/cíl otevřeného orderu se kreslí v grafu jako
 čárkované čáry (bílá/červená/zelená).</p>
+<p><img src="img/paper-ticket.jpg" alt="Paper order ticket nad grafem: entry ze spotu, stop/cíl, kontrakty ze sizingu"></p>
 <h3>Kvartální expirační týden — roll, OPEX, SOQ (v1.20, #1189)</h3>
 <p>Třikrát… čtyřikrát do roka (3. pátek března, června, září a prosince) se
 trh chová jinak než jindy a aplikace to od v1.20 ví:</p>
@@ -2149,6 +2152,9 @@ ESU6: RTH objem na sledovaném kontraktu spadl z ~1,07 M (11. 9.) na 176 k,
 tisky 1/min — a úrovně byly v ceně, která se od obchodované (Z6) lišila
 o ~275 b na NQ. Od v1.20 se front kontrakt volí podle roll date, ne podle
 nejbližší expirace (<code>GEXLENS_FRONT_ROLL_DAYS</code>, default 8).</p>
+<p><img src="img/hlavicka-kalendar-paper.png" alt="Hlavička v OPEX týdnu: chip ⌛ kalendáře a chip 📒 paper účtu"></p>
+<p><img src="img/graf-expiry-marker.png" alt="⌛ v ose grafu na minutě expirace (VIX 15:30)"></p>
+<p><img src="img/briefing-expiracni-tyden.jpg" alt="Briefing — karta Expirační týden"></p>
 <h3>Playbook: zelený režim (spot NAD flip zónou)</h3>
 <ul>
 <li><strong>LONG:</strong> cena spadne na hranu silné zelené zóny / put wall. Potvrzení: svíčky se zkracují, dolní knoty, CumΔ prodejní tlak zpomaluje nebo diverguje. Vstup od hrany, cíl střed pásma / nejbližší silný strike, <strong>stop kousek POD zelenou zónu</strong> (když brzda selže, nemáš tam co dělat).</li>
