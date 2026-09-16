@@ -94,6 +94,7 @@ from gexlens_engine.instruments import (
 )
 from gexlens_engine.ivrank import IvRankCollector, TastyMetricsLike
 from gexlens_engine.memwatch import MemoryWatch
+from gexlens_engine.paper import PaperBroker
 from gexlens_engine.probes import T9ProbeCollector
 from gexlens_engine.provider import MarketDataProviderLike
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
@@ -121,6 +122,7 @@ from gexlens_engine.storage.gammacliff_store import GammaCliffRepository
 from gexlens_engine.storage.ivrank_store import IvRankRepository
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
+from gexlens_engine.storage.paper_store import PaperRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter
 from gexlens_engine.storage.probes_store import ProbeRepository
 from gexlens_engine.storage.retention import RetentionJob
@@ -666,6 +668,7 @@ async def create_pipeline(
     t6_repository: T6Repository | None = None,
     gamma_cliff_repository: GammaCliffRepository | None = None,
     scenarios_repository: ScenariosRepository | None = None,
+    paper_repository: PaperRepository | None = None,
     scenario_api: ApiReader | None = None,
     scenario_auto_minutes: int = 15,
     vol_regime_repository: VolRegimeRepository | None = None,
@@ -1211,6 +1214,20 @@ async def create_pipeline(
             if scenarios_repository is not None and db is not None
             else None
         ),
+        paper_broker=(
+            PaperBroker(
+                symbol=symbol,
+                repository=paper_repository,
+                publisher=publisher,
+                fee_per_contract_usd=(
+                    setup_params[0].fee_per_contract_usd
+                    if setup_params is not None
+                    else setup_params_from_settings(settings).fee_per_contract_usd
+                ),
+            )
+            if paper_repository is not None
+            else None
+        ),
         scenario_generator=(
             ScenarioGenerator(
                 symbol=symbol,
@@ -1448,6 +1465,9 @@ async def main() -> None:
     # Scénáře dne (#1173): tabulku zakládá i API, tady jen pro jistotu při startu
     scenarios_repository = ScenariosRepository(db)
     await asyncio.to_thread(scenarios_repository.ensure_schema)
+    # Paper účet (#1187 fáze 1): účet + ordery; fily dělá PaperBroker per symbol
+    paper_repository = PaperRepository(db)
+    await asyncio.to_thread(paper_repository.ensure_schema)
     # Vstupy verdiktu dne z API (svíčky, bary, ΔOI, sentiment, kalendář) — #1173 A
     scenario_api = ApiReader(api_base)
 
@@ -2703,6 +2723,7 @@ async def main() -> None:
                     t6_repository=t6_repository,
                     gamma_cliff_repository=gamma_cliff_repository,
                     scenarios_repository=scenarios_repository,
+                    paper_repository=paper_repository,
                     scenario_api=scenario_api,
                     scenario_auto_minutes=settings.scenario_auto_minutes_before_open,
                     vol_regime_repository=vol_regime_repository,

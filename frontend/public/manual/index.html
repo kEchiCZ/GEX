@@ -2017,6 +2017,25 @@ sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly.</p>
 </tr>
 </tbody></table>
 <p><strong>Rozdíl obou čar ber jako flip ZÓNU.</strong> Blízko sebe = ostrá hranice režimů, signály čitelné. Rozjeté = hranice rozmazaná → <strong>uvnitř zóny neobchoduj</strong>, čekej, až cena opustí celé pásmo.</p>
+<h3>Paper účet v aplikaci — fáze 1 (v1.20, #1187, ADR-0040)</h3>
+<p>Trénink obchodování bez brokera: ordery se zadávají do aplikace, fily
+simuluje engine proti živé ceně (1min bary; market na open dalšího baru</p>
+<ul>
+<li>1 tick, limit při protnutí úrovně, stop-first uvnitř svíčky, výstup na
+stop s tickem proti, cíl přesně). Účet začíná na <strong>50 000 $</strong> v jednotkách
+plného kontraktu (= 5 000 $ na MES/MNQ, viz Risk management) a vede si
+vklady, equity a P/L po poplatcích. Každý uzavřený obchod skončí
+<strong>v Deníku</strong> jako záznam typu obchod s tagem <code>paper</code> — plán vs. realita,
+MFE/MAE, výsledek v R i $ — a je tak vstupem kouče.</li>
+</ul>
+<p><strong>Risk vrstva blokuje:</strong> order nad rozpočtem rizika (1 % equity), po denní
+(−3 R) či týdenní (−6 R) brzdě nebo při zapnutém kill switchi se nepodá;
+odpověď říká proč a kolik kontraktů by prošlo. Jedna pozice/order na
+symbol, vše denní (v settle se pozice zavřou). Kill switch zavře vše
+a zablokuje nové ordery, dokud ho neodblokuješ.</p>
+<p>Ve fázi 1 se ordery zadávají přes API (<code>POST /paper/orders</code>, viz admin
+manuál); <strong>order ticket přímo v grafu, karta pozice a kill switch v UI
+jsou fáze 2</strong> (#1187).</p>
 <h3>Kvartální expirační týden — roll, OPEX, SOQ (v1.20, #1189)</h3>
 <p>Třikrát… čtyřikrát do roka (3. pátek března, června, září a prosince) se
 trh chová jinak než jindy a aplikace to od v1.20 ví:</p>
