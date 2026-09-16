@@ -39,6 +39,13 @@ class OrderIn(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+class ModifyIn(BaseModel):
+    stop_price: float | None = None
+    target_price: float | None = None
+    #: True = cíl zrušit (target_price None by jinak znamenalo „nemění se")
+    clear_target: bool = False
+
+
 class EventIn(BaseModel):
     kind: str
     amount: float = Field(default=0.0, ge=0)
@@ -236,6 +243,95 @@ def build_paper_router(
         updated = repo.get_order(order_id)
         assert updated is not None
         return updated
+
+    @router.patch("/orders/{order_id}")
+    def modify(order_id: int, body: ModifyIn) -> dict[str, Any]:
+        """Posun stopu/cíle čekajícího nebo otevřeného orderu — s historií změn.
+
+        Risk vrstva blokuje posun stopu DÁL od entry nad rozpočet (409); každá
+        změna se zapíše do `paper_order_changes` — kouč z toho počítá
+        „posunutý stop" (#1187 fáze 4).
+        """
+        repo = repository_factory()
+        params = params_factory()
+        moment = now()
+        order = repo.get_order(order_id)
+        if order is None:
+            raise HTTPException(404, "Order neexistuje")
+        if order["status"] not in ("working", "open"):
+            raise HTTPException(409, f"Order je ve stavu {order['status']}")
+        new_stop = body.stop_price if body.stop_price is not None else float(order["stop_price"])
+        if body.clear_target:
+            new_target: float | None = None
+        elif body.target_price is not None:
+            new_target = body.target_price
+        else:
+            new_target = order.get("target_price")
+        reference = float(order["fill_price"] or order["entry_price"])
+        error = validate_levels(
+            cast(Side, order["side"]),
+            cast(OrderType, order["order_type"]),
+            reference,
+            new_stop,
+            new_target,
+        )
+        if error:
+            raise HTTPException(422, error)
+        point_value = float(order["point_value"])
+        size = position_size(
+            reference,
+            new_stop,
+            point_value,
+            account_equity_usd=repo.equity(),
+            risk_pct=params.risk_pct,
+            risk_max_pct=params.risk_max_pct,
+        )
+        qty = int(order["qty"])
+        if not size.affordable or qty > size.contracts:
+            raise HTTPException(
+                409,
+                {
+                    "block": size.block or "stop_over_budget",
+                    "reason": f"stop {size.stop_points:g} b × {qty} ks = "
+                    f"{size.stop_points * point_value * qty:.0f} $ přesahuje rozpočet "
+                    f"{size.risk_budget_usd:.0f} $",
+                    "max_contracts": size.contracts,
+                },
+            )
+        updates: dict[str, Any] = {}
+        if new_stop != float(order["stop_price"]):
+            repo.record_change(order_id, "stop_price", float(order["stop_price"]), new_stop, moment)
+            updates["stop_price"] = new_stop
+            updates["risk_usd"] = size.stop_points * point_value * qty
+        old_target = order.get("target_price")
+        if new_target != (float(old_target) if old_target is not None else None):
+            repo.record_change(
+                order_id,
+                "target_price",
+                float(old_target) if old_target is not None else None,
+                new_target,
+                moment,
+            )
+            updates["target_price"] = new_target
+        if updates:
+            repo.update_order(order_id, **updates)
+            publish_alert(
+                {
+                    "kind": "paper",
+                    "event": "modified",
+                    "symbol": order["symbol"],
+                    "message": f"Paper order #{order_id}: "
+                    + ", ".join(
+                        f"{'stop' if k == 'stop_price' else 'cíl'} → {v if v is not None else '—'}"
+                        for k, v in updates.items()
+                        if k != "risk_usd"
+                    ),
+                    "ts": moment.timestamp(),
+                }
+            )
+        updated = repo.get_order(order_id)
+        assert updated is not None
+        return {**updated, "changes": repo.changes_for(order_id)}
 
     @router.post("/kill")
     def kill(body: KillIn) -> dict[str, Any]:

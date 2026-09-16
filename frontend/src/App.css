@@ -2771,6 +2771,17 @@ tr.setup-shadow td[data-part='risk'] {
   flex: 1;
 }
 
+.paper-levels-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.paper-levels-editor input {
+  width: 76px;
+  font-size: 11px;
+}
+
 /* Kalendář expirací (#1189): šedý chip ⌛ jako TradingView; v den expirace výraznější */
 .expiry-phase-chip {
   font-size: 12px;

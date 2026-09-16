@@ -1629,6 +1629,7 @@ a ke každému dá **příznaky s důkazem a cenou v R**:
 | nízké RRR | plánované RRR < 1,5 | 10 |
 | předčasný výstup | ruční výstup a cena pak došla na cíl → „nechal jsi X R" | 10 |
 | overtrading | 5. a další obchod seance | 10 |
+| stop posunutý dál od entry | historie změn paper orderu (✎ v chipu) | 20 |
 
 **Skóre disciplíny** dne = 100 − součet trestů (zeleně ≥ 85, žlutě ≥ 60).
 U každého obchodu je i **využití pohybu** (realizované R / MFE v R). Pod tím
@@ -1667,7 +1668,11 @@ je **chip 📒 paper účtu**: equity, R dne, brzda/KILL, pozice nebo čekajíc�
 order aktuálního symbolu s tlačítkem **✕ Zavřít/Zrušit** (provede se na
 open dalšího baru) a tlačítko **KILL** (zavře vše, zablokuje nové; pak
 „Odblokovat"). Entry/stop/cíl otevřeného orderu se kreslí v grafu jako
-čárkované čáry (bílá/červená/zelená).
+čárkované čáry (bílá/červená/zelená). Tlačítko **✎** u pozice v chipu
+umožní **posunout stop nebo cíl**; posun stopu dál od entry nad rozpočet
+server odmítne a každá změna se zapíše do historie — kouč z ní hlásí
+„stop posunutý dál od entry“ (trest 20). Kontext orderu (režim, flip, zdi,
+tendence, seance) se ukládá při podání a putuje s obchodem do Deníku (#932).
 
 ![Paper order ticket nad grafem: entry ze spotu, stop/cíl, kontrakty ze sizingu](img/paper-ticket.jpg)
 

@@ -2070,6 +2070,11 @@ a ke každému dá <strong>příznaky s důkazem a cenou v R</strong>:</p>
 <td>5. a další obchod seance</td>
 <td>10</td>
 </tr>
+<tr>
+<td>stop posunutý dál od entry</td>
+<td>historie změn paper orderu (✎ v chipu)</td>
+<td>20</td>
+</tr>
 </tbody></table>
 <p><strong>Skóre disciplíny</strong> dne = 100 − součet trestů (zeleně ≥ 85, žlutě ≥ 60).
 U každého obchodu je i <strong>využití pohybu</strong> (realizované R / MFE v R). Pod tím
@@ -2105,7 +2110,11 @@ je <strong>chip 📒 paper účtu</strong>: equity, R dne, brzda/KILL, pozice ne
 order aktuálního symbolu s tlačítkem <strong>✕ Zavřít/Zrušit</strong> (provede se na
 open dalšího baru) a tlačítko <strong>KILL</strong> (zavře vše, zablokuje nové; pak
 „Odblokovat&quot;). Entry/stop/cíl otevřeného orderu se kreslí v grafu jako
-čárkované čáry (bílá/červená/zelená).</p>
+čárkované čáry (bílá/červená/zelená). Tlačítko <strong>✎</strong> u pozice v chipu
+umožní <strong>posunout stop nebo cíl</strong>; posun stopu dál od entry nad rozpočet
+server odmítne a každá změna se zapíše do historie — kouč z ní hlásí
+„stop posunutý dál od entry“ (trest 20). Kontext orderu (režim, flip, zdi,
+tendence, seance) se ukládá při podání a putuje s obchodem do Deníku (#932).</p>
 <p><img src="img/paper-ticket.jpg" alt="Paper order ticket nad grafem: entry ze spotu, stop/cíl, kontrakty ze sizingu"></p>
 <h3>Kvartální expirační týden — roll, OPEX, SOQ (v1.20, #1189)</h3>
 <p>Třikrát… čtyřikrát do roka (3. pátek března, června, září a prosince) se

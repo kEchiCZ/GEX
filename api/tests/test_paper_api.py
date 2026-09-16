@@ -137,3 +137,31 @@ def test_kill_switch_zastavi_a_zavira(tmp_path: Path) -> None:
     assert any(a["event"] == "kill" for a in alerts)
     resumed = client.post("/paper/resume")
     assert resumed.status_code == 200 and resumed.json()["halted"] is False
+
+
+def test_posun_stopu_a_cile_s_historii(tmp_path: Path) -> None:
+    alerts: list[dict[str, Any]] = []
+    client, repo = _app(tmp_path, alerts)
+    created = client.post("/paper/orders", json=_order()).json()
+    oid = created["id"]
+    # Přitažení stopu + nový cíl → OK, historie 2 změny
+    moved = client.patch(
+        f"/paper/orders/{oid}", json={"stop_price": 7595.0, "target_price": 7620.0}
+    )
+    assert moved.status_code == 200, moved.text
+    body = moved.json()
+    assert (
+        body["stop_price"] == 7595.0
+        and body["target_price"] == 7620.0
+        and body["risk_usd"] == 250.0
+    )
+    assert [c["field"] for c in body["changes"]] == ["stop_price", "target_price"]
+    assert any(a["event"] == "modified" for a in alerts)
+    # Posun dál nad rozpočet (16 b × 50 = 800 > 500) → 409
+    over = client.patch(f"/paper/orders/{oid}", json={"stop_price": 7584.0})
+    assert over.status_code == 409 and over.json()["detail"]["block"] == "stop_over_budget"
+    # Neplatná úroveň → 422; zrušení cíle → target None
+    assert client.patch(f"/paper/orders/{oid}", json={"stop_price": 7605.0}).status_code == 422
+    cleared = client.patch(f"/paper/orders/{oid}", json={"clear_target": True}).json()
+    assert cleared["target_price"] is None
+    assert client.patch("/paper/orders/999", json={"stop_price": 7590.0}).status_code == 404

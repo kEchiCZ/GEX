@@ -159,6 +159,7 @@ class PaperBroker:
             )
             context = {
                 "paper_order_id": order.id,
+                **await asyncio.to_thread(self.repository.stop_move_summary, stored),
                 "exit_reason": exit_.reason,
                 "r_multiple": result_r,
                 "pnl_usd": pnl,

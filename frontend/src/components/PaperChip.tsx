@@ -1,8 +1,78 @@
 /** Chip paper účtu v hlavičce (#1187 fáze 2): equity, R dne, brzda/kill, otevřená
 pozice nebo čekající order s tlačítky Zavřít a KILL. Bez účtu (API nedostupné,
 engine ho ještě nezaložil) se nekreslí. */
-import { closePaperOrder, killPaper, orderLabel, resumePaper } from '../api/paper'
-import type { PaperAccount } from '../api/paper'
+import { useState } from 'react'
+import { closePaperOrder, killPaper, modifyPaperOrder, orderLabel, resumePaper } from '../api/paper'
+import type { PaperAccount, PaperOrderRow } from '../api/paper'
+
+/** Inline úprava stopu/cíle (#1187 fáze 4) — posun dál od entry blokuje server. */
+function LevelsEditor({ order, onChanged }: { order: PaperOrderRow; onChanged: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [stop, setStop] = useState(String(order.stop_price))
+  const [target, setTarget] = useState(
+    order.target_price === null ? '' : String(order.target_price),
+  )
+  const [error, setError] = useState<string | null>(null)
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="chip"
+        title="Upravit stop / cíl"
+        onClick={() => setOpen(true)}
+      >
+        ✎
+      </button>
+    )
+  }
+  return (
+    <span className="paper-levels-editor" data-testid="paper-levels-editor">
+      <input
+        type="text"
+        inputMode="decimal"
+        value={stop}
+        aria-label="Nový stop"
+        onChange={(event) => setStop(event.target.value)}
+      />
+      <input
+        type="text"
+        inputMode="decimal"
+        value={target}
+        aria-label="Nový cíl"
+        placeholder="cíl"
+        onChange={(event) => setTarget(event.target.value)}
+      />
+      <button
+        type="button"
+        className="chip active"
+        onClick={() => {
+          const stopValue = Number(stop.replace(',', '.'))
+          if (!Number.isFinite(stopValue) || stopValue <= 0) {
+            setError('stop musí být číslo')
+            return
+          }
+          const targetValue = target.trim() === '' ? null : Number(target.replace(',', '.'))
+          void modifyPaperOrder(order.id, {
+            stop_price: stopValue,
+            target_price: targetValue,
+          }).then((result) => {
+            if (result.ok) {
+              setOpen(false)
+              setError(null)
+              onChanged()
+            } else setError(result.error)
+          })
+        }}
+      >
+        OK
+      </button>
+      <button type="button" className="chip" onClick={() => setOpen(false)}>
+        ×
+      </button>
+      {error && <span className="journal-error">{error}</span>}
+    </span>
+  )
+}
 
 export function PaperChip({
   account,
@@ -38,6 +108,7 @@ export function PaperChip({
         <span key={order.id} className="paper-position" data-testid="paper-position">
           {orderLabel(order)}
           {order.close_requested ? ' · zavírá se' : ''}
+          {!order.close_requested && <LevelsEditor order={order} onChanged={onChanged} />}
           {!order.close_requested && (
             <button
               type="button"

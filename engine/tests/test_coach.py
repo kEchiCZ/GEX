@@ -173,3 +173,11 @@ def test_trade_from_journal_radek() -> None:
     assert t.opened_ts == dt.datetime(2026, 9, 17, 14, 1, tzinfo=dt.UTC) and t.closed_ts is None
     assert t.planned_rr == 2.0 and t.sign == -1.0
     assert trade_from_journal({"id": 1, "trade": None}) is None
+
+
+def test_stop_moved_z_historie_paper_orderu() -> None:
+    moved = review_trade(trade(stop_widened_points=5.0, r_multiple=-1.3, exit_reason="stop"), [])
+    kinds = [f.kind for f in moved.flags]
+    assert "stop_moved" in kinds and "big_loss" in kinds
+    assert next(f for f in moved.flags if f.kind == "stop_moved").cost_r == -1.3
+    assert review_trade(trade(stop_widened_points=0.0), []).flags == ()

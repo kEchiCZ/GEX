@@ -131,6 +131,28 @@ export async function placePaperOrder(draft: PaperOrderDraft): Promise<PlaceResu
   }
 }
 
+/** Posun stopu/cíle otevřeného nebo čekajícího orderu (historie změn na serveru). */
+export async function modifyPaperOrder(
+  id: number,
+  patch: { stop_price?: number; target_price?: number | null },
+): Promise<PlaceResult> {
+  try {
+    const body: Record<string, unknown> = {}
+    if (patch.stop_price !== undefined) body.stop_price = patch.stop_price
+    if (patch.target_price === null) body.clear_target = true
+    else if (patch.target_price !== undefined) body.target_price = patch.target_price
+    const response = await fetch(`${API_BASE}/paper/orders/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!response.ok) return { ok: false, ...(await errorText(response)) }
+    return { ok: true, order: (await response.json()) as PaperOrderRow }
+  } catch (error) {
+    return { ok: false, block: null, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 /** Zruší čekající order / zavře pozici (engine provede na dalším baru). */
 export async function closePaperOrder(id: number): Promise<boolean> {
   try {

@@ -93,6 +93,19 @@ paper_orders_table = Table(
     Column("journal_entry_id", Integer, nullable=True),
 )
 
+# Historie změn stopu/cíle (#1187 fáze 4): vstup kouče — „posunutý stop" byl
+# v track recordu setupů nejdražší chyba (71 obchodů > 1 000 $)
+paper_order_changes_table = Table(
+    "paper_order_changes",
+    paper_metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("order_id", Integer, nullable=False),
+    Column("ts", DateTime(timezone=True), nullable=False),
+    Column("field", String(16), nullable=False),  # stop_price | target_price
+    Column("old_value", Float, nullable=True),
+    Column("new_value", Float, nullable=True),
+)
+
 DEFAULT_ACCOUNT_ID = 1
 DEFAULT_EQUITY_START = 50000.0
 ACTIVE_STATUSES = ("working", "open")
@@ -337,6 +350,52 @@ class PaperRepository:
                 )
             )
         return result
+
+    def record_change(
+        self,
+        order_id: int,
+        field_name: str,
+        old_value: float | None,
+        new_value: float | None,
+        now: dt.datetime,
+    ) -> None:
+        with self._engine.begin() as conn:
+            conn.execute(
+                insert(paper_order_changes_table).values(
+                    order_id=order_id,
+                    ts=now,
+                    field=field_name,
+                    old_value=old_value,
+                    new_value=new_value,
+                )
+            )
+
+    def changes_for(self, order_id: int) -> list[dict[str, Any]]:
+        stmt = (
+            select(paper_order_changes_table)
+            .where(paper_order_changes_table.c.order_id == order_id)
+            .order_by(paper_order_changes_table.c.id)
+        )
+        with self._engine.connect() as conn:
+            return [{k: _iso(v) for k, v in dict(r._mapping).items()} for r in conn.execute(stmt)]
+
+    def stop_move_summary(self, order: dict[str, Any]) -> dict[str, Any]:
+        """Kolikrát a o kolik bodů se stop posunul PROTI pozici (dál od entry) —
+        do kontextu deníku, ať kouč vidí „posunutý stop" s číslem."""
+        changes = [c for c in self.changes_for(int(order["id"])) if c["field"] == "stop_price"]
+        sign = 1.0 if order["side"] == "long" else -1.0
+        widened = 0.0
+        moves = 0
+        for change in changes:
+            old, new = change.get("old_value"), change.get("new_value")
+            if old is None or new is None:
+                continue
+            moves += 1
+            # Long: nižší stop = dál od entry; short: vyšší stop = dál
+            delta = (old - new) * sign
+            if delta > 0:
+                widened += delta
+        return {"stop_moves": moves, "stop_widened_points": widened}
 
     # ── deník ────────────────────────────────────────────────────
 
