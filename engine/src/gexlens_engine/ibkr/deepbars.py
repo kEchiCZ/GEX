@@ -21,25 +21,17 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from gexlens_engine.compute.settle import QUARTER_MONTHS, quarterly_expiry
 from gexlens_engine.ibkr.underlying import Bar
 
 logger = logging.getLogger(__name__)
 
 # Kvartální cyklus ES/NQ (H/M/U/Z)
-QUARTER_MONTHS = (3, 6, 9, 12)
 
 # durationStr "10 D" = 10 OBCHODNÍCH dní ≈ 12–14 kalendářních (změřeno);
 # krok 12 kalendářních dní dává překryv, který řeší upsert dle ts_min
 CHUNK_CALENDAR_DAYS = 12
 CHUNK_DURATION = "10 D"
-
-
-def quarterly_expiry(year: int, month: int) -> dt.date:
-    """3. pátek kvartálního měsíce — expirace ES/NQ futures."""
-    first = dt.date(year, month, 1)
-    # Pátek = weekday 4; první pátek + 2 týdny
-    first_friday = first + dt.timedelta(days=(4 - first.weekday()) % 7)
-    return first_friday + dt.timedelta(days=14)
 
 
 def _quarterlies_until(last: dt.date) -> Iterable[tuple[str, dt.date]]:

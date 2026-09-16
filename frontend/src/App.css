@@ -2667,6 +2667,27 @@ tr.setup-shadow td[data-part='risk'] {
   white-space: nowrap;
 }
 
+/* Kalendář expirací (#1189): šedý chip ⌛ jako TradingView; v den expirace výraznější */
+.expiry-phase-chip {
+  font-size: 12px;
+  white-space: nowrap;
+  color: #aab0be;
+}
+
+.expiry-phase-chip.phase-expiry_day {
+  color: #d5d9e2;
+  font-weight: 600;
+}
+
+.briefing-expiry ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.briefing-expiry li {
+  margin-bottom: 4px;
+}
+
 /* ── Deník (#673, fáze A) ─────────────────────────────────────────── */
 .journal-view {
   padding: 16px 24px;

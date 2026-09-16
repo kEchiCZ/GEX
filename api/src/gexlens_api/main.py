@@ -65,6 +65,7 @@ from gexlens_api.security import (
 )
 from gexlens_api.sentiment_routes import build_sentiment_router
 from gexlens_api.status import StatusStore
+from gexlens_engine.compute.expiry_calendar import expiry_calendar
 from gexlens_engine.compute.gammacliff import build_cliff
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
@@ -243,6 +244,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def status() -> dict[str, object]:
         """Agregovaný stav pipeline (SPEC 3.7): greeks progress, repair, lines, disk."""
         return status_store.snapshot()
+
+    @app.get("/calendar/expiry")
+    def calendar_expiry(date: dt.date | None = None) -> dict[str, object]:
+        """Kalendář expirací a rollu (#1189, ADR-0039): fáze kvartálního týdne,
+        roll date, SOQ, VIX expirace a značky do grafu. Čistá kalendářní
+        matematika — bez DB; `date` = obchodní den (default dnešní seance)."""
+        day = date or trading_session_date(dt.datetime.now(dt.UTC))
+        return expiry_calendar(day).as_dict()
 
     # Interní ingest z enginu. Chráněno sdíleným tajemstvím (#542 C5) — kdokoli
     # s přístupem na port by jinak podvrhl UI libovolné ceny, úrovně i alerty.

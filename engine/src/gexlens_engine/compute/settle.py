@@ -31,6 +31,38 @@ def session_time_utc(day: dt.date, hh: int, mm: int, tz: ZoneInfo) -> dt.datetim
     return local.astimezone(dt.UTC)
 
 
+QUARTER_MONTHS = (3, 6, 9, 12)
+# SOQ (Special Opening Quotation) kvartální expirace: 9:30 ET (#1189, ADR-0039)
+SOQ_LOCAL = dt.time(9, 30)
+
+
+def quarterly_expiry(year: int, month: int) -> dt.date:
+    """3. pátek měsíce — expirace kvartálních ES/NQ futures a měsíčních opcí."""
+    first = dt.date(year, month, 1)
+    first_friday = first + dt.timedelta(days=(4 - first.weekday()) % 7)
+    return first_friday + dt.timedelta(days=14)
+
+
+def is_quarterly_expiry(day: dt.date) -> bool:
+    """3. pátek března/června/září/prosince = kvartální expirace (SOQ ráno)."""
+    return day.month in QUARTER_MONTHS and day == quarterly_expiry(day.year, day.month)
+
+
+def soq_ts(day: dt.date) -> dt.datetime:
+    """Okamžik SOQ (9:30 ET) daného dne v UTC."""
+    return session_time_utc(day, SOQ_LOCAL.hour, SOQ_LOCAL.minute, ET_TZ)
+
+
+def expiry_settle_ts(day: dt.date) -> dt.datetime:
+    """Settle EXPIRACE (ne seance): kvartální opce a futures se vypořádají
+    ráno v SOQ 9:30 ET (#1189), všechny ostatní expirace v 16:00 ET.
+
+    Kdo počítá čas do expirace řetězu, timeout setupu podle expirace nebo
+    platnost front kontraktu, volá tohle; hranice SEANCE zůstává `settle_ts`.
+    """
+    return soq_ts(day) if is_quarterly_expiry(day) else settle_ts(day)
+
+
 def settle_ts(day: dt.date) -> dt.datetime:
     """Okamžik settle US seance daného kalendářního dne (UTC).
 

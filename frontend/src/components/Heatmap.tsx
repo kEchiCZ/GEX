@@ -35,6 +35,7 @@ import type { OverlayData, PriceBar, PriceStyle } from '../heatmap/overlays'
 import { stackLabelRows } from '../heatmap/labelStack'
 import { journalGlyph, journalMarkerColor, journalMarkerNear } from '../heatmap/journalMarkers'
 import type { JournalMarker } from '../heatmap/journalMarkers'
+import { EXPIRY_GLYPH } from '../heatmap/expiryMarkers'
 import { markerColor, markerNear, markerStyle } from '../heatmap/newsMarkers'
 import type { NewsMarker as NewsMarkerType } from '../heatmap/newsMarkers'
 
@@ -654,6 +655,25 @@ export function Heatmap({
         context.font = '9px sans-serif'
         context.fillText(String(marker.count), x + 6, newsTickTop - 3)
       }
+    }
+
+    // ⌛ kalendář expirací (#1189, styl TradingView): šedé přesýpací hodiny
+    // v ose na den/minutu expirace, rollu, VIX expirace; kvartální a roll
+    // plné, měsíční OPEX a VIX slabší. Nad news pásem, ať se glyfy nepřekrývají.
+    for (const marker of overlays.expiryMarkers ?? []) {
+      const x = minuteToX(marker.minuteIdx) - 0.5 * scaleX
+      const alpha = marker.major ? 0.9 : 0.55
+      context.strokeStyle = `rgba(170,176,190,${alpha})`
+      context.lineWidth = marker.major ? 1.5 : 1
+      context.setLineDash([2, 3])
+      context.beginPath()
+      context.moveTo(x, newsTickTop - 16)
+      context.lineTo(x, logicalH)
+      context.stroke()
+      context.setLineDash([])
+      context.fillStyle = `rgba(190,196,210,${alpha})`
+      context.font = marker.major ? '13px sans-serif' : '11px sans-serif'
+      context.fillText(EXPIRY_GLYPH, x - 6, newsTickTop - 18)
     }
 
     // Značky deníku (#673, Traders mode): pás u HORNÍ hrany, aby nekolidoval

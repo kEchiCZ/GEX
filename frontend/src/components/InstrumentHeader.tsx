@@ -7,6 +7,7 @@ import { formatSettleWatch } from '../instrument/settlewatch'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
 import { ExpiryCalendar } from './ExpiryCalendar'
+import { ExpiryPhaseChip, useExpiryCalendar } from './ExpiryPhaseChip'
 import { GammaCliffChip } from './GammaCliffChip'
 import { IvRankChip } from './IvRankChip'
 import { RelativeStrengthChip } from './RelativeStrengthChip'
@@ -137,6 +138,7 @@ export function InstrumentHeader({
     regimeInfo,
     settleWatch,
   } = useAppState()
+  const expiryPhaseCalendar = useExpiryCalendar()
   const [alertsOpen, setAlertsOpen] = useState(false)
   const live = status.engine === 'online'
   // Odpočet do expirace se obnovuje po minutě (velké expirace = velké OI)
@@ -225,6 +227,8 @@ export function InstrumentHeader({
       právě proto, že chipy odešly z prvního řádku; při užším okně se navíc
       zalomí na třetí řádek, místo aby zvoneček vytlačily z obrazovky. */}
       <div className="header-row header-row-context">
+        {/* Kalendář expirací (#1189): roll / OPEX týden / SOQ / po OPEXu — ⌛ jako TradingView */}
+        <ExpiryPhaseChip calendar={expiryPhaseCalendar} />
         {/* Gamma útes (#576): kolik gammy dnešní expirací odpadne — jen informace */}
         <GammaCliffChip symbol={symbol} />
         {/* Relativní síla ES vs. NQ (#680, Traders mode) — widget na zkoušku */}

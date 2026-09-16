@@ -42,6 +42,9 @@ import { categoryGlyph, fetchSentimentState, fetchUpcoming, isHighImpact } from 
 import type { NewsRow, SentimentStateInfo } from '../api/news'
 import { useGexForward } from '../hooks/useGexForward'
 import { fetchScenarios } from '../api/scenarios'
+import { contractCode, nextContractCode, shortDate } from '../api/calendar'
+import type { ExpiryPhase } from '../api/calendar'
+import { useExpiryCalendar } from './ExpiryPhaseChip'
 import type { Scenario } from '../api/scenarios'
 import { ScenarioCard } from './ScenarioCard'
 import { TIMEFRAME_LABELS, assessTrends, directionLabel } from '../instrument/trend'
@@ -99,6 +102,54 @@ function ScenarioBlock({ symbol }: { symbol: string }) {
         <ScenarioCard key={row.id} scenario={row} compact />
       ))}
     </>
+  )
+}
+
+/** Karta „Expirační týden" (#1189): jen v roll/OPEX/expiry/post fázi — co se
+děje a co to znamená pro obchodování (článek 15. 9. 2026, ADR-0039). */
+function ExpiryWeekCard() {
+  const calendar = useExpiryCalendar()
+  if (calendar === null || calendar.phase === 'normal') return null
+  const code = contractCode(calendar.quarterly_expiry)
+  const next = nextContractCode(code)
+  const expiry = shortDate(calendar.quarterly_expiry)
+  const soq = new Date(calendar.soq_ts).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  const headline: Record<ExpiryPhase, string> = {
+    normal: '',
+    roll: `Roll proběhl ${shortDate(calendar.roll_date)}: front kontrakt je ${next}, ${code} dobíhá s tenkým objemem. Aplikace jede na ${next}.`,
+    opex_week: `Kvartální expirace ${code} v pátek ${expiry} ráno (SOQ ${soq}). Do pátku je cena tažená hedgingem dealerů, ne náladou.`,
+    expiry_day: `Dnes SOQ ${soq}: futures ${code} a kvartální opce se vypořádají z otevíracích cen indexu. Odpoledne pinning k velkým strikům, na close rebalance S&P.`,
+    post_opex: `Týden po kvartální expiraci (${expiry}): bez opční podpory, sezónně slabý — nálada se do ceny propisuje až teď.`,
+  }
+  return (
+    <section className="briefing-card briefing-expiry" aria-label="Expirační týden">
+      <h3>⌛ Expirační týden</h3>
+      <p>{headline[calendar.phase]}</p>
+      <ul className="muted">
+        <li>
+          <b>Scénář A (špatná nálada):</b> pod flipem short gamma — vzduchové kapsy, ostré odrazy
+          bez pokračování; ITM puty rolované níž = další prodej futures (vanna zhoršuje). Po SOQ
+          dealeři zavírají short hedge → možný odraz, ale put wall zmizí.
+        </li>
+        <li>
+          <b>Scénář B (dobrá nálada):</b> nad flipem long gamma — lepení ke strikům, stlačená
+          realizovaná volatilita, drift nahoru; po pátku sedativum přestane působit (vol
+          re-expansion).
+        </li>
+        <li>
+          <b>Co sledovat:</b> flip a put wall (zlom režimu), dno negativní zóny, kde trh v pátek
+          zavře vůči flipu; Forward GEX ukazuje strukturu po expiraci. Sentiment v OPEX týdnu ber
+          jako šum.
+        </li>
+        <li>
+          VIX expirace st {shortDate(calendar.vix_expiry)} ráno · roll{' '}
+          {shortDate(calendar.roll_date)} · SOQ pá {expiry} {soq}.
+        </li>
+      </ul>
+    </section>
   )
 }
 
@@ -322,6 +373,8 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
         {/* Shrnutí dne (#1090, ADR-0035): trend a směr, úrovně obratu, zprávy dne
         s očekávanou reakcí, verdikt hlasováním s vypsanými důvody. Heuristika —
         proto se verdikt ukládá a vyhodnocuje (#1091). */}
+        {/* Expirační týden (#1189): jen v roll/OPEX/SOQ/post fázi */}
+        <ExpiryWeekCard />
         <Card title="Scénář dne">
           <ScenarioBlock symbol={symbol} />
         </Card>

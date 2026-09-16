@@ -12,6 +12,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
+from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.tasty.session import TastySession
 
@@ -33,11 +34,13 @@ class ChainSymbols:
 class SymbolMap:
     """Denní cache chain map per produkt; obnova při změně dne."""
 
-    def __init__(self, session: TastySession) -> None:
+    def __init__(self, session: TastySession, *, front_roll_days: int = 8) -> None:
         self._session = session
         self._cache: dict[str, ChainSymbols] = {}
         # Front future se během dne nemění; roll řeší restart nebo změna dne
         self._front_future: dict[str, str] = {}
+        # Roll pravidlo (#1189): stejný kontrakt jako IBKR pipeline
+        self._front_roll_days = front_roll_days
 
     async def front_future(self, product: str) -> str | None:
         """Streamer symbol front kontraktu podkladu — zdroj spotu při fallbacku (#614).
@@ -62,7 +65,19 @@ class SymbolMap:
         if not items:
             logger.warning("tasty: pro %s nevrátilo API žádný futures kontrakt", product)
             return None
-        nearest = min(items, key=lambda item: str(item["expiration-date"]))
+        today = dt.date.today()
+        eligible = []
+        for item in items:
+            try:
+                last = dt.date.fromisoformat(str(item["expiration-date"])[:10])
+            except ValueError:
+                continue
+            if front_contract_eligible(last, today, self._front_roll_days):
+                eligible.append(item)
+        if not eligible:
+            logger.warning("tasty: pro %s není kontrakt nad roll oknem — beru nejbližší", product)
+            eligible = items
+        nearest = min(eligible, key=lambda item: str(item["expiration-date"]))
         symbol = str(nearest["streamer-symbol"])
         self._front_future[product] = symbol
         logger.info(

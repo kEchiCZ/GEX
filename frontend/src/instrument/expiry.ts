@@ -61,18 +61,20 @@ export function expiryKind(expiry: string): ExpiryKind | null {
 }
 
 /** Settle dne expirace: 16:00 ET — DST-korektně přes IANA zónu (#511),
-shodné s engine `compute/settle.py`. */
+shodné s engine `compute/settle.py`. Kvartální expirace (3. pátek bře/čvn/
+zář/pro) se vypořádá ráno v SOQ 9:30 ET (#1189, `expiry_settle_ts`). */
 export function expirySettleUtc(expiry: string): Date | null {
   const date = parse(expiry)
   if (!date) return null
+  const quarterly = expiryKind(expiry) === 'kvartální'
   return new Date(
     zonedTimeUtc(
       'America/New_York',
       date.getUTCFullYear(),
       date.getUTCMonth() + 1,
       date.getUTCDate(),
-      16,
-      0,
+      quarterly ? 9 : 16,
+      quarterly ? 30 : 0,
     ),
   )
 }

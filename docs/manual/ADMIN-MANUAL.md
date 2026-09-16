@@ -1,6 +1,6 @@
 # GEXLens — Manuál pro správce a vývojáře
 
-*Verze 1.8 · září 2026 · interní dokumentace — není dostupná v aplikaci*
+*Verze 1.9 · září 2026 · interní dokumentace — není dostupná v aplikaci*
 
 Technický popis architektury, provozu, konfigurace a vývoje aplikace GEXLens. Uživatelská příručka: `UZIVATELSKY-MANUAL.md`. Zdroj pravdy funkčních požadavků: [`docs/SPEC.md`](../SPEC.md) (v2.0); architektonická rozhodnutí v [`docs/adr/`](../adr/).
 
@@ -170,6 +170,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_RECONNECT_STALL_ALERT_S` | 300 | Watchdog reconnectu (#770): po tolika sekundách bez spojení alert `connection_stall` do zvonečku, opakovaně dokud spojení chybí; `/status.connection_offline_for_s` nese délku výpadku (klíč chybí, když spojení drží) |
 | `GEXLENS_SYMBOLS` | ES | Základní sada futures podkladů (čárkami); watchlist z DB se přidává za běhu (ADR-0003) |
 | `GEXLENS_MAX_INSTRUMENTS` | 3 | Strop souběžných instrumentů (rozpočet market data lines) |
+| `GEXLENS_FRONT_ROLL_DAYS` | 8 | Roll front kontraktu (#1189, ADR-0039): kontrakt je front, dokud má do expirace VÍC než N dní (CME roll date = 8 d před expirací). Platí pro IBKR pipeline, tasty streamer i IV rank. 0 = původní chování (nejbližší nepropadlý kontrakt). Discovery cache front kontrakt po rollu zahodí. |
 | `GEXLENS_WATCHLIST_POLL_CYCLES` | 5 | Watchlist + runtime nastavení (strike_range_points) se čtou z DB každý k-tý cyklus |
 | `GEXLENS_OI_ARCHIVE_EXPIRIES` | 5 | Ranní OI archiv pokrývá N nejbližších expirací (základ ΔOI vs. včera) |
 | `GEXLENS_SWEEP_NEXT_EXPIRY` | true | Sekundární sweep následující expirace (positioning příští seance) |
@@ -318,6 +319,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8000/docs` (OpenAPI).
 | `GET /setups/params`, `POST /setups/params` `{params, note, created_by?}` | Parameter store setupů (ADR-0033): platná verze + historie + defaulty; POST založí novou verzi (jen změněné klíče, zbytek defaulty; neznámý klíč/typ = 422, bez `note` = 422) a probudí engine NOTIFY. Autonomie stupeň 1: zapisuje člověk, ne smyčka. |
 | — risk parametry (#1185) | Součást téže verze parametrů: `account_equity_usd` (50000), `risk_pct` (1), `risk_max_pct` (2), `fee_per_contract_usd` (10), `daily_brake_r` (3), `weekly_brake_r` (6), `max_template_stops_per_day` (2), `template_gate_enabled` (true), `template_gate_min_samples` (30), `template_gate_days` (60). Engine u každého setupu zapíše do `context`: `risk_rules_version`, `contracts`, `risk_budget_usd`, `max_loss_usd`, `fee_usd`, `affordable`, `tradeable`, `trade_block` (`stop_over_budget` / `stop_over_cap` / `daily_brake` / `weekly_brake` / `template_stops` / `gate`), `template_gate` (+ `_n`, `_lb`), `realized_day_r`, `realized_week_r`. Brzdy čtou uzavřené setupy napříč symboly (`tradeable` = true) od pondělní seance; brána šablon setupy se stopem v rozpočtu za `template_gate_days` seancí (starší řádky bez kontextu se dopočítají z entry/stop a hodnoty bodu). Alert `risk_brake` (kategorie push `setup`), setup alert nese `tradeable` — stín do pushe nejde. UI: Settings → Risk management (POST téže cesty). |
 | `GET /gammacliff/{symbol}` | Dnešní odpad gammy + historie útesů (#576) |
+| `GET /calendar/expiry?date=` | Kalendář expirací (#1189): fáze kvartálního týdne (`normal`/`roll`/`opex_week`/`expiry_day`/`post_opex`), `quarterly_expiry`, `roll_date`, `soq_ts` (9:30 ET), `vix_expiry`, značky do grafu (`markers`: roll, quarterly_expiry, monthly_opex, vix_expiry). Čistá kalendářní matematika bez DB. Engine posílá alert `expiry_calendar` (roll date 9:30 ET, pondělí OPEX týdne 8:00 ET, 5 min po SOQ; push kategorie news). Kvartální expirace propadá v SOQ (`compute.settle.expiry_settle_ts`) — po 9:30 ET se pipeline překlopí na další expiraci. |
 | `GET /fa/alpha` | Kalibrovaná α FA odhadu per symbol (#232) |
 | `GET /gexplane/{...}` | Dyn Charm/Vanna plochy (#204) |
 | `GET /sentiment/*?symbol=` | Sentiment per symbol (ADR-0026): index/daily/state/waves |

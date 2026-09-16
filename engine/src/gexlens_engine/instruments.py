@@ -22,7 +22,11 @@ from sqlalchemy.engine import Engine
 
 from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
 from gexlens_engine.compute.gexforward import ForwardContract, forward_field
-from gexlens_engine.compute.settle import settle_ts
+from gexlens_engine.compute.settle import (
+    expiry_settle_ts,
+    is_quarterly_expiry,
+    soq_ts,
+)
 from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
 from gexlens_engine.compute.setupstats import (
     SetupParamsStats,
@@ -166,22 +170,26 @@ def greeks_watch_applies(expiry: str, now: dt.datetime) -> bool:
     except ValueError:
         logger.warning("Nečitelná expirace %r — hlídka Greeks se nechává zapnutá", expiry)
         return True
-    return now < settle_ts(expiry_date)
+    return now < expiry_settle_ts(expiry_date)
 
 
-def expiry_expired(expiry: str, today: dt.date) -> bool:
+def expiry_expired(expiry: str, today: dt.date, now: dt.datetime | None = None) -> bool:
     """True, když expirace (YYYYMMDD) už proběhla — pipeline se musí překlopit.
 
     0DTE řetěz: po vypršení denní expirace by sweep běžel nad mrtvými kontrakty;
     orchestrátor pipeline zastaví a další cyklus ji založí znovu (discovery
-    vybere novou nejbližší expiraci). Nečitelný formát → False (nerozbíjet běh).
+    vybere novou nejbližší expiraci). Kvartální expirace propadá už v SOQ
+    (9:30 ET, #1189) — s `now` se hlídá i čas, ne jen kalendářní den.
+    Nečitelný formát → False (nerozbíjet běh).
     """
     try:
         expiry_date = dt.datetime.strptime(expiry, "%Y%m%d").date()
     except ValueError:
         logger.warning("Nečitelná expirace %r — roll se přeskakuje", expiry)
         return False
-    return expiry_date < today
+    if expiry_date < today:
+        return True
+    return now is not None and is_quarterly_expiry(expiry_date) and now >= soq_ts(expiry_date)
 
 
 class TickerLike(Protocol):
