@@ -2719,6 +2719,36 @@ tr.setup-shadow td[data-part='risk'] {
   color: #f0c36d;
 }
 
+.coach-time-table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.coach-time-table td {
+  padding: 1px 8px 1px 0;
+}
+
+.coach-time-table tr.coach-good td:first-child {
+  color: #7fd9a8;
+  font-weight: 600;
+}
+
+.coach-time-table tr.coach-bad td:first-child {
+  color: #e39a9a;
+  font-weight: 600;
+}
+
+.coach-hours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 32px;
+  margin-top: 8px;
+}
+
+.coach-setups {
+  margin: 6px 0 10px;
+}
+
 .coach-weekly {
   margin-top: 8px;
   padding-top: 6px;

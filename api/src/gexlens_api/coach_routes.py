@@ -19,10 +19,16 @@ from gexlens_engine.compute.coach import (
     trade_from_journal,
     weekly_report,
 )
+from gexlens_engine.compute.coach_setups import (
+    setup_from_row,
+    setups_report,
+    time_of_day_profile,
+)
 from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setups import SetupParams
 
 JournalReader = Callable[[dt.date, dt.date], list[dict[str, Any]]]
+SetupsReader = Callable[[dt.datetime, dt.datetime, str | None], list[dict[str, Any]]]
 BarsReader = Callable[[str, dt.date], pd.DataFrame]
 
 
@@ -55,6 +61,7 @@ def build_coach_router(
     journal_reader: JournalReader,
     bars_reader: BarsReader,
     params_factory: Callable[[], SetupParams],
+    setups_reader: SetupsReader | None = None,
     *,
     now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
 ) -> APIRouter:
@@ -94,5 +101,44 @@ def build_coach_router(
             trades, day, params=_params(), bars_after=_bars_after_factory(bars_reader)
         )
         return result.as_dict()
+
+    def _setup_items(days: int, symbol: str | None) -> list[Any]:
+        if setups_reader is None:
+            return []
+        until = now()
+        since = until - dt.timedelta(days=max(1, min(days, 365)))
+        rows = setups_reader(since, until, symbol or None)
+        return [s for s in (setup_from_row(row) for row in rows) if s is not None]
+
+    @router.get("/setups")
+    def setups(days: int = 60, symbol: str | None = None) -> dict[str, Any]:
+        """Kouč nad setupy detektoru (#1201): příznaky, profil denní doby, doporučení
+        (šablona × okno × režim × pásmo × důvěra) s minimálním vzorkem a Wilsonovou mezí."""
+        items = _setup_items(days, symbol)
+        report = setups_report(items)
+        report["days"] = days
+        report["symbol"] = symbol
+        return report
+
+    @router.get("/hours")
+    def hours(days: int = 60, symbol: str | None = None) -> dict[str, Any]:
+        """Profil denní doby zvlášť pro obchody deníku (ruční + paper) a pro setupy."""
+        until = now()
+        since_day = (until - dt.timedelta(days=max(1, min(days, 365)))).date()
+        trades = _trades(since_day, until.date())
+        if symbol:
+            trades = [t for t in trades if t.symbol == symbol]
+        trade_points = [
+            (t.opened_ts, t.realized_r)
+            for t in trades
+            if t.opened_ts is not None and t.realized_r is not None
+        ]
+        setup_points = [(s.created_ts, s.outcome_r) for s in _setup_items(days, symbol)]
+        return {
+            "days": days,
+            "symbol": symbol,
+            "trades": {"n": len(trade_points), **time_of_day_profile(trade_points).as_dict()},
+            "setups": {"n": len(setup_points), **time_of_day_profile(setup_points).as_dict()},
+        }
 
     return router

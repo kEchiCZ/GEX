@@ -21,6 +21,7 @@ from gexlens_engine.compute.bandregime import (
     band_context,
     band_gate_context,
 )
+from gexlens_engine.compute.coach_setups import hour_local, session_segment
 from gexlens_engine.compute.confidence import ConfidenceTable, build_confidence_table
 from gexlens_engine.compute.gexfield import gamma_edges
 from gexlens_engine.compute.risk import (
@@ -670,6 +671,10 @@ class SetupEngine:
                 **band,
                 **gate,
                 **risk,
+                # Denní doba (#1201): odvozené při vzniku, ať jsou koše stabilní
+                # i po změně hranic segmentů
+                "session_segment": session_segment(now),
+                "hour_local": hour_local(now),
                 "confidence_base": base,
                 "confidence_template": candidate.confidence,
                 "confidence_source": source,

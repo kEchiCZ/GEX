@@ -12,6 +12,7 @@ import { formatLevel } from '../heatmap/overlays'
 import { useSetups } from '../hooks/useSetups'
 import { pointValue } from '../instrument/tick'
 import { useAppState } from '../state/AppState'
+import { CoachSetupsBlock } from './CoachSetupsBlock'
 import { usePersistentState } from '../state/persist'
 
 function formatTs(iso: string | null): string {
@@ -342,6 +343,8 @@ export function SetupsView() {
           </div>
         </div>
       )}
+      {/* Kouč nad setupy (#1201): doporučení s vzorkem, denní doba, příznaky */}
+      <CoachSetupsBlock symbol={symbol} />
       {day.trades === 0 && (
         <p className="muted setups-day-empty">
           Dnešní seance zatím bez obchodu — detektor běží, jen nenastaly podmínky šablon.

@@ -66,3 +66,43 @@ def test_review_a_weekly() -> None:
     assert weekly["week_start"] == "2026-09-14" and weekly["n"] == 1
     assert weekly["rules"][0]["kind"] == "early_exit" and weekly["rules"][0]["cost_r"] == -1.5
     assert weekly["days"][3]["session_day"] == "2026-09-17"
+
+
+def test_setups_a_hours() -> None:
+    setup_rows = [
+        {
+            "id": i,
+            "symbol": "ES",
+            "template": "wall_bounce",
+            "direction": "long",
+            "created_ts": (T0 - dt.timedelta(minutes=30)).isoformat(),  # 9:30 ET open30
+            "closed_ts": T0.isoformat(),
+            "status": "closed_stop",
+            "outcome_r": -0.5,
+            "entry": 7600.0,
+            "target": 7616.0,
+            "stop": 7592.0,
+            "confidence": 50,
+            "context": {"gex_regime": "positive", "band_class": "inside", "tradeable": True},
+        }
+        for i in range(30)
+    ]
+    app = FastAPI()
+    app.include_router(
+        build_coach_router(
+            lambda since, until: [_row(1)],
+            _bars,
+            SetupParams,
+            lambda since, until, symbol: setup_rows,
+            now=lambda: NOW,
+        )
+    )
+    client = TestClient(app)
+    report = client.get("/coach/setups", params={"days": 30}).json()
+    assert report["n"] == 30 and report["by_template"]["wall_bounce"]["avg_r"] == -0.5
+    assert report["time"]["worst_segment"] == "open30"
+    assert report["recommendations"][0]["kind"] == "avoid"
+    assert report["flags"]["bad_window"]["n"] == 30
+    hours = client.get("/coach/hours").json()
+    assert hours["setups"]["n"] == 30 and hours["trades"]["n"] == 1
+    assert hours["setups"]["segments"]["open30"]["n"] == 30
