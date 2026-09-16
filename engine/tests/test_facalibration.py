@@ -218,3 +218,16 @@ def test_collect_bez_netflow_vraci_none(tmp_path: Path) -> None:
     alpha_repo = FaAlphaRepository(db)
     alpha_repo.ensure_schema()
     assert collect_alpha_calibration("ES", settings.derived_dir, oi_repo, alpha_repo, TODAY) is None
+
+
+def test_collect_bere_netflow_sekundarniho_retezu(tmp_path: Path) -> None:
+    """Den má netflow 0DTE (aktivní) i sekundárního řetězu (#1182): 0DTE nemá ΔOI
+    a přeskočí se, bod vznikne ze sekundáru s expirací po dni netflow."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    _seed_day(settings, oi_repo, expiry=EXPIRY_0DTE)
+    _seed_day(settings, oi_repo)  # sekundární řetěz: EXPIRY > PREV
+    result = collect_alpha_calibration("ES", settings.derived_dir, oi_repo, alpha_repo, TODAY)
+    assert result is not None and result.expiry == EXPIRY and result.day == PREV
+    assert result.point.ratio_median == pytest.approx(0.4)
+    state = alpha_repo.get("ES")
+    assert state is not None and state.alpha == pytest.approx(0.4) and state.days == 1

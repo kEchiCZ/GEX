@@ -133,8 +133,9 @@ class EngineRuntime:
     futures_cvd: FuturesCvdTracker | None = None
     # Multi-instrument orchestrátor pushuje agregovaný status sám (ADR-0003)
     push_status: bool = True
-    # Sekundární řetěz (následující expirace): jen snapshots + levels —
-    # flow/CumΔ a bary podkladu patří výhradně aktivní expiraci (per-symbol soubory)
+    # Sekundární řetěz (následující expirace): snapshots + levels + netflow
+    # (#1182, vstup kalibrace α) — flow/CumΔ, printvol, FA vrstva a bary
+    # podkladu patří výhradně aktivní expiraci (per-symbol soubory)
     secondary: bool = False
     # Per-symbol α flow-adjusted odhadu (#232): None = default z konfigurace
     # (flow_oi_alpha); ranní kalibrace fáze 2 ho nastavuje za běhu
@@ -444,7 +445,10 @@ class EngineRuntime:
             # ho v sémantice IBKR nedodá a dosadit nulu by znamenalo skokový
             # záporný přírůstek přes celý řetěz. Řady CumΔ a net objem během
             # fallbacku stojí — díra, kterou je vidět, místo vymyšleného čísla.
-            if not self.secondary and snapshot.volume is not None and snapshot.last is not None:
+            # Sekundární řetěz krmí tracker taky (#1182): jeho net objem je
+            # jediný vstup kalibrace α, který má ΔOI do dalšího dne — aktivní
+            # řetěz ES/NQ je každý den 0DTE (#1172). CumΔ/flow z něj se nepíší.
+            if snapshot.volume is not None and snapshot.last is not None:
                 tracker.add_bar(
                     spec,
                     cumulative_volume=snapshot.volume,
@@ -705,28 +709,29 @@ class EngineRuntime:
         # profil/pole i řady netflow/oiest — všechno je TENTÝŽ model.
         alpha = self.flow_alpha if self.flow_alpha is not None else self.settings.flow_oi_alpha
         fa_oi: dict[OptionContractSpec, float] = {}
+        # Po restartu uprostřed dne naváže kumulativ z partice netflow —
+        # jinak by odhad začínal od nuly a zahodil celý dopolední tok
+        await self._seed_net_volume(session_day)
+        # Netflow a printvol jsou MĚŘENÁ data — píší se bez ohledu na α
+        # (#1172): dřív visely pod `alpha > 0`, takže jakmile kalibrace
+        # srazila α na 0, přestal se sbírat i její vlastní vstup a α už
+        # nikdy nevyrostla. Na α závisí jen odhad (oiest, FA profily).
+        # Persistence netflow (#232): kumulativ dne per strana — vstup ranní
+        # kalibrace α a zpětné validace směru (znaménko net vs. ΔOI). Píše
+        # i sekundární řetěz (#1182) — teprve jeho netflow má ΔOI do D+1.
+        netflow_rows = [
+            NetFlowRow(ts_min=ts_min, strike=spec.strike, right=spec.right, net_volume=net)
+            for spec, net in sorted(
+                tracker.net_volumes().items(),
+                key=lambda item: (item[0].strike, item[0].right),
+            )
+            if net != 0.0
+        ]
+        if netflow_rows:
+            await asyncio.to_thread(
+                self.writer.write_netflow, self.symbol, self.expiry, day, netflow_rows
+            )
         if not self.secondary:
-            # Po restartu uprostřed dne naváže kumulativ z partice netflow —
-            # jinak by odhad začínal od nuly a zahodil celý dopolední tok
-            await self._seed_net_volume(session_day)
-            # Netflow a printvol jsou MĚŘENÁ data — píší se bez ohledu na α
-            # (#1172): dřív visely pod `alpha > 0`, takže jakmile kalibrace
-            # srazila α na 0, přestal se sbírat i její vlastní vstup a α už
-            # nikdy nevyrostla. Na α závisí jen odhad (oiest, FA profily).
-            # Persistence netflow (#232): kumulativ dne per strana — vstup ranní
-            # kalibrace α a zpětné validace směru (znaménko net vs. ΔOI)
-            netflow_rows = [
-                NetFlowRow(ts_min=ts_min, strike=spec.strike, right=spec.right, net_volume=net)
-                for spec, net in sorted(
-                    tracker.net_volumes().items(),
-                    key=lambda item: (item[0].strike, item[0].right),
-                )
-                if net != 0.0
-            ]
-            if netflow_rows:
-                await asyncio.to_thread(
-                    self.writer.write_netflow, self.symbol, self.expiry, day, netflow_rows
-                )
             # Řada printvol (#1007): přírůstek objemu per kontrakt rozložený na
             # tisky a zbytek bez tisku; NULL = trade větev neběžela. Živý push
             # stejnou cestou jako oiest, ať profil nečeká na další balík.

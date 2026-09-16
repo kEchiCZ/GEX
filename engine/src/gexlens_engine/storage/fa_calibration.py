@@ -198,7 +198,8 @@ def collect_alpha_calibration(
 ) -> AlphaCalibrationResult | None:
     """Spočítá a uloží chybějící kalibrační bod symbolu k dnešnímu OI archivu.
 
-    Netflow píše jen aktivní řetěz, takže den má nejvýš jednu expiraci s daty.
+    Netflow píše aktivní i sekundární řetěz (#1182); den má typicky dvě expirace
+    s daty a projde jen ta, která v den netflow ještě neexpirovala.
     Bere se poslední archivní den < today, který má netflow partici a OI v obou
     dnech; hotové dny přeskakuje (idempotentní dedup v historii). Blokující
     (parquet + DB) — volat přes to_thread.

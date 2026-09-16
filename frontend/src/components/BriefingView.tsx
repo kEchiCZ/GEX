@@ -87,8 +87,9 @@ function ScenarioBlock({ symbol }: { symbol: string }) {
   if (open.length === 0 && recent.length === 0) {
     return (
       <p className="muted">
-        Žádný scénář. Nakresli na živém grafu očekávanou cestu (šipka/freehand) a ulož ji tlačítkem
-        ✎ Scénář — po termínu se vyhodnotí sama.
+        Žádný scénář. Automatický scénář dne vzniká z verdiktu dne ~15 minut před US openem (jen při
+        verdiktu long/short a existující úrovni obratu ve směru; #1173). Vlastní cestu nakresli na
+        živém grafu (šipka/freehand) a ulož ji tlačítkem ✎ Scénář — po termínu se vyhodnotí sama.
       </p>
     )
   }

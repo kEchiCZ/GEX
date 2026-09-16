@@ -276,7 +276,7 @@ Od ADR-0029 (v1.2) se **`snapshots/` a `derived/` nemažou nikdy** (`GEXLENS_KEE
 | `derived/{sym}/{expiry}/oiwalls/{date}.parquet` | **OI zdi** (#851): oi_call_wall / oi_put_wall + `share` (podíl na OI strany; frontend pod 0,2 nekreslí) |
 | `derived/{sym}/features/{date}.parquet` | **Minutový feature log** (#796): vstupní vektor setup detektoru + ATR + band metriky — trénovací matice smyčky #794 |
 | `trades/{sym}/{YYYY-MM-DD}.parquet` | **Surové opční TimeAndSale printy z dxFeed** (#795): ts, streamer_symbol, price, size, aggressorSide, spread_leg, eth. Mimo retenci; podklad budoucí klasifikace agresora (#615). Flag `GEXLENS_TASTY_TRADES_RECORD` (default true) |
-| `derived/{sym}/netflow/{date}.parquet` | Δ-vážený tok per strana (podklad FA odhadu OI) |
+| `derived/{sym}/{expiry}/netflow/{date}.parquet` | Kumulativní klasifikovaný net objem per strana (midpoint/Lee–Ready) — podklad FA odhadu OI a ranní kalibrace α. Píše **aktivní i sekundární řetěz** (#1182): aktivní ES/NQ je vždy 0DTE bez ΔOI do D+1, kalibrace proto bere netflow sekundáru (expirace po dni netflow); `fa_alpha_history.expiry` říká, ze kterého řetězu bod vznikl. |
 | `derived/{sym}/{expiry}/oiest/{date}.parquet` | FA odhad OI (netflow×α, #232) |
 | `derived/{sym}/{expiry}/gexprofile(fa)/…` + `gexfield(fa)/…` | Dyn profily/pole; `…fa` varianty nad FA odhadem |
 | `derived/{sym}/{expiry}/charmprofile/…`, `vannaprofile/…` (+ `…field`) | Dyn Charm/Vanna plochy (#204) |
