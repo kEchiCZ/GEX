@@ -1028,7 +1028,9 @@ async def create_pipeline(
             expiry=next_info.expiry,
             multiplier=multiplier,
             contracts=next_contracts,
-            cum_delta=CumDeltaTracker(multiplier=multiplier),
+            # Stejná klasifikace toku jako aktivní řetěz (#1182) — netflow sekundáru
+            # je vstup kalibrace α
+            cum_delta=CumDeltaTracker(multiplier=multiplier, source=settings.cumdelta_source),
             push_status=False,
             secondary=True,
             oi_fallback=oi_fallback,
