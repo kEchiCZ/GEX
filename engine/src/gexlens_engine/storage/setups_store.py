@@ -245,6 +245,40 @@ class SetupsRepository:
             for row in rows
         ]
 
+    def closed_between(
+        self,
+        since: dt.datetime,
+        until: dt.datetime,
+        *,
+        mechanics_version: int | None = None,
+        symbol: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Uzavřené setupy napříč symboly s `created_ts` v [since, until) — vstup
+        kouče (#1201): řádek jako dict s ISO časy a kontextem."""
+        stmt = select(setups_table).where(
+            setups_table.c.status != "active",
+            setups_table.c.created_ts >= since,
+            setups_table.c.created_ts < until,
+        )
+        if mechanics_version is not None:
+            stmt = stmt.where(setups_table.c.mechanics_version == mechanics_version)
+        if symbol is not None:
+            stmt = stmt.where(setups_table.c.symbol == symbol)
+        stmt = stmt.order_by(setups_table.c.created_ts.asc())
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row._mapping)
+            for key in ("created_ts", "closed_ts"):
+                value = record.get(key)
+                if isinstance(value, dt.datetime):
+                    if value.tzinfo is None:
+                        value = value.replace(tzinfo=dt.UTC)
+                    record[key] = value.isoformat()
+            result.append(record)
+        return result
+
     def closed_since(
         self, symbol: str, since: dt.datetime, *, mechanics_version: int | None = None
     ) -> list[ClosedSetup]:

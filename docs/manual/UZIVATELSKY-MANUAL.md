@@ -1641,6 +1641,20 @@ výher přibudou, až paper ordery ponesou historii změn.
 
 ![Deník — panel Kouč (den bez obchodu: skóre —, shrnutí)](img/denik-kouc.png)
 
+**Kouč nad setupy a denní doba (v1.20, #1201).** V záložce **Setupy** je nad
+tabulkou blok **🎓 Kouč nad setupy** (60 dní, aktuální mechanika): doporučení
+„⛔ Neobchodovat …" / „✅ Soustředit se na …" pro kombinace šablona × okno
+seance, šablona × gamma režim, poloha v pásmu, obchodovatelnost a důvěra —
+jen se vzorkem **n ≥ 30** a Wilsonovou dolní mezí úspěšnosti (Ø R ≤ −0,15
+= vypnout, ≥ +0,20 = zdůraznit), seřazené podle Σ R. Pod tím nejlepší a
+nejhorší okno dne a četnost příznaků setupů (proti režimu, mimo pásmo, stop
+nad rozpočtem, nízké RRR, timeout, prodělečné okno). V panelu Kouč v Deníku
+je sekce **Denní doba** zvlášť pro tvoje obchody a pro setupy: segmenty seance
+(Globex noc · US premarket · US open +30 · RTH dopoledne · Poledne · Power
+hour · Posledních 30 min · Po close) s Ø R, n, úspěšností a Σ R, nejlepší
+zeleně, nejhorší červeně; okna pod 20 vzorků jsou označená jako malý vzorek.
+Hodiny se počítají v pražském čase.
+
 ### Paper účet v aplikaci — fáze 1 (v1.20, #1187, ADR-0040)
 
 Trénink obchodování bez brokera: ordery se zadávají do aplikace, fily

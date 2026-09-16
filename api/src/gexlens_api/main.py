@@ -226,10 +226,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             lambda payload: live_hub.publish("alerts", payload),
         )
     )
+
     # Kouč v1 (#1187 fáze 3, #933): review obchodů deníku, týdenní report
+    def coach_setups_reader(
+        since: dt.datetime, until: dt.datetime, symbol: str | None
+    ) -> list[dict[str, object]]:
+        return setups_repository().closed_between(
+            since, until, mechanics_version=SETUP_MECHANICS_VERSION, symbol=symbol
+        )
+
     app.include_router(
         build_coach_router(
-            meta_repository.journal_between, repository.bars_session, current_setup_params
+            meta_repository.journal_between,
+            repository.bars_session,
+            current_setup_params,
+            coach_setups_reader,
         )
     )
     # SentimentLens (#285) — vlastní router, ať main.py nenaroste o dalších

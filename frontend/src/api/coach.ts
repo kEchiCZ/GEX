@@ -63,6 +63,94 @@ export interface CoachWeekly {
   rules: CoachRule[]
 }
 
+export interface CoachBucket {
+  n: number
+  sum_r: number
+  avg_r: number
+  win_rate: number
+  win_lb: number
+}
+
+export interface CoachTimeProfile {
+  n?: number
+  tz: string
+  hours: Record<string, CoachBucket>
+  segments: Record<string, CoachBucket & { label: string }>
+  best_hour: number | null
+  worst_hour: number | null
+  best_segment: string | null
+  worst_segment: string | null
+  min_window_sample: number
+}
+
+export interface CoachHours {
+  days: number
+  symbol: string | null
+  trades: CoachTimeProfile & { n: number }
+  setups: CoachTimeProfile & { n: number }
+}
+
+export interface CoachRecommendation extends CoachBucket {
+  kind: 'avoid' | 'focus'
+  scope: string
+  key: string
+  text: string
+}
+
+export interface CoachSetupsReport {
+  rules_version: number
+  days: number
+  symbol: string | null
+  n: number
+  total_r: number
+  min_sample: number
+  by_template: Record<string, CoachBucket>
+  time: CoachTimeProfile
+  flags: Record<string, { label: string; n: number; sum_r: number }>
+  recommendations: CoachRecommendation[]
+}
+
+function isHours(value: unknown): value is CoachHours {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as CoachHours).trades === 'object' &&
+    typeof (value as CoachHours).setups === 'object'
+  )
+}
+
+function isSetupsReport(value: unknown): value is CoachSetupsReport {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Array.isArray((value as CoachSetupsReport).recommendations) &&
+    typeof (value as CoachSetupsReport).time === 'object'
+  )
+}
+
+export function fetchCoachHours(days = 60, symbol?: string): Promise<CoachHours | null> {
+  const params = new URLSearchParams({ days: String(days) })
+  if (symbol) params.set('symbol', symbol)
+  return getJson(`${API_BASE}/coach/hours?${params.toString()}`, isHours)
+}
+
+export function fetchCoachSetups(days = 60, symbol?: string): Promise<CoachSetupsReport | null> {
+  const params = new URLSearchParams({ days: String(days) })
+  if (symbol) params.set('symbol', symbol)
+  return getJson(`${API_BASE}/coach/setups?${params.toString()}`, isSetupsReport)
+}
+
+/** Řádky profilu denní doby seřazené podle Ø R; jen koše se vzorkem (min n). */
+export function rankedWindows(
+  profile: CoachTimeProfile,
+  minN = profile.min_window_sample,
+): Array<{ key: string; label: string; bucket: CoachBucket }> {
+  const rows = Object.entries(profile.segments)
+    .filter(([, bucket]) => bucket.n >= minN)
+    .map(([key, bucket]) => ({ key, label: bucket.label, bucket }))
+  return rows.sort((a, b) => b.bucket.avg_r - a.bucket.avg_r)
+}
+
 async function getJson<T>(url: string, guard: (value: unknown) => value is T): Promise<T | null> {
   try {
     const response = await fetch(url)

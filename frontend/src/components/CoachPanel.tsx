@@ -2,8 +2,54 @@
 týdenní report s cenou chyb a 1–3 pravidly. Data z /coach/*; refresh při
 změně dne, symbolu nebo verze deníku. */
 import { useEffect, useState } from 'react'
-import { fetchCoachReview, fetchCoachWeekly, formatR, scoreTone } from '../api/coach'
-import type { CoachDaily, CoachWeekly } from '../api/coach'
+import {
+  fetchCoachHours,
+  fetchCoachReview,
+  fetchCoachWeekly,
+  formatR,
+  rankedWindows,
+  scoreTone,
+} from '../api/coach'
+import type { CoachDaily, CoachHours, CoachTimeProfile, CoachWeekly } from '../api/coach'
+
+/** Tabulka segmentů seance s Ø R — nejlepší/nejhorší okno zvýrazněné (#1201). */
+function TimeTable({
+  title,
+  profile,
+}: {
+  title: string
+  profile: CoachTimeProfile & { n: number }
+}) {
+  const rows = rankedWindows(profile, 1)
+  if (profile.n === 0 || rows.length === 0) return null
+  return (
+    <div className="coach-time" data-testid="coach-time">
+      <h4>
+        {title} <span className="muted">({profile.n} · Praha)</span>
+      </h4>
+      <table className="coach-time-table">
+        <tbody>
+          {rows.map(({ key, label, bucket }) => {
+            const tone =
+              key === profile.best_segment ? 'good' : key === profile.worst_segment ? 'bad' : ''
+            return (
+              <tr key={key} className={tone ? `coach-${tone}` : undefined}>
+                <td>{label}</td>
+                <td className={bucket.avg_r >= 0 ? 'r-positive' : 'r-negative'}>
+                  {formatR(bucket.avg_r)}
+                </td>
+                <td className="muted">
+                  n={bucket.n} · {Math.round(bucket.win_rate * 100)} % · Σ {formatR(bucket.sum_r)}
+                  {bucket.n < profile.min_window_sample ? ' · malý vzorek' : ''}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 function timeOf(iso: string | null): string {
   if (!iso) return '—'
@@ -27,6 +73,7 @@ export function CoachPanel({
 }) {
   const [daily, setDaily] = useState<CoachDaily | null>(null)
   const [weekly, setWeekly] = useState<CoachWeekly | null>(null)
+  const [hours, setHours] = useState<CoachHours | null>(null)
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
@@ -34,10 +81,12 @@ export function CoachPanel({
     void Promise.all([
       fetchCoachReview(date || undefined, symbol || undefined),
       fetchCoachWeekly(date || undefined, symbol || undefined),
-    ]).then(([review, report]) => {
+      fetchCoachHours(60, symbol || undefined),
+    ]).then(([review, report, timeProfile]) => {
       if (cancelled) return
       setDaily(review)
       setWeekly(report)
+      setHours(timeProfile)
       setLoaded(true)
     })
     return () => {
@@ -127,6 +176,12 @@ export function CoachPanel({
               ))}
             </ol>
           )}
+        </div>
+      )}
+      {hours && (hours.trades.n > 0 || hours.setups.n > 0) && (
+        <div className="coach-hours">
+          <TimeTable title="Denní doba — tvoje obchody (60 dní)" profile={hours.trades} />
+          <TimeTable title="Denní doba — setupy detektoru (60 dní)" profile={hours.setups} />
         </div>
       )}
     </section>
