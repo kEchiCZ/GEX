@@ -2017,6 +2017,66 @@ sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly.</p>
 </tr>
 </tbody></table>
 <p><strong>Rozdíl obou čar ber jako flip ZÓNU.</strong> Blízko sebe = ostrá hranice režimů, signály čitelné. Rozjeté = hranice rozmazaná → <strong>uvnitř zóny neobchoduj</strong>, čekej, až cena opustí celé pásmo.</p>
+<h3>Kouč — denní review a týdenní report (v1.20, #1187 fáze 3)</h3>
+<p>V Deníku nahoře je panel <strong>🎓 Kouč</strong>. Pro zvolený den (filtr dne; prázdný =
+dnešní seance) a symbol projde všechny obchody typu <em>obchod</em> (ruční i paper)
+a ke každému dá <strong>příznaky s důkazem a cenou v R</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>příznak</th>
+<th>důkaz</th>
+<th>trest</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>bez plánovaného stopu</td>
+<td>obchod nemá <code>planned_stop</code></td>
+<td>25</td>
+</tr>
+<tr>
+<td>vstup po denní brzdě</td>
+<td>vstup při dnešních ≤ −3 R (jen ruční obchody — paper účet je blokuje)</td>
+<td>25</td>
+</tr>
+<tr>
+<td>revenge</td>
+<td>vstup do 5 min po stopu na tomtéž symbolu</td>
+<td>15</td>
+</tr>
+<tr>
+<td>ztráta nad plánované riziko</td>
+<td>realizováno pod −1,2 R (stop nedodržen)</td>
+<td>15</td>
+</tr>
+<tr>
+<td>bez setupu z playbooku</td>
+<td><code>setup_key</code> prázdný</td>
+<td>10</td>
+</tr>
+<tr>
+<td>nízké RRR</td>
+<td>plánované RRR &lt; 1,5</td>
+<td>10</td>
+</tr>
+<tr>
+<td>předčasný výstup</td>
+<td>ruční výstup a cena pak došla na cíl → „nechal jsi X R&quot;</td>
+<td>10</td>
+</tr>
+<tr>
+<td>overtrading</td>
+<td>5. a další obchod seance</td>
+<td>10</td>
+</tr>
+</tbody></table>
+<p><strong>Skóre disciplíny</strong> dne = 100 − součet trestů (zeleně ≥ 85, žlutě ≥ 60).
+U každého obchodu je i <strong>využití pohybu</strong> (realizované R / MFE v R). Pod tím
+<strong>týdenní report</strong> (po–pá): počet, Σ R, úspěšnost, Ø R, disciplína, využití
+pohybu a <strong>1–3 pravidla na příští týden</strong> — příznaky seřazené podle toho,
+kolik R stály, s konkrétní radou („po stopu 15 minut pauza&quot;). Kouč nic
+nehádá: každá věta je číslo z deníku; posun stopu a zvětšování po sérii
+výher přibudou, až paper ordery ponesou historii změn.</p>
 <h3>Paper účet v aplikaci — fáze 1 (v1.20, #1187, ADR-0040)</h3>
 <p>Trénink obchodování bez brokera: ordery se zadávají do aplikace, fily
 simuluje engine proti živé ceně (1min bary; market na open dalšího baru</p>

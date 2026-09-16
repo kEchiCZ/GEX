@@ -271,6 +271,24 @@ class MetaRepository:
         with self._db().connect() as conn:
             return [str(row[0]) for row in conn.execute(stmt)]
 
+    def journal_between(self, since: dt.date, until: dt.date) -> list[dict[str, Any]]:
+        """Obchody deníku (typ `obchod`) s ts_ref v [since, until] — vstup kouče (#933)."""
+        start = dt.datetime.combine(since, dt.time.min, tzinfo=dt.UTC)
+        end = dt.datetime.combine(until + dt.timedelta(days=1), dt.time.min, tzinfo=dt.UTC)
+        stmt = (
+            select(journal_table)
+            .where(
+                journal_table.c.entry_type == "obchod",
+                journal_table.c.ts_ref >= start,
+                journal_table.c.ts_ref < end,
+            )
+            .order_by(journal_table.c.ts_ref.asc())
+        )
+        with self._db().connect() as conn:
+            entries = [dict(row._mapping) for row in conn.execute(stmt)]
+            trades = self._journal_trades(conn, [int(e["id"]) for e in entries])
+        return [_journal_row(entry, trades.get(int(entry["id"]))) for entry in entries]
+
     def journal_create(
         self, values: dict[str, Any], trade: dict[str, Any] | None = None
     ) -> dict[str, Any]:

@@ -22,6 +22,7 @@ import {
   updateJournalEntry,
 } from '../api/journal'
 import { MISSED_REASONS, MISSED_REASON_LABELS, fetchPlaybook } from '../api/journal'
+import { CoachPanel } from './CoachPanel'
 import type {
   JournalEntry,
   JournalMeta,
@@ -446,6 +447,8 @@ export function JournalView() {
 
   return (
     <main className="journal-view" aria-label="Deník">
+      {/* Kouč (#933): review obchodů dne (filtr dne/symbolu jako seznam) + týdenní report */}
+      <CoachPanel date={filterDate} symbol={filterSymbol} version={entries.length} />
       <section className="journal-form" aria-label="Nový záznam">
         <h3>Nový záznam · {symbol}</h3>
         <div className="journal-form-row" role="group" aria-label="Profil deníku">

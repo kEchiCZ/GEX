@@ -41,6 +41,7 @@ from gexlens_api.candles import (
     build_daily_candles,
     calendar_days_needed,
 )
+from gexlens_api.coach_routes import build_coach_router
 from gexlens_api.crud import build_router
 from gexlens_api.data import DataRepository, PartitionNotFoundError, session_bounds
 from gexlens_api.heatmap import (
@@ -223,6 +224,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             paper_repository,
             current_setup_params,
             lambda payload: live_hub.publish("alerts", payload),
+        )
+    )
+    # Kouč v1 (#1187 fáze 3, #933): review obchodů deníku, týdenní report
+    app.include_router(
+        build_coach_router(
+            meta_repository.journal_between, repository.bars_session, current_setup_params
         )
     )
     # SentimentLens (#285) — vlastní router, ať main.py nenaroste o dalších

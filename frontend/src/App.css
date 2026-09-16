@@ -2667,6 +2667,64 @@ tr.setup-shadow td[data-part='risk'] {
   white-space: nowrap;
 }
 
+/* Kouč (#933) v Deníku */
+.coach-panel {
+  margin: 6px 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--border, #2a3140);
+  border-left: 3px solid #7c9cff;
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.coach-panel h3,
+.coach-panel h4 {
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.coach-score {
+  font-size: 13px;
+  padding: 1px 8px;
+  border-radius: 9px;
+  background: var(--bg-chip);
+}
+
+.coach-score.coach-good {
+  color: #7fd9a8;
+}
+
+.coach-score.coach-warn {
+  color: #f0c36d;
+}
+
+.coach-score.coach-bad {
+  color: #e39a9a;
+}
+
+.coach-trades,
+.coach-flags,
+.coach-rules {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.coach-trades > li {
+  margin-bottom: 4px;
+}
+
+.coach-flag {
+  color: #f0c36d;
+}
+
+.coach-weekly {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border, #2a3140);
+}
+
 /* Paper účet (#1187): chip s equity/R dne, pozice a kill switch */
 .paper-chip {
   display: inline-flex;
