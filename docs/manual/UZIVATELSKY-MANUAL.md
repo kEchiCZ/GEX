@@ -1611,6 +1611,31 @@ V aplikaci jsou dva flipy — **obě čáry měří totéž dvěma metodami**:
 
 **Rozdíl obou čar ber jako flip ZÓNU.** Blízko sebe = ostrá hranice režimů, signály čitelné. Rozjeté = hranice rozmazaná → **uvnitř zóny neobchoduj**, čekej, až cena opustí celé pásmo.
 
+### Kouč — denní review a týdenní report (v1.20, #1187 fáze 3)
+
+V Deníku nahoře je panel **🎓 Kouč**. Pro zvolený den (filtr dne; prázdný =
+dnešní seance) a symbol projde všechny obchody typu *obchod* (ruční i paper)
+a ke každému dá **příznaky s důkazem a cenou v R**:
+
+| příznak | důkaz | trest |
+|---|---|---|
+| bez plánovaného stopu | obchod nemá `planned_stop` | 25 |
+| vstup po denní brzdě | vstup při dnešních ≤ −3 R (jen ruční obchody — paper účet je blokuje) | 25 |
+| revenge | vstup do 5 min po stopu na tomtéž symbolu | 15 |
+| ztráta nad plánované riziko | realizováno pod −1,2 R (stop nedodržen) | 15 |
+| bez setupu z playbooku | `setup_key` prázdný | 10 |
+| nízké RRR | plánované RRR < 1,5 | 10 |
+| předčasný výstup | ruční výstup a cena pak došla na cíl → „nechal jsi X R" | 10 |
+| overtrading | 5. a další obchod seance | 10 |
+
+**Skóre disciplíny** dne = 100 − součet trestů (zeleně ≥ 85, žlutě ≥ 60).
+U každého obchodu je i **využití pohybu** (realizované R / MFE v R). Pod tím
+**týdenní report** (po–pá): počet, Σ R, úspěšnost, Ø R, disciplína, využití
+pohybu a **1–3 pravidla na příští týden** — příznaky seřazené podle toho,
+kolik R stály, s konkrétní radou („po stopu 15 minut pauza"). Kouč nic
+nehádá: každá věta je číslo z deníku; posun stopu a zvětšování po sérii
+výher přibudou, až paper ordery ponesou historii změn.
+
 ### Paper účet v aplikaci — fáze 1 (v1.20, #1187, ADR-0040)
 
 Trénink obchodování bez brokera: ordery se zadávají do aplikace, fily
