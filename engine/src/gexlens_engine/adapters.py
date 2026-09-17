@@ -21,6 +21,7 @@ from gexlens_engine.ibkr.subscription import ReqIdTombstones, contract_label
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import PublisherLike
 from gexlens_engine.storage.oi_archive import ContractSnapshot
+from gexlens_engine.ticker import symbol_root
 
 logger = logging.getLogger(__name__)
 
@@ -33,16 +34,17 @@ QUALIFY_DEAD_FOR_S = 60.0
 
 
 def spec_to_contract(spec: OptionContractSpec) -> Contract:
+    # Ticker pipeline může být pinovaný kontrakt (ESU6, #1191) — IBKR chce kořen
     if spec.sec_type == "FOP":
         return FuturesOption(
-            spec.symbol,
+            symbol_root(spec.symbol),
             spec.expiry,
             spec.strike,
             spec.right,
             spec.exchange,
             tradingClass=spec.trading_class,
         )
-    return Option(spec.symbol, spec.expiry, spec.strike, spec.right, spec.exchange)
+    return Option(symbol_root(spec.symbol), spec.expiry, spec.strike, spec.right, spec.exchange)
 
 
 def _valid(value: float | None) -> bool:

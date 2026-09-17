@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { coverageLabel, greeksCoverage, oiCoverage } from '../instrument/coverage'
 import type { Coverage } from '../instrument/coverage'
 import { expiryCountdown, expiryIsoDate, expiryKind, expirySettleUtc } from '../instrument/expiry'
+import { pinnedContract, symbolRoot } from '../instrument/ticker'
 import { formatSettleWatch } from '../instrument/settlewatch'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
@@ -182,7 +183,20 @@ export function InstrumentHeader({
       <div className="header-row header-row-main">
         <div className="instrument-title">
           <span className="ticker">{symbol}</span>
-          <span className="name muted">{SYMBOL_NAMES[symbol] ?? ''}</span>
+          <span className="name muted">{SYMBOL_NAMES[symbolRoot(symbol)] ?? ''}</span>
+          {pinnedContract(symbol) && (
+            <span
+              className="chip contract-pinned"
+              data-testid="contract-pinned"
+              title={
+                'Pinovaný kontrakt (#1191): engine sleduje přesně tento futures ' +
+                'kontrakt a jeho opční řetěz až do expirace — bez roll pravidla. ' +
+                `Automatický front kontrakt má ticker ${symbolRoot(symbol)}.`
+              }
+            >
+              📌 kontrakt {pinnedContract(symbol)?.slice(symbolRoot(symbol).length)}
+            </span>
+          )}
         </div>
         <div className="instrument-price">
           <span className="last">{lastPrice !== undefined ? lastPrice.toFixed(2) : '—'}</span>

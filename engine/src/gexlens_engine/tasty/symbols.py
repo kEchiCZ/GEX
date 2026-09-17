@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.tasty.session import TastySession
+from gexlens_engine.ticker import parse_ticker, symbol_root
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,9 @@ class SymbolMap:
         cached = self._front_future.get(product)
         if cached is not None:
             return cached
-        payload = await self._session.get_json(f"/instruments/futures?product-code={product}")
+        # `product` je ticker pipeline: kořen (ES) nebo pinovaný kontrakt (ESU6, #1191)
+        ticker = parse_ticker(product)
+        payload = await self._session.get_json(f"/instruments/futures?product-code={ticker.root}")
         items = [
             item
             for item in payload.get("data", {}).get("items", [])
@@ -65,6 +68,21 @@ class SymbolMap:
         if not items:
             logger.warning("tasty: pro %s nevrátilo API žádný futures kontrakt", product)
             return None
+        if ticker.pinned:
+            # tasty `symbol` je "/ESU6" — přesně pinovaný kontrakt, bez roll pravidla
+            pinned = [item for item in items if str(item.get("symbol")) == f"/{ticker.symbol}"]
+            if not pinned:
+                logger.warning("tasty: kontrakt %s v produktu %s není", product, ticker.root)
+                return None
+            symbol = str(pinned[0]["streamer-symbol"])
+            self._front_future[product] = symbol
+            logger.info(
+                "tasty pinovaný kontrakt %s: %s (expirace %s)",
+                product,
+                symbol,
+                pinned[0].get("expiration-date"),
+            )
+            return symbol
         today = dt.date.today()
         eligible = []
         for item in items:
@@ -89,6 +107,8 @@ class SymbolMap:
         return symbol
 
     async def chain(self, product: str, today: dt.date) -> ChainSymbols:
+        # Řetěz je per produkt (kořen): pinovaný ticker (ESU6) sdílí cache s ES (#1191)
+        product = symbol_root(product)
         cached = self._cache.get(product)
         if cached is not None and cached.day == today:
             return cached

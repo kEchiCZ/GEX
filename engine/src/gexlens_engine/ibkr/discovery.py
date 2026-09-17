@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from gexlens_engine.config import Settings
+from gexlens_engine.ticker import symbol_root
 
 logger = logging.getLogger(__name__)
 
@@ -175,8 +176,10 @@ class ChainDiscovery:
         FOP se filtruje na burzu podkladu (CME), OPT na agregát SMART (SPEC 3.2).
         """
         fut_fop_exchange = underlying.exchange if underlying.sec_type == "FUT" else ""
+        # Ticker může být pinovaný kontrakt (ESU6, #1191) — IBKR chce kořen produktu;
+        # řetěz konkrétního kontraktu určuje `con_id` podkladu
         chains = await self._client.reqSecDefOptParamsAsync(
-            underlying.symbol,
+            symbol_root(underlying.symbol),
             fut_fop_exchange,
             underlying.sec_type,
             underlying.con_id,

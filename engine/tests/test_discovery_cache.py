@@ -53,6 +53,17 @@ def test_store_load_roundtrip_a_filtr_expirovanych(tmp_path: Path) -> None:
     assert cache.load("ES", today=TODAY) is None
 
 
+def test_pinovany_kontrakt_v_cache_plati_do_expirace(tmp_path: Path) -> None:
+    """#1191: kořen respektuje roll okno, pinovaný ticker (NQU6) platí až do expirace."""
+    cache = DiscoveryCache(tmp_path / CACHE_FILENAME)
+    cache.store(front(), infos())  # NQ, front NQU6, expirace 18. 9.
+    cache.store(front(symbol="NQU6"), infos())
+    v_roll_oknu = dt.date(2026, 9, 14)  # 4 dny do expirace < roll 8 d
+    assert cache.load("NQ", today=v_roll_oknu, front_roll_days=8) is None
+    assert cache.load("NQU6", today=v_roll_oknu, front_roll_days=8) is not None
+    assert cache.load("NQU6", today=dt.date(2026, 9, 19), front_roll_days=8) is None
+
+
 def test_store_prepisuje_jen_svuj_symbol(tmp_path: Path) -> None:
     cache = DiscoveryCache(tmp_path / CACHE_FILENAME)
     cache.store(front(), infos())

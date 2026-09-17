@@ -27,6 +27,7 @@ import { fetchTendency } from '../api/tendency'
 import type { TendencyRow } from '../api/tendency'
 import type { JournalProfile } from '../api/journal'
 import { frontContractCode } from '../instrument/expiry'
+import { pinnedContract } from '../instrument/ticker'
 import { isRollWeek, macroFromHeadline } from './futures'
 import { segmentForTs } from './segments'
 
@@ -179,7 +180,11 @@ export function composeContext(input: ContextInputs): JournalContext {
     vol_bucket: input.volRegime?.bucket ?? null,
     vol_percentile: input.volRegime?.percentile ?? null,
     macro_event: input.macroEvent,
-    contract: input.profile === 'futures' ? frontContractCode(input.symbol, tsDate) : null,
+    // Pinovaný ticker (ESU6, #1191) je kontrakt sám; kořen → front podle roll pravidla
+    contract:
+      input.profile === 'futures'
+        ? (pinnedContract(input.symbol) ?? frontContractCode(input.symbol, tsDate))
+        : null,
     roll_week: input.profile === 'futures' ? isRollWeek(tsDate) : null,
   }
 }

@@ -158,6 +158,7 @@ from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
 from gexlens_engine.tasty.trades_recorder import TradesRecorder
 from gexlens_engine.tasty.wideoi import wide_contracts, wide_records, wide_streamers
 from gexlens_engine.tendency import TendencyEngine
+from gexlens_engine.ticker import parse_ticker
 from gexlens_engine.volregime import VolRegimeCollector
 
 logger = logging.getLogger("gexlens.engine")
@@ -236,10 +237,11 @@ async def _resolve_front_future(ib: IB, symbol: str, *, front_roll_days: int = 0
     `front_roll_days` dní — od CME roll date je front ten další.
     """
     today = dt.datetime.now(dt.UTC).date()
+    ticker = parse_ticker(symbol)
     for attempt in range(3):
         try:
             details = await asyncio.wait_for(
-                ib.reqContractDetailsAsync(Future(symbol, exchange="")), timeout=30.0
+                ib.reqContractDetailsAsync(Future(ticker.root, exchange="")), timeout=30.0
             )
         except TimeoutError:
             logger.warning("Discovery %s timeout (pokus %d/3)", symbol, attempt + 1)
@@ -251,6 +253,26 @@ async def _resolve_front_future(ib: IB, symbol: str, *, front_roll_days: int = 0
         ]
         if contracts:
             contracts.sort(key=lambda c: c.lastTradeDateOrContractMonth)
+            if ticker.pinned:
+                # Pinovaný kontrakt (#1191): přesně ten, žádné roll pravidlo —
+                # expirovaný/neexistující je chyba setupu, ne tichý fallback
+                for contract in contracts:
+                    if str(contract.localSymbol) != ticker.local_symbol:
+                        continue
+                    if str(contract.lastTradeDateOrContractMonth)[:8] < today.strftime("%Y%m%d"):
+                        raise InstrumentSetupError(
+                            f"{symbol}: kontrakt expiroval {contract.lastTradeDateOrContractMonth}"
+                        )
+                    logger.info(
+                        "Pinovaný kontrakt %s (expirace %s)",
+                        contract.localSymbol,
+                        contract.lastTradeDateOrContractMonth,
+                    )
+                    return contract
+                raise InstrumentSetupError(
+                    f"{symbol}: kontrakt {ticker.local_symbol} IBKR nezná "
+                    f"(k dispozici: {', '.join(str(c.localSymbol) for c in contracts[:6])})"
+                )
             for contract in contracts:
                 try:
                     last_trade = dt.datetime.strptime(
