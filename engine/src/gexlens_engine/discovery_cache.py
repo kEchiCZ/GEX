@@ -31,6 +31,7 @@ from pathlib import Path
 from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.ibkr.discovery import ExpiryInfo
 from gexlens_engine.instruments import expiry_expired
+from gexlens_engine.ticker import pinned_contract
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,8 @@ class DiscoveryCache:
             last_trade = dt.datetime.strptime(front.last_trade_date, "%Y%m%d").date()
         except ValueError:
             return None
-        if not front_contract_eligible(last_trade, today, front_roll_days):
+        # Pinovaný kontrakt (#1191) roll pravidlo nemá — platí do expirace
+        roll_days = 0 if pinned_contract(symbol) else front_roll_days
+        if not front_contract_eligible(last_trade, today, roll_days):
             return None
         return cached

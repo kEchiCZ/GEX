@@ -2098,6 +2098,15 @@ je sekce <strong>Denní doba</strong> zvlášť pro tvoje obchody a pro setupy: 
 hour · Posledních 30 min · Po close) s Ø R, n, úspěšností a Σ R, nejlepší
 zeleně, nejhorší červeně; okna pod 20 vzorků jsou označená jako malý vzorek.
 Hodiny se počítají v pražském čase.</p>
+<p><strong>Pinovaný kontrakt ve watchlistu.</strong> Ticker <code>ES</code> znamená automatický front
+kontrakt (engine roluje 8 dnů před expirací, ADR-0039). Když chceš vidět
+přesně jeden futures kontrakt a jeho opční řetěz — typicky v roll týdnu
+kvartální 0DTE na dobíhajícím kontraktu — přidej do watchlistu ticker
+s kódem kontraktu: <code>ESU6</code>, <code>NQZ6</code> (kód měsíce H/M/U/Z + poslední číslice
+roku). Pinovaný kontrakt <strong>nahrazuje</strong> automatický (stejný počet pipeline
+a market data lines), platí až do expirace a v hlavičce nese štítek
+<code>📌 kontrakt U6</code>. Má vlastní historii (setupy, statistiky) oddělenou od <code>ES</code>;
+po expiraci ho z watchlistu odeber (engine hlásí chybu setupu).</p>
 <p><strong>Shrnutí kouče.</strong> Nahoře v panelu Kouč (Deník) je 4–6 vět složených jen
 z čísel: týden (obchody, Σ R, úspěšnost, disciplína), nejdražší chyba, tvoje
 nejlepší/nejhorší okno dne, okna setupů detektoru a hlavní doporučení pro

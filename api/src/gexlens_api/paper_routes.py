@@ -18,6 +18,7 @@ from gexlens_engine.compute.risk import brake_state, position_size, week_start
 from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.storage.paper_store import DEFAULT_ACCOUNT_ID, PaperRepository
+from gexlens_engine.ticker import symbol_root
 
 SIDES = ("long", "short")
 ORDER_TYPES = ("market", "limit", "stop")
@@ -123,7 +124,7 @@ def build_paper_router(
             raise HTTPException(422, f"side musí být jeden z {SIDES}")
         if body.order_type not in ORDER_TYPES:
             raise HTTPException(422, f"order_type musí být jeden z {ORDER_TYPES}")
-        point_value = POINT_VALUES.get(body.symbol)
+        point_value = POINT_VALUES.get(symbol_root(body.symbol))  # ESU6 → ES (#1191)
         if point_value is None:
             raise HTTPException(422, f"Neznámá hodnota bodu pro {body.symbol}")
         error = validate_levels(

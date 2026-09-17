@@ -38,6 +38,7 @@ from gexlens_engine.storage.ivrank_store import (
     IvRankRepository,
 )
 from gexlens_engine.storage.oi_archive import oi_eod_table
+from gexlens_engine.ticker import parse_ticker, symbol_root
 
 logger = logging.getLogger(__name__)
 
@@ -151,14 +152,21 @@ class IvRankCollector:
         if self.ib is None:
             return None
         # Sec-def farma při Error 1100 neodpoví nikdy — bez stropu by sběr visel (#1153)
+        ticker = parse_ticker(self.symbol)
         details = await asyncio.wait_for(
-            self.ib.reqContractDetailsAsync(Future(self.symbol, exchange="CME")), timeout=30.0
+            self.ib.reqContractDetailsAsync(Future(ticker.root, exchange="CME")), timeout=30.0
         )
         today = dt.date.today()
         candidates = sorted(
             (item.contract for item in details if item.contract is not None),
             key=lambda contract: str(contract.lastTradeDateOrContractMonth),
         )
+        if ticker.pinned:
+            # Pinovaný kontrakt (#1191): IV přesně toho kontraktu, bez roll pravidla
+            for contract in candidates:
+                if str(contract.localSymbol) == ticker.local_symbol:
+                    return contract
+            return None
         for contract in candidates:
             # Roll pravidlo (#1189): stejný kontrakt jako pipeline, ne dobíhající
             try:
@@ -232,11 +240,12 @@ class IvRankCollector:
     async def _collect_tasty(self, now: dt.datetime, session: dt.date) -> None:
         if self.tasty is None:
             return
-        symbol = f"%2F{self.symbol}"  # /ES — lomítko musí být URL-encoded
+        root = symbol_root(self.symbol)  # metriky jsou per produkt (#1191)
+        symbol = f"%2F{root}"  # /ES — lomítko musí být URL-encoded
         payload = await self.tasty.get_json(f"/market-metrics?symbols={symbol}")
         items = payload.get("data", {}).get("items", [])
         for item in items:
-            if item.get("symbol") != f"/{self.symbol}":
+            if item.get("symbol") != f"/{root}":
                 continue
             iv = _num(item.get("implied-volatility-index"))
             rank = _num(item.get("implied-volatility-index-rank"))

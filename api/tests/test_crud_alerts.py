@@ -24,6 +24,14 @@ def client(tmp_path: Path) -> TestClient:
 # ── CRUD integračně (AC) ───────────────────────────────────────────
 
 
+def test_watchlist_ticker_validace(client: TestClient) -> None:
+    """#1191: kořen i pinovaný kontrakt projdou (uppercase), nesmysl 422."""
+    assert client.post("/watchlist", json={"symbol": "esz6"}).json()["symbol"] == "ESZ6"
+    assert client.post("/watchlist", json={"symbol": "nq"}).json()["symbol"] == "NQ"
+    assert client.post("/watchlist", json={"symbol": "ES-Z6"}).status_code == 422
+    assert client.post("/watchlist", json={"symbol": "ES Z6"}).status_code == 422
+
+
 def test_watchlist_crud(client: TestClient) -> None:
     assert client.get("/watchlist").json() == {"watchlist": []}
 

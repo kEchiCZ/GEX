@@ -21,6 +21,7 @@ from typing import Literal
 
 from gexlens_engine.compute.setups import Direction, Outcome, evaluate_bar
 from gexlens_engine.ibkr.underlying import Bar
+from gexlens_engine.ticker import symbol_root
 
 #: Hodnota bodu plného kontraktu (CME) — sizing a P/L; neznámý symbol = order se odmítne
 POINT_VALUES: dict[str, float] = {
@@ -91,7 +92,7 @@ class Exit:
 
 
 def tick_of(symbol: str) -> float:
-    return TICK_SIZES.get(symbol, 0.25)
+    return TICK_SIZES.get(symbol_root(symbol), 0.25)
 
 
 def fill_entry(order: PaperOrder, bar: Bar, *, slippage_ticks: int = 1) -> Fill | None:

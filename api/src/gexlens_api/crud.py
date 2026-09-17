@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from gexlens_api.alerts import AlertKind
 from gexlens_api.meta_repo import DuplicateEntryError, MetaRepository, NotFoundError
@@ -24,6 +24,7 @@ from gexlens_engine.storage.meta import (
     TRADE_DIRECTIONS,
     default_profile,
 )
+from gexlens_engine.ticker import parse_ticker
 
 # Klíče řídící engine (#542 C4). Bez whitelistu byl `PUT /settings/{key}`
 # neautentizované řízení enginu: `ibkr_host` ho přepojí na cizí server
@@ -69,6 +70,15 @@ class ReconnectIn(BaseModel):
 
 class WatchlistItemIn(BaseModel):
     symbol: str = Field(min_length=1, max_length=16)
+
+    @field_validator("symbol")
+    @classmethod
+    def _ticker(cls, value: str) -> str:
+        """Kořen (ES) nebo pinovaný kontrakt (ESZ6) — ADR-0041 (#1191); ukládá se uppercase."""
+        try:
+            return parse_ticker(value).symbol
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class AlertIn(BaseModel):

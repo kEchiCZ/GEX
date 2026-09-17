@@ -2719,6 +2719,11 @@ tr.setup-shadow td[data-part='risk'] {
   color: #f0c36d;
 }
 
+.contract-pinned {
+  margin-left: 6px;
+  font-size: 0.8em;
+}
+
 .coach-overview {
   margin: 4px 0 8px;
   padding-left: 18px;

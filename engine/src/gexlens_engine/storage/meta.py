@@ -28,6 +28,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.ticker import symbol_root
+
 meta_metadata = MetaData()
 
 # PG NOTIFY kanál změn watchlistu (#207): API po zápisu notifikuje, engine
@@ -120,7 +122,8 @@ TRADE_DIRECTIONS = ("long", "short")
 
 def default_profile(symbol: str) -> str:
     """Výchozí profil podle symbolu; volba zůstává na uživateli."""
-    return "futures" if symbol.upper() in FUTURES_SYMBOLS else "smb"
+    # Pinovaný kontrakt (ESU6, #1191) je futures stejně jako kořen
+    return "futures" if symbol_root(symbol) in FUTURES_SYMBOLS else "smb"
 
 
 journal_table = Table(

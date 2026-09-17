@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Legend } from './Legend'
 import { API_BASE, APP_ENV, APP_VERSION } from '../config'
 import { frontContractCode } from '../instrument/expiry'
+import { parseTicker } from '../instrument/ticker'
 import { useAdhocPing } from '../hooks/useAdhocPing'
 import { useAppState } from '../state/AppState'
 import type { AppView } from '../state/AppState'
@@ -111,6 +112,11 @@ export function Sidebar() {
   const addSymbol = async () => {
     const symbol = newSymbol.trim().toUpperCase()
     if (!symbol) return
+    // Kořen (ES) nebo pinovaný kontrakt (ESZ6) — stejná gramatika jako engine (#1191)
+    if (parseTicker(symbol) === null) {
+      setWatchlistError(`Neplatný ticker ${symbol} — zadej kořen (ES) nebo kontrakt (ESZ6)`)
+      return
+    }
     try {
       const response = await fetch(`${API_BASE}/watchlist`, {
         method: 'POST',

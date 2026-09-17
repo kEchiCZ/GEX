@@ -28,6 +28,7 @@ from gexlens_engine.compute.settle import settle_ts, trading_session_date
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import PublisherLike
 from gexlens_engine.storage.paper_store import PaperRepository
+from gexlens_engine.ticker import symbol_root
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ class PaperBroker:
         await self._publish(order, "cancelled", f"Paper order #{order.id} zrušen ({reason})")
 
     async def _close(self, order: PaperOrder, exit_: Exit, now: dt.datetime) -> None:
-        point_value = POINT_VALUES.get(order.symbol, 0.0)
+        point_value = POINT_VALUES.get(symbol_root(order.symbol), 0.0)
         points = pnl_points(order, exit_.price)
         fees = self.fee_per_contract_usd * order.qty
         pnl = points * order.qty * point_value - fees
