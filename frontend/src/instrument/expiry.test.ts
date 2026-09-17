@@ -6,7 +6,11 @@ test('frontContractCode: TWS symbol předního kvartálního kontraktu (#189)', 
   // Červenec 2026 → září (3. pátek 18. 9. 2026 je v budoucnu) → ESU6
   expect(frontContractCode('ES', new Date('2026-07-22T09:00:00Z'))).toBe('ESU6')
   expect(frontContractCode('NQ', new Date('2026-07-22T09:00:00Z'))).toBe('NQU6')
-  // V den zářijové expirace se kód přepne na prosinec
+  // Roll 8 dnů před expirací (ADR-0039): 9. 9. ještě U6, od roll date 10. 9. Z6
+  expect(frontContractCode('ES', new Date('2026-09-09T23:00:00Z'))).toBe('ESU6')
+  expect(frontContractCode('ES', new Date('2026-09-10T00:00:00Z'))).toBe('ESZ6')
+  expect(frontContractCode('NQ', new Date('2026-09-17T06:00:00Z'))).toBe('NQZ6')
+  // V den zářijové expirace už dávno prosinec
   expect(frontContractCode('ES', new Date('2026-09-18T10:00:00Z'))).toBe('ESZ6')
   // Po prosincové expiraci (18. 12. 2026) → březen dalšího roku
   expect(frontContractCode('ES', new Date('2026-12-20T00:00:00Z'))).toBe('ESH7')
