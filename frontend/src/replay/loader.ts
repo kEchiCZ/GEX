@@ -96,6 +96,23 @@ export interface ReplayDay {
   gexFieldFa: GexFieldRow | null
   /** GEX žebřík per minuta (#244); null = minuta žebřík nemá. */
   ladder: (LadderMinuteRow | null)[]
+  /** Denní součty z API `?resolution=daily` (#1206); undefined = plný balík,
+  Daily si je sečte z minutových panelů. */
+  dailyTotals?: DailyTotals
+}
+
+/** Součty dne z API pro Daily pohled (#1206) — stejné vzorce jako `ensureDerived`. */
+export interface DailyTotals {
+  tsIso: string
+  vol: number
+  optVolCall: number
+  optVolPut: number
+  deltaFlowCall: number
+  deltaFlowPut: number
+  evoOiCall: number
+  evoOiPut: number
+  cumDelta: number | null
+  bar: { open: number; high: number; low: number; close: number } | null
 }
 
 /** GEX žebřík minuty (#244): významné striky per strana s podílem na síle. */
@@ -251,6 +268,8 @@ export interface ReplayInputs {
   gexFieldFa: GexFieldRow | null
   /** GEX žebřík per minuta (#244). */
   ladder: LadderMinuteRow[]
+  /** Denní součty z `?resolution=daily` (#1206); undefined u plného balíku. */
+  dailyTotals?: DailyTotals
   /** Klíče `minuta|strike|strana`, pro které OI není k dispozici (#465).
    *
    * Množina místo pole: profil se na ni ptá per řádek při každém překreslení,
@@ -352,7 +371,7 @@ export interface LiveMinute {
   }
 }
 
-interface ReplayBundle {
+export interface ReplayBundle {
   symbol: string
   expiry: string
   date: string
@@ -389,7 +408,23 @@ interface ReplayBundle {
   /** OI téže expirace z předchozího archivovaného dne (ΔOI vs. včera). */
   oi_prev?: Array<{ strike: number; right: string; oi: number }>
   oi_today?: Array<{ strike: number; right: string; oi: number }>
+  /** Denní součty (#1206) — jen u `?resolution=daily`. */
+  daily?: {
+    ts_min: string
+    vol: number
+    opt_vol_call: number
+    opt_vol_put: number
+    delta_flow_call: number
+    delta_flow_put: number
+    evo_oi_call: number
+    evo_oi_put: number
+    cum_delta: number | null
+    bar: { open: number; high: number; low: number; close: number } | null
+  }
 }
+
+/** Rozlišení balíku: `daily` = jen poslední minuta + denní součty (#1206). */
+export type ReplayResolution = 'full' | 'daily'
 
 export interface DayListing {
   date: string
@@ -406,8 +441,14 @@ export async function fetchDays(symbol: string): Promise<DayListing[]> {
   return payload.days
 }
 
-async function fetchBundle(symbol: string, expiry: string, date: string): Promise<ReplayBundle> {
-  const response = await fetch(`${API_BASE}/replay/${symbol}/${expiry}/${date}`)
+async function fetchBundle(
+  symbol: string,
+  expiry: string,
+  date: string,
+  resolution: ReplayResolution = 'full',
+): Promise<ReplayBundle> {
+  const query = resolution === 'daily' ? '?resolution=daily' : ''
+  const response = await fetch(`${API_BASE}/replay/${symbol}/${expiry}/${date}${query}`)
   if (!response.ok) {
     throw new Error(`Replay ${symbol}/${expiry}/${date} selhal: HTTP ${response.status}`)
   }
@@ -418,8 +459,11 @@ export async function fetchReplay(
   symbol: string,
   expiry: string,
   date: string,
+  options: { resolution?: ReplayResolution } = {},
 ): Promise<ReplayDay> {
-  return assembleReplayDay(decodeBundle(await fetchBundle(symbol, expiry, date)))
+  return assembleReplayDay(
+    decodeBundle(await fetchBundle(symbol, expiry, date, options.resolution ?? 'full')),
+  )
 }
 
 /** Rozložený vstup dne z /replay (pro živý append). */
@@ -807,6 +851,27 @@ export function decodeBundle(bundle: ReplayBundle, now: Date = new Date()): Repl
     gexProfileFa,
     gexFieldFa,
     ladder: ladderRows,
+    dailyTotals: bundle.daily
+      ? {
+          tsIso: canonicalTs(bundle.daily.ts_min),
+          vol: Number(bundle.daily.vol) || 0,
+          optVolCall: Number(bundle.daily.opt_vol_call) || 0,
+          optVolPut: Number(bundle.daily.opt_vol_put) || 0,
+          deltaFlowCall: Number(bundle.daily.delta_flow_call) || 0,
+          deltaFlowPut: Number(bundle.daily.delta_flow_put) || 0,
+          evoOiCall: Number(bundle.daily.evo_oi_call) || 0,
+          evoOiPut: Number(bundle.daily.evo_oi_put) || 0,
+          cumDelta: numOrNull(bundle.daily.cum_delta),
+          bar: bundle.daily.bar
+            ? {
+                open: Number(bundle.daily.bar.open),
+                high: Number(bundle.daily.bar.high),
+                low: Number(bundle.daily.bar.low),
+                close: Number(bundle.daily.bar.close),
+              }
+            : null,
+        }
+      : undefined,
     oiMissing,
     oiFilled,
     oiLowMinutes,
@@ -1495,6 +1560,7 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     gexProfileFa,
     gexFieldFa: inputs.gexFieldFa,
     ladder,
+    dailyTotals: inputs.dailyTotals,
   }
 }
 

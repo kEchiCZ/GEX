@@ -329,6 +329,30 @@ def test_replay_bundle(client: TestClient) -> None:
     assert payload["gexfieldfa"] == []
 
 
+def test_replay_bundle_daily_resolution(client: TestClient) -> None:
+    """Daily pohled (#1206): jen poslední minuta + denní součty stejným vzorcem jako UI."""
+    full = client.get(f"/replay/ES/20260716/{DAY.isoformat()}").json()
+    payload = client.get(f"/replay/ES/20260716/{DAY.isoformat()}?resolution=daily").json()
+    raw = read_arrow(base64.b64decode(payload["snapshots_arrow_base64"]))
+    assert len(raw) == len(STRIKES) * 2  # jen poslední minuta
+    assert len(payload["levels"]) == 1 and len(payload["bars"]) == 1
+    daily = payload["daily"]
+    assert daily["ts_min"].startswith("2026-07-16T15:02")
+    # Přírůstky volume: per strike 10·(i+1) za minutu, 2 měřené přírůstky → Σ 120 na stranu
+    assert daily["opt_vol_call"] == pytest.approx(120.0)
+    assert daily["opt_vol_put"] == pytest.approx(120.0)
+    assert daily["delta_flow_call"] == pytest.approx(120.0 * 0.5)
+    assert daily["delta_flow_put"] == pytest.approx(120.0 * 0.4)
+    assert daily["evo_oi_call"] == pytest.approx(600.0)
+    assert daily["evo_oi_put"] == pytest.approx(750.0)
+    assert daily["cum_delta"] == pytest.approx(150.0)
+    bars = full["bars"]
+    assert daily["bar"]["open"] == bars[0]["open"] and daily["bar"]["close"] == bars[-1]["close"]
+    assert daily["vol"] == pytest.approx(sum(bar["volume"] for bar in bars))
+    # Plný balík se nemění
+    assert "daily" not in full and len(full["bars"]) == MINUTES
+
+
 def test_replay_bundle_oiest(settings: Settings) -> None:
     """OI odhad z toku (#232): /replay nese řadu oiest + FA Dyn GEX profil."""
     from gexlens_engine.storage.parquet_store import GexProfileRow, OiEstRow

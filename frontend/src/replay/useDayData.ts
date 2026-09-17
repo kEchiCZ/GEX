@@ -675,7 +675,10 @@ export function useDayData(
         const missingDates: string[] = []
         for (const [index, entry] of recent.entries()) {
           try {
-            const day = await fetchReplay(symbol, entry.expiry, entry.date)
+            // Jen poslední minuta + denní součty (#1206 fáze 2): stovky kB místo 20–40 MB
+            const day = await fetchReplay(symbol, entry.expiry, entry.date, {
+              resolution: 'daily',
+            })
             if (day.grid.minutes > 0) {
               days.push(day)
             } else {

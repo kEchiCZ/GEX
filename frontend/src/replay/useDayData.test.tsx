@@ -508,6 +508,8 @@ test('daily skládá dny sekvenčně, sloupce přibývají a progres končí nul
     await vi.advanceTimersByTimeAsync(10)
   })
   expect(order).toEqual(['2026-07-14', '2026-07-15', '2026-07-16'])
+  // Daily žádá zredukovaný balík (#1206 fáze 2)
+  expect(vi.mocked(fetchReplay).mock.calls[0][3]).toEqual({ resolution: 'daily' })
   expect(result.current.day.grid.minutes).toBe(3)
   expect(result.current.dailyProgress).toBeNull()
 })
