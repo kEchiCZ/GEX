@@ -149,6 +149,7 @@ from gexlens_engine.tasty.extended import (
     validate_disjoint,
 )
 from gexlens_engine.tasty.greeks_validator import GreeksAlert, GreeksValidator
+from gexlens_engine.tasty.kpi import StreamKpi
 from gexlens_engine.tasty.monitor import MAX_AGE_MS, FeedMonitor, tracked_symbols
 from gexlens_engine.tasty.provider import TastyChainCache, _number
 from gexlens_engine.tasty.session import TastyCredentials, TastySession
@@ -1772,10 +1773,32 @@ async def main() -> None:
 
         dx_print_active = _dx_print_active
 
+        stream_kpi = StreamKpi(
+            report_path=settings.derived_dir.parent / "reports" / "tasty-kpi.jsonl"
+        )
+
         def _tasty_status() -> dict[str, object]:
             """Stav větve do /status (#706): spojení, subskripce, pokrytí, čerstvost."""
             counts = tasty_cache.field_counts()
+            # KPI stability streamu (#1214): jeden vzorek za minutu z hotových počítadel
+            tracked = tasty_cache.symbols_tracked()
+            tally = crosscheck.last.tally if crosscheck is not None and crosscheck.last else None
+            stream_kpi.observe(
+                dt.datetime.now(dt.UTC),
+                connected=tasty_stream.connected,
+                reconnects=tasty_stream.reconnects,
+                rate_limited=tasty_stream.rate_limited,
+                heals=tasty_stream.heals,
+                errors=tasty_stream.errors,
+                last_event_at=tasty_cache.last_event_at,
+                rate_limit_active=tasty_stream.rate_limit_active,
+                tasty_dead_share=(
+                    tally.tasty_only_dead / tally.contracts if tally and tally.contracts else None
+                ),
+                greeks_share=(counts["greeks"] / tracked) if tracked else None,
+            )
             fields: dict[str, object] = {
+                "tasty_kpi": stream_kpi.status_fields(),
                 "tasty_connected": tasty_stream.connected,
                 # Odmítnutí ze serveru (#845) — dřív se tiše zahazovala
                 "tasty_stream_errors": tasty_stream.errors,
