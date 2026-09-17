@@ -9,6 +9,7 @@ from gexlens_engine.memwatch import (
     arrow_release_enabled,
     rss_mb,
     trace_enabled,
+    trace_frames,
     trim_enabled,
 )
 
@@ -61,6 +62,33 @@ def test_trace_flag_a_top_lines() -> None:
         tracemalloc.stop()
     untraced = MemoryWatch("y", logging.getLogger("test.memwatch"), rss_provider=lambda: 1.0)
     assert untraced.top_lines() == []
+
+
+def test_trace_frames_z_env() -> None:
+    # Default 1 rámec — 25 rámců engine na produkci neunesl (16./17. 9. 2026)
+    assert trace_frames({}) == 1
+    assert trace_frames({"GEXLENS_MEMORY_TRACE_FRAMES": "5"}) == 5
+    assert trace_frames({"GEXLENS_MEMORY_TRACE_FRAMES": "99"}) == 25
+    assert trace_frames({"GEXLENS_MEMORY_TRACE_FRAMES": "0"}) == 1
+    assert trace_frames({"GEXLENS_MEMORY_TRACE_FRAMES": "abc"}) == 1
+
+
+def test_trace_start_respektuje_hloubku(caplog: pytest.LogCaptureFixture) -> None:
+    import tracemalloc
+
+    with caplog.at_level(logging.WARNING, logger="test.memwatch"):
+        MemoryWatch(
+            "z",
+            logging.getLogger("test.memwatch"),
+            trace=True,
+            trace_frames=3,
+            rss_provider=lambda: 1.0,
+        )
+    try:
+        assert tracemalloc.get_traceback_limit() == 3
+        assert "3 rámců" in caplog.text
+    finally:
+        tracemalloc.stop()
 
 
 def test_note_loguje_hned_bez_skrceni(caplog: pytest.LogCaptureFixture) -> None:
