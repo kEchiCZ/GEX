@@ -266,6 +266,9 @@ export interface DayFeed {
   /** Data se nedaří obnovit (#516): ≥ N selhání po sobě → banner se stářím.
   Null = obnovy fungují (nebo není co obnovovat — demo/daily). */
   staleData: { failures: number; lastMinuteIso: string | null; atMs: number } | null
+  /** Daily pohled se skládá (#1206): kolik dnů z kolika už dorazilo. Null =
+  hotovo nebo intraday. Do dokončení UI ukazuje progres, ne demo banner. */
+  dailyProgress: { done: number; total: number } | null
 }
 
 export function useDayData(
@@ -283,6 +286,7 @@ export function useDayData(
     inputsRef.current = inputs
   }, [inputs])
   const [daily, setDaily] = useState<DayData | null>(null)
+  const [dailyProgress, setDailyProgress] = useState<{ done: number; total: number } | null>(null)
   // Selhané obnovy po sobě (#516) — banner „zobrazen stav z HH:MM" po prahu;
   // `atMs` = čas posledního selhání, ze kterého banner počítá stáří dat
   // (render nesmí sahat na Date.now, #1123)
@@ -301,6 +305,7 @@ export function useDayData(
     setInputs(cached)
     inputsRef.current = cached
     setDaily(null)
+    setDailyProgress(null)
     setSpotBars([])
     setRefreshFailures({ count: 0, atMs: 0 })
     if (import.meta.env.DEV) {
@@ -660,23 +665,37 @@ export function useDayData(
     fetchDays(symbol)
       .then(async (listing) => {
         const recent = listing.slice(-DAILY_MAX_DAYS)
-        const results = await Promise.allSettled(
-          recent.map((day) => fetchReplay(symbol, day.expiry, day.date)),
-        )
+        if (cancelled) return
+        setDailyProgress({ done: 0, total: recent.length })
+        // Dny SEKVENČNĚ, sloupec přibývá po každém dni (#1206): paralelní
+        // stažení 14 × 20–40 MB balíků parsovalo stovky MB naráz, tab na
+        // desítky sekund zamrzl a do konce ukazoval demo data. Mezi dny se
+        // pouští event loop, aby prohlížeč stihl překreslit progres.
         const days: ReplayDay[] = []
         const missingDates: string[] = []
-        results.forEach((result, index) => {
-          if (result.status === 'fulfilled' && result.value.grid.minutes > 0) {
-            days.push(result.value)
-          } else {
-            // Den bez dat (#516): NEvynechat tiše — osa dostane šrafovaný sloupec
-            missingDates.push(recent[index].date)
+        for (const [index, entry] of recent.entries()) {
+          try {
+            const day = await fetchReplay(symbol, entry.expiry, entry.date)
+            if (day.grid.minutes > 0) {
+              days.push(day)
+            } else {
+              // Den bez dat (#516): NEvynechat tiše — osa dostane šrafovaný sloupec
+              missingDates.push(entry.date)
+            }
+          } catch {
+            missingDates.push(entry.date)
           }
-        })
-        if (!cancelled && days.length > 0) setDaily(buildDailyDay(days, missingDates))
+          if (cancelled) return
+          setDailyProgress({ done: index + 1, total: recent.length })
+          if (days.length > 0) setDaily(buildDailyDay(days, missingDates))
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+          if (cancelled) return
+        }
+        setDailyProgress(null)
       })
       .catch(() => {
         // API neběží — zůstává demo dataset
+        if (!cancelled) setDailyProgress(null)
       })
     return () => {
       cancelled = true
@@ -699,6 +718,13 @@ export function useDayData(
           atMs: refreshFailures.atMs,
         }
       : null
-  if (timeframe === 'daily') return { day: daily ?? fallback, live: EMPTY_LIVE, staleData: null }
-  return { day: replayDay ?? fallback, live: replayDay ? live : EMPTY_LIVE, staleData }
+  if (timeframe === 'daily') {
+    return { day: daily ?? fallback, live: EMPTY_LIVE, staleData: null, dailyProgress }
+  }
+  return {
+    day: replayDay ?? fallback,
+    live: replayDay ? live : EMPTY_LIVE,
+    staleData,
+    dailyProgress: null,
+  }
 }

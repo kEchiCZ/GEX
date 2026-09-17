@@ -4,7 +4,7 @@ import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { LiveSocket } from '../api/ws'
 import { useDayData } from './useDayData'
-import { fetchDays, fetchReplay, fetchReplayInputs } from './loader'
+import { assembleReplayDay, fetchDays, fetchReplay, fetchReplayInputs } from './loader'
 import { clearBundleCache } from './bundleCache'
 import { sessionDateIso } from '../instrument/tz'
 import type { ReplayInputs } from './loader'
@@ -479,6 +479,55 @@ test('daily režim nepoužívá intraday live fetch', async () => {
   })
   expect(fetchReplayInputs).not.toHaveBeenCalled()
   expect(fetchReplay).not.toHaveBeenCalled()
+})
+
+test('daily skládá dny sekvenčně, sloupce přibývají a progres končí null (#1206)', async () => {
+  const listing = ['2026-07-14', '2026-07-15', '2026-07-16'].map((date) => ({
+    date,
+    expiry: date.replaceAll('-', ''),
+  }))
+  vi.mocked(fetchDays).mockResolvedValue(listing)
+  const order: string[] = []
+  vi.mocked(fetchReplay).mockImplementation(async (_symbol, _expiry, date) => {
+    order.push(date)
+    return { ...assembleReplayDay(makeInputs()), date }
+  })
+  const { result } = renderHook(() => useDayData('ES', '20260716', '2026-07-16', 'daily'))
+  expect(result.current.dailyProgress).toBeNull()
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  // První dny jsou na ose dřív, než dorazí zbytek — a progres říká kolik chybí
+  const progress = result.current.dailyProgress
+  expect(progress).not.toBeNull()
+  expect(progress!.total).toBe(3)
+  expect(progress!.done).toBeLessThan(3)
+  expect(result.current.day.source).toBe('replay')
+  expect(result.current.day.grid.minutes).toBe(progress!.done)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10)
+  })
+  expect(order).toEqual(['2026-07-14', '2026-07-15', '2026-07-16'])
+  expect(result.current.day.grid.minutes).toBe(3)
+  expect(result.current.dailyProgress).toBeNull()
+})
+
+test('daily: den, který selže, dostane šrafovaný sloupec a progres doběhne (#1206)', async () => {
+  vi.mocked(fetchDays).mockResolvedValue([
+    { date: '2026-07-15', expiry: '20260715' },
+    { date: '2026-07-16', expiry: '20260716' },
+  ])
+  vi.mocked(fetchReplay).mockImplementation(async (_symbol, _expiry, date) => {
+    if (date === '2026-07-15') throw new Error('500')
+    return { ...assembleReplayDay(makeInputs()), date }
+  })
+  const { result } = renderHook(() => useDayData('ES', '20260716', '2026-07-16', 'daily'))
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10)
+  })
+  expect(result.current.dailyProgress).toBeNull()
+  expect(result.current.day.grid.minutes).toBe(2)
+  expect(result.current.day.grid.missingMinutes).toEqual([true, false])
 })
 
 // ── LRU cache balíků (#514) ────────────────────────────────────────

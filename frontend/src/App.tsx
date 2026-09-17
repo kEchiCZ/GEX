@@ -300,6 +300,7 @@ function MainContent() {
     day: rawDay,
     live,
     staleData,
+    dailyProgress,
   } = useDayData(
     symbol,
     selectedExpiry,
@@ -2033,7 +2034,12 @@ function MainContent() {
                     : 'neznámého času')}
               </div>
             )}
-            {day.source === 'demo' && (
+            {dailyProgress && (
+              <div className="demo-banner" role="status" data-testid="daily-loading">
+                {`Načítám denní pohled (${dailyProgress.done}/${dailyProgress.total} dnů)…`}
+              </div>
+            )}
+            {day.source === 'demo' && !dailyProgress && (
               <div className="demo-banner" role="status">
                 {isHistoricalExpiry
                   ? `Demo data — pro expiraci ${viewDate} už nejsou uložená data ` +
