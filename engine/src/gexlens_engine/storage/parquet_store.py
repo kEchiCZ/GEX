@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from gexlens_engine.config import Settings
@@ -676,13 +677,47 @@ class FeatureRow:
 
 
 class _PartitionBuffer:
-    """Buffer jedné denní partice: drží celý den v paměti a atomicky přepisuje soubor."""
+    """Buffer jedné denní partice: drží celý den jako Arrow tabulku a atomicky přepisuje soubor.
+
+    Do #1105 držel den jako seznam Python dictů (`to_pylist()` při načtení +
+    `extend` každou minutu) — tracemalloc 17. 9. 2026 ukázal +580 MB / 12 mil.
+    bloků za 31 min právě tady (snapshoty × striky × sloupce × série × symboly
+    jako Python objekty), tedy ten růst RSS 1 → 3,4 GB za den. Arrow tabulka
+    téhož dne je řádově desítky MB: sloupcové buffery, žádné objekty per hodnota.
+    Python dicty existují jen přechodně — příchozí minuta a řádky, které
+    `keep_existing` porovnává.
+    """
+
+    #: Po kolika minutových `concat_tables` se chunky slijí (jinak roste seznam chunků)
+    COMBINE_EVERY = 32
+    _KEY_SEP = "\x1f"
 
     def __init__(self, path: Path, schema: pa.Schema) -> None:
         self._path = path
         self._schema = schema
-        self._rows: list[dict[str, object]] = []
+        self._table: pa.Table = schema.empty_table()
         self._loaded = False
+        self._appends = 0
+        #: Klíčový string sloupec tabulky (pro `key`) — udržuje se přírůstkově,
+        #: přepočet celého dne každou minutu by rostl s délkou dne
+        self._keys: tuple[PartitionKey, pa.Array] | None = None
+
+    @property
+    def rows(self) -> int:
+        return int(self._table.num_rows)
+
+    def _key_column(self, table: pa.Table, key: PartitionKey) -> pa.Array:
+        """Řádkový klíč jako string — přesná shoda n-tice, ne kartézský součin
+        per-sloupcových `is_in`."""
+        names = [key] if isinstance(key, str) else list(key)
+        parts = [pc.cast(table.column(name), pa.string()) for name in names]
+        if len(parts) == 1:
+            return parts[0].combine_chunks() if isinstance(parts[0], pa.ChunkedArray) else parts[0]
+        joined = pc.binary_join_element_wise(*parts, self._KEY_SEP)
+        return joined.combine_chunks() if isinstance(joined, pa.ChunkedArray) else joined
+
+    def _to_table(self, rows: Sequence[dict[str, object]]) -> pa.Table:
+        return pa.Table.from_pylist(list(rows), schema=self._schema)
 
     def append_and_write(
         self,
@@ -703,23 +738,70 @@ class _PartitionBuffer:
         pozdější zápis vítězí vždy.
         """
         self._ensure_loaded(key)
-        if key is not None:
+        incoming_rows = list(rows)
+        if key is not None and incoming_rows:
             key_of = key_getter(key)
-            if keep_existing is not None:
-                existing_by_key = {key_of(row): row for row in self._rows}
-                rows = [
-                    row
-                    for row in rows
-                    if (current := existing_by_key.get(key_of(row))) is None
-                    or not keep_existing(current, row)
-                ]
-            incoming = {key_of(row) for row in rows}
-            if incoming:
-                self._rows = [row for row in self._rows if key_of(row) not in incoming]
-        self._rows.extend(rows)
-        if key is not None:
-            self._rows.sort(key=key_getter(key))
+            incoming = self._to_table(incoming_rows)
+            incoming_keys = self._key_column(incoming, key)
+            existing_keys = self._existing_keys(key)
+            if self._table.num_rows:
+                clash_mask = pc.is_in(existing_keys, value_set=pa.array(incoming_keys.to_pylist()))
+                if keep_existing is not None and pc.any(clash_mask).as_py():
+                    # Jen řádky se shodným klíčem jdou do Pythonu — pár dictů, ne celý den
+                    clashing = {
+                        key_of(row): row for row in self._table.filter(clash_mask).to_pylist()
+                    }
+                    kept_incoming = [
+                        row
+                        for row in incoming_rows
+                        if (current := clashing.get(key_of(row))) is None
+                        or not keep_existing(current, row)
+                    ]
+                    if len(kept_incoming) != len(incoming_rows):
+                        incoming_rows = kept_incoming
+                        incoming = self._to_table(incoming_rows)
+                        incoming_keys = self._key_column(incoming, key)
+                        clash_mask = pc.is_in(
+                            existing_keys, value_set=pa.array(incoming_keys.to_pylist())
+                        )
+                keep = pc.invert(clash_mask)
+                self._table = self._table.filter(keep)
+                existing_keys = existing_keys.filter(keep)
+            names = [key] if isinstance(key, str) else list(key)
+            order = [(name, "ascending") for name in names]
+            incoming = incoming.sort_by(order)
+            incoming_keys = self._key_column(incoming, key)
+            # Běžná minuta jde ZA konec dne → jen připojit; celý den se třídí
+            # jen když přišel starší klíč (upsert dřívější minuty, doplnění díry)
+            needs_sort = bool(len(existing_keys)) and str(incoming_keys[0].as_py()) < str(
+                existing_keys[-1].as_py()
+            )
+            self._table = pa.concat_tables([self._table, incoming])
+            if needs_sort:
+                self._table = self._table.sort_by(order)
+                self._keys = None
+            else:
+                self._keys = (key, pa.concat_arrays([existing_keys, incoming_keys]))
+        elif incoming_rows:
+            self._table = pa.concat_tables([self._table, self._to_table(incoming_rows)])
+            self._keys = None
+        self._appends += 1
+        if self._appends % self.COMBINE_EVERY == 0:
+            self._table = self._table.combine_chunks()
+            if self._keys is not None:
+                self._keys = (self._keys[0], pa.concat_arrays([self._keys[1]]))
         return self._write()
+
+    def _existing_keys(self, key: PartitionKey) -> pa.Array:
+        if self._keys is not None and self._keys[0] == key:
+            return self._keys[1]
+        keys = (
+            self._key_column(self._table, key)
+            if self._table.num_rows
+            else pa.array([], type=pa.string())
+        )
+        self._keys = (key, keys)
+        return keys
 
     def replace_and_write(self, rows: Sequence[dict[str, object]]) -> Path:
         """Nahradí CELÝ obsah partice — řady typu „jen poslední stav" (gexfield).
@@ -728,15 +810,15 @@ class _PartitionBuffer:
         první cyklus ho přepíše čerstvým polem.
         """
         self._loaded = True
-        self._rows = list(rows)
+        self._table = self._to_table(list(rows))
+        self._keys = None
         return self._write()
 
     def _write(self) -> Path:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._cleanup_stale_tmp()
-        table = pa.Table.from_pylist(self._rows, schema=self._schema)
         tmp_path = self._path.with_name(f"{self._path.name}.{os.getpid()}.tmp")
-        pq.write_table(table, tmp_path)
+        pq.write_table(self._table, tmp_path)
         os.replace(tmp_path, self._path)  # atomické zveřejnění — nikdy částečný soubor
         return self._path
 
@@ -746,15 +828,16 @@ class _PartitionBuffer:
         S klíčem partici zároveň zbaví duplicit z doby před upsertem (#1047):
         partice napsaná starším enginem se tak opraví prvním zápisem po
         nasazení, bez ručního zásahu do dnešního souboru. Duplicita se hlásí —
-        po opravě zápisu by se už objevit neměla.
+        po opravě zápisu by se už objevit neměla. Dedup jde přes Python dicty
+        jen jednou při načtení a seznam se hned zahodí.
         """
         if self._loaded:
             return
         self._loaded = True
         if self._path.exists():
-            existing = pq.read_table(self._path, schema=self._schema).to_pylist()
+            table = pq.read_table(self._path, schema=self._schema)
             if key is not None:
-                existing, dropped = dedupe_last(existing, key)
+                existing, dropped = dedupe_last(table.to_pylist(), key)
                 if dropped:
                     logger.warning(
                         "Partice %s nesla %d duplicitních řádků klíče %s — ponechán poslední zápis",
@@ -762,7 +845,10 @@ class _PartitionBuffer:
                         dropped,
                         key,
                     )
-            self._rows = existing
+                    table = self._to_table(existing)
+                del existing
+            self._table = table
+            self._keys = None
 
     def _cleanup_stale_tmp(self) -> None:
         """Uklidí osiřelé .tmp soubory po případném kill -9 předchozího procesu."""

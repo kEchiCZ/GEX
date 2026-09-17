@@ -207,3 +207,50 @@ def test_printvol_partition_roundtrip(writer: SnapshotWriter, tmp_path: Path) ->
     ]
     assert list(frame["printed"].isna()) == [False, True]
     assert float(frame["structured"].iloc[0]) == 8.0
+
+
+def test_partition_buffer_slozeny_klic_presne_a_keep_existing(tmp_path: Path) -> None:
+    """#1105 A: upsert nad Arrow tabulkou — shoda n-tice klíče je přesná (ne kartézský
+    součin per sloupec) a `keep_existing` chrání změřený řádek před doplněným."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from gexlens_engine.storage.parquet_store import _PartitionBuffer
+
+    schema = pa.schema([("ts", pa.int64()), ("strike", pa.float64()), ("v", pa.float64())])
+    buffer = _PartitionBuffer(tmp_path / "p.parquet", schema)
+    key = ("ts", "strike")
+    buffer.append_and_write(
+        [{"ts": 1, "strike": 10.0, "v": 1.0}, {"ts": 1, "strike": 20.0, "v": 2.0}], key
+    )
+    # (2, 10) a (1, 20) mají per-sloupcově společné hodnoty s (1, 10) — ta zůstat MUSÍ
+    buffer.append_and_write(
+        [{"ts": 2, "strike": 10.0, "v": 3.0}, {"ts": 1, "strike": 20.0, "v": 9.0}], key
+    )
+    rows = pq.read_table(tmp_path / "p.parquet").to_pylist()
+    assert rows == [
+        {"ts": 1, "strike": 10.0, "v": 1.0},
+        {"ts": 1, "strike": 20.0, "v": 9.0},
+        {"ts": 2, "strike": 10.0, "v": 3.0},
+    ]
+    # keep_existing: změřený (v > 0) řádek nepřepíše doplněný (v == 0)
+    buffer.append_and_write(
+        [{"ts": 1, "strike": 10.0, "v": 0.0}, {"ts": 3, "strike": 10.0, "v": 0.0}],
+        key,
+        keep_existing=lambda existing, incoming: incoming["v"] == 0.0 and existing["v"] > 0,
+    )
+    rows = pq.read_table(tmp_path / "p.parquet").to_pylist()
+    assert rows[0] == {"ts": 1, "strike": 10.0, "v": 1.0}
+    assert rows[-1] == {"ts": 3, "strike": 10.0, "v": 0.0}
+    assert buffer.rows == 4
+    # Restart uprostřed dne: partice s duplicitou se při načtení opraví (poslední vítězí)
+    dup = pa.Table.from_pylist(
+        [{"ts": 5, "strike": 1.0, "v": 1.0}, {"ts": 5, "strike": 1.0, "v": 2.0}], schema=schema
+    )
+    pq.write_table(dup, tmp_path / "q.parquet")
+    fresh = _PartitionBuffer(tmp_path / "q.parquet", schema)
+    fresh.append_and_write([{"ts": 6, "strike": 1.0, "v": 0.5}], key)
+    assert pq.read_table(tmp_path / "q.parquet").to_pylist() == [
+        {"ts": 5, "strike": 1.0, "v": 2.0},
+        {"ts": 6, "strike": 1.0, "v": 0.5},
+    ]
