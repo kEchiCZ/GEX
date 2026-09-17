@@ -276,6 +276,11 @@ class DxLinkStream:
                 len(self._subs),
             )
 
+    @property
+    def rate_limit_active(self) -> bool:
+        """Stream je po rate limitu a ještě nedošlo k healu (#1214 KPI: minuty v limitu)."""
+        return self._rate_limit_ts is not None
+
     def _heal_due(self, now: float) -> bool:
         """Je čas na samoléčebný resubscribe? Až po zklidnění rate limitu."""
         return (
