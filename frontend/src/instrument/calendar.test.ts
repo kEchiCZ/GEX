@@ -40,7 +40,9 @@ test('kindClass: druh → ASCII CSS třída', () => {
 test('dayTitle: druh + série + zdroj tasty', () => {
   // 28. 8. 2026 = pátek (ne třetí, ne poslední obchodní den) → týdenní
   expect(dayTitle('20260828', ['EW4'], false)).toBe('týdenní · EW4')
-  expect(dayTitle('20260827', [], true)).toBe('denní · zdroj tastytrade')
+  expect(dayTitle('20260827', [], true)).toBe(
+    'denní · zdroj tastytrade — jen heatmapa, bez zdí a úrovní',
+  )
   // 31. 8. 2026 = pondělí, poslední obchodní den měsíce → EOM
   expect(dayTitle('20260831', ['EW'], false)).toBe('EOM · EW')
 })

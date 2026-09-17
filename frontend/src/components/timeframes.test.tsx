@@ -62,6 +62,13 @@ test('defaultExpiry: expirace dne seance, jinak NEJBLIŽŠÍ budoucí (#945)', (
     '20260831',
   )
 
+  // Tasty-only expirace (#1217): nejbližší IBKR má přednost, tasty jen když IBKR není
+  const extended = new Set(['20260831', '20260901'])
+  expect(
+    defaultExpiry(['20260828', '20260831', '20260901', '20260925'], '20260830', extended),
+  ).toBe('20260925')
+  expect(defaultExpiry(['20260828', '20260831', '20260901'], '20260830', extended)).toBe('20260831')
+
   // Žádná budoucí → nejnovější proběhlá (původní chování pro čistě historický seznam)
   expect(defaultExpiry(['20250101', '20250102'], '20260830')).toBe('20250102')
 

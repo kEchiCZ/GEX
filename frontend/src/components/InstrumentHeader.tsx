@@ -228,13 +228,13 @@ export function InstrumentHeader({
             data-testid="expiry-meta"
             title={
               selectedIsExtended
-                ? 'Expirace mimo IBKR pokrytí — data z tastytrade (dxFeed): kotace + OI, greeks dopočtené BS modelem z mid ceny. Bez objemů a flows (ty nese jen IBKR).'
+                ? 'Expirace mimo IBKR pokrytí — data z tastytrade (dxFeed): kotace + OI, greeks dopočtené BS modelem z mid ceny. Jen heatmapa: bez zdí, flipu, Max Pain, Opt Vol a flows (ty se počítají jen pro IBKR řetěz, #1217).'
                 : undefined
             }
           >
             {kind}
             {countdown && ` · expiruje ${countdown}`}
-            {selectedIsExtended && ' · zdroj tastytrade'}
+            {selectedIsExtended && ' · zdroj tastytrade · jen heatmapa, bez zdí'}
             {chainNote && ` · ${chainNote}`}
           </span>
         )}

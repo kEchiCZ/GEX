@@ -1,5 +1,5 @@
 /** Globální stav aplikace: pipeline status z WS, view, téma, alerty, přepínače. */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { LiveSocket } from '../api/ws'
 import type { Coverage } from '../instrument/coverage'
@@ -310,10 +310,16 @@ pondělní ose. `sessionDate` je parametrem kvůli deterministickým testům. */
 export function defaultExpiry(
   expiries: string[],
   sessionDate: string = sessionDateIso().replaceAll('-', ''),
+  extended: ReadonlySet<string> = new Set(),
 ): string | null {
   if (expiries.length === 0) return null
   const sorted = [...expiries].sort()
-  return sorted.find((expiry) => expiry >= sessionDate) ?? sorted.at(-1) ?? null
+  const upcoming = sorted.filter((expiry) => expiry >= sessionDate)
+  // Tasty-only expirace (#1217) má jen heatmapu — zdi, flip, Max Pain a Opt Vol
+  // nese IBKR řetěz. V roll týdnu je nejbližší 0DTE na dobíhajícím kontraktu
+  // právě taková, takže default = nejbližší IBKR expirace; tasty jen když
+  // žádná IBKR není (víkend s extended plánem, čerstvý ticker).
+  return upcoming.find((expiry) => !extended.has(expiry)) ?? upcoming[0] ?? sorted.at(-1) ?? null
 }
 
 /** Expirace k otevření: vybraná, nebo — když pro ni nejsou uložená žádná data —
@@ -608,6 +614,29 @@ export function AppStateProvider({
     }
   }, [])
 
+  // Tasty-only expirace symbolu ze statusu (#1217) — pro default expirace;
+  // ref, aby loader expirací nezávisel na pořadí příchodu statusu a expirací
+  const extendedRef = useRef<Set<string>>(new Set())
+  // Expirace zvolená automaticky (ne uživatelem): jen tu smí status přesunout
+  const autoExpiryRef = useRef(false)
+  useEffect(() => {
+    extendedRef.current = new Set(status.tasty_extended_expiries?.[symbol] ?? [])
+  }, [status.tasty_extended_expiries, symbol])
+
+  useEffect(() => {
+    // Status s extended expiracemi typicky dorazí až po seznamu expirací (#1217):
+    // automaticky zvolenou tasty-only expiraci přesunout na nejbližší IBKR;
+    // ruční volbu uživatele neměnit
+    if (!autoExpiryRef.current || selectedExpiry === null) return
+    const extended = extendedRef.current
+    if (!extended.has(selectedExpiry)) return
+    const better = defaultExpiry(expiries, undefined, extended)
+    if (better !== null && better !== selectedExpiry) {
+      setExpiryFallback(null)
+      setSelectedExpiry(better)
+    }
+  }, [status.tasty_extended_expiries, expiries, selectedExpiry])
+
   const [expiryRetry, setExpiryRetry] = useState(0)
   useEffect(() => {
     let cancelled = false
@@ -631,7 +660,8 @@ export function AppStateProvider({
               (payload.detail ?? []).map((row) => [row.date, row.trading_classes]),
             ),
           )
-          const candidate = defaultExpiry(payload.expiries)
+          const candidate = defaultExpiry(payload.expiries, undefined, extendedRef.current)
+          autoExpiryRef.current = true
           setSelectedExpiry(candidate)
           if (payload.expiries.length === 0) scheduleRetry()
           // Mimo obchodování nemá vybraná expirace data (#946) — doskočit na
@@ -688,6 +718,7 @@ export function AppStateProvider({
       // Ruční volba expirace doskok ruší — od té chvíle uživatel ví, na co kouká
       setSelectedExpiry: (expiry: string) => {
         setExpiryFallback(null)
+        autoExpiryRef.current = false
         setSelectedExpiry(expiry)
       },
       expiryFallback,

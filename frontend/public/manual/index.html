@@ -2107,6 +2107,14 @@ roku). Pinovaný kontrakt <strong>nahrazuje</strong> automatický (stejný poče
 a market data lines), platí až do expirace a v hlavičce nese štítek
 <code>📌 kontrakt U6</code>. Má vlastní historii (setupy, statistiky) oddělenou od <code>ES</code>;
 po expiraci ho z watchlistu odeber (engine hlásí chybu setupu).</p>
+<p><strong>Roll týden a denní 0DTE.</strong> Po roll date (8 dnů před kvartální expirací) sleduje
+<code>ES</code> už nový kontrakt (Z6) a IBKR řetěz začíná až kvartální expirací. Denní 0DTE
+do pátku běží ještě na dobíhajícím kontraktu (U6) — v aplikaci existují jen z
+tastytrade jako <strong>„jen heatmapa, bez zdí a úrovní“</strong> (bez zdí, flipu, Max Pain
+a Opt Vol; hlavička i kalendář to označí). Aplikace proto otevírá defaultně
+nejbližší <strong>IBKR</strong> expiraci. Chceš-li 0DTE se zdmi, přidej v roll týdnu pinovaný
+ticker <code>ESU6</code> — Briefing (karta Expirační týden) na to upozorní a nabídne
+tlačítko <strong>Přidat ESU6</strong>.</p>
 <p><strong>Shrnutí kouče.</strong> Nahoře v panelu Kouč (Deník) je 4–6 vět složených jen
 z čísel: týden (obchody, Σ R, úspěšnost, disciplína), nejdražší chyba, tvoje
 nejlepší/nejhorší okno dne, okna setupů detektoru a hlavní doporučení pro
