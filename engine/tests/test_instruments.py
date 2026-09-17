@@ -24,6 +24,7 @@ from gexlens_engine.ibkr.mock import MockIB, MockOIFetcher, MockQuoteStreamer
 from gexlens_engine.ibkr.scheduler import SubscriptionScheduler, SweepMetrics
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.instruments import (
+    OI_RETRY_CYCLES,
     SETUP_RETRY_CYCLES,
     SETUP_RETRY_FIRST_CYCLES,
     InstrumentPipeline,
@@ -667,6 +668,58 @@ async def test_oi_missing_alert_and_retry_counter(
     alerts = [data for channel, data in publisher.messages if channel == "alerts"]
     assert alerts and alerts[-1]["kind"] == "oi_missing"
     assert alerts[-1]["symbol"] == "CL"
+
+
+async def test_prvni_archiv_na_pozadi_neblokuje_a_nastavi_oi_available(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1208: start_initial_archive vrátí hned; oi_available se nastaví po doběhnutí."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline(
+        "ES", 7600.0, settings, writer, repository, publisher, oi_available=False
+    )
+    specs = list(pipeline.runtime.contracts)
+    pipeline.archiver = OIArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings)
+
+    task = pipeline.start_initial_archive(TS.date())
+    assert pipeline.oi_available is False  # nečekalo se
+    assert pipeline.initial_archive_running() is True
+    assert await task is True
+    assert pipeline.oi_available is True
+    assert pipeline.initial_archive_running() is False
+
+
+async def test_minutovy_cyklus_nearchivuje_dokud_bezi_prvni_archiv(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1208: retry v run_minute čeká na první archiv; po jeho doběhnutí jede normálně."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline(
+        "ES", 7600.0, settings, writer, repository, publisher, oi_available=False
+    )
+    gate = asyncio.Event()
+    calls: list[dt.date] = []
+
+    async def slow_archive(today: dt.date, now: dt.datetime | None = None) -> bool:
+        calls.append(today)
+        await gate.wait()
+        return True
+
+    pipeline.try_archive_oi = slow_archive  # type: ignore[method-assign]
+    pipeline._cycles_since_oi = OI_RETRY_CYCLES  # retry by jinak archivoval hned
+    task = pipeline.start_initial_archive(TS.date())
+    await asyncio.sleep(0)
+    await pipeline.run_minute(TS + dt.timedelta(minutes=1))
+    assert calls == [TS.date()]  # jen první archiv, žádný souběžný retry
+    assert pipeline.oi_available is False
+
+    gate.set()
+    assert await task is True
+    assert pipeline.oi_available is True
+    # Po doběhnutí se retry (OI nefinální) zase hlásí — další volání projde
+    pipeline._cycles_since_oi = OI_RETRY_CYCLES
+    await pipeline.run_minute(TS + dt.timedelta(minutes=2))
+    assert len(calls) == 2
 
 
 async def test_watchdog_prerusi_visici_cyklus(
