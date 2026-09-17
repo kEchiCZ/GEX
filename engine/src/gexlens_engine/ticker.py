@@ -56,6 +56,22 @@ def parse_ticker(raw: str) -> Ticker:
     raise ValueError(f"neplatný ticker {raw!r} — čekám kořen (ES) nebo kontrakt (ESZ6)")
 
 
+#: CME produkty, které aplikace zná jako futures (podklad = futures kontrakt,
+#: opce = FOP). Cokoli jiného je akcie / ETF / index (#206): podklad = symbol
+#: sám, opce z `/option-chains/{symbol}/nested` (OPRA přes tastytrade).
+CME_FUTURES_ROOTS: frozenset[str] = frozenset(
+    {
+        "ES", "NQ", "RTY", "YM", "MES", "MNQ", "M2K", "MYM",
+        "CL", "NG", "GC", "SI", "HG", "ZB", "ZN", "ZF", "6E", "6J", "ZC", "ZS", "ZW",
+    }
+)  # fmt: skip
+
+
+def is_futures(symbol: str) -> bool:
+    """Futures produkt (CME) vs. akcie/ETF/index (#206) — podle kořene tickeru."""
+    return symbol_root(symbol) in CME_FUTURES_ROOTS
+
+
 def symbol_root(symbol: str) -> str:
     """Kořen produktu z tickeru; nečitelný ticker vrací beze změny (uppercase)."""
     try:

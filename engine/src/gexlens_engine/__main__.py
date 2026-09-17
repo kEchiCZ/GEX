@@ -120,6 +120,7 @@ from gexlens_engine.storage.fa_validation import FaValidationRepository
 from gexlens_engine.storage.feed_comparison import FeedComparisonRepository
 from gexlens_engine.storage.gammacliff_store import GammaCliffRepository
 from gexlens_engine.storage.ivrank_store import IvRankRepository
+from gexlens_engine.storage.meta import ADHOC_CHANNEL
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.paper_store import PaperRepository
@@ -1437,7 +1438,10 @@ async def main() -> None:
     # LISTEN na změny watchlistu (#207): nový symbol startuje do sekund;
     # poll à WATCHLIST_POLL_CYCLES zůstává jako fallback
     watchlist_listener = WatchlistListener(settings.database_url)
+    # Požadavky ad-hoc pohledu (#206): NOTIFY z API místo pollu à 30 s
+    adhoc_listener = WatchlistListener(settings.database_url, channel=ADHOC_CHANNEL)
     watchlist_listener.start()
+    adhoc_listener.start()
     setups_repository: SetupsRepository | None = None
     setup_params_repository: SetupParamsRepository | None = None
     # Platná verze prahů šablon (#794 fáze 2, ADR-0033); None = bez store
@@ -1729,6 +1733,8 @@ async def main() -> None:
             cache=tasty_cache,
             writer=writer,
             is_watched=lambda product: product in pipelines,
+            # Svíčky podkladu do minulosti při založení pohledu (#206)
+            candles=CandleFetcher(tasty_session.quote_token),
         )
 
         def _tasty_event(event_type: str, values: list[object]) -> None:
@@ -2535,16 +2541,19 @@ async def main() -> None:
             last_refresh = 0.0
             last_minute: dt.datetime | None = None
             while not shadow_stop.is_set():
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(shadow_stop.wait(), timeout=5.0)
+                # Probuzení NOTIFY z API (#206): pohled vzniká do sekundy místo
+                # až na dalším 30s pollu; bez notifikace tick à 5 s jako dřív
+                woke = await adhoc_listener.wait(5.0)
                 if shadow_stop.is_set():
                     return
                 try:
                     now = dt.datetime.now(dt.UTC)
-                    if time.monotonic() - last_refresh > 30.0:
+                    if woke or time.monotonic() - last_refresh > 30.0:
                         last_refresh = time.monotonic()
                         await adhoc_viewer.refresh(now)
                     adhoc_viewer.sample_spot()
+                    # První snapshot hned po prvních kotacích (#206), ne až na minutě
+                    await adhoc_viewer.write_first_snapshot(now)
                     minute = now.replace(second=0, microsecond=0)
                     if last_minute is not None and minute > last_minute and adhoc_viewer.active():
                         await adhoc_viewer.write_minute(last_minute, now)

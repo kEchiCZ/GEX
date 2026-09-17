@@ -36,6 +36,8 @@ meta_metadata = MetaData()
 # přes LISTEN probudí orchestrátor — nový symbol startuje do sekund, ne až
 # za WATCHLIST_POLL_CYCLES minut. Mimo PostgreSQL zůstává jen poll.
 WATCHLIST_CHANNEL = "gexlens_watchlist"
+#: Kanál požadavků ad-hoc pohledu (#206): UI → engine do sekundy místo pollu à 30 s
+ADHOC_CHANNEL = "gexlens_adhoc"
 
 watchlist_table = Table(
     "watchlist",

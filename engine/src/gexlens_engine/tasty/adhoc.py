@@ -24,9 +24,11 @@ from dataclasses import dataclass, field
 from sqlalchemy import delete, select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.meta import adhoc_view_table
 from gexlens_engine.storage.parquet_store import SnapshotWriter
+from gexlens_engine.tasty.candles import CandleFetcher, CandleRange
 from gexlens_engine.tasty.extended import build_snapshot_rows
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
@@ -39,6 +41,9 @@ ADHOC_TTL_S = 180.0
 ADHOC_BAND_PCT = 8.0
 #: Stáří kotace, po kterém se do snapshotu nezapisuje (shodné s extended)
 ADHOC_MAX_AGE_S = 90.0
+#: První snapshot hned po založení (#206): stačí, když má kotaci tenhle podíl
+#: kontraktů pásma — čekat na minutovou hranici by heatmapu zdrželo až o minutu
+FIRST_SNAPSHOT_MIN_SHARE = 0.2
 
 
 @dataclass
@@ -52,6 +57,8 @@ class _ActiveView:
     bar_high: float = 0.0
     bar_low: float = 0.0
     bar_last: float = 0.0
+    #: První snapshot už zapsán (#206) — do té doby se zkouší každý tick
+    first_written: bool = False
 
 
 @dataclass
@@ -64,6 +71,9 @@ class AdhocViewer:
     writer: SnapshotWriter
     #: Produkty s plnou IBKR pipeline — ad-hoc se pro ně nezakládá
     is_watched: Callable[[str], bool]
+    #: Svíčky podkladu do minulosti při založení (#206): graf ceny hned, ne od
+    #: první minuty pohledu; None = bez backfillu (testy, vypnutá tasty)
+    candles: CandleFetcher | None = None
 
     _views: dict[str, _ActiveView] = field(default_factory=dict, init=False)
 
@@ -126,18 +136,56 @@ class AdhocViewer:
                 upcoming[0],
                 front,
             )
+            if front and self.candles is not None:
+                await self._backfill_candles(product, front, now)
+
+    async def _backfill_candles(self, product: str, streamer: str, now: dt.datetime) -> None:
+        """Svíčky seance do minulosti z dxFeed Candle (#206): cena hned, s objemem."""
+        import asyncio
+
+        since, _ = session_bounds(trading_session_date(now))
+        bars = await self.candles.fetch(  # type: ignore[union-attr]
+            CandleRange(streamer_symbol=streamer, since=since, until=now)
+        )
+        if not bars:
+            return
+        by_day: dict[dt.date, list[object]] = {}
+        for bar in bars:
+            by_day.setdefault(bar.ts.date(), []).append(bar)
+        for day, day_bars in sorted(by_day.items()):
+            await asyncio.to_thread(self.writer.write_bars, product, day, day_bars)  # type: ignore[arg-type]
+        logger.info("Ad-hoc %s: %d svíček podkladu doplněno od %s", product, len(bars), since)
+
+    async def write_first_snapshot(self, now: dt.datetime) -> int:
+        """První snapshot hned, jakmile má pásmo dost kotací (#206) — bez čekání na minutu."""
+        written = 0
+        for view in self._views.values():
+            if view.first_written:
+                continue
+            wanted = self._band_streamers(view)
+            fresh = sum(1 for streamer in wanted if self.cache.state(streamer) is not None)
+            if not wanted or fresh < max(2, int(len(wanted) * FIRST_SNAPSHOT_MIN_SHARE)):
+                continue
+            view.first_written = True
+            written += await self._write_view(view, now.replace(second=0, microsecond=0), now)
+        return written
+
+    def _band_streamers(self, view: _ActiveView) -> set[str]:
+        spot = self._front_mid(view)
+        symbols: set[str] = set()
+        for (expiry, strike, _right), streamer in view.chain.by_contract.items():
+            if expiry != view.expiry:
+                continue
+            if spot is not None and abs(strike - spot) / spot * 100.0 > ADHOC_BAND_PCT:
+                continue
+            symbols.add(streamer)
+        return symbols
 
     def streamers(self) -> set[str]:
         """Symboly k subskripci: nejbližší expirace v pásmu kolem spotu + front."""
         symbols: set[str] = set()
         for view in self._views.values():
-            spot = self._front_mid(view)
-            for (expiry, strike, _right), streamer in view.chain.by_contract.items():
-                if expiry != view.expiry:
-                    continue
-                if spot is not None and abs(strike - spot) / spot * 100.0 > ADHOC_BAND_PCT:
-                    continue
-                symbols.add(streamer)
+            symbols |= self._band_streamers(view)
             if view.front_streamer:
                 symbols.add(view.front_streamer)
         return symbols
@@ -160,28 +208,8 @@ class AdhocViewer:
 
         written = 0
         for view in self._views.values():
-            spot = self._front_mid(view) or view.bar_last
-            if not spot or not math.isfinite(spot) or spot <= 0:
-                continue
-            rows, oi_missing = build_snapshot_rows(
-                view.chain,
-                view.expiry,
-                self.cache,
-                ts_min=ts_min,
-                spot=spot,
-                now_utc=now_utc,
-                max_age_s=ADHOC_MAX_AGE_S,
-            )
-            day = ts_min.date()
-            if rows:
-                await asyncio.to_thread(
-                    self.writer.write_minute, view.product, view.expiry, day, rows
-                )
-                written += len(rows)
-                if oi_missing:
-                    await asyncio.to_thread(
-                        self.writer.write_oi_missing, view.product, view.expiry, day, oi_missing
-                    )
+            written += await self._write_view(view, ts_min, now_utc)
+            view.first_written = True
             if view.bar_open is not None:
                 bar = Bar(
                     ts=ts_min,
@@ -191,9 +219,36 @@ class AdhocViewer:
                     close=view.bar_last,
                     volume=0.0,  # kotace, ne obchody — viz docstring
                 )
-                await asyncio.to_thread(self.writer.write_bars, view.product, day, [bar])
+                await asyncio.to_thread(self.writer.write_bars, view.product, ts_min.date(), [bar])
                 view.bar_open = None
         return written
+
+    async def _write_view(
+        self, view: _ActiveView, ts_min: dt.datetime, now_utc: dt.datetime
+    ) -> int:
+        import asyncio
+
+        spot = self._front_mid(view) or view.bar_last
+        if not spot or not math.isfinite(spot) or spot <= 0:
+            return 0
+        rows, oi_missing = build_snapshot_rows(
+            view.chain,
+            view.expiry,
+            self.cache,
+            ts_min=ts_min,
+            spot=spot,
+            now_utc=now_utc,
+            max_age_s=ADHOC_MAX_AGE_S,
+        )
+        day = ts_min.date()
+        if not rows:
+            return 0
+        await asyncio.to_thread(self.writer.write_minute, view.product, view.expiry, day, rows)
+        if oi_missing:
+            await asyncio.to_thread(
+                self.writer.write_oi_missing, view.product, view.expiry, day, oi_missing
+            )
+        return len(rows)
 
     def active(self) -> list[str]:
         """Aktivní produkty pro /status (UI badge zdroje)."""

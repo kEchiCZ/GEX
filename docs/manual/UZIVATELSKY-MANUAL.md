@@ -1667,6 +1667,15 @@ a market data lines), platí až do expirace a v hlavičce nese štítek
 `📌 kontrakt U6`. Má vlastní historii (setupy, statistiky) oddělenou od `ES`;
 po expiraci ho z watchlistu odeber (engine hlásí chybu setupu).
 
+**Akcie, ETF a indexy — ad-hoc pohled přes tastytrade (#206).** Do vyhledávání
+symbolu zadej `SPY`, `QQQ`, `SPX`, `KO` nebo jakýkoli ticker s opcemi u tastytrade.
+Engine pohled založí do sekund (bez IBKR market data lines): svíčky podkladu se
+dotáhnou do minulosti (dxFeed Candle, s objemem), první heatmapa naskočí do
+~10 s, dál se skládá po minutách. Zdi, flip a Max Pain **začínají v okamžiku
+zapnutí** — historie opčního řetězu se zpětně nedá dopočítat. Pohled žije,
+dokud ho máš otevřený (3 min po zavření se uklidí); setupy pro tyto tickery
+nevznikají (jen ES/NQ), kouč ale vyhodnotí i ruční obchody na akciích z deníku.
+
 **Roll týden a denní 0DTE.** Po roll date (8 dnů před kvartální expirací) sleduje
 `ES` už nový kontrakt (Z6) a IBKR řetěz začíná až kvartální expirací. Denní 0DTE
 do pátku běží ještě na dobíhajícím kontraktu (U6) — v aplikaci existují jen z

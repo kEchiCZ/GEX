@@ -294,6 +294,11 @@ function MainContent() {
   // svíčky do historického dne.
   const viewDate = sessionDateFor(selectedExpiry, today)
   const isHistoricalExpiry = viewDate !== today
+  // Ad-hoc pohled (#206): symbol bez expirací = engine ho teprve zakládá
+  // (přes tastytrade, do ~10 s) — banner nesmí tvrdit „Demo data"
+  const { expiries: knownExpiries, status: pipelineStatus } = useAppState()
+  const adhocLoading =
+    knownExpiries.length === 0 && (pipelineStatus.tasty_adhoc?.includes(symbol) ?? false)
   // Sentiment per zobrazený den (#976) — proto až za `viewDate`
   const newsData = useNews(viewDate)
   const {
@@ -2044,10 +2049,13 @@ function MainContent() {
                 {isHistoricalExpiry
                   ? `Demo data — pro expiraci ${viewDate} už nejsou uložená data ` +
                     '(mimo retenci 14 dní).'
-                  : `Demo data — pro ${symbol} zatím nejsou uložená živá data.` +
-                    (timeframe === 'intraday'
-                      ? ' Engine začne sbírat do ~5 minut po přidání do watchlistu.'
-                      : '')}
+                  : adhocLoading
+                    ? `Zakládám pohled ${symbol} přes tastytrade — svíčky a první heatmapa ` +
+                      'do ~10 s (ad-hoc pohled, #206).'
+                    : `Demo data — pro ${symbol} zatím nejsou uložená živá data.` +
+                      (timeframe === 'intraday'
+                        ? ' Engine začne sbírat do ~5 minut po přidání do watchlistu.'
+                        : '')}
               </div>
             )}
           </main>

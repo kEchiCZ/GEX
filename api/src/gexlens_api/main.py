@@ -30,7 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from gexlens_api.alerts import AlertEngine
 from gexlens_api.backup import build_backup_router
@@ -84,6 +84,7 @@ from gexlens_engine.storage.emrespect_store import EmRespectRepository
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.gammacliff_store import gamma_cliff_table
 from gexlens_engine.storage.ivrank_store import IvRankRepository
+from gexlens_engine.storage.meta import ADHOC_CHANNEL
 from gexlens_engine.storage.oi_archive import OIEodRepository
 from gexlens_engine.storage.paper_store import PaperRepository
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
@@ -92,6 +93,7 @@ from gexlens_engine.storage.setup_params_store import SetupParamsRepository
 from gexlens_engine.storage.setups_store import SetupsRepository
 from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.storage.volregime_store import VolRegimeRepository
+from gexlens_engine.ticker import is_futures, parse_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -436,16 +438,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ("ZW", "Wheat"),
     ]
 
+    # Akcie / ETF / indexy pro našeptávač (#206): opce přes tastytrade (OPRA),
+    # bez IBKR lines. Cokoli mimo katalog jde zadat volně — validaci „řetěz
+    # existuje" dělá engine (chain endpoint tasty).
+    EQUITY_CATALOG: list[tuple[str, str]] = [
+        ("SPY", "SPDR S&P 500 ETF"),
+        ("QQQ", "Invesco Nasdaq-100 ETF"),
+        ("IWM", "iShares Russell 2000 ETF"),
+        ("DIA", "SPDR Dow Jones ETF"),
+        ("SPX", "S&P 500 index (SPXW)"),
+        ("NDX", "Nasdaq-100 index"),
+        ("RUT", "Russell 2000 index"),
+        ("VIX", "Cboe Volatility Index"),
+        ("AAPL", "Apple"),
+        ("MSFT", "Microsoft"),
+        ("NVDA", "NVIDIA"),
+        ("AMZN", "Amazon"),
+        ("META", "Meta Platforms"),
+        ("GOOGL", "Alphabet"),
+        ("TSLA", "Tesla"),
+        ("AMD", "AMD"),
+        ("KO", "Coca-Cola"),
+    ]
+
     @app.get("/search")
     def search(q: str = Query("", max_length=16)) -> dict[str, object]:
-        """Našeptávač produktů pro ad-hoc pohled (#521, varianta C)."""
+        """Našeptávač produktů pro ad-hoc pohled (#521 C; akcie/ETF/indexy #206)."""
         needle = q.strip().upper()
-        matches = [
-            {"symbol": root, "name": name}
+        matches: list[dict[str, object]] = [
+            {"symbol": root, "name": name, "kind": "futures"}
             for root, name in CME_PRODUCTS
             if not needle or needle in root or needle in name.upper()
         ]
-        return {"matches": matches[:10]}
+        matches += [
+            {"symbol": root, "name": name, "kind": "equity"}
+            for root, name in EQUITY_CATALOG
+            if not needle or needle in root or needle in name.upper()
+        ]
+        # Volný ticker mimo katalog (#206): jakákoli akcie s opcemi u tastytrade
+        if needle and all(m["symbol"] != needle for m in matches):
+            try:
+                ticker = parse_ticker(needle)
+            except ValueError:
+                ticker = None
+            if ticker is not None and not ticker.pinned and not is_futures(ticker.root):
+                matches.append(
+                    {"symbol": ticker.root, "name": "akcie / ETF (tastytrade)", "kind": "equity"}
+                )
+        return {"matches": matches[:12]}
 
     @app.post("/adhoc/{symbol}")
     def adhoc_request(symbol: str) -> dict[str, object]:
@@ -454,9 +494,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         Engine požadavek vyzvedne à 30 s a bez prodloužení ho po ~3 min
         uklidí (subskripce vypadnou diffem — AC uvolnění kapacity).
         """
-        root = symbol.strip().upper()
-        if root not in {p for p, _ in CME_PRODUCTS}:
-            raise HTTPException(404, f"Neznámý produkt: {symbol!r}")
+        # Kořen CME produktu nebo akcie/ETF/index (#206) — gramatika tickeru
+        # (ADR-0041); zda řetěz existuje, řekne engine (tasty chain endpoint)
+        try:
+            root = parse_ticker(symbol).symbol
+        except ValueError as exc:
+            raise HTTPException(404, f"Neplatný ticker: {symbol!r}") from exc
         from gexlens_engine.storage.meta import adhoc_view_table, ensure_meta_schema
 
         engine = meta_repository.engine()
@@ -465,6 +508,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with engine.begin() as conn:
             conn.execute(delete(adhoc_view_table).where(adhoc_view_table.c.symbol == root))
             conn.execute(adhoc_view_table.insert().values(symbol=root, requested_ts=now))
+            # Probuzení enginu hned (#206): NOTIFY se doručí s commitem
+            if conn.dialect.name == "postgresql":
+                conn.execute(
+                    text("select pg_notify(:channel, :payload)"),
+                    {"channel": ADHOC_CHANNEL, "payload": root},
+                )
         return {"symbol": root, "requested_ts": now.isoformat()}
 
     @app.get("/instruments/{symbol}/expiries")
