@@ -105,15 +105,18 @@ def daily_totals(snapshots: pd.DataFrame) -> tuple[dict[str, object], object | N
     """
     if snapshots.empty:
         return {}, None
-    frame = snapshots[["ts_min", "strike", "right", "volume", "delta", "oi"]]
+    # Klíč (ts_min, strike, right) je unikátní per partice; sešití D−1 + D
+    # může minutu nést dvakrát (viz bars_session) — vyhrává první výskyt.
+    # `pivot` (bez agregace), NE `pivot_table`: na řídkých prod datech (striky
+    # přibývají/mizí, NaN volume) dával pivot_table o 13 % nižší OptVol než
+    # referenční smyčka po minutách (ověřeno 17. 9. 2026 nad ES 20260916).
+    frame = snapshots[["ts_min", "strike", "right", "volume", "delta", "oi"]].drop_duplicates(
+        subset=["ts_min", "strike", "right"], keep="first"
+    )
     last_ts = frame["ts_min"].max()
-    volume = frame.pivot_table(
-        index=["strike", "right"], columns="ts_min", values="volume", aggfunc="first"
-    ).fillna(0.0)
+    volume = frame.pivot(index=["strike", "right"], columns="ts_min", values="volume").fillna(0.0)
     delta = (
-        frame.pivot_table(
-            index=["strike", "right"], columns="ts_min", values="delta", aggfunc="first"
-        )
+        frame.pivot(index=["strike", "right"], columns="ts_min", values="delta")
         .reindex(index=volume.index, columns=volume.columns)
         .fillna(0.0)
     )
@@ -131,6 +134,13 @@ def daily_totals(snapshots: pd.DataFrame) -> tuple[dict[str, object], object | N
         "evo_oi_put": float(last_rows.loc[last_rows["right"] == "P", "oi"].fillna(0.0).sum()),
     }
     return totals, last_ts
+
+
+#: Cache zredukovaných Daily balíků uzavřených seancí (#1206): den je immutable,
+#: skládání z partic stojí ~2–7 s a Daily jich žádá 14 naráz — bez cache každé
+#: přepnutí na Daily čte stovky souborů z bind mountu znovu
+_DAILY_BUNDLE_CACHE: dict[tuple[str, str, str], dict[str, object]] = {}
+_DAILY_BUNDLE_CACHE_MAX = 64
 
 
 def _last_state(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1145,8 +1155,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         snapshots_frame = session(lambda d: repository.snapshots(symbol, expiry, d), date)
         _, session_end = session_bounds(date)
         immutable = dt.datetime.now(dt.UTC) >= session_end
+        cache_key = (symbol, expiry, date.isoformat())
         if immutable:
             cache_headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+            if resolution == "daily" and cache_key in _DAILY_BUNDLE_CACHE:
+                return JSONResponse(_DAILY_BUNDLE_CACHE[cache_key], headers=cache_headers)
         else:
             last_ts = (
                 snapshots_frame["ts_min"].max().isoformat() if not snapshots_frame.empty else "0"
@@ -1252,6 +1265,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             daily.setdefault("vol", 0.0)
             daily.setdefault("cum_delta", None)
             bundle["daily"] = daily
+            if immutable:
+                if len(_DAILY_BUNDLE_CACHE) >= _DAILY_BUNDLE_CACHE_MAX:
+                    _DAILY_BUNDLE_CACHE.pop(next(iter(_DAILY_BUNDLE_CACHE)))
+                _DAILY_BUNDLE_CACHE[cache_key] = bundle
         # ΔOI vs. předchozí den: poslední archivovaný den téže expirace před `date`
         bundle["oi_prev"] = []
         try:
