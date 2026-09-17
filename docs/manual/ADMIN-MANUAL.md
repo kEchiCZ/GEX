@@ -336,6 +336,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8000/docs` (OpenAPI).
 | `GET /profile/{sym}/{expiry}?date&ts&variant&oi_weight&spot` | Strike profil k okamžiku |
 | `GET /flow/{sym}?date` | CumΔ + OptVol + Vol řady |
 | `GET /replay/{sym}/{expiry}/{date}` | Kompletní denní balík (levels/flow/bars JSON + snapshoty base64 Arrow + `oi_prev` pro ΔOI vs. včera) |
+| `GET /replay/{sym}/{expiry}/{date}?resolution=daily` | Daily pohled (#1206): snapshoty jen poslední minuty, řady zredukované na poslední stav a pole `daily` (denní OptVol / Δ Flow / Evo OI / CumΔ + OHLC, stejné vzorce jako UI) — stovky kB místo 20–40 MB |
 | CRUD `/watchlist`, `/alerts`, `/annotations?symbol&date`, `/settings` | PostgreSQL persistence |
 | `POST /internal/status`, `POST /internal/publish` | **Ingest z enginu** — vyžaduje hlavičku `X-GEXLens-Token` (#542). Od #949 tu API vyhodnocuje **provozní alerty** `AlertEngine.observe_connection` / `observe_disk` (výpadek spojení s IBKR, obsazení disku přes limit) — ze **snímku** statusu, ne z těla requestu (engine posílá jen změněné klíče); obě hlášky jsou hranové. Do té doby byl `AlertEngine` mrtvý kód; pravidla `price_cross` / `cum_delta_jump` / `dominant_strike_change` odstraněna jako překonaná (`LevelProximityWatcher`), `POST /alerts` je přestává přijímat, CRUD `/alerts` zůstává |
 | `PUT /settings/{key}` | Zápis nastavení + `pg_notify` na kanál watchlistu (#992) — engine se probudí do sekund |

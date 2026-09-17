@@ -26,20 +26,34 @@ function lastNonNull(series: (number | null)[] | undefined): number | null {
   return null
 }
 
+function ohlcBar(
+  dayIdx: number,
+  ohlc: { open: number; high: number; low: number; close: number },
+  previousClose: number,
+): PriceBar {
+  return {
+    minuteIdx: dayIdx,
+    ...ohlc,
+    up: Number.isNaN(previousClose) ? ohlc.close >= ohlc.open : !(ohlc.close < previousClose),
+  }
+}
+
 /** Denní OHLC svíčka z 1m barů dne. */
 function dailyBar(dayIdx: number, bars: PriceBar[], previousClose: number): PriceBar | null {
   if (bars.length === 0) return null
   const sorted = [...bars].sort((a, b) => a.minuteIdx - b.minuteIdx)
   const open = sorted[0].open ?? sorted[0].close
   const close = sorted[sorted.length - 1].close
-  return {
-    minuteIdx: dayIdx,
-    open,
-    close,
-    high: Math.max(...sorted.map((bar) => bar.high ?? bar.close)),
-    low: Math.min(...sorted.map((bar) => bar.low ?? bar.close)),
-    up: Number.isNaN(previousClose) ? close >= open : !(close < previousClose),
-  }
+  return ohlcBar(
+    dayIdx,
+    {
+      open,
+      close,
+      high: Math.max(...sorted.map((bar) => bar.high ?? bar.close)),
+      low: Math.min(...sorted.map((bar) => bar.low ?? bar.close)),
+    },
+    previousClose,
+  )
 }
 
 /** Složení Daily datasetu z denních replay balíků (seřazených vzestupně dle data). */
@@ -90,17 +104,23 @@ export function buildDailyDay(days: ReplayDay[], missingDates: string[] = []): D
       put[target] = day.grid.layers.put?.[source] ?? 0
     })
 
-    vol[dayIdx] = day.panels.vol.reduce((sum, value) => sum + value, 0)
-    optVolCall[dayIdx] = day.panels.optVolCall.reduce((sum, value) => sum + value, 0)
-    optVolPut[dayIdx] = day.panels.optVolPut.reduce((sum, value) => sum + value, 0)
-    cumDelta[dayIdx] = day.panels.cumDelta.at(-1) ?? 0
-    deltaFlowCall[dayIdx] = day.panels.deltaFlowCall.reduce((sum, value) => sum + value, 0)
-    deltaFlowPut[dayIdx] = day.panels.deltaFlowPut.reduce((sum, value) => sum + value, 0)
+    // Denní součty (#1206): balík `?resolution=daily` nese jen poslední minutu,
+    // součty dne spočítalo API stejným vzorcem — plný balík se sčítá tady
+    const totals = day.dailyTotals
+    const sum = (series: number[]) => series.reduce((acc, value) => acc + value, 0)
+    vol[dayIdx] = totals ? totals.vol : sum(day.panels.vol)
+    optVolCall[dayIdx] = totals ? totals.optVolCall : sum(day.panels.optVolCall)
+    optVolPut[dayIdx] = totals ? totals.optVolPut : sum(day.panels.optVolPut)
+    cumDelta[dayIdx] = totals ? (totals.cumDelta ?? 0) : (day.panels.cumDelta.at(-1) ?? 0)
+    deltaFlowCall[dayIdx] = totals ? totals.deltaFlowCall : sum(day.panels.deltaFlowCall)
+    deltaFlowPut[dayIdx] = totals ? totals.deltaFlowPut : sum(day.panels.deltaFlowPut)
     // Evo OI (#573): úroveň posledního sloupce dne — Σ přes striky z raw matic
-    evoOiCall[dayIdx] = day.panels.evoOiCall?.at(-1) ?? 0
-    evoOiPut[dayIdx] = day.panels.evoOiPut?.at(-1) ?? 0
+    evoOiCall[dayIdx] = totals ? totals.evoOiCall : (day.panels.evoOiCall?.at(-1) ?? 0)
+    evoOiPut[dayIdx] = totals ? totals.evoOiPut : (day.panels.evoOiPut?.at(-1) ?? 0)
 
-    const bar = dailyBar(dayIdx, day.overlays.price ?? [], previousClose)
+    const bar = totals?.bar
+      ? ohlcBar(dayIdx, totals.bar, previousClose)
+      : dailyBar(dayIdx, day.overlays.price ?? [], previousClose)
     if (bar) {
       price.push(bar)
       previousClose = bar.close

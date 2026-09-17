@@ -12,7 +12,7 @@ import logging
 import math
 import threading
 from collections.abc import Callable
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -94,6 +94,51 @@ from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.storage.volregime_store import VolRegimeRepository
 
 logger = logging.getLogger(__name__)
+
+
+def daily_totals(snapshots: pd.DataFrame) -> tuple[dict[str, object], object | None]:
+    """Denní součty pro Daily pohled (#1206) — stejné vzorce jako frontend
+    `ensureDerived`: OptVol / Δ Flow = KLADNÉ přírůstky kumulativního volume
+    vůči předchozí MĚŘENÉ minutě (minuta bez snapshotu se přeskakuje, chybějící
+    strike v minutě = 0), Δ Flow vážené |delta| minuty; Evo OI = Σ OI přes
+    striky v poslední minutě. Vrací (součty, poslední ts_min).
+    """
+    if snapshots.empty:
+        return {}, None
+    frame = snapshots[["ts_min", "strike", "right", "volume", "delta", "oi"]]
+    last_ts = frame["ts_min"].max()
+    volume = frame.pivot_table(
+        index=["strike", "right"], columns="ts_min", values="volume", aggfunc="first"
+    ).fillna(0.0)
+    delta = (
+        frame.pivot_table(
+            index=["strike", "right"], columns="ts_min", values="delta", aggfunc="first"
+        )
+        .reindex(index=volume.index, columns=volume.columns)
+        .fillna(0.0)
+    )
+    increments = volume.diff(axis=1).clip(lower=0.0).fillna(0.0)
+    weighted = increments * delta.abs()
+    rights = volume.index.get_level_values("right")
+    last_rows = frame[frame["ts_min"] == last_ts]
+    totals: dict[str, object] = {
+        "ts_min": last_ts.isoformat(),
+        "opt_vol_call": float(increments[rights == "C"].to_numpy().sum()),
+        "opt_vol_put": float(increments[rights == "P"].to_numpy().sum()),
+        "delta_flow_call": float(weighted[rights == "C"].to_numpy().sum()),
+        "delta_flow_put": float(weighted[rights == "P"].to_numpy().sum()),
+        "evo_oi_call": float(last_rows.loc[last_rows["right"] == "C", "oi"].fillna(0.0).sum()),
+        "evo_oi_put": float(last_rows.loc[last_rows["right"] == "P", "oi"].fillna(0.0).sum()),
+    }
+    return totals, last_ts
+
+
+def _last_state(frame: pd.DataFrame) -> pd.DataFrame:
+    """Poslední stav řady pro Daily (#1206): per sloupec poslední ne-null hodnota
+    (frontend bere `lastNonNull` každé linky), jako jeden řádek."""
+    if frame.empty:
+        return frame
+    return frame.ffill().tail(1).reset_index(drop=True)
 
 
 def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
@@ -1077,8 +1122,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         expiry: str,
         date: dt.date,
         if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
+        resolution: Literal["full", "daily"] = "full",
     ) -> Response:
         """Kompletní denní balík pro playback (SPEC kap. 6).
+
+        `resolution=daily` (#1206): Daily pohled potřebuje z každého dne jen
+        stav poslední minuty (matice, profil, úrovně) a denní součty panelů —
+        balík nese snapshoty jen poslední minuty, řady zredukované na poslední
+        stav a pole `daily` (součty + denní OHLC). Stovky kB místo 20–40 MB.
 
         Snapshot matice jde surová (base64 Arrow) — klient přepíná módy/škály
         lokálně bez dalších requestů (latence < 100 ms, SPEC kap. 8).
@@ -1100,10 +1151,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             last_ts = (
                 snapshots_frame["ts_min"].max().isoformat() if not snapshots_frame.empty else "0"
             )
-            etag = f'W/"{symbol}-{expiry}-{date.isoformat()}-{len(snapshots_frame)}-{last_ts}"'
+            etag = (
+                f'W/"{symbol}-{expiry}-{date.isoformat()}-{len(snapshots_frame)}-{last_ts}'
+                f'-{resolution}"'
+            )
             if if_none_match == etag:
                 return Response(status_code=304, headers={"ETag": etag})
             cache_headers = {"Cache-Control": "no-cache", "ETag": etag}
+        daily: dict[str, object] | None = None
+        daily_last_ts: object | None = None
+        if resolution == "daily":
+            daily, daily_last_ts = daily_totals(snapshots_frame)
+            if daily_last_ts is not None:
+                snapshots_frame = snapshots_frame[
+                    snapshots_frame["ts_min"] == daily_last_ts
+                ].reset_index(drop=True)
         bundle: dict[str, object] = {
             "symbol": symbol,
             "expiry": expiry,
@@ -1157,9 +1219,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ]
         for key, reader in readers:
             try:
-                bundle[key] = _records(reader())
+                frame = reader()
             except PartitionNotFoundError:
                 bundle[key] = []  # část dne může chybět (např. bez flow) — balík drží tvar
+                continue
+            if daily is not None and key not in ("gexfield", "gexfieldfa"):
+                if key == "bars":
+                    # Denní OHLC + Σ objemu z celé seance; do matice jen bar
+                    # poslední měřené minuty, jinak by osa dne měla 1380 sloupců
+                    if not frame.empty:
+                        daily["bar"] = {
+                            "open": float(frame["open"].iloc[0]),
+                            "high": float(frame["high"].max()),
+                            "low": float(frame["low"].min()),
+                            "close": float(frame["close"].iloc[-1]),
+                        }
+                        daily["vol"] = float(frame["volume"].fillna(0.0).sum())
+                    frame = (
+                        frame[frame["ts_min"] == daily_last_ts]
+                        if daily_last_ts is not None
+                        else frame.iloc[0:0]
+                    )
+                elif key == "flow":
+                    if not frame.empty:
+                        daily["cum_delta"] = float(frame["cum_delta"].iloc[-1])
+                    frame = _last_state(frame)
+                else:
+                    frame = _last_state(frame)
+            bundle[key] = _records(frame)
+        if daily is not None:
+            daily.setdefault("bar", None)
+            daily.setdefault("vol", 0.0)
+            daily.setdefault("cum_delta", None)
+            bundle["daily"] = daily
         # ΔOI vs. předchozí den: poslední archivovaný den téže expirace před `date`
         bundle["oi_prev"] = []
         try:
