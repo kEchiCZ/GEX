@@ -237,7 +237,7 @@ def test_partition_buffer_slozeny_klic_presne_a_keep_existing(tmp_path: Path) ->
     buffer.append_and_write(
         [{"ts": 1, "strike": 10.0, "v": 0.0}, {"ts": 3, "strike": 10.0, "v": 0.0}],
         key,
-        keep_existing=lambda existing, incoming: incoming["v"] == 0.0 and existing["v"] > 0,
+        keep_existing=lambda existing, incoming: incoming["v"] == 0.0 and existing["v"] != 0.0,
     )
     rows = pq.read_table(tmp_path / "p.parquet").to_pylist()
     assert rows[0] == {"ts": 1, "strike": 10.0, "v": 1.0}
