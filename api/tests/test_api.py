@@ -160,11 +160,20 @@ def test_expiries_detail_trading_classes(settings: Settings) -> None:
 def test_search_and_adhoc_request(client: TestClient) -> None:
     """#521 C: našeptávač katalogu + založení/prodloužení ad-hoc požadavku."""
     matches = client.get("/search", params={"q": "cru"}).json()["matches"]
-    assert {"symbol": "CL", "name": "Crude Oil"} in matches
-    assert client.get("/search", params={"q": "zzz"}).json()["matches"] == []
+    assert {"symbol": "CL", "name": "Crude Oil", "kind": "futures"} in matches
+    # Akcie/ETF/indexy (#206): katalog + volný ticker mimo katalog (řetěz ověří engine)
+    assert {"symbol": "SPY", "name": "SPDR S&P 500 ETF", "kind": "equity"} in client.get(
+        "/search", params={"q": "spy"}
+    ).json()["matches"]
+    assert client.get("/search", params={"q": "zzz"}).json()["matches"] == [
+        {"symbol": "ZZZ", "name": "akcie / ETF (tastytrade)", "kind": "equity"}
+    ]
+    # Futures kořen mimo katalog se volně nenabízí (ES je v CME katalogu, esz6 je kontrakt)
+    assert client.get("/search", params={"q": "esz6"}).json()["matches"] == []
 
     created = client.post("/adhoc/cl").json()
     assert created["symbol"] == "CL"
+    assert client.post("/adhoc/ko").json()["symbol"] == "KO"  # akcie (#206)
     # Neznámý produkt se odmítá — engine nedostane nesmyslný požadavek
     assert client.post("/adhoc/NESMYSL").status_code == 404
     # Prodloužení téhož symbolu přepisuje čas, nedělá duplicitu

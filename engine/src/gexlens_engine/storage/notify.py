@@ -42,8 +42,9 @@ def listen_dsn(database_url: str) -> str | None:
 class WatchlistListener:
     """Vlastní LISTEN spojení s reconnectem; pád listeneru nesmí shodit engine."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, channel: str = WATCHLIST_CHANNEL) -> None:
         self._dsn = listen_dsn(database_url)
+        self._channel = channel
         self._event = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._connection: psycopg.Connection | None = None
@@ -109,7 +110,7 @@ class WatchlistListener:
         with psycopg.connect(self._dsn, autocommit=True) as connection:
             self._connection = connection
             # Kanál je konstanta modulu, ne uživatelský vstup
-            connection.execute(f"LISTEN {WATCHLIST_CHANNEL}")
-            logger.info("Watchlist LISTEN aktivní (kanál %s)", WATCHLIST_CHANNEL)
+            connection.execute(f"LISTEN {self._channel}")
+            logger.info("LISTEN aktivní (kanál %s)", self._channel)
             for _ in connection.notifies():
                 loop.call_soon_threadsafe(self._event.set)

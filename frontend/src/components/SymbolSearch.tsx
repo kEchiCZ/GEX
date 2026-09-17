@@ -12,6 +12,8 @@ import { useAppState } from '../state/AppState'
 interface SearchMatch {
   symbol: string
   name: string
+  /** futures (CME) | equity (akcie/ETF/index přes tastytrade, #206) */
+  kind?: 'futures' | 'equity'
 }
 
 /** Založení/prodloužení ad-hoc pohledu; chyby polyká — engine je zdroj pravdy. */

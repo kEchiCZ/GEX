@@ -28,6 +28,8 @@ class _FakeSymbolMap:
         return ChainSymbols(product=product, day=day, by_contract=by_contract)
 
     async def front_future(self, product: str) -> str | None:
+        if product == "KO":
+            return "KO"  # akcie (#206): podklad je symbol sám
         return f"/{product}V26:XNYM"
 
 
@@ -132,3 +134,23 @@ async def test_write_minute_zapisuje_snapshoty_a_bar(tmp_path: Path) -> None:
     bar = pq.read_table(bars_path).to_pylist()[0]
     assert bar["close"] == 75.0
     assert bar["volume"] == 0.0  # kotace, ne obchody
+
+
+async def test_akcie_prvni_snapshot_hned_po_kotacich(tmp_path: Path) -> None:
+    """#206: equity ad-hoc pohled — podklad = symbol, první snapshot bez čekání na minutu."""
+    viewer, cache, db = make_viewer(tmp_path)
+    request(db, "KO", NOW)
+    await viewer.refresh(NOW)
+    assert viewer.active() == ["KO"]
+    # Bez kotací se první snapshot nezapíše (pásmo prázdné → nic)
+    assert await viewer.write_first_snapshot(NOW) == 0
+    feed_quote(cache, "KO", 74.9, 75.1)
+    assert "KO" in viewer.streamers()
+    band = [s for s in viewer.streamers() if s != "KO"]
+    # Kotace pro 20 % pásma stačí — heatmapa naskočí do sekund, ne až na minutové hranici
+    for streamer in band[: max(2, len(band) // 5 + 1)]:
+        feed_quote(cache, streamer, 1.0, 1.2)
+    written = await viewer.write_first_snapshot(NOW + dt.timedelta(seconds=7))
+    assert written > 0
+    # Opakované volání je no-op — o zbytek se stará minutová uzávěrka
+    assert await viewer.write_first_snapshot(NOW + dt.timedelta(seconds=12)) == 0

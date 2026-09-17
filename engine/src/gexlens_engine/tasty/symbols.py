@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.tasty.session import TastySession
-from gexlens_engine.ticker import parse_ticker, symbol_root
+from gexlens_engine.ticker import is_futures, parse_ticker, symbol_root
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,12 @@ class SymbolMap:
             return cached
         # `product` je ticker pipeline: kořen (ES) nebo pinovaný kontrakt (ESU6, #1191)
         ticker = parse_ticker(product)
+        if not is_futures(ticker.root):
+            # Akcie / ETF / index (#206): podklad je symbol sám — dxFeed kotuje
+            # SPY, KO i SPX pod holým symbolem (ověřeno sondou 23. 8. 2026)
+            self._front_future[product] = ticker.root
+            logger.info("tasty podklad %s: %s (akcie/ETF/index)", product, ticker.root)
+            return ticker.root
         payload = await self._session.get_json(f"/instruments/futures?product-code={ticker.root}")
         items = [
             item
@@ -112,9 +118,16 @@ class SymbolMap:
         cached = self._cache.get(product)
         if cached is not None and cached.day == today:
             return cached
-        payload = await self._session.get_json(f"/futures-option-chains/{product}/nested")
+        if is_futures(product):
+            payload = await self._session.get_json(f"/futures-option-chains/{product}/nested")
+            groups = payload["data"].get("option-chains", [])
+        else:
+            # Equity/index nested chain (#206): stejný tvar expirací a striků,
+            # jen pod `data.items` (sonda 23. 8. 2026: SPY 32 expirací, SPX 60, KO 17)
+            payload = await self._session.get_json(f"/option-chains/{product}/nested")
+            groups = payload["data"].get("items", [])
         by_contract: dict[tuple[str, float, str], str] = {}
-        for group in payload["data"].get("option-chains", []):
+        for group in groups:
             for expiration in group.get("expirations", []):
                 expiry = str(expiration.get("expiration-date", "")).replace("-", "")
                 for strike in expiration.get("strikes", []):

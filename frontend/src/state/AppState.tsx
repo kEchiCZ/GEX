@@ -643,7 +643,9 @@ export function AppStateProvider({
     let timer: ReturnType<typeof setTimeout> | null = null
     // Čerstvě přidaný ticker nemusí mít ještě data — bez expirací zkoušet à 30 s
     const scheduleRetry = () => {
-      timer = setTimeout(() => setExpiryRetry((n) => n + 1), 30_000)
+      // Ad-hoc pohled (#206) má první snapshot do ~10 s — prvních 12 pokusů
+      // à 5 s, pak à 30 s (čerstvý ticker ve watchlistu sbírá minuty)
+      timer = setTimeout(() => setExpiryRetry((n) => n + 1), expiryRetry < 12 ? 5_000 : 30_000)
     }
     fetch(`${API_BASE}/instruments/${symbol}/expiries`)
       .then((response) => (response.ok ? response.json() : { expiries: [] }))
