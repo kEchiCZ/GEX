@@ -101,6 +101,6 @@ export function kindClass(kind: ExpiryKind | null): string {
 export function dayTitle(expiry: string, classes: string[], extended: boolean): string {
   const parts = [expiryKind(expiry) ?? 'expirace']
   if (classes.length > 0) parts.push(classes.join(', '))
-  if (extended) parts.push('zdroj tastytrade')
+  if (extended) parts.push('zdroj tastytrade — jen heatmapa, bez zdí a úrovní')
   return parts.join(' · ')
 }

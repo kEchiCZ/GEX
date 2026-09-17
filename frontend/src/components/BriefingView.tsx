@@ -44,7 +44,9 @@ import { useGexForward } from '../hooks/useGexForward'
 import { fetchScenarios } from '../api/scenarios'
 import { contractCode, nextContractCode, shortDate } from '../api/calendar'
 import type { ExpiryPhase } from '../api/calendar'
+import { API_BASE } from '../config'
 import { useExpiryCalendar } from './ExpiryPhaseChip'
+import { symbolRoot } from '../instrument/ticker'
 import { CoachWatchCard } from './CoachWatchCard'
 import type { Scenario } from '../api/scenarios'
 import { ScenarioCard } from './ScenarioCard'
@@ -109,8 +111,53 @@ function ScenarioBlock({ symbol }: { symbol: string }) {
 
 /** Karta „Expirační týden" (#1189): jen v roll/OPEX/expiry/post fázi — co se
 děje a co to znamená pro obchodování (článek 15. 9. 2026, ADR-0039). */
+/** Roll týden (#1217, varianta C): denní 0DTE do pátku běží na dobíhajícím
+kontraktu, který v řetězu nového frontu není — aplikace u něj ukáže jen
+heatmapu. Pinovaný ticker (`ESU6`, #1191) dá celý řetěz, zdi i cenu v jeho rámci. */
+function PinnedContractHint({ root, code, next }: { root: string; code: string; next: string }) {
+  const ticker = `${root}${code}`
+  const [state, setState] = useState<'idle' | 'busy' | 'added' | 'exists' | 'error'>('idle')
+  const add = async () => {
+    setState('busy')
+    try {
+      const response = await fetch(`${API_BASE}/watchlist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: ticker }),
+      })
+      setState(response.status === 409 ? 'exists' : response.ok ? 'added' : 'error')
+    } catch {
+      setState('error')
+    }
+  }
+  return (
+    <li data-testid="pinned-contract-hint">
+      <b>0DTE tohoto týdne:</b> denní expirace do pátku běží na dobíhajícím {code} — v řetězu {next}{' '}
+      nejsou, u tickeru {root} tak mají jen heatmapu bez zdí a úrovní. Zdi a cenu v jeho rámci dá
+      pinovaný ticker <code>{ticker}</code>.{' '}
+      {state === 'added' ? (
+        <span>Přidáno do watchlistu — engine ho založí do minuty.</span>
+      ) : state === 'exists' ? (
+        <span>Už je ve watchlistu.</span>
+      ) : state === 'error' ? (
+        <span role="alert">Přidání selhalo — zkus to v sidebaru.</span>
+      ) : (
+        <button
+          type="button"
+          className="chip"
+          onClick={() => void add()}
+          disabled={state === 'busy'}
+        >
+          Přidat {ticker}
+        </button>
+      )}
+    </li>
+  )
+}
+
 function ExpiryWeekCard() {
   const calendar = useExpiryCalendar()
+  const { symbol } = useAppState()
   if (calendar === null || calendar.phase === 'normal') return null
   const code = contractCode(calendar.quarterly_expiry)
   const next = nextContractCode(code)
@@ -150,6 +197,9 @@ function ExpiryWeekCard() {
           VIX expirace st {shortDate(calendar.vix_expiry)} ráno · roll{' '}
           {shortDate(calendar.roll_date)} · SOQ pá {expiry} {soq}.
         </li>
+        {(calendar.phase === 'roll' || calendar.phase === 'opex_week') && (
+          <PinnedContractHint root={symbolRoot(symbol)} code={code} next={next} />
+        )}
       </ul>
     </section>
   )
