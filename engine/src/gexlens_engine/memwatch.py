@@ -44,6 +44,13 @@ from typing import Protocol
 
 #: Env přepínač pro tracemalloc (1/true/yes); bez něj se loguje jen RSS
 TRACE_ENV = "GEXLENS_MEMORY_TRACE"
+#: Hloubka zásobníku per alokace pro tracemalloc (default 1 = jen řádek
+#: alokace). Noc 16./17. 9. 2026: s 25 rámci engine neběžel (RSS 1,9 → 3,8 GB
+#: za 8 min, CPU ~90 %, cykly > 240 s) a news-engine držel celé jádro — na
+#: otázku „který řádek drží paměť" stačí jeden rámec, hlubší stack jen na devu.
+TRACE_FRAMES_ENV = "GEXLENS_MEMORY_TRACE_FRAMES"
+DEFAULT_TRACE_FRAMES = 1
+MAX_TRACE_FRAMES = 25
 #: Env přepínač pro glibc malloc_trim po vzorku (default zapnuto; 0/false vypne)
 TRIM_ENV = "GEXLENS_MALLOC_TRIM"
 #: Env přepínač pro měření Arrow poolu + release_unused po vzorku (default zapnuto)
@@ -72,6 +79,16 @@ def rss_mb() -> float | None:
 def trace_enabled(environ: dict[str, str] | None = None) -> bool:
     value = (environ if environ is not None else os.environ).get(TRACE_ENV, "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def trace_frames(environ: dict[str, str] | None = None) -> int:
+    """Hloubka zásobníku tracemalloc z env; neplatná hodnota → default, strop 25."""
+    raw = (environ if environ is not None else os.environ).get(TRACE_FRAMES_ENV, "")
+    try:
+        frames = int(raw.strip())
+    except ValueError:
+        return DEFAULT_TRACE_FRAMES
+    return max(1, min(MAX_TRACE_FRAMES, frames))
 
 
 def trim_enabled(environ: dict[str, str] | None = None) -> bool:
@@ -138,6 +155,7 @@ class MemoryWatch:
         *,
         interval_s: float = DEFAULT_INTERVAL_S,
         trace: bool = False,
+        trace_frames: int = DEFAULT_TRACE_FRAMES,
         trim: bool = False,
         arrow: bool = False,
         rss_provider: Callable[[], float | None] = rss_mb,
@@ -172,12 +190,13 @@ class MemoryWatch:
         #: Poslední změřené RSS — do /status bez dalšího čtení /proc
         self.last_rss_mb: float | None = None
         if trace:
-            tracemalloc.start(25)
+            tracemalloc.start(trace_frames)
             self._baseline = tracemalloc.take_snapshot()
             logger.warning(
-                "%s: tracemalloc zapnutý (%s) — dražší běh, jen na dobu hledání viníka",
+                "%s: tracemalloc zapnutý (%s, %d rámců) — dražší běh, jen na dobu hledání viníka",
                 name,
                 TRACE_ENV,
+                trace_frames,
             )
 
     @classmethod
@@ -186,6 +205,7 @@ class MemoryWatch:
             name,
             logger,
             trace=trace_enabled(),
+            trace_frames=trace_frames(),
             trim=trim_enabled(),
             arrow=arrow_release_enabled(),
         )

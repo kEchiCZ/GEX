@@ -808,7 +808,11 @@ varianta A.
   (`engine: RSS 1234 MB`) a engine ho hlásí do `/status.memory_rss_mb`
   (Settings → „Paměť enginu"). Při hledání viníka nastav
   `GEXLENS_MEMORY_TRACE=1` (tracemalloc, top-10 řádků kódu podle přírůstku;
-  dražší běh, jen dočasně). Noc 10./11. 9. 2026 ukázala, že RSS roste mimo
+  dražší běh, jen dočasně). Hloubka zásobníku `GEXLENS_MEMORY_TRACE_FRAMES`
+  má default **1** (jen řádek alokace) — s 25 rámci engine 16./17. 9. 2026
+  neběžel (RSS 1,9 → 3,8 GB za 8 min, cykly > 240 s) a news-engine držel celé
+  jádro; hlubší stack jen na devu. Trace platí pro engine i news-engine, po
+  měření flag z `.env` odstranit a **oba** kontejnery recreatnout. Noc 10./11. 9. 2026 ukázala, že RSS roste mimo
   Python heap (glibc drží uvolněné bloky v arénách) — hlídka proto po každém
   vzorku volá `malloc_trim(0)` a loguje, kolik MB vrátila (`malloc_trim vrátil
   N MB`, vypnutí `GEXLENS_MALLOC_TRIM=0`), a compose nastavuje
