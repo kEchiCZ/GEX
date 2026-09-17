@@ -329,6 +329,61 @@ def test_replay_bundle(client: TestClient) -> None:
     assert payload["gexfieldfa"] == []
 
 
+def _naive_daily_totals(rows: list[SnapshotRow]) -> dict[str, float]:
+    """Referenční smyčka = přesně algoritmus frontendu `ensureDerived` (#1206):
+    přírůstek vůči předchozí MĚŘENÉ minutě, chybějící strike = 0, jen kladné."""
+    by_minute: dict[dt.datetime, dict[tuple[float, str], tuple[float, float]]] = {}
+    for row in rows:
+        by_minute.setdefault(row.ts_min, {})[(row.strike, row.right)] = (
+            row.volume or 0.0,
+            row.delta or 0.0,
+        )
+    totals = {
+        "opt_vol_call": 0.0,
+        "opt_vol_put": 0.0,
+        "delta_flow_call": 0.0,
+        "delta_flow_put": 0.0,
+    }
+    previous: dict[tuple[float, str], float] | None = None
+    for ts_min in sorted(by_minute):
+        current = by_minute[ts_min]
+        if previous is not None:
+            for key in set(current) | set(previous):
+                volume, delta = current.get(key, (0.0, 0.0))
+                increment = volume - previous.get(key, 0.0)
+                if increment > 0:
+                    side = "call" if key[1] == "C" else "put"
+                    totals[f"opt_vol_{side}"] += increment
+                    totals[f"delta_flow_{side}"] += increment * abs(delta)
+        previous = {key: volume for key, (volume, _) in current.items()}
+    return totals
+
+
+def test_daily_totals_ridka_data_jako_frontend() -> None:
+    """Řídká matice (strike chybí uprostřed dne, NaN volume, duplicitní minuta ze sešití):
+    součty musí sedět s referenční smyčkou — `pivot_table` tu dával jiné hodnoty."""
+    from dataclasses import replace
+
+    from gexlens_api.main import daily_totals
+
+    rows: list[SnapshotRow] = []
+    for minute in range(4):
+        for row in snapshot_rows(minute):
+            if minute == 1 and row.strike == STRIKES[1]:
+                continue  # strike v minutě 1 chybí → v minutě 2 se počítá od nuly
+            if minute == 2 and row.strike == STRIKES[0] and row.right == "P":
+                row = replace(row, volume=None)  # NaN volume = 0
+            rows.append(row)
+    rows.append(rows[-1])  # duplicitní řádek (sešití partic) nesmí nic přičíst
+    frame = pd.DataFrame([r.__dict__ for r in rows])
+    totals, last_ts = daily_totals(frame)
+    reference = _naive_daily_totals(rows)
+    assert last_ts == ts(3)
+    for key, expected in reference.items():
+        assert totals[key] == pytest.approx(expected), key
+    assert totals["evo_oi_call"] == pytest.approx(600.0)
+
+
 def test_replay_bundle_daily_resolution(client: TestClient) -> None:
     """Daily pohled (#1206): jen poslední minuta + denní součty stejným vzorcem jako UI."""
     full = client.get(f"/replay/ES/20260716/{DAY.isoformat()}").json()
