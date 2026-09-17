@@ -1576,6 +1576,8 @@ do pushe** a nevstupuje do bilance účtu; přepínač **Jen obchodovatelné** j
 schová. Tooltip štítku nese rozpočet, stop v bodech, verdikt brány (n, dolní
 mez) a stav brzd (dnes / týden v R).
 
+![Setupy — sloupec Účet: stín „stop nad rozpočtem rizika“ / „šablona bez prokázaného edge“, nad tabulkou Kouč nad setupy](img/setupy-ucet-risk.jpg)
+
 **Bilance účtu.** Dlaždice **Účet (obchodovatelné)** v Setupech a karta
 **Účet 50k** ve Stats → Výkon setupů: Σ (kontrakty × R × stop × bod −
 poplatky), počet obchodů, počet stínů, poplatky a max drawdown v $. Poplatek
