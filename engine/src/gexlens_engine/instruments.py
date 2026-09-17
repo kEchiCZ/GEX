@@ -381,6 +381,8 @@ class InstrumentPipeline:
     _last_spot: float = field(default=float("nan"), repr=False)
     _backfill_task: asyncio.Task[None] | None = field(default=None, repr=False)
     _gap_fill_task: asyncio.Task[int] | None = field(default=None, repr=False)
+    #: První OI archiv dne na pozadí (#1208); None = neběží (hotovo nebo nezačal)
+    _initial_oi_task: asyncio.Task[bool] | None = field(default=None, repr=False)
     # Kolik barů zatím doplnil tasty fallback během běžícího stall (do logu při zotavení)
     _gap_filled: int = field(default=0, repr=False)
     # Vol koncentrace (#208): už ohlášené strany (expirace, strike, right) —
@@ -462,6 +464,37 @@ class InstrumentPipeline:
         čtení navíc. To je levnější než další stav v schématu.
         """
         return now >= self.settings.oi_publication_utc(now.date()) and not self.oi_final
+
+    def start_initial_archive(self, today: dt.date) -> asyncio.Task[bool]:
+        """První OI archiv dne jako task na pozadí (#1208).
+
+        `create_pipeline` na něj dřív čekal: archiv z IBKR + FA validace +
+        kalibrace α + Forward GEX trvaly u ES 5–10 min a hlavní smyčka zakládá
+        instrumenty sekvenčně, takže NQ po restartu stál 11 min bez dat.
+        Do doběhnutí jede pipeline s `oi_available=False` (volume fallback,
+        stejně jako při selhání archivu); minutový cyklus mezitím vlastní
+        retry archivu přeskakuje, aby neběžely dva naráz.
+        """
+        task = asyncio.create_task(self.try_archive_oi(today), name=f"oi-archive-{self.symbol}")
+
+        def _done(done: asyncio.Task[bool]) -> None:
+            self._initial_oi_task = None
+            if done.cancelled():
+                return
+            exc = done.exception()
+            if exc is not None:
+                logger.error(
+                    "První OI archiv %s selhal (%s) — retry v minutovém cyklu", self.symbol, exc
+                )
+                return
+            self.oi_available = done.result()
+
+        task.add_done_callback(_done)
+        self._initial_oi_task = task
+        return task
+
+    def initial_archive_running(self) -> bool:
+        return self._initial_oi_task is not None and not self._initial_oi_task.done()
 
     async def try_archive_oi(self, today: dt.date, now: dt.datetime | None = None) -> bool:
         """Denní OI archiv; při úplném selhání alert do UI (ADR-0001 v2).
@@ -884,8 +917,12 @@ class InstrumentPipeline:
             self._cycles_since_oi = OI_RETRY_CYCLES  # archivuj hned, ne až za 30 min
         self._oi_day = today
         # Retry běží nejen když OI chybí, ale i dokud snímek není finální (#463):
-        # předpublikační čísla jsou nenulová, takže se bez toho nikdy neobnoví
-        if not self.oi_available or self._oi_refresh_due(now):
+        # předpublikační čísla jsou nenulová, takže se bez toho nikdy neobnoví.
+        # Dokud běží první archiv na pozadí (#1208), retry čeká — dva archivy
+        # téhož dne naráz by se přepisovaly.
+        if not self.initial_archive_running() and (
+            not self.oi_available or self._oi_refresh_due(now)
+        ):
             self._cycles_since_oi += 1
             if self._cycles_since_oi >= OI_RETRY_CYCLES:
                 self._cycles_since_oi = 0
@@ -1325,6 +1362,8 @@ class InstrumentPipeline:
             self._backfill_task.cancel()
         if self._gap_fill_task is not None:
             self._gap_fill_task.cancel()
+        if self._initial_oi_task is not None:
+            self._initial_oi_task.cancel()
         try:
             self.on_stop()
         except Exception:

@@ -1300,7 +1300,9 @@ async def create_pipeline(
 
     manager.on_resubscribe(resubscribe)
 
-    pipeline.oi_available = await pipeline.try_archive_oi(dt.datetime.now(dt.UTC).date())
+    # První OI archiv dne na pozadí (#1208): čekání tady blokovalo založení
+    # dalšího instrumentu v hlavní smyčce (NQ startoval 11 min po ES)
+    pipeline.start_initial_archive(dt.datetime.now(dt.UTC).date())
     return pipeline
 
 
