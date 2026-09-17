@@ -89,11 +89,16 @@ function thirdFridayUtc(year: number, month: number): Date {
   return new Date(Date.UTC(year, month, 1 + ((5 - firstDay + 7) % 7) + 14))
 }
 
+/** Roll futures na další kontrakt: 8 dnů před expirací (ADR-0039, #1189) —
+stejné pravidlo jako engine (`GEXLENS_FRONT_ROLL_DAYS`), aby sidebar i deník
+ukazovaly kontrakt, který engine skutečně sleduje (po rollu už Z6, ne U6). */
+const FRONT_ROLL_DAYS = 8
+
 /** TWS lokální symbol předního kvartálního kontraktu („ES" → „ESU6", #189).
 
-Přední kontrakt = nejbližší kvartální měsíc, jehož expirace (3. pátek) je
-v budoucnu; v den expirace se kód přepne na další kontrakt (futures se stejně
-rolují dřív). Jen orientační pomůcka pro vyhledání grafu v TWS. */
+Přední kontrakt = nejbližší kvartální měsíc, jehož roll date (3. pátek − 8 d)
+je ještě v budoucnu; od roll date je přední ten další (ADR-0039). Jen
+orientační pomůcka pro vyhledání grafu v TWS. */
 export function frontContractCode(symbol: string, now: Date): string | null {
   if (!QUARTERLY_ROOTS.has(symbol)) return null
   for (let offset = 0; offset < 15; offset += 1) {
@@ -101,7 +106,8 @@ export function frontContractCode(symbol: string, now: Date): string | null {
     const year = now.getUTCFullYear() + Math.floor((now.getUTCMonth() + offset) / 12)
     const code = QUARTER_CODES[month]
     if (!code) continue
-    if (now.getTime() < thirdFridayUtc(year, month).getTime()) {
+    const rollAt = thirdFridayUtc(year, month).getTime() - FRONT_ROLL_DAYS * 86_400_000
+    if (now.getTime() < rollAt) {
       return `${symbol}${code}${year % 10}`
     }
   }
