@@ -679,6 +679,8 @@ scénáře nese štítek **auto** a rozbalovací **hlasy verdiktu** (proč práv
 tenhle směr a cíle). Nastavení: `GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN`
 (ADMIN manuál; 0 = vypnuto).
 
+![Briefing 18. 9. 2026 (SOQ den): automatický scénář dne SHORT (skóre −3) — vstup 7701,5 → ONL 7696 → PDL 7617,5, náčrt cesty v kartě Scénář dne, vedle karta Expirační týden a Kouč](img/briefing-auto-scenar.jpg)
+
 **Ruční scénář** (doplněk, štítek „ručně"): nakresli na **živém** grafu
 očekávanou cestu ceny (šipka nebo freehand) a klikni **✎ Scénář**: aplikace
 pořídí snímek grafu s anotací, z geometrie odvodí **cíle v pořadí** (obraty
