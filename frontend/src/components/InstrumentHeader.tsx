@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react'
 import { coverageLabel, greeksCoverage, oiCoverage } from '../instrument/coverage'
 import type { Coverage } from '../instrument/coverage'
 import { expiryCountdown, expiryIsoDate, expiryKind, expirySettleUtc } from '../instrument/expiry'
-import { pinnedContract, symbolRoot } from '../instrument/ticker'
+import { isFutures, pinnedContract, symbolRoot } from '../instrument/ticker'
+import { outsideUsRth } from '../instrument/marketclock'
 import { formatSettleWatch } from '../instrument/settlewatch'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
 import { useAppState } from '../state/AppState'
@@ -163,14 +164,19 @@ export function InstrumentHeader({
   // vysvětlivky mate, že „budoucnost už má svíčky".
   const expiryDate = selectedExpiry ? expiryIsoDate(selectedExpiry) : null
   const todayIso = now.toISOString().slice(0, 10)
+  // Akcie/ETF/index mimo 9:30–16:00 ET (#206 fáze 2): řetěz stojí na posledních
+  // kotacích — bez vysvětlivky vypadá zamrzlá heatmapa jako výpadek
+  const equityClosed = !isFutures(symbol) && outsideUsRth(now)
   const chainNote =
     expiryDate === null
       ? null
-      : expiryDate < todayIso
-        ? 'proběhla — zobrazen den expirace'
-        : expiryDate > todayIso
-          ? 'svíčky = dnešní seance'
-          : null
+      : equityClosed
+        ? 'trh zavřený (9:30–16:00 ET) — řetěz z posledních kotací'
+        : expiryDate < todayIso
+          ? 'proběhla — zobrazen den expirace'
+          : expiryDate > todayIso
+            ? 'svíčky = dnešní seance'
+            : null
 
   return (
     <header className="instrument-header">

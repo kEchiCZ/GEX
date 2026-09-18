@@ -25,6 +25,15 @@ class _FakeSymbolMap:
             for strike in range(60, 91)
             for right in ("C", "P")
         }
+        if product == "KO":
+            # Akcie (#206 f. 2): dnešní 0DTE + další týden — po close se dnešek přeskočí
+            by_contract.update(
+                {
+                    ("20260827", float(strike), right): f".KO260827{right}{strike}"
+                    for strike in range(60, 91)
+                    for right in ("C", "P")
+                }
+            )
         return ChainSymbols(product=product, day=day, by_contract=by_contract)
 
     async def front_future(self, product: str) -> str | None:
@@ -154,3 +163,38 @@ async def test_akcie_prvni_snapshot_hned_po_kotacich(tmp_path: Path) -> None:
     assert written > 0
     # Opakované volání je no-op — o zbytek se stará minutová uzávěrka
     assert await viewer.write_first_snapshot(NOW + dt.timedelta(seconds=12)) == 0
+
+
+async def test_akcie_po_close_preskoci_dnesni_0dte(tmp_path: Path) -> None:
+    """#206 fáze 2: KO má expirace 20260827 (dnes) a 20260828; v 14:00 UTC (10:00 ET)
+    je dnešní živá, ve 21:00 UTC (17:00 ET) už ne → bere se další."""
+    viewer, _cache, db = make_viewer(tmp_path)
+    request(db, "KO", NOW)
+    await viewer.refresh(NOW)  # 14:00 UTC = 10:00 ET
+    assert viewer._views["KO"].expiry == "20260827"
+
+    viewer2, _cache2, db2 = make_viewer(tmp_path)
+    after_close = NOW.replace(hour=21)  # 17:00 ET
+    request(db2, "KO", after_close)
+    await viewer2.refresh(after_close)
+    assert viewer2._views["KO"].expiry == "20260828"
+
+
+def test_equity_expiry_open_pravidla() -> None:
+    from gexlens_engine.tasty.adhoc import equity_expiry_open
+
+    # Akcie: 0DTE žije do 16:00 ET (20:00 UTC v létě)
+    assert equity_expiry_open("20260827", "KO", dt.datetime(2026, 8, 27, 19, 59, tzinfo=dt.UTC))
+    assert not equity_expiry_open("20260827", "KO", dt.datetime(2026, 8, 27, 20, 0, tzinfo=dt.UTC))
+    # Index, 3. pátek (18. 9. 2026) = AM vypořádání 9:30 ET (13:30 UTC)
+    assert equity_expiry_open("20260918", "SPX", dt.datetime(2026, 9, 18, 13, 29, tzinfo=dt.UTC))
+    assert not equity_expiry_open(
+        "20260918", "SPX", dt.datetime(2026, 9, 18, 13, 31, tzinfo=dt.UTC)
+    )
+    # Index, týdenní (pondělí) = 16:00 ET
+    assert equity_expiry_open("20260921", "SPX", dt.datetime(2026, 9, 21, 19, 0, tzinfo=dt.UTC))
+    assert not equity_expiry_open("20260921", "SPX", dt.datetime(2026, 9, 21, 20, 1, tzinfo=dt.UTC))
+    # Včerejší / zítřejší
+    assert not equity_expiry_open("20260826", "KO", dt.datetime(2026, 8, 27, 12, 0, tzinfo=dt.UTC))
+    assert equity_expiry_open("20260828", "KO", dt.datetime(2026, 8, 27, 23, 0, tzinfo=dt.UTC))
+    assert not equity_expiry_open("nesmysl", "KO", dt.datetime(2026, 8, 27, tzinfo=dt.UTC))
