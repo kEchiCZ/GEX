@@ -24,7 +24,12 @@ from dataclasses import dataclass, field
 from sqlalchemy import delete, select
 from sqlalchemy.engine import Engine
 
-from gexlens_engine.compute.settle import session_bounds, trading_session_date
+from gexlens_engine.compute.settle import (
+    session_bounds,
+    settle_ts,
+    soq_ts,
+    trading_session_date,
+)
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.meta import adhoc_view_table
 from gexlens_engine.storage.parquet_store import SnapshotWriter
@@ -32,6 +37,7 @@ from gexlens_engine.tasty.candles import CandleFetcher, CandleRange
 from gexlens_engine.tasty.extended import build_snapshot_rows
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
+from gexlens_engine.ticker import is_futures, symbol_root
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +50,36 @@ ADHOC_MAX_AGE_S = 90.0
 #: První snapshot hned po založení (#206): stačí, když má kotaci tenhle podíl
 #: kontraktů pásma — čekat na minutovou hranici by heatmapu zdrželo až o minutu
 FIRST_SNAPSHOT_MIN_SHARE = 0.2
+#: Strop striků na stranu od spotu (#206 fáze 2): SPX má 14 634 striků, ±8 %
+#: by bylo přes 400 symbolů — rate limit streamu; nejbližší ke spotu vyhrávají
+ADHOC_MAX_STRIKES_PER_SIDE = 120
+#: Indexy s AM vypořádáním 3. pátek (SPX/NDX/RUT/DJX/XSP měsíční, VIX středa)
+INDEX_ROOTS = frozenset({"SPX", "NDX", "RUT", "DJX", "XSP", "VIX"})
+
+
+def _third_friday(day: dt.date) -> bool:
+    return day.weekday() == 4 and 15 <= day.day <= 21
+
+
+def equity_expiry_open(expiry: str, root: str, now: dt.datetime) -> bool:
+    """Je equity/indexová expirace ještě živá? (#206 fáze 2)
+
+    Futures řeší `expiry_expired` (jen kvartální SOQ); u akcií/ETF/indexů
+    expiruje 0DTE v 16:00 ET a po close by pohled jinak celý večer stál na
+    mrtvém řetězu (18. 9. 2026 SPY vybral 20260918 v 23:09 CEST). Měsíční
+    indexové série (3. pátek) se vypořádávají ráno v 9:30 ET (AM), týdenní
+    v 16:00 ET.
+    """
+    try:
+        day = dt.datetime.strptime(expiry, "%Y%m%d").date()
+    except ValueError:
+        return False
+    if day < now.date():
+        return False
+    if day > now.date():
+        return True
+    cutoff = soq_ts(day) if root in INDEX_ROOTS and _third_friday(day) else settle_ts(day)
+    return now < cutoff
 
 
 @dataclass
@@ -123,6 +159,11 @@ class AdhocViewer:
             expiries = sorted({expiry for (expiry, _s, _r) in chain.by_contract})
             today_key = now.date().strftime("%Y%m%d")
             upcoming = [expiry for expiry in expiries if expiry >= today_key]
+            if not is_futures(product):
+                # Akcie/ETF/index (#206 fáze 2): dnešní 0DTE po 16:00 ET (index AM
+                # série po 9:30 ET) je mrtvá — vzít další živou expiraci
+                root = symbol_root(product)
+                upcoming = [e for e in upcoming if equity_expiry_open(e, root, now)]
             if not upcoming:
                 logger.warning("Ad-hoc %s: chain bez budoucí expirace — přeskočeno", product)
                 continue
@@ -172,14 +213,16 @@ class AdhocViewer:
 
     def _band_streamers(self, view: _ActiveView) -> set[str]:
         spot = self._front_mid(view)
-        symbols: set[str] = set()
+        picked: list[tuple[float, str]] = []
         for (expiry, strike, _right), streamer in view.chain.by_contract.items():
             if expiry != view.expiry:
                 continue
             if spot is not None and abs(strike - spot) / spot * 100.0 > ADHOC_BAND_PCT:
                 continue
-            symbols.add(streamer)
-        return symbols
+            picked.append((abs(strike - spot) if spot is not None else 0.0, streamer))
+        # Strop počtu (#206 fáze 2): nejbližší striky ke spotu, C i P = 2 symboly per strike
+        picked.sort(key=lambda item: item[0])
+        return {streamer for _distance, streamer in picked[: ADHOC_MAX_STRIKES_PER_SIDE * 4]}
 
     def streamers(self) -> set[str]:
         """Symboly k subskripci: nejbližší expirace v pásmu kolem spotu + front."""

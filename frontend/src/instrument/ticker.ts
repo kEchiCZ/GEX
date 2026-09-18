@@ -23,6 +23,17 @@ export function parseTicker(raw: string): Ticker | null {
   return null
 }
 
+/** CME produkty, které aplikace zná jako futures — zrcadlo `engine/ticker.py` (#206). */
+const CME_FUTURES_ROOTS = new Set([
+  'ES', 'NQ', 'RTY', 'YM', 'MES', 'MNQ', 'M2K', 'MYM',
+  'CL', 'NG', 'GC', 'SI', 'HG', 'ZB', 'ZN', 'ZF', '6E', '6J', 'ZC', 'ZS', 'ZW',
+]) // prettier-ignore
+
+/** Futures (CME) vs. akcie/ETF/index (#206). */
+export function isFutures(symbol: string): boolean {
+  return CME_FUTURES_ROOTS.has(symbolRoot(symbol))
+}
+
 /** Kořen produktu pro lidské názvy a konfiguraci; nečitelný ticker beze změny. */
 export function symbolRoot(symbol: string): string {
   return parseTicker(symbol)?.root ?? symbol.trim().toUpperCase()
