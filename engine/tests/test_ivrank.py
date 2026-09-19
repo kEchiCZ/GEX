@@ -26,6 +26,8 @@ from gexlens_engine.storage.oi_archive import metadata as oi_metadata
 from gexlens_engine.storage.oi_archive import oi_eod_table
 
 SESSION = dt.date(2026, 8, 26)
+#: Front future daleko za roll oknem — relativně k dnešku, ne pevné datum
+FRONT_EXPIRY = (dt.date.today() + dt.timedelta(days=120)).strftime("%Y%m%d")
 
 
 def num(value: object) -> float:
@@ -73,7 +75,9 @@ class _FakeIb:
     async def reqContractDetailsAsync(self, contract: Any) -> list[SimpleNamespace]:
         return [
             SimpleNamespace(
-                contract=SimpleNamespace(lastTradeDateOrContractMonth="20260918", symbol="ES")
+                # Expirace relativně k dnešku: pevné 20260918 po 18. 9. 2026 propadlo a
+                # front future se nenašel (CI 19. 9. 2026) — test nesmí stárnout
+                contract=SimpleNamespace(lastTradeDateOrContractMonth=FRONT_EXPIRY, symbol="ES")
             )
         ]
 
