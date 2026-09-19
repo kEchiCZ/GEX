@@ -1,10 +1,12 @@
-/** Web worker pro kontury (#493): blur + marching squares mimo main thread.
+/** Web worker pro kontury (#493, #1222): blur + marching squares + napojení
+do polylinií mimo main thread.
 
 Zpráva dovnitř: { id, buffer (transferable), width, height, mode }.
-Zpráva ven: { id, buffer } — segmenty jako plochý Float32Array (transferable).
+Zpráva ven: { id, buffer } — polylinie kódované do Float32Array (transferable).
 */
-import { computeContourSegments, segmentsToFlat } from './contourCompute'
+import { computeContourPolylines } from './contourCompute'
 import type { ContoursMode } from './contours'
+import { encodePolylines } from './polylines'
 
 interface ContourRequest {
   id: number
@@ -16,8 +18,8 @@ interface ContourRequest {
 
 self.addEventListener('message', (event: MessageEvent<ContourRequest>) => {
   const { id, buffer, width, height, mode } = event.data
-  const segments = computeContourSegments(new Float32Array(buffer), width, height, mode)
-  const flat = segmentsToFlat(segments)
+  const polylines = computeContourPolylines(new Float32Array(buffer), width, height, mode)
+  const flat = encodePolylines(polylines)
   // postMessage workeru: druhý argument = transfer list (typ z DOM lib sedí)
   self.postMessage({ id, buffer: flat.buffer }, { transfer: [flat.buffer] })
 })
