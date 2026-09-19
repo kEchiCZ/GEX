@@ -1,7 +1,12 @@
 /** Hook kontur (#493): sync fallback bez Workeru, multi-slot cache, parita výpočtu. */
 import { renderHook } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { computeContourSegments, flatToSegments, segmentsToFlat } from './contourCompute'
+import {
+  computeContourPolylines,
+  computeContourSegments,
+  flatToSegments,
+  segmentsToFlat,
+} from './contourCompute'
 import type { HeatmapGrid } from './grid'
 import { useContours } from './useContours'
 
@@ -20,7 +25,7 @@ describe('useContours (jsdom = sync fallback, Worker není)', () => {
   it('vrací segmenty shodné s přímým výpočtem', () => {
     const grid = makeGrid()
     const { result } = renderHook(() => useContours(grid, null, 'all'))
-    const direct = computeContourSegments(
+    const direct = computeContourPolylines(
       grid.layers.signed as Float32Array,
       grid.minutes,
       grid.strikes.length,

@@ -552,17 +552,24 @@ export function Heatmap({
       context.restore()
     }
 
-    // Kontury (bílé přerušované, SPEC 7.2)
+    // Kontury (bílé přerušované, SPEC 7.2) — souvislé vyhlazené křivky (#1222):
+    // jedna cesta per izolinie, dash běží podél křivky, ne per buňka
+    const tracePolylines = (polylines: typeof contourSegments) => {
+      context.beginPath()
+      for (const { points, closed } of polylines) {
+        context.moveTo(minuteToX(points[0] - 0.5), rowToY(points[1]))
+        for (let index = 2; index < points.length; index += 2) {
+          context.lineTo(minuteToX(points[index] - 0.5), rowToY(points[index + 1]))
+        }
+        if (closed) context.closePath()
+      }
+      context.stroke()
+    }
     if (contourSegments.length > 0) {
       context.strokeStyle = 'rgba(255,255,255,0.8)'
       context.setLineDash([4, 3])
       context.lineWidth = 1
-      context.beginPath()
-      for (const [x1, y1, x2, y2] of contourSegments) {
-        context.moveTo(minuteToX(x1 - 0.5), rowToY(y1))
-        context.lineTo(minuteToX(x2 - 0.5), rowToY(y2))
-      }
-      context.stroke()
+      tracePolylines(contourSegments)
       context.setLineDash([])
     }
     // Kontura flipu (#1174): nulová izolinie modelu — plná bílá, silnější,
@@ -572,12 +579,7 @@ export function Heatmap({
       context.strokeStyle = 'rgba(255,255,255,0.95)'
       context.setLineDash([10, 5])
       context.lineWidth = 1.75
-      context.beginPath()
-      for (const [x1, y1, x2, y2] of flipContourSegments) {
-        context.moveTo(minuteToX(x1 - 0.5), rowToY(y1))
-        context.lineTo(minuteToX(x2 - 0.5), rowToY(y2))
-      }
-      context.stroke()
+      tracePolylines(flipContourSegments)
       context.setLineDash([])
       context.lineWidth = 1
     }
