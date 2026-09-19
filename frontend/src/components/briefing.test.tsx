@@ -18,6 +18,7 @@ beforeEach(() => {
   setJournalDraft.mockReset()
   setView.mockReset()
   useAppStateMock.mockReturnValue({
+    regimeInfo: { state: null, measuredFlip: null, dynamicFlip: null },
     symbol: 'ES',
     selectedExpiry: '20260813',
     setJournalDraft,
@@ -152,7 +153,8 @@ test('verdikt se přepíše, když se změní hlasy i při stejném skóre (#109
     levels: { levels: [{ ts_min: '2026-08-13T14:00:00Z', flip: 6430, call_wall: 6500, put_wall: 6400, centroid: 6445, total_gex: 900 }] }, // prettier-ignore
     tendency: { tendency: [{ ts_min: '', symbol: 'ES', score: 0.6, band: 'long', votes: [], weights_version: 1 }] }, // prettier-ignore
   })
-  useAppStateMock.mockReturnValue({ symbol: 'ES', selectedExpiry: '20260814', setJournalDraft, setView }) // prettier-ignore
+  useAppStateMock.mockReturnValue({
+    regimeInfo: { state: null, measuredFlip: null, dynamicFlip: null }, symbol: 'ES', selectedExpiry: '20260814', setJournalDraft, setView }) // prettier-ignore
   rerender(<BriefingView />)
   await waitFor(
     () => {

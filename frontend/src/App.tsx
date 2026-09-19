@@ -104,6 +104,7 @@ import { CLEAN_VIEW_OFF, CLEAN_VIEW_TARGET, CLEAN_VIEW_TOGGLE_KEYS, CLEAN_VIEW_T
 import type { CleanViewSettings, CleanViewState } from './state/cleanView'
 import type { ActiveTool } from './annotations/model'
 import { CONTOURS_MODES } from './heatmap/contours'
+import { magnetLevel } from './instrument/magnet'
 import type { ContoursMode } from './heatmap/contours'
 import type { HeatmapStyle } from './heatmap/render'
 import type { LiveSocket } from './api/ws'
@@ -122,6 +123,15 @@ function lastWeakFlag(flags: (boolean | null)[]): boolean | null {
     if (flags[index] !== null) return flags[index]
   }
   return null
+}
+
+/** Poslední známá hodnota pojmenované linky úrovní/zdí (#1223). */
+function lastLineValue(
+  lines: { name: string; series: (number | null)[] }[] | null | undefined,
+  name: string,
+): number | null {
+  const series = lines?.find((line) => line.name === name)?.series
+  return series ? lastValue(series, series.length - 1) : null
 }
 
 function lastValue(series: (number | null)[] | undefined, position: number): number | null {
@@ -149,6 +159,7 @@ function MainContent() {
     interval,
     setPriceInfo,
     setRegimeInfo,
+    setMagnetInfo,
     setSettleWatch,
     setOhlcCoverage,
     signalMode,
@@ -495,8 +506,9 @@ function MainContent() {
       flipState === null && lastProfile && liveSpot !== null
         ? profileSignRegime(lastProfile, liveSpot)
         : null
+    const regimeState = flipState ?? signState
     setRegimeInfo({
-      state: flipState ?? signState,
+      state: regimeState,
       measuredFlip,
       dynamicFlip,
       fromProfileSign: flipState === null && signState !== null,
@@ -508,7 +520,18 @@ function MainContent() {
       weak: line.weak ? (lastWeakFlag(line.weak) ?? null) : null,
     }))
     setSettleWatch(settleWatchLevel(wallCandidates, liveSpot))
-  }, [realDay, day.spotSeries, day.overlays.levels, day.overlays.walls, day.gexProfile, liveOverlay.bars, setRegimeInfo, setSettleWatch]) // prettier-ignore
+    // Magnet úrovně (#1223): kam positioning tlačí/lepí cenu — z týchž řad
+    setMagnetInfo(
+      magnetLevel({
+        spot: liveSpot,
+        regime: regimeState,
+        flip: measuredFlip ?? dynamicFlip,
+        putWall: lastLineValue(day.overlays.walls, 'put_wall'),
+        callWall: lastLineValue(day.overlays.walls, 'call_wall'),
+        centroid: lastLineValue(day.overlays.levels, 'centroid'),
+      }),
+    )
+  }, [realDay, day.spotSeries, day.overlays.levels, day.overlays.walls, day.gexProfile, liveOverlay.bars, setRegimeInfo, setSettleWatch, setMagnetInfo]) // prettier-ignore
   // Pokrytí OHLC do hlavičky (#470) — počítá se nad 1m osou, ne nad koši, aby
   // číslo znamenalo minuty dne bez ohledu na zvolený timeframe
   useEffect(() => {

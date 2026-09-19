@@ -7,6 +7,7 @@ import { API_BASE, WS_URL } from '../config'
 import type { GexRegimeState } from '../instrument/regime'
 import type { SettleWatchInfo } from '../instrument/settlewatch'
 import { sessionDateIso } from '../instrument/tz'
+import type { Magnet } from '../instrument/magnet'
 import { GEX_UNITS } from '../heatmap/units'
 import type { GexUnits } from '../heatmap/units'
 import { FORWARD_RANGES } from '../heatmap/dailyforward'
@@ -156,6 +157,10 @@ export interface PriceInfo {
   changePct: number | null
 }
 
+/** Magnet úrovně (#1223): kam positioning tlačí/lepí cenu; plní MainContent
+z živých levels + režimu, hlavička kreslí chip. */
+export type MagnetInfo = Magnet | null
+
 /** GEX režim badge (#209; plní MainContent z živých levels + Dyn GEX profilu). */
 export interface RegimeInfo {
   state: GexRegimeState | null
@@ -266,6 +271,8 @@ interface AppState {
   setPriceInfo: (info: PriceInfo) => void
   regimeInfo: RegimeInfo
   setRegimeInfo: (info: RegimeInfo) => void
+  magnetInfo: MagnetInfo
+  setMagnetInfo: (info: MagnetInfo) => void
   /** Settle watch (#603): klíčová úroveň dne + odstup — plní MainContent, čte hlavička. */
   settleWatch: SettleWatchInfo | null
   setSettleWatch: (info: SettleWatchInfo | null) => void
@@ -486,6 +493,21 @@ export function AppStateProvider({
       previous?.covered === coverage?.covered && previous?.expected === coverage?.expected
         ? previous
         : coverage,
+    )
+  }, [])
+  const [magnetInfo, setMagnetInfoState] = useState<MagnetInfo>(null)
+  // Bail-out jako u regimeInfo: stejný magnet = žádný re-render hlavičky
+  const setMagnetInfo = useCallback((info: MagnetInfo) => {
+    setMagnetInfoState((previous) =>
+      previous === info ||
+      (previous !== null &&
+        info !== null &&
+        previous.kind === info.kind &&
+        previous.source === info.source &&
+        previous.level === info.level &&
+        previous.distance === info.distance)
+        ? previous
+        : info,
     )
   }, [])
   const [regimeInfo, setRegimeInfoState] = useState<RegimeInfo>({
@@ -762,6 +784,8 @@ export function AppStateProvider({
       setPriceInfo,
       regimeInfo,
       setRegimeInfo,
+      magnetInfo,
+      setMagnetInfo,
       settleWatch,
       setSettleWatch,
       ohlcCoverage,
@@ -813,6 +837,8 @@ export function AppStateProvider({
       setPriceInfo,
       regimeInfo,
       setRegimeInfo,
+      magnetInfo,
+      setMagnetInfo,
       settleWatch,
       setSettleWatch,
       ohlcCoverage,

@@ -2719,6 +2719,23 @@ tr.setup-shadow td[data-part='risk'] {
   color: #f0c36d;
 }
 
+.magnet-chip {
+  font-weight: 600;
+}
+
+.magnet-push {
+  color: #f28b82;
+}
+
+.magnet-pin {
+  color: #81c995;
+}
+
+.briefing-magnet {
+  font-weight: 600;
+  margin: 2px 0 8px;
+}
+
 .contract-pinned {
   margin-left: 6px;
   font-size: 0.8em;
