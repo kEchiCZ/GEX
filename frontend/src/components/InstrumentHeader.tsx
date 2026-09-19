@@ -4,6 +4,7 @@ import { coverageLabel, greeksCoverage, oiCoverage } from '../instrument/coverag
 import type { Coverage } from '../instrument/coverage'
 import { expiryCountdown, expiryIsoDate, expiryKind, expirySettleUtc } from '../instrument/expiry'
 import { isFutures, pinnedContract, symbolRoot } from '../instrument/ticker'
+import { MAGNET_SOURCE_LABELS, magnetChipText, magnetGlyph } from '../instrument/magnet'
 import { outsideUsRth } from '../instrument/marketclock'
 import { formatSettleWatch } from '../instrument/settlewatch'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
@@ -140,6 +141,7 @@ export function InstrumentHeader({
     markAlertsRead,
     setView,
     regimeInfo,
+    magnetInfo,
     settleWatch,
   } = useAppState()
   const expiryPhaseCalendar = useExpiryCalendar()
@@ -256,6 +258,24 @@ export function InstrumentHeader({
         <PaperChip account={paperAccount} symbol={symbol} onChanged={refreshPaper} />
         {/* Gamma útes (#576): kolik gammy dnešní expirací odpadne — jen informace */}
         <GammaCliffChip symbol={symbol} />
+        {/* Magnet úrovně (#1223): kam positioning tlačí/lepí cenu a kdy tlak zmizí */}
+        {magnetInfo && (
+          <span
+            className={`chip magnet-chip magnet-${magnetInfo.kind}`}
+            data-testid="magnet-chip"
+            title={
+              `Magnet (#1223) z GEX režimu a úrovní řetězu: ${MAGNET_SOURCE_LABELS[magnetInfo.source]} ` +
+              `${magnetInfo.level.toFixed(2)}, ${regimeInfo.state === 'negative' ? 'negativní gamma — dealeři hedgují ve směru pohybu, cena zrychluje k zóně největší negativní gammy' : regimeInfo.state === 'positive' ? 'pozitivní gamma — lepení k těžišti kladné gammy (pinning)' : 'cena na hraně režimu'}. ` +
+              'Tlak platí do expirace zobrazeného řetězu; po ní se přepočítá z další. Není to signál.'
+            }
+          >
+            {magnetGlyph(magnetInfo)}{' '}
+            {magnetChipText(
+              magnetInfo,
+              selectedExpiry ? expiryCountdown(selectedExpiry, now) : null,
+            )}
+          </span>
+        )}
         {/* Relativní síla ES vs. NQ (#680, Traders mode) — widget na zkoušku */}
         <RelativeStrengthChip />
         {/* Settle watch (#603): denní teze jednou větou — uzavřeme nad/pod klíčovou zdí? */}

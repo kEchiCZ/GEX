@@ -47,6 +47,8 @@ import type { ExpiryPhase } from '../api/calendar'
 import { API_BASE } from '../config'
 import { useExpiryCalendar } from './ExpiryPhaseChip'
 import { symbolRoot } from '../instrument/ticker'
+import { magnetGlyph, magnetLevel, magnetSentence } from '../instrument/magnet'
+import { expiryCountdown } from '../instrument/expiry'
 import { CoachWatchCard } from './CoachWatchCard'
 import type { Scenario } from '../api/scenarios'
 import { ScenarioCard } from './ScenarioCard'
@@ -215,7 +217,7 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 }
 
 export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedMove | null }) {
-  const { symbol, selectedExpiry, setJournalDraft, setView } = useAppState()
+  const { symbol, selectedExpiry, setJournalDraft, setView, regimeInfo } = useAppState()
   const dateIso = sessionDateIso()
 
   const [bars, setBars] = useState<RangeSummary | null>(null)
@@ -325,6 +327,18 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     [expectedMove],
   )
 
+  // Magnet úrovně (#1223): z posledních levels + režimu badge + poslední ceny
+  const magnet = useMemo(() => {
+    const spot = todayBars.at(-1)?.close ?? null
+    return magnetLevel({
+      spot,
+      regime: regimeInfo.state,
+      flip: levels?.flip ?? regimeInfo.measuredFlip,
+      putWall: levels?.put_wall ?? null,
+      callWall: levels?.call_wall ?? null,
+      centroid: levels?.centroid ?? null,
+    })
+  }, [todayBars, regimeInfo.state, regimeInfo.measuredFlip, levels])
   // Shrnutí dne (#1090, ADR-0035): úrovně obratu, zprávy s reakcí, verdikt hlasováním
   const reference = useMemo(
     () =>
@@ -440,6 +454,16 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
               <p data-testid="summary-trend">
                 {trend === null ? 'Svíčky trendu se načítají.' : trend.reading}
               </p>
+              {magnet && (
+                <p className="briefing-magnet" data-testid="summary-magnet">
+                  {magnetGlyph(magnet)}{' '}
+                  {magnetSentence(
+                    magnet,
+                    regimeInfo.state,
+                    selectedExpiry ? expiryCountdown(selectedExpiry, new Date()) : null,
+                  )}
+                </p>
+              )}
               <h4>Verdikt dne</h4>
               <p
                 className={`briefing-verdict verdict-${verdict.verdict}`}
