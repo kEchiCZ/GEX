@@ -26,6 +26,47 @@ def sample(kpi: StreamKpi, now: dt.datetime, **overrides: object) -> None:
     kpi.observe(now, **values)  # type: ignore[arg-type]
 
 
+def test_rozpracovana_seance_prezije_restart(tmp_path: Path) -> None:
+    """#1214: restart uprostřed seance (18. 9. 23:05) nesmí zahodit RTH část dne."""
+    state = tmp_path / "tasty-kpi-current.json"
+    report = tmp_path / "kpi.jsonl"
+    kpi = StreamKpi(report_path=report, state_path=state)
+    sample(kpi, RTH, reconnects=3)
+    sample(kpi, RTH + dt.timedelta(minutes=1), reconnects=4)
+    sample(kpi, RTH + dt.timedelta(minutes=2), last_event_at=RTH - dt.timedelta(minutes=5))
+    assert state.exists()
+
+    # „Restart“: nová instance načte stav, počítadla streamu začínají od nuly
+    restarted = StreamKpi(report_path=report, state_path=state)
+    assert restarted.current is not None
+    assert restarted.current.minutes == 3
+    assert restarted.current.rth_minutes == 3
+    assert restarted.current.rth_silent == 1
+    assert restarted.current.drops == 1
+    # Táž minuta jako před restartem = no-op (nepočítá se dvakrát)
+    sample(restarted, RTH + dt.timedelta(minutes=2), reconnects=0)
+    assert restarted.current.minutes == 3
+    # První vzorek po restartu jen primuje: reconnects 0 → 1 se počítá až od druhého
+    sample(restarted, RTH + dt.timedelta(minutes=3), reconnects=0)
+    sample(restarted, RTH + dt.timedelta(minutes=4), reconnects=1)
+    assert restarted.current.minutes == 5
+    assert restarted.current.drops == 2
+
+    # Nová seance uzavře navázanou do reportu s plným počtem minut
+    sample(restarted, RTH + dt.timedelta(days=1))
+    rows = [json.loads(line) for line in report.read_text(encoding="utf-8").splitlines()]
+    assert rows[-1]["session"] == "2026-09-17" and rows[-1]["minutes"] == 5
+
+
+def test_poskozeny_stav_zacina_od_nuly(tmp_path: Path) -> None:
+    state = tmp_path / "tasty-kpi-current.json"
+    state.write_text("{nesmysl", encoding="utf-8")
+    kpi = StreamKpi(state_path=state)
+    assert kpi.current is None
+    sample(kpi, RTH)
+    assert kpi.current is not None and kpi.current.minutes == 1
+
+
 def test_delty_pocitadel_a_rth_mlceni(tmp_path: Path) -> None:
     kpi = StreamKpi(report_path=tmp_path / "kpi.jsonl")
     # První vzorek jen zapamatuje historii (5 reconnectů z noci se nepočítá)
