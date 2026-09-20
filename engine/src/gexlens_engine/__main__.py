@@ -1783,7 +1783,9 @@ async def main() -> None:
         dx_print_active = _dx_print_active
 
         stream_kpi = StreamKpi(
-            report_path=settings.derived_dir.parent / "reports" / "tasty-kpi.jsonl"
+            report_path=settings.derived_dir.parent / "reports" / "tasty-kpi.jsonl",
+            # Rozpracovaná seance přežije restart (#1214)
+            state_path=settings.derived_dir.parent / "reports" / "tasty-kpi-current.json",
         )
 
         if settings.tasty_silent_watchdog:
