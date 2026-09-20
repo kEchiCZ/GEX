@@ -33,6 +33,13 @@ from gexlens_engine.compute.settle import session_bounds, trading_session_date
 COACH_RULES_VERSION = 1
 
 PENALTIES: dict[str, int] = {
+    "oversized": 15,
+    "undersized": 5,
+    "off_plan": 10,
+    "chased_entry": 10,
+    "fomo": 10,
+    "no_plan": 10,
+    "late_exit": 10,
     "no_stop": 25,
     "after_brake": 25,
     "revenge": 15,
@@ -45,6 +52,13 @@ PENALTIES: dict[str, int] = {
 }
 
 FLAG_LABELS: dict[str, str] = {
+    "oversized": "pozice nad plánované riziko",
+    "undersized": "pozice pod plánované riziko",
+    "off_plan": "obchod mimo plán / proti verdiktu dne",
+    "chased_entry": "vstup za cenou (chase)",
+    "fomo": "vstup ze strachu, že to uteče",
+    "no_plan": "bez plánu (stop, cíl, důvod) před vstupem",
+    "late_exit": "pozdní výstup — cena se vrátila",
     "no_stop": "obchod bez plánovaného stopu",
     "no_setup": "obchod bez setupu z playbooku",
     "low_rr": "plánované RRR pod prahem",
@@ -57,6 +71,26 @@ FLAG_LABELS: dict[str, str] = {
 }
 
 ADVICE: dict[str, str] = {
+    "oversized": (
+        "Riziko na obchod je pevné číslo v $ (1 % účtu) — velikost pozice se z něj "
+        "počítá, ne naopak."
+    ),
+    "undersized": (
+        "Když setup sedí, ber plnou jednotku rizika — poloviční pozice na dobrých "
+        "obchodech ničí matematiku edge."
+    ),
+    "off_plan": (
+        "Proti verdiktu dne jen s potvrzením (tendence otočená ≥ 15 min + cena za "
+        "těžištěm) a s polovičním sizingem."
+    ),
+    "chased_entry": (
+        "Na extrému dne nevstupuj za cenou — počkej na pullback k úrovni, nebo nech obchod být."
+    ),
+    "fomo": "Ujetý pohyb není důvod ke vstupu; další setup přijde.",
+    "no_plan": (
+        "Před vstupem napiš stop v $, cíl a důvod — bez toho není co hodnotit ani co dodržet."
+    ),
+    "late_exit": "Výstup podle plánu, ne podle naděje — cíl nebo stop, nic mezi tím.",
     "no_stop": "Každý order jen s předem daným stopem — bez stopu nevstupuj "
     "(paper účet to vynucuje).",
     "no_setup": "Vstup jen na setup z playbooku; bez pojmenovaného setupu není co hodnotit.",
@@ -71,6 +105,32 @@ ADVICE: dict[str, str] = {
 }
 
 
+#: Účet v aplikaci je v jednotkách plného kontraktu, reálný účet obchoduje
+#: mikro = 1/10 (ADR-0038, #1185: 50 000 $ ≡ 5 000 $). Ruční obchody z brokera
+#: v deníku jsou v reálných $, proto se jednotka rizika dělí tímhle.
+REAL_ACCOUNT_SCALE = 10.0
+
+#: Karta playbooku pro diskreční vstup (#1233): API vyžaduje setup, kouč ji čte
+#: jako „bez setupu"
+NO_SETUP_KEY = "bez_setupu"
+
+#: Chyby označené v deníku (`journal_trades.mistake_tags`) → příznaky kouče.
+#: Vlastní detekce má přednost; tag doplní jen to, co kouč z dat nepozná.
+TAG_FLAGS: dict[str, str] = {
+    "revenge_trade": "revenge",
+    "moved_stop": "stop_moved",
+    "early_exit": "early_exit",
+    "overtrading": "overtrading",
+    "oversized": "oversized",
+    "undersized": "undersized",
+    "off_plan": "off_plan",
+    "chased_entry": "chased_entry",
+    "fomo": "fomo",
+    "no_plan": "no_plan",
+    "late_exit": "late_exit",
+}
+
+
 @dataclass(frozen=True)
 class CoachParams:
     min_rr: float = 1.5
@@ -78,6 +138,12 @@ class CoachParams:
     max_trades_per_day: int = 4
     big_loss_r: float = -1.2
     daily_brake_r: float = 3.0
+    #: Jednotka rizika v $ (#1233): R obchodu bez plánovaného stopu = net_pnl / unit;
+    #: None = bez odhadu (jen R z plánu)
+    risk_unit_usd: float | None = None
+    #: Denní strop ztráty v $ (#1185: 2 % účtu); Σ net_pnl seance pod ním = brzda
+    daily_cap_usd: float | None = None
+    no_setup_key: str = NO_SETUP_KEY
 
 
 #: Výchozí prahy — jediná instance, ať se ve výchozích argumentech nevolá konstruktor
@@ -110,6 +176,8 @@ class Trade:
     tags: tuple[str, ...] = ()
     #: Body, o které se stop posunul dál od entry (paper historie změn, #1187 fáze 4)
     stop_widened_points: float | None = None
+    #: Chyby označené v deníku (#1233)
+    mistake_tags: tuple[str, ...] = ()
 
     @property
     def sign(self) -> float:
@@ -194,7 +262,22 @@ def trade_from_journal(row: dict[str, Any]) -> Trade | None:
         day_r_at_entry=num(context.get("day_r_at_entry")),
         tags=tags,
         stop_widened_points=num(context.get("stop_widened_points")),
+        mistake_tags=tuple(str(t) for t in (trade.get("mistake_tags") or [])),
     )
+
+
+def realized_with_fallback(trade: Trade, params: CoachParams) -> tuple[float | None, bool]:
+    """(R, je to odhad?) — R z plánu, jinak z P&L a jednotky rizika (#1233).
+
+    Diskreční obchody importované od brokera stop v plánu nemají; bez odhadu
+    by kouč u nich hlásil 0 R a skóre 0/100, ačkoli P&L zná.
+    """
+    realized = trade.realized_r
+    if realized is not None:
+        return realized, False
+    if trade.net_pnl is not None and params.risk_unit_usd:
+        return trade.net_pnl / params.risk_unit_usd, True
+    return None, False
 
 
 @dataclass(frozen=True)
@@ -220,6 +303,8 @@ class TradeReview:
     realized_r: float | None
     planned_rr: float | None
     capture: float | None  # realizované R / MFE R (jen když MFE > 0)
+    #: R odvozené z P&L a jednotky rizika, ne z plánovaného stopu (#1233)
+    r_estimated: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         t = self.trade
@@ -230,6 +315,7 @@ class TradeReview:
             "opened_ts": t.opened_ts.isoformat() if t.opened_ts else None,
             "closed_ts": t.closed_ts.isoformat() if t.closed_ts else None,
             "setup_key": t.setup_key,
+            "r_estimated": self.r_estimated,
             "paper": t.paper,
             "exit_reason": t.exit_reason,
             "realized_r": self.realized_r,
@@ -266,11 +352,11 @@ def review_trade(
     trades_same_session: int = 1,
 ) -> TradeReview:
     flags: list[Flag] = []
-    realized = trade.realized_r
+    realized, estimated = realized_with_fallback(trade, params)
     rr = trade.planned_rr
     if trade.planned_stop is None:
         flags.append(Flag("no_stop", "obchod nemá plánovaný stop — riziko nebylo definované"))
-    if trade.setup_key is None:
+    if trade.setup_key is None or trade.setup_key == params.no_setup_key:
         flags.append(
             Flag(
                 "no_setup",
@@ -298,11 +384,22 @@ def review_trade(
                 realized if realized is not None and realized < 0 else None,
             )
         )
-    if trade.day_r_at_entry is not None and trade.day_r_at_entry <= -params.daily_brake_r:
+    day_r, day_usd = _session_before(trade, previous, params)
+    brake_r = day_r is not None and day_r <= -params.daily_brake_r
+    brake_usd = (
+        day_usd is not None
+        and params.daily_cap_usd is not None
+        and day_usd <= -params.daily_cap_usd
+    )
+    if brake_r or brake_usd:
         flags.append(
             Flag(
                 "after_brake",
-                f"vstup při dnešních {trade.day_r_at_entry:+.1f} R",
+                (
+                    f"vstup při dnešních {day_r:+.1f} R"
+                    if day_r is not None
+                    else f"vstup při dnešních {day_usd:+.0f} $"
+                ),
                 realized if realized is not None and realized < 0 else None,
             )
         )
@@ -311,9 +408,15 @@ def review_trade(
         for prev in previous:
             if prev.closed_ts is None or prev.symbol != trade.symbol:
                 continue
-            prev_r = prev.realized_r
+            prev_r, _ = realized_with_fallback(prev, params)
+            # Bez exit_reason (ruční obchody z brokera) je stop každá ztráta:
+            # jiný důvod uzavřít v mínusu pár minut před dalším vstupem není
             stopped = prev.exit_reason == "stop" or (
-                prev.exit_reason is None and prev_r is not None and prev_r <= -0.9
+                prev.exit_reason is None
+                and (
+                    (prev_r is not None and prev_r <= -0.9)
+                    or (prev.net_pnl is not None and prev.net_pnl < 0)
+                )
             )
             if stopped and dt.timedelta(0) <= trade.opened_ts - prev.closed_ts <= window:
                 gap = int((trade.opened_ts - prev.closed_ts).total_seconds() // 60)
@@ -360,9 +463,51 @@ def review_trade(
     capture = None
     if realized is not None and mfe_r is not None and mfe_r > 0:
         capture = max(0.0, min(1.0, realized / mfe_r)) if realized > 0 else 0.0
+    # Chyby označené v deníku (#1233) — jen to, co kouč z dat sám nepoznal
+    seen = {f.kind for f in flags}
+    for tag in trade.mistake_tags:
+        kind = TAG_FLAGS.get(tag)
+        if kind is None or kind in seen:
+            continue
+        seen.add(kind)
+        flags.append(
+            Flag(
+                kind,
+                "označeno v deníku",
+                realized if realized is not None and realized < 0 else None,
+            )
+        )
     return TradeReview(
-        trade=trade, flags=tuple(flags), realized_r=realized, planned_rr=rr, capture=capture
+        trade=trade,
+        flags=tuple(flags),
+        realized_r=realized,
+        planned_rr=rr,
+        capture=capture,
+        r_estimated=estimated,
     )
+
+
+def _session_before(
+    trade: Trade, previous: Sequence[Trade], params: CoachParams
+) -> tuple[float | None, float | None]:
+    """Stav dne před vstupem: (Σ R, Σ net_pnl $) uzavřených obchodů téže seance.
+
+    Paper obchody nesou `day_r_at_entry` z risk vrstvy; ruční obchody ho nemají,
+    proto se sčítá z předchozích obchodů (#1233).
+    """
+    if trade.day_r_at_entry is not None:
+        return trade.day_r_at_entry, None
+    if trade.opened_ts is None:
+        return None, None
+    start, _ = session_bounds(trading_session_date(trade.opened_ts))
+    same = [
+        p for p in previous if p.closed_ts is not None and start <= p.closed_ts <= trade.opened_ts
+    ]
+    if not same:
+        return None, None
+    rs = [r for r in (realized_with_fallback(p, params)[0] for p in same) if r is not None]
+    usd = [p.net_pnl for p in same if p.net_pnl is not None]
+    return (sum(rs) if rs else None), (sum(usd) if usd else None)
 
 
 @dataclass(frozen=True)

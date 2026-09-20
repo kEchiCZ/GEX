@@ -22,6 +22,8 @@ export interface CoachTrade {
   paper: boolean
   exit_reason: string | null
   realized_r: number | null
+  /** R odvozené z P&L a jednotky rizika, ne z plánovaného stopu (#1233) */
+  r_estimated?: boolean
   planned_rr: number | null
   capture: number | null
   net_pnl: number | null

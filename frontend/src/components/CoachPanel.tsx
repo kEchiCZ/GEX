@@ -139,6 +139,7 @@ export function CoachPanel({
                     {trade.setup_key ? ` · ${trade.setup_key}` : ''}
                     {trade.paper ? ' · paper' : ''} ·{' '}
                     <b className={(trade.realized_r ?? 0) >= 0 ? 'r-positive' : 'r-negative'}>
+                      {trade.r_estimated ? '≈ ' : ''}
                       {formatR(trade.realized_r)}
                     </b>
                     {trade.planned_rr !== null ? ` (plán ${trade.planned_rr.toFixed(1)} R)` : ''}
