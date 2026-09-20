@@ -42,6 +42,78 @@ def trade(**overrides: Any) -> Trade:
     return Trade(**base)
 
 
+def test_r_z_pnl_bez_stopu_a_tagy_z_deniku() -> None:
+    """#1233: bez stopu → R = net_pnl / jednotka rizika; tagy → příznaky; bez_setupu."""
+    params = CoachParams(risk_unit_usd=50.0, daily_cap_usd=100.0)
+    t = trade(
+        planned_entry=None,
+        planned_stop=None,
+        planned_target=None,
+        actual_entry=2.54,
+        actual_exit=1.83,
+        net_pnl=-72.9,
+        paper=False,
+        exit_reason=None,
+        r_multiple=None,
+        setup_key="bez_setupu",
+        mistake_tags=("off_plan", "oversized", "revenge_trade", "neznamy_tag"),
+        mfe=None,
+        mae=None,
+    )
+    review = review_trade(t, [], params=params)
+    assert review.realized_r is not None and abs(review.realized_r + 1.458) < 0.01
+    assert review.r_estimated
+    kinds = [f.kind for f in review.flags]
+    assert "no_stop" in kinds and "no_setup" in kinds and "big_loss" in kinds
+    assert "off_plan" in kinds and "oversized" in kinds and "revenge" in kinds
+    assert kinds.count("revenge") == 1
+    assert review.as_dict()["r_estimated"] is True
+    # Bez jednotky rizika zůstává R neznámé (jako dřív)
+    assert review_trade(t, [], params=CoachParams()).realized_r is None
+
+
+def test_revenge_z_casu_a_brzda_v_usd_u_rucnich_obchodu() -> None:
+    """#1233: ztráta bez exit_reason = stop; Σ net_pnl seance pod −2 % účtu = after_brake."""
+    params = CoachParams(risk_unit_usd=50.0, daily_cap_usd=100.0)
+    manual: dict[str, Any] = {
+        "planned_stop": None,
+        "planned_target": None,
+        "paper": False,
+        "exit_reason": None,
+        "r_multiple": None,
+        "day_r_at_entry": None,
+    }
+    first = trade(id=1, closed_ts=T0 + dt.timedelta(minutes=30), net_pnl=-56.9, **manual)
+    second = trade(
+        id=2,
+        opened_ts=T0 + dt.timedelta(minutes=32),
+        closed_ts=T0 + dt.timedelta(minutes=40),
+        net_pnl=-32.06,
+        **manual,
+    )
+    third = trade(
+        id=3,
+        opened_ts=T0 + dt.timedelta(minutes=70),
+        closed_ts=T0 + dt.timedelta(minutes=90),
+        net_pnl=-42.9,
+        **manual,
+    )
+    kinds2 = [f.kind for f in review_trade(second, [first], params=params).flags]
+    assert "revenge" in kinds2 and "after_brake" not in kinds2
+    # Před třetím obchodem je den −88,96 $ → pod stropem 100 $ ještě ne; po něm −131,9 $
+    kinds3 = [f.kind for f in review_trade(third, [first, second], params=params).flags]
+    assert "after_brake" not in kinds3 and "revenge" not in kinds3
+    fourth = trade(
+        id=4,
+        opened_ts=T0 + dt.timedelta(minutes=100),
+        closed_ts=T0 + dt.timedelta(minutes=120),
+        net_pnl=-10.0,
+        **manual,
+    )
+    kinds4 = [f.kind for f in review_trade(fourth, [first, second, third], params=params).flags]
+    assert "after_brake" in kinds4
+
+
 def test_cisty_obchod_bez_priznaku_a_capture() -> None:
     review = review_trade(trade(), [])
     assert review.flags == () and review.realized_r == 2.0 and review.planned_rr == 2.0

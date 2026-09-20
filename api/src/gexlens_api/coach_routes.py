@@ -13,6 +13,7 @@ import pandas as pd
 from fastapi import APIRouter
 
 from gexlens_engine.compute.coach import (
+    REAL_ACCOUNT_SCALE,
     CoachParams,
     Trade,
     daily_review,
@@ -70,7 +71,18 @@ def build_coach_router(
 
     def _params() -> CoachParams:
         setup_params = params_factory()
-        return CoachParams(daily_brake_r=setup_params.daily_brake_r)
+        # Ruční obchody z brokera jsou v reálných $ (mikro = 1/10 účtu aplikace)
+        return CoachParams(
+            daily_brake_r=setup_params.daily_brake_r,
+            risk_unit_usd=setup_params.account_equity_usd
+            * setup_params.risk_pct
+            / 100.0
+            / REAL_ACCOUNT_SCALE,
+            daily_cap_usd=setup_params.account_equity_usd
+            * setup_params.risk_max_pct
+            / 100.0
+            / REAL_ACCOUNT_SCALE,
+        )
 
     def _trades(since: dt.date, until: dt.date) -> list[Trade]:
         rows = journal_reader(since, until)
