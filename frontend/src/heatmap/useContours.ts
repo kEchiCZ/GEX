@@ -10,14 +10,16 @@
 - Během asynchronního výpočtu se drží PŘEDCHOZÍ segmenty — kontury nebliknou.
 */
 import { useEffect, useState } from 'react'
-import type { ContoursMode, Segment } from './contours'
-import { computeContourSegments, flatToSegments } from './contourCompute'
+import type { ContoursMode } from './contours'
+import { computeContourPolylines } from './contourCompute'
+import { decodePolylines } from './polylines'
+import type { Polyline } from './polylines'
 import type { HeatmapGrid } from './grid'
 
-const EMPTY: Segment[] = []
+const EMPTY: Polyline[] = []
 
 //: Cache per zdrojové pole (WeakMap → uvolní se s gridem) × mód
-const cache = new WeakMap<Float32Array, Map<ContoursMode, Segment[]>>()
+const cache = new WeakMap<Float32Array, Map<ContoursMode, Polyline[]>>()
 
 let worker: Worker | null = null
 let workerFailed = false
@@ -79,8 +81,8 @@ function workerAvailable(): boolean {
   return !workerFailed && typeof Worker !== 'undefined'
 }
 
-function storeSegments(field: Float32Array, mode: ContoursMode, segments: Segment[]): void {
-  const perMode = cache.get(field) ?? new Map<ContoursMode, Segment[]>()
+function storeSegments(field: Float32Array, mode: ContoursMode, segments: Polyline[]): void {
+  const perMode = cache.get(field) ?? new Map<ContoursMode, Polyline[]>()
   perMode.set(mode, segments)
   cache.set(field, perMode)
 }
@@ -89,17 +91,17 @@ export function useContours(
   grid: HeatmapGrid,
   underGrid: HeatmapGrid | null | undefined,
   mode: ContoursMode,
-): Segment[] {
+): Polyline[] {
   const { field, width, height } = sourceField(grid, underGrid)
   // Poslední segmenty doručené workerem — během asynchronního výpočtu se
   // drží (kontury nebliknou). Stav místo ref čteného při renderu (#1123).
-  const [delivered, setDelivered] = useState<Segment[]>(EMPTY)
+  const [delivered, setDelivered] = useState<Polyline[]>(EMPTY)
 
   let cached = field ? cache.get(field)?.get(mode) : undefined
   if (!cached && mode !== 'off' && field && !workerAvailable()) {
     // Sync fallback přímo v renderu: výsledek jde do cache per pole × mód,
     // takže je to memoizace (další render ji čte), ne vedlejší efekt
-    cached = computeContourSegments(field, width, height, mode)
+    cached = computeContourPolylines(field, width, height, mode)
     storeSegments(field, mode, cached)
   }
 
@@ -109,7 +111,7 @@ export function useContours(
     if (target === null) {
       // Konstruktor workeru právě selhal (CSP, build): jednorázově spočítat
       // synchronně, další rendery už jdou sync fallbackem výše
-      const segments = computeContourSegments(field, width, height, mode)
+      const segments = computeContourPolylines(field, width, height, mode)
       storeSegments(field, mode, segments)
       // eslint-disable-next-line react-hooks/set-state-in-effect -- jediná cesta k překreslení po selhání workeru
       setDelivered(segments)
@@ -120,7 +122,7 @@ export function useContours(
     nextRequestId += 1
     pending.set(id, (flat) => {
       if (cancelled) return
-      const segments = flatToSegments(flat)
+      const segments = decodePolylines(flat)
       storeSegments(field, mode, segments)
       setDelivered(segments)
     })

@@ -180,9 +180,11 @@ function MainContent() {
     'gradient',
     oneOf(['gradient', 'blobs']),
   )
+  // Default major+flip (#1222): kontury jsou od napojení do křivek čitelné a
+  // patří k Dyn GEX ploše; persistovaná volba uživatele má přednost
   const [contours, setContours] = usePersistentState<ContoursMode>(
     'contours',
-    'off',
+    'major+flip',
     oneOf(CONTOURS_MODES),
   )
   // Persistovaný 'dyn_gex' z dob módu spadne reviverem na 'oi' (#242)
