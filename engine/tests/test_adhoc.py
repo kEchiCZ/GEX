@@ -1,6 +1,8 @@
 """Ad-hoc pohled přes tasty (#521 C): životní cyklus, pásmo, zápis snapshotů."""
 
+import asyncio
 import datetime as dt
+import time
 from pathlib import Path
 from typing import cast
 
@@ -10,6 +12,7 @@ from gexlens_engine.config import Settings
 from gexlens_engine.storage.meta import adhoc_view_table, ensure_meta_schema
 from gexlens_engine.storage.parquet_store import SnapshotWriter
 from gexlens_engine.tasty.adhoc import ADHOC_TTL_S, AdhocViewer
+from gexlens_engine.tasty.candles import CandleBar, CandleFetcher, CandleRange
 from gexlens_engine.tasty.provider import TastyChainCache
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
 
@@ -178,6 +181,55 @@ async def test_akcie_po_close_preskoci_dnesni_0dte(tmp_path: Path) -> None:
     request(db2, "KO", after_close)
     await viewer2.refresh(after_close)
     assert viewer2._views["KO"].expiry == "20260828"
+
+
+class _SlowSymbolMap(_FakeSymbolMap):
+    """Chain i front future trvají — jako tasty REST (sekundy)."""
+
+    async def chain(self, product: str, day: dt.date) -> ChainSymbols:
+        await asyncio.sleep(0.2)
+        return await super().chain(product, day)
+
+    async def front_future(self, product: str) -> str | None:
+        await asyncio.sleep(0.02)
+        return await super().front_future(product)
+
+
+class _SlowCandles:
+    def __init__(self) -> None:
+        self.requests: list[CandleRange] = []
+
+    async def fetch(self, request: CandleRange) -> list[CandleBar]:
+        self.requests.append(request)
+        await asyncio.sleep(0.2)
+        ts = request.since.replace(second=0, microsecond=0)
+        return [CandleBar(ts=ts, open=75.0, high=75.2, low=74.8, close=75.1, volume=100.0)]
+
+
+async def test_svicky_podkladu_jedou_paralelne_s_chainem(tmp_path: Path) -> None:
+    """#206: backfill svíček nečeká na chain — celkově max(chain, svíčky), ne součet."""
+    db = create_engine("sqlite+pysqlite:///:memory:")
+    ensure_meta_schema(db)
+    candles = _SlowCandles()
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    viewer = AdhocViewer(
+        db=db,
+        symbol_map=cast(SymbolMap, _SlowSymbolMap()),
+        cache=TastyChainCache(clock=lambda: NOW),
+        writer=writer,
+        is_watched=lambda product: product in WATCHED,
+        candles=cast(CandleFetcher, candles),
+    )
+    request(db, "KO", NOW)
+    started = time.monotonic()
+    await viewer.refresh(NOW)
+    elapsed = time.monotonic() - started
+    assert viewer.active() == ["KO"]
+    assert [r.streamer_symbol for r in candles.requests] == ["KO"]
+    # Sériově by to bylo ≥ 0,42 s; paralelně ~0,22 s
+    assert elapsed < 0.36, elapsed
+    day = candles.requests[0].since.date()
+    assert (tmp_path / "derived" / "KO" / "bars" / f"{day.isoformat()}.parquet").exists()
 
 
 def test_equity_expiry_open_pravidla() -> None:
