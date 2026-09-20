@@ -349,6 +349,10 @@ class Settings(BaseSettings):
     # engine sám, ale VÝHRADNĚ mimo US RTH — 1. pokus resubscribe (bez díry),
     # 2. pokus reconnect. Vypnutí vrací čistou variantu „jen alert".
     bs_fallback_reconnect: bool = True
+    # Hlídač mlčícího tasty streamu (#1228): socket žije, eventy ne → při
+    # otevřeném trhu force_reconnect (US RTH po 3 min, Globex po 10 min, backoff
+    # 5 min) + alert feed_silent. Zavřený trh (víkend, pauza) hlídač ignoruje.
+    tasty_silent_watchdog: bool = True
     # Konkurenční relace (#495): error 10197 chodí při přetahované session
     # ~2× za minutu (naměřeno 4. 8., viz connection.py) — sdílený práh 5/60 s
     # by se nikdy nenaplnil a alert competing_session by se neodpálil

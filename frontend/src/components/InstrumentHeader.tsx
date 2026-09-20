@@ -8,6 +8,7 @@ import { MAGNET_SOURCE_LABELS, magnetChipText, magnetGlyph } from '../instrument
 import { outsideUsRth } from '../instrument/marketclock'
 import { formatSettleWatch } from '../instrument/settlewatch'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
+import { feedSilenceMinutes } from '../instrument/marketclock'
 import { useAppState } from '../state/AppState'
 import { ExpiryCalendar } from './ExpiryCalendar'
 import { ExpiryPhaseChip, useExpiryCalendar } from './ExpiryPhaseChip'
@@ -93,27 +94,39 @@ než obvykle. */
 function FallbackChip({
   chainSource,
   spotSource,
+  lastEventTs,
 }: {
   chainSource?: 'ibkr' | 'tasty'
   spotSource?: 'ibkr' | 'tasty' | 'none'
+  /** Poslední event tasty streamu (#1228) — stáří říká, jestli záloha vůbec žije */
+  lastEventTs?: string
 }) {
   const parts: string[] = []
   if (chainSource === 'tasty') parts.push('řetěz')
   if (spotSource === 'tasty') parts.push('cena')
   if (parts.length === 0) return null
+  // Status chodí à minutu, takže „teď" při renderu stačí; mimo RTH je ticho normální
+  const silentMinutes = feedSilenceMinutes(lastEventTs, new Date())
+  const lastEvent = lastEventTs ? new Date(lastEventTs).toLocaleTimeString('cs-CZ') : null
   return (
     <span
-      className="fallback-chip"
+      className={silentMinutes === null ? 'fallback-chip' : 'fallback-chip fallback-chip--stale'}
       data-testid="fallback-chip"
       title={
         `Data pro ${parts.join(' i ')} tečou z tastytrade, protože IBKR přestal ` +
         'dodávat — typicky souběh s přihlášením na mobilu (error 10197) nebo výpadek ' +
         'datové farmy. Graf běží dál. Po dobu fallbacku řetězu ale stojí CumΔ a net ' +
         'objem: tastytrade denní objem ve stejné sémantice nedodává, a vymyšlená nula ' +
-        'by byla horší než viditelná díra.'
+        'by byla horší než viditelná díra.' +
+        (lastEvent ? `\nPoslední kotace z tastytrade: ${lastEvent}.` : '') +
+        (silentMinutes === null
+          ? ''
+          : `\nStream mlčí ${silentMinutes} min při otevřeném trhu — engine ho přepojuje sám; ` +
+            'pokud kotace nenaběhnou, zkontroluj Settings → Tastytrade.')
       }
     >
       ⤳ {parts.join(' + ')}: tastytrade
+      {silentMinutes !== null && ` · bez kotací ${silentMinutes} min`}
     </span>
   )
 }
@@ -334,7 +347,11 @@ export function InstrumentHeader({
         {/* Aktivní fallback na tastytrade (#614) — ADR-0025 pravidlo 5 zakazuje
         tiché přepnutí zdroje. Chip svítí JEN při fallbacku: za normálního
         provozu by trvalé „zdroj: IBKR" jen zabíralo místo. */}
-        <FallbackChip chainSource={status.chain_source} spotSource={status.spot_source} />
+        <FallbackChip
+          chainSource={status.chain_source}
+          spotSource={status.spot_source}
+          lastEventTs={status.tasty_last_event_ts}
+        />
         {/* Ad-hoc pohled (#521 C): symbol jede jen z tastytrade — bez flows,
         bez Cum Δ, BS greeks z mid. Musí být vidět, na co se člověk dívá. */}
         {(status.tasty_adhoc ?? []).includes(symbol) && (

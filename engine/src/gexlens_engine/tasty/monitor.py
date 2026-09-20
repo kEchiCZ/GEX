@@ -32,6 +32,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
+from gexlens_engine.compute.marketclock import outside_us_rth
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import CachedQuote
 from gexlens_engine.storage.feed_comparison import ComparisonRow, FeedComparisonRepository
@@ -335,7 +336,7 @@ class FeedMonitor:
         # na tom, jestli se insert povedl — detekce výpadku feedu je cennější
         # než řádek v pracovní tabulce.
         if self._detector is not None:
-            verdict = self._detector.observe(comparison.tally)
+            verdict = self._detector.observe(comparison.tally, in_us_rth=not outside_us_rth(ts))
             if self._on_verdict is not None:
                 await self._on_verdict(verdict)
             if verdict.alert and self._on_alert is not None:
