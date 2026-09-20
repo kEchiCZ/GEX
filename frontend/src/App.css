@@ -498,6 +498,13 @@ button.cal-selected {
 /* Aktivní fallback na tastytrade (#614): chip svítí jen za výpadku IBKR, tak
    ať je vidět. Jantarová, ne červená — data tečou dál, jen z jiného zdroje;
    červená patří stavům, kdy graf něco netvrdí správně. */
+/* Záloha sama mlčí při otevřeném trhu (#1228): žlutý chip lže o „datech", proto červeně */
+.fallback-chip--stale {
+  border-color: rgba(229, 83, 83, 0.7);
+  background: rgba(229, 83, 83, 0.16);
+  color: #f08a8a;
+}
+
 .fallback-chip {
   display: inline-flex;
   align-items: center;
@@ -2717,6 +2724,23 @@ tr.setup-shadow td[data-part='risk'] {
 
 .coach-flag {
   color: #f0c36d;
+}
+
+.magnet-chip {
+  font-weight: 600;
+}
+
+.magnet-push {
+  color: #f28b82;
+}
+
+.magnet-pin {
+  color: #81c995;
+}
+
+.briefing-magnet {
+  font-weight: 600;
+  margin: 2px 0 8px;
 }
 
 .contract-pinned {

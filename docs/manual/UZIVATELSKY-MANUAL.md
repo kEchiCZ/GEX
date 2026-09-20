@@ -1669,6 +1669,13 @@ a market data lines), platí až do expirace a v hlavičce nese štítek
 `📌 kontrakt U6`. Má vlastní historii (setupy, statistiky) oddělenou od `ES`;
 po expiraci ho z watchlistu odeber (engine hlásí chybu setupu).
 
+**Magnet úrovně (#1223).** Chip v hlavičce (🧲 / 📌 / ⚖️) a věta v Briefingu
+nad verdiktem říkají jednou větou, kam dnešní positioning cenu **tlačí**
+(negativní gamma → nejbližší put wall pod cenou, případně call wall nad ní),
+kam ji **lepí** (pozitivní gamma → těžiště GEX) nebo že je **na hraně** (±5 b
+od flipu), s odpočtem, kdy tlak zmizí (expirace zobrazeného řetězu). Je to
+čtení existujících úrovní, ne signál; bez potřebné zdi se chip nekreslí.
+
 **Akcie, ETF a indexy — ad-hoc pohled přes tastytrade (#206).** Do vyhledávání
 symbolu zadej `SPY`, `QQQ`, `SPX`, `KO` nebo jakýkoli ticker s opcemi u tastytrade.
 Engine pohled založí do sekund (bez IBKR market data lines): svíčky podkladu se

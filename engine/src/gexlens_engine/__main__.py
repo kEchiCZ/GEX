@@ -78,7 +78,13 @@ from gexlens_engine.ibkr.subscription import (
     SubscriptionErrorTracker,
     contract_label,
 )
-from gexlens_engine.ibkr.underlying import Bar, RealTimeBarAggregator, UnderlyingBackfiller
+from gexlens_engine.ibkr.underlying import (
+    BACKFILL_CONTRACT_TOLERANCE,
+    Bar,
+    RealTimeBarAggregator,
+    UnderlyingBackfiller,
+    contract_mismatch,
+)
 from gexlens_engine.instruments import (
     InstrumentPipeline,
     InstrumentSetupError,
@@ -124,7 +130,7 @@ from gexlens_engine.storage.meta import ADHOC_CHANNEL
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.paper_store import PaperRepository
-from gexlens_engine.storage.parquet_store import SnapshotWriter
+from gexlens_engine.storage.parquet_store import SnapshotWriter, bar_partition_day
 from gexlens_engine.storage.probes_store import ProbeRepository
 from gexlens_engine.storage.retention import RetentionJob
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
@@ -137,7 +143,7 @@ from gexlens_engine.storage.volregime_store import VolRegimeRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.adhoc import AdhocViewer
 from gexlens_engine.tasty.budget import DistanceGroup, order_by_distance, plan_subscriptions
-from gexlens_engine.tasty.candles import CandleFetcher, backfill_gaps, partition_days
+from gexlens_engine.tasty.candles import CandleBar, CandleFetcher, backfill_gaps, partition_days
 from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow
@@ -158,6 +164,7 @@ from gexlens_engine.tasty.spot_fallback import SpotFallback
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
 from gexlens_engine.tasty.trades_recorder import TradesRecorder
+from gexlens_engine.tasty.watchdog import SilentStreamWatchdog
 from gexlens_engine.tasty.wideoi import wide_contracts, wide_records, wide_streamers
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.ticker import parse_ticker
@@ -1093,11 +1100,34 @@ async def create_pipeline(
     # okno při startu, jednodenní re-backfill po výpadku real-time streamu
     backfiller = UnderlyingBackfiller(provider.historical(front), pacing_guard, settings)
 
+    async def write_backfilled(day: dt.date, day_bars: list[Bar], origin: str) -> bool:
+        """Zápis doplněných barů jen když sedí na měřené minuty partice (#1232).
+
+        Roll týden září 2026: pipeline měřila NQU6, historical vracel NQZ6 —
+        o 430 b jinde. Kalendář front kontraktu se s #1189 měnil, proto se
+        rozhoduje podle dat, ne podle pravidla.
+        """
+        measured = await asyncio.to_thread(writer.measured_bar_closes, symbol, day)
+        deviation = contract_mismatch(measured, day_bars)
+        if deviation is not None and deviation > BACKFILL_CONTRACT_TOLERANCE:
+            logger.warning(
+                "Backfill %s %s (%s) zahozen: %d barů se od měřených liší o %.2f %% — "
+                "jiný kontrakt než sleduje pipeline (#1232)",
+                symbol,
+                day,
+                origin,
+                len(day_bars),
+                deviation * 100,
+            )
+            return False
+        await asyncio.to_thread(writer.write_bars, symbol, day, day_bars)
+        return True
+
     async def backfill_today() -> None:
         day = dt.datetime.now(dt.UTC).date()
         day_bars = await backfiller.backfill_day(symbol, day)
         if day_bars:
-            await asyncio.to_thread(writer.write_bars, symbol, day, day_bars)
+            await write_backfilled(day, day_bars, "re-backfill")
         logger.info("Re-backfill %s %s: %d barů", symbol, day, len(day_bars))
 
     async def initial_backfill() -> None:
@@ -1108,7 +1138,7 @@ async def create_pipeline(
             return
         for day, day_bars in by_day.items():
             if day_bars:
-                await asyncio.to_thread(writer.write_bars, symbol, day, day_bars)
+                await write_backfilled(day, day_bars, "start")
         logger.info(
             "Backfill %s: %d dní, %d barů",
             symbol,
@@ -1643,6 +1673,29 @@ async def main() -> None:
                 until=until,
             )
             if bars:
+                # Táž stráž jako u IBKR historical (#1232): svíčky dxFeed jdou
+                # z front future tasty, který se od kontraktu pipeline může lišit
+                kept: list[CandleBar] = []
+                by_partition: dict[dt.date, list[CandleBar]] = {}
+                for bar in bars:
+                    by_partition.setdefault(bar_partition_day(bar.ts), []).append(bar)
+                for day, group in by_partition.items():
+                    measured = await asyncio.to_thread(writer.measured_bar_closes, symbol, day)
+                    deviation = contract_mismatch(measured, group)
+                    if deviation is not None and deviation > BACKFILL_CONTRACT_TOLERANCE:
+                        logger.warning(
+                            "Rekonstrukce %s %s zahozena: %d svíček %s se od měřených "
+                            "liší o %.2f %% — jiný kontrakt (#1232)",
+                            symbol,
+                            day,
+                            len(group),
+                            streamer_symbol,
+                            deviation * 100,
+                        )
+                        continue
+                    kept.extend(group)
+                bars = kept
+            if bars:
                 await asyncio.to_thread(writer.write_bars_by_day, symbol, bars)
         return len(bars)
 
@@ -1705,6 +1758,8 @@ async def main() -> None:
     crosscheck: CrossCheckDetector | None = None
     publish_crosscheck: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None
     tasty_session: TastySession | None = None
+    # Hlídač mlčícího streamu (#1228) — tik z hlavní smyčky; None bez tasty větve
+    tasty_silence_tick: Callable[[dt.datetime], Awaitable[None]] | None = None
     # Živý fallback barů (#614 doplněk): funkce sama bez tasty větve vrací 0
     bar_gap_fill: Callable[[str, dt.datetime, dt.datetime], Awaitable[int]] = _live_bar_gap_fill
     if settings.tasty_enabled and settings.tasty_client_secret and settings.tasty_refresh_token:
@@ -1780,8 +1835,41 @@ async def main() -> None:
         dx_print_active = _dx_print_active
 
         stream_kpi = StreamKpi(
-            report_path=settings.derived_dir.parent / "reports" / "tasty-kpi.jsonl"
+            report_path=settings.derived_dir.parent / "reports" / "tasty-kpi.jsonl",
+            # Rozpracovaná seance přežije restart (#1214)
+            state_path=settings.derived_dir.parent / "reports" / "tasty-kpi-current.json",
         )
+
+        if settings.tasty_silent_watchdog:
+            silent_watchdog = SilentStreamWatchdog()
+
+            async def _tasty_silence_tick(now: dt.datetime) -> None:
+                """Socket žije, eventy ne (#1228): při otevřeném trhu přepojit + alert."""
+                action = silent_watchdog.check(
+                    now,
+                    connected=tasty_stream.connected,
+                    last_event_at=tasty_cache.last_event_at,
+                )
+                if action is None:
+                    return
+                logger.warning("Hlídač tasty streamu (#1228): %s", action.reason)
+                await tasty_stream.force_reconnect("mlčící stream (#1228)")
+                if action.alert:
+                    await publisher.publish(
+                        "alerts",
+                        {
+                            "kind": "feed_silent",
+                            "symbol": "*",
+                            "message": (
+                                f"Tastytrade stream mlčel {action.silence_s / 60:.0f} min "
+                                "při otevřeném trhu — engine ho přepojil sám. Pokud "
+                                "kotace nenaběhnou do 2 min, zkontroluj stav v Settings."
+                            ),
+                            "ts": dt.datetime.now(dt.UTC).timestamp(),
+                        },
+                    )
+
+            tasty_silence_tick = _tasty_silence_tick
 
         def _tasty_status() -> dict[str, object]:
             """Stav větve do /status (#706): spojení, subskripce, pokrytí, čerstvost."""
@@ -2887,6 +2975,12 @@ async def main() -> None:
                     },
                 )
                 break
+        # Mlčící tasty stream (#1228): nezávisle na IBKR, jednou za minutu
+        if tasty_silence_tick is not None:
+            try:
+                await tasty_silence_tick(dt.datetime.now(dt.UTC))
+            except Exception:
+                logger.exception("Hlídač tasty streamu selhal — příští minuta jede dál")
         # Účty čte ib_async z připojení; po přepojení se mohou změnit (#446)
         account = classify_accounts(ib.managedAccounts())
         # Status se pushuje i BEZ pipelines (#756). Dřív ho podmiňoval neprázdný

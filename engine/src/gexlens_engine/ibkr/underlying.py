@@ -10,13 +10,13 @@ desítky zbytečných historických dotazů při každém startu.
 import asyncio
 import datetime as dt
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol
 
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.pacing import PacingGuard
-from gexlens_engine.storage.parquet_store import BAR_SOURCE_HISTORICAL
+from gexlens_engine.storage.parquet_store import BAR_SOURCE_HISTORICAL, BarLike
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +145,58 @@ class BarsStallDetector:
             return "still_stalled"
         self._stalled = True
         return "stalled"
+
+
+#: Relativní odchylka doplněných barů od měřených, nad kterou jde o jiný
+#: kontrakt (#1232): U6 × Z6 v roll týdnu září 2026 = 1,5 % u NQ, 0,9 % u ES;
+#: pohyb trhu mezi sousedními minutami je řádově 0,05 %
+BACKFILL_CONTRACT_TOLERANCE = 0.003
+#: Jak daleko (min) se hledá měřený soused doplněného baru
+BACKFILL_NEIGHBOUR_MINUTES = 3
+#: Minimální počet párů pro výrok — pod ním se nekontroluje (nic měřeného)
+BACKFILL_MIN_PAIRS = 5
+
+
+def contract_mismatch(
+    measured: Mapping[dt.datetime, float],
+    incoming: Sequence[BarLike],
+    *,
+    neighbour_minutes: int = BACKFILL_NEIGHBOUR_MINUTES,
+    min_pairs: int = BACKFILL_MIN_PAIRS,
+) -> float | None:
+    """Medián relativní odchylky close doplněných barů od nejbližší měřené minuty.
+
+    Roll týden září 2026 (#1232): engine sledoval dobíhající NQU6, backfill děr
+    z IBKR historical přinesl NQZ6 (+430 b) a partice 8.–18. 9. měly svíčky
+    skákající o ±400 b každých pár minut. Kalendářní pravidlo nestačí (kdo byl
+    front, se změnilo s #1189) — porovnává se s tím, co pipeline opravdu
+    měřila. None = málo párů (prázdná partice, jiné hodiny), nelze rozhodnout.
+    """
+    if not measured or not incoming:
+        return None
+    keys = sorted(measured)
+    deviations: list[float] = []
+    for bar in incoming:
+        best: float | None = None
+        for offset in range(neighbour_minutes + 1):
+            for sign in (1, -1) if offset else (1,):
+                ts = bar.ts + dt.timedelta(minutes=offset * sign)
+                close = measured.get(ts)
+                if close and close > 0:
+                    best = abs(bar.close - close) / close
+                    break
+            if best is not None:
+                break
+        if best is not None:
+            deviations.append(best)
+    del keys
+    if len(deviations) < min_pairs:
+        return None
+    deviations.sort()
+    mid = len(deviations) // 2
+    if len(deviations) % 2:
+        return deviations[mid]
+    return (deviations[mid - 1] + deviations[mid]) / 2
 
 
 class UnderlyingBackfiller:

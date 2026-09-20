@@ -585,3 +585,21 @@ def test_zamrzle_ibkr_pri_castecnem_pokryti_tasty_spusti_fallback() -> None:
     small = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3)
     tiny = tally(ibkr_dead=10, both_dead=40, comparable=5, changed=0)
     assert all(small.observe(tiny).state != "ibkr_suspect" for _ in range(5))
+
+
+def test_quiet_uvnitr_rth_po_m_minutach_alertuje() -> None:
+    """#1228: „oba zdroje mlčí" je tichý trh jen mimo US RTH; uvnitř RTH po M minutách alert."""
+    detector = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3, cooldown_minutes=15)
+    quiet = tally(both_dead=95, ok=5)
+    # Mimo RTH: nekonečno tichých minut bez alertu (noc, víkend — 19. 9. 2026 sobota)
+    for _ in range(10):
+        assert not detector.observe(quiet).alert
+    # Uvnitř RTH: série se počítá od nuly, alert na hraně M
+    assert not detector.observe(quiet, in_us_rth=True).alert
+    assert not detector.observe(quiet, in_us_rth=True).alert
+    third = detector.observe(quiet, in_us_rth=True)
+    assert third.state == "quiet" and third.alert and "US RTH" in third.message
+    # Cooldown: čtvrtá minuta bez dalšího alertu
+    assert not detector.observe(quiet, in_us_rth=True).alert
+    # Návrat mimo RTH (16:00 ET) sérii nuluje
+    assert detector.observe(quiet).streak == 0
