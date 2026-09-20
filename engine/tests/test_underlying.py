@@ -9,10 +9,12 @@ from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.mock import MockHistoricalClient
 from gexlens_engine.ibkr.pacing import PacingGuard
 from gexlens_engine.ibkr.underlying import (
+    BACKFILL_CONTRACT_TOLERANCE,
     Bar,
     BarsStallDetector,
     RealTimeBarAggregator,
     UnderlyingBackfiller,
+    contract_mismatch,
 )
 
 TODAY = dt.date(2026, 7, 16)
@@ -23,6 +25,30 @@ def bar_5s(minute: int, second: int, close: float, volume: float = 1.0) -> Bar:
     return Bar(
         ts=ts, open=close - 0.25, high=close + 0.5, low=close - 0.5, close=close, volume=volume
     )
+
+
+# ── contract_mismatch (#1232) ──────────────────────────────────────
+
+
+def _bar(ts: dt.datetime, close: float) -> Bar:
+    return Bar(ts=ts, open=close, high=close, low=close, close=close, volume=1.0)
+
+
+def test_jiny_kontrakt_v_backfillu_se_pozna_podle_merenych_minut() -> None:
+    """Roll týden 9/2026: měřené NQU6 ~29 100, historical NQZ6 ~29 530 (+1,5 %) → zahodit."""
+    t0 = dt.datetime(2026, 9, 15, 13, 30, tzinfo=dt.UTC)
+    measured = {t0 + dt.timedelta(minutes=i): 29100.0 + i for i in range(0, 60, 2)}
+    foreign = [_bar(t0 + dt.timedelta(minutes=i), 29530.0 + i) for i in range(1, 60, 2)]
+    deviation = contract_mismatch(measured, foreign)
+    assert deviation is not None and deviation > BACKFILL_CONTRACT_TOLERANCE
+    # Týž kontrakt: sousední minuty se liší o zlomky procenta
+    same = [_bar(t0 + dt.timedelta(minutes=i), 29100.0 + i + 3) for i in range(1, 60, 2)]
+    deviation = contract_mismatch(measured, same)
+    assert deviation is not None and deviation < BACKFILL_CONTRACT_TOLERANCE
+    # Bez měřené reference (prázdná partice) nebo bez sousedů nelze rozhodnout
+    assert contract_mismatch({}, foreign) is None
+    far = [_bar(t0 + dt.timedelta(hours=5, minutes=i), 29530.0) for i in range(10)]
+    assert contract_mismatch(measured, far) is None
 
 
 # ── RealTimeBarAggregator ──────────────────────────────────────────

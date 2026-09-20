@@ -254,3 +254,25 @@ def test_partition_buffer_slozeny_klic_presne_a_keep_existing(tmp_path: Path) ->
         {"ts": 5, "strike": 1.0, "v": 2.0},
         {"ts": 6, "strike": 1.0, "v": 0.5},
     ]
+
+
+def test_measured_bar_closes_vynechava_doplnene(tmp_path: Path) -> None:
+    """#1232: reference pro kontrolu backfillu = jen měřené minuty (živé / NULL zdroj)."""
+    from gexlens_engine.ibkr.underlying import Bar
+
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    day = dt.date(2026, 9, 15)
+    t0 = dt.datetime(2026, 9, 15, 13, 30, tzinfo=dt.UTC)
+    live = Bar(ts=t0, open=1, high=1, low=1, close=29100.0, volume=1, source=None)
+    hist = Bar(
+        ts=t0 + dt.timedelta(minutes=1),
+        open=1,
+        high=1,
+        low=1,
+        close=29530.0,
+        volume=1,
+        source="ibkr_hist",
+    )
+    writer.write_bars("NQ", day, [live, hist])
+    assert writer.measured_bar_closes("NQ", day) == {t0: 29100.0}
+    assert writer.measured_bar_closes("NQ", dt.date(2026, 9, 16)) == {}

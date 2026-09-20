@@ -1172,6 +1172,28 @@ class SnapshotWriter:
             by_day.setdefault(bar_partition_day(bar.ts), []).append(bar)
         return [self.write_bars(symbol, day, group) for day, group in sorted(by_day.items())]
 
+    def measured_bar_closes(self, symbol: str, day: dt.date) -> dict[dt.datetime, float]:
+        """Close měřených minut partice (živá cesta, i NULL ze starých partic) — #1232.
+
+        Reference pro kontrolu doplněných barů: doplněné a rekonstruované
+        řádky se vynechávají, aby chybný backfill nebyl sám sobě referencí.
+        """
+        path = self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
+        if not path.exists():
+            return {}
+        table = pq.read_table(path, columns=["ts_min", "close", "source"])
+        closes: dict[dt.datetime, float] = {}
+        for ts, close, source in zip(
+            table.column("ts_min").to_pylist(),
+            table.column("close").to_pylist(),
+            table.column("source").to_pylist(),
+            strict=True,
+        ):
+            if ts is None or close is None or bar_source_rank(source) < bar_source_rank(None):
+                continue
+            closes[ts.replace(tzinfo=dt.UTC) if ts.tzinfo is None else ts] = float(close)
+        return closes
+
     def bar_minutes_for_days(self, symbol: str, days: Iterable[dt.date]) -> set[dt.datetime]:
         """Sjednocení `bar_minutes` přes všechny partice, do kterých okno zasahuje (#1002).
 

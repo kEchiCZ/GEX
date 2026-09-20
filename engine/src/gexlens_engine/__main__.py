@@ -78,7 +78,13 @@ from gexlens_engine.ibkr.subscription import (
     SubscriptionErrorTracker,
     contract_label,
 )
-from gexlens_engine.ibkr.underlying import Bar, RealTimeBarAggregator, UnderlyingBackfiller
+from gexlens_engine.ibkr.underlying import (
+    BACKFILL_CONTRACT_TOLERANCE,
+    Bar,
+    RealTimeBarAggregator,
+    UnderlyingBackfiller,
+    contract_mismatch,
+)
 from gexlens_engine.instruments import (
     InstrumentPipeline,
     InstrumentSetupError,
@@ -124,7 +130,7 @@ from gexlens_engine.storage.meta import ADHOC_CHANNEL
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.paper_store import PaperRepository
-from gexlens_engine.storage.parquet_store import SnapshotWriter
+from gexlens_engine.storage.parquet_store import SnapshotWriter, bar_partition_day
 from gexlens_engine.storage.probes_store import ProbeRepository
 from gexlens_engine.storage.retention import RetentionJob
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
@@ -137,7 +143,7 @@ from gexlens_engine.storage.volregime_store import VolRegimeRepository
 from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.adhoc import AdhocViewer
 from gexlens_engine.tasty.budget import DistanceGroup, order_by_distance, plan_subscriptions
-from gexlens_engine.tasty.candles import CandleFetcher, backfill_gaps, partition_days
+from gexlens_engine.tasty.candles import CandleBar, CandleFetcher, backfill_gaps, partition_days
 from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow
@@ -1094,11 +1100,34 @@ async def create_pipeline(
     # okno při startu, jednodenní re-backfill po výpadku real-time streamu
     backfiller = UnderlyingBackfiller(provider.historical(front), pacing_guard, settings)
 
+    async def write_backfilled(day: dt.date, day_bars: list[Bar], origin: str) -> bool:
+        """Zápis doplněných barů jen když sedí na měřené minuty partice (#1232).
+
+        Roll týden září 2026: pipeline měřila NQU6, historical vracel NQZ6 —
+        o 430 b jinde. Kalendář front kontraktu se s #1189 měnil, proto se
+        rozhoduje podle dat, ne podle pravidla.
+        """
+        measured = await asyncio.to_thread(writer.measured_bar_closes, symbol, day)
+        deviation = contract_mismatch(measured, day_bars)
+        if deviation is not None and deviation > BACKFILL_CONTRACT_TOLERANCE:
+            logger.warning(
+                "Backfill %s %s (%s) zahozen: %d barů se od měřených liší o %.2f %% — "
+                "jiný kontrakt než sleduje pipeline (#1232)",
+                symbol,
+                day,
+                origin,
+                len(day_bars),
+                deviation * 100,
+            )
+            return False
+        await asyncio.to_thread(writer.write_bars, symbol, day, day_bars)
+        return True
+
     async def backfill_today() -> None:
         day = dt.datetime.now(dt.UTC).date()
         day_bars = await backfiller.backfill_day(symbol, day)
         if day_bars:
-            await asyncio.to_thread(writer.write_bars, symbol, day, day_bars)
+            await write_backfilled(day, day_bars, "re-backfill")
         logger.info("Re-backfill %s %s: %d barů", symbol, day, len(day_bars))
 
     async def initial_backfill() -> None:
@@ -1109,7 +1138,7 @@ async def create_pipeline(
             return
         for day, day_bars in by_day.items():
             if day_bars:
-                await asyncio.to_thread(writer.write_bars, symbol, day, day_bars)
+                await write_backfilled(day, day_bars, "start")
         logger.info(
             "Backfill %s: %d dní, %d barů",
             symbol,
@@ -1643,6 +1672,29 @@ async def main() -> None:
                 since=since,
                 until=until,
             )
+            if bars:
+                # Táž stráž jako u IBKR historical (#1232): svíčky dxFeed jdou
+                # z front future tasty, který se od kontraktu pipeline může lišit
+                kept: list[CandleBar] = []
+                by_partition: dict[dt.date, list[CandleBar]] = {}
+                for bar in bars:
+                    by_partition.setdefault(bar_partition_day(bar.ts), []).append(bar)
+                for day, group in by_partition.items():
+                    measured = await asyncio.to_thread(writer.measured_bar_closes, symbol, day)
+                    deviation = contract_mismatch(measured, group)
+                    if deviation is not None and deviation > BACKFILL_CONTRACT_TOLERANCE:
+                        logger.warning(
+                            "Rekonstrukce %s %s zahozena: %d svíček %s se od měřených "
+                            "liší o %.2f %% — jiný kontrakt (#1232)",
+                            symbol,
+                            day,
+                            len(group),
+                            streamer_symbol,
+                            deviation * 100,
+                        )
+                        continue
+                    kept.extend(group)
+                bars = kept
             if bars:
                 await asyncio.to_thread(writer.write_bars_by_day, symbol, bars)
         return len(bars)
