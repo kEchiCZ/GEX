@@ -15,6 +15,7 @@ kotace front future (volume 0 — jsou to kotace, ne obchody; poctivě
 dokumentováno v manuálu).
 """
 
+import asyncio
 import datetime as dt
 import logging
 import math
@@ -151,11 +152,25 @@ class AdhocViewer:
         for product in wanted:
             if product in self._views or self.is_watched(product):
                 continue
-            try:
-                chain = await self.symbol_map.chain(product, now.date())
-            except Exception:
-                logger.exception("Ad-hoc %s: chain z tasty selhal — požadavek zůstává", product)
+            # Chain (REST, sekundy) a svíčky podkladu (front future + Candle
+            # backfill) jedou VEDLE sebe (#206): podklad je znám z tickeru, cena
+            # v grafu nemusí čekat na řetěz — měřeno 19. 9.: sériově 5–7 s,
+            # cíl ≤ 2 s od požadavku
+            chain_result, front_result = await asyncio.gather(
+                self.symbol_map.chain(product, now.date()),
+                self._front_with_backfill(product, now),
+                return_exceptions=True,
+            )
+            if isinstance(chain_result, BaseException):
+                logger.error(
+                    "Ad-hoc %s: chain z tasty selhal (%s: %s) — požadavek zůstává",
+                    product,
+                    type(chain_result).__name__,
+                    chain_result,
+                )
                 continue
+            chain = chain_result
+            front = None if isinstance(front_result, BaseException) else front_result
             expiries = sorted({expiry for (expiry, _s, _r) in chain.by_contract})
             today_key = now.date().strftime("%Y%m%d")
             upcoming = [expiry for expiry in expiries if expiry >= today_key]
@@ -167,7 +182,6 @@ class AdhocViewer:
             if not upcoming:
                 logger.warning("Ad-hoc %s: chain bez budoucí expirace — přeskočeno", product)
                 continue
-            front = await self.symbol_map.front_future(product)
             self._views[product] = _ActiveView(
                 product=product, chain=chain, expiry=upcoming[0], front_streamer=front
             )
@@ -177,13 +191,21 @@ class AdhocViewer:
                 upcoming[0],
                 front,
             )
-            if front and self.candles is not None:
+
+    async def _front_with_backfill(self, product: str, now: dt.datetime) -> str | None:
+        """Front streamer podkladu + backfill svíček; chyba backfillu pohled nezastaví."""
+        front = await self.symbol_map.front_future(product)
+        if front and self.candles is not None:
+            try:
                 await self._backfill_candles(product, front, now)
+            except Exception:
+                logger.exception(
+                    "Ad-hoc %s: backfill svíček selhal — pohled jede bez historie", product
+                )
+        return front
 
     async def _backfill_candles(self, product: str, streamer: str, now: dt.datetime) -> None:
         """Svíčky seance do minulosti z dxFeed Candle (#206): cena hned, s objemem."""
-        import asyncio
-
         since, _ = session_bounds(trading_session_date(now))
         bars = await self.candles.fetch(  # type: ignore[union-attr]
             CandleRange(streamer_symbol=streamer, since=since, until=now)
