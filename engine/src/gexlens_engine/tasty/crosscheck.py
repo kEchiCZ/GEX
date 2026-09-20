@@ -176,6 +176,9 @@ class CrossCheckDetector:
         self._tasty_streak = 0
         #: Minuty v řadě, kdy tasty mlčí A trh se přitom hýbe (#764)
         self._backup_streak = 0
+        #: Minuty v řadě „oba zdroje mlčí" uvnitř US RTH (#1228) — hlavní
+        #: seance nikdy není tichá minuty v kuse; mimo RTH se nepočítá
+        self._quiet_rth_streak = 0
         self._since_alert: dict[str, int] = {}
         #: Čisté minuty v řadě — po `minutes_threshold` se cooldown re-armuje
         self._clean_streak = 0
@@ -184,8 +187,12 @@ class CrossCheckDetector:
         #: Posledních 10 minut pro diagnostiku v logu
         self.history: deque[MinuteTally] = deque(maxlen=10)
 
-    def observe(self, tally: MinuteTally) -> CrossCheckVerdict:
-        """Zpracuje minutu a vrátí verdikt; volá se 1× za minutu ze shadow smyčky."""
+    def observe(self, tally: MinuteTally, *, in_us_rth: bool = False) -> CrossCheckVerdict:
+        """Zpracuje minutu a vrátí verdikt; volá se 1× za minutu ze shadow smyčky.
+
+        `in_us_rth`: minuta leží v US RTH (9:30–16:00 NY) — jen tehdy se stav
+        `quiet` po M minutách eskaluje na alert (#1228); jinak je ticho normální.
+        """
         self.history.append(tally)
         for state in list(self._since_alert):
             self._since_alert[state] += 1
@@ -196,6 +203,7 @@ class CrossCheckDetector:
             self._ibkr_streak = 0
             self._tasty_streak = 0
             self._backup_streak = 0
+            self._quiet_rth_streak = 0
             return self._finish(
                 "insufficient",
                 tally,
@@ -246,6 +254,19 @@ class CrossCheckDetector:
         if tally.both_dead_share >= self._share_threshold:
             self._tasty_streak = 0
             self._backup_streak = 0
+            # Výjimka (#1228): uvnitř US RTH tichý trh neexistuje — po M minutách
+            # v řadě mlčí OBA zdroje a prod je slepý; to se musí ohlásit
+            self._quiet_rth_streak = self._quiet_rth_streak + 1 if in_us_rth else 0
+            if self._quiet_rth_streak >= self._minutes_threshold:
+                return self._finish(
+                    "quiet",
+                    tally,
+                    self._quiet_rth_streak,
+                    self._may_alert("quiet_rth"),
+                    f"Oba zdroje mlčí na {tally.both_dead_share * 100:.0f} % kontraktů "
+                    f"už {self._quiet_rth_streak} min uvnitř US RTH — to není tichý trh, "
+                    "IBKR i tastytrade stojí",
+                )
             return self._finish(
                 "quiet",
                 tally,
@@ -299,6 +320,7 @@ class CrossCheckDetector:
 
         self._tasty_streak = 0
         self._backup_streak = 0
+        self._quiet_rth_streak = 0
         return self._finish("ok", tally, 0, False, "Oba zdroje dodávají data")
 
     def _may_alert(self, key: str) -> bool:

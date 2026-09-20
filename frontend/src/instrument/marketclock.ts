@@ -19,6 +19,21 @@ export function newYorkClock(now: Date): { minutes: number; weekday: number } {
   return { minutes: hour * 60 + minute, weekday }
 }
 
+/** Ticho tasty streamu, které je v US RTH porucha (#1228, zrcadlo enginu
+`tasty/watchdog.SILENT_RTH_S`). */
+export const FEED_SILENT_AFTER_MIN = 3
+
+/** Kolik minut tasty stream mlčí, pokud je to při otevřeném trhu porucha;
+null = v pořádku, nebo trh stojí (mimo RTH je ticho normální — 19. 9. 2026
+sobota byla falešný poplach). */
+export function feedSilenceMinutes(lastEventTs: string | undefined, now: Date): number | null {
+  if (!lastEventTs || outsideUsRth(now)) return null
+  const last = Date.parse(lastEventTs)
+  if (!Number.isFinite(last)) return null
+  const minutes = Math.floor((now.getTime() - last) / 60_000)
+  return minutes >= FEED_SILENT_AFTER_MIN ? minutes : null
+}
+
 /** Mimo US RTH (9:30–16:00 ET)? Víkend = mimo. */
 export function outsideUsRth(now: Date): boolean {
   const { minutes, weekday } = newYorkClock(now)

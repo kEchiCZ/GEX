@@ -158,6 +158,7 @@ from gexlens_engine.tasty.spot_fallback import SpotFallback
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
 from gexlens_engine.tasty.trades_recorder import TradesRecorder
+from gexlens_engine.tasty.watchdog import SilentStreamWatchdog
 from gexlens_engine.tasty.wideoi import wide_contracts, wide_records, wide_streamers
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.ticker import parse_ticker
@@ -1705,6 +1706,8 @@ async def main() -> None:
     crosscheck: CrossCheckDetector | None = None
     publish_crosscheck: Callable[[CrossCheckVerdict], Awaitable[None]] | None = None
     tasty_session: TastySession | None = None
+    # Hlídač mlčícího streamu (#1228) — tik z hlavní smyčky; None bez tasty větve
+    tasty_silence_tick: Callable[[dt.datetime], Awaitable[None]] | None = None
     # Živý fallback barů (#614 doplněk): funkce sama bez tasty větve vrací 0
     bar_gap_fill: Callable[[str, dt.datetime, dt.datetime], Awaitable[int]] = _live_bar_gap_fill
     if settings.tasty_enabled and settings.tasty_client_secret and settings.tasty_refresh_token:
@@ -1782,6 +1785,37 @@ async def main() -> None:
         stream_kpi = StreamKpi(
             report_path=settings.derived_dir.parent / "reports" / "tasty-kpi.jsonl"
         )
+
+        if settings.tasty_silent_watchdog:
+            silent_watchdog = SilentStreamWatchdog()
+
+            async def _tasty_silence_tick(now: dt.datetime) -> None:
+                """Socket žije, eventy ne (#1228): při otevřeném trhu přepojit + alert."""
+                action = silent_watchdog.check(
+                    now,
+                    connected=tasty_stream.connected,
+                    last_event_at=tasty_cache.last_event_at,
+                )
+                if action is None:
+                    return
+                logger.warning("Hlídač tasty streamu (#1228): %s", action.reason)
+                await tasty_stream.force_reconnect("mlčící stream (#1228)")
+                if action.alert:
+                    await publisher.publish(
+                        "alerts",
+                        {
+                            "kind": "feed_silent",
+                            "symbol": "*",
+                            "message": (
+                                f"Tastytrade stream mlčel {action.silence_s / 60:.0f} min "
+                                "při otevřeném trhu — engine ho přepojil sám. Pokud "
+                                "kotace nenaběhnou do 2 min, zkontroluj stav v Settings."
+                            ),
+                            "ts": dt.datetime.now(dt.UTC).timestamp(),
+                        },
+                    )
+
+            tasty_silence_tick = _tasty_silence_tick
 
         def _tasty_status() -> dict[str, object]:
             """Stav větve do /status (#706): spojení, subskripce, pokrytí, čerstvost."""
@@ -2887,6 +2921,12 @@ async def main() -> None:
                     },
                 )
                 break
+        # Mlčící tasty stream (#1228): nezávisle na IBKR, jednou za minutu
+        if tasty_silence_tick is not None:
+            try:
+                await tasty_silence_tick(dt.datetime.now(dt.UTC))
+            except Exception:
+                logger.exception("Hlídač tasty streamu selhal — příští minuta jede dál")
         # Účty čte ib_async z připojení; po přepojení se mohou změnit (#446)
         account = classify_accounts(ib.managedAccounts())
         # Status se pushuje i BEZ pipelines (#756). Dřív ho podmiňoval neprázdný
