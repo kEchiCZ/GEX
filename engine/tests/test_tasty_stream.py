@@ -8,10 +8,14 @@ import pytest
 
 from gexlens_engine.tasty.stream import (
     KEEPALIVE_INTERVAL_S,
+    PAUSE_RELAX_AFTER_S,
     RATE_LIMIT_HEAL_QUIET_S,
     SUBSCRIPTION_BATCH,
+    SUBSCRIPTION_BURST_ENTRIES,
     SUBSCRIPTION_PAUSE_MAX_S,
     SUBSCRIPTION_PAUSE_S,
+    SUBSCRIPTION_RATE_ENTRIES_S,
+    SUBSCRIPTION_RATE_MIN_ENTRIES_S,
     DxLinkStream,
 )
 
@@ -121,8 +125,64 @@ async def test_connect_ma_ping_timeout_prezivajici_subskripci(
     assert captured["ping_timeout"] == stream_module.PING_TIMEOUT_S
     # Timeout musí s rezervou pokrýt nejpomalejší plnou subskripci: všechny
     # symboly z produkce (#863: ~5 600 × 4 eventy / 500 na dávku) à strop 2 s
-    worst_batches = (5_600 * 4) / SUBSCRIPTION_BATCH
-    assert worst_batches * SUBSCRIPTION_PAUSE_MAX_S < stream_module.PING_TIMEOUT_S
+    worst_entries = 5_600 * 4
+    worst_batches = worst_entries / SUBSCRIPTION_BATCH
+    # ... a to i při nejpomalejším tempu bucketu (#1214: min 100 položek/s)
+    worst_seconds = (
+        worst_batches * SUBSCRIPTION_PAUSE_MAX_S
+        + (worst_entries - SUBSCRIPTION_BURST_ENTRIES) / SUBSCRIPTION_RATE_MIN_ENTRIES_S
+    )
+    assert worst_seconds < stream_module.PING_TIMEOUT_S
+
+
+async def test_token_bucket_drzi_tempo_subskripci(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1214: burst projde hned, zbytek rovnoměrně tempem — rate limit nemá vzniknout."""
+    stream, sent = make_stream()
+    clock = {"now": 0.0}
+
+    async def fake_sleep(seconds: float) -> None:
+        clock["now"] += seconds
+
+    import gexlens_engine.tasty.stream as stream_module
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(stream_module, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    stream._tokens_ts = 0.0
+    entries = 3_000  # 3 000 symbolů × 1 event (stream jen s Quote)
+    await stream._send_subscription(add={f".ES{i}C" for i in range(entries)})
+    batches = [p for p in sent if p.get("type") == "FEED_SUBSCRIPTION"]
+    assert len(batches) == entries // SUBSCRIPTION_BATCH
+    expected = (entries - SUBSCRIPTION_BURST_ENTRIES) / SUBSCRIPTION_RATE_ENTRIES_S
+    pauses = len(batches) * SUBSCRIPTION_PAUSE_S
+    assert expected <= clock["now"] <= expected + pauses + 0.01
+
+
+def test_rate_limit_zpomali_tempo_a_klid_ho_vrati(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1214: odmítnutí = tempo na polovinu (min 100/s) a prázdný bucket; po klidu zpět."""
+    stream, _ = make_stream()
+    import gexlens_engine.tasty.stream as stream_module
+
+    clock = {"now": 1_000.0}
+    monkeypatch.setattr(stream_module, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    assert stream.rate_entries_s == SUBSCRIPTION_RATE_ENTRIES_S
+    stream._note_server_error(rate_limit_message())
+    assert stream.rate_entries_s == SUBSCRIPTION_RATE_ENTRIES_S / 2
+    assert stream._tokens == 0.0
+    for _ in range(5):
+        stream._note_server_error(rate_limit_message())
+    assert stream.rate_entries_s == SUBSCRIPTION_RATE_MIN_ENTRIES_S
+    # Během rate limitu (před healem) se nerelaxuje
+    clock["now"] += PAUSE_RELAX_AFTER_S + 1
+    stream._relax_pacing(clock["now"])
+    assert stream.rate_entries_s == SUBSCRIPTION_RATE_MIN_ENTRIES_S
+    # Po healu (rate_limit_ts pryč) a klidu tempo roste ×1,5 až ke stropu
+    stream._rate_limit_ts = None
+    stream._relax_pacing(clock["now"])
+    assert stream.rate_entries_s == SUBSCRIPTION_RATE_MIN_ENTRIES_S * 1.5
+    for _ in range(5):
+        clock["now"] += PAUSE_RELAX_AFTER_S + 1
+        stream._relax_pacing(clock["now"])
+    assert stream.rate_entries_s == SUBSCRIPTION_RATE_ENTRIES_S
 
 
 def test_silent_symbols_v_cache() -> None:
