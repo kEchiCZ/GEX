@@ -16,7 +16,10 @@ from typing import Literal
 
 from gexlens_engine.compute.trend import Direction, TrendReport
 
-VERDICT_RULES_VERSION = 1
+VERDICT_RULES_VERSION = 2
+#: Útes gammy předchozí seance (#576 fáze 1, #1241): nad tímto podílem je
+#: struktura, která cenu držela, pryč — „pozitivní gamma tlumí“ nehlasuje
+CLIFF_DAMPING_OFF = 0.5
 VERDICT_THRESHOLD = 3
 OI_DELTA_MIN_SHARE = 0.1
 CONFLUENCE_SHARE = 0.001
@@ -54,6 +57,8 @@ class VerdictInput:
     oi_call_total: float | None
     oi_put_total: float | None
     news_before_open: bool
+    #: Podíl gammy, který odpadl expirací předchozí seance (0–1); None bez dat
+    cliff_share: float | None = None
 
 
 @dataclass(frozen=True)
@@ -130,7 +135,12 @@ def day_verdict(inp: VerdictInput) -> DayVerdict:
     votes.append(_oi_delta_vote(inp))
     partial = sum(v.vote for v in votes)
     votes.append(
-        _gamma_vote(inp.positive_gamma, inp.trend.expected if inp.trend else None, partial)
+        _gamma_vote(
+            inp.positive_gamma,
+            inp.trend.expected if inp.trend else None,
+            partial,
+            cliff_share=inp.cliff_share,
+        )
     )
     score = sum(v.vote for v in votes)
     verdict: VerdictKind = "none"
@@ -155,9 +165,23 @@ def _oi_delta_vote(inp: VerdictInput) -> Vote:
     return Vote("oi_delta", -1, f"ΔOI převaha put ({round(diff)})")
 
 
-def _gamma_vote(positive_gamma: bool | None, expected: Direction | None, partial: int) -> Vote:
+def _gamma_vote(
+    positive_gamma: bool | None,
+    expected: Direction | None,
+    partial: int,
+    *,
+    cliff_share: float | None = None,
+) -> Vote:
     if positive_gamma is None:
         return Vote("gamma", 0, "gamma režim bez dat")
+    if positive_gamma and cliff_share is not None and cliff_share >= CLIFF_DAMPING_OFF:
+        # 21. 9. 2026: po kvartálním OPEX (útes ES 83 %) hlas −1 vyrušil trend +3
+        # a verdikt byl none při +580 b — tenká gamma netlumí
+        return Vote(
+            "gamma",
+            0,
+            f"pozitivní gamma, ale po útesu {cliff_share:.0%} gammy je tlumení tenké — nehlasuje",
+        )
     if not positive_gamma:
         if expected == "up":
             return Vote("gamma", 1, "negativní gamma = momentum ve směru trendu (long)")

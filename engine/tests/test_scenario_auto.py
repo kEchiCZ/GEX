@@ -295,3 +295,47 @@ def test_gather_context_pri_vypadku_api_hlasi_chybejici_vstupy() -> None:
     assert ctx.trend is None and ctx.prev_close is None and ctx.sentiment_state is None
     assert any(item.startswith("candles W") for item in ctx.missing)
     assert any(item.startswith("oidelta") for item in ctx.missing)
+
+
+def test_settle_close_bere_posledni_rth_bar_ne_globex() -> None:
+    """#1241: PDC = close posledního baru US RTH; nedělní Globex partice bez RTH dá None."""
+    from gexlens_engine.scenario_auto import _settle_close
+
+    friday = [
+        {"ts_min": "2026-09-18T13:30:00+00:00", "close": 7700.0},
+        {"ts_min": "2026-09-18T19:59:00+00:00", "close": 7734.5},
+        {"ts_min": "2026-09-18T20:30:00+00:00", "close": 7740.0},  # po close, Globex
+    ]
+    assert _settle_close(friday) == 7734.5
+    sunday = [{"ts_min": "2026-09-20T22:30:00+00:00", "close": 7760.0}]
+    assert _settle_close(sunday) is None
+
+
+def test_verdikt_po_utesu_gamma_nehlasuje() -> None:
+    """#1241: po útesu ≥ 50 % „pozitivní gamma tlumí“ nesmí vyrušit trend."""
+    from gexlens_engine.compute.dayverdict import VerdictInput, day_verdict
+    from gexlens_engine.compute.trend import TrendReport
+
+    def inp(cliff: float | None) -> VerdictInput:
+        return VerdictInput(
+            trend=TrendReport(higher="up", lower="up", expected="up", by_timeframe=()),
+            positive_gamma=True,
+            tendency_band="short",
+            sentiment_state=None,
+            sentiment_unconfirmed=False,
+            price=30240.0,
+            prev_close=30029.5,
+            oi_call_delta=None,
+            oi_put_delta=None,
+            oi_call_total=None,
+            oi_put_total=None,
+            news_before_open=False,
+            cliff_share=cliff,
+        )
+
+    plain = day_verdict(inp(None))
+    cliffed = day_verdict(inp(0.83))
+    gamma_plain = next(v for v in plain.votes if v.name == "gamma")
+    gamma_cliffed = next(v for v in cliffed.votes if v.name == "gamma")
+    assert gamma_plain.vote == -1 and gamma_cliffed.vote == 0
+    assert cliffed.score == plain.score + 1
