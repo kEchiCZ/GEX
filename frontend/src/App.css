@@ -3126,6 +3126,40 @@ tr.setup-shadow td[data-part='risk'] {
   border-radius: 8px;
   padding: 12px 14px;
 }
+/* Ranní checklist (#1241) */
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.checklist-item {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 8px;
+  align-items: start;
+  font-size: 13px;
+}
+.checklist-glyph {
+  font-size: 11px;
+  line-height: 18px;
+}
+.checklist-go .checklist-glyph {
+  color: #4fd18b;
+}
+.checklist-watch .checklist-glyph {
+  color: #e8c14b;
+}
+.checklist-calm .checklist-glyph,
+.checklist-na .checklist-glyph {
+  color: #7c8aa0;
+}
+.checklist-action {
+  display: block;
+  font-size: 12px;
+}
+
 .briefing-card h3 {
   margin: 0 0 8px;
   font-size: 0.95em;

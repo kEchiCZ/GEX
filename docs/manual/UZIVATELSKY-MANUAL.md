@@ -1009,7 +1009,8 @@ běží **odpočet do US openu** (9:30 New York, DST-korektně).
 
 | Karta | Co ukazuje |
 |---|---|
-| **Shrnutí dne** (v1.16, #1090) | Přes celou šířku nahoře. **Trend a směr** (čtení z karty Trend); **Verdikt dne** — *Spíše LONG den / Spíše SHORT den / Bez převahy / Počkat na tisk* z hlasování s pevnými vahami (ADR-0035 §3: trend vyšších TF ±2, nižších ±1, tendence ±1/±2, potvrzený sentiment ±1, overnight vs. včerejší close ±1, ΔOI ±1 při převaze ≥ 10 %, gamma: negativní +1 ve směru trendu, pozitivní táhne skóre k nule; práh ±3) — každý hlas má vypsaný důvod, chybějící data = nulový hlas „bez dat"; High-impact zpráva před US openem = „Počkat na tisk". **Úrovně obratu** — jeden seznam podle vzdálenosti od ceny: gamma (flip, zdi, těžiště), PDH/PDL/PDC, ONH/ONL, ±EM, denní EMA20; role odpor/podpora, konfluence úrovní do 0,1 % ceny. **Zprávy dne** — čas v Praze, směr překvapení z konvence řady („nad konsensem = risk-off"), typická velikost z naměřených reakcí kategorie (medián \|ret\| v 5/15/60 min, n), nebo poctivé „bez měřené reakce". Verdikt je **heuristika** — ukládá se per seance a symbol a engine po settle doplní výsledek (pohyb US open → settle v bodech i v EM, zásah verdiktu); track record je ve **Stats → Verdikt dne** (zásah per verdikt, souhlas per složka hlasování, Wilsonova dolní mez, brána n ≥ 30 seancí); váhy se mění jen dodatkem ADR (#1091). Tlačítko ☀ dává tytéž řádky do plánu v deníku. |
+| **Shrnutí dne** (v1.16, #1090) | Přes celou šířku nahoře. **Trend a směr** (čtení z karty Trend); **Verdikt dne** — *Spíše LONG den / Spíše SHORT den / Bez převahy / Počkat na tisk* z hlasování s pevnými vahami (ADR-0035 §3: trend vyšších TF ±2, nižších ±1, tendence ±1/±2, potvrzený sentiment ±1, overnight vs. včerejší close ±1, ΔOI ±1 při převaze ≥ 10 %, gamma: negativní +1 ve směru trendu, pozitivní táhne skóre k nule — **po útesu ≥ 50 % gammy minulé seance pozitivní gamma nehlasuje** (v1.18, #1241: tenká gamma netlumí); práh ±3) — každý hlas má vypsaný důvod, chybějící data = nulový hlas „bez dat"; High-impact zpráva před US openem = „Počkat na tisk". **Úrovně obratu** — jeden seznam podle vzdálenosti od ceny: gamma (flip, zdi, těžiště), PDH/PDL/PDC, ONH/ONL, ±EM, denní EMA20; role odpor/podpora, konfluence úrovní do 0,1 % ceny. **Zprávy dne** — čas v Praze, směr překvapení z konvence řady („nad konsensem = risk-off"), typická velikost z naměřených reakcí kategorie (medián \|ret\| v 5/15/60 min, n), nebo poctivé „bez měřené reakce". Verdikt je **heuristika** — ukládá se per seance a symbol a engine po settle doplní výsledek (pohyb US open → settle v bodech i v EM, zásah verdiktu); track record je ve **Stats → Verdikt dne** (zásah per verdikt, souhlas per složka hlasování, Wilsonova dolní mez, brána n ≥ 30 seancí); váhy se mění jen dodatkem ADR (#1091). Tlačítko ☀ dává tytéž řádky do plánu v deníku. |
+| **Ranní checklist** (v1.18, #1241) | Šest bodů, které 21. 9. 2026 (trendový den po kvartálním OPEX, NQ +580 b od 15:30) měly odpověď v datech, ale byly roztroušené po panelech: **útes gammy** minulé seance (≥ 50 % = den rozsahu, ne pinu), **vyšší TF trend** (bias dne), **nejbližší zeď s dominancí** (< 25 % = slabá zeď → průraz pravděpodobnější než odraz), **gap vůči PDC a flipu** (≥ 0,4 % a držení = komprese před průrazem ve směru gapu), **tendence a Max Pain** (váhu mají až posledních 90 min do expirace; přes den jen informace, dokud se mapa hýbe), **riziko** (max 50 $ / obchod, −100 $ = konec dne, 15 min pauza po stopu, max 4 obchody). ▲ = signál pro dnešek, ● = sledovat, ○ = v normálu, — = bez dat. Viz kap. 21b. |
 | **Trend** (v1.16, #1089) | Trend podkladu **shora dolů**: týden, den, 4h, 1h, 15m — per timeframe struktura trhu (HH/HL = rostoucí, LH/LL = klesající) a EMA20/EMA50; ● = struktura i EMA souhlasí, ○ = jen jedna z nich. Nad tabulkou čtení pro den: vyšší TF (týden, den) určuje směr, nižší načasování — souhlas = obchodovat ve směru, nesoulad = nižší TF korigují, čekat na návrat. Málo svíček = „málo dat", nic se nedosazuje. Metoda v ADR-0035. |
 | **Režim a úrovně** | Pozitivní/negativní gamma + poloha ceny vůči flipu; flip, call/put wall, těžiště |
 | **Volatilita** | Volatilitní režim dne, expected move a jak často EM drží — viz níže |
@@ -1099,6 +1100,56 @@ přemýšleli, není závislé na tom, jestli ji zrovna bylo z čeho spočítat.
 Ranní rituál: otevřít Briefing → projít karty → ☀ → dopsat tezi.
 
 ---
+
+## 11g. Trendový den po expiraci — co bylo vidět a na co se dívat (v1.18, #1241)
+
+Poučení z **pondělí 21. 9. 2026** (první seance po kvartální expiraci 18. 9.):
+NQ šlo od 15:30 z 30 220 na 30 800 (+580 b) prakticky bez pullbacku, ES
+7 760 → 7 842. Aplikace měla všechny signály, ale verdikt dne byl „bez převahy",
+tendence hlásila short a v RTH nevznikl jediný long setup na NQ.
+
+![Zdi s dominancí (Vrstvy → Zdi + 2. zeď)](img/graf-zdi-dominance.png)
+
+**Co v datech bylo před openem**
+
+| signál | kde v aplikaci | hodnota 21. 9. 15:30 | co znamená |
+|---|---|---|---|
+| útes gammy z pátku | Briefing → Ranní checklist; Stats → gamma útes | ES 83 %, NQ 44 % (OPEX) | struktura, která držela cenu, zmizela — den rozsahu |
+| vyšší TF trend | Briefing → Trend | týden/den rostoucí | bias LONG |
+| gap-and-hold | Graf: cena vs. PDC a flip | +210 b nad pátečním settle, nad flipem, 2,5 h komprese těsně pod call zdí 30 300 | připravený průraz |
+| dominance zdi | Graf: cenovka zdi („Call zeď 30300 · 18 %") | 18 % (běžně 35–56 %) | slabá zeď = průraz, ne odraz |
+| mapa se hýbe | Graf: čára call zdi po openu | 30 300 → 30 450 → 30 500 → 30 650 za 60 min | momentum, ne pin — pullbacky jsou vstupy, ne důvod k fade |
+
+**Co aplikace řekla špatně (a co je od v1.18 jinak)**
+
+- Verdikt dne „bez převahy": hlasy tendence −1, ΔOI put −1 a „pozitivní gamma tlumí" −1
+  vyrušily trend +3. Nově po útesu ≥ 50 % gamma nehlasuje.
+- Tendence short/strong short při +400 b: hlasy „poloha mezi zdmi" a „Max Pain" jsou
+  mean-reversion. Nově poloha nehlasuje u zdi s dominancí < 25 % nebo u zdi, která se
+  za 30 min posunula ve směru ceny; Max Pain hlasuje jen ≤ 90 min do close.
+- Setup T3 „Max Pain pin" short s cílem 934 b pod cenou: nově jen do vzdálenosti
+  šířky pásma zdí.
+- Briefing v pondělí „overnight bez dat": PDC je nově settle poslední RTH seance,
+  ne poslední minuta nedělního Globexu.
+
+**Ranní checklist (kartu najdeš v Briefingu nahoře)**
+
+1. Útes gammy minulé seance ≥ 50 % ⇒ čekej rozsah, fade zdí až po potvrzení.
+2. Vyšší TF trend = bias dne; proti němu jen s potvrzením (tendence otočená
+   ≥ 15 min + cena za těžištěm) a polovičním sizingem.
+3. Nejbližší zeď a její dominance: pod 25 % je zeď slabá — vstup na 5min akceptaci
+   za zdí, stop pod konsolidaci, cíl další zeď.
+4. Gap ≥ 0,4 % a držení nad flipem = komprese před průrazem ve směru gapu.
+5. Po průrazu sleduj čáru zdi: dokud se posouvá za cenou, pullbacky k EMA20 jsou
+   vstupy (T7). Fade až když se zeď zastaví a dominance vzroste.
+6. Tendenci a Max Pain ber přes den jen jako informaci; váhu mají posledních 90 min.
+7. Riziko v $ před vstupem (max 50 $), −100 $ = konec dne, 15 min pauza po stopu,
+   max 4 obchody (z review #1188).
+
+**Kde zapnout zdi:** Graf → **Vrstvy** → *Zdi* (call/put čára s cenovkou a dominancí
+v %) a *2. zeď* (tečkovaně); dropdown **Walls** (Peak / Smooth / Ridge) kreslí zelené
+pásy zdí v heatmapě. Když cena „uteče" z grafu (uživatelem přiblížený rozsah),
+ikona ↻ vpravo nahoře v grafu vrátí automatický rozsah.
 
 ## 12. IBKR Console — zrušena (sloučeno do Settings)
 

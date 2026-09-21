@@ -13,6 +13,7 @@ import {
   briefingToPlanText,
   fetchBars,
   fetchCandlesByTimeframe,
+  fetchCliffPrevious,
   fetchCliffToday,
   fetchEmRespectSummary,
   fetchIvRankLatest,
@@ -32,7 +33,7 @@ import {
   previousStoredDay,
   usOpenMs,
 } from '../api/briefing'
-import type { BarRow, CliffToday, EmRespectSummary, IvRankRow, LevelsRow, OiDeltaSummary, RangeSummary, VolRegimeRow } from '../api/briefing' // prettier-ignore
+import type { BarRow, CliffPrevious, CliffToday, EmRespectSummary, IvRankRow, LevelsRow, OiDeltaSummary, RangeSummary, VolRegimeRow } from '../api/briefing' // prettier-ignore
 import { fetchTendency } from '../api/tendency'
 import { VERDICT_RULES_VERSION, dayVerdict, newsExpectations, turnLevels } from '../instrument/daysummary' // prettier-ignore
 import type { TypicalReaction } from '../instrument/daysummary'
@@ -48,7 +49,9 @@ import { API_BASE } from '../config'
 import { useExpiryCalendar } from './ExpiryPhaseChip'
 import { symbolRoot } from '../instrument/ticker'
 import { magnetGlyph, magnetLevel, magnetSentence } from '../instrument/magnet'
-import { expiryCountdown } from '../instrument/expiry'
+import { expiryCountdown, expirySettleUtc } from '../instrument/expiry'
+import { morningChecklist } from '../instrument/morningcheck'
+import { MorningChecklistCard } from './MorningChecklistCard'
 import { CoachWatchCard } from './CoachWatchCard'
 import type { Scenario } from '../api/scenarios'
 import { ScenarioCard } from './ScenarioCard'
@@ -231,6 +234,8 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   const [prevDate, setPrevDate] = useState<string | null>(null)
   const [levels, setLevels] = useState<LevelsRow | null>(null)
   const [cliff, setCliff] = useState<CliffToday | null>(null)
+  // Útes minulé seance (#1241): brána gamma hlasu + ranní checklist
+  const [prevCliff, setPrevCliff] = useState<CliffPrevious | null>(null)
   const [oiDelta, setOiDelta] = useState<OiDeltaSummary | null>(null)
   const [upcoming, setUpcoming] = useState<NewsRow[]>([])
   const [sentiments, setSentiments] = useState<Array<[string, SentimentStateInfo | null]>>([])
@@ -269,6 +274,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
       void fetchOiDelta(symbol, selectedExpiry).then(setOiDelta)
     }
     void fetchCliffToday(symbol).then(setCliff)
+    void fetchCliffPrevious(symbol).then(setPrevCliff)
     void fetchVolRegimeLatest(symbol).then(setVolRegime)
     void fetchEmRespectSummary(symbol).then(setEmRespect)
     void fetchIvRankLatest(symbol).then(setIvRank)
@@ -368,8 +374,9 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
         prevClose: prevDay?.last ?? null,
         oiDelta,
         newsBeforeOpen: newsToday.some((item) => item.highImpact && item.beforeOpen),
+        cliffShare: prevCliff?.cliff_share ?? null,
       }),
-    [trend, levels, tendencyBand, symbolSentiment, bars, prevDay, oiDelta, newsToday],
+    [trend, levels, tendencyBand, symbolSentiment, bars, prevDay, oiDelta, newsToday, prevCliff],
   )
   // Uložení verdiktu (#1090): až když dorazily svíčky trendu a stav se ustálí
   // (VERDICT_POST_DELAY_MS) — při načítání se vstupy sypou po jednom a dva
@@ -420,6 +427,24 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     setView('journal')
   }
 
+  const checklist = useMemo(() => {
+    const settle = selectedExpiry ? expirySettleUtc(selectedExpiry) : null
+    return morningChecklist({
+      prevCliffShare: prevCliff?.cliff_share ?? null,
+      prevCliffOpex: prevCliff?.is_opex ?? false,
+      trend,
+      price: bars?.last ?? null,
+      prevClose: prevDay?.last ?? null,
+      flip: levels?.flip ?? null,
+      callWall: levels?.call_wall ?? null,
+      putWall: levels?.put_wall ?? null,
+      callWallDom: levels?.call_wall_dom ?? null,
+      putWallDom: levels?.put_wall_dom ?? null,
+      tendencyBand,
+      minutesToExpiry: settle ? Math.round((settle.getTime() - now) / 60_000) : null,
+    })
+  }, [prevCliff, trend, bars, prevDay, levels, tendencyBand, selectedExpiry, now])
+
   const fmt = (value: number | null | undefined) =>
     value === null || value === undefined ? '—' : String(value)
 
@@ -440,6 +465,8 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
         s očekávanou reakcí, verdikt hlasováním s vypsanými důvody. Heuristika —
         proto se verdikt ukládá a vyhodnocuje (#1091). */}
         {/* Kouč (#1201): pravidla a okna dne před openem */}
+        {/* Ranní checklist (#1241): útes, trend, zeď + dominance, gap, tendence, riziko */}
+        <MorningChecklistCard items={checklist} />
         <CoachWatchCard symbol={symbol} />
         {/* Expirační týden (#1189): jen v roll/OPEX/SOQ/post fázi */}
         <ExpiryWeekCard />
