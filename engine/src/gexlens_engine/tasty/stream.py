@@ -56,7 +56,18 @@ KEEPALIVE_INTERVAL_S = 25.0
 #: spojení sám zabil a subskripce se NIKDY nedokončila — smyčka reconnectů,
 #: fallback #614 bez dat. Timeout musí subskripci s rezervou přežít; mrtvé
 #: spojení dál hlídá protokolový KEEPALIVE (vyjednaných 60 s) + backoff.
-PING_TIMEOUT_S = 120.0
+#: Od #1214 musí přežít i nejpomalejší plnou subskripci: ~22 000 položek při
+#: tempu 100/s + rozestupy 2 s ≈ 5 min. Mrtvý kanál hlídá KEEPALIVE + #1228.
+PING_TIMEOUT_S = 360.0
+#: Tempo subskripcí (#1214): server má leaky bucket na položky symbol × event.
+#: Z logů 18.–20. 9. 2026: plná subskripce à 0,25 s (~2 000 položek/s) = 4–17
+#: odmítnutí při každém startu; heal à 2 s (250 položek/s) prošel jen když
+#: před ním nebyla dávka. Proto se dávky posílají z token bucketu: burst
+#: 1 000 položek hned, dál 200/s; po odmítnutí tempo na polovinu (min 100/s,
+#: ať plná množina ~22 000 položek doběhne pod PING_TIMEOUT_S), po klidu zpět.
+SUBSCRIPTION_RATE_ENTRIES_S = 200.0
+SUBSCRIPTION_RATE_MIN_ENTRIES_S = 100.0
+SUBSCRIPTION_BURST_ENTRIES = 1_000.0
 SUBSCRIPTION_BATCH = 500
 _BACKOFF_START_S = 1.0
 _BACKOFF_MAX_S = 60.0
@@ -94,6 +105,7 @@ class DxLinkStream:
         *,
         events: tuple[str, ...] = ("Quote", "Greeks", "Summary", "TimeAndSale"),
         heal_targets: Callable[[set[str]], set[str]] | None = None,
+        rate_entries_s: float = SUBSCRIPTION_RATE_ENTRIES_S,
     ) -> None:
         self._token_source = token_source
         self._on_event = on_event
@@ -122,6 +134,44 @@ class DxLinkStream:
         self._pause_s = SUBSCRIPTION_PAUSE_S
         self._rate_limit_ts: float | None = None
         self._last_keepalive = 0.0
+        #: Token bucket na položky subskripce (#1214): tempo se po rate limitu
+        #: snižuje, po klidu vrací ke stropu z konfigurace
+        self._rate_max = max(SUBSCRIPTION_RATE_MIN_ENTRIES_S, rate_entries_s)
+        self.rate_entries_s = self._rate_max
+        self._tokens = SUBSCRIPTION_BURST_ENTRIES
+        self._tokens_ts = time.monotonic()
+
+    async def _bucket_wait(self, entries: int) -> None:
+        """Počká, až bucket má `entries` tokenů; burst projde hned, zbytek tempem."""
+        now = time.monotonic()
+        self._tokens = min(
+            SUBSCRIPTION_BURST_ENTRIES,
+            self._tokens + (now - self._tokens_ts) * self.rate_entries_s,
+        )
+        self._tokens_ts = now
+        if self._tokens >= entries:
+            self._tokens -= entries
+            return
+        wait = (entries - self._tokens) / self.rate_entries_s
+        self._tokens = 0.0
+        await asyncio.sleep(wait)
+        self._tokens_ts = time.monotonic()
+
+    def _relax_pacing(self, now: float) -> None:
+        """Po klidu bez rate limitu se rozestup i tempo vracejí k základu (#936, #1214)."""
+        if self._rate_limit_ts is not None:
+            return
+        if now - self._last_rate_limit_seen <= PAUSE_RELAX_AFTER_S:
+            return
+        changed = False
+        if self._pause_s > SUBSCRIPTION_PAUSE_S:
+            self._pause_s = max(SUBSCRIPTION_PAUSE_S, self._pause_s / 2)
+            changed = True
+        if self.rate_entries_s < self._rate_max:
+            self.rate_entries_s = min(self._rate_max, self.rate_entries_s * 1.5)
+            changed = True
+        if changed:
+            self._last_rate_limit_seen = now
 
     @property
     def connected(self) -> bool:
@@ -263,6 +313,16 @@ class DxLinkStream:
             self._rate_limit_ts = time.monotonic()
             self._last_rate_limit_seen = self._rate_limit_ts
             self._pause_s = min(self._pause_s * 2, SUBSCRIPTION_PAUSE_MAX_S)
+            # Tempo bucketu na polovinu a bucket vyprázdnit — další dávka počká
+            slower = max(SUBSCRIPTION_RATE_MIN_ENTRIES_S, self.rate_entries_s / 2)
+            if slower < self.rate_entries_s:
+                logger.warning(
+                    "DXLink rate limit: tempo subskripcí %.0f → %.0f položek/s (#1214)",
+                    self.rate_entries_s,
+                    slower,
+                )
+            self.rate_entries_s = slower
+            self._tokens = 0.0
         elif "subscription size" in lowered:
             # Strop 25 000 položek na spojení (#982): heal tady nepomůže —
             # opakované přihlášení téže množiny přeteče znovu. Plán musí
@@ -323,6 +383,9 @@ class DxLinkStream:
             if batch_remove:
                 payload["remove"] = batch_remove
             if batch_add or batch_remove:
+                # Tempo drží token bucket (#1214): burst hned, zbytek rovnoměrně —
+                # rate limit nemá vzniknout, heal je záchranná brzda, ne plán
+                await self._bucket_wait(len(batch_add) + len(batch_remove))
                 await self._send(payload)
                 # Bez rozestupu server dávky odmítá (#845) a odmítnuté
                 # symboly pak tiše mlčí — viz `Your subscription rate is
@@ -354,9 +417,10 @@ class DxLinkStream:
                     # poznala až z nepřímých příznaků, protože nedoběhnutá
                     # subskripce nikde nechyběla
                     logger.info(
-                        "DXLink subskripce kompletní: %d symbolů (à %.2f s)",
+                        "DXLink subskripce kompletní: %d symbolů (à %.2f s, %.0f položek/s)",
                         len(self._symbols),
                         self._pause_s,
+                        self.rate_entries_s,
                     )
 
                 self._last_keepalive = time.monotonic()
@@ -399,13 +463,7 @@ class DxLinkStream:
                     # Relaxace rozestupu (#936): po klidu bez rate limitu se
                     # pauza vrací k základu — jinak by ranní špička zpomalila
                     # subskripce na celý den
-                    if (
-                        self._pause_s > SUBSCRIPTION_PAUSE_S
-                        and self._rate_limit_ts is None
-                        and time.monotonic() - self._last_rate_limit_seen > PAUSE_RELAX_AFTER_S
-                    ):
-                        self._pause_s = max(SUBSCRIPTION_PAUSE_S, self._pause_s / 2)
-                        self._last_rate_limit_seen = time.monotonic()
+                    self._relax_pacing(time.monotonic())
                     try:
                         raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
                     except TimeoutError:

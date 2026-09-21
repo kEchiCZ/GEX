@@ -1827,6 +1827,7 @@ async def main() -> None:
             _tasty_event,
             # Cílený heal (#936): po rate limitu resubscribe jen mlčících
             heal_targets=lambda candidates: tasty_cache.silent_symbols(candidates),
+            rate_entries_s=settings.tasty_subscribe_rate_entries_s,
         )
 
         def _dx_print_active(active_symbol: str) -> bool:
@@ -1901,6 +1902,7 @@ async def main() -> None:
                 # Rate limit subskripcí (#863): počet odmítnutí serverem
                 "tasty_rate_limited": tasty_stream.rate_limited,
                 "tasty_heals": tasty_stream.heals,
+                "tasty_subscribe_rate": round(tasty_stream.rate_entries_s),
                 "tasty_symbols": tasty_cache.symbols_tracked(),
                 # Ad-hoc pohledy (#521 C) — UI badge zdroje
                 # Vždy, i prázdný seznam: API status slévá jen poslané klíče, takže

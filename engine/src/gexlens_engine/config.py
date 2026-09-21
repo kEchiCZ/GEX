@@ -205,6 +205,10 @@ class Settings(BaseSettings):
     # Rezerva drží místo pro ad-hoc pohledy (#521 C): ~2 pohledy à 300
     # symbolů × 3 eventy. Běžný plán (wide/extended) smí zabrat jen zbytek.
     tasty_max_entries: int = Field(default=25_000, ge=1_000)
+    # Tempo subskripcí DXLink v položkách symbol × event za sekundu (#1214):
+    # z logů 18.–20. 9. 2026 leaky bucket serveru snese ~200/s trvale; klient
+    # se po odmítnutí sám zpomalí (min 100/s) a po klidu vrátí k této hodnotě
+    tasty_subscribe_rate_entries_s: float = Field(default=200.0, ge=100.0)
     tasty_adhoc_reserve_entries: int = Field(default=2_000, ge=0)
     # Křížová kontrola feedů (#517 fáze A): pasivní detektor nad shadow daty,
     # žádný request navíc. Bez běžící shadow větve se tiše nezapne.
