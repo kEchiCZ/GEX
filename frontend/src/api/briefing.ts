@@ -28,6 +28,9 @@ export interface LevelsRow {
   put_wall: number | null
   centroid: number | null
   total_gex: number
+  /** Dominance zdí (ADR-0010, #1241) — chybí u starších partic. */
+  call_wall_dom?: number | null
+  put_wall_dom?: number | null
 }
 
 export interface OiDeltaSummary {
@@ -183,6 +186,20 @@ export async function fetchCliffToday(symbol: string): Promise<CliffToday | null
     today: null,
   })
   return data.today
+}
+
+/** Útes gammy poslední UZAVŘENÉ seance (#1241): řádek tabulky, ne živý odhad. */
+export interface CliffPrevious {
+  session_date: string
+  cliff_share: number | null
+  is_opex: boolean
+}
+
+export async function fetchCliffPrevious(symbol: string): Promise<CliffPrevious | null> {
+  const data = await getJson<{ rows: CliffPrevious[] }>(`/gammacliff/${symbol}?limit=1`, {
+    rows: [],
+  })
+  return data.rows[0] ?? null
 }
 
 export async function fetchStoredDays(symbol: string): Promise<string[]> {

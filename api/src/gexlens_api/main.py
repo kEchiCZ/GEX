@@ -579,12 +579,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/levels/{symbol}/{expiry}")
     def levels(symbol: str, expiry: str, date: dt.date) -> dict[str, object]:
-        """Časové řady flip/walls/centroid (SPEC 4.2)."""
-        return {
-            "levels": _records(
-                repository.session_frame(lambda d: repository.levels(symbol, expiry, d), date)
-            )
-        }
+        """Časové řady flip/walls/centroid (SPEC 4.2) + dominance zdí (#1241).
+
+        Dominance (ADR-0010) žije ve vlastní řadě `walldom`; Briefing ji potřebuje
+        k poslední minutě, aby poznal slabou zeď (21. 9. 2026: call 30 300 · 18 %).
+        """
+        frame = repository.session_frame(lambda d: repository.levels(symbol, expiry, d), date)
+        try:
+            dom = repository.session_frame(lambda d: repository.walldom(symbol, expiry, d), date)
+        except Exception:  # noqa: BLE001 — řada je volitelná, levels bez ní drží tvar
+            dom = pd.DataFrame()
+        if not frame.empty and not dom.empty and "ts_min" in dom.columns:
+            keep = [c for c in ("ts_min", "call_wall_dom", "put_wall_dom") if c in dom.columns]
+            frame = frame.merge(dom[keep].drop_duplicates("ts_min"), on="ts_min", how="left")
+        return {"levels": _records(frame)}
 
     @app.get("/bars/{symbol}")
     def bars(symbol: str, date: dt.date) -> dict[str, object]:

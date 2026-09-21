@@ -34,7 +34,8 @@ function mockApis(overrides: Record<string, unknown> = {}) {
     if (path.includes('/instruments/')) return body(overrides['days'] ?? { days: [] })
     if (path.includes('/levels/')) return body(overrides['levels'] ?? { levels: [] })
     if (path.includes('/oidelta/')) return body({ symbol: 'ES', expiry: '20260813', days: null })
-    if (path.includes('/gammacliff/')) return body({ today: null })
+    if (path.includes('/gammacliff/'))
+      return body(overrides['gammacliff'] ?? { today: null, rows: [] })
     if (path.includes('/news/upcoming')) return body({ upcoming: [] })
     if (path.includes('/sentiment/state')) return body(null)
     if (path.includes('/gexforward/')) return body({ days: [] })
@@ -291,4 +292,24 @@ test('☀ založí ranní plán s kostrou textu a přepne na Deník', async () =
   // Volatility box (#873) je v kostře vždy — i bez dat s poctivým „bez dat"
   expect(draft.text).toContain('- Volatilita: ')
   expect(draft.text).toContain('- [ ] riziko přizpůsobeno režimu')
+})
+
+test('Ranní checklist (#1241): útes minulé seance, slabá zeď, gap-and-hold; gamma hlas po útesu nehlasuje', async () => {
+  mockApis({
+    candles: { W: risingCandles(60), D: risingCandles(60), '4h': risingCandles(60), '1h': risingCandles(60), '15m': risingCandles(60) }, // prettier-ignore
+    bars: { bars: [{ ts_min: '2026-09-21T13:15:00Z', open: 30240, high: 30245, low: 30235, close: 30240, volume: 1 }] }, // prettier-ignore
+    days: { days: [{ date: '2026-09-18' }] },
+    levels: { levels: [{ ts_min: '2026-09-21T13:15:00Z', flip: 29834, call_wall: 30300, put_wall: 29875, centroid: 30150, total_gex: 74, call_wall_dom: 0.18, put_wall_dom: 0.2 }] }, // prettier-ignore
+    gammacliff: { today: null, rows: [{ session_date: '2026-09-18', cliff_share: 0.826, is_opex: true }] }, // prettier-ignore
+  })
+  render(<BriefingView />)
+  const cliff = await screen.findByTestId('check-cliff')
+  expect(cliff.textContent).toContain('odpadlo 83 % (OPEX)')
+  expect(cliff.className).toContain('checklist-go')
+  const wall = screen.getByTestId('check-wall')
+  expect(wall.textContent).toContain('dominance 18 %')
+  expect(wall.textContent).toContain('průraz')
+  expect(screen.getByTestId('check-rules').textContent).toContain('50 $')
+  // Brána gamma hlasu: pozitivní gamma po útesu 83 % nehlasuje proti trendu
+  await waitFor(() => expect(screen.getByText(/tlumení tenké — nehlasuje/)).toBeTruthy())
 })

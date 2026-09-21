@@ -203,7 +203,12 @@ export interface VerdictInput {
   oiDelta: OiDeltaSummary | null
   /** High-impact zpráva mezi teď a US openem. */
   newsBeforeOpen: boolean
+  /** Útes gammy minulé seance (0–1, #1241); null bez dat. */
+  cliffShare?: number | null
 }
+
+/** Po útesu ≥ 50 % je tlumení tenké — zrcadlo enginu `dayverdict.CLIFF_DAMPING_OFF`. */
+export const CLIFF_DAMPING_OFF = 0.5
 
 const TENDENCY_VOTES: Record<string, number> = {
   strong_short: -2,
@@ -278,7 +283,7 @@ export function dayVerdict(input: VerdictInput): DayVerdict {
   votes.push({ name: 'overnight', vote: overnightVote, reason: overnightReason })
   votes.push(oiDeltaVote(input.oiDelta))
   const partial = votes.reduce((sum, vote) => sum + vote.vote, 0)
-  votes.push(gammaVote(input.positiveGamma, trend?.expected ?? null, partial))
+  votes.push(gammaVote(input.positiveGamma, trend?.expected ?? null, partial, input.cliffShare ?? null)) // prettier-ignore
   const score = votes.reduce((sum, vote) => sum + vote.vote, 0)
   let verdict: VerdictKind = 'none'
   if (score >= VERDICT_THRESHOLD) verdict = 'long'
@@ -314,8 +319,14 @@ function gammaVote(
   positiveGamma: boolean | null,
   expected: TrendDirection | null,
   partial: number,
+  cliffShare: number | null = null,
 ): VerdictVote {
   if (positiveGamma === null) return { name: 'gamma', vote: 0, reason: 'gamma režim bez dat' }
+  if (positiveGamma && cliffShare !== null && cliffShare >= CLIFF_DAMPING_OFF) {
+    // 21. 9. 2026: po kvartálním OPEX (útes ES 83 %) hlas −1 vyrušil trend +3 a
+    // verdikt byl none při +580 b — tenká gamma netlumí
+    return { name: 'gamma', vote: 0, reason: `pozitivní gamma, ale po útesu ${Math.round(cliffShare * 100)} % gammy je tlumení tenké — nehlasuje` } // prettier-ignore
+  }
   if (!positiveGamma) {
     if (expected === 'up') return { name: 'gamma', vote: 1, reason: 'negativní gamma = momentum ve směru trendu (long)' } // prettier-ignore
     if (expected === 'down') return { name: 'gamma', vote: -1, reason: 'negativní gamma = momentum ve směru trendu (short)' } // prettier-ignore
