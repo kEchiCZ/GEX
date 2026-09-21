@@ -14,6 +14,7 @@ from gexlens_engine.compute.tendency import (
     BandHysteresis,
     TendencyInputs,
     TendencyResult,
+    _collect_votes,
     band_of,
     evaluate_tendency,
 )
@@ -172,9 +173,59 @@ def test_vanna_flow_needs_iv_trend() -> None:
     assert missing is None or "vanna_flow" not in {v.name for v in missing.votes}
 
 
-def test_weights_version_bumped_for_v3() -> None:
-    """v3 (#394): hystereze pásem — uložená pásma nejsou srovnatelná s v2."""
-    assert TENDENCY_WEIGHTS_VERSION == 3
+def test_weights_version_bumped_for_v4() -> None:
+    """v3 (#394): hystereze pásem; v4 (#1241): poloha mezi zdmi a Max Pain hlasují podmíněně."""
+    assert TENDENCY_WEIGHTS_VERSION == 4
+
+
+def test_trendovy_den_poloha_a_max_pain_nehlasuji_proti_pohybu() -> None:
+    """#1241 (21. 9. 2026): slabá/posouvající se zeď vypne hlas polohy, Max Pain jen u close."""
+
+    def inputs(**overrides: float | None) -> TendencyInputs:
+        values: dict[str, float | None] = {
+            "flip": 29840.0,
+            "put_wall": 29875.0,
+            "max_pain": 29750.0,
+            "call_wall": 30500.0,
+            "put_wall_dom": 0.2,
+        }
+        values.update(overrides)
+        return TendencyInputs(
+            ts_min=NOW,
+            spot=30500.0,
+            flip=values.get("flip"),
+            call_wall=values.get("call_wall"),
+            put_wall=values.get("put_wall"),
+            call_wall_dom=values.get("call_wall_dom"),
+            put_wall_dom=values.get("put_wall_dom"),
+            max_pain=values.get("max_pain"),
+            call_wall_then=values.get("call_wall_then"),
+            minutes_to_close=values.get("minutes_to_close"),
+        )
+
+    # Call zeď 30 500 s dominancí 0,18 → poloha nehlasuje (0), Max Pain 3 h do close nehlasuje
+    votes = {v.name: v for v in _collect_votes(inputs(call_wall_dom=0.18, minutes_to_close=200.0))}
+    assert votes["walls_distance"].vote == 0.0 and "slabá" in votes["walls_distance"].detail
+    assert "max_pain" not in votes
+    # Silná zeď, ale za 30 min se posunula za cenou (30 300 → 30 650) → poloha nehlasuje
+    votes = {
+        v.name: v
+        for v in _collect_votes(
+            inputs(
+                call_wall=30650.0, call_wall_then=30300.0, call_wall_dom=0.4, minutes_to_close=60.0
+            )
+        )
+    }
+    assert votes["walls_distance"].vote == 0.0 and "posouvá" in votes["walls_distance"].detail
+    assert votes["max_pain"].vote == -1.0  # 60 min do close: Max Pain pod cenou hlasuje short
+    # Silná stojící zeď: poloha hlasuje jako dřív (blíž k call zdi = short)
+    votes = {
+        v.name: v
+        for v in _collect_votes(
+            inputs(call_wall=30650.0, call_wall_then=30650.0, call_wall_dom=0.4)
+        )
+    }
+    assert votes["walls_distance"].vote < 0
 
 
 # ── Hystereze pásem (#394) ────────────────────────────────────────────

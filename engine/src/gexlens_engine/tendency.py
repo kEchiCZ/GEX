@@ -30,6 +30,8 @@ SENTIMENT_SUBDIR = "sentiment"
 SENTIMENT_MISSING_WARN_MIN = 30
 # Sklon ATM IV pro vanna hlas (#397) — delší okno, IV se hýbe pomaleji než cena
 IV_LOOKBACK_MIN = 30
+#: Okno pro posun zdí (#1241): mapa jde za cenou
+WALL_LOOKBACK_MIN = 30
 
 
 @dataclass
@@ -53,6 +55,10 @@ class TendencyEngine:
         self._sent_missing_warned_at: dt.datetime | None = None
         # ATM IV historie pro vanna hlas (#397)
         self._iv_history: deque[tuple[dt.datetime, float]] = deque(maxlen=IV_LOOKBACK_MIN + 1)
+        # Zdi před oknem (#1241) — posun ve směru ceny vypíná hlas polohy
+        self._wall_history: deque[tuple[dt.datetime, float | None, float | None]] = deque(
+            maxlen=WALL_LOOKBACK_MIN + 1
+        )
         # Hystereze pásma (#394) — resetuje se na přelomu dne (nový den nemá
         # dědit rozpracované přepnutí ani pásmo včerejšího závěru)
         self._hysteresis = BandHysteresis()
@@ -223,6 +229,15 @@ class TendencyEngine:
         if atm_iv is not None:
             self._iv_history.append((now, atm_iv))
 
+        call_wall_then: float | None = None
+        put_wall_then: float | None = None
+        if self._wall_history:
+            wall_oldest = self._wall_history[0]
+            if now - wall_oldest[0] >= dt.timedelta(minutes=WALL_LOOKBACK_MIN):
+                call_wall_then, put_wall_then = wall_oldest[1], wall_oldest[2]
+        self._wall_history.append(
+            (now, levels.call_wall if levels else None, levels.put_wall if levels else None)
+        )
         profile = runtime.last_profile
         charm_profile = runtime.last_charm_profile
         vanna_profile = runtime.last_vanna_profile
@@ -236,6 +251,8 @@ class TendencyEngine:
             put_wall_dom=levels.put_wall_dom if levels else None,
             max_pain=self._max_pain,
             centroid=levels.centroid if levels else None,
+            call_wall_then=call_wall_then,
+            put_wall_then=put_wall_then,
             cum_delta_now=cum_now,
             cum_delta_then=cum_then,
             price_then=price_then,

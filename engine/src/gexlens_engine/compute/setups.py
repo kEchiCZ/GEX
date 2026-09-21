@@ -753,6 +753,12 @@ def detect_max_pain_pin(
     distance = now.close - now.max_pain
     if abs(distance) < params.pin_min_distance:
         return None
+    # Pin má dosah šířky pásma zdí, ne dál (#1241): 21. 9. 2026 vznikl short s cílem
+    # 934 b pod cenou na trendovém dni — Max Pain 1 000 b daleko není magnet
+    if now.call_wall is not None and now.put_wall is not None:
+        width = now.call_wall - now.put_wall
+        if width > 0 and abs(distance) > width:
+            return None
     if len(history) > params.pin_stability_lookback:
         past_mp = history[-1 - params.pin_stability_lookback].max_pain
         if past_mp is not None and abs(now.max_pain - past_mp) >= params.pin_stability:

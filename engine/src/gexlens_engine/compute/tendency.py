@@ -25,7 +25,17 @@ from dataclasses import dataclass, field
 # v3 (#394): hystereze pásem (margin + dwell) — skóre i hlasy beze změny,
 #            ale uložené pásmo už není čisté band_of(score), takže řádky
 #            v3 nejsou v pásmech srovnatelné s v2
-TENDENCY_WEIGHTS_VERSION = 3
+TENDENCY_WEIGHTS_VERSION = 4
+#: Trendový den (#1241, 21. 9. 2026): hlasy „poloha mezi zdmi“ a „Max Pain“ jsou
+#: mean-reversion — po kvartálním OPEX hlasovaly short celý den při +580 b.
+#: Zeď s dominancí pod tímto prahem není brzda (běžně 0,35–0,56; 21. 9. 0,18)
+WALL_WEAK_DOMINANCE = 0.25
+#: Zeď, která se za okno posunula ve směru ceny aspoň o tento podíl šířky
+#: pásma, cenu nedrží — mapa jde ZA cenou (30 300 → 30 450 → 30 650)
+WALL_MOVED_SHARE = 0.1
+#: Max Pain hlasuje jen v posledních minutách do close/expirace — dřív je to
+#: jen vzdálený magnet bez síly (T3 pin má totéž okno)
+MAX_PAIN_VOTE_MINUTES = 90.0
 
 # Nekalibrované výchozí váhy (#350): flip nejvyšší, zbytek rovnocenný.
 # Kalibrace #394 (7. 8., 7 dní dat v2): korelace hlasů s pohybem ceny za
@@ -99,6 +109,9 @@ class TendencyInputs:
     put_wall_dom: float | None = None
     max_pain: float | None = None
     centroid: float | None = None
+    # Zdi před oknem (#1241): posun ve směru ceny = mapa jde za cenou
+    call_wall_then: float | None = None
+    put_wall_then: float | None = None
     # Sklon/rozchod: hodnota teď a před lookback oknem
     cum_delta_now: float | None = None
     cum_delta_then: float | None = None
@@ -172,11 +185,15 @@ def _collect_votes(inputs: TendencyInputs) -> list[ComponentVote]:
     ):
         # Blíž k put zdi = podpora pod cenou (long); blíž k call zdi zrcadlově
         position = (inputs.call_wall - spot) / (inputs.call_wall - inputs.put_wall)
-        add(
-            "walls_distance",
-            _clamp(2.0 * position - 1.0),
-            f"poloha mezi zdmi {inputs.put_wall:.0f}–{inputs.call_wall:.0f}",
-        )
+        skip = _walls_not_holding(inputs, spot)
+        if skip is None:
+            add(
+                "walls_distance",
+                _clamp(2.0 * position - 1.0),
+                f"poloha mezi zdmi {inputs.put_wall:.0f}–{inputs.call_wall:.0f}",
+            )
+        else:
+            add("walls_distance", 0.0, skip)
     if inputs.call_wall_dom is not None and inputs.put_wall_dom is not None:
         strongest = max(inputs.call_wall_dom, inputs.put_wall_dom)
         if strongest > 0:
@@ -185,7 +202,9 @@ def _collect_votes(inputs: TendencyInputs) -> list[ComponentVote]:
                 _clamp((inputs.put_wall_dom - inputs.call_wall_dom) / strongest),
                 f"dominance put {inputs.put_wall_dom:.0%} vs. call {inputs.call_wall_dom:.0%}",
             )
-    if inputs.max_pain is not None:
+    if inputs.max_pain is not None and (
+        inputs.minutes_to_close is None or inputs.minutes_to_close <= MAX_PAIN_VOTE_MINUTES
+    ):
         add(
             "max_pain",
             _sign(inputs.max_pain - spot),
@@ -266,6 +285,30 @@ def _collect_votes(inputs: TendencyInputs) -> list[ComponentVote]:
             f"vanna {'kladná' if inputs.vanna_at_price > 0 else 'záporná' if inputs.vanna_at_price < 0 else 'nulová'}, ATM IV {iv_change * 100:+.2f} b za okno",  # noqa: E501
         )
     return votes
+
+
+def _walls_not_holding(inputs: TendencyInputs, spot: float) -> str | None:
+    """Důvod, proč zeď před cenou nebrzdí (#1241); None = hlas platí.
+
+    Zeď, ke které cena jde (nad středem pásma call, pod put), je slabá
+    (dominance < WALL_WEAK_DOMINANCE) nebo se za okno posunula ve směru ceny
+    (mapa jde za cenou). V obou případech je „poloha mezi zdmi“ falešný
+    mean-reversion signál — 21. 9. 2026 hlasoval short celý trendový den.
+    """
+    assert inputs.call_wall is not None and inputs.put_wall is not None
+    width = inputs.call_wall - inputs.put_wall
+    toward_call = spot >= (inputs.call_wall + inputs.put_wall) / 2
+    dom = inputs.call_wall_dom if toward_call else inputs.put_wall_dom
+    label = "call" if toward_call else "put"
+    if dom is not None and dom < WALL_WEAK_DOMINANCE:
+        return f"{label} zeď slabá (dominance {dom:.0%}) — poloha nehlasuje"
+    then = inputs.call_wall_then if toward_call else inputs.put_wall_then
+    now = inputs.call_wall if toward_call else inputs.put_wall
+    if then is not None and width > 0:
+        moved = (now - then) if toward_call else (then - now)
+        if moved >= WALL_MOVED_SHARE * width:
+            return f"{label} zeď se posouvá za cenou ({then:.0f} → {now:.0f}) — poloha nehlasuje"
+    return None
 
 
 def charm_time_factor(minutes_to_close: float) -> float:

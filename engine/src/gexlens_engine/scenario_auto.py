@@ -54,6 +54,8 @@ class VerdictContext:
     prev_high: float | None = None
     prev_low: float | None = None
     prev_close: float | None = None
+    #: Útes gammy poslední uzavřené seance (#1241)
+    cliff_share: float | None = None
     on_high: float | None = None
     on_low: float | None = None
     oi_call_delta: float | None = None
@@ -98,6 +100,19 @@ def _candles(rows: list[dict[str, Any]]) -> list[Candle]:
     return out
 
 
+def _settle_close(bars: list[dict[str, Any]]) -> float | None:
+    """Close posledního baru v US RTH (≤ 16:00 New York) — PDC, ne poslední Globex minuta."""
+    settle: float | None = None
+    for bar in bars:
+        ts = dt.datetime.fromisoformat(str(bar["ts_min"]))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=dt.UTC)
+        local = ts.astimezone(ET_TZ)
+        if local.weekday() < 5 and dt.time(9, 30) <= local.time() < dt.time(16, 0):
+            settle = float(bar["close"])
+    return settle
+
+
 async def gather_context(
     api: ApiReader,
     symbol: str,
@@ -136,17 +151,37 @@ async def gather_context(
             str(item["date"]) for item in days_payload.get("days", []) if item.get("date")
         )
         before = [day for day in days if day < session.isoformat()]
-        if before:
-            prev = await api.get(f"/bars/{symbol}", {"date": before[-1]})
-            for bar in prev.get("bars", []):
-                high, low, close = float(bar["high"]), float(bar["low"]), float(bar["close"])
+        # PDC = settle poslední seance s US close (#1241): pondělní „včerejšek“ je
+        # nedělní Globex partice bez RTH — bral se její poslední bar, ne páteční
+        # settle; zpět nejvýš 4 partice (dlouhý víkend)
+        found = False
+        for day in reversed(before[-4:]):
+            prev = await api.get(f"/bars/{symbol}", {"date": day})
+            bars = prev.get("bars", [])
+            settle = _settle_close(bars)
+            if settle is None:
+                continue
+            for bar in bars:
+                high, low = float(bar["high"]), float(bar["low"])
                 ctx.prev_high = high if ctx.prev_high is None else max(ctx.prev_high, high)
                 ctx.prev_low = low if ctx.prev_low is None else min(ctx.prev_low, low)
-                ctx.prev_close = close
-        else:
+            ctx.prev_close = settle
+            found = True
+            break
+        if before and not found:
+            ctx.missing.append("bary včerejška: žádná partice s US close")
+        if not before:
             ctx.missing.append("bary včerejška: žádný uložený den")
     except Exception as exc:  # noqa: BLE001
         ctx.missing.append(f"bars včera: {type(exc).__name__}")
+    try:
+        cliff = await api.get(f"/gammacliff/{symbol}", {"limit": 1})
+        rows = cliff.get("rows") or cliff.get("history") or []
+        if rows:
+            share = rows[0].get("cliff_share")
+            ctx.cliff_share = float(share) if share is not None else None
+    except Exception as exc:  # noqa: BLE001
+        ctx.missing.append(f"gamma útes: {type(exc).__name__}")
     if expiry:
         try:
             oi = await api.get(f"/oidelta/{symbol}/{expiry}")
@@ -235,6 +270,7 @@ class ScenarioGenerator:
                 oi_call_total=ctx.oi_call_total,
                 oi_put_total=ctx.oi_put_total,
                 news_before_open=ctx.news_before_open,
+                cliff_share=ctx.cliff_share,
             )
         )
         rationale = _rationale(verdict, ctx)
