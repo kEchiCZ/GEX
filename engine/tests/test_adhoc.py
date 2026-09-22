@@ -196,40 +196,66 @@ class _SlowSymbolMap(_FakeSymbolMap):
 
 
 class _SlowCandles:
-    def __init__(self) -> None:
+    def __init__(self, delay: float = 0.2) -> None:
         self.requests: list[CandleRange] = []
+        self.delay = delay
 
     async def fetch(self, request: CandleRange) -> list[CandleBar]:
         self.requests.append(request)
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(self.delay)
         ts = request.since.replace(second=0, microsecond=0)
         return [CandleBar(ts=ts, open=75.0, high=75.2, low=74.8, close=75.1, volume=100.0)]
 
 
-async def test_svicky_podkladu_jedou_paralelne_s_chainem(tmp_path: Path) -> None:
-    """#206: backfill svíček nečeká na chain — celkově max(chain, svíčky), ne součet."""
+async def test_svicky_neblokuji_zalozeni_pohledu_a_probudi_plan(tmp_path: Path) -> None:
+    """#206: pohled vznikne po chainu; svíčky dobíhají na pozadí a plán se probudí hned.
+
+    22. 9. 2026 vypršel u QQQ šedesátisekundový timeout backfillu svíček a
+    pohled kvůli tomu vznikl o minutu později — tím se posunul i první snapshot.
+    """
     db = create_engine("sqlite+pysqlite:///:memory:")
     ensure_meta_schema(db)
-    candles = _SlowCandles()
-    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    candles = _SlowCandles(delay=1.0)
+    woken: list[int] = []
     viewer = AdhocViewer(
         db=db,
         symbol_map=cast(SymbolMap, _SlowSymbolMap()),
         cache=TastyChainCache(clock=lambda: NOW),
-        writer=writer,
+        writer=SnapshotWriter(Settings(data_dir=tmp_path)),
         is_watched=lambda product: product in WATCHED,
         candles=cast(CandleFetcher, candles),
+        on_change=lambda: woken.append(1),
     )
     request(db, "KO", NOW)
     started = time.monotonic()
     await viewer.refresh(NOW)
     elapsed = time.monotonic() - started
+
     assert viewer.active() == ["KO"]
+    # Pohled je hotový po chainu (0,2 s), ne až po svíčkách (1,0 s)
+    assert elapsed < 0.6, elapsed
+    assert woken == [1]  # plán subskripce se probudil hned při založení
+    day = dt.datetime.now(dt.UTC).date()
+    bars = tmp_path / "derived" / "KO" / "bars" / f"{day.isoformat()}.parquet"
+    assert not bars.exists()  # svíčky ještě nedoběhly
+
+    await asyncio.gather(*viewer._backfill_tasks)
     assert [r.streamer_symbol for r in candles.requests] == ["KO"]
-    # Sériově by to bylo ≥ 0,42 s; paralelně ~0,22 s
-    assert elapsed < 0.36, elapsed
-    day = candles.requests[0].since.date()
-    assert (tmp_path / "derived" / "KO" / "bars" / f"{day.isoformat()}.parquet").exists()
+    written = candles.requests[0].since.date()
+    assert (tmp_path / "derived" / "KO" / "bars" / f"{written.isoformat()}.parquet").exists()
+
+
+async def test_uklid_pohledu_take_probudi_plan(tmp_path: Path) -> None:
+    """#206: po úklidu se rozpočet uvolní — reconciler se má dozvědět hned."""
+    viewer, _cache, db = make_viewer(tmp_path)
+    woken: list[str] = []
+    viewer.on_change = lambda: woken.append("x")
+    request(db, "KO", NOW)
+    await viewer.refresh(NOW)
+    assert woken == ["x"]
+    await viewer.refresh(NOW + dt.timedelta(seconds=ADHOC_TTL_S + 1))
+    assert viewer.active() == []
+    assert woken == ["x", "x"]
 
 
 def test_equity_expiry_open_pravidla() -> None:
@@ -250,3 +276,30 @@ def test_equity_expiry_open_pravidla() -> None:
     assert not equity_expiry_open("20260826", "KO", dt.datetime(2026, 8, 27, 12, 0, tzinfo=dt.UTC))
     assert equity_expiry_open("20260828", "KO", dt.datetime(2026, 8, 27, 23, 0, tzinfo=dt.UTC))
     assert not equity_expiry_open("nesmysl", "KO", dt.datetime(2026, 8, 27, tzinfo=dt.UTC))
+
+
+async def test_wait_for_plan_tick_probuzeni_stop_a_timeout() -> None:
+    """#206: reconciler se probudí událostí, stopne okamžitě a jinak čeká timeout."""
+    from gexlens_engine.__main__ import wait_for_plan_tick
+
+    stop = asyncio.Event()
+    wake = asyncio.Event()
+
+    # Probuzení: vrátí se hned a event se zase zahodí (další tik zas čeká)
+    wake.set()
+    started = time.monotonic()
+    await wait_for_plan_tick(stop, wake, 5.0)
+    assert time.monotonic() - started < 0.5
+    assert not wake.is_set()
+
+    # Stop: shutdown nesmí držet celou periodu
+    stop.set()
+    started = time.monotonic()
+    await wait_for_plan_tick(stop, wake, 5.0)
+    assert time.monotonic() - started < 0.5
+
+    # Bez události se čeká do timeoutu
+    stop.clear()
+    started = time.monotonic()
+    await wait_for_plan_tick(stop, wake, 0.2)
+    assert 0.15 < time.monotonic() - started < 1.0

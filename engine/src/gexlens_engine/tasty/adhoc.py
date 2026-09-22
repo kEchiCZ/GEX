@@ -111,8 +111,13 @@ class AdhocViewer:
     #: Svíčky podkladu do minulosti při založení (#206): graf ceny hned, ne od
     #: první minuty pohledu; None = bez backfillu (testy, vypnutá tasty)
     candles: CandleFetcher | None = None
+    #: Zavolá se, když pohled vznikne nebo zmizí (#206): probudí reconciler
+    #: subskripce, aby striky pohledu nečekaly na jeho šedesátisekundový tik
+    on_change: Callable[[], None] | None = None
 
     _views: dict[str, _ActiveView] = field(default_factory=dict, init=False)
+    #: Běžící backfilly svíček — reference drží úlohu naživu (#499)
+    _backfill_tasks: set[asyncio.Task[None]] = field(default_factory=set, init=False)
 
     async def refresh(self, now: dt.datetime) -> None:
         """Sladí aktivní pohledy s tabulkou požadavků (à ~30 s)."""
@@ -137,6 +142,7 @@ class AdhocViewer:
             if product not in wanted:
                 self._views.pop(product)
                 logger.info("Ad-hoc pohled %s uklizen (bez prodloužení)", product)
+                self._notify_change()
             elif self.is_watched(product):
                 # Produkt mezitím dostal plnou IBKR pipeline (4. 9.: pohled NQ
                 # vznikl po startu enginu, než se pipeline postavily, a pak
@@ -149,16 +155,17 @@ class AdhocViewer:
                         delete(adhoc_view_table).where(adhoc_view_table.c.symbol == product)
                     )
                 logger.info("Ad-hoc pohled %s uklizen — produkt má plnou pipeline", product)
+                self._notify_change()
         for product in wanted:
             if product in self._views or self.is_watched(product):
                 continue
-            # Chain (REST, sekundy) a svíčky podkladu (front future + Candle
-            # backfill) jedou VEDLE sebe (#206): podklad je znám z tickeru, cena
-            # v grafu nemusí čekat na řetěz — měřeno 19. 9.: sériově 5–7 s,
-            # cíl ≤ 2 s od požadavku
+            # Na kritické cestě jsou jen dva REST dotazy (chain a front future),
+            # a ty jdou vedle sebe. Backfill svíček je doplněk a založení pohledu
+            # NESMÍ blokovat (#206): 22. 9. vypršel u QQQ jeho šedesátisekundový
+            # timeout a pohled kvůli tomu vznikl o minutu později.
             chain_result, front_result = await asyncio.gather(
                 self.symbol_map.chain(product, now.date()),
-                self._front_with_backfill(product, now),
+                self.symbol_map.front_future(product),
                 return_exceptions=True,
             )
             if isinstance(chain_result, BaseException):
@@ -191,18 +198,33 @@ class AdhocViewer:
                 upcoming[0],
                 front,
             )
+            if front and self.candles is not None:
+                self._spawn_backfill(product, front, now)
+            self._notify_change()
 
-    async def _front_with_backfill(self, product: str, now: dt.datetime) -> str | None:
-        """Front streamer podkladu + backfill svíček; chyba backfillu pohled nezastaví."""
-        front = await self.symbol_map.front_future(product)
-        if front and self.candles is not None:
+    def _notify_change(self) -> None:
+        """Změna množiny pohledů — reconciler subskripce se má probudit (#206)."""
+        if self.on_change is None:
+            return
+        try:
+            self.on_change()
+        except Exception:
+            logger.exception("Ad-hoc: probuzení plánu subskripce selhalo")
+
+    def _spawn_backfill(self, product: str, streamer: str, now: dt.datetime) -> None:
+        """Svíčky podkladu na pozadí (#206) — pohled na ně nečeká."""
+
+        async def run() -> None:
             try:
-                await self._backfill_candles(product, front, now)
+                await self._backfill_candles(product, streamer, now)
             except Exception:
                 logger.exception(
                     "Ad-hoc %s: backfill svíček selhal — pohled jede bez historie", product
                 )
-        return front
+
+        task = asyncio.create_task(run())
+        self._backfill_tasks.add(task)
+        task.add_done_callback(self._backfill_tasks.discard)
 
     async def _backfill_candles(self, product: str, streamer: str, now: dt.datetime) -> None:
         """Svíčky seance do minulosti z dxFeed Candle (#206): cena hned, s objemem."""
