@@ -181,6 +181,26 @@ FUTURES_EXCHANGES = ("CME", "CBOT", "NYMEX", "COMEX")
 #: reqSecDefOptParams nemá vlastní timeout; při mrtvé sec-def farmě by setup
 #: visel donekonečna a cooldown by se nikdy nedostal ke slovu (#1153)
 CHAIN_DISCOVERY_TIMEOUT_S = 30.0
+#: Perioda reconcileru subskripce (`shadow_symbols_loop`). Průchod je čistě
+#: v paměti (řetěz je cachovaný per den), takže se dá probudit i dřív — viz
+#: `wait_for_plan_tick` a `AdhocViewer.on_change` (#206).
+SHADOW_REFRESH_S = 60.0
+
+
+async def wait_for_plan_tick(stop: asyncio.Event, wake: asyncio.Event, timeout: float) -> None:
+    """Počká na další tik reconcileru subskripce: timeout, probuzení, nebo stop (#206).
+
+    Probuzení posílá ad-hoc pohled hned, jak vznikne nebo zmizí — jeho striky
+    tak nečekají na periodu smyčky. `stop` musí zůstat okamžitý, aby restart
+    enginu nedržel shutdown celou periodu.
+    """
+    waiters = [asyncio.create_task(stop.wait()), asyncio.create_task(wake.wait())]
+    try:
+        await asyncio.wait(waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in waiters:
+            task.cancel()
+    wake.clear()
 
 
 def _front_to_cache(front: Contract, symbol: str) -> FrontFuture:
@@ -1782,6 +1802,11 @@ async def main() -> None:
         # pipeline. V režimu midpoint tracker jen měří pokrytí.
         dx_universe: dict[str, dict[str, OptionContractSpec]] = {}
         # Ad-hoc pohled přes tasty (#521, varianta C): žádné IBKR linky
+        # Probuzení reconcileru subskripce (#206): ad-hoc pohled vznikne do
+        # sekund, ale jeho striky posílá do DXLinku až `shadow_symbols_loop`.
+        # Bez probuzení čekaly na jeho šedesátisekundový tik a první snapshot
+        # přišel po ~70 s místo jednotek sekund (měřeno 22. 9.).
+        plan_wakeup = asyncio.Event()
         adhoc_viewer = AdhocViewer(
             db=db,
             symbol_map=symbol_map,
@@ -1790,6 +1815,7 @@ async def main() -> None:
             is_watched=lambda product: product in pipelines,
             # Svíčky podkladu do minulosti při založení pohledu (#206)
             candles=CandleFetcher(tasty_session.quote_token),
+            on_change=plan_wakeup.set,
         )
 
         def _tasty_event(event_type: str, values: list[object]) -> None:
@@ -2392,8 +2418,7 @@ async def main() -> None:
                         await tasty_stream.set_subscriptions(plan.subscriptions)
                 except Exception:
                     logger.exception("Shadow symbols refresh selhal — zkusí se za minutu")
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(shadow_stop.wait(), timeout=60.0)
+                await wait_for_plan_tick(shadow_stop, plan_wakeup, SHADOW_REFRESH_S)
 
         async def orphan_spot_loop() -> None:
             """Cena z tasty pro instrumenty BEZ běžící pipeline (#756).
