@@ -676,6 +676,25 @@ class FeatureRow:
     band_metrics_version: int | None
 
 
+#: Kolik dní partic se drží v paměti (#1247). Dnešek a včerejšek: seance
+#: sahá přes půlnoc UTC (22:00 předchozího dne) a catch-up po restartu
+#: dopisuje do včerejší partice. Starší dny žijí jen na disku — každý
+#: `append_and_write` propisuje celou tabulku do souboru, takže se nic
+#: neztrácí; při pozdním zápisu se partice načte zpátky (`_ensure_loaded`).
+BUFFER_KEEP_DAYS = 1
+#: Druhá pojistka: strop paměti všech bufferů. Nad ním se evikuje od
+#: nejdéle nepoužívaného — chrání před dnem s neobvykle velkým řetězem.
+BUFFER_MAX_BYTES = 400 * 1024 * 1024
+
+
+def partition_day(path: Path) -> dt.date | None:
+    """Den partice z názvu souboru (`2026-09-22.parquet`); None u jiných jmen."""
+    try:
+        return dt.date.fromisoformat(path.stem)
+    except ValueError:
+        return None
+
+
 class _PartitionBuffer:
     """Buffer jedné denní partice: drží celý den jako Arrow tabulku a atomicky přepisuje soubor.
 
@@ -696,6 +715,9 @@ class _PartitionBuffer:
         self._path = path
         self._schema = schema
         self._table: pa.Table = schema.empty_table()
+        #: Den partice a pořadí posledního použití — vstup evikce (#1247)
+        self.day: dt.date | None = partition_day(path)
+        self.touched: int = 0
         self._loaded = False
         self._appends = 0
         #: Klíčový string sloupec tabulky (pro `key`) — udržuje se přírůstkově,
@@ -705,6 +727,11 @@ class _PartitionBuffer:
     @property
     def rows(self) -> int:
         return int(self._table.num_rows)
+
+    @property
+    def nbytes(self) -> int:
+        """Paměť tabulky — vstup stropu velikosti (#1247)."""
+        return int(self._table.nbytes)
 
     def _key_column(self, table: pa.Table, key: PartitionKey) -> pa.Array:
         """Řádkový klíč jako string — přesná shoda n-tice, ne kartézský součin
@@ -866,6 +893,12 @@ class SnapshotWriter:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._buffers: dict[Path, _PartitionBuffer] = {}
+        #: Evikce starých partic (#1247): nejnovější viděný den, pořadové
+        #: číslo použití a prahy (přepisovatelné v testech)
+        self._newest_day: dt.date | None = None
+        self._touch_tick = 0
+        self.buffer_keep_days = BUFFER_KEEP_DAYS
+        self.buffer_max_bytes = BUFFER_MAX_BYTES
 
     def write_minute(
         self, symbol: str, expiry: str, day: dt.date, rows: Sequence[SnapshotRow]
@@ -1252,10 +1285,69 @@ class SnapshotWriter:
 
     def _buffer(self, path: Path, schema: pa.Schema) -> _PartitionBuffer:
         buffer = self._buffers.get(path)
+        fresh = buffer is None
         if buffer is None:
             buffer = _PartitionBuffer(path, schema)
             self._buffers[path] = buffer
+        self._touch_tick += 1
+        buffer.touched = self._touch_tick
+        if fresh:
+            # Nová partice = jediný okamžik, kdy může přibýt den; evikce
+            # se tím drží mimo horkou cestu opakovaných zápisů (#1247)
+            self._evict(keep=path)
         return buffer
+
+    def _evict(self, *, keep: Path) -> None:
+        """Zahodí buffery starých dnů a přebytek nad stropem velikosti (#1247).
+
+        Partice na disku je po každém zápisu kompletní, takže zahození
+        bufferu nic neztratí — pozdní zápis do staršího dne si ji načte
+        zpátky. Bez toho paměť rostla o celou denní sadu Arrow tabulek za
+        každý den běhu (naměřeno 600–750 MB/den, #1247).
+        """
+        days = [buf.day for buf in self._buffers.values() if buf.day is not None]
+        if days:
+            newest = max(days)
+            self._newest_day = newest if self._newest_day is None else max(self._newest_day, newest)
+        dropped = 0
+        freed = 0
+        if self._newest_day is not None:
+            cutoff = self._newest_day - dt.timedelta(days=max(0, self.buffer_keep_days))
+            for path, buf in list(self._buffers.items()):
+                if path == keep or buf.day is None or buf.day >= cutoff:
+                    continue
+                freed += buf.nbytes
+                dropped += 1
+                del self._buffers[path]
+        total = sum(buf.nbytes for buf in self._buffers.values())
+        while total > self.buffer_max_bytes and len(self._buffers) > 1:
+            oldest = min(
+                (p for p in self._buffers if p != keep),
+                key=lambda p: self._buffers[p].touched,
+                default=None,
+            )
+            if oldest is None:
+                break
+            buf = self._buffers.pop(oldest)
+            total -= buf.nbytes
+            freed += buf.nbytes
+            dropped += 1
+        if dropped:
+            logger.info(
+                "Uvolněno %d partic z paměti (%.0f MB), zůstává %d (%.0f MB) — "
+                "starší dny jen na disku (#1247)",
+                dropped,
+                freed / 1e6,
+                len(self._buffers),
+                total / 1e6,
+            )
+
+    def buffer_stats(self) -> dict[str, int]:
+        """Živé buffery partic pro /status (#1247)."""
+        return {
+            "partitions": len(self._buffers),
+            "bytes": sum(buf.nbytes for buf in self._buffers.values()),
+        }
 
 
 def read_netflow_latest(
