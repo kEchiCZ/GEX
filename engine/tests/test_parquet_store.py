@@ -276,3 +276,46 @@ def test_measured_bar_closes_vynechava_doplnene(tmp_path: Path) -> None:
     writer.write_bars("NQ", day, [live, hist])
     assert writer.measured_bar_closes("NQ", day) == {t0: 29100.0}
     assert writer.measured_bar_closes("NQ", dt.date(2026, 9, 16)) == {}
+
+
+def _bar_row(ts: dt.datetime, close: float):
+    from gexlens_engine.ibkr.underlying import Bar
+
+    return Bar(ts=ts, open=close, high=close, low=close, close=close, volume=1.0, source=None)
+
+
+def test_buffery_starych_dnu_se_uvolni_a_soubor_zustane(tmp_path: Path) -> None:
+    """#1247: partice starší než dnes−1 se z paměti zahodí; na disku zůstává kompletní."""
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    days = [dt.date(2026, 9, 20), dt.date(2026, 9, 21), dt.date(2026, 9, 22)]
+    for index, day in enumerate(days):
+        ts = dt.datetime.combine(day, dt.time(13, 30), tzinfo=dt.UTC)
+        writer.write_bars("NQ", day, [_bar_row(ts, 30000.0 + index)])
+
+    stats = writer.buffer_stats()
+    assert stats["partitions"] == 2  # 21. a 22. 9.; 20. 9. uvolněno
+    first = tmp_path / "derived" / "NQ" / "bars" / "2026-09-20.parquet"
+    assert first.exists()
+    assert len(pd.read_parquet(first)) == 1
+
+    # Pozdní zápis do uvolněného dne si particii načte a řádek nepřepíše
+    late = dt.datetime.combine(days[0], dt.time(14, 0), tzinfo=dt.UTC)
+    writer.write_bars("NQ", days[0], [_bar_row(late, 29999.0)])
+    reloaded = pd.read_parquet(first)
+    assert len(reloaded) == 2
+    assert set(reloaded["close"]) == {30000.0, 29999.0}
+
+
+def test_strop_velikosti_evikuje_nejdele_nepouzity(tmp_path: Path) -> None:
+    """#1247: druhá pojistka — nad stropem se zahazuje od nejdéle nepoužívaného."""
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    writer.buffer_max_bytes = 1  # každý neprázdný buffer strop překročí
+    day = dt.date(2026, 9, 22)
+    ts = dt.datetime.combine(day, dt.time(13, 30), tzinfo=dt.UTC)
+    for symbol in ("ES", "NQ", "QQQ"):
+        writer.write_bars(symbol, day, [_bar_row(ts, 100.0)])
+    # Zůstává jen poslední zapisovaná partice
+    assert writer.buffer_stats()["partitions"] == 1
+    for symbol in ("ES", "NQ", "QQQ"):
+        path = tmp_path / "derived" / symbol / "bars" / f"{day.isoformat()}.parquet"
+        assert len(pd.read_parquet(path)) == 1

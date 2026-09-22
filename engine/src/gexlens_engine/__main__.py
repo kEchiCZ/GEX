@@ -3021,6 +3021,10 @@ async def main() -> None:
                 # Podíl Arrow poolu na RSS (#1105, 15. 9.) — kolik z paměti
                 # enginu drží pyarrow (partice), ne Python
                 memory_arrow_mb=memory_watch.last_arrow_mb,
+                # Živé buffery partic (#1247): po evikci starých dnů nesmí
+                # počet ani objem růst napříč dny běhu
+                partition_buffers=writer.buffer_stats()["partitions"],
+                partition_buffer_mb=round(writer.buffer_stats()["bytes"] / 1e6, 1),
                 # Zdroj znaménka CumΔ a denní pokrytí tisky (ADR-0032, #615
                 # krok 5) — UI ukazuje podíl objemu se stranou od burzy,
                 # ne smyšlenou šířku zóny
