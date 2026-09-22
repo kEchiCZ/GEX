@@ -312,6 +312,7 @@ aktualizaci chová jako Ridge vše.</p>
 <li><strong>Blobs</strong> — gaussovské „bubliny“ kolem koncentrací; zvýrazní ohniska positioningu</li>
 </ul>
 <h3>Contours (izolinie)</h3>
+<p><img src="img/graf-kontury-dyngex.png" alt="Dyn GEX s konturami Major + Flip (NQ, 22. 9. 2026)"></p>
 <p>Bílé přerušované vrstevnice nad vyhlazeným polem. Prahy jsou <strong>procenta síly
 z 99. percentilu pole, zvlášť za kladnou a zápornou stranu</strong> — na každé straně
 tedy vždy uvidíš dvě čáry bez ohledu na to, jak silný den je:</p>
@@ -1157,7 +1158,11 @@ běží <strong>odpočet do US openu</strong> (9:30 New York, DST-korektně).</p
 </thead>
 <tbody><tr>
 <td><strong>Shrnutí dne</strong> (v1.16, #1090)</td>
-<td>Přes celou šířku nahoře. <strong>Trend a směr</strong> (čtení z karty Trend); <strong>Verdikt dne</strong> — <em>Spíše LONG den / Spíše SHORT den / Bez převahy / Počkat na tisk</em> z hlasování s pevnými vahami (ADR-0035 §3: trend vyšších TF ±2, nižších ±1, tendence ±1/±2, potvrzený sentiment ±1, overnight vs. včerejší close ±1, ΔOI ±1 při převaze ≥ 10 %, gamma: negativní +1 ve směru trendu, pozitivní táhne skóre k nule; práh ±3) — každý hlas má vypsaný důvod, chybějící data = nulový hlas „bez dat&quot;; High-impact zpráva před US openem = „Počkat na tisk&quot;. <strong>Úrovně obratu</strong> — jeden seznam podle vzdálenosti od ceny: gamma (flip, zdi, těžiště), PDH/PDL/PDC, ONH/ONL, ±EM, denní EMA20; role odpor/podpora, konfluence úrovní do 0,1 % ceny. <strong>Zprávy dne</strong> — čas v Praze, směr překvapení z konvence řady („nad konsensem = risk-off&quot;), typická velikost z naměřených reakcí kategorie (medián |ret| v 5/15/60 min, n), nebo poctivé „bez měřené reakce&quot;. Verdikt je <strong>heuristika</strong> — ukládá se per seance a symbol a engine po settle doplní výsledek (pohyb US open → settle v bodech i v EM, zásah verdiktu); track record je ve <strong>Stats → Verdikt dne</strong> (zásah per verdikt, souhlas per složka hlasování, Wilsonova dolní mez, brána n ≥ 30 seancí); váhy se mění jen dodatkem ADR (#1091). Tlačítko ☀ dává tytéž řádky do plánu v deníku.</td>
+<td>Přes celou šířku nahoře. <strong>Trend a směr</strong> (čtení z karty Trend); <strong>Verdikt dne</strong> — <em>Spíše LONG den / Spíše SHORT den / Bez převahy / Počkat na tisk</em> z hlasování s pevnými vahami (ADR-0035 §3: trend vyšších TF ±2, nižších ±1, tendence ±1/±2, potvrzený sentiment ±1, overnight vs. včerejší close ±1, ΔOI ±1 při převaze ≥ 10 %, gamma: negativní +1 ve směru trendu, pozitivní táhne skóre k nule — <strong>po útesu ≥ 50 % gammy minulé seance pozitivní gamma nehlasuje</strong> (v1.18, #1241: tenká gamma netlumí); práh ±3) — každý hlas má vypsaný důvod, chybějící data = nulový hlas „bez dat&quot;; High-impact zpráva před US openem = „Počkat na tisk&quot;. <strong>Úrovně obratu</strong> — jeden seznam podle vzdálenosti od ceny: gamma (flip, zdi, těžiště), PDH/PDL/PDC, ONH/ONL, ±EM, denní EMA20; role odpor/podpora, konfluence úrovní do 0,1 % ceny. <strong>Zprávy dne</strong> — čas v Praze, směr překvapení z konvence řady („nad konsensem = risk-off&quot;), typická velikost z naměřených reakcí kategorie (medián |ret| v 5/15/60 min, n), nebo poctivé „bez měřené reakce&quot;. Verdikt je <strong>heuristika</strong> — ukládá se per seance a symbol a engine po settle doplní výsledek (pohyb US open → settle v bodech i v EM, zásah verdiktu); track record je ve <strong>Stats → Verdikt dne</strong> (zásah per verdikt, souhlas per složka hlasování, Wilsonova dolní mez, brána n ≥ 30 seancí); váhy se mění jen dodatkem ADR (#1091). Tlačítko ☀ dává tytéž řádky do plánu v deníku.</td>
+</tr>
+<tr>
+<td><strong>Ranní checklist</strong> (v1.18, #1241)</td>
+<td>Šest bodů, které 21. 9. 2026 (trendový den po kvartálním OPEX, NQ +580 b od 15:30) měly odpověď v datech, ale byly roztroušené po panelech: <strong>útes gammy</strong> minulé seance (≥ 50 % = den rozsahu, ne pinu), <strong>vyšší TF trend</strong> (bias dne), <strong>nejbližší zeď s dominancí</strong> (&lt; 25 % = slabá zeď → průraz pravděpodobnější než odraz), <strong>gap vůči PDC a flipu</strong> (≥ 0,4 % a držení = komprese před průrazem ve směru gapu), <strong>tendence a Max Pain</strong> (váhu mají až posledních 90 min do expirace; přes den jen informace, dokud se mapa hýbe), <strong>riziko</strong> (max 50 $ / obchod, −100 $ = konec dne, 15 min pauza po stopu, max 4 obchody). ▲ = signál pro dnešek, ● = sledovat, ○ = v normálu, — = bez dat. Viz kap. 21b.</td>
 </tr>
 <tr>
 <td><strong>Trend</strong> (v1.16, #1089)</td>
@@ -1268,6 +1273,83 @@ je v kostře VŽDY, i když data chybí — potvrzení, že jste o volatilitě
 přemýšleli, není závislé na tom, jestli ji zrovna bylo z čeho spočítat.
 Ranní rituál: otevřít Briefing → projít karty → ☀ → dopsat tezi.</p>
 <hr>
+<h2>11g. Trendový den po expiraci — co bylo vidět a na co se dívat (v1.18, #1241)</h2>
+<p>Poučení z <strong>pondělí 21. 9. 2026</strong> (první seance po kvartální expiraci 18. 9.):
+NQ šlo od 15:30 z 30 220 na 30 800 (+580 b) prakticky bez pullbacku, ES
+7 760 → 7 842. Aplikace měla všechny signály, ale verdikt dne byl „bez převahy&quot;,
+tendence hlásila short a v RTH nevznikl jediný long setup na NQ.</p>
+<p><img src="img/graf-zdi-dominance.png" alt="Zdi s dominancí (Vrstvy → Zdi + 2. zeď)"></p>
+<p><strong>Co v datech bylo před openem</strong></p>
+<table>
+<thead>
+<tr>
+<th>signál</th>
+<th>kde v aplikaci</th>
+<th>hodnota 21. 9. 15:30</th>
+<th>co znamená</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>útes gammy z pátku</td>
+<td>Briefing → Ranní checklist; Stats → gamma útes</td>
+<td>ES 83 %, NQ 44 % (OPEX)</td>
+<td>struktura, která držela cenu, zmizela — den rozsahu</td>
+</tr>
+<tr>
+<td>vyšší TF trend</td>
+<td>Briefing → Trend</td>
+<td>týden/den rostoucí</td>
+<td>bias LONG</td>
+</tr>
+<tr>
+<td>gap-and-hold</td>
+<td>Graf: cena vs. PDC a flip</td>
+<td>+210 b nad pátečním settle, nad flipem, 2,5 h komprese těsně pod call zdí 30 300</td>
+<td>připravený průraz</td>
+</tr>
+<tr>
+<td>dominance zdi</td>
+<td>Graf: cenovka zdi („Call zeď 30300 · 18 %&quot;)</td>
+<td>18 % (běžně 35–56 %)</td>
+<td>slabá zeď = průraz, ne odraz</td>
+</tr>
+<tr>
+<td>mapa se hýbe</td>
+<td>Graf: čára call zdi po openu</td>
+<td>30 300 → 30 450 → 30 500 → 30 650 za 60 min</td>
+<td>momentum, ne pin — pullbacky jsou vstupy, ne důvod k fade</td>
+</tr>
+</tbody></table>
+<p><strong>Co aplikace řekla špatně (a co je od v1.18 jinak)</strong></p>
+<ul>
+<li>Verdikt dne „bez převahy&quot;: hlasy tendence −1, ΔOI put −1 a „pozitivní gamma tlumí&quot; −1
+vyrušily trend +3. Nově po útesu ≥ 50 % gamma nehlasuje.</li>
+<li>Tendence short/strong short při +400 b: hlasy „poloha mezi zdmi&quot; a „Max Pain&quot; jsou
+mean-reversion. Nově poloha nehlasuje u zdi s dominancí &lt; 25 % nebo u zdi, která se
+za 30 min posunula ve směru ceny; Max Pain hlasuje jen ≤ 90 min do close.</li>
+<li>Setup T3 „Max Pain pin&quot; short s cílem 934 b pod cenou: nově jen do vzdálenosti
+šířky pásma zdí.</li>
+<li>Briefing v pondělí „overnight bez dat&quot;: PDC je nově settle poslední RTH seance,
+ne poslední minuta nedělního Globexu.</li>
+</ul>
+<p><strong>Ranní checklist (kartu najdeš v Briefingu nahoře)</strong></p>
+<ol>
+<li>Útes gammy minulé seance ≥ 50 % ⇒ čekej rozsah, fade zdí až po potvrzení.</li>
+<li>Vyšší TF trend = bias dne; proti němu jen s potvrzením (tendence otočená
+≥ 15 min + cena za těžištěm) a polovičním sizingem.</li>
+<li>Nejbližší zeď a její dominance: pod 25 % je zeď slabá — vstup na 5min akceptaci
+za zdí, stop pod konsolidaci, cíl další zeď.</li>
+<li>Gap ≥ 0,4 % a držení nad flipem = komprese před průrazem ve směru gapu.</li>
+<li>Po průrazu sleduj čáru zdi: dokud se posouvá za cenou, pullbacky k EMA20 jsou
+vstupy (T7). Fade až když se zeď zastaví a dominance vzroste.</li>
+<li>Tendenci a Max Pain ber přes den jen jako informaci; váhu mají posledních 90 min.</li>
+<li>Riziko v $ před vstupem (max 50 $), −100 $ = konec dne, 15 min pauza po stopu,
+max 4 obchody (z review #1188).</li>
+</ol>
+<p><strong>Kde zapnout zdi:</strong> Graf → <strong>Vrstvy</strong> → <em>Zdi</em> (call/put čára s cenovkou a dominancí
+v %) a <em>2. zeď</em> (tečkovaně); dropdown <strong>Walls</strong> (Peak / Smooth / Ridge) kreslí zelené
+pásy zdí v heatmapě. Když cena „uteče&quot; z grafu (uživatelem přiblížený rozsah),
+ikona ↻ vpravo nahoře v grafu vrátí automatický rozsah.</p>
 <h2>12. IBKR Console — zrušena (sloučeno do Settings)</h2>
 <p>Obrazovka je od srpna 2026 pryč: nenesla nic unikátního a navíc posílala
 enginu rozepsané hodnoty při psaní (bez tlačítka Uložit). Kde co najdeš teď:</p>
@@ -2108,7 +2190,9 @@ roku). Pinovaný kontrakt <strong>nahrazuje</strong> automatický (stejný poče
 a market data lines), platí až do expirace a v hlavičce nese štítek
 <code>📌 kontrakt U6</code>. Má vlastní historii (setupy, statistiky) oddělenou od <code>ES</code>;
 po expiraci ho z watchlistu odeber (engine hlásí chybu setupu).</p>
-<p><strong>Magnet úrovně (#1223).</strong> Chip v hlavičce (🧲 / 📌 / ⚖️) a věta v Briefingu
+<p><strong>Magnet úrovně (#1223).</strong></p>
+<p><img src="img/hlavicka-magnet.png" alt="Chip magnetu v hlavičce — pozitivní gamma lepí cenu k těžišti"></p>
+<p>Chip v hlavičce (🧲 / 📌 / ⚖️) a věta v Briefingu
 nad verdiktem říkají jednou větou, kam dnešní positioning cenu <strong>tlačí</strong>
 (negativní gamma → nejbližší put wall pod cenou, případně call wall nad ní),
 kam ji <strong>lepí</strong> (pozitivní gamma → těžiště GEX) nebo že je <strong>na hraně</strong> (±5 b
