@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from gexlens_engine.config import Settings
+from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.parquet_store import (
     SNAPSHOT_SCHEMA,
     PrintVolRow,
@@ -278,9 +279,7 @@ def test_measured_bar_closes_vynechava_doplnene(tmp_path: Path) -> None:
     assert writer.measured_bar_closes("NQ", dt.date(2026, 9, 16)) == {}
 
 
-def _bar_row(ts: dt.datetime, close: float):
-    from gexlens_engine.ibkr.underlying import Bar
-
+def _bar_row(ts: dt.datetime, close: float) -> Bar:
     return Bar(ts=ts, open=close, high=close, low=close, close=close, volume=1.0, source=None)
 
 
