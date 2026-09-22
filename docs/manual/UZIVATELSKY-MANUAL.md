@@ -240,6 +240,8 @@ aktualizaci chová jako Ridge vše.
 
 ### Contours (izolinie)
 
+![Dyn GEX s konturami Major + Flip (NQ, 22. 9. 2026)](img/graf-kontury-dyngex.png)
+
 Bílé přerušované vrstevnice nad vyhlazeným polem. Prahy jsou **procenta síly
 z 99. percentilu pole, zvlášť za kladnou a zápornou stranu** — na každé straně
 tedy vždy uvidíš dvě čáry bez ohledu na to, jak silný den je:
@@ -1720,7 +1722,11 @@ a market data lines), platí až do expirace a v hlavičce nese štítek
 `📌 kontrakt U6`. Má vlastní historii (setupy, statistiky) oddělenou od `ES`;
 po expiraci ho z watchlistu odeber (engine hlásí chybu setupu).
 
-**Magnet úrovně (#1223).** Chip v hlavičce (🧲 / 📌 / ⚖️) a věta v Briefingu
+**Magnet úrovně (#1223).**
+
+![Chip magnetu v hlavičce — pozitivní gamma lepí cenu k těžišti](img/hlavicka-magnet.png)
+
+Chip v hlavičce (🧲 / 📌 / ⚖️) a věta v Briefingu
 nad verdiktem říkají jednou větou, kam dnešní positioning cenu **tlačí**
 (negativní gamma → nejbližší put wall pod cenou, případně call wall nad ní),
 kam ji **lepí** (pozitivní gamma → těžiště GEX) nebo že je **na hraně** (±5 b
