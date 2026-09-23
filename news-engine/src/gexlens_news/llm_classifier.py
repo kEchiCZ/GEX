@@ -22,7 +22,7 @@ from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import case, func, insert, select, update
+from sqlalchemy import case, exists, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import (
@@ -263,8 +263,10 @@ class LlmClassificationJob:
         return self._requests
 
     def _pending(self, *, high_impact_only: bool) -> list[Any]:
-        already = select(news_classifications.c.event_id).where(
-            news_classifications.c.source == LLM_SOURCE
+        # NOT EXISTS místo NOT IN — viz classification_job (#1257)
+        already = exists().where(
+            news_classifications.c.event_id == news_events.c.id,
+            news_classifications.c.source == LLM_SOURCE,
         )
         stmt = (
             select(
@@ -275,7 +277,7 @@ class LlmClassificationJob:
                 news_events.c.source,
                 news_events.c.kind,
             )
-            .where(news_events.c.id.not_in(already))
+            .where(~already)
             .where(news_events.c.kind != "scheduled")
             # Řadí se podle MENŠÍHO z (ts_event, ts_ingested) — #552 L2. `ts_event`
             # je plně pod kontrolou feedu, takže položka datovaná do budoucna by

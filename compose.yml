@@ -25,6 +25,11 @@ services:
     restart: unless-stopped
     image: postgres:16
     logging: *default-logging
+    # work_mem 64 MB (#1257): s defaultem 4 MB přestal PostgreSQL hashovat
+    # `NOT IN (subquery)` nad ~250 k klasifikací a job news-engine běžel 23 min
+    # na 190 % CPU. Dotazy jsou přepsané na NOT EXISTS, tohle je druhá pojistka
+    # a reprodukovatelná podoba `ALTER SYSTEM` z 23. 9. 2026 (platí i na čistém svazku)
+    command: ["postgres", "-c", "work_mem=64MB"]
     environment:
       POSTGRES_USER: gexlens
       POSTGRES_PASSWORD: ${GEXLENS_PG_PASSWORD:?chybí GEXLENS_PG_PASSWORD — vygeneruj přes scripts/init-secrets.ps1}

@@ -16,6 +16,13 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-09-23 — PostgreSQL 190 % CPU v RTH (#1257): `NOT IN (subquery)` přestal být hashovaný.**
+  Job news-engine s `id NOT IN (SELECT event_id …)` běžel 23 min; do té doby milisekundy. Příčina není
+  v kódu jobu jako takovém, ale v růstu tabulky: hash 264 k řádků se přestal vejít do `work_mem` 4 MB
+  a plánovač spadl na Materialize + Filter per řádek (O(N·M)). Odhalilo `pg_stat_activity` (3 backendy
+  s týmž dotazem = 1 dotaz + 2 paralelní workery) a `EXPLAIN` (`NOT (SubPlan)` bez slova `hashed`).
+  → Anti-join psát jako `NOT EXISTS`, ne `NOT IN`; `work_mem` nastavit v compose; při „něco je pomalé"
+  nejdřív `docker stats` + `pg_stat_activity` — pomalý test výkonu byl symptom, ne příčina.
 - **2026-09-19 — falešný P1 „tichý tasty stream v RTH" (#1228): byla sobota.** Z „0 eventů DXLink",
   „IBKR bez kotací" a „KPI rth_minutes 0" složen incident, přitom trh byl zavřený; den v týdnu převzat
   ze souhrnu kontextu, nikdo ho neověřil. Odhalilo `outside_us_rth(now)` v kontejneru.

@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import delete, exists, func, insert, select
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import (
@@ -191,8 +191,10 @@ class NgramShadowJob:
         has_other = select(news_classifications.c.event_id).where(
             news_classifications.c.source != NGRAM_SOURCE
         )
-        has_ngram = select(news_classifications.c.event_id).where(
-            news_classifications.c.source == NGRAM_SOURCE
+        # NOT EXISTS místo NOT IN — viz classification_job (#1257)
+        has_ngram = exists().where(
+            news_classifications.c.event_id == news_events.c.id,
+            news_classifications.c.source == NGRAM_SOURCE,
         )
         stmt = (
             select(
@@ -205,7 +207,7 @@ class NgramShadowJob:
             )
             .where(
                 news_events.c.id.in_(has_other),
-                news_events.c.id.not_in(has_ngram),
+                ~has_ngram,
                 news_events.c.kind != "scheduled",
                 news_events.c.title.is_not(None),
                 news_events.c.ts_event >= now - dt.timedelta(days=self._recent_days),
