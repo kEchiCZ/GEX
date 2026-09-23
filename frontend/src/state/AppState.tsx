@@ -1,5 +1,6 @@
 /** Globální stav aplikace: pipeline status z WS, view, téma, alerty, přepínače. */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import type { MapStateInfo } from '../instrument/mapstate'
 import type { ReactNode } from 'react'
 import { LiveSocket } from '../api/ws'
 import type { Coverage } from '../instrument/coverage'
@@ -90,6 +91,8 @@ export interface PipelineStatus {
   tasty_extended_expiries?: Record<string, string[]>
   /** Aktivní ad-hoc pohledy přes tasty (#521 C) — hlavička jimi značí zdroj. */
   tasty_adhoc?: string[]
+  /** Stav „tenká mapa" per symbol (#1245). Klíč CHYBÍ, když kolektor neběží. */
+  map_state?: Record<string, MapStateInfo>
   updated_at?: number | null
 }
 

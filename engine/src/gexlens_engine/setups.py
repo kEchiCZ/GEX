@@ -318,6 +318,8 @@ class SetupEngine:
                 band_metrics_version=(
                     int(band["band_metrics_version"]) if "band_metrics_version" in band else None
                 ),
+                # Stav mapy téže minuty (#1245) — kolektor běží před detektorem
+                thin_map=runtime.thin_map,
             )
             await asyncio.to_thread(
                 self.feature_writer.write_features, self.symbol, now.date(), [row]

@@ -2730,6 +2730,12 @@ tr.setup-shadow td[data-part='risk'] {
   font-weight: 600;
 }
 
+/* Tenká mapa (#1245): stejná barva jako magnet push — „nic nedrží" */
+.thin-map-chip {
+  font-weight: 600;
+  color: #f28b82;
+}
+
 .magnet-push {
   color: #f28b82;
 }

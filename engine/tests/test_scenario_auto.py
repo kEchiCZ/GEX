@@ -316,7 +316,7 @@ def test_verdikt_po_utesu_gamma_nehlasuje() -> None:
     from gexlens_engine.compute.dayverdict import VerdictInput, day_verdict
     from gexlens_engine.compute.trend import TrendReport
 
-    def inp(cliff: float | None) -> VerdictInput:
+    def inp(cliff: float | None, thin: bool | None = None) -> VerdictInput:
         return VerdictInput(
             trend=TrendReport(higher="up", lower="up", expected="up", by_timeframe=()),
             positive_gamma=True,
@@ -331,6 +331,7 @@ def test_verdikt_po_utesu_gamma_nehlasuje() -> None:
             oi_put_total=None,
             news_before_open=False,
             cliff_share=cliff,
+            thin_map=thin,
         )
 
     plain = day_verdict(inp(None))
@@ -339,3 +340,9 @@ def test_verdikt_po_utesu_gamma_nehlasuje() -> None:
     gamma_cliffed = next(v for v in cliffed.votes if v.name == "gamma")
     assert gamma_plain.vote == -1 and gamma_cliffed.vote == 0
     assert cliffed.score == plain.score + 1
+    # Tenká mapa (#1245) nuluje stejně; souběh s útesem = JEDEN hlas s oběma důvody
+    thin = next(v for v in day_verdict(inp(None, True)).votes if v.name == "gamma")
+    both = next(v for v in day_verdict(inp(0.83, True)).votes if v.name == "gamma")
+    assert thin.vote == 0 and "tenká" in thin.reason
+    assert both.vote == 0 and "útesu" in both.reason and "tenká" in both.reason
+    assert day_verdict(inp(0.83, True)).score == cliffed.score

@@ -5,6 +5,7 @@ import type { Coverage } from '../instrument/coverage'
 import { expiryCountdown, expiryIsoDate, expiryKind, expirySettleUtc } from '../instrument/expiry'
 import { isFutures, pinnedContract, symbolRoot } from '../instrument/ticker'
 import { MAGNET_SOURCE_LABELS, magnetChipText, magnetGlyph } from '../instrument/magnet'
+import { mapStateLabel, mapStateTooltip } from '../instrument/mapstate'
 import { outsideUsRth } from '../instrument/marketclock'
 import { formatSettleWatch } from '../instrument/settlewatch'
 import { REGIME_HINTS, REGIME_LABELS } from '../instrument/regime'
@@ -271,6 +272,17 @@ export function InstrumentHeader({
         <PaperChip account={paperAccount} symbol={symbol} onChanged={refreshPaper} />
         {/* Gamma útes (#576): kolik gammy dnešní expirací odpadne — jen informace */}
         <GammaCliffChip symbol={symbol} />
+        {/* Tenká mapa (#1245): co z pozicování TEĎ zbylo — chip jen ve stavu thin,
+        „mapa OK" by byl šum; tooltip nese podmínky i to, co z toho plyne */}
+        {status.map_state?.[symbol]?.thin && (
+          <span
+            className="chip thin-map-chip"
+            data-testid="thin-map-chip"
+            title={mapStateTooltip(status.map_state[symbol])}
+          >
+            ◌ {mapStateLabel(status.map_state[symbol])}
+          </span>
+        )}
         {/* Magnet úrovně (#1223): kam positioning tlačí/lepí cenu a kdy tlak zmizí */}
         {magnetInfo && (
           <span

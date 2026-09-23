@@ -271,6 +271,7 @@ class ScenarioGenerator:
                 oi_put_total=ctx.oi_put_total,
                 news_before_open=ctx.news_before_open,
                 cliff_share=ctx.cliff_share,
+                thin_map=runtime.thin_map,
             )
         )
         rationale = _rationale(verdict, ctx)

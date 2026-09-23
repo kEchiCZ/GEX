@@ -220,7 +220,7 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 }
 
 export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedMove | null }) {
-  const { symbol, selectedExpiry, setJournalDraft, setView, regimeInfo } = useAppState()
+  const { symbol, selectedExpiry, setJournalDraft, setView, regimeInfo, status } = useAppState()
   const dateIso = sessionDateIso()
 
   const [bars, setBars] = useState<RangeSummary | null>(null)
@@ -375,8 +375,9 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
         oiDelta,
         newsBeforeOpen: newsToday.some((item) => item.highImpact && item.beforeOpen),
         cliffShare: prevCliff?.cliff_share ?? null,
+        thinMap: status.map_state?.[symbol]?.thin ?? null,
       }),
-    [trend, levels, tendencyBand, symbolSentiment, bars, prevDay, oiDelta, newsToday, prevCliff],
+    [trend, levels, tendencyBand, symbolSentiment, bars, prevDay, oiDelta, newsToday, prevCliff, status.map_state, symbol], // prettier-ignore
   )
   // Uložení verdiktu (#1090): až když dorazily svíčky trendu a stav se ustálí
   // (VERDICT_POST_DELAY_MS) — při načítání se vstupy sypou po jednom a dva
@@ -432,6 +433,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     return morningChecklist({
       prevCliffShare: prevCliff?.cliff_share ?? null,
       prevCliffOpex: prevCliff?.is_opex ?? false,
+      mapState: status.map_state?.[symbol] ?? null,
       trend,
       price: bars?.last ?? null,
       prevClose: prevDay?.last ?? null,
@@ -443,7 +445,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
       tendencyBand,
       minutesToExpiry: settle ? Math.round((settle.getTime() - now) / 60_000) : null,
     })
-  }, [prevCliff, trend, bars, prevDay, levels, tendencyBand, selectedExpiry, now])
+  }, [prevCliff, status.map_state, symbol, trend, bars, prevDay, levels, tendencyBand, selectedExpiry, now]) // prettier-ignore
 
   const fmt = (value: number | null | undefined) =>
     value === null || value === undefined ? '—' : String(value)

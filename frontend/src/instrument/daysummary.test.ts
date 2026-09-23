@@ -137,7 +137,7 @@ describe('dayVerdict', () => {
     expect(result.votes.map((vote) => vote.name)).toEqual(['trend_higher', 'trend_lower', 'tendency', 'sentiment', 'overnight', 'oi_delta', 'gamma']) // prettier-ignore
     expect(result.votes.every((vote) => vote.reason.length > 0)).toBe(true)
     expect(result.summary).toContain('Spíše long den (skóre +8)')
-    expect(VERDICT_RULES_VERSION).toBe(1)
+    expect(VERDICT_RULES_VERSION).toBe(3) // = engine dayverdict.VERDICT_RULES_VERSION
   })
 
   test('pozitivní gamma táhne skóre k nule; práh ±3', () => {
@@ -161,6 +161,21 @@ describe('dayVerdict', () => {
     })
     expect(none.score).toBe(2) // 2 + 0 + overnight 1 − gamma 1
     expect(none.verdict).toBe('none')
+  })
+
+  test('tenká mapa (#1245) nuluje gamma hlas; souběh s útesem = jeden hlas s oběma důvody', () => {
+    const input = { ...base, positiveGamma: true, tendencyBand: 'neutral', sentiment: null, oiDelta: null } // prettier-ignore
+    const plain = dayVerdict(input)
+    const thin = dayVerdict({ ...input, thinMap: true })
+    const both = dayVerdict({ ...input, thinMap: true, cliffShare: 0.83 })
+    const gamma = (v: ReturnType<typeof dayVerdict>) =>
+      v.votes.find((vote) => vote.name === 'gamma')!
+    expect(gamma(plain).vote).toBe(-1)
+    expect(gamma(thin).vote).toBe(0)
+    expect(gamma(thin).reason).toContain('tenká')
+    expect(gamma(both).reason).toMatch(/útesu 83 %.*tenká/)
+    expect(both.votes.filter((vote) => vote.name === 'gamma')).toHaveLength(1)
+    expect(both.score).toBe(plain.score + 1)
   })
 
   test('short zrcadlově; nepotvrzený sentiment nehlasuje', () => {

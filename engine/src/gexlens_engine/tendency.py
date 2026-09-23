@@ -64,6 +64,11 @@ class TendencyEngine:
         self._hysteresis = BandHysteresis()
         self._hysteresis_day: dt.date | None = None
 
+    @property
+    def max_pain(self) -> float | None:
+        """Max Pain aktivní expirace z posledního obnovení — sdílí ho stav mapy (#1245)."""
+        return self._max_pain
+
     def _refresh_max_pain(self, expiry: str, today: dt.date) -> None:
         """Max Pain z denního archivu OI; přepočet při KAŽDÉ změně snímku (#826).
 

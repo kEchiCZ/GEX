@@ -3,6 +3,8 @@ kvartálním OPEX, NQ +580 b od 15:30) měly odpověď v datech, ale Briefing je
 nesložil. Čistá funkce nad tím, co Briefing už načítá: útes gammy minulé
 seance, vyšší TF trend, nejbližší zeď a její dominance, gap vůči PDC a flipu,
 tendence, minuty do expirace. Každý bod nese hodnotu, verdikt a co dělat. */
+import type { MapStateInfo } from './mapstate'
+import { mapStateLabel } from './mapstate'
 import type { TrendReport } from './trend'
 
 export type CheckStatus = 'go' | 'watch' | 'calm' | 'na'
@@ -21,6 +23,8 @@ export interface MorningCheckInput {
   /** Podíl gammy, který odpadl expirací minulé seance (0–1). */
   prevCliffShare: number | null
   prevCliffOpex: boolean
+  /** Stav mapy TEĎ (#1245) z /status; null = kolektor neběží. */
+  mapState: MapStateInfo | null
   trend: TrendReport | null
   price: number | null
   prevClose: number | null
@@ -66,6 +70,28 @@ export function morningChecklist(input: MorningCheckInput): CheckItem[] {
       value: `odpadlo ${pct(input.prevCliffShare)}`,
       status: 'calm',
       action: 'Mapa z minulé seance z větší části platí — zdi mají svou váhu.',
+    })
+  }
+
+  // 1b. Stav mapy teď (#1245): co zbylo, ne co odpadlo
+  if (input.mapState === null) {
+    items.push({ key: 'map', label: 'Stav mapy', value: '—', status: 'na', action: 'Engine stav mapy nevyhodnocuje (map_state_enabled).' }) // prettier-ignore
+  } else if (input.mapState.thin) {
+    items.push({
+      key: 'map',
+      label: 'Stav mapy',
+      value: mapStateLabel(input.mapState),
+      status: 'go',
+      action:
+        'Tenká mapa: nic netlumí a nic nepinuje — čekej delší pohyby v obou směrech; setupy od zdi a pin k Max Pain vynech, dokud se mapa neobnoví.',
+    })
+  } else {
+    items.push({
+      key: 'map',
+      label: 'Stav mapy',
+      value: mapStateLabel(input.mapState),
+      status: 'calm',
+      action: 'Mapa má strukturu — zdi a Max Pain mají svou váhu.',
     })
   }
 

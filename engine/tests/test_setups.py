@@ -623,6 +623,8 @@ class FakeRuntime:
         # Dyn GEX profil minuty — SetupEngine z něj počítá hranice gamma masy (#600).
         # None = minuta profil nemá; orchestrační testy na hranicích nestojí.
         self.last_profile: GexProfile | None = None
+        # Stav mapy (#1245) — None = kolektor v testu neběží
+        self.thin_map: bool | None = None
 
     def current_quotes(self) -> dict[object, object]:
         """Aktivní zdroj řetězu (#614 fáze 2b) — bez fallbacku prostě sweep cache."""

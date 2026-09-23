@@ -16,6 +16,7 @@ const trendUp: TrendReport = {
 const nq2109 = {
   prevCliffShare: 0.437,
   prevCliffOpex: true,
+  mapState: null,
   trend: trendUp,
   price: 30240,
   prevClose: 30029.5,
@@ -60,10 +61,20 @@ test('ES po OPEX: útes 83 % = den rozsahu; v posledních 90 min pin má váhu; 
   expect(items.cliff.value).toBe('odpadlo 83 % (OPEX)')
   expect(items.wall.status).toBe('calm')
   expect(items.pin.status).toBe('watch')
+  // Stav mapy (#1245): tenká = signál, se strukturou = v normálu, bez kolektoru = bez dat
+  const thinState = { thin: true, thin_gamma: true, weak_walls: true, fused: false, reasons: [], gex_abs: 1, gamma_abs: 0.1, spread_pct: 0.01, version: 1 } // prettier-ignore
+  const thin = Object.fromEntries(morningChecklist({ ...nq2109, mapState: thinState }).map((i) => [i.key, i])) // prettier-ignore
+  expect(thin.map.status).toBe('go')
+  expect(thin.map.value).toBe('tenká mapa (2/3)')
+  expect(thin.map.action).toContain('nic nepinuje')
+  const solid = Object.fromEntries(morningChecklist({ ...nq2109, mapState: { ...thinState, thin: false, thin_gamma: false, weak_walls: true } }).map((i) => [i.key, i])) // prettier-ignore
+  expect(solid.map.status).toBe('calm')
+  expect(items.map.status).toBe('na')
   const empty = Object.fromEntries(
     morningChecklist({
       prevCliffShare: null,
       prevCliffOpex: false,
+      mapState: null,
       trend: null,
       price: null,
       prevClose: null,

@@ -85,6 +85,8 @@ class Settings(BaseSettings):
     t6_collector_enabled: bool = True
     # Gamma útes po expiraci (#576, fáze 1 jen měření)
     gamma_cliff_enabled: bool = True
+    # Stav „tenká mapa" (#1245, fáze 1 jen měření a chip) — historie v PG `map_state`
+    map_state_enabled: bool = True
     # Cenové alerty na úrovně (#675): práh přiblížení v násobcích kroku striků
     # (škáluje per symbol — ES krok 5 b, NQ širší); 0 = vypnuto
     level_alert_near_steps: float = Field(default=1.0, ge=0)

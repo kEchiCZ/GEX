@@ -109,6 +109,9 @@ FEATURES_SCHEMA = pa.schema(
         # Verze definice pásmových metrik (#952). Trénovací matice #794
         # nesmí míchat hodnoty z různých definic hloubky.
         ("band_metrics_version", pa.int64()),
+        # Stav „tenká mapa" (#1245): NULL = nevyhodnoceno (kolektor vypnutý
+        # nebo bez historie prahů), jinak zda aspoň 2 ze 3 podmínek platily
+        ("thin_map", pa.bool_()),
     ]
 )
 
@@ -675,6 +678,7 @@ class FeatureRow:
     band_sharpness_pct: float | None
     band_depth: float | None
     band_metrics_version: int | None
+    thin_map: bool | None = None
 
 
 #: Kolik dní partic se drží v paměti (#1247). Dnešek a včerejšek: seance
