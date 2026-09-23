@@ -221,7 +221,8 @@ def test_options_ze_settings_nenese_klic_v_repr() -> None:
     options = ExplainOptions.from_settings(settings)
     assert options.api_key == "sk-tajne" and options.enabled and options.daily_tokens == 5
     assert "sk-tajne" not in repr(options)
-    assert ExplainOptions.from_settings(Settings()).api_key == ""
+    # Bez klíče v prostředí je prázdný; assert bez hodnoty, ať pytest při pádu nevypíše tajemství
+    assert not ExplainOptions.from_settings(Settings()).api_key
 
 
 def test_endpoint_mapuje_chyby_na_stavove_kody(

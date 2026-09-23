@@ -64,6 +64,18 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 2. Diagnostika (zastavil jsem se u první hypotézy)
 
+- **2026-09-23 — backfill svíček SPY „TimeoutError po 60 s" (#1253): živá subskripce nikdy neztichne.**
+  Sběr `Candle{=1m}` končil „3 s ticha", ale DXLink po historii dál posílá updaty právě tvořící se
+  minuty (u SPY v RTH každou chvíli) → ticho nenastalo, strop 60 s vše zahodil. Druhá vrstva: `until`
+  se sekundami pustil rozdělanou minutu mezi „díry", takže rekonstrukce ES/NQ ji hlásila každou minutu
+  znovu a nikdy nedoplnila. 14. 9. tentýž symptom připsán souběhu handshaků (zámek pomohl jen náhodou).
+  Odhalilo: log s časem tokenu (0,3 s) a nic dalšího 60 s → čas mizí až ve sběru, ne v připojení.
+  → U streamů rozlišovat „nová data" od „jakákoli zpráva"; při stropu vracet částečný výsledek a
+  logovat **fázi**, ve které se čas ztratil; okno s rozdělanou minutou vždy zarovnat na celé minuty.
+- **2026-09-23 — test tiskl klíč z `.env` (#1254).** `Settings()` v testu načetl skutečný `.env`,
+  assert `== ""` padl a pytest hodnotu vypsal do výstupu; v CI bez `.env` prošlo.
+  → Root `conftest.py` vypíná `env_file` pro všechny sady; asserty na tajemství psát jako
+  `assert not value` (při pádu se hodnota netiskne).
 - **2026-09-09 — #576: závěr „hypotéza se nepotvrzuje" stál na vadné metrice.** Korelace ≈ 0 z 35 seancí,
   přitom tabulka obsahovala anomálii (cliff_share 0,028 na OPEX), která byla chybou měření: |NetGEX|
   0DTE řetězu se před settle vynuluje (call/put se odečtou). Po opravě na hrubou gammu korelace +0,3.
