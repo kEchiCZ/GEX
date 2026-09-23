@@ -11,7 +11,7 @@ import datetime as dt
 import logging
 from typing import Any
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import exists, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import news_classifications, news_events
@@ -38,7 +38,12 @@ class RuleClassificationJob:
         # nepotřebuje hrubší pravidlovou navrch (a denormalizace by regresí
         # z llm na rule lhala). Scheduled eventy LLM nikdy nebere, takže směr
         # ze surprise_z dostávají vždy tady.
-        already = select(news_classifications.c.event_id)
+        # NOT EXISTS místo NOT IN (#1257): `NOT IN (subquery)` PostgreSQL hashuje
+        # jen když se hash vejde do work_mem; nad ~260 k klasifikací (23. 9. 2026)
+        # spadl na Materialize + Filter per řádek a jeden běh jobu trval 23+ min
+        # na ~190 % CPU. Anti-join přes index (event_id, version) je na velikosti
+        # nezávislý.
+        already = exists().where(news_classifications.c.event_id == news_events.c.id)
         stmt = (
             select(
                 news_events.c.id,
@@ -50,7 +55,7 @@ class RuleClassificationJob:
                 news_events.c.ts_event,
                 news_events.c.source,
             )
-            .where(news_events.c.id.not_in(already))
+            .where(~already)
             .order_by(news_events.c.ts_event.desc())
             .limit(limit)
         )
