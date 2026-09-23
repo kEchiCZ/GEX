@@ -24,6 +24,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -43,9 +44,15 @@ logger = logging.getLogger(__name__)
 #: Pole svíčky v pořadí, v jakém je server posílá v COMPACT formátu
 CANDLE_FIELDS = ["eventSymbol", "time", "open", "high", "low", "close", "volume"]
 
-#: Jak dlouho čekat na další dávku, než se sběr prohlásí za dokončený.
-#: Server posílá historii v dávkách a konec nijak neoznamuje.
+#: Jak dlouho čekat na další NOVOU minutu, než se sběr prohlásí za dokončený.
+#: Server posílá historii v dávkách a konec nijak neoznamuje. Ticho se měří
+#: jen nad novými minutami (#1253): subskripce `Candle{=1m}` je živá a po
+#: historii dál posílá updaty právě tvořící se minuty — u likvidního SPY
+#: v RTH každou chvíli, takže „3 s bez jakékoli zprávy" nikdy nenastalo,
+#: sběr vyčerpal celý strop a všechny dotažené minuty zahodil.
 QUIET_TIMEOUT_S = 3.0
+#: Kolik nejvýš čekat na PRVNÍ dávku historie (server ji musí vyhledat).
+FIRST_DATA_TIMEOUT_S = 15.0
 #: Tvrdý strop, ať jednorázový backfill nikdy nezablokuje start enginu
 TOTAL_TIMEOUT_S = 60.0
 
@@ -93,8 +100,12 @@ def missing_minutes(
     není co doplňovat.
     """
     minute = since.replace(second=0, microsecond=0)
+    # `until` se sekundami (typicky `now`) by rozdělanou minutu pustil dovnitř:
+    # 14:27:00 < 14:27:23 — a ta se doplnit nedá, každý běh ji hlásil jako
+    # díru a její živé updaty držely sběr až do stropu (#1253)
+    last = until.replace(second=0, microsecond=0)
     out: list[dt.datetime] = []
-    while minute < until:
+    while minute < last:
         if minute not in have:
             out.append(minute)
         minute += dt.timedelta(minutes=1)
@@ -126,6 +137,17 @@ def _row_to_bar(values: list[object]) -> CandleBar | None:
     )
 
 
+class _Progress:
+    """Co sběr zatím dotáhl a v jaké je fázi — pro diagnostiku i částečný výsledek."""
+
+    def __init__(self) -> None:
+        self.phase = "token"
+        self.by_minute: dict[dt.datetime, CandleBar] = {}
+
+    def bars(self) -> list[CandleBar]:
+        return [self.by_minute[key] for key in sorted(self.by_minute)]
+
+
 class CandleFetcher:
     """Jednorázové stažení 1min svíček z DXLink.
 
@@ -139,37 +161,55 @@ class CandleFetcher:
         token_source: Callable[[], Awaitable[tuple[str, str]]],
         *,
         quiet_timeout_s: float = QUIET_TIMEOUT_S,
+        first_data_timeout_s: float = FIRST_DATA_TIMEOUT_S,
+        total_timeout_s: float = TOTAL_TIMEOUT_S,
     ) -> None:
         self._token_source = token_source
         self._quiet_timeout_s = quiet_timeout_s
+        self._first_data_timeout_s = first_data_timeout_s
+        self._total_timeout_s = total_timeout_s
 
     async def fetch(self, request: CandleRange) -> list[CandleBar]:
         """Svíčky pro okno; prázdný seznam = nedostupné (nikdy nevyhazuje).
 
         Selhání backfillu nesmí shodit start enginu — díra v datech je horší
-        stav, ale pořád lepší než nespuštěná pipeline.
+        stav, ale pořád lepší než nespuštěná pipeline. Při stropu se vrátí,
+        co už dorazilo (uzavřené minuty jsou platné bez ohledu na to, jak
+        sběr skončil), a log říká, ve které fázi se čas ztratil (#1253).
         """
+        progress = _Progress()
+        started = time.monotonic()
         try:
-            return await asyncio.wait_for(self._fetch(request), timeout=TOTAL_TIMEOUT_S)
+            await asyncio.wait_for(self._fetch(request, progress), timeout=self._total_timeout_s)
         except Exception as error:
+            bars = progress.bars()
             logger.warning(
-                "Backfill svíček %s selhal (%s: %s) — díra zůstává, sběr běží dál",
+                "Backfill svíček %s selhal ve fázi %s po %.0f s (%s: %s) — %s",
                 request.streamer_symbol,
+                progress.phase,
+                time.monotonic() - started,
                 type(error).__name__,
                 error,
+                f"zapíše se {len(bars)} dotažených minut"
+                if bars
+                else "díra zůstává, sběr běží dál",
             )
-            return []
+            return bars
+        return progress.bars()
 
-    async def _fetch(self, request: CandleRange) -> list[CandleBar]:
+    async def _fetch(self, request: CandleRange, progress: _Progress) -> None:
         url, token = await self._token_source()
         symbol = f"{request.streamer_symbol}{{=1m}}"
+        progress.phase = "connect"
         async with websockets.connect(
             url,
             max_size=2**24,
             ping_interval=KEEPALIVE_INTERVAL_S,
             ping_timeout=PING_TIMEOUT_S,
         ) as ws:
+            progress.phase = "handshake"
             await handshake(ws, token, {"Candle": CANDLE_FIELDS})
+            progress.phase = "subscribe"
             await send_json(
                 ws,
                 {
@@ -184,22 +224,32 @@ class CandleFetcher:
                     ],
                 },
             )
-            bars = await self._collect(ws, request)
+            progress.phase = "collect"
+            await self._collect(ws, request, progress)
         logger.info(
             "Backfill svíček %s: %d barů v okně %s–%s",
             request.streamer_symbol,
-            len(bars),
+            len(progress.by_minute),
             request.since.isoformat(timespec="minutes"),
             request.until.isoformat(timespec="minutes"),
         )
-        return bars
 
-    async def _collect(self, ws: WebSocketLike, request: CandleRange) -> list[CandleBar]:
-        """Čte, dokud server posílá; konec pozná podle ticha, ne podle zprávy."""
-        by_minute: dict[dt.datetime, CandleBar] = {}
+    async def _collect(self, ws: WebSocketLike, request: CandleRange, progress: _Progress) -> None:
+        """Čte, dokud přibývají nové minuty; konec pozná podle ticha nad NIMI.
+
+        Živé updaty rozdělané minuty ani keepalive ticho nepřerušují (#1253) —
+        jinak by u likvidního podkladu v RTH sběr nikdy neskončil.
+        """
+        by_minute = progress.by_minute
+        # Rozdělaná minuta (ts == floor(until)) se nesbírá — není uzavřená
+        last = request.until.replace(second=0, microsecond=0)
+        deadline = time.monotonic() + self._first_data_timeout_s
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=self._quiet_timeout_s)
+                raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
             except TimeoutError:
                 break  # dávky došly
             message = json.loads(raw)
@@ -210,9 +260,11 @@ class CandleFetcher:
                 if bar is None:
                     continue
                 # Okno je polootevřené a server rád přidá i minuty mimo
-                if request.since <= bar.ts < request.until:
-                    by_minute[bar.ts] = bar
-        return [by_minute[key] for key in sorted(by_minute)]
+                if not (request.since <= bar.ts < last):
+                    continue
+                if bar.ts not in by_minute:
+                    deadline = time.monotonic() + self._quiet_timeout_s
+                by_minute[bar.ts] = bar
 
 
 def _chunks(data: list[object]) -> list[list[object]]:

@@ -1,6 +1,12 @@
 """Backfill svíček (#617): detekce děr, parsování a záruka nepřepisování."""
 
+import asyncio
 import datetime as dt
+import json
+import logging
+import time
+
+import pytest
 
 from gexlens_engine.storage.parquet_store import (
     BAR_SOURCE_LIVE,
@@ -10,7 +16,10 @@ from gexlens_engine.storage.parquet_store import (
 from gexlens_engine.tasty.candles import (
     CANDLE_FIELDS,
     CandleBar,
+    CandleFetcher,
+    CandleRange,
     _chunks,
+    _Progress,
     _row_to_bar,
     missing_minutes,
 )
@@ -133,3 +142,75 @@ def test_zapis_odlisi_puvod_a_backfill_neprepise_merena_data(tmp_path) -> None: 
         row = podle_minuty[M + dt.timedelta(minutes=offset)]
         assert row["close"] == 999.0
         assert row["source"] == BAR_SOURCE_RECONSTRUCTED
+
+
+# ── Sběr s živou subskripcí (#1253) ───────────────────────────────
+
+
+def _feed(rows: list[list[object]]) -> str:
+    return json.dumps({"type": "FEED_DATA", "channel": 1, "data": ["Candle", sum(rows, [])]})
+
+
+class _LiveWs:
+    """Dvojník DXLink: dávka historie a pak nekonečné updaty rozdělané minuty."""
+
+    def __init__(self, history: list[list[object]], forming: list[object]) -> None:
+        self._queue = [_feed(history)]
+        self._forming = forming
+        self.sent = 0
+
+    async def send(self, payload: str) -> None:
+        pass
+
+    async def recv(self) -> str:
+        if self._queue:
+            return self._queue.pop(0)
+        await asyncio.sleep(0.02)  # živý update každých 20 ms, ticho nikdy
+        self.sent += 1
+        return _feed([self._forming])
+
+
+async def test_sber_skonci_i_kdyz_zive_updaty_rozdelane_minuty_nikdy_neutichnou() -> None:
+    """#1253: SPY v RTH — server po historii posílá updaty tvořící se minuty
+    každou chvíli; ticho se měří nad NOVÝMI minutami, jinak sběr vyčerpal strop."""
+    now = M + dt.timedelta(minutes=3, seconds=23)
+    history = [_row(M + dt.timedelta(minutes=i)) for i in range(3)]
+    forming = _row(M + dt.timedelta(minutes=3), close=7777.0)
+    ws = _LiveWs(history, forming)
+    fetcher = CandleFetcher(_no_token, quiet_timeout_s=0.1, total_timeout_s=5.0)
+    progress = _Progress()
+    started = time.monotonic()
+    await fetcher._collect(ws, CandleRange("SPY", since=M, until=now), progress)
+    assert time.monotonic() - started < 1.0
+    assert [bar.ts for bar in progress.bars()] == [M + dt.timedelta(minutes=i) for i in range(3)]
+    assert ws.sent > 0  # updaty opravdu chodily a sběr je přežil
+
+
+async def test_rozdelana_minuta_se_nesbira_ani_nehlasi_jako_dira() -> None:
+    now = M + dt.timedelta(minutes=2, seconds=23)
+    assert missing_minutes(set(), M, now) == [M, M + dt.timedelta(minutes=1)]
+    ws = _LiveWs([_row(M), _row(M + dt.timedelta(minutes=2))], _row(M + dt.timedelta(minutes=2)))
+    progress = _Progress()
+    fetcher = CandleFetcher(_no_token, quiet_timeout_s=0.1, first_data_timeout_s=0.5)
+    await fetcher._collect(ws, CandleRange("SPY", since=M, until=now), progress)
+    assert [bar.ts for bar in progress.bars()] == [M]
+
+
+async def test_pri_stropu_se_vrati_dotazene_minuty_a_log_nese_fazi(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _Hanging(CandleFetcher):
+        async def _fetch(self, request: CandleRange, progress: _Progress) -> None:
+            progress.phase = "collect"
+            progress.by_minute[M] = CandleBar(M, 1.0, 1.0, 1.0, 1.0, 1.0)
+            await asyncio.sleep(10)
+
+    fetcher = _Hanging(_no_token, total_timeout_s=0.1)
+    with caplog.at_level(logging.WARNING, logger="gexlens_engine.tasty.candles"):
+        bars = await fetcher.fetch(CandleRange("SPY", since=M, until=M + dt.timedelta(minutes=5)))
+    assert [bar.ts for bar in bars] == [M]
+    assert "ve fázi collect" in caplog.text and "zapíše se 1" in caplog.text
+
+
+async def _no_token() -> tuple[str, str]:
+    return ("wss://x", "t")
