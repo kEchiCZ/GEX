@@ -23,6 +23,7 @@ beforeEach(() => {
     selectedExpiry: '20260813',
     setJournalDraft,
     setView,
+    status: { engine: 'online' },
   })
 })
 
@@ -119,7 +120,7 @@ test('Shrnutí dne (#1090): verdikt z hlasování, úrovně obratu, zprávy s re
       expect(post).toBeDefined()
       const payload = JSON.parse(String(post![1].body)) as { verdict: string; rules_version: number } // prettier-ignore
       expect(payload.verdict).toBe('long')
-      expect(payload.rules_version).toBe(1)
+      expect(payload.rules_version).toBe(3)
     },
     { timeout: 5_000 },
   )
@@ -155,7 +156,7 @@ test('verdikt se přepíše, když se změní hlasy i při stejném skóre (#109
     tendency: { tendency: [{ ts_min: '', symbol: 'ES', score: 0.6, band: 'long', votes: [], weights_version: 1 }] }, // prettier-ignore
   })
   useAppStateMock.mockReturnValue({
-    regimeInfo: { state: null, measuredFlip: null, dynamicFlip: null }, symbol: 'ES', selectedExpiry: '20260814', setJournalDraft, setView }) // prettier-ignore
+    regimeInfo: { state: null, measuredFlip: null, dynamicFlip: null }, symbol: 'ES', selectedExpiry: '20260814', setJournalDraft, setView, status: { engine: 'online' } }) // prettier-ignore
   rerender(<BriefingView />)
   await waitFor(
     () => {
@@ -308,8 +309,10 @@ test('Ranní checklist (#1241): útes minulé seance, slabá zeď, gap-and-hold;
   expect(cliff.className).toContain('checklist-go')
   const wall = screen.getByTestId('check-wall')
   expect(wall.textContent).toContain('dominance 18 %')
+  // Stav mapy (#1245) bez kolektoru: bod je, ale „bez dat" — žádný dosazený verdikt
+  expect(screen.getByTestId('check-map').className).toContain('checklist-na')
   expect(wall.textContent).toContain('průraz')
   expect(screen.getByTestId('check-rules').textContent).toContain('50 $')
   // Brána gamma hlasu: pozitivní gamma po útesu 83 % nehlasuje proti trendu
-  await waitFor(() => expect(screen.getByText(/tlumení tenké — nehlasuje/)).toBeTruthy())
+  await waitFor(() => expect(screen.getByText(/tlumení tenké, nehlasuje/)).toBeTruthy())
 })

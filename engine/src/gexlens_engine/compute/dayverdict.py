@@ -16,7 +16,7 @@ from typing import Literal
 
 from gexlens_engine.compute.trend import Direction, TrendReport
 
-VERDICT_RULES_VERSION = 2
+VERDICT_RULES_VERSION = 3
 #: Útes gammy předchozí seance (#576 fáze 1, #1241): nad tímto podílem je
 #: struktura, která cenu držela, pryč — „pozitivní gamma tlumí“ nehlasuje
 CLIFF_DAMPING_OFF = 0.5
@@ -59,6 +59,8 @@ class VerdictInput:
     news_before_open: bool
     #: Podíl gammy, který odpadl expirací předchozí seance (0–1); None bez dat
     cliff_share: float | None = None
+    #: Stav „tenká mapa" (#1245): True = mapa teď nemá čím tlumit; None bez dat
+    thin_map: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,7 @@ def day_verdict(inp: VerdictInput) -> DayVerdict:
             inp.trend.expected if inp.trend else None,
             partial,
             cliff_share=inp.cliff_share,
+            thin_map=inp.thin_map,
         )
     )
     score = sum(v.vote for v in votes)
@@ -171,17 +174,26 @@ def _gamma_vote(
     partial: int,
     *,
     cliff_share: float | None = None,
+    thin_map: bool | None = None,
 ) -> Vote:
     if positive_gamma is None:
         return Vote("gamma", 0, "gamma režim bez dat")
-    if positive_gamma and cliff_share is not None and cliff_share >= CLIFF_DAMPING_OFF:
+    if positive_gamma:
         # 21. 9. 2026: po kvartálním OPEX (útes ES 83 %) hlas −1 vyrušil trend +3
-        # a verdikt byl none při +580 b — tenká gamma netlumí
-        return Vote(
-            "gamma",
-            0,
-            f"pozitivní gamma, ale po útesu {cliff_share:.0%} gammy je tlumení tenké — nehlasuje",
-        )
+        # a verdikt byl none při +580 b — tenká gamma netlumí. Útes (co odpadlo)
+        # a tenká mapa (co zbylo, #1245) jsou JEDEN nulový hlas s oběma důvody,
+        # ne dva — jinak by se tatáž skutečnost počítala dvakrát.
+        causes: list[str] = []
+        if cliff_share is not None and cliff_share >= CLIFF_DAMPING_OFF:
+            causes.append(f"po útesu {cliff_share:.0%} gammy")
+        if thin_map:
+            causes.append("mapa je tenká (#1245)")
+        if causes:
+            return Vote(
+                "gamma",
+                0,
+                f"pozitivní gamma, ale {' a '.join(causes)} — tlumení tenké, nehlasuje",
+            )
     if not positive_gamma:
         if expected == "up":
             return Vote("gamma", 1, "negativní gamma = momentum ve směru trendu (long)")

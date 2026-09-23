@@ -99,6 +99,7 @@ from gexlens_engine.instruments import (
     read_watchlist,
 )
 from gexlens_engine.ivrank import IvRankCollector, TastyMetricsLike
+from gexlens_engine.mapstate import MapStateCollector
 from gexlens_engine.memwatch import MemoryWatch
 from gexlens_engine.paper import PaperBroker
 from gexlens_engine.probes import T9ProbeCollector
@@ -126,6 +127,7 @@ from gexlens_engine.storage.fa_validation import FaValidationRepository
 from gexlens_engine.storage.feed_comparison import FeedComparisonRepository
 from gexlens_engine.storage.gammacliff_store import GammaCliffRepository
 from gexlens_engine.storage.ivrank_store import IvRankRepository
+from gexlens_engine.storage.mapstate_store import MapStateRepository
 from gexlens_engine.storage.meta import ADHOC_CHANNEL
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
@@ -691,6 +693,16 @@ def _bs_fallback_status(running: Sequence[InstrumentPipeline]) -> dict[str, obje
     return {"greeks_bs_share": shares} if shares else {}
 
 
+def _map_state_status(running: Sequence[InstrumentPipeline]) -> dict[str, object]:
+    """Stav mapy per symbol (#1245): thin + důvody + změřené podmínky."""
+    states = {
+        pipeline.symbol: pipeline.map_state.state.as_dict()
+        for pipeline in running
+        if pipeline.map_state is not None and pipeline.map_state.state is not None
+    }
+    return {"map_state": states} if states else {}
+
+
 def _chain_source_status(fallback: "ChainFallback | None") -> dict[str, object]:
     """Zdroj opčního řetězu do /status (#614 fáze 2b).
 
@@ -718,6 +730,7 @@ async def create_pipeline(
     tendency_repository: TendencyRepository | None = None,
     t6_repository: T6Repository | None = None,
     gamma_cliff_repository: GammaCliffRepository | None = None,
+    map_state_repository: MapStateRepository | None = None,
     scenarios_repository: ScenariosRepository | None = None,
     paper_repository: PaperRepository | None = None,
     scenario_api: ApiReader | None = None,
@@ -1277,6 +1290,15 @@ async def create_pipeline(
             if gamma_cliff_repository is not None and db is not None
             else None
         ),
+        map_state=(
+            MapStateCollector(
+                symbol=symbol,
+                repository=map_state_repository,
+                data_dir=settings.data_dir,
+            )
+            if map_state_repository is not None
+            else None
+        ),
         scenario_collector=(
             ScenarioCollector(
                 symbol=symbol,
@@ -1541,6 +1563,11 @@ async def main() -> None:
     if settings.gamma_cliff_enabled:
         gamma_cliff_repository = GammaCliffRepository(db)
         await asyncio.to_thread(gamma_cliff_repository.ensure_schema)
+    # Stav „tenká mapa" (#1245): historie prahů per seance, backfill z partic
+    map_state_repository: MapStateRepository | None = None
+    if settings.map_state_enabled:
+        map_state_repository = MapStateRepository(db)
+        await asyncio.to_thread(map_state_repository.ensure_schema)
     # Scénáře dne (#1173): tabulku zakládá i API, tady jen pro jistotu při startu
     scenarios_repository = ScenariosRepository(db)
     await asyncio.to_thread(scenarios_repository.ensure_schema)
@@ -2893,6 +2920,7 @@ async def main() -> None:
                     tendency_repository=tendency_repository,
                     t6_repository=t6_repository,
                     gamma_cliff_repository=gamma_cliff_repository,
+                    map_state_repository=map_state_repository,
                     scenarios_repository=scenarios_repository,
                     paper_repository=paper_repository,
                     scenario_api=scenario_api,
@@ -3092,6 +3120,8 @@ async def main() -> None:
                 **_spot_source_status(run_list),
                 # Podíl BS fallback greeks per symbol (#877, follow-up #862)
                 **_bs_fallback_status(run_list),
+                # Stav „tenká mapa" per symbol (#1245) — klíč chybí, když kolektor neběží
+                **_map_state_status(run_list),
                 # Obsazení disku (#773) — plní i patičku UI, která do teď
                 # ukazovala `disk — / —`; klíče chybí do prvního měření
                 **disk_watch.status_fields(int(settings.disk_limit_gb * 1024**3)),

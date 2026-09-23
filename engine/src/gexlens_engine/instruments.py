@@ -54,6 +54,7 @@ from gexlens_engine.ibkr.scheduler import (
 )
 from gexlens_engine.ibkr.underlying import Bar, BarsStallDetector
 from gexlens_engine.ivrank import IvRankCollector
+from gexlens_engine.mapstate import MapStateCollector
 from gexlens_engine.paper import PaperBroker
 from gexlens_engine.probes import T9ProbeCollector
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
@@ -336,6 +337,8 @@ class InstrumentPipeline:
     t6_collector: T6Collector | None = None
     # Gamma útes po expiraci (#576, fáze 1 jen měření) — None = vypnuto
     gamma_cliff: GammaCliffCollector | None = None
+    # Stav „tenká mapa" (#1245, fáze 1 jen měření) — None = vypnuto
+    map_state: MapStateCollector | None = None
     # Scénář dne (#1173) — vyhodnocení po termínu, jednou po settle
     scenario_collector: ScenarioCollector | None = None
     # Paper účet (#1187 fáze 1): fily orderů proti barům minuty — None = vypnuto
@@ -965,6 +968,18 @@ class InstrumentPipeline:
         await self._watch_greeks(now, metrics)
         await self._watch_repair(now, metrics)
 
+        # Stav mapy (#1245) — PŘED detektorem, ať feature log nese stav téže
+        # minuty; max pain sdílí s tendencí (obnova jen při novém snímku OI)
+        if self.map_state is not None:
+            try:
+                await self.map_state.on_minute(
+                    now,
+                    spot,
+                    self.runtime,
+                    self.tendency_engine.max_pain if self.tendency_engine is not None else None,
+                )
+            except Exception:
+                logger.exception("Stav mapy %s selhal — pokračuji", self.symbol)
         # Setup detektor (ADR-0004) — jeho pád nesmí shodit sběr dat
         if self.setup_engine is not None:
             try:

@@ -13,7 +13,7 @@ import type { TrendDirection, TrendReport } from './trend'
 import { directionLabel } from './trend'
 
 /** Verze pravidel hlasování — ukládá se s verdiktem, ať jde historie číst správně. */
-export const VERDICT_RULES_VERSION = 1
+export const VERDICT_RULES_VERSION = 3
 /** Skóre ≥ +3 = spíše long, ≤ −3 = spíše short (ADR-0035 §3). */
 export const VERDICT_THRESHOLD = 3
 /** Konfluence: dvě úrovně do 0,1 % ceny od sebe (NQ ≈ 30 b, ES ≈ 8 b). */
@@ -205,6 +205,8 @@ export interface VerdictInput {
   newsBeforeOpen: boolean
   /** Útes gammy minulé seance (0–1, #1241); null bez dat. */
   cliffShare?: number | null
+  /** Stav „tenká mapa" (#1245): true = mapa teď nemá čím tlumit; null bez dat. */
+  thinMap?: boolean | null
 }
 
 /** Po útesu ≥ 50 % je tlumení tenké — zrcadlo enginu `dayverdict.CLIFF_DAMPING_OFF`. */
@@ -283,7 +285,7 @@ export function dayVerdict(input: VerdictInput): DayVerdict {
   votes.push({ name: 'overnight', vote: overnightVote, reason: overnightReason })
   votes.push(oiDeltaVote(input.oiDelta))
   const partial = votes.reduce((sum, vote) => sum + vote.vote, 0)
-  votes.push(gammaVote(input.positiveGamma, trend?.expected ?? null, partial, input.cliffShare ?? null)) // prettier-ignore
+  votes.push(gammaVote(input.positiveGamma, trend?.expected ?? null, partial, input.cliffShare ?? null, input.thinMap ?? null)) // prettier-ignore
   const score = votes.reduce((sum, vote) => sum + vote.vote, 0)
   let verdict: VerdictKind = 'none'
   if (score >= VERDICT_THRESHOLD) verdict = 'long'
@@ -320,12 +322,21 @@ function gammaVote(
   expected: TrendDirection | null,
   partial: number,
   cliffShare: number | null = null,
+  thinMap: boolean | null = null,
 ): VerdictVote {
   if (positiveGamma === null) return { name: 'gamma', vote: 0, reason: 'gamma režim bez dat' }
-  if (positiveGamma && cliffShare !== null && cliffShare >= CLIFF_DAMPING_OFF) {
+  if (positiveGamma) {
     // 21. 9. 2026: po kvartálním OPEX (útes ES 83 %) hlas −1 vyrušil trend +3 a
-    // verdikt byl none při +580 b — tenká gamma netlumí
-    return { name: 'gamma', vote: 0, reason: `pozitivní gamma, ale po útesu ${Math.round(cliffShare * 100)} % gammy je tlumení tenké — nehlasuje` } // prettier-ignore
+    // verdikt byl none při +580 b — tenká gamma netlumí. Útes (co odpadlo) a
+    // tenká mapa (co zbylo, #1245) jsou JEDEN nulový hlas s oběma důvody, ne dva.
+    const causes: string[] = []
+    if (cliffShare !== null && cliffShare >= CLIFF_DAMPING_OFF) {
+      causes.push(`po útesu ${Math.round(cliffShare * 100)} % gammy`)
+    }
+    if (thinMap) causes.push('mapa je tenká (#1245)')
+    if (causes.length > 0) {
+      return { name: 'gamma', vote: 0, reason: `pozitivní gamma, ale ${causes.join(' a ')} — tlumení tenké, nehlasuje` } // prettier-ignore
+    }
   }
   if (!positiveGamma) {
     if (expected === 'up') return { name: 'gamma', vote: 1, reason: 'negativní gamma = momentum ve směru trendu (long)' } // prettier-ignore
