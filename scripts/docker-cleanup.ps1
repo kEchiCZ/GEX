@@ -138,7 +138,7 @@ if ($problems.Count -gt 0) {
             }
         } | ConvertTo-Json -Depth 4
         try {
-            Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8000/internal/publish' `
+            Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8010/internal/publish' `
                 -Headers @{ 'X-GEXLens-Token' = $token } -ContentType 'application/json' -Body $body | Out-Null
             Write-Step 'Alert disk_low odeslán do zvonku.'
         } catch {

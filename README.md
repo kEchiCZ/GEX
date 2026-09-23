@@ -37,7 +37,7 @@ Copy-Item .env.example .env
 docker compose up --build     # nebo: make run
 ```
 
-Vytvoří a spustí: PostgreSQL (host port **55432** — záměrně ne 5432, aby nekolidoval s případným nativním PostgreSQL), API server (`http://127.0.0.1:8000`), engine (připojuje se na TWS na hostiteli přes `host.docker.internal`) a frontend (**http://127.0.0.1:8080**).
+Vytvoří a spustí: PostgreSQL (host port **55432** — záměrně ne 5432, aby nekolidoval s případným nativním PostgreSQL), API server (`http://127.0.0.1:8010`, uvnitř compose sítě `api:8000`), engine (připojuje se na TWS na hostiteli přes `host.docker.internal`) a frontend (**http://127.0.0.1:8080**).
 
 Otevři **http://127.0.0.1:8080** — stavová lišta dole musí do minuty ukázat `IBKR: connected` a `Greeks X/Y`. Data (Parquet partice) se ukládají do `./data`.
 

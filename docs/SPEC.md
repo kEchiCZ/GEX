@@ -3,6 +3,13 @@
 
 > Cíl: **plně funkční, spustitelná aplikace** (nikoli MVP) pro vizualizaci opčního positioningu (GEX/OI/Vol heatmapa) nad ES futures opcemi, s primárním datovým zdrojem **Interactive Brokers TWS/Gateway API** (sekundární brokerský zdroj s daty zdarma připuštěn v roli rozšíření/fallbacku, viz ADR-0025).
 
+> **Role tohoto dokumentu (rev. 23. 9. 2026):** SPEC je **zmrazené zadání v2.0** — závazná rozhodnutí
+> R1–R6 (kap. 0) a jádro M1–M5 (kap. 1–9). Kapitoly 3–8 se udržují jen tam, kde se mění jádro;
+> pozdější rozhodnutí je mění přes **ADR** (`docs/adr/`, ADR má přednost před textem, na který se
+> odkazuje). Moduly přidané po červenci 2026 tu nejsou popsané — jsou v **kap. 11 (index rozšíření)**
+> s odkazem na ADR, epic issue a kapitolu manuálu. **Aktuální chování** systému popisují manuály
+> (`docs/manual/ADMIN-MANUAL.md`, `docs/manual/UZIVATELSKY-MANUAL.md`).
+
 ---
 
 ## 0. Klíčová rozhodnutí (závazná)
@@ -229,7 +236,7 @@ Nástroje šipka / linie / freehand, výběr barvy, mazání; persistence per in
 
 ### 7.5 Ostatní obrazovky
 - **Dashboard:** karty watchlistu (cena, %, mini NetGEX profil, vzdálenost k walls, stav dat).
-- **IBKR Console:** log API událostí a chyb, správa připojení (host/port/clientId, reconnect tlačítko), přehled subskripcí a repair fronty.
+- **IBKR Console:** log API událostí a chyb, správa připojení (host/port/clientId, reconnect tlačítko), přehled subskripcí a repair fronty. *(Samostatná obrazovka zrušena — sloučeno do Settings, viz uživatelský manuál kap. 12.)*
 - **Settings:** IBKR parametry, rozsah strikes, velikost dávky, retence/disk limit, výchozí módy vizualizace, seznam seancí + časová zóna, definice alertů, téma Dark/Light, jazyk (CZ/EN).
 - **Notifikace/News:** alert engine (cena × flip/wall cross, změna dominantního striku, skok CumΔ o konfigurovatelný práh, výpadek spojení, disk limit); news headline feed (zdroj: IBKR news subscription, je-li na účtu — jinak modul skrytý).
 
@@ -263,3 +270,30 @@ Nástroje šipka / linie / freehand, výběr barvy, mazání; persistence per in
 2. Chování generic ticku 588 (OI) na FOP na Romanově účtu.
 3. Limit souběžných tick-by-tick streamů na účtu — změřeno 5 (ADR-0001); po ADR-0032 bez použití.
 4. Limit market data lines na účtu (velikost dávky).
+
+---
+
+## 11. Index rozšíření po v2.0 (rev. 23. 9. 2026)
+
+Moduly, které zadání v2.0 neobsahuje. SPEC je pro ně jen rozcestník; **zdroj pravdy je uvedené ADR
+(rozhodnutí) + kapitola manuálu (aktuální chování) + epic issue (zadání a stav)**. Nový modul =
+nový řádek v této tabulce ve stejném PR (viz `AGENTS.md`, Definition of done).
+
+| Modul | Rozhodnutí (ADR) | Zadání / epic | Aktuální popis |
+|---|---|---|---|
+| Multi-instrument (ES, NQ, …), pásmo strikes, ticker vs. kontrakt | 0002, 0003, 0041 | #629 | ADMIN kap. 4–5 |
+| tastytrade / dxFeed jako sekundární zdroj; klasifikace agresora celého řetězu (R2) | 0025, 0027, 0032 | #610, #615 | ADMIN kap. 5, 11 |
+| Equity ad-hoc pohled (SPY, QQQ, akcie) přes tastytrade | 0025 | #206 | ADMIN kap. 5 |
+| Konvence obchodního dne a settle; kvartální roll a SOQ; pozdní start | 0023, 0024, 0039 | — | USER kap. 6, 8b |
+| Retence 90 dní; věčný archiv učicích dat | 0022, 0029 | #437 | ADMIN kap. 6 |
+| Zmrzlé kotace (stáří dat v každé buňce) | 0015 | #306 | USER kap. 15 |
+| Dyn GEX pole, projekce do settle, sekundární zeď, dominance zdí, flow-adjusted GEX | 0006, 0008, 0009, 0010, 0011 | #629 | USER kap. 5, 18 |
+| Volatilitní režim (bez VIX), IV rank, tendence, gamma útes, EM respect | 0028 | #394, #576 | USER kap. 11f, 18 |
+| Setup detektor, signály, track record, parameter store, walk-forward, risk framework | 0004, 0020, 0021, 0030, 0033, 0034, 0038 | #794, #453 | USER kap. 11d; ADMIN kap. 12 |
+| SentimentLens: news-engine, zdroje (IBKR news, ForexFactory, Reddit, CNN F&G), dedup, vlny, SentIndex, per-symbol, reakce trhu | 0012–0014, 0016–0019, 0026, 0031, 0036, 0037 | #561, #566, #740 | USER kap. 11c |
+| Briefing: trend napříč TF, verdikt dne, ranní checklist | 0035 | #1089–#1091, #1241 | USER kap. 11f, 11g |
+| Deník tradera, Traders mode, paper účet v aplikaci | 0040 | #1187 | USER kap. 11e |
+| Trading kouč (vyhodnocení chyb, smyčka zlepšování setupů) | 0030, 0033, 0034 | #1187, #1244 | USER kap. 11d–11e |
+| Persistence UI voleb, provizorní bar, deep-linky | 0005, 0007 | — | USER kap. 13, 16 |
+| Autopilot M8 (exekuce strategií) — **zatím jen zadání** | *ADR čeká (#925)* | #924–#934 | — |
+| Provoz: dev/prod stack, zálohy PG, bezpečnostní CI, hosting | — | #696, #542, #1094 | ADMIN kap. 3, 9, 10, 14 |
