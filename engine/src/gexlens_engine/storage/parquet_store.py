@@ -9,6 +9,7 @@ maximálně zůstane osiřelý `.tmp`, který se při dalším zápisu uklidí.
 import datetime as dt
 import logging
 import os
+import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -685,6 +686,11 @@ BUFFER_KEEP_DAYS = 1
 #: Druhá pojistka: strop paměti všech bufferů. Nad ním se evikuje od
 #: nejdéle nepoužívaného — chrání před dnem s neobvykle velkým řetězem.
 BUFFER_MAX_BYTES = 400 * 1024 * 1024
+#: Jak často nejvýš běží stráž i bez vzniku nové partice. Buffery rostou i
+#: mezi vznikem partic — v noci 23. 9. 2026 nevznikla 6,5 h žádná nová a paměť
+#: mezitím driftovala 416 → 536 MB (RSS +240 MB), než ji srovnal první ranní
+#: vznik partice. Kontrola je levná (součet `nbytes` přes desítky bufferů).
+BUFFER_EVICT_EVERY_S = 60.0
 
 
 def partition_day(path: Path) -> dt.date | None:
@@ -897,8 +903,10 @@ class SnapshotWriter:
         #: číslo použití a prahy (přepisovatelné v testech)
         self._newest_day: dt.date | None = None
         self._touch_tick = 0
+        self._last_evict = 0.0
         self.buffer_keep_days = BUFFER_KEEP_DAYS
         self.buffer_max_bytes = BUFFER_MAX_BYTES
+        self.buffer_evict_every_s = BUFFER_EVICT_EVERY_S
 
     def write_minute(
         self, symbol: str, expiry: str, day: dt.date, rows: Sequence[SnapshotRow]
@@ -1291,9 +1299,12 @@ class SnapshotWriter:
             self._buffers[path] = buffer
         self._touch_tick += 1
         buffer.touched = self._touch_tick
-        if fresh:
-            # Nová partice = jediný okamžik, kdy může přibýt den; evikce
-            # se tím drží mimo horkou cestu opakovaných zápisů (#1247)
+        now = time.monotonic()
+        # Nová partice přináší nový den; časová stráž hlídá růst UVNITŘ dne,
+        # kdy nové partice nevznikají (#1247). Obojí drží evikci mimo horkou
+        # cestu opakovaných zápisů do téže partice.
+        if fresh or now - self._last_evict >= self.buffer_evict_every_s:
+            self._last_evict = now
             self._evict(keep=path)
         return buffer
 

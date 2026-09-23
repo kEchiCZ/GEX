@@ -318,3 +318,41 @@ def test_strop_velikosti_evikuje_nejdele_nepouzity(tmp_path: Path) -> None:
     for symbol in ("ES", "NQ", "QQQ"):
         path = tmp_path / "derived" / symbol / "bars" / f"{day.isoformat()}.parquet"
         assert len(pd.read_parquet(path)) == 1
+
+
+def test_casova_straz_uklidi_i_bez_vzniku_nove_partice(tmp_path: Path) -> None:
+    """#1247: buffery rostou i mezi vznikem partic — stráž musí běžet i časově.
+
+    Noc 23. 9. 2026: 6,5 h bez nové partice a paměť mezitím driftovala
+    416 → 536 MB, než ji srovnal první ranní vznik partice.
+    """
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    writer.buffer_evict_every_s = 0.0  # stráž při každém zápisu
+    day = dt.date(2026, 9, 23)
+    ts = dt.datetime.combine(day, dt.time(13, 30), tzinfo=dt.UTC)
+    writer.write_bars("ES", day, [_bar_row(ts, 7800.0)])
+    writer.write_bars("NQ", day, [_bar_row(ts, 30000.0)])
+    assert writer.buffer_stats()["partitions"] == 2
+
+    # Strop se sníží za provozu; další zápis do UŽ EXISTUJÍCÍ partice musí
+    # přebytek uklidit, i když žádná nová partice nevzniká
+    writer.buffer_max_bytes = 1
+    writer.write_bars("NQ", day, [_bar_row(ts + dt.timedelta(minutes=1), 30001.0)])
+    assert writer.buffer_stats()["partitions"] == 1
+
+    # Uvolněná partice zůstala na disku celá
+    es_path = tmp_path / "derived" / "ES" / "bars" / f"{day.isoformat()}.parquet"
+    assert len(pd.read_parquet(es_path)) == 1
+
+
+def test_bez_casove_strazi_se_neevikuje_pri_kazdem_zapisu(tmp_path: Path) -> None:
+    """Stráž nesmí běžet na každý zápis — jinak by se evikce dostala na horkou cestu."""
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    day = dt.date(2026, 9, 23)
+    ts = dt.datetime.combine(day, dt.time(13, 30), tzinfo=dt.UTC)
+    writer.write_bars("ES", day, [_bar_row(ts, 7800.0)])
+    writer.write_bars("NQ", day, [_bar_row(ts, 30000.0)])
+    writer.buffer_max_bytes = 1
+    # Výchozí interval 60 s ještě neuplynul → zápis do existující partice neuklízí
+    writer.write_bars("NQ", day, [_bar_row(ts + dt.timedelta(minutes=1), 30001.0)])
+    assert writer.buffer_stats()["partitions"] == 2
