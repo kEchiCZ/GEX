@@ -38,3 +38,6 @@ frontend/playwright-report/
 scripts/lines_probe_result*.txt
 scripts/lines_probe_result*.log
 scripts/lines_probe_run.log
+
+# Osobní/strojové instrukce pro AI nástroje (mimo repo)
+CLAUDE.local.md

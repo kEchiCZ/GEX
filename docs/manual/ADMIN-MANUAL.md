@@ -97,7 +97,7 @@ docker compose down              # odstranění kontejnerů (volume pgdata zůst
 | Služba | Port (host) | Poznámka |
 |---|---|---|
 | frontend | **8080** | nginx, SPA + `/manual/` wiki |
-| api | **8000** | FastAPI, OpenAPI na `/docs` |
+| api | **8010** (kontejner 8000) | FastAPI, OpenAPI na `/docs`; loopback jen pro nástroje na hostiteli, prohlížeč jde přes nginx |
 | postgres | **55432** | ⚠️ záměrně ne 5432/5433 — na vývojovém PC běží nativní PostgreSQL na obou |
 | engine | — | bez portu; TWS přes `host.docker.internal:7496` |
 
@@ -305,7 +305,7 @@ Zápis je **atomický** (temp + rename) — po pádu procesu nikdy nezůstane č
 
 ## 7. API reference
 
-Interaktivní dokumentace: `http://127.0.0.1:8000/docs` (OpenAPI).
+Interaktivní dokumentace: `http://127.0.0.1:8010/docs` (OpenAPI; dev stack `:8011`).
 
 ### REST
 
@@ -922,7 +922,7 @@ nástroje na hostiteli (zálohy, sondy) — pro provoz je potřeba nemá.
 2. `GEXLENS_BIND_ADDR` = Tailscale IP serveru.
 3. `GEXLENS_ALLOWED_ORIGINS` = adresa UI, pod kterou se bude otevírat (jinak
    prohlížeč zablokuje fetch a WS handshake skončí na kontrole Origin).
-4. UFW: povolit jen SSH a Tailscale; ověřit `nmap` z venku, že 8080/8000/55432
+4. UFW: povolit jen SSH a Tailscale; ověřit `nmap` z venku, že 8080/8010/55432
    nejsou vidět (kontrolovat zvenčí, ne `ufw status` — viz past s DOCKER chainem).
 5. SSH: klíče, `PasswordAuthentication no`, root login zakázaný.
 6. IB Gateway: **VNC nikdy veřejně**, jen přes tunel.

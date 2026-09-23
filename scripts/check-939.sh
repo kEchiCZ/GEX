@@ -7,7 +7,7 @@ okno="${1:-2h}"
 echo "=== #939 — heal za RTH, okno $okno ($(date -u)) ==="
 echo
 echo "-- /status (kumulativ od startu enginu) --"
-curl -s --max-time 10 http://127.0.0.1:8000/status | python -c "
+curl -s --max-time 10 http://127.0.0.1:8010/status | python -c "
 import sys, json
 d = json.load(sys.stdin)
 for k in ('tasty_heals','tasty_rate_limited','tasty_stream_errors','tasty_reconnects','tasty_symbols','tasty_connected','feed_crosscheck','spot_source','chain_source'):

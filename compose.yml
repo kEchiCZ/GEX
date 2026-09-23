@@ -61,7 +61,7 @@ services:
     ports:
       # Prohlížeč sem nechodí (nginx proxuje /api) — publikace zůstává jen pro
       # nástroje na hostiteli a je vázaná na loopback
-      - "${GEXLENS_BIND_ADDR:-127.0.0.1}:8000:8000"
+      - "${GEXLENS_BIND_ADDR:-127.0.0.1}:8010:8000"
     volumes:
       - ./data:/app/data
     depends_on:

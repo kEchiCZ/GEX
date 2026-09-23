@@ -65,7 +65,7 @@ services:
       GEXLENS_DATA_DIR: /app/data
       GEXLENS_API_TOKEN: ${GEXLENS_API_TOKEN:?chybí GEXLENS_API_TOKEN — vygeneruj přes scripts/init-secrets.ps1}
     ports:
-      - "${GEXLENS_BIND_ADDR:-127.0.0.1}:8001:8000"
+      - "${GEXLENS_BIND_ADDR:-127.0.0.1}:8011:8000"
     volumes:
       - ./data-dev:/app/data
     depends_on:
