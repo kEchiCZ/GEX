@@ -16,6 +16,13 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-09-24 — naplánované úlohy tiše padaly 2 týdny (0x80070002): cesta k pwsh z WindowsApps nese číslo verze.**
+  `(Get-Command pwsh).Source` = `…\Microsoft.PowerShell_7.6.5.0_…\pwsh.exe`; po aktualizaci Store balíčku
+  na 7.6.6 cesta zmizela a „GEXLens walk-forward" (noční report pro #794/#1081) končil „soubor nenalezen"
+  od 9. 9. Nikdo si nevšiml — úloha hlásila `Ready`, log jen přestal růst.
+  → Do úloh dávat **App Execution Alias** `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe` (přežije verzi);
+  po registraci úlohu spustit nanečisto a číst `LastTaskResult`; při kontrole stavu úloh nečíst `State`,
+  ale `Get-ScheduledTaskInfo` (poslední výsledek + čas) a mtime logu.
 - **2026-09-23 — PostgreSQL 190 % CPU v RTH (#1257): `NOT IN (subquery)` přestal být hashovaný.**
   Job news-engine s `id NOT IN (SELECT event_id …)` běžel 23 min; do té doby milisekundy. Příčina není
   v kódu jobu jako takovém, ale v růstu tabulky: hash 264 k řádků se přestal vejít do `work_mem` 4 MB
