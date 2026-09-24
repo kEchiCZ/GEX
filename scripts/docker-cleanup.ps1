@@ -1,4 +1,4 @@
-# Bezpečný úklid Dockeru (#1127) — rollback tagy, build cache, osiřelé image, hlídka místa.
+﻿# Bezpečný úklid Dockeru (#1127) — rollback tagy, build cache, osiřelé image, hlídka místa.
 #
 # Proč: 12. 9. 2026 měl VHDX Dockeru 71 GB (build cache 43 GB z 507 buildů,
 # 36 rollback tagů `gex-*:pre-<issue>` z deploy skriptu), build zaplnil disk D:
@@ -66,7 +66,10 @@ if ($WhatIf) {
 } else {
     $out = docker builder prune -f --filter "until=${CacheAgeHours}h" 2>&1 | Out-String
     $line = ($out -split "`n" | Where-Object { $_ -match 'reclaimed' } | Select-Object -Last 1)
-    Write-Step "Build cache (> $CacheAgeHours h): $($line.Trim())"
+    # Bez řádku „reclaimed" (nic k uvolnění, jiný formát výstupu) je $line $null
+    # a .Trim() padal na „Metodu nelze volat u výrazu s hodnotou null" (#1259)
+    if (-not $line) { $line = 'nic k uvolnění' }
+    Write-Step "Build cache (> $CacheAgeHours h): $("$line".Trim())"
 }
 
 # ── 3) Osiřelé image ─────────────────────────────────────────────────────
@@ -75,7 +78,8 @@ if ($WhatIf) {
 } else {
     $out = docker image prune -f 2>&1 | Out-String
     $line = ($out -split "`n" | Where-Object { $_ -match 'reclaimed' } | Select-Object -Last 1)
-    Write-Step "Osiřelé image: $($line.Trim())"
+    if (-not $line) { $line = 'nic k uvolnění' }
+    Write-Step "Osiřelé image: $("$line".Trim())"
 }
 
 # ── 4) Report: docker system df + VHDX + volné místo ────────────────────
