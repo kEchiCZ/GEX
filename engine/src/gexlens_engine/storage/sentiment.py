@@ -41,6 +41,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.engine import Engine
 
@@ -408,6 +409,9 @@ news_model_stats = Table(
     Column("hit_rate", Float, nullable=True),
     # Wilson dolní mez — bodová hit-rate při malém n je nerozlišitelná od mince
     Column("hit_rate_lb", Float, nullable=True),
+    # Gate signálů (SPEC 6.2, ADR-0042) vyhodnocený při přepočtu —
+    # `compute/signal_gate.gate_open`; čtenáři pravidlo nepočítají (#1267)
+    Column("gate_open", Boolean, nullable=False, server_default=false()),
     Column("computed_at", DateTime(timezone=True), nullable=False),
 )
 
@@ -676,6 +680,15 @@ def ensure_sentiment_schema(engine: Engine) -> None:
         if "regime" not in columns:
             with engine.begin() as conn:
                 conn.execute(text("DROP TABLE news_model_stats"))
+        elif "gate_open" not in columns:
+            # #1267: hodnotu doplní přepočet, který běží i při startu news-engine
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE news_model_stats "
+                        "ADD COLUMN gate_open BOOLEAN NOT NULL DEFAULT false"
+                    )
+                )
     # `news_weights` jsou plně derivované (noční full-replace) — při chybějícím
     # sloupci `symbol` (ADR-0026) se tabulka zahodí a založí v novém tvaru;
     # hodnoty doplní příští přepočet vah.

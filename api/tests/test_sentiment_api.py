@@ -144,7 +144,9 @@ def test_upcoming_returns_only_future_scheduled(client: TestClient) -> None:
 def test_static_routes_are_not_swallowed_by_path_param(client: TestClient) -> None:
     """`/news/upcoming` a `/news/stats` nesmí spadnout do `/news/{event_id}`."""
     assert client.get("/news/upcoming").status_code == 200
-    assert client.get("/news/stats").status_code == 200
+    stats = client.get("/news/stats")
+    assert stats.status_code == 200
+    assert stats.json()["gate"] == {"min_samples": 30, "wilson_lb": 0.5, "min_effect_bp": 1.0}
     assert client.get("/sentiment/state").status_code == 200
     assert client.get("/sentiment/daily").status_code == 200
     assert client.get("/sentiment/topics").status_code == 200

@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import create_engine, insert, select, text
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.signal_gate import gate_open
 from gexlens_engine.storage.sentiment import (
     LegacyNewsReactionsError,
     ReactionWindow,
@@ -189,6 +190,7 @@ def test_signal_bucket_prefers_state_view_only_with_gate(tmp_path: Path) -> None
             "ret_sigma_bp": 3.0,
             "hit_rate": 0.6,
             "hit_rate_lb": lb,
+            "gate_open": gate_open(n, lb, mean),
             "computed_at": NOW,
         }
 

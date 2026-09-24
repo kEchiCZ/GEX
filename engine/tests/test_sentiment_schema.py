@@ -230,3 +230,33 @@ def test_categories_cover_spec_list() -> None:
     assert "FED" in NEWS_CATEGORIES
     assert "GEOPOLITICS" in NEWS_CATEGORIES
     assert len(NEWS_CATEGORIES) == 10
+
+
+def test_model_stats_gains_gate_open_column(tmp_path: Path) -> None:
+    """#1267: starší `news_model_stats` bez `gate_open` dostane sloupec (default false)."""
+    from sqlalchemy import text
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'old.sqlite'}")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE news_model_stats (regime VARCHAR(16), category VARCHAR(24), "
+                "importance SMALLINT, surprise_bucket VARCHAR(16), deferred BOOLEAN, "
+                "window_min SMALLINT, symbol VARCHAR(16), n INTEGER, ret_mean_bp FLOAT, "
+                "ret_median_bp FLOAT, ret_sigma_bp FLOAT, hit_rate FLOAT, hit_rate_lb FLOAT, "
+                "computed_at TIMESTAMP)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO news_model_stats VALUES "
+                "('all', 'FED', 3, 'none', 0, 5, 'ES', 50, 6.0, 6.0, 3.0, 0.6, 0.55, "
+                "'2026-09-24 00:00:00')"
+            )
+        )
+    ensure_sentiment_schema(engine)
+    ensure_sentiment_schema(engine)  # idempotence
+    columns = {c["name"] for c in inspect(engine).get_columns("news_model_stats")}
+    assert "gate_open" in columns
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT gate_open FROM news_model_stats")).scalar() in (0, False)

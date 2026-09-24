@@ -37,6 +37,7 @@ from gexlens_engine.compute.sentwaves import (
     assess_state,
     correction_levels,
 )
+from gexlens_engine.compute.signal_gate import gate_thresholds
 from gexlens_engine.storage.sentiment import (
     NEWS_CATEGORIES,
     REACTION_ALL_WINDOWS,
@@ -452,14 +453,16 @@ def build_sentiment_router(
         """Empirický model pro inspekci — hit-raty per okno včetně Wilson LB.
 
         `regime` (#402): all / RiskOn / RiskOff / Neutral / gamma_positive /
-        gamma_negative; bez filtru se vrací všechny pohledy.
+        gamma_negative; bez filtru se vrací všechny pohledy. Řádek nese
+        `gate_open` z přepočtu, `gate` jsou prahy pro text a progres ve Stats
+        (#1267 — frontend nemá vlastní kopii pravidla).
         """
         stmt = select(news_model_stats).order_by(
             news_model_stats.c.category, news_model_stats.c.window_min
         )
         if regime is not None:
             stmt = stmt.where(news_model_stats.c.regime == regime)
-        return {"stats": _rows(engine_factory(), stmt)}
+        return {"stats": _rows(engine_factory(), stmt), "gate": gate_thresholds()}
 
     @router.get("/news/latency")
     def news_latency(days: int = Query(7, ge=1, le=14)) -> dict[str, object]:

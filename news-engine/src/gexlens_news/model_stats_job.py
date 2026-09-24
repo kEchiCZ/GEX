@@ -14,6 +14,7 @@ from sqlalchemy import delete, insert, select
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.sentwaves import DailyClose, assess_state
+from gexlens_engine.compute.signal_gate import gate_open
 from gexlens_engine.storage.sentiment import (
     news_events,
     news_model_stats,
@@ -113,6 +114,7 @@ class ModelStatsJob:
                 "ret_sigma_bp": item.ret_sigma_bp,
                 "hit_rate": item.hit_rate,
                 "hit_rate_lb": item.hit_rate_lb,
+                "gate_open": gate_open(item.n, item.hit_rate_lb, item.ret_mean_bp),
                 "computed_at": now,
             }
             for regime, item in stats

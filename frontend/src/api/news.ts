@@ -533,48 +533,48 @@ export interface ModelStatsRow {
   ret_mean_bp: number
   hit_rate: number | null
   hit_rate_lb: number | null
+  /** Gate signálů vyhodnocený enginem při přepočtu (6.2 + ADR-0042, #1267). */
+  gate_open: boolean
 }
 
-export async function fetchNewsStats(): Promise<ModelStatsRow[]> {
-  const data = await getJson<{ stats: ModelStatsRow[] }>('/news/stats', { stats: [] })
-  return data.stats ?? []
+/** Prahy gate ze sdíleného modulu enginu — jen pro text a progres, pravidlo nese `gate_open`. */
+export interface GateThresholds {
+  min_samples: number
+  wilson_lb: number
+  min_effect_bp: number
 }
 
-/** Zrcadlo gate podmínky signal enginu (6.2 + ADR-0042): n ≥ 30 ∧ Wilson LB > 0.50 ∧ |Ø| ≥ 1 bp. */
-export const GATE_MIN_SAMPLES = 30
-export const GATE_WILSON_LB = 0.5
-export const GATE_MIN_EFFECT_BP = 1
+export interface NewsStats {
+  rows: ModelStatsRow[]
+  /** null = API nedostupné; UI pak prahy neukazuje místo vymyšlených čísel. */
+  gate: GateThresholds | null
+}
 
-/** Otevřený gate bucketu — jediná definice pro progres i zvýraznění ve Stats. */
-export function gateOpen(row: Pick<ModelStatsRow, 'n' | 'hit_rate_lb' | 'ret_mean_bp'>): boolean {
-  return (
-    row.n >= GATE_MIN_SAMPLES &&
-    (row.hit_rate_lb ?? 0) > GATE_WILSON_LB &&
-    Math.abs(row.ret_mean_bp) >= GATE_MIN_EFFECT_BP
-  )
+export async function fetchNewsStats(): Promise<NewsStats> {
+  const data = await getJson<{ stats?: ModelStatsRow[]; gate?: GateThresholds }>('/news/stats', {
+    stats: [],
+  })
+  return { rows: data.stats ?? [], gate: data.gate ?? null }
 }
 
 export interface SignalGateInfo {
   /** Kolik bucketů primárního okna má gate otevřený. */
   open: number
-  /** Nejlepší progres k n ≥ 30 (0–1) — pro stav „sbírám data". */
+  /** Nejlepší progres k n ≥ min_samples (0–1) — pro stav „sbírám data". */
   progress: number
 }
 
 /** Progres ke gate z modelových statistik; primární okno +5 min (SPEC 6.2). */
-export function signalGateInfo(
-  stats: ModelStatsRow[],
-  symbol: string,
-  windowMin = 5,
-): SignalGateInfo {
+export function signalGateInfo(stats: NewsStats, symbol: string, windowMin = 5): SignalGateInfo {
   let open = 0
   let progress = 0
-  for (const row of stats) {
+  const minSamples = stats.gate?.min_samples
+  for (const row of stats.rows) {
     // Progres ke gate se počítá z nepodmíněného pohledu (#402)
     if (row.regime !== undefined && row.regime !== 'all') continue
     if (row.window_min !== windowMin || row.symbol !== symbol) continue
-    if (gateOpen(row)) open += 1
-    progress = Math.max(progress, Math.min(1, row.n / GATE_MIN_SAMPLES))
+    if (row.gate_open) open += 1
+    if (minSamples) progress = Math.max(progress, Math.min(1, row.n / minSamples))
   }
   return { open, progress }
 }
