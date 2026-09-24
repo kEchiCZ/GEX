@@ -131,6 +131,12 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-24 — signály NQ jen z jednoho dne (#1265): gate LB > 0,5 bez velikosti efektu.**
+  81 z 86 signálů NQ za 10 dní vzniklo 23. 9. z bucketu OTHER/imp 1 (n 13 464, LB 0,5004, Ø −0,03 bp);
+  po nočním přepočtu LB klesl na 0,4997 a signály ustaly. Odhalil to mezistav H1 (#1264): 86 řádků
+  mělo jen 42 různých `ts` a 85 bylo z jednoho dne. → Statistická brána nad velkým n potřebuje i práh
+  velikosti efektu (ADR-0042); vyhodnocení track recordu dělat nad shluky (stejný `ts` = jedno
+  pozorování) a hlídat počet seancí, ne jen n řádků.
 - **2026-09-10 — špatné poučení z rozboru seance: „širší stop".** Short vyhozen o 2 body před pohybem
   k cíli → návrh stopů „za další konfluenci". Stop chrání kapitál a nezvětšuje se podle toho, co trh
   udělal; další zeď může být stovky bodů daleko a R:R zmizí.

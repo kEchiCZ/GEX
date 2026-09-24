@@ -13,7 +13,13 @@ import {
   fetchTrackRecord,
   fetchWaves,
 } from '../api/news'
-import { categoryLabel, GATE_MIN_SAMPLES, GATE_WILSON_LB } from '../api/news'
+import {
+  categoryLabel,
+  GATE_MIN_EFFECT_BP,
+  GATE_MIN_SAMPLES,
+  GATE_WILSON_LB,
+  gateOpen as bucketGateOpen,
+} from '../api/news'
 import type {
   EpisodeRow,
   ModelStatsRow,
@@ -818,8 +824,8 @@ export function StatsView() {
           )
         </h2>
         <p className="muted">
-          Gate signálů (6.2): n ≥ {GATE_MIN_SAMPLES} ∧ Wilson LB &gt; {GATE_WILSON_LB.toFixed(2)}.
-          Zvýrazněné řádky gate splňují.
+          Gate signálů (6.2): n ≥ {GATE_MIN_SAMPLES} ∧ Wilson LB &gt; {GATE_WILSON_LB.toFixed(2)} ∧
+          |Ø bp| ≥ {GATE_MIN_EFFECT_BP}. Zvýrazněné řádky gate splňují.
         </p>
         {bucketRows.length === 0 ? (
           <p className="muted">Žádné buckety pro tuto kombinaci</p>
@@ -839,8 +845,7 @@ export function StatsView() {
             </thead>
             <tbody>
               {bucketRows.map((row, index) => {
-                const gateOpen =
-                  row.n >= GATE_MIN_SAMPLES && (row.hit_rate_lb ?? 0) > GATE_WILSON_LB
+                const gateOpen = bucketGateOpen(row)
                 const driftKey = `news:${row.category}|${row.importance}|${row.surprise_bucket}|${row.deferred}|${row.symbol}`
                 const hasDrift = driftKeys.has(driftKey)
                 return (

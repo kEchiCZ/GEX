@@ -7,6 +7,7 @@ import {
   countdownLabel,
   episodeBadge,
   episodeTooltip,
+  gateOpen,
   latestCrowd,
   primaryReaction,
   relativeAge,
@@ -201,5 +202,18 @@ describe('korekční epizody (#565)', () => {
     expect(lines[lines.length - 1]).toContain(
       'placeholder z prvního měření, ne kalibrace (rozhodnutých epizod: 3)',
     )
+  })
+})
+
+describe('gate signálů (6.2 + ADR-0042)', () => {
+  const row = { n: 50, hit_rate_lb: 0.55, ret_mean_bp: 6 }
+  it('otevřený při n, LB i efektu', () => {
+    expect(gateOpen(row)).toBe(true)
+    expect(gateOpen({ ...row, ret_mean_bp: -1 })).toBe(true)
+  })
+  it('obří bucket s nulovou reakcí neprojde (#1265)', () => {
+    expect(gateOpen({ n: 13_464, hit_rate_lb: 0.5004, ret_mean_bp: -0.03 })).toBe(false)
+    expect(gateOpen({ ...row, n: 29 })).toBe(false)
+    expect(gateOpen({ ...row, hit_rate_lb: null })).toBe(false)
   })
 })
