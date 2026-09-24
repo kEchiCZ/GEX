@@ -108,13 +108,18 @@ $branch = (git rev-parse --abbrev-ref HEAD).Trim()
 if ($branch -ne 'main') { throw "Nasazuje se výhradně z main (jsi na '$branch')." }
 git pull --ff-only
 $head = (git rev-parse HEAD).Trim()
-Write-Step "main na $($head.Substring(0, 7))"
+# Image z CI nese revizi POSLEDNÍHO commitu, který sahal na vstupy workflow
+# Images (stejný seznam cest jako `paths:` v .github/workflows/images.yml).
+# Commit jen ve scripts/ nebo docs/ image nestaví, takže porovnání s HEAD
+# by po něm navždy hlásilo „CI nedoběhlo" (24. 9. 2026: 8315200 vs. 4bef411).
+$imageHead = (git log -1 --format=%H -- engine api news-engine pyproject.toml uv.lock frontend docker .github/workflows/images.yml).Trim()
+Write-Step "main na $($head.Substring(0, 7)); image se čeká z revize $($imageHead.Substring(0, 7))"
 
 # ── 3) Záloha běžícího image + stažení nového z GHCR (#1139) ──────────
 # Rollback tag na lokálním jménu `gex-python:pre-*` (docker-cleanup.ps1 nechá 3)
 docker tag $script:Images.engine "gex-python:$BackupTag"
 Write-Step "Záloha image: gex-python:$BackupTag"
-if (-not (Update-ServiceImage 'engine' $head)) { throw 'Image enginu pro HEAD main není k dispozici — nic se nerestartovalo. (Nouzově: -Build.)' }
+if (-not (Update-ServiceImage 'engine' $imageHead)) { throw 'Image enginu pro HEAD main není k dispozici — nic se nerestartovalo. (Nouzově: -Build.)' }
 
 # ── 3a) Log dosavadního běhu, než ho recreate smaže (#1056) ───────────
 Save-EngineLog
@@ -143,7 +148,7 @@ if ($healthy) {
     # části NEshazuje engine deploy: engine už je zdravý, exit 0 výše
     # se jen posune za tento blok a chyba se ohlásí warningem.
     foreach ($svc in @('api', 'frontend')) {
-        if (-not (Update-ServiceImage $svc $head)) { Write-Warning "Image $svc pro HEAD main není k dispozici — služba zůstává na staré verzi."; continue }
+        if (-not (Update-ServiceImage $svc $imageHead)) { Write-Warning "Image $svc pro HEAD main není k dispozici — služba zůstává na staré verzi."; continue }
         docker compose @composeArgs up -d --no-deps $svc
         if ($LASTEXITCODE -ne 0) { Write-Warning "Start $svc selhal — zkontroluj docker logs." }
         else { Write-Step "OK — $svc nasazen." }
