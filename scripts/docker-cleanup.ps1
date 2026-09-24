@@ -112,7 +112,22 @@ if ($vhdx) {
     $freeGB = [math]::Round($drive.Free / 1GB, 1)
     Write-Step "VHDX $($vhdx.FullName): $vhdxGB GB; disk $($drive.Name): volných $freeGB GB"
     if ($freeGB -lt $MinFreeGB) { $problems += "na disku $($drive.Name): zbývá $freeGB GB (práh $MinFreeGB GB)" }
-    if ($vhdxGB -gt $MaxVhdxGB) { $problems += "VHDX Dockeru má $vhdxGB GB (práh $MaxVhdxGB GB) — spusť jako správce scripts/compact-docker-vhdx.ps1" }
+    if ($vhdxGB -gt $MaxVhdxGB) {
+        # Kompaktace automaticky (#1127, 24. 9. 2026): elevovaná úloha z
+        # register-compact-vhdx-task.ps1; skript sám hlídá prahy i zavřený trh
+        # (Docker se na 2–5 min zastaví). Bez úlohy zůstává jen hlášení.
+        $compactTask = Get-ScheduledTask -TaskName 'GEXLens compact-vhdx' -ErrorAction SilentlyContinue
+        if ($compactTask -and -not $WhatIf) {
+            try {
+                Start-ScheduledTask -TaskName 'GEXLens compact-vhdx'
+                Write-Step "VHDX $vhdxGB GB nad prahem $MaxVhdxGB GB — spuštěna úloha „GEXLens compact-vhdx“ (běží jen při zavřeném trhu; log data/logs/compact-vhdx.log)."
+            } catch { $problems += "VHDX Dockeru má $vhdxGB GB (práh $MaxVhdxGB GB) a úlohu compact-vhdx se nepodařilo spustit: $_" }
+        } elseif ($compactTask) {
+            Write-Step "WhatIf: VHDX $vhdxGB GB nad prahem — spustila by se úloha „GEXLens compact-vhdx“."
+        } else {
+            $problems += "VHDX Dockeru má $vhdxGB GB (práh $MaxVhdxGB GB) — zaregistruj jako správce scripts/register-compact-vhdx-task.ps1 (kompaktace pak běží sama), nebo spusť ručně scripts/compact-docker-vhdx.ps1"
+        }
+    }
 } else {
     Write-Warning 'VHDX Dockeru nenalezen — hlídka místa přeskočena.'
 }
