@@ -49,6 +49,7 @@ const STATS = [
     ret_mean_bp: 8.0,
     hit_rate: 0.76,
     hit_rate_lb: 0.59,
+    gate_open: true,
   },
   {
     regime: 'all',
@@ -62,6 +63,7 @@ const STATS = [
     ret_mean_bp: -1.0,
     hit_rate: 0.5,
     hit_rate_lb: 0.3,
+    gate_open: false,
   },
 ]
 
@@ -118,7 +120,7 @@ beforeEach(() => {
           : url.includes('/stats/waves')
             ? { waves: WAVES }
             : url.includes('/news/stats')
-              ? { stats: STATS }
+              ? { stats: STATS, gate: { min_samples: 30, wilson_lb: 0.5, min_effect_bp: 1 } }
               : url.includes('/briefing/verdicts/stats')
                 ? {
                     evaluated: 3,

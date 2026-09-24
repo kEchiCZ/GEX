@@ -226,6 +226,7 @@ class SignalJob:
                 hit_rate_lb=float(row.hit_rate_lb) if row.hit_rate_lb is not None else None,
                 ret_mean_bp=float(row.ret_mean_bp),
                 window_min=int(row.window_min),
+                gate_open=bool(row.gate_open),
                 regime=str(row.regime),
             )
 

@@ -15,9 +15,12 @@ ustaly. Signály v ostatních dnech (GEOPOLITICS imp 3, Ø desítky bp) byly v p
 ## Rozhodnutí
 
 Gate = `n ≥ 30 ∧ Wilson LB > 0,50 ∧ |ret_mean_bp| ≥ 1,0` na primárním okně.
-Konstanta `GATE_MIN_EFFECT_BP` v `signal_engine.py`, zrcadlo ve `frontend/src/api/news.ts`.
-Platí všude, kde se ptáme „má bucket otevřený gate": výběr režimového bucketu v `SignalJob`,
-drift hlídka (#403) i zvýraznění/progres ve Stats.
+**Jeden zdroj pravdy (#1267):** prahy a čistá funkce `gate_open()` jsou v
+`gexlens_engine/compute/signal_gate.py`. `ModelStatsJob` výsledek zapíše do sloupce
+`news_model_stats.gate_open` (tabulka je plně odvozená; migrace `ADD COLUMN`, přepočet běží
+i při startu news-engine). Výběr režimového bucketu v `SignalJob`, drift hlídka (#403)
+i zvýraznění/progres ve Stats čtou sloupec, pravidlo znovu nepočítají. `/news/stats` vrací
+prahy (`gate`) jen pro text a progres; frontend nemá vlastní kopii.
 
 Práh 1 bp ≈ 2× round-trip náklad ES (tick 0,25 b ≈ 0,37 bp + poplatek), u NQ víc než 5×.
 Znaménko Ø dál určuje směr (SPEC 6.3), práh je symetrický.

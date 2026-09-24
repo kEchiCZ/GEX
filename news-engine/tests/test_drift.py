@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import create_engine, insert, update
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.signal_gate import gate_open
 from gexlens_engine.storage.meta import meta_metadata
 from gexlens_engine.storage.sentiment import (
     ReactionWindow,
@@ -59,6 +60,7 @@ def seed_bucket(engine: Engine, *, hit_rate: float, ret_mean_bp: float = 5.0) ->
                     "ret_sigma_bp": 3.0,
                     "hit_rate": hit_rate,
                     "hit_rate_lb": 0.55,
+                    "gate_open": gate_open(100, 0.55, ret_mean_bp),
                     "computed_at": NOW,
                 }
             ],
@@ -109,7 +111,7 @@ def seed_recent_reactions(engine: Engine, *, hits: int, total: int) -> None:
 
 
 def test_drift_ignores_bucket_below_min_effect(tmp_path: Path) -> None:
-    """ADR-0042: bucket s |Ø| < 1 bp nemá otevřený gate → drift ho netestuje."""
+    """Drift testuje jen buckety s uloženým `gate_open` (ADR-0042, #1267)."""
     engine = make_db(tmp_path)
     seed_bucket(engine, hit_rate=0.61, ret_mean_bp=-0.03)
     seed_recent_reactions(engine, hits=5, total=RECENT_N)

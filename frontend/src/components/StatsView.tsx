@@ -13,15 +13,10 @@ import {
   fetchTrackRecord,
   fetchWaves,
 } from '../api/news'
-import {
-  categoryLabel,
-  GATE_MIN_EFFECT_BP,
-  GATE_MIN_SAMPLES,
-  GATE_WILSON_LB,
-  gateOpen as bucketGateOpen,
-} from '../api/news'
+import { categoryLabel } from '../api/news'
 import type {
   EpisodeRow,
+  GateThresholds,
   ModelStatsRow,
   SignalRow,
   SourceLatencyRow,
@@ -535,6 +530,7 @@ export function StatsView() {
   // Korekční epizody (#565) — per symbol, plní WavesJob
   const [episodes, setEpisodes] = useState<EpisodeRow[]>([])
   const [stats, setStats] = useState<ModelStatsRow[]>([])
+  const [gate, setGate] = useState<GateThresholds | null>(null)
   const [retro, setRetro] = useState<RetroPassState | null>(null)
   const [track, setTrack] = useState<TrackRecordRow[]>([])
   const [signals, setSignals] = useState<SignalRow[]>([])
@@ -566,7 +562,8 @@ export function StatsView() {
           if (cancelled) return
           setVerdictStats(verdicts)
           setWaves(waveRows)
-          setStats(statsRows)
+          setStats(statsRows.rows)
+          setGate(statsRows.gate)
           const retroValue = settings.retro_pass
           setRetro(isRetroState(retroValue) ? retroValue : null)
           const driftValue = settings.drift_state
@@ -824,8 +821,10 @@ export function StatsView() {
           )
         </h2>
         <p className="muted">
-          Gate signálů (6.2): n ≥ {GATE_MIN_SAMPLES} ∧ Wilson LB &gt; {GATE_WILSON_LB.toFixed(2)} ∧
-          |Ø bp| ≥ {GATE_MIN_EFFECT_BP}. Zvýrazněné řádky gate splňují.
+          Gate signálů (6.2)
+          {gate &&
+            `: n ≥ ${gate.min_samples} ∧ Wilson LB > ${gate.wilson_lb.toFixed(2)} ∧ |Ø bp| ≥ ${gate.min_effect_bp}`}
+          . Zvýrazněné řádky gate splňují.
         </p>
         {bucketRows.length === 0 ? (
           <p className="muted">Žádné buckety pro tuto kombinaci</p>
@@ -845,7 +844,7 @@ export function StatsView() {
             </thead>
             <tbody>
               {bucketRows.map((row, index) => {
-                const gateOpen = bucketGateOpen(row)
+                const gateOpen = row.gate_open
                 const driftKey = `news:${row.category}|${row.importance}|${row.surprise_bucket}|${row.deferred}|${row.symbol}`
                 const hasDrift = driftKeys.has(driftKey)
                 return (

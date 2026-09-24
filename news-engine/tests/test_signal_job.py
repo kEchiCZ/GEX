@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.signal_gate import gate_open
 from gexlens_engine.storage.sentiment import (
     ensure_sentiment_schema,
     news_events,
@@ -77,6 +78,7 @@ def seed_bucket(engine: Engine, *, n: int = 50, lb: float = 0.6, mean: float = 6
                     "ret_sigma_bp": 4.0,
                     "hit_rate": 0.65,
                     "hit_rate_lb": lb,
+                    "gate_open": gate_open(n, lb, mean),
                     "computed_at": NOW,
                 }
             ],
@@ -257,6 +259,7 @@ def test_stavy_per_symbol_a_state_symbol_v_inputs(tmp_path: Path) -> None:
                     "ret_sigma_bp": 4.0,
                     "hit_rate": 0.65,
                     "hit_rate_lb": 0.6,
+                    "gate_open": True,
                     "computed_at": NOW,
                 }
             ],

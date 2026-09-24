@@ -12,7 +12,7 @@ import {
   fetchTopics,
   fetchUpcoming,
 } from '../api/news'
-import type { ModelStatsRow, NewsRow, SentimentPoint, SignalRow, TopicRow } from '../api/news'
+import type { NewsRow, NewsStats, SentimentPoint, SignalRow, TopicRow } from '../api/news'
 import { useAppState } from '../state/AppState'
 
 /** Perioda přenačtení. Index se počítá po minutě, takže častěji nemá smysl. */
@@ -44,7 +44,7 @@ export interface NewsData {
   /** Signály obou větví (#295); filtr dle režimu dělá až UI (S9). */
   signals: SignalRow[]
   /** Empirický model — progres ke gate v dropdownu režimu (#295). */
-  stats: ModelStatsRow[]
+  stats: NewsStats
   refresh: () => void
 }
 
@@ -58,7 +58,7 @@ export function useNews(date?: string): NewsData {
   const [series, setSeries] = useState<SentimentPoint[]>([])
   const [topics, setTopics] = useState<TopicRow[]>([])
   const [signals, setSignals] = useState<SignalRow[]>([])
-  const [stats, setStats] = useState<ModelStatsRow[]>([])
+  const [stats, setStats] = useState<NewsStats>({ rows: [], gate: null })
   const [version, setVersion] = useState(0)
 
   useEffect(() => {

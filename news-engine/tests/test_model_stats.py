@@ -226,6 +226,7 @@ def test_job_recomputes_from_scratch(tmp_path: Path) -> None:
     assert {r.window_min for r in rows} == {1, 5, 15}
     assert all(r.surprise_bucket == "pos_large" for r in rows)
     assert all(r.hit_rate is None for r in rows)  # klasifikace přijde v N3
+    assert not any(r.gate_open for r in rows)  # bez hit-rate gate zavřený (#1267)
 
     # Opakovaný běh tabulku nahradí, ne zduplikuje
     assert job.run(NOW) == 3

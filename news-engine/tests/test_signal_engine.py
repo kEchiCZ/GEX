@@ -4,6 +4,7 @@ import datetime as dt
 
 import pytest
 
+from gexlens_engine.compute.signal_gate import gate_open
 from gexlens_news.signal_engine import (
     BucketStats,
     GexContext,
@@ -17,7 +18,13 @@ NOW = dt.datetime(2026, 7, 29, 14, 0, tzinfo=dt.UTC)
 
 
 def stats(n: int = 50, hit_rate_lb: float | None = 0.58, ret_mean_bp: float = 6.0) -> BucketStats:
-    return BucketStats(n=n, hit_rate_lb=hit_rate_lb, ret_mean_bp=ret_mean_bp, window_min=5)
+    return BucketStats(
+        n=n,
+        hit_rate_lb=hit_rate_lb,
+        ret_mean_bp=ret_mean_bp,
+        window_min=5,
+        gate_open=gate_open(n, hit_rate_lb, ret_mean_bp),
+    )
 
 
 def event(
@@ -39,24 +46,14 @@ def event(
     )
 
 
-# ── Wilson gate (SPEC 6.2, golden dle kap. 10) ─────────────────────
+# ── Gate (SPEC 6.2, ADR-0042; prahy testuje engine/tests/test_signal_gate.py) ──
 
 
-def test_gate_requires_samples_and_wilson_lb() -> None:
-    assert gate_passes(stats(n=30, hit_rate_lb=0.51))
-    assert not gate_passes(stats(n=29, hit_rate_lb=0.9))  # málo vzorků
-    assert not gate_passes(stats(n=200, hit_rate_lb=0.50))  # LB přesně 0.50 nestačí
-    assert not gate_passes(stats(hit_rate_lb=None))  # bucket bez hit-rate
+def test_gate_passes_reads_stored_flag() -> None:
+    """Signal engine pravidlo nepočítá, čte `gate_open` z přepočtu (#1267)."""
+    assert gate_passes(stats())
+    assert not gate_passes(stats(ret_mean_bp=0.5))
     assert not gate_passes(None)  # bucket vůbec neexistuje
-
-
-def test_gate_requires_minimal_effect() -> None:
-    """ADR-0042 (#1265): spolehlivý směr s nulovou reakcí není signál."""
-    # NQ OTHER/imp 1 z 23. 9. 2026: n 13 464, LB 0,5004, Ø −0,03 bp
-    assert not gate_passes(stats(n=13_464, hit_rate_lb=0.5004, ret_mean_bp=-0.03))
-    assert not gate_passes(stats(ret_mean_bp=0.99))
-    assert gate_passes(stats(ret_mean_bp=1.0))
-    assert gate_passes(stats(ret_mean_bp=-1.0))  # short bucket — rozhoduje velikost
 
 
 # ── Čerstvost a expirace (ADR-0020) ────────────────────────────────

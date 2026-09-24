@@ -7,10 +7,10 @@ import {
   countdownLabel,
   episodeBadge,
   episodeTooltip,
-  gateOpen,
   latestCrowd,
   primaryReaction,
   relativeAge,
+  signalGateInfo,
 } from './news'
 import type { NewsRow, SentimentStateInfo } from './news'
 
@@ -205,15 +205,30 @@ describe('korekční epizody (#565)', () => {
   })
 })
 
-describe('gate signálů (6.2 + ADR-0042)', () => {
-  const row = { n: 50, hit_rate_lb: 0.55, ret_mean_bp: 6 }
-  it('otevřený při n, LB i efektu', () => {
-    expect(gateOpen(row)).toBe(true)
-    expect(gateOpen({ ...row, ret_mean_bp: -1 })).toBe(true)
+describe('signalGateInfo (#1267)', () => {
+  const base = {
+    regime: 'all',
+    category: 'FED',
+    importance: 3,
+    surprise_bucket: 'none',
+    deferred: false,
+    window_min: 5,
+    symbol: 'NQ',
+    ret_mean_bp: -0.03,
+    hit_rate: 0.51,
+    hit_rate_lb: 0.5004,
+  }
+  const gate = { min_samples: 30, wilson_lb: 0.5, min_effect_bp: 1 }
+  it('počítá otevřené buckety z gate_open enginu, ne vlastním pravidlem', () => {
+    const rows = [
+      { ...base, n: 13_464, gate_open: false },
+      { ...base, category: 'GEOPOLITICS', n: 67, gate_open: true },
+    ]
+    expect(signalGateInfo({ rows, gate }, 'NQ')).toEqual({ open: 1, progress: 1 })
   })
-  it('obří bucket s nulovou reakcí neprojde (#1265)', () => {
-    expect(gateOpen({ n: 13_464, hit_rate_lb: 0.5004, ret_mean_bp: -0.03 })).toBe(false)
-    expect(gateOpen({ ...row, n: 29 })).toBe(false)
-    expect(gateOpen({ ...row, hit_rate_lb: null })).toBe(false)
+  it('progres k min_samples z API; bez prahů progres 0', () => {
+    const rows = [{ ...base, n: 15, gate_open: false }]
+    expect(signalGateInfo({ rows, gate }, 'NQ').progress).toBe(0.5)
+    expect(signalGateInfo({ rows, gate: null }, 'NQ').progress).toBe(0)
   })
 })
