@@ -19,7 +19,7 @@ import math
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
@@ -34,7 +34,7 @@ from gexlens_engine.storage.sentiment import (
 )
 from gexlens_engine.storage.setups_store import setups_table
 from gexlens_news.predictions import DEFAULT_PRIMARY_WINDOW_MIN
-from gexlens_news.signal_engine import GATE_MIN_SAMPLES, GATE_WILSON_LB
+from gexlens_news.signal_engine import GATE_MIN_EFFECT_BP, GATE_MIN_SAMPLES, GATE_WILSON_LB
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,7 @@ class DriftJob:
             news_model_stats.c.window_min == self._window,
             news_model_stats.c.n >= GATE_MIN_SAMPLES,
             news_model_stats.c.hit_rate_lb > GATE_WILSON_LB,
+            func.abs(news_model_stats.c.ret_mean_bp) >= GATE_MIN_EFFECT_BP,
             news_model_stats.c.hit_rate.is_not(None),
         )
         with self._engine.connect() as conn:

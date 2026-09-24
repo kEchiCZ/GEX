@@ -540,9 +540,19 @@ export async function fetchNewsStats(): Promise<ModelStatsRow[]> {
   return data.stats ?? []
 }
 
-/** Zrcadlo gate podmínky signal enginu (6.2): n ≥ 30 ∧ Wilson LB > 0.50. */
+/** Zrcadlo gate podmínky signal enginu (6.2 + ADR-0042): n ≥ 30 ∧ Wilson LB > 0.50 ∧ |Ø| ≥ 1 bp. */
 export const GATE_MIN_SAMPLES = 30
 export const GATE_WILSON_LB = 0.5
+export const GATE_MIN_EFFECT_BP = 1
+
+/** Otevřený gate bucketu — jediná definice pro progres i zvýraznění ve Stats. */
+export function gateOpen(row: Pick<ModelStatsRow, 'n' | 'hit_rate_lb' | 'ret_mean_bp'>): boolean {
+  return (
+    row.n >= GATE_MIN_SAMPLES &&
+    (row.hit_rate_lb ?? 0) > GATE_WILSON_LB &&
+    Math.abs(row.ret_mean_bp) >= GATE_MIN_EFFECT_BP
+  )
+}
 
 export interface SignalGateInfo {
   /** Kolik bucketů primárního okna má gate otevřený. */
@@ -563,7 +573,7 @@ export function signalGateInfo(
     // Progres ke gate se počítá z nepodmíněného pohledu (#402)
     if (row.regime !== undefined && row.regime !== 'all') continue
     if (row.window_min !== windowMin || row.symbol !== symbol) continue
-    if (row.n >= GATE_MIN_SAMPLES && (row.hit_rate_lb ?? 0) > GATE_WILSON_LB) open += 1
+    if (gateOpen(row)) open += 1
     progress = Math.max(progress, Math.min(1, row.n / GATE_MIN_SAMPLES))
   }
   return { open, progress }

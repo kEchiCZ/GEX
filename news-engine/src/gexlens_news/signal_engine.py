@@ -32,6 +32,11 @@ SHORT = "short"
 # bucketů navíc nějaký „projde" náhodou — proto interval, ne bod.
 GATE_MIN_SAMPLES = 30
 GATE_WILSON_LB = 0.50
+# Minimální |Ø reakce| bucketu v bp (ADR-0042, #1265). LB > 0,5 měří jen
+# spolehlivost směru, ne velikost: při n ≈ 14 000 projde i bucket s Ø −0,03 bp
+# (NQ OTHER/imp 1, 23. 9. 2026 — 81 šumových signálů za den). 1 bp ≈ 2×
+# round-trip náklad ES (tick + poplatek), u NQ víc než 5×.
+GATE_MIN_EFFECT_BP = 1.0
 
 # Důvody, proč kandidát nedal signál (#453). Prázdná tabulka `signals` se
 # bez tohohle rozpadu nedá odlišit od poruchy — job je loguje po cyklech.
@@ -103,10 +108,14 @@ class SignalCandidate:
 
 
 def gate_passes(stats: BucketStats | None) -> bool:
-    """SPEC 6.2: n ≥ 30 nekontaminovaných reakcí ∧ Wilson LB > 0.50."""
+    """SPEC 6.2 + ADR-0042: n ≥ 30 ∧ Wilson LB > 0.50 ∧ |Ø reakce| ≥ 1 bp."""
     if stats is None or stats.hit_rate_lb is None:
         return False
-    return stats.n >= GATE_MIN_SAMPLES and stats.hit_rate_lb > GATE_WILSON_LB
+    return (
+        stats.n >= GATE_MIN_SAMPLES
+        and stats.hit_rate_lb > GATE_WILSON_LB
+        and abs(stats.ret_mean_bp) >= GATE_MIN_EFFECT_BP
+    )
 
 
 def event_is_fresh(event: SignalEvent, now: dt.datetime) -> bool:

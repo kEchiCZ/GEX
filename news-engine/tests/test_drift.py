@@ -40,7 +40,7 @@ def make_db(tmp_path: Path) -> Engine:
     return engine
 
 
-def seed_bucket(engine: Engine, *, hit_rate: float) -> None:
+def seed_bucket(engine: Engine, *, hit_rate: float, ret_mean_bp: float = 5.0) -> None:
     with engine.begin() as conn:
         conn.execute(
             insert(news_model_stats),
@@ -54,7 +54,7 @@ def seed_bucket(engine: Engine, *, hit_rate: float) -> None:
                     "window_min": 5,
                     "symbol": "ES",
                     "n": 100,
-                    "ret_mean_bp": 5.0,
+                    "ret_mean_bp": ret_mean_bp,
                     "ret_median_bp": 5.0,
                     "ret_sigma_bp": 3.0,
                     "hit_rate": hit_rate,
@@ -106,6 +106,14 @@ def seed_recent_reactions(engine: Engine, *, hits: int, total: int) -> None:
                     event_id=event_id, symbol="ES", **reaction_row_values([window])
                 )
             )
+
+
+def test_drift_ignores_bucket_below_min_effect(tmp_path: Path) -> None:
+    """ADR-0042: bucket s |Ø| < 1 bp nemá otevřený gate → drift ho netestuje."""
+    engine = make_db(tmp_path)
+    seed_bucket(engine, hit_rate=0.61, ret_mean_bp=-0.03)
+    seed_recent_reactions(engine, hits=5, total=RECENT_N)
+    assert DriftJob(engine).run(NOW) == []
 
 
 def test_drift_fires_once_for_degraded_bucket(tmp_path: Path) -> None:

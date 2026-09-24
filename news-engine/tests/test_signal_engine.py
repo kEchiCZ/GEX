@@ -50,6 +50,15 @@ def test_gate_requires_samples_and_wilson_lb() -> None:
     assert not gate_passes(None)  # bucket vůbec neexistuje
 
 
+def test_gate_requires_minimal_effect() -> None:
+    """ADR-0042 (#1265): spolehlivý směr s nulovou reakcí není signál."""
+    # NQ OTHER/imp 1 z 23. 9. 2026: n 13 464, LB 0,5004, Ø −0,03 bp
+    assert not gate_passes(stats(n=13_464, hit_rate_lb=0.5004, ret_mean_bp=-0.03))
+    assert not gate_passes(stats(ret_mean_bp=0.99))
+    assert gate_passes(stats(ret_mean_bp=1.0))
+    assert gate_passes(stats(ret_mean_bp=-1.0))  # short bucket — rozhoduje velikost
+
+
 # ── Čerstvost a expirace (ADR-0020) ────────────────────────────────
 
 
