@@ -9,6 +9,7 @@ maximálně zůstane osiřelý `.tmp`, který se při dalším zápisu uklidí.
 import datetime as dt
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass
@@ -903,6 +904,11 @@ class SnapshotWriter:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._buffers: dict[Path, _PartitionBuffer] = {}
+        #: Slovník bufferů mění a jako celek čte víc vláken naráz (minutový
+        #: cyklus, extended snapshoty, ad-hoc, rekonstrukce barů — každý přes
+        #: asyncio.to_thread). Evikce (#1247) slovník iteruje, takže bez zámku
+        #: spadla na „dictionary changed size during iteration" (#1261).
+        self._lock = threading.Lock()
         #: Evikce starých partic (#1247): nejnovější viděný den, pořadové
         #: číslo použití a prahy (přepisovatelné v testech)
         self._newest_day: dt.date | None = None
@@ -1296,24 +1302,27 @@ class SnapshotWriter:
         )
 
     def _buffer(self, path: Path, schema: pa.Schema) -> _PartitionBuffer:
-        buffer = self._buffers.get(path)
-        fresh = buffer is None
-        if buffer is None:
-            buffer = _PartitionBuffer(path, schema)
-            self._buffers[path] = buffer
-        self._touch_tick += 1
-        buffer.touched = self._touch_tick
-        now = time.monotonic()
-        # Nová partice přináší nový den; časová stráž hlídá růst UVNITŘ dne,
-        # kdy nové partice nevznikají (#1247). Obojí drží evikci mimo horkou
-        # cestu opakovaných zápisů do téže partice.
-        if fresh or now - self._last_evict >= self.buffer_evict_every_s:
-            self._last_evict = now
-            self._evict(keep=path)
-        return buffer
+        with self._lock:
+            buffer = self._buffers.get(path)
+            fresh = buffer is None
+            if buffer is None:
+                buffer = _PartitionBuffer(path, schema)
+                self._buffers[path] = buffer
+            self._touch_tick += 1
+            buffer.touched = self._touch_tick
+            now = time.monotonic()
+            # Nová partice přináší nový den; časová stráž hlídá růst UVNITŘ dne,
+            # kdy nové partice nevznikají (#1247). Obojí drží evikci mimo horkou
+            # cestu opakovaných zápisů do téže partice.
+            if fresh or now - self._last_evict >= self.buffer_evict_every_s:
+                self._last_evict = now
+                self._evict(keep=path)
+            return buffer
 
     def _evict(self, *, keep: Path) -> None:
         """Zahodí buffery starých dnů a přebytek nad stropem velikosti (#1247).
+
+        Volá se výhradně pod `self._lock` (z `_buffer`) — iteruje slovník bufferů.
 
         Partice na disku je po každém zápisu kompletní, takže zahození
         bufferu nic neztratí — pozdní zápis do staršího dne si ji načte
@@ -1359,10 +1368,11 @@ class SnapshotWriter:
 
     def buffer_stats(self) -> dict[str, int]:
         """Živé buffery partic pro /status (#1247)."""
-        return {
-            "partitions": len(self._buffers),
-            "bytes": sum(buf.nbytes for buf in self._buffers.values()),
-        }
+        with self._lock:
+            return {
+                "partitions": len(self._buffers),
+                "bytes": sum(buf.nbytes for buf in self._buffers.values()),
+            }
 
 
 def read_netflow_latest(

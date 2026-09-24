@@ -12,6 +12,7 @@ import pytest
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.parquet_store import (
+    LEVELS_SCHEMA,
     SNAPSHOT_SCHEMA,
     PrintVolRow,
     SnapshotRow,
@@ -356,3 +357,33 @@ def test_bez_casove_strazi_se_neevikuje_pri_kazdem_zapisu(tmp_path: Path) -> Non
     # Výchozí interval 60 s ještě neuplynul → zápis do existující partice neuklízí
     writer.write_bars("NQ", day, [_bar_row(ts + dt.timedelta(minutes=1), 30001.0)])
     assert writer.buffer_stats()["partitions"] == 2
+
+
+def test_buffer_a_evikce_prezijou_soubeh_vlaken(tmp_path: Path) -> None:
+    """#1261: dvě vlákna střídavě zakládají partice a evikují — bez zámku
+    `_evict` iteroval slovník, do kterého druhé vlákno právě vkládalo
+    (23. 9. 2026 21:45 UTC: extended snapshoty minuty ztraceny)."""
+    import threading
+
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    writer.buffer_keep_days = 0
+    writer.buffer_evict_every_s = 0.0  # evikce při každém volání
+    errors: list[BaseException] = []
+
+    def worker(offset: int) -> None:
+        try:
+            for i in range(300):
+                day = dt.date(2026, 1, 1) + dt.timedelta(days=(i + offset) % 40)
+                path = tmp_path / "derived" / f"S{offset}" / "levels" / f"{day.isoformat()}.parquet"
+                writer._buffer(path, LEVELS_SCHEMA)
+                writer.buffer_stats()
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(k,)) for k in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert writer.buffer_stats()["partitions"] >= 1
