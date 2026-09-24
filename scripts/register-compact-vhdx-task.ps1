@@ -25,7 +25,12 @@ if (-not (Test-Path $script)) { throw "Nenalezen $script" }
 New-Item -ItemType Directory -Force (Split-Path -Parent $log) | Out-Null
 
 # Plná cesta pwsh — Task Scheduler nepoužívá PATH uživatele (10. 9. 2026: 0x80070002)
-$pwsh = (Get-Command pwsh).Source
+# Stabilní alias pwsh (App Execution Alias), ne cesta do WindowsApps s číslem
+# verze: po aktualizaci Store balíčku (7.6.5 → 7.6.6, 9. 9. 2026) stará cesta
+# zmizela a úlohy končily 0x80070002, aniž si toho kdo všiml (walk-forward
+# neběžel 2 týdny). Alias verzi přežije; Get-Command jen jako záloha.
+$pwsh = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
+if (-not (Test-Path $pwsh)) { $pwsh = (Get-Command pwsh).Source }
 $argument = "-NoProfile -ExecutionPolicy Bypass -Command `"& '$script' -IfNeeded *>> '$log'`""
 $action = New-ScheduledTaskAction -Execute $pwsh -Argument $argument -WorkingDirectory $repo
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Saturday -At $At
