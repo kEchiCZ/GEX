@@ -94,24 +94,14 @@ function Save-EngineLog([string]$Suffix = '') {
 }
 
 # ── 1) Je trh zavřený? ────────────────────────────────────────────────
-# Globex jede neděle 17:00 CT → pátek 16:00 CT s denní pauzou 16:00–17:00 CT.
-# Id zóny: Windows zná 'Central Standard Time', Linux (pwsh bez ICU konverze)
-# jen IANA 'America/Chicago' — zkusí se obojí, jinak by deploy na serveru spadl
-# dřív, než cokoli zkontroluje (#1094)
-$tz = $null
-foreach ($id in @('America/Chicago', 'Central Standard Time')) {
-    try { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById($id); break } catch { }
+# Sdílená brána (scripts/lib/GlobexClock.ps1): Globex jede neděle 17:00 CT →
+# pátek 16:00 CT s denní pauzou 16:00–17:00 CT.
+. (Join-Path $PSScriptRoot 'lib\GlobexClock.ps1')
+$clock = Get-GlobexClock
+if (-not $clock.Closed -and -not $Force) {
+    throw "Trh je otevřený (CT $($clock.Label)) — restart by udělal díru ve sběru. Použij -Force jen vědomě."
 }
-if (-not $tz) { throw "Časová zóna Chicago není v systému (zkoušeno America/Chicago, Central Standard Time) — bez ní nejde určit pauzu Globexu." }
-$ct = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tz)
-$closed = $ct.DayOfWeek -eq 'Saturday' `
-    -or ($ct.DayOfWeek -eq 'Sunday' -and $ct.Hour -lt 17) `
-    -or ($ct.DayOfWeek -eq 'Friday' -and $ct.Hour -ge 16) `
-    -or ($ct.Hour -eq 16)
-if (-not $closed -and -not $Force) {
-    throw "Trh je otevřený (CT $($ct.ToString('ddd HH:mm'))) — restart by udělal díru ve sběru. Použij -Force jen vědomě."
-}
-Write-Step "Trh zavřený (CT $($ct.ToString('ddd HH:mm'))) — pokračuju."
+Write-Step "Trh zavřený (CT $($clock.Label)) — pokračuju."
 
 # ── 2) Kód z main ─────────────────────────────────────────────────────
 $branch = (git rev-parse --abbrev-ref HEAD).Trim()
