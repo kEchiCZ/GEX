@@ -351,12 +351,19 @@ class FfActualRefreshJob:
         return elapsed >= dt.timedelta(seconds=BURST_INTERVAL_S) and self._release_pending(now)
 
     def _release_pending(self, now: dt.datetime) -> bool:
-        """Proběhl právě high-impact scheduled event bez actual?"""
+        """Proběhl právě high-impact scheduled event bez actual?
+
+        Jen eventy s číselnou řadou (`previous`): projevy („FOMC Member …
+        Speaks") actual nikdy nedostanou a burst by po každém 20 min zbytečně
+        tahal FF (#1271). Na prod datech mají `previous` všechny eventy, které
+        actual dostaly; `forecast` u některých chybí.
+        """
         stmt = (
             select(news_events.c.id)
             .where(
                 news_events.c.kind == "scheduled",
                 news_events.c.importance >= BURST_MIN_IMPORTANCE,
+                news_events.c.previous.is_not(None),
                 news_events.c.actual.is_(None),
                 news_events.c.ts_event <= now,
                 news_events.c.ts_event >= now - dt.timedelta(minutes=BURST_WINDOW_MIN),

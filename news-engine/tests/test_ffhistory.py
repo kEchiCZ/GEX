@@ -289,6 +289,25 @@ def test_actual_refresh_bursts_after_high_impact_release(tmp_path: Path) -> None
     # Bez čekajícího release → burst nebeží
     assert job.due(now) is False
 
+    # Projev bez číselné řady actual nikdy nedostane → burst nespouští (#1271)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(news_events).values(
+                ts_event=now - dt.timedelta(minutes=5),
+                ts_ingested=now - dt.timedelta(hours=30),
+                source="forexfactory",
+                kind="scheduled",
+                category="CENTRAL_BANK",
+                importance=3,
+                title="USD FOMC Member Williams Speaks",
+                symbols=[],
+                market_closed=False,
+                dedup_hash="speech-burst",
+                raw={},
+            )
+        )
+    assert job.due(now) is False
+
     with engine.begin() as conn:
         conn.execute(
             insert(news_events).values(
@@ -301,6 +320,7 @@ def test_actual_refresh_bursts_after_high_impact_release(tmp_path: Path) -> None
                 title="USD CPI m/m",
                 symbols=[],
                 market_closed=False,
+                previous=0.2,
                 actual=None,
                 dedup_hash="cpi-burst",
                 raw={},
