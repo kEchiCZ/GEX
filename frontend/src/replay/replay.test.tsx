@@ -1128,6 +1128,59 @@ test('accumulatePrintVol (#1007): kumulativ per buňka, díra dědí, NULL otrá
   expect(Number.isNaN(target.putPrinted[2])).toBe(true) // NaN se dědí i přes další řádek
 })
 
+test('appendMinute: pozdější flush téže minuty bez printVol přírůstek nesmaže (#1273)', () => {
+  const printed = (inputs: ReturnType<typeof decodeBundle>, strike: number, ts: string) => {
+    const at =
+      inputs.strikes.indexOf(strike) * inputs.minuteCapacity +
+      inputs.minutes.indexOf(new Date(ts).toISOString())
+    return [inputs.callPrinted[at], inputs.callStructured[at]]
+  }
+  const start = decodeBundle({
+    ...bundleFor(
+      CELLS.filter((c) => c.ts === M0),
+      [BARS[0]],
+      [LEVELS[0]],
+      [FLOW[0]],
+    ),
+    printvol: [{ ts_min: M0, strike: 7600, right: 'C', printed: 5, structured: 1 }],
+  })
+  // Kanály minuty M1 chodí ve více flushích: snapshot + printVol, pak levels,
+  // pak finální bar předchozí minuty M0 (ADR-0005)
+  const withPrintVol = appendMinute(start, {
+    tsIso: M1,
+    rows: CELLS.filter((c) => c.ts === M1).map((c) => ({
+      strike: c.strike,
+      right: c.right,
+      oi: c.oi,
+      volume: c.volume,
+      delta: c.delta,
+    })),
+    printVol: [{ strike: 7600, right: 'C', volume_delta: 4, printed: 3, structured: 1 }],
+  })
+  expect(printed(withPrintVol, 7600, M1)).toEqual([8, 2])
+
+  const withLevels = appendMinute(withPrintVol, {
+    tsIso: M1,
+    rows: [],
+    levels: { flip: 7596, centroid: 7599, call_wall: 7655, put_wall: 7505 },
+  })
+  const withFinalBar = appendMinute(withLevels, {
+    tsIso: M0,
+    rows: [],
+    bar: { open: 7600, high: 7601, low: 7599, close: 7600.5, volume: 1000 },
+  })
+  expect(printed(withFinalBar, 7600, M0)).toEqual([5, 1])
+  expect(printed(withFinalBar, 7600, M1)).toEqual([8, 2])
+
+  // Opakovaný printVol téže minuty je idempotentní (přepočet od předchozího sloupce)
+  const repeated = appendMinute(withFinalBar, {
+    tsIso: M1,
+    rows: [],
+    printVol: [{ strike: 7600, right: 'C', volume_delta: 4, printed: 3, structured: 1 }],
+  })
+  expect(printed(repeated, 7600, M1)).toEqual([8, 2])
+})
+
 test('outrightShareAt (#1007): podíl tisků, NaN a nulový objem → null', () => {
   const printed = new Float32Array([60, Number.NaN, 0])
   const structured = new Float32Array([40, 1, 0])

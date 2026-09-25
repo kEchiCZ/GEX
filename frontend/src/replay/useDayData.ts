@@ -394,19 +394,10 @@ export function useDayData(
           // NEBO nese aspoň bar: osa X = sjednocení minut ze snapshotů a barů (#459),
           // takže bar-only minuta při výpadku opčního sběru dostane sloupec i živě (#503).
           if (partial.rows || known.has(ts) || partial.bar) {
-            applied.push({
-              tsIso: ts,
-              rows: partial.rows ?? [],
-              catchUp: partial.catchUp,
-              bar: partial.bar,
-              levels: partial.levels,
-              flow: partial.flow,
-              gexProfile: partial.gexProfile,
-              gexField: partial.gexField,
-              oiEst: partial.oiEst,
-              gexProfileFa: partial.gexProfileFa,
-              gexFieldFa: partial.gexFieldFa,
-            })
+            // Všechny kanály minuty rozprostřením, ne výčtem: ruční výčet tiše
+            // zahazoval ladder (#244) a printVol (#1007) — žebřík i podíl
+            // outright pak živě stály až do hodinového refetche (#1273)
+            applied.push({ ...partial, tsIso: ts, rows: partial.rows ?? [] })
             pending.delete(ts)
             known.add(ts)
           }

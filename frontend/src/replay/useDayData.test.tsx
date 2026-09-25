@@ -719,3 +719,50 @@ test('rekonstruovaná minuta MIMO osu snapshotů se taky ohlásí (#617)', async
   expect(day.minutes).not.toContain('2026-07-15T22:00:00.000Z') // opravdu mimo osu
   expect(day.reconstructedIso).toEqual(['2026-07-15T22:00:00.000Z'])
 })
+
+test('flush předá ladder a printvol; pozdější flush téže minuty přírůstek nesmaže (#1273)', async () => {
+  vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+  const socket = makeSocket()
+  const { result } = renderHook(() =>
+    useDayData('ES', '20260716', '2026-07-16', 'intraday', socket),
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+
+  const ts = '2026-07-16T15:01:00Z'
+  await act(async () => {
+    socket.emit('snapshot.ES.20260716', {
+      ts_min: ts,
+      rows: [{ strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 }],
+    })
+    socket.emit('ladder.ES.20260716', {
+      ts_min: ts,
+      call_strikes: [7600],
+      call_shares: [1],
+      put_strikes: [],
+      put_shares: [],
+    })
+    socket.emit('printvol.ES.20260716', {
+      ts_min: ts,
+      rows: [{ strike: 7600, right: 'C', volume_delta: 20, printed: 12, structured: 8 }],
+    })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  const callPrinted = () => {
+    const raw = result.current.day.raw!
+    return raw.callPrinted![
+      raw.strikes.indexOf(7600) * (raw.callPrinted!.length / raw.strikes.length) + 1
+    ]
+  }
+  expect(result.current.day.ladder?.[1]?.callStrikes).toEqual([7600])
+  expect(callPrinted()).toBe(12)
+
+  // Levels téže minuty dorazí až po debounce → druhý flush bez printVol
+  await act(async () => {
+    socket.emit('levels.ES.20260716', { ts_min: ts, flip: 7596, call_wall: 7650, put_wall: 7500 })
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  expect(callPrinted()).toBe(12)
+  expect(result.current.day.ladder?.[1]?.callStrikes).toEqual([7600])
+})
