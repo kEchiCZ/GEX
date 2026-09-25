@@ -104,7 +104,12 @@ if (-not $Force) {
         exit 0
     }
 }
-if ($DryRun) { Write-Step 'DryRun: kompaktace by teď proběhla.'; exit 0 }
+if ($DryRun) {
+    # Nastavení upozornění (#1284) jen vypsat — ruční ověření přepínače Noční údržba selhala
+    Write-Step "DryRun: $((Resolve-OpsAlertTelegram -Topic 'maintenance' -Policy (Get-OpsAlertPolicy)).Reason)"
+    Write-Step 'DryRun: kompaktace by teď proběhla.'
+    exit 0
+}
 
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Spusť jako správce (diskpart vyžaduje elevaci) — nebo přes úlohu „GEXLens compact-vhdx" (register-compact-vhdx-task.ps1).'
@@ -171,6 +176,10 @@ function Invoke-Diskpart([string]$Commands) {
 # záměrně zastavenou službu (docker compose stop) kompaktace nepustí
 $expectedRunning = @(Get-GexRunning)
 Write-Step "Před kompaktací běží: $($expectedRunning.Count) ($($expectedRunning -join ', '))"
+# Nastavení Telegramu (#1284) teď, dokud Docker běží — po zastavení API neodpoví
+# a upozornění by šlo bez ohledu na přepínače (fail-open)
+$alertPolicy = Get-OpsAlertPolicy
+Write-Step (Resolve-OpsAlertTelegram -Topic 'maintenance' -Policy $alertPolicy).Reason
 
 $marketState = if ($clock.Closed) { 'trh zavřený' } else { 'trh OTEVŘENÝ, -Force' }
 Write-Step "Zastavuji Docker Desktop a WSL ($marketState, CT $($clock.Label))..."
@@ -239,4 +248,4 @@ try {
 } catch {
     $problem = "Kompaktace VHDX spadla po zastavení Dockeru ($($_.Exception.Message)) — zkontroluj Docker Desktop a docker ps."
 }
-if ($problem) { Send-OpsAlert $problem; exit 1 }
+if ($problem) { Send-OpsAlert $problem -Topic 'maintenance' -Policy $alertPolicy; exit 1 }
