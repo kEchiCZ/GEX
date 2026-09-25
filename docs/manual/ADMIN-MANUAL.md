@@ -219,7 +219,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_NEWS_EXPLAIN_ENABLED` | false | **Vysvětlení zprávy** (#1126 3d, v1.18): tlačítko „Vysvětlit" u karty v News → `POST /news/{id}/explain` → Gemini free tier přes REST (klíč `GEXLENS_NEWS_GEMINI_API_KEY` výše, api kontejner přes `env_file`; bez klíče 503, cache jede dál). Jiný účel než klasifikace: porozumění, ne predikce — do SentIndexu, vah ani signálů nic neteče (R4). Odpovědi navždy v PG `news_explanations` (event_id, model, text, tokeny, created_at) |
 | `GEXLENS_NEWS_EXPLAIN_MODEL` | gemini-3.8-flash,gemini-3.6-flash,gemini-3.5-flash | Řetěz modelů oddělený čárkou — při 5xx „high demand" se hned zkusí další (free tier je přetěžovaný, 15. 9.: 3.8 200/503/503, 3.7 503). **Pinovat konkrétní verze**, ne alias `*-latest` (#738); `thinkingLevel: low` (`minimal` odmítá 400). Jedno vysvětlení ≈ 600 tokenů; uložený řádek nese model, který odpověděl |
 | `GEXLENS_NEWS_EXPLAIN_DAILY_TOKENS` | 300000 | Denní strop prompt+output tokenů za UTC den, po překročení 429 (0 = bez stropu); free tier má navíc vlastní denní kvótu requestů (429 od Google se hlásí stejně). Spotřeba je v logu api (`Vysvětlení zprávy N: model, in+out tokenů (dnes X/strop)`) |
-| `GEXLENS_PUSH_TELEGRAM_TOKEN` | — | **Push na Telegram** (#1175, v1.18): přihlašovací řetězec bota z @BotFather; api kontejner ho dostane přes `env_file`. Bez něj (nebo bez chat id) se nic neposílá, `GET /push/status` hlásí `configured: false` |
+| `GEXLENS_PUSH_TELEGRAM_TOKEN` | — | **Push na Telegram** (#1175, v1.18): přihlašovací řetězec bota z @BotFather; api kontejner ho dostane přes `env_file`. Bez něj (nebo bez chat id) se nic neposílá, `GET /push/status` hlásí `configured: false`. Tytéž klíče čte z `.env` i `scripts/lib/OpsAlert.ps1` pro upozornění, když neběží Docker (#1279) |
 | `GEXLENS_PUSH_TELEGRAM_CHAT_ID` | — | Id soukromého chatu s botem (napiš botovi /start, id je v odpovědi metody `getUpdates` Bot API, pole `chat.id`) |
 | `GEXLENS_PUSH_QUIET_HOURS` | 23:00-06:00 | Tiché hodiny v Europe/Prague (`HH:MM-HH:MM`, prázdné = žádné); provozní kategorie jde i v nich |
 | `GEXLENS_PUSH_DAILY_CAP` | 200 | Denní strop odeslaných zpráv (0 = bez stropu); dedup per (kind, symbol, začátek textu) 10 min |
@@ -864,6 +864,10 @@ je uvnitř VHDX). Proto:
   a v sobotu 10:00 (#1277, místní čas) a `docker-cleanup.ps1` po deployi; běží jen
   nad prahem (`-IfNeeded`), při zavřeném trhu s ≥ 20 min do otevření a počká,
   až doběhne deploy / walk-forward / záloha PG. Nanečisto: `-IfNeeded -DryRun`.
+  Když po kompaktaci Docker nenaběhne nebo chybí kontejner, skript zkusí jeden restart Docker
+  Desktopu a `docker compose start` (jen spustí existující kontejnery, nic nerecreatuje) a pak
+  upozorní **mimo Docker** (#1279, `scripts/lib/OpsAlert.ps1`): okno na ploše (`msg.exe`, vydrží
+  12 h) a Telegram, jsou-li v `.env` `GEXLENS_PUSH_TELEGRAM_TOKEN` a `_CHAT_ID` (token se nevypisuje).
 - Lokální build image jen nouzově a **po jedné službě** (`docker compose build engine`,
   pak `frontend`), nikdy všechny naráz, a před buildem zkontrolovat volné místo;
   standardně image dodává CI (#1139, kap. 3).
