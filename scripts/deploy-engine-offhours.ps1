@@ -22,6 +22,7 @@ param(
     [int]$ImageWaitSeconds = 900
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib\OpsAlert.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
 Set-Location $repo
 
@@ -177,4 +178,6 @@ docker compose @composeArgs up -d --no-deps --force-recreate engine
 Start-Sleep -Seconds 20
 $after = (docker inspect -f '{{.State.Status}}' gex-engine-1).Trim()
 Write-Step "Po rollbacku: $after"
+# Deploy běží i bez dohledu (23:xx) — upozornit mimo Docker, API může stát (#1279)
+Send-OpsAlert "Deploy enginu selhal, vrácena verze $BackupTag (stav po rollbacku: $after). Zkontroluj docker logs gex-engine-1."
 throw 'Nasazení enginu selhalo, vrácena předchozí verze. Zkontroluj docker logs gex-engine-1.'

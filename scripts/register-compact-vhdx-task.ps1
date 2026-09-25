@@ -47,7 +47,9 @@ $trigger = @(
     New-LocalWeeklyTrigger -DaysOfWeek Monday, Wednesday, Friday -At $WeekdayAt
     New-LocalWeeklyTrigger -DaysOfWeek Saturday -At $At
 )
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
+# 60 min: čekání na deploy (≤ 20) + kompaktace se samoopravou (≤ ~17) + upozornění;
+# po vypršení Task Scheduler pwsh zabije a upozornění by se ztratilo (#1279)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 60) `
     -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
 # Interactive: Docker Desktop (GUI) se po kompaktaci startuje v přihlášené relaci
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest
