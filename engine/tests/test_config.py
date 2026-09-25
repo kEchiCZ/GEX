@@ -53,6 +53,7 @@ def test_env_file_loaded(tmp_path: Path) -> None:
         ("GEXLENS_BATCH_SIZE", "-1"),
         ("GEXLENS_STRIKE_RANGE_EXPAND_THRESHOLD", "1.5"),
         ("GEXLENS_DISK_LIMIT_GB", "0"),
+        ("GEXLENS_PUSH_SETUP_MIN_CONFIDENCE", "101"),
     ],
 )
 def test_invalid_value_rejected(monkeypatch: pytest.MonkeyPatch, var: str, value: str) -> None:
@@ -123,3 +124,9 @@ def test_multiple_errors_reported_together(monkeypatch: pytest.MonkeyPatch) -> N
     message = str(excinfo.value)
     assert "GEXLENS_IBKR_PORT" in message
     assert "GEXLENS_RETENTION_DAYS" in message
+
+
+def test_prah_confidence_pushu_je_v_procentech(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setup posílá confidence 0–100; práh ve stejné škále musí projít (#1285)."""
+    monkeypatch.setenv("GEXLENS_PUSH_SETUP_MIN_CONFIDENCE", "65")
+    assert load_settings().push_setup_min_confidence == 65.0

@@ -188,7 +188,9 @@ class Settings(BaseSettings):
     push_telegram_chat_id: str = ""
     push_quiet_hours: str = "23:00-06:00"
     push_daily_cap: int = Field(default=200, ge=0)
-    push_setup_min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Práh v procentech 0–100 — setup posílá confidence ve stejné škále
+    # (adjusted_confidence, compute/bandregime.py); dřív 0–1, takže nic nefiltroval (#1285)
+    push_setup_min_confidence: float = Field(default=0.0, ge=0.0, le=100.0)
     news_explain_enabled: bool = False
     # Řetěz modelů oddělený čárkou: free tier vrací často 503 „high demand",
     # při něm se hned zkusí další (změřeno 15. 9. 2026)
