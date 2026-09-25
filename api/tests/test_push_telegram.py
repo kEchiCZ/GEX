@@ -315,12 +315,13 @@ def test_setup_odejde_jednou_a_uzavreni_ne() -> None:
 
 def test_prah_confidence_a_prepinace() -> None:
     post = FakePost()
-    push = _push(post, setup_min_confidence=0.5, stored={"push_telegram_news": False})
-    assert push.decide({"kind": "setup", "symbol": "ES", "message": "x", "confidence": 0.4})
-    assert push.decide({"kind": "setup", "symbol": "ES", "message": "x", "confidence": 0.6}) is None
+    # Práh i confidence setupu jsou v procentech 0–100 (#1285)
+    push = _push(post, setup_min_confidence=50, stored={"push_telegram_news": False})
+    assert push.decide({"kind": "setup", "symbol": "ES", "message": "x", "confidence": 40})
+    assert push.decide({"kind": "setup", "symbol": "ES", "message": "x", "confidence": 60}) is None
     # Stínový setup (#1185) nejde ven; brzda účtu má vlastní přepínač
     assert push.decide(
-        {"kind": "setup", "symbol": "ES", "message": "y", "confidence": 0.9, "tradeable": False}
+        {"kind": "setup", "symbol": "ES", "message": "y", "confidence": 90, "tradeable": False}
     )
     assert push.decide({"kind": "risk_brake", "symbol": "ES", "message": "brzda"}) is None
     # Zděděné vypnutí kategorie news

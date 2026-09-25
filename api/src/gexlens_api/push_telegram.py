@@ -127,7 +127,7 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
         (
             "Jen vznik, uzavření setupu na Telegram nechodí",
             "Stínový setup (stop nad rozpočtem, brzda, brána) se neposílá",
-            "Práh confidence z .env (GEXLENS_PUSH_SETUP_MIN_CONFIDENCE)",
+            "Práh confidence v % (0–100) z .env (GEXLENS_PUSH_SETUP_MIN_CONFIDENCE)",
         ),
     ),
     PushTopic(
