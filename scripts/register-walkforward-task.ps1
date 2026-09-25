@@ -12,6 +12,7 @@ param(
     [string]$At = '23:30'
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib\LocalTrigger.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
 $script = Join-Path $repo 'scripts\walkforward-nightly.ps1'
 $log = Join-Path $repo 'data\reports\walkforward-nightly.log'
@@ -26,7 +27,8 @@ $pwsh = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
 if (-not (Test-Path $pwsh)) { $pwsh = (Get-Command pwsh).Source }
 $argument = "-NoProfile -ExecutionPolicy Bypass -Command `"& '$script' *>> '$log'`""
 $action = New-ScheduledTaskAction -Execute $pwsh -Argument $argument -WorkingDirectory $repo
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At $At
+# Místní čas (#1278): s UTC ukotvením by po konci letního času běžel 22:30 v otevřeném trhu
+$trigger = New-LocalWeeklyTrigger -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday -At $At
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
     -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited

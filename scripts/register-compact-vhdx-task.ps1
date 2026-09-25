@@ -22,6 +22,7 @@ param(
     [string]$WeekdayAt = '23:05'
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib\LocalTrigger.ps1')
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Registrace elevované úlohy vyžaduje správce — spusť pwsh jako správce.'
 }
@@ -40,14 +41,12 @@ $pwsh = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
 if (-not (Test-Path $pwsh)) { $pwsh = (Get-Command pwsh).Source }
 $argument = "-NoProfile -ExecutionPolicy Bypass -Command `"& '$script' -IfNeeded *>> '$log'`""
 $action = New-ScheduledTaskAction -Execute $pwsh -Argument $argument -WorkingDirectory $repo
+# Místní čas, ne UTC (#1277/#1278): jinak by po konci letního času 23:05 vyšlo
+# na 22:05, tedy do otevřeného trhu
 $trigger = @(
-    New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday, Wednesday, Friday -At $WeekdayAt
-    New-ScheduledTaskTrigger -Weekly -DaysOfWeek Saturday -At $At
+    New-LocalWeeklyTrigger -DaysOfWeek Monday, Wednesday, Friday -At $WeekdayAt
+    New-LocalWeeklyTrigger -DaysOfWeek Saturday -At $At
 )
-# Místní čas, ne UTC (#1277): New-ScheduledTaskTrigger ukládá StartBoundary
-# s offsetem (+02:00) = „synchronizovat napříč časovými pásmy" → po konci
-# letního času by 23:05 vyšlo na 22:05, tedy do otevřeného trhu
-foreach ($t in $trigger) { $t.StartBoundary = ([datetime]$t.StartBoundary).ToString('s') }
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
     -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
 # Interactive: Docker Desktop (GUI) se po kompaktaci startuje v přihlášené relaci

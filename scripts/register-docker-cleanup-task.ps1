@@ -12,6 +12,7 @@ param(
     [string]$At = '08:00'
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib\LocalTrigger.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
 $script = Join-Path $repo 'scripts\docker-cleanup.ps1'
 $log = Join-Path $repo 'data\logs\docker-cleanup.log'
@@ -28,7 +29,7 @@ $pwsh = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
 if (-not (Test-Path $pwsh)) { $pwsh = (Get-Command pwsh).Source }
 $argument = "-NoProfile -ExecutionPolicy Bypass -Command `"& '$script' *>> '$log'`""
 $action = New-ScheduledTaskAction -Execute $pwsh -Argument $argument -WorkingDirectory $repo
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Saturday -At $At
+$trigger = New-LocalWeeklyTrigger -DaysOfWeek Saturday -At $At  # místní čas (#1278)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 1) `
     -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
