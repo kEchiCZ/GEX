@@ -1,18 +1,29 @@
 """Testy měření reakce (#276): okna, kontaminace, deferred gap, volume z-score."""
 
 import datetime as dt
+import math
+import statistics
 
 import pytest
 
 from gexlens_news.reactions import (
     MIN_BASELINE_SESSIONS,
     MIN_MINUTE_SAMPLES,
+    SIGMA_LOOKBACK_MIN,
+    SIGMA_MIN_SAMPLES,
     Bar,
+    Excursion,
     SessionDaily,
     VolumeBaseline,
+    build_excursion_baseline,
     build_volume_baseline,
     compute_daily_reactions,
     compute_reactions,
+    excursion_series,
+    measure_excursion,
+    minute_of_day_et,
+    percentile_abs,
+    tod_thresholds,
     volume_z_score,
 )
 
@@ -238,3 +249,105 @@ def test_daily_vikendova_zprava_je_deferred_a_zahrnuje_gap() -> None:
     )
     assert reactions[0].deferred is True
     assert reactions[0].ret_bp == pytest.approx((7150.0 - 7000.0) / 7000.0 * 10_000)
+
+
+# ── Výchylka a baseline denní doby (#1291) ─────────────────────────
+
+
+def ohlc(
+    ts: dt.datetime, close: float, *, high: float | None = None, low: float | None = None
+) -> Bar:
+    return Bar(
+        ts=ts,
+        open=close,
+        high=close + 0.25 if high is None else high,
+        low=close - 0.25 if low is None else low,
+        close=close,
+        volume=1.0,
+    )
+
+
+def wavy(start: dt.datetime, minutes: int, *, amplitude: float = 0.5) -> list[Bar]:
+    """Nepravidelně zvlněné bary — σ výnosů se mění v čase."""
+    return [
+        ohlc(start + dt.timedelta(minutes=i), 7000.0 + amplitude * math.sin(i * 1.7) * (1 + i % 7))
+        for i in range(minutes)
+    ]
+
+
+def test_percentile_abs_nearest_rank() -> None:
+    values = [float(v) for v in range(1, 101)]  # 1..100
+    assert percentile_abs(values, 0.90) == 90.0
+    assert percentile_abs([-8.0, 3.0], 0.90) == 8.0  # bere absolutní hodnoty
+
+
+def test_vychylka_od_cele_minuty_se_zakladem_minuty_pred_zpravou() -> None:
+    """Zpráva ve 12:30:03 se měří od 12:30 se základem close 12:29 (ne 12:30)."""
+    start = dt.datetime(2026, 9, 10, 11, 0, tzinfo=dt.UTC)
+    history = wavy(start, 89)  # 11:00–12:28
+    release = dt.datetime(2026, 9, 10, 12, 30, tzinfo=dt.UTC)
+    base = ohlc(release - dt.timedelta(minutes=1), 7000.0)
+    window = [
+        ohlc(release, 6990.0, low=6980.0),  # whipsaw: nejdřív dolů o 28,6 bp …
+        ohlc(release + dt.timedelta(minutes=1), 7010.0, high=7012.0),  # … pak nahoru 17 bp
+        ohlc(release + dt.timedelta(minutes=2), 7001.0),
+        ohlc(release + dt.timedelta(minutes=3), 7000.5),
+        ohlc(release + dt.timedelta(minutes=4), 7000.0),
+    ]
+    excursion = measure_excursion([*history, base, *window], release, 5)
+    assert excursion is not None
+    assert excursion.direction == -1
+    assert excursion.bp == pytest.approx((7000.0 - 6980.0) / 7000.0 * 10_000)
+    # Close-to-close by ukázal ~0 bp — výchylka whipsaw chytí
+    assert (window[-1].close - base.close) == 0
+
+
+def test_vychylka_potrebuje_zaklad_a_skoro_cele_okno() -> None:
+    start = dt.datetime(2026, 9, 10, 11, 0, tzinfo=dt.UTC)
+    bars = wavy(start, 120)
+    at = start + dt.timedelta(minutes=80)
+    assert measure_excursion(bars, at, 5) is not None
+    # Chybí základní bar (otevření po pauze) → nic
+    without_base = [bar for bar in bars if bar.ts != at - dt.timedelta(minutes=1)]
+    assert measure_excursion(without_base, at, 5) is None
+    # Jedna díra v okně se toleruje, dvě ne
+    one_hole = [bar for bar in bars if bar.ts != at + dt.timedelta(minutes=2)]
+    assert measure_excursion(one_hole, at, 5) is not None
+    two_holes = [bar for bar in one_hole if bar.ts != at + dt.timedelta(minutes=3)]
+    assert measure_excursion(two_holes, at, 5) is None
+    # Málo výnosů v hodině před startem (začátek seance) → nic
+    assert measure_excursion(bars, start + dt.timedelta(minutes=SIGMA_MIN_SAMPLES - 1), 5) is None
+
+
+def test_klouzava_sigma_sedi_na_primy_vypocet() -> None:
+    start = dt.datetime(2026, 9, 10, 11, 0, tzinfo=dt.UTC)
+    bars = [bar for bar in wavy(start, 400) if bar.ts.minute % 17 != 3]  # s dírami
+    by_ts = {bar.ts: bar for bar in bars}
+    series = excursion_series(bars, 5)
+    assert len(series) > 200
+    for at, excursion in series.items():
+        returns = [
+            math.log(by_ts[t].close / by_ts[t - dt.timedelta(minutes=1)].close)
+            for t in (at - dt.timedelta(minutes=k) for k in range(SIGMA_LOOKBACK_MIN, 0, -1))
+            if t in by_ts and t - dt.timedelta(minutes=1) in by_ts
+        ]
+        sigma_bp = statistics.stdev(returns) * 10_000
+        assert excursion.z == pytest.approx(excursion.bp / (sigma_bp * math.sqrt(5)), rel=1e-6)
+
+
+def test_baseline_denni_doby_v_et_a_prahy() -> None:
+    # 12:30 UTC v září (EDT) i 13:30 UTC v prosinci (EST) je 8:30 v New Yorku
+    assert minute_of_day_et(dt.datetime(2026, 9, 11, 12, 30, tzinfo=dt.UTC)) == 510
+    assert minute_of_day_et(dt.datetime(2026, 12, 10, 13, 30, tzinfo=dt.UTC)) == 510
+    sessions = [wavy(dt.datetime(2026, 9, day, 11, 0, tzinfo=dt.UTC), 180) for day in (7, 8, 9, 10)]
+    baseline = build_excursion_baseline(sessions, 5)
+    minute = minute_of_day_et(dt.datetime(2026, 9, 10, 12, 30, tzinfo=dt.UTC))
+    assert len(baseline[minute]) == 4  # jedna výchylka za seanci
+    thresholds = tod_thresholds(baseline, minute, min_samples=200)
+    assert thresholds is not None and thresholds.samples == 4 * 61
+    pooled = [item for offset in range(-30, 31) for item in baseline.get(minute + offset, [])]
+    assert thresholds.bp == percentile_abs([item.bp for item in pooled], 0.97)
+    assert thresholds.z == percentile_abs([item.z for item in pooled], 0.97)
+    # Pod minimem vzorků se nerozhoduje
+    assert tod_thresholds(baseline, minute, min_samples=245) is None
+    assert tod_thresholds({0: [Excursion(1.0, 1, 1.0)] * 300}, 1439) is not None  # přes půlnoc

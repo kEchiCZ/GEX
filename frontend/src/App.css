@@ -937,6 +937,12 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   font-size: 12px;
 }
 
+/* Víceřádková upozornění (news_preopen, news_anomaly — #1291) skládají odrážky
+   zalomením řádku; bez pre-line by je zvoneček slil do jednoho odstavce */
+.alerts-dropdown li {
+  white-space: pre-line;
+}
+
 .alert-time {
   margin-right: 4px;
   font-variant-numeric: tabular-nums;

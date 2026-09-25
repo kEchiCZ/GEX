@@ -1266,8 +1266,9 @@ Telegram. V Settings → **Notifikace (Telegram)**:
   neodejde nic, ani výpadky a noční údržba; přepínače pod ním zešednou, jejich
   hodnoty ale zůstanou uložené.
 - **Setupy a burza** — ve výchozím stavu zapnuté: Nový setup, Brzda ztráty,
-  Paper účet, Scénář dne, Reakce trhu na zprávu, Koncentrace opčního objemu,
-  Kalendář expirací, Setup detektor prodělává; vypnuté (chodí často nebo jsou
+  Paper účet, Scénář dne, Reakce trhu na zprávu, Zprávy před otevřením po
+  víkendu, Koncentrace opčního objemu, Kalendář expirací, Setup detektor
+  prodělává; vypnuté (chodí často nebo jsou
   jen informační): Cena u GEX úrovně, Kandidát vzorce T6, Setup detektor se
   zotavil, Drift vzorců.
 - **Chování aplikace** — ve výchozím stavu zapnuté výpadky a degradace: Výpadek
@@ -1287,14 +1288,16 @@ rollback deploye): do zvonku nejde, protože API v tu chvíli může stát, a p�
 vypnutém Telegramu zůstane jen v logu skriptu.
 
 Tiché hodiny 23:00–06:00 (lokálně): provozní přepínače (ve výchozím stavu zapnuté
-v Chování aplikace a Setup detektor prodělává) chodí i v nich, ostatní ne.
+v Chování aplikace a Setup detektor prodělává) chodí i v nich, ostatní ne —
+s jedinou výjimkou **Zprávy před otevřením po víkendu**: aktualizace 15 minut
+před nedělním otevřením padá na 23:45 a ráno by už nebyla k ničemu.
 Duplicitní alert do 10 min se neposílá, denní strop 200. Nastavení bota
 (přihlašovací údaje, chat id) dělá správce v `.env` — bez něj Settings ukážou
 „Telegram bot není nastaven". **Když se přihlásíš na mobilu k IBKR**, engine
 jede z tastytrade a CumΔ stojí: setupy s potvrzením tokem (T1, T4, T8)
 nevznikají, T2/T3/T7 a zprávy chodí dál; provozní alert o přetažení dostaneš.
 
-Zvonek je **globální — sbírá alerty napříč všemi instrumenty** ve watchlistu, ne jen z toho na grafu. Proto je u každého alertu **datum + čas** notifikace a **symbol instrumentu** (např. `[NQ · setup]`). Naproti tomu **karty a linie setupů přímo v grafu jsou jen pro instrument, který máš zobrazený.**
+Zvonek je **globální — sbírá alerty napříč všemi instrumenty** ve watchlistu, ne jen z toho na grafu. Proto je u každého alertu **datum + čas** notifikace a **symbol instrumentu** (např. `[NQ · setup]`). Naproti tomu **karty a linie setupů přímo v grafu jsou jen pro instrument, který máš zobrazený.** Víceřádková upozornění (reakce trhu na zprávy, zprávy před otevřením) se ve zvonku zobrazí po řádcích jako na Telegramu.
 
 Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a jeho výchozí stav; úplný popis ukážou tooltipy přepínačů):
 
@@ -1317,7 +1320,97 @@ Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a je
 | **Setup detektor prodělává / se zotavil** | Denní sebekontrola: setupy symbolu za sledované okno prodělávají — alert doporučí vypnout nejhorší šablonu (`GEXLENS_SETUP_DISABLED_TEMPLATES`) nebo upravit prahy; „zotavil“ = výkonnost se vrátila nad práh | Setup detektor prodělává (zap.) / se zotavil (vyp.) |
 | **T6 kandidát** | Ráno po výprodeji (close −1 % a hůř) nastala konstelace premarket squeeze (kap. 18) — zatím se jen sbírá, šablona vznikne po ~5 výskytech | Kandidát vzorce T6 (vyp.) |
 | **Drift hlídka** | Čerstvá úspěšnost signálového bucketu se statisticky rozešla s historickou — model přestává platit, signály z něj ber s rezervou (detail na Stats) | Drift vzorců (vyp.) |
-| **News anomálie** | Trh na zprávu zareagoval nad obvyklou míru — pohyb v bp nad p90 svého bucketu, jednou pro každou dvojici zpráva × symbol | Reakce trhu na zprávu (zap.) |
+| **Reakce trhu na zprávy** (`news_anomaly`) | Trh se do 5 min po shluku zpráv s aspoň jednou **významnou** zprávou pohnul mimořádně — nad 97 % výchylek v tuto denní dobu i po zohlednění volatility poslední hodiny. Jedno upozornění na shluk a instrument, ES a NQ zvlášť (viz níže) | Reakce trhu na zprávu (zap.) |
+| **Zprávy před otevřením po víkendu** (`news_preopen`) | V neděli 4 h před otevřením Globexu (20:00) souhrn **zásadních** zpráv za víkend se směrem, sklonem a úrovněmi poslední seance, 15 min před otevřením (23:45) aktualizace jen s novou zásadní zprávou; ES a NQ zvlášť, jen když nějaká zásadní vyšla (viz níže) | Zprávy před otevřením po víkendu (zap., i v tichých hodinách) |
+
+### Upozornění na zprávy (#1291)
+
+Pohyb trhu ze stejné chvíle nejde přisoudit jedné zprávě: v běžné minutě vyjde
+několik titulků a většina je šum. Aplikace proto hodnotí **shluk zpráv** a ohlásí
+ho jen tehdy, když v něm je aspoň jedna **významná** zpráva a trh se zároveň
+pohnul mimořádně. Mimořádný pohyb bez významné zprávy se neohlašuje.
+
+- **Významná zpráva**: ekonomický kalendář s dopadem High nebo Medium; headline
+  (agentury, Alpaca, Finnhub, IBKR) s důležitostí 2 a víc, kromě firemních
+  výsledků a přepisů earnings calls; sociální sítě jen od kurátorovaných autorů
+  (seznam v záložce News) s důležitostí 2 a víc.
+- **Shluk** začíná první významnou zprávou a patří do něj vše do 2 minut po ní.
+- **Mimořádný pohyb**: největší výchylka ceny do 5 minut od začátku shluku (i když
+  se cena vrátí — whipsaw po FOMC se počítá) je vyšší než u 97 % výchylek ve stejnou
+  denní dobu za posledních 20 seancí **a zároveň** vysoká i vzhledem k tomu, jak
+  rozjetý byl trh poslední hodinu. Klidná hodina a pak skok = upozornění; stejný
+  skok v už divokém trhu ne.
+- **ES a NQ zvlášť**: každý instrument má svou výchylku i hranici; když se pohne
+  jen NQ, přijde jen upozornění pro NQ.
+- **Kdy přijde**: 7–12 minut po začátku shluku (5 min okno + zápis svíček + cyklus
+  news-engine). Další shluk téhož instrumentu do 15 minut se nehlásí — měří týž pohyb.
+
+Text upozornění:
+
+```
+Reakce ES na zprávy z 20:00: ↓ -19 bp za 5 min (97 % výchylek v tuto denní dobu do 9 bp)
+• USD Federal Funds Rate
+• USD FOMC Statement
+• …
+další významné: 4 · ostatní zprávy: 27
+```
+
+Čas je začátek shluku (lokálně), bp je výchylka se směrem, v závorce hranice obvyklé
+výchylky v tuto denní dobu. Vypíše se nejvýš 5 významných zpráv (kalendář High,
+Medium, pak podle důležitosti); zbytek jen počtem. Žádná pravděpodobnost se
+nepočítá — číslo v závorce je naměřené rozdělení z posledních 20 seancí.
+
+**Zprávy za zavřený trh:** zprávy z víkendu nebo denní pauzy (a z posledních 5 minut
+před zavřením) se jednotlivě neohlašují — gap na otevření je součet všeho, co se
+za zavřený trh stalo, a jedné zprávě ho přisoudit nejde. Na víkend se ale dá
+připravit: **před nedělním otevřením** přijde upozornění na každý instrument zvlášť,
+jen když za zavřený trh vyšla aspoň jedna **zásadní** zpráva:
+
+- **Zásadní zpráva** je přísnější výběr z významných: ekonomický kalendář s dopadem
+  High nebo Medium, kurátorovaný autor na sociálních sítích a headline o Fedu, makru
+  (inflace, trh práce, růst) nebo geopolitice včetně obchodu a cel s nejvyšší
+  důležitostí 3. Jen ty jdou do výčtu a do sklonu; ostatní významné (za víkend jich
+  bývá desítky, často šum) a běžné zprávy jsou jen počet. Když za víkend vyšly jen
+  významné, ale žádná zásadní, nepřijde nic.
+- **hlavní souhrn 4 h před otevřením Globexu** — v běžném týdnu v neděli ve 20:00;
+- **aktualizace 15 min před otevřením** (23:45) — jen když od hlavního souhrnu vyšla
+  nová zásadní zpráva (ta, kterou hlavní souhrn ještě neznal, i když přišla pozdě).
+  Když ve 20:00 ještě žádná zásadní nebyla, je to první upozornění a vypadá jako
+  souhrn.
+
+Časy se počítají od otevření Globexu v Chicagu (neděle 17:00 CT), ne jako pevné
+hodiny: poslední říjnový týden, kdy Evropa už přešla na zimní čas a USA ještě ne,
+přijde souhrn v 19:00 a aktualizace ve 22:45. Denní pauza (1 h) se nehlásí.
+
+```
+Před otevřením ES: Globex otevře v pondělí 00:00 (za 4 h)
+Úrovně ES z poslední seance (expirace 21. 9.): call zeď 7730 · put zeď 7680 · flip 7752 · těžiště 7715 · close 7725
+Zásadní zprávy za zavřený trh od pátku 22:55: 21 · sklon 🔴 (🟢 1 · 🔴 9 · ⚪ 11)
+• 🔴 North Korea fires missile off east coast, Yonhap says
+• …
+další zásadní: 16 · další významné: 11 · ostatní zprávy: 1910
+```
+
+- **Úrovně** jsou z poslední minuty páteční seance pro expiraci příští seance
+  (pondělní 0DTE — páteční po settle zanikla) a **close** je poslední cena před
+  zavřením: na tyhle úrovně si dej pozor, kam gap otevře.
+- **Sklon** je jen počet zásadních zpráv podle klasifikovaného směru (🟢 pozitivní,
+  🔴 negativní, ⚪ neutrální nebo nezařazené) — **žádná pravděpodobnost**; směr určuje
+  pravidlový klasifikátor z titulku a u víkendových titulků se mýlí (slovo „tariff“ = 🔴).
+  Tentýž klasifikátor občas povýší i šum mezi zásadní („… Payroll Tax“ jako trh práce).
+- **Výčet** ukáže nejvýš 5 zásadních zpráv (kalendář, pak podle důležitosti, v nich
+  nejnovější), zbytek počtem „další zásadní“; tatáž story z více zdrojů se počítá jednou.
+- **Svátky**: pokrytý je jen svátek, který zkrátí nebo zruší páteční seanci (Velký
+  pátek, Vánoce nebo Nový rok v pátek, 3. 7.) — pozná se podle toho, kdy přestaly
+  chodit svíčky, a souhrn pak bere zprávy od posledního obchodu. **Nepokryté**:
+  svátek uprostřed týdne (Den díkůvzdání, pondělní svátky s přerušením obchodu,
+  Vánoce či Nový rok v úterý až čtvrtek) upozornění nemá a svátek s celodenním
+  zavřením v pondělí (Vánoce či Nový rok v pondělí nebo s náhradním pondělím, poprvé
+  v prosinci 2028) dostane upozornění k nedělnímu otevření, které nenastane — Globex
+  pak otevře až v pondělí v 17:00 CT (v úterý 00:00 Praha) a před tím upozornění
+  nepřijde.
+- Restart aplikace v neděli večer souhrn nezopakuje; když aplikace ve 20:00 neběžela,
+  souhrn přijde jednou při prvním běhu do otevření.
 
 ### Setupy
 

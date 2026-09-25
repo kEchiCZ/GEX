@@ -22,7 +22,8 @@ Pravidla:
 - Druh bez záznamu v tabulce neodejde (WARNING jednou za druh).
 - Setup jen `event=created` a s confidence ≥ práh (env), uzavření ne.
 - Tiché hodiny (env, default 23:00–06:00 Europe/Prague) — provozní přepínače
-  (kategorie ops) jdou i v noci (pád enginu nepočká), ostatní ne.
+  (kategorie ops) jdou i v noci (pád enginu nepočká), z ostatních jen výslovná
+  výjimka `quiet_exempt` (předobchodní zprávy, #1291); ostatní ne.
 - Dedup per (kind, symbol, klíč zprávy) po 10 min, denní strop zpráv.
 - Token a chat id jen z `.env`; hlavička ani log token nikdy nenesou,
   URL s tokenem se do logu nepíše (Telegram ho má v cestě).
@@ -85,6 +86,8 @@ class PushTopic:
     hodnotu, dědění, výjimku z tichých hodin (ops) a emoji zprávy. Přepínač
     nikdy nemíchá kategorie, jinak by se někomu uložená volba převrátila.
     `bell=False`: druh posílá jen skript mimo Docker (`OpsAlert.ps1`), zvonek ho nemá.
+    `quiet_exempt=True`: chodí i v tichých hodinách, i když není provozní —
+    upozornění vázané na čas otevření trhu, které ráno ztrácí smysl.
     """
 
     key: str
@@ -95,10 +98,16 @@ class PushTopic:
     summary: str
     bullets: tuple[str, ...] = ()
     bell: bool = True
+    quiet_exempt: bool = False
 
     @property
     def setting(self) -> str:
         return TOPIC_KEY_PREFIX + self.key
+
+    @property
+    def ignores_quiet_hours(self) -> bool:
+        """Provozní přepínače (pád enginu nepočká) a výslovné výjimky."""
+        return self.category == "ops" or self.quiet_exempt
 
     @property
     def default(self) -> bool:
@@ -107,7 +116,7 @@ class PushTopic:
     def help_lines(self) -> list[str]:
         """Tooltip po řádcích (vzor ivRankTooltip): věta, prázdný řádek, odrážky."""
         lines = [self.summary, "", *(f"• {bullet}" for bullet in self.bullets)]
-        if self.category == "ops":
+        if self.ignores_quiet_hours:
             lines.append("• Chodí i v tichých hodinách")
         if self.bell:
             lines.append(f"• Ve zvonku: {', '.join(self.kinds)}")
@@ -170,8 +179,32 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
         "news",
         ("news_anomaly",),
         "Reakce trhu na zprávu",
-        "Trh na zprávu zareagoval nad obvyklou míru.",
-        ("Pohyb v bp nad p90 svého bucketu", "Jednou pro každou dvojici zpráva × symbol"),
+        "Trh na shluk zpráv s významnou zprávou zareagoval nad obvyklou míru.",
+        (
+            "Výchylka do 5 min nad 97. percentilem denní doby i volatility poslední hodiny",
+            "Významná: kalendář High/Medium, headline s důležitostí 2+ mimo earnings,"
+            " kurátor na sociálních sítích",
+            "Jednou pro shluk zpráv × instrument, ES a NQ zvlášť",
+        ),
+    ),
+    PushTopic(
+        "news_preopen",
+        "market",
+        "news",
+        ("news_preopen",),
+        "Zprávy před otevřením po víkendu",
+        "Zásadní zprávy za zavřený trh a úrovně poslední seance před otevřením Globexu.",
+        (
+            "Souhrn 4 h před otevřením (v běžném týdnu 20:00), aktualizace 15 min předem"
+            " jen s novou zásadní zprávou",
+            "Zásadní: kalendář High/Medium, Fed, makro, geopolitika a cla s důležitostí 3,"
+            " kurátor; ostatní jen počtem",
+            "ES a NQ zvlášť: směr zpráv, souhrnný sklon, call/put zeď, flip, těžiště",
+            "Jen když za zavřený trh vyšla aspoň jedna zásadní zpráva; denní pauza ne",
+        ),
+        # Aktualizace 15 min před nedělním otevřením padá na 23:45 — bez výjimky
+        # by ji výchozí tiché hodiny (23:00–06:00) nikdy nepustily
+        quiet_exempt=True,
     ),
     PushTopic(
         "vol_concentration",
@@ -655,7 +688,7 @@ class TelegramPush:
             return f"{topic.key} vypnuto"
         now = self._clock()
         local = dt.datetime.fromtimestamp(now, self._tz)
-        if topic.category != "ops" and in_quiet_hours(local.time(), self._quiet):
+        if not topic.ignores_quiet_hours and in_quiet_hours(local.time(), self._quiet):
             return "tiché hodiny"
         key = (kind, str(payload.get("symbol") or ""), str(payload.get("message") or "")[:80])
         with self._lock:
