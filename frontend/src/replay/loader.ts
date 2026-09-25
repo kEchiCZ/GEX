@@ -1017,13 +1017,18 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
   // Podíl objemu mimo tisk (#1007): kumulativ = předchozí sloupec + přírůstek
   // minuty; sloupec bez řádku dědí předchozí. Vsunutí zpětné minuty (ne
   // append) kumulativ dál nepřepočítává — vzácné a příští balík to srovná.
-  for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
-    const to = strikeIdx * capacity + targetMinute
-    const from = targetMinute > 0 ? to - 1 : -1
-    callPrinted[to] = from >= 0 ? callPrinted[from] : 0
-    putPrinted[to] = from >= 0 ? putPrinted[from] : 0
-    callStructured[to] = from >= 0 ? callStructured[from] : 0
-    putStructured[to] = from >= 0 ? putStructured[from] : 0
+  // Přepočet jen pro nový sloupec nebo minutu nesoucí printVol: kanály jedné
+  // minuty chodí ve 2–4 flushích a pozdější flush bez printVol (levels, flow,
+  // finální bar) by jinak přírůstek minuty smazal (#1273).
+  if (isAppend || minute.printVol !== undefined) {
+    for (let strikeIdx = 0; strikeIdx < strikeCount; strikeIdx += 1) {
+      const to = strikeIdx * capacity + targetMinute
+      const from = targetMinute > 0 ? to - 1 : -1
+      callPrinted[to] = from >= 0 ? callPrinted[from] : 0
+      putPrinted[to] = from >= 0 ? putPrinted[from] : 0
+      callStructured[to] = from >= 0 ? callStructured[from] : 0
+      putStructured[to] = from >= 0 ? putStructured[from] : 0
+    }
   }
   for (const row of minute.printVol ?? []) {
     const strikeIdx = newStrikeIndex.get(row.strike)

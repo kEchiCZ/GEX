@@ -138,6 +138,15 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-25 — živý GEX žebřík a podíl outright stály až hodinu (#1273): ruční výčet polí ve flushi.**
+  Handlery WS kanálů `ladder.*` (#244) a `printvol.*` (#1007) data ukládaly, ale flush v `useDayData`
+  vyjmenovával pole `LiveMinute` ručně a nová pole do výčtu nikdo nepřipsal — dva měsíce bez chyby
+  v konzoli, UI jen drželo poslední známý stav do hodinového refetche. Druhá vrstva: `appendMinute`
+  při každém flushi přepočítával kumulativ tisků od předchozího sloupce, jenže kanály jedné minuty
+  chodí ve 2–4 flushích (a finální bar M−1 až v cyklu M) → pozdější flush přírůstek smazal.
+  → Přenos „všech polí" psát rozprostřením (`...partial`), ne výčtem; operace nad minutou musí být
+  bezpečné pro opakovanou aplikaci téže minuty s jinou podmnožinou kanálů (test na to je v #1273).
+
 - **2026-09-24 — signály NQ jen z jednoho dne (#1265): gate LB > 0,5 bez velikosti efektu.**
   81 z 86 signálů NQ za 10 dní vzniklo 23. 9. z bucketu OTHER/imp 1 (n 13 464, LB 0,5004, Ø −0,03 bp);
   po nočním přepočtu LB klesl na 0,4997 a signály ustaly. Odhalil to mezistav H1 (#1264): 86 řádků
