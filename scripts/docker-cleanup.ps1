@@ -13,8 +13,9 @@
 #
 # Hlídka místa: když je na disku s VHDX méně než -MinFreeGB nebo VHDX větší
 # než -MaxVhdxGB, pošle alert do zvonku aplikace (kanál `alerts`, jako
-# provozní alerty enginu) s doporučením kompakce (`compact-docker-vhdx.ps1`,
-# správce, zastaví Docker — proto se nespouští automaticky).
+# provozní alerty enginu); když je VHDX nad prahem, spustí elevovanou úlohu
+# „GEXLens compact-vhdx" (#1127) — ta sama hlídá práh, zavřený trh, rezervu
+# do otevření a počká na doběhnutí deploye (#1277).
 #
 # Volání: z deploy skriptu po úspěšném nasazení, nebo týdně z Task Scheduleru
 # (`register-docker-cleanup-task.ps1`, sobota ráno — trh zavřený).
