@@ -864,10 +864,13 @@ je uvnitř VHDX). Proto:
   a v sobotu 10:00 (#1277, místní čas) a `docker-cleanup.ps1` po deployi; běží jen
   nad prahem (`-IfNeeded`), při zavřeném trhu s ≥ 20 min do otevření a počká,
   až doběhne deploy / walk-forward / záloha PG. Nanečisto: `-IfNeeded -DryRun`.
-  Když po kompaktaci Docker nenaběhne nebo chybí kontejner, skript zkusí jeden restart Docker
-  Desktopu a `docker compose start` (jen spustí existující kontejnery, nic nerecreatuje) a pak
-  upozorní **mimo Docker** (#1279, `scripts/lib/OpsAlert.ps1`): okno na ploše (`msg.exe`, vydrží
-  12 h) a Telegram, jsou-li v `.env` `GEXLENS_PUSH_TELEGRAM_TOKEN` a `_CHAT_ID` (token se nevypisuje).
+  Před zastavením si zapamatuje běžící služby projektu `gex`; když po kompaktaci Docker nenaběhne
+  (volání `docker` mají časový limit) nebo některá z nich neběží, zkusí jeden restart Docker Desktopu
+  a `docker start` (jen spustí existující kontejnery, nic nerecreatuje; záměrně zastavenou službu
+  nechá být) a pak upozorní **mimo Docker** (#1279, `scripts/lib/OpsAlert.ps1`): okno na ploše
+  (`msg.exe`, vydrží 12 h) a Telegram, jsou-li v `.env` `GEXLENS_PUSH_TELEGRAM_TOKEN` a `_CHAT_ID`
+  (token se nevypisuje). Totéž upozornění pošle `deploy-engine-offhours.ps1` po rollbacku.
+  Chybu diskpartu pozná podle návratového kódu a VHDX odpojí. Limit úlohy je 60 min.
 - Lokální build image jen nouzově a **po jedné službě** (`docker compose build engine`,
   pak `frontend`), nikdy všechny naráz, a před buildem zkontrolovat volné místo;
   standardně image dodává CI (#1139, kap. 3).

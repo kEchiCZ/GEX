@@ -28,7 +28,8 @@ param(
     [switch]$DryRun,
     # Přeskočit bránu obchodních hodin (jen vědomě, ručně)
     [switch]$Force,
-    # Rezerva do otevření Globexu: kompaktace ~1,5 min, nejhůř ~11 min (diskpart + start Dockeru)
+    # Rezerva do otevření Globexu: kompaktace ~1,5 min; nejhůř ~17 min (diskpart, 5 min
+    # čekání na Docker, jeden restart, dalších 5 min, docker start)
     [int]$MinMinutesToOpen = 20,
     # Jak dlouho čekat na doběhnutí deploye / walk-forward / zálohy PG
     [int]$BusyWaitMinutes = 20
@@ -109,87 +110,133 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     throw 'Spusť jako správce (diskpart vyžaduje elevaci) — nebo přes úlohu „GEXLens compact-vhdx" (register-compact-vhdx-task.ps1).'
 }
 
-$marketState = if ($clock.Closed) { 'trh zavřený' } else { 'trh OTEVŘENÝ, -Force' }
-Write-Step "Zastavuji Docker Desktop a WSL ($marketState, CT $($clock.Label))..."
-# Docker se musí znovu spustit i při chybě uprostřed (#1277) — jinak sběr
-# stojí přes otevření trhu a alert nejde poslat (API běží v Dockeru)
-$compactError = $null
-try {
-    Get-Process 'Docker Desktop', com.docker.backend -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 5
-    wsl --shutdown
-    Start-Sleep -Seconds 5
-
-    Write-Step ("VHDX před: {0:N1} GB" -f $before)
-
-    $script = @"
-select vdisk file="$vhdx"
-attach vdisk readonly
-compact vdisk
-detach vdisk
-exit
-"@
-    $tmp = Join-Path $env:TEMP 'compact-vhdx.txt'
-    Set-Content -Path $tmp -Value $script -Encoding ascii
-    diskpart /s $tmp
-    Remove-Item $tmp -ErrorAction SilentlyContinue
-
-    $after = (Get-Item $vhdx).Length / 1GB
-    Write-Step ("VHDX po:   {0:N1} GB (uvolněno {1:N1} GB)" -f $after, ($before - $after))
-} catch {
-    # Chyba wsl/diskpart: Docker se stejně spustí (finally) a stav ověří
-    # kontrola níže — výjimka by jinak skript ukončila bez upozornění (#1279)
-    $compactError = $_.Exception.Message
-    Write-Warning "Kompaktace selhala: $compactError"
-} finally {
-    Write-Step 'Startuji Docker Desktop...'
-    Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe'
+# Docker CLI s časovým limitem (#1279): při napůl živém daemonu `docker info`
+# visí (lessons-learned: docker CLI při pádu lže/visí) a termín čekání by se
+# nikdy nezkontroloval — úlohu by ve 60. minutě zabil Task Scheduler bez
+# upozornění. Vypršení = daemon nereaguje.
+function Invoke-Docker([string[]]$DockerArgs, [int]$TimeoutSec = 20) {
+    $psi = [System.Diagnostics.ProcessStartInfo]::new('docker')
+    foreach ($arg in $DockerArgs) { $psi.ArgumentList.Add($arg) }
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    try { $proc = [System.Diagnostics.Process]::Start($psi) }
+    catch { return [pscustomobject]@{ ExitCode = -1; Out = ''; Err = $_.Exception.Message } }
+    $out = $proc.StandardOutput.ReadToEndAsync()
+    $err = $proc.StandardError.ReadToEndAsync()
+    if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
+        try { $proc.Kill($true) } catch { }
+        return [pscustomobject]@{ ExitCode = -1; Out = ''; Err = "docker $($DockerArgs[0]): bez odpovědi do $TimeoutSec s" }
+    }
+    [pscustomobject]@{ ExitCode = $proc.ExitCode; Out = $out.Result; Err = $err.Result }
 }
-
-# Kontejnery s restart: unless-stopped naběhnou samy; ověřit, že se tak stalo,
-# jinak by sběr stál až do rána (26. 8. 2026: pád daemonu = 23 min díra).
-# Ve všední den zbývá do otevření < 1 h a uživatel spí — proto nejdřív
-# samooprava, teprve pak upozornění mimo Docker (#1279).
+# Běžící služby produkčního projektu (bez one-off kontejnerů typu gex-greeks-probe
+# a bez crash loopu — status=running); prázdné i při nereagujícím daemonu
+function Get-GexRunning {
+    $result = Invoke-Docker @('ps', '--filter', 'label=com.docker.compose.project=gex',
+        '--filter', 'label=com.docker.compose.oneoff=False', '--filter', 'status=running', '--format', '{{.Names}}')
+    if ($result.ExitCode -ne 0) { return }  # nic = daemon nereaguje; @($null) by mělo Count 1
+    @($result.Out -split "`r?`n" | Where-Object { $_ } | Sort-Object)
+}
 function Wait-DockerReady([int]$Minutes) {
     $deadline = (Get-Date).AddMinutes($Minutes)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 10
-        try { docker info *> $null; if ($LASTEXITCODE -eq 0) { return $true } } catch { }
+        if ((Invoke-Docker @('info') 20).ExitCode -eq 0) { return $true }
     }
     return $false
 }
-function Get-GexRunning { @(docker ps --filter 'name=gex-' --format '{{.Names}}' 2>$null) }
-$expected = 5
-$running = @()
-
-$ready = Wait-DockerReady 5
-if (-not $ready) {
-    Write-Warning 'Docker do 5 minut nenaběhl — zkouším jeden restart Docker Desktopu.'
+function Stop-DockerDesktop {
     Get-Process 'Docker Desktop', com.docker.backend -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 5
     wsl --shutdown
+    if ($LASTEXITCODE -ne 0) { Write-Warning "wsl --shutdown skončil kódem $LASTEXITCODE." }
     Start-Sleep -Seconds 5
+}
+function Start-DockerDesktop {
+    Write-Step 'Startuji Docker Desktop...'
     Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe'
-    $ready = Wait-DockerReady 5
 }
-if ($ready) {
-    Start-Sleep -Seconds 20
-    $running = Get-GexRunning
-    if ($running.Count -lt $expected) {
-        # `start`, ne `up`: up by kontejner mohl recreatovat na novější image
-        # z GHCR, než ho nasadí deploy — tady se jen spouští, co existuje
-        Write-Warning "Běží jen $($running.Count) z $expected kontejnerů gex-* — zkouším docker compose start."
-        docker compose -f (Join-Path (Split-Path -Parent $PSScriptRoot) 'compose.yml') start *> $null
-        Start-Sleep -Seconds 20
-        $running = Get-GexRunning
+# Nativní diskpart výjimku nevyhodí — rozhoduje návratový kód (#1279)
+function Invoke-Diskpart([string]$Commands) {
+    $tmp = Join-Path $env:TEMP 'compact-vhdx.txt'
+    Set-Content -Path $tmp -Value $Commands -Encoding ascii
+    diskpart /s $tmp | Write-Host
+    $code = $LASTEXITCODE
+    Remove-Item $tmp -ErrorAction SilentlyContinue
+    return $code
+}
+
+# Stav před kompaktací: po ní se očekává a případně spouští jen to, co běželo —
+# záměrně zastavenou službu (docker compose stop) kompaktace nepustí
+$expectedRunning = @(Get-GexRunning)
+Write-Step "Před kompaktací běží: $($expectedRunning.Count) ($($expectedRunning -join ', '))"
+
+$marketState = if ($clock.Closed) { 'trh zavřený' } else { 'trh OTEVŘENÝ, -Force' }
+Write-Step "Zastavuji Docker Desktop a WSL ($marketState, CT $($clock.Label))..."
+$compactError = $null
+$problem = $null
+# Vše od zastavení Dockeru je v try: neošetřená výjimka by jinak úlohu
+# ukončila tiše, se zastaveným sběrem (#1279)
+try {
+    # Docker se musí znovu spustit i při chybě uprostřed (#1277)
+    try {
+        Stop-DockerDesktop
+        Write-Step ("VHDX před: {0:N1} GB" -f $before)
+        $code = Invoke-Diskpart "select vdisk file=`"$vhdx`"`nattach vdisk readonly`ncompact vdisk`ndetach vdisk`nexit"
+        if ($code -ne 0) {
+            $compactError = "diskpart skončil kódem $code"
+            # diskpart /s končí na první chybě — `detach` se nemusel provést a
+            # připojený VHDX by Docker nepustil
+            Write-Warning "$compactError — odpojuji VHDX."
+            [void](Invoke-Diskpart "select vdisk file=`"$vhdx`"`ndetach vdisk noerr`nexit")
+        }
+        $after = (Get-Item $vhdx).Length / 1GB
+        Write-Step ("VHDX po:   {0:N1} GB (uvolněno {1:N1} GB)" -f $after, ($before - $after))
+    } catch {
+        $compactError = $_.Exception.Message
+        Write-Warning "Kompaktace selhala: $compactError"
+    } finally {
+        Start-DockerDesktop
     }
-    Write-Step "Docker běží; kontejnery gex-*: $($running.Count) ($($running -join ', '))"
-}
-$problem = if (-not $ready) {
-    'Docker Desktop po kompaktaci VHDX nenaběhl ani po restartu — sběr dat stojí. Zkontroluj Docker Desktop.'
-} elseif ($running.Count -lt $expected) {
-    "Po kompaktaci VHDX běží jen $($running.Count) z $expected kontejnerů gex-* ($($running -join ', ')) — sběr dat může stát. Zkontroluj docker ps."
-} elseif ($compactError) {
-    "Kompaktace VHDX selhala ($compactError); Docker znovu běží, místo se neuvolnilo."
+
+    # Kontejnery s restart: unless-stopped naběhnou samy; ověřit, že se tak stalo,
+    # jinak by sběr stál až do rána (26. 8. 2026: pád daemonu = 23 min díra).
+    # Ve všední den zbývá do otevření < 1 h a uživatel spí — proto nejdřív
+    # samooprava, teprve pak upozornění mimo Docker (#1279).
+    $ready = Wait-DockerReady 5
+    if (-not $ready) {
+        Write-Warning 'Docker do 5 minut nenaběhl — zkouším jeden restart Docker Desktopu.'
+        Stop-DockerDesktop
+        Start-DockerDesktop
+        $ready = Wait-DockerReady 5
+    }
+    $missing = @()
+    if ($ready) {
+        Start-Sleep -Seconds 20
+        $running = @(Get-GexRunning)
+        $missing = @($expectedRunning | Where-Object { $_ -notin $running })
+        if ($missing.Count -gt 0) {
+            # `docker start`, ne `compose up`: up by kontejner mohl recreatovat na
+            # novější image z GHCR, než ho nasadí deploy. Postgres první.
+            $order = @($missing | Sort-Object { $_ -notlike '*postgres*' }, { $_ })
+            Write-Warning "Neběží $($order -join ', ') — zkouším docker start."
+            $result = Invoke-Docker (@('start') + $order) 120
+            if ($result.ExitCode -ne 0) { Write-Warning "docker start skončil kódem $($result.ExitCode): $($result.Err.Trim())" }
+            Start-Sleep -Seconds 20
+            $running = @(Get-GexRunning)
+            $missing = @($expectedRunning | Where-Object { $_ -notin $running })
+        }
+        Write-Step "Docker běží; kontejnery gex-*: $($running.Count) ($($running -join ', '))"
+    }
+    $problem = if (-not $ready) {
+        'Docker Desktop po kompaktaci VHDX nenaběhl ani po restartu — sběr dat stojí. Zkontroluj Docker Desktop.'
+    } elseif ($missing.Count -gt 0) {
+        "Po kompaktaci VHDX neběží $($missing -join ', ') — sběr dat může stát. Zkontroluj docker ps."
+    } elseif ($compactError) {
+        "Kompaktace VHDX selhala ($compactError); Docker znovu běží, místo se neuvolnilo."
+    }
+} catch {
+    $problem = "Kompaktace VHDX spadla po zastavení Dockeru ($($_.Exception.Message)) — zkontroluj Docker Desktop a docker ps."
 }
 if ($problem) { Send-OpsAlert $problem; exit 1 }
