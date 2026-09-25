@@ -290,7 +290,7 @@ nový řádek v této tabulce ve stejném PR (viz `AGENTS.md`, Definition of don
 | Dyn GEX pole, projekce do settle, sekundární zeď, dominance zdí, flow-adjusted GEX | 0006, 0008, 0009, 0010, 0011 | #629 | USER kap. 5, 18 |
 | Volatilitní režim (bez VIX), IV rank, tendence, gamma útes, EM respect, stav „tenká mapa" | 0028 | #394, #576, #1245 | USER kap. 4, 11f, 18 |
 | Setup detektor, signály, track record, parameter store, walk-forward, risk framework | 0004, 0020, 0021, 0030, 0033, 0034, 0038 | #794, #453 | USER kap. 11d; ADMIN kap. 12 |
-| SentimentLens: news-engine, zdroje (IBKR news, ForexFactory, Reddit, CNN F&G), dedup, vlny, SentIndex, per-symbol, reakce trhu | 0012–0014, 0016–0019, 0026, 0031, 0036, 0037 | #561, #566, #740 | USER kap. 11c |
+| SentimentLens: news-engine, zdroje (IBKR news, ForexFactory, Reddit, CNN F&G), dedup, vlny, SentIndex, per-symbol, reakce trhu | 0012–0014, 0016–0019, 0026, 0031, 0036, 0037, 0043 | #561, #566, #740 | USER kap. 11c |
 | Briefing: trend napříč TF, verdikt dne, ranní checklist | 0035 | #1089–#1091, #1241 | USER kap. 11f, 11g |
 | Deník tradera, Traders mode, paper účet v aplikaci | 0040 | #1187 | USER kap. 11e |
 | Trading kouč (vyhodnocení chyb, smyčka zlepšování setupů) | 0030, 0033, 0034 | #1187, #1244 | USER kap. 11d–11e |

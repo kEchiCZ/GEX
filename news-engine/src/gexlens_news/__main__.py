@@ -52,6 +52,7 @@ from gexlens_news.model_stats_job import ModelStatsJob
 from gexlens_news.ngram_job import NgramShadowJob
 from gexlens_news.pipeline import DedupingWriter
 from gexlens_news.prediction_job import PredictionJob
+from gexlens_news.preopen_job import PreopenJob
 from gexlens_news.publisher import NewsPublisher
 from gexlens_news.reaction_job import ReactionJob
 from gexlens_news.retro_pass import RetroPass, store_retro_result
@@ -216,9 +217,12 @@ async def run(settings: NewsSettings) -> None:
         )
     else:
         logger.info("Gemini bez klíče — LLM klasifikace se nespouští (není to porucha)")
-    reactions = ReactionJob(engine, BarsRepository(settings.data_dir))
-    # Anomální reakce (#295, SPEC 9.4): |ret| nad p90 bucketu → zvonek
-    anomaly = AnomalyJob(engine)
+    bars_repo = BarsRepository(settings.data_dir)
+    reactions = ReactionJob(engine, bars_repo)
+    # Mimořádná reakce trhu na shluk zpráv (#1291, ADR-0043) → zvonek a Telegram
+    anomaly = AnomalyJob(engine, bars_repo)
+    # Zprávy za víkend 4 h a 15 min před otevřením Globexu (#1291 Q2, ADR-0043)
+    preopen = PreopenJob(engine, bars_repo)
     # Hodinové doplňování actual z FF kalendáře (#277) — widget feed ho nenese
     ff_refresh = (
         FfActualRefreshJob(engine, interval_s=settings.ff_actual_refresh_s)
@@ -304,7 +308,8 @@ async def run(settings: NewsSettings) -> None:
                 logger.exception(
                     "Dopočet reakcí selhal — zkusí se za %.0f s", settings.reaction_interval_s
                 )
-            # Anomálie hned po reakcích (#295) — hodnotí právě spočítaná okna
+            # Reakce na shluky zpráv (#1291) po klasifikaci — významnost stojí na
+            # importance; bary čte sám, na news_reactions nezávisí
             try:
                 anomaly_alerts = await asyncio.to_thread(anomaly.run, now)
                 if publisher is not None:
@@ -312,6 +317,14 @@ async def run(settings: NewsSettings) -> None:
                         await publisher.publish("alerts", alert)
             except Exception:
                 logger.exception("Detekce anomálií selhala — zkusí se příští cyklus")
+            # Předobchodní upozornění (#1291 Q2) po klasifikaci — mimo neděli nic nečte
+            try:
+                preopen_alerts = await asyncio.to_thread(preopen.run, now)
+                if publisher is not None:
+                    for alert in preopen_alerts:
+                        await publisher.publish("alerts", alert)
+            except Exception:
+                logger.exception("Předobchodní upozornění selhalo — zkusí se příští cyklus")
             # Review fronta (#293) po reakcích — auto-uzavírání čte uzavřená okna
             try:
                 await asyncio.to_thread(review.run, now)

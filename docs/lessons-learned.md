@@ -85,6 +85,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 2. Diagnostika (zastavil jsem se u první hypotézy)
 
+- **2026-09-25 — zvonek 516–596 „anomálií“ za 14 dní na šum, žádná na CPI/FOMC (#1291, ADR-0043).**
+  Tři vrstvy: (1) `importance` v `news_events` je po regexovém klasifikátoru, ne od zdroje — přepisuje
+  i FF impact (USD PPI High → 1, „FOMC Member Speaks“ Low → 3), takže „významnost“ podle importance
+  u kalendáře lže oběma směry; (2) kontaminace okna (jiná zpráva s importance ≥ 2) při ~2 800 zprávách
+  denně zasáhla 82,5 % oken — strukturálně blokovala skutečné makro releasy a pouštěla poslední šum
+  před klidem; (3) close-to-close výnos míjí whipsaw (FOMC 16. 9.: ES −0,3 bp, výchylka −19 bp).
+  Popis v issue („+19 bp za 60 min“) navíc neseděl na kód (okno 5 min, hodnota byla `ret_15`).
+  Odhalilo: replay starého pravidla nejdřív ověřený proti logu news-enginu (9/9 běhů), až pak čísla.
+  → Význam zprávy u scheduled brát z `raw` zdroje, ne z přepsaného sloupce; pohyb hodnotit na shluku
+  zpráv (jedno upozornění = shluk × instrument), ne na jednotlivé zprávě; reakci měřit výchylkou.
+  Replay pravidla vždy nejdřív ověřit proti produkčnímu logu a tvrzení z issue proti kódu.
 - **2026-09-23 — backfill svíček SPY „TimeoutError po 60 s" (#1253): živá subskripce nikdy neztichne.**
   Sběr `Candle{=1m}` končil „3 s ticha", ale DXLink po historii dál posílá updaty právě tvořící se
   minuty (u SPY v RTH každou chvíli) → ticho nenastalo, strop 60 s vše zahodil. Druhá vrstva: `until`
@@ -145,6 +156,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-25 — „souhrn zpráv za víkend po otevření“ byl hotový a uživatel ho zahodil (#1291 Q2): trader potřebuje čas se připravit.**
+  Upozornění, které přijde až s gapem, popisuje, co už se stalo; hodnotu má jen před otevřením. Druhá past
+  v téže změně: aktualizace 15 min před nedělním openem padá na 23:45 = do výchozích tichých hodin Telegramu
+  (23:00–06:00), takže by na mobil nikdy nedošla. Třetí: replay v měřicím skriptu měl vlastní SELECT zpráv
+  bez `sentiment_dir` a simulace ukázala sklon ⚪ u všech 35 víkendových zpráv — vypadalo to jako chyba
+  klasifikátoru. → U upozornění vázaného na trh se nejdřív ptát, **kdy** má být užitečné (před/po události),
+  a jeho čas odvozovat od otevření v CT (`settle`/`marketclock`), ne od pevných hodin; nový druh alertu
+  s pevným časem proti tichým hodinám ověřit; replay stavět na týchž sloupcích a mapování jako job
+  (`EVENT_COLUMNS`, `event_from_row`), ne na kopii dotazu. Čtvrtá: slučování téže story podle času
+  (první výskyt zůstane) vydalo kopii z opožděného feedu s dřívějším `ts_event` za novou zprávu
+  aktualizace → u dedupu napříč etapami musí mít přednost už ohlášená zpráva, ne nejstarší čas.
 - **2026-09-25 — živý GEX žebřík a podíl outright stály až hodinu (#1273): ruční výčet polí ve flushi.**
   Handlery WS kanálů `ladder.*` (#244) a `printvol.*` (#1007) data ukládaly, ale flush v `useDayData`
   vyjmenovával pole `LiveMinute` ručně a nová pole do výčtu nikdo nepřipsal — dva měsíce bez chyby

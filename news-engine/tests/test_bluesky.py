@@ -77,3 +77,14 @@ def test_stream_filtruje_a_drzi_povodnovy_strop() -> None:
     assert len(writer.events) == MAX_PER_MINUTE
     assert stream.flood_dropped == 5
     assert stream.matched == MAX_PER_MINUTE
+
+
+def test_kurator_dostane_priznak_curated_ostatni_ne() -> None:
+    """#1291: sociální zpráva je významná jen od kurátora — příznak nese `raw`."""
+    writer = _Writer()
+    stream = BlueskyStream(writer, curated_authors=["did:vip"])
+    stream._handle(__import__("json").dumps(commit("thread from the floor", did="did:vip")))
+    stream._handle(__import__("json").dumps(commit("$SPY ripping", did="did:crowd")))
+    curated, crowd = writer.events
+    assert curated.raw == {"did": "did:vip", "langs": ["en"], "curated": True}
+    assert "curated" not in crowd.raw

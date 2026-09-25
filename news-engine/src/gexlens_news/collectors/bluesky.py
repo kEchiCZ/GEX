@@ -18,6 +18,7 @@ Tier v registru zdrojů: testovací — váhu si musí teprve vyměřit (audit B
 
 import asyncio
 import contextlib
+import dataclasses
 import datetime as dt
 import json
 import logging
@@ -176,6 +177,10 @@ class BlueskyStream:
         author = str(message.get("did") or "")
         if not matches(event.title + (event.body or ""), author, self._curated):
             return
+        if author in self._curated:
+            # Příznak kurátora (#1291): jen kurátorovaný autor dělá sociální
+            # zprávu významnou; seznam kurátorů zná jen stream za běhu
+            event = dataclasses.replace(event, raw={**event.raw, "curated": True})
         # Pojistka proti povodni: nad MAX_PER_MINUTE se počítá a zahazuje
         minute = now.replace(second=0, microsecond=0)
         if self._minute_window != minute:

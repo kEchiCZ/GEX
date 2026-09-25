@@ -296,7 +296,7 @@ Návrh navazuje na existující layout (screenshot v0.1.0) a využívá už př�
 Nová položka pod IBKR Console: live feed poslední zprávy (čas, glyf kategorie, titulek zkrácený, barevný badge skóre). Filtry: kategorie, min. importance, kind. Klik → přepne graf na čas eventu. Nahoře sekce **Upcoming**: dnešní zbývající scheduled eventy s countdownem (high-impact zvýrazněné). Badge s počtem nepřečtených high-impact u položky v sidebaru. Doplňkový blok crowd sentiment (Reddit/F&G/PCR řady, 5.8).
 
 ### 9.4 Notifikační zvonek *(N5: scheduled; N7: anomálie)*
-Existující zvonek dostává: T−10 min před high-impact scheduled eventem, headline s |score| ≥ práh (konfig.), a „reakce překročila historický p90 bucketu" (trh reaguje silněji než obvykle → anomálie; vyžaduje model stats, proto N7).
+Existující zvonek dostává: T−10 min před high-impact scheduled eventem, headline s |score| ≥ práh (konfig.), a „reakce překročila historický p90 bucketu" (trh reaguje silněji než obvykle → anomálie; vyžaduje model stats, proto N7). **Nahrazeno ADR-0043 (#1291):** anomálie se hodnotí na shluku zpráv s významnou zprávou a per instrument (výchylka do 5 min nad p97 denní doby i volatility poslední hodiny); zásadní zprávy za víkend (kalendář High/Medium, Fed, makro, geopolitika a cla s importance 3, kurátoři) shrne předobchodní upozornění per instrument 4 h a 15 min před otevřením Globexu (`news_preopen`).
 
 ### 9.5 Hlavička *(N5)*
 Vedle expirace a „Live" malý countdown chip nejbližšího high-impact eventu: `CPI za 1 h 12 m`. Klik otevře News panel.
