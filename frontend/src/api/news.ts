@@ -41,6 +41,28 @@ export interface NewsRow {
   series_name?: string | null
 }
 
+/** Zpráva pro marker grafu a jeho dialog (#1290) — kompaktní tvar `GET /news/markers`.
+
+Plný `NewsRow` z feedu je jeho nadmnožina, takže marker umí vzít obojí
+(nadcházející eventy jdou dál z `/news/upcoming`). */
+export type ChartNewsRow = Pick<
+  NewsRow,
+  | 'id'
+  | 'ts_event'
+  | 'kind'
+  | 'category'
+  | 'importance'
+  | 'title'
+  | 'summary'
+  | 'sentiment_dir'
+  | 'sentiment_score'
+  | 'forecast'
+  | 'previous'
+  | 'actual'
+  | 'surprise_z'
+  | 'surprise_direction'
+>
+
 export interface SentimentPoint {
   ts_min: string
   value: number
@@ -146,6 +168,28 @@ export async function fetchNews(limit = 100, symbol = 'ES'): Promise<NewsRow[]> 
     news: [],
   })
   return data.news
+}
+
+async function fetchChartNews(query: string): Promise<ChartNewsRow[]> {
+  const response = await fetch(`${API_BASE}/news/markers?${query}`)
+  // Chyba musí být vidět — tiché `[]` by v grafu vypadalo jako den bez zpráv
+  if (!response.ok) throw new Error(`news/markers: HTTP ${response.status}`)
+  const payload = (await response.json()) as { news?: ChartNewsRow[] }
+  if (!Array.isArray(payload.news)) throw new Error('news/markers: odpověď bez pole news')
+  return payload.news
+}
+
+/** Všechny zprávy rozsahu [from, to) pro markery grafu (#1290) — bez stropu počtu;
+API hlídá délku rozsahu (jedna seance), proto se načítá po dnech. */
+export function fetchNewsMarkers(fromMs: number, toMs: number): Promise<ChartNewsRow[]> {
+  const from = encodeURIComponent(new Date(fromMs).toISOString())
+  const to = encodeURIComponent(new Date(toMs).toISOString())
+  return fetchChartNews(`from=${from}&to=${to}`)
+}
+
+/** Konkrétní zprávy podle id — proklik z upozornění (#1290), nejvýš 100. */
+export function fetchNewsByIds(ids: number[]): Promise<ChartNewsRow[]> {
+  return fetchChartNews(`ids=${ids.join(',')}`)
 }
 
 /** Hlavní naměřený dopad karty (#656): preferuje 5m okno, jinak nejkratší

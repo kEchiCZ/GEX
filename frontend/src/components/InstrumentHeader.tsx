@@ -34,6 +34,11 @@ function alertTimestamp(ts: number): string {
   })
 }
 
+/** Upozornění na zprávy s proklikem do grafu (#1290) — payload nese `event_ids`. */
+const NEWS_ALERT_KINDS = new Set(['news_anomaly', 'news_preopen'])
+/** Strop `ids` v `GET /news/markers` — delší výčet API odmítne. */
+const NEWS_FOCUS_MAX_IDS = 100
+
 /** Zobrazovací názvy běžných futures podkladů (jinak jen ticker). */
 const SYMBOL_NAMES: Record<string, string> = {
   ES: 'E-mini S&P 500',
@@ -153,6 +158,8 @@ export function InstrumentHeader({
     alerts,
     unreadAlerts,
     markAlertsRead,
+    requestNewsFocus,
+    setToggle,
     setView,
     regimeInfo,
     magnetInfo,
@@ -447,6 +454,12 @@ export function InstrumentHeader({
                     const isResult =
                       alert.event === 'closed' ||
                       (alert.event === undefined && alert.message.includes('uzavřen'))
+                    // Upozornění na zprávy (#1290): proklik na zprávy v grafu —
+                    // starší payload bez `event_ids` zůstává prostý text
+                    const newsIds =
+                      NEWS_ALERT_KINDS.has(alert.kind) && Array.isArray(alert.event_ids)
+                        ? alert.event_ids.filter((id) => typeof id === 'number')
+                        : []
                     const content = (
                       <>
                         {stamp && <time className="alert-time muted">{stamp}</time>}
@@ -455,7 +468,28 @@ export function InstrumentHeader({
                     )
                     return (
                       <li key={index}>
-                        {isSetup ? (
+                        {newsIds.length > 0 ? (
+                          <button
+                            type="button"
+                            className="alert-link"
+                            aria-label={`Otevřít zprávy ${alert.symbol} v grafu`}
+                            title="Otevřít zprávy v grafu — dialog se zprávami upozornění a posun grafu na jejich marker"
+                            onClick={() => {
+                              if (alert.symbol) setSymbol(alert.symbol)
+                              // Marker musí být vidět — proklik zapne vrstvu News
+                              setToggle('news', true)
+                              setView('chart')
+                              requestNewsFocus({
+                                kind: alert.kind,
+                                eventIds: newsIds.slice(0, NEWS_FOCUS_MAX_IDS),
+                                tsEvent: alert.ts_event ?? null,
+                              })
+                              setAlertsOpen(false)
+                            }}
+                          >
+                            {content}
+                          </button>
+                        ) : isSetup ? (
                           <button
                             type="button"
                             className="alert-link"

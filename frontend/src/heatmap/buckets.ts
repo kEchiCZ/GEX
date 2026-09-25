@@ -140,6 +140,42 @@ export function cachedBucketPlan(
   return plan
 }
 
+/** 1m starty košů se cachují na identitu osy — markery zpráv je čtou při každé
+změně osy (živý den každou minutu) a Date.parse celé seance by se opakoval. */
+const minuteStartsCache = new WeakMap<string[], Float64Array | null>()
+
+function minuteStarts(minutesIso: string[]): Float64Array | null {
+  const hit = minuteStartsCache.get(minutesIso)
+  if (hit !== undefined) return hit
+  const starts = new Float64Array(minutesIso.length)
+  let result: Float64Array | null = starts
+  for (let index = 0; index < minutesIso.length; index += 1) {
+    const ms = Date.parse(minutesIso[index])
+    // Nečitelná nebo nerostoucí osa: časové mapování by tiše lhalo → žádné
+    if (Number.isNaN(ms) || (index > 0 && ms <= starts[index - 1])) {
+      result = null
+      break
+    }
+    starts[index] = Math.floor(ms / 60_000) * 60_000
+  }
+  minuteStartsCache.set(minutesIso, result)
+  return result
+}
+
+/** Wall-clock start každého koše osy (epoch ms, vzestupně) — časové mapování
+markerů zpráv (#1290); `null` = osa bez ISO časů (demo, Daily) nebo nečitelná.
+
+Shodné s plánem košů: 1m = minuty osy, delší TF = `startMs` plánu (#584). */
+export function bucketStartsMs(
+  minutesIso: string[],
+  minutes: number,
+  bucketMinutes: number,
+): Float64Array | null {
+  if (minutesIso.length === 0 || minutesIso.length !== minutes) return null
+  if (bucketMinutes <= 1) return minuteStarts(minutesIso)
+  return cachedBucketPlan(minutesIso, minutes, bucketMinutes).startMs
+}
+
 /** Fáze osy v minutách: o kolik minut je první minuta osy ZA hranicí svého koše.
 
 Slouží převodu spojitý index koše ↔ index 1m osy (anotace, crosshair):

@@ -2264,6 +2264,11 @@ tr.setup-shadow td[data-part='risk'] {
   border-bottom: none;
 }
 
+/* Sbalené drobné zprávy velkého clusteru (#1290) */
+.news-dialog-more {
+  margin-top: 8px;
+}
+
 .news-dialog-head {
   display: flex;
   align-items: center;

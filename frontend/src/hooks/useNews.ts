@@ -50,8 +50,12 @@ export interface NewsData {
 
 /** `date` = zobrazený den (session date). Index se drží v denních UTC
 particích a osa grafu je týž UTC den, takže bez data by historický den dostal
-dnešní řadu — a ta by se podle popisku `HH:MM` přilepila na včerejší ráno (#976). */
-export function useNews(date?: string): NewsData {
+dnešní řadu — a ta by se podle popisku `HH:MM` přilepila na včerejší ráno (#976).
+
+`feed: false` = bez feedu posledních zpráv (`news` zůstane prázdné): graf má
+vlastní načítání po seancích (`useChartNews`, #1290) a feed s reakcemi
+a indexem tématu je drahý — čte ho jen obrazovka News. */
+export function useNews(date?: string, { feed = true }: { feed?: boolean } = {}): NewsData {
   const { symbol, socket } = useAppState()
   const [news, setNews] = useState<NewsRow[]>([])
   const [upcoming, setUpcoming] = useState<NewsRow[]>([])
@@ -65,7 +69,7 @@ export function useNews(date?: string): NewsData {
     let cancelled = false
     const load = () => {
       void Promise.all([
-        fetchNews(100, symbol), // dopad zpráv per aktivní symbol (#656)
+        feed ? fetchNews(100, symbol) : Promise.resolve([]), // dopad per aktivní symbol (#656)
         fetchUpcoming(),
         fetchSentimentSeries(symbol, date),
         fetchTopics(),
@@ -87,11 +91,12 @@ export function useNews(date?: string): NewsData {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [symbol, date, version])
+  }, [symbol, date, version, feed])
 
   // Živý push (#335). Bez něj se nová zpráva objeví až s dalším REST fetchem,
   // takže headline → obrazovka trvalo minuty; teď jde o sekundy.
   useEffect(() => {
+    if (!feed) return
     const handler = (data: Record<string, unknown>) => {
       // Kanál `news` nese i provozní hlášky (retro pass) — ty nemají `id`
       if (typeof data.id !== 'number') return
@@ -99,7 +104,7 @@ export function useNews(date?: string): NewsData {
     }
     socket.subscribe('news', handler)
     return () => socket.unsubscribe('news', handler)
-  }, [socket])
+  }, [socket, feed])
 
   // Nový signál z WS (#295) — šipka se má objevit hned, ne s dalším fetchem
   useEffect(() => {
