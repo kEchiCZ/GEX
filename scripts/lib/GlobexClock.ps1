@@ -19,5 +19,15 @@ function Get-GlobexClock {
         -or ($ct.DayOfWeek -eq 'Sunday' -and $ct.Hour -lt 17) `
         -or ($ct.DayOfWeek -eq 'Friday' -and $ct.Hour -ge 16) `
         -or ($ct.Hour -eq 16)
-    [pscustomobject]@{ Closed = [bool]$closed; Central = $ct; Label = $ct.ToString('ddd HH:mm') }
+    # Kolik minut zbývá do otevření (#1277): „zavřeno teď" nestačí — akce,
+    # která zastaví Docker v 16:55 CT, by přetekla přes otevření v 17:00.
+    # Otevírá se v 17:00 CT kromě pátku a soboty (víkend → neděle 17:00).
+    $minutesToOpen = 0.0
+    if ($closed) {
+        $open = $ct.Date.AddHours(17)
+        if ($ct -ge $open) { $open = $open.AddDays(1) }
+        while ($open.DayOfWeek -in 'Friday', 'Saturday') { $open = $open.AddDays(1) }
+        $minutesToOpen = ($open - $ct).TotalMinutes
+    }
+    [pscustomobject]@{ Closed = [bool]$closed; Central = $ct; Label = $ct.ToString('ddd HH:mm'); MinutesToOpen = $minutesToOpen }
 }

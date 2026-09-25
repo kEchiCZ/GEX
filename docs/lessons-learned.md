@@ -16,6 +16,13 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-09-25 — spouštěč Task Scheduleru „23:05“ by v zimě běžel ve 22:05 (#1277): `New-ScheduledTaskTrigger` ukládá offset.**
+  `StartBoundary` vzniká jako `…T23:05:00+02:00` = „synchronizovat napříč časovými pásmy“ → Windows drží čas v UTC
+  a po konci letního času úloha poběží o hodinu dřív (u pauzy Globexu = do otevřeného trhu). Týká se i walk-forward
+  a docker úklidu (#1278). Druhá past téhož dne: plánovaný čas 23:05 padl přímo do okna deploye (logy enginu
+  23:04–23:08), přestože komentář tvrdil „deploy 23:15“. → Po `New-ScheduledTaskTrigger` přepsat
+  `StartBoundary = ([datetime]$t.StartBoundary).ToString('s')`; čas úlohy, která zastavuje Docker, ověřovat podle
+  skutečných časů v `data/logs/`, ne podle komentářů, a úlohy vzájemně vylučovat (čekání na běžící deploy).
 - **2026-09-24 — naplánované úlohy tiše padaly 2 týdny (0x80070002): cesta k pwsh z WindowsApps nese číslo verze.**
   `(Get-Command pwsh).Source` = `…\Microsoft.PowerShell_7.6.5.0_…\pwsh.exe`; po aktualizaci Store balíčku
   na 7.6.6 cesta zmizela a „GEXLens walk-forward" (noční report pro #794/#1081) končil „soubor nenalezen"
