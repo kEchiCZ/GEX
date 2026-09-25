@@ -103,6 +103,20 @@ export interface AlertMessage {
   ts: number
   /** Setup alerty (#186): 'created' → proklik na graf, 'closed' → na Setupy. */
   event?: string
+  /** Upozornění na zprávy (#1291): čas zprávy / začátek shluku (`news_anomaly`)
+      nebo otevření Globexu (`news_preopen`). */
+  ts_event?: string
+  /** Zprávy upozornění (#1290) — proklik ze zvonečku na jejich marker a dialog. */
+  event_ids?: number[]
+}
+
+/** Požadavek na zobrazení zpráv upozornění v grafu (#1290) — plní zvoneček, čte App. */
+export interface NewsFocus {
+  kind: string
+  eventIds: number[]
+  tsEvent: string | null
+  /** Každé kliknutí je nový požadavek, i na totéž upozornění (posun grafu znovu). */
+  nonce: number
 }
 
 export interface Toggles {
@@ -269,6 +283,9 @@ interface AppState {
   alerts: AlertMessage[]
   unreadAlerts: number
   markAlertsRead: () => void
+  /** Proklik z upozornění na zprávy (#1290): dialog zpráv a posun grafu na marker. */
+  newsFocus: NewsFocus | null
+  requestNewsFocus: (focus: Omit<NewsFocus, 'nonce'>) => void
   consoleLog: string[]
   priceInfo: PriceInfo
   setPriceInfo: (info: PriceInfo) => void
@@ -480,6 +497,10 @@ export function AppStateProvider({
   )
   const [alerts, setAlerts] = useState<AlertMessage[]>([])
   const [unreadAlerts, setUnreadAlerts] = useState(0)
+  const [newsFocus, setNewsFocus] = useState<NewsFocus | null>(null)
+  const requestNewsFocus = useCallback((focus: Omit<NewsFocus, 'nonce'>) => {
+    setNewsFocus((previous) => ({ ...focus, nonce: (previous?.nonce ?? 0) + 1 }))
+  }, [])
   const [consoleLog, setConsoleLog] = useState<string[]>([])
   const [setupsVersion, setSetupsVersion] = useState(0)
   const [priceInfo, setPriceInfoState] = useState<PriceInfo>({ last: null, changePct: null })
@@ -782,6 +803,8 @@ export function AppStateProvider({
       alerts,
       unreadAlerts,
       markAlertsRead: () => setUnreadAlerts(0),
+      newsFocus,
+      requestNewsFocus,
       consoleLog,
       priceInfo,
       setPriceInfo,
@@ -835,6 +858,8 @@ export function AppStateProvider({
       theme,
       alerts,
       unreadAlerts,
+      newsFocus,
+      requestNewsFocus,
       consoleLog,
       priceInfo,
       setPriceInfo,

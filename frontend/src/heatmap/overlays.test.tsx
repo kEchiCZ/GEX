@@ -4,9 +4,10 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, test } from 'vitest'
 import { Heatmap } from '../components/Heatmap'
 import { CrosshairProvider, useCrosshair } from '../state/Crosshair'
-import { DEFAULT_VIEW } from './view'
+import { DEFAULT_VIEW, baseBucketPx } from './view'
 import type { ViewTransform } from './view'
 import { demoGrid } from './demo'
+import type { HeatmapGrid } from './grid'
 import { breaksOnJump, formatLevel, fractionalRow, isLevelJump, hasLevelProjection, levelLabel, pairWallSeries, pricePolyline, resolveSecondaryWalls, tickIndices, visibleOverlays } from './overlays' // prettier-ignore
 import type { LevelLine, OverlayData } from './overlays'
 
@@ -396,5 +397,142 @@ describe('horizontální projekce úrovní (#344)', () => {
     expect(hasLevelProjection('walls:ridge-0')).toBe(false)
     expect(hasLevelProjection('walls:call')).toBe(false)
     expect(hasLevelProjection('walls:flip')).toBe(false)
+  })
+})
+
+describe('proklik na marker zprávy (#1290)', () => {
+  function FocusHarness({ focus }: { focus: { idx: number; nonce: number } | null }) {
+    const [view, setView] = useState(DEFAULT_VIEW)
+    return (
+      <CrosshairProvider>
+        <Heatmap
+          grid={demoGrid(100, 10)}
+          style="gradient"
+          contours="off"
+          fitRange={{ low: 7405, high: 7440 }}
+          view={view}
+          onViewChange={(next) => {
+            focusViews.push(next)
+            setView(next)
+          }}
+          resetKey="ES|e|intraday|1m|d"
+          focusBucket={focus}
+        />
+      </CrosshairProvider>
+    )
+  }
+  let focusViews: ViewTransform[] = []
+
+  test('focusBucket vycentruje koš a zoom nechá; každý nonce jednou', () => {
+    focusViews = []
+    const { rerender } = render(<FocusHarness focus={null} />)
+    const fitted = focusViews[focusViews.length - 1]
+    // 100 minut na plátně 1 200 px (jsdom default) → 12 px na koš při zoomu 1
+    const scaleX = baseBucketPx(100, 1200) * fitted.zoomX
+
+    rerender(<FocusHarness focus={{ idx: 20, nonce: 1 }} />)
+    const focused = focusViews[focusViews.length - 1]
+    expect(focused.offsetX).toBeCloseTo(600 - 20.5 * scaleX)
+    expect(focused.zoomX).toBe(fitted.zoomX)
+
+    // Tentýž nonce podruhé (re-render) pohled znovu nepřepíše — uživatel mezitím panuje
+    const count = focusViews.length
+    rerender(<FocusHarness focus={{ idx: 20, nonce: 1 }} />)
+    expect(focusViews.length).toBe(count)
+
+    // Nové kliknutí (nonce 2) posune znovu
+    rerender(<FocusHarness focus={{ idx: 80, nonce: 2 }} />)
+    expect(focusViews[focusViews.length - 1].offsetX).toBeCloseTo(600 - 80.5 * scaleX)
+  })
+
+  test('focus před prvním fitem datasetu čeká — fit by ho jinak přepsal', () => {
+    focusViews = []
+    render(<FocusHarness focus={{ idx: 30, nonce: 1 }} />)
+    // Poslední pohled je posunutý na koš 30, ne výchozí fit
+    const last = focusViews[focusViews.length - 1]
+    const scaleX = baseBucketPx(100, 1200) * last.zoomX
+    expect(last.offsetX).toBeCloseTo(600 - 30.5 * scaleX)
+    // A před ním proběhl fit (focus není první změna pohledu)
+    expect(focusViews.length).toBeGreaterThan(1)
+  })
+})
+
+describe('proklik na marker při výměně datasetu (#1290)', () => {
+  function SwapHarness({
+    grid,
+    fitRange,
+    focus,
+    log,
+    onApplied,
+  }: {
+    grid: HeatmapGrid
+    fitRange: { low: number; high: number }
+    focus: { idx: number; nonce: number } | null
+    log: ViewTransform[]
+    onApplied?: (nonce: number) => void
+  }) {
+    const [view, setView] = useState(DEFAULT_VIEW)
+    return (
+      <CrosshairProvider>
+        <Heatmap
+          grid={grid}
+          style="gradient"
+          contours="off"
+          fitRange={fitRange}
+          view={view}
+          onViewChange={(next) => {
+            log.push(next)
+            setView(next)
+          }}
+          resetKey="NQ|e|intraday|1m|d"
+          focusBucket={focus}
+          onFocusApplied={onApplied}
+        />
+      </CrosshairProvider>
+    )
+  }
+
+  test('focus v témže renderu jako nová data se skládá na nový auto-fit (osa Y nových dat)', () => {
+    // Demo fallback → data NQ: auto režim i focus volají setView v témže commitu.
+    // Dřív focus bral pohled z renderu (demo) a přepsal nový fit — osa Y zůstala na demu.
+    const demo = demoGrid(100, 10)
+    const real = demoGrid(100, 40)
+    const realFit = { low: 7550, high: 7590 }
+    const reference: ViewTransform[] = []
+    const { unmount } = render(
+      <SwapHarness grid={real} fitRange={realFit} focus={null} log={reference} />,
+    )
+    const expected = reference[reference.length - 1]
+    unmount()
+
+    const log: ViewTransform[] = []
+    const applied: number[] = []
+    const onApplied = (nonce: number) => applied.push(nonce)
+    const { rerender } = render(
+      <SwapHarness
+        grid={demo}
+        fitRange={{ low: 7405, high: 7440 }}
+        focus={null}
+        log={log}
+        onApplied={onApplied}
+      />,
+    )
+    expect(log[log.length - 1].zoomY).not.toBeCloseTo(expected.zoomY)
+    rerender(
+      <SwapHarness
+        grid={real}
+        fitRange={realFit}
+        focus={{ idx: 30, nonce: 1 }}
+        log={log}
+        onApplied={onApplied}
+      />,
+    )
+    const last = log[log.length - 1]
+    expect(last.zoomY).toBeCloseTo(expected.zoomY)
+    expect(last.offsetY).toBeCloseTo(expected.offsetY)
+    const scaleX = baseBucketPx(100, 1200) * last.zoomX
+    expect(last.offsetX).toBeCloseTo(600 - 30.5 * scaleX)
+    // Aplikovaný požadavek se hlásí rodiči — ten ho spotřebuje (návrat na graf)
+    expect(applied).toEqual([1])
   })
 })

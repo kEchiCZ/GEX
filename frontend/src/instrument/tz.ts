@@ -71,6 +71,27 @@ export function sessionDateIso(ts: number = Date.now()): string {
   return new Date(shifted).toISOString().slice(0, 10)
 }
 
+/** Hranice obchodního dne `dateIso` v epoch ms: [17:00 CT dne D−1, 17:00 CT dne D).
+
+Protějšek `sessionDateIso` (týž den = tatáž seance). Okno má 24 h (23 h obchodu
++ pauza CME), v den přechodu DST 23 nebo 25 h — hranice se proto počítají
+v zóně, ne ±24 h. */
+export function sessionBoundsUtc(dateIso: string): { openMs: number; closeMs: number } {
+  const [year, month, day] = dateIso.split('-').map(Number)
+  const previous = new Date(Date.UTC(year, month - 1, day - 1))
+  return {
+    openMs: zonedTimeUtc(
+      'America/Chicago',
+      previous.getUTCFullYear(),
+      previous.getUTCMonth() + 1,
+      previous.getUTCDate(),
+      17,
+      0,
+    ),
+    closeMs: zonedTimeUtc('America/Chicago', year, month, day, 17, 0),
+  }
+}
+
 /** Epoch ms okamžiku „`hour`:`minute` dne `year`-`month`-`day` v zóně `timeZone`".
 
 `month` je 1-based. Dvě iterace stačí: první odhad s offsetem UTC okamžiku,

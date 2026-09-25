@@ -33,7 +33,6 @@ function marker(rows: NewsRow[], upcoming = false): NewsMarker {
     importance: 2,
     glyph: '🏛',
     upcoming,
-    titles: rows.map((item) => item.title),
     rows,
   }
 }
@@ -136,4 +135,57 @@ test('dialog markeru nabízí Vysvětlit u každé zprávy a ukáže text z API 
     expect(screen.getByTestId('news-explain-1').textContent).toBe('Fed drží sazby.'),
   )
   vi.unstubAllGlobals()
+})
+
+test('zpráva mimo zobrazený den: datum v čase a bez range tlačítek (#1290)', () => {
+  // Proklik z upozornění nebo marker historie — range umí jen osa zobrazeného dne
+  const inView = row({ id: 1, ts_event: new Date(2026, 6, 28, 14, 30).toISOString() })
+  const otherDay = row({ id: 2, ts_event: new Date(2026, 6, 27, 9, 5).toISOString() })
+  const onSetRange = vi.fn()
+  render(
+    <NewsMarkerDialog
+      marker={marker([inView, otherDay])}
+      onClose={() => {}}
+      onSetRange={onSetRange}
+      isInView={(item) => item.id === 1}
+    />,
+  )
+  // Range jen u zprávy zobrazeného dne (tlačítka +15/+60 jednou, ne dvakrát)
+  expect(screen.getAllByRole('button', { name: /\+15 min/ })).toHaveLength(1)
+  // Čas nese datum, když dialog míchá dny
+  const heading = screen.getByRole('heading')
+  expect(heading.textContent).toContain('27. 7.')
+})
+
+test('velký cluster (~200 zpráv na 60m): významné nahoře, drobné sbalené (#1290)', () => {
+  const at = (minute: number) => new Date(2026, 6, 28, 14, minute).toISOString()
+  const minor = Array.from({ length: 197 }, (_, index) =>
+    row({ id: 100 + index, importance: 1, ts_event: at(index % 60), title: `Drobná ${index}` }),
+  )
+  const prominent = [
+    row({ id: 1, importance: 3, ts_event: at(40), title: 'Fed Powell' }),
+    row({ id: 2, importance: 1, kind: 'scheduled', ts_event: at(30), title: 'USD PPI m/m' }),
+    row({ id: 3, importance: 2, ts_event: at(50), title: 'Treasury' }),
+  ]
+  render(<NewsMarkerDialog marker={marker([...minor, ...prominent])} onClose={() => {}} />)
+  const titles = () =>
+    Array.from(document.querySelectorAll('.news-dialog-title')).map((item) => item.textContent)
+  // Významné (plánované i importance ≥ 2) časem, drobné schované
+  expect(titles()).toEqual(['USD PPI m/m', 'Fed Powell', 'Treasury'])
+  // Hlavička nese čas první zprávy clusteru, ne první zobrazené
+  expect(screen.getByRole('heading').textContent).toContain(
+    new Date(at(0)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+  )
+  fireEvent.click(screen.getByRole('button', { name: '+197 drobných zpráv (důležitost 1)' }))
+  expect(titles()).toHaveLength(200)
+  expect(titles().slice(0, 3)).toEqual(['USD PPI m/m', 'Fed Powell', 'Treasury'])
+  fireEvent.click(screen.getByRole('button', { name: 'Skrýt drobné zprávy' }))
+  expect(titles()).toHaveLength(3)
+})
+
+test('malý cluster se nesbaluje — drobné zprávy jsou vidět hned', () => {
+  const rows = [row({ id: 1, importance: 1 }), row({ id: 2, importance: 3 })]
+  render(<NewsMarkerDialog marker={marker(rows)} onClose={() => {}} />)
+  expect(screen.getByText('Zpráva 1')).toBeDefined()
+  expect(screen.queryByRole('button', { name: /drobných zpráv/ })).toBeNull()
 })

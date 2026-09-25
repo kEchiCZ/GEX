@@ -615,3 +615,174 @@ def test_typicka_reakce_per_kategorie(client: TestClient) -> None:
     assert "60" not in row["windows"]  # neměřené okno se nevrací
     # Jiný symbol bez měření → prázdno, žádný dosazený default
     assert client.get("/news/reactions/typical", params={"symbol": "NQ"}).json()["typical"] == []
+
+
+# ── Markery grafu (#1290) ──────────────────────────────────────────
+
+#: Seance 16. 9. 2026: [17:00 CT 15. 9., 17:00 CT 16. 9.) = [22:00Z, 22:00Z)
+SESSION_OPEN = dt.datetime(2026, 9, 15, 22, 0, tzinfo=dt.UTC)
+SESSION_CLOSE = dt.datetime(2026, 9, 16, 22, 0, tzinfo=dt.UTC)
+SESSION_EVENTS = 1200
+
+
+def _marker_event(ts: dt.datetime, key: str, **values: object) -> dict[str, object]:
+    return {
+        "ts_event": ts,
+        "ts_ingested": ts,
+        "source": "alpaca",
+        "kind": "headline",
+        "title": f"Zpráva {key}",
+        "category": "OTHER",
+        "importance": 1,
+        "symbols": [],
+        "market_closed": False,
+        "dedup_hash": f"marker-{key}",
+        "body": "plné znění článku",
+        "raw": {"impact": "Low"},
+        **values,
+    }
+
+
+@pytest.fixture
+def markers_client(client: TestClient) -> TestClient:
+    """Seance s 1 200 zprávami (víc než dřívější strop 100 i výchozí limit 200)."""
+    engine = cast(FastAPI, client.app).state.meta_repository.engine()
+    step = (SESSION_CLOSE - SESSION_OPEN) / SESSION_EVENTS
+    # Vloženo sestupně — pořadí v odpovědi musí určit ORDER BY, ne pořadí zápisu
+    events = [
+        _marker_event(SESSION_OPEN + step * index, str(index))
+        for index in reversed(range(SESSION_EVENTS))
+    ]
+    # Hranice: přesně na `to` už patří další seanci, minuta před `from` předchozí
+    events.append(_marker_event(SESSION_CLOSE, "next-session"))
+    events.append(_marker_event(SESSION_OPEN - dt.timedelta(minutes=1), "previous-session"))
+    # Scheduled řádek má navíc sloupce → vlastní insert (executemany bere klíče
+    # z prvního slovníku a ostatní by tiše zahodil)
+    cpi = _marker_event(
+        SESSION_OPEN + dt.timedelta(hours=16, minutes=30),
+        "cpi",
+        source="forexfactory",
+        kind="scheduled",
+        title="USD CPI m/m",
+        category="MACRO_INFLATION",
+        importance=3,
+        forecast=2.9,
+        previous=3.0,
+        actual=2.7,
+        surprise_z=-1.4,
+    )
+    with engine.begin() as conn:
+        conn.execute(insert(news_events), events)
+        conn.execute(insert(news_events).values(**cpi))
+    return client
+
+
+def _session_params() -> dict[str, str]:
+    return {"from": SESSION_OPEN.isoformat(), "to": SESSION_CLOSE.isoformat()}
+
+
+def test_news_markers_return_whole_session_without_cap(markers_client: TestClient) -> None:
+    """#1290: všechny zprávy seance, vzestupně, jen sloupce markeru a dialogu."""
+    response = markers_client.get("/news/markers", params=_session_params())
+    assert response.status_code == 200
+    rows = response.json()["news"]
+    assert len(rows) == SESSION_EVENTS + 1  # + CPI; hranice seance vynechané
+    titles = {row["title"] for row in rows}
+    assert "Zpráva next-session" not in titles  # [from, to) — `to` už patří další seanci
+    assert "Zpráva previous-session" not in titles
+    stamps = [dt.datetime.fromisoformat(row["ts_event"]) for row in rows]
+    assert stamps == sorted(stamps)
+    assert set(rows[0]) == {
+        "id",
+        "ts_event",
+        "kind",
+        "category",
+        "importance",
+        "title",
+        "summary",
+        "sentiment_dir",
+        "sentiment_score",
+        "forecast",
+        "previous",
+        "actual",
+        "surprise_z",
+    }
+
+
+def test_news_markers_scheduled_carries_direction(markers_client: TestClient) -> None:
+    """Dialog markeru ukazuje verdikt makra (#462 A) — směr musí dorazit i sem."""
+    rows = markers_client.get("/news/markers", params=_session_params()).json()["news"]
+    cpi = next(row for row in rows if row["title"] == "USD CPI m/m")
+    assert cpi["surprise_direction"] == 1  # nižší CPI = risk-on
+    assert cpi["actual"] == pytest.approx(2.7)  # číslo, ne řetězec z Decimal
+
+
+def test_news_markers_do_not_compute_topic_index(
+    markers_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hlídač výkonu: index tématu je O(řádky × eventy), seance by trvala desítky s."""
+    from gexlens_api import sentiment_routes
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("/news/markers nesmí počítat topic_value")
+
+    monkeypatch.setattr(sentiment_routes, "_attach_topic_values", forbidden)
+    assert markers_client.get("/news/markers", params=_session_params()).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {},  # chybí rozsah i ids
+        {"from": SESSION_OPEN.isoformat()},
+        {"to": SESSION_CLOSE.isoformat()},
+        # from ≥ to
+        {"from": SESSION_CLOSE.isoformat(), "to": SESSION_OPEN.isoformat()},
+        {"from": SESSION_OPEN.isoformat(), "to": SESSION_OPEN.isoformat()},
+        # nad 26 h — načítá se po seancích, strop se tiše neuplatní
+        {
+            "from": SESSION_OPEN.isoformat(),
+            "to": (SESSION_OPEN + dt.timedelta(hours=26, minutes=1)).isoformat(),
+        },
+        # ids a rozsah zároveň
+        {"ids": "1", "from": SESSION_OPEN.isoformat(), "to": SESSION_CLOSE.isoformat()},
+        {"ids": "1,x"},
+        {"ids": ","},
+        {"ids": ",".join(str(index) for index in range(1, 102))},
+    ],
+)
+def test_news_markers_reject_invalid_query(
+    markers_client: TestClient, params: dict[str, str]
+) -> None:
+    assert markers_client.get("/news/markers", params=params).status_code == 422
+
+
+def test_news_markers_accept_dst_session(markers_client: TestClient) -> None:
+    """Seance přes konec letního času má 24 h — pod stropem 26 h projde."""
+    params = {
+        "from": dt.datetime(2026, 10, 31, 22, 0, tzinfo=dt.UTC).isoformat(),
+        "to": dt.datetime(2026, 11, 1, 23, 0, tzinfo=dt.UTC).isoformat(),
+    }
+    response = markers_client.get("/news/markers", params=params)
+    assert response.status_code == 200
+    assert response.json()["news"] == []
+
+
+def test_news_markers_by_ids(markers_client: TestClient) -> None:
+    """Proklik z upozornění (#1290): právě požadované řádky, neznámé id se vynechá."""
+    rows = markers_client.get("/news/markers", params=_session_params()).json()["news"]
+    wanted = [rows[5]["id"], rows[700]["id"]]
+    response = markers_client.get(
+        "/news/markers", params={"ids": f"{wanted[1]},{wanted[0]},999999"}
+    )
+    assert response.status_code == 200
+    assert [row["id"] for row in response.json()["news"]] == wanted  # vzestupně časem
+    # Strop 100 ids platí včetně hranice
+    hundred = ",".join(str(row["id"]) for row in rows[:100])
+    assert len(markers_client.get("/news/markers", params={"ids": hundred}).json()["news"]) == 100
+
+
+def test_news_markers_route_is_not_swallowed_by_event_detail(client: TestClient) -> None:
+    """`/news/markers` je registrovaný před `/news/{event_id}` — jinak 422 z int parseru."""
+    response = client.get("/news/markers", params={"ids": "1"})
+    assert response.status_code == 200

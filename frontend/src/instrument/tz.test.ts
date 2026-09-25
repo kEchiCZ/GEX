@@ -1,6 +1,6 @@
 /** Testy převodu burzovní čas → UTC (#511): letní i zimní období, přechody DST. */
 import { expect, test } from 'vitest'
-import { sessionDateIso, zonedTimeUtc } from './tz'
+import { sessionBoundsUtc, sessionDateIso, zonedTimeUtc } from './tz'
 
 test('zonedTimeUtc: 16:00 New York — 20:00 UTC v létě, 21:00 v zimě', () => {
   expect(zonedTimeUtc('America/New_York', 2026, 7, 17, 16, 0)).toBe(Date.UTC(2026, 6, 17, 20, 0))
@@ -43,4 +43,34 @@ test('sessionDateIso: obchodní den = Globex seance (#512)', () => {
   // Zima (CST, UTC−6): open ve 23:00 UTC
   expect(sessionDateIso(Date.UTC(2026, 0, 19, 22, 30))).toBe('2026-01-19')
   expect(sessionDateIso(Date.UTC(2026, 0, 19, 23, 0))).toBe('2026-01-20')
+})
+
+test('sessionBoundsUtc: hranice seance = [17:00 CT D−1, 17:00 CT D) (#1290)', () => {
+  // Léto (CDT, UTC−5): seance 25. 9. 2026 běží 24. 9. 22:00Z – 25. 9. 22:00Z
+  expect(sessionBoundsUtc('2026-09-25')).toEqual({
+    openMs: Date.UTC(2026, 8, 24, 22, 0),
+    closeMs: Date.UTC(2026, 8, 25, 22, 0),
+  })
+  // Zima (CST, UTC−6): o hodinu později
+  expect(sessionBoundsUtc('2026-12-15')).toEqual({
+    openMs: Date.UTC(2026, 11, 14, 23, 0),
+    closeMs: Date.UTC(2026, 11, 15, 23, 0),
+  })
+  // Přes přelom měsíce i roku
+  expect(sessionBoundsUtc('2027-01-01').openMs).toBe(Date.UTC(2026, 11, 31, 23, 0))
+})
+
+test('sessionBoundsUtc: den přechodu DST (1. 11. 2026) má 25 h, pondělí zase 24 h', () => {
+  const sunday = sessionBoundsUtc('2026-11-01')
+  expect(sunday.openMs).toBe(Date.UTC(2026, 9, 31, 22, 0)) // sobota 17:00 CDT
+  expect(sunday.closeMs).toBe(Date.UTC(2026, 10, 1, 23, 0)) // neděle 17:00 CST
+  expect((sunday.closeMs - sunday.openMs) / 3_600_000).toBe(25)
+  // Seance 2. 11. začíná 1. 11. 23:00Z
+  const monday = sessionBoundsUtc('2026-11-02')
+  expect(monday.openMs).toBe(Date.UTC(2026, 10, 1, 23, 0))
+  expect((monday.closeMs - monday.openMs) / 3_600_000).toBe(24)
+  // Shoda se sessionDateIso: open patří dni, minuta před ním předchozímu
+  const { openMs } = sessionBoundsUtc('2026-11-02')
+  expect(sessionDateIso(openMs)).toBe('2026-11-02')
+  expect(sessionDateIso(openMs - 60_000)).toBe('2026-11-01')
 })

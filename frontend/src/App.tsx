@@ -1,11 +1,19 @@
 /** Kořenový layout aplikace (SPEC 7.1) s obrazovkami Graf / Dashboard / Settings…. */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { alignSeriesToLabels, signalGateInfo } from './api/news'
-import type { NewsRow } from './api/news'
+import { alignSeriesToLabels, fetchNewsByIds, signalGateInfo } from './api/news'
+import type { ChartNewsRow } from './api/news'
 import { axisDatesOf, buildExpiryMarkers } from './heatmap/expiryMarkers'
-import { buildNewsMarkers, significantOnly } from './heatmap/newsMarkers'
-import type { NewsMarker } from './heatmap/newsMarkers'
+import {
+  buildNewsMarkers,
+  closedDayMarkers,
+  markerFromRows,
+  newsBucketIndex,
+  significantOnly,
+} from './heatmap/newsMarkers'
+import type { AxisSegment, NewsMarker, TimedNewsRow } from './heatmap/newsMarkers'
+import { bucketStartsMs } from './heatmap/buckets'
+import { useChartNews } from './hooks/useChartNews'
 import { buildJournalMarkers } from './heatmap/journalMarkers'
 import { fetchJournal } from './api/journal'
 import type { JournalEntry } from './api/journal'
@@ -57,7 +65,7 @@ import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid, scaleHintFor } from './he
 import type { HeatmapScale, MeasuredHeatmapMode } from './heatmap/modes'
 import { projectGrid, projectionLabels, projectionLength } from './heatmap/projection'
 import { expiryIsoDate, expirySettleUtc, sessionDateFor } from './instrument/expiry'
-import { sessionDateIso } from './instrument/tz'
+import { sessionBoundsUtc, sessionDateIso } from './instrument/tz'
 import { EM_COLOR, EM_DASH, REF_COLOR, REF_DASH, SETUP_COLORS, VWAP_COLOR, resolveSecondaryWalls, visibleOverlays } from './heatmap/overlays' // prettier-ignore
 import { computeExpectedMove, emUsage } from './instrument/expectedmove'
 import { vwapSeriesForAxis } from './instrument/referencelevels'
@@ -143,6 +151,9 @@ function lastValue(series: (number | null)[] | undefined, position: number): num
   return null
 }
 
+/** Jak dlouho visí hláška o nezdařeném prokliku z upozornění (#1290). */
+const NEWS_FOCUS_ERROR_MS = 8000
+
 function MainContent() {
   const {
     toggles,
@@ -170,6 +181,7 @@ function MainContent() {
     oiSource,
     socket,
     setToggle,
+    newsFocus,
   } = useAppState()
   // Zprávy a sentiment (#288/#289) — jeden zdroj pro panel, sidebar i chip
   // Stav RiskOn/RiskOff (#295) — varovný badge šipek při unconfirmed změně
@@ -312,8 +324,9 @@ function MainContent() {
   const { expiries: knownExpiries, status: pipelineStatus } = useAppState()
   const adhocLoading =
     knownExpiries.length === 0 && (pipelineStatus.tasty_adhoc?.includes(symbol) ?? false)
-  // Sentiment per zobrazený den (#976) — proto až za `viewDate`
-  const newsData = useNews(viewDate)
+  // Sentiment per zobrazený den (#976) — proto až za `viewDate`. Feed posledních
+  // zpráv graf nečte: markery mají vlastní načítání po seancích (#1290)
+  const newsData = useNews(viewDate, { feed: false })
   const {
     day: rawDay,
     live,
@@ -357,6 +370,16 @@ function MainContent() {
     () => (timeframe === 'daily' ? null : buildHistoryView(historyBars.days, bucketMinutes)),
     [timeframe, historyBars.days, bucketMinutes],
   )
+  // Zprávy pro markery po seancích (#1290): zobrazený den celý, historie z osy
+  // líně po dnech; cache per datum, takže přepnutí ES↔NQ nic nestahuje
+  const historyDates = useMemo(() => historyBars.days.map((item) => item.date), [historyBars.days])
+  const chartNews = useChartNews({
+    enabled: toggles.news && timeframe !== 'daily',
+    viewDate,
+    live: !isHistoricalExpiry,
+    historyDates,
+    socket: isHistoricalExpiry ? undefined : socket,
+  })
   // Podkladová plocha (#242 → #204): gamma z /replay balíku; charm/vanna se
   // stahují a odebírají jen když jsou zobrazené (kanál per plocha)
   const greekPlane = useGreekPlane(
@@ -797,22 +820,137 @@ function MainContent() {
       ),
     ]
   }, [day.minuteLabels, day.lastMinuteIso, projectionExtra, bucketMinutes, timeframe, dailyForward]) // prettier-ignore
-  // Markery zpráv se počítají nad CELOU osou včetně projekce (#287): jen tak
-  // se nadcházející CPI vykreslí vpravo od živé hrany, kde ho trader čeká.
-  // Filtr „Významné" (#408) pouští jen importance ≥ 2 — okrajové titulky
-  // plochu nezahltí, FOMC/CPI zůstávají.
+  // Úseky osy pro časové mapování zpráv (#1290): zobrazený den (koše od 0,
+  // včetně projekce — nadcházející CPI padne vpravo od živé hrany, #287)
+  // a historické seance se zápornými koši (#788). Daily má sloupec = den, bez markerů.
+  const viewBounds = useMemo(() => sessionBoundsUtc(viewDate), [viewDate])
+  const newsAxis = useMemo((): {
+    view: AxisSegment | null
+    /** Uzavřené seance historie, vzestupně podle osy (nejstarší první). */
+    history: { date: string; segment: AxisSegment }[]
+  } => {
+    if (timeframe === 'daily') return { view: null, history: [] }
+    const bucketMs = bucketMinutes * 60_000
+    let view: AxisSegment | null = null
+    const starts = bucketStartsMs(rawDay.minutesIso, rawDay.grid.minutes, bucketMinutes)
+    if (starts && starts.length > 0) {
+      const withProjection = new Float64Array(starts.length + Math.max(0, projectionExtra))
+      withProjection.set(starts)
+      for (let index = starts.length; index < withProjection.length; index += 1) {
+        withProjection[index] = withProjection[index - 1] + bucketMs
+      }
+      view = {
+        openMs: viewBounds.openMs,
+        // Živá projekce sahá až k settle (max 24 h) i přes konec seance
+        closeMs: isHistoricalExpiry ? viewBounds.closeMs : Number.POSITIVE_INFINITY,
+        startsMs: withProjection,
+        bucketMs,
+        firstIdx: 0,
+      }
+    }
+    const history: { date: string; segment: AxisSegment }[] = []
+    for (const slice of historyView?.slices ?? []) {
+      if (!slice.startsMs) continue
+      const bounds = sessionBoundsUtc(slice.date)
+      history.push({
+        date: slice.date,
+        segment: { ...bounds, startsMs: slice.startsMs, bucketMs, firstIdx: slice.firstBucket },
+      })
+    }
+    history.sort((a, b) => a.segment.firstIdx - b.segment.firstIdx)
+    return { view, history }
+  }, [timeframe, bucketMinutes, rawDay.minutesIso, rawDay.grid.minutes, projectionExtra, viewBounds, isHistoricalExpiry, historyView]) // prettier-ignore
+  // Zprávy prokliknutého upozornění projdou i filtrem „Významné" (#1290):
+  // upozornění bere makro podle FF impactu, ne podle importance
+  const pinnedNewsIds = useMemo(() => new Set(newsFocus?.eventIds ?? []), [newsFocus])
+  // Markery = všechny zprávy zobrazeného dne a historie v ose (#1290), clustery
+  // po koších. Filtr „Významné" (#408) pouští jen importance ≥ 2 — okrajové
+  // titulky plochu nezahltí, FOMC/CPI zůstávají. Uzavřené seance (historie,
+  // proběhlá expirace) jdou z cache per den; živý push, dotažení ani „teď"
+  // přestaví jen živý den (#1274).
   const newsMarkers = useMemo(() => {
     if (!toggles.news) return []
     const important = newsMarkerFilter === 'important'
-    return buildNewsMarkers(
-      important ? significantOnly(newsData.news) : newsData.news,
-      important ? significantOnly(newsData.upcoming) : newsData.upcoming,
-      chartLabels,
-      minuteLabel,
-    )
-  }, [toggles.news, newsMarkerFilter, newsData.news, newsData.upcoming, chartLabels])
-  // Dialog zpráv kliknutého markeru (#408)
+    const markers: NewsMarker[] = []
+    const append = (part: readonly NewsMarker[]) => {
+      for (const marker of part) markers.push(marker)
+    }
+    for (const { date, segment } of newsAxis.history) {
+      const dayNews = chartNews.days.get(date)
+      if (dayNews) append(closedDayMarkers(dayNews, segment, important, pinnedNewsIds))
+    }
+    const view = newsAxis.view
+    const viewNews = chartNews.days.get(viewDate)
+    if (view && isHistoricalExpiry) {
+      if (viewNews) append(closedDayMarkers(viewNews, view, important, pinnedNewsIds))
+    } else if (view) {
+      const rows: TimedNewsRow[] = viewNews ? [...viewNews.values()] : []
+      // Nadcházející za horizontem seance (projekce do settle); duplicitu se
+      // zprávou dne odstraní buildNewsMarkers podle id — řádek dne má přednost
+      for (const row of newsData.upcoming) rows.push({ ...row, tsMs: Date.parse(row.ts_event) })
+      const filtered = important ? significantOnly(rows, pinnedNewsIds) : rows
+      append(buildNewsMarkers(filtered, [view], chartNews.nowMs))
+    }
+    return markers
+  }, [toggles.news, newsMarkerFilter, newsAxis, viewDate, chartNews.days, chartNews.nowMs, newsData.upcoming, isHistoricalExpiry, pinnedNewsIds]) // prettier-ignore
+  // Dialog zpráv kliknutého markeru (#408); stabilní zavření — dialog je memo
   const [newsDialogMarker, setNewsDialogMarker] = useState<NewsMarker | null>(null)
+  const closeNewsDialog = useCallback(() => setNewsDialogMarker(null), [])
+  // Range a pre/post (#488/#489) umí jen osa zobrazeného dne — historie a proklik
+  // na jiný den je nemají a dialog u nich ukazuje datum (#1290)
+  const isNewsRowInView = useCallback(
+    (row: ChartNewsRow) => {
+      const ms = Date.parse(row.ts_event)
+      return ms >= viewBounds.openMs && ms < viewBounds.closeMs
+    },
+    [viewBounds],
+  )
+  // Proklik z upozornění (#1290): zprávy podle id → dialog; chyba je vidět
+  // (hláška nad grafem, sama zmizí — vzor toastu scénáře)
+  const [newsFocusError, setNewsFocusError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!newsFocus) return
+    let cancelled = false
+    const fail = (message: string) => {
+      setNewsFocusError(message)
+      window.setTimeout(
+        () => setNewsFocusError((current) => (current === message ? null : current)),
+        NEWS_FOCUS_ERROR_MS,
+      )
+    }
+    fetchNewsByIds(newsFocus.eventIds)
+      .then((rows) => {
+        if (cancelled) return
+        const marker = markerFromRows(rows, -1, Date.now())
+        setNewsDialogMarker(marker)
+        if (marker) setNewsFocusError(null)
+        else fail('Zprávy upozornění v databázi nejsou.')
+      })
+      .catch((failure: unknown) => {
+        if (cancelled) return
+        const reason = failure instanceof Error ? failure.message : String(failure)
+        fail(`Zprávy upozornění se nepodařilo načíst: ${reason}`)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [newsFocus])
+  // Posun grafu na marker upozornění: jen když zpráva leží v zobrazeném dni
+  // a osa je z reálných dat (demo osu nemá). `news_preopen` nese čas otevření
+  // Globexu a víkendové zprávy na ose seance neleží — u něj jen dialog.
+  // Aplikovaný požadavek se spotřebuje: Heatmap se při odchodu z grafu
+  // odmontuje a po návratu by jinak pohled skočil na staré upozornění znovu.
+  const [appliedNewsFocus, setAppliedNewsFocus] = useState<number | null>(null)
+  const newsFocusBucket = useMemo(() => {
+    if (!newsFocus || newsFocus.nonce === appliedNewsFocus) return null
+    if (newsFocus.kind === 'news_preopen' || newsFocus.tsEvent === null) return null
+    const tsMs = Date.parse(newsFocus.tsEvent)
+    const viewSegment = newsAxis.view
+    if (rawDay.source !== 'replay' || !viewSegment) return null
+    if (Number.isNaN(tsMs) || tsMs >= viewBounds.closeMs) return null
+    const idx = newsBucketIndex(tsMs, false, [viewSegment])
+    return idx === null ? null : { idx, nonce: newsFocus.nonce }
+  }, [newsFocus, appliedNewsFocus, rawDay.source, newsAxis, viewBounds])
   // Značky deníku v ose (#673, Traders mode): záznamy symbolu se párují na osu
   // stejným formatterem jako popisky (vzor news markerů). Refetch i při návratu
   // z Deníku (změna view) — nový záznam se má ukázat hned.
@@ -1251,7 +1389,7 @@ function MainContent() {
   }, [])
   // Pre/post event (#489): A = event−15→event, B = event→+15 — diferenční mód
   const handleMarkerPrePost = useCallback(
-    (newsRow: NewsRow) => {
+    (newsRow: ChartNewsRow) => {
       const result = prePostWindows(newsRow.ts_event, 15, rawDay.minutesIso.at(-1) ?? null)
       if (!result) return
       setRange(result.a)
@@ -1265,7 +1403,7 @@ function MainContent() {
   )
   // Range z news markeru (#488): reakční okno zprávy — táž okna jako news_reactions
   const handleMarkerRange = useCallback(
-    (newsRow: NewsRow, minutes: number) => {
+    (newsRow: ChartNewsRow, minutes: number) => {
       const result = reactionWindow(newsRow.ts_event, minutes, rawDay.minutesIso.at(-1) ?? null)
       if (!result) return
       setRange(result.range)
@@ -1957,6 +2095,8 @@ function MainContent() {
               rangeCreate={rangeTool}
               history={historyView}
               onNeedHistory={timeframe === 'daily' ? undefined : historyBars.requestMore}
+              focusBucket={newsFocusBucket}
+              onFocusApplied={setAppliedNewsFocus}
             />
             {/* Chip aktivního range (#484): popisek okna + CumΔ okna + zavření */}
             {range && timeframe === 'intraday' && (
@@ -2017,10 +2157,18 @@ function MainContent() {
             {newsDialogMarker && (
               <NewsMarkerDialog
                 marker={newsDialogMarker}
-                onClose={() => setNewsDialogMarker(null)}
+                onClose={closeNewsDialog}
                 onSetRange={timeframe === 'intraday' ? handleMarkerRange : undefined}
                 onSetPrePost={timeframe === 'intraday' ? handleMarkerPrePost : undefined}
+                isInView={isNewsRowInView}
               />
+            )}
+            {/* Zprávy grafu (#1290): chyba načtení nesmí vypadat jako den bez zpráv */}
+            {toggles.news && (chartNews.error || newsFocusError) && (
+              <div className="stale-banner" role="status" data-testid="news-load-error">
+                {newsFocusError ??
+                  `Zprávy do grafu se nepodařilo načíst (${chartNews.error}) — markery můžou chybět, další pokus do minuty.`}
+              </div>
             )}
             {/* Checkbox Setupy (#399): globální viditelnost vrstvy setupů */}
             {toggles.setups && (

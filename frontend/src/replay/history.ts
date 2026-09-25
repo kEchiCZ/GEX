@@ -12,12 +12,14 @@ křivka NEspojuje hranici dnů — přes roll kontraktu (~2. čtvrtek měsíce
 expirace) by spojnice tvrdila falešnou kontinuitu (ADR-0028 dodatek).
 
 Jen cena. Heatmapa, panely ani profily se pro minulé dny nestaví (rozhodnutí
-zadavatele v #788 — positioning per den stojí na jiném 0DTE řetězu).
+zadavatele v #788 — positioning per den stojí na jiném 0DTE řetězu). Markery
+zpráv ano (#1290): slice nese wall-clock starty košů a zprávy se na něj
+mapují časem stejně jako na dnešek.
 */
 
 import { API_BASE } from '../config'
 import type { PriceBar } from '../heatmap/overlays'
-import { cachedBucketPlan } from '../heatmap/buckets'
+import { bucketStartsMs, cachedBucketPlan } from '../heatmap/buckets'
 import { aggregateBars } from './aggregate'
 import { minuteLabel } from './useDayData'
 
@@ -38,6 +40,9 @@ export interface HistorySlice {
       Stejný formát i cache jako dnešní osa (`minuteLabel`), takže osa X
       nese časy po celé délce, ne jen pro dnešek. */
   labels: string[]
+  /** Wall-clock start každého koše slice (epoch ms) — markery zpráv historie
+      se mapují časem jako dnešní (#1290); null = osa bez čitelných časů. */
+  startsMs: Float64Array | null
 }
 
 export interface HistoryView {
@@ -112,6 +117,7 @@ export function buildHistoryView(
         const iso = day.minutesIso[plan.starts[bucketIdx] ?? 0]
         return iso === undefined ? '' : minuteLabel(iso)
       }),
+      startsMs: bucketStartsMs(day.minutesIso, day.minutesIso.length, bucketMinutes),
     })
     offset = firstBucket
   }

@@ -347,12 +347,26 @@ podle zdi umisťuje stop, o ní jinak neví.
 
 Se zapnutým **News** se na časové ose kreslí značky zpráv a makro událostí (krátký tick těsně nad pásem popisků seancí u spodní hrany + glyf kategorie nad ním: 🏛 Fed, 📊 inflace, 👷 trh práce…; od v1.13 mají pevnou výšku v pixelech a nerostou s výškou grafu — dřív zabíraly spodní třetinu plochy, #980; klik na marker trefí jen tenhle spodní pás, výš patří klik heatmapě):
 
+**Všechny zprávy zobrazeného dne** (v1.21, #1290): graf načítá zprávy po seancích — celý
+obchodní den (17:00–17:00 CT) jedním dotazem, bez stropu počtu. Dřív bral posledních 100
+zpráv, což při toku ~150 zpráv za hodinu pokrylo jen ~30–40 minut, a markery starších
+zpráv během dne mizely. Nové zprávy dorazí živě (do ~2 s), každou minutu se navíc dotáhne
+úsek od posledního úspěšného dotažení s 30min rezervou (klasifikace, výsledek makra, výpadek
+API). Celý den se načte znovu po výpadku spojení a také po **vypnutí a zapnutí** vrstvy
+News, návratu z Daily nebo z prohlížení jiného dne — během pauzy graf zprávy neodebíral
+a díra by jinak zůstala do obnovení stránky. Když se zprávy nepodaří načíst, nad grafem se
+ukáže hláška **s dnem, který chybí** — prázdný pás markerů pak neznamená den bez zpráv;
+hláška zmizí, jakmile se ten den načte (další pokus do minuty). Zprávy víkendu (pátek 17:00 – neděle 17:00 CT) na ose žádné seance neleží; najdeš
+je v záložce News a v upozornění před otevřením.
+
 - **Barva = změřený dopad**: teal kladný sentiment, červená záporný, šedá neutrální/nezměřený. **Jas a tloušťka = důležitost** — okrajová zpráva nekřičí jako FOMC.
-- Víc zpráv v téže minutě = **jeden marker s počtem** (cluster).
-- **Nadcházející plánované eventy** (CPI ve 14:30…) se kreslí **dutě čárkovaně do projekční zóny** vpravo od živé hrany — vidíš je dřív, než přijdou.
-- **Klik na marker otevře dialog** se zprávami dané minuty: čas, kategorie, důležitost (! až !!!), titulek, případný souhrn a **očekávaný dopad na trh — Long ▲ / Short ▼ / Neutrální** (u klasifikovaných zpráv podle směru, jinak podle znaménka skóre; stejná logika, jakou se barví marker). U makro událostí navíc **očekávání / minule / výsledek**, u nadcházejících odpočet. Zavření: ×, Esc, nebo klik mimo.
+- Víc zpráv v témže sloupci grafu (minuta na 1m, pět minut na 5m…) = **jeden marker s počtem** (cluster). Zpráva padne do sloupce **podle času**: 13:02 na 5m do sloupce 13:00 (v1.21 — dřív se na 5m a delších timeframech zprávy mimo hranici sloupce nekreslily vůbec). Zprávy z **denní pauzy CME** (16–17 CT, v Praze 23–24) vlastní sloupec nemají a přimknou se k poslednímu sloupci před pauzou.
+- **Oddálený celý den** (v1.21): s filtrem Vše je za seanci 1 000–1 250 markerů. Pod ~4 px na sloupec se kreslí jen čárky, glyf dostanou jen významné zprávy (bez počtu) a glyfy se nepřekrývají — přednost má důležitější zpráva; po přiblížení se glyfy i počty vrátí. Kreslí se jen markery ve výřezu. Klik trefí to, co je **nakreslené**: nejdřív glyf (v jeho šíři přednost důležitější zprávě), jinak nejbližší čárku — ne sousední drobnou zprávu se skrytým glyfem.
+- **Nadcházející plánované eventy** (CPI ve 14:30…) se kreslí **dutě čárkovaně do projekční zóny** vpravo od živé hrany — vidíš je dřív, než přijdou. Dutý je jen **plánovaný** event z kalendáře; čerstvý titulek je vždy plný marker na živé hraně, i když dorazil pár vteřin po posledním tiku.
+- **Klik na marker otevře dialog** se zprávami daného sloupce: čas, kategorie, důležitost (! až !!!), titulek, případný souhrn a **očekávaný dopad na trh — Long ▲ / Short ▼ / Neutrální** (u klasifikovaných zpráv podle směru, jinak podle znaménka skóre; stejná logika, jakou se barví marker). U makro událostí navíc **očekávání / minule / výsledek**, u nadcházejících odpočet. **Významné zprávy** (plánované eventy a důležitost ≥ 2) jsou nahoře, drobné pod nimi; cluster nad 6 zpráv (na 60m i ~200) drobné **sbalí** pod tlačítko „+N drobných zpráv" — rozbalíš je jedním klikem. Zavření: ×, Esc, nebo klik mimo.
 - **Verdikt vydané makro události (v1.12):** jakmile dorazí výsledek, dialog pod čísly ukáže **„nižší/vyšší než očekávání (±X σ)"** a při překvapení ≥ 0,5 σ i **směr → risk-on ▲ / risk-off ▼**. **Proč z pohledu tradera:** holé „2,7 vs 2,9" musíš v hlavě přepočítat přes polaritu řady (nižší CPI = dobrá zpráva, nižší payrolls = špatná) — přesně v minutách, kdy sleduješ reakci spotu; verdikt to udělá za tebe včetně velikosti překvapení v σ řady (−1,4 σ je jiná káva než −0,5 σ). **Jak číst:** šipka je odhad z konvence řady, ne signál — tooltip připomíná, že polarita je režimově závislá (v období „good news is bad news" se obrací); pod 0,5 σ se směr neukazuje vůbec, protože překvapení na úrovni šumu žádný směr nenese. Výsledek u high-impact událostí dorazí do ~1–2 minut od vydání (burst dotahování).
 - Dropdown **Vše / Významné** vedle checkboxu News omezí markery jen na zprávy s **důležitostí ≥ 2** — plocha se nezahltí drobnými titulky, FOMC/CPI zůstávají.
+- **Markery historických dnů** (v1.21): při posunu do minulosti (kap. Historie přes hranici dne) se zprávy dotáhnou i pro starší seance. V jejich dialogu je u času i **datum** a akce ⧉ +15/+60 min a pre/post chybí — okno umí jen osa zobrazeného dne.
 
 ### Stale buňky
 
@@ -371,16 +385,18 @@ Graf se při načtení **automaticky napasuje na cenové pásmo dne** (svíčky 
 
 Posuvníkem **Viditelnost** (10–100 %) cenovou vrstvu zeslabíš, aby nepřebíjela heatmapu pod ní — užitečné hlavně u svíček. **Štítek aktuální ceny zůstává vždy plně viditelný.**
 
-### Historie přes hranici dne — jen cena (v1.13, #788)
+### Historie přes hranici dne — cena a zprávy (v1.13, #788; zprávy v1.21, #1290)
 
 Bary podkladu se drží navždy (ES i NQ od července 2024), takže graf nekončí
 začátkem dnešní seance: **doscrolluj doleva** a starší seance se dotáhnou
 samy, den po dni, až na začátek archivu. Platí přitom:
 
-- **Jen cena.** Heatmapa, profil ani spodní panely se pro minulé dny
+- **Cena a zprávy.** Heatmapa, profil ani spodní panely se pro minulé dny
   nestaví — positioning každého dne stojí na jiném 0DTE řetězu a míchat ho
-  do dnešní osy by lhalo. Historie je **ztlumená** a na hranici dneška je
-  popisek „← historie (jen cena)"; mezi dny jsou předěly s datem.
+  do dnešní osy by lhalo. **Markery zpráv** se pro minulé dny kreslí
+  (v1.21, #1290), dotahují se po dnech spolu s cenou. Historie je
+  **ztlumená** a na hranici dneška je popisek „← historie (cena a zprávy)";
+  mezi dny jsou předěly s datem.
 - **Kotva na dnešku:** dotažení staršího dne s pohledem nepohne ani o pixel.
   Dny stojí zády k sobě po obchodních minutách — víkend ani pauza CME
   nevyrábí mezeru.
@@ -1298,6 +1314,8 @@ jede z tastytrade a CumΔ stojí: setupy s potvrzením tokem (T1, T4, T8)
 nevznikají, T2/T3/T7 a zprávy chodí dál; provozní alert o přetažení dostaneš.
 
 Zvonek je **globální — sbírá alerty napříč všemi instrumenty** ve watchlistu, ne jen z toho na grafu. Proto je u každého alertu **datum + čas** notifikace a **symbol instrumentu** (např. `[NQ · setup]`). Naproti tomu **karty a linie setupů přímo v grafu jsou jen pro instrument, který máš zobrazený.** Víceřádková upozornění (reakce trhu na zprávy, zprávy před otevřením) se ve zvonku zobrazí po řádcích jako na Telegramu.
+
+**Proklik na zprávy** (v1.21, #1290): upozornění *Reakce trhu na zprávy* a *Zprávy před otevřením* jsou ve zvonku klikací („Otevřít zprávy v grafu"). Klik přepne graf na instrument upozornění, zapne vrstvu **News** a otevře **dialog se zprávami upozornění** (s datem, když leží mimo zobrazený den). U reakce trhu navíc **jednou posune graf** tak, aby začátek shluku byl uprostřed (zoom i cenová osa zůstávají) — marker tam najdeš spolu s ostatními zprávami toho sloupce, **i s filtrem Významné**: zprávy upozornění projdou filtrem vždy (upozornění bere makro podle dopadu z kalendáře, ne podle důležitosti). Po návratu na graf z jiné obrazovky se pohled znovu neposouvá. U souhrnu před otevřením se graf neposouvá: víkendové zprávy na ose seance neleží. Zvonek drží upozornění jen v paměti stránky (posledních 50), po obnovení stránky je prázdný; z Telegramu vede k zprávě jen čas v textu upozornění („Reakce ES na zprávy z 13:00").
 
 Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a jeho výchozí stav; úplný popis ukážou tooltipy přepínačů):
 

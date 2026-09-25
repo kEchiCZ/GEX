@@ -18,6 +18,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import Table, case, desc, func, insert, literal, select
 from sqlalchemy import update as sql_update
@@ -66,6 +67,42 @@ logger = logging.getLogger(__name__)
 SENTIMENT_SUBDIR = "sentiment"
 DEFAULT_FEED_LIMIT = 200
 MAX_FEED_LIMIT = 1000
+
+#: Nejdelší rozsah `/news/markers` (#1290): okno seance [17:00 CT D−1, 17:00 CT D)
+#: má 24 h, v den přechodu DST 25 h; delší dotaz je chyba — graf načítá po seancích
+MARKERS_MAX_RANGE = dt.timedelta(hours=26)
+#: Strop `ids` na proklik z upozornění — shluk i předobchodní souhrn nesou jednotky
+MARKERS_MAX_IDS = 100
+#: Sloupce markeru a jeho dialogu (#1290). Bez `body`, `raw`, reakcí a indexu
+#: tématu: graf je nečte a u 5 tis. zpráv za seanci by stály MB a desítky sekund
+MARKER_COLUMNS = (
+    news_events.c.id,
+    news_events.c.ts_event,
+    news_events.c.kind,
+    news_events.c.category,
+    news_events.c.importance,
+    news_events.c.title,
+    news_events.c.summary,
+    news_events.c.sentiment_dir,
+    news_events.c.sentiment_score,
+    news_events.c.forecast,
+    news_events.c.previous,
+    news_events.c.actual,
+    news_events.c.surprise_z,
+)
+
+
+def _parse_ids(raw: str) -> list[int]:
+    """`?ids=1,2,3` → seznam id; nečitelný token nebo překročený strop = 422."""
+    try:
+        ids = sorted({int(token) for token in raw.split(",") if token.strip()})
+    except ValueError as exc:
+        raise HTTPException(422, "ids musí být celá čísla oddělená čárkou") from exc
+    if not ids:
+        raise HTTPException(422, "ids je prázdné")
+    if len(ids) > MARKERS_MAX_IDS:
+        raise HTTPException(422, f"nejvýš {MARKERS_MAX_IDS} ids na dotaz")
+    return ids
 
 
 def _reaction_windows(engine: Engine, event_id: int) -> list[dict[str, Any]]:
@@ -303,6 +340,47 @@ def build_sentiment_router(
         _attach_topic_values(engine_factory(), rows)
         _attach_scheduled_directions(rows)
         return {"news": rows}
+
+    @router.get("/news/markers")
+    def news_markers(
+        from_ts: dt.datetime | None = Query(None, alias="from"),
+        to_ts: dt.datetime | None = Query(None, alias="to"),
+        ids: str | None = None,
+    ) -> JSONResponse:
+        """Zprávy pro markery grafu (#1290): celý rozsah bez stropu, nebo výčet id.
+
+        `from`/`to` = polouzavřený interval [from, to) — graf žádá po seancích,
+        takže hranice sousedních seancí se nepřekrývají. Vrací VŠECHNY zprávy
+        rozsahu; strop by tiše uřízl čas (#1290), proto je omezená jen délka
+        rozsahu (`MARKERS_MAX_RANGE`). `ids` (≤ 100) slouží prokliku
+        z upozornění. Řazení vzestupně podle času.
+
+        Sloupce jsou jen ty, které čte marker a jeho dialog; feed `/news`
+        s reakcemi a indexem tématu zůstává pro obrazovku News.
+        """
+        stmt = select(*MARKER_COLUMNS).order_by(news_events.c.ts_event, news_events.c.id)
+        if ids is not None:
+            if from_ts is not None or to_ts is not None:
+                raise HTTPException(422, "zadej buď ids, nebo from/to — ne obojí")
+            stmt = stmt.where(news_events.c.id.in_(_parse_ids(ids)))
+        else:
+            if from_ts is None or to_ts is None:
+                raise HTTPException(422, "chybí from a to (nebo ids)")
+            start, end = _utc(from_ts), _utc(to_ts)
+            if start >= end:
+                raise HTTPException(422, "from musí být před to")
+            if end - start > MARKERS_MAX_RANGE:
+                raise HTTPException(
+                    422,
+                    f"rozsah nad {int(MARKERS_MAX_RANGE.total_seconds() // 3600)} h — "
+                    "načítej po seancích",
+                )
+            stmt = stmt.where(news_events.c.ts_event >= start, news_events.c.ts_event < end)
+        rows = _rows(engine_factory(), stmt)
+        _attach_scheduled_directions(rows)
+        # Řádky jsou po `_rows` čisté JSON typy — přímý render místo
+        # `jsonable_encoder`, který u seance (~5 tis. řádků) stál ~4× víc
+        return JSONResponse({"news": rows})
 
     @router.get("/news/sources")
     def news_sources_report(days: int = Query(7, ge=1, le=90)) -> dict[str, object]:

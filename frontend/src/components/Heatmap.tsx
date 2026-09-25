@@ -36,7 +36,7 @@ import { stackLabelRows } from '../heatmap/labelStack'
 import { journalGlyph, journalMarkerColor, journalMarkerNear } from '../heatmap/journalMarkers'
 import type { JournalMarker } from '../heatmap/journalMarkers'
 import { EXPIRY_GLYPH } from '../heatmap/expiryMarkers'
-import { markerColor, markerNear, markerStyle } from '../heatmap/newsMarkers'
+import { newsDrawPlan, newsMarkerAtX } from '../heatmap/newsMarkers'
 import type { NewsMarker as NewsMarkerType } from '../heatmap/newsMarkers'
 
 /** Pás news markerů u spodní hrany (#980): spodek ticku nad popisky seancí
@@ -161,6 +161,8 @@ export function Heatmap({
   forwardMarkers = [],
   history = null,
   onNeedHistory,
+  focusBucket = null,
+  onFocusApplied,
 }: {
   grid: HeatmapGrid
   /** Dyn GEX pole jako podklad (#242) — kreslí se POD měřeným gridem; průhledné
@@ -259,6 +261,13 @@ export function Heatmap({
   /** Levý okraj viewportu se blíží načtené historii — rodič dotáhne další den
       (lazy, jeden request v letu; #788). */
   onNeedHistory?: () => void
+  /** Proklik z upozornění na zprávy (#1290): posune osu X tak, aby koš `idx`
+      byl uprostřed (zoom zůstává). Každý `nonce` se aplikuje jednou a až po
+      auto-fitu datasetu — jinak by ho fit nového instrumentu přepsal. */
+  focusBucket?: { idx: number; nonce: number } | null
+  /** Posun `focusBucket` proběhl — rodič požadavek spotřebuje, aby se po
+      návratu na graf (nový mount) nepřehrál znovu (#1290). */
+  onFocusApplied?: (nonce: number) => void
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -273,10 +282,23 @@ export function Heatmap({
   const [internalView, setInternalView] = useState<ViewTransform>(DEFAULT_VIEW)
   // Řízený vs. vlastní pohled: rodič může sdílet transformaci se spodními panely
   const view = controlledView ?? internalView
+  // Updatery řízeného pohledu se v jednom commitu skládají (#1290): prop
+  // `controlledView` je hodnota z renderu, takže druhý `setView` téhož commitu
+  // (auto režim + proklik na marker) by bez tohohle přepsal první starým
+  // pohledem. Po každém commitu platí zase prop.
+  const pendingViewRef = useRef<ViewTransform | null>(null)
+  useLayoutEffect(() => {
+    pendingViewRef.current = null
+  })
   const setView = useCallback(
     (updater: (previous: ViewTransform) => ViewTransform) => {
-      if (onViewChange) onViewChange(updater(controlledView ?? DEFAULT_VIEW))
-      else setInternalView(updater)
+      if (onViewChange) {
+        const next = updater(pendingViewRef.current ?? controlledView ?? DEFAULT_VIEW)
+        pendingViewRef.current = next
+        onViewChange(next)
+      } else {
+        setInternalView(updater)
+      }
     },
     [onViewChange, controlledView],
   )
@@ -368,6 +390,29 @@ export function Heatmap({
     appliedViewRef.current = initialView
     setView(() => initialView)
   }, [initialView, view, resetKey, setView])
+  // Proklik na marker (#1290): až když pohled datasetu prošel fitem (render
+  // s napasovaným pohledem), jinak by posun počítal se starým zoomem a fit ho
+  // v témže commitu přepsal. Posun se skládá na pohled, který v témže commitu
+  // zapsal auto režim (výměna dema za data nového instrumentu) — ne na pohled
+  // z renderu; zoom i osa Y zůstávají. Programový posun pak auto režim zmrazí
+  // jako gesto. Aplikovaný `nonce` se hlásí rodiči, který požadavek spotřebuje.
+  const fitCommittedRef = useRef<string | number | undefined | symbol>(UNFITTED)
+  const focusAppliedRef = useRef<number | null>(null)
+  useEffect(() => {
+    const applied = appliedViewRef.current
+    if (fittedKeyRef.current === resetKey && applied !== null && view === applied) {
+      fitCommittedRef.current = resetKey
+    }
+    if (!focusBucket || focusAppliedRef.current === focusBucket.nonce) return
+    if (fitCommittedRef.current !== resetKey) return
+    focusAppliedRef.current = focusBucket.nonce
+    const basePx = baseBucketPx(grid.minutes, logicalW)
+    setView((current) => ({
+      ...current,
+      offsetX: logicalW / 2 - (focusBucket.idx + 0.5) * basePx * current.zoomX,
+    }))
+    onFocusApplied?.(focusBucket.nonce)
+  }, [focusBucket, view, resetKey, grid.minutes, logicalW, setView, onFocusApplied])
   // Tažení: pan plochy, nebo roztahování jedné osy (TradingView styl)
   const dragRef = useRef<{ x: number; y: number; mode: 'pan' | 'scale-x' | 'scale-y' } | null>(null)
   // Tažení range (#484): create drží kotvu (druhý okraj), move offset úchopu
@@ -635,27 +680,36 @@ export function Heatmap({
     // Sedí těsně nad pásem popisků seancí u spodní hrany (#980, styl
     // TradingView): krátký tick v px, ne podíl výšky — dřív pás od 72 % dolů
     // konkuroval cenové křivce a při vysokém grafu rostl s ní.
+    // Celý den nese ~1 000–1 250 clusterů (#1290): kreslí se jen viditelné,
+    // čárky jedním strokem per styl a při hrubém zoomu bez glyfů drobných zpráv
     const newsTickBottom = logicalH - NEWS_MARKER_BAND_BOTTOM
     const newsTickTop = newsTickBottom - NEWS_MARKER_TICK
-    for (const marker of overlays.newsMarkers ?? []) {
-      const x = minuteToX(marker.minuteIdx) - 0.5 * scaleX
-      const { alpha, width } = markerStyle(marker)
-      context.strokeStyle = markerColor(marker, alpha)
-      context.lineWidth = width
-      if (marker.upcoming) context.setLineDash([3, 3])
-      context.beginPath()
-      context.moveTo(x, newsTickTop)
-      context.lineTo(x, newsTickBottom)
-      context.stroke()
+    const newsMarkers = overlays.newsMarkers ?? []
+    if (newsMarkers.length > 0) {
+      const plan = newsDrawPlan(newsMarkers, minuteToX, scaleX, logicalW)
+      for (const group of plan.ticks.values()) {
+        const [first] = group
+        context.strokeStyle = first.color
+        context.lineWidth = first.width
+        context.setLineDash(first.dashed ? [3, 3] : [])
+        context.beginPath()
+        for (const tick of group) {
+          context.moveTo(tick.x, newsTickTop)
+          context.lineTo(tick.x, newsTickBottom)
+        }
+        context.stroke()
+      }
       context.setLineDash([])
-
-      context.fillStyle = markerColor(marker, Math.min(1, alpha + 0.05))
-      context.font = '11px sans-serif'
-      context.fillText(marker.glyph, x - 4, newsTickTop - 3)
-      if (marker.count > 1) {
-        // Cluster: jeden marker s počtem místo změti čar (SPEC 9.1)
-        context.font = '9px sans-serif'
-        context.fillText(String(marker.count), x + 6, newsTickTop - 3)
+      context.lineWidth = 1
+      for (const glyph of plan.glyphs) {
+        context.fillStyle = glyph.color
+        context.font = '11px sans-serif'
+        context.fillText(glyph.glyph, glyph.x - 4, newsTickTop - 3)
+        if (glyph.count !== null) {
+          // Cluster: jeden marker s počtem místo změti čar (SPEC 9.1)
+          context.font = '9px sans-serif'
+          context.fillText(String(glyph.count), glyph.x + 6, newsTickTop - 3)
+        }
       }
     }
 
@@ -931,7 +985,8 @@ export function Heatmap({
       context.moveTo(xToday, 0)
       context.lineTo(xToday, logicalH)
       context.stroke()
-      const todayNote = '← historie (jen cena)'
+      // Zprávy historie mají markery (#1290), heatmapa a panely ne (#788)
+      const todayNote = '← historie (cena a zprávy)'
       context.fillText(todayNote, xToday - measuredWidth(context, todayNote) - 4, 12)
       context.setLineDash([])
       context.font = '11px sans-serif'
@@ -1662,7 +1717,7 @@ export function Heatmap({
     if (!start) return
     const point = canvasPoint(event)
     if (!point || Math.hypot(point.x - start.x, point.y - start.y) > 4) return
-    const { screenToCell, scaleX } = mapping()
+    const { screenToCell, scaleX, minuteToX } = mapping()
     const { minuteIdx } = screenToCell(point.x, point.y)
     // Tolerance v minutách dle zoomu: glyf je ~8 px široký i při hustší ose
     const tolerance = Math.max(1, Math.ceil(6 / Math.max(scaleX, 0.01)))
@@ -1685,7 +1740,9 @@ export function Heatmap({
     if (point.y < logicalH - NEWS_MARKER_HIT_BAND) return
     const markers = overlays.newsMarkers ?? []
     if (markers.length === 0) return
-    const marker = markerNear(markers, minuteIdx, tolerance)
+    // Zásah podle nakreslených glyfů a čárek (#1290), ne podle indexu koše —
+    // oddálený den skrývá glyfy drobných zpráv
+    const marker = newsMarkerAtX(markers, minuteToX, scaleX, logicalW, point.x)
     if (marker) onNewsMarkerClick(marker)
   }
 

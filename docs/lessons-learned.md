@@ -156,6 +156,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-25 — markery zpráv během dne mizely, k upozornění nešla v grafu najít zpráva (#1290): „posledních N“ jako zdroj časové osy.**
+  Graf bral `/news?limit=100`; při toku ~150 zpráv/h to pokrylo ~30–40 min (upozornění ve 14:03 na zprávy
+  z 13:00, graf začínal 13:42). Tamtéž druhá tichá chyba: marker se pároval na osu shodou popisku `HH:MM`,
+  takže na 5m a delších TF zmizela každá zpráva mimo hranici koše a zprávy z pauzy CME neměly sloupec.
+  Odhalil to proklik z upozornění, ne test (testy měly osu 1m a pár zpráv). → Data časové osy načítat
+  podle rozsahu (seance), nikdy „posledních N“ — strop počtu bez hlídání rozsahu tiše uřízne čas; na osu
+  mapovat časem (`bucketStartsMs` + binární hledání), ne formátovaným popiskem; testovat i na 5m a s > 100 řádky.
+  Review téže změny našlo tentýž symptom podruhé: cache „den načtený" živého dne přežila pauzu odběru
+  (vypnutá vrstva, Daily, jiný den) a minutové dotažení bralo jen posledních 30 min. → Příznak „načteno"
+  u živých dat platí jen po dobu odběru: při (znovu)zahájení odběru zneplatnit, dotažení počítat od
+  posledního úspěšného, ne od „teď"; test s pauzou delší než okno.
 - **2026-09-25 — „souhrn zpráv za víkend po otevření“ byl hotový a uživatel ho zahodil (#1291 Q2): trader potřebuje čas se připravit.**
   Upozornění, které přijde až s gapem, popisuje, co už se stalo; hodnotu má jen před otevřením. Druhá past
   v téže změně: aktualizace 15 min před nedělním openem padá na 23:45 = do výchozích tichých hodin Telegramu
