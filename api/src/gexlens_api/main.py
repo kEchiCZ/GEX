@@ -188,8 +188,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     live_hub = LiveHub()
     meta_repository = MetaRepository(settings)
     alert_engine = AlertEngine(live_hub)
-    # Push na Telegram (#1175): posluchač kanálu alerts, přepínače kategorií
-    # ze serverových nastavení; bez přihlašovacích údajů v .env jen loguje
+    # Push na Telegram (#1175, #1284): posluchač kanálu alerts, hlavní vypínač
+    # a přepínače per druh ze serverových nastavení; bez údajů bota v .env jen loguje
     telegram_push = TelegramPush(PushOptions.from_settings(settings), meta_repository.settings_all)
     live_hub.alert_listeners.append(telegram_push.handle)
     app_push = telegram_push
@@ -332,7 +332,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/push/status")
     def push_status() -> dict[str, object]:
-        """Stav push notifikací (#1175): nakonfigurováno, odesláno dnes, poslední chyba."""
+        """Stav push notifikací (#1175, #1284): bot, odesláno dnes, poslední chyba,
+        hlavní vypínač a přepínače per druh s popisky a efektivní hodnotou (po dědění).
+
+        Bez tokenu i chat id; čte ho Settings → Notifikace a `scripts/lib/OpsAlert.ps1`.
+        """
         return app_push.status()
 
     @app.get("/status")

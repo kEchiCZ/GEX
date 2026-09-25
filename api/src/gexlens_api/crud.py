@@ -44,7 +44,10 @@ UI_SETTINGS = frozenset(["theme", "language", "sessions"])
 # řetězců — jiný tvar by news-engine tiše ignoroval jako „vše smazáno".
 NEWS_LIST_SETTINGS = frozenset(["news_bluesky_authors", "news_reddit_subreddits", "news_rss_extra"])
 
-# Přepínače kategorií push notifikací (#1175): booleany, čte je API při každém alertu
+# Push na Telegram (#1175, #1284): hlavní vypínač a přepínače per druh upozornění
+# (`push_telegram_enabled`, `push_telegram_topic_*`), booleany, čte je API při každém
+# alertu. Dřívější přepínače kategorií (`push_telegram_setup/ops/news/info`) už zapsat
+# nejde — zůstávají jen jako záloha pro dědění (`push_telegram.effective`).
 # `retro_pass` chybí schválně — ten si news-engine píše přímo do DB, ne přes API.
 WRITABLE_SETTINGS = ENGINE_SETTINGS | UI_SETTINGS | NEWS_LIST_SETTINGS | PUSH_SETTING_KEYS
 

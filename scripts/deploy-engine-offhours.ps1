@@ -178,6 +178,8 @@ docker compose @composeArgs up -d --no-deps --force-recreate engine
 Start-Sleep -Seconds 20
 $after = (docker inspect -f '{{.State.Status}}' gex-engine-1).Trim()
 Write-Step "Po rollbacku: $after"
-# Deploy běží i bez dohledu (23:xx) — upozornit mimo Docker, API může stát (#1279)
-Send-OpsAlert "Deploy enginu selhal, vrácena verze $BackupTag (stav po rollbacku: $after). Zkontroluj docker logs gex-engine-1."
+# Deploy běží i bez dohledu (23:xx) — upozornit mimo Docker (#1279). Rollback
+# restartuje jen engine (--no-deps), API běží: nastavení Telegramu (#1284) si
+# Send-OpsAlert načte samo; když API neodpoví, pošle se (fail-open)
+Send-OpsAlert "Deploy enginu selhal, vrácena verze $BackupTag (stav po rollbacku: $after). Zkontroluj docker logs gex-engine-1." -Topic 'maintenance'
 throw 'Nasazení enginu selhalo, vrácena předchozí verze. Zkontroluj docker logs gex-engine-1.'

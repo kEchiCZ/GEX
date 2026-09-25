@@ -3479,12 +3479,36 @@ tr.setup-shadow td[data-part='risk'] {
   border-radius: 4px;
 }
 
-/* Push kategorie (#1175) — jeden řádek na kategorii, tooltip nese popis */
-.push-category {
+/* Notifikace Telegram (#1175, #1284) — jeden řádek na přepínač, tooltip nese
+   popis; hlavní vypínač nad dvěma skupinami, vypnutý = skupiny zešednou */
+.push-topic {
   display: flex;
   align-items: center;
   gap: 6px;
   margin: 4px 0;
+}
+.settings .push-master {
+  font-weight: 600;
+  color: var(--text);
+}
+.push-group {
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.push-group legend {
+  padding: 0;
+  margin: 0 0 2px;
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.push-group:disabled {
+  opacity: 0.5;
+}
+.push-error {
+  color: var(--down);
 }
 
 /* Stav enginu v Settings (#705 — náhrada IBKR Console) */

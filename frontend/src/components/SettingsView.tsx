@@ -7,6 +7,8 @@ obrazovky nebo refreshem zahodí a platí původní hodnoty.
 
 Výjimka je téma: aplikuje se i ukládá okamžitě, protože jde o čistě vizuální
 volbu s okamžitou zpětnou vazbou (AC #167) — čekat u něj na Uložit by mátlo.
+Totéž platí pro přepínače Telegramu (#1284): jeden klik = jeden bool, žádná
+rozepsaná hodnota; uloží se hned a při odmítnutí serverem ukážou chybu.
 */
 import { useEffect, useState } from 'react'
 import { loadApiToken, saveApiToken } from '../api/apiToken'
@@ -750,8 +752,9 @@ Sběr dat se na ~1–2 minuty přeruší.`)
       {/* Risk management (#1185): sizing, brzdy a brána = verze parametrů setupů */}
       <RiskSettings />
 
-      {/* Push na Telegram (#1175): přepínače kategorií = serverová nastavení */}
-      <PushSettings values={values} put={put} />
+      {/* Push na Telegram (#1175, #1284): hlavní vypínač + přepínače per druh =
+          serverová nastavení, ukládají se hned přes saveAll (chyba se ukáže) */}
+      <PushSettings values={values} saveAll={saveAll} />
 
       {/* Scénáře dne (#1173): disk snímků + ruční úklid */}
       <ScenarioSettings />

@@ -120,6 +120,43 @@ def test_seznamy_zdroju_validuji_tvar(client: TestClient) -> None:
     assert "retro_pass" not in WRITABLE_SETTINGS  # píše si ho news-engine přímo do DB
 
 
+@pytest.fixture
+def db_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setenv("GEXLENS_API_TOKEN", TOKEN)
+    settings = Settings(
+        data_dir=tmp_path / "data", database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.db'}"
+    )
+    return TestClient(create_app(settings))
+
+
+def test_push_prepinace_jen_bool_a_jen_nove_klice(db_client: TestClient) -> None:
+    """#1284: hlavní vypínač a přepínače per druh jsou bool; dřívější přepínače
+    kategorií zůstávají jen pro čtení (dědění), zápis na ně 422."""
+
+    def put(key: str, value: object) -> int:
+        return int(db_client.put(f"/settings/{key}", json={"value": value}).status_code)
+
+    assert put("push_telegram_enabled", True) == 200
+    assert put("push_telegram_topic_disk", "ano") == 422
+    assert put("push_telegram_news", False) == 422
+    assert put("push_telegram_topic_neexistuje", True) == 422
+
+
+def test_push_status_bez_tokenu_s_efektivnim_stavem(db_client: TestClient) -> None:
+    status = db_client.get("/push/status")
+    assert status.status_code == 200
+    body = status.json()
+    assert body["enabled"] is True and body["configured"] is False
+    assert [group["key"] for group in body["groups"]] == ["market", "app"]
+
+    for key in ("push_telegram_topic_disk", "push_telegram_enabled"):
+        assert db_client.put(f"/settings/{key}", json={"value": False}).status_code == 200
+    body = db_client.get("/push/status").json()
+    topics = {t["key"]: t["enabled"] for g in body["groups"] for t in g["topics"]}
+    assert body["enabled"] is False
+    assert topics["disk"] is False and topics["ibkr_connection"] is True
+
+
 # ── Origin u WebSocketu (H1) ───────────────────────────────────────────────
 
 

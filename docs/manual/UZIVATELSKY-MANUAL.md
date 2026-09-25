@@ -1257,14 +1257,38 @@ Light téma:
 
 **Zvonek** v hlavičce ukazuje badge s počtem nepřečtených alertů; kliknutím otevřeš historii (otevření badge vynuluje). Alerty chodí i za běhu do IBKR Console logu.
 
-**Push na Telegram (v1.18, #1175):** totéž, co zvoní ve zvonku, může chodit i na
-mobil přes Telegram bota — jedna fronta, dva výstupy, žádná jiná logika.
-V Settings → **Notifikace (Telegram)** přepínáš kategorie: **Setupy** (vznik
-setupu, práh confidence v `.env`), **Provoz** (výpadek IBKR, degradovaný start,
-přetažení mobilem, disk, zaseknuté greeks — chodí i v tichých hodinách),
-**Zprávy** (anomálie, koncentrace opčního objemu), **Ostatní** (FA validace,
-drift, blízkost úrovně — default vypnuto). Tiché hodiny 23:00–06:00 (lokálně),
-duplicitní alert do 10 min se neposílá, denní strop 200. Nastavení bota
+**Push na Telegram (v1.18, #1175; přepínače per druh #1284):** totéž, co zvoní
+ve zvonku, může chodit i na mobil přes Telegram bota — jedna fronta, dva výstupy,
+žádná jiná logika. **Zvonek dostává vždy všechno**, nastavení níže platí jen pro
+Telegram. V Settings → **Notifikace (Telegram)**:
+
+- **Posílat notifikace na Telegram** — hlavní vypínač. Vypnutý = na Telegram
+  neodejde nic, ani výpadky a noční údržba; přepínače pod ním zešednou, jejich
+  hodnoty ale zůstanou uložené.
+- **Setupy a burza** — ve výchozím stavu zapnuté: Nový setup, Brzda ztráty,
+  Paper účet, Scénář dne, Reakce trhu na zprávu, Koncentrace opčního objemu,
+  Kalendář expirací, Setup detektor prodělává; vypnuté (chodí často nebo jsou
+  jen informační): Cena u GEX úrovně, Kandidát vzorce T6, Setup detektor se
+  zotavil, Drift vzorců.
+- **Chování aplikace** — ve výchozím stavu zapnuté výpadky a degradace: Výpadek
+  spojení s IBKR, IBKR přihlášen jinde, IBKR odmítá market data, Přepnutí na
+  zálohu tastytrade, Záloha tastytrade nefunguje, Neúplná data opcí, Chybí OI,
+  Instrument nejde spustit, Dochází místo na disku, Noční údržba selhala;
+  vypnuté diagnostika a zotavení: Kontrola datových toků, Greeks z dopočtu,
+  Svíčky nechodí, Data opcí zase chodí, Málo místa pro Docker, Diagnostika modelu.
+
+Co přesně přepínač posílá, ukáže **tooltip** (najeď myší na název): popis, druhy
+ze zvonku, které pod něj patří, jestli chodí i v tichých hodinách a výchozí stav.
+Přepínač se uloží hned po kliknutí; když ho server odmítne, ukáže se chyba
+a přepínač zůstane, jak byl. Kdo měl dřív vypnutou kategorii (např. „Zprávy"),
+má vypnuté i její nové přepínače, dokud je sám nezapne — nic se samo nezapne
+ani nevypne. **Noční údržba selhala** posílá skript mimo Docker (kompaktace VHDX,
+rollback deploye): do zvonku nejde, protože API v tu chvíli může stát, a při
+vypnutém Telegramu zůstane jen v logu skriptu.
+
+Tiché hodiny 23:00–06:00 (lokálně): provozní přepínače (ve výchozím stavu zapnuté
+v Chování aplikace a Setup detektor prodělává) chodí i v nich, ostatní ne.
+Duplicitní alert do 10 min se neposílá, denní strop 200. Nastavení bota
 (přihlašovací údaje, chat id) dělá správce v `.env` — bez něj Settings ukážou
 „Telegram bot není nastaven". **Když se přihlásíš na mobilu k IBKR**, engine
 jede z tastytrade a CumΔ stojí: setupy s potvrzením tokem (T1, T4, T8)
@@ -1272,31 +1296,28 @@ nevznikají, T2/T3/T7 a zprávy chodí dál; provozní alert o přetažení dost
 
 Zvonek je **globální — sbírá alerty napříč všemi instrumenty** ve watchlistu, ne jen z toho na grafu. Proto je u každého alertu **datum + čas** notifikace a **symbol instrumentu** (např. `[NQ · setup]`). Naproti tomu **karty a linie setupů přímo v grafu jsou jen pro instrument, který máš zobrazený.**
 
-Druhy alertů:
+Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a jeho výchozí stav; úplný popis ukážou tooltipy přepínačů):
 
-| Alert | Kdy |
-|---|---|
-| **Cena u úrovně** | Cena se přiblíží k flipu / call zdi / put zdi na ≤ 1 krok striků (ES ±5 b). Anti-spam: úroveň po vystřelení mlčí 15 min **a** znovu hlásí až poté, co cena od úrovně odešla (2× práh) — konsolidace u zdi tak pípne jednou, ne každou minutu |
-| Cum Δ skok | Skok kumulativní delty o nastavený práh |
-| Dominantní strike | Změna striku s největší koncentrací |
-| **Výpadek spojení** | TWS/Gateway nedostupné — hlásí se **při přechodu** do odpojeného stavu (od v1.13 se skutečně vyhodnocuje, #949; dřív byl alert mrtvý kód). Trvá-li výpadek přes 5 min, přijde navíc **„IBKR spojení chybí už X min — sběr dat stojí"** a opakuje se, dokud se spojení nevrátí (#770); stejná doba je v Settings → Stav enginu jako „bez spojení X min" |
-| **Disk limit** | Obsazení dat překročilo limit ze Settings → Engine (hranově, jednou za překročení, #949). Nezaměňovat s alertem **disk_space** (volné místo disku pod 15 / 5 GB + výpis největších tabulek) |
-| **OI nedorazilo** | IBKR nedodalo Open Interest — GEX vrstvy jedou dočasně z volume (viz Řešení potíží) |
-| **Instrument nejde spustit** | Ticker z watchlistu není futures s opčním řetězem (např. akcie) — engine to zkusí znovu za 30 minut |
-| Obálka na stropu | Pásmo strikes dosáhlo maxima šířky — vzdálený okraj se posouvá za cenou |
-| **Svíčky se přestaly kreslit** | Real-time bary z TWS nechodí, ale cena žije (mrtvé TWS farmy po noční přestávce) — pomáhá restart TWS; díra se po návratu doplní sama |
-| Svíčky zase jedou | Bary se vrátily — díra ve svíčkách se doplní backfillem |
-| **Vol koncentrace** | Jedna strana (strike × C/P) příští expirace výrazně převyšuje zbytek (≥ 3× medián top 10) — úroveň, kde se trh zajišťuje na zítřek (put pod trhem pojistka/magnet, call nad trhem strop) |
-| **Nový setup** | Detektor našel obchodní setup (odraz od zdi / neúspěšný průraz / Max Pain pin / gamma momentum / divergenční spring) |
-| **FA validace** | Ranní kalibrační bod FA vrstvy: po příchodu OI archivu engine porovná včerejší klasifikovaný volume s ΔOI (open-ratio ≈ α, korelace) a bod uloží pro kalibraci — čistě informační |
-| **Greeks se zasekly / zase jedou** | Kotace opčního řetězu přestaly chodit při živém spotu (obdoba svíček) — hint restart TWS; návrat se ohlásí. **Po settle expirující řady se nehlásí** (v1.13, #959): vypořádaný řetěz se přestane kotovat, což je normální stav, ne porucha — dřív alert s radou „restart TWS" chodil každý den po 22:00 |
-| **Chyba subskripce** | TWS opakovaně odmítla data konkrétních kontraktů (error 354 „not subscribed"); alert vypíše, o které kontrakty jde. Ojedinělé výskyty se nehlásí — ty patří ke krátkým výpadkům farem a data se vrátí sama. Když alert přijde, zkontroluj subskripce v Market Data Subscription Manager. Jde vypnout v Settings → Alerty |
-| **Konkurenční relace** | Stejný IBKR účet je přihlášený jinde (mobilní aplikace, Client Portal, druhá TWS) a přetahuje si market data. IBKR povoluje jen jednu aktivní market-data relaci na subskripci, takže data můžou vypadávat — pomůže odhlásit účet z ostatních míst. Sdílení dat s paper účtem tohle **neřeší**: sdílí se oprávnění, ne kapacita relace |
-| **Setup detektor degradován/obnoven** | Detektoru chybí vstup (např. OI pro Max Pain) — šablony na něm závislé se dočasně nevyhodnocují |
-| **T6 kandidát** | Ráno po výprodeji (close −1 % a hůř) nastala konstelace premarket squeeze (kap. 18) — zatím se jen sbírá, šablona vznikne po ~5 výskytech |
-| **Drift hlídka** | Čerstvá úspěšnost signálového bucketu se statisticky rozešla s historickou — model přestává platit, signály z něj ber s rezervou (detail na Stats) |
-| **News anomálie** | Výrazný pohyb ceny bez odpovídající zprávy — něco hýbe trhem mimo pokryté zdroje |
-| **Retro pass** | Ranní přehodnocení včerejších klasifikací zpráv s odstupem — čistě informační |
+| Alert | Kdy | Telegram |
+|---|---|---|
+| **Cena u úrovně** | Cena se přiblíží k flipu / call zdi / put zdi na ≤ 1 krok striků (ES ±5 b). Anti-spam: úroveň po vystřelení mlčí 15 min **a** znovu hlásí až poté, co cena od úrovně odešla (2× práh) — konsolidace u zdi tak pípne jednou, ne každou minutu | Cena u GEX úrovně (vyp.) |
+| **Výpadek spojení** | TWS/Gateway nedostupné — hlásí se **při přechodu** do odpojeného stavu (od v1.13 se skutečně vyhodnocuje, #949; dřív byl alert mrtvý kód). Trvá-li výpadek přes 5 min, přijde navíc **„IBKR spojení chybí už X min — sběr dat stojí"** a opakuje se, dokud se spojení nevrátí (#770); stejná doba je v Settings → Stav enginu jako „bez spojení X min" | Výpadek spojení s IBKR (zap.) |
+| **Disk limit** | Obsazení dat překročilo limit ze Settings → Engine (hranově, jednou za překročení, #949). Nezaměňovat s alertem **disk_space** (volné místo disku pod 15 / 5 GB + výpis největších tabulek) | Dochází místo na disku (zap.) |
+| **OI nedorazilo** | IBKR nedodalo Open Interest — GEX vrstvy jedou dočasně z volume (viz Řešení potíží) | Chybí OI (zap.) |
+| **Instrument nejde spustit** | Ticker z watchlistu není futures s opčním řetězem (např. akcie) — engine to zkusí znovu za 30 minut | Instrument nejde spustit (zap.) |
+| Obálka na stropu | Pásmo strikes dosáhlo maxima šířky — vzdálený okraj se posouvá za cenou | Diagnostika modelu (vyp.) |
+| **Svíčky se přestaly kreslit** | Real-time bary z TWS nechodí, ale cena žije (mrtvé TWS farmy po noční přestávce) — pomáhá restart TWS; díra se po návratu doplní sama | Svíčky nechodí (vyp.) |
+| Svíčky zase jedou | Bary se vrátily — díra ve svíčkách se doplní backfillem | Svíčky nechodí (vyp.) |
+| **Vol koncentrace** | Jedna strana (strike × C/P) příští expirace výrazně převyšuje zbytek (≥ 3× medián top 10) — úroveň, kde se trh zajišťuje na zítřek (put pod trhem pojistka/magnet, call nad trhem strop) | Koncentrace opčního objemu (zap.) |
+| **Nový setup** | Detektor našel obchodní setup (odraz od zdi / neúspěšný průraz / Max Pain pin / gamma momentum / divergenční spring) | Nový setup (zap.) |
+| **FA validace** | Ranní kalibrační bod FA vrstvy: po příchodu OI archivu engine porovná včerejší klasifikovaný volume s ΔOI (open-ratio ≈ α, korelace) a bod uloží pro kalibraci — čistě informační | Diagnostika modelu (vyp.) |
+| **Greeks se zasekly / zase jedou** | Kotace opčního řetězu přestaly chodit při živém spotu (obdoba svíček) — hint restart TWS; návrat se ohlásí. **Po settle expirující řady se nehlásí** (v1.13, #959): vypořádaný řetěz se přestane kotovat, což je normální stav, ne porucha — dřív alert s radou „restart TWS" chodil každý den po 22:00 | Neúplná data opcí (zap.) / Data opcí zase chodí (vyp.) |
+| **Chyba subskripce** | TWS opakovaně odmítla data konkrétních kontraktů (error 354 „not subscribed"); alert vypíše, o které kontrakty jde. Ojedinělé výskyty se nehlásí — ty patří ke krátkým výpadkům farem a data se vrátí sama. Když alert přijde, zkontroluj subskripce v Market Data Subscription Manager. Jde vypnout v Settings → Alerty | IBKR odmítá market data (zap.) |
+| **Konkurenční relace** | Stejný IBKR účet je přihlášený jinde (mobilní aplikace, Client Portal, druhá TWS) a přetahuje si market data. IBKR povoluje jen jednu aktivní market-data relaci na subskripci, takže data můžou vypadávat — pomůže odhlásit účet z ostatních míst. Sdílení dat s paper účtem tohle **neřeší**: sdílí se oprávnění, ne kapacita relace | IBKR přihlášen jinde (zap.) |
+| **Setup detektor prodělává / se zotavil** | Denní sebekontrola: setupy symbolu za sledované okno prodělávají — alert doporučí vypnout nejhorší šablonu (`GEXLENS_SETUP_DISABLED_TEMPLATES`) nebo upravit prahy; „zotavil“ = výkonnost se vrátila nad práh | Setup detektor prodělává (zap.) / se zotavil (vyp.) |
+| **T6 kandidát** | Ráno po výprodeji (close −1 % a hůř) nastala konstelace premarket squeeze (kap. 18) — zatím se jen sbírá, šablona vznikne po ~5 výskytech | Kandidát vzorce T6 (vyp.) |
+| **Drift hlídka** | Čerstvá úspěšnost signálového bucketu se statisticky rozešla s historickou — model přestává platit, signály z něj ber s rezervou (detail na Stats) | Drift vzorců (vyp.) |
+| **News anomálie** | Trh na zprávu zareagoval nad obvyklou míru — pohyb v bp nad p90 svého bucketu, jednou pro každou dvojici zpráva × symbol | Reakce trhu na zprávu (zap.) |
 
 ### Setupy
 
