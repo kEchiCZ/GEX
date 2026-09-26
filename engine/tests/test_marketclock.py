@@ -54,3 +54,18 @@ def test_naivni_cas_se_bere_jako_utc() -> None:
     """Tichý posun o lokální zónu by hodnotu udělal nepředvídatelnou."""
     naive = dt.datetime(2026, 7, 25, 23)  # sobota
     assert is_market_closed(naive) == is_market_closed(utc(2026, 7, 25, 23))
+
+
+def test_svatky_rozvrh_nezna() -> None:
+    """ADR-0023 bod 4 (#1307): rozvrh je odhad, svátky nezná — o Vánocích
+    (pátek 25. 12. 2026, CME zavřeno) tvrdí „otevřeno". Hlídače proto k rozvrhu
+    potřebují hranové alerty: svátek stojí nejvýš jedno upozornění na druh,
+    ne opakování à 30 min (test v `test_instruments`)."""
+    assert not is_market_closed(utc(2026, 12, 25, 15))  # pátek 09:00 CST
+    assert is_market_closed(utc(2026, 12, 26, 15))  # sobota — tu rozvrh zná
+
+
+def test_konec_dst_posouva_nedelni_otevreni() -> None:
+    """1. 11. 2026 končí DST: nedělní otevření 17:00 CST = 23:00 UTC (#1307)."""
+    assert is_market_closed(utc(2026, 11, 1, 22, 59))  # neděle 16:59 CST
+    assert not is_market_closed(utc(2026, 11, 1, 23))  # neděle 17:00 CST

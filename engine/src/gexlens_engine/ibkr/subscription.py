@@ -123,6 +123,7 @@ class SubscriptionErrorTracker:
         now: float,
         wall_now: float | None = None,
         after_cancel: bool = False,
+        market_closed: bool = False,
     ) -> SubscriptionErrorAlert | None:
         """Jeden výskyt error 354; vrací alert jen při překročení prahu v okně.
 
@@ -131,6 +132,10 @@ class SubscriptionErrorTracker:
         `now` je monotonic (okna a prahy), `wall_now` epoch pro záznamy v UI.
         `after_cancel` (#1088): chyba k requestu, který engine už zrušil — počítá
         se do diagnostiky, do alertovacího prahu ne (subskripce nejsou mrtvé).
+        `market_closed` (#1307): zavřený trh podle rozvrhu CME — do diagnostiky
+        ano, do prahu ne. Alert odpálený (a zahozený) o víkendu by spotřeboval
+        cooldown a trvající stav by se po otevření ohlásil až po něm; takhle
+        se po otevření práh plní od nuly a trvající stav se ohlásí hned.
         """
         self._total += 1
         self._recent.append(
@@ -143,6 +148,8 @@ class SubscriptionErrorTracker:
         self._hour.append(now)
         if after_cancel:
             self._after_cancel += 1
+            return None
+        if market_closed:
             return None
         if self._excused_until is not None and now < self._excused_until:
             # Očekávaná chyba přechodu seance: do prahu se nepočítá vůbec —

@@ -13,10 +13,12 @@ natáhnou, až se stav vrátí. Bez toho by se opakovaly s každým statusem
 z enginu (~1×/min) a zvoneček by se stal nepoužitelným.
 """
 
+import datetime as dt
 import enum
 import time
 
 from gexlens_api.live import LiveHub
+from gexlens_engine.compute.marketclock import is_market_closed
 
 
 class AlertKind(enum.Enum):
@@ -33,22 +35,30 @@ class AlertEngine:
         self._disconnected = False
         self._disk_over = False
 
-    def observe_connection(self, connection: str | None) -> bool:
+    def observe_connection(self, connection: str | None, *, now: dt.datetime | None = None) -> bool:
         """Sleduje stav spojení; vystřelí JEN při přechodu do odpojeno.
 
         `None` (engine stav neposlal) se ignoruje — chybějící údaj není výpadek,
         jinak by každý neúplný status zvonil.
+
+        Při zavřeném trhu podle rozvrhu CME (#1307; víkend, denní pauza) se
+        nehlásí: sběr dat nestojí, protože žádná data nejsou (údržba IBKR
+        o víkendu, denní odpojení kolem 00:00 UTC). Hrana se přitom
+        nenatahuje, takže trvá-li výpadek i po otevření, ohlásí ho první
+        status po otevření. Délku výpadku loguje watchdog enginu.
         """
         if connection is None:
             return False
-        lost = connection != "connected"
-        if lost and not self._disconnected:
-            self._disconnected = True
-            self._fire(0, AlertKind.DISCONNECT, "*", f"Výpadek spojení s IBKR: {connection}")
-            return True
-        if not lost:
+        if connection == "connected":
             self._disconnected = False
-        return False
+            return False
+        if self._disconnected:
+            return False
+        if is_market_closed(now if now is not None else dt.datetime.now(dt.UTC)):
+            return False
+        self._disconnected = True
+        self._fire(0, AlertKind.DISCONNECT, "*", f"Výpadek spojení s IBKR: {connection}")
+        return True
 
     def observe_disk(self, usage_bytes: object, limit_bytes: object) -> bool:
         """Sleduje obsazení disku; vystřelí JEN při překročení limitu."""

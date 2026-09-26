@@ -167,7 +167,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_CONNECT_TIMEOUT_S` | 10 | |
 | `GEXLENS_RECONNECT_BACKOFF_BASE_S` / `_MAX_S` | 2 / 60 | Exponenciální reconnect |
 | `GEXLENS_HEARTBEAT_INTERVAL_S` / `_TIMEOUT_S` | 30 / 15 | Heartbeat spojení; agresivnější hodnoty vedly k falešným reconnectům během sweep dávek |
-| `GEXLENS_RECONNECT_STALL_ALERT_S` | 300 | Watchdog reconnectu (#770): po tolika sekundách bez spojení alert `connection_stall` do zvonečku, opakovaně dokud spojení chybí; `/status.connection_offline_for_s` nese délku výpadku (klíč chybí, když spojení drží) |
+| `GEXLENS_RECONNECT_STALL_ALERT_S` | 300 | Watchdog reconnectu (#770): po tolika sekundách bez spojení alert `connection_stall` do zvonečku, opakovaně dokud spojení chybí — jen při otevřeném trhu, jinak log (#1307); `/status.connection_offline_for_s` nese délku výpadku (klíč chybí, když spojení drží) |
 | `GEXLENS_SYMBOLS` | ES | Základní sada futures podkladů (čárkami); watchlist z DB se přidává za běhu (ADR-0003) |
 | `GEXLENS_MAX_INSTRUMENTS` | 3 | Strop souběžných instrumentů (rozpočet market data lines) |
 | `GEXLENS_FRONT_ROLL_DAYS` | 8 | Roll front kontraktu (#1189, ADR-0039): kontrakt je front, dokud má do expirace VÍC než N dní (CME roll date = 8 d před expirací). Platí pro IBKR pipeline, tasty streamer i IV rank. 0 = původní chování (nejbližší nepropadlý kontrakt). Discovery cache front kontrakt po rollu zahodí. |
@@ -251,13 +251,71 @@ Minutový cyklus (`runtime.EngineRuntime.run_cycle`):
 
 Každá pipeline navíc drží **sekundární runtime následující expirace** (`secondary=True`): sweep v kadenci `NEXT_EXPIRY_SWEEP_EVERY`, zapisuje jen snapshots + levels své expirace (flow/bary patří výhradně aktivnímu řetězu — soubory jsou per symbol).
 
-Další joby: **OI archiv** při startu + retry à 30 min dokud den nemá data (alert `oi_missing`); pokrývá `OI_ARCHIVE_EXPIRIES` nejbližších expirací — základ ΔOI vs. včera. **POZOR: OI se čte přes generic tick 101 i pro FOP** (tick 588 na FOP nedodává nikdy — ADR-0001 v3; hodnota se čte podle strany kontraktu, opačná strana je validní 0.0). **Auto-rozšíření obálky strikes** (grow-only, capped → alert) + runtime změna `strike_range_points` ze Settings UI (překlopí pipeline). **OI zdi** (#851): `compute/oiwalls.py` počítá maximum OI per strana nad širokým archivem (ne nad snapshoty omezenými obálkou) s cache na `captured_ts` — archiv se přes dopoledne dopisuje, klíč jen na den by zamrzl jako Max Pain (#826); vlastní řada `oiwalls/`, LEVELS_SCHEMA se nerozšiřuje (ADR-0008).
+Další joby: **OI archiv** při startu + retry à 30 min dokud den nemá data (alert `oi_missing`, hranově, jen při otevřeném trhu v obchodní den CME po publikačním okně — kap. 5 „Provozní upozornění při zavřeném trhu“); pokrývá `OI_ARCHIVE_EXPIRIES` nejbližších expirací — základ ΔOI vs. včera. **POZOR: OI se čte přes generic tick 101 i pro FOP** (tick 588 na FOP nedodává nikdy — ADR-0001 v3; hodnota se čte podle strany kontraktu, opačná strana je validní 0.0). **Auto-rozšíření obálky strikes** (grow-only, capped → alert) + runtime změna `strike_range_points` ze Settings UI (překlopí pipeline). **OI zdi** (#851): `compute/oiwalls.py` počítá maximum OI per strana nad širokým archivem (ne nad snapshoty omezenými obálkou) s cache na `captured_ts` — archiv se přes dopoledne dopisuje, klíč jen na den by zamrzl jako Max Pain (#826); vlastní řada `oiwalls/`, LEVELS_SCHEMA se nerozšiřuje (ADR-0008).
 
 **Nastavení připojení ze Settings UI** (#446, #950, #992): orchestrátor čte watchlist + runtime nastavení z DB každý `WATCHLIST_POLL_CYCLES`-tý cyklus nebo po `LISTEN/NOTIFY`; od #992 posílá NOTIFY i `PUT /settings/{key}` (stejný kanál `gexlens_watchlist` — po probuzení se čte obojí jedním průchodem) a **bez spojení k IBKR se DB čte každý cyklus** (`runtime_settings.should_poll_settings`), takže změna portu platí do sekund i v reconnect smyčce (dřív až za ≤ 5 min). Hodnota uložená v DB **přebíjí `.env`** — je to záměr #446, ale po `docker compose up -d engine` s přepsaným `.env` to jinak nešlo poznat (2. 9.: connect na 4001 a o sekundu později skok zpět na 7496); engine to od #992 při prvním cyklu hlásí `WARNING`em s návodem, co změnit. **Ruční přepojení** (#950): `POST /engine/reconnect {target: ibkr|tasty|both}` zapíše serverem generované razítko `reconnect_request_*` do `settings` (klíče schválně nejsou ve `WRITABLE_SETTINGS`, přes `PUT /settings` je podvrhnout nejde); engine reaguje na **změnu** razítka (`pending_reconnects`), výchozí stav si načte `seed_reconnects` jednou před hlavní smyčkou — chybějící klíč se pamatuje jako `None`, takže první požadavek po startu neshoří (#957). IBKR: `ib.disconnect()` + supervisor; tasty: `DxLinkStream.force_reconnect()` (zavře socket, standardní `run` smyčka udělá reconnect i resubskripci). Přepojení = 1–2 min díra ve sběru, UI si vyžádá potvrzení. **Denní roll expirace**: vypršelá pipeline se zastaví a další cyklus založí novou s čerstvou discovery (bezobslužný přechod přes víkend). **Noční retention purge** po `RETENTION_PURGE_TIME_UTC`.
 
-Bary podkladu (#221): **Backfill 1min barů** při startu pipeline (aktuální den + retention okno, reqHistoricalData pod pacing guardem, upsert podle ts_min — živý stream a backfill se nedublují; od #1055 (v1.6) nese doplněný bar `source = ibkr_hist` a **změřenou minutu nepřepíše** — přednost původu `bar_source_rank`: měřený > `ibkr_hist` > `tasty_candle`, živý zápis historickou hodnotu naopak nahradí vždy). **Hlídání tiché ztráty barů** (`BarsStallDetector`): když ≥ `BARS_STALL_ALERT_MINUTES` (default 3) nedorazí žádný 5s bar, ale spot se hýbe, odejde alert `bars_stalled` (typicky mrtvé TWS farmy po noční přestávce — pomáhá restart TWS); po návratu streamu alert `bars_recovered` + automatický re-backfill dnešního dne doplní díru. Bez pohybu spotu (zavřený trh) se nehlásí nic. **Rekonstrukce děr z dxFeed Candle** (#617, v1.3): jednou po startu pipeline (`_candle_gap_backfill`, jen s běžící tasty větví) se pro aktuální seanci spočítají minuty, které IBKR historical nedodal, a doplní se z dxFeed `Candle` (historie od `fromTime`, bez pacing limitu) přes vlastní krátké spojení mimo živou datovou cestu — sdílený handshake `tasty/dxlink.py`. `backfill_gaps` výsledek ještě jednou filtruje na chybějící minuty, takže měřená minuta se nemá jak přepsat; selhání se jen zaloguje. ADR-0024 platí dál pro opční vrstvu (Greeks zpětně neexistují). Past z ADR-0027: streamer symbol se nesestavuje (`/ESU6:XCME` s hlubokým `fromTime` vrací rok 2016), bere se hotový z chain endpointu. UI doplněné minuty hlásí bannerem (sbírá se ze všech barů dne, ne jen z těch na ose snapshotů — večerní minuty Globexu na osu opcí nepadnou, #974). **Hlídka Greeks po settle** (#959): `greeks_watch_applies(expiry, now)` vypne `greeks_stalled` pro expirující řadu po jejím settle (`compute/settle.py`, DST-korektně) a detektor se nekrmí — vypořádaný řetěz se přestane kotovat legitimně (sekundární řada měla v téže vteřině plný počet) a pipeline nad ním běží až do půlnoci, kdy `expiry_expired` překlápí podle kalendářního dne.
+Bary podkladu (#221): **Backfill 1min barů** při startu pipeline (aktuální den + retention okno, reqHistoricalData pod pacing guardem, upsert podle ts_min — živý stream a backfill se nedublují; od #1055 (v1.6) nese doplněný bar `source = ibkr_hist` a **změřenou minutu nepřepíše** — přednost původu `bar_source_rank`: měřený > `ibkr_hist` > `tasty_candle`, živý zápis historickou hodnotu naopak nahradí vždy). **Hlídání tiché ztráty barů** (`BarsStallDetector`): když ≥ `BARS_STALL_ALERT_MINUTES` (default 3) nedorazí žádný 5s bar, ale spot se hýbe, odejde alert `bars_stalled` (typicky mrtvé TWS farmy po noční přestávce — pomáhá restart TWS); po návratu streamu alert `bars_recovered` + automatický re-backfill dnešního dne doplní díru. Bez pohybu spotu (zavřený trh) se nehlásí nic; při zavřeném trhu podle rozvrhu CME (pre-open, denní pauza) se detektor ani nekrmí (#1307). **Rekonstrukce děr z dxFeed Candle** (#617, v1.3): jednou po startu pipeline (`_candle_gap_backfill`, jen s běžící tasty větví) se pro aktuální seanci spočítají minuty, které IBKR historical nedodal, a doplní se z dxFeed `Candle` (historie od `fromTime`, bez pacing limitu) přes vlastní krátké spojení mimo živou datovou cestu — sdílený handshake `tasty/dxlink.py`. `backfill_gaps` výsledek ještě jednou filtruje na chybějící minuty, takže měřená minuta se nemá jak přepsat; selhání se jen zaloguje. ADR-0024 platí dál pro opční vrstvu (Greeks zpětně neexistují). Past z ADR-0027: streamer symbol se nesestavuje (`/ESU6:XCME` s hlubokým `fromTime` vrací rok 2016), bere se hotový z chain endpointu. UI doplněné minuty hlásí bannerem (sbírá se ze všech barů dne, ne jen z těch na ose snapshotů — večerní minuty Globexu na osu opcí nepadnou, #974). **Hlídka Greeks po settle** (#959): `greeks_watch_applies(expiry, now)` vypne `greeks_stalled` pro expirující řadu po jejím settle (`compute/settle.py`, DST-korektně) a detektor se nekrmí — vypořádaný řetěz se přestane kotovat legitimně (sekundární řada měla v téže vteřině plný počet) a pipeline nad ním běží až do půlnoci, kdy `expiry_expired` překlápí podle kalendářního dne.
 
 Odolnost: **reconnect nesmí umlknout** (#770): `_supervise()` je odolná smyčka nad `_try_connect()` — výjimka v iteraci (padlý odběratel stavu, selhaná resubskripce) se zaloguje a jede se dál, selhaná resubskripce jde rovnou na reconnect; **watchdog běží záměrně mimo supervisora** a křísí mrtvou smyčku (čítač `ConnectionManager.supervisor_restarts` — nenulová hodnota je nález, do logu jde jako vzkříšení supervisora), po `RECONNECT_STALL_ALERT_S` hlásí `connection_stall` (18. 8. byl engine 8 h offline bez jediného řádku). ConnectionManager watchdog (heartbeat 30/15 s + exponenciální reconnect + plná resubskripce — **vč. spot tickeru a realtime barů podkladu** přes `on_resubscribe`), spot fallback last → marketPrice → close (start i o víkendu), discovery s timeoutem a retry (sec-def farm výpadky), výjimka v cyklu nikdy neshodí smyčku, pacing guard historical requestů (≤60/10 min, dedup, priorita).
+
+### Provozní upozornění při zavřeném trhu (#1307)
+
+Engine běží i o víkendu, v denní pauze CME (po–čt 16:00–17:00 CT) a o svátcích:
+sweep, OI archiv i hlídače. Mimo seanci ale TWS nedodává Greeks ani kompletní
+kotace, IBKR po páteční uzávěrce neposílá cenu a CME nepublikuje OI. To není
+porucha. Do #1307 to hlídače nerozlišovaly: 26. 9. 2026 chodilo
+`oi_refresh_failed` pro ES i NQ à 30 min, `spot_fallback` po nočním reconnectu
+DXLink a `strikes_stalled` po sobotním rollu.
+
+Všechny hlídače níže berou jeden predikát „očekávají se data?" z rozvrhu
+`compute/marketclock.is_market_closed` (ADR-0023, DST-korektně; stejný vzor
+jako signály #968 a hlídač tasty streamu #1228). Hranu zavřeno → otevřeno
+zjišťuje pipeline jednou v `run_minute`, před sweepem.
+
+| Upozornění | Při zavřeném trhu | Po otevření (neděle / po pauze 17:00 CT) |
+| --- | --- | --- |
+| `oi_refresh_failed`, `oi_missing` | Obnova ani retry neběží, selhání jde jen do logu. Zůstává jediné čtení na začátku nového UTC dne: runtime čte OI podle UTC dne, víkendová mapa by jinak OI neměla. | Chybějící OI (nebo nefinální snímek po okně) se čte hned — hrana otevření natáhne čítač retry. Upozornit smí jen obchodní den CME po publikačním okně: v neděli CME nepublikuje, snímek neděle se neobnovuje a selhání jde do logu. První upozornění po víkendu tak přijde nejdřív v pondělí po 07:00 CT. |
+| `spot_fallback` | Nepřepíná se. Fallback z doby před uzávěrkou drží do návratu IBKR. | Ticho IBKR se měří od okamžiku otevření, ne od pátečního ticku. |
+| `greeks_stalled`, `strikes_stalled` | Detektory se nekrmí. | Hrana otevření vynuluje repair kola a backoff scheduleru (aktivní i sekundární řetěz) a stav obou detektorů. Čítače BS fallbacku zůstávají: kontrakt bez TWS greeks dostane BS dopočet z čerstvých kotací hned prvním sweepem. |
+| `bars_stalled` + obnova streamu | Detektor se nekrmí (pre-open: indikativní kotace se hýbou, TRADES bary nevznikají). Stav se nenuluje. | Stall ze seance skončí `bars_recovered` a re-backfillem díry. |
+| `feed_crosscheck`, `chain_fallback`, `feed_probe` | Křížová kontrola vrací `quiet` a nuluje série. dxFeed posílá snímek posledních hodnot při resubskripci i přechodu seance, takže „tasty čerstvé" tu nic nedokazuje. | Série od nuly, prahy beze změny. |
+| `connection_stall`, `disconnect` (API) | Jen log (watchdog enginu), API hranu výpadku nenatáhne. | Trvá-li výpadek, `connection_stall` nese celou délku a `disconnect` odejde s prvním statusem po otevření. |
+| `competing_session`, `subscription_error` | Chyby 10197 a 354 jdou do diagnostiky (`/status`), do alertovacího prahu ne, takže nespotřebují ani cooldown. | Práh se plní od nuly; drží-li mobil feed i po otevření, ohlásí se to do pár minut. |
+| `degraded_start`, `instrument_error` | Jen log. Sobotní roll v 00:00 UTC se kryje s denním odpojením IBKR. | Trvající výpadek ohlásí `disconnect`; setup instrumentu se po cooldownu zkusí znovu a jeho selhání se ohlásí. |
+
+**Při otevřeném trhu se nic neumlčuje** („Otevřený trh = vidět vše"). Jediná
+změna v seanci jsou OI alerty. Jsou **hranové**: jednou za (symbol, den) a znovu
+až po úspěšném čtení. A čekají na **publikační okno**: v noci před 07:00 CT
+dodává IBKR předpublikační čísla, takže selhání jde jen do logu. Kdyby se
+ohlásilo, spotřebovalo by hranu dne a skutečná porucha „okno proběhlo, OI pořád
+nedorazilo" by se neohlásila. Retry běží à 30 min dál, další selhání jdou do logu.
+
+**Svátky rozvrh nezná** (ADR-0023 bod 4): v den celodenního zavření CME vypadá
+trh jako otevřený. Tam platí datové proxy (spot fallback nepřepne, když mlčí
+i tasty; křížová kontrola je `quiet`, když mlčí oba) a hranové alerty. OI, Greeks
+a striky tak stojí nejvýš jedno upozornění na druh. **Dvě cesty ale svátek
+nepokrývá:**
+
+- `feed_crosscheck` „Oba zdroje mlčí … uvnitř US RTH" (#1228) se opakuje po
+  cooldownu 15 min, protože `outside_us_rth` svátky nezná. Celodenní svátek
+  (Vánoce 25. 12.) to je ~26 upozornění. Thanksgiving 26. 11. (pauza od
+  12:00 CT) dá ~12 a 27. 11. (uzavření ve 12:15 CT) ~11.
+- `spot_fallback` přepne, když DXLink po reconnectu pošle snímek posledních
+  hodnot a tasty tím vypadá živě.
+
+Řešení čeká na rozhodnutí v #1307.
+
+Log: `Trh ES otevřel (rozvrh CME) — repair a backoff stav ze zavřeného trhu
+vynulován`, `oi_refresh_failed ES: trh je zavřený (rozvrh CME) — bez upozornění,
+jen log: …`, `oi_missing ES: CME pro tento den OI ještě nepublikoval (před oknem
+nebo víkend) — bez upozornění, jen log: …`, `degraded_start ES: trh je zavřený
+(rozvrh CME) — bez upozornění, jen log: …`, `IBKR spojení chybí N min, trh je ale
+zavřený (rozvrh CME) — bez upozornění`. Testy: `engine/tests/test_instruments.py`
+(minutové sekvence pátek → pondělí po okně, neděle 16:59 a 17:00 CT, denní pauza,
+konec DST 1. 11., Vánoce), `test_scheduler.py`, `test_subscription.py`,
+`test_spot_fallback.py`, `test_crosscheck.py`, `test_connection.py`,
+`api/tests/test_crud_alerts.py`.
 
 ## 6. Datové formáty a persistence
 
@@ -345,7 +403,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8010/docs` (OpenAPI; dev stack `:80
 | `GET /replay/{sym}/{expiry}/{date}` | Kompletní denní balík (levels/flow/bars JSON + snapshoty base64 Arrow + `oi_prev` pro ΔOI vs. včera) |
 | `GET /replay/{sym}/{expiry}/{date}?resolution=daily` | Daily pohled (#1206): snapshoty jen poslední minuty, řady zredukované na poslední stav a pole `daily` (denní OptVol / Δ Flow / Evo OI / CumΔ + OHLC, stejné vzorce jako UI) — stovky kB místo 20–40 MB |
 | CRUD `/watchlist`, `/alerts`, `/annotations?symbol&date`, `/settings` | PostgreSQL persistence |
-| `POST /internal/status`, `POST /internal/publish` | **Ingest z enginu** — vyžaduje hlavičku `X-GEXLens-Token` (#542). Od #949 tu API vyhodnocuje **provozní alerty** `AlertEngine.observe_connection` / `observe_disk` (výpadek spojení s IBKR, obsazení disku přes limit) — ze **snímku** statusu, ne z těla requestu (engine posílá jen změněné klíče); obě hlášky jsou hranové. Do té doby byl `AlertEngine` mrtvý kód; pravidla `price_cross` / `cum_delta_jump` / `dominant_strike_change` odstraněna jako překonaná (`LevelProximityWatcher`), `POST /alerts` je přestává přijímat, CRUD `/alerts` zůstává |
+| `POST /internal/status`, `POST /internal/publish` | **Ingest z enginu** — vyžaduje hlavičku `X-GEXLens-Token` (#542). Od #949 tu API vyhodnocuje **provozní alerty** `AlertEngine.observe_connection` / `observe_disk` (výpadek spojení s IBKR, obsazení disku přes limit) — ze **snímku** statusu, ne z těla requestu (engine posílá jen změněné klíče); obě hlášky jsou hranové. Výpadek spojení se při zavřeném trhu podle rozvrhu CME nehlásí a hrana se nenatahuje — trvá-li i po otevření, ohlásí ho první status po otevření (#1307, kap. 5). Do té doby byl `AlertEngine` mrtvý kód; pravidla `price_cross` / `cum_delta_jump` / `dominant_strike_change` odstraněna jako překonaná (`LevelProximityWatcher`), `POST /alerts` je přestává přijímat, CRUD `/alerts` zůstává |
 | `PUT /settings/{key}` | Zápis nastavení + `pg_notify` na kanál watchlistu (#992) — engine se probudí do sekund |
 | `GET /backup/postgres` | Stream `pg_dump -Fc` — vyžaduje `X-GEXLens-Token` (#542) |
 
@@ -552,6 +610,10 @@ do `/status` a jednou na začátku epizody do logu.
 
 Kontrolní měření po téhle úpravě: **3 053 minut čisté historie → 0 alertů.**
 
+Při zavřeném trhu podle rozvrhu CME (víkend, denní pauza) je verdikt vždy `quiet`
+a série se nulují (#1307): dxFeed po resubskripci a při přechodu seance pošle snímek
+posledních hodnot, takže „IBKR mrtvé ∧ tasty čerstvé“ tam vzniká i bez poruchy.
+
 Stav je v **Settings → Stav enginu** (řádek *Křížová kontrola feedů*) a v
 `/status` jako `feed_crosscheck`. Když tasty větev neběží, pole ve statusu **chybí**
 — UI to ukáže jako „neměří se", což je jiný stav než `ok`.
@@ -567,6 +629,9 @@ engine zůstane připojený — jen mu přestanou chodit ticky.
 | --- | --- | --- |
 | **Spot podkladu** (2a) | 30 s bez ticku | 60 s souvislých dat |
 | **Opční řetěz** — kotace, greeks, OI (2b) | verdikt `ibkr_suspect`, tedy 3 min | 5 čistých minut v řadě |
+
+Při zavřeném trhu podle rozvrhu CME se spot nepřepíná a po otevření se ticho IBKR
+měří od okamžiku otevření (#1307, kap. 5 „Provozní upozornění při zavřeném trhu“).
 
 Řetěz se spouští **verdiktem křížové kontroly**, ne vlastním prahem — dědí tak
 kalibraci měřenou na 3 016 minutách místo nového odhadu. Návrat vyžaduje
@@ -657,7 +722,7 @@ Pipeline se založí sama, jakmile se spojení objeví. Restart enginu není pot
 | Situace | Postup |
 |---|---|
 | Engine offline | `docker compose logs engine` — hledej stav ConnectionManageru; ověř TWS (API zapnuté, port, Trusted IP). Warning 2110/2103 = výpadek TWS↔IB, vyřeší se sám. |
-| Prázdné GEX/walls | Zkontroluj `oi_eod` pro dnešek: `docker compose exec postgres psql -U gexlens -c "select date, count(*) from oi_eod group by 1 order by 1 desc limit 5"` — pokud dnešek chybí, engine archiv opakuje à 30 min (CME publikuje OI ráno). |
+| Prázdné GEX/walls | Zkontroluj `oi_eod` pro dnešek: `docker compose exec postgres psql -U gexlens -c "select date, count(*) from oi_eod group by 1 order by 1 desc limit 5"` — pokud dnešek chybí, engine archiv opakuje à 30 min při otevřeném trhu (CME publikuje OI ráno; o víkendu a v denní pauze se neopakuje, #1307). |
 | Ticker z watchlistu nesbírá | `docker compose logs engine | grep Setup` — ne-futures symbol nebo chybějící subskripce burzy (NYMEX/COMEX pro CL/GC); cooldown 30 min mezi pokusy. |
 | Vysoké `Repair` / `Stale` | Konkrétní kontrakty bez dat — často nelikvidní křídla; zvyš `BATCH_TIMEOUT_S` nebo zmenši obálku. |
 | Disk roste | Retention běží nočně; ručně: smaž staré partice v `./data` (nikdy `oi_eod`). |
@@ -671,6 +736,7 @@ Pipeline se založí sama, jakmile se spojení objeví. Restart enginu není pot
 | Změna portu TWS | Settings v aplikaci (platí do sekund i bez spojení, #992), **a zároveň** `.env` + `docker compose up -d engine` — hodnota v DB přebíjí `.env`, takže samotná změna `.env` skončí skokem zpět na starý port (engine to hlásí `WARNING: Nastavení připojení ze Settings UI (DB) přebíjí .env`). |
 | Zaseknuté spojení, restart kontejneru nechci | Settings → Stav enginu → **Přepojit IBKR** / **Přepojit tastytrade** (#950) — 1–2 min díra, mimo US RTH. Uložení nastavení beze změny hodnot nepřepojuje. |
 | Po restartu Docker Desktop frontend vrací 502 (Settings nejde uložit, watchlist prázdný) | Do #993 nginx držel starou IP služby api; nově se resolvuje za běhu (do ~10 s). U staršího image `docker compose restart frontend`, trvale rebuild frontendu. |
+| Upozornění o výpadku dat o víkendu nebo v denní pauze (`oi_refresh_failed` à 30 min, `spot_fallback`, `strikes_stalled`, `connection_stall`, `disconnect`, `competing_session`, `degraded_start`) | Do #1307 hlídače zavřený trh nerozlišovaly. Od #1307 se při zavřeném trhu podle rozvrhu CME jen loguje (kap. 5 „Provozní upozornění při zavřeném trhu“). Chodí-li i tak, ověř čas v CT (DST) a jestli není svátek. Ten rozvrh nezná: OI, Greeks a striky se ohlásí nejvýš jednou, `feed_crosscheck` „Oba zdroje mlčí … uvnitř US RTH" ale à 15 min. |
 | Alert `greeks_stalled` každý den po settle | Do #959 hlídka běžela i nad expirující řadou, která se po settle přestane kotovat (93 % chybějících Greeks, sekundární řada plná). Nově se po settle dané expirace nehlásí. |
 | `subscription size is too big` v logu / `tasty_budget.size_exceeded` roste | Strop 25 000 položek `symbol × event` na spojení (#982, kap. 4). Zkontroluj `/status.tasty_budget` — které složky se ořezaly; ad-hoc pohled má rezervu `GEXLENS_TASTY_ADHOC_RESERVE_ENTRIES`. Heal se na tuhle chybu záměrně nespouští. |
 | Reddit 429 v logu news-engine | Limit per IP napříč subreddity (#941) — kolektor jede round robin, jeden subreddit za cyklus à 300 s, retry při 429. Ojedinělé 429 jsou normální; trvalé = zkrátil se `GEXLENS_NEWS_REDDIT_RSS_FEED_DELAY_S` nebo interval. |

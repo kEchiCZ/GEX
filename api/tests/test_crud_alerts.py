@@ -1,6 +1,7 @@
 """Integrační testy CRUD a alert enginu (issue #21)."""
 
 import asyncio
+import datetime as dt
 from pathlib import Path
 
 import pytest
@@ -126,6 +127,13 @@ def _drain(queue: asyncio.Queue[dict[str, object]]) -> list[dict[str, object]]:
     return [message["data"] for message in messages if isinstance(message["data"], dict)]
 
 
+# Září 2026 je CDT (UTC−5): čtvrtek 24. 9. 15:00 UTC = 10:00 CT (seance),
+# sobota 26. 9. celý den zavřeno, neděle 27. 9. 22:00 UTC = otevření 17:00 CT
+OPEN_THURSDAY = dt.datetime(2026, 9, 24, 15, 0, tzinfo=dt.UTC)
+SATURDAY = dt.datetime(2026, 9, 26, 12, 0, tzinfo=dt.UTC)
+SUNDAY_OPEN = dt.datetime(2026, 9, 27, 22, 0, tzinfo=dt.UTC)
+
+
 async def test_vypadek_spojeni_strili_jen_na_hrane() -> None:
     """Status chodí ~1×/min; bez hrany by zvoneček zvonil pořád dokola."""
     hub = LiveHub()
@@ -133,16 +141,47 @@ async def test_vypadek_spojeni_strili_jen_na_hrane() -> None:
     hub.subscribe(subscriber_id, ["alerts"])
     engine = AlertEngine(hub)
 
-    assert engine.observe_connection("connected") is False
-    assert engine.observe_connection("disconnected") is True  # hrana
-    assert engine.observe_connection("disconnected") is False  # drží se, už nezvoní
-    assert engine.observe_connection("connecting") is False
-    assert engine.observe_connection("connected") is False  # návrat = natažení
-    assert engine.observe_connection("disconnected") is True  # druhý výpadek zvoní znovu
+    def observe(connection: str) -> bool:
+        return engine.observe_connection(connection, now=OPEN_THURSDAY)
+
+    assert observe("connected") is False
+    assert observe("disconnected") is True  # hrana
+    assert observe("disconnected") is False  # drží se, už nezvoní
+    assert observe("connecting") is False
+    assert observe("connected") is False  # návrat = natažení
+    assert observe("disconnected") is True  # druhý výpadek zvoní znovu
 
     messages = _drain(queue)
     assert [m["kind"] for m in messages] == ["disconnect", "disconnect"]
     assert "disconnected" in str(messages[0]["message"])
+
+
+async def test_vypadek_spojeni_pri_zavrenem_trhu_nezvoni_trvajici_po_otevreni_ano() -> None:
+    """#1307: údržba IBKR o víkendu nebo denní odpojení kolem 00:00 UTC není
+    výpadek sběru — žádná data nejsou. Trvá-li výpadek i po otevření v neděli
+    17:00 CT, ohlásí ho první status po otevření (jednou, hranově)."""
+    hub = LiveHub()
+    subscriber_id, queue = hub.register()
+    hub.subscribe(subscriber_id, ["alerts"])
+    engine = AlertEngine(hub)
+
+    assert engine.observe_connection("connected", now=SATURDAY) is False
+    assert engine.observe_connection("disconnected", now=SATURDAY) is False
+    assert engine.observe_connection("connecting", now=SATURDAY + dt.timedelta(hours=5)) is False
+    assert _drain(queue) == []
+
+    assert engine.observe_connection("disconnected", now=SUNDAY_OPEN) is True
+    assert engine.observe_connection("disconnected", now=SUNDAY_OPEN + dt.timedelta(minutes=1)) is (
+        False
+    )
+    assert [m["kind"] for m in _drain(queue)] == ["disconnect"]
+
+    # Výpadek, který skončil ještě o víkendu, po otevření nezvoní
+    quiet = AlertEngine(hub)
+    assert quiet.observe_connection("disconnected", now=SATURDAY) is False
+    assert quiet.observe_connection("connected", now=SATURDAY + dt.timedelta(hours=1)) is False
+    assert quiet.observe_connection("connected", now=SUNDAY_OPEN) is False
+    assert _drain(queue) == []
 
 
 async def test_chybejici_stav_spojeni_neni_vypadek() -> None:

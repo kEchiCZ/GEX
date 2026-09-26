@@ -187,15 +187,38 @@ class CrossCheckDetector:
         #: Posledních 10 minut pro diagnostiku v logu
         self.history: deque[MinuteTally] = deque(maxlen=10)
 
-    def observe(self, tally: MinuteTally, *, in_us_rth: bool = False) -> CrossCheckVerdict:
+    def observe(
+        self, tally: MinuteTally, *, in_us_rth: bool = False, market_closed: bool = False
+    ) -> CrossCheckVerdict:
         """Zpracuje minutu a vrátí verdikt; volá se 1× za minutu ze shadow smyčky.
 
         `in_us_rth`: minuta leží v US RTH (9:30–16:00 NY) — jen tehdy se stav
         `quiet` po M minutách eskaluje na alert (#1228); jinak je ticho normální.
+        `market_closed`: rozvrh CME (#1307) — zavřený trh je `quiet` bez ohledu
+        na tally, série se nulují.
         """
         self.history.append(tally)
         for state in list(self._since_alert):
             self._since_alert[state] += 1
+
+        if market_closed:
+            # „Tasty čerstvé" o víkendu a v pauze nic nedokazuje: čerstvost se
+            # měří časem příjmu a dxFeed pošle snímek posledních hodnot při
+            # každé (re)subskripci i přechodu seance. Z „IBKR mrtvé ∧ tasty
+            # čerstvé" tak vznikal `ibkr_suspect` → fallback řetězu + sonda
+            # (pátek 18. 9. 21:00 UTC, sobota 19. 9. 00:08, neděle 20. 9. 20:14).
+            # `quiet` fallback řetězu drží a sérii zotavení nuluje.
+            self._ibkr_streak = 0
+            self._tasty_streak = 0
+            self._backup_streak = 0
+            self._quiet_rth_streak = 0
+            return self._finish(
+                "quiet",
+                tally,
+                0,
+                False,
+                "Trh je zavřený (rozvrh CME) — ticho feedů není porucha",
+            )
 
         if tally.contracts < self._min_contracts:
             # Přestavba pipeline nebo start — sérii nulujeme, aby náběh

@@ -603,3 +603,25 @@ def test_quiet_uvnitr_rth_po_m_minutach_alertuje() -> None:
     assert not detector.observe(quiet, in_us_rth=True).alert
     # Návrat mimo RTH (16:00 ET) sérii nuluje
     assert detector.observe(quiet).streak == 0
+
+
+def test_zavreny_trh_je_quiet_bez_alertu_a_fallbacku() -> None:
+    """#1307: po uzávěrce a o víkendu dxFeed pošle snímek posledních hodnot
+    (resubskripce, přechod seance), takže „IBKR mrtvé ∧ tasty čerstvé" vzniká
+    i bez poruchy — 18. 9. 21:00 UTC, 19. 9. 00:08 a 20. 9. 20:14 z toho byl
+    `feed_crosscheck` + fallback řetězu. Rozvrh ho zamítne; po otevření se
+    série počítá od nuly a výpadek v seanci se hlásí beze změny."""
+    detector = CrossCheckDetector(share_threshold=0.7, minutes_threshold=3)
+    dead = tally(ibkr_dead=90, ok=10)
+
+    for _ in range(10):
+        closed = detector.observe(dead, market_closed=True)
+        assert closed.state == "quiet"
+        assert closed.alert is False
+        assert closed.streak == 0
+
+    # Otevřeno: série začíná znovu, alert na hraně M jako dřív
+    assert not detector.observe(dead).alert
+    assert not detector.observe(dead).alert
+    third = detector.observe(dead)
+    assert third.state == "ibkr_suspect" and third.alert is True

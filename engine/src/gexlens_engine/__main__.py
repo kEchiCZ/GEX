@@ -30,7 +30,7 @@ from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
-from gexlens_engine.compute.marketclock import outside_us_rth
+from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.compute.setups import SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
@@ -335,6 +335,8 @@ def _watch_subscription_errors(
     publisher: PublisherLike,
     alert_enabled: Callable[[], bool],
     tombstones: ReqIdTombstones | None = None,
+    *,
+    utc_now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
 ) -> SubscriptionErrorTracker:
     """Zapojení `ib.errorEvent` (#417): delayed data → fail-fast, 354 → hlídání shluků.
 
@@ -343,6 +345,11 @@ def _watch_subscription_errors(
     počítá nad nespolehlivými Greeks (SPEC 3.1 fail-fast), zatímco error 354 se
     týká JEDNOHO requestu a v provozu chodí sporadicky i s platnou subskripcí —
     shodit kvůli němu stav spojení by z výpadku farmy udělalo trvalou chybu.
+
+    Při zavřeném trhu podle rozvrhu CME (#1307) jdou 354 i 10197 jen do
+    diagnostiky, do alertovacího prahu ne: data se neočekávají (sobotní roll,
+    mobilní aplikace otevřená o víkendu). Trvá-li stav po otevření, práh se
+    naplní od nuly a ohlásí ho.
     """
     tracker = SubscriptionErrorTracker(
         threshold=settings.subscription_error_threshold,
@@ -420,7 +427,9 @@ def _watch_subscription_errors(
             # feed mizí úplně (4. 8. tak vypadla data ve 14 cyklech ze 192).
             # Symbol se předává (#495) — alert v UI je vázaný na instrument.
             label, symbol, _after_cancel = _resolve_contract(reqId, contract)
-            alert = competing_sessions.observe(label, symbol, now=time.monotonic())
+            alert = competing_sessions.observe(
+                label, symbol, now=time.monotonic(), market_closed=is_market_closed(utc_now())
+            )
             if alert is not None:
                 logger.warning("Konkurenční relace odebírá market data: %s", message)
                 if alert_enabled():
@@ -429,7 +438,13 @@ def _watch_subscription_errors(
         if code != NOT_SUBSCRIBED_ERROR_CODE:
             return  # ostatní kódy loguje ib_async samo
         label, symbol, after_cancel = _resolve_contract(reqId, contract)
-        alert = tracker.observe(label, symbol, now=time.monotonic(), after_cancel=after_cancel)
+        alert = tracker.observe(
+            label,
+            symbol,
+            now=time.monotonic(),
+            after_cancel=after_cancel,
+            market_closed=is_market_closed(utc_now()),
+        )
         if after_cancel:
             # Diagnostika ano, alert ne (#1088): request už neběží, subskripce žijí
             logger.debug("IBKR error 354 po cancelu (reqId %s): %s", reqId, label)
@@ -451,8 +466,38 @@ def _watch_subscription_errors(
     return tracker
 
 
+async def _publish_outage_alert(
+    publisher: PublisherLike, kind: str, symbol: str, message: str, now: dt.datetime
+) -> bool:
+    """Upozornění „IBKR nedodává" jen při otevřeném trhu (#1307); vrací, zda odešlo.
+
+    Při zavřeném trhu podle rozvrhu CME (víkend, denní pauza) se data
+    neočekávají — výpadek jde jen do logu. Sobotní roll v 00:00 UTC se kryje
+    s denním odpojením IBKR (25. 9. 00:00:54 a 26. 9. 00:00:36 UTC), takže
+    z něj vznikal `degraded_start` nebo `instrument_error`. Trvá-li stav po
+    otevření, ohlásí ho `disconnect` z API a další pokus o setup instrumentu.
+    """
+    if is_market_closed(now):
+        logger.info(
+            "%s %s: trh je zavřený (rozvrh CME) — bez upozornění, jen log: %s",
+            kind,
+            symbol,
+            message,
+        )
+        return False
+    await publisher.publish(
+        "alerts",
+        {"kind": kind, "symbol": symbol, "message": message, "ts": now.timestamp()},
+    )
+    return True
+
+
 def _watch_connection_stall(
-    manager: ConnectionManager, settings: Settings, publisher: PublisherLike
+    manager: ConnectionManager,
+    settings: Settings,
+    publisher: PublisherLike,
+    *,
+    utc_now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
 ) -> None:
     """Dlouhý výpadek IBKR spojení do zvonečku (#770).
 
@@ -460,12 +505,23 @@ def _watch_connection_stall(
     `reconnect_stall_alert_s`, dokud se spojení nevrátí — 18. 8. byl engine
     osm hodin offline a poznalo se to jen tím, že si člověk všiml zamrzlého
     grafu. Log ERROR píše watchdog sám; tady se výpadek jen publikuje.
+
+    Při zavřeném trhu (#1307) se nepublikuje: sběr dat nestojí, protože žádná
+    data nejsou (víkend 12.–13. 9. 2026: ~216 upozornění à 5 min během
+    údržby IBKR). Trvá-li výpadek i po otevření, první hlášení po otevření
+    nese celou délku výpadku — watchdog volá dál každý interval.
     """
     # RUF006: create_task bez držené reference může GC uklidit před doběhem
     # (#499) — alert by pak tiše nedorazil
     pending: set[asyncio.Task[None]] = set()
 
     def on_stall(offline_s: float) -> None:
+        if is_market_closed(utc_now()):
+            logger.info(
+                "IBKR spojení chybí %.0f min, trh je ale zavřený (rozvrh CME) — bez upozornění",
+                offline_s / 60,
+            )
+            return
         task = asyncio.create_task(
             publisher.publish(
                 "alerts",
@@ -477,7 +533,7 @@ def _watch_connection_stall(
                         f"stojí. Zkontroluj TWS a API port "
                         f"{settings.ibkr_host}:{settings.ibkr_port}."
                     ),
-                    "ts": dt.datetime.now(dt.UTC).timestamp(),
+                    "ts": utc_now().timestamp(),
                 },
             )
         )
@@ -911,14 +967,23 @@ async def create_pipeline(
             await asyncio.sleep(SPOT_FALLBACK_POLL_S)
             try:
                 price, fresh = tasty_spot(symbol)
-                decision = spot_fallback.resolve(loop.time(), tasty_price=price, tasty_fresh=fresh)
+                decision = spot_fallback.resolve(
+                    loop.time(),
+                    tasty_price=price,
+                    tasty_fresh=fresh,
+                    # Rozvrh CME (#1307): o víkendu a v denní pauze IBKR mlčí
+                    # legitimně a snímek DXLink po reconnectu tasty jen „oživí"
+                    market_closed=is_market_closed(dt.datetime.now(dt.UTC)),
+                )
                 if decision.source == "tasty" and decision.price is not None:
                     fallback_price = decision.price
                 if decision.switched:
                     logger.warning(
-                        "Spot %s: IBKR mlčí, přebírá tastytrade (#614) — "
-                        "typicky souběh s mobilem (error 10197)",
+                        "Spot %s: IBKR při otevřeném trhu mlčí ≥ %g s, přebírá tastytrade "
+                        "(#614) — souběh s mobilem (error 10197), výpadek farmy nebo "
+                        "zaseknutá subskripce",
                         symbol,
+                        settings.tasty_spot_stale_after_s,
                     )
                     await publisher.publish(
                         "alerts",
@@ -1041,18 +1106,14 @@ async def create_pipeline(
             symbol,
             "; ".join(degraded_reasons),
         )
-        await publisher.publish(
-            "alerts",
-            {
-                "kind": "degraded_start",
-                "symbol": symbol,
-                "message": (
-                    f"{symbol}: IBKR neodpovídá, pipeline založena z posledního známého "
-                    f"discovery a tastytrade ({'; '.join(degraded_reasons)}). Spot, řetěz, "
-                    "OI i svíčky jedou z tasty, IBKR převezme po zotavení."
-                ),
-                "ts": dt.datetime.now(dt.UTC).timestamp(),
-            },
+        await _publish_outage_alert(
+            publisher,
+            "degraded_start",
+            symbol,
+            f"{symbol}: IBKR neodpovídá, pipeline založena z posledního známého "
+            f"discovery a tastytrade ({'; '.join(degraded_reasons)}). Spot, řetěz, "
+            "OI i svíčky jedou z tasty, IBKR převezme po zotavení.",
+            dt.datetime.now(dt.UTC),
         )
     info = infos[0]
     band = discovery.initial_band(info, spot)
@@ -2954,15 +3015,7 @@ async def main() -> None:
             except InstrumentSetupError as exc:
                 delay = setup_cooldown.penalize(symbol)
                 logger.warning("Setup %s selhal (další pokus za %d cyklů): %s", symbol, delay, exc)
-                await publisher.publish(
-                    "alerts",
-                    {
-                        "kind": "instrument_error",
-                        "symbol": symbol,
-                        "message": str(exc),
-                        "ts": now.timestamp(),
-                    },
-                )
+                await _publish_outage_alert(publisher, "instrument_error", symbol, str(exc), now)
             except Exception:
                 delay = setup_cooldown.penalize(symbol)
                 logger.exception(

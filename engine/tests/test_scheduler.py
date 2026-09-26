@@ -384,3 +384,35 @@ async def test_fallback_ustoupi_kdyz_se_tws_model_vrati() -> None:
     assert cached is not None
     assert cached.source == GREEKS_SOURCE_MODEL
     assert cached.snapshot.iv == 0.15  # hodnoty zase z TWS modelu
+
+
+async def test_reset_na_otevreni_zahodi_backoff_ale_bs_dopocet_drzi() -> None:
+    """#1307: hrana otevření trhu zahodí repair kola a backoff ze zavřeného trhu
+    (žádný `strikes_stalled`, striky se fetchují hned), ale čítače BS fallbacku
+    ne — kontrakt bez TWS greeks dostane BS dopočet z čerstvých kotací už
+    v prvním sweepu seance, ne až po `greeks_fallback_sweeps` sweepech stale."""
+    contracts = chain_360()
+    atm = {spec for spec in contracts if spec.strike == SPOT}
+    streamer = MockQuoteStreamer(partial_greeks=atm)
+    clock = FakeClock()
+    settings = Settings()
+    scheduler = SubscriptionScheduler(streamer, settings, clock=clock, utc_now=lambda: UTC_NOW)
+
+    def atm_calls() -> int:
+        return sum(1 for spec in streamer.fetch_calls if spec in atm)
+
+    # Zavřený trh: TWS model mlčí sweep za sweepem, kola rostou až do stall
+    for _ in range(settings.repair_stall_rounds):
+        clock.advance(settings.repair_backoff_max_s + 1.0)
+        closed = await scheduler.sweep(contracts, SPOT)
+    assert closed.stalled_count == len(atm)
+    assert closed.computed_greeks == len(atm)
+
+    scheduler.reset_repair_state()
+    before = atm_calls()
+    opened = await scheduler.sweep(contracts, SPOT)  # hodiny stojí: backoff je pryč
+
+    assert atm_calls() > before  # žádný odklad z víkendu
+    assert opened.stalled_count == 0
+    assert opened.stale_count == 0
+    assert opened.computed_greeks == len(atm)

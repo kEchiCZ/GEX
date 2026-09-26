@@ -22,6 +22,7 @@ from sqlalchemy.engine import Engine
 
 from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
 from gexlens_engine.compute.gexforward import ForwardContract, forward_field
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import (
     expiry_settle_ts,
     is_quarterly_expiry,
@@ -380,6 +381,12 @@ class InstrumentPipeline:
     # s nedenní nejbližší expirací přežije půlnoc a bez resetu by včerejší
     # finalita blokovala archivaci nového dne navždy.
     _oi_day: dt.date | None = field(default=None, repr=False)
+    # Den, za který už odešel OI alert (#1307): selhání se hlásí hranově —
+    # jednou za den a znovu až po úspěšném čtení. Opakovat tutéž větu à 30 min
+    # je spam, který uživatele naučí zvonek ignorovat.
+    _oi_alerted_day: dt.date | None = field(default=None, repr=False)
+    # Stav rozvrhu CME z minulého cyklu (#1307) — z něj hrana otevření trhu
+    _market_closed: bool = field(default=False, repr=False)
     _minute_count: int = field(default=0, repr=False)
     _last_spot: float = field(default=float("nan"), repr=False)
     _backfill_task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -458,6 +465,20 @@ class InstrumentPipeline:
                     universe.append(spec)
         return universe
 
+    def _oi_published(self, now: dt.datetime) -> bool:
+        """Publikoval už CME OI pro UTC den `now`? (#1307)
+
+        CME publikuje jen v obchodní dny (po–pá) a do publikačního okna
+        (`oi_publication_utc`, 07:00 CT = horní mez naměřeného příchodu, #463).
+        Za sobotu a neděli nepublikuje nic: sobotní snímek je beze změny kopie
+        pátku (26. 9. 2026: obnova à 30 min od 07:00 CT, 0 zapsáno) a nová
+        čísla dodá IBKR nejdřív v neděli po otevření Globexu (oi_eod 13. a
+        20. 9. 2026: zápisy až po 17:00 CT). Pro víkendový UTC den tak „po
+        okně" nenastane nikdy. Svátky rozvrh nezná (ADR-0023 bod 4).
+        """
+        day = now.date()
+        return day.weekday() < 5 and now >= self.settings.oi_publication_utc(day)  # po–pá
+
     def _oi_refresh_due(self, now: dt.datetime) -> bool:
         """Má se existující snímek dne přečíst znovu? (#463)
 
@@ -465,8 +486,13 @@ class InstrumentPipeline:
         Po okně se čte, dokud dvě po sobě jdoucí čtení nedají totéž (`oi_final`);
         potvrzení se do DB neukládá, takže po restartu proběhne jedno kontrolní
         čtení navíc. To je levnější než další stav v schématu.
+
+        Víkendový UTC den se neobnovuje vůbec (#1307, `_oi_published`) — první
+        obnova po víkendu je v pondělí po okně. Při zavřeném trhu (denní pauza,
+        páteční večer) se neobnovuje taky; po denní pauze jde obnova hned
+        v 17:00 CT, protože `_on_market_open` natáhne čítač retry.
         """
-        return now >= self.settings.oi_publication_utc(now.date()) and not self.oi_final
+        return self._oi_published(now) and not self.oi_final and not is_market_closed(now)
 
     def start_initial_archive(self, today: dt.date) -> asyncio.Task[bool]:
         """První OI archiv dne jako task na pozadí (#1208).
@@ -534,16 +560,13 @@ class InstrumentPipeline:
             # retry po OI_RETRY_CYCLES cyklech
             logger.exception("OI archivace %s selhala — pokračuje se bez OI", self.symbol)
             if has_snapshot:
-                return await self._report_refresh_failed(today)
-            await self.publisher.publish(
-                "alerts",
-                {
-                    "kind": "oi_missing",
-                    "symbol": self.symbol,
-                    "message": f"OI archivace {self.symbol} selhala — GEX/OI vrstvy zatím "
-                    "bez OI, další pokus za 30 min (detail v logu enginu)",
-                    "ts": dt.datetime.now(dt.UTC).timestamp(),
-                },
+                return await self._report_refresh_failed(today, now)
+            await self._publish_oi_alert(
+                "oi_missing",
+                f"OI archivace {self.symbol} selhala — GEX/OI vrstvy zatím bez OI, další "
+                "pokus za 30 min (detail v logu enginu)",
+                today,
+                now,
             )
             return False
         logger.info(
@@ -555,22 +578,22 @@ class InstrumentPipeline:
         )
         if result.written == 0:
             if has_snapshot:
-                return await self._report_refresh_failed(today)
-            await self.publisher.publish(
-                "alerts",
-                {
-                    "kind": "oi_missing",
-                    "symbol": self.symbol,
-                    "message": f"OI pro {self.symbol} z IBKR nedorazilo — GEX/OI vrstvy "
-                    "zatím bez OI, další pokus za 30 min (CME publikuje OI ráno)",
-                    "ts": dt.datetime.now(dt.UTC).timestamp(),
-                },
+                return await self._report_refresh_failed(today, now)
+            await self._publish_oi_alert(
+                "oi_missing",
+                f"OI pro {self.symbol} z IBKR nedorazilo — GEX/OI vrstvy zatím bez OI, "
+                "další pokus za 30 min",
+                today,
+                now,
             )
             return False
+        # Úspěšné čtení re-armuje hranový OI alert (#1307) — další selhání
+        # téhož dne je nová epizoda a ohlásí se znovu
+        self._oi_alerted_day = None
         # Finální je snímek pořízený po publikačním okně, jehož hodnoty se proti
         # předchozímu čtení nezměnily — jedno čtení po okně nestačí, publikace
         # může doběhnout zrovna mezi dvěma dávkami sweepu
-        if now >= self.settings.oi_publication_utc(now.date()) and not result.changed:
+        if self._oi_published(now) and not result.changed:
             # Shoda čtení nestačí (#664): 12. 8. dvě shodná čtení 4 kontraktů
             # ze 160 zastavila obnovu 0DTE na celý den — řídký snímek finální
             # být nesmí, obnova jede dál, dokud CME nedopublikuje
@@ -658,7 +681,7 @@ class InstrumentPipeline:
         except Exception:
             logger.exception("Forward GEX %s se nespočítal — zkusí se po další archivaci", today)
 
-    async def _report_refresh_failed(self, today: dt.date) -> bool:
+    async def _report_refresh_failed(self, today: dt.date, now: dt.datetime) -> bool:
         """Neúspěšná post-publikační OBNOVA při existujícím denním archivu (#494).
 
         Přechodný výpadek fetche po publikaci nesmí shodit `oi_available` ani
@@ -671,17 +694,65 @@ class InstrumentPipeline:
             self.symbol,
             today,
         )
+        await self._publish_oi_alert(
+            "oi_refresh_failed",
+            f"Obnova OI pro {self.symbol} po publikačním okně selhala — jede se na starším "
+            "snímku dne, další pokus za 30 min",
+            today,
+            now,
+        )
+        return True
+
+    async def _publish_oi_alert(
+        self, kind: str, message: str, today: dt.date, now: dt.datetime
+    ) -> None:
+        """OI alert jen tehdy, když se OI čeká, a hranově (#1307).
+
+        Čeká se při otevřeném trhu v obchodní den CME po publikačním okně
+        (`_oi_published`). Jinak selhání čtení není porucha a jde jen do logu:
+        zavřený trh (víkend, denní pauza), víkendový UTC den (neděle 17:00 až
+        19:00 CT — CME v neděli nepublikuje) a noc před oknem, kdy IBKR
+        dodává předpublikační čísla. Hlášení před oknem by navíc spotřebovalo
+        hranu dne a skutečná porucha „okno proběhlo, OI pořád nedorazilo" by
+        se už neohlásila.
+
+        Po okně se ohlásí první selhání dne, další až po úspěšném čtení
+        (`_oi_alerted_day` se nuluje v `try_archive_oi`). Do #1307 chodila
+        tatáž věta každých 30 min pro ES i NQ (Telegram deduplikuje jen
+        10 min, zvonek vůbec).
+        """
+        if is_market_closed(now):
+            logger.info(
+                "%s %s: trh je zavřený (rozvrh CME) — bez upozornění, jen log: %s",
+                kind,
+                self.symbol,
+                message,
+            )
+            return
+        if not self._oi_published(now):
+            logger.info(
+                "%s %s: CME pro tento den OI ještě nepublikoval (před oknem nebo víkend) "
+                "— bez upozornění, jen log: %s",
+                kind,
+                self.symbol,
+                message,
+            )
+            return
+        if self._oi_alerted_day == today:
+            logger.info(
+                "%s %s: dnes už ohlášeno, další neúspěšný pokus jen do logu", kind, self.symbol
+            )
+            return
+        self._oi_alerted_day = today
         await self.publisher.publish(
             "alerts",
             {
-                "kind": "oi_refresh_failed",
+                "kind": kind,
                 "symbol": self.symbol,
-                "message": f"Obnova OI pro {self.symbol} po publikačním okně selhala — "
-                "jede se na starším snímku dne, další pokus za 30 min",
-                "ts": dt.datetime.now(dt.UTC).timestamp(),
+                "message": message,
+                "ts": now.timestamp(),
             },
         )
-        return True
 
     async def _run_setup_selfcheck(self, today: dt.date) -> None:
         """Denní sebekontrola detektoru (#309): alert, když za okno prodělává.
@@ -910,11 +981,19 @@ class InstrumentPipeline:
 
     async def run_minute(self, now: dt.datetime) -> SweepMetrics:
         """Jeden minutový cyklus instrumentu: OI retry, expanze obálky, runtime cyklus."""
+        # Očekávají se data? (#1307) Jeden predikát z rozvrhu CME (ADR-0023) pro
+        # OI retry i všechny hlídače níž; hrana zavřeno → otevřeno se zjišťuje
+        # jen tady, ještě před sweepem, aby první sweep seance začal čistý.
+        market_closed = is_market_closed(now)
+        if self._market_closed and not market_closed:
+            self._on_market_open()
+        self._market_closed = market_closed
         # Nový den (#494): finalita i dostupnost OI patřily včerejšku. Pipeline
         # s nedenní nejbližší expirací přežije půlnoc a bez resetu by se nový
         # den nikdy nearchivoval (oi_final=True vypíná retry blok níže).
         today = now.date()
-        if self._oi_day is not None and self._oi_day != today:
+        new_day = self._oi_day is not None and self._oi_day != today
+        if new_day:
             self.oi_available = False
             self.oi_final = False
             self._cycles_since_oi = OI_RETRY_CYCLES  # archivuj hned, ne až za 30 min
@@ -923,11 +1002,18 @@ class InstrumentPipeline:
         # předpublikační čísla jsou nenulová, takže se bez toho nikdy neobnoví.
         # Dokud běží první archiv na pozadí (#1208), retry čeká — dva archivy
         # téhož dne naráz by se přepisovaly.
+        # Při zavřeném trhu (#1307) se neopakuje ani neobnovuje: nic nového se
+        # nepublikuje a každý pokus by jen selhal (sobota 26. 9.: 0 zapsáno
+        # à 30 min). Výjimkou je jediné čtení na začátku nového UTC dne
+        # (půlnoc UTC padá do zavřeného trhu jen v pátek a v sobotu večer CT):
+        # runtime čte OI podle UTC dne, takže bez něj by víkendová mapa OI
+        # neměla vůbec. Na hraně otevření natáhne čítač `_on_market_open`,
+        # takže chybějící OI (nebo nefinální snímek po okně) se čte hned.
         if not self.initial_archive_running() and (
             not self.oi_available or self._oi_refresh_due(now)
         ):
             self._cycles_since_oi += 1
-            if self._cycles_since_oi >= OI_RETRY_CYCLES:
+            if self._cycles_since_oi >= OI_RETRY_CYCLES and (not market_closed or new_day):
                 self._cycles_since_oi = 0
                 self.oi_available = await self.try_archive_oi(today, now)
 
@@ -1070,6 +1156,35 @@ class InstrumentPipeline:
         self._minute_count += 1
         return metrics
 
+    def _on_market_open(self) -> None:
+        """Hrana zavřeno → otevřeno (#1307): zahodí stav hlídačů ze zavřeného trhu.
+
+        Sweep běží i o víkendu a v denní pauze; TWS mimo seanci nedodává
+        modelGreeks ani kompletní kotace, takže scheduler nasbírá repair kola
+        a backoff. Bez resetu by striky začaly seanci v backoffu a s hotovým
+        `strikes_stalled`. Čítače BS fallbacku zůstávají — kontrakt bez greeks
+        od TWS dostane BS dopočet z čerstvých kotací hned prvním sweepem.
+        Detektory se nulují spolu se schedulerem — `recovered` k poplachu
+        z minulé seance by po vynulování kol přišel naprázdno.
+
+        Čítač retry OI se natáhne: při zavřeném trhu obnova neběží a čítač se
+        nezvyšuje, takže by první obnova po denní pauze přišla až za
+        OI_RETRY_CYCLES minut. Pokus jde jen tam, kde je co číst — OI chybí,
+        nebo snímek po publikačním okně ještě není finální.
+        """
+        self._cycles_since_oi = OI_RETRY_CYCLES
+        self.runtime.scheduler.reset_repair_state()
+        if self.next_runtime is not None:
+            self.next_runtime.scheduler.reset_repair_state()
+        if self.greeks_detector is not None:
+            self.greeks_detector.reset()
+        if self.repair_detector is not None:
+            self.repair_detector.reset()
+        logger.info(
+            "Trh %s otevřel (rozvrh CME) — repair a backoff stav ze zavřeného trhu vynulován",
+            self.symbol,
+        )
+
     async def _collect_news_ticks(self, now: dt.datetime) -> None:
         """Broker headlines z ticku 292 (#291) — zápis do sdílené news_events.
 
@@ -1095,6 +1210,12 @@ class InstrumentPipeline:
         """
         detector = self.greeks_detector
         if detector is None:
+            return
+        # Zavřený trh (#1307): TWS mimo seanci modelGreeks nepočítá, chybějící
+        # Greeks nejsou porucha — detektor se nekrmí (stav z doby před zavřením
+        # vynuluje hrana otevření v `run_minute`). 26. 9. 2026 tak odešlo
+        # „Greeks ES nechodí pro 89 z 122" tři minuty po sobotním rollu.
+        if is_market_closed(now):
             return
         # Po settle expirující řady se nehlídá vůbec (#959) — detektor se ani
         # nekrmí, jinak by si zapamatoval „stalled" a po rollu vystřelil
@@ -1156,6 +1277,12 @@ class InstrumentPipeline:
         detector = self.repair_detector
         if detector is None:
             return
+        # Zavřený trh (#1307): repair kola mimo seanci selhávají z definice —
+        # pátek 16:20 CT a znovu po sobotním rollu tak chodilo „TWS dlouhodobě
+        # nedodává kompletní data pro 62 striků". Detektor se nekrmí; kola
+        # nasbíraná při zavřeném trhu zahodí hrana otevření v `run_minute`.
+        if is_market_closed(now):
+            return
         event = detector.observe(metrics.stalled_count)
         if event is None:
             return
@@ -1209,6 +1336,13 @@ class InstrumentPipeline:
             spot == spot and self._last_spot == self._last_spot and spot != self._last_spot
         )
         self._last_spot = spot
+        # Zavřený trh (#1307): „zavřený trh = spot se nehýbe" neplatí v pre-openu
+        # (neděle 16:00–17:00 CT, denní pauza) — indikativní kotace i mid z tasty
+        # fallbacku se hýbou, TRADES bary ale nevznikají. Detektor se nekrmí a
+        # stream se neobnovuje; stav se NEnuluje, aby stall z běžící seance po
+        # otevření skončil `recovered` a re-backfillem díry.
+        if is_market_closed(now):
+            return
         event = detector.observe(bar_activity=bar_activity, spot_moving=spot_moving)
         if event == "stalled":
             logger.error(

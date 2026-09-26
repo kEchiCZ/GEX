@@ -1,6 +1,7 @@
 """Testy hlídání chyb subskripce market data (#417) a konkurenční relace (#451/#495)."""
 
 import asyncio
+import datetime as dt
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -154,20 +155,13 @@ async def test_competing_session_alert_se_odpali_a_nese_symbol(
         Settings(),
         publisher,
         lambda: True,
+        utc_now=lambda: OPEN_THURSDAY,
     )
 
-    contract = SimpleNamespace(
-        symbol="NQ",
-        localSymbol="NQU6",
-        right="",
-        strike=0.0,
-        lastTradeDateOrContractMonth="",
-        exchange="CME",
-    )
     message = "No market data during competing live session"
-    ib.errorEvent.emit(1, 10197, message, contract)
+    ib.errorEvent.emit(1, 10197, message, NQ_FUTURE)
     fake_now["t"] = 30.0  # další výskyt za půl minuty — naměřená kadence ze 4. 8.
-    ib.errorEvent.emit(2, 10197, message, contract)
+    ib.errorEvent.emit(2, 10197, message, NQ_FUTURE)
     for _ in range(3):  # nech doběhnout create_task s publikací alertu
         await asyncio.sleep(0)
 
@@ -179,6 +173,76 @@ async def test_competing_session_alert_se_odpali_a_nese_symbol(
     assert len(alerts) == 1
     assert alerts[0]["symbol"] == "NQ"
     assert "přetahuje si market data" in str(alerts[0]["message"])
+
+
+# Září 2026 je CDT (UTC−5): čtvrtek 24. 9. 15:00 UTC = 10:00 CT (seance),
+# sobota 26. 9. zavřeno, neděle 27. 9. 22:00 UTC = otevření 17:00 CT
+OPEN_THURSDAY = dt.datetime(2026, 9, 24, 15, 0, tzinfo=dt.UTC)
+SATURDAY = dt.datetime(2026, 9, 26, 12, 0, tzinfo=dt.UTC)
+SUNDAY_OPEN = dt.datetime(2026, 9, 27, 22, 0, tzinfo=dt.UTC)
+NQ_FUTURE = SimpleNamespace(
+    symbol="NQ",
+    localSymbol="NQU6",
+    right="",
+    strike=0.0,
+    lastTradeDateOrContractMonth="",
+    exchange="CME",
+)
+
+
+def test_zavreny_trh_chyby_jen_do_diagnostiky() -> None:
+    """#1307: při zavřeném trhu se výskyt počítá do diagnostiky (/status),
+    do alertovacího prahu ne — a nespotřebuje cooldown, takže trvající stav
+    se po otevření ohlásí hned, jakmile se práh naplní znovu."""
+    t = tracker(threshold=2, cooldown_s=3600.0)
+    for i in range(5):
+        assert t.observe("ES @CME", "ES", now=float(i), market_closed=True) is None
+    assert t.total == 5
+    assert len(t.recent_records()) == 5
+
+    assert t.observe("ES @CME", "ES", now=10.0) is None  # po otevření: 1. výskyt
+    assert t.observe("ES @CME", "ES", now=20.0) is not None  # práh 2 — hned, bez cooldownu
+
+
+async def test_konkurencni_relace_o_vikendu_nezvoni_po_otevreni_ano(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1307: mobilní IBKR otevřený v sobotu vyrobí 10197 à ~30 s — data se
+    ale neočekávají. Drží-li mobil feed i po nedělním otevření, ohlásí se to."""
+    fake_now = {"t": 0.0}
+    wall = {"now": SATURDAY}
+    monkeypatch.setattr(engine_main, "time", SimpleNamespace(monotonic=lambda: fake_now["t"]))
+    ib = SimpleNamespace(errorEvent=_FakeErrorEvent())
+    manager = SimpleNamespace(report_error=lambda code, message: None)
+    publisher = _RecordingPublisher()
+    engine_main._watch_subscription_errors(
+        cast(IB, ib),
+        cast(ConnectionManager, manager),
+        Settings(),
+        publisher,
+        lambda: True,
+        utc_now=lambda: wall["now"],
+    )
+    message = "No market data during competing live session"
+    not_subscribed = "Requested market data is not subscribed."
+
+    async def emit_minutes(minutes: int) -> None:
+        for _ in range(minutes * 2):
+            fake_now["t"] += 30.0
+            wall["now"] += dt.timedelta(seconds=30)
+            ib.errorEvent.emit(1, 10197, message, NQ_FUTURE)
+            for req_id in (2, 3, 4):  # 6×/min — nad prahem 354 (5/60 s)
+                ib.errorEvent.emit(req_id, 354, not_subscribed, NQ_FUTURE)
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    await emit_minutes(30)
+    assert publisher.messages == []
+
+    wall["now"] = SUNDAY_OPEN
+    await emit_minutes(3)
+    kinds = [data["kind"] for channel, data in publisher.messages if channel == "alerts"]
+    assert kinds == ["competing_session", "subscription_error"]
 
 
 # ── Popisek kontraktu ────────────────────────────────────────────────

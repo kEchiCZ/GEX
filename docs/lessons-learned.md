@@ -85,6 +85,28 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 2. Diagnostika (zastavil jsem se u první hypotézy)
 
+- **2026-09-26 — o víkendu chodila upozornění „data nechodí“ z IBKR i tasty (#1307): hlídače soudily zavřený trh z dat.**
+  `oi_refresh_failed` à 30 min pro ES i NQ, `spot_fallback` po nočním reconnectu DXLink, `strikes_stalled`
+  po sobotním rollu, dřív i `connection_stall` ~216× za víkend. Každý hlídač poznal zavřený trh jen
+  nepřímo, nebo vůbec: publikační okno OI se počítalo pro každý kalendářní den, spot fallback bral
+  „mlčí i tasty“ (čerstvost podle času PŘÍJMU, snímek po resubskripci vypadá živě), bary „spot se
+  nehýbe“ (v pre-openu se hýbe), repair/greeks žádnou bránu neměly. Opakování dělal chybějící hranový
+  stav: každý retry = nový alert, Telegram deduplikuje jen 10 min. Odhalil to log produkce srovnaný
+  s rozvrhem a oi_eod (sobotní snímek = kopie pátku, páteční OI až v neděli večer).
+  → Každý hlídač výpadku dat má bránu „očekávají se data?“ z `marketclock.is_market_closed`
+  (při zavřeném trhu se nekrmí) a stav nasbíraný mimo seanci (repair kola, backoff) zahodí na hraně
+  otevření. Datová proxy doplňuje rozvrh jen tam, kde
+  rozvrh neví (svátky). Alert, který se opakuje s každým retry, je hranový. Nový hlídač se testuje
+  na sobotě, neděli 16:59/17:00 CT, denní pauze a konci DST, ne jen v seanci. (Třetí výskyt vzorce
+  po #968 a #1228 — kandidát na pravidlo v AGENTS.md.)
+  Druhé kolo (review téhož dne): „otevřený trh“ ≠ „data se čekají“. OI publikuje CME jen v obchodní
+  dny do 07:00 CT, takže neděle 17:00–19:00 CT je otevřený trh bez publikace a noc před oknem
+  předpublikační stav — hrana alertu per UTC den se tam spotřebovala a skutečná porucha po okně
+  se už neohlásila. Stejně tak brána jen v jednom hlídači nestačí: `disconnect` z API, 10197/354
+  a `degraded_start` při sobotním rollu chodily dál. A tvrzení „po otevření se čte hned“ platilo
+  jen v testu, který čítač natahoval ručně — sekvence se testují minutu po minutě.
+  Svátek rozvrh nezná a `feed_crosscheck` „oba mlčí uvnitř US RTH“ se tam opakuje à 15 min
+  (Vánoce ~26×) — otevřené k rozhodnutí v #1307.
 - **2026-09-25 — zvonek 516–596 „anomálií“ za 14 dní na šum, žádná na CPI/FOMC (#1291, ADR-0043).**
   Tři vrstvy: (1) `importance` v `news_events` je po regexovém klasifikátoru, ne od zdroje — přepisuje
   i FF impact (USD PPI High → 1, „FOMC Member Speaks“ Low → 3), takže „významnost“ podle importance
