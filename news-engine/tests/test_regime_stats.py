@@ -110,7 +110,8 @@ def seed_event_with_reaction(engine: Engine, event_id: int, *, gex_regime: str |
             [
                 {
                     "id": event_id,
-                    "ts_event": NOW - dt.timedelta(days=1),
+                    # Různé časy: souběžné eventy téhož bucketu jsou jedno měření (#1293)
+                    "ts_event": NOW - dt.timedelta(days=1, minutes=event_id),
                     "ts_ingested": NOW,
                     "source": "rss_news",
                     "kind": "headline",

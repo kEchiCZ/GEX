@@ -5,6 +5,12 @@ Klasifikace se **nikdy nepřepisuje** — každý průchod přidá verzi do
 a ruční oprava verzi 3. `news_events` drží denormalizovanou poslední verzi pro
 rychlé čtení feedu, ale zdrojem pravdy je historie verzí: bez ní by zpětná
 reklasifikace tiše měnila minulé predikce.
+
+Klasifikátor v2 (#1293, ADR-0045) potřebuje kromě titulku **feed** (strop
+importance: sociální sítě bez kurátora, agregátory) a u kalendáře **FF impact**
+— obojí je v surovém payloadu (`RAW_COLUMNS`). Kalendář ani `fed_rss` se už
+regexem nad titulkem nepřepisují. Reklasifikace historie
+(`scripts/reclassify_news_rules.py`) volá tutéž `classify_row`.
 """
 
 import datetime as dt
@@ -14,13 +20,67 @@ from typing import Any
 from sqlalchemy import exists, func, insert, select, update
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.news_significance import significance_tier
 from gexlens_engine.storage.sentiment import news_classifications, news_events
-from gexlens_news.classifier import classify
+from gexlens_news.classifier import RuleClassification, classify, feed_of
 from gexlens_news.conventions import scheduled_direction
 
 logger = logging.getLogger(__name__)
 
 RULE_SOURCE = "rule"
+SCHEDULED_KIND = "scheduled"
+#: Síla směru z konvence řady u kalendáře (překvapení × polarita, SPEC kap. 4)
+SCHEDULED_STRENGTH = 0.6
+
+#: Pole surového payloadu, která klasifikace čte: feed (`raw.feed` URL RSS feedu,
+#: záložně `raw.link`), kurátor Bluesky (`raw.curated`, autor `raw.did`) a FF
+#: impact (živý feed `raw.impact`, backfill `raw.impactName`)
+RAW_COLUMNS = (
+    news_events.c.raw["feed"].as_string().label("raw_feed"),
+    news_events.c.raw["link"].as_string().label("raw_link"),
+    news_events.c.raw["curated"].as_boolean().label("raw_curated"),
+    news_events.c.raw["did"].as_string().label("raw_did"),
+    news_events.c.raw["impact"].as_string().label("raw_impact"),
+    news_events.c.raw["impactName"].as_string().label("raw_impact_name"),
+)
+
+
+def row_feed(row: Any, curated_dids: frozenset[str] = frozenset()) -> str:
+    """Feed řádku (`feed_of`) — klíč stropu importance.
+
+    Kurátora Bluesky pozná podle příznaku `raw.curated`, který collector
+    zapisuje až od #1291 (25. 9. 2026). Reklasifikace historie předává
+    `curated_dids` (aktuální seznam kurátorů), aby starší posty týchž autorů
+    nedostaly strop nekurátorované sociální sítě.
+    """
+    curated = row.raw_curated is True or (row.raw_did is not None and row.raw_did in curated_dids)
+    raw = {"feed": row.raw_feed, "link": row.raw_link, "curated": curated}
+    return feed_of(str(row.source), raw)
+
+
+def classify_row(row: Any, curated_dids: frozenset[str] = frozenset()) -> RuleClassification:
+    """Pravidlová klasifikace řádku se sloupci `title`, `source`, `kind`,
+    `surprise_z` a `RAW_COLUMNS` — sdílí ji job i reklasifikace historie.
+
+    U kalendáře směr plyne z překvapení a konvence řady, ne ze slovesa.
+    `curated_dids` viz `row_feed` (jen reklasifikace historie).
+    """
+    result = classify(
+        str(row.title or ""),
+        feed=row_feed(row, curated_dids),
+        kind=str(row.kind),
+        ff_impact=row.raw_impact_name or row.raw_impact,
+    )
+    if row.kind != SCHEDULED_KIND:
+        return result
+    surprise_z = float(row.surprise_z) if row.surprise_z is not None else None
+    from_convention = scheduled_direction(str(row.title or ""), surprise_z)
+    if from_convention is None:
+        return result
+    strength = SCHEDULED_STRENGTH if from_convention != 0 else 0.0
+    return RuleClassification(
+        result.category, result.importance, from_convention, strength, result.reason
+    )
 
 
 class RuleClassificationJob:
@@ -54,6 +114,7 @@ class RuleClassificationJob:
                 # Pro push do WS (#335) — UI potřebuje celý řádek, ne jen kategorii
                 news_events.c.ts_event,
                 news_events.c.source,
+                *RAW_COLUMNS,
             )
             .where(~already)
             .order_by(news_events.c.ts_event.desc())
@@ -90,18 +151,9 @@ class RuleClassificationJob:
         batch: list[dict[str, object]] = []
         for row in pending:
             event_id = int(row.id)
-            title = row.title
-            surprise_z = float(row.surprise_z) if row.surprise_z is not None else None
-            result = classify(title, row.summary)
+            result = classify_row(row)
             direction = result.direction
             strength = result.strength
-            if row.kind == "scheduled":
-                # Plánované eventy klasifikaci směru nepotřebují — plyne
-                # z překvapení a konvence řady (SPEC kap. 4)
-                from_convention = scheduled_direction(title, surprise_z)
-                if from_convention is not None:
-                    direction = from_convention
-                    strength = 0.6 if from_convention != 0 else 0.0
             batch.append(
                 {
                     "id": event_id,
@@ -111,7 +163,10 @@ class RuleClassificationJob:
                     "kind": row.kind,
                     "category": result.category,
                     "importance": result.importance,
-                    "title": title,
+                    # Stupeň významnosti (#1305) — graf filtruje podle něj, ne podle
+                    # vlastní kopie pravidel
+                    "significance": significance_tier(row.kind, result.importance, result.category),
+                    "title": row.title,
                     "summary": row.summary,
                     "sentiment_dir": direction,
                     "sentiment_score": direction * strength,

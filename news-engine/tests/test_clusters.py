@@ -29,8 +29,6 @@ def ev(
     kind: str = "headline",
     importance: int | None = 1,
     category: str | None = "OTHER",
-    impact: str | None = None,
-    curated: bool = False,
     title: str | None = None,
 ) -> ClusterEvent:
     return ClusterEvent(
@@ -40,8 +38,6 @@ def ev(
         title=title or f"Zpráva {event_id}",
         importance=importance,
         category=category,
-        ff_impact=impact,
-        curated=curated,
     )
 
 
@@ -74,7 +70,7 @@ def flat_baseline(bp: float = 1.2, z: float = 0.7) -> dict[int, list[Excursion]]
 def two_significant_and_noise() -> list[ClusterEvent]:
     """AC1: 10 zpráv během 90 s — FF High a headline s importance 3, zbytek šum."""
     events = [
-        ev(1, T0, kind="scheduled", importance=1, impact="High", title="USD CPI m/m"),
+        ev(1, T0, kind="scheduled", importance=3, title="USD CPI m/m"),
         ev(
             2,
             T0 + dt.timedelta(seconds=40),
@@ -122,23 +118,21 @@ def market_bars(*, jump_bp: float) -> list[Bar]:
 # ── Významnost ─────────────────────────────────────────────────────
 
 
-def test_vyznamnost_podle_zdroje() -> None:
-    # FF podle impactu z payloadu, ne podle importance z klasifikátoru
-    assert is_significant(ev(1, T0, kind="scheduled", importance=1, impact="High"))
-    assert is_significant(ev(1, T0, kind="scheduled", importance=1, impact="Medium"))
-    assert not is_significant(ev(1, T0, kind="scheduled", importance=3, impact="Low"))
-    assert not is_significant(ev(1, T0, kind="scheduled", importance=3, impact="Holiday"))
-    assert not is_significant(ev(1, T0, kind="scheduled", importance=3, impact=None))
-    # Headline a broker: importance ≥ 2 mimo EARNINGS (varianta B)
+def test_vyznamnost_ze_sdilene_definice() -> None:
+    """Shluky delegují na `news_significance` (ADR-0045) — FF podle měny i strop
+    nekurátorovaných sociálních sítí už nese importance z klasifikátoru v2."""
+    assert is_significant(ev(1, T0, kind="scheduled", importance=3))  # USD High
+    assert is_significant(ev(1, T0, kind="scheduled", importance=2))  # USD Medium, ECB/BoE/BoJ
+    assert not is_significant(ev(1, T0, kind="scheduled", importance=1))  # cizí měna, Low
+    # Headline a broker: importance ≥ 2 mimo EARNINGS
     assert is_significant(ev(1, T0, importance=2))
     assert is_significant(ev(1, T0, kind="broker", importance=3, category="FED"))
     assert not is_significant(ev(1, T0, importance=1))
     assert not is_significant(ev(1, T0, importance=None))
     assert not is_significant(ev(1, T0, importance=3, category="EARNINGS"))
-    # Sociální sítě jen kurátor s importance ≥ 2
-    assert not is_significant(ev(1, T0, kind="social", importance=3))
-    assert is_significant(ev(1, T0, kind="social", importance=2, curated=True))
-    assert not is_significant(ev(1, T0, kind="social", importance=1, curated=True))
+    # Sociální sítě: kurátor s importance ≥ 2 (nekurátor má od klasifikátoru strop 1)
+    assert is_significant(ev(1, T0, kind="social", importance=2))
+    assert not is_significant(ev(1, T0, kind="social", importance=1))
 
 
 # ── Shlukování ─────────────────────────────────────────────────────

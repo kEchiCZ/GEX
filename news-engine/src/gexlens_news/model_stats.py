@@ -11,11 +11,16 @@ Dvě věci, které rozhodují o tom, jestli model neučí šum:
   jiný high-impact event, neměří reakci na tuhle zprávu.
 * **Deferred okna tvoří vlastní buckety.** Gap na open po víkendu má jinou
   dynamiku než okamžitá reakce; smíchat je znamená rozmazat obojí.
+* **Jedno měření = jeden vzorek** (#1293). Vzorky téhož bucketu se stejným
+  `ts_event` jsou tentýž pohyb trhu — typicky řádky FF jednoho releasu
+  (CPI m/m, Core CPI m/m, y/y) se shodným časem i výnosem. Počítat je zvlášť
+  by nafouklo `n` a gate by se otevřel na pseudoreplikacích.
 
 Spolehlivost se reportuje jako `n` a σ, u hit-rate navíc Wilsonova dolní mez —
 bodová úspěšnost při malém n je nerozlišitelná od mince.
 """
 
+import datetime as dt
 import statistics
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -47,6 +52,9 @@ class ReactionSample:
     # Režimové dimenze (#402); None = nezjištěno → jen do nepodmíněného agregátu
     state: str | None = None
     gex_regime: str | None = None
+    # Čas eventu — klíč sloučení souběžných vzorků téhož bucketu (#1293);
+    # None = samostatné měření
+    ts_event: dt.datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -94,52 +102,12 @@ def surprise_bucket(surprise_z: float | None) -> str:
 
 
 def aggregate_samples(samples: Sequence[ReactionSample]) -> list[BucketStats]:
-    """Rozdělení reakcí per bucket; kontaminovaná okna se zahazují.
+    """Nepodmíněné rozdělení reakcí per bucket — režim 'all' z `aggregate_by_regime`.
 
-    Nezařazené eventy (bez kategorie nebo importance) se přeskakují — dokud
-    nejsou klasifikované (N3), nepatří do žádného bucketu a míchat je do
-    `OTHER` by model naředilo.
+    Jedna cesta agregace: kontaminovaná okna a nezařazené eventy se zahazují,
+    souběžné vzorky téhož bucketu se slučují stejně jako v nočním jobu.
     """
-    grouped: dict[BucketKey, list[ReactionSample]] = {}
-    for sample in samples:
-        if sample.contaminated:
-            continue
-        if sample.category is None or sample.importance is None:
-            continue
-        key = BucketKey(
-            category=sample.category,
-            importance=sample.importance,
-            surprise_bucket=surprise_bucket(sample.surprise_z),
-            deferred=sample.deferred,
-            window_min=sample.window_min,
-            symbol=sample.symbol,
-        )
-        grouped.setdefault(key, []).append(sample)
-
-    stats: list[BucketStats] = []
-    for key, items in grouped.items():
-        returns = [item.ret_bp for item in items]
-        # Hit-rate jen z klasifikovaných eventů — u neklasifikovaných není
-        # co porovnávat a doplňovat nulou by úspěšnost uměle stlačilo
-        judged = [item for item in items if item.sentiment_dir in (-1, 1)]
-        hits = sum(
-            1
-            for item in judged
-            if (item.ret_bp > 0 and item.sentiment_dir == 1)
-            or (item.ret_bp < 0 and item.sentiment_dir == -1)
-        )
-        stats.append(
-            BucketStats(
-                key=key,
-                n=len(items),
-                ret_mean_bp=statistics.fmean(returns),
-                ret_median_bp=statistics.median(returns),
-                ret_sigma_bp=statistics.pstdev(returns) if len(returns) > 1 else 0.0,
-                hit_rate=hits / len(judged) if judged else None,
-                hit_rate_lb=wilson_lower_bound(hits, len(judged)) if judged else None,
-            )
-        )
-    return sorted(stats, key=lambda s: (s.key.category, s.key.importance, s.key.window_min))
+    return [stats for regime, stats in aggregate_by_regime(samples) if regime == "all"]
 
 
 def lookup(
@@ -172,25 +140,57 @@ _GAMMA_LABELS = {"positive": "gamma_positive", "negative": "gamma_negative"}
 
 
 class _Accumulator:
-    """Minimum, co bucket potřebuje: výnosy a počty zásahů — ne celé vzorky."""
+    """Minimum, co bucket potřebuje: výnosy a počty zásahů — ne celé vzorky.
 
-    __slots__ = ("hits", "judged", "returns")
+    Souběžné vzorky (stejný `ts_event`) jsou jedno měření (#1293): drží se jako
+    rozpracované a zapíší se, až přijde jiný čas. Směr sloučeného měření je
+    převaha směrů (remíza = neposuzuje se), výnos je z prvního vzorku — u
+    souběžných eventů je shodný (tatáž okna nad stejnými bary). Proto musí
+    stream jít vzestupně podle `ts_event` (`ModelStatsJob.iter_samples`);
+    vzorek bez času je vždy samostatné měření.
+    """
+
+    __slots__ = ("hits", "judged", "pending_dir", "pending_ret", "pending_ts", "returns")
 
     def __init__(self) -> None:
         self.returns: list[float] = []
         self.judged = 0
         self.hits = 0
+        self.pending_ts: dt.datetime | None = None
+        self.pending_ret = 0.0
+        self.pending_dir = 0
 
     def add(self, sample: ReactionSample) -> None:
-        self.returns.append(sample.ret_bp)
-        if sample.sentiment_dir in (-1, 1):
+        # Směr pro hit-rate: ±1, jinak 0 (neklasifikováno nebo neutrální)
+        vote = 1 if sample.sentiment_dir == 1 else -1 if sample.sentiment_dir == -1 else 0
+        if sample.ts_event is not None and sample.ts_event == self.pending_ts:
+            self.pending_dir += vote
+            return
+        self._flush()
+        if sample.ts_event is None:
+            self._record(sample.ret_bp, vote)
+            return
+        self.pending_ts = sample.ts_event
+        self.pending_ret = sample.ret_bp
+        self.pending_dir = vote
+
+    def _flush(self) -> None:
+        if self.pending_ts is not None:
+            self._record(self.pending_ret, self.pending_dir)
+            self.pending_ts = None
+
+    def _record(self, ret_bp: float, direction_votes: int) -> None:
+        self.returns.append(ret_bp)
+        # Hit-rate jen z klasifikovaných eventů — u neklasifikovaných není
+        # co porovnávat a doplňovat nulou by úspěšnost uměle stlačilo
+        direction = (direction_votes > 0) - (direction_votes < 0)
+        if direction != 0:
             self.judged += 1
-            if (sample.ret_bp > 0 and sample.sentiment_dir == 1) or (
-                sample.ret_bp < 0 and sample.sentiment_dir == -1
-            ):
+            if (ret_bp > 0 and direction == 1) or (ret_bp < 0 and direction == -1):
                 self.hits += 1
 
     def stats(self, key: BucketKey) -> BucketStats:
+        self._flush()
         returns = self.returns
         return BucketStats(
             key=key,
@@ -213,6 +213,10 @@ def aggregate_by_regime(samples: Iterable[ReactionSample]) -> list[tuple[str, Bu
     Jeden průchod nad streamem (#1105 bod 2): dřív se všech ~2 M oken drželo
     jako seznam dataclass objektů a pak se 5× filtrovalo do dalších seznamů —
     ~1 GB RSS news-engine po půlnoci. Teď bucket drží jen výnosy a čítače.
+
+    Souběžné vzorky téhož bucketu se slučují do jednoho měření (#1293, viz
+    `_Accumulator`) — stream musí být seřazený vzestupně podle `ts_event`,
+    jinak se sloučí jen sousední.
     """
     grouped: dict[tuple[str, BucketKey], _Accumulator] = {}
     for sample in samples:

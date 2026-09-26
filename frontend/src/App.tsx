@@ -860,12 +860,14 @@ function MainContent() {
     history.sort((a, b) => a.segment.firstIdx - b.segment.firstIdx)
     return { view, history }
   }, [timeframe, bucketMinutes, rawDay.minutesIso, rawDay.grid.minutes, projectionExtra, viewBounds, isHistoricalExpiry, historyView]) // prettier-ignore
-  // Zprávy prokliknutého upozornění projdou i filtrem „Významné" (#1290):
-  // upozornění bere makro podle FF impactu, ne podle importance
+  // Zprávy prokliknutého upozornění projdou i filtrem „Významné" (#1290, #1305):
+  // upozornění z doby před reklasifikací může nést zprávu, která dnes významná
+  // není — marker se i tak zobrazí a graf se na něj posune
   const pinnedNewsIds = useMemo(() => new Set(newsFocus?.eventIds ?? []), [newsFocus])
   // Markery = všechny zprávy zobrazeného dne a historie v ose (#1290), clustery
-  // po koších. Filtr „Významné" (#408) pouští jen importance ≥ 2 — okrajové
-  // titulky plochu nezahltí, FOMC/CPI zůstávají. Uzavřené seance (historie,
+  // po koších. Filtr „Významné" (#408, #1305) pouští jen zprávy se stupněm
+  // významnosti z API (stejná definice jako upozornění) — okrajové titulky
+  // plochu nezahltí, FOMC/CPI zůstávají. Uzavřené seance (historie,
   // proběhlá expirace) jdou z cache per den; živý push, dotažení ani „teď"
   // přestaví jen živý den (#1274).
   const newsMarkers = useMemo(() => {

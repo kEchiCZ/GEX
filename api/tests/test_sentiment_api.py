@@ -315,6 +315,10 @@ def test_news_sources_report(client: TestClient) -> None:
     assert sources["bluesky"]["significant_share"] is None
     # forexfactory event z fixture (scheduled) — zdroj v reportu
     assert "forexfactory" in sources
+    # „Významné“ = tatáž definice jako graf a upozornění (#1293): kalendář USD
+    # High je významný i bez skóre
+    assert sources["forexfactory"]["significant_share"] == pytest.approx(1.0)
+    assert sources["rss_news"]["significant_share"] == pytest.approx(1.0)
 
     # Vypnutí zdroje (#578): PATCH přepne enabled, neznámý zdroj → 404
     response = client.patch("/news/sources/bluesky", json={"enabled": False})
@@ -323,6 +327,30 @@ def test_news_sources_report(client: TestClient) -> None:
     sources = {row["source"]: row for row in payload["sources"]}
     assert sources["bluesky"]["enabled"] is False
     assert client.patch("/news/sources/neexistuje", json={"enabled": True}).status_code == 404
+
+    # Výsledky firem s importance 3 významné nejsou (sdílená `significance_tier`)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(news_events).values(
+                ts_event=NOW - dt.timedelta(hours=2),
+                ts_ingested=NOW,
+                source="rss_news",
+                kind="headline",
+                title="Acme beats earnings estimates",
+                category="EARNINGS",
+                importance=3,
+                sentiment_dir=1,
+                sentiment_score=0.4,
+                sentiment_source="rule",
+                symbols=[],
+                market_closed=False,
+                dedup_hash="earnings",
+                raw={},
+            )
+        )
+    sources = {row["source"]: row for row in client.get("/news/sources").json()["sources"]}
+    assert sources["rss_news"]["events_window"] == 2
+    assert sources["rss_news"]["significant_share"] == pytest.approx(0.5)
 
     # Uživatelské seznamy (#578): validní zápis + čtení zpět přes /settings
     put = client.put("/settings/news_bluesky_authors", json={"value": ["cnbc.com", "did:plc:x"]})
@@ -706,7 +734,33 @@ def test_news_markers_return_whole_session_without_cap(markers_client: TestClien
         "previous",
         "actual",
         "surprise_z",
+        "significance",
     }
+
+
+def test_news_markers_carry_significance_from_shared_definition(
+    markers_client: TestClient,
+) -> None:
+    """#1305: stupeň významnosti z `news_significance` — frontend pravidla nekopíruje."""
+    rows = markers_client.get("/news/markers", params=_session_params()).json()["news"]
+    cpi = next(row for row in rows if row["title"] == "USD CPI m/m")
+    assert cpi["significance"] == 0  # kalendář s importance 3 (FF USD High)
+    assert rows[0]["importance"] == 1 and rows[0]["significance"] is None
+
+
+def test_news_markers_by_ids_return_insignificant_too(markers_client: TestClient) -> None:
+    """Proklik z upozornění vrací i nevýznamné zprávy (graf je zobrazí jako připnuté)."""
+    rows = markers_client.get("/news/markers", params=_session_params()).json()["news"]
+    noise = rows[0]
+    fetched = markers_client.get("/news/markers", params={"ids": str(noise["id"])}).json()["news"]
+    assert [(row["id"], row["significance"]) for row in fetched] == [(noise["id"], None)]
+
+
+def test_news_feed_and_upcoming_carry_significance(client: TestClient) -> None:
+    feed = {row["title"]: row["significance"] for row in client.get("/news").json()["news"]}
+    assert feed == {"Fed holds rates": 2, "USD CPI m/m": 0}
+    upcoming = client.get("/news/upcoming").json()["upcoming"]
+    assert [(row["title"], row["significance"]) for row in upcoming] == [("USD CPI m/m", 0)]
 
 
 def test_news_markers_scheduled_carries_direction(markers_client: TestClient) -> None:

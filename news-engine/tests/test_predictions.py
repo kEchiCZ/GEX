@@ -118,12 +118,19 @@ def test_categories_and_predictors_are_separate() -> None:
 # ── Job nad DB ─────────────────────────────────────────────────────
 
 
-def seed(engine: Engine, *, direction: int, ret_bp: float, contaminated: bool = False) -> int:
+def seed(
+    engine: Engine,
+    *,
+    direction: int,
+    ret_bp: float,
+    contaminated: bool = False,
+    ts_event: dt.datetime = NOW - dt.timedelta(hours=2),
+) -> int:
     with engine.begin() as conn:
         key = conn.execute(
             insert(news_events).values(
-                ts_event=NOW - dt.timedelta(hours=2),
-                ts_ingested=NOW - dt.timedelta(hours=2),
+                ts_event=ts_event,
+                ts_ingested=ts_event,
                 source="rss_news",
                 kind="headline",
                 title=f"zprava-{ret_bp}-{contaminated}",
@@ -131,7 +138,7 @@ def seed(engine: Engine, *, direction: int, ret_bp: float, contaminated: bool = 
                 importance=3,
                 symbols=[],
                 market_closed=False,
-                dedup_hash=f"h-{ret_bp}-{contaminated}",
+                dedup_hash=f"h-{ret_bp}-{contaminated}-{ts_event.isoformat()}",
                 raw={},
             )
         ).inserted_primary_key
@@ -223,6 +230,28 @@ def test_weights_land_in_db_and_map_defaults_to_neutral(tmp_path: Path) -> None:
     assert ("GEOPOLITICS", "rule") not in weights
     assert event_weight(weights, "GEOPOLITICS", "rule") == 1.0
     assert event_weight(weights, "FED", None) == 1.0  # event bez zdroje skóre
+
+
+def test_klouzave_okno_vah_podle_casu_zpravy(tmp_path: Path) -> None:
+    """#1293: reklasifikace vyhodnotí jednorázově i staré predikce (computed_at =
+    teď). Okno vah se řídí časem zprávy — staré zprávy do vah nevstoupí."""
+    engine, job = make(tmp_path)
+    old = NOW - dt.timedelta(days=200)
+    for i in range(MIN_SAMPLES_FOR_WEIGHT):
+        seed(engine, direction=1, ret_bp=float(i + 1), ts_event=old)
+    job.run(NOW)  # outcomes starých zpráv vznikly teď
+    with engine.connect() as conn:
+        assert len(conn.execute(select(news_prediction_outcomes)).fetchall()) == (
+            MIN_SAMPLES_FOR_WEIGHT
+        )
+        assert conn.execute(select(news_weights)).fetchall() == []
+
+    for i in range(MIN_SAMPLES_FOR_WEIGHT):
+        seed(engine, direction=1, ret_bp=float(i + 1), ts_event=NOW - dt.timedelta(days=10))
+    job.run(NOW)
+    with engine.connect() as conn:
+        rows = conn.execute(select(news_weights)).fetchall()
+    assert [(row.category, row.n) for row in rows] == [("FED", MIN_SAMPLES_FOR_WEIGHT)]
 
 
 def test_weight_map_keeps_predictors_apart(tmp_path: Path) -> None:

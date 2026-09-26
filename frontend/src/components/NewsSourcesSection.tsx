@@ -229,8 +229,9 @@ export function NewsSourcesSection() {
             </th>
             <th
               title={
-                'Podíl událostí s důležitostí ≥ 2 a skóre.\n' +
-                'Nízký podíl = zdroj sype hlavně balast.'
+                'Podíl významných zpráv zdroje.\n' +
+                '• stejná definice jako filtr grafu „Významné“ a upozornění\n' +
+                '• nízký podíl = zdroj sype hlavně balast'
               }
             >
               Významné

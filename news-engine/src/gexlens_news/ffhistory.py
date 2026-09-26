@@ -39,8 +39,8 @@ from sqlalchemy import select, update
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.storage.sentiment import news_events
-from gexlens_news.classifier import classify_category
-from gexlens_news.collectors.forexfactory import _IMPACT, _SYMBOLS_BY_COUNTRY, parse_number
+from gexlens_news.classifier import classify_category, scheduled_importance
+from gexlens_news.collectors.forexfactory import _SYMBOLS_BY_COUNTRY, parse_number
 from gexlens_news.http import read_limited_cffi
 from gexlens_news.model import NewsEvent, normalize_title
 from gexlens_news.store import NewsWriter
@@ -118,7 +118,9 @@ def normalize_entry(entry: dict[str, Any], *, fetched_at: dt.datetime) -> NewsEv
         return None
     ts_event = dt.datetime.fromtimestamp(float(dateline), tz=dt.UTC)
     currency = str(entry.get("currency") or "").upper()
-    importance = _IMPACT.get(str(entry.get("impactName") or "").lower(), 1)
+    title = f"{currency} {name}" if currency else name
+    # FF impact podle měny (#1293) — tatáž funkce jako klasifikační job
+    importance = scheduled_importance(title, str(entry.get("impactName") or ""))
     return NewsEvent(
         ts_event=ts_event,
         ts_ingested=fetched_at,
@@ -127,7 +129,7 @@ def normalize_entry(entry: dict[str, Any], *, fetched_at: dt.datetime) -> NewsEv
         kind="scheduled",
         category=classify_category(name),
         importance=importance,
-        title=f"{currency} {name}" if currency else name,
+        title=title,
         summary=None,
         symbols=list(_SYMBOLS_BY_COUNTRY.get(currency, [])),
         forecast=parse_number(entry.get("forecast")),

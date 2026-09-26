@@ -161,9 +161,12 @@ export const SIGNAL_MODES: readonly SignalMode[] = ['off', 'news', 'combined']
 export type UnderlayPlane = 'off' | 'gex' | 'charm' | 'vanna'
 export const UNDERLAY_PLANES: readonly UnderlayPlane[] = ['off', 'gex', 'charm', 'vanna']
 
-/** Filtr news markerů v grafu (#408): všechny, nebo jen významné (importance ≥ 2). */
+/** Filtr news markerů v grafu (#408, #1305): všechny, nebo jen významné — stejná
+definice jako upozornění (`significance` z API). */
 export type NewsMarkerFilter = 'all' | 'important'
 export const NEWS_MARKER_FILTERS: readonly NewsMarkerFilter[] = ['all', 'important']
+/** Klíč persistence filtru (#1305: nový výchozí stav „Významné“ pod novým klíčem). */
+export const NEWS_MARKER_FILTER_KEY = 'newsMarkerFilter.v2'
 
 /** Zdroj OI pro heatmapu a Dyn GEX (#232 fáze 2): měřený ranní archiv, nebo
 flow-adjusted odhad OI_est = OI + α·net (ADR-0011). Default VŽDY měřené —
@@ -586,9 +589,11 @@ export function AppStateProvider({
     'gex',
     oneOf(UNDERLAY_PLANES),
   )
+  // Výchozí „Významné“ (#1305): 1 000–1 250 markerů denně při „Vše“ zahltí graf.
+  // Nový klíč `.v2` — jinak by dřív uložená volba „Vše“ nový výchozí stav přebila
   const [newsMarkerFilter, setNewsMarkerFilter] = usePersistentState<NewsMarkerFilter>(
-    'newsMarkerFilter',
-    'all',
+    NEWS_MARKER_FILTER_KEY,
+    'important',
     oneOf(NEWS_MARKER_FILTERS),
   )
   // Rozsah Forward GEX projekce (#572): default celý týden — přepínač filtruje

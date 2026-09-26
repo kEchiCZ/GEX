@@ -9,6 +9,10 @@ export interface NewsRow {
   kind: 'scheduled' | 'headline' | 'social' | 'broker'
   category: string | null
   importance: number | null
+  /** Stupeň významnosti z API (#1305, ADR-0045) — stejná definice jako upozornění:
+  0 kalendář importance 3, 1 kalendář 2, 2 zpráva 3, 3 zpráva 2; null = nevýznamná.
+  Frontend pravidla nekopíruje; chybí u syrového WS pushe před klasifikací. */
+  significance?: number | null
   /** Surový záznam zdroje (ForexFactory) — nese `impact` (High/Medium/Low).
   `importance` na to není spolehlivý proxy: hodnota 3 se v datech objevuje
   i u Low událostí (#830). */
@@ -52,6 +56,7 @@ export type ChartNewsRow = Pick<
   | 'kind'
   | 'category'
   | 'importance'
+  | 'significance'
   | 'title'
   | 'summary'
   | 'sentiment_dir'

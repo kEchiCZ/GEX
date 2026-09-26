@@ -178,6 +178,26 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-26 — „významná zpráva“ měla dvě definice a klasifikátor s lidmi nesouhlasil (#1293, #1305): regex nad slovy kdekoli.**
+  Předobchodní souhrn vypsal mezi „zásadními“ článek o dani z mezd lékařky a tarifní refundaci drobné firmy;
+  měření na 400 zprávách (dva hodnotitelé, κ 0,81) dalo mezi importance a relevancí κ ≈ 0,05 a importance 3
+  zásadní u 9 % zpráv. Příčiny: spouštěč stačil kdekoli v titulku i shrnutí (zmínka ≠ předmět), falešné shody
+  (`opec` v „alopecia“, `cpi` v doméně, Colin Powell), zdroj se nerozlišoval (Yahoo i CNBC = `rss_news`)
+  a kalendář dostával importance regexem (High PPI → 1), takže upozornění četlo `raw.impact` a graf
+  `importance` — dvě definice téhož. Odhalilo to až ruční hodnocení vzorku, testy regexy jen potvrzovaly.
+  → Pravidlo, na kterém stojí alert, filtr nebo model, **změřit proti lidskému hodnocení** (vzorek se
+  shodou hodnotitelů, holdout z jiného týdne) a držet ho **jednou čistou funkcí** volanou všude
+  (`compute/news_significance.py`, ADR-0045); golden test nese i vzory chyb, ne jen šťastné případy.
+  Při reklasifikaci pozor na vedlejší efekt: vlastní pokrytí téže události by zkontaminovalo reakci
+  (proto K1 — jen jiná kategorie).
+  Recenze pak našla tři pasti za samotnou klasifikací: (1) řádky FF jednoho releasu (CPI m/m, Core, y/y)
+  mají tentýž čas i výnos a model je počítal jako nezávislé vzorky — gate se otevíral na pseudoreplikacích
+  (stejně deferred zprávy jedné uzavírky); (2) klouzavé okno vah filtrovalo `computed_at`, takže hromadné
+  zpětné vyhodnocení po reklasifikaci by 90 dní vážilo historii; (3) regex `\bmay\b` jako názor chytal měsíc
+  May, `\d+ … stocks` cenovou úroveň „$100 as stocks“, typografický apostrof míjel „here's“.
+  → **n = počet nezávislých měření** (slučovat vzorky se stejným měřeným oknem), okna kalibrace podle času
+  události, ne času zápisu; regexy na slova s více významy testovat i na protipříkladech.
+
 - **2026-09-26 — „konečné“ rozhodnutí hypotézy a „pevná“ kritéria platila jen v textu ADR (#1296): přepočet od nuly a sdílené konstanty.**
   `release_hypotheses` se po každé změně počítala celá znovu a CLI backfill přeměřoval i živé releasy — oprava
   dat by zpětně překlopila „ověřeno“ na „ověřuje se“; M1 bral rodiny a baseline ze sdílených konstant upozornění

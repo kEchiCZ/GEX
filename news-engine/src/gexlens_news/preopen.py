@@ -7,12 +7,13 @@ připravit na nedělní / pondělní open:
 * **hlavní souhrn 4 h před otevřením Globexu** (v běžném týdnu 20:00 Praha),
 * **aktualizace 15 min před otevřením**, jen když od hlavního souhrnu vyšla
   nová významná zpráva,
-* ES a NQ zvlášť: **zásadní** zprávy (`is_key`, upřesnění uživatele 25. 9.)
-  s klasifikovaným směrem, souhrnný sklon 🟢/🔴/⚪ jen z nich a klíčové úrovně
-  z poslední seance; ostatní významné (varianta B, `clusters.is_significant`)
-  a šum jen počtem; **bez pravděpodobnosti** (#1287),
-* nic, když za zavřený trh nevyšla žádná zásadní zpráva (ani když varianta B
-  něco splní — simulace v ADR-0043); denní pauza (1 h) se nehlásí.
+* ES a NQ zvlášť: **zásadní** zprávy (`is_key` = kalendář nebo zpráva
+  s importance 3, rozhodnutí uživatele 26. 9., ADR-0045) s klasifikovaným
+  směrem, souhrnný sklon 🟢/🔴/⚪ jen z nich a klíčové úrovně z poslední seance;
+  ostatní významné (`clusters.is_significant`) a šum jen počtem;
+  **bez pravděpodobnosti** (#1287),
+* nic, když za zavřený trh nevyšla žádná zásadní zpráva (ani když je tam
+  významná — simulace v ADR-0043); denní pauza (1 h) se nehlásí.
 
 Časy se odvozují od otevření Globexu (`settle.session_bounds` = 17:00 CT,
 `marketclock.is_market_closed` = rozvrh), ne od pevných hodin — DST v Chicagu
@@ -32,12 +33,12 @@ from dataclasses import dataclass, field
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from gexlens_engine.compute import news_significance
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_news.clusters import (
     MAX_LISTED,
     SCHEDULED_KIND,
-    SOCIAL_KIND,
     ClusterEvent,
     clean_title,
     is_significant,
@@ -63,13 +64,6 @@ CLOSURE_LOOKBACK = dt.timedelta(days=5)
 #: Telegram ořízne zprávu na 900 znaků i s hlavičkou „📰 GEXLens · ES“ —
 #: text se proto vejde pod tuto mez ubráním odrážek, ne useknutím konce
 MESSAGE_BUDGET = 860
-
-#: Zásadní zpráva (upřesnění uživatele 25. 9., #1291): kategorie pravidlového
-#: i LLM klasifikátoru (`NEWS_CATEGORIES`) pro Fed, makro a geopolitiku —
-#: obchod a cla klasifikátor řadí do GEOPOLITICS (regex `tariff|sanction`),
-#: samostatnou kategorii nemají
-KEY_CATEGORIES = frozenset({"FED", "MACRO_INFLATION", "MACRO_LABOR", "MACRO_GROWTH", "GEOPOLITICS"})
-KEY_MIN_IMPORTANCE = 3
 
 UP_GLYPH = "🟢"
 DOWN_GLYPH = "🔴"
@@ -206,18 +200,13 @@ class Bias:
 def is_key(event: ClusterEvent) -> bool:
     """Zásadní zpráva — do výčtu a sklonu předobchodního souhrnu (podmnožina významných).
 
-    Upřesnění uživatele 25. 9. (#1291): víkend nese ~15–50 „významných“
-    zpráv podle varianty B a mezi nimi šum, který regexový klasifikátor
-    povýšil. Zásadní je kalendář FF High/Medium, kurátor na sociálních sítích
-    (obojí jako ve variantě B) a headline/broker v kategorii Fed, makro nebo
-    geopolitika (obchod a cla) s importance 3. Intradenní shluky (`clusters`)
-    se tím neřídí.
+    Kalendář (FF USD High/Medium, rozhodnutí ECB/BoE/BoJ) nebo zpráva
+    s importance 3 (událost podle klasifikátoru v2) — rozhodnutí uživatele
+    26. 9. 2026 (#1293, ADR-0045). Výčet kategorií odpadl: ropa (ENERGY) je
+    mezi zásadními a kurátor na sociálních sítích je zásadní jen s importance 3.
+    Intradenní shluky (`clusters`) se tím neřídí.
     """
-    if not is_significant(event):
-        return False
-    if event.kind in (SCHEDULED_KIND, SOCIAL_KIND):
-        return True
-    return event.category in KEY_CATEGORIES and (event.importance or 0) >= KEY_MIN_IMPORTANCE
+    return news_significance.is_key(event.kind, event.importance, event.category)
 
 
 def direction_glyph(direction: int | None) -> str:
@@ -360,7 +349,7 @@ def build_preopen(
     ostatní významné a šum jsou jen počty. Hlavní souhrn vyjmenuje všechny
     zásadní, aktualizace jen nové. Když hlavní souhrn nic neohlásil,
     aktualizace s novou zprávou vypadá jako souhrn. Bez zásadní zprávy se nic
-    neposílá, i když varianta B něco splní: výčet by byl prázdný a zbyly by
+    neposílá, i když je tam významná zpráva: výčet by byl prázdný a zbyly by
     jen počty toho, co uživatel označil za šum (rozhodnutí podle simulace,
     ADR-0043 bod 5). Tatáž story z více zdrojů se počítá i vypisuje jednou;
     opakování už ohlášené story (i s dřívějším `ts_event`) za novou nevydává.

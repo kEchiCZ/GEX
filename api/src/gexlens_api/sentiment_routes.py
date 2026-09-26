@@ -11,6 +11,7 @@ stabilní kontrakt a N7/N8 mění jen data, ne tvar API.
 
 import datetime as dt
 import logging
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from statistics import median
@@ -31,6 +32,7 @@ from gexlens_api.news_explain import (
     ExplainOptions,
     explain_event,
 )
+from gexlens_engine.compute.news_significance import significance_tier
 from gexlens_engine.compute.sentwaves import (
     DailyClose,
     DailyZ,
@@ -263,6 +265,43 @@ def _attach_scheduled_directions(rows: list[dict[str, Any]]) -> None:
         )
 
 
+def _attach_significance(rows: list[dict[str, Any]]) -> None:
+    """Stupeň významnosti zprávy (#1305, ADR-0045): 0–3, None = nevýznamná.
+
+    Tatáž čistá funkce jako upozornění a předobchodní souhrn
+    (`news_significance`) — graf podle ní filtruje „Významné“ a řadí dialog,
+    frontend pravidla nekopíruje. Počítá se při čtení: reklasifikace i ruční
+    korekce se projeví hned, bez backfillu.
+    """
+    for row in rows:
+        kind, importance, category = row.get("kind"), row.get("importance"), row.get("category")
+        row["significance"] = significance_tier(
+            kind if isinstance(kind, str) else None,
+            importance if isinstance(importance, int) else None,
+            category if isinstance(category, str) else None,
+        )
+
+
+@dataclass
+class _SourceReality:
+    """Součty jednoho zdroje za okno auditu (`/news/sources`)."""
+
+    events: int = 0
+    today: int = 0
+    significant: int = 0
+    last_ts: dt.datetime | None = None
+
+    def add(
+        self, *, events: int, today: int, last_ts: dt.datetime | None, significant: bool
+    ) -> None:
+        self.events += events
+        self.today += today
+        if significant:
+            self.significant += events
+        if last_ts is not None and (self.last_ts is None or last_ts > self.last_ts):
+            self.last_ts = last_ts
+
+
 def _empty_table(engine: Engine, table: Table, **filters: Any) -> list[dict[str, Any]]:
     """Dotaz nad tabulkou pozdějšího milestonu — dnes vrací prázdno, ale tvar drží."""
     stmt = select(table)
@@ -340,6 +379,7 @@ def build_sentiment_router(
                 row["reaction_contaminated"] = event_id in contaminated
         _attach_topic_values(engine_factory(), rows)
         _attach_scheduled_directions(rows)
+        _attach_significance(rows)
         return {"news": rows}
 
     @router.get("/news/markers")
@@ -354,7 +394,8 @@ def build_sentiment_router(
         takže hranice sousedních seancí se nepřekrývají. Vrací VŠECHNY zprávy
         rozsahu; strop by tiše uřízl čas (#1290), proto je omezená jen délka
         rozsahu (`MARKERS_MAX_RANGE`). `ids` (≤ 100) slouží prokliku
-        z upozornění. Řazení vzestupně podle času.
+        z upozornění. Řazení vzestupně podle času. Každý řádek nese
+        `significance` (stupeň 0–3, None = nevýznamná, ADR-0045).
 
         Sloupce jsou jen ty, které čte marker a jeho dialog; feed `/news`
         s reakcemi a indexem tématu zůstává pro obrazovku News.
@@ -379,6 +420,9 @@ def build_sentiment_router(
             stmt = stmt.where(news_events.c.ts_event >= start, news_events.c.ts_event < end)
         rows = _rows(engine_factory(), stmt)
         _attach_scheduled_directions(rows)
+        # Stupeň významnosti i u `ids`: proklik z upozornění vrací i nevýznamné
+        # zprávy a graf je zobrazí jako připnuté (#1305)
+        _attach_significance(rows)
         # Řádky jsou po `_rows` čisté JSON typy — přímý render místo
         # `jsonable_encoder`, který u seance (~5 tis. řádků) stál ~4× víc
         return JSONResponse({"news": rows})
@@ -388,10 +432,12 @@ def build_sentiment_router(
         """Audit pokrytí zdrojů (#578 B): registr + realita za okno.
 
         Per zdroj: tier, čekaný denní objem, dnešní počet, denní průměr okna,
-        podíl významných (importance ≥ 2 se skóre) a čas poslední události.
-        Latence vůči prvnímu jinému zdroji téže zprávy tu ZATÍM není — dedup
-        duplicitní kopie zahazuje, páry nejsou uložené (poctivé follow-up,
-        ne tichý dojem).
+        podíl významných a čas poslední události. „Významná“ = stejná čistá
+        funkce jako filtr grafu a upozornění (`news_significance`, #1293) —
+        SQL seskupí podle (zdroj, druh, kategorie, importance) a stupeň se
+        spočte tady. Latence vůči prvnímu jinému zdroji téže zprávy tu ZATÍM
+        není — dedup duplicitní kopie zahazuje, páry nejsou uložené (poctivé
+        follow-up, ne tichý dojem).
         """
         engine = engine_factory()
         now = dt.datetime.now(dt.UTC)
@@ -400,25 +446,32 @@ def build_sentiment_router(
         stmt = (
             select(
                 news_events.c.source,
+                news_events.c.kind,
+                news_events.c.category,
+                news_events.c.importance,
                 func.count().label("events"),
                 func.max(news_events.c.ts_event).label("last_ts"),
-                func.sum(
-                    case(
-                        (
-                            (news_events.c.importance >= 2)
-                            & news_events.c.sentiment_score.is_not(None),
-                            1,
-                        ),
-                        else_=0,
-                    )
-                ).label("significant"),
                 func.sum(case((news_events.c.ts_event >= today_start, 1), else_=0)).label("today"),
             )
             .where(news_events.c.ts_event >= since)
-            .group_by(news_events.c.source)
+            .group_by(
+                news_events.c.source,
+                news_events.c.kind,
+                news_events.c.category,
+                news_events.c.importance,
+            )
         )
+        reality: dict[str, _SourceReality] = {}
         with engine.connect() as conn:
-            reality = {row.source: row for row in conn.execute(stmt)}
+            for row in conn.execute(stmt):
+                item = reality.setdefault(row.source, _SourceReality())
+                item.add(
+                    events=int(row.events),
+                    today=int(row.today),
+                    last_ts=row.last_ts,
+                    significant=significance_tier(row.kind, row.importance, row.category)
+                    is not None,
+                )
             registry = [dict(row._mapping) for row in conn.execute(select(news_sources))]
         known = {entry["source"] for entry in registry}
         # Zdroje mimo registr se hlásí taky — registr má popisovat realitu
@@ -435,19 +488,21 @@ def build_sentiment_router(
                 )
         report = []
         for entry in registry:
-            row = reality.get(entry["source"])
-            events = int(row.events) if row else 0
+            source_row = reality.get(entry["source"])
+            events = source_row.events if source_row else 0
             report.append(
                 {
                     **entry,
                     "events_window": events,
-                    "events_today": int(row.today) if row else 0,
+                    "events_today": source_row.today if source_row else 0,
                     "daily_avg": round(events / days, 1),
                     "significant_share": (
-                        round(int(row.significant) / events, 3) if row and events else None
+                        round(source_row.significant / events, 3) if source_row and events else None
                     ),
                     "last_event_ts": (
-                        row.last_ts.isoformat() if row and row.last_ts is not None else None
+                        source_row.last_ts.isoformat()
+                        if source_row and source_row.last_ts is not None
+                        else None
                     ),
                 }
             )
@@ -487,6 +542,7 @@ def build_sentiment_router(
         )
         rows = _rows(engine_factory(), stmt)
         _attach_series_conventions(rows)
+        _attach_significance(rows)
         return {"upcoming": rows}
 
     @router.get("/news/reactions/typical")
