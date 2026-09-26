@@ -29,11 +29,18 @@ Co se měří (ES a NQ zvlášť, každý horizont 5/15/60 min a 1/2/3/5/10 sean
 
 Kritéria stanovená předem (před pohledem na výsledky):
 
-* **prošlo**: BH q ≤ 0,10 v rodině, směr IS = směr celku, OOS ve směru IS s jednostranným
-  p ≤ 0,10;
-* **kandidát**: q ≤ 0,10, OOS ve stejném směru, ale nepotvrzený (p > 0,10);
-* **nestabilní**: q ≤ 0,10, ale IS nebo OOS opačný směr;
-* **bez efektu**: q > 0,10; **nedostatek dat**: méně než 5 releasů v některé buňce.
+* **prošlo**: BH q ≤ 0,10 v rodině počítané **jen z IS p-hodnot** (`q_is`), OOS ve směru IS
+  s jednostranným p ≤ 0,10;
+* **kandidát**: q_is ≤ 0,10, OOS ve stejném směru, ale nepotvrzený (p > 0,10);
+* **nestabilní**: q_is ≤ 0,10, ale OOS opačný směr;
+* **bez efektu**: q_is > 0,10; **nedostatek dat**: méně než 5 releasů v některé buňce.
+
+Metodická korekce 26. 9. 2026 (před fází 3, ne ladění kritérií): první verze rozhodovala
+podle q z **celého** vzorku a vyžadovala „směr IS = směr celku“ — celý vzorek ale obsahuje
+OOS, takže OOS se použil dvakrát (k objevu i k ověření). Objev teď stojí jen na IS
+(Benjamini-Hochberg přes IS p-hodnoty rodiny), OOS slouží jen k jednostrannému ověření ve
+směru IS. q z celého vzorku zůstává v reportu jen informativně. Výjimka: stabilita pořadí
+velikosti řad je sama srovnáním IS → OOS (nemá vlastní IS fázi) a rozhoduje u ní q rodiny.
 
 Spuštění (z hostitele; URL ani heslo se nevypisují):
     python scripts/measure_release_predictability.py --out-dir <scratchpad>/epic1296 \\
@@ -977,10 +984,18 @@ def verdicts(tests: pd.DataFrame) -> pd.DataFrame:
     def verdict(row: pd.Series) -> str:
         if not row["tested"] or pd.isna(row.get("p")):
             return "nedostatek dat"
-        if row["q"] > Q_PASS:
+        if row.get("predictor") == "size_rank_stability":
+            # Test je sám srovnáním IS → OOS (pořadí mediánů) — vlastní IS fázi nemá
+            if row["q"] > Q_PASS:
+                return "bez efektu"
+            oos_ok = not pd.isna(row["oos_p"]) and row["oos_p"] <= OOS_ALPHA
+            return "prošlo" if oos_ok else "kandidát"
+        # Objev jen z IS (q_is), směr z IS; OOS jen jednostranné ověření ve směru IS
+        if pd.isna(row.get("q_is")):
+            return "nedostatek dat"
+        if row["q_is"] > Q_PASS:
             return "bez efektu"
-        full, is_dir, oos_dir = _dir(row["effect"]), _dir(row["is_effect"]), _dir(row["oos_effect"])
-        if is_dir != full or oos_dir != is_dir:
+        if _dir(row["oos_effect"]) != _dir(row["is_effect"]):
             return "nestabilní"
         if not pd.isna(row["oos_p"]) and row["oos_p"] <= OOS_ALPHA:
             return "prošlo"
@@ -1199,9 +1214,10 @@ def write_report(
         f"{int((tested['q'] <= Q_PASS).sum())}, q ≤ 0,05: {int((tested['q'] <= 0.05).sum())}."
     )
     add(
-        f"- **Prošlo** (q ≤ 0,10 + IS i OOS stejný směr + OOS p ≤ 0,10): {len(passed)}; "
+        f"- **Prošlo** (IS q ≤ 0,10 + OOS ve směru IS s p ≤ 0,10): {len(passed)}; "
         f"kandidátů (OOS stejný směr, nepotvrzený): {len(candidates)}; nestabilních: "
-        f"{len(unstable)}."
+        f"{len(unstable)}. Objevů jen z IS (q_is ≤ 0,10): "
+        f"{int((tested['q_is'] <= Q_PASS).sum())}."
     )
     add(
         f"- Testy velikosti (vlastní rodina): {len(vol_tested)}, q ≤ 0,10: "
@@ -1211,14 +1227,19 @@ def write_report(
     add("Kritéria byla stanovena před pohledem na výsledky (docstring skriptu):")
     add("")
     add(
-        "- **prošlo**: BH q ≤ 0,10 v celé rodině směrových testů, směr IS = směr celku, OOS ve "
-        "směru IS s jednostranným p ≤ 0,10;"
+        "- **prošlo**: BH q ≤ 0,10 v celé rodině směrových testů počítané jen z IS p-hodnot "
+        "(q_is), OOS ve směru IS s jednostranným p ≤ 0,10;"
     )
-    add("- **kandidát**: q ≤ 0,10, OOS ve stejném směru, ale nepotvrzený;")
-    add("- **nestabilní**: q ≤ 0,10, ale IS nebo OOS opačně;")
+    add("- **kandidát**: q_is ≤ 0,10, OOS ve stejném směru, ale nepotvrzený;")
+    add("- **nestabilní**: q_is ≤ 0,10, ale OOS opačně;")
     add(
-        "- **bez efektu**: q > 0,10; **nedostatek dat**: < 5 releasů v některé buňce (netestuje "
-        "se, do BH se nepočítá)."
+        "- **bez efektu**: q_is > 0,10; **nedostatek dat**: < 5 releasů v některé buňce "
+        "(netestuje se, do BH se nepočítá)."
+    )
+    add(
+        "- Metodická korekce 26. 9. 2026 (ne ladění kritérií): první verze rozhodovala podle q "
+        "z celého vzorku, který obsahuje OOS — OOS se tak použil k objevu i k ověření. q z celého "
+        "vzorku je dál v tabulkách jen informativně."
     )
     add("")
     add("### Signály, které prošly")
@@ -1232,7 +1253,7 @@ def write_report(
                     "horizont",
                     "odhad (celý vzorek)",
                     "95% interval",
-                    "p / q",
+                    "IS p / q_is",
                     "IS → OOS",
                 ],
                 (
@@ -1242,7 +1263,7 @@ def write_report(
                         r["horizon"],
                         estimate_text(r),
                         interval_text(r),
-                        f"{pval(r['p'])} / {pval(r['q'])}",
+                        f"{pval(r['is_p'])} / {pval(r['q_is'])}",
                         oos_text(r),
                     ]
                     for _, r in passed.sort_values(
@@ -1254,13 +1275,13 @@ def write_report(
     else:
         add("Žádný směrový signál kritéria nesplnil.")
     add("")
-    add("### Kandidáti a nestabilní (q ≤ 0,10, ale OOS nepotvrdil)")
+    add("### Kandidáti a nestabilní (IS q ≤ 0,10, ale OOS nepotvrdil)")
     add("")
     rest = pd.concat([candidates, unstable])
     if len(rest):
         add(
             table(
-                ["verdikt", "signál", "symbol", "horizont", "odhad", "p / q", "IS → OOS"],
+                ["verdikt", "signál", "symbol", "horizont", "odhad", "IS p / q_is", "IS → OOS"],
                 (
                     [
                         r["verdict"],
@@ -1268,7 +1289,7 @@ def write_report(
                         r["symbol"],
                         r["horizon"],
                         estimate_text(r),
-                        f"{pval(r['p'])} / {pval(r['q'])}",
+                        f"{pval(r['is_p'])} / {pval(r['q_is'])}",
                         oos_text(r),
                     ]
                     for _, r in rest.sort_values(
@@ -1993,7 +2014,7 @@ def write_report(
         add("")
         add(
             table(
-                ["signál", "symbol", "h", "IS p / q", "IS → OOS", "celý vzorek verdikt"],
+                ["signál", "symbol", "h", "IS p / q", "IS → OOS", "verdikt"],
                 (
                     [
                         describe_signal(r),
@@ -2323,7 +2344,8 @@ def main(args: argparse.Namespace) -> None:
     tested = tests[tests["tested"].fillna(False).astype(bool)]
     print(
         f"Směrových testů {len(tested)}, p<0,05 {int((tested['p'] < 0.05).sum())}, "
-        f"q≤0,10 {int((tested['q'] <= Q_PASS).sum())}, prošlo "
+        f"q≤0,10 {int((tested['q'] <= Q_PASS).sum())}, "
+        f"q_is≤0,10 {int((tested['q_is'] <= Q_PASS).sum())}, prošlo "
         f"{int((tested['verdict'] == 'prošlo').sum())}"
     )
     print(tested["verdict"].value_counts().to_dict())

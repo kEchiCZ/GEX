@@ -661,6 +661,74 @@ track_record = Table(
 )
 
 
+# ── Ohlášené releasy (#1296, ADR-0044) ──────────────────────────────
+# Naměřená fakta za shluk releasu × instrument — jediný zdroj velikosti pohybu
+# pro upozornění před releasem i živé vyhodnocení hypotéz. Píše jen
+# ReleaseMovesJob (upsert, idempotentní; historii dopočítá CLI backfill).
+release_moves = Table(
+    "release_moves",
+    sentiment_metadata,
+    # floor minuty releasu (UTC)
+    Column("cluster_ts", DateTime(timezone=True), primary_key=True),
+    Column("symbol", String(16), primary_key=True),
+    Column("family", String(16), nullable=False),
+    # Headline řada shluku (titulek bez „USD “) — H1 platí jen pro jádro inflace
+    Column("headline", String(64), nullable=False),
+    Column("headline_event_id", Integer, ForeignKey("news_events.id"), nullable=False),
+    # sign(actual − forecast) × polarita řady; NULL = actual/forecast zatím chybí
+    Column("surprise_sign", SmallInteger, nullable=True),
+    # medián denního rozsahu 20 seancí před seancí releasu / close minuty před ním (bp)
+    Column("vol_ref_bp", Float, nullable=True),
+    Column("exc_15m_bp", Float, nullable=True),
+    Column("ret_15m_bp", Float, nullable=True),
+    Column("ret_60m_bp", Float, nullable=True),
+    # medián 15min výchylek ±30 min stejné denní doby za 20 seancí (jen pro M1)
+    Column("tod_med_15m_bp", Float, nullable=True),
+    Column("measured_at", DateTime(timezone=True), nullable=False),
+)
+
+# Každý odhad velikosti v upozornění před releasem (etapa T60/T15) — zároveň
+# dedup etap přes restart: řádek se zapisuje PŘED publikací. `sent = false`
+# = etapa přeskočená (po pozdním startu odejde jen pozdější etapa).
+release_previews = Table(
+    "release_previews",
+    sentiment_metadata,
+    Column("cluster_ts", DateTime(timezone=True), primary_key=True),
+    Column("symbol", String(16), primary_key=True),
+    Column("stage", String(8), primary_key=True),
+    Column("family", String(16), nullable=False),
+    Column("sent", Boolean, nullable=False),
+    Column("n", Integer, nullable=False),
+    Column("expected_p50_bp", Float, nullable=True),
+    Column("expected_p75_bp", Float, nullable=True),
+    Column("vol_now_bp", Float, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+# Stav předem registrovaných hypotéz (ADR-0044) — přepis po každé změně
+# živých měření; vyhodnocený úsek (releasy do posledního kontrolního bodu,
+# stav, decided_at_n) se přebírá z předchozího řádku, takže tabulka NENÍ
+# plně derivovaná a ručně se nemaže. Definice a kritéria jsou v kódu
+# (`gexlens_news.release_hypotheses`) a v ADR, v DB NEJSOU: dodatečně je
+# měnit nejde.
+release_hypotheses = Table(
+    "release_hypotheses",
+    sentiment_metadata,
+    Column("hypothesis", String(8), primary_key=True),
+    Column("symbol", String(16), primary_key=True),
+    Column("n", Integer, nullable=False),
+    Column("hits", Integer, nullable=False),
+    Column("wilson_lb", Float, nullable=True),
+    Column("wilson_ub", Float, nullable=True),
+    # testing | verified | rejected
+    Column("status", String(12), nullable=False),
+    Column("decided_at_n", Integer, nullable=True),
+    # [{cluster_ts, family, hit, value_bp}] chronologicky — pro UI
+    Column("outcomes", JSON, nullable=False, default=list),
+    Column("computed_at", DateTime(timezone=True), nullable=False),
+)
+
+
 def ensure_sentiment_schema(engine: Engine) -> None:
     """Založí všechny tabulky SentimentLensu (idempotentní).
 

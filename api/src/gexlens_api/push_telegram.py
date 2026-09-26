@@ -206,6 +206,22 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
         # by ji výchozí tiché hodiny (23:00–06:00) nikdy nepustily
         quiet_exempt=True,
     ),
+    # Releasy padají do 13:30–20:00 Praha — výjimka z tichých hodin netřeba
+    PushTopic(
+        "release_preview",
+        "market",
+        "news",
+        ("release_preview",),
+        "Očekávaný pohyb před releasem",
+        "60 a 15 min před CPI, NFP, FOMC, PPI, PCE, Retail Sales a ISM Services:"
+        " typická výchylka ES a NQ a úrovně v jejím dosahu.",
+        (
+            "Medián–p75 výchylky za 15 min z minulých releasů, přepočtený na dnešní volatilitu",
+            "Call/put zeď, flip a těžiště v dosahu p75",
+            "Směr jen u jádra inflace: předem registrovaná hypotéza H1 se stavem ověřování",
+            "ES a NQ zvlášť",
+        ),
+    ),
     PushTopic(
         "vol_concentration",
         "market",

@@ -52,6 +52,7 @@ from gexlens_engine.storage.sentiment import (
     news_sources,
     reaction_contaminated,
     reaction_ret,
+    release_hypotheses,
     review_queue,
     sentiment_daily,
     sentiment_episodes,
@@ -1190,6 +1191,69 @@ def build_sentiment_router(
     def stats_trackrecord(strategy: str | None = None) -> dict[str, object]:
         """Equity křivky — N8 (#298)."""
         return {"track_record": _empty_table(engine_factory(), track_record, strategy=strategy)}
+
+    @router.get("/stats/releases/hypotheses")
+    def stats_release_hypotheses() -> dict[str, object]:
+        """Předem registrované hypotézy o reakci na releasy a jejich živý stav (#1296, ADR-0044).
+
+        Stav počítá news-engine (`release_hypotheses`, přepis po každém měření,
+        vyhodnocený úsek zmrazený); API jen čte a přidává definice z registru
+        v kódu. Bez řádku
+        (čerstvá DB, žádný živý release) = „ověřuje se“ s n = 0 — není to chyba.
+        """
+        from gexlens_news.release_hypotheses import (
+            CHECKPOINTS,
+            HYPOTHESES,
+            REGISTERED_AT,
+            STATUS_TESTING,
+            next_checkpoint,
+        )
+
+        stored = {
+            (row["hypothesis"], row["symbol"]): row
+            for row in _rows(engine_factory(), select(release_hypotheses))
+        }
+        hypotheses: list[dict[str, object]] = []
+        for hypothesis in HYPOTHESES:
+            symbols: dict[str, object] = {}
+            for symbol in hypothesis.symbols:
+                row = stored.get((hypothesis.id, symbol))
+                hits, n = hypothesis.historical[symbol]
+                status = str(row["status"]) if row else STATUS_TESTING
+                count = int(row["n"]) if row else 0
+                symbols[symbol] = {
+                    "historical": {"hits": hits, "n": n},
+                    "hits": int(row["hits"]) if row else 0,
+                    "n": count,
+                    "wilson_lb": row["wilson_lb"] if row else None,
+                    "wilson_ub": row["wilson_ub"] if row else None,
+                    "status": status,
+                    "decided_at_n": row["decided_at_n"] if row else None,
+                    "next_checkpoint": (
+                        next_checkpoint(count) if status == STATUS_TESTING else None
+                    ),
+                    "outcomes": list(row["outcomes"] or []) if row else [],
+                    "computed_at": row["computed_at"] if row else None,
+                }
+            hypotheses.append(
+                {
+                    "id": hypothesis.id,
+                    "label": hypothesis.label,
+                    "rule": hypothesis.rule,
+                    "in_preview": hypothesis.in_preview,
+                    "symbols": symbols,
+                }
+            )
+        return {
+            "registered_at": REGISTERED_AT.isoformat(),
+            "criteria": {
+                "checkpoints": list(CHECKPOINTS),
+                "confidence": 0.95,
+                "verified": "dolní mez Wilsonova 95% intervalu nad 50 %",
+                "rejected": "horní mez pod 50 %, nebo n = 30 bez ověření",
+            },
+            "hypotheses": hypotheses,
+        }
 
     @router.get("/sentiment/summary")
     def sentiment_summary() -> dict[str, object]:

@@ -938,6 +938,10 @@ function MainContent() {
   // Posun grafu na marker upozornění: jen když zpráva leží v zobrazeném dni
   // a osa je z reálných dat (demo osu nemá). `news_preopen` nese čas otevření
   // Globexu a víkendové zprávy na ose seance neleží — u něj jen dialog.
+  // `release_preview` (#1296) nese čas releasu: klik před releasem = jen dialog
+  // a nikdy pozdější posun — graf by jinak sám poskočil v minutě releasu, až
+  // koš vznikne, a přepsal pohled, který si trader mezitím nastavil. Klik po
+  // releasu posune na jeho koš (až v ose je).
   // Aplikovaný požadavek se spotřebuje: Heatmap se při odchodu z grafu
   // odmontuje a po návratu by jinak pohled skočil na staré upozornění znovu.
   const [appliedNewsFocus, setAppliedNewsFocus] = useState<number | null>(null)
@@ -945,10 +949,12 @@ function MainContent() {
     if (!newsFocus || newsFocus.nonce === appliedNewsFocus) return null
     if (newsFocus.kind === 'news_preopen' || newsFocus.tsEvent === null) return null
     const tsMs = Date.parse(newsFocus.tsEvent)
+    const isRelease = newsFocus.kind === 'release_preview'
+    if (isRelease && tsMs > newsFocus.requestedMs) return null
     const viewSegment = newsAxis.view
     if (rawDay.source !== 'replay' || !viewSegment) return null
     if (Number.isNaN(tsMs) || tsMs >= viewBounds.closeMs) return null
-    const idx = newsBucketIndex(tsMs, false, [viewSegment])
+    const idx = newsBucketIndex(tsMs, isRelease, [viewSegment])
     return idx === null ? null : { idx, nonce: newsFocus.nonce }
   }, [newsFocus, appliedNewsFocus, rawDay.source, newsAxis, viewBounds])
   // Značky deníku v ose (#673, Traders mode): záznamy symbolu se párují na osu

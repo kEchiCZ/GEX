@@ -93,11 +93,16 @@ from gexlens_news.reactions import (  # noqa: E402
     compute_reactions,
     measure_excursion,
 )
+from gexlens_news.releases import (  # noqa: E402
+    QUALIFYING_IMPACTS,
+    SERIES,
+    SERIES_RANK,
+    impact_of,
+)
 
 SYMBOLS = ("ES", "NQ")
 SHORT_WINDOWS = (5, 15, 60)
 DAILY_WINDOWS = (1, 2, 3, 5, 10)
-QUALIFYING_IMPACTS = ("high", "medium")
 ARCHIVE_START = dt.datetime(2024, 7, 28, tzinfo=dt.UTC)
 
 #: ±N seancí kolem releasu pro baseline
@@ -138,60 +143,8 @@ RV_MIN_RETURNS = 15
 PIT_WINDOW = 252
 PIT_MIN = 60
 
-#: Řada → (skupina, polarita). Polarita +1: vyšší číslo = silnější ekonomika,
-#: vyšší inflace, jestřábí Fed. −1: vyšší číslo = slabší (nezaměstnanost,
-#: žádosti o podporu, zásoby ropy = slabší poptávka).
-SERIES: dict[str, tuple[str, int]] = {
-    "Federal Funds Rate": ("fed", 1),
-    "Non-Farm Employment Change": ("labor", 1),
-    "Core CPI m/m": ("inflation", 1),
-    "CPI m/m": ("inflation", 1),
-    "Core CPI y/y": ("inflation", 1),
-    "CPI y/y": ("inflation", 1),
-    "Core PCE Price Index m/m": ("inflation", 1),
-    "Core PPI m/m": ("inflation", 1),
-    "PPI m/m": ("inflation", 1),
-    "Retail Sales m/m": ("growth", 1),
-    "Core Retail Sales m/m": ("growth", 1),
-    "Advance GDP q/q": ("growth", 1),
-    "Prelim GDP q/q": ("growth", 1),
-    "Final GDP q/q": ("growth", 1),
-    "ISM Manufacturing PMI": ("growth", 1),
-    "ISM Services PMI": ("growth", 1),
-    "ADP Non-Farm Employment Change": ("labor", 1),
-    "JOLTS Job Openings": ("labor", 1),
-    "Unemployment Rate": ("labor", -1),
-    "Average Hourly Earnings m/m": ("labor", 1),
-    "Employment Cost Index q/q": ("labor", 1),
-    "Unemployment Claims": ("labor", -1),
-    "ISM Manufacturing Prices": ("inflation", 1),
-    "Advance GDP Price Index q/q": ("inflation", 1),
-    "Prelim GDP Price Index q/q": ("inflation", 1),
-    "Final GDP Price Index q/q": ("inflation", 1),
-    "Flash Manufacturing PMI": ("growth", 1),
-    "Flash Services PMI": ("growth", 1),
-    "Final Manufacturing PMI": ("growth", 1),
-    "Final Services PMI": ("growth", 1),
-    "Durable Goods Orders m/m": ("growth", 1),
-    "Core Durable Goods Orders m/m": ("growth", 1),
-    "Philly Fed Manufacturing Index": ("growth", 1),
-    "Empire State Manufacturing Index": ("growth", 1),
-    "Richmond Manufacturing Index": ("growth", 1),
-    "Chicago PMI": ("growth", 1),
-    "Prelim UoM Consumer Sentiment": ("sentiment", 1),
-    "Revised UoM Consumer Sentiment": ("sentiment", 1),
-    "CB Consumer Confidence": ("sentiment", 1),
-    "Pending Home Sales m/m": ("housing", 1),
-    "Existing Home Sales": ("housing", 1),
-    "New Home Sales": ("housing", 1),
-    "Building Permits": ("housing", 1),
-    "S&P/CS Composite-20 HPI y/y": ("housing", 1),
-    "Crude Oil Inventories": ("energy", -1),
-}
-#: Pořadí headline řad pro `primary_in_cluster` / `primary_in_group` — souběžné
-#: releasy (CPI m/m + y/y + core…) nesou identickou reakci trhu; skupinová
-#: statistika má brát jeden řádek na shluk a skupinu. Pořadí = pořadí v SERIES.
-SERIES_RANK = {name: rank for rank, name in enumerate(SERIES)}
+#: Řady, jejich skupina a polarita i pořadí headline jsou v `gexlens_news.releases`
+#: (sdílí je měření reakcí a upozornění před releasem, #1296 fáze 3–4)
 FOMC_DECISION_TITLES = ("USD Federal Funds Rate", "USD FOMC Statement")
 
 
@@ -211,14 +164,6 @@ def short_columns(h: int) -> list[str]:
 
 
 # ── Pomocné ────────────────────────────────────────────────────────
-
-
-def impact_of(raw: Any) -> str | None:
-    """FF impact z raw: backfill `impactName` (lowercase), živý feed `impact`."""
-    if not isinstance(raw, dict):
-        return None
-    value = raw.get("impactName") or raw.get("impact")
-    return str(value).lower() if value else None
 
 
 def read_env_value(env_file: Path | None, key: str) -> str | None:

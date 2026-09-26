@@ -107,15 +107,22 @@ def follows_long_closure(opening: dt.datetime) -> bool:
     return is_market_closed(opening - PAUSE_PROBE)
 
 
-def due_stages(now: dt.datetime, opening: dt.datetime, done: Collection[str]) -> list[str]:
+def due_stages(
+    now: dt.datetime,
+    opening: dt.datetime,
+    done: Collection[str],
+    leads: Sequence[tuple[str, dt.timedelta]] = STAGE_LEADS,
+) -> list[str]:
     """Etapy, jejichž čas nastal a které ještě neproběhly; po otevření už žádné.
 
     Když news-engine ve 20:00 neběžel, pošle hlavní souhrn při prvním běhu po
     startu — i když je to až v čase aktualizace (pak jedna zpráva, ne dvě).
+    `leads` = etapy a předstih před cílovým časem (upozornění před releasem
+    #1296 má vlastní T−60 a T−15 min).
     """
     if now >= opening:
         return []
-    return [name for name, lead in STAGE_LEADS if opening - lead <= now and name not in done]
+    return [name for name, lead in leads if opening - lead <= now and name not in done]
 
 
 def scheduled_close(opening: dt.datetime) -> dt.datetime:
@@ -268,14 +275,14 @@ def preopen_order(events: Iterable[ClusterEvent]) -> list[ClusterEvent]:
     )
 
 
-def _price(value: float) -> str:
+def price_text(value: float) -> str:
     """Cena bez zbytečných nul: 7725, 7716.25, 29987.75."""
     return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
 def levels_line(symbol: str, levels: SessionLevels | None, last_close: float | None) -> str:
     """Úrovně, na které si dát pozor při gapu; chybějící data jsou vidět."""
-    close = f"close {_price(last_close)}" if last_close is not None else None
+    close = f"close {price_text(last_close)}" if last_close is not None else None
     if levels is None:
         return " · ".join(filter(None, [f"Úrovně {symbol} z poslední seance chybí", close]))
     parts = [

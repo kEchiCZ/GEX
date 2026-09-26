@@ -156,3 +156,44 @@ test('posun na upozornění proběhne jednou; po návratu z Dashboardu se nepře
   // Nový mount grafu nedostane žádný požadavek na posun
   expect(heatmapStub.mounts.at(-1)?.every((focus) => focus === null)).toBe(true)
 })
+
+/** Klik na upozornění `release_preview` (#1296) s hodinami nastavenými na `clickIso`. */
+async function clickReleasePreview(tsEvent: string, clickIso: string) {
+  const socket = new LiveSocket('ws://test/ws/live', {
+    webSocketFactory: (url) => new FakeWebSocket(url),
+  })
+  render(<App socket={socket} />)
+  await waitFor(() => expect(screen.getByTestId('data-source').textContent).toContain('replay'))
+  const ws = FakeWebSocket.latest()
+  act(() => {
+    ws.open()
+    ws.push('alerts', {
+      kind: 'release_preview',
+      symbol: 'ES',
+      message: 'CPI za 15 min (17:02) — ES 7600',
+      ts: 1784214000,
+      ts_event: tsEvent,
+      event_ids: [ALERT_ROW.id],
+    })
+  })
+  fireEvent.click(screen.getByRole('button', { name: /Notifikace/ }))
+  // Hodiny jen pro klik — čas požadavku se bere v okamžiku kliknutí
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse(clickIso))
+  try {
+    fireEvent.click(screen.getByRole('button', { name: 'Otevřít zprávy ES v grafu' }))
+  } finally {
+    clock.mockRestore()
+  }
+  await screen.findByRole('dialog', { name: 'Zprávy v čase markeru' })
+}
+
+test('upozornění před releasem: klik před releasem jen otevře dialog, graf se neposune', async () => {
+  // Koš 15:02 v ose už je (projekce / osa mezitím narostla) — posun by přepsal pohled
+  await clickReleasePreview('2026-07-16T15:02:00+00:00', '2026-07-16T15:01:30Z')
+  expect(heatmapStub.mounts.flat().every((focus) => focus === null)).toBe(true)
+})
+
+test('upozornění před releasem: klik po releasu posune graf na koš releasu', async () => {
+  await clickReleasePreview('2026-07-16T15:01:00+00:00', '2026-07-16T15:05:00Z')
+  await waitFor(() => expect(heatmapStub.mounts.at(-1)).toContainEqual({ idx: 1, nonce: 1 }))
+})

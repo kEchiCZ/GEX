@@ -441,3 +441,34 @@ def test_collector_doplni_outside_share_do_starsich_radku(tmp_path: Path) -> Non
     assert row["next_range_atr"] == pytest.approx(1.5)
     assert row["next_outside_share"] == pytest.approx(1.0)
     assert repository.missing_next_metrics("ES") == []
+
+
+def test_session_ranges_since_vraci_totez_pro_spolecne_seance(tmp_path: Path) -> None:
+    """#1296: `since` čte jen partice od seance `since` (a večer před ní) — hodnoty se nemění."""
+    settings = Settings(
+        data_dir=tmp_path, database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}"
+    )
+    days = [dt.date(2026, 9, 14) + dt.timedelta(days=offset) for offset in range(5)]
+    for offset, day in enumerate(days):
+        seed_bars(settings, "ES", day, high=7600.0 + 10 * (offset + 1), low=7600.0)
+    # Večerní bar 23:00 UTC patří seanci následujícího dne (ADR-0023)
+    SnapshotWriter(settings).write_bars(
+        "ES",
+        days[2],
+        [
+            Bar(
+                ts=dt.datetime(2026, 9, 16, 23, 0, tzinfo=dt.UTC),
+                open=7590.0,
+                high=7650.0,
+                low=7590.0,
+                close=7650.0,
+                volume=1.0,
+            )
+        ],
+    )
+    full = session_ranges(tmp_path, "ES")
+    since = session_ranges(tmp_path, "ES", since=days[3])
+    assert since == [row for row in full if row[0] >= days[3]]
+    assert [day for day, _ in since] == days[3:]
+    # Seance 17. 9. nese i večerní bar z partice 16. 9.
+    assert dict(since)[days[3]] == pytest.approx(60.0)

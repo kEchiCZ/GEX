@@ -55,6 +55,8 @@ from gexlens_news.prediction_job import PredictionJob
 from gexlens_news.preopen_job import PreopenJob
 from gexlens_news.publisher import NewsPublisher
 from gexlens_news.reaction_job import ReactionJob
+from gexlens_news.release_moves_job import BACKFILL_START, ReleaseMovesJob
+from gexlens_news.release_preview_job import ReleasePreviewJob
 from gexlens_news.retro_pass import RetroPass, store_retro_result
 from gexlens_news.review_job import ReviewJob
 from gexlens_news.runner import CollectorRunner
@@ -223,6 +225,10 @@ async def run(settings: NewsSettings) -> None:
     anomaly = AnomalyJob(engine, bars_repo)
     # Zprávy za víkend 4 h a 15 min před otevřením Globexu (#1291 Q2, ADR-0043)
     preopen = PreopenJob(engine, bars_repo)
+    # Reakce ES/NQ na ohlášené releasy a živé hypotézy (#1296, ADR-0044)
+    release_moves = ReleaseMovesJob(engine, bars_repo)
+    # Očekávaný pohyb 60 a 15 min před releasem (#1296, ADR-0044) → zvonek a Telegram
+    release_preview = ReleasePreviewJob(engine, bars_repo)
     # Hodinové doplňování actual z FF kalendáře (#277) — widget feed ho nenese
     ff_refresh = (
         FfActualRefreshJob(engine, interval_s=settings.ff_actual_refresh_s)
@@ -325,6 +331,11 @@ async def run(settings: NewsSettings) -> None:
                         await publisher.publish("alerts", alert)
             except Exception:
                 logger.exception("Předobchodní upozornění selhalo — zkusí se příští cyklus")
+            # Reakce na ohlášené releasy (#1296) — měří až po uplynutí 60 min okna
+            try:
+                await asyncio.to_thread(release_moves.run, now)
+            except Exception:
+                logger.exception("Měření reakcí na releasy selhalo — zkusí se příští cyklus")
             # Review fronta (#293) po reakcích — auto-uzavírání čte uzavřená okna
             try:
                 await asyncio.to_thread(review.run, now)
@@ -533,6 +544,25 @@ async def run(settings: NewsSettings) -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=60.0)
 
+    async def release_preview_loop() -> None:
+        """Upozornění před releasem (#1296) — vlastní 60s tikot.
+
+        T−15 musí odejít do minuty; v reaction_loop (à 300 s + délka cyklu) by
+        chodilo až o 5 min a víc později. Mimo okno releasu je tik jeden SELECT.
+        """
+        while not stop.is_set():
+            try:
+                preview_alerts = await asyncio.to_thread(
+                    release_preview.run, dt.datetime.now(dt.UTC)
+                )
+                if publisher is not None:
+                    for alert in preview_alerts:
+                        await publisher.publish("alerts", alert)
+            except Exception:
+                logger.exception("Upozornění před releasem selhalo — zkusí se za minutu")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=60.0)
+
     async def crowd_loop() -> None:
         """Crowd zdroje (#290) — intervaly per zdroj drží CrowdRunner."""
         while not stop.is_set():
@@ -556,6 +586,7 @@ async def run(settings: NewsSettings) -> None:
         ngram_loop(),
         crowd_loop(),
         ff_actual_loop(),
+        release_preview_loop(),
         alpaca_loop(),
         bluesky_loop(),
     )
@@ -641,11 +672,39 @@ def backfill_ff(settings: NewsSettings, weeks: int | None) -> int:
     return 1 if stats.weeks_fetched == 0 else 0
 
 
+def backfill_release_moves(settings: NewsSettings, start: str | None, include_live: bool) -> int:
+    """Dopočet reakcí na ohlášené releasy od `--from` (#1296, CLI příkaz).
+
+    Tatáž cesta jako živý běh (`ReleaseMovesJob.run`): přeměří shluky v rozsahu
+    **před registrací hypotéz** (idempotentně), živé jen s `--include-live` —
+    i pak zůstane vyhodnocený úsek hypotéz zmrazený (ADR-0044). Po opravě
+    kalendáře (#1298) nebo barů (#1299, #1300) se spustí znovu.
+    """
+    since = (
+        dt.datetime.combine(dt.date.fromisoformat(start), dt.time(), dt.UTC)
+        if start
+        else BACKFILL_START
+    )
+    engine = create_engine(settings.database_url, pool_pre_ping=True)
+    ensure_sentiment_schema(engine)
+    job = ReleaseMovesJob(engine, BarsRepository(settings.data_dir))
+    summary = job.run(dt.datetime.now(dt.UTC), since=since, refresh=True, include_live=include_live)
+    print(f"Reakce na releasy od {since.date()}: {summary.describe()}")
+    return 1 if summary.failed else 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gexlens_news", description="SentimentLens news-engine")
     parser.add_argument(
         "command",
-        choices=("run", "status", "backfill-ff", "backfill-sentiment-daily", "recompute-sentindex"),
+        choices=(
+            "run",
+            "status",
+            "backfill-ff",
+            "backfill-sentiment-daily",
+            "recompute-sentindex",
+            "backfill-release-moves",
+        ),
         nargs="?",
         default="run",
     )
@@ -659,13 +718,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--from",
         dest="start",
         default=None,
-        help="recompute-sentindex: první den (YYYY-MM-DD, UTC)",
+        help=(
+            "recompute-sentindex: první den (YYYY-MM-DD, UTC); backfill-release-moves: "
+            "od kdy (default začátek archivu barů 2024-07-28)"
+        ),
     )
     parser.add_argument(
         "--to",
         dest="end",
         default=None,
         help="recompute-sentindex: poslední den (default dnešek)",
+    )
+    parser.add_argument(
+        "--include-live",
+        action="store_true",
+        help=(
+            "backfill-release-moves: přeměřit i živé releasy od registrace hypotéz "
+            "(vyhodnocený úsek hypotéz se nepřepíše)"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -686,6 +756,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return backfill_sentiment(settings)
     if args.command == "recompute-sentindex":
         return recompute_sentindex_cli(settings, args.start, args.end)
+    if args.command == "backfill-release-moves":
+        return backfill_release_moves(settings, args.start, args.include_live)
     try:
         asyncio.run(run(settings))
     except KeyboardInterrupt:

@@ -54,6 +54,34 @@ PREOPEN_SETTINGS_KEY = "news_preopen_state"
 _MINUTE = dt.timedelta(minutes=1)
 
 
+def read_levels(
+    derived: Path, symbol: str, day: dt.date, until: dt.datetime, first_expiry: dt.date
+) -> SessionLevels | None:
+    """Úrovně nejbližší expirace ≥ `first_expiry` z partice UTC dne `day` před `until`.
+
+    Sdílí předobchodní upozornění i upozornění před releasem (#1296). Expirace
+    bez úrovní před `until` (nečitelná partice, jen prázdné minuty) se přeskočí.
+    """
+    candidates: list[tuple[dt.date, Path]] = []
+    for path in (derived / symbol).glob(f"*/levels/{day.isoformat()}.parquet"):
+        try:
+            expiry = dt.datetime.strptime(path.parent.parent.name, "%Y%m%d").date()
+        except ValueError:
+            continue
+        if expiry >= first_expiry:
+            candidates.append((expiry, path))
+    for expiry, path in sorted(candidates):
+        try:
+            rows = pq.read_table(path, columns=["ts_min", *LEVEL_FIELDS]).to_pylist()
+        except Exception:
+            logger.exception("Levels partice %s nečitelná — zkusím další expiraci", path)
+            continue
+        found = last_levels(rows, until, expiry)
+        if found is not None:
+            return found
+    return None
+
+
 class PreopenJob:
     """Zprávy za víkend → `news_preopen` pro ES a NQ před otevřením Globexu."""
 
@@ -101,30 +129,11 @@ class PreopenJob:
     def load_levels(
         self, symbol: str, day: dt.date, until: dt.datetime, first_expiry: dt.date
     ) -> SessionLevels | None:
-        """Úrovně nejbližší expirace ≥ `first_expiry` z partice dne `day`.
-
-        Po víkendu platí expirace příští seance (pondělní 0DTE), ne páteční —
+        """Po víkendu platí expirace příští seance (pondělní 0DTE), ne páteční —
         ta po settle zanikla. Engine počítá i příští expiraci, takže partice
         `derived/{sym}/{expirace}/levels/{den}.parquet` existuje už v pátek.
         """
-        candidates: list[tuple[dt.date, Path]] = []
-        for path in (self._derived / symbol).glob(f"*/levels/{day.isoformat()}.parquet"):
-            try:
-                expiry = dt.datetime.strptime(path.parent.parent.name, "%Y%m%d").date()
-            except ValueError:
-                continue
-            if expiry >= first_expiry:
-                candidates.append((expiry, path))
-        for expiry, path in sorted(candidates):
-            try:
-                rows = pq.read_table(path, columns=["ts_min", *LEVEL_FIELDS]).to_pylist()
-            except Exception:
-                logger.exception("Levels partice %s nečitelná — zkusím další expiraci", path)
-                continue
-            found = last_levels(rows, until, expiry)
-            if found is not None:
-                return found
-        return None
+        return read_levels(self._derived, symbol, day, until, first_expiry)
 
     def closure(
         self, symbol: str, opening: dt.datetime, now: dt.datetime
