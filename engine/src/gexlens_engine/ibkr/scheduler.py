@@ -153,6 +153,11 @@ class GreeksStallDetector:
     def stalled(self) -> bool:
         return self._stalled
 
+    def reset(self) -> None:
+        """Zapomene sérii i stav bez hlášení (#1307: hrana otevření trhu)."""
+        self._bad_cycles = 0
+        self._stalled = False
+
     def observe(self, *, total: int, stale: int) -> str | None:
         if total <= 0:
             return None
@@ -184,6 +189,10 @@ class RepairStallDetector:
     @property
     def stalled(self) -> bool:
         return self._stalled
+
+    def reset(self) -> None:
+        """Zapomene stav bez hlášení (#1307: hrana otevření trhu)."""
+        self._stalled = False
 
     def observe(self, stalled_count: int) -> str | None:
         if stalled_count > 0 and not self._stalled:
@@ -402,6 +411,20 @@ class SubscriptionScheduler:
             self._settings.repair_backoff_base_s,
             self._settings.repair_backoff_max_s,
         )
+
+    def reset_repair_state(self) -> None:
+        """Zahodí repair kola a backoff všech kontraktů (#1307).
+
+        Volá pipeline na hraně otevření trhu: kola selhaná při zavřeném trhu
+        (TWS mimo seanci kompletní data nedodává) o zdraví feedu nic neříkají.
+        Cache kotací a stale příznaky zůstávají — ty popisují data, ne pokusy.
+        Čítače BS fallbacku (`_no_greeks_sweeps`) zůstávají taky: kontrakt,
+        kterému TWS greeks nedodává, má v prvním sweepu seance dostat BS
+        dopočet z čerstvých kotací, ne být `greeks_fallback_sweeps − 1` sweepů
+        stale (a přiblížit `greeks_stalled` na jediný cyklus rezervy).
+        """
+        self._fail_rounds.clear()
+        self._due_at.clear()
 
     def _clear_repair_state(self, spec: OptionContractSpec) -> None:
         """TWS zase dodává kompletní data — backoff i fallback čítače končí."""

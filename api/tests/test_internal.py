@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import gexlens_api.alerts as alerts_module
 from gexlens_api.main import create_app
 from gexlens_engine.config import Settings
 
@@ -74,8 +75,13 @@ def test_internal_publish_routes_to_channel(client: TestClient) -> None:
     assert invalid.status_code == 422
 
 
-def test_internal_status_vystreli_provozni_alerty(client: TestClient) -> None:
+def test_internal_status_vystreli_provozni_alerty(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Jádro #949: AlertEngine se nikde nevolal, takže výpadek ani plný disk nezvonily."""
+    # Test zapojení, ne rozvrhu: výpadek při zavřeném trhu se od #1307 nehlásí
+    # a test nesmí záviset na tom, jestli běží o víkendu
+    monkeypatch.setattr(alerts_module, "is_market_closed", lambda ts: False)
     hub = client.app.state.live_hub  # type: ignore[attr-defined]
     subscriber_id, queue = hub.register()
     hub.subscribe(subscriber_id, ["alerts"])

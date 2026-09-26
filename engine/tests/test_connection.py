@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import datetime as dt
 
 import pytest
 
@@ -302,6 +303,11 @@ class _RecordingPublisher(PublisherLike):
         self.messages.append((channel, data))
 
 
+# Rozvrh CME (#1307): čtvrtek 24. 9. 2026 10:00 CDT běží, sobota 26. 9. je zavřeno
+OPEN_MARKET = dt.datetime(2026, 9, 24, 15, 0, tzinfo=dt.UTC)
+CLOSED_SATURDAY = dt.datetime(2026, 9, 26, 12, 0, tzinfo=dt.UTC)
+
+
 async def test_offline_for_s_measures_only_outage() -> None:
     """Do prvního connectu spojení chybí; po připojení je hodnota None."""
     client = MockIB()
@@ -321,7 +327,7 @@ async def test_stall_report_publishes_bell_alert() -> None:
     client = MockIB(fail_connects=1000)  # TWS je trvale dole
     manager = manager_with_watchdog(client, stall_alert_s=0.05)
     publisher = _RecordingPublisher()
-    engine_main._watch_connection_stall(manager, Settings(), publisher)
+    engine_main._watch_connection_stall(manager, Settings(), publisher, utc_now=lambda: OPEN_MARKET)
 
     await manager.start()
     async with asyncio.timeout(3.0):
@@ -334,6 +340,69 @@ async def test_stall_report_publishes_bell_alert() -> None:
     assert data["symbol"] == "*"
     assert "sběr dat" in str(data["message"])
     await manager.stop()
+
+
+async def test_stall_report_pri_zavrenem_trhu_jen_loguje() -> None:
+    """#1307: o víkendu 12.–13. 9. chodilo „IBKR spojení chybí… sběr dat stojí"
+    à 5 min (~216×) — při zavřeném trhu žádná data nejsou, takže nic nestojí.
+    Watchdog dál volá (hlášení po otevření ponese celou délku výpadku)."""
+    client = MockIB(fail_connects=1000)
+    manager = manager_with_watchdog(client, stall_alert_s=0.05)
+    publisher = _RecordingPublisher()
+    engine_main._watch_connection_stall(
+        manager, Settings(), publisher, utc_now=lambda: CLOSED_SATURDAY
+    )
+    reports: list[float] = []
+    manager.on_stall(reports.append)
+
+    await manager.start()
+    async with asyncio.timeout(3.0):
+        while len(reports) < 2:
+            await asyncio.sleep(0.005)
+    await asyncio.sleep(0.02)  # případný publish task by mezitím doběhl
+
+    assert publisher.messages == []
+    await manager.stop()
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        CLOSED_SATURDAY,
+        dt.datetime(2026, 9, 26, 0, 1, tzinfo=dt.UTC),  # sobotní roll = denní odpojení IBKR
+        dt.datetime(2026, 9, 23, 21, 30, tzinfo=dt.UTC),  # středa 16:30 CDT, denní pauza
+    ],
+)
+async def test_degraded_start_a_instrument_error_pri_zavrenem_trhu_jen_loguji(
+    now: dt.datetime,
+) -> None:
+    """#1307: sobotní roll v 00:00 UTC se kryje s denním odpojením IBKR —
+    nový instrument se založí z cache (`degraded_start`) nebo setup selže
+    (`instrument_error`). Data se přitom neočekávají, takže jen log."""
+    publisher = _RecordingPublisher()
+    for kind in ("degraded_start", "instrument_error"):
+        sent = await engine_main._publish_outage_alert(publisher, kind, "ES", "IBKR mlčí", now)
+        assert sent is False
+    assert publisher.messages == []
+
+
+async def test_degraded_start_pri_otevrenem_trhu_hlasi() -> None:
+    """Regrese #1307: v seanci se výpadek hlásí beze změny (nic se neumlčuje)."""
+    publisher = _RecordingPublisher()
+    assert await engine_main._publish_outage_alert(
+        publisher, "degraded_start", "ES", "IBKR neodpovídá", OPEN_MARKET
+    )
+    assert publisher.messages == [
+        (
+            "alerts",
+            {
+                "kind": "degraded_start",
+                "symbol": "ES",
+                "message": "IBKR neodpovídá",
+                "ts": OPEN_MARKET.timestamp(),
+            },
+        )
+    ]
 
 
 async def test_connection_offline_status_key_only_when_offline() -> None:

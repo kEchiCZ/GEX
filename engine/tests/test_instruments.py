@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime as dt
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -11,6 +12,7 @@ import pytest
 from sqlalchemy import create_engine, insert
 
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import (
     ChainDiscovery,
@@ -41,6 +43,7 @@ from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.meta import settings_table, watchlist_table
 from gexlens_engine.storage.oi_archive import (
+    ArchiveResult,
     ContractSnapshot,
     OIArchiver,
     OIEodRepository,
@@ -50,6 +53,9 @@ from gexlens_engine.storage.parquet_store import NetFlowRow, SnapshotWriter
 from gexlens_engine.storage.setups_store import SetupsRepository
 
 TS = dt.datetime(2026, 7, 17, 15, 0, tzinfo=dt.UTC)
+# Otevřený trh v pondělí (10:00 CDT) — OI alerty se od #1307 hlásí jen při
+# otevřeném trhu, takže test nesmí záviset na dni, kdy běží (sobota = ticho)
+OPEN_MONDAY = dt.datetime(2026, 7, 20, 15, 0, tzinfo=dt.UTC)
 
 
 # ── Čisté funkce ───────────────────────────────────────────────────
@@ -545,11 +551,13 @@ async def test_neuspesna_obnova_jede_na_starsim_snimku(
     assert "starším snímku" in str(alerts[-1]["message"])
     assert pipeline.oi_final is False  # obnova se zopakuje dalším retry cyklem
 
-    # Totéž pro fetch, který nespadne, ale nic nevrátí (written == 0)
+    # Totéž pro fetch, který nespadne, ale nic nevrátí (written == 0): týž den
+    # je už ohlášený, další selhání jde jen do logu (#1307 hranově)
     pipeline.archiver = OIArchiver(repository, MockOIFetcher(), settings)
     assert await pipeline.try_archive_oi(today, po_okne) is True
     alerts = [d for ch, d in publisher.messages if ch == "alerts"]
-    assert alerts[-1]["kind"] == "oi_refresh_failed"
+    assert [a["kind"] for a in alerts] == ["oi_refresh_failed"]
+    assert pipeline.oi_final is False  # obnova běží dál, jen bez opakovaného alertu
 
 
 @pytest.fixture
@@ -663,7 +671,8 @@ async def test_oi_missing_alert_and_retry_counter(
     # Jiný den než upsert v make_pipeline → OI archiv pro dnešek chybí
     pipeline = make_pipeline("CL", 80.0, settings, writer, repository, publisher)
 
-    ok = await pipeline.try_archive_oi(dt.date(2026, 7, 18))  # MockOIFetcher bez hodnot
+    # MockOIFetcher bez hodnot
+    ok = await pipeline.try_archive_oi(OPEN_MONDAY.date(), OPEN_MONDAY)
     assert ok is False
     alerts = [data for channel, data in publisher.messages if channel == "alerts"]
     assert alerts and alerts[-1]["kind"] == "oi_missing"
@@ -969,7 +978,7 @@ async def test_archive_failure_does_not_kill_pipeline(
 
     pipeline.archiver = ExplodingArchiver()  # type: ignore[assignment]
 
-    ok = await pipeline.try_archive_oi(dt.date(2026, 7, 18))
+    ok = await pipeline.try_archive_oi(OPEN_MONDAY.date(), OPEN_MONDAY)
 
     assert ok is False  # pipeline žije dál, retry po OI_RETRY_CYCLES
     alerts = [data for channel, data in publisher.messages if channel == "alerts"]
@@ -1290,3 +1299,445 @@ async def test_bars_stall_dopnuje_tasty_a_spot_override_hyba_detektorem(
     await pipeline.run_minute(now)
     assert pipeline._gap_filled == 0
     assert len(fills) == 3
+
+
+# ── Zavřený trh podle rozvrhu CME (#1307) ──────────────────────────
+#
+# Září 2026 je CDT (UTC−5): pátek 25. 9. zavírá v 16:00 CT = 21:00 UTC,
+# neděle 27. 9. otevírá v 17:00 CT = 22:00 UTC, publikační okno OI 07:00 CT
+# = 12:00 UTC. 1. 11. 2026 končí DST — denní pauza 16:00–17:00 CST je pak
+# 22:00–23:00 UTC.
+
+FRI_CLOSE = dt.datetime(2026, 9, 25, 21, 0, tzinfo=dt.UTC)
+SAT_ROLL = dt.datetime(2026, 9, 26, 0, 0, tzinfo=dt.UTC)
+SAT_NOON = dt.datetime(2026, 9, 26, 12, 30, tzinfo=dt.UTC)
+SUN_PREOPEN = dt.datetime(2026, 9, 27, 21, 59, tzinfo=dt.UTC)
+SUN_OPEN = dt.datetime(2026, 9, 27, 22, 0, tzinfo=dt.UTC)
+MON_MIDNIGHT = dt.datetime(2026, 9, 28, 0, 0, tzinfo=dt.UTC)
+OI_KINDS = {"oi_missing", "oi_refresh_failed"}
+# Expirace po víkendu — hlídka Greeks (#959) pro ni platí celý víkend
+MONDAY_EXPIRY = "20260928"
+
+
+class CountingArchiver(OIArchiver):
+    """Skutečný archiver nad mock fetcherem, který si pamatuje každé čtení z IBKR."""
+
+    def __init__(
+        self, repository: OIEodRepository, fetcher: MockOIFetcher, settings: Settings
+    ) -> None:
+        super().__init__(repository, fetcher, settings)
+        self.calls: list[dt.date] = []
+        self.times: list[dt.datetime | None] = []
+
+    async def archive_day(
+        self,
+        contracts: Sequence[OptionContractSpec],
+        day: dt.date,
+        now: dt.datetime | None = None,
+    ) -> ArchiveResult:
+        self.calls.append(day)
+        self.times.append(now)
+        return await super().archive_day(contracts, day, now=now)
+
+
+def stub_sweep(pipeline: InstrumentPipeline, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sweep bez IO pro minutové sekvence OI (#1307).
+
+    Plný `run_cycle` stojí ~70 ms na minutu; OI retry i obnova běží v
+    `run_minute` před ním, takže sekvence přes celý víkend jde minutu po
+    minutě bez ručního natahování čítače. Hlídače dostanou zdravé metriky.
+    """
+
+    async def cycle(
+        ts_min: dt.datetime, spot: float, bars: object, forming_bar: object = None
+    ) -> SweepMetrics:
+        return SweepMetrics(
+            total=6, greeks_complete=6, repair_count=0, stale_count=0, sweep_duration_s=0.0
+        )
+
+    monkeypatch.setattr(pipeline.runtime, "run_cycle", cycle)
+
+
+async def run_minutes(pipeline: InstrumentPipeline, start: dt.datetime, end: dt.datetime) -> None:
+    """Minutové cykly v [start, end) — jako hlavní smyčka enginu."""
+    at = start
+    while at < end:
+        await pipeline.run_minute(at)
+        at += dt.timedelta(minutes=1)
+
+
+def alerts_of(publisher: RecordingPublisher, kinds: set[str]) -> list[dict[str, object]]:
+    return [d for ch, d in publisher.messages if ch == "alerts" and d["kind"] in kinds]
+
+
+def seed_oi(
+    repository: OIEodRepository,
+    pipeline: InstrumentPipeline,
+    day: dt.date,
+    captured: dt.datetime,
+) -> None:
+    repository.upsert_many(
+        [
+            OIRecord(pipeline.symbol, spec.expiry, spec.strike, spec.right, day, 500.0)
+            for spec in pipeline.runtime.contracts
+        ],
+        captured,
+    )
+
+
+def stalled_metrics(stale: int, stalled: int) -> SweepMetrics:
+    return SweepMetrics(
+        total=96,
+        greeks_complete=96 - stale,
+        repair_count=stale,
+        stale_count=stale,
+        sweep_duration_s=1.0,
+        stalled_count=stalled,
+    )
+
+
+async def test_sobota_oi_neobnovuje_ani_nehlasi(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1307: 26. 9. se od 12:30 UTC à 30 min „obnovoval" sobotní OI archiv.
+
+    Snímek z 00:01 UTC je formálně „před publikací" (okno 07:00 CT se počítalo
+    pro každý den), jenže CME za víkend nic nepublikuje a IBKR v sobotu nic
+    nevrátí — obnova nemohla uspět a každý pokus odešel jako upozornění.
+    """
+    settings, writer, repository, publisher = env
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    day = SAT_NOON.date()
+    seed_oi(repository, pipeline, day, SAT_ROLL + dt.timedelta(minutes=1))
+    archiver = CountingArchiver(repository, MockOIFetcher(), settings)  # sobota: 0 zapsáno
+    pipeline.archiver = archiver
+    pipeline._oi_day = day
+
+    assert settings.oi_publication_utc(day) <= SAT_NOON  # okno „uplynulo"…
+    assert pipeline._oi_refresh_due(SAT_NOON) is False  # …trh je ale zavřený
+    for at in (SAT_NOON, SAT_NOON + dt.timedelta(minutes=31), SAT_NOON + dt.timedelta(hours=3)):
+        pipeline._cycles_since_oi = OI_RETRY_CYCLES  # retry by byl na řadě
+        await pipeline.run_minute(at)
+
+    assert archiver.calls == []
+    assert alerts_of(publisher, OI_KINDS) == []
+    # První archiv po restartu enginu v sobotu uložený snímek jen použije
+    assert await pipeline.try_archive_oi(day, SAT_NOON) is True
+    assert archiver.calls == []
+
+
+async def test_vikend_oi_jen_tiche_cteni_prvni_upozorneni_v_pondeli_po_okne(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1307: OI chybí celý víkend a IBKR nic nevrací — minutu po minutě od
+    páteční uzávěrky do pondělí po publikačním okně.
+
+    Víkend: tiché čtení na začátku UTC dne (runtime čte OI podle UTC dne) a
+    po nedělním otevření retry, ale žádné upozornění — CME v sobotu ani
+    v neděli nepublikuje. V noci na pondělí jde o předpublikační stav, taky
+    jen log. První (a jediné) upozornění je první selhání po 07:00 CT.
+    """
+    settings, writer, repository, publisher = env
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline(
+        "ES", 7600.0, settings, writer, repository, publisher, oi_available=False
+    )
+    stub_sweep(pipeline, monkeypatch)
+    archiver = CountingArchiver(repository, MockOIFetcher(), settings)  # IBKR nic nevrací
+    pipeline.archiver = archiver
+    pipeline._oi_day = FRI_CLOSE.date()
+    monday = MON_MIDNIGHT.date()
+    window = settings.oi_publication_utc(monday)
+
+    await run_minutes(pipeline, FRI_CLOSE, SUN_OPEN)
+    # Pátek večer a sobota: jediné čtení v půlnoci UTC, v neděli taky
+    assert archiver.times == [SAT_ROLL, SAT_ROLL + dt.timedelta(days=1)]
+
+    await run_minutes(pipeline, SUN_OPEN, MON_MIDNIGHT)
+    # Otevření v 17:00 CT: chybějící OI se čte hned, pak à 30 min
+    assert archiver.times[2] == SUN_OPEN
+    assert len(archiver.times) == 6  # 22:00, 22:30, 23:00, 23:30
+
+    await run_minutes(pipeline, MON_MIDNIGHT, window + dt.timedelta(hours=2))
+    assert archiver.times[6] == MON_MIDNIGHT  # nový UTC den se čte hned
+
+    alerts = alerts_of(publisher, OI_KINDS)
+    assert [a["kind"] for a in alerts] == ["oi_missing"]
+    first_after_window = next(t for t in archiver.times if t is not None and t >= window)
+    assert alerts[0]["ts"] == first_after_window.timestamp()
+
+
+async def test_nedele_oi_neobnovuje_pondeli_po_okne_selhani_hlasi(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1307: v neděli CME nepublikuje, takže se snímek neděle neobnovuje ani
+    po otevření v 17:00 CT (dřív tu padalo `oi_refresh_failed`). Nová čísla
+    přečte čtení nového UTC dne v 19:00 CT; obnova běží až v pondělí po okně
+    a její selhání se ohlásí jednou."""
+    settings, writer, repository, publisher = env
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    stub_sweep(pipeline, monkeypatch)
+    sunday = SUN_OPEN.date()
+    seed_oi(repository, pipeline, sunday, dt.datetime(2026, 9, 27, 0, 1, tzinfo=dt.UTC))
+    specs = list(pipeline.runtime.contracts)
+    delivering = CountingArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 640.0)), settings)
+    pipeline.archiver = delivering
+    pipeline._oi_day = sunday
+    window = settings.oi_publication_utc(MON_MIDNIGHT.date())
+
+    await run_minutes(pipeline, dt.datetime(2026, 9, 27, 0, 5, tzinfo=dt.UTC), window)
+    assert delivering.times == [MON_MIDNIGHT]  # neděle bez obnovy, i po otevření
+    assert repository.get_oi("ES", MON_MIDNIGHT.date(), specs[0].strike, specs[0].right) == 640.0
+
+    failing = CountingArchiver(repository, MockOIFetcher(), settings)
+    pipeline.archiver = failing
+    await run_minutes(pipeline, window, window + dt.timedelta(hours=2))
+    assert len(failing.times) >= 3  # obnova à 30 min běží dál
+    assert [a["kind"] for a in alerts_of(publisher, OI_KINDS)] == ["oi_refresh_failed"]
+
+
+async def test_selhani_oi_pred_oknem_nespotrebuje_upozorneni_dne(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1307: hrana OI alertu je per UTC den, který začíná v 19:00 CT. Když
+    se ohlásilo už půlnoční (předpublikační) selhání, skutečná porucha „okno
+    proběhlo a OI pořád nic" se celý den neohlásila. Pondělí 28. 9.: selhání
+    à 30 min od 00:00 do 19:20 UTC → jediné upozornění, první po oknu."""
+    settings, writer, repository, publisher = env
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline(
+        "ES", 7600.0, settings, writer, repository, publisher, oi_available=False
+    )
+    stub_sweep(pipeline, monkeypatch)
+    archiver = CountingArchiver(repository, MockOIFetcher(), settings)
+    pipeline.archiver = archiver
+    pipeline._oi_day = SUN_OPEN.date()
+    window = settings.oi_publication_utc(MON_MIDNIGHT.date())
+
+    await run_minutes(pipeline, MON_MIDNIGHT, window)
+    assert archiver.times[0] == MON_MIDNIGHT
+    assert alerts_of(publisher, OI_KINDS) == []  # noc před oknem: jen log
+
+    await run_minutes(pipeline, window, dt.datetime(2026, 9, 28, 19, 20, tzinfo=dt.UTC))
+    after_window = [t for t in archiver.times if t is not None and t >= window]
+    assert len(after_window) >= 14
+    alerts = alerts_of(publisher, OI_KINDS)
+    assert [a["kind"] for a in alerts] == ["oi_missing"]
+    assert alerts[0]["ts"] == after_window[0].timestamp()
+
+
+async def test_po_denni_pauze_obnovi_nefinalni_oi_hned_v_17_ct(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1307: v denní pauze obnova neběží a čítač retry stojí — bez natažení
+    na hraně otevření by první obnova nefinálního snímku přišla až v 17:29 CT."""
+    settings, writer, repository, publisher = env
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    stub_sweep(pipeline, monkeypatch)
+    tuesday = dt.date(2026, 9, 29)
+    seed_oi(repository, pipeline, tuesday, dt.datetime(2026, 9, 29, 12, 5, tzinfo=dt.UTC))
+    specs = list(pipeline.runtime.contracts)
+    archiver = CountingArchiver(repository, MockOIFetcher(dict.fromkeys(specs, 700.0)), settings)
+    pipeline.archiver = archiver
+    pipeline._oi_day = tuesday
+    pause_open = dt.datetime(2026, 9, 29, 22, 0, tzinfo=dt.UTC)  # 17:00 CDT
+
+    # 15:45–16:59 CDT: čítač nedoběhne před pauzou, v pauze se nečte
+    await run_minutes(pipeline, dt.datetime(2026, 9, 29, 20, 45, tzinfo=dt.UTC), pause_open)
+    assert archiver.times == []
+
+    await run_minutes(pipeline, pause_open, pause_open + dt.timedelta(minutes=5))
+    assert archiver.times == [pause_open]
+    assert alerts_of(publisher, OI_KINDS) == []
+
+
+async def test_otevreny_trh_selhani_oi_hlasi_hranove(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """Regrese #1307: při OTEVŘENÉM trhu se selhání obnovy hlásí (nic se
+    neumlčuje) — jen ne tatáž věta à 30 min: jednou, znovu až po úspěchu."""
+    settings, writer, repository, publisher = env
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    specs = list(pipeline.runtime.contracts)
+    po_okne = settings.oi_publication_utc(TS.date()) + dt.timedelta(minutes=5)
+    assert not is_market_closed(po_okne)
+    failing = CountingArchiver(repository, MockOIFetcher(), settings)
+    pipeline.archiver = failing
+
+    async def retry(at: dt.datetime) -> None:
+        pipeline._cycles_since_oi = OI_RETRY_CYCLES
+        await pipeline.run_minute(at)
+
+    await retry(po_okne)
+    await retry(po_okne + dt.timedelta(minutes=31))
+    assert len(failing.calls) == 2  # retry běží dál
+    assert [a["kind"] for a in alerts_of(publisher, OI_KINDS)] == ["oi_refresh_failed"]
+
+    # Úspěšné čtení re-armuje; další selhání je nová epizoda
+    pipeline.archiver = CountingArchiver(
+        repository, MockOIFetcher(dict.fromkeys(specs, 700.0)), settings
+    )
+    await retry(po_okne + dt.timedelta(minutes=62))
+    pipeline.archiver = failing
+    await retry(po_okne + dt.timedelta(minutes=93))
+    assert [a["kind"] for a in alerts_of(publisher, OI_KINDS)] == [
+        "oi_refresh_failed",
+        "oi_refresh_failed",
+    ]
+
+
+async def test_svatek_stoji_nejvys_jeden_oi_alert(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1307 varianta A: rozvrh svátky nezná (ADR-0023 bod 4) — na Vánoce
+    (pátek 25. 12. 2026, CME zavřeno) obnova OI selhává celý den; hranový
+    alert z toho udělá jedno upozornění místo dvou za hodinu."""
+    settings, writer, repository, publisher = env
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    day = dt.date(2026, 12, 25)
+    seed_oi(repository, pipeline, day, dt.datetime(2026, 12, 25, 0, 5, tzinfo=dt.UTC))
+    archiver = CountingArchiver(repository, MockOIFetcher(), settings)
+    pipeline.archiver = archiver
+    pipeline._oi_day = day
+
+    start = dt.datetime(2026, 12, 25, 13, 5, tzinfo=dt.UTC)  # po okně 07:00 CST
+    assert not is_market_closed(start)  # rozvrh svátek nezná
+    for step in range(10):
+        pipeline._cycles_since_oi = OI_RETRY_CYCLES
+        await pipeline.run_minute(start + dt.timedelta(minutes=31 * step))
+
+    assert len(archiver.calls) == 10
+    assert [a["kind"] for a in alerts_of(publisher, OI_KINDS)] == ["oi_refresh_failed"]
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        dt.datetime(2026, 9, 25, 21, 20, tzinfo=dt.UTC),  # pátek 16:20 CDT, po uzávěrce
+        dt.datetime(2026, 9, 26, 0, 3, tzinfo=dt.UTC),  # sobota po rollu
+        dt.datetime(2026, 9, 27, 21, 30, tzinfo=dt.UTC),  # neděle 16:30 CDT, pre-open
+        dt.datetime(2026, 9, 23, 21, 30, tzinfo=dt.UTC),  # středa 16:30 CDT, denní pauza
+    ],
+)
+async def test_zavreny_trh_greeks_ani_striky_nehlasi(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    now: dt.datetime,
+) -> None:
+    """#1307: mimo seanci TWS nedodává modelGreeks ani kompletní kotace —
+    26. 9. 00:03 „Greeks ES nechodí pro 89 z 122", 00:20 „TWS dlouhodobě
+    nedodává kompletní data pro 62 striků NQ"."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    pipeline.runtime.expiry = MONDAY_EXPIRY
+
+    for minute in range(settings.greeks_stall_cycles + 2):
+        at = now + dt.timedelta(minutes=minute)
+        await pipeline._watch_greeks(at, stalled_metrics(stale=78, stalled=62))
+        await pipeline._watch_repair(at, stalled_metrics(stale=78, stalled=62))
+
+    assert alerts_of(publisher, {"greeks_stalled", "strikes_stalled"}) == []
+
+
+async def test_otevreny_trh_greeks_a_striky_hlasi(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """Regrese #1307: v běžící seanci (čtvrtek 24. 9. 10:00 CDT) se výpadek
+    Greeks i trvale selhávající repair hlásí beze změny."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    pipeline.runtime.expiry = MONDAY_EXPIRY
+    now = dt.datetime(2026, 9, 24, 15, 0, tzinfo=dt.UTC)
+
+    for minute in range(settings.greeks_stall_cycles):
+        at = now + dt.timedelta(minutes=minute)
+        await pipeline._watch_greeks(at, stalled_metrics(stale=78, stalled=62))
+        await pipeline._watch_repair(at, stalled_metrics(stale=78, stalled=62))
+
+    kinds = {str(a["kind"]) for a in alerts_of(publisher, {"greeks_stalled", "strikes_stalled"})}
+    assert kinds == {"greeks_stalled", "strikes_stalled"}
+    assert len(alerts_of(publisher, {"greeks_stalled", "strikes_stalled"})) == 2
+
+
+async def test_otevreni_zahodi_repair_stav_ze_zavreneho_trhu(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1307: přes víkend scheduler nasbírá repair kola a backoff. Bez resetu
+    na hraně otevření by striky začaly seanci v backoffu a první sweep
+    v 17:00 CT by hned hlásil `strikes_stalled`. (Že čítače BS fallbacku
+    reset přežijí, ověřuje chováním `test_scheduler`.)"""
+    settings, writer, repository, publisher = env
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    specs = list(pipeline.runtime.contracts)
+    # TWS dál nedodává (první minuty seance) — rozhoduje jen víkendová historie
+    scheduler = SubscriptionScheduler(MockQuoteStreamer(always_fail=set(specs)), settings)
+    pipeline.runtime.scheduler = scheduler
+
+    await pipeline.run_minute(SUN_PREOPEN)  # zavřeno — sweep běží, hlídače ne
+    far = 1e9
+    scheduler._fail_rounds = dict.fromkeys(specs, settings.repair_stall_rounds + 5)
+    scheduler._due_at = dict.fromkeys(specs, far)
+
+    await pipeline.run_minute(SUN_OPEN)
+
+    assert max(scheduler._fail_rounds.values()) < settings.repair_stall_rounds
+    assert all(due < far for due in scheduler._due_at.values())  # nic v backoffu
+    assert alerts_of(publisher, {"strikes_stalled", "greeks_stalled"}) == []
+
+
+async def test_preopen_bary_nehlasi_po_otevreni_ano(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1307: neděle 16:00–17:00 CT — indikativní kotace se hýbou, TRADES bary
+    nevznikají; 13. a 20. 9. z toho byl `bars_stalled` a obnova streamu.
+    Po otevření se hlídání obnoví."""
+    settings, writer, repository, publisher = env
+    settings.bars_stall_alert_minutes = 2
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+    restarts: list[int] = []
+
+    async def fake_restart() -> None:
+        restarts.append(len(restarts) + 1)
+
+    pipeline.restart_bars = fake_restart
+    ticker = pipeline.ticker
+    assert isinstance(ticker, FakeTicker)
+
+    for minute in range(5):  # 16:55–16:59 CDT, spot se hýbe, bary ne
+        ticker.last = 7600.0 + minute
+        await pipeline.run_minute(SUN_PREOPEN - dt.timedelta(minutes=4 - minute))
+    assert alerts_of(publisher, {"bars_stalled"}) == []
+    assert restarts == []
+
+    for minute in range(2):  # 17:00 a 17:01 CDT — bary pořád nechodí
+        ticker.last = 7610.0 + minute
+        await pipeline.run_minute(SUN_OPEN + dt.timedelta(minutes=minute))
+    assert [a["kind"] for a in alerts_of(publisher, {"bars_stalled"})] == ["bars_stalled"]
+    assert restarts == [1]
+
+
+def test_prechod_dst_denni_pauza_v_zime_22_az_23_utc(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1307: 1. 11. 2026 končí DST — denní pauza 16:00–17:00 CST je 22:00 až
+    23:00 UTC; pevný posun by obnovu OI pustil o hodinu dřív do zavřeného trhu."""
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+
+    # Pondělí 2. 11. (CST): 22:30 UTC je v pauze, 23:00 UTC po otevření
+    assert pipeline._oi_refresh_due(dt.datetime(2026, 11, 2, 22, 30, tzinfo=dt.UTC)) is False
+    assert pipeline._oi_refresh_due(dt.datetime(2026, 11, 2, 23, 0, tzinfo=dt.UTC)) is True
+    # Pondělí 26. 10. (CDT): 22:30 UTC = 17:30 CT, pauza už skončila
+    assert pipeline._oi_refresh_due(dt.datetime(2026, 10, 26, 22, 30, tzinfo=dt.UTC)) is True
+    # Neděle 1. 11. po otevření (23:00 UTC = 17:00 CST): CME v neděli nepublikuje
+    assert pipeline._oi_refresh_due(dt.datetime(2026, 11, 1, 23, 0, tzinfo=dt.UTC)) is False
