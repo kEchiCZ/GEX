@@ -44,6 +44,7 @@ PUBLISHED_KINDS = frozenset(
         "vol_concentration",
         "news_anomaly",
         "news_preopen",
+        "release_preview",
         "expiry_calendar",
         "drift",
         "setup_degraded",
@@ -109,8 +110,15 @@ def _legacy_category(kind: str) -> str:
     }
     if kind in ops:
         return "ops"
-    # news_preopen (#1291) vznikl po #1175 — patří ke zprávám jako news_anomaly
-    if kind in ("news_anomaly", "news_preopen", "vol_concentration", "expiry_calendar"):
+    # news_preopen (#1291) a release_preview (#1296) vznikly po #1175 — patří ke zprávám
+    # jako news_anomaly
+    if kind in (
+        "news_anomaly",
+        "news_preopen",
+        "release_preview",
+        "vol_concentration",
+        "expiry_calendar",
+    ):
         return "news"
     return "info"
 
@@ -157,7 +165,7 @@ def test_kazdy_druh_prave_jeden_prepinac() -> None:
     assert sum(len(topic.kinds) for topic in PUSH_TOPICS) == len(KIND_TOPIC)  # žádný dvakrát
     # broker je druh zprávy v kanálu news, retro_pass jde také kanálem news
     assert "broker" not in KIND_TOPIC and "retro_pass" not in KIND_TOPIC
-    assert len(PUSH_TOPICS) == 29
+    assert len(PUSH_TOPICS) == 30
     assert all(len(topic.setting) <= 64 for topic in PUSH_TOPICS)
     assert {topic.key for topic in PUSH_TOPICS if not topic.bell} == {"maintenance"}
 
@@ -188,7 +196,7 @@ def test_setting_keys_jen_master_a_topic() -> None:
         for key in PUSH_SETTING_KEYS
     )
     assert "push_telegram_news" not in PUSH_SETTING_KEYS
-    assert len(PUSH_SETTING_KEYS) == 30
+    assert len(PUSH_SETTING_KEYS) == 31
 
 
 # ── Dědění a efektivní stav ────────────────────────────────────────
@@ -205,7 +213,13 @@ def test_dedeni_z_kategorii() -> None:
     news = {t.key for t in PUSH_TOPICS if t.category == "news"}
     info = {t.key for t in PUSH_TOPICS if t.category == "info"}
     setup = {t.key for t in PUSH_TOPICS if t.category == "setup"}
-    assert news == {"news_anomaly", "news_preopen", "vol_concentration", "expiry_calendar"}
+    assert news == {
+        "news_anomaly",
+        "news_preopen",
+        "release_preview",
+        "vol_concentration",
+        "expiry_calendar",
+    }
     assert len(info) == 10  # 4 v „Setupy a burza", 6 v „Chování aplikace"
     assert setup == {"setup", "risk_brake", "paper", "scenario"}
 
@@ -454,3 +468,21 @@ def test_skripty_odkazuji_existujici_topic() -> None:
     }
     assert found, "žádný skript nepoužívá -Topic — pojistka by nic nekontrolovala"
     assert found <= {topic.key for topic in PUSH_TOPICS}
+
+
+def test_release_preview_zpravy_vychozi_zapnuto() -> None:
+    """#1296: upozornění před releasem = kategorie zpráv, výchozí zapnuto, tiché hodiny drží."""
+    topic = KIND_TOPIC["release_preview"]
+    assert (topic.key, topic.group, topic.category) == ("release_preview", "market", "news")
+    assert topic.default is True and not topic.ignores_quiet_hours
+    _, topics = effective({})
+    assert topics["release_preview"] is True
+    day = _push(FakePost(), clock=_at(13, 30))
+    assert day.decide({"kind": "release_preview", "symbol": "ES", "message": "CPI"}) is None
+    night = _push(FakePost(), clock=_at(23, 30))
+    assert night.decide({"kind": "release_preview", "symbol": "ES", "message": "x"}) == (
+        "tiché hodiny"
+    )
+    help_lines = topic.help_lines()
+    assert help_lines[0].startswith("60 a 15 min před CPI")
+    assert "• Ve zvonku: release_preview" in help_lines

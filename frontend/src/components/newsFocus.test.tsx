@@ -151,3 +151,28 @@ test('chyba načtení zpráv upozornění je vidět, ne tichý prázdný dialog'
   const banner = await screen.findByTestId('news-load-error')
   expect(banner.textContent).toContain('HTTP 500')
 })
+
+test('upozornění před releasem (#1296) je ve zvonečku proklikávací na zprávy releasu', async () => {
+  const fetchMock = mockApi()
+  renderApp()
+  const ws = FakeWebSocket.latest()
+  act(() => {
+    ws.open()
+    ws.push('alerts', {
+      kind: 'release_preview',
+      symbol: 'ES',
+      message: 'PCE za 15 min (13:00) — ES 7805.5',
+      ts: 1790334300,
+      ts_event: '2026-09-25T11:00:00+00:00',
+      event_ids: [11],
+    })
+  })
+  fireEvent.click(screen.getByRole('button', { name: /Notifikace/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Otevřít zprávy ES v grafu' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Zprávy v čase markeru' })
+  expect(dialog.textContent).toContain('USD Core PCE Price Index m/m')
+  const idsCall = fetchMock.mock.calls
+    .map(([url]) => String(url))
+    .find((url) => url.includes('ids='))
+  expect(idsCall).toContain('/news/markers?ids=11')
+})

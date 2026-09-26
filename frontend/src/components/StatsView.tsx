@@ -35,6 +35,7 @@ import {
   usdSimulation,
 } from '../setups/performance'
 import { fetchVerdictStats } from '../api/briefing'
+import { ReleaseHypothesesSection } from './ReleaseHypothesesSection'
 import { ScenarioStatsSection } from './ScenarioStatsSection'
 import type { VerdictStatBucket, VerdictStats } from '../api/briefing'
 import { sessionDateIso } from '../instrument/tz'
@@ -930,6 +931,8 @@ export function StatsView() {
       </section>
 
       <ScenarioStatsSection symbol={symbol} />
+
+      <ReleaseHypothesesSection />
 
       <section className="stats-section" aria-label="Track record">
         <h2>Track record — mechanické equity křivky</h2>

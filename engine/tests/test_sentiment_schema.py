@@ -43,6 +43,10 @@ EXPECTED_TABLES = {
     "signals",
     "review_queue",
     "track_record",
+    # Ohlášené releasy (#1296, ADR-0044) — jen aditivní create_all
+    "release_moves",
+    "release_previews",
+    "release_hypotheses",
 }
 
 

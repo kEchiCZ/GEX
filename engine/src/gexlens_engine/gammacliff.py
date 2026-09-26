@@ -129,19 +129,31 @@ def _levels_days(data_dir: Path, symbol: str) -> list[dt.date]:
     return sorted(days)
 
 
-def session_ranges(data_dir: Path, symbol: str) -> list[tuple[dt.date, float]]:
+def session_ranges(
+    data_dir: Path, symbol: str, since: dt.date | None = None
+) -> list[tuple[dt.date, float]]:
     """(seance, high−low) z bars partic; bary se řadí seanci dle ADR-0023.
 
     Bary po settle seance se nepočítají — rozsah odpovídá „do settle",
-    konzistentně s denní metrikou útesu.
+    konzistentně s denní metrikou útesu. `since` omezí čtení na seance
+    ≥ `since` (#1296: upozornění před releasem čte jen posledních ~45 dní);
+    seance začíná večer předchozího UTC dne, proto se čte i partice `since − 1`
+    a neúplná seance před `since` se zahodí.
     """
     bars_dir = data_dir / "derived" / symbol / "bars"
     if not bars_dir.exists():
         return []
+    first_partition = since - dt.timedelta(days=1) if since is not None else None
     highs: dict[dt.date, float] = {}
     lows: dict[dt.date, float] = {}
     settles: dict[dt.date, dt.datetime] = {}
     for path in sorted(bars_dir.glob("*.parquet")):
+        if first_partition is not None:
+            try:
+                if dt.date.fromisoformat(path.stem) < first_partition:
+                    continue
+            except ValueError:
+                pass  # nečitelné jméno čte jako dřív celé (chyba se ukáže při čtení)
         try:
             table = pq.read_table(path, columns=["ts_min", "high", "low"])
         except Exception:
@@ -157,7 +169,7 @@ def session_ranges(data_dir: Path, symbol: str) -> list[tuple[dt.date, float]]:
                 continue
             highs[session] = max(highs.get(session, float(record["high"])), float(record["high"]))
             lows[session] = min(lows.get(session, float(record["low"])), float(record["low"]))
-    return [(day, highs[day] - lows[day]) for day in sorted(highs)]
+    return [(day, highs[day] - lows[day]) for day in sorted(highs) if since is None or day >= since]
 
 
 def session_band_depths(data_dir: Path, symbol: str, session: dt.date) -> list[float | None]:

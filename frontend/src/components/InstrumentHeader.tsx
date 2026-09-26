@@ -34,8 +34,9 @@ function alertTimestamp(ts: number): string {
   })
 }
 
-/** Upozornění na zprávy s proklikem do grafu (#1290) — payload nese `event_ids`. */
-const NEWS_ALERT_KINDS = new Set(['news_anomaly', 'news_preopen'])
+/** Upozornění na zprávy s proklikem do grafu (#1290) — payload nese `event_ids`;
+`release_preview` (#1296) = releasy, před kterými upozornění varuje. */
+const NEWS_ALERT_KINDS = new Set(['news_anomaly', 'news_preopen', 'release_preview'])
 /** Strop `ids` v `GET /news/markers` — delší výčet API odmítne. */
 const NEWS_FOCUS_MAX_IDS = 100
 

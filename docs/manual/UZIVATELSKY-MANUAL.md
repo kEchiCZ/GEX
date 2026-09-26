@@ -909,6 +909,7 @@ Signál se ukáže jako **šipka na cenové křivce** (▲ Long teal / ▼ Short
 | **Hit-raty bucketů** | Empirický model reakcí na zprávy: úspěšnost per kategorie × důležitost × překvapení, přepínač **okna reakce** (+5/+15/+30/+60 min) a **režimu** (vše / RiskOn / RiskOff / Neutral / gamma ±), progres ke gate |
 | **Výkon setupů** (v1.10) | **Sharpe ratio a equity křivka** simulace: denní ΣR přes všechny symboly watchlistu (jen aktuální mechanika detektoru), anualizovaný Sharpe celkem + za posledních 30 seancí, max drawdown a **USD simulace** s exekucí micro kontrakty dle kalkulačky (Trading nastavení) včetně nákladů. Do 60 seancí varování o malém vzorku — potvrzení cíle Sharpe > 2 vyžaduje 400+ seancí |
 | **Setupy per režim** | Úspěšnost šablon T1–T7 rozpadlá podle GEX režimu — které setupy fungují v jakém prostředí |
+| **Releasy — předem registrované hypotézy** (v1.22, #1296) | Živý stav hypotéz o reakci trhu na ohlášené releasy: **H1** teplejší jádro inflace → za 15 min níž (ES, NQ), **H3** po CPI je ES za 60 min výš (jen ES, do upozornění nejde), **M1** výchylka za 15 min nad běžným dnem u CPI/NFP/FOMC/PPI/PCE (ES, NQ). Sloupce: stav (ověřuje se šedá / ověřeno zelená / zamítnuto červená), živě k/n, 95% interval, další kontrolní bod a historie výzkumu (jen popisně). Počítají se jen releasy od 1. 10. 2026 a rozhoduje se jen při n = 10, 20 a 30: ověřeno = dolní mez intervalu nad 50 %, zamítnuto = horní mez pod 50 % nebo n = 30 bez ověření; kritéria se už nemění a rozhodnutí je konečné — pozdější oprava dat ho nezmění (tooltip nadpisu). U řádku rozbalíš posledních 10 releasů (✔/✘ a výnos či výchylka v bp). Když se data nenačtou, sekce ukáže chybu |
 | **Track record** | Mechanické equity křivky strategií (signály, setupy) + drawdown |
 | **Latence zdrojů** | Jak rychle který zdroj doručuje zprávy (medián, p90, podíl dávek) |
 | **Striky se zasekly / zase jedou** | Část pásma opakovaně nejde opravit (repair kola bez úspěchu) — TWS pro ně přestala dodávat modelGreeks; hint **restart TWS**. Návrat se ohlásí |
@@ -1283,8 +1284,8 @@ Telegram. V Settings → **Notifikace (Telegram)**:
   hodnoty ale zůstanou uložené.
 - **Setupy a burza** — ve výchozím stavu zapnuté: Nový setup, Brzda ztráty,
   Paper účet, Scénář dne, Reakce trhu na zprávu, Zprávy před otevřením po
-  víkendu, Koncentrace opčního objemu, Kalendář expirací, Setup detektor
-  prodělává; vypnuté (chodí často nebo jsou
+  víkendu, Očekávaný pohyb před releasem, Koncentrace opčního objemu, Kalendář
+  expirací, Setup detektor prodělává; vypnuté (chodí často nebo jsou
   jen informační): Cena u GEX úrovně, Kandidát vzorce T6, Setup detektor se
   zotavil, Drift vzorců.
 - **Chování aplikace** — ve výchozím stavu zapnuté výpadky a degradace: Výpadek
@@ -1315,7 +1316,7 @@ nevznikají, T2/T3/T7 a zprávy chodí dál; provozní alert o přetažení dost
 
 Zvonek je **globální — sbírá alerty napříč všemi instrumenty** ve watchlistu, ne jen z toho na grafu. Proto je u každého alertu **datum + čas** notifikace a **symbol instrumentu** (např. `[NQ · setup]`). Naproti tomu **karty a linie setupů přímo v grafu jsou jen pro instrument, který máš zobrazený.** Víceřádková upozornění (reakce trhu na zprávy, zprávy před otevřením) se ve zvonku zobrazí po řádcích jako na Telegramu.
 
-**Proklik na zprávy** (v1.21, #1290): upozornění *Reakce trhu na zprávy* a *Zprávy před otevřením* jsou ve zvonku klikací („Otevřít zprávy v grafu"). Klik přepne graf na instrument upozornění, zapne vrstvu **News** a otevře **dialog se zprávami upozornění** (s datem, když leží mimo zobrazený den). U reakce trhu navíc **jednou posune graf** tak, aby začátek shluku byl uprostřed (zoom i cenová osa zůstávají) — marker tam najdeš spolu s ostatními zprávami toho sloupce, **i s filtrem Významné**: zprávy upozornění projdou filtrem vždy (upozornění bere makro podle dopadu z kalendáře, ne podle důležitosti). Po návratu na graf z jiné obrazovky se pohled znovu neposouvá. U souhrnu před otevřením se graf neposouvá: víkendové zprávy na ose seance neleží. Zvonek drží upozornění jen v paměti stránky (posledních 50), po obnovení stránky je prázdný; z Telegramu vede k zprávě jen čas v textu upozornění („Reakce ES na zprávy z 13:00").
+**Proklik na zprávy** (v1.21, #1290): upozornění *Reakce trhu na zprávy*, *Zprávy před otevřením* a *Očekávaný pohyb před releasem* (#1296) jsou ve zvonku klikací („Otevřít zprávy v grafu"). Klik přepne graf na instrument upozornění, zapne vrstvu **News** a otevře **dialog se zprávami upozornění** (s datem, když leží mimo zobrazený den). U reakce trhu navíc **jednou posune graf** tak, aby začátek shluku byl uprostřed (zoom i cenová osa zůstávají) — marker tam najdeš spolu s ostatními zprávami toho sloupce, **i s filtrem Významné**: zprávy upozornění projdou filtrem vždy (upozornění bere makro podle dopadu z kalendáře, ne podle důležitosti). Po návratu na graf z jiné obrazovky se pohled znovu neposouvá. U souhrnu před otevřením se graf neposouvá: víkendové zprávy na ose seance neleží. U upozornění před releasem se graf posune na release jen při kliku po releasu; klik před releasem otevře jen dialog se zprávami releasu (odhad, předchozí hodnota) a graf se ani později, v minutě releasu, sám neposune — pohled, který si mezitím nastavíš, zůstane. Zvonek drží upozornění jen v paměti stránky (posledních 50), po obnovení stránky je prázdný; z Telegramu vede k zprávě jen čas v textu upozornění („Reakce ES na zprávy z 13:00").
 
 Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a jeho výchozí stav; úplný popis ukážou tooltipy přepínačů):
 
@@ -1339,6 +1340,7 @@ Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a je
 | **T6 kandidát** | Ráno po výprodeji (close −1 % a hůř) nastala konstelace premarket squeeze (kap. 18) — zatím se jen sbírá, šablona vznikne po ~5 výskytech | Kandidát vzorce T6 (vyp.) |
 | **Drift hlídka** | Čerstvá úspěšnost signálového bucketu se statisticky rozešla s historickou — model přestává platit, signály z něj ber s rezervou (detail na Stats) | Drift vzorců (vyp.) |
 | **Reakce trhu na zprávy** (`news_anomaly`) | Trh se do 5 min po shluku zpráv s aspoň jednou **významnou** zprávou pohnul mimořádně — nad 97 % výchylek v tuto denní dobu i po zohlednění volatility poslední hodiny. Jedno upozornění na shluk a instrument, ES a NQ zvlášť (viz níže) | Reakce trhu na zprávu (zap.) |
+| **Očekávaný pohyb před releasem** (`release_preview`) | 60 a 15 min před CPI, NFP, FOMC, PPI, PCE, Retail Sales a ISM Services: typická výchylka ES a NQ za 15 min po releasu, přepočtená na dnešní volatilitu, a úrovně v jejím dosahu; směr jen u jádra inflace jako hypotéza „ověřuje se“ (viz níže) | Očekávaný pohyb před releasem (zap.) |
 | **Zprávy před otevřením po víkendu** (`news_preopen`) | V neděli 4 h před otevřením Globexu (20:00) souhrn **zásadních** zpráv za víkend se směrem, sklonem a úrovněmi poslední seance, 15 min před otevřením (23:45) aktualizace jen s novou zásadní zprávou; ES a NQ zvlášť, jen když nějaká zásadní vyšla (viz níže) | Zprávy před otevřením po víkendu (zap., i v tichých hodinách) |
 
 ### Upozornění na zprávy (#1291)
@@ -1429,6 +1431,69 @@ další zásadní: 16 · další významné: 11 · ostatní zprávy: 1910
   nepřijde.
 - Restart aplikace v neděli večer souhrn nezopakuje; když aplikace ve 20:00 neběžela,
   souhrn přijde jednou při prvním běhu do otevření.
+
+### Upozornění před releasem (v1.22, #1296)
+
+Před velkým ohlášeným releasem (ekonomický kalendář, dopad High) přijde **60 a 15 minut
+předem** upozornění na každý instrument zvlášť. Říká, **jak velký pohyb** po takovém releasu
+čekat a **které úrovně** leží v jeho dosahu — ne kam trh půjde.
+
+```
+CPI za 60 min (14:30) — ES 7805.5
+Vyjde: Core CPI m/m (odhad 0.3%), CPI m/m, Core CPI y/y, CPI y/y
+Očekávaná výchylka do 15 min: 30–36 bodů (38–46 bp)
+medián–p75 z 23 CPI · volatilita 0.94× obvyklé (bez přepočtu 39–56 bp)
+V dosahu 7769–7842: call zeď 7810 (+4.5) · těžiště 7800 (-5.5) · flip 7785 (-20.5)
+Dál: put zeď 7735 (-70.5)
+H1 – OVĚŘUJE SE: jádro inflace teplejší než odhad → historicky za 15 min níž ve 13 ze 14 (živě 0 z 0)
+Směr jinak bez prokazatelného efektu.
+```
+
+**Co upozornění říká:**
+
+- **Které releasy**: CPI, NFP (s nezaměstnaností a mzdami), FOMC, PPI a PCE; Retail Sales
+  a ISM Services se štítkem „slabší řada“ (velikost u nich drží hůř). Týdenní žádosti
+  o podporu (Claims) upozornění nemají. Souběžné releasy v jedné minutě jsou jedno
+  upozornění a pojmenuje ho nejdůležitější z nich.
+- **Očekávaná výchylka** = největší pohyb ceny (nahoru nebo dolů, i když se vrátí) do 15 minut
+  po releasu, **v bodech** pro dnešní cenu (jako úrovně) a v závorce v bp. První číslo je
+  medián z minulých releasů téže rodiny (polovina releasů pohnula trhem víc), druhé p75
+  (čtvrtina víc). Druhý řádek říká, odkud číslo je: z kolika releasů a jak se **přepočítalo
+  na dnešní volatilitu** — když je trh posledních 20 seancí klidnější než obvykle při tomto
+  releasu (0.94×), čeká se i menší pohyb; v závorce číslo bez přepočtu.
+- **V dosahu** = call/put zeď, flip a těžiště 0DTE mezi cenou − p75 a cenou + p75, seřazené
+  podle vzdálenosti (v závorce vzdálenost od ceny v bodech); **Dál** = ostatní. Úrovně jsou
+  z okamžiku upozornění a do releasu se mění — starší než 10 min nesou čas.
+- **Směr jen u jádra inflace** (Core CPI, Core PPI, Core PCE): hypotéza **H1** „teplejší než
+  odhad → za 15 min níž“ historicky platila ve 13 ze 14 releasů, ale **teprve se ověřuje živě**
+  (od 1. 10. 2026). Dokud není ověřená, upozornění **neuvádí pravděpodobnost**; po ověření
+  přibude „s pravděpodobností X % [interval]“, po zamítnutí řádek zmizí. Stav vidíš ve
+  **Statistikách → Releasy**.
+- **Velikost ověřená živě** (dovětek „Velikost nad běžným dnem ověřena živě k z n (M1)“) se
+  objeví až po ověření hypotézy M1 a jen u CPI, NFP, FOMC, PPI a PCE — slabší řady (Retail
+  Sales, ISM Services) M1 nehodnotí, takže ho nenesou nikdy.
+
+**Co upozornění NEříká:**
+
+- **Neříká směr** — u všech ostatních releasů výzkum nenašel nic, co by směr předem
+  předpovědělo (ani podle překvapení u trhu práce, růstu, Fedu, ani podle pohybu před
+  releasem). Proto „Směr: bez prokazatelného efektu.“
+- **Neříká opačný scénář u inflace** („chladnější → výš“) — v datech mimo vzorek nedržel.
+- **Není to hranice**: zhruba v každém pátém releasu byla výchylka větší než p75.
+- **Neví, jaké číslo vyjde** — odhad v řádku „Vyjde“ je z kalendáře tak, jak ho ukazuje
+  ForexFactory; vyhodnocení H1 bere číslo z databáze a to se může lišit (u NFP třeba „58K“
+  v textu a 55 000 v datech).
+- **Nepozná přesunutý release** — změnu času kalendář do aplikace nepropíše (#1298): při
+  přesunu v rámci dne přijde upozornění podle původního času, při přesunu na jiný den přijde
+  navíc falešné upozornění v původní čas (do statistik ani hypotéz se nezapočte). Release,
+  který v kalendáři chybí, také nepozná.
+- **Nic po releasu** — upozornění „co se stalo a co dál“ (aktivní scénář, vícedenní výhled)
+  zatím není.
+
+Když chybí data, text to řekne a upozornění stejně přijde: „ES cena chybí“ (bez barů posledních
+15 min), „Úrovně ES chybí“, „bez přepočtu na dnešní volatilitu“ nebo „málo historie (n = …)“
+(pod 8 minulými releasy rodiny). Restart aplikace upozornění nezopakuje; když aplikace v T−60
+neběžela, přijde jen T−15.
 
 ### Setupy
 

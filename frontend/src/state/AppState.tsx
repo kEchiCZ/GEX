@@ -103,8 +103,8 @@ export interface AlertMessage {
   ts: number
   /** Setup alerty (#186): 'created' → proklik na graf, 'closed' → na Setupy. */
   event?: string
-  /** Upozornění na zprávy (#1291): čas zprávy / začátek shluku (`news_anomaly`)
-      nebo otevření Globexu (`news_preopen`). */
+  /** Upozornění na zprávy (#1291): čas zprávy / začátek shluku (`news_anomaly`),
+      otevření Globexu (`news_preopen`) nebo čas releasu (`release_preview`, #1296). */
   ts_event?: string
   /** Zprávy upozornění (#1290) — proklik ze zvonečku na jejich marker a dialog. */
   event_ids?: number[]
@@ -117,6 +117,9 @@ export interface NewsFocus {
   tsEvent: string | null
   /** Každé kliknutí je nový požadavek, i na totéž upozornění (posun grafu znovu). */
   nonce: number
+  /** Čas kliknutí (ms) — release v budoucnu v tu chvíli = jen dialog, bez pozdějšího
+      posunu grafu v minutě releasu (#1296). */
+  requestedMs: number
 }
 
 export interface Toggles {
@@ -285,7 +288,7 @@ interface AppState {
   markAlertsRead: () => void
   /** Proklik z upozornění na zprávy (#1290): dialog zpráv a posun grafu na marker. */
   newsFocus: NewsFocus | null
-  requestNewsFocus: (focus: Omit<NewsFocus, 'nonce'>) => void
+  requestNewsFocus: (focus: Omit<NewsFocus, 'nonce' | 'requestedMs'>) => void
   consoleLog: string[]
   priceInfo: PriceInfo
   setPriceInfo: (info: PriceInfo) => void
@@ -498,8 +501,9 @@ export function AppStateProvider({
   const [alerts, setAlerts] = useState<AlertMessage[]>([])
   const [unreadAlerts, setUnreadAlerts] = useState(0)
   const [newsFocus, setNewsFocus] = useState<NewsFocus | null>(null)
-  const requestNewsFocus = useCallback((focus: Omit<NewsFocus, 'nonce'>) => {
-    setNewsFocus((previous) => ({ ...focus, nonce: (previous?.nonce ?? 0) + 1 }))
+  const requestNewsFocus = useCallback((focus: Omit<NewsFocus, 'nonce' | 'requestedMs'>) => {
+    const requestedMs = Date.now()
+    setNewsFocus((previous) => ({ ...focus, requestedMs, nonce: (previous?.nonce ?? 0) + 1 }))
   }, [])
   const [consoleLog, setConsoleLog] = useState<string[]>([])
   const [setupsVersion, setSetupsVersion] = useState(0)

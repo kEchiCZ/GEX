@@ -786,3 +786,54 @@ def test_news_markers_route_is_not_swallowed_by_event_detail(client: TestClient)
     """`/news/markers` je registrovaný před `/news/{event_id}` — jinak 422 z int parseru."""
     response = client.get("/news/markers", params={"ids": "1"})
     assert response.status_code == 200
+
+
+def test_release_hypotheses_prazdna_db_a_radek_beze_zmeny(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """#1296: bez řádku „ověřuje se“ s n = 0 z registru; uložený stav API jen předá."""
+    from sqlalchemy import create_engine
+
+    from gexlens_engine.storage.sentiment import release_hypotheses
+
+    empty = client.get("/stats/releases/hypotheses").json()
+    assert empty["registered_at"] == "2026-10-01T00:00:00+00:00"
+    assert empty["criteria"]["checkpoints"] == [10, 20, 30]
+    assert [h["id"] for h in empty["hypotheses"]] == ["H1", "H3", "M1"]
+    h1 = empty["hypotheses"][0]
+    assert h1["in_preview"] == "testing" and set(h1["symbols"]) == {"ES", "NQ"}
+    assert h1["symbols"]["ES"] == {
+        "historical": {"hits": 13, "n": 14},
+        "hits": 0,
+        "n": 0,
+        "wilson_lb": None,
+        "wilson_ub": None,
+        "status": "testing",
+        "decided_at_n": None,
+        "next_checkpoint": 10,
+        "outcomes": [],
+        "computed_at": None,
+    }
+    assert set(empty["hypotheses"][1]["symbols"]) == {"ES"}  # H3 jen ES
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}")
+    outcome = {"cluster_ts": "2026-10-02T12:30:00+00:00", "family": "NFP", "hit": True}
+    with engine.begin() as conn:
+        conn.execute(
+            insert(release_hypotheses).values(
+                hypothesis="M1",
+                symbol="NQ",
+                n=10,
+                hits=10,
+                wilson_lb=0.72,
+                wilson_ub=1.0,
+                status="verified",
+                decided_at_n=10,
+                outcomes=[outcome],
+                computed_at=NOW,
+            )
+        )
+    m1 = client.get("/stats/releases/hypotheses").json()["hypotheses"][2]["symbols"]["NQ"]
+    assert (m1["hits"], m1["n"], m1["status"], m1["decided_at_n"]) == (10, 10, "verified", 10)
+    assert m1["wilson_lb"] == 0.72 and m1["outcomes"] == [outcome]
+    assert m1["next_checkpoint"] is None

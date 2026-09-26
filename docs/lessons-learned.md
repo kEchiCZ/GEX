@@ -156,6 +156,19 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-26 — „konečné“ rozhodnutí hypotézy a „pevná“ kritéria platila jen v textu ADR (#1296): přepočet od nuly a sdílené konstanty.**
+  `release_hypotheses` se po každé změně počítala celá znovu a CLI backfill přeměřoval i živé releasy — oprava
+  dat by zpětně překlopila „ověřeno“ na „ověřuje se“; M1 bral rodiny a baseline ze sdílených konstant upozornění
+  a news_anomaly, takže jejich ladění by potichu změnilo registrované kritérium. → Co má být neměnné, musí
+  vynutit kód: vyhodnocený úsek se přebírá z předchozího stavu (ne přepočítává), registr má vlastní kopie vstupů
+  a strážní test na ně. Slib v ADR bez mechanismu, který ho drží, je nález.
+- **2026-09-26 — walk-forward „prošlo“ signál, který OOS nepotvrzuje nezávisle (#1296): OOS použitý k objevu i k ověření.**
+  `verdicts()` ve výzkumu releasů rozhodoval podle BH q z **celého** vzorku a chtěl „směr IS = směr celku“; celý
+  vzorek ale obsahuje OOS, takže silný OOS pomohl signálu přes práh objevu a pak ho „ověřil“. Jediný „prošlý“
+  signál (Core PPI → NQ 3 seance) adversariální kontrola vyvrátila; po opravě (q jen z IS p-hodnot, OOS jen
+  jednostranně ve směru IS) z „prošlo“ vypadl. → Ve walk-forward stojí objev (výběr, BH, směr) **jen na IS**,
+  OOS jen ověřuje; kritéria zapsat do docstringu/ADR před pohledem na výsledky a opravu metodiky označit jako
+  korekci, ne ladění. Živé hypotézy (ADR-0044) mají kritéria v kódu a strážní test, ne v DB.
 - **2026-09-25 — markery zpráv během dne mizely, k upozornění nešla v grafu najít zpráva (#1290): „posledních N“ jako zdroj časové osy.**
   Graf bral `/news?limit=100`; při toku ~150 zpráv/h to pokrylo ~30–40 min (upozornění ve 14:03 na zprávy
   z 13:00, graf začínal 13:42). Tamtéž druhá tichá chyba: marker se pároval na osu shodou popisku `HH:MM`,
