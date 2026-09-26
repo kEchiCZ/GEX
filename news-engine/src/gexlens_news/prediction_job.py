@@ -148,6 +148,12 @@ class PredictionJob:
     # ── 3) Váhy ────────────────────────────────────────────────────
 
     def load_outcomes(self, now: dt.datetime, symbol: str) -> list[Outcome]:
+        """Outcomes klouzavého okna podle **času zprávy**, ne času vyhodnocení.
+
+        `computed_at` je čas zápisu outcome: reklasifikace (#1293) nebo retro
+        dopočet reakcí vyhodnotí jednorázově i měsíce staré predikce a filtr
+        podle něj by váhy počítal 90 dní převážně z historie.
+        """
         since = now - dt.timedelta(days=self._rolling_days)
         stmt = (
             select(
@@ -165,7 +171,7 @@ class PredictionJob:
             )
             .where(
                 news_prediction_outcomes.c.symbol == symbol,
-                news_prediction_outcomes.c.computed_at >= since,
+                news_events.c.ts_event >= since,
                 news_events.c.category.is_not(None),
             )
         )

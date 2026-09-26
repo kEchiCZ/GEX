@@ -6,12 +6,11 @@ jen tehdy, když v něm je aspoň jedna **významná** zpráva a trh se zárove�
 pohnul mimořádně. Jedno upozornění = shluk × instrument; ES a NQ se
 rozhodují úplně zvlášť (vlastní bary, baseline, práh, cooldown).
 
-* **Významná zpráva** (`is_significant`, rozhodnutí uživatele 25. 9. 2026,
-  varianta B): FF kalendář s impactem High/Medium podle surového payloadu
-  (`raw.impact`), headline a broker s importance ≥ 2 mimo kategorii EARNINGS,
-  sociální sítě jen od kurátorů (#578) s importance ≥ 2. U scheduled se
-  nebere `importance`: pravidlový klasifikátor ji přepisuje regexem nad
-  titulkem („USD PPI m/m" High → 1, „FOMC Member Speaks" Low → 3).
+* **Významná zpráva** (`is_significant`): sdílená definice
+  `gexlens_engine.compute.news_significance` (#1293, #1305, ADR-0045) —
+  importance ≥ 2 mimo EARNINGS; kalendář FF dostává importance podle měny
+  a sociální sítě bez kurátora strop 1 už v klasifikátoru v2. Stejnou funkcí
+  filtruje graf „Významné“ i předobchodní souhrn.
 * **Shluk** se kotví na první významné zprávě `t0` a bere zprávy do
   `t0 + CLUSTER_SPAN`. Šum shluk nezaloží ani neprodlouží (řetězení přes
   všechny zprávy dělalo shluky o tisících zpráv), jen se počítá.
@@ -34,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from gexlens_engine.compute import news_significance
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_news.reactions import (
     TOD_QUANTILE,
@@ -56,14 +56,9 @@ LOOKBACK = dt.timedelta(minutes=30)
 #: Rezerva na zápis finálního baru (engine ho píše až v další minutě)
 BAR_SETTLE = dt.timedelta(minutes=2)
 
-SIGNIFICANT_MIN_IMPORTANCE = 2
-#: FF impact (`raw.impact`), malými písmeny
-SCHEDULED_SIGNIFICANT_IMPACTS = frozenset({"high", "medium"})
-#: Varianta B (#1291 Q1): earnings a přepisy hovorů nejsou významné — přes
-#: polovinu headline s importance ≥ 2 tvořily firemní výsledky bez vlivu na index
-EXCLUDED_CATEGORIES = frozenset({"EARNINGS"})
-SCHEDULED_KIND = "scheduled"
-SOCIAL_KIND = "social"
+SCHEDULED_KIND = news_significance.SCHEDULED_KIND
+#: Pořadí nevýznamné zprávy — za všemi stupni významnosti
+INSIGNIFICANT_RANK = news_significance.TIER_NEWS_MEDIUM + 1
 
 #: Kolik významných zpráv text vyjmenuje; zbytek jen počtem
 MAX_LISTED = 5
@@ -82,10 +77,6 @@ class ClusterEvent:
     title: str
     importance: int | None = None
     category: str | None = None
-    #: FF impact z `raw.impact` (jen scheduled)
-    ff_impact: str | None = None
-    #: Autor je kurátor (#578) — `raw.curated`, zapisuje Bluesky collector
-    curated: bool = False
     #: Klasifikovaný směr (`sentiment_dir`: +1 / −1 / 0, None = neklasifikováno)
     direction: int | None = None
 
@@ -102,25 +93,18 @@ class Cluster:
 
 
 def is_significant(event: ClusterEvent) -> bool:
-    """Jediné místo s definicí významné zprávy (#1291, varianta B)."""
-    if event.kind == SCHEDULED_KIND:
-        return (event.ff_impact or "").strip().lower() in SCHEDULED_SIGNIFICANT_IMPACTS
-    if (event.importance or 0) < SIGNIFICANT_MIN_IMPORTANCE:
-        return False
-    if event.kind == SOCIAL_KIND:
-        return event.curated
-    return event.category not in EXCLUDED_CATEGORIES
+    """Významná zpráva — sdílená definice (`news_significance`, ADR-0045)."""
+    return news_significance.is_significant(event.kind, event.importance, event.category)
 
 
 def significance_tier(event: ClusterEvent) -> int:
-    """Stupeň významnosti: 0 scheduled High, 1 Medium, 2 importance 3, 3 importance 2."""
-    if event.kind == SCHEDULED_KIND:
-        return 0 if (event.ff_impact or "").strip().lower() == "high" else 1
-    return 2 if (event.importance or 0) >= 3 else 3
+    """Stupeň: 0 kalendář importance 3, 1 kalendář 2, 2 zpráva 3, 3 zpráva 2; jinak za nimi."""
+    tier = news_significance.significance_tier(event.kind, event.importance, event.category)
+    return tier if tier is not None else INSIGNIFICANT_RANK
 
 
 def significance_rank(event: ClusterEvent) -> tuple[int, dt.datetime, int]:
-    """Řazení: scheduled High > Medium > importance 3 > importance 2, pak čas a id."""
+    """Řazení: stupeň významnosti (`significance_tier`), pak čas a id."""
     return (significance_tier(event), event.ts_event, event.id)
 
 

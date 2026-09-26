@@ -22,7 +22,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-from gexlens_news.classifier import classify_category
+from gexlens_news.classifier import classify_category, scheduled_importance
 from gexlens_news.collectors import CollectorClock, utc_now
 from gexlens_news.http import Fetcher
 from gexlens_news.model import NewsEvent, RawItem
@@ -35,8 +35,6 @@ FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 # na USD data. EUR/GBP/JPY zprávy se sbírají (risk sentiment se přelévá), ale
 # symboly nedostávají — reakční okna by měřila šum.
 _SYMBOLS_BY_COUNTRY = {"USD": ["ES", "NQ"]}
-
-_IMPACT = {"high": 3, "medium": 2, "low": 1}
 
 
 def parse_number(raw: object) -> float | None:
@@ -111,7 +109,7 @@ class ForexFactoryCollector:
             return None
 
         country = str(payload.get("country") or "").upper()
-        impact = _IMPACT.get(str(payload.get("impact") or "").lower(), 1)
+        full_title = f"{country} {title}" if country else title
         return NewsEvent(
             ts_event=ts_event,
             ts_ingested=item.fetched_at,
@@ -121,8 +119,9 @@ class ForexFactoryCollector:
             source_uid=f"{country}|{title}|{ts_event.isoformat()}",
             kind="scheduled",
             category=classify_category(title),
-            importance=impact,
-            title=f"{country} {title}" if country else title,
+            # FF impact podle měny (#1293) — tatáž funkce jako klasifikační job
+            importance=scheduled_importance(full_title, str(payload.get("impact") or "")),
+            title=full_title,
             summary=None,
             symbols=list(_SYMBOLS_BY_COUNTRY.get(country, [])),
             forecast=parse_number(payload.get("forecast")),

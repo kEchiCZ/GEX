@@ -17,13 +17,16 @@ read-only), parquet bary `data/derived/{ES,NQ}/bars` jen čte.
   partice a stav předobchodních etap drží paměť (DB je jen pro čtení).
   Předobchodní job se přehrává zvlášť za posledních `--preopen-weeks` víkendů
   (mimo etapy nic nedělá, stačí kroky od T−4 h do otevření).
-* **Kurátoři**: příznak `raw.curated` zapisuje Bluesky collector až od nasazení
-  #1291. Pro historii jde emulovat souborem DID kurátorů (`--curated-dids`,
-  jeden DID na řádek); bez něj nejsou sociální sítě významné vůbec.
+* **Kurátoři**: významnost od klasifikátoru v2 (ADR-0045) rozhoduje jen
+  z klasifikace — nekurátorované sociální sítě mají od klasifikátoru strop
+  importance 1. Kurátory historie z doby před příznakem `raw.curated` řeší
+  reklasifikace (`reclassify_news_rules.py`, ADR-0045 bod 8), proto emulace
+  podle DID (`--curated-dids`) odpadla — před reklasifikací replay kurátory
+  historie nevidí.
 
 Spuštění (z hostitele, PG publikované na 55432; URL se nikdy nevypisuje):
     uv run python scripts/measure_news_anomaly.py --days 14 --out report.md \\
-        [--curated-dids dids.txt] [--end 2026-09-25T15:30] [--preopen-weeks 8]
+        [--end 2026-09-25T15:30] [--preopen-weeks 8]
 
 URL: `--db`, jinak `GEXLENS_HOST_DATABASE_URL`, jinak sestavená z
 `GEXLENS_PG_PASSWORD` (uživatel/DB `gexlens`, 127.0.0.1:55432).
@@ -40,7 +43,7 @@ import sys
 import time
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -254,21 +257,6 @@ class ReplayPreopen(PreopenJob):
 
     def store_state(self, state: PreopenState) -> None:
         self._state = state.to_json()
-
-
-def emulate_curated(stored: list[StoredEvent], dids: set[str]) -> tuple[list[StoredEvent], int]:
-    """Historické posty kurátorů příznak nemají — doplní se podle DID."""
-    if not dids:
-        return stored, 0
-    changed = 0
-    result = []
-    for item in stored:
-        did = item.source.split("|", 1)[1]
-        if item.event.kind == "social" and did in dids and not item.event.curated:
-            item = replace(item, event=replace(item.event, curated=True))
-            changed += 1
-        result.append(item)
-    return result, changed
 
 
 # ── Stará pravidla (#295) ──────────────────────────────────────────
@@ -570,7 +558,6 @@ def render(
     replay_s: float,
     real: dict[str, float],
     partition_reads: int,
-    curated_emulated: int,
     stored: Sequence[StoredEvent],
 ) -> str:
     anomalies = [a for a in new if a.payload["kind"] == ANOMALY_KIND]
@@ -638,8 +625,7 @@ def render(
     by_source = Counter(s.source.split("|", 1)[0] for s in significant)
     out += [
         f"Zprávy v období: {len(period)}, z toho významných {len(significant)} "
-        f"({', '.join(f'{k} {v}' for k, v in by_source.most_common())}); "
-        f"kurátorovaných sociálních postů doplněných podle DID: {curated_emulated}.",
+        f"({', '.join(f'{k} {v}' for k, v in by_source.most_common())}).",
         "",
         "## Doba běhu",
         "",
@@ -798,7 +784,6 @@ def main() -> None:
     parser.add_argument("--data-dir", default=os.environ.get("GEXLENS_DATA_DIR", "data"))
     parser.add_argument("--days", type=int, default=14)
     parser.add_argument("--end", default=None, help="konec období, ISO UTC (výchozí teď)")
-    parser.add_argument("--curated-dids", default=None, help="soubor s DID kurátorů")
     parser.add_argument(
         "--preopen-weeks", type=int, default=8, help="kolik posledních víkendů přehrát"
     )
@@ -821,15 +806,7 @@ def main() -> None:
     openings = weekend_openings(end - dt.timedelta(weeks=args.preopen_weeks), end)
     first = min([start, known_first, *openings])
     stored = load_all_events(engine, first - dt.timedelta(days=5), end)
-    dids: set[str] = set()
-    if args.curated_dids:
-        dids = {
-            line.strip()
-            for line in Path(args.curated_dids).read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        }
-    stored, emulated = emulate_curated(stored, dids)
-    print(f"Zprávy: {len(stored)} (kurátor doplněn u {emulated})", flush=True)
+    print(f"Zprávy: {len(stored)}", flush=True)
 
     began = time.perf_counter()
     old = old_rule_alerts(engine, start, end)
@@ -871,7 +848,6 @@ def main() -> None:
         replay_s=replay_s,
         real=real,
         partition_reads=bars.partition_reads,
-        curated_emulated=emulated,
         stored=stored,
     )
     Path(args.out).write_text(report, encoding="utf-8")

@@ -261,8 +261,8 @@ describe('historie (#788): záporné koše', () => {
   test('uzavřený den: markery z cache per identita dne, osy a filtru', () => {
     const today = daySegment(sessionMinutes())
     const day = new Map([
-      [1, row({ id: 1, at: minute(3), importance: 1 })],
-      [2, row({ id: 2, at: minute(7), importance: 3 })],
+      [1, row({ id: 1, at: minute(3), importance: 1, significance: null })],
+      [2, row({ id: 2, at: minute(7), importance: 3, significance: 2 })],
     ])
     const none = new Set<number>()
     const first = closedDayMarkers(day, today, false, none)
@@ -440,16 +440,19 @@ describe('interakce a filtr (#408)', () => {
     expect(expectedImpact(row({ id: 4, at: 0, sentiment_score: null }))).toBe(0)
   })
 
-  test('significantOnly: pouští importance ≥ 2, chybějící důležitost je okrajová', () => {
+  test('significantOnly: rozhoduje stupeň významnosti z API, ne importance (#1305)', () => {
     const rows = [
-      row({ id: 1, at: 0, importance: 1 }),
-      row({ id: 2, at: 0, importance: 2 }),
-      row({ id: 3, at: 0, importance: 3 }),
-      row({ id: 4, at: 0, importance: null }),
+      row({ id: 1, at: 0, importance: 1, significance: null }),
+      row({ id: 2, at: 0, importance: 2, significance: 3 }),
+      row({ id: 3, at: 0, kind: 'scheduled', importance: 3, significance: 0 }),
+      // EARNINGS s importance 3: definice upozornění ji nebere, graf také ne
+      row({ id: 4, at: 0, category: 'EARNINGS', importance: 3, significance: null }),
+      // Syrový WS push před klasifikací stupeň nemá
+      row({ id: 5, at: 0, importance: null }),
     ]
     expect(significantOnly(rows).map((item) => item.id)).toEqual([2, 3])
-    // Zprávy prokliknutého upozornění projdou vždy (makro podle FF impactu, #1290)
-    expect(significantOnly(rows, new Set([1])).map((item) => item.id)).toEqual([1, 2, 3])
+    // Zprávy prokliknutého upozornění projdou vždy, i nevýznamné (#1290, #1305)
+    expect(significantOnly(rows, new Set([1, 4])).map((item) => item.id)).toEqual([1, 2, 3, 4])
   })
 })
 

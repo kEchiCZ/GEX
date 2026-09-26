@@ -4,9 +4,13 @@ Pro každý event a symbol se měří okna +1/+5/+15/+60 min: návrat v bps, roz
 a objemové z-score. Dvě věci jsou tu podstatnější než samotný výpočet, protože
 na nich stojí „systém se nesmí učit šum":
 
-* **Kontaminace** — když do okna spadne jiný event s importance ≥ 2, nejde
-  přiřadit pohyb jedné zprávě. Takové okno se označí a do trénovacích statistik
-  nevstupuje. Bez toho by se všem headlines z Fed day přičetl tentýž pohyb.
+* **Kontaminace** — když do okna spadne jiný event s importance ≥ 2 **jiné
+  kategorie**, nejde přiřadit pohyb jedné zprávě. Takové okno se označí a do
+  trénovacích statistik nevstupuje. Bez toho by se všem headlines z Fed day
+  přičetl tentýž pohyb. Event téže kategorie kontaminací není (varianta K1,
+  ADR-0045): je to pokrytí téže události — řádek Benzinga „USA CPI … Vs Est“
+  minutu po kalendáři CPI by jinak vyřadil z modelu 92 % reakcí na USD High
+  releasy.
 * **Deferred** — u zprávy, která přišla při zavřeném trhu (víkend, svátek), se
   okna měří od prvního obchodovaného baru, ale **základní cena zůstává poslední
   před uzavřením**, takže `ret_bp` zahrnuje gap. Přesně to je otázka „co
@@ -162,6 +166,30 @@ def build_volume_baseline(
     return baseline
 
 
+def contaminates(event_category: str | None, other_category: str | None) -> bool:
+    """Kontaminuje jiný významný event okno reakce? Jen s jinou kategorií (K1, ADR-0045).
+
+    Neznámá kategorie (neklasifikovaný event) kontaminuje — raději vyřadit okno
+    než přičíst zprávě cizí pohyb.
+    """
+    return event_category is None or other_category is None or other_category != event_category
+
+
+def window_contaminated(
+    event_ts: dt.datetime,
+    start: dt.datetime,
+    window: int,
+    other_event_ts: Sequence[dt.datetime],
+) -> bool:
+    """Spadl do okna [start, start + window) jiný event po zprávě? (SPEC 5.1)
+
+    `start` = čas zprávy, u deferred první obchodovaný bar; `other_event_ts`
+    = kontaminující eventy (`contaminates`). Sdílí ho job i reklasifikace.
+    """
+    end = start + dt.timedelta(minutes=window)
+    return any(event_ts < other < end for other in other_event_ts)
+
+
 def compute_reactions(
     event_ts: dt.datetime,
     bars: Sequence[Bar],
@@ -174,7 +202,8 @@ def compute_reactions(
     """Reakce ve všech oknech; prázdný seznam = není z čeho měřit.
 
     `bars` musí být seřazené a pokrývat okolí události (před i po).
-    `other_event_ts` jsou časy ostatních eventů s importance ≥ 2 — kontaminace.
+    `other_event_ts` jsou časy ostatních kontaminujících eventů (importance ≥ 2
+    a jiná kategorie, `contaminates`).
     """
     ordered = sorted(bars, key=lambda bar: bar.ts)
     base = _last_before(ordered, event_ts)
@@ -201,7 +230,7 @@ def compute_reactions(
             / base.close
             * 10_000
         )
-        contaminated = any(event_ts < other < end for other in other_event_ts)
+        contaminated = window_contaminated(event_ts, start, window, other_event_ts)
         results.append(
             Reaction(
                 window_min=window,

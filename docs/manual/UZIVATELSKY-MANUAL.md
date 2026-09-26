@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.21 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.22 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -106,7 +106,7 @@ Obrazovka se skládá z (shora dolů, zleva doprava):
 | **Hlavička — horní řádek** | **Kdo a za kolik**: ticker a název instrumentu, **poslední cena + denní změna v %**, **kalendářový selektor expirace** (v1.12, níže) s typem (denní/týdenní/měsíční/kvartální/EOM) a odpočtem „expiruje ≈ za X h" — velké expirace nesou velké OI. Vedle selektoru je **vyhledání symbolu** (v1.12, #521): našeptávač CME produktů, výběr otevře **ad-hoc pohled přes tastytrade** — positioning libovolného produktu bez přidání do watchlistu a bez spotřeby IBKR linek (kotace + OI + BS greeks z mid; bez objemů, flows a Cum Δ — ty nese jen plný sběr). Takový symbol nese štítek **„ad-hoc · tastytrade“** a žije, dokud je zobrazený (~3 min po odchodu se uklízí); pro trvalé sledování ho přidej do watchlistu. Symbol z watchlistu štítek nikdy nemá — od v1.14 ad-hoc pohled ustoupí, jakmile má produkt plnou IBKR pipeline (dřív mohl po restartu enginu chvíli viset i nad daty z IBKR). **Výběr položky z našeptávače pohled otevře rovnou** — Enter je potřeba jen při ručním dopsání celého symbolu (v1.13, #983). Aby ad-hoc symbol data skutečně dostal, drží si engine ve streamu tastytrade **rezervu na ~2 ad-hoc pohledy** (v1.13, #982; do té doby mohl při plném streamu tiše mlčet). V selektoru najdeš i **následující expiraci** (sbírá se souběžně — čtení positioningu příští seance). |
 | **Hlavička — spodní řádek** | **V jakém je to stavu**: **GEX režim badge** (zelený fade / červený momentum / žlutá flip zóna; tooltip s playbook hintem; když flip leží **mimo měřené pásmo** — celý Dyn GEX profil je na jedné straně nuly — badge se od v1.13 neztratí, režim se odvodí ze znaménka profilu u spotu a tooltip to přizná, #864), **chip Tendence** (pětipásmová škála Strong Short … Strong Long; klik = rozpad hlasů 12 složek, zatím „nekalibrováno"), **chip stavu sentimentu** RISK ON / RISK OFF / NEUTRAL (klik = sparkline dnešního SentIndexu, MA5/MA10 a aktivní témata; tečka = nepotvrzená intradenní změna), **settle watch**, **chip gamma útesu** a vpravo **ukazatele pokrytí dat**, indikátor ● Live / ○ Offline a zvonek notifikací. |
 | **Řádek timeframe** | **Intraday/Daily** a rozlišení **1m, 2m, 3m, 5m, 10m, 15m, 30m, 45m, 1h, 2h, 3h, 4h, 1d**. Intraday agreguje minutová data do zvolených košů (svíčky OHLC, objemy se sčítají); Daily zobrazí sloupec za každý uložený den (roste s historií, max 14 dní). |
-| **Řádek přepínačů** | Dropdown **Dyn plocha** (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18; **výchozí je Dyn GEX** (#837) — modelované gamma pole je hlavní přidaná hodnota nástroje, Off zvol, když chceš jen měřenou mapu). Dropdown **Vrstvy (n)** (v1.16, #1084) — multi-výběr vrstev v grafu: **GEX Levels** (flip/centroid/Max Pain + **OI zdi**, viz kap. 5), **GEX žebřík** (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), **Zdi** (call/put wall linie), **2. zeď** (druhá nejsilnější koncentrace strany, tečkovaně), **FA levels** (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI). Dropdown **Panely (n)** (v1.16, #1084) — multi-výběr spodních panelů v pořadí, jak se kreslí shora dolů: **Vol / Opt Vol / Δ Flow C/P / Evo OI / Cum Δ / Sentiment**; panel Sentiment má vlastní položku, nezávislou na checkboxu News. Závorka u obou dropdownů ukazuje počet zapnutých („žádný“ = nic). Checkboxy přímo v liště: **Sessions** (automatické markery světových seancí), **Vol + OI Δ**, **Projekce**, **News** (markery zpráv) s dropdownem **Vše/Významné** (filtr markerů na importance ≥ 2), dropdown **Signály** (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá. |
+| **Řádek přepínačů** | Dropdown **Dyn plocha** (Off / Dyn GEX / Dyn Charm / Dyn Vanna — modelované pole jako podklad heatmapy, kombinuje se s libovolným módem, kap. 18; **výchozí je Dyn GEX** (#837) — modelované gamma pole je hlavní přidaná hodnota nástroje, Off zvol, když chceš jen měřenou mapu). Dropdown **Vrstvy (n)** (v1.16, #1084) — multi-výběr vrstev v grafu: **GEX Levels** (flip/centroid/Max Pain + **OI zdi**, viz kap. 5), **GEX žebřík** (top významné striky jako barevné úrovně: zelené call nad cenou, červené put pod ní, s podílem na síle strany v cenovce; jen striky s dostatečnou dominancí), **Zdi** (call/put wall linie), **2. zeď** (druhá nejsilnější koncentrace strany, tečkovaně), **FA levels** (flow-adjusted flip/walls z odhadu OI: ranní OI + dnešní klasifikovaný tok — ukazuje stěhování zdí dřív, než to potvrdí zítřejší OI). Dropdown **Panely (n)** (v1.16, #1084) — multi-výběr spodních panelů v pořadí, jak se kreslí shora dolů: **Vol / Opt Vol / Δ Flow C/P / Evo OI / Cum Δ / Sentiment**; panel Sentiment má vlastní položku, nezávislou na checkboxu News. Závorka u obou dropdownů ukazuje počet zapnutých („žádný“ = nic). Checkboxy přímo v liště: **Sessions** (automatické markery světových seancí), **Vol + OI Δ**, **Projekce**, **News** (markery zpráv) s dropdownem **Významné/Vše** (výchozí Významné — stejná definice jako upozornění na zprávy, kap. 14), dropdown **Signály** (Off / NEWS / COMBINED — šipky Long/Short na ceně, kap. 11d). Co odškrtneš, zmizí — layout se přeskládá. |
 | **Chipy stavu trhu** | **Settle watch** — segment „settle 22:00 · nad/pod X ±d b": klíčová úroveň dne (nejsilnější zeď dle dominance, silné mají přednost) a kolik bodů k ní zbývá; teze dne „uzavřeme nad X?" na jeden pohled. **Chip „odpadá X % gammy"** — kolik gammy dnešní expirací večer zmizí z trhu (běžný den ~15 %, před OPEX i přes 60 %); struktura, která dnes drží cenu, zítra nemusí existovat. **Chip ⌛ kalendáře expirací** (v1.20, #1189) — jen v kvartálním expiračním týdnu: „roll proběhl 10. 9. · expirace U6 pá 18. 9. 15:30", „OPEX týden", „kvartální expirace U6 dnes 15:30 (SOQ)", „po OPEXu — bez opční podpory"; tooltip vysvětluje, co fáze znamená. Stejné ⌛ jsou v ose grafu (jako TradingView) a v Briefingu je karta **Expirační týden**. **Chip ◌ „tenká mapa (n/3)"** (v1.21, #1245) — jen když pozicování, které by cenu tlumilo nebo pinovalo, právě chybí: aspoň dvě ze tří podmínek — *tenká gamma* (celkové GEX i gamma u ceny pod 25. percentilem posledních 20 seancí téhož symbolu; prahy jsou relativní, ES a NQ se liší o řády), *slabé zdi* (dominance obou < 25 %), *slitá mapa* (flip, obě zdi a max pain do 0,25 % ceny od sebe — referenční 21. 9. 2026 po kvartálním OPEX: vše na 7 650). Tooltip vypisuje ✓/✗/? per podmínku. Co z toho plyne: nic netlumí a nic nepinuje, pohyby jsou delší v obou směrech, zdi jen orientační, setupy od zdi a pin k Max Pain nedávají smysl, dokud se mapa neobnoví. Liší se od útesu gammy: útes říká, co po settle **odpadlo**, tenká mapa, co **teď zbylo** (a může nastat i mimo OPEX, po prudkém pohybu mimo pozicování). Fáze 1 jen ukazuje, nic se neblokuje. |
 | **Ukazatele pokrytí dat** | Tři drobné proužky **Greeks**, **OI** a **OHLC** s podílem „kolik z kolika". Zelený = úplné, žlutý = díra (část striků čeká na dopočet, nebo chybí svíčky), **ztlumený s pomlčkou = hodnotu teď nelze změřit** (typicky odpojené IBKR nebo pár vteřin po startu). Prvky **nemizí** — ukazatel, který zmizí, vypadá jako rozbité rozhraní, ne jako chybějící data. |
 | **Přepínač OI** | **Měřené / FA odhad** — zdroj Open Interest pro heatmapu i profil (persistováno per symbol, default Měřené). FA odhad = OI dopočtené z klasifikovaného toku (netflow×α): k dispozici dřív než publikovaný archiv, ale je to odhad — při pochybnosti věř Měřeným. FA má i vlastní Dyn GEX plochu v dropdownu Dyn plocha a vlastní FA levels. |
@@ -363,9 +363,10 @@ je v záložce News a v upozornění před otevřením.
 - Víc zpráv v témže sloupci grafu (minuta na 1m, pět minut na 5m…) = **jeden marker s počtem** (cluster). Zpráva padne do sloupce **podle času**: 13:02 na 5m do sloupce 13:00 (v1.21 — dřív se na 5m a delších timeframech zprávy mimo hranici sloupce nekreslily vůbec). Zprávy z **denní pauzy CME** (16–17 CT, v Praze 23–24) vlastní sloupec nemají a přimknou se k poslednímu sloupci před pauzou.
 - **Oddálený celý den** (v1.21): s filtrem Vše je za seanci 1 000–1 250 markerů. Pod ~4 px na sloupec se kreslí jen čárky, glyf dostanou jen významné zprávy (bez počtu) a glyfy se nepřekrývají — přednost má důležitější zpráva; po přiblížení se glyfy i počty vrátí. Kreslí se jen markery ve výřezu. Klik trefí to, co je **nakreslené**: nejdřív glyf (v jeho šíři přednost důležitější zprávě), jinak nejbližší čárku — ne sousední drobnou zprávu se skrytým glyfem.
 - **Nadcházející plánované eventy** (CPI ve 14:30…) se kreslí **dutě čárkovaně do projekční zóny** vpravo od živé hrany — vidíš je dřív, než přijdou. Dutý je jen **plánovaný** event z kalendáře; čerstvý titulek je vždy plný marker na živé hraně, i když dorazil pár vteřin po posledním tiku.
-- **Klik na marker otevře dialog** se zprávami daného sloupce: čas, kategorie, důležitost (! až !!!), titulek, případný souhrn a **očekávaný dopad na trh — Long ▲ / Short ▼ / Neutrální** (u klasifikovaných zpráv podle směru, jinak podle znaménka skóre; stejná logika, jakou se barví marker). U makro událostí navíc **očekávání / minule / výsledek**, u nadcházejících odpočet. **Významné zprávy** (plánované eventy a důležitost ≥ 2) jsou nahoře, drobné pod nimi; cluster nad 6 zpráv (na 60m i ~200) drobné **sbalí** pod tlačítko „+N drobných zpráv" — rozbalíš je jedním klikem. Zavření: ×, Esc, nebo klik mimo.
+- **Klik na marker otevře dialog** se zprávami daného sloupce: čas, kategorie, důležitost (! až !!!), titulek, případný souhrn a **očekávaný dopad na trh — Long ▲ / Short ▼ / Neutrální** (u klasifikovaných zpráv podle směru, jinak podle znaménka skóre; stejná logika, jakou se barví marker). U makro událostí navíc **očekávání / minule / výsledek**, u nadcházejících odpočet. **Nejvýznamnější zpráva je nahoře** (v1.22, #1305): nejdřív kalendář s dopadem High, pak kalendář Medium (a rozhodnutí ECB, BoE, BoJ), pak zprávy s důležitostí 3 a 2; pod nimi nevýznamné zprávy podle důležitosti; uvnitř každého stupně podle času. Cluster nad 6 zpráv (na 60m i ~200) nevýznamné **sbalí** pod tlačítko „+N nevýznamných zpráv" — rozbalíš je jedním klikem. Zavření: ×, Esc, nebo klik mimo.
 - **Verdikt vydané makro události (v1.12):** jakmile dorazí výsledek, dialog pod čísly ukáže **„nižší/vyšší než očekávání (±X σ)"** a při překvapení ≥ 0,5 σ i **směr → risk-on ▲ / risk-off ▼**. **Proč z pohledu tradera:** holé „2,7 vs 2,9" musíš v hlavě přepočítat přes polaritu řady (nižší CPI = dobrá zpráva, nižší payrolls = špatná) — přesně v minutách, kdy sleduješ reakci spotu; verdikt to udělá za tebe včetně velikosti překvapení v σ řady (−1,4 σ je jiná káva než −0,5 σ). **Jak číst:** šipka je odhad z konvence řady, ne signál — tooltip připomíná, že polarita je režimově závislá (v období „good news is bad news" se obrací); pod 0,5 σ se směr neukazuje vůbec, protože překvapení na úrovni šumu žádný směr nenese. Výsledek u high-impact událostí dorazí do ~1–2 minut od vydání (burst dotahování).
-- Dropdown **Vše / Významné** vedle checkboxu News omezí markery jen na zprávy s **důležitostí ≥ 2** — plocha se nezahltí drobnými titulky, FOMC/CPI zůstávají.
+- Dropdown **Významné / Vše** vedle checkboxu News (v1.22, #1305): **výchozí je Významné** — v grafu jsou jen zprávy, které splní **stejnou definici jako upozornění na reakci trhu** (viz „Co je významná zpráva“ v kap. 14): kalendář USD High/Medium a rozhodnutí ECB, BoE a BoJ, zprávy s důležitostí 2 a 3 kromě výsledků firem. Za den je to asi 50 markerů místo 1 000–1 250 při „Vše“. Definici počítá server a graf ji jen přebírá, takže graf a upozornění se nerozejdou. Volba „Vše“ zůstává a pamatuje se; kdo měl dřív uložené „Vše“, uvidí po aktualizaci jednou výchozí „Významné“.
+- **Proklik ze zvonečku** ukáže v grafu i zprávy upozornění, které podle dnešní definice významné nejsou (upozornění z doby před zpřesněním klasifikace) — marker se objeví i s filtrem Významné a graf se na něj posune.
 - **Markery historických dnů** (v1.21): při posunu do minulosti (kap. Historie přes hranici dne) se zprávy dotáhnou i pro starší seance. V jejich dialogu je u času i **datum** a akce ⧉ +15/+60 min a pre/post chybí — okno umí jen osa zobrazeného dne.
 
 ### Stale buňky
@@ -747,6 +748,18 @@ Obrazovka **Řetěz** v sidebaru ukazuje klasickou opční tabulku vybrané expi
 
 Vlastní **news-engine** běží vedle datového enginu: sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy, Alpaca, broker pásku z IBKR), klasifikuje **kategorii, důležitost (1–3) a směr dopadu**, a počítá z nich **SentIndex** — souhrnný sentiment s rozpadem po tématech. Nic z toho nechodí ven; vše se počítá lokálně.
 
+**Důležitost 1–3 se čte z předmětu titulku a ze zdroje** (v1.22, #1293). Dřív
+stačilo klíčové slovo kdekoli v titulku nebo shrnutí, takže článek o osobních
+financích se zmínkou „payroll tax“ dostal nejvyšší důležitost a jen asi každá
+jedenáctá zpráva s důležitostí 3 byla opravdu zásadní. Teď: důležitost 3 mají jen
+události (rozhodnutí Fedu, vydaná US data s číslem, pohyb ropy, eskalace nebo
+příměří, cla), 2 téma jako předmět zprávy, zmínka a názor 1; sociální sítě bez
+kurátora nejvýš 1, agregátory o stupeň méně; kalendář podle dopadu a měny (USD
+High 3, Medium 2, rozhodnutí ECB/BoE/BoJ 2, ostatní měny 1). Na ohodnoceném vzorku
+je teď zásadních 8 z 10 zpráv s důležitostí 3 (dřív necelá 1 z 10). Kategorie se
+také bere z předmětu — pohyb ropy kvůli válce je **Energie**, ne geopolitika.
+Historie zpráv se překlasifikuje jednorázově (verze klasifikace zůstávají).
+
 **Klasifikace jede na pravidlech, ne na AI modelu.** LLM větev (Gemini) je od
 srpna 2026 zakonzervovaná: měřením se ukázalo, že hodnotu nepřidávala — proti
 pravidlům měla horší úspěšnost (0,484 vs. 0,516) a statistickou branou neprošla
@@ -796,7 +809,8 @@ proklik** — otevře téma v panelu Témata i se zdrojovými zprávami.
 - **Nadcházející** — nejbližší plánované události s odpočtem a konsensem (např. „CPI za 1 h 12 m · konsensus 2,9 (min. 3,0)").
 - **Tabulka zpráv** — čas, kategorie, titulek, typ, důležitost, skóre. U řádků s nejistou klasifikací je tužka ✎ — můžeš **ručně opravit směr nebo kategorii** (uloží se jako korekce, model se z ní učí — review fronta).
 - **Zdroje zpráv** (dole) — audit všech používaných zdrojů: co má téct vs. co
-  reálně teče (dnešek / denní průměr, podíl významných zpráv, poslední událost)
+  reálně teče (dnešek / denní průměr, podíl významných zpráv — stejná definice
+  jako filtr grafu a upozornění, poslední událost)
   a **přepínač Aktivní** — vypnutý zdroj se při startu news-engine vůbec
   nespustí. Pod tabulkou jsou **editovatelné seznamy**: Bluesky kurátoři
   (handle nebo `did:…`, jejichž každý post se bere), Reddit subreddity
@@ -1316,7 +1330,7 @@ nevznikají, T2/T3/T7 a zprávy chodí dál; provozní alert o přetažení dost
 
 Zvonek je **globální — sbírá alerty napříč všemi instrumenty** ve watchlistu, ne jen z toho na grafu. Proto je u každého alertu **datum + čas** notifikace a **symbol instrumentu** (např. `[NQ · setup]`). Naproti tomu **karty a linie setupů přímo v grafu jsou jen pro instrument, který máš zobrazený.** Víceřádková upozornění (reakce trhu na zprávy, zprávy před otevřením) se ve zvonku zobrazí po řádcích jako na Telegramu.
 
-**Proklik na zprávy** (v1.21, #1290): upozornění *Reakce trhu na zprávy*, *Zprávy před otevřením* a *Očekávaný pohyb před releasem* (#1296) jsou ve zvonku klikací („Otevřít zprávy v grafu"). Klik přepne graf na instrument upozornění, zapne vrstvu **News** a otevře **dialog se zprávami upozornění** (s datem, když leží mimo zobrazený den). U reakce trhu navíc **jednou posune graf** tak, aby začátek shluku byl uprostřed (zoom i cenová osa zůstávají) — marker tam najdeš spolu s ostatními zprávami toho sloupce, **i s filtrem Významné**: zprávy upozornění projdou filtrem vždy (upozornění bere makro podle dopadu z kalendáře, ne podle důležitosti). Po návratu na graf z jiné obrazovky se pohled znovu neposouvá. U souhrnu před otevřením se graf neposouvá: víkendové zprávy na ose seance neleží. U upozornění před releasem se graf posune na release jen při kliku po releasu; klik před releasem otevře jen dialog se zprávami releasu (odhad, předchozí hodnota) a graf se ani později, v minutě releasu, sám neposune — pohled, který si mezitím nastavíš, zůstane. Zvonek drží upozornění jen v paměti stránky (posledních 50), po obnovení stránky je prázdný; z Telegramu vede k zprávě jen čas v textu upozornění („Reakce ES na zprávy z 13:00").
+**Proklik na zprávy** (v1.21, #1290): upozornění *Reakce trhu na zprávy*, *Zprávy před otevřením* a *Očekávaný pohyb před releasem* (#1296) jsou ve zvonku klikací („Otevřít zprávy v grafu"). Klik přepne graf na instrument upozornění, zapne vrstvu **News** a otevře **dialog se zprávami upozornění** (s datem, když leží mimo zobrazený den). U reakce trhu navíc **jednou posune graf** tak, aby začátek shluku byl uprostřed (zoom i cenová osa zůstávají) — marker tam najdeš spolu s ostatními zprávami toho sloupce, **i s filtrem Významné**: zprávy upozornění projdou filtrem vždy, i když podle dnešní definice významné nejsou (upozornění z doby před zpřesněním klasifikace). Po návratu na graf z jiné obrazovky se pohled znovu neposouvá. U souhrnu před otevřením se graf neposouvá: víkendové zprávy na ose seance neleží. U upozornění před releasem se graf posune na release jen při kliku po releasu; klik před releasem otevře jen dialog se zprávami releasu (odhad, předchozí hodnota) a graf se ani později, v minutě releasu, sám neposune — pohled, který si mezitím nastavíš, zůstane. Zvonek drží upozornění jen v paměti stránky (posledních 50), po obnovení stránky je prázdný; z Telegramu vede k zprávě jen čas v textu upozornění („Reakce ES na zprávy z 13:00").
 
 Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a jeho výchozí stav; úplný popis ukážou tooltipy přepínačů):
 
@@ -1350,10 +1364,25 @@ několik titulků a většina je šum. Aplikace proto hodnotí **shluk zpráv** 
 ho jen tehdy, když v něm je aspoň jedna **významná** zpráva a trh se zároveň
 pohnul mimořádně. Mimořádný pohyb bez významné zprávy se neohlašuje.
 
-- **Významná zpráva**: ekonomický kalendář s dopadem High nebo Medium; headline
-  (agentury, Alpaca, Finnhub, IBKR) s důležitostí 2 a víc, kromě firemních
-  výsledků a přepisů earnings calls; sociální sítě jen od kurátorovaných autorů
-  (seznam v záložce News) s důležitostí 2 a víc.
+- **Co je významná zpráva** (v1.22, #1293, #1305 — stejná definice platí pro
+  upozornění, předobchodní souhrn i filtr grafu „Významné“):
+  - **ekonomický kalendář**: USD s dopadem High nebo Medium a rozhodnutí ECB, BoE
+    a BoJ (sazba, prohlášení, tisková konference); data ostatních měn (Kanada,
+    Británie, Austrálie…) významná nejsou;
+  - **zpráva s důležitostí 2 nebo 3**, kromě firemních výsledků a přepisů earnings calls.
+    Důležitost 3 mají jen **události** — rozhodnutí Fedu, statement a minutes FOMC,
+    předseda Fedu, vydaná US data s číslem (CPI, PCE, PPI, payrolls, retail sales,
+    ISM/PMI, HDP), pohyb ropy, útok nebo příměří na Blízkém východě či kolem Tchaj-wanu,
+    uvalení cel, snížení ratingu USA. Důležitost 2 má **téma jako předmět zprávy**
+    (Fed, výnosy, inflace, trh práce, cla, obchodní dohoda, shutdown…);
+  - **agregátory** (Yahoo Finance včetně převzatých WSJ, Barron's a IBD, MarketWatch)
+    mají o stupeň nižší důležitost — významné jsou jen jejich zprávy o události,
+    souhrny a výhledy trhu ne; **sociální sítě** jen od kurátorovaných autorů
+    (seznam v záložce News);
+  - **nevýznamné** jsou zprávy, které klíčové slovo jen zmíní („… ahead of Fed“ o akcii
+    nebo kryptu), osobní finance, výběr akcií, názory a otázky („Will the Fed hike?“),
+    sport, sankce, cizí data, souhrny cizích burz („Indian shares…“, „Gulf
+    bourses…“) a menší centrální banky.
 - **Shluk** začíná první významnou zprávou a patří do něj vše do 2 minut po ní.
 - **Mimořádný pohyb**: největší výchylka ceny do 5 minut od začátku shluku (i když
   se cena vrátí — whipsaw po FOMC se počítá) je vyšší než u 97 % výchylek ve stejnou
@@ -1386,12 +1415,11 @@ za zavřený trh stalo, a jedné zprávě ho přisoudit nejde. Na víkend se ale
 připravit: **před nedělním otevřením** přijde upozornění na každý instrument zvlášť,
 jen když za zavřený trh vyšla aspoň jedna **zásadní** zpráva:
 
-- **Zásadní zpráva** je přísnější výběr z významných: ekonomický kalendář s dopadem
-  High nebo Medium, kurátorovaný autor na sociálních sítích a headline o Fedu, makru
-  (inflace, trh práce, růst) nebo geopolitice včetně obchodu a cel s nejvyšší
-  důležitostí 3. Jen ty jdou do výčtu a do sklonu; ostatní významné (za víkend jich
-  bývá desítky, často šum) a běžné zprávy jsou jen počet. Když za víkend vyšly jen
-  významné, ale žádná zásadní, nepřijde nic.
+- **Zásadní zpráva** je přísnější výběr z významných (v1.22, #1293): významný
+  ekonomický kalendář nebo zpráva s nejvyšší důležitostí 3 (událost) — včetně ropy,
+  bez ohledu na kategorii; kurátorovaný autor jen s důležitostí 3. Jen ty jdou do
+  výčtu a do sklonu; ostatní významné a běžné zprávy jsou jen počet. Když za víkend
+  vyšly jen významné, ale žádná zásadní, nepřijde nic.
 - **hlavní souhrn 4 h před otevřením Globexu** — v běžném týdnu v neděli ve 20:00;
 - **aktualizace 15 min před otevřením** (23:45) — jen když od hlavního souhrnu vyšla
   nová zásadní zpráva (ta, kterou hlavní souhrn ještě neznal, i když přišla pozdě).
@@ -1417,7 +1445,6 @@ další zásadní: 16 · další významné: 11 · ostatní zprávy: 1910
 - **Sklon** je jen počet zásadních zpráv podle klasifikovaného směru (🟢 pozitivní,
   🔴 negativní, ⚪ neutrální nebo nezařazené) — **žádná pravděpodobnost**; směr určuje
   pravidlový klasifikátor z titulku a u víkendových titulků se mýlí (slovo „tariff“ = 🔴).
-  Tentýž klasifikátor občas povýší i šum mezi zásadní („… Payroll Tax“ jako trh práce).
 - **Výčet** ukáže nejvýš 5 zásadních zpráv (kalendář, pak podle důležitosti, v nich
   nejnovější), zbytek počtem „další zásadní“; tatáž story z více zdrojů se počítá jednou.
 - **Svátky**: pokrytý je jen svátek, který zkrátí nebo zruší páteční seanci (Velký

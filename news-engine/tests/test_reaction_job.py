@@ -48,7 +48,14 @@ def write_bars(data_dir: Path, symbol: str, day: dt.date, *, drift_bp: float = 0
     pq.write_table(pa.Table.from_pylist(rows), directory / f"{day.isoformat()}.parquet")
 
 
-def add_event(engine: Engine, ts: dt.datetime, *, importance: int | None, title: str) -> int:
+def add_event(
+    engine: Engine,
+    ts: dt.datetime,
+    *,
+    importance: int | None,
+    title: str,
+    category: str | None = None,
+) -> int:
     with engine.begin() as conn:
         key = conn.execute(
             insert(news_events).values(
@@ -58,6 +65,7 @@ def add_event(engine: Engine, ts: dt.datetime, *, importance: int | None, title:
                 kind="headline",
                 title=title,
                 importance=importance,
+                category=category,
                 symbols=[],
                 market_closed=False,
                 dedup_hash=title,
@@ -147,6 +155,39 @@ def test_low_importance_event_does_not_contaminate(tmp_path: Path) -> None:
     job.run(NOW)
 
     assert all(not window.contaminated for _, window in reaction_windows(engine, event_id))
+
+
+def test_same_category_coverage_does_not_contaminate(tmp_path: Path) -> None:
+    """K1 (ADR-0045): pokrytí téže události (stejná kategorie) okno nekazí, jiná kategorie ano."""
+    engine, job = make_env(tmp_path)
+    event_id = add_event(
+        engine, EVENT_TS, importance=3, title="USD CPI m/m", category="MACRO_INFLATION"
+    )
+    # Řádek releasu minutu po kalendáři — tatáž událost, jiný zdroj
+    add_event(
+        engine,
+        EVENT_TS + dt.timedelta(minutes=1),
+        importance=3,
+        title="USA CPI (MoM) For August 0.4% Vs 0.3% Est.",
+        category="MACRO_INFLATION",
+    )
+    # Jiná kategorie ve 12. minutě kontaminuje okna 15 a 60
+    add_event(
+        engine,
+        EVENT_TS + dt.timedelta(minutes=12),
+        importance=3,
+        title="Oil surges",
+        category="ENERGY",
+    )
+
+    job.run(NOW)
+
+    contaminated = {
+        window.window_min: window.contaminated
+        for symbol, window in reaction_windows(engine, event_id)
+        if symbol == "ES"
+    }
+    assert contaminated == {1: False, 5: False, 15: True, 60: True}
 
 
 def write_holiday_bars(data_dir: Path, symbol: str, day: dt.date) -> None:

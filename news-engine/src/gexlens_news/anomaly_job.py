@@ -58,9 +58,9 @@ Baseline = dict[int, list[Excursion]]
 
 #: Sloupce `news_events`, ze kterých se staví `ClusterEvent` — jediný zdroj
 #: i pro replay v `scripts/measure_news_anomaly.py` (vlastní SELECT tam jednou
-#: zapomněl `sentiment_dir` a simulace ukázala samé ⚪). Význam scheduled stojí
-#: na FF impactu ze surového payloadu (`raw.impact`), ne na `importance` — tu
-#: pravidlový klasifikátor přepisuje regexem.
+#: zapomněl `sentiment_dir` a simulace ukázala samé ⚪). Významnost stojí na
+#: klasifikaci (`kind`, `importance`, `category`) — FF impact podle měny a strop
+#: nekurátorovaných sociálních sítí už nese importance (klasifikátor v2, ADR-0045).
 EVENT_COLUMNS = (
     news_events.c.id,
     news_events.c.ts_event,
@@ -69,8 +69,6 @@ EVENT_COLUMNS = (
     news_events.c.importance,
     news_events.c.category,
     news_events.c.sentiment_dir,
-    news_events.c.raw["impact"].as_string().label("ff_impact"),
-    news_events.c.raw["curated"].as_boolean().label("curated"),
 )
 
 
@@ -83,8 +81,6 @@ def event_from_row(row: Any) -> ClusterEvent:
         title=str(row.title),
         importance=int(row.importance) if row.importance is not None else None,
         category=str(row.category) if row.category is not None else None,
-        ff_impact=str(row.ff_impact) if row.ff_impact is not None else None,
-        curated=bool(row.curated),
         direction=int(row.sentiment_dir) if row.sentiment_dir is not None else None,
     )
 

@@ -94,13 +94,25 @@ function importanceMark(importance: number | null): string {
   return '!'.repeat(Math.min(3, Math.max(1, importance ?? 1)))
 }
 
-/** Nad tolik zpráv v clusteru se drobné zprávy sbalí (#1290): na 60m nese
+/** Nad tolik zpráv v clusteru se nevýznamné zprávy sbalí (#1290): na 60m nese
 cluster i ~200 zpráv a významná by se ztratila mezi šumem. */
 export const NEWS_DIALOG_COLLAPSE_OVER = 6
+/** Počet stupňů významnosti z API (0–3, `news_significance`, ADR-0045). */
+const SIGNIFICANCE_TIERS = 4
 
-/** Zpráva, která se v dialogu nesbaluje: plánovaný event nebo importance ≥ 2. */
+/** Zpráva, která se v dialogu nesbaluje: významná podle API (#1305). */
 function isProminent(row: ChartNewsRow): boolean {
-  return row.kind === 'scheduled' || (row.importance ?? 1) >= 2
+  return row.significance !== null && row.significance !== undefined
+}
+
+/** Pořadí zprávy v dialogu (#1305): nejvýznamnější nahoře.
+
+Stupeň významnosti z API (kalendář importance 3 → kalendář 2 → zpráva 3 →
+zpráva 2), za nimi nevýznamné podle důležitosti sestupně. Frontend definici
+významnosti nepočítá — jen řadí podle stupně, který dodá API. */
+function dialogRank(row: ChartNewsRow): number {
+  if (isProminent(row)) return row.significance as number
+  return SIGNIFICANCE_TIERS + 3 - Math.min(3, Math.max(1, row.importance ?? 1))
 }
 
 /** Jedna zpráva dialogu — detail, vysvětlení a akce range. */
@@ -196,23 +208,32 @@ export const NewsMarkerDialog = memo(function NewsMarkerDialog({
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // Pořadí: významné (plánované, importance ≥ 2) nahoře, drobné pod nimi —
-  // obojí časem. Velký cluster drobné sbalí; čas se parsuje jednou per zprávu.
+  // Pořadí (#1305): stupeň významnosti z API, nevýznamné podle důležitosti,
+  // v rámci stupně čas. Velký cluster nevýznamné sbalí; čas se parsuje jednou.
   const layout = useMemo(() => {
-    const byTime = marker.rows
-      .map((row) => ({ row, ms: Date.parse(row.ts_event), inView: isInView?.(row) ?? true }))
-      .sort((a, b) => a.ms - b.ms)
-    const prominent = byTime.filter((item) => isProminent(item.row))
-    const minor = byTime.filter((item) => !isProminent(item.row))
+    const items = marker.rows.map((row) => ({
+      row,
+      ms: Date.parse(row.ts_event),
+      rank: dialogRank(row),
+      inView: isInView?.(row) ?? true,
+    }))
+    const ordered = [...items].sort((a, b) => a.rank - b.rank || a.ms - b.ms)
+    const prominent = ordered.filter((item) => isProminent(item.row))
+    const minor = ordered.filter((item) => !isProminent(item.row))
+    // Hlavička nese čas první zprávy clusteru, ne první zobrazené
+    const first = items.reduce<(typeof items)[number] | null>(
+      (earliest, item) => (earliest === null || item.ms < earliest.ms ? item : earliest),
+      null,
+    )
     return {
-      first: byTime[0]?.row ?? null,
+      first: first?.row ?? null,
       prominent,
       minor,
-      collapsible: byTime.length > NEWS_DIALOG_COLLAPSE_OVER && minor.length > 0,
-      withDate: byTime.some((item) => !item.inView),
+      collapsible: items.length > NEWS_DIALOG_COLLAPSE_OVER && minor.length > 0,
+      withDate: items.some((item) => !item.inView),
     }
   }, [marker, isInView])
-  // Rozbalení drobných platí pro jeden marker — nový marker začíná sbalený
+  // Rozbalení nevýznamných platí pro jeden marker — nový marker začíná sbalený
   const [expandedFor, setExpandedFor] = useState<NewsMarker | null>(null)
   const showMinor = !layout.collapsible || expandedFor === marker
   const visible = showMinor ? [...layout.prominent, ...layout.minor] : layout.prominent
@@ -257,14 +278,13 @@ export const NewsMarkerDialog = memo(function NewsMarkerDialog({
               aria-expanded={showMinor}
               onClick={() => setExpandedFor(showMinor ? null : marker)}
               title={
-                'Drobné zprávy clusteru:\n' +
-                '• důležitost 1, bez plánovaného eventu\n' +
+                'Nevýznamné zprávy clusteru:\n' +
+                '• mimo definici upozornění (kalendář USD High/Medium a rozhodnutí ECB/BoE/BoJ, ' +
+                'zprávy s důležitostí ≥ 2 kromě výsledků firem)\n' +
                 '• sbalené, aby se významné neztratily v šumu'
               }
             >
-              {showMinor
-                ? 'Skrýt drobné zprávy'
-                : `+${layout.minor.length} drobných zpráv (důležitost 1)`}
+              {showMinor ? 'Skrýt nevýznamné zprávy' : `+${layout.minor.length} nevýznamných zpráv`}
             </button>
           )}
         </div>

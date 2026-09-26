@@ -37,11 +37,13 @@ from gexlens_news.reactions import (
     build_volume_baseline,
     compute_daily_reactions,
     compute_reactions,
+    contaminates,
 )
 
 logger = logging.getLogger(__name__)
 
-# Importance, od které event kontaminuje cizí okno (SPEC 5.1)
+# Importance, od které event kontaminuje cizí okno (SPEC 5.1); jen jiná
+# kategorie (`reactions.contaminates`, K1 ADR-0045)
 CONTAMINATION_MIN_IMPORTANCE = 2
 # Jak daleko zpět hledat poslední obchodovaný bar před zprávou. Musí pokrýt
 # nejdelší zavření: pátek 16:00 CT → neděle 17:00 CT, a k tomu svátek navíc.
@@ -145,7 +147,9 @@ class ReactionJob:
         # GEX režim reakce (#402) — levels čteme ze stejného data_dir jako bary
         self._regime_reader = LevelsRegimeReader(bars.data_dir)
 
-    def _pending_events(self, now: dt.datetime, limit: int) -> list[tuple[int, dt.datetime]]:
+    def _pending_events(
+        self, now: dt.datetime, limit: int
+    ) -> list[tuple[int, dt.datetime, str | None]]:
         """Eventy s uzavřeným nejdelším oknem a bez reakcí.
 
         „Bez reakcí" = bez JAKÉHOKOLI řádku, ne jen bez minutové fáze: event,
@@ -156,7 +160,7 @@ class ReactionJob:
         ready_before = now - dt.timedelta(minutes=max(self._windows))
         measured = exists().where(news_reactions.c.event_id == news_events.c.id)
         stmt = (
-            select(news_events.c.id, news_events.c.ts_event)
+            select(news_events.c.id, news_events.c.ts_event, news_events.c.category)
             .where(
                 news_events.c.ts_event <= ready_before,
                 not_(measured),
@@ -170,12 +174,12 @@ class ReactionJob:
         )
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
-        return [(int(row.id), _as_utc(row.ts_event)) for row in rows]
+        return [(int(row.id), _as_utc(row.ts_event), row.category) for row in rows]
 
-    def _contaminating(self, around: dt.datetime) -> list[dt.datetime]:
-        """Časy jiných high-impact eventů, které můžou spadnout do oken."""
+    def _contaminating(self, around: dt.datetime, category: str | None) -> list[dt.datetime]:
+        """Časy jiných významných eventů jiné kategorie, které můžou spadnout do oken."""
         span = dt.timedelta(minutes=max(self._windows) + 1)
-        stmt = select(news_events.c.ts_event).where(
+        stmt = select(news_events.c.ts_event, news_events.c.category).where(
             and_(
                 news_events.c.ts_event > around,
                 news_events.c.ts_event <= around + span,
@@ -184,7 +188,7 @@ class ReactionJob:
         )
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
-        return [_as_utc(row.ts_event) for row in rows]
+        return [_as_utc(row.ts_event) for row in rows if contaminates(category, row.category)]
 
     def _daily_sessions(self, symbol: str) -> list[SessionDaily]:
         """Denní agregáty Globex seancí z bars partic (#564), s cache per běh.
@@ -234,7 +238,7 @@ class ReactionJob:
             news_reactions.c.computed_at_daily.is_not(None),
         )
         stmt = (
-            select(news_events.c.id, news_events.c.ts_event)
+            select(news_events.c.id, news_events.c.ts_event, news_events.c.category)
             .where(
                 news_events.c.ts_event <= ready_before,
                 not_(measured),
@@ -336,8 +340,8 @@ class ReactionJob:
             return self._run_daily(now, limit=limit)
         written = 0
         baselines = {symbol: self._baseline_for(symbol, now.date()) for symbol in self._symbols}
-        for event_id, ts_event in pending:
-            others = self._contaminating(ts_event)
+        for event_id, ts_event, category in pending:
+            others = self._contaminating(ts_event, category)
             rows: list[tuple[str, dict[str, object], int]] = []
             # Zavřený trh podle skutečně obchodovaných barů, per symbol (#339)
             closed_flags: list[bool] = []

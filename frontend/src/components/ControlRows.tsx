@@ -165,6 +165,15 @@ const NEWS_FILTER_LABELS: Record<NewsMarkerFilter, string> = {
   all: 'Vše',
   important: 'Významné',
 }
+/** Tooltip filtru (#1305) — odrážky, ne odstavec (vzor ivRankTooltip). */
+const NEWS_FILTER_TOOLTIP = [
+  'Které zprávy kreslit do grafu:',
+  '• Významné = stejná definice jako upozornění na reakci trhu',
+  '• kalendář: USD High/Medium a rozhodnutí ECB, BoE, BoJ',
+  '• zprávy s důležitostí ≥ 2 kromě výsledků firem',
+  '• zprávy prokliknutého upozornění se ukážou vždy',
+  '• Vše = každá zpráva (1 000+ denně)',
+].join('\n')
 
 export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null }) {
   const {
@@ -273,15 +282,15 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
           {TOGGLE_LABELS[key]}
         </label>
       ))}
-      {/* Filtr news markerů (#408): jen významné zprávy (importance ≥ 2),
-          ať plocha grafu nekřičí okrajovými titulky; jen když je News zapnuté */}
+      {/* Filtr news markerů (#408, #1305): jen významné zprávy — stejná definice
+          jako upozornění (`significance` z API); jen když je News zapnuté */}
       {toggles.news && (
         <label className="toggle">
           <select
             value={newsMarkerFilter}
             onChange={(event) => setNewsMarkerFilter(event.target.value as NewsMarkerFilter)}
             aria-label="Filtr news markerů"
-            title="Které zprávy kreslit do grafu: všechny, nebo jen významné (importance ≥ 2)"
+            title={NEWS_FILTER_TOOLTIP}
           >
             {(Object.keys(NEWS_FILTER_LABELS) as NewsMarkerFilter[]).map((value) => (
               <option key={value} value={value}>

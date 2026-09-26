@@ -79,6 +79,9 @@ export function socketRow(data: Record<string, unknown>): TimedNewsRow | null {
     kind: row.kind,
     category: row.category ?? null,
     importance: row.importance ?? null,
+    // Stupeň významnosti (#1305) nese jen dávka klasifikace; syrový push ho nemá
+    // a sloučení (`mergeSocket`) chybějící pole nepřepisuje
+    significance: row.significance,
     title: typeof row.title === 'string' ? row.title : '',
     summary: row.summary ?? null,
     sentiment_dir: row.sentiment_dir ?? null,

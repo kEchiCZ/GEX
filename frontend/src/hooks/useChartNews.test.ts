@@ -196,6 +196,29 @@ describe('useChartNews', () => {
     expect(row?.sentiment_dir).toBe(1)
   })
 
+  test('stupeň významnosti z REST nepřepíše syrový WS push, dávka klasifikace ano (#1305)', async () => {
+    mockFetch(() => [newsRow(8, '2026-09-16T13:00:00Z', { importance: 3, significance: 2 })])
+    const ws = fakeSocket()
+    const { result } = renderHook(() =>
+      useChartNews({
+        enabled: true,
+        viewDate: VIEW_DATE,
+        live: true,
+        historyDates: [],
+        socket: ws.socket,
+      }),
+    )
+    await flush()
+    // Engine pushuje syrový titulek bez klasifikace — stupeň zůstává z REST
+    act(() => ws.push({ ...newsRow(8, '2026-09-16T13:00:00Z'), importance: null }))
+    await flush(CHART_NEWS_WS_FLUSH_MS)
+    expect(result.current.days.get(VIEW_DATE)?.get(8)?.significance).toBe(2)
+    // Nová zpráva z dávky klasifikace nese stupeň z news-enginu
+    act(() => ws.push({ ...newsRow(9, '2026-09-16T13:05:00Z'), significance: 0 }))
+    await flush(CHART_NEWS_WS_FLUSH_MS)
+    expect(result.current.days.get(VIEW_DATE)?.get(9)?.significance).toBe(0)
+  })
+
   test('živý den: po minutě dotažení od posledního úspěšného − 30 min', async () => {
     const calls = mockFetch((from) =>
       from === OPEN_ISO ? [] : [newsRow(5, '2026-09-16T14:59:00Z', { actual: 1.2 })],

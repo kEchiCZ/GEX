@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import case, exists, func, insert, select, update
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.news_significance import significance_tier
 from gexlens_engine.storage.sentiment import (
     NEWS_CATEGORIES,
     news_classifications,
@@ -379,6 +380,10 @@ class LlmClassificationJob:
                     "kind": event.kind,
                     "category": result.category,
                     "importance": result.importance,
+                    # Stupeň významnosti (#1305) — tentýž výpočet jako API
+                    "significance": significance_tier(
+                        event.kind, result.importance, result.category
+                    ),
                     "title": event.title,
                     "summary": event.summary,
                     "sentiment_dir": result.direction,

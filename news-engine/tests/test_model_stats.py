@@ -135,6 +135,44 @@ def test_hit_rate_is_none_without_classification() -> None:
     assert stats[0].hit_rate_lb is None
 
 
+def test_soubezne_vzorky_tehoz_bucketu_jsou_jedno_mereni() -> None:
+    """#1293: řádky FF jednoho releasu (CPI m/m, Core CPI m/m, y/y) mají stejný čas
+    i výnos — jsou jedno měření, jinak gate otevře pseudoreplikace."""
+    from dataclasses import replace
+
+    release = NOW - dt.timedelta(days=1)
+    rows = [
+        replace(sample(26.7, surprise_z=-1.0, sentiment_dir=1), ts_event=release),
+        replace(sample(26.7, surprise_z=-1.0, sentiment_dir=1), ts_event=release),
+        replace(sample(26.7, surprise_z=-1.0, sentiment_dir=1), ts_event=release),
+        # Jiný bucket (velké překvapení) ve stejném čase je samostatné měření
+        replace(sample(26.7, surprise_z=-2.0, sentiment_dir=1), ts_event=release),
+        replace(sample(-4.0, surprise_z=-1.0, sentiment_dir=1), ts_event=NOW),
+    ]
+    by_bucket = {s.key.surprise_bucket: s for s in aggregate_samples(rows)}
+    small = by_bucket["neg_small"]
+    assert small.n == 2
+    assert small.ret_mean_bp == pytest.approx((26.7 - 4.0) / 2)
+    assert small.hit_rate == pytest.approx(0.5)
+    assert by_bucket["neg_large"].n == 1
+    # Vzorky bez času (testy, ruční výpočty) jsou dál samostatná měření
+    assert aggregate_samples([sample(10.0), sample(10.0)])[0].n == 2
+
+
+def test_sloucene_mereni_ma_smer_podle_prevahy() -> None:
+    from dataclasses import replace
+
+    tie = [
+        replace(sample(5.0, sentiment_dir=1), ts_event=NOW),
+        replace(sample(5.0, sentiment_dir=-1), ts_event=NOW),
+    ]
+    stats = aggregate_samples(tie)[0]
+    assert stats.n == 1
+    assert stats.hit_rate is None  # remíza směrů = neposuzuje se
+    majority = [*tie, replace(sample(5.0, sentiment_dir=-1), ts_event=NOW)]
+    assert aggregate_samples(majority)[0].hit_rate == pytest.approx(0.0)
+
+
 def test_wilson_lower_bound_punishes_small_samples() -> None:
     """Stejná bodová úspěšnost, ale dolní mez roste s počtem vzorků."""
     few = aggregate_samples([sample(10.0, sentiment_dir=1)] * 3)[0]
@@ -232,6 +270,61 @@ def test_job_recomputes_from_scratch(tmp_path: Path) -> None:
     assert job.run(NOW) == 3
     with engine.connect() as conn:
         assert len(conn.execute(select(news_model_stats)).fetchall()) == 3
+
+
+def test_job_slucuje_soubezne_eventy_i_mimo_poradi_id(tmp_path: Path) -> None:
+    """#1293: CPI m/m a Core CPI m/m ve stejném čase = n 1, i když mezi nimi leží
+    v tabulce jiný event (job řadí podle času eventu)."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    release = NOW - dt.timedelta(days=1)
+    with engine.begin() as conn:
+        for index, (ts, title, ret) in enumerate(
+            [
+                (release, "USD CPI m/m", 26.7),
+                (NOW, "USD CPI m/m", -3.0),
+                (release, "USD Core CPI m/m", 26.7),
+            ]
+        ):
+            key = conn.execute(
+                insert(news_events).values(
+                    ts_event=ts,
+                    ts_ingested=ts,
+                    source="forexfactory",
+                    kind="scheduled",
+                    title=title,
+                    category="MACRO_INFLATION",
+                    importance=3,
+                    surprise_z=-1.0,
+                    sentiment_dir=1,
+                    symbols=[],
+                    market_closed=False,
+                    dedup_hash=f"cpi-{index}",
+                    raw={},
+                )
+            ).inserted_primary_key
+            assert key is not None
+            window = ReactionWindow(
+                window_min=5,
+                ret_bp=ret,
+                range_bp=20.0,
+                vol_z=None,
+                contaminated=False,
+                deferred=False,
+                gex_regime=None,
+                computed_at=NOW,
+            )
+            conn.execute(
+                insert(news_reactions).values(
+                    event_id=int(key[0]), symbol="ES", **reaction_row_values([window])
+                )
+            )
+
+    ModelStatsJob(engine).run(NOW)
+    with engine.connect() as conn:
+        row = conn.execute(select(news_model_stats).where(news_model_stats.c.regime == "all")).one()
+    assert row.n == 2
+    assert row.ret_mean_bp == pytest.approx((26.7 - 3.0) / 2)
 
 
 def test_aggregate_by_regime_bere_stream_a_dava_totez_co_seznam() -> None:

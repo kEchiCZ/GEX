@@ -64,17 +64,24 @@ class ModelStatsJob:
 
         `fetchall()` přes join reakcí a eventů držel ~290 k širokých řádků
         a z nich 2 M vzorků naráz; agregace teď spotřebovává stream.
+
+        Řazení podle času eventu: agregace slučuje souběžné vzorky téhož
+        bucketu do jednoho měření (#1293) a potřebuje je za sebou.
         """
         state_by_date = self._state_by_date()
-        stmt = select(
-            news_events.c.category,
-            news_events.c.importance,
-            news_events.c.surprise_z,
-            news_events.c.sentiment_dir,
-            news_events.c.ts_event,
-            news_reactions,
-        ).select_from(
-            news_reactions.join(news_events, news_events.c.id == news_reactions.c.event_id)
+        stmt = (
+            select(
+                news_events.c.category,
+                news_events.c.importance,
+                news_events.c.surprise_z,
+                news_events.c.sentiment_dir,
+                news_events.c.ts_event,
+                news_reactions,
+            )
+            .select_from(
+                news_reactions.join(news_events, news_events.c.id == news_reactions.c.event_id)
+            )
+            .order_by(news_events.c.ts_event, news_events.c.id)
         )
         with self._engine.connect() as conn:
             result = conn.execution_options(yield_per=YIELD_PER).execute(stmt).mappings()
@@ -95,6 +102,7 @@ class ModelStatsJob:
                         deferred=window.deferred,
                         state=state,
                         gex_regime=window.gex_regime,
+                        ts_event=row["ts_event"],
                     )
 
     def store(self, stats: list[tuple[str, BucketStats]], now: dt.datetime) -> None:

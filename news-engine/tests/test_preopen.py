@@ -48,9 +48,7 @@ def ev(
     kind: str = "headline",
     importance: int | None = 1,
     category: str | None = "OTHER",
-    impact: str | None = None,
     direction: int | None = None,
-    curated: bool = False,
 ) -> ClusterEvent:
     return ClusterEvent(
         id=event_id,
@@ -59,9 +57,7 @@ def ev(
         title=title,
         importance=importance,
         category=category,
-        ff_impact=impact,
         direction=direction,
-        curated=curated,
     )
 
 
@@ -75,7 +71,7 @@ def weekend_events() -> list[ClusterEvent]:
             category="GEOPOLITICS",
             direction=-1,
         ),
-        # Významná (varianta B), ale ne zásadní: importance 2 → jen počtem
+        # Významná, ale ne zásadní: importance 2 → jen počtem
         ev(
             2,
             dt.datetime(2026, 9, 19, 12, 0, tzinfo=UTC),
@@ -84,7 +80,7 @@ def weekend_events() -> list[ClusterEvent]:
             category="GEOPOLITICS",
             direction=1,
         ),
-        # Earnings nejsou významné (varianta B), šum jen počtem
+        # Earnings nejsou významné, šum jen počtem
         ev(
             3,
             dt.datetime(2026, 9, 19, 13, 0, tzinfo=UTC),
@@ -97,10 +93,9 @@ def weekend_events() -> list[ClusterEvent]:
         ev(
             5,
             dt.datetime(2026, 9, 20, 16, 0, tzinfo=UTC),
-            title="CNY Industrial Production y/y",
+            title="USD Industrial Production m/m",
             kind="scheduled",
-            importance=1,  # klasifikátor přepsal, rozhoduje FF impact
-            impact="Medium",
+            importance=2,  # FF Medium u USD (klasifikátor v2)
             direction=0,
         ),
     ]
@@ -182,7 +177,7 @@ def test_hlavni_souhrn_presny_text_a_payload() -> None:
         "Úrovně ES z poslední seance (expirace 21. 9.): call zeď 7730 · put zeď 7680 · "
         "flip 7752 · těžiště 7715 · close 7725\n"
         "Zásadní zprávy za zavřený trh od pátku 22:55: 2 · sklon 🔴 (🟢 0 · 🔴 1 · ⚪ 1)\n"
-        "• ⚪ CNY Industrial Production y/y\n"
+        "• ⚪ USD Industrial Production m/m\n"
         "• 🔴 Weekend strike on oil facility\n"
         "další významné: 1 · ostatní zprávy: 2"
     )
@@ -217,29 +212,28 @@ def test_bez_zasadni_zpravy_nic() -> None:
 
 
 def test_zasadni_zpravy_podmnozina_vyznamnych() -> None:
+    """Zásadní = kalendář nebo zpráva s importance 3 (rozhodnutí 26. 9., ADR-0045)."""
     at = OPENING - dt.timedelta(hours=5)
     key = [
-        ev(1, at, title="USD CPI m/m", kind="scheduled", importance=1, impact="High"),
-        ev(2, at, title="ECB Lagarde Speaks", kind="scheduled", impact="Medium"),
-        ev(3, at, title="Powell says", importance=3, category="FED"),
+        ev(1, at, title="USD CPI m/m", kind="scheduled", importance=3),
+        ev(2, at, title="EUR Main Refinancing Rate", kind="scheduled", importance=2),
+        ev(3, at, title="Fed holds rates", importance=3, category="FED"),
         ev(4, at, title="CPI hot", importance=3, category="MACRO_INFLATION"),
-        ev(5, at, title="Payrolls", importance=3, category="MACRO_LABOR"),
-        ev(6, at, title="GDP", importance=3, category="MACRO_GROWTH"),
-        ev(7, at, title="Tariffs on China", importance=3, category="GEOPOLITICS"),
-        # Kurátor na sociálních sítích stačí s importance 2 jako ve variantě B
-        ev(8, at, title="Post", kind="social", importance=2, category="OTHER", curated=True),
+        # Ropa bez výčtu kategorií patří mezi zásadní
+        ev(5, at, title="Oil surges 8%", importance=3, category="ENERGY"),
+        ev(6, at, title="Tariffs on China", importance=3, category="GEOPOLITICS"),
+        ev(7, at, title="Post", kind="social", importance=3, category="GEOPOLITICS"),
     ]
     significant_only = [
-        ev(11, at, title="Inflation eats savings", importance=2, category="MACRO_INFLATION"),
+        ev(11, at, title="Inflation data due", importance=2, category="MACRO_INFLATION"),
         ev(12, at, title="Fed chair op-ed", importance=2, category="FED"),
-        ev(13, at, title="Futures poised ahead of Fed", importance=3, category="OTHER"),
-        ev(14, at, title="3 AI stocks before Fed", importance=3, category="TECH"),
-        ev(15, at, title="OPEC+ keeps output", importance=3, category="ENERGY"),
+        # Kurátor s importance 2 už není automaticky zásadní
+        ev(13, at, title="Post", kind="social", importance=2, category="OTHER"),
     ]
     not_significant = [
-        ev(21, at, title="FOMC Member Speaks", kind="scheduled", importance=3, impact="Low"),
+        ev(21, at, title="CAD CPI m/m", kind="scheduled", importance=1),
         ev(22, at, title="Firma X výsledky", importance=3, category="EARNINGS"),
-        ev(23, at, title="Post", kind="social", importance=3, category="FED"),  # ne kurátor
+        ev(23, at, title="Post", kind="social", importance=1, category="FED"),  # ne kurátor
         ev(24, at, title="Šum", importance=1, category="GEOPOLITICS"),
     ]
     assert [e.id for e in key if is_key(e)] == [e.id for e in key]
@@ -452,7 +446,7 @@ def test_tataz_story_z_vice_zdroju_jednou_i_v_aktualizaci() -> None:
     assert update([*weekend_events(), first, backdated], {1, 5, 7}) is None
     # Kalendář se neslučuje: Core CPI a CPI jsou dvě události
     cpi = [
-        ev(11, OPENING, title="USD CPI m/m", kind="scheduled", impact="High"),
-        ev(12, OPENING, title="USD Core CPI m/m", kind="scheduled", impact="High"),
+        ev(11, OPENING, title="USD CPI m/m", kind="scheduled", importance=3),
+        ev(12, OPENING, title="USD Core CPI m/m", kind="scheduled", importance=3),
     ]
     assert len(distinct_stories(cpi)) == 2

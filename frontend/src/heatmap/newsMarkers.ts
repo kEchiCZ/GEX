@@ -274,7 +274,7 @@ export interface NewsDrawPlan {
 Denně je 1 000–1 250 clusterů (filtr „Vše"), dřív ~50. Kreslení každého glyfu
 a počtu při každém panu by stálo desítky tisíc volání 2D API (#1274), proto:
 - markery mimo viewport se přeskočí;
-- pod `NEWS_DETAIL_MIN_PX` na koš jen čárky, glyf dostanou jen významné
+- pod `NEWS_DETAIL_MIN_PX` na koš jen čárky, glyf dostanou jen důležitější
   (importance ≥ 2) a bez počtu;
 - glyfy se neslévají: bližší než `NEWS_GLYPH_MIN_GAP_PX` k už kreslenému
   se vynechají, přednost má vyšší důležitost. Čárka zůstává vždy — žádná
@@ -398,15 +398,20 @@ export function expectedImpact(row: ChartNewsRow): -1 | 0 | 1 {
   return 0
 }
 
-/** Významné zprávy (importance ≥ 2) — filtr markerů „Významné" (#408).
+/** Významné zprávy — filtr markerů „Významné" (#408, #1305).
 
-`pinnedIds` projdou vždy: zprávy prokliknutého upozornění (#1290). Upozornění
-bere plánované eventy podle FF impactu, ne podle `importance` (pravidlový
-klasifikátor dává „USD PPI m/m" High importance 1) — bez výjimky by proklik
-posunul graf na koš bez markeru. */
+Rozhoduje `significance` z API: stejná definice jako upozornění a předobchodní
+souhrn (`news_significance`, ADR-0045), frontend pravidla nekopíruje.
+`pinnedIds` projdou vždy: zprávy prokliknutého upozornění (#1290) — i ty, které
+podle dnešní klasifikace významné nejsou (upozornění z doby před
+reklasifikací); bez výjimky by proklik posunul graf na koš bez markeru. */
 export function significantOnly<T extends ChartNewsRow>(
   rows: T[],
   pinnedIds?: ReadonlySet<number>,
 ): T[] {
-  return rows.filter((row) => (row.importance ?? 1) >= 2 || (pinnedIds?.has(row.id) ?? false))
+  return rows.filter(
+    (row) =>
+      (row.significance !== null && row.significance !== undefined) ||
+      (pinnedIds?.has(row.id) ?? false),
+  )
 }

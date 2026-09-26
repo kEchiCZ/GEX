@@ -137,13 +137,13 @@ def quiet_es(tmp_path_factory: pytest.TempPathFactory) -> BarsRepository:
 
 
 def seed_cpi_cluster(engine: Engine) -> tuple[int, int]:
-    """FF High (klasifikátor mu dal importance 1), headline 3 a osm šumových titulků."""
+    """FF High (USD → importance 3, klasifikátor v2), headline 3 a osm šumových titulků."""
     ff = add_event(
         engine,
         T0,
         title="USD CPI m/m",
         kind="scheduled",
-        importance=1,
+        importance=3,
         category="MACRO_INFLATION",
         raw={"impact": "High", "country": "USD"},
         ingested=T0 - dt.timedelta(days=3),  # kalendář je v DB předem
@@ -195,9 +195,13 @@ def test_bez_mimoradneho_pohybu_jen_nq(tmp_path: Path, quiet_es: BarsRepository)
     assert [a["symbol"] for a in alerts] == ["NQ"]
 
 
-def test_socialni_sit_jen_od_kuratora(tmp_path: Path, archive: BarsRepository) -> None:
+def test_socialni_sit_podle_importance_od_klasifikatoru(
+    tmp_path: Path, archive: BarsRepository
+) -> None:
+    """Nekurátorovaný post má od klasifikátoru v2 strop 1 — významnost pak rozhoduje
+    jen importance, `raw.curated` job nečte (ADR-0045)."""
     engine, bars = make_db(tmp_path), archive
-    add_event(engine, T0, title="Obecný post", kind="social", importance=3)
+    add_event(engine, T0, title="Obecný post", kind="social", importance=1)
     job = AnomalyJob(engine, bars, symbols=("ES",), started_at=T0 - dt.timedelta(hours=1))
     assert job.run(T0 + dt.timedelta(minutes=8)) == []
     add_event(
