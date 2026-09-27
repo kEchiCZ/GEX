@@ -1,6 +1,7 @@
 """Automatický scénář dne (#1173, varianta A — rozhodnutí uživatele 15. 9. 2026).
 
-Jednou za seanci, 15 minut před US openem (`GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN`),
+Jednou za obchodní seanci (po–pá, `settle.is_trading_session`; víkend nemá US open
+ani settle — #1309), 15 minut před US openem (`GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN`),
 engine sám sestaví scénář z **verdiktu dne** — stejné hlasování jako Shrnutí
 dne v Briefingu (`compute/dayverdict`, port frontendu, týž `rules_version`):
 trend TF, tendence, sentiment, cena vs. včerejší close, ΔOI přes noc, gamma
@@ -31,7 +32,13 @@ from gexlens_engine.compute.dayverdict import (
     build_auto_scenario,
     day_verdict,
 )
-from gexlens_engine.compute.settle import ET_TZ, session_time_utc, settle_ts, trading_session_date
+from gexlens_engine.compute.settle import (
+    ET_TZ,
+    is_trading_session,
+    session_time_utc,
+    settle_ts,
+    trading_session_date,
+)
 from gexlens_engine.compute.trend import TIMEFRAMES, Candle, TrendReport, assess_trends
 from gexlens_engine.runtime import EngineRuntime
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
@@ -243,8 +250,8 @@ class ScenarioGenerator:
 
     async def on_minute(self, now: dt.datetime, spot: float | None, runtime: EngineRuntime) -> None:
         session = trading_session_date(now)
-        if self._done_for == session:
-            return
+        if self._done_for == session or not is_trading_session(session):
+            return  # víkend: den bez US openu i settle — scénář nevzniká (#1309)
         fire_at = us_open_ts(session) - dt.timedelta(minutes=self.minutes_before_open)
         if now < fire_at or now >= us_open_ts(session):
             return  # okno: [open − N min, open) — po openu už dnes ne

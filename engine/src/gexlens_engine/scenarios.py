@@ -1,8 +1,10 @@
 """Vyhodnocení scénářů dne (#1173) — kolektor po settle, vzor GammaCliffCollector.
 
-Jednou po settle každé seance projde scénáře symbolu, jejichž termín uplynul
-a nemají výsledek; bary bere z partic `derived/{sym}/bars/` od okamžiku
-vzniku (výhradně PO `created_at`) do settle termínu — i přes více seancí.
+Jednou po settle každé obchodní seance (po–pá; víkend settle nemá — #1309)
+projde scénáře symbolu, jejichž termín uplynul a nemají výsledek; bary bere
+z partic `derived/{sym}/bars/` od okamžiku vzniku (výhradně PO `created_at`)
+do settle termínu — i přes více seancí. Scénář s termínem mimo obchodní seanci
+se uzavře bez výsledku a bez upozornění.
 EM pro odchylku v násobcích EM je z `em_respect` seance vzniku (bez řádku
 None, ne odhad). Výsledek jde do `scenarios.result` a alertem do zvonku
 (a přes něj i na Telegram, kategorie info).
@@ -19,7 +21,7 @@ import pyarrow.parquet as pq
 from sqlalchemy import select
 
 from gexlens_engine.compute.scenario import Bar, PathPoint, evaluate_scenario
-from gexlens_engine.compute.settle import settle_ts, trading_session_date
+from gexlens_engine.compute.settle import is_trading_session, settle_ts, trading_session_date
 from gexlens_engine.storage.emrespect_store import em_respect_table
 from gexlens_engine.storage.scenarios_store import ScenarioRow, ScenariosRepository
 
@@ -89,6 +91,8 @@ class ScenarioCollector:
 
     async def on_minute(self, now: dt.datetime) -> None:
         session = trading_session_date(now)
+        if not is_trading_session(session):
+            return  # víkend: den bez settle — nic se nevyhodnocuje ani nehlásí (#1309)
         boundary = settle_ts(session) + dt.timedelta(minutes=SETTLE_GRACE_MINUTES)
         if now < boundary or self._evaluated_for == session:
             return
@@ -139,6 +143,18 @@ class ScenarioCollector:
         """Blokující průchod — volat přes to_thread. Vrací (scénář, výsledek)."""
         done: list[tuple[ScenarioRow, dict[str, Any]]] = []
         for row in self.repository.pending(self.symbol, now):
+            if not is_trading_session(row.deadline):
+                # Termín bez settle (víkendový scénář z doby před #1309): uzavřít
+                # bez výsledku a bez upozornění — jinak by visel mezi otevřenými
+                # a bary mimo seanci by daly falešný výsledek do track recordu
+                logger.info(
+                    "%s: scénář #%d má termín %s mimo obchodní seanci — uzavřen bez výsledku",
+                    self.symbol,
+                    row.id,
+                    row.deadline.isoformat(),
+                )
+                self.repository.record_result(row.id, None, now)
+                continue
             bars = load_bars_between(self.data_dir, self.symbol, row.created_at, row.deadline_ts)
             result = evaluate_scenario(
                 bars,

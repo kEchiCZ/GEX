@@ -89,6 +89,17 @@ def session_bounds(day: dt.date) -> tuple[dt.datetime, dt.datetime]:
     return open_of(day - dt.timedelta(days=1)), open_of(day)
 
 
+def is_trading_session(day: dt.date) -> bool:
+    """Má obchodní den `day` US seanci s RTH openem (9:30 ET) i settle (16:00 ET)? Po–pá.
+
+    `trading_session_date` vrací pro sobotu a neděli před otevřením Globexu
+    kalendářní den, který seanci nemá — kdo na něj váže open nebo settle
+    (scénář dne a jeho vyhodnocení, #1309), ptá se tady. Svátky CME zatím
+    nezná (#1308).
+    """
+    return day.weekday() < 5
+
+
 def trading_session_date(ts: dt.datetime) -> dt.date:
     """Obchodní den, do kterého okamžik `ts` patří (ADR-0023, #638).
 

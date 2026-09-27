@@ -178,6 +178,19 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-27 — automatický scénář dne vznikal v sobotu i v neděli s „termínem settle“ toho dne (#1309).**
+  Scénáře #6/#7 (sobota) a #8/#9 (neděle 15:15 CEST) přišly jako upozornění `scenario_created`
+  a vyhodnocovač by nedělní uzavřel v neděli 22:15 CEST, na settle neexistující seance. Příčina:
+  `trading_session_date(now)` vrací o víkendu kalendářní den bez seance a generátor i vyhodnocovač na něj
+  bez otázky navázaly `us_open_ts` a `settle_ts`. Sobotní #6/#7 skončily bez výsledku (a nedělní #8/#9
+  by skončily stejně) jen proto, že víkendové okno do 20:00 UTC nemá bary — nedělní partice začínají
+  otevřením Globexu ve 22:00 UTC; s bary by šla falešná trefa do track recordu. Sobotu našla diagnóza #1307,
+  neděli uživatel. → Kdo na den váže open, settle nebo publikaci, ptá se
+  `settle.is_trading_session`, ne jen `trading_session_date`, a má test na sobotu i neděli. Starší řádky
+  se neopravují ručně: kód je uzavře bez výsledku a statistiky je vynechají. Čtvrtý výskyt vzorce
+  „kalendářní den místo obchodního“ po #1241 (PDC z nedělní partice), #1307 (okno OI pro každý
+  kalendářní den) a `/oidelta` pondělí proti neděli (#1309 bod 3); je to kandidát na pravidlo v AGENTS.md.
+
 - **2026-09-26 — „významná zpráva“ měla dvě definice a klasifikátor s lidmi nesouhlasil (#1293, #1305): regex nad slovy kdekoli.**
   Předobchodní souhrn vypsal mezi „zásadními“ článek o dani z mezd lékařky a tarifní refundaci drobné firmy;
   měření na 400 zprávách (dva hodnotitelé, κ 0,81) dalo mezi importance a relevancí κ ≈ 0,05 a importance 3

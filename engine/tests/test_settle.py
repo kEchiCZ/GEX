@@ -6,7 +6,14 @@ Fixní 20:00 UTC platilo jen v letním čase — v zimě je settle 16:00 ET
 
 import datetime as dt
 
-from gexlens_engine.compute.settle import CME_TZ, ET_TZ, session_time_utc, settle_ts
+from gexlens_engine.compute.settle import (
+    CME_TZ,
+    ET_TZ,
+    is_trading_session,
+    session_time_utc,
+    settle_ts,
+    trading_session_date,
+)
 
 
 def test_settle_letni_cas_zustava_20_utc() -> None:
@@ -61,3 +68,20 @@ def test_session_bounds_a_trading_session_date() -> None:
     assert trading_session_date(dt.datetime(2026, 7, 21, 0, 30, tzinfo=dt.UTC)) == dt.date(
         2026, 7, 21
     )
+
+
+def test_obchodni_seance_po_pa_vikend_ne() -> None:
+    """#1309: neděle 27. 9. 15:15 CEST patří k „seanci“ neděle, která nemá RTH ani
+    settle; od 17:00 CT už běží pondělní seance."""
+    assert [is_trading_session(dt.date(2026, 9, day)) for day in range(25, 30)] == [
+        True,  # pátek
+        False,  # sobota
+        False,  # neděle
+        True,  # pondělí
+        True,  # úterý
+    ]
+    sunday_1515_cest = dt.datetime(2026, 9, 27, 13, 15, tzinfo=dt.UTC)
+    assert trading_session_date(sunday_1515_cest) == dt.date(2026, 9, 27)
+    assert not is_trading_session(trading_session_date(sunday_1515_cest))
+    sunday_open = dt.datetime(2026, 9, 27, 17, 0, tzinfo=CME_TZ)
+    assert is_trading_session(trading_session_date(sunday_open))  # pondělí 28. 9.

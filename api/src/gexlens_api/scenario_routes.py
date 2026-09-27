@@ -1,9 +1,9 @@
 """Scénář dne (#1173, #1126 bod 3a): založení se snímkem, seznam, obrázek, track record.
 
 Scénář vzniká jen dopředu (rozhodnutí uživatele 15. 9. 2026): `created_at`
-razítkuje server, `day` musí být aktuální seance, termín ≥ den vzniku; replay
-minulého dne scénář nezaloží (422). Vyhodnocení dělá engine po settle
-termínu (`ScenarioCollector`), API jen ukládá a čte.
+razítkuje server, `day` musí být aktuální seance, termín ≥ den vzniku a obchodní
+den (po–pá, víkend nemá settle — #1309); replay minulého dne scénář nezaloží (422).
+Vyhodnocení dělá engine po settle termínu (`ScenarioCollector`), API jen ukládá a čte.
 
 Snímek: klient pošle PNG (base64) — složený canvas heatmapy + anotace —
 uloží se do `data/scenarios/{sym}/{den}/{id}.png`; velikost snímků se
@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from gexlens_engine.compute.scenario import PathPoint, targets_from_path
-from gexlens_engine.compute.settle import settle_ts, trading_session_date
+from gexlens_engine.compute.settle import is_trading_session, settle_ts, trading_session_date
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
 
 logger = logging.getLogger(__name__)
@@ -122,6 +122,9 @@ def build_scenario_router(
             raise HTTPException(422, "Termín scénáře nesmí být v minulosti")
         if (deadline - day).days > 60:
             raise HTTPException(422, "Termín scénáře nejvýš 60 dní dopředu")
+        if not is_trading_session(deadline):
+            # Víkend nemá settle — scénář by se nikdy nevyhodnotil (#1309)
+            raise HTTPException(422, "Termín scénáře musí být obchodní den (po–pá)")
         path = [
             PathPoint(
                 ts=point.ts if point.ts.tzinfo else point.ts.replace(tzinfo=dt.UTC),

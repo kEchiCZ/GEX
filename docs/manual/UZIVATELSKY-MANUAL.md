@@ -718,7 +718,11 @@ medián odchylky — brána n ≥ 30 jako u verdiktu dne), alert ve zvonku
 
 Zásady: scénář vzniká **jen dopředu** — na živém dni (v replay minulého dne
 tlačítko není) a vyhodnocuje se výhradně z barů po jeho vzniku; nic se
-nedopočítává zpětně. Snímky leží na disku (`data/scenarios/`); nad **1 GB**
+nedopočítává zpětně. Scénář patří k **obchodnímu dni** (po–pá): o víkendu
+automatický scénář nevzniká, termín ručního scénáře musí být obchodní den
+(víkendový dialog odmítne — nemá settle) a scénář s termínem mimo seanci
+(víkendové z doby před #1309) se uzavře jako „nešlo posoudit" bez upozornění
+a do track recordu se nepočítá. Snímky leží na disku (`data/scenarios/`); nad **1 GB**
 přijde alert „pročisti" — mazání je ruční v Settings → Scénáře dne (mizí jen
 PNG, výsledky zůstávají).
 
