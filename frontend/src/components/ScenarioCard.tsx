@@ -1,6 +1,7 @@
 /** Karta scénáře (#1173): snímek, cíle, termín, výsledek — Briefing i Stats. */
 import { scenarioImageUrl, verdictLabel } from '../api/scenarios'
 import type { Scenario } from '../api/scenarios'
+import { isTradingSessionIso } from '../instrument/tz'
 
 function fmtTime(iso: string): string {
   return new Date(iso).toLocaleString([], {
@@ -19,6 +20,8 @@ export function ScenarioCard({
   compact?: boolean
 }) {
   const result = scenario.result
+  // Uzavřený bez výsledku (#1309): engine ho zavřel, na termín už nečeká
+  const closedWithoutResult = scenario.evaluated_at !== null && result === null
   const cls = result
     ? `scenario-verdict scenario-${result.verdict}`
     : 'scenario-verdict scenario-pending'
@@ -29,7 +32,7 @@ export function ScenarioCard({
           {scenario.symbol} · {fmtTime(scenario.created_at)}
         </strong>
         <span className="muted"> → termín {scenario.deadline}</span>
-        <span className={cls}>{verdictLabel(result)}</span>
+        <span className={cls}>{closedWithoutResult ? 'bez výsledku' : verdictLabel(result)}</span>
         <span
           className="scenario-source"
           title={
@@ -76,8 +79,12 @@ export function ScenarioCard({
           {scenario.evaluated_at === null ? '' : ` · vyhodnoceno ${fmtTime(scenario.evaluated_at)}`}
         </div>
       )}
-      {scenario.evaluated_at !== null && result === null && (
-        <div className="muted">bez barů v okně — nešlo posoudit</div>
+      {closedWithoutResult && (
+        <div className="muted" data-testid={`scenario-closed-${scenario.id}`}>
+          {isTradingSessionIso(scenario.deadline)
+            ? 'bez barů v okně — nešlo posoudit'
+            : 'termín mimo obchodní seanci (víkend nemá settle) — uzavřen bez vyhodnocení a mimo track record'}
+        </div>
       )}
       {scenario.has_image && !compact && (
         <a href={scenarioImageUrl(scenario.id)} target="_blank" rel="noreferrer">

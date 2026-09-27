@@ -92,10 +92,16 @@ def session_bounds(day: dt.date) -> tuple[dt.datetime, dt.datetime]:
 def is_trading_session(day: dt.date) -> bool:
     """Má obchodní den `day` US seanci s RTH openem (9:30 ET) i settle (16:00 ET)? Po–pá.
 
+    **Jediný predikát „obchodní den" v enginu** (#1309, AGENTS.md): kdo na den
+    váže open, settle, publikaci OI nebo srovnání „proti předchozímu dni",
+    ptá se tady — žádné lokální `weekday() < 5` jako test obchodního dne
+    (kalendářní otázky jako pondělí týdne nebo 3. pátek jsou jiná věc).
     `trading_session_date` vrací pro sobotu a neděli před otevřením Globexu
-    kalendářní den, který seanci nemá — kdo na něj váže open nebo settle
-    (scénář dne a jeho vyhodnocení, #1309), ptá se tady. Svátky CME zatím
-    nezná (#1308).
+    kalendářní den, který seanci nemá; OI archiv má klíče podle UTC dne
+    včetně víkendu. Protějšek ve frontendu je `isTradingSessionIso`
+    (instrument/tz.ts) — mění se spolu, jako `trading_session_date` ↔
+    `sessionDateIso`. Svátky CME zatím nezná — doplní je #1308 sem
+    a do protějšku, a tím všem volajícím naráz.
     """
     return day.weekday() < 5
 

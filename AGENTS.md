@@ -64,6 +64,12 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
 - **Zavřený trh = žádná upozornění na chybějící data.** Každý hlídač výpadku dat (IBKR, tasty,
   OI, greeks, striky, spojení) má bránu „očekávají se data?“ z `compute/marketclock.is_market_closed`
   a test na víkend, denní pauzu a nedělní otevření; při zavřeném trhu jen loguje (#968, #1228, #1307).
+- **Obchodní den, ne kalendářní.** `trading_session_date` i UTC klíče partic a OI archivu mají
+  sobotu a neděli. Kdo na den váže US open, settle, publikaci OI nebo srovnání „proti předchozímu
+  dni", ptá se jediného predikátu `compute/settle.is_trading_session` (frontend: protějšek
+  `instrument/tz.isTradingSessionIso`; svátky doplní #1308 do obou), žádné lokální `weekday() < 5`
+  ani `getUTCDay()` jako test obchodního dne; test na sobotu, neděli a pondělí proti pátku
+  (#1241, #1307, #1309).
 - **Podezřelá hodnota na produkci se řeší hned** (issue + příčina), neodkládá se „až se to bude opakovat".
   Demo/mock data nesmí prosáknout do UI.
 - **Ověřuj na tvrdých datech**: metriku dohledej v kódu, stav issue z `gh issue view`, ne z paměti;

@@ -115,7 +115,8 @@ def _settle_close(bars: list[dict[str, Any]]) -> float | None:
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=dt.UTC)
         local = ts.astimezone(ET_TZ)
-        if local.weekday() < 5 and dt.time(9, 30) <= local.time() < dt.time(16, 0):
+        # Obchodní den z jediného predikátu (#1309) — víkendový bar PDC není
+        if is_trading_session(local.date()) and dt.time(9, 30) <= local.time() < dt.time(16, 0):
             settle = float(bar["close"])
     return settle
 

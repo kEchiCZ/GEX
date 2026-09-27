@@ -9,10 +9,11 @@ Bez uloženého verdiktu by šlo o názor bez zpětné vazby.
 import datetime as dt
 from typing import Any, Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from gexlens_api.meta_repo import MetaRepository
+from gexlens_engine.compute.settle import is_trading_session
 from gexlens_engine.storage.briefing_verdicts_store import BriefingVerdictRepository, verdict_stats
 
 VerdictKind = Literal["long", "short", "none", "wait_news"]
@@ -41,6 +42,9 @@ def build_briefing_router(repository: MetaRepository) -> APIRouter:
     @router.post("/briefing/verdicts", status_code=201)
     def verdict_put(payload: VerdictIn) -> dict[str, Any]:
         """Uloží (nebo přepíše) verdikt seance pro symbol."""
+        if not is_trading_session(payload.session_date):
+            # Víkend nemá US open ani settle — verdikt by se nikdy nevyhodnotil (#1309)
+            raise HTTPException(422, "Verdikt dne jen pro obchodní den (po–pá)")
         values = payload.model_dump()
         values["votes"] = [vote.model_dump() for vote in payload.votes]
         return repository.briefing_verdict_upsert(values)

@@ -57,7 +57,7 @@ import type { Scenario } from '../api/scenarios'
 import { ScenarioCard } from './ScenarioCard'
 import { TIMEFRAME_LABELS, assessTrends, directionLabel } from '../instrument/trend'
 import type { Candle, TimeframeKey } from '../instrument/trend'
-import { sessionDateIso } from '../instrument/tz'
+import { isTradingSessionIso, sessionDateIso } from '../instrument/tz'
 import { useAppState } from '../state/AppState'
 
 const REFRESH_MS = 60_000
@@ -391,7 +391,8 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
       ? null
       : `${dateIso}|${symbol}|${verdict.verdict}|${verdict.score}|${verdict.votes.map((vote) => `${vote.name}=${vote.vote}:${vote.reason}`).join(';')}`
   useEffect(() => {
-    if (verdictKey === null) return
+    // Víkend nemá US open ani settle — verdikt by se nikdy nevyhodnotil (#1309, API 422)
+    if (verdictKey === null || !isTradingSessionIso(dateIso)) return
     const timer = window.setTimeout(() => {
       void postVerdict({
         session_date: dateIso,

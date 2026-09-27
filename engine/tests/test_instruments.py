@@ -209,11 +209,33 @@ def test_oi_prev_day_queries(tmp_path: Path) -> None:
     repository.upsert_many([OIRecord("ES", "20260717", 7500.0, "P", day1, 100.0)])
     repository.upsert_many([OIRecord("ES", "20260717", 7500.0, "P", day2, 150.0)])
 
-    assert repository.latest_day_before("ES", "20260717", day2) == day1
-    assert repository.latest_day_before("ES", "20260717", day1) is None
+    assert repository.latest_trading_day_before("ES", "20260717", day2) == day1
+    assert repository.latest_trading_day_before("ES", "20260717", day1) is None
     values = repository.values_for("ES", "20260717", day1)
     assert len(values) == 1
     assert values[0].strike == 7500.0 and values[0].right == "P" and values[0].oi == 100.0
+
+
+def test_oi_prev_trading_day_skips_weekend_keys(tmp_path: Path) -> None:
+    """#1309: archiv má klíče i pro sobotu a neděli (UTC den pořízení), základ
+    ΔOI je ale poslední OBCHODNÍ den — pondělí se srovnává s pátkem, ne s nedělí,
+    jejíž archiv po otevření Globexu nese už pondělní čísla (21. 9. 2026: ΔOI 0)."""
+    repository = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
+    repository.ensure_schema()
+    friday, saturday, sunday = dt.date(2026, 9, 18), dt.date(2026, 9, 19), dt.date(2026, 9, 20)
+    monday, tuesday = dt.date(2026, 9, 21), dt.date(2026, 9, 22)
+    for day in (friday, saturday, sunday, monday, tuesday):
+        repository.upsert_many([OIRecord("ES", "20260925", 6700.0, "P", day, 100.0)])
+
+    assert repository.latest_trading_day_before("ES", "20260925", monday) == friday
+    assert repository.latest_trading_day_before("ES", "20260925", sunday) == friday
+    assert repository.latest_trading_day_before("ES", "20260925", saturday) == friday
+    # Regrese pracovního dne: úterý proti pondělí
+    assert repository.latest_trading_day_before("ES", "20260925", tuesday) == monday
+    # Před dnem jen víkendové klíče → žádný základ, ne víkendová kopie
+    for day in (saturday, sunday, monday):
+        repository.upsert_many([OIRecord("ES", "20260928", 6700.0, "P", day, 50.0)])
+    assert repository.latest_trading_day_before("ES", "20260928", monday) is None
 
 
 # ── Pipeline nad mocky ─────────────────────────────────────────────
@@ -963,6 +985,48 @@ async def test_vol_concentration_alert_once_per_leader(
     second = str(alerts[1]["message"])
     assert "7650C" in second
     assert "strop" in second  # call nad spotem → dovětek
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        (dt.datetime(2026, 9, 26, 0, 5, tzinfo=dt.UTC), 0),  # sobota po rollu (26. 9. 00:05)
+        (dt.datetime(2026, 9, 27, 21, 59, tzinfo=dt.UTC), 0),  # neděle před otevřením
+        (dt.datetime(2026, 9, 23, 21, 30, tzinfo=dt.UTC), 0),  # středa, denní pauza
+        (dt.datetime(2026, 9, 27, 22, 0, tzinfo=dt.UTC), 1),  # nedělní otevření 17:00 CDT
+        (dt.datetime(2026, 9, 24, 15, 0, tzinfo=dt.UTC), 1),  # čtvrtek v seanci
+    ],
+)
+async def test_vol_concentration_jen_pri_otevrenem_trhu(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    now: dt.datetime,
+    expected: int,
+) -> None:
+    """#1309: 26. 9. 00:05 UTC, tři hodiny po páteční uzávěrce, odešlo
+    „ES 20260929: 7900C 19,7× medián" — nový sekundární řetěz po sobotním
+    rollu nad 10 snímky s páteční volume. Při zavřeném trhu se nehledá,
+    v seanci (i hned po nedělním otevření) beze změny."""
+    from types import SimpleNamespace
+
+    settings, writer, repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+
+    def cached(volume: float) -> SimpleNamespace:
+        return SimpleNamespace(snapshot=SimpleNamespace(volume=volume))
+
+    quotes = {
+        OptionContractSpec("ES", "FOP", "20260929", 7900.0, "C", "CME", "E5B", "50"): cached(9000),
+        OptionContractSpec("ES", "FOP", "20260929", 7500.0, "P", "CME", "E5B", "50"): cached(400),
+        OptionContractSpec("ES", "FOP", "20260929", 7580.0, "C", "CME", "E5B", "50"): cached(300),
+        OptionContractSpec("ES", "FOP", "20260929", 7400.0, "P", "CME", "E5B", "50"): cached(350),
+    }
+    pipeline.next_runtime = SimpleNamespace(  # type: ignore[assignment]
+        expiry="20260929", current_quotes=lambda: quotes
+    )
+
+    await pipeline._check_vol_concentration(now)
+
+    assert len(alerts_of(publisher, {"vol_concentration"})) == expected
 
 
 async def test_archive_failure_does_not_kill_pipeline(

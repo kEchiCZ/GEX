@@ -34,6 +34,8 @@ test('expiryKind: 3. pátek = měsíční, v kvartálních měsících kvartáln
 test('expiryKind: pátek = týdenní, poslední obchodní den = EOM, jinak denní', () => {
   expect(expiryKind('20260724')).toBe('týdenní') // 4. pátek
   expect(expiryKind('20260731')).toBe('EOM') // pátek a zároveň konec měsíce → EOM
+  // Pátek 30. 10. 2026: 31. 10. je sobota (bez seance, #1309) → poslední obchodní den
+  expect(expiryKind('20261030')).toBe('EOM')
   expect(expiryKind('20260720')).toBe('denní') // pondělí
   expect(expiryKind('20260721')).toBe('denní') // úterý
   expect(expiryKind('nesmysl')).toBeNull()

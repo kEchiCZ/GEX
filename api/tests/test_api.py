@@ -1229,16 +1229,57 @@ def test_oidelta_endpoint(settings: Settings) -> None:
         "current": DAY.isoformat(),
         "previous": previous_day.isoformat(),
     }
-    assert payload["call_total"] == 190.0
+    assert payload["call_total"] == 190.0  # součet celého dnešního archivu vč. nového striku
     assert payload["put_total"] == 180.0
-    assert payload["call_delta"] == 90.0  # +50 na 7600 + 40 nový strike
+    # Strike bez včerejšího archivu je neměřený, ne „+40 nového OI" (#1309):
+    # obálka se mezi dny liší (sekundární 160 striků, aktivní ~560)
+    assert payload["call_delta"] == 50.0
     assert payload["put_delta"] == -20.0
     movers = payload["movers"]
     assert movers[0]["strike"] == 7600.0 and movers[0]["right"] == "C"  # |Δ| 50 největší
+    assert all(row["strike"] != 7650.0 for row in movers)
 
     # Bez archivu drží tvar (days: None) — briefing sekci skryje
     empty = client.get("/oidelta/ES/20991231").json()
     assert empty["days"] is None
+
+
+def test_oidelta_pondeli_proti_patku(settings: Settings) -> None:
+    """#1309: OI archiv má klíče podle UTC dne včetně víkendu. Neděle po otevření
+    Globexu nese už pondělní čísla, takže pondělí proti neděli dávalo ΔOI = 0
+    (21. 9. 2026 u většiny expirací). Základ je poslední OBCHODNÍ den — pátek."""
+    from sqlalchemy import create_engine as sa_create_engine
+
+    from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
+
+    oi_repo = OIEodRepository(sa_create_engine(settings.database_url))
+    oi_repo.ensure_schema()
+    friday, saturday = dt.date(2026, 9, 18), dt.date(2026, 9, 19)
+    sunday, monday = dt.date(2026, 9, 20), dt.date(2026, 9, 21)
+    exp = "20260925"
+    oi_repo.upsert_many(
+        [
+            # Pátek a sobota (kopie pátku, pořízená po uzávěrce)
+            *(OIRecord("ES", exp, 6700.0, "P", day, 100.0) for day in (friday, saturday)),
+            *(OIRecord("ES", exp, 6700.0, "C", day, 100.0) for day in (friday, saturday)),
+            # Neděle po otevření Globexu = už pondělní čísla
+            OIRecord("ES", exp, 6700.0, "P", sunday, 160.0),
+            OIRecord("ES", exp, 6700.0, "C", sunday, 90.0),
+            OIRecord("ES", exp, 6700.0, "P", monday, 160.0),
+            OIRecord("ES", exp, 6700.0, "C", monday, 90.0),
+            OIRecord("ES", exp, 6750.0, "C", monday, 30.0),  # mimo páteční obálku
+        ]
+    )
+    client = TestClient(create_app(settings))
+
+    payload = client.get(f"/oidelta/ES/{exp}").json()
+    assert payload["days"] == {"current": monday.isoformat(), "previous": friday.isoformat()}
+    assert payload["put_delta"] == 60.0 and payload["call_delta"] == -10.0
+    assert payload["call_total"] == 120.0 and payload["put_total"] == 160.0
+    assert [(row["strike"], row["right"]) for row in payload["movers"]] == [
+        (6700.0, "P"),
+        (6700.0, "C"),
+    ]
 
 
 def test_profile_window_full_day_equals_daily_cumulative(client: TestClient) -> None:

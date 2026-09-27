@@ -231,3 +231,39 @@ def test_collect_bere_netflow_sekundarniho_retezu(tmp_path: Path) -> None:
     assert result.point.ratio_median == pytest.approx(0.4)
     state = alpha_repo.get("ES")
     assert state is not None and state.alpha == pytest.approx(0.4) and state.days == 1
+
+
+def test_collect_vikend_nic_pondeli_proti_patku(tmp_path: Path) -> None:
+    """#1309: sobotní běh párovál páteční netflow s archivem soboty (kopie
+    pátku) — fa_alpha_history 18. a 25. 9. 2026 má medián 0 a dedup dne pak
+    zablokoval poctivý bod „pátek → pondělí". Víkend se nekalibruje."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    friday, saturday, sunday = dt.date(2026, 9, 25), dt.date(2026, 9, 26), dt.date(2026, 9, 27)
+    monday = dt.date(2026, 9, 28)
+    expiry = "20261002"
+    strikes = [7500.0 + 10 * i for i in range(5)]
+    ts = dt.datetime.combine(friday, dt.time(20, 0), tzinfo=dt.UTC)
+    SnapshotWriter(settings).write_netflow(
+        "ES",
+        expiry,
+        friday,
+        [NetFlowRow(ts_min=ts, strike=strike, right="C", net_volume=100.0) for strike in strikes],
+    )
+    for day in (friday, saturday, sunday):  # víkendové klíče = kopie pátku
+        oi_repo.upsert_many(
+            [OIRecord("ES", expiry, strike, "C", day, 1000.0) for strike in strikes]
+        )
+    # Sobotní archiv širší obálky — ΔOI „pátek → sobota" není všude 0
+    oi_repo.upsert_many([OIRecord("ES", expiry, 7600.0, "C", saturday, 500.0)])
+    oi_repo.upsert_many([OIRecord("ES", expiry, strike, "C", monday, 1040.0) for strike in strikes])
+
+    for weekend in (saturday, sunday):
+        assert (
+            collect_alpha_calibration("ES", settings.derived_dir, oi_repo, alpha_repo, weekend)
+            is None
+        )
+    assert not alpha_repo.history_exists("ES", friday)
+
+    result = collect_alpha_calibration("ES", settings.derived_dir, oi_repo, alpha_repo, monday)
+    assert result is not None and result.day == friday and result.expiry == expiry
+    assert result.point.ratio_median == pytest.approx(0.4)

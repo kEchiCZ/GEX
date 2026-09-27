@@ -364,6 +364,9 @@ def test_settle_close_bere_posledni_rth_bar_ne_globex() -> None:
     assert _settle_close(friday) == 7734.5
     sunday = [{"ts_min": "2026-09-20T22:30:00+00:00", "close": 7760.0}]
     assert _settle_close(sunday) is None
+    # Bar v čase RTH o víkendu (den bez seance, #1309) PDC není
+    saturday = [{"ts_min": "2026-09-19T14:00:00+00:00", "close": 7750.0}]
+    assert _settle_close(saturday) is None
 
 
 def test_verdikt_po_utesu_gamma_nehlasuje() -> None:

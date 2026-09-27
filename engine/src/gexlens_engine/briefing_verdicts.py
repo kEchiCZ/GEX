@@ -23,6 +23,7 @@ from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.settle import (
     ET_TZ,
+    is_trading_session,
     session_bounds,
     session_time_utc,
     settle_ts,
@@ -114,6 +115,8 @@ class BriefingVerdictCollector:
 
     async def on_minute(self, now: dt.datetime) -> None:
         session = trading_session_date(now)
+        if not is_trading_session(session):
+            return  # víkend: den bez settle — nic se nevyhodnocuje (#1309, vzor scénářů)
         boundary = settle_ts(session) + dt.timedelta(minutes=SETTLE_GRACE_MINUTES)
         if now < boundary or self._evaluated_for == session:
             return
@@ -127,6 +130,10 @@ class BriefingVerdictCollector:
             session_date = row["session_date"]
             if isinstance(session_date, str):
                 session_date = dt.date.fromisoformat(session_date)
+            if not is_trading_session(session_date):
+                # Víkendový verdikt (API ho od #1309 odmítá) nemá US open ani
+                # settle — nevyhodnocuje se a do track recordu nepatří
+                continue
             ohlc = session_ohlc(self.data_dir, self.symbol, session_date)
             if ohlc is None:
                 logger.info(

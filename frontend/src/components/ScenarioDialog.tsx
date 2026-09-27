@@ -1,8 +1,10 @@
 /** Dialog „Uložit scénář" (#1173): cíle z geometrie poslední anotace (upravitelné),
-termín (dnes nebo budoucí datum), poznámka; snímek grafu se pořídí při potvrzení.
-Jen dopředu: rodič dialog nabízí pouze na živém dni. */
+termín (dnes nebo budoucí obchodní den), poznámka; snímek grafu se pořídí při potvrzení.
+Jen dopředu: rodič dialog nabízí pouze na živém dni. O víkendu je výchozí termín
+pondělí — sobota ani neděle nemají settle a API je odmítne (#1309). */
 import { useState } from 'react'
 import type { ScenarioPathPoint } from '../api/scenarios'
+import { isTradingSessionIso, nextTradingSessionIso } from '../instrument/tz'
 
 export interface ScenarioDraft {
   targets: number[]
@@ -32,14 +34,15 @@ export function ScenarioDialog({
   onCancel: () => void
 }) {
   const [targetsText, setTargetsText] = useState(suggestedTargets.map((t) => String(t)).join(', '))
-  const [deadline, setDeadline] = useState(today)
+  const [deadline, setDeadline] = useState(() => nextTradingSessionIso(today))
   const [note, setNote] = useState('')
   const parsedTargets = targetsText
     .split(/[,;\s]+/)
     .map((item) => Number(item.replace(',', '.')))
     .filter((value) => Number.isFinite(value) && value > 0)
     .slice(0, 3)
-  const valid = parsedTargets.length > 0 && deadline >= today
+  const tradingDeadline = isTradingSessionIso(deadline)
+  const valid = parsedTargets.length > 0 && deadline >= today && tradingDeadline
   const last = path[path.length - 1]
   return (
     <div className="scenario-dialog" role="dialog" aria-label="Uložit scénář">
@@ -72,6 +75,9 @@ export function ScenarioDialog({
           onChange={(event) => setDeadline(event.target.value)}
         />
       </label>
+      {!tradingDeadline && (
+        <p className="journal-error">Termín musí být obchodní den (po–pá) — víkend nemá settle.</p>
+      )}
       <label>
         Poznámka
         <input

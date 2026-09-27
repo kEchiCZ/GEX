@@ -19,3 +19,10 @@ def test_us_rth_zima_est_a_vikend() -> None:
     assert not outside_us_rth(dt.datetime(2026, 1, 15, 14, 30, tzinfo=dt.UTC))
     # Sobota je vždy mimo RTH
     assert outside_us_rth(dt.datetime(2026, 8, 29, 15, 0, tzinfo=dt.UTC))
+
+
+def test_us_rth_jen_v_obchodni_den() -> None:
+    """#1309: den bez seance z jediného predikátu `settle.is_trading_session`
+    — neděle v čase RTH mimo, pondělí v RTH uvnitř."""
+    assert outside_us_rth(dt.datetime(2026, 9, 27, 15, 0, tzinfo=dt.UTC))  # neděle 11:00 EDT
+    assert not outside_us_rth(dt.datetime(2026, 9, 28, 15, 0, tzinfo=dt.UTC))  # pondělí

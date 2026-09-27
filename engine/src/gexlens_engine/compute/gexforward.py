@@ -26,7 +26,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from gexlens_engine.compute.gexfield import _YEAR_S, TAU_FLOOR_S
-from gexlens_engine.compute.settle import CME_TZ, session_time_utc, settle_ts
+from gexlens_engine.compute.settle import CME_TZ, is_trading_session, session_time_utc, settle_ts
 
 # Poledne US seance (CT) — referenční čas budoucího dne
 NOON_LOCAL = dt.time(12, 0)
@@ -71,16 +71,13 @@ def trading_days_until_friday(today: dt.date) -> list[dt.date]:
 
     Sobota/neděle jako vstup vrací jen následující týden nezačíná — horizont
     „do konce týdne" o víkendu znamená prázdno; forward se počítá po ranním
-    OI archivu, který o víkendu neběží, takže je to okrajový stav.
+    OI archivu, který o víkendu neběží, takže je to okrajový stav. Obchodní
+    den z jediného predikátu `settle.is_trading_session` (#1309; svátky #1308).
     """
-    days: list[dt.date] = []
-    day = today
-    while day.weekday() < 5:
-        days.append(day)
-        if day.weekday() == 4:
-            break
-        day += dt.timedelta(days=1)
-    return days
+    # Pátek téhož kalendářního týdne; o víkendu leží před `today` → prázdno
+    friday = today + dt.timedelta(days=4 - today.weekday())
+    span = (today + dt.timedelta(days=offset) for offset in range((friday - today).days + 1))
+    return [day for day in span if is_trading_session(day)]
 
 
 def day_reference_ts(day: dt.date) -> dt.datetime:

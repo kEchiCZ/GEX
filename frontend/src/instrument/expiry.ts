@@ -5,7 +5,7 @@ Frontend zná jen datum expirace (YYYYMMDD) — typ se odvozuje kalendářně:
 den měsíce = EOM, jiný pátek = týdenní, jinak denní 0DTE. Odpočet míří na
 settle 16:00 ET dne expirace (v létě 20:00 UTC, v zimě 21:00 — #511).
 */
-import { zonedTimeUtc } from './tz'
+import { isTradingSessionIso, zonedTimeUtc } from './tz'
 
 export type ExpiryKind = 'denní' | 'týdenní' | 'měsíční' | 'kvartální' | 'EOM'
 
@@ -41,11 +41,11 @@ function isThirdFriday(date: Date): boolean {
 }
 
 function isLastTradingDayOfMonth(date: Date): boolean {
-  // Další obchodní den (přeskočí víkend) už je v jiném měsíci
+  // Další obchodní den (přeskočí víkend; predikát z tz.ts, #1309) už je v jiném měsíci
   const next = new Date(date)
   do {
     next.setUTCDate(next.getUTCDate() + 1)
-  } while (next.getUTCDay() === 0 || next.getUTCDay() === 6)
+  } while (!isTradingSessionIso(next.toISOString().slice(0, 10)))
   return next.getUTCMonth() !== date.getUTCMonth()
 }
 

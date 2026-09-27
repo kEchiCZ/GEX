@@ -51,7 +51,10 @@ kalendářní den, close_z = close / σ(100 předchozích řádků) (#640).
   (`end` NULL, třída NULL).
 - **Hloubka** `depth_z` = největší pokles pod referenční úroveň během epizody;
   **délka** = obchodní dny od startu do rozhodnutí.
-- **Obchodní den** = pondělí–pátek (`is_weekday`). Svátky se NEgatují (zásada
+- **Obchodní den** = pondělí–pátek (`settle.is_trading_session`, od #1309 jediný predikát
+  obchodního dne v repu; dřív lokální `sentwaves.is_weekday`). Až #1308 doplní do predikátu
+  svátky CME, epizody je přestanou počítat jako obchodní dny — ta změna tohoto bodu se
+  rozhoduje v #1308. Dnes se svátky NEgatují (zásada
   „otevřený trh = vidět vše"); proti skutečným seancím podkladu, které používá
   měřicí skript, se liší nejvýš o den kolem svátku. Funkce bere
   `is_trading_day` jako parametr, takže měření může dosadit reálný kalendář.

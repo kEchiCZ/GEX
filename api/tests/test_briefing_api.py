@@ -7,9 +7,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gexlens_api.main import create_app
+from gexlens_engine.compute.settle import is_trading_session
 from gexlens_engine.config import Settings
 
-TODAY = dt.datetime.now(dt.UTC).date()
+
+def _trading_day_on_or_before(day: dt.date) -> dt.date:
+    while not is_trading_session(day):
+        day -= dt.timedelta(days=1)
+    return day
+
+
+# Verdikt jen pro obchodní den (#1309) — o víkendu testy berou poslední pátek
+TODAY = _trading_day_on_or_before(dt.datetime.now(dt.UTC).date())
 
 
 @pytest.fixture
@@ -59,7 +68,7 @@ def test_verdict_upsert_je_idempotentni(client: TestClient) -> None:
 def test_verdicts_per_symbol_a_okno_dnu(client: TestClient) -> None:
     client.post("/briefing/verdicts", json=_payload())
     client.post("/briefing/verdicts", json=_payload(symbol="NQ", verdict="short", score=-3))
-    old_day = (TODAY - dt.timedelta(days=60)).isoformat()
+    old_day = _trading_day_on_or_before(TODAY - dt.timedelta(days=60)).isoformat()
     client.post("/briefing/verdicts", json=_payload(session_date=old_day, verdict="wait_news"))
 
     all_recent = client.get("/briefing/verdicts", params={"days": 30}).json()["verdicts"]
@@ -73,6 +82,17 @@ def test_verdicts_per_symbol_a_okno_dnu(client: TestClient) -> None:
 def test_verdict_validace(client: TestClient) -> None:
     assert client.post("/briefing/verdicts", json=_payload(verdict="maybe")).status_code == 422
     assert client.post("/briefing/verdicts", json=_payload(score=99)).status_code == 422
+
+
+def test_verdict_vikend_odmitne(client: TestClient) -> None:
+    """#1309: sobota ani neděle nemají US open ani settle — verdikt by visel
+    nevyhodnocený navždy. Briefing ho o víkendu neposílá, API ho odmítne."""
+    for weekend in ("2026-09-26", "2026-09-27"):
+        rejected = client.post("/briefing/verdicts", json=_payload(session_date=weekend))
+        assert rejected.status_code == 422 and "obchodní den" in rejected.json()["detail"]
+    # Regrese obchodního dne: pondělí projde
+    ok = client.post("/briefing/verdicts", json=_payload(session_date="2026-09-28"))
+    assert ok.status_code == 201
 
 
 def test_verdict_stats_prazdne_a_po_vyhodnoceni(client: TestClient) -> None:

@@ -23,6 +23,7 @@ from gexlens_engine.compute.favalidation import (
     Key,
     compute_fa_validation,
 )
+from gexlens_engine.compute.settle import is_trading_session
 from gexlens_engine.storage.oi_archive import OIEodRepository
 
 logger = logging.getLogger(__name__)
@@ -69,13 +70,22 @@ class FaValidationRepository:
         metadata.create_all(self._engine)
 
     def exists(self, symbol: str, expiry: str, day: dt.date) -> bool:
-        stmt = select(fa_validation_table.c.symbol).where(
+        """Má den `day` expirace platný bod (dedup jobu)?
+
+        Bod, jehož `next_day` není obchodní den, se nepočítá (#1309): sobotní
+        a nedělní běhy před opravou párovaly volume pátku s víkendovým archivem
+        (kopie pátku nebo už pondělí) a takový řádek by dedupem zablokoval
+        poctivý bod „pátek → pondělí". Pondělní běh ho proto přepočítá a upsert
+        víkendový řádek přepíše — bez ručního zásahu do dat.
+        """
+        stmt = select(fa_validation_table.c.next_day).where(
             fa_validation_table.c.symbol == symbol,
             fa_validation_table.c.expiry == expiry,
             fa_validation_table.c.day == day,
         )
         with self._engine.connect() as conn:
-            return conn.execute(stmt).first() is not None
+            row = conn.execute(stmt).first()
+        return row is not None and is_trading_session(row.next_day)
 
     def upsert(self, record: FaValidationRecord) -> None:
         row = {
@@ -138,17 +148,23 @@ def collect_fa_validation(
 ) -> list[FaValidationRecord]:
     """Spočítá a uloží chybějící validační body symbolu k dnešnímu OI archivu.
 
-    Pro každou expiraci se snapshotem z posledního archivního dne < today,
-    která má OI v obou dnech (mrtvé expirace dnešní OI nemají a přeskočí se),
-    vrátí nově uložené záznamy. Blokující (parquet + DB) — volat přes to_thread.
+    Pro každou expiraci se snapshotem z posledního archivního OBCHODNÍHO dne
+    < today, která má OI v obou dnech (mrtvé expirace dnešní OI nemají
+    a přeskočí se), vrátí nově uložené záznamy. Blokující (parquet + DB) —
+    volat přes to_thread.
+
+    Jen obchodní den na obou koncích (#1309): víkendový archiv je kopie pátku
+    (nebo už pondělí), takže sobotní běh ukládal bod „pátek → sobota" s ΔOI
+    kolem nuly a jeho dedup pak zablokoval poctivý bod „pátek → pondělí";
+    nedělní partice zase nese víkendovou volume bez obchodu.
     """
     records: list[FaValidationRecord] = []
     base = snapshots_dir / symbol
-    if not base.is_dir():
+    if not is_trading_session(today) or not base.is_dir():
         return records
     for exp_dir in sorted(p for p in base.iterdir() if p.is_dir()):
         expiry = exp_dir.name
-        previous = oi_repository.latest_day_before(symbol, expiry, today)
+        previous = oi_repository.latest_trading_day_before(symbol, expiry, today)
         if previous is None or fa_repository.exists(symbol, expiry, previous):
             continue
         snapshot_path = exp_dir / f"{previous.isoformat()}.parquet"

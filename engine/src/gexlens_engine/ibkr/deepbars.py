@@ -21,7 +21,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from gexlens_engine.compute.settle import QUARTER_MONTHS, quarterly_expiry
+from gexlens_engine.compute.settle import QUARTER_MONTHS, is_trading_session, quarterly_expiry
 from gexlens_engine.ibkr.underlying import Bar
 
 logger = logging.getLogger(__name__)
@@ -132,12 +132,13 @@ def existing_days(derived_dir: Path, symbol: str) -> set[dt.date]:
 def task_is_covered(task: FetchTask, existing: set[dt.date]) -> bool:
     """Chunk se přeskočí, když všechny jeho kalendářní dny už partici mají.
 
-    Víkendové dny se nepočítají — bary pro ně nikdy nevzniknou (sobota) nebo
-    vznikají až nedělním otevřením, které pokrývá pondělní obchodní den.
+    Dny bez obchodní seance se nepočítají — bary pro ně nikdy nevzniknou
+    (sobota) nebo vznikají až nedělním otevřením, které pokrývá pondělní
+    obchodní den (predikát `settle.is_trading_session`, #1309).
     """
     day = task.span_start
     while day <= task.end:
-        if day.weekday() < 5 and day not in existing:
+        if is_trading_session(day) and day not in existing:
             return False
         day += dt.timedelta(days=1)
     return True

@@ -1,6 +1,6 @@
 /** Briefing (#674): smoke render + předvyplnění ranního plánu do deníku. */
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { BriefingView } from './BriefingView'
 
 const useAppStateMock = vi.fn()
@@ -26,6 +26,17 @@ beforeEach(() => {
     status: { engine: 'online' },
   })
 })
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+/** Pevné „teď" pro testy ukládání verdiktu: o víkendu se verdikt neposílá (#1309),
+takže test nesmí záviset na dni běhu. Falšuje se jen Date — debounce běží reálně. */
+function freezeDate(iso: string) {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(iso))
+}
 
 function mockApis(overrides: Record<string, unknown> = {}) {
   fetchMock.mockImplementation((url: string) => {
@@ -94,6 +105,7 @@ test('karta Trend (#1089): směr per timeframe a čtení shora dolů', async () 
 })
 
 test('Shrnutí dne (#1090): verdikt z hlasování, úrovně obratu, zprávy s reakcí, uložení', async () => {
+  freezeDate('2026-09-24T15:00:00Z') // čtvrtek v seanci
   const rising = risingCandles(60)
   mockApis({
     candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising },
@@ -127,6 +139,7 @@ test('Shrnutí dne (#1090): verdikt z hlasování, úrovně obratu, zprávy s re
 })
 
 test('verdikt se přepíše, když se změní hlasy i při stejném skóre (#1090)', async () => {
+  freezeDate('2026-09-24T15:00:00Z') // čtvrtek v seanci
   const rising = risingCandles(60)
   // 1. render: bez levels → gamma „bez dat"; skóre = trend 3 + tendence 0 = 3
   mockApis({
@@ -172,6 +185,22 @@ test('verdikt se přepíše, když se změní hlasy i při stejném skóre (#109
     },
     { timeout: 6_000 },
   )
+})
+
+test('o víkendu se verdikt dne neukládá — sobota nemá US open ani settle (#1309)', async () => {
+  freezeDate('2026-09-26T15:00:00Z') // sobota
+  const rising = risingCandles(60)
+  mockApis({ candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising } })
+  render(<BriefingView />)
+  await waitFor(() => {
+    expect(screen.getByTestId('summary-verdict').textContent).toBe('Spíše LONG den')
+  })
+  // Debounce ukládání je 2 s — po 2,5 s by POST už odešel
+  await new Promise((resolve) => setTimeout(resolve, 2_500))
+  const posts = fetchMock.mock.calls.filter(
+    (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
+  )
+  expect(posts).toHaveLength(0)
 })
 
 test('karta Trend bez svíček říká, že se načítají / chybí', async () => {

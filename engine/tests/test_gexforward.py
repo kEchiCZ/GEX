@@ -56,9 +56,13 @@ def test_trading_days_preskakuji_vikend() -> None:
         dt.date(2026, 8, 13),
         dt.date(2026, 8, 14),
     ]
-    # Pátek = jen pátek; sobota = prázdno
+    # Pátek = jen pátek; sobota i neděle = prázdno; pondělí = celý týden (#1309)
     assert trading_days_until_friday(dt.date(2026, 8, 14)) == [dt.date(2026, 8, 14)]
     assert trading_days_until_friday(dt.date(2026, 8, 15)) == []
+    assert trading_days_until_friday(dt.date(2026, 8, 16)) == []
+    assert trading_days_until_friday(dt.date(2026, 8, 17)) == [
+        dt.date(2026, 8, 17) + dt.timedelta(days=offset) for offset in range(5)
+    ]
 
 
 def test_utes_po_0dte_odpovida_rucnimu_zbytku() -> None:
