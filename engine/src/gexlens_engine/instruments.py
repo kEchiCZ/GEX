@@ -26,6 +26,7 @@ from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import (
     expiry_settle_ts,
     is_quarterly_expiry,
+    is_trading_session,
     soq_ts,
 )
 from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
@@ -474,10 +475,10 @@ class InstrumentPipeline:
         pátku (26. 9. 2026: obnova à 30 min od 07:00 CT, 0 zapsáno) a nová
         čísla dodá IBKR nejdřív v neděli po otevření Globexu (oi_eod 13. a
         20. 9. 2026: zápisy až po 17:00 CT). Pro víkendový UTC den tak „po
-        okně" nenastane nikdy. Svátky rozvrh nezná (ADR-0023 bod 4).
+        okně" nenastane nikdy. Svátky predikát zatím nezná (#1308).
         """
         day = now.date()
-        return day.weekday() < 5 and now >= self.settings.oi_publication_utc(day)  # po–pá
+        return is_trading_session(day) and now >= self.settings.oi_publication_utc(day)
 
     def _oi_refresh_due(self, now: dt.datetime) -> bool:
         """Má se existující snímek dne přečíst znovu? (#463)
@@ -1449,9 +1450,17 @@ class InstrumentPipeline:
         Alanův event-workflow: jeden dominantní strike zítřejšího řetězu =
         úroveň, kde se trh zajišťuje na event. Jeden alert per leader
         (nová dominantní strana se ohlásí znovu).
+
+        Při zavřeném trhu (#1309) se nehledá: alert tvrdí „trh se TEĎ
+        zajišťuje", ale objem kotací je zmrzlý z poslední seance a po
+        sobotním rollu se nový sekundární řetěz plní ze snímků postupně.
+        26. 9. 2026 00:05 UTC (tři hodiny po páteční uzávěrce) tak odešlo
+        „ES 20260929: 7900C 19,7× medián" nad 10 snímky ze 122 kontraktů
+        s páteční volume a v 01:05 další leader nad 39 ze 160. Sekundární
+        sweep běží dál (víkendová mapa), jen detektor ne.
         """
         runtime = self.next_runtime
-        if runtime is None:
+        if runtime is None or is_market_closed(now):
             return
         # Aktivní zdroj řetězu (#614 fáze 2b): za fallbacku objem chybí, takže
         # `min_volume` alert utne. Čtení přímo ze sweep cache by naopak nechalo

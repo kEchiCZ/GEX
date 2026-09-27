@@ -161,3 +161,86 @@ def test_collect_spocita_ulozi_a_dedupuje(tmp_path: Path) -> None:
     assert fa_repo.exists("ES", EXPIRY, DAY)
     # Druhý běh (restart pipeline) už bod nepřepočítává
     assert collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, NEXT) == []
+
+
+def test_collect_vikend_nic_pondeli_proti_patku(tmp_path: Path) -> None:
+    """#1309: sobotní běh ukládal bod „pátek → sobota" nad archivem, který je
+    kopií pátku (ΔOI ≈ 0, open-ratio 0,007 u 21. 8. 2026), a dedup dne pak
+    zablokoval poctivý bod „pátek → pondělí"; nedělní bod bral víkendovou
+    partici. O víkendu se nepočítá nic, pondělí se páruje s pátkem."""
+    db = create_engine("sqlite://")
+    oi_repo = OIEodRepository(db)
+    oi_repo.ensure_schema()
+    fa_repo = FaValidationRepository(db)
+    fa_repo.ensure_schema()
+    friday, saturday, sunday = dt.date(2026, 9, 25), dt.date(2026, 9, 26), dt.date(2026, 9, 27)
+    monday = dt.date(2026, 9, 28)
+    expiry = "20261002"
+    strikes = [7000.0 + 5 * i for i in range(12)]
+    for day in (friday, sunday):  # nedělní partice nese páteční volume bez obchodu
+        _write_snapshot(
+            tmp_path / "ES" / expiry / f"{day.isoformat()}.parquet",
+            day,
+            [(20, s, "C", 10.0 * (i + 1)) for i, s in enumerate(strikes)],
+        )
+    for day in (friday, saturday, sunday):  # víkendové klíče = kopie pátku
+        oi_repo.upsert_many([OIRecord("ES", expiry, s, "C", day, 100.0) for s in strikes])
+    oi_repo.upsert_many(
+        [
+            OIRecord("ES", expiry, s, "C", monday, 100.0 + 4.0 * (i + 1))
+            for i, s in enumerate(strikes)
+        ]
+    )
+
+    assert collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, saturday) == []
+    assert collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, sunday) == []
+    assert not fa_repo.exists("ES", expiry, friday)
+
+    records = collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, monday)
+    assert [(r.expiry, r.day, r.next_day) for r in records] == [(expiry, friday, monday)]
+    assert records[0].point.open_ratio == pytest.approx(0.4)
+
+
+def test_vikendovy_radek_neblokuje_pondelni_bod(tmp_path: Path) -> None:
+    """#1309: produkce má ES/NQ 20260928 day=25. 9. → next_day=26. 9. (sobotní
+    běh před opravou). Dedup podle `day` by pondělní bod „pátek → pondělí"
+    přeskočil — víkendový řádek se nepočítá, pondělí ho přepočítá a upsert
+    přepíše; poctivý pondělní bod už pak dedup drží."""
+    db = create_engine("sqlite://")
+    oi_repo = OIEodRepository(db)
+    oi_repo.ensure_schema()
+    fa_repo = FaValidationRepository(db)
+    fa_repo.ensure_schema()
+    friday, saturday, monday = dt.date(2026, 9, 25), dt.date(2026, 9, 26), dt.date(2026, 9, 28)
+    expiry = "20260928"
+    strikes = [7000.0 + 5 * i for i in range(12)]
+    _write_snapshot(
+        tmp_path / "ES" / expiry / f"{friday.isoformat()}.parquet",
+        friday,
+        [(20, s, "C", 10.0 * (i + 1)) for i, s in enumerate(strikes)],
+    )
+    oi_repo.upsert_many([OIRecord("ES", expiry, s, "C", friday, 100.0) for s in strikes])
+    oi_repo.upsert_many(
+        [
+            OIRecord("ES", expiry, s, "C", monday, 100.0 + 4.0 * (i + 1))
+            for i, s in enumerate(strikes)
+        ]
+    )
+    stale = FaValidationPoint(
+        contracts=462,
+        volume_sum=1.0,
+        doi_abs_sum=1.0,
+        doi_net_sum=1.0,
+        open_ratio=0.3825,
+        spearman=-0.441,
+        silent_share=0.0,
+    )
+    fa_repo.upsert(FaValidationRecord("ES", expiry, friday, saturday, stale))
+    assert not fa_repo.exists("ES", expiry, friday)
+
+    records = collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, monday)
+    assert [(r.expiry, r.day, r.next_day) for r in records] == [(expiry, friday, monday)]
+    assert records[0].point.open_ratio == pytest.approx(0.4)
+    assert fa_repo.exists("ES", expiry, friday)
+    # Restart pipeline v pondělí: bod už je poctivý a dedup ho drží
+    assert collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, monday) == []

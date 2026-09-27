@@ -635,20 +635,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/oidelta/{symbol}/{expiry}")
     def oi_delta(symbol: str, expiry: str, movers: int = 10) -> dict[str, object]:
-        """ΔOI přes noc (#674): souhrn změny OI vs. předchozí archivovaný den.
+        """ΔOI přes noc (#674): souhrn změny OI vs. předchozí archivovaný obchodní den.
 
-        Porovnává poslední dva archivované dny věčného OI archivu dané expirace
-        (ranní archiv ~po otevření CME nese včerejší settlement OI). Před prvním
-        archivem expirace vrací prázdný tvar — briefing sekci skryje.
+        Porovnává poslední dva archivované OBCHODNÍ dny věčného OI archivu dané
+        expirace (ranní archiv ~po otevření CME nese včerejší settlement OI).
+        Víkendové klíče archivu se přeskakují (#1309): pondělí proti neděli
+        dávalo ΔOI = 0 a o víkendu se ukazoval rozdíl kopie pátku proti pátku.
+        Změna se počítá jen na stranách, které nesou OBA archivy — obálka se
+        mezi dny liší (sekundární řetěz 160 striků, aktivní ~560), strana bez
+        předchozího archivu není „nové OI", ale neměřená. Součty OI jsou
+        z aktuálního archivu celé. Před prvním archivem expirace vrací prázdný
+        tvar — briefing sekci skryje.
         """
         empty: dict[str, object] = {"symbol": symbol, "expiry": expiry, "days": None}
         try:
             repo = oi_repository()
             today_utc = dt.datetime.now(dt.UTC).date()
-            current = repo.latest_day_before(symbol, expiry, today_utc + dt.timedelta(days=1))
+            current = repo.latest_trading_day_before(
+                symbol, expiry, today_utc + dt.timedelta(days=1)
+            )
             if current is None:
                 return empty
-            previous = repo.latest_day_before(symbol, expiry, current)
+            previous = repo.latest_trading_day_before(symbol, expiry, current)
             latest = {(r.strike, r.right): r.oi for r in repo.values_for(symbol, expiry, current)}
             prior: dict[tuple[float, str], float] = {}
             if previous is not None:
@@ -662,7 +670,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         rows: list[dict[str, object]] = []
         for (strike, right), oi in latest.items():
             totals[right] = totals.get(right, 0.0) + oi
-            delta = oi - prior.get((strike, right), 0.0) if prior else 0.0
+            before = prior.get((strike, right))
+            if before is None:
+                continue  # strana mimo předchozí obálku — změna neznámá
+            delta = oi - before
             deltas[right] = deltas.get(right, 0.0) + delta
             rows.append({"strike": strike, "right": right, "oi": oi, "delta": delta})
         rows.sort(key=lambda row: -abs(float(row["delta"])))  # type: ignore[arg-type]
@@ -1055,7 +1066,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Greeks & OI tabulka (#202): per-strike řetěz z poslední minuty snapshotů.
 
         Řádek na strike se stranami C/P (bid/ask/last/vol/IV/Δ/Γ/Θ/V/OI + stale)
-        a ΔOI vs. poslední archivovaný den (věčný OI archiv, R4).
+        a ΔOI vs. poslední archivovaný obchodní den (věčný OI archiv, R4; víkend
+        se přeskakuje — #1309).
         """
         frame = repository.session_frame(lambda d: repository.snapshots(symbol, expiry, d), date)
         minute = frame["ts_min"].max()
@@ -1064,7 +1076,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         oi_prev: dict[tuple[float, str], float] = {}
         try:
             repo = oi_repository()
-            previous = repo.latest_day_before(symbol, expiry, date)
+            previous = repo.latest_trading_day_before(symbol, expiry, date)
             if previous is not None:
                 oi_prev = {
                     (record.strike, record.right): record.oi
@@ -1330,11 +1342,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if len(_DAILY_BUNDLE_CACHE) >= _DAILY_BUNDLE_CACHE_MAX:
                     _DAILY_BUNDLE_CACHE.pop(next(iter(_DAILY_BUNDLE_CACHE)))
                 _DAILY_BUNDLE_CACHE[cache_key] = bundle
-        # ΔOI vs. předchozí den: poslední archivovaný den téže expirace před `date`
+        # ΔOI vs. předchozí den: poslední archivovaný OBCHODNÍ den téže expirace
+        # před `date` (víkendový klíč archivu je kopie pátku nebo pondělí, #1309)
         bundle["oi_prev"] = []
         try:
             repo = oi_repository()
-            previous = repo.latest_day_before(symbol, expiry, date)
+            previous = repo.latest_trading_day_before(symbol, expiry, date)
             if previous is not None:
                 bundle["oi_prev"] = [
                     {"strike": record.strike, "right": record.right, "oi": record.oi}

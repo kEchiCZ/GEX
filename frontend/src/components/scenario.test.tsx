@@ -80,6 +80,33 @@ test('dialog: cíle jdou upravit, termín nesmí být před dneškem, potvrzení
   })
 })
 
+test('dialog o víkendu (#1309): termín předvyplní pondělí, víkend nejde uložit', () => {
+  const onConfirm = vi.fn()
+  render(
+    <ScenarioDialog
+      symbol="ES"
+      entry={7600}
+      path={[{ ts: '2026-09-26T12:00:00Z', price: 7600 }]}
+      suggestedTargets={[7680]}
+      today="2026-09-26"
+      busy={false}
+      error={null}
+      onConfirm={onConfirm}
+      onCancel={() => undefined}
+    />,
+  )
+  const deadline = screen.getByLabelText('Termín scénáře') as HTMLInputElement
+  expect(deadline.value).toBe('2026-09-28') // sobota → pondělí, první uložení bez 422
+  const save = screen.getByRole('button', { name: 'Uložit scénář' }) as HTMLButtonElement
+  expect(save.disabled).toBe(false)
+  fireEvent.change(deadline, { target: { value: '2026-09-27' } }) // neděle nemá settle
+  expect(save.disabled).toBe(true)
+  expect(screen.getByText(/Termín musí být obchodní den/)).toBeDefined()
+  fireEvent.change(deadline, { target: { value: '2026-09-29' } })
+  fireEvent.click(save)
+  expect(onConfirm).toHaveBeenCalledWith({ targets: [7680], deadline: '2026-09-29', note: '' })
+})
+
 const SCENARIO: Scenario = {
   id: 7,
   symbol: 'NQ',
@@ -131,6 +158,25 @@ test('karta ukazuje verdikt, výsledek a snímek', () => {
   )
   render(<ScenarioCard scenario={{ ...SCENARIO, id: 8, result: null, evaluated_at: null }} />)
   expect(screen.getByText('čeká na termín')).toBeDefined()
+})
+
+test('karta uzavřená bez výsledku (#1309): víkendový termín vs. díra v barech', () => {
+  // Nedělní auto scénář z 27. 9. (#8): engine ho zavřel bez výsledku
+  render(
+    <ScenarioCard
+      scenario={{ ...SCENARIO, id: 9, deadline: '2026-09-27', result: null, has_image: false }}
+    />,
+  )
+  expect(screen.getByTestId('scenario-closed-9').textContent).toContain(
+    'termín mimo obchodní seanci',
+  )
+  // Obchodní den bez barů zůstává „nešlo posoudit"; ani jeden nečeká na termín
+  render(<ScenarioCard scenario={{ ...SCENARIO, id: 10, result: null, has_image: false }} />)
+  expect(screen.getByTestId('scenario-closed-10').textContent).toBe(
+    'bez barů v okně — nešlo posoudit',
+  )
+  expect(screen.getAllByText('bez výsledku')).toHaveLength(2)
+  expect(screen.queryByText('čeká na termín')).toBeNull()
 })
 
 test('Settings: obsazení disku a úklid s potvrzením', async () => {

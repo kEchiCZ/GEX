@@ -71,6 +71,27 @@ export function sessionDateIso(ts: number = Date.now()): string {
   return new Date(shifted).toISOString().slice(0, 10)
 }
 
+/** Má obchodní den `dateIso` US seanci s openem i settle? Po–pá.
+
+Jediný predikát obchodního dne ve frontendu, protějšek engine
+`settle.is_trading_session` (#1309, AGENTS.md) — mění se spolu; žádné lokální
+`getUTCDay()` jako test obchodního dne. `sessionDateIso` vrací v sobotu
+a v neděli před 17:00 CT den bez seance — scénář ani verdikt na něj navázat
+nejde (API vrací 422). Svátky CME zatím nezná (#1308). */
+export function isTradingSessionIso(dateIso: string): boolean {
+  const weekday = new Date(`${dateIso}T00:00:00Z`).getUTCDay()
+  return weekday >= 1 && weekday <= 5
+}
+
+/** První obchodní den ≥ `dateIso` — o víkendu pondělí (výchozí termín scénáře, #1309). */
+export function nextTradingSessionIso(dateIso: string): string {
+  const date = new Date(`${dateIso}T00:00:00Z`)
+  while (!isTradingSessionIso(date.toISOString().slice(0, 10))) {
+    date.setUTCDate(date.getUTCDate() + 1)
+  }
+  return date.toISOString().slice(0, 10)
+}
+
 /** Hranice obchodního dne `dateIso` v epoch ms: [17:00 CT dne D−1, 17:00 CT dne D).
 
 Protějšek `sessionDateIso` (týž den = tatáž seance). Okno má 24 h (23 h obchodu

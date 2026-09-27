@@ -28,9 +28,9 @@ from gexlens_engine.compute.sentwaves import (
     assess_episode,
     correction_levels,
     detect_episodes,
-    is_weekday,
     rolling_max_z,
 )
+from gexlens_engine.compute.settle import is_trading_session
 
 START = dt.date(2026, 7, 28)  # úterý
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "measure_sentiment_episodes.py"
@@ -49,7 +49,7 @@ def trading_days_after(start: dt.date, count: int) -> dt.date:
     seen = 0
     while seen < count:
         day += dt.timedelta(days=1)
-        if is_weekday(day):
+        if is_trading_session(day):
             seen += 1
     return day
 
@@ -84,7 +84,7 @@ def test_pokus_zahlazeni_nad_peak() -> None:
     assert episode.depth_z == pytest.approx(2.0)
     start = START + dt.timedelta(days=25)
     assert episode.length_days == sum(
-        1 for i in range(26, 28) if is_weekday(START + dt.timedelta(days=i))
+        1 for i in range(26, 28) if is_trading_session(START + dt.timedelta(days=i))
     )
     assert episode.start == start
 
@@ -135,7 +135,7 @@ def test_assess_episode_stavy() -> None:
     open_state = assess_episode(series([0.0] * 25 + [-2.0, -1.8]))
     assert open_state.status == EPISODE_OPEN
     assert open_state.episode is not None and open_state.episode.length_days == (
-        1 if is_weekday(START + dt.timedelta(days=26)) else 0
+        1 if is_trading_session(START + dt.timedelta(days=26)) else 0
     )
     # attempt: jen v den zahlazení, den poté none (korekce je pryč)
     attempt_today = assess_episode(series([0.0] * 25 + [-2.0, 0.5]))
@@ -174,7 +174,7 @@ def test_parita_s_mericim_skriptem() -> None:
     horizon_h = 10
     engine_eps = detect_episodes(points, threshold_d=1.0, horizon_h=horizon_h)
     daily = [(p.date, p.close, p.z, 2.0) for p in points]
-    closes = {p.date: 100.0 for p in points if is_weekday(p.date)}
+    closes = {p.date: 100.0 for p in points if is_trading_session(p.date)}
     script_eps = script.detect_episodes(
         "ES",
         script.enrich(daily),

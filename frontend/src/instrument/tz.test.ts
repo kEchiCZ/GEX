@@ -1,6 +1,12 @@
 /** Testy převodu burzovní čas → UTC (#511): letní i zimní období, přechody DST. */
 import { expect, test } from 'vitest'
-import { sessionBoundsUtc, sessionDateIso, zonedTimeUtc } from './tz'
+import {
+  isTradingSessionIso,
+  nextTradingSessionIso,
+  sessionBoundsUtc,
+  sessionDateIso,
+  zonedTimeUtc,
+} from './tz'
 
 test('zonedTimeUtc: 16:00 New York — 20:00 UTC v létě, 21:00 v zimě', () => {
   expect(zonedTimeUtc('America/New_York', 2026, 7, 17, 16, 0)).toBe(Date.UTC(2026, 6, 17, 20, 0))
@@ -73,4 +79,19 @@ test('sessionBoundsUtc: den přechodu DST (1. 11. 2026) má 25 h, pondělí zase
   const { openMs } = sessionBoundsUtc('2026-11-02')
   expect(sessionDateIso(openMs)).toBe('2026-11-02')
   expect(sessionDateIso(openMs - 60_000)).toBe('2026-11-01')
+})
+
+test('isTradingSessionIso / nextTradingSessionIso: víkend nemá seanci (#1309)', () => {
+  // Sobota 26. 9. 2026 celý den i neděle před 17:00 CT dávají den bez seance
+  expect(sessionDateIso(Date.UTC(2026, 8, 26, 15, 0))).toBe('2026-09-26')
+  expect(isTradingSessionIso('2026-09-26')).toBe(false)
+  expect(isTradingSessionIso('2026-09-27')).toBe(false)
+  expect(isTradingSessionIso('2026-09-25')).toBe(true) // pátek
+  expect(isTradingSessionIso('2026-09-28')).toBe(true) // pondělí
+  // Výchozí termín scénáře o víkendu = pondělí; v pracovní den beze změny
+  expect(nextTradingSessionIso('2026-09-26')).toBe('2026-09-28')
+  expect(nextTradingSessionIso('2026-09-27')).toBe('2026-09-28')
+  expect(nextTradingSessionIso('2026-09-24')).toBe('2026-09-24')
+  // Nedělní večer už patří pondělní seanci — bez posunu
+  expect(nextTradingSessionIso(sessionDateIso(Date.UTC(2026, 8, 27, 22, 0)))).toBe('2026-09-28')
 })

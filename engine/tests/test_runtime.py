@@ -796,3 +796,60 @@ async def test_po_navratu_na_ibkr_cyklus_zase_cte_sweep(
     snapshots = pd.read_parquet(settings.snapshots_dir / "ES" / "20260716" / f"{day}.parquet")
     # Mock streamer dodává objem; kdyby cyklus zůstal na fallbacku, byl by NULL
     assert snapshots["volume"].notna().any()
+
+
+@pytest.mark.parametrize(
+    ("now", "alerted"),
+    [
+        (dt.datetime(2026, 9, 26, 0, 20, tzinfo=dt.UTC), False),  # sobota po uzávěrce
+        (dt.datetime(2026, 9, 27, 21, 30, tzinfo=dt.UTC), False),  # neděle před otevřením
+        (dt.datetime(2026, 9, 23, 21, 30, tzinfo=dt.UTC), False),  # středa, denní pauza
+        (dt.datetime(2026, 9, 27, 22, 0, tzinfo=dt.UTC), True),  # nedělní otevření 17:00 CDT
+        (dt.datetime(2026, 9, 24, 15, 0, tzinfo=dt.UTC), True),  # čtvrtek v seanci
+    ],
+)
+async def test_bs_fallback_hlidka_jen_pri_otevrenem_trhu(
+    tmp_path: Path, now: dt.datetime, alerted: bool
+) -> None:
+    """#1309: `greeks_bs_fallback` (#877) neměl bránu zavřeného trhu — mimo
+    seanci TWS model greeks nepočítá a hodinové připomínky i remediace
+    (resubscribe/reconnect) by běžely celý víkend. Zavřený trh epizodu
+    přeruší bez alertu; v seanci (i hned po nedělním otevření) beze změny."""
+    from gexlens_engine.compute.bsfallback import MIN_DURATION_S, BsFallbackWatcher
+
+    settings = Settings(data_dir=tmp_path / "data", greeks_fallback_sweeps=1)
+    specs = [
+        OptionContractSpec("ES", "FOP", "20260930", strike, right, "CME", "E5C", "50")
+        for strike in (7590.0, 7600.0, 7610.0)
+        for right in ("C", "P")
+    ]
+    repository = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}"))
+    repository.ensure_schema()
+    publisher = RecordingPublisher()
+    engine_runtime = EngineRuntime(
+        settings=settings,
+        # TWS model mlčí pro celý řetěz → 100 % striků na BS dopočtu
+        scheduler=SubscriptionScheduler(
+            MockQuoteStreamer(partial_greeks=set(specs)), settings, utc_now=lambda: now
+        ),
+        writer=SnapshotWriter(settings),
+        oi_repository=repository,
+        publisher=publisher,
+        symbol="ES",
+        expiry="20260930",
+        multiplier=50.0,
+        contracts=specs,
+    )
+    # Epizoda běží už dvakrát déle, než je práh alertu (např. od pátku)
+    watcher = BsFallbackWatcher(symbol="ES")
+    watcher.episode_started = time.monotonic() - 2 * MIN_DURATION_S
+    engine_runtime._bs_watcher = watcher
+
+    await engine_runtime.run_cycle(now, SPOT, [])
+
+    kinds = [data["kind"] for channel, data in publisher.messages if channel == "alerts"]
+    assert ("greeks_bs_fallback" in kinds) is alerted
+    assert watcher.share == 1.0
+    if not alerted:
+        assert watcher.episode_started is None
+        assert engine_runtime.bs_remediation_due(time.monotonic() + 10 * MIN_DURATION_S) is None

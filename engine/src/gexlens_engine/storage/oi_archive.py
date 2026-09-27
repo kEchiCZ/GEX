@@ -38,6 +38,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.sql import Executable
 
+from gexlens_engine.compute.settle import is_trading_session
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 
@@ -400,16 +401,32 @@ class OIEodRepository:
                 for row in conn.execute(stmt)
             }
 
-    def latest_day_before(self, symbol: str, expiry: str, day: dt.date) -> dt.date | None:
-        """Poslední archivovaný den dané expirace před `day` (základ pro ΔOI)."""
-        stmt = select(func.max(oi_eod_table.c.date)).where(
-            oi_eod_table.c.symbol == symbol,
-            oi_eod_table.c.expiry == expiry,
-            oi_eod_table.c.date < day,
+    def latest_trading_day_before(self, symbol: str, expiry: str, day: dt.date) -> dt.date | None:
+        """Poslední archivovaný OBCHODNÍ den expirace před `day` — základ každého ΔOI.
+
+        Klíč archivu je UTC den pořízení, takže archiv má i sobotu a neděli
+        (čtení na začátku UTC dne, tasty široký OI, doarchivace striků). Jejich
+        obsah závisí na hodině pořízení: sobota a neděle před otevřením Globexu
+        nesou páteční stav, neděle po otevření už pondělní. Srovnání „proti
+        předchozímu dni" proto víkend přeskakuje (#1309): pondělí proti neděli
+        dávalo 21. 9. 2026 u většiny expirací ΔOI = 0 na všech stranách.
+        """
+        stmt = (
+            select(oi_eod_table.c.date)
+            .where(
+                oi_eod_table.c.symbol == symbol,
+                oi_eod_table.c.expiry == expiry,
+                oi_eod_table.c.date < day,
+            )
+            .distinct()
+            .order_by(oi_eod_table.c.date.desc())
         )
         with self._engine.connect() as conn:
-            result = conn.execute(stmt).scalar_one_or_none()
-        return result
+            for row in conn.execute(stmt):
+                archived: dt.date = row.date
+                if is_trading_session(archived):
+                    return archived
+        return None
 
     def values_for(
         self, symbol: str, expiry: str, day: dt.date, trading_class: str | None = None

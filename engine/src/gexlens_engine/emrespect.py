@@ -34,6 +34,7 @@ from gexlens_engine.compute.emrespect import (
 )
 from gexlens_engine.compute.settle import (
     ET_TZ,
+    is_trading_session,
     session_time_utc,
     settle_ts,
     trading_session_date,
@@ -312,8 +313,8 @@ class EmRespectCollector:
         refilled = 0
         for offset in range(1, self.backfill_days + 1):
             session = current_session - dt.timedelta(days=offset)
-            if session.weekday() >= 5:
-                continue
+            if not is_trading_session(session):
+                continue  # den bez US open → settle (#1309)
             if session in existing and session not in without_gamma:
                 continue
             record = compute_session(self.data_dir, self.db, self.symbol, session)

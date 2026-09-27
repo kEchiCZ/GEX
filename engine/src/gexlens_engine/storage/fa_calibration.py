@@ -27,6 +27,7 @@ from gexlens_engine.compute.facalibration import (
     calibrate_alpha,
     update_alpha,
 )
+from gexlens_engine.compute.settle import is_trading_session
 from gexlens_engine.storage.fa_validation import CUTOFF_HOUR_UTC
 from gexlens_engine.storage.oi_archive import OIEodRepository
 
@@ -200,19 +201,22 @@ def collect_alpha_calibration(
 
     Netflow píše aktivní i sekundární řetěz (#1182); den má typicky dvě expirace
     s daty a projde jen ta, která v den netflow ještě neexpirovala.
-    Bere se poslední archivní den < today, který má netflow partici a OI v obou
-    dnech; hotové dny přeskakuje (idempotentní dedup v historii). Blokující
-    (parquet + DB) — volat přes to_thread.
+    Bere se poslední archivní OBCHODNÍ den < today, který má netflow partici
+    a OI v obou dnech; hotové dny přeskakuje (idempotentní dedup v historii).
+    Víkendový `today` se nekalibruje (#1309): archiv soboty je kopie pátku,
+    bod „pátek → sobota" vyšel s mediánem 0 (fa_alpha_history 18. a 25. 9.
+    2026) a dedup dne pak zablokoval poctivý bod „pátek → pondělí".
+    Blokující (parquet + DB) — volat přes to_thread.
     """
     base = derived_dir / symbol
-    if not base.is_dir():
+    if not is_trading_session(today) or not base.is_dir():
         return None
     for exp_dir in sorted((p for p in base.iterdir() if p.is_dir()), reverse=True):
         expiry = exp_dir.name
         netflow_dir = exp_dir / "netflow"
         if not netflow_dir.is_dir():
             continue
-        previous = oi_repository.latest_day_before(symbol, expiry, today)
+        previous = oi_repository.latest_trading_day_before(symbol, expiry, today)
         if previous is None or alpha_repository.history_exists(symbol, previous):
             continue
         # Řetěz, který v den netflow (nebo dřív) expiroval, žádné „ΔOI do

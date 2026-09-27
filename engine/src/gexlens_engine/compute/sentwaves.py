@@ -27,6 +27,8 @@ import datetime as dt
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from gexlens_engine.compute.settle import is_trading_session
+
 MA_SHORT = 5
 MA_LONG = 10
 
@@ -288,12 +290,6 @@ class EpisodeAssessment:
     params_version: int = EPISODE_PARAMS_VERSION
 
 
-def is_weekday(day: dt.date) -> bool:
-    """Výchozí obchodní den = pondělí–pátek (svátky se NEgatují; rozdíl proti
-    skutečným seancím podkladu je nejvýš den kolem svátku, viz ADR-0037)."""
-    return day.weekday() < 5
-
-
 def rolling_max_z(points: list[DailyZ], window: int = EPISODE_MAX_WINDOW) -> list[float | None]:
     """Klouzavé maximum close_z posledních `window` řádků včetně aktuálního.
 
@@ -327,7 +323,7 @@ def detect_episodes(
     threshold_d: float = EPISODE_THRESHOLD_D,
     horizon_h: int = EPISODE_HORIZON_H,
     window: int = EPISODE_MAX_WINDOW,
-    is_trading_day: Callable[[dt.date], bool] = is_weekday,
+    is_trading_day: Callable[[dt.date], bool] = is_trading_session,
 ) -> list[Episode]:
     """Epizody nad chronologickou řadou (pinnutá definice, ADR-0037).
 
@@ -432,7 +428,7 @@ def assess_episode(
     threshold_d: float = EPISODE_THRESHOLD_D,
     horizon_h: int = EPISODE_HORIZON_H,
     window: int = EPISODE_MAX_WINDOW,
-    is_trading_day: Callable[[dt.date], bool] = is_weekday,
+    is_trading_day: Callable[[dt.date], bool] = is_trading_session,
 ) -> EpisodeAssessment:
     """Epizodový stav k poslednímu dni řady.
 

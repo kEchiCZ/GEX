@@ -589,11 +589,17 @@ class EngineRuntime:
                     len(greeks_computed),
                 )
         # Hlídka epizod BS fallbacku (#877): bouře #862 běžela 29 h neviditelně —
-        # podíl nad prahem po dobu epizody jde do zvonku, návrat taky
+        # podíl nad prahem po dobu epizody jde do zvonku, návrat taky. Při
+        # zavřeném trhu (#1309) TWS model greeks nepočítá — hodiny epizody se
+        # pozastaví bez alertu i remediace (brána „očekávají se data?",
+        # AGENTS.md); pokusy remediace nuluje až skutečný návrat (#877 C)
         if self._bs_watcher is None:
             self._bs_watcher = BsFallbackWatcher(symbol=self.symbol)
         bs_message = self._bs_watcher.observe(
-            bs_count=len(greeks_computed), total=len(rows), now=time.monotonic()
+            bs_count=len(greeks_computed),
+            total=len(rows),
+            now=time.monotonic(),
+            market_closed=is_market_closed(ts_min),
         )
         if bs_message is not None:
             logger.warning("%s", bs_message)

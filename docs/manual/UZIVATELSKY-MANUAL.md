@@ -720,9 +720,11 @@ Zásady: scénář vzniká **jen dopředu** — na živém dni (v replay minulé
 tlačítko není) a vyhodnocuje se výhradně z barů po jeho vzniku; nic se
 nedopočítává zpětně. Scénář patří k **obchodnímu dni** (po–pá): o víkendu
 automatický scénář nevzniká, termín ručního scénáře musí být obchodní den
-(víkendový dialog odmítne — nemá settle) a scénář s termínem mimo seanci
-(víkendové z doby před #1309) se uzavře jako „nešlo posoudit" bez upozornění
-a do track recordu se nepočítá. Snímky leží na disku (`data/scenarios/`); nad **1 GB**
+(dialog o víkendu předvyplní pondělí a víkendový termín nepustí — nemá settle)
+a scénář s termínem mimo seanci (víkendové z doby před #1309) se uzavře bez
+upozornění: karta ukáže **bez výsledku** a „termín mimo obchodní seanci" (díra
+v barech obchodního dne zůstává „bez barů v okně — nešlo posoudit") a do track
+recordu se nepočítá. Snímky leží na disku (`data/scenarios/`); nad **1 GB**
 přijde alert „pročisti" — mazání je ruční v Settings → Scénáře dne (mizí jen
 PNG, výsledky zůstávají).
 
@@ -744,7 +746,7 @@ Karty instrumentů z watchlistu: aktuální cena, stav dat (● live / offline),
 
 ## 11b. Řetěz — Greeks & OI tabulka
 
-Obrazovka **Řetěz** v sidebaru ukazuje klasickou opční tabulku vybrané expirace: **call strana vlevo, strike uprostřed, put vpravo**, sloupce Bid/Ask/Last/Vol/IV/Δ/Γ/Θ/Vega/OI/ΔOI (put strana zrcadlově, ať OI sousedí se strikem). Data jsou **živý pohled z poslední minuty** sběru, obnovují se každou minutu; ΔOI porovnává s posledním archivovaným dnem. Řádek nejblíž aktuální ceně je zvýrazněný (ATM), strany se zastaralými kotacemi jsou ztlumené. Expirace se přepíná selektorem v hlavičce — funguje i pro zítřejší řetěz.
+Obrazovka **Řetěz** v sidebaru ukazuje klasickou opční tabulku vybrané expirace: **call strana vlevo, strike uprostřed, put vpravo**, sloupce Bid/Ask/Last/Vol/IV/Δ/Γ/Θ/Vega/OI/ΔOI (put strana zrcadlově, ať OI sousedí se strikem). Data jsou **živý pohled z poslední minuty** sběru, obnovují se každou minutu; ΔOI porovnává s posledním archivovaným **obchodním** dnem (v pondělí s pátkem, #1309). Řádek nejblíž aktuální ceně je zvýrazněný (ATM), strany se zastaralými kotacemi jsou ztlumené. Expirace se přepíná selektorem v hlavičce — funguje i pro zítřejší řetěz.
 
 ---
 
@@ -1046,7 +1048,7 @@ běží **odpočet do US openu** (9:30 New York, DST-korektně).
 
 | Karta | Co ukazuje |
 |---|---|
-| **Shrnutí dne** (v1.16, #1090) | Přes celou šířku nahoře. **Trend a směr** (čtení z karty Trend); **Verdikt dne** — *Spíše LONG den / Spíše SHORT den / Bez převahy / Počkat na tisk* z hlasování s pevnými vahami (ADR-0035 §3: trend vyšších TF ±2, nižších ±1, tendence ±1/±2, potvrzený sentiment ±1, overnight vs. včerejší close ±1, ΔOI ±1 při převaze ≥ 10 %, gamma: negativní +1 ve směru trendu, pozitivní táhne skóre k nule — **po útesu ≥ 50 % gammy minulé seance nebo ve stavu tenká mapa pozitivní gamma nehlasuje** (v1.18, #1241: tenká gamma netlumí; v1.21, #1245: při souběhu útesu a tenké mapy je to jeden nulový hlas s oběma důvody, ne dva); práh ±3) — každý hlas má vypsaný důvod, chybějící data = nulový hlas „bez dat"; High-impact zpráva před US openem = „Počkat na tisk". **Úrovně obratu** — jeden seznam podle vzdálenosti od ceny: gamma (flip, zdi, těžiště), PDH/PDL/PDC, ONH/ONL, ±EM, denní EMA20; role odpor/podpora, konfluence úrovní do 0,1 % ceny. **Zprávy dne** — čas v Praze, směr překvapení z konvence řady („nad konsensem = risk-off"), typická velikost z naměřených reakcí kategorie (medián \|ret\| v 5/15/60 min, n), nebo poctivé „bez měřené reakce". Verdikt je **heuristika** — ukládá se per seance a symbol a engine po settle doplní výsledek (pohyb US open → settle v bodech i v EM, zásah verdiktu); track record je ve **Stats → Verdikt dne** (zásah per verdikt, souhlas per složka hlasování, Wilsonova dolní mez, brána n ≥ 30 seancí); váhy se mění jen dodatkem ADR (#1091). Tlačítko ☀ dává tytéž řádky do plánu v deníku. |
+| **Shrnutí dne** (v1.16, #1090) | Přes celou šířku nahoře. **Trend a směr** (čtení z karty Trend); **Verdikt dne** — *Spíše LONG den / Spíše SHORT den / Bez převahy / Počkat na tisk* z hlasování s pevnými vahami (ADR-0035 §3: trend vyšších TF ±2, nižších ±1, tendence ±1/±2, potvrzený sentiment ±1, overnight vs. včerejší close ±1, ΔOI ±1 při převaze ≥ 10 %, gamma: negativní +1 ve směru trendu, pozitivní táhne skóre k nule — **po útesu ≥ 50 % gammy minulé seance nebo ve stavu tenká mapa pozitivní gamma nehlasuje** (v1.18, #1241: tenká gamma netlumí; v1.21, #1245: při souběhu útesu a tenké mapy je to jeden nulový hlas s oběma důvody, ne dva); práh ±3) — každý hlas má vypsaný důvod, chybějící data = nulový hlas „bez dat"; High-impact zpráva před US openem = „Počkat na tisk". **Úrovně obratu** — jeden seznam podle vzdálenosti od ceny: gamma (flip, zdi, těžiště), PDH/PDL/PDC, ONH/ONL, ±EM, denní EMA20; role odpor/podpora, konfluence úrovní do 0,1 % ceny. **Zprávy dne** — čas v Praze, směr překvapení z konvence řady („nad konsensem = risk-off"), typická velikost z naměřených reakcí kategorie (medián \|ret\| v 5/15/60 min, n), nebo poctivé „bez měřené reakce". Verdikt je **heuristika** — ukládá se per seance a symbol (jen obchodní den: o víkendu, kdy seance nemá US open ani settle, se neukládá, #1309) a engine po settle doplní výsledek (pohyb US open → settle v bodech i v EM, zásah verdiktu); track record je ve **Stats → Verdikt dne** (zásah per verdikt, souhlas per složka hlasování, Wilsonova dolní mez, brána n ≥ 30 seancí); váhy se mění jen dodatkem ADR (#1091). Tlačítko ☀ dává tytéž řádky do plánu v deníku. |
 | **Ranní checklist** (v1.18, #1241) | Sedm bodů, které 21. 9. 2026 (trendový den po kvartálním OPEX, NQ +580 b od 15:30) měly odpověď v datech, ale byly roztroušené po panelech: **útes gammy** minulé seance (≥ 50 % = den rozsahu, ne pinu), **stav mapy** (v1.21, #1245: tenká mapa = nic netlumí a nic nepinuje, setupy od zdi a pin vynechat; „—" = engine stav nevyhodnocuje), **vyšší TF trend** (bias dne), **nejbližší zeď s dominancí** (< 25 % = slabá zeď → průraz pravděpodobnější než odraz), **gap vůči PDC a flipu** (≥ 0,4 % a držení = komprese před průrazem ve směru gapu), **tendence a Max Pain** (váhu mají až posledních 90 min do expirace; přes den jen informace, dokud se mapa hýbe), **riziko** (max 50 $ / obchod, −100 $ = konec dne, 15 min pauza po stopu, max 4 obchody). ▲ = signál pro dnešek, ● = sledovat, ○ = v normálu, — = bez dat. Viz kap. 21b. |
 | **Trend** (v1.16, #1089) | Trend podkladu **shora dolů**: týden, den, 4h, 1h, 15m — per timeframe struktura trhu (HH/HL = rostoucí, LH/LL = klesající) a EMA20/EMA50; ● = struktura i EMA souhlasí, ○ = jen jedna z nich. Nad tabulkou čtení pro den: vyšší TF (týden, den) určuje směr, nižší načasování — souhlas = obchodovat ve směru, nesoulad = nižší TF korigují, čekat na návrat. Málo svíček = „málo dat", nic se nedosazuje. Metoda v ADR-0035. |
 | **Režim a úrovně** | Pozitivní/negativní gamma + poloha ceny vůči flipu; flip, call/put wall, těžiště |
@@ -1054,7 +1056,7 @@ běží **odpočet do US openu** (9:30 New York, DST-korektně).
 | **Včera a overnight** | Včerejší settle a rozsah, overnight rozsah (do US openu), aktuální cena |
 | **Gamma dnes a přes týden** | Chip „dnes odpadá X % gammy" (kap. 14) + Forward GEX útesy dalších dnů týdne |
 | **Makro kalendář dne** | Dnešní plánované eventy (významné napřed, ❗ = importance ≥ 3) |
-| **ΔOI přes noc** | Změna call/put OI vs. předchozí archivovaný den + top strike movers |
+| **ΔOI přes noc** | Změna call/put OI vs. předchozí archivovaný **obchodní** den + top strike movers. V pondělí proti pátku, o víkendu pátek proti čtvrtku (do #1309 se pondělí srovnávalo s nedělí, jejíž archiv nese už pondělní čísla → ΔOI ≈ 0). Počítají se jen striky, které nesou oba archivy — strike mimo včerejší obálku není „nové OI", ale neměřený; součty OI jsou celé |
 | **Sentiment** | Stav RiskOn/RiskOff/Neutral per instrument (ES, NQ) |
 
 ### Karta Volatilita a volatility box
@@ -1160,7 +1162,8 @@ tendence hlásila short a v RTH nevznikl jediný long setup na NQ.
 **Co aplikace řekla špatně (a co je od v1.18 jinak)**
 
 - Verdikt dne „bez převahy": hlasy tendence −1, ΔOI put −1 a „pozitivní gamma tlumí" −1
-  vyrušily trend +3. Nově po útesu ≥ 50 % gamma nehlasuje.
+  vyrušily trend +3. Nově po útesu ≥ 50 % gamma nehlasuje. Hlas ΔOI put −1 navíc
+  srovnával pondělí s nedělí; proti pátku by u ES (0DTE) vyšel call +1 (#1309).
 - Tendence short/strong short při +400 b: hlasy „poloha mezi zdmi" a „Max Pain" jsou
   mean-reversion. Nově poloha nehlasuje u zdi s dominancí < 25 % nebo u zdi, která se
   za 30 min posunula ve směru ceny; Max Pain hlasuje jen ≤ 90 min do close.
@@ -1348,9 +1351,9 @@ Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a je
 | Obálka na stropu | Pásmo strikes dosáhlo maxima šířky — vzdálený okraj se posouvá za cenou | Diagnostika modelu (vyp.) |
 | **Svíčky se přestaly kreslit** | Real-time bary z TWS nechodí, ale cena žije (mrtvé TWS farmy po noční přestávce) — pomáhá restart TWS; díra se po návratu doplní sama | Svíčky nechodí (vyp.) |
 | Svíčky zase jedou | Bary se vrátily — díra ve svíčkách se doplní backfillem | Svíčky nechodí (vyp.) |
-| **Vol koncentrace** | Jedna strana (strike × C/P) příští expirace výrazně převyšuje zbytek (≥ 3× medián top 10) — úroveň, kde se trh zajišťuje na zítřek (put pod trhem pojistka/magnet, call nad trhem strop) | Koncentrace opčního objemu (zap.) |
+| **Vol koncentrace** | Jedna strana (strike × C/P) příští expirace výrazně převyšuje zbytek (≥ 3× medián top 10) — úroveň, kde se trh zajišťuje na zítřek (put pod trhem pojistka/magnet, call nad trhem strop). **Při zavřeném trhu** (víkend, denní pauza) se nehlásí: objem je zmrzlý z poslední seance (#1309) | Koncentrace opčního objemu (zap.) |
 | **Nový setup** | Detektor našel obchodní setup (odraz od zdi / neúspěšný průraz / Max Pain pin / gamma momentum / divergenční spring) | Nový setup (zap.) |
-| **FA validace** | Ranní kalibrační bod FA vrstvy: po příchodu OI archivu engine porovná včerejší klasifikovaný volume s ΔOI (open-ratio ≈ α, korelace) a bod uloží pro kalibraci — čistě informační | Diagnostika modelu (vyp.) |
+| **FA validace** | Ranní kalibrační bod FA vrstvy: po příchodu OI archivu engine porovná klasifikovaný volume posledního obchodního dne s ΔOI (open-ratio ≈ α, korelace) a bod uloží pro kalibraci — čistě informační. Jen v obchodní den; v pondělí páteční volume proti ΔOI pátek → pondělí (#1309) | Diagnostika modelu (vyp.) |
 | **Greeks se zasekly / zase jedou** | Kotace opčního řetězu přestaly chodit při živém spotu (obdoba svíček) — hint restart TWS; návrat se ohlásí. **Po settle expirující řady se nehlásí** (v1.13, #959): vypořádaný řetěz se přestane kotovat, což je normální stav, ne porucha — dřív alert s radou „restart TWS" chodil každý den po 22:00 | Neúplná data opcí (zap.) / Data opcí zase chodí (vyp.) |
 | **Chyba subskripce** | TWS opakovaně odmítla data konkrétních kontraktů (error 354 „not subscribed"); alert vypíše, o které kontrakty jde. Ojedinělé výskyty se nehlásí — ty patří ke krátkým výpadkům farem a data se vrátí sama. Když alert přijde, zkontroluj subskripce v Market Data Subscription Manager. Jde vypnout v Settings → Alerty | IBKR odmítá market data (zap.) |
 | **Konkurenční relace** | Stejný IBKR účet je přihlášený jinde (mobilní aplikace, Client Portal, druhá TWS) a přetahuje si market data. IBKR povoluje jen jednu aktivní market-data relaci na subskripci, takže data můžou vypadávat — pomůže odhlásit účet z ostatních míst. Sdílení dat s paper účtem tohle **neřeší**: sdílí se oprávnění, ne kapacita relace | IBKR přihlášen jinde (zap.) |
@@ -2115,7 +2118,7 @@ podkladu**, ne absolutní čísla.
 | **Centroid (HVL)** | Vážené těžiště |NetGEX| profilu. |
 | **Max Pain** | Strike, kde by při expiraci vypršelo nejméně hodnoty opcí — trh k němu v expiracích často „přišpendlí" (pinning). |
 | **OI (Open Interest)** | Počet otevřených kontraktů; mění se jednou denně (CME publikuje ráno). |
-| **ΔOI vs. včera** | Změna OI proti předchozímu dni — kde přes noc vznikly/zanikly pozice. |
+| **ΔOI vs. včera** | Změna OI proti předchozímu **obchodnímu** dni (v pondělí proti pátku) — kde přes noc vznikly/zanikly pozice. |
 | **Evo OI** | *Evolution* = vývoj. Spodní panel s celkovým OI (call/put) minutu po minutě. Spolu s objemem rozliší, jestli se pozice **budují** (objem ↑, OI ↑), nebo **zavírají** (objem ↑, OI ↓). Tlačítko Δ přepíná změnu od začátku osy vs. absolutní úroveň. |
 | **Contours (kontury)** | Bílé izolinie nad zobrazeným polem na prazích % síly z p99 (Major 65/95, All 40/70, vždy dvě na stranu). Říkají, **jak ostrá** je hranice tlumící zóny — zdi říkají *kde*, kontury *jak ostře*. |
 | **$/bod vs. $/1 %** | Jednotka Dyn ploch a GEX křivky. $/bod = surové pole (gamma expozice na 1 bod pohybu). $/1 % = totéž vážené P²/100 — kolik dolarů dealeři přeobchodují při 1% pohybu; srovnatelné napříč cenovými hladinami, proto výchozí. Zdi, levels ani flip přepínač nemění. |

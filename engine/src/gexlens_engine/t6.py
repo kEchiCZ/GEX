@@ -211,14 +211,14 @@ class T6Collector:
             return
 
         change_pct = (closes.last_close / closes.previous_close - 1) * 100
-        # ΔOI putů pod spotem: dnešní ranní archiv vs. předchozí den
+        # ΔOI putů pod spotem: dnešní ranní archiv vs. předchozí obchodní den (#1309)
         oi_today: dict[tuple[float, str], float] = {}
         oi_previous: dict[tuple[float, str], float] = {}
         expiry = runtime.expiry
         today_records = self.oi_repository.values_for(self.symbol, expiry, today)
         if today_records:
             oi_today = {(r.strike, r.right): r.oi for r in today_records}
-            previous_day = self.oi_repository.latest_day_before(self.symbol, expiry, today)
+            previous_day = self.oi_repository.latest_trading_day_before(self.symbol, expiry, today)
             if previous_day is not None:
                 oi_previous = {
                     (r.strike, r.right): r.oi

@@ -178,6 +178,28 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-27 — víkendové klíče OI archivu jako „předchozí den“: pondělní ΔOI proti neděli, FA body „pátek → sobota“ (#1309 část 2).**
+  OI archiv má klíč podle UTC dne pořízení, takže nese i sobotu a neděli; jejich obsah závisí na hodině:
+  sobota a neděle před otevřením Globexu jsou kopie pátku, neděle po otevření už pondělí (produkce 18.–21. 9.:
+  sobota = pátek na všech stranách, neděle = pondělí na všech sekundárních expiracích). `latest_day_before`
+  bral poslední klíč bez ohledu na den, takže `/oidelta` v pondělí dávalo ΔOI = 0 (u 0DTE ES 21. 9. hlas
+  „převaha put“ místo „převaha call“) a o víkendu ukazovalo kopii proti originálu; FA validace i kalibrace α
+  v sobotu uložily bod „pátek → sobota“ (ΔOI ≈ 0, medián 0) a dedup dne pak zablokoval poctivý bod
+  „pátek → pondělí“. Oprava: `latest_trading_day_before` pro všechny ΔOI (API, T6, FA) a FA/α jen v obchodní
+  den. Druhý nález téhož srovnání: strike mimo včerejší obálku počítal `/oidelta` jako „+celé OI“ — sekundár
+  má 160 striků, aktivní ~560, takže pondělí proti pátku by bez průniku lhalo jinak. Stejným vzorem běžely
+  i `vol_concentration` (26. 9. 00:05 UTC nad 10 snímky s páteční volume po sobotním rollu), `greeks_bs_fallback`
+  bez brány zavřeného trhu a vyhodnocení verdiktů dne o víkendu. → Pravidlo „Obchodní den, ne kalendářní“
+  v AGENTS.md; jeden predikát `settle.is_trading_session` (sjednocen se `sentwaves.is_weekday`, převedeny
+  i `emrespect`, `deepbars`, `scenario_auto._settle_close`, `marketclock.outside_us_rth`, `gexforward`
+  a frontend `expiry.ts` → `tz.isTradingSessionIso`), svátky #1308.
+  Srovnání dvou archivů = jen strany měřené v obou. Dvě poučení z revize opravy: (1) dedup odvozených bodů
+  podle klíče dne musí chybně vzniklý řádek umět nepočítat (`fa_validation.exists` ignoruje víkendový
+  `next_day`), jinak oprava kódu starou chybu zakonzervuje — pondělní bod 28. 9. by se vůbec nespočítal;
+  (2) brána zavřeného trhu u hlídače s epizodou hodiny **pozastavuje**, stav epizody (ohlášení, pokusy
+  remediace #877 C) nuluje jen skutečný návrat — vynulování při zavření by z trvalé poruchy udělalo novou
+  epizodu s dalšími zásahy každou denní pauzu.
+
 - **2026-09-27 — automatický scénář dne vznikal v sobotu i v neděli s „termínem settle“ toho dne (#1309).**
   Scénáře #6/#7 (sobota) a #8/#9 (neděle 15:15 CEST) přišly jako upozornění `scenario_created`
   a vyhodnocovač by nedělní uzavřel v neděli 22:15 CEST, na settle neexistující seance. Příčina:
@@ -189,7 +211,7 @@ chyb**, hlavně diagnostických a provozních.
   `settle.is_trading_session`, ne jen `trading_session_date`, a má test na sobotu i neděli. Starší řádky
   se neopravují ručně: kód je uzavře bez výsledku a statistiky je vynechají. Čtvrtý výskyt vzorce
   „kalendářní den místo obchodního“ po #1241 (PDC z nedělní partice), #1307 (okno OI pro každý
-  kalendářní den) a `/oidelta` pondělí proti neděli (#1309 bod 3); je to kandidát na pravidlo v AGENTS.md.
+  kalendářní den) a `/oidelta` pondělí proti neděli (#1309 bod 3); od #1309 části 2 je to pravidlo v AGENTS.md.
 
 - **2026-09-26 — „významná zpráva“ měla dvě definice a klasifikátor s lidmi nesouhlasil (#1293, #1305): regex nad slovy kdekoli.**
   Předobchodní souhrn vypsal mezi „zásadními“ článek o dani z mezd lékařky a tarifní refundaci drobné firmy;

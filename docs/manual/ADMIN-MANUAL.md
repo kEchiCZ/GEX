@@ -279,6 +279,8 @@ zjišťuje pipeline jednou v `run_minute`, před sweepem.
 | `spot_fallback` | Nepřepíná se. Fallback z doby před uzávěrkou drží do návratu IBKR. | Ticho IBKR se měří od okamžiku otevření, ne od pátečního ticku. |
 | `greeks_stalled`, `strikes_stalled` | Detektory se nekrmí. | Hrana otevření vynuluje repair kola a backoff scheduleru (aktivní i sekundární řetěz) a stav obou detektorů. Čítače BS fallbacku zůstávají: kontrakt bez TWS greeks dostane BS dopočet z čerstvých kotací hned prvním sweepem. |
 | `bars_stalled` + obnova streamu | Detektor se nekrmí (pre-open: indikativní kotace se hýbou, TRADES bary nevznikají). Stav se nenuluje. | Stall ze seance skončí `bars_recovered` a re-backfillem díry. |
+| `greeks_bs_fallback` + remediace (#877, #1309) | Hodiny epizody se pozastaví (`BsFallbackWatcher.observe(market_closed=True)`): bez alertu, bez hodinových připomínek a bez resubscribe/reconnectu — TWS mimo seanci model greeks nepočítá. Epizoda nekončí: ohlášení i počet remediačních pokusů nuluje jen skutečný návrat za otevřeného trhu, takže trvalá porucha dostane nejvýš 2 zásahy za celou epizodu, ne každý Globex večer (#877 C). Podíl pro `/status` se měří dál. | Nový otevřený úsek: připomínka nejdřív po 15 min otevřeného trhu (první sweepy jedou z BS, než TWS model naběhne), délka v textu = součet otevřených úseků („… min otevřeného trhu“); zbývající pokus remediace nejdřív 30 min × pořadí pokusu od otevření. Epizoda ohlášená před zavřením skončí zprávou o návratu, pokud greeks chodí. |
+| `vol_concentration` (#208, #1309) | Nehledá se. Objem kotací je zmrzlý z poslední seance a po sobotním rollu se nový sekundární řetěz plní postupně (26. 9. 00:05 UTC „7900C 19,7× medián" nad 10 snímky s páteční volume). Sekundární sweep běží dál. | Beze změny, první minutou po otevření. |
 | `feed_crosscheck`, `chain_fallback`, `feed_probe` | Křížová kontrola vrací `quiet` a nuluje série. dxFeed posílá snímek posledních hodnot při resubskripci i přechodu seance, takže „tasty čerstvé" tu nic nedokazuje. | Série od nuly, prahy beze změny. |
 | `connection_stall`, `disconnect` (API) | Jen log (watchdog enginu), API hranu výpadku nenatáhne. | Trvá-li výpadek, `connection_stall` nese celou délku a `disconnect` odejde s prvním statusem po otevření. |
 | `competing_session`, `subscription_error` | Chyby 10197 a 354 jdou do diagnostiky (`/status`), do alertovacího prahu ne, takže nespotřebují ani cooldown. | Práh se plní od nuly; drží-li mobil feed i po otevření, ohlásí se to do pár minut. |
@@ -316,6 +318,50 @@ zavřený (rozvrh CME) — bez upozornění`. Testy: `engine/tests/test_instrume
 konec DST 1. 11., Vánoce), `test_scheduler.py`, `test_subscription.py`,
 `test_spot_fallback.py`, `test_crosscheck.py`, `test_connection.py`,
 `api/tests/test_crud_alerts.py`.
+
+### Obchodní den místo kalendářního (#1309)
+
+`trading_session_date` vrací v sobotu a v neděli před otevřením Globexu
+kalendářní den bez seance a OI archiv i partice mají klíče podle UTC dne včetně
+víkendu. Kdo na den váže US open, settle, publikaci OI nebo srovnání „proti
+předchozímu dni", ptá se jediného predikátu `compute/settle.is_trading_session`
+(po–pá; frontendový protějšek `instrument/tz.isTradingSessionIso`; svátky CME
+doplní #1308 do obou). Sdílí ho epizody sentimentu (ADR-0037), scénáře a verdikty
+dne, publikace OI (`_oi_published`), backfill EM respect, pokrytí hlubokých barů
+(`deepbars.task_is_covered`), PDC scénáře (`scenario_auto._settle_close`), okno
+remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
+(`gexforward.trading_days_until_friday`) a ve frontendu EOM expirace
+(`expiry.ts`) a termín scénáře:
+
+- **ΔOI** (`GET /oidelta`, `/chain`, `/replay` → `oi_prev`, T6): základem je
+  poslední archivovaný **obchodní** den (`OIEodRepository.latest_trading_day_before`),
+  pondělí se srovnává s pátkem. Víkendové klíče archivu jsou kopie pátku
+  (sobota, neděle před otevřením) nebo už pondělí (neděle po otevření), takže
+  pondělí proti neděli dávalo 21. 9. 2026 u většiny expirací ΔOI = 0 a hlas ΔOI
+  ve verdiktu dne ES (0DTE) „převaha put" místo „převaha call". `/oidelta`
+  navíc počítá změnu jen na stranách, které nesou oba archivy (obálka se liší:
+  sekundár 160 striků, aktivní ~560); součty OI jsou z aktuálního archivu celé.
+  O víkendu ukazuje pátek proti čtvrtku.
+- **FA validace a ranní kalibrace α** (#232) běží jen v obchodní den a párují
+  volume/netflow posledního obchodního dne s ΔOI do dneška. Sobotní běh dřív
+  ukládal bod „pátek → sobota" (ΔOI ≈ 0) a dedup dne pak zablokoval poctivý bod
+  „pátek → pondělí". Starší bod `fa_validation` s víkendovým `next_day`
+  (19 řádků od 24. 7. 2026, naposledy 25. → 26. 9.) dedup nepočítá
+  (`FaValidationRepository.exists`), takže pondělní běh bod pátku přepočítá
+  a upsert víkendový řádek přepíše; ostatní zůstávají jako audit (tabulku nic
+  jiného nečte). `fa_alpha_history` `next_day` nemá, víkendový bod (18. a 25. 9.
+  2026, medián 0 → α beze změny, #1172) proto dál blokuje bod téhož pátku.
+- **Verdikty dne** (#1091): `BriefingVerdictCollector` o víkendu neběží, víkendový
+  verdikt nevyhodnocuje a `POST /briefing/verdicts` ho odmítne (422); Briefing ho
+  o víkendu neposílá. Scénáře dne viz #1173 v kap. 4.
+
+Testy: `engine/tests/test_instruments.py` (archiv pá–po, vol koncentrace),
+`test_runtime.py` a `test_bsfallback.py` (BS hlídka: víkend, pauza, nedělní
+otevření, max 2 remediace přes denní pauzy), `test_favalidation.py` (víkendový
+řádek neblokuje pondělí), `test_facalibration.py`, `test_marketclock_rth.py`,
+`test_gexforward.py`, `test_scenario_auto.py`,
+`test_briefing_verdicts.py`, `api/tests/test_api.py` (`/oidelta` pondělí proti
+pátku), `test_briefing_api.py`.
 
 ## 6. Datové formáty a persistence
 
@@ -379,7 +425,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8010/docs` (OpenAPI; dev stack `:80
 | `GET /bars/{symbol}?date=` | Lehké 1min OHLCV bary seance (#674/#678) — bez /replay balíku |
 | `GET /news?from&to&category&importance&kind&limit&symbol` | Feed zpráv pro obrazovku **News**: nejnovější první, `limit` 1–1000 (výchozí 200, UI 100) — strop uřízne nejstarší. Karta nese `reactions_bp` a `reaction_contaminated` (symbol = `symbol`) a `significance` (stupeň významnosti, ADR-0045) a `topic_value` (index tématu k okamžiku zprávy; výpočet je O(řádky × eventy kategorie) za 2 dny zpět, 100 řádků ~1 s, 6h okno ~12 s — pro velká okna nepoužívat). Graf ho od #1290 nečte |
 | `GET /news/markers?from&to`, `GET /news/markers?ids=` | **Zprávy pro markery grafu** (#1290). Rozsah `[from, to)` **bez stropu počtu**; délka nejvýš 26 h (okno seance má 24 h, v den přechodu DST 25 h), delší, chybějící `from`/`to` nebo `from ≥ to` = 422 — frontend načítá po seancích [17:00 CT D−1, 17:00 CT D). `ids` = 1–100 id čárkou (proklik z upozornění), neexistující id se vynechá; `ids` spolu s rozsahem = 422. Kompaktní sloupce `id, ts_event, kind, category, importance, title, summary, sentiment_dir, sentiment_score, forecast, previous, actual, surprise_z` + `surprise_direction` u scheduled + `significance` (stupeň významnosti 0–3 / null z `compute/news_significance.py`, #1305, ADR-0045 — i u `ids`, proklik vrací i nevýznamné zprávy; frontend podle něj filtruje „Významné“ a řadí dialog, pravidla nekopíruje); bez `body`, `raw`, reakcí a `topic_value`; řazení vzestupně. Odpověď jde přímo přes `JSONResponse` (řádky jsou po převodu čisté JSON typy). Frontend (`useChartNews`): den jedním dotazem, cache per datum seance (ES i NQ sdílí); živý den WS `news` (dávky po 2 s) + každou minutu `from = poslední úspěšné dotažení − 30 min` (zacelí i výpadek REST delší než okno); celý den znovu po reconnectu i po (znovu)zahájení odběru (vypnutí/zapnutí News, návrat z Daily či z jiného dne); historické dny (#788) líně po jednom. Chyby per den, maže je úspěch téhož dne; dotažení nebo push beze změny nemění stav (žádný re-render), „teď" pro nadcházející se posune jen s vydaným plánovaným eventem. Markery uzavřených seancí se cachují per den (`closedDayMarkers`), při živé změně se přestaví jen živý den. Měřeno 25. 9. 2026 na produkčních datech (read-only, `scripts/measure_news_markers.py`): špičková seance 16. 9. 4 971 zpráv → PG 22 ms, odpověď ~0,3 s, JSON 1,9 MB / gzip 0,43 MB; běžná seance (~3 tis.) ~0,2 s a 0,3 MB; `ids` ~12 ms |
-| `GET /oidelta/{symbol}/{expiry}` | ΔOI posledních dvou archivovaných dnů + top movers (#674) |
+| `GET /oidelta/{symbol}/{expiry}` | ΔOI posledních dvou archivovaných **obchodních** dnů + top movers (#674; víkend se přeskakuje a změna se počítá jen na stranách obou archivů — #1309) |
 | `GET /journal`, `POST/PATCH/DELETE /journal/*` | Deník tradera (#673, fáze A) |
 | `GET /setups/params`, `POST /setups/params` `{params, note, created_by?}` | Parameter store setupů (ADR-0033): platná verze + historie + defaulty; POST založí novou verzi (jen změněné klíče, zbytek defaulty; neznámý klíč/typ = 422, bez `note` = 422) a probudí engine NOTIFY. Autonomie stupeň 1: zapisuje člověk, ne smyčka. |
 | — risk parametry (#1185) | Součást téže verze parametrů: `account_equity_usd` (50000), `risk_pct` (1), `risk_max_pct` (2), `fee_per_contract_usd` (10), `daily_brake_r` (3), `weekly_brake_r` (6), `max_template_stops_per_day` (2), `template_gate_enabled` (true), `template_gate_min_samples` (30), `template_gate_days` (60). Engine u každého setupu zapíše do `context`: `risk_rules_version`, `contracts`, `risk_budget_usd`, `max_loss_usd`, `fee_usd`, `affordable`, `tradeable`, `trade_block` (`stop_over_budget` / `stop_over_cap` / `daily_brake` / `weekly_brake` / `template_stops` / `gate`), `template_gate` (+ `_n`, `_lb`), `realized_day_r`, `realized_week_r`. Brzdy čtou uzavřené setupy napříč symboly (`tradeable` = true) od pondělní seance; brána šablon setupy se stopem v rozpočtu za `template_gate_days` seancí (starší řádky bez kontextu se dopočítají z entry/stop a hodnoty bodu). Alert `risk_brake` (přepínač Telegramu „Brzda ztráty"), setup alert nese `tradeable` — stín do pushe nejde. UI: Settings → Risk management (POST téže cesty). |

@@ -50,13 +50,37 @@ class BsFallbackWatcher:
     _alerted: bool = field(default=False, init=False)
     #: Kolik remediačních pokusů (#877 C) epizoda vyčerpala; reset s návratem.
     _remediation_attempts: int = field(default=0, init=False)
+    #: Otevřený čas epizody před posledním zavřením trhu (#1309): hodiny se
+    #: při zavřeném trhu pozastaví, nenulují — délka v alertu je součet
+    #: otevřených úseků (± jeden cyklus na zavření).
+    _paused_s: float = field(default=0.0, init=False)
 
-    def observe(self, *, bs_count: int, total: int, now: float) -> str | None:
-        """Jeden cyklus: podíl + stav epizody. Vrací zprávu k publikaci, nebo None."""
+    def observe(
+        self, *, bs_count: int, total: int, now: float, market_closed: bool = False
+    ) -> str | None:
+        """Jeden cyklus: podíl + stav epizody. Vrací zprávu k publikaci, nebo None.
+
+        Při zavřeném trhu (`market_closed`, rozvrh CME — AGENTS.md „Zavřený
+        trh…", #1309) TWS model greeks nepočítá, takže vysoký podíl BS není
+        porucha: hodiny epizody se POZASTAVÍ — bez alertu, připomínek
+        i remediace. Epizodu končí jen skutečný návrat (podíl pod prahem za
+        otevřeného trhu): teprve ten nuluje ohlášení i počet remediačních
+        pokusů, takže trvalá porucha dostane nejvýš REMEDIATION_MAX_ATTEMPTS
+        zásahů za celou epizodu, ne za každou denní pauzu (#877 C). Po
+        otevření běží nový úsek: připomínka nejdřív po `min_duration_s`
+        otevřeného trhu (první sweepy po otevření jedou z BS, než TWS model
+        naběhne) a s délkou = součet otevřených úseků.
+        """
         self.share = bs_count / total if total > 0 else 0.0
+        if market_closed:
+            if self.episode_started is not None:
+                self._paused_s += now - self.episode_started
+                self.episode_started = None
+            return None
         if self.share < self.threshold:
             recovered = self._alerted
             self.episode_started = None
+            self._paused_s = 0.0
             self._last_alert = None
             self._alerted = False
             self._remediation_attempts = 0
@@ -75,10 +99,12 @@ class BsFallbackWatcher:
             return None
         self._last_alert = now
         self._alerted = True
-        minutes = int(duration // 60)
+        minutes = int((self._paused_s + duration) // 60)
+        # Epizoda přes zavřený trh: délka je jen otevřený čas, ať to čtenář ví
+        span = " otevřeného trhu" if self._paused_s > 0 else ""
         return (
             f"{self.symbol}: greeks jedou z BS fallbacku (#547) — {self.share:.0%} striků "
-            f"už {minutes} min. TWS model nedodává; při bouři #862 pomohl až restart TWS "
+            f"už {minutes} min{span}. TWS model nedodává; při bouři #862 pomohl až restart TWS "
             f"(farmy usopt/usfuture)."
         )
 
@@ -89,7 +115,10 @@ class BsFallbackWatcher:
         (flag GEXLENS_BS_FALLBACK_RECONNECT + mimo US RTH) hlídá volající —
         kalendář do čisté počítací třídy nepatří. Pokus se započítá hned při
         vrácení: neúspěšný zásah se neopakuje každou minutu, další přijde až
-        po dalším REMEDIATION_AFTER_S.
+        po dalším REMEDIATION_AFTER_S. Rozestup se měří od začátku běžícího
+        otevřeného úseku, po otevření trhu tedy znovu od nuly — žádný zásah
+        v prvních minutách, kdy TWS model teprve nabíhá (#1309). Počet pokusů
+        se přes zavřený trh přenáší.
         """
         if self.episode_started is None or self.share < REMEDIATION_SHARE:
             return None

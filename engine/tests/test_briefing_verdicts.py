@@ -132,6 +132,53 @@ async def test_kolektor_doplni_vysledek_po_settle(settings: Settings) -> None:
     assert not repository.pending("ES", before=SESSION + dt.timedelta(days=1))
 
 
+@pytest.mark.asyncio
+async def test_kolektor_o_vikendu_nevyhodnocuje(tmp_path: Path) -> None:
+    """#1309 (vzor scénářů): `trading_session_date` vrací o víkendu kalendářní
+    den bez seance a kolektor na něj navázal „settle" — v sobotu 20:20 UTC by
+    víkendový verdikt dostal výsledek z barů okna, které nemá US open ani
+    settle. Víkend se nevyhodnocuje; pondělí (regrese obchodního dne) ano."""
+    saturday, sunday, monday = dt.date(2026, 9, 26), dt.date(2026, 9, 27), dt.date(2026, 9, 28)
+    settings = Settings(
+        data_dir=tmp_path, database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}"
+    )
+    writer = SnapshotWriter(settings)
+    for day in (saturday, sunday, monday):
+        writer.write_bars_by_day("ES", _bars(day))  # bary v okně i o víkendu
+    engine = create_engine(settings.database_url)
+    repository = BriefingVerdictRepository(engine)
+    repository.ensure_schema()
+    EmRespectRepository(engine).ensure_schema()
+    now0 = dt.datetime(2026, 9, 26, 12, 0, tzinfo=dt.UTC)
+    with engine.begin() as conn:
+        for day in (saturday, sunday, monday):
+            conn.execute(
+                insert(briefing_verdicts_table).values(
+                    session_date=day,
+                    symbol="ES",
+                    verdict="long",
+                    score=4,
+                    votes=[],
+                    rules_version=1,
+                    created_at=now0,
+                    updated_at=now0,
+                )
+            )
+    collector = BriefingVerdictCollector(
+        symbol="ES", repository=repository, db=engine, data_dir=settings.data_dir
+    )
+
+    await collector.on_minute(settle_ts(saturday) + dt.timedelta(minutes=20))
+    await collector.on_minute(settle_ts(sunday) + dt.timedelta(minutes=20))
+    assert len(repository.pending("ES", before=monday + dt.timedelta(days=1))) == 3
+
+    await collector.on_minute(settle_ts(monday) + dt.timedelta(minutes=20))
+    with engine.connect() as conn:
+        rows = conn.execute(select(briefing_verdicts_table)).mappings().all()
+    evaluated = {row["session_date"]: row["outcome_computed_at"] is not None for row in rows}
+    assert evaluated == {saturday: False, sunday: False, monday: True}
+
+
 def test_verdict_stats_per_verdikt_a_slozku() -> None:
     rows: list[dict[str, Any]] = [
         {

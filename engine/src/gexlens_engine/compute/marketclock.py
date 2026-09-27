@@ -31,6 +31,8 @@ stejný vzorec jako provizorní bar rozdělané minuty (ADR-0005).
 import datetime as dt
 from zoneinfo import ZoneInfo
 
+from gexlens_engine.compute.settle import is_trading_session
+
 # Rozvrh Globexu je definovaný v čase burzy, ne v UTC
 CME_TZ = ZoneInfo("America/Chicago")
 # 16:00 CT — denní přestávka i páteční závěr týdne
@@ -73,13 +75,14 @@ _US_RTH_CLOSE = dt.time(16, 0)
 
 
 def outside_us_rth(ts: dt.datetime) -> bool:
-    """Je čas MIMO US RTH (9:30–16:00 NY, DST-korektně)? Víkend = mimo.
+    """Je čas MIMO US RTH (9:30–16:00 NY, DST-korektně)? Den bez obchodní
+    seance (víkend; svátky doplní #1308 v `settle.is_trading_session`) = mimo.
 
     Používá remediace BS fallbacku (#877, varianta C): zásahy do spojení jen
     v Globex noci a pauzách, kdy je díra pár minut přijatelná cena.
     """
     aware = ts if ts.tzinfo is not None else ts.replace(tzinfo=dt.UTC)
     local = aware.astimezone(_NY_TZ)
-    if local.weekday() >= 5:
+    if not is_trading_session(local.date()):
         return True
     return not (_US_RTH_OPEN <= local.time() < _US_RTH_CLOSE)
