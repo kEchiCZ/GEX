@@ -30,6 +30,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.settle import is_trading_session
+
 scenarios_metadata = MetaData()
 
 scenarios_table = Table(
@@ -297,7 +299,8 @@ class ScenariosRepository:
         return {"bytes": int(total), "scenarios": int(rows), "images": int(images)}
 
     def stats(self, symbol: str | None, source: str | None = None) -> dict[str, Any]:
-        """Track record vyhodnocených scénářů: hit rate cílů, pořadí, medián odchylky."""
+        """Track record vyhodnocených scénářů s termínem v obchodní seanci: hit rate
+        cílů, pořadí, medián odchylky."""
         stmt = select(scenarios_table).where(scenarios_table.c.result.is_not(None))
         if symbol:
             stmt = stmt.where(scenarios_table.c.symbol == symbol)
@@ -305,7 +308,9 @@ class ScenariosRepository:
             stmt = stmt.where(scenarios_table.c.source == source)
         with self._engine.connect() as conn:
             rows = [_row(row) for row in conn.execute(stmt).mappings()]
-        results = [row.result for row in rows if row.result]
+        # Termín bez settle (víkend, #1309) do track recordu nepatří ani u starších
+        # řádků, které se stihly vyhodnotit před opravou
+        results = [row.result for row in rows if row.result and is_trading_session(row.deadline)]
         n = len(results)
         hit1 = sum(1 for r in results if r.get("hit1"))
         with_second = [r for r in results if r.get("hit2") is not None]

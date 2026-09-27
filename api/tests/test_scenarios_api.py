@@ -70,6 +70,10 @@ def test_termin_v_minulosti_a_nesmyslny_snimek(tmp_path: Path) -> None:
         "/scenarios", json=_payload(image_png_base64=base64.b64encode(b"GIF89a").decode())
     )
     assert bad.status_code == 422
+    # Termín o víkendu (#1309): sobota ani neděle nemají settle → 422 s důvodem
+    for weekend in ("2026-09-19", "2026-09-20"):
+        rejected = client.post("/scenarios", json=_payload(deadline=weekend))
+        assert rejected.status_code == 422 and "obchodní den" in rejected.json()["detail"]
     # Bez snímku jde založit (jen řádek), budoucí termín platí
     ok = client.post("/scenarios", json=_payload(image_png_base64=None, deadline="2026-09-18"))
     assert ok.status_code == 201 and ok.json()["has_image"] is False

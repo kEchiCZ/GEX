@@ -1,5 +1,6 @@
 """Scénář dne (#1173): cíle z geometrie, vyhodnocení, úložiště a kolektor po settle."""
 
+import asyncio
 import datetime as dt
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from gexlens_engine.compute.scenario import (
     evaluate_scenario,
     targets_from_path,
 )
+from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.scenarios import ScenarioCollector, load_bars_between
 from gexlens_engine.storage.emrespect_store import EmRespectRepository, em_respect_table
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
@@ -172,3 +174,110 @@ def test_kolektor_hodnoti_jen_po_terminu_a_jen_bary_po_vzniku(tmp_path: Path) ->
     assert repo.disk_usage() == {"bytes": 0, "scenarios": 1, "images": 0}
     bars = load_bars_between(tmp_path, "ES", T0, deadline_ts)
     assert [bar.ts for bar in bars] == [_ts(20), _ts(40)]
+
+
+def _create_at(repo: ScenariosRepository, created_at: dt.datetime, deadline: dt.date) -> int:
+    """Scénář vstup 7600 → cíl 7680 s termínem settle `deadline` (vzor #8/#9 z #1309)."""
+    return repo.create(
+        symbol="ES",
+        day=created_at.date(),
+        created_at=created_at,
+        deadline=deadline,
+        deadline_ts=settle_ts(deadline),
+        entry=7600.0,
+        targets=[7680.0],
+        path=[
+            {"ts": created_at.isoformat(), "price": 7600},
+            {"ts": (created_at + dt.timedelta(hours=1)).isoformat(), "price": 7680},
+        ],
+        annotation_id=None,
+        note=None,
+        source="auto",
+    )
+
+
+def _hit_bars(created_at: dt.datetime) -> list[Bar]:
+    return [
+        Bar(ts=created_at + dt.timedelta(minutes=20), high=7620, low=7590, close=7610),
+        Bar(ts=created_at + dt.timedelta(minutes=40), high=7681, low=7650, close=7670),
+    ]
+
+
+def test_kolektor_v_nedeli_nic_nevyhodnoti_termin_mimo_seanci_uzavre_bez_upozorneni(
+    tmp_path: Path,
+) -> None:
+    """#1309: scénář vzniklý v neděli 27. 9. 15:15 CEST s termínem „settle neděle“.
+    Neděle nemá settle → kolektor v neděli večer nic nehodnotí ani nepublikuje; v pondělí
+    po settle ho uzavře bez výsledku a bez upozornění, pondělní scénář vyhodnotí normálně."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
+    repo = ScenariosRepository(db)
+    repo.ensure_schema()
+    EmRespectRepository(db).ensure_schema()  # EM řádek chybí → max_dev_em None
+    sunday, monday = dt.date(2026, 9, 27), dt.date(2026, 9, 28)
+    sunday_created = dt.datetime(2026, 9, 27, 13, 15, tzinfo=dt.UTC)
+    monday_created = dt.datetime(2026, 9, 28, 13, 15, tzinfo=dt.UTC)
+    weekend_id = _create_at(repo, sunday_created, sunday)
+    monday_id = _create_at(repo, monday_created, monday)
+    # I kdyby v nedělním okně nějaké bary byly, termín mimo seanci se nehodnotí
+    _write_bars(tmp_path, "ES", sunday, _hit_bars(sunday_created))
+    _write_bars(tmp_path, "ES", monday, _hit_bars(monday_created))
+    alerts: list[dict[str, object]] = []
+
+    class Publisher:
+        async def publish(self, channel: str, payload: dict[str, object]) -> None:
+            alerts.append({"channel": channel, **payload})
+
+    collector = ScenarioCollector(
+        symbol="ES", repository=repo, db=db, data_dir=tmp_path, publisher=Publisher()
+    )
+    # Neděle 22:15 CEST (dřívější settle + 15 min) a 23:00 CEST: nic
+    for now in (
+        dt.datetime(2026, 9, 27, 20, 15, tzinfo=dt.UTC),
+        dt.datetime(2026, 9, 27, 21, 0, tzinfo=dt.UTC),
+    ):
+        asyncio.run(collector.on_minute(now))
+    assert alerts == []
+    for scenario_id in (weekend_id, monday_id):
+        stored = repo.get(scenario_id)
+        assert stored is not None and stored.evaluated_at is None and stored.result is None
+    # Pondělí po settle + 15 min: pondělní vyhodnocen s upozorněním, nedělní uzavřen tiše
+    monday_after = settle_ts(monday) + dt.timedelta(minutes=15)
+    asyncio.run(collector.on_minute(monday_after))
+    assert [(alert["kind"], alert["scenario_id"]) for alert in alerts] == [
+        ("scenario_result", monday_id)
+    ]
+    weekend = repo.get(weekend_id)
+    assert weekend is not None and weekend.evaluated_at is not None and weekend.result is None
+    evaluated = repo.get(monday_id)
+    assert evaluated is not None and evaluated.result is not None
+    assert evaluated.result["hit1"] is True
+    assert repo.stats("ES")["n"] == 1
+
+
+def test_stats_nezapocita_scenar_s_terminem_mimo_seanci(tmp_path: Path) -> None:
+    """#1309: výsledek scénáře s termínem v neděli (starší řádek z doby před opravou)
+    do track recordu nepatří — auto ani ruční."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
+    repo = ScenariosRepository(db)
+    repo.ensure_schema()
+    hit = {"hit1": True, "hit2": None, "order_ok": None, "max_dev_em": 0.2, "verdict": "hit"}
+    friday = dt.datetime(2026, 9, 25, 13, 15, tzinfo=dt.UTC)
+    weekday_id = _create_at(repo, friday, friday.date())
+    sunday_id = _create_at(repo, friday, dt.date(2026, 9, 27))
+    manual_sunday_id = repo.create(
+        symbol="ES",
+        day=friday.date(),
+        created_at=friday,
+        deadline=dt.date(2026, 9, 27),
+        deadline_ts=settle_ts(dt.date(2026, 9, 27)),
+        entry=7600.0,
+        targets=[7680.0],
+        path=[{"ts": friday.isoformat(), "price": 7600}],
+        annotation_id=None,
+        note=None,
+    )
+    for scenario_id in (weekday_id, sunday_id, manual_sunday_id):
+        repo.record_result(scenario_id, hit, friday + dt.timedelta(hours=8))
+    assert repo.stats("ES")["n"] == 1
+    assert repo.stats("ES", source="auto")["n"] == 1
+    assert repo.stats("ES", source="manual")["n"] == 0

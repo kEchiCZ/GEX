@@ -15,6 +15,7 @@ from gexlens_engine.compute.dayverdict import (
     day_verdict,
     turn_levels,
 )
+from gexlens_engine.compute.settle import settle_ts
 from gexlens_engine.compute.trend import Candle, assess_trends, ema, find_pivots
 from gexlens_engine.runtime import EngineRuntime
 from gexlens_engine.scenario_auto import ScenarioGenerator, gather_context, us_open_ts
@@ -189,79 +190,100 @@ def _down_candles() -> list[dict[str, Any]]:
     return rows
 
 
-def test_generator_zalozi_auto_scenar_jednou_pred_openem(tmp_path: Path) -> None:
-    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
-    repo = ScenariosRepository(db)
-    repo.ensure_schema()
-    candles = _down_candles()
-    api = FakeApi(
+def _verdict_api(session: dt.date, prev_day: dt.date) -> FakeApi:
+    """Úplné vstupy verdiktu SHORT pro seanci `session` (PDC z RTH seance `prev_day`)."""
+    open_ts = us_open_ts(session)
+    return FakeApi(
         {
             **{
-                f"/candles/ES?tf={tf}": {"candles": candles} for tf in ("W", "D", "240", "60", "15")
+                f"/candles/ES?tf={tf}": {"candles": _down_candles()}
+                for tf in ("W", "D", "240", "60", "15")
             },
-            f"/bars/ES?date={SESSION.isoformat()}": {
+            f"/bars/ES?date={session.isoformat()}": {
                 "bars": [
                     {
-                        "ts_min": (OPEN - dt.timedelta(hours=3)).isoformat(),
+                        "ts_min": (open_ts - dt.timedelta(hours=3)).isoformat(),
                         "high": 7633.25,
                         "low": 7600.0,
                         "close": 7610.0,
                     },
                     {
-                        "ts_min": (OPEN - dt.timedelta(hours=1)).isoformat(),
+                        "ts_min": (open_ts - dt.timedelta(hours=1)).isoformat(),
                         "high": 7605.0,
                         "low": 7576.75,
                         "close": 7590.0,
                     },
                     {
-                        "ts_min": (OPEN + dt.timedelta(minutes=5)).isoformat(),
+                        "ts_min": (open_ts + dt.timedelta(minutes=5)).isoformat(),
                         "high": 7700.0,
                         "low": 7500.0,
                         "close": 7600.0,
                     },
                 ]
             },
-            "/instruments/ES/days": {"days": [{"date": "2026-09-14"}, {"date": "2026-09-15"}]},
-            "/bars/ES?date=2026-09-14": {
+            "/instruments/ES/days": {
+                "days": [{"date": prev_day.isoformat()}, {"date": session.isoformat()}]
+            },
+            f"/bars/ES?date={prev_day.isoformat()}": {
                 "bars": [
                     {
-                        "ts_min": "2026-09-14T14:00:00+00:00",
+                        "ts_min": (us_open_ts(prev_day) + dt.timedelta(minutes=30)).isoformat(),
                         "high": 7652.0,
                         "low": 7595.25,
                         "close": 7640.0,
                     },
                     {
-                        "ts_min": "2026-09-14T19:59:00+00:00",
+                        "ts_min": (settle_ts(prev_day) - dt.timedelta(minutes=1)).isoformat(),
                         "high": 7640.0,
                         "low": 7630.0,
                         "close": 7632.0,
                     },
                 ]
             },
-            "/oidelta/ES/20260915": {
+            f"/oidelta/ES/{session:%Y%m%d}": {
                 "call_delta": 100.0,
                 "put_delta": 900.0,
                 "call_total": 5000.0,
                 "put_total": 6000.0,
-                "days": {"previous": "2026-09-14"},
+                "days": {"previous": prev_day.isoformat()},
             },
             "/sentiment/state": {"state": "RiskOff", "unconfirmed": False},
             "/news/upcoming": {"upcoming": []},
         }
     )
+
+
+def _runtime(session: dt.date) -> EngineRuntime:
     runtime = EngineRuntime.__new__(EngineRuntime)  # jen pole, která generátor čte
-    runtime.expiry = "20260915"
+    runtime.expiry = f"{session:%Y%m%d}"
     runtime.last_levels = LevelsRow(
-        ts_min=OPEN, flip=7620.0, call_wall=7650.0, put_wall=7550.0, centroid=7600.0, total_gex=-5.0
+        ts_min=us_open_ts(session),
+        flip=7620.0,
+        call_wall=7650.0,
+        put_wall=7550.0,
+        centroid=7600.0,
+        total_gex=-5.0,
     )
     runtime.tendency_band = "short"
-    alerts: list[dict[str, Any]] = []
+    return runtime
 
-    class Publisher:
-        async def publish(self, channel: str, payload: dict[str, Any]) -> None:
-            alerts.append({"channel": channel, **payload})
 
-    generator = ScenarioGenerator("ES", repo, api, Publisher(), minutes_before_open=15)  # type: ignore[arg-type]
+class _Publisher:
+    def __init__(self) -> None:
+        self.alerts: list[dict[str, Any]] = []
+
+    async def publish(self, channel: str, payload: dict[str, Any]) -> None:
+        self.alerts.append({"channel": channel, **payload})
+
+
+def test_generator_zalozi_auto_scenar_jednou_pred_openem(tmp_path: Path) -> None:
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
+    repo = ScenariosRepository(db)
+    repo.ensure_schema()
+    api = _verdict_api(SESSION, dt.date(2026, 9, 14))
+    runtime = _runtime(SESSION)
+    publisher = _Publisher()
+    generator = ScenarioGenerator("ES", repo, api, publisher, minutes_before_open=15)  # type: ignore[arg-type]
     # Před oknem nic; v okně jeden scénář; po openu už ne (a ne podruhé po restartu)
     asyncio.run(generator.on_minute(OPEN - dt.timedelta(minutes=30), 7590.0, runtime))
     assert repo.list_for("ES") == []
@@ -273,12 +295,45 @@ def test_generator_zalozi_auto_scenar_jednou_pred_openem(tmp_path: Path) -> None
     assert row.rationale is not None and row.rationale["verdict"] == "short"
     assert row.rationale["score"] <= -3 and row.rationale["targets"] == ["ONL", "Put wall"]
     assert row.deadline == SESSION and row.entry == 7590.0 and len(row.path) == 3
+    alerts = publisher.alerts
     assert alerts and alerts[0]["kind"] == "scenario_created" and "SHORT" in alerts[0]["message"]
     # ONH/ONL jen z barů před openem (bar po openu s low 7500 se nepočítá)
     assert row.targets[0] == 7576.75
-    fresh = ScenarioGenerator("ES", repo, api, Publisher(), minutes_before_open=15)  # type: ignore[arg-type]
+    fresh = ScenarioGenerator("ES", repo, api, _Publisher(), minutes_before_open=15)  # type: ignore[arg-type]
     asyncio.run(fresh.on_minute(OPEN - dt.timedelta(minutes=5), 7590.0, runtime))
     assert len(repo.list_for("ES")) == 1
+
+
+def test_generator_o_vikendu_scenar_nezalozi_v_pondeli_ano(tmp_path: Path) -> None:
+    """#1309: neděle 27. 9. 15:15 CEST — `trading_session_date` = neděle bez RTH
+    openu i settle; se stejně úplnými vstupy jako v pondělí scénář vznikat nesmí."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
+    repo = ScenariosRepository(db)
+    repo.ensure_schema()
+    friday = dt.date(2026, 9, 25)
+    saturday, sunday, monday = (friday + dt.timedelta(days=offset) for offset in (1, 2, 3))
+    publisher = _Publisher()
+    weekend_api = _verdict_api(sunday, friday)
+    generator = ScenarioGenerator("ES", repo, weekend_api, publisher, minutes_before_open=15)  # type: ignore[arg-type]
+    # Sobota i neděle v okně [open − 15 min, open): bez scénáře, bez alertu, bez dotazu na API
+    for day in (saturday, sunday):
+        fire_at = us_open_ts(day) - dt.timedelta(minutes=15)
+        for offset in (0, 10):
+            now = fire_at + dt.timedelta(minutes=offset)
+            asyncio.run(generator.on_minute(now, 7590.0, _runtime(day)))
+    sunday_1515_cest = dt.datetime(2026, 9, 27, 13, 15, tzinfo=dt.UTC)
+    asyncio.run(generator.on_minute(sunday_1515_cest, 7590.0, _runtime(sunday)))
+    assert repo.list_for("ES") == []
+    assert publisher.alerts == [] and weekend_api.calls == []
+    # Pondělí 28. 9. 15:15 CEST: týž generátor scénář založí, termín = settle pondělí
+    generator.api = _verdict_api(monday, friday)  # type: ignore[assignment]
+    monday_1515_cest = dt.datetime(2026, 9, 28, 13, 15, tzinfo=dt.UTC)
+    asyncio.run(generator.on_minute(monday_1515_cest, 7590.0, _runtime(monday)))
+    rows = repo.list_for("ES")
+    assert len(rows) == 1
+    assert rows[0].day == monday and rows[0].deadline == monday
+    assert rows[0].deadline_ts == settle_ts(monday)
+    assert [alert["kind"] for alert in publisher.alerts] == ["scenario_created"]
 
 
 def test_gather_context_pri_vypadku_api_hlasi_chybejici_vstupy() -> None:
