@@ -28,9 +28,9 @@ export interface SetupRow {
 
 /** Zrcadlo `SETUP_MECHANICS_VERSION` v enginu (#311) — UŽ JEN pro testy.
 
-Filtrování statistik používá `currentMechanicsVersion()` (setups/performance,
-ADR-0030): tahle konstanta zastarala na 2, zatímco engine byl na 4, a
-statistiky Setupů týden neviděly aktuální setupy. */
+Aktuální mechaniku posílá server v souhrnu (`SetupsSummary.mechanics_version`,
+#1319): tahle konstanta už jednou zastarala (2 vs. engine 4) a statistiky
+Setupů týden neviděly aktuální setupy. */
 export const CURRENT_MECHANICS_VERSION = 4
 
 export const TEMPLATE_LABELS: Record<string, string> = {
@@ -72,52 +72,28 @@ export function setupPnlUsd(
   return row.outcome_r * Math.abs(row.entry - row.stop) * pointValueUsd
 }
 
-/** Formát P/L se znaménkem („+512.50 $" / „−250 $"). */
-/** Expected Value na obchod (#911): (WinRate × AvgWin) − (LossRate × AvgLoss).
+/** Expected Value na obchod (#911) ze serverového souhrnu (#1319):
+(WinRate × AvgWin) − (LossRate × AvgLoss).
 
-Matematicky ≡ prostý průměr výsledků (v R je to přesně Ø R) — hodnota EV
-dlaždice je v USD vyjádření a ve viditelném ROZKLADU: trader vidí, jestli
-EV táhne win rate, velikost výher, nebo ho zabíjí velikost proher.
-EV > 0 = dlouhodobě vydělává, EV < 0 = dlouhodobě ztrácí. */
-export interface EvStats {
+Matematicky ≡ prostý průměr výsledků (v R je to přesně Ø R) — hodnota je ve
+viditelném ROZKLADU: trader vidí, jestli EV táhne win rate, velikost výher,
+nebo ho zabíjí velikost proher. `avg_loss` je kladné číslo. */
+export interface EvBreakdown {
   ev: number
-  winRate: number
-  lossRate: number
-  avgWin: number
-  /** Průměrná ztráta jako KLADNÉ číslo (vzorec ji odečítá). */
-  avgLoss: number
+  win_rate: number
+  loss_rate: number
+  avg_win: number
+  avg_loss: number
   n: number
 }
 
-export function evStats(pnls: number[]): EvStats | null {
-  if (pnls.length === 0) return null
-  const winsList = pnls.filter((value) => value > 0)
-  const lossList = pnls.filter((value) => value <= 0)
-  const winRate = winsList.length / pnls.length
-  const lossRate = lossList.length / pnls.length
-  const avgWin =
-    winsList.length > 0 ? winsList.reduce((sum, value) => sum + value, 0) / winsList.length : 0
-  const avgLoss =
-    lossList.length > 0
-      ? Math.abs(lossList.reduce((sum, value) => sum + value, 0) / lossList.length)
-      : 0
-  return {
-    ev: winRate * avgWin - lossRate * avgLoss,
-    winRate,
-    lossRate,
-    avgWin,
-    avgLoss,
-    n: pnls.length,
-  }
-}
-
 /** Tooltip EV — odřádkovaný (konvence 27. 8.); rozklad + čtení znaménka. */
-export function evTooltip(stats: EvStats, unit: string): string {
+export function evTooltip(stats: EvBreakdown, unit: string): string {
   const pct = (value: number) => `${Math.round(100 * value)} %`
   return [
     'Expected Value = průměrný očekávaný výsledek NA OBCHOD:',
     `(WinRate × AvgWin) − (LossRate × AvgLoss)`,
-    `= ${pct(stats.winRate)} × ${stats.avgWin.toFixed(0)} ${unit} − ${pct(stats.lossRate)} × ${stats.avgLoss.toFixed(0)} ${unit}`,
+    `= ${pct(stats.win_rate)} × ${stats.avg_win.toFixed(0)} ${unit} − ${pct(stats.loss_rate)} × ${stats.avg_loss.toFixed(0)} ${unit}`,
     `= ${stats.ev >= 0 ? '+' : ''}${stats.ev.toFixed(0)} ${unit} (n=${stats.n})`,
     '',
     'Čtení:',
@@ -129,6 +105,7 @@ export function evTooltip(stats: EvStats, unit: string): string {
   ].join('\n')
 }
 
+/** Formát P/L se znaménkem („+512.5 $" / „-250 $"). */
 export function formatPnlUsd(value: number): string {
   const rounded = Math.round(value * 100) / 100
   return `${rounded > 0 ? '+' : ''}${rounded} $`
@@ -158,84 +135,159 @@ export function formatPct(value: number): string {
   return `${value > 0 ? '+' : ''}${value.toFixed(2)} %`
 }
 
-/** Riziko jednoho setupu v USD na 1 kontrakt: |entry − stop| × hodnota bodu.
+/** Stránka tabulky setupů: posledních ≤ 200 podle vzniku + počet všech (#1319).
 
-Na rozdíl od P/L je známé už při vzniku setupu — proto se počítá i pro aktivní
-pozice, kde `outcome_r` ještě není. */
-export function setupRiskUsd(row: Pick<SetupRow, 'entry' | 'stop'>, pointValueUsd: number): number {
-  return Math.abs(row.entry - row.stop) * pointValueUsd
+Stránka je JEN pro tabulku — souhrny počítá server (`fetchSetupsSummary`)
+z celé historie; agregace nad stránkou by byla klouzavé okno. `date`
+(UTC den vzniku, YYYY-MM-DD) zúží výpis na jeden den. */
+export interface SetupsPage {
+  setups: SetupRow[]
+  /** Všechny řádky se stejnými filtry; null = server počet nedodal (DB nedostupná). */
+  totalCount: number | null
 }
 
-/** Souhrn jednoho obchodního dne (#748). */
-export interface DailyStats {
-  /** Uzavřené dnes + aktivní vzniklé dnes. */
+export async function fetchSetups(symbol: string, date?: string): Promise<SetupsPage> {
+  const query = date ? `?date=${encodeURIComponent(date)}` : ''
+  const response = await fetch(`${API_BASE}/setups/${symbol}${query}`)
+  if (!response.ok) return { setups: [], totalCount: null }
+  const payload = (await response.json()) as { setups?: SetupRow[]; total_count?: number | null }
+  return {
+    setups: payload.setups ?? [],
+    totalCount: typeof payload.total_count === 'number' ? payload.total_count : null,
+  }
+}
+
+// ── Souhrn setupů z celé historie (#1319) — počítá server ─────────────────
+//
+// `GET /setups/summary` (engine `compute/setup_summary.py`): UI nic
+// nesčítá, jen vykresluje. Tvar zrcadlí dataclassy souhrnu.
+
+export interface SummaryGroup {
+  count: number
+  active: number
+  closed: number
+  wins: number
+  losses: number
+  /** 0–1; null = nic uzavřeného. */
+  win_rate: number | null
+  sum_r: number
+  avg_r: number | null
+  /** Na 1 kontrakt: Σ R × stop × hodnota bodu. */
+  gross_usd: number
+  /** Na 1 kontrakt: uzavřené × poplatek za kontrakt a obchod. */
+  fees_usd: number
+  net_usd: number
+  ev_r: EvBreakdown | null
+  /** Hrubě na 1 kontrakt (před poplatky). */
+  ev_usd: EvBreakdown | null
+}
+
+export interface SummaryAccount {
+  trades: number
+  gross_usd: number
+  fees_usd: number
+  net_usd: number
+  net_pct: number
+  /** ≤ 0 */
+  max_drawdown_usd: number
+}
+
+export interface SummaryDay {
+  session: string
   trades: number
   closed: number
   active: number
   wins: number
   losses: number
-  /** Úspěšnost z uzavřených; `null` když se dnes nic neuzavřelo. */
-  winRate: number | null
-  bestUsd: number | null
-  worstUsd: number | null
-  pnlUsd: number
-  pnlPct: number
-  /** Největší riziko v JEDNOM dnešním obchodě (% účtu). */
-  maxRiskPct: number
-  /** Součet rizik všech dnešních obchodů (% účtu) — celkové nasazení dne. */
-  totalRiskPct: number
+  win_rate: number | null
+  best_usd: number | null
+  worst_usd: number | null
+  gross_usd: number
+  fees_usd: number
+  net_usd: number
+  gross_pct: number
+  max_risk_pct: number
+  total_risk_pct: number
+  account: SummaryAccount | null
 }
 
-/** Statistika dne ze setupů (#748).
+export interface GateBucket {
+  n: number
+  avg_r: number
+  win_rate: number
+}
 
-**Den je obchodní seance, ne kalendářní datum** — `sessionDateIso` mapuje čas na
-seanci [17:00 CT D−1, 17:00 CT D), takže noční Globex obchod spadne do správného
-dne (#512). Bez toho by se večerní obchody počítaly k předchozímu dni.
+export type BandGateSummary = Record<'simple' | 'regime', Record<'pass' | 'block', GateBucket>>
 
-**Který čas rozhoduje**: uzavřený setup patří do dne, kdy se uzavřel (`closed_ts`)
-— bilance dne je to, co se dnes zrealizovalo. Aktivní patří do dne vzniku
-(`created_ts`), protože jiný čas nemají a riziko už nesou.
+export interface RegimeRow {
+  template: string
+  regime: string
+  n: number
+  wins: number
+  win_rate: number
+}
 
-Riziko se počítá i pro aktivní pozice: „kolik dnes bylo v sázce" je otázka
-o vstupu, ne o výsledku. */
-export function dailyStats(
-  rows: SetupRow[],
-  pointValueUsd: number,
-  sessionDate: string,
-  toSessionDate: (ts: number) => string,
-): DailyStats {
-  const today = rows.filter((row) => {
-    const stamp = row.status === 'active' ? row.created_ts : (row.closed_ts ?? row.created_ts)
-    return toSessionDate(new Date(stamp).getTime()) === sessionDate
-  })
-  const closed = today.filter((row) => row.status !== 'active' && row.outcome_r !== null)
-  const pnls = closed.map((row) => setupPnlUsd(row, pointValueUsd) ?? 0)
-  const wins = pnls.filter((value) => value > 0).length
-  const risks = today.map((row) => setupRiskUsd(row, pointValueUsd))
-  const pnlUsd = pnls.reduce((sum, value) => sum + value, 0)
-  return {
-    trades: today.length,
-    closed: closed.length,
-    active: today.length - closed.length,
-    wins,
-    losses: closed.length - wins,
-    // Bez uzavřeného obchodu úspěšnost neexistuje — nula by lhala, že se
-    // nedařilo, přitom se jen ještě nic nedokončilo
-    winRate: closed.length > 0 ? (wins / closed.length) * 100 : null,
-    bestUsd: pnls.length > 0 ? Math.max(...pnls) : null,
-    worstUsd: pnls.length > 0 ? Math.min(...pnls) : null,
-    pnlUsd,
-    pnlPct: (pnlUsd / ACCOUNT_START_USD) * 100,
-    maxRiskPct: risks.length > 0 ? (Math.max(...risks) / ACCOUNT_START_USD) * 100 : 0,
-    totalRiskPct: (risks.reduce((sum, value) => sum + value, 0) / ACCOUNT_START_USD) * 100,
+export interface SharpeValue {
+  sharpe: number | null
+  days: number
+}
+
+export interface SetupsPerformance {
+  daily: { session: string; trades: number; sum_r: number; cum_r: number }[]
+  sharpe_all: SharpeValue
+  sharpe_30: SharpeValue
+  max_drawdown_r: number
+  simulation: { traded: number; skipped: number; total_usd: number; sharpe: SharpeValue } | null
+}
+
+export interface SetupsSummary {
+  symbols: string[]
+  mechanics_version: number
+  all_versions: boolean
+  total_count: number
+  legacy_count: number
+  fee_per_contract_usd: number
+  account_usd: number
+  unpriced_symbols: string[]
+  all: SummaryGroup
+  tradeable: SummaryGroup
+  shadow: SummaryGroup
+  unruled: SummaryGroup
+  shadow_reasons: Record<string, number>
+  account: SummaryAccount | null
+  today: SummaryDay
+  band_gates: BandGateSummary | null
+  regimes: RegimeRow[]
+  performance: SetupsPerformance
+}
+
+export interface SummaryOptions {
+  /** Včetně starších verzí mechaniky (#311); výchozí jen aktuální. */
+  allVersions?: boolean
+  /** Účet a % rizika kalkulačky (#679) → USD simulace mikro kontrakty. */
+  simulation?: { accountUsd: number; riskPct: number }
+}
+
+/** Souhrn setupů symbolů z celé historie; null = server ho nedodal (chyba se ukáže, nic se nedopočítává). */
+export async function fetchSetupsSummary(
+  symbols: string[],
+  options: SummaryOptions = {},
+): Promise<SetupsSummary | null> {
+  const params = new URLSearchParams({ symbols: symbols.join(',') })
+  if (options.allVersions) params.set('all_versions', 'true')
+  if (options.simulation) {
+    params.set('sim_account_usd', String(options.simulation.accountUsd))
+    params.set('sim_risk_pct', String(options.simulation.riskPct))
   }
-}
-
-export async function fetchSetups(symbol: string): Promise<SetupRow[]> {
-  const response = await fetch(`${API_BASE}/setups/${symbol}`)
-  if (!response.ok) return []
-  const payload = (await response.json()) as { setups?: SetupRow[] }
-  return payload.setups ?? []
+  try {
+    const response = await fetch(`${API_BASE}/setups/summary?${params.toString()}`)
+    if (!response.ok) return null
+    const payload = (await response.json()) as Partial<SetupsSummary> | null
+    if (!payload || typeof payload !== 'object' || typeof payload.all !== 'object') return null
+    return payload as SetupsSummary
+  } catch {
+    return null
+  }
 }
 
 /** Ruční hodnocení uzavřeného setupu (kvalitativní vrstva — nevstupuje do kalibrace). */
@@ -365,51 +417,10 @@ export function bandTooltip(info: BandInfo): string {
   ].join('\n')
 }
 
-export interface GateBucket {
-  n: number
-  avgR: number
-  winRate: number
-}
-
-export interface BandGateStats {
-  simple: { pass: GateBucket; block: GateBucket }
-  regime: { pass: GateBucket; block: GateBucket }
-}
-
-function gateBucket(rows: SetupRow[]): GateBucket {
-  const results = rows.map((row) => row.outcome_r ?? 0)
-  const wins = results.filter((value) => value > 0).length
-  const sum = results.reduce((total, value) => total + value, 0)
-  return {
-    n: rows.length,
-    avgR: rows.length > 0 ? sum / rows.length : 0,
-    winRate: rows.length > 0 ? wins / rows.length : 0,
-  }
-}
-
-/** Rozpad uzavřených setupů podle verdiktu obou stínových pravidel.
-
-Jen uzavřené řádky s bránou v `context`; verdikt `unknown` nevstupuje do
-žádné skupiny (režim nebyl znám, pravidlo nemělo co říct). null = žádný
-uzavřený setup bránu nenese — blok se nekreslí. */
-export function bandGateStats(rows: SetupRow[]): BandGateStats | null {
-  const closed = rows
-    .filter((row) => row.status !== 'active' && row.outcome_r !== null)
-    .map((row) => ({ row, info: bandInfo(row) }))
-    .filter((item): item is { row: SetupRow; info: BandInfo } => item.info !== null)
-  if (closed.length === 0) return null
-  const pick = (rule: 'gateSimple' | 'gateRegime', verdict: BandGate) =>
-    gateBucket(closed.filter((item) => item.info[rule] === verdict).map((item) => item.row))
-  return {
-    simple: { pass: pick('gateSimple', 'pass'), block: pick('gateSimple', 'block') },
-    regime: { pass: pick('gateRegime', 'pass'), block: pick('gateRegime', 'block') },
-  }
-}
-
 /** Text dlaždice skupiny: „n · Ø R" (bez vzorku pomlčka). */
 export function formatGateBucket(bucket: GateBucket): string {
   if (bucket.n === 0) return '—'
-  return `${bucket.n} · ${bucket.avgR >= 0 ? '+' : ''}${bucket.avgR.toFixed(2)} R`
+  return `${bucket.n} · ${bucket.avg_r >= 0 ? '+' : ''}${bucket.avg_r.toFixed(2)} R`
 }
 
 // ── Risk framework malého účtu (#1185, varianta A) ─────────────────────────
@@ -530,43 +541,6 @@ export function riskTooltip(info: RiskInfo): string {
     `• brzdy: dnes ${day}, týden ${week} (−3 R den / −6 R týden zastaví nové obchody do settle)`,
     '• stínové setupy se dál měří, jen se neobchodují a nechodí do pushe',
   ].join('\n')
-}
-
-export interface AccountStats {
-  n: number
-  shadow: number
-  pnlUsd: number
-  feesUsd: number
-  maxDrawdownUsd: number
-}
-
-/** Bilance účtu z obchodovatelných uzavřených setupů (chronologicky podle uzavření).
-null = žádný řádek nenese risk kontext (před #1185) — blok se nekreslí. */
-export function accountStats(rows: SetupRow[]): AccountStats | null {
-  const withRisk = rows
-    .map((row) => ({ row, info: riskInfo(row) }))
-    .filter((item): item is { row: SetupRow; info: RiskInfo } => item.info !== null)
-  if (withRisk.length === 0) return null
-  const closed = withRisk
-    .filter((item) => item.info.tradeable && item.row.outcome_r !== null && item.row.closed_ts)
-    .sort((a, b) => Date.parse(a.row.closed_ts ?? '') - Date.parse(b.row.closed_ts ?? ''))
-  let equity = 0
-  let peak = 0
-  let worst = 0
-  let fees = 0
-  for (const item of closed) {
-    fees += item.info.feeUsd
-    equity += accountPnlUsd(item.row) ?? 0
-    if (equity > peak) peak = equity
-    if (equity - peak < worst) worst = equity - peak
-  }
-  return {
-    n: closed.length,
-    shadow: withRisk.filter((item) => !item.info.tradeable).length,
-    pnlUsd: equity,
-    feesUsd: fees,
-    maxDrawdownUsd: worst,
-  }
 }
 
 // ── Parametry setupů (#794 fáze 2) vč. risk parametrů (#1185) ─────────────

@@ -300,9 +300,27 @@ export function JournalView() {
     void fetchPlaybook().then(setPlaybook)
   }, [])
 
+  // Setupy dne zapisované minuty (#1319): výpis bez data je jen posledních
+  // 200 setupů, takže u staršího záznamu by detektor „nic nenabídl". Okno
+  // ±15 min může přes půlnoc UTC sáhnout do dvou dnů (filtr `date` je UTC).
+  const setupDays = useMemo(() => {
+    const target = new Date(formTs).getTime()
+    if (!Number.isFinite(target)) return ''
+    const days = [target - SETUP_MATCH_MS, target + SETUP_MATCH_MS].map((ms) =>
+      new Date(ms).toISOString().slice(0, 10),
+    )
+    return [...new Set(days)].join(',')
+  }, [formTs])
   useEffect(() => {
-    void fetchSetups(symbol).then(setSetups)
-  }, [symbol])
+    if (setupDays === '') return
+    let cancelled = false
+    void Promise.all(setupDays.split(',').map((day) => fetchSetups(symbol, day))).then((pages) => {
+      if (!cancelled) setSetups(pages.flatMap((page) => page.setups))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [symbol, setupDays])
 
   // Schránka z jiného pohledu (Briefing, heatmapa): jednorázově se přelije do
   // formuláře a vyprázdní. setState v efektu vědomě (#1123) — spotřeba zprávy

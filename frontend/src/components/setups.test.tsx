@@ -2,9 +2,10 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
-import { CURRENT_MECHANICS_VERSION, bandGateStats, bandInfo, bandLabel, formatGateBucket, formatPct, formatPnlUsd, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
-import type { SetupRow } from '../api/setups'
+import { CURRENT_MECHANICS_VERSION, bandInfo, bandLabel, formatGateBucket, formatPct, formatPnlUsd, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import type { SetupRow, SummaryGroup } from '../api/setups'
 import { pointValue } from '../instrument/tick'
+import { sessionDateIso } from '../instrument/tz'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
 
@@ -43,14 +44,102 @@ const SETUP_ROW = {
   },
 }
 
-function mockApi(setups: Array<Record<string, unknown>>) {
+const GROUP: SummaryGroup = {
+  count: 0,
+  active: 0,
+  closed: 0,
+  wins: 0,
+  losses: 0,
+  win_rate: null,
+  sum_r: 0,
+  avg_r: null,
+  gross_usd: 0,
+  fees_usd: 0,
+  net_usd: 0,
+  ev_r: null,
+  ev_usd: null,
+}
+
+/** Serverový souhrn (#1319) — UI ho jen vykresluje, test dodá hotová čísla. */
+function summary(overrides: Record<string, unknown> = {}) {
+  return {
+    symbols: ['ES'],
+    mechanics_version: CURRENT_MECHANICS_VERSION,
+    all_versions: false,
+    total_count: 1,
+    legacy_count: 0,
+    fee_per_contract_usd: 10,
+    account_usd: 50000,
+    unpriced_symbols: [],
+    all: GROUP,
+    tradeable: GROUP,
+    shadow: GROUP,
+    unruled: GROUP,
+    shadow_reasons: {},
+    account: null,
+    today: {
+      session: '2026-07-17',
+      trades: 0,
+      closed: 0,
+      active: 0,
+      wins: 0,
+      losses: 0,
+      win_rate: null,
+      best_usd: null,
+      worst_usd: null,
+      gross_usd: 0,
+      fees_usd: 0,
+      net_usd: 0,
+      gross_pct: 0,
+      max_risk_pct: 0,
+      total_risk_pct: 0,
+      account: null,
+    },
+    band_gates: null,
+    regimes: [],
+    performance: {
+      daily: [],
+      sharpe_all: { sharpe: null, days: 0 },
+      sharpe_30: { sharpe: null, days: 0 },
+      max_drawdown_r: 0,
+      simulation: null,
+    },
+    ...overrides,
+  }
+}
+
+/** Jediný uzavřený SETUP_ROW (+0,48 R × 29 b × 50 $ = +696 $), bez risk kontextu. */
+const CLOSED_ONE: SummaryGroup = {
+  ...GROUP,
+  count: 1,
+  closed: 1,
+  wins: 1,
+  win_rate: 1,
+  sum_r: 0.48,
+  avg_r: 0.48,
+  gross_usd: 696,
+  fees_usd: 10,
+  net_usd: 686,
+  ev_usd: { ev: 696, win_rate: 1, loss_rate: 0, avg_win: 696, avg_loss: 0, n: 1 },
+}
+
+function mockApi(
+  setups: Array<Record<string, unknown>>,
+  summaryPayload: Record<string, unknown> | null = summary(),
+  totalCount: number = setups.length,
+) {
   const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
     const target = String(url)
     if (init?.method === 'PATCH' && target.includes('/review')) {
       return { ok: true, json: async () => ({ status: 'ok' }) }
     }
+    if (target.includes('/setups/summary')) {
+      return summaryPayload === null
+        ? { ok: false, status: 503, json: async () => ({ detail: 'DB' }) }
+        : { ok: true, json: async () => summaryPayload }
+    }
     if (target.includes('/setups/')) {
-      return { ok: true, json: async () => ({ symbol: 'ES', setups }) }
+      return { ok: true, json: async () => ({ symbol: 'ES', setups, total_count: totalCount }) }
     }
     if (target.includes('/expiries')) {
       return { ok: true, json: async () => ({ expiries: ['20260717'] }) }
@@ -112,7 +201,7 @@ test('P/L v % startovního účtu 50 000 $ v jednotkách aplikace (#191, #1185)'
   expect(formatPct(-1.5)).toBe('-1.50 %')
 })
 
-test('poloha v pásmu z contextu setupu (#1060): štítek, chybějící brána, rozpad pass/block', () => {
+test('poloha v pásmu z contextu setupu (#1060): štítek, chybějící brána, formát dlaždice', () => {
   const inside = bandInfo(SETUP_ROW as unknown as SetupRow)
   expect(inside).not.toBeNull()
   expect(bandLabel(inside!)).toBe('uvnitř pásma +10')
@@ -132,55 +221,29 @@ test('poloha v pásmu z contextu setupu (#1060): štítek, chybějící brána, 
   expect(bandInfo({ context: null })).toBeNull()
   expect(bandInfo({ context: { band_class: 'inside', band_gate_simple: 'pass' } })).toBeNull()
 
-  const rows = [
-    SETUP_ROW, // inside, pass/pass, +0.48
-    {
-      ...SETUP_ROW,
-      id: 8,
-      outcome_r: -1,
-      status: 'closed_stop',
-      context: {
-        band_class: 'outside',
-        confidence_band_adjust: -15,
-        band_gate_simple: 'block',
-        band_gate_regime: 'block',
-      },
-    },
-    {
-      ...SETUP_ROW,
-      id: 9,
-      outcome_r: 0.5,
-      status: 'closed_target',
-      context: {
-        band_class: 'transition',
-        confidence_band_adjust: 0,
-        band_gate_simple: 'pass',
-        band_gate_regime: 'unknown', // neznámý režim — do regime skupin nevstupuje
-      },
-    },
-    { ...SETUP_ROW, id: 10, status: 'active', outcome_r: null }, // aktivní se nepočítá
-    { ...SETUP_ROW, id: 11, context: null }, // bez brány se nepočítá
-  ] as unknown as SetupRow[]
-  const stats = bandGateStats(rows)
-  expect(stats).not.toBeNull()
-  expect(stats!.simple.pass).toEqual({ n: 2, avgR: 0.49, winRate: 1 })
-  expect(stats!.simple.block).toEqual({ n: 1, avgR: -1, winRate: 0 })
-  expect(stats!.regime.pass.n).toBe(1)
-  expect(stats!.regime.block.n).toBe(1)
-  expect(formatGateBucket(stats!.simple.pass)).toBe('2 · +0.49 R')
-  expect(formatGateBucket({ n: 0, avgR: 0, winRate: 0 })).toBe('—')
-  // Žádný uzavřený setup s bránou → null (blok se nekreslí)
-  expect(bandGateStats([{ ...SETUP_ROW, context: null }] as unknown as SetupRow[])).toBeNull()
+  // Rozpad pass/block počítá server (#1319) — dlaždice jen formátuje
+  expect(formatGateBucket({ n: 2, avg_r: 0.49, win_rate: 1 })).toBe('2 · +0.49 R')
+  expect(formatGateBucket({ n: 0, avg_r: 0, win_rate: 0 })).toBe('—')
 })
 
 test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
-  const fetchMock = mockApi([SETUP_ROW])
+  const gate = { n: 1, avg_r: 0.48, win_rate: 1 }
+  const empty = { n: 0, avg_r: 0, win_rate: 0 }
+  const fetchMock = mockApi(
+    [SETUP_ROW],
+    summary({
+      all: CLOSED_ONE,
+      unruled: CLOSED_ONE,
+      band_gates: { simple: { pass: gate, block: empty }, regime: { pass: gate, block: empty } },
+    }),
+  )
   renderApp()
 
   fireEvent.click(screen.getByRole('button', { name: 'Setupy' }))
   expect(await screen.findByText('Neúspěšný průraz')).toBeDefined()
-  // '+0.48' je v R sloupci tabulky i v dlaždici Ø R (jediný uzavřený setup)
-  expect(screen.getAllByText('+0.48').length).toBe(2)
+  expect(await screen.findByTestId('setups-total-pnl')).toBeDefined()
+  // '+0.48' je v R sloupci tabulky, v dlaždici Ø R a v Ø R řádku „Bez risk pravidel"
+  expect(screen.getAllByText('+0.48').length).toBe(3)
   // 'Cíl' je hlavička sloupce i badge stavu — badge přidává druhý výskyt
   expect(screen.getAllByText('Cíl').length).toBe(2)
   // Čas uzavření a P/L v USD na 1 kontrakt (#185): 0.48 R × 29 b × 50 $ = 696 $
@@ -189,13 +252,18 @@ test('obrazovka Setupy: historie s výsledkem a hodnocením', async () => {
   // P/L buňka nese dolary i % účtu 50 000 $ (#191, #1185)
   expect(document.querySelector('[data-part="pnl"]')?.textContent).toContain('+696 $')
   expect(document.querySelector('[data-part="pnl"]')?.textContent).toContain('+1.39 %')
-  // Zvýrazněné souhrnné statistiky (#189/#191): Ø R, Σ P/L, % P/L vůči účtu
+  // Souhrn ze serveru (#1319): hrubý výsledek, poplatky, čistý (1 kontrakt)
   expect(screen.getByTestId('setups-total-pnl').textContent).toBe('+696 $')
-  expect(screen.getByTestId('setups-total-pct').textContent).toBe('+1.39 %')
-  expect(screen.getByText('Ø R')).toBeDefined()
-  // Od „Σ dnes (1 kontrakt)“ (27. 8.) nese text víc dlaždic — stačí, že existují
+  expect(screen.getByTestId('setups-fees').textContent).toBe('-10 $')
+  expect(screen.getByTestId('setups-net-pnl').textContent).toBe('+686 $')
+  // 'Ø R' je dlaždice souhrnu i sloupec tabulky rozdělení
+  expect(screen.getAllByText('Ø R').length).toBe(2)
   expect(screen.getAllByText(/1 kontrakt/).length).toBeGreaterThan(0)
-  expect(screen.getByText(/účet 50k/)).toBeDefined()
+  // Rozdělení obchodovatelné / stínové / bez pravidel
+  expect(screen.getByTestId('split-unruled').textContent).toContain('+686 $')
+  expect(screen.getByTestId('split-tradeable').textContent).toContain('—')
+  // Bez risk kontextu se účet nekreslí (nic se nevymýšlí)
+  expect(screen.queryByTestId('setups-account-pnl')).toBeNull()
   // EV / obchod (#911): jediný uzavřený obchod +696 $ → EV = +696 $, tooltip s rozkladem
   const evTile = screen.getByTestId('setups-ev')
   expect(evTile.textContent).toBe('+696 $')
@@ -335,20 +403,112 @@ test('statistiky počítají jen aktuální mechaniku, starší jde zapnout (#31
     status: 'closed_stop',
     mechanics_version: 1,
   }
-  mockApi([legacy, SETUP_ROW])
+  const fetchMock = mockApi([legacy, SETUP_ROW], summary({ legacy_count: 1 }))
   renderApp()
 
   fireEvent.click(await screen.findByRole('button', { name: 'Setupy' }))
   await screen.findByRole('heading', { name: /Setupy —/ })
+  const historyRows = () =>
+    document.querySelectorAll('.setups-table:not(.setups-split) tbody tr').length
 
-  // Default: jen aktuální verze → jeden řádek, ΣR z něj
-  expect(screen.getAllByRole('row').length - 1).toBe(1)
-  const toggle = screen.getByLabelText(/Včetně starší mechaniky/)
-  expect(toggle).toBeDefined()
+  // Default: jen aktuální verze (ze serveru) → jeden řádek v tabulce
+  const toggle = await screen.findByLabelText(/Včetně starší mechaniky \(1\)/)
+  expect(historyRows()).toBe(1)
 
-  // Po zapnutí se přidá i starý setup
+  // Po zapnutí se přidá i starý setup a souhrn se přepočítá na serveru se všemi verzemi
   fireEvent.click(toggle)
-  await waitFor(() => expect(screen.getAllByRole('row').length - 1).toBe(2))
+  await waitFor(() => expect(historyRows()).toBe(2))
+  await waitFor(() =>
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('all_versions=true'))).toBe(
+      true,
+    ),
+  )
+})
+
+test('přepnutí mechaniky drží přepínač i souhrn ztlumeně do odpovědi, fokus zůstane (#1319)', async () => {
+  // Dřív souhrn i přepínač po kliknutí zmizely, dokud nedorazil nový dotaz —
+  // prvek uživateli ujel pod kurzorem, fokus se ztratil a stránka poskočila
+  const legacy = { ...SETUP_ROW, id: 1, outcome_r: -8, status: 'closed_stop', mechanics_version: 1 }
+  const baseFetch = mockApi([legacy, SETUP_ROW], summary({ legacy_count: 1, all: CLOSED_ONE }))
+  let release: () => void = () => undefined
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes('all_versions=true')) await pending
+      return baseFetch(url, init)
+    }),
+  )
+  renderApp()
+  fireEvent.click(await screen.findByRole('button', { name: 'Setupy' }))
+  const toggle = (await screen.findByTestId('setups-all-versions')) as HTMLInputElement
+  const stats = await screen.findByRole('group', { name: 'Souhrnné statistiky' })
+  expect(stats.getAttribute('aria-busy')).toBe('false')
+
+  act(() => toggle.focus())
+  fireEvent.click(toggle)
+  // Dotaz se všemi verzemi visí: nic se neodpojí, souhrn je jen ztlumený
+  await waitFor(() => expect(stats.getAttribute('aria-busy')).toBe('true'))
+  expect(stats.classList.contains('summary-stale')).toBe(true)
+  expect(toggle.isConnected).toBe(true)
+  expect(stats.isConnected).toBe(true)
+  expect(toggle.checked).toBe(true)
+  expect(document.activeElement).toBe(toggle)
+
+  await act(async () => {
+    release()
+  })
+  await waitFor(() => expect(stats.getAttribute('aria-busy')).toBe('false'))
+  expect(stats.classList.contains('summary-stale')).toBe(false)
+  expect(screen.getByTestId('setups-all-versions')).toBe(toggle)
+  expect(document.activeElement).toBe(toggle)
+})
+
+test('blok Dnes se po 17:00 CT přenačte na novou seanci i bez WS události (#1319)', async () => {
+  // Souhrn „Dnes" je snímek serveru; přes noc na Globexu nový setup (a s ním
+  // setups.*) nemusí přijít hodiny — přechod seance musí dotaz vyvolat sám
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    vi.setSystemTime(Date.UTC(2026, 8, 28, 21, 59, 30)) // pondělí 16:59:30 CDT
+    const baseFetch = mockApi([SETUP_ROW])
+    const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes('/setups/summary')) {
+        // Server počítá den v okamžiku dotazu (trading_session_date(now))
+        const base = summary()
+        return {
+          ok: true,
+          json: async () => ({ ...base, today: { ...base.today, session: sessionDateIso() } }),
+        }
+      }
+      return baseFetch(url, init)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const summaryCalls = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url).includes('/setups/summary')).length
+    renderApp()
+    fireEvent.click(await screen.findByRole('button', { name: 'Setupy' }))
+    await waitFor(() => expect(screen.getByTestId('day-session').textContent).toBe('28. 9.'))
+    const before = summaryCalls()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000) // 17:00:31 CDT → úterní seance
+    })
+    await waitFor(() => expect(screen.getByTestId('day-session').textContent).toBe('29. 9.'))
+    expect(summaryCalls()).toBeGreaterThan(before)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+test('souhrn nedostupný: chyba místo čísel z tabulky, tabulka ukazuje „N z M" (#1319)', async () => {
+  mockApi([SETUP_ROW], null, 604)
+  renderApp()
+  fireEvent.click(screen.getByRole('button', { name: 'Setupy' }))
+  expect(await screen.findByTestId('setups-summary-error')).toBeDefined()
+  expect(screen.queryByTestId('setups-total-pnl')).toBeNull()
+  expect(screen.getByTestId('setups-page-note').textContent).toContain('posledních 1 z 604')
 })
 
 test('obrazovka Setupy: risk sloupec (#1185) — obchodovatelný vs. stín a filtr', async () => {
@@ -379,7 +539,22 @@ test('obrazovka Setupy: risk sloupec (#1185) — obchodovatelný vs. stín a fil
       trade_block: null,
     },
   }
-  mockApi([SETUP_ROW, { ...SETUP_ROW, id: 9, context: risk }, tradeable])
+  const account = {
+    trades: 1,
+    gross_usd: 192,
+    fees_usd: 10,
+    net_usd: 182,
+    net_pct: 0.364,
+    max_drawdown_usd: 0,
+  }
+  mockApi(
+    [SETUP_ROW, { ...SETUP_ROW, id: 9, context: risk }, tradeable],
+    summary({
+      shadow: { ...GROUP, count: 1 },
+      shadow_reasons: { stop_over_budget: 1 },
+      account,
+    }),
+  )
   renderApp()
   fireEvent.click(screen.getByRole('button', { name: 'Setupy' }))
   await screen.findAllByText('Neúspěšný průraz')
@@ -389,7 +564,10 @@ test('obrazovka Setupy: risk sloupec (#1185) — obchodovatelný vs. stín a fil
   // Bez pravidel „—", stín s důvodem (ztlumený řádek), obchodovatelný s P/L účtu 0.48 × 400 − 10
   expect(cells).toEqual(['—', 'stín: stop nad rozpočtem rizika', '1 ks · 400 $ +182 $'])
   expect(document.querySelectorAll('tr.setup-shadow').length).toBe(1)
-  expect(screen.getByTestId('setups-account-pnl').textContent).toContain('+182 $')
+  expect((await screen.findByTestId('setups-account-pnl')).textContent).toBe('+182 $')
+  expect(screen.getByTestId('split-shadow').getAttribute('title')).toContain(
+    'stop nad rozpočtem rizika: 1',
+  )
   // Filtr „jen obchodovatelné" schová stín, řádek bez pravidel zůstává
   fireEvent.click(screen.getByTestId('setups-tradeable-only'))
   await waitFor(() => expect(document.querySelectorAll('[data-part="risk"]').length).toBe(2))

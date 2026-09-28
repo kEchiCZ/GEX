@@ -1,13 +1,6 @@
 /** Risk framework malého účtu (#1185): čtení kontextu, štítky, bilance účtu. */
 import { describe, expect, it } from 'vitest'
-import {
-  ACCOUNT_START_USD,
-  accountPnlUsd,
-  accountStats,
-  riskInfo,
-  riskLabel,
-  riskTooltip,
-} from './setups'
+import { ACCOUNT_START_USD, accountPnlUsd, riskInfo, riskLabel, riskTooltip } from './setups'
 import type { SetupRow } from './setups'
 
 const RISK = {
@@ -94,20 +87,5 @@ describe('bilance účtu', () => {
       accountPnlUsd(row({ ...RISK, tradeable: false }, 2, '2026-09-16T15:00:00+00:00')),
     ).toBeNull()
     expect(accountPnlUsd(row(RISK, null, ''))).toBeNull()
-  })
-
-  it('accountStats: chronologicky, max DD, stín se počítá zvlášť', () => {
-    const rows = [
-      row(RISK, 2, '2026-09-16T17:00:00+00:00'), // +790 (třetí)
-      row(RISK, -1, '2026-09-16T15:00:00+00:00'), // −410 (první)
-      row(RISK, -1, '2026-09-16T16:00:00+00:00'), // −410 (druhá) → DD −820
-      row({ ...RISK, tradeable: false, trade_block: 'gate' }, -3, '2026-09-16T16:30:00+00:00'),
-      row({ gex_regime: 'negative' }, -5, '2026-09-16T16:40:00+00:00'), // před pravidly
-    ]
-    const stats = accountStats(rows)
-    expect(stats).toEqual({ n: 3, shadow: 1, pnlUsd: -30, feesUsd: 30, maxDrawdownUsd: -820 })
-    expect(
-      accountStats([row({ gex_regime: 'negative' }, 1, '2026-09-16T16:40:00+00:00')]),
-    ).toBeNull()
   })
 })

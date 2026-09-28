@@ -78,5 +78,26 @@ triviální a testy jsou kontrakt.
 - Reset track recordu (#794 ad 3) metriku nezasáhne — řada prostě začne
   znovu od první uzavřené seance nové mechaniky.
 
+## Dodatek 2026-09-28: výpočet se stěhuje na server (#1319)
+
+Oddíl 4 („Kde se počítá") přestal platit. Frontend počítal metriku nad
+odpovědí `GET /setups/{symbol}`, která má strop 200 řádků pro tabulku —
+Sharpe, equity, EV i USD simulace tak byly klouzavé okno posledních 200
+setupů na symbol, ne celá historie. Rozhodnutí uživatele (varianta B, #1319):
+souhrn z celé historie počítá server, UI jen vykresluje.
+
+- Vzorce tohoto ADR beze změny, jen jinde: čistá funkce
+  `engine/compute/setup_summary.py` (denní ΣR per seance, Sharpe celkem/30,
+  max DD, EV, USD simulace) za `GET /setups/summary`; testy přeneseny do
+  `engine/tests/test_setup_summary.py`. `frontend/src/setups/performance.ts`
+  zrušen.
+- Konstanty nákladů (MES 2,49 $, MNQ 1,74 $, jiné 2,50 $) a mapování na mikro
+  jsou v `compute/setup_summary.py`; mapování mikro zrcadlí kalkulačku
+  pozice ve frontendu (`instrument/position.ts`).
+- Účet a % rizika z kalkulačky #679 se dál **neukládají** na server — posílají
+  se jen jako parametry dotazu (`sim_account_usd`, `sim_risk_pct`) a bez nich
+  se USD simulace nepočítá.
+- Aktuální mechanika = `SETUP_MECHANICS_VERSION` enginu, ne maximum v datech.
+
 Souvisí: #794 (epic, rozhodnutí), #679 (sizing), #512/#748 (seance),
 #311 (mechanics_version), ADR-0029 (učicí data).

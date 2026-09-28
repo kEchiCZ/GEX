@@ -571,6 +571,73 @@ def test_setups_list_and_review(settings: Settings) -> None:
     assert client.patch(f"/setups/ES/{setup_id}/review", json={"rating": 5}).status_code == 422
 
 
+def test_setups_summary_z_cele_historie(settings: Settings) -> None:
+    """#1319: souhrn počítá server nad VŠEMI setupy, stránka tabulky nese total_count."""
+    from sqlalchemy import create_engine as sa_create_engine
+
+    from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
+    from gexlens_engine.storage.setups_store import SetupsRepository
+
+    repo = SetupsRepository(sa_create_engine(settings.database_url))
+    repo.ensure_schema()
+    start = dt.datetime.combine(DAY, dt.time(14, 0), tzinfo=dt.UTC)
+    for i in range(210):
+        tradeable = i % 2 == 0
+        risk = {
+            "tradeable": tradeable,
+            "contracts": 1,
+            "max_loss_usd": 250.0,
+            "fee_usd": 10.0,
+            "trade_block": None if tradeable else "gate",
+        }
+        setup_id = repo.create(
+            symbol="ES",
+            expiry="20260716",
+            template="failed_break",
+            direction="long",
+            created_ts=start + dt.timedelta(minutes=i),
+            entry=7500.0,
+            target=7510.0,
+            stop=7495.0,  # 5 b × 50 $ = 250 $ na 1 kontrakt
+            confidence=50,
+            reason="test",
+            context=risk,
+        )
+        repo.close(
+            setup_id,
+            status="closed_stop",
+            closed_ts=start + dt.timedelta(minutes=i + 1),
+            outcome_r=-1.0,
+            mfe=0.0,
+            mae=5.0,
+        )
+    client = TestClient(create_app(settings))
+
+    page = client.get("/setups/ES").json()
+    assert len(page["setups"]) == 200
+    assert page["total_count"] == 210
+
+    summary = client.get("/setups/summary?symbols=ES").json()
+    assert summary["symbols"] == ["ES"]
+    assert summary["mechanics_version"] == SETUP_MECHANICS_VERSION
+    assert summary["all"]["closed"] == 210  # ne 200 ze stránky
+    assert summary["all"]["sum_r"] == -210.0
+    assert summary["all"]["gross_usd"] == -210 * 250.0
+    assert summary["all"]["fees_usd"] == 210 * 10.0  # default poplatek parametrů
+    assert summary["tradeable"]["closed"] == 105
+    assert summary["shadow_reasons"] == {"gate": 105}
+    assert summary["account"]["trades"] == 105
+    assert summary["account"]["net_usd"] == -105 * 260.0
+    assert summary["performance"]["daily"][0]["trades"] == 210
+    assert summary["performance"]["simulation"] is None
+    simulated = client.get(
+        "/setups/summary?symbols=ES,NQ&sim_account_usd=5000&sim_risk_pct=1"
+    ).json()
+    assert simulated["symbols"] == ["ES", "NQ"]
+    assert simulated["performance"]["simulation"]["traded"] == 210
+    assert client.get("/setups/summary?symbols=%20,").status_code == 422
+
+
 def test_status_store(client: TestClient) -> None:
     assert client.get("/status").json()["engine"] == "offline"
     client.app.state.status_store.update(engine="online", greeks_complete=350, greeks_total=360)  # type: ignore[attr-defined]

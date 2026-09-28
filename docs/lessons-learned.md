@@ -178,6 +178,18 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-28 — „celkem" na obrazovce Setupy zaseknuté na 200 obchodech; ES ukazovalo +690 $ místo −2 338 $ (#1319).**
+  Frontend sčítal souhrn (Σ P/L, EV, účet, denní bilanci, Stats → Výkon i režimovou tabulku, Deník hledal
+  setup u minuty) nad odpovědí `GET /setups/{symbol}`, která má `LIMIT 200 ORDER BY created_ts DESC` — stránku
+  pro tabulku. „Celkem" tak bylo **klouzavé okno** posledních 200 setupů: každý nový setup vytlačil nejstarší
+  a u ES zrovna vypadávaly velké ztráty ze začátku v5, takže bilance „vylezla z mínusu do plusu". Číslo
+  vypadalo věrohodně; prozradil ho až počet obchodů, který přestal růst, a nezávislý přepočet z PG. Druhý
+  nález: řazení jen podle času nebylo stabilní (31 dvojic téhož symbolu se shodným `created_ts`).
+  → Stránka dat **nikdy** není podklad agregace: souhrn počítá server nad celou množinou (čistá funkce
+  `compute/setup_summary.py` + `GET /setups/summary`), stránka nese `total_count` a UI píše „N z M";
+  řazení stránky vždy s unikátním druhým klíčem (`id`). Při review hledat `reduce` / `filter().length`
+  nad výsledkem endpointu s limitem.
+
 - **2026-09-27 — víkendové klíče OI archivu jako „předchozí den“: pondělní ΔOI proti neděli, FA body „pátek → sobota“ (#1309 část 2).**
   OI archiv má klíč podle UTC dne pořízení, takže nese i sobotu a neděli; jejich obsah závisí na hodině:
   sobota a neděle před otevřením Globexu jsou kopie pátku, neděle po otevření už pondělí (produkce 18.–21. 9.:
