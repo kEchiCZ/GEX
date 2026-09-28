@@ -4,12 +4,13 @@ Predikce jsou neměnné — jediná mutace je rating (+1/−1) a poznámka; hodn
 je kvalitativní vrstva a nevstupuje do automatické kalibrace confidence.
 */
 import { useState } from 'react'
-import { ACCOUNT_START_USD, STATUS_LABELS, accountPnlUsd, accountStats, bandGateStats, bandInfo, bandLabel, bandTooltip, confidenceTooltip, dailyStats, formatGateBucket, formatPct, formatPnlUsd, reviewSetup, riskInfo, riskLabel, riskTooltip, setupPnlPct, setupPnlUsd, setupRrr, templateLabel , evStats, evTooltip } from '../api/setups' // prettier-ignore
-import { currentMechanicsVersion } from '../setups/performance'
-import { sessionDateIso } from '../instrument/tz'
-import type { SetupRow } from '../api/setups'
+import type { ReactNode } from 'react'
+import { STATUS_LABELS, TRADE_BLOCK_LABELS, accountPnlUsd, bandInfo, bandLabel, bandTooltip, confidenceTooltip, evTooltip, formatGateBucket, formatPct, formatPnlUsd, reviewSetup, riskInfo, riskLabel, riskTooltip, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
+import type { SetupRow, SummaryGroup } from '../api/setups'
 import { formatLevel } from '../heatmap/overlays'
 import { useSetups } from '../hooks/useSetups'
+import { useSessionDate } from '../hooks/useSessionDate'
+import { useSetupsSummary } from '../hooks/useSetupsSummary'
 import { pointValue } from '../instrument/tick'
 import { useAppState } from '../state/AppState'
 import { CoachSetupsBlock } from './CoachSetupsBlock'
@@ -75,9 +76,87 @@ function ReviewCell({
   )
 }
 
+/** Dlaždice souhrnu: popisek, hodnota, volitelně barva znaménka a tooltip. */
+function Stat({
+  label,
+  value,
+  tone,
+  testId,
+  title,
+}: {
+  label: string
+  value: ReactNode
+  tone?: number | null
+  testId?: string
+  title?: string
+}) {
+  const toneClass =
+    tone === undefined || tone === null ? '' : tone >= 0 ? ' r-positive' : ' r-negative'
+  return (
+    <div className="stat">
+      <span className="stat-label muted">{label}</span>
+      <span className={`stat-value${toneClass}`} data-testid={testId} title={title}>
+        {value}
+      </span>
+    </div>
+  )
+}
+
+function formatRate(value: number | null): string {
+  return value === null ? '—' : `${Math.round(value * 100)} %`
+}
+
+function formatR(value: number | null, digits = 2): string {
+  return value === null ? '—' : `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`
+}
+
+/** Poplatky jako odečet („-3140 $"); nula bez znaménka. */
+function formatFees(value: number): string {
+  return value > 0 ? formatPnlUsd(-value) : '0 $'
+}
+
+/** Den seance ze serveru („2026-09-28" → „28. 9."), bez závislosti na zóně prohlížeče. */
+function formatSessionDay(iso: string): string {
+  const [, month, day] = iso.split('-').map(Number)
+  return `${day}. ${month}.`
+}
+
+const SHADOW_REASON_LABELS: Record<string, string> = {
+  ...TRADE_BLOCK_LABELS,
+  unknown: 'neznámý důvod',
+}
+
+/** Řádek rozdělení obchodovatelné / stínové / bez pravidel (1 kontrakt na setup). */
+function SplitRow({
+  label,
+  title,
+  group,
+  testId,
+}: {
+  label: string
+  title: string
+  group: SummaryGroup
+  testId: string
+}) {
+  const tone = (value: number) => (value >= 0 ? 'r-positive' : 'r-negative')
+  return (
+    <tr data-testid={testId} title={title}>
+      <td>{label}</td>
+      <td>{group.count}</td>
+      <td>{group.closed}</td>
+      <td>{formatRate(group.win_rate)}</td>
+      <td className={tone(group.sum_r)}>{formatR(group.sum_r, 1)}</td>
+      <td className={tone(group.avg_r ?? 0)}>{formatR(group.avg_r)}</td>
+      <td className={tone(group.gross_usd)}>{formatPnlUsd(group.gross_usd)}</td>
+      <td className="r-negative">{formatFees(group.fees_usd)}</td>
+      <td className={tone(group.net_usd)}>{formatPnlUsd(group.net_usd)}</td>
+    </tr>
+  )
+}
+
 export function SetupsView() {
-  const { symbol } = useAppState()
-  const { setups, refresh } = useSetups()
+  const { symbol, setupsVersion } = useAppState()
+  const { setups, totalCount, refresh } = useSetups()
   // Statistiky defaultně jen z aktuální mechaniky (#311) — setupy staré verze
   // mají jinou sémantiku stopů a cílů (Ø RRR 25–47), míchat je do jedné bilance
   // by znamenalo počítat výkonnost systému, který už neexistuje
@@ -86,69 +165,69 @@ export function SetupsView() {
     false,
     (value) => (typeof value === 'boolean' ? value : false),
   )
-  // Aktuální mechanika dynamicky z dat (ADR-0030) — natvrdo zapsaná konstanta
-  // zastarala (v2 vs. engine v4) a statistiky týden neviděly aktuální setupy
-  const mechanicsVersion = currentMechanicsVersion(setups)
-  const legacyCount = setups.filter(
-    (row) => (row.mechanics_version ?? 1) !== mechanicsVersion,
-  ).length
   // Jen obchodovatelné (#1185): skryje stínové setupy (stop nad rozpočtem,
-  // brzda, brána); řádky bez risk kontextu (před pravidly) zůstávají vidět
+  // brzda, brána) v TABULCE; řádky bez risk kontextu (před pravidly) zůstávají
   const [tradeableOnly, setTradeableOnly] = usePersistentState<boolean>(
     'setupsTradeableOnly',
     false,
     (value) => (typeof value === 'boolean' ? value : false),
   )
-  const byVersion = allVersions
-    ? setups
-    : setups.filter((row) => (row.mechanics_version ?? 1) === mechanicsVersion)
-  const shadowCount = byVersion.filter((row) => riskInfo(row)?.tradeable === false).length
+  // Souhrn z CELÉ historie počítá server (#1319) — tabulka níž je jen stránka
+  // posledních 200 setupů a agregace nad ní byla klouzavé okno. Blok „Dnes"
+  // je snímek serveru: nová seance (po 17:00 CT) ho musí přenačíst i bez
+  // WS události setups.* — přes noc na Globexu nový setup nemusí přijít hodiny
+  const sessionDay = useSessionDate()
+  const { summary, failed, stale } = useSetupsSummary([symbol], {
+    allVersions,
+    refreshKey: `${setupsVersion}|${sessionDay}`,
+  })
+  // Po přepnutí mechaniky zůstává poslední souhrn ztlumeně do odpovědi —
+  // přepínač ani bloky nezmizí pod kurzorem a stránka neposkočí
+  const summaryClass = (base: string) => (stale ? `${base} summary-stale` : base)
+  const legacyCount = summary?.legacy_count ?? null
+  const shadowCount = summary?.shadow.count ?? null
+  // Aktuální mechanika ze serveru (engine SETUP_MECHANICS_VERSION); bez
+  // souhrnu tabulka nefiltruje — radši víc řádků než tichý výpadek
+  const mechanicsVersion = summary?.mechanics_version ?? null
+  const byVersion =
+    allVersions || mechanicsVersion === null
+      ? setups
+      : setups.filter((row) => (row.mechanics_version ?? 1) === mechanicsVersion)
   const visible = tradeableOnly
     ? byVersion.filter((row) => riskInfo(row)?.tradeable !== false)
     : byVersion
-
-  const closed = visible.filter((row) => row.status !== 'active')
-  const wins = closed.filter((row) => (row.outcome_r ?? 0) > 0).length
-  const totalR = closed.reduce((sum, row) => sum + (row.outcome_r ?? 0), 0)
-  // P/L v USD na 1 kontrakt (#185) — CME hodnota bodu instrumentu
   const pointUsd = pointValue(symbol)
-  const totalPnl = closed.reduce((sum, row) => sum + (setupPnlUsd(row, pointUsd) ?? 0), 0)
-  // EV na obchod (#911): z týchž uzavřených obchodů jako Σ P/L (1 kontrakt)
-  const ev = evStats(
-    closed
-      .map((row) => setupPnlUsd(row, pointUsd))
-      .filter((value): value is number => value !== null),
-  )
-  // % P/L vůči startovnímu účtu 5 000 $ na ticker (#191) — s fixní bází je
-  // součet procent setupů roven celkovému zhodnocení účtu
-  const totalPct = (totalPnl / ACCOUNT_START_USD) * 100
-  const averageR = closed.length > 0 ? totalR / closed.length : 0
-  // Bilance ÚČTU (#1185): jen obchodovatelné uzavřené, kontrakty × R × stop ×
-  // bod − poplatky; null = žádný řádek risk kontext nenese (před pravidly)
-  const account = accountStats(byVersion)
-  const pnlClass = totalPnl >= 0 ? 'r-positive' : 'r-negative'
-  // Bilance dnešní seance (#748) — nad `visible`, aby ctila přepínač verze
-  // mechaniky; jinak by si horní a spodní blok odporovaly
-  const day = dailyStats(visible, pointUsd, sessionDateIso(), sessionDateIso)
-  // Stínová brána podle polohy v zóně (#1060): rozpad pass/block per pravidlo
-  // nad týmiž uzavřenými setupy jako bilance výše (ctí přepínač mechaniky)
-  const gates = bandGateStats(visible)
+  const all = summary?.all ?? null
+  const account = summary?.account ?? null
+  const day = summary?.today ?? null
+  const gates = summary?.band_gates ?? null
+  const shadowTitle = summary
+    ? [
+        'Setup vznikl a měří se, ale NEobchoduje se (risk pravidla #1185):',
+        ...Object.entries(summary.shadow_reasons).map(
+          ([reason, count]) => `• ${SHADOW_REASON_LABELS[reason] ?? reason}: ${count}`,
+        ),
+      ].join('\n')
+    : ''
 
   return (
     <section className="setups-view" aria-label="Setupy">
       <header className="setups-summary">
         <h2>Setupy — {symbol}</h2>
-        {legacyCount > 0 && (
+        {/* Zapnutý přepínač zůstává i bez souhrnu (chyba serveru) — jinak by
+            filtr nešel vypnout */}
+        {((legacyCount ?? 0) > 0 || allVersions) && (
           <label className="setups-version-toggle">
             <input
               type="checkbox"
               checked={allVersions}
               onChange={(event) => setAllVersions(event.target.checked)}
+              data-testid="setups-all-versions"
             />
-            Včetně starší mechaniky ({legacyCount})
+            Včetně starší mechaniky{legacyCount !== null && ` (${legacyCount})`}
           </label>
         )}
-        {shadowCount > 0 && (
+        {((shadowCount ?? 0) > 0 || tradeableOnly) && (
           <label className="setups-version-toggle">
             <input
               type="checkbox"
@@ -156,196 +235,292 @@ export function SetupsView() {
               onChange={(event) => setTradeableOnly(event.target.checked)}
               data-testid="setups-tradeable-only"
             />
-            Jen obchodovatelné (stín {shadowCount})
+            Jen obchodovatelné v tabulce{shadowCount !== null && ` (stín ${shadowCount})`}
           </label>
         )}
       </header>
-      {/* Zvýrazněné souhrnné statistiky (#189); P/L vždy na 1 kontrakt */}
-      <div className="setups-stats" role="group" aria-label="Souhrnné statistiky">
-        <div className="stat">
-          <span className="stat-label muted">Aktivní</span>
-          <span className="stat-value">{visible.length - closed.length}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-label muted">Uzavřené</span>
-          <span className="stat-value">{closed.length}</span>
-        </div>
-        <div className="stat">
-          <span className="stat-label muted">Úspěšnost</span>
-          <span className="stat-value">
-            {closed.length > 0 ? `${Math.round((wins / closed.length) * 100)} %` : '—'}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label muted">Ø R</span>
-          <span className={`stat-value ${averageR >= 0 ? 'r-positive' : 'r-negative'}`}>
-            {closed.length > 0 ? `${averageR >= 0 ? '+' : ''}${averageR.toFixed(2)}` : '—'}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label muted">Σ P/L (1 kontrakt)</span>
-          <span className={`stat-value ${pnlClass}`} data-testid="setups-total-pnl">
-            {closed.length > 0 ? formatPnlUsd(totalPnl) : '—'}
-          </span>
-        </div>
-        <div className="stat">
-          {/* EV na obchod (#911): USD + rozklad v tooltipu; v R ≡ Ø R */}
-          <span className="stat-label muted">EV / obchod</span>
-          <span
-            className={`stat-value ${(ev?.ev ?? 0) >= 0 ? 'r-positive' : 'r-negative'}`}
-            data-testid="setups-ev"
-            title={ev ? evTooltip(ev, '$') : undefined}
+      {failed && (
+        <p className="muted setups-summary-error" role="alert" data-testid="setups-summary-error">
+          Souhrn setupů se nepodařilo načíst ze serveru (API nebo databáze). Čísla se nedopočítávají
+          z tabulky — ta ukazuje jen posledních 200 setupů.
+        </p>
+      )}
+      {summary !== null && all !== null && (
+        <>
+          {/* Celá historie (#1319): každý setup rovným dílem 1 kontrakt, i stínový */}
+          <div
+            className={summaryClass('setups-stats')}
+            role="group"
+            aria-label="Souhrnné statistiky"
+            aria-busy={stale}
+            title={[
+              `Celá historie ${symbol}, mechanika ${summary.all_versions ? 'všechny verze' : `v${summary.mechanics_version}`} (spočítal server):`,
+              '• každý setup = 1 kontrakt, obchodovatelný i stínový',
+              '• hrubý výsledek = R × stop × hodnota bodu',
+              `• poplatky = ${summary.fee_per_contract_usd} $ za kontrakt a obchod`,
+              '• čistý = hrubý − poplatky',
+              '• co by reálně vydělal účet, ukazuje řádek Účet níž',
+            ].join('\n')}
           >
-            {ev ? formatPnlUsd(ev.ev) : '—'}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label muted">% P/L (účet 50k)</span>
-          <span className={`stat-value ${pnlClass}`} data-testid="setups-total-pct">
-            {closed.length > 0 ? formatPct(totalPct) : '—'}
-          </span>
-        </div>
-        {account !== null && (
-          <div className="stat">
-            <span className="stat-label muted">Účet (obchodovatelné)</span>
-            <span
-              className={`stat-value ${account.pnlUsd >= 0 ? 'r-positive' : 'r-negative'}`}
-              data-testid="setups-account-pnl"
-              title={
-                'Bilance účtu 50 000 $ z OBCHODOVATELNÝCH uzavřených setupů (#1185): ' +
-                'kontrakty × R × stop × bod − poplatky.\n' +
-                `• obchodů ${account.n} · stínových ${account.shadow} (neobchodují se)\n` +
-                `• poplatky ${Math.round(account.feesUsd)} $ · max DD ${Math.round(account.maxDrawdownUsd)} $\n` +
-                'Reálně na MES/MNQ jsou dolary ÷ 10.'
-              }
-            >
-              {account.n > 0 ? formatPnlUsd(account.pnlUsd) : '—'}
-              <span className="pnl-pct muted"> {account.n} obch.</span>
-            </span>
+            <Stat label="Aktivní" value={all.active} />
+            <Stat label="Uzavřené" value={all.closed} testId="setups-closed" />
+            <Stat label="Úspěšnost" value={formatRate(all.win_rate)} />
+            <Stat label="Ø R" value={formatR(all.avg_r)} tone={all.avg_r} />
+            <Stat
+              label="Σ R"
+              value={formatR(all.closed > 0 ? all.sum_r : null, 1)}
+              tone={all.sum_r}
+            />
+            <Stat
+              label="Hrubý výsledek (1 kontrakt)"
+              value={all.closed > 0 ? formatPnlUsd(all.gross_usd) : '—'}
+              tone={all.gross_usd}
+              testId="setups-total-pnl"
+            />
+            <Stat
+              label="Poplatky"
+              value={all.closed > 0 ? formatFees(all.fees_usd) : '—'}
+              testId="setups-fees"
+              title={`${all.closed} uzavřených × ${summary.fee_per_contract_usd} $ (1 kontrakt, obchod tam i zpět)`}
+            />
+            <Stat
+              label="Čistý výsledek"
+              value={all.closed > 0 ? formatPnlUsd(all.net_usd) : '—'}
+              tone={all.net_usd}
+              testId="setups-net-pnl"
+            />
+            {/* EV na obchod (#911): hrubě v USD + rozklad v tooltipu; v R ≡ Ø R */}
+            <Stat
+              label="EV / obchod (hrubě)"
+              value={all.ev_usd ? formatPnlUsd(all.ev_usd.ev) : '—'}
+              tone={all.ev_usd?.ev ?? null}
+              testId="setups-ev"
+              title={all.ev_usd ? evTooltip(all.ev_usd, '$') : undefined}
+            />
           </div>
-        )}
-      </div>
+          {/* Rozdělení (#1319): co se obchoduje vs. co se jen měří */}
+          <div className={summaryClass('setups-table-wrap')} aria-busy={stale}>
+            <table className="setups-table setups-split" aria-label="Obchodovatelné a stínové">
+              <thead>
+                <tr>
+                  <th>Skupina</th>
+                  <th>Setupů</th>
+                  <th>Uzavřené</th>
+                  <th>Úspěšnost</th>
+                  <th>Σ R</th>
+                  <th>Ø R</th>
+                  <th>Hrubě (1 kontrakt)</th>
+                  <th>Poplatky</th>
+                  <th>Čistě</th>
+                </tr>
+              </thead>
+              <tbody>
+                <SplitRow
+                  label="Obchodovatelné"
+                  testId="split-tradeable"
+                  group={summary.tradeable}
+                  title={[
+                    'Setupy, které risk pravidla (#1185) pustila do obchodu:',
+                    '• stop v rozpočtu rizika, brzdy neaktivní, šablona s prokázaným edge',
+                  ].join('\n')}
+                />
+                <SplitRow
+                  label="Stínové"
+                  testId="split-shadow"
+                  group={summary.shadow}
+                  title={shadowTitle}
+                />
+                <SplitRow
+                  label="Bez risk pravidel"
+                  testId="split-unruled"
+                  group={summary.unruled}
+                  title={[
+                    'Setupy z doby před risk pravidly (#1185, 15. 9. 2026):',
+                    '• nevíme, zda by prošly — do bilance účtu nevstupují',
+                  ].join('\n')}
+                />
+              </tbody>
+            </table>
+          </div>
+          {account !== null && (
+            <div
+              className={summaryClass('setups-stats setups-stats-account')}
+              role="group"
+              aria-label="Účet — obchodovatelné"
+              aria-busy={stale}
+              title={[
+                `Co by reálně vydělal účet ${Math.round(summary.account_usd)} $ (#1185):`,
+                '• jen OBCHODOVATELNÉ uzavřené setupy',
+                '• kontrakty ze serverového sizingu × R × stop × bod − poplatky',
+                '• max DD = nejhlubší propad od vrcholu, chronologicky podle uzavření',
+                '• reálně na MES/MNQ jsou dolary ÷ 10',
+              ].join('\n')}
+            >
+              <Stat
+                label={`Účet ${Math.round(summary.account_usd / 1000)}k · obchodů`}
+                value={account.trades}
+              />
+              <Stat
+                label="Účet hrubě"
+                value={account.trades > 0 ? formatPnlUsd(account.gross_usd) : '—'}
+                tone={account.gross_usd}
+              />
+              <Stat
+                label="Účet poplatky"
+                value={account.trades > 0 ? formatFees(account.fees_usd) : '—'}
+              />
+              <Stat
+                label="Účet čistě"
+                value={account.trades > 0 ? formatPnlUsd(account.net_usd) : '—'}
+                tone={account.net_usd}
+                testId="setups-account-pnl"
+              />
+              <Stat
+                label="% účtu"
+                value={account.trades > 0 ? formatPct(account.net_pct) : '—'}
+                tone={account.net_pct}
+                testId="setups-account-pct"
+              />
+              <Stat
+                label="Max DD"
+                value={account.trades > 0 ? formatPnlUsd(account.max_drawdown_usd) : '—'}
+              />
+            </div>
+          )}
+        </>
+      )}
       {/* Bilance dnešní SEANCE (#748) — oddělená od celkové historie výše.
           Den je Globex seance (#512), ne kalendářní datum. */}
-      <div className="setups-stats setups-stats-day" role="group" aria-label="Dnešní seance">
-        <div className="stat">
-          <span className="stat-label muted">Dnes obchodů</span>
-          <span className="stat-value" data-testid="day-trades">
-            {day.trades > 0 ? day.trades : '—'}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label muted">Úspěšné / ztrátové</span>
-          <span className="stat-value">
-            {day.closed > 0 ? (
-              <>
-                <span className="r-positive">{day.wins}</span>
-                {' / '}
-                <span className="r-negative">{day.losses}</span>
-              </>
-            ) : (
-              '—'
-            )}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label muted">Úspěšnost dne</span>
+      {day !== null && (
+        <div
+          className={summaryClass('setups-stats setups-stats-day')}
+          role="group"
+          aria-label="Dnešní seance"
+          aria-busy={stale}
+        >
+          {/* Seance, ke které čísla patří (serverový snímek) — zastaralost je vidět */}
+          <Stat
+            label="Seance"
+            value={formatSessionDay(day.session)}
+            testId="day-session"
+            title="Obchodní den = Globex seance od 17:00 CT předchozího dne (#512)"
+          />
+          <Stat
+            label="Dnes obchodů"
+            value={day.trades > 0 ? day.trades : '—'}
+            testId="day-trades"
+          />
+          <Stat
+            label="Úspěšné / ztrátové"
+            value={
+              day.closed > 0 ? (
+                <>
+                  <span className="r-positive">{day.wins}</span>
+                  {' / '}
+                  <span className="r-negative">{day.losses}</span>
+                </>
+              ) : (
+                '—'
+              )
+            }
+          />
           {/* null ≠ 0 %: den bez uzavřeného obchodu není neúspěšný, jen nedokončený */}
-          <span className="stat-value" data-testid="day-winrate">
-            {day.winRate === null ? '—' : `${Math.round(day.winRate)} %`}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label muted">Největší zisk</span>
-          <span className="stat-value r-positive">
-            {day.bestUsd !== null && day.bestUsd > 0 ? formatPnlUsd(day.bestUsd) : '—'}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label muted">Největší ztráta</span>
-          <span className="stat-value r-negative">
-            {day.worstUsd !== null && day.worstUsd < 0 ? formatPnlUsd(day.worstUsd) : '—'}
-          </span>
-        </div>
-        <div className="stat">
-          {/* Denní bilance v penězích — % účtu vedle je z ní odvozené, ale
-          částku samotnou dlaždice dosud neukazovaly (požadavek 27. 8.) */}
-          <span className="stat-label muted">Σ dnes (1 kontrakt)</span>
-          <span
-            className={`stat-value ${day.pnlUsd >= 0 ? 'r-positive' : 'r-negative'}`}
-            data-testid="day-pnl"
-          >
-            {day.closed > 0 ? formatPnlUsd(day.pnlUsd) : '—'}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label muted">% účtu dnes</span>
-          <span
-            className={`stat-value ${day.pnlUsd >= 0 ? 'r-positive' : 'r-negative'}`}
-            data-testid="day-pct"
-          >
-            {day.closed > 0 ? formatPct(day.pnlPct) : '—'}
-          </span>
-        </div>
-        <div className="stat">
-          <span className="stat-label muted">Riskováno (max / celkem)</span>
+          <Stat label="Úspěšnost dne" value={formatRate(day.win_rate)} testId="day-winrate" />
+          <Stat
+            label="Největší zisk"
+            value={day.best_usd !== null && day.best_usd > 0 ? formatPnlUsd(day.best_usd) : '—'}
+            tone={1}
+          />
+          <Stat
+            label="Největší ztráta"
+            value={day.worst_usd !== null && day.worst_usd < 0 ? formatPnlUsd(day.worst_usd) : '—'}
+            tone={-1}
+          />
+          <Stat
+            label="Σ dnes hrubě (1 kontrakt)"
+            value={day.closed > 0 ? formatPnlUsd(day.gross_usd) : '—'}
+            tone={day.gross_usd}
+            testId="day-pnl"
+          />
+          <Stat
+            label="Poplatky dnes"
+            value={day.closed > 0 ? formatFees(day.fees_usd) : '—'}
+            testId="day-fees"
+          />
+          <Stat
+            label="% účtu dnes (hrubě)"
+            value={day.closed > 0 ? formatPct(day.gross_pct) : '—'}
+            tone={day.gross_pct}
+            testId="day-pct"
+          />
+          {day.account !== null && (
+            <Stat
+              label="Účet dnes čistě"
+              value={day.account.trades > 0 ? formatPnlUsd(day.account.net_usd) : '—'}
+              tone={day.account.net_usd}
+              testId="day-account"
+              title={[
+                'Jen obchodovatelné setupy dne (#1185):',
+                '• kontrakty ze sizingu × R × stop × bod − poplatky',
+              ].join('\n')}
+            />
+          )}
           {/* Dvě čtení rizika: největší jednotlivá sázka a celkové nasazení dne.
               Počítá se i z aktivních — „co je v sázce" je otázka o vstupu. */}
-          <span
-            className="stat-value"
-            data-testid="day-risk"
-            title="Max riziko v jednom obchodě / součet rizik všech dnešních obchodů, v % startovního účtu"
-          >
-            {' '}
-            {/* prettier-ignore */}
-            {day.trades > 0
-              ? `${day.maxRiskPct.toFixed(1)} % / ${day.totalRiskPct.toFixed(1)} %`
-              : '—'}
-          </span>
+          <Stat
+            label="Riskováno (max / celkem)"
+            value={
+              day.trades > 0
+                ? `${day.max_risk_pct.toFixed(1)} % / ${day.total_risk_pct.toFixed(1)} %`
+                : '—'
+            }
+            testId="day-risk"
+            title={[
+              'Riziko dnešních obchodů na 1 kontrakt, v % startovního účtu:',
+              '• max = největší riziko v jednom obchodě',
+              '• celkem = součet rizik všech dnešních obchodů (i aktivních)',
+            ].join('\n')}
+          />
         </div>
-      </div>
+      )}
       {gates !== null && (
         <div
-          className="setups-stats setups-stats-gate"
+          className={summaryClass('setups-stats setups-stats-gate')}
           role="group"
           aria-label="Stínová brána podle polohy v pásmu"
-          title={
-            'Poloha entry v tlumící zóně Dyn GEX (#1060). Nic se neblokuje — u každého ' +
-            'setupu se jen zapisuje, co by pravidlo udělalo. Hodnota: počet uzavřených · Ø R.\n' +
-            '• jen poloha: mimo pásmo / bez pásma = blok\n' +
-            '• poloha × režim: uvnitř vždy, přechod jen v negativní gammě, mimo nikdy\n' +
-            'Vyhodnocení ~5. 10. 2026: blok horší o ≥ 0,2 R než prošel → pravidlo se zapne.'
-          }
+          aria-busy={stale}
+          title={[
+            'Poloha entry v tlumící zóně Dyn GEX (#1060). Nic se neblokuje — u každého setupu se jen zapisuje, co by pravidlo udělalo. Hodnota: počet uzavřených · Ø R.',
+            '• jen poloha: mimo pásmo / bez pásma = blok',
+            '• poloha × režim: uvnitř vždy, přechod jen v negativní gammě, mimo nikdy',
+            'Vyhodnocení ~5. 10. 2026: blok horší o ≥ 0,2 R než prošel → pravidlo se zapne.',
+          ].join('\n')}
         >
-          <div className="stat">
-            <span className="stat-label muted">Jen poloha · prošel</span>
-            <span className="stat-value" data-testid="gate-simple-pass">
-              {formatGateBucket(gates.simple.pass)}
-            </span>
-          </div>
-          <div className="stat">
-            <span className="stat-label muted">Jen poloha · blok</span>
-            <span className="stat-value" data-testid="gate-simple-block">
-              {formatGateBucket(gates.simple.block)}
-            </span>
-          </div>
-          <div className="stat">
-            <span className="stat-label muted">Poloha × režim · prošel</span>
-            <span className="stat-value" data-testid="gate-regime-pass">
-              {formatGateBucket(gates.regime.pass)}
-            </span>
-          </div>
-          <div className="stat">
-            <span className="stat-label muted">Poloha × režim · blok</span>
-            <span className="stat-value" data-testid="gate-regime-block">
-              {formatGateBucket(gates.regime.block)}
-            </span>
-          </div>
+          <Stat
+            label="Jen poloha · prošel"
+            value={formatGateBucket(gates.simple.pass)}
+            testId="gate-simple-pass"
+          />
+          <Stat
+            label="Jen poloha · blok"
+            value={formatGateBucket(gates.simple.block)}
+            testId="gate-simple-block"
+          />
+          <Stat
+            label="Poloha × režim · prošel"
+            value={formatGateBucket(gates.regime.pass)}
+            testId="gate-regime-pass"
+          />
+          <Stat
+            label="Poloha × režim · blok"
+            value={formatGateBucket(gates.regime.block)}
+            testId="gate-regime-block"
+          />
         </div>
       )}
       {/* Kouč nad setupy (#1201): doporučení s vzorkem, denní doba, příznaky */}
       <CoachSetupsBlock symbol={symbol} />
-      {day.trades === 0 && (
+      {day !== null && day.trades === 0 && (
         <p className="muted setups-day-empty">
           Dnešní seance zatím bez obchodu — detektor běží, jen nenastaly podmínky šablon.
         </p>
@@ -354,6 +529,12 @@ export function SetupsView() {
         <p className="muted">
           Zatím žádné setupy — detektor běží nad živými daty a čeká na podmínky šablon (odraz od
           zdi, neúspěšný průraz, Max Pain pin, gamma momentum).
+        </p>
+      )}
+      {visible.length > 0 && totalCount !== null && totalCount > setups.length && (
+        <p className="muted setups-page-note" data-testid="setups-page-note">
+          Tabulka ukazuje posledních {setups.length} z {totalCount} setupů {symbol} (všechny verze
+          mechaniky); souhrn nahoře počítá celou historii.
         </p>
       )}
       {visible.length > 0 && (

@@ -1441,12 +1441,38 @@ najevo, že se stav právě změnil (samotná změna slova je snadno přehlédnu
   color: #e05563;
 }
 
-.setups-table .r-positive {
+.setups-table .r-positive,
+.setups-stats .r-positive {
   color: #3fbf6f;
 }
 
-.setups-table .r-negative {
+.setups-table .r-negative,
+.setups-stats .r-negative {
   color: #e05563;
+}
+
+/* Rozdělení obchodovatelné / stínové / bez pravidel (#1319) nad účtem */
+.setups-split {
+  width: auto;
+  margin-bottom: 14px;
+}
+
+/* Účet (#1185, #1319): co by reálně vydělal — zelený pruh odliší od 1 kontraktu */
+.setups-stats-account .stat {
+  border-left: 3px solid rgba(63, 191, 111, 0.7);
+}
+
+.setups-page-note,
+.setups-summary-error {
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+
+/* Souhrn předchozích voleb, nový se načítá (#1319) — ztlumit, ne odpojit:
+   přepínač nad ním drží fokus a stránka neposkočí */
+.summary-stale {
+  opacity: 0.55;
+  transition: opacity 120ms ease-out;
 }
 
 .setup-status {

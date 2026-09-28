@@ -249,6 +249,11 @@ test('detekovaný setup u zapisované minuty nabídne převzetí plánu (#710)',
   })
   render(<JournalView />)
   await waitFor(() => expect(screen.getByText(/Detektor tu nabídl/)).toBeTruthy())
+  // Setupy dne zapisované minuty (#1319), ne posledních 200 bez data
+  const today = new Date(now).toISOString().slice(0, 10)
+  expect(
+    fetchMock.mock.calls.some(([url]) => String(url).includes(`/setups/ES?date=${today}`)),
+  ).toBe(true)
 
   fireEvent.change(screen.getByLabelText('Typ záznamu'), { target: { value: 'obchod' } })
   fireEvent.click(screen.getByRole('button', { name: 'Převzít plán' }))

@@ -7,7 +7,7 @@ hodnocení uživatele (rating + poznámka).
 
 import datetime as dt
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +21,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    func,
     insert,
     inspect,
     select,
@@ -28,9 +29,11 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import Engine
+from sqlalchemy.sql.elements import ColumnElement
 
 from gexlens_engine.compute.confidence import CalibrationRow
 from gexlens_engine.compute.risk import RealizedSetup
+from gexlens_engine.compute.setup_summary import SetupFact, fact_from_record
 from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
 from gexlens_engine.compute.setupstats import ClosedSetup
 
@@ -389,6 +392,56 @@ class SetupsRepository:
             )
         return result
 
+    @staticmethod
+    def _list_filters(
+        symbol: str, date: dt.date | None, status: str | None
+    ) -> list[ColumnElement[bool]]:
+        """Podmínky výpisu — sdílí je stránka (`list_for`) i její počet (`count_for`)."""
+        filters: list[ColumnElement[bool]] = [setups_table.c.symbol == symbol]
+        if status is not None:
+            filters.append(setups_table.c.status == status)
+        if date is not None:
+            start = dt.datetime.combine(date, dt.time.min, tzinfo=dt.UTC)
+            filters.append(setups_table.c.created_ts >= start)
+            filters.append(setups_table.c.created_ts < start + dt.timedelta(days=1))
+        return filters
+
+    def count_for(
+        self, symbol: str, *, date: dt.date | None = None, status: str | None = None
+    ) -> int:
+        """Počet řádků, ze kterých `list_for` bere stránku — „zobrazeno N z M" (#1319)."""
+        stmt = (
+            select(func.count())
+            .select_from(setups_table)
+            .where(*self._list_filters(symbol, date, status))
+        )
+        with self._engine.connect() as conn:
+            return int(conn.execute(stmt).scalar_one())
+
+    def summary_facts(self, symbols: Sequence[str]) -> list[SetupFact]:
+        """Všechny setupy symbolů BEZ stropu — vstup serverového souhrnu (#1319).
+
+        Stránka `list_for` (limit 200) je jen pro tabulku; agregace nad ní byla
+        klouzavé okno posledních 200 setupů. Čtou se jen sloupce, které souhrn
+        potřebuje (bez `reason`, `mfe`/`mae`, hodnocení).
+        """
+        stmt = select(
+            setups_table.c.id,
+            setups_table.c.symbol,
+            setups_table.c.template,
+            setups_table.c.status,
+            setups_table.c.created_ts,
+            setups_table.c.closed_ts,
+            setups_table.c.outcome_r,
+            setups_table.c.entry,
+            setups_table.c.stop,
+            setups_table.c.mechanics_version,
+            setups_table.c.context,
+        ).where(setups_table.c.symbol.in_(list(symbols)))
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [fact_from_record(dict(row._mapping)) for row in rows]
+
     def list_for(
         self,
         symbol: str,
@@ -397,16 +450,14 @@ class SetupsRepository:
         status: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        stmt = select(setups_table).where(setups_table.c.symbol == symbol)
-        if status is not None:
-            stmt = stmt.where(setups_table.c.status == status)
-        if date is not None:
-            start = dt.datetime.combine(date, dt.time.min, tzinfo=dt.UTC)
-            stmt = stmt.where(
-                setups_table.c.created_ts >= start,
-                setups_table.c.created_ts < start + dt.timedelta(days=1),
-            )
-        stmt = stmt.order_by(setups_table.c.created_ts.desc()).limit(limit)
+        # id jako druhý klíč: 31 dvojic setupů téhož symbolu má shodný
+        # created_ts (dvě šablony v jedné minutě) — bez něj je pořadí náhodné
+        stmt = (
+            select(setups_table)
+            .where(*self._list_filters(symbol, date, status))
+            .order_by(setups_table.c.created_ts.desc(), setups_table.c.id.desc())
+            .limit(limit)
+        )
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
         result: list[dict[str, Any]] = []

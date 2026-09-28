@@ -12,6 +12,7 @@ import logging
 import math
 import threading
 from collections.abc import Callable
+from dataclasses import asdict
 from typing import Annotated, Any, Literal
 
 import numpy as np
@@ -31,6 +32,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, text
+from sqlalchemy.exc import SQLAlchemyError
 
 from gexlens_api.alerts import AlertEngine
 from gexlens_api.backup import build_backup_router
@@ -70,8 +72,10 @@ from gexlens_api.status import StatusStore
 from gexlens_engine.compute.expiry_calendar import expiry_calendar
 from gexlens_engine.compute.gammacliff import build_cliff
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
+from gexlens_engine.compute.paper import POINT_VALUES
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
 from gexlens_engine.compute.settle import trading_session_date
+from gexlens_engine.compute.setup_summary import SimulationInput, summarize_setups
 from gexlens_engine.compute.setups import (
     SETUP_MECHANICS_VERSION,
     SetupParams,
@@ -730,16 +734,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         meta_repository.notify_engine("setup_params")
         return stored.as_dict()
 
+    @app.get("/setups/summary")
+    def setups_summary(
+        symbols: str,
+        all_versions: bool = False,
+        sim_account_usd: float | None = None,
+        sim_risk_pct: float | None = None,
+    ) -> dict[str, object]:
+        """Souhrn setupů z CELÉ historie (#1319, `compute/setup_summary.py`).
+
+        `symbols` = čárkou oddělené symboly (jeden = obrazovka Setupy, víc =
+        portfolio Stats → Výkon). Výchozí jen aktuální mechanika; `all_versions`
+        přidá starší. `sim_account_usd` + `sim_risk_pct` (kalkulačka #679)
+        zapnou USD simulaci mikro kontrakty. Registrováno před `/setups/{symbol}`,
+        jinak by „summary" padlo do výpisu jako symbol. DB nedostupná = 503
+        (souhrn se nevydává za prázdný).
+        """
+        wanted = sorted({item.strip() for item in symbols.split(",") if item.strip()})
+        if not wanted:
+            raise HTTPException(422, "symbols: zadej aspoň jeden symbol")
+        simulation = (
+            SimulationInput(account_usd=sim_account_usd, risk_pct=sim_risk_pct)
+            if sim_account_usd is not None and sim_risk_pct is not None
+            else None
+        )
+        try:
+            params = current_setup_params()
+            facts = setups_repository().summary_facts(wanted)
+        except SQLAlchemyError as error:
+            logger.warning("Souhrn setupů: DB nedostupná (%s)", error)
+            raise HTTPException(503, "Databáze setupů je nedostupná") from error
+        summary = summarize_setups(
+            facts,
+            mechanics_version=SETUP_MECHANICS_VERSION,
+            all_versions=all_versions,
+            point_values=POINT_VALUES,
+            fee_per_contract_usd=params.fee_per_contract_usd,
+            account_usd=params.account_equity_usd,
+            session_day=trading_session_date(dt.datetime.now(dt.UTC)),
+            simulation=simulation,
+        )
+        return {"symbols": wanted, **asdict(summary)}
+
     @app.get("/setups/{symbol}")
     def setups_list(
         symbol: str, date: dt.date | None = None, status: str | None = None
     ) -> dict[str, object]:
-        """Historie setupů (ADR-0004): analýzy s automatickým vyhodnocením."""
+        """Historie setupů (ADR-0004): posledních 200 pro tabulku + `total_count`.
+
+        Stránka je jen pro tabulku — souhrn počítá `/setups/summary` z celé
+        historie (#1319). `total_count` = všechny řádky se stejnými filtry.
+        """
         try:
-            rows = setups_repository().list_for(symbol, date=date, status=status)
+            repo = setups_repository()
+            rows = repo.list_for(symbol, date=date, status=status)
+            total: int | None = repo.count_for(symbol, date=date, status=status)
         except Exception:
-            rows = []  # DB nedostupná — UI drží tvar
-        return {"symbol": symbol, "setups": rows}
+            rows, total = [], None  # DB nedostupná — UI drží tvar
+        return {"symbol": symbol, "setups": rows, "total_count": total}
 
     @app.get("/gexforward/{symbol}")
     def gex_forward(symbol: str, date: dt.date | None = None) -> dict[str, object]:

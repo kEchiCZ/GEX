@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.22 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.23 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -927,8 +927,8 @@ Signál se ukáže jako **šipka na cenové křivce** (▲ Long teal / ▼ Short
 | **Vlny sentimentu** | Historie RISK ON/OFF vln — hloubka, délka, četnost per směr. Hloubky jsou od v1.11 **v jednotkách σ škály** (#640): řada má dvě éry s různým měřítkem (backfill osciloval v ±0,4, bohatší živý feed dává násobně větší denní součty) a dělení σ(100 seancí) je činí srovnatelnými — 2 σ znamená „dvakrát větší výchylka než běžný den", ať vlna proběhla loni nebo dnes. Surová hodnota zůstává v textu aktuální vlny |
 | **Volatilita zpráv** (v1.12, #567) | Denní průměr \|naměřené reakce\| na zprávy (bp, okno 5 min, kontaminovaná okna mimo) s **dlouhodobými pásmy min/průměr/max** přes celou historii (~2 roky). **Proč:** směr a velikost jsou dvě různé informace — SentIndex říká KAM nálada táhne, tenhle index JAK MOC trh na zprávy reaguje; bez pásem nepoznáš, jestli je číslo velké. **Jak číst:** u minima trh zprávy ignoruje (klid), kolem průměru běžný provoz, u maxima panika/euforie (každá zpráva hýbe trhem) — obdoba Fear & Greed, jen rychlejší. Sekce vypisuje i **největší naměřené vrcholy jmenovitě** — musí sedět na známé epizody (5. 8. 2024 VIX spike apod.), jinak ukazatel nefunguje a poznáš to hned |
 | **Hit-raty bucketů** | Empirický model reakcí na zprávy: úspěšnost per kategorie × důležitost × překvapení, přepínač **okna reakce** (+5/+15/+30/+60 min) a **režimu** (vše / RiskOn / RiskOff / Neutral / gamma ±), progres ke gate |
-| **Výkon setupů** (v1.10) | **Sharpe ratio a equity křivka** simulace: denní ΣR přes všechny symboly watchlistu (jen aktuální mechanika detektoru), anualizovaný Sharpe celkem + za posledních 30 seancí, max drawdown a **USD simulace** s exekucí micro kontrakty dle kalkulačky (Trading nastavení) včetně nákladů. Do 60 seancí varování o malém vzorku — potvrzení cíle Sharpe > 2 vyžaduje 400+ seancí |
-| **Setupy per režim** | Úspěšnost šablon T1–T7 rozpadlá podle GEX režimu — které setupy fungují v jakém prostředí |
+| **Výkon setupů** (v1.10) | **Sharpe ratio a equity křivka** simulace: denní ΣR přes všechny symboly watchlistu (jen aktuální mechanika detektoru), anualizovaný Sharpe celkem + za posledních 30 seancí, max drawdown, karta **Všechny setupy — 1 kontrakt** (čistě, hrubě, poplatky), **Účet 50k** (jen obchodovatelné) a **USD simulace** s exekucí micro kontrakty dle kalkulačky (Trading nastavení) včetně nákladů. Od v1.23 vše z celé historie, počítá server (#1319) — dřív jen posledních 200 setupů na symbol. Do 60 seancí varování o malém vzorku — potvrzení cíle Sharpe > 2 vyžaduje 400+ seancí |
+| **Setupy per režim** | Úspěšnost šablon T1–T7 rozpadlá podle GEX režimu — které setupy fungují v jakém prostředí (cíl vs. stop, timeouty mimo; celá historie aktuální mechaniky) |
 | **Releasy — předem registrované hypotézy** (v1.22, #1296) | Živý stav hypotéz o reakci trhu na ohlášené releasy: **H1** teplejší jádro inflace → za 15 min níž (ES, NQ), **H3** po CPI je ES za 60 min výš (jen ES, do upozornění nejde), **M1** výchylka za 15 min nad běžným dnem u CPI/NFP/FOMC/PPI/PCE (ES, NQ). Sloupce: stav (ověřuje se šedá / ověřeno zelená / zamítnuto červená), živě k/n, 95% interval, další kontrolní bod a historie výzkumu (jen popisně). Počítají se jen releasy od 1. 10. 2026 a rozhoduje se jen při n = 10, 20 a 30: ověřeno = dolní mez intervalu nad 50 %, zamítnuto = horní mez pod 50 % nebo n = 30 bez ověření; kritéria se už nemění a rozhodnutí je konečné — pozdější oprava dat ho nezmění (tooltip nadpisu). U řádku rozbalíš posledních 10 releasů (✔/✘ a výnos či výchylka v bp). Když se data nenačtou, sekce ukáže chybu |
 | **Track record** | Mechanické equity křivky strategií (signály, setupy) + drawdown |
 | **Latence zdrojů** | Jak rychle který zdroj doručuje zprávy (medián, p90, podíl dávek) |
@@ -1533,13 +1533,59 @@ neběžela, přijde jen T−15.
 
 Když detektor najde setup, přijde alert **Nový setup** a nad grafem se ukáže **karta setupu** pro daný instrument: směr (LONG/SHORT), šablona, **datum a čas vzniku** (kdy se splnily podmínky), úrovně **Entry / Cíl / Stop**, RRR a důvěra (od v1.16 **kalibrovaná z track recordu**: Wilsonova dolní mez úspěšnosti šablony v daném gamma režimu při ≥ 30 uzavřených setupech, jinak konstanta šablony — najetím na číslo zjistíš zdroj), od v1.16 štítek **polohy v tlumící zóně** (uvnitř pásma / přechod / mimo pásmo / bez pásma s posunem důvěry, kap. 18), plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce **Setupy** v sidebaru.
 
+**Souhrn nahoře = celá historie, ne posledních 200 (v1.23, #1319).** Čísla nad
+tabulkou počítá server ze **všech** setupů instrumentu aktuální mechaniky
+detektoru; přepínač **Včetně starší mechaniky (N)** přidá i starší verze.
+Po přepnutí zůstanou dosavadní čísla ztlumeně na místě, dokud server nepošle
+nový souhrn — přepínač nezmizí a stránka neposkočí.
+Tabulka pod nimi je jen **stránka posledních 200 setupů** — je-li historie
+delší, stojí nad ní „Tabulka ukazuje posledních 200 z 604 setupů". Do v1.22
+se „celkem" omylem sčítalo jen z těch 200 řádků, takže číslo s každým novým
+setupem klouzalo (ES v5: obrazovka +690 $, celá historie −2 338 $ na
+1 kontrakt). Když server souhrn nedodá, obrazovka ukáže chybu — z tabulky se
+nic nedopočítává.
+
+| Dlaždice | Co znamená |
+|---|---|
+| **Aktivní / Uzavřené** | běžící setupy / setupy s výsledkem (cíl, stop, timeout) |
+| **Úspěšnost** | podíl uzavřených s kladným výsledkem v R (i kladný timeout) |
+| **Ø R / Σ R** | průměrný / celkový výsledek v násobcích rizika (1 R = vzdálenost entry–stop) |
+| **Hrubý výsledek (1 kontrakt)** | Σ (R × stop v bodech × hodnota bodu; ES 50 $, NQ 20 $) — každý setup rovným dílem jeden kontrakt, obchodovatelný i stínový |
+| **Poplatky** | uzavřené × poplatek za kontrakt a obchod (default 10 $ v jednotkách aplikace = 1 $ reálně na mikro) |
+| **Čistý výsledek** | hrubý výsledek − poplatky |
+| **EV / obchod (hrubě)** | očekávaný výsledek jednoho obchodu na 1 kontrakt před poplatky (viz níže) |
+
+**Proč může být Σ R kladné a dolary záporné:** R je vztažené k riziku
+obchodu, dolary jsou absolutní. Setup se širokým stopem (40 b ES = 2 000 $ na
+kontrakt) prodělá na stopu víc, než kolik vydělá několik výher s těsným
+stopem — proto rozhoduje řádek **Účet**, kde sizing (#1185) velikost pozice
+podle stopu srovná.
+
+**Rozdělení obchodovatelné / stínové / bez risk pravidel.** Tabulka pod
+dlaždicemi rozdělí tentýž souhrn (pořád 1 kontrakt na setup) podle verdiktu
+risk pravidel:
+- **Obchodovatelné** — setupy, které by se reálně zobchodovaly (stop v rozpočtu, brzdy neaktivní, šablona s prokázaným edge);
+- **Stínové** — setup vznikl a měří se, ale neobchoduje se; tooltip řádku nese počty podle důvodu (brána šablony, strop stopů šablony, stop nad rozpočtem, brzdy);
+- **Bez risk pravidel** — setupy z doby před 15. 9. 2026, verdikt u nich neexistuje.
+
+**Účet 50k — co by reálně vydělal účet** (řádek se zeleným pruhem): jen
+**obchodovatelné** uzavřené setupy s kontrakty ze serverového sizingu —
+hrubě (kontrakty × R × stop × bod), poplatky (kontrakty × poplatek), čistě,
+% účtu a max drawdown (chronologicky podle uzavření). Dlaždice 1 kontrakt
+výše měří detektor, tenhle řádek odpovídá na otázku „kolik by vydělal účet".
+Reálně na MES/MNQ jsou dolary ÷ 10.
+
 **Denní statistika seance** (obrazovka Setupy): nad seznamem je souhrn dnešního
 dne — kolik obchodů proběhlo, kolik úspěšných a kolik ztrátových, úspěšnost
-v %, největší ziskový a největší ztrátový obchod, od v1.12 **Σ dnes** —
-denní bilance v dolarech (na 1 kontrakt, stejná konvence jako Σ P/L
-v historickém souhrnu: zisk zeleně, ztráta červeně), **kolik procent účtu se
-vydělalo nebo prodělalo** a **kolik procent bylo maximálně v riziku**. Řez je
-podle **Globex seance**, ne kalendářního dne, takže nedělní večer patří pondělí.
+v %, největší ziskový a největší ztrátový obchod, od v1.12 **Σ dnes hrubě** —
+denní bilance v dolarech (na 1 kontrakt, stejná konvence jako hrubý výsledek
+v souhrnu: zisk zeleně, ztráta červeně), od v1.23 **poplatky dnes** a
+**Účet dnes čistě** (jen obchodovatelné setupy dne), **kolik procent účtu se
+vydělalo nebo prodělalo** (hrubě, 1 kontrakt) a **kolik procent bylo
+maximálně v riziku**. Řez je podle **Globex seance**, ne kalendářního dne,
+takže nedělní večer patří pondělí. První dlaždice **Seance** ukazuje, ke
+kterému obchodnímu dni čísla patří; po 17:00 CT se blok sám přenačte na novou
+seanci (do minuty), i když zrovna nevznikl žádný setup.
 
 **EV / obchod (Expected Value):** v historickém souhrnu na Setupech a jako
 karta ve Stats → Výkon setupů. Vzorec: (Win Rate × Avg Win) − (Loss Rate ×
@@ -1858,18 +1904,18 @@ právě velké stopy chceme dál vidět), ale nese verdikt: sloupec **Účet** v
 obrazovce Setupy ukazuje `1 ks · 400 $` (kontrakty · ztráta na stopu) u
 obchodovatelného, nebo `stín: stop nad rozpočtem rizika` / `denní brzda` /
 `šablona bez prokázaného edge` u stínu. Stínový řádek je ztlumený, **nechodí
-do pushe** a nevstupuje do bilance účtu; přepínač **Jen obchodovatelné** je
-schová. Tooltip štítku nese rozpočet, stop v bodech, verdikt brány (n, dolní
+do pushe** a nevstupuje do bilance účtu; přepínač **Jen obchodovatelné v
+tabulce** ho z tabulky schová (souhrn nahoře ukazuje rozdělení vždy). Tooltip štítku nese rozpočet, stop v bodech, verdikt brány (n, dolní
 mez) a stav brzd (dnes / týden v R).
 
 ![Setupy — sloupec Účet: stín „stop nad rozpočtem rizika“ / „šablona bez prokázaného edge“, nad tabulkou Kouč nad setupy](img/setupy-ucet-risk.jpg)
 
-**Bilance účtu.** Dlaždice **Účet (obchodovatelné)** v Setupech a karta
-**Účet 50k** ve Stats → Výkon setupů: Σ (kontrakty × R × stop × bod −
-poplatky), počet obchodů, počet stínů, poplatky a max drawdown v $. Poplatek
-je default 10 $ za kontrakt a obchod v jednotkách aplikace (= 1 $ reálně).
-Vedle toho zůstává **USD simulace (#679)** z kalkulačky v prohlížeči — ta
-počítá s tvým reálným účtem a mikro kontrakty.
+**Bilance účtu.** Řádek **Účet 50k** v Setupech a karta **Účet 50k** ve
+Stats → Výkon setupů: Σ (kontrakty × R × stop × bod − poplatky), počet
+obchodů, počet stínů, poplatky a max drawdown v $ — od v1.23 z celé historie
+(#1319). Poplatek je default 10 $ za kontrakt a obchod v jednotkách aplikace
+(= 1 $ reálně). Vedle toho zůstává **USD simulace (#679)** podle kalkulačky
+(Settings → Trading) — ta počítá s tvým reálným účtem a mikro kontrakty.
 
 **Co to (ne)slibuje.** Pravidla zaručují, že účet přežije sérii ztrát (1 %:
 max drawdown ~19 % v simulaci nad v5; 2 %: ~39 %) a že ztráta přes 1 000 $

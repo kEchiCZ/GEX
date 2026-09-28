@@ -107,39 +107,88 @@ const EPISODES = [
   },
 ]
 
+const GROUP = {
+  count: 3,
+  active: 0,
+  closed: 3,
+  wins: 2,
+  losses: 1,
+  win_rate: 2 / 3,
+  sum_r: 2.5,
+  avg_r: 2.5 / 3,
+  gross_usd: 1250,
+  fees_usd: 30,
+  net_usd: 1220,
+  ev_r: { ev: 2.5 / 3, win_rate: 2 / 3, loss_rate: 1 / 3, avg_win: 1.75, avg_loss: 1, n: 3 },
+  ev_usd: null,
+}
+
+/** Serverový souhrn setupů (#1319) — Stats ho jen vykresluje. */
+const SUMMARY = {
+  symbols: ['ES'],
+  mechanics_version: 5,
+  all_versions: false,
+  total_count: 603,
+  legacy_count: 290,
+  fee_per_contract_usd: 10,
+  account_usd: 50000,
+  unpriced_symbols: [],
+  all: GROUP,
+  tradeable: { ...GROUP, count: 0, closed: 0 },
+  shadow: { ...GROUP, count: 2 },
+  unruled: GROUP,
+  shadow_reasons: { gate: 2 },
+  account: null,
+  today: null,
+  band_gates: null,
+  regimes: [{ template: 'wall_bounce', regime: 'negative', n: 4, wins: 3, win_rate: 0.75 }],
+  performance: {
+    daily: [
+      { session: '2026-09-24', trades: 2, sum_r: 3, cum_r: 3 },
+      { session: '2026-09-25', trades: 1, sum_r: -0.5, cum_r: 2.5 },
+    ],
+    sharpe_all: { sharpe: 11.2, days: 2 },
+    sharpe_30: { sharpe: 11.2, days: 2 },
+    max_drawdown_r: -0.5,
+    simulation: null,
+  },
+}
+
 beforeEach(() => {
   FakeWebSocket.reset()
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
       const url = String(input)
-      const body = url.includes('/setups/')
-        ? { setups: [] }
-        : url.includes('/stats/episodes')
-          ? { episodes: EPISODES }
-          : url.includes('/stats/waves')
-            ? { waves: WAVES }
-            : url.includes('/news/stats')
-              ? { stats: STATS, gate: { min_samples: 30, wilson_lb: 0.5, min_effect_bp: 1 } }
-              : url.includes('/briefing/verdicts/stats')
-                ? {
-                    evaluated: 3,
-                    min_samples: 30,
-                    by_verdict: { long: { n: 3, hits: 2, unscored: 0, hit_rate: 0.667, wilson_lb: 0.208, gate_open: false } }, // prettier-ignore
-                    by_vote: { trend_higher: { n: 3, hits: 3, hit_rate: 1, wilson_lb: 0.439, gate_open: false } }, // prettier-ignore
-                  }
-                : url.includes('/settings')
+      const body = url.includes('/setups/summary')
+        ? SUMMARY
+        : url.includes('/setups/')
+          ? { setups: [] }
+          : url.includes('/stats/episodes')
+            ? { episodes: EPISODES }
+            : url.includes('/stats/waves')
+              ? { waves: WAVES }
+              : url.includes('/news/stats')
+                ? { stats: STATS, gate: { min_samples: 30, wilson_lb: 0.5, min_effect_bp: 1 } }
+                : url.includes('/briefing/verdicts/stats')
                   ? {
-                      settings: {
-                        retro_pass: {
-                          ran_at: '2026-07-29T05:00:00+00:00',
-                          classified: 12,
-                          reactions: 96,
-                          index_points: 480,
-                        },
-                      },
+                      evaluated: 3,
+                      min_samples: 30,
+                      by_verdict: { long: { n: 3, hits: 2, unscored: 0, hit_rate: 0.667, wilson_lb: 0.208, gate_open: false } }, // prettier-ignore
+                      by_vote: { trend_higher: { n: 3, hits: 3, hit_rate: 1, wilson_lb: 0.439, gate_open: false } }, // prettier-ignore
                     }
-                  : {}
+                  : url.includes('/settings')
+                    ? {
+                        settings: {
+                          retro_pass: {
+                            ran_at: '2026-07-29T05:00:00+00:00',
+                            classified: 12,
+                            reactions: 96,
+                            index_points: 480,
+                          },
+                        },
+                      }
+                    : {}
       return Promise.resolve({ ok: true, json: () => Promise.resolve(body) })
     }),
   )
@@ -197,6 +246,18 @@ test('zobrazí vlny, hit-raty s gate zvýrazněním a stav retro passu (SPEC 9.6
   expect(rows[0].textContent).toContain('probíhá')
 })
 
+test('Výkon a režimy setupů vykreslí serverový souhrn celé historie (#1319)', async () => {
+  makeView()
+  expect((await screen.findByTestId('stats-balance')).textContent).toContain('+2.5 R')
+  expect(screen.getByTestId('stats-balance').textContent).toContain('3 obchodů')
+  expect(screen.getByTestId('stats-one-contract').textContent).toContain('+1220 $')
+  expect(screen.getByTestId('stats-ev').textContent).toContain('n=3')
+  const regimes = screen.getByLabelText('Setupy per režim')
+  expect(regimes.textContent).toContain('Odraz od zdi')
+  expect(regimes.textContent).toContain('75 %')
+  expect(regimes.textContent).toContain('(v5)')
+})
+
 test('přepnutí symbolu refetchne tabulku setupů s novým symbolem (#500)', async () => {
   window.localStorage.clear()
   const socket = new LiveSocket('ws://test/ws/live', {
@@ -212,11 +273,12 @@ test('přepnutí symbolu refetchne tabulku setupů s novým symbolem (#500)', as
   const setupCalls = () =>
     fetchMock.mock.calls.map((call) => String(call[0])).filter((url) => url.includes('/setups/'))
 
-  await waitFor(() => expect(setupCalls().some((url) => url.includes('/setups/ES'))).toBe(true))
-  expect(setupCalls().some((url) => url.includes('/setups/NQ'))).toBe(false)
+  // Souhrn setupů ze serveru (#1319): /setups/summary?symbols=…
+  await waitFor(() => expect(setupCalls().some((url) => url.includes('symbols=ES'))).toBe(true))
+  expect(setupCalls().some((url) => url.includes('symbols=NQ'))).toBe(false)
 
   fireEvent.click(screen.getByText('Přepnout na NQ'))
-  await waitFor(() => expect(setupCalls().some((url) => url.includes('/setups/NQ'))).toBe(true))
+  await waitFor(() => expect(setupCalls().some((url) => url.includes('symbols=NQ'))).toBe(true))
 })
 
 test('sekce Verdikt dne (#1091): tabulky per verdikt a složku, brána sběr', async () => {
