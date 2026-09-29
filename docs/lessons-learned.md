@@ -178,6 +178,37 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-29 — 81 setupů v5 vzniklo po settle vlastní expirace a příští minutou skončilo timeoutem (#1324): pipeline roluje expiraci až s novým UTC dnem.**
+  `expiry_expired` porovnává expiraci s `now.date()` v UTC, takže 0DTE řetěz běží po settle (v létě 20:00 UTC)
+  ještě 4 h až do půlnoci UTC — přes poslední hodinu Globexu, denní pauzu i večerní otevření. `SetupEngine`
+  se na živost expirace neptal (hlídala ji jen šablona T3 přes `minutes_to_expiry`), takže detektory nad
+  vypršelým řetězem vyráběly setupy 0–238 min po settle a timeout podle expirace setupu (#259) je příští
+  minutou zavřel. Škoda: 1 obchodovatelný setup s pushem (1397 NQ), nafouknuté `n` brány šablon a poplatky
+  v souhrnu #1319 (~810 $ v jednotkách aplikace). Odhalil to rozbor stínových setupů: maximum 238 min po
+  settle sedělo na roll o půlnoci UTC v logu enginu („vypršela — roll na novou“). Tentýž vzor mají sondy T9
+  (docstring `probes.probe_settle` mluví o „dead-chain okně“).
+  → Invariant vzniku záznamu vázaného na expiraci hlídat na **místě vzniku** jedním čistým predikátem
+  (`compute/setups.born_after_settle`) a **v jeho offline zrcadle** (kandidát v `replay` backtestu
+  a walk-forwardu, jinak se live a replay rozejdou; přeskočit kandidáta, ne ořezat minuty — ořez by
+  změnil i vyhodnocení setupů otevřených před settle). Týmž predikátem vyřadit historii ze čtení, která
+  z ní počítají (brzdy, brána, kalibrace confidence, sebekontrola, kouč, souhrn; gamma útes #1331), řádky
+  v tabulce označit a počet vyřazených ukázat; historické řádky nemazat. Hranici brát z ADR
+  (`expiry_settle_ts`, ADR-0039), ne z nejbližší funkce. Invariant je jen pojistka: dokud pipeline
+  roluje podle UTC kalendářního dne (další výskyt „kalendářní den místo obchodního“), nevznikají mezi
+  settle a půlnocí UTC žádné setupy. Příčinu řeší #1331 (roll v settle mění všechny moduly pipeline,
+  proto samostatné rozhodnutí).
+
+- **2026-09-29 — týdenní brzda sčítala 84 dní místo týdne (#1322): jeden dotaz pro dvě okna, filtr jen u jednoho.**
+  `_load_realized` čte uzavřené setupy od `min(week_start, now − 84 dní)`, aby měla data i brána šablon.
+  `brake_state` pak podle `session_bounds` vymezil jen den a do `week_r` přičetl všechno. Kontext od 28. 9.
+  ukazoval týden −2,0 R ze ztrát z pátku a další tři stopy by brzdu −6 R držely až do prosince. Testy
+  prošly, protože jejich vstup obsahoval jen řádky téhož týdne. K tomu dva chybné texty: docstring „třetí
+  stop“ (kód zastaví šablonu po druhém) a „do settle“ v alertu i nápovědě (brzdy končí otevřením Globexu
+  v 17:00 CT). Odhalil to přepočet `realized_week_r` z PG: 84denní součet seděl u 265 z 266 řádků.
+  → Když jeden dotaz slouží několika oknům, **každé okno si vymezí jeho konzument** a test mu podstrčí
+  řádky mimo okno (minulý týden, řádek přesně na hranici). Text o okně (docstring, alert, nápověda)
+  odvozovat z kódu hranice, ne z paměti.
+
 - **2026-09-28 — „celkem" na obrazovce Setupy zaseknuté na 200 obchodech; ES ukazovalo +690 $ místo −2 338 $ (#1319).**
   Frontend sčítal souhrn (Σ P/L, EV, účet, denní bilanci, Stats → Výkon i režimovou tabulku, Deník hledal
   setup u minuty) nad odpovědí `GET /setups/{symbol}`, která má `LIMIT 200 ORDER BY created_ts DESC` — stránku

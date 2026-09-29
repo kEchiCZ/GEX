@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.23 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.24 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -1545,6 +1545,33 @@ setupem klouzalo (ES v5: obrazovka +690 $, celá historie −2 338 $ na
 1 kontrakt). Když server souhrn nedodá, obrazovka ukáže chybu — z tabulky se
 nic nedopočítává.
 
+**Po settle expirace nové setupy nevznikají (v1.24, #1324).** Setup se
+vztahuje k expiraci opčního řetězu a po jejím settle (16:00 ET, tj. 22:00
+našeho času) už žít nemůže. Engine přepíná na další expiraci až o půlnoci UTC
+a do té doby běží nad vypršelým řetězem. Setup, který by v tomto okně vznikl,
+by příští minutou uzavřel timeout. Proto mezi settle a přechodem na další
+expiraci **žádný nový setup nevzniká**:
+
+| | Okno bez nových setupů |
+|---|---|
+| léto | 22:00–02:00 SELČ (15:00–19:00 CT) |
+| zima | 22:00–01:00 SEČ (15:00–18:00 CT) |
+
+Bez denní pauzy CME (16–17 CT) jsou to na otevřeném Globexu 3 h v létě, 2 h
+v zimě a 1 h v pátek. Okno zmizí, až engine přepne na další expiraci už
+v settle; to řeší #1331.
+
+**Setupy vzniklé po settle se do souhrnu nepočítají.** Z doby před v1.24
+jich v databázi zůstává přes 80 (mechanika v5, jeden z nich obchodovatelný
+s upozorněním). Každý takový řádek je v tabulce ztlumený a nese štítek **po
+settle, mimo souhrn**; tooltip štítku vysvětlí proč. Přepínač **Jen
+obchodovatelné v tabulce** je skryje, takže tabulka sedí se souhrnem. Ze
+souhrnu, účtu, brzd, brány šablon, kalibrace confidence i kouče jsou
+vyřazené. Pod rozdělením se vypíše **Vyřazeno ze souhrnu (vznik po settle
+vlastní expirace): N**, takže nic nezmizí potichu. Počet u přepínače
+**Včetně starší mechaniky (N)** zahrnuje všechny řádky starších verzí,
+i vyřazené.
+
 | Dlaždice | Co znamená |
 |---|---|
 | **Aktivní / Uzavřené** | běžící setupy / setupy s výsledkem (cíl, stop, timeout) |
@@ -1894,9 +1921,9 @@ zároveň nejhorší obchody (v5: −0,34 R vs. +0,06 R se stopem v rozpočtu).
 |---|---|---|
 | **Riziko na setup** | **1 %** = 500 $ (50 $ reálně) | kontrakty = ⌊rozpočet / (stop b × hodnota bodu)⌋ → 1 kontrakt při stopu ≤ **10 b ES / ≤ 25 b NQ**; těsnější stop = víc kontraktů (ES 4 b → 2 ks) |
 | **Tvrdý strop** | 2 % = 1 000 $ | ztráta jednoho setupu nikdy nad 2 % účtu, i kdyby se riziko zvedlo |
-| **Denní brzda** | −3 R | po realizované ztrátě −3 R za seanci (obchodovatelné setupy, ES i NQ) nové setupy jen **stínově** do settle; alert do zvonku a pushe |
-| **Týdenní brzda** | −6 R | totéž za obchodní týden (od pondělní seance) |
-| **Strop stopů šablony** | 2 / den | třetí pokus téže šablony po dvou stopech za seanci je stín |
+| **Denní brzda** | −3 R | po realizované ztrátě −3 R za seanci (obchodovatelné setupy, ES i NQ) nové setupy jen **stínově** do konce seance (17:00 CT), každý den včetně pátku — ne do settle; alert do zvonku a pushe |
+| **Týdenní brzda** | −6 R | totéž za obchodní týden: počítá se od otevření pondělní seance (neděle 17:00 CT) a stín platí do konce obchodního týdne (neděle 17:00 CT) |
+| **Strop stopů šablony** | 2 / den | třetí pokus téže šablony po dvou stopech za seanci je stín, až do konce seance (17:00 CT) |
 | **Brána šablon** | zapnuta, n ≥ 30, okno 60 seancí | obchodovatelná je jen šablona, jejíž **dolní mez očekávání** (jednostranný 95% interval Ø R ze setupů se stopem v rozpočtu) je kladná; ostatní se dál měří, ale neobchodují |
 
 **Stín vs. obchodovatelný.** Setup **vzniká vždy** (měření nesmí přestat —
@@ -1906,7 +1933,9 @@ obchodovatelného, nebo `stín: stop nad rozpočtem rizika` / `denní brzda` /
 `šablona bez prokázaného edge` u stínu. Stínový řádek je ztlumený, **nechodí
 do pushe** a nevstupuje do bilance účtu; přepínač **Jen obchodovatelné v
 tabulce** ho z tabulky schová (souhrn nahoře ukazuje rozdělení vždy). Tooltip štítku nese rozpočet, stop v bodech, verdikt brány (n, dolní
-mez) a stav brzd (dnes / týden v R).
+mez) a stav brzd (dnes / týden v R). U setupů vzniklých před v1.24 je „týden“
+součet za 84 dní, ne za obchodní týden: týdenní brzda omylem sčítala celé okno
+brány šablon (#1322). Stav v době vzniku se zpětně nepřepisuje.
 
 ![Setupy — sloupec Účet: stín „stop nad rozpočtem rizika“ / „šablona bez prokázaného edge“, nad tabulkou Kouč nad setupy](img/setupy-ucet-risk.jpg)
 

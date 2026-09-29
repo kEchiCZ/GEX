@@ -34,8 +34,21 @@ from sqlalchemy.sql.elements import ColumnElement
 from gexlens_engine.compute.confidence import CalibrationRow
 from gexlens_engine.compute.risk import RealizedSetup
 from gexlens_engine.compute.setup_summary import SetupFact, fact_from_record
-from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
+from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION, born_after_settle
 from gexlens_engine.compute.setupstats import ClosedSetup
+
+
+def _born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
+    """`born_after_settle` nad řádkem DB (#1324) — sqlite vrací naivní čas.
+
+    Setup vzniklý po settle vlastní expirace nemohl existovat: čtení pro brzdy,
+    bránu šablon, kalibraci, sebekontrolu i kouče ho vynechá, výpis tabulky ho
+    jen označí. V DB řádek zůstává.
+    """
+    if created_ts.tzinfo is None:
+        created_ts = created_ts.replace(tzinfo=dt.UTC)
+    return born_after_settle(expiry, created_ts)
+
 
 setups_metadata = MetaData()
 
@@ -257,7 +270,8 @@ class SetupsRepository:
         symbol: str | None = None,
     ) -> list[dict[str, Any]]:
         """Uzavřené setupy napříč symboly s `created_ts` v [since, until) — vstup
-        kouče (#1201): řádek jako dict s ISO časy a kontextem."""
+        kouče (#1201): řádek jako dict s ISO časy a kontextem. Setupy vzniklé
+        po settle vlastní expirace (#1324) se vynechají."""
         stmt = select(setups_table).where(
             setups_table.c.status != "active",
             setups_table.c.created_ts >= since,
@@ -272,6 +286,8 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[dict[str, Any]] = []
         for row in rows:
+            if _born_after_settle(row.expiry, row.created_ts):
+                continue
             record = dict(row._mapping)
             for key in ("created_ts", "closed_ts"):
                 value = record.get(key)
@@ -292,8 +308,11 @@ class SetupsRepository:
 
         `mechanics_version` omezí bilanci na jeden systém (#311) — bez něj by se
         míchaly výsledky staré a nové mechaniky a verdikt by mluvil o minulosti.
+        Setupy vzniklé po settle vlastní expirace (#1324) se vynechají.
         """
         stmt = select(
+            setups_table.c.expiry,
+            setups_table.c.created_ts,
             setups_table.c.template,
             setups_table.c.direction,
             setups_table.c.status,
@@ -316,15 +335,22 @@ class SetupsRepository:
                 outcome_r=float(row.outcome_r or 0.0),
             )
             for row in rows
+            if not _born_after_settle(row.expiry, row.created_ts)
         ]
 
     def realized_since(self, since: dt.datetime, *, mechanics_version: int) -> list[RealizedSetup]:
         """Uzavřené setupy napříč symboly s `closed_ts >= since` — brzdy a brána
-        šablon (#1185). `tradeable` z kontextu; řádky před pravidly nesou None."""
+        šablon (#1185). `tradeable` z kontextu; řádky před pravidly nesou None.
+
+        Setupy vzniklé po settle vlastní expirace (`born_after_settle`, #1324)
+        se vynechají: nemohly existovat, takže nesmí nafukovat `n` brány ani
+        pohnout brzdami. V DB zůstávají."""
         stmt = select(
             setups_table.c.symbol,
+            setups_table.c.expiry,
             setups_table.c.template,
             setups_table.c.status,
+            setups_table.c.created_ts,
             setups_table.c.outcome_r,
             setups_table.c.closed_ts,
             setups_table.c.entry,
@@ -340,6 +366,8 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[RealizedSetup] = []
         for row in rows:
+            if _born_after_settle(row.expiry, row.created_ts):
+                continue
             context = row.context if isinstance(row.context, dict) else {}
             tradeable = context.get("tradeable")
             affordable = context.get("affordable")
@@ -366,11 +394,15 @@ class SetupsRepository:
 
         Výhra = `closed_target` (stejně jako `setupstats`); gamma režim z
         `context.gex_regime` (None u řádků bez něj). Timeout není výhra.
+        Setup vzniklý po settle vlastní expirace (#1324) se vynechá — jinak by
+        jeho okamžitý timeout snižoval confidence košů a s ní práh pushe.
         """
         stmt = select(
             setups_table.c.symbol,
+            setups_table.c.expiry,
             setups_table.c.template,
             setups_table.c.status,
+            setups_table.c.created_ts,
             setups_table.c.context,
         ).where(
             setups_table.c.status != "active",
@@ -380,6 +412,8 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[CalibrationRow] = []
         for row in rows:
+            if _born_after_settle(row.expiry, row.created_ts):
+                continue
             context = row.context if isinstance(row.context, dict) else {}
             regime = context.get("gex_regime")
             result.append(
@@ -428,6 +462,7 @@ class SetupsRepository:
         stmt = select(
             setups_table.c.id,
             setups_table.c.symbol,
+            setups_table.c.expiry,
             setups_table.c.template,
             setups_table.c.status,
             setups_table.c.created_ts,
@@ -463,6 +498,9 @@ class SetupsRepository:
         result: list[dict[str, Any]] = []
         for row in rows:
             record = dict(row._mapping)
+            # Tabulka řádek ukáže, ale označí — ze souhrnu, brzd i brány je
+            # vyřazený (#1324); filtr „Jen obchodovatelné“ ho skryje
+            record["after_settle"] = _born_after_settle(row.expiry, row.created_ts)
             for key in ("created_ts", "closed_ts"):
                 value = record.get(key)
                 if isinstance(value, dt.datetime):

@@ -18,7 +18,10 @@ Konvence (převzaté z dosavadního UI, sémantika výsledků se nemění):
   R × `max_loss_usd` − `fee_usd`, drawdown chronologicky podle uzavření;
 - **den** = obchodní seance (`settle.trading_session_date`): uzavřený patří do
   seance uzavření, aktivní do seance vzniku;
-- **mechanika**: výchozí jen aktuální verze (#311), `all_versions` přidá starší.
+- **mechanika**: výchozí jen aktuální verze (#311), `all_versions` přidá starší;
+- **vznik po settle** vlastní expirace (`setups.born_after_settle`, #1324): setup
+  nemohl existovat, takže nevstupuje do žádného čísla souhrnu; jen se spočítá
+  do `after_settle_count`, ať nic nezmizí potichu. V DB řádky zůstávají.
 """
 
 import datetime as dt
@@ -29,6 +32,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from gexlens_engine.compute.settle import trading_session_date
+from gexlens_engine.compute.setups import born_after_settle
 from gexlens_engine.ticker import symbol_root
 
 RiskGroup = Literal["tradeable", "shadow", "unruled"]
@@ -52,6 +56,8 @@ class SetupFact:
 
     id: int
     symbol: str
+    #: Expirace řetězu (`YYYYMMDD`, sloupec NOT NULL) — hranice vzniku (#1324)
+    expiry: str
     template: str
     status: str
     created_ts: dt.datetime
@@ -77,6 +83,11 @@ class SetupFact:
     @property
     def stop_points(self) -> float:
         return abs(self.entry - self.stop)
+
+    @property
+    def after_settle(self) -> bool:
+        """Vznikl po settle vlastní expirace (#1324) — nemohl existovat."""
+        return born_after_settle(self.expiry, self.created_ts)
 
     @property
     def risk_group(self) -> RiskGroup:
@@ -119,6 +130,7 @@ def fact_from_record(record: Mapping[str, Any]) -> SetupFact:
     return SetupFact(
         id=int(record["id"]),
         symbol=str(record["symbol"]),
+        expiry=str(record["expiry"]),
         template=str(record["template"]),
         status=str(record["status"]),
         created_ts=_utc(record["created_ts"]),
@@ -305,6 +317,9 @@ class SetupSummary:
     total_count: int
     #: Řádky jiné verze mechaniky než aktuální (přepínač „Včetně starší mechaniky")
     legacy_count: int
+    #: Řádky zvolených verzí vzniklé po settle vlastní expirace (#1324) — vyřazené
+    #: ze všech čísel souhrnu (nemohly existovat), v DB zůstávají
+    after_settle_count: int
     fee_per_contract_usd: float
     account_usd: float
     #: Symboly bez známé hodnoty bodu — jejich USD se nepočítají (nic se nevymýšlí)
@@ -582,9 +597,14 @@ def summarize_setups(
     """Souhrn setupů `facts` (celá historie vybraných symbolů) pro UI.
 
     `mechanics_version` = aktuální verze detektoru; bez `all_versions` se
-    počítá jen ona, starší řádky se jen spočítají do `legacy_count`.
+    počítá jen ona, starší řádky se jen spočítají do `legacy_count`. Setupy
+    vzniklé po settle vlastní expirace (#1324) se ze zvolených verzí vyřadí
+    a jen spočítají do `after_settle_count`.
     """
-    scope = [fact for fact in facts if all_versions or fact.mechanics_version == mechanics_version]
+    versions = [
+        fact for fact in facts if all_versions or fact.mechanics_version == mechanics_version
+    ]
+    scope = [fact for fact in versions if not fact.after_settle]
     by_group: dict[RiskGroup, list[SetupFact]] = {"tradeable": [], "shadow": [], "unruled": []}
     for fact in scope:
         by_group[fact.risk_group].append(fact)
@@ -597,6 +617,7 @@ def summarize_setups(
         all_versions=all_versions,
         total_count=len(facts),
         legacy_count=sum(1 for fact in facts if fact.mechanics_version != mechanics_version),
+        after_settle_count=len(versions) - len(scope),
         fee_per_contract_usd=fee_per_contract_usd,
         account_usd=account_usd,
         unpriced_symbols=sorted(
