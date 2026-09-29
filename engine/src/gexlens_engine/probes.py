@@ -40,7 +40,10 @@ logger = logging.getLogger(__name__)
 
 
 def probe_settle(expiry: str, fallback_day: dt.date) -> dt.datetime:
-    """Settle expirace runtime (YYYYMMDD) — timeout sond, konvence `SetupEngine`.
+    """Settle expirace runtime (YYYYMMDD) — timeout sond.
+
+    Dřív konvence `SetupEngine`; ten od #1324 bere `setup_settle_ts`
+    (`expiry_settle_ts`, SOQ u kvartálních) — sjednocení řeší #1331.
 
     Do zavedení čisté funkce se sondy uzavíraly settlem KALENDÁŘNÍHO dne:
     výskyt po 20:00 UTC (dead-chain okno před rollem, nebo večerní Globex

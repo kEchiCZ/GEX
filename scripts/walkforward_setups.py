@@ -95,7 +95,7 @@ def daily_series(
             continue
         day = session_date(expiry)
         for name, params in candidates.items():
-            rows = bt.replay(minutes, params)
+            rows = bt.replay(minutes, params, expiry)
             series[name][day] = float(sum(r["r"] for r in rows if r["r"] is not None))
     return series
 

@@ -43,6 +43,7 @@ from gexlens_engine.compute.setups import (
     ProbeOccurrence,
     ProbeParams,
     SetupParams,
+    born_after_settle,
     detect_all,
     detect_damping_ceiling,
     evaluate_bar,
@@ -51,6 +52,7 @@ from gexlens_engine.compute.setups import (
     max_pain_strike,
     probe_excursion,
     r_result,
+    setup_settle_ts,
 )
 from gexlens_engine.storage.oi_archive import OIEodRepository
 
@@ -158,7 +160,15 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
             edges_by_ts[prof.ts_min] = (edges.up, edges.dn)
     day = pd.Timestamp(frame.ts_min.iloc[-1]).date()
     pain = max_pain_for(repo, symbol, expiry, day)
-    settle = dt.datetime.strptime(expiry, "%Y%m%d").replace(hour=20, tzinfo=dt.UTC)
+    # Settle vlastní expirace = konec života setupu, táž hranice jako živý
+    # SetupEngine (`setup_settle_ts`, ADR-0039 bod 2, DST #511; dřív pevně
+    # 20:00 UTC). Minuty po něm se přehrávají dál (otevřené setupy se
+    # vyhodnocují jako dřív; timeout v settle, který je živě uzavře jako
+    # `closed_timeout`, replay nemá), jen v nich nevznikne nový setup — viz
+    # `replay`.
+    settle = setup_settle_ts(expiry)
+    if settle is None:
+        raise ValueError(f"Nečitelná expirace {expiry!r}")
 
     minutes: list[MinuteInputs] = []
     for row in frame.itertuples():
@@ -216,8 +226,13 @@ class OpenSetup:
     counter: bool
 
 
-def replay(minutes: list[MinuteInputs], params: SetupParams) -> list[dict]:
-    """Přehraje den; vrací uzavřené i otevřené setupy s výsledkem v R."""
+def replay(minutes: list[MinuteInputs], params: SetupParams, expiry: str) -> list[dict]:
+    """Přehraje den expirace `expiry`; vrací uzavřené i otevřené setupy s výsledkem v R.
+
+    Invariant vzniku (#1324) jako živý `SetupEngine._detect_new`: v minutě po
+    settle vlastní expirace (`born_after_settle`) žádný kandidát nevznikne —
+    pipeline tam do rollu o půlnoci UTC běží nad vypršelým řetězem (#1331).
+    """
     history: list[MinuteInputs] = []
     open_setups: list[OpenSetup] = []
     done: list[dict] = []
@@ -263,7 +278,9 @@ def replay(minutes: list[MinuteInputs], params: SetupParams) -> list[dict]:
                 dir_blocked.pop(side, None)
         open_setups = still
 
-        # 2) Nové kandidáty přes produkční detect_all
+        # 2) Nové kandidáty přes produkční detect_all — ne po settle expirace (#1324)
+        if born_after_settle(expiry, now.ts):
+            continue
         open_templates = {item.template for item in open_setups}
         for candidate in detect_all(history, params):
             template = candidate.template.value
@@ -550,7 +567,7 @@ def main() -> None:
             if len(minutes) < 60:
                 continue
             for name, params in configs.items():
-                rows = replay(minutes, params)
+                rows = replay(minutes, params, expiry)
                 per_config[name].extend(rows)
                 for row in rows:
                     per_template[name][row["template"]].append(row)

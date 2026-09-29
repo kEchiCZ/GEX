@@ -126,6 +126,15 @@ const SHADOW_REASON_LABELS: Record<string, string> = {
   unknown: 'neznámý důvod',
 }
 
+/** Proč je setup vzniklý po settle vlastní expirace vyřazený (#1324) — poznámka i řádek. */
+const AFTER_SETTLE_TOOLTIP = [
+  'Setup vzniklý po settle své expirace nemohl existovat (#1324):',
+  '• řetěz už vypršel, timeout ho uzavřel hned příští minutou',
+  '• nevstupuje do souhrnu, účtu, brzd ani brány šablon',
+  '• v tabulce a v databázi zůstává',
+  '• nové takové setupy už nevznikají (přechod expirace v settle řeší #1331)',
+].join('\n')
+
 /** Řádek rozdělení obchodovatelné / stínové / bez pravidel (1 kontrakt na setup). */
 function SplitRow({
   label,
@@ -166,7 +175,8 @@ export function SetupsView() {
     (value) => (typeof value === 'boolean' ? value : false),
   )
   // Jen obchodovatelné (#1185): skryje stínové setupy (stop nad rozpočtem,
-  // brzda, brána) v TABULCE; řádky bez risk kontextu (před pravidly) zůstávají
+  // brzda, brána) v TABULCE; řádky bez risk kontextu (před pravidly) zůstávají.
+  // Skryje i setupy vzniklé po settle (#1324) — souhrn je mezi obchody nepočítá
   const [tradeableOnly, setTradeableOnly] = usePersistentState<boolean>(
     'setupsTradeableOnly',
     false,
@@ -194,7 +204,7 @@ export function SetupsView() {
       ? setups
       : setups.filter((row) => (row.mechanics_version ?? 1) === mechanicsVersion)
   const visible = tradeableOnly
-    ? byVersion.filter((row) => riskInfo(row)?.tradeable !== false)
+    ? byVersion.filter((row) => !row.after_settle && riskInfo(row)?.tradeable !== false)
     : byVersion
   const pointUsd = pointValue(symbol)
   const all = summary?.all ?? null
@@ -342,6 +352,16 @@ export function SetupsView() {
               </tbody>
             </table>
           </div>
+          {/* Vyřazené setupy (#1324) se počítají nahlas — nic nezmizí potichu */}
+          {summary.after_settle_count > 0 && (
+            <p
+              className="muted setups-page-note"
+              data-testid="setups-after-settle"
+              title={AFTER_SETTLE_TOOLTIP}
+            >
+              Vyřazeno ze souhrnu (vznik po settle vlastní expirace): {summary.after_settle_count}
+            </p>
+          )}
           {account !== null && (
             <div
               className={summaryClass('setups-stats setups-stats-account')}
@@ -569,7 +589,13 @@ export function SetupsView() {
                   <tr
                     key={row.id}
                     title={row.reason}
-                    className={risk !== null && !risk.tradeable ? 'setup-shadow' : undefined}
+                    className={
+                      row.after_settle
+                        ? 'setup-after-settle'
+                        : risk !== null && !risk.tradeable
+                          ? 'setup-shadow'
+                          : undefined
+                    }
                   >
                     <td>{formatTs(row.created_ts)}</td>
                     <td>{templateLabel(row.template)}</td>
@@ -617,6 +643,17 @@ export function SetupsView() {
                       <span className={`setup-status ${row.status}`}>
                         {STATUS_LABELS[row.status] ?? row.status}
                       </span>
+                      {/* Vyřazený ze souhrnu (#1324) — řádek zůstává, ale je poznat který */}
+                      {row.after_settle && (
+                        <span
+                          className="setup-after-settle-tag muted"
+                          data-testid={`after-settle-${row.id}`}
+                          title={AFTER_SETTLE_TOOLTIP}
+                        >
+                          {' '}
+                          · po settle, mimo souhrn
+                        </span>
+                      )}
                     </td>
                     <td data-part="closed-ts">{formatTs(row.closed_ts)}</td>
                     <td className={(row.outcome_r ?? 0) >= 0 ? 'r-positive' : 'r-negative'}>

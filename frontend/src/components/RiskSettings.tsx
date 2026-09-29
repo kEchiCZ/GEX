@@ -53,7 +53,7 @@ const RISK_FIELDS: readonly RiskField[] = [
     step: 0.5,
     min: 0,
     max: 100,
-    help: 'Po této realizované ztrátě za seanci (obchodovatelné setupy, všechny symboly) nové setupy jen stínově do settle. 0 = vypnuto.',
+    help: 'Po této realizované ztrátě za seanci (obchodovatelné setupy, všechny symboly) nové setupy jen stínově do konce seance (17:00 CT). 0 = vypnuto.',
   },
   {
     key: 'weekly_brake_r',
@@ -61,7 +61,7 @@ const RISK_FIELDS: readonly RiskField[] = [
     step: 0.5,
     min: 0,
     max: 100,
-    help: 'Totéž za obchodní týden (od pondělní seance). 0 = vypnuto.',
+    help: 'Totéž za obchodní týden (od pondělní seance) — stínově do konce obchodního týdne (neděle 17:00 CT). 0 = vypnuto.',
   },
   {
     key: 'max_template_stops_per_day',
@@ -69,7 +69,7 @@ const RISK_FIELDS: readonly RiskField[] = [
     step: 1,
     min: 0,
     max: 100,
-    help: 'Po N stopech téže šablony za seanci je šablona do settle stínová. 0 = vypnuto.',
+    help: 'Po N stopech téže šablony za seanci je šablona do konce seance (17:00 CT) stínová. 0 = vypnuto.',
   },
   {
     key: 'template_gate_min_samples',

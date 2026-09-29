@@ -146,7 +146,11 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
         ("risk_brake",),
         "Brzda ztráty",
         "Byla dosažena denní nebo týdenní brzda ztráty.",
-        ("Nové setupy jsou do settle jen stínové", "Jednou za seanci pro každou brzdu"),
+        (
+            "Nové setupy jsou jen stínové: denní brzda do konce seance (17:00 CT), "
+            "týdenní do konce obchodního týdne (neděle 17:00 CT)",
+            "Jednou za seanci pro každou brzdu",
+        ),
     ),
     PushTopic(
         "paper",

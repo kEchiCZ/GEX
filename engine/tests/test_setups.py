@@ -1,6 +1,7 @@
 """Testy setup detektoru (ADR-0004): šablony T1–T4, vyhodnocení, orchestrace."""
 
 import datetime as dt
+import logging
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -20,6 +21,7 @@ from gexlens_engine.compute.setups import (
     SetupTemplate,
     _ema,
     average_true_range,
+    born_after_settle,
     detect_all,
     detect_divergence_spring,
     detect_failed_break,
@@ -639,11 +641,13 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     oi_repo.ensure_schema()
     publisher = RecordingPublisher()
     # Track record pro kalibraci confidence (#794 fáze 2B): 35 uzavřených
-    # failed_break v negativní gammě, 20 cílů → Wilson LB 0,4086 → základ 41
+    # failed_break v negativní gammě, 20 cílů → Wilson LB 0,4086 → základ 41.
+    # Expirace dne vzniku: setup po settle vlastní expirace (#1324) by kalibrace
+    # vyřadila (dřív tu byl 20260715 u setupů z 16. 7. — nemožný řádek)
     for i in range(35):
         seeded = repository.create(
             symbol="ES",
-            expiry="20260715",
+            expiry="20260716",
             template="failed_break",
             direction="long",
             created_ts=TS - dt.timedelta(days=1, minutes=i),
@@ -973,6 +977,158 @@ async def test_setup_engine_stale_setup_times_out_by_own_expiry(tmp_path: Path) 
     rows = repository.list_for("ES")
     assert rows[0]["status"] == "closed_timeout"  # ne closed_target z dnešního high
     assert rows[0]["outcome_r"] == pytest.approx((7460 - 7452) / 24, rel=1e-3)
+
+
+def test_born_after_settle_hranice_je_settle_expirace() -> None:
+    """#1324: vznik přesně v settle už je po něm; DST posouvá UTC hodinu (#511)."""
+    summer = dt.datetime(2026, 9, 28, 20, 0, tzinfo=dt.UTC)  # 28. 9. 16:00 EDT
+    assert not born_after_settle("20260928", summer - dt.timedelta(seconds=1))
+    assert born_after_settle("20260928", summer)
+    # 1397 NQ: 28. 9. 22:02 UTC, expirace 20260928 — po otevření Globexu
+    assert born_after_settle("20260928", dt.datetime(2026, 9, 28, 22, 2, tzinfo=dt.UTC))
+    winter = dt.datetime(2026, 1, 15, 21, 0, tzinfo=dt.UTC)  # 15. 1. 16:00 EST
+    assert not born_after_settle("20260115", winter - dt.timedelta(minutes=30))
+    assert born_after_settle("20260115", winter)
+    # Další expirace po rollu je živá; nečitelná expirace se nevyřazuje
+    assert not born_after_settle("20260929", summer)
+    assert not born_after_settle("nesmysl", summer)
+
+
+def test_settle_setupu_kvartalni_expirace_v_soq() -> None:
+    """ADR-0039 bod 2: kvartální expirace se vypořádá v SOQ 9:30 ET — timeout
+    setupu i invariant vzniku (#1324) mají tutéž hranici jako roll pipeline."""
+    soq = dt.datetime(2026, 9, 18, 13, 30, tzinfo=dt.UTC)  # 3. pátek září, 9:30 EDT
+    assert SetupEngine._settle_ts("20260918") == soq
+    assert not born_after_settle("20260918", soq - dt.timedelta(seconds=1))
+    assert born_after_settle("20260918", soq)
+    # Běžný pátek (ne 3. v kvartálním měsíci) dál 16:00 ET
+    assert SetupEngine._settle_ts("20260925") == dt.datetime(2026, 9, 25, 20, 0, tzinfo=dt.UTC)
+
+
+def test_repository_vznik_po_settle_oznaci_a_vyradi_ze_statistik(tmp_path: Path) -> None:
+    """#1324: řádek vzniklý po settle vlastní expirace zůstává v tabulce (označený),
+    ale kalibrace confidence, sebekontrola ani kouč ho nepočítají."""
+    repository = SetupsRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 's.sqlite'}"))
+    repository.ensure_schema()
+    settle = dt.datetime(2026, 9, 28, 20, 0, tzinfo=dt.UTC)  # 28. 9. 16:00 EDT
+
+    def closed(created: dt.datetime) -> int:
+        sid = repository.create(
+            symbol="NQ",
+            expiry="20260928",
+            template="trend_continuation",
+            direction="long",
+            created_ts=created,
+            entry=20000.0,
+            target=20030.0,
+            stop=19990.0,
+            confidence=50,
+            reason="test",
+            context={"gex_regime": "positive"},
+        )
+        repository.close(
+            sid,
+            status="closed_timeout",
+            closed_ts=created + dt.timedelta(minutes=1),
+            outcome_r=-0.025,
+            mfe=0,
+            mae=0,
+        )
+        return sid
+
+    alive = closed(settle - dt.timedelta(hours=2))
+    dead = closed(settle + dt.timedelta(minutes=122))  # jako 1397 NQ ve 22:02 UTC
+
+    flags = {row["id"]: row["after_settle"] for row in repository.list_for("NQ")}
+    assert flags == {alive: False, dead: True}
+    version = SETUP_MECHANICS_VERSION
+    assert len(repository.closed_for_calibration(mechanics_version=version)) == 1
+    since = settle - dt.timedelta(days=1)
+    assert len(repository.closed_since("NQ", since, mechanics_version=version)) == 1
+    coach = repository.closed_between(since, settle + dt.timedelta(days=1))
+    assert [row["id"] for row in coach] == [alive]
+
+
+async def test_setup_engine_po_settle_nevznika_po_rollu_ano(tmp_path: Path) -> None:
+    """#1324: nad vypršelým řetězem setup nevznikne, po rollu na další expiraci ano.
+
+    Pipeline roluje až s novým UTC dnem, takže detektor mezi settle a rollem
+    vidí vzor jako kdykoli jindy — invariant hlídá SetupEngine na místě vzniku.
+    """
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}")
+    repository = SetupsRepository(db)
+    repository.ensure_schema()
+    oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
+    oi_repo.ensure_schema()
+    publisher = RecordingPublisher()
+    fake = FakeRuntime()
+    fake.expiry = "20260716"  # settle 16. 7. 20:00 UTC < TS: řetěz po settle
+    runtime = cast(EngineRuntime, fake)
+    engine = SetupEngine(
+        symbol="ES", repository=repository, oi_repository=oi_repo, publisher=publisher
+    )
+
+    async def step(idx: int, o: float, h: float, low: float, c: float, cum: float) -> None:
+        fake.last_flow = FakeFlow(cum)
+        ts = TS + dt.timedelta(minutes=idx)
+        await engine.on_minute(
+            ts, c, [Bar(ts=ts, open=o, high=h, low=low, close=c, volume=100.0)], runtime
+        )
+
+    for i in range(30):
+        await step(i, 7505, 7506, 7504, 7505, float(i * 10))
+    await step(30, 7500, 7500, 7494, 7496, 310.0)
+    await step(31, 7496, 7502, 7495, 7501, 320.0)  # vzor failed_break jako v end-to-end
+    assert repository.list_for("ES") == []
+    assert not any(data.get("event") == "created" for _, data in publisher.messages)
+
+    # Roll: runtime jede na další expiraci → tentýž vzor setup vytvoří
+    fake.expiry = "20260717"
+    for i in range(32, 48):  # starý průraz vypadne z reclaim okna
+        await step(i, 7505, 7506, 7504, 7505, float(i * 10))
+    await step(48, 7500, 7500, 7494, 7496, 480.0)
+    await step(49, 7496, 7502, 7495, 7501, 490.0)
+    active = repository.active_for("ES")
+    assert len(active) == 1
+    assert active[0].template == "failed_break" and active[0].expiry == "20260717"
+
+
+async def test_setup_engine_necitelna_expirace_varuje_jednou_za_expiraci(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1324: nečitelná expirace invariant vzniku vypne — ne potichu, WARNING 1× za expiraci."""
+    repository = SetupsRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 's.sqlite'}"))
+    repository.ensure_schema()
+    oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
+    oi_repo.ensure_schema()
+    fake = FakeRuntime()
+    runtime = cast(EngineRuntime, fake)
+    engine = SetupEngine(
+        symbol="ES", repository=repository, oi_repository=oi_repo, publisher=RecordingPublisher()
+    )
+
+    async def minutes(start: int, count: int) -> None:
+        for i in range(start, start + count):
+            ts = TS + dt.timedelta(minutes=i)
+            bar = Bar(ts=ts, open=7505, high=7506, low=7504, close=7505, volume=100.0)
+            await engine.on_minute(ts, 7505.0, [bar], runtime)
+
+    def warnings() -> list[str]:
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING and "nečitelná expirace" in record.getMessage()
+        ]
+
+    with caplog.at_level(logging.WARNING, logger="gexlens_engine.setups"):
+        await minutes(0, 3)  # čitelná živá expirace (20991231) — bez varování
+        assert warnings() == []
+        fake.expiry = "2026-07-17"
+        await minutes(3, 3)
+        assert len(warnings()) == 1 and "'2026-07-17'" in warnings()[0]
+        fake.expiry = "17.7."
+        await minutes(6, 2)
+    assert len(warnings()) == 2
 
 
 # ── Verzování mechaniky (#311) ─────────────────────────────────────

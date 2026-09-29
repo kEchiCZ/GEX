@@ -62,6 +62,9 @@ def fact(**overrides: Any) -> SetupFact:
         "mechanics_version": 5,
     }
     values.update(overrides)
+    # Živá expirace (settle až den po vzniku) — vyřazení setupů vzniklých po
+    # settle (#1324) má vlastní test s expirací zadanou výslovně
+    values.setdefault("expiry", (values["created_ts"] + dt.timedelta(days=1)).strftime("%Y%m%d"))
     return SetupFact(**values)
 
 
@@ -73,6 +76,7 @@ def test_fact_from_record_cte_risk_a_branu_jen_z_platneho_kontextu() -> None:
     base = {
         "id": 3,
         "symbol": "NQ",
+        "expiry": "20260916",
         "template": "failed_break",
         "status": "closed_stop",
         "created_ts": dt.datetime(2026, 9, 16, 14, 0),  # sqlite = naivní → UTC
@@ -97,6 +101,9 @@ def test_fact_from_record_cte_risk_a_branu_jen_z_platneho_kontextu() -> None:
         }
     )
     assert ruled.created_ts.tzinfo is dt.UTC
+    # Vznik 16. 9. 14:00 UTC: vlastní expirace žije do 20:00 UTC, včerejší už ne (#1324)
+    assert ruled.expiry == "20260916" and ruled.after_settle is False
+    assert fact_from_record({**base, "expiry": "20260915"}).after_settle is True
     assert ruled.risk_group == "shadow"
     assert ruled.trade_block == "gate"
     assert ruled.max_loss_usd == 400
@@ -355,6 +362,70 @@ def test_summarize_rozdeleni_poplatky_mechanika_a_legacy() -> None:
     assert with_legacy.legacy_count == 1
 
 
+def test_summarize_vyradi_vznik_po_settle_a_uvede_pocet() -> None:
+    """#1324: setup vzniklý po settle vlastní expirace nemohl existovat — ze všech
+    čísel souhrnu ven, jen se spočítá (nic nezmizí potichu)."""
+    risk = {"max_loss_usd": 400.0, "fee_usd": 10.0}
+    settle = utc("2026-08-17T20:00:00")  # 17. 8. 16:00 EDT
+    rows = [
+        fact(id=1, expiry="20260817", tradeable=True, **risk),  # vznik 14:00 = živý
+        # obchodovatelný po otevření Globexu, timeout příští minutu (jako 1397 NQ)
+        fact(
+            id=2,
+            expiry="20260817",
+            tradeable=True,
+            status="closed_timeout",
+            outcome_r=-0.025,
+            created_ts=settle + dt.timedelta(minutes=122),
+            closed_ts=settle + dt.timedelta(minutes=123),
+            **risk,
+        ),
+        # přesně v settle = už po něm; stín
+        fact(
+            id=3,
+            expiry="20260817",
+            tradeable=False,
+            trade_block="gate",
+            status="closed_timeout",
+            outcome_r=0.3,
+            created_ts=settle,
+            closed_ts=settle + dt.timedelta(minutes=1),
+        ),
+        # starší mechanika po settle — počítá se jen s all_versions
+        fact(
+            id=4,
+            expiry="20260817",
+            mechanics_version=4,
+            status="closed_timeout",
+            outcome_r=0.1,
+            created_ts=settle + dt.timedelta(minutes=5),
+            closed_ts=settle + dt.timedelta(minutes=6),
+        ),
+    ]
+
+    def run(all_versions: bool) -> Any:
+        return summarize_setups(
+            rows,
+            mechanics_version=5,
+            all_versions=all_versions,
+            point_values=POINT_VALUES,
+            fee_per_contract_usd=FEE,
+            account_usd=ACCOUNT,
+            session_day=DAY,
+        )
+
+    summary = run(False)
+    assert (summary.total_count, summary.legacy_count, summary.after_settle_count) == (4, 1, 2)
+    assert (summary.all.count, summary.all.closed, summary.all.fees_usd) == (1, 1, FEE)
+    assert (summary.tradeable.count, summary.shadow.count) == (1, 0)
+    assert summary.shadow_reasons == {}
+    assert summary.account is not None and summary.account.trades == 1
+    assert summary.today.trades == 1
+    assert [point.trades for point in summary.performance.daily] == [1]
+    assert run(True).after_settle_count == 3
+    assert run(True).all.count == 1
+
+
 def test_summarize_neznamy_bod_se_nevymysli() -> None:
     summary = summarize_setups(
         [fact(symbol="XYZ")],
@@ -422,4 +493,5 @@ def test_summary_facts_bez_stropu_a_stabilni_poradi_stranky(tmp_path: Path) -> N
     assert len(facts) == 206
     assert sum(1 for item in facts if item.is_closed) == 150
     assert all(item.tradeable is True and item.max_loss_usd == 400 for item in facts)
+    assert all(item.expiry == "20260917" and not item.after_settle for item in facts)
     assert len(repo.summary_facts(["ES", "NQ"])) == 207

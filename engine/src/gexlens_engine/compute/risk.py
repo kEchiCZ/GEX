@@ -10,11 +10,15 @@ aplikaci (50 $ reálně) → pro 1 kontrakt stop nejvýš 10 b ES / 25 b NQ.
 Setup se stopem nad rozpočtem VZNIKÁ dál (měření, varianta A ≠ C), ale je
 `unaffordable`: šedý v Setupech, bez pushe, mimo obchodovatelné statistiky.
 
-Brzdy (v R obchodovatelných setupů napříč symboly): −3 R za seanci a −6 R za
-týden zastaví nové obchodovatelné setupy do settle; třetí stop téže šablony
-za seanci ji do settle zastaví. Brána šablon: obchodovatelná je jen šablona,
-jejíž dolní mez očekávání (jednostranný 95% interval Ø R) za posledních N
-seancí je kladná při n ≥ 30 — ostatní se dál měří, ale neobchodují.
+Brzdy (v R obchodovatelných setupů napříč symboly, `brake_state`): −3 R za
+seanci zastaví nové obchodovatelné setupy do konce seance, −6 R za obchodní
+týden do konce týdne; po druhém stopu téže šablony za seanci
+(`max_template_stops_per_day` = 2) je šablona do konce seance stínová. Konec
+seance je otevření Globexu v 17:00 CT (`session_bounds`), ne settle 15:00 CT;
+konec týdne je otevření pondělní seance v neděli 17:00 CT (`week_start`).
+Brána šablon: obchodovatelná je jen šablona, jejíž dolní mez očekávání
+(jednostranný 95% interval Ø R) za posledních N seancí je kladná při n ≥ 30 —
+ostatní se dál měří, ale neobchodují.
 """
 
 import datetime as dt
@@ -118,17 +122,25 @@ def brake_state(
 ) -> BrakeState:
     """Brzdy z obchodovatelných uzavřených setupů týdne (napříč symboly).
 
-    Řádky bez `tradeable` (před #1185) se nepočítají — brzda je o účtu, ne o
-    detektoru. Priorita: den → týden → šablona (první, která platí).
+    `realized` smí nést i starší řádky (volající čte i 84denní okno brány
+    šablon), proto se den i týden vymezují tady podle `closed_ts`, stejnou
+    konvencí polouzavřených intervalů: den = `session_bounds(session_day)`,
+    týden = [`week_start(session_day)`, konec seance). Do #1322 se do týdne
+    sčítalo celé okno brány — ztráty staré až 84 dní by týdenní brzdu držely
+    měsíce. Řádky bez `tradeable` (před #1185) se nepočítají — brzda je o účtu,
+    ne o detektoru. Priorita: den → týden → šablona (první, která platí).
     """
     day_from, day_to = session_bounds(session_day)
+    week_from = week_start(session_day)
     day_r = week_r = 0.0
     template_stops = 0
     for row in realized:
         if row.tradeable is not True:
             continue
+        if not week_from <= row.closed_ts < day_to:
+            continue
         week_r += row.outcome_r
-        if day_from <= row.closed_ts < day_to:
+        if day_from <= row.closed_ts:
             day_r += row.outcome_r
             if row.template == template and row.status == "closed_stop":
                 template_stops += 1

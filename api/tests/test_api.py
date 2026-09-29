@@ -554,6 +554,7 @@ def test_setups_list_and_review(settings: Settings) -> None:
     assert row["id"] == setup_id
     assert row["template"] == "failed_break"
     assert row["status"] == "active"
+    assert row["after_settle"] is False  # vznik 15:00 UTC < settle 20:00 UTC (#1324)
     assert client.get("/setups/ES?status=closed_target").json()["setups"] == []
     assert client.get("/setups/NQ").json()["setups"] == []
 
@@ -620,6 +621,7 @@ def test_setups_summary_z_cele_historie(settings: Settings) -> None:
     summary = client.get("/setups/summary?symbols=ES").json()
     assert summary["symbols"] == ["ES"]
     assert summary["mechanics_version"] == SETUP_MECHANICS_VERSION
+    assert summary["after_settle_count"] == 0  # vznik po settle (#1324) žádný
     assert summary["all"]["closed"] == 210  # ne 200 ze stránky
     assert summary["all"]["sum_r"] == -210.0
     assert summary["all"]["gross_usd"] == -210 * 250.0

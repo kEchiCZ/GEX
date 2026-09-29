@@ -24,6 +24,9 @@ export interface SetupRow {
   mechanics_version?: number
   /** Kontext vzniku (gex_regime, …) — podklad režimových statistik (#402). */
   context?: Record<string, unknown> | null
+  /** Vznikl po settle vlastní expirace (#1324, server `born_after_settle`) —
+   *  nemohl existovat, souhrn, brzdy ani brána ho nepočítají. */
+  after_settle?: boolean
 }
 
 /** Zrcadlo `SETUP_MECHANICS_VERSION` v enginu (#311) — UŽ JEN pro testy.
@@ -246,6 +249,8 @@ export interface SetupsSummary {
   all_versions: boolean
   total_count: number
   legacy_count: number
+  /** Setupy vzniklé po settle vlastní expirace (#1324) — vyřazené ze všech čísel souhrnu. */
+  after_settle_count: number
   fee_per_contract_usd: number
   account_usd: number
   unpriced_symbols: string[]
@@ -538,7 +543,7 @@ export function riskTooltip(info: RiskInfo): string {
     '',
     'Pravidla (#1185):',
     `• brána šablony: ${gate}`,
-    `• brzdy: dnes ${day}, týden ${week} (−3 R den / −6 R týden zastaví nové obchody do settle)`,
+    `• brzdy: dnes ${day}, týden ${week} (−3 R den zastaví nové obchody do konce seance (17:00 CT), −6 R týden do konce obchodního týdne (neděle 17:00 CT))`,
     '• stínové setupy se dál měří, jen se neobchodují a nechodí do pushe',
   ].join('\n')
 }

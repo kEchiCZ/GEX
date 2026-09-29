@@ -17,6 +17,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 
 from gexlens_engine.compute.bandregime import BAND_MAJOR_SHARE, BandZone
+from gexlens_engine.compute.settle import expiry_settle_ts
 
 # Verze mechaniky detektoru (#311). Zvedá se při KAŽDÉ změně sémantiky stopů,
 # cílů nebo filtrů — statistiky a budoucí kalibrace (Fáze 2) počítají jen
@@ -58,6 +59,13 @@ from gexlens_engine.compute.bandregime import BAND_MAJOR_SHARE, BandZone
 #       který neodpovídal skutečnosti (NQ 24. 8.: tendence celý den 29525,
 #       skutečnost 29200 → 29400 → 29390), a do hodnocení track recordu
 #       nepatří (#859).
+#
+# #1322/#1324 verzi ZÁMĚRNĚ nezvedá: invariant `born_after_settle` jen brání
+# vzniku „mrtvě narozených“ setupů nad vypršelou expirací (všechny skončily
+# timeoutem 1–4 min po vzniku) a historii v5 vyřazuje týž predikát při čtení,
+# takže statistiky v5 novému chování už odpovídají. Posun timeoutu kvartální
+# expirace na SOQ (`expiry_settle_ts`, ADR-0039 bod 2) se v5 netýká —
+# kvartální 0DTE se jako runtime nepoužívá (ADR-0039 bod 1).
 SETUP_MECHANICS_VERSION = 5
 
 
@@ -1152,6 +1160,54 @@ def r_result(direction: Direction, entry: float, stop: float, exit_price: float)
         return 0.0
     move = exit_price - entry if direction is Direction.LONG else entry - exit_price
     return move / risk
+
+
+def setup_settle_ts(expiry: str) -> dt.datetime | None:
+    """Settle expirace setupu (`YYYYMMDD`) = konec jeho života (#259, #498).
+
+    Hranice pro timeout setupu, jeho čas do expirace (T3) i invariant vzniku
+    (#1324) je settle EXPIRACE podle ADR-0039 bod 2 (`settle.expiry_settle_ts`:
+    16:00 ET, kvartální expirace SOQ 9:30 ET; DST #511).
+
+    Pipeline s ní zatím v souladu není (rozpor s ADR-0039 bod 2, řeší #1331):
+    `instruments.expiry_expired` roluje běžnou expiraci až s novým UTC dnem
+    (v čase jen kvartální SOQ), sondy T9 mají vlastní `probes.probe_settle`
+    nad `settle_ts` a čas do expirace Dyn profilu (`runtime`) počítá také se
+    `settle_ts`. Mezi settle a rollem proto pipeline běží nad vypršelým
+    řetězem. Nečitelný formát → None (nic se nevymýšlí).
+    """
+    try:
+        day = dt.datetime.strptime(expiry, "%Y%m%d").date()
+    except ValueError:
+        return None
+    return expiry_settle_ts(day)
+
+
+def born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
+    """Vznikl setup až po settle vlastní expirace? (#1324)
+
+    Takový setup nemohl existovat: vztahuje se k vypršelému řetězu a timeout
+    ho příští minutou uzavře (`closed_timeout`). Pipeline přitom běží nad
+    vypršelým řetězem až do rollu s novým UTC dnem (`instruments.expiry_expired`)
+    — ve v5 tak do #1324 vzniklo 81 setupů 0–238 min po settle. Příčinu (roll
+    podle UTC dne místo v settle) řeší #1331. Do rollu na settle v okně
+    settle → 00:00 UTC setupy nevznikají.
+
+    Jeden predikát invariantu pro vznik i čtení historie:
+    - vznik: živý `SetupEngine._detect_new` (jediné místo zápisu setupu) a jeho
+      offline zrcadlo `scripts/backtest_setups.replay` (backtest
+      a walk-forward), ne detektory;
+    - čtení: `SetupsRepository` vyřazuje historické řádky ze vstupu brzd
+      a brány šablon, kalibrace confidence, sebekontroly a kouče a označí je
+      ve výpisu tabulky (`after_settle`); souhrn `setup_summary` je jen
+      spočítá. V DB řádky zůstávají. Gamma útes (`next_setups`) je zatím
+      nevyřazuje (#1331).
+    Vznik přesně v okamžiku settle už je po něm. Nečitelná expirace → False
+    (nelze rozhodnout, řádek se nevyřazuje; živý `_detect_new` to hlásí
+    WARNINGem).
+    """
+    settle = setup_settle_ts(expiry)
+    return settle is not None and created_ts >= settle
 
 
 # ── Sondy nezapnutých šablon (#577 fáze 1) ─────────────────────────────────

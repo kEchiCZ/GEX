@@ -41,3 +41,22 @@ v rozpočtu (n = 339, +0,06 R). Uživatel bude obchodovat účet ~5 000 $ na
   za stín. Přepnutí na 2 % až po ≥ 50 živých obchodech s edge ≥ +0,2 R;
   živě až po ~60 seancích kladné bilance obchodovatelných setupů.
 - 10× zhodnocení není otázka risk managementu, ale edge (#794, #1060, #453).
+
+## Dodatek 2026-09-29: okna brzd a vstup bez setupů po settle (#1322, #1324)
+
+- **Okna brzd** platí podle kódu hranice (`compute/risk.brake_state`), stejnou konvencí
+  polouzavřených intervalů jako obchodní den. Den je Globex seance (`session_bounds`), tedy do
+  otevření Globexu v 17:00 CT, ne do settle. Týden běží od otevření pondělní seance (neděle 17:00 CT,
+  `week_start`) do konce dnešní seance. Do #1322 se do týdne omylem sčítalo celé 84denní okno brány
+  šablon (`_load_realized` čte širší z obou oken), takže ztráty z minulých týdnů by týdenní brzdu
+  držely měsíce. Rozhodnutí bod 3 se nemění. Strop stopů šablony ji zastaví po **2.** stopu za
+  seanci (text „třetí stop“ v docstringu byl chybný).
+- **Vstup brzd i brány šablon** nevidí setupy vzniklé po settle vlastní expirace
+  (`compute/setups.born_after_settle`, #1324). Takový setup nemohl existovat: pipeline běží nad
+  vypršelým řetězem až do rollu o půlnoci UTC a timeout by setup zavřel příští minutou. Od #1324 takový
+  setup nevznikne, takže mezi settle a půlnocí UTC nevznikají žádné setupy (na otevřeném Globexu 1–3 h
+  denně). Roll expirace v settle, který okno odstraní, řeší #1331. Hranice je settle expirace podle
+  ADR-0039 bod 2 (`expiry_settle_ts`), táž jako timeout setupu. Historické řádky zůstávají v DB
+  a vyřadí je predikát při čtení. `realized_day_r` a `realized_week_r` v kontextu starších setupů se
+  nepřepisují, protože jsou záznamem stavu v době vzniku (`realized_week_r` před #1322 je tedy
+  84denní součet, ne týden).

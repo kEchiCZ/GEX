@@ -34,7 +34,7 @@ from gexlens_engine.compute.risk import (
     template_gate,
     week_start,
 )
-from gexlens_engine.compute.settle import settle_ts, trading_session_date
+from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setups import (
     SETUP_MECHANICS_VERSION,
     Direction,
@@ -42,12 +42,14 @@ from gexlens_engine.compute.setups import (
     Outcome,
     SetupParams,
     average_true_range,
+    born_after_settle,
     detect_all,
     evaluate_bar,
     gex_regime,
     is_counter_regime,
     max_pain_strike,
     r_result,
+    setup_settle_ts,
 )
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.underlying import Bar
@@ -155,6 +157,9 @@ class SetupEngine:
         # Brzdy (#1185): alert jednou per (brzda, seance); realizované řádky
         # týdne se čtou z DB jen když je co rozhodovat
         self._brake_alerted: dict[str, dt.date] = {}
+        # Expirace, ke které už je v logu poznámka invariantu #1324 (po settle
+        # setupy nevznikají, nebo je nečitelná) — log 1× za expiraci
+        self._expiry_logged: str | None = None
         self._max_pain_loaded_for: tuple[str, dt.date, dt.datetime | None] | None = None
         # Otevřené setupy z DB (restart enginu) — MFE/MAE pokračují od nuly
         for stored in self.repository.active_for(self.symbol):
@@ -208,12 +213,8 @@ class SetupEngine:
 
     @staticmethod
     def _settle_ts(expiry: str) -> dt.datetime | None:
-        """Settle dne expirace — konvence sdílená přes compute.settle (#498)."""
-        try:
-            date = dt.datetime.strptime(expiry, "%Y%m%d").date()
-        except ValueError:
-            return None
-        return settle_ts(date)
+        """Settle expirace setupu (ADR-0039 bod 2) — hranice invariantu vzniku (#1324)."""
+        return setup_settle_ts(expiry)
 
     @classmethod
     def _minutes_to_expiry(cls, expiry: str, now: dt.datetime) -> float | None:
@@ -449,7 +450,10 @@ class SetupEngine:
         return now - dt.timedelta(days=self.params.template_gate_days * 7 / 5)
 
     def _load_realized(self, now: dt.datetime) -> list[RealizedSetup]:
-        """Blokující čtení uzavřených setupů týdne a okna brány — volat přes to_thread."""
+        """Blokující čtení uzavřených setupů týdne a okna brány — volat přes to_thread.
+
+        Okno je širší z obou (týden, nebo N seancí brány ≈ 84 dní); týden si
+        z něj vymezuje `brake_state` sám (#1322)."""
         since = min(week_start(trading_session_date(now)), self._gate_since(now))
         return self.repository.realized_since(since, mechanics_version=SETUP_MECHANICS_VERSION)
 
@@ -482,7 +486,15 @@ class SetupEngine:
         if self._brake_alerted.get(state.block) == session_day:
             return
         self._brake_alerted[state.block] = session_day
-        value = state.day_r if state.block == "daily_brake" else state.week_r
+        daily = state.block == "daily_brake"
+        value = state.day_r if daily else state.week_r
+        # Okno brzd = okna `brake_state` (#1322): seance končí v 17:00 CT každý
+        # den včetně pátku (`session_bounds`), týden v neděli 17:00 CT
+        # (`week_start`) — ne settle 15:00 CT. Tentýž text nese nápověda pushe,
+        # Settings → Risk management a tooltip risk sloupce.
+        until = (
+            "do konce seance (17:00 CT)" if daily else "do konce obchodního týdne (neděle 17:00 CT)"
+        )
         await self.publisher.publish(
             "alerts",
             {
@@ -490,7 +502,7 @@ class SetupEngine:
                 "event": state.block,
                 "symbol": self.symbol,
                 "message": f"{BRAKE_LABELS[state.block].capitalize()}: {value:+.1f} R — "
-                "nové setupy jen stínově (neobchodovat) do settle",
+                f"nové setupy jen stínově (neobchodovat) {until}",
                 "ts": now.timestamp(),
             },
         )
@@ -614,6 +626,36 @@ class SetupEngine:
     async def _detect_new(
         self, now: dt.datetime, runtime: EngineRuntime, inputs: MinuteInputs
     ) -> None:
+        # Invariant #1324: setup se vztahuje jen k živé expiraci. Pipeline roluje
+        # na další expiraci až s novým UTC dnem (`expiry_expired`), takže mezi
+        # settle a rollem běží nad vypršelým řetězem — setup odtud by příští
+        # minutu skončil timeoutem. Hlídá se tady, na jediném místě vzniku, ne
+        # v detektorech; nové setupy vzniknou po rollu nad novou expirací.
+        # Příčinu, roll expirace podle UTC dne místo v settle, řeší #1331. Do
+        # rollu na settle v okně settle → 00:00 UTC setupy nevznikají (na
+        # otevřeném Globexu 1–3 h denně). Po rollu v settle invariant nezasáhne,
+        # ale zůstává jako pojistka.
+        if setup_settle_ts(runtime.expiry) is None:
+            # Nečitelná expirace: predikát nerozhodne a invariant neplatí —
+            # nahlas, jednou za expiraci (detekce jede dál, nic se nevymýšlí)
+            if self._expiry_logged != runtime.expiry:
+                self._expiry_logged = runtime.expiry
+                logger.warning(
+                    "Setupy %s: nečitelná expirace %r — invariant vzniku po settle "
+                    "(#1324) ani timeout podle expirace nelze ověřit",
+                    self.symbol,
+                    runtime.expiry,
+                )
+        elif born_after_settle(runtime.expiry, now):
+            if self._expiry_logged != runtime.expiry:
+                self._expiry_logged = runtime.expiry
+                logger.info(
+                    "Setupy %s: expirace %s je po settle — nové setupy až po rollu "
+                    "na další expiraci (#1331)",
+                    self.symbol,
+                    runtime.expiry,
+                )
+            return
         await self._refresh_calibration(now)
         open_templates = {item.stored.template for item in self._open}
         realized: list[RealizedSetup] | None = None

@@ -68,6 +68,7 @@ function summary(overrides: Record<string, unknown> = {}) {
     all_versions: false,
     total_count: 1,
     legacy_count: 0,
+    after_settle_count: 0,
     fee_per_contract_usd: 10,
     account_usd: 50000,
     unpriced_symbols: [],
@@ -393,6 +394,25 @@ test('WS událost setups.* přenačte setupy', async () => {
   })
 })
 
+test('souhrn uvádí počet setupů vyřazených pro vznik po settle expirace (#1324)', async () => {
+  // Server je ze všech čísel vyřadí — UI musí říct kolik, jinak by zmizely potichu
+  mockApi([SETUP_ROW], summary({ after_settle_count: 81, all: CLOSED_ONE }))
+  renderApp()
+  fireEvent.click(await screen.findByRole('button', { name: 'Setupy' }))
+  const note = await screen.findByTestId('setups-after-settle')
+  expect(note.textContent).toContain('vznik po settle vlastní expirace')
+  expect(note.textContent).toContain('81')
+  expect(note.getAttribute('title')).toContain('nevstupuje do souhrnu, účtu, brzd ani brány')
+})
+
+test('bez setupů po settle se poznámka o vyřazení neukazuje (#1324)', async () => {
+  mockApi([SETUP_ROW], summary({ all: CLOSED_ONE }))
+  renderApp()
+  fireEvent.click(await screen.findByRole('button', { name: 'Setupy' }))
+  await screen.findByRole('group', { name: 'Souhrnné statistiky' })
+  expect(screen.queryByTestId('setups-after-settle')).toBeNull()
+})
+
 test('statistiky počítají jen aktuální mechaniku, starší jde zapnout (#311)', async () => {
   // Starý setup má jinou sémantiku stopů/cílů (Ø RRR 25–47) — do bilance
   // aktuálního systému nepatří, jinak by čísla popisovala mrtvý detektor
@@ -572,4 +592,41 @@ test('obrazovka Setupy: risk sloupec (#1185) — obchodovatelný vs. stín a fil
   fireEvent.click(screen.getByTestId('setups-tradeable-only'))
   await waitFor(() => expect(document.querySelectorAll('[data-part="risk"]').length).toBe(2))
   expect(document.querySelectorAll('tr.setup-shadow').length).toBe(0)
+})
+
+test('setup vzniklý po settle je v tabulce označený a filtr obchodovatelných ho skryje (#1324)', async () => {
+  // Produkce: 1397 NQ byl obchodovatelný s pushem, ale vznikl po settle 20260928 —
+  // souhrn ho mezi obchody nepočítá, tabulka tedy nesmí tvrdit opak
+  const context = {
+    account_equity_usd: 50000,
+    risk_budget_usd: 500,
+    stop_points: 8,
+    contracts: 1,
+    max_loss_usd: 400,
+    fee_usd: 10,
+    affordable: true,
+    tradeable: true,
+    trade_block: null,
+    template_gate: 'pass',
+  }
+  const live = { ...SETUP_ROW, id: 8, stop: 7493, context, after_settle: false }
+  const dead = {
+    ...live,
+    id: 9,
+    status: 'closed_timeout',
+    outcome_r: -0.03,
+    after_settle: true,
+  }
+  mockApi([live, dead], summary({ shadow: { ...GROUP, count: 1 }, after_settle_count: 1 }))
+  renderApp()
+  fireEvent.click(screen.getByRole('button', { name: 'Setupy' }))
+  const tag = await screen.findByTestId('after-settle-9')
+  expect(tag.textContent).toContain('po settle')
+  expect(tag.getAttribute('title')).toContain('nevstupuje do souhrnu, účtu, brzd ani brány')
+  expect(screen.queryByTestId('after-settle-8')).toBeNull()
+  expect(document.querySelectorAll('tr.setup-after-settle').length).toBe(1)
+  // „Jen obchodovatelné" = totéž, co souhrn počítá mezi obchody
+  fireEvent.click(screen.getByTestId('setups-tradeable-only'))
+  await waitFor(() => expect(screen.queryByTestId('after-settle-9')).toBeNull())
+  expect(document.querySelectorAll('[data-part="risk"]').length).toBe(1)
 })

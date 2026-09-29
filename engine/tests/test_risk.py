@@ -16,7 +16,7 @@ from gexlens_engine.compute.risk import (
     template_gate,
     week_start,
 )
-from gexlens_engine.compute.settle import session_bounds
+from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.compute.setups import SetupParams, params_from_dict, params_to_dict
 from gexlens_engine.runtime import PublisherLike
 from gexlens_engine.setups import SetupEngine
@@ -137,6 +137,117 @@ def test_brzdy_den_tyden_a_sablona() -> None:
         max_template_stops_per_day=0,
     )
     assert off.block is None
+
+
+def _brake_kwargs(session_day: dt.date) -> dict[str, Any]:
+    return {
+        "session_day": session_day,
+        "daily_brake_r": 3.0,
+        "weekly_brake_r": 6.0,
+        "max_template_stops_per_day": 2,
+    }
+
+
+def test_tydenni_brzda_jen_z_aktualniho_obchodniho_tydne() -> None:
+    """#1322: `realized` nese i 84denní okno brány šablon — týden si brzda vymezí sama.
+
+    Produkce 28. 9. 2026 (pondělí): kontext ukazoval týden −2,0 R ze ztrát
+    z pátku 25. 9.; další tři stopy by spustily brzdu −6 R až do prosince.
+    """
+    monday = dt.date(2026, 9, 28)
+    start = week_start(monday)
+    assert start == dt.datetime(2026, 9, 27, 22, 0, tzinfo=dt.UTC)  # neděle 17:00 CDT
+    friday = dt.datetime(2026, 9, 25, 18, 0, tzinfo=dt.UTC)
+    old = [
+        _row("wall_bounce", -1.0, friday),
+        _row("wall_bounce", -1.0, friday),
+        _row("failed_break", -6.0, friday - dt.timedelta(days=30)),
+    ]
+    state = brake_state(old, "wall_bounce", **_brake_kwargs(monday))
+    assert (state.week_r, state.day_r, state.template_stops, state.block) == (0.0, 0.0, 0, None)
+    # Tři pondělní stopy: denní brzda ano, týden jen −3 R (staré ztráty se nepřičtou)
+    t = start + dt.timedelta(hours=16)
+    today = [_row("trend_continuation", -1.0, t) for _ in range(3)]
+    state = brake_state([*old, *today], "wall_bounce", **_brake_kwargs(monday))
+    assert (state.week_r, state.day_r, state.block) == (-3.0, -3.0, "daily_brake")
+    # Úterý po pondělních −3 R: další −3 R → teprve teď týdenní brzda
+    tuesday = dt.date(2026, 9, 29)
+    tue = session_bounds(tuesday)[0] + dt.timedelta(hours=16)
+    week = [*old, *today, _row("wall_bounce", -2.0, tue), _row("failed_break", -1.0, tue)]
+    state = brake_state(week, "failed_break", **_brake_kwargs(tuesday))
+    assert (state.week_r, state.day_r, state.block) == (-6.0, -3.0, "daily_brake")
+    state = brake_state(week, "failed_break", **{**_brake_kwargs(tuesday), "daily_brake_r": 0.0})
+    assert state.block == "weekly_brake"
+
+
+def test_hranice_tydne_polouzavrena() -> None:
+    """Týden = [open pondělní seance, konec dnešní seance) — stejná konvence jako den."""
+    wednesday = dt.date(2026, 9, 30)
+    start = week_start(wednesday)
+    _, day_to = session_bounds(wednesday)
+    # Přesně v otevření pondělní seance → do týdne (ne do dne); minutu dřív → minulý týden
+    at_edge = brake_state([_row("wall_bounce", -6.0, start)], "x", **_brake_kwargs(wednesday))
+    assert (at_edge.week_r, at_edge.day_r, at_edge.block) == (-6.0, 0.0, "weekly_brake")
+    before = start - dt.timedelta(minutes=1)
+    earlier = brake_state([_row("wall_bounce", -6.0, before)], "x", **_brake_kwargs(wednesday))
+    assert (earlier.week_r, earlier.block) == (0.0, None)
+    # Uzavření v otevření další seance už do dnešní seance ani týdne nepatří
+    later = brake_state([_row("wall_bounce", -6.0, day_to)], "x", **_brake_kwargs(wednesday))
+    assert (later.week_r, later.day_r) == (0.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("now", "session_day", "block"),
+    [
+        # Sobota: obchodní den soboty, týden od neděle 20. 9. 17:00 CDT → páteční −6 R platí
+        (dt.datetime(2026, 9, 26, 12, 0, tzinfo=dt.UTC), dt.date(2026, 9, 26), "weekly_brake"),
+        # Neděle minutu před otevřením Globexu: pořád tentýž týden, brzda drží
+        (dt.datetime(2026, 9, 27, 21, 59, tzinfo=dt.UTC), dt.date(2026, 9, 27), "weekly_brake"),
+        # Neděle 17:00 CDT = pondělní seance → nový týden, páteční ztráty už ne
+        (dt.datetime(2026, 9, 27, 22, 0, tzinfo=dt.UTC), dt.date(2026, 9, 28), None),
+    ],
+)
+def test_tydenni_brzda_o_vikendu_do_nedelniho_otevreni(
+    now: dt.datetime, session_day: dt.date, block: str | None
+) -> None:
+    """#1322 + AGENTS „obchodní den“: sobota, neděle před a po 17:00 CT proti pátku.
+
+    Alert slibuje „do konce obchodního týdne (neděle 17:00 CT)“ — tady je to hlídané.
+    """
+    assert trading_session_date(now) == session_day
+    friday = dt.datetime(2026, 9, 25, 18, 0, tzinfo=dt.UTC)  # pátek 13:00 CDT
+    rows = [_row("wall_bounce", -3.0, friday), _row("failed_break", -3.0, friday)]
+    state = brake_state(rows, "x", **_brake_kwargs(session_day))
+    assert state.day_r == 0.0  # páteční seance skončila v pátek 17:00 CT
+    assert state.block == block
+    assert state.week_r == (-6.0 if block else 0.0)
+
+
+def test_den_a_strop_sablony_beze_zmeny_s_tydnem() -> None:
+    """Regrese #1322: den a strop stopů šablony počítají jen dnešní seanci."""
+    wednesday = dt.date(2026, 9, 30)
+    day_from, _ = session_bounds(wednesday)
+    t = day_from + dt.timedelta(hours=16)
+    monday = week_start(wednesday) + dt.timedelta(hours=16)
+    last_week = week_start(wednesday) - dt.timedelta(days=2)
+    rows = [
+        # Stopy téže šablony z pondělí a z minulého týdne se do stropu nepočítají
+        _row("max_pain_pin", -1.0, monday),
+        _row("max_pain_pin", -1.0, last_week),
+        _row("max_pain_pin", -1.0, last_week),
+        _row("max_pain_pin", -1.0, t),
+    ]
+    state = brake_state(rows, "max_pain_pin", **_brake_kwargs(wednesday))
+    assert (state.day_r, state.week_r, state.template_stops, state.block) == (
+        -1.0,
+        -2.0,
+        1,
+        None,
+    )
+    state = brake_state(
+        [*rows, _row("max_pain_pin", -1.0, t)], "max_pain_pin", **_brake_kwargs(wednesday)
+    )
+    assert (state.day_r, state.template_stops, state.block) == (-2.0, 2, "template_stops")
 
 
 def test_brana_sablony_dolni_mez_ocekavani() -> None:
@@ -276,3 +387,92 @@ async def test_setup_engine_zapisuje_risk_kontext_a_brzdu(tmp_path: Path) -> Non
     brake_alerts = [e for e in publisher.events if e.get("kind") == "risk_brake"]
     assert len(brake_alerts) == 1 and brake_alerts[0]["event"] == "daily_brake"
     assert "-3.0 R" in str(brake_alerts[0]["message"])
+    # Okno brzdy končí otevřením další seance, ne settle (#1322)
+    assert "do konce seance (17:00 CT)" in str(brake_alerts[0]["message"])
+    assert "settle" not in str(brake_alerts[0]["message"])
+
+
+def _closed_setup(
+    repository: SetupsRepository,
+    *,
+    expiry: str,
+    created: dt.datetime,
+    closed: dt.datetime,
+    outcome_r: float,
+    status: str = "closed_stop",
+) -> int:
+    sid = repository.create(
+        symbol="ES",
+        expiry=expiry,
+        template="failed_break",
+        direction="long",
+        created_ts=created,
+        entry=7600.0,
+        target=7620.0,
+        stop=7592.0,
+        confidence=50,
+        reason="test",
+        context={"affordable": True, "tradeable": True},
+    )
+    repository.close(sid, status=status, closed_ts=closed, outcome_r=outcome_r, mfe=0, mae=1)
+    return sid
+
+
+def _setup_engine(tmp_path: Path) -> tuple[SetupEngine, SetupsRepository]:
+    repository = SetupsRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 's.sqlite'}"))
+    repository.ensure_schema()
+    oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
+    oi_repo.ensure_schema()
+    engine = SetupEngine(
+        symbol="ES", repository=repository, oi_repository=oi_repo, publisher=_Publisher()
+    )
+    engine.point_values["ES"] = 50.0
+    return engine, repository
+
+
+def test_kontext_setupu_nese_tyden_bez_starsich_ztrat_okna_brany(tmp_path: Path) -> None:
+    """#1322 end-to-end: `_load_realized` čte 84 dní kvůli bráně, týden ne."""
+    engine, repository = _setup_engine(tmp_path)
+    now = OPEN + dt.timedelta(hours=16)  # středa 16. 9. 2026 14:00 UTC
+    # Sedm obchodovatelných stopů z minulého týdne (8. 9.) — v okně brány, mimo týden
+    for _ in range(7):
+        _closed_setup(
+            repository,
+            expiry="20260908",
+            created=dt.datetime(2026, 9, 8, 14, 0, tzinfo=dt.UTC),
+            closed=dt.datetime(2026, 9, 8, 15, 0, tzinfo=dt.UTC),
+            outcome_r=-1.0,
+        )
+    realized = engine._load_realized(now)
+    assert len(realized) == 7  # brána je dál vidí
+    risk, brakes = engine._risk_context(realized, "failed_break", 7600.0, 7592.0, 50.0, now)
+    assert risk["realized_week_r"] == 0.0 and risk["realized_day_r"] == 0.0
+    assert brakes.block is None and risk["trade_block"] != "weekly_brake"
+    assert risk["template_gate_n"] == 7
+
+
+def test_realizovane_bez_setupu_vzniklych_po_settle(tmp_path: Path) -> None:
+    """#1324: setup vzniklý po settle vlastní expirace nevstupuje do brzd ani brány."""
+    engine, repository = _setup_engine(tmp_path)
+    now = OPEN + dt.timedelta(hours=16)  # středa 16. 9. 2026 14:00 UTC
+    settle = dt.datetime(2026, 9, 15, 20, 0, tzinfo=dt.UTC)  # 15. 9. 16:00 EDT
+    _closed_setup(
+        repository,
+        expiry="20260915",
+        created=settle - dt.timedelta(minutes=1),
+        closed=settle,
+        outcome_r=-1.0,
+    )
+    for created in (settle, settle + dt.timedelta(minutes=122)):
+        _closed_setup(
+            repository,
+            expiry="20260915",
+            created=created,
+            closed=created + dt.timedelta(minutes=1),
+            outcome_r=-1.0,
+            status="closed_timeout",
+        )
+    realized = engine._load_realized(now)
+    assert [row.closed_ts for row in realized] == [settle]
+    risk, _ = engine._risk_context(realized, "failed_break", 7600.0, 7592.0, 50.0, now)
+    assert risk["realized_week_r"] == -1.0 and risk["template_gate_n"] == 1
