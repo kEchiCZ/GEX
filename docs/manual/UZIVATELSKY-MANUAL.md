@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.24 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.25 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -1924,7 +1924,7 @@ zároveň nejhorší obchody (v5: −0,34 R vs. +0,06 R se stopem v rozpočtu).
 | **Denní brzda** | −3 R | po realizované ztrátě −3 R za seanci (obchodovatelné setupy, ES i NQ) nové setupy jen **stínově** do konce seance (17:00 CT), každý den včetně pátku — ne do settle; alert do zvonku a pushe |
 | **Týdenní brzda** | −6 R | totéž za obchodní týden: počítá se od otevření pondělní seance (neděle 17:00 CT) a stín platí do konce obchodního týdne (neděle 17:00 CT) |
 | **Strop stopů šablony** | 2 / den | třetí pokus téže šablony po dvou stopech za seanci je stín, až do konce seance (17:00 CT) |
-| **Brána šablon** | zapnuta, n ≥ 30, okno 60 seancí | obchodovatelná je jen šablona, jejíž **dolní mez očekávání** (jednostranný 95% interval Ø R ze setupů se stopem v rozpočtu) je kladná; ostatní se dál měří, ale neobchodují |
+| **Brána šablon** | zapnuta, n ≥ 30, okno 60 seancí | obchodovatelná je jen šablona **na daném symbolu**, jejíž **dolní mez očekávání** (jednostranný 95% interval Ø R ze setupů téhož symbolu se stopem v rozpočtu) je kladná; ES a NQ se hodnotí zvlášť; ostatní se dál měří, ale neobchodují |
 
 **Stín vs. obchodovatelný.** Setup **vzniká vždy** (měření nesmí přestat —
 právě velké stopy chceme dál vidět), ale nese verdikt: sloupec **Účet** v
@@ -1936,6 +1936,29 @@ tabulce** ho z tabulky schová (souhrn nahoře ukazuje rozdělení vždy). Toolt
 mez) a stav brzd (dnes / týden v R). U setupů vzniklých před v1.24 je „týden“
 součet za 84 dní, ne za obchodní týden: týdenní brzda omylem sčítala celé okno
 brány šablon (#1322). Stav v době vzniku se zpětně nepřepisuje.
+
+**Brána po symbolech (v1.25, #1325).** Brána hodnotí každou dvojici šablona ×
+symbol zvlášť: trend_continuation na ES má svůj verdikt a na NQ jiný. ES a NQ se
+u téže šablony chovají jinak (jiný typický stop i dopad skluzu), takže edge musí
+prokázat každý symbol sám; starší setupy se dopočítají hodnotou bodu vlastního
+symbolu. Do v1.24 brána omylem míchala setupy obou symbolů a každý symbol ji
+počítal nad jiným vzorkem. Tutéž šablonu proto mohla ve stejnou chvíli pustit na
+NQ a zablokovat na ES a verdikt NQ přeskakoval i několikrát za hodinu. Setupy
+vzniklé před v1.25 nesou verdikt podle staré logiky a zpětně se nepřepisují.
+Symbolem se myslí ticker z watchlistu: pinovaný kontrakt (např. `ESZ6`, viz
+„Pinovaný kontrakt ve watchlistu“ níže) má vlastní vzorek, nepřebírá ho od
+`ES` a začíná od nuly. Než nasbírá 30 vlastních uzavřených setupů šablony,
+jsou všechny jeho setupy stínové, a protože pinovaný kontrakt obvykle žije jen
+roll týden, zůstane v praxi stínový celý.
+**Co to znamená:** k 30. 9. 2026 nemá žádná šablona kladnou dolní mez na žádném
+symbolu (trend_continuation je v bloku na ES i NQ, ostatní šablony nemají 30
+vzorků), takže nové setupy jsou stínové: nechodí z nich push a bilance účtu
+stojí. Vědomé přebití brány pro vybranou kombinaci šablona × symbol navrhuje
+#1323, které zatím čeká na rozhodnutí. Do té doby jde bránu jen vypnout celou
+(Settings → Risk management, zaškrtávátko **Brána šablon**). Obchodovatelné jsou
+pak všechny šablony na všech symbolech se stopem v rozpočtu a chrání tě jen
+sizing a brzdy. Kritérium brány se nemění; přehodnotí se kolem 28. 10. na
+datech od 30. 9. (připomínka #1334).
 
 ![Setupy — sloupec Účet: stín „stop nad rozpočtem rizika“ / „šablona bez prokázaného edge“, nad tabulkou Kouč nad setupy](img/setupy-ucet-risk.jpg)
 

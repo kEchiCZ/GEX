@@ -263,6 +263,20 @@ def test_brana_sablony_dolni_mez_ocekavani() -> None:
     assert template_gate(real, min_samples=30, enabled=False).verdict == "off"
 
 
+def _gate_input(rows: list[RealizedSetup], symbol: str, point_value: float) -> list[float]:
+    t = OPEN + dt.timedelta(hours=16)
+    return affordable_results(
+        rows,
+        "failed_break",
+        symbol,
+        since=t - dt.timedelta(days=84),
+        point_value_usd=point_value,
+        account_equity_usd=50000,
+        risk_pct=1,
+        risk_max_pct=2,
+    )
+
+
 def test_brana_pocita_jen_zobchodovatelne_a_dopocitava_stare_radky() -> None:
     t = OPEN + dt.timedelta(hours=16)
     rows = [
@@ -270,22 +284,52 @@ def test_brana_pocita_jen_zobchodovatelne_a_dopocitava_stare_radky() -> None:
         _row("failed_break", -1.0, t, affordable=False),  # nový řádek, stop nad rozpočtem
         _row("failed_break", 1.0, t, tradeable=None, stop=7590.0),  # starý, 10 b ES → v rozpočtu
         _row("failed_break", -1.0, t, tradeable=None, stop=7560.0),  # starý, 40 b → mimo
-        _row(
-            "failed_break", 1.5, t, tradeable=None, symbol="NQ"
-        ),  # cizí symbol bez hodnoty bodu → vynechat
         _row("wall_bounce", 5.0, t, affordable=True),  # jiná šablona
         _row("failed_break", 9.0, t - dt.timedelta(days=100), affordable=True),  # mimo okno
     ]
-    results = affordable_results(
-        rows,
-        "failed_break",
-        since=t - dt.timedelta(days=84),
-        point_values={"ES": 50.0},
-        account_equity_usd=50000,
-        risk_pct=1,
-        risk_max_pct=2,
-    )
-    assert results == [2.0, 1.0]
+    assert _gate_input(rows, "ES", 50.0) == [2.0, 1.0]
+
+
+def test_brana_ignoruje_radky_ciziho_symbolu() -> None:
+    """#1325: klíč brány je šablona × symbol. Do opravy se řádky NQ s `affordable`
+    započítaly i do brány ES (a naopak), řádky před pravidly jen z vlastního."""
+    t = OPEN + dt.timedelta(hours=16)
+    nq_stop = 29000.0 - 20.0  # 20 b NQ × 20 $ = 400 $ → v rozpočtu
+    rows = [
+        _row("failed_break", 2.0, t, affordable=True),
+        _row("failed_break", -1.0, t, affordable=True, symbol="NQ", entry=29000.0, stop=nq_stop),
+        _row("failed_break", 1.5, t, tradeable=None, symbol="NQ", entry=29000.0, stop=nq_stop),
+    ]
+    assert _gate_input(rows, "ES", 50.0) == [2.0]
+    assert _gate_input(rows, "NQ", 20.0) == [-1.0, 1.5]
+    assert _gate_input(rows, "RTY", 50.0) == []
+
+
+def test_brana_pinovany_kontrakt_ma_vlastni_bunku() -> None:
+    """Klíč brány je ticker instance (ADR-0041 bod 3), ne kořen produktu: pinovaný
+    `ESZ6` nepřebírá vzorek `ES` (a naopak) a začíná na n = 0 → insufficient."""
+    t = OPEN + dt.timedelta(hours=16)
+    rows = [_row("failed_break", 2.0, t, affordable=True) for _ in range(35)]
+    rows.append(_row("failed_break", -1.0, t, affordable=True, symbol="ESZ6"))
+    assert _gate_input(rows, "ESZ6", 50.0) == [-1.0]
+    assert len(_gate_input(rows, "ES", 50.0)) == 35
+    gate = template_gate(_gate_input(rows, "ESZ6", 50.0), min_samples=30, enabled=True)
+    assert (gate.verdict, gate.n) == ("insufficient", 1)
+
+
+def test_brana_dopocita_stary_radek_hodnotou_bodu_vlastniho_symbolu() -> None:
+    """Řádek před pravidly se dopočítá hodnotou bodu symbolu, pro který brána rozhoduje."""
+    t = OPEN + dt.timedelta(hours=16)
+    # 15 b: ES 15 × 50 $ = 750 $ > 500 $ (mimo), NQ 15 × 20 $ = 300 $ (v rozpočtu)
+    es_old = [_row("failed_break", 1.0, t, tradeable=None, entry=7600.0, stop=7585.0)]
+    nq_old = [
+        _row("failed_break", 1.0, t, tradeable=None, symbol="NQ", entry=29000.0, stop=28985.0)
+    ]
+    assert _gate_input(es_old, "ES", 50.0) == []
+    assert _gate_input(nq_old, "NQ", 20.0) == [1.0]
+    # Táž geometrie s cizí hodnotou bodu by dala opačný verdikt — proto vlastní symbol
+    assert _gate_input(es_old, "ES", 20.0) == [1.0]
+    assert _gate_input(nq_old, "NQ", 50.0) == []
 
 
 def test_risk_parametry_jsou_ve_store() -> None:
@@ -319,7 +363,6 @@ async def test_setup_engine_zapisuje_risk_kontext_a_brzdu(tmp_path: Path) -> Non
     engine = SetupEngine(
         symbol="ES", repository=repository, oi_repository=oi_repo, publisher=publisher
     )
-    engine.point_values["ES"] = 50.0
     now = OPEN + dt.timedelta(hours=16)
     # Track record: 35 failed_break v rozpočtu s kladnou dolní mezí → brána pass
     for i in range(35):
@@ -426,7 +469,6 @@ def _setup_engine(tmp_path: Path) -> tuple[SetupEngine, SetupsRepository]:
     engine = SetupEngine(
         symbol="ES", repository=repository, oi_repository=oi_repo, publisher=_Publisher()
     )
-    engine.point_values["ES"] = 50.0
     return engine, repository
 
 
@@ -476,3 +518,73 @@ def test_realizovane_bez_setupu_vzniklych_po_settle(tmp_path: Path) -> None:
     assert [row.closed_ts for row in realized] == [settle]
     risk, _ = engine._risk_context(realized, "failed_break", 7600.0, 7592.0, 50.0, now)
     assert risk["realized_week_r"] == -1.0 and risk["template_gate_n"] == 1
+
+
+def _history(
+    repository: SetupsRepository,
+    symbol: str,
+    outcomes: list[float],
+    *,
+    entry: float,
+    stop: float,
+    context: dict[str, object],
+) -> None:
+    """Uzavřené failed_break z minulého týdne (8. 9.) — v okně brány, mimo týdenní brzdu."""
+    for outcome_r in outcomes:
+        sid = repository.create(
+            symbol=symbol,
+            expiry="20260908",
+            template="failed_break",
+            direction="long",
+            created_ts=dt.datetime(2026, 9, 8, 14, 0, tzinfo=dt.UTC),
+            entry=entry,
+            target=entry + 2 * (entry - stop),
+            stop=stop,
+            confidence=50,
+            reason="historie",
+            context=context,
+        )
+        repository.close(
+            sid,
+            status="closed_target" if outcome_r > 0 else "closed_stop",
+            closed_ts=dt.datetime(2026, 9, 8, 15, 0, tzinfo=dt.UTC),
+            outcome_r=outcome_r,
+            mfe=1,
+            mae=1,
+        )
+
+
+def test_brana_es_a_nq_maji_vlastni_vstup_a_verdikt(tmp_path: Path) -> None:
+    """#1325: dvě instance nad jedním track recordem — každá hodnotí šablonu jen
+    na svém symbolu a starší řádky dopočítá svou hodnotou bodu. Do opravy braly
+    obě instance i řádky cizího symbolu s `affordable` a dopočtené jen z vlastního
+    (ES n = 60, NQ n = 70) — verdikt tak závisel na tom, která instance se ptá."""
+    engine_es, repository = _setup_engine(tmp_path)
+    engine_nq = SetupEngine(
+        symbol="NQ",
+        repository=repository,
+        oi_repository=engine_es.oi_repository,
+        publisher=_Publisher(),
+    )
+    shadow: dict[str, object] = {"affordable": True, "tradeable": False}
+    # ES: 10 cílů po +2 R, 25 stopů → Ø −0,14 R → block
+    _history(repository, "ES", [2.0] * 10 + [-1.0] * 25, entry=7600.0, stop=7592.0, context=shadow)
+    # NQ: 25 řádků s pravidly (20 cílů, 5 stopů) + 10 cílů před pravidly se stopem 20 b
+    _history(repository, "NQ", [1.0] * 20 + [-1.0] * 5, entry=29000.0, stop=28980.0, context=shadow)
+    _history(repository, "NQ", [1.0] * 10, entry=29000.0, stop=28980.0, context={})
+    now = OPEN + dt.timedelta(hours=16)
+    realized = engine_es._load_realized(now)
+    assert len(realized) == 70  # brzdy čtou oba symboly
+    assert engine_nq._load_realized(now) == realized  # vstup je týž, klíč ne
+
+    es, _ = engine_es._risk_context(realized, "failed_break", 7600.0, 7592.0, 50.0, now)
+    nq, _ = engine_nq._risk_context(realized, "failed_break", 29000.0, 28980.0, 20.0, now)
+    es_lb, nq_lb = es["template_gate_lb"], nq["template_gate_lb"]
+    assert (es["template_gate"], es["template_gate_n"]) == ("block", 35)
+    assert isinstance(es_lb, float) and es_lb < 0
+    assert es["tradeable"] is False and es["trade_block"] == "gate"
+    assert (nq["template_gate"], nq["template_gate_n"]) == ("pass", 35)
+    assert isinstance(nq_lb, float) and nq_lb > 0
+    assert nq["tradeable"] is True and nq["trade_block"] is None and nq["contracts"] == 1
+    # Význam template_gate* se změnil → nová verze pravidel v kontextu
+    assert es["risk_rules_version"] == nq["risk_rules_version"] == 2
