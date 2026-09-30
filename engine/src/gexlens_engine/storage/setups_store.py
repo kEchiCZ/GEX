@@ -340,7 +340,9 @@ class SetupsRepository:
 
     def realized_since(self, since: dt.datetime, *, mechanics_version: int) -> list[RealizedSetup]:
         """Uzavřené setupy napříč symboly s `closed_ts >= since` — brzdy a brána
-        šablon (#1185). `tradeable` z kontextu; řádky před pravidly nesou None.
+        šablon (#1185). Brzdy sčítají napříč symboly, brána si vybere vlastní
+        symbol (`affordable_results`, #1325). `tradeable` z kontextu; řádky před
+        pravidly nesou None.
 
         Setupy vzniklé po settle vlastní expirace (`born_after_settle`, #1324)
         se vynechají: nemohly existovat, takže nesmí nafukovat `n` brány ani

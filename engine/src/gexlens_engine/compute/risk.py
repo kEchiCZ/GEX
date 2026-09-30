@@ -16,21 +16,28 @@ týden do konce týdne; po druhém stopu téže šablony za seanci
 (`max_template_stops_per_day` = 2) je šablona do konce seance stínová. Konec
 seance je otevření Globexu v 17:00 CT (`session_bounds`), ne settle 15:00 CT;
 konec týdne je otevření pondělní seance v neděli 17:00 CT (`week_start`).
-Brána šablon: obchodovatelná je jen šablona, jejíž dolní mez očekávání
-(jednostranný 95% interval Ø R) za posledních N seancí je kladná při n ≥ 30 —
-ostatní se dál měří, ale neobchodují.
+Brána šablon: obchodovatelná je jen šablona na daném symbolu (klíč šablona ×
+symbol, #1325), jejíž dolní mez očekávání (jednostranný 95% interval Ø R) za
+posledních N seancí je kladná při n ≥ 30 — ostatní se dál měří, ale neobchodují.
 """
 
 import datetime as dt
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 from gexlens_engine.compute.settle import session_bounds
 
-#: Verze pravidel sizingu/brzd — do kontextu setupu, aby šly řádky rozlišit
-RISK_RULES_VERSION = 1
+#: Verze pravidel sizingu/brzd/brány — do kontextu setupu, aby šly řádky
+#: rozlišit. Zvýšit při změně významu hodnot, které engine do kontextu zapisuje.
+#: 1 = #1185: brána podle šablony; kvůli nesdílenému slovníku hodnot bodu brala
+#:     řádky s `affordable` z obou symbolů a dopočtené řádky před pravidly jen
+#:     z vlastního, takže `template_gate` (+ `_n`, `_lb`) a `tradeable` měly
+#:     u ES a NQ různý vstup (#1325).
+#: 2 = #1325: brána per šablona × symbol, řádky před pravidly dopočtené
+#:     hodnotou bodu vlastního symbolu.
+RISK_RULES_VERSION = 2
 
 TradeBlock = Literal[
     "stop_over_budget", "stop_over_cap", "daily_brake", "weekly_brake", "template_stops", "gate"
@@ -174,29 +181,35 @@ class GateResult:
 def affordable_results(
     realized: Sequence[RealizedSetup],
     template: str,
+    symbol: str,
     *,
     since: dt.datetime,
-    point_values: Mapping[str, float],
+    point_value_usd: float,
     account_equity_usd: float,
     risk_pct: float,
     risk_max_pct: float,
 ) -> list[float]:
-    """Výsledky šablony pro bránu: jen setupy, které by se daly zobchodovat
-    (stop v rozpočtu). Řádky před pravidly se dopočítají z entry/stop a hodnoty
-    bodu symbolu; bez známé hodnoty bodu se řádek vynechá (nic se nevymýšlí)."""
+    """Výsledky buňky šablona × symbol pro bránu (#1325): jen řádky vlastního
+    symbolu, které by se daly zobchodovat (stop v rozpočtu).
+
+    `realized` nese řádky napříč symboly (brzdy jsou o účtu), brána si bere jen
+    `symbol` — ES a NQ mají u téže šablony jiný stop i skluz, takže každý symbol
+    prokazuje edge sám. `symbol` je ticker instance (ADR-0041 bod 3): pinovaný
+    `ESZ6` má vlastní buňku a vzorek `ES` nepřebírá. Řádky před pravidly
+    (`affordable` None) se dopočítají z entry/stop a `point_value_usd` vlastního
+    symbolu. Do #1325 se hodnota bodu
+    brala ze slovníku, o kterém komentář tvrdil, že ho instance sdílejí; nesdílely,
+    takže brána brala řádky s `affordable` z obou symbolů a dopočtené jen z vlastního."""
     results: list[float] = []
     for row in realized:
-        if row.template != template or row.closed_ts < since:
+        if row.symbol != symbol or row.template != template or row.closed_ts < since:
             continue
         affordable = row.affordable
         if affordable is None:
-            point_value = point_values.get(row.symbol)
-            if point_value is None:
-                continue
             affordable = position_size(
                 row.entry,
                 row.stop,
-                point_value,
+                point_value_usd,
                 account_equity_usd=account_equity_usd,
                 risk_pct=risk_pct,
                 risk_max_pct=risk_max_pct,
@@ -207,7 +220,8 @@ def affordable_results(
 
 
 def template_gate(results: Sequence[float], *, min_samples: int, enabled: bool) -> GateResult:
-    """Brána šablony: pass jen s kladnou dolní mezí očekávání při n ≥ min_samples."""
+    """Brána buňky šablona × symbol: pass jen s kladnou dolní mezí očekávání
+    při n ≥ min_samples (`results` z `affordable_results`)."""
     lb = expectancy_lower_bound(results)
     if not enabled:
         return GateResult("off", len(results), lb)

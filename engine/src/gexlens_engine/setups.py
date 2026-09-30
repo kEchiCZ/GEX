@@ -121,9 +121,6 @@ class SetupEngine:
     # Minutový feature log (#796): trénovací matice pro samoučící smyčku (#794).
     # None = vypnuto; zapisuje se do derived/{symbol}/features/ (mimo retenci).
     feature_writer: SnapshotWriter | None = None
-    # Hodnota bodu per symbol (#1185) — sdílený slovník všech instancí, aby brána
-    # šablon uměla dopočítat obchodovatelnost starších řádků cizího symbolu
-    point_values: dict[str, float] = field(default_factory=dict)
 
     def apply_params(self, params: SetupParams, version: int | None) -> bool:
         """Přepne prahy za běhu (nová verze ve store). Vrací True při změně.
@@ -228,7 +225,6 @@ class SetupEngine:
     ) -> None:
         levels = runtime.last_levels
         flow = runtime.last_flow
-        self.point_values[self.symbol] = float(runtime.multiplier)
         self._refresh_max_pain(runtime.expiry, now.date())
         call_flow, put_flow, raw_flow = self._flows(runtime)
 
@@ -453,7 +449,8 @@ class SetupEngine:
         """Blokující čtení uzavřených setupů týdne a okna brány — volat přes to_thread.
 
         Okno je širší z obou (týden, nebo N seancí brány ≈ 84 dní); týden si
-        z něj vymezuje `brake_state` sám (#1322)."""
+        z něj vymezuje `brake_state` sám (#1322). Řádky jsou napříč symboly
+        kvůli brzdám; brána si z nich vybere vlastní symbol (#1325)."""
         since = min(week_start(trading_session_date(now)), self._gate_since(now))
         return self.repository.realized_since(since, mechanics_version=SETUP_MECHANICS_VERSION)
 
@@ -519,7 +516,11 @@ class SetupEngine:
         point_value: float,
         now: dt.datetime,
     ) -> tuple[dict[str, object], BrakeState]:
-        """Sizing, brzdy a brána (#1185) → klíče kontextu setupu + stav brzd."""
+        """Sizing, brzdy a brána (#1185) → klíče kontextu setupu + stav brzd.
+
+        `point_value` je hodnota bodu vlastního symbolu (`runtime.multiplier`);
+        sizing kandidáta i dopočet starších řádků brány (klíč šablona × symbol,
+        #1325) stojí na ní — cizí symbol brána nečte, jeho hodnotu bodu nepotřebuje."""
         params = self.params
         size = position_size(
             entry,
@@ -534,8 +535,9 @@ class SetupEngine:
             affordable_results(
                 realized,
                 template,
+                self.symbol,
                 since=self._gate_since(now),
-                point_values=self.point_values,
+                point_value_usd=point_value,
                 account_equity_usd=params.account_equity_usd,
                 risk_pct=params.risk_pct,
                 risk_max_pct=params.risk_max_pct,

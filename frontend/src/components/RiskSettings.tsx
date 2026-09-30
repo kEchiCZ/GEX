@@ -77,7 +77,7 @@ const RISK_FIELDS: readonly RiskField[] = [
     step: 1,
     min: 1,
     max: 10_000,
-    help: 'Šablona je obchodovatelná jen s kladnou dolní mezí očekávání (jednostranný 95% interval Ø R) při n ≥ tomuto počtu.',
+    help: 'Šablona je na daném symbolu obchodovatelná jen s kladnou dolní mezí očekávání (jednostranný 95% interval Ø R) při n ≥ tomuto počtu setupů téhož symbolu. ES a NQ se hodnotí zvlášť.',
   },
   {
     key: 'template_gate_days',
@@ -184,7 +184,7 @@ export function RiskSettings() {
             aria-label="Brána šablon zapnuta"
             onChange={(event) => setDraft((prev) => ({ ...prev, gate: event.target.checked }))}
           />
-          Brána šablon (obchodovat jen šablony s prokázaným edge)
+          Brána šablon (obchodovat jen šablony s prokázaným edge na daném symbolu)
         </label>
       </div>
       <label>

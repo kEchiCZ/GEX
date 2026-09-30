@@ -60,3 +60,49 @@ v rozpočtu (n = 339, +0,06 R). Uživatel bude obchodovat účet ~5 000 $ na
   a vyřadí je predikát při čtení. `realized_day_r` a `realized_week_r` v kontextu starších setupů se
   nepřepisují, protože jsou záznamem stavu v době vzniku (`realized_week_r` před #1322 je tedy
   84denní součet, ne týden).
+
+## Dodatek 2026-09-30: brána per šablona × symbol (#1325, varianta C)
+
+- **Klíč brány je šablona × symbol.** `affordable_results` bere jen řádky vlastního symbolu (tickeru
+  instance, ADR-0041 bod 3). Řádky před pravidly bez `affordable` dopočítá hodnotou bodu vlastního
+  symbolu (`runtime.multiplier`, ES 50 $, NQ 20 $), tedy touž hodnotou, se kterou počítá sizing kandidáta.
+  Kritérium bodu 4 se nemění: dolní mez Ø R > 0 při n ≥ `template_gate_min_samples` (30) za
+  `template_gate_days` (60) seancí, ze setupů se stopem v rozpočtu a bez setupů po settle (#1324).
+  Brzdy (bod 3) včetně stropu stopů šablony zůstávají napříč symboly, protože chrání účet, ne edge.
+- **Pinovaný kontrakt má vlastní buňku.** Klíčem je ticker, ne kořen produktu, stejně jako u partic,
+  setupů, statistik a kalibrace confidence (ADR-0041 bod 3 a Důsledky). `ESZ6` proto nepřebírá vzorek
+  `ES` a začíná na n = 0. Dokud nenasbírá `template_gate_min_samples` vlastních uzavřených setupů
+  šablony, je jeho brána `insufficient` a všechny jeho setupy jsou stín. Pinovaný kontrakt obvykle
+  žije krátce (roll týden, ADR-0039), takže v praxi zůstane celý stínový. Klíč podle kořene
+  (`symbol_root`) by vzorek i hodnotu bodu sdílel, ale šel by proti ADR-0041 bod 3.
+- **Proč.** Brána do #1325 stála na slovníku `point_values`, o kterém komentář tvrdil, že ho instance
+  `SetupEngine` sdílejí. Nesdílely: každá instance dostala vlastní prázdný slovník a plnila jen svůj
+  symbol. Brána proto brala řádky s `affordable` z obou symbolů, ale dopočtené řádky před pravidly jen
+  z vlastního. ES a NQ tak tutéž šablonu ve stejnou chvíli hodnotily nad jiným vzorkem: NQ pass při
+  LB +0,004 (n = 226), o 5 minut později ES block při LB −0,027 (n = 234). Verdikt NQ kmital,
+  25. 9. se za 75 minut třikrát přepnul. Bránou prošla jen NQ trend_continuation, a to jen díky této
+  chybě. K 30. 9. 2026 06:47 UTC je obchodovatelných setupů v5 osm: 1339, 1343, 1384, 1397, 1412,
+  1414, 1416 a 1418. Dva z nich (1397, 1414) vznikly po settle, takže podle #1324 nemohly existovat.
+  Zbylých šest skončilo stopem (−6 R, −2 090 $ včetně poplatků). Replay brány po #1325 v okamžiku
+  vzniku dává u všech osmi block (n = 123–143, LB −0,095 až −0,052). Do nasazení #1325 mohou další
+  přibýt. Rozbor v #1323 (29. 9.) pracoval s prvními čtyřmi (−1 085 $). Oprava samotného sdílení
+  (varianta B) by dnes zavřela bránu všem šablonám. Klíč po symbolech odpovídá datům: ES a NQ se
+  u téže šablony chovají jinak (medián stopu v bráně 2,4 b proti 16,8 b; ES nepřežije skluz 1 tick,
+  NQ ano).
+- **Sdílený `point_values` zrušen** jako balast. Brána cizí symbol nečte a hodnotu bodu vlastního
+  zná instance z `runtime.multiplier`. Souhrn setupů (#1319) má vlastní tabulku hodnot bodu
+  (`compute/paper.POINT_VALUES`), změna se ho netýká.
+- **`risk_rules_version` = 2.** Změnil se význam `template_gate`, `template_gate_n` a
+  `template_gate_lb` a s nimi i `tradeable` v kontextu setupu. Řádky s verzí 1 nesou verdikt staré
+  logiky a nepřepisují se, protože jsou záznamem stavu v době vzniku. Verze je jediný způsob, jak je
+  v analýze oddělit.
+- **Důsledek: dnes block na obou symbolech.** K 30. 9. 2026 06:48 UTC (po vyřazení setupů po settle)
+  je jediná šablona s dostatečným vzorkem, trend_continuation, v bloku na ES (n = 189, LB −0,107)
+  i na NQ (n = 144, LB −0,079). Ostatní šablony mají n < 30 (insufficient). Bez ručního zásahu tedy
+  nevzniknou obchodovatelné setupy ani jejich pushe (stín do pushe nejde) a bilance účtu stojí.
+  Přebití brány pro vybranou kombinaci šablona × symbol navrhuje #1323, které zatím čeká na
+  rozhodnutí. Do té doby jde bránu jen vypnout celou (Settings → Risk management,
+  `template_gate_enabled`). Obchodovatelné jsou pak všechny šablony na všech symbolech se stopem
+  v rozpočtu, chrání jen sizing a brzdy (varianta E z #1325 s jejími nevýhodami). Kritérium se zpětně
+  neladí: LB > 0 se přehodnotí walk-forwardem po ≥ 20 seancích od 30. 9. (~28. 10., připomínka #1334),
+  s náklady ADR-0030 (komise a skluz 1 tick).

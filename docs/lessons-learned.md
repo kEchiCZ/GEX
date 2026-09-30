@@ -178,6 +178,23 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-29 — brána šablon dávala ES a NQ různé verdikty téže šablony (#1325): komentář tvrdil sdílení, které konstrukce nezajistila.**
+  `SetupEngine.point_values` nesl komentář „sdílený slovník všech instancí“, ale `field(default_factory=dict)`
+  dal každé instanci vlastní slovník a `__main__` žádný společný nepředal, takže každá instance znala jen svůj
+  symbol. `affordable_results` proto bral řádky s `affordable` z obou symbolů a dopočtené řádky před pravidly
+  jen z vlastního. ES a NQ tak tutéž šablonu ve stejnou chvíli hodnotily nad jiným vzorkem (NQ pass při
+  LB +0,004, o 5 min později ES block) a verdikt NQ kmital. Všechny obchodovatelné setupy v5 do nasazení
+  opravy (NQ trend_continuation; k 30. 9. 06:47 UTC osm, z toho 1397 a 1414 po settle) prošly jen díky tomu:
+  replay opravené brány dává u všech block. Testy prošly, protože slovník plnily ručně
+  (`engine.point_values["ES"] = 50.0`) a měly jedinou instanci. Odhalil to přepočet `template_gate_n` z kontextu: u 263 z 266 řádků seděla hypotéza „každá
+  instance zvlášť“, hypotéza „sdílený slovník“ u žádného.
+  → Tvrzení komentáře o sdílení nebo životnosti stavu (sdílený, singleton, per proces) ověřit **v místě
+  konstrukce** (`grep` konstruktoru a všech zapisovatelů), ne v místě použití. Když na něm stojí rozhodnutí,
+  test staví objekty jako produkce (víc instancí, nic se neplní ručně) a porovná **vstup** rozhodnutí per
+  instance, ne jen verdikt (`test_brana_es_a_nq_maji_vlastni_vstup_a_verdikt`). Nejlepší sdílený mutable
+  stav je žádný: brána má klíč šablona × symbol a hodnotu bodu vlastního symbolu instance zná
+  (`runtime.multiplier`).
+
 - **2026-09-29 — 81 setupů v5 vzniklo po settle vlastní expirace a příští minutou skončilo timeoutem (#1324): pipeline roluje expiraci až s novým UTC dnem.**
   `expiry_expired` porovnává expiraci s `now.date()` v UTC, takže 0DTE řetěz běží po settle (v létě 20:00 UTC)
   ještě 4 h až do půlnoci UTC — přes poslední hodinu Globexu, denní pauzu i večerní otevření. `SetupEngine`

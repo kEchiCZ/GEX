@@ -432,7 +432,8 @@ export function formatGateBucket(bucket: GateBucket): string {
 //
 // Engine u každého setupu spočítá sizing (kontrakty = ⌊účet × riziko % /
 // (stop b × hodnota bodu)⌋), brzdy (−3 R den, −6 R týden, 2 stopy šablony za
-// den) a bránu šablon (dolní mez očekávání > 0 při n ≥ 30 za 60 seancí).
+// den) a bránu šablon (dolní mez očekávání > 0 při n ≥ 30 za 60 seancí; od #1325
+// per šablona × symbol, `risk_rules_version` 2).
 // Setup vzniká vždy; `tradeable` říká, zda se dá zobchodovat, `trade_block`
 // proč ne. UI jen zobrazuje — nic nepřepočítává.
 
