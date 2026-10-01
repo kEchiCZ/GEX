@@ -4,18 +4,23 @@ Spouští se z hostu proti běžící TWS / IB Gateway (vlastní clientId — ne
 
     uv run python scripts/backfill_bars.py [--symbols ES,NQ] [--depth-days 730]
     uv run python scripts/backfill_bars.py --days 2026-09-10,2026-09-14
-        [--replace-tasty] [--dry-run] [--port 4001]
+        [--replace-tasty] [--replace-wrong-contract] [--dry-run] [--port 4001]
 
 Hluboký backfill je idempotentní a přerušitelný: dny s existující particí se
 přeskakují, takže opakované spuštění doplní jen díry.
 
 `--days` opraví vyjmenované dny, které partici už mají: doplní chybějící minuty
 a s `--replace-tasty` nahradí i minuty rekonstruované z dxFeed (`tasty_candle`).
-Měřené minuty (`ibkr`) ani dřívější doplnění (`ibkr_hist`) nepřepíše. Kontrakt
+S `--replace-wrong-contract` přepíše i dřívější doplnění (`ibkr_hist`), jehož
+close se od ověřeného staženého baru liší o víc než `BACKFILL_CONTRACT_TOLERANCE`
+— bar jiného kontraktu zapsaný před stráží #1232; `ibkr_hist` v toleranci
+zůstává. Měřené minuty (`ibkr`) nepřepíše nikdy. Kontrakt
 dne se vybírá podle měřených barů partice (stráž #1232), ne podle kalendáře,
 a každý zapisovaný souvislý blok minut musí sedět i na nejbližší měřené minuty
-po obou stranách (engine mohl během dne přepnout kontrakt). Dnešek a včerejšek skript odmítne:
-jejich partice drží engine v paměti a pozdním zápisem by opravu přepsal.
+téže seance po stranách (engine mohl během dne přepnout kontrakt; minuta za
+denní pauzou je jiná seance). Doplnění díry stačí jedna strana, přepis
+`ibkr_hist` potřebuje obě. Dnešek a včerejšek skript odmítne: jejich partice
+drží engine v paměti a pozdním zápisem by opravu přepsal.
 
 Port je z konfigurace (`GEXLENS_IBKR_PORT`, IB Gateway 4001), jde přebít
 `--port`. Bary nesou `source = ibkr_hist` jako backfill enginu (#1055).
@@ -36,6 +41,7 @@ from ib_async import IB, Contract, Future  # noqa: E402
 from gexlens_engine.adapters import IbHistoricalClient  # noqa: E402
 from gexlens_engine.config import Settings, load_settings  # noqa: E402
 from gexlens_engine.ibkr.deepbars import (  # noqa: E402
+    RejectedBlock,
     bucket_by_day,
     build_plan,
     contract_candidates,
@@ -54,6 +60,7 @@ from gexlens_engine.storage.parquet_store import (  # noqa: E402
     BAR_SOURCE_HISTORICAL,
     BUFFER_KEEP_DAYS,
     SnapshotWriter,
+    StoredBar,
     read_bars,
 )
 
@@ -197,13 +204,13 @@ async def run_deep(symbols: list[str], depth_days: int, settings: Settings, port
     return 0 if stats["fetched"] or stats["skipped"] else 1
 
 
-def day_sources(settings: Settings, symbol: str, day: dt.date) -> dict[dt.datetime, str | None]:
-    """Minuta → `source` partice dne (NULL = živá cesta)."""
+def day_bars(settings: Settings, symbol: str, day: dt.date) -> dict[dt.datetime, StoredBar]:
+    """Minuta → uložený bar partice dne (`source` NULL = živá cesta)."""
     start = dt.datetime.combine(day, dt.time(0, 0), tzinfo=dt.UTC)
     # read_bars bere `since < ts ≤ until`; o mikrosekundu dřív = včetně 00:00
     since = start - dt.timedelta(microseconds=1)
     until = start + dt.timedelta(days=1) - dt.timedelta(microseconds=1)
-    return {bar.ts: bar.source for bar in read_bars(settings.derived_dir, symbol, since, until)}
+    return {bar.ts: bar for bar in read_bars(settings.derived_dir, symbol, since, until)}
 
 
 async def fetch_verified_day(
@@ -262,6 +269,21 @@ async def fetch_verified_day(
     return None
 
 
+def reject_message(block: RejectedBlock, contract_month: str) -> str:
+    """Důvod odmítnutí bloku pro výpis (`RejectReason`)."""
+    if block.reason == "no_edge" or block.deviation is None:
+        return "po stranách žádná měřená minuta téže seance, kontrakt nelze ověřit"
+    if block.reason == "mismatch":
+        return (
+            f"měřené minuty vedle bloku se liší o {block.deviation * 100:.2f} % "
+            f"(jiný kontrakt než {contract_month}?)"
+        )
+    return (
+        "přepis ibkr_hist potřebuje měřenou minutu téže seance po obou stranách, "
+        f"má jen jednu (odchylka {block.deviation * 100:.2f} %)"
+    )
+
+
 async def run_days(
     symbols: list[str],
     days: list[dt.date],
@@ -269,15 +291,17 @@ async def run_days(
     port: int,
     *,
     replace_tasty: bool,
+    replace_wrong_contract: bool,
     dry_run: bool,
 ) -> int:
-    """Oprava vyjmenovaných dnů (#1320): díry a volitelně rekonstrukce `tasty_candle`."""
+    """Oprava vyjmenovaných dnů (#1320): díry, volitelně rekonstrukce `tasty_candle`
+    a dřívější doplnění `ibkr_hist` z jiného kontraktu."""
     writer = SnapshotWriter(settings)
     ib = await connect(port, settings)
     backfillers: dict[str, UnderlyingBackfiller] = {}
     failed = 0
     rejected = 0
-    totals = {"filled": 0, "replaced": 0, "tasty_left": 0}
+    totals = {"filled": 0, "replaced": 0, "tasty_left": 0, "rewritten": 0}
     try:
         for symbol in symbols:
             for day in days:
@@ -288,10 +312,11 @@ async def run_days(
                     continue
                 contract_month, bars, deviation = fetched
                 plan = plan_day_refill(
-                    day_sources(settings, symbol, day),
+                    day_bars(settings, symbol, day),
                     bars,
                     measured=measured,
                     replace_tasty=replace_tasty,
+                    replace_wrong_contract=replace_wrong_contract,
                 )
                 for block in plan.rejected:
                     logger.error(
@@ -301,15 +326,25 @@ async def run_days(
                         block.start.strftime("%H:%M"),
                         block.end.strftime("%H:%M"),
                         block.minutes,
-                        "po stranách žádná měřená minuta, kontrakt nelze ověřit"
-                        if block.deviation is None
-                        else f"měřené minuty vedle bloku se liší o {block.deviation * 100:.2f} % "
-                        f"(jiný kontrakt než {contract_month}?)",
+                        reject_message(block, contract_month),
                     )
                 rejected += len(plan.rejected)
+                for rewrite in plan.rewritten:
+                    logger.info(
+                        "%s %s: blok %s–%s (%d min) ibkr_hist jiného kontraktu se přepíše barem "
+                        "%s (odchylka až %.2f %%)",
+                        symbol,
+                        day,
+                        rewrite.start.strftime("%H:%M"),
+                        rewrite.end.strftime("%H:%M"),
+                        rewrite.minutes,
+                        contract_month,
+                        rewrite.deviation * 100,
+                    )
+                rewritten = sum(rewrite.minutes for rewrite in plan.rewritten)
                 logger.info(
                     "%s %s z %s (odchylka %.3f %%, %d barů): doplní %d, nahradí tasty %d, "
-                    "tasty zůstává %d%s",
+                    "tasty zůstává %d, přepíše jiný kontrakt %d%s",
                     symbol,
                     day,
                     contract_month,
@@ -318,11 +353,13 @@ async def run_days(
                     plan.filled,
                     plan.replaced,
                     plan.tasty_left,
+                    rewritten,
                     " — dry-run, nic se nezapisuje" if dry_run else "",
                 )
                 totals["filled"] += plan.filled
                 totals["replaced"] += plan.replaced
                 totals["tasty_left"] += plan.tasty_left
+                totals["rewritten"] += rewritten
                 if dry_run or not plan.bars:
                     continue
                 writer.write_bars(symbol, day, plan.bars)
@@ -333,12 +370,13 @@ async def run_days(
         ib.disconnect()
 
     logger.info(
-        "Hotovo%s: doplněno %d, nahrazeno tasty %d, tasty zůstává %d, %d dnů bez zápisu "
-        "(chyba), %d bloků odmítnuto (kontrakt vedle bloku nesedí)",
+        "Hotovo%s: doplněno %d, nahrazeno tasty %d, tasty zůstává %d, přepsáno jiného "
+        "kontraktu %d, %d dnů bez zápisu (chyba), %d bloků odmítnuto (kontrakt bloku neověřen)",
         " (dry-run)" if dry_run else "",
         totals["filled"],
         totals["replaced"],
         totals["tasty_left"],
+        totals["rewritten"],
         failed,
         rejected,
     )
@@ -369,11 +407,16 @@ def main() -> int:
         help="s --days nahradit i minuty tasty_candle barem IBKR historical",
     )
     parser.add_argument(
+        "--replace-wrong-contract",
+        action="store_true",
+        help="s --days přepsat i minuty ibkr_hist, které nesedí na ověřený kontrakt dne",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true", help="s --days jen vypsat, co by se zapsalo"
     )
     args = parser.parse_args()
-    if args.days is None and (args.replace_tasty or args.dry_run):
-        parser.error("--replace-tasty a --dry-run patří k --days")
+    if args.days is None and (args.replace_tasty or args.replace_wrong_contract or args.dry_run):
+        parser.error("--replace-tasty, --replace-wrong-contract a --dry-run patří k --days")
     # Partice dneška a včerejška drží engine v paměti (BUFFER_KEEP_DAYS) a jeho
     # pozdní zápis (finalizace 23:59, gap-fill, díra setupu) by opravu přepsal
     newest = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=BUFFER_KEEP_DAYS + 1)
@@ -384,6 +427,8 @@ def main() -> int:
         )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    # ib_async.wrapper loguje na INFO číslo účtu a pozice portfolia — do logu nepatří
+    logging.getLogger("ib_async.wrapper").setLevel(logging.WARNING)
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
     settings = settings_for(args.data_dir)
     port = args.port if args.port is not None else settings.ibkr_port
@@ -396,6 +441,7 @@ def main() -> int:
             settings,
             port,
             replace_tasty=args.replace_tasty,
+            replace_wrong_contract=args.replace_wrong_contract,
             dry_run=args.dry_run,
         )
     )

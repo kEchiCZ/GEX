@@ -126,13 +126,21 @@ def ibkr_day(offset: float = 0.0) -> list[Bar]:
     return [bar(i, price(i) + 0.25 + offset, None) for i in range(30)]
 
 
-async def run(mod: Any, data: Path, *, replace_tasty: bool, dry_run: bool = False) -> int:
+async def run(
+    mod: Any,
+    data: Path,
+    *,
+    replace_tasty: bool,
+    replace_wrong_contract: bool = False,
+    dry_run: bool = False,
+) -> int:
     result: int = await mod.run_days(
         ["ES"],
         [DAY],
         Settings(data_dir=data),
         4001,
         replace_tasty=replace_tasty,
+        replace_wrong_contract=replace_wrong_contract,
         dry_run=dry_run,
     )
     return result
@@ -260,3 +268,71 @@ async def test_block_next_to_other_measured_contract_is_not_written(
     for i in u6_live + z6_live:
         assert after[i] == before[i]
         assert after[i][1] == BAR_SOURCE_LIVE
+
+
+async def test_replace_wrong_contract_rewrites_only_historical_out_of_tolerance(
+    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """9. 9. 2026: starší `ibkr_hist` ze Z6 mezi měřenými minutami U6 (#1320, #1232).
+
+    S `--replace-wrong-contract` se přepíše jen `ibkr_hist` mimo toleranci;
+    měřená minuta (i o basis jinde), `ibkr_hist` v toleranci a rekonstrukce
+    bez `--replace-tasty` zůstávají. Druhý běh partici nezmění (idempotence).
+    """
+    wrong = [10, 11, 12, 13, 14]
+    near = [15, 16, 17]
+    live = [i for i in range(30) if i not in (*wrong, *near, 20, 25)]
+    rows = (
+        [bar(i, price(i), None) for i in live]
+        + [bar(i, price(i) + 77.0, BAR_SOURCE_HISTORICAL) for i in wrong]  # Z6, +1 %
+        + [bar(i, price(i) - 1.0, BAR_SOURCE_HISTORICAL) for i in near]  # v toleranci
+        + [bar(20, price(20) + 0.5, BAR_SOURCE_RECONSTRUCTED)]
+        + [bar(25, price(25) + 77.0, None)]  # měřená minuta mimo kontrakt dne
+    )
+    path = SnapshotWriter(Settings(data_dir=tmp_path)).write_bars("ES", DAY, rows)
+    before = read(path)
+    install_fakes(mod, monkeypatch, {"202609": ibkr_day()})
+
+    # Bez volby zůstává dřívější doplnění beze změny
+    assert await run(mod, tmp_path, replace_tasty=False) == 0
+    assert read(path) == before
+
+    assert await run(mod, tmp_path, replace_tasty=False, replace_wrong_contract=True) == 0
+    after = read(path)
+    for i in wrong:
+        assert after[i] == (price(i) + 0.25, BAR_SOURCE_HISTORICAL)
+    for i in [*live, 25, *near, 20]:
+        assert after[i] == before[i]
+    assert after[25][1] == BAR_SOURCE_LIVE
+    assert after[20][1] == BAR_SOURCE_RECONSTRUCTED
+
+    content = path.read_bytes()
+    assert await run(mod, tmp_path, replace_tasty=False, replace_wrong_contract=True) == 0
+    assert path.read_bytes() == content
+
+
+async def test_replace_wrong_contract_keeps_session_after_daily_pause(
+    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Konec dne po denní pauze z jiného kontraktu se nepřepíše (#1320).
+
+    Rolovací den: engine měřil U6 do 20:59 UTC, s novou seancí (22:00 UTC)
+    Z6 a konec partice je `ibkr_hist` ze Z6. Medián dne vybere U6; jediná
+    měřená minuta vedle bloku je z předchozí seance, takže kontrakt bloku
+    nejde ověřit — blok se odmítne, návratový kód 1, partice beze změny.
+    """
+    u6_live = list(range(410, 420))  # 20:50–20:59
+    z6_hist = list(range(480, 490))  # 22:00–22:09
+    rows = [bar(i, price(i), None) for i in u6_live] + [
+        bar(i, price(i) + 77.0, BAR_SOURCE_HISTORICAL) for i in z6_hist
+    ]
+    path = SnapshotWriter(Settings(data_dir=tmp_path)).write_bars("ES", DAY, rows)
+    content = path.read_bytes()
+    install_fakes(
+        mod, monkeypatch, {"202609": [bar(i, price(i), None) for i in [*u6_live, *z6_hist]]}
+    )
+
+    assert await run(mod, tmp_path, replace_tasty=False, replace_wrong_contract=True) == 1
+    assert path.read_bytes() == content
+    assert "blok 22:00–22:09 (10 min) se nezapíše" in caplog.text
+    assert "žádná měřená minuta téže seance" in caplog.text
