@@ -3,7 +3,8 @@
 Každou minutu po cyklu aktivní expirace: sestaví MinuteInputs (bar podkladu,
 GEX úrovně z posledního cyklu, toky z rozdílu kumulativních volume, Max Pain
 z OI archivu), spustí čisté detektory, hlídá anti-spam, ukládá setupy do PG,
-vyhodnocuje otevřené proti baru a publikuje alerty + WS kanál setups.{symbol}.
+vyhodnocuje otevřené po cestě ceny (bary v pořadí, díry si vyžádá z IBKR
+historical a čte z partic, #1320) a publikuje alerty + WS kanál setups.{symbol}.
 
 Selhání čehokoli tady nesmí shodit sběr dat — volající balí do try/except.
 """
@@ -12,7 +13,7 @@ import asyncio
 import datetime as dt
 import logging
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -36,20 +37,25 @@ from gexlens_engine.compute.risk import (
 )
 from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setups import (
+    PATH_GAP_WAIT,
     SETUP_MECHANICS_VERSION,
     Direction,
     MinuteInputs,
     Outcome,
+    PathBar,
+    PathState,
     SetupParams,
     average_true_range,
     born_after_settle,
     detect_all,
-    evaluate_bar,
     gex_regime,
     is_counter_regime,
     max_pain_strike,
+    missing_minutes,
+    path_start,
     r_result,
     setup_settle_ts,
+    walk_setup_path,
 )
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.underlying import Bar
@@ -63,6 +69,21 @@ logger = logging.getLogger(__name__)
 HISTORY_MINUTES = 400
 #: Jak často se znovu čte track record pro kalibraci confidence (#794 fáze 2B)
 CALIBRATION_REFRESH = dt.timedelta(minutes=10)
+#: Bary z partic se berou jen do minuty now − 2 (#1320): partice nese i
+#: provizorní bar rozdělané minuty (ADR-0005) a finál minuty N−1 může dorazit
+#: až v cyklu N+1. Starší minuty jsou finální.
+STORED_BAR_LAG = dt.timedelta(minutes=2)
+
+#: Čtení barů z partic: bary se `since < ts ≤ until` (`parquet_store.read_bars`)
+BarReader = Callable[[dt.datetime, dt.datetime], Sequence[PathBar]]
+#: Žádost o doplnění minut [první, poslední] do partic (IBKR historical na
+#: pozadí); False = jiné doplnění ještě běží, žádost se zopakuje příští cyklus
+BarRequester = Callable[[dt.datetime, dt.datetime], bool]
+
+
+def _utc(value: dt.datetime) -> dt.datetime:
+    """Naivní čas z DB (sqlite) je UTC."""
+    return value.replace(tzinfo=dt.UTC) if value.tzinfo is None else value
 
 
 def setup_params_from_settings(settings: Settings) -> SetupParams:
@@ -84,8 +105,14 @@ def setup_params_from_settings(settings: Settings) -> SetupParams:
 @dataclass
 class _OpenSetup:
     stored: StoredSetup
-    mfe: float = 0.0
-    mae: float = 0.0
+    # Kam až je cesta ceny vyhodnocená (#1320), včetně MFE/MAE. Začíná barem
+    # vstupu; setup z DB po restartu ho zná z kontextu (`entry_bar_ts`), takže
+    # se cesta přehraje z partic od téhož baru jako v živém běhu.
+    path: PathState
+    # Díra v barech, na které vyhodnocení stojí, a od kdy (#1320); None =
+    # neblokuje. Každá díra má vlastní PATH_GAP_WAIT — posun cesty čekání nuluje.
+    waiting_gap: tuple[dt.datetime, dt.datetime] | None = None
+    blocked_since: dt.datetime | None = None
     # Kontra-režimový setup (#252 C): stop spouští delší cooldown šablony.
     # Setupy načtené z DB po restartu flag nemají (kontext se nenačítá) — žebřík
     # ztrát se po restartu hlídá až od prvního nově vzniklého setupu.
@@ -121,6 +148,15 @@ class SetupEngine:
     # Minutový feature log (#796): trénovací matice pro samoučící smyčku (#794).
     # None = vypnuto; zapisuje se do derived/{symbol}/features/ (mimo retenci).
     feature_writer: SnapshotWriter | None = None
+    # Bary symbolu z partic (#1320) — díry v živé dávce (výpadek streamu,
+    # restart) se dotahují odtud, kam je zapsal backfill nebo doplnění z tasty.
+    # None = jen živé bary; díra se pak po PATH_GAP_WAIT přejde s varováním.
+    bar_reader: BarReader | None = None
+    # Doplnění díry, na které vyhodnocení stojí (#1320): IBKR historical do
+    # partic. Stall detektor díru při zamrzlém spotu nevidí (3. 9. stál stream
+    # i spot), takže re-backfill po návratu streamu nepřijde — o doplnění si
+    # proto říká ten, kdo díru potřebuje. None = jen čekání a čtení partic.
+    request_bars: BarRequester | None = None
 
     def apply_params(self, params: SetupParams, version: int | None) -> bool:
         """Přepne prahy za běhu (nová verze ve store). Vrací True při změně.
@@ -158,9 +194,21 @@ class SetupEngine:
         # setupy nevznikají, nebo je nečitelná) — log 1× za expiraci
         self._expiry_logged: str | None = None
         self._max_pain_loaded_for: tuple[str, dt.date, dt.datetime | None] | None = None
-        # Otevřené setupy z DB (restart enginu) — MFE/MAE pokračují od nuly
+        # Díry, o jejichž doplnění už engine požádal (#1320) — jedna žádost na
+        # díru, i když na ní stojí víc setupů; bez blokace se množina vyprázdní
+        self._requested_gaps: set[tuple[dt.datetime, dt.datetime]] = set()
+        # Otevřené setupy z DB (restart enginu) — cesta ceny se přehraje od
+        # baru vstupu z partic (#1320), MFE/MAE tím dostanou i minuty výpadku
         for stored in self.repository.active_for(self.symbol):
-            self._open.append(_OpenSetup(stored=stored))
+            self._open.append(_OpenSetup(stored=stored, path=self._stored_path(stored)))
+
+    @staticmethod
+    def _stored_path(stored: StoredSetup) -> PathState:
+        """Začátek cesty setupu z DB (#1320): bar vstupu z kontextu; starší
+        řádky a setupy nad spotem ho nemají — minuta před vznikem."""
+        if stored.entry_bar_ts is None:
+            return path_start(_utc(stored.created_ts))
+        return PathState(last_ts=_utc(stored.entry_bar_ts), last_close=stored.entry)
 
     def _refresh_max_pain(self, expiry: str, today: dt.date) -> None:
         """Max Pain z denního archivu OI; přepočet při KAŽDÉ změně snímku (#826).
@@ -207,6 +255,19 @@ class SetupEngine:
             else:
                 put_flow += weighted
         return call_flow, put_flow, raw
+
+    @staticmethod
+    def _new_path(now: dt.datetime, entry_bar: Bar | None) -> PathState:
+        """Cesta nového setupu začíná za barem vstupu (#1320).
+
+        Entry je close posledního baru dávky cyklu (`MinuteInputs.close`):
+        obvykle N−1, opožděný cyklus nese i bar N a pozdější (NQ po ES, open
+        seance), zpožděný stream jen N−2. Bary do baru vstupu včetně proběhly
+        před vstupem, pozdější patří cestě. Dávka bez baru = setup nad spotem,
+        cesta za minutou N−1 (`path_start`)."""
+        if entry_bar is None:
+            return path_start(now)
+        return PathState(last_ts=entry_bar.ts, last_close=entry_bar.close)
 
     @staticmethod
     def _settle_ts(expiry: str) -> dt.datetime | None:
@@ -268,8 +329,9 @@ class SetupEngine:
         if self.feature_writer is not None:
             await self._log_features(now, runtime, inputs)
 
-        await self._evaluate_open(now, inputs, bars)
-        await self._detect_new(now, runtime, inputs)
+        await self._evaluate_open(now, bars)
+        # Bar vstupu = týž bar, jehož close je `inputs.close` (#1320)
+        await self._detect_new(now, runtime, inputs, bars[-1] if bars else None)
 
     async def _log_features(
         self, now: dt.datetime, runtime: EngineRuntime, inputs: MinuteInputs
@@ -324,122 +386,204 @@ class SetupEngine:
         except Exception:
             logger.exception("Zápis feature logu selhal — minutový cyklus jede dál")
 
-    async def _evaluate_open(
-        self,
-        now: dt.datetime,
-        inputs: MinuteInputs,
-        bars: Sequence[Bar] | None = None,
-    ) -> None:
-        # Vyhodnocení po jednotlivých barech (#257): cyklus umí nést víc minut
-        # najednou (sekvenční sweep instrumentů, dávka po zpoždění) — outcome
-        # i closed_ts musí patřit svíčce, která úroveň zasáhla (její ts = čas
-        # na 1m TF), ne wall-clock času cyklu. Konzervativní stop-first pravidlo
-        # platí jen UVNITŘ jedné svíčky — cíl v dřívější minutě vyhrává nad
-        # stopem v pozdější. Bez barů (spot fallback) se hodnotí agregát minuty.
-        points: Sequence[Bar] = (
-            sorted(bars, key=lambda bar: bar.ts)
-            if bars
-            else [
-                Bar(
-                    ts=now,
-                    open=inputs.open,
-                    high=inputs.high,
-                    low=inputs.low,
-                    close=inputs.close,
-                    volume=0.0,
-                )
-            ]
-        )
+    async def _stored_bars(self, now: dt.datetime, live: Sequence[Bar]) -> list[PathBar]:
+        """Bary z partic pro setupy, kterým živá dávka nenavazuje (#1320).
+
+        Čte se jen při mezeře: setup je pozadu za `now − STORED_BAR_LAG`, mezi
+        jeho posledním barem a tou hranicí běžel trh a živá dávka na něj
+        nenavazuje (výpadek streamu, restart, opožděné cykly, doplněná díra).
+        Běžná minuta partici nečte. Chyba čtení = bez dotažení; setup počká
+        (nic se nevymýšlí).
+        """
+        if self.bar_reader is None:
+            return []
+        horizon = now.replace(second=0, microsecond=0) - STORED_BAR_LAG
+        behind: list[dt.datetime] = []
+        for item in self._open:
+            last_ts = item.path.last_ts
+            if (
+                last_ts >= horizon
+                or missing_minutes(last_ts, horizon + dt.timedelta(minutes=1)) is None
+            ):
+                continue
+            following = next((bar for bar in live if bar.ts > last_ts), None)
+            if following is not None and missing_minutes(last_ts, following.ts) is None:
+                continue  # živá dávka navazuje
+            behind.append(last_ts)
+        if not behind:
+            return []
+        try:
+            return list(await asyncio.to_thread(self.bar_reader, min(behind), horizon))
+        except Exception:
+            logger.exception(
+                "Setupy %s: čtení barů z partic selhalo — vyhodnocení čeká", self.symbol
+            )
+            return []
+
+    async def _evaluate_open(self, now: dt.datetime, bars: Sequence[Bar] | None = None) -> None:
+        # Vyhodnocení po cestě ceny (#1320, dřív #257): bary v pořadí, bez
+        # vynechané minuty; outcome i closed_ts patří svíčce, která úroveň
+        # zasáhla, ne času cyklu. Díry v živé dávce se dotahují z partic (o
+        # doplnění si engine řekne sám), spot se nehodnotí nikdy (zamrzlý spot
+        # 3. 9. = 72 min rovné čáry). Timeout podle expirace SETUPU, ne runtime
+        # (#259), za close baru končícího v settle — ne za cenu minuty, kdy se
+        # timeout zjistil.
+        live = sorted(bars or (), key=lambda bar: bar.ts)
+        if not self._open:
+            self._requested_gaps.clear()
+            return
+        # Partice první, živé bary po nich: táž minuta z živé dávky vyhrává
+        path_bars: list[PathBar] = [*await self._stored_bars(now, live), *live]
         still_open: list[_OpenSetup] = []
-        closed_tradeable = False
+        closing: list[tuple[_OpenSetup, Outcome, dt.datetime, float | None]] = []
         for item in self._open:
             direction = Direction(item.stored.direction)
-            settle = self._settle_ts(item.stored.expiry)
-            outcome: Outcome | None = None
-            closed_ts = now
-            for point in points:
-                # Bary po settle už setupu nepatří (#259) — jinak by dnešní
-                # svíčka mohla „zavřít" včerejší setup jeho úrovněmi
-                if settle is not None and point.ts >= settle:
-                    break
-                favourable = (
-                    point.high - item.stored.entry
-                    if direction is Direction.LONG
-                    else item.stored.entry - point.low
+            # Přejde se jen díra, na kterou setup čekal PATH_GAP_WAIT; pozdější
+            # díra v téže cestě dostane vlastní čekání i vlastní žádost
+            force_until = (
+                item.waiting_gap[1]
+                if item.waiting_gap is not None
+                and item.blocked_since is not None
+                and now - item.blocked_since >= PATH_GAP_WAIT
+                else None
+            )
+            previous_ts = item.path.last_ts
+            path = walk_setup_path(
+                direction,
+                item.stored.entry,
+                item.stored.target,
+                item.stored.stop,
+                self._settle_ts(item.stored.expiry),
+                path_bars,
+                item.path,
+                now=now,
+                force_until=force_until,
+            )
+            item.path = path.state
+            if path.state.last_ts > previous_ts:
+                # Cesta pokročila: případná další díra čeká od začátku
+                item.waiting_gap = item.blocked_since = None
+            # Přejité díry = všechny kromě té, na které krok (znovu) stojí
+            skipped = path.gaps[:-1] if path.blocked else path.gaps
+            if skipped:
+                logger.warning(
+                    "Setup %s #%d: bary %s UTC se nedoplnily ani za %d min — vyhodnoceno "
+                    "bez nich, výsledek neověřený (#1320)",
+                    self.symbol,
+                    item.stored.id,
+                    ", ".join(f"{a:%d. %m. %H:%M}–{b:%H:%M}" for a, b in skipped),
+                    PATH_GAP_WAIT.total_seconds() // 60,
                 )
-                adverse = (
-                    item.stored.entry - point.low
-                    if direction is Direction.LONG
-                    else point.high - item.stored.entry
-                )
-                item.mfe = max(item.mfe, favourable)
-                item.mae = max(item.mae, adverse)
-                outcome = evaluate_bar(
-                    direction,
-                    item.stored.entry,
-                    item.stored.target,
-                    item.stored.stop,
-                    point.high,
-                    point.low,
-                )
-                if outcome is not None:
-                    closed_ts = point.ts
-                    break
-
-            # Timeout podle expirace SETUPU, ne runtime (#259): po restartu přes
-            # hranici expirace by čerstvá runtime expirace nechala včerejší
-            # setupy žít a vyhodnocovat se svými úrovněmi proti dnešním cenám
-            timeout = outcome is None and settle is not None and now >= settle
-            if outcome is None and not timeout:
+            outcome = path.outcome
+            if outcome is None:
+                if not path.blocked:
+                    item.waiting_gap = item.blocked_since = None
+                else:
+                    gap = path.gaps[-1]
+                    if item.blocked_since is None:
+                        item.waiting_gap, item.blocked_since = gap, now
+                        # Čekání je běžný stav (bar 19:59 o cyklus později,
+                        # doplnění díry) — WARNING až při vyhodnocení bez díry
+                        logger.info(
+                            "Setup %s #%d: v cestě ceny chybí bary %s–%s UTC — "
+                            "vyhodnocení čeká na doplnění, nejdéle %d min (#1320)",
+                            self.symbol,
+                            item.stored.id,
+                            f"{gap[0]:%d. %m. %H:%M}",
+                            f"{gap[1]:%H:%M}",
+                            PATH_GAP_WAIT.total_seconds() // 60,
+                        )
+                    self._request_gap(gap)
                 still_open.append(item)
                 continue
-
-            if outcome is Outcome.TARGET:
-                exit_price = item.stored.target
-            elif outcome is Outcome.STOP:
-                exit_price = item.stored.stop
-            else:
-                outcome = Outcome.TIMEOUT
-                exit_price = inputs.close
-                closed_ts = now
-            result = r_result(direction, item.stored.entry, item.stored.stop, exit_price)
-            closed_tradeable = closed_tradeable or item.tradeable
-            # Stop kontra-setupu (#252 C): další kontra pokus téže šablony až po
-            # delším cooldownu — brání žebříku ztrát (24. 7.: 4 stopy za hodinu)
-            if outcome is Outcome.STOP and item.counter:
-                self._last_counter_stop[item.stored.template] = closed_ts
-            self._track_direction_streak(item.stored.direction, outcome, closed_ts)
-            self.repository.close(
-                item.stored.id,
-                status=outcome.value,
-                closed_ts=closed_ts,
-                outcome_r=result,
-                mfe=item.mfe,
-                mae=item.mae,
+            closing.append(
+                (
+                    item,
+                    outcome,
+                    path.closed_ts if path.closed_ts is not None else now,
+                    path.exit_price,
+                )
             )
-            label = {
-                Outcome.TARGET: "cíl zasažen",
-                Outcome.STOP: "stop zasažen",
-                Outcome.TIMEOUT: "timeout (expirace/seance)",
-            }[outcome]
-            await self.publisher.publish(
-                "alerts",
-                {
-                    "kind": "setup",
-                    # Proklik ve zvonečku (#186): výsledek vede na stránku Setupy
-                    "event": "closed",
-                    "symbol": self.symbol,
-                    "message": f"Setup #{item.stored.id} uzavřen: {label}, "
-                    f"výsledek {result:+.2f} R",
-                    "ts": now.timestamp(),
-                },
-            )
-            await self.publisher.publish(
-                f"setups.{self.symbol}", {"event": "closed", "id": item.stored.id}
-            )
+        # Uzavření v časovém pořadí barů, ne v pořadí vzniku (#1320): po dohnání
+        # díry nebo restartu se v jednom kroku zavře víc setupů a série stopů
+        # směru (#302) i cooldown kontra-setupu (#252 C) závisí na pořadí
+        closing.sort(key=lambda entry: entry[2])
+        for item, outcome, closed_ts, exit_price in closing:
+            await self._close(item, outcome, closed_ts, exit_price, now)
         self._open = still_open
-        if closed_tradeable:
+        if not any(item.blocked_since is not None for item in still_open):
+            self._requested_gaps.clear()
+        if any(item.tradeable for item, *_ in closing):
             await self._check_brakes(now)
+
+    async def _close(
+        self,
+        item: _OpenSetup,
+        outcome: Outcome,
+        closed_ts: dt.datetime,
+        exit_price: float | None,
+        now: dt.datetime,
+    ) -> None:
+        """Zapíše uzavření setupu, vedlejší efekty (série stopů, cooldown) a push."""
+        direction = Direction(item.stored.direction)
+        if exit_price is None:
+            # Timeout bez jediného baru v celém životě setupu: výstupní cena
+            # neexistuje — 0 R (za entry), nahlas; přepočet ho neověří
+            logger.warning(
+                "Setup %s #%d: do settle žádný bar — timeout za entry (0 R), "
+                "výsledek neověřený (#1320)",
+                self.symbol,
+                item.stored.id,
+            )
+            exit_price = item.stored.entry
+        result = r_result(direction, item.stored.entry, item.stored.stop, exit_price)
+        # Stop kontra-setupu (#252 C): další kontra pokus téže šablony až po
+        # delším cooldownu — brání žebříku ztrát (24. 7.: 4 stopy za hodinu)
+        if outcome is Outcome.STOP and item.counter:
+            self._last_counter_stop[item.stored.template] = closed_ts
+        self._track_direction_streak(item.stored.direction, outcome, closed_ts)
+        self.repository.close(
+            item.stored.id,
+            status=outcome.value,
+            closed_ts=closed_ts,
+            outcome_r=result,
+            mfe=item.path.mfe,
+            mae=item.path.mae,
+        )
+        label = {
+            Outcome.TARGET: "cíl zasažen",
+            Outcome.STOP: "stop zasažen",
+            Outcome.TIMEOUT: "timeout (expirace/seance)",
+        }[outcome]
+        await self.publisher.publish(
+            "alerts",
+            {
+                "kind": "setup",
+                # Proklik ve zvonečku (#186): výsledek vede na stránku Setupy
+                "event": "closed",
+                "symbol": self.symbol,
+                "message": f"Setup #{item.stored.id} uzavřen: {label}, výsledek {result:+.2f} R",
+                "ts": now.timestamp(),
+            },
+        )
+        await self.publisher.publish(
+            f"setups.{self.symbol}", {"event": "closed", "id": item.stored.id}
+        )
+
+    def _request_gap(self, gap: tuple[dt.datetime, dt.datetime]) -> None:
+        """Požádá o doplnění díry do partic, jednou na díru (#1320).
+
+        Odmítnutá žádost (běží jiné doplnění) se zopakuje příští cyklus. Chyba
+        hooku nesmí shodit vyhodnocení — setup pak jen čeká."""
+        if self.request_bars is None or gap in self._requested_gaps:
+            return
+        try:
+            accepted = self.request_bars(gap[0], gap[1])
+        except Exception:
+            logger.exception("Setupy %s: žádost o doplnění barů selhala", self.symbol)
+            return
+        if accepted:
+            self._requested_gaps.add(gap)
 
     def _gate_since(self, now: dt.datetime) -> dt.datetime:
         # N seancí ≈ N × 7/5 kalendářních dnů
@@ -626,7 +770,11 @@ class SetupEngine:
             logger.exception("Kalibrace confidence selhala — platí poslední tabulka")
 
     async def _detect_new(
-        self, now: dt.datetime, runtime: EngineRuntime, inputs: MinuteInputs
+        self,
+        now: dt.datetime,
+        runtime: EngineRuntime,
+        inputs: MinuteInputs,
+        entry_bar: Bar | None = None,
     ) -> None:
         # Invariant #1324: setup se vztahuje jen k živé expiraci. Pipeline roluje
         # na další expiraci až s novým UTC dnem (`expiry_expired`), takže mezi
@@ -725,6 +873,10 @@ class SetupEngine:
                 "confidence_template": candidate.confidence,
                 "confidence_source": source,
             }
+            if entry_bar is not None:
+                # Bar vstupu (#1320): odtud začíná cesta ceny po restartu
+                # i v offline přepočtu; chybí = setup vznikl nad spotem
+                context["entry_bar_ts"] = entry_bar.ts.isoformat()
             setup_id = self.repository.create(
                 symbol=self.symbol,
                 expiry=runtime.expiry,
@@ -755,7 +907,9 @@ class SetupEngine:
                         confidence=confidence,
                         reason=candidate.reason,
                         status="active",
+                        entry_bar_ts=entry_bar.ts if entry_bar is not None else None,
                     ),
+                    path=self._new_path(now, entry_bar),
                     counter=counter,
                     tradeable=tradeable,
                 )

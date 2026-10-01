@@ -299,3 +299,45 @@ pravidlo *„bez delete — R4 duch platí i tady"*, historické řádky jsou d�
 starou mechaniku s novou, což je přesně to, co chceme příští dny měřit.
 Verzování dá stejný čistý start ve statistikách, evidenci nezničí a je to trvalé
 řešení pro každou budoucí změnu, ne jednorázový úklid.
+
+## Dodatek 2026-09-30: vyhodnocení po cestě ceny a oprava historie (#1320)
+
+Přehrání setupů v5 proti 1m barům (#1319) našlo výsledky, které neodpovídají
+cestě ceny. `SetupEngine` hodnotil jen bary z dávky minutového cyklu a bez nich
+agregát spotu v okamžiku cyklu. 3. 9. 14:17–15:30 UTC stál IBKR stream i spot,
+engine 72 minut „viděl“ rovnou čáru, stop ve výpadku minul a první živý bar
+nad cílem zapsal jako cíl (NQ 1003, ES 1004). Timeout bral cenu minuty, kdy se
+zjistil (restart ve 20:50, pondělí po Labor Day, spot po settle nebo zamrzlý).
+
+- **Hodnotí se jen bary, v pořadí, bez vynechané minuty.** Spot se nehodnotí
+  nikdy. Jedna čistá funkce `compute/setups.walk_setup_path` pro živý engine
+  i offline přepočet. Cesta začíná za barem vstupu (jeho close je entry; ts
+  v `context.entry_bar_ts`), takže živý běh, restart i přepočet hodnotí od
+  téhož baru — opožděný cyklus nese i bar minuty vzniku a ten proběhl před
+  vstupem. Chybějící minuta běžícího trhu, za kterou už bar je, je díra:
+  engine si ji vyžádá z IBKR historical (stall detektor ji při zamrzlém spotu
+  nevidí — 3. 9. nedoplnil nikdo nic), čte ji z partic a na každou díru čeká
+  nejdéle 15 min (`PATH_GAP_WAIT`), pak hodnotí bez ní s varováním. Delší
+  čekání by drželo výsledek i push, kratší by nedalo doplnění čas. Značku
+  „hodnoceno přes díru“ řádek nenese: přepočet tutéž díru najde v particích
+  a výsledek opraví, nebo označí jako neověřitelný.
+- **Timeout = close baru, který v settle vlastní expirace končí; `closed_ts` =
+  settle.** Varianty: čas baru 19:59 (konvence cíle a stopu) by tvrdil uzavření
+  minutu před settle, ačkoli close platí až v něm; čas zjištění (dosud) závisí
+  na cyklu a restartu a přesouvá setup do jiné seance i obchodního týdne
+  (1031 v pondělí po svátku), a tím i do jiných brzd.
+- **`SETUP_MECHANICS_VERSION` se nezvedá.** Mění se vyhodnocení, ne vznik ani
+  úrovně: opravené vyhodnocení je to, co v5 měla dělat od začátku. Nová verze by
+  rozdělila vzorek brány šablon a kalibrace a opravu historie by nenahradila.
+- **Oprava historie je třetí mutace uzavřeného řádku** (vedle hodnocení
+  uživatele): `scripts/recompute_setup_outcomes.py` přehraje setup touž funkcí,
+  výchozí je dry-run s reportem a zápis jen po výslovném souhlasu.
+  `SetupsRepository.correct_outcome` přepíše `status`, `closed_ts`,
+  `outcome_r` a MFE/MAE ze stejné cesty ceny (stop s MAE pod rizikem by si
+  protiřečil) a původní hodnoty uloží do `context.outcome_correction`. Nic se
+  nemaže, opakovaná oprava drží první původní hodnoty. Co nejde ověřit
+  (díra v barech, bar z rekonstrukce tasty v rozhodující cestě, jiný kontrakt,
+  kvartální datum expirace do rozhodnutí #1331), se nepřepisuje. Setup, jehož
+  vstup v barech minuty vzniku neleží (vznik nad zamrzlým spotem nebo mid
+  kotací), se také nepřepisuje — výsledek od neexistující ceny opravou
+  nezíská smysl; rozhodne uživatel podle reportu.

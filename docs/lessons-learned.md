@@ -178,6 +178,31 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-09-30 — setupy 1003 a 1004 zapsané jako cíl místo stopu, timeouty za cenu z jiného času (#1320): vyhodnocení bralo, co přišlo v cyklu, ne cestu ceny.**
+  `SetupEngine._evaluate_open` hodnotil jen bary z dávky cyklu a bez nich agregát spotu v okamžiku cyklu.
+  3. 9. 14:17–15:30 UTC stál IBKR stream i spot (NQ 29317, ES 7709): feature log ukazuje 72 minut
+  O = H = L = C. Stop ve 14:56 (NQ 1003) a 14:34 (ES 1004) engine minul a první živý bar v 15:30 nad cílem
+  zapsal jako cíl (−3 966 $ na 1 kontrakt u 1003). Bary té doby dnes v partici jsou (zdroj `ibkr`, tedy
+  zápis před #1055 — doplnil je až některý pozdější backfill), engine je ale v době vyhodnocení neměl
+  a nikdo je nevyžádal: `BarsStallDetector` bez pohybu spotu nečítá, takže `stalled`/`recovered`
+  a re-backfill po návratu streamu nepřišly. NQ 1373 (27. 9. večer, IBKR stál, spot = mid kotace
+  z tasty jednou za minutu): spot 30 793,625 stop 30 790,73 minul, bar ve 23:06 má low 30 790,50
+  v IBKR historical i v dřívější rekonstrukci `tasty_candle`. Timeout bral cenu minuty, kdy se zjistil:
+  restart 10. 9. ve 20:50 (1106–1110), pondělí po Labor Day 7. 9. 06:31 (1031: −0,74 R místo −0,08 R),
+  cyklus 20:00 se spotem už po settle (1407–1409: mid 7 736,875 místo close 19:59 7 732,50) nebo se
+  zamrzlým spotem (1016: 29 510,5 místo 29 530,75). Na zamrzlém spotu setupy i vznikaly (ES 1004:
+  vstup 7 709 = close baru 14:18, trh v minutě vzniku 7 710,5–7 714,75; NQ 1048 8. 9.).
+  → Výsledek obchodu je funkce **cesty ceny**, ne vzorku v okamžiku cyklu. Úrovně se hodnotí nad bary
+  v pořadí bez vynechané minuty, od baru vstupu (jeho close je entry). Chybějící minuta běžícího trhu
+  je díra, na kterou se čeká, ne rovná čára; spot místo baru jsou vymyšlená data. O doplnění díry si
+  říká ten, kdo ji potřebuje (`SetupEngine.request_bars`), ne detektor, který ji nemusí vidět. Čas
+  uzavření patří baru, který rozhodl, nebo hranici (settle), nikdy okamžiku zjištění; vedlejší efekty
+  uzavření (série stopů, cooldown) v pořadí barů. Živý engine a offline přepočet sdílejí jednu čistou
+  funkci (`compute/setups.walk_setup_path`) i začátek cesty (`context.entry_bar_ts`), jinak se
+  rozejdou. Oprava výsledku přepisuje i MFE/MAE ze stejné cesty (stop s MAE pod rizikem si protiřečí).
+  Při rozboru porovnat feature log (co engine viděl) s particí barů (co se stalo): O = H = L = C proti
+  svíčce je podpis zamrzlého vstupu, vstup mimo rozsah barů minuty vzniku je setup nad zamrzlým spotem.
+
 - **2026-09-29 — brána šablon dávala ES a NQ různé verdikty téže šablony (#1325): komentář tvrdil sdílení, které konstrukce nezajistila.**
   `SetupEngine.point_values` nesl komentář „sdílený slovník všech instancí“, ale `field(default_factory=dict)`
   dal každé instanci vlastní slovník a `__main__` žádný společný nepředal, takže každá instance znala jen svůj

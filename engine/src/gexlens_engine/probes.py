@@ -9,8 +9,13 @@ Rozhodování dělá čistá funkce `detect_damping_ceiling` v `compute/setups.p
 (vedle ostatních detektorů, ale MIMO `detect_all`) — tatáž, kterou spouští
 `scripts/backtest_setups.py --probes` nad historií. Tenhle modul je jen
 orchestrace: okno posledních minut, zápis výskytu do `setup_probes`,
-vyhodnocení otevřených sond TÝMŽ `evaluate_bar`/`r_result` jako živé
-setupy a timeout na settle expirace runtime (konvence `SetupEngine`, #259).
+vyhodnocení otevřených sond `evaluate_bar`/`r_result` nad POSLEDNÍM barem
+dávky cyklu (cyklus bez barů se přeskočí, `closed_ts` = čas cyklu) a timeout
+za close prvního cyklu po settle expirace runtime (#259). Živé setupy od #1320
+hodnotí jinak — celou cestou ceny (`compute/setups.walk_setup_path`: bary
+v pořadí, díra = čekání na doplnění, timeout za close baru končícího
+v settle) —, takže při výpadku barů, v dávce víc minut a v timeoutu nejsou
+výsledky sond se setupy 1:1 srovnatelné.
 Do `setups`, alertů ani track recordu nejde NIC — fáze 2 (≥ 30 výskytů na
 instrument) teprve rozhodne zapnout/sloučit/zavřít.
 """
@@ -159,7 +164,10 @@ class T9ProbeCollector:
         self._active = still_active
 
     def _timeout_at_settle(self, now: dt.datetime, close: float, expiry: str) -> None:
-        """Settle expirace uzavírá vše otevřené za close — stejně jako živé setupy."""
+        """Settle expirace uzavírá vše otevřené za close cyklu, `closed_ts` = čas cyklu.
+
+        Živé setupy od #1320 berou close baru, který v settle končí, a
+        `closed_ts` = settle — viz docstring modulu."""
         if not self._active or now < probe_settle(expiry, now.date()):
             return
         for probe in self._active:

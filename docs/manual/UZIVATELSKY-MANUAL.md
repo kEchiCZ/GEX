@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.25 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.26 · září 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -1532,6 +1532,28 @@ neběžela, přijde jen T−15.
 ### Setupy
 
 Když detektor najde setup, přijde alert **Nový setup** a nad grafem se ukáže **karta setupu** pro daný instrument: směr (LONG/SHORT), šablona, **datum a čas vzniku** (kdy se splnily podmínky), úrovně **Entry / Cíl / Stop**, RRR a důvěra (od v1.16 **kalibrovaná z track recordu**: Wilsonova dolní mez úspěšnosti šablony v daném gamma režimu při ≥ 30 uzavřených setupech, jinak konstanta šablony — najetím na číslo zjistíš zdroj), od v1.16 štítek **polohy v tlumící zóně** (uvnitř pásma / přechod / mimo pásmo / bez pásma s posunem důvěry, kap. 18), plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce **Setupy** v sidebaru.
+
+**Výsledek podle skutečné cesty ceny (v1.26, #1320).** Setup se uzavírá jen
+podle minutových svíček v pořadí, v jakém trh šel, počínaje svíčkou po té,
+na jejíž ceně vznikl. Cíl nebo stop rozhodne svíčka, která úroveň zasáhla,
+a čas uzavření je čas té svíčky. Když svíčky chybí (výpadek dat z IBKR),
+setup zůstane **aktivní**, engine si chybějící minuty sám vyžádá zpětně
+z IBKR (při výpadku celého IBKR je doplní tastytrade) a pak je projde
+v pořadí. I když mezitím cena doběhla k cíli, rozhodne stop, který padl ve
+výpadku. Na každou díru čeká engine nejdéle 15 minut; minuty, které se do té
+doby nedoplní, přeskočí a zapíše do logu jako neověřený výsledek. Do v1.25
+hodnotil při výpadku jen poslední cenu a stop ve výpadku přehlédl: 3. 9.
+zapsal setup NQ 1003 jako cíl +3 R místo stopu −1 R.
+
+**Timeout za cenu v settle.** Setup, který do settle své expirace nezasáhl cíl
+ani stop, skončí za close poslední svíčky před settle (16:00 ET, tj. 22:00
+našeho času) a čas uzavření je settle. Dřív se brala cena z okamžiku, kdy
+engine timeout zjistil (restart ve 22:50, pondělí po svátku), a výsledek se
+lišil o desítky bodů. Starší výsledky opraví jednorázový přepočet, až ho
+schválíš; přepíše i MFE/MAE a opravený setup si v databázi pamatuje původní
+hodnoty. Setupy, které vznikly na „zamrzlé“ ceně během výpadku (vstup, jaký
+trh v té minutě neměl, např. ES 1004 3. 9.), přepočet sám neopraví —
+rozhodneš o nich podle reportu.
 
 **Souhrn nahoře = celá historie, ne posledních 200 (v1.23, #1319).** Čísla nad
 tabulkou počítá server ze **všech** setupů instrumentu aktuální mechaniky

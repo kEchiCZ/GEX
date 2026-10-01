@@ -1,9 +1,15 @@
 """Offline přehrání historie přes PRODUKČNÍ detektor setupů (#434).
 
-Nepřepisuje logiku: importuje `detect_all`, `evaluate_bar`, `r_result` z
-`gexlens_engine.compute.setups` a jen kolem nich staví orchestraci, kterou
+Nepřepisuje logiku detekce: importuje `detect_all`, `evaluate_bar`, `r_result`
+z `gexlens_engine.compute.setups` a jen kolem nich staví orchestraci, kterou
 jinak dělá `SetupEngine` (anti-spam per šablona, blokace směru po sérii stopů,
 cooldown v kontra-režimu, vyhodnocení otevřených setupů po barech).
+
+Vyhodnocení otevřených ale živé `SetupEngine` NEZRCADLÍ: engine od #1320 jde
+po cestě ceny (`walk_setup_path` — chybějící minuta běžícího trhu je díra, na
+kterou se čeká, bary od settle se nehodnotí, timeout za close baru končícího
+v settle). Replay hodnotí každou minutu rámce `evaluate_bar` bez kontroly děr,
+po settle dál a timeout nemá (setup bez zásahu skončí jako `active`).
 
 Opční toky (`call_flow` / `put_flow` / `opt_vol`) se **rekonstruují ze snapshotů**
 (`data/snapshots/{symbol}/{expiry}/*.parquet`), ne z předpočítané řady — engine

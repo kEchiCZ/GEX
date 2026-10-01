@@ -1,8 +1,9 @@
 """Trvalé úložiště setupů (ADR-0004): historie analýz pro kalibraci.
 
 Tabulka záměrně nemá delete API (jako oi_eod) — výsledky setupů jsou dataset,
-ze kterého se časem kalibruje confidence. Jediná mutace po uzavření je ruční
-hodnocení uživatele (rating + poznámka).
+ze kterého se časem kalibruje confidence. Mutace po uzavření jsou dvě: ruční
+hodnocení uživatele (rating + poznámka) a oprava výsledku přepočtem z barů
+(`correct_outcome`, #1320) — ta původní hodnoty uchová v kontextu.
 """
 
 import datetime as dt
@@ -48,6 +49,31 @@ def _born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
     if created_ts.tzinfo is None:
         created_ts = created_ts.replace(tzinfo=dt.UTC)
     return born_after_settle(expiry, created_ts)
+
+
+def entry_bar_ts(context: object) -> dt.datetime | None:
+    """Bar vstupu setupu z kontextu (`entry_bar_ts`, #1320) — bar, jehož close je entry.
+
+    Odtud začíná cesta ceny po restartu enginu i v offline přepočtu. None =
+    setup vznikl nad spotem (dávka cyklu bez baru) nebo je starší než #1320.
+    """
+    if not isinstance(context, dict):
+        return None
+    value = context.get("entry_bar_ts")
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=dt.UTC) if parsed.tzinfo is None else parsed.astimezone(dt.UTC)
+
+
+def _utc_iso(value: dt.datetime) -> str:
+    """ISO čas v UTC; naivní čas (sqlite) je UTC."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.UTC)
+    return value.astimezone(dt.UTC).isoformat()
 
 
 setups_metadata = MetaData()
@@ -99,6 +125,8 @@ class StoredSetup:
     confidence: int
     reason: str
     status: str
+    #: Bar vstupu z kontextu (#1320); None = nad spotem nebo řádek před #1320
+    entry_bar_ts: dt.datetime | None = None
 
 
 class SetupsRepository:
@@ -203,6 +231,84 @@ class SetupsRepository:
         with self._engine.begin() as conn:
             conn.execute(stmt)
 
+    def correct_outcome(
+        self,
+        setup_id: int,
+        *,
+        status: str,
+        closed_ts: dt.datetime,
+        outcome_r: float,
+        mfe: float,
+        mae: float,
+        reason: str,
+        corrected_ts: dt.datetime,
+    ) -> bool:
+        """Oprava výsledku uzavřeného setupu přepočtem z barů (#1320).
+
+        Nic se nemaže: přepíše se status, `closed_ts`, `outcome_r` a MFE/MAE
+        (ze stejné cesty ceny jako výsledek — stop s MAE menším než riziko by
+        si protiřečil) a původní hodnoty se uloží do `context.outcome_correction`
+        (`old_status`, `old_outcome_r`, `old_closed_ts`, `old_mfe`, `old_mae`,
+        `corrected_ts`, `reason`). Opakovaná oprava drží PRVNÍ původní hodnoty
+        (ty z enginu), obnoví jen čas a důvod. Aktivní setup se neopravuje
+        (vyhodnotí ho engine). Vrací False, když řádek neexistuje nebo je aktivní.
+        """
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                select(
+                    setups_table.c.status,
+                    setups_table.c.closed_ts,
+                    setups_table.c.outcome_r,
+                    setups_table.c.mfe,
+                    setups_table.c.mae,
+                    setups_table.c.context,
+                ).where(setups_table.c.id == setup_id)
+            ).fetchone()
+            if row is None or row.status == "active":
+                return False
+            context = dict(row.context) if isinstance(row.context, dict) else {}
+            previous = context.get("outcome_correction")
+            if isinstance(previous, dict) and "old_status" in previous:
+                original = {
+                    key: previous.get(key)
+                    for key in (
+                        "old_status",
+                        "old_outcome_r",
+                        "old_closed_ts",
+                        "old_mfe",
+                        "old_mae",
+                    )
+                }
+            else:
+                old_closed = row.closed_ts
+                if isinstance(old_closed, dt.datetime):
+                    old_closed = _utc_iso(old_closed)
+                original = {
+                    "old_status": row.status,
+                    "old_outcome_r": row.outcome_r,
+                    "old_closed_ts": old_closed,
+                    "old_mfe": row.mfe,
+                    "old_mae": row.mae,
+                }
+            context["outcome_correction"] = {
+                **original,
+                "corrected_ts": _utc_iso(corrected_ts),
+                "reason": reason,
+            }
+            conn.execute(
+                update(setups_table)
+                .where(setups_table.c.id == setup_id)
+                .values(
+                    status=status,
+                    closed_ts=closed_ts,
+                    outcome_r=outcome_r,
+                    mfe=mfe,
+                    mae=mae,
+                    context=json.loads(json.dumps(context, default=str)),
+                )
+            )
+        return True
+
     def review(self, setup_id: int, rating: int | None, note: str | None) -> bool:
         stmt = (
             update(setups_table)
@@ -257,6 +363,7 @@ class SetupsRepository:
                 confidence=row.confidence,
                 reason=row.reason,
                 status=row.status,
+                entry_bar_ts=entry_bar_ts(row.context),
             )
             for row in rows
         ]
