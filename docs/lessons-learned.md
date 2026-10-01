@@ -178,6 +178,21 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-01 — oprava barů 8.–15. 9. pro přepočet setupů (#1320): stráž a razítko platily jen pro nové zápisy jedné cesty.**
+  Hluboký backfill `scripts/backfill_bars.py` razil bary IBKR historical jako živé `ibkr`. Konvenci `ibkr_hist`
+  (#1055) dostal jen `UnderlyingBackfiller` v enginu. Při opravě 9. 9. se ukázalo, že všech 147 (ES)
+  a 150 (NQ) starších barů `ibkr_hist` je z ESZ6/NQZ6, zatímco engine měřil U6: bloky 04:30–06:22
+  a odpoledne (ES 14:43–15:16, NQ 14:42–15:18) se skokem o basis. Zapsalo je doplnění před stráží
+  kontraktu #1232. Stráž chrání jen nové zápisy, staré partice nikdo neprošel. Odhalil to přepočet setupu ES 1068 („skok ceny … jiný kontrakt?“),
+  potvrdil sken skoků close > 0,4 % mezi sousedními bary. Bary IBKR historical U6 seděly na živé minuty
+  s mediánem odchylky 0,000 %.
+  Medián odchylky přes celý den navíc pustí partici, ve které engine během dne přepnul kontrakt,
+  proto oprava dne ověřuje kontrakt i po blocích (nejbližší měřená minuta po obou stranách bloku).
+  → Konvenci původu dat a zápisovou stráž držet v **jedné funkci**, kterou volají engine i skripty
+  (cesta `--days` skriptu teď bere `UnderlyingBackfiller.backfill_day` + `contract_mismatch`;
+  hluboký backfill bez `--days` razí `ibkr_hist`, ale stráž kontraktu zatím nemá). Po zavedení
+  stráže projít i data zapsaná před ní (sken skoků), jinak stará chyba přežije v archivu.
+
 - **2026-09-30 — setupy 1003 a 1004 zapsané jako cíl místo stopu, timeouty za cenu z jiného času (#1320): vyhodnocení bralo, co přišlo v cyklu, ne cestu ceny.**
   `SetupEngine._evaluate_open` hodnotil jen bary z dávky cyklu a bez nich agregát spotu v okamžiku cyklu.
   3. 9. 14:17–15:30 UTC stál IBKR stream i spot (NQ 29317, ES 7709): feature log ukazuje 72 minut
