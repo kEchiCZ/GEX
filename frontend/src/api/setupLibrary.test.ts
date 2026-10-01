@@ -2,21 +2,34 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   apiErrorText,
+  clearLibraryFilters,
   decisionText,
   decisionTooltip,
+  DEFAULT_LIBRARY_VIEW,
   edgeUnproven,
   evidenceTooltip,
+  filterLibraryCells,
   gateLabel,
   lbText,
+  libraryFiltersActive,
   libraryParams,
+  libraryRows,
+  libraryGateFilterOf,
+  librarySortKeyOf,
+  librarySortTooltip,
+  libraryTickers,
+  nextLibrarySort,
   proofText,
+  reviveLibraryView,
   saveSetupStage,
+  sortLibraryCells,
   stageLabel,
+  toggleLibraryStage,
   trialEnd,
   trialUsageText,
   windowTooShort,
 } from './setupLibrary'
-import type { LibraryCell } from './setupLibrary'
+import type { LibraryCell, LibraryView } from './setupLibrary'
 import { riskInfo, riskLabel, riskTooltip } from './setups'
 
 const CELL: LibraryCell = {
@@ -247,5 +260,256 @@ describe('kontext setupu se stádiem (risk_rules_version 3)', () => {
     const legacy = riskInfo({ context: { ...base, tradeable: false, trade_block: 'gate' } })
     expect(legacy!.userStage).toBeNull()
     expect(riskTooltip(legacy!)).not.toContain('stádium v Knihovně')
+  })
+})
+
+describe('řazení a filtry tabulky', () => {
+  // Pořadí serveru: průkaznost sestupně (163/462, 30/100, 12/618, bez odhadu)
+  const A: LibraryCell = { ...CELL, cell: 'NQ:trend_continuation' }
+  const B: LibraryCell = {
+    ...CELL,
+    cell: 'ES:gamma_momentum',
+    ticker: 'ES',
+    template: 'gamma_momentum',
+    template_number: 4,
+    stage: 'shadow',
+    effective_stage: 'shadow',
+    gate_verdict: 'insufficient',
+    gate_n: 30,
+    gate_lb: null,
+    avg_r: null,
+    avg_net_r: 0.2,
+    n_needed: 100,
+    sessions_to_decision: 3,
+  }
+  const C: LibraryCell = {
+    ...CELL,
+    cell: 'ES:trend_continuation',
+    ticker: 'ES',
+    gate_verdict: 'pass',
+    gate_n: 12,
+    gate_lb: 0.3,
+    avg_r: 0.5,
+    avg_net_r: null,
+    n_needed: 618,
+    sessions_to_decision: null,
+  }
+  const D: LibraryCell = {
+    ...CELL,
+    cell: 'NQ:divergence_spring',
+    template: 'divergence_spring',
+    template_number: 9,
+    stage: 'trial',
+    effective_stage: 'auto',
+    trial: { ...TRIAL, spent: true },
+    gate_verdict: 'block',
+    gate_lb: -0.5,
+    avg_r: -0.2,
+    avg_net_r: -0.3,
+    n_needed: null,
+    sessions_to_decision: null,
+  }
+  const SERVER = [A, B, C, D]
+  const ids = (cells: LibraryCell[]) => cells.map((cell) => cell.cell)
+  const view = (patch: Partial<LibraryView>): LibraryView => ({ ...DEFAULT_LIBRARY_VIEW, ...patch })
+
+  it('výchozí pohled = průkaznost sestupně = pořadí serveru, vstup se nemění', () => {
+    const input = [...SERVER]
+    expect(ids(libraryRows(input, DEFAULT_LIBRARY_VIEW))).toEqual(ids(SERVER))
+    expect(ids(libraryRows([D, C, B, A], DEFAULT_LIBRARY_VIEW))).toEqual(ids(SERVER))
+    sortLibraryCells(input, 'ticker', 'asc')
+    expect(input).toEqual(SERVER)
+  })
+
+  it('číselné sloupce číselně, prázdné hodnoty na konec v obou směrech', () => {
+    expect(ids(sortLibraryCells(SERVER, 'avgR', 'asc'))).toEqual([D.cell, A.cell, C.cell, B.cell])
+    expect(ids(sortLibraryCells(SERVER, 'avgR', 'desc'))).toEqual([C.cell, A.cell, D.cell, B.cell])
+    expect(ids(sortLibraryCells(SERVER, 'avgNetR', 'asc'))).toEqual([
+      D.cell,
+      A.cell,
+      B.cell,
+      C.cell,
+    ])
+    expect(ids(sortLibraryCells(SERVER, 'avgNetR', 'desc'))).toEqual([
+      B.cell,
+      A.cell,
+      D.cell,
+      C.cell,
+    ])
+    expect(ids(sortLibraryCells(SERVER, 'proof', 'asc'))).toEqual([C.cell, B.cell, A.cell, D.cell])
+    // Rozhodnutelné: C „v okně nedosáhne" (okno 489 < 618) je nejdál — vzestupně
+    // za odhady, sestupně první; D „málo dat" (bez n potřebné) dole v obou směrech
+    expect(ids(sortLibraryCells(SERVER, 'decision', 'asc'))).toEqual([
+      B.cell,
+      A.cell,
+      C.cell,
+      D.cell,
+    ])
+    expect(ids(sortLibraryCells(SERVER, 'decision', 'desc'))).toEqual([
+      C.cell,
+      A.cell,
+      B.cell,
+      D.cell,
+    ])
+    // Dvě „v okně nedosáhne" jsou shoda (∞ − ∞ ne NaN) — drží vstupní pořadí
+    const far = { ...C, cell: 'NQ:far' }
+    expect(ids(sortLibraryCells([far, B, C], 'decision', 'desc'))).toEqual([
+      'NQ:far',
+      C.cell,
+      B.cell,
+    ])
+    // „vzorek stačí" (0) je nejblíž rozhodnutí
+    const ready = { ...A, cell: 'NQ:ready', sessions_to_decision: 0 }
+    expect(ids(sortLibraryCells([A, B, ready], 'decision', 'asc'))[0]).toBe('NQ:ready')
+    // Číslo šablony číselně: T10 za T9, ne mezi T1 a T2
+    const t10 = { ...A, cell: 'NQ:t10', template_number: 10 }
+    expect(ids(sortLibraryCells([t10, D, B], 'setup', 'asc'))).toEqual([B.cell, D.cell, 'NQ:t10'])
+  })
+
+  it('ticker podle kódových jednotek jako výběr tickeru, ne české CH za H', () => {
+    const hd = { ...A, cell: 'HD:trend_continuation', ticker: 'HD' }
+    const chtr = { ...A, cell: 'CHTR:trend_continuation', ticker: 'CHTR' }
+    expect(ids(sortLibraryCells([hd, chtr], 'ticker', 'asc'))).toEqual([chtr.cell, hd.cell])
+    expect(libraryTickers([hd, chtr], null)).toEqual(['CHTR', 'HD'])
+  })
+
+  it('shoda drží vstupní pořadí (stabilní) v obou směrech', () => {
+    expect(ids(sortLibraryCells(SERVER, 'ticker', 'asc'))).toEqual([B.cell, C.cell, A.cell, D.cell])
+    expect(ids(sortLibraryCells(SERVER, 'ticker', 'desc'))).toEqual([
+      A.cell,
+      D.cell,
+      B.cell,
+      C.cell,
+    ])
+  })
+
+  it('stádium podle platného stádia, brána podle verdiktu a uvnitř podle LB', () => {
+    // Vyčerpaná zkouška (D) se řadí jako Auto
+    expect(ids(sortLibraryCells(SERVER, 'stage', 'asc'))).toEqual([A.cell, C.cell, D.cell, B.cell])
+    // block (D −0.5, A −0.14) → insufficient (B) → pass (C)
+    expect(ids(sortLibraryCells(SERVER, 'gate', 'asc'))).toEqual([D.cell, A.cell, B.cell, C.cell])
+    expect(ids(sortLibraryCells(SERVER, 'gate', 'desc'))).toEqual([C.cell, B.cell, A.cell, D.cell])
+    // LB bez hodnoty je uvnitř verdiktu poslední
+    const noLb = { ...A, cell: 'NQ:no_lb', gate_lb: null }
+    expect(ids(sortLibraryCells([noLb, A, D], 'gate', 'desc'))).toEqual([
+      A.cell,
+      D.cell,
+      'NQ:no_lb',
+    ])
+    // Brána vypnutá (off) nemá pořadí → na konec
+    const off = { ...C, cell: 'ES:off', gate_verdict: 'off' as const }
+    expect(ids(sortLibraryCells([off, D], 'gate', 'desc'))).toEqual([D.cell, 'ES:off'])
+  })
+
+  it('filtry: ticker, stádia, brána, hledání bez diakritiky a ØR čistě > 0', () => {
+    expect(ids(filterLibraryCells(SERVER, view({ ticker: 'ES' })))).toEqual([B.cell, C.cell])
+    expect(ids(filterLibraryCells(SERVER, view({ stages: ['auto'] })))).toEqual([
+      A.cell,
+      C.cell,
+      D.cell,
+    ])
+    expect(ids(filterLibraryCells(SERVER, view({ stages: ['shadow', 'trial'] })))).toEqual([B.cell])
+    expect(ids(filterLibraryCells(SERVER, view({ gate: 'block' })))).toEqual([A.cell, D.cell])
+    expect(ids(filterLibraryCells(SERVER, view({ query: '  POKRACOVANI ' })))).toEqual([
+      A.cell,
+      C.cell,
+    ])
+    expect(ids(filterLibraryCells(SERVER, view({ query: 't9' })))).toEqual([D.cell])
+    // Bez ØR čistě (C) a záporné (D) skryje
+    expect(ids(filterLibraryCells(SERVER, view({ netPositive: true })))).toEqual([A.cell, B.cell])
+    expect(
+      ids(libraryRows(SERVER, view({ ticker: 'NQ', sortKey: 'setup', sortDir: 'desc' }))),
+    ).toEqual([D.cell, A.cell])
+  })
+
+  it('klik na záhlaví, přepínání stádií a zrušení filtrů', () => {
+    const byTicker = nextLibrarySort(DEFAULT_LIBRARY_VIEW, 'ticker')
+    expect([byTicker.sortKey, byTicker.sortDir]).toEqual(['ticker', 'asc'])
+    expect(nextLibrarySort(byTicker, 'ticker').sortDir).toBe('desc')
+    expect(nextLibrarySort(nextLibrarySort(byTicker, 'ticker'), 'ticker').sortDir).toBe('asc')
+    // Výchozí Průkaznost ↓ → klik na ni = vzestupně
+    expect(nextLibrarySort(DEFAULT_LIBRARY_VIEW, 'proof').sortDir).toBe('asc')
+    const staged = toggleLibraryStage(toggleLibraryStage(DEFAULT_LIBRARY_VIEW, 'trial'), 'auto')
+    expect(staged.stages).toEqual(['auto', 'trial'])
+    expect(toggleLibraryStage(staged, 'auto').stages).toEqual(['trial'])
+    const filtered = view({ sortKey: 'gate', ticker: 'NQ', stages: ['auto'], query: 'x' })
+    expect(libraryFiltersActive(DEFAULT_LIBRARY_VIEW)).toBe(false)
+    expect(libraryFiltersActive(view({ query: '   ' }))).toBe(false)
+    expect(libraryFiltersActive(filtered)).toBe(true)
+    expect(clearLibraryFilters(filtered)).toEqual({ ...DEFAULT_LIBRARY_VIEW, sortKey: 'gate' })
+  })
+
+  it('tickery z dat, vybraný zůstane i po zmizení z dat', () => {
+    expect(libraryTickers(SERVER, null)).toEqual(['ES', 'NQ'])
+    expect(libraryTickers(SERVER, 'NQZ6')).toEqual(['ES', 'NQ', 'NQZ6'])
+  })
+
+  it('uložený pohled: platná pole se převezmou, neplatná spadnou na výchozí', () => {
+    const stored = {
+      sortKey: 'avgNetR',
+      sortDir: 'asc',
+      ticker: 'NQZ6',
+      stages: ['trial', 'auto', 'trial', 'nesmysl'],
+      gate: 'pass',
+      query: 'trend',
+      netPositive: true,
+    }
+    expect(reviveLibraryView(stored, DEFAULT_LIBRARY_VIEW)).toEqual({
+      ...stored,
+      stages: ['auto', 'trial'],
+    })
+    expect(
+      reviveLibraryView(
+        {
+          sortKey: 'sum_r',
+          sortDir: 'up',
+          ticker: '../settings',
+          stages: 'auto',
+          gate: 'off',
+          query: 5,
+          netPositive: 'ano',
+        },
+        DEFAULT_LIBRARY_VIEW,
+      ),
+    ).toEqual(DEFAULT_LIBRARY_VIEW)
+    // Řazení jen jako dvojice: zastaralý sloupec se směrem nesmí dát Průkaznost ↑
+    expect(reviveLibraryView({ sortKey: 'sum_r', sortDir: 'asc' }, DEFAULT_LIBRARY_VIEW)).toEqual(
+      DEFAULT_LIBRARY_VIEW,
+    )
+    expect(reviveLibraryView({ sortKey: 'ticker', sortDir: 'up' }, DEFAULT_LIBRARY_VIEW)).toEqual(
+      DEFAULT_LIBRARY_VIEW,
+    )
+    expect(reviveLibraryView({ sortKey: 'ticker' }, DEFAULT_LIBRARY_VIEW)).toEqual(
+      DEFAULT_LIBRARY_VIEW,
+    )
+    // Ticker a brána: uložené null = bez filtru, neplatné = výchozí
+    const filtered = view({ ticker: 'NQ', gate: 'pass' })
+    expect(reviveLibraryView({ ticker: null, gate: null }, filtered)).toMatchObject({
+      ticker: null,
+      gate: null,
+    })
+    expect(reviveLibraryView({ ticker: 'nq', gate: 'off' }, filtered)).toMatchObject({
+      ticker: 'NQ',
+      gate: 'pass',
+    })
+    expect(reviveLibraryView(null, DEFAULT_LIBRARY_VIEW)).toBe(DEFAULT_LIBRARY_VIEW)
+    expect(reviveLibraryView([], DEFAULT_LIBRARY_VIEW)).toBe(DEFAULT_LIBRARY_VIEW)
+    const long = reviveLibraryView({ query: 'x'.repeat(500) }, DEFAULT_LIBRARY_VIEW)
+    expect(long.query).toHaveLength(100)
+  })
+
+  it('volby z výběru: jen známé hodnoty, „vše" a neznámé = null', () => {
+    expect(librarySortKeyOf('avgNetR')).toBe('avgNetR')
+    expect(librarySortKeyOf('sum_r')).toBeNull()
+    expect(librarySortKeyOf(undefined)).toBeNull()
+    expect(libraryGateFilterOf('block')).toBe('block')
+    expect(libraryGateFilterOf('')).toBeNull()
+    expect(libraryGateFilterOf('off')).toBeNull()
+  })
+
+  it('tooltip záhlaví v odrážkách', () => {
+    const lines = librarySortTooltip('gate').split('\n')
+    expect(lines[0]).toContain('block → nedostatek vzorku → pass')
+    expect(lines.slice(1).every((line) => line.startsWith('• '))).toBe(true)
   })
 })
