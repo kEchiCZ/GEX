@@ -37,11 +37,12 @@ from gexlens_engine.compute.setups import (
     r_result,
     scale_params,
 )
+from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.oi_archive import OIEodRepository
-from gexlens_engine.storage.parquet_store import LevelsRow
+from gexlens_engine.storage.parquet_store import LevelsRow, SnapshotWriter, read_bars
 from gexlens_engine.storage.setups_store import SetupsRepository
 
 TS = dt.datetime(2026, 7, 17, 15, 0, tzinfo=dt.UTC)
@@ -682,28 +683,27 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     # Verze prahů z parameter store (#794 fáze 2) — setup ji nese v řádku
     engine.params_version = 4
 
-    def bar(o: float, h: float, low: float, c: float) -> Bar:
-        return Bar(ts=TS, open=o, high=h, low=low, close=c, volume=100.0)
+    def bar(now: dt.datetime, o: float, h: float, low: float, c: float) -> Bar:
+        # Cyklus minuty N nese dokončený bar N−1 (jako produkce) — cesta ceny
+        # setupu jde po minutách bez díry (#1320)
+        return Bar(ts=now - dt.timedelta(minutes=1), open=o, high=h, low=low, close=c, volume=100.0)
 
     # Kontra-režim (#252 B): reclaim long v negativní gammě (close pod flipem 7515)
     # potřebuje CumΔ konfluenci přes 30 min → warmup s rostoucí CumΔ před scénářem
     for i in range(30):
         fake.last_flow = FakeFlow(float(i))
-        await engine.on_minute(
-            TS - dt.timedelta(minutes=30 - i), 7505, [bar(7505, 7506, 7504, 7505)], runtime
-        )
+        now = TS - dt.timedelta(minutes=30 - i)
+        await engine.on_minute(now, 7505, [bar(now, 7505, 7506, 7504, 7505)], runtime)
     fake.last_flow = FakeFlow(100.0)
 
     # Páteční scénář: baseline → průraz 7500 s dnem 7494 → reclaim 7501 → setup LONG.
     # Dno je mělké schválně (#302): hlubší průraz by dal risk 29 b proti cíli 14 b
     # (RRR 0,48) a normalizace by setup zahodila — přesně ta vada, kterou #302 řeší.
-    await engine.on_minute(TS, 7505, [bar(7505, 7506, 7504, 7505)], runtime)
-    await engine.on_minute(
-        TS + dt.timedelta(minutes=1), 7496, [bar(7500, 7500, 7494, 7496)], runtime
-    )
-    await engine.on_minute(
-        TS + dt.timedelta(minutes=2), 7501, [bar(7496, 7502, 7495, 7501)], runtime
-    )
+    await engine.on_minute(TS, 7505, [bar(TS, 7505, 7506, 7504, 7505)], runtime)
+    now = TS + dt.timedelta(minutes=1)
+    await engine.on_minute(now, 7496, [bar(now, 7500, 7500, 7494, 7496)], runtime)
+    now = TS + dt.timedelta(minutes=2)
+    await engine.on_minute(now, 7501, [bar(now, 7496, 7502, 7495, 7501)], runtime)
 
     active = repository.active_for("ES")
     assert len(active) == 1
@@ -732,9 +732,8 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     assert any(ch == "setups.ES" for ch, _ in publisher.messages)
 
     # Další minuta zasáhne cíl 7515 → closed_target s kladným R
-    await engine.on_minute(
-        TS + dt.timedelta(minutes=3), 7516, [bar(7501, 7516, 7500, 7516)], runtime
-    )
+    now = TS + dt.timedelta(minutes=3)
+    await engine.on_minute(now, 7516, [bar(now, 7501, 7516, 7500, 7516)], runtime)
     assert repository.active_for("ES") == []
     # Výsledek nese event=closed (#186)
     closed_alerts = [d for ch, d in publisher.messages if ch == "alerts"]
@@ -810,9 +809,10 @@ async def test_setup_engine_counter_stop_cooldown(tmp_path: Path) -> None:
 async def test_setup_engine_close_ts_matches_hitting_bar(tmp_path: Path) -> None:
     """#257: closed_ts patří svíčce, která úroveň zasáhla, ne času cyklu.
 
-    Cyklus nese dávku dvou barů: první (o 7 min starší než `now`) zasáhne cíl,
+    Cyklus nese dávku dvou barů: první (o 8 min starší než `now`) zasáhne cíl,
     druhý by zasáhl stop — uzavření musí být TARGET s ts prvního baru;
-    konzervativní stop-first platí jen uvnitř jedné svíčky.
+    konzervativní stop-first platí jen uvnitř jedné svíčky. Dávka navazuje na
+    bar vzniku bez díry (#1320).
     """
     db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}")
     repository = SetupsRepository(db)
@@ -837,15 +837,28 @@ async def test_setup_engine_close_ts_matches_hitting_bar(tmp_path: Path) -> None
         await step(i, 7505, 7506, 7504, 7505, float(i * 10))
     await step(30, 7500, 7500, 7494, 7496, 310.0)
     await step(31, 7496, 7502, 7495, 7501, 320.0)  # setup: entry 7501, cíl 7515, stop 7493
-    assert len(repository.active_for("ES")) == 1
+    (stored,) = repository.active_for("ES")
+    # Bar vstupu (#1320): opožděný cyklus 31 nesl bar 31, entry je jeho close.
+    # Kontext ho nese, takže restart (a offline přepočet) začne cestu za týmž
+    # barem jako živý běh — ne za minutou N−1, kde by bar 31 hodnotil podruhé.
+    assert stored.entry_bar_ts == TS + dt.timedelta(minutes=31)
+    assert repository.list_for("ES")[0]["context"]["entry_bar_ts"] == (
+        (TS + dt.timedelta(minutes=31)).isoformat()
+    )
+    restarted = SetupEngine(
+        symbol="ES", repository=repository, oi_repository=oi_repo, publisher=RecordingPublisher()
+    )
+    assert restarted._open[0].path == engine._open[0].path
+    assert engine._open[0].path.last_ts == stored.entry_bar_ts
+    assert engine._open[0].path.last_close == pytest.approx(7501)
 
-    # Zpožděný cyklus v now=TS+40 s dávkou barů 33 a 34
+    # Zpožděný cyklus v now=TS+40 s dávkou barů 32 a 33
     fake.last_flow = FakeFlow(400.0)
     target_bar = Bar(
-        ts=TS + dt.timedelta(minutes=33), open=7501, high=7516, low=7500, close=7514, volume=100.0
+        ts=TS + dt.timedelta(minutes=32), open=7501, high=7516, low=7500, close=7514, volume=100.0
     )
     stop_bar = Bar(
-        ts=TS + dt.timedelta(minutes=34), open=7514, high=7514, low=7470, close=7480, volume=100.0
+        ts=TS + dt.timedelta(minutes=33), open=7514, high=7514, low=7470, close=7480, volume=100.0
     )
     await engine.on_minute(TS + dt.timedelta(minutes=40), 7480, [target_bar, stop_bar], runtime)
 
@@ -853,8 +866,8 @@ async def test_setup_engine_close_ts_matches_hitting_bar(tmp_path: Path) -> None
     assert rows[0]["status"] == "closed_target"
     assert rows[0]["outcome_r"] > 0
     closed_ts = str(rows[0]["closed_ts"])
-    assert closed_ts.startswith("2026-07-17T15:33")
-    # MFE/MAE se akumulují jen do uzavíracího baru — propad baru 34 (low 7470)
+    assert closed_ts.startswith("2026-07-17T15:32")
+    # MFE/MAE se akumulují jen do uzavíracího baru — propad baru 33 (low 7470)
     # se nepočítá; MAE = entry 7501 − low 7500 uzavíracího baru
     assert rows[0]["mae"] == pytest.approx(1.0)
     assert rows[0]["mfe"] == pytest.approx(7516 - 7501)
@@ -938,11 +951,13 @@ async def test_setup_engine_blocks_direction_after_stop_streak(tmp_path: Path) -
 
 
 async def test_setup_engine_stale_setup_times_out_by_own_expiry(tmp_path: Path) -> None:
-    """#259: setup proslé expirace se po restartu uzavře timeoutem svojí expirace.
+    """#259 + #1320: setup prošlé expirace se po restartu uzavře timeoutem SVÉ expirace.
 
     Runtime jede na čerstvé expiraci (timeout z ní by setup nechal žít) a dnešní
     bar zasahuje jeho target — bary po settle se ale nevyhodnocují, takže výhra
-    se falešně nepřipíše.
+    se falešně nepřipíše. Cesta ceny se po restartu přehraje z partic a timeout
+    bere close baru končícího v settle (19:59), ne dnešní cenu; `closed_ts` =
+    settle (#1320, dřív čas cyklu po restartu).
     """
     db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}")
     repository = SetupsRepository(db)
@@ -950,12 +965,14 @@ async def test_setup_engine_stale_setup_times_out_by_own_expiry(tmp_path: Path) 
     oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
     oi_repo.ensure_schema()
     # Včerejší setup (expirace 20260716, settle 16. 7. 20:00 UTC < TS)
+    created = TS - dt.timedelta(days=1)
+    settle = dt.datetime(2026, 7, 16, 20, 0, tzinfo=dt.UTC)
     repository.create(
         symbol="ES",
         expiry="20260716",
         template="wall_bounce",
         direction="long",
-        created_ts=TS - dt.timedelta(days=1),
+        created_ts=created,
         entry=7452.0,
         target=7540.0,
         stop=7428.0,
@@ -963,20 +980,39 @@ async def test_setup_engine_stale_setup_times_out_by_own_expiry(tmp_path: Path) 
         reason="test",
         context={},
     )
+    # Partice: bary od vzniku do settle, poslední (19:59) close 7460
+    settings = Settings(data_dir=tmp_path / "data")
+    minutes = int((settle - created).total_seconds() // 60)
+    SnapshotWriter(settings).write_bars_by_day(
+        "ES",
+        [
+            Bar(
+                ts=created - dt.timedelta(minutes=1) + dt.timedelta(minutes=i),
+                open=7455.0,
+                high=7458.0,
+                low=7450.0,
+                close=7460.0 if i == minutes else 7455.0,
+                volume=100.0,
+            )
+            for i in range(minutes + 1)
+        ],
+    )
     # Restart enginu: __post_init__ načte aktivní setup z DB
     engine = SetupEngine(
         symbol="ES",
         repository=repository,
         oi_repository=oi_repo,
         publisher=RecordingPublisher(),
+        bar_reader=lambda since, until: read_bars(settings.derived_dir, "ES", since, until),
     )
     runtime = cast(EngineRuntime, FakeRuntime())
-    bar = Bar(ts=TS, open=7538.0, high=7545.0, low=7538.0, close=7460.0, volume=100.0)
-    await engine.on_minute(TS, 7460, [bar], runtime)
+    bar = Bar(ts=TS, open=7538.0, high=7545.0, low=7538.0, close=7538.0, volume=100.0)
+    await engine.on_minute(TS + dt.timedelta(minutes=1), 7538, [bar], runtime)
 
     rows = repository.list_for("ES")
     assert rows[0]["status"] == "closed_timeout"  # ne closed_target z dnešního high
     assert rows[0]["outcome_r"] == pytest.approx((7460 - 7452) / 24, rel=1e-3)
+    assert str(rows[0]["closed_ts"]).startswith("2026-07-16T20:00")
 
 
 def test_born_after_settle_hranice_je_settle_expirace() -> None:

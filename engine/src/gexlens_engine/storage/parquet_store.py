@@ -203,6 +203,57 @@ def bar_partition_day(ts: dt.datetime) -> dt.date:
     return ts.astimezone(dt.UTC).date()
 
 
+@dataclass(frozen=True)
+class StoredBar:
+    """1min bar z partice `derived/{sym}/bars` včetně původu (#617, #1055)."""
+
+    ts: dt.datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    #: `ibkr` (i NULL ze starých partic = živá cesta), `ibkr_hist`, `tasty_candle`
+    source: str | None
+
+
+def read_bars(
+    derived_dir: Path, symbol: str, since: dt.datetime, until: dt.datetime
+) -> list[StoredBar]:
+    """Bary symbolu se `since < ts ≤ until` z partic UTC dnů okna, seřazené (#1320).
+
+    Čtenář cesty ceny setupu (živý SetupEngine při díře v dávce i přepočet
+    historie): partice = UTC den baru (`bar_partition_day`), okno přes půlnoc
+    čte obě. Chybějící partice = žádné bary, ne chyba. Naivní čas je UTC.
+    """
+    first = bar_partition_day(since)
+    last = bar_partition_day(until)
+    bars: dict[dt.datetime, StoredBar] = {}
+    day = first
+    while day <= last:
+        path = derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
+        day += dt.timedelta(days=1)
+        if not path.exists():
+            continue
+        for row in pq.read_table(path, schema=BARS_SCHEMA).to_pylist():
+            ts = row["ts_min"]
+            if ts is None:
+                continue
+            ts = ts.replace(tzinfo=dt.UTC) if ts.tzinfo is None else ts.astimezone(dt.UTC)
+            if not since < ts <= until:
+                continue
+            bars[ts] = StoredBar(
+                ts=ts,
+                open=float(row["open"]),
+                high=float(row["high"]),
+                low=float(row["low"]),
+                close=float(row["close"]),
+                volume=float(row["volume"] or 0.0),
+                source=row["source"],
+            )
+    return [bars[ts] for ts in sorted(bars)]
+
+
 # Řada flowΔ/CumΔ (SPEC 4.5/5.1: derived/)
 FLOW_SCHEMA = pa.schema(
     [

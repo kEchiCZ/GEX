@@ -132,7 +132,7 @@ from gexlens_engine.storage.meta import ADHOC_CHANNEL
 from gexlens_engine.storage.notify import WatchlistListener
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.paper_store import PaperRepository
-from gexlens_engine.storage.parquet_store import SnapshotWriter, bar_partition_day
+from gexlens_engine.storage.parquet_store import SnapshotWriter, bar_partition_day, read_bars
 from gexlens_engine.storage.probes_store import ProbeRepository
 from gexlens_engine.storage.retention import RetentionJob
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
@@ -1224,6 +1224,40 @@ async def create_pipeline(
             await write_backfilled(day, day_bars, "re-backfill")
         logger.info("Re-backfill %s %s: %d barů", symbol, day, len(day_bars))
 
+    # Doplnění díry, na které stojí vyhodnocení setupu (#1320). Re-backfill
+    # výše spouští jen stall detektor, a ten bez pohybu spotu nečítá: 3. 9. stál
+    # stream i spot 72 min a díru v době vyhodnocení nedoplnil nikdo. Jedno
+    # doplnění naráz, IBKR historical UTC dnů díry přes zápisovou stráž
+    # `write_backfilled` (měřená minuta se nepřepíše, jiný kontrakt se zahodí).
+    setup_fill_task: asyncio.Task[None] | None = None
+
+    async def backfill_setup_gap(since: dt.datetime, until: dt.datetime) -> None:
+        day = bar_partition_day(since)
+        while day <= bar_partition_day(until):
+            try:
+                day_bars = await backfiller.backfill_day(symbol, day)
+                written = bool(day_bars) and await write_backfilled(day, day_bars, "díra setupu")
+            except Exception:
+                logger.exception("Doplnění díry %s %s pro vyhodnocení setupů selhalo", symbol, day)
+                return
+            logger.info(
+                "Doplnění díry %s %s:%s–%s pro vyhodnocení setupů: %d barů%s",
+                symbol,
+                day,
+                f"{since:%H:%M}",
+                f"{until:%H:%M}",
+                len(day_bars),
+                "" if written else " (nezapsáno)",
+            )
+            day += dt.timedelta(days=1)
+
+    def request_setup_bars(since: dt.datetime, until: dt.datetime) -> bool:
+        nonlocal setup_fill_task
+        if setup_fill_task is not None and not setup_fill_task.done():
+            return False
+        setup_fill_task = asyncio.ensure_future(backfill_setup_gap(since, until))
+        return True
+
     async def initial_backfill() -> None:
         try:
             by_day = await backfiller.backfill(symbol, dt.datetime.now(dt.UTC).date())
@@ -1264,6 +1298,8 @@ async def create_pipeline(
         nonlocal stopped
         stopped = True
         backfill_task.cancel()
+        if setup_fill_task is not None:
+            setup_fill_task.cancel()
         if fallback_task is not None:
             fallback_task.cancel()
         spot_streamer.stop()
@@ -1314,6 +1350,11 @@ async def create_pipeline(
                 ),
                 params_version=setup_params[1] if setup_params is not None else None,
                 feature_writer=writer if settings.feature_log_enabled else None,
+                # Díry v živých barech si vyžádá a dotahuje z partic (#1320)
+                bar_reader=lambda since, until: read_bars(
+                    settings.derived_dir, symbol, since, until
+                ),
+                request_bars=request_setup_bars,
             )
             if setups_repository is not None
             else None

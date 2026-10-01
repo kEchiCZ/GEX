@@ -15,8 +15,10 @@ import enum
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
+from typing import Protocol
 
 from gexlens_engine.compute.bandregime import BAND_MAJOR_SHARE, BandZone
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import expiry_settle_ts
 
 # Verze mechaniky detektoru (#311). Zvedá se při KAŽDÉ změně sémantiky stopů,
@@ -59,6 +61,12 @@ from gexlens_engine.compute.settle import expiry_settle_ts
 #       který neodpovídal skutečnosti (NQ 24. 8.: tendence celý den 29525,
 #       skutečnost 29200 → 29400 → 29390), a do hodnocení track recordu
 #       nepatří (#859).
+#
+# #1320 verzi ZÁMĚRNĚ nezvedá: mění vyhodnocení (celá cesta ceny z barů, timeout
+# za close baru končícího v settle), ne vznik setupu ani jeho úrovně. Opravené
+# vyhodnocení je to, co mechanika v5 měla dělat od začátku; historické výsledky
+# se srovnají skriptem `scripts/recompute_setup_outcomes.py` (jen se souhlasem,
+# původní hodnoty zůstanou v `context.outcome_correction`).
 #
 # #1322/#1324 verzi ZÁMĚRNĚ nezvedá: invariant `born_after_settle` jen brání
 # vzniku „mrtvě narozených“ setupů nad vypršelou expirací (všechny skončily
@@ -1208,6 +1216,223 @@ def born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
     """
     settle = setup_settle_ts(expiry)
     return settle is not None and created_ts >= settle
+
+
+# ── Cesta ceny setupu (#1320) ───────────────────────────────────────────────
+#
+# Setup se uzavírá podle SKUTEČNÉ cesty ceny: minutové bary v pořadí, bez
+# vynechané minuty. Dřív SetupEngine hodnotil jen bary, které dorazily v dávce
+# cyklu, a bez nich agregát spotu v okamžiku cyklu. 3. 9. 14:17–15:30 UTC stál
+# IBKR stream i spot (NQ 29317, ES 7709): engine 72 minut „viděl“ rovnou čáru,
+# stop ve 14:56 (NQ 1003) a 14:34 (ES 1004) minul a první živý bar v 15:30 zapsal
+# jako cíl. Stejně NQ 1373 (27. 9. večer bez barů): spot vzorkovaný jednou za
+# minutu stop o tick minul, bary ho mají ve 23:06. Timeout bral close minuty,
+# ve které se zjistil (restart ve 20:50, cyklus 20:02, pondělí po Labor Day,
+# zamrzlý spot v settle), ne close v settle.
+#
+# Pravidla (sdílí živý SetupEngine i `scripts/recompute_setup_outcomes.py`):
+# - hodnotí se jen bary, spot nikdy; cesta začíná za BAREM VSTUPU, tedy barem,
+#   jehož close je entry (poslední bar dávky cyklu: obvykle N−1, u opožděného
+#   cyklu N i pozdější, při zpožděném streamu N−2). Setup vzniklý nad spotem
+#   (dávka bez baru) začíná za barem N−1 (`path_start`);
+# - minuta, ve které trh běžel (`marketclock`), a bar chybí, přičemž pozdější
+#   bar už existuje = DÍRA: vyhodnocení se zastaví, nic se nevymýšlí. Engine
+#   si díru vyžádá z IBKR historical (stall detektor ji při zamrzlém spotu
+#   nevidí, 3. 9.), čte ji z partic a na každou díru čeká nejdéle
+#   `PATH_GAP_WAIT`; pak hodnotí bez ní a zaloguje ji. Offline přepočet
+#   s dírou setup neověří;
+# - timeout = close posledního baru před settle vlastní expirace (bar, který
+#   v settle končí), `closed_ts` = settle. Chybí-li bary až k settle, čeká se
+#   stejně jako u díry.
+
+#: Nejdelší čekání vyhodnocení na doplnění jedné díry v barech (#1320). Engine
+#: si díru při první blokaci vyžádá z IBKR historical; doplnění trvá jednotky
+#: minut. Co se do té doby nedoplní (minuta bez obchodu, nedostupný HMDS), už
+#: nejspíš nepřijde a setup nesmí viset do settle — offline přepočet takový
+#: výsledek později opraví (díra se mezitím doplnila, 3. 9.) nebo označí jako
+#: neověřitelný.
+PATH_GAP_WAIT = dt.timedelta(minutes=15)
+_MINUTE = dt.timedelta(minutes=1)
+#: Nejdelší zavřený trh mezi dvěma minutami seance (víkend + svátek)
+_MAX_CLOSED_SPAN = dt.timedelta(days=4)
+
+
+class PathBar(Protocol):
+    """Minutový bar cesty ceny; `ts` = začátek minuty (UTC)."""
+
+    @property
+    def ts(self) -> dt.datetime: ...
+
+    @property
+    def high(self) -> float: ...
+
+    @property
+    def low(self) -> float: ...
+
+    @property
+    def close(self) -> float: ...
+
+
+@dataclass(frozen=True)
+class PathState:
+    """Kam až je cesta ceny setupu vyhodnocená.
+
+    `last_ts` = ts posledního vyhodnoceného baru; na začátku bar vstupu (jeho
+    close je entry), u setupu nad spotem minuta před vznikem (`path_start`).
+    `last_close` je výstupní cena timeoutu, MFE/MAE v bodech.
+    """
+
+    last_ts: dt.datetime
+    last_close: float | None = None
+    mfe: float = 0.0
+    mae: float = 0.0
+
+
+@dataclass(frozen=True)
+class PathResult:
+    """Výsledek jednoho kroku po cestě ceny.
+
+    `outcome` None = setup běží dál. `blocked` = vyhodnocení stojí na díře
+    (nebo na chybějících barech před settle) a čeká na doplnění; `gaps` jsou
+    díry (první, poslední chybějící minuta), které krok potkal, včetně těch,
+    přes které se hodnotilo (`force_until`).
+    """
+
+    state: PathState
+    outcome: Outcome | None = None
+    closed_ts: dt.datetime | None = None
+    exit_price: float | None = None
+    gaps: tuple[tuple[dt.datetime, dt.datetime], ...] = ()
+    blocked: bool = False
+
+
+def path_start(created_ts: dt.datetime) -> PathState:
+    """Počáteční stav bez známého baru vstupu: minuta před vznikem (bar N−1).
+
+    Setup vzniklý nad spotem (dávka cyklu bez baru) a starší řádky bez
+    `entry_bar_ts` v kontextu; jinak cesta začíná barem vstupu."""
+    return PathState(last_ts=created_ts.replace(second=0, microsecond=0) - _MINUTE)
+
+
+def missing_minutes(
+    after: dt.datetime, before: dt.datetime
+) -> tuple[dt.datetime, dt.datetime] | None:
+    """První a poslední minuta v (after, before), ve které trh běžel — bar tam patří.
+
+    Denní pauza a víkend dírou nejsou (`marketclock.is_market_closed`). Svátky
+    rozvrh nezná (#1308): jejich zavřené minuty vypadají jako díra, kterou engine
+    po `PATH_GAP_WAIT` přejde a zaloguje.
+    """
+    first: dt.datetime | None = None
+    last: dt.datetime | None = None
+    minute = after + _MINUTE
+    while minute < before:
+        if not is_market_closed(minute):
+            if first is None:
+                first = minute
+            last = minute
+        minute += _MINUTE
+    if first is None or last is None:
+        return None
+    return first, last
+
+
+def last_expected_minute(settle: dt.datetime) -> dt.datetime | None:
+    """Poslední minuta před settle, ve které trh běžel — její bar v settle končí."""
+    minute = settle.replace(second=0, microsecond=0)
+    if minute == settle:
+        minute -= _MINUTE
+    floor = settle - _MAX_CLOSED_SPAN
+    while minute > floor:
+        if not is_market_closed(minute):
+            return minute
+        minute -= _MINUTE
+    return None
+
+
+def walk_setup_path(
+    direction: Direction,
+    entry: float,
+    target: float,
+    stop: float,
+    settle: dt.datetime | None,
+    bars: Sequence[PathBar],
+    state: PathState,
+    *,
+    now: dt.datetime,
+    force_until: dt.datetime | None = None,
+) -> PathResult:
+    """Posune vyhodnocení setupu po barech za `state.last_ts` (#1320).
+
+    Bary z více zdrojů se sloučí podle `ts` (pozdější v `bars` vyhrává), berou
+    se jen minuty před settle. Stop-first platí jen uvnitř jedné svíčky (#257):
+    cíl v dřívější minutě vyhrává nad stopem v pozdější. Uzavření nese ts baru,
+    který úroveň zasáhl, ne čas zjištění.
+
+    Díra (chybějící minuta běžícího trhu, za kterou už bar je) krok zastaví
+    s `blocked`. Díru, která začíná nejpozději ve `force_until`, krok přejde
+    a vrátí v `gaps`: engine tak přejde jen díru, na kterou už čekal, a pozdější
+    díra dostane vlastní čekání. Po settle (`now ≥ settle`) bez zásahu úrovně:
+    timeout za close baru končícího v settle, `closed_ts` = settle. Chybí-li bary
+    až k němu, je to díra; přejitá = timeout za poslední známý close
+    (`exit_price` None = žádný bar).
+    """
+    last_ts = state.last_ts
+    last_close = state.last_close
+    mfe = state.mfe
+    mae = state.mae
+    by_ts: dict[dt.datetime, PathBar] = {}
+    for bar in bars:
+        if bar.ts <= last_ts or (settle is not None and bar.ts >= settle):
+            continue
+        by_ts[bar.ts] = bar
+    gaps: list[tuple[dt.datetime, dt.datetime]] = []
+
+    def current() -> PathState:
+        return PathState(last_ts=last_ts, last_close=last_close, mfe=mfe, mae=mae)
+
+    def skipped(hole: tuple[dt.datetime, dt.datetime]) -> bool:
+        return force_until is not None and hole[0] <= force_until
+
+    for ts in sorted(by_ts):
+        bar = by_ts[ts]
+        hole = missing_minutes(last_ts, ts)
+        if hole is not None:
+            gaps.append(hole)
+            if not skipped(hole):
+                return PathResult(state=current(), gaps=tuple(gaps), blocked=True)
+        if direction is Direction.LONG:
+            favourable, adverse = bar.high - entry, entry - bar.low
+        else:
+            favourable, adverse = entry - bar.low, bar.high - entry
+        mfe = max(mfe, favourable)
+        mae = max(mae, adverse)
+        last_ts, last_close = ts, bar.close
+        outcome = evaluate_bar(direction, entry, target, stop, bar.high, bar.low)
+        if outcome is not None:
+            return PathResult(
+                state=current(),
+                outcome=outcome,
+                closed_ts=ts,
+                exit_price=stop if outcome is Outcome.STOP else target,
+                gaps=tuple(gaps),
+            )
+
+    if settle is None or now < settle:
+        return PathResult(state=current(), gaps=tuple(gaps))
+    end = last_expected_minute(settle)
+    tail = missing_minutes(last_ts, end + _MINUTE) if end is not None else None
+    if tail is not None:
+        gaps.append(tail)
+        if not skipped(tail):
+            return PathResult(state=current(), gaps=tuple(gaps), blocked=True)
+    return PathResult(
+        state=current(),
+        outcome=Outcome.TIMEOUT,
+        closed_ts=settle,
+        exit_price=last_close,
+        gaps=tuple(gaps),
+    )
 
 
 # ── Sondy nezapnutých šablon (#577 fáze 1) ─────────────────────────────────
