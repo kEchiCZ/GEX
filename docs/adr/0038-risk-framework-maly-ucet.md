@@ -106,3 +106,93 @@ v rozpočtu (n = 339, +0,06 R). Uživatel bude obchodovat účet ~5 000 $ na
   v rozpočtu, chrání jen sizing a brzdy (varianta E z #1325 s jejími nevýhodami). Kritérium se zpětně
   neladí: LB > 0 se přehodnotí walk-forwardem po ≥ 20 seancích od 30. 9. (~28. 10., připomínka #1334),
   s náklady ADR-0030 (komise a skluz 1 tick).
+
+## Dodatek 2026-10-01: stádia buněk, Zkouška a Knihovna setupů (#1323, fáze 1)
+
+- **Rozhodnutí uživatele 1. 10. 2026** (otevřené otázky #1323): ovládání v Setupy → Knihovna (1B);
+  přebití brány jen jako **Zkouška s rozpočtem** (2B: výchozí 10 setupů nebo −3 R, meze 1–20 setupů
+  a 0,5–6 R, obnovitelná s důvodem); po vyčerpání zpět na Auto bez zápisu verze (3A); zaškrtávátko
+  `template_gate_enabled` z UI pryč, pole zůstává (4B); verdikt brány v Knihovně se počítá teď týmiž
+  funkcemi jako engine (5B); klíč buňky je ticker instance (ADR-0041), brzdy mají přednost před
+  rozhodnutím uživatele a rozsah kouče (#1244) se řeší zvlášť (8). Původní „obchodovat" bez stropu
+  z prvního zadání #1323 se nezavádí.
+- **Stádium buňky ticker × šablona.** Auto (výchozí, buňka bez záznamu: sizing → brzdy → brána),
+  Stín (setup vzniká a měří se, nikdy není obchodovatelný, `trade_block = "user"`) a Zkouška (přebije
+  verdikt brány, dokud nevyčerpá rozpočet). Stádia jsou pole `SetupParams` (`shadow_cells`,
+  `trial_cells` se začátkem a rozpočtem per buňka; výchozí rozpočet `trial_budget_setups` = 10
+  a `trial_budget_r` = 3), takže každá změna je nová verze `setup_params` s povinným důvodem
+  (ADR-0033, dodatek 2026-10-01). Klíč `NQ:trend_continuation` neplatí pro pinovaný `NQZ6`, ten má
+  vlastní buňku. Vyřazení celé šablony zůstává `disabled_templates` (přestane se měřit).
+- **Pořadí bloků:** sizing (`stop_over_budget`, `stop_over_cap`) → brzdy (`daily_brake`,
+  `weekly_brake`, `template_stops`) → `user` (Stín) → brána (`gate`). Aktivní Zkouška přebije jen
+  verdikt brány `block` nebo `insufficient` a nastaví `gate_overridden = true`. Sizing ani brzdy
+  nepřebije žádné stádium. Brána dál bere i stínové řádky (na `tradeable` se nefiltruje), takže
+  stádium vzorek nezkresluje.
+- **Čerpání zkoušky** (`compute/risk.trial_usage`, čistá funkce): setupy buňky s `gate_overridden`
+  vzniklé od začátku zkoušky, uzavřené z `realized_since` a otevřené z paměti instance; ztráta je Σ R
+  uzavřených. Vyčerpáno = počet ≥ N nebo Σ R ≤ −X. Setup obchodovatelný z vlastní brány (pass) ani
+  setup zastavený sizingem nebo brzdou rozpočet nečerpá. Na šablonu × symbol je otevřený nejvýš jeden
+  setup, rozpočet se tak může přečerpat nejvýš o něj. Selže-li čtení výsledků, Zkouška bránu
+  nepřebije — výpadek DB nesmí riziko zvýšit.
+- **Kdy zkouška platí** (`TrialCell.in_force`): od `started_at` a jen na mechanice, na které
+  začala. Cyklus enginu má čas zaokrouhlený na minutu, API razí začátek přesně: setup z cyklu,
+  ve kterém se nová verze aplikovala, by zkouška pustila, ale čerpání (setupy od `started_at`)
+  by ho nikdy nezapočetlo — strop by neplatil (review 1. 10. 2026). Invariant: `gate_overridden`
+  ⇒ `created_ts` ≥ `started_at`; zkouška platí od příští minuty. Čerpání se čte jen z aktuální
+  mechaniky (#311), takže zvednutí `SETUP_MECHANICS_VERSION` by vyčerpané zkoušce vrátilo plný
+  rozpočet bez rozhodnutí uživatele; zkouška proto nese `mechanics_version` a na jiné mechanice
+  končí (Auto, bez zápisu). Pro novou mechaniku ji uživatel vědomě obnoví — riziko systém jen
+  snižuje.
+- **Asymetrická autonomie** (stupeň 1, #794, ADR-0033 bod 5): riziko zvyšuje jen člověk s důvodem
+  (nová verze parametrů). Systém ho smí jen snížit — konec zkoušky a brzdy se odvozují z výsledků
+  a do `setup_params` nic nezapisují. Konec zkoušky ohlásí alert `setup_stage` (`event =
+  trial_spent`) jednou na zkoušku, na přechodu do vyčerpání (vznik setupu, který doplní počet, nebo
+  uzavření, které dosáhne ztráty), takže odejde jednou i po restartu enginu bez stavu v paměti.
+- **Zápis stádia jen přes `POST /setups/stage`** (jedna buňka, povinný důvod) — **odchylka od
+  zadání #1323** („žádný nový endpoint“, zápis přes `saveSetupParams`), předložená uživateli
+  k potvrzení v PR; varianta A (zápis přes `/setups/params` se začátkem od serveru) zůstává
+  možná. Začátek a mechaniku zkoušky nastaví server („teď“, `SETUP_MECHANICS_VERSION`);
+  opakované zahájení je obnovení s rozpočtem od nuly. `POST /setups/params` stádia nemění
+  (chybějící klíč převezme platnou verzi, jiná hodnota vrátí 422): klient by jinak mohl zvolit
+  budoucí začátek (zkouška bez stropu) a starý snímek parametrů (Settings otevřené před změnou
+  stádia) by stádia tiše vrátil; návrhy walk-forwardu stádia nenesou. Náhradní
+  důvod „risk: změna ze Settings" v UI je zrušený, prázdný důvod odmítne UI i API.
+- **Kontext setupu, `risk_rules_version` = 3.** Nové klíče `user_stage` (efektivní stádium při
+  vzniku; vyčerpaná zkouška = `auto`), `gate_overridden`, u buňky se zkouškou `trial_started_at`,
+  `trial_budget_setups`, `trial_budget_r`, `trial_setups` (čerpání včetně tohoto setupu, pokud ho
+  zkouška pustila) a `trial_sum_r`, a důkaz buňky nad vzorkem brány: `template_gate_avg_r`,
+  `template_gate_avg_net_r` (po nákladech ADR-0030) a `template_gate_n_needed`. `tradeable` může
+  být u v3 true i při bráně `block`. Řádky v1 a v2 tyto klíče nemají a čtou se jako Auto bez přebití.
+- **Knihovna je druhý volající, ne druhá implementace.** `GET /setups/summary` vrací `cells`
+  (`compute/setup_library.library_cells`): verdikt brány spočítaný teď (`affordable_rows`
+  + `template_gate`, okno `gate_window_start`), ØR hrubě a čistě, vzorek potřebný pro průkaz edge
+  +0,2 R (`risk.samples_needed`: ((1,645 + 0,84) · σ / 0,2)², jednostranně 95 %, síla 80 %) a odhad
+  v seancích při dnešním tempu; řadí se podle průkaznosti n / n potřebné, ne podle ØR. n potřebné
+  nikdy neklesne pod minimum brány (30) a při σ = 0 pod ním se neodhaduje: stop je vždy přesně
+  −1 R a capovaný cíl přesně +3 R, takže dva stejné výsledky dávaly „2 / 2 · vzorek stačí“ na
+  prvním řádku. Vzorek brány je oknem `template_gate_days` useknutý: při tempu t za seanci ho
+  okno pojme nejvýš t × 60 (`window_capacity`). Když je to méně než n potřebné, odhad v seancích
+  se nedává a Knihovna píše „v okně nedosáhne“ — vzorec z #1323 by sliboval termín, který se
+  pořád posouvá (1. 10.: ES T7 ~427 < 456, NQ T7 ~337 < 462; souvisí s přehodnocením
+  kritéria #1334). Buňka nese i `net_usd`, Σ čistého P/L vzorku v reálných mikro dolarech při
+  skutečném sizingu (kontrakty z kontextu setupu). Buňky s nastaveným stádiem jsou v Knihovně
+  vždy, i mimo watchlist. Stav brzd účtu v hlavičce Knihovny (`brakes`, `library_brakes`)
+  počítá `brake_state` nad týmž čtením `realized_since` jako engine, napříč symboly — pole
+  navíc proti zadání #1323, předložené k potvrzení spolu s endpointem. Souhrn #1319 má skupinu
+  `trial` (obchodovatelné díky zkoušce, podmnožina `tradeable`) a důvod stínu `user`.
+- **Push** nového setupu chodí dál jen pro `tradeable` (stín uživatele push nedostane); zpráva nese
+  šablonu (`T7 trend_continuation`), stádium (AUTO / STÍN / ZKOUŠKA k/N) a řádek důkazu (ØR
+  hrubě a čistě, n / n potřebné, brána), který při dolní mezi ≤ 0 nebo bez ní začíná štítkem
+  „edge neprokázán“ — vždy u setupu, který pustila Zkouška.
+- **Globální `template_gate_enabled`** zůstává v parametrech jen jako nouzová cesta přes API; v UI
+  by byl druhou cestou k „obchodovat vše bez rozpočtu". Věta předchozího dodatku o vypnutí brány
+  zaškrtávátkem v Settings proto už neplatí.
+- **Důsledky.** Každá změna stádia zvedá `params_version`, takže řezy track recordu „od verze N"
+  zahrnou i verze, které měnily jen stádium (Historie ve fázi 2 je rozliší). Brzdy jsou společné
+  napříč symboly: ztráty zkoušky mohou denní nebo týdenní brzdou zastavit i jiné obchodovatelné
+  setupy — dialog změny stádia to říká. Zkouška znamená reálné peníze na neprokázaném edge
+  (k 1. 10. 2026 má každá buňka bránu block nebo insufficient, rozbor v #1323); mitigace jsou
+  rozpočet, štítek „edge neprokázán" (dialog i push), brzdy, které se nepřebíjejí, a čisté R
+  i $ v Knihovně (ØR čistě vedle hrubého, `net_usd` v tooltipu).
+  Fáze 2–4 (detail setupu, úpravy prahů s OOS ověřením, varianty, diskreční Fibonacci) jsou
+  samostatná zadání.

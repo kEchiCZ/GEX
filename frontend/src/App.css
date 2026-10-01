@@ -9,6 +9,8 @@
   --accent: #38b2ac;
   --up: #3ecf8e;
   --down: #f0616d;
+  /* Varování bez poplachu (zkouška, edge neprokázán, #1323) */
+  --warn: #f5c542;
 }
 
 * {
@@ -758,6 +760,7 @@ button.cal-selected {
   --border: #c9d1dc;
   --text: #22262e;
   --text-muted: #66707f;
+  --warn: #9a6b00;
   background: var(--bg);
   color: var(--text);
 }
@@ -1583,6 +1586,260 @@ tr.setup-after-settle td {
 .setups-disclaimer {
   margin-top: 12px;
   font-size: 11px;
+}
+
+/* Podzáložky Setupy (#1323): Přehled / Knihovna */
+.setups-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+/* Knihovna setupů (#1323): stav brzd a zkoušek nad tabulkou buněk */
+.library-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  font-size: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.library-status .r-negative {
+  color: #e05563;
+}
+
+.library-message {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--up);
+}
+
+.library-table .library-setup {
+  font-weight: 600;
+}
+
+.stage-chip {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.stage-chip.stage-shadow {
+  color: var(--text-muted);
+}
+
+.stage-chip.stage-trial {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.library-gate {
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 11px;
+  background: var(--bg-chip);
+}
+
+.library-gate.gate-pass {
+  background: rgba(63, 191, 111, 0.25);
+}
+
+.library-gate.gate-block {
+  background: rgba(224, 85, 99, 0.25);
+}
+
+.library-legend {
+  margin-top: 6px;
+}
+
+/* Dialog změny stádia (#1323): modál nad Knihovnou, na mobilu přes celou šířku */
+.stage-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.stage-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(620px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  padding: 14px 16px;
+  font-size: 13px;
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+
+.stage-dialog-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.stage-dialog-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.stage-dialog input:not([type='radio']) {
+  padding: 4px 6px;
+  color: var(--text);
+  background: var(--bg-chip);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.stage-dialog input[aria-invalid='true'] {
+  border-color: var(--down);
+}
+
+.stage-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.stage-options legend {
+  margin-bottom: 4px;
+  padding: 0;
+  font-size: 11px;
+}
+
+.stage-option {
+  display: grid;
+  grid-template-columns: auto 72px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.stage-option-name {
+  font-weight: 600;
+}
+
+.stage-trial {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--warn);
+  background: var(--bg-chip);
+}
+
+.stage-trial p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.stage-budget {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.stage-budget input {
+  width: 64px;
+}
+
+.stage-warning {
+  color: var(--warn);
+}
+
+.stage-reason {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.stage-reason input {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.stage-effects,
+.stage-error {
+  margin: 0;
+  font-size: 12px;
+}
+
+.stage-error {
+  color: var(--down);
+}
+
+.stage-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.stage-actions .chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Mobil (#1323): buňky Knihovny jako karty místo sloupců — popisek z data-label */
+@media (max-width: 700px) {
+  .library-table thead {
+    display: none;
+  }
+
+  .library-table,
+  .library-table tbody,
+  .library-table tr,
+  .library-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .library-table tr {
+    margin-bottom: 8px;
+    padding: 6px 10px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+
+  .library-table td {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 3px 0;
+    text-align: right;
+    white-space: normal;
+    border-bottom: 0;
+  }
+
+  .library-table td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    text-align: left;
+  }
+
+  .stage-option {
+    grid-template-columns: auto 1fr;
+  }
+
+  .stage-option .muted {
+    grid-column: 2;
+  }
 }
 
 /* Greeks & OI tabulka (#202): chain pohled — call vlevo, strike uprostřed, put vpravo */

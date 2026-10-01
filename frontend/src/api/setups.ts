@@ -1,5 +1,6 @@
 /** Setup detektor (ADR-0004): REST klient a české popisky šablon. */
 import { API_BASE } from '../config'
+import type { LibraryBrakes, LibraryCell, UserStage } from './setupLibrary'
 
 export interface SetupRow {
   id: number
@@ -256,6 +257,9 @@ export interface SetupsSummary {
   unpriced_symbols: string[]
   all: SummaryGroup
   tradeable: SummaryGroup
+  /** Obchodovatelné jen díky zkoušce (#1323, `gate_overridden`) — podmnožina
+   *  `tradeable`; chybí u API před #1323. */
+  trial?: SummaryGroup
   shadow: SummaryGroup
   unruled: SummaryGroup
   shadow_reasons: Record<string, number>
@@ -264,6 +268,10 @@ export interface SetupsSummary {
   band_gates: BandGateSummary | null
   regimes: RegimeRow[]
   performance: SetupsPerformance
+  /** Knihovna setupů (#1323): buňky ticker × šablona; chybí u API před #1323. */
+  cells?: LibraryCell[]
+  /** Stav brzd účtu teď (#1323, hlavička Knihovny); chybí u API před #1323. */
+  brakes?: LibraryBrakes
 }
 
 export interface SummaryOptions {
@@ -433,12 +441,14 @@ export function formatGateBucket(bucket: GateBucket): string {
 // Engine u každého setupu spočítá sizing (kontrakty = ⌊účet × riziko % /
 // (stop b × hodnota bodu)⌋), brzdy (−3 R den, −6 R týden, 2 stopy šablony za
 // den) a bránu šablon (dolní mez očekávání > 0 při n ≥ 30 za 60 seancí; od #1325
-// per šablona × symbol, `risk_rules_version` 2).
+// per šablona × symbol, `risk_rules_version` 2). Od #1323 (`risk_rules_version`
+// 3) i stádium buňky ticker × šablona: Stín (`trade_block` `user`, po brzdách)
+// a Zkouška, která přebije bránu (`gate_overridden`), sizing ani brzdy ne.
 // Setup vzniká vždy; `tradeable` říká, zda se dá zobchodovat, `trade_block`
 // proč ne. UI jen zobrazuje — nic nepřepočítává.
 
 export type TradeBlock =
-  'stop_over_budget' | 'stop_over_cap' | 'daily_brake' | 'weekly_brake' | 'template_stops' | 'gate'
+  'stop_over_budget' | 'stop_over_cap' | 'daily_brake' | 'weekly_brake' | 'template_stops' | 'user' | 'gate' // prettier-ignore
 
 export const TRADE_BLOCK_LABELS: Record<TradeBlock, string> = {
   stop_over_budget: 'stop nad rozpočtem rizika',
@@ -446,6 +456,7 @@ export const TRADE_BLOCK_LABELS: Record<TradeBlock, string> = {
   daily_brake: 'denní brzda',
   weekly_brake: 'týdenní brzda',
   template_stops: 'strop stopů šablony',
+  user: 've stínu z rozhodnutí uživatele',
   gate: 'šablona bez prokázaného edge',
 }
 
@@ -468,6 +479,12 @@ export interface RiskInfo {
   gateLb: number | null
   dayR: number | null
   weekR: number | null
+  /** Stádium buňky při vzniku (#1323); null = řádek před #1323 (= Auto). */
+  userStage: UserStage | null
+  /** Obchodovatelný jen díky zkoušce (#1323) — brána by ho jinak zastavila. */
+  gateOverridden: boolean
+  /** Čerpání zkoušky při vzniku; null = buňka zkoušku neměla. */
+  trial: { setups: number; budgetSetups: number; sumR: number; budgetR: number } | null
 }
 
 /** Risk kontext setupu (#1185); null = řádek vznikl před pravidly — nic se nevymýšlí. */
@@ -478,6 +495,11 @@ export function riskInfo(row: Pick<SetupRow, 'context'>): RiskInfo | null {
     typeof context[key] === 'number' ? (context[key] as number) : null
   const block = context.trade_block
   const gate = context.template_gate
+  const stage = context.user_stage
+  const trialSetups = num('trial_setups')
+  const trialBudgetSetups = num('trial_budget_setups')
+  const trialSumR = num('trial_sum_r')
+  const trialBudgetR = num('trial_budget_r')
   return {
     tradeable: context.tradeable,
     affordable: context.affordable === true,
@@ -496,6 +518,20 @@ export function riskInfo(row: Pick<SetupRow, 'context'>): RiskInfo | null {
     gateLb: num('template_gate_lb'),
     dayR: num('realized_day_r'),
     weekR: num('realized_week_r'),
+    userStage: stage === 'auto' || stage === 'shadow' || stage === 'trial' ? stage : null,
+    gateOverridden: context.gate_overridden === true,
+    trial:
+      trialSetups !== null &&
+      trialBudgetSetups !== null &&
+      trialSumR !== null &&
+      trialBudgetR !== null
+        ? {
+            setups: trialSetups,
+            budgetSetups: trialBudgetSetups,
+            sumR: trialSumR,
+            budgetR: trialBudgetR,
+          }
+        : null,
   }
 }
 
@@ -503,9 +539,15 @@ function blockText(info: RiskInfo): string {
   return info.block === null ? 'neobchodovatelný' : TRADE_BLOCK_LABELS[info.block]
 }
 
-/** Štítek do tabulky: „1 ks · 500 $" nebo „stín: denní brzda". */
+/** Štítek do tabulky: „1 ks · 500 $", „1 ks · 500 $ · zkouška 3/10" nebo „stín: denní brzda". */
 export function riskLabel(info: RiskInfo): string {
-  if (info.tradeable) return `${info.contracts} ks · ${Math.round(info.maxLossUsd)} $`
+  if (info.tradeable) {
+    const base = `${info.contracts} ks · ${Math.round(info.maxLossUsd)} $`
+    if (!info.gateOverridden) return base
+    return info.trial === null
+      ? `${base} · zkouška`
+      : `${base} · zkouška ${info.trial.setups}/${info.trial.budgetSetups}`
+  }
   return `stín: ${blockText(info)}`
 }
 
@@ -535,6 +577,7 @@ export function riskTooltip(info: RiskInfo): string {
       : `${GATE_TEXT[info.gate]}${info.gateN === null ? '' : ` · n=${info.gateN}`}${info.gateLb === null ? '' : ` · LB ${signed(info.gateLb, 2)} R`}`
   const day = info.dayR === null ? '—' : `${signed(info.dayR, 1)} R`
   const week = info.weekR === null ? '—' : `${signed(info.weekR, 1)} R`
+  const stage = stageText(info)
   return [
     info.tradeable
       ? `Obchodovatelný: ${info.contracts} kontrakt(y), ztráta na stopu ${Math.round(info.maxLossUsd)} $ (+ poplatky ${Math.round(info.feeUsd)} $).`
@@ -544,9 +587,24 @@ export function riskTooltip(info: RiskInfo): string {
     '',
     'Pravidla (#1185):',
     `• brána šablony: ${gate}`,
+    ...(stage === null ? [] : [`• stádium v Knihovně: ${stage}`]),
     `• brzdy: dnes ${day}, týden ${week} (−3 R den zastaví nové obchody do konce seance (17:00 CT), −6 R týden do konce obchodního týdne (neděle 17:00 CT))`,
     '• stínové setupy se dál měří, jen se neobchodují a nechodí do pushe',
   ].join('\n')
+}
+
+/** Stádium buňky při vzniku do tooltipu (#1323); null = řádek před #1323. */
+function stageText(info: RiskInfo): string | null {
+  if (info.userStage === null) return null
+  const trial =
+    info.trial === null
+      ? ''
+      : ` (${info.trial.setups}/${info.trial.budgetSetups} setupů, ${signed(info.trial.sumR, 1)} z ${(-info.trial.budgetR).toFixed(1)} R)`
+  if (info.gateOverridden) return `Zkouška — přebila bránu${trial}`
+  if (info.userStage === 'shadow') return 'Stín — rozhodnutí uživatele'
+  if (info.userStage === 'trial') return `Zkouška${trial}`
+  // Auto s klíči zkoušky = vyčerpaná zkouška (engine ji vrací na Auto bez zápisu)
+  return info.trial === null ? 'Auto' : `Auto — zkouška vyčerpána${trial}`
 }
 
 // ── Parametry setupů (#794 fáze 2) vč. risk parametrů (#1185) ─────────────

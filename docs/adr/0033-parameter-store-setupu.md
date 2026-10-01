@@ -93,3 +93,22 @@ Důsledek: čísla důvěry u nových setupů klesnou z 45–60 na kalibrovaná
 #794 (epic), #311 (mechanics_version), ADR-0004 (defaulty prahů), ADR-0030
 (metrika), #446 (přednost DB nad `.env`), #1060 (posun confidence podle
 polohy — aplikuje se navrch základu, který fáze 2B nahradí kalibrovaným).
+
+## Dodatek 2026-10-01: stádia buněk jako pole store (#1323)
+
+- **Stádium buňky ticker × šablona** (Auto / Stín / Zkouška, ADR-0038 dodatek 2026-10-01) je pole
+  `SetupParams`: `shadow_cells` (seřazený seznam klíčů `NQ:trend_continuation`) a `trial_cells`.
+  Historie stádií tak žije v append-only `setup_params` s důvodem a `created_by`, bez nové tabulky.
+- **Výjimka z ploché serializace bodu 4:** `trial_cells` se ukládá jako objekt `{buňka: {started_at,
+  budget_setups, budget_r, mechanics_version}}` (čas v ISO UTC, všechny klíče povinné), protože
+  rozpočet je per buňka. `mechanics_version` je mechanika, na které zkouška začala; čerpání se čte
+  jen z aktuální mechaniky, takže zkouška jiné mechaniky neplatí (jinak by zvednutí mechaniky
+  vyčerpané zkoušce vrátilo rozpočet bez rozhodnutí uživatele). Validaci dělá `SetupParams.__post_init__` (kanonický ticker, známá šablona, buňka nejvýš
+  v jednom stádiu, zóna u `started_at`, meze 1–20 setupů a 0,5–6 R), takže neplatný stav nejde
+  postavit ani přes `replace()`; v API je to 422.
+- **Starší verze** bez těchto klíčů (seed 8. 9. 2026) se načtou jako všechny buňky Auto.
+- **Kdo zapisuje:** stádia mění jen `POST /setups/stage` (server nastaví začátek a mechaniku
+  zkoušky, mění jen jednu buňku platné verze; odchylka od zadání #1323, viz ADR-0038 dodatek).
+  Návrhy walk-forwardu (`scripts/walkforward_setups.py`) stádia nenesou. `POST /setups/params` je převezme z platné verze, jinou hodnotu odmítne.
+  Engine novou verzi převezme po NOTIFY jako dosud (`apply_params`), otevřené setupy si nesou
+  stádium platné při vzniku.

@@ -25,17 +25,22 @@ from gexlens_engine.compute.bandregime import (
 from gexlens_engine.compute.coach_setups import hour_local, session_segment
 from gexlens_engine.compute.confidence import ConfidenceTable, build_confidence_table
 from gexlens_engine.compute.gexfield import gamma_edges
+from gexlens_engine.compute.paper import POINT_VALUES
 from gexlens_engine.compute.risk import (
     RISK_RULES_VERSION,
     BrakeState,
     RealizedSetup,
-    affordable_results,
+    TrialUsage,
+    affordable_rows,
     brake_state,
+    gate_window_start,
     position_size,
     template_gate,
+    trial_usage,
     week_start,
 )
 from gexlens_engine.compute.settle import trading_session_date
+from gexlens_engine.compute.setup_library import cell_evidence
 from gexlens_engine.compute.setups import (
     PATH_GAP_WAIT,
     SETUP_MECHANICS_VERSION,
@@ -44,7 +49,11 @@ from gexlens_engine.compute.setups import (
     Outcome,
     PathBar,
     PathState,
+    SetupCandidate,
     SetupParams,
+    SetupTemplate,
+    TrialCell,
+    UserStage,
     average_true_range,
     born_after_settle,
     detect_all,
@@ -55,6 +64,7 @@ from gexlens_engine.compute.setups import (
     path_start,
     r_result,
     setup_settle_ts,
+    template_label,
     walk_setup_path,
 )
 from gexlens_engine.config import Settings
@@ -119,6 +129,9 @@ class _OpenSetup:
     counter: bool = False
     # Obchodovatelný podle risk pravidel (#1185) — po uzavření se zkontrolují brzdy
     tradeable: bool = False
+    # Obchodovatelný jen díky zkoušce (#1323) — čerpá její rozpočet, i po
+    # restartu (čte se z kontextu), ať se otevřený setup do čerpání započítá
+    gate_overridden: bool = False
 
 
 BRAKE_LABELS: dict[str, str] = {
@@ -131,8 +144,39 @@ TRADE_BLOCK_LABELS: dict[str, str] = {
     **BRAKE_LABELS,
     "stop_over_budget": "stop nad rozpočtem rizika",
     "stop_over_cap": "stop nad tvrdým stropem",
+    "user": "ve stínu z rozhodnutí uživatele",
     "gate": "šablona bez prokázaného edge",
 }
+
+#: Stádium do textu nového setupu (zvonek i Telegram, #1323)
+STAGE_LABELS: dict[str, str] = {"auto": "AUTO", "shadow": "STÍN", "trial": "ZKOUŠKA"}
+
+
+def _signed(value: float | None, digits: int = 2) -> str:
+    return "—" if value is None else f"{value:+.{digits}f}"
+
+
+def evidence_line(context: dict[str, object]) -> str:
+    """Řádek důkazu buňky do textu nového setupu (#1323): ØR hrubě a čistě,
+    n / n potřebné a verdikt brány z kontextu, který engine právě zapsal.
+
+    Začíná „edge neprokázán:“, když dolní mez ØR není kladná nebo ji vzorek
+    ještě nedává — vždy u setupu, který pustila Zkouška. Push je chvíle, kdy
+    se na mobilu rozhoduje o penězích; štítek je mitigace z ADR-0038."""
+    n = context.get("template_gate_n")
+    needed = context.get("template_gate_n_needed")
+    lb = context.get("template_gate_lb")
+    avg = context.get("template_gate_avg_r")
+    net = context.get("template_gate_avg_net_r")
+    sample = f"n {n}/{needed}" if isinstance(needed, int) else f"n {n}"
+    gate = f"brána {context.get('template_gate')}"
+    if isinstance(lb, float):
+        gate += f" (LB {lb:+.2f})"
+    head = "Důkaz" if isinstance(lb, float) and lb > 0 else "edge neprokázán"
+    return (
+        f"{head}: ØR {_signed(avg if isinstance(avg, float) else None)} R "
+        f"(čistě {_signed(net if isinstance(net, float) else None)}) · {sample} · {gate}"
+    )
 
 
 @dataclass
@@ -200,7 +244,13 @@ class SetupEngine:
         # Otevřené setupy z DB (restart enginu) — cesta ceny se přehraje od
         # baru vstupu z partic (#1320), MFE/MAE tím dostanou i minuty výpadku
         for stored in self.repository.active_for(self.symbol):
-            self._open.append(_OpenSetup(stored=stored, path=self._stored_path(stored)))
+            self._open.append(
+                _OpenSetup(
+                    stored=stored,
+                    path=self._stored_path(stored),
+                    gate_overridden=stored.gate_overridden,
+                )
+            )
 
     @staticmethod
     def _stored_path(stored: StoredSetup) -> PathState:
@@ -508,13 +558,15 @@ class SetupEngine:
         # díry nebo restartu se v jednom kroku zavře víc setupů a série stopů
         # směru (#302) i cooldown kontra-setupu (#252 C) závisí na pořadí
         closing.sort(key=lambda entry: entry[2])
+        closed: list[tuple[_OpenSetup, float]] = []
         for item, outcome, closed_ts, exit_price in closing:
-            await self._close(item, outcome, closed_ts, exit_price, now)
+            closed.append((item, await self._close(item, outcome, closed_ts, exit_price, now)))
         self._open = still_open
         if not any(item.blocked_since is not None for item in still_open):
             self._requested_gaps.clear()
-        if any(item.tradeable for item, *_ in closing):
-            await self._check_brakes(now)
+        # Setup zkoušky je obchodovatelný; po restartu nese z DB jen gate_overridden
+        if any(item.tradeable or item.gate_overridden for item, _ in closed):
+            await self._check_brakes(now, closed)
 
     async def _close(
         self,
@@ -523,8 +575,9 @@ class SetupEngine:
         closed_ts: dt.datetime,
         exit_price: float | None,
         now: dt.datetime,
-    ) -> None:
-        """Zapíše uzavření setupu, vedlejší efekty (série stopů, cooldown) a push."""
+    ) -> float:
+        """Zapíše uzavření setupu, vedlejší efekty (série stopů, cooldown) a push.
+        Vrací výsledek v R (čerpání zkoušky, #1323)."""
         direction = Direction(item.stored.direction)
         if exit_price is None:
             # Timeout bez jediného baru v celém životě setupu: výstupní cena
@@ -569,6 +622,7 @@ class SetupEngine:
         await self.publisher.publish(
             f"setups.{self.symbol}", {"event": "closed", "id": item.stored.id}
         )
+        return result
 
     def _request_gap(self, gap: tuple[dt.datetime, dt.datetime]) -> None:
         """Požádá o doplnění díry do partic, jednou na díru (#1320).
@@ -586,17 +640,50 @@ class SetupEngine:
             self._requested_gaps.add(gap)
 
     def _gate_since(self, now: dt.datetime) -> dt.datetime:
-        # N seancí ≈ N × 7/5 kalendářních dnů
-        return now - dt.timedelta(days=self.params.template_gate_days * 7 / 5)
+        return gate_window_start(now, self.params.template_gate_days)
 
     def _load_realized(self, now: dt.datetime) -> list[RealizedSetup]:
         """Blokující čtení uzavřených setupů týdne a okna brány — volat přes to_thread.
 
-        Okno je širší z obou (týden, nebo N seancí brány ≈ 84 dní); týden si
-        z něj vymezuje `brake_state` sám (#1322). Řádky jsou napříč symboly
+        Okno je nejširší z týdne, N seancí brány (≈ 84 dní) a začátků zkoušek
+        tohoto tickeru (#1323 — zkouška vzácné šablony může běžet déle než
+        okno brány a čerpání by jinak zapomnělo staré uzavřené setupy). Týden
+        si z něj vymezuje `brake_state` sám (#1322). Řádky jsou napříč symboly
         kvůli brzdám; brána si z nich vybere vlastní symbol (#1325)."""
-        since = min(week_start(trading_session_date(now)), self._gate_since(now))
+        starts = [
+            trial.started_at
+            for trial in self.params.trial_cells
+            if trial.ticker == self.symbol and trial.mechanics_version == SETUP_MECHANICS_VERSION
+        ]
+        since = min(week_start(trading_session_date(now)), self._gate_since(now), *starts)
         return self.repository.realized_since(since, mechanics_version=SETUP_MECHANICS_VERSION)
+
+    def _trial_in_force(self, template: str, now: dt.datetime) -> TrialCell | None:
+        """Zkouška buňky, která teď platí (`TrialCell.in_force`): od začátku a na
+        aktuální mechanice. Vyčerpání rozhoduje až `_trial_usage`."""
+        trial = self.params.trial_of(self.symbol, template)
+        if trial is None or not trial.in_force(now, SETUP_MECHANICS_VERSION):
+            return None
+        return trial
+
+    def _trial_usage(self, realized: Sequence[RealizedSetup], trial: TrialCell) -> TrialUsage:
+        """Čerpání zkoušky buňky: uzavřené z `realized`, otevřené z paměti instance."""
+        open_setups = sum(
+            1
+            for item in self._open
+            if item.gate_overridden
+            and item.stored.template == trial.template
+            and _utc(item.stored.created_ts) >= trial.started_at
+        )
+        return trial_usage(
+            realized,
+            self.symbol,
+            trial.template,
+            started_at=trial.started_at,
+            budget_setups=trial.budget_setups,
+            budget_r=trial.budget_r,
+            open_setups=open_setups,
+        )
 
     def _brakes(
         self, realized: Sequence[RealizedSetup], template: str, now: dt.datetime
@@ -610,15 +697,66 @@ class SetupEngine:
             max_template_stops_per_day=self.params.max_template_stops_per_day,
         )
 
-    async def _check_brakes(self, now: dt.datetime) -> None:
-        """Po uzavření obchodovatelného setupu: dosažená denní/týdenní brzda se
-        ohlásí hned, ne až u dalšího kandidáta (#1185). Chyba DB = bez alertu."""
+    async def _check_brakes(
+        self, now: dt.datetime, closed: Sequence[tuple[_OpenSetup, float]] = ()
+    ) -> None:
+        """Po uzavření obchodovatelného setupu: dosažená denní/týdenní brzda
+        (#1185) i ztrátou vyčerpaná zkouška (#1323) se ohlásí hned, ne až
+        u dalšího kandidáta. `closed` = (setup, výsledek v R). Chyba DB = bez alertu."""
         try:
             realized = await asyncio.to_thread(self._load_realized, now)
         except Exception:
-            logger.exception("Kontrola brzd selhala — bez alertu")
+            logger.exception("Kontrola brzd a zkoušek selhala — bez alertu")
             return
         await self._alert_brake(self._brakes(realized, "", now), now)
+        for item, result in closed:
+            if not item.gate_overridden:
+                continue
+            trial = self._trial_in_force(item.stored.template, now)
+            if trial is None or _utc(item.stored.created_ts) < trial.started_at:
+                continue  # setup dřívější zkoušky — obnovená počítá od nuly
+            usage = self._trial_usage(realized, trial)
+            # Před uzavřením se setup počítal jako otevřený: počet stejný, R bez něj.
+            # Alert jen na přechodu do vyčerpání — jednou na zkoušku, i po restartu
+            spent_before = (
+                usage.setups >= trial.budget_setups or usage.sum_r - result <= -trial.budget_r
+            )
+            if usage.spent and not spent_before:
+                await self._alert_trial_spent(trial, usage, now)
+
+    async def _alert_trial_spent(
+        self, trial: TrialCell, usage: TrialUsage, now: dt.datetime
+    ) -> None:
+        """Alert `setup_stage` (#1323): zkouška vyčerpala rozpočet, buňka se
+        chová jako Auto. Volá se jen na přechodu do vyčerpání (vznik setupu,
+        který doplní počet, nebo uzavření, které překročí ztrátu), takže odejde
+        jednou na zkoušku bez stavu v paměti; do `setup_params` se nic nezapisuje."""
+        label = template_label(SetupTemplate(trial.template))
+        await self.publisher.publish(
+            "alerts",
+            {
+                "kind": "setup_stage",
+                "event": "trial_spent",
+                "symbol": self.symbol,
+                "template": trial.template,
+                "message": f"Zkouška {label} · {self.symbol} skončila: "
+                f"{usage.setups}/{trial.budget_setups} setupů, {usage.sum_r:+.1f} R "
+                f"z {-trial.budget_r:.1f} R → zpět na Auto (rozhoduje brána)",
+                "trial_setups": usage.setups,
+                "trial_budget_setups": trial.budget_setups,
+                "trial_sum_r": usage.sum_r,
+                "trial_budget_r": trial.budget_r,
+                "ts": now.timestamp(),
+            },
+        )
+        logger.info(
+            "Zkouška %s vyčerpána: %d/%d setupů, %+.2f R z −%.1f R",
+            trial.cell,
+            usage.setups,
+            trial.budget_setups,
+            usage.sum_r,
+            trial.budget_r,
+        )
 
     async def _alert_brake(self, state: BrakeState, now: dt.datetime) -> None:
         if state.block is None or state.block == "template_stops":
@@ -659,8 +797,22 @@ class SetupEngine:
         stop: float,
         point_value: float,
         now: dt.datetime,
+        *,
+        history_ok: bool = True,
     ) -> tuple[dict[str, object], BrakeState]:
-        """Sizing, brzdy a brána (#1185) → klíče kontextu setupu + stav brzd.
+        """Sizing, brzdy, stádium buňky a brána (#1185, #1323) → klíče kontextu
+        setupu + stav brzd.
+
+        Pořadí bloků: sizing → brzdy → `user` (buňka ve Stínu) → brána. Aktivní
+        Zkouška přebije verdikt brány block i insufficient (`gate_overridden`),
+        dokud nevyčerpá rozpočet; vyčerpaná se chová jako Auto (nic se
+        nezapisuje), stejně jako zkouška před svým začátkem (cyklus s `now`
+        zaokrouhleným na minutu) nebo zahájená na jiné mechanice
+        (`TrialCell.in_force`). Sizing ani brzdy nepřebije nic. Verdikt brány
+        a důkaz buňky se zapisují vždy, i když rozhodlo něco dřív.
+        `history_ok=False` (čtení uzavřených setupů selhalo) = čerpání zkoušky
+        nejde ověřit, takže zkouška bránu nepřebije — výpadek DB nesmí riziko
+        zvýšit.
 
         `point_value` je hodnota bodu vlastního symbolu (`runtime.multiplier`);
         sizing kandidáta i dopočet starších řádků brány (klíč šablona × symbol,
@@ -675,46 +827,79 @@ class SetupEngine:
             risk_max_pct=params.risk_max_pct,
         )
         brakes = self._brakes(realized, template, now)
+        rows = affordable_rows(
+            realized,
+            template,
+            self.symbol,
+            since=self._gate_since(now),
+            point_value_usd=point_value,
+            account_equity_usd=params.account_equity_usd,
+            risk_pct=params.risk_pct,
+            risk_max_pct=params.risk_max_pct,
+        )
         gate = template_gate(
-            affordable_results(
-                realized,
-                template,
-                self.symbol,
-                since=self._gate_since(now),
-                point_value_usd=point_value,
-                account_equity_usd=params.account_equity_usd,
-                risk_pct=params.risk_pct,
-                risk_max_pct=params.risk_max_pct,
-            ),
+            [row.outcome_r for row in rows],
             min_samples=params.template_gate_min_samples,
             enabled=params.template_gate_enabled,
         )
+        evidence = cell_evidence(rows, POINT_VALUES, min_samples=params.template_gate_min_samples)
+        stage: UserStage = params.stage_of(self.symbol, template)
+        trial = self._trial_in_force(template, now)
+        if stage == "trial" and trial is None:
+            stage = "auto"  # zkouška ještě nezačala nebo patří jiné mechanice
+        usage = self._trial_usage(realized, trial) if trial is not None and history_ok else None
+        if trial is not None and (usage is None or usage.spent):
+            stage = "auto"  # vyčerpaná / neověřitelná zkouška = Auto, nic se nepíše
         block: str | None = size.block
         if block is None:
             block = brakes.block
+        if block is None and stage == "shadow":
+            block = "user"
+        gate_overridden = False
         if block is None and gate.verdict in ("block", "insufficient"):
-            block = "gate"
-        return (
-            {
-                "risk_rules_version": RISK_RULES_VERSION,
-                "account_equity_usd": params.account_equity_usd,
-                "point_value_usd": point_value,
-                "risk_budget_usd": size.risk_budget_usd,
-                "stop_points": size.stop_points,
-                "contracts": size.contracts,
-                "max_loss_usd": size.max_loss_usd,
-                "fee_usd": size.contracts * params.fee_per_contract_usd,
-                "affordable": size.affordable,
-                "tradeable": block is None,
-                "trade_block": block,
-                "template_gate": gate.verdict,
-                "template_gate_n": gate.n,
-                "template_gate_lb": gate.lower_bound,
-                "realized_day_r": brakes.day_r,
-                "realized_week_r": brakes.week_r,
-            },
-            brakes,
-        )
+            if stage == "trial":
+                gate_overridden = True
+            else:
+                block = "gate"
+        context: dict[str, object] = {
+            "risk_rules_version": RISK_RULES_VERSION,
+            "account_equity_usd": params.account_equity_usd,
+            "point_value_usd": point_value,
+            "risk_budget_usd": size.risk_budget_usd,
+            "stop_points": size.stop_points,
+            "contracts": size.contracts,
+            "max_loss_usd": size.max_loss_usd,
+            "fee_usd": size.contracts * params.fee_per_contract_usd,
+            "affordable": size.affordable,
+            "tradeable": block is None,
+            "trade_block": block,
+            "template_gate": gate.verdict,
+            "template_gate_n": gate.n,
+            "template_gate_lb": gate.lower_bound,
+            # Důkaz buňky (#1323) nad týmž vzorkem jako brána: ØR hrubě a po
+            # nákladech ADR-0030, vzorek potřebný na průkaz edge +0,2 R
+            "template_gate_avg_r": evidence.avg_r,
+            "template_gate_avg_net_r": evidence.avg_net_r,
+            "template_gate_n_needed": evidence.n_needed,
+            "realized_day_r": brakes.day_r,
+            "realized_week_r": brakes.week_r,
+            # Stádium platné při vzniku (#1323): auto / shadow / trial; vyčerpaná
+            # zkouška = auto (klíče trial_* zůstanou a řeknou proč)
+            "user_stage": stage,
+            "gate_overridden": gate_overridden,
+        }
+        if trial is not None and usage is not None:
+            context.update(
+                {
+                    "trial_started_at": trial.started_at.isoformat(),
+                    "trial_budget_setups": trial.budget_setups,
+                    "trial_budget_r": trial.budget_r,
+                    # Čerpání včetně tohoto setupu, pokud ho zkouška pouští
+                    "trial_setups": usage.setups + (1 if gate_overridden else 0),
+                    "trial_sum_r": usage.sum_r,
+                }
+            )
+        return context, brakes
 
     def _track_direction_streak(
         self, direction: str, outcome: Outcome, closed_ts: dt.datetime
@@ -809,6 +994,7 @@ class SetupEngine:
         await self._refresh_calibration(now)
         open_templates = {item.stored.template for item in self._open}
         realized: list[RealizedSetup] | None = None
+        history_ok = True
         for candidate in detect_all(list(self._history), self.params):
             template = candidate.template.value
             if template in open_templates:
@@ -853,10 +1039,20 @@ class SetupEngine:
                 try:
                     realized = await asyncio.to_thread(self._load_realized, now)
                 except Exception:
-                    logger.exception("Čtení realizovaných setupů selhalo — brzdy neplatí")
+                    logger.exception(
+                        "Čtení realizovaných setupů selhalo — brzdy neplatí, zkoušky "
+                        "nepřebíjejí bránu"
+                    )
                     realized = []
+                    history_ok = False
             risk, brakes = self._risk_context(
-                realized, template, candidate.entry, candidate.stop, float(runtime.multiplier), now
+                realized,
+                template,
+                candidate.entry,
+                candidate.stop,
+                float(runtime.multiplier),
+                now,
+                history_ok=history_ok,
             )
             await self._alert_brake(brakes, now)
             tradeable = bool(risk["tradeable"])
@@ -912,36 +1108,92 @@ class SetupEngine:
                     path=self._new_path(now, entry_bar),
                     counter=counter,
                     tradeable=tradeable,
+                    gate_overridden=risk["gate_overridden"] is True,
                 )
             )
             open_templates.add(template)
-            side = "LONG" if candidate.direction is Direction.LONG else "SHORT"
-            block = risk["trade_block"]
-            risk_note = (
-                f"{risk['contracts']} kontr., riziko {risk['max_loss_usd']:.0f} $"
-                if tradeable
-                else f"stín: {TRADE_BLOCK_LABELS.get(str(block), str(block))}"
-            )
-            await self.publisher.publish(
-                "alerts",
-                {
-                    "kind": "setup",
-                    # Proklik ve zvonečku (#186): nový setup vede na graf instrumentu
-                    "event": "created",
-                    "symbol": self.symbol,
-                    # Číselná confidence pro práh push notifikací (#1175) — text
-                    # zprávy ji nese jen v procentech
-                    "confidence": confidence,
-                    # Neobchodovatelný setup (#1185) push nedostane
-                    "tradeable": tradeable,
-                    "message": f"Nový setup {side} ({template}): entry {candidate.entry:g}, "
-                    f"cíl {candidate.target:g}, stop {candidate.stop:g} "
-                    f"(RRR {candidate.rrr:.1f}, conf. {confidence} %, {risk_note}). "
-                    f"{candidate.reason}",
-                    "ts": now.timestamp(),
-                },
-            )
-            await self.publisher.publish(
-                f"setups.{self.symbol}", {"event": "created", "id": setup_id}
-            )
+            await self._publish_created(setup_id, template, candidate, confidence, risk, now)
             logger.info("Setup %s %s #%d: %s", self.symbol, template, setup_id, candidate.reason)
+            # Setup, který doplnil počet zkoušky, ji vyčerpal — ohlásit hned
+            # (jednou: další setupy buňky už zkouška nepustí)
+            trial = self._trial_in_force(template, now)
+            trial_setups = risk.get("trial_setups")
+            if (
+                trial is not None
+                and risk["gate_overridden"] is True
+                and isinstance(trial_setups, int)
+                and trial_setups >= trial.budget_setups
+            ):
+                sum_r = risk.get("trial_sum_r")
+                await self._alert_trial_spent(
+                    trial,
+                    TrialUsage(
+                        setups=trial_setups,
+                        sum_r=float(sum_r) if isinstance(sum_r, int | float) else 0.0,
+                        spent=True,
+                    ),
+                    now,
+                )
+
+    async def _publish_created(
+        self,
+        setup_id: int,
+        template: str,
+        candidate: SetupCandidate,
+        confidence: int,
+        risk: dict[str, object],
+        now: dt.datetime,
+    ) -> None:
+        """Alert nového setupu do zvonku a (jen tradeable) na Telegram.
+
+        Text nese stádium buňky (#1323: AUTO / STÍN / ZKOUŠKA k/N s čerpáním)
+        a řádek důkazu (ØR hrubě a čistě, n / n potřebné, verdikt brány).
+        Payload nese `user_stage`, `gate_overridden` a čerpání zkoušky."""
+        tradeable = risk["tradeable"] is True
+        side = "LONG" if candidate.direction is Direction.LONG else "SHORT"
+        block = risk["trade_block"]
+        risk_note = (
+            f"{risk['contracts']} kontr., riziko {risk['max_loss_usd']:.0f} $"
+            if tradeable
+            else f"stín: {TRADE_BLOCK_LABELS.get(str(block), str(block))}"
+        )
+        stage = str(risk["user_stage"])
+        stage_note = STAGE_LABELS.get(stage, stage.upper())
+        trial_keys = (
+            "trial_setups",
+            "trial_budget_setups",
+            "trial_sum_r",
+            "trial_budget_r",
+        )
+        trial = {key: risk[key] for key in trial_keys if key in risk}
+        if stage == "trial":
+            stage_note += (
+                f" {trial['trial_setups']}/{trial['trial_budget_setups']} "
+                f"({float(cast(float, trial['trial_sum_r'])):+.1f} z "
+                f"{-float(cast(float, trial['trial_budget_r'])):.1f} R)"
+            )
+        label = template_label(SetupTemplate(template))
+        await self.publisher.publish(
+            "alerts",
+            {
+                "kind": "setup",
+                # Proklik ve zvonečku (#186): nový setup vede na graf instrumentu
+                "event": "created",
+                "symbol": self.symbol,
+                "template": template,
+                # Číselná confidence pro práh push notifikací (#1175) — text
+                # zprávy ji nese jen v procentech
+                "confidence": confidence,
+                # Neobchodovatelný setup (#1185) push nedostane
+                "tradeable": tradeable,
+                "user_stage": stage,
+                "gate_overridden": risk["gate_overridden"] is True,
+                **trial,
+                "message": f"Nový setup {side} ({label}) · {stage_note}: "
+                f"entry {candidate.entry:g}, cíl {candidate.target:g}, stop {candidate.stop:g} "
+                f"(RRR {candidate.rrr:.1f}, conf. {confidence} %, {risk_note}). "
+                f"{candidate.reason}\n{evidence_line(risk)}",
+                "ts": now.timestamp(),
+            },
+        )
+        await self.publisher.publish(f"setups.{self.symbol}", {"event": "created", "id": setup_id})

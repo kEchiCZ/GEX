@@ -1,7 +1,13 @@
-/** Settings → Risk management (#1185): serverové parametry sizingu, brzd a
-brány šablon. Ukládá se jako nová verze parametrů setupů (append-only, povinný
-důvod) — engine přepne do sekund; existující setupy si nesou hodnoty vzniku. */
+/** Settings → Risk management (#1185): serverové parametry účtu — sizing,
+brzdy, kritérium brány šablon a výchozí rozpočet zkoušky (#1323). Ukládá se jako
+nová verze parametrů setupů (append-only, povinný důvod bez náhradního textu)
+— engine přepne do sekund; existující setupy si nesou hodnoty vzniku.
+
+Stádia buněk (Stín, Zkouška) se tady nemění — patří do Setupy → Knihovna
+(`POST /setups/stage`); globální vypínač brány `template_gate_enabled` zůstal
+jen jako nouzová cesta přes API (rozhodnutí 1. 10. 2026, #1323 bod 4B). */
 import { useEffect, useState } from 'react'
+import { NOTE_MAX, NOTE_MIN } from '../api/setupLibrary'
 import { fetchSetupParams, saveSetupParams } from '../api/setups'
 import type { SetupParamsVersion } from '../api/setups'
 
@@ -87,29 +93,47 @@ const RISK_FIELDS: readonly RiskField[] = [
     max: 1000,
     help: 'Kolik posledních seancí track recordu brána hodnotí.',
   },
+  {
+    key: 'trial_budget_setups',
+    label: 'Zkouška: výchozí počet setupů',
+    step: 1,
+    min: 1,
+    max: 20,
+    help: 'Předvyplní dialog Zkoušky v Setupy → Knihovna: zkouška skončí po tolika setupech s přebitou bránou (1–20). Běžící zkoušky si nesou rozpočet ze zahájení.',
+  },
+  {
+    key: 'trial_budget_r',
+    label: 'Zkouška: výchozí ztráta (R)',
+    step: 0.5,
+    min: 0.5,
+    max: 6,
+    help: 'Předvyplní dialog Zkoušky: zkouška skončí, když Σ R jejích uzavřených setupů klesne na −tuto hodnotu (0,5–6 R).',
+  },
 ]
+
+/** Stádia buněk mění jen `POST /setups/stage` — klíče se neposílají, server
+ *  převezme platné (starý snímek by jinak vrátil 422). */
+const STAGE_KEYS = new Set(['shadow_cells', 'trial_cells'])
 
 function numberOf(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
 
-function draftFrom(source: Record<string, unknown>, defaults: Record<string, unknown>): Draft {
+function draftFrom(
+  source: Record<string, unknown>,
+  defaults: Record<string, unknown>,
+): Record<string, number> {
   const values: Record<string, number> = {}
   for (const field of RISK_FIELDS) {
     values[field.key] = numberOf(source[field.key], numberOf(defaults[field.key], 0))
   }
-  return { values, gate: source.template_gate_enabled !== false }
-}
-
-interface Draft {
-  values: Record<string, number>
-  gate: boolean
+  return values
 }
 
 export function RiskSettings() {
   // undefined = načítá se; null = server bez verze (defaulty)
   const [current, setCurrent] = useState<SetupParamsVersion | null | undefined>(undefined)
-  const [draft, setDraft] = useState<Draft>({ values: {}, gate: true })
+  const [draft, setDraft] = useState<Record<string, number>>({})
   const [note, setNote] = useState('')
   const [message, setMessage] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -127,15 +151,17 @@ export function RiskSettings() {
     }
   }, [])
 
+  const trimmedNote = note.trim()
+  const noteOk = trimmedNote.length >= NOTE_MIN
+
   const save = async () => {
-    if (current === undefined) return
+    // Důvod je povinný (audit, #1323) — náhradní text se nevymýšlí
+    if (current === undefined || !noteOk) return
     setSaving(true)
-    const params = {
-      ...(current?.params ?? {}),
-      ...draft.values,
-      template_gate_enabled: draft.gate,
-    }
-    const result = await saveSetupParams(params, note.trim() || 'risk: změna ze Settings')
+    const base = Object.fromEntries(
+      Object.entries(current?.params ?? {}).filter(([key]) => !STAGE_KEYS.has(key)),
+    )
+    const result = await saveSetupParams({ ...base, ...draft }, trimmedNote)
     setSaving(false)
     if (result.ok) {
       setMessage(`Uloženo jako verze ${result.version} — engine přepne do sekund.`)
@@ -166,50 +192,45 @@ export function RiskSettings() {
               min={field.min}
               max={field.max}
               step={field.step}
-              value={draft.values[field.key] ?? ''}
+              value={draft[field.key] ?? ''}
               aria-label={field.label}
               onChange={(event) =>
-                setDraft((prev) => ({
-                  ...prev,
-                  values: { ...prev.values, [field.key]: Number(event.target.value) || 0 },
-                }))
+                setDraft((prev) => ({ ...prev, [field.key]: Number(event.target.value) || 0 }))
               }
             />
           </label>
         ))}
-        <label title="Vypnutá brána: obchodovatelné jsou všechny šablony se stopem v rozpočtu (brzdy platí dál).">
-          <input
-            type="checkbox"
-            checked={draft.gate}
-            aria-label="Brána šablon zapnuta"
-            onChange={(event) => setDraft((prev) => ({ ...prev, gate: event.target.checked }))}
-          />
-          Brána šablon (obchodovat jen šablony s prokázaným edge na daném symbolu)
-        </label>
       </div>
       <label>
-        Důvod změny
+        Důvod změny*
         <input
           value={note}
-          maxLength={500}
-          placeholder="proč se parametry mění (audit)"
+          maxLength={NOTE_MAX}
+          placeholder="proč se parametry mění (audit, povinné)"
           aria-label="Důvod změny risk parametrů"
+          aria-invalid={!noteOk}
           onChange={(event) => setNote(event.target.value)}
         />
       </label>
       <button
         type="button"
         className="chip"
-        disabled={saving || current === undefined}
+        disabled={saving || current === undefined || !noteOk}
         onClick={() => void save()}
       >
         {saving ? 'Ukládám…' : 'Uložit jako novou verzi'}
       </button>
+      {!noteOk && (
+        <p className="muted" data-testid="risk-note-required">
+          Důvod je povinný (aspoň {NOTE_MIN} znaky) — bez něj se verze neuloží.
+        </p>
+      )}
       {message && <p className="muted">{message}</p>}
       <p className="muted setting-help">
         Setup se stopem nad rozpočtem, po brzdě nebo z šablony bez prokázaného edge vzniká dál jako
-        <b> stín</b>: šedý v Setupech, bez pushe, mimo bilanci účtu. Ostatní prahy šablon se mění
-        skriptem (POST /setups/params).
+        <b> stín</b>: šedý v Setupech, bez pushe, mimo bilanci účtu. Stádium jednotlivé šablony na
+        tickeru (Stín, Zkouška s rozpočtem) se nastavuje v <b>Setupy → Knihovna</b>. Ostatní prahy
+        šablon se mění skriptem (POST /setups/params).
       </p>
     </section>
   )

@@ -162,6 +162,7 @@ export function InstrumentHeader({
     requestNewsFocus,
     setToggle,
     setView,
+    setSetupsTab,
     regimeInfo,
     magnetInfo,
     settleWatch,
@@ -452,6 +453,8 @@ export function InstrumentHeader({
                     // instrumentu (karta + linie), výsledek → stránka Setupy.
                     // Alerty od staršího enginu bez `event` rozliší text zprávy.
                     const isSetup = alert.kind === 'setup' && alert.symbol !== ''
+                    // Konec zkoušky (#1323): proklik na Setupy → Knihovna, kde jde obnovit
+                    const isStage = alert.kind === 'setup_stage'
                     const isResult =
                       alert.event === 'closed' ||
                       (alert.event === undefined && alert.message.includes('uzavřen'))
@@ -490,6 +493,20 @@ export function InstrumentHeader({
                           >
                             {content}
                           </button>
+                        ) : isStage ? (
+                          <button
+                            type="button"
+                            className="alert-link"
+                            aria-label="Otevřít Knihovnu setupů"
+                            title="Otevřít Setupy → Knihovna — stádium buňky a obnovení zkoušky"
+                            onClick={() => {
+                              setSetupsTab('library')
+                              setView('setups')
+                              setAlertsOpen(false)
+                            }}
+                          >
+                            {content}
+                          </button>
                         ) : isSetup ? (
                           <button
                             type="button"
@@ -506,6 +523,8 @@ export function InstrumentHeader({
                             }
                             onClick={() => {
                               setSymbol(alert.symbol)
+                              // Vyhodnocení je v Přehledu, ne v Knihovně (#1323)
+                              if (isResult) setSetupsTab('overview')
                               setView(isResult ? 'setups' : 'chart')
                               setAlertsOpen(false)
                             }}

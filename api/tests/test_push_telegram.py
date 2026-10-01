@@ -36,6 +36,7 @@ PUBLISHED_KINDS = frozenset(
     {
         "setup",
         "risk_brake",
+        "setup_stage",
         "paper",
         "scenario_created",
         "scenario_result",
@@ -86,7 +87,15 @@ SCRIPT_KINDS = frozenset({"vhdx_compact", "deploy_rollback"})
 
 def _legacy_category(kind: str) -> str:
     """Dřívější `category_of` (#1175) bez mrtvého `broker` — kotva pro „nic se nepřevrátí"."""
-    if kind in ("setup", "scenario_result", "scenario_created", "risk_brake", "paper"):
+    # setup_stage (#1323, konec zkoušky v Knihovně) vznikl po #1175 — patří k setupům
+    if kind in (
+        "setup",
+        "scenario_result",
+        "scenario_created",
+        "risk_brake",
+        "paper",
+        "setup_stage",
+    ):
         return "setup"
     ops = {
         "disconnect",
@@ -165,7 +174,7 @@ def test_kazdy_druh_prave_jeden_prepinac() -> None:
     assert sum(len(topic.kinds) for topic in PUSH_TOPICS) == len(KIND_TOPIC)  # žádný dvakrát
     # broker je druh zprávy v kanálu news, retro_pass jde také kanálem news
     assert "broker" not in KIND_TOPIC and "retro_pass" not in KIND_TOPIC
-    assert len(PUSH_TOPICS) == 30
+    assert len(PUSH_TOPICS) == 31
     assert all(len(topic.setting) <= 64 for topic in PUSH_TOPICS)
     assert {topic.key for topic in PUSH_TOPICS if not topic.bell} == {"maintenance"}
 
@@ -196,7 +205,7 @@ def test_setting_keys_jen_master_a_topic() -> None:
         for key in PUSH_SETTING_KEYS
     )
     assert "push_telegram_news" not in PUSH_SETTING_KEYS
-    assert len(PUSH_SETTING_KEYS) == 31
+    assert len(PUSH_SETTING_KEYS) == 32
 
 
 # ── Dědění a efektivní stav ────────────────────────────────────────
@@ -221,7 +230,7 @@ def test_dedeni_z_kategorii() -> None:
         "expiry_calendar",
     }
     assert len(info) == 10  # 4 v „Setupy a burza", 6 v „Chování aplikace"
-    assert setup == {"setup", "risk_brake", "paper", "scenario"}
+    assert setup == {"setup", "risk_brake", "setup_stage", "paper", "scenario"}
 
     _, topics = effective({"push_telegram_news": False})
     assert {k for k, on in topics.items() if not on} == news | info

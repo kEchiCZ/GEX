@@ -27,11 +27,11 @@ import { fetchSettings } from '../api/settings'
 import { evTooltip, formatPnlUsd, templateLabel } from '../api/setups'
 import type { SetupsSummary, SharpeValue } from '../api/setups'
 import { useSetupsSummary } from '../hooks/useSetupsSummary'
+import { useWatchlistSymbols } from '../hooks/useWatchlistSymbols'
 import { fetchVerdictStats } from '../api/briefing'
 import { ReleaseHypothesesSection } from './ReleaseHypothesesSection'
 import { ScenarioStatsSection } from './ScenarioStatsSection'
 import type { VerdictStatBucket, VerdictStats } from '../api/briefing'
-import { API_BASE } from '../config'
 import {
   STRATEGY_COLORS,
   STRATEGY_LABELS,
@@ -533,7 +533,7 @@ export function StatsView() {
   const [regime, setRegime] = useState('all')
   // Portfolio pro sekci Výkon (#794): symboly watchlistu — Sharpe se dle
   // ADR-0030 počítá nad celou simulací, ne per aktivní symbol
-  const [watchlistSymbols, setWatchlistSymbols] = useState<string[]>([])
+  const watchlistSymbols = useWatchlistSymbols(REFRESH_MS)
   const [drift, setDrift] = useState<DriftState | null>(null)
   const [verdictStats, setVerdictStats] = useState<VerdictStats | null>(null)
 
@@ -594,25 +594,6 @@ export function StatsView() {
 
   // Portfolio Výkonu (#794): symboly z watchlistu; při nedostupném watchlistu
   // aspoň aktivní symbol, ať sekce neukazuje prázdno kvůli vedlejší chybě
-  useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      try {
-        const response = await fetch(`${API_BASE}/watchlist`)
-        if (!response.ok) return
-        const payload = (await response.json()) as { watchlist?: { symbol: string }[] }
-        if (!cancelled) setWatchlistSymbols((payload.watchlist ?? []).map((item) => item.symbol))
-      } catch {
-        // watchlist nedostupný — portfolio drží aktivní symbol (viz níže)
-      }
-    }
-    void load()
-    const timer = window.setInterval(() => void load(), REFRESH_MS)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [])
   const portfolioSymbols = useMemo(
     () => [...new Set([...watchlistSymbols, symbol])].sort(),
     [watchlistSymbols, symbol],

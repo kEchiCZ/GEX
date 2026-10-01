@@ -19,6 +19,9 @@ konec týdne je otevření pondělní seance v neděli 17:00 CT (`week_start`).
 Brána šablon: obchodovatelná je jen šablona na daném symbolu (klíč šablona ×
 symbol, #1325), jejíž dolní mez očekávání (jednostranný 95% interval Ø R) za
 posledních N seancí je kladná při n ≥ 30 — ostatní se dál měří, ale neobchodují.
+Stádium buňky (#1323): uživatel ji může dát do Stínu (blok `user`, po brzdách)
+nebo do Zkoušky, která přebije bránu, dokud nevyčerpá rozpočet (`trial_usage`).
+Sizing a brzdy nepřebíjí nic.
 """
 
 import datetime as dt
@@ -37,10 +40,21 @@ from gexlens_engine.compute.settle import session_bounds
 #:     u ES a NQ různý vstup (#1325).
 #: 2 = #1325: brána per šablona × symbol, řádky před pravidly dopočtené
 #:     hodnotou bodu vlastního symbolu.
-RISK_RULES_VERSION = 2
+#: 3 = #1323: stádium buňky ticker × šablona. Pořadí bloků sizing → brzdy →
+#:     `user` (Stín) → brána; aktivní Zkouška přebije verdikt brány block
+#:     i insufficient (`gate_overridden`). Kontext nese `user_stage`,
+#:     `gate_overridden`, čerpání zkoušky a důkaz buňky (ØR hrubě/čistě,
+#:     n potřebné). `tradeable` tak u v3 může být True i při bráně block.
+RISK_RULES_VERSION = 3
 
 TradeBlock = Literal[
-    "stop_over_budget", "stop_over_cap", "daily_brake", "weekly_brake", "template_stops", "gate"
+    "stop_over_budget",
+    "stop_over_cap",
+    "daily_brake",
+    "weekly_brake",
+    "template_stops",
+    "user",
+    "gate",
 ]
 GateVerdict = Literal["pass", "block", "insufficient", "off"]
 
@@ -102,6 +116,14 @@ class RealizedSetup:
     affordable: bool | None = None
     entry: float = 0.0
     stop: float = 0.0
+    #: Vznik setupu — čerpání zkoušky počítá setupy vzniklé od jejího začátku
+    #: (#1323); None = zdroj vznik nenese (paper obchody)
+    created_ts: dt.datetime | None = None
+    #: `context.gate_overridden` (#1323): obchodovatelný jen díky zkoušce
+    gate_overridden: bool = False
+    #: `context.contracts` — sizing při vzniku (#1185); None = řádek před
+    #: pravidly (Knihovna ho dopočte `position_size` jako brána `affordable`)
+    contracts: int | None = None
 
 
 def week_start(session_day: dt.date) -> dt.datetime:
@@ -171,11 +193,43 @@ def expectancy_lower_bound(results: Sequence[float], z: float = 1.645) -> float 
     return mean - z * math.sqrt(variance / n)
 
 
+#: Edge, který má buňka prokázat, a kvantily testu (jednostranně 95 %, síla 80 %)
+#: pro odhad potřebného vzorku (#1323): n = ((z_α + z_β) · σ / edge)²
+PROOF_EDGE_R = 0.2
+PROOF_Z_ALPHA = 1.645
+PROOF_Z_POWER = 0.84
+
+
+def samples_needed(results: Sequence[float], *, min_samples: int) -> int | None:
+    """Kolik vzorků buňka potřebuje, aby edge +0,2 R prošel bránou s 80% šancí.
+
+    σ je výběrová směrodatná odchylka R téhož vzorku jako brána; None pod
+    2 vzorky. Nikdy méně než `min_samples` brány — pod ním brána nerozhodne,
+    ať je σ jakékoli. Nulové σ pod `min_samples` nic neříká (stop je vždy
+    přesně −1 R a cíl na stropu `max_rr` přesně +3 R, takže dva stopy nebo dva
+    cíle dají σ = 0) → None, ne „vzorek stačí“: malý vzorek nesmí svádět."""
+    n = len(results)
+    if n < 2:
+        return None
+    mean = sum(results) / n
+    sigma = math.sqrt(sum((value - mean) ** 2 for value in results) / (n - 1))
+    if sigma == 0 and n < min_samples:
+        return None
+    needed = math.ceil(((PROOF_Z_ALPHA + PROOF_Z_POWER) * sigma / PROOF_EDGE_R) ** 2)
+    return max(min_samples, needed)
+
+
 @dataclass(frozen=True)
 class GateResult:
     verdict: GateVerdict
     n: int
     lower_bound: float | None
+
+
+def gate_window_start(now: dt.datetime, gate_days: int) -> dt.datetime:
+    """Začátek okna brány: N seancí ≈ N × 7/5 kalendářních dnů. Jediná
+    definice pro engine i Knihovnu (#1323) — verdikt „teď“ se nesmí rozejít."""
+    return now - dt.timedelta(days=gate_days * 7 / 5)
 
 
 def affordable_results(
@@ -189,7 +243,34 @@ def affordable_results(
     risk_pct: float,
     risk_max_pct: float,
 ) -> list[float]:
-    """Výsledky buňky šablona × symbol pro bránu (#1325): jen řádky vlastního
+    """Výsledky buňky šablona × symbol pro bránu (#1325) — R řádků z `affordable_rows`."""
+    return [
+        row.outcome_r
+        for row in affordable_rows(
+            realized,
+            template,
+            symbol,
+            since=since,
+            point_value_usd=point_value_usd,
+            account_equity_usd=account_equity_usd,
+            risk_pct=risk_pct,
+            risk_max_pct=risk_max_pct,
+        )
+    ]
+
+
+def affordable_rows(
+    realized: Sequence[RealizedSetup],
+    template: str,
+    symbol: str,
+    *,
+    since: dt.datetime,
+    point_value_usd: float,
+    account_equity_usd: float,
+    risk_pct: float,
+    risk_max_pct: float,
+) -> list[RealizedSetup]:
+    """Vzorek buňky šablona × symbol pro bránu (#1325): jen řádky vlastního
     symbolu, které by se daly zobchodovat (stop v rozpočtu).
 
     `realized` nese řádky napříč symboly (brzdy jsou o účtu), brána si bere jen
@@ -199,8 +280,11 @@ def affordable_results(
     (`affordable` None) se dopočítají z entry/stop a `point_value_usd` vlastního
     symbolu. Do #1325 se hodnota bodu
     brala ze slovníku, o kterém komentář tvrdil, že ho instance sdílejí; nesdílely,
-    takže brána brala řádky s `affordable` z obou symbolů a dopočtené jen z vlastního."""
-    results: list[float] = []
+    takže brána brala řádky s `affordable` z obou symbolů a dopočtené jen z vlastního.
+
+    Stín (brána, brzda i rozhodnutí uživatele, #1323) se počítá stejně jako
+    obchodovatelné — na `tradeable` se nefiltruje, takže stádium vzorek nezkreslí."""
+    rows: list[RealizedSetup] = []
     for row in realized:
         if row.symbol != symbol or row.template != template or row.closed_ts < since:
             continue
@@ -215,8 +299,8 @@ def affordable_results(
                 risk_max_pct=risk_max_pct,
             ).affordable
         if affordable:
-            results.append(row.outcome_r)
-    return results
+            rows.append(row)
+    return rows
 
 
 def template_gate(results: Sequence[float], *, min_samples: int, enabled: bool) -> GateResult:
@@ -228,3 +312,55 @@ def template_gate(results: Sequence[float], *, min_samples: int, enabled: bool) 
     if len(results) < min_samples or lb is None:
         return GateResult("insufficient", len(results), lb)
     return GateResult("pass" if lb > 0 else "block", len(results), lb)
+
+
+@dataclass(frozen=True)
+class TrialUsage:
+    """Čerpání zkoušky buňky (#1323), odvozené z výsledků jako brzdy."""
+
+    #: Setupy s přebitou bránou od začátku zkoušky — uzavřené i otevřené
+    setups: int
+    #: Σ R uzavřených z nich (záporné = ztráta); otevřený setup R ještě nemá
+    sum_r: float
+    spent: bool
+
+
+def trial_usage(
+    realized: Sequence[RealizedSetup],
+    symbol: str,
+    template: str,
+    *,
+    started_at: dt.datetime,
+    budget_setups: int,
+    budget_r: float,
+    open_setups: int = 0,
+) -> TrialUsage:
+    """Čerpání zkoušky buňky ticker × šablona — čistá funkce, nic se nezapisuje.
+
+    Čerpají jen setupy, které zkouška opravdu pustila (`gate_overridden`):
+    setup obchodovatelný z vlastní brány (pass) ani setup zastavený sizingem
+    nebo brzdou rozpočet neubírá. Počítají se setupy vzniklé od `started_at`
+    (obnovená zkouška začíná od nuly); uzavřené z `realized`, otevřené dodá
+    volající (`open_setups`, z paměti instance nebo řádků `active`). Vyčerpáno
+    = počet ≥ `budget_setups`, nebo Σ R ≤ −`budget_r`. Na šablonu a symbol je
+    otevřený nejvýš 1 setup, takže ztráta může rozpočet přečerpat nejvýš o něj.
+
+    Okno čtení musí sahat do `started_at` (engine ho do `_load_realized`
+    přidává); řádky jiné verze mechaniky volající nepředává. Zkouška jiné
+    mechaniky proto vůbec neplatí (`TrialCell.in_force`) — jinak by zvednutí
+    mechaniky vyčerpané zkoušce vrátilo plný rozpočet bez rozhodnutí uživatele.
+    """
+    count = open_setups
+    total = 0.0
+    for row in realized:
+        if (
+            row.gate_overridden
+            and row.symbol == symbol
+            and row.template == template
+            and row.created_ts is not None
+            and row.created_ts >= started_at
+        ):
+            count += 1
+            total += row.outcome_r
+    spent = count >= budget_setups or total <= -budget_r
+    return TrialUsage(setups=count, sum_r=total, spent=spent)

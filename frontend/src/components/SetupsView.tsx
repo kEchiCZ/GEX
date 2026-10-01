@@ -2,6 +2,7 @@
 
 Predikce jsou neměnné — jediná mutace je rating (+1/−1) a poznámka; hodnocení
 je kvalitativní vrstva a nevstupuje do automatické kalibrace confidence.
+Podzáložka Knihovna (#1323) nastavuje stádium buněk ticker × šablona.
 */
 import { useState } from 'react'
 import type { ReactNode } from 'react'
@@ -15,6 +16,8 @@ import { pointValue } from '../instrument/tick'
 import { useAppState } from '../state/AppState'
 import { CoachSetupsBlock } from './CoachSetupsBlock'
 import { usePersistentState } from '../state/persist'
+import type { SetupsTab } from '../state/AppState'
+import { SetupLibrary } from './SetupLibrary'
 
 function formatTs(iso: string | null): string {
   if (!iso) return '—'
@@ -163,7 +166,36 @@ function SplitRow({
   )
 }
 
+const SETUPS_TAB_LABELS: Record<SetupsTab, string> = {
+  overview: 'Přehled',
+  library: 'Knihovna',
+}
+
+/** Setupy: Přehled (historie a souhrn instrumentu) a Knihovna (stádia buněk, #1323). */
 export function SetupsView() {
+  const { setupsTab, setSetupsTab } = useAppState()
+  return (
+    <section className="setups-view" aria-label="Setupy">
+      <div className="setups-tabs" role="tablist" aria-label="Pohled na setupy">
+        {(Object.keys(SETUPS_TAB_LABELS) as SetupsTab[]).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            role="tab"
+            aria-selected={setupsTab === tab}
+            className={setupsTab === tab ? 'chip active' : 'chip'}
+            onClick={() => setSetupsTab(tab)}
+          >
+            {SETUPS_TAB_LABELS[tab]}
+          </button>
+        ))}
+      </div>
+      {setupsTab === 'library' ? <SetupLibrary /> : <SetupsOverview />}
+    </section>
+  )
+}
+
+function SetupsOverview() {
   const { symbol, setupsVersion } = useAppState()
   const { setups, totalCount, refresh } = useSetups()
   // Statistiky defaultně jen z aktuální mechaniky (#311) — setupy staré verze
@@ -221,7 +253,7 @@ export function SetupsView() {
     : ''
 
   return (
-    <section className="setups-view" aria-label="Setupy">
+    <>
       <header className="setups-summary">
         <h2>Setupy — {symbol}</h2>
         {/* Zapnutý přepínač zůstává i bez souhrnu (chyba serveru) — jinak by
@@ -331,9 +363,23 @@ export function SetupsView() {
                   group={summary.tradeable}
                   title={[
                     'Setupy, které risk pravidla (#1185) pustila do obchodu:',
-                    '• stop v rozpočtu rizika, brzdy neaktivní, šablona s prokázaným edge',
+                    '• stop v rozpočtu rizika, brzdy neaktivní',
+                    '• šablona s prokázaným edge, nebo buňka ve Zkoušce (Knihovna, #1323)',
                   ].join('\n')}
                 />
+                {/* Zkouška (#1323): co ruční přebití brány přineslo — podmnožina řádku nad ní */}
+                {summary.trial !== undefined && summary.trial.count > 0 && (
+                  <SplitRow
+                    label="· z toho Zkouška"
+                    testId="split-trial"
+                    group={summary.trial}
+                    title={[
+                      'Obchodovatelné jen díky Zkoušce v Knihovně (#1323):',
+                      '• brána by je zastavila (block / nedostatek vzorku)',
+                      '• už jsou v řádku Obchodovatelné — nesčítat znovu',
+                    ].join('\n')}
+                  />
+                )}
                 <SplitRow
                   label="Stínové"
                   testId="split-shadow"
@@ -679,6 +725,6 @@ export function SetupsView() {
         Setupy jsou podpora rozhodování, ne obchodní signály. Confidence se kalibruje až s dostatkem
         uzavřených výsledků (Fáze 2).
       </p>
-    </section>
+    </>
   )
 }
