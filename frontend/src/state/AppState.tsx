@@ -153,6 +153,10 @@ export type AppView =
   'chart' | 'dashboard' | 'chain' | 'setups' | 'briefing' | 'journal' | 'news' | 'stats' | 'settings' // prettier-ignore
 export type Theme = 'dark' | 'light'
 
+/** Podzáložka obrazovky Setupy (#1323): Přehled / Knihovna — proklik ze zvonku. */
+export type SetupsTab = 'overview' | 'library'
+const SETUPS_TABS: readonly SetupsTab[] = ['overview', 'library']
+
 /** Režim zobrazení signálů (#295, SPEC 6.1/S9): výpočet běží vždy, tohle řídí jen UI. */
 export type SignalMode = 'off' | 'news' | 'combined'
 export const SIGNAL_MODES: readonly SignalMode[] = ['off', 'news', 'combined']
@@ -270,6 +274,8 @@ interface AppState {
   setOiSource: (source: OiSource) => void
   view: AppView
   setView: (view: AppView) => void
+  setupsTab: SetupsTab
+  setSetupsTab: (tab: SetupsTab) => void
   /** Rychlý vstup do deníku (#673): předvyplněný okamžik (✎/Shift+klik);
       briefing (#674) předvyplní i text ranního plánu. */
   journalDraft: { tsRef: string; text?: string } | null
@@ -479,6 +485,11 @@ export function AppStateProvider({
   )
   const [interval, setInterval] = usePersistentState<Interval>('interval', '1m', oneOf(INTERVALS))
   const [view, setView] = useState<AppView>(() => initialFromUrl().view)
+  const [setupsTab, setSetupsTab] = usePersistentState<SetupsTab>(
+    'setupsTab',
+    'overview',
+    oneOf(SETUPS_TABS),
+  )
   // Rychlý vstup do deníku (#673) — jen v paměti, nepersistuje se
   const [journalDraft, setJournalDraft] = useState<{ tsRef: string; text?: string } | null>(null)
   // Traders mode (#627 bod 5): přepínač trading vrstev; když se osvědčí,
@@ -799,6 +810,8 @@ export function AppStateProvider({
       setOiSource,
       view,
       setView,
+      setupsTab,
+      setSetupsTab,
       journalDraft,
       setJournalDraft,
       tradersMode,
@@ -838,6 +851,7 @@ export function AppStateProvider({
       setInterval,
       setTheme,
       setToggles,
+      setSetupsTab,
       signalMode,
       setSignalMode,
       underlayPlane,
@@ -860,6 +874,7 @@ export function AppStateProvider({
       interval,
       toggles,
       view,
+      setupsTab,
       journalDraft,
       tradersMode,
       riskAccountUsd,

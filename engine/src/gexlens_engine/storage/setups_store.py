@@ -127,6 +127,9 @@ class StoredSetup:
     status: str
     #: Bar vstupu z kontextu (#1320); None = nad spotem nebo řádek před #1320
     entry_bar_ts: dt.datetime | None = None
+    #: `context.gate_overridden` (#1323): otevřený setup zkoušky čerpá její
+    #: rozpočet i po restartu enginu
+    gate_overridden: bool = False
 
 
 class SetupsRepository:
@@ -364,6 +367,8 @@ class SetupsRepository:
                 reason=row.reason,
                 status=row.status,
                 entry_bar_ts=entry_bar_ts(row.context),
+                gate_overridden=isinstance(row.context, dict)
+                and row.context.get("gate_overridden") is True,
             )
             for row in rows
         ]
@@ -446,10 +451,11 @@ class SetupsRepository:
         ]
 
     def realized_since(self, since: dt.datetime, *, mechanics_version: int) -> list[RealizedSetup]:
-        """Uzavřené setupy napříč symboly s `closed_ts >= since` — brzdy a brána
-        šablon (#1185). Brzdy sčítají napříč symboly, brána si vybere vlastní
-        symbol (`affordable_results`, #1325). `tradeable` z kontextu; řádky před
-        pravidly nesou None.
+        """Uzavřené setupy napříč symboly s `closed_ts >= since` — brzdy, brána
+        šablon (#1185) a čerpání zkoušek (#1323). Brzdy sčítají napříč symboly,
+        brána si vybere vlastní symbol (`affordable_results`, #1325). `tradeable`,
+        `contracts` a `gate_overridden` z kontextu; řádky před pravidly nesou
+        None / None / False.
 
         Setupy vzniklé po settle vlastní expirace (`born_after_settle`, #1324)
         se vynechají: nemohly existovat, takže nesmí nafukovat `n` brány ani
@@ -480,9 +486,13 @@ class SetupsRepository:
             context = row.context if isinstance(row.context, dict) else {}
             tradeable = context.get("tradeable")
             affordable = context.get("affordable")
+            contracts = context.get("contracts")
             closed_ts = row.closed_ts
             if closed_ts.tzinfo is None:  # sqlite vrací naivní čas
                 closed_ts = closed_ts.replace(tzinfo=dt.UTC)
+            created_ts = row.created_ts
+            if created_ts.tzinfo is None:
+                created_ts = created_ts.replace(tzinfo=dt.UTC)
             result.append(
                 RealizedSetup(
                     symbol=str(row.symbol),
@@ -494,6 +504,13 @@ class SetupsRepository:
                     affordable=affordable if isinstance(affordable, bool) else None,
                     entry=float(row.entry),
                     stop=float(row.stop),
+                    created_ts=created_ts,
+                    gate_overridden=context.get("gate_overridden") is True,
+                    contracts=(
+                        contracts
+                        if isinstance(contracts, int) and not isinstance(contracts, bool)
+                        else None
+                    ),
                 )
             )
         return result

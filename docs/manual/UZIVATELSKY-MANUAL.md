@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.26 · září 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.27 · říjen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -1304,7 +1304,7 @@ Telegram. V Settings → **Notifikace (Telegram)**:
   neodejde nic, ani výpadky a noční údržba; přepínače pod ním zešednou, jejich
   hodnoty ale zůstanou uložené.
 - **Setupy a burza** — ve výchozím stavu zapnuté: Nový setup, Brzda ztráty,
-  Paper účet, Scénář dne, Reakce trhu na zprávu, Zprávy před otevřením po
+  Konec zkoušky setupu, Paper účet, Scénář dne, Reakce trhu na zprávu, Zprávy před otevřením po
   víkendu, Očekávaný pohyb před releasem, Koncentrace opčního objemu, Kalendář
   expirací, Setup detektor prodělává; vypnuté (chodí často nebo jsou
   jen informační): Cena u GEX úrovně, Kandidát vzorce T6, Setup detektor se
@@ -1352,7 +1352,8 @@ Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a je
 | **Svíčky se přestaly kreslit** | Real-time bary z TWS nechodí, ale cena žije (mrtvé TWS farmy po noční přestávce) — pomáhá restart TWS; díra se po návratu doplní sama | Svíčky nechodí (vyp.) |
 | Svíčky zase jedou | Bary se vrátily — díra ve svíčkách se doplní backfillem | Svíčky nechodí (vyp.) |
 | **Vol koncentrace** | Jedna strana (strike × C/P) příští expirace výrazně převyšuje zbytek (≥ 3× medián top 10) — úroveň, kde se trh zajišťuje na zítřek (put pod trhem pojistka/magnet, call nad trhem strop). **Při zavřeném trhu** (víkend, denní pauza) se nehlásí: objem je zmrzlý z poslední seance (#1309) | Koncentrace opčního objemu (zap.) |
-| **Nový setup** | Detektor našel obchodní setup (odraz od zdi / neúspěšný průraz / Max Pain pin / gamma momentum / divergenční spring) | Nový setup (zap.) |
+| **Nový setup** | Detektor našel obchodní setup (odraz od zdi / neúspěšný průraz / Max Pain pin / gamma momentum / divergenční spring). Od v1.27 nese šablonu s číslem (T7 trend_continuation), stádium buňky (AUTO / STÍN / ZKOUŠKA 3/10 s čerpáním) a druhý řádek s ØR hrubě a čistě, n / n potřebné a verdiktem brány — se štítkem **edge neprokázán:**, když dolní mez ØR není kladná, jinak **Důkaz:**. Na Telegram jen obchodovatelný setup | Nový setup (zap.) |
+| **Konec zkoušky setupu** (`setup_stage`, v1.27) | Zkouška buňky v Knihovně vyčerpala rozpočet (počet setupů nebo ztrátu v R) a buňka je zpět na Auto — rozhoduje brána. Jednou na zkoušku; ve zvonku je klikací a otevře **Setupy → Knihovna**, kde jde zkouška obnovit (kap. 18) | Konec zkoušky setupu (zap.) |
 | **FA validace** | Ranní kalibrační bod FA vrstvy: po příchodu OI archivu engine porovná klasifikovaný volume posledního obchodního dne s ΔOI (open-ratio ≈ α, korelace) a bod uloží pro kalibraci — čistě informační. Jen v obchodní den; v pondělí páteční volume proti ΔOI pátek → pondělí (#1309) | Diagnostika modelu (vyp.) |
 | **Greeks se zasekly / zase jedou** | Kotace opčního řetězu přestaly chodit při živém spotu (obdoba svíček) — hint restart TWS; návrat se ohlásí. **Po settle expirující řady se nehlásí** (v1.13, #959): vypořádaný řetěz se přestane kotovat, což je normální stav, ne porucha — dřív alert s radou „restart TWS" chodil každý den po 22:00 | Neúplná data opcí (zap.) / Data opcí zase chodí (vyp.) |
 | **Chyba subskripce** | TWS opakovaně odmítla data konkrétních kontraktů (error 354 „not subscribed"); alert vypíše, o které kontrakty jde. Ojedinělé výskyty se nehlásí — ty patří ke krátkým výpadkům farem a data se vrátí sama. Když alert přijde, zkontroluj subskripce v Market Data Subscription Manager. Jde vypnout v Settings → Alerty | IBKR odmítá market data (zap.) |
@@ -1532,6 +1533,12 @@ neběžela, přijde jen T−15.
 ### Setupy
 
 Když detektor najde setup, přijde alert **Nový setup** a nad grafem se ukáže **karta setupu** pro daný instrument: směr (LONG/SHORT), šablona, **datum a čas vzniku** (kdy se splnily podmínky), úrovně **Entry / Cíl / Stop**, RRR a důvěra (od v1.16 **kalibrovaná z track recordu**: Wilsonova dolní mez úspěšnosti šablony v daném gamma režimu při ≥ 30 uzavřených setupech, jinak konstanta šablony — najetím na číslo zjistíš zdroj), od v1.16 štítek **polohy v tlumící zóně** (uvnitř pásma / přechod / mimo pásmo / bez pásma s posunem důvěry, kap. 18), plus krátké zdůvodnění. Stejné úrovně se kreslí jako linie přímo v heatmapě. Kartu skryješ křížkem (setup dál běží). Historii, úspěšnost a hodnocení 👍/👎 najdeš na obrazovce **Setupy** v sidebaru.
+
+**Přehled a Knihovna (v1.27, #1323).** Obrazovka Setupy má nahoře dvě podzáložky. **Přehled** je
+dosavadní obrazovka zobrazeného instrumentu (souhrn, účet, dnešní seance, tabulka setupů).
+**Knihovna** ukazuje všechny tickery watchlistu najednou po buňkách šablona × ticker a nastavuje se
+v ní, co se smí obchodovat (stádium Auto / Stín / Zkouška, kap. 18 „Knihovna setupů“). Aplikace si
+pamatuje, kterou podzáložku jsi měl otevřenou.
 
 **Výsledek podle skutečné cesty ceny (v1.26, #1320).** Setup se uzavírá jen
 podle minutových svíček v pořadí, v jakém trh šel, počínaje svíčkou po té,
@@ -1947,6 +1954,7 @@ zároveň nejhorší obchody (v5: −0,34 R vs. +0,06 R se stopem v rozpočtu).
 | **Týdenní brzda** | −6 R | totéž za obchodní týden: počítá se od otevření pondělní seance (neděle 17:00 CT) a stín platí do konce obchodního týdne (neděle 17:00 CT) |
 | **Strop stopů šablony** | 2 / den | třetí pokus téže šablony po dvou stopech za seanci je stín, až do konce seance (17:00 CT) |
 | **Brána šablon** | zapnuta, n ≥ 30, okno 60 seancí | obchodovatelná je jen šablona **na daném symbolu**, jejíž **dolní mez očekávání** (jednostranný 95% interval Ø R ze setupů téhož symbolu se stopem v rozpočtu) je kladná; ES a NQ se hodnotí zvlášť; ostatní se dál měří, ale neobchodují |
+| **Zkouška — výchozí rozpočet** (v1.27) | 10 setupů / −3 R | předvyplní dialog Zkoušky v Setupy → Knihovna (meze 1–20 setupů a 0,5–6 R); běžící zkoušky si nesou rozpočet ze zahájení |
 
 **Stín vs. obchodovatelný.** Setup **vzniká vždy** (měření nesmí přestat —
 právě velké stopy chceme dál vidět), ale nese verdikt: sloupec **Účet** v
@@ -1975,12 +1983,12 @@ roll týden, zůstane v praxi stínový celý.
 **Co to znamená:** k 30. 9. 2026 nemá žádná šablona kladnou dolní mez na žádném
 symbolu (trend_continuation je v bloku na ES i NQ, ostatní šablony nemají 30
 vzorků), takže nové setupy jsou stínové: nechodí z nich push a bilance účtu
-stojí. Vědomé přebití brány pro vybranou kombinaci šablona × symbol navrhuje
-#1323, které zatím čeká na rozhodnutí. Do té doby jde bránu jen vypnout celou
-(Settings → Risk management, zaškrtávátko **Brána šablon**). Obchodovatelné jsou
-pak všechny šablony na všech symbolech se stopem v rozpočtu a chrání tě jen
-sizing a brzdy. Kritérium brány se nemění; přehodnotí se kolem 28. 10. na
-datech od 30. 9. (připomínka #1334).
+stojí. Od v1.27 jde bránu pro vybranou buňku šablona × ticker vědomě přebít
+**Zkouškou s rozpočtem** v Setupy → Knihovna (níže); sizing a brzdy platí dál.
+Zaškrtávátko **Brána šablon** v Settings zmizelo — vypnout bránu celou by byla
+druhá cesta k obchodování všeho bez rozpočtu (zůstalo jen jako nouzová cesta přes
+API). Kritérium brány se nemění; přehodnotí se kolem 28. 10. na datech od 30. 9.
+(připomínka #1334).
 
 ![Setupy — sloupec Účet: stín „stop nad rozpočtem rizika“ / „šablona bez prokázaného edge“, nad tabulkou Kouč nad setupy](img/setupy-ucet-risk.jpg)
 
@@ -2002,9 +2010,99 @@ nezvětšuje, zpřesňuje se vstup.
 
 **Změna parametrů.** Settings → Risk management: každé uložení založí novou
 verzi parametrů setupů s povinným důvodem (audit), engine ji převezme do
-sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly.
+sekund; už vzniklé setupy si nesou hodnoty, se kterými vznikly. Od v1.27 bez
+důvodu (aspoň 3 znaky) tlačítko uložit nejde — dřív se místo chybějícího důvodu
+zapsal náhradní text. Stádium jednotlivých šablon (Stín, Zkouška) se v Settings
+nemění, patří do Setupy → Knihovna.
 
 ![Settings → Risk management a Notifikace (Telegram)](img/settings-risk-management.jpg)
+
+### Knihovna setupů — stádia Auto / Stín / Zkouška (v1.27, #1323)
+
+Brána šablon rozhoduje za tebe, a dnes říká „ne“ všem buňkám. **Knihovna**
+(Setupy → podzáložka Knihovna) je místo, kde rozhoduješ ty — vedle čísel, ze
+kterých se rozhoduje. Jednotkou je **buňka šablona × ticker**: trend_continuation
+na NQ je jiná buňka než na ES, a pinovaný kontrakt (např. `NQZ6`) má vlastní buňku,
+stádium nastavené pro `NQ` pro něj neplatí.
+
+**Hlavička** ukazuje okno brány (60 seancí) a mechaniku, stav **brzd účtu**
+(„den -1.0 / -3.0 R · týden -2.5 / -6.0 R“, stopy šablony za seanci, aktivní
+brzda červeně) a **zkoušky** s čerpáním (skončená s důvodem „vyčerpaná“ nebo
+„jiná mechanika“). Brzdy se počítají napříč všemi symboly, stejně jako v enginu.
+Buňka s nastaveným Stínem nebo Zkouškou je v Knihovně vždy, i když ticker
+(třeba pinovaný kontrakt) mezitím z watchlistu vypadl — zkoušku tak vždy vidíš
+a můžeš vrátit.
+
+**Tabulka** — každý řádek je buňka:
+
+| Sloupec | Co znamená |
+|---|---|
+| **Setup** | číslo a název šablony (T7 Pokračování trendu) |
+| **Ticker** | ticker z watchlistu (vč. pinovaného kontraktu) |
+| **Stádium** | Auto / Stín / Zkouška; u zkoušky čerpání „3/10 · -1.0 z -3.0 R“. Skončená zkouška se hlásí jako „Auto (zkouška vyčerpána)“ nebo „Auto (zkouška skončila)“ po změně mechaniky. Klik otevře dialog změny |
+| **Brána teď** | verdikt spočítaný **teď** týmiž funkcemi jako engine: ✓ pass, ✕ block, „· 24/30“ = nedostatek vzorku (n z minima), plus dolní mez ØR (LB) |
+| **ØR hrubě / čistě** | průměrný výsledek v R ze vzorku brány; čistě = po nákladech 1 mikra (komise + skluz 1 tick na stranu, ADR-0030). Krátký stop zvedá náklad v R — na ES může kladné hrubé ØR čistě klesnout pod nulu. Tooltip ukáže i **čistě v $**: součet za vzorek v reálných mikro dolarech při skutečném sizingu (kontrakty z kontextu setupu) — kladné R může v dolarech prodělat |
+| **Průkaznost** | n / n potřebné — kolik vzorků by prokázalo edge +0,2 R (jednostranně 95 %, síla 80 %); n potřebné nikdy neklesne pod minimum brány (30). Pod minimem se samými stejnými výsledky (dva stopy po −1 R) se neodhaduje — „—“ |
+| **Rozhodnutelné** | za kolik seancí buňka při dnešním tempu vzorek nasbírá; „vzorek stačí“ = už ho má; **„v okně nedosáhne · max ~337/462“** = brána bere jen posledních 60 seancí, takže při dnešním tempu se do ní vejde nejvýš ~337 vzorků z potřebných 462 — edge +0,2 R brána neprokáže nikdy (rozhodne jen větší edge); „málo dat“ = n potřebné nejde odhadnout |
+
+Řádky jsou **seřazené podle průkaznosti**, ne podle ØR: malý vzorek s vysokým
+ØR je náhoda, ne edge. Tooltipy u čísel ukazují vzorec a vstupy. Pod tabulkou
+jsou vyjmenované vyřazené šablony (`disabled_templates`), které se neměří vůbec.
+Na úzké obrazovce (mobil) se řádky skládají do karet s popisky místo sloupců.
+
+**Stádia buňky:**
+
+| Stádium | Co se děje | Push | Účet a brzdy |
+|---|---|---|---|
+| **Auto** (výchozí) | jako dřív: sizing → brzdy → brána | jen obchodovatelné | jen obchodovatelné |
+| **Stín** | setup vzniká, měří se, vstupuje do brány a je vidět v grafu i tabulce, ale **nikdy** není obchodovatelný (štítek „stín: ve stínu z rozhodnutí uživatele“) | ne | ne |
+| **Zkouška** | přebije verdikt brány (block i nedostatek vzorku), dokud nevyčerpá rozpočet — N setupů nebo ztrátu X R | ano, se štítkem ZKOUŠKA | ano |
+
+**Sizing a brzdy nepřebije žádné stádium.** Setup se stopem nad rozpočtem
+nebo po denní brzdě zůstane stínem i ve Zkoušce. Brzdy mají přednost i před
+Stínem (v tabulce Setupů pak vidíš důvod „denní brzda“).
+
+**Zkouška a její konec.** Rozpočet se zadává při zahájení (výchozí 10 setupů
+nebo −3 R, meze 1–20 setupů a 0,5–6 R). Čerpají ho jen setupy, které zkouška
+opravdu pustila přes bránu; otevřený setup se započítá do počtu hned, do R až po
+uzavření. Na šablonu a ticker je otevřený nejvýš jeden setup, takže rozpočet se
+přečerpá nejvýš o něj. Po vyčerpání se buňka **sama vrátí na Auto** (rozhoduje
+brána) a přijde upozornění **Konec zkoušky setupu**; nic se přitom nepřepisuje,
+riziko smí systém jen snížit, zvýšit ho smíš jen ty. Zkoušku jde kdykoli
+**obnovit** s novým důvodem — začne čerpat od nuly a v dialogu vidíš výsledek té
+předchozí. Když engine nemůže přečíst výsledky (výpadek databáze), zkouška
+bránu nepřebije. Zkouška platí od **příští minuty** po uložení a jen na verzi
+mechaniky detektoru, na které začala: po nasazení nové mechaniky skončí (bez
+upozornění, v Knihovně „Auto (zkouška skončila)“) a pro novou mechaniku ji
+obnovíš vědomě sám — rozpočet se nikdy neobnoví bez tebe.
+
+**Dialog změny stádia** (klik na stádium):
+
+1. Vyber stádium. U Auto vidíš verdikt brány teď.
+2. U Zkoušky nastav rozpočet. Štítek **edge neprokázán** znamená, že dolní mez
+   ØR je ≤ 0 (nebo ji vzorek ještě nedává) — zkouška je obchod s reálnými
+   penězi bez prokázané výhody. Dialog připomene, že **brzdy jsou společné
+   napříč symboly**: ztráty zkoušky můžou denní nebo týdenní brzdou zastavit
+   i ostatní obchodovatelné setupy.
+3. Vyber **důvod** — čip (test naživo, edge neprokázán, drawdown, jiný režim
+   trhu) a/nebo vlastní text. Bez důvodu uložit nejde.
+4. Řádek **Změní se** shrne dopad (push, účet, brzdy). **Uložit → verze N**
+   založí novou verzi parametrů setupů; engine ji převezme do sekund a nové
+   setupy se jí řídí (Zkouška od příští minuty). Už otevřené setupy si nesou
+   stádium platné při vzniku.
+
+**Kde zkoušku uvidíš dál:** obchodovatelný setup ze zkoušky má ve sloupci Účet
+štítek „· zkouška 3/10“ a tooltip s čerpáním; souhrn v Přehledu má řádek
+**· z toho Zkouška** (podmnožina obchodovatelných — nesčítat znovu) a mezi důvody
+stínu „ve stínu z rozhodnutí uživatele“. Push nového setupu na Telegram nese
+šablonu (např. „T7 trend_continuation“), stádium a řádek důkazu (ØR hrubě
+a čistě, n / n potřebné, brána). Když dolní mez ØR není kladná — u setupu ze
+zkoušky vždy — začíná řádek štítkem **edge neprokázán:**, jinak **Důkaz:**.
+
+**Co Knihovna (zatím) neumí:** detail setupu s grafem výkonu, úpravy prahů
+šablon a nové setupy přijdou v dalších fázích #1323. Diskreční setup (např. NQ
++ Fibonacci) si zatím založ jako kartu v Deník → Playbook a obchody jí značkuj
+i s plánovaným stopem.
 
 ### Flip: naměřený vs. dynamický = flip ZÓNA
 
@@ -2227,6 +2325,8 @@ podkladu**, ne absolutní čísla.
 | **GEX** (Gamma Exposure) | Odhad, kolik dolarů musí dealeři hedgeovat na 1 bod pohybu podkladu. Kladný = dealeři tlumí pohyb, záporný = zesilují. Počítá se z **opcí na ES futures** (FOP), takže všechny úrovně jsou nativně v ES — viz kap. 18, proč se liší od SPX služeb. |
 | **Basis** | Rozdíl mezi cenou futures a indexu (cost of carry), který se během kvartálu smršťuje. **V GEXLens nikde nevystupuje** — podkladem opcí je přímo ES kontrakt. Relevantní jen při srovnávání s cizími SPX službami. |
 | **Roll** | Přechod na další kvartální kontrakt (likvidita se stěhuje ~2. čtvrtek měsíce expirace). Cenová historie přes roll obsahuje skok o roll spread — není to pohyb trhu (ADR-0028). |
+| **Knihovna setupů / stádium** | Setupy → Knihovna (v1.27): pro každou buňku šablona × ticker volíš Auto (rozhoduje brána), Stín (měří se, neobchoduje) nebo Zkoušku (přebije bránu do vyčerpání rozpočtu). Sizing a brzdy platí vždy. |
+| **Průkaznost (n / n potřebné)** | Kolik vzorků buňka má proti tomu, kolik by prokázalo edge +0,2 R. Knihovna podle ní řadí, ne podle ØR. |
 | **Flip (zero-gamma)** | Cena, kde kumulativní NetGEX prochází nulou — hranice mezi režimem komprese a expanze volatility. |
 | **Dynamický flip** | Modelová verze flipu: nula Dyn GEX křivky (BS model, jemnější mřížka). S naměřeným flipem tvoří **flip zónu** (kap. 18). |
 | **Dyn GEX (vrstva)** | Modelované pole NetGEX pro hypotetické ceny přes pásmo a čas — „jakou gammu potká cena na úrovni X v čase T". Zelená tlumí, červená zesiluje. |

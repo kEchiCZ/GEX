@@ -117,8 +117,15 @@ def proposal_payload(
 ) -> dict[str, Any] | None:
     if result.proposal is None:
         return None
+    # Stádia buněk (#1323) nejsou prahy a mění se jen přes POST /setups/stage:
+    # návrh je nenese, jinak by ho po změně stádia API odmítlo (422)
+    params = {
+        key: value
+        for key, value in params_to_dict(candidates[result.proposal]).items()
+        if key not in ("shadow_cells", "trial_cells")
+    }
     return {
-        "params": params_to_dict(candidates[result.proposal]),
+        "params": params,
         "note": (
             f"walk-forward {dt.date.today().isoformat()} ({block}): {result.proposal} — "
             f"{result.verdict}"

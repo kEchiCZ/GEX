@@ -12,7 +12,7 @@ import logging
 import math
 import threading
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Annotated, Any, Literal
 
 import numpy as np
@@ -30,7 +30,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -74,13 +74,21 @@ from gexlens_engine.compute.gammacliff import build_cliff
 from gexlens_engine.compute.heatmap import HeatmapMode, HeatmapScale
 from gexlens_engine.compute.paper import POINT_VALUES
 from gexlens_engine.compute.profile import ProfileInput, ProfileVariant, compute_profile
+from gexlens_engine.compute.risk import week_start
 from gexlens_engine.compute.settle import trading_session_date
+from gexlens_engine.compute.setup_library import (
+    configured_tickers,
+    library_brakes,
+    library_cells,
+)
 from gexlens_engine.compute.setup_summary import SimulationInput, summarize_setups
 from gexlens_engine.compute.setups import (
     SETUP_MECHANICS_VERSION,
     SetupParams,
+    UserStage,
     params_from_dict,
     params_to_dict,
+    with_stage,
 )
 from gexlens_engine.config import Settings, load_settings
 from gexlens_engine.gammacliff import read_expiries_at
@@ -712,9 +720,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     class SetupParamsIn(BaseModel):
+        # Důvod z mezer = prázdný důvod → 422, ne 500 ze store (#1323)
+        model_config = ConfigDict(str_strip_whitespace=True)
+
         params: dict[str, object]
         note: str = Field(min_length=3, max_length=500)
         created_by: str = Field(default="ui", min_length=1, max_length=32)
+
+    #: Pole stádií buněk (#1323) — mění je jen `POST /setups/stage`
+    stage_fields = ("shadow_cells", "trial_cells")
 
     @app.post("/setups/params", status_code=201)
     def setup_params_post(body: SetupParamsIn) -> dict[str, object]:
@@ -724,12 +738,77 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         chybějící klíče berou defaulty. Engine přepne do sekund (NOTIFY).
         Autonomie stupeň 1 (#794): tohle je ruční/schválený zápis, smyčka
         sama sem nezapisuje.
+
+        Stádia buněk (`shadow_cells`, `trial_cells`, #1323) se tudy měnit
+        nedají: chybějící klíč převezme platnou verzi, jiná hodnota = 422.
+        Začátek zkoušky by jinak volil klient (budoucí `started_at` = zkouška
+        bez stropu) a starý snímek parametrů (Settings otevřené před změnou
+        stádia, report walk-forwardu) by stádia tiše vrátil.
         """
         try:
             params = params_from_dict(body.params)
         except ValueError as error:
             raise HTTPException(422, str(error)) from error
         repo = setup_params_repository()
+        latest = repo.latest()
+        current = latest.params if latest is not None else SetupParams()
+        for name in stage_fields:
+            if name in body.params and getattr(params, name) != getattr(current, name):
+                raise HTTPException(
+                    422,
+                    f"{name}: stádia buněk se mění přes POST /setups/stage — "
+                    "pošli platnou hodnotu nebo klíč vynech (načti parametry znovu)",
+                )
+        params = replace(params, shadow_cells=current.shadow_cells, trial_cells=current.trial_cells)
+        stored = repo.save(params, note=body.note, created_by=body.created_by)
+        meta_repository.notify_engine("setup_params")
+        return stored.as_dict()
+
+    class SetupStageIn(BaseModel):
+        model_config = ConfigDict(str_strip_whitespace=True)
+
+        #: Buňka `TICKER:šablona` (ticker instance, ADR-0041)
+        cell: str = Field(min_length=3, max_length=64)
+        stage: UserStage
+        #: Jen pro zkoušku; chybí = výchozí rozpočet z parametrů
+        budget_setups: int | None = Field(default=None, strict=True)
+        budget_r: float | None = None
+        note: str = Field(min_length=3, max_length=500)
+        created_by: str = Field(default="ui", min_length=1, max_length=32)
+
+    @app.post("/setups/stage", status_code=201)
+    def setup_stage_post(body: SetupStageIn) -> dict[str, object]:
+        """Změna stádia jedné buňky ticker × šablona (#1323) → nová verze parametrů.
+
+        Úzký endpoint místo celé sady parametrů: server čte platnou verzi
+        a mění jen tuto buňku (starý snímek v klientovi nic nepřepíše) a začátek
+        zkoušky nastaví sám — nová i obnovená zkouška začíná teď s rozpočtem
+        od nuly. 422: špatný formát buňky, neznámá šablona, rozpočet mimo meze
+        nebo u jiného stádia než zkoušky, prázdný důvod. 409: stádium se
+        nemění (Auto → Auto, Stín → Stín) nebo store ještě nemá verzi (seed
+        dělá engine při startu). Engine přepne do sekund (NOTIFY).
+        """
+        if body.stage != "trial" and (body.budget_setups is not None or body.budget_r is not None):
+            raise HTTPException(422, "Rozpočet patří jen ke zkoušce (stage=trial)")
+        repo = setup_params_repository()
+        latest = repo.latest()
+        if latest is None:
+            raise HTTPException(
+                409, "Parametry setupů zatím nemají verzi — engine ji založí při startu"
+            )
+        try:
+            params = with_stage(
+                latest.params,
+                body.cell,
+                body.stage,
+                now=dt.datetime.now(dt.UTC),
+                budget_setups=body.budget_setups,
+                budget_r=body.budget_r,
+            )
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from error
+        if body.stage != "trial" and params == latest.params:
+            raise HTTPException(409, f"Buňka {body.cell} už je ve stádiu {body.stage}")
         stored = repo.save(params, note=body.note, created_by=body.created_by)
         meta_repository.notify_engine("setup_params")
         return stored.as_dict()
@@ -758,23 +837,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if sim_account_usd is not None and sim_risk_pct is not None
             else None
         )
+        now = dt.datetime.now(dt.UTC)
+        session_day = trading_session_date(now)
         try:
             params = current_setup_params()
-            facts = setups_repository().summary_facts(wanted)
+            repo = setups_repository()
+            # Knihovna ukazuje buňky s nastaveným stádiem vždy, i mimo `symbols`
+            # (zkouška pinovaného kontraktu mimo watchlist) — jejich řádky navíc
+            extra = sorted(configured_tickers(params) - set(wanted))
+            facts = repo.summary_facts([*wanted, *extra])
+            # Brzdy účtu (#1323, hlavička Knihovny): napříč symboly, totéž
+            # čtení a tatáž funkce jako engine — nezávisí na `symbols`
+            realized_week = repo.realized_since(
+                week_start(session_day), mechanics_version=SETUP_MECHANICS_VERSION
+            )
         except SQLAlchemyError as error:
             logger.warning("Souhrn setupů: DB nedostupná (%s)", error)
             raise HTTPException(503, "Databáze setupů je nedostupná") from error
         summary = summarize_setups(
-            facts,
+            [fact for fact in facts if fact.symbol not in extra],
             mechanics_version=SETUP_MECHANICS_VERSION,
             all_versions=all_versions,
             point_values=POINT_VALUES,
             fee_per_contract_usd=params.fee_per_contract_usd,
             account_usd=params.account_equity_usd,
-            session_day=trading_session_date(dt.datetime.now(dt.UTC)),
+            session_day=session_day,
             simulation=simulation,
         )
-        return {"symbols": wanted, **asdict(summary)}
+        # Knihovna (#1323): buňky ticker × šablona se stádiem a verdiktem brány
+        # teď — vždy aktuální mechanika, nezávisle na `all_versions` (jako brána)
+        cells = library_cells(
+            facts,
+            params,
+            symbols=wanted,
+            now=now,
+            mechanics_version=SETUP_MECHANICS_VERSION,
+            point_values=POINT_VALUES,
+        )
+        brakes = library_brakes(realized_week, params, now=now)
+        return {
+            "symbols": wanted,
+            **asdict(summary),
+            "cells": [asdict(cell) for cell in cells],
+            "brakes": asdict(brakes),
+        }
 
     @app.get("/setups/{symbol}")
     def setups_list(

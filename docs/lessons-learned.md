@@ -178,6 +178,19 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-01 — zkouška setupu (#1323) by pouštěla setupy, které se do jejího rozpočtu nezapočtou: dva zdroje času.**
+  Engine razí `created_ts` časem cyklu zaokrouhleným na minutu, API razilo začátek zkoušky přesně.
+  Setup z cyklu, ve kterém engine novou verzi aplikoval (14:06:00 < začátek 14:06:20), zkouška
+  pustila přes bránu, ale čerpání (setupy od `started_at`) ho nikdy nezapočetlo — strop rozpočtu
+  neplatil a alert „zkouška skončila“ lhal. Testy procházely, protože začátek dávaly vždy minuty
+  před `now`. Odhalilo oponentní review (repro se začátkem `now + 20 s`). Druhá díra téhož druhu:
+  čerpání se čte jen z aktuální mechaniky, takže zvednutí `SETUP_MECHANICS_VERSION` by vyčerpané
+  zkoušce vrátilo rozpočet bez rozhodnutí uživatele.
+  → Kde rozhodnutí (přebití) a jeho účetnictví (čerpání) filtrují tentýž čas, musí platit invariant
+  „co rozhodnutí pustí, to se započte“ (`gate_overridden` ⇒ `created_ts` ≥ `started_at`) jednou
+  predikátní funkcí pro obě strany (`TrialCell.in_force`); testovat i časy uvnitř minuty a změnu
+  verze, ne jen „začátek o hodinu dřív“. Stav, který zvyšuje riziko, nesmí obnovit změna, kterou
+  udělal systém (verze mechaniky), jen člověk.
 - **2026-10-01 — oprava barů 8.–15. 9. pro přepočet setupů (#1320): stráž a razítko platily jen pro nové zápisy jedné cesty.**
   Hluboký backfill `scripts/backfill_bars.py` razil bary IBKR historical jako živé `ibkr`. Konvenci `ibkr_hist`
   (#1055) dostal jen `UnderlyingBackfiller` v enginu. Při opravě 9. 9. se ukázalo, že všech 147 (ES)

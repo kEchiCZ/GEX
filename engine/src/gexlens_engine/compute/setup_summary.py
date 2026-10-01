@@ -14,6 +14,8 @@ Konvence (převzaté z dosavadního UI, sémantika výsledků se nemění):
   hrubý − poplatky = čistý. Každý setup rovným dílem 1 kontrakt, i stínový;
 - **obchodovatelné / stínové / bez pravidel** podle `context.tradeable` (#1185):
   stín se měří, ale neobchoduje; řádky před pravidly risk kontext nemají;
+  **zkouška** (#1323) = obchodovatelné s `gate_overridden`, podmnožina
+  obchodovatelných; stín z rozhodnutí uživatele má důvod `user`;
 - **účet** = jen obchodovatelné, kontrakty ze serverového sizingu:
   R × `max_loss_usd` − `fee_usd`, drawdown chronologicky podle uzavření;
 - **den** = obchodní seance (`settle.trading_session_date`): uzavřený patří do
@@ -50,6 +52,45 @@ ROUND_TRIP_COST_USD: dict[str, float] = {"MES": 2.49, "MNQ": 1.74}
 DEFAULT_ROUND_TRIP_COST_USD = 2.5
 
 
+def net_r(
+    outcome_r: float, stop_points: float, symbol: str, point_values: Mapping[str, float]
+) -> float | None:
+    """R po nákladech ADR-0030 na 1 mikro kontrakt (#1323, Knihovna a push):
+    R − round-trip náklad mikra / (stop b × hodnota bodu mikra).
+
+    Táž konvence jako USD simulace souhrnu (`usd_simulation`); na ES při
+    mediánu stopu T7 2,4 b stojí náklad ~0,2 R. None = mikro bez hodnoty
+    bodu nebo nulový stop (nic se nevymýšlí)."""
+    root = symbol_root(symbol)
+    micro = MICRO_SYMBOLS.get(root, root)
+    point = point_values.get(micro)
+    if point is None or stop_points <= 0:
+        return None
+    cost = ROUND_TRIP_COST_USD.get(micro, DEFAULT_ROUND_TRIP_COST_USD)
+    return outcome_r - cost / (stop_points * point)
+
+
+def net_usd_micro(
+    outcome_r: float,
+    stop_points: float,
+    contracts: int,
+    symbol: str,
+    point_values: Mapping[str, float],
+) -> float | None:
+    """Čistý P/L v reálných mikro dolarech (#1323, Knihovna): kontrakty ×
+    (R × stop b × hodnota bodu mikra − round-trip náklad mikra, ADR-0030).
+
+    Konvence `usd_simulation`; kontrakty jsou sizing aplikace (ADR-0038:
+    1 kontrakt v aplikaci = 1 mikro reálně). None = mikro bez hodnoty bodu."""
+    root = symbol_root(symbol)
+    micro = MICRO_SYMBOLS.get(root, root)
+    point = point_values.get(micro)
+    if point is None:
+        return None
+    cost = ROUND_TRIP_COST_USD.get(micro, DEFAULT_ROUND_TRIP_COST_USD)
+    return contracts * (outcome_r * stop_points * point - cost)
+
+
 @dataclass(frozen=True)
 class SetupFact:
     """Setup zúžený na to, co souhrn čte (podmnožina řádku `setups`)."""
@@ -75,6 +116,12 @@ class SetupFact:
     #: Verdikty stínové brány polohy (#1060); None = řádek bránu nenese
     band_gate_simple: str | None = None
     band_gate_regime: str | None = None
+    #: `context.affordable` (stop v rozpočtu, #1185); None = řádek před pravidly
+    affordable: bool | None = None
+    #: `context.gate_overridden` (#1323): obchodovatelný jen díky zkoušce
+    gate_overridden: bool = False
+    #: `context.contracts` (sizing při vzniku); None = řádek před pravidly
+    contracts: int | None = None
 
     @property
     def is_closed(self) -> bool:
@@ -127,6 +174,7 @@ def fact_from_record(record: Mapping[str, Any]) -> SetupFact:
     )
     closed_ts = record.get("closed_ts")
     outcome = record.get("outcome_r")
+    affordable = context.get("affordable")
     return SetupFact(
         id=int(record["id"]),
         symbol=str(record["symbol"]),
@@ -146,6 +194,9 @@ def fact_from_record(record: Mapping[str, Any]) -> SetupFact:
         gex_regime=regime if isinstance(regime, str) else None,
         band_gate_simple=str(gate_simple) if has_gate else None,
         band_gate_regime=str(gate_regime) if has_gate else None,
+        affordable=affordable if isinstance(affordable, bool) else None,
+        gate_overridden=context.get("gate_overridden") is True,
+        contracts=int(contracts) if isinstance(contracts, int | float) and ruled else None,
     )
 
 
@@ -326,9 +377,13 @@ class SetupSummary:
     unpriced_symbols: list[str]
     all: GroupStats
     tradeable: GroupStats
+    #: Obchodovatelné jen díky zkoušce (`gate_overridden`, #1323) — podmnožina
+    #: `tradeable`, ať je vidět, co ruční přebití brány přineslo
+    trial: GroupStats
     shadow: GroupStats
     unruled: GroupStats
-    #: Počty stínových setupů (aktivní i uzavřené) podle `trade_block`
+    #: Počty stínových setupů (aktivní i uzavřené) podle `trade_block`; stín
+    #: z rozhodnutí uživatele (#1323) má důvod `user`
     shadow_reasons: dict[str, int]
     #: None = žádný setup v rozsahu nenese risk kontext
     account: AccountStats | None
@@ -625,6 +680,7 @@ def summarize_setups(
         ),
         all=stats(scope),
         tradeable=stats(by_group["tradeable"]),
+        trial=stats([fact for fact in by_group["tradeable"] if fact.gate_overridden]),
         shadow=stats(by_group["shadow"]),
         unruled=stats(by_group["unruled"]),
         shadow_reasons=dict(

@@ -630,3 +630,46 @@ test('setup vzniklý po settle je v tabulce označený a filtr obchodovatelných
   await waitFor(() => expect(screen.queryByTestId('after-settle-9')).toBeNull())
   expect(document.querySelectorAll('[data-part="risk"]').length).toBe(1)
 })
+
+test('souhrn ukazuje Zkoušku zvlášť a stín z rozhodnutí uživatele s důvodem (#1323)', async () => {
+  const trialGroup: SummaryGroup = { ...GROUP, count: 2, closed: 2, sum_r: -1, avg_r: -0.5 }
+  mockApi(
+    [SETUP_ROW],
+    summary({
+      tradeable: { ...GROUP, count: 3 },
+      trial: trialGroup,
+      shadow: { ...GROUP, count: 4 },
+      shadow_reasons: { user: 3, gate: 1 },
+    }),
+  )
+  renderApp()
+  fireEvent.click(screen.getByRole('button', { name: 'Setupy' }))
+  const trial = await screen.findByTestId('split-trial')
+  expect(trial.textContent).toContain('z toho Zkouška')
+  expect(trial.getAttribute('title')).toContain('nesčítat znovu')
+  expect(screen.getByTestId('split-shadow').getAttribute('title')).toContain(
+    've stínu z rozhodnutí uživatele: 3',
+  )
+})
+
+test('konec zkoušky ve zvonečku prokliká do Setupy → Knihovna (#1323)', async () => {
+  mockApi([])
+  renderApp()
+  const ws = FakeWebSocket.latest()
+  act(() => {
+    ws.open()
+    ws.push('alerts', {
+      kind: 'setup_stage',
+      event: 'trial_spent',
+      symbol: 'NQ',
+      template: 'trend_continuation',
+      message:
+        'Zkouška T7 trend_continuation · NQ skončila: 10/10 setupů, -2.0 R z -3.0 R → zpět na Auto (rozhoduje brána)',
+      ts: 1752823000,
+    })
+  })
+  fireEvent.click(screen.getByRole('button', { name: /Notifikace/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Otevřít Knihovnu setupů' }))
+  expect(await screen.findByRole('heading', { name: 'Knihovna setupů' })).toBeDefined()
+  expect(screen.getByRole('tab', { name: 'Knihovna' }).getAttribute('aria-selected')).toBe('true')
+})

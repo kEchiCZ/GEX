@@ -135,7 +135,9 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
         "Vznikl obchodní setup LONG/SHORT se vstupem, cílem a stopem.",
         (
             "Jen vznik, uzavření setupu na Telegram nechodí",
-            "Stínový setup (stop nad rozpočtem, brzda, brána) se neposílá",
+            "Stínový setup (stop nad rozpočtem, brzda, stín v Knihovně, brána) se neposílá",
+            "Zpráva nese stádium (AUTO, ZKOUŠKA s čerpáním) a řádek důkazu: ØR čistě, n, brána",
+            "Bez kladné dolní meze ØR (vždy u zkoušky) řádek začíná „edge neprokázán“",
             "Práh confidence v % (0–100) z .env (GEXLENS_PUSH_SETUP_MIN_CONFIDENCE)",
         ),
     ),
@@ -150,6 +152,19 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
             "Nové setupy jsou jen stínové: denní brzda do konce seance (17:00 CT), "
             "týdenní do konce obchodního týdne (neděle 17:00 CT)",
             "Jednou za seanci pro každou brzdu",
+        ),
+    ),
+    PushTopic(
+        "setup_stage",
+        "market",
+        "setup",
+        ("setup_stage",),
+        "Konec zkoušky setupu",
+        "Zkouška setupu v Knihovně vyčerpala rozpočet a buňka je zpět na Auto.",
+        (
+            "Rozpočet: počet setupů, nebo ztráta v R (nastavuje se při zahájení zkoušky)",
+            "Na Auto rozhoduje znovu brána šablon; zkoušku jde obnovit v Setupy → Knihovna",
+            "Jednou na zkoušku",
         ),
     ),
     PushTopic(

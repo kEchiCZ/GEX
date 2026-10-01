@@ -15,11 +15,12 @@ import enum
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
-from typing import Protocol
+from typing import Literal, Protocol
 
 from gexlens_engine.compute.bandregime import BAND_MAJOR_SHARE, BandZone
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import expiry_settle_ts
+from gexlens_engine.ticker import parse_ticker
 
 # Verze mechaniky detektoru (#311). Zvedá se při KAŽDÉ změně sémantiky stopů,
 # cílů nebo filtrů — statistiky a budoucí kalibrace (Fáze 2) počítají jen
@@ -191,6 +192,95 @@ class MinuteInputs:
     gamma_edge_dn: float | None = field(default=None, kw_only=True)
 
 
+#: Stádium buňky ticker × šablona (#1323, Knihovna setupů). Auto = sizing →
+#: brzdy → brána rozhoduje (výchozí, buňka bez záznamu); Stín = setup vzniká
+#: a měří se, ale nikdy není obchodovatelný (`trade_block="user"`); Zkouška =
+#: přebije verdikt brány, dokud nevyčerpá rozpočet. Vyřazení celé šablony
+#: zůstává `disabled_templates` (přestane se měřit).
+UserStage = Literal["auto", "shadow", "trial"]
+
+#: Meze rozpočtu zkoušky (rozhodnutí uživatele 1. 10. 2026, #1323 bod 2B):
+#: 1–20 setupů, ztráta 0,5–6 R; výchozí 10 setupů / −3 R
+TRIAL_BUDGET_SETUPS_RANGE: tuple[int, int] = (1, 20)
+TRIAL_BUDGET_R_RANGE: tuple[float, float] = (0.5, 6.0)
+
+
+def cell_key(ticker: str, template: str) -> str:
+    """Klíč buňky `NQ:trend_continuation` — ticker instance (ADR-0041), ne kořen."""
+    return f"{ticker}:{template}"
+
+
+def parse_cell(cell: str) -> tuple[str, str]:
+    """`NQ:trend_continuation` → (ticker, šablona); jinak ValueError.
+
+    Ticker musí být v kanonickém tvaru (`parse_ticker(...).symbol`, tedy velká
+    písmena bez mezer): `nq:…` by jako klíč nikdy nepotkal setup `NQ` a stádium
+    by tiše neplatilo. Pinovaný kontrakt (`NQZ6`) je vlastní buňka (ADR-0041).
+    Šablona musí být známá (`SetupTemplate`).
+    """
+    ticker, separator, template = cell.partition(":")
+    if not separator or not ticker or not template:
+        raise ValueError(f"Špatný formát buňky {cell!r} — čekám TICKER:šablona")
+    try:
+        canonical = parse_ticker(ticker).symbol
+    except ValueError as error:
+        raise ValueError(f"Špatný formát buňky {cell!r}: {error}") from error
+    if canonical != ticker:
+        raise ValueError(f"Špatný formát buňky {cell!r} — ticker piš jako {canonical!r}")
+    if template not in {item.value for item in SetupTemplate}:
+        raise ValueError(f"Neznámá šablona {template!r} v buňce {cell!r}")
+    return ticker, template
+
+
+def _check_trial_budget(budget_setups: int, budget_r: float, where: str) -> None:
+    low_n, high_n = TRIAL_BUDGET_SETUPS_RANGE
+    low_r, high_r = TRIAL_BUDGET_R_RANGE
+    if not low_n <= budget_setups <= high_n:
+        raise ValueError(f"{where}: rozpočet {budget_setups} setupů je mimo meze {low_n}–{high_n}")
+    if not low_r <= budget_r <= high_r:
+        raise ValueError(f"{where}: rozpočet {budget_r:g} R je mimo meze {low_r:g}–{high_r:g} R")
+
+
+@dataclass(frozen=True)
+class TrialCell:
+    """Zkouška buňky (#1323): přebíjí bránu od `started_at`, dokud buňka
+    nevyčerpá `budget_setups` setupů s přebitou bránou nebo ztrátu `budget_r` R.
+
+    Čerpání se nezapisuje — odvozuje se z výsledků setupů buňky stejně jako
+    brzdy (`compute.risk.trial_usage`). Začátek a mechaniku nastavuje server při
+    zahájení i obnovení zkoušky (`with_stage`), klient je nevolí.
+    """
+
+    cell: str
+    started_at: dt.datetime
+    budget_setups: int
+    #: Kladná velikost dovolené ztráty: 3.0 = zkouška končí na Σ R ≤ −3
+    budget_r: float
+    #: Verze mechaniky, na které zkouška začala (#311). Čerpání se čte jen
+    #: z aktuální mechaniky, takže po jejím zvednutí by vyčerpaná zkouška
+    #: dostala nový rozpočet bez rozhodnutí uživatele — proto tím končí
+    mechanics_version: int
+
+    @property
+    def ticker(self) -> str:
+        return self.cell.partition(":")[0]
+
+    @property
+    def template(self) -> str:
+        return self.cell.partition(":")[2]
+
+    def in_force(self, now: dt.datetime, mechanics_version: int) -> bool:
+        """Platí zkouška teď? Až od `started_at` a jen na své mechanice.
+
+        Čas cyklu enginu je zaokrouhlený na minutu (`created_ts` = začátek
+        minuty), kdežto začátek zkoušky nastavuje API přesně: setup z cyklu, ve
+        kterém se nová verze aplikovala, by zkouška pustila, ale čerpání (setupy
+        od `started_at`) by ho nikdy nezapočetlo. Invariant: `gate_overridden`
+        ⇒ `created_ts` ≥ `started_at`. Zkouška jiné mechaniky skončila — riziko
+        smí zvýšit jen člověk (asymetrická autonomie, ADR-0038)."""
+        return now >= self.started_at and self.mechanics_version == mechanics_version
+
+
 @dataclass(frozen=True)
 class SetupParams:
     """Prahy šablon (ADR-0004 defaulty; body podkladu)."""
@@ -320,6 +410,88 @@ class SetupParams:
     template_gate_enabled: bool = True
     template_gate_min_samples: int = 30
     template_gate_days: int = 60
+    # Stádia buněk ticker × šablona (#1323, ADR-0038 dodatek). Buňka bez
+    # záznamu je Auto; buňka je nejvýš v jedné množině. Mění se jen přes
+    # `POST /setups/stage` (začátek zkoušky nastavuje server), každá změna je
+    # nová verze s důvodem (ADR-0033).
+    shadow_cells: frozenset[str] = frozenset()
+    trial_cells: tuple[TrialCell, ...] = ()
+    # Výchozí rozpočet nové zkoušky (předvyplní dialog, Settings → Risk)
+    trial_budget_setups: int = 10
+    trial_budget_r: float = 3.0
+
+    def __post_init__(self) -> None:
+        """Stádia nesmí jít uložit nekonzistentní — jinak ValueError (422 v API).
+
+        Zkoušky se řadí podle buňky, ať dvě verze se stejným obsahem jsou si
+        rovny (`apply_params` porovnává `==`).
+        """
+        for cell in self.shadow_cells:
+            parse_cell(cell)
+        trials = tuple(sorted(self.trial_cells, key=lambda trial: trial.cell))
+        seen: set[str] = set()
+        for trial in trials:
+            parse_cell(trial.cell)
+            if trial.cell in seen:
+                raise ValueError(f"Buňka {trial.cell!r} je ve zkoušce dvakrát")
+            seen.add(trial.cell)
+            if trial.cell in self.shadow_cells:
+                raise ValueError(f"Buňka {trial.cell!r} je zároveň ve stínu i ve zkoušce")
+            if trial.started_at.tzinfo is None:
+                raise ValueError(f"Zkouška {trial.cell!r}: začátek musí nést časovou zónu")
+            if trial.mechanics_version < 1:
+                raise ValueError(f"Zkouška {trial.cell!r}: mechanics_version musí být ≥ 1")
+            _check_trial_budget(trial.budget_setups, trial.budget_r, f"Zkouška {trial.cell!r}")
+        _check_trial_budget(self.trial_budget_setups, self.trial_budget_r, "Výchozí zkouška")
+        object.__setattr__(self, "trial_cells", trials)
+
+    def trial_of(self, ticker: str, template: str) -> TrialCell | None:
+        """Nastavená zkouška buňky (i vyčerpaná — to rozhoduje `trial_usage`)."""
+        cell = cell_key(ticker, template)
+        return next((trial for trial in self.trial_cells if trial.cell == cell), None)
+
+    def stage_of(self, ticker: str, template: str) -> UserStage:
+        """Nastavené stádium buňky; chybějící záznam = Auto."""
+        if cell_key(ticker, template) in self.shadow_cells:
+            return "shadow"
+        return "trial" if self.trial_of(ticker, template) is not None else "auto"
+
+
+def with_stage(
+    params: SetupParams,
+    cell: str,
+    stage: UserStage,
+    *,
+    now: dt.datetime,
+    budget_setups: int | None = None,
+    budget_r: float | None = None,
+) -> SetupParams:
+    """Nové parametry s buňkou ve stádiu `stage` (#1323) — čistá funkce.
+
+    Zkouška vždy začíná `now` na aktuální mechanice (`SETUP_MECHANICS_VERSION`
+    volajícího): nová i obnovená (opakované zahájení = nový rozpočet od nuly).
+    Chybějící rozpočet bere výchozí z parametrů. Meze a formát buňky hlídá
+    `SetupParams` (ValueError).
+    """
+    parse_cell(cell)
+    shadow = params.shadow_cells - {cell}
+    trials = tuple(trial for trial in params.trial_cells if trial.cell != cell)
+    if stage == "shadow":
+        shadow = shadow | {cell}
+    elif stage == "trial":
+        trials = (
+            *trials,
+            TrialCell(
+                cell=cell,
+                started_at=now.astimezone(dt.UTC),
+                budget_setups=(
+                    budget_setups if budget_setups is not None else params.trial_budget_setups
+                ),
+                budget_r=budget_r if budget_r is not None else params.trial_budget_r,
+                mechanics_version=SETUP_MECHANICS_VERSION,
+            ),
+        )
+    return replace(params, shadow_cells=shadow, trial_cells=trials)
 
 
 #: Pole SetupParams, která se do parameter store (#794 fáze 2) neukládají —
@@ -331,20 +503,88 @@ def params_to_dict(params: SetupParams) -> dict[str, object]:
     """SetupParams → plochý JSON-friendly dict (frozenset → seřazený seznam).
 
     Jediná serializace pro parameter store i API (#794 fáze 2): klíče = názvy
-    polí dataclass, hodnoty číslo nebo seznam řetězců.
+    polí dataclass, hodnoty číslo nebo seznam řetězců. Zkoušky (#1323) jako
+    objekt {buňka: {started_at, budget_setups, budget_r, mechanics_version}},
+    čas v ISO UTC.
     """
     result: dict[str, object] = {}
     for name in _params_field_names():
         value = getattr(params, name)
-        result[name] = sorted(value) if isinstance(value, frozenset) else value
+        if name == "trial_cells":
+            result[name] = {
+                trial.cell: {
+                    "started_at": trial.started_at.astimezone(dt.UTC).isoformat(),
+                    "budget_setups": trial.budget_setups,
+                    "budget_r": trial.budget_r,
+                    "mechanics_version": trial.mechanics_version,
+                }
+                for trial in params.trial_cells
+            }
+        else:
+            result[name] = sorted(value) if isinstance(value, frozenset) else value
     return result
+
+
+_TRIAL_KEYS = frozenset({"started_at", "budget_setups", "budget_r", "mechanics_version"})
+
+
+def _trial_cells_from(value: object) -> tuple[TrialCell, ...]:
+    """`trial_cells` z JSON: {buňka: {started_at, budget_setups, budget_r,
+    mechanics_version}} → TrialCell.
+
+    Všechny klíče jsou povinné (zkouška bez začátku, rozpočtu nebo mechaniky
+    by neměla strop), čas musí nést zónu; meze a formát buňky hlídá SetupParams."""
+    if not isinstance(value, Mapping):
+        raise ValueError("Parametr trial_cells musí být objekt {buňka: zkouška}")
+    trials: list[TrialCell] = []
+    for cell, raw in value.items():
+        if not isinstance(cell, str) or not isinstance(raw, Mapping):
+            raise ValueError("Parametr trial_cells musí být objekt {buňka: zkouška}")
+        if set(raw) != _TRIAL_KEYS:
+            raise ValueError(
+                f"Zkouška {cell!r} musí mít právě klíče {', '.join(sorted(_TRIAL_KEYS))}"
+            )
+        started_raw, budget_setups, budget_r, mechanics = (
+            raw["started_at"],
+            raw["budget_setups"],
+            raw["budget_r"],
+            raw["mechanics_version"],
+        )
+        if not isinstance(started_raw, str):
+            raise ValueError(f"Zkouška {cell!r}: started_at musí být ISO čas")
+        try:
+            started_at = dt.datetime.fromisoformat(started_raw)
+        except ValueError as error:
+            raise ValueError(f"Zkouška {cell!r}: started_at není ISO čas") from error
+        if started_at.tzinfo is None:
+            raise ValueError(f"Zkouška {cell!r}: started_at musí nést časovou zónu (UTC)")
+        if isinstance(budget_setups, bool) or not isinstance(budget_setups, int):
+            raise ValueError(f"Zkouška {cell!r}: budget_setups musí být celé číslo")
+        if isinstance(budget_r, bool) or not isinstance(budget_r, int | float):
+            raise ValueError(f"Zkouška {cell!r}: budget_r musí být číslo")
+        if not math.isfinite(float(budget_r)):
+            raise ValueError(f"Zkouška {cell!r}: budget_r musí být konečné číslo")
+        if isinstance(mechanics, bool) or not isinstance(mechanics, int):
+            raise ValueError(f"Zkouška {cell!r}: mechanics_version musí být celé číslo")
+        trials.append(
+            TrialCell(
+                cell=cell,
+                started_at=started_at.astimezone(dt.UTC),
+                budget_setups=budget_setups,
+                budget_r=float(budget_r),
+                mechanics_version=mechanics,
+            )
+        )
+    return tuple(trials)
 
 
 def params_from_dict(values: Mapping[str, object]) -> SetupParams:
     """Dict → SetupParams s validací: neznámý klíč nebo špatný typ = ValueError.
 
     Chybějící klíče berou defaulty (starší verze parametrů se tak dá načíst
-    novějším kódem); `bool` se za číslo neuznává (True by tiše prošlo jako 1).
+    novějším kódem — verze bez stádií = všechny buňky Auto); `bool` se za
+    číslo neuznává (True by tiše prošlo jako 1). Formát buněk, známou šablonu,
+    buňku ve stínu i ve zkoušce a meze rozpočtu hlídá `SetupParams` (#1323).
     """
     names = _params_field_names()
     unknown = sorted(set(values) - set(names))
@@ -357,7 +597,9 @@ def params_from_dict(values: Mapping[str, object]) -> SetupParams:
             continue
         value = values[name]
         current = getattr(defaults, name)
-        if isinstance(current, frozenset):
+        if name == "trial_cells":
+            kwargs[name] = _trial_cells_from(value)
+        elif isinstance(current, frozenset):
             if not isinstance(value, (list, tuple, set, frozenset)) or not all(
                 isinstance(item, str) for item in value
             ):
