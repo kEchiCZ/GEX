@@ -2,9 +2,11 @@
 
 Buňky, verdikt brány „teď", důkaz a stav brzd počítá server
 (`GET /setups/summary` → `cells`, `brakes`; engine `compute/setup_library.py`
-týmiž funkcemi jako engine). UI jen vykresluje a mění stádium jedné buňky
-přes `POST /setups/stage` — začátek zkoušky nastavuje server, ne klient. */
+týmiž funkcemi jako engine). UI jen vykresluje, řadí a filtruje hotové buňky
+(`libraryRows`, nic nepřepočítává) a mění stádium jedné buňky přes
+`POST /setups/stage` — začátek zkoušky nastavuje server, ne klient. */
 import { API_BASE } from '../config'
+import { oneOf, shortString } from '../state/persist'
 import { TEMPLATE_LABELS, formatPnlUsd } from './setups'
 import type { GateVerdict, SetupParamsResponse, TradeBlock } from './setups'
 
@@ -263,7 +265,7 @@ export function proofTooltip(cell: LibraryCell): string {
       : `• n potřebné: ${cell.n_needed} — kolik vzorků prokáže edge +0.2 R (jednostranně 95 %, síla 80 %)`,
     '• vzorec: ((1.645 + 0.84) · σ / 0.2)², σ = rozptyl R téhož vzorku; nikdy pod minimum brány',
     '',
-    'Řazení Knihovny: podle průkaznosti, ne podle ØR — malý vzorek s vysokým ØR nesmí svádět.',
+    'Výchozí řazení Knihovny: podle průkaznosti, ne podle ØR — malý vzorek s vysokým ØR nesmí svádět.',
   ].join('\n')
 }
 
@@ -345,6 +347,279 @@ export function stageTooltip(cell: LibraryCell): string {
     'Klik = změna stádia s povinným důvodem.',
   )
   return lines.join('\n')
+}
+
+/* ── Řazení a filtry tabulky ──────────────────────────────────────────────
+Vstup: buňky v pořadí serveru (průkaznost sestupně) a pohled uživatele.
+Výstup: viditelné řádky. Řadí se stabilně — shodné hodnoty drží pořadí
+serveru, takže výchozí Průkaznost ↓ vrátí přesně jeho pořadí. */
+
+/** Sloupec, podle kterého jde řadit. */
+export type LibrarySortKey =
+  'setup' | 'ticker' | 'stage' | 'gate' | 'avgR' | 'avgNetR' | 'proof' | 'decision'
+
+export const LIBRARY_SORT_KEYS: readonly LibrarySortKey[] = [
+  'setup',
+  'ticker',
+  'stage',
+  'gate',
+  'avgR',
+  'avgNetR',
+  'proof',
+  'decision',
+]
+
+/** Záhlaví sloupců a volby řazení na mobilu. */
+export const LIBRARY_SORT_LABELS: Record<LibrarySortKey, string> = {
+  setup: 'Setup',
+  ticker: 'Ticker',
+  stage: 'Stádium',
+  gate: 'Brána teď',
+  avgR: 'ØR hrubě',
+  avgNetR: 'ØR čistě',
+  proof: 'Průkaznost',
+  decision: 'Rozhodnutelné',
+}
+
+export type SortDir = 'asc' | 'desc'
+
+/** Verdikty ve filtru brány; `off` (brána vypnutá přes API) ukáže jen „vše". */
+export const LIBRARY_GATE_FILTERS = ['pass', 'block', 'insufficient'] as const
+export type LibraryGateFilter = (typeof LIBRARY_GATE_FILTERS)[number]
+
+export const GATE_FILTER_LABELS: Record<LibraryGateFilter, string> = {
+  pass: '✓ pass',
+  block: '✕ block',
+  insufficient: '· nedostatek vzorku',
+}
+
+/** Řazení a filtry tabulky — pamatuje se v localStorage (`reviveLibraryView`). */
+export interface LibraryView {
+  sortKey: LibrarySortKey
+  sortDir: SortDir
+  /** null = všechny tickery. */
+  ticker: string | null
+  /** Platné stádium (`effective_stage`); prázdné = všechna. */
+  stages: UserStage[]
+  gate: LibraryGateFilter | null
+  /** Hledání v názvu setupu („T7 Pokračování trendu"). */
+  query: string
+  /** Jen buňky s ØR čistě > 0. */
+  netPositive: boolean
+}
+
+/** Výchozí pohled: dnešní řazení serveru (průkaznost sestupně), bez filtrů. */
+export const DEFAULT_LIBRARY_VIEW: LibraryView = {
+  sortKey: 'proof',
+  sortDir: 'desc',
+  ticker: null,
+  stages: [],
+  gate: null,
+  query: '',
+  netPositive: false,
+}
+
+/** Průkaznost jako podíl n / n potřebné; bez odhadu null (na konec). */
+function proofRatio(cell: Pick<LibraryCell, 'gate_n' | 'n_needed'>): number | null {
+  return cell.n_needed === null || cell.n_needed <= 0 ? null : cell.gate_n / cell.n_needed
+}
+
+/** Brána od nejhoršího: block → nedostatek vzorku → pass; `off` bez pořadí (na konec). */
+const GATE_RANK: Record<GateVerdict, number | null> = {
+  block: 0,
+  insufficient: 1,
+  pass: 2,
+  off: null,
+}
+
+type SortValue = number | string | null
+
+/** Rozhodnutelné: „v okně nedosáhne" je nejdál od rozhodnutí (nekonečno),
+ *  neznámý odhad („málo dat", „—") nemá pořadí (null, na konec). */
+function decisionValue(cell: LibraryCell): number | null {
+  if (cell.sessions_to_decision !== null) return cell.sessions_to_decision
+  return windowTooShort(cell) ? Number.POSITIVE_INFINITY : null
+}
+
+/** Hodnoty sloupce pro řazení; další prvek rozhoduje jen při shodě předchozích. */
+function sortValues(cell: LibraryCell, key: LibrarySortKey): SortValue[] {
+  switch (key) {
+    case 'setup':
+      return [cell.template_number]
+    case 'ticker':
+      return [cell.ticker]
+    case 'stage':
+      // Co se teď uplatní — skončená zkouška se hlásí i řadí jako Auto
+      return [USER_STAGES.indexOf(cell.effective_stage)]
+    case 'gate':
+      return [GATE_RANK[cell.gate_verdict], cell.gate_lb]
+    case 'avgR':
+      return [cell.avg_r]
+    case 'avgNetR':
+      return [cell.avg_net_r]
+    case 'proof':
+      return [proofRatio(cell)]
+    case 'decision':
+      return [decisionValue(cell)]
+  }
+}
+
+function compareCells(a: LibraryCell, b: LibraryCell, key: LibrarySortKey, dir: SortDir): number {
+  const left = sortValues(a, key)
+  const right = sortValues(b, key)
+  for (let index = 0; index < left.length; index += 1) {
+    const x = left[index]
+    const y = right[index]
+    if (x === null && y === null) continue
+    // Prázdná hodnota na konec v obou směrech
+    if (x === null) return 1
+    if (y === null) return -1
+    // Podle kódových jednotek jako `libraryTickers`: ticker je symbol, ne české
+    // slovo (locale 'cs' řadí CH za H); dvě nekonečna jsou shoda, ne NaN
+    const order = x < y ? -1 : x > y ? 1 : 0
+    if (order !== 0) return dir === 'asc' ? order : -order
+  }
+  return 0
+}
+
+/** Seřadí kopii buněk; shodné hodnoty drží vstupní pořadí (stabilní řazení). */
+export function sortLibraryCells(
+  cells: readonly LibraryCell[],
+  key: LibrarySortKey,
+  dir: SortDir,
+): LibraryCell[] {
+  return [...cells].sort((a, b) => compareCells(a, b, key, dir))
+}
+
+/** Bez ohledu na velikost písmen a diakritiku („pokracovani" najde „Pokračování"). */
+function searchable(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+}
+
+export function filterLibraryCells(
+  cells: readonly LibraryCell[],
+  view: LibraryView,
+): LibraryCell[] {
+  const query = searchable(view.query)
+  return cells.filter(
+    (cell) =>
+      (view.ticker === null || cell.ticker === view.ticker) &&
+      (view.stages.length === 0 || view.stages.includes(cell.effective_stage)) &&
+      (view.gate === null || cell.gate_verdict === view.gate) &&
+      (!view.netPositive || (cell.avg_net_r !== null && cell.avg_net_r > 0)) &&
+      (query === '' || searchable(cellTitle(cell)).includes(query)),
+  )
+}
+
+/** Viditelné řádky tabulky: filtry, pak řazení. */
+export function libraryRows(cells: readonly LibraryCell[], view: LibraryView): LibraryCell[] {
+  return sortLibraryCells(filterLibraryCells(cells, view), view.sortKey, view.sortDir)
+}
+
+/** Klik na záhlaví: nový sloupec vzestupně, týž sloupec obrátí směr. */
+export function nextLibrarySort(view: LibraryView, key: LibrarySortKey): LibraryView {
+  if (view.sortKey === key) return { ...view, sortDir: view.sortDir === 'asc' ? 'desc' : 'asc' }
+  return { ...view, sortKey: key, sortDir: 'asc' }
+}
+
+/** Přepne stádium ve filtru; pořadí voleb drží Auto → Stín → Zkouška. */
+export function toggleLibraryStage(view: LibraryView, stage: UserStage): LibraryView {
+  const selected = view.stages.includes(stage)
+    ? view.stages.filter((item) => item !== stage)
+    : [...view.stages, stage]
+  return { ...view, stages: USER_STAGES.filter((item) => selected.includes(item)) }
+}
+
+export function libraryFiltersActive(view: LibraryView): boolean {
+  return (
+    view.ticker !== null ||
+    view.stages.length > 0 ||
+    view.gate !== null ||
+    view.query.trim() !== '' ||
+    view.netPositive
+  )
+}
+
+/** Zrušit filtry: řazení zůstává. */
+export function clearLibraryFilters(view: LibraryView): LibraryView {
+  return { ...DEFAULT_LIBRARY_VIEW, sortKey: view.sortKey, sortDir: view.sortDir }
+}
+
+/** Tickery do filtru: z dat a vybraný, i když z dat zmizel (ať je filtr vidět a jde zrušit). */
+export function libraryTickers(cells: readonly LibraryCell[], selected: string | null): string[] {
+  const tickers = new Set(cells.map((cell) => cell.ticker))
+  if (selected !== null) tickers.add(selected)
+  return [...tickers].sort()
+}
+
+const SORT_HELP: Record<LibrarySortKey, string> = {
+  setup: 'číslo šablony (T1, T2, …)',
+  ticker: 'ticker abecedně',
+  stage: 'platné stádium Auto → Stín → Zkouška (skončená zkouška = Auto)',
+  gate: 'verdikt block → nedostatek vzorku → pass, uvnitř verdiktu dolní mez LB (bez LB poslední)',
+  avgR: 'ØR hrubě',
+  avgNetR: 'ØR čistě (po nákladech ADR-0030)',
+  proof: 'podíl n / n potřebné',
+  decision: 'seance do rozhodnutí („vzorek stačí" = 0, „v okně nedosáhne" = nejdál)',
+}
+
+/** Tooltip záhlaví — odrážky (vzor ivRankTooltip). */
+export function librarySortTooltip(key: LibrarySortKey): string {
+  return [
+    `Řadit podle: ${SORT_HELP[key]}`,
+    '• klik = vzestupně, další klik = sestupně',
+    '• bez hodnoty („—", „málo dat", brána „vypnuta") vždy na konec',
+    '• výchozí: Průkaznost sestupně (pořadí serveru)',
+  ].join('\n')
+}
+
+/** Delší hledaný text nedává smysl a do úložiště nepatří; drží ho i pole hledání. */
+export const LIBRARY_QUERY_MAX = 100
+
+const SORT_DIRS: readonly SortDir[] = ['asc', 'desc']
+
+/** Hodnota z povolené množiny (select, localStorage), jinak null. Kontrolu dělá
+ *  `oneOf`; '' v žádné z množin není, takže jen značí neplatnou hodnotu. */
+function optionOf<T extends string>(allowed: readonly T[], value: unknown): T | null {
+  return oneOf<T | ''>(allowed)(value, '') || null
+}
+
+/** Sloupec z výběru řazení (mobil) nebo z úložiště; neznámý = null. */
+export function librarySortKeyOf(value: unknown): LibrarySortKey | null {
+  return optionOf(LIBRARY_SORT_KEYS, value)
+}
+
+/** Filtr brány z výběru nebo z úložiště; „vše" ('') nebo neznámý = null. */
+export function libraryGateFilterOf(value: unknown): LibraryGateFilter | null {
+  return optionOf(LIBRARY_GATE_FILTERS, value)
+}
+
+/** Reviver uloženého pohledu (`usePersistentState`): neplatné pole → jeho výchozí hodnota. */
+export function reviveLibraryView(value: unknown, fallback: LibraryView): LibraryView {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return fallback
+  const raw = value as Record<string, unknown>
+  const sortKey = librarySortKeyOf(raw.sortKey)
+  const sortDir = optionOf(SORT_DIRS, raw.sortDir)
+  // Řazení platí jen jako dvojice: zastaralý sloupec s uloženým směrem by
+  // z výchozí Průkaznosti ↓ udělal Průkaznost ↑ (nejméně průkazné nahoře)
+  const sortStored = sortKey !== null && sortDir !== null
+  const stages: unknown = raw.stages
+  return {
+    sortKey: sortStored ? sortKey : fallback.sortKey,
+    sortDir: sortStored ? sortDir : fallback.sortDir,
+    // null = všechny tickery; jinak jen tvar symbolu (`shortString`, #554 L5)
+    ticker: raw.ticker === null ? null : shortString()(raw.ticker, '') || fallback.ticker,
+    stages: Array.isArray(stages)
+      ? USER_STAGES.filter((stage) => (stages as unknown[]).includes(stage))
+      : fallback.stages,
+    gate: raw.gate === null ? null : (libraryGateFilterOf(raw.gate) ?? fallback.gate),
+    query: typeof raw.query === 'string' ? raw.query.slice(0, LIBRARY_QUERY_MAX) : fallback.query,
+    netPositive: typeof raw.netPositive === 'boolean' ? raw.netPositive : fallback.netPositive,
+  }
 }
 
 /** Odpověď API s chybou → čitelný text (detail je string, u pydantic pole). */

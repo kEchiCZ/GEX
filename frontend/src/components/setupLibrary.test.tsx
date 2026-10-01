@@ -40,8 +40,13 @@ const ES_T7: LibraryCell = {
   gate_lb: -0.11,
   avg_r: 0.1,
   avg_net_r: -0.13,
-  n_needed: 456,
-  sessions_to_decision: 40,
+  // Průkaznost 192/600 = 0,32 < NQ T7 163/462 = 0,35 — server řadí NQ T7 první
+  n_needed: 600,
+  // Tempo 192/16 = 12 za seanci: okno 60 seancí pojme 720 ≥ 600, odhad ⌈408/12⌉
+  sessions: 16,
+  per_session: 12,
+  window_capacity: 720,
+  sessions_to_decision: 34,
 }
 
 const NQ_T4: LibraryCell = {
@@ -197,6 +202,21 @@ function renderLibrary() {
   )
 }
 
+/** ØR hrubě a čistě řádku (dva sloupce, ať jde řadit podle každého). */
+function evidence(row: HTMLElement) {
+  return ['ØR hrubě', 'ØR čistě'].map(
+    (label) => row.querySelector(`td[data-label="${label}"]`)?.textContent,
+  )
+}
+
+function rowIds() {
+  return screen.getAllByTestId(/^library-row-/).map((row) => row.dataset.testid)
+}
+
+function header(name: string) {
+  return screen.getByRole('columnheader', { name })
+}
+
 function stageCalls(fetchMock: ReturnType<typeof mockApi>) {
   const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit | undefined]>
   return calls
@@ -213,7 +233,7 @@ test('Knihovna: buňky v pořadí serveru, sloupce důkazu a stav brzd i zkouše
   const fetchMock = mockApi()
   renderLibrary()
   const rows = await screen.findAllByTestId(/^library-row-/)
-  // Řadí server (průkaznost) — UI pořadí nemění
+  // Výchozí řazení = průkaznost sestupně, tedy pořadí serveru
   expect(rows.map((row) => row.dataset.testid)).toEqual([
     'library-row-NQ:trend_continuation',
     'library-row-ES:trend_continuation',
@@ -224,13 +244,13 @@ test('Knihovna: buňky v pořadí serveru, sloupce důkazu a stav brzd i zkouše
   expect(nq.getByRole('button', { name: /Stádium T7 Pokračování trendu · NQ: Auto/ })).toBeDefined()
   expect(rows[0].textContent).toContain('✕ block')
   expect(rows[0].textContent).toContain('LB -0.14')
-  expect(rows[0].textContent).toContain('+0.09 / +0.03')
+  expect(evidence(rows[0])).toEqual(['+0.09', '+0.03'])
   expect(rows[0].textContent).toContain('163 / 462')
   expect(rows[0].textContent).toContain('~46 seancí')
   // Stín uživatele a běžící zkouška s čerpáním; vzácná šablona: okno brány
   // vzorek nepojme, takže žádný odhad v seancích
   expect(rows[1].textContent).toContain('Stín')
-  expect(rows[1].textContent).toContain('+0.10 / -0.13')
+  expect(evidence(rows[1])).toEqual(['+0.10', '-0.13'])
   expect(rows[2].textContent).toContain('Zkouška')
   expect(rows[2].textContent).toContain('3/10 · -1.0 z -3.0 R')
   expect(rows[2].textContent).toContain('· 12/30')
@@ -253,6 +273,129 @@ test('Knihovna: buňky v pořadí serveru, sloupce důkazu a stav brzd i zkouše
       true,
     ),
   )
+})
+
+test('řazení: klik na záhlaví řadí vzestupně, další sestupně, aria-sort, mobil výběrem', async () => {
+  mockApi()
+  renderLibrary()
+  await screen.findAllByTestId(/^library-row-/)
+  // Výchozí: Průkaznost sestupně, ostatní sloupce aria-sort nemají
+  expect(header('Průkaznost').getAttribute('aria-sort')).toBe('descending')
+  expect(header('Ticker').hasAttribute('aria-sort')).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Ticker' }))
+  expect(header('Ticker').getAttribute('aria-sort')).toBe('ascending')
+  expect(header('Průkaznost').hasAttribute('aria-sort')).toBe(false)
+  // Shoda (dvakrát NQ) drží pořadí serveru
+  expect(rowIds()).toEqual([
+    'library-row-ES:trend_continuation',
+    'library-row-NQ:trend_continuation',
+    'library-row-NQ:gamma_momentum',
+  ])
+  fireEvent.click(screen.getByRole('button', { name: 'Ticker' }))
+  expect(header('Ticker').getAttribute('aria-sort')).toBe('descending')
+  expect(rowIds()).toEqual([
+    'library-row-NQ:trend_continuation',
+    'library-row-NQ:gamma_momentum',
+    'library-row-ES:trend_continuation',
+  ])
+  // Rozhodnutelné: NQ T4 „v okně nedosáhne" je nejdál — vzestupně poslední, sestupně první
+  fireEvent.click(screen.getByRole('button', { name: 'Rozhodnutelné' }))
+  expect(rowIds()).toEqual([
+    'library-row-ES:trend_continuation',
+    'library-row-NQ:trend_continuation',
+    'library-row-NQ:gamma_momentum',
+  ])
+  fireEvent.click(screen.getByRole('button', { name: 'Rozhodnutelné' }))
+  expect(rowIds()).toEqual([
+    'library-row-NQ:gamma_momentum',
+    'library-row-NQ:trend_continuation',
+    'library-row-ES:trend_continuation',
+  ])
+  // Mobil: totéž výběrem (záhlaví je na kartách skryté) a tlačítkem směru
+  const sortSelect = screen.getByRole('combobox', { name: 'Řadit podle' }) as HTMLSelectElement
+  expect(sortSelect.value).toBe('decision')
+  fireEvent.change(sortSelect, { target: { value: 'avgNetR' } })
+  expect(header('ØR čistě').getAttribute('aria-sort')).toBe('ascending')
+  expect(rowIds()[0]).toBe('library-row-ES:trend_continuation')
+  fireEvent.click(screen.getByRole('button', { name: 'Směr řazení: vzestupně' }))
+  expect(header('ØR čistě').getAttribute('aria-sort')).toBe('descending')
+  expect(rowIds()[2]).toBe('library-row-ES:trend_continuation')
+})
+
+test('filtry: ticker, stádium, brána, hledání a ØR čistě > 0 zúží řádky, Zrušit filtry vrátí vše', async () => {
+  mockApi()
+  renderLibrary()
+  await screen.findAllByTestId(/^library-row-/)
+  const count = screen.getByTestId('library-count')
+  const clear = screen.getByRole('button', { name: 'Zrušit filtry' }) as HTMLButtonElement
+  expect(count.textContent).toBe('zobrazeno 3 z 3')
+  expect(clear.disabled).toBe(true)
+  // Stádium: vícenásobný výběr, platné stádium
+  const stages = screen.getByRole('group', { name: 'Stádium' })
+  fireEvent.click(within(stages).getByRole('button', { name: 'Stín' }))
+  expect(rowIds()).toEqual(['library-row-ES:trend_continuation'])
+  expect(within(stages).getByRole('button', { name: 'Stín' }).getAttribute('aria-pressed')).toBe(
+    'true',
+  )
+  fireEvent.click(within(stages).getByRole('button', { name: 'Zkouška' }))
+  expect(rowIds()).toEqual(['library-row-ES:trend_continuation', 'library-row-NQ:gamma_momentum'])
+  expect(count.textContent).toBe('zobrazeno 2 z 3')
+  expect(clear.disabled).toBe(false)
+  fireEvent.click(clear)
+  expect(count.textContent).toBe('zobrazeno 3 z 3')
+  // Ticker ze seznamu tickerů v datech
+  const ticker = screen.getByRole('combobox', { name: 'Ticker' }) as HTMLSelectElement
+  expect([...ticker.options].map((option) => option.value)).toEqual(['', 'ES', 'NQ'])
+  fireEvent.change(ticker, { target: { value: 'NQ' } })
+  expect(rowIds()).toEqual(['library-row-NQ:trend_continuation', 'library-row-NQ:gamma_momentum'])
+  // Brána: nedostatek vzorku
+  fireEvent.change(screen.getByRole('combobox', { name: 'Brána' }), {
+    target: { value: 'insufficient' },
+  })
+  expect(rowIds()).toEqual(['library-row-NQ:gamma_momentum'])
+  fireEvent.click(clear)
+  // Hledání bez diakritiky a jen kladné ØR čistě
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Hledat v názvu setupu' }), {
+    target: { value: 'pokracovani' },
+  })
+  expect(rowIds()).toEqual([
+    'library-row-NQ:trend_continuation',
+    'library-row-ES:trend_continuation',
+  ])
+  fireEvent.click(screen.getByRole('checkbox', { name: 'jen ØR čistě > 0' }))
+  expect(rowIds()).toEqual(['library-row-NQ:trend_continuation'])
+  // Nic neprojde → hláška místo prázdné tabulky, filtry zůstávají k zrušení
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Hledat v názvu setupu' }), {
+    target: { value: 'spring' },
+  })
+  expect(screen.getByTestId('library-filtered-empty')).toBeDefined()
+  expect(screen.queryByRole('table')).toBeNull()
+  expect(count.textContent).toBe('zobrazeno 0 z 3')
+  fireEvent.click(clear)
+  expect(rowIds()).toHaveLength(3)
+})
+
+test('řazení a filtry přežijí remount z localStorage, rozbitý záznam = výchozí pohled', async () => {
+  mockApi()
+  const first = renderLibrary()
+  await screen.findAllByTestId(/^library-row-/)
+  fireEvent.click(screen.getByRole('button', { name: 'Setup' }))
+  fireEvent.change(screen.getByRole('combobox', { name: 'Ticker' }), { target: { value: 'NQ' } })
+  expect(rowIds()).toEqual(['library-row-NQ:gamma_momentum', 'library-row-NQ:trend_continuation'])
+  first.unmount()
+  mockApi()
+  const second = renderLibrary()
+  await screen.findAllByTestId(/^library-row-/)
+  expect(rowIds()).toEqual(['library-row-NQ:gamma_momentum', 'library-row-NQ:trend_continuation'])
+  expect(header('Setup').getAttribute('aria-sort')).toBe('ascending')
+  expect((screen.getByRole('combobox', { name: 'Ticker' }) as HTMLSelectElement).value).toBe('NQ')
+  second.unmount()
+  window.localStorage.setItem('gexlens.setupLibraryView', '{rozbité')
+  mockApi()
+  renderLibrary()
+  await screen.findAllByTestId(/^library-row-/)
+  expect(header('Průkaznost').getAttribute('aria-sort')).toBe('descending')
+  expect(screen.getByTestId('library-count').textContent).toBe('zobrazeno 3 z 3')
 })
 
 test('dialog: bez důvodu nejde uložit, čip důvod doplní, Stín se uloží jen s buňkou a důvodem', async () => {

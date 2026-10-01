@@ -2041,12 +2041,22 @@ a můžeš vrátit.
 | **Ticker** | ticker z watchlistu (vč. pinovaného kontraktu) |
 | **Stádium** | Auto / Stín / Zkouška; u zkoušky čerpání „3/10 · -1.0 z -3.0 R“. Skončená zkouška se hlásí jako „Auto (zkouška vyčerpána)“ nebo „Auto (zkouška skončila)“ po změně mechaniky. Klik otevře dialog změny |
 | **Brána teď** | verdikt spočítaný **teď** týmiž funkcemi jako engine: ✓ pass, ✕ block, „· 24/30“ = nedostatek vzorku (n z minima), plus dolní mez ØR (LB) |
-| **ØR hrubě / čistě** | průměrný výsledek v R ze vzorku brány; čistě = po nákladech 1 mikra (komise + skluz 1 tick na stranu, ADR-0030). Krátký stop zvedá náklad v R — na ES může kladné hrubé ØR čistě klesnout pod nulu. Tooltip ukáže i **čistě v $**: součet za vzorek v reálných mikro dolarech při skutečném sizingu (kontrakty z kontextu setupu) — kladné R může v dolarech prodělat |
+| **ØR hrubě**, **ØR čistě** | dva sloupce: průměrný výsledek v R ze vzorku brány; čistě = po nákladech 1 mikra (komise + skluz 1 tick na stranu, ADR-0030). Krátký stop zvedá náklad v R — na ES může kladné hrubé ØR čistě klesnout pod nulu. Tooltip ukáže i **čistě v $**: součet za vzorek v reálných mikro dolarech při skutečném sizingu (kontrakty z kontextu setupu) — kladné R může v dolarech prodělat |
 | **Průkaznost** | n / n potřebné — kolik vzorků by prokázalo edge +0,2 R (jednostranně 95 %, síla 80 %); n potřebné nikdy neklesne pod minimum brány (30). Pod minimem se samými stejnými výsledky (dva stopy po −1 R) se neodhaduje — „—“ |
 | **Rozhodnutelné** | za kolik seancí buňka při dnešním tempu vzorek nasbírá; „vzorek stačí“ = už ho má; **„v okně nedosáhne · max ~337/462“** = brána bere jen posledních 60 seancí, takže při dnešním tempu se do ní vejde nejvýš ~337 vzorků z potřebných 462 — edge +0,2 R brána neprokáže nikdy (rozhodne jen větší edge); „málo dat“ = n potřebné nejde odhadnout |
 
-Řádky jsou **seřazené podle průkaznosti**, ne podle ØR: malý vzorek s vysokým
-ØR je náhoda, ne edge. Tooltipy u čísel ukazují vzorec a vstupy. Pod tabulkou
+Ve výchozím stavu jsou řádky **seřazené podle průkaznosti**, ne podle ØR: malý vzorek
+s vysokým ØR je náhoda, ne edge. Klik na záhlaví sloupce řadí vzestupně, další klik
+sestupně; na mobilu, kde záhlaví chybí, se řadí výběrem **Řadit** a tlačítkem směru ▲/▼.
+Buňky bez hodnoty („—“, „málo dat“, brána „vypnuta“) jsou v obou směrech na konci.
+**Brána teď** řadí podle verdiktu (block → nedostatek vzorku → pass) a uvnitř verdiktu
+podle LB; buňka bez LB je poslední ve svém verdiktu. V **Rozhodnutelné** je
+„v okně nedosáhne“ nejdál od rozhodnutí — vzestupně za všemi odhady, sestupně první.
+Filtry nad tabulkou zúží buňky podle tickeru, stádia (toho, které se teď uplatní —
+skončená zkouška je Auto), brány, názvu setupu nebo na **jen ØR čistě > 0**
+(„zobrazeno N z M“; **Zrušit filtry** vrátí všechny buňky a řazení nechá). Řazení
+i filtry si pamatuje tento prohlížeč — na mobilu je nastavení zvlášť.
+Tooltipy u čísel ukazují vzorec a vstupy. Pod tabulkou
 jsou vyjmenované vyřazené šablony (`disabled_templates`), které se neměří vůbec.
 Na úzké obrazovce (mobil) se řádky skládají do karet s popisky místo sloupců.
 
