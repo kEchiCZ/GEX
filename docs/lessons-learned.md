@@ -185,9 +185,14 @@ chyb**, hlavně diagnostických a provozních.
   a odpoledne (ES 14:43–15:16, NQ 14:42–15:18) se skokem o basis. Zapsalo je doplnění před stráží
   kontraktu #1232. Stráž chrání jen nové zápisy, staré partice nikdo neprošel. Odhalil to přepočet setupu ES 1068 („skok ceny … jiný kontrakt?“),
   potvrdil sken skoků close > 0,4 % mezi sousedními bary. Bary IBKR historical U6 seděly na živé minuty
-  s mediánem odchylky 0,000 %.
+  s mediánem odchylky 0,000 %. Bloky přepsala volba `--replace-wrong-contract` (jen `ibkr_hist`
+  mimo toleranci od ověřeného staženého baru); přepočet pak u ES 1068 i NQ 1064 potvrdil stop,
+  opravil se jen čas uzavření.
   Medián odchylky přes celý den navíc pustí partici, ve které engine během dne přepnul kontrakt,
-  proto oprava dne ověřuje kontrakt i po blocích (nejbližší měřená minuta po obou stranách bloku).
+  proto oprava dne ověřuje kontrakt i po blocích: nejbližší měřená minuta **téže seance** po stranách
+  bloku. Roll přichází s novým discovery (restart, nová seance), takže minuta za denní pauzou o kontraktu
+  bloku nic neříká; první verze ji brala a na rolovací den by přepsala správné bary nové seance.
+  Přepis dat, která v partici jsou, potřebuje ověřenou minutu po obou stranách, doplnění díry stačí jedna.
   → Konvenci původu dat a zápisovou stráž držet v **jedné funkci**, kterou volají engine i skripty
   (cesta `--days` skriptu teď bere `UnderlyingBackfiller.backfill_day` + `contract_mismatch`;
   hluboký backfill bez `--days` razí `ibkr_hist`, ale stráž kontraktu zatím nemá). Po zavedení

@@ -13,8 +13,9 @@ jedno (okna reakcí jsou minutová, basis rozdíl kontraktů se krátí).
 
 Modul drží čisté plánování a bucketování (golden testy, pravidlo 3);
 síťový runner je ve `scripts/backfill_bars.py`. Týž runner umí i opravu
-existujících dnů (#1320): doplnit chybějící minuty a nahradit rekonstrukci
-`tasty_candle` barem IBKR historical — plán dne skládá `plan_day_refill`.
+existujících dnů (#1320): doplnit chybějící minuty, nahradit rekonstrukci
+`tasty_candle` barem IBKR historical a přepsat dřívější doplnění `ibkr_hist`
+z jiného kontraktu — plán dne skládá `plan_day_refill`.
 """
 
 import datetime as dt
@@ -23,10 +24,20 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-from gexlens_engine.compute.settle import QUARTER_MONTHS, is_trading_session, quarterly_expiry
+from gexlens_engine.compute.settle import (
+    QUARTER_MONTHS,
+    is_trading_session,
+    quarterly_expiry,
+    trading_session_date,
+)
 from gexlens_engine.ibkr.underlying import BACKFILL_CONTRACT_TOLERANCE, Bar
-from gexlens_engine.storage.parquet_store import BAR_SOURCE_RECONSTRUCTED
+from gexlens_engine.storage.parquet_store import (
+    BAR_SOURCE_HISTORICAL,
+    BAR_SOURCE_RECONSTRUCTED,
+    StoredBar,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -176,18 +187,40 @@ def contract_candidates(day: dt.date) -> list[str]:
     return candidates
 
 
+#: Proč se blok nezapíše: `no_edge` = po žádné straně měřená minuta téže
+#: seance (kontrakt nejde ověřit), `mismatch` = měřená minuta vedle bloku nesedí
+#: na stažený kontrakt, `one_edge` = přepis `ibkr_hist` má měřenou minutu téže
+#: seance jen po jedné straně (engine mohl za ní přepnout kontrakt)
+RejectReason = Literal["no_edge", "mismatch", "one_edge"]
+
+
 @dataclass(frozen=True)
 class RejectedBlock:
-    """Souvislý blok minut, který se nezapíše — kontrakt na okraji nesedí (#1320).
+    """Souvislý blok minut, který se nezapíše — kontrakt bloku nejde ověřit (#1320).
 
     `deviation` = největší odchylka po stranách bloku (None = na žádné straně
-    měřená minuta, kontrakt nejde ověřit).
+    měřená minuta téže seance).
     """
 
     start: dt.datetime
     end: dt.datetime
     minutes: int
     deviation: float | None
+    reason: RejectReason
+
+
+@dataclass(frozen=True)
+class RewrittenBlock:
+    """Souvislý blok minut `ibkr_hist`, které nesedí na ověřený kontrakt a přepíší se (#1320).
+
+    `deviation` = největší odchylka close uložené minuty od staženého baru
+    v bloku (u baru jiného kontraktu zhruba basis mezi kontrakty).
+    """
+
+    start: dt.datetime
+    end: dt.datetime
+    minutes: int
+    deviation: float
 
 
 @dataclass(frozen=True)
@@ -198,7 +231,8 @@ class DayRefill:
     filled: int  # minuty, které v partici chyběly
     replaced: int  # minuty `tasty_candle` nahrazené barem IBKR historical
     tasty_left: int  # minuty `tasty_candle`, které v partici po zápisu zůstanou
-    rejected: list[RejectedBlock]  # bloky, na jejichž okraji kontrakt nesedí
+    rejected: list[RejectedBlock]  # bloky, jejichž kontrakt nejde ověřit (`RejectReason`)
+    rewritten: list[RewrittenBlock]  # bloky `ibkr_hist` jiného kontraktu, které se přepíší
 
 
 def _blocks(bars: Sequence[Bar]) -> list[list[Bar]]:
@@ -218,85 +252,151 @@ def _edge_deviations(
     measured: Mapping[dt.datetime, float],
     incoming: Mapping[dt.datetime, Bar],
 ) -> list[float]:
-    """Odchylka staženého kontraktu od měřeného po obou stranách bloku.
+    """Odchylka staženého kontraktu od měřeného po stranách bloku, jen v téže seanci.
 
     `pairs` = seřazené minuty, které partice má změřené a stažený den je má
     také. Na každé straně bloku se vezme nejbližší z nich a porovná se close
     **téže** minuty — pohyb trhu se do porovnání nepřimíchá, takže na
-    vzdálenosti od bloku nezáleží. Kořenový ticker přepíná kontrakt jen rollem
+    vzdálenosti od bloku nezáleží. Počítá se jen minuta ze seance
+    (`trading_session_date`) krajní minuty bloku: roll se projeví až novým
+    discovery (restart, nová seance), takže měřená minuta za denní pauzou
+    o kontraktu bloku nic neříká. Kořenový ticker přepíná kontrakt jen rollem
     dopředu (pinovaný kontrakt má vlastní ticker, ADR-0041), takže sedí-li obě
     strany, sedí i blok mezi nimi.
-    Strana bez takové minuty (začátek dne, denní pauza) do výsledku nepřispěje.
+    Strana bez měřené minuty téže seance (začátek dne, denní pauza) do výsledku
+    nepřispěje — výsledek má 0–2 prvky, po jednom za stranu.
     """
     deviations: list[float] = []
-    before = bisect_left(pairs, block[0].ts)
+    before = bisect_left(pairs, block[0].ts) - 1
     after = bisect_right(pairs, block[-1].ts)
-    for index in (before - 1, after):
-        if 0 <= index < len(pairs):
-            ts = pairs[index]
-            deviations.append(abs(incoming[ts].close - measured[ts]) / measured[ts])
+    for index, edge in ((before, block[0].ts), (after, block[-1].ts)):
+        if not 0 <= index < len(pairs):
+            continue
+        ts = pairs[index]
+        if trading_session_date(ts) != trading_session_date(edge):
+            continue
+        deviations.append(abs(incoming[ts].close - measured[ts]) / measured[ts])
     return deviations
 
 
+def _reject_reason(
+    deviations: Sequence[float], *, rewrite: bool, tolerance: float
+) -> RejectReason | None:
+    """Proč blok nezapsat; None = kontrakt bloku je ověřený a blok se zapíše.
+
+    Doplnění díry nebo rekonstrukce stačí měřená minuta téže seance po jedné
+    straně (jako doplňování z #1348). Přepis dřívějšího doplnění `ibkr_hist`
+    (`rewrite`) mění data, která v partici jsou a mohou být správná — engine
+    mohl za jedinou ověřenou stranou přepnout kontrakt — proto potřebuje obě.
+    """
+    if not deviations:
+        return "no_edge"
+    if max(deviations) > tolerance:
+        return "mismatch"
+    if rewrite and len(deviations) < 2:
+        return "one_edge"
+    return None
+
+
+def _wrong_contract_deviation(stored: StoredBar, bar: Bar, tolerance: float) -> float | None:
+    """Odchylka uložené minuty `ibkr_hist` od ověřeného baru, je-li mimo toleranci.
+
+    None = minuta sedí (nebo nejde porovnat) a zůstane. Měřené minuty a
+    rekonstrukce se tudy neposuzují — jen dřívější doplnění z IBKR historical.
+    """
+    if stored.source != BAR_SOURCE_HISTORICAL or bar.close <= 0:
+        return None
+    deviation = abs(stored.close - bar.close) / bar.close
+    return deviation if deviation > tolerance else None
+
+
 def plan_day_refill(
-    existing: Mapping[dt.datetime, str | None],
+    existing: Mapping[dt.datetime, StoredBar],
     incoming: Iterable[Bar],
     *,
     measured: Mapping[dt.datetime, float],
     replace_tasty: bool,
+    replace_wrong_contract: bool = False,
     tolerance: float = BACKFILL_CONTRACT_TOLERANCE,
 ) -> DayRefill:
     """Které bary IBKR historical zapsat do partice, která už existuje (#1320).
 
-    `existing` = minuta → `source` z partice (NULL = živá cesta), `measured` =
-    close měřených minut téže partice (`SnapshotWriter.measured_bar_closes`),
-    `incoming` = bary IBKR historical téhož dne z jednoho kontraktu. Kandidát
-    k zápisu je minuta, která v partici chybí, a s `replace_tasty` i minuta
-    rekonstruovaná z dxFeed (`tasty_candle`). Měřenou minutu (`ibkr`, NULL) ani
-    dřívější doplnění (`ibkr_hist`) plán nepřepíše; `SnapshotWriter.write_bars`
+    `existing` = minuta → uložený bar partice (`source` NULL = živá cesta),
+    `measured` = close měřených minut téže partice
+    (`SnapshotWriter.measured_bar_closes`), `incoming` = bary IBKR historical
+    téhož dne z jednoho kontraktu. Kandidát k zápisu je minuta, která v partici
+    chybí, s `replace_tasty` i minuta rekonstruovaná z dxFeed (`tasty_candle`)
+    a s `replace_wrong_contract` i dřívější doplnění (`ibkr_hist`), jehož close
+    se od staženého baru liší o víc než `tolerance` — bar jiného kontraktu
+    zapsaný před stráží #1232. `ibkr_hist` v toleranci zůstává. Měřenou minutu
+    (`ibkr`, NULL) plán nepřepíše nikdy; `SnapshotWriter.write_bars`
     (`bar_source_rank`) to pak hlídá ještě jednou. Časy jsou v UTC na obou stranách.
 
     Kontrakt dne vybírá medián přes celý den (`contract_mismatch`), a ten
     projde i partici, ve které engine během dne přepnul kontrakt (roll se
     projeví až novým discovery — restart, nová seance). Proto se kandidáti
-    zapisují po souvislých blocích a každý blok musí po obou stranách sedět na
-    nejbližší měřené minuty v toleranci `tolerance` (`_edge_deviations`); blok,
-    který nesedí nebo nemá na žádné straně měřenou minutu, se nezapíše a vrátí
-    se v `rejected`.
+    zapisují po souvislých blocích a každý blok musí sedět na nejbližší měřené
+    minuty téže seance po stranách v toleranci `tolerance` (`_edge_deviations`).
+    Blok bez měřené minuty téže seance, blok vedle jiného kontraktu a blok
+    s přepisem `ibkr_hist`, který má měřenou minutu téže seance jen po jedné
+    straně (`_reject_reason`), se nezapíše a vrátí se v `rejected`. Plán je
+    idempotentní: po zápisu nesou přepsané minuty close staženého baru
+    a podruhé už kandidáty nejsou.
     """
     by_ts = {bar.ts: bar for bar in incoming}
     pairs = sorted(ts for ts, close in measured.items() if close > 0 and ts in by_ts)
-    candidates = [
-        bar
-        for ts, bar in sorted(by_ts.items())
-        if ts not in existing or (replace_tasty and existing[ts] == BAR_SOURCE_RECONSTRUCTED)
-    ]
+    wrong: dict[dt.datetime, float] = {}
+    candidates: list[Bar] = []
+    for ts, bar in sorted(by_ts.items()):
+        stored = existing.get(ts)
+        if stored is None or (replace_tasty and stored.source == BAR_SOURCE_RECONSTRUCTED):
+            candidates.append(bar)
+        elif replace_wrong_contract:
+            deviation = _wrong_contract_deviation(stored, bar, tolerance)
+            if deviation is not None:
+                wrong[ts] = deviation
+                candidates.append(bar)
     bars: list[Bar] = []
     rejected: list[RejectedBlock] = []
     for block in _blocks(candidates):
         deviations = _edge_deviations(block, pairs, measured, by_ts)
-        if not deviations or max(deviations) > tolerance:
+        reason = _reject_reason(
+            deviations, rewrite=any(bar.ts in wrong for bar in block), tolerance=tolerance
+        )
+        if reason is not None:
             rejected.append(
                 RejectedBlock(
                     start=block[0].ts,
                     end=block[-1].ts,
                     minutes=len(block),
                     deviation=max(deviations) if deviations else None,
+                    reason=reason,
                 )
             )
             continue
         bars.extend(block)
     filled = sum(1 for bar in bars if bar.ts not in existing)
+    rewritten_bars = [bar for bar in bars if bar.ts in wrong]
     covered = {bar.ts for bar in bars}
     tasty_left = sum(
         1
-        for ts, source in existing.items()
-        if source == BAR_SOURCE_RECONSTRUCTED and ts not in covered
+        for ts, stored in existing.items()
+        if stored.source == BAR_SOURCE_RECONSTRUCTED and ts not in covered
     )
+    rewritten = [
+        RewrittenBlock(
+            start=block[0].ts,
+            end=block[-1].ts,
+            minutes=len(block),
+            deviation=max(wrong[bar.ts] for bar in block),
+        )
+        for block in _blocks(rewritten_bars)
+    ]
     return DayRefill(
         bars=bars,
         filled=filled,
-        replaced=len(bars) - filled,
+        replaced=len(bars) - filled - len(rewritten_bars),
         tasty_left=tasty_left,
         rejected=rejected,
+        rewritten=rewritten,
     )
