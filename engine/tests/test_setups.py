@@ -750,6 +750,87 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     assert reviewed["user_note"] == "vyšlo přesně podle predikce"
 
 
+def _bare_engine(tmp_path: Path) -> tuple[SetupEngine, SetupsRepository, FakeRuntime]:
+    repository = SetupsRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 's.sqlite'}"))
+    repository.ensure_schema()
+    oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
+    oi_repo.ensure_schema()
+    engine = SetupEngine(
+        symbol="ES", repository=repository, oi_repository=oi_repo, publisher=RecordingPublisher()
+    )
+    return engine, repository, FakeRuntime()
+
+
+async def _warmup_and_break(engine: SetupEngine, fake: FakeRuntime) -> None:
+    """30 klidných minut s rostoucí CumΔ + průraz 7500 (dno 7494) v minutě 30.
+
+    Cyklus minuty N nese bar N−1 (jako produkce); reclaim přijde v minutě 31.
+    """
+    runtime = cast(EngineRuntime, fake)
+
+    def bar(idx: int, o: float, h: float, low: float, c: float) -> Bar:
+        ts = TS + dt.timedelta(minutes=idx - 1)
+        return Bar(ts=ts, open=o, high=h, low=low, close=c, volume=100.0)
+
+    for i in range(30):
+        fake.last_flow = FakeFlow(float(i * 10))
+        await engine.on_minute(
+            TS + dt.timedelta(minutes=i), 7505, [bar(i, 7505, 7506, 7504, 7505)], runtime
+        )
+    fake.last_flow = FakeFlow(310.0)
+    await engine.on_minute(
+        TS + dt.timedelta(minutes=30), 7496, [bar(30, 7500, 7500, 7494, 7496)], runtime
+    )
+
+
+async def test_setup_engine_minuta_bez_baru_setup_nevytvori(tmp_path: Path) -> None:
+    """#1346: dávka bez baru = žádná detekce; spot (zamrzlý) nevstoupí ani do historie.
+
+    Kontrola: tentýž reclaim jako bar (test níže) setup vytvoří — spot 7501
+    by dřív dal O = H = L = C = 7501 a setup nad cenou, kterou trh neměl
+    (ES 1004, NQ 1048, ES 1049).
+    """
+    engine, repository, fake = _bare_engine(tmp_path)
+    runtime = cast(EngineRuntime, fake)
+    await _warmup_and_break(engine, fake)
+    history = len(engine._history)
+
+    fake.last_flow = FakeFlow(320.0)
+    for i in range(31, 45):  # výpadek streamu: spot stojí na „reclaimu“ 14 minut
+        await engine.on_minute(TS + dt.timedelta(minutes=i), 7501, [], runtime)
+
+    assert repository.active_for("ES") == []
+    assert len(engine._history) == history
+
+
+async def test_setup_engine_opozdeny_bar_detekuje_dalsi_minuta(tmp_path: Path) -> None:
+    """#1346: bar, který do cyklu nestihl dorazit, přijde v další dávce a detekce
+    proběhne nad ním — vstup = close posledního baru, ne spot minuty bez baru."""
+    engine, repository, fake = _bare_engine(tmp_path)
+    runtime = cast(EngineRuntime, fake)
+    await _warmup_and_break(engine, fake)
+
+    fake.last_flow = FakeFlow(320.0)
+    await engine.on_minute(TS + dt.timedelta(minutes=31), 7499, [], runtime)  # bar 30 nestihl
+    assert repository.active_for("ES") == []
+
+    late = Bar(
+        ts=TS + dt.timedelta(minutes=30), open=7496, high=7502, low=7495, close=7500, volume=1.0
+    )
+    current = Bar(
+        ts=TS + dt.timedelta(minutes=31), open=7500, high=7502, low=7499, close=7501, volume=1.0
+    )
+    await engine.on_minute(TS + dt.timedelta(minutes=32), 7501, [late, current], runtime)
+
+    active = repository.active_for("ES")
+    assert len(active) == 1
+    assert active[0].template == "failed_break"
+    assert active[0].entry == 7501
+    assert active[0].stop == 7493  # dno průrazu 7494 − 1
+    context = repository.list_for("ES")[0]["context"]
+    assert context["entry_bar_ts"] == current.ts.isoformat()
+
+
 async def test_setup_engine_counter_stop_cooldown(tmp_path: Path) -> None:
     """#252 C: stop kontra-setupu → další kontra pokus téže šablony až za 45 min."""
     db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'setups.sqlite'}")

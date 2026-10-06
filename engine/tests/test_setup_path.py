@@ -205,13 +205,11 @@ def test_novy_setup_nad_barem_19_59_konci_timeoutem_za_jeho_close() -> None:
     „žádný bar“), přitom bar vstupu v settle končí.
     """
     entry_bar = bar(SETTLE - MINUTE, high=ENTRY + 3, low=ENTRY - 3, close=ENTRY)
-    state = SetupEngine._new_path(SETTLE, entry_bar)
+    state = SetupEngine._new_path(entry_bar)
     assert state == PathState(last_ts=entry_bar.ts, last_close=ENTRY)
     result = walk([entry_bar], state, now=SETTLE + MINUTE)
     assert result.outcome is Outcome.TIMEOUT
     assert result.exit_price == ENTRY and result.closed_ts == SETTLE
-    # Dávka bez baru = setup nad spotem: za minutou N−1 jako dřív
-    assert SetupEngine._new_path(SETTLE, None) == path_start(SETTLE)
 
 
 # ── SetupEngine: živý běh ─────────────────────────────────────────────────

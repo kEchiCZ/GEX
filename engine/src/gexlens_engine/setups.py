@@ -1,10 +1,11 @@
 """SetupEngine (ADR-0004): stavová orchestrace detektoru nad běžící pipeline.
 
-Každou minutu po cyklu aktivní expirace: sestaví MinuteInputs (bar podkladu,
+Každou minutu po cyklu aktivní expirace: sestaví MinuteInputs (bary dávky cyklu,
 GEX úrovně z posledního cyklu, toky z rozdílu kumulativních volume, Max Pain
 z OI archivu), spustí čisté detektory, hlídá anti-spam, ukládá setupy do PG,
 vyhodnocuje otevřené po cestě ceny (bary v pořadí, díry si vyžádá z IBKR
 historical a čte z partic, #1320) a publikuje alerty + WS kanál setups.{symbol}.
+Dávka bez baru jen vyhodnotí otevřené setupy — spot do detekce nevstupuje (#1346).
 
 Selhání čehokoli tady nesmí shodit sběr dat — volající balí do try/except.
 """
@@ -255,7 +256,7 @@ class SetupEngine:
     @staticmethod
     def _stored_path(stored: StoredSetup) -> PathState:
         """Začátek cesty setupu z DB (#1320): bar vstupu z kontextu; starší
-        řádky a setupy nad spotem ho nemají — minuta před vznikem."""
+        řádky (před #1320, resp. nad spotem do #1346) ho nemají — minuta před vznikem."""
         if stored.entry_bar_ts is None:
             return path_start(_utc(stored.created_ts))
         return PathState(last_ts=_utc(stored.entry_bar_ts), last_close=stored.entry)
@@ -307,16 +308,14 @@ class SetupEngine:
         return call_flow, put_flow, raw
 
     @staticmethod
-    def _new_path(now: dt.datetime, entry_bar: Bar | None) -> PathState:
+    def _new_path(entry_bar: Bar) -> PathState:
         """Cesta nového setupu začíná za barem vstupu (#1320).
 
         Entry je close posledního baru dávky cyklu (`MinuteInputs.close`):
         obvykle N−1, opožděný cyklus nese i bar N a pozdější (NQ po ES, open
         seance), zpožděný stream jen N−2. Bary do baru vstupu včetně proběhly
-        před vstupem, pozdější patří cestě. Dávka bez baru = setup nad spotem,
-        cesta za minutou N−1 (`path_start`)."""
-        if entry_bar is None:
-            return path_start(now)
+        před vstupem, pozdější patří cestě. Dávka bez baru setup nevytvoří
+        (#1346), bar vstupu tedy existuje vždy."""
         return PathState(last_ts=entry_bar.ts, last_close=entry_bar.close)
 
     @staticmethod
@@ -334,18 +333,27 @@ class SetupEngine:
     async def on_minute(
         self, now: dt.datetime, spot: float, bars: list[Bar], runtime: EngineRuntime
     ) -> None:
+        if not bars:
+            # Dávka bez baru (#1346): minuta se přeskočí — žádná detekce, řádek
+            # historie ani feature logu. Spot místo baru jsou vymyšlená data:
+            # při výpadku streamu zamrzne a setupy vznikaly nad cenou, kterou
+            # trh neměl (ES 1004, NQ 1048, ES 1049). Opožděný bar přijde v další
+            # dávce a detekce proběhne nad ním (agregát dávky, vstup = close
+            # posledního baru); toky se nečtou, takže přírůstek volume připadne
+            # téže agregované minutě. Na doplnění z partic se nečeká: setup je
+            # živé upozornění, vstup za cenu několik minut starou nejde zadat.
+            # Otevřené setupy se vyhodnocují dál (díry řeší #1320).
+            await self._evaluate_open(now, bars)
+            return
         levels = runtime.last_levels
         flow = runtime.last_flow
         self._refresh_max_pain(runtime.expiry, now.date())
         call_flow, put_flow, raw_flow = self._flows(runtime)
 
-        if bars:
-            bar_open = bars[0].open
-            bar_high = max(b.high for b in bars)
-            bar_low = min(b.low for b in bars)
-            bar_close = bars[-1].close
-        else:
-            bar_open = bar_high = bar_low = bar_close = spot
+        bar_open = bars[0].open
+        bar_high = max(b.high for b in bars)
+        bar_low = min(b.low for b in bars)
+        bar_close = bars[-1].close
 
         minutes_left = self._minutes_to_expiry(runtime.expiry, now)
         # Dominance zdí (ADR-0010, #223) — LevelsRow ji nenese, čte se z plných levels
@@ -381,7 +389,7 @@ class SetupEngine:
 
         await self._evaluate_open(now, bars)
         # Bar vstupu = týž bar, jehož close je `inputs.close` (#1320)
-        await self._detect_new(now, runtime, inputs, bars[-1] if bars else None)
+        await self._detect_new(now, runtime, inputs, bars[-1])
 
     async def _log_features(
         self, now: dt.datetime, runtime: EngineRuntime, inputs: MinuteInputs
@@ -959,7 +967,7 @@ class SetupEngine:
         now: dt.datetime,
         runtime: EngineRuntime,
         inputs: MinuteInputs,
-        entry_bar: Bar | None = None,
+        entry_bar: Bar,
     ) -> None:
         # Invariant #1324: setup se vztahuje jen k živé expiraci. Pipeline roluje
         # na další expiraci až s novým UTC dnem (`expiry_expired`), takže mezi
@@ -1069,10 +1077,9 @@ class SetupEngine:
                 "confidence_template": candidate.confidence,
                 "confidence_source": source,
             }
-            if entry_bar is not None:
-                # Bar vstupu (#1320): odtud začíná cesta ceny po restartu
-                # i v offline přepočtu; chybí = setup vznikl nad spotem
-                context["entry_bar_ts"] = entry_bar.ts.isoformat()
+            # Bar vstupu (#1320): odtud začíná cesta ceny po restartu i v offline
+            # přepočtu; chybí jen u řádků před #1346, které mohly vzniknout nad spotem
+            context["entry_bar_ts"] = entry_bar.ts.isoformat()
             setup_id = self.repository.create(
                 symbol=self.symbol,
                 expiry=runtime.expiry,
@@ -1103,9 +1110,9 @@ class SetupEngine:
                         confidence=confidence,
                         reason=candidate.reason,
                         status="active",
-                        entry_bar_ts=entry_bar.ts if entry_bar is not None else None,
+                        entry_bar_ts=entry_bar.ts,
                     ),
-                    path=self._new_path(now, entry_bar),
+                    path=self._new_path(entry_bar),
                     counter=counter,
                     tradeable=tradeable,
                     gate_overridden=risk["gate_overridden"] is True,

@@ -341,3 +341,33 @@ zjistil (restart ve 20:50, pondělí po Labor Day, spot po settle nebo zamrzlý)
   vstup v barech minuty vzniku neleží (vznik nad zamrzlým spotem nebo mid
   kotací), se také nepřepisuje — výsledek od neexistující ceny opravou
   nezíská smysl; rozhodne uživatel podle reportu.
+
+## Dodatek 2026-10-06: setup vzniká jen nad barem (#1346)
+
+Když dávka minutového cyklu neměla bar, `SetupEngine.on_minute` sestavil
+`MinuteInputs` ze spotu (O = H = L = C = spot). Při výpadku streamu spot zamrzne
+a setupy vznikaly nad cenou, kterou trh v té minutě neměl: ES 1004 (3. 9., vstup
+= close baru 14:18, trh 7 710,5–7 714,75), NQ 1048 (8. 9., setup pod vlastním
+stopem), ES 1049 (close baru o 52 min starší).
+
+- **Minuta bez baru se pro detekci přeskočí.** Nevznikne setup, řádek historie
+  detektoru ani feature logu; toky se nečtou, takže přírůstek volume připadne
+  další minutě s barem. Otevřené setupy se vyhodnocují dál (dodatek #1320).
+  Pravidlo „spot se nehodnotí nikdy“ tím platí i pro vznik.
+- **Opožděný bar se zpracuje v další dávce**, ne zpětně. Varianty:
+  - *Odložit detekci minuty, než bar dorazí* (`request_bars`, partice): setup by
+    vznikl o minuty později se vstupem za cenu, která už neplatí — živé
+    upozornění, které nejde zadat, a v track recordu vstup, jaký by nikdo
+    nedostal. Navíc druhá cesta vzniku vedle živé dávky.
+  - *Přeskočit minutu* (zvoleno): bar, který do cyklu nestihl dorazit, přijde
+    v dávce dalšího cyklu a detekce proběhne nad agregátem dávky (open prvního
+    baru, high/low přes dávku, vstup = close posledního baru) — stejně jako
+    u opožděného cyklu, který nese víc barů. Při delším výpadku vznikne první
+    setup až nad prvním živým barem.
+  - *Spot jen když se v posledních N s pohnul* (návrh B v issue): pohyblivý spot
+    pořád není bar dané minuty (mid kotace, jiný okamžik) a práh N je další
+    ladicí parametr; zamítnuto.
+- Bez filtru podle seance: rozhoduje jen to, zda bar existuje.
+- **`SETUP_MECHANICS_VERSION` se nezvedá** — detekce nad minutou s barem se
+  nemění; setupy nad spotem jsou vadná data v5, ne jiná mechanika (zdůvodnění
+  u konstanty v `compute/setups.py`).
