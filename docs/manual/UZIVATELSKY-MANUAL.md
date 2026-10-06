@@ -1601,6 +1601,16 @@ vlastní expirace): N**, takže nic nezmizí potichu. Počet u přepínače
 **Včetně starší mechaniky (N)** zahrnuje všechny řádky starších verzí,
 i vyřazené.
 
+**Setupy nad zamrzlým spotem se do souhrnu nepočítají (#1346).** Při
+výpadku datového streamu stála cena a několik setupů vzniklo nad cenou, kterou
+trh v té minutě neměl (vstup mimo 1min bary — ES 1004, ES 1049, NQ 1048, 1184,
+1203). Od opravy #1346 takové setupy nevznikají; ty starší jsou trvale
+označené. V tabulce jsou ztlumené se štítkem **vstup mimo bary, mimo souhrn**,
+přepínač **Jen obchodovatelné v tabulce** je skryje a pod rozdělením se
+vypíše **Vyřazeno ze souhrnu (vstup mimo bary, zamrzlý spot): N**. Ze souhrnu,
+Knihovny, účtu, brzd, brány šablon, kalibrace confidence i kouče jsou
+vyřazené stejně jako setupy po settle; v databázi zůstávají.
+
 | Dlaždice | Co znamená |
 |---|---|
 | **Aktivní / Uzavřené** | běžící setupy / setupy s výsledkem (cíl, stop, timeout) |

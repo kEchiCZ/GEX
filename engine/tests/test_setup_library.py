@@ -85,6 +85,9 @@ def _facts() -> list[SetupFact]:
     after_settle = dt.datetime(2026, 9, 29, 21, 0, tzinfo=dt.UTC)
     facts.append(_fact(61, after_settle, outcome_r=5.0, expiry="20260929"))
     facts.append(_fact(62, old, symbol="RTY", outcome_r=5.0))
+    # … ani značka vyřazení (#1346, vznik nad zamrzlým spotem) v okně brány
+    frozen = dt.datetime(2026, 9, 28, 16, 0, tzinfo=dt.UTC)
+    facts.append(_fact(63, frozen, outcome_r=5.0, excluded="vstup_mimo_bary"))
     # NQ: jeden uzavřený T7 → ticker v okně, brána insufficient
     facts.append(
         _fact(

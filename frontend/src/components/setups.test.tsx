@@ -69,6 +69,7 @@ function summary(overrides: Record<string, unknown> = {}) {
     total_count: 1,
     legacy_count: 0,
     after_settle_count: 0,
+    excluded_count: 0,
     fee_per_contract_usd: 10,
     account_usd: 50000,
     unpriced_symbols: [],
@@ -629,6 +630,36 @@ test('setup vzniklý po settle je v tabulce označený a filtr obchodovatelných
   fireEvent.click(screen.getByTestId('setups-tradeable-only'))
   await waitFor(() => expect(screen.queryByTestId('after-settle-9')).toBeNull())
   expect(document.querySelectorAll('[data-part="risk"]').length).toBe(1)
+})
+
+test('setup se značkou vyřazení je ztlumený se štítkem, souhrn uvede počet (#1346)', async () => {
+  // Produkce: ES 1004 vznikl nad zamrzlým spotem — vstup mimo bary minuty vzniku
+  const context = {
+    contracts: 1,
+    max_loss_usd: 400,
+    fee_usd: 10,
+    affordable: true,
+    tradeable: true,
+    trade_block: null,
+  }
+  const live = { ...SETUP_ROW, id: 8, context, excluded: null }
+  const frozen = { ...live, id: 1004, excluded: 'vstup_mimo_bary' }
+  mockApi(
+    [live, frozen],
+    summary({ excluded_count: 1, all: CLOSED_ONE, shadow: { ...GROUP, count: 1 } }),
+  )
+  renderApp()
+  fireEvent.click(screen.getByRole('button', { name: 'Setupy' }))
+  const tag = await screen.findByTestId('excluded-1004')
+  expect(tag.textContent).toContain('vstup mimo bary')
+  expect(tag.getAttribute('title')).toContain('nevstupuje do souhrnu')
+  expect(screen.queryByTestId('excluded-8')).toBeNull()
+  expect(document.querySelectorAll('tr.setup-after-settle').length).toBe(1)
+  const note = await screen.findByTestId('setups-excluded')
+  expect(note.textContent).toContain('vstup mimo bary')
+  expect(note.textContent).toContain('1')
+  fireEvent.click(screen.getByTestId('setups-tradeable-only'))
+  await waitFor(() => expect(screen.queryByTestId('excluded-1004')).toBeNull())
 })
 
 test('souhrn ukazuje Zkoušku zvlášť a stín z rozhodnutí uživatele s důvodem (#1323)', async () => {

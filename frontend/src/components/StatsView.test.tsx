@@ -131,6 +131,7 @@ const SUMMARY = {
   total_count: 603,
   legacy_count: 290,
   after_settle_count: 0,
+  excluded_count: 0,
   fee_per_contract_usd: 10,
   account_usd: 50000,
   unpriced_symbols: [],

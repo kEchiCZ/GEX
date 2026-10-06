@@ -23,7 +23,11 @@ Konvence (převzaté z dosavadního UI, sémantika výsledků se nemění):
 - **mechanika**: výchozí jen aktuální verze (#311), `all_versions` přidá starší;
 - **vznik po settle** vlastní expirace (`setups.born_after_settle`, #1324): setup
   nemohl existovat, takže nevstupuje do žádného čísla souhrnu; jen se spočítá
-  do `after_settle_count`, ať nic nezmizí potichu. V DB řádky zůstávají.
+  do `after_settle_count`, ať nic nezmizí potichu. V DB řádky zůstávají;
+- **značka vyřazení** `context.excluded` (`setups.excluded_reason`, #1346): setup
+  vznikl nad cenou, kterou bary neměly (zamrzlý spot), vyřazuje se stejně
+  a počítá do `excluded_count`. Obojí drží jeden predikát `SetupFact.in_stats`
+  (`setups.counts_in_stats`), který čte i Knihovna.
 """
 
 import datetime as dt
@@ -34,7 +38,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from gexlens_engine.compute.settle import trading_session_date
-from gexlens_engine.compute.setups import born_after_settle
+from gexlens_engine.compute.setups import born_after_settle, excluded_reason
 from gexlens_engine.ticker import symbol_root
 
 RiskGroup = Literal["tradeable", "shadow", "unruled"]
@@ -122,6 +126,8 @@ class SetupFact:
     gate_overridden: bool = False
     #: `context.contracts` (sizing při vzniku); None = řádek před pravidly
     contracts: int | None = None
+    #: Důvod značky `context.excluded` (#1346); None = bez značky
+    excluded: str | None = None
 
     @property
     def is_closed(self) -> bool:
@@ -135,6 +141,11 @@ class SetupFact:
     def after_settle(self) -> bool:
         """Vznikl po settle vlastní expirace (#1324) — nemohl existovat."""
         return born_after_settle(self.expiry, self.created_ts)
+
+    @property
+    def in_stats(self) -> bool:
+        """Patří do statistik (`setups.counts_in_stats`): ne po settle, bez značky."""
+        return not self.after_settle and self.excluded is None
 
     @property
     def risk_group(self) -> RiskGroup:
@@ -197,6 +208,7 @@ def fact_from_record(record: Mapping[str, Any]) -> SetupFact:
         affordable=affordable if isinstance(affordable, bool) else None,
         gate_overridden=context.get("gate_overridden") is True,
         contracts=int(contracts) if isinstance(contracts, int | float) and ruled else None,
+        excluded=excluded_reason(context),
     )
 
 
@@ -371,6 +383,9 @@ class SetupSummary:
     #: Řádky zvolených verzí vzniklé po settle vlastní expirace (#1324) — vyřazené
     #: ze všech čísel souhrnu (nemohly existovat), v DB zůstávají
     after_settle_count: int
+    #: Řádky zvolených verzí se značkou `context.excluded` (#1346, vznik nad
+    #: zamrzlým spotem) a ne po settle — vyřazené stejně, v DB zůstávají
+    excluded_count: int
     fee_per_contract_usd: float
     account_usd: float
     #: Symboly bez známé hodnoty bodu — jejich USD se nepočítají (nic se nevymýšlí)
@@ -653,13 +668,16 @@ def summarize_setups(
 
     `mechanics_version` = aktuální verze detektoru; bez `all_versions` se
     počítá jen ona, starší řádky se jen spočítají do `legacy_count`. Setupy
-    vzniklé po settle vlastní expirace (#1324) se ze zvolených verzí vyřadí
-    a jen spočítají do `after_settle_count`.
+    mimo statistiky (`SetupFact.in_stats`) se ze zvolených verzí vyřadí a jen
+    spočítají: vznik po settle (#1324) do `after_settle_count`, značka
+    `context.excluded` (#1346) do `excluded_count` (řádek po settle se značkou
+    jen jednou, jako po settle).
     """
     versions = [
         fact for fact in facts if all_versions or fact.mechanics_version == mechanics_version
     ]
-    scope = [fact for fact in versions if not fact.after_settle]
+    scope = [fact for fact in versions if fact.in_stats]
+    after_settle_count = sum(1 for fact in versions if fact.after_settle)
     by_group: dict[RiskGroup, list[SetupFact]] = {"tradeable": [], "shadow": [], "unruled": []}
     for fact in scope:
         by_group[fact.risk_group].append(fact)
@@ -672,7 +690,8 @@ def summarize_setups(
         all_versions=all_versions,
         total_count=len(facts),
         legacy_count=sum(1 for fact in facts if fact.mechanics_version != mechanics_version),
-        after_settle_count=len(versions) - len(scope),
+        after_settle_count=after_settle_count,
+        excluded_count=len(versions) - len(scope) - after_settle_count,
         fee_per_contract_usd=fee_per_contract_usd,
         account_usd=account_usd,
         unpriced_symbols=sorted(

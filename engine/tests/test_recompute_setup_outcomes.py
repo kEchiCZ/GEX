@@ -253,6 +253,10 @@ def fx(tmp_path: Path) -> Fixture:
         closed=utc("2026-09-18", "20:02"),
         outcome_r=0.5,
     )
+    # Vstup se i na kvartální den ověřuje proti barům (#1346) — tady sedí
+    f.writer.write_bars_by_day(
+        "ES", series(utc("2026-09-18", "08:58"), utc("2026-09-18", "09:05"), 7700.0)
+    )
     # H — cesta přeskočí na bary jiného kontraktu (+300 b, #1232) → neověřitelný
     day = "2026-08-27"
     f.setup(
@@ -422,7 +426,7 @@ def test_dry_run_reportuje_rozdily_a_nic_nezapise(mod: Any, fx: Fixture, tmp_pat
     assert "| opravit čas | 1 |" in text
     assert "| vstup mimo bary | 1 |" in text
     assert f"| {ids['gap_stop']} | NQ | cíl → stop | +3.000 → -1.000 |" in text
-    assert "## Vstup mimo bary (nezapisují se, rozhodne uživatel)" in text
+    assert "## Vstup mimo bary (výsledek se nepřepisuje, `--exclude` vyřadí ze statistik)" in text
 
 
 def test_apply_zapise_outcome_correction_a_nic_nesmaze(
@@ -525,6 +529,100 @@ def test_apply_bez_souhlasu_nezapise(
     args = ["--db", fx.url, "--data", str(fx.data), "--out", str(tmp_path / "o"), "--apply"]
     assert mod.main(args) == 1
     assert snapshot(fx) == before
+
+
+def test_exclude_oznaci_jen_vstup_mimo_bary_a_nic_nesmaze(
+    mod: Any, fx: Fixture, tmp_path: Path
+) -> None:
+    """#1346: `--exclude` zapíše verdiktu „vstup mimo bary“ značku `context.excluded`
+    (po schváleném dry-runu); výsledek ani jiné řádky se nemění, opakovaný běh
+    značku nepřepíše."""
+    before = {row["id"]: row for row in snapshot(fx)}
+    approved = approve(mod, fx, tmp_path)
+    args = [
+        *("--db", fx.url, "--data", str(fx.data), "--out", str(tmp_path / "o")),
+        *("--exclude", "--yes", "--approved", str(approved)),
+    ]
+    assert mod.main(args) == 0
+
+    after = {row["id"]: row for row in snapshot(fx)}
+    assert after.keys() == before.keys()
+    frozen_id = fx.ids["frozen"]
+    frozen = after[frozen_id]
+    mark = frozen["context"]["excluded"]
+    assert mark["reason"] == "vstup_mimo_bary" and frozen["excluded"] == "vstup_mimo_bary"
+    assert "zamrzlý spot" in mark["detail"] and mark["ts"]
+    # Výsledek a zbytek kontextu beze změny, žádná oprava výsledku
+    for key in ("status", "outcome_r", "closed_ts", "mfe", "mae"):
+        assert frozen[key] == before[frozen_id][key], key
+    assert "outcome_correction" not in frozen["context"]
+    assert {k: v for k, v in frozen["context"].items() if k != "excluded"} == (
+        before[frozen_id]["context"]
+    )
+    for setup_id, row in after.items():
+        if setup_id != frozen_id:
+            assert row == before[setup_id], setup_id
+
+    assert mod.main(args) == 0  # idempotentní: značka zůstává první
+    assert snapshot(fx) == list(after.values())
+
+
+def test_exclude_jen_schvaleny_report_a_ne_s_apply(mod: Any, fx: Fixture, tmp_path: Path) -> None:
+    before = snapshot(fx)
+    approved = approve(mod, fx, tmp_path)
+    rows = [
+        row
+        for row in csv.DictReader(approved.open(encoding="utf-8"))
+        if int(row["id"]) != fx.ids["frozen"]  # uživatel vyřazení neschválil
+    ]
+    with approved.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+    base = ["--db", fx.url, "--data", str(fx.data), "--out", str(tmp_path / "o")]
+    assert mod.main([*base, "--exclude", "--yes", "--approved", str(approved)]) == 1
+    assert snapshot(fx) == before
+    with pytest.raises(SystemExit):
+        mod.main([*base, "--exclude", "--yes"])
+    with pytest.raises(SystemExit):
+        mod.main([*base, "--apply", "--exclude"])
+    assert snapshot(fx) == before
+
+
+def test_kvartalni_expirace_vstup_mimo_bary(mod: Any) -> None:
+    """#1346: vstup se ověřuje i na kvartální expiraci — výsledek rozhodne #1331,
+    setup nad zamrzlým spotem se ale vyřadit musí."""
+    created = utc("2026-09-18", "09:00")
+    row = mod.SetupRow(
+        id=1,
+        symbol="ES",
+        expiry="20260918",
+        direction="long",
+        created_ts=created,
+        entry=7680.0,
+        target=7710.0,
+        stop=7670.0,
+        status="closed_timeout",
+        closed_ts=utc("2026-09-18", "13:30"),
+        outcome_r=0.5,
+    )
+    bars = series(
+        created - 60 * MINUTE,
+        created + 10 * MINUTE,
+        7700.0,
+        overrides={created - 30 * MINUTE: (7682.0, 7678.0, 7680.0)},
+    )
+
+    def load(_symbol: str, since: dt.datetime, until: dt.datetime) -> list[Bar]:
+        return [bar for bar in bars if since < bar.ts <= until]
+
+    result = mod.recompute(row, load, utc("2026-10-06", "12:00"))
+    assert result.verdict == "vstup mimo bary"
+    assert "zamrzlý spot" in result.reason
+    on_bars = mod.recompute(
+        mod.SetupRow(**{**row.__dict__, "entry": 7700.0}), load, utc("2026-10-06", "12:00")
+    )
+    assert on_bars.verdict == "neověřitelný" and "kvartální" in on_bars.reason
 
 
 def test_opakovana_oprava_drzi_puvodni_hodnoty(fx: Fixture) -> None:

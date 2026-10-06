@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, text
 from gexlens_engine.compute.gexfield import GexProfile
 from gexlens_engine.compute.levels import GexLevels
 from gexlens_engine.compute.setups import (
+    EXCLUDED_ENTRY_OFF_BARS,
     SETUP_MECHANICS_VERSION,
     Direction,
     MinuteInputs,
@@ -22,6 +23,7 @@ from gexlens_engine.compute.setups import (
     _ema,
     average_true_range,
     born_after_settle,
+    counts_in_stats,
     detect_all,
     detect_divergence_spring,
     detect_failed_break,
@@ -30,6 +32,7 @@ from gexlens_engine.compute.setups import (
     detect_trend_continuation,
     detect_wall_bounce,
     evaluate_bar,
+    excluded_reason,
     gex_regime,
     is_counter_regime,
     max_pain_strike,
@@ -1164,6 +1167,97 @@ def test_repository_vznik_po_settle_oznaci_a_vyradi_ze_statistik(tmp_path: Path)
     assert len(repository.closed_since("NQ", since, mechanics_version=version)) == 1
     coach = repository.closed_between(since, settle + dt.timedelta(days=1))
     assert [row["id"] for row in coach] == [alive]
+
+
+def test_repository_znacka_vyrazeni_vyradi_ze_vsech_cteni(tmp_path: Path) -> None:
+    """#1346: značka `context.excluded` (setup nad zamrzlým spotem) vyřadí řádek
+    z brzd a brány, kalibrace, sebekontroly i kouče stejně jako vznik po settle;
+    tabulka ho ukáže s důvodem. Výsledek ani ostatní kontext se nemění, aktivní
+    řádek se neoznačí, opakované označení drží první značku."""
+    repository = SetupsRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 's.sqlite'}"))
+    repository.ensure_schema()
+    created = dt.datetime(2026, 9, 8, 17, 24, tzinfo=dt.UTC)
+
+    def setup(minute: int, *, close: bool = True) -> int:
+        sid = repository.create(
+            symbol="NQ",
+            expiry="20260908",
+            template="trend_continuation",
+            direction="long",
+            created_ts=created + dt.timedelta(minutes=minute),
+            entry=29630.25,
+            target=29700.0,
+            stop=29610.0,
+            confidence=50,
+            reason="test",
+            context={"gex_regime": "positive", "tradeable": True, "contracts": 1},
+        )
+        if close:
+            repository.close(
+                sid,
+                status="closed_stop",
+                closed_ts=created + dt.timedelta(minutes=minute + 5),
+                outcome_r=-1.0,
+                mfe=0.0,
+                mae=20.25,
+            )
+        return sid
+
+    live, frozen, active = setup(0), setup(1), setup(2, close=False)
+    marked_at = dt.datetime(2026, 10, 6, 21, 0, tzinfo=dt.UTC)
+
+    def mark(setup_id: int, at: dt.datetime) -> bool:
+        return repository.exclude(
+            setup_id, reason=EXCLUDED_ENTRY_OFF_BARS, detail="zamrzlý spot", excluded_ts=at
+        )
+
+    assert mark(frozen, marked_at)
+    assert not mark(frozen, marked_at + dt.timedelta(hours=1))  # idempotentní
+    assert not mark(active, marked_at)  # aktivní vyhodnocuje engine
+    assert not mark(9999, marked_at)
+    with pytest.raises(ValueError):
+        repository.exclude(live, reason="", detail="", excluded_ts=marked_at)
+
+    rows = {row["id"]: row for row in repository.list_for("NQ")}
+    assert {sid: row["excluded"] for sid, row in rows.items()} == {
+        live: None,
+        frozen: EXCLUDED_ENTRY_OFF_BARS,
+        active: None,
+    }
+    context = rows[frozen]["context"]
+    assert context["excluded"] == {
+        "reason": EXCLUDED_ENTRY_OFF_BARS,
+        "detail": "zamrzlý spot",
+        "ts": "2026-10-06T21:00:00+00:00",
+    }
+    assert context["tradeable"] is True and context["gex_regime"] == "positive"
+    assert (rows[frozen]["status"], rows[frozen]["outcome_r"]) == ("closed_stop", -1.0)
+
+    version = SETUP_MECHANICS_VERSION
+    since = created - dt.timedelta(days=1)
+    assert [r.created_ts for r in repository.realized_since(since, mechanics_version=version)] == [
+        created
+    ]
+    assert len(repository.closed_for_calibration(mechanics_version=version)) == 1
+    assert len(repository.closed_since("NQ", since, mechanics_version=version)) == 1
+    coach = repository.closed_between(since, created + dt.timedelta(days=1))
+    assert [row["id"] for row in coach] == [live]
+    facts = {fact.id: fact for fact in repository.summary_facts(["NQ"])}
+    assert (facts[live].in_stats, facts[frozen].in_stats) == (True, False)
+
+
+def test_counts_in_stats_po_settle_nebo_znacka() -> None:
+    """#1346: jediný predikát čtenářů — po settle (#1324) nebo značka `excluded`."""
+    alive = dt.datetime(2026, 9, 28, 15, 0, tzinfo=dt.UTC)
+    mark = {"excluded": {"reason": EXCLUDED_ENTRY_OFF_BARS}}
+    assert counts_in_stats("20260928", alive, {})
+    assert counts_in_stats("20260928", alive, None)
+    assert not counts_in_stats("20260928", alive, mark)
+    assert not counts_in_stats("20260928", alive + dt.timedelta(hours=5), {})
+    # Bez platného důvodu to značka není
+    assert counts_in_stats("20260928", alive, {"excluded": {"reason": ""}})
+    assert counts_in_stats("20260928", alive, {"excluded": True})
+    assert excluded_reason(mark) == EXCLUDED_ENTRY_OFF_BARS
 
 
 async def test_setup_engine_po_settle_nevznika_po_rollu_ano(tmp_path: Path) -> None:

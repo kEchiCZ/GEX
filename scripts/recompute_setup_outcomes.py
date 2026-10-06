@@ -19,11 +19,12 @@ Verdikty:
 - **opravit čas** — výsledek sedí, liší se jen `closed_ts` (engine zásah
   zjistil později než bar, který úroveň zasáhl);
 - **beze změny**;
-- **vstup mimo bary** (nezapisuje se, rozhodne uživatel): setup vznikl nad
-  cenou, kterou bary v minutě vzniku nemají — zamrzlý spot při výpadku streamu
+- **vstup mimo bary** (výsledek se nepřepisuje): setup vznikl nad cenou,
+  kterou bary v minutě vzniku nemají — zamrzlý spot při výpadku streamu
   (ES 1004 3. 9.: 7709 = close baru 14:17, trh už na 7711–7714), bary jiného
   kontraktu (#1232) nebo žádný bar. Návrh (od baru N−1 jako engine) je jen
-  v reportu;
+  v reportu; `--exclude` takový setup vyřadí ze statistik (#1346). Kontroluje
+  se i na kvartální expiraci (vstup na settle nezávisí);
 - **neověřitelný** (nezapisuje se, návrh je jen v reportu): v cestě ceny chybí
   bary (díra nebo chybějící bary do settle; návrh je pak spočítaný přes díru),
   cesta obsahuje bary z jiného zdroje než IBKR (rekonstrukce z tasty
@@ -45,12 +46,21 @@ Režimy:
   by jinak zapsaly něco, co nikdo neviděl). Nic nemaže: přepíše status,
   `closed_ts`, `outcome_r` a MFE/MAE z téže cesty ceny, původní hodnoty uloží
   do `context.outcome_correction` (`SetupsRepository.correct_outcome`).
-  Opakovaný běh je idempotentní.
+  Opakovaný běh je idempotentní;
+- `--exclude` (#1346, rozhodnutí uživatele 6. 10. 2026) zapíše verdiktům
+  „vstup mimo bary“ trvalou značku `context.excluded` = {reason
+  `vstup_mimo_bary`, detail = důvod z reportu, ts} (`SetupsRepository.exclude`).
+  Výsledek ani nic jiného se nemění, nic se nemaže; čtenáři historie (souhrn,
+  Knihovna, brzdy, brána, kalibrace, sebekontrola, kouč) se ptají
+  `counts_in_stats`. Potvrzení a `--approved` stejně jako u `--apply`
+  (shoda řádků „vstup mimo bary“ se schváleným CSV). Řádek se značkou se
+  nemění — opakovaný běh je idempotentní.
 
 Spuštění z hostitele (partice v `data/`, PG publikované na 55432; URL se
 nevypisuje). Produkce se nejdřív jen čte, zápis až po schválení reportu:
     uv run python scripts/recompute_setup_outcomes.py --data data \\
-        [--symbols ES,NQ] [--ids 1003,1004] [--apply [--yes --approved report.csv]]
+        [--symbols ES,NQ] [--ids 1003,1004] \\
+        [--apply | --exclude [--yes --approved report.csv]]
 URL: `--db`, jinak `GEXLENS_HOST_DATABASE_URL`, jinak `GEXLENS_DATABASE_URL`.
 """
 
@@ -72,6 +82,7 @@ from sqlalchemy import create_engine, select
 from gexlens_engine.compute.paper import POINT_VALUES
 from gexlens_engine.compute.settle import is_quarterly_expiry
 from gexlens_engine.compute.setups import (
+    EXCLUDED_ENTRY_OFF_BARS,
     SETUP_MECHANICS_VERSION,
     Direction,
     Outcome,
@@ -106,6 +117,8 @@ VERDICTS: tuple[Verdict, ...] = (
 )
 #: Verdikty, které `--apply` zapíše
 WRITABLE: frozenset[Verdict] = frozenset({"opravit", "opravit čas"})
+#: Verdikty, které `--exclude` označí značkou vyřazení ze statistik (#1346)
+EXCLUDABLE: frozenset[Verdict] = frozenset({"vstup mimo bary"})
 #: Shoda R při porovnání s DB (float z Postgresu vs. přepočet)
 R_TOLERANCE = 1e-6
 #: Shoda ceny: entry je close baru vstupu přesně (tatáž float hodnota)
@@ -263,15 +276,23 @@ def recompute(row: SetupRow, load_bars: BarLoader, now: dt.datetime) -> Recomput
     settle = setup_settle_ts(row.expiry)
     if settle is None:
         return Recomputed(row, "neověřitelný", f"nečitelná expirace {row.expiry!r}")
+    direction = Direction(row.direction)
+    minute = created.replace(second=0, microsecond=0)
     if is_quarterly_expiry(settle.date()):
+        # Výsledek rozhodne #1331, vstup na settle nezávisí: setup nad spotem
+        # se vyřadí ze statistik i na kvartální den (#1346)
+        entry_bars = load_bars(
+            row.symbol, minute - FROZEN_LOOKBACK, minute + max(ENTRY_BAR_OFFSETS) * _MINUTE
+        )
+        _, entry_problem = entry_starts(row, entry_bars, created)
+        if entry_problem:
+            return Recomputed(row, "vstup mimo bary", entry_problem)
         return Recomputed(
             row,
             "neověřitelný",
             "kvartální datum expirace: settle SOQ (ADR-0039 bod 2) vs. odpolední "
             "týdenní řetěz (EW3/QN3) — rozhodne #1331",
         )
-    direction = Direction(row.direction)
-    minute = created.replace(second=0, microsecond=0)
     # Od FROZEN_LOOKBACK před vznikem: bar vstupu i diagnostika zamrzlého spotu
     bars = load_bars(row.symbol, minute - FROZEN_LOOKBACK, settle)
 
@@ -531,7 +552,10 @@ def report_markdown(results: Sequence[Recomputed], generated: dt.datetime, *, ap
                 f"{', '.join(item.sources)} |"
             )
     for verdict, title in (
-        ("vstup mimo bary", "Vstup mimo bary (nezapisují se, rozhodne uživatel)"),
+        (
+            "vstup mimo bary",
+            "Vstup mimo bary (výsledek se nepřepisuje, `--exclude` vyřadí ze statistik)",
+        ),
         ("neověřitelný", "Neověřitelné (nezapisují se, návrh jen pro rozhodnutí)"),
     ):
         items = [item for item in results if item.verdict == verdict]
@@ -602,17 +626,22 @@ def load_rows(
     return rows
 
 
-def approved_mismatch(results: Sequence[Recomputed], approved_csv: Path) -> list[str]:
-    """Rozdíly zapisovaných řádků proti schválenému dry-runu (stejné sloupce CSV).
+def approved_mismatch(
+    results: Sequence[Recomputed],
+    approved_csv: Path,
+    verdicts: frozenset[Verdict] = WRITABLE,
+) -> list[str]:
+    """Rozdíly zapisovaných řádků (`verdicts`) proti schválenému dry-runu (stejné sloupce CSV).
 
-    Prázdný seznam = `--apply` zapíše přesně to, co uživatel v reportu viděl.
+    Prázdný seznam = `--apply` / `--exclude` zapíše přesně to, co uživatel
+    v reportu viděl.
     """
 
     def writable(text: str) -> dict[str, dict[str, str]]:
         return {
             row["id"]: row
             for row in csv.DictReader(io.StringIO(text))
-            if row["verdict"] in WRITABLE
+            if row["verdict"] in verdicts
         }
 
     current = writable(report_csv(results))
@@ -666,6 +695,29 @@ def apply_corrections(
     return written
 
 
+def apply_exclusions(
+    repository: SetupsRepository, results: Sequence[Recomputed], excluded_ts: dt.datetime
+) -> int:
+    """Označí verdikty „vstup mimo bary“ značkou `context.excluded` (#1346); nic nemaže."""
+    written = 0
+    for item in results:
+        if item.verdict not in EXCLUDABLE:
+            continue
+        if repository.exclude(
+            item.row.id,
+            reason=EXCLUDED_ENTRY_OFF_BARS,
+            detail=item.reason,
+            excluded_ts=excluded_ts,
+        ):
+            written += 1
+        else:
+            print(
+                f"Setup {item.row.id}: neoznačen — značku už má, je aktivní nebo smazán",
+                file=sys.stderr,
+            )
+    return written
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
     parser.add_argument(
@@ -682,12 +734,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ids", default="", help="jen tato id (např. 1003,1004)")
     parser.add_argument("--mechanics-version", type=int, default=SETUP_MECHANICS_VERSION)
     parser.add_argument("--out", default="", help="adresář reportu (výchozí {data}/reports)")
-    parser.add_argument("--apply", action="store_true", help="zapsat opravy (po potvrzení)")
-    parser.add_argument("--yes", action="store_true", help="s --apply bez interaktivní otázky")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="zapsat opravy (po potvrzení)")
+    mode.add_argument(
+        "--exclude",
+        action="store_true",
+        help="vyřadit „vstup mimo bary“ ze statistik značkou context.excluded (#1346)",
+    )
+    parser.add_argument(
+        "--yes", action="store_true", help="s --apply / --exclude bez interaktivní otázky"
+    )
     parser.add_argument(
         "--approved",
         default="",
-        help="CSV schváleného dry-runu: --apply zapíše jen při shodě zapisovaných řádků",
+        help="CSV schváleného dry-runu: zápis jen při shodě zapisovaných řádků",
     )
     args = parser.parse_args(argv)
     if not args.db:
@@ -714,8 +774,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     stem.with_suffix(".csv").write_text(report_csv(results), encoding="utf-8")
     fixes = sum(1 for item in results if item.verdict in WRITABLE)
-    print(f"Setupů {len(results)}, k opravě {fixes}; report {stem}.md / .csv")
+    off_bars = sum(1 for item in results if item.verdict in EXCLUDABLE)
+    print(
+        f"Setupů {len(results)}, k opravě {fixes}, vstup mimo bary {off_bars}; "
+        f"report {stem}.md / .csv"
+    )
 
+    if args.exclude:
+        return _exclude(args, results, off_bars, generated)
     if not args.apply:
         return 0
     if fixes == 0:
@@ -736,6 +802,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
     written = apply_corrections(SetupsRepository(create_engine(args.db)), results, generated)
     print(f"Zapsáno {written} oprav (původní hodnoty v context.outcome_correction).")
+    return 0
+
+
+def _exclude(
+    args: argparse.Namespace, results: Sequence[Recomputed], count: int, generated: dt.datetime
+) -> int:
+    """`--exclude`: značka vyřazení po kontrole schváleného CSV a potvrzení (#1346)."""
+    if count == 0:
+        print("Nic k vyřazení.")
+        return 0
+    if args.approved:
+        problems = approved_mismatch(results, Path(args.approved), EXCLUDABLE)
+        if problems:
+            print("Přepočet se od schváleného reportu liší — nezapsáno:", file=sys.stderr)
+            for problem in problems:
+                print(f"  {problem}", file=sys.stderr)
+            return 1
+    if not args.yes:
+        answer = input(
+            f"Vyřadit {count} setupů ze statistik v DB {args.db.split('@')[-1]}? Napiš 'ano': "
+        )
+        if answer.strip().lower() != "ano":
+            print("Nezapsáno.")
+            return 1
+    written = apply_exclusions(SetupsRepository(create_engine(args.db)), results, generated)
+    print(f"Označeno {written} setupů (context.excluded, výsledky beze změny).")
     return 0
 
 

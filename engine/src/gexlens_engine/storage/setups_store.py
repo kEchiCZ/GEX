@@ -1,9 +1,10 @@
 """Trvalé úložiště setupů (ADR-0004): historie analýz pro kalibraci.
 
 Tabulka záměrně nemá delete API (jako oi_eod) — výsledky setupů jsou dataset,
-ze kterého se časem kalibruje confidence. Mutace po uzavření jsou dvě: ruční
-hodnocení uživatele (rating + poznámka) a oprava výsledku přepočtem z barů
-(`correct_outcome`, #1320) — ta původní hodnoty uchová v kontextu.
+ze kterého se časem kalibruje confidence. Mutace po uzavření jsou tři: ruční
+hodnocení uživatele (rating + poznámka), oprava výsledku přepočtem z barů
+(`correct_outcome`, #1320) — ta původní hodnoty uchová v kontextu — a značka
+vyřazení ze statistik (`exclude`, #1346), která výsledek nemění, jen označí.
 """
 
 import datetime as dt
@@ -35,20 +36,34 @@ from sqlalchemy.sql.elements import ColumnElement
 from gexlens_engine.compute.confidence import CalibrationRow
 from gexlens_engine.compute.risk import RealizedSetup
 from gexlens_engine.compute.setup_summary import SetupFact, fact_from_record
-from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION, born_after_settle
+from gexlens_engine.compute.setups import (
+    EXCLUDED_KEY,
+    SETUP_MECHANICS_VERSION,
+    born_after_settle,
+    counts_in_stats,
+    excluded_reason,
+)
 from gexlens_engine.compute.setupstats import ClosedSetup
 
 
-def _born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
-    """`born_after_settle` nad řádkem DB (#1324) — sqlite vrací naivní čas.
+def _naive_utc(value: dt.datetime) -> dt.datetime:
+    """sqlite vrací naivní čas — je to UTC."""
+    return value.replace(tzinfo=dt.UTC) if value.tzinfo is None else value
 
-    Setup vzniklý po settle vlastní expirace nemohl existovat: čtení pro brzdy,
-    bránu šablon, kalibraci, sebekontrolu i kouče ho vynechá, výpis tabulky ho
-    jen označí. V DB řádek zůstává.
+
+def _born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
+    """`born_after_settle` nad řádkem DB (#1324) — označení řádku v tabulce."""
+    return born_after_settle(expiry, _naive_utc(created_ts))
+
+
+def _in_stats(expiry: str, created_ts: dt.datetime, context: object) -> bool:
+    """`counts_in_stats` nad řádkem DB (#1324, #1346).
+
+    Setup vzniklý po settle vlastní expirace nebo se značkou `context.excluded`
+    čtení pro brzdy, bránu šablon, kalibraci, sebekontrolu i kouče vynechá,
+    výpis tabulky ho jen označí. V DB řádek zůstává.
     """
-    if created_ts.tzinfo is None:
-        created_ts = created_ts.replace(tzinfo=dt.UTC)
-    return born_after_settle(expiry, created_ts)
+    return counts_in_stats(expiry, _naive_utc(created_ts), context)
 
 
 def entry_bar_ts(context: object) -> dt.datetime | None:
@@ -312,6 +327,38 @@ class SetupsRepository:
             )
         return True
 
+    def exclude(self, setup_id: int, *, reason: str, detail: str, excluded_ts: dt.datetime) -> bool:
+        """Trvale vyřadí uzavřený setup ze statistik značkou `context.excluded` (#1346).
+
+        Nic se nemaže ani nepřepisuje: výsledek, časy i ostatní klíče kontextu
+        zůstávají, přibude `{"reason", "detail", "ts"}`. Čtenáři historie se
+        ptají `counts_in_stats`. Idempotentní: řádek se značkou se nemění (drží
+        první čas a důvod). Vrací False, když řádek neexistuje, je aktivní
+        (vyhodnocuje ho engine) nebo značku už má.
+        """
+        if not reason:
+            raise ValueError("Značka vyřazení potřebuje důvod")
+        with self._engine.begin() as conn:
+            row = conn.execute(
+                select(setups_table.c.status, setups_table.c.context).where(
+                    setups_table.c.id == setup_id
+                )
+            ).fetchone()
+            if row is None or row.status == "active" or excluded_reason(row.context) is not None:
+                return False
+            context = dict(row.context) if isinstance(row.context, dict) else {}
+            context[EXCLUDED_KEY] = {
+                "reason": reason,
+                "detail": detail,
+                "ts": _utc_iso(excluded_ts),
+            }
+            conn.execute(
+                update(setups_table)
+                .where(setups_table.c.id == setup_id)
+                .values(context=json.loads(json.dumps(context, default=str)))
+            )
+        return True
+
     def review(self, setup_id: int, rating: int | None, note: str | None) -> bool:
         stmt = (
             update(setups_table)
@@ -382,8 +429,8 @@ class SetupsRepository:
         symbol: str | None = None,
     ) -> list[dict[str, Any]]:
         """Uzavřené setupy napříč symboly s `created_ts` v [since, until) — vstup
-        kouče (#1201): řádek jako dict s ISO časy a kontextem. Setupy vzniklé
-        po settle vlastní expirace (#1324) se vynechají."""
+        kouče (#1201): řádek jako dict s ISO časy a kontextem. Setupy mimo
+        statistiky (`counts_in_stats`: po settle #1324, značka #1346) se vynechají."""
         stmt = select(setups_table).where(
             setups_table.c.status != "active",
             setups_table.c.created_ts >= since,
@@ -398,7 +445,7 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[dict[str, Any]] = []
         for row in rows:
-            if _born_after_settle(row.expiry, row.created_ts):
+            if not _in_stats(row.expiry, row.created_ts, row.context):
                 continue
             record = dict(row._mapping)
             for key in ("created_ts", "closed_ts"):
@@ -420,7 +467,8 @@ class SetupsRepository:
 
         `mechanics_version` omezí bilanci na jeden systém (#311) — bez něj by se
         míchaly výsledky staré a nové mechaniky a verdikt by mluvil o minulosti.
-        Setupy vzniklé po settle vlastní expirace (#1324) se vynechají.
+        Setupy mimo statistiky (`counts_in_stats`: po settle #1324, značka
+        #1346) se vynechají.
         """
         stmt = select(
             setups_table.c.expiry,
@@ -429,6 +477,7 @@ class SetupsRepository:
             setups_table.c.direction,
             setups_table.c.status,
             setups_table.c.outcome_r,
+            setups_table.c.context,
         ).where(
             setups_table.c.symbol == symbol,
             setups_table.c.status != "active",
@@ -447,7 +496,7 @@ class SetupsRepository:
                 outcome_r=float(row.outcome_r or 0.0),
             )
             for row in rows
-            if not _born_after_settle(row.expiry, row.created_ts)
+            if _in_stats(row.expiry, row.created_ts, row.context)
         ]
 
     def realized_since(self, since: dt.datetime, *, mechanics_version: int) -> list[RealizedSetup]:
@@ -457,9 +506,10 @@ class SetupsRepository:
         `contracts` a `gate_overridden` z kontextu; řádky před pravidly nesou
         None / None / False.
 
-        Setupy vzniklé po settle vlastní expirace (`born_after_settle`, #1324)
-        se vynechají: nemohly existovat, takže nesmí nafukovat `n` brány ani
-        pohnout brzdami. V DB zůstávají."""
+        Setupy mimo statistiky (`counts_in_stats`) se vynechají: vznik po settle
+        vlastní expirace (#1324) nemohl existovat, setup se značkou
+        `context.excluded` (#1346) stál na ceně, kterou trh neměl — nesmí
+        nafukovat `n` brány, čerpat zkoušku ani pohnout brzdami. V DB zůstávají."""
         stmt = select(
             setups_table.c.symbol,
             setups_table.c.expiry,
@@ -481,7 +531,7 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[RealizedSetup] = []
         for row in rows:
-            if _born_after_settle(row.expiry, row.created_ts):
+            if not _in_stats(row.expiry, row.created_ts, row.context):
                 continue
             context = row.context if isinstance(row.context, dict) else {}
             tradeable = context.get("tradeable")
@@ -520,8 +570,9 @@ class SetupsRepository:
 
         Výhra = `closed_target` (stejně jako `setupstats`); gamma režim z
         `context.gex_regime` (None u řádků bez něj). Timeout není výhra.
-        Setup vzniklý po settle vlastní expirace (#1324) se vynechá — jinak by
-        jeho okamžitý timeout snižoval confidence košů a s ní práh pushe.
+        Setup mimo statistiky (`counts_in_stats`) se vynechá — vznik po settle
+        (#1324) by okamžitým timeoutem snižoval confidence košů a s ní práh
+        pushe, setup se značkou `context.excluded` (#1346) nešel zadat.
         """
         stmt = select(
             setups_table.c.symbol,
@@ -538,7 +589,7 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[CalibrationRow] = []
         for row in rows:
-            if _born_after_settle(row.expiry, row.created_ts):
+            if not _in_stats(row.expiry, row.created_ts, row.context):
                 continue
             context = row.context if isinstance(row.context, dict) else {}
             regime = context.get("gex_regime")
@@ -625,8 +676,9 @@ class SetupsRepository:
         for row in rows:
             record = dict(row._mapping)
             # Tabulka řádek ukáže, ale označí — ze souhrnu, brzd i brány je
-            # vyřazený (#1324); filtr „Jen obchodovatelné“ ho skryje
+            # vyřazený (#1324, #1346); filtr „Jen obchodovatelné“ ho skryje
             record["after_settle"] = _born_after_settle(row.expiry, row.created_ts)
+            record["excluded"] = excluded_reason(row.context)
             for key in ("created_ts", "closed_ts"):
                 value = record.get(key)
                 if isinstance(value, dt.datetime):
