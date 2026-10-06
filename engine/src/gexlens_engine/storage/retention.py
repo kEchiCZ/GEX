@@ -23,9 +23,32 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from gexlens_engine.compute.marketclock import CME_TZ, is_market_closed
 from gexlens_engine.config import Settings
 
 logger = logging.getLogger(__name__)
+
+#: Rezerva do otevření trhu: purge se spustí, jen když bude trh zavřený ještě
+#: tak dlouho — běh trvá ~2,5 min (#1337), 15 min pokryje i pomalý bind mount
+PURGE_HEADROOM = dt.timedelta(minutes=15)
+
+
+def purge_day_due(now: dt.datetime, last_purge_day: dt.date | None) -> dt.date | None:
+    """Den CME (CT), za který má purge proběhnout právě teď; None = ještě ne.
+
+    Purge patří do zavřeného trhu — v pracovní dny do denní pauzy CME
+    16:00–17:00 CT, o víkendu kdykoli. Rozvrh nese `marketclock` v burzovním
+    čase, takže sedí v létě i v zimě; dřívější pevných 21:30 UTC padlo od
+    1. 11. (CST, 15:30 CT) do otevřené seance (#1337). Spouští se jednou za
+    kalendářní den v CT a jen s rezervou `PURGE_HEADROOM` do otevření.
+    """
+    day = now.astimezone(CME_TZ).date()
+    if day == last_purge_day:
+        return None
+    if not (is_market_closed(now) and is_market_closed(now + PURGE_HEADROOM)):
+        return None
+    return day
+
 
 # Adresář s 1min bary podkladu; partice pod ním retence nemaže (S4, #275)
 BARS_DIR_NAME = "bars"
@@ -109,14 +132,6 @@ class RetentionJob:
                 if path.is_relative_to(root):
                     return True
         return False
-
-    def seconds_until_next_run(self, now: dt.datetime) -> float:
-        """Prodleva do dalšího nočního běhu (konfig. čas UTC po zavření US)."""
-        run_time = self._settings.retention_purge_time_utc
-        candidate = now.replace(hour=run_time.hour, minute=run_time.minute, second=0, microsecond=0)
-        if candidate <= now:
-            candidate += dt.timedelta(days=1)
-        return (candidate - now).total_seconds()
 
     def _partition_day(self, path: Path) -> dt.date | None:
         try:

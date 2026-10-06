@@ -400,8 +400,8 @@ class Settings(BaseSettings):
     disk_free_warn_gb: float = Field(default=15.0, gt=0)
     disk_free_crit_gb: float = Field(default=5.0, gt=0)
     db_size_alert_gb: float = Field(default=4.0, gt=0)
-    # Čas nočního purge jobu (UTC, po zavření US seance)
-    retention_purge_time_utc: dt.time = dt.time(21, 30)
+    # Čas purge jobu se nekonfiguruje: běží v denní pauze CME podle
+    # `retention.purge_day_due` (#1337, pevné UTC se míjelo s DST)
 
     @model_validator(mode="after")
     def _validate_backoff(self) -> "Settings":

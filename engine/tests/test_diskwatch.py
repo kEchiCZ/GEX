@@ -86,25 +86,30 @@ def test_bez_zmereneho_mista_se_nealertuje(tmp_path: Path) -> None:
     assert watch(tmp_path).evaluate(snapshot(free=None, db=1.0)) is None
 
 
-def test_tick_meri_jen_v_intervalu(tmp_path: Path) -> None:
-    (tmp_path / "soubor.bin").write_bytes(b"x" * 1024)
+def test_due_jen_v_intervalu_od_zacatku_mereni(tmp_path: Path) -> None:
+    """#1337: interval běží od začátku měření — pomalé měření rozvrh neposouvá."""
     w = DiskWatch(tmp_path, None, interval_s=600.0)
-    first = w.tick(0.0)
-    assert first is not None and first.data_dir_bytes == 1024
+    assert w.due(0.0)
+    assert not w.due(60.0)  # v intervalu se neměří
+    assert not w.due(599.0)
+    assert w.due(600.0)
 
-    (tmp_path / "dalsi.bin").write_bytes(b"x" * 1024)
-    within = w.tick(60.0)
-    assert within is first  # v intervalu se vrací poslední snímek, neměří se
 
-    after = w.tick(700.0)
-    assert after is not None and after.data_dir_bytes == 2048
+def test_record_ulozi_posledni_snimek(tmp_path: Path) -> None:
+    (tmp_path / "soubor.bin").write_bytes(b"x" * 1024)
+    w = DiskWatch(tmp_path, None)
+    assert w.last is None
+    snap = w.measure(0.0)
+    assert w.last is None  # measure běží ve vlákně a stav nemění
+    w.record(snap)
+    assert w.last is snap and snap.data_dir_bytes == 1024
 
 
 def test_status_fields_chybi_do_prvniho_mereni(tmp_path: Path) -> None:
     w = watch(tmp_path)
     assert w.status_fields(5 * GB) == {}
 
-    w.tick(0.0)
+    w.record(w.measure(0.0))
     fields = w.status_fields(5 * GB)
     assert fields["disk_limit_bytes"] == 5 * GB
     assert "disk_usage_bytes" in fields
