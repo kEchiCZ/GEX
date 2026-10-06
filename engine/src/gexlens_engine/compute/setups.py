@@ -75,6 +75,14 @@ from gexlens_engine.ticker import parse_ticker
 # takže statistiky v5 novému chování už odpovídají. Posun timeoutu kvartální
 # expirace na SOQ (`expiry_settle_ts`, ADR-0039 bod 2) se v5 netýká —
 # kvartální 0DTE se jako runtime nepoužívá (ADR-0039 bod 1).
+#
+# #1346 verzi ZÁMĚRNĚ nezvedá: detektory, prahy a úrovně nad minutou s barem
+# jsou beze změny. Mění se jen to, že minuta bez baru (dávka cyklu prázdná)
+# nevytvoří setup ani řádek historie ze spotu — takové setupy stály na ceně,
+# kterou trh neměl (ES 1004, NQ 1048, ES 1049), jsou to vadná data v5, ne jiná
+# mechanika. Nová verze by rozdělila vzorek brány a kalibrace kvůli řádkům,
+# které vznikly jen při výpadku streamu; od #1320 je pozná chybějící
+# `context.entry_bar_ts`, starší přepočet #1320 jako „vstup mimo bary“.
 SETUP_MECHANICS_VERSION = 5
 
 

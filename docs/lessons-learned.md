@@ -198,6 +198,13 @@ chyb**, hlavně diagnostických a provozních.
   predikátní funkcí pro obě strany (`TrialCell.in_force`); testovat i časy uvnitř minuty a změnu
   verze, ne jen „začátek o hodinu dřív“. Stav, který zvyšuje riziko, nesmí obnovit změna, kterou
   udělal systém (verze mechaniky), jen člověk.
+- **2026-10-06 — setupy nad zamrzlým spotem (#1346): #1320 opravil vyhodnocení, ale vznik dál bral spot.**
+  Dávka cyklu bez baru dávala `MinuteInputs` se spotem jako O = H = L = C; při výpadku streamu spot
+  stál a detektory nad ním vytvořily setupy, jejichž vstup trh v té minutě neměl (ES 1004, NQ 1048 pod
+  vlastním stopem, ES 1049). Odhalil to přepočet #1320 verdiktem „vstup mimo bary“. → Pravidlo „spot
+  místo baru jsou vymyšlená data“ platí pro každého konzumenta minuty, nejen pro toho, kde se chyba
+  ukázala: při opravě vstupu jedné cesty projít všechny, které tentýž náhradní vstup čtou (vznik,
+  historie detektoru, feature log). Minuta bez baru se přeskočí, opožděný bar zpracuje další dávka.
 - **2026-10-01 — oprava barů 8.–15. 9. pro přepočet setupů (#1320): stráž a razítko platily jen pro nové zápisy jedné cesty.**
   Hluboký backfill `scripts/backfill_bars.py` razil bary IBKR historical jako živé `ibkr`. Konvenci `ibkr_hist`
   (#1055) dostal jen `UnderlyingBackfiller` v enginu. Při opravě 9. 9. se ukázalo, že všech 147 (ES)
