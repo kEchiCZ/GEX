@@ -70,9 +70,10 @@ def _gb(value: int | None) -> str:
 class DiskWatch:
     """Měření obsazení disku + vyhodnocení prahů s hysterezí a cooldownem.
 
-    `measure()` je blokující (statfs, rglob, SQL) — volá se přes `to_thread`
-    z hlavní smyčky v intervalu `interval_s`; mezitím se vrací poslední
-    snímek. Vyhodnocení je čistá funkce nad snímkem, testovatelná bez disku.
+    `measure()` je blokující (statfs, scandir, SQL) — hlavní smyčka ho podle
+    `due()` odpálí jako úlohu na pozadí (`background.BackgroundJob`, #1337)
+    a doběhlý snímek předá `record()`; cyklus na měření nikdy nečeká.
+    Vyhodnocení je čistá funkce nad snímkem, testovatelná bez disku.
     """
 
     def __init__(
@@ -100,13 +101,20 @@ class DiskWatch:
 
     # ── měření ────────────────────────────────────────────────────────
 
-    def tick(self, now: float) -> DiskSnapshot | None:
-        """Změří, jen když uplynul interval; vrací aktuální snímek (nebo poslední)."""
+    def due(self, now: float) -> bool:
+        """Je čas na další měření? Kladná odpověď si začátek měření zapamatuje.
+
+        Interval se počítá od začátku měření, ne od jeho konce — pomalý
+        průchod bind mountu (#1337, až 121 s) rozvrh neposouvá.
+        """
         if self._last_measure is not None and now - self._last_measure < self._interval_s:
-            return self.last
+            return False
         self._last_measure = now
-        self.last = self.measure(now)
-        return self.last
+        return True
+
+    def record(self, snapshot: DiskSnapshot) -> None:
+        """Uloží doběhlé měření jako poslední snímek (čte ho `status_fields`)."""
+        self.last = snapshot
 
     def measure(self, now: float) -> DiskSnapshot:
         data_bytes = self._data_dir_bytes()

@@ -14,7 +14,7 @@ from sqlalchemy import create_engine
 
 from gexlens_engine.config import Settings
 from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
-from gexlens_engine.storage.retention import RetentionJob
+from gexlens_engine.storage.retention import RetentionJob, purge_day_due
 
 TODAY = dt.date(2026, 7, 16)
 RETENTION_DAYS = 14
@@ -125,17 +125,43 @@ def test_disk_usage_and_limit_alert(tmp_path: Path) -> None:
     assert report_exceeded.disk_limit_exceeded  # hard limit → alert
 
 
-def test_seconds_until_next_run(tmp_path: Path) -> None:
-    settings = Settings(
-        retention_days=RETENTION_DAYS, data_dir=tmp_path, retention_purge_time_utc=dt.time(21, 30)
-    )
-    job = RetentionJob(settings)
+def _utc(y: int, m: int, d: int, hh: int, mm: int) -> dt.datetime:
+    return dt.datetime(y, m, d, hh, mm, tzinfo=dt.UTC)
 
-    before = dt.datetime(2026, 7, 16, 20, 30, tzinfo=dt.UTC)
-    after = dt.datetime(2026, 7, 16, 22, 0, tzinfo=dt.UTC)
 
-    assert job.seconds_until_next_run(before) == 3600.0
-    assert job.seconds_until_next_run(after) == 23.5 * 3600  # zítra 21:30
+def test_purge_v_lete_jen_v_denni_pauze_cme() -> None:
+    """#1337: léto (CDT, UTC−5) — pauza 16:00–17:00 CT = 21:00–22:00 UTC."""
+    wed = dt.date(2026, 7, 15)
+    assert purge_day_due(_utc(2026, 7, 15, 20, 59), None) is None  # 15:59 CT, trh běží
+    assert purge_day_due(_utc(2026, 7, 15, 21, 0), None) == wed
+    assert purge_day_due(_utc(2026, 7, 15, 21, 44), None) == wed  # 16:44 CT
+    # Méně než PURGE_HEADROOM do otevření 17:00 CT už se nespouští
+    assert purge_day_due(_utc(2026, 7, 15, 21, 45), None) is None
+    assert purge_day_due(_utc(2026, 7, 15, 22, 0), None) is None  # 17:00 CT, seance
+
+
+def test_purge_v_zime_posunuty_o_hodinu() -> None:
+    """#1337: zima (CST, UTC−6) — dřívějších 21:30 UTC je 15:30 CT, otevřený trh."""
+    wed = dt.date(2026, 11, 4)
+    assert purge_day_due(_utc(2026, 11, 4, 21, 30), None) is None
+    assert purge_day_due(_utc(2026, 11, 4, 21, 59), None) is None
+    assert purge_day_due(_utc(2026, 11, 4, 22, 0), None) == wed  # 16:00 CT
+    assert purge_day_due(_utc(2026, 11, 4, 22, 44), None) == wed
+    assert purge_day_due(_utc(2026, 11, 4, 22, 45), None) is None
+
+
+def test_purge_jednou_za_den_ct() -> None:
+    wed = dt.date(2026, 7, 15)
+    assert purge_day_due(_utc(2026, 7, 15, 21, 5), wed) is None
+    # Další den v pauze znovu
+    assert purge_day_due(_utc(2026, 7, 16, 21, 5), wed) == dt.date(2026, 7, 16)
+
+
+def test_purge_o_vikendu_kdykoli() -> None:
+    # Sobota poledne CT — trh zavřený celý den
+    assert purge_day_due(_utc(2026, 7, 18, 17, 0), None) == dt.date(2026, 7, 18)
+    # Neděle 16:50 CT — do nedělního otevření zbývá míň než rezerva
+    assert purge_day_due(_utc(2026, 7, 19, 21, 50), None) is None
 
 
 # ── Věčný archiv 1min barů (SentimentLens S4, #275) ────────────────

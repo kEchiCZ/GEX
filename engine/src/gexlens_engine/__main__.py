@@ -26,6 +26,7 @@ from gexlens_engine.adapters import (
     IbkrProvider,
     count_ib_lines,
 )
+from gexlens_engine.background import BackgroundJob
 from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
 from gexlens_engine.compute.cumdelta import CumDeltaTracker
 from gexlens_engine.compute.expiry_calendar import front_contract_eligible
@@ -120,7 +121,7 @@ from gexlens_engine.scenarios import ScenarioCollector
 from gexlens_engine.setups import SetupEngine, setup_params_from_settings
 from gexlens_engine.spot_stream import SpotStreamer
 from gexlens_engine.storage.briefing_verdicts_store import BriefingVerdictRepository
-from gexlens_engine.storage.diskwatch import DiskWatch, utcnow_ts
+from gexlens_engine.storage.diskwatch import DiskSnapshot, DiskWatch, utcnow_ts
 from gexlens_engine.storage.emrespect_store import EmRespectRepository
 from gexlens_engine.storage.fa_calibration import FaAlphaRepository
 from gexlens_engine.storage.fa_validation import FaValidationRepository
@@ -134,7 +135,7 @@ from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.storage.paper_store import PaperRepository
 from gexlens_engine.storage.parquet_store import SnapshotWriter, bar_partition_day, read_bars
 from gexlens_engine.storage.probes_store import ProbeRepository
-from gexlens_engine.storage.retention import RetentionJob
+from gexlens_engine.storage.retention import RetentionJob, RetentionReport, purge_day_due
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
 from gexlens_engine.storage.sentiment import LegacyNewsReactionsError, ensure_sentiment_schema
 from gexlens_engine.storage.setup_params_store import SetupParamsRepository
@@ -1739,6 +1740,9 @@ async def main() -> None:
 
     retention = RetentionJob(settings)
     last_purge_date: dt.date | None = None
+    # Měření disku a purge běží na pozadí, cyklus na ně nečeká (#1337)
+    disk_job: BackgroundJob[DiskSnapshot] = BackgroundJob("Měření disku (#773)")
+    purge_job: BackgroundJob[RetentionReport] = BackgroundJob("Retention purge")
     # Dohled nad volným místem (#773): měří datový disk (bind mount = čísla
     # hostitele) a velikost PostgreSQL; alerty do zvonečku, úklid řeší #757
     disk_watch = DiskWatch(
@@ -3138,10 +3142,12 @@ async def main() -> None:
         # „Engine běží" a „IBKR je připojen" jsou dva různé stavy a status je
         # nesmí splácnout dohromady.
         if full_run:
-            # Dohled disku (#773): měří se v intervalu DiskWatch, mezi měřeními
-            # se vrací poslední snímek — rglob a SQL neběží každou minutu
-            disk_snapshot = await asyncio.to_thread(disk_watch.tick, utcnow_ts())
+            # Dohled disku (#773): měření běží na pozadí v intervalu DiskWatch
+            # (#1337 — přes bind mount až 121 s); cyklus jen vyzvedne doběhlý
+            # snímek a vyhodnotí ho, na běžící měření nečeká
+            disk_snapshot = disk_job.take_result()
             if disk_snapshot is not None:
+                disk_watch.record(disk_snapshot)
                 disk_alert = disk_watch.evaluate(disk_snapshot)
                 if disk_alert is not None:
                     await publisher.publish(
@@ -3153,6 +3159,9 @@ async def main() -> None:
                             "ts": now.timestamp(),
                         },
                     )
+            measure_ts = utcnow_ts()
+            if not disk_job.running and disk_watch.due(measure_ts):
+                disk_job.start(disk_watch.measure, measure_ts)
             try:
                 await calendar_alerts.on_minute(now, publisher)
             except Exception:
@@ -3222,23 +3231,23 @@ async def main() -> None:
                 **aggregate_status(results),
             )
 
-        # Noční purge (jednou po konfigurovaném čase)
-        if (
-            dt.datetime.now(dt.UTC).time() >= settings.retention_purge_time_utc
-            and last_purge_date != dt.datetime.now(dt.UTC).date()
-        ):
-            report = await asyncio.to_thread(retention.purge, dt.datetime.now(dt.UTC).date())
-            last_purge_date = dt.datetime.now(dt.UTC).date()
-            if report.disk_limit_exceeded:
-                await publisher.publish(
-                    "alerts",
-                    {
-                        "kind": "disk_limit",
-                        "symbol": "*",
-                        "message": "Disk limit překročen",
-                        "ts": now.timestamp(),
-                    },
-                )
+        # Purge jednou denně v zavřeném trhu (denní pauza CME, #1337) na pozadí;
+        # den se odškrtne už při startu — pád se zaloguje a neopakuje se každou minutu
+        purge_now = dt.datetime.now(dt.UTC)
+        purge_day = purge_day_due(purge_now, last_purge_date)
+        if purge_day is not None and purge_job.start(retention.purge, purge_now.date()):
+            last_purge_date = purge_day
+        report = purge_job.take_result()
+        if report is not None and report.disk_limit_exceeded:
+            await publisher.publish(
+                "alerts",
+                {
+                    "kind": "disk_limit",
+                    "symbol": "*",
+                    "message": "Disk limit překročen",
+                    "ts": now.timestamp(),
+                },
+            )
 
         cycle += 1
         elapsed = asyncio.get_running_loop().time() - cycle_start

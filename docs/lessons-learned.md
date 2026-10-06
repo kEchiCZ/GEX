@@ -16,6 +16,13 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-10-06 — `await asyncio.to_thread(...)` v minutovém cyklu = cyklus stojí (#1337).**
+  Měření disku (bind mount, až 121 s) a purge (~2,5 min) běžely ve vlákně, takže event loop žil, ale
+  cyklus na ně čekal — 29. 9. chyběly cykly ES 21:31–21:32 UTC. Purge navíc měl pevných 21:30 UTC, což
+  je od 1. 11. (CST) 15:30 CT, tedy otevřený trh. Odhalilo srovnání děr v minutových cyklech s časem
+  purge a logem „pomalý bind mount“. → Pomalou údržbu odpalovat přes `background.BackgroundJob` (jeden
+  běh naráz, výsledek se vyzvedne v další minutě, výjimka do logu) a čas jobu vázat na hodiny trhu
+  (`marketclock`), nikdy na pevné UTC; test na léto i zimu.
 - **2026-09-25 — spouštěč Task Scheduleru „23:05“ by v zimě běžel ve 22:05 (#1277): `New-ScheduledTaskTrigger` ukládá offset.**
   `StartBoundary` vzniká jako `…T23:05:00+02:00` = „synchronizovat napříč časovými pásmy“ → Windows drží čas v UTC
   a po konci letního času úloha poběží o hodinu dřív (u pauzy Globexu = do otevřeného trhu). Týká se i walk-forward
