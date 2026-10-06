@@ -82,7 +82,9 @@ from gexlens_engine.ticker import parse_ticker
 # kterou trh neměl (ES 1004, NQ 1048, ES 1049), jsou to vadná data v5, ne jiná
 # mechanika. Nová verze by rozdělila vzorek brány a kalibrace kvůli řádkům,
 # které vznikly jen při výpadku streamu; od #1320 je pozná chybějící
-# `context.entry_bar_ts`, starší přepočet #1320 jako „vstup mimo bary“.
+# `context.entry_bar_ts`, starší přepočet #1320 jako „vstup mimo bary“. Ze
+# statistik je vyřazuje trvalá značka `context.excluded` (`counts_in_stats`),
+# kterou po schválení zapíše `scripts/recompute_setup_outcomes.py --exclude`.
 SETUP_MECHANICS_VERSION = 5
 
 
@@ -1455,7 +1457,8 @@ def born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
     - vznik: živý `SetupEngine._detect_new` (jediné místo zápisu setupu) a jeho
       offline zrcadlo `scripts/backtest_setups.replay` (backtest
       a walk-forward), ne detektory;
-    - čtení: `SetupsRepository` vyřazuje historické řádky ze vstupu brzd
+    - čtení: přes `counts_in_stats` (spolu se značkou #1346) —
+      `SetupsRepository` vyřazuje historické řádky ze vstupu brzd
       a brány šablon, kalibrace confidence, sebekontroly a kouče a označí je
       ve výpisu tabulky (`after_settle`); souhrn `setup_summary` je jen
       spočítá. V DB řádky zůstávají. Gamma útes (`next_setups`) je zatím
@@ -1466,6 +1469,44 @@ def born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
     """
     settle = setup_settle_ts(expiry)
     return settle is not None and created_ts >= settle
+
+
+#: Klíč trvalé značky vyřazení ze statistik v `context` (#1346):
+#: `{"reason": …, "detail": …, "ts": ISO}`. Zapisuje ji jen
+#: `SetupsRepository.exclude` (skript `recompute_setup_outcomes.py --exclude`).
+EXCLUDED_KEY = "excluded"
+#: Důvod značky: setup vznikl nad cenou, kterou bary v minutě vzniku nemají
+#: (zamrzlý spot / mid kotace bez baru před #1346, verdikt přepočtu #1320)
+EXCLUDED_ENTRY_OFF_BARS = "vstup_mimo_bary"
+
+
+def excluded_reason(context: object) -> str | None:
+    """Důvod trvalého vyřazení setupu ze statistik (`context.excluded`, #1346), jinak None.
+
+    Na rozdíl od `born_after_settle` se z řádku spočítat nedá — rozhodnutí
+    stojí na barech v partici (přepočet #1320), které API ani engine při čtení
+    historie nečtou. Proto ho skript po schválení zapíše do kontextu a čtenáři
+    se ptají jen značky.
+    """
+    if not isinstance(context, Mapping):
+        return None
+    mark = context.get(EXCLUDED_KEY)
+    if not isinstance(mark, Mapping):
+        return None
+    reason = mark.get("reason")
+    return reason if isinstance(reason, str) and reason else None
+
+
+def counts_in_stats(expiry: str, created_ts: dt.datetime, context: object) -> bool:
+    """Patří setup do statistik? Jediný predikát všech čtenářů historie.
+
+    Vyřazený je setup vzniklý po settle vlastní expirace (`born_after_settle`,
+    #1324) a setup se značkou `context.excluded` (`excluded_reason`, #1346).
+    Čtenáři: souhrn #1319 a Knihovna (`SetupFact.in_stats`), brzdy, brána
+    šablon a čerpání zkoušky, kalibrace confidence, sebekontrola a kouč
+    (`SetupsRepository`). Tabulka řádek jen označí, v DB zůstává.
+    """
+    return not born_after_settle(expiry, created_ts) and excluded_reason(context) is None
 
 
 # ── Cesta ceny setupu (#1320) ───────────────────────────────────────────────

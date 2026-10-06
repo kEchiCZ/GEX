@@ -28,6 +28,9 @@ export interface SetupRow {
   /** Vznikl po settle vlastní expirace (#1324, server `born_after_settle`) —
    *  nemohl existovat, souhrn, brzdy ani brána ho nepočítají. */
   after_settle?: boolean
+  /** Důvod trvalého vyřazení ze statistik (#1346, `context.excluded`), např.
+   *  `vstup_mimo_bary` = vznik nad zamrzlým spotem; null = bez značky. */
+  excluded?: string | null
 }
 
 /** Zrcadlo `SETUP_MECHANICS_VERSION` v enginu (#311) — UŽ JEN pro testy.
@@ -252,6 +255,8 @@ export interface SetupsSummary {
   legacy_count: number
   /** Setupy vzniklé po settle vlastní expirace (#1324) — vyřazené ze všech čísel souhrnu. */
   after_settle_count: number
+  /** Setupy se značkou vyřazení (#1346, vznik nad zamrzlým spotem) — vyřazené stejně. */
+  excluded_count: number
   fee_per_contract_usd: number
   account_usd: number
   unpriced_symbols: string[]

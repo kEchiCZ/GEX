@@ -138,6 +138,14 @@ const AFTER_SETTLE_TOOLTIP = [
   '• nové takové setupy už nevznikají (přechod expirace v settle řeší #1331)',
 ].join('\n')
 
+const EXCLUDED_TOOLTIP = [
+  'Setup vznikl nad cenou, kterou trh v té minutě neměl (#1346):',
+  '• při výpadku streamu stál spot a detektor vzal starou cenu',
+  '• vstup leží mimo 1min bary minuty vzniku (přepočet #1320)',
+  '• nevstupuje do souhrnu, účtu, brzd, brány šablon ani kalibrace',
+  '• v tabulce a v databázi zůstává; nové takové setupy už nevznikají',
+].join('\n')
+
 /** Řádek rozdělení obchodovatelné / stínové / bez pravidel (1 kontrakt na setup). */
 function SplitRow({
   label,
@@ -236,7 +244,9 @@ function SetupsOverview() {
       ? setups
       : setups.filter((row) => (row.mechanics_version ?? 1) === mechanicsVersion)
   const visible = tradeableOnly
-    ? byVersion.filter((row) => !row.after_settle && riskInfo(row)?.tradeable !== false)
+    ? byVersion.filter(
+        (row) => !row.after_settle && !row.excluded && riskInfo(row)?.tradeable !== false,
+      )
     : byVersion
   const pointUsd = pointValue(symbol)
   const all = summary?.all ?? null
@@ -406,6 +416,15 @@ function SetupsOverview() {
               title={AFTER_SETTLE_TOOLTIP}
             >
               Vyřazeno ze souhrnu (vznik po settle vlastní expirace): {summary.after_settle_count}
+            </p>
+          )}
+          {summary.excluded_count > 0 && (
+            <p
+              className="muted setups-page-note"
+              data-testid="setups-excluded"
+              title={EXCLUDED_TOOLTIP}
+            >
+              Vyřazeno ze souhrnu (vstup mimo bary, zamrzlý spot): {summary.excluded_count}
             </p>
           )}
           {account !== null && (
@@ -636,7 +655,7 @@ function SetupsOverview() {
                     key={row.id}
                     title={row.reason}
                     className={
-                      row.after_settle
+                      row.after_settle || row.excluded
                         ? 'setup-after-settle'
                         : risk !== null && !risk.tradeable
                           ? 'setup-shadow'
@@ -698,6 +717,17 @@ function SetupsOverview() {
                         >
                           {' '}
                           · po settle, mimo souhrn
+                        </span>
+                      )}
+                      {/* Vyřazený značkou (#1346) — vstup mimo bary */}
+                      {!row.after_settle && row.excluded && (
+                        <span
+                          className="setup-after-settle-tag muted"
+                          data-testid={`excluded-${row.id}`}
+                          title={EXCLUDED_TOOLTIP}
+                        >
+                          {' '}
+                          · vstup mimo bary, mimo souhrn
                         </span>
                       )}
                     </td>

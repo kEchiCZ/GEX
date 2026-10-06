@@ -12,7 +12,8 @@ by u vzácných šablon klamal stářím (ES gamma_momentum měl 1. 10. posledn�
 verdikt z 25. 9.).
 
 Vstupem jsou `SetupFact` ze souhrnu (#1319); bere se jen aktuální mechanika
-a setupy vzniklé po settle vlastní expirace (#1324) se vyřadí — stejně jako
+a setupy mimo statistiky (`SetupFact.in_stats`: vznik po settle vlastní
+expirace #1324, značka `context.excluded` #1346) se vyřadí — stejně jako
 čtení brzd a brány v enginu (`setups_store.realized_since`).
 
 Hlavička Knihovny ukazuje stav brzd účtu (`library_brakes`) — tatáž
@@ -229,9 +230,7 @@ def library_cells(
     starší řádky do brány nepočítá.
     """
     scope = [
-        fact
-        for fact in facts
-        if fact.mechanics_version == mechanics_version and not fact.after_settle
+        fact for fact in facts if fact.mechanics_version == mechanics_version and fact.in_stats
     ]
     since = gate_window_start(now, params.template_gate_days)
     wanted = set(symbols)

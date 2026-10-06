@@ -426,6 +426,46 @@ def test_summarize_vyradi_vznik_po_settle_a_uvede_pocet() -> None:
     assert run(True).all.count == 1
 
 
+def test_summarize_vyradi_oznacene_znackou_a_uvede_pocet() -> None:
+    """#1346: setup se značkou `context.excluded` (vznik nad zamrzlým spotem) je
+    ze všech čísel souhrnu venku a počítá se do `excluded_count`; řádek po
+    settle se značkou se počítá jen jednou (jako po settle)."""
+    risk = {"max_loss_usd": 400.0, "fee_usd": 10.0}
+    settle = utc("2026-08-17T20:00:00")
+    mark = {"excluded": {"reason": "vstup_mimo_bary", "detail": "zamrzlý spot", "ts": "x"}}
+    base = {
+        "symbol": "ES",
+        "expiry": "20260817",
+        "template": "wall_bounce",
+        "status": "closed_target",
+        "created_ts": utc("2026-08-17T14:00:00"),
+        "closed_ts": utc("2026-08-17T15:00:00"),
+        "outcome_r": 2.0,
+        "entry": 6000.0,
+        "stop": 5995.0,
+        "mechanics_version": 5,
+    }
+    context = {"tradeable": True, "contracts": 1, **risk}
+    live = fact_from_record({**base, "id": 1, "context": context})
+    frozen = fact_from_record({**base, "id": 2, "context": {**context, **mark}})
+    both = fact_from_record({**base, "id": 3, "created_ts": settle, "context": {**context, **mark}})
+    assert (live.excluded, frozen.excluded) == (None, "vstup_mimo_bary")
+    assert (live.in_stats, frozen.in_stats, both.in_stats) == (True, False, False)
+    summary = summarize_setups(
+        [live, frozen, both],
+        mechanics_version=5,
+        all_versions=False,
+        point_values=POINT_VALUES,
+        fee_per_contract_usd=FEE,
+        account_usd=ACCOUNT,
+        session_day=DAY,
+    )
+    assert (summary.after_settle_count, summary.excluded_count) == (1, 1)
+    assert (summary.all.count, summary.tradeable.count) == (1, 1)
+    assert summary.all.sum_r == pytest.approx(2.0)
+    assert summary.account is not None and summary.account.trades == 1
+
+
 def test_summarize_neznamy_bod_se_nevymysli() -> None:
     summary = summarize_setups(
         [fact(symbol="XYZ")],

@@ -198,6 +198,20 @@ chyb**, hlavně diagnostických a provozních.
   predikátní funkcí pro obě strany (`TrialCell.in_force`); testovat i časy uvnitř minuty a změnu
   verze, ne jen „začátek o hodinu dřív“. Stav, který zvyšuje riziko, nesmí obnovit změna, kterou
   udělal systém (verze mechaniky), jen člověk.
+- **2026-10-06 — vyřazení setupů nad zamrzlým spotem ze statistik (#1346): kritérium nejde spočítat z řádku a kvartální větev přepočtu vstup vůbec nekontrolovala.**
+  Uživatel rozhodl historické setupy „vstup mimo bary“ vyřadit stejně jako vznik po settle (#1324).
+  Kritérium ale na rozdíl od `born_after_settle` stojí na barech v partici: chybějící
+  `context.entry_bar_ts` nestačí (nemá ho celá v5 před #1320, 686 řádků „beze změny“) a čtení barů
+  v API/enginu u každého čtení historie by bylo pomalé (bind mount) a mohlo by se rozejít s tím, co
+  uživatel schválil. Přepočet #1320 navíc kvartální expiraci (18. 9., 23 setupů) vrátil jako
+  „neověřitelný“ **dřív**, než kontroloval vstup — setup nad spotem v ten den by zůstal ve statistikách
+  (v produkci tam žádný nebyl, ověřeno doplněnou kontrolou).
+  → Rozhodnutí, které stojí na datech mimo řádek, zapsat jako **trvalou značku** v řádku
+  (`context.excluded`, skript dry-run → schválené CSV → zápis, nic nemazat) a čtenáři se ptají jen
+  značky přes **jeden predikát** (`counts_in_stats` = ne po settle a bez značky), který nahradil
+  `born_after_settle` u všech čtenářů najednou. V klasifikátoru s časnými návraty kontrolovat, zda
+  časný návrat nepřeskakuje kontrolu, na které závisí jiný konzument (vstup na settle nezávisí, tak se
+  ověřuje před větví settle).
 - **2026-10-06 — setupy nad zamrzlým spotem (#1346): #1320 opravil vyhodnocení, ale vznik dál bral spot.**
   Dávka cyklu bez baru dávala `MinuteInputs` se spotem jako O = H = L = C; při výpadku streamu spot
   stál a detektory nad ním vytvořily setupy, jejichž vstup trh v té minutě neměl (ES 1004, NQ 1048 pod
