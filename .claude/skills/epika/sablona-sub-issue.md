@@ -1,13 +1,13 @@
 # Šablona: sub-issue (jedna session, jeden PR)
 
 Navazuje na zavedený styl (#1352). Titulek jako Conventional commit česky:
-`feat(scope): …`, `fix(scope): …`, `docs(adr): …`. Labely: `prio:*`, právě jeden `epic:*`,
+`feat(scope): …`, `fix(scope): …`, `docs(adr): …`. Labely: právě jeden `prio:*` a jeden `epic:*`,
 případně `needs-decision`, `performance`, doménový. Navázat jako GitHub sub-issue epiky
-(dřív se vazba psala jen textem — teď obojí).
+(příkaz v SKILL.md, krok 3) — dřív se vazba psala jen textem, teď obojí.
 
 ```markdown
 Fáze N z #<EPIKA>. Koncept, data a rozhodnutí jsou v #<EPIKA> (fáze N−1 = PR #… / —).
-Blokováno: #… (nebo —)
+Postup: skill epika (`.claude/skills/epika/SKILL.md`, kroky 4–5). Blokováno: #… (nebo —)
 
 ## Rozsah
 - **<co>** — <konkrétně: modul, funkce, endpoint, obrazovka; path:line, kde je známé>
@@ -22,18 +22,18 @@ Blokováno: #… (nebo —)
 - [ ] Dokumentace (ADR / manuál #628 / SPEC kap. 11 / roadmapa #629) + u engine/API nasazení na dev a ověření naživo
 
 ## Velikost a navázání
-- 1 session. Když se nedokončí: commit + push do větve `feat/<N>-slug` a komentář „Stav"
-  (hotovo / zbývá / další krok / otevřené otázky / jak ověřit).
+- Odhad: vrstva <engine | API | frontend> · soubory ke čtení <…> · živé ověření <ano/ne> → 1 session.
+- Na začátku session komentář „Plán session", po každém kroku commit + push, na konci „Stav".
 
 Souvisí: #…, ADR-00xx
 ```
 
 # Šablona: PR
 
-Titulek `typ(scope): popis česky — upřesnění (#N)`. Tělo:
+Titulek `typ(scope): popis česky — upřesnění (#N)`, kde N je sub-issue. Tělo:
 
 ```markdown
-Closes #N            (u částečné fáze: Refs #N na konci)
+Closes #N
 
 ## Problém / Shrnutí
 ## Řešení / Co se mění
