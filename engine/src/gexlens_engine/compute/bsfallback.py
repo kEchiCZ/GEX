@@ -50,6 +50,8 @@ class BsFallbackWatcher:
     _alerted: bool = field(default=False, init=False)
     #: Kolik remediačních pokusů (#877 C) epizoda vyčerpala; reset s návratem.
     _remediation_attempts: int = field(default=0, init=False)
+    # Kdy byl započten poslední pokus — další až po REMEDIATION_AFTER_S (#1315)
+    _last_attempt_at: float | None = field(default=None, init=False)
     #: Otevřený čas epizody před posledním zavřením trhu (#1309): hodiny se
     #: při zavřeném trhu pozastaví, nenulují — délka v alertu je součet
     #: otevřených úseků (± jeden cyklus na zavření).
@@ -84,6 +86,7 @@ class BsFallbackWatcher:
             self._last_alert = None
             self._alerted = False
             self._remediation_attempts = 0
+            self._last_attempt_at = None
             if recovered:
                 return (
                     f"{self.symbol}: TWS model greeks se vrátil — BS fallback skončil "
@@ -120,6 +123,20 @@ class BsFallbackWatcher:
         v prvních minutách, kdy TWS model teprve nabíhá (#1309). Počet pokusů
         se přes zavřený trh přenáší.
         """
+        attempt = self.remediation_pending(now=now)
+        if attempt is not None:
+            self._remediation_attempts = attempt
+            self._last_attempt_at = now
+        return attempt
+
+    def remediation_pending(self, *, now: float) -> int | None:
+        """Číslo pokusu, který by `remediation_due` vrátil — BEZ započtení (#1315).
+
+        Volající nejdřív zjistí, že pokus dozrál, a započítá ho (`remediation_due`)
+        až ve chvíli, kdy smí zasáhnout. Dřív se pokus započetl před kontrolou
+        US RTH a v RTH propadl bez zásahu — trvalá porucha Greeks pak po dvou
+        propadlých pokusech zůstala bez nápravy.
+        """
         if self.episode_started is None or self.share < REMEDIATION_SHARE:
             return None
         if self._remediation_attempts >= REMEDIATION_MAX_ATTEMPTS:
@@ -127,8 +144,11 @@ class BsFallbackWatcher:
         required = REMEDIATION_AFTER_S * (self._remediation_attempts + 1)
         if now - self.episode_started < required:
             return None
-        self._remediation_attempts += 1
-        return self._remediation_attempts
+        # Pokus zdržený do konce RTH (#1315): další má vlastní rozestup, jinak by
+        # reconnect přišel minutu po resubscribe a ten by neměl šanci zabrat
+        if self._last_attempt_at is not None and now - self._last_attempt_at < REMEDIATION_AFTER_S:
+            return None
+        return self._remediation_attempts + 1
 
     def status_fields(self) -> dict[str, object]:
         """Pole do /status: podíl + případný začátek epizody (epoch ISO nejde

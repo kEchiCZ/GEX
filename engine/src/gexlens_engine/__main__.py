@@ -2903,6 +2903,9 @@ async def main() -> None:
     )
     last_full_minute: dt.datetime | None = None
 
+    # Symbol → remediační pokus BS fallbacku, o jehož čekání na konec RTH už
+    # log ví (#1315) — WARNING jednou na pokus, ne každou minutu RTH
+    bs_wait_logged: dict[str, int] = {}
     while True:
         cycle_start = asyncio.get_running_loop().time()
         now = dt.datetime.now(dt.UTC).replace(second=0, microsecond=0)
@@ -3122,15 +3125,24 @@ async def main() -> None:
         # (spojení je sdílené, druhý symbol by zasahoval do téhož).
         if settings.bs_fallback_reconnect:
             for pipeline in run_list:
+                # Okno zásahu se kontroluje PŘED započtením pokusu (#1315):
+                # pokus dozrálý v RTH počká na konec RTH, nepropadne
+                pending = pipeline.runtime.bs_remediation_pending(time.monotonic())
+                if pending is None:
+                    continue
+                if not outside_us_rth(now):
+                    if bs_wait_logged.get(pipeline.symbol) != pending:
+                        bs_wait_logged[pipeline.symbol] = pending
+                        logger.warning(
+                            "%s: plný BS fallback dozrál k remediaci (pokus %d/2), ale běží "
+                            "US RTH — čekám na konec RTH",
+                            pipeline.symbol,
+                            pending,
+                        )
+                    break
                 attempt = pipeline.runtime.bs_remediation_due(time.monotonic())
                 if attempt is None:
                     continue
-                if not outside_us_rth(now):
-                    logger.warning(
-                        "%s: plný BS fallback dozrál k remediaci, ale běží US RTH — čekám",
-                        pipeline.symbol,
-                    )
-                    break
                 if attempt == 1:
                     action = "vynucená obnova subskripcí"
                     ok = await manager.resubscribe_now()
