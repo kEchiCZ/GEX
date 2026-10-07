@@ -447,6 +447,7 @@ def _phase_values(
                 deferred=reaction.deferred,
                 gex_regime=regime,
                 computed_at=now,
+                closure_open=reaction.closure_open,
             )
             for reaction in reactions
         ]
