@@ -6,6 +6,8 @@ převádí přes `Intl.DateTimeFormat` s `timeZone` — žádné externí závis
 žádná vlastní aproximace DST po celých dnech (ta se na přechodovém víkendu
 míjela o hodinu, #159/#511). */
 
+import { isUsMarketHoliday } from './holidays'
+
 const dtfCache = new Map<string, Intl.DateTimeFormat>()
 
 function formatter(timeZone: string): Intl.DateTimeFormat {
@@ -71,16 +73,16 @@ export function sessionDateIso(ts: number = Date.now()): string {
   return new Date(shifted).toISOString().slice(0, 10)
 }
 
-/** Má obchodní den `dateIso` US seanci s openem i settle? Po–pá.
+/** Má obchodní den `dateIso` US seanci s openem i settle? Po–pá mimo svátky.
 
 Jediný predikát obchodního dne ve frontendu, protějšek engine
 `settle.is_trading_session` (#1309, AGENTS.md) — mění se spolu; žádné lokální
 `getUTCDay()` jako test obchodního dne. `sessionDateIso` vrací v sobotu
 a v neděli před 17:00 CT den bez seance — scénář ani verdikt na něj navázat
-nejde (API vrací 422). Svátky CME zatím nezná (#1308). */
+nejde (API vrací 422). Svátky NYSE z pravidel (#1308, `holidays.ts`). */
 export function isTradingSessionIso(dateIso: string): boolean {
   const weekday = new Date(`${dateIso}T00:00:00Z`).getUTCDay()
-  return weekday >= 1 && weekday <= 5
+  return weekday >= 1 && weekday <= 5 && !isUsMarketHoliday(dateIso)
 }
 
 /** První obchodní den ≥ `dateIso` — o víkendu pondělí (výchozí termín scénáře, #1309). */

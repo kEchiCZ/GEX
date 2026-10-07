@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.28 · říjen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.29 · říjen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -160,8 +160,8 @@ svátek), otevře se **poslední seance, která data má** — typicky pátečn�
 (#946). Doskok se vždy ohlásí bannerem nad grafem s oběma daty: *„Pro
 2026-08-31 nejsou uložená data — zobrazena poslední seance 2026-08-28. Mimo
 obchodní dny je to očekávané; ve všední den to znamená, že sběr neběžel."*
-Aplikace nezná kalendář svátků, podle data poznáš sám, jestli je to
-v pořádku; ruční volba expirace v selektoru banner zruší. Čerstvě přidaný
+Banner svátek od výpadku sběru nerozlišuje, podle data poznáš sám, jestli
+je to v pořádku; ruční volba expirace v selektoru banner zruší. Čerstvě přidaný
 ticker bez dat zůstává u vybrané expirace s hláškou demo dat.
 
 ---
@@ -914,6 +914,15 @@ Dropdown **Signály** v řádku přepínačů: **Off / NEWS / COMBINED** (obě v
 - **COMBINED** — totéž se souhlasem GEX kontextu (režim, poloha vůči flipu).
 
 Signál se ukáže jako **šipka na cenové křivce** (▲ Long teal / ▼ Short červená, sytost = síla) s **vodorovnou stopou platnosti** do své expirace. Tooltip u crosshairu nese režim, zdůvodnění, **n vzorků a Wilson LB**. Při nepotvrzené změně stavu sentimentu nese šipka **⚠**.
+
+**Svátky a zkrácené seance (v1.29, #1308).** Aplikace zná svátky US trhu
+(Nový rok, MLK, Presidents Day, Velký pátek, Memorial Day, Juneteenth, 4. 7.,
+Labor Day, Den díkůvzdání, Vánoce) i zkrácené seance (den po Dni díkůvzdání,
+Štědrý den, 3. 7.). Svátek není obchodní den: nevzniká scénář ani verdikt dne
+a nechodí upozornění na chybějící data. O Vánocích, Novém roce a Velkém pátku
+je Globex zavřený celý den, o ostatních svátcích se obchoduje do 12:00 CT
+(19:00 našeho času). Zkrácená seance končí v 13:00 ET (19:00 našeho času) a
+v tu chvíli je i settle a přechod na další expiraci.
 
 **Jen v obchodní době (v1.13, #968).** Signály vznikají výhradně, když se ES/NQ obchodují (neděle 17:00 CT → pátek 16:00 CT, mimo denní pauzu CME 16:00–17:00 CT). Doklad z produkce: 21 z 39 signálů vzniklo se zavřeným trhem a **ani jeden** neměl vyhodnocení — bez barů není z čeho výnos změřit — a hlavně se nedal obchodovat: než trh otevřel, positioning byl jinde. Expirace starších signálů a dopočet jejich výsledků běží dál i o víkendu.
 

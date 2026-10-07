@@ -24,7 +24,10 @@ partici místo pondělní seance (#512).
    klíčované UTC kalendářním dnem** — přepis partic (fáze 2) se nedělá, dokud
    pro něj nevznikne konkrétní důvod.
 4. **Svátky neřeší kalendář.** Rozhoduje existence barů (stejný princip jako
-   dosavadní `marketclock.py` — odhad, konečné slovo mají data).
+   dosavadní `marketclock.py` — odhad, konečné slovo mají data). *Upřesněno
+   ADR-0046 (#1308):* pro změřená data to platí dál, ale hlídače a predikát
+   obchodního dne se ptají předem — od #1308 berou svátky a zkrácené seance
+   z pravidel NYSE (`settle.us_market_holidays`), ne z udržovaného seznamu.
 5. **Pořadí realizace: #498 → #511 → #512.** Hranice seance potřebuje
    DST-korektní převod, proto #512 až po #511.
 

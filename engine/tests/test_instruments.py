@@ -1764,12 +1764,12 @@ async def test_otevreny_trh_selhani_oi_hlasi_hranove(
     ]
 
 
-async def test_svatek_stoji_nejvys_jeden_oi_alert(
+async def test_vanoce_bez_obnovy_oi_i_bez_alertu(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
 ) -> None:
-    """#1307 varianta A: rozvrh svátky nezná (ADR-0023 bod 4) — na Vánoce
-    (pátek 25. 12. 2026, CME zavřeno) obnova OI selhává celý den; hranový
-    alert z toho udělá jedno upozornění místo dvou za hodinu."""
+    """#1308: na Vánoce (pátek 25. 12. 2026) CME nepublikuje OI a Globex je
+    zavřený — obnova archivu ani upozornění nemají co hlásit. Do #1308 rozvrh
+    svátek neznal a obnova selhávala celý den (#1307 ji zbrzdil hranovým alertem)."""
     settings, writer, repository, publisher = env
     settings.level_alert_near_steps = 0.0
     pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
@@ -1780,13 +1780,14 @@ async def test_svatek_stoji_nejvys_jeden_oi_alert(
     pipeline._oi_day = day
 
     start = dt.datetime(2026, 12, 25, 13, 5, tzinfo=dt.UTC)  # po okně 07:00 CST
-    assert not is_market_closed(start)  # rozvrh svátek nezná
+    assert is_market_closed(start)
+    assert pipeline._oi_published(start) is False
     for step in range(10):
         pipeline._cycles_since_oi = OI_RETRY_CYCLES
         await pipeline.run_minute(start + dt.timedelta(minutes=31 * step))
 
-    assert len(archiver.calls) == 10
-    assert [a["kind"] for a in alerts_of(publisher, OI_KINDS)] == ["oi_refresh_failed"]
+    assert archiver.calls == []
+    assert alerts_of(publisher, OI_KINDS) == []
 
 
 @pytest.mark.parametrize(
