@@ -187,6 +187,16 @@ def test_collect_zaporny_median_alfu_nemeni(tmp_path: Path) -> None:
     assert alpha_repo.history_exists("ES", PREV)  # bod zapsán pro audit, dedup drží
 
 
+def test_collect_zaporny_median_bez_kalibrace_nezalozi_alfu_nula(tmp_path: Path) -> None:
+    """#1314: symbol bez kalibrace dostal po bodu s mediánem ≤ 0 řádek `fa_alpha`
+    s α 0 — runtime ho převzal a FA vrstva NQ byla vypnutá. Teď jen historie."""
+    settings, oi_repo, alpha_repo = _repos(tmp_path)
+    _seed_day(settings, oi_repo, doi=-40.0)
+    assert collect_alpha_calibration("ES", settings.derived_dir, oi_repo, alpha_repo, TODAY) is None
+    assert alpha_repo.get("ES") is None  # α zůstává z konfigurace
+    assert alpha_repo.history_exists("ES", PREV)  # audit bodu zůstává
+
+
 def test_collect_alpha_calibration_a_dedup(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path / "data")
     db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")

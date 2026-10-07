@@ -132,8 +132,14 @@ class FaAlphaRepository:
         alpha_after: float,
         days: int,
         now: dt.datetime | None = None,
+        *,
+        update_state: bool = True,
     ) -> None:
-        """Uloží denní bod do historie a přepíše aktuální α symbolu (transakčně)."""
+        """Uloží denní bod do historie a přepíše aktuální α symbolu (transakčně).
+
+        `update_state=False` zapíše jen historii (audit bodu, který α nemění):
+        symbol bez kalibrace tak nedostane řádek `fa_alpha` s α 0 (#1314).
+        """
         now = now or dt.datetime.now(dt.UTC)
         history_row = {
             "symbol": symbol,
@@ -148,7 +154,21 @@ class FaAlphaRepository:
         alpha_row = {"symbol": symbol, "alpha": alpha_after, "days": days, "updated_at": now}
         with self._engine.begin() as conn:
             conn.execute(self._upsert(fa_alpha_history_table, history_row, ["symbol", "day"]))
-            conn.execute(self._upsert(fa_alpha_table, alpha_row, ["symbol"]))
+            if update_state:
+                conn.execute(self._upsert(fa_alpha_table, alpha_row, ["symbol"]))
+
+    def set_state(
+        self, symbol: str, alpha: float, days: int, now: dt.datetime | None = None
+    ) -> None:
+        """Přepíše aktuální α symbolu (přepočet historie `scripts/recompute_fa.py`, #1314)."""
+        row = {
+            "symbol": symbol,
+            "alpha": alpha,
+            "days": days,
+            "updated_at": now or dt.datetime.now(dt.UTC),
+        }
+        with self._engine.begin() as conn:
+            conn.execute(self._upsert(fa_alpha_table, row, ["symbol"]))
 
     def _upsert(self, table: Table, row: dict[str, object], primary_key: list[str]) -> Executable:
         update_cols = {k: v for k, v in row.items() if k not in primary_key}
@@ -273,7 +293,10 @@ def collect_alpha_calibration(
         if point.ratio_median <= 0.0:
             # Nulový nebo záporný medián = tok se do OI nepropsal nebo jsou
             # data rozbitá; není to důkaz pro α = 0 (vypnutí vrstvy). Bod jde
-            # do historie pro audit, α i počet dnů zůstávají (#1172).
+            # do historie pro audit, α i počet dnů zůstávají (#1172). Symbol
+            # bez kalibrace stav nedostane vůbec: dřív se tu zapsal `fa_alpha`
+            # s α 0, runtime ho převzal a FA vrstva NQ byla vypnutá (#1314);
+            # v historii pak `alpha_after` 0 znamená „ještě nekalibrováno".
             logger.warning(
                 "Kalibrace α %s %s %s: medián %.3f ≤ 0 (%d stran) — α beze změny",
                 symbol,
@@ -289,6 +312,7 @@ def collect_alpha_calibration(
                 point,
                 state.alpha if state else 0.0,
                 state.days if state else 0,
+                update_state=state is not None,
             )
             continue
         alpha_after = update_alpha(state.alpha if state else None, point.ratio_median)
