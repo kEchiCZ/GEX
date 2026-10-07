@@ -1,11 +1,13 @@
 /** Značky deníku na časové ose heatmapy (#673) — čisté funkce.
 
-Záznamy deníku se mapují na minutu grafu stejným formatterem, jakým vznikly
-popisky osy (vzor newsMarkers, #287/#288) — vlastní formátování by se s osou
-rozešlo a značky by tiše zmizely. Víc záznamů v téže minutě = jedna značka
-s počtem. Zobrazení je vypínatelné přes Traders mode.
+Záznamy deníku se mapují na koš osy **časem** (#1303, vzor news markerů
+#1290, `AxisLocator`): dřív shodou popisku HH:MM, takže na 5m a delších TF
+zmizel záznam mimo hranici koše a záznam z pauzy CME neměl sloupec. Víc
+záznamů v témže koši = jedna značka s počtem. Zobrazení je vypínatelné přes
+Traders mode.
 */
 import type { JournalEntry } from '../api/journal'
+import type { AxisLocator } from './axisLocator'
 
 export interface JournalMarker {
   minuteIdx: number
@@ -41,22 +43,11 @@ export function journalMarkerColor(entries: JournalEntry[]): 'win' | 'loss' | nu
   return total > 0 ? 'win' : 'loss'
 }
 
-export function buildJournalMarkers(
-  entries: JournalEntry[],
-  labels: string[],
-  formatLabel: (iso: string) => string,
-): JournalMarker[] {
-  if (labels.length === 0) return []
-  // Popisek → index; při shodě popisků vyhrává první (vzor newsMarkers)
-  const indexByLabel = new Map<string, number>()
-  labels.forEach((label, index) => {
-    if (!indexByLabel.has(label)) indexByLabel.set(label, index)
-  })
-
+export function buildJournalMarkers(entries: JournalEntry[], locate: AxisLocator): JournalMarker[] {
   const clusters = new Map<number, JournalMarker>()
   for (const entry of entries) {
-    const index = indexByLabel.get(formatLabel(entry.ts_ref))
-    if (index === undefined) continue // mimo osu (jiný den)
+    const index = locate(entry.ts_ref)
+    if (index === null) continue // mimo osu (jiný den)
     const existing = clusters.get(index)
     if (existing) {
       clusters.set(index, {

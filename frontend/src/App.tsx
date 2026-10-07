@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { alignSeriesToLabels, fetchNewsByIds, signalGateInfo } from './api/news'
 import type { ChartNewsRow } from './api/news'
-import { axisDatesOf, buildExpiryMarkers } from './heatmap/expiryMarkers'
+import { buildExpiryMarkers } from './heatmap/expiryMarkers'
+import { dailyAxisLocator, sessionAxisLocator } from './heatmap/axisLocator'
 import {
   buildNewsMarkers,
   closedDayMarkers,
@@ -968,21 +969,23 @@ function MainContent() {
       cancelled = true
     }
   }, [tradersMode, symbol, view])
+  // Poloha značek deníku, signálů a expirací na ose (#1303): intraday časem na
+  // koš zobrazeného dne (vzor news markerů #1290), Daily datem sloupce
+  const axisLocator = useMemo(() => {
+    if (timeframe === 'daily') return dailyAxisLocator(chartLabels, dayLabel)
+    return sessionAxisLocator(newsAxis.view ? [newsAxis.view] : [], chartNews.nowMs)
+  }, [timeframe, chartLabels, newsAxis.view, chartNews.nowMs])
   const journalMarkers = useMemo(() => {
     if (!tradersMode || journalEntries.length === 0) return []
-    // Daily pohled páruje datem (sloupec = den), intraday minutou
-    const format = timeframe === 'daily' ? (iso: string) => dayLabel(iso.slice(0, 10)) : minuteLabel
-    return buildJournalMarkers(journalEntries, chartLabels, format)
-  }, [tradersMode, journalEntries, chartLabels, timeframe])
+    return buildJournalMarkers(journalEntries, axisLocator)
+  }, [tradersMode, journalEntries, axisLocator])
   // ⌛ kalendář expirací v ose (#1189): roll, kvartální expirace (SOQ), VIX,
   // měsíční OPEX — intraday jen ze dnů, které osa nese; Daily přes celou osu
   const expiryCalendar = useExpiryCalendar()
   const expiryMarkers = useMemo(() => {
     if (expiryCalendar === null) return []
-    const format = timeframe === 'daily' ? (iso: string) => dayLabel(iso.slice(0, 10)) : minuteLabel
-    const axisDates = timeframe === 'daily' ? null : axisDatesOf(day.minutesIso)
-    return buildExpiryMarkers(expiryCalendar.markers, chartLabels, format, axisDates)
-  }, [expiryCalendar, chartLabels, timeframe, day.minutesIso])
+    return buildExpiryMarkers(expiryCalendar.markers, axisLocator)
+  }, [expiryCalendar, axisLocator])
   // Shift+klik do plochy (#673): rychlý zápis k minutě pod kurzorem — myšlenka
   // přijde většinou až s odstupem od okamžiku, ✎ u Replay nese jen minutu playbacku
   const handleJournalQuickAdd = useCallback(
@@ -1108,10 +1111,17 @@ function MainContent() {
     if (signalMode === 'off') return []
     const branch = signalMode === 'news' ? 'NEWS' : 'COMBINED'
     const rows = newsData.signals.filter((row) => row.mode === branch && row.symbol === symbol)
-    return buildSignalMarkers(rows, chartLabels, minuteLabel, {
+    return buildSignalMarkers(rows, axisLocator, chartLabels.length - 1, {
       warning: sentState?.unconfirmed ?? false,
     })
-  }, [signalMode, newsData.signals, symbol, chartLabels, sentState?.unconfirmed])
+  }, [
+    signalMode,
+    newsData.signals,
+    symbol,
+    axisLocator,
+    chartLabels.length,
+    sentState?.unconfirmed,
+  ])
   // Progres ke gate pro dropdown (SPEC 9.0 „collecting data")
   const signalGate = useMemo(() => signalGateInfo(newsData.stats, symbol), [newsData.stats, symbol])
   // Daily OHLC SentIndexu (#296) — jen když je Daily pohled a panel zapnutý

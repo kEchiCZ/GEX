@@ -7,6 +7,8 @@ import {
   journalMarkerColor,
   journalMarkerNear,
 } from './journalMarkers'
+import { sessionAxisLocator } from './axisLocator'
+import { segmentOf } from '../test/axisSegment'
 
 function entry(id: number, tsRef: string): JournalEntry {
   return {
@@ -28,45 +30,50 @@ function entry(id: number, tsRef: string): JournalEntry {
   }
 }
 
-// Formatter jako v ose: HH:MM z ISO (UTC, ať test nezávisí na timezone)
-const label = (iso: string) => iso.slice(11, 16)
+// Osa 1m od 15:00 UTC (#1303: poloha časem, ne popiskem)
+const oneMinute = (count: number) =>
+  sessionAxisLocator([segmentOf('2026-08-13T15:00:00Z', count)], Infinity)
 
 describe('buildJournalMarkers', () => {
-  it('mapuje záznam na minutu přes formatter popisků', () => {
-    const labels = ['15:00', '15:01', '15:02']
-    const markers = buildJournalMarkers([entry(1, '2026-08-13T15:01:00Z')], labels, label)
+  it('mapuje záznam na koš osy časem', () => {
+    const markers = buildJournalMarkers([entry(1, '2026-08-13T15:01:00Z')], oneMinute(3))
     expect(markers).toHaveLength(1)
     expect(markers[0].minuteIdx).toBe(1)
     expect(markers[0].count).toBe(1)
   })
 
-  it('víc záznamů v téže minutě = jedna značka s počtem', () => {
-    const labels = ['15:00', '15:01']
+  it('víc záznamů v témže koši = jedna značka s počtem', () => {
     const markers = buildJournalMarkers(
       [entry(1, '2026-08-13T15:01:10Z'), entry(2, '2026-08-13T15:01:40Z')],
-      labels,
-      label,
+      oneMinute(2),
     )
     expect(markers).toHaveLength(1)
     expect(markers[0].count).toBe(2)
     expect(markers[0].entries.map((e) => e.id)).toEqual([1, 2])
   })
 
+  it('5m: záznam 15:07 nezmizí — padne do koše 15:05 (#1303)', () => {
+    const fiveMinute = sessionAxisLocator([segmentOf('2026-08-13T15:00:00Z', 4, 5)], Infinity)
+    const markers = buildJournalMarkers([entry(1, '2026-08-13T15:07:00Z')], fiveMinute)
+    expect(markers.map((m) => m.minuteIdx)).toEqual([1])
+  })
+
   it('záznam mimo osu (jiný den/čas) se tiše vynechá', () => {
-    const markers = buildJournalMarkers([entry(1, '2026-08-13T09:00:00Z')], ['15:00'], label)
+    const markers = buildJournalMarkers([entry(1, '2026-08-13T09:00:00Z')], oneMinute(1))
     expect(markers).toEqual([])
   })
 
   it('prázdná osa nic nevrací', () => {
-    expect(buildJournalMarkers([entry(1, '2026-08-13T15:00:00Z')], [], label)).toEqual([])
+    expect(
+      buildJournalMarkers([entry(1, '2026-08-13T15:00:00Z')], sessionAxisLocator([], Infinity)),
+    ).toEqual([])
   })
 })
 
 describe('journalMarkerNear', () => {
   const markers = buildJournalMarkers(
     [entry(1, '2026-08-13T15:00:00Z'), entry(2, '2026-08-13T15:10:00Z')],
-    Array.from({ length: 11 }, (_, i) => `15:${String(i).padStart(2, '0')}`),
-    label,
+    oneMinute(11),
   )
 
   it('vrací nejbližší značku v toleranci', () => {
