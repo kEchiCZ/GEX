@@ -537,8 +537,7 @@ class InstrumentPipeline:
         # neúspěšná OBNOVA, ne ztráta OI (#494) — jede se dál na starším snímku
         has_snapshot = today in self.oi_repository.days(self.symbol)
         if has_snapshot and not self._oi_refresh_due(now):
-            await self._run_fa_validation(today)
-            await self._run_alpha_calibration(today)
+            await self._run_fa_jobs(today)
             return True
         captured = self.oi_repository.captured_at(self.symbol, today)
         if captured is not None and captured < self.settings.oi_publication_utc(captured.date()):
@@ -607,8 +606,7 @@ class InstrumentPipeline:
                     coverage * 100,
                     self.settings.oi_final_min_coverage * 100,
                 )
-        await self._run_fa_validation(today)
-        await self._run_alpha_calibration(today)
+        await self._run_fa_jobs(today)
         await self._run_setup_selfcheck(today)
         await self._write_forward_field(today)
         return True
@@ -815,11 +813,47 @@ class InstrumentPipeline:
                 },
             )
 
+    async def _run_fa_jobs(self, today: dt.date) -> None:
+        """FA validace a kalibrace α jen nad FINÁLNÍM snímkem dne (#1314).
+
+        Obě porovnávají dnešní OI archiv s předchozím obchodním dnem a jejich
+        denní dedup bod zamkne. Dřív běžely hned po prvním archivu dne v 00:00
+        UTC, tedy nad OI před publikací CME (07:00 CT) — ΔOI ≈ 0 (`doi_abs` 0
+        u ES/NQ 22.–24. 9.), medián α 0 a dedup pak nedovolil bod přepočítat
+        po publikaci. Finální je snímek po publikačním okně se dvěma shodnými
+        čteními (`oi_final`); víkend ani pre-publikační snímek finální nejsou.
+        Do té doby se jen propíše uložená α do runtime (start enginu).
+        """
+        if not self.oi_final:
+            await self._restore_alpha()
+            return
+        await self._run_fa_validation(today)
+        await self._run_alpha_calibration(today)
+
+    async def _restore_alpha(self) -> None:
+        """Uložená α symbolu do runtime — bez nového kalibračního bodu."""
+        if self.alpha_repository is None:
+            return
+        try:
+            state = await asyncio.to_thread(self.alpha_repository.get, self.symbol)
+        except Exception:
+            logger.exception("α %s se nepodařilo načíst — platí konfigurace", self.symbol)
+            return
+        if state is not None and self.runtime.flow_alpha != state.alpha:
+            self.runtime.flow_alpha = state.alpha
+            logger.info(
+                "α %s obnovena z kalibrace: %.3f (%d dnů)",
+                self.symbol,
+                state.alpha,
+                state.days,
+            )
+
     async def _run_fa_validation(self, today: dt.date) -> None:
         """Denní FA validace (#232): open-ratio bod za včerejší volume vs. dnešní ΔOI.
 
-        Běží po úspěšném OI archivu; selhání nesmí zabít pipeline — bod se
-        dopočítá při dalším pokusu (idempotentní dedup v tabulce fa_validation).
+        Běží po finálním OI archivu (`_run_fa_jobs`, #1314); selhání nesmí
+        zabít pipeline — bod se dopočítá při dalším pokusu (idempotentní dedup
+        v tabulce fa_validation).
         """
         if self.fa_repository is None:
             return
@@ -874,8 +908,9 @@ class InstrumentPipeline:
     async def _run_alpha_calibration(self, today: dt.date) -> None:
         """Ranní kalibrace α (#232 fáze 2): včerejší netflow vs. skutečné ΔOI.
 
-        Běží po FA validaci nad týmiž archivy; selhání nesmí zabít pipeline —
-        bod se dopočítá při dalším OI cyklu (idempotentní dedup v historii).
+        Běží po FA validaci nad týmiž archivy, jen nad finálním snímkem
+        (`_run_fa_jobs`, #1314); selhání nesmí zabít pipeline — bod se
+        dopočítá při dalším OI cyklu (idempotentní dedup v historii).
         I bez nového bodu se uložená α propíše do runtime (start enginu).
         """
         if self.alpha_repository is None:
@@ -889,19 +924,11 @@ class InstrumentPipeline:
                 self.alpha_repository,
                 today,
             )
-            if result is None:
-                state = await asyncio.to_thread(self.alpha_repository.get, self.symbol)
-                if state is not None and self.runtime.flow_alpha != state.alpha:
-                    self.runtime.flow_alpha = state.alpha
-                    logger.info(
-                        "α %s obnovena z kalibrace: %.3f (%d dnů)",
-                        self.symbol,
-                        state.alpha,
-                        state.days,
-                    )
-                return
         except Exception:
             logger.exception("Kalibrace α %s selhala — zkusí se při dalším OI cyklu", self.symbol)
+            return
+        if result is None:
+            await self._restore_alpha()
             return
         self.runtime.flow_alpha = result.alpha_after
         point = result.point

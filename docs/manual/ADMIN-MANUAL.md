@@ -354,6 +354,18 @@ remediace BS (`marketclock.outside_us_rth`), dny Forward GEX
   a upsert víkendový řádek přepíše; ostatní zůstávají jako audit (tabulku nic
   jiného nečte). `fa_alpha_history` `next_day` nemá, víkendový bod (18. a 25. 9.
   2026, medián 0 → α beze změny, #1172) proto dál blokuje bod téhož pátku.
+- **FA validace a kalibrace α jen nad finálním OI snímkem** (#1314,
+  `InstrumentPipeline._run_fa_jobs`): dřív běžely hned po prvním archivu dne
+  v 00:00 UTC, tedy nad OI před publikací CME (07:00 CT) — ΔOI ≈ 0
+  (`doi_abs_sum` 0 u ES/NQ 22.–24. 9.) a denní dedup pak bod zamkl. Teď se
+  počítají až nad snímkem se dvěma shodnými čteními po publikačním okně
+  (`oi_final`); do té doby se jen propíše uložená α do runtime. Symbol bez
+  kalibrace po bodu s mediánem ≤ 0 už nedostane `fa_alpha` s α 0 (jen řádek
+  historie s `alpha_after` 0 = nekalibrováno) — tak vznikla NQ α = 0 a FA vrstva
+  NQ byla vypnutá. Historii opraví `scripts/recompute_fa.py` (dry-run → report
+  `{data}/reports/recompute-fa-*.md`, `--apply` po potvrzení): přehraje tytéž
+  funkce den po dni nad finálními archivy, dny se snímkem pořízeným před
+  publikací přeskočí jako neověřitelné, nic nemaže.
 - **Verdikty dne** (#1091): `BriefingVerdictCollector` o víkendu neběží, víkendový
   verdikt nevyhodnocuje a `POST /briefing/verdicts` ho odmítne (422); Briefing ho
   o víkendu neposílá. Scénáře dne viz #1173 v kap. 4.

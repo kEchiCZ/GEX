@@ -1317,6 +1317,66 @@ async def test_kalibrace_alfa_po_oi_archivu_nastavi_runtime(
     assert fresh.runtime.flow_alpha == pytest.approx(0.4)
 
 
+async def test_kalibrace_alfa_az_nad_finalnim_snimkem(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1314: půlnoční (předpublikační) archiv kalibraci nespustí a bod nezamkne.
+
+    Dřív běžela kalibrace hned po prvním archivu dne v 00:00 UTC nad OI před
+    publikací CME — ΔOI ≈ 0, medián kolem 0 a denní dedup pak nedovolil bod
+    přepočítat po publikaci (NQ α = 0, FA vrstva vypnutá).
+    """
+    settings, writer, oi_repository, publisher = env
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, oi_repository, publisher)
+    alpha_repo = FaAlphaRepository(
+        create_engine(f"sqlite+pysqlite:///{settings.data_dir.parent / 'alpha.sqlite'}")
+    )
+    alpha_repo.ensure_schema()
+    pipeline.alpha_repository = alpha_repo
+
+    today = TS.date()  # pátek 17. 7.
+    prev = today - dt.timedelta(days=1)
+    contracts = list(pipeline.runtime.contracts)
+    oi_repository.upsert_many(
+        [OIRecord("ES", "20260717", c.strike, c.right, prev, 460.0) for c in contracts]
+    )
+    ts = dt.datetime.combine(prev, dt.time(20, 0), tzinfo=dt.UTC)
+    writer.write_netflow(
+        "ES",
+        "20260717",
+        prev,
+        [
+            NetFlowRow(ts_min=ts, strike=c.strike, right=c.right, net_volume=100.0)
+            for c in contracts
+        ],
+    )
+    # Půlnoční snímek dne: CME ještě nepublikovala, jen pár stran se pohnulo
+    oi_repository.upsert_many(
+        [
+            OIRecord("ES", "20260717", c.strike, c.right, today, 461.0 if i % 4 == 0 else 460.0)
+            for i, c in enumerate(contracts)
+        ],
+        dt.datetime(2026, 7, 17, 0, 5, tzinfo=dt.UTC),
+    )
+    okno = settings.oi_publication_utc(today)
+    assert await pipeline.try_archive_oi(today, okno - dt.timedelta(hours=2)) is True
+    assert pipeline.oi_final is False
+    assert alpha_repo.history_exists("ES", prev) is False  # bod nezamčený
+    assert pipeline.runtime.flow_alpha is None
+
+    # Po publikaci: dvě shodná čtení (mock 500) → finální snímek → poctivý bod 40/100
+    specs = pipeline.runtime.contracts
+    pipeline.archiver = OIArchiver(
+        oi_repository, MockOIFetcher(dict.fromkeys(specs, 500.0)), settings
+    )
+    po_okne = okno + dt.timedelta(minutes=5)
+    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert alpha_repo.history_exists("ES", prev) is False  # jedno čtení nestačí
+    assert await pipeline.try_archive_oi(today, po_okne) is True
+    assert pipeline.oi_final is True
+    assert pipeline.runtime.flow_alpha == pytest.approx(0.4)
+
+
 # ── Hlídka Greeks po settle (#959) ─────────────────────────────────
 
 
