@@ -33,9 +33,6 @@ from gexlens_engine.storage.mapstate_store import MapStateRepository
 
 logger = logging.getLogger(__name__)
 
-#: Odklad po settle — poslední minutový zápis levels musí dosednout.
-SETTLE_GRACE_MINUTES = 5
-
 
 def _rth_minutes(session: dt.date) -> tuple[dt.datetime, dt.datetime]:
     """Hranice US RTH seance v UTC (od otevření do settle)."""
@@ -211,8 +208,12 @@ class MapStateCollector:
                 self._dominance.append(max(doms))
             self._thin_flags.append(state.thin)
 
-        boundary = settle_ts(session) + dt.timedelta(minutes=SETTLE_GRACE_MINUTES)
-        if now >= boundary and self._written_for != session:
+        # Agregát se píše v prvním cyklu po settle, bez odkladu: vzorky jsou
+        # v paměti (poslední z cyklu minuty před settle), na zápis partic se
+        # nečeká. Odklad by ho poslal do pipeline po rollu v settle (#1331),
+        # která vzorky seance nemá — `session_stats` bez vzorků nic nepíše,
+        # takže seanci zapsanou starou pipeline ani nepřepíše.
+        if now >= settle_ts(session) and self._written_for != session:
             self._written_for = session  # jeden pokus per seance i při chybě
             record = session_stats(
                 session,

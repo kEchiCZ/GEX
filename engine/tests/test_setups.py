@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, text
 
 from gexlens_engine.compute.gexfield import GexProfile
 from gexlens_engine.compute.levels import GexLevels
+from gexlens_engine.compute.settle import expiry_settle
 from gexlens_engine.compute.setups import (
     EXCLUDED_ENTRY_OFF_BARS,
     SETUP_MECHANICS_VERSION,
@@ -1118,11 +1119,11 @@ def test_settle_setupu_kvartalni_expirace_v_soq() -> None:
     """ADR-0039 bod 2: kvartální expirace se vypořádá v SOQ 9:30 ET — timeout
     setupu i invariant vzniku (#1324) mají tutéž hranici jako roll pipeline."""
     soq = dt.datetime(2026, 9, 18, 13, 30, tzinfo=dt.UTC)  # 3. pátek září, 9:30 EDT
-    assert SetupEngine._settle_ts("20260918") == soq
+    assert expiry_settle("20260918") == soq
     assert not born_after_settle("20260918", soq - dt.timedelta(seconds=1))
     assert born_after_settle("20260918", soq)
     # Běžný pátek (ne 3. v kvartálním měsíci) dál 16:00 ET
-    assert SetupEngine._settle_ts("20260925") == dt.datetime(2026, 9, 25, 20, 0, tzinfo=dt.UTC)
+    assert expiry_settle("20260925") == dt.datetime(2026, 9, 25, 20, 0, tzinfo=dt.UTC)
 
 
 def test_repository_vznik_po_settle_oznaci_a_vyradi_ze_statistik(tmp_path: Path) -> None:
@@ -1593,9 +1594,9 @@ def test_gamma_momentum_cum_gate_uses_quantile_not_absolute_extreme() -> None:
 
 def test_settle_ts_expirace_v_burzovni_zone() -> None:
     """#511: settle expirace 16:00 ET — letní 20:00 UTC (dřívější chování), zimní 21:00."""
-    assert SetupEngine._settle_ts("20260717") == dt.datetime(2026, 7, 17, 20, 0, tzinfo=dt.UTC)
-    assert SetupEngine._settle_ts("20260115") == dt.datetime(2026, 1, 15, 21, 0, tzinfo=dt.UTC)
-    assert SetupEngine._settle_ts("nesmysl") is None
+    assert expiry_settle("20260717") == dt.datetime(2026, 7, 17, 20, 0, tzinfo=dt.UTC)
+    assert expiry_settle("20260115") == dt.datetime(2026, 1, 15, 21, 0, tzinfo=dt.UTC)
+    assert expiry_settle("nesmysl") is None
     # Timeout setupu se v zimě posouvá se settle: ve 20:30 UTC ještě 30 minut zbývá
     now = dt.datetime(2026, 1, 15, 20, 30, tzinfo=dt.UTC)
     assert SetupEngine._minutes_to_expiry("20260115", now) == 30.0

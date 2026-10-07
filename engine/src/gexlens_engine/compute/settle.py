@@ -63,6 +63,22 @@ def expiry_settle_ts(day: dt.date) -> dt.datetime:
     return soq_ts(day) if is_quarterly_expiry(day) else settle_ts(day)
 
 
+def expiry_settle(expiry: str) -> dt.datetime | None:
+    """Settle expirace zapsané jako `YYYYMMDD` (IBKR) — JEDINÝ helper nad řetězcem (#1331).
+
+    Sdílí ho roll pipeline (`instruments.expiry_expired`, discovery i cache),
+    hlídka Greeks, setupy (timeout, čas do expirace, invariant vzniku
+    `born_after_settle`) i sondy T9 — všichni se ptají téže hranice
+    `expiry_settle_ts` (ADR-0039 bod 2). Nečitelný formát → None: rozhodnutí
+    je na volajícím (nic se nevymýšlí).
+    """
+    try:
+        day = dt.datetime.strptime(expiry, "%Y%m%d").date()
+    except ValueError:
+        return None
+    return expiry_settle_ts(day)
+
+
 def settle_ts(day: dt.date) -> dt.datetime:
     """Okamžik settle US seance daného kalendářního dne (UTC).
 

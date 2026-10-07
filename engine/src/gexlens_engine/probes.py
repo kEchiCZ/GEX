@@ -11,7 +11,10 @@ Rozhodování dělá čistá funkce `detect_damping_ceiling` v `compute/setups.p
 orchestrace: okno posledních minut, zápis výskytu do `setup_probes`,
 vyhodnocení otevřených sond `evaluate_bar`/`r_result` nad POSLEDNÍM barem
 dávky cyklu (cyklus bez barů se přeskočí, `closed_ts` = čas cyklu) a timeout
-za close prvního cyklu po settle expirace runtime (#259). Živé setupy od #1320
+za close prvního cyklu po settle expirace runtime (#259, `settle.expiry_settle`
+— táž hranice jako setupy a roll pipeline, #1331). Pipeline tím cyklem končí
+a roluje, takže otevřené sondy zavře ještě sběrač, který je otevřel; nové
+v něm nevzniknou (`born_after_settle`). Živé setupy od #1320
 hodnotí jinak — celou cestou ceny (`compute/setups.walk_setup_path`: bary
 v pořadí, díra = čekání na doplnění, timeout za close baru končícího
 v settle) —, takže při výpadku barů, v dávce víc minut a v timeoutu nejsou
@@ -26,12 +29,13 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from gexlens_engine.compute.bandregime import BAND_METRICS_VERSION, band_metrics, band_zone
-from gexlens_engine.compute.settle import settle_ts
+from gexlens_engine.compute.settle import expiry_settle
 from gexlens_engine.compute.setups import (
     Outcome,
     ProbeMinute,
     ProbeOccurrence,
     ProbeParams,
+    born_after_settle,
     detect_damping_ceiling,
     evaluate_bar,
     probe_excursion,
@@ -42,26 +46,6 @@ from gexlens_engine.runtime import EngineRuntime
 from gexlens_engine.storage.probes_store import ProbeRepository
 
 logger = logging.getLogger(__name__)
-
-
-def probe_settle(expiry: str, fallback_day: dt.date) -> dt.datetime:
-    """Settle expirace runtime (YYYYMMDD) — timeout sond.
-
-    Dřív konvence `SetupEngine`; ten od #1324 bere `setup_settle_ts`
-    (`expiry_settle_ts`, SOQ u kvartálních) — sjednocení řeší #1331.
-
-    Do zavedení čisté funkce se sondy uzavíraly settlem KALENDÁŘNÍHO dne:
-    výskyt po 20:00 UTC (dead-chain okno před rollem, nebo večerní Globex
-    po rollu) se tak zavřel hned další minutou jako timeout (2 z 11 řádků
-    produkce do 3. 9.). Živé setupy se řídí expirací (#259), sondy teď taky.
-    Nečitelná expirace → settle dne (nerozbíjet sběr kvůli formátu).
-    """
-    try:
-        day = dt.datetime.strptime(expiry, "%Y%m%d").date()
-    except ValueError:
-        logger.warning("Nečitelná expirace %r — timeout sond podle dne", expiry)
-        day = fallback_day
-    return settle_ts(day)
 
 
 @dataclass
@@ -82,6 +66,7 @@ class T9ProbeCollector:
 
     _history: deque[ProbeMinute] = field(init=False)
     _active: list[_ActiveProbe] = field(default_factory=list, init=False)
+    _expiry_logged: str | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         # Detektor potřebuje přesně 2 × akceptace minut (usazení + přechod)
@@ -110,8 +95,27 @@ class T9ProbeCollector:
             )
         )
         occurrence = detect_damping_ceiling(list(self._history), self.params)
-        if occurrence is not None:
+        if occurrence is not None and self._expiry_alive(runtime.expiry, now):
             self._open_probe(now, occurrence, runtime.expiry)
+
+    def _expiry_alive(self, expiry: str, now: dt.datetime) -> bool:
+        """Smí nad expirací runtime vzniknout sonda? Týž invariant jako setupy (#1324).
+
+        Po settle vlastní expirace (`born_after_settle`) ne — v prvním cyklu
+        po settle, po kterém pipeline roluje (#1331), by ji timeout zavřel
+        hned. Nečitelná expirace také ne: sonda bez settle by nikdy nedostala
+        timeout (nahlas, jednou za expiraci).
+        """
+        if expiry_settle(expiry) is None:
+            if self._expiry_logged != expiry:
+                self._expiry_logged = expiry
+                logger.warning(
+                    "Sondy T9 %s: nečitelná expirace %r — bez settle se sonda neotevře",
+                    self.symbol,
+                    expiry,
+                )
+            return False
+        return not born_after_settle(expiry, now)
 
     def _open_probe(self, now: dt.datetime, occurrence: ProbeOccurrence, expiry: str) -> None:
         context = {**occurrence.context, "expiry": expiry}
@@ -168,7 +172,8 @@ class T9ProbeCollector:
 
         Živé setupy od #1320 berou close baru, který v settle končí, a
         `closed_ts` = settle — viz docstring modulu."""
-        if not self._active or now < probe_settle(expiry, now.date()):
+        settle = expiry_settle(expiry)
+        if not self._active or settle is None or now < settle:
             return
         for probe in self._active:
             item = probe.occurrence

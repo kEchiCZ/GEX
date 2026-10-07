@@ -40,7 +40,7 @@ from sqlalchemy import create_engine
 
 from gexlens_engine.compute.bandregime import band_metrics, band_zone
 from gexlens_engine.compute.gexfield import GexProfile, gamma_edges
-from gexlens_engine.compute.settle import settle_ts
+from gexlens_engine.compute.settle import expiry_settle, settle_ts
 from gexlens_engine.compute.setups import (
     Direction,
     MinuteInputs,
@@ -58,7 +58,6 @@ from gexlens_engine.compute.setups import (
     max_pain_strike,
     probe_excursion,
     r_result,
-    setup_settle_ts,
 )
 from gexlens_engine.storage.oi_archive import OIEodRepository
 
@@ -167,12 +166,12 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
     day = pd.Timestamp(frame.ts_min.iloc[-1]).date()
     pain = max_pain_for(repo, symbol, expiry, day)
     # Settle vlastní expirace = konec života setupu, táž hranice jako živý
-    # SetupEngine (`setup_settle_ts`, ADR-0039 bod 2, DST #511; dřív pevně
+    # SetupEngine (`expiry_settle`, ADR-0039 bod 2, DST #511; dřív pevně
     # 20:00 UTC). Minuty po něm se přehrávají dál (otevřené setupy se
     # vyhodnocují jako dřív; timeout v settle, který je živě uzavře jako
     # `closed_timeout`, replay nemá), jen v nich nevznikne nový setup — viz
     # `replay`.
-    settle = setup_settle_ts(expiry)
+    settle = expiry_settle(expiry)
     if settle is None:
         raise ValueError(f"Nečitelná expirace {expiry!r}")
 
@@ -237,7 +236,7 @@ def replay(minutes: list[MinuteInputs], params: SetupParams, expiry: str) -> lis
 
     Invariant vzniku (#1324) jako živý `SetupEngine._detect_new`: v minutě po
     settle vlastní expirace (`born_after_settle`) žádný kandidát nevznikne —
-    pipeline tam do rollu o půlnoci UTC běží nad vypršelým řetězem (#1331).
+    živě je to jediný cyklus minuty settle, po kterém pipeline roluje (#1331).
     """
     history: list[MinuteInputs] = []
     open_setups: list[OpenSetup] = []

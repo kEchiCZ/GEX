@@ -60,10 +60,10 @@ class CachedDiscovery:
     front: FrontFuture
     expiries: tuple[ExpiryInfo, ...]
 
-    def unexpired(self, today: dt.date, now: dt.datetime | None = None) -> tuple[ExpiryInfo, ...]:
-        """Expirace, které dnes ještě platí (řazení discovery = podle expirace);
-        kvartální po SOQ už ne (#1189)."""
-        return tuple(info for info in self.expiries if not expiry_expired(info.expiry, today, now))
+    def unexpired(self, now: dt.datetime) -> tuple[ExpiryInfo, ...]:
+        """Expirace se settle v budoucnu (řazení discovery = podle expirace):
+        dnešní po settle už ne (#1331), kvartální po SOQ (#1189)."""
+        return tuple(info for info in self.expiries if not expiry_expired(info.expiry, now))
 
 
 class DiscoveryCache:
@@ -111,8 +111,7 @@ class DiscoveryCache:
         self,
         symbol: str,
         *,
-        today: dt.date,
-        now: dt.datetime | None = None,
+        now: dt.datetime,
         front_roll_days: int = 0,
     ) -> CachedDiscovery | None:
         """Záznam symbolu, pokud není starší než MAX_AGE_DAYS, má platnou expiraci
@@ -152,7 +151,7 @@ class DiscoveryCache:
         if (dt.datetime.now(dt.UTC) - stored_at).days > MAX_AGE_DAYS:
             return None
         cached = CachedDiscovery(symbol=symbol, stored_at=stored_at, front=front, expiries=expiries)
-        if not cached.unexpired(today, now):
+        if not cached.unexpired(now):
             return None
         # Front kontrakt po expiraci nebo po roll date je k ničemu — spot i tok
         # by šly z mrtvého/dobíhajícího kontraktu (#1189)
@@ -162,6 +161,6 @@ class DiscoveryCache:
             return None
         # Pinovaný kontrakt (#1191) roll pravidlo nemá — platí do expirace
         roll_days = 0 if pinned_contract(symbol) else front_roll_days
-        if not front_contract_eligible(last_trade, today, roll_days):
+        if not front_contract_eligible(last_trade, now.date(), roll_days):
             return None
         return cached

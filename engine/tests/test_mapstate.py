@@ -282,8 +282,9 @@ async def test_collector_backfill_stav_a_zapis_po_settle(tmp_path: Path) -> None
     )
     assert collector.state.thin is False
 
-    # Po settle + grace se zapíše agregát seance z obou RTH minut
-    after = settle_ts(TS.date()) + dt.timedelta(minutes=6)
+    # V prvním cyklu po settle se zapíše agregát seance z obou RTH minut —
+    # ještě v pipeline staré expirace, která po něm roluje (#1331)
+    after = settle_ts(TS.date())
     await collector.on_minute(after, 7650.0, cast(EngineRuntime, runtime), 7625.0)
     row = repo.history_before("ES", TS.date() + dt.timedelta(days=1), window=1)[0]
     assert row.session_date == TS.date()
@@ -293,3 +294,29 @@ async def test_collector_backfill_stav_a_zapis_po_settle(tmp_path: Path) -> None
         after + dt.timedelta(minutes=1), 7650.0, cast(EngineRuntime, runtime), 7625.0
     )
     assert len(repo.existing_dates("ES")) == MIN_SAMPLE + 1  # jen jednou per seance
+
+
+async def test_collector_po_rollu_v_settle_neprepise_agregat_seance(tmp_path: Path) -> None:
+    """Pipeline založená rollem v settle (#1331) vzorky seance nemá — nic nezapíše."""
+    repo = MapStateRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'm.sqlite'}"))
+    repo.ensure_schema()
+    levels = GexLevels(
+        flip=7600.0, call_wall=7700.0, put_wall=7550.0, centroid=7620.0, total_gex=2000.0,
+        call_wall_dom=0.5, put_wall_dom=0.4,
+    )  # fmt: skip
+    runtime = FakeRuntime(levels, None)
+    old = MapStateCollector(symbol="ES", repository=repo, data_dir=tmp_path, backfill=False)
+    await old.on_minute(TS, 7650.0, cast(EngineRuntime, runtime), 7625.0)
+    settle = settle_ts(TS.date())
+    await old.on_minute(settle, 7650.0, cast(EngineRuntime, runtime), 7625.0)
+    assert (
+        repo.history_before("ES", TS.date() + dt.timedelta(days=1), window=1)[0].sample_minutes == 1
+    )
+
+    new = MapStateCollector(symbol="ES", repository=repo, data_dir=tmp_path, backfill=False)
+    for minute in (1, 5, 30):
+        await new.on_minute(
+            settle + dt.timedelta(minutes=minute), 7650.0, cast(EngineRuntime, runtime), 7625.0
+        )
+    row = repo.history_before("ES", TS.date() + dt.timedelta(days=1), window=1)[0]
+    assert row.sample_minutes == 1

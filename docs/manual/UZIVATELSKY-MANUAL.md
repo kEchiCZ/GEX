@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.27 · říjen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.28 · říjen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -1574,21 +1574,24 @@ setupem klouzalo (ES v5: obrazovka +690 $, celá historie −2 338 $ na
 1 kontrakt). Když server souhrn nedodá, obrazovka ukáže chybu — z tabulky se
 nic nedopočítává.
 
-**Po settle expirace nové setupy nevznikají (v1.24, #1324).** Setup se
-vztahuje k expiraci opčního řetězu a po jejím settle (16:00 ET, tj. 22:00
-našeho času) už žít nemůže. Engine přepíná na další expiraci až o půlnoci UTC
-a do té doby běží nad vypršelým řetězem. Setup, který by v tomto okně vznikl,
-by příští minutou uzavřel timeout. Proto mezi settle a přechodem na další
-expiraci **žádný nový setup nevzniká**:
+**Přechod na další expiraci v settle (v1.28, #1331).** Setup se vztahuje
+k expiraci opčního řetězu a po jejím settle už žít nemůže. Settle je
+16:00 ET (22:00 našeho času; v týdnech, kdy se USA a Evropa liší v přechodu
+na letní čas, o hodinu jinak), u kvartální expirace (3. pátek března, června,
+září a prosince) už ráno v 9:30 ET. **Přesně v tu chvíli engine přepne
+sběr dat, setupy, sondy i tendenci na další expiraci** — v pátek na pondělní.
+Přechod trvá 1–2 minuty: minuta settle ještě uzavře, co k vypršelé expiraci
+patří (otevřené setupy timeoutem, paper ordery, agregát mapy), a pak se
+řetěz načte znovu. Graf zatím drží expiraci podle dne seance: na novou
+expiraci přepne sám s otevřením Globexu (17:00 CT, tj. 0:00 našeho času),
+do té doby ji vyber v selektoru expirací v hlavičce (přepnutí v settle
+řeší #1367).
 
-| | Okno bez nových setupů |
-|---|---|
-| léto | 22:00–02:00 SELČ (15:00–19:00 CT) |
-| zima | 22:00–01:00 SEČ (15:00–18:00 CT) |
-
-Bez denní pauzy CME (16–17 CT) jsou to na otevřeném Globexu 3 h v létě, 2 h
-v zimě a 1 h v pátek. Okno zmizí, až engine přepne na další expiraci už
-v settle; to řeší #1331.
+Nové setupy pak potřebují pár minut historie nad novým řetězem, než je
+detektory najdou — úrovně staré a nové expirace se nemíchají. Do v1.28 engine
+přepínal až o půlnoci UTC a do té doby běžel nad vypršelým řetězem; od v1.24
+v tom okně (v létě 22:00–02:00, v zimě 22:00–01:00 našeho času) setupy
+nevznikaly vůbec. To okno zmizelo.
 
 **Setupy vzniklé po settle se do souhrnu nepočítají.** Z doby před v1.24
 jich v databázi zůstává přes 80 (mechanika v5, jeden z nich obchodovatelný

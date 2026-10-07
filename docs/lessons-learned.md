@@ -185,6 +185,21 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-07 — roll expirace v settle (#1331): „zastavit pipeline v okamžiku settle“ by potichu ztratilo stav dne.**
+  Přímočaré provedení varianty A (zastavit pipeline v orchestrátoru dřív, než cyklus minuty settle
+  poběží) by sondy T9 nechalo v DB navždy `active` (otevřené drží jen v paměti a timeout dělá první
+  cyklus po settle) a agregát `map_state` by se nezapsal: vzorky RTH jsou v paměti, zápis čekal na
+  settle + 5 min a nová pipeline vzorky nemá. Druhá past: IBKR `reqSecDefOptParams` vrací dnešní
+  expiraci i po jejím settle — bez filtru by nová pipeline vzala tutéž vypršelou expiraci a roll by
+  se točil každou minutu. Odhalil to audit všech modulů v `run_minute` po jednom: „kdo něco dělá
+  v settle a odkud bere stav?“, ne testy (každý modul zvlášť procházel).
+  → Restart pipeline v hraničním čase plánovat **po** cyklu té hranice (poslední cyklus starého stavu
+  uzavře, co k hranici patří; nové záznamy blokuje invariant `born_after_settle`). Zápis ze vzorků
+  v paměti nedávat za odklad, který přežije restart; modul po odkladu musí pracovat nad partice/DB
+  idempotentně. Výběr „aktuální“ položky ze seznamu zdroje filtrovat týmž predikátem jako roll
+  (`expiry_expired`), jinak roll a výběr nesouhlasí. Hranici počítat jedním helperem
+  (`settle.expiry_settle`), ne třemi kopiemi, které se rozjely (16:00 ET vs. SOQ).
+
 - **2026-10-01 — zkouška setupu (#1323) by pouštěla setupy, které se do jejího rozpočtu nezapočtou: dva zdroje času.**
   Engine razí `created_ts` časem cyklu zaokrouhleným na minutu, API razilo začátek zkoušky přesně.
   Setup z cyklu, ve kterém engine novou verzi aplikoval (14:06:00 < začátek 14:06:20), zkouška

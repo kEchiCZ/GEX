@@ -65,7 +65,7 @@ def _third_friday(day: dt.date) -> bool:
 def equity_expiry_open(expiry: str, root: str, now: dt.datetime) -> bool:
     """Je equity/indexová expirace ještě živá? (#206 fáze 2)
 
-    Futures řeší `expiry_expired` (jen kvartální SOQ); u akcií/ETF/indexů
+    Futures řeší `expiry_expired` (settle expirace, kvartální SOQ, #1331); u akcií/ETF/indexů
     expiruje 0DTE v 16:00 ET a po close by pohled jinak celý večer stál na
     mrtvém řetězu (18. 9. 2026 SPY vybral 20260918 v 23:09 CEST). Měsíční
     indexové série (3. pátek) se vypořádávají ráno v 9:30 ET (AM), týdenní

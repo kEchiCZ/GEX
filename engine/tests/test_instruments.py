@@ -75,14 +75,60 @@ def test_merge_symbols_dedupe_uppercase_base_first() -> None:
     assert merge_symbols([], ["es"]) == ["ES"]
 
 
-def test_expiry_expired_roll() -> None:
+def test_expiry_expired_roll_v_settle_0dte() -> None:
+    """Roll 0DTE v settle 16:00 ET, ne o půlnoci UTC (#1331)."""
     from gexlens_engine.instruments import expiry_expired
 
-    today = dt.date(2026, 7, 18)
-    assert expiry_expired("20260717", today) is True  # včerejší 0DTE → roll
-    assert expiry_expired("20260718", today) is False  # dnešní žije
-    assert expiry_expired("20260720", today) is False
-    assert expiry_expired("nesmysl", today) is False  # nečitelný formát neshazuje běh
+    settle = dt.datetime(2026, 7, 17, 20, 0, tzinfo=dt.UTC)  # léto: 16:00 EDT
+    assert expiry_expired("20260717", settle - dt.timedelta(minutes=1)) is False
+    assert expiry_expired("20260717", settle) is True  # roll přesně v settle
+    # Dřívější okno 3–4 h nad mrtvým řetězem do půlnoci UTC už neexistuje
+    assert expiry_expired("20260717", dt.datetime(2026, 7, 17, 22, 0, tzinfo=dt.UTC)) is True
+    assert expiry_expired("20260718", settle) is False  # zítřejší žije
+    assert expiry_expired("nesmysl", settle) is False  # nečitelný formát neshazuje běh
+
+
+def test_expiry_expired_patek_pred_vikendem() -> None:
+    """Páteční expirace roluje v pátečním settle — další je pondělní, ne až v sobotu."""
+    from gexlens_engine.compute.settle import expiry_settle
+    from gexlens_engine.discovery_cache import CachedDiscovery, FrontFuture
+    from gexlens_engine.ibkr.discovery import ExpiryInfo
+    from gexlens_engine.instruments import expiry_expired
+
+    friday_settle = dt.datetime(2026, 9, 25, 20, 0, tzinfo=dt.UTC)
+    assert expiry_settle("20260925") == friday_settle
+    assert expiry_expired("20260925", friday_settle - dt.timedelta(seconds=1)) is False
+    assert expiry_expired("20260925", friday_settle) is True
+    cached = CachedDiscovery(
+        symbol="ES",
+        stored_at=friday_settle,
+        front=FrontFuture("ES", 1, "CME", "50", "20261218", "ESZ6", "ES"),
+        expiries=tuple(
+            ExpiryInfo("EW4", expiry, "CME", "50", (6600.0,))
+            for expiry in ("20260925", "20260928", "20260929")
+        ),
+    )
+    # Discovery po rollu: páteční vynechá, začne pondělní (Globex v neděli večer)
+    assert [info.expiry for info in cached.unexpired(friday_settle)] == ["20260928", "20260929"]
+    sunday_open = dt.datetime(2026, 9, 27, 22, 0, tzinfo=dt.UTC)
+    assert cached.unexpired(sunday_open)[0].expiry == "20260928"
+
+
+def test_expiry_expired_dst() -> None:
+    """Settle 16:00 ET podle IANA zóny (#511): léto 20:00 UTC, zima 21:00 UTC."""
+    from gexlens_engine.instruments import expiry_expired
+
+    # Pátek 30. 10. (EDT) vs. pondělí 2. 11. po přechodu na zimní čas 1. 11.
+    assert expiry_expired("20261030", dt.datetime(2026, 10, 30, 20, 0, tzinfo=dt.UTC)) is True
+    winter = dt.datetime(2026, 11, 2, 21, 0, tzinfo=dt.UTC)
+    assert expiry_expired("20261102", winter - dt.timedelta(minutes=1)) is False
+    assert expiry_expired("20261102", winter) is True
+    # Jaro: US přechází 8. 3. 2026 — pondělí 9. 3. už v letním čase (20:00 UTC)
+    spring = dt.datetime(2026, 3, 9, 20, 0, tzinfo=dt.UTC)
+    assert expiry_expired("20260309", spring - dt.timedelta(minutes=1)) is False
+    assert expiry_expired("20260309", spring) is True
+    # Pátek 6. 3. ještě v zimním čase (21:00 UTC)
+    assert expiry_expired("20260306", dt.datetime(2026, 3, 6, 20, 30, tzinfo=dt.UTC)) is False
 
 
 def test_plan_instruments_start_stop_and_cap() -> None:

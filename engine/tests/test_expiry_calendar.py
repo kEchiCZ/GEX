@@ -42,17 +42,17 @@ def test_kvartalni_expirace_settluje_v_soq() -> None:
     assert soq_ts(dt.date(2026, 12, 18)) == dt.datetime(2026, 12, 18, 14, 30, tzinfo=dt.UTC)
 
 
-def test_expirace_propada_po_soq_jen_kvartalni() -> None:
+def test_kvartalni_expirace_propada_v_soq() -> None:
     before = dt.datetime(2026, 9, 18, 13, 0, tzinfo=dt.UTC)
-    after = dt.datetime(2026, 9, 18, 13, 31, tzinfo=dt.UTC)
-    assert not expiry_expired("20260918", SEP18, before)
-    assert expiry_expired("20260918", SEP18, after)
-    assert not expiry_expired("20260918", SEP18)  # bez času jen kalendář
-    assert expiry_expired("20260917", SEP18)
-    # Denní expirace téhož dne po 13:31 UTC nepropadá (settle až 20:00 UTC)
-    assert not expiry_expired("20260917", dt.date(2026, 9, 17), after - dt.timedelta(days=1))
-    # Greeks hlídka končí v SOQ
-    assert greeks_watch_applies("20260918", before) and not greeks_watch_applies("20260918", after)
+    soq = dt.datetime(2026, 9, 18, 13, 30, tzinfo=dt.UTC)
+    assert not expiry_expired("20260918", before)
+    assert not expiry_expired("20260918", soq - dt.timedelta(seconds=1))
+    assert expiry_expired("20260918", soq)  # roll přesně v SOQ, ne v 16:00 ET
+    # Denní expirace předchozího dne žije do svého settle 20:00 UTC (#1331)
+    assert not expiry_expired("20260917", dt.datetime(2026, 9, 17, 19, 59, tzinfo=dt.UTC))
+    assert expiry_expired("20260917", dt.datetime(2026, 9, 17, 20, 0, tzinfo=dt.UTC))
+    # Greeks hlídka končí v SOQ — táž hranice jako roll
+    assert greeks_watch_applies("20260918", before) and not greeks_watch_applies("20260918", soq)
 
 
 def test_roll_pravidlo_front_kontraktu() -> None:
@@ -106,14 +106,14 @@ def test_discovery_cache_zahodi_front_po_rollu_a_kvartalni_po_soq(tmp_path: Path
         trading_class="ES",
     )
     cache.store(front, [ExpiryInfo("ES", "20260918", "CME", "50", (7600.0,))])
-    today = dt.date(2026, 9, 18)
     before = dt.datetime(2026, 9, 18, 13, 0, tzinfo=dt.UTC)
     after = dt.datetime(2026, 9, 18, 14, 0, tzinfo=dt.UTC)
-    assert cache.load("ES", today=today, now=before) is not None
-    assert cache.load("ES", today=today, now=after) is None  # kvartální po SOQ
+    assert cache.load("ES", now=before) is not None
+    assert cache.load("ES", now=after) is None  # kvartální po SOQ
     # Roll okno: 16. 9. má U6 2 dny do expirace → s roll_days 8 neplatí
-    assert cache.load("ES", today=dt.date(2026, 9, 16)) is not None
-    assert cache.load("ES", today=dt.date(2026, 9, 16), front_roll_days=8) is None
+    sep16 = dt.datetime(2026, 9, 16, 12, 0, tzinfo=dt.UTC)
+    assert cache.load("ES", now=sep16) is not None
+    assert cache.load("ES", now=sep16, front_roll_days=8) is None
 
 
 class _Publisher(PublisherLike):

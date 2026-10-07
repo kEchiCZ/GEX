@@ -40,7 +40,7 @@ from gexlens_engine.compute.risk import (
     trial_usage,
     week_start,
 )
-from gexlens_engine.compute.settle import trading_session_date
+from gexlens_engine.compute.settle import expiry_settle, trading_session_date
 from gexlens_engine.compute.setup_library import cell_evidence
 from gexlens_engine.compute.setups import (
     PATH_GAP_WAIT,
@@ -64,7 +64,6 @@ from gexlens_engine.compute.setups import (
     missing_minutes,
     path_start,
     r_result,
-    setup_settle_ts,
     template_label,
     walk_setup_path,
 )
@@ -319,13 +318,8 @@ class SetupEngine:
         return PathState(last_ts=entry_bar.ts, last_close=entry_bar.close)
 
     @staticmethod
-    def _settle_ts(expiry: str) -> dt.datetime | None:
-        """Settle expirace setupu (ADR-0039 bod 2) — hranice invariantu vzniku (#1324)."""
-        return setup_settle_ts(expiry)
-
-    @classmethod
-    def _minutes_to_expiry(cls, expiry: str, now: dt.datetime) -> float | None:
-        settle = cls._settle_ts(expiry)
+    def _minutes_to_expiry(expiry: str, now: dt.datetime) -> float | None:
+        settle = expiry_settle(expiry)
         if settle is None:
             return None
         return (settle - now).total_seconds() / 60.0
@@ -511,7 +505,7 @@ class SetupEngine:
                 item.stored.entry,
                 item.stored.target,
                 item.stored.stop,
-                self._settle_ts(item.stored.expiry),
+                expiry_settle(item.stored.expiry),
                 path_bars,
                 item.path,
                 now=now,
@@ -969,16 +963,12 @@ class SetupEngine:
         inputs: MinuteInputs,
         entry_bar: Bar,
     ) -> None:
-        # Invariant #1324: setup se vztahuje jen k živé expiraci. Pipeline roluje
-        # na další expiraci až s novým UTC dnem (`expiry_expired`), takže mezi
-        # settle a rollem běží nad vypršelým řetězem — setup odtud by příští
-        # minutu skončil timeoutem. Hlídá se tady, na jediném místě vzniku, ne
-        # v detektorech; nové setupy vzniknou po rollu nad novou expirací.
-        # Příčinu, roll expirace podle UTC dne místo v settle, řeší #1331. Do
-        # rollu na settle v okně settle → 00:00 UTC setupy nevznikají (na
-        # otevřeném Globexu 1–3 h denně). Po rollu v settle invariant nezasáhne,
-        # ale zůstává jako pojistka.
-        if setup_settle_ts(runtime.expiry) is None:
+        # Invariant #1324: setup se vztahuje jen k živé expiraci. Hlídá se tady,
+        # na jediném místě vzniku, ne v detektorech. Od #1331 pipeline roluje
+        # v settle expirace (`expiry_expired`) dřív, než cyklus téže minuty
+        # poběží, takže invariant nezasáhne — zůstává jako pojistka se stejnou
+        # hranicí (`expiry_settle`).
+        if expiry_settle(runtime.expiry) is None:
             # Nečitelná expirace: predikát nerozhodne a invariant neplatí —
             # nahlas, jednou za expiraci (detekce jede dál, nic se nevymýšlí)
             if self._expiry_logged != runtime.expiry:
@@ -994,7 +984,7 @@ class SetupEngine:
                 self._expiry_logged = runtime.expiry
                 logger.info(
                     "Setupy %s: expirace %s je po settle — nové setupy až po rollu "
-                    "na další expiraci (#1331)",
+                    "na další expiraci (pojistka #1324, roll v settle #1331)",
                     self.symbol,
                     runtime.expiry,
                 )
