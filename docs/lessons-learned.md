@@ -185,6 +185,16 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-07 — paper, sondy T9 a replay backtestu hodnotily jinak než setupy (#1345, #1369): oprava jednoho vyhodnocovače nestačí.**
+  #1320 převedl živé setupy na cestu ceny, ale tři další vyhodnocovače téže otázky („zasáhla cena
+  stop/cíl?“) dál hodnotily vzorek cyklu: paper účet bez barů rovnou čáru zamrzlého spotu, sondy jen
+  poslední bar dávky, replay každou minutu bez děr a bez timeoutu (setup otevřený v settle skončil
+  `active` bez R a do walk-forwardu nevstoupil). Replay sond navíc vynechal minuty bez profilu — stop
+  v nich se ztratil.
+  → Po opravě pravidla vyhodnocení najít **všechny** kopie téže otázky (grep `evaluate_bar`) a převést
+  je naráz na jednu funkci; výjimky zdokumentovat jen dočasně s issue. Data pro detekci (profil)
+  a data pro vyhodnocení (bar) filtrovat zvlášť.
+
 - **2026-10-07 — FA validace a kalibrace α nad předpublikačním OI (#1314): dedup zamkl bod spočítaný z neúplných dat.**
   Joby běžely po každém úspěšném OI archivu, tedy i po prvním v 00:00 UTC, kdy dnešní snímek nese
   ještě včerejší čísla. ΔOI ≈ 0 a denní dedup pak bod zamkl — pozdější obnova po publikaci (#463)

@@ -37,9 +37,12 @@ def profile() -> GexProfile:
     )
 
 
-def bar(close: float, high: float | None = None, low: float | None = None) -> Bar:
+def bar(
+    close: float, high: float | None = None, low: float | None = None, at: dt.datetime = NOON
+) -> Bar:
+    """Bar minuty před cyklem `at` (dávka cyklu N nese bar N−1)."""
     return Bar(
-        ts=NOON,
+        ts=at - dt.timedelta(minutes=1),
         open=close,
         high=high if high is not None else close,
         low=low if low is not None else close,
@@ -52,10 +55,36 @@ def runtime_with_profile(expiry: str = "20260827") -> EngineRuntime:
     return cast(EngineRuntime, SimpleNamespace(last_profile=profile(), expiry=expiry))
 
 
-def make_collector() -> tuple[T9ProbeCollector, ProbeRepository]:
+def make_collector(
+    partition: dict[dt.datetime, Bar] | None = None,
+) -> tuple[T9ProbeCollector, ProbeRepository]:
+    """Sběrač; `partition` = bary „z partic“ podle minuty (díry v živé dávce, #1345)."""
     repository = ProbeRepository(create_engine("sqlite+pysqlite:///:memory:"))
     repository.ensure_schema()
-    return T9ProbeCollector(symbol="ES", repository=repository), repository
+
+    def reader(since: dt.datetime, until: dt.datetime) -> list[Bar]:
+        return [b for ts, b in sorted((partition or {}).items()) if since < ts <= until]
+
+    collector = T9ProbeCollector(
+        symbol="ES", repository=repository, bar_reader=reader if partition is not None else None
+    )
+    return collector, repository
+
+
+def closed_at(row: dict[str, object]) -> dt.datetime:
+    """`closed_ts` řádku sondy jako UTC (sqlite vrací naivní čas)."""
+    value = cast(dt.datetime, row["closed_ts"])
+    return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
+
+
+def flat_partition(start: dt.datetime, end: dt.datetime, close: float) -> dict[dt.datetime, Bar]:
+    """Souvislé bary [start, end) — partice, kterou živá dávka nepokryla."""
+    out: dict[dt.datetime, Bar] = {}
+    ts = start
+    while ts < end:
+        out[ts] = Bar(ts=ts, open=close, high=close, low=close, close=close, volume=1.0)
+        ts += dt.timedelta(minutes=1)
+    return out
 
 
 def rows(repository: ProbeRepository) -> list[dict[str, object]]:
@@ -69,12 +98,15 @@ async def settle_below_then_enter(
     """Usazení pod pásmem, pak akceptovaný vstup dovnitř; vrací poslední minutu."""
     for offset in range(ACCEPT):
         await collector.on_minute(
-            start + dt.timedelta(minutes=offset - ACCEPT), 120.0, [bar(120.0)], runtime
+            start + dt.timedelta(minutes=offset - ACCEPT),
+            120.0,
+            [bar(120.0, at=start + dt.timedelta(minutes=offset - ACCEPT))],
+            runtime,
         )
     minute = start
     for _ in range(ACCEPT):
         minute += dt.timedelta(minutes=1)
-        await collector.on_minute(minute, 138.0, [bar(138.0)], runtime)
+        await collector.on_minute(minute, 138.0, [bar(138.0, at=minute)], runtime)
     return minute
 
 
@@ -126,7 +158,7 @@ async def test_ceiling_probe_vznik_a_target() -> None:
     assert "transition_ts" in context
     # Bar protne cíl → uzávěrka stejnou mechanikou jako živé setupy
     minute += dt.timedelta(minutes=1)
-    await collector.on_minute(minute, 150.0, [bar(150.0, high=zone.center + 1)], runtime)
+    await collector.on_minute(minute, 150.0, [bar(150.0, high=zone.center + 1, at=minute)], runtime)
     closed = rows(repository)[0]
     assert closed["status"] == "closed_target"
     assert float(cast(float, closed["outcome_r"])) > 0
@@ -139,12 +171,30 @@ async def test_okamzite_vraceny_prechod_se_zahazuje() -> None:
     runtime = runtime_with_profile()
     for offset in range(ACCEPT):
         await collector.on_minute(
-            NOON + dt.timedelta(minutes=offset - ACCEPT), 120.0, [bar(120.0)], runtime
+            NOON + dt.timedelta(minutes=offset - ACCEPT),
+            120.0,
+            [bar(120.0, at=NOON + dt.timedelta(minutes=offset - ACCEPT))],
+            runtime,
         )
-    await collector.on_minute(NOON + dt.timedelta(minutes=1), 138.0, [bar(138.0)], runtime)
-    await collector.on_minute(NOON + dt.timedelta(minutes=2), 120.0, [bar(120.0)], runtime)
+    await collector.on_minute(
+        NOON + dt.timedelta(minutes=1),
+        138.0,
+        [bar(138.0, at=NOON + dt.timedelta(minutes=1))],
+        runtime,
+    )
+    await collector.on_minute(
+        NOON + dt.timedelta(minutes=2),
+        120.0,
+        [bar(120.0, at=NOON + dt.timedelta(minutes=2))],
+        runtime,
+    )
     for offset in range(3, 3 + ACCEPT):
-        await collector.on_minute(NOON + dt.timedelta(minutes=offset), 120.0, [bar(120.0)], runtime)
+        await collector.on_minute(
+            NOON + dt.timedelta(minutes=offset),
+            120.0,
+            [bar(120.0, at=NOON + dt.timedelta(minutes=offset))],
+            runtime,
+        )
     assert rows(repository) == []
 
 
@@ -155,12 +205,15 @@ async def test_exit_probe_zrcadlo() -> None:
     # Usazená výchozí poloha uvnitř pásma
     for offset in range(ACCEPT):
         await collector.on_minute(
-            NOON + dt.timedelta(minutes=offset - ACCEPT), 140.0, [bar(140.0)], runtime
+            NOON + dt.timedelta(minutes=offset - ACCEPT),
+            140.0,
+            [bar(140.0, at=NOON + dt.timedelta(minutes=offset - ACCEPT))],
+            runtime,
         )
     minute = NOON
     for _ in range(ACCEPT):
         minute += dt.timedelta(minutes=1)
-        await collector.on_minute(minute, 128.0, [bar(128.0)], runtime)
+        await collector.on_minute(minute, 128.0, [bar(128.0, at=minute)], runtime)
     stored = rows(repository)
     assert len(stored) == 1
     probe = stored[0]
@@ -172,23 +225,92 @@ async def test_exit_probe_zrcadlo() -> None:
     assert probe["target"] == pytest.approx(128.0 - zone.width)
     # Návrat nad hranu → stop, R = −1 (risk = stop − entry)
     minute += dt.timedelta(minutes=1)
-    await collector.on_minute(minute, 136.0, [bar(136.0, high=zone.all_low + 1)], runtime)
+    await collector.on_minute(
+        minute, 136.0, [bar(136.0, high=zone.all_low + 1, at=minute)], runtime
+    )
     closed = rows(repository)[0]
     assert closed["status"] == "closed_stop"
     assert float(cast(float, closed["outcome_r"])) == pytest.approx(-1.0)
 
 
 async def test_timeout_na_settle_expirace() -> None:
-    """Settle expirace runtime uzavírá otevřené sondy za close — jako živé setupy."""
-    collector, repository = make_collector()
+    """Settle expirace sondy uzavírá timeoutem za close baru končícího v settle,
+    `closed_ts` = settle — jako živé setupy (#1345). Díru mezi poslední živou
+    minutou a večerním cyklem dotáhne z partic."""
+    partition = flat_partition(NOON, NOON.replace(hour=21), 139.5)
+    collector, repository = make_collector(partition)
     runtime = runtime_with_profile(expiry="20260827")
     await settle_below_then_enter(collector, runtime)
     assert rows(repository)[0]["status"] == "active"
-    evening = NOON.replace(hour=21, minute=30)  # po settle v létě i zimě
-    await collector.on_minute(evening, 139.0, [bar(139.0)], runtime)
+    evening = NOON.replace(hour=21, minute=30)  # po settle 20:00 UTC
+    await collector.on_minute(evening, 139.0, [bar(139.0, at=evening)], runtime)
     closed = rows(repository)[0]
     assert closed["status"] == "closed_timeout"
-    assert closed["closed_ts"] is not None
+    settle = expiry_settle("20260827")
+    assert settle is not None
+    assert closed_at(closed) == settle
+    # Výstup = close baru 19:59 z partice (139,5), ne cena večerního cyklu
+    entry = float(cast(float, closed["entry"]))
+    stop = float(cast(float, closed["stop"]))
+    assert float(cast(float, closed["outcome_r"])) == pytest.approx(
+        (139.5 - entry) / (entry - stop)
+    )
+
+
+async def test_stop_v_dire_zive_davky_se_neztrati() -> None:
+    """#1345: cyklus bez barů (výpadek streamu) dřív sondu přeskočil a stop
+    v díře se ztratil; teď ho cesta najde v partici s časem jeho baru."""
+    collector, repository = make_collector({})
+    runtime = runtime_with_profile()
+    minute = await settle_below_then_enter(collector, runtime)
+    probe = rows(repository)[0]
+    crash_ts = minute + dt.timedelta(minutes=2)
+    low = float(cast(float, probe["stop"])) - 1
+    collector.bar_reader = lambda since, until: [
+        b
+        for b in (
+            Bar(ts=minute, open=138, high=138, low=138, close=138, volume=1),
+            Bar(
+                ts=minute + dt.timedelta(minutes=1),
+                open=138,
+                high=138,
+                low=137,
+                close=137,
+                volume=1,
+            ),
+            Bar(ts=crash_ts, open=137, high=137, low=low, close=low, volume=1),
+        )
+        if since < b.ts <= until
+    ]
+    later = crash_ts + dt.timedelta(minutes=5)
+    await collector.on_minute(later, 139.0, [], runtime)  # cyklus bez barů
+    closed = rows(repository)[0]
+    assert closed["status"] == "closed_stop"
+    assert closed_at(closed) == crash_ts
+    assert float(cast(float, closed["outcome_r"])) == pytest.approx(-1.0)
+
+
+async def test_nedoplnena_dira_ceka_a_pak_se_prejde() -> None:
+    """Díra bez partice: sonda čeká `PATH_GAP_WAIT`, pak hodnotí bez ní (jako setupy)."""
+    from gexlens_engine.compute.setups import PATH_GAP_WAIT
+
+    partition: dict[dt.datetime, Bar] = {}
+    collector, repository = make_collector(partition)
+    runtime = runtime_with_profile()
+    minute = await settle_below_then_enter(collector, runtime)
+    zone = band_zone(profile(), 138.0)
+    assert zone is not None
+    after_gap = minute + dt.timedelta(minutes=5)
+    target_bar = [bar(150.0, high=zone.center + 1, at=after_gap)]
+    # Bar cíle engine zapíše do partice; minuty díry v ní nejsou
+    partition[target_bar[0].ts] = target_bar[0]
+    await collector.on_minute(after_gap, 150.0, target_bar, runtime)
+    assert rows(repository)[0]["status"] == "active"  # čeká na díru
+    later = after_gap + PATH_GAP_WAIT
+    await collector.on_minute(later, 150.0, [bar(150.0, at=later)], runtime)
+    closed = rows(repository)[0]
+    assert closed["status"] == "closed_target"
+    assert closed_at(closed) == after_gap - dt.timedelta(minutes=1)
 
 
 async def test_sonda_po_rollu_prezije_settle_kalendarniho_dne() -> None:
@@ -202,11 +324,16 @@ async def test_sonda_po_rollu_prezije_settle_kalendarniho_dne() -> None:
     runtime = runtime_with_profile(expiry="20260828")
     evening = NOON.replace(hour=22, minute=0)  # Globex po rollu, 27. 8.
     await settle_below_then_enter(collector, runtime, start=evening)
-    await collector.on_minute(evening + dt.timedelta(minutes=10), 139.0, [bar(139.0)], runtime)
+    await collector.on_minute(
+        evening + dt.timedelta(minutes=10),
+        139.0,
+        [bar(139.0, at=evening + dt.timedelta(minutes=10))],
+        runtime,
+    )
     assert rows(repository)[0]["status"] == "active"
     next_settle = expiry_settle("20260828")
     assert next_settle is not None
-    await collector.on_minute(next_settle, 139.0, [bar(139.0)], runtime)
+    await collector.on_minute(next_settle, 139.0, [bar(139.0, at=next_settle)], runtime)
     assert rows(repository)[0]["status"] == "closed_timeout"
 
 

@@ -1,15 +1,15 @@
 """Offline přehrání historie přes PRODUKČNÍ detektor setupů (#434).
 
-Nepřepisuje logiku detekce: importuje `detect_all`, `evaluate_bar`, `r_result`
-z `gexlens_engine.compute.setups` a jen kolem nich staví orchestraci, kterou
-jinak dělá `SetupEngine` (anti-spam per šablona, blokace směru po sérii stopů,
-cooldown v kontra-režimu, vyhodnocení otevřených setupů po barech).
+Nepřepisuje logiku detekce ani vyhodnocení: importuje `detect_all`,
+`walk_setup_path`, `r_result` z `gexlens_engine.compute.setups` a jen kolem
+nich staví orchestraci, kterou jinak dělá `SetupEngine` (anti-spam per šablona,
+blokace směru po sérii stopů, cooldown v kontra-režimu).
 
-Vyhodnocení otevřených ale živé `SetupEngine` NEZRCADLÍ: engine od #1320 jde
-po cestě ceny (`walk_setup_path` — chybějící minuta běžícího trhu je díra, na
-kterou se čeká, bary od settle se nehodnotí, timeout za close baru končícího
-v settle). Replay hodnotí každou minutu rámce `evaluate_bar` bez kontroly děr,
-po settle dál a timeout nemá (setup bez zásahu skončí jako `active`).
+Otevřené setupy jdou týmž krokem jako živý engine (#1320, #1345): po cestě
+ceny od baru vstupu, bary od settle se nehodnotí, timeout za close baru
+končícího v settle (dřív replay timeout neměl a setup skončil jako `active`,
+#1369). Díru v minutách offline nikdo nedoplní — replay ji přejde jako engine
+po `PATH_GAP_WAIT` a spočítá v `gaps` řádku.
 
 Opční toky (`call_flow` / `put_flow` / `opt_vol`) se **rekonstruují ze snapshotů**
 (`data/snapshots/{symbol}/{expiry}/*.parquet`), ne z předpočítané řady — engine
@@ -21,8 +21,8 @@ přírůstky (reset volume na přelomu seance) se zahazují, stejně jako v prod
 
 Sondy nezapnutých šablon (`--probes`, #577 fáze 1): tatáž čistá funkce
 `detect_damping_ceiling` jako živý sběrač (`gexlens_engine.probes`) nad bary +
-uloženými Dyn profily (`gexprofile/`), vyhodnocení týmž `evaluate_bar`, timeout
-na settle expirace. Bez DB — nic se nezapisuje, výsledek je jen report.
+uloženými Dyn profily (`gexprofile/`), vyhodnocení týmž `walk_setup_path`,
+timeout v settle expirace. Bez DB — nic se nezapisuje, výsledek je jen report.
 Datový kořen: `--data` nebo `GEXLENS_DATA_DIR` (default `data`).
 """
 
@@ -45,6 +45,7 @@ from gexlens_engine.compute.setups import (
     Direction,
     MinuteInputs,
     Outcome,
+    PathState,
     ProbeMinute,
     ProbeOccurrence,
     ProbeParams,
@@ -52,12 +53,11 @@ from gexlens_engine.compute.setups import (
     born_after_settle,
     detect_all,
     detect_damping_ceiling,
-    evaluate_bar,
     gex_regime,
     is_counter_regime,
     max_pain_strike,
-    probe_excursion,
     r_result,
+    walk_setup_path,
 )
 from gexlens_engine.storage.oi_archive import OIEodRepository
 
@@ -167,10 +167,8 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
     pain = max_pain_for(repo, symbol, expiry, day)
     # Settle vlastní expirace = konec života setupu, táž hranice jako živý
     # SetupEngine (`expiry_settle`, ADR-0039 bod 2, DST #511; dřív pevně
-    # 20:00 UTC). Minuty po něm se přehrávají dál (otevřené setupy se
-    # vyhodnocují jako dřív; timeout v settle, který je živě uzavře jako
-    # `closed_timeout`, replay nemá), jen v nich nevznikne nový setup — viz
-    # `replay`.
+    # 20:00 UTC). Minuty po něm se přehrávají dál, ale nehodnotí: otevřený
+    # setup uzavře timeout v settle a nový nevznikne — viz `replay`.
     settle = expiry_settle(expiry)
     if settle is None:
         raise ValueError(f"Nečitelná expirace {expiry!r}")
@@ -229,6 +227,8 @@ class OpenSetup:
     stop: float
     created: dt.datetime
     counter: bool
+    #: Cesta ceny od baru vstupu (#1345) — vyhodnocuje se `walk_setup_path`
+    path: PathState
 
 
 def replay(minutes: list[MinuteInputs], params: SetupParams, expiry: str) -> list[dict]:
@@ -237,7 +237,14 @@ def replay(minutes: list[MinuteInputs], params: SetupParams, expiry: str) -> lis
     Invariant vzniku (#1324) jako živý `SetupEngine._detect_new`: v minutě po
     settle vlastní expirace (`born_after_settle`) žádný kandidát nevznikne —
     živě je to jediný cyklus minuty settle, po kterém pipeline roluje (#1331).
+
+    Vyhodnocení týmž `walk_setup_path` jako živý engine (#1345, #1369): bary
+    v pořadí od baru vstupu, bary od settle se nehodnotí a setup otevřený
+    v settle skončí timeoutem za close baru končícího v settle (`closed` =
+    settle). Díru v minutách (trh běžel, bar chybí) offline nikdo nedoplní —
+    replay ji přejde jako engine po `PATH_GAP_WAIT` a počet děr vrátí v `gaps`.
     """
+    settle = expiry_settle(expiry)
     history: list[MinuteInputs] = []
     open_setups: list[OpenSetup] = []
     done: list[dict] = []
@@ -246,39 +253,54 @@ def replay(minutes: list[MinuteInputs], params: SetupParams, expiry: str) -> lis
     dir_stops: dict[str, int] = defaultdict(int)
     dir_blocked: dict[str, dt.datetime] = {}
 
+    gaps: dict[int, int] = defaultdict(int)
     for now in minutes:
         history.append(now)
-        # 1) Vyhodnocení otevřených (stop-first uvnitř svíčky, jako SetupEngine)
+        # 1) Vyhodnocení otevřených po cestě ceny (stop-first uvnitř svíčky,
+        # timeout v settle) — týž krok jako SetupEngine; offline se díra přejde
         still: list[OpenSetup] = []
         for item in open_setups:
-            outcome = evaluate_bar(
-                item.direction, item.entry, item.target, item.stop, now.high, now.low
+            step = walk_setup_path(
+                item.direction,
+                item.entry,
+                item.target,
+                item.stop,
+                settle,
+                [now],
+                item.path,
+                now=now.ts + dt.timedelta(minutes=1),
+                force_until=now.ts,
             )
+            gaps[id(item)] += len(step.gaps)
+            item.path = step.state
+            outcome = step.outcome
             if outcome is None:
                 still.append(item)
                 continue
-            exit_price = item.stop if outcome is Outcome.STOP else item.target
+            exit_price = step.exit_price if step.exit_price is not None else item.entry
             result = r_result(item.direction, item.entry, item.stop, exit_price)
             done.append(
                 {
                     "template": item.template,
                     "direction": item.direction.value,
                     "created": item.created,
-                    "closed": now.ts,
+                    "closed": step.closed_ts,
                     "outcome": outcome.value,
                     "r": result,
+                    "gaps": gaps.pop(id(item), 0),
                 }
             )
             side = item.direction.value
+            closed_ts = step.closed_ts or now.ts
             if outcome is Outcome.STOP:
                 if item.counter:
-                    last_counter_stop[item.template] = now.ts
+                    last_counter_stop[item.template] = closed_ts
                 dir_stops[side] += 1
                 if dir_stops[side] >= params.max_stops_per_direction:
-                    dir_blocked[side] = now.ts + dt.timedelta(
+                    dir_blocked[side] = closed_ts + dt.timedelta(
                         minutes=params.direction_block_minutes
                     )
-            else:
+            elif outcome is Outcome.TARGET:
                 dir_stops[side] = 0
                 dir_blocked.pop(side, None)
         open_setups = still
@@ -316,11 +338,13 @@ def replay(minutes: list[MinuteInputs], params: SetupParams, expiry: str) -> lis
                     stop=candidate.stop,
                     created=now.ts,
                     counter=counter,
+                    # Bar vstupu = minuta vzniku (entry je její close)
+                    path=PathState(last_ts=now.ts, last_close=now.close),
                 )
             )
             open_templates.add(template)
 
-    for item in open_setups:  # neuzavřené do konce dne = bez výsledku
+    for item in open_setups:  # data skončila před settle = bez výsledku
         done.append(
             {
                 "template": item.template,
@@ -329,6 +353,7 @@ def replay(minutes: list[MinuteInputs], params: SetupParams, expiry: str) -> lis
                 "closed": None,
                 "outcome": "active",
                 "r": None,
+                "gaps": gaps.get(id(item), 0),
             }
         )
     return done
@@ -365,60 +390,80 @@ def build_probe_minutes(symbol: str, expiry: str) -> list[ProbeMinute]:
 
     Seance = (settle předchozího dne, settle expirace): adresář expirace nese
     i profily z dob, kdy byla sekundárním řetězem (#442), a minuty po settle
-    jsou mrtvý řetěz před rollem — živý sběrač je sice vidí, ale sonda by se
-    zavřela hned další minutou timeoutem. Obojí se vynechává.
+    expirace (`expiry_settle`, kvartální SOQ) už pipeline neběží (roll #1331).
+    Minuta bez profilu v seanci zůstává se zónou None (#1345) — jako živý
+    sběrač, kterému chybí `last_profile`: přechod se v ní nepočítá, ale její
+    bar patří cestě ceny otevřených sond (dřív se vynechala a stop v ní
+    se ztratil).
     """
     bars = cached_bars(symbol)
     profiles = load_profiles(symbol, expiry)
     if bars is None or not profiles:
         return []
     expiry_day = dt.datetime.strptime(expiry, "%Y%m%d").date()
-    session_end = settle_ts(expiry_day)
+    session_end = expiry_settle(expiry)
+    if session_end is None:
+        return []
     session_start = settle_ts(expiry_day - dt.timedelta(days=1))
     bars = bars.copy()
     bars["ts_min"] = bars["ts_min"] + pd.Timedelta(minutes=1)  # bar N−1 → rozhodnutí v N
     minutes: list[ProbeMinute] = []
     for row in bars.itertuples():
-        profile = profiles.get(row.ts_min)
-        if profile is None:
-            continue
         ts = pd.Timestamp(row.ts_min).to_pydatetime()
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=dt.UTC)
-        if not (session_start < ts < session_end):
+        if not (session_start < ts <= session_end):
             continue
+        profile = profiles.get(row.ts_min)
         close = float(row.close)
-        metrics = band_metrics(profile, close)
+        metrics = band_metrics(profile, close) if profile is not None else None
         minutes.append(
             ProbeMinute(
                 ts=ts,
                 high=float(row.high),
                 low=float(row.low),
                 close=close,
-                zone=band_zone(profile, close),
+                zone=band_zone(profile, close) if profile is not None else None,
                 band_depth=metrics.depth if metrics is not None else None,
             )
         )
     return minutes
 
 
+@dataclasses.dataclass(frozen=True)
+class _PathBar:
+    """Bar cesty ceny sondy: `ProbeMinute.ts` je minuta rozhodnutí, bar je o minutu dřív."""
+
+    ts: dt.datetime
+    high: float
+    low: float
+    close: float
+
+
 @dataclasses.dataclass
 class OpenProbe:
     occurrence: ProbeOccurrence
-    mfe: float = 0.0
-    mae: float = 0.0
+    path: PathState
 
 
-def replay_probes(minutes: list[ProbeMinute], params: ProbeParams) -> list[dict]:
-    """Přehraje seanci přes `detect_damping_ceiling`; výsledek týmž `evaluate_bar`.
+def replay_probes(
+    minutes: list[ProbeMinute], params: ProbeParams, settle: dt.datetime | None = None
+) -> list[dict]:
+    """Přehraje seanci přes `detect_damping_ceiling`; výsledek týmž `walk_setup_path`.
 
-    Zrcadlo `T9ProbeCollector`: okno 2 × akceptace minut, otevřené sondy se
-    vyhodnocují barem každé další minuty (stop-first), MFE/MAE v R, konec
-    seance = timeout za poslední close (settle expirace).
+    Zrcadlo `T9ProbeCollector` (#1345): okno 2 × akceptace minut, otevřené sondy
+    jdou po cestě ceny od baru vstupu (stop-first uvnitř svíčky, bary od settle
+    se nehodnotí, timeout za close baru končícího v settle, `closed` = settle),
+    MFE/MAE v R. Díru v minutách offline nikdo nedoplní — přejde se a spočítá
+    v `gaps`. Bez `settle` (testy) uzavře konec dat timeoutem za poslední close.
     """
     history: deque[ProbeMinute] = deque(maxlen=2 * params.acceptance_minutes)
     open_probes: list[OpenProbe] = []
     done: list[dict] = []
+    gaps: dict[int, int] = defaultdict(int)
+
+    def bar_of(minute: ProbeMinute) -> _PathBar:
+        return _PathBar(minute.ts - dt.timedelta(minutes=1), minute.high, minute.low, minute.close)
 
     def close_row(
         probe: OpenProbe, outcome: Outcome, closed: dt.datetime, exit_price: float
@@ -432,36 +477,54 @@ def replay_probes(minutes: list[ProbeMinute], params: ProbeParams) -> list[dict]
             "closed": closed,
             "outcome": outcome.value,
             "r": r_result(item.direction, item.entry, item.stop, exit_price),
-            "mfe_r": probe.mfe / risk if risk > 0 else None,
-            "mae_r": probe.mae / risk if risk > 0 else None,
+            "mfe_r": probe.path.mfe / risk if risk > 0 else None,
+            "mae_r": probe.path.mae / risk if risk > 0 else None,
+            "gaps": gaps.pop(id(probe), 0),
             "context": item.context,
         }
 
-    for now in minutes:
-        still: list[OpenProbe] = []
-        for probe in open_probes:
-            item = probe.occurrence
-            favorable, adverse = probe_excursion(item.direction, item.entry, now.high, now.low)
-            probe.mfe = max(probe.mfe, favorable)
-            probe.mae = max(probe.mae, adverse)
-            outcome = evaluate_bar(
-                item.direction, item.entry, item.target, item.stop, now.high, now.low
-            )
-            if outcome is None:
-                still.append(probe)
-                continue
-            exit_price = item.stop if outcome is Outcome.STOP else item.target
-            done.append(close_row(probe, outcome, now.ts, exit_price))
-        open_probes = still
+    def step(probe: OpenProbe, bars: list[_PathBar], now: dt.datetime) -> bool:
+        """Krok cesty; True = sonda uzavřena (řádek zapsán)."""
+        item = probe.occurrence
+        result = walk_setup_path(
+            item.direction,
+            item.entry,
+            item.target,
+            item.stop,
+            settle,
+            bars,
+            probe.path,
+            now=now,
+            force_until=now,
+        )
+        gaps[id(probe)] += len(result.gaps)
+        probe.path = result.state
+        if result.outcome is None:
+            return False
+        exit_price = result.exit_price if result.exit_price is not None else item.entry
+        closed = result.closed_ts if result.closed_ts is not None else now
+        done.append(close_row(probe, result.outcome, closed, exit_price))
+        return True
 
+    for now in minutes:
+        bar = bar_of(now)
+        open_probes = [probe for probe in open_probes if not step(probe, [bar], now.ts)]
+        if settle is not None and now.ts >= settle:
+            continue  # minuta settle a po ní — sonda nevzniká (`born_after_settle`, #1331)
         history.append(now)
         occurrence = detect_damping_ceiling(list(history), params)
         if occurrence is not None:
-            open_probes.append(OpenProbe(occurrence=occurrence))
+            open_probes.append(
+                OpenProbe(
+                    occurrence=occurrence, path=PathState(last_ts=bar.ts, last_close=bar.close)
+                )
+            )
 
+    if settle is not None:
+        open_probes = [probe for probe in open_probes if not step(probe, [], settle)]
     if minutes:
         last = minutes[-1]
-        for probe in open_probes:
+        for probe in open_probes:  # data skončila dřív než settle
             done.append(close_row(probe, Outcome.TIMEOUT, last.ts, last.close))
     return done
 
@@ -499,7 +562,7 @@ def probe_report(symbols: list[str], params: ProbeParams) -> dict:
             if len(minutes) < 60:
                 continue
             days += 1
-            day_rows = replay_probes(minutes, params)
+            day_rows = replay_probes(minutes, params, expiry_settle(expiry))
             rows.extend(day_rows)
             if day_rows:
                 per_day[expiry] = len(day_rows)
