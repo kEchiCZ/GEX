@@ -1591,9 +1591,9 @@ def missing_minutes(
 ) -> tuple[dt.datetime, dt.datetime] | None:
     """První a poslední minuta v (after, before), ve které trh běžel — bar tam patří.
 
-    Denní pauza a víkend dírou nejsou (`marketclock.is_market_closed`). Svátky
-    rozvrh nezná (#1308): jejich zavřené minuty vypadají jako díra, kterou engine
-    po `PATH_GAP_WAIT` přejde a zaloguje.
+    Denní pauza, víkend a svátky dírou nejsou (`marketclock.is_market_closed`,
+    svátky a zkrácené seance od #1308). Mimořádné zavření rozvrh nezná — jeho
+    minuty vypadají jako díra, kterou engine po `PATH_GAP_WAIT` přejde a zaloguje.
     """
     first: dt.datetime | None = None
     last: dt.datetime | None = None

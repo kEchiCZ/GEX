@@ -215,3 +215,22 @@ kontaminace w5 48 % → 24 %) — před ostrým během se přeměří.
 - Sloupec „Významné“ v auditu zdrojů (`GET /news/sources`) počítá podíl toutéž funkcí
   `significance_tier` (dřív importance ≥ 2 a skóre).
 - Taxonomie (MARKETS, RATES, CB_FOREIGN) zůstává beze změny — samostatné issue.
+
+## Dodatek 2026-10-07 — bod 9 u odložených reakcí: jedno měření = jedna uzavírka (#1311)
+
+Sloučení podle `ts_event` (bod 9) nechytí odložené reakce: zprávy jedné uzavírky trhu
+(víkend, denní pauza, svátek) mají různý čas, ale tutéž základní cenu před uzavřením i první
+bar po otevření, tedy shodný výnos (GEOPOLITICS|1 deferred ~370 vzorků na ~130 uzavírek).
+
+- **Klíč uzavírky je měření z barů, ne kalendář:** `news_reactions.closure_open_ts` = první
+  obchodovaný bar po zprávě (`reactions.compute_reactions`, týž `first_traded` jako start
+  okna), jen u deferred reakcí. Rozvrh `marketclock` nezná svátky ani halty.
+- **Agregace** (`model_stats._Accumulator`) slučuje deferred vzorky podle `closure_open`,
+  ostatní dál podle `ts_event`; stream zůstává řazený podle času zprávy, vzorky jedné
+  uzavírky jsou v bucketu za sebou. Řádek bez klíče (před backfillem) se slučuje jen časem.
+- **Historie:** sloupec se přidá aditivně, `scripts/backfill_reaction_closure.py` ho doplní
+  z archivu barů (dry-run → `--apply`, jen NULL řádky, nic nemaže); gate se přepočítá
+  nočním `ModelStatsJob`.
+
+Varianta „proxy klíč z kalendáře“ zamítnuta: na svátek nebo halt by rozdělila nebo spojila
+uzavírky jinak než trh.

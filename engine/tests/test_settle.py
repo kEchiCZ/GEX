@@ -9,10 +9,14 @@ import datetime as dt
 from gexlens_engine.compute.settle import (
     CME_TZ,
     ET_TZ,
+    easter_sunday,
+    expiry_settle,
+    is_early_close,
     is_trading_session,
     session_time_utc,
     settle_ts,
     trading_session_date,
+    us_market_holidays,
 )
 
 
@@ -85,3 +89,43 @@ def test_obchodni_seance_po_pa_vikend_ne() -> None:
     assert not is_trading_session(trading_session_date(sunday_1515_cest))
     sunday_open = dt.datetime(2026, 9, 27, 17, 0, tzinfo=CME_TZ)
     assert is_trading_session(trading_session_date(sunday_open))  # pondělí 28. 9.
+
+
+def test_svatky_nyse_z_pravidel() -> None:
+    """#1308, ADR-0046: celodenní svátky NYSE z pravidel (2025 a 2026 = oficiální rozvrh)."""
+
+    def iso(year: int) -> list[str]:
+        return sorted(day.isoformat() for day in us_market_holidays(year))
+
+    assert iso(2026) == [
+        "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+        "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    ]  # fmt: skip
+    assert iso(2025) == [
+        "2025-01-01", "2025-01-20", "2025-02-17", "2025-04-18", "2025-05-26",
+        "2025-06-19", "2025-07-04", "2025-09-01", "2025-11-27", "2025-12-25",
+    ]  # fmt: skip
+    # Přesuny: Vánoce a Juneteenth v sobotu → pátek, 4. 7. v neděli → pondělí
+    assert {dt.date(2027, 12, 24), dt.date(2027, 6, 18), dt.date(2027, 7, 5)} <= (
+        us_market_holidays(2027)
+    )
+    # Nový rok v sobotu (2028) se na pátek 31. 12. 2027 nepřesouvá
+    assert dt.date(2027, 12, 31) not in us_market_holidays(2027)
+    assert not any(day.month == 1 and day.day <= 2 for day in us_market_holidays(2028))
+    assert easter_sunday(2026) == dt.date(2026, 4, 5)
+    assert easter_sunday(2027) == dt.date(2027, 3, 28)
+
+
+def test_svatek_neni_obchodni_den_zkracena_seance_ano() -> None:
+    """Thanksgiving a Vánoce nemají US seanci; den po Thanksgiving ano, se settle 13:00 ET."""
+    assert not is_trading_session(dt.date(2026, 11, 26))  # Thanksgiving
+    assert not is_trading_session(dt.date(2026, 12, 25))  # Vánoce
+    assert is_trading_session(dt.date(2026, 11, 27))  # zkrácená seance
+    assert is_early_close(dt.date(2026, 11, 27)) and is_early_close(dt.date(2026, 12, 24))
+    # 3. 7. 2026 je držený svátek (4. 7. v sobotu), 2. 7. zkrácený není
+    assert not is_early_close(dt.date(2026, 7, 3)) and not is_early_close(dt.date(2026, 7, 2))
+    assert is_early_close(dt.date(2025, 7, 3))
+    # Settle zkrácené seance 13:00 ET (= 18:00 UTC v zimě) — i pro 0DTE expiraci
+    assert settle_ts(dt.date(2026, 11, 27)) == dt.datetime(2026, 11, 27, 18, 0, tzinfo=dt.UTC)
+    assert expiry_settle("20261127") == dt.datetime(2026, 11, 27, 18, 0, tzinfo=dt.UTC)
+    assert settle_ts(dt.date(2026, 11, 25)) == dt.datetime(2026, 11, 25, 21, 0, tzinfo=dt.UTC)

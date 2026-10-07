@@ -262,6 +262,11 @@ news_reactions = Table(
     # Kdy byla fáze spočítána; NULL = fáze zatím nespočítaná (pending dotazy)
     Column("computed_at_min", DateTime(timezone=True), nullable=True),
     Column("computed_at_daily", DateTime(timezone=True), nullable=True),
+    # První obchodovaný bar po uzavírce trhu (#1311) — jen deferred reakce,
+    # jinak NULL. Klíč uzavírky: deferred reakce jedné uzavírky (víkend,
+    # denní pauza, svátek) sdílejí základní cenu i první bar, tedy i výnos,
+    # a model je slučuje do jednoho měření. Měření z barů, ne kalendář.
+    Column("closure_open_ts", DateTime(timezone=True), nullable=True),
 )
 
 
@@ -282,6 +287,8 @@ class ReactionWindow:
     deferred: bool
     gex_regime: str | None
     computed_at: dt.datetime
+    # První obchodovaný bar po uzavírce (#1311); jen deferred, jinak None
+    closure_open: dt.datetime | None = None
 
 
 def _window_column(prefix: str, window_min: int) -> Column[Any]:
@@ -355,6 +362,13 @@ def reaction_row_values(windows: Sequence[ReactionWindow]) -> dict[str, object]:
         values[f"deferred_{phase}"] = deferred
         values[f"regime_{phase}"] = regime
         values[f"computed_at_{phase}"] = computed_at
+    # Klíč uzavírky (#1311) je vlastnost události, ne okna — všechna deferred
+    # okna řádku ho sdílejí; nedeferred fáze sloupec nepřepisuje
+    opens = {window.closure_open for window in windows if window.deferred}
+    if len(opens) > 1:
+        raise ValueError(f"Deferred okna řádku mají různý první bar po uzavírce: {opens}")
+    if opens:
+        values["closure_open_ts"] = opens.pop()
     return values
 
 
@@ -382,6 +396,7 @@ def unpivot_reaction(row: Mapping[Any, Any]) -> list[ReactionWindow]:
                 deferred=bool(row[f"deferred_{phase}"]),
                 gex_regime=row.get(f"regime_{phase}"),
                 computed_at=computed_at,
+                closure_open=row.get("closure_open_ts") if row[f"deferred_{phase}"] else None,
             )
         )
     return windows
@@ -800,6 +815,16 @@ def ensure_sentiment_schema(engine: Engine) -> None:
                 "Spusť `scripts/migrate_news_reactions_wide.py` (nejdřív se zálohou PG); "
                 "do té doby se do reakcí nesmí psát."
             )
+        # Klíč uzavírky (#1311) — aditivně; historii doplní
+        # `scripts/backfill_reaction_closure.py` z archivu barů
+        if "closure_open_ts" not in columns:
+            column_type = (
+                "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "TIMESTAMP"
+            )
+            with engine.begin() as conn:
+                conn.execute(
+                    text(f"ALTER TABLE news_reactions ADD COLUMN closure_open_ts {column_type}")
+                )
     sentiment_metadata.create_all(engine)
     ensure_news_reaction_spread_view(engine)
 

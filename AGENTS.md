@@ -67,7 +67,7 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
 - **Obchodní den, ne kalendářní.** `trading_session_date` i UTC klíče partic a OI archivu mají
   sobotu a neděli. Kdo na den váže US open, settle, publikaci OI nebo srovnání „proti předchozímu
   dni", ptá se jediného predikátu `compute/settle.is_trading_session` (frontend: protějšek
-  `instrument/tz.isTradingSessionIso`; svátky doplní #1308 do obou), žádné lokální `weekday() < 5`
+  `instrument/tz.isTradingSessionIso`; svátky NYSE z pravidel, #1308, ADR-0046), žádné lokální `weekday() < 5`
   ani `getUTCDay()` jako test obchodního dne; test na sobotu, neděli a pondělí proti pátku
   (#1241, #1307, #1309).
 - **Podezřelá hodnota na produkci se řeší hned** (issue + příčina), neodkládá se „až se to bude opakovat".

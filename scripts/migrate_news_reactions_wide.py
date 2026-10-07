@@ -106,6 +106,10 @@ def pivot_select_sql(source: str = TABLE) -> str:
         for phase in ("min", "daily"):
             columns.append(f"{field}_{phase}")
             exprs.append(phase_exprs[field].format(cond=_phase_condition(phase)))
+    # Klíč uzavírky (#1311) starý tvar nenese — doplní ho
+    # `scripts/backfill_reaction_closure.py` z archivu barů
+    columns.append("closure_open_ts")
+    exprs.append("NULL")
     # Pořadí musí odpovídat INSERT seznamu = definici tabulky; posun sloupce
     # by prohodil hodnoty a kontroly by to sice chytily, ale lepší hned
     if columns != pivot_column_names():

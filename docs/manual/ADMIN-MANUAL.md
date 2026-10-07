@@ -273,7 +273,12 @@ DXLink a `strikes_stalled` po sobotním rollu.
 
 Všechny hlídače níže berou jeden predikát „očekávají se data?" z rozvrhu
 `compute/marketclock.is_market_closed` (ADR-0023, DST-korektně; stejný vzor
-jako signály #968 a hlídač tasty streamu #1228). Hranu zavřeno → otevřeno
+jako signály #968 a hlídač tasty streamu #1228). Od #1308 (ADR-0046) zná rozvrh
+i svátky a zkrácené seance z pravidel NYSE (`compute/settle`: `us_market_holidays`,
+`is_early_close`): o Vánocích, Novém roce a Velkém pátku je Globex zavřený,
+o ostatních svátcích obchoduje do 12:00 CT, zkrácená seance (den po Thanksgiving,
+Štědrý den, 3. 7.) končí v 12:15 CT a settle i US RTH v 13:00 ET. O Vánocích tak
+neodejde ~26 upozornění `feed_crosscheck`, o Thanksgivingu ~12. Hranu zavřeno → otevřeno
 zjišťuje pipeline jednou v `run_minute`, před sweepem.
 
 | Upozornění | Při zavřeném trhu | Po otevření (neděle / po pauze 17:00 CT) |
@@ -328,8 +333,8 @@ konec DST 1. 11., Vánoce), `test_scheduler.py`, `test_subscription.py`,
 kalendářní den bez seance a OI archiv i partice mají klíče podle UTC dne včetně
 víkendu. Kdo na den váže US open, settle, publikaci OI nebo srovnání „proti
 předchozímu dni", ptá se jediného predikátu `compute/settle.is_trading_session`
-(po–pá; frontendový protějšek `instrument/tz.isTradingSessionIso`; svátky CME
-doplní #1308 do obou). Sdílí ho epizody sentimentu (ADR-0037), scénáře a verdikty
+(po–pá mimo svátky NYSE; frontendový protějšek `instrument/tz.isTradingSessionIso`;
+kalendář svátků z pravidel, #1308, ADR-0046). Sdílí ho epizody sentimentu (ADR-0037), scénáře a verdikty
 dne, publikace OI (`_oi_published`), backfill EM respect, pokrytí hlubokých barů
 (`deepbars.task_is_covered`), PDC scénáře (`scenario_auto._settle_close`), okno
 remediace BS (`marketclock.outside_us_rth`), dny Forward GEX

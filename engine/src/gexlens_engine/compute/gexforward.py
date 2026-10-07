@@ -72,7 +72,7 @@ def trading_days_until_friday(today: dt.date) -> list[dt.date]:
     Sobota/neděle jako vstup vrací jen následující týden nezačíná — horizont
     „do konce týdne" o víkendu znamená prázdno; forward se počítá po ranním
     OI archivu, který o víkendu neběží, takže je to okrajový stav. Obchodní
-    den z jediného predikátu `settle.is_trading_session` (#1309; svátky #1308).
+    den z jediného predikátu `settle.is_trading_session` (#1309; svátek vypadne, #1308).
     """
     # Pátek téhož kalendářního týdne; o víkendu leží před `today` → prázdno
     friday = today + dt.timedelta(days=4 - today.weekday())
