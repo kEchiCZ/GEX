@@ -3,12 +3,14 @@
 import asyncio
 import contextlib
 import datetime as dt
+from collections.abc import Callable
+from typing import Any, cast
 
 import pytest
 
 import gexlens_engine.__main__ as engine_main
 from gexlens_engine.config import Settings
-from gexlens_engine.ibkr.connection import ConnectionManager, ConnectionState
+from gexlens_engine.ibkr.connection import ConnectionManager, ConnectionState, StatusEvent
 from gexlens_engine.ibkr.mock import MockIB
 from gexlens_engine.runtime import PublisherLike
 
@@ -327,7 +329,9 @@ async def test_stall_report_publishes_bell_alert() -> None:
     client = MockIB(fail_connects=1000)  # TWS je trvale dole
     manager = manager_with_watchdog(client, stall_alert_s=0.05)
     publisher = _RecordingPublisher()
-    engine_main._watch_connection_stall(manager, Settings(), publisher, utc_now=lambda: OPEN_MARKET)
+    engine_main._watch_connection_stall(
+        manager, Settings(reconnect_stall_alert_s=0.05), publisher, utc_now=lambda: OPEN_MARKET
+    )
 
     await manager.start()
     async with asyncio.timeout(3.0):
@@ -465,3 +469,66 @@ async def test_selhana_vynucena_obnova_prepoji_spojeni() -> None:
     # Disconnect nastartuje reconnect; MockIB se nechá znovu připojit
     await wait_for_state(manager, ConnectionState.CONNECTED)
     await manager.stop()
+
+
+class _FakeManager:
+    """Zachytí callbacky watchdogu — volání řídí test (#1317)."""
+
+    def __init__(self) -> None:
+        self.stall: list[Callable[[float], None]] = []
+        self.status: list[Callable[[StatusEvent], None]] = []
+
+    def on_stall(self, callback: Callable[[float], None]) -> None:
+        self.stall.append(callback)
+
+    def on_status(self, callback: Callable[[StatusEvent], None]) -> None:
+        self.status.append(callback)
+
+
+def test_stall_alert_stage_eskalace() -> None:
+    """5 min, 15 min, 1 h, pak à 4 h (násobky prahu 300 s)."""
+    stage = engine_main.stall_alert_stage
+    assert [stage(s, 300.0) for s in (299, 300, 899, 900, 3599, 3600)] == [0, 1, 1, 2, 2, 3]
+    assert stage(3600 + 4 * 3600 - 1, 300.0) == 3
+    assert stage(3600 + 4 * 3600, 300.0) == 4
+    assert stage(3600 + 8 * 3600, 300.0) == 5
+
+
+async def test_dlouhy_vypadek_omezeny_pocet_zprav_a_pravdivy_text() -> None:
+    """#1317: 28. 9. odešlo za 35 min 15 zpráv „sběr dat stojí“, ač data jela
+    ze zálohy tastytrade. Teď eskalace a text podle zálohy; po návratu „zpět“."""
+    manager = _FakeManager()
+    publisher = _RecordingPublisher()
+    backup = {"active": True}
+    engine_main._watch_connection_stall(
+        cast(Any, manager),
+        Settings(),
+        publisher,
+        utc_now=lambda: OPEN_MARKET,
+        backup_active=lambda: backup["active"],
+    )
+    # Watchdog volá každých 5 min dvě hodiny
+    for minute in range(5, 125, 5):
+        for callback in manager.stall:
+            callback(minute * 60.0)
+    await asyncio.sleep(0)
+    messages = [str(data["message"]) for _, data in publisher.messages]
+    assert len(messages) == 3  # 5 min, 15 min, 1 h
+    assert all("zálohy tastytrade" in text and "stojí" not in text for text in messages)
+    assert "1.0 h" not in messages[0] and "5 min" in messages[0]
+    # Bez zálohy pravdivě „sběr dat stojí“ (další milník po 4 h)
+    backup["active"] = False
+    for callback in manager.stall:
+        callback((60 + 4 * 60) * 60.0)
+    # Návrat spojení
+    for callback in manager.status:
+        callback(StatusEvent(state=ConnectionState.CONNECTED, detail="", port=4001, ts=0.0))
+    await asyncio.sleep(0)
+    messages = [str(data["message"]) for _, data in publisher.messages]
+    assert "sběr dat stojí" in messages[3] and "5.0 h" in messages[3]
+    assert messages[4].startswith("IBKR spojení je zpět")
+    # Nový výpadek začíná eskalaci znovu
+    for callback in manager.stall:
+        callback(300.0)
+    await asyncio.sleep(0)
+    assert len(publisher.messages) == 6

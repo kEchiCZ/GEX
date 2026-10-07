@@ -51,6 +51,7 @@ from gexlens_engine.ibkr.connection import (
     DELAYED_DATA_ERROR_CODES,
     ConnectionManager,
     ConnectionState,
+    StatusEvent,
 )
 from gexlens_engine.ibkr.discovery import (
     ChainDiscovery,
@@ -493,28 +494,67 @@ async def _publish_outage_alert(
     return True
 
 
+#: Eskalace upozornění na výpadek IBKR (#1317) v násobcích `reconnect_stall_alert_s`:
+#: 5 min, 15 min, 1 h a pak jednou za 4 h (při výchozích 300 s)
+STALL_ALERT_STEPS = (1, 3, 12)
+STALL_ALERT_REPEAT = 48
+
+
+def stall_alert_stage(offline_s: float, first_s: float) -> int:
+    """Kolik milníků eskalace výpadek už překročil (0 = žádný) — čistá funkce."""
+    if offline_s < first_s:
+        return 0
+    stage = sum(1 for step in STALL_ALERT_STEPS if offline_s >= step * first_s)
+    last = STALL_ALERT_STEPS[-1] * first_s
+    if offline_s < last:
+        return stage
+    return stage + int((offline_s - last) // (STALL_ALERT_REPEAT * first_s))
+
+
 def _watch_connection_stall(
     manager: ConnectionManager,
     settings: Settings,
     publisher: PublisherLike,
     *,
     utc_now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
+    backup_active: Callable[[], bool] = lambda: False,
 ) -> None:
-    """Dlouhý výpadek IBKR spojení do zvonečku (#770).
+    """Dlouhý výpadek IBKR spojení do zvonečku (#770) — eskalací, ne intervalem (#1317).
 
-    Watchdog v ConnectionManageru hlásí přes `on_stall` každých
+    Watchdog v ConnectionManageru volá `on_stall` každých
     `reconnect_stall_alert_s`, dokud se spojení nevrátí — 18. 8. byl engine
     osm hodin offline a poznalo se to jen tím, že si člověk všiml zamrzlého
-    grafu. Log ERROR píše watchdog sám; tady se výpadek jen publikuje.
+    grafu. Log ERROR píše watchdog sám; tady se výpadek publikuje.
 
-    Při zavřeném trhu (#1307) se nepublikuje: sběr dat nestojí, protože žádná
-    data nejsou (víkend 12.–13. 9. 2026: ~216 upozornění à 5 min během
-    údržby IBKR). Trvá-li výpadek i po otevření, první hlášení po otevření
-    nese celou délku výpadku — watchdog volá dál každý interval.
+    Upozornění jde jen při překročení milníku (`stall_alert_stage`: 5 min,
+    15 min, 1 h, pak à 4 h): 28. 9. odešlo za 35 min 15 zpráv s počtem
+    sekund v textu, který dedup Telegramu nechytil. Text říká pravdu: běží-li
+    záloha tastytrade (`backup_active`), data se sbírají dál. Po obnovení
+    spojení odejde „IBKR zpět“, pokud se o výpadku hlásilo.
+
+    Při zavřeném trhu (#1307) se nepublikuje: žádná data nejsou (víkend
+    12.–13. 9. 2026: ~216 upozornění à 5 min během údržby IBKR). Trvá-li
+    výpadek i po otevření, první hlášení po otevření nese celou délku výpadku.
     """
     # RUF006: create_task bez držené reference může GC uklidit před doběhem
     # (#499) — alert by pak tiše nedorazil
     pending: set[asyncio.Task[None]] = set()
+    episode = {"stage": 0, "alerted": False}
+
+    def publish(message: str) -> None:
+        task = asyncio.create_task(
+            publisher.publish(
+                "alerts",
+                {
+                    "kind": "connection_stall",
+                    "symbol": "*",
+                    "message": message,
+                    "ts": utc_now().timestamp(),
+                },
+            )
+        )
+        pending.add(task)
+        task.add_done_callback(pending.discard)
 
     def on_stall(offline_s: float) -> None:
         if is_market_closed(utc_now()):
@@ -523,25 +563,35 @@ def _watch_connection_stall(
                 offline_s / 60,
             )
             return
-        task = asyncio.create_task(
-            publisher.publish(
-                "alerts",
-                {
-                    "kind": "connection_stall",
-                    "symbol": "*",
-                    "message": (
-                        f"IBKR spojení chybí už {offline_s / 60:.0f} min — sběr dat "
-                        f"stojí. Zkontroluj TWS a API port "
-                        f"{settings.ibkr_host}:{settings.ibkr_port}."
-                    ),
-                    "ts": utc_now().timestamp(),
-                },
+        stage = stall_alert_stage(offline_s, settings.reconnect_stall_alert_s)
+        if stage <= episode["stage"]:
+            return
+        episode["stage"] = stage
+        episode["alerted"] = True
+        minutes = offline_s / 60
+        duration = f"{minutes / 60:.1f} h" if minutes >= 120 else f"{minutes:.0f} min"
+        if backup_active():
+            message = (
+                f"IBKR nedostupné už {duration} — data jedou ze zálohy tastytrade. "
+                f"Zkontroluj TWS a API port {settings.ibkr_host}:{settings.ibkr_port}."
             )
-        )
-        pending.add(task)
-        task.add_done_callback(pending.discard)
+        else:
+            message = (
+                f"IBKR spojení chybí už {duration} — sběr dat stojí. Zkontroluj TWS "
+                f"a API port {settings.ibkr_host}:{settings.ibkr_port}."
+            )
+        publish(message)
+
+    def on_status(event: StatusEvent) -> None:
+        if event.state is not ConnectionState.CONNECTED:
+            return
+        if episode["alerted"]:
+            publish("IBKR spojení je zpět — data jedou znovu z IBKR.")
+        episode["stage"] = 0
+        episode["alerted"] = False
 
     manager.on_stall(on_stall)
+    manager.on_status(on_status)
 
 
 def _connection_offline_status(manager: ConnectionManager) -> dict[str, object]:
@@ -1601,9 +1651,19 @@ async def main() -> None:
         lambda: subscription_alerts["enabled"],
         tombstones=reqid_tombstones,
     )
+    pipelines: dict[str, InstrumentPipeline] = {}
     # Dlouhý výpadek spojení hlásí zvoneček (#770) — registrace PŘED start(),
     # ať dozor platí od první vteřiny (i pro „TWS po startu stroje neběží")
-    _watch_connection_stall(manager, settings, publisher)
+    _watch_connection_stall(
+        manager,
+        settings,
+        publisher,
+        # Záloha tastytrade drží spot aspoň jednoho instrumentu (#614) — sběr
+        # dat nestojí (#1317)
+        backup_active=lambda: any(
+            pipeline.spot_source() == "tasty" for pipeline in pipelines.values()
+        ),
+    )
     await manager.start()
     # Čekání na IBKR je OHRANIČENÉ (#756). Dokud tu byla nekonečná smyčka,
     # zůstal za ní celý zbytek main() — schéma DB, pipelines, tastytrade větev
@@ -1798,7 +1858,6 @@ async def main() -> None:
         price, fresh = tasty_spot_lookup(symbol)
         return price is not None and fresh
 
-    pipelines: dict[str, InstrumentPipeline] = {}
     # Cílová sada instrumentů (konfigurace + watchlist) — pro tasty větev, ať
     # front future a řetěz drží i pro symbol, jehož pipeline zrovna neběží
     desired_symbols: list[str] = []
