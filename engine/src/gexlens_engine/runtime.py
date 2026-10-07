@@ -173,6 +173,12 @@ class EngineRuntime:
         dozrála k zásahu; oprávnění (flag + mimo US RTH) hlídá orchestrátor."""
         return self._bs_watcher.remediation_due(now=now) if self._bs_watcher is not None else None
 
+    def bs_remediation_pending(self, now: float) -> int | None:
+        """Dozrálý remediační pokus BEZ započtení (#1315) — pro kontrolu okna zásahu."""
+        return (
+            self._bs_watcher.remediation_pending(now=now) if self._bs_watcher is not None else None
+        )
+
     # Poslední Dyn GEX profil (ADR-0009) — tendency (#350) z něj čte gammu v místě ceny
     last_profile: GexProfile | None = field(default=None, init=False)
     # Charm/vanna profily (#204) — tendency v2 (#397) z nich čte toky v místě ceny

@@ -172,3 +172,21 @@ def test_otevreni_po_ohlasene_epizode_ohlasi_navrat() -> None:
     watcher.observe(bs_count=100, total=100, now=MIN_DURATION_S + 60.0, market_closed=True)
     recovery = watcher.observe(bs_count=0, total=100, now=300_000.0)
     assert recovery is not None and "vrátil" in recovery
+
+
+def test_pokus_dozraly_v_rth_se_nezapocita_a_pocka() -> None:
+    """#1315: volající nejdřív zjistí dozrálý pokus (`remediation_pending`) a započítá
+    ho až mimo RTH. Dřív se pokus započetl před kontrolou okna a v RTH propadl."""
+    from gexlens_engine.compute.bsfallback import REMEDIATION_AFTER_S
+
+    watcher = BsFallbackWatcher(symbol="NQ")
+    watcher.observe(bs_count=90, total=100, now=0.0)
+    ready = REMEDIATION_AFTER_S + 1.0
+    # V RTH: pokus je zralý, ale volající ho nezapočítá — každou minutu znovu zralý
+    assert watcher.remediation_pending(now=ready) == 1
+    assert watcher.remediation_pending(now=ready + 3600.0) == 1
+    # Po konci RTH se teprve započítá; reconnect má vlastní rozestup od resubscribe
+    after_rth = ready + 3600.0
+    assert watcher.remediation_due(now=after_rth) == 1
+    assert watcher.remediation_pending(now=after_rth + 60.0) is None
+    assert watcher.remediation_due(now=after_rth + REMEDIATION_AFTER_S) == 2
