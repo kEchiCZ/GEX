@@ -315,7 +315,7 @@ function MainContent() {
   const isHistoricalExpiry = viewDate !== today
   // Ad-hoc pohled (#206): symbol bez expirací = engine ho teprve zakládá
   // (přes tastytrade, do ~10 s) — banner nesmí tvrdit „Demo data"
-  const { expiries: knownExpiries, status: pipelineStatus } = useAppState()
+  const { expiries: knownExpiries, status: pipelineStatus, expiriesState } = useAppState()
   const adhocLoading =
     knownExpiries.length === 0 && (pipelineStatus.tasty_adhoc?.includes(symbol) ?? false)
   // Sentiment per zobrazený den (#976) — proto až za `viewDate`. Feed posledních
@@ -326,12 +326,14 @@ function MainContent() {
     live,
     staleData,
     dailyProgress,
+    availability,
   } = useDayData(
     symbol,
     selectedExpiry,
     viewDate,
     timeframe,
     isHistoricalExpiry ? undefined : socket,
+    expiriesState,
   )
   // FA zdroj OI (#232): opt-in přepínač per symbol. Aktivní je jen když FA
   // data opravdu existují — bez řady oiest se poctivě padá na měřené
@@ -482,7 +484,7 @@ function MainContent() {
   // Demo den (#1096) je jen kulisa grafu, dokud nedorazí balík dne nebo když API
   // neběží — z jeho čísel se NESMÍ počítat nic, co hlavička ukazuje jako fakt
   // (cena, změna, gamma režim, settle watch). Živé ticky spotu jsou skutečné.
-  const realDay = day.source !== 'demo'
+  const realDay = day.source === 'replay'
   // Hlavička: poslední cena + denní změna vs. otevření dne (živá cena má přednost)
   useEffect(() => {
     const spots = realDay ? day.spotSeries.filter((value): value is number => value !== null) : [] // prettier-ignore
@@ -1939,7 +1941,9 @@ function MainContent() {
         <span className="muted" data-testid="data-source">
           {day.source === 'replay'
             ? `replay ${viewDate}${isHistoricalExpiry ? ' · den expirace' : ''}`
-            : 'demo data'}
+            : day.source === 'blank'
+              ? 'bez dat'
+              : 'demo data'}
         </span>
         {/* Čas posledních dat u grafu (#470): když engine přestane sbírat, graf
         vypadá jako živý — jen se přestane hýbat. Tady je to vidět hned. */}
@@ -2226,6 +2230,13 @@ function MainContent() {
             {dailyProgress && (
               <div className="demo-banner" role="status" data-testid="daily-loading">
                 {`Načítám denní pohled (${dailyProgress.done}/${dailyProgress.total} dnů)…`}
+              </div>
+            )}
+            {day.source === 'blank' && (
+              <div className="demo-banner" role="status" data-testid="day-loading">
+                {availability === 'unavailable'
+                  ? 'API je nedostupné nebo se spouští — data zatím nejdou načíst, zkouším znovu…'
+                  : `Načítám data ${symbol}…`}
               </div>
             )}
             {day.source === 'demo' && !dailyProgress && (

@@ -160,7 +160,9 @@ function splitSpotBars(day: ReplayDay, spotBars: SpotBar[]): LiveOverlay {
 }
 
 export interface DayData {
-  source: 'replay' | 'demo'
+  /** `blank` = data se načítají nebo API je nedostupné (#1355) — prázdná plocha
+  bez smyšlených svíček; `demo` jen když pro symbol data opravdu nejsou. */
+  source: 'replay' | 'demo' | 'blank'
   grid: HeatmapGrid
   /** Surová snapshot matice (přepínání módů/škál) — jen intraday replay. */
   raw: RawDay | null
@@ -227,6 +229,46 @@ function demoDay(): DayData {
   }
 }
 
+/** Prázdný den (#1355): rozměry demo dne, ale bez heatmapy, svíček, úrovní
+i panelů — kulisa grafu, dokud API neodpoví nebo když je nedostupné. Demo
+data tu prosakovala do UI jako „pro NQ zatím nejsou uložená živá data“. */
+function blankDay(): DayData {
+  const demo = demoDay()
+  const minutes = demo.grid.minutes
+  const size = minutes * demo.grid.strikes.length
+  const zeros = () => Array.from({ length: minutes }, () => 0)
+  return {
+    ...demo,
+    source: 'blank',
+    grid: {
+      ...demo.grid,
+      layers: { call: new Float32Array(size), put: new Float32Array(size) },
+      staleAge: null,
+    },
+    overlays: {},
+    panels: {
+      vol: zeros(),
+      optVolCall: zeros(),
+      optVolPut: zeros(),
+      cumDelta: zeros(),
+      deltaFlowCall: zeros(),
+      deltaFlowPut: zeros(),
+    },
+    demoProfileRows: null,
+    spotSeries: Array.from({ length: minutes }, () => null),
+  }
+}
+
+/** Stav načtení dne (#1355): `loading` do první odpovědi, `unavailable` při
+chybě sítě nebo 5xx (API neběží / startuje), `empty` když API odpoví, že data
+nejsou (404, prázdný den), `ready` s daty. */
+export type DayAvailability = 'loading' | 'unavailable' | 'empty' | 'ready'
+
+/** Odpověď API, která říká „data nejsou“ — ne „nevím, API nejede“. */
+export function isNoDataError(error: unknown): boolean {
+  return error instanceof Error && /HTTP 404\b/.test(error.message)
+}
+
 function replayToDay(day: ReplayDay): DayData {
   const spotSeries: (number | null)[] = Array.from({ length: day.grid.minutes }, () => null)
   for (const bar of day.overlays.price ?? []) {
@@ -269,6 +311,8 @@ export interface DayFeed {
   /** Daily pohled se skládá (#1206): kolik dnů z kolika už dorazilo. Null =
   hotovo nebo intraday. Do dokončení UI ukazuje progres, ne demo banner. */
   dailyProgress: { done: number; total: number } | null
+  /** Stav načtení intradenního dne (#1355); Daily = `ready` (vlastní progres). */
+  availability: DayAvailability
 }
 
 export function useDayData(
@@ -277,8 +321,14 @@ export function useDayData(
   date: string,
   timeframe: 'intraday' | 'daily',
   socket?: LiveSocket,
+  /** Stav seznamu expirací (#1355): bez expirace z nedostupného API není demo. */
+  expiriesState: 'loading' | 'unavailable' | 'ready' = 'ready',
 ): DayFeed {
   const fallback = useMemo(() => demoDay(), [])
+  const blank = useMemo(() => blankDay(), [])
+  // Výsledek posledního fetche dne bez dat (#1355) — rozhoduje mezi prázdnou
+  // plochou (načítám / API nejede) a demem (data opravdu nejsou)
+  const [missing, setMissing] = useState<'loading' | 'unavailable' | 'empty'>('loading')
   const [inputs, setInputs] = useState<ReplayInputs | null>(null)
   // Zrcadlo inputs pro rozhodování ve flushi mimo setState updater (#143: updater musí být čistý)
   const inputsRef = useRef<ReplayInputs | null>(null)
@@ -308,6 +358,7 @@ export function useDayData(
     setDailyProgress(null)
     setSpotBars([])
     setRefreshFailures({ count: 0, atMs: 0 })
+    setMissing('loading')
     if (import.meta.env.DEV) {
       console.debug(`[replay-cache #514] ${symbol}|${expiry}|${date}: ${cached ? 'hit — okamžitý render' : 'miss — plný fetch'}`) // prettier-ignore
     }
@@ -353,15 +404,20 @@ export function useDayData(
           // Prázdná odpověď = neúspěšná obnova (#516) — počítá se a zkouší znovu
           const atMs = Date.now()
           setRefreshFailures((prev) => ({ count: prev.count + 1, atMs }))
+          setMissing('empty')
           timer = setTimeout(() => setRetry((n) => n + 1), 30_000)
         }
       })
-      .catch(() => {
-        // Den (zatím) neexistuje — např. čerstvě přidaný ticker; zkusit znovu za 30 s
+      .catch((error: unknown) => {
+        // 404 = den (zatím) neexistuje, např. čerstvě přidaný ticker; chyba sítě
+        // nebo 5xx = API neběží / startuje (#1355) — demo jen v prvním případě.
+        // Nedostupné API se zkouší dřív (start API trvá desítky sekund).
         if (cancelled) return
         const atMs = Date.now()
+        const noData = isNoDataError(error)
         setRefreshFailures((prev) => ({ count: prev.count + 1, atMs }))
-        timer = setTimeout(() => setRetry((n) => n + 1), 30_000)
+        setMissing(noData ? 'empty' : 'unavailable')
+        timer = setTimeout(() => setRetry((n) => n + 1), noData ? 30_000 : 5_000)
       })
     return () => {
       cancelled = true
@@ -713,12 +769,26 @@ export function useDayData(
         }
       : null
   if (timeframe === 'daily') {
-    return { day: daily ?? fallback, live: EMPTY_LIVE, staleData: null, dailyProgress }
+    return {
+      day: daily ?? fallback,
+      live: EMPTY_LIVE,
+      staleData: null,
+      dailyProgress,
+      availability: 'ready',
+    }
   }
+  const availability: DayAvailability = replayDay
+    ? 'ready'
+    : expiry
+      ? missing
+      : expiriesState === 'ready'
+        ? 'empty'
+        : expiriesState
   return {
-    day: replayDay ?? fallback,
+    day: replayDay ?? (availability === 'empty' ? fallback : blank),
     live: replayDay ? live : EMPTY_LIVE,
     staleData,
     dailyProgress: null,
+    availability,
   }
 }

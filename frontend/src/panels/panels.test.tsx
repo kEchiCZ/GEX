@@ -389,11 +389,21 @@ test('úchyt panelu je splitter se sousedem pod ním; globální předěl výšk
   expect(volSvg().getAttribute('height')).toBe(optSvg().getAttribute('height'))
 })
 
-test('málo košů se neroztahuje na šířku — ukotvení k pravému okraji (issue #102)', () => {
+test('málo košů se neroztahuje na šířku — ukotvení k pravému okraji (issue #102)', async () => {
+  // Demo den až po odpovědi „data nejsou“ (404) — během načítání je plocha prázdná (#1355)
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: unknown) =>
+      String(url).includes('/expiries')
+        ? { ok: true, status: 200, json: async () => ({ expiries: ['20260716'] }) }
+        : { ok: false, status: 404, json: async () => ({}) },
+    ),
+  )
   const socket = new LiveSocket('ws://test/ws/live', {
     webSocketFactory: (url) => new FakeWebSocket(url),
   })
   render(<App socket={socket} />)
+  await screen.findByText(/Demo data — pro expiraci/)
   const volGroup = () => screen.getByLabelText('Vol panel').querySelector('g')!
   // 1m: demo den 390 minut vyplní šířku → fit-to-width beze změny (offset 0)
   expect(volGroup().getAttribute('transform')).toBe('translate(0 0) scale(1 1)')

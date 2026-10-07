@@ -161,10 +161,44 @@ test('replay lišta je defaultně skrytá (vždy live) a zavření vrací na liv
   expect((screen.getByLabelText('Pozice dne') as HTMLInputElement).value).toBe('389')
 })
 
-test('demo zdroj dat ukazuje zřetelný banner', () => {
+test('demo zdroj dat ukazuje zřetelný banner — až když API řekne, že data nejsou', async () => {
   mockApi()
   renderApp()
-  expect(screen.getByText(/Demo data — pro ES/)).toBeDefined()
+  // Do odpovědi API se načítá, demo se neukazuje (#1355)
+  // Expirace 20260716 je pro test historická → text banneru o retenci
+  expect(screen.queryByText(/Demo data/)).toBeNull()
+  expect(screen.getByTestId('day-loading').textContent).toBe('Načítám data ES…')
+  expect(await screen.findByText(/Demo data — pro expiraci 2026-07-16/)).toBeDefined()
+  expect(screen.queryByTestId('day-loading')).toBeNull()
+})
+
+test('API nedostupné nebo se spouští (síť, 503): žádné demo, viditelný stav (#1355)', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: unknown) =>
+      String(url).includes('/expiries')
+        ? { ok: true, status: 200, json: async () => ({ expiries: ['20260716'] }) }
+        : String(url).includes('/replay/')
+          ? { ok: false, status: 503, json: async () => ({}) }
+          : { ok: false, status: 404, json: async () => ({}) },
+    ),
+  )
+  renderApp()
+  expect(await screen.findByText(/API je nedostupné nebo se spouští/)).toBeDefined()
+  expect(screen.queryByText(/Demo data/)).toBeNull()
+  expect(screen.getByTestId('data-source').textContent).toBe('bez dat')
+})
+
+test('chyba sítě u seznamu expirací: žádné demo (#1355)', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => {
+      throw new TypeError('Failed to fetch')
+    }),
+  )
+  renderApp()
+  expect(await screen.findByText(/API je nedostupné nebo se spouští/)).toBeDefined()
+  expect(screen.queryByText(/Demo data/)).toBeNull()
 })
 
 test('Daily režim: stáhne seznam dnů a zakáže intraday koše', async () => {
