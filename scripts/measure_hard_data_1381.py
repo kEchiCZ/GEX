@@ -2,9 +2,9 @@
 
 Oddíly: gamma režim seancí (`em_respect.negative_gamma_share`), zprávy podle
 zdroje × měsíce, pokrytí `sentiment_daily` a retro přepočet SentIndexu po
-reklasifikaci v2 (ADR-0045), bary podle `source` × měsíce a skoky ≥ 60 bp
-(#1349) uvnitř seance i přes její hranici, seance s doplněnými bary, hloubka
-archivu partic a `oi_eod`, velikost `data/` a PG.
+reklasifikaci v2 (ADR-0045), bary podle `source` × měsíce, skoky ≥ 60 bp přes
+hranici seance (roll, #1349, #1301; skoky uvnitř seance skenuje E-0.2 #1390),
+seance s doplněnými bary, hloubka archivu partic a `oi_eod`, velikost `data/` a PG.
 
 Všechny SQL dotazy běží v jedné transakci `SET TRANSACTION READ ONLY`
 (AGENTS.md: data v PG nejdou znovu pořídit); partice se jen čtou. Měsíc a
@@ -36,7 +36,7 @@ from gexlens_engine.compute.settle import (
 )
 from gexlens_engine.storage.parquet_store import BAR_SOURCE_LIVE
 
-#: Práh skoku mezi po sobě jdoucími bary téže seance (sken skoků z E-0.2).
+#: Práh skoku přes hranici seance (stejný jako sken skoků E-0.2).
 JUMP_BP = 60.0
 #: Seance s podílem minut pod flipem ≥ tomuto prahu je „převážně negativní".
 NEGATIVE_MAJORITY = 0.5
@@ -148,7 +148,9 @@ def sentiment(conn: Connection, reclass_at: dt.datetime) -> str:
             " min(date) FILTER (WHERE update_time >= :t),"
             " max(date) FILTER (WHERE update_time >= :t),"
             " min(update_time) FILTER (WHERE update_time >= :t),"
-            " count(*) FILTER (WHERE update_time < :t) FROM sentiment_daily"
+            " count(*) FILTER (WHERE update_time < :t),"
+            " min(update_time) FILTER (WHERE update_time < :t),"
+            " max(update_time) FILTER (WHERE update_time < :t) FROM sentiment_daily"
             " WHERE date < :d GROUP BY symbol ORDER BY symbol"
         ),
         {"t": reclass_at, "d": reclass_at.date()},
@@ -162,6 +164,8 @@ def sentiment(conn: Connection, reclass_at: dt.datetime) -> str:
                 "do",
                 "první update_time po RUN_AT",
                 "dny před RUN_AT nepřepočtené",
+                "jejich update_time od",
+                "do",
             ],
             [list(r) for r in after],
         )
@@ -192,7 +196,6 @@ def _roll_window(session: dt.date) -> bool:
 
 def bars(data: Path) -> str:
     out = []
-    jumps: list[list[object]] = []
     boundary: list[list[object]] = []
     supplemented: list[str] = []
     for bars_dir in sorted(data.glob("derived/*/bars")):
@@ -224,22 +227,21 @@ def bars(data: Path) -> str:
             session = trading_session_date(ts)
             if source not in ("NULL", BAR_SOURCE_LIVE):
                 filled[session][source] += 1
+            # Jen hranice seance (roll, #1349); skoky uvnitř seance skenuje E-0.2 (#1390).
             if prev is not None and close > 0 and prev[1] > 0:
                 bp = 1e4 * (close / prev[1] - 1.0)
-                if abs(bp) >= JUMP_BP:
-                    same = trading_session_date(prev[0]) == session
+                if abs(bp) >= JUMP_BP and trading_session_date(prev[0]) != session:
                     gap = int((ts - prev[0]).total_seconds() // 60)
                     roll = "ano" if _roll_window(session) else ""
-                    row = [symbol, ts.isoformat(), gap, f"{bp:+.0f}", prev[2], source, roll]
-                    (jumps if same else boundary).append(row)
+                    boundary.append(
+                        [symbol, ts.isoformat(), gap, f"{bp:+.0f}", prev[2], source, roll]
+                    )
             prev = (ts, close, source)
         if symbol in CORE_SYMBOLS:
             kinds = sorted({s for c in filled.values() for s in c})
             rows = [[symbol, day, *(filled[day][k] or "" for k in kinds)] for day in sorted(filled)]
             supplemented.append(_table(["symbol", "seance", *kinds], rows))
     header = ["symbol", "ts (UTC)", "mezera min", "bp", "zdroj před", "zdroj po", "týden rollu"]
-    out.append(f"#### Skoky ≥ {JUMP_BP:.0f} bp mezi po sobě jdoucími bary téže seance\n\n")
-    out[-1] += _table(header, jumps)
     out.append(
         f"#### Skoky ≥ {JUMP_BP:.0f} bp přes hranici seance (první bar proti poslednímu)\n\n"
     )
