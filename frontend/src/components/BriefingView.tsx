@@ -430,7 +430,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   }
 
   const checklist = useMemo(() => {
-    const settle = selectedExpiry ? expirySettleUtc(selectedExpiry) : null
+    const settle = selectedExpiry ? expirySettleUtc(selectedExpiry, symbol) : null
     return morningChecklist({
       prevCliffShare: prevCliff?.cliff_share ?? null,
       prevCliffOpex: prevCliff?.is_opex ?? false,
@@ -490,7 +490,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
                   {magnetSentence(
                     magnet,
                     regimeInfo.state,
-                    selectedExpiry ? expiryCountdown(selectedExpiry, new Date()) : null,
+                    selectedExpiry ? expiryCountdown(selectedExpiry, new Date(), symbol) : null,
                   )}
                 </p>
               )}

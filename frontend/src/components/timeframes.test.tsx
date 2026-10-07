@@ -54,39 +54,52 @@ test('defaultExpiry: nejbližší expirace se settle v budoucnu, jinak poslední
   const sunday = Date.UTC(2026, 7, 30, 12, 0)
 
   // Dnešní 0DTE vyhrává i mezi budoucími — do svého settle
-  expect(defaultExpiry(['20260828', '20260831', '20260901', '20260925'], monday10cdt)).toBe(
+  expect(defaultExpiry(['20260828', '20260831', '20260901', '20260925'], 'ES', monday10cdt)).toBe(
     '20260831',
   )
   // V settle 16:00 ET (20:00 UTC v létě) přepne na další — jako roll enginu (#1331)
   const settle = Date.UTC(2026, 7, 31, 20, 0)
-  expect(defaultExpiry(['20260831', '20260901'], settle - 60_000)).toBe('20260831')
-  expect(defaultExpiry(['20260831', '20260901'], settle)).toBe('20260901')
+  expect(defaultExpiry(['20260831', '20260901'], 'ES', settle - 60_000)).toBe('20260831')
+  expect(defaultExpiry(['20260831', '20260901'], 'ES', settle)).toBe('20260901')
 
   // Víkend: nejbližší BUDOUCÍ, ne poslední v seznamu (#945 — `at(-1)` bralo
   // měsíční expiraci měsíc dopředu a graf padal na demo data)
-  expect(defaultExpiry(['20260828', '20260831', '20260901', '20260925'], sunday)).toBe('20260831')
+  expect(defaultExpiry(['20260828', '20260831', '20260901', '20260925'], 'ES', sunday)).toBe(
+    '20260831',
+  )
   // Pátek po settle → pondělí
-  expect(defaultExpiry(['20260828', '20260831'], Date.UTC(2026, 7, 28, 20, 1))).toBe('20260831')
-  // Kvartální expirace končí v SOQ 9:30 ET (13:30 UTC) — odpoledne už další
-  expect(defaultExpiry(['20260918', '20260921'], Date.UTC(2026, 8, 18, 13, 29))).toBe('20260918')
-  expect(defaultExpiry(['20260918', '20260921'], Date.UTC(2026, 8, 18, 13, 30))).toBe('20260921')
+  expect(defaultExpiry(['20260828', '20260831'], 'ES', Date.UTC(2026, 7, 28, 20, 1))).toBe(
+    '20260831',
+  )
+  // Kvartální datum (#1366): kořenový ticker sbírá po rollu týdenní sérii
+  // nového kontraktu (EW3) — settle 16:00 ET, ne SOQ; SOQ 9:30 ET (13:30 UTC)
+  // má jen pinovaný expirující kontrakt
+  const quarterly = ['20260918', '20260921']
+  expect(defaultExpiry(quarterly, 'ES', Date.UTC(2026, 8, 18, 19, 59))).toBe('20260918')
+  expect(defaultExpiry(quarterly, 'ES', Date.UTC(2026, 8, 18, 20, 0))).toBe('20260921')
+  expect(defaultExpiry(quarterly, 'ESU6', Date.UTC(2026, 8, 18, 13, 29))).toBe('20260918')
+  expect(defaultExpiry(quarterly, 'ESU6', Date.UTC(2026, 8, 18, 13, 30))).toBe('20260921')
   // Zimní čas: settle 21:00 UTC — ve 20:30 UTC ještě dnešní
-  expect(defaultExpiry(['20261202', '20261203'], Date.UTC(2026, 11, 2, 20, 30))).toBe('20261202')
+  expect(defaultExpiry(['20261202', '20261203'], 'ES', Date.UTC(2026, 11, 2, 20, 30))).toBe(
+    '20261202',
+  )
 
   // Tasty-only expirace (#1217): nejbližší IBKR má přednost, tasty jen když IBKR není
   const extended = new Set(['20260831', '20260901'])
-  expect(defaultExpiry(['20260828', '20260831', '20260901', '20260925'], sunday, extended)).toBe(
-    '20260925',
+  expect(
+    defaultExpiry(['20260828', '20260831', '20260901', '20260925'], 'ES', sunday, extended),
+  ).toBe('20260925')
+  expect(defaultExpiry(['20260828', '20260831', '20260901'], 'ES', sunday, extended)).toBe(
+    '20260831',
   )
-  expect(defaultExpiry(['20260828', '20260831', '20260901'], sunday, extended)).toBe('20260831')
 
   // Žádná budoucí → nejnovější proběhlá (původní chování pro čistě historický seznam)
-  expect(defaultExpiry(['20250101', '20250102'], sunday)).toBe('20250102')
+  expect(defaultExpiry(['20250101', '20250102'], 'ES', sunday)).toBe('20250102')
 
   // Nesetříděný vstup nesmí výběr rozhodit
-  expect(defaultExpiry(['20260925', '20260828', '20260901'], sunday)).toBe('20260901')
+  expect(defaultExpiry(['20260925', '20260828', '20260901'], 'ES', sunday)).toBe('20260901')
 
-  expect(defaultExpiry([], sunday)).toBeNull()
+  expect(defaultExpiry([], 'ES', sunday)).toBeNull()
 })
 
 test('expiryWithData: mimo obchodování doskočí na poslední den s daty (#946)', () => {

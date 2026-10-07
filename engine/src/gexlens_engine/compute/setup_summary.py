@@ -38,7 +38,11 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from gexlens_engine.compute.settle import trading_session_date
-from gexlens_engine.compute.setups import born_after_settle, excluded_reason
+from gexlens_engine.compute.setups import (
+    born_after_settle,
+    context_trading_class,
+    excluded_reason,
+)
 from gexlens_engine.ticker import symbol_root
 
 RiskGroup = Literal["tradeable", "shadow", "unruled"]
@@ -128,6 +132,8 @@ class SetupFact:
     contracts: int | None = None
     #: Důvod značky `context.excluded` (#1346); None = bez značky
     excluded: str | None = None
+    #: `context.trading_class` řetězu (#1366); None = řádek před #1366
+    trading_class: str | None = None
 
     @property
     def is_closed(self) -> bool:
@@ -140,7 +146,7 @@ class SetupFact:
     @property
     def after_settle(self) -> bool:
         """Vznikl po settle vlastní expirace (#1324) — nemohl existovat."""
-        return born_after_settle(self.expiry, self.created_ts)
+        return born_after_settle(self.expiry, self.created_ts, self.trading_class, self.symbol)
 
     @property
     def in_stats(self) -> bool:
@@ -209,6 +215,7 @@ def fact_from_record(record: Mapping[str, Any]) -> SetupFact:
         gate_overridden=context.get("gate_overridden") is True,
         contracts=int(contracts) if isinstance(contracts, int | float) and ruled else None,
         excluded=excluded_reason(context),
+        trading_class=context_trading_class(context),
     )
 
 

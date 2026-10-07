@@ -211,6 +211,15 @@ chyb**, hlavně diagnostických a provozních.
   → Výpočet, jehož výsledek dedup zamyká, spouštět až nad **finálními** vstupy (`oi_final`), ne nad
   prvním úspěšným čtením. „Beze změny“ u neexistujícího stavu znamená stav nezakládat, ne zapsat nulu.
 
+- **2026-10-07 — settle kvartálního data podle trading class (#1366): datum expirace nestačí k určení jejího settle.**
+  Pravidlo „3. pátek kvartálního měsíce = SOQ 9:30 ET“ platí pro standardní kvartální třídu, ale po
+  rollu front kontraktu sbírá pipeline na totéž datum týdenní sérii nového kontraktu (EW3/QN3), která
+  se vypořádá v 16:00 ET. Engine ji ukončil ráno a kvartální pátek zůstal bez živého řetězu. Totéž
+  datum, dva různé settle — rozhoduje trading class. Historické řádky třídu nenesly, takže pro ně
+  bylo potřeba pravidlo dovození (kořenový ticker po rollu = týdenní série) a uvést ho v reportu.
+  → Hranici expirace počítat z identity řetězu (datum + trading class + podklad), ne ze samotného
+  data. Údaj, na kterém hranice závisí, ukládat do záznamu už při vzniku (`context.trading_class`);
+  dovozování pro historii držet v jedné funkci (`settle.history_expiry_settle`) a hlásit ho.
 - **2026-10-07 — roll expirace v settle (#1331): „zastavit pipeline v okamžiku settle“ by potichu ztratilo stav dne.**
   Přímočaré provedení varianty A (zastavit pipeline v orchestrátoru dřív, než cyklus minuty settle
   poběží) by sondy T9 nechalo v DB navždy `active` (otevřené drží jen v paměti a timeout dělá první

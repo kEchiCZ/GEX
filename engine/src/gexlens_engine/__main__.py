@@ -1139,7 +1139,11 @@ async def create_pipeline(
     # Roll v settle (#1331): IBKR vrací dnešní expiraci i po jejím settle —
     # bez filtru by pipeline založená v rollu vzala znovu tutéž vypršelou
     # expiraci a orchestrátor by ji co minutu zastavil a založil
-    infos = [info for info in infos if not expiry_expired(info.expiry, started)]
+    infos = [
+        info
+        for info in infos
+        if not expiry_expired(info.expiry, started, info.trading_class, symbol)
+    ]
     if not infos:
         if cached is None and discovery_cache is not None:
             cached = discovery_cache.load(
@@ -3164,7 +3168,8 @@ async def main() -> None:
         # expirací se settle v budoucnu (discovery i cache vypršelé vynechají).
         # Mezera je 1–2 min místo 3–4 h nad mrtvým řetězem do půlnoci UTC.
         for symbol in list(pipelines):
-            if expiry_expired(pipelines[symbol].runtime.expiry, now):
+            expiring = pipelines[symbol].runtime
+            if expiry_expired(expiring.expiry, now, expiring.trading_class, expiring.symbol):
                 logger.info(
                     "Expirace %s pipeline %s vypršela v settle — roll na novou",
                     pipelines[symbol].runtime.expiry,

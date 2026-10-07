@@ -62,8 +62,13 @@ class CachedDiscovery:
 
     def unexpired(self, now: dt.datetime) -> tuple[ExpiryInfo, ...]:
         """Expirace se settle v budoucnu (řazení discovery = podle expirace):
-        dnešní po settle už ne (#1331), kvartální po SOQ (#1189)."""
-        return tuple(info for info in self.expiries if not expiry_expired(info.expiry, now))
+        dnešní po settle už ne (#1331), standardní kvartální třída po SOQ
+        (#1189), týdenní série na kvartální datum až odpoledne (#1366)."""
+        return tuple(
+            info
+            for info in self.expiries
+            if not expiry_expired(info.expiry, now, info.trading_class, self.symbol)
+        )
 
 
 class DiscoveryCache:

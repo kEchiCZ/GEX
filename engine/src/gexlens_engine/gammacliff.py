@@ -325,7 +325,7 @@ class GammaCliffCollector:
             rows = [
                 row
                 for row in conn.execute(stmt).fetchall()
-                if row_in_stats(row.expiry, row.created_ts, row.context)
+                if row_in_stats(row.expiry, row.created_ts, row.context, self.symbol)
             ]
         if not rows:
             return None

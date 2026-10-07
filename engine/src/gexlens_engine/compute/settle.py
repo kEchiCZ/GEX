@@ -13,6 +13,8 @@ import datetime as dt
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
+from gexlens_engine.ticker import MONTH_CODES, parse_ticker, symbol_root
+
 # Globex (CME) počítá v americkém centrálním čase
 CME_TZ = ZoneInfo("America/Chicago")
 # Konvence „16:00 ET" (cash close NYSE) — východní čas
@@ -152,30 +154,93 @@ def soq_ts(day: dt.date) -> dt.datetime:
     return session_time_utc(day, SOQ_LOCAL.hour, SOQ_LOCAL.minute, ET_TZ)
 
 
-def expiry_settle_ts(day: dt.date) -> dt.datetime:
-    """Settle EXPIRACE (ne seance): kvartální opce a futures se vypořádají
-    ráno v SOQ 9:30 ET (#1189), všechny ostatní expirace v 16:00 ET.
+def settles_at_soq(
+    day: dt.date, trading_class: str | None = None, symbol: str | None = None
+) -> bool:
+    """Vypořádá se expirace dne `day` ráno v SOQ? (#1189, #1366, ADR-0039 bod 2)
+
+    SOQ 9:30 ET patří jen STANDARDNÍ kvartální třídě — opcím na expirující
+    kontrakt, jejichž trading class je kořen produktu (`ES`, `NQ`, `MES`…).
+    Týdenní série nového kontraktu na totéž datum (`EW3`, `QN3`), kterou
+    pipeline po rollu front kontraktu (ADR-0039 bod 1) sbírá, se vypořádá
+    odpoledne jako každý jiný pátek — do #1366 ji engine ukončil v 9:30 ET
+    a kvartální pátek zůstal od rána bez živého řetězu.
+
+    Bez třídy nebo symbolu (historické řádky před #1366) rozhoduje datum jako
+    dřív: kvartální datum = SOQ. Nic se nedomýšlí.
+    """
+    if not is_quarterly_expiry(day):
+        return False
+    if trading_class is None or symbol is None:
+        return True
+    return trading_class.strip().upper() == symbol_root(symbol)
+
+
+def expiry_settle_ts(
+    day: dt.date, trading_class: str | None = None, symbol: str | None = None
+) -> dt.datetime:
+    """Settle EXPIRACE (ne seance): standardní kvartální opce a futures se
+    vypořádají ráno v SOQ 9:30 ET (#1189), všechny ostatní expirace — i týdenní
+    série na kvartální datum (#1366, `settles_at_soq`) — v 16:00 ET.
 
     Kdo počítá čas do expirace řetězu, timeout setupu podle expirace nebo
     platnost front kontraktu, volá tohle; hranice SEANCE zůstává `settle_ts`.
     """
-    return soq_ts(day) if is_quarterly_expiry(day) else settle_ts(day)
+    if settles_at_soq(day, trading_class, symbol):
+        return soq_ts(day)
+    return settle_ts(day)
 
 
-def expiry_settle(expiry: str) -> dt.datetime | None:
+def expiry_settle(
+    expiry: str, trading_class: str | None = None, symbol: str | None = None
+) -> dt.datetime | None:
     """Settle expirace zapsané jako `YYYYMMDD` (IBKR) — JEDINÝ helper nad řetězcem (#1331).
 
     Sdílí ho roll pipeline (`instruments.expiry_expired`, discovery i cache),
     hlídka Greeks, setupy (timeout, čas do expirace, invariant vzniku
     `born_after_settle`) i sondy T9 — všichni se ptají téže hranice
-    `expiry_settle_ts` (ADR-0039 bod 2). Nečitelný formát → None: rozhodnutí
-    je na volajícím (nic se nevymýšlí).
+    `expiry_settle_ts` (ADR-0039 bod 2). Trading class řetězu a symbol
+    rozhodují kvartální datum (#1366): bez nich platí datum (historie).
+    Nečitelný formát → None: rozhodnutí je na volajícím (nic se nevymýšlí).
     """
     try:
         day = dt.datetime.strptime(expiry, "%Y%m%d").date()
     except ValueError:
         return None
-    return expiry_settle_ts(day)
+    return expiry_settle_ts(day, trading_class, symbol)
+
+
+def _pinned_expires_on(symbol: str, day: dt.date) -> bool:
+    """Je ticker pinovaný kontrakt (#1191), který expiruje v měsíci `day`?"""
+    try:
+        contract = parse_ticker(symbol).contract
+    except ValueError:
+        return False
+    if contract is None:
+        return False
+    month = MONTH_CODES.index(contract[0]) + 1
+    return month == day.month and int(contract[1]) == day.year % 10
+
+
+def history_expiry_settle(
+    expiry: str, symbol: str, trading_class: str | None = None
+) -> tuple[dt.datetime | None, bool]:
+    """Settle expirace pro offline nástroje (přepočet setupů, backtest), kde
+    trading class řetězu chybí (#1366) — a zda se dovozovala.
+
+    Se třídou platí `expiry_settle` jako v enginu. Bez ní (řádky a partice před
+    #1366) se na kvartální datum dovodí z tickeru: kořenový ticker sbíral po
+    rollu front kontraktu (ADR-0039 bod 1, 8 dní před expirací) řetěz nového
+    kontraktu = týdenní sérii (16:00 ET), pinovaný expirující kontrakt
+    standardní třídu (SOQ 9:30 ET). Mimo kvartální datum se nic nedovozuje.
+    """
+    if trading_class is not None:
+        return expiry_settle(expiry, trading_class, symbol), False
+    settle = expiry_settle(expiry)
+    if settle is None or not is_quarterly_expiry(settle.date()):
+        return settle, False
+    day = settle.date()
+    return (soq_ts(day) if _pinned_expires_on(symbol, day) else settle_ts(day)), True
 
 
 def settle_ts(day: dt.date) -> dt.datetime:

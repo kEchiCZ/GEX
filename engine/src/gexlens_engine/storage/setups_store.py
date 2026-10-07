@@ -35,11 +35,13 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from gexlens_engine.compute.confidence import CalibrationRow
 from gexlens_engine.compute.risk import RealizedSetup
+from gexlens_engine.compute.settle import expiry_settle
 from gexlens_engine.compute.setup_summary import SetupFact, fact_from_record
 from gexlens_engine.compute.setups import (
     EXCLUDED_KEY,
     SETUP_MECHANICS_VERSION,
     born_after_settle,
+    context_trading_class,
     counts_in_stats,
     excluded_reason,
 )
@@ -51,20 +53,24 @@ def _naive_utc(value: dt.datetime) -> dt.datetime:
     return value.replace(tzinfo=dt.UTC) if value.tzinfo is None else value
 
 
-def _born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
-    """`born_after_settle` nad řádkem DB (#1324) — označení řádku v tabulce."""
-    return born_after_settle(expiry, _naive_utc(created_ts))
+def _born_after_settle(expiry: str, created_ts: dt.datetime, context: object, symbol: str) -> bool:
+    """`born_after_settle` nad řádkem DB (#1324) — označení řádku v tabulce;
+    trading class řetězu z kontextu (#1366)."""
+    return born_after_settle(expiry, _naive_utc(created_ts), context_trading_class(context), symbol)
 
 
-def row_in_stats(expiry: str, created_ts: dt.datetime, context: object) -> bool:
+def row_in_stats(
+    expiry: str, created_ts: dt.datetime, context: object, symbol: str | None = None
+) -> bool:
     """`counts_in_stats` nad řádkem DB (#1324, #1346).
 
     Setup vzniklý po settle vlastní expirace nebo se značkou `context.excluded`
     čtení pro brzdy, bránu šablon, kalibraci, sebekontrolu, kouče i gamma
     útes (`next_setups`, #1331) vynechá, výpis tabulky ho jen označí. V DB
-    řádek zůstává.
+    řádek zůstává. `symbol` s `context.trading_class` rozhodují settle
+    kvartálního data (#1366).
     """
-    return counts_in_stats(expiry, _naive_utc(created_ts), context)
+    return counts_in_stats(expiry, _naive_utc(created_ts), context, symbol)
 
 
 def entry_bar_ts(context: object) -> dt.datetime | None:
@@ -146,6 +152,12 @@ class StoredSetup:
     #: `context.gate_overridden` (#1323): otevřený setup zkoušky čerpá její
     #: rozpočet i po restartu enginu
     gate_overridden: bool = False
+    #: `context.trading_class` řetězu (#1366); None = řádek před #1366
+    trading_class: str | None = None
+
+    def settle(self) -> dt.datetime | None:
+        """Settle expirace setupu (#1331) s trading class řetězu (#1366)."""
+        return expiry_settle(self.expiry, self.trading_class, self.symbol)
 
 
 class SetupsRepository:
@@ -417,6 +429,7 @@ class SetupsRepository:
                 entry_bar_ts=entry_bar_ts(row.context),
                 gate_overridden=isinstance(row.context, dict)
                 and row.context.get("gate_overridden") is True,
+                trading_class=context_trading_class(row.context),
             )
             for row in rows
         ]
@@ -446,7 +459,7 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[dict[str, Any]] = []
         for row in rows:
-            if not row_in_stats(row.expiry, row.created_ts, row.context):
+            if not row_in_stats(row.expiry, row.created_ts, row.context, row.symbol):
                 continue
             record = dict(row._mapping)
             for key in ("created_ts", "closed_ts"):
@@ -497,7 +510,7 @@ class SetupsRepository:
                 outcome_r=float(row.outcome_r or 0.0),
             )
             for row in rows
-            if row_in_stats(row.expiry, row.created_ts, row.context)
+            if row_in_stats(row.expiry, row.created_ts, row.context, symbol)
         ]
 
     def realized_since(self, since: dt.datetime, *, mechanics_version: int) -> list[RealizedSetup]:
@@ -532,7 +545,7 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[RealizedSetup] = []
         for row in rows:
-            if not row_in_stats(row.expiry, row.created_ts, row.context):
+            if not row_in_stats(row.expiry, row.created_ts, row.context, row.symbol):
                 continue
             context = row.context if isinstance(row.context, dict) else {}
             tradeable = context.get("tradeable")
@@ -590,7 +603,7 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[CalibrationRow] = []
         for row in rows:
-            if not row_in_stats(row.expiry, row.created_ts, row.context):
+            if not row_in_stats(row.expiry, row.created_ts, row.context, row.symbol):
                 continue
             context = row.context if isinstance(row.context, dict) else {}
             regime = context.get("gex_regime")
@@ -678,7 +691,9 @@ class SetupsRepository:
             record = dict(row._mapping)
             # Tabulka řádek ukáže, ale označí — ze souhrnu, brzd i brány je
             # vyřazený (#1324, #1346); filtr „Jen obchodovatelné“ ho skryje
-            record["after_settle"] = _born_after_settle(row.expiry, row.created_ts)
+            record["after_settle"] = _born_after_settle(
+                row.expiry, row.created_ts, row.context, row.symbol
+            )
             record["excluded"] = excluded_reason(row.context)
             for key in ("created_ts", "closed_ts"):
                 value = record.get(key)

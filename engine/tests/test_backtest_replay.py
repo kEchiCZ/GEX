@@ -94,10 +94,27 @@ def test_replay_setup_otevreny_v_settle_konci_timeoutem() -> None:
         minute(created + dt.timedelta(minutes=offset), 100.0 + offset * 0.2)
         for offset in range(0, 15)  # běží i po settle (mrtvý řetěz se nehodnotí)
     ]
-    rows = module.replay(minutes, SetupParams(), EXPIRY)
+    rows = module.replay(minutes, SetupParams(), EXPIRY, "ES")
     assert [(row["outcome"], row["closed"]) for row in rows] == [("closed_timeout", SETTLE)]
     # Close baru 19:59 (končí v settle) = 100 + 9 × 0,2; risk 5 b
     assert rows[0]["r"] == pytest.approx(9 * 0.2 / 5)
+
+
+def test_replay_kvartalni_patek_tydenni_serie_do_odpoledne() -> None:
+    """#1366: partice třídu řetězu nenesou — kořenový ticker sbíral na kvartální
+    datum po rollu týdenní sérii (16:00 ET), setup po SOQ vznikne a timeout
+    dostane odpoledne; pinovaný expirující kontrakt končí v SOQ."""
+    module = _load()
+    soq = dt.datetime(2026, 9, 18, 13, 30, tzinfo=dt.UTC)
+    afternoon = dt.datetime(2026, 9, 18, 20, 0, tzinfo=dt.UTC)
+    assert module.expiry_end("ES", "20260918") == afternoon
+    assert module.expiry_end("ESU6", "20260918") == soq
+    created = afternoon - dt.timedelta(minutes=10)
+    _one_setup_at(module, created)
+    minutes = [minute(created + dt.timedelta(minutes=offset), 100.0) for offset in range(15)]
+    rows = module.replay(minutes, SetupParams(), "20260918", "ES")
+    assert [(row["outcome"], row["closed"]) for row in rows] == [("closed_timeout", afternoon)]
+    assert module.replay(minutes, SetupParams(), "20260918", "ESU6") == []
 
 
 def test_replay_stop_za_dirou_v_datech() -> None:
@@ -112,7 +129,7 @@ def test_replay_stop_za_dirou_v_datech() -> None:
         # 14:02–14:04 chybí
         minute(created + dt.timedelta(minutes=5), 96.0, low=94.0),
     ]
-    rows = module.replay(minutes, SetupParams(), EXPIRY)
+    rows = module.replay(minutes, SetupParams(), EXPIRY, "ES")
     assert rows[0]["outcome"] == "closed_stop"
     assert rows[0]["closed"] == created + dt.timedelta(minutes=5)
     assert rows[0]["gaps"] == 1

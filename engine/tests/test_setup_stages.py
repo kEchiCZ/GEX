@@ -18,7 +18,7 @@ from sqlalchemy import create_engine
 
 import gexlens_engine.setups as setups_module
 from gexlens_engine.compute.risk import RealizedSetup, trial_usage
-from gexlens_engine.compute.settle import session_bounds
+from gexlens_engine.compute.settle import expiry_settle, session_bounds
 from gexlens_engine.compute.setups import (
     SETUP_MECHANICS_VERSION,
     TRIAL_BUDGET_R_RANGE,
@@ -521,8 +521,13 @@ def test_zkouska_bez_overitelneho_cerpani_neprebiji(tmp_path: Path) -> None:
 
 class _Runtime:
     expiry = "20991231"
+    symbol = "ES"
+    trading_class: str | None = None
     multiplier = 50.0
     last_profile = None
+
+    def settle(self) -> dt.datetime | None:
+        return expiry_settle(self.expiry, self.trading_class, self.symbol)
 
 
 def _inputs(now: dt.datetime) -> MinuteInputs:
@@ -556,9 +561,11 @@ CANDIDATE = SetupCandidate(
 )
 
 
-async def _create(engine: SetupEngine, now: dt.datetime) -> None:
+async def _create(engine: SetupEngine, now: dt.datetime, runtime: _Runtime | None = None) -> None:
     entry_bar = Bar(now - dt.timedelta(minutes=1), 7600.0, 7600.0, 7600.0, 7600.0, 10.0)
-    await engine._detect_new(now, cast(EngineRuntime, _Runtime()), _inputs(now), entry_bar)
+    await engine._detect_new(
+        now, cast(EngineRuntime, runtime or _Runtime()), _inputs(now), entry_bar
+    )
 
 
 async def _close(engine: SetupEngine, now: dt.datetime, *, win: bool) -> None:
@@ -803,3 +810,29 @@ def test_navrh_walk_forwardu_nenese_stadia() -> None:
     assert payload is not None
     assert "shadow_cells" not in payload["params"] and "trial_cells" not in payload["params"]
     assert payload["params"]["min_rrr"] == staged.min_rrr
+
+
+@pytest.mark.usefixtures("_one_candidate")
+async def test_kvartalni_patek_tydenni_serie_zije_do_odpoledne_standardni_konci_v_soq(
+    tmp_path: Path,
+) -> None:
+    """#1366: na kvartální datum sbírá pipeline po rollu týdenní sérii nového
+    kontraktu (EW3), která se vypořádá v 16:00 ET — setup v 11:00 ET vznikne
+    a nese trading class; nad standardní třídou (ES, SOQ 9:30 ET) ne."""
+    engine, repository, _ = _engine(tmp_path)
+    late_morning = dt.datetime(2026, 12, 18, 16, 0, tzinfo=dt.UTC)  # 11:00 ET, po SOQ
+    weekly = _Runtime()
+    weekly.expiry, weekly.trading_class = "20261218", "EW3"
+    await _create(engine, late_morning, weekly)
+    contexts = _contexts(repository)
+    assert len(contexts) == 1 and contexts[0]["trading_class"] == "EW3"
+    stored = engine._open[-1].stored
+    assert stored.trading_class == "EW3"
+    assert stored.settle() == dt.datetime(2026, 12, 18, 21, 0, tzinfo=dt.UTC)  # 16:00 ET
+
+    (tmp_path / "standard").mkdir()
+    engine2, repository2, _ = _engine(tmp_path / "standard")
+    standard = _Runtime()
+    standard.expiry, standard.trading_class = "20261218", "ES"
+    await _create(engine2, late_morning, standard)
+    assert _contexts(repository2) == []  # po SOQ standardní třídy nevznikne (#1324)

@@ -763,11 +763,11 @@ function MainContent() {
     }
     const extra = projectionLength(
       day.lastMinuteIso ?? undefined,
-      expirySettleUtc(selectedExpiry),
+      expirySettleUtc(selectedExpiry, symbol),
       bucketMinutes,
     )
     return projectGrid(grid, extra)
-  }, [grid, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, playback.isLive, dailyForward]) // prettier-ignore
+  }, [grid, toggles.projection, timeframe, selectedExpiry, symbol, day.lastMinuteIso, bucketMinutes, playback.isLive, dailyForward]) // prettier-ignore
   // Dyn GEX podklad (#242): stejný slice + projekce jako hlavní grid — projekční
   // zóna nese modelované budoucí sloupce (ADR-0009 fáze 2)
   const gexUnderGrid = useMemo(() => {
@@ -791,7 +791,7 @@ function MainContent() {
     }
     const extra = projectionLength(
       day.lastMinuteIso ?? undefined,
-      expirySettleUtc(selectedExpiry),
+      expirySettleUtc(selectedExpiry, symbol),
       bucketMinutes,
     )
     return projectGexField(sliced, extra, planeField, {
@@ -801,7 +801,7 @@ function MainContent() {
       scale: heatScale,
       units: gexUnits,
     })
-  }, [gexUnderDay, planeProfiles, planeField, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, day.lastMinuteIso, bucketMinutes, heatScale, gexUnits, dailyForward]) // prettier-ignore
+  }, [gexUnderDay, planeProfiles, planeField, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, symbol, day.lastMinuteIso, bucketMinutes, heatScale, gexUnits, dailyForward]) // prettier-ignore
   const projectionExtra = projectedGrid.minutes - (projectedGrid.dataMinutes ?? projectedGrid.minutes) // prettier-ignore
   const chartLabels = useMemo(() => {
     if (projectionExtra <= 0) return day.minuteLabels
@@ -1549,11 +1549,11 @@ function MainContent() {
     if (timeframe !== 'intraday' || !day.lastMinuteIso) return []
     return projectedSessions(
       day.lastMinuteIso,
-      expirySettleUtc(selectedExpiry),
+      expirySettleUtc(selectedExpiry, symbol),
       bucketMinutes,
       day.grid.minutes,
     )
-  }, [toggles.sessions, projectionExtra, playback.isLive, selectedExpiry, timeframe, day.lastMinuteIso, bucketMinutes, day.grid.minutes]) // prettier-ignore
+  }, [toggles.sessions, projectionExtra, playback.isLive, selectedExpiry, symbol, timeframe, day.lastMinuteIso, bucketMinutes, day.grid.minutes]) // prettier-ignore
 
   // Walls módy (SPEC 4.4): bílé čárkované linie počítané z aktuální vrstvy gridu.
   // Call/put strana vrstvy: signed vrstva se dělí na kladnou a zápornou část.

@@ -240,7 +240,8 @@ def fx(tmp_path: Path) -> Fixture:
             overrides={utc(day, "10:15"): (7501.0, 7489.0, 7495.0)},
         ),
     )
-    # G — kvartální datum expirace (18. 9.: týdenní EW3/QN3 vs. SOQ) → neověřitelný
+    # G — kvartální datum bez třídy (#1366): settle dovozený z tickeru (týdenní
+    # série po rollu, 16:00 ET), bary chybí do settle → neověřitelný s poznámkou
     f.setup(
         "quarterly",
         symbol="ES",
@@ -406,7 +407,7 @@ def test_dry_run_reportuje_rozdily_a_nic_nezapise(mod: Any, fx: Fixture, tmp_pat
     # Návrh u neověřitelného zůstává v reportu (stop z tasty), jen se nezapisuje
     assert rows[ids["mixed"]]["new_status"] == "closed_stop"
     assert "jiný kontrakt" in rows[ids["contract"]]["reason"]
-    assert "kvartální" in rows[ids["quarterly"]]["reason"]
+    assert "týdenní série" in rows[ids["quarterly"]]["reason"]
     late_close = rows[ids["late_close"]]
     assert late_close["new_closed_ts"] == "2026-08-26T13:30:00+00:00"
     assert float(late_close["usd_diff_1c"]) == pytest.approx(0.0)
@@ -590,8 +591,8 @@ def test_exclude_jen_schvaleny_report_a_ne_s_apply(mod: Any, fx: Fixture, tmp_pa
 
 
 def test_kvartalni_expirace_vstup_mimo_bary(mod: Any) -> None:
-    """#1346: vstup se ověřuje i na kvartální expiraci — výsledek rozhodne #1331,
-    setup nad zamrzlým spotem se ale vyřadit musí."""
+    """#1346: vstup se ověřuje i na kvartální expiraci — setup nad zamrzlým
+    spotem se vyřadit musí."""
     created = utc("2026-09-18", "09:00")
     row = mod.SetupRow(
         id=1,
@@ -728,3 +729,45 @@ def test_cesta_zacina_za_barem_vstupu_z_kontextu(mod: Any) -> None:
     assert result.new_mae == pytest.approx(2.0)  # low 7489 baru vstupu se nepočítá
     # Starší řádek bez kontextu: bar vstupu se dohledá podle close == entry
     assert mod.recompute(row(None), load, now).verdict == "beze změny"
+
+
+def test_kvartalni_datum_settle_podle_tridy_retezu(mod: Any) -> None:
+    """#1366: kvartální setup je ověřitelný — týdenní série (EW3, i dovozená
+    u kořenového tickeru bez třídy) končí timeoutem v 16:00 ET, pinovaný
+    expirující kontrakt (standardní třída) v SOQ 9:30 ET."""
+    created = utc("2026-09-18", "09:00")
+    row = mod.SetupRow(
+        id=1,
+        symbol="ES",
+        expiry="20260918",
+        direction="long",
+        created_ts=created,
+        entry=7700.0,
+        target=7730.0,
+        stop=7690.0,
+        status="closed_timeout",
+        closed_ts=utc("2026-09-18", "13:30"),  # engine do #1366: timeout v SOQ
+        outcome_r=0.0,
+    )
+    bars = series(
+        created - 60 * MINUTE,
+        utc("2026-09-18", "20:00"),
+        7700.0,
+        overrides={utc("2026-09-18", "19:59"): (7706.0, 7699.0, 7705.0)},
+    )
+
+    def load(_symbol: str, since: dt.datetime, until: dt.datetime) -> list[Bar]:
+        return [bar for bar in bars if since < bar.ts <= until]
+
+    now = utc("2026-10-06", "12:00")
+    explicit = mod.recompute(mod.SetupRow(**{**row.__dict__, "trading_class": "EW3"}), load, now)
+    assert explicit.verdict == "opravit"
+    assert explicit.new_closed_ts == utc("2026-09-18", "20:00")  # 16:00 EDT
+    assert explicit.new_r == pytest.approx(0.5)  # close 19:59 = 7705, risk 10 b
+    assert "bez třídy" not in explicit.reason
+    inferred = mod.recompute(row, load, now)
+    assert (inferred.verdict, inferred.new_closed_ts) == ("opravit", utc("2026-09-18", "20:00"))
+    assert "týdenní série" in inferred.reason
+    pinned = mod.recompute(mod.SetupRow(**{**row.__dict__, "symbol": "ESU6"}), load, now)
+    assert pinned.verdict == "beze změny"  # SOQ: timeout 13:30, close 13:29 = entry
+    assert "expirující kontrakt = SOQ" in pinned.reason

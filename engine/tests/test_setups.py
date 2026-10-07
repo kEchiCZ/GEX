@@ -632,6 +632,13 @@ class FakeRuntime:
         self.last_profile: GexProfile | None = None
         # Stav mapy (#1245) — None = kolektor v testu neběží
         self.thin_map: bool | None = None
+        self.symbol = "ES"
+        # Trading class řetězu (#1366) — None = settle jen podle data
+        self.trading_class: str | None = None
+
+    def settle(self) -> dt.datetime | None:
+        """Settle expirace jako `EngineRuntime.settle` (#1331, #1366)."""
+        return expiry_settle(self.expiry, self.trading_class, self.symbol)
 
     def current_quotes(self) -> dict[object, object]:
         """Aktivní zdroj řetězu (#614 fáze 2b) — bez fallbacku prostě sweep cache."""
@@ -1599,4 +1606,6 @@ def test_settle_ts_expirace_v_burzovni_zone() -> None:
     assert expiry_settle("nesmysl") is None
     # Timeout setupu se v zimě posouvá se settle: ve 20:30 UTC ještě 30 minut zbývá
     now = dt.datetime(2026, 1, 15, 20, 30, tzinfo=dt.UTC)
-    assert SetupEngine._minutes_to_expiry("20260115", now) == 30.0
+    winter = FakeRuntime()
+    winter.expiry = "20260115"
+    assert SetupEngine._minutes_to_expiry(cast(EngineRuntime, winter), now) == 30.0
