@@ -131,6 +131,62 @@ def _place(repo: PaperRepository, **overrides: Any) -> int:
     return repo.create_order(values)
 
 
+def _ts(value: Any) -> dt.datetime:
+    """Čas z `get_order` (ISO text nebo datetime; sqlite bez zóny = UTC)."""
+    parsed = dt.datetime.fromisoformat(value) if isinstance(value, str) else value
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.UTC)
+
+
+def _flat_bars(since: dt.datetime, until: dt.datetime, close: float) -> list[Bar]:
+    """Partice: souvislé bary `since < ts ≤ until` (vzor `read_bars`)."""
+    out: list[Bar] = []
+    ts = since + dt.timedelta(minutes=1)
+    while ts <= until:
+        out.append(Bar(ts=ts, open=close, high=close, low=close, close=close, volume=1.0))
+        ts += dt.timedelta(minutes=1)
+    return out
+
+
+def test_broker_bez_baru_nehodnoti_spot_a_stop_v_dire_najde_v_partici(tmp_path: Path) -> None:
+    """#1345: cyklus bez barů dřív hodnotil rovnou čáru zamrzlého spotu (3. 9.
+    výpadek by stop v díře zapsal jako výhru). Teď spot nehodnotí a stop v díře
+    najde v partici — s časem jeho baru."""
+    repo = _repo(tmp_path)
+    order_id = _place(repo, order_type="market", entry_price=7600.0)
+    broker = PaperBroker("ES", repo, _Publisher())
+    asyncio.run(
+        broker.on_minute(TS + dt.timedelta(minutes=1), 7600.0, [bar(1, 7600, 7601, 7599, 7600)])
+    )
+    assert repo.get_order(order_id)["status"] == "open"  # type: ignore[index]
+    # Výpadek streamu: dávky bez barů, zamrzlý spot nad cílem — nic se nesmí stát
+    for minute in range(2, 6):
+        asyncio.run(broker.on_minute(TS + dt.timedelta(minutes=minute), 7620.0, []))
+    assert repo.get_order(order_id)["status"] == "open"  # type: ignore[index]
+    # Partice po doplnění: ve 14:03 bar propadl pod stop 7595
+    crash = Bar(
+        ts=TS + dt.timedelta(minutes=3), open=7598, high=7598, low=7590, close=7591, volume=1
+    )
+    broker.bar_reader = lambda since, until: [
+        b
+        for b in (
+            Bar(
+                ts=TS + dt.timedelta(minutes=2),
+                open=7600,
+                high=7600,
+                low=7598,
+                close=7598,
+                volume=1,
+            ),
+            crash,
+        )
+        if since < b.ts <= until
+    ]
+    asyncio.run(broker.on_minute(TS + dt.timedelta(minutes=6), 7620.0, []))
+    closed = repo.get_order(order_id)
+    assert closed is not None and closed["exit_reason"] == "stop"
+    assert _ts(closed["closed_ts"]) == crash.ts
+
+
 def test_broker_fill_cil_denik_a_equity(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert repo.account() is not None and repo.equity() == 50000.0
@@ -179,7 +235,9 @@ def test_broker_stop_first_manual_close_a_settle(tmp_path: Path) -> None:
     )
     assert stopped["pnl_usd"] == (7594.75 - 7600.0) * 2 * 50 - 20.0
     # Ruční zavření: open pozice + close_requested → výstup na open dalšího baru
-    manual_id = _place(repo, order_type="market", entry_price=7600.0)
+    manual_id = _place(
+        repo, order_type="market", entry_price=7600.0, created_ts=TS + dt.timedelta(minutes=4)
+    )
     asyncio.run(
         broker.on_minute(TS + dt.timedelta(minutes=5), 7600.0, [bar(5, 7600, 7602, 7599, 7601)])
     )
@@ -192,7 +250,9 @@ def test_broker_stop_first_manual_close_a_settle(tmp_path: Path) -> None:
         manual is not None and manual["exit_reason"] == "manual" and manual["exit_price"] == 7602.0
     )
     # Settle: otevřená pozice se zavře na close, čekající zruší
-    open_id = _place(repo, order_type="market", entry_price=7600.0)
+    open_id = _place(
+        repo, order_type="market", entry_price=7600.0, created_ts=TS + dt.timedelta(minutes=6)
+    )
     waiting_id = _place(
         repo,
         symbol="NQ",
@@ -200,11 +260,14 @@ def test_broker_stop_first_manual_close_a_settle(tmp_path: Path) -> None:
         stop_price=28980.0,
         target_price=29050.0,
         point_value=20.0,
+        created_ts=TS + dt.timedelta(minutes=6),
     )
     asyncio.run(
         broker.on_minute(TS + dt.timedelta(minutes=7), 7600.0, [bar(7, 7600, 7601, 7599, 7600)])
     )
     settle = dt.datetime(2026, 9, 17, 20, 0, tzinfo=dt.UTC)
+    # Odpoledne bez živých dávek — cesta ceny ho dotáhne z partic (#1345)
+    broker.bar_reader = lambda since, until: _flat_bars(since, until, 7605.0)
     asyncio.run(
         broker.on_minute(
             settle,
@@ -225,9 +288,13 @@ def test_broker_stop_first_manual_close_a_settle(tmp_path: Path) -> None:
     assert (
         settled is not None
         and settled["exit_reason"] == "settle"
-        and settled["exit_price"] == 7610.0
+        and settled["exit_price"] == 7610.0  # close baru 19:59, který v settle končí
     )
-    nq = PaperBroker("NQ", repo, _Publisher())
+    assert _ts(settled["closed_ts"]) == settle
+    # NQ celé odpoledne nad limitem 29000 — čekající order se nevyplní
+    nq = PaperBroker(
+        "NQ", repo, _Publisher(), bar_reader=lambda since, until: _flat_bars(since, until, 29100.0)
+    )
     asyncio.run(
         nq.on_minute(
             settle,

@@ -68,6 +68,8 @@ class PaperOrder:
     close_requested: bool = False
     mfe: float = 0.0
     mae: float = 0.0
+    #: Vznik orderu — cesta ceny čekajícího orderu začíná následující minutou (#1345)
+    created_ts: dt.datetime | None = None
 
     @property
     def direction(self) -> Direction:

@@ -185,6 +185,16 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-07 — paper, sondy T9 a replay backtestu hodnotily jinak než setupy (#1345, #1369): oprava jednoho vyhodnocovače nestačí.**
+  #1320 převedl živé setupy na cestu ceny, ale tři další vyhodnocovače téže otázky („zasáhla cena
+  stop/cíl?“) dál hodnotily vzorek cyklu: paper účet bez barů rovnou čáru zamrzlého spotu, sondy jen
+  poslední bar dávky, replay každou minutu bez děr a bez timeoutu (setup otevřený v settle skončil
+  `active` bez R a do walk-forwardu nevstoupil). Replay sond navíc vynechal minuty bez profilu — stop
+  v nich se ztratil.
+  → Po opravě pravidla vyhodnocení najít **všechny** kopie téže otázky (grep `evaluate_bar`) a převést
+  je naráz na jednu funkci; výjimky zdokumentovat jen dočasně s issue. Data pro detekci (profil)
+  a data pro vyhodnocení (bar) filtrovat zvlášť.
+
 - **2026-10-07 — odložené reakce jedné uzavírky jako nezávislé vzorky (#1311): sloučení podle času zprávy minulo pseudoreplikaci.**
   #1293 slučoval vzorky se shodným `ts_event`, ale víkendové zprávy mají každá jiný čas a přitom
   tentýž výnos — základní cena je poslední bar před uzavřením a okno začíná prvním barem po

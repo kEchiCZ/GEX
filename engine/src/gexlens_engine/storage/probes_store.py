@@ -2,7 +2,7 @@
 
 Tabulka `setup_probes` drží hypotetické obchody kandidátů (T9 „strop nad
 hlavou" a zrcadlový výpad z pásma), vyhodnocované STEJNOU mechanikou jako
-živé setupy (`evaluate_bar`/`r_result`) — bez toho by fáze 2 neměla co
+živé setupy (`walk_setup_path`/`r_result`, #1345) — bez toho by fáze 2 neměla co
 porovnat s track recordem. Do `setups` ani track recordu se nezapisuje NIC:
 nekalibrovaná šablona by zanesla jedinou věc, podle které se kalibruje
 (#394). Kalibrační data — žádné delete API, retence se tabulky nedotýká.

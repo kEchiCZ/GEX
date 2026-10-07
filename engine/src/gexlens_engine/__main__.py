@@ -1419,6 +1419,19 @@ async def create_pipeline(
                 symbol=symbol,
                 repository=paper_repository,
                 publisher=publisher,
+                # Díry v živých barech dotahuje z partic jako SetupEngine (#1345)
+                bar_reader=lambda since, until: [
+                    Bar(
+                        ts=stored.ts,
+                        open=stored.open,
+                        high=stored.high,
+                        low=stored.low,
+                        close=stored.close,
+                        volume=stored.volume,
+                        source=stored.source,
+                    )
+                    for stored in read_bars(settings.derived_dir, symbol, since, until)
+                ],
                 fee_per_contract_usd=(
                     setup_params[0].fee_per_contract_usd
                     if setup_params is not None
@@ -1483,7 +1496,14 @@ async def create_pipeline(
             else None
         ),
         t9_probes=(
-            T9ProbeCollector(symbol=symbol, repository=probe_repository)
+            T9ProbeCollector(
+                symbol=symbol,
+                repository=probe_repository,
+                # Díry v živých barech dotahuje z partic jako SetupEngine (#1345)
+                bar_reader=lambda since, until: read_bars(
+                    settings.derived_dir, symbol, since, until
+                ),
+            )
             if probe_repository is not None
             else None
         ),

@@ -313,6 +313,7 @@ class PaperRepository:
                 close_requested=bool(row.close_requested),
                 mfe=float(row.mfe or 0.0),
                 mae=float(row.mae or 0.0),
+                created_ts=_aware(row.created_ts),
             )
             for row in rows
         ]
