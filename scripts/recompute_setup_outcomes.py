@@ -32,7 +32,7 @@ Verdikty:
   v cestě skočí na jinou hladinu (jiný kontrakt, #1232), bar vstupu je
   nejednoznačný a výsledek na něm závisí, nečitelná expirace, nebo expirace
   na kvartální datum, kde settle není jednoznačný (SOQ podle ADR-0039 bod 2,
-  ale týdenní řetěz EW3/QN3 18. 9. se vypořádal odpoledne; #1331);
+  ale týdenní řetěz EW3/QN3 18. 9. se vypořádal odpoledne; #1366);
 - **po settle** — setup vznikl po settle vlastní expirace (`born_after_settle`,
   #1324), přeskočí se.
 
@@ -80,7 +80,7 @@ from typing import Literal
 from sqlalchemy import create_engine, select
 
 from gexlens_engine.compute.paper import POINT_VALUES
-from gexlens_engine.compute.settle import is_quarterly_expiry
+from gexlens_engine.compute.settle import expiry_settle, is_quarterly_expiry
 from gexlens_engine.compute.setups import (
     EXCLUDED_ENTRY_OFF_BARS,
     SETUP_MECHANICS_VERSION,
@@ -92,7 +92,6 @@ from gexlens_engine.compute.setups import (
     last_expected_minute,
     path_start,
     r_result,
-    setup_settle_ts,
     walk_setup_path,
 )
 from gexlens_engine.ibkr.underlying import BACKFILL_CONTRACT_TOLERANCE
@@ -273,13 +272,13 @@ def recompute(row: SetupRow, load_bars: BarLoader, now: dt.datetime) -> Recomput
     created = _utc(row.created_ts)
     if born_after_settle(row.expiry, created):
         return Recomputed(row, "po settle", "vznik po settle vlastní expirace (#1324)")
-    settle = setup_settle_ts(row.expiry)
+    settle = expiry_settle(row.expiry)
     if settle is None:
         return Recomputed(row, "neověřitelný", f"nečitelná expirace {row.expiry!r}")
     direction = Direction(row.direction)
     minute = created.replace(second=0, microsecond=0)
     if is_quarterly_expiry(settle.date()):
-        # Výsledek rozhodne #1331, vstup na settle nezávisí: setup nad spotem
+        # Výsledek rozhodne #1366, vstup na settle nezávisí: setup nad spotem
         # se vyřadí ze statistik i na kvartální den (#1346)
         entry_bars = load_bars(
             row.symbol, minute - FROZEN_LOOKBACK, minute + max(ENTRY_BAR_OFFSETS) * _MINUTE
@@ -291,7 +290,7 @@ def recompute(row: SetupRow, load_bars: BarLoader, now: dt.datetime) -> Recomput
             row,
             "neověřitelný",
             "kvartální datum expirace: settle SOQ (ADR-0039 bod 2) vs. odpolední "
-            "týdenní řetěz (EW3/QN3) — rozhodne #1331",
+            "týdenní řetěz (EW3/QN3) — rozhodne #1366",
         )
     # Od FROZEN_LOOKBACK před vznikem: bar vstupu i diagnostika zamrzlého spotu
     bars = load_bars(row.symbol, minute - FROZEN_LOOKBACK, settle)

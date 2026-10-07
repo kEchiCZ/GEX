@@ -472,3 +472,40 @@ def test_session_ranges_since_vraci_totez_pro_spolecne_seance(tmp_path: Path) ->
     assert [day for day, _ in since] == days[3:]
     # Seance 17. 9. nese i večerní bar z partice 16. 9.
     assert dict(since)[days[3]] == pytest.approx(60.0)
+
+
+def test_next_setups_pocita_jen_setupy_ve_statistikach(tmp_path: Path) -> None:
+    """Gamma útes `next_setups` (#1331) sdílí predikát `counts_in_stats`:
+    vznik po settle vlastní expirace (#1324) ani značka `excluded` (#1346) se
+    do osy „co přišlo po útesu" nepočítají."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}")
+    setups = SetupsRepository(db)
+    setups.ensure_schema()
+
+    def add(created: dt.datetime, context: dict[str, object]) -> None:
+        setups.create(
+            symbol="ES",
+            expiry="20260720",
+            template="wall_bounce",
+            direction="long",
+            created_ts=created,
+            entry=7600.0,
+            target=7610.0,
+            stop=7595.0,
+            confidence=50,
+            reason="test",
+            context=context,
+        )
+
+    add(dt.datetime(2026, 7, 20, 15, 0, tzinfo=dt.UTC), {})  # počítá se
+    add(dt.datetime(2026, 7, 20, 20, 30, tzinfo=dt.UTC), {})  # po settle 20:00 UTC
+    add(
+        dt.datetime(2026, 7, 20, 16, 0, tzinfo=dt.UTC),
+        {"excluded": {"reason": "vstup_mimo_bary"}},
+    )
+    collector = GammaCliffCollector(
+        symbol="ES", repository=GammaCliffRepository(db), db=db, data_dir=tmp_path
+    )
+    stats = collector._setup_stats(SESSION)
+    assert stats is not None
+    assert stats["wall_bounce"]["count"] == 1

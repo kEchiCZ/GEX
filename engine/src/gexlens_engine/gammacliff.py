@@ -28,7 +28,7 @@ from gexlens_engine.compute.gammacliff import (
 )
 from gexlens_engine.compute.settle import session_bounds, settle_ts, trading_session_date
 from gexlens_engine.storage.gammacliff_store import GammaCliffRepository
-from gexlens_engine.storage.setups_store import setups_table
+from gexlens_engine.storage.setups_store import row_in_stats, setups_table
 
 logger = logging.getLogger(__name__)
 
@@ -302,17 +302,31 @@ class GammaCliffCollector:
             )
 
     def _setup_stats(self, session: dt.date) -> dict[str, dict[str, float]] | None:
-        """Setupy následující seance per šablona: počet, uzavřené, Σ R, výhry."""
+        """Setupy následující seance per šablona: počet, uzavřené, Σ R, výhry.
+
+        Jen setupy ve statistikách (`row_in_stats`, #1331): vznik po settle
+        vlastní expirace (#1324) a značka `context.excluded` (#1346) se do
+        osy „co přišlo po útesu" nepočítají, stejně jako u brzd a kalibrace.
+        """
         start, end = session_bounds(session)
         stmt = select(
-            setups_table.c.template, setups_table.c.outcome_r, setups_table.c.status
+            setups_table.c.template,
+            setups_table.c.outcome_r,
+            setups_table.c.status,
+            setups_table.c.expiry,
+            setups_table.c.created_ts,
+            setups_table.c.context,
         ).where(
             setups_table.c.symbol == self.symbol,
             setups_table.c.created_ts >= start,
             setups_table.c.created_ts < end,
         )
         with self.db.connect() as conn:
-            rows = conn.execute(stmt).fetchall()
+            rows = [
+                row
+                for row in conn.execute(stmt).fetchall()
+                if row_in_stats(row.expiry, row.created_ts, row.context)
+            ]
         if not rows:
             return None
         stats: dict[str, dict[str, float]] = {}

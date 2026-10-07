@@ -15,9 +15,10 @@ from sqlalchemy import create_engine, select
 
 from gexlens_engine.compute.bandregime import BAND_METRICS_VERSION, band_zone
 from gexlens_engine.compute.gexfield import GexProfile
+from gexlens_engine.compute.settle import expiry_settle
 from gexlens_engine.compute.setups import ProbeParams, band_position
 from gexlens_engine.ibkr.underlying import Bar
-from gexlens_engine.probes import T9ProbeCollector, probe_settle
+from gexlens_engine.probes import T9ProbeCollector
 from gexlens_engine.runtime import EngineRuntime
 from gexlens_engine.storage.probes_store import ProbeRepository, setup_probes
 
@@ -203,12 +204,34 @@ async def test_sonda_po_rollu_prezije_settle_kalendarniho_dne() -> None:
     await settle_below_then_enter(collector, runtime, start=evening)
     await collector.on_minute(evening + dt.timedelta(minutes=10), 139.0, [bar(139.0)], runtime)
     assert rows(repository)[0]["status"] == "active"
-    next_settle = probe_settle("20260828", evening.date())
+    next_settle = expiry_settle("20260828")
+    assert next_settle is not None
     await collector.on_minute(next_settle, 139.0, [bar(139.0)], runtime)
     assert rows(repository)[0]["status"] == "closed_timeout"
 
 
-def test_probe_settle_necitelna_expirace_padne_na_den() -> None:
-    day = dt.date(2026, 8, 27)
-    assert probe_settle("20260827", day) == dt.datetime(2026, 8, 27, 20, 0, tzinfo=dt.UTC)
-    assert probe_settle("neplatná", day) == probe_settle("20260827", day)
+async def test_sonda_nevznikne_po_settle_expirace() -> None:
+    """Invariant `born_after_settle` jako setupy (#1324, #1331).
+
+    Pipeline proběhne ještě cyklem minuty settle a teprve pak roluje — výskyt
+    v něm se vztahuje k vypršelému řetězu a timeout by ho zavřel hned.
+    """
+    collector, repository = make_collector()
+    runtime = runtime_with_profile(expiry="20260827")
+    settle = expiry_settle("20260827")
+    assert settle == dt.datetime(2026, 8, 27, 20, 0, tzinfo=dt.UTC)
+    # Akceptovaný vstup padne přesně na minutu settle
+    await settle_below_then_enter(collector, runtime, start=settle - dt.timedelta(minutes=ACCEPT))
+    assert rows(repository) == []
+    # Týž průběh minutu před settle sondu otevře — brání jen hranice
+    collector, repository = make_collector()
+    early = settle - dt.timedelta(minutes=ACCEPT + 1)
+    await settle_below_then_enter(collector, runtime, start=early)
+    assert [row["status"] for row in rows(repository)] == ["active"]
+
+
+async def test_sonda_nad_necitelnou_expiraci_nevznikne() -> None:
+    """Bez settle by sonda nikdy nedostala timeout — neotevře se (nahlas)."""
+    collector, repository = make_collector()
+    await settle_below_then_enter(collector, runtime_with_profile(expiry="neplatná"))
+    assert rows(repository) == []

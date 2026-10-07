@@ -827,7 +827,7 @@ async def create_pipeline(
     # do výpočtů, dokud shadow fáze M7 neskončí)
     if provider is None:
         provider = IbkrProvider(ib, line_gauge)
-    today = dt.datetime.now(dt.UTC).date()
+    started = dt.datetime.now(dt.UTC)
     cached: CachedDiscovery | None = None
     degraded_reasons: list[str] = []
     # API socket k TWS/Gateway dolů (Gateway vyhozená souběhem s mobilem,
@@ -838,8 +838,7 @@ async def create_pipeline(
         cached = (
             discovery_cache.load(
                 symbol,
-                today=today,
-                now=dt.datetime.now(dt.UTC),
+                now=started,
                 front_roll_days=settings.front_roll_days,
             )
             if discovery_cache
@@ -860,8 +859,7 @@ async def create_pipeline(
             cached = (
                 discovery_cache.load(
                     symbol,
-                    today=today,
-                    now=dt.datetime.now(dt.UTC),
+                    now=started,
                     front_roll_days=settings.front_roll_days,
                 )
                 if discovery_cache
@@ -1088,18 +1086,21 @@ async def create_pipeline(
             logger.warning("Discovery řetězu %s bez spojení (%s)", symbol, exc)
     if infos and discovery_cache is not None:
         discovery_cache.store(_front_to_cache(front, symbol), infos)
+    # Roll v settle (#1331): IBKR vrací dnešní expiraci i po jejím settle —
+    # bez filtru by pipeline založená v rollu vzala znovu tutéž vypršelou
+    # expiraci a orchestrátor by ji co minutu zastavil a založil
+    infos = [info for info in infos if not expiry_expired(info.expiry, started)]
     if not infos:
         if cached is None and discovery_cache is not None:
             cached = discovery_cache.load(
                 symbol,
-                today=today,
-                now=dt.datetime.now(dt.UTC),
+                now=started,
                 front_roll_days=settings.front_roll_days,
             )
         if cached is None:
             _cancel_quietly(ib, front)
             raise InstrumentSetupError(f"{symbol}: žádný FOP řetězec na {front.exchange}")
-        infos = list(cached.unexpired(today))
+        infos = list(cached.unexpired(started))
         degraded_reasons.append(f"řetěz z cache ({cached.stored_at.date()})")
     if degraded_reasons:
         logger.warning(
@@ -1768,7 +1769,7 @@ async def main() -> None:
         if (
             discovery_cache.load(
                 symbol,
-                today=dt.datetime.now(dt.UTC).date(),
+                now=dt.datetime.now(dt.UTC),
                 front_roll_days=settings.front_roll_days,
             )
             is None
@@ -2978,23 +2979,6 @@ async def main() -> None:
                 for symbol in list(pipelines):
                     pipelines.pop(symbol).stop()
 
-        # Denní roll expirace (0DTE): vypršelou pipeline zastavit — plán ji založí
-        # znovu a discovery vybere novou nejbližší expiraci
-        for symbol in list(pipelines):
-            if expiry_expired(pipelines[symbol].runtime.expiry, now.date(), now):
-                logger.info(
-                    "Expirace %s pipeline %s vypršela — roll na novou",
-                    pipelines[symbol].runtime.expiry,
-                    symbol,
-                )
-                pipelines.pop(symbol).stop()
-                # Resubskripce nové seance vyrobí nárazově error 354 (#772:
-                # 18./19. 8. skok 5→23 přesně o půlnoci UTC) — očekávaný
-                # přechod, ne porucha; alertovací práh ho nemá počítat
-                subscription_errors.excuse(
-                    settings.subscription_error_rollover_grace_s, now=time.monotonic()
-                )
-
         setup_cooldown.tick()
         eligible = [symbol for symbol in desired if not setup_cooldown.blocked(symbol)]
 
@@ -3089,6 +3073,29 @@ async def main() -> None:
             if run_pipe.runtime.cum_delta is not None:
                 run_pipe.runtime.cum_delta.dx_active = dx_print_active(run_pipe.runtime.symbol)
         results = await gather_metrics(run_list, now)
+        # Roll expirace v jejím settle (#1331, ADR-0039 bod 2): pipeline, jejíž
+        # expirace v `now` vypršela, právě proběhla posledním cyklem — prvním po
+        # settle. V něm moduly uzavřou, co k settle patří (timeout sond T9 a
+        # setupů z živé dávky, paper ordery, agregát stavu mapy) a nové setupy
+        # ani sondy nad vypršelým řetězem nevzniknou (`born_after_settle`).
+        # Pak se zastaví a plán ji příští minutu založí znovu nad první
+        # expirací se settle v budoucnu (discovery i cache vypršelé vynechají).
+        # Mezera je 1–2 min místo 3–4 h nad mrtvým řetězem do půlnoci UTC.
+        for symbol in list(pipelines):
+            if expiry_expired(pipelines[symbol].runtime.expiry, now):
+                logger.info(
+                    "Expirace %s pipeline %s vypršela v settle — roll na novou",
+                    pipelines[symbol].runtime.expiry,
+                    symbol,
+                )
+                pipelines.pop(symbol).stop()
+                # Resubskripce nové seance vyrobí nárazově error 354 (#772:
+                # 18./19. 8. skok 5→23 přesně v tehdejším rollu o půlnoci
+                # UTC) — očekávaný přechod, ne porucha; alertovací práh ho
+                # nemá počítat
+                subscription_errors.excuse(
+                    settings.subscription_error_rollover_grace_s, now=time.monotonic()
+                )
         # Remediace BS fallbacku (#877, varianta C): plný fallback ≥ 30 min →
         # 1. pokus resubscribe (bez díry), 2. pokus reconnect — VÝHRADNĚ mimo
         # US RTH (reconnect je díra ve sběru) a max jeden zásah per cyklus

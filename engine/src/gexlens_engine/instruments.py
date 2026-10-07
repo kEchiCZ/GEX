@@ -24,10 +24,8 @@ from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
 from gexlens_engine.compute.gexforward import ForwardContract, forward_field
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.settle import (
-    expiry_settle_ts,
-    is_quarterly_expiry,
+    expiry_settle,
     is_trading_session,
-    soq_ts,
 )
 from gexlens_engine.compute.setups import SETUP_MECHANICS_VERSION
 from gexlens_engine.compute.setupstats import (
@@ -163,37 +161,35 @@ def greeks_watch_applies(expiry: str, now: dt.datetime) -> bool:
     s radou „zvaž restart TWS", která nic neřeší. Pravidelný falešný poplach
     je horší než žádný: uživatel si na něj zvykne a mine se pak i ten pravý.
 
-    Roll na novou expiraci dělá `expiry_expired` až podle KALENDÁŘNÍHO dne,
-    takže mezi settle a koncem dne pipeline nad mrtvým řetězem legitimně běží
-    dál — právě tam ta hlídka nemá co dělat.
+    Od #1331 pipeline roluje přímo v settle (`expiry_expired`) dřív, než
+    minutový cyklus doběhne, takže aktivní řetěz po settle nehlídá nikdo.
+    Brána zůstává jako pojistka invariantu — sdílí s rollem jednu hranici.
 
     Nečitelná expirace → True (hlídat; nerozbíjet běh kvůli formátu).
     """
-    try:
-        expiry_date = dt.datetime.strptime(expiry, "%Y%m%d").date()
-    except ValueError:
+    settle = expiry_settle(expiry)
+    if settle is None:
         logger.warning("Nečitelná expirace %r — hlídka Greeks se nechává zapnutá", expiry)
         return True
-    return now < expiry_settle_ts(expiry_date)
+    return now < settle
 
 
-def expiry_expired(expiry: str, today: dt.date, now: dt.datetime | None = None) -> bool:
+def expiry_expired(expiry: str, now: dt.datetime) -> bool:
     """True, když expirace (YYYYMMDD) už proběhla — pipeline se musí překlopit.
 
-    0DTE řetěz: po vypršení denní expirace by sweep běžel nad mrtvými kontrakty;
-    orchestrátor pipeline zastaví a další cyklus ji založí znovu (discovery
-    vybere novou nejbližší expiraci). Kvartální expirace propadá už v SOQ
-    (9:30 ET, #1189) — s `now` se hlídá i čas, ne jen kalendářní den.
-    Nečitelný formát → False (nerozbíjet běh).
+    Hranice je settle EXPIRACE (`settle.expiry_settle`, ADR-0039 bod 2):
+    16:00 ET, kvartální SOQ 9:30 ET (#1189). Do #1331 se běžná expirace
+    rolovala až s novým kalendářním dnem v UTC, takže pipeline běžela 3–4 h
+    nad vypršelým řetězem (setupy, sondy T9, tendence i heatmapa). Orchestrátor
+    vypršelou pipeline zastaví a týž cyklus ji založí znovu; discovery i cache
+    vypršelé expirace vynechají, takže se nevrátí na tutéž. Nečitelný formát
+    → False (nerozbíjet běh).
     """
-    try:
-        expiry_date = dt.datetime.strptime(expiry, "%Y%m%d").date()
-    except ValueError:
+    settle = expiry_settle(expiry)
+    if settle is None:
         logger.warning("Nečitelná expirace %r — roll se přeskakuje", expiry)
         return False
-    if expiry_date < today:
-        return True
-    return now is not None and is_quarterly_expiry(expiry_date) and now >= soq_ts(expiry_date)
+    return now >= settle
 
 
 class TickerLike(Protocol):

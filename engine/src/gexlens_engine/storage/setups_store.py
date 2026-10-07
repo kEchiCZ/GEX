@@ -56,12 +56,13 @@ def _born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
     return born_after_settle(expiry, _naive_utc(created_ts))
 
 
-def _in_stats(expiry: str, created_ts: dt.datetime, context: object) -> bool:
+def row_in_stats(expiry: str, created_ts: dt.datetime, context: object) -> bool:
     """`counts_in_stats` nad řádkem DB (#1324, #1346).
 
     Setup vzniklý po settle vlastní expirace nebo se značkou `context.excluded`
-    čtení pro brzdy, bránu šablon, kalibraci, sebekontrolu i kouče vynechá,
-    výpis tabulky ho jen označí. V DB řádek zůstává.
+    čtení pro brzdy, bránu šablon, kalibraci, sebekontrolu, kouče i gamma
+    útes (`next_setups`, #1331) vynechá, výpis tabulky ho jen označí. V DB
+    řádek zůstává.
     """
     return counts_in_stats(expiry, _naive_utc(created_ts), context)
 
@@ -445,7 +446,7 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[dict[str, Any]] = []
         for row in rows:
-            if not _in_stats(row.expiry, row.created_ts, row.context):
+            if not row_in_stats(row.expiry, row.created_ts, row.context):
                 continue
             record = dict(row._mapping)
             for key in ("created_ts", "closed_ts"):
@@ -496,7 +497,7 @@ class SetupsRepository:
                 outcome_r=float(row.outcome_r or 0.0),
             )
             for row in rows
-            if _in_stats(row.expiry, row.created_ts, row.context)
+            if row_in_stats(row.expiry, row.created_ts, row.context)
         ]
 
     def realized_since(self, since: dt.datetime, *, mechanics_version: int) -> list[RealizedSetup]:
@@ -531,7 +532,7 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[RealizedSetup] = []
         for row in rows:
-            if not _in_stats(row.expiry, row.created_ts, row.context):
+            if not row_in_stats(row.expiry, row.created_ts, row.context):
                 continue
             context = row.context if isinstance(row.context, dict) else {}
             tradeable = context.get("tradeable")
@@ -589,7 +590,7 @@ class SetupsRepository:
             rows = conn.execute(stmt).fetchall()
         result: list[CalibrationRow] = []
         for row in rows:
-            if not _in_stats(row.expiry, row.created_ts, row.context):
+            if not row_in_stats(row.expiry, row.created_ts, row.context):
                 continue
             context = row.context if isinstance(row.context, dict) else {}
             regime = context.get("gex_regime")

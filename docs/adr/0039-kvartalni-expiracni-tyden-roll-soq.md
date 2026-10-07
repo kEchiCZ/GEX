@@ -58,3 +58,40 @@ chce být na expiraci/roll vizuálně upozorněn jako v TradingView.
 - Nasazením v roll týdnu (16. 9. večer) engine přepne na ESZ6/NQZ6 s řetězem
   21. 9.; páteční kvartální 0DTE U6 (18. 9.) se v aplikaci nezobrazí.
 - Gamma útes a Forward GEX se nemění; kalendář jim dává kontext v UI.
+
+## Dodatek 2026-10-07 — roll pipeline v settle expirace, jeden helper (#1331)
+
+**Stav:** přijato (uživatel, #1331 varianta A).
+
+Bod 2 platil jen pro kvartální expiraci: `expiry_expired` rolovalo běžnou
+expiraci až s novým kalendářním dnem v UTC, takže pipeline po settle 16:00 ET
+běžela 3–4 h nad vypršelým řetězem (setupy, sondy T9, tendence, heatmapa).
+Hranici settle navíc počítaly tři funkce (`setups.setup_settle_ts`,
+`probes.probe_settle` nad `settle_ts`, Dyn profil v `runtime` nad `settle_ts`).
+
+1. **Jeden helper** `compute/settle.expiry_settle(expiry: str)` — settle
+   expirace `YYYYMMDD` podle bodu 2 (`expiry_settle_ts`: 16:00 ET, kvartální
+   SOQ 9:30 ET), nečitelný formát → None. Ptá se ho roll, discovery i cache,
+   hlídka Greeks, setupy (timeout, čas do expirace, `born_after_settle`),
+   sondy T9 a Dyn profil. `setup_settle_ts` a `probe_settle` zanikly.
+2. **Roll v settle:** `expiry_expired(expiry, now)` = `now ≥ expiry_settle`.
+   Orchestrátor zastaví pipeline **po** cyklu minuty settle — ten je poslední
+   nad starým řetězem a moduly v něm uzavřou, co k settle patří (sondy T9,
+   setupy z živé dávky, paper, agregát stavu mapy); nové setupy ani sondy
+   v něm nevzniknou (`born_after_settle`). Příští minutu se pipeline založí
+   nad první expirací se settle v budoucnu — discovery i cache vypršelé
+   vynechají.
+3. **Moduly „jednou po settle“** nesmí potřebovat stav staré pipeline po
+   jejím posledním cyklu: zápis ze vzorků v paměti patří do cyklu settle
+   (stav mapy), vyhodnocení po settle + odklad běží v nové pipeline nad
+   partice/DB a je idempotentní. Seznam a testy v ADMIN-MANUAL kap. 5.
+
+Důsledky: mezera ve sběru 1–2 min v settle místo 3–4 h nad mrtvým řetězem;
+nová pipeline začíná s prázdnou historií detektoru setupů; frontend vybírá
+výchozí expiraci dál podle dne seance (přepne s otevřením Globexu, #1367).
+
+**Otevřený nález k bodu 2:** po rollu front kontraktu (bod 1) je aktivní
+řetěz na kvartální datum týdenní série nového kontraktu (EW3/QN3), která se
+18. 9. 2026 vypořádala odpoledne, ne v SOQ. Settle podle samotného data
+expirace (bez trading class) ji tak ukončí v 9:30 ET. Chování je stejné jako
+před #1331 a mění se jen samostatným rozhodnutím (settle podle trading class, #1366).
