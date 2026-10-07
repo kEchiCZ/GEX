@@ -947,19 +947,55 @@ async def test_strikes_stalled_alert_a_recovery(
     assert [a["kind"] for a in alerts] == ["strikes_stalled", "strikes_recovered"]
 
 
+@pytest.mark.parametrize(
+    "start",
+    [
+        dt.datetime(2026, 7, 18, 15, 0, tzinfo=dt.UTC),  # sobota
+        dt.datetime(2026, 7, 15, 21, 5, tzinfo=dt.UTC),  # středa 16:05 CDT, denní pauza
+        dt.datetime(2026, 7, 19, 21, 30, tzinfo=dt.UTC),  # neděle 16:30 CDT, před otevřením
+    ],
+)
 async def test_no_stall_alert_when_market_quiet(
     env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+    start: dt.datetime,
 ) -> None:
-    """#221: zavřený trh (spot stojí) — chybějící bary nesmí spouštět alert."""
+    """#221, #1347: zavřený trh — chybějící bary nesmí spouštět alert (ani teď, kdy
+    se při otevřeném trhu ticho počítá i bez pohybu spotu)."""
     settings, writer, repository, publisher = env
     settings.bars_stall_alert_minutes = 2
     settings.level_alert_near_steps = 0.0  # zdi fixture jsou u spotu — nešumět (#675)
     pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
 
-    for minute in range(5):  # FakeTicker drží stejnou cenu → spot se nehýbe
+    for minute in range(5):
+        await pipeline.run_minute(start + dt.timedelta(minutes=minute))
+
+    assert not [
+        data
+        for channel, data in publisher.messages
+        if channel == "alerts" and data["kind"] == "bars_stalled"
+    ]
+
+
+async def test_zamrzly_spot_pri_otevrenem_trhu_je_vypadek_baru(
+    env: tuple[Settings, SnapshotWriter, OIEodRepository, RecordingPublisher],
+) -> None:
+    """#1347: 3. 9. 14:17–15:29 UTC stál stream i spot (O=H=L=C 72 min) — detektor
+    bez pohybu spotu nepočítal, takže nevznikl alert, re-backfill ani doplnění."""
+    settings, writer, repository, publisher = env
+    settings.bars_stall_alert_minutes = 2
+    settings.level_alert_near_steps = 0.0
+    pipeline = make_pipeline("ES", 7600.0, settings, writer, repository, publisher)
+
+    for minute in range(3):  # FakeTicker drží stejnou cenu, bary nechodí
         await pipeline.run_minute(TS + dt.timedelta(minutes=minute))
 
-    assert not [data for channel, data in publisher.messages if channel == "alerts"]
+    stalled = [
+        data
+        for channel, data in publisher.messages
+        if channel == "alerts" and data["kind"] == "bars_stalled"
+    ]
+    assert len(stalled) == 1
+    assert "stojí i spot" in str(stalled[0]["message"])
 
 
 async def test_level_proximity_alert_z_pipeline(
@@ -1451,12 +1487,13 @@ async def test_bars_stall_dopnuje_tasty_a_spot_override_hyba_detektorem(
 
     # Cyklus pipeline počítá nad tasty cenou, ne nad zamrzlým tickerem
     assert pipeline.spot == pytest.approx(7604.0)
-    # Stall v cyklu 2; doplnění v cyklech 2, 3, 4 s klouzavým oknem do aktuální minuty
-    assert len(fills) == 3
+    # Stall v cyklu 1 (#1347: ticho se počítá od prvního cyklu otevřeného trhu);
+    # doplnění v cyklech 1–4 s klouzavým oknem do aktuální minuty
+    assert len(fills) == 4
     assert fills[-1][1] == TS + dt.timedelta(minutes=4)
     # Okno = max(práh, 3) + 5 min rezervy — jen čerstvá díra, ne celý den
     assert fills[-1][0] == fills[-1][1] - dt.timedelta(minutes=8)
-    assert pipeline._gap_filled == 9
+    assert pipeline._gap_filled == 12
     alerts = [data for channel, data in publisher.messages if channel == "alerts"]
     assert [a["kind"] for a in alerts] == ["bars_stalled"]
 
@@ -1468,7 +1505,7 @@ async def test_bars_stall_dopnuje_tasty_a_spot_override_hyba_detektorem(
     tasty_price = 7605.0
     await pipeline.run_minute(now)
     assert pipeline._gap_filled == 0
-    assert len(fills) == 3
+    assert len(fills) == 4
 
 
 # ── Zavřený trh podle rozvrhu CME (#1307) ──────────────────────────

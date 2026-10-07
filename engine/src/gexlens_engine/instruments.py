@@ -1349,6 +1349,9 @@ class InstrumentPipeline:
     ) -> None:
         """Tichá ztráta 5s barů (#221): alert při výpadku, po návratu re-backfill díry.
 
+        Počítá se při otevřeném trhu i bez pohybu spotu (#1347): stojící stream
+        i spot je výpadek, ne klid. Spot rozliší jen text upozornění.
+
         Bar aktivita = uzavřené minuty NEBO rozdělaná agregace aktuální minuty;
         zaseknutý agregátor drží starou rozdělanou minutu, ta se nepočítá.
         """
@@ -1367,14 +1370,17 @@ class InstrumentPipeline:
         # otevření skončil `recovered` a re-backfillem díry.
         if is_market_closed(now):
             return
-        event = detector.observe(bar_activity=bar_activity, spot_moving=spot_moving)
+        # Otevřený trh (výše) = bary se čekají i při stojícím spotu (#1347)
+        event = detector.observe(bar_activity=bar_activity, market_open=True)
         if event == "stalled":
+            spot_note = "spot přitom žije" if spot_moving else "stojí i spot (zamrzlý stream)"
             logger.error(
-                "Real-time bary %s nechodí ≥ %d min při živém spotu — mrtvý "
+                "Real-time bary %s nechodí ≥ %d min při otevřeném trhu, %s — mrtvý "
                 "reqRealTimeBars stream (výpadek TWS farem / Error 1100?); "
                 "svíčky se nekreslí, stream se obnovuje",
                 self.symbol,
                 self.settings.bars_stall_alert_minutes,
+                spot_note,
             )
             await self.publisher.publish(
                 "alerts",
@@ -1382,9 +1388,9 @@ class InstrumentPipeline:
                     "kind": "bars_stalled",
                     "symbol": self.symbol,
                     "message": f"Svíčky {self.symbol} se přestaly kreslit — real-time "
-                    f"bary z TWS nechodí ≥ {self.settings.bars_stall_alert_minutes} min, "
-                    "spot přitom žije. Engine stream obnovuje sám; když to nepomůže, "
-                    "pomáhá restart TWS. Díra se po návratu doplní backfillem.",
+                    f"bary z TWS nechodí ≥ {self.settings.bars_stall_alert_minutes} min "
+                    f"při otevřeném trhu, {spot_note}. Engine stream obnovuje sám; když "
+                    "to nepomůže, pomáhá restart TWS. Díra se po návratu doplní backfillem.",
                     "ts": now.timestamp(),
                 },
             )

@@ -105,10 +105,12 @@ class BarsStallDetector:
 
     Po nočním výpadku TWS farem přestanou real-time bary chodit, zatímco spot
     ticky jedou dál — svíčky se nekreslí a výpadek je pro uživatele neviditelný.
-    Detektor počítá po sobě jdoucí minutové cykly, kdy spot žije, ale žádný bar
-    nedorazil; po prahu ohlásí `"stalled"`, po návratu barů `"recovered"`.
-    Bez pohybu spotu (zavřený trh, noční přestávka CME) se čítač nezvyšuje —
-    chybějící bary tam nejsou závada.
+    Detektor počítá po sobě jdoucí minutové cykly otevřeného trhu bez jediného
+    baru; po prahu ohlásí `"stalled"`, po návratu barů `"recovered"`. Při
+    zavřeném trhu (`market_open=False`) se čítač nezvyšuje — chybějící bary
+    tam nejsou závada. Pohyb spotu podmínkou není (#1347): 3. 9. 14:17–15:29
+    UTC stál stream i spot (O=H=L=C 72 min) a výpadek zůstal bez alertu,
+    re-backfillu i doplnění — zamrzlý spot při otevřeném trhu je výpadek sám.
 
     Po `"stalled"` pipeline stream sama obnoví (#1082: Error 1100/1102 zabije
     `reqRealTimeBars`, aniž by spadlo API spojení, takže reconnect hook neběží).
@@ -125,7 +127,7 @@ class BarsStallDetector:
     def stalled(self) -> bool:
         return self._stalled
 
-    def observe(self, *, bar_activity: bool, spot_moving: bool) -> str | None:
+    def observe(self, *, bar_activity: bool, market_open: bool) -> str | None:
         """Jeden minutový cyklus; vrací "stalled"/"recovered" právě jednou, jinak None."""
         if bar_activity:
             self._quiet_cycles = 0
@@ -133,7 +135,7 @@ class BarsStallDetector:
                 self._stalled = False
                 return "recovered"
             return None
-        if not spot_moving:
+        if not market_open:
             return None
         self._quiet_cycles += 1
         if self._quiet_cycles < self._stall_minutes:

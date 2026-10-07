@@ -91,50 +91,50 @@ def test_flush_emits_partial_minute() -> None:
 
 def test_stall_detector_alerts_after_threshold() -> None:
     detector = BarsStallDetector(stall_minutes=3)
-    assert detector.observe(bar_activity=False, spot_moving=True) is None
-    assert detector.observe(bar_activity=False, spot_moving=True) is None
-    assert detector.observe(bar_activity=False, spot_moving=True) == "stalled"
+    assert detector.observe(bar_activity=False, market_open=True) is None
+    assert detector.observe(bar_activity=False, market_open=True) is None
+    assert detector.observe(bar_activity=False, market_open=True) == "stalled"
     assert detector.stalled is True
     # Anti-spam: další tiché cykly už alert neopakují
-    assert detector.observe(bar_activity=False, spot_moving=True) is None
+    assert detector.observe(bar_activity=False, market_open=True) is None
 
 
 def test_stall_detector_ignores_quiet_market() -> None:
-    # Zavřený trh / noční přestávka CME: spot stojí → chybějící bary nejsou závada
+    # Zavřený trh / noční přestávka CME → chybějící bary nejsou závada
     detector = BarsStallDetector(stall_minutes=2)
     for _ in range(10):
-        assert detector.observe(bar_activity=False, spot_moving=False) is None
+        assert detector.observe(bar_activity=False, market_open=False) is None
     assert detector.stalled is False
     # Přestávka uprostřed výpadku čítač drží, neresetuje: 1 tichý + pauza + 1 tichý = práh
-    assert detector.observe(bar_activity=False, spot_moving=True) is None
-    assert detector.observe(bar_activity=False, spot_moving=False) is None
-    assert detector.observe(bar_activity=False, spot_moving=True) == "stalled"
+    assert detector.observe(bar_activity=False, market_open=True) is None
+    assert detector.observe(bar_activity=False, market_open=False) is None
+    assert detector.observe(bar_activity=False, market_open=True) == "stalled"
 
 
 def test_stall_detector_recovers_once() -> None:
     detector = BarsStallDetector(stall_minutes=1)
-    assert detector.observe(bar_activity=False, spot_moving=True) == "stalled"
-    assert detector.observe(bar_activity=True, spot_moving=True) == "recovered"
+    assert detector.observe(bar_activity=False, market_open=True) == "stalled"
+    assert detector.observe(bar_activity=True, market_open=True) == "recovered"
     assert detector.stalled is False
     # Normální provoz ani opakovaná aktivita už nic nehlásí
-    assert detector.observe(bar_activity=True, spot_moving=True) is None
+    assert detector.observe(bar_activity=True, market_open=True) is None
     # Bar aktivita bez alertu čítač jen resetuje
-    assert detector.observe(bar_activity=False, spot_moving=True) == "stalled"
+    assert detector.observe(bar_activity=False, market_open=True) == "stalled"
 
 
 def test_stall_detector_repeats_after_failed_restart() -> None:
     """#1082: obnova streamu nepomohla → po dalším prahu `still_stalled` (další pokus)."""
     detector = BarsStallDetector(stall_minutes=2)
-    assert detector.observe(bar_activity=False, spot_moving=True) is None
-    assert detector.observe(bar_activity=False, spot_moving=True) == "stalled"
+    assert detector.observe(bar_activity=False, market_open=True) is None
+    assert detector.observe(bar_activity=False, market_open=True) == "stalled"
     # Čítač jede od nuly: další pokus až po stejné době ticha
-    assert detector.observe(bar_activity=False, spot_moving=True) is None
-    assert detector.observe(bar_activity=False, spot_moving=True) == "still_stalled"
-    assert detector.observe(bar_activity=False, spot_moving=True) is None
-    assert detector.observe(bar_activity=False, spot_moving=True) == "still_stalled"
+    assert detector.observe(bar_activity=False, market_open=True) is None
+    assert detector.observe(bar_activity=False, market_open=True) == "still_stalled"
+    assert detector.observe(bar_activity=False, market_open=True) is None
+    assert detector.observe(bar_activity=False, market_open=True) == "still_stalled"
     assert detector.stalled is True
     # Návrat barů hlásí recovery jednou, bez ohledu na počet pokusů
-    assert detector.observe(bar_activity=True, spot_moving=True) == "recovered"
+    assert detector.observe(bar_activity=True, market_open=True) == "recovered"
     assert detector.stalled is False
 
 
