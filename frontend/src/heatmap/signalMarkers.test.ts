@@ -2,10 +2,12 @@
 import { describe, expect, it } from 'vitest'
 import { buildSignalMarkers, signalAt, signalColor, signalTooltip } from './signalMarkers'
 import type { SignalRow } from '../api/news'
+import { sessionAxisLocator } from './axisLocator'
+import { segmentOf } from '../test/axisSegment'
 
-const LABELS = ['15:30', '15:31', '15:32', '15:33', '15:34']
-/** Stejný princip jako osa grafu: ISO čas → popisek minuty (tady HH:MM UTC). */
-const format = (iso: string) => iso.slice(11, 16)
+/** Osa 5 košů 1m od 15:30 UTC; poloha časem (#1303). */
+const LOCATE = sessionAxisLocator([segmentOf('2026-07-29T15:30:00Z', 5)], Infinity)
+const LAST = 4
 
 function signal(overrides: Partial<SignalRow> = {}): SignalRow {
   return {
@@ -26,8 +28,8 @@ function signal(overrides: Partial<SignalRow> = {}): SignalRow {
 }
 
 describe('buildSignalMarkers', () => {
-  it('mapuje signál i stopu platnosti podle popisků osy', () => {
-    const markers = buildSignalMarkers([signal()], LABELS, format, {
+  it('mapuje signál i stopu platnosti na koše osy časem', () => {
+    const markers = buildSignalMarkers([signal()], LOCATE, LAST, {
       now: new Date(0), // vše v „budoucnosti" → active
     })
     expect(markers).toHaveLength(1)
@@ -39,12 +41,12 @@ describe('buildSignalMarkers', () => {
   it('expiraci mimo osu ořízne na poslední minutu, signál mimo osu zahodí', () => {
     const beyond = buildSignalMarkers(
       [signal({ expiry_ts: '2026-07-29T18:00:00+00:00' })],
-      LABELS,
-      format,
+      LOCATE,
+      LAST,
     )
-    expect(beyond[0].endIdx).toBe(LABELS.length - 1)
+    expect(beyond[0].endIdx).toBe(LAST)
     expect(
-      buildSignalMarkers([signal({ ts: '2026-07-29T09:00:00+00:00' })], LABELS, format),
+      buildSignalMarkers([signal({ ts: '2026-07-29T09:00:00+00:00' })], LOCATE, LAST),
     ).toHaveLength(0)
   })
 
@@ -55,10 +57,10 @@ describe('buildSignalMarkers', () => {
     ]
     const past = new Date(8.64e15) // po expiraci všech
     expect(
-      buildSignalMarkers(rows, LABELS, format, { warning: true, now: past }).map((m) => m.warning),
+      buildSignalMarkers(rows, LOCATE, LAST, { warning: true, now: past }).map((m) => m.warning),
     ).toEqual([false, false])
     expect(
-      buildSignalMarkers(rows, LABELS, format, { warning: true, now: new Date(0) }).map(
+      buildSignalMarkers(rows, LOCATE, LAST, { warning: true, now: new Date(0) }).map(
         (m) => m.warning,
       ),
     ).toEqual([true, true])
@@ -78,17 +80,17 @@ describe('signalTooltip', () => {
 
 describe('signalColor a signalAt', () => {
   it('long je teal, short červená; sytost roste se strength', () => {
-    const strong = buildSignalMarkers([signal({ strength: 1 })], LABELS, format)[0]
-    const weak = buildSignalMarkers([signal({ strength: 0 })], LABELS, format)[0]
+    const strong = buildSignalMarkers([signal({ strength: 1 })], LOCATE, LAST)[0]
+    const weak = buildSignalMarkers([signal({ strength: 0 })], LOCATE, LAST)[0]
     expect(signalColor(strong)).toContain('20,184,166')
     expect(signalColor(strong)).toContain('0.95')
     expect(signalColor(weak)).toContain('0.35')
-    const short = buildSignalMarkers([signal({ direction: 'short' })], LABELS, format)[0]
+    const short = buildSignalMarkers([signal({ direction: 'short' })], LOCATE, LAST)[0]
     expect(signalColor(short)).toContain('224,82,96')
   })
 
   it('signalAt najde marker na minutě crosshairu', () => {
-    const markers = buildSignalMarkers([signal()], LABELS, format)
+    const markers = buildSignalMarkers([signal()], LOCATE, LAST)
     expect(signalAt(markers, 1)).not.toBeNull()
     expect(signalAt(markers, 2)).toBeNull()
     expect(signalAt(markers, null)).toBeNull()

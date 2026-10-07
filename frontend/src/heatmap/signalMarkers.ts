@@ -1,12 +1,14 @@
 /** Šipky signálů na cenové křivce (#295, SPEC 9.0) — čisté funkce.
 
-Signály se mapují na minutu grafu stejně jako news markery: **podle popisku
-minuty, ne podle pořadí**, týmž formatterem, který vyrobil popisky osy.
-Stopa platnosti vede od šipky do `expiry_ts`; expirace za koncem osy se
-ořízne na poslední minutu (signál platí „až do konce zobrazeného dne").
+Signály se mapují na koš osy **časem** jako news markery (#1290, #1303,
+`AxisLocator`), ne shodou popisku HH:MM — na 5m a delších TF by šipka mimo
+hranici koše zmizela. Stopa platnosti vede od šipky do `expiry_ts`; expirace
+za koncem osy se ořízne na poslední koš (signál platí „až do konce
+zobrazeného dne").
 */
 import { categoryLabel } from '../api/news'
 import type { SignalRow } from '../api/news'
+import type { AxisLocator } from './axisLocator'
 
 export interface SignalMarker {
   minuteIdx: number
@@ -52,23 +54,18 @@ export function signalTooltip(signal: SignalRow): string {
 
 export function buildSignalMarkers(
   signals: SignalRow[],
-  labels: string[],
-  formatLabel: (iso: string) => string,
+  locate: AxisLocator,
+  lastIdx: number,
   options: { now?: Date; warning?: boolean } = {},
 ): SignalMarker[] {
-  if (labels.length === 0) return []
+  if (lastIdx < 0) return []
   const now = options.now ?? new Date()
-  const indexByLabel = new Map<string, number>()
-  labels.forEach((label, index) => {
-    if (!indexByLabel.has(label)) indexByLabel.set(label, index)
-  })
-
   const markers: SignalMarker[] = []
   for (const signal of signals) {
-    const minuteIdx = indexByLabel.get(formatLabel(signal.ts))
-    if (minuteIdx === undefined) continue // mimo zobrazený den
+    const minuteIdx = locate(signal.ts)
+    if (minuteIdx === null) continue // mimo zobrazený den
     // Expirace mimo osu = platnost přesahuje zobrazený den → stopa do konce
-    const endIdx = indexByLabel.get(formatLabel(signal.expiry_ts)) ?? labels.length - 1
+    const endIdx = Math.min(locate(signal.expiry_ts) ?? lastIdx, lastIdx)
     const active = new Date(signal.expiry_ts).getTime() > now.getTime()
     markers.push({
       minuteIdx,
