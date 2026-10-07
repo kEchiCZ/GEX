@@ -85,7 +85,7 @@ Obchodní den a měsíc se dopočítají v Pythonu. Celkem je 223 865 zpráv ve 
 | Éra | Měsíce | Zdroje (měsíční objem) |
 |---|---|---|
 | A — jen kalendář | 2023-07 → 27. 7. 2024 | `forexfactory` 367–451 (2023-07 od 30. 7.: 21), `rss_news` do 14 |
-| B — backfill zpráv | 28. 7. 2024 → 27. 7. 2026 | `alpaca` 2 532–3 863 (2024-07 od 28. 7.: 558), `forexfactory` 378–460, `rss_news` do 39, `fed_rss` od 2026-01 do 6 |
+| B — backfill zpráv | 28. 7. 2024 → 27. 7. 2026 | `alpaca` 2 532–3 863 (neúplný 2024-07: 558), `forexfactory` 378–460, `rss_news` do 39, `fed_rss` od 2026-01 do 6 |
 | C — živý sběr z více zdrojů | od 28. 7. 2026 | viz tabulka níže |
 
 | měsíc | alpaca | bluesky | fed_rss | finnhub | forexfactory | ibkr_brfg | ibkr_djnl | reddit_rss | rss_news | celkem |
