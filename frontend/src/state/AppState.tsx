@@ -7,7 +7,7 @@ import type { Coverage } from '../instrument/coverage'
 import { API_BASE, WS_URL } from '../config'
 import type { GexRegimeState } from '../instrument/regime'
 import type { SettleWatchInfo } from '../instrument/settlewatch'
-import { sessionDateIso } from '../instrument/tz'
+import { expirySettleUtc } from '../instrument/expiry'
 import type { Magnet } from '../instrument/magnet'
 import { GEX_UNITS } from '../heatmap/units'
 import type { GexUnits } from '../heatmap/units'
@@ -334,8 +334,12 @@ const VIEWS: readonly AppView[] = [
   'settings',
 ]
 
-/** Výchozí expirace: nejbližší expirace ≥ den seance (dnešní 0DTE řetěz tím
-dostane přednost sám), a teprve když žádná budoucí není, nejnovější proběhlá.
+/** Nejdelší zpoždění `setTimeout` (2^31 − 1 ms ≈ 24,8 dne). */
+const MAX_TIMER_MS = 2 ** 31 - 1
+
+/** Výchozí expirace: nejbližší expirace se settle v budoucnu (dnešní 0DTE řetěz
+tím dostane přednost sám až do svého settle), a teprve když žádná budoucí není,
+nejnovější proběhlá.
 
 Původní pravidlo „jinak `at(-1)`" počítalo s tím, že seznam nese jen proběhlé
 expirace, kde poslední = nejnovější minulá. Po zapojení tastytrade extended
@@ -344,16 +348,19 @@ expirací (#610) sahá `/instruments/{symbol}/expiries` daleko DOPŘEDU, takže
 pro který se nic nesbírá. O víkendech a svátcích, kdy den seance mezi
 expiracemi není, tím aplikace tiše spadla na demo data (#945).
 
-Kotva je den seance (#512), ne kalendářní UTC den: nedělní večer už patří
-pondělní ose. `sessionDate` je parametrem kvůli deterministickým testům. */
+Kotva je settle expirace (`expirySettleUtc`, protějšek engine
+`settle.expiry_settle`, #1367), ne den seance: engine od #1331 roluje na další
+expiraci přímo v settle (16:00 ET, kvartální SOQ, zkrácená seance 13:00 ET)
+a výběr podle dne seance držel graf 1–2 h nad vypršelým řetězem až do otevření
+Globexu. `nowMs` je parametrem kvůli deterministickým testům. */
 export function defaultExpiry(
   expiries: string[],
-  sessionDate: string = sessionDateIso().replaceAll('-', ''),
+  nowMs: number = Date.now(),
   extended: ReadonlySet<string> = new Set(),
 ): string | null {
   if (expiries.length === 0) return null
   const sorted = [...expiries].sort()
-  const upcoming = sorted.filter((expiry) => expiry >= sessionDate)
+  const upcoming = sorted.filter((expiry) => (expirySettleUtc(expiry)?.getTime() ?? 0) > nowMs)
   // Tasty-only expirace (#1217) má jen heatmapu — zdi, flip, Max Pain a Opt Vol
   // nese IBKR řetěz. V roll týdnu je nejbližší 0DTE na dobíhajícím kontraktu
   // právě taková, takže default = nejbližší IBKR expirace; tasty jen když
@@ -702,6 +709,24 @@ export function AppStateProvider({
       setSelectedExpiry(better)
     }
   }, [status.tasty_extended_expiries, expiries, selectedExpiry])
+
+  useEffect(() => {
+    // Přechod na další expiraci v jejím settle (#1367) — totéž, co dělá engine
+    // (#1331). Jen u automaticky zvolené expirace a bez doskoku #946: ruční
+    // volbu ani záměrně zobrazenou poslední seanci s daty to nepřepíná.
+    if (!autoExpiryRef.current || selectedExpiry === null || expiryFallback !== null) return
+    const settle = expirySettleUtc(selectedExpiry)
+    if (settle === null) return
+    const delay = Math.min(Math.max(settle.getTime() - Date.now(), 0), MAX_TIMER_MS)
+    const timer = setTimeout(() => {
+      // Mezitím ruční volba (i téže expirace — stav se nezmění, časovač běží dál)
+      if (!autoExpiryRef.current) return
+      if (Date.now() < settle.getTime()) return // strop časovače — přepočet při příští změně
+      const next = defaultExpiry(expiries, Date.now(), extendedRef.current)
+      if (next !== null && next !== selectedExpiry) setSelectedExpiry(next)
+    }, delay)
+    return () => clearTimeout(timer)
+  }, [selectedExpiry, expiries, expiryFallback])
 
   const [expiryRetry, setExpiryRetry] = useState(0)
   useEffect(() => {
