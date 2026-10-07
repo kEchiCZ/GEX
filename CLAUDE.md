@@ -13,3 +13,5 @@ specifika Claude Code; nic z AGENTS.md neopakuje.
   a stav issues tvrdými daty (`gh issue view`, `/api/status`, `marketclock`), ne ze souhrnu.
 - Rozhodnutí předkládej jako varianty s výhodami/nevýhodami a doporučením (viz AGENTS.md
   „Rozhodování"); připomínky s datem zakládej jako issue `Připomínka ~D. M.:` s `prio:*`.
+- Epiky a větší funkce: skill `/epika` (`.claude/skills/epika/`); ověřovatele před PR spouštěj
+  jako subagenta bez kontextu implementace.
