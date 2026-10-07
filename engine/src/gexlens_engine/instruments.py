@@ -471,7 +471,7 @@ class InstrumentPipeline:
         pátku (26. 9. 2026: obnova à 30 min od 07:00 CT, 0 zapsáno) a nová
         čísla dodá IBKR nejdřív v neděli po otevření Globexu (oi_eod 13. a
         20. 9. 2026: zápisy až po 17:00 CT). Pro víkendový UTC den tak „po
-        okně" nenastane nikdy. Svátky predikát zatím nezná (#1308).
+        okně" nenastane nikdy. Totéž o svátku (#1308): CME nepublikuje, obnova neběží.
         """
         day = now.date()
         return is_trading_session(day) and now >= self.settings.oi_publication_utc(day)

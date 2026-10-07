@@ -1,5 +1,8 @@
 /** Hodiny US akciového trhu (#206): 9:30–16:00 America/New_York, DST-korektně,
-víkend = zavřeno. Zrcadlo enginu `compute/marketclock.outside_us_rth`. */
+víkend a svátek = zavřeno (#1308). Zrcadlo enginu `compute/marketclock.outside_us_rth`. */
+
+import { isEarlyClose } from './holidays'
+import { isTradingSessionIso, zonedDateParts } from './tz'
 
 const NY_FORMAT = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York',
@@ -34,9 +37,13 @@ export function feedSilenceMinutes(lastEventTs: string | undefined, now: Date): 
   return minutes >= FEED_SILENT_AFTER_MIN ? minutes : null
 }
 
-/** Mimo US RTH (9:30–16:00 ET)? Víkend = mimo. */
+/** Mimo US RTH (9:30–16:00 ET)? Víkend a svátek = mimo, zkrácená seance do 13:00 ET (#1308). */
 export function outsideUsRth(now: Date): boolean {
   const { minutes, weekday } = newYorkClock(now)
   if (weekday === 0 || weekday === 6) return true
-  return minutes < 9 * 60 + 30 || minutes >= 16 * 60
+  const parts = zonedDateParts('America/New_York', now.getTime())
+  const dateIso = `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`
+  if (!isTradingSessionIso(dateIso)) return true
+  const close = isEarlyClose(dateIso) ? 13 * 60 : 16 * 60
+  return minutes < 9 * 60 + 30 || minutes >= close
 }

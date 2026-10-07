@@ -5,6 +5,7 @@ Frontend zná jen datum expirace (YYYYMMDD) — typ se odvozuje kalendářně:
 den měsíce = EOM, jiný pátek = týdenní, jinak denní 0DTE. Odpočet míří na
 settle 16:00 ET dne expirace (v létě 20:00 UTC, v zimě 21:00 — #511).
 */
+import { isEarlyClose } from './holidays'
 import { isTradingSessionIso, zonedTimeUtc } from './tz'
 
 export type ExpiryKind = 'denní' | 'týdenní' | 'měsíční' | 'kvartální' | 'EOM'
@@ -62,18 +63,20 @@ export function expiryKind(expiry: string): ExpiryKind | null {
 
 /** Settle dne expirace: 16:00 ET — DST-korektně přes IANA zónu (#511),
 shodné s engine `compute/settle.py`. Kvartální expirace (3. pátek bře/čvn/
-zář/pro) se vypořádá ráno v SOQ 9:30 ET (#1189, `expiry_settle_ts`). */
+zář/pro) se vypořádá ráno v SOQ 9:30 ET (#1189, `expiry_settle_ts`),
+zkrácená seance (den po Thanksgiving, Štědrý den) v 13:00 ET (#1308). */
 export function expirySettleUtc(expiry: string): Date | null {
   const date = parse(expiry)
   if (!date) return null
   const quarterly = expiryKind(expiry) === 'kvartální'
+  const early = isEarlyClose(date.toISOString().slice(0, 10))
   return new Date(
     zonedTimeUtc(
       'America/New_York',
       date.getUTCFullYear(),
       date.getUTCMonth() + 1,
       date.getUTCDate(),
-      quarterly ? 9 : 16,
+      quarterly ? 9 : early ? 13 : 16,
       quarterly ? 30 : 0,
     ),
   )
