@@ -1,8 +1,10 @@
 # GEXLens — instrukce pro Claude Code
 
 **Zdroj pravdy pro práci v repu je `AGENTS.md`** (kontext, zdroje pravdy zadání, stack, build,
-prostředí, kritická pravidla, principy, workflow) — čti ho jako první. Tento soubor jen doplňuje
-specifika Claude Code; nic z AGENTS.md neopakuje.
+prostředí, kritická pravidla, principy, workflow) — načítá se importem níže. Tento soubor jen
+doplňuje specifika Claude Code; nic z AGENTS.md neopakuje.
+
+@AGENTS.md
 
 ## Specifika Claude Code
 - Paměť projektu (`~/.claude/projects/…/memory/`) drží připomínky, stav produkce a strojové limity;
