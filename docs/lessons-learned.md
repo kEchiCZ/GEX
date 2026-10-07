@@ -192,6 +192,14 @@ chyb**, hlavně diagnostických a provozních.
   → Nezávislost vzorku odvozovat z **toho, co výnos určuje** (základní cena a začátek okna), ne
   z identity zprávy. Klíč takové skupiny ukládat jako měření (`closure_open_ts` z barů), ne
   odhadovat z kalendáře.
+- **2026-10-07 — FA validace a kalibrace α nad předpublikačním OI (#1314): dedup zamkl bod spočítaný z neúplných dat.**
+  Joby běžely po každém úspěšném OI archivu, tedy i po prvním v 00:00 UTC, kdy dnešní snímek nese
+  ještě včerejší čísla. ΔOI ≈ 0 a denní dedup pak bod zamkl — pozdější obnova po publikaci (#463)
+  přepsala archiv, ale bod už ne. Druhá cesta téhož výsledku: symbol bez kalibrace po bodu s mediánem
+  ≤ 0 dostal `fa_alpha` s α 0 (větev „α beze změny“ zapsala `state.alpha if state else 0.0`), runtime
+  ho převzal a FA vrstva NQ byla vypnutá.
+  → Výpočet, jehož výsledek dedup zamyká, spouštět až nad **finálními** vstupy (`oi_final`), ne nad
+  prvním úspěšným čtením. „Beze změny“ u neexistujícího stavu znamená stav nezakládat, ne zapsat nulu.
 
 - **2026-10-07 — roll expirace v settle (#1331): „zastavit pipeline v okamžiku settle“ by potichu ztratilo stav dne.**
   Přímočaré provedení varianty A (zastavit pipeline v orchestrátoru dřív, než cyklus minuty settle

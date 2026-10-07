@@ -846,6 +846,13 @@ class _PartitionBuffer:
                         if (current := clashing.get(key_of(row))) is None
                         or not keep_existing(current, row)
                     ]
+                    if not kept_incoming:
+                        # Všechny příchozí minuty už partice nese a mají
+                        # přednost (#1343: doplněný bar /NQ 05:30 po restartu)
+                        # — partice se nemění. Prázdný seznam by dal
+                        # `value_set` typu null a `is_in` nad string klíči by
+                        # spadl na ArrowTypeError.
+                        return self._path
                     if len(kept_incoming) != len(incoming_rows):
                         incoming_rows = kept_incoming
                         incoming = self._to_table(incoming_rows)
