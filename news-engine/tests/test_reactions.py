@@ -129,6 +129,15 @@ def test_weekend_event_measures_from_first_traded_bar_but_keeps_the_gap() -> Non
     assert all(r.deferred for r in reactions)
     # +100 bps = celý gap ze 7000 na 7070
     assert reactions[0].ret_bp == pytest.approx(100.0)
+    # Klíč uzavírky (#1311) = první obchodovaný bar; zpráva o hodinu později
+    # téže uzavírky má tentýž klíč i výnos
+    assert {r.closure_open for r in reactions} == {sunday[0].ts}
+    later = compute_reactions(EVENT + dt.timedelta(hours=1), friday_close + sunday, windows=(1, 5))
+    assert [r.ret_bp for r in later] == [r.ret_bp for r in reactions]
+    assert {r.closure_open for r in later} == {sunday[0].ts}
+    # Zpráva za běžícího trhu klíč nemá
+    live = compute_reactions(EVENT, friday_close + bars(EVENT, [7000.0, 7001.0]), windows=(1,))
+    assert live and all(r.closure_open is None for r in live)
 
 
 def test_short_data_gap_is_not_treated_as_closed_market() -> None:

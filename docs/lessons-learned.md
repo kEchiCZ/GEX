@@ -185,6 +185,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-07 — odložené reakce jedné uzavírky jako nezávislé vzorky (#1311): sloučení podle času zprávy minulo pseudoreplikaci.**
+  #1293 slučoval vzorky se shodným `ts_event`, ale víkendové zprávy mají každá jiný čas a přitom
+  tentýž výnos — základní cena je poslední bar před uzavřením a okno začíná prvním barem po
+  otevření. `n` deferred bucketů bylo 2,5–5× nafouknuté a gate stál na pseudoreplikacích.
+  → Nezávislost vzorku odvozovat z **toho, co výnos určuje** (základní cena a začátek okna), ne
+  z identity zprávy. Klíč takové skupiny ukládat jako měření (`closure_open_ts` z barů), ne
+  odhadovat z kalendáře.
+
 - **2026-10-07 — roll expirace v settle (#1331): „zastavit pipeline v okamžiku settle“ by potichu ztratilo stav dne.**
   Přímočaré provedení varianty A (zastavit pipeline v orchestrátoru dřív, než cyklus minuty settle
   poběží) by sondy T9 nechalo v DB navždy `active` (otevřené drží jen v paměti a timeout dělá první

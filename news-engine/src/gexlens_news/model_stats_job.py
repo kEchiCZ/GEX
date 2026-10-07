@@ -103,6 +103,7 @@ class ModelStatsJob:
                         state=state,
                         gex_regime=window.gex_regime,
                         ts_event=row["ts_event"],
+                        closure_open=window.closure_open,
                     )
 
     def store(self, stats: list[tuple[str, BucketStats]], now: dt.datetime) -> None:

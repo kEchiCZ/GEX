@@ -97,6 +97,8 @@ class Reaction:
     vol_z: float | None
     contaminated: bool
     deferred: bool
+    # První obchodovaný bar po uzavírce trhu (#1311) — jen deferred, jinak None
+    closure_open: dt.datetime | None = None
 
 
 def _last_before(bars: Sequence[Bar], moment: dt.datetime) -> Bar | None:
@@ -239,6 +241,7 @@ def compute_reactions(
                 vol_z=volume_z_score(in_window, baseline),
                 contaminated=contaminated,
                 deferred=deferred,
+                closure_open=first_traded.ts if deferred else None,
             )
         )
     return results
@@ -310,6 +313,7 @@ def compute_daily_reactions(
                 vol_z=None,
                 contaminated=False,
                 deferred=deferred,
+                closure_open=first_traded.ts if deferred else None,
             )
         )
     return results

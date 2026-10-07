@@ -264,3 +264,40 @@ def test_model_stats_gains_gate_open_column(tmp_path: Path) -> None:
     assert "gate_open" in columns
     with engine.connect() as conn:
         assert conn.execute(text("SELECT gate_open FROM news_model_stats")).scalar() in (0, False)
+
+
+def test_reactions_gain_closure_open_column_and_roundtrip(tmp_path: Path) -> None:
+    """#1311: starší `news_reactions` dostane `closure_open_ts` (aditivně) a klíč
+    uzavírky projde zápisem i rozkladem jen u deferred oken."""
+    from sqlalchemy import text
+
+    engine = make_engine(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE news_reactions DROP COLUMN closure_open_ts"))
+    ensure_sentiment_schema(engine)
+    ensure_sentiment_schema(engine)  # idempotence
+    columns = {c["name"] for c in inspect(engine).get_columns("news_reactions")}
+    assert "closure_open_ts" in columns
+
+    opened = TS + dt.timedelta(days=1)
+    window = ReactionWindow(
+        window_min=REACTION_WINDOWS[0],
+        ret_bp=-12.0,
+        range_bp=8.0,
+        vol_z=None,
+        contaminated=False,
+        deferred=True,
+        gex_regime=None,
+        computed_at=TS,
+        closure_open=opened,
+    )
+    values = reaction_row_values([window])
+    assert values["closure_open_ts"] == opened
+    assert unpivot_reaction(values)[0].closure_open == opened
+    live = ReactionWindow(**{**window.__dict__, "deferred": False, "closure_open": None})
+    assert "closure_open_ts" not in reaction_row_values([live])
+    other = ReactionWindow(
+        **{**window.__dict__, "window_min": REACTION_WINDOWS[1], "closure_open": TS}
+    )
+    with pytest.raises(ValueError, match="první bar"):
+        reaction_row_values([window, other])

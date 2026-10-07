@@ -14,7 +14,11 @@ Dvě věci, které rozhodují o tom, jestli model neučí šum:
 * **Jedno měření = jeden vzorek** (#1293). Vzorky téhož bucketu se stejným
   `ts_event` jsou tentýž pohyb trhu — typicky řádky FF jednoho releasu
   (CPI m/m, Core CPI m/m, y/y) se shodným časem i výnosem. Počítat je zvlášť
-  by nafouklo `n` a gate by se otevřel na pseudoreplikacích.
+  by nafouklo `n` a gate by se otevřel na pseudoreplikacích. U deferred
+  reakcí je jedno měření celá **uzavírka trhu** (#1311): všechny zprávy
+  víkendu nebo denní pauzy mají tutéž základní cenu před uzavřením i první
+  bar po otevření, tedy shodný výnos — klíčem je `closure_open`, ne čas
+  zprávy (GEOPOLITICS|1 deferred ~370 vzorků na ~130 uzavírek).
 
 Spolehlivost se reportuje jako `n` a σ, u hit-rate navíc Wilsonova dolní mez —
 bodová úspěšnost při malém n je nerozlišitelná od mince.
@@ -55,6 +59,16 @@ class ReactionSample:
     # Čas eventu — klíč sloučení souběžných vzorků téhož bucketu (#1293);
     # None = samostatné měření
     ts_event: dt.datetime | None = None
+    # První obchodovaný bar po uzavírce (#1311) — klíč sloučení deferred
+    # vzorků jedné uzavírky; None (nedeferred nebo před backfillem) = `ts_event`
+    closure_open: dt.datetime | None = None
+
+    @property
+    def measurement_key(self) -> dt.datetime | None:
+        """Klíč jednoho měření: uzavírka u deferred, jinak čas zprávy."""
+        if self.deferred and self.closure_open is not None:
+            return self.closure_open
+        return self.ts_event
 
 
 @dataclass(frozen=True)
@@ -142,12 +156,14 @@ _GAMMA_LABELS = {"positive": "gamma_positive", "negative": "gamma_negative"}
 class _Accumulator:
     """Minimum, co bucket potřebuje: výnosy a počty zásahů — ne celé vzorky.
 
-    Souběžné vzorky (stejný `ts_event`) jsou jedno měření (#1293): drží se jako
-    rozpracované a zapíší se, až přijde jiný čas. Směr sloučeného měření je
-    převaha směrů (remíza = neposuzuje se), výnos je z prvního vzorku — u
-    souběžných eventů je shodný (tatáž okna nad stejnými bary). Proto musí
-    stream jít vzestupně podle `ts_event` (`ModelStatsJob.iter_samples`);
-    vzorek bez času je vždy samostatné měření.
+    Souběžné vzorky (stejný `measurement_key`: čas zprávy, u deferred první
+    bar po uzavírce, #1293/#1311) jsou jedno měření: drží se jako rozpracované
+    a zapíší se, až přijde jiný klíč. Směr sloučeného měření je převaha směrů
+    (remíza = neposuzuje se), výnos je z prvního vzorku — u souběžných eventů
+    i u zpráv jedné uzavírky je shodný (tatáž základní cena i okna nad
+    stejnými bary). Proto musí stream jít vzestupně podle `ts_event`
+    (`ModelStatsJob.iter_samples`) — deferred vzorky jedné uzavírky jsou pak
+    v bucketu za sebou; vzorek bez klíče je vždy samostatné měření.
     """
 
     __slots__ = ("hits", "judged", "pending_dir", "pending_ret", "pending_ts", "returns")
@@ -163,14 +179,15 @@ class _Accumulator:
     def add(self, sample: ReactionSample) -> None:
         # Směr pro hit-rate: ±1, jinak 0 (neklasifikováno nebo neutrální)
         vote = 1 if sample.sentiment_dir == 1 else -1 if sample.sentiment_dir == -1 else 0
-        if sample.ts_event is not None and sample.ts_event == self.pending_ts:
+        key = sample.measurement_key
+        if key is not None and key == self.pending_ts:
             self.pending_dir += vote
             return
         self._flush()
-        if sample.ts_event is None:
+        if key is None:
             self._record(sample.ret_bp, vote)
             return
-        self.pending_ts = sample.ts_event
+        self.pending_ts = key
         self.pending_ret = sample.ret_bp
         self.pending_dir = vote
 

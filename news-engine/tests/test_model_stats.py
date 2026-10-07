@@ -159,6 +159,41 @@ def test_soubezne_vzorky_tehoz_bucketu_jsou_jedno_mereni() -> None:
     assert aggregate_samples([sample(10.0), sample(10.0)])[0].n == 2
 
 
+def test_deferred_zpravy_jedne_uzavirky_jsou_jedno_mereni() -> None:
+    """#1311: víkendové zprávy sdílejí základní cenu i první bar po otevření, tedy
+    výnos — n je počet uzavírek, ne zpráv (GEOPOLITICS|1 deferred ~370 na ~130)."""
+    from dataclasses import replace
+
+    saturday = NOW - dt.timedelta(days=5)
+    sunday_open = saturday + dt.timedelta(days=1, hours=8)
+    next_open = sunday_open + dt.timedelta(days=1)
+    weekend = [
+        replace(
+            sample(-30.0, deferred=True, sentiment_dir=-1),
+            ts_event=saturday + dt.timedelta(hours=hour),
+            closure_open=sunday_open,
+        )
+        for hour in (0, 3, 7)
+    ]
+    pause = replace(
+        sample(5.0, deferred=True, sentiment_dir=-1),
+        ts_event=next_open - dt.timedelta(minutes=30),
+        closure_open=next_open,
+    )
+    stats = aggregate_samples([*weekend, pause])[0]
+    assert stats.n == 2
+    assert stats.ret_mean_bp == pytest.approx((-30.0 + 5.0) / 2)
+    # Bez klíče (řádky před backfillem) se slučují jen podle času zprávy (#1293)
+    legacy = [replace(item, closure_open=None) for item in weekend]
+    assert aggregate_samples(legacy)[0].n == 3
+    # Nedeferred vzorek klíč uzavírky nemá a slučuje se dál jen časem zprávy
+    live = [
+        replace(sample(1.0), ts_event=NOW, closure_open=sunday_open),
+        replace(sample(1.0), ts_event=NOW + dt.timedelta(minutes=1), closure_open=sunday_open),
+    ]
+    assert aggregate_samples(live)[0].n == 2
+
+
 def test_sloucene_mereni_ma_smer_podle_prevahy() -> None:
     from dataclasses import replace
 
@@ -325,6 +360,54 @@ def test_job_slucuje_soubezne_eventy_i_mimo_poradi_id(tmp_path: Path) -> None:
         row = conn.execute(select(news_model_stats).where(news_model_stats.c.regime == "all")).one()
     assert row.n == 2
     assert row.ret_mean_bp == pytest.approx((26.7 - 3.0) / 2)
+
+
+def test_job_slucuje_deferred_podle_uzavirky(tmp_path: Path) -> None:
+    """#1311: klíč uzavírky prochází z `news_reactions.closure_open_ts` do agregace."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    saturday = NOW - dt.timedelta(days=5)
+    sunday_open = saturday + dt.timedelta(days=1, hours=8)
+    with engine.begin() as conn:
+        for index, hour in enumerate((0, 2, 5)):
+            ts = saturday + dt.timedelta(hours=hour)
+            key = conn.execute(
+                insert(news_events).values(
+                    ts_event=ts,
+                    ts_ingested=ts,
+                    source="test",
+                    kind="headline",
+                    title=f"víkend {index}",
+                    category="GEOPOLITICS",
+                    importance=1,
+                    sentiment_dir=-1,
+                    symbols=[],
+                    market_closed=True,
+                    dedup_hash=f"wk-{index}",
+                    raw={},
+                )
+            ).inserted_primary_key
+            assert key is not None
+            window = ReactionWindow(
+                window_min=5,
+                ret_bp=-25.0,
+                range_bp=20.0,
+                vol_z=None,
+                contaminated=False,
+                deferred=True,
+                gex_regime=None,
+                computed_at=NOW,
+                closure_open=sunday_open,
+            )
+            conn.execute(
+                insert(news_reactions).values(
+                    event_id=int(key[0]), symbol="ES", **reaction_row_values([window])
+                )
+            )
+    ModelStatsJob(engine).run(NOW)
+    with engine.connect() as conn:
+        row = conn.execute(select(news_model_stats).where(news_model_stats.c.regime == "all")).one()
+    assert row.deferred is True and row.n == 1
 
 
 def test_aggregate_by_regime_bere_stream_a_dava_totez_co_seznam() -> None:
