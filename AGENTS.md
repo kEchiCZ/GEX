@@ -70,7 +70,7 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
   `instrument/tz.isTradingSessionIso`; svátky NYSE z pravidel, #1308, ADR-0046), žádné lokální `weekday() < 5`
   ani `getUTCDay()` jako test obchodního dne; test na sobotu, neděli a pondělí proti pátku
   (#1241, #1307, #1309).
-- **Podezřelá hodnota na produkci se řeší hned** (issue + příčina), neodkládá se „už se to bude opakovat".
+- **Podezřelá hodnota na produkci se řeší hned** (issue + příčina), neodkládá se „až se to bude opakovat".
   Demo/mock data nesmí prosáknout do UI.
 - **Ověřuj na tvrdých datech**: metriku dohledej v kódu, stav issue z `gh issue view`, ne z paměti;
   cenzurovaná/neúplná data neextrapoluj.
@@ -149,7 +149,7 @@ frontend (nginx :8080, React SPA) — heatmapa, profil, panely, playback, briefi
 - `main` je chráněný: jen PR, jen **squash merge** po zeleném CI aktuálního SHA →
   `scripts/merge-when-green.sh <PR>` (po push počkat ~60 s, `gh pr checks` musí checky vidět).
   `gh pr checks --watch` samotné nestačí (vrací 0 i při failu).
-- Delší texty do `gh issue/pr comment` **vždy `--body-file`** (české uvozovky useкávají inline body).
+- Delší texty do `gh issue/pr comment` **vždy `--body-file`** (české uvozovky usekávají inline body).
 - Milestones M1→M5 (SPEC kap. 9) a dále roadmapa #629: neimplementuj napřed věci z pozdějších fází.
 - **Definition of done** pro feature PR:
   1. testy (golden při změně výpočtu), lint, mypy, build zelené;
