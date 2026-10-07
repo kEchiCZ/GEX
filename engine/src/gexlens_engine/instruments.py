@@ -153,7 +153,12 @@ class SetupCooldown:
         return released
 
 
-def greeks_watch_applies(expiry: str, now: dt.datetime) -> bool:
+def greeks_watch_applies(
+    expiry: str,
+    now: dt.datetime,
+    trading_class: str | None = None,
+    symbol: str | None = None,
+) -> bool:
     """Má se u téhle řady vůbec hlídat výpadek Greeks? (#959)
 
     Po settle se expirující řetěz přestane kotovat, takže Greeks logicky
@@ -167,25 +172,32 @@ def greeks_watch_applies(expiry: str, now: dt.datetime) -> bool:
 
     Nečitelná expirace → True (hlídat; nerozbíjet běh kvůli formátu).
     """
-    settle = expiry_settle(expiry)
+    settle = expiry_settle(expiry, trading_class, symbol)
     if settle is None:
         logger.warning("Nečitelná expirace %r — hlídka Greeks se nechává zapnutá", expiry)
         return True
     return now < settle
 
 
-def expiry_expired(expiry: str, now: dt.datetime) -> bool:
+def expiry_expired(
+    expiry: str,
+    now: dt.datetime,
+    trading_class: str | None = None,
+    symbol: str | None = None,
+) -> bool:
     """True, když expirace (YYYYMMDD) už proběhla — pipeline se musí překlopit.
 
     Hranice je settle EXPIRACE (`settle.expiry_settle`, ADR-0039 bod 2):
-    16:00 ET, kvartální SOQ 9:30 ET (#1189). Do #1331 se běžná expirace
+    16:00 ET, standardní kvartální třída SOQ 9:30 ET (#1189) — týdenní série
+    na kvartální datum (EW3/QN3) až odpoledne, proto trading class (#1366).
+    Do #1331 se běžná expirace
     rolovala až s novým kalendářním dnem v UTC, takže pipeline běžela 3–4 h
     nad vypršelým řetězem (setupy, sondy T9, tendence i heatmapa). Orchestrátor
     vypršelou pipeline zastaví a týž cyklus ji založí znovu; discovery i cache
     vypršelé expirace vynechají, takže se nevrátí na tutéž. Nečitelný formát
     → False (nerozbíjet běh).
     """
-    settle = expiry_settle(expiry)
+    settle = expiry_settle(expiry, trading_class, symbol)
     if settle is None:
         logger.warning("Nečitelná expirace %r — roll se přeskakuje", expiry)
         return False
@@ -1244,7 +1256,9 @@ class InstrumentPipeline:
         # Po settle expirující řady se nehlídá vůbec (#959) — detektor se ani
         # nekrmí, jinak by si zapamatoval „stalled" a po rollu vystřelil
         # „recovered" k poplachu, který nikdy neodešel
-        if not greeks_watch_applies(self.runtime.expiry, now):
+        if not greeks_watch_applies(
+            self.runtime.expiry, now, self.runtime.trading_class, self.runtime.symbol
+        ):
             return
         event = detector.observe(total=metrics.total, stale=metrics.stale_count)
         if event is None:

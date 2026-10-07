@@ -72,9 +72,8 @@ from gexlens_engine.ticker import parse_ticker
 # #1322/#1324 verzi ZÁMĚRNĚ nezvedá: invariant `born_after_settle` jen brání
 # vzniku „mrtvě narozených“ setupů nad vypršelou expirací (všechny skončily
 # timeoutem 1–4 min po vzniku) a historii v5 vyřazuje týž predikát při čtení,
-# takže statistiky v5 novému chování už odpovídají. Posun timeoutu kvartální
-# expirace na SOQ (`expiry_settle`, ADR-0039 bod 2) se v5 netýká —
-# kvartální 0DTE se jako runtime nepoužívá (ADR-0039 bod 1).
+# takže statistiky v5 novému chování už odpovídají. Kvartální datum viz #1366
+# níž.
 #
 # #1346 verzi ZÁMĚRNĚ nezvedá: detektory, prahy a úrovně nad minutou s barem
 # jsou beze změny. Mění se jen to, že minuta bez baru (dávka cyklu prázdná)
@@ -85,6 +84,14 @@ from gexlens_engine.ticker import parse_ticker
 # `context.entry_bar_ts`, starší přepočet #1320 jako „vstup mimo bary“. Ze
 # statistik je vyřazuje trvalá značka `context.excluded` (`counts_in_stats`),
 # kterou po schválení zapíše `scripts/recompute_setup_outcomes.py --exclude`.
+#
+# #1366 verzi ZÁMĚRNĚ nezvedá: na kvartální datum sbírá pipeline po rollu front
+# kontraktu týdenní sérii nového kontraktu (EW3/QN3), která se vypořádá
+# odpoledne — SOQ patří jen standardní třídě (`settle.settles_at_soq`). Engine
+# ji do #1366 ukončil v 9:30 ET, takže setupy toho dne dostaly timeout v SOQ.
+# Detektory ani úrovně se nemění, jen hranice vyhodnocení; trading class nese
+# `context.trading_class` a historické výsledky srovná
+# `scripts/recompute_setup_outcomes.py` (jen se souhlasem).
 SETUP_MECHANICS_VERSION = 5
 
 
@@ -1422,7 +1429,26 @@ def r_result(direction: Direction, entry: float, stop: float, exit_price: float)
     return move / risk
 
 
-def born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
+#: Trading class řetězu v `context` setupu i sondy T9 (#1366): rozhoduje settle
+#: kvartálního data — standardní třída (`ES`) v SOQ, týdenní série (`EW3`)
+#: odpoledne. Řádky před #1366 ji nemají a čtou se podle data.
+TRADING_CLASS_KEY = "trading_class"
+
+
+def context_trading_class(context: object) -> str | None:
+    """Trading class řetězu z kontextu setupu/sondy (#1366), jinak None."""
+    if not isinstance(context, Mapping):
+        return None
+    value = context.get(TRADING_CLASS_KEY)
+    return value if isinstance(value, str) and value else None
+
+
+def born_after_settle(
+    expiry: str,
+    created_ts: dt.datetime,
+    trading_class: str | None = None,
+    symbol: str | None = None,
+) -> bool:
     """Vznikl setup (nebo sonda T9) až po settle vlastní expirace? (#1324)
 
     Takový setup nemohl existovat: vztahuje se k vypršelému řetězu a timeout
@@ -1443,11 +1469,12 @@ def born_after_settle(expiry: str, created_ts: dt.datetime) -> bool:
       a brány šablon, kalibrace confidence, sebekontroly a kouče a označí je
       ve výpisu tabulky (`after_settle`); souhrn `setup_summary` je jen
       spočítá a gamma útes (`next_setups`) je nepočítá. V DB řádky zůstávají.
-    Vznik přesně v okamžiku settle už je po něm. Nečitelná expirace → False
-    (nelze rozhodnout, řádek se nevyřazuje; živý `_detect_new` to hlásí
-    WARNINGem).
+    Vznik přesně v okamžiku settle už je po něm. Kvartální datum rozhoduje
+    trading class řetězu a symbol (#1366, `settle.settles_at_soq`); bez nich
+    datum. Nečitelná expirace → False (nelze rozhodnout, řádek se nevyřazuje;
+    živý `_detect_new` to hlásí WARNINGem).
     """
-    settle = expiry_settle(expiry)
+    settle = expiry_settle(expiry, trading_class, symbol)
     return settle is not None and created_ts >= settle
 
 
@@ -1477,7 +1504,9 @@ def excluded_reason(context: object) -> str | None:
     return reason if isinstance(reason, str) and reason else None
 
 
-def counts_in_stats(expiry: str, created_ts: dt.datetime, context: object) -> bool:
+def counts_in_stats(
+    expiry: str, created_ts: dt.datetime, context: object, symbol: str | None = None
+) -> bool:
     """Patří setup do statistik? Jediný predikát všech čtenářů historie.
 
     Vyřazený je setup vzniklý po settle vlastní expirace (`born_after_settle`,
@@ -1485,9 +1514,13 @@ def counts_in_stats(expiry: str, created_ts: dt.datetime, context: object) -> bo
     Čtenáři: souhrn #1319 a Knihovna (`SetupFact.in_stats`), brzdy, brána
     šablon a čerpání zkoušky, kalibrace confidence, sebekontrola a kouč
     (`SetupsRepository`) a gamma útes `next_setups` (#1331). Tabulka řádek
-    jen označí, v DB zůstává.
+    jen označí, v DB zůstává. Trading class řetězu je v kontextu (#1366).
     """
-    return not born_after_settle(expiry, created_ts) and excluded_reason(context) is None
+    trading_class = context_trading_class(context)
+    return (
+        not born_after_settle(expiry, created_ts, trading_class, symbol)
+        and excluded_reason(context) is None
+    )
 
 
 # ── Cesta ceny setupu (#1320) ───────────────────────────────────────────────

@@ -354,17 +354,21 @@ expiracemi není, tím aplikace tiše spadla na demo data (#945).
 
 Kotva je settle expirace (`expirySettleUtc`, protějšek engine
 `settle.expiry_settle`, #1367), ne den seance: engine od #1331 roluje na další
-expiraci přímo v settle (16:00 ET, kvartální SOQ, zkrácená seance 13:00 ET)
+expiraci přímo v settle (16:00 ET, SOQ jen standardní kvartální třída #1366,
+zkrácená seance 13:00 ET)
 a výběr podle dne seance držel graf 1–2 h nad vypršelým řetězem až do otevření
 Globexu. `nowMs` je parametrem kvůli deterministickým testům. */
 export function defaultExpiry(
   expiries: string[],
+  symbol: string,
   nowMs: number = Date.now(),
   extended: ReadonlySet<string> = new Set(),
 ): string | null {
   if (expiries.length === 0) return null
   const sorted = [...expiries].sort()
-  const upcoming = sorted.filter((expiry) => (expirySettleUtc(expiry)?.getTime() ?? 0) > nowMs)
+  const upcoming = sorted.filter(
+    (expiry) => (expirySettleUtc(expiry, symbol)?.getTime() ?? 0) > nowMs,
+  )
   // Tasty-only expirace (#1217) má jen heatmapu — zdi, flip, Max Pain a Opt Vol
   // nese IBKR řetěz. V roll týdnu je nejbližší 0DTE na dobíhajícím kontraktu
   // právě taková, takže default = nejbližší IBKR expirace; tasty jen když
@@ -708,30 +712,30 @@ export function AppStateProvider({
     if (!autoExpiryRef.current || selectedExpiry === null) return
     const extended = extendedRef.current
     if (!extended.has(selectedExpiry)) return
-    const better = defaultExpiry(expiries, undefined, extended)
+    const better = defaultExpiry(expiries, symbol, undefined, extended)
     if (better !== null && better !== selectedExpiry) {
       setExpiryFallback(null)
       setSelectedExpiry(better)
     }
-  }, [status.tasty_extended_expiries, expiries, selectedExpiry])
+  }, [status.tasty_extended_expiries, expiries, selectedExpiry, symbol])
 
   useEffect(() => {
     // Přechod na další expiraci v jejím settle (#1367) — totéž, co dělá engine
     // (#1331). Jen u automaticky zvolené expirace a bez doskoku #946: ruční
     // volbu ani záměrně zobrazenou poslední seanci s daty to nepřepíná.
     if (!autoExpiryRef.current || selectedExpiry === null || expiryFallback !== null) return
-    const settle = expirySettleUtc(selectedExpiry)
+    const settle = expirySettleUtc(selectedExpiry, symbol)
     if (settle === null) return
     const delay = Math.min(Math.max(settle.getTime() - Date.now(), 0), MAX_TIMER_MS)
     const timer = setTimeout(() => {
       // Mezitím ruční volba (i téže expirace — stav se nezmění, časovač běží dál)
       if (!autoExpiryRef.current) return
       if (Date.now() < settle.getTime()) return // strop časovače — přepočet při příští změně
-      const next = defaultExpiry(expiries, Date.now(), extendedRef.current)
+      const next = defaultExpiry(expiries, symbol, Date.now(), extendedRef.current)
       if (next !== null && next !== selectedExpiry) setSelectedExpiry(next)
     }, delay)
     return () => clearTimeout(timer)
-  }, [selectedExpiry, expiries, expiryFallback])
+  }, [selectedExpiry, expiries, expiryFallback, symbol])
 
   const [expiryRetry, setExpiryRetry] = useState(0)
   useEffect(() => {
@@ -763,7 +767,7 @@ export function AppStateProvider({
               (payload.detail ?? []).map((row) => [row.date, row.trading_classes]),
             ),
           )
-          const candidate = defaultExpiry(payload.expiries, undefined, extendedRef.current)
+          const candidate = defaultExpiry(payload.expiries, symbol, undefined, extendedRef.current)
           autoExpiryRef.current = true
           setSelectedExpiry(candidate)
           if (payload.expiries.length === 0) scheduleRetry()

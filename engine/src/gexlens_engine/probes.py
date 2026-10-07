@@ -13,8 +13,8 @@ a vyhodnocení otevřených sond **týmž krokem jako živé setupy** (#1345,
 `compute/setups.walk_setup_path`): bary v pořadí od baru vstupu, díru v živé
 dávce dotáhne z partic (`bar_reader`) a na nedoplněnou čeká `PATH_GAP_WAIT`,
 bary od settle se nehodnotí, timeout za close baru končícího v settle
-expirace sondy (`settle.expiry_settle`, #1331), `closed_ts` = bar zásahu nebo
-settle. Spot se nehodnotí nikdy. Nové sondy po settle nevzniknou
+expirace sondy (`settle.expiry_settle` s trading class řetězu, #1331, #1366),
+`closed_ts` = bar zásahu nebo settle. Spot se nehodnotí nikdy. Nové sondy po settle nevzniknou
 (`born_after_settle`).
 Do `setups`, alertů ani track recordu nejde NIC — fáze 2 (≥ 30 výskytů na
 instrument) teprve rozhodne zapnout/sloučit/zavřít.
@@ -27,9 +27,9 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from gexlens_engine.compute.bandregime import BAND_METRICS_VERSION, band_metrics, band_zone
-from gexlens_engine.compute.settle import expiry_settle
 from gexlens_engine.compute.setups import (
     PATH_GAP_WAIT,
+    TRADING_CLASS_KEY,
     PathBar,
     PathState,
     ProbeMinute,
@@ -56,6 +56,8 @@ class _ActiveProbe:
     probe_id: int
     occurrence: ProbeOccurrence
     expiry: str
+    #: Settle expirace řetězu sondy — s jeho trading class (#1331, #1366)
+    settle: dt.datetime
     #: Kam až je cesta ceny vyhodnocená (#1345); MFE/MAE v bodech
     path: PathState
     #: Díra, na kterou sonda čeká, a od kdy (`PATH_GAP_WAIT`)
@@ -106,18 +108,24 @@ class T9ProbeCollector:
             )
         )
         occurrence = detect_damping_ceiling(list(self._history), self.params)
-        if occurrence is not None and self._expiry_alive(runtime.expiry, now):
-            self._open_probe(now, occurrence, runtime.expiry, bar)
+        if occurrence is not None:
+            settle = self._live_settle(runtime, now)
+            if settle is not None:
+                self._open_probe(now, occurrence, runtime, settle, bar)
 
-    def _expiry_alive(self, expiry: str, now: dt.datetime) -> bool:
-        """Smí nad expirací runtime vzniknout sonda? Týž invariant jako setupy (#1324).
+    def _live_settle(self, runtime: EngineRuntime, now: dt.datetime) -> dt.datetime | None:
+        """Settle expirace runtime, smí-li nad ní vzniknout sonda; jinak None.
+        Týž invariant jako setupy (#1324).
 
         Po settle vlastní expirace (`born_after_settle`) ne — v prvním cyklu
         po settle, po kterém pipeline roluje (#1331), by ji timeout zavřel
         hned. Nečitelná expirace také ne: sonda bez settle by nikdy nedostala
-        timeout (nahlas, jednou za expiraci).
+        timeout (nahlas, jednou za expiraci). Kvartální datum rozhoduje
+        trading class řetězu (#1366).
         """
-        if expiry_settle(expiry) is None:
+        expiry = runtime.expiry
+        settle = runtime.settle()
+        if settle is None:
             if self._expiry_logged != expiry:
                 self._expiry_logged = expiry
                 logger.warning(
@@ -125,13 +133,23 @@ class T9ProbeCollector:
                     self.symbol,
                     expiry,
                 )
-            return False
-        return not born_after_settle(expiry, now)
+            return None
+        if born_after_settle(expiry, now, runtime.trading_class, runtime.symbol):
+            return None
+        return settle
 
     def _open_probe(
-        self, now: dt.datetime, occurrence: ProbeOccurrence, expiry: str, entry_bar: Bar
+        self,
+        now: dt.datetime,
+        occurrence: ProbeOccurrence,
+        runtime: EngineRuntime,
+        settle: dt.datetime,
+        entry_bar: Bar,
     ) -> None:
+        expiry = runtime.expiry
         context = {**occurrence.context, "expiry": expiry}
+        if runtime.trading_class is not None:
+            context[TRADING_CLASS_KEY] = runtime.trading_class
         if "band_depth" in context:
             # Význam hloubky se mění mezi verzemi (#952) — bez značky by šly
             # sondy z různých verzí sdružit dohromady
@@ -153,6 +171,7 @@ class T9ProbeCollector:
                 probe_id=probe_id,
                 occurrence=occurrence,
                 expiry=expiry,
+                settle=settle,
                 path=PathState(last_ts=entry_bar.ts, last_close=entry_bar.close),
             )
         )
@@ -212,7 +231,7 @@ class T9ProbeCollector:
                 item.entry,
                 item.target,
                 item.stop,
-                expiry_settle(probe.expiry),
+                probe.settle,
                 path_bars,
                 probe.path,
                 now=now,

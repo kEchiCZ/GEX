@@ -95,3 +95,37 @@ výchozí expiraci podle settle a v settle ji přepne (#1367).
 18. 9. 2026 vypořádala odpoledne, ne v SOQ. Settle podle samotného data
 expirace (bez trading class) ji tak ukončí v 9:30 ET. Chování je stejné jako
 před #1331 a mění se jen samostatným rozhodnutím (settle podle trading class, #1366).
+
+## Dodatek 2026-10-07 — settle kvartálního data podle trading class (#1366)
+
+**Stav:** přijato (uživatel, #1366 varianta A). Řeší otevřený nález výše.
+
+1. **SOQ jen standardní kvartální třída:** `compute/settle.settles_at_soq(day,
+   trading_class, symbol)` — 9:30 ET jen pro 3. pátek bře/čvn/zář/pro a třídu
+   rovnou kořeni produktu (`ES`, `NQ`, `MES`…; opce na expirující kontrakt).
+   Týdenní série na totéž datum (`EW3`, `QN3`) má settle 16:00 ET jako každý
+   jiný pátek. `expiry_settle_ts` i `expiry_settle(expiry, trading_class,
+   symbol)` třídu berou; bez třídy nebo symbolu rozhoduje datum jako dřív.
+2. **Třída v runtime:** `EngineRuntime.trading_class` (z kontraktů řetězu)
+   a `EngineRuntime.settle()` — ptá se ho roll (`expiry_expired`), discovery
+   i cache (třída z `ExpiryInfo`), hlídka Greeks, Dyn profil, setupy (čas do
+   expirace, invariant vzniku) a sondy T9.
+3. **Třída v historii:** setup i sonda nesou `context.trading_class`;
+   `born_after_settle`, `counts_in_stats` (souhrn, Knihovna, brzdy, brána,
+   kalibrace, sebekontrola, kouč, gamma útes) i timeout otevřeného setupu po
+   restartu (`StoredSetup.settle()`) čtou settle s ní. Řádky před #1366 třídu
+   nemají a čtou se podle data (SOQ).
+4. **Offline nástroje bez třídy** (`settle.history_expiry_settle`: přepočet
+   setupů, backtest a walk-forward): na kvartální datum se třída dovodí
+   z tickeru — kořenový ticker sbíral po rollu front kontraktu (bod 1) týdenní
+   sérii nového kontraktu (16:00 ET), pinovaný kontrakt expirující v měsíci
+   data (#1191) standardní třídu (SOQ). `recompute_setup_outcomes.py` tak
+   kvartální setupy ověří a dovození uvede v důvodu řádku.
+5. **Frontend** (`instrument/expiry.settlesAtSoq`, `expirySettleUtc(expiry,
+   symbol)`) zná jen datum a ticker — používá totéž pravidlo jako bod 4
+   (odpočet v hlavičce, výchozí expirace a její přepnutí v settle, projekce).
+
+Mechanika setupů v5 se nemění (detektory a úrovně stejné, jen hranice
+vyhodnocení), historické výsledky srovná přepočet se souhlasem uživatele.
+Ověřit na prosincové expiraci 18. 12. 2026: třídy z `reqSecDefOptParams` pro
+ESZ6/ESH7 a NQZ6/NQH7 na 20261218 a čas jejich vypořádání.

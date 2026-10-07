@@ -23,6 +23,7 @@ import {
   expiryKind,
   expirySettleUtc,
   sessionDateFor,
+  settlesAtSoq,
 } from './expiry'
 
 test('expiryKind: 3. pátek = měsíční, v kvartálních měsících kvartální', () => {
@@ -58,17 +59,36 @@ test('sessionDateFor: proběhlá expirace = den expirace, aktuální a budoucí 
 
 test('expiryCountdown: odpočet k letnímu settle 20:00 UTC, po expiraci null', () => {
   const now = new Date(Date.UTC(2026, 6, 17, 14, 18)) // 14:18 UTC v den expirace
-  expect(expiryCountdown('20260717', now)).toBe('≈ za 5 h 42 m')
-  expect(expiryCountdown('20260717', new Date(Date.UTC(2026, 6, 17, 21, 0)))).toBeNull()
-  expect(expiryCountdown('20260720', now)).toBe('≈ za 3 d')
-  expect(expiryCountdown('20260717', new Date(Date.UTC(2026, 6, 17, 19, 30)))).toBe('≈ za 30 m')
+  expect(expiryCountdown('20260717', now, 'ES')).toBe('≈ za 5 h 42 m')
+  expect(expiryCountdown('20260717', new Date(Date.UTC(2026, 6, 17, 21, 0)), 'ES')).toBeNull()
+  expect(expiryCountdown('20260720', now, 'ES')).toBe('≈ za 3 d')
+  expect(expiryCountdown('20260717', new Date(Date.UTC(2026, 6, 17, 19, 30)), 'ES')).toBe(
+    '≈ za 30 m',
+  )
 })
 
 test('expirySettleUtc: 16:00 ET — v zimě 21:00 UTC, ne 20:00 (#511)', () => {
-  expect(expirySettleUtc('20260717')?.toISOString()).toBe('2026-07-17T20:00:00.000Z')
-  expect(expirySettleUtc('20260115')?.toISOString()).toBe('2026-01-15T21:00:00.000Z')
-  expect(expirySettleUtc('nesmysl')).toBeNull()
+  expect(expirySettleUtc('20260717', 'ES')?.toISOString()).toBe('2026-07-17T20:00:00.000Z')
+  expect(expirySettleUtc('20260115', 'ES')?.toISOString()).toBe('2026-01-15T21:00:00.000Z')
+  expect(expirySettleUtc('nesmysl', 'ES')).toBeNull()
   // Zimní odpočet: ve 20:30 UTC ještě půl hodiny do settle (fixní 20:00 by dalo null)
-  expect(expiryCountdown('20260115', new Date(Date.UTC(2026, 0, 15, 20, 30)))).toBe('≈ za 30 m')
-  expect(expiryCountdown('20260115', new Date(Date.UTC(2026, 0, 15, 21, 0)))).toBeNull()
+  expect(expiryCountdown('20260115', new Date(Date.UTC(2026, 0, 15, 20, 30)), 'ES')).toBe(
+    '≈ za 30 m',
+  )
+  expect(expiryCountdown('20260115', new Date(Date.UTC(2026, 0, 15, 21, 0)), 'ES')).toBeNull()
+})
+
+test('settlesAtSoq: SOQ jen pinovaný kontrakt expirující v kvartálním datu (#1366)', () => {
+  // Kořenový ticker: po rollu týdenní série nového kontraktu (EW3) — 16:00 ET
+  expect(settlesAtSoq('20260918', 'ES')).toBe(false)
+  expect(expirySettleUtc('20260918', 'ES')?.toISOString()).toBe('2026-09-18T20:00:00.000Z')
+  expect(expirySettleUtc('20261218', 'NQ')?.toISOString()).toBe('2026-12-18T21:00:00.000Z')
+  // Expirující kontrakt: standardní kvartální třída — SOQ 9:30 ET (léto i zima)
+  expect(settlesAtSoq('20260918', 'ESU6')).toBe(true)
+  expect(expirySettleUtc('20260918', 'ESU6')?.toISOString()).toBe('2026-09-18T13:30:00.000Z')
+  expect(expirySettleUtc('20261218', 'NQZ6')?.toISOString()).toBe('2026-12-18T14:30:00.000Z')
+  // Pinovaný další kontrakt a nekvartální datum: 16:00 ET
+  expect(settlesAtSoq('20260918', 'ESZ6')).toBe(false)
+  expect(settlesAtSoq('20261016', 'ESZ6')).toBe(false)
+  expect(settlesAtSoq('nesmysl', 'ESU6')).toBe(false)
 })

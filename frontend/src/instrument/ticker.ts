@@ -3,7 +3,7 @@ kontrakt (`ESU6` = kód měsíce + poslední číslice roku). Zrcadlo enginu
 `gexlens_engine/ticker.py` — stejná gramatika, aby watchlist nepustil nic,
 co engine nezaloží. */
 
-const MONTH_CODES = 'FGHJKMNQUVXZ'
+export const MONTH_CODES = 'FGHJKMNQUVXZ'
 const CONTRACT_RE = new RegExp(`^([A-Z0-9]{1,4})([${MONTH_CODES}])(\\d)$`)
 const ROOT_RE = /^[A-Z0-9]{1,6}$/
 

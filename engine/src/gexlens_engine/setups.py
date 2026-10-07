@@ -40,11 +40,12 @@ from gexlens_engine.compute.risk import (
     trial_usage,
     week_start,
 )
-from gexlens_engine.compute.settle import expiry_settle, trading_session_date
+from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setup_library import cell_evidence
 from gexlens_engine.compute.setups import (
     PATH_GAP_WAIT,
     SETUP_MECHANICS_VERSION,
+    TRADING_CLASS_KEY,
     Direction,
     MinuteInputs,
     Outcome,
@@ -318,8 +319,8 @@ class SetupEngine:
         return PathState(last_ts=entry_bar.ts, last_close=entry_bar.close)
 
     @staticmethod
-    def _minutes_to_expiry(expiry: str, now: dt.datetime) -> float | None:
-        settle = expiry_settle(expiry)
+    def _minutes_to_expiry(runtime: EngineRuntime, now: dt.datetime) -> float | None:
+        settle = runtime.settle()
         if settle is None:
             return None
         return (settle - now).total_seconds() / 60.0
@@ -349,7 +350,7 @@ class SetupEngine:
         bar_low = min(b.low for b in bars)
         bar_close = bars[-1].close
 
-        minutes_left = self._minutes_to_expiry(runtime.expiry, now)
+        minutes_left = self._minutes_to_expiry(runtime, now)
         # Dominance zdí (ADR-0010, #223) — LevelsRow ji nenese, čte se z plných levels
         full = runtime.last_gex_levels
         # Hranice gamma masy (#600) z Dyn GEX profilu téže minuty — počítá se tady,
@@ -505,7 +506,7 @@ class SetupEngine:
                 item.stored.entry,
                 item.stored.target,
                 item.stored.stop,
-                expiry_settle(item.stored.expiry),
+                item.stored.settle(),
                 path_bars,
                 item.path,
                 now=now,
@@ -968,7 +969,7 @@ class SetupEngine:
         # v settle expirace (`expiry_expired`) dřív, než cyklus téže minuty
         # poběží, takže invariant nezasáhne — zůstává jako pojistka se stejnou
         # hranicí (`expiry_settle`).
-        if expiry_settle(runtime.expiry) is None:
+        if runtime.settle() is None:
             # Nečitelná expirace: predikát nerozhodne a invariant neplatí —
             # nahlas, jednou za expiraci (detekce jede dál, nic se nevymýšlí)
             if self._expiry_logged != runtime.expiry:
@@ -979,7 +980,7 @@ class SetupEngine:
                     self.symbol,
                     runtime.expiry,
                 )
-        elif born_after_settle(runtime.expiry, now):
+        elif born_after_settle(runtime.expiry, now, runtime.trading_class, runtime.symbol):
             if self._expiry_logged != runtime.expiry:
                 self._expiry_logged = runtime.expiry
                 logger.info(
@@ -1070,6 +1071,10 @@ class SetupEngine:
             # Bar vstupu (#1320): odtud začíná cesta ceny po restartu i v offline
             # přepočtu; chybí jen u řádků před #1346, které mohly vzniknout nad spotem
             context["entry_bar_ts"] = entry_bar.ts.isoformat()
+            # Trading class řetězu (#1366): settle kvartálního data — timeout,
+            # invariant vzniku i statistiky čtou z ní, ne jen z data
+            if runtime.trading_class is not None:
+                context[TRADING_CLASS_KEY] = runtime.trading_class
             setup_id = self.repository.create(
                 symbol=self.symbol,
                 expiry=runtime.expiry,
@@ -1101,6 +1106,7 @@ class SetupEngine:
                         reason=candidate.reason,
                         status="active",
                         entry_bar_ts=entry_bar.ts,
+                        trading_class=runtime.trading_class,
                     ),
                     path=self._new_path(entry_bar),
                     counter=counter,

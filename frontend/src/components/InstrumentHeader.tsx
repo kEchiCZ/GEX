@@ -183,7 +183,7 @@ export function InstrumentHeader({
   const extendedExpiries = new Set(status.tasty_extended_expiries?.[symbol] ?? [])
   const selectedIsExtended = selectedExpiry !== null && extendedExpiries.has(selectedExpiry)
   const kind = selectedExpiry ? expiryKind(selectedExpiry) : null
-  const countdown = selectedExpiry ? expiryCountdown(selectedExpiry, now) : null
+  const countdown = selectedExpiry ? expiryCountdown(selectedExpiry, now, symbol) : null
   // Vztah chainu k zobrazené seanci (#352): proběhlá expirace se čte jako
   // replay dne expirace; budoucí chain se obchoduje nad dnešní seancí — bez
   // vysvětlivky mate, že „budoucnost už má svíčky".
@@ -306,7 +306,7 @@ export function InstrumentHeader({
             {magnetGlyph(magnetInfo)}{' '}
             {magnetChipText(
               magnetInfo,
-              selectedExpiry ? expiryCountdown(selectedExpiry, now) : null,
+              selectedExpiry ? expiryCountdown(selectedExpiry, now, symbol) : null,
             )}
           </span>
         )}
@@ -325,7 +325,7 @@ export function InstrumentHeader({
             }
           >
             {`settle ${
-              expirySettleUtc(selectedExpiry)?.toLocaleTimeString([], {
+              expirySettleUtc(selectedExpiry, symbol)?.toLocaleTimeString([], {
                 hour: '2-digit',
                 minute: '2-digit',
               }) ?? '—'

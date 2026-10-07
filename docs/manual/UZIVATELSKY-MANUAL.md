@@ -1586,8 +1586,13 @@ nic nedopočítává.
 **Přechod na další expiraci v settle (v1.28, #1331).** Setup se vztahuje
 k expiraci opčního řetězu a po jejím settle už žít nemůže. Settle je
 16:00 ET (22:00 našeho času; v týdnech, kdy se USA a Evropa liší v přechodu
-na letní čas, o hodinu jinak), u kvartální expirace (3. pátek března, června,
-září a prosince) už ráno v 9:30 ET. **Přesně v tu chvíli engine přepne
+na letní čas, o hodinu jinak). Na kvartální datum (3. pátek března, června,
+září a prosince) sleduje aplikace po rollu týdenní sérii nového kontraktu
+(EW3/QN3), která se vypořádá také v 16:00 ET — kvartální pátek tak zůstává
+živý celou seanci (v1.31, #1366; do té doby engine končil už v 9:30 ET). Ráno
+v 9:30 ET (SOQ) se vypořádá jen standardní kvartální řetěz expirujícího
+kontraktu — ten aplikace sleduje, jen když máš ve watchlistu pinovaný kontrakt
+(`ESZ6` v prosinci). **Přesně v tu chvíli engine přepne
 sběr dat, setupy, sondy i tendenci na další expiraci** — v pátek na pondělní.
 Přechod trvá 1–2 minuty: minuta settle ještě uzavře, co k vypršelé expiraci
 patří (otevřené setupy timeoutem, paper ordery, agregát mapy), a pak se
@@ -2282,7 +2287,7 @@ trh chová jinak než jindy a aplikace to od v1.20 ví:
 |---|---|---|
 | **Roll date** — čtvrtek 8 dní před expirací (CME) | Objem a likvidita přecházejí do dalšího kontraktu (U6 → Z6). Starý kontrakt dobíhá: drží ho hedgeři AM-settled SPX opcí a ti, kdo chtějí cash settlement. | Engine od tohoto dne jede **na novém kontraktu** (bary, CumΔ, spot, řetěz) — cena v grafu sedí s tím, co obchoduješ na MES/MNQ. Chip ⌛ „roll proběhl", ⌛ v ose, alert. |
 | **OPEX týden** (po–čt) | Cena tažená hedgingem dealerů, ne náladou: nad flipem long gamma = lepení ke strikům a stlačená volatilita, pod flipem short gamma = vzduchové kapsy a ostré odrazy. Ve středu ráno expiruje VIX (odejde gamma tlumící VIX); FOMC v tomto týdnu dopadá na trh s plnou opční pozicí. | Chip ⌛ „OPEX týden", karta **Expirační týden** v Briefingu se scénářem A (špatná nálada) / B (dobrá nálada) a tím, co sledovat. **Sentiment ber v OPEX týdnu jako šum.** |
-| **Pátek 9:30 ET (15:30 CEST) — SOQ** | Kvartální futures a kvartální opce se vypořádají z **otevíracích cen všech 500 akcií** (Special Opening Quotation) — velká část „witchingu" proběhne ráno, ne odpoledne. Open bývá rozhozený proti noční ceně futures. | Odpočet v hlavičce míří na 9:30 ET, ne 16:00 ET. Po SOQ engine přepne na další expiraci (už na novém kontraktu). Alert „kvartální expirace proběhla". |
+| **Pátek 9:30 ET (15:30 CEST) — SOQ** | Kvartální futures a kvartální opce se vypořádají z **otevíracích cen všech 500 akcií** (Special Opening Quotation) — velká část „witchingu" proběhne ráno, ne odpoledne. Open bývá rozhozený proti noční ceně futures. | Kvartální futures a standardní kvartální opce končí v SOQ. Aplikace na kořenovém tickeru (`ES`, `NQ`) sleduje týdenní sérii nového kontraktu (EW3/QN3) — odpočet míří na **16:00 ET** a setupy i sondy běží celou seanci (v1.31, #1366). Na 9:30 ET míří jen u pinovaného expirujícího kontraktu (`ESZ6`). Alert „kvartální expirace proběhla". |
 | **Pátek odpoledne / close** | Tichý drift k velkým strikům (pinning); v 16:00 ET expirují akciové opce, SPY, SPXW a probíhá kvartální rebalance S&P 500 — objemově největší den kvartálu. | Forward GEX ukazuje strukturu **po** expiraci (dnešní OI minus to, co odpadne); chip „odpadá X % gammy". |
 | **Pondělí po** | Bez opční podpory: put wall, který držel, zmizel; trh, který do OPEXu trendoval, se zastaví nebo obrátí; týden po zářijové expiraci je sezónně jeden z nejslabších. Nálada se do ceny propisuje až teď. | Chip ⌛ „po OPEXu — bez opční podpory". |
 

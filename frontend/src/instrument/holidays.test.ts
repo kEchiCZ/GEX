@@ -39,8 +39,8 @@ test('Thanksgiving a Vánoce nejsou obchodní den, zkrácená seance je', () => 
 })
 
 test('settle a RTH zkrácené seance končí ve 13:00 ET', () => {
-  expect(expirySettleUtc('20261127')?.toISOString()).toBe('2026-11-27T18:00:00.000Z')
-  expect(expirySettleUtc('20261125')?.toISOString()).toBe('2026-11-25T21:00:00.000Z')
+  expect(expirySettleUtc('20261127', 'ES')?.toISOString()).toBe('2026-11-27T18:00:00.000Z')
+  expect(expirySettleUtc('20261125', 'ES')?.toISOString()).toBe('2026-11-25T21:00:00.000Z')
   expect(outsideUsRth(new Date(Date.UTC(2026, 10, 27, 17, 59)))).toBe(false) // 12:59 ET
   expect(outsideUsRth(new Date(Date.UTC(2026, 10, 27, 18, 0)))).toBe(true) // 13:00 ET
   expect(outsideUsRth(new Date(Date.UTC(2026, 10, 26, 16, 0)))).toBe(true) // Thanksgiving

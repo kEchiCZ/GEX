@@ -6,6 +6,7 @@ den měsíce = EOM, jiný pátek = týdenní, jinak denní 0DTE. Odpočet míř�
 settle 16:00 ET dne expirace (v létě 20:00 UTC, v zimě 21:00 — #511).
 */
 import { isEarlyClose } from './holidays'
+import { MONTH_CODES, parseTicker } from './ticker'
 import { isTradingSessionIso, zonedTimeUtc } from './tz'
 
 export type ExpiryKind = 'denní' | 'týdenní' | 'měsíční' | 'kvartální' | 'EOM'
@@ -61,14 +62,33 @@ export function expiryKind(expiry: string): ExpiryKind | null {
   return 'denní'
 }
 
+/** Vypořádá se řetěz symbolu na datum `expiry` ráno v SOQ? (#1189, #1366)
+
+SOQ 9:30 ET patří jen standardní kvartální třídě — opcím na expirující
+kontrakt. Kořenový ticker (`ES`) sbírá na kvartální datum po rollu front
+kontraktu (ADR-0039 bod 1, 8 dní před expirací) týdenní sérii nového kontraktu
+(EW3, QN3), která se vypořádá v 16:00 ET; SOQ má jen pinovaný kontrakt
+expirující v měsíci data (`ESU6` 18. 9.). Stejné pravidlo jako engine
+`settle.history_expiry_settle` — engine sám rozhoduje podle trading class. */
+export function settlesAtSoq(expiry: string, symbol: string): boolean {
+  const date = parse(expiry)
+  if (!date || expiryKind(expiry) !== 'kvartální') return false
+  const contract = parseTicker(symbol)?.contract
+  if (!contract) return false
+  return (
+    MONTH_CODES.indexOf(contract[0]) === date.getUTCMonth() &&
+    Number(contract[1]) === date.getUTCFullYear() % 10
+  )
+}
+
 /** Settle dne expirace: 16:00 ET — DST-korektně přes IANA zónu (#511),
-shodné s engine `compute/settle.py`. Kvartální expirace (3. pátek bře/čvn/
-zář/pro) se vypořádá ráno v SOQ 9:30 ET (#1189, `expiry_settle_ts`),
-zkrácená seance (den po Thanksgiving, Štědrý den) v 13:00 ET (#1308). */
-export function expirySettleUtc(expiry: string): Date | null {
+shodné s engine `compute/settle.py`. Standardní kvartální třída se vypořádá
+ráno v SOQ 9:30 ET (#1189, `settlesAtSoq`, #1366), zkrácená seance (den po
+Thanksgiving, Štědrý den) v 13:00 ET (#1308). */
+export function expirySettleUtc(expiry: string, symbol: string): Date | null {
   const date = parse(expiry)
   if (!date) return null
-  const quarterly = expiryKind(expiry) === 'kvartální'
+  const quarterly = settlesAtSoq(expiry, symbol)
   const early = isEarlyClose(date.toISOString().slice(0, 10))
   return new Date(
     zonedTimeUtc(
@@ -118,8 +138,8 @@ export function frontContractCode(symbol: string, now: Date): string | null {
 }
 
 /** Lidský odpočet do expirace („≈ za 5 h 42 m"); null = už expirováno/nečitelné. */
-export function expiryCountdown(expiry: string, now: Date): string | null {
-  const settle = expirySettleUtc(expiry)
+export function expiryCountdown(expiry: string, now: Date, symbol: string): string | null {
+  const settle = expirySettleUtc(expiry, symbol)
   if (!settle) return null
   const remainingMs = settle.getTime() - now.getTime()
   if (remainingMs <= 0) return null

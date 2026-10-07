@@ -40,7 +40,7 @@ from sqlalchemy import create_engine
 
 from gexlens_engine.compute.bandregime import band_metrics, band_zone
 from gexlens_engine.compute.gexfield import GexProfile, gamma_edges
-from gexlens_engine.compute.settle import expiry_settle, settle_ts
+from gexlens_engine.compute.settle import history_expiry_settle, settle_ts
 from gexlens_engine.compute.setups import (
     Direction,
     MinuteInputs,
@@ -50,7 +50,6 @@ from gexlens_engine.compute.setups import (
     ProbeOccurrence,
     ProbeParams,
     SetupParams,
-    born_after_settle,
     detect_all,
     detect_damping_ceiling,
     gex_regime,
@@ -115,6 +114,13 @@ def option_flows(symbol: str, expiry: str) -> pd.DataFrame | None:
     ).reset_index(drop=True)
 
 
+def expiry_end(symbol: str, expiry: str) -> dt.datetime | None:
+    """Settle expirace dne z partic (#1331). Partice trading class řetězu nenesou —
+    kvartální datum se dovodí z tickeru jako v přepočtu setupů (#1366,
+    `settle.history_expiry_settle`): kořenový ticker = týdenní série 16:00 ET."""
+    return history_expiry_settle(expiry, symbol)[0]
+
+
 def max_pain_for(repo: OIEodRepository, symbol: str, expiry: str, day: dt.date) -> float | None:
     try:
         records = repo.values_for(symbol, expiry, day)
@@ -166,10 +172,10 @@ def build_minutes(symbol: str, expiry: str, repo: OIEodRepository) -> list[Minut
     day = pd.Timestamp(frame.ts_min.iloc[-1]).date()
     pain = max_pain_for(repo, symbol, expiry, day)
     # Settle vlastní expirace = konec života setupu, táž hranice jako živý
-    # SetupEngine (`expiry_settle`, ADR-0039 bod 2, DST #511; dřív pevně
+    # SetupEngine (`expiry_end`, ADR-0039 bod 2, DST #511, #1366; dřív pevně
     # 20:00 UTC). Minuty po něm se přehrávají dál, ale nehodnotí: otevřený
     # setup uzavře timeout v settle a nový nevznikne — viz `replay`.
-    settle = expiry_settle(expiry)
+    settle = expiry_end(symbol, expiry)
     if settle is None:
         raise ValueError(f"Nečitelná expirace {expiry!r}")
 
@@ -231,11 +237,13 @@ class OpenSetup:
     path: PathState
 
 
-def replay(minutes: list[MinuteInputs], params: SetupParams, expiry: str) -> list[dict]:
+def replay(
+    minutes: list[MinuteInputs], params: SetupParams, expiry: str, symbol: str
+) -> list[dict]:
     """Přehraje den expirace `expiry`; vrací uzavřené i otevřené setupy s výsledkem v R.
 
     Invariant vzniku (#1324) jako živý `SetupEngine._detect_new`: v minutě po
-    settle vlastní expirace (`born_after_settle`) žádný kandidát nevznikne —
+    settle vlastní expirace (`expiry_end`, #1366) žádný kandidát nevznikne —
     živě je to jediný cyklus minuty settle, po kterém pipeline roluje (#1331).
 
     Vyhodnocení týmž `walk_setup_path` jako živý engine (#1345, #1369): bary
@@ -244,7 +252,7 @@ def replay(minutes: list[MinuteInputs], params: SetupParams, expiry: str) -> lis
     settle). Díru v minutách (trh běžel, bar chybí) offline nikdo nedoplní —
     replay ji přejde jako engine po `PATH_GAP_WAIT` a počet děr vrátí v `gaps`.
     """
-    settle = expiry_settle(expiry)
+    settle = expiry_end(symbol, expiry)
     history: list[MinuteInputs] = []
     open_setups: list[OpenSetup] = []
     done: list[dict] = []
@@ -306,7 +314,7 @@ def replay(minutes: list[MinuteInputs], params: SetupParams, expiry: str) -> lis
         open_setups = still
 
         # 2) Nové kandidáty přes produkční detect_all — ne po settle expirace (#1324)
-        if born_after_settle(expiry, now.ts):
+        if settle is not None and now.ts >= settle:  # `born_after_settle` (#1366)
             continue
         open_templates = {item.template for item in open_setups}
         for candidate in detect_all(history, params):
@@ -390,7 +398,7 @@ def build_probe_minutes(symbol: str, expiry: str) -> list[ProbeMinute]:
 
     Seance = (settle předchozího dne, settle expirace): adresář expirace nese
     i profily z dob, kdy byla sekundárním řetězem (#442), a minuty po settle
-    expirace (`expiry_settle`, kvartální SOQ) už pipeline neběží (roll #1331).
+    expirace (`expiry_end`, #1366) už pipeline neběží (roll #1331).
     Minuta bez profilu v seanci zůstává se zónou None (#1345) — jako živý
     sběrač, kterému chybí `last_profile`: přechod se v ní nepočítá, ale její
     bar patří cestě ceny otevřených sond (dřív se vynechala a stop v ní
@@ -401,7 +409,7 @@ def build_probe_minutes(symbol: str, expiry: str) -> list[ProbeMinute]:
     if bars is None or not profiles:
         return []
     expiry_day = dt.datetime.strptime(expiry, "%Y%m%d").date()
-    session_end = expiry_settle(expiry)
+    session_end = expiry_end(symbol, expiry)
     if session_end is None:
         return []
     session_start = settle_ts(expiry_day - dt.timedelta(days=1))
@@ -562,7 +570,7 @@ def probe_report(symbols: list[str], params: ProbeParams) -> dict:
             if len(minutes) < 60:
                 continue
             days += 1
-            day_rows = replay_probes(minutes, params, expiry_settle(expiry))
+            day_rows = replay_probes(minutes, params, expiry_end(symbol, expiry))
             rows.extend(day_rows)
             if day_rows:
                 per_day[expiry] = len(day_rows)
@@ -635,7 +643,7 @@ def main() -> None:
             if len(minutes) < 60:
                 continue
             for name, params in configs.items():
-                rows = replay(minutes, params, expiry)
+                rows = replay(minutes, params, expiry, symbol)
                 per_config[name].extend(rows)
                 for row in rows:
                     per_template[name][row["template"]].append(row)

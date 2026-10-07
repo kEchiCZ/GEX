@@ -51,8 +51,19 @@ def bar(
     )
 
 
-def runtime_with_profile(expiry: str = "20260827") -> EngineRuntime:
-    return cast(EngineRuntime, SimpleNamespace(last_profile=profile(), expiry=expiry))
+def runtime_with_profile(
+    expiry: str = "20260827", trading_class: str | None = None
+) -> EngineRuntime:
+    return cast(
+        EngineRuntime,
+        SimpleNamespace(
+            last_profile=profile(),
+            expiry=expiry,
+            symbol="ES",
+            trading_class=trading_class,
+            settle=lambda: expiry_settle(expiry, trading_class, "ES"),
+        ),
+    )
 
 
 def make_collector(
@@ -361,4 +372,29 @@ async def test_sonda_nad_necitelnou_expiraci_nevznikne() -> None:
     """Bez settle by sonda nikdy nedostala timeout — neotevře se (nahlas)."""
     collector, repository = make_collector()
     await settle_below_then_enter(collector, runtime_with_profile(expiry="neplatná"))
+    assert rows(repository) == []
+
+
+async def test_kvartalni_patek_sonda_tydenni_serie_zije_do_odpoledne() -> None:
+    """#1366: na kvartální datum běží po rollu týdenní série nového kontraktu
+    (EW3, settle 16:00 ET) — sonda v 11:00 ET vznikne, nese trading class
+    a timeout dostane v 16:00 ET. Nad standardní třídou (ES, SOQ 9:30 ET) ne."""
+    late_morning = dt.datetime(2026, 9, 18, 15, 0, tzinfo=dt.UTC)  # 11:00 EDT, po SOQ
+    collector, repository = make_collector(
+        flat_partition(late_morning, dt.datetime(2026, 9, 18, 21, 0, tzinfo=dt.UTC), 139.5)
+    )
+    weekly = runtime_with_profile(expiry="20260918", trading_class="EW3")
+    await settle_below_then_enter(collector, weekly, start=late_morning)
+    opened = rows(repository)
+    assert [row["status"] for row in opened] == ["active"]
+    assert cast(dict[str, object], opened[0]["context"])["trading_class"] == "EW3"
+    evening = dt.datetime(2026, 9, 18, 20, 30, tzinfo=dt.UTC)
+    await collector.on_minute(evening, 139.0, [bar(139.0, at=evening)], weekly)
+    closed = rows(repository)[0]
+    assert closed["status"] == "closed_timeout"
+    assert closed_at(closed) == dt.datetime(2026, 9, 18, 20, 0, tzinfo=dt.UTC)  # 16:00 EDT
+
+    collector, repository = make_collector()
+    standard = runtime_with_profile(expiry="20260918", trading_class="ES")
+    await settle_below_then_enter(collector, standard, start=late_morning)
     assert rows(repository) == []

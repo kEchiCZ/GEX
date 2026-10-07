@@ -38,7 +38,7 @@ from gexlens_engine.compute.levelalerts import (
 from gexlens_engine.compute.levels import GexLevels, compute_ladder, compute_levels
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.oiwalls import OiWalls, compute_oi_walls
-from gexlens_engine.compute.settle import expiry_settle_ts, session_bounds, trading_session_date
+from gexlens_engine.compute.settle import expiry_settle, session_bounds, trading_session_date
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import (
@@ -163,6 +163,17 @@ class EngineRuntime:
     _level_watcher: LevelProximityWatcher | None = field(default=None, init=False)
     # Hlídka objemu BS fallback greeks (#877) — epizody nad prahem do alerts
     _bs_watcher: BsFallbackWatcher | None = field(default=None, init=False)
+
+    @property
+    def trading_class(self) -> str | None:
+        """Trading class řetězu (`EW3`, `ES`…) — rozhoduje settle kvartálního
+        data (#1366); všechny kontrakty pásma nesou tutéž. None = prázdný řetěz."""
+        return self.contracts[0].trading_class if self.contracts else None
+
+    def settle(self) -> dt.datetime | None:
+        """Settle expirace tohoto řetězu (`settle.expiry_settle` s jeho trading
+        class, #1366) — táž hranice pro roll, setupy, sondy i Greeks."""
+        return expiry_settle(self.expiry, self.trading_class, self.symbol)
 
     def bs_fallback_status(self) -> dict[str, object] | None:
         """Podíl BS greeks do /status (#877); None před prvním cyklem."""
@@ -846,9 +857,11 @@ class EngineRuntime:
                 b - a for a, b in zip(strikes_sorted, strikes_sorted[1:], strict=False) if b > a
             )
             # Settle expirace ze sdílené konvence (#511, ADR-0039 bod 2,
-            # #1331) — 16:00 ET (20:00 UTC v létě, 21:00 UTC v zimě),
-            # kvartální SOQ 9:30 ET; táž hranice jako roll pipeline
-            settle = expiry_settle_ts(dt.datetime.strptime(self.expiry, "%Y%m%d").date())
+            # #1331, #1366) — 16:00 ET (20:00 UTC v létě, 21:00 UTC v zimě),
+            # standardní kvartální třída SOQ 9:30 ET; táž hranice jako roll
+            settle = self.settle()
+            if settle is None:
+                raise ValueError(f"nečitelná expirace {self.expiry!r}")
             # Gamma + charm + vanna jedním průchodem (#204) — sdílené d1/φ,
             # tři plochy nestojí trojnásobek. Gamma drží původní kanály/adresáře.
             profiles = greek_profiles(

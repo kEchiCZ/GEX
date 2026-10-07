@@ -30,11 +30,17 @@ Verdikty:
   cesta obsahuje bary z jiného zdroje než IBKR (rekonstrukce z tasty
   `tasty_candle`; živý `ibkr` i historický `ibkr_hist` jsou týž zdroj), cena
   v cestě skočí na jinou hladinu (jiný kontrakt, #1232), bar vstupu je
-  nejednoznačný a výsledek na něm závisí, nečitelná expirace, nebo expirace
-  na kvartální datum, kde settle není jednoznačný (SOQ podle ADR-0039 bod 2,
-  ale týdenní řetěz EW3/QN3 18. 9. se vypořádal odpoledne; #1366);
+  nejednoznačný a výsledek na něm závisí nebo nečitelná expirace;
 - **po settle** — setup vznikl po settle vlastní expirace (`born_after_settle`,
   #1324), přeskočí se.
+
+Settle kvartálního data (#1366, ADR-0039 bod 2) rozhoduje trading class
+řetězu z `context.trading_class`: standardní kvartální třída (kořen produktu,
+`ES`) v SOQ 9:30 ET, týdenní série (`EW3`, `QN3`) v 16:00 ET. Řádky před
+#1366 třídu nemají — dovodí se z tickeru (`settle.history_expiry_settle`):
+kořenový ticker sbíral po rollu front kontraktu (ADR-0039 bod 1, 8 dní před
+expirací) řetěz nového kontraktu = týdenní sérii, pinovaný expirující kontrakt
+(#1191) standardní třídu. Report to u řádku uvede.
 
 Režimy:
 - **výchozí je dry-run**: report jako markdown + CSV do `{data}/reports/`
@@ -73,14 +79,14 @@ import io
 import os
 import sys
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
 from sqlalchemy import create_engine, select
 
 from gexlens_engine.compute.paper import POINT_VALUES
-from gexlens_engine.compute.settle import expiry_settle, is_quarterly_expiry
+from gexlens_engine.compute.settle import history_expiry_settle, soq_ts
 from gexlens_engine.compute.setups import (
     EXCLUDED_ENTRY_OFF_BARS,
     SETUP_MECHANICS_VERSION,
@@ -88,7 +94,7 @@ from gexlens_engine.compute.setups import (
     Outcome,
     PathResult,
     PathState,
-    born_after_settle,
+    context_trading_class,
     last_expected_minute,
     path_start,
     r_result,
@@ -153,6 +159,8 @@ class SetupRow:
     mae: float | None = None
     #: Bar vstupu z kontextu (#1320); None = starší řádek nebo setup nad spotem
     entry_bar_ts: dt.datetime | None = None
+    #: `context.trading_class` řetězu (#1366); None = řádek před #1366
+    trading_class: str | None = None
 
 
 @dataclass(frozen=True)
@@ -263,35 +271,45 @@ def entry_starts(
     )
 
 
+def history_settle(row: SetupRow) -> tuple[dt.datetime | None, str | None]:
+    """Settle expirace setupu a poznámka, když se třída řetězu dovozuje (#1366,
+    `settle.history_expiry_settle`)."""
+    settle, inferred = history_expiry_settle(row.expiry, row.symbol, row.trading_class)
+    if not inferred or settle is None:
+        return settle, None
+    if settle == soq_ts(settle.date()):
+        return settle, "kvartální datum bez třídy: expirující kontrakt = SOQ (#1366)"
+    return settle, (
+        "kvartální datum bez třídy: řetěz nového kontraktu po rollu = týdenní série, "
+        "settle 16:00 ET (#1366)"
+    )
+
+
 def recompute(row: SetupRow, load_bars: BarLoader, now: dt.datetime) -> Recomputed:
     """Přehraje setup týmž `walk_setup_path` jako SetupEngine a porovná s DB.
 
     `now` = okamžik přepočtu: setup, jehož expirace ještě běží, se hodnotí jen
-    po bary, které už existují (timeout ještě nenastal).
+    po bary, které už existují (timeout ještě nenastal). Settle kvartálního
+    data dovozený bez `context.trading_class` (#1366) report u řádku uvede.
     """
+    settle, note = history_settle(row)
+    result = _recompute(row, load_bars, now, settle)
+    if note is None:
+        return result
+    return replace(result, reason=f"{result.reason} · {note}" if result.reason else note)
+
+
+def _recompute(
+    row: SetupRow, load_bars: BarLoader, now: dt.datetime, settle: dt.datetime | None
+) -> Recomputed:
     created = _utc(row.created_ts)
-    if born_after_settle(row.expiry, created):
-        return Recomputed(row, "po settle", "vznik po settle vlastní expirace (#1324)")
-    settle = expiry_settle(row.expiry)
     if settle is None:
         return Recomputed(row, "neověřitelný", f"nečitelná expirace {row.expiry!r}")
+    if created >= settle:
+        # `born_after_settle` s dovozenou třídou řetězu (#1324, #1366)
+        return Recomputed(row, "po settle", "vznik po settle vlastní expirace (#1324)")
     direction = Direction(row.direction)
     minute = created.replace(second=0, microsecond=0)
-    if is_quarterly_expiry(settle.date()):
-        # Výsledek rozhodne #1366, vstup na settle nezávisí: setup nad spotem
-        # se vyřadí ze statistik i na kvartální den (#1346)
-        entry_bars = load_bars(
-            row.symbol, minute - FROZEN_LOOKBACK, minute + max(ENTRY_BAR_OFFSETS) * _MINUTE
-        )
-        _, entry_problem = entry_starts(row, entry_bars, created)
-        if entry_problem:
-            return Recomputed(row, "vstup mimo bary", entry_problem)
-        return Recomputed(
-            row,
-            "neověřitelný",
-            "kvartální datum expirace: settle SOQ (ADR-0039 bod 2) vs. odpolední "
-            "týdenní řetěz (EW3/QN3) — rozhodne #1366",
-        )
     # Od FROZEN_LOOKBACK před vznikem: bar vstupu i diagnostika zamrzlého spotu
     bars = load_bars(row.symbol, minute - FROZEN_LOOKBACK, settle)
 
@@ -621,7 +639,13 @@ def load_rows(
         for row in conn.execute(stmt):
             values = dict(row._mapping)
             context = values.pop("context")
-            rows.append(SetupRow(**values, entry_bar_ts=entry_bar_ts(context)))
+            rows.append(
+                SetupRow(
+                    **values,
+                    entry_bar_ts=entry_bar_ts(context),
+                    trading_class=context_trading_class(context),
+                )
+            )
     return rows
 
 
