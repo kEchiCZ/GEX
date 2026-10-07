@@ -192,20 +192,20 @@ test('fallback na tastytrade je vidět v hlavičce, jinak chip nesvítí (#614)'
   expect(screen.getByTestId('fallback-chip').textContent).toContain('řetěz + cena: tastytrade')
 })
 
-test('demo den nemá měřitelnou osu, takže OHLC badge ani časová značka nesvítí (#470)', () => {
+test('den bez dat nemá měřitelnou osu, takže OHLC badge ani časová značka nesvítí (#470)', () => {
   makeApp()
-  // Demo den (bez /replay dat) nemá ISO osu ani lastMinuteIso — pokrytí se nedá
-  // změřit, tak ho prvek přizná pomlčkou místo aby lhal číslem (#758)
+  // Den bez /replay dat (načítání, #1355; dřív demo) nemá ISO osu ani
+  // lastMinuteIso — pokrytí se nedá změřit, prvek to přizná pomlčkou (#758)
   expect(screen.getByTestId('coverage-ohlc').textContent).toBe('OHLC —')
   expect(screen.queryByTestId('data-stamp')).toBeNull()
-  expect(screen.getByTestId('data-source').textContent).toBe('demo data')
+  expect(screen.getByTestId('data-source').textContent).toBe('bez dat')
 })
 
 test('demo den neprosakuje do hlavičky: bez ceny, změny, gamma režimu a settle watch (#1096)', () => {
   // 9. 9. 2026 na produkci: NQ · 7573.17 — poslední close demo datasetu ukázaný
   // jako skutečná cena, dokud se načítal balík dne. Hlavička smí lhát pomlčkou, ne číslem.
   const { container } = makeApp()
-  expect(screen.getByTestId('data-source').textContent).toBe('demo data')
+  expect(screen.getByTestId('data-source').textContent).toBe('bez dat')
   expect(container.querySelector('.instrument-price .last')?.textContent).toBe('—')
   expect(container.querySelector('.regime-badge')).toBeNull()
   expect(screen.queryByText(/settle .* · (nad|pod) /)).toBeNull()

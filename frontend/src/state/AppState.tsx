@@ -248,6 +248,10 @@ interface AppState {
   /** Doskok na starší seanci, protože pro vybranou expiraci nejsou data (#946).
   Null = ukazuje se to, co uživatel/výchozí volba vybrala. */
   expiryFallback: { requested: string; shown: string } | null
+  /** Načtení seznamu expirací (#1355): `loading` do první odpovědi,
+  `unavailable` při chybě sítě nebo 5xx — prázdný seznam pak neznamená
+  „pro symbol nejsou data“ a graf nesmí ukázat demo. */
+  expiriesState: 'loading' | 'unavailable' | 'ready'
   timeframe: 'intraday' | 'daily'
   setTimeframe: (value: 'intraday' | 'daily') => void
   interval: Interval
@@ -479,6 +483,7 @@ export function AppStateProvider({
     [],
   )
   const [expiries, setExpiries] = useState<string[]>([])
+  const [expiriesState, setExpiriesState] = useState<'loading' | 'unavailable' | 'ready'>('loading')
   const [expiryClasses, setExpiryClasses] = useState<Record<string, string[]>>({})
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
   const [expiryFallback, setExpiryFallback] = useState<{
@@ -739,13 +744,18 @@ export function AppStateProvider({
       timer = setTimeout(() => setExpiryRetry((n) => n + 1), expiryRetry < 12 ? 5_000 : 30_000)
     }
     fetch(`${API_BASE}/instruments/${symbol}/expiries`)
-      .then((response) => (response.ok ? response.json() : { expiries: [] }))
+      .then((response) => {
+        // 5xx = API startuje nebo spadlo (#1355) — ne „symbol nemá data“
+        if (response.status >= 500) throw new Error(`HTTP ${response.status}`)
+        return response.ok ? response.json() : { expiries: [] }
+      })
       .then(
         (payload: {
           expiries: string[]
           detail?: { date: string; trading_classes: string[] }[]
         }) => {
           if (cancelled) return
+          setExpiriesState('ready')
           setExpiries(payload.expiries)
           // Trading classes do mapy (#513); starší API bez `detail` = prázdno
           setExpiryClasses(
@@ -785,6 +795,7 @@ export function AppStateProvider({
       .catch(() => {
         // API neběží — hlavička ukáže placeholder, status bar offline stav
         if (!cancelled) {
+          setExpiriesState('unavailable')
           setExpiries([])
           setExpiryClasses({})
           setSelectedExpiry(null)
@@ -815,6 +826,7 @@ export function AppStateProvider({
         setSelectedExpiry(expiry)
       },
       expiryFallback,
+      expiriesState,
       timeframe,
       setTimeframe,
       interval,
@@ -895,6 +907,7 @@ export function AppStateProvider({
       expiryClasses,
       selectedExpiry,
       expiryFallback,
+      expiriesState,
       timeframe,
       interval,
       toggles,

@@ -1725,7 +1725,8 @@ Parametry lze kombinovat.
 | Stavová lišta `IBKR: offline` | TWS neběží / není přihlášené / vypnuté API / špatný port. Zkontroluj TWS/Gateway, pak Settings → Stav enginu → **Přepojit IBKR** (kap. 13). |
 | Alert „delayed market data“ | Chybí live subskripce CME v Client Portal (viz kap. 2). |
 | `Stale` místo `● Live` | Data se přestala hýbat — obvykle výpadek TWS↔IB (v TWS bývá hláška o connectivity). Vyřeší se samo, případně re-login TWS. |
-| Lišta grafu ukazuje „demo data“ | Aplikace se nedostala k API / žádná data pro dnešek. Zkontroluj, že služby běží (`docker compose ps`) a engine je online. |
+| Lišta grafu ukazuje „demo data“ | API odpovědělo, že pro symbol a den data nejsou (čerstvě přidaný ticker, expirace mimo retenci). Zkontroluj, že engine je online a sbírá. |
+| Lišta grafu ukazuje „bez dat“, nad grafem „API je nedostupné nebo se spouští“ | API neběží nebo se po restartu ještě spouští — graf je prázdný a aplikace to zkouší znovu každých 5 s; demo data se v tu chvíli neukazují, aby nevypadala jako skutečná (v1.31, #1355). Trvá-li to přes minutu, zkontroluj `docker compose ps`. |
 | **Alert „OI nedorazilo“** | IBKR dodává Open Interest pro ES opce jen jednou denně (ráno, po publikaci CME). Do té doby heatmapa jede z volume a GEX úrovně mohou být ploché. Engine to zkouší každých 30 minut sám — není třeba nic dělat. |
 | Prázdná heatmapa | Mimo obchodní hodiny nevznikají nové snapshoty — použij playback pro přehrání posledního dne. O víkendu se od v1.13 poslední seance s daty otevře sama (kap. 4). |
 | **Banner „Pro … nejsou uložená data — zobrazena poslední seance …"** | Pro vybranou expiraci není uložený žádný den, takže graf ukazuje **jiný den**, než odpovídá kalendáři (#946). O víkendu a svátku je to v pořádku; **ve všední den to znamená, že sběr pro dnešek neběžel** — zkontroluj TWS/Gateway a stav enginu. Ruční volba expirace banner zavře. |
