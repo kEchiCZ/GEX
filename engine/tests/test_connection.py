@@ -521,8 +521,8 @@ async def test_dlouhy_vypadek_omezeny_pocet_zprav_a_pravdivy_text() -> None:
     for callback in manager.stall:
         callback((60 + 4 * 60) * 60.0)
     # Návrat spojení
-    for callback in manager.status:
-        callback(StatusEvent(state=ConnectionState.CONNECTED, detail="", port=4001, ts=0.0))
+    for on_status in manager.status:
+        on_status(StatusEvent(state=ConnectionState.CONNECTED, detail="", port=4001, ts=0.0))
     await asyncio.sleep(0)
     messages = [str(data["message"]) for _, data in publisher.messages]
     assert "sběr dat stojí" in messages[3] and "5.0 h" in messages[3]
