@@ -41,3 +41,5 @@ scripts/lines_probe_run.log
 
 # Osobní/strojové instrukce pro AI nástroje (mimo repo)
 CLAUDE.local.md
+.claude/settings.local.json
+.mcp.json

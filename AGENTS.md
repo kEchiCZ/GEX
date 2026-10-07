@@ -112,6 +112,11 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
 - SPEC/ADR něco nepokrývá → **ADR** v `docs/adr/` (číslo navazuje) + PR s labelem `needs-decision`.
   Nerozhoduj mlčky.
 - Každý bod k rozhodnutí předkládej jako **varianty s výhodami/nevýhodami a doporučením**.
+  Doporučení se řídí: **rychlost** (latence UI, „kliknu a je hotovo") · **výkon** (notebook 16 GB,
+  WSL 6 GB, 100 lines) · **relevance dat pro obchodní rozhodnutí** (point-in-time, stáří viditelně,
+  mezera místo zmrzlých čísel, měřené > odhadnuté).
+- Nejasné zadání → zeptej se, nehádej. Rozpor stávající funkce × funkce převzaté odjinud (referenční
+  aplikace, článek, screenshot) → zeptej se; chování, na které je vlastník zvyklý, nepřepisuj mlčky.
 - Odložená práce = **issue s `prio:P0–P3`** a `epic:*` labelem, ne poznámka v kódu nebo dokumentu.
 
 ## Jazyk
@@ -142,6 +147,8 @@ frontend (nginx :8080, React SPA) — heatmapa, profil, panely, playback, briefi
 ## Git & workflow
 - Jedno issue = jedna větev `feat/{N}-slug` (nebo `fix/`), PR s `Closes #N`; Conventional commits
   česky (`feat(engine): …`, `fix(api): …`, `docs(adr): …`).
+- **Velké funkce a epiky** (víc PR, nové rozhodnutí, syrové zadání): postup
+  `.claude/skills/epika/SKILL.md`; malé opravy jdou běžným tokem.
 - `main` je chráněný: jen PR, jen **squash merge** po zeleném CI aktuálního SHA →
   `scripts/merge-when-green.sh <PR>` (po push počkat ~60 s, `gh pr checks` musí checky vidět).
   `gh pr checks --watch` samotné nestačí (vrací 0 i při failu).
