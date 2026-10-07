@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.30 · říjen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.31 · říjen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -1353,7 +1353,7 @@ Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a je
 | Alert | Kdy | Telegram |
 |---|---|---|
 | **Cena u úrovně** | Cena se přiblíží k flipu / call zdi / put zdi na ≤ 1 krok striků (ES ±5 b). Anti-spam: úroveň po vystřelení mlčí 15 min **a** znovu hlásí až poté, co cena od úrovně odešla (2× práh) — konsolidace u zdi tak pípne jednou, ne každou minutu | Cena u GEX úrovně (vyp.) |
-| **Výpadek spojení** | TWS/Gateway nedostupné — hlásí se **při přechodu** do odpojeného stavu (od v1.13 se skutečně vyhodnocuje, #949; dřív byl alert mrtvý kód). Trvá-li výpadek přes 5 min, přijde navíc **„IBKR spojení chybí už X min — sběr dat stojí"** a opakuje se, dokud se spojení nevrátí (#770); stejná doba je v Settings → Stav enginu jako „bez spojení X min" | Výpadek spojení s IBKR (zap.) |
+| **Výpadek spojení** | TWS/Gateway nedostupné — hlásí se **při přechodu** do odpojeného stavu (od v1.13 se skutečně vyhodnocuje, #949; dřív byl alert mrtvý kód). Trvá-li výpadek přes 5 min, přijde navíc **„IBKR spojení chybí už X min — sběr dat stojí"**, nebo **„IBKR nedostupné už X min — data jedou ze zálohy tastytrade"**, když data sbírá záloha; připomene se po 15 min, po 1 h a pak jednou za 4 h, po obnovení přijde **„IBKR spojení je zpět"** (v1.31, #1317; dřív à 5 min, #770); stejná doba je v Settings → Stav enginu jako „bez spojení X min" | Výpadek spojení s IBKR (zap.) |
 | **Disk limit** | Obsazení dat překročilo limit ze Settings → Engine (hranově, jednou za překročení, #949). Nezaměňovat s alertem **disk_space** (volné místo disku pod 15 / 5 GB + výpis největších tabulek) | Dochází místo na disku (zap.) |
 | **OI nedorazilo** | IBKR nedodalo Open Interest — GEX vrstvy jedou dočasně z volume (viz Řešení potíží) | Chybí OI (zap.) |
 | **Instrument nejde spustit** | Ticker z watchlistu není futures s opčním řetězem (např. akcie) — engine to zkusí znovu za 30 minut | Instrument nejde spustit (zap.) |

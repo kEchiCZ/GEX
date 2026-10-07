@@ -167,7 +167,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_CONNECT_TIMEOUT_S` | 10 | |
 | `GEXLENS_RECONNECT_BACKOFF_BASE_S` / `_MAX_S` | 2 / 60 | Exponenciální reconnect |
 | `GEXLENS_HEARTBEAT_INTERVAL_S` / `_TIMEOUT_S` | 30 / 15 | Heartbeat spojení; agresivnější hodnoty vedly k falešným reconnectům během sweep dávek |
-| `GEXLENS_RECONNECT_STALL_ALERT_S` | 300 | Watchdog reconnectu (#770): po tolika sekundách bez spojení alert `connection_stall` do zvonečku, opakovaně dokud spojení chybí — jen při otevřeném trhu, jinak log (#1307); `/status.connection_offline_for_s` nese délku výpadku (klíč chybí, když spojení drží) |
+| `GEXLENS_RECONNECT_STALL_ALERT_S` | 300 | Watchdog reconnectu (#770): po tolika sekundách bez spojení alert `connection_stall` do zvonečku, pak eskalací (#1317, `stall_alert_stage`: 1×, 3× a 12× prahu, dál à 48× — při 300 s tedy 5 min, 15 min, 1 h, à 4 h), s textem podle zálohy tastytrade (`spot_source = tasty` aspoň u jednoho instrumentu → „data jedou ze zálohy“, jinak „sběr dat stojí“) a zprávou „IBKR spojení je zpět“ po obnovení — jen při otevřeném trhu, jinak log (#1307); `/status.connection_offline_for_s` nese délku výpadku (klíč chybí, když spojení drží) |
 | `GEXLENS_SYMBOLS` | ES | Základní sada futures podkladů (čárkami); watchlist z DB se přidává za běhu (ADR-0003) |
 | `GEXLENS_MAX_INSTRUMENTS` | 3 | Strop souběžných instrumentů (rozpočet market data lines) |
 | `GEXLENS_FRONT_ROLL_DAYS` | 8 | Roll front kontraktu (#1189, ADR-0039): kontrakt je front, dokud má do expirace VÍC než N dní (CME roll date = 8 d před expirací). Platí pro IBKR pipeline, tasty streamer i IV rank. 0 = původní chování (nejbližší nepropadlý kontrakt). Discovery cache front kontrakt po rollu zahodí. |
