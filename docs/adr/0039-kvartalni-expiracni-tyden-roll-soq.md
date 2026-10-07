@@ -88,7 +88,7 @@ Hranici settle navíc počítaly tři funkce (`setups.setup_settle_ts`,
 
 Důsledky: mezera ve sběru 1–2 min v settle místo 3–4 h nad mrtvým řetězem;
 nová pipeline začíná s prázdnou historií detektoru setupů; frontend vybírá
-výchozí expiraci dál podle dne seance (přepne s otevřením Globexu, #1367).
+výchozí expiraci podle settle a v settle ji přepne (#1367).
 
 **Otevřený nález k bodu 2:** po rollu front kontraktu (bod 1) je aktivní
 řetěz na kvartální datum týdenní série nového kontraktu (EW3/QN3), která se

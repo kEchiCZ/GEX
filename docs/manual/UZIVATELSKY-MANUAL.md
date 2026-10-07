@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.29 · říjen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.30 · říjen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -1591,10 +1591,9 @@ září a prosince) už ráno v 9:30 ET. **Přesně v tu chvíli engine přepne
 sběr dat, setupy, sondy i tendenci na další expiraci** — v pátek na pondělní.
 Přechod trvá 1–2 minuty: minuta settle ještě uzavře, co k vypršelé expiraci
 patří (otevřené setupy timeoutem, paper ordery, agregát mapy), a pak se
-řetěz načte znovu. Graf zatím drží expiraci podle dne seance: na novou
-expiraci přepne sám s otevřením Globexu (17:00 CT, tj. 0:00 našeho času),
-do té doby ji vyber v selektoru expirací v hlavičce (přepnutí v settle
-řeší #1367).
+řetěz načte znovu. Graf přepne v téže chvíli sám
+(v1.30, #1367), pokud expiraci vybrala aplikace; ručně zvolenou expiraci ani
+zobrazenou poslední seanci s daty (banner o víkendu) nemění.
 
 Nové setupy pak potřebují pár minut historie nad novým řetězem, než je
 detektory najdou — úrovně staré a nové expirace se nemíchají. Do v1.28 engine
