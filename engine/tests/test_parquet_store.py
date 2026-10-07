@@ -280,6 +280,25 @@ def test_measured_bar_closes_vynechava_doplnene(tmp_path: Path) -> None:
     assert writer.measured_bar_closes("NQ", dt.date(2026, 9, 16)) == {}
 
 
+def test_doplneni_jen_existujicich_minut_nespadne_a_partici_nezmeni(tmp_path: Path) -> None:
+    """#1343: všechny doplňované minuty už partice nese jako změřené — `keep_existing`
+    je vyřadí a prázdný `value_set` typu null shodil rekonstrukci (ArrowTypeError)."""
+    from gexlens_engine.ibkr.underlying import Bar
+
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    day = dt.date(2026, 10, 1)
+    t0 = dt.datetime(2026, 10, 1, 5, 30, tzinfo=dt.UTC)
+    path = writer.write_bars("NQ", day, [_bar_row(t0, 25000.0)])
+    before = path.read_bytes()
+    candle = Bar(ts=t0, open=1, high=1, low=1, close=24990.0, volume=1, source="tasty_candle")
+    assert writer.write_bars("NQ", day, [candle]) == path
+    assert path.read_bytes() == before
+    assert writer.measured_bar_closes("NQ", day) == {t0: 25000.0}
+    # Další živý bar se zapíše normálně (buffer zůstal konzistentní)
+    writer.write_bars("NQ", day, [_bar_row(t0 + dt.timedelta(minutes=1), 25001.0)])
+    assert len(writer.measured_bar_closes("NQ", day)) == 2
+
+
 def _bar_row(ts: dt.datetime, close: float) -> Bar:
     return Bar(ts=ts, open=close, high=close, low=close, close=close, volume=1.0, source=None)
 
