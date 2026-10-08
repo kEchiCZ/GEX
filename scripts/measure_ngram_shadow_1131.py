@@ -28,7 +28,7 @@ false, ne `scheduled`):
 
 Varianty vzorku:
 - `job` — definice jobu beze změny (včetně deferred reakcí);
-- `opravený` (primární) — bez deferred reakcí (zprávy při zavřeném trhu sdílí
+- `opravený` (vzorek podle bodu 3 #1131) — bez deferred reakcí (zprávy při zavřeném trhu sdílí
   výnos uzavírky, víkendový gap; 1 měření, ne stovky) a bez seancí s výpadkem
   (živých řádků ES < `OUTAGE_SHARE` × medián, #1131 bod 3);
 - `opravený od 12. 9.` — jen data po předregistraci (nezávislá kontrola);
@@ -38,7 +38,8 @@ Interval rozdílu lift − baseline: bootstrap po obchodních seancích
 (`settle.trading_session_date`, deferred reakce v seanci prvního baru po
 uzavírce), `N_BOOT` replik, pevné semínko.
 
-Diagnostika (doplněná po prvním běhu, kritérium nemění): sdružený lift skóre,
+Diagnostika (doplněná po prvním běhu; předregistrované kritérium nemění, doporučení
+verdiktu ale stojí na ní a na nulovém modelu zdroj × hodina): sdružený lift skóre,
 které se mění v čase (walk-forward průměry, skladba kategorií dne), míchá
 pořadí zpráv uvnitř dne s rozdíly mezi dny (volatilní dny s jinou skladbou
 zpráv). Proto lift uvnitř seance (vážený průměr přes seance s ≥ `MIN_STRATUM`
@@ -176,16 +177,14 @@ ORDER BY e.ts_event
 """
 
 HISTORY_SQL = """
-SELECT computed_at, symbol, n, lift, baseline_lift, baseline_source, model_n_train
+SELECT computed_at, symbol, n, lift, baseline_lift, baseline_source, mean_bp, model_n_train
 FROM news_ngram_shadow_history
-WHERE window_min = 5 AND subset = 'live' AND computed_at < :until_history
+WHERE window_min = 5 AND subset = 'live'
 ORDER BY computed_at, symbol
 """
 
 
-def load(
-    url: str | URL, until: dt.datetime, until_history: dt.datetime
-) -> tuple[list[EvalRow], list[TrainRow], list[Any]]:
+def load(url: str | URL, until: dt.datetime) -> tuple[list[EvalRow], list[TrainRow], list[Any]]:
     engine = create_engine(url, connect_args={"options": "-c default_transaction_read_only=on"})
     with engine.connect() as conn:
         conn.execute(text("SET TRANSACTION READ ONLY"))
@@ -210,7 +209,8 @@ def load(
             TrainRow(row.ts_event, row.category, row.source, float(row.magnitude))
             for row in conn.execute(text(TRAIN_SQL), {"until": until})
         ]
-        history = list(conn.execute(text(HISTORY_SQL), {"until_history": until_history}))
+        # Historie jobu celá (stav tabulky v okamžiku běhu), ne jen do `until`
+        history = list(conn.execute(text(HISTORY_SQL)))
         conn.rollback()
     engine.dispose()
     return evals, train, history
@@ -462,20 +462,22 @@ BASELINES = (
 
 
 def history_table(history: Sequence[Any]) -> list[str]:
-    """Poslední běh jobu za UTC den: n, lift, baseline (ES, NQ)."""
-    last: dict[dt.date, dict[str, Any]] = {}
+    """Každý běh jobu: zdroj baseline, n, Ø |ret|, lift a baseline (ES, NQ), velikost tréninku."""
+    runs: dict[dt.datetime, dict[str, Any]] = {}
     for row in history:
-        last.setdefault(row.computed_at.astimezone(dt.UTC).date(), {})[row.symbol] = row
+        runs.setdefault(row.computed_at, {})[row.symbol] = row
     lines = [
-        "| den (UTC) | ES n | ES lift | ES baseline | NQ lift | NQ baseline | trénink |",
-        "|---|---|---|---|---|---|---|",
+        "| běh (UTC) | baseline z | ES n | ES Ø \\|ret\\| bp | ES lift | ES baseline | NQ lift"
+        " | NQ baseline | trénink |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
-    for day in sorted(last):
-        es, nq = last[day].get("ES"), last[day].get("NQ")
+    for computed_at in sorted(runs):
+        es, nq = runs[computed_at].get("ES"), runs[computed_at].get("NQ")
         if es is None or nq is None:
             continue
         lines.append(
-            f"| {_day(day)} | {es.n} | {_f(es.lift)} | {_f(es.baseline_lift)} | "
+            f"| {computed_at.astimezone(dt.UTC):%d. %m. %H:%M} | {es.baseline_source} | {es.n} | "
+            f"{_f(es.mean_bp, 2)} | {_f(es.lift)} | {_f(es.baseline_lift)} | "
             f"{_f(nq.lift)} | {_f(nq.baseline_lift)} | {es.model_n_train} |"
         )
     return lines
@@ -506,6 +508,17 @@ def report(
     job_scores = job_category_scores(train, live)
     category_wf, cell_wf = walk_forward_scores(train, live)
     sessions_all = np.array([session_key(row) for row in live])
+    es_rows = [r for r in live if r.symbol == "ES"]
+    deferred_es = [r for r in es_rows if r.deferred]
+    deferred_mags = [abs(r.ret_bp) for r in deferred_es]
+    other_mags = [abs(r.ret_bp) for r in es_rows if not r.deferred]
+    by_session: dict[dt.date, list[float]] = defaultdict(list)
+    for r in deferred_es:
+        by_session[session_key(r)].append(abs(r.ret_bp))
+    deferred_by_session = {day: float(np.mean(v)) for day, v in by_session.items()}
+    source_counts: dict[str, int] = defaultdict(int)
+    for r in es_rows:
+        source_counts[r.source] += 1
     out: list[str] = []
 
     out += [
@@ -515,7 +528,15 @@ def report(
         f" živých: {len(live)}"
         f" (ES {sum(r.symbol == 'ES' for r in live)}, NQ {sum(r.symbol == 'NQ' for r in live)}).",
         "- Deferred (trh zavřený, výnos uzavírky): ES"
-        f" {sum(r.deferred for r in live if r.symbol == 'ES')}.",
+        f" {len(deferred_es)}, Ø |ret| {_f(float(np.mean(deferred_mags)), 2)} bp"
+        f" (nejvyšší seance {_f(max(deferred_by_session.values()), 2)} bp);"
+        f" ostatní živé ES Ø |ret| {_f(float(np.mean(other_mags)), 2)} bp.",
+        "- Zdroje živých řádků ES: "
+        + ", ".join(
+            f"{source} {_f(100 * n / len(es_rows), 1)} %"
+            for source, n in sorted(source_counts.items(), key=lambda kv: -kv[1])
+        )
+        + ".",
         f"- Seancí s živými řádky ES: {len(counts)}, medián {_f(median, 0)} řádků;"
         f" výpadek (< {_f(OUTAGE_SHARE * 100, 0)} % mediánu): "
         + (", ".join(f"{_day(d)} ({counts[d]})" for d in sorted(outages)) or "žádný")
@@ -528,8 +549,9 @@ def report(
     out += [
         "## Remízy: baseline jobu závisí na pořadí řádků",
         "",
-        "Lift baseline tak, jak ho počítá job (pořadí řádků bez ORDER BY), přes "
-        f"{N_TIE_DRAWS} náhodných pořadí, proti očekávané hodnotě (opravený výpočet):",
+        f"Lift baseline s remízou rozhodnutou náhodným pořadím řádků ({N_TIE_DRAWS} pořadí) proti"
+        " očekávané hodnotě (opravený výpočet). Job remízu rozhoduje pořadím, v jakém řádky vrátí"
+        " PG (dotaz bez ORDER BY) — jeho čísla jsou v tabulce Historie jobu.",
         "",
         "| symbol | n | lift modelu | baseline: 5 % | medián | 95 % | očekávaná |",
         "|---|---|---|---|---|---|---|",
@@ -734,7 +756,10 @@ def report(
             )
     out.append("")
 
-    out += ["## Historie jobu (`news_ngram_shadow_history`, subset live, poslední běh dne)", ""]
+    out += [
+        "## Historie jobu (`news_ngram_shadow_history`, subset live, stav při běhu skriptu)",
+        "",
+    ]
     out += history_table(history)
     out.append("")
     return "\n".join(out)
@@ -753,7 +778,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.until.tzinfo is None:
         raise SystemExit("--until musí mít časovou zónu (např. +00:00)")
-    evals, train, history = load(_url(args.db), args.until, args.until)
+    evals, train, history = load(_url(args.db), args.until)
     title = (
         f"# Ngram stín — měření (#1131)\n\n> data do {args.until:%d. %m. %Y %H:%M} UTC · "
         f"semínko {SEED} · `scripts/measure_ngram_shadow_1131.py`\n\n"
