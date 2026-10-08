@@ -350,3 +350,106 @@ def test_live_coverage_is_summed_from_flow_partition(tmp_path: Path) -> None:
     )
     _, none_coverage = load_live_series(derived, "NQ", session)
     assert none_coverage is None
+
+
+def test_available_sessions_skip_weekend_partitions(tmp_path: Path) -> None:
+    """Engine píše ploché partice i o víkendu — do srovnání nepatří (obchodní den, #1018).
+
+    Pátek a pondělí zůstávají, sobota a neděle (nedělní otevření patří pondělku) ne."""
+    dx_dir = tmp_path / "ES" / "cumdelta_dx"
+    dx_dir.mkdir(parents=True)
+    friday, saturday, sunday, monday = (dt.date(2026, 9, d) for d in (25, 26, 27, 28))
+    for day in (friday, saturday, sunday, monday):
+        (dx_dir / f"{day.isoformat()}.parquet").touch()
+    assert available_sessions(tmp_path, "ES") == [friday, monday]
+
+
+def test_minute_returns_skip_gaps() -> None:
+    from gexlens_engine.storage.cumdelta_compare import minute_returns
+
+    t0 = dt.datetime(2026, 9, 10, 14, 0, tzinfo=dt.UTC)
+    closes = {
+        t0: 100.0,
+        t0 + dt.timedelta(minutes=1): 101.0,
+        t0 + dt.timedelta(minutes=3): 99.0,  # díra 2 min — není přírůstek
+        t0 + dt.timedelta(minutes=4): 99.5,
+    }
+    assert minute_returns(closes) == {
+        t0 + dt.timedelta(minutes=1): 1.0,
+        t0 + dt.timedelta(minutes=4): 0.5,
+    }
+
+
+def test_window_sums_align_to_hour() -> None:
+    import pytest
+
+    from gexlens_engine.storage.cumdelta_compare import window_sums
+
+    t0 = dt.datetime(2026, 9, 10, 14, 3, tzinfo=dt.UTC)
+    values = {t0 + dt.timedelta(minutes=i): 1.0 for i in range(4)}  # 14:03–14:06
+    assert window_sums(values, 5) == {
+        dt.datetime(2026, 9, 10, 14, 0, tzinfo=dt.UTC): 2.0,
+        dt.datetime(2026, 9, 10, 14, 5, tzinfo=dt.UTC): 2.0,
+    }
+    assert window_sums(values, 1) == values
+    with pytest.raises(ValueError, match="nedělí hodinu"):
+        window_sums(values, 7)
+
+
+def test_price_alignment_flags_inverted_series() -> None:
+    """Řada se stranou ve směru ceny má r = +1, obrácená −1; pod 30 okny None."""
+    from gexlens_engine.storage.cumdelta_compare import (
+        MIN_ALIGNMENT_POINTS,
+        price_alignment,
+    )
+
+    ts = _minutes(60)
+    returns = dict(zip(ts, _flows(60), strict=True))
+    dx = {t: 3.0 * r for t, r in returns.items()}
+    live = {t: -r for t, r in returns.items()}
+    a = price_alignment(dx, live, returns, returns, 1)
+    assert a.window == 1
+    assert a.dx_vs_price == 1.0
+    assert a.live_vs_price == -1.0
+    assert a.cvd_vs_price == 1.0
+    assert a.dx_vs_cvd == 1.0
+    assert a.live_vs_cvd == -1.0
+    # 60 minut = 4 okna po 15 min < MIN_ALIGNMENT_POINTS → bez čísla
+    assert MIN_ALIGNMENT_POINTS > 60 // 15
+    assert price_alignment(dx, live, returns, returns, 15).dx_vs_price is None
+
+
+def test_align_session_reads_bars_and_futures_cvd(tmp_path: Path) -> None:
+    """Bary (close → přírůstek ceny) a `futures_cvd_delta` z partic seance (D−1 + D)."""
+    from gexlens_engine.storage.cumdelta_compare import ALIGNMENT_WINDOWS, align_session
+    from gexlens_engine.storage.parquet_store import BARS_SCHEMA
+
+    count = 200
+    ts = _minutes(count)
+    flows = _flows(count)
+    write_dx(tmp_path, "ES", ts, flows)
+    write_live(tmp_path, "ES", ts, [-f for f in flows])
+    closes = [5000.0 + c for c in _cumulative(flows)]  # přírůstek ceny = tok
+    by_day: dict[dt.date, list[dict[str, object]]] = {}
+    for t, close in zip(ts, closes, strict=True):
+        by_day.setdefault(t.date(), []).append(
+            {"ts_min": t, "open": close, "high": close, "low": close, "close": close}
+        )
+    for day, rows in by_day.items():
+        path = tmp_path / "ES" / "bars" / f"{day.isoformat()}.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(pa.Table.from_pylist(rows, schema=BARS_SCHEMA), path)
+    # CVD futures do živých partic (přepíše write_live sloupec futures_cvd_delta)
+    for path in (tmp_path / "ES" / "flow").glob("*.parquet"):
+        table = pq.read_table(path, schema=FLOW_SCHEMA).to_pylist()
+        for row in table:
+            row["futures_cvd_delta"] = 2.0 * -float(row["flow_delta"])
+        pq.write_table(pa.Table.from_pylist(table, schema=FLOW_SCHEMA), path)
+
+    alignments = align_session(tmp_path, "ES", SESSION)
+    assert [a.window for a in alignments] == list(ALIGNMENT_WINDOWS)
+    one = alignments[0]
+    # první minuta nemá předchozí close → korelace přes 199 přírůstků
+    assert one.dx_vs_price is not None and one.dx_vs_price > 0.999
+    assert one.live_vs_price is not None and one.live_vs_price < -0.999
+    assert one.cvd_vs_price is not None and one.cvd_vs_price > 0.999
