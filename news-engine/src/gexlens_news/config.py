@@ -16,11 +16,15 @@ FED_RSS_URLS = (
     "https://www.federalreserve.gov/feeds/speeches.xml",
 )
 
-# Tier B redundance k Finnhubu (SPEC kap. 1) — širší pokrytí, dedup je řeší
+# Tier B redundance k Finnhubu (SPEC kap. 1) — širší pokrytí, dedup je řeší.
+# Yahoo zrušil souhrnný `rssindex` (HTTP 404 od 23. 9. 2026, #1451); místo něj
+# headline feedy indexů pod ES a NQ (rozhodnutí uživatele 8. 10. 2026). ES=F
+# a NQ=F vrací jen staré položky, ^DJI se překrývá s ^GSPC.
 NEWS_RSS_URLS = (
     "https://www.cnbc.com/id/100003114/device/rss/rss.html",
     "https://feeds.content.dowjones.io/public/rss/mw_topstories",
-    "https://finance.yahoo.com/news/rssindex",
+    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US",
+    "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EIXIC&region=US&lang=en-US",
 )
 
 # Reddit nativní RSS (#578) — burza a sentiment; „hot" řadí komunita, ne my.

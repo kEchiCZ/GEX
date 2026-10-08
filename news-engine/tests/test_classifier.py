@@ -33,6 +33,7 @@ from gexlens_news.classifier import (
     headline_importance,
     scheduled_importance,
 )
+from gexlens_news.config import NEWS_RSS_URLS
 from gexlens_news.conventions import (
     ConventionOutcome,
     check_conventions,
@@ -351,6 +352,9 @@ def test_feed_ze_zdroje_a_surového_payloadu() -> None:
     # Syndikované WSJ/Barron's přes Yahoo rssindex: rozhoduje URL feedu, ne odkaz
     yahoo = {"feed": "https://finance.yahoo.com/news/rssindex", "link": "https://www.wsj.com/x"}
     assert feed_of("rss_news", yahoo) == FEED_YAHOO
+    # Headline feedy indexů místo zrušeného rssindex (#1451) — stejný strop agregátoru
+    for url in (u for u in NEWS_RSS_URLS if "yahoo.com" in u):
+        assert feed_of("rss_news", {"feed": url, "link": "https://www.fool.com/x"}) == FEED_YAHOO
     marketwatch = {"feed": "https://feeds.content.dowjones.io/public/rss/mw_topstories"}
     assert feed_of("rss_news", marketwatch) == FEED_MARKETWATCH
     assert feed_of("rss_news", {"feed": "https://www.cnbc.com/id/1/device/rss"}) == FEED_CNBC
