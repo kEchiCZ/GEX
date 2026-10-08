@@ -7,161 +7,163 @@
 
 ## Verdikt
 
-- **Nepotvrzeno.** GEX zdi (tytéž čte wall_bounce), 343 doteků, 296 rozhodnutých s měřeným
-  podílem: zdi s outright ≥ 40 % drží v 87,9 % (131/149), zdi pod 40 % v 83,7 % (123/147).
-  Rozdíl +4,2 p. b., Newcombe 95 % [−3,8; +12,3], bootstrap po seancích [−4,3; +11,9] —
-  dolní mez pod nulou, síta neprošla. Dělení mediánem (40,1 %) dává totéž.
-- **Zavádějící faktor:** skupina s vyšším outright má i vyšší dominanci zdi (medián 0,319 × 0,271).
-  Těch +4 p. b. tak může nést dominance (ta už dnes filtruje wall_bounce, `min_wall_dominance`).
-- **OI zdi** (`oiwalls`) jsou od ceny většinou daleko: 25 doteků za 13 seancí, 19 s měřeným
-  podílem — na verdikt nestačí.
-- Rozpad (jen popisně, mnoho srovnání): v RTH 86,7 % × 75,3 %, call zdi 93,5 % × 84,4 %, put zdi
-  78,9 % × 82,5 %, noc 95,2 % × 93,9 %. Nic z toho není samostatný nález.
+- **Nepotvrzeno.** GEX zdi (tytéž čte wall_bounce), 223 rozhodnutých doteků s měřeným podílem:
+  rozdíl podílu „drží" outright ≥ 40 % − pod 40 %, sdružený přes RTH a noc (Mantel–Haenszel),
+  **+5,5 p. b., bootstrap po seancích [−4,0; +14,3]** — dolní mez pod nulou, síto neprošlo.
+  Kontrola „přebytek drží nad nulovou pravděpodobností" (vliv polohy doteku odstraněn):
+  +4,6 p. b. [−4,5; +12,9].
+- **Vrstvy:** RTH 74,8 % (77/103) × 68,1 % (47/69), +6,6 p. b. [−6,8; +20,5]; noc 90,0 % (9/10)
+  × 90,2 % (37/41). Nulová pravděpodobnost „drží" (z polohy close doteku) je v obou skupinách
+  stejná (~77 %), skupiny tedy startují ze stejného místa.
+- **Dominance zdi rozdíl nevysvětluje ani nenese:** v RTH s dominancí nad mediánem −0,3 p. b.,
+  pod mediánem +12,0 p. b. [−6,5; +29,7] — obojí neprůkazné.
+- Popisně (mnoho srovnání, nic samostatně): call zdi +10,8 p. b. [−2,2; +23,6], put zdi
+  −16,3 p. b. [−34,0; +3,1] — opačné směry, ES −1,2 a NQ +0,4 p. b.
+- **OI zdi** (`oiwalls`) jsou od ceny většinou daleko: 15 rozhodnutých doteků za 13 seancí — na
+  verdikt nestačí.
+- **Vedlejší pozorování (netestováno):** GEX zdi 0DTE v tomto vzorku „drží" (±9 bp, 30 min)
+  v 76 %, tedy stejně, jak by vyšlo z náhodné procházky ze stejné polohy (77 %). Podíl outright
+  na tom nic nemění.
 - **Důsledek podle zadání #1019:** záporný verdikt → podíl outright zůstává jen informativní
   popisek (profil dvěma tóny, popisky zdí a žebříku — #1014, #1015); žádný práh, tečkování ani
-  váha v detektorech, pás C a heatmapa D se nezakládají. Varianty k rozhodnutí vlastníka v #1019.
+  váha v detektorech; pás C a heatmapa D se nezakládají. Varianty k rozhodnutí vlastníka v #1019.
+
+## Oprava metody proti prvnímu běhu (8. 10.)
+
+První běh (stažený komentář v #1019) měl dvě chyby, které našel nezávislý ověřovatel:
+1. **Práh „drží" ležel na úrovni doteku** (dotek i „drží" 4,5 bp od zdi): víc než polovina doteků
+   „držela" už na dalším baru a podíl „drží" (~85 %) byl z velké části mechanický.
+2. **Sloučené RTH a noc**, ačkoli zadání chtělo vrstvy zvlášť: skupina outright ≥ 40 % byla
+   z 86 % RTH, skupina pod 40 % z 55 % — a noc „drží" víc sama od sebe. Proto celkově +4,2 p. b.
+   a v RTH zdánlivě průkazných +11,4 p. b.
+
+Oprava (odchylka od parametrů zvolených před prvním během, uvedená výslovně):
+- bariéry symetricky kolem zdi **±9 bp** (2× tolerance doteku), „drží" = close pod zdí o 9 bp;
+- **nulová pravděpodobnost** „drží" pro každý dotek z polohy close doteku mezi bariérami
+  (náhodná procházka bez driftu) a „přebytek drží" jako kontrola;
+- **stratifikace RTH / noc** jako primární analýza (Mantel–Haenszel, bootstrap celých seancí);
+- vynechán dotek mimo pokrytí `printvol` (12) a po settle 0DTE (15; setupy po settle nevznikají,
+  #1324).
 
 ## Jak číst a co data neříkají
 
-- Událost = dotek zdi ze správné strany (bar se přiblíží na 4,5 bp; ES ≈ 3 body = `wall_zone`
-  šablony), výsledek do 30 min nad úrovní zdi v okamžiku doteku: průraz = close za zdí o ≥ 4,5 bp,
-  drží = close zpět od zdi o ≥ 4,5 bp. Parametry byly zvolené předem, před prvním během.
-- **Absolutní podíl „drží" je nadsazený:** dotek stačí high/low, close doteku tak obvykle leží
-  ještě před zdí a k prahu „drží" má blíž než k prahu průrazu. Pro srovnání skupin to nevadí
-  (platí pro obě stejně), ale ~85 % není „zdi drží v 85 %". Strop u vysokého podílu zároveň
-  snižuje sílu testu: interval rozdílu je ±8 p. b.; efekt +4 p. b. by potřeboval zhruba
-  čtyřnásobek dat (~50 seancí).
+- Dotek = bar se přiblíží ke zdi na 4,5 bp ze správné strany (ES při ~7 650 ≈ 3,4 b, `wall_zone`
+  šablony je 3 b; NQ ≈ 11 b). wall_bounce navíc vynechává zdi s dominancí pod 0,15 — tady jsou
+  všechny zdi.
 - Podíl outright = tisky / objem na striku a straně zdi od začátku seance do doteku (dnešní tok,
-  point-in-time), ne složení OI, ze kterého zeď vzniká. Proxy z #1007 — přímé složení OI nejde
-  změřit.
-- Doteky jedné seance nejsou nezávislé — proto bootstrap, který losuje celé seance; Newcombe je
-  bere jednotlivě (spíš optimistický), a přesto neprošel.
+  point-in-time), ne složení OI, ze kterého zeď vzniká — proxy z #1007.
+- Pokrytí `printvol` u nové 0DTE expirace začíná v 6 z 13 seancí až 00:01 UTC místo 22:00
+  (roll pipeline o půlnoci UTC — #1331, nasazeno 7. 10.); 28. 9. až 15:07 UTC, 29. 9. končí 18:09.
+  Doteky mimo pokrytí jsou vynechané, podíl v prvních hodinách je počítaný z kratšího okna.
+- Track record wall_bounce, EM respect (#872) a gamma cliff (#576), které #1019 jmenuje jako další
+  zdroje, nejsou události na striku zdi (EM, cliff) nebo mají malé n (wall_bounce v5 s printvol
+  ~80 setupů) — srovnání by bylo slabší než doteky.
+- Doteky jedné seance nejsou nezávislé — proto bootstrap celých seancí; Newcombe ve vrstvách bere
+  doteky jednotlivě (spíš optimistický) a je jen popisný.
 
 ## Výstup skriptu
 
-Parametry: dotek 4.5 bp, průraz / drží 4.5 bp, znovu-ozbrojení 15.0 bp, horizont 30 min, min. objem na striku 100, práh 40,0 %, MIN_SAMPLE 30, bootstrap 10000× po seancích, semínko 1019.
+Parametry: dotek 4.5 bp, bariéry průraz / drží ±9.0 bp kolem zdi, znovu-ozbrojení 15.0 bp, horizont 30 min, min. objem na striku 100, práh 40,0 %, MIN_SAMPLE 30, bootstrap 10000× po seancích, semínko 1019.
 
 ### Seance
 
-| symbol | seance | stav |
-|---|---|---|
-| ES | 2026-09-21 | barů 1380, doteků 11, printvol NULL 0,0 % |
-| NQ | 2026-09-21 | barů 1380, doteků 19, printvol NULL 0,0 % |
-| ES | 2026-09-22 | barů 1380, doteků 6, printvol NULL 0,0 % |
-| NQ | 2026-09-22 | barů 1380, doteků 24, printvol NULL 0,0 % |
-| ES | 2026-09-23 | barů 1380, doteků 9, printvol NULL 0,0 % |
-| NQ | 2026-09-23 | barů 1380, doteků 19, printvol NULL 0,0 % |
-| ES | 2026-09-24 | barů 1380, doteků 11, printvol NULL 0,0 % |
-| NQ | 2026-09-24 | barů 1380, doteků 19, printvol NULL 0,0 % |
-| ES | 2026-09-25 | barů 1380, doteků 12, printvol NULL 0,0 % |
-| NQ | 2026-09-25 | barů 1380, doteků 18, printvol NULL 0,0 % |
-| ES | 2026-09-28 | barů 1380, doteků 3, printvol NULL 0,0 % |
-| NQ | 2026-09-28 | barů 1380, doteků 12, printvol NULL 0,0 % |
-| ES | 2026-09-29 | barů 1380, doteků 12, printvol NULL 0,0 % |
-| NQ | 2026-09-29 | barů 1380, doteků 31, printvol NULL 0,0 % |
-| ES | 2026-09-30 | barů 1380, doteků 23, printvol NULL 0,0 % |
-| NQ | 2026-09-30 | barů 1380, doteků 27, printvol NULL 0,0 % |
-| ES | 2026-10-01 | barů 1380, doteků 16, printvol NULL 0,0 % |
-| NQ | 2026-10-01 | barů 1380, doteků 18, printvol NULL 0,0 % |
-| ES | 2026-10-02 | barů 1380, doteků 4, printvol NULL 0,0 % |
-| NQ | 2026-10-02 | barů 1380, doteků 22, printvol NULL 0,0 % |
-| ES | 2026-10-05 | barů 1380, doteků 7, printvol NULL 0,1 % |
-| NQ | 2026-10-05 | barů 1380, doteků 14, printvol NULL 0,2 % |
-| ES | 2026-10-06 | barů 1380, doteků 4, printvol NULL 0,1 % |
-| NQ | 2026-10-06 | barů 1380, doteků 10, printvol NULL 0,2 % |
-| ES | 2026-10-07 | barů 1380, doteků 8, printvol NULL 0,1 % |
-| NQ | 2026-10-07 | barů 1380, doteků 9, printvol NULL 0,0 % |
+| symbol | seance | barů | printvol od – do (UTC) | NULL printed | doteků |
+|---|---|---|---|---|---|
+| ES | 2026-09-21 | 1380 | 09-20 22:01 – 09-21 21:04 | 0,0 % | 11 |
+| NQ | 2026-09-21 | 1380 | 09-20 22:01 – 09-21 21:02 | 0,0 % | 18 |
+| ES | 2026-09-22 | 1380 | 09-21 22:03 – 09-22 21:01 | 0,0 % | 5 |
+| NQ | 2026-09-22 | 1380 | 09-21 22:05 – 09-22 21:06 | 0,0 % | 24 |
+| ES | 2026-09-23 | 1380 | 09-22 22:05 – 09-23 21:05 | 0,0 % | 9 |
+| NQ | 2026-09-23 | 1380 | 09-22 22:06 – 09-23 21:05 | 0,0 % | 19 |
+| ES | 2026-09-24 | 1380 | 09-23 22:01 – 09-24 21:32 | 0,0 % | 11 |
+| NQ | 2026-09-24 | 1380 | 09-23 22:01 – 09-24 21:27 | 0,0 % | 17 |
+| ES | 2026-09-25 | 1380 | 09-25 00:01 – 09-25 21:28 | 0,0 % | 10 |
+| NQ | 2026-09-25 | 1380 | 09-25 00:01 – 09-25 21:28 | 0,0 % | 18 |
+| ES | 2026-09-28 | 1380 | 09-28 15:07 – 09-28 21:28 | 0,0 % | 2 |
+| NQ | 2026-09-28 | 1380 | 09-28 15:07 – 09-28 21:33 | 0,0 % | 5 |
+| ES | 2026-09-29 | 1380 | 09-29 00:01 – 09-29 18:09 | 0,0 % | 12 |
+| NQ | 2026-09-29 | 1380 | 09-29 00:01 – 09-29 18:09 | 0,0 % | 24 |
+| ES | 2026-09-30 | 1380 | 09-29 22:04 – 09-30 21:33 | 0,0 % | 22 |
+| NQ | 2026-09-30 | 1380 | 09-29 22:04 – 09-30 21:33 | 0,0 % | 25 |
+| ES | 2026-10-01 | 1380 | 10-01 00:02 – 10-01 21:28 | 0,0 % | 16 |
+| NQ | 2026-10-01 | 1380 | 10-01 00:02 – 10-01 21:32 | 0,0 % | 16 |
+| ES | 2026-10-02 | 1380 | 10-02 00:02 – 10-02 21:28 | 0,0 % | 3 |
+| NQ | 2026-10-02 | 1380 | 10-02 00:02 – 10-02 21:33 | 0,0 % | 21 |
+| ES | 2026-10-05 | 1380 | 10-04 22:01 – 10-05 21:33 | 0,1 % | 6 |
+| NQ | 2026-10-05 | 1380 | 10-04 22:01 – 10-05 21:32 | 0,2 % | 14 |
+| ES | 2026-10-06 | 1380 | 10-06 00:01 – 10-06 21:08 | 0,1 % | 4 |
+| NQ | 2026-10-06 | 1380 | 10-06 00:01 – 10-06 21:07 | 0,2 % | 10 |
+| ES | 2026-10-07 | 1380 | 10-06 22:03 – 10-07 20:00 | 0,1 % | 8 |
+| NQ | 2026-10-07 | 1380 | 10-06 22:05 – 10-07 20:00 | 0,0 % | 9 |
 
 ### GEX zdi (levels)
 
 | výsledek | doteků | z toho nízký objem na striku |
 |---|---|---|
-| drží | 284 | 30 |
-| průraz | 53 | 11 |
-| nerozhodnuto | 6 | 2 |
+| drží | 189 | 19 |
+| průraz | 59 | 6 |
+| nerozhodnuto | 68 | 8 |
 
-Podíl outright na zdi při doteku: medián 40,1 %, kvartily 22,1 % – 50,3 %, n = 296.
+Vynecháno: mimo pokrytí printvol 12, po settle 0DTE 15.
+Podíl outright na zdi při doteku: medián 40,1 %, kvartily 22,1 % – 50,2 %, n = 223.
 
-#### Dělení: předregistrovaný práh 40,0 % — síta NEsplněna
+#### Primárně: práh 40 %, stratifikováno RTH / noc — síta NEsplněna
 
-| skupina | n rozhodnutých | drží [Wilson 95 %] | medián dominance |
-|---|---|---|---|
-| outright ≥ 40,0 % | 149 | 131/149 = 87,9 % [81,7 %; 92,2 %] | 0,319 |
-| outright < 40,0 % | 147 | 123/147 = 83,7 % [76,9 %; 88,8 %] | 0,271 |
-
-| síto | hodnota |  |
-|---|---|---|
-| n ≥ 30 v obou skupinách | 149 / 147 | ✔ |
-| rozdíl „drží“ high − low, Newcombe 95 % — dolní mez > 0 | 4,2 % [-3,8 %; 12,3 %] | ✘ |
-| týž rozdíl, bootstrap po seancích — dolní mez > 0 | [-4,3 %; 11,9 %] | ✘ |
-
-#### Dělení: medián (kontrola) 40,1 % — síta NEsplněna
-
-| skupina | n rozhodnutých | drží [Wilson 95 %] | medián dominance |
-|---|---|---|---|
-| outright ≥ 40,1 % | 148 | 130/148 = 87,8 % [81,6 %; 92,2 %] | 0,318 |
-| outright < 40,1 % | 148 | 124/148 = 83,8 % [77,0 %; 88,9 %] | 0,271 |
+| vrstva | drží — outright ≥ 40 % | nulová p | drží — outright < 40 % | nulová p | rozdíl high − low [Newcombe 95 %] |
+|---|---|---|---|---|---|
+| RTH | 77/103 = 74,8 % [65,6 %; 82,2 %] | 77,2 % | 47/69 = 68,1 % [56,4 %; 77,9 %] | 76,7 % | +6,6 p. b. [-6,8 p. b.; +20,5 p. b.] |
+| noc | 9/10 = 90,0 % [59,6 %; 98,2 %] | 78,7 % | 37/41 = 90,2 % [77,5 %; 96,1 %] | 75,9 % | -0,2 p. b. [-31,2 p. b.; +15,0 p. b.] |
+| celkem (nestratifikováno) | 86/113 = 76,1 % [67,5 %; 83,0 %] | 77,3 % | 84/110 = 76,4 % [67,6 %; 83,3 %] | 76,4 % | -0,3 p. b. [-11,4 p. b.; +10,9 p. b.] |
 
 | síto | hodnota |  |
 |---|---|---|
-| n ≥ 30 v obou skupinách | 148 / 148 | ✔ |
-| rozdíl „drží“ high − low, Newcombe 95 % — dolní mez > 0 | 4,1 % [-4,0 %; 12,1 %] | ✘ |
-| týž rozdíl, bootstrap po seancích — dolní mez > 0 | [-4,4 %; 11,5 %] | ✘ |
+| n ≥ 30 v obou skupinách | 113 / 110 | ✔ |
+| drží: rozdíl high − low sdružený přes RTH/noc (Mantel–Haenszel), bootstrap po seancích 95 % — dolní mez > 0 | +5,5 p. b. [-4,0 p. b.; +14,3 p. b.] | ✘ |
+| přebytek drží nad nulovou p: rozdíl high − low sdružený přes RTH/noc (Mantel–Haenszel), bootstrap po seancích 95 % (kontrola) | +4,6 p. b. [-4,5 p. b.; +12,9 p. b.] | ✘ |
 
-#### Rozpad (popisný, práh 40 %)
+#### Rozpad (popisný)
 
-|  | drží — outright ≥ 40 % | drží — outright < 40 % | drží — všechny doteky |
+|  | drží — outright ≥ 40 % | drží — outright < 40 % | rozdíl [Newcombe 95 %] |
 |---|---|---|---|
-| ES | 63/71 = 88,7 % [79,3 %; 94,2 %] | 39/48 = 81,2 % [68,1 %; 89,8 %] | 104/121 = 86,0 % [78,6 %; 91,0 %] |
-| NQ | 68/78 = 87,2 % [78,0 %; 92,9 %] | 84/99 = 84,8 % [76,5 %; 90,6 %] | 180/216 = 83,3 % [77,8 %; 87,7 %] |
-| RTH | 111/128 = 86,7 % [79,8 %; 91,5 %] | 61/81 = 75,3 % [64,9 %; 83,4 %] | 176/217 = 81,1 % [75,4 %; 85,8 %] |
-| noc | 20/21 = 95,2 % [77,3 %; 99,2 %] | 62/66 = 93,9 % [85,4 %; 97,6 %] | 108/120 = 90,0 % [83,3 %; 94,2 %] |
-| call zeď | 86/92 = 93,5 % [86,5 %; 97,0 %] | 76/90 = 84,4 % [75,6 %; 90,5 %] | 174/199 = 87,4 % [82,1 %; 91,3 %] |
-| put zeď | 45/57 = 78,9 % [66,7 %; 87,5 %] | 47/57 = 82,5 % [70,6 %; 90,2 %] | 110/138 = 79,7 % [72,2 %; 85,6 %] |
+| ES | 40/53 = 75,5 % [62,4 %; 85,1 %] | 23/30 = 76,7 % [59,1 %; 88,2 %] | -1,2 p. b. [-18,6 p. b.; +18,8 p. b.] |
+| NQ | 46/60 = 76,7 % [64,6 %; 85,6 %] | 61/80 = 76,2 % [65,9 %; 84,2 %] | +0,4 p. b. [-14,1 p. b.; +14,1 p. b.] |
+| call zeď | 59/67 = 88,1 % [78,2 %; 93,8 %] | 51/66 = 77,3 % [65,8 %; 85,7 %] | +10,8 p. b. [-2,2 p. b.; +23,6 p. b.] |
+| put zeď | 27/46 = 58,7 % [44,3 %; 71,7 %] | 33/44 = 75,0 % [60,6 %; 85,4 %] | -16,3 p. b. [-34,0 p. b.; +3,1 p. b.] |
+| RTH, dominance ≥ medián 0,275 | 40/55 = 72,7 % [59,8 %; 82,7 %] | 19/26 = 73,1 % [53,9 %; 86,3 %] | -0,3 p. b. [-18,9 p. b.; +21,3 p. b.] |
+| RTH, dominance < medián | 37/48 = 77,1 % [63,5 %; 86,7 %] | 28/43 = 65,1 % [50,2 %; 77,6 %] | +12,0 p. b. [-6,5 p. b.; +29,7 p. b.] |
 
 ### OI zdi (oiwalls)
 
 | výsledek | doteků | z toho nízký objem na striku |
 |---|---|---|
-| drží | 22 | 5 |
-| průraz | 3 | 1 |
-| nerozhodnuto | 0 | 0 |
+| drží | 14 | 2 |
+| průraz | 3 | 0 |
+| nerozhodnuto | 6 | 3 |
 
-Podíl outright na zdi při doteku: medián 36,5 %, kvartily 24,8 % – 49,3 %, n = 19.
+Vynecháno: mimo pokrytí printvol 1, po settle 0DTE 1.
+Podíl outright na zdi při doteku: medián 45,9 %, kvartily 24,6 % – 51,3 %, n = 15.
 
-#### Dělení: předregistrovaný práh 40,0 % — síta NEsplněna
+#### Primárně: práh 40 %, stratifikováno RTH / noc — síta NEsplněna
 
-| skupina | n rozhodnutých | drží [Wilson 95 %] | medián dominance |
-|---|---|---|---|
-| outright ≥ 40,0 % | 9 | 8/9 = 88,9 % [56,5 %; 98,0 %] | 0,690 |
-| outright < 40,0 % | 10 | 9/10 = 90,0 % [59,6 %; 98,2 %] | 0,492 |
-
-| síto | hodnota |  |
-|---|---|---|
-| n ≥ 30 v obou skupinách | 9 / 10 | ✘ |
-| rozdíl „drží“ high − low, Newcombe 95 % — dolní mez > 0 | -1,1 % [-34,5 %; 30,6 %] | ✘ |
-| týž rozdíl, bootstrap po seancích — dolní mez > 0 | [-35,2 %; 20,0 %] | ✘ |
-
-#### Dělení: medián (kontrola) 36,5 % — síta NEsplněna
-
-| skupina | n rozhodnutých | drží [Wilson 95 %] | medián dominance |
-|---|---|---|---|
-| outright ≥ 36,5 % | 10 | 9/10 = 90,0 % [59,6 %; 98,2 %] | 0,651 |
-| outright < 36,5 % | 9 | 8/9 = 88,9 % [56,5 %; 98,0 %] | 0,455 |
+| vrstva | drží — outright ≥ 40 % | nulová p | drží — outright < 40 % | nulová p | rozdíl high − low [Newcombe 95 %] |
+|---|---|---|---|---|---|
+| RTH | 5/7 = 71,4 % [35,9 %; 91,8 %] | 82,4 % | 2/2 = 100,0 % [34,2 %; 100,0 %] | 72,9 % | -28,6 p. b. [-64,1 p. b.; +40,3 p. b.] |
+| noc | 1/1 = 100,0 % [20,7 %; 100,0 %] | 74,4 % | 4/5 = 80,0 % [37,6 %; 96,4 %] | 71,8 % | +20,0 p. b. [-61,0 p. b.; +62,4 p. b.] |
+| celkem (nestratifikováno) | 6/8 = 75,0 % [40,9 %; 92,9 %] | 81,4 % | 6/7 = 85,7 % [48,7 %; 97,4 %] | 72,1 % | -10,7 p. b. [-46,7 p. b.; +30,4 p. b.] |
 
 | síto | hodnota |  |
 |---|---|---|
-| n ≥ 30 v obou skupinách | 10 / 9 | ✘ |
-| rozdíl „drží“ high − low, Newcombe 95 % — dolní mez > 0 | 1,1 % [-30,6 %; 34,5 %] | ✘ |
-| týž rozdíl, bootstrap po seancích — dolní mez > 0 | [-24,2 %; 20,0 %] | ✘ |
+| n ≥ 30 v obou skupinách | 8 / 7 | ✘ |
+| drží: rozdíl high − low sdružený přes RTH/noc (Mantel–Haenszel), bootstrap po seancích 95 % — dolní mez > 0 | -11,6 p. b. [-50,0 p. b.; +14,9 p. b.] | ✘ |
+| přebytek drží nad nulovou p: rozdíl high − low sdružený přes RTH/noc (Mantel–Haenszel), bootstrap po seancích 95 % (kontrola) | -18,7 p. b. [-54,1 p. b.; +2,9 p. b.] | ✘ |
 
-#### Rozpad (popisný, práh 40 %)
+#### Rozpad (popisný)
 
-|  | drží — outright ≥ 40 % | drží — outright < 40 % | drží — všechny doteky |
+|  | drží — outright ≥ 40 % | drží — outright < 40 % | rozdíl [Newcombe 95 %] |
 |---|---|---|---|
-| ES | 2/2 = 100,0 % [34,2 %; 100,0 %] | 1/1 = 100,0 % [20,7 %; 100,0 %] | 3/3 = 100,0 % [43,8 %; 100,0 %] |
-| NQ | 6/7 = 85,7 % [48,7 %; 97,4 %] | 8/9 = 88,9 % [56,5 %; 98,0 %] | 19/22 = 86,4 % [66,7 %; 95,3 %] |
-| RTH | 7/8 = 87,5 % [52,9 %; 97,8 %] | 2/3 = 66,7 % [20,8 %; 93,9 %] | 9/11 = 81,8 % [52,3 %; 94,9 %] |
-| noc | 1/1 = 100,0 % [20,7 %; 100,0 %] | 7/7 = 100,0 % [64,6 %; 100,0 %] | 13/14 = 92,9 % [68,5 %; 98,7 %] |
-| call zeď | 6/7 = 85,7 % [48,7 %; 97,4 %] | 7/8 = 87,5 % [52,9 %; 97,8 %] | 17/20 = 85,0 % [64,0 %; 94,8 %] |
-| put zeď | 2/2 = 100,0 % [34,2 %; 100,0 %] | 2/2 = 100,0 % [34,2 %; 100,0 %] | 5/5 = 100,0 % [56,6 %; 100,0 %] |
+| ES | 1/2 = 50,0 % [9,5 %; 90,5 %] | 1/1 = 100,0 % [20,7 %; 100,0 %] | -50,0 p. b. [-90,5 p. b.; +39,1 p. b.] |
+| NQ | 5/6 = 83,3 % [43,6 %; 97,0 %] | 5/6 = 83,3 % [43,6 %; 97,0 %] | +0,0 p. b. [-42,0 p. b.; +42,0 p. b.] |
+| call zeď | 5/6 = 83,3 % [43,6 %; 97,0 %] | 4/5 = 80,0 % [37,6 %; 96,4 %] | +3,3 p. b. [-39,6 p. b.; +47,9 p. b.] |
+| put zeď | 1/2 = 50,0 % [9,5 %; 90,5 %] | 2/2 = 100,0 % [34,2 %; 100,0 %] | -50,0 p. b. [-90,5 p. b.; +27,3 p. b.] |
+| RTH, dominance ≥ medián 0,529 | 4/4 = 100,0 % [51,0 %; 100,0 %] | — | — |
+| RTH, dominance < medián | 1/3 = 33,3 % [6,1 %; 79,2 %] | 2/2 = 100,0 % [34,2 %; 100,0 %] | -66,7 p. b. [-93,9 p. b.; +13,5 p. b.] |
