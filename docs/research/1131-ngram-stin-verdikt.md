@@ -62,6 +62,8 @@
 - **Doporučení: varianta C** (viz Varianty): `importance` z hlavy nezapínat a stín vypnout
   (`ngram_shadow_enabled` = false). Historie `source='ngram'` zůstane v PG. Doporučení stojí na
   dodatečné kontrole denní doby, ne na předregistrovaném čísle.
+- **Rozhodnutí vlastníka 8. 10. 2026: varianta C.** `importance` z hlavy se nezapíná, stín se
+  vypne (#1469) a epika #740 se uzavírá.
 
 ## Varianty
 
@@ -77,7 +79,7 @@ Vypnutí znamená:
 - upravit `.env.example`;
 - nasadit news-engine v pauze Globexu.
 
-Udělá se samostatným issue, až vlastník rozhodne.
+Udělá to #1469 (rozhodnutí 8. 10. 2026).
 
 ## Jak číst a co data neříkají
 
