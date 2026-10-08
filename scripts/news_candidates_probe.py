@@ -4,9 +4,10 @@ Pro každého kandidáta jeden GET a jeden GET `robots.txt` stejnou hlavičkou
 `User-Agent`, jakou by posílal adaptér: prohlížečová `BROWSER_UA` jako dnešní
 fetcher, u SEC a BLS identifikace s kontaktem (bez ní vrací 403 / stránku
 překročeného limitu). Výstup: HTTP status, formát, počet položek, podíl položek
-s časem, stáří nejnovější položky, medián odstupu položek, validátory pro
-conditional GET (ETag / Last-Modified), hlavičky rate limitu a verdikt
-robots.txt pro danou cestu.
+s věrohodným časem (nesmysly jako rok 1899 zvlášť), čas a stáří nejnovější
+položky, medián odstupu položek, validátory pro conditional GET (ETag /
+Last-Modified), hlavičky rate limitu a verdikt robots.txt pro danou cestu podle
+RFC 9309 (`robots_allows`).
 
 Jde o **jednorázový snímek** feedu v čase běhu, ne o průměr: odstup a stáří
 položek popisují, co feed drží teď. Zpoždění proti skutečné publikaci změří
@@ -24,10 +25,10 @@ Spuštění:
 import datetime as dt
 import json
 import os
+import re
 import statistics
 import sys
 import unicodedata
-import urllib.robotparser
 from collections.abc import Sequence
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -43,6 +44,10 @@ CONTACT_ENV = "GEXLENS_NEWS_SEC_CONTACT"
 FINNHUB_ENV = "GEXLENS_NEWS_FINNHUB_API_KEY"
 #: Hlavičky, ze kterých jde vyčíst rate limit (názvy se mezi poskytovateli liší)
 RATE_HEADERS = ("retry-after", "x-ratelimit-limit", "x-ratelimit-remaining", "ratelimit-limit")
+#: Feedy BLS po jednotlivých releasech (`/feed/{release}.rss`) — trh hýbající řady
+BLS_RELEASES = ("empsit", "cpi", "ppi", "jolts", "eci")
+#: Čas položky mimo tento rozsah je nesmysl (Fed testimony nese `30 Dec 1899`)
+PLAUSIBLE_FROM = dt.datetime(2000, 1, 1, tzinfo=dt.UTC)
 
 
 @dataclass(frozen=True)
@@ -72,6 +77,10 @@ CANDIDATES: tuple[Candidate, ...] = (
     Candidate(
         "BLS — nejnovější releasy", "1", "https://www.bls.gov/feed/bls_latest.rss", ua="contact"
     ),
+    *(
+        Candidate(f"BLS — {release}", "1", f"https://www.bls.gov/feed/{release}.rss", ua="contact")
+        for release in BLS_RELEASES
+    ),
     Candidate("BEA — zprávy (www)", "1", "https://www.bea.gov/news/rss"),
     Candidate("BEA — zprávy (apps)", "1", "https://apps.bea.gov/rss/rss.xml"),
     Candidate(
@@ -98,6 +107,12 @@ CANDIDATES: tuple[Candidate, ...] = (
         "&owner=include&start=0&count=100&output=atom",
         ua="contact",
     ),
+    Candidate(
+        "SEC data.sec.gov — podání jedné firmy (Apple, jen 8-K)",
+        "1",
+        "https://data.sec.gov/submissions/CIK0000320193.json",
+        ua="contact",
+    ),
     Candidate("FinancialJuice", "2", "https://www.financialjuice.com/feed.ashx?xy=rss"),
     Candidate(
         "Finnhub general",
@@ -119,7 +134,9 @@ class Probe:
     fmt: str = "—"
     items: int = 0
     with_time: int = 0
+    newest: dt.datetime | None = None
     newest_age_s: float | None = None
+    implausible: int = 0
     median_gap_s: float | None = None
     validators: str = "—"
     rate: str = "—"
@@ -144,6 +161,13 @@ def _json_times(payload: object) -> tuple[int, list[dt.datetime]]:
         stamps = [item.get("datetime") for item in payload if isinstance(item, dict)]
         times = [dt.datetime.fromtimestamp(float(s), tz=dt.UTC) for s in stamps if s]
         return len(payload), times
+    if isinstance(payload, dict) and isinstance(payload.get("filings"), dict):
+        # SEC submissions: paralelní pole `form` a `acceptanceDateTime` (UTC, `Z`)
+        recent = payload["filings"].get("recent", {})
+        pairs = zip(recent.get("form", []), recent.get("acceptanceDateTime", []), strict=False)
+        accepted = [str(stamp) for form, stamp in pairs if form in ("8-K", "8-K/A") and stamp]
+        times = [dt.datetime.fromisoformat(s.replace("Z", "+00:00")) for s in accepted]
+        return len(accepted), times
     if isinstance(payload, dict) and isinstance(payload.get("feed"), list):
         feed = payload["feed"]
         times = []
@@ -170,6 +194,57 @@ def _parse(body: str, content_type: str) -> tuple[str, int, list[dt.datetime]]:
     return "HTML", 0, []
 
 
+def _rule_matches(pattern: str, path: str) -> bool:
+    """Shoda cesty s pravidlem RFC 9309: `*` = libovolná sekvence, `$` = konec cesty."""
+    regex = re.escape(pattern).replace(r"\*", ".*")
+    if regex.endswith(r"\$"):
+        regex = regex[:-2] + "$"
+    return re.match(regex, path) is not None
+
+
+def robots_allows(robots_txt: str, user_agent: str, path: str) -> bool:
+    """Smí `user_agent` na `path` (cesta i s dotazem)? Podle RFC 9309.
+
+    `urllib.robotparser` ukončí skupinu prázdným řádkem, takže pravidla SEC
+    (`User-agent: *`, prázdný řádek, `Disallow: /cgi-bin`) tiše ignoruje a hlásí
+    „povoleno“. RFC 9309 skupinu ukončí až další `User-agent` po pravidlech.
+    Skupina platí, když je její jméno podřetězcem User-Agent (bez ohledu na
+    velikost písmen); jinak platí `*`. Rozhoduje nejdelší shoda, při shodě
+    délky vyhrává Allow.
+    """
+    groups: list[tuple[list[str], list[tuple[bool, str]]]] = []
+    agents: list[str] = []
+    rules: list[tuple[bool, str]] = []
+    for raw in robots_txt.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if ":" not in line:
+            continue
+        field, value = (part.strip() for part in line.split(":", 1))
+        field = field.lower()
+        if field == "user-agent":
+            if rules:
+                groups.append((agents, rules))
+                agents, rules = [], []
+            agents.append(value.lower())
+        elif field in ("allow", "disallow") and agents:
+            if value:  # prázdný Disallow = žádné pravidlo
+                rules.append((field == "allow", value))
+    if agents:
+        groups.append((agents, rules))
+
+    ua = user_agent.lower()
+    specific = [r for names, r in groups if any(n != "*" and n in ua for n in names)]
+    chosen = specific or [r for names, r in groups if "*" in names]
+    best: tuple[int, bool] | None = None
+    for group_rules in chosen:
+        for allow, pattern in group_rules:
+            if _rule_matches(pattern, path):
+                candidate = (len(pattern), allow)
+                if best is None or candidate > best:
+                    best = candidate
+    return True if best is None else best[1]
+
+
 def _robots(client: httpx.Client, url: str, ua: str) -> str:
     parts = urlsplit(url)
     robots_url = f"{parts.scheme}://{parts.netloc}/robots.txt"
@@ -177,13 +252,15 @@ def _robots(client: httpx.Client, url: str, ua: str) -> str:
         response = client.get(robots_url, headers={"User-Agent": ua})
     except httpx.HTTPError as error:
         return f"nečitelné ({type(error).__name__})"
-    parser = urllib.robotparser.RobotFileParser()
-    if response.status_code in (401, 403):
-        return f"robots.txt {response.status_code} → zakázáno vše"
+    # RFC 9309 2.3.1: 4xx = soubor nedostupný → bez omezení; 5xx = nedosažitelný → zakázáno vše
+    if response.status_code >= 500:
+        return f"robots.txt {response.status_code} → **zakázáno vše**"
     if response.status_code >= 400:
         return f"robots.txt {response.status_code} → bez omezení"
-    parser.parse(response.text.splitlines())
-    return "povoleno" if parser.can_fetch(ua, url) else "**zakázáno**"
+    path = parts.path or "/"
+    if parts.query:
+        path = f"{path}?{parts.query}"
+    return "povoleno" if robots_allows(response.text, ua, path) else "**zakázáno**"
 
 
 def probe(client: httpx.Client, candidate: Candidate, now: dt.datetime) -> Probe:
@@ -215,14 +292,24 @@ def probe(client: httpx.Client, candidate: Candidate, now: dt.datetime) -> Probe
     except (ValueError, ElementTree.ParseError) as error:
         result.fmt = f"nečitelné ({type(error).__name__})"
         return result
-    result.fmt, result.items, result.with_time = fmt, count, len(times)
-    if times:
-        ordered = sorted(times, reverse=True)
+    plausible = [t for t in times if PLAUSIBLE_FROM <= t <= now + dt.timedelta(hours=1)]
+    result.fmt, result.items, result.with_time = fmt, count, len(plausible)
+    result.implausible = len(times) - len(plausible)
+    if plausible:
+        ordered = sorted(plausible, reverse=True)
+        result.newest = ordered[0]
         result.newest_age_s = (now - ordered[0]).total_seconds()
         gaps = [(a - b).total_seconds() for a, b in zip(ordered, ordered[1:], strict=False)]
         if gaps:
             result.median_gap_s = statistics.median(gaps)
     return result
+
+
+def _note(result: Probe) -> str:
+    notes = [strip_secrets(result.note)] if result.note else []
+    if result.implausible:
+        notes.append(f"{result.implausible} s nesmyslným časem (< 2000 nebo v budoucnosti)")
+    return "; ".join(notes) or "—"
 
 
 def _duration(seconds: float | None) -> str:
@@ -258,12 +345,15 @@ def main() -> int:
                     result.fmt,
                     result.items,
                     f"{result.with_time}/{result.items}" if result.items else "—",
+                    f"{result.newest.astimezone(dt.UTC):%Y-%m-%d %H:%M:%S}"
+                    if result.newest
+                    else "—",
                     _duration(result.newest_age_s),
                     _duration(result.median_gap_s),
                     result.validators,
                     result.rate,
                     result.robots,
-                    strip_secrets(result.note) or "—",
+                    _note(result),
                 ]
             )
     header = [
@@ -274,6 +364,7 @@ def main() -> int:
         "formát",
         "položek",
         "s časem",
+        "nejnovější (UTC)",
         "stáří nejnovější",
         "medián odstupu",
         "conditional GET",
