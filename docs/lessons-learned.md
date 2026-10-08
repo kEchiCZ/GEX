@@ -215,6 +215,16 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-08 — walk-forward spadl po změně signatury `replay` a replay měřil setupy, které živý engine nedetekuje (#1081, #1464).**
+  #1366 přidal do `scripts/backtest_setups.py` `replay` povinný `symbol`; testy a jediný volající
+  v témže souboru prošly, noční `walkforward_setups.py` spadl na `TypeError` — `scripts/` mypy
+  nehlídá a o pádu věděl jen log. Při kontrole reportů se navíc ukázalo, že `build_minutes` bere
+  všechny `levels` expirace, i ty, které den předem píše sekundární runtime (kadence 3 min):
+  36 % (ES) a 44 % (NQ) setupů replaye vzniklo tam, kde živý `SetupEngine` neběží.
+  → Při změně signatury funkce ze `scripts/` grepnout volající ve všech skriptech a mít na každého
+  nočního volajícího test přes skutečnou funkci. Replay má přehrávat **jen minuty, kdy živý engine
+  nad daným vstupem běžel** — data partice nejsou totéž co „seance enginu", hranici odvodit z rollu.
+
 - **2026-10-07 — paper, sondy T9 a replay backtestu hodnotily jinak než setupy (#1345, #1369): oprava jednoho vyhodnocovače nestačí.**
   #1320 převedl živé setupy na cestu ceny, ale tři další vyhodnocovače téže otázky („zasáhla cena
   stop/cíl?“) dál hodnotily vzorek cyklu: paper účet bez barů rovnou čáru zamrzlého spotu, sondy jen

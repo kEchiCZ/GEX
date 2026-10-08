@@ -176,3 +176,44 @@ def test_replay_sond_stop_v_minute_bez_profilu_a_timeout_v_settle() -> None:
     rows = module.replay_probes([*entering, crash], ProbeParams(), SETTLE)
     assert [row["outcome"] for row in rows] == ["closed_stop"]
     assert rows[0]["closed"] == crash.ts - dt.timedelta(minutes=1)
+
+
+def test_walkforward_predava_symbol_do_replaye(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1081: walk-forward přehrává týmž `replay` se symbolem řetězu — po #1366
+    volání bez symbolu shodilo noční běh (TypeError) a `scripts/` mypy nehlídá.
+    Kvartální pátek: kořenový ticker má týdenní sérii do odpoledne, pinovaný
+    expirující kontrakt končí v SOQ."""
+    monkeypatch.delitem(sys.modules, "backtest_setups", raising=False)
+    spec = importlib.util.spec_from_file_location(
+        "walkforward_setups", SCRIPT.with_name("walkforward_setups.py")
+    )
+    assert spec is not None and spec.loader is not None
+    module: Any = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    bt = module.bt
+
+    afternoon = dt.datetime(2026, 9, 18, 20, 0, tzinfo=dt.UTC)
+    start = afternoon - dt.timedelta(minutes=70)
+    created = afternoon - dt.timedelta(minutes=10)
+    minutes = [
+        minute(start + dt.timedelta(minutes=offset), 100.0 + max(0, offset - 60) * 0.2)
+        for offset in range(75)
+    ]
+    for symbol in ("ES", "ESU6"):
+        (tmp_path / symbol / "20260918").mkdir(parents=True)
+        (tmp_path / symbol / "bars").mkdir()  # nečíselné adresáře nejsou expirace
+    monkeypatch.setattr(bt, "DATA", str(tmp_path))
+    monkeypatch.setattr(bt, "build_minutes", lambda symbol, expiry, repo: minutes)
+    _one_setup_at(bt, created)
+
+    day = dt.date(2026, 9, 18)
+    # Timeout za close baru 19:59 = 100 + 9 × 0,2; risk 5 b
+    assert module.daily_series("ES", {"baseline": SetupParams()}, None) == {
+        "baseline": {day: pytest.approx(9 * 0.2 / 5)}
+    }
+    assert module.daily_series("ESU6", {"baseline": SetupParams()}, None) == {
+        "baseline": {day: 0.0}
+    }
