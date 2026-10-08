@@ -38,7 +38,10 @@
   horizont 30 min nezohledňuje, skutečná nulová p rozhodnutých doteků je spíš vyšší).
 - **Důsledek:** do rozhodování nic nepřidávat — podíl outright zůstává informativní popisek
   (profil dvěma tóny, popisky zdí a žebříku — #1014, #1015); žádný práh, tečkování, váha
-  v detektorech, MCP (E-3.9) ani ranní snapshot (E-5.7). Varianty a rozhodnutí vlastníka v #1019.
+  v detektorech, MCP (E-3.9) ani ranní snapshot (E-5.7).
+- **Rozhodnutí vlastníka 8. 10. 2026: B** — nic se nezapíná; přeměření touto předem zafixovanou
+  metodou po ≥ 40 čistých seancích, připomínka #1462 (~20. 11.). Manuál a tooltip legendy
+  opraveny („zeď z outright drží líp" je hypotéza).
 
 ## Oprava metody proti prvnímu běhu (8. 10.)
 
