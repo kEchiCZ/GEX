@@ -220,7 +220,7 @@ chyb**, hlavně diagnostických a provozních.
   v témže souboru prošly, noční `walkforward_setups.py` spadl na `TypeError` — `scripts/` mypy
   nehlídá a o pádu věděl jen log. Při kontrole reportů se navíc ukázalo, že `build_minutes` bere
   všechny `levels` expirace, i ty, které den předem píše sekundární runtime (kadence 3 min):
-  38 % (ES) a 44 % (NQ) setupů replaye vzniklo tam, kde živý `SetupEngine` neběží.
+  36 % (ES) a 44 % (NQ) setupů replaye vzniklo tam, kde živý `SetupEngine` neběží.
   → Při změně signatury funkce ze `scripts/` grepnout volající ve všech skriptech a mít na každého
   nočního volajícího test přes skutečnou funkci. Replay má přehrávat **jen minuty, kdy živý engine
   nad daným vstupem běžel** — data partice nejsou totéž co „seance enginu", hranici odvodit z rollu.
