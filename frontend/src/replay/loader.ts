@@ -1312,10 +1312,10 @@ export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
     const share = lastLevelValue(levelSeries(key))
     return share === null ? undefined : ` · OI ${Math.round(share * 100)} %`
   }
-  // Podíl outright objemu na striku zdi (#1007): zeď postavená z tisků
-  // (outright) drží dealer jako plnou pozici, zeď ze spreadů má gammu
-  // částečně vykompenzovanou. Jen informace — žádné ztlumení, dokud
-  // kalibrace (#1007 krok 4) nedoloží, že se to v chování ceny liší.
+  // Podíl outright objemu na striku zdi (#1007). Hypotéza: zeď postavená
+  // z tisků (outright) drží dealer jako plnou pozici, zeď ze spreadů má gammu
+  // částečně vykompenzovanou. Kalibrace 8. 10. 2026 (#1019) neprůkazná —
+  // jen informace, žádné ztlumení do přeměření.
   const outrightSuffix = (wallKey: string, side: 'C' | 'P'): string => {
     if (!inputs.hasPrintVol) return ''
     const series = levelSeries(wallKey)

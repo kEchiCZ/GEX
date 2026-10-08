@@ -126,8 +126,9 @@ export const LEGEND_SECTIONS: LegendSection[] = [
           'takže OI zeď bývá dál od ceny. Číslo v popisku je podíl na OI své strany: nízké procento ' +
           'znamená plochý profil, kde je „zeď“ jen nejvyšší z mnoha srovnatelných striků. ' +
           'Druhé číslo „% outright“ (v1.14, #1007) říká, kolik dnešního objemu na striku vytiskly ' +
-          'outright obchody: zeď z outright drží dealer jako plnou pozici, zeď ze spreadů má ' +
-          'gammu částečně vykompenzovanou — zatím jen informace, bez vlivu na kreslení.',
+          'outright obchody. Hypotéza: zeď z outright drží dealer jako plnou pozici, zeď ze spreadů ' +
+          'má gammu částečně vykompenzovanou — měření 8. 10. 2026 (#1019) neprůkazné, proto jen ' +
+          'informace, bez vlivu na kreslení.',
         up: 'Blíž k expiraci působí velké OI jako magnet — cena k němu bývá tažena, protože se tam zavírají pozice. Shoda OI zdi s call zdí je silná úroveň; když se rozejdou, gamma zeď působí teď, OI zeď až k expiraci.',
         down: 'Velké put OI pod trhem je místo, kde se pád má o co opřít, i když tam gamma zeď není. Pozor: sám o sobě to není hedging, takže reakce nebývá tak okamžitá jako u put zdi.',
         how: 'Nic se tu nedopočítává — bez OI se hladina nekreslí. Gamma pro tyhle striky neznáme, takže je záměrně nemícháme mezi gamma zdi.',

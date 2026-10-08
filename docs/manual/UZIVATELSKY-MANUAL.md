@@ -325,10 +325,12 @@ podle zdi umisťuje stop, o ní jinak neví.
   hladina prostě nekreslí. Proto se OI zdi nemíchají mezi gamma zdi.
 - **Cenovka nese i podíl outright objemu** (v1.14, #1007): `· 74 % outright` říká,
   kolik dnešního objemu na striku zdi vytiskly outright obchody se stranou od
-  burzy; zbytek je strukturovaný objem (nohy spreadů, bloky). Zeď z outright
-  drží dealer jako plnou pozici, zeď ze spreadů má gammu částečně
-  vykompenzovanou. Zatím jen informace — kreslení zdi to nemění, dokud
-  kalibrace nedoloží rozdíl v chování ceny. Stejné číslo má i GEX žebřík.
+  burzy; zbytek je strukturovaný objem (nohy spreadů, bloky). Hypotéza: zeď
+  z outright drží dealer jako plnou pozici, zeď ze spreadů má gammu částečně
+  vykompenzovanou. **Měření 8. 10. 2026 je neprůkazné** (v1.31, #1019): zdi
+  s outright ≥ 40 % drží bodově o 5–10 p. b. líp, ale na 13 seancích to nejde
+  odlišit od náhody; přeměření po ≥ 40 seancích. Do té doby jen informace —
+  kreslení zdi, setupy ani upozornění to nemění. Stejné číslo má i GEX žebřík.
 - **Cenovka nese podíl na OI své strany**: nízké procento = plochý profil,
   „zeď" je jen nejvyšší z mnoha srovnatelných striků. **Slabé zdi (pod 20 %)
   se nekreslí vůbec** — práh leží v mezeře naměřeného rozdělení (hodnoty se
@@ -471,9 +473,12 @@ Není to šrafování — to patří výhradně chybějícímu OI. Když rozděl
 
 - **Důvěra v Cum Δ na striku.** Cum Δ z tisků popisuje jen outright; u striku,
   kde 60 % objemu nikdy nevytisklo trade, vypovídá o menšině dění.
-- **Kvalita zdi.** Zeď z outright objemu drží dealer jako plnou pozici, zeď ze
-  spreadů má gammu částečně vykompenzovanou druhou nohou — stejné OI, slabší
-  tlak. Proto totéž číslo nese cenovka OI zdí a žebříku.
+- **Kvalita zdi — zatím hypotéza.** Zeď z outright objemu by měl dealer držet
+  jako plnou pozici, zeď ze spreadů má gammu částečně vykompenzovanou druhou
+  nohou — stejné OI, slabší tlak. Měření 8. 10. 2026 (v1.31, #1019) rozdíl
+  v chování ceny neprokázalo ani nevyvrátilo (bodově +5 až +10 p. b. pro outright
+  zdi, neprůkazně); proto totéž číslo nese cenovka OI zdí a žebříku jen jako
+  informace.
 - **Záměr na 0DTE.** Rostoucí strukturovaný objem kolem úrovně = sázka na
   rozsah; prudce rostoucí outright nad cenou = pokus o průraz.
 
