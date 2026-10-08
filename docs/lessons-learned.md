@@ -92,6 +92,16 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 2. Diagnostika (zastavil jsem se u první hypotézy)
 
+- **2026-10-08 — měření zdí × podíl outright (#1019) dalo třikrát jiný verdikt, než se metoda ustálila.**
+  První běh: „nepotvrzeno" — jenže práh výsledku „drží" ležel na úrovni, která spouští dotek (víc než
+  polovina doteků „držela" už na dalším baru), a RTH s nocí se sčítaly, ač se skupiny lišily
+  složením (86 % × 55 % RTH). Oprava se šířkou bariéry zvolenou až po prvním běhu dala zase
+  „nepotvrzeno", ale s původní šířkou by síto prošlo. Pravdivý verdikt byl „neprůkazné". Odhalili to
+  dva nezávislí ověřovatelé, ne já. → U event study: práh výsledku nesmí ležet na spouštěči události;
+  vrstvy, které zadání jmenuje, jsou primární analýza (stratifikace), ne popisný rozpad; kontrola
+  vůči nulovému modelu z polohy události; když se parametr mění po prvním běhu, povinně tabulka
+  citlivosti a výslovná poznámka v reportu. Ověřovatele pustit znovu po každé změně metody.
+
 - **2026-10-08 — živá CumΔ šla dva měsíce proti ceně a srovnání zdrojů to četlo jako „jiná veličina“ (#1018).**
   Midpoint test (SPEC 4.5) porovnával `snapshot.last` — obchod starší než snímek — s aktuálním bid/ask:
   při růstu ceny vyjde call „prodej“ a put „nákup“, obojí záporná delta. Srovnání midpoint × tisky
