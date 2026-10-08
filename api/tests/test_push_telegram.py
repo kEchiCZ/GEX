@@ -123,12 +123,15 @@ def _legacy_category(kind: str) -> str:
         return "ops"
     # news_preopen (#1291) a release_preview (#1296) vznikly po #1175 — patří ke zprávám
     # jako news_anomaly
+    # news_feed_* (#1451): výpadek zdroje zpráv — výchozí zapnuto jako zprávy
     if kind in (
         "news_anomaly",
         "news_preopen",
         "release_preview",
         "vol_concentration",
         "expiry_calendar",
+        "news_feed_error",
+        "news_feed_recovered",
     ):
         return "news"
     return "info"
@@ -230,8 +233,9 @@ def test_dedeni_z_kategorii() -> None:
         "release_preview",
         "vol_concentration",
         "expiry_calendar",
+        "news_feed",
     }
-    assert len(info) == 11  # 4 v „Setupy a burza", 7 v „Chování aplikace"
+    assert len(info) == 10  # 4 v „Setupy a burza", 6 v „Chování aplikace"
     assert setup == {"setup", "risk_brake", "setup_stage", "paper", "scenario"}
 
     _, topics = effective({"push_telegram_news": False})

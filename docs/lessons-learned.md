@@ -92,6 +92,15 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 2. Diagnostika (zastavil jsem se u první hypotézy)
 
+- **2026-10-08 — feed Yahoo `rssindex` vracel dva týdny HTTP 404 a nikdo to nevěděl (#1451).**
+  Zdraví collectoru hlídalo zdroj `rss_news` jako celek. Dokud odpovídaly CNBC a MarketWatch, byl
+  zdroj „ok“ a mrtvý feed psal jen `warning` do logu každou minutu. Zdroj přitom přišel o 94 % zpráv,
+  které už nejdou dohledat. Našlo se to až přes tvrdá data (`news_events` podle `raw.feed`, E-0.4a).
+  Navíc mrtvý feed spolu s 304 u ostatních vyhodil výjimku a backoff zpomalil i zdravé feedy.
+  → Souhrnné zdraví nesmí maskovat selhání části: stav držet per feed (`feed_failures`), trvalé
+  selhání hlásit hranovým alertem (`FeedWatch`) a výjimku pro runner házet, jen když selže všechno.
+  U každého nového zdroje s víc URL se ptát, kdo uvidí smrt jednoho z nich.
+
 - **2026-09-26 — o víkendu chodila upozornění „data nechodí“ z IBKR i tasty (#1307): hlídače soudily zavřený trh z dat.**
   `oi_refresh_failed` à 30 min pro ES i NQ, `spot_fallback` po nočním reconnectu DXLink, `strikes_stalled`
   po sobotním rollu, dřív i `connection_stall` ~216× za víkend. Každý hlídač poznal zavřený trh jen

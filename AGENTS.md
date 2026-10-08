@@ -64,6 +64,8 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
 - **Zavřený trh = žádná upozornění na chybějící data.** Každý hlídač výpadku dat (IBKR, tasty,
   OI, greeks, striky, spojení) má bránu „očekávají se data?“ z `compute/marketclock.is_market_closed`
   a test na víkend, denní pauzu a nedělní otevření; při zavřeném trhu jen loguje (#968, #1228, #1307).
+  Výjimka: hlídka RSS feedů zpráv (#1451) bránu nemá — reaguje na chybu stažení, ne na ticho, a zprávy
+  vycházejí i o víkendu.
 - **Obchodní den, ne kalendářní.** `trading_session_date` i UTC klíče partic a OI archivu mají
   sobotu a neděli. Kdo na den váže US open, settle, publikaci OI nebo srovnání „proti předchozímu
   dni", ptá se jediného predikátu `compute/settle.is_trading_session` (frontend: protějšek

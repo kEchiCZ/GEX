@@ -9,9 +9,9 @@ import datetime as dt
 import httpx
 import pytest
 
-from gexlens_news.collectors.rss import RssCollector
+from gexlens_news.collectors.rss import FeedFailure, RssCollector
 from gexlens_news.config import NEWS_RSS_URLS
-from gexlens_news.feed_watch import ERROR_KIND, RECOVERED_KIND, FeedWatch
+from gexlens_news.feed_watch import ERROR_KIND, RECOVERED_KIND, FeedWatch, feed_label
 from gexlens_news.http import Response
 
 DEAD = "https://finance.yahoo.com/news/rssindex"
@@ -196,3 +196,48 @@ async def test_necitelne_xml_je_selhani_feedu_a_rada_pokracuje() -> None:
     await collector.fetch()
     failure = collector.feed_failures[DEAD]
     assert failure.since == WEDNESDAY and failure.last_error == "ParseError"
+
+
+def test_zpravy_se_lisi_v_prvnich_80_znacich() -> None:
+    """Telegram slučuje alerty se shodným začátkem zprávy — feedy se tam musí lišit."""
+    from gexlens_news.config import FED_RSS_URLS
+
+    now = WEDNESDAY + dt.timedelta(hours=2)
+    failure = FeedFailure(since=WEDNESDAY, last_error="HTTP 404")
+    for urls in (NEWS_RSS_URLS, FED_RSS_URLS):
+        heads = {FeedWatch._failed(("rss_news", url), failure, now)["message"][:80] for url in urls}
+        assert len(heads) == len(urls)
+    assert feed_label(NEWS_RSS_URLS[2]).endswith(" ^GSPC")
+
+
+async def test_feed_ozil_a_znovu_selhal_mezi_tiky_je_nova_epizoda() -> None:
+    clock = Clock(WEDNESDAY)
+    fetcher = Fetcher({DEAD: 404})
+    collector = _collector(fetcher, clock)
+    watch = FeedWatch([collector])
+    await collector.fetch()
+    clock.now = WEDNESDAY + dt.timedelta(hours=1)
+    assert [a["kind"] for a in watch.run(clock.now)] == [ERROR_KIND]
+
+    fetcher.dead.clear()
+    await collector.fetch()  # ožil…
+    fetcher.dead[DEAD] = 500
+    clock.now = WEDNESDAY + dt.timedelta(hours=1, minutes=1)
+    await collector.fetch()  # …a před dalším tikem hlídky zase selhal
+    assert [a["kind"] for a in watch.run(clock.now)] == [RECOVERED_KIND]
+    clock.now = WEDNESDAY + dt.timedelta(hours=2, minutes=1)
+    [again] = watch.run(clock.now)
+    assert again["kind"] == ERROR_KIND and "HTTP 500" in again["message"]
+
+
+async def test_round_robin_drzi_selhani_nestazeneho_feedu() -> None:
+    """Reddit stahuje jeden feed za cyklus — úspěch druhého selhání prvního nesmaže."""
+    clock = Clock(WEDNESDAY)
+    first, second = "https://www.reddit.com/r/a/hot/.rss", "https://www.reddit.com/r/b/hot/.rss"
+    collector = RssCollector(
+        "reddit_rss", [first, second], Fetcher({first: 429}), round_robin=True, clock=clock
+    )
+    with pytest.raises(RuntimeError, match="HTTP 429"):  # jediný splatný feed selhal
+        await collector.fetch()
+    await collector.fetch()  # druhý feed uspěje
+    assert set(collector.feed_failures) == {first}
