@@ -4,6 +4,7 @@ import datetime as dt
 from pathlib import Path
 
 import numpy as np
+import pytest
 from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
@@ -18,6 +19,7 @@ from gexlens_engine.storage.sentiment import (
     news_reactions,
     reaction_row_values,
 )
+from gexlens_news.config import NewsSettings
 from gexlens_news.ngram_job import MIN_EVAL, NgramShadowJob, TrainedMagnitude
 from gexlens_news.ngram_model import LogisticModel
 from gexlens_news.prediction_job import PredictionJob
@@ -327,3 +329,11 @@ def test_run_retrains_once_a_day_and_survives_thin_db(tmp_path: Path) -> None:
             ).fetchall()
             == []
         )
+
+
+def test_stin_je_ve_vychozim_stavu_vypnuty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verdikt #1131 (varianta C, #1469): bez proměnné prostředí stín neběží."""
+    monkeypatch.delenv("GEXLENS_NEWS_NGRAM_SHADOW_ENABLED", raising=False)
+    assert NewsSettings(_env_file=None).ngram_shadow_enabled is False  # type: ignore[call-arg]
+    monkeypatch.setenv("GEXLENS_NEWS_NGRAM_SHADOW_ENABLED", "true")
+    assert NewsSettings(_env_file=None).ngram_shadow_enabled is True  # type: ignore[call-arg]

@@ -98,8 +98,11 @@ class NewsSettings(BaseSettings):
     # Ngram magnitudová hlava ve STÍNU (#740 fáze 2): zapisuje jen
     # `news_classifications` se source='ngram' (direction=0) a lift metriky
     # do `news_ngram_shadow` — do SentIndexu, vah ani signálů nic neteče.
-    # Default zapnuto: je to měření, ne zásah (R4); vypnutí pro ladění.
-    ngram_shadow_enabled: bool = True
+    # Default VYPNUTO od verdiktu #1131 (8. 10. 2026, varianta C): text nenese
+    # informaci o velikosti pohybu nad denní dobu, `importance` z hlavy se
+    # nezapíná. Kód a historie `source='ngram'` zůstávají pro přeměření
+    # (`scripts/measure_ngram_shadow_1131.py`).
+    ngram_shadow_enabled: bool = False
     ngram_interval_s: float = Field(default=300.0, gt=0)
 
     # Okno rolling deduplikace (#273, #351): musí pokrýt republikace téže story
