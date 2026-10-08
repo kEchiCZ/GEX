@@ -92,6 +92,23 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 2. Diagnostika (zastavil jsem se u první hypotézy)
 
+- **2026-10-08 — stínová brána ngram hlavy (#1131) ukazovala falešný průchod: baseline z remízy, žádný nulový model denní doby.**
+  Job řadil baseline podle průměru kategorie, takže celá kategorie měla jedno skóre. Hranice horního
+  decilu padla dovnitř FED (2 821 řádků) a řádky vybralo pořadí z PG bez ORDER BY. Baseline proto
+  mezi běhy skákala 0,91–1,66 a brána střídala průchod s neprůchodem (ES 29 : 13 ze 42 běhů,
+  v termínu 26. 9. průchod 1,039 proti 0,869). Se shodami spočtenými jako očekávaná hodnota je hlava
+  ve sdruženém liftu pod baseline. Odhalila to až celá tabulka historie běhů, ve které baseline
+  skákala, zatímco lift hlavy stál; dřív se četl jen poslední běh. Druhá past: sdružený lift skóre,
+  které se mění v čase (walk-forward průměry), vyšel 1,55, ale v každém týdnu jen ≤ 1,16. Míchal
+  pořadí uvnitř dne s rozdíly mezi dny. Třetí past: model měl mezi rysy hodinu a zdroj. Uvnitř vrstev
+  seance × hodina měl ρ −0,01 a nulový model zdroj × hodina bez textu byl lepší než on. Stejnou
+  remízu a stejnou chybějící kontrolu měl i offline experiment #749, na kterém stál závěr
+  „velikost ANO“ (oprava liftu #1467).
+  → Ranking metrika se shodnými skóre počítá shody očekávanou hodnotou a nikdy nespoléhá na pořadí
+  řádků. U stínové brány se čte celá historie běhů, ne poslední číslo. Skóre, které se mění v čase,
+  se hodnotí i uvnitř seance. Model s rysy denní doby nebo zdroje se srovnává s nulovým modelem
+  z týchž rysů bez textu.
+
 - **2026-10-08 — měření zdí × podíl outright (#1019) dalo třikrát jiný verdikt, než se metoda ustálila.**
   První běh: „nepotvrzeno" — jenže práh výsledku „drží" ležel na úrovni, která spouští dotek (víc než
   polovina doteků „držela" už na dalším baru), a RTH s nocí se sčítaly, ač se skupiny lišily
