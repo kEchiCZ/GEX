@@ -529,7 +529,7 @@ def report(
         f" (ES {sum(r.symbol == 'ES' for r in live)}, NQ {sum(r.symbol == 'NQ' for r in live)}).",
         "- Deferred (trh zavřený, výnos uzavírky): ES"
         f" {len(deferred_es)}, Ø |ret| {_f(float(np.mean(deferred_mags)), 2)} bp"
-        f" (nejvyšší seance {_f(max(deferred_by_session.values()), 2)} bp);"
+        f" (nejvyšší seance {_f(max(deferred_by_session.values(), default=0.0), 2)} bp);"
         f" ostatní živé ES Ø |ret| {_f(float(np.mean(other_mags)), 2)} bp.",
         "- Zdroje živých řádků ES: "
         + ", ".join(

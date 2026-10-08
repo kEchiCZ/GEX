@@ -12,8 +12,8 @@
   - Horní decil ES má 1 662 míst. GEOPOLITICS (326), MACRO_GROWTH (69) a MACRO_LABOR (339) ho
     nezaplní, takže hranice padne dovnitř FED: 928 míst pro 2 821 řádků. Které z nich se do
     decilu dostanou, rozhodne pořadí, v jakém je vrátí PG (dotaz nemá ORDER BY).
-  - Číslo jobu proto mezi běhy přeskakuje, zatímco lift hlavy drží 1,10–1,12 (tabulka Historie
-    jobu). Ze 42 běhů vyšlo u ES 29 průchodů a 13 neprůchodů, všechny s `baseline_source =
+  - Číslo jobu proto mezi běhy přeskakuje, zatímco lift hlavy od 26. 9. 22:25 drží 1,10–1,12
+    (předtím 0,92–1,04; tabulka Historie jobu). Ze 42 běhů vyšlo u ES 29 průchodů a 13 neprůchodů, všechny s `baseline_source =
     training`. Po sobě:
     - 12.–16. 9. převážně neprůchod (8 z 9 běhů);
     - 16. 9. 21:09 až 26. 9. 15:46 průchod, **v termínu (26. 9. 15:46, n 3 635) ES 1,039 proti
@@ -22,8 +22,8 @@
     - 30. 9. až 7. 10. 00:02 průchod;
     - 7. 10. 17:27 neprůchod (1,111 proti 1,659);
     - 8. 10. průchod (10:06, n 16 778: 1,110 proti 1,008).
-  - Při náhodném pořadí řádků vychází baseline ES 1,19–1,30 (5.–95. percentil). Fyzické pořadí
-    tabulky je shlukované v čase, proto skáče job víc.
+  - Při náhodném pořadí řádků vychází baseline ES 1,19–1,30 (5.–95. percentil). Job skáče víc,
+    pravděpodobně proto, že fyzické pořadí tabulky je shlukované v čase.
   - Pro běhy po přepočtu kontaminace (26. 9. 22:25) je remíza v tomto měření doložená. Pro běhy
     před ním, včetně běhu v termínu, je pravděpodobná (stejná konstrukce baseline), ověřit ji ale
     nejde: `cont_5` i kategorie se 26. 9. přepsaly.
@@ -52,7 +52,7 @@
     u NQ −0,011 [−0,031; +0,009]. Celou výhodu hlavy uvnitř seance tedy nesou rysy hodina
     a zdroj (`h=`, `src=`).
   - Nulový model bez textu (průměr |ret_5| buňky zdroj × hodina z minulosti) je lepší než hlava.
-    Uvnitř seance má lift 1,346 [1,202; 1,494], u NQ 1,274. Sdruženě dává 1,401 proti 1,111.
+    Uvnitř seance má lift 1,346 [1,202; 1,494], u NQ 1,274. Sdruženě (definice jobu) dává 1,401 proti 1,111.
   - `importance` z hlavy by tak v praxi znamenala jen „zpráva v aktivní hodině = důležitá“.
 - **Průřez `dir × ret` (vstup ADR-0053): směr pravidel na 5min okně živě nic nenese.**
   - Pravidla se vyjádří u 16 % zpráv (ES 2 230 ze 14 147).
@@ -68,7 +68,7 @@
 | | výhody | nevýhody |
 |---|---|---|
 | A. Zapnout `importance` z hlavy | – | kritérium nesplněno a importance by kopírovala denní dobu, kterou obchodník vidí na hodinách |
-| B. Prodloužit stín | průběžná kontrola trvá | chybí důvod: 15 tis. vzorků a ρ uvnitř hodiny do ±0,03, víc dat obraz nezmění. Denní trénink stojí 162 s CPU nad 142 777 vzorky (log news-enginu 8. 10. 10:08 UTC) a drží největší matice news-enginu (#1105). Přibývá ~2,4 tis. řádků `ngram` denně (100 408 za 26. 8.–7. 10., `1381-tvrda-data.md` kap. 3). Číslo jobu by se muselo opravit (#1467), jinak dál klame |
+| B. Prodloužit stín | průběžná kontrola trvá | chybí důvod: 15 tis. vzorků a ρ uvnitř hodiny do ±0,03, víc dat obraz nezmění. Denní trénink stojí 162 s CPU nad 142 777 vzorky (log news-enginu 8. 10. 10:08 UTC) a drží největší matice news-enginu (#1105). Přibývá ~2,3 tis. řádků `ngram` denně (100 408 za 26. 8.–7. 10., `1381-tvrda-data.md` kap. 3). Číslo jobu by se muselo opravit (#1467), jinak dál klame |
 | **C. Zahodit: nezapínat a stín vypnout** | ušetří CPU a paměť news-enginu a zmizí číslo, které střídá falešný průchod s neprůchodem | průběžné číslo zmizí; skript jde ale pustit kdykoli nad uloženou historií |
 
 Vypnutí znamená:
@@ -120,8 +120,8 @@ Udělá se samostatným issue, až vlastník rozhodne.
        chyby, mění ale rozhodovací číslo.
     2. Hlavní srovnání zůstalo proti baseline z tréninku jobu, jak bylo předregistrováno;
        walk-forward stojí vedle.
-    3. Deferred reakce jsou vyřazené, ne sloučené do jednoho měření na uzavírku. `closure_open_ts`
-       má ve vzorku vyplněné jen 2 uzavírky a reakce uzavírky měří gap, ne zprávu.
+    3. Deferred reakce jsou vyřazené, ne sloučené do jednoho měření na uzavírku: reakce uzavírky
+       měří gap, ne zprávu.
     4. Nulový model zdroj × hodina přibyl po průzkumu dat, před prvním během skriptu.
     5. Diagnostika uvnitř seance a seance × hodina přibyla po prvním běhu.
   - Doporučení C stojí na bodech 4 a 5, tedy na kontrolách, které předregistrované nebyly.
