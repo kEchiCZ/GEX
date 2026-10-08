@@ -29,16 +29,20 @@ Událost = test zdi front expirace (0DTE řetěz seance, partice `derived/{sym}/
 Analýza (zadání #1019: RTH a noc odděleně): skupiny outright ≥ `OUTRIGHT_SPLIT`
 (40 %, návrh #1007) × pod ním, **stratifikované RTH / noc**. Primární číslo je
 sdružený rozdíl podílu „drží" high − low s váhami Mantel–Haenszel přes obě vrstvy
-a 95% interval z bootstrapu po seancích (losují se celé seance s oběma vrstvami).
-Verdikt „outright drží lépe" jen když n ≥ `MIN_SAMPLE` v obou skupinách a dolní
-mez sdruženého rozdílu > 0. Totéž pro „přebytek drží" jako kontrola citlivosti;
-vrstvy, dominance zdi, ES/NQ a call/put jsou popisné.
+a 95% interval z bootstrapu po obchodních dnech (losují se celé dny; ES a NQ téhož
+dne jsou korelované). Síto „outright drží lépe" = n ≥ `MIN_SAMPLE` v obou skupinách
+a dolní mez sdruženého rozdílu > 0; totéž pro „přebytek drží" jako kontrolu vlivu
+polohy doteku. Vrstvy, dominance zdi, ES/NQ a call/put jsou popisné.
 
-Odchylka od plánu session (8. 10.): první běh měl práh „drží" na úrovni doteku
-(`MOVE_BP` = `TOUCH_BP` = 4,5 bp) a sloučené RTH + noc. Nezávislý ověřovatel
-ukázal, že tím víc než polovina doteků „držela" už na dalším baru a že skupiny
-se liší složením RTH/noc → bariéry symetricky kolem zdi, nulová pravděpodobnost
-a stratifikace (výsledek prvního běhu je v reportu uveden).
+Odchylky od plánu session (8. 10.), uvedené i v reportu:
+- první běh měl práh „drží" na úrovni doteku (4,5 bp = tolerance doteku) a sloučené
+  RTH + noc; ověřovatel ukázal, že tím víc než polovina doteků „držela" už na dalším
+  baru a že skupiny se liší složením RTH/noc → bariéry symetricky kolem zdi, nulová
+  pravděpodobnost, stratifikace, filtry pokrytí a settle;
+- **šířka bariéry 9 bp byla zvolena až po prvním běhu** — proto tabulka citlivosti
+  `SENSITIVITY_BP` (4,5 / 6,75 / 9 / 13,5 bp) a varianta bez doteků odmítnutých knotem;
+- dělení mediánem (v plánu jako kontrola) vypuštěno — medián podílu je 40,1 %,
+  dělení je s prahem 40 % prakticky totožné.
 
 Spuštění (z kořene repa):
     uv run python scripts/measure_wall_outright_1019.py --from 2026-09-21 --to 2026-10-07 \\
@@ -64,6 +68,8 @@ from gexlens_engine.compute.setupstats import wilson_lower_bound
 
 TOUCH_BP = 4.5
 BARRIER_BP = 9.0
+#: Šířky bariéry pro tabulku citlivosti (4,5 = práh prvního běhu, 9 = primární)
+SENSITIVITY_BP = (4.5, 6.75, 9.0, 13.5)
 REARM_BP = 15.0
 HORIZON_MIN = 30
 MIN_VOLUME = 100.0
@@ -242,8 +248,11 @@ def find_events(
     dominance: dict[dt.datetime, tuple[float | None, float | None]],
     printvol: PrintVol,
     skipped: Skipped,
+    barrier_bp: float = BARRIER_BP,
 ) -> list[Event]:
-    """Doteky zdí a jejich výsledek; zeď = hodnota v minutě doteku (point-in-time)."""
+    """Doteky zdí a jejich výsledek; zeď = hodnota v minutě doteku (point-in-time).
+
+    Horizont výsledku končí nejpozději v settle 0DTE (po něm je zeď prošlé expirace)."""
     times = sorted(t for t in bars if t in walls)
     settle = expiry_settle_ts(session, None, symbol)
     events: list[Event] = []
@@ -276,13 +285,13 @@ def find_events(
             ):
                 skipped.coverage += 1
                 continue
-            barrier = wall * BARRIER_BP / 1e4
+            barrier = wall * barrier_bp / 1e4
             # Poloha close doteku: kladná = už za zdí (směr průrazu), v jednotkách ceny
             beyond_now = (close - wall) if side == "call" else (wall - close)
             p_null = min(1.0, max(0.0, (barrier - beyond_now) / (2 * barrier)))
             outcome = "nerozhodnuto"
             for later in times[i + 1 :]:
-                if (later - ts).total_seconds() > HORIZON_MIN * 60:
+                if (later - ts).total_seconds() > HORIZON_MIN * 60 or later >= settle:
                     break
                 c = bars[later][2]
                 beyond = (c - wall) if side == "call" else (wall - c)
@@ -360,14 +369,15 @@ def mh_difference(high: Sequence[Event], low: Sequence[Event], metric: Metric) -
 
 def bootstrap_mh(
     high: Sequence[Event], low: Sequence[Event], metric: Metric, rng: np.random.Generator
-) -> tuple[float, float] | None:
-    """95% percentilový interval `mh_difference`; losují se celé seance (symbol × den)."""
-    keys = sorted({(e.symbol, e.session) for e in (*high, *low)})
-    by_key: dict[tuple[str, dt.date], tuple[list[Event], list[Event]]] = {k: ([], []) for k in keys}
+) -> tuple[float, float, int] | None:
+    """95% percentilový interval `mh_difference` + počet zahozených losů (žádná vrstva
+    s oběma skupinami). Losují se celé obchodní dny — ES a NQ téhož dne jsou korelované."""
+    keys = sorted({e.session for e in (*high, *low)})
+    by_key: dict[dt.date, tuple[list[Event], list[Event]]] = {k: ([], []) for k in keys}
     for e in high:
-        by_key[(e.symbol, e.session)][0].append(e)
+        by_key[e.session][0].append(e)
     for e in low:
-        by_key[(e.symbol, e.session)][1].append(e)
+        by_key[e.session][1].append(e)
     # Součty a počty per seance × skupina × vrstva → bootstrap nad maticemi
     shape = (len(keys), 2, len(STRATA))
     sums = np.zeros(shape)
@@ -389,11 +399,11 @@ def bootstrap_mh(
         w = np.where((n1 > 0) & (n0 > 0), n1 * n0 / (n1 + n0), 0.0)
         diff = np.where(w > 0, means[:, 0, :] - means[:, 1, :], 0.0)
         pooled = (w * diff).sum(axis=1) / w.sum(axis=1)
-    pooled = pooled[np.isfinite(pooled)]
-    if pooled.size == 0:
+    finite = np.isfinite(pooled)
+    if not finite.any():
         return None
-    low_q, high_q = np.percentile(pooled, [2.5, 97.5])
-    return float(low_q), float(high_q)
+    low_q, high_q = np.percentile(pooled[finite], [2.5, 97.5])
+    return float(low_q), float(high_q), int((~finite).sum())
 
 
 # ── Report ─────────────────────────────────────────────────────────
@@ -447,7 +457,7 @@ def _newcombe_cell(high: Sequence[Event], low: Sequence[Event]) -> str:
     return f"{_pp(diff)} [{_pp(lo)}; {_pp(hi)}]"
 
 
-def primary(events: Sequence[Event], rng: np.random.Generator) -> tuple[str, bool]:
+def primary(events: Sequence[Event]) -> tuple[str, bool]:
     high, low = _split(events)
     strata_rows = []
     for stratum in STRATA:
@@ -483,23 +493,62 @@ def primary(events: Sequence[Event], rng: np.random.Generator) -> tuple[str, boo
         )
     ]
     for label, metric in (("drží", _held), ("přebytek drží nad nulovou p", _excess)):
-        diff = mh_difference(high, low, metric)
-        boot = bootstrap_mh(high, low, metric, rng)
-        value = "—" if diff is None else _pp(diff)
-        if boot is not None:
-            value += f" [{_pp(boot[0])}; {_pp(boot[1])}]"
+        value, ok = _mh_cell(high, low, metric)
         suffix = " — dolní mez > 0" if metric is _held else " (kontrola)"
         checks.append(
             (
                 f"{label}: rozdíl high − low sdružený přes RTH/noc (Mantel–Haenszel), "
-                f"bootstrap po seancích 95 %{suffix}",
+                f"bootstrap po dnech 95 %{suffix}",
                 value,
-                boot is not None and boot[0] > 0,
+                ok,
             )
         )
     sieve = _table(["síto", "hodnota", ""], [[n, v, "✔" if ok else "✘"] for n, v, ok in checks])
     verdict = checks[0][2] and checks[1][2]
     return table + "\n\n" + sieve, verdict
+
+
+def _mh_cell(high: Sequence[Event], low: Sequence[Event], metric: Metric) -> tuple[str, bool]:
+    """„rozdíl [interval]" sdruženého rozdílu a zda je dolní mez nad nulou.
+
+    Každé volání má vlastní generátor se `SEED` — tatáž data dají v celém reportu
+    tentýž interval (primární tabulka i řádek citlivosti)."""
+    diff = mh_difference(high, low, metric)
+    boot = bootstrap_mh(high, low, metric, np.random.default_rng(SEED))
+    value = "—" if diff is None else _pp(diff)
+    if boot is not None:
+        value += f" [{_pp(boot[0])}; {_pp(boot[1])}]"
+        if boot[2]:
+            value += f" ({boot[2]} losů bez společné vrstvy zahozeno)"
+    return value, boot is not None and boot[0] > 0
+
+
+def sensitivity(by_barrier: dict[float, list[Event]]) -> str:
+    """Primární síto pro různé šířky bariéry (citlivost na volbu po prvním běhu) a pro
+    primární šířku bez doteků odmítnutých knotem (close doteku už za bariérou „drží")."""
+    rows: list[list[object]] = []
+    variants = [(f"±{b:g} bp".replace(".", ","), events) for b, events in by_barrier.items()]
+    primary_events = by_barrier[BARRIER_BP]
+    variants.append(
+        (
+            f"±{BARRIER_BP:g} bp bez odmítnutí knotem".replace(".", ","),
+            [e for e in primary_events if e.p_null < 1.0],
+        )
+    )
+    for label, events in variants:
+        high, low = _split(events)
+        held, held_ok = _mh_cell(high, low, _held)
+        excess, excess_ok = _mh_cell(high, low, _excess)
+        rows.append(
+            [
+                label,
+                f"{len(high)} / {len(low)}",
+                held + (" ✔" if held_ok else ""),
+                excess + (" ✔" if excess_ok else ""),
+            ]
+        )
+    header = ["bariéra", "n high / low", "drží: rozdíl MH [95 %]", "přebytek: rozdíl MH [95 %]"]
+    return _table(header, rows)
 
 
 def breakdown(events: Sequence[Event]) -> str:
@@ -536,8 +585,12 @@ def breakdown(events: Sequence[Event]) -> str:
     return _table(header, rows)
 
 
-def report(events: list[Event], sessions: list[list[object]], skipped: dict[str, Skipped]) -> str:
-    rng = np.random.default_rng(SEED)
+def report(
+    by_barrier: dict[float, list[Event]],
+    sessions: list[list[object]],
+    skipped: dict[str, Skipped],
+) -> str:
+    events = by_barrier[BARRIER_BP]
     out = ["## Seance\n"]
     out.append(
         _table(
@@ -569,9 +622,13 @@ def report(events: list[Event], sessions: list[list[object]], skipped: dict[str,
                 f"Podíl outright na zdi při doteku: medián {_pct(statistics.median(measured))}, "
                 f"kvartily {_pct(quart[0])} – {_pct(quart[2])}, n = {len(measured)}."
             )
-        table, ok = primary(subset, rng)
+        table, ok = primary(subset)
         verdict = "outright drží lépe — síta splněna" if ok else "síta NEsplněna"
         out.append(f"\n### Primárně: práh 40 %, stratifikováno RTH / noc — {verdict}\n\n{table}")
+        out.append("\n### Citlivost na šířku bariéry (✔ = dolní mez > 0)\n")
+        out.append(
+            sensitivity({b: [e for e in ev if e.source == source] for b, ev in by_barrier.items()})
+        )
         out.append("\n### Rozpad (popisný)\n")
         out.append(breakdown(subset))
     return "\n".join(out) + "\n"
@@ -588,7 +645,7 @@ def main() -> None:
     parser.add_argument("--to", dest="date_to", type=dt.date.fromisoformat, required=True)
     parser.add_argument("--out", type=Path, required=True, help="výstupní Markdown (UTF-8)")
     args = parser.parse_args()
-    events: list[Event] = []
+    by_barrier: dict[float, list[Event]] = {b: [] for b in SENSITIVITY_BP}
     sessions: list[list[object]] = []
     skipped = {source: Skipped() for source, *_ in WALL_SOURCES}
     day = args.date_from
@@ -602,11 +659,15 @@ def main() -> None:
                 if len(bars) >= 1000 and printvol.rows:
                     for source, partition, call_col, put_col in WALL_SOURCES:
                         walls = load_walls(args.derived, symbol, day, partition, call_col, put_col)
-                        batch = find_events(
-                            symbol, day, source, bars, walls, dominance, printvol, skipped[source]
-                        )
-                        events.extend(batch)
-                        found += len(batch)
+                        for barrier in SENSITIVITY_BP:
+                            # Filtry nezávisí na bariéře — vynechané se počítají jen jednou
+                            skip = skipped[source] if barrier == BARRIER_BP else Skipped()
+                            batch = find_events(
+                                symbol, day, source, bars, walls, dominance, printvol, skip, barrier
+                            )
+                            by_barrier[barrier].extend(batch)
+                            if barrier == BARRIER_BP:
+                                found += len(batch)
                 null_share = printvol.null_rows / len(printvol.rows) if printvol.rows else 0.0
                 sessions.append(
                     [
@@ -626,7 +687,7 @@ def main() -> None:
         f"min. objem na striku {MIN_VOLUME:.0f}, práh {_pct(OUTRIGHT_SPLIT)}, "
         f"MIN_SAMPLE {MIN_SAMPLE}, bootstrap {N_BOOT}× po seancích, semínko {SEED}.\n\n"
     )
-    args.out.write_text(title + params + report(events, sessions, skipped), encoding="utf-8")
+    args.out.write_text(title + params + report(by_barrier, sessions, skipped), encoding="utf-8")
 
 
 if __name__ == "__main__":
