@@ -92,6 +92,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 2. Diagnostika (zastavil jsem se u první hypotézy)
 
+- **2026-10-08 — `urllib.robotparser` hlásil SEC `/cgi-bin` jako povolené (#1474).**
+  Robots.txt SEC má jedinou skupinu `User-agent: *`, kterou přerušují prázdné řádky a komentáře.
+  Standardní knihovna skupinu ukončí prázdným řádkem, takže `Disallow: /cgi-bin` tiše zahodila a sonda
+  doporučila feed, který robots.txt zakazuje. Odhalil to nezávislý ověřovatel ruční kontrolou souboru.
+  → Robots.txt vyhodnocovat podle RFC 9309: skupinu ukončí až další `User-agent`, platí nejdelší
+  shoda a 5xx = zakázáno vše. Používat `robots_allows` ze `scripts/news_candidates_probe.py`
+  s testem na strukturu SEC, ne `urllib.robotparser`.
+
 - **2026-10-08 — stínová brána ngram hlavy (#1131) ukazovala falešný průchod: baseline z remízy, žádný nulový model denní doby.**
   Job řadil baseline podle průměru kategorie, takže celá kategorie měla jedno skóre. Hranice horního
   decilu padla dovnitř FED (2 821 řádků) a řádky vybralo pořadí z PG bez ORDER BY. Baseline proto
