@@ -45,6 +45,7 @@ from gexlens_news.crowd import (
     RedditCollector,
 )
 from gexlens_news.drift import DriftJob
+from gexlens_news.feed_watch import FeedWatch
 from gexlens_news.ffhistory import FfActualRefreshJob, run_backfill
 from gexlens_news.http import Fetcher, make_fetcher
 from gexlens_news.llm_classifier import GeminiClient, LlmClassificationJob
@@ -188,6 +189,8 @@ async def run(settings: NewsSettings) -> None:
         extra_rss_urls=tuple(extra_rss),
     )
     runner = CollectorRunner(collectors, writer.write)
+    # Hlídka jednotlivých RSS feedů (#1451) — zdraví zdroje vidí jen celek
+    feed_watch = FeedWatch([c for c in collectors if isinstance(c, RssCollector)])
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -544,6 +547,19 @@ async def run(settings: NewsSettings) -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=60.0)
 
+    async def feed_watch_loop() -> None:
+        """Hlídka RSS feedů (#1451) à 60 s — jen čte stav collectorů, nic nestahuje."""
+        while not stop.is_set():
+            try:
+                feed_alerts = feed_watch.run(dt.datetime.now(dt.UTC))
+                if publisher is not None:
+                    for alert in feed_alerts:
+                        await publisher.publish("alerts", alert)
+            except Exception:
+                logger.exception("Hlídka feedů selhala — zkusí se za minutu")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=60.0)
+
     async def release_preview_loop() -> None:
         """Upozornění před releasem (#1296) — vlastní 60s tikot.
 
@@ -587,6 +603,7 @@ async def run(settings: NewsSettings) -> None:
         crowd_loop(),
         ff_actual_loop(),
         release_preview_loop(),
+        feed_watch_loop(),
         alpaca_loop(),
         bluesky_loop(),
     )

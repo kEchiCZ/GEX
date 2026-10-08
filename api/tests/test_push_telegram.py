@@ -70,6 +70,8 @@ PUBLISHED_KINDS = frozenset(
         "strikes_recovered",
         "bars_stalled",
         "bars_recovered",
+        "news_feed_error",
+        "news_feed_recovered",
         "oi_missing",
         "oi_refresh_failed",
         "band_capped",
@@ -121,12 +123,15 @@ def _legacy_category(kind: str) -> str:
         return "ops"
     # news_preopen (#1291) a release_preview (#1296) vznikly po #1175 — patří ke zprávám
     # jako news_anomaly
+    # news_feed_* (#1451): výpadek zdroje zpráv — výchozí zapnuto jako zprávy
     if kind in (
         "news_anomaly",
         "news_preopen",
         "release_preview",
         "vol_concentration",
         "expiry_calendar",
+        "news_feed_error",
+        "news_feed_recovered",
     ):
         return "news"
     return "info"
@@ -174,7 +179,7 @@ def test_kazdy_druh_prave_jeden_prepinac() -> None:
     assert sum(len(topic.kinds) for topic in PUSH_TOPICS) == len(KIND_TOPIC)  # žádný dvakrát
     # broker je druh zprávy v kanálu news, retro_pass jde také kanálem news
     assert "broker" not in KIND_TOPIC and "retro_pass" not in KIND_TOPIC
-    assert len(PUSH_TOPICS) == 31
+    assert len(PUSH_TOPICS) == 32
     assert all(len(topic.setting) <= 64 for topic in PUSH_TOPICS)
     assert {topic.key for topic in PUSH_TOPICS if not topic.bell} == {"maintenance"}
 
@@ -205,7 +210,7 @@ def test_setting_keys_jen_master_a_topic() -> None:
         for key in PUSH_SETTING_KEYS
     )
     assert "push_telegram_news" not in PUSH_SETTING_KEYS
-    assert len(PUSH_SETTING_KEYS) == 32
+    assert len(PUSH_SETTING_KEYS) == 33
 
 
 # ── Dědění a efektivní stav ────────────────────────────────────────
@@ -228,6 +233,7 @@ def test_dedeni_z_kategorii() -> None:
         "release_preview",
         "vol_concentration",
         "expiry_calendar",
+        "news_feed",
     }
     assert len(info) == 10  # 4 v „Setupy a burza", 6 v „Chování aplikace"
     assert setup == {"setup", "risk_brake", "setup_stage", "paper", "scenario"}

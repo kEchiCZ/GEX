@@ -24,7 +24,8 @@ Rozhodnutí se tedy neopírá o „riziko je nízké", ale o tři konkrétní z�
 import asyncio
 import datetime as dt
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from xml.etree import ElementTree
 
@@ -116,6 +117,14 @@ def _describe(error: Exception) -> str:
     return type(error).__name__
 
 
+@dataclass(frozen=True)
+class FeedFailure:
+    """Trvající selhání jednoho feedu (#1451): od kdy selhává a poslední chyba."""
+
+    since: dt.datetime
+    last_error: str
+
+
 class RssCollector:
     """Jeden nebo více RSS/Atom feedů pod společným jménem zdroje."""
 
@@ -152,6 +161,9 @@ class RssCollector:
         self._round_robin = round_robin
         self._cursor = 0
         self._clock = clock
+        #: Feedy, které právě selhávají (#1451) — zdroj jako celek může být „ok",
+        #: i když jeden jeho feed vrací 404 celé týdny (Yahoo rssindex od 23. 9. 2026)
+        self._failures: dict[str, FeedFailure] = {}
 
     @property
     def name(self) -> str:
@@ -160,6 +172,11 @@ class RssCollector:
     @property
     def interval_s(self) -> float:
         return self._interval_s
+
+    @property
+    def feed_failures(self) -> Mapping[str, FeedFailure]:
+        """Feedy, jejichž poslední stažení selhalo, s časem prvního selhání v řadě."""
+        return dict(self._failures)
 
     async def _fetch_with_retry(self, url: str) -> Response:
         """Jeden pokus navíc při 429 (#941).
@@ -191,14 +208,18 @@ class RssCollector:
         now = self._clock()
         items: list[RawItem] = []
         errors: list[str] = []
-        for index, url in enumerate(self._due_urls()):
+        due = self._due_urls()
+        for index, url in enumerate(due):
             if index > 0 and self._inter_fetch_delay_s > 0:
                 await asyncio.sleep(self._inter_fetch_delay_s)
             try:
                 response = await self._fetch_with_retry(url)
                 if response.not_modified:
+                    self._failures.pop(url, None)
                     continue  # 304 — feed se nezměnil, nic k práci
                 entries = parse_items(response.text)
+                # Až po parsování: nečitelné XML je selhání feedu jako HTTP chyba
+                self._failures.pop(url, None)
                 if len(entries) > MAX_ITEMS_PER_FEED:
                     # Ořez, ne zahození: zdroj může legitimně poslat víc po
                     # výpadku. Novější položky jsou ve feedu první.
@@ -214,9 +235,15 @@ class RssCollector:
                         RawItem(source=self._name, payload={**entry, "feed": url}, fetched_at=now)
                     )
             except Exception as error:  # noqa: BLE001 — jeden mrtvý feed nezabije ostatní
-                errors.append(f"{url}: {_describe(error)}")
-        if errors and not items:
-            # Všechny feedy zdroje selhaly → ať to runner započítá do degradace
+                described = _describe(error)
+                errors.append(f"{url}: {described}")
+                previous = self._failures.get(url)
+                since = previous.since if previous is not None else now
+                self._failures[url] = FeedFailure(since=since, last_error=described)
+        if errors and len(errors) == len(due):
+            # Všechny feedy zdroje selhaly → ať to runner započítá do degradace.
+            # Ne „žádné položky": mrtvý feed + 304 u ostatních by jinak spustil
+            # backoff a zpomalil i zdravé feedy (#1451)
             raise RuntimeError("; ".join(errors))
         if errors:
             logger.warning("Část feedů %s selhala: %s", self._name, "; ".join(errors))

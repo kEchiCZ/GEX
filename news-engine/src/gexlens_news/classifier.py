@@ -29,8 +29,9 @@ Powell, `icc-cpi.int` v odkazu). Analýza #1293 (400 zpráv, dva hodnotitelé,
    …“). Názor a otázka shodí téma na 1 a událost na 2; měsíc „May“ názor
    není, sázka trhu na akci Fedu („Traders bet Fed cuts“) akce není.
 5. **Strop podle feedu** (ne podle zdroje — Yahoo i CNBC jsou `rss_news`):
-   sociální sítě bez kurátora 1, agregátory (Yahoo rssindex vč. syndikace
-   WSJ/Barron's/IBD, MarketWatch, uživatelské RSS) **jen události**
+   sociální sítě bez kurátora 1, agregátory (Yahoo — od 8. 10. 2026 headline
+   feedy ^GSPC/^IXIC, dřív rssindex vč. syndikace WSJ/Barron's/IBD, #1451 —,
+   MarketWatch, uživatelské RSS) **jen události**
    (3 → 2, 2 → 1; rozhodnutí uživatele 26. 9. 2026).
 6. **Kalendář FF**: importance = FF impact podle měny — USD High 3, Medium 2;
    rozhodnutí ECB/BoE/BoJ s High 2; ostatní 1. Regex nad titulkem kalendáře
@@ -104,8 +105,9 @@ AGGREGATOR_FEEDS = frozenset({FEED_YAHOO, FEED_MARKETWATCH, FEED_RSS_USER})
 def _rss_feed(url: str) -> str:
     """Feed `rss_news` podle URL feedu (`raw.feed`), záložně podle odkazu článku.
 
-    Yahoo `rssindex` syndikuje i WSJ, Barron's a IBD — doména odkazu by je
-    zařadila jinam, proto rozhoduje URL feedu.
+    Yahoo syndikuje cizí články (`rssindex` WSJ, Barron's a IBD; headline feedy
+    indexů od #1451 Fool, TheStreet, Benzinga) — doména odkazu by je zařadila
+    jinam, proto rozhoduje URL feedu.
     """
     lowered = url.lower()
     if "yahoo.com" in lowered:

@@ -458,6 +458,21 @@ PUSH_TOPICS: tuple[PushTopic, ...] = (
         ("Engine obnovuje stream", "Návrat barů a doplnění díry"),
     ),
     PushTopic(
+        "news_feed",
+        "app",
+        # Kategorie zpráv (rozhodnutí uživatele 8. 10. 2026): výchozí zapnuto, ale
+        # tiché hodiny počká — zvonek bez otevřeného tabu alert neudrží a výpadek
+        # Yahoo 23. 9. – 8. 10. tak zůstal dva týdny bez povšimnutí
+        "news",
+        ("news_feed_error", "news_feed_recovered"),
+        "Feed zpráv nefunguje",
+        "RSS feed zpráv selhává bez přerušení déle než hodinu (#1451).",
+        (
+            "Zrušená adresa, chyba serveru nebo sítě — jednou za výpadek feedu",
+            "Obnova feedu s délkou výpadku",
+        ),
+    ),
+    PushTopic(
         "option_data_recovered",
         "app",
         "info",
