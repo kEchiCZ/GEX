@@ -24,17 +24,23 @@ znovu ze součtu uložených přírůstků), korelace přírůstků při posunu 
 mezi flush smyčkou stínu a cyklem enginu, ne jiný tok). Ze stínové partice se
 přidávají součty `trades`, `unknown_side`, `dropped_no_context`, `volume`.
 
-Co skript NEČTE: `printed_share`, `structured_volume`, `fallback_volume`,
-`dropped_no_delta` z `/status.cumdelta_coverage` — ty se do parquetu
-neukládají, existují jen v živém `/status` (per den od startu enginu) a pro
-komentář v #615 se musí opsat odtud.
+Pokrytí trade větví (podíl objemu z tisků, fallback v RTH) se od #1071 čte
+z partice `flow`; seance před #1071 ho nemají („—").
+
+Shoda s cenou futures (verdikt #1018): korelace přírůstků obou řad s pohybem
+ceny futures a s CVD futures (strana agresora od burzy) v oknech 1/5/15 min,
+per seance a v souhrnu medián + počet seancí s kladnou korelací. Řada, která
+jde soustavně proti ceně i proti CVD, čte stranu agresora obráceně.
+
+Víkendy a svátky (`settle.is_trading_session`) se nevypisují — engine píše
+ploché partice i při zavřeném trhu.
 
 Seance, které do souhrnu NEPATŘÍ (v tabulce jsou, do souhrnu je vrátí
 `--include-unusable`):
 - 4. 9. 2026 — #1013 nasazeno v 09:03 CEST, seance neúplná;
-- 7. 9. 2026 — Labor Day, zkrácená seance;
 - 8. 9. 2026 — PC vypnuté, market data přetažená na mobil, seance neúplná;
 - automaticky každá seance s < 1 000 společnými minutami.
+Víkendy a svátky (např. Labor Day 7. 9.) se nevypisují vůbec — viz níže.
 Seance před 4. 9. mají stín dělený na zóny (ATM±15 prstenec + hot ±1) — jsou
 označeny „zóny" a srovnávají ATM±15, ne celý řetěz.
 
@@ -56,6 +62,7 @@ import dataclasses
 import datetime as dt
 import io
 import json
+import statistics
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -63,8 +70,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine" / "src"))
 
 from gexlens_engine.storage.cumdelta_compare import (  # noqa: E402
+    ALIGNMENT_WINDOWS,
+    PriceAlignment,
     SessionComparison,
     Summary,
+    align_session,
     available_sessions,
     compare_session,
     summarize,
@@ -98,13 +108,14 @@ def _fmt_best_lag(r: SessionComparison) -> str:
 
 def session_table(results: Sequence[SessionComparison]) -> str:
     header = (
-        "| Seance | Sym | Min. spol. (jen dx / jen live) | max |Δ| | max |Δ| % rozsahu | "
+        "| Seance | Sym | Min. spol. (jen dx / jen live) | max \\|Δ\\| | max \\|Δ\\| % rozsahu | "
         "tvar. odch. | rozsah dx/live | r hladiny | r přírůstky | r přír. RTH | "
-        "r přír. mimo RTH | max |Δ| RTH / mimo | opačné zn. | close dx / live | zn. close | "
-        "tisky (bez strany / bez kontextu) | pokrytí tisky | fallback RTH | "
+        "r přír. mimo RTH | max \\|Δ\\| RTH / mimo | opačné zn. | close dx / live | zn. close | "
+        "tisky (bez strany / bez kontextu) | tisky z klasif. objemu | tisky z celého objemu | "
+        "strukt. objem | fallback RTH (objem) | zahozeno bez Δ | "
         "řetěz dx/live | r přír. nejl. lag | poznámka |"
     )
-    sep = "|" + "|".join(["---"] * 21) + "|"
+    sep = "|" + "|".join(["---"] * 24) + "|"
     lines = [header, sep]
     for r in results:
         note_parts = list(r.notes)
@@ -132,7 +143,10 @@ def session_table(results: Sequence[SessionComparison]) -> str:
                     f"{r.dx_trades} ({r.dx_unknown_side} / {r.dx_dropped_no_context})",
                     # Pokrytí z živé partice (#1071); „—" = partice před #1071
                     _pct(r.live_printed_share),
+                    _pct(r.live_printed_share_total),
+                    _pct(r.live_structured_share),
                     _pct(r.live_fallback_share_rth),
+                    "—" if r.live_dropped_no_delta is None else str(r.live_dropped_no_delta),
                     f"{r.dx_chain_breaks} / {r.live_chain_breaks}",
                     _fmt_best_lag(r),
                     "; ".join(note_parts) if note_parts else "",
@@ -145,7 +159,7 @@ def session_table(results: Sequence[SessionComparison]) -> str:
 
 def summary_table(summaries: Sequence[Summary]) -> str:
     header = (
-        "| Sym | Seancí v souhrnu | zn. close shoda | med. max |Δ| % rozsahu | "
+        "| Sym | Seancí v souhrnu | zn. close shoda | med. max \\|Δ\\| % rozsahu | "
         "med. tvar. odch. | med. rozsah dx/live | med. r hladiny | med. r přírůstky | "
         "med. r přír. RTH | med. r přír. mimo RTH | med. opačné zn. | "
         "med. r přír. nejl. lag | nejl. lagy |"
@@ -177,6 +191,58 @@ def summary_table(summaries: Sequence[Summary]) -> str:
     return "\n".join(lines)
 
 
+#: Sloupce shody s cenou: (popisek, pole PriceAlignment)
+_ALIGNMENT_FIELDS = (
+    ("dx ~ cena", "dx_vs_price"),
+    ("midpoint ~ cena", "live_vs_price"),
+    ("CVD fut. ~ cena", "cvd_vs_price"),
+    ("dx ~ CVD", "dx_vs_cvd"),
+    ("midpoint ~ CVD", "live_vs_cvd"),
+)
+
+Alignments = dict[tuple[str, dt.date], tuple[PriceAlignment, ...]]
+
+
+def alignment_table(results: Sequence[SessionComparison], alignments: Alignments) -> str:
+    """Per seance: korelace přírůstků s cenou a CVD futures pro každé okno."""
+    labels = " | ".join(label for label, _ in _ALIGNMENT_FIELDS)
+    lines = [
+        f"| Seance | Sym | okno | {labels} |",
+        "|" + "|".join(["---"] * (3 + len(_ALIGNMENT_FIELDS))) + "|",
+    ]
+    for r in results:
+        for a in alignments.get((r.symbol, r.session), ()):
+            cells = [_fmt(getattr(a, field), 3) for _, field in _ALIGNMENT_FIELDS]
+            row = [r.session.isoformat(), r.symbol, f"{a.window} min", *cells]
+            lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(lines)
+
+
+def alignment_summary(
+    usable: Sequence[SessionComparison], alignments: Alignments, symbols: Sequence[str]
+) -> str:
+    """Medián korelace přes použitelné seance a počet seancí s kladnou korelací."""
+    labels = " | ".join(label for label, _ in _ALIGNMENT_FIELDS)
+    lines = [
+        f"| Sym | okno | {labels} |",
+        "|" + "|".join(["---"] * (2 + len(_ALIGNMENT_FIELDS))) + "|",
+    ]
+    for symbol in symbols:
+        rows = [alignments.get((r.symbol, r.session), ()) for r in usable if r.symbol == symbol]
+        for i, window in enumerate(ALIGNMENT_WINDOWS):
+            cells = []
+            for _, field in _ALIGNMENT_FIELDS:
+                values = [getattr(row[i], field) for row in rows if len(row) > i]
+                clean = [v for v in values if v is not None]
+                if not clean:
+                    cells.append("—")
+                    continue
+                positive = sum(1 for v in clean if v > 0)
+                cells.append(f"{_fmt(statistics.median(clean), 3)} (+ {positive}/{len(clean)})")
+            lines.append("| " + " | ".join([symbol, f"{window} min", *cells]) + " |")
+    return "\n".join(lines)
+
+
 def _json_default(value: object) -> object:
     if isinstance(value, dt.date):
         return value.isoformat()
@@ -191,7 +257,8 @@ def run(
     date_to: dt.date | None,
     include_unusable: bool,
     rechain_series: bool = False,
-) -> tuple[list[SessionComparison], list[Summary]]:
+) -> tuple[list[SessionComparison], list[Summary], list[SessionComparison], Alignments]:
+    """(všechny seance, souhrny, použitelné seance, shoda s cenou per seance)."""
     results: list[SessionComparison] = []
     for symbol in symbols:
         for session in available_sessions(derived_dir, symbol):
@@ -204,7 +271,10 @@ def run(
             )
     usable = [r for r in results if include_unusable or r.unusable_reason is None]
     summaries = [summarize(usable, symbol) for symbol in symbols]
-    return results, summaries
+    alignments = {
+        (r.symbol, r.session): align_session(derived_dir, r.symbol, r.session) for r in results
+    }
+    return results, summaries, usable, alignments
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -241,7 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Adresář {derived_dir} neexistuje", file=sys.stderr)
         return 2
 
-    results, summaries = run(
+    results, summaries, usable, alignments = run(
         derived_dir,
         args.symbols,
         date_from=args.date_from,
@@ -258,6 +328,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "derived_dir": str(derived_dir),
             "sessions": [dataclasses.asdict(r) for r in results],
             "summary": [dataclasses.asdict(s) for s in summaries],
+            "price_alignment": [
+                {
+                    "symbol": symbol,
+                    "session": session,
+                    "windows": [dataclasses.asdict(a) for a in rows],
+                }
+                for (symbol, session), rows in alignments.items()
+            ],
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default))
         return 0
@@ -268,10 +346,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(session_table(results))
     print("\n## Souhrn (jen použitelné seance, mediány)\n")
     print(summary_table(summaries))
-    print(
-        "\nPokrytí `printed_share` / `structured_volume` / `fallback_volume` / "
-        "`dropped_no_delta` se do parquetu neukládá — opsat z živého `/status.cumdelta_coverage`."
-    )
+    print("\n## Shoda s cenou futures — souhrn (medián r, + seancí s r > 0)\n")
+    print(alignment_summary(usable, alignments, args.symbols))
+    print("\n## Shoda s cenou futures — per seance\n")
+    print(alignment_table(results, alignments))
     return 0
 
 

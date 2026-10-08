@@ -40,6 +40,9 @@ Metriky (vše jen nad minutami, které mají OBĚ řady):
   minutu podle hodin flush smyčky, živá řada podle minuty cyklu — když je
   korelace při k=0 nízká a při k=±1 vysoká, je to posun značek, ne jiný tok.
   Kladné k = stín předbíhá živou řadu o k minut.
+- Shoda s cenou (`align_session`, verdikt #1018): korelace přírůstků obou
+  řad s pohybem ceny futures a s CVD futures (agresor od burzy) v oknech
+  1/5/15 min — která řada čte stranu agresora ve směru trhu.
 
 Zóny: partice stínu před 4. 9. 2026 (#1013) mají tok dělený na prstenec
 (``cum_ring``) a hot zónu ATM±1 (``cum_hot``); od #1013 je ``cum_ring`` celý
@@ -59,14 +62,14 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from gexlens_engine.compute.marketclock import outside_us_rth
-from gexlens_engine.compute.settle import session_bounds
-from gexlens_engine.storage.parquet_store import DX_FLOW_SCHEMA, FLOW_SCHEMA
+from gexlens_engine.compute.settle import is_trading_session, session_bounds
+from gexlens_engine.storage.parquet_store import BARS_SCHEMA, DX_FLOW_SCHEMA, FLOW_SCHEMA
 
 #: Seance, které se do souhrnu NEPOČÍTAJÍ (uživatel je označil za neúplné);
-#: `--include-unusable` je do souhrnu vrátí, v tabulce jsou vidět vždy.
+#: `--include-unusable` je do souhrnu vrátí, v tabulce jsou vidět vždy. Svátky
+#: (Labor Day 7. 9.) sem nepatří — vyřadí je už `available_sessions`.
 KNOWN_UNUSABLE: Mapping[dt.date, str] = {
     dt.date(2026, 9, 4): "nasazení #1013 v 09:03 CEST, neúplná seance",
-    dt.date(2026, 9, 7): "Labor Day, zkrácená seance",
     dt.date(2026, 9, 8): "PC vypnuté, market data přetažená na mobil, neúplná",
 }
 
@@ -140,6 +143,9 @@ class SessionComparison:
     live_printed_share: float | None
     live_fallback_share_rth: float | None
     live_dropped_no_delta: int | None
+    #: Podíl tisků a strukturovaného objemu z CELÉHO přírůstku objemu
+    live_printed_share_total: float | None
+    live_structured_share: float | None
     #: Proč seance nepatří do souhrnu; None = použitelná
     unusable_reason: str | None
     notes: tuple[str, ...] = field(default_factory=tuple)
@@ -328,14 +334,30 @@ class LiveCoverage:
     fallback_rth: float
     classified_rth: float
     dropped_no_delta: int
+    #: Přírůstek objemu bez tisku u kontraktu, který v minutě tisk měl (legy
+    #: spreadů, bloky — ADR-0032 bod 4); mimo tok a mimo „klasifikovaný" objem
+    structured: float = 0.0
 
     @property
     def printed_share(self) -> float | None:
+        """Podíl tisků z KLASIFIKOVANÉHO objemu (bez strukturovaného)."""
         classified = self.printed + self.unknown + self.fallback
         return self.printed / classified if classified > 0 else None
 
     @property
+    def printed_share_total(self) -> float | None:
+        """Podíl tisků z CELÉHO přírůstku objemu (včetně strukturovaného)."""
+        total = self.printed + self.unknown + self.fallback + self.structured
+        return self.printed / total if total > 0 else None
+
+    @property
+    def structured_share(self) -> float | None:
+        total = self.printed + self.unknown + self.fallback + self.structured
+        return self.structured / total if total > 0 else None
+
+    @property
     def fallback_share_rth(self) -> float | None:
+        """Podíl OBJEMU kontrakt-minut bez tisku (fallback) z klasifikovaného objemu v RTH."""
         return self.fallback_rth / self.classified_rth if self.classified_rth > 0 else None
 
 
@@ -346,7 +368,7 @@ def load_live_series(
     plus součty pokrytí trade větví (#1071); None = žádná minuta pokrytí nenese."""
     bounds = session_bounds(session)
     series: dict[dt.datetime, tuple[float, float]] = {}
-    printed = unknown = fallback = fallback_rth = classified_rth = 0.0
+    printed = unknown = fallback = fallback_rth = classified_rth = structured = 0.0
     dropped = 0
     measured = False
     for offset in (-1, 0):
@@ -368,12 +390,13 @@ def load_live_series(
             printed += p
             unknown += u
             fallback += f
+            structured += float(row.get("structured_volume") or 0.0)  # type: ignore[arg-type]
             dropped += int(float(row.get("dropped_no_delta") or 0))  # type: ignore[arg-type]
             if not outside_us_rth(ts):
                 fallback_rth += f
                 classified_rth += p + u + f
     coverage = (
-        LiveCoverage(printed, unknown, fallback, fallback_rth, classified_rth, dropped)
+        LiveCoverage(printed, unknown, fallback, fallback_rth, classified_rth, dropped, structured)
         if measured
         else None
     )
@@ -460,6 +483,8 @@ def compare_series(
         live_printed_share=live_coverage.printed_share if live_coverage else None,
         live_fallback_share_rth=live_coverage.fallback_share_rth if live_coverage else None,
         live_dropped_no_delta=live_coverage.dropped_no_delta if live_coverage else None,
+        live_printed_share_total=live_coverage.printed_share_total if live_coverage else None,
+        live_structured_share=live_coverage.structured_share if live_coverage else None,
         unusable_reason=unusable,
         notes=tuple(notes),
     )
@@ -483,17 +508,137 @@ def compare_session(
 
 
 def available_sessions(derived_dir: Path, symbol: str) -> list[dt.date]:
-    """Obchodní dny, pro které existuje stínová partice (bez ní není co srovnat)."""
+    """Obchodní dny, pro které existuje stínová partice (bez ní není co srovnat).
+
+    Partice víkendu a svátku (engine je píše i při zavřeném trhu, ploché
+    řady bez obchodů) se vynechají — do souhrnu by přidaly „shodu" na nule."""
     dx_dir = derived_dir / symbol / "cumdelta_dx"
     if not dx_dir.exists():
         return []
     sessions: list[dt.date] = []
     for path in sorted(dx_dir.glob("*.parquet")):
         try:
-            sessions.append(dt.date.fromisoformat(path.stem))
+            session = dt.date.fromisoformat(path.stem)
         except ValueError:
             continue
+        if is_trading_session(session):
+            sessions.append(session)
     return sessions
+
+
+# ── Shoda s cenou futures (#1018 verdikt) ─────────────────────────────────
+
+#: Okna v minutách: 1 min nese posun značek minut mezi stínem a cyklem enginu
+#: (`lag_scan`), 5 a 15 min ho rozmyjí. Musí dělit 60 (okna zarovnaná na hodinu).
+ALIGNMENT_WINDOWS = (1, 5, 15)
+#: Pod tolik společných oken se korelace nepočítá (šum malého vzorku)
+MIN_ALIGNMENT_POINTS = 30
+
+
+@dataclass(frozen=True)
+class PriceAlignment:
+    """Korelace přírůstků obou řad CumΔ s pohybem ceny futures a s CVD futures.
+
+    Test platnosti bez „pravdy" o opčním agresorovi: CVD futures nese stranu
+    agresora přímo od burzy (`compute/futures_cvd`) a s cenou jde kladně —
+    kotva, že metoda měří. Opční delta tok se správně určenou stranou jde
+    s cenou i s CVD týmž směrem; řada, která jde soustavně proti, čte stranu
+    obráceně (#1018: midpoint test proti zastaralému `last`)."""
+
+    window: int
+    dx_vs_price: float | None
+    live_vs_price: float | None
+    cvd_vs_price: float | None
+    dx_vs_cvd: float | None
+    live_vs_cvd: float | None
+
+
+def minute_returns(closes: Mapping[dt.datetime, float]) -> dict[dt.datetime, float]:
+    """Změna close proti předchozí minutě; jen navazující minuty (díra není přírůstek)."""
+    returns: dict[dt.datetime, float] = {}
+    previous: tuple[dt.datetime, float] | None = None
+    for ts in sorted(closes):
+        if previous is not None and ts - previous[0] == dt.timedelta(minutes=1):
+            returns[ts] = closes[ts] - previous[1]
+        previous = (ts, closes[ts])
+    return returns
+
+
+def window_sums(values: Mapping[dt.datetime, float], minutes: int) -> dict[dt.datetime, float]:
+    """Součty v pevných oknech `minutes` zarovnaných na celou hodinu."""
+    if 60 % minutes:
+        raise ValueError(f"Okno {minutes} min nedělí hodinu")
+    sums: dict[dt.datetime, float] = {}
+    for ts, value in values.items():
+        key = ts.replace(minute=ts.minute - ts.minute % minutes, second=0, microsecond=0)
+        sums[key] = sums.get(key, 0.0) + value
+    return sums
+
+
+def _corr_common(a: Mapping[dt.datetime, float], b: Mapping[dt.datetime, float]) -> float | None:
+    common = sorted(set(a) & set(b))
+    if len(common) < MIN_ALIGNMENT_POINTS:
+        return None
+    return pearson([a[ts] for ts in common], [b[ts] for ts in common])
+
+
+def price_alignment(
+    dx_flow: Mapping[dt.datetime, float],
+    live_flow: Mapping[dt.datetime, float],
+    returns: Mapping[dt.datetime, float],
+    cvd: Mapping[dt.datetime, float],
+    window: int,
+) -> PriceAlignment:
+    """Korelace minutových přírůstků (sečtených do oken) obou řad s cenou a CVD."""
+    dx, live, price, flow = (window_sums(s, window) for s in (dx_flow, live_flow, returns, cvd))
+    return PriceAlignment(
+        window=window,
+        dx_vs_price=_corr_common(dx, price),
+        live_vs_price=_corr_common(live, price),
+        cvd_vs_price=_corr_common(flow, price),
+        dx_vs_cvd=_corr_common(dx, flow),
+        live_vs_cvd=_corr_common(live, flow),
+    )
+
+
+def load_closes(derived_dir: Path, symbol: str, session: dt.date) -> dict[dt.datetime, float]:
+    """Close minutových barů futures v hranicích seance (čte D−1 … D+1 a ořízne)."""
+    bounds = session_bounds(session)
+    closes: dict[dt.datetime, float] = {}
+    for offset in (-1, 0, 1):
+        day = session + dt.timedelta(days=offset)
+        for row in _read_rows(derived_dir / symbol / "bars" / f"{day}.parquet", BARS_SCHEMA):
+            ts = _as_utc(row["ts_min"])  # type: ignore[arg-type]
+            if _in_session(ts, bounds) and row.get("close") is not None:
+                closes[ts] = float(row["close"])  # type: ignore[arg-type]
+    return closes
+
+
+def load_futures_cvd(derived_dir: Path, symbol: str, session: dt.date) -> dict[dt.datetime, float]:
+    """Minutový čistý objem agresora futures (`futures_cvd_delta`) z partic `flow`."""
+    bounds = session_bounds(session)
+    cvd: dict[dt.datetime, float] = {}
+    for offset in (-1, 0):
+        day = session + dt.timedelta(days=offset)
+        for row in _read_rows(derived_dir / symbol / "flow" / f"{day}.parquet", FLOW_SCHEMA):
+            ts = _as_utc(row["ts_min"])  # type: ignore[arg-type]
+            value = row.get("futures_cvd_delta")
+            if _in_session(ts, bounds) and value is not None:
+                cvd[ts] = float(value)  # type: ignore[arg-type]
+    return cvd
+
+
+def align_session(derived_dir: Path, symbol: str, session: dt.date) -> tuple[PriceAlignment, ...]:
+    """Shoda s cenou pro všechna okna `ALIGNMENT_WINDOWS` jedné seance."""
+    dx, _, _ = load_dx_series(derived_dir, symbol, session)
+    live, _ = load_live_series(derived_dir, symbol, session)
+    returns = minute_returns(load_closes(derived_dir, symbol, session))
+    cvd = load_futures_cvd(derived_dir, symbol, session)
+    dx_flow = {ts: flow for ts, (_, flow) in dx.items()}
+    live_flow = {ts: flow for ts, (_, flow) in live.items()}
+    return tuple(
+        price_alignment(dx_flow, live_flow, returns, cvd, window) for window in ALIGNMENT_WINDOWS
+    )
 
 
 @dataclass(frozen=True)
