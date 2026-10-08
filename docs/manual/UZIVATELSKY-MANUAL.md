@@ -1323,7 +1323,8 @@ Telegram. V Settings → **Notifikace (Telegram)**:
   zálohu tastytrade, Záloha tastytrade nefunguje, Neúplná data opcí, Chybí OI,
   Instrument nejde spustit, Dochází místo na disku, Noční údržba selhala;
   vypnuté diagnostika a zotavení: Kontrola datových toků, Greeks z dopočtu,
-  Svíčky nechodí, Data opcí zase chodí, Málo místa pro Docker, Diagnostika modelu.
+  Svíčky nechodí, Feed zpráv nefunguje, Data opcí zase chodí, Málo místa pro Docker,
+  Diagnostika modelu.
 
 Co přesně přepínač posílá, ukáže **tooltip** (najeď myší na název): popis, druhy
 ze zvonku, které pod něj patří, jestli chodí i v tichých hodinách a výchozí stav.
@@ -1360,6 +1361,8 @@ Druhy alertů (sloupec **Telegram** = přepínač v Settings → Notifikace a je
 | Obálka na stropu | Pásmo strikes dosáhlo maxima šířky — vzdálený okraj se posouvá za cenou | Diagnostika modelu (vyp.) |
 | **Svíčky se přestaly kreslit** | Real-time bary z TWS nechodí při otevřeném trhu (mrtvé TWS farmy po noční přestávce) — i když stojí i cena, to je zamrzlý stream (v1.31, #1347); pomáhá restart TWS, díra se po návratu doplní sama | Svíčky nechodí (vyp.) |
 | Svíčky zase jedou | Bary se vrátily — díra ve svíčkách se doplní backfillem | Svíčky nechodí (vyp.) |
+| **Feed zpráv nefunguje** | Jeden RSS feed zpráv (Yahoo, CNBC, MarketWatch, Reddit, vlastní feed) selhává bez přerušení déle než hodinu — zrušená adresa, chyba serveru nebo nečitelná odpověď. Ostatní feedy chodí dál, ale zprávy z tohoto chybí a zpětně se nedoplní. Hlásí se jednou za výpadek, i o víkendu, protože zprávy vycházejí pořád (v1.31, #1451) | Feed zpráv nefunguje (vyp.) |
+| Feed zpráv zase odpovídá | První úspěšné stažení po ohlášeném výpadku, s jeho délkou | Feed zpráv nefunguje (vyp.) |
 | **Vol koncentrace** | Jedna strana (strike × C/P) příští expirace výrazně převyšuje zbytek (≥ 3× medián top 10) — úroveň, kde se trh zajišťuje na zítřek (put pod trhem pojistka/magnet, call nad trhem strop). **Při zavřeném trhu** (víkend, denní pauza) se nehlásí: objem je zmrzlý z poslední seance (#1309) | Koncentrace opčního objemu (zap.) |
 | **Nový setup** | Detektor našel obchodní setup (odraz od zdi / neúspěšný průraz / Max Pain pin / gamma momentum / divergenční spring). Od v1.27 nese šablonu s číslem (T7 trend_continuation), stádium buňky (AUTO / STÍN / ZKOUŠKA 3/10 s čerpáním) a druhý řádek s ØR hrubě a čistě, n / n potřebné a verdiktem brány — se štítkem **edge neprokázán:**, když dolní mez ØR není kladná, jinak **Důkaz:**. Na Telegram jen obchodovatelný setup | Nový setup (zap.) |
 | **Konec zkoušky setupu** (`setup_stage`, v1.27) | Zkouška buňky v Knihovně vyčerpala rozpočet (počet setupů nebo ztrátu v R) a buňka je zpět na Auto — rozhoduje brána. Jednou na zkoušku; ve zvonku je klikací a otevře **Setupy → Knihovna**, kde jde zkouška obnovit (kap. 18) | Konec zkoušky setupu (zap.) |
@@ -1392,7 +1395,8 @@ pohnul mimořádně. Mimořádný pohyb bez významné zprávy se neohlašuje.
     ISM/PMI, HDP), pohyb ropy, útok nebo příměří na Blízkém východě či kolem Tchaj-wanu,
     uvalení cel, snížení ratingu USA. Důležitost 2 má **téma jako předmět zprávy**
     (Fed, výnosy, inflace, trh práce, cla, obchodní dohoda, shutdown…);
-  - **agregátory** (Yahoo Finance včetně převzatých WSJ, Barron's a IBD, MarketWatch)
+  - **agregátory** (Yahoo Finance — zprávy k indexům S&P 500 a Nasdaq, do 23. 9. 2026
+    souhrnný feed i s převzatými WSJ, Barron's a IBD — a MarketWatch)
     mají o stupeň nižší důležitost — významné jsou jen jejich zprávy o události,
     souhrny a výhledy trhu ne; **sociální sítě** jen od kurátorovaných autorů
     (seznam v záložce News);
