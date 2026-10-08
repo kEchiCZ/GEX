@@ -3,8 +3,9 @@
 Po zdroji a podskupině (feed RSS, autor Alpaca, vydavatel Finnhubu, kurátor
 Bluesky, provider IBKR): objem za 24 h a 7 dní podle `ts_ingested`, zpoždění
 `ts_ingested − ts_event` (medián, p90, podíl nad hodinu, záporná, bez vlastního
-času), poslední příjem. Dál kalendář podle času releasu, uložené sloučené
-duplicity (`raw.merged_sources`) a registr `news_sources` proti záznamům.
+času), poslední příjem; denní mediány zpoždění za 30 dní. Dál kalendář podle
+času releasu, uložené sloučené duplicity (`raw.merged_sources`) a registr
+`news_sources` proti záznamům.
 
 Okna se počítají od pevného `as_of` (výchozí: začátek běhu). Objem podle
 příjmu, ne podle `ts_event`: kalendář se vkládá dopředu a Bluesky nese čas
@@ -64,6 +65,22 @@ GROUP BY 1, 2, 3
 ORDER BY 1, 2
 """
 
+# Je zpoždění okna 7 d typické? Denní mediány podle UTC dne příjmu za 30 dní
+DAILY_LAG_SQL = """
+SELECT source, count(*) AS days, min(p50) AS lo,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY p50) AS mid, max(p50) AS hi
+FROM (
+    SELECT source, date_trunc('day', ts_ingested) AS day,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM ts_ingested - ts_event))
+               AS p50
+    FROM news_events
+    WHERE kind <> 'scheduled'
+      AND ts_ingested >= :as_of - interval '30 days' AND ts_ingested < :as_of
+    GROUP BY 1, 2
+) daily
+GROUP BY 1 ORDER BY 1
+"""
+
 # Kalendář se vkládá dopředu (`ts_event` = čas releasu), objem dává smysl podle něj
 CALENDAR_SQL = """
 SELECT count(*) FILTER (WHERE ts_event >= :as_of - interval '24 hours') AS n_24h,
@@ -100,7 +117,12 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[object]]) -> str:
 
 
 def _seconds(value: float | None) -> str:
-    return "—" if value is None else f"{value:,.0f}".replace(",", " ")
+    if value is None:
+        return "—"
+    # Pod 10 s rozhoduje desetina (push zdroje, posun hodin), nad tím celé sekundy
+    if abs(value) < 10:
+        return f"{value:.1f}".replace(".", ",")
+    return f"{value:,.0f}".replace(",", " ")
 
 
 def _ts(value: dt.datetime | None) -> str:
@@ -141,6 +163,15 @@ def sources(conn: Connection, as_of: dt.datetime) -> str:
         "bez vlastního času",
         "poslední příjem (UTC)",
     ]
+    return _table(header, rows)
+
+
+def daily_lag(conn: Connection, as_of: dt.datetime) -> str:
+    rows = [
+        [r.source, r.days, _seconds(r.lo), _seconds(r.mid), _seconds(r.hi)]
+        for r in conn.execute(text(DAILY_LAG_SQL), {"as_of": as_of})
+    ]
+    header = ["zdroj", "dnů s příjmem", "min [s]", "medián [s]", "max [s]"]
     return _table(header, rows)
 
 
@@ -213,6 +244,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     sections: list[tuple[str, Any]] = [
         ("Zdroje a podskupiny (okno 7 d podle `ts_ingested`)", sources),
+        ("Denní medián zpoždění za 30 dní (UTC den příjmu)", daily_lag),
         ("Kalendář podle času releasu", calendar),
         ("Uložené sloučené duplicity", merged),
         ("Registr `news_sources` × záznamy v `news_events` (celá historie)", registry),
