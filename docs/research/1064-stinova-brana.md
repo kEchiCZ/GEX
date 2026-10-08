@@ -21,8 +21,10 @@
   v1–v4) viděla inside +0,21 × outside −0,24 R; v5 ukazuje opak. Efekt polohy není stabilní napříč
   mechanikami a obdobími.
 - **Důsledek:** žádné z pravidel se naostro nezapíná; do bumpu v6 (E-1.14b) brána polohy nejde.
-  Posun confidence +10 / 0 / −15 (`BAND_CONFIDENCE_ADJUST`) stojí na fázi 1 a v5 ho nepotvrzuje —
-  o něm rozhoduje vlastník (varianty v #1064).
+  Posun confidence +10 / 0 / −15 (`BAND_CONFIDENCE_ADJUST`) stojí na fázi 1 a v5 ho nepotvrzuje.
+- **Rozhodnutí vlastníka 8. 10. 2026:** posun confidence podle polohy se ruší
+  (`BAND_CONFIDENCE_ADJUST` = 0) v nasazení s E-1.14b (#1403); stínové verdikty a pásmové metriky
+  se zapisují dál; přeměření na v6 bez připomínky (tento skript jde spustit kdykoli).
 
 ## Jak číst a co data neříkají
 
