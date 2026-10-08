@@ -7,33 +7,54 @@
 
 ## Verdikt
 
-- **Živá midpoint CumΔ jde soustavně proti ceně.** Korelace minutových přírůstků s pohybem ceny
-  futures je záporná ve **26 z 26** seancí (ES medián −0,16 na 1 min, −0,24 na 5 min, −0,33 na
-  15 min; NQ −0,21 / −0,36 / −0,46) a záporná je i proti CVD futures (agresor od burzy).
+- **Živá midpoint CumΔ jde soustavně proti ceně.** Korelace přírůstků s pohybem ceny futures je
+  záporná ve všech 13 seancích u obou symbolů v oknech 1 a 5 min (ES medián −0,16 / −0,24,
+  NQ −0,21 / −0,36); na 15 min −0,33 / −0,46 (ES jedna seance ≈ 0). Záporná je i proti CVD
+  futures (agresor od burzy).
 - **Tisková řada dxFeed (strana agresora od burzy) jde s cenou:** kladně ve 13/13 seancích na 1 min
-  (ES +0,10, NQ +0,11), na 5 min ES +0,27 (12/13), NQ +0,30 (12/13), a kladně s CVD futures
-  (13/13). Kotva metody — CVD futures × cena — je kladná ve všech seancích (ES +0,34 až +0,50,
-  NQ +0,52 až +0,67).
+  (ES +0,10, NQ +0,11), na 5 min ES +0,27 a NQ +0,30 (12/13), a kladně s CVD futures (13/13).
+  Kotva metody — CVD futures × cena — je kladná ve všech seancích (mediány přes okna ES +0,34
+  až +0,50, NQ +0,52 až +0,67; per seance 0,13–0,76).
 - **Obě řady spolu prakticky nesouvisí:** medián r přírůstků ES −0,04, NQ −0,08; opačné znaménko
   v 53 % (ES) a 63 % (NQ) minut; znaménko na close souhlasí jen v 7/13 (ES) a 5/13 (NQ) seancí;
   žádný posun −3…+3 min to nevysvětlí.
-- **Příčina (mechanismus, `runtime.py:471` → `cumdelta.add_bar`):** midpoint test porovnává
-  `snapshot.last` — poslední obchod kontraktu, často minuty starý — s **aktuálním** bid/ask. Když
-  futures rostou, mid callu vyjede nad starý last → obchod „prodej" (−1 × kladná delta); mid putu
-  klesne pod last → „nákup" (+1 × záporná delta). Oba případy dávají záporný delta tok právě
-  ve chvíli, kdy cena roste. Odhad tedy neměří agresora, ale (obráceně) pohyb ceny od posledního
-  obchodu. Nález z 8. 9. („záporná hladinová korelace NQ 5/5 je nález o datech, ne bug") tím má
-  vysvětlení: znaménková konvence v kódu je v pořádku, vadný je odhad strany.
-- **Pokrytí tisky:** podíl klasifikovaného objemu z tisků ES medián 52 % (42–69 %), NQ 43 %
-  (19–57 %); kontrakt-minuty bez tisku (dnešní fallback režimu `dxfeed`) v RTH ES 34 % (17–42 %),
-  NQ 45 % (25–72 %). Rozsah tiskové řady je 0,2–0,4× midpointové (nese jen outright agresi).
-- **Důsledek pro obchodování:** co dnes čte CumΔ, čte obrácený tok — setupy (potvrzení
-  protitoku, divergence „nákupy do slabosti / prodeje do síly", kvantilová brána, podíl toku
-  u gamma momentum), sklon CumΔ v tendenci (#394) a plocha CumΔ v panelu. Do přepnutí je
-  spolehlivé čtení toku linka **CVD futures** ve stejném panelu (agresor od burzy).
-- **Do přepnutí nestačí jen zapnout `GEXLENS_CUMDELTA_SOURCE=dxfeed`:** v tom režimu jde objem
-  kontrakt-minut bez tisku dál přes týž midpoint test (ES ~34 %, NQ ~45 % objemu v RTH), tedy
-  s obráceným znaménkem; taková směs není změřená. Varianty a rozhodnutí vlastníka v #1018.
+- **Příčina (mechanismus, `runtime.py:471` → `cumdelta.add_bar`, vzorec SPEC 4.5):** midpoint test
+  porovnává `snapshot.last` — poslední obchod kontraktu, starší než snímek o libovolnou mezeru
+  (rotační sweep, u čistě strukturovaného přírůstku i víc) — s **aktuálním** bid/ask. Když futures
+  rostou, mid callu vyjede nad starý last → „prodej" (−1 × kladná delta); mid putu klesne pod
+  last → „nákup" (+1 × záporná delta). Oba případy dávají záporný delta tok právě při růstu ceny.
+  Odhad neměří agresora, ale obráceně pohyb ceny od posledního obchodu. Znaménková konvence delty
+  je v pořádku (tisková řada i CVD vycházejí kladně), posun minut to není (5 a 15 min jsou
+  zápornější než 1 min). Nález z 8. 9. („záporná hladinová korelace NQ 5/5 je nález o datech")
+  tím má vysvětlení.
+- **Pokrytí:** tisky tvoří z **celého** přírůstku objemu ES medián 40,5 % (34–57 %), NQ 38,3 %
+  (18–53 %); z klasifikovaného objemu (bez strukturovaného) ES 52 %, NQ 43 %. Strukturovaný objem
+  (legy spreadů, bloky — mimo tok, ADR-0032 bod 4) ES 21 %, NQ 10 %. Objem kontrakt-minut bez
+  tisku (dnešní fallback režimu `dxfeed`) tvoří v RTH ES 34 % (17–42 %), NQ 45 % (25–72 %)
+  klasifikovaného objemu. Rozsah tiskové řady je 0,2–0,4× midpointové (nese jen outright agresi).
+- **Důsledek pro obchodování:** obráceně dnes čte vše, co stojí na midpoint znaménku — setupy
+  (potvrzení protitoku, divergence „nákupy do slabosti / prodeje do síly", kvantilová brána, podíl
+  toku u gamma momentum), sklon CumΔ v tendenci (#394), plocha CumΔ v panelu, a přes čistý objem
+  i FA odhad OI (ADR-0011), kalibrace α ze sekundárního řetězu (#1182) a potvrzení zpráv
+  `cum_delta_slope` / alert `cum_delta_jump` v news-engine. Do přepnutí je spolehlivé čtení toku
+  linka **CVD futures** v panelu CumΔ.
+- **Kalibrace (#394 / #434):** prahy setupů jsou směrová a kvantilová srovnání (`setups.py:714,
+  839, 1108-1113, 1206`), na měřítko řady necitlivá — po přepnutí se mění jejich obsah (směr),
+  ne škála. Přeměřit se musí váha `cum_delta_slope` tendence (#394) a všechny vzorky v6.
+
+## Rozhodnutí vlastníka 8. 10. 2026
+
+- **1A — CumΔ jen z tisků od burzy, midpoint nikde:** objem bez tisku jde mimo tok, výpadek tasty
+  větve = viditelná mezera, ne odhad. Revize R2, SPEC 3.4 a 4.5 a ADR-0032 bod 1, 3 a Důsledky
+  → ADR-0057 (E-1.14c #1459), implementace E-1.14d #1460.
+- **2A — nasazení s dávkovým bumpem v6** (E-1.14b #1403, ~29. 10.–1. 11.); do té doby číst tok
+  z linky CVD futures.
+- E-1.14c před ADR změří hybrid (tisky + midpoint fallback) z uložených dat (`printvol`, `netflow`,
+  delta ze `snapshots`) a projde všechny spotřebitele midpoint znaménka (čistý objem, α, FA OI,
+  news-engine) — kde rozhodnutí 1A neurčuje, co dostanou, přijdou varianty.
+- Zamítnuto: **opravit midpoint** (kotace v čase obchodu, tick test) — snímek kotaci z doby
+  obchodu nedá a strukturovaný přírůstek obchod nemá; tick test by byl tentýž artefakt s opačným
+  znaménkem (klasifikuje pohyb ceny, ne agresora).
 
 ## Jak číst a co data neříkají
 
@@ -42,48 +63,48 @@
   cenu). Korelace je **současná** (v témž okně), ne předpověď budoucí ceny — o edge setupů neříká
   nic, jen o tom, kterým směrem řada čte.
 - Okna 5 a 15 min rozmývají posun značek minut mezi stínem a cyklem enginu (1 min ho nese).
-- Seance 21. 9.–7. 10. bez víkendů (dřívější výstup nástroje počítal i ploché víkendové partice
-  jako seance — opraveno v tomto PR); 3. 10. a 8. 10. neúplné, mimo souhrn. Partice před #1189
+- Seance 21. 9.–7. 10. bez víkendů a svátků (dřívější výstup nástroje počítal i ploché víkendové
+  partice jako seance — opraveno v tomto PR); 8. 10. běžela a leží mimo `--to`. Partice před #1189
   (14.–18. 9.) sledovaly dobíhající kontrakt a do souhrnu nepatří.
-- Hybridní režim `dxfeed` (tisky + midpoint fallback) se neukládá — jeho chování se z dat odhadnout
-  nedá, jen z mechanismu (fallback nese tentýž obrácený odhad).
+- Hybridní režim `dxfeed` (tisky + midpoint fallback) se jako řada neukládá; složit se dá
+  z `printvol`, `netflow` a delty snímků — měření je první krok E-1.14c (#1459).
 
 ## Výstup skriptu
 
 ### Per seance
 
-| Seance | Sym | Min. spol. (jen dx / jen live) | max |Δ| | max |Δ| % rozsahu | tvar. odch. | rozsah dx/live | r hladiny | r přírůstky | r přír. RTH | r přír. mimo RTH | max |Δ| RTH / mimo | opačné zn. | close dx / live | zn. close | tisky (bez strany / bez kontextu) | pokrytí tisky | fallback RTH | řetěz dx/live | r přír. nejl. lag | poznámka |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 2026-09-21 | ES | 1418 (16 / 5) | 725,408 | 114.8 % | 99.4 % | 0.197 | -0.661 | -0.042 | -0.018 | -0.201 | 725,408 / 586,657 | 99.5 % | 12,411 / -561,798 | NE | 50200 (48 / 0) | 42.4 % | 42.2 % | 0 / 1 | -0.007 (k=-2) | přerušený řetěz dx 0× / live 1× |
-| 2026-09-22 | ES | 1408 (27 / 4) | 99,099 | 61.0 % | 63.4 % | 0.526 | 0.372 | -0.045 | -0.035 | -0.123 | 99,099 / 53,397 | 44.3 % | 37,363 / 46,038 | ano | 38802 (4 / 0) | 69.4 % | 24.5 % | 0 / 0 | 0.161 (k=+1) |  |
-| 2026-09-23 | ES | 1378 (50 / 9) | 839,379 | 95.6 % | 91.8 % | 0.120 | -0.351 | -0.059 | -0.058 | -0.185 | 819,562 / 839,379 | 36.4 % | 43,949 / -795,127 | NE | 46870 (28 / 0) | 50.5 % | 34.0 % | 0 / 0 | 0.031 (k=-1) |  |
-| 2026-09-24 | ES | 1364 (60 / 8) | 102,090 | 46.4 % | 55.1 % | 0.380 | 0.832 | 0.196 | 0.255 | -0.017 | 102,090 / 96,573 | 59.9 % | -68,183 / -150,085 | ano | 47211 (5 / 0) | 65.3 % | 31.3 % | 0 / 0 | 0.196 (k=+0) | řady nezačínají v nule (start uprostřed seance / navázání) |
-| 2026-09-25 | ES | 1417 (15 / 5) | 257,466 | 79.9 % | 65.5 % | 0.704 | 0.547 | -0.095 | -0.298 | 0.232 | 257,466 / 172,371 | 23.3 % | -50,175 / -213,054 | ano | 52211 (11 / 0) | 53.7 % | 34.2 % | 0 / 0 | 0.046 (k=-2) |  |
-| 2026-09-28 | ES | 1420 (14 / 6) | 67,856 | 78.1 % | 96.1 % | 0.665 | -0.394 | 0.022 | 0.032 | -0.002 | 57,317 / 67,856 | 61.4 % | -30,399 / 37,457 | NE | 50387 (17 / 0) | 65.3 % | 29.8 % | 0 / 0 | 0.022 (k=+0) | řady nezačínají v nule (start uprostřed seance / navázání) |
-| 2026-09-29 | ES | 1379 (49 / 9) | 228,086 | 79.8 % | 63.3 % | 0.218 | 0.411 | -0.042 | -0.034 | -0.050 | 117,441 / 228,086 | 67.4 % | 21,352 / 248,193 | ano | 41832 (16 / 0) | 42.4 % | 29.1 % | 0 / 0 | 0.063 (k=+1) |  |
-| 2026-09-30 | ES | 1403 (29 / 7) | 305,328 | 116.7 % | 100.0 % | 0.478 | -0.256 | -0.137 | 0.127 | -0.452 | 242,553 / 305,328 | 28.6 % | -86,695 / 218,633 | NE | 49955 (3 / 0) | 53.0 % | 33.7 % | 0 / 0 | 0.121 (k=-3) | řady nezačínají v nule (start uprostřed seance / navázání) |
-| 2026-10-01 | ES | 1396 (29 / 11) | 210,267 | 65.8 % | 73.5 % | 0.228 | 0.204 | -0.226 | -0.200 | -0.302 | 143,038 / 210,267 | 42.7 % | 30,569 / 18,854 | ano | 52767 (1 / 0) | 48.3 % | 35.9 % | 0 / 1 | 0.064 (k=+3) | přerušený řetěz dx 0× / live 1× |
-| 2026-10-02 | ES | 1409 (24 / 6) | 911,809 | 96.3 % | 79.2 % | 0.129 | 0.206 | -0.026 | -0.003 | -0.332 | 911,809 / 878,794 | 64.2 % | -12,412 / -877,755 | ano | 57871 (6 / 0) | 66.3 % | 17.2 % | 0 / 0 | 0.024 (k=+2) |  |
-| 2026-10-05 | ES | 1411 (20 / 9) | 220,158 | 70.7 % | 93.0 % | 0.481 | -0.812 | 0.106 | 0.129 | -0.034 | 220,158 / 195,603 | 88.7 % | 57,800 / -45,711 | NE | 48945 (26 / 0) | 47.5 % | 35.6 % | 0 / 0 | 0.106 (k=+0) | řady nezačínají v nule (start uprostřed seance / navázání) |
-| 2026-10-06 | ES | 1395 (31 / 10) | 473,813 | 108.5 % | 85.5 % | 0.199 | -0.732 | -0.044 | -0.061 | -0.021 | 349,132 / 473,813 | 38.0 % | 42,320 / -431,494 | NE | 43493 (14 / 0) | 44.3 % | 35.0 % | 0 / 0 | 0.103 (k=+2) |  |
-| 2026-10-07 | ES | 1399 (29 / 7) | 185,493 | 52.1 % | 70.7 % | 0.464 | -0.049 | 0.013 | 0.029 | 0.005 | 185,493 / 125,658 | 52.8 % | 117,836 / 243,495 | ano | 48173 (10 / 0) | 51.7 % | 32.0 % | 0 / 0 | 0.045 (k=-2) | řady nezačínají v nule (start uprostřed seance / navázání) |
-| 2026-09-21 | NQ | 1417 (14 / 5) | 226,935 | 102.6 % | 99.7 % | 0.033 | -0.927 | -0.041 | -0.034 | -0.064 | 226,935 / 226,267 | 95.2 % | 5,709 / -214,133 | NE | 6991 (0 / 0) | 19.2 % | 71.8 % | 0 / 0 | -0.010 (k=-3) |  |
-| 2026-09-22 | NQ | 1408 (27 / 4) | 73,342 | 116.6 % | 99.5 % | 0.309 | -0.873 | -0.004 | 0.117 | -0.282 | 73,342 / 72,204 | 62.7 % | 19,038 / -45,581 | NE | 8309 (0 / 0) | 44.0 % | 45.1 % | 0 / 0 | 0.053 (k=-3) |  |
-| 2026-09-23 | NQ | 1375 (47 / 10) | 45,403 | 85.9 % | 66.2 % | 0.228 | 0.402 | -0.110 | -0.164 | 0.008 | 45,403 / 24,413 | 6.9 % | 3,568 / 20,895 | ano | 11616 (0 / 0) | 39.7 % | 46.7 % | 0 / 0 | 0.005 (k=-3) |  |
-| 2026-09-24 | NQ | 1365 (59 / 8) | 51,405 | 99.8 % | 87.3 % | 0.194 | 0.351 | -0.107 | -0.131 | 0.006 | 48,356 / 51,405 | 52.6 % | 2,275 / 35,333 | ano | 14431 (0 / 0) | 43.9 % | 45.0 % | 0 / 0 | 0.021 (k=+2) |  |
-| 2026-09-25 | NQ | 1417 (15 / 5) | 81,985 | 110.6 % | 97.8 % | 0.167 | -0.748 | -0.128 | -0.142 | -0.084 | 81,985 / 71,740 | 88.2 % | 11,757 / -49,730 | NE | 14352 (0 / 0) | 39.3 % | 51.4 % | 0 / 0 | 0.013 (k=+3) |  |
-| 2026-09-28 | NQ | 1420 (14 / 6) | 18,113 | 67.9 % | 81.6 % | 0.442 | -0.236 | -0.066 | -0.075 | 0.013 | 18,113 / 11,353 | 16.5 % | -4,085 / 7,268 | NE | 16098 (0 / 0) | 57.4 % | 42.1 % | 0 / 0 | 0.033 (k=+2) | řady nezačínají v nule (start uprostřed seance / navázání) |
-| 2026-09-29 | NQ | 1377 (46 / 10) | 41,304 | 68.3 % | 96.3 % | 0.171 | -0.218 | -0.247 | -0.382 | 0.004 | 31,579 / 41,304 | 76.6 % | -7,224 / 19,853 | NE | 14117 (0 / 0) | 46.3 % | 34.3 % | 0 / 0 | 0.014 (k=-3) |  |
-| 2026-09-30 | NQ | 1403 (29 / 7) | 34,598 | 69.1 % | 88.8 % | 0.251 | -0.746 | -0.204 | -0.199 | -0.209 | 23,897 / 34,598 | 85.7 % | 6,897 / -10,397 | NE | 15470 (0 / 0) | 42.0 % | 44.9 % | 0 / 0 | 0.030 (k=-3) | řady nezačínají v nule (start uprostřed seance / navázání) |
-| 2026-10-01 | NQ | 1396 (29 / 11) | 101,731 | 99.6 % | 89.0 % | 0.065 | -0.238 | -0.011 | -0.014 | 0.005 | 101,731 / 100,348 | 65.0 % | 1,806 / -97,615 | NE | 14348 (1 / 0) | 42.6 % | 38.2 % | 0 / 0 | 0.535 (k=+1) |  |
-| 2026-10-02 | NQ | 1409 (24 / 6) | 82,897 | 93.1 % | 72.3 % | 0.140 | 0.200 | -0.065 | -0.083 | 0.045 | 82,897 / 81,256 | 61.8 % | -2,336 / -81,379 | ano | 18081 (0 / 0) | 53.1 % | 25.2 % | 0 / 0 | 0.040 (k=-1) |  |
-| 2026-10-05 | NQ | 1411 (20 / 9) | 67,822 | 82.2 % | 77.2 % | 0.164 | 0.310 | -0.145 | -0.206 | -0.049 | 61,596 / 67,822 | 64.3 % | -7,920 / -10,294 | ano | 15641 (0 / 0) | 40.3 % | 46.9 % | 0 / 0 | 0.175 (k=-3) | řady nezačínají v nule (start uprostřed seance / navázání) |
-| 2026-10-06 | NQ | 1394 (32 / 10) | 92,938 | 99.2 % | 97.3 % | 0.071 | -0.372 | -0.026 | -0.028 | -0.028 | 92,938 / 84,676 | 35.8 % | -1,759 / -86,435 | ano | 13385 (0 / 0) | 39.2 % | 51.8 % | 0 / 0 | 0.050 (k=+2) |  |
-| 2026-10-07 | NQ | 1398 (30 / 7) | 41,554 | 108.2 % | 89.0 % | 0.252 | -0.493 | -0.084 | -0.076 | -0.146 | 41,554 / 36,243 | 55.1 % | -1,180 / 8,204 | NE | 13543 (0 / 0) | 51.5 % | 39.4 % | 0 / 0 | -0.014 (k=+2) |  |
+| Seance | Sym | Min. spol. (jen dx / jen live) | max \|Δ\| | max \|Δ\| % rozsahu | tvar. odch. | rozsah dx/live | r hladiny | r přírůstky | r přír. RTH | r přír. mimo RTH | max \|Δ\| RTH / mimo | opačné zn. | close dx / live | zn. close | tisky (bez strany / bez kontextu) | tisky z klasif. objemu | tisky z celého objemu | strukt. objem | fallback RTH (objem) | zahozeno bez Δ | řetěz dx/live | r přír. nejl. lag | poznámka |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-21 | ES | 1418 (16 / 5) | 725,408 | 114.8 % | 99.4 % | 0.197 | -0.661 | -0.042 | -0.018 | -0.201 | 725,408 / 586,657 | 99.5 % | 12,411 / -561,798 | NE | 50200 (48 / 0) | 42.4 % | 33.7 % | 20.5 % | 42.2 % | 0 | 0 / 1 | -0.007 (k=-2) | přerušený řetěz dx 0× / live 1× |
+| 2026-09-22 | ES | 1408 (27 / 4) | 99,099 | 61.0 % | 63.4 % | 0.526 | 0.372 | -0.045 | -0.035 | -0.123 | 99,099 / 53,397 | 44.3 % | 37,363 / 46,038 | ano | 38802 (4 / 0) | 69.4 % | 57.1 % | 17.8 % | 24.5 % | 0 | 0 / 0 | 0.161 (k=+1) |  |
+| 2026-09-23 | ES | 1378 (50 / 9) | 839,379 | 95.6 % | 91.8 % | 0.120 | -0.351 | -0.059 | -0.058 | -0.185 | 819,562 / 839,379 | 36.4 % | 43,949 / -795,127 | NE | 46870 (28 / 0) | 50.5 % | 39.9 % | 21.0 % | 34.0 % | 0 | 0 / 0 | 0.031 (k=-1) |  |
+| 2026-09-24 | ES | 1364 (60 / 8) | 102,090 | 46.4 % | 55.1 % | 0.380 | 0.832 | 0.196 | 0.255 | -0.017 | 102,090 / 96,573 | 59.9 % | -68,183 / -150,085 | ano | 47211 (5 / 0) | 65.3 % | 52.4 % | 19.7 % | 31.3 % | 0 | 0 / 0 | 0.196 (k=+0) | řady nezačínají v nule (start uprostřed seance / navázání) |
+| 2026-09-25 | ES | 1417 (15 / 5) | 257,466 | 79.9 % | 65.5 % | 0.704 | 0.547 | -0.095 | -0.298 | 0.232 | 257,466 / 172,371 | 23.3 % | -50,175 / -213,054 | ano | 52211 (11 / 0) | 53.7 % | 40.5 % | 24.5 % | 34.2 % | 0 | 0 / 0 | 0.046 (k=-2) |  |
+| 2026-09-28 | ES | 1420 (14 / 6) | 67,856 | 78.1 % | 96.1 % | 0.665 | -0.394 | 0.022 | 0.032 | -0.002 | 57,317 / 67,856 | 61.4 % | -30,399 / 37,457 | NE | 50387 (17 / 0) | 65.3 % | 56.4 % | 13.6 % | 29.8 % | 0 | 0 / 0 | 0.022 (k=+0) | řady nezačínají v nule (start uprostřed seance / navázání) |
+| 2026-09-29 | ES | 1379 (49 / 9) | 228,086 | 79.8 % | 63.3 % | 0.218 | 0.411 | -0.042 | -0.034 | -0.050 | 117,441 / 228,086 | 67.4 % | 21,352 / 248,193 | ano | 41832 (16 / 0) | 42.4 % | 36.1 % | 14.8 % | 29.1 % | 0 | 0 / 0 | 0.063 (k=+1) |  |
+| 2026-09-30 | ES | 1403 (29 / 7) | 305,328 | 116.7 % | 100.0 % | 0.478 | -0.256 | -0.137 | 0.127 | -0.452 | 242,553 / 305,328 | 28.6 % | -86,695 / 218,633 | NE | 49955 (3 / 0) | 53.0 % | 40.5 % | 23.5 % | 33.7 % | 0 | 0 / 0 | 0.121 (k=-3) | řady nezačínají v nule (start uprostřed seance / navázání) |
+| 2026-10-01 | ES | 1396 (29 / 11) | 210,267 | 65.8 % | 73.5 % | 0.228 | 0.204 | -0.226 | -0.200 | -0.302 | 143,038 / 210,267 | 42.7 % | 30,569 / 18,854 | ano | 52767 (1 / 0) | 48.3 % | 37.7 % | 21.9 % | 35.9 % | 0 | 0 / 1 | 0.064 (k=+3) | přerušený řetěz dx 0× / live 1× |
+| 2026-10-02 | ES | 1409 (24 / 6) | 911,809 | 96.3 % | 79.2 % | 0.129 | 0.206 | -0.026 | -0.003 | -0.332 | 911,809 / 878,794 | 64.2 % | -12,412 / -877,755 | ano | 57871 (6 / 0) | 66.3 % | 48.0 % | 27.6 % | 17.2 % | 0 | 0 / 0 | 0.024 (k=+2) |  |
+| 2026-10-05 | ES | 1411 (20 / 9) | 220,158 | 70.7 % | 93.0 % | 0.481 | -0.812 | 0.106 | 0.129 | -0.034 | 220,158 / 195,603 | 88.7 % | 57,800 / -45,711 | NE | 48945 (26 / 0) | 47.5 % | 38.8 % | 18.4 % | 35.6 % | 0 | 0 / 0 | 0.106 (k=+0) | řady nezačínají v nule (start uprostřed seance / navázání) |
+| 2026-10-06 | ES | 1395 (31 / 10) | 473,813 | 108.5 % | 85.5 % | 0.199 | -0.732 | -0.044 | -0.061 | -0.021 | 349,132 / 473,813 | 38.0 % | 42,320 / -431,494 | NE | 43493 (14 / 0) | 44.3 % | 35.0 % | 21.0 % | 35.0 % | 0 | 0 / 0 | 0.103 (k=+2) |  |
+| 2026-10-07 | ES | 1399 (29 / 7) | 185,493 | 52.1 % | 70.7 % | 0.464 | -0.049 | 0.013 | 0.029 | 0.005 | 185,493 / 125,658 | 52.8 % | 117,836 / 243,495 | ano | 48173 (10 / 0) | 51.7 % | 41.1 % | 20.6 % | 32.0 % | 0 | 0 / 0 | 0.045 (k=-2) | řady nezačínají v nule (start uprostřed seance / navázání) |
+| 2026-09-21 | NQ | 1417 (14 / 5) | 226,935 | 102.6 % | 99.7 % | 0.033 | -0.927 | -0.041 | -0.034 | -0.064 | 226,935 / 226,267 | 95.2 % | 5,709 / -214,133 | NE | 6991 (0 / 0) | 19.2 % | 18.0 % | 6.5 % | 71.8 % | 0 | 0 / 0 | -0.010 (k=-3) |  |
+| 2026-09-22 | NQ | 1408 (27 / 4) | 73,342 | 116.6 % | 99.5 % | 0.309 | -0.873 | -0.004 | 0.117 | -0.282 | 73,342 / 72,204 | 62.7 % | 19,038 / -45,581 | NE | 8309 (0 / 0) | 44.0 % | 38.7 % | 11.9 % | 45.1 % | 0 | 0 / 0 | 0.053 (k=-3) |  |
+| 2026-09-23 | NQ | 1375 (47 / 10) | 45,403 | 85.9 % | 66.2 % | 0.228 | 0.402 | -0.110 | -0.164 | 0.008 | 45,403 / 24,413 | 6.9 % | 3,568 / 20,895 | ano | 11616 (0 / 0) | 39.7 % | 35.8 % | 9.7 % | 46.7 % | 0 | 0 / 0 | 0.005 (k=-3) |  |
+| 2026-09-24 | NQ | 1365 (59 / 8) | 51,405 | 99.8 % | 87.3 % | 0.194 | 0.351 | -0.107 | -0.131 | 0.006 | 48,356 / 51,405 | 52.6 % | 2,275 / 35,333 | ano | 14431 (0 / 0) | 43.9 % | 39.0 % | 11.1 % | 45.0 % | 0 | 0 / 0 | 0.021 (k=+2) |  |
+| 2026-09-25 | NQ | 1417 (15 / 5) | 81,985 | 110.6 % | 97.8 % | 0.167 | -0.748 | -0.128 | -0.142 | -0.084 | 81,985 / 71,740 | 88.2 % | 11,757 / -49,730 | NE | 14352 (0 / 0) | 39.3 % | 35.3 % | 10.3 % | 51.4 % | 0 | 0 / 0 | 0.013 (k=+3) |  |
+| 2026-09-28 | NQ | 1420 (14 / 6) | 18,113 | 67.9 % | 81.6 % | 0.442 | -0.236 | -0.066 | -0.075 | 0.013 | 18,113 / 11,353 | 16.5 % | -4,085 / 7,268 | NE | 16098 (0 / 0) | 57.4 % | 53.0 % | 7.6 % | 42.1 % | 0 | 0 / 0 | 0.033 (k=+2) | řady nezačínají v nule (start uprostřed seance / navázání) |
+| 2026-09-29 | NQ | 1377 (46 / 10) | 41,304 | 68.3 % | 96.3 % | 0.171 | -0.218 | -0.247 | -0.382 | 0.004 | 31,579 / 41,304 | 76.6 % | -7,224 / 19,853 | NE | 14117 (0 / 0) | 46.3 % | 41.6 % | 10.2 % | 34.3 % | 0 | 0 / 0 | 0.014 (k=-3) |  |
+| 2026-09-30 | NQ | 1403 (29 / 7) | 34,598 | 69.1 % | 88.8 % | 0.251 | -0.746 | -0.204 | -0.199 | -0.209 | 23,897 / 34,598 | 85.7 % | 6,897 / -10,397 | NE | 15470 (0 / 0) | 42.0 % | 38.0 % | 9.5 % | 44.9 % | 0 | 0 / 0 | 0.030 (k=-3) | řady nezačínají v nule (start uprostřed seance / navázání) |
+| 2026-10-01 | NQ | 1396 (29 / 11) | 101,731 | 99.6 % | 89.0 % | 0.065 | -0.238 | -0.011 | -0.014 | 0.005 | 101,731 / 100,348 | 65.0 % | 1,806 / -97,615 | NE | 14348 (1 / 0) | 42.6 % | 38.3 % | 10.0 % | 38.2 % | 0 | 0 / 0 | 0.535 (k=+1) |  |
+| 2026-10-02 | NQ | 1409 (24 / 6) | 82,897 | 93.1 % | 72.3 % | 0.140 | 0.200 | -0.065 | -0.083 | 0.045 | 82,897 / 81,256 | 61.8 % | -2,336 / -81,379 | ano | 18081 (0 / 0) | 53.1 % | 46.6 % | 12.3 % | 25.2 % | 0 | 0 / 0 | 0.040 (k=-1) |  |
+| 2026-10-05 | NQ | 1411 (20 / 9) | 67,822 | 82.2 % | 77.2 % | 0.164 | 0.310 | -0.145 | -0.206 | -0.049 | 61,596 / 67,822 | 64.3 % | -7,920 / -10,294 | ano | 15641 (0 / 0) | 40.3 % | 36.1 % | 10.5 % | 46.9 % | 0 | 0 / 0 | 0.175 (k=-3) | řady nezačínají v nule (start uprostřed seance / navázání) |
+| 2026-10-06 | NQ | 1394 (32 / 10) | 92,938 | 99.2 % | 97.3 % | 0.071 | -0.372 | -0.026 | -0.028 | -0.028 | 92,938 / 84,676 | 35.8 % | -1,759 / -86,435 | ano | 13385 (0 / 0) | 39.2 % | 35.2 % | 10.4 % | 51.8 % | 0 | 0 / 0 | 0.050 (k=+2) |  |
+| 2026-10-07 | NQ | 1398 (30 / 7) | 41,554 | 108.2 % | 89.0 % | 0.252 | -0.493 | -0.084 | -0.076 | -0.146 | 41,554 / 36,243 | 55.1 % | -1,180 / 8,204 | NE | 13543 (0 / 0) | 51.5 % | 46.4 % | 9.9 % | 39.4 % | 0 | 0 / 0 | -0.014 (k=+2) |  |
 
 ### Souhrn (jen použitelné seance, mediány)
 
-| Sym | Seancí v souhrnu | zn. close shoda | med. max |Δ| % rozsahu | med. tvar. odch. | med. rozsah dx/live | med. r hladiny | med. r přírůstky | med. r přír. RTH | med. r přír. mimo RTH | med. opačné zn. | med. r přír. nejl. lag | nejl. lagy |
+| Sym | Seancí v souhrnu | zn. close shoda | med. max \|Δ\| % rozsahu | med. tvar. odch. | med. rozsah dx/live | med. r hladiny | med. r přírůstky | med. r přír. RTH | med. r přír. mimo RTH | med. opačné zn. | med. r přír. nejl. lag | nejl. lagy |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | ES | 13 | 7/13 | 79.8 % | 79.2 % | 0.380 | -0.049 | -0.042 | -0.018 | -0.050 | 52.8 % | 0.063 | -2, +1, -1, +0, -2, +0, +1, -3, +3, +2, +0, +2, -2 |
 | NQ | 13 | 5/13 | 99.2 % | 89.0 % | 0.171 | -0.238 | -0.084 | -0.083 | -0.028 | 62.7 % | 0.030 | -3, -3, -3, +2, +3, +2, -3, -3, +1, -1, -3, +2, +2 |

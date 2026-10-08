@@ -92,6 +92,17 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 2. Diagnostika (zastavil jsem se u první hypotézy)
 
+- **2026-10-08 — živá CumΔ šla dva měsíce proti ceně a srovnání zdrojů to četlo jako „jiná veličina“ (#1018).**
+  Midpoint test (SPEC 4.5) porovnával `snapshot.last` — obchod starší než snímek — s aktuálním bid/ask:
+  při růstu ceny vyjde call „prodej“ a put „nákup“, obojí záporná delta. Srovnání midpoint × tisky
+  (8. 9.) našlo jen „řady spolu nekorelují, NQ hladiny 5/5 záporně“ a uzavřelo to jako nález o datech,
+  protože obě řady neměly „pravdu“. Odhalila to až **kotva**: korelace každé řady s pohybem ceny futures
+  a s CVD futures (agresor od burzy) — midpoint záporně 26/26 seancí, tisky kladně. Týž běh ukázal,
+  že nástroj počítal ploché víkendové partice jako seance a nafukoval „shodu znaménka“.
+  → Dvě neověřené řady se nesrovnávají jen mezi sebou: přidat nezávislou měřenou kotvu (cena, CVD)
+  a ptát se, kterým směrem každá čte. Odhad strany ze snímku cen nikdy nebrat jako agresora.
+  Seznam seancí v měřicím nástroji vždy přes `settle.is_trading_session`.
+
 - **2026-10-08 — feed Yahoo `rssindex` vracel dva týdny HTTP 404 a nikdo to nevěděl (#1451).**
   Zdraví collectoru hlídalo zdroj `rss_news` jako celek. Dokud odpovídaly CNBC a MarketWatch, byl
   zdroj „ok“ a mrtvý feed psal jen `warning` do logu každou minutu. Zdroj přitom přišel o 94 % zpráv,

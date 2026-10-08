@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from gexlens_engine.compute.settle import session_bounds
 from gexlens_engine.storage.cumdelta_compare import (
@@ -28,8 +29,8 @@ SESSION = dt.date(2026, 9, 10)  # čtvrtek, seance 9. 9. 22:00 UTC → 10. 9. 22
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "compare_cumdelta_sources.py"
 
 
-def _minutes(count: int) -> list[dt.datetime]:
-    start, _ = session_bounds(SESSION)
+def _minutes(count: int, session: dt.date = SESSION) -> list[dt.datetime]:
+    start, _ = session_bounds(session)
     return [start + dt.timedelta(minutes=i) for i in range(count)]
 
 
@@ -54,6 +55,7 @@ def write_dx(
     flows: list[float],
     *,
     hot_flows: list[float] | None = None,
+    session: dt.date = SESSION,
 ) -> None:
     hot = hot_flows or [0.0] * len(flows)
     rows = [
@@ -72,7 +74,7 @@ def write_dx(
             zip(ts, flows, _cumulative(flows), hot, _cumulative(hot), strict=True)
         )
     ]
-    path = derived / symbol / "cumdelta_dx" / f"{SESSION.isoformat()}.parquet"
+    path = derived / symbol / "cumdelta_dx" / f"{session.isoformat()}.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(rows, schema=DX_FLOW_SCHEMA), path)
 
@@ -240,7 +242,8 @@ def test_short_session_is_flagged_unusable(tmp_path: Path) -> None:
 
 def test_known_unusable_sessions_are_named() -> None:
     assert dt.date(2026, 9, 4) in KNOWN_UNUSABLE
-    assert dt.date(2026, 9, 7) in KNOWN_UNUSABLE
+    # Labor Day vyřadí obchodní den (`available_sessions`), ne ruční seznam
+    assert dt.date(2026, 9, 7) not in KNOWN_UNUSABLE
     assert dt.date(2026, 9, 8) in KNOWN_UNUSABLE
 
 
@@ -269,6 +272,9 @@ def test_script_prints_markdown_and_json(tmp_path: Path) -> None:
     md = subprocess.run([*common], capture_output=True, text=True, encoding="utf-8", check=False)
     assert md.returncode == 0, md.stderr
     assert "## Per seance" in md.stdout
+    # bez barů a CVD je shoda s cenou prázdná, ale tabulky jsou
+    assert "## Shoda s cenou futures — souhrn" in md.stdout
+    assert "| ES | 1 min | — | — | — | — | — |" in md.stdout
     assert (
         f"| {SESSION.isoformat()} | ES | 1200 (0 / 0) | 0 | 0.0 % | 0.0 % | 1.000 | 1.000 | 1.000 |"
         in md.stdout
@@ -331,6 +337,9 @@ def test_live_coverage_is_summed_from_flow_partition(tmp_path: Path) -> None:
     assert coverage.printed_share == pytest.approx(80 / 200)  # (60+20) / (80+10+110)
     assert coverage.fallback_share_rth == pytest.approx(30 / 100)  # jen minuta 14:00
     assert coverage.dropped_no_delta == 3
+    # strukturovaný objem (5) je mimo klasifikovaný, ale v celém objemu
+    assert coverage.printed_share_total == pytest.approx(80 / 205)
+    assert coverage.structured_share == pytest.approx(5 / 205)
 
     # Partice před #1071: sloupce chybí → None
     old = derived / "NQ" / "flow" / f"{session.isoformat()}.parquet"
@@ -355,11 +364,13 @@ def test_live_coverage_is_summed_from_flow_partition(tmp_path: Path) -> None:
 def test_available_sessions_skip_weekend_partitions(tmp_path: Path) -> None:
     """Engine píše ploché partice i o víkendu — do srovnání nepatří (obchodní den, #1018).
 
-    Pátek a pondělí zůstávají, sobota a neděle (nedělní otevření patří pondělku) ne."""
+    Pátek a pondělí zůstávají, sobota a neděle (nedělní otevření patří pondělku) ne,
+    svátek NYSE (Labor Day) taky ne."""
     dx_dir = tmp_path / "ES" / "cumdelta_dx"
     dx_dir.mkdir(parents=True)
     friday, saturday, sunday, monday = (dt.date(2026, 9, d) for d in (25, 26, 27, 28))
-    for day in (friday, saturday, sunday, monday):
+    labor_day = dt.date(2026, 9, 7)
+    for day in (labor_day, friday, saturday, sunday, monday):
         (dx_dir / f"{day.isoformat()}.parquet").touch()
     assert available_sessions(tmp_path, "ES") == [friday, monday]
 
@@ -419,16 +430,24 @@ def test_price_alignment_flags_inverted_series() -> None:
     assert price_alignment(dx, live, returns, returns, 15).dx_vs_price is None
 
 
-def test_align_session_reads_bars_and_futures_cvd(tmp_path: Path) -> None:
-    """Bary (close → přírůstek ceny) a `futures_cvd_delta` z partic seance (D−1 + D)."""
+@pytest.mark.parametrize(
+    "session",
+    [SESSION, dt.date(2026, 9, 28)],  # čtvrtek; pondělí začíná nedělí 22:00 UTC
+    ids=["ctvrtek", "pondeli"],
+)
+def test_align_session_reads_bars_and_futures_cvd(tmp_path: Path, session: dt.date) -> None:
+    """Bary (close → přírůstek ceny) a `futures_cvd_delta` z partic seance (D−1 + D);
+    pondělní seance leží v nedělní a pondělní UTC partici."""
     from gexlens_engine.storage.cumdelta_compare import ALIGNMENT_WINDOWS, align_session
     from gexlens_engine.storage.parquet_store import BARS_SCHEMA
 
     count = 200
-    ts = _minutes(count)
+    ts = _minutes(count, session)
     flows = _flows(count)
-    write_dx(tmp_path, "ES", ts, flows)
+    write_dx(tmp_path, "ES", ts, flows, session=session)
     write_live(tmp_path, "ES", ts, [-f for f in flows])
+    # 200 min od 22:00 UTC přes půlnoc → obě UTC partice (D−1 i D)
+    assert {t.date() for t in ts} == {session - dt.timedelta(days=1), session}
     closes = [5000.0 + c for c in _cumulative(flows)]  # přírůstek ceny = tok
     by_day: dict[dt.date, list[dict[str, object]]] = {}
     for t, close in zip(ts, closes, strict=True):
@@ -446,7 +465,7 @@ def test_align_session_reads_bars_and_futures_cvd(tmp_path: Path) -> None:
             row["futures_cvd_delta"] = 2.0 * -float(row["flow_delta"])
         pq.write_table(pa.Table.from_pylist(table, schema=FLOW_SCHEMA), path)
 
-    alignments = align_session(tmp_path, "ES", SESSION)
+    alignments = align_session(tmp_path, "ES", session)
     assert [a.window for a in alignments] == list(ALIGNMENT_WINDOWS)
     one = alignments[0]
     # první minuta nemá předchozí close → korelace přes 199 přírůstků

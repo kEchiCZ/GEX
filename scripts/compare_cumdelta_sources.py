@@ -38,9 +38,9 @@ ploché partice i při zavřeném trhu.
 Seance, které do souhrnu NEPATŘÍ (v tabulce jsou, do souhrnu je vrátí
 `--include-unusable`):
 - 4. 9. 2026 — #1013 nasazeno v 09:03 CEST, seance neúplná;
-- 7. 9. 2026 — Labor Day, zkrácená seance;
 - 8. 9. 2026 — PC vypnuté, market data přetažená na mobil, seance neúplná;
 - automaticky každá seance s < 1 000 společnými minutami.
+Víkendy a svátky (např. Labor Day 7. 9.) se nevypisují vůbec — viz níže.
 Seance před 4. 9. mají stín dělený na zóny (ATM±15 prstenec + hot ±1) — jsou
 označeny „zóny" a srovnávají ATM±15, ne celý řetěz.
 
@@ -108,13 +108,14 @@ def _fmt_best_lag(r: SessionComparison) -> str:
 
 def session_table(results: Sequence[SessionComparison]) -> str:
     header = (
-        "| Seance | Sym | Min. spol. (jen dx / jen live) | max |Δ| | max |Δ| % rozsahu | "
+        "| Seance | Sym | Min. spol. (jen dx / jen live) | max \\|Δ\\| | max \\|Δ\\| % rozsahu | "
         "tvar. odch. | rozsah dx/live | r hladiny | r přírůstky | r přír. RTH | "
-        "r přír. mimo RTH | max |Δ| RTH / mimo | opačné zn. | close dx / live | zn. close | "
-        "tisky (bez strany / bez kontextu) | pokrytí tisky | fallback RTH | "
+        "r přír. mimo RTH | max \\|Δ\\| RTH / mimo | opačné zn. | close dx / live | zn. close | "
+        "tisky (bez strany / bez kontextu) | tisky z klasif. objemu | tisky z celého objemu | "
+        "strukt. objem | fallback RTH (objem) | zahozeno bez Δ | "
         "řetěz dx/live | r přír. nejl. lag | poznámka |"
     )
-    sep = "|" + "|".join(["---"] * 21) + "|"
+    sep = "|" + "|".join(["---"] * 24) + "|"
     lines = [header, sep]
     for r in results:
         note_parts = list(r.notes)
@@ -142,7 +143,10 @@ def session_table(results: Sequence[SessionComparison]) -> str:
                     f"{r.dx_trades} ({r.dx_unknown_side} / {r.dx_dropped_no_context})",
                     # Pokrytí z živé partice (#1071); „—" = partice před #1071
                     _pct(r.live_printed_share),
+                    _pct(r.live_printed_share_total),
+                    _pct(r.live_structured_share),
                     _pct(r.live_fallback_share_rth),
+                    "—" if r.live_dropped_no_delta is None else str(r.live_dropped_no_delta),
                     f"{r.dx_chain_breaks} / {r.live_chain_breaks}",
                     _fmt_best_lag(r),
                     "; ".join(note_parts) if note_parts else "",
@@ -155,7 +159,7 @@ def session_table(results: Sequence[SessionComparison]) -> str:
 
 def summary_table(summaries: Sequence[Summary]) -> str:
     header = (
-        "| Sym | Seancí v souhrnu | zn. close shoda | med. max |Δ| % rozsahu | "
+        "| Sym | Seancí v souhrnu | zn. close shoda | med. max \\|Δ\\| % rozsahu | "
         "med. tvar. odch. | med. rozsah dx/live | med. r hladiny | med. r přírůstky | "
         "med. r přír. RTH | med. r přír. mimo RTH | med. opačné zn. | "
         "med. r přír. nejl. lag | nejl. lagy |"
