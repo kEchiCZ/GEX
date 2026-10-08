@@ -2,10 +2,10 @@
 
 Po zdroji a podskupině (feed RSS, autor Alpaca, vydavatel Finnhubu, kurátor
 Bluesky, provider IBKR): objem za 24 h a 7 dní podle `ts_ingested`, zpoždění
-`ts_ingested − ts_event` (medián, p90, podíl nad hodinu, záporná, bez vlastního
-času), poslední příjem; denní mediány zpoždění za 30 dní. Dál kalendář podle
-času releasu, uložené sloučené duplicity (`raw.merged_sources`) a registr
-`news_sources` proti záznamům.
+`ts_ingested − ts_event` (medián, p90, podíl nad hodinu, záporná, čas rovný
+příjmu), medián délky titulku, poslední příjem; denní mediány zpoždění za 30 dní.
+Dál kalendář podle času releasu, uložené sloučené duplicity (`raw.merged_sources`)
+a registr `news_sources` proti záznamům.
 
 Okna se počítají od pevného `as_of` (výchozí: začátek běhu). Objem podle
 příjmu, ne podle `ts_event`: kalendář se vkládá dopředu a Bluesky nese čas
@@ -58,6 +58,7 @@ SELECT source, {SUBGROUP_SQL} AS sub, kind,
        count(*) FILTER (WHERE ts_ingested - ts_event > interval '1 hour') AS over_1h,
        count(*) FILTER (WHERE ts_ingested < ts_event) AS negative,
        count(*) FILTER (WHERE ts_ingested = ts_event) AS no_own_time,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY length(title)) AS title_p50,
        max(ts_ingested) AS last_ingested
 FROM news_events
 WHERE ts_ingested >= :as_of - interval '7 days' AND ts_ingested < :as_of
@@ -70,7 +71,7 @@ DAILY_LAG_SQL = """
 SELECT source, count(*) AS days, min(p50) AS lo,
        percentile_cont(0.5) WITHIN GROUP (ORDER BY p50) AS mid, max(p50) AS hi
 FROM (
-    SELECT source, date_trunc('day', ts_ingested) AS day,
+    SELECT source, date_trunc('day', ts_ingested, 'UTC') AS day,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM ts_ingested - ts_event))
                AS p50
     FROM news_events
@@ -148,6 +149,7 @@ def sources(conn: Connection, as_of: dt.datetime) -> str:
                 "—" if scheduled else f"{row.over_1h / row.n_7d:.0%}",
                 row.negative,
                 row.no_own_time,
+                f"{row.title_p50:.0f}",
                 _ts(row.last_ingested),
             ]
         )
@@ -160,7 +162,8 @@ def sources(conn: Connection, as_of: dt.datetime) -> str:
         "p90 [s]",
         "> 1 h",
         "< 0",
-        "bez vlastního času",
+        "čas = příjem",
+        "titulek p50 [znaků]",
         "poslední příjem (UTC)",
     ]
     return _table(header, rows)
