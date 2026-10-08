@@ -334,10 +334,10 @@ def breakdown(
             interval = f"{_r(mean_gap(passed, blocked))} [{_r(low)}; {_r(high)}]"
         else:
             interval = f"— (n < {MIN_INTERVAL_N})"
-        p_sum, b_sum = _summary(passed), _summary(blocked)
-        body.append([value, p_sum[0], p_sum[2], p_sum[3], b_sum[0], b_sum[2], b_sum[3], interval])
-    header = ["", "n pass", "Ø R pass", "Ø čisté R pass", "n block", "Ø R block"]
-    header += ["Ø čisté R block", "Ø R pass − block [95 %]"]
+        cells = [" / ".join(str(cell) for cell in _summary(group)) for group in (passed, blocked)]
+        body.append([value, *cells, interval])
+    groups = "n / úspěšnost / Ø R / Ø čisté R / Σ R"
+    header = ["", f"pass: {groups}", f"block: {groups}", "Ø R pass − block [95 %]"]
     return _table(header, body)
 
 
@@ -345,11 +345,12 @@ def report(rows: Sequence[Row], funnel: dict[str, int]) -> str:
     rng = np.random.default_rng(SEED)
     first = min(row.fact.created_ts for row in rows)
     last = max(row.fact.created_ts for row in rows)
-    sessions = len({row.session for row in rows})
+    sessions = sorted({row.session for row in rows})
     out = [
         "## Vzorek\n",
         f"Mechanika v{MECHANICS_VERSION}, vznik {first:%Y-%m-%d %H:%M} – "
-        f"{last:%Y-%m-%d %H:%M} UTC, {sessions} obchodních seancí.\n",
+        f"{last:%Y-%m-%d %H:%M} UTC = {len(sessions)} obchodních seancí "
+        f"{sessions[0]} – {sessions[-1]}.\n",
         _table(["krok", "setupů"], [[k, v] for k, v in funnel.items()]),
         "\n## Skupiny pass × block\n",
     ]
