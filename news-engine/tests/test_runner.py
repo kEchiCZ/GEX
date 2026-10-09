@@ -194,3 +194,29 @@ def test_writer_is_idempotent_on_dedup_hash(tmp_path: Path) -> None:
     assert writer.write([duplicate]) == 0
     assert writer.count() == 2
     assert writer.write([]) == 0
+
+
+def test_writer_stores_content_tier_from_source_and_raw(tmp_path: Path) -> None:
+    """ADR-0059: tier obsahu se zapisuje při ingestu z `content_tier(source, raw)`."""
+    from sqlalchemy import select
+
+    from gexlens_engine.storage.sentiment import news_events
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    writer = NewsWriter(engine)
+    events = [
+        NewsEvent(TS, TS, "alpaca", "headline", "US CPI rises", raw={"author": "Benzinga Newsdesk"}),
+        NewsEvent(TS, TS, "alpaca", "headline", "Five stocks to watch", raw={"author": "Jane Doe"}),
+        NewsEvent(TS, TS, "bluesky", "social", "Fed hikes", raw={"did": "d", "curated": True}),
+        NewsEvent(TS, TS, "reddit_rss", "social", "YOLO calls"),
+    ]
+    assert writer.write(events) == 4
+    with engine.connect() as conn:
+        tiers = dict(conn.execute(select(news_events.c.title, news_events.c.content_tier)).all())
+    assert tiers == {
+        "US CPI rises": 2,
+        "Five stocks to watch": 3,
+        "Fed hikes": 2,
+        "YOLO calls": None,
+    }

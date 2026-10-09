@@ -126,6 +126,9 @@ news_events = Table(
     # NULL = nerozhodnuto; nastavuje výhradně ReactionJob, pending dotaz
     # označené eventy vynechává (jinak se přescanovávaly donekonečna).
     Column("daily_uncomputable", Boolean, nullable=True),
+    # Tier obsahu 1 oficiální / 2 headline / 3 článek, NULL mimo tiery (ADR-0059);
+    # zapisuje se při ingestu z `compute.news_tier.content_tier`, vstupy se nemění
+    Column("content_tier", SmallInteger, nullable=True),
     Column("dedup_hash", String(64), nullable=False, unique=True),
     Column("raw", JSON, nullable=False, default=dict),
     Index("ix_news_events_ts", "ts_event"),
@@ -803,6 +806,9 @@ def ensure_sentiment_schema(engine: Engine) -> None:
         if "body" not in columns:  # #743: plné znění článku
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE news_events ADD COLUMN body TEXT"))
+        if "content_tier" not in columns:  # ADR-0059: historii doplní backfill
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE news_events ADD COLUMN content_tier SMALLINT"))
     # `news_reactions` jsou naměřená data. Starý tvar (řádek per okno, do #998)
     # se NEmigruje za běhu: 1,85 M řádků pivotuje samostatný skript s kontrolou
     # bezeztrátovosti. Proces nesmí do starého tvaru tiše psát ani vedle plné
