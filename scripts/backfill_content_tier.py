@@ -9,7 +9,9 @@ Kurátor Bluesky: příznak `raw.curated` zapisuje collector až od #1291 (25. 9
 Posty přijaté před prvním postem s příznakem dostanou kurátora podle ADR-0045
 bod 8 (`load_curated` z `reclassify_news_rules.py`: autor má post s příznakem,
 nebo je v aktuálním seznamu kurátorů). Novější posty se řídí jen příznakem —
-jeho absence tehdy znamenala „autor není kurátor“.
+jeho absence tehdy znamenala „autor není kurátor“. Reklasifikace
+(`reclassify_news_rules.py`) bere seznam pro všechny posty; tier je přísnější
+point-in-time, liší se jen u autora přidaného do seznamu po jeho postu.
 
 Režimy: výchozí dry-run jen čtením (PG `default_transaction_read_only`) s počty
 zdroj × tier a počtem změn; `--apply` zapíše jen řádky, kde se tier liší

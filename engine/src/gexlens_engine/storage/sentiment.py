@@ -750,9 +750,9 @@ release_hypotheses = Table(
 def ensure_sentiment_schema(engine: Engine) -> None:
     """Založí všechny tabulky SentimentLensu (idempotentní).
 
-    Volá se při startu news-engine i API, aby modul fungoval nad čerstvou DB
-    bez ručního kroku. Tabulky pozdějších milestones vznikají rovnou — migrace
-    mají být dopředné (SPEC kap. 11).
+    Volá se při startu news-engine, API i enginu (IBKR pásky, `ibkr_news_enabled`),
+    aby modul fungoval nad čerstvou DB bez ručního kroku. Tabulky pozdějších
+    milestones vznikají rovnou — migrace mají být dopředné (SPEC kap. 11).
     """
     from sqlalchemy import inspect, text
 
