@@ -58,7 +58,7 @@ samotné feedy CNBC/MarketWatch/Yahoo.
 
 **Rozhodnutí: tick 292 odebírá datový engine, ne news-engine.**
 
-- Market data lines jsou limit **na účet, ne na spojení** (bod 4 výše: ≥ 150).
+- Market data lines jsou limit **na účet, ne na spojení** (ADR-0001 bod 4: přidělení 100, revize #1479).
   Druhý clientId by kapacitu nepřidal, jen rozdělil tutéž mezi dva procesy,
   které o sobě nevědí — a engine dnes drží rezervu vědomě (80 z ≥ 150).
 - Tick 292 stojí **jednu line na symbol** (ES + NQ = 2), objednává se jako

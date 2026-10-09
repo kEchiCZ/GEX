@@ -56,7 +56,7 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
 ## Kritická pravidla
 - **Závazná rozhodnutí R1–R6** (SPEC kap. 0) se neporušují: žádná MVP zjednodušení, plná klasifikace
   agresora, věčný OI archiv, IBKR jako primární zdroj.
-- **Účet má 100 market data lines** (ne ≥150 z ADR-0001). `batch_size` a počet instrumentů nezvyšovat.
+- **Účet má 100 market data lines** (přidělení IBKR pro API, ADR-0001 bod 4). `batch_size` a počet instrumentů nezvyšovat.
 - **Uživatelova data se nemažou.** Po testech mazat jen vlastní záznamy podle id, nikdy hromadný DELETE
   (anotace, deník, verdikty, setupy jsou nenahraditelné).
 - **Otevřený trh = vidět vše.** Žádné gating setupů/signálů podle svátku, tenkého trhu nebo seance —

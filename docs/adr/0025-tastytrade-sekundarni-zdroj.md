@@ -13,7 +13,7 @@ subskripce:
 
 | Limit | Hodnota | Dopad |
 |---|---|---|
-| Market data lines | **100** (ADR-0001 bod 4 uvádí „≥ 150", reálný strop účtu je 100) | `batch_size=80`, nelze držet víc expirací současně |
+| Market data lines | **100** (přidělení IBKR pro API, ADR-0001 bod 4, revize #1479) | `batch_size=80`, nelze držet víc expirací současně |
 | Souběžné tick-by-tick streamy | **5** (error 10190, ADR-0001 bod 3) | Hot zóna degradována z cílových ATM±15 na ~ATM±1 C/P |
 | OI tick 588 na FOP | nechodí vůbec (ADR-0001 bod 2) | Workaround přes tick 101 à 30 min + alert `oi_missing` |
 | Souběh se sessions | feed je per-uživatel | Přihlášení mobilní aplikace na live přetáhne feed → error 10197, graf zamrzne |
@@ -158,7 +158,8 @@ Konkrétně se po měření přenastaví: počet symbolů na subskripci, počet 
 šířka strike bandu a počet současně držených expirací (#616), kadence REST dotazů.
 
 **Pozor na záměnu s IBKR.** U IBKR platí opačné pravidlo — `batch_size` se zvyšovat nesmí,
-protože strop účtu je tvrdých 100 market data lines a jeho překročení shodí subskripce.
+protože účet má od IBKR přidělených 100 market data lines pro API (ADR-0001 bod 4, #1479)
+a data nad nimi spolehlivá nejsou.
 Toto rozhodnutí se týká **výhradně tastytrade větve**; limity IBKR zůstávají tam, kde jsou.
 
 Rezerva se nechává jen tam, kde ji vyžaduje sdílení účtu s dev prostředím a stabilita při

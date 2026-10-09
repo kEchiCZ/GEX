@@ -183,7 +183,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 | `GEXLENS_WINGS_SWEEP_EVERY` | 3 | Křídla každý k-tý cyklus |
 | `GEXLENS_ATM_SWEEP_WIDTH` | 30 | ATM ± N strikes každý cyklus |
 | `GEXLENS_REPAIR_MAX_ATTEMPTS` | 3 | Retry repair fronty za sweep |
-| `GEXLENS_MARKET_DATA_LINES` | 100 | Kapacita market data lines — **tvrdý strop účtu je 100** (změřeno #609; původní odhad „≥ 150" z ADR-0001 neplatil). `batch_size` nikdy nezvyšovat |
+| `GEXLENS_MARKET_DATA_LINES` | 100 | Kapacita market data lines — **strop účtu je 100**: přidělení IBKR pro API (TWS „Maximum Allowed“, 9. 10. 2026, #1479); původní odhad „≥ 150" z ADR-0001 neplatil. `batch_size` nikdy nezvyšovat |
 | `GEXLENS_CUMDELTA_SOURCE` | midpoint | Zdroj znaménka CumΔ (ADR-0032): `midpoint` = minutový test celý řetěz; `dxfeed` = tisky TimeAndSale se stranou od burzy, midpoint jen fallback per kontrakt a minutu. Přepnout až po srovnání řad a rozhodnutí |
 | `GEXLENS_DATABASE_URL` | postgres localhost | V compose směřuje na službu `postgres` |
 | `GEXLENS_DATA_DIR` | data | Kořen Parquet partic |
@@ -552,7 +552,7 @@ Z [ADR-0001](../adr/0001-ibkr-account-limits.md) (měřeno živě na účtu):
 | Limit | Hodnota | Dopad |
 |---|---|---|
 | Tick-by-tick streamy | **5** | Bez použití od ADR-0032 (3. 9. 2026): klasifikaci agresora dodá dxFeed `TimeAndSale` bez limitu; IBKR tick-by-tick zóna zrušena. |
-| Market data lines | **100** | Naměřený strop účtu (sonda #609). Původní údaj „≥ 150" v ADR-0001 neplatí — dávka 80 jede blízko stropu (~95–100/100), **`batch_size` proto nezvyšovat**. Strukturální řešení přinese #616. |
+| Market data lines | **100** | Přidělení IBKR pro API (TWS „Maximum Allowed“, 9. 10. 2026, #1479; sonda #1477 dostala krátkodobě tick i u 250 linek, spolehlivé to není). Původní údaj „≥ 150" v ADR-0001 neplatí — dávka 80 jede blízko stropu (~95–100/100), **`batch_size` proto nezvyšovat**. Strukturální řešení přinese #616. |
 | **FOP OI** | **tick 588 nedodává nikdy; tick 101 funguje** | **VYŘEŠENO (issue #65, ADR-0001 v3):** `IbOIFetcher` používá generic tick 101 pro OPT i FOP a čte hodnotu podle strany kontraktu (opačná strana = validní 0.0). Retry à 30 min + volume fallback zůstávají jako pojistka. |
 
 [ADR-0002](../adr/0002-strike-band-expansion.md): obálka strikes je grow-only (křídla se neztrácejí), strop šířky s alertem. [ADR-0003](../adr/0003-multi-instrument.md): multi-instrument orchestrace řízená watchlistem.
