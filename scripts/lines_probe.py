@@ -1,119 +1,307 @@
-"""Sonda #631: přeměřit strop market data lines s OVĚŘENÍM DORUČENÍ dat.
+"""Sonda market data lines (#631, #1477): kolik souběžných subskripcí účet reálně obslouží.
 
-ADR-0001 bod 4 měřil jen nepřítomnost erroru; #631 chce doložit, kolik
-souběžných subskripcí REÁLNĚ DODÁVÁ data (IBKR nad stropem umí mlčet bez
-chyby). Postup: postupně přidávat reqMktData na ES FOP stricích po dávkách,
-po každé dávce počkat a spočítat tickery, kterým dorazil aspoň jeden tick
-(bid/ask/last/close; v pauze Globexu chodí zmrazené kotace — doručení doloží
-i ty). Zlom v křivce „subskribováno vs. dodává" je skutečný strop.
+Hypotéza z provozu (ADR-0001 bod 4): nad stropem IBKR Error 101 neposílá, linky jen
+tiše nedodávají data. #609 přičetl umlčení spíš churnu subskripcí. Měří se proto
+doručení dvakrát:
+- **dodalo**: po požadavku dorazil aspoň jeden tick (`Ticker.time` po čase požadavku;
+  ib_async ho posouvá jen daty, ne `tickReqParams` ani `marketDataType`);
+- **proud**: tick dorazil i v okně `HOLD_S` po naplnění. Linka nad stropem může
+  poslat úvodní snímek a pak mlčet. Měření 9. 10. dalo 130/130 „dodalo“ (#1477),
+  rozhoduje proto proud a měří se jen za otevřeného trhu.
 
-POZOR: lines jsou SDÍLENÉ per uživatel — spouštět VÝHRADNĚ se STOPNUTÝM
-produkčním enginem (Globex pauza 23:00–24:00), jinak sonda trhá produkci.
-Runner: scripts/lines-probe-offhours.cmd (stop engine → sonda → start).
+ib_async drží `Ticker` per conId napříč subskripcemi i s hodnotami z minula (#1088),
+takže samotná hodnota nestačí. Data se žádají jako zmrazená (`reqMarketDataType(2)`):
+při otevřeném trhu chodí živá. Kontrakty jsou blízko ATM přes nejbližší expirace
+všech řetězů, protože kotují nejživěji.
 
-Spuštění (host, TWS na 7496):  python scripts/lines_probe.py
+Režimy:
+- výchozí (#631): FOP ES po dávkách až do `MAX_LINES` a kolik z nich dodává;
+- `--news` (#1477): měření A/B/A. Kapacita FOP bez NEWS pásek (A), s páskami (B)
+  a znovu bez nich (A2). Pásky jsou tytéž a odebírané stejným kódem jako v enginu
+  (`broad_tape_providers`, `subscribe_broad_tape`). Rozdíl A − B říká, kolik lines
+  pásky berou. A2 ≠ A znamená, že kapacitu mezitím bral někdo jiný (mobil, TWS),
+  a měření se opakuje.
+- `--dry-run`: jen kvalifikace kontraktů a seznam pásek, žádné `reqMktData`.
+  Linky nebere, jde pustit i za běhu enginu.
+
+POZOR: lines jsou SDÍLENÉ per uživatel. Mimo `--dry-run` spouštět VÝHRADNĚ se
+STOPNUTÝM produkčním enginem, se svolením vlastníka a **za otevřeného trhu**. Při
+zavřeném trhu nic neteče, takže sonda skončí chybou (`marketclock.is_market_closed`)
+a nevydá falešný verdikt. Výpadek enginu je mezera v datech. Mobil ani TWS během
+měření nepoužívat. Runner scripts/lines-probe-offhours.cmd počítá s pauzou Globexu,
+pro měření proudu se proto nehodí. Ručně:
+    docker stop gex-engine-1
+    PYTHONUTF8=1 uv run python scripts/lines_probe.py --news
+    docker start gex-engine-1   # pak ověřit čerstvost: /status last_tick_ts
+
+Spuštění (host): uv run python scripts/lines_probe.py [--news] [--dry-run]
+Prostředí: GEXLENS_IBKR_HOST (127.0.0.1), GEXLENS_IBKR_PORT (4001 = IB Gateway).
 Výstup: scripts/lines_probe_result.txt + stdout.
 """
 
+import argparse
 import asyncio
 import datetime as dt
-import math
+import os
 import sys
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine" / "src"))
+from ib_async import IB, Contract, Future, Ticker
 
-from ib_async import IB, Contract, Future  # noqa: E402
+from gexlens_engine.compute.marketclock import is_market_closed
+from gexlens_engine.ibkr.newsticks import (
+    broad_tape_providers,
+    subscribe_broad_tape,
+    tape_symbol,
+)
 
-HOST = "127.0.0.1"
-PORT = 7496
 #: Mimo rozsah enginu — souběh ID nesmí kolidovat (engine používá nízká ID)
 CLIENT_ID = 631
-
 BATCH = 10
-MAX_LINES = 130  # nad papírový strop 100, ať je zlom vidět celý
-SETTLE_S = 4.0  # čekání na první ticky po dávce
+#: Nad provozní strop 100 i nad 130 z měření 9. 10. (#1477), ať je zlom vidět celý
+MAX_LINES = 250
+#: Strike na expiraci (call i put); nejbližší expirace blízko ATM kotují nejživěji
+STRIKES_PER_EXPIRY = 13
+SETTLE_S = 1.0  # čekání po dávce
+FINAL_SETTLE_S = 5.0  # doběh posledních dávek před počítáním
+#: Okno proudu: linka nad stropem může poslat úvodní snímek a pak mlčet (ADR-0001)
+HOLD_S = 30.0
+RELEASE_S = 3.0  # po zrušení subskripcí, než IBKR linky uvolní
+FROZEN = 2  # reqMarketDataType: živá data, při zavřeném trhu poslední známá
 RESULT_PATH = Path(__file__).with_name("lines_probe_result.txt")
 
 
-def _has_data(ticker: object) -> bool:
-    for name in ("bid", "ask", "last", "close"):
-        value = getattr(ticker, name, None)
-        if value is not None and not (isinstance(value, float) and math.isnan(value)) and value > 0:
-            return True
-    return False
+@dataclass(frozen=True)
+class Fill:
+    label: str
+    subscribed: int
+    delivering: int  # aspoň jeden tick po požadavku
+    streaming: int  # aspoň jeden tick v okně HOLD_S po naplnění
 
 
-async def main() -> None:
-    lines: list[str] = [f"Sonda #631 spuštěna {dt.datetime.now(dt.UTC).isoformat()}"]
-    errors: list[str] = []
+class _ReqIdRecorder:
+    """`ib.client` pro `subscribe_broad_tape`, který si pamatuje reqId kvůli zrušení."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+        self.req_ids: list[int] = []
+
+    def getReqId(self) -> int:  # noqa: N802 — jméno z protokolu ib_async
+        req_id = int(self._client.getReqId())
+        self.req_ids.append(req_id)
+        return req_id
+
+    def reqMktData(self, *args: Any) -> None:  # noqa: N802
+        self._client.reqMktData(*args)
+
+
+def _delivered(ticker: Ticker, since: dt.datetime) -> bool:
+    return ticker.time is not None and ticker.time > since
+
+
+async def front_future(ib: IB) -> Contract:
+    """Nejbližší neexpirovaný kvartální ES (stejný řetěz jako tradingClass ES)."""
+    details = await ib.reqContractDetailsAsync(Future("ES", exchange="CME"))
+    today = dt.datetime.now(dt.UTC).strftime("%Y%m%d")
+    futures = sorted(
+        (
+            d.contract
+            for d in details
+            if d.contract and d.contract.lastTradeDateOrContractMonth >= today
+        ),
+        key=lambda c: c.lastTradeDateOrContractMonth,
+    )
+    if not futures:
+        raise RuntimeError("Žádný neexpirovaný ES future — sonda končí")
+    return futures[0]
+
+
+async def option_contracts(ib: IB, front: Contract, limit: int) -> tuple[float, list[Contract]]:
+    """`limit` FOP blízko spotu přes nejbližší expirace všech řetězů předního kvartálu.
+
+    Krátké expirace blízko ATM kotují nejživěji, takže chybějící proud dat znamená
+    umlčenou linku, ne klidný kontrakt. Spot z historického baru, ne z `reqMktData`:
+    historická data linku neberou.
+    """
+    bars = await ib.reqHistoricalDataAsync(
+        front, "", "2 D", "1 hour", "TRADES", useRTH=False, formatDate=2
+    )
+    if not bars:
+        raise RuntimeError("Historické bary ES nepřišly — spot neznámý, sonda končí")
+    spot = float(bars[-1].close)
+    today = dt.datetime.now(dt.UTC).strftime("%Y%m%d")
+    chains = await ib.reqSecDefOptParamsAsync("ES", "CME", "FUT", front.conId)
+    series = sorted(
+        (expiry, chain.tradingClass, chain.strikes)
+        for chain in chains
+        if chain.exchange == "CME"
+        for expiry in chain.expirations
+        if expiry >= today
+    )
+    specs: list[Contract] = []
+    for expiry, trading_class, strikes in series:
+        nearest = sorted(strikes, key=lambda s: abs(s - spot))[:STRIKES_PER_EXPIRY]
+        specs += [
+            Contract(
+                secType="FOP",
+                symbol="ES",
+                lastTradeDateOrContractMonth=expiry,
+                strike=float(strike),
+                right=right,
+                exchange="CME",
+                tradingClass=trading_class,
+                multiplier="50",
+            )
+            for strike in nearest
+            for right in ("C", "P")
+        ]
+        if len(specs) >= limit:
+            break
+    # ib_async vrací u nejednoznačného kontraktu seznam kandidátů, u neznámého None
+    qualified = [
+        c
+        for c in await ib.qualifyContractsAsync(*specs[:limit])
+        if isinstance(c, Contract) and c.conId
+    ]
+    return spot, qualified
+
+
+async def fill(ib: IB, contracts: Sequence[Contract], label: str, log: list[str]) -> Fill:
+    """Subskribuje po dávkách, změří doručení i proud dat v okně HOLD_S a vše zruší."""
+    since = dt.datetime.now(dt.UTC)
+    tickers: list[Ticker] = []
+    for offset in range(0, len(contracts), BATCH):
+        for contract in contracts[offset : offset + BATCH]:
+            tickers.append(ib.reqMktData(contract, "", False, False))
+        await asyncio.sleep(SETTLE_S)
+        delivering = sum(_delivered(t, since) for t in tickers)
+        log.append(f"  {label}: subskribováno {len(tickers):3d} -> dodává {delivering:3d}")
+        print(log[-1], flush=True)
+    await asyncio.sleep(FINAL_SETTLE_S)
+    delivering = sum(_delivered(t, since) for t in tickers)
+    hold_from = dt.datetime.now(dt.UTC)
+    await asyncio.sleep(HOLD_S)
+    streaming_flags = [_delivered(t, hold_from) for t in tickers]
+    result = Fill(label, len(tickers), delivering, sum(streaming_flags))
+    # Kde v pořadí subskripce proud končí: linky nad stropem jsou ty poslední
+    silent = [i + 1 for i, flag in enumerate(streaming_flags) if not flag]
+    for contract in contracts:
+        ib.cancelMktData(contract)
+    await asyncio.sleep(RELEASE_S)
+    log.append(
+        f"{label}: FINÁLNĚ subskribováno {result.subscribed} -> dodalo {result.delivering},"
+        f" proud za {HOLD_S:.0f} s {result.streaming}; bez proudu pořadí: {_ranges(silent)}"
+    )
+    print(log[-1], flush=True)
+    return result
+
+
+def _ranges(positions: Sequence[int]) -> str:
+    """[1, 2, 3, 7] → "1–3, 7" (pořadí subskripce bez proudu dat)."""
+    if not positions:
+        return "—"
+    parts: list[str] = []
+    start = prev = positions[0]
+    for pos in [*positions[1:], None]:
+        if pos is not None and pos == prev + 1:
+            prev = pos
+            continue
+        parts.append(f"{start}–{prev}" if prev != start else str(start))
+        if pos is not None:
+            start = prev = pos
+    return ", ".join(parts)
+
+
+def verdict(a: Fill, b: Fill, a2: Fill, tapes: int) -> str:
+    """Rozhoduje proud dat: linka nad stropem může dodat úvodní snímek a pak mlčet."""
+    if a.streaming == 0 or b.streaming == 0:
+        return "NEROZHODNUTO: žádný proud dat (zavřený trh, nebo spojení bez dat) — měřit znovu"
+    if a.streaming != a2.streaming:
+        return (
+            f"NEROZHODNUTO: proud bez pásek se mezi A ({a.streaming}) a A2 ({a2.streaming}) "
+            "liší — linky bral někdo jiný, nebo kontrakty kotují nepravidelně; zopakovat"
+        )
+    if a.streaming >= a.subscribed:
+        return (
+            f"NEROZHODNUTO: strop nedosažen ({a.streaming}/{a.subscribed} s proudem dat)"
+            " — zvýšit MAX_LINES"
+        )
+    used = a.streaming - b.streaming
+    return (
+        f"NEWS pásky ({tapes}) berou {used} market data lines; strop bez pásek {a.streaming} "
+        f"(proud A {a.streaming}, B {b.streaming}, A2 {a2.streaming}; "
+        f"dodalo A {a.delivering}, B {b.delivering}, A2 {a2.delivering})"
+    )
+
+
+async def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Sonda market data lines (#631, #1477)")
+    parser.add_argument("--news", action="store_true", help="měření A/B/A s NEWS páskami (#1477)")
+    parser.add_argument("--dry-run", action="store_true", help="jen kvalifikace, žádné reqMktData")
+    args = parser.parse_args(argv)
+    host = os.environ.get("GEXLENS_IBKR_HOST", "127.0.0.1")
+    port = int(os.environ.get("GEXLENS_IBKR_PORT", "4001"))
+
+    log: list[str] = [f"Sonda lines spuštěna {dt.datetime.now(dt.UTC).isoformat()} ({host}:{port})"]
     ib = IB()
+    errors: list[str] = []
 
-    def on_error(reqId: int, code: int, message: str, *args: object) -> None:
-        # 354 = not subscribed, 101 = max lines — přesně to, co dokumentujeme
-        if code in (354, 101, 300, 10190, 10197):
-            errors.append(f"error {code} reqId {reqId}")
+    def on_error(req_id: int, code: int, message: str, *_: object) -> None:
+        # 101 = max tickers, 354 = not subscribed, 10197 = konkurenční relace (mobil)
+        if code in (101, 200, 300, 321, 354, 10089, 10190, 10197):
+            errors.append(f"{code} reqId {req_id}")
 
     ib.errorEvent += on_error
-    await ib.connectAsync(HOST, PORT, clientId=CLIENT_ID, timeout=15)
+    await ib.connectAsync(host, port, clientId=CLIENT_ID, timeout=15)
     try:
-        # Řetěz ES: přední future → contract details FOP kolem spotu
-        front = Future("ES", "20260918", "CME")
-        [front] = await ib.qualifyContractsAsync(front)
-        [spot_ticker] = [ib.reqMktData(front, "", False, False)]
-        await asyncio.sleep(3)
-        spot = spot_ticker.marketPrice()
-        ib.cancelMktData(front)
-        if spot is None or math.isnan(spot):
-            raise RuntimeError("Spot ES se nepodařilo přečíst — sonda končí")
-        lines.append(f"Spot ES ~{spot:.0f}")
+        front = await front_future(ib)
+        spot, contracts = await option_contracts(ib, front, MAX_LINES)
+        log.append(
+            f"ES {front.lastTradeDateOrContractMonth}, spot ~{spot:.0f}, "
+            f"kvalifikováno {len(contracts)} FOP"
+        )
+        codes = [p.code for p in await ib.reqNewsProvidersAsync()]
+        providers = broad_tape_providers(codes)
+        log.append(f"News kódy účtu: {', '.join(codes)} -> pásky enginu: {', '.join(providers)}")
+        print("\n".join(log), flush=True)
+        if args.dry_run:
+            return 0
+        if is_market_closed(dt.datetime.now(dt.UTC)):
+            log.append("Trh je zavřený — proud dat se změřit nedá, sonda končí (jen --dry-run)")
+            print(log[-1], flush=True)
+            return 2
 
-        # Kontrakty: strike po 5 b oběma směry od ATM, střídavě C/P
-        atm = round(spot / 5) * 5
-        specs: list[Contract] = []
-        for i in range(MAX_LINES):
-            strike = atm + (i // 2 + 1) * 5 * (1 if i % 2 == 0 else -1)
-            right = "C" if strike >= atm else "P"
-            specs.append(
-                Contract(
-                    secType="FOP",
-                    symbol="ES",
-                    lastTradeDateOrContractMonth="20260918",
-                    strike=float(strike),
-                    right=right,
-                    exchange="CME",
-                    tradingClass="ES",  # měsíční/kvartální — nejlikvidnější řetěz
-                    multiplier="50",
-                )
-            )
-        qualified = [c for c in await ib.qualifyContractsAsync(*specs) if c is not None and c.conId]
-        lines.append(f"Kvalifikováno {len(qualified)} kontraktů")
+        ib.reqMarketDataType(FROZEN)
+        if not args.news:
+            await fill(ib, contracts, "FOP", log)
+        else:
+            a = await fill(ib, contracts, "A bez pásek", log)
+            recorder = _ReqIdRecorder(ib.client)
 
-        tickers = []
-        for offset in range(0, len(qualified), BATCH):
-            batch = qualified[offset : offset + BATCH]
-            for contract in batch:
-                tickers.append(ib.reqMktData(contract, "", False, False))
+            def make_contract(provider: str) -> Contract:
+                return Contract(secType="NEWS", exchange=provider, symbol=tape_symbol(provider))
+
+            subscribe_broad_tape(recorder, providers, make_contract=make_contract)
             await asyncio.sleep(SETTLE_S)
-            delivering = sum(1 for t in tickers if _has_data(t))
-            subscribed = len(tickers)
-            lines.append(
-                f"subskribováno {subscribed:3d} → dodává {delivering:3d} (chyb {len(errors)})"
-            )
-            print(lines[-1])
-        # Finální doběh: poslední dávky potřebují čas
-        await asyncio.sleep(10)
-        delivering = sum(1 for t in tickers if _has_data(t))
-        lines.append(f"FINÁLNĚ: subskribováno {len(tickers)} → dodává {delivering}")
+            log.append(f"Pásky odebrány: {', '.join(providers)} (reqId {recorder.req_ids})")
+            b = await fill(ib, contracts, "B s páskami", log)
+            for req_id in recorder.req_ids:
+                ib.client.cancelMktData(req_id)  # type: ignore[no-untyped-call]
+            await asyncio.sleep(RELEASE_S)
+            a2 = await fill(ib, contracts, "A2 bez pásek", log)
+            log.append("VERDIKT: " + verdict(a, b, a2, len(providers)))
+            print(log[-1], flush=True)
         if errors:
-            lines.append("Chyby (posledních 20): " + "; ".join(errors[-20:]))
-        for contract in qualified:
-            ib.cancelMktData(contract)
+            log.append(f"Chyby IBKR ({len(errors)}, posledních 20): " + "; ".join(errors[-20:]))
+        return 0
     finally:
         ib.disconnect()
-        RESULT_PATH.write_text("\n".join(lines), encoding="utf-8")
-        print(f"Výsledek: {RESULT_PATH}")
+        RESULT_PATH.write_text("\n".join(log) + "\n", encoding="utf-8")
+        print(f"Výsledek: {RESULT_PATH}", flush=True)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))
