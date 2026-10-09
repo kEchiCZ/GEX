@@ -199,6 +199,8 @@ def test_writes_broker_headlines_once(tmp_path: Path) -> None:
     # Kategorii a důležitost doplní klasifikátor v news-engine
     assert row.category is None
     assert row.raw["provider"] == "DJ-RTG"
+    # IBKR pásky jsou sloupky a newslettery — tier 3 (ADR-0059)
+    assert row.content_tier == 3
 
 
 def test_same_story_from_rss_and_broker_is_one_row(tmp_path: Path) -> None:

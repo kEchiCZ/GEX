@@ -266,6 +266,31 @@ def test_model_stats_gains_gate_open_column(tmp_path: Path) -> None:
         assert conn.execute(text("SELECT gate_open FROM news_model_stats")).scalar() in (0, False)
 
 
+def test_news_events_gain_content_tier_column_and_keep_data(tmp_path: Path) -> None:
+    """ADR-0059: starší `news_events` dostane `content_tier` aditivně, řádky zůstanou."""
+    from sqlalchemy import text
+
+    engine = make_engine(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE news_events DROP COLUMN content_tier"))
+        conn.execute(
+            text(
+                "INSERT INTO news_events (ts_event, ts_ingested, source, kind, title, symbols,"
+                " market_closed, dedup_hash, raw) VALUES (:ts, :ts, 'finnhub', 'headline',"
+                " 'Fed holds rates', '[]', 0, 'h1', '{}')"
+            ),
+            {"ts": TS},
+        )
+    ensure_sentiment_schema(engine)
+    ensure_sentiment_schema(engine)  # idempotence
+    columns = {c["name"] for c in inspect(engine).get_columns("news_events")}
+    assert "content_tier" in columns
+    with engine.connect() as conn:
+        row = conn.execute(select(news_events.c.title, news_events.c.content_tier)).one()
+    assert row.title == "Fed holds rates"
+    assert row.content_tier is None  # historii doplní scripts/backfill_content_tier.py
+
+
 def test_reactions_gain_closure_open_column_and_roundtrip(tmp_path: Path) -> None:
     """#1311: starší `news_reactions` dostane `closure_open_ts` (aditivně) a klíč
     uzavírky projde zápisem i rozkladem jen u deferred oken."""

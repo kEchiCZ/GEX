@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.news_tier import content_tier
 from gexlens_engine.compute.newstext import normalize_source_uid
 from gexlens_engine.storage.sentiment import news_events
 from gexlens_news.http import sanitize_raw
@@ -58,6 +59,7 @@ class NewsWriter:
                 "actual": event.actual,
                 "surprise_z": event.surprise_z,
                 "market_closed": event.market_closed,
+                "content_tier": content_tier(event.source, event.raw),
                 "dedup_hash": event.dedup_hash,
                 # S10 (#553): raw payload nesmí do DB s tokenem v URL — čistí
                 # se až tady na zápisu, jediné hrdlo pro všechny collectory

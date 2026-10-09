@@ -31,6 +31,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.marketclock import is_market_closed
+from gexlens_engine.compute.news_tier import content_tier
 from gexlens_engine.compute.newstext import clip_body, dedup_hash, normalize_source_uid, strip_html
 from gexlens_engine.storage.sentiment import news_events
 
@@ -328,6 +329,7 @@ class NewsTickCollector:
                         "summary": None,
                         "symbols": [],
                         "market_closed": is_market_closed(headline.ts_event),
+                        "content_tier": content_tier(headline.source, None),
                         "dedup_hash": dedup_hash(headline.title, headline.ts_event),
                         "raw": {
                             "provider": headline.provider,
