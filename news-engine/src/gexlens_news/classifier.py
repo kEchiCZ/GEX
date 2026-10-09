@@ -42,7 +42,7 @@ Kategorie se bere z předmětu titulku, pak z celého titulku; ENERGY má
 přednost před GEOPOLITICS (pohyb ropy způsobený válkou je ENERGY).
 Směr (`classify_direction`) se proti verzi 1 nemění.
 
-**Údržba:** slovník současného režimu (aktéři `ACTORS`, předseda Fedu
+**Údržba:** slovník současného režimu (aktéři `REGIME_ACTORS`, předseda Fedu
 v `FED_TOPIC`) stárne. Po změně režimu (nová válka, nová cla, nový předseda
 Fedu) dostanou nové zprávy nejvýš 2, dokud se konstanta neupraví. Změnu
 ověř golden testem `test_classifier.py`.
@@ -366,11 +366,17 @@ ENERGY_TOPIC = _rx(
 SUPPLY_TOPIC = _rx(r"\b(?:hormuz|houthis?|aramco)\b")
 #: Aktéři současného režimu (válka s Íránem, Blízký východ, Čína/Tchaj-wan) —
 #: JEDINÉ místo se slovníkem režimu, při jeho změně upravit. Rusko/Ukrajina
-#: (válka od 2022) jen jako téma „war“ (2).
-ACTORS = _rx(
-    r"\b(?:iran(?:ian)?|tehran|israel(?:i)?|saudis?|saudi\ arabia|riyadh|houthis?|yemen(?:i)?|"
-    r"china|chinese|beijing|taiwan|hormuz|opec|middle\ east|gulf)\b"
-)
+#: (válka od 2022) jen jako téma „war“ (2). Klíč aktéra je zároveň téma karty
+#: breaking news (`breaking.theme`, ADR-0059 bod 4); `ACTORS` je sjednocení.
+REGIME_ACTORS: dict[str, str] = {
+    "iran": r"iran(?:ian)?|tehran",
+    "israel": r"israel(?:i)?",
+    "hormuz": r"hormuz",
+    "china": r"china|chinese|beijing|taiwan",
+    "opec": r"opec",
+    "middle_east": r"saudis?|saudi\ arabia|riyadh|houthis?|yemen(?:i)?|middle\ east|gulf",
+}
+ACTORS = _rx(rf"\b(?:{'|'.join(REGIME_ACTORS.values())})\b")
 #: Uzavření / znovuotevření je eskalace jen u průlivu, hranice, přístavu a podobně —
 #: „Chinese stocks close higher“ ani „Gulf markets reopen“ eskalace nejsou
 _CHOKEPOINT = (
