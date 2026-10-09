@@ -1,6 +1,7 @@
 # ADR-0059: Breaking news — tier obsahu, záznam všech zdrojů u duplicit, `is_breaking` a téma, nové oficiální zdroje
 
-- **Stav:** navrženo (PR s labelem `needs-decision`)
+- **Stav:** přijato (9. 10. 2026, rozhodnutí vlastníka v chatu, zapsané v PR #1484: doporučené
+  varianty všech bodů; „výzkum bank“ varianta A, protože původní záměr skupiny už není znám)
 - **Datum:** 2026-10-09
 - **Souvisí:** #1482 (E-6.23), #1406 (Fáze 6), #1385 (Rozhodnuto 8. 10. — breaking news), audit
   zdrojů #1473 (`docs/research/1473-audit-zdroju-zprav.md`), test kandidátů #1474
@@ -77,9 +78,9 @@ a test kandidátů (E-6.22) daly tato tvrdá data:
 
 ## Rozhodnutí
 
-Návrh. Vlastník rozhoduje o všech bodech. Ke každému jsou varianty v oddílu „Zvažované
-varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přesně znamená skupina
-„výzkum bank“ (bod 4).
+Vlastník 9. 10. 2026 přijal doporučené varianty všech bodů. Varianty jsou v oddílu „Zvažované
+varianty“. Výjimka mega caps (bod 4), a s ní SEC (bod 6), platí jen po splnění
+předregistrovaného kritéria.
 
 1. **Tier obsahu = `content_tier`** (1 oficiální zdroj, 2 headline feed, 3 článek nebo analýza,
    NULL = mimo tiery). V UI se zobrazuje jako „Tier 1/2/3“. Identifikátor `content_tier` se
@@ -133,7 +134,7 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
    - **`ts_event` se nepřepisuje**, protože od něj se měří reakce. Nejdřívější publikace je
      odvozená hodnota `min(ts_event, min(published_at))`, počítaná při čtení.
    - Tabulka je aditivní, nic se nemaže. Mrtvou cestu `raw.merged_sources`, nečtené čítače
-     a test dávky ze dvou zdrojů (`news-engine/tests/test_dedup.py:308`) odstraní E-6.24.
+     a test dávky ze dvou zdrojů (`news-engine/tests/test_dedup.py:308`) odstraní E-6.24b.
    - **Dvě úrovně se nepletou:** `news_event_sources` je **táž zpráva** z více zdrojů, shluk
      (ADR-0043, E-6.6, E-6.17) jsou **různé zprávy** o téže události. Srovnání „kdo byl první“
      přes různé titulky (8-K × headline) proto potřebuje shluk nebo párování, ne tuto tabulku.
@@ -153,7 +154,7 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
        testem a `is_breaking` ho převezme.
    - **Firmy na kartě:** ADR-0045 výsledky firem z významnosti vyřazuje vždy (Kontext 5).
      Na kartě by tak skupina „firmy“ zůstala prázdná a SEC by na ni nikdy nic nedodal.
-     Doporučená výjimka **jen pro kartu**: zpráva tier 1–2 v kategorii `EARNINGS`
+     Výjimka **jen pro kartu**: zpráva tier 1–2 v kategorii `EARNINGS`
      s importance ≥ 2, jejíž `symbols` obsahují firmu ze seznamu mega caps (bod 6), je
      breaking. Významnost pro upozornění, gate a model se nemění.
      - `TECH` výjimku nepotřebuje, s importance ≥ 2 je významné už dnes
@@ -175,9 +176,9 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
      | firmy | `EARNINGS` (jen mega caps podle výjimky výše), `TECH` |
      | ostatní | `CRYPTO`, `OTHER` |
 
-     „Výzkum bank“ jako skupina nevzniká, pokud znamená analytické akce: ty v2 shazuje na
-     importance 1 a na kartu by se nedostaly. Pokud vlastník myslí výhledy stratégů bank pro
-     index (např. cíl S&P 500), je to nová kategorie klasifikátoru (varianty v oddílu níže).
+     „Výzkum bank“ jako skupina nevzniká. Analytické akce v2 shazuje na importance 1 a na
+     kartu by se nedostaly. Výhledy stratégů bank pro index by byly nová kategorie
+     klasifikátoru (varianta B níže); vlastník její záměr nepotvrdil.
    - **Téma** je jedna entita z jednoho slovníku: aktéři režimu z klasifikátoru (Írán, Izrael,
      Hormuz, Čína/Tchaj-wan, OPEC…), cla, Fed a další. Bere se první shoda podle pořadí ve
      slovníku a počítá se při čtení z titulku.
@@ -231,8 +232,8 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
      - Upozornění spustí jen zpráva s importance ≥ 2 (ADR-0043). Kolik položek White House
        to bude, změří E-6.29; snímek E-6.22 frekvenci neměří.
 6. **SEC, Treasury, Finnhub, tier 2:**
-   - **SEC = varianta B, ale jen spolu s výjimkou mega caps z bodu 4.** Bez ní SEC na kartu nic
-     nedodá a doporučení je A (nepoužít).
+   - **SEC = varianta B, ale jen spolu s výjimkou mega caps z bodu 4.** Když výjimka kritérium
+     nesplní, SEC na kartu nic nedodá a platí varianta A (nepoužít).
      - Zdroj: `data.sec.gov/submissions/CIK{10}.json` po firmách, jen 8-K.
      - Seznam mega caps (CIK a symboly) je jedna konstanta: ~30 firem s největší vahou
        v S&P 500 a Nasdaq-100. Sdílí ji výjimka v bodě 4.
@@ -241,7 +242,7 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
      - **Kritérium setrvání:** po 30 obchodních dnech provozu včetně sezóny výsledků se změří,
        kolik 8-K nemělo do 30 min před `acceptanceDateTime` zprávu tier 2 se stejným symbolem
        (podíl unikátních). Když je podíl nulový, zdroj se vypne. Měření dostane vlastní
-       připomínku při nasazení E-6.25.
+       připomínku při nasazení E-6.25b.
    - **Treasury: zatím ne.**
    - **Finnhub general zůstává jako tier 3.**
    - **Tier 2 beze změny.** E-6.26 nemá co stavět.
@@ -275,11 +276,11 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
 
 ## Zvažované varianty
 
-Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
+Kritéria volby podle AGENTS.md: rychlost, výkon, relevance dat.
 
 **Přiřazení tierů (bod 1):**
 
-| otázka | varianty | doporučení |
+| otázka | varianty | zvoleno |
 |---|---|---|
 | kurátorovaný Bluesky | **A tier 2**: vlastník autory vybírá kvůli zprávám a medián zpoždění je 2,6 s. B mimo tiery: autoři můžou psát i názory | A; názory odfiltruje `is_significant` |
 | sociální sítě jako vlastní typ (audit 5) | **A NULL**: sociální obsah bez kurátora na kartu nepatří. B tier 4 „sociální“: rozšiřuje schéma 1/2/3 ze zadání | A |
@@ -289,7 +290,7 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
 
 | varianta | výhody | nevýhody |
 |---|---|---|
-| **A — sloupec zapsaný při ingestu** (doporučeno) | levný SQL filtr pro kartu, report i heatmapu; vstupy nového řádku se nemění | migrace a backfill; dva zapisovatelé (news-engine, engine) musí volat tutéž funkci |
+| **A — sloupec zapsaný při ingestu** (zvoleno) | levný SQL filtr pro kartu, report i heatmapu; vstupy nového řádku se nemění | migrace a backfill; dva zapisovatelé (news-engine, engine) musí volat tutéž funkci |
 | B — čistá funkce při čtení | bez migrace; změna mapování platí hned i zpětně | čte `raw` JSON u každého řádku, který filtr propustí; SQL by uměl jen druhou kopii pravidla |
 | C — sloupec v registru `news_sources` | nejjednodušší | nerozliší autory Alpacy ani kurátory Bluesky, takže 29 % Alpacy by mělo špatný tier |
 
@@ -297,7 +298,7 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
 
 | varianta | výhody | nevýhody |
 |---|---|---|
-| **A — tabulka jen s kopiemi z jiných zdrojů** (doporučeno) | minimum dat, první doručení se neduplikuje | dotaz „všechny zdroje“ = `news_events` ∪ `news_event_sources` |
+| **A — tabulka jen s kopiemi z jiných zdrojů** (zvoleno) | minimum dat, první doručení se neduplikuje | dotaz „všechny zdroje“ = `news_events` ∪ `news_event_sources` |
 | B — tabulka se všemi doručeními včetně prvního | jednotný dotaz | +0,8–1,1 mil. řádků za rok, které jen opakují `news_events` |
 | C — opravit `raw.merged_sources` (UPDATE prvního eventu) | bez nové tabulky | mutuje surová data (#1027); JSON nejde rozumně dotazovat ani indexovat; žádný point-in-time |
 
@@ -305,19 +306,19 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
 
 | varianta | výhody | nevýhody |
 |---|---|---|
-| **A — při čtení z efektivního tieru a významnosti** (doporučeno) | jedna definice; reklasifikace i ruční korekce se projeví hned | SQL umí jen předfiltr (`content_tier ≤ 2`, `importance ≥ 2`), přesné pravidlo běží v Pythonu |
+| **A — při čtení z efektivního tieru a významnosti** (zvoleno) | jedna definice; reklasifikace i ruční korekce se projeví hned | SQL umí jen předfiltr (`content_tier ≤ 2`, `importance ≥ 2`), přesné pravidlo běží v Pythonu |
 | B — uložený příznak s vlastním slovníkem (dnešní znění E-6.27) | rychlý SQL filtr | druhá definice „důležité zprávy“, tedy přesně ten rozjezd, který ADR-0045 odstranil; po každé reklasifikaci backfill |
 
 **Firmy na kartě (bod 4):**
 - A — žádné: karta jen s makrem, centrálními bankami a geopolitikou. Skupina „firmy“ odpadne
   a SEC se nepoužije.
-- **B — výjimka jen pro kartu: mega caps tier 1–2 s importance ≥ 2** (doporučeno, podmíněně
+- **B — výjimka jen pro kartu: mega caps tier 1–2 s importance ≥ 2** (zvoleno, podmíněně
   měřením v E-6.27). Významnost pro upozornění a model zůstane podle ADR-0045.
 - C — zrušit vyřazení `EARNINGS` z významnosti: mění upozornění, gate a model a vrací šum
   výsledků malých firem, který #1291 odstranil.
 
-**Výzkum bank (bod 4, otevřená otázka):**
-- **A — skupina nevzniká** (doporučeno, pokud jde o analytické akce, které v2 shazuje na 1).
+**Výzkum bank (bod 4):**
+- **A — skupina nevzniká** (zvoleno): analytické akce v2 shazuje na 1.
 - B — nová kategorie výhledů stratégů bank pro index v klasifikátoru v3: mění buckety
   `news_model_stats` a K1 a vyžaduje reklasifikaci historie a retro přepočet SentIndexu
   (ADR-0036).
@@ -325,7 +326,7 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
 
 **Téma (bod 4):**
 
-| otázka | varianty | doporučení |
+| otázka | varianty | zvoleno |
 |---|---|---|
 | uložené × při čtení | **A při čtení**: změna slovníku platí i pro historii bez backfillu, titulek se nemění. B uložený sloupec: rychlejší heatmapa, ale backfill po každé změně slovníku | A; heatmapa E-6.33 si výsledek cachuje |
 | jedno × více na zprávu | **A jedno** (první shoda podle pořadí): heatmapa nepočítá jednu reakci ve více buňkách. B více: zpráva „Írán uzavírá Hormuz, ropa +5 %“ by měla obě témata, ale reakce by se započetla dvakrát | A |
@@ -336,7 +337,7 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
     přijdou o první skok;
   - restart v jiný den změní `dedup_hash` a release se zapíše znovu, pokud nepomůže kontrola
     `(source, source_uid)`.
-- **B — čas releasu z kalendáře, záložně čas stažení** (doporučeno): přesný čas 8:30:00,
+- **B — čas releasu z kalendáře, záložně čas stažení** (zvoleno): přesný čas 8:30:00,
   stabilní hash a týž čas jako řádek FF. Cenou je mapování feed → titulek releasu FF
   a záloha, když kalendář chybí (`raw.ts_source = fetch`, viditelné).
 - C — čas položky: look-ahead 39 min.
@@ -345,7 +346,7 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
 - A — jen změna ceny (close-to-close): jednoduché, ale FOMC 16. 9. by ukázal −0,3 bp místo
   výchylky −19 bp.
 - B — jen výchylka (ADR-0043): zachytí whipsaw, ale neřekne, kam trh skončil.
-- **C — změna ceny jako hlavní číslo a výchylka vedle** (doporučeno). Obojí dává tatáž data
+- **C — změna ceny jako hlavní číslo a výchylka vedle** (zvoleno). Obojí dává tatáž data
   a tytéž funkce jako `news_reactions` a upozornění.
 - Reakční index G1 (E-6.8) je normalizovaná řada pro model, ne syrový dopad pro kartu. Na kartu
   může přibýt, až vznikne.
@@ -353,7 +354,7 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
 **SEC (bod 6, E-6.22 2.4):**
 - A — nepoužít: 8-K mega caps zůstanou jen přes Benzingu. Platí, pokud se nepřijme výjimka
   mega caps (bod 4).
-- **B — `data.sec.gov` po CIK** (doporučeno s výjimkou mega caps): robots.txt to neomezuje,
+- **B — `data.sec.gov` po CIK** (zvoleno, podmíněně výjimkou mega caps): robots.txt to neomezuje,
   JSON nese čas přijetí a filtr na firmy z indexu je přirozený. Cenou je dotaz na každou firmu
   a chybějící conditional GET.
 - C — `getcurrent`: porušuje robots.txt, jen s výslovným rozhodnutím vlastníka.
@@ -362,40 +363,42 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
 **Treasury (bod 6):**
 - A — HTML výpis s `ts_event` = časem prvního stažení. Přidá oficiální oznámení (sankce,
   refunding), ale parsování HTML je křehké a změna šablony webu ho tiše rozbije.
-- **B — zatím ne** (doporučeno). Titulky Treasury by šly přes pravidla v2 nad titulkem jako
+- **B — zatím ne** (zvoleno). Titulky Treasury by šly přes pravidla v2 nad titulkem jako
   White House a v2 sankce shazuje na importance 1, takže na kartu by se nedostaly. Cla ohlašuje
   White House, který tier 1 mít bude. Treasury se vrátí na stůl, až se doloží případ, kdy
   oznámení Treasury pohnulo ES a žádný jiný zdroj ho do 5 min nepřinesl.
 
 **Finnhub general (bod 6):**
-- **A — ponechat jako tier 3** (doporučeno): jediný nese Reuters a Bloomberg, stojí 1 požadavek
+- **A — ponechat jako tier 3** (zvoleno): jediný nese Reuters a Bloomberg, stojí 1 požadavek
   za minutu a z karty ho vyřadí tier.
 - B — vypnout: ušetří 1 požadavek za minutu, ale ztratí se zprávy, které nikdo jiný nedodá.
 
 **Kontakt pro User-Agent (bod 7):**
-- **A — obecná proměnná jen pro zdroje, které kontakt vyžadují** (doporučeno).
+- **A — obecná proměnná jen pro zdroje, které kontakt vyžadují** (zvoleno).
 - B — ponechat název `…_SEC_CONTACT` i pro BLS: zavádějící jméno.
 - C — obecná proměnná posílaná všem zdrojům: osobní kontakt by zbytečně dostávaly další strany.
 
 ## Důsledky
 
-- **Zadání navazujících úkolů v #1406 se po rozhodnutí upraví podle přijatých variant:**
-  - **E-6.24:**
+- **Zadání navazujících úkolů v #1406 jsou upravená podle přijatých variant (9. 10.):**
+  - **E-6.24a (nový):** funkce `content_tier`, sloupec a backfill. Předchází záznamu kopií,
+    které tier potřebují.
+  - **E-6.24b (dřív E-6.24):**
     - zápis kopií ze všech cest včetně `newsticks`, s `content_tier` kopie;
     - oprava docstringu `dedup.py:8-11` a poznámka u SPEC 3.3.
   - **E-6.25:**
     - pravidla `ts_event` a pojistky z bodu 5 s testy (restart v jiný den, první stažení
       po startu procesu, rok 1899, čas BLS z kalendáře, kolize s jiným řádkem FF téhož dne);
     - kategorie a importance podle feedu;
-    - SEC podle bodu 6 s připomínkou kritéria setrvání;
     - kontakt `GEXLENS_NEWS_UA_CONTACT`.
-  - **E-6.26:** zavřít bez implementace s odkazem na #1474. Nový kandidát se ověří sondou
+  - **E-6.25b (nový):** SEC podle bodu 6 s připomínkou kritéria setrvání. Jen když výjimka
+    mega caps z E-6.27 splní kritérium, jinak se zavře.
+  - **E-6.26:** zrušen bez implementace s odkazem na #1474. Nový kandidát se ověří sondou
     `scripts/news_candidates_probe.py`.
   - **E-6.27:**
-    - `content_tier` jako sloupec s backfillem;
     - `is_breaking`, skupina a téma při čtení místo ukládání a bez vlastního slovníku;
-    - vypadá kritérium „krátký headline“ (nahrazuje ho tier 2);
-    - měření mega caps před výjimkou a podle rozhodnutí „výzkum bank“.
+    - vypadá kritérium „krátký headline“ (nahrazuje ho tier 2) a skupina „výzkum bank“;
+    - předregistrované měření mega caps před výjimkou.
   - **E-6.28:**
     - změna ceny a výchylka z barů touž funkcí jako `news_reactions`, fixace v 5. minutě;
     - stav „trh zavřený“;
@@ -409,9 +412,9 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
   - `news_event_sources`, hrubý odhad ~140 MB za rok; skutečnost změří E-6.29.
 - **Co přestává platit:** bod 2 ADR-0016 a v sentiment SPEC 3.3 věta o `raw.merged_sources`
   i slib „`raw` uchová všechny payloady“. Platí bod 3 tohoto ADR. Kód s ním bude v souladu
-  až po E-6.24.
+  až po E-6.24b.
 - **Sentiment SPEC kap. 1:** Tier A (BLS a BEA API pro hodnoty releasů) se tímto ADR nemění
   ani neplní. Tier B: Finnhub přestává být hlavním headline zdrojem.
 - **Krok vlastníka:** přejmenovat v `.env` proměnnou `GEXLENS_NEWS_SEC_CONTACT` na
-  `GEXLENS_NEWS_UA_CONTACT` (připomínka issue s `prio:*` po přijetí).
+  `GEXLENS_NEWS_UA_CONTACT` při nasazení E-6.25 (připomínka #1485).
 - **Počet IBKR market data lines se nemění** (žádná nová páska).
