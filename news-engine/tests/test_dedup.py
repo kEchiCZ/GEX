@@ -6,11 +6,13 @@ Kopie z jiného zdroje se ukládají do `news_event_sources` (ADR-0059 bod 3, #1
 import datetime as dt
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Row
 
+from gexlens_engine.ibkr.newsticks import NewsTickCollector
 from gexlens_engine.storage.sentiment import (
     ensure_sentiment_schema,
     news_event_sources,
@@ -449,3 +451,31 @@ def test_copy_without_stored_first_delivery_is_logged(
         assert inner.write_copies(unwritten.copies) == 0
     assert "bez prvního doručení" in caplog.text
     assert stored_copies(inner) == []
+
+
+def test_news_copy_of_ibkr_tape_is_recorded(tmp_path: Path) -> None:
+    """IBKR pásku zapisuje engine mimo rolling dedup; zpráva z news-engine se
+    shodným titulkem téhož dne je kopie prvního doručení z pásky (ADR-0059 bod 3).
+    """
+    writer, inner = make_writer(tmp_path)
+    tape = NewsTickCollector(inner._engine)  # noqa: SLF001 — sdílená DB obou procesů
+    tick = SimpleNamespace(
+        headline="!BRFG Fed holds rates",
+        providerCode="BRFG",
+        articleId="b1",
+        timeStamp=int(TS.timestamp()),
+        extraData="",
+    )
+    [stored] = tape.write([tick], now=TS)
+
+    newsdesk = event(
+        "Fed holds rates",
+        "alpaca",
+        at=TS + dt.timedelta(seconds=1),
+        ingested=TS + dt.timedelta(seconds=2),
+        raw=NEWSDESK,
+    )
+    assert writer.write([newsdesk]) == 0
+    assert [(c.event_id, c.source, c.content_tier) for c in stored_copies(inner)] == [
+        (stored.id, "alpaca", 2)
+    ]
