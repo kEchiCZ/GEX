@@ -8,6 +8,7 @@ jednou a kopie z ostatních zdrojů se zaznamenaly v `news_event_sources`
 
 import datetime as dt
 import logging
+import threading
 from collections.abc import Sequence
 
 from gexlens_news.dedup import DEFAULT_WINDOW_MINUTES, RollingDeduplicator
@@ -29,6 +30,7 @@ class DedupingWriter:
         self._writer = writer
         self._dedup = RollingDeduplicator(window_minutes=window_minutes)
         self._window_minutes = window_minutes
+        self._lock = threading.Lock()
 
     def prime_from_db(self, now: dt.datetime) -> int:
         """Naplní okno z DB — po restartu se jinak duplikuje čerstvý sběr."""
@@ -43,9 +45,14 @@ class DedupingWriter:
         """Zapíše nové eventy, pak kopie; vrací počet nových eventů.
 
         Kopie jdou až po eventech: první výskyt může být ve stejné dávce.
+        Zámek drží dedup a zápis pohromadě: Alpaca zapisuje z vlákna
+        (`asyncio.to_thread`), runner ze smyčky. Bez něj by kopie z jedné
+        cesty mohla hledat první doručení z druhé ještě před jeho commitem
+        a okno by se měnilo během průchodu (`_prune`, `_fuzzy_match`).
         """
-        result = self._dedup.process(events)
-        written = self._writer.write(result.events) if result.events else 0
-        if result.copies:
-            self._writer.write_copies(result.copies)
+        with self._lock:
+            result = self._dedup.process(events)
+            written = self._writer.write(result.events) if result.events else 0
+            if result.copies:
+                self._writer.write_copies(result.copies)
         return written
