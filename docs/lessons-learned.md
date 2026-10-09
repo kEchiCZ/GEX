@@ -248,6 +248,16 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-09 — tisíce reakcí bez minutové fáze, i když bary existují (#1494).** Backfill zpráv
+  (17. 8.) proběhl dřív než backfill barů (3. 9.): `ReactionJob` spočítal jen denní fázi a event
+  už nikdy nevybral, protože pending dotaz bere jen eventy bez jakéhokoli řádku (ochrana #655).
+  Na díru se přišlo až při měření mega caps (#1491): hlavní výsledky Q2 ve vzorku chyběly. Táž díra
+  vzniká i v provozu: symbol bez barů v T+60 (výpadek, restart) dostane jen denní fázi a backfill
+  `ibkr_hist` pak doplní bary, ale reakci ne (NQ v září 2026).
+  → Kdo ukládá „spočítáno“ podle existence řádku, musí mít cestu, jak přepočítat, když vstup
+  přibude později (`scripts/backfill_minute_reactions.py` po každém backfillu barů). Před měřením
+  nad historií zkontrolovat pokrytí: podíl NULL po měsících a u největších událostí vzorku.
+
 - **2026-10-08 — walk-forward spadl po změně signatury `replay` a replay měřil setupy, které živý engine nedetekuje (#1081, #1464).**
   #1366 přidal do `scripts/backtest_setups.py` `replay` povinný `symbol`; testy a jediný volající
   v témže souboru prošly, noční `walkforward_setups.py` spadl na `TypeError` — `scripts/` mypy

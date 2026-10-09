@@ -8,7 +8,8 @@ takže výpadek nic neztratí (archiv barů je věčný, S4).
 
 import datetime as dt
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy import and_, exists, insert, not_, select, update
@@ -113,6 +114,23 @@ class LevelsRegimeReader:
         if last is None:
             return None
         return gex_regime(spot, last[1], last[2])
+
+
+@dataclass(frozen=True)
+class MinuteRow:
+    """Minutová fáze jednoho symbolu: sloupce širokého řádku a počet oken."""
+
+    symbol: str
+    values: dict[str, object]
+    windows: int
+
+
+@dataclass(frozen=True)
+class MinuteMeasurement:
+    """Minutová fáze eventu: řádky změřených symbolů a jejich příznaky deferred (#339)."""
+
+    rows: list[MinuteRow]
+    closed_flags: list[bool]
 
 
 class ReactionJob:
@@ -339,50 +357,83 @@ class ReactionJob:
         if not pending:
             return self._run_daily(now, limit=limit)
         written = 0
-        baselines = {symbol: self._baseline_for(symbol, now.date()) for symbol in self._symbols}
+        baselines = {symbol: self.baseline_for(symbol, now.date()) for symbol in self._symbols}
         for event_id, ts_event, category in pending:
-            others = self._contaminating(ts_event, category)
-            rows: list[tuple[str, dict[str, object], int]] = []
-            # Zavřený trh podle skutečně obchodovaných barů, per symbol (#339)
-            closed_flags: list[bool] = []
-            for symbol in self._symbols:
-                window_end = ts_event + dt.timedelta(minutes=max(self._windows) + 1)
-                # Dozadu přes celé zavření, dopředu k prvnímu obchodovanému baru
-                # — jinak deferred okno nemá základní cenu ani cíl (#339)
-                bars = self._bars.load_range(
-                    symbol,
-                    ts_event - dt.timedelta(days=CLOSURE_LOOKBACK_DAYS),
-                    window_end + dt.timedelta(days=CLOSURE_LOOKAHEAD_DAYS),
-                )
-                reactions = compute_reactions(
-                    ts_event,
-                    bars,
-                    windows=self._windows,
-                    other_event_ts=others,
-                    baseline=baselines[symbol],
-                )
-                if reactions:
-                    # `deferred` je na event stejné ve všech oknech
-                    closed_flags.append(reactions[0].deferred)
-                # GEX režim v čase eventu (#402): spot = poslední bar ≤ ts_event
-                spot_at_event: float | None = None
-                for bar in bars:
-                    if bar.ts <= ts_event:
-                        spot_at_event = float(bar.close)
-                    else:
-                        break
-                regime = self._regime_reader.regime_at(symbol, ts_event, spot_at_event)
-                if reactions:
-                    rows.append((symbol, _phase_values(reactions, regime, now), len(reactions)))
-            if rows:
-                with self._engine.begin() as conn:
-                    for symbol, values, count in rows:
-                        _write_phase(conn, event_id, symbol, values)
-                        written += count
-                    self._correct_market_closed(conn, event_id, closed_flags)
+            measurement = self.measure_minute(ts_event, category, baselines, now)
+            if measurement.rows:
+                written += self.write_minute(event_id, measurement)
         if written:
             logger.info("Reakce: zapsáno %d oken pro %d eventů", written, len(pending))
         return written + self._run_daily(now, limit=limit)
+
+    def measure_minute(
+        self,
+        ts_event: dt.datetime,
+        category: str | None,
+        baselines: Mapping[str, Mapping[dt.time, VolumeBaseline] | None],
+        now: dt.datetime,
+    ) -> MinuteMeasurement:
+        """Minutová fáze jednoho eventu pro všechny symboly; nic nezapisuje.
+
+        Sdílí ji běžný průchod (`run`) i doplnění minutové fáze po pozdějším
+        backfillu barů (`scripts/backfill_minute_reactions.py`, #1494).
+        """
+        others = self._contaminating(ts_event, category)
+        rows: list[MinuteRow] = []
+        # Zavřený trh podle skutečně obchodovaných barů, per symbol (#339)
+        closed_flags: list[bool] = []
+        for symbol in self._symbols:
+            window_end = ts_event + dt.timedelta(minutes=max(self._windows) + 1)
+            # Dozadu přes celé zavření, dopředu k prvnímu obchodovanému baru
+            # — jinak deferred okno nemá základní cenu ani cíl (#339)
+            bars = self._bars.load_range(
+                symbol,
+                ts_event - dt.timedelta(days=CLOSURE_LOOKBACK_DAYS),
+                window_end + dt.timedelta(days=CLOSURE_LOOKAHEAD_DAYS),
+            )
+            reactions = compute_reactions(
+                ts_event,
+                bars,
+                windows=self._windows,
+                other_event_ts=others,
+                baseline=baselines[symbol],
+            )
+            if not reactions:
+                continue
+            # `deferred` je na event stejné ve všech oknech
+            closed_flags.append(reactions[0].deferred)
+            # GEX režim v čase eventu (#402): spot = poslední bar ≤ ts_event
+            spot_at_event: float | None = None
+            for bar in bars:
+                if bar.ts <= ts_event:
+                    spot_at_event = float(bar.close)
+                else:
+                    break
+            regime = self._regime_reader.regime_at(symbol, ts_event, spot_at_event)
+            rows.append(MinuteRow(symbol, _phase_values(reactions, regime, now), len(reactions)))
+        return MinuteMeasurement(rows, closed_flags)
+
+    def write_minute(
+        self,
+        event_id: int,
+        measurement: MinuteMeasurement,
+        *,
+        only_symbols: Collection[str] | None = None,
+    ) -> int:
+        """Zapíše minutovou fázi a opraví `market_closed`; vrací počet oken.
+
+        `only_symbols` omezí zápis na symboly bez minutové fáze (doplnění
+        #1494 nepřepisuje existující měření); `market_closed` se počítá ze
+        všech změřených symbolů.
+        """
+        written = 0
+        with self._engine.begin() as conn:
+            for row in measurement.rows:
+                if only_symbols is None or row.symbol in only_symbols:
+                    _write_phase(conn, event_id, row.symbol, row.values)
+                    written += row.windows
+            self._correct_market_closed(conn, event_id, measurement.closed_flags)
+        return written
 
     @staticmethod
     def _correct_market_closed(conn: Connection, event_id: int, closed_flags: list[bool]) -> None:
@@ -404,7 +455,7 @@ class ReactionJob:
             .values(market_closed=all(closed_flags))
         )
 
-    def _baseline_for(self, symbol: str, today: dt.date) -> dict[dt.time, VolumeBaseline] | None:
+    def baseline_for(self, symbol: str, today: dt.date) -> dict[dt.time, VolumeBaseline] | None:
         sessions = self._bars.recent_sessions(symbol, today, MIN_BASELINE_SESSIONS)
         if len(sessions) < MIN_BASELINE_SESSIONS:
             # Archiv se teprve plní (#275 spuštěn 28. 7.) — do té doby vol_z None
