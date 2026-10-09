@@ -1,8 +1,9 @@
 """Zápis normalizovaných eventů do PostgreSQL (SPEC 3.1 — writer).
 
-Duplicity se zahazují na unikátním `dedup_hash`; plnohodnotný rolling-window
-dedup a cross-source merge přijde v #273. Tady jde jen o to, aby skeleton
-uměl bezpečně psát a opakovaný běh nic nerozbil.
+Duplicity se zahazují na unikátním `dedup_hash` (opakovaný běh nic nerozbije);
+rolling-window dedup před zápisem drží `pipeline.DedupingWriter`. Kopie téže
+zprávy z jiného zdroje se zapíše do `news_event_sources` (ADR-0059 bod 3), ať
+ji zahodil rolling dedup (`write_copies`), nebo unikátní `dedup_hash` (`write`).
 """
 
 import datetime as dt
@@ -12,11 +13,12 @@ from collections.abc import Sequence
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from gexlens_engine.compute.news_tier import content_tier
 from gexlens_engine.compute.newstext import normalize_source_uid
-from gexlens_engine.storage.sentiment import news_events
+from gexlens_engine.storage.sentiment import CopyOutcome, news_events, record_news_copy
+from gexlens_news.dedup import DedupCopy
 from gexlens_news.http import sanitize_raw
 from gexlens_news.model import NewsEvent
 
@@ -30,6 +32,23 @@ def _as_utc(value: dt.datetime) -> dt.datetime:
     porovnání časů v dedup okně padalo na TypeError.
     """
     return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
+
+
+def _record_copy(conn: Connection, event: NewsEvent, *, first_hash: str) -> CopyOutcome:
+    """Kopie `event` k prvnímu doručení s `first_hash` (ADR-0059 bod 3).
+
+    Tier a čas publikace jsou kopie samotné: `published_at` = její `ts_event`
+    (pravidla jejího zdroje), viditelná je od `ts_ingested`.
+    """
+    return record_news_copy(
+        conn,
+        dedup_hash=first_hash,
+        source=event.source,
+        source_uid=normalize_source_uid(event.source_uid),
+        content_tier=content_tier(event.source, event.raw),
+        published_at=event.ts_event,
+        fetched_at=event.ts_ingested,
+    )
 
 
 class NewsWriter:
@@ -70,8 +89,9 @@ class NewsWriter:
         dialect = self._engine.dialect.name
         insert = pg_insert if dialect == "postgresql" else sqlite_insert
         written = 0
+        copies = 0
         with self._engine.begin() as conn:
-            for row in rows:
+            for event, row in zip(events, rows, strict=True):
                 # RETURNING, ne rowcount: PostgreSQL u ON CONFLICT DO NOTHING
                 # vrací -1 (= „nevím") a počítadlo by lhalo (#367)
                 stmt = (
@@ -82,10 +102,41 @@ class NewsWriter:
                 )
                 if conn.execute(stmt).first() is not None:
                     written += 1
+                elif _record_copy(conn, event, first_hash=event.dedup_hash) == "recorded":
+                    # Týž titulek téhož dne už v DB je (mimo okno rolling dedupu,
+                    # IBKR páska z enginu, zápis mimo DedupingWriter)
+                    copies += 1
         skipped = len(rows) - written
         if skipped:
-            logger.debug("Zahozeno %d duplicit dle dedup_hash", skipped)
+            logger.debug(
+                "Zahozeno %d duplicit dle dedup_hash, z toho %d kopií z jiného zdroje",
+                skipped,
+                copies,
+            )
         return written
+
+    def write_copies(self, copies: Sequence[DedupCopy]) -> int:
+        """Kopie zahozené rolling dedupem do `news_event_sources`; vrací počet nových.
+
+        Kopie bez prvního doručení v DB (jeho zápis selhal) se nezapíše a jde
+        do logu jako WARNING — tichá ztráta by zkreslila efektivní tier.
+        """
+        recorded = 0
+        missing: list[str] = []
+        with self._engine.begin() as conn:
+            for copy in copies:
+                outcome = _record_copy(conn, copy.event, first_hash=copy.first_hash)
+                if outcome == "recorded":
+                    recorded += 1
+                elif outcome == "missing":
+                    missing.append(copy.event.source)
+        if missing:
+            logger.warning(
+                "Kopie zprávy bez prvního doručení v DB — nezapsáno %d (zdroje %s)",
+                len(missing),
+                ", ".join(sorted(set(missing))),
+            )
+        return recorded
 
     def recent(self, since: dt.datetime) -> list[NewsEvent]:
         """Eventy od `since` — naplní dedup okno po startu (#273).

@@ -127,7 +127,8 @@ def dedup_hash(title: str, ts_event: dt.datetime) -> str:
     (měsíční „Core PCE", „Fed holds rates").
 
     Hrubost na den je záměr — tatáž story z více zdrojů v jeden den má splynout
-    (cross-source merge). Případ přes půlnoc řeší rolling-window dedup před
+    (cross-source merge; kopie z jiného zdroje jde do `news_event_sources`,
+    ADR-0059 bod 3). Případ přes půlnoc řeší rolling-window dedup před
     zápisem; tenhle hash je poslední pojistka proti opakovanému fetchi.
     """
     key = f"{normalize_title(title)}|{ts_event.date().isoformat()}"

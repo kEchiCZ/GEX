@@ -4,7 +4,9 @@ Zachytává je **datový engine**, ne news-engine: připojení k IBKR má engine
 a market data lines jsou limit na účet, ne na spojení (ADR-0001), takže druhý
 clientId by kapacitu nepřidal — jen rozdělil tutéž mezi dva procesy, které
 o sobě nevědí. Zápis jde do sdílené `news_events`, odkud si je news-engine
-přečte stejně jako zprávy z vlastních collectorů.
+přečte stejně jako zprávy z vlastních collectorů. Rolling dedup news-enginu
+pásky nevidí; tutéž zprávu z jiného zdroje zachytí unikátní `dedup_hash`
+a kopie jde do `news_event_sources` (ADR-0059 bod 3).
 
 Motivace je měřená: RSS zdroje doručují headline s mediánem 667 s po jejich
 vlastním `pubDate` (změřeno 28. 7. na 371 zprávách), takže požadavek
@@ -33,7 +35,7 @@ from sqlalchemy.engine import Engine
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.compute.news_tier import content_tier
 from gexlens_engine.compute.newstext import clip_body, dedup_hash, normalize_source_uid, strip_html
-from gexlens_engine.storage.sentiment import news_events
+from gexlens_engine.storage.sentiment import news_events, record_news_copy
 
 logger = logging.getLogger(__name__)
 
@@ -345,6 +347,7 @@ class NewsTickCollector:
 
         insert = pg_insert if self._db.dialect.name == "postgresql" else sqlite_insert
         written: list[StoredHeadline] = []
+        copies = 0
         with self._db.begin() as conn:
             for headline, row in pending:
                 # RETURNING, ne rowcount: PostgreSQL u ON CONFLICT DO NOTHING
@@ -358,8 +361,27 @@ class NewsTickCollector:
                 inserted = conn.execute(stmt).first()
                 if inserted is not None:
                     written.append(StoredHeadline(id=int(inserted.id), headline=headline))
-        if written:
-            logger.info("IBKR headlines: %d nových (z %d ticků)", len(written), len(pending))
+                    continue
+                # Tatáž zpráva už v DB je (news-engine nebo dřívější páska): kopie
+                # z jiného zdroje do `news_event_sources` (ADR-0059 bod 3)
+                outcome = record_news_copy(
+                    conn,
+                    dedup_hash=row["dedup_hash"],
+                    source=row["source"],
+                    source_uid=row["source_uid"],
+                    content_tier=row["content_tier"],
+                    published_at=row["ts_event"],
+                    fetched_at=row["ts_ingested"],
+                )
+                if outcome == "recorded":
+                    copies += 1
+        if written or copies:
+            logger.info(
+                "IBKR headlines: %d nových, %d kopií zprávy z jiného zdroje (z %d ticků)",
+                len(written),
+                copies,
+                len(pending),
+            )
         return written
 
     def count(self) -> int:

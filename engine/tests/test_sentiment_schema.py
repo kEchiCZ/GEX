@@ -16,11 +16,13 @@ from gexlens_engine.storage.sentiment import (
     crowd_sentiment,
     ensure_sentiment_schema,
     news_classifications,
+    news_event_sources,
     news_events,
     news_reactions,
     reaction_contaminated,
     reaction_ret,
     reaction_row_values,
+    record_news_copy,
     sentiment_metadata,
     unpivot_reaction,
 )
@@ -31,6 +33,8 @@ TS = dt.datetime(2026, 7, 28, 12, 30, tzinfo=dt.UTC)
 # migrace, aby N6–N8 nemusely couvat
 EXPECTED_TABLES = {
     "news_events",
+    # Kopie téže zprávy z jiných zdrojů (ADR-0059 bod 3)
+    "news_event_sources",
     "news_classifications",
     "news_reactions",
     "news_model_stats",
@@ -289,6 +293,84 @@ def test_news_events_gain_content_tier_column_and_keep_data(tmp_path: Path) -> N
         row = conn.execute(select(news_events.c.title, news_events.c.content_tier)).one()
     assert row.title == "Fed holds rates"
     assert row.content_tier is None  # historii doplní scripts/backfill_content_tier.py
+
+
+def test_existing_db_gains_news_event_sources_and_keeps_events(tmp_path: Path) -> None:
+    """ADR-0059 bod 3: tabulka kopií vzniká aditivně nad DB se zprávami."""
+    from sqlalchemy import text
+
+    engine = make_engine(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE news_event_sources"))
+        conn.execute(insert(news_events).values(**event_values()))
+    ensure_sentiment_schema(engine)
+    ensure_sentiment_schema(engine)  # idempotence
+    assert "news_event_sources" in inspect(engine).get_table_names()
+    with engine.connect() as conn:
+        assert conn.execute(select(news_events.c.title)).scalar_one() == "Fed holds rates"
+
+
+def record_copy(
+    engine: Engine,
+    *,
+    dedup_hash: str = "hash-1",
+    source: str = "alpaca",
+    published_at: dt.datetime = TS + dt.timedelta(seconds=2),
+    fetched_at: dt.datetime = TS + dt.timedelta(seconds=5),
+) -> str:
+    with engine.begin() as conn:
+        return record_news_copy(
+            conn,
+            dedup_hash=dedup_hash,
+            source=source,
+            source_uid="a-1",
+            content_tier=2,
+            published_at=published_at,
+            fetched_at=fetched_at,
+        )
+
+
+def test_record_news_copy_links_copy_to_first_delivery(tmp_path: Path) -> None:
+    """Kopie z jiného zdroje se přiřadí k prvnímu doručení podle `dedup_hash`."""
+    engine = make_engine(tmp_path)
+    with engine.begin() as conn:
+        key = conn.execute(insert(news_events).values(**event_values())).inserted_primary_key
+        assert key is not None
+        event_id = key[0]
+
+    assert record_copy(engine) == "recorded"
+    with engine.connect() as conn:
+        row = conn.execute(select(news_event_sources)).one()
+    assert row.event_id == event_id
+    assert (row.source, row.source_uid, row.content_tier) == ("alpaca", "a-1", 2)
+    assert row.published_at.replace(tzinfo=dt.UTC) == TS + dt.timedelta(seconds=2)
+    assert row.fetched_at.replace(tzinfo=dt.UTC) == TS + dt.timedelta(seconds=5)
+
+
+def test_record_news_copy_is_idempotent_and_keeps_earliest(tmp_path: Path) -> None:
+    """PK (event_id, source): opakovaná kopie zdroje nic nepřidá ani nepřepíše."""
+    engine = make_engine(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(insert(news_events).values(**event_values()))
+
+    assert record_copy(engine) == "recorded"
+    later = TS + dt.timedelta(hours=1)
+    assert record_copy(engine, published_at=later, fetched_at=later) == "skipped"
+    with engine.connect() as conn:
+        rows = conn.execute(select(news_event_sources.c.fetched_at)).all()
+    assert [r.fetched_at.replace(tzinfo=dt.UTC) for r in rows] == [TS + dt.timedelta(seconds=5)]
+
+
+def test_record_news_copy_skips_same_source_and_reports_missing_event(tmp_path: Path) -> None:
+    """Kopie téhož zdroje je duplicita bez záznamu; bez prvního doručení nic."""
+    engine = make_engine(tmp_path)
+    with engine.begin() as conn:
+        conn.execute(insert(news_events).values(**event_values()))
+
+    assert record_copy(engine, source="finnhub") == "skipped"
+    assert record_copy(engine, dedup_hash="hash-unknown") == "missing"
+    with engine.connect() as conn:
+        assert conn.execute(select(news_event_sources)).all() == []
 
 
 def test_reactions_gain_closure_open_column_and_roundtrip(tmp_path: Path) -> None:

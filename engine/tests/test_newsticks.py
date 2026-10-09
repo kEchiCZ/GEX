@@ -23,7 +23,11 @@ from gexlens_engine.ibkr.newsticks import (
     tick_time,
 )
 from gexlens_engine.runtime import PublisherLike
-from gexlens_engine.storage.sentiment import ensure_sentiment_schema, news_events
+from gexlens_engine.storage.sentiment import (
+    ensure_sentiment_schema,
+    news_event_sources,
+    news_events,
+)
 
 NOW = dt.datetime(2026, 7, 28, 14, 0, tzinfo=dt.UTC)
 
@@ -234,6 +238,63 @@ def test_same_story_from_rss_and_broker_is_one_row(tmp_path: Path) -> None:
     with engine.connect() as conn:  # type: ignore[attr-defined]
         total = conn.execute(select(news_events)).fetchall()
     assert len(total) == 1  # stopslovo „The" hash nemění
+
+
+def test_tape_copy_of_stored_news_is_recorded_as_source(tmp_path: Path) -> None:
+    """ADR-0059 bod 3: páska se shodným titulkem téhož dne jako zpráva z news-engine
+    je kopie — `news_events` zůstane s prvním doručením, páska přibude jako zdroj.
+    """
+    from sqlalchemy import insert
+
+    from gexlens_engine.compute.newstext import dedup_hash
+
+    collector, engine = make(tmp_path)
+    published = NOW - dt.timedelta(seconds=30)
+    with engine.begin() as conn:  # type: ignore[attr-defined]
+        key = conn.execute(
+            insert(news_events).values(
+                ts_event=published,
+                ts_ingested=published,
+                source="alpaca",
+                kind="headline",
+                title="Fed holds rates",
+                symbols=[],
+                market_closed=False,
+                content_tier=2,
+                dedup_hash=dedup_hash("Fed holds rates", published),
+                raw={"author": "Benzinga Newsdesk"},
+            )
+        ).inserted_primary_key
+    assert key is not None
+
+    tick_at = NOW - dt.timedelta(seconds=10)
+    tick = FakeTick(
+        "!BRFG Fed holds rates",
+        providerCode="BRFG",
+        articleId="x1",
+        timeStamp=int(tick_at.timestamp()),
+    )
+    assert collector.write([tick], now=NOW) == []
+
+    with engine.connect() as conn:  # type: ignore[attr-defined]
+        assert [r.source for r in conn.execute(select(news_events.c.source))] == ["alpaca"]
+        copy = conn.execute(select(news_event_sources)).one()
+    assert copy.event_id == key[0]
+    assert (copy.source, copy.source_uid, copy.content_tier) == ("ibkr_brfg", "x1", 3)
+    assert copy.published_at.replace(tzinfo=dt.UTC) == tick_at
+    assert copy.fetched_at.replace(tzinfo=dt.UTC) == NOW
+
+
+def test_tape_repeated_after_restart_is_not_a_copy(tmp_path: Path) -> None:
+    """Nový proces (prázdné `_seen`) znovu čte kumulativní pásku: týž zdroj = duplicita."""
+    collector, engine = make(tmp_path)
+    tick = FakeTick("!DJ-RTG Fed holds rates", articleId="x1")
+    assert len(collector.write([tick], now=NOW)) == 1
+
+    restarted = NewsTickCollector(engine)  # type: ignore[arg-type]
+    assert restarted.write([tick], now=NOW + dt.timedelta(minutes=5)) == []
+    with engine.connect() as conn:  # type: ignore[attr-defined]
+        assert conn.execute(select(news_event_sources)).all() == []
 
 
 def test_ticks_without_article_id_dedup_by_hash(tmp_path: Path) -> None:

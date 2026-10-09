@@ -6,9 +6,11 @@ proto porovnává proti všem eventům z posledních `window_minutes` — v pam�
 s doplněním z DB po startu.
 
 Cross-source merge je smysl celé redundance zdrojů (SPEC kap. 1, Tier B):
-tatáž zpráva z Finnhubu i CNBC má být **jeden** záznam, `source` nese ten
-nejrychlejší a ostatní se schovají do `raw.merged_sources`. Naměřená latence
-per zdroj je podklad pro budoucí prioritizaci.
+tatáž zpráva z Finnhubu i CNBC má být **jeden** záznam v `news_events`,
+`source` nese první doručení. Kopie z jiného zdroje se nezahodí beze stopy:
+výsledek ji vrací s `dedup_hash` prvního výskytu a zápis ji uloží do
+`news_event_sources` (ADR-0059 bod 3) — efektivní tier a zpoždění per zdroj.
+Kopie z téhož zdroje je opakovaný fetch, duplicita bez záznamu.
 
 Fuzzy vrstva (#274): přeformulovanou story chytá token Jaccard ≥ 0.9 nad
 týmž oknem. Simhash ze SPEC byl na provozních datech zamítnut — Hammingova
@@ -44,7 +46,7 @@ FUZZY_KINDS = frozenset({"headline", "broker"})
 
 @dataclass
 class _Seen:
-    """Záznam v okně: první výskyt story a zdroje, které ji potvrdily."""
+    """Záznam v okně: první výskyt story."""
 
     key: str
     ts_event: dt.datetime
@@ -52,15 +54,24 @@ class _Seen:
     first_ingested: dt.datetime
     kind: str
     tokens: frozenset[str]
-    merged: list[dict[str, object]] = field(default_factory=list)
+    # Hash prvního výskytu: podle něj zápis kopie najde řádek v `news_events`
+    dedup_hash: str
+
+
+@dataclass(frozen=True)
+class DedupCopy:
+    """Kopie story z jiného zdroje a `dedup_hash` jejího prvního výskytu."""
+
+    event: NewsEvent
+    first_hash: str
 
 
 @dataclass
 class DedupResult:
-    """Výsledek jedné dávky: co zapsat a co se slilo."""
+    """Výsledek jedné dávky: co zapsat, kopie z jiných zdrojů a duplicity."""
 
     events: list[NewsEvent]
-    merged: int = 0
+    copies: list[DedupCopy] = field(default_factory=list)
     duplicates: int = 0
 
 
@@ -94,19 +105,25 @@ class RollingDeduplicator:
             del self._seen[key]
 
     def prime(self, events: Sequence[NewsEvent]) -> None:
-        """Naplní okno z DB po startu — jinak by se po restartu duplikovalo."""
+        """Naplní okno z DB po startu — jinak by se po restartu duplikovalo.
+
+        Ze dvou řádků téhož klíče (přes půlnoc UTC = jiný `dedup_hash`) zůstane
+        nejdřívější bez ohledu na pořadí z DB: kopie se přiřazuje k prvnímu
+        doručení (ADR-0059 bod 3).
+        """
         for event in events:
             key = self.key_of(event)
-            self._seen.setdefault(
-                key,
-                _Seen(
-                    key=key,
-                    ts_event=event.ts_event,
-                    first_source=event.source,
-                    first_ingested=event.ts_ingested,
-                    kind=event.kind,
-                    tokens=frozenset(key.split()),
-                ),
+            current = self._seen.get(key)
+            if current is not None and current.ts_event <= event.ts_event:
+                continue
+            self._seen[key] = _Seen(
+                key=key,
+                ts_event=event.ts_event,
+                first_source=event.source,
+                first_ingested=event.ts_ingested,
+                kind=event.kind,
+                tokens=frozenset(key.split()),
+                dedup_hash=event.dedup_hash,
             )
 
     def _fuzzy_match(self, event: NewsEvent, key: str) -> _Seen | None:
@@ -136,11 +153,11 @@ class RollingDeduplicator:
         return best
 
     def process(self, events: Sequence[NewsEvent]) -> DedupResult:
-        """Rozdělí dávku na nové eventy a slučované výskyty.
+        """Rozdělí dávku na nové eventy, kopie z jiných zdrojů a duplicity.
 
-        Vrací jen ty, které se mají zapsat; u sloučených se do `raw` prvního
-        výskytu nedostaneme (už je v DB), proto se merge loguje a promítá do
-        `merged_sources` u eventu, který se právě zapisuje.
+        Nové eventy se zapisují do `news_events`. Kopie nesou `dedup_hash`
+        prvního výskytu, protože ten už může být v DB z dřívější dávky nebo
+        z doby před restartem (`prime`); zápis kopie ho podle hashe najde.
         """
         result = DedupResult(events=[])
         for event in sorted(events, key=lambda e: e.ts_event):
@@ -155,6 +172,7 @@ class RollingDeduplicator:
                     first_ingested=event.ts_ingested,
                     kind=event.kind,
                     tokens=frozenset(key.split()),
+                    dedup_hash=event.dedup_hash,
                 )
                 result.events.append(event)
                 continue
@@ -164,26 +182,12 @@ class RollingDeduplicator:
                 result.duplicates += 1
                 continue
 
-            latency_s = (event.ts_ingested - seen.first_ingested).total_seconds()
-            seen.merged.append(
-                {
-                    "source": event.source,
-                    "source_uid": event.source_uid,
-                    "ts_ingested": event.ts_ingested.isoformat(),
-                    "latency_s": latency_s,
-                }
-            )
-            result.merged += 1
+            result.copies.append(DedupCopy(event=event, first_hash=seen.dedup_hash))
             logger.debug(
-                "Merge: %r už má %s, %s je o %.1f s pozdější",
+                "Kopie: %r už má %s, %s je o %.1f s pozdější",
                 event.title,
                 seen.first_source,
                 event.source,
-                latency_s,
+                (event.ts_ingested - seen.first_ingested).total_seconds(),
             )
         return result
-
-    def merged_sources(self, event: NewsEvent) -> list[dict[str, object]]:
-        """Zdroje, které tutéž story potvrdily po prvním výskytu."""
-        seen = self._seen.get(self.key_of(event))
-        return list(seen.merged) if seen else []

@@ -18,9 +18,15 @@ Tiery:
 významnosti (`news_significance.significance_tier`). Nový zdroj musí dostat
 výslovné rozhodnutí v `FIXED_TIERS` nebo ve funkci — test pokrytí registru
 `NEWS_SOURCE_SEED` jinak spadne.
+
+Efektivní tier a nejdřívější publikace zprávy se neukládají, počítají se při
+čtení z prvního doručení a kopií z jiných zdrojů (`news_event_sources`,
+ADR-0059 bod 3), viditelných v čase *t*.
 """
 
-from collections.abc import Mapping
+import datetime as dt
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 
 OFFICIAL = 1
 HEADLINE = 2
@@ -56,3 +62,37 @@ def content_tier(source: str, raw: Mapping[str, object] | None) -> int | None:
     if source.startswith(IBKR_PREFIX):
         return ARTICLE
     return FIXED_TIERS.get(source)
+
+
+@dataclass(frozen=True)
+class SourceCopy:
+    """Kopie zprávy z jiného zdroje — řádek `news_event_sources` (ADR-0059 bod 3)."""
+
+    content_tier: int | None
+    published_at: dt.datetime
+    fetched_at: dt.datetime
+
+
+def effective_tier(
+    first_tier: int | None, copies: Iterable[SourceCopy], *, at: dt.datetime
+) -> int | None:
+    """Nejnižší tier z prvního doručení a kopií viditelných v `at`, None = žádný.
+
+    Kopie je viditelná od `fetched_at` (point-in-time). Viditelnost prvního
+    doručení (`ts_ingested ≤ at`) hlídá volající, bez něj zpráva neexistuje.
+    Bez efektivního tieru by o `is_breaking` rozhodovalo pořadí doručení:
+    CNBC RSS před Benzinga Newsdeskem by zprávu z karty vyřadil.
+    """
+    tiers = [first_tier, *(copy.content_tier for copy in copies if copy.fetched_at <= at)]
+    known = [tier for tier in tiers if tier is not None]
+    return min(known) if known else None
+
+
+def earliest_published(
+    ts_event: dt.datetime, copies: Iterable[SourceCopy], *, at: dt.datetime
+) -> dt.datetime:
+    """Nejdřívější publikace `min(ts_event, published_at kopií viditelných v at)`.
+
+    `ts_event` prvního doručení se nepřepisuje, protože od něj se měří reakce.
+    """
+    return min([ts_event, *(copy.published_at for copy in copies if copy.fetched_at <= at)])
