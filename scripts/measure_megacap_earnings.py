@@ -105,10 +105,12 @@ def split_headlines(
 def split_windows(
     rows: Sequence[Reaction], value: Callable[[Reaction], float]
 ) -> tuple[list[float], list[float]]:
-    """Jednotka minuta okna NQ: titulky téže minuty mají tytéž bary.
+    """Jednotka minuta okna NQ: titulky téže minuty mají (téměř) tytéž bary.
 
     Minuta s titulkem mega cap patří jen do skupiny mega; hodnotou minuty je
-    medián hodnot jejích titulků (při shodných barech jsou stejné).
+    medián hodnot jejích titulků. Přiblížení: okno začíná přesně v `ts_event`
+    (`reactions.compute_reactions`), takže titulek v hh:mm:00 má okno o bar
+    dřív než titulek v hh:mm:01–59 (rozdíl v reportu #1491).
     """
     minutes: dict[dt.datetime, list[Reaction]] = {}
     for row in rows:
@@ -249,8 +251,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     print(live_table + "\n")
     print(f"Verdikt: {verdict(live_criterion)}\n")
-    full_table, _ = report(load_reactions(engine, since=None), "Sekundárně: celá historie")
-    print(full_table)
+    history = load_reactions(engine, since=None)
+    full_table, _ = report(history, "Sekundárně: celá historie")
+    print(full_table + "\n")
+    # Rozpad celé historie: backfill bral jen mega caps a indexová ETF
+    backfill = [row for row in history if row.ts_event < LIVE_FROM]
+    backfill_table, _ = report(
+        backfill, f"Sekundárně: jen backfill (před {LIVE_FROM.date().isoformat()})"
+    )
+    print(backfill_table)
 
 
 if __name__ == "__main__":

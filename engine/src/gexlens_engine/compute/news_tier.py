@@ -80,8 +80,9 @@ def effective_tier(
 
     Kopie je viditelná od `fetched_at` (point-in-time). Viditelnost prvního
     doručení (`ts_ingested ≤ at`) hlídá volající, bez něj zpráva neexistuje.
-    Bez efektivního tieru by o `is_breaking` rozhodovalo pořadí doručení:
-    CNBC RSS před Benzinga Newsdeskem by zprávu z karty vyřadil.
+    Bez efektivního tieru by o štítku karty rozhodovalo pořadí doručení:
+    CNBC RSS před Benzinga Newsdeskem by zprávu nechal jako nepotvrzenou
+    (`gexlens_news.breaking.is_confirmed`).
     """
     tiers = [first_tier, *(copy.content_tier for copy in copies if copy.fetched_at <= at)]
     known = [tier for tier in tiers if tier is not None]

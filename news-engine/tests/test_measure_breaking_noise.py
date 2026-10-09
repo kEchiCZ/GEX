@@ -175,10 +175,51 @@ def test_variant_counts_split_trading_days_and_weekend() -> None:
         script.timeline(event(2, source="alpaca"), [], until=UNTIL),  # potvrzená — nepočítá se
     ]
     sessions = {T0.date()}  # pátek 9. 10.; sobota obchodní den není
-    rows = {
-        name.split(" —")[0]: (session, other)
-        for name, session, other in script.variant_counts(items, sessions)
+    rows = {name.split(" —")[0]: counts for name, *counts in script.variant_counts(items, sessions)}
+    assert rows == {"A": [3, 2, 1], "B": [1, 1, 0], "C": [2, 1, 1], "B + C": [1, 1, 0]}
+
+
+# Říjen 2026 je letní čas: 17:00 CT = 22:00 UTC (otevření Globexu, další obchodní den)
+FRIDAY = dt.date(2026, 10, 9)
+SATURDAY = dt.date(2026, 10, 10)
+SUNDAY = dt.date(2026, 10, 11)
+MONDAY = dt.date(2026, 10, 12)
+
+
+def at(day: dt.date, hour: int, minute: int = 0) -> dt.datetime:
+    return dt.datetime(day.year, day.month, day.day, hour, minute, tzinfo=dt.UTC)
+
+
+def test_day_is_globex_session_sunday_open_belongs_to_monday() -> None:
+    entries = {
+        "pátek seance": at(FRIDAY, 14),
+        "pátek po close": at(FRIDAY, 22, 30),  # po 17:00 CT → sobota, mimo seance
+        "sobota": at(SATURDAY, 13),
+        "neděle před otevřením": at(SUNDAY, 21, 30),
+        "neděle po otevření": at(SUNDAY, 22, 30),  # pondělní seance
+        "pondělí": at(MONDAY, 14),
     }
-    assert rows == {"A": (2, 1), "B": (1, 0), "C": (1, 1), "B + C": (1, 0)}
-    report = script.render(items, as_of=saturday + MIN, days=1)
-    assert "| A — všechny (rozhodnutí 9. 10.) | 3 | 2.0 | 1 |" in report
+    items = [script.timeline(event(3, ingested=ts), [], until=ts + MIN) for ts in entries.values()]
+    days = {day: stats.total for day, stats in script.daily(items).items()}
+    assert days == {FRIDAY: 1, SATURDAY: 2, SUNDAY: 1, MONDAY: 2}
+    rows = script.variant_counts(items, {FRIDAY, MONDAY})
+    assert rows[0][1:] == (6, 3, 3)  # pátek 1 + pondělí 2; sobota 2 + neděle 1 mimo seance
+
+
+def test_full_sessions_skip_edges_weekend_and_holiday() -> None:
+    # okno pátek 14:00 → úterý 14:00 UTC: krajní pátek a úterý se vynechají
+    assert script.full_sessions(at(FRIDAY, 14), at(dt.date(2026, 10, 13), 14)) == {MONDAY}
+    # Den díkůvzdání 26. 11. 2026 (čtvrtek) seanci nemá
+    sessions = script.full_sessions(at(dt.date(2026, 11, 23), 14), at(dt.date(2026, 11, 28), 14))
+    assert sessions == {dt.date(2026, 11, 24), dt.date(2026, 11, 25), dt.date(2026, 11, 27)}
+
+
+def test_render_average_uses_full_sessions() -> None:
+    items = [
+        script.timeline(event(3, ingested=at(MONDAY, 14 + n)), [], until=at(MONDAY, 23))
+        for n in range(4)
+    ]
+    report = script.render(items, as_of=at(dt.date(2026, 10, 13), 14), days=4)
+    # okno pátek 14:00 → úterý 14:00: celá seance jen pondělí
+    assert "| A — všechny (rozhodnutí 9. 10.) | 4 | 4.0 | 0 |" in report
+    assert "Celých obchodních seancí v okně: 1." in report

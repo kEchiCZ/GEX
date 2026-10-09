@@ -108,7 +108,7 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
    - **Efektivní tier zprávy** je nejnižší tier ze všech doručení viditelných v čase *t*:
      z prvního doručení a z kopií v `news_event_sources` (bod 3). Bez toho by o `is_breaking`
      rozhodovalo pořadí doručení. Když CNBC RSS přijde dřív než Benzinga Newsdesk, zpráva
-     by na kartu nepřišla.
+     by na kartu nepřišla (po revizi bodu 4 z 9. 10.: zůstala by označená jako nepotvrzená).
    - Registr `news_sources.tier` (role zdroje) zůstává beze změny.
    - **Objem (#1338):** sloupec na stávajících řádcích. Zpráv je ~2 200 denně v průměru 7 dní
      (včetně víkendu) a ~2 900 za 24 h pracovního dne (audit 2.1), tedy ~0,8–1,1 mil. řádků
@@ -156,7 +156,7 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
        Newsdesk. Kopie je jen táž zpráva (bod 3), takže článek s jiným titulkem o téže události
        potvrdí až shluk (E-6.6, E-6.17).
      - **Šum** změřil E-6.27 (`docs/research/1491-sum-karty-breaking.md`): za 30 dní polovina
-       karty nepotvrzená, ~40 zpráv za obchodní den, z toho 40 % Finnhub s mediánem zpoždění
+       karty nepotvrzená, ~42 zpráv za obchodní seanci, z toho 40 % Finnhub s mediánem zpoždění
        11 h. Zpřísnění (jen `is_key`, jen čerstvé zprávy) jen po rozhodnutí vlastníka;
        přeměření s kopiemi #1492.
      - Předfiltr v SQL (`importance ≥ 2` a tier není NULL v `news_events` **nebo**
@@ -164,7 +164,7 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
        (`news-engine/src/gexlens_news/breaking.py`).
      - Výpočet při čtení v API má precedens ve významnosti (ADR-0045 bod 5).
      - Vlastní slovník klíčových slov ani kritérium „krátký headline“ nevzniká. Fed, CPI, NFP
-       a cla už jsou spouštěče v2 (`EVENT_KINDS`, `classifier.py:536-538`) a krátký titulek
+       a cla už jsou spouštěče v2 (`EVENT_KINDS`, `classifier.py:542-544`) a krátký titulek
        zajišťuje tier 2.
      - Chybějící téma (např. stres bank) se doplní do klasifikátoru jako nová verze s golden
        testem a `is_breaking` ho převezme.
@@ -186,8 +186,8 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
        kontrola robustnosti přes unikátní minutu okna NQ. Mega caps n = 81, ostatní n = 2 876:
        rozdíl mediánů `range_5` −0,90 bp, 95% CI [−1,97; 0,16]; po minutách −0,46 bp
        [−1,52; 0,60]. Celá historie by kritérium splnila, ale srovnává mega caps z backfillu
-       s ostatními ze živého sběru, tedy dvě období s různou volatilitou. Skupinu „firmy“ tvoří
-       jen `TECH`.
+       s ostatními ze živého sběru, tedy dvě období s různou volatilitou; uvnitř backfillu má CI
+       nulu uvnitř. Skupinu „firmy“ tvoří jen `TECH`.
    - Odznak zásadní zprávy je stávající `is_key`.
    - **Skupina na kartě** je zobrazovací mapování stávající `category`. Slovník kategorií se
      nemění, protože je klíčem modelu a K1.
@@ -223,11 +223,11 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
    - **Kategorie a importance:**
      - **feedy s pevným obsahem** (Fed, BLS, BEA, ECB, SEC) je určují podle feedu a typu releasu,
        vzorem je `fed_rss` (`news-engine/src/gexlens_news/__main__.py:108-118`,
-       `fed_rss_importance` v `classifier.py:721-723`): BLS `cpi`/`ppi` → `MACRO_INFLATION` 3,
+       `fed_rss_importance` v `classifier.py:727-729`): BLS `cpi`/`ppi` → `MACRO_INFLATION` 3,
        `empsit` → `MACRO_LABOR` 3, `jolts`/`eci` → `MACRO_LABOR` 2; BEA GDP → `MACRO_GROWTH` 3,
        PCE → `MACRO_INFLATION` 3, ostatní 2; ECB rozhodnutí o sazbách 2, ostatní 1
        (shodně s ADR-0045 bod 3); SEC 8-K Item 2.02 → `EARNINGS` 2, ostatní Items 1.
-       JSON `data.sec.gov` titulek nemá a regex `EARNINGS` (`classifier.py:460-461`) by
+       JSON `data.sec.gov` titulek nemá a regex `EARNINGS` (`classifier.py:466-467`) by
        sestavený titulek formuláře nechytil;
      - **White House** má titulky ve tvaru headline, takže platí pravidla v2 nad titulkem.
    - **`ts_event` = okamžik zveřejnění,** původ se ukládá v `raw.ts_source` (`item`,
@@ -354,7 +354,8 @@ Kritéria volby podle AGENTS.md: rychlost, výkon, relevance dat.
 - A — žádné: karta jen s makrem, centrálními bankami a geopolitikou. Skupina „firmy“ odpadne
   a SEC se nepoužije.
 - **B — výjimka jen pro kartu: mega caps tier 1–2 s importance ≥ 2** (zvoleno, podmíněně
-  měřením v E-6.27). Významnost pro upozornění a model zůstane podle ADR-0045.
+  měřením v E-6.27; **měření nesplnilo kritérium, výjimka nevznikla** — platí A).
+  Významnost pro upozornění a model zůstane podle ADR-0045.
 - C — zrušit vyřazení `EARNINGS` z významnosti: mění upozornění, gate a model a vrací šum
   výsledků malých firem, který #1291 odstranil.
 

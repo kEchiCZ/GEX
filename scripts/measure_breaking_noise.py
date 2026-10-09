@@ -15,8 +15,13 @@ je tier 1–2 později potvrdí. Výběr a potvrzení počítá tatáž funkce j
 * Kopie (`news_event_sources`) se zaznamenávají až od nasazení E-6.24b
   (2026-10-09 12:01:22 UTC, #1489). Starší dny jsou proto bez potvrzení a počet
   nepotvrzených je v nich jen horní mez.
-* Den = UTC den vstupu; importance a kategorie jsou dnešní (reklasifikace se
-  promítne i zpětně, stejně jako na kartě).
+* Den = obchodní den seance Globexu, do které vstup patří
+  (`compute/settle.trading_session_date`: po 17:00 CT už běží další den, nedělní
+  otevření patří pondělí); sobota a neděle před otevřením jsou mimo seance.
+  Průměr na obchodní den počítá jen seance uvnitř okna
+  (`compute/settle.is_trading_session`) bez obou krajních, které bývají neúplné.
+* Importance a kategorie jsou dnešní (reklasifikace se promítne i zpětně,
+  stejně jako na kartě).
 
 Spojení je jen pro čtení (`default_transaction_read_only`, transakce končí
 rollbackem). Spuštění z hostitele (URL se nikdy nevypisuje):
@@ -48,7 +53,10 @@ from gexlens_engine.compute.news_significance import (  # noqa: E402
     is_key,
 )
 from gexlens_engine.compute.news_tier import SourceCopy, effective_tier  # noqa: E402
-from gexlens_engine.compute.settle import is_trading_session  # noqa: E402
+from gexlens_engine.compute.settle import (  # noqa: E402
+    is_trading_session,
+    trading_session_date,
+)
 from gexlens_engine.storage.sentiment import news_event_sources, news_events  # noqa: E402
 from gexlens_news.breaking import card_group, is_breaking, is_confirmed  # noqa: E402
 
@@ -146,7 +154,7 @@ class DayStats:
 def daily(timelines: Sequence[Timeline]) -> dict[dt.date, DayStats]:
     days: dict[dt.date, DayStats] = defaultdict(DayStats)
     for item in timelines:
-        stats = days[item.entered.astimezone(dt.UTC).date()]
+        stats = days[trading_session_date(item.entered)]
         stats.total += 1
         if item.confirmed_on_entry:
             stats.confirmed_on_entry += 1
@@ -248,7 +256,7 @@ def render(timelines: Sequence[Timeline], *, as_of: dt.datetime, days: int) -> s
         f"`as_of` = {as_of.isoformat()}, okno {days} dní; kopie se zaznamenávají od "
         f"{COPIES_FROM.isoformat()} (dřívější dny: nepotvrzené = horní mez).",
         "",
-        "### Denně (UTC den vstupu na kartu)",
+        "### Denně (obchodní den seance Globexu, ve které zpráva vstoupila na kartu)",
         "",
         "| den | breaking | potvrzené při vstupu | nepotvrzené | z nich později potvrzené "
         "| nepotvrzené `is_key` |",
@@ -303,16 +311,22 @@ def render(timelines: Sequence[Timeline], *, as_of: dt.datetime, days: int) -> s
         "",
         "### Varianty zpřísnění — nepotvrzené při vstupu (celé okno)",
         "",
-        "| varianta | celkem | průměr na obchodní den | víkend a svátky |",
+        "| varianta | celkem | průměr na celou obchodní seanci | mimo seance (víkend, svátky) |",
         "|---|---|---|---|",
     ]
-    first_day = (as_of - dt.timedelta(days=days)).astimezone(dt.UTC).date()
-    window = [first_day + dt.timedelta(days=n) for n in range(days + 1)]
-    sessions = {day for day in window if is_trading_session(day)}
-    for name, count_session, count_other in variant_counts(timelines, sessions):
-        average = f"{count_session / len(sessions):.1f}" if sessions else "—"
-        lines.append(f"| {name} | {count_session + count_other} | {average} | {count_other} |")
+    sessions = full_sessions(as_of - dt.timedelta(days=days), as_of)
+    for name, total, in_sessions, off_session in variant_counts(timelines, sessions):
+        average = f"{in_sessions / len(sessions):.1f}" if sessions else "—"
+        lines.append(f"| {name} | {total} | {average} | {off_session} |")
+    lines += ["", f"Celých obchodních seancí v okně: {len(sessions)}."]
     return "\n".join(lines)
+
+
+def full_sessions(start: dt.datetime, end: dt.datetime) -> set[dt.date]:
+    """Obchodní seance uvnitř `[start, end)` bez obou krajních (bývají neúplné)."""
+    first, last = trading_session_date(start), trading_session_date(end)
+    inner = (first + dt.timedelta(days=n) for n in range(1, (last - first).days))
+    return {day for day in inner if is_trading_session(day)}
 
 
 def is_stale(event: Event) -> bool:
@@ -321,8 +335,12 @@ def is_stale(event: Event) -> bool:
 
 def variant_counts(
     timelines: Sequence[Timeline], sessions: set[dt.date]
-) -> list[tuple[str, int, int]]:
-    """Nepotvrzené při vstupu podle varianty: (název, v obchodní dny, ostatní dny)."""
+) -> list[tuple[str, int, int, int]]:
+    """Nepotvrzené při vstupu podle varianty.
+
+    Vrací (název, celkem, v seancích `sessions`, mimo obchodní seance); vstupy
+    v krajních seancích okna jsou jen v celkovém počtu.
+    """
     unconfirmed = [item for item in timelines if not item.confirmed_on_entry]
 
     def key(item: Timeline) -> bool:
@@ -340,9 +358,10 @@ def variant_counts(
     ]
     rows = []
     for name, keep in variants:
-        kept = [item for item in unconfirmed if keep(item)]
-        in_session = sum(item.entered.astimezone(dt.UTC).date() in sessions for item in kept)
-        rows.append((name, in_session, len(kept) - in_session))
+        days = [trading_session_date(item.entered) for item in unconfirmed if keep(item)]
+        in_sessions = sum(day in sessions for day in days)
+        off_session = sum(not is_trading_session(day) for day in days)
+        rows.append((name, len(days), in_sessions, off_session))
     return rows
 
 

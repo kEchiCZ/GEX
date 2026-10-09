@@ -24,6 +24,7 @@ T0 = dt.datetime(2026, 10, 9, 13, 0, tzinfo=dt.UTC)
         (None, "social", 3, "FED", False),  # Bluesky bez kurátora, Reddit
         (None, "scheduled", 3, "MACRO_INFLATION", False),  # kalendář má vlastní cestu
         (2, "headline", 1, "FED", False),  # nevýznamná
+        (3, "headline", 1, "GEOPOLITICS", False),  # nevýznamný článek
         (2, "headline", None, None, False),  # neklasifikovaná
         (2, "headline", 3, "EARNINGS", False),  # ani mega caps (měření nesplněno)
         (1, "headline", 2, "EARNINGS", False),

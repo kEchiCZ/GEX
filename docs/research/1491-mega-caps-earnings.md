@@ -11,7 +11,10 @@ varianta A) a E-6.25b se ruší jako nepotřebný.
 ## Jak se měřilo
 
 Skript `scripts/measure_megacap_earnings.py` jen čte PG. Testy čistých funkcí jsou
-v `news-engine/tests/test_measure_megacap_earnings.py`. Snímek `as_of` **2026-10-09T12:31:10Z**.
+v `news-engine/tests/test_measure_megacap_earnings.py`. Verdikt padl v předregistrovaném běhu
+`as_of` **2026-10-09T12:31:10Z**; tabulky níže jsou z opakovaného běhu **2026-10-09T12:51:35Z**,
+který přidal rozpad backfillu (mezitím přibyl jeden titulek; verdikt je stejný, první běh měl
+CI titulků [−1,97; 0,16] a minut [−1,52; 0,60]).
 
 ```bash
 # heslo se předá z .env bez výpisu hodnoty
@@ -33,8 +36,12 @@ CI rozdílu mediánů `range_5` nad nulou) upřesňuje takto:
   10 000 opakování, seed 1491. |`ret_5`| je jen sekundární.
 - **Jednotka:**
   - titulek podle znění ADR;
-  - kontrola robustnosti přes unikátní minutu okna NQ. Titulky téže minuty mají tytéž bary, a tedy
-    nejsou nezávislá měření. Minuta, ve které je titulek mega cap, patří jen do skupiny mega.
+  - kontrola robustnosti přes unikátní minutu okna NQ. Titulky téže minuty mají (téměř) tytéž bary,
+    a tedy nejsou nezávislá měření. Minuta, ve které je titulek mega cap, patří jen do skupiny mega.
+    Minuta je přiblížení: okno začíná přesně v `ts_event` (`reactions.compute_reactions`), takže
+    titulek v hh:mm:00 má okno o bar dřív než titulek v hh:mm:01–59. S přesným klíčem (začátek
+    prvního baru okna) vychází týž verdikt: −0,44 bp, CI [−1,52; 0,64] (jednorázový výpočet
+    nad týmiž daty 9. 10.).
 - **Kritérium** musí platit v obou jednotkách. Při neshodě jednotek rozhoduje vlastník.
 
 ## Výsledek
@@ -43,10 +50,10 @@ CI rozdílu mediánů `range_5` nad nulou) upřesňuje takto:
 
 | jednotka | metrika | n mega | n ostatní | medián mega (bp) | medián ostatní (bp) | rozdíl (bp) | 95% CI | kritérium |
 |---|---|---|---|---|---|---|---|---|
-| titulek | `range_5` | 81 | 2 876 | 7,58 | 8,48 | −0,90 | [−1,97; 0,16] | ✗ |
-| titulek | \|`ret_5`\| | 81 | 2 876 | 3,35 | 3,60 | −0,25 | [−1,33; 0,68] | (sekundární) |
-| minuta okna | `range_5` | 80 | 2 295 | 7,54 | 8,00 | −0,46 | [−1,52; 0,60] | ✗ |
-| minuta okna | \|`ret_5`\| | 80 | 2 295 | 3,34 | 3,43 | −0,09 | [−1,15; 0,67] | (sekundární) |
+| titulek | `range_5` | 81 | 2 877 | 7,58 | 8,48 | −0,90 | [−1,96; 0,21] | ✗ |
+| titulek | \|`ret_5`\| | 81 | 2 877 | 3,35 | 3,60 | −0,25 | [−1,32; 0,73] | (sekundární) |
+| minuta okna | `range_5` | 80 | 2 296 | 7,54 | 8,00 | −0,46 | [−1,53; 0,63] | ✗ |
+| minuta okna | \|`ret_5`\| | 80 | 2 296 | 3,34 | 3,43 | −0,09 | [−1,18; 0,65] | (sekundární) |
 
 Obě skupiny mají n ≥ 30, ale CI rozdílu `range_5` obsahuje nulu v obou jednotkách. Bodový odhad je
 dokonce záporný: titulky o výsledcích mega caps mají v pětiminutovém okně NQ medián výchylky
@@ -56,23 +63,34 @@ o 0,5–0,9 bp **menší** než ostatní titulky `EARNINGS`.
 
 | jednotka | metrika | n mega | n ostatní | medián mega (bp) | medián ostatní (bp) | rozdíl (bp) | 95% CI |
 |---|---|---|---|---|---|---|---|
-| titulek | `range_5` | 1 479 | 3 093 | 9,11 | 8,46 | +0,64 | [0,19; 1,22] |
-| titulek | \|`ret_5`\| | 1 479 | 3 093 | 3,78 | 3,62 | +0,16 | [−0,21; 0,52] |
-| minuta okna | `range_5` | 1 462 | 2 489 | 9,10 | 8,00 | +1,10 | [0,58; 1,69] |
-| minuta okna | \|`ret_5`\| | 1 462 | 2 489 | 3,77 | 3,49 | +0,28 | [−0,05; 0,67] |
+| titulek | `range_5` | 1 479 | 3 094 | 9,11 | 8,46 | +0,64 | [0,19; 1,22] |
+| titulek | \|`ret_5`\| | 1 479 | 3 094 | 3,78 | 3,62 | +0,16 | [−0,22; 0,52] |
+| minuta okna | `range_5` | 1 462 | 2 490 | 9,10 | 8,00 | +1,10 | [0,59; 1,69] |
+| minuta okna | \|`ret_5`\| | 1 462 | 2 490 | 3,77 | 3,49 | +0,28 | [−0,03; 0,67] |
+
+### Sekundárně: jen backfill (před 2026-07-28)
+
+| jednotka | metrika | n mega | n ostatní | medián mega (bp) | medián ostatní (bp) | rozdíl (bp) | 95% CI |
+|---|---|---|---|---|---|---|---|
+| titulek | `range_5` | 1 398 | 217 | 9,25 | 8,09 | +1,16 | [−0,45; 2,12] |
+| titulek | \|`ret_5`\| | 1 398 | 217 | 3,83 | 4,01 | −0,18 | [−0,71; 0,92] |
+| minuta okna | `range_5` | 1 382 | 194 | 9,24 | 8,11 | +1,13 | [−0,38; 2,04] |
+| minuta okna | \|`ret_5`\| | 1 382 | 194 | 3,81 | 3,97 | −0,16 | [−0,70; 0,89] |
 
 Celá historie by kritérium splnila, ale srovnává dvě různá období:
 
 - skupina mega pochází z 95 % z backfillu (1 398 z 1 479 titulků jsou před 28. 7. 2026);
-- skupina ostatní pochází z 93 % ze živého sběru (2 876 z 3 093).
+- skupina ostatní pochází z 93 % ze živého sběru (2 877 z 3 094).
 
-Rozdíl celé historie tak míchá dvě věci, které s výsledky mega caps nesouvisí:
+Uvnitř žádné z obou ér kritérium splněné není: v živém sběru je rozdíl záporný, v backfillu má CI
+nulu uvnitř. Kladný rozdíl celé historie tak vzniká jen složením ér a míchá dvě věci, které
+s výsledky mega caps nesouvisí:
 
 - **Volatilitu období.** Medián `range_5` titulků mega caps je v backfillu 9,25 bp (n 1 398)
   a v živém sběru 7,58 bp (n 81).
-- **Nesrovnatelnou skupinu v backfillu.** Uvnitř backfillu mají ostatní titulky medián 8,09 bp,
-  ale je jich jen 217. Filtr do backfillu pustil jen titulky s tickerem indexového ETF nebo bez
-  tickeru, tedy souhrny sezóny výsledků, ne výsledky jiných firem.
+- **Nesrovnatelnou skupinu v backfillu.** Ostatních titulků je v backfillu jen 217. Filtr do
+  backfillu pustil jen titulky s tickerem indexového ETF nebo bez tickeru, tedy souhrny sezóny
+  výsledků, ne výsledky jiných firem.
 
 Kde jsou obě skupiny z téhož období a bez filtru (primární tabulka), rozdíl se od nuly neliší.
 

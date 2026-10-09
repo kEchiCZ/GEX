@@ -5,8 +5,8 @@ Vlastník 9. 10. 2026 rozhodl, že významná zpráva s efektivním tierem 3 (č
 (Rozhodnuto v #1385, revize ADR-0059 bod 4). Report měří, kolik takových zpráv karta ukáže.
 Při velkém šumu předkládá varianty zpřísnění. Patří do sub-issue #1491, Fáze 6 #1406.
 
-**Shrnutí:** za 30 dní šlo na kartu ~81 zpráv za obchodní den a polovina z nich byla nepotvrzená
-(~40 za obchodní den). Největší zdroj šumu je Finnhub: 40 % nepotvrzených zpráv s mediánem zpoždění
+**Shrnutí:** za 30 dní šlo na kartu ~86 zpráv za obchodní seanci a polovina z nich byla nepotvrzená
+(~42 za seanci). Největší zdroj šumu je Finnhub: 40 % nepotvrzených zpráv s mediánem zpoždění
 11 h. Kolik nepotvrzených zpráv později potvrdí tier 1–2, zatím změřit nejde, protože kopie se
 zaznamenávají teprve od 9. 10. 12:01 UTC. Přeměření je připomínka #1492.
 
@@ -35,48 +35,50 @@ Omezení:
 - Kopie (`news_event_sources`) se zaznamenávají až od nasazení E-6.24b (2026-10-09 12:01:22 UTC,
   #1489). Ve starších dnech proto nic potvrzené později není a počet nepotvrzených je **horní mez**.
 - Importance a kategorie jsou dnešní, stejně jako na kartě. Reklasifikace se promítne i zpětně.
-- Den je UTC den vstupu; 9. 9. a 9. 10. jsou neúplné.
+- Den je obchodní den seance Globexu, do které vstup patří (`trading_session_date`: po 17:00 CT
+  běží další den, nedělní otevření patří pondělí). Sobota a neděle před otevřením jsou mimo
+  seance. Průměr na seanci počítá jen 21 celých seancí; krajní 9. 9. a 9. 10. jsou neúplné.
 
 ## Výsledek
 
-### Denně
+### Denně (obchodní den seance Globexu)
 
 | den | breaking | potvrzené při vstupu | nepotvrzené | z nich později potvrzené | nepotvrzené `is_key` |
 |---|---|---|---|---|---|
-| 2026-09-09 st | 50 | 13 | 37 (74 %) | 0 | 16 |
-| 2026-09-10 čt | 117 | 43 | 74 (63 %) | 0 | 34 |
-| 2026-09-11 pá | 102 | 47 | 55 (54 %) | 0 | 21 |
-| 2026-09-12 so | 32 | 4 | 28 (88 %) | 0 | 19 |
-| 2026-09-13 ne | 35 | 13 | 22 (63 %) | 0 | 11 |
-| 2026-09-14 po | 72 | 32 | 40 (56 %) | 0 | 17 |
-| 2026-09-15 út | 88 | 35 | 53 (60 %) | 0 | 15 |
-| 2026-09-16 st | 152 | 94 | 58 (38 %) | 0 | 18 |
-| 2026-09-17 čt | 106 | 51 | 55 (52 %) | 0 | 16 |
-| 2026-09-18 pá | 82 | 37 | 45 (55 %) | 0 | 10 |
-| 2026-09-19 so | 21 | 6 | 15 (71 %) | 0 | 7 |
-| 2026-09-20 ne | 13 | 5 | 8 (62 %) | 0 | 2 |
-| 2026-09-21 po | 53 | 31 | 22 (42 %) | 0 | 4 |
-| 2026-09-22 út | 92 | 46 | 46 (50 %) | 0 | 20 |
-| 2026-09-23 st | 80 | 34 | 46 (58 %) | 0 | 13 |
-| 2026-09-24 čt | 100 | 48 | 52 (52 %) | 0 | 32 |
-| 2026-09-25 pá | 74 | 37 | 37 (50 %) | 0 | 16 |
-| 2026-09-26 so | 21 | 10 | 11 (52 %) | 0 | 8 |
-| 2026-09-27 ne | 23 | 8 | 15 (65 %) | 0 | 9 |
-| 2026-09-28 po | 68 | 26 | 42 (62 %) | 0 | 18 |
+| 2026-09-09 st | 44 | 8 | 36 (82 %) | 0 | 16 |
+| 2026-09-10 čt | 115 | 47 | 68 (59 %) | 0 | 31 |
+| 2026-09-11 pá | 110 | 48 | 62 (56 %) | 0 | 24 |
+| 2026-09-12 so | 31 | 4 | 27 (87 %) | 0 | 18 |
+| 2026-09-13 ne | 29 | 9 | 20 (69 %) | 0 | 12 |
+| 2026-09-14 po | 77 | 35 | 42 (55 %) | 0 | 16 |
+| 2026-09-15 út | 84 | 33 | 51 (61 %) | 0 | 16 |
+| 2026-09-16 st | 153 | 95 | 58 (38 %) | 0 | 17 |
+| 2026-09-17 čt | 103 | 50 | 53 (51 %) | 0 | 14 |
+| 2026-09-18 pá | 87 | 39 | 48 (55 %) | 0 | 13 |
+| 2026-09-19 so | 22 | 6 | 16 (73 %) | 0 | 6 |
+| 2026-09-20 ne | 14 | 6 | 8 (57 %) | 0 | 2 |
+| 2026-09-21 po | 54 | 31 | 23 (43 %) | 0 | 5 |
+| 2026-09-22 út | 87 | 46 | 41 (47 %) | 0 | 19 |
+| 2026-09-23 st | 84 | 33 | 51 (61 %) | 0 | 14 |
+| 2026-09-24 čt | 97 | 49 | 48 (49 %) | 0 | 28 |
+| 2026-09-25 pá | 74 | 36 | 38 (51 %) | 0 | 17 |
+| 2026-09-26 so | 25 | 11 | 14 (56 %) | 0 | 11 |
+| 2026-09-27 ne | 22 | 7 | 15 (68 %) | 0 | 9 |
+| 2026-09-28 po | 66 | 25 | 41 (62 %) | 0 | 18 |
 | 2026-09-29 út | 95 | 72 | 23 (24 %) | 0 | 12 |
-| 2026-09-30 st | 87 | 42 | 45 (52 %) | 0 | 11 |
-| 2026-10-01 čt | 103 | 63 | 40 (39 %) | 0 | 17 |
-| 2026-10-02 pá | 82 | 50 | 32 (39 %) | 0 | 14 |
+| 2026-09-30 st | 82 | 41 | 41 (50 %) | 0 | 11 |
+| 2026-10-01 čt | 108 | 63 | 45 (42 %) | 0 | 17 |
+| 2026-10-02 pá | 84 | 52 | 32 (38 %) | 0 | 14 |
 | 2026-10-03 so | 5 | 3 | 2 (40 %) | 0 | 1 |
-| 2026-10-04 ne | 15 | 11 | 4 (27 %) | 0 | 2 |
-| 2026-10-05 po | 38 | 22 | 16 (42 %) | 0 | 2 |
-| 2026-10-06 út | 54 | 29 | 25 (46 %) | 0 | 13 |
-| 2026-10-07 st | 69 | 38 | 31 (45 %) | 0 | 11 |
-| 2026-10-08 čt | 78 | 39 | 39 (50 %) | 0 | 14 |
+| 2026-10-04 ne | 12 | 8 | 4 (33 %) | 0 | 2 |
+| 2026-10-05 po | 42 | 26 | 16 (38 %) | 0 | 2 |
+| 2026-10-06 út | 50 | 27 | 23 (46 %) | 0 | 13 |
+| 2026-10-07 st | 70 | 38 | 32 (46 %) | 0 | 10 |
+| 2026-10-08 čt | 81 | 41 | 40 (49 %) | 0 | 15 |
 | 2026-10-09 pá | 19 | 12 | 7 (37 %) | 0 | 3 |
 
 Celkem 2 026 zpráv na kartě, z toho 1 001 potvrzených při vstupu a 1 025 nepotvrzených.
-Mimo víkendy je to ~81 zpráv za obchodní den.
+V 21 celých seancích je to 1 803 zpráv, tedy ~86 za seanci (z toho 876 nepotvrzených).
 
 ### Od záznamu kopií (9. 10. 12:01–12:40 UTC)
 
@@ -107,12 +109,12 @@ a ve skutečnosti už breaking nejsou.
 
 ### Varianty zpřísnění (nepotvrzené při vstupu, celé okno)
 
-| varianta | celkem | průměr na obchodní den | víkend a svátky |
+| varianta | celkem | průměr na celou obchodní seanci | mimo seance (víkend, svátky) |
 |---|---|---|---|
-| A — všechny (rozhodnutí 9. 10.) | 1 025 | 40,0 | 105 |
-| B — jen `is_key` (importance 3) | 406 | 15,1 | 59 |
-| C — jen čerstvé (zpoždění příjmu ≤ 60 min) | 550 | 23,0 | 21 |
-| B + C | 164 | 6,8 | 7 |
+| A — všechny (rozhodnutí 9. 10.) | 1 025 | 41,7 | 106 |
+| B — jen `is_key` (importance 3) | 406 | 15,5 | 61 |
+| C — jen čerstvé (zpoždění příjmu ≤ 60 min) | 550 | 24,0 | 19 |
+| B + C | 164 | 6,9 | 7 |
 
 ## K rozhodnutí vlastníka
 
@@ -120,7 +122,7 @@ Kritéria podle AGENTS.md: rychlost, výkon, relevance dat pro obchodní rozhodn
 
 - **A — ponechat** (platí od 9. 10.):
   - \+ nic významného neunikne;
-  - − polovina karty nese štítek „nepotvrzeno“ (~40 zpráv za obchodní den) a 90 % zpráv z Finnhubu
+  - − polovina karty nese štítek „nepotvrzeno“ (~42 zpráv za seanci) a 90 % zpráv z Finnhubu
     je starších než hodina.
 - **B — tier 3 jen se zásadní zprávou (`is_key`)**:
   - \+ jednoduché, využívá stávající odznak;
@@ -131,7 +133,7 @@ Kritéria podle AGENTS.md: rychlost, výkon, relevance dat pro obchodní rozhodn
     rychlé články CNBC a Benzingy;
   - − nové kritérium karty, zatím mimo ADR (doplnila by ho revize ADR-0059 bod 4);
   - − nepomůže proti počtu zpráv v hlavních hodinách.
-- **B + C:** ~7 nepotvrzených za obchodní den; nejtišší karta, ale nejvíc vynechaných zpráv.
+- **B + C:** ~7 nepotvrzených za seanci; nejtišší karta, ale nejvíc vynechaných zpráv.
 
 **Doporučení: C.** Šum tvoří převážně staré zprávy, ne slabé zprávy. Kritérium „čerstvá“ míří
 na relevanci dat (point-in-time) a nepotřebuje slovník ani kritérium délky titulku. Hranice
