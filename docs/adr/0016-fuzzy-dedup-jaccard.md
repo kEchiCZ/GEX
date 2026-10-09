@@ -3,6 +3,8 @@
 **Stav:** přijato (schváleno uživatelem 29. 7. 2026, mergnuto v PR #353)
 **Datum:** 2026-07-29
 **Issue:** #274 (souvisí: #351)
+**Nahrazeno:** bod 2 (merge do `raw.merged_sources`) nahrazuje ADR-0059 bod 3 —
+kopie z jiného zdroje se zapisuje do `news_event_sources`.
 
 ## Kontext
 
@@ -34,6 +36,8 @@ všechny páry v okně 36 h; skript i plné výsledky v komentáři
 2. Fuzzy vrstva = **token Jaccard ≥ 0.9** nad týmž rolling oknem, v
    `RollingDeduplicator` (news-engine). Shoda se chová stejně jako exaktní:
    jiný zdroj → merge do `raw.merged_sources`, týž zdroj → duplicita.
+   *(Nahrazeno ADR-0059 bod 3: `raw.merged_sources` se do DB nikdy nedostal,
+   audit #1473 3.2.)*
 3. Fuzzy se pouští jen na `kind ∈ {headline, broker}`; `scheduled` eventy
    nikdy (konstrukčně eliminuje třídu Core-prefix falešných merge).
 4. Práh je konstanta `DEFAULT_JACCARD_THRESHOLD = 0.9`; `jaccard_threshold=None`
