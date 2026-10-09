@@ -55,8 +55,11 @@ def count_ib_lines(ib: IB) -> int:
     """Aktivní market data lines dle registru ib_async (#630).
 
     reqMktData tickery + realtime bars streamy — obojí u IBKR čerpá linku.
-    Broad tape NEWS pásky jdou mimo registr (raw client) a díky `mdoff`
-    linku nespotřebují; tick-by-tick má vlastní limit (ADR-0001), nepočítá se.
+    Broad tape NEWS pásky (BRFG, DJNL) jdou mimo registr (raw client) a nepočítají
+    se. Zda linku berou, změřit nešlo: 9. 10. 2026 účet obsloužil 250 FOP + 2 pásky
+    současně s proudem dat, takže strop nebyl dosažen (#1477, `scripts/lines_probe.py
+    --news`); na rozpočet lines enginu nemají vliv. Tick-by-tick má vlastní limit
+    (ADR-0001), nepočítá se.
     """
     mkt_data = len(ib.wrapper.ticker2ReqId.get("mktData", {}))
     bars = sum(
