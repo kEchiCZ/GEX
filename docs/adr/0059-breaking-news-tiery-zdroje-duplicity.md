@@ -127,7 +127,8 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
      z téhož zdroje zůstává duplicitou bez záznamu jako dosud.
    - **Co se do tabulky nedává:**
      - první doručení zůstává jen v `news_events` (`source`, `ts_event`, `ts_ingested`);
-     - payload kopie se neukládá, protože titulek je podle definice duplicity stejný.
+     - payload kopie se neukládá, protože titulek je podle definice duplicity stejný nebo
+       téměř stejný (Jaccard ≥ 0,9).
        Tím se ruší slib SPEC 3.3, že „`raw` uchová všechny payloady“.
    - **`ts_event` se nepřepisuje**, protože od něj se měří reakce. Nejdřívější publikace je
      odvozená hodnota `min(ts_event, min(published_at))`, počítaná při čtení.
@@ -142,6 +143,9 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
 4. **`is_breaking`, skupina a téma se počítají při čtení, nic z toho se neukládá:**
    - `is_breaking = efektivní tier ∈ {1, 2} ∧ is_significant(kind, importance, category)`
      (ADR-0045 bod 5).
+     - Předfiltr v SQL (`importance ≥ 2` a tier ≤ 2 v `news_events` **nebo**
+       v `news_event_sources`) je nadmnožina. Přesné pravidlo běží v jedné funkci.
+     - Výpočet při čtení v API má precedens ve významnosti (ADR-0045 bod 5).
      - Vlastní slovník klíčových slov ani kritérium „krátký headline“ nevzniká. Fed, CPI, NFP
        a cla už jsou spouštěče v2 (`EVENT_KINDS`, `classifier.py:536-538`) a krátký titulek
        zajišťuje tier 2.
@@ -149,12 +153,16 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
        testem a `is_breaking` ho převezme.
    - **Firmy na kartě:** ADR-0045 výsledky firem z významnosti vyřazuje vždy (Kontext 5).
      Na kartě by tak skupina „firmy“ zůstala prázdná a SEC by na ni nikdy nic nedodal.
-     Doporučená výjimka **jen pro kartu**: zpráva tier 1–2 v kategorii `EARNINGS` nebo `TECH`
+     Doporučená výjimka **jen pro kartu**: zpráva tier 1–2 v kategorii `EARNINGS`
      s importance ≥ 2, jejíž `symbols` obsahují firmu ze seznamu mega caps (bod 6), je
      breaking. Významnost pro upozornění, gate a model se nemění.
-     - **Podmínka:** E-6.27 nejdřív z `news_reactions` změří medián |výchylky| NQ za 5 min
-       u `EARNINGS` mega caps proti ostatním `EARNINGS`. Když rozdíl nebude, výjimka se
-       nezavede.
+     - `TECH` výjimku nepotřebuje, s importance ≥ 2 je významné už dnes
+       (`news_significance.py:47`).
+     - **Podmínka (předregistrované kritérium):** E-6.27 nejdřív z `news_reactions` porovná
+       `range_5` a |`ret_5`| NQ u `EARNINGS` mega caps proti ostatním `EARNINGS`, bez
+       kontaminovaných oken. Výjimka se zavede, jen když:
+       - má každá skupina n ≥ 30;
+       - 95% bootstrap CI rozdílu mediánů `range_5` leží nad nulou.
    - Odznak zásadní zprávy je stávající `is_key`.
    - **Skupina na kartě** je zobrazovací mapování stávající `category`. Slovník kategorií se
      nemění, protože je klíčem modelu a K1.
@@ -164,7 +172,7 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
      | makro data | `MACRO_INFLATION`, `MACRO_LABOR`, `MACRO_GROWTH` |
      | centrální banky | `FED` a zprávy zdroje `ecb` |
      | geopolitika | `GEOPOLITICS`, `ENERGY` |
-     | firmy | `EARNINGS`, `TECH` (jen s výjimkou výše) |
+     | firmy | `EARNINGS` (jen mega caps podle výjimky výše), `TECH` |
      | ostatní | `CRYPTO`, `OTHER` |
 
      „Výzkum bank“ jako skupina nevzniká, pokud znamená analytické akce: ty v2 shazuje na
@@ -179,33 +187,47 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
      Každá instituce má vlastní `source`, aby šlo měřit zpoždění po zdrojích. Hlídka feedů
      #1451 je pokryje.
    - **Kategorie a importance:**
-     - **feedy s pevným obsahem** (Fed, BLS, BEA, ECB) je určují podle feedu a typu releasu,
+     - **feedy s pevným obsahem** (Fed, BLS, BEA, ECB, SEC) je určují podle feedu a typu releasu,
        vzorem je `fed_rss` (`news-engine/src/gexlens_news/__main__.py:108-118`,
        `fed_rss_importance` v `classifier.py:721-723`): BLS `cpi`/`ppi` → `MACRO_INFLATION` 3,
        `empsit` → `MACRO_LABOR` 3, `jolts`/`eci` → `MACRO_LABOR` 2; BEA GDP → `MACRO_GROWTH` 3,
        PCE → `MACRO_INFLATION` 3, ostatní 2; ECB rozhodnutí o sazbách 2, ostatní 1
-       (shodně s ADR-0045 bod 3);
-     - **White House a SEC** mají titulky ve tvaru headline nebo formuláře, takže platí
-       pravidla v2 nad titulkem. U SEC jde Item 2.02 do kategorie `EARNINGS`.
+       (shodně s ADR-0045 bod 3); SEC 8-K Item 2.02 → `EARNINGS` 2, ostatní Items 1.
+       JSON `data.sec.gov` titulek nemá a regex `EARNINGS` (`classifier.py:460-461`) by
+       sestavený titulek formuláře nechytil;
+     - **White House** má titulky ve tvaru headline, takže platí pravidla v2 nad titulkem.
    - **`ts_event` = okamžik zveřejnění,** původ se ukládá v `raw.ts_source` (`item`,
-     `calendar`, `fetch`). Pořadí:
-     1. čas položky, je-li věrohodný (rok ≥ 2000, ne v budoucnosti, ne před zveřejněním);
-     2. u BLS čas releasu z kalendáře: řádek FF USD téhož dne v okně 2 h po čase položky;
-     3. jinak čas prvního stažení.
+     `calendar`, `fetch`). Adaptér čas zveřejnění obecně nezná, proto pravidlo určuje zdroj:
+     - **BLS:** čas položky se nepoužije nikdy, protože předbíhá release o 39 min.
+       - Bere se čas releasu z kalendáře: řádek FF USD téhož dne v ET **podle mapování
+         feed → titulek releasu**, ne libovolný řádek USD.
+       - Mapování: `cpi` → „CPI m/m“, `ppi` → „PPI m/m“, `empsit` → „Non-Farm Employment
+         Change“, `jolts` → „JOLTS Job Openings“, `eci` → „Employment Cost Index q/q“.
+         Přesné titulky FF ověří E-6.25.
+       - Bez shody se vezme čas prvního stažení.
+     - **Ostatní zdroje:** čas položky, je-li věrohodný (rok ≥ 2000, ne v budoucnosti). Jinak
+       čas prvního stažení.
    - **Pojistky (požadavky na E-6.25 s testy):**
-     - čas BLS podle kalendáře je stabilní, takže restart v jiný den nezmění `dedup_hash`
+     - čas BLS z kalendáře je stabilní, takže restart v jiný den nezmění `dedup_hash`
        a release se nezapíše znovu;
-     - u času stažení se zapisuje jen položka, jejíž `(source, source_uid)` v DB ještě není
+     - párování BLS nesmí vzít jiný řádek téhož dne: test na kolizi s „FOMC Member Speaks“
+       v 8:00 a s PMI v 9:45;
+     - s časem stažení se zapisuje jen položka, jejíž `(source, source_uid)` v DB ještě není
        (`ix_news_events_source_uid`, `storage/sentiment.py:133`);
-     - položky z první dávky nového zdroje s časem stažení nesou `raw.backlog = true`.
-       Nejsou breaking a reakce se z nich neměří, jinak by se historie feedu tvářila jako
-       čerstvé zprávy.
+     - položka bez věrohodného času, kterou feed nesl už v **prvním stažení po startu
+       procesu**, se nezapíše, protože čas zveřejnění nejde doložit. Jinak by se historie
+       feedu (např. testimony s rokem 1899) tvářila jako čerstvá zpráva a vstoupila do
+       SentIndexu, shluků i souhrnu. Ztrátou je položka bez času, která přibyla během výpadku
+       procesu; ta se zaloguje a započte do zdraví zdroje.
    - **Dopad na model a upozornění:** nové zprávy projdou klasifikací jako ostatní a vstoupí
      do SentIndexu, `news_model_stats` a gate, do shluků upozornění (ADR-0043) a do
      předobchodního souhrnu.
-     - Položka BLS s časem z kalendáře má stejný `ts_event` a kategorii jako řádek FF. Model
-       ji proto sloučí do jednoho vzorku (ADR-0045 bod 9) a K1 je navzájem nekontaminuje
-       (ADR-0045 bod 7).
+     - Položka BLS s časem z kalendáře má stejný `ts_event` a kategorii jako řádek FF, takže
+       je K1 navzájem nekontaminuje (ADR-0045 bod 7).
+     - Do jednoho vzorku je model nesloučí: položka BLS nemá `surprise_z` a padne do bucketu
+       `none`, řádek FF do pos/neg/flat (`news-engine/src/gexlens_news/model_stats.py:106-115`).
+       V témž agregátu se tedy nezapočte dvakrát, stejně jako dnes řádek Benzinga
+       „USA CPI … Vs Est“.
      - Upozornění spustí jen zpráva s importance ≥ 2 (ADR-0043). Kolik položek White House
        to bude, změří E-6.29; snímek E-6.22 frekvenci neměří.
 6. **SEC, Treasury, Finnhub, tier 2:**
@@ -239,9 +261,12 @@ varianty“ a doporučená varianta je tady. Otevřená otázka navíc: co přes
      - běží průběžně („běží X min“) a v 5. minutě se zafixuje.
    - **Odkud se dopad počítá:** hodnotu i fixaci počítá z minutových barů **tatáž čistá funkce**
      jako `news_reactions` (`compute_reactions`, `news-engine/src/gexlens_news/reactions.py:195`)
-     a výchylka ADR-0043 (`clusters.py:156`). Ze `news_reactions` se nečte, protože ten se zapisuje
-     až po 60 min. Kde výpočet běží (push z news-enginu, nebo API), rozhodne E-6.28; funkce se
-     nesmí zkopírovat.
+     a výchylka ADR-0043 (`measure_excursion`, `reactions.py:425`). Ze `news_reactions` se
+     nečte, protože ten se zapisuje až po 60 min.
+   - **Kde výpočet běží,** rozhodne E-6.28 s variantami; funkce se nesmí zkopírovat.
+     - Push z news-enginu odpovídá pravidlu AGENTS „API jen čte storage, nepočítá“.
+     - Výpočet v API by byl další výjimka z tohoto pravidla, i když precedens má
+       (významnost při čtení, ADR-0045 bod 5).
    - **Zavřený trh:** místo dopadu se ukáže „trh zavřený“. Odložená reakce zůstává
      v `news_reactions`, karta ji nepočítá.
    - ⚠ označuje kontaminaci podle K1.
@@ -265,7 +290,7 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
 | varianta | výhody | nevýhody |
 |---|---|---|
 | **A — sloupec zapsaný při ingestu** (doporučeno) | levný SQL filtr pro kartu, report i heatmapu; vstupy nového řádku se nemění | migrace a backfill; dva zapisovatelé (news-engine, engine) musí volat tutéž funkci |
-| B — čistá funkce při čtení | bez migrace; změna mapování platí hned i zpětně | čte `raw` JSON u každého řádku; SQL by uměl jen druhou kopii pravidla (s předfiltrem importance ≥ 2 jde o tisíce řádků denně) |
+| B — čistá funkce při čtení | bez migrace; změna mapování platí hned i zpětně | čte `raw` JSON u každého řádku, který filtr propustí; SQL by uměl jen druhou kopii pravidla |
 | C — sloupec v registru `news_sources` | nejjednodušší | nerozliší autory Alpacy ani kurátory Bluesky, takže 29 % Alpacy by mělo špatný tier |
 
 **Záznam zdrojů (bod 3):**
@@ -309,12 +334,10 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
 - A — čas prvního stažení:
   - dopad se měří až od stažení (perioda 60 s a zpoždění feedu), takže CPI a NFP na kartě
     přijdou o první skok;
-  - položka má jiný `ts_event` než řádek kalendáře, takže model ji počítá jako druhý vzorek
-    (pseudoreplikace);
   - restart v jiný den změní `dedup_hash` a release se zapíše znovu, pokud nepomůže kontrola
     `(source, source_uid)`.
 - **B — čas releasu z kalendáře, záložně čas stažení** (doporučeno): přesný čas 8:30:00,
-  stabilní hash a jeden vzorek s řádkem FF. Cenou je párování položky na řádek kalendáře
+  stabilní hash a týž čas jako řádek FF. Cenou je mapování feed → titulek releasu FF
   a záloha, když kalendář chybí (`raw.ts_source = fetch`, viditelné).
 - C — čas položky: look-ahead 39 min.
 
@@ -361,8 +384,8 @@ Doporučení se řídí kritérii AGENTS.md: rychlost, výkon, relevance dat.
     - zápis kopií ze všech cest včetně `newsticks`, s `content_tier` kopie;
     - oprava docstringu `dedup.py:8-11` a poznámka u SPEC 3.3.
   - **E-6.25:**
-    - pravidla `ts_event` a pojistky z bodu 5 s testy (restart v jiný den, první dávka nového
-      zdroje, rok 1899, čas BLS z kalendáře);
+    - pravidla `ts_event` a pojistky z bodu 5 s testy (restart v jiný den, první stažení
+      po startu procesu, rok 1899, čas BLS z kalendáře, kolize s jiným řádkem FF téhož dne);
     - kategorie a importance podle feedu;
     - SEC podle bodu 6 s připomínkou kritéria setrvání;
     - kontakt `GEXLENS_NEWS_UA_CONTACT`.
