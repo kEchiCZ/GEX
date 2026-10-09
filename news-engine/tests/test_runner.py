@@ -206,17 +206,20 @@ def test_writer_stores_content_tier_from_source_and_raw(tmp_path: Path) -> None:
     ensure_sentiment_schema(engine)
     writer = NewsWriter(engine)
     events = [
-        NewsEvent(TS, TS, "alpaca", "headline", "US CPI rises", raw={"author": "Benzinga Newsdesk"}),
-        NewsEvent(TS, TS, "alpaca", "headline", "Five stocks to watch", raw={"author": "Jane Doe"}),
+        NewsEvent(
+            TS, TS, "alpaca", "headline", "US CPI rises", raw={"author": "Benzinga Newsdesk"}
+        ),
+        NewsEvent(TS, TS, "alpaca", "headline", "Five stocks", raw={"author": "Jane Doe"}),
         NewsEvent(TS, TS, "bluesky", "social", "Fed hikes", raw={"did": "d", "curated": True}),
         NewsEvent(TS, TS, "reddit_rss", "social", "YOLO calls"),
     ]
     assert writer.write(events) == 4
     with engine.connect() as conn:
-        tiers = dict(conn.execute(select(news_events.c.title, news_events.c.content_tier)).all())
+        rows = conn.execute(select(news_events.c.title, news_events.c.content_tier)).all()
+    tiers = {row.title: row.content_tier for row in rows}
     assert tiers == {
         "US CPI rises": 2,
-        "Five stocks to watch": 3,
+        "Five stocks": 3,
         "Fed hikes": 2,
         "YOLO calls": None,
     }
