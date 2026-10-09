@@ -197,3 +197,49 @@ def test_cached_bars_evict_oldest(tmp_path: Path) -> None:
     bars.load_day("ES", DAY + dt.timedelta(days=2))
     assert ("ES", DAY) not in bars._cache
     assert len(first) == 24 * 60
+
+
+def test_symbol_without_row_is_inserted_and_market_closed_corrected(tmp_path: Path) -> None:
+    engine = make_engine(tmp_path)
+    data = tmp_path / "data"
+    write_bars(data, "ES", DAY, drift_bp=20.0)
+    write_bars(data, "NQ", DAY, drift_bp=-10.0)
+    event_id = add_event(engine, EVENT_TS, "AAPL Q3 EPS")
+    with engine.begin() as conn:  # zpráva chybně odhadnutá jako „zavřeno“ (#339)
+        conn.execute(
+            news_events.update().where(news_events.c.id == event_id).values(market_closed=True)
+        )
+    add_reaction(engine, event_id, "ES", ret_5=99.0, range_5=1.0, computed_at_min=COMPUTED)
+
+    report = script.run(engine, data, apply=True, now=NOW)
+    assert dict(report.filled) == {("2026-07", "NQ"): 1}
+    assert reaction(engine, event_id, "NQ")["ret_5"] == pytest.approx(-10.0)  # INSERT
+    assert reaction(engine, event_id, "ES")["ret_5"] == 99.0
+    with engine.connect() as conn:
+        closed = conn.execute(
+            select(news_events.c.market_closed).where(news_events.c.id == event_id)
+        ).scalar_one()
+    assert closed is False  # oba symboly obchodovaly
+
+
+def test_baseline_is_taken_for_event_trading_day(tmp_path: Path, monkeypatch: Any) -> None:
+    engine = make_engine(tmp_path)
+    data = tmp_path / "data"
+    (data / "derived").mkdir(parents=True)
+    # 20:05 UTC = 15:05 CT → seance 29. 7.; 23:30 UTC = 18:30 CT → už seance 30. 7.
+    evening = dt.datetime(2026, 7, 29, 23, 30, tzinfo=dt.UTC)
+    for ts in (EVENT_TS, evening):
+        daily_only(engine, add_event(engine, ts, f"zpráva {ts.isoformat()}"))
+    days: list[tuple[str, dt.date]] = []
+    monkeypatch.setattr(
+        script.ReactionJob,
+        "baseline_for",
+        lambda self, symbol, day: days.append((symbol, day)),
+    )
+    script.run(engine, data, apply=False, now=NOW)
+    assert days == [
+        ("ES", DAY),
+        ("NQ", DAY),
+        ("ES", DAY + dt.timedelta(days=1)),
+        ("NQ", DAY + dt.timedelta(days=1)),
+    ]

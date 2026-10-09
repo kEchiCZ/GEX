@@ -11,15 +11,27 @@ přibudou. Tenhle skript ji doplní touž cestou jako job
   a symbol nemá minutovou fázi.
 * Měří se všechny symboly, ale zapisují se jen ty bez minutové fáze.
   Existující měření se nepřepisuje a nic se nemaže. `market_closed` se opraví
-  ze všech změřených symbolů jako v jobu (#339).
+  ze všech změřených symbolů jako v jobu (#339). Výjimka: deferred minutová
+  fáze zapíše i `closure_open_ts`, který mohla nastavit denní fáze. Na týchž
+  barech je to tatáž hodnota.
 * Baseline objemu (`vol_z`) se bere k obchodnímu dni eventu (point-in-time),
   stejně jako u jobu, který měří hned po zprávě.
 * Pár bez barů zůstane bez minutové fáze a report ho započte (zavřený trh
   nebo díra v archivu).
 * Idempotentní: druhý běh najde jen páry, které bary pořád nemají.
 
-Do jobu se doplňování nedává, protože pár bez barů by se vybíral každý cyklus
-(past #655). Skript se pustí ručně po každém backfillu barů.
+Díra vzniká dvěma cestami:
+
+* backfill zpráv proběhne před backfillem barů;
+* v běžném provozu symbol, který v T+60 min nemá bary (výpadek feedu, restart
+  enginu), dostane jen denní fázi. `run` zapíše jen změřené symboly a event
+  z pending dotazu vypadne. Díru v barech pak doplní automatický backfill
+  `ibkr_hist`, reakci ale ne.
+
+Do jobu se doplňování zatím nedává, protože pár bez barů by se vybíral každý
+cyklus (past #655). Skript se pouští ručně po backfillu barů nebo výpadku.
+Trvalé řešení v jobu je otevřené v #1494. Jeden event trvá ~0,15 s, takže
+~15 tis. kandidátů znamená ~35 min na průchod; dry-run měří stejně jako `--apply`.
 
 Režimy: výchozí dry-run jen čtením (PG `default_transaction_read_only`), `--apply`
 zapíše. Před `--apply` na produkci záloha `pwsh scripts/backup-postgres.ps1`.
@@ -54,8 +66,10 @@ from gexlens_news.reactions import DEFAULT_WINDOWS, Bar, VolumeBaseline  # noqa:
 
 SYMBOLS = ("ES", "NQ")
 DEFAULT_BATCH = 500
-#: Partic v paměti — eventy jdou podle času, okno eventu čte ~12 dní na symbol
-CACHE_DAYS = 64
+#: Partic v paměti: baseline čte ~57 partic na symbol (`recent_sessions`: 2 × 20
+#: seancí + 14 dní + kraje) a okno eventu ~13; dva symboly ≈ 140, s rezervou 160.
+#: Méně než 140 čte partice dokola (měřeno 64 → 5,5× víc čtení).
+CACHE_DAYS = 160
 
 
 class CachedBars(BarsRepository):
@@ -126,6 +140,8 @@ def candidates(
     """Eventy s aspoň jedním řádkem reakcí, kterým chybí minutová fáze symbolu.
 
     Event bez řádku vůbec patří běžnému jobu (`_pending_events`), ne sem.
+    Výjimkou je tombstone `daily_uncomputable` (#655), který job vynechává.
+    Ten bary neměl ani pro denní fázi, takže by ho nedoplnil ani skript.
     Jen eventy s uzavřeným nejdelším minutovým oknem; podle `ts_event`.
     """
     incomplete = (
@@ -174,7 +190,10 @@ def run(
 ) -> Report:
     """Doplní (nebo v dry-runu jen spočítá) minutovou fázi kandidátů."""
     job = ReactionJob(engine, CachedBars(data_dir), symbols=symbols)
-    baselines: dict[dt.date, dict[str, dict[dt.time, VolumeBaseline] | None]] = {}
+    # Eventy jdou podle času, takže stačí držet baseline jen aktuálního dne
+    # (všechny dny by držely ~270 MB)
+    baseline_day: dt.date | None = None
+    baselines: dict[str, dict[dt.time, VolumeBaseline] | None] = {}
     report = Report()
     for candidate in candidates(engine, now, symbols=symbols, batch=batch):
         month = candidate.ts_event.strftime("%Y-%m")
@@ -182,11 +201,10 @@ def run(
             report.missing[(month, symbol)] += 1
         # Baseline k obchodnímu dni eventu, ne k dnešku (point-in-time)
         day = trading_session_date(candidate.ts_event)
-        if day not in baselines:
-            baselines[day] = {symbol: job.baseline_for(symbol, day) for symbol in symbols}
-        measurement = job.measure_minute(
-            candidate.ts_event, candidate.category, baselines[day], now
-        )
+        if day != baseline_day:
+            baseline_day = day
+            baselines = {symbol: job.baseline_for(symbol, day) for symbol in symbols}
+        measurement = job.measure_minute(candidate.ts_event, candidate.category, baselines, now)
         fillable = [row for row in measurement.rows if row.symbol in candidate.missing]
         if not fillable:
             continue
