@@ -130,7 +130,7 @@ Každý collector implementuje `fetch() -> list[RawItem]`, `normalize(RawItem) -
 
 ### 3.3 Deduplikace a slučování
 - Hash: normalizovaný titulek (lowercase, bez interpunkce a stopwords). Porovnává se **rolling window** — proti všem eventům z posledních 10 minut (in-memory cache + DB fallback), žádné fixní časové buckety (boundary problém).
-- Stejná story z více zdrojů → jeden event, `raw` uchová všechny payloady, `source` = první zdroj (nejrychlejší), seznam ostatních v `raw.merged_sources`. Latence per zdroj se loguje → data pro budoucí prioritizaci zdrojů.
+- Stejná story z více zdrojů → jeden event, `raw` uchová všechny payloady, `source` = první zdroj (nejrychlejší), seznam ostatních v `raw.merged_sources`. Latence per zdroj se loguje → data pro budoucí prioritizaci zdrojů. **Nahrazeno ADR-0059 bod 3 (#1489):** `raw.merged_sources` se do DB nikdy nedostal (audit #1473); kopie z jiného zdroje (rolling dedup exaktní i Jaccard, unikátní `dedup_hash`, IBKR pásky z enginu) se zapisuje do tabulky `news_event_sources` (`event_id` prvního doručení, `source`, `source_uid`, `content_tier`, `published_at`, `fetched_at`; PK `(event_id, source)`). Payload kopie se neukládá, `ts_event` prvního doručení se nepřepisuje; efektivní tier a nejdřívější publikace se počítají při čtení.
 - Vědomé omezení: exaktní hash nechytí přeformulovanou story mezi zdroji. Fuzzy matching (simhash) je samostatné follow-up issue, do N1 nepatří.
 
 ### 3.4 Backfill (jednorázově při zřízení + doplňkově)
