@@ -369,13 +369,15 @@ def test_fuzzy_copy_from_another_batch_is_recorded(tmp_path: Path) -> None:
                 "Medicare is about to change a drug program that held down the cost of premiums",
                 "finnhub",
                 at=TS + dt.timedelta(minutes=2),
+                ingested=TS + dt.timedelta(minutes=3),
             )
         ]
     )
     [first] = stored_events(inner)
-    assert [(c.event_id, c.source, c.content_tier) for c in stored_copies(inner)] == [
-        (first.id, "finnhub", 3)
-    ]
+    [copy] = stored_copies(inner)
+    assert (copy.event_id, copy.source, copy.content_tier) == (first.id, "finnhub", 3)
+    assert copy.published_at.replace(tzinfo=dt.UTC) == TS + dt.timedelta(minutes=2)
+    assert copy.fetched_at.replace(tzinfo=dt.UTC) == TS + dt.timedelta(minutes=3)
 
 
 def test_copies_are_idempotent_and_same_source_leaves_no_row(tmp_path: Path) -> None:
@@ -479,3 +481,20 @@ def test_news_copy_of_ibkr_tape_is_recorded(tmp_path: Path) -> None:
     assert [(c.event_id, c.source, c.content_tier) for c in stored_copies(inner)] == [
         (stored.id, "alpaca", 2)
     ]
+
+
+def test_priming_keeps_earliest_occurrence_regardless_of_db_order() -> None:
+    """Dva řádky téhož titulku v okně (přes půlnoc UTC = jiný `dedup_hash`):
+    kopie po restartu míří na první doručení, ať DB vrátí řádky v jakémkoli pořadí.
+    """
+    before_midnight = dt.datetime(2026, 10, 8, 23, 58, tzinfo=dt.UTC)
+    earlier = event("Overnight selloff", "finnhub", at=before_midnight)
+    later = event("Overnight selloff", "rss_news", at=before_midnight + dt.timedelta(minutes=4))
+    assert earlier.dedup_hash != later.dedup_hash
+
+    dedup = RollingDeduplicator(window_minutes=10)
+    dedup.prime([later, earlier])
+    copy = event("Overnight selloff", "alpaca", at=before_midnight + dt.timedelta(minutes=5))
+    result = dedup.process([copy])
+
+    assert [c.first_hash for c in result.copies] == [earlier.dedup_hash]

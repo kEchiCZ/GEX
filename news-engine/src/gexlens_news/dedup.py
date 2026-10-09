@@ -105,20 +105,25 @@ class RollingDeduplicator:
             del self._seen[key]
 
     def prime(self, events: Sequence[NewsEvent]) -> None:
-        """Naplní okno z DB po startu — jinak by se po restartu duplikovalo."""
+        """Naplní okno z DB po startu — jinak by se po restartu duplikovalo.
+
+        Ze dvou řádků téhož klíče (přes půlnoc UTC = jiný `dedup_hash`) zůstane
+        nejdřívější bez ohledu na pořadí z DB: kopie se přiřazuje k prvnímu
+        doručení (ADR-0059 bod 3).
+        """
         for event in events:
             key = self.key_of(event)
-            self._seen.setdefault(
-                key,
-                _Seen(
-                    key=key,
-                    ts_event=event.ts_event,
-                    first_source=event.source,
-                    first_ingested=event.ts_ingested,
-                    kind=event.kind,
-                    tokens=frozenset(key.split()),
-                    dedup_hash=event.dedup_hash,
-                ),
+            current = self._seen.get(key)
+            if current is not None and current.ts_event <= event.ts_event:
+                continue
+            self._seen[key] = _Seen(
+                key=key,
+                ts_event=event.ts_event,
+                first_source=event.source,
+                first_ingested=event.ts_ingested,
+                kind=event.kind,
+                tokens=frozenset(key.split()),
+                dedup_hash=event.dedup_hash,
             )
 
     def _fuzzy_match(self, event: NewsEvent, key: str) -> _Seen | None:

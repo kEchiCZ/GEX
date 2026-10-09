@@ -268,14 +268,19 @@ def test_tape_copy_of_stored_news_is_recorded_as_source(tmp_path: Path) -> None:
     assert key is not None
 
     tick_at = NOW - dt.timedelta(seconds=10)
-    tick = FakeTick("!DJ-RTG Fed holds rates", articleId="x1", timeStamp=int(tick_at.timestamp()))
+    tick = FakeTick(
+        "!BRFG Fed holds rates",
+        providerCode="BRFG",
+        articleId="x1",
+        timeStamp=int(tick_at.timestamp()),
+    )
     assert collector.write([tick], now=NOW) == []
 
     with engine.connect() as conn:  # type: ignore[attr-defined]
         assert [r.source for r in conn.execute(select(news_events.c.source))] == ["alpaca"]
         copy = conn.execute(select(news_event_sources)).one()
     assert copy.event_id == key[0]
-    assert (copy.source, copy.source_uid, copy.content_tier) == ("ibkr_dj-rtg", "x1", 3)
+    assert (copy.source, copy.source_uid, copy.content_tier) == ("ibkr_brfg", "x1", 3)
     assert copy.published_at.replace(tzinfo=dt.UTC) == tick_at
     assert copy.fetched_at.replace(tzinfo=dt.UTC) == NOW
 
