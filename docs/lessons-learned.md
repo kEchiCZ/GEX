@@ -16,6 +16,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-10-09 — `uv run --env-file .env` vypsal řádek `.env` do konzole (#1486).**
+  Při ručním backfillu proti produkční PG uv narazil na hodnotu s mezerami bez uvozovek a varování
+  „Failed to parse environment file `.env` at position N: …“ obsahovalo **celou hodnotu řádku** (osobní
+  kontakt). Do repa ani issues se nedostala, jen do výstupu session. → `uv run --env-file` (a jiné
+  nástroje, které při chybě citují vstup) na `.env` nepoužívat; potřebnou proměnnou exportovat bez
+  výpisu: `export GEXLENS_PG_PASSWORD="$(grep -m1 '^GEXLENS_PG_PASSWORD=' .env | cut -d= -f2-)"`.
+  Formát `.env` ověřovat jen počty shod (`grep -c`), nikdy výpisem. Hodnoty s mezerami v `.env` dávat
+  do uvozovek, jinak je každý parser čte jinak.
 - **2026-10-06 — `await asyncio.to_thread(...)` v minutovém cyklu = cyklus stojí (#1337).**
   Měření disku (bind mount, až 121 s) a purge (~2,5 min) běžely ve vlákně, takže event loop žil, ale
   cyklus na ně čekal — 29. 9. chyběly cykly ES 21:31–21:32 UTC. Purge navíc měl pevných 21:30 UTC, což
