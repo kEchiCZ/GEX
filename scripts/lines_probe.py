@@ -1,7 +1,8 @@
 """Sonda market data lines (#631, #1477): kolik souběžných subskripcí účet reálně obslouží.
 
-Nad stropem IBKR Error 101 neposílá, linky jen tiše nedodávají data (ADR-0001 bod 4).
-Měří se proto doručení dvakrát:
+Hypotéza z provozu (ADR-0001 bod 4): nad stropem IBKR Error 101 neposílá, linky jen
+tiše nedodávají data. #609 přičetl umlčení spíš churnu subskripcí. Měří se proto
+doručení dvakrát:
 - **dodalo**: po požadavku dorazil aspoň jeden tick (`Ticker.time` po čase požadavku;
   ib_async ho posouvá jen daty, ne `tickReqParams` ani `marketDataType`);
 - **proud**: tick dorazil i v okně `HOLD_S` po naplnění. Linka nad stropem může
@@ -24,9 +25,11 @@ Režimy:
   Linky nebere, jde pustit i za běhu enginu.
 
 POZOR: lines jsou SDÍLENÉ per uživatel. Mimo `--dry-run` spouštět VÝHRADNĚ se
-STOPNUTÝM produkčním enginem při zavřeném trhu, jinak sonda trhá produkci; mobil
-ani TWS během měření nepoužívat. Runner scripts/lines-probe-offhours.cmd spouští
-výchozí režim. Pro `--news` ručně:
+STOPNUTÝM produkčním enginem, se svolením vlastníka a **za otevřeného trhu**. Při
+zavřeném trhu nic neteče, takže sonda skončí chybou (`marketclock.is_market_closed`)
+a nevydá falešný verdikt. Výpadek enginu je mezera v datech. Mobil ani TWS během
+měření nepoužívat. Runner scripts/lines-probe-offhours.cmd počítá s pauzou Globexu,
+pro měření proudu se proto nehodí. Ručně:
     docker stop gex-engine-1
     PYTHONUTF8=1 uv run python scripts/lines_probe.py --news
     docker start gex-engine-1   # pak ověřit čerstvost: /status last_tick_ts
@@ -48,6 +51,7 @@ from typing import Any
 
 from ib_async import IB, Contract, Future, Ticker
 
+from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.ibkr.newsticks import (
     broad_tape_providers,
     subscribe_broad_tape,
@@ -213,6 +217,8 @@ def _ranges(positions: Sequence[int]) -> str:
 
 def verdict(a: Fill, b: Fill, a2: Fill, tapes: int) -> str:
     """Rozhoduje proud dat: linka nad stropem může dodat úvodní snímek a pak mlčet."""
+    if a.streaming == 0 or b.streaming == 0:
+        return "NEROZHODNUTO: žádný proud dat (zavřený trh, nebo spojení bez dat) — měřit znovu"
     if a.streaming != a2.streaming:
         return (
             f"NEROZHODNUTO: proud bez pásek se mezi A ({a.streaming}) a A2 ({a2.streaming}) "
@@ -263,6 +269,10 @@ async def main(argv: Sequence[str] | None = None) -> int:
         print("\n".join(log), flush=True)
         if args.dry_run:
             return 0
+        if is_market_closed(dt.datetime.now(dt.UTC)):
+            log.append("Trh je zavřený — proud dat se změřit nedá, sonda končí (jen --dry-run)")
+            print(log[-1], flush=True)
+            return 2
 
         ib.reqMarketDataType(FROZEN)
         if not args.news:
