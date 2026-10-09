@@ -22,7 +22,7 @@ Klíčové invarianty, které schéma vynucuje:
 import datetime as dt
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import (
     JSON,
@@ -42,8 +42,11 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     false,
+    select,
 )
-from sqlalchemy.engine import Engine
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import Connection, Engine
 
 sentiment_metadata = MetaData()
 
@@ -135,6 +138,74 @@ news_events = Table(
     Index("ix_news_events_cat_ts", "category", "ts_event"),
     Index("ix_news_events_source_uid", "source", "source_uid"),
 )
+
+# Kopie téže zprávy z jiných zdrojů (ADR-0059 bod 3, nahrazuje `raw.merged_sources`
+# z ADR-0016). První doručení zůstává jen v `news_events`; payload kopie se
+# neukládá, titulek je podle definice duplicity stejný. Řádek je viditelný od
+# `fetched_at` (point-in-time), `ts_event` prvního doručení se nepřepisuje.
+news_event_sources = Table(
+    "news_event_sources",
+    sentiment_metadata,
+    Column("event_id", Integer, ForeignKey("news_events.id"), primary_key=True),
+    Column("source", String(32), primary_key=True),
+    Column("source_uid", String(128), nullable=True),
+    # Tier kopie z `compute.news_tier.content_tier` — efektivní tier zprávy je
+    # nejnižší ze všech doručení viditelných v čase t
+    Column("content_tier", SmallInteger, nullable=True),
+    # Čas publikace podle zdroje kopie (pravidla jako u `ts_event`)
+    Column("published_at", DateTime(timezone=True), nullable=False),
+    Column("fetched_at", DateTime(timezone=True), nullable=False),
+)
+
+#: Výsledek zápisu kopie: nový řádek / nic nového (týž zdroj jako první
+#: doručení nebo kopie zdroje už zapsaná) / první doručení v DB není
+CopyOutcome = Literal["recorded", "skipped", "missing"]
+
+
+def record_news_copy(
+    conn: Connection,
+    *,
+    dedup_hash: str,
+    source: str,
+    source_uid: str | None,
+    content_tier: int | None,
+    published_at: dt.datetime,
+    fetched_at: dt.datetime,
+) -> CopyOutcome:
+    """Zapíše kopii zprávy k prvnímu doručení (ADR-0059 bod 3) — jediná cesta.
+
+    Volá ji rolling dedup news-enginu i konflikt na unikátním `dedup_hash`
+    (news-engine `NewsWriter`, engine `newsticks`). První doručení se hledá
+    podle `dedup_hash`: rolling dedup zná hash prvního výskytu v okně a při
+    konfliktu je hash kopie a prvního doručení z definice stejný. Kopie téhož
+    zdroje zůstává duplicitou bez záznamu. `ON CONFLICT DO NOTHING` nad PK
+    `(event_id, source)` dělá zápis idempotentním a drží nejdřívější kopii.
+    """
+    first = conn.execute(
+        select(news_events.c.id, news_events.c.source).where(news_events.c.dedup_hash == dedup_hash)
+    ).first()
+    if first is None:
+        return "missing"
+    if first.source == source:
+        return "skipped"
+    insert = pg_insert if conn.dialect.name == "postgresql" else sqlite_insert
+    stmt = (
+        insert(news_event_sources)
+        .values(
+            event_id=first.id,
+            source=source,
+            source_uid=source_uid,
+            content_tier=content_tier,
+            published_at=published_at,
+            fetched_at=fetched_at,
+        )
+        .on_conflict_do_nothing(
+            index_elements=[news_event_sources.c.event_id, news_event_sources.c.source]
+        )
+        .returning(news_event_sources.c.event_id)
+    )
+    return "recorded" if conn.execute(stmt).first() is not None else "skipped"
+
 
 # Append-only verzování (S11): každý průchod klasifikace přidá řádek, nikdy
 # nepřepisuje. Umožňuje rekonstruovat, co systém věděl v libovolném okamžiku —
