@@ -32,7 +32,7 @@ import datetime as dt
 import statistics
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,12 +48,15 @@ from gexlens_engine.compute.news_significance import (  # noqa: E402
     is_key,
 )
 from gexlens_engine.compute.news_tier import SourceCopy, effective_tier  # noqa: E402
+from gexlens_engine.compute.settle import is_trading_session  # noqa: E402
 from gexlens_engine.storage.sentiment import news_event_sources, news_events  # noqa: E402
 from gexlens_news.breaking import card_group, is_breaking, is_confirmed  # noqa: E402
 
 #: Nasazení E-6.24b — od té chvíle se kopie z jiných zdrojů zaznamenávají
 COPIES_FROM = dt.datetime(2026, 10, 9, 12, 1, 22, tzinfo=dt.UTC)
 DEFAULT_DAYS = 30
+#: Zpoždění příjmu za publikací, nad kterým zpráva není čerstvá (varianta C)
+STALE_MIN = 60
 WEEKDAYS = ("po", "út", "st", "čt", "pá", "so", "ne")
 
 
@@ -278,11 +281,11 @@ def render(timelines: Sequence[Timeline], *, as_of: dt.datetime, days: int) -> s
         "### Zdroje nepotvrzených zpráv (celé okno)",
         "",
         "| zdroj | nepotvrzené | později potvrzené "
-        "| medián zpoždění `ts_ingested − ts_event` (min) | nad 60 min |",
+        f"| medián zpoždění `ts_ingested − ts_event` (min) | nad {STALE_MIN} min |",
         "|---|---|---|---|---|",
     ]
     for source, stats in sorted(by_source(timelines).items(), key=lambda kv: -kv[1].unconfirmed):
-        stale = sum(lag > 60 for lag in stats.lags_min)
+        stale = sum(lag > STALE_MIN for lag in stats.lags_min)
         lines.append(
             f"| {source} | {stats.unconfirmed} | {stats.later_confirmed} "
             f"| {_median(stats.lags_min)} | {stale} ({_pct(stale, stats.unconfirmed)}) |"
@@ -297,8 +300,50 @@ def render(timelines: Sequence[Timeline], *, as_of: dt.datetime, days: int) -> s
         "### Skupiny nepotvrzených zpráv (celé okno)",
         "",
         ", ".join(f"{group} {count}" for group, count in groups.most_common()) or "—",
+        "",
+        "### Varianty zpřísnění — nepotvrzené při vstupu (celé okno)",
+        "",
+        "| varianta | celkem | průměr na obchodní den | víkend a svátky |",
+        "|---|---|---|---|",
     ]
+    first_day = (as_of - dt.timedelta(days=days)).astimezone(dt.UTC).date()
+    window = [first_day + dt.timedelta(days=n) for n in range(days + 1)]
+    sessions = {day for day in window if is_trading_session(day)}
+    for name, count_session, count_other in variant_counts(timelines, sessions):
+        average = f"{count_session / len(sessions):.1f}" if sessions else "—"
+        lines.append(f"| {name} | {count_session + count_other} | {average} | {count_other} |")
     return "\n".join(lines)
+
+
+def is_stale(event: Event) -> bool:
+    return event.ts_ingested - event.ts_event > dt.timedelta(minutes=STALE_MIN)
+
+
+def variant_counts(
+    timelines: Sequence[Timeline], sessions: set[dt.date]
+) -> list[tuple[str, int, int]]:
+    """Nepotvrzené při vstupu podle varianty: (název, v obchodní dny, ostatní dny)."""
+    unconfirmed = [item for item in timelines if not item.confirmed_on_entry]
+
+    def key(item: Timeline) -> bool:
+        event = item.event
+        return is_key(event.kind, event.importance, event.category)
+
+    def fresh(item: Timeline) -> bool:
+        return not is_stale(item.event)
+
+    variants: list[tuple[str, Callable[[Timeline], bool]]] = [
+        ("A — všechny (rozhodnutí 9. 10.)", lambda item: True),
+        ("B — jen `is_key`", key),
+        (f"C — jen čerstvé (zpoždění ≤ {STALE_MIN} min)", fresh),
+        ("B + C", lambda item: key(item) and fresh(item)),
+    ]
+    rows = []
+    for name, keep in variants:
+        kept = [item for item in unconfirmed if keep(item)]
+        in_session = sum(item.entered.astimezone(dt.UTC).date() in sessions for item in kept)
+        rows.append((name, in_session, len(kept) - in_session))
+    return rows
 
 
 def main(argv: Sequence[str] | None = None) -> None:

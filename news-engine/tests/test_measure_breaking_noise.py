@@ -164,3 +164,21 @@ def test_load_from_db(tmp_path: Path) -> None:
     assert [item.event.id for item in items] == [ids[0]]
     assert items[0].lead == 5 * MIN
     assert items[0].confirmed_by == "alpaca"
+
+
+def test_variant_counts_split_trading_days_and_weekend() -> None:
+    saturday = dt.datetime(2026, 10, 10, 13, 0, tzinfo=dt.UTC)
+    items = [
+        script.timeline(event(3, importance=3), [], until=UNTIL),  # zásadní, čerstvá
+        script.timeline(event(3, source="finnhub", lag=dt.timedelta(hours=8)), [], until=UNTIL),
+        script.timeline(event(3, ingested=saturday), [], until=saturday + MIN),
+        script.timeline(event(2, source="alpaca"), [], until=UNTIL),  # potvrzená — nepočítá se
+    ]
+    sessions = {T0.date()}  # pátek 9. 10.; sobota obchodní den není
+    rows = {
+        name.split(" —")[0]: (session, other)
+        for name, session, other in script.variant_counts(items, sessions)
+    }
+    assert rows == {"A": (2, 1), "B": (1, 0), "C": (1, 1), "B + C": (1, 0)}
+    report = script.render(items, as_of=saturday + MIN, days=1)
+    assert "| A — všechny (rozhodnutí 9. 10.) | 3 | 2.0 | 1 |" in report
