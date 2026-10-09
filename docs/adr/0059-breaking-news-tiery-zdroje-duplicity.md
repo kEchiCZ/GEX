@@ -2,6 +2,10 @@
 
 - **Stav:** přijato (9. 10. 2026, rozhodnutí vlastníka v chatu, zapsané v PR #1484: doporučené
   varianty všech bodů; „výzkum bank“ varianta A, protože původní záměr skupiny už není znám)
+- **Revize 9. 10. 2026 odpoledne (E-6.27, #1491):** bod 4 — významná zpráva tier 3 jde na kartu
+  hned se štítkem „článek, zatím nepotvrzeno“ (rozhodnutí vlastníka, Rozhodnuto v #1385);
+  výjimka mega caps předregistrované kritérium nesplnila, takže se nezavádí a SEC se nepoužije
+  (bod 6 varianta A, E-6.25b zrušen)
 - **Datum:** 2026-10-09
 - **Souvisí:** #1482 (E-6.23), #1406 (Fáze 6), #1385 (Rozhodnuto 8. 10. — breaking news), audit
   zdrojů #1473 (`docs/research/1473-audit-zdroju-zprav.md`), test kandidátů #1474
@@ -79,8 +83,8 @@ a test kandidátů (E-6.22) daly tato tvrdá data:
 ## Rozhodnutí
 
 Vlastník 9. 10. 2026 přijal doporučené varianty všech bodů. Varianty jsou v oddílu „Zvažované
-varianty“. Výjimka mega caps (bod 4), a s ní SEC (bod 6), platí jen po splnění
-předregistrovaného kritéria.
+varianty“. Výjimka mega caps (bod 4), a s ní SEC (bod 6), platila jen po splnění
+předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
 
 1. **Tier obsahu = `content_tier`** (1 oficiální zdroj, 2 headline feed, 3 článek nebo analýza,
    NULL = mimo tiery). V UI se zobrazuje jako „Tier 1/2/3“. Identifikátor `content_tier` se
@@ -142,10 +146,22 @@ předregistrovaného kritéria.
      s jednou kopií na zprávu: ~1,1 mil. řádků × ~130 B (řádek ~100 B a PK ~30 B, odhad
      z šířky sloupců) ≈ **140 MB za rok**. Skutečný denní objem změří E-6.29.
 4. **`is_breaking`, skupina a téma se počítají při čtení, nic z toho se neukládá:**
-   - `is_breaking = efektivní tier ∈ {1, 2} ∧ is_significant(kind, importance, category)`
-     (ADR-0045 bod 5).
-     - Předfiltr v SQL (`importance ≥ 2` a tier ≤ 2 v `news_events` **nebo**
-       v `news_event_sources`) je nadmnožina. Přesné pravidlo běží v jedné funkci.
+   - `is_breaking = efektivní tier ∈ {1, 2, 3} ∧ is_significant(kind, importance, category)`
+     (ADR-0045 bod 5; **revize 9. 10.:** původně jen tier 1–2). Tier NULL (kalendář, Reddit,
+     Bluesky bez kurátora) na kartu nejde.
+     - **Potvrzení:** zpráva s efektivním tierem 1–2 je potvrzená. Zpráva s efektivním tierem 3
+       jde na kartu **hned** se štítkem „článek, zatím nepotvrzeno“. Štítek zmizí v okamžiku,
+       kdy je viditelná kopie tier 1–2 (`fetched_at`, point-in-time). Důvod (vlastník 9. 10.):
+       trader potřebuje zprávu co nejdřív, i když ji pomalejší zdroj přinese dřív než Benzinga
+       Newsdesk. Kopie je jen táž zpráva (bod 3), takže článek s jiným titulkem o téže události
+       potvrdí až shluk (E-6.6, E-6.17).
+     - **Šum** změřil E-6.27 (`docs/research/1491-sum-karty-breaking.md`): za 30 dní polovina
+       karty nepotvrzená, ~40 zpráv za obchodní den, z toho 40 % Finnhub s mediánem zpoždění
+       11 h. Zpřísnění (jen `is_key`, jen čerstvé zprávy) jen po rozhodnutí vlastníka;
+       přeměření s kopiemi #1492.
+     - Předfiltr v SQL (`importance ≥ 2` a tier není NULL v `news_events` **nebo**
+       v `news_event_sources`) je nadmnožina. Přesné pravidlo běží v jedné funkci
+       (`news-engine/src/gexlens_news/breaking.py`).
      - Výpočet při čtení v API má precedens ve významnosti (ADR-0045 bod 5).
      - Vlastní slovník klíčových slov ani kritérium „krátký headline“ nevzniká. Fed, CPI, NFP
        a cla už jsou spouštěče v2 (`EVENT_KINDS`, `classifier.py:536-538`) a krátký titulek
@@ -154,9 +170,9 @@ předregistrovaného kritéria.
        testem a `is_breaking` ho převezme.
    - **Firmy na kartě:** ADR-0045 výsledky firem z významnosti vyřazuje vždy (Kontext 5).
      Na kartě by tak skupina „firmy“ zůstala prázdná a SEC by na ni nikdy nic nedodal.
-     Výjimka **jen pro kartu**: zpráva tier 1–2 v kategorii `EARNINGS`
+     Navržená výjimka **jen pro kartu**: zpráva tier 1–2 v kategorii `EARNINGS`
      s importance ≥ 2, jejíž `symbols` obsahují firmu ze seznamu mega caps (bod 6), je
-     breaking. Významnost pro upozornění, gate a model se nemění.
+     breaking. Významnost pro upozornění, gate a model by se neměnila.
      - `TECH` výjimku nepotřebuje, s importance ≥ 2 je významné už dnes
        (`news_significance.py:47`).
      - **Podmínka (předregistrované kritérium):** E-6.27 nejdřív z `news_reactions` porovná
@@ -164,6 +180,14 @@ předregistrovaného kritéria.
        kontaminovaných oken. Výjimka se zavede, jen když:
        - má každá skupina n ≥ 30;
        - 95% bootstrap CI rozdílu mediánů `range_5` leží nad nulou.
+     - **Výsledek (revize 9. 10., `docs/research/1491-mega-caps-earnings.md`): nesplněno,
+       výjimka se nezavádí.** Upřesnění zapsaná v #1491 před spuštěním: jen éra živého sběru od
+       28. 7. 2026 (backfill Alpaca výsledky malých firem neobsahuje), bez odložených reakcí,
+       kontrola robustnosti přes unikátní minutu okna NQ. Mega caps n = 81, ostatní n = 2 876:
+       rozdíl mediánů `range_5` −0,90 bp, 95% CI [−1,97; 0,16]; po minutách −0,46 bp
+       [−1,52; 0,60]. Celá historie by kritérium splnila, ale srovnává mega caps z backfillu
+       s ostatními ze živého sběru, tedy dvě období s různou volatilitou. Skupinu „firmy“ tvoří
+       jen `TECH`.
    - Odznak zásadní zprávy je stávající `is_key`.
    - **Skupina na kartě** je zobrazovací mapování stávající `category`. Slovník kategorií se
      nemění, protože je klíčem modelu a K1.
@@ -173,7 +197,7 @@ předregistrovaného kritéria.
      | makro data | `MACRO_INFLATION`, `MACRO_LABOR`, `MACRO_GROWTH` |
      | centrální banky | `FED` a zprávy zdroje `ecb` |
      | geopolitika | `GEOPOLITICS`, `ENERGY` |
-     | firmy | `EARNINGS` (jen mega caps podle výjimky výše), `TECH` |
+     | firmy | `TECH` (`EARNINGS` jen v mapování; výjimka mega caps nesplnila kritérium) |
      | ostatní | `CRYPTO`, `OTHER` |
 
      „Výzkum bank“ jako skupina nevzniká. Analytické akce v2 shazuje na importance 1 a na
@@ -182,6 +206,15 @@ předregistrovaného kritéria.
    - **Téma** je jedna entita z jednoho slovníku: aktéři režimu z klasifikátoru (Írán, Izrael,
      Hormuz, Čína/Tchaj-wan, OPEC…), cla, Fed a další. Bere se první shoda podle pořadí ve
      slovníku a počítá se při čtení z titulku.
+     - **Upřesnění E-6.27:** shoda se hledá nejdřív v předmětu titulku, pak v celém titulku,
+       stejně jako kategorie (`classify_category`). „Oil jumps as Iran seizes tanker“ má téma
+       ropa, ne Írán.
+     - Slovník (`THEMES` v `breaking.py`) skládá jen vzory klasifikátoru v tomto pořadí:
+       regionální průzkum Fedu jako růst, Fed, cla a obchodní dohody, aktéři režimu po jednom
+       (`REGIME_ACTORS`, ze kterých vzniká `ACTORS`), energie, inflace, trh práce, růst,
+       fiskální riziko USA (shutdown, dluhový strop, rating).
+     - Identifikátor je `theme`, protože `topic` už v API znamená index kategorie
+       (`topic_value`). Popisky témat a skupin v češtině dodá UI (E-6.28).
 5. **Zdroje tier 1 (E-6.25) a jejich `ts_event`, kategorie a importance:**
    - Zdroje podle E-6.22: Fed testimony, BLS `empsit`/`cpi`/`ppi`/`jolts`/`eci`, BEA
      z `www.bea.gov/news/rss` (po ověření úplnosti proti kalendáři), ECB, White House ×2.
@@ -234,6 +267,8 @@ předregistrovaného kritéria.
 6. **SEC, Treasury, Finnhub, tier 2:**
    - **SEC = varianta B, ale jen spolu s výjimkou mega caps z bodu 4.** Když výjimka kritérium
      nesplní, SEC na kartu nic nedodá a platí varianta A (nepoužít).
+     **Revize 9. 10.: výjimka kritérium nesplnila (bod 4), platí varianta A** — SEC se nepoužije
+     a podmíněný návrh níže zůstává jen pro případ nového rozhodnutí.
      - Zdroj: `data.sec.gov/submissions/CIK{10}.json` po firmách, jen 8-K.
      - Seznam mega caps (CIK a symboly) je jedna konstanta: ~30 firem s největší vahou
        v S&P 500 a Nasdaq-100. Sdílí ji výjimka v bodě 4.
@@ -306,8 +341,14 @@ Kritéria volby podle AGENTS.md: rychlost, výkon, relevance dat.
 
 | varianta | výhody | nevýhody |
 |---|---|---|
-| **A — při čtení z efektivního tieru a významnosti** (zvoleno) | jedna definice; reklasifikace i ruční korekce se projeví hned | SQL umí jen předfiltr (`content_tier ≤ 2`, `importance ≥ 2`), přesné pravidlo běží v Pythonu |
+| **A — při čtení z efektivního tieru a významnosti** (zvoleno) | jedna definice; reklasifikace i ruční korekce se projeví hned | SQL umí jen předfiltr (`content_tier` není NULL, `importance ≥ 2`), přesné pravidlo běží v Pythonu |
 | B — uložený příznak s vlastním slovníkem (dnešní znění E-6.27) | rychlý SQL filtr | druhá definice „důležité zprávy“, tedy přesně ten rozjezd, který ADR-0045 odstranil; po každé reklasifikaci backfill |
+
+**Zprávy tier 3 na kartě (bod 4, revize 9. 10., vlastník v chatu):**
+- A — až po potvrzení kopií tier 1–2: karta bez neověřených článků, ale zpráva, kterou pomalejší
+  zdroj přinese dřív než Benzinga Newsdesk, se na kartě objeví až s ním.
+- **B — hned se štítkem „článek, zatím nepotvrzeno“** (zvoleno): trader vidí zprávu co nejdřív;
+  cenou je šum, který měří `docs/research/1491-sum-karty-breaking.md` (varianty zpřísnění tam).
 
 **Firmy na kartě (bod 4):**
 - A — žádné: karta jen s makrem, centrálními bankami a geopolitikou. Skupina „firmy“ odpadne
@@ -392,17 +433,21 @@ Kritéria volby podle AGENTS.md: rychlost, výkon, relevance dat.
     - kategorie a importance podle feedu;
     - kontakt `GEXLENS_NEWS_UA_CONTACT`.
   - **E-6.25b (nový):** SEC podle bodu 6 s připomínkou kritéria setrvání. Jen když výjimka
-    mega caps z E-6.27 splní kritérium, jinak se zavře.
+    mega caps z E-6.27 splní kritérium, jinak se zavře. **Revize 9. 10.: zrušen** (kritérium
+    nesplněno, #1491).
   - **E-6.26:** zrušen bez implementace s odkazem na #1474. Nový kandidát se ověří sondou
     `scripts/news_candidates_probe.py`.
   - **E-6.27:**
     - `is_breaking`, skupina a téma při čtení místo ukládání a bez vlastního slovníku;
     - vypadá kritérium „krátký headline“ (nahrazuje ho tier 2) a skupina „výzkum bank“;
-    - předregistrované měření mega caps před výjimkou.
+    - předregistrované měření mega caps před výjimkou;
+    - **revize 9. 10.:** tier 3 na kartě se štítkem „nepotvrzeno“, report šumu a varianty
+      zpřísnění; výjimka mega caps nesplnila kritérium a nevznikla.
   - **E-6.28:**
     - změna ceny a výchylka z barů touž funkcí jako `news_reactions`, fixace v 5. minutě;
     - stav „trh zavřený“;
-    - štítek skupiny a seznam zdrojů se zpožděním z `news_event_sources`.
+    - štítek skupiny a seznam zdrojů se zpožděním z `news_event_sources`;
+    - štítek „článek, zatím nepotvrzeno“ u efektivního tieru 3 a popisky skupin a témat.
   - **E-6.29:** report za 24 h doplní denní objem `news_event_sources` a podíl zpráv, u kterých
     efektivní tier změnila kopie. Návrh přeměřeného `expected_daily_volume` zapíše jednorázový
     skript, protože PATCH registru umí jen `enabled` a seed je insert-if-missing
