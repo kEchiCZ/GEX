@@ -1,11 +1,21 @@
-"""Testy deduplikace (#273, #274): rolling okno, cross-source merge, fuzzy, priming."""
+"""Testy deduplikace (#273, #274): rolling okno, kopie z jiných zdrojů, fuzzy, priming.
+
+Kopie z jiného zdroje se ukládají do `news_event_sources` (ADR-0059 bod 3, #1489).
+"""
 
 import datetime as dt
+import logging
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, select
+from sqlalchemy.engine import Row
 
-from gexlens_engine.storage.sentiment import ensure_sentiment_schema, news_events
+from gexlens_engine.storage.sentiment import (
+    ensure_sentiment_schema,
+    news_event_sources,
+    news_events,
+)
 from gexlens_news.dedup import RollingDeduplicator
 from gexlens_news.model import NewsEvent
 from gexlens_news.pipeline import DedupingWriter
@@ -21,6 +31,7 @@ def event(
     at: dt.datetime = TS,
     ingested: dt.datetime | None = None,
     kind: str = "headline",
+    raw: dict[str, object] | None = None,
 ) -> NewsEvent:
     return NewsEvent(
         ts_event=at,
@@ -29,6 +40,7 @@ def event(
         kind=kind,
         title=title,
         source_uid=f"{source}-{title}",
+        raw=raw or {},
     )
 
 
@@ -43,7 +55,7 @@ def test_rolling_window_beats_fixed_buckets_across_the_boundary() -> None:
 
     result = dedup.process([before, after])
     assert [e.source for e in result.events] == ["finnhub"]
-    assert result.merged == 1
+    assert len(result.copies) == 1
 
 
 def test_same_story_outside_window_is_a_new_event() -> None:
@@ -53,7 +65,7 @@ def test_same_story_outside_window_is_a_new_event() -> None:
 
     result = dedup.process([first, much_later])
     assert len(result.events) == 2  # po 45 minutách je to nová zpráva
-    assert result.merged == 0
+    assert result.copies == []
 
 
 def test_repeated_fetch_of_same_source_is_a_duplicate_not_a_merge() -> None:
@@ -67,7 +79,7 @@ def test_repeated_fetch_of_same_source_is_a_duplicate_not_a_merge() -> None:
     )
     assert len(result.events) == 1
     assert result.duplicates == 1
-    assert result.merged == 0
+    assert result.copies == []
 
 
 def test_normalized_title_matches_across_wording() -> None:
@@ -79,11 +91,11 @@ def test_normalized_title_matches_across_wording() -> None:
         ]
     )
     assert len(result.events) == 1
-    assert result.merged == 1
+    assert len(result.copies) == 1
 
 
-def test_merge_records_source_and_latency() -> None:
-    """Latence per zdroj je podklad pro budoucí prioritizaci (SPEC 3.3)."""
+def test_copy_carries_event_and_first_hash() -> None:
+    """Kopie nese vlastní event (zdroj, časy) a hash prvního výskytu pro zápis."""
     dedup = RollingDeduplicator(window_minutes=10)
     fast = event("Payrolls beat", "finnhub", at=TS, ingested=TS)
     slow = event(
@@ -92,12 +104,10 @@ def test_merge_records_source_and_latency() -> None:
         at=TS + dt.timedelta(seconds=5),
         ingested=TS + dt.timedelta(seconds=42),
     )
-    dedup.process([fast, slow])
+    result = dedup.process([fast, slow])
 
-    merged = dedup.merged_sources(fast)
-    assert len(merged) == 1
-    assert merged[0]["source"] == "rss_news"
-    assert merged[0]["latency_s"] == 42.0
+    assert [c.event for c in result.copies] == [slow]
+    assert result.copies[0].first_hash == fast.dedup_hash
 
 
 def test_key_ignores_day_so_midnight_stories_merge() -> None:
@@ -111,7 +121,7 @@ def test_key_ignores_day_so_midnight_stories_merge() -> None:
         ]
     )
     assert len(result.events) == 1
-    assert result.merged == 1
+    assert len(result.copies) == 1
 
 
 # ── Šířka okna (#351) ──────────────────────────────────────────────
@@ -184,7 +194,7 @@ def test_reformulated_story_merges_across_sources() -> None:
         ]
     )
     assert len(result.events) == 1
-    assert result.merged == 1
+    assert len(result.copies) == 1
 
 
 def test_reformulated_repeat_from_same_source_is_duplicate() -> None:
@@ -204,7 +214,7 @@ def test_reformulated_repeat_from_same_source_is_duplicate() -> None:
     )
     assert len(result.events) == 1
     assert result.duplicates == 1
-    assert result.merged == 0
+    assert result.copies == []
 
 
 def test_template_titles_of_different_companies_stay_apart() -> None:
@@ -255,8 +265,8 @@ def test_scheduled_events_never_merge_fuzzy() -> None:
     assert len(headline_result.events) == 1
 
 
-def test_fuzzy_merge_records_source_for_written_event() -> None:
-    """Sloučený zdroj se ukládá k prvnímu výskytu — i při fuzzy shodě."""
+def test_fuzzy_copy_points_to_first_occurrence() -> None:
+    """Kopie míří na první výskyt i při fuzzy shodě (jiný titulek, jiný hash)."""
     dedup = RollingDeduplicator(window_minutes=10)
     first = event(
         "Medicare is about to change a program that held down the cost of premiums",
@@ -270,11 +280,10 @@ def test_fuzzy_merge_records_source_for_written_event() -> None:
         at=TS + dt.timedelta(minutes=2),
         ingested=TS + dt.timedelta(minutes=2),
     )
-    dedup.process([first, reworded])
+    result = dedup.process([first, reworded])
 
-    merged = dedup.merged_sources(first)
-    assert len(merged) == 1
-    assert merged[0]["source"] == "rss_cnbc"
+    assert [c.event.source for c in result.copies] == ["rss_cnbc"]
+    assert result.copies[0].first_hash == first.dedup_hash != reworded.dedup_hash
 
 
 def test_fuzzy_layer_can_be_disabled() -> None:
@@ -305,29 +314,80 @@ def make_writer(tmp_path: Path) -> tuple[DedupingWriter, NewsWriter]:
     return DedupingWriter(inner, window_minutes=10), inner
 
 
-def test_deduping_writer_persists_merged_sources(tmp_path: Path) -> None:
+def stored_events(inner: NewsWriter) -> list[Row[tuple[int, str]]]:
+    with inner._engine.connect() as conn:  # noqa: SLF001 — kontrola uloženého tvaru
+        return list(conn.execute(select(news_events.c.id, news_events.c.source)))
+
+
+def stored_copies(inner: NewsWriter) -> list[Row[tuple[int, str]]]:
+    with inner._engine.connect() as conn:  # noqa: SLF001 — kontrola uloženého tvaru
+        return list(conn.execute(select(news_event_sources).order_by(news_event_sources.c.source)))
+
+
+NEWSDESK: dict[str, object] = {"author": "Benzinga Newsdesk"}
+
+
+def test_copy_from_second_batch_is_recorded_with_its_tier_and_times(tmp_path: Path) -> None:
+    """Jádro #1489: každý collector zapisuje vlastní dávku — kopie z druhé dávky
+    se uloží k prvnímu doručení (dřív končila jen v paměti, audit #1473 3.2).
+    """
     writer, inner = make_writer(tmp_path)
-    written = writer.write(
+    assert writer.write([event("Fed holds rates", "rss_news", at=TS, ingested=TS)]) == 1
+    copy_at = TS - dt.timedelta(seconds=1)  # Benzinga publikovala dřív, přišla později
+    copy_in = TS + dt.timedelta(seconds=20)
+    newsdesk = event("Fed holds rates", "alpaca", at=copy_at, ingested=copy_in, raw=NEWSDESK)
+    assert writer.write([newsdesk]) == 0
+
+    [first] = stored_events(inner)
+    assert first.source == "rss_news"  # první doručení zůstává, ts_event se nepřepisuje
+    [copy] = stored_copies(inner)
+    assert copy.event_id == first.id
+    assert (copy.source, copy.source_uid, copy.content_tier) == (
+        "alpaca",
+        "alpaca-Fed holds rates",
+        2,
+    )
+    assert copy.published_at.replace(tzinfo=dt.UTC) == copy_at
+    assert copy.fetched_at.replace(tzinfo=dt.UTC) == copy_in
+
+
+def test_fuzzy_copy_from_another_batch_is_recorded(tmp_path: Path) -> None:
+    writer, inner = make_writer(tmp_path)
+    writer.write(
         [
-            event("Fed holds rates", "finnhub", at=TS, ingested=TS),
             event(
-                "Fed holds rates",
+                "Medicare is about to change a program that held down the cost of premiums",
                 "rss_news",
-                at=TS + dt.timedelta(seconds=3),
-                ingested=TS + dt.timedelta(seconds=20),
-            ),
+            )
         ]
     )
-    assert written == 1
-    assert writer.merged_total == 1
+    writer.write(
+        [
+            event(
+                "Medicare is about to change a drug program that held down the cost of premiums",
+                "finnhub",
+                at=TS + dt.timedelta(minutes=2),
+            )
+        ]
+    )
+    [first] = stored_events(inner)
+    assert [(c.event_id, c.source, c.content_tier) for c in stored_copies(inner)] == [
+        (first.id, "finnhub", 3)
+    ]
 
-    with inner._engine.connect() as conn:  # noqa: SLF001 — kontrola uloženého tvaru
-        row = conn.execute(select(news_events.c.source, news_events.c.raw)).fetchone()
-    assert row is not None
-    assert row.source == "finnhub"  # nejrychlejší zdroj zůstává
-    merged = row.raw["merged_sources"]
-    assert merged[0]["source"] == "rss_news"
-    assert merged[0]["latency_s"] == 20.0
+
+def test_copies_are_idempotent_and_same_source_leaves_no_row(tmp_path: Path) -> None:
+    """Opakovaná kopie zdroje nic nepřidá (PK event × zdroj); týž zdroj = duplicita."""
+    writer, inner = make_writer(tmp_path)
+    writer.write([event("Oil spikes", "rss_news", at=TS)])
+    writer.write([event("Oil spikes", "rss_news", at=TS + dt.timedelta(minutes=1))])
+    assert stored_copies(inner) == []
+
+    first_copy_in = TS + dt.timedelta(minutes=2)
+    writer.write([event("Oil spikes", "finnhub", at=TS, ingested=first_copy_in)])
+    writer.write([event("Oil spikes", "finnhub", at=TS, ingested=TS + dt.timedelta(minutes=9))])
+    [copy] = stored_copies(inner)
+    assert copy.fetched_at.replace(tzinfo=dt.UTC) == first_copy_in  # platí nejdřívější
 
 
 def test_priming_from_db_prevents_duplicates_after_restart(tmp_path: Path) -> None:
@@ -340,16 +400,52 @@ def test_priming_from_db_prevents_duplicates_after_restart(tmp_path: Path) -> No
     primed = restarted.prime_from_db(TS + dt.timedelta(minutes=2))
     assert primed == 1
 
-    # Tatáž story z jiného zdroje se teď sloučí místo zápisu
+    # Tatáž story z jiného zdroje je teď kopie prvního doručení z DB
     assert restarted.write([event("Breaking story", "rss_news", at=TS)]) == 0
-    assert restarted.merged_total == 1
     assert inner.count() == 1
+    [first] = stored_events(inner)
+    assert [(c.event_id, c.source) for c in stored_copies(inner)] == [(first.id, "rss_news")]
 
 
 def test_dedup_hash_still_guards_against_double_write(tmp_path: Path) -> None:
-    """Poslední pojistka: i kdyby okno selhalo, UNIQUE v DB zápis nepustí."""
+    """Poslední pojistka: i kdyby okno selhalo, UNIQUE v DB zápis nepustí —
+    a kopii z jiného zdroje zaznamená (ADR-0059 bod 3).
+    """
     writer, inner = make_writer(tmp_path)
     assert writer.write([event("Guarded", "finnhub", at=TS)]) == 1
     # Obejití dedupu (jiná instance bez okna) — DB duplicitu odmítne sama
     assert inner.write([event("Guarded", "rss_news", at=TS)]) == 0
     assert inner.count() == 1
+    [first] = stored_events(inner)
+    assert [(c.event_id, c.source) for c in stored_copies(inner)] == [(first.id, "rss_news")]
+    # Týž zdroj jako první doručení = opakovaný fetch, bez záznamu
+    assert inner.write([event("Guarded", "finnhub", at=TS)]) == 0
+    assert len(stored_copies(inner)) == 1
+
+
+def test_same_day_copy_outside_window_is_recorded_via_dedup_hash(tmp_path: Path) -> None:
+    """Republikace po 7 h téhož dne: okno (6 h) ji nevidí, zachytí ji `dedup_hash`."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    inner = NewsWriter(engine)
+    writer = DedupingWriter(inner)
+    morning = dt.datetime(2026, 10, 9, 6, 0, tzinfo=dt.UTC)
+    assert writer.write([event("Treasury yields climb", "rss_news", at=morning)]) == 1
+    later = morning + dt.timedelta(hours=7)
+    assert writer.write([event("Treasury yields climb", "finnhub", at=later)]) == 0
+    [first] = stored_events(inner)
+    assert [(c.event_id, c.source) for c in stored_copies(inner)] == [(first.id, "finnhub")]
+
+
+def test_copy_without_stored_first_delivery_is_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Selhal-li zápis prvního doručení, kopie se nezapíše a jde do logu."""
+    _, inner = make_writer(tmp_path)
+    unwritten = RollingDeduplicator(window_minutes=10).process(
+        [event("Lost story", "rss_news"), event("Lost story", "finnhub")]
+    )
+    with caplog.at_level(logging.WARNING):
+        assert inner.write_copies(unwritten.copies) == 0
+    assert "bez prvního doručení" in caplog.text
+    assert stored_copies(inner) == []

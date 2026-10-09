@@ -2,8 +2,8 @@
 
 Runner volá jediný `Writer` callable; tady se mezi normalizaci a databázi
 vkládá rolling-window deduplikace, aby se tatáž story z více zdrojů zapsala
-jednou a ostatní zdroje se k ní jen přilepily (SPEC 3.1 pořadí:
-normalizer → dedup → writer).
+jednou a kopie z ostatních zdrojů se zaznamenaly v `news_event_sources`
+(ADR-0059 bod 3; SPEC 3.1 pořadí: normalizer → dedup → writer).
 """
 
 import datetime as dt
@@ -29,8 +29,6 @@ class DedupingWriter:
         self._writer = writer
         self._dedup = RollingDeduplicator(window_minutes=window_minutes)
         self._window_minutes = window_minutes
-        self.merged_total = 0
-        self.duplicates_total = 0
 
     def prime_from_db(self, now: dt.datetime) -> int:
         """Naplní okno z DB — po restartu se jinak duplikuje čerstvý sběr."""
@@ -42,19 +40,12 @@ class DedupingWriter:
         return len(recent)
 
     def write(self, events: Sequence[NewsEvent]) -> int:
+        """Zapíše nové eventy, pak kopie; vrací počet nových eventů.
+
+        Kopie jdou až po eventech: první výskyt může být ve stejné dávce.
+        """
         result = self._dedup.process(events)
-        self.merged_total += result.merged
-        self.duplicates_total += result.duplicates
-        if not result.events:
-            return 0
-        # Zdroje, které tutéž story potvrdily, se ukládají k zapisovanému eventu:
-        # latence per zdroj je podklad pro budoucí prioritizaci (SPEC 3.3)
-        enriched = []
-        for event in result.events:
-            merged = self._dedup.merged_sources(event)
-            if merged:
-                event = NewsEvent(
-                    **{**event.__dict__, "raw": {**event.raw, "merged_sources": merged}}
-                )
-            enriched.append(event)
-        return self._writer.write(enriched)
+        written = self._writer.write(result.events) if result.events else 0
+        if result.copies:
+            self._writer.write_copies(result.copies)
+        return written
