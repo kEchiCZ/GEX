@@ -4121,13 +4121,14 @@ tr.setup-after-settle td {
   color: #e0a040;
 }
 
-/* Sbalitelný panel v levém dolním rohu heatmapy (nad časovou osou) — vpravo
+/* Sbalitelný panel v levém dolním rohu heatmapy (nad časovou osou, popiskem
+   projekce a za popisky strik) — vpravo
    nahoře sedí ⟲ reset a karta setupu, vlevo nahoře tooltip, nahoře uprostřed
    bannery. Sbalený je jen štítek, graf nezmenšuje */
 .breaking-overlay-chip {
   position: absolute;
-  bottom: 30px;
-  left: 8px;
+  bottom: 46px;
+  left: 52px;
   z-index: 5;
   background: var(--bg-chip);
   color: var(--text);
@@ -4141,8 +4142,8 @@ tr.setup-after-settle td {
 
 .breaking-overlay {
   position: absolute;
-  bottom: 30px;
-  left: 8px;
+  bottom: 46px;
+  left: 52px;
   z-index: 5;
   width: min(380px, 45%);
   max-height: 60%;
