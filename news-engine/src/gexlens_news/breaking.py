@@ -80,7 +80,7 @@ CATEGORY_GROUPS: Mapping[str, str] = {
     "CRYPTO": GROUP_OTHER,
     "OTHER": GROUP_OTHER,
 }
-#: Zdroje centrální banky — skupina bez ohledu na kategorii (ECB přidá E-6.25)
+#: Zdroje centrální banky — skupina bez ohledu na kategorii (`ecb` od E-6.25a, #1515)
 CENTRAL_BANK_SOURCES = frozenset({"ecb"})
 
 

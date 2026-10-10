@@ -27,13 +27,14 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
+from typing import Any
 from xml.etree import ElementTree
 
 from httpx import HTTPStatusError
 
 from gexlens_news.collectors import CollectorClock, utc_now
 from gexlens_news.http import Fetcher, Response
-from gexlens_news.model import NewsEvent, RawItem
+from gexlens_news.model import TS_SOURCE_FETCH, TS_SOURCE_ITEM, NewsEvent, RawItem
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,9 @@ TITLE_LIMIT = 500
 # Bez stropu zaplaví jeden nepřátelský feed `news_events`, WS push i frontu
 # Gemini. Největší reálný feed má desítky položek na dávku.
 MAX_ITEMS_PER_FEED = 200
+#: Nejstarší věrohodný rok položky (ADR-0059 bod 5) — Fed testimony nese
+#: u části položek `30 Dec 1899` (E-6.22, 2.2)
+MIN_PLAUSIBLE_YEAR = 2000
 
 
 def parse_feed_time(raw: str | None) -> dt.datetime | None:
@@ -106,6 +110,12 @@ def parse_items(xml: str) -> list[dict[str, str | None]]:
     ]
 
 
+def _item_uid(payload: Mapping[str, Any]) -> str | None:
+    """Identita položky ve feedu — tatáž hodnota jde do `source_uid`."""
+    uid = payload.get("guid") or payload.get("link")
+    return str(uid) if uid else None
+
+
 def _describe(error: Exception) -> str:
     """Chyba do souhrnu: u HTTP i status kód (#941).
 
@@ -141,6 +151,7 @@ class RssCollector:
         symbols: Sequence[str] = (),
         inter_fetch_delay_s: float = 0.0,
         round_robin: bool = False,
+        verified_time: bool = False,
         clock: CollectorClock = utc_now,
     ) -> None:
         self._name = name
@@ -160,6 +171,20 @@ class RssCollector:
         #: což pro crowd sentiment bohatě stačí.
         self._round_robin = round_robin
         self._cursor = 0
+        #: Čas zveřejnění zdroje tier 1 (ADR-0059 bod 5): čas položky jen
+        #: věrohodný, jinak čas prvního stažení s původem v `raw.ts_source`.
+        #: Ostatní RSS beze změny — budoucí čas tam nese informaci (#552 L2)
+        self._verified_time = verified_time
+        #: Feedy, které od startu procesu aspoň jednou úspěšně odpověděly
+        self._fetched_urls: set[str] = set()
+        #: Položky z prvního úspěšného stažení feedu po startu: bez věrohodného
+        #: času u nich nejde doložit, kdy vyšly (historie feedu, výpadek procesu)
+        self._startup_uids: set[str] = set()
+        #: Čas prvního stažení položky bez věrohodného času — drží `ts_event`
+        #: (a s ním `dedup_hash`) stabilní, když se feed znovu změní
+        self._first_fetched: dict[str, dt.datetime] = {}
+        #: Přeskočené položky — log jednou za běh procesu, ne každý cyklus
+        self._undatable: set[str] = set()
         self._clock = clock
         #: Feedy, které právě selhávají (#1451) — zdroj jako celek může být „ok",
         #: i když jeden jeho feed vrací 404 celé týdny (Yahoo rssindex od 23. 9. 2026)
@@ -230,6 +255,11 @@ class RssCollector:
                         MAX_ITEMS_PER_FEED,
                     )
                     entries = entries[:MAX_ITEMS_PER_FEED]
+                if self._verified_time and url not in self._fetched_urls:
+                    self._fetched_urls.add(url)
+                    self._startup_uids.update(
+                        uid for entry in entries if (uid := _item_uid(entry)) is not None
+                    )
                 for entry in entries:
                     items.append(
                         RawItem(source=self._name, payload={**entry, "feed": url}, fetched_at=now)
@@ -249,29 +279,71 @@ class RssCollector:
             logger.warning("Část feedů %s selhala: %s", self._name, "; ".join(errors))
         return items
 
+    def _verified_ts_event(
+        self, item: RawItem, published: dt.datetime | None
+    ) -> tuple[dt.datetime, str] | None:
+        """Čas zveřejnění zdroje tier 1 a jeho původ; None = položku nezapsat.
+
+        ADR-0059 bod 5: čas položky jen věrohodný (rok ≥ 2000, ne po stažení),
+        jinak čas prvního stažení. Položku bez věrohodného času z prvního
+        stažení po startu nejde datovat — tvářila by se jako čerstvá zpráva
+        (testimony s rokem 1899) a vstoupila do SentIndexu i shluků.
+        Jednou přidělený čas stažení platí do konce běhu, i když budoucí čas
+        položky mezitím zestárne — jinak by se položka zapsala znovu jiným dnem.
+        """
+        uid = _item_uid(item.payload)
+        if uid is not None and uid in self._first_fetched:
+            return self._first_fetched[uid], TS_SOURCE_FETCH
+        if (
+            published is not None
+            and published.year >= MIN_PLAUSIBLE_YEAR
+            and published <= item.fetched_at
+        ):
+            # V UTC: ECB posílá `+0200` a `dedup_hash` bere den z času, jak přišel
+            return published.astimezone(dt.UTC), TS_SOURCE_ITEM
+        if uid is None or uid in self._startup_uids:
+            key = uid or str(item.payload.get("title"))
+            if key not in self._undatable:
+                self._undatable.add(key)
+                logger.warning(
+                    "%s: položka bez věrohodného času %r z prvního stažení po startu "
+                    "se nezapisuje — čas zveřejnění nejde doložit (ADR-0059 bod 5)",
+                    self._name,
+                    item.payload.get("title"),
+                )
+            return None
+        return self._first_fetched.setdefault(uid, item.fetched_at), TS_SOURCE_FETCH
+
     def normalize(self, item: RawItem) -> NewsEvent | None:
         title = item.payload.get("title")
         if not title:
             return None
         published = parse_feed_time(item.payload.get("published"))
+        raw = dict(item.payload)
         # Pozn. (#552 L2): budoucí `ts_event` se tu VĚDOMĚ nepřepisuje. Feed ho
         # sice plně ovládá, ale zahodit ho by ničilo informaci a u plánovaných
         # událostí (makro kalendář) je budoucí čas legitimní. Škodil jen tím, že
         # držel položku na vrcholu LLM fronty — to řeší řazení podle menšího
         # z (ts_event, ts_ingested) v `llm_classifier._pending`.
+        # Bez času publikace bereme čas ingestu — u RSS je rozdíl v jednotkách
+        # minut a zahodit zprávu kvůli chybějícímu datu by bylo horší
+        ts_event = published or item.fetched_at
+        if self._verified_time:
+            verified = self._verified_ts_event(item, published)
+            if verified is None:
+                return None
+            ts_event, raw["ts_source"] = verified
         summary = item.payload.get("summary")
         return NewsEvent(
-            # Bez času publikace bereme čas ingestu — u RSS je rozdíl v jednotkách
-            # minut a zahodit zprávu kvůli chybějícímu datu by bylo horší
-            ts_event=published or item.fetched_at,
+            ts_event=ts_event,
             ts_ingested=item.fetched_at,
             source=self._name,
-            source_uid=item.payload.get("guid") or item.payload.get("link"),
+            source_uid=_item_uid(item.payload),
             kind=self._kind,
             category=self._category,
             importance=self._importance,
             title=str(title)[:TITLE_LIMIT],
             summary=summary[:SUMMARY_LIMIT] if summary else None,
             symbols=list(self._symbols),
-            raw=dict(item.payload),
+            raw=raw,
         )

@@ -40,7 +40,7 @@ GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME 
 - **ΔOI vs. včera** — kde přes noc přibyly/ubyly otevřené pozice (tooltip profilu).
 - **Replay** — skrytý za tlačítkem ⏮ Replay; slider přehraje vývoj dne rychlostí 1×/5×/20×. Aplikace defaultně jede vždy live.
 - **Anotace** — šipky, linie a kreslení od ruky přímo do grafu; uložené k instrumentu a dni, přežijí restart.
-- **News a sentiment (SentimentLens)** — vlastní news-engine sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy), klasifikuje směr a důležitost, počítá **SentIndex** a stav **RISK ON / RISK OFF**. V grafu markery zpráv (klik = dialog s detaily a dopadem Long/Short), obrazovka **News** s feedem a nadcházejícími událostmi.
+- **News a sentiment (SentimentLens)** — vlastní news-engine sbírá zprávy a makro kalendář (ForexFactory, oficiální feedy Fedu, ECB a Bílého domu, zpravodajské feedy), klasifikuje směr a důležitost, počítá **SentIndex** a stav **RISK ON / RISK OFF**. V grafu markery zpráv (klik = dialog s detaily a dopadem Long/Short), obrazovka **News** s feedem a nadcházejícími událostmi.
 - **Signály** — empiricky gate-ované Long/Short nápovědy ze zpráv (šipky na ceně); pouštějí se, až když daný typ zprávy má statisticky ověřenou reakci (n ≥ 30, Wilson LB > 0,50, průměrná reakce aspoň 1 bp).
 - **Tendence** — souhrnný chip v hlavičce (Strong Short … Strong Long) z 12 složek positioningu a toku, s rozpadem hlasů po kliknutí.
 - **Setup detektor** — šablony T1–T5 a T7 (odraz od zdi, neúspěšný průraz, Max Pain pin, gamma momentum, divergenční spring, pokračování trendu) s kartou, liniemi v grafu, P/L evidencí a hodnocením.
@@ -757,7 +757,7 @@ Obrazovka **Řetěz** v sidebaru ukazuje klasickou opční tabulku vybrané expi
 
 ## 11c. News a sentiment (SentimentLens)
 
-Vlastní **news-engine** běží vedle datového enginu: sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy, Alpaca, broker pásku z IBKR), klasifikuje **kategorii, důležitost (1–3) a směr dopadu**, a počítá z nich **SentIndex** — souhrnný sentiment s rozpadem po tématech. Nic z toho nechodí ven; vše se počítá lokálně.
+Vlastní **news-engine** běží vedle datového enginu: sbírá zprávy a makro kalendář (ForexFactory, oficiální feedy Fedu, ECB a Bílého domu, zpravodajské feedy, Alpaca, broker pásku z IBKR), klasifikuje **kategorii, důležitost (1–3) a směr dopadu**, a počítá z nich **SentIndex** — souhrnný sentiment s rozpadem po tématech. Nic z toho nechodí ven; vše se počítá lokálně.
 
 **Důležitost 1–3 se čte z předmětu titulku a ze zdroje** (v1.22, #1293). Dřív
 stačilo klíčové slovo kdekoli v titulku nebo shrnutí, takže článek o osobních

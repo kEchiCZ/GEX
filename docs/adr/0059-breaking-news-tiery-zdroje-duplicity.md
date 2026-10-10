@@ -9,6 +9,9 @@
 - **Revize 10. 10. 2026 (E-6.28b, #1497):** bod 4 — zpráva s efektivním tierem 3 jde na kartu
   jen čerstvá, nejvýš 60 min od publikace do příjmu (vlastník 9. 10. večer, varianta C);
   bod 8 — dopad počítá API při čtení (vlastník 10. 10., varianta A), `GET /news/breaking`
+- **Revize 11. 10. 2026 (E-6.25a, #1515):** bod 5 — přeskočená položka bez věrohodného času se
+  jen zaloguje, čítač ve zdraví zdroje se nezavádí (vlastník 11. 10., varianta A, Rozhodnuto
+  v #1385); čas položky se ukládá v UTC a pojistka `(source, source_uid)` platí pro celý tier 1
 - **Datum:** 2026-10-09
 - **Souvisí:** #1482 (E-6.23), #1406 (Fáze 6), #1385 (Rozhodnuto 8. 10. — breaking news), audit
   zdrojů #1473 (`docs/research/1473-audit-zdroju-zprav.md`), test kandidátů #1474
@@ -263,12 +266,14 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
      - párování BLS nesmí vzít jiný řádek téhož dne: test na kolizi s „FOMC Member Speaks“
        v 8:00 a s PMI v 9:45;
      - s časem stažení se zapisuje jen položka, jejíž `(source, source_uid)` v DB ještě není
-       (`ix_news_events_source_uid`, `storage/sentiment.py:133`);
+       (`ix_news_events_source_uid`, `storage/sentiment.py:139`); **revize 11. 10.:** pojistka platí
+       pro každou položku zdroje tier 1, protože i zestárlý budoucí čas položky se po restartu změní;
      - položka bez věrohodného času, kterou feed nesl už v **prvním stažení po startu
        procesu**, se nezapíše, protože čas zveřejnění nejde doložit. Jinak by se historie
        feedu (např. testimony s rokem 1899) tvářila jako čerstvá zpráva a vstoupila do
        SentIndexu, shluků i souhrnu. Ztrátou je položka bez času, která přibyla během výpadku
-       procesu; ta se zaloguje a započte do zdraví zdroje.
+       procesu; ta se zaloguje (**revize 11. 10.:** jen WARNING jednou za běh, bez čítače ve
+       zdraví zdroje — `CollectorHealth` se nikam nevystavuje, vlastník 11. 10. varianta A).
    - **Dopad na model a upozornění:** nové zprávy projdou klasifikací jako ostatní a vstoupí
      do SentIndexu, `news_model_stats` a gate, do shluků upozornění (ADR-0043) a do
      předobchodního souhrnu.

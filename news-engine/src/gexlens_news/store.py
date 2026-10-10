@@ -51,6 +51,16 @@ def _record_copy(conn: Connection, event: NewsEvent, *, first_hash: str) -> Copy
     )
 
 
+def _source_uid_known(conn: Connection, source: str, source_uid: str) -> bool:
+    """Zapsal už zdroj položku s tímto `source_uid`? (`ix_news_events_source_uid`)."""
+    stmt = (
+        select(news_events.c.id)
+        .where(news_events.c.source == source, news_events.c.source_uid == source_uid)
+        .limit(1)
+    )
+    return conn.execute(stmt).first() is not None
+
+
 class NewsWriter:
     """Idempotentní zápis eventů (ON CONFLICT DO NOTHING nad `dedup_hash`)."""
 
@@ -90,8 +100,19 @@ class NewsWriter:
         insert = pg_insert if dialect == "postgresql" else sqlite_insert
         written = 0
         copies = 0
+        known = 0
         with self._engine.begin() as conn:
             for event, row in zip(events, rows, strict=True):
+                if (
+                    event.raw.get("ts_source") is not None
+                    and row["source_uid"] is not None
+                    and _source_uid_known(conn, event.source, row["source_uid"])
+                ):
+                    # ADR-0059 bod 5: čas zdroje tier 1 se mezi běhy procesu může
+                    # změnit (čas stažení, zestárlý budoucí čas položky), takže
+                    # `dedup_hash` položku znovu nepozná — rozhoduje identita u zdroje
+                    known += 1
+                    continue
                 # RETURNING, ne rowcount: PostgreSQL u ON CONFLICT DO NOTHING
                 # vrací -1 (= „nevím") a počítadlo by lhalo (#367)
                 stmt = (
@@ -106,12 +127,14 @@ class NewsWriter:
                     # Týž titulek téhož dne už v DB je (mimo okno rolling dedupu,
                     # IBKR páska z enginu, zápis mimo DedupingWriter)
                     copies += 1
-        skipped = len(rows) - written
-        if skipped:
+        skipped = len(rows) - written - known
+        if skipped or known:
             logger.debug(
-                "Zahozeno %d duplicit dle dedup_hash, z toho %d kopií z jiného zdroje",
+                "Zahozeno %d duplicit dle dedup_hash (z toho %d kopií z jiného zdroje) "
+                "a %d položek zdroje tier 1 známých podle source_uid",
                 skipped,
                 copies,
+                known,
             )
         return written
 
