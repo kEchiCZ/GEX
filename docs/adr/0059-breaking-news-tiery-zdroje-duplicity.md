@@ -6,6 +6,9 @@
   hned se štítkem „článek, zatím nepotvrzeno“ (rozhodnutí vlastníka, Rozhodnuto v #1385);
   výjimka mega caps předregistrované kritérium nesplnila, takže se nezavádí a SEC se nepoužije
   (bod 6 varianta A, E-6.25b zrušen)
+- **Revize 10. 10. 2026 (E-6.28b, #1497):** bod 4 — zpráva s efektivním tierem 3 jde na kartu
+  jen čerstvá, nejvýš 60 min od publikace do příjmu (vlastník 9. 10. večer, varianta C);
+  bod 8 — dopad počítá API při čtení (vlastník 10. 10., varianta A), `GET /news/breaking`
 - **Datum:** 2026-10-09
 - **Souvisí:** #1482 (E-6.23), #1406 (Fáze 6), #1385 (Rozhodnuto 8. 10. — breaking news), audit
   zdrojů #1473 (`docs/research/1473-audit-zdroju-zprav.md`), test kandidátů #1474
@@ -157,11 +160,15 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
        potvrdí až shluk (E-6.6, E-6.17).
      - **Šum** změřil E-6.27 (`docs/research/1491-sum-karty-breaking.md`): za 30 dní polovina
        karty nepotvrzená, ~42 zpráv za obchodní seanci, z toho 40 % Finnhub s mediánem zpoždění
-       11 h. Zpřísnění (jen `is_key`, jen čerstvé zprávy) jen po rozhodnutí vlastníka;
-       přeměření s kopiemi #1492.
-     - Předfiltr v SQL (`importance ≥ 2` a tier není NULL v `news_events` **nebo**
-       v `news_event_sources`) je nadmnožina. Přesné pravidlo běží v jedné funkci
-       (`news-engine/src/gexlens_news/breaking.py`).
+       11 h. Přeměření s kopiemi #1492.
+     - **Čerstvost (revize 10. 10., vlastník 9. 10. večer, varianta C):** zpráva s efektivním
+       tierem 3 jde na kartu jen tehdy, když první doručení přišlo nejvýš 60 min po publikaci
+       (`ts_ingested − ts_event`, `breaking.ARTICLE_MAX_INGEST_DELAY`). Tier 1–2 omezení nemá.
+       Starý článek, který později potvrdí kopie tier 1–2, na kartu vstoupí s potvrzením.
+       Šum tvořily staré zprávy, ne slabé: C dává ~24 nepotvrzených za seanci místo ~42 a nepotřebuje
+       slovník. Varianty B (jen `is_key`) a B + C vlastník zamítl.
+     - Předfiltr v SQL (`importance ≥ 2` v okně karty) je nadmnožina. Přesné pravidlo běží
+       v jedné funkci (`news-engine/src/gexlens_news/breaking.py`).
      - Výpočet při čtení v API má precedens ve významnosti (ADR-0045 bod 5).
      - Vlastní slovník klíčových slov ani kritérium „krátký headline“ nevzniká. Fed, CPI, NFP
        a cla už jsou spouštěče v2 (`EVENT_KINDS`, `classifier.py:542-544`) a krátký titulek
@@ -299,10 +306,20 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
      jako `news_reactions` (`compute_reactions`, `news-engine/src/gexlens_news/reactions.py:195`)
      a výchylka ADR-0043 (`measure_excursion`, `reactions.py:425`). Ze `news_reactions` se
      nečte, protože ten se zapisuje až po 60 min.
-   - **Kde výpočet běží,** rozhodne E-6.28 s variantami; funkce se nesmí zkopírovat.
-     - Push z news-enginu odpovídá pravidlu AGENTS „API jen čte storage, nepočítá“.
-     - Výpočet v API by byl další výjimka z tohoto pravidla, i když precedens má
-       (významnost při čtení, ADR-0045 bod 5).
+   - **Kde výpočet běží (revize 10. 10., vlastník, varianta A): v API při čtení,**
+     `GET /news/breaking` (`api/src/gexlens_api/breaking_card.py`). Je to výjimka z pravidla
+     AGENTS „API jen čte storage, nepočítá“ s precedentem ve významnosti při čtení (ADR-0045
+     bod 5). Funkce se nekopírují: `breaking.card_impact` skládá `compute_reactions` (okno 5 min)
+     a `measure_excursion`.
+     - **Bary point-in-time:** bez `at` (živě) se bere i rozpracovaná minuta, kterou engine
+       přepisuje každý cyklus. S `at` (replay) jen uzavřené minuty, aby poslední minuta nenesla
+       budoucí cenu. Partice se cachují podle mtime (bind mount ~20 ms na soubor).
+     - **Výchylka během prvních 5 minut** se měří od celé minuty zprávy (jako upozornění)
+       přes uzavřené minuty, okno roste do 5. Bez hodiny barů pro σ (např. po otevření) je
+       prázdná, ne nula.
+     - **Mezera:** trh podle rozvrhu otevřený, ale po zprávě nejsou bary → po 5. minutě stav
+       „bez dat“, ne zmrzlé číslo.
+     - Kontaminace K1 bere jen eventy známé v čase čtení (`ts_ingested ≤ at`).
    - **Zavřený trh:** místo dopadu se ukáže „trh zavřený“. Odložená reakce zůstává
      v `news_reactions`, karta ji nepočítá.
    - ⚠ označuje kontaminaci podle K1.
@@ -383,6 +400,22 @@ Kritéria volby podle AGENTS.md: rychlost, výkon, relevance dat.
   stabilní hash a týž čas jako řádek FF. Cenou je mapování feed → titulek releasu FF
   a záloha, když kalendář chybí (`raw.ts_source = fetch`, viditelné).
 - C — čas položky: look-ahead 39 min.
+
+**Zprávy tier 3 — zpřísnění (bod 4, revize 10. 10., vlastník 9. 10. večer):**
+- A — všechny (~42 nepotvrzených za seanci): nic neunikne, ale je to hlučné.
+- B — jen zásadní (`is_key`, ~15,5): vypadnou i čerstvé články s importance 2, staré zprávy
+  Finnhubu s importance 3 zůstanou.
+- **C — jen čerstvé, příjem ≤ 60 min po publikaci (~24)** (zvoleno): odfiltruje 366 ze 405
+  zpráv Finnhubu a ponechá rychlé články CNBC a Benzingy.
+- B + C (~7): nejtišší, ale vynechá nejvíc zpráv.
+
+**Kde se počítá dopad na kartě (bod 8, revize 10. 10., vlastník):**
+- **A — API při čtení** (zvoleno): žádný nový stav ani smyčka, replay přes `at`, tytéž funkce
+  importem; cenou je výjimka z pravidla „API jen čte“ (precedens ADR-0045 bod 5).
+- B — push z news-enginu: drží pravidlo, ale přidá smyčku à sekundy a stav po načtení stránky
+  by API stejně muselo spočítat (nebo nová tabulka).
+- C — frontend z cenového streamu: kopie funkce v TS (zakázáno výše) a cenu pushuje jen aktivní
+  symbol.
 
 **Míra dopadu na kartě (bod 8):**
 - A — jen změna ceny (close-to-close): jednoduché, ale FOMC 16. 9. by ukázal −0,3 bp místo
