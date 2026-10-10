@@ -149,11 +149,12 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
      s jednou kopií na zprávu: ~1,1 mil. řádků × ~130 B (řádek ~100 B a PK ~30 B, odhad
      z šířky sloupců) ≈ **140 MB za rok**. Skutečný denní objem změří E-6.29.
 4. **`is_breaking`, skupina a téma se počítají při čtení, nic z toho se neukládá:**
-   - `is_breaking = efektivní tier ∈ {1, 2, 3} ∧ is_significant(kind, importance, category)`
-     (ADR-0045 bod 5; **revize 9. 10.:** původně jen tier 1–2). Tier NULL (kalendář, Reddit,
-     Bluesky bez kurátora) na kartu nejde.
+   - `is_breaking = efektivní tier ∈ {1, 2, 3} ∧ is_significant(kind, importance, category)
+     ∧ (efektivní tier ≠ 3 ∨ ts_ingested − ts_event ≤ 60 min)` (ADR-0045 bod 5; **revize 9. 10.:**
+     původně jen tier 1–2; **revize 10. 10.:** čerstvost článku, varianta C níže). Tier NULL
+     (kalendář, Reddit, Bluesky bez kurátora) na kartu nejde.
      - **Potvrzení:** zpráva s efektivním tierem 1–2 je potvrzená. Zpráva s efektivním tierem 3
-       jde na kartu **hned** se štítkem „článek, zatím nepotvrzeno“. Štítek zmizí v okamžiku,
+       jde na kartu **hned** (je-li čerstvá) se štítkem „článek, zatím nepotvrzeno“. Štítek zmizí v okamžiku,
        kdy je viditelná kopie tier 1–2 (`fetched_at`, point-in-time). Důvod (vlastník 9. 10.):
        trader potřebuje zprávu co nejdřív, i když ji pomalejší zdroj přinese dřív než Benzinga
        Newsdesk. Kopie je jen táž zpráva (bod 3), takže článek s jiným titulkem o téže události
@@ -166,7 +167,9 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
        (`ts_ingested − ts_event`, `breaking.ARTICLE_MAX_INGEST_DELAY`). Tier 1–2 omezení nemá.
        Starý článek, který později potvrdí kopie tier 1–2, na kartu vstoupí s potvrzením.
        Šum tvořily staré zprávy, ne slabé: C dává ~24 nepotvrzených za seanci místo ~42 a nepotřebuje
-       slovník. Varianty B (jen `is_key`) a B + C vlastník zamítl.
+       slovník. Varianty B (jen `is_key`) a B + C vlastník zamítl. Čerstvost se měří na prvním
+       doručení: když je první doručení mimo tiery (Bluesky bez kurátora) a článek tier 3 přinese
+       až pozdní kopie, rozhoduje zpoždění prvního doručení (hraniční případ, vědomě).
      - Předfiltr v SQL (`importance ≥ 2` v okně karty) je nadmnožina. Přesné pravidlo běží
        v jedné funkci (`news-engine/src/gexlens_news/breaking.py`).
      - Výpočet při čtení v API má precedens ve významnosti (ADR-0045 bod 5).
@@ -320,6 +323,13 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
      - **Mezera:** trh podle rozvrhu otevřený, ale po zprávě nejsou bary → po 5. minutě stav
        „bez dat“, ne zmrzlé číslo.
      - Kontaminace K1 bere jen eventy známé v čase čtení (`ts_ingested ≤ at`).
+     - **Konec okna:** dopad je zafixovaný od uzávěru posledního baru okna `[ts, ts + 5 min)`
+       (zpráva v 14:30:20 → 14:36:00), do té doby běží. Zpráva v poslední minutě před pauzou nebo
+       víkendem, po které bary nejsou nebo je reakce odložená, má stav „trh zavřený“, ne „bez
+       dat“ (zavřený trh = žádná upozornění na chybějící data).
+     - **Replay je přibližný v klasifikaci:** `at` filtruje příjem, kopie i bary, ale kategorie
+       a importance jsou dnešní (klasifikace se do `news_events` denormalizuje bez času). Do #1496
+       přicházela rule klasifikace s mediánem 203 s po příjmu, od #1496 do ~1 s.
    - **Zavřený trh:** místo dopadu se ukáže „trh zavřený“. Odložená reakce zůstává
      v `news_reactions`, karta ji nepočítá.
    - ⚠ označuje kontaminaci podle K1.
