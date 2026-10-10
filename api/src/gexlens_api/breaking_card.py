@@ -17,6 +17,7 @@ nekopíruje.
   ≥ 2 a jinou kategorií v okně, známý v `at`.
 """
 
+import bisect
 import datetime as dt
 import threading
 from collections import defaultdict
@@ -34,16 +35,19 @@ from gexlens_engine.compute.news_tier import SourceCopy, effective_tier
 from gexlens_engine.storage.sentiment import news_event_sources, news_events
 from gexlens_news import breaking
 from gexlens_news.bars import BarsRepository
-from gexlens_news.reaction_job import CONTAMINATION_MIN_IMPORTANCE
+from gexlens_news.reaction_job import CLOSURE_LOOKBACK_DAYS, CONTAMINATION_MIN_IMPORTANCE
 from gexlens_news.reactions import SIGMA_LOOKBACK_MIN, Bar, contaminates
 
 SYMBOLS = ("ES", "NQ")
-#: Partic barů v paměti: 2 symboly × (okno karty + σ) ≈ 2 × 4 dny
-BARS_CACHE_DAYS = 16
+#: Partic barů v paměti: 2 symboly × (okno karty + základ až 5 dní zpět + kraje)
+BARS_CACHE_DAYS = 24
 
 _MINUTE = dt.timedelta(minutes=1)
-#: Bary potřebné před zprávou: hodina pro σ výchylky (ADR-0043) a bar základu
-_BARS_BEFORE = dt.timedelta(minutes=SIGMA_LOOKBACK_MIN + 2)
+#: Základ = poslední bar před zprávou až přes celé zavření, stejně jako
+#: `ReactionJob` (po otevření Globexu je to páteční close)
+_BASE_LOOKBACK = dt.timedelta(days=CLOSURE_LOOKBACK_DAYS)
+#: Hodina barů před zprávou pro σ výchylky (ADR-0043) a bar základu
+_SIGMA_BEFORE = dt.timedelta(minutes=SIGMA_LOOKBACK_MIN + 2)
 _BARS_AFTER = dt.timedelta(minutes=breaking.CARD_WINDOW_MIN + 1)
 
 
@@ -157,13 +161,21 @@ def breaking_card(
         first = min(item[1] for item in selected)
         last = max(item[1] for item in selected)
         others = _contaminating(engine, first, last + _BARS_AFTER, moment)
-        series = {
-            symbol: _visible(bars.load_range(symbol, first - _BARS_BEFORE, moment), moment, live)
-            for symbol in SYMBOLS
-        }
+        series = {symbol: _series(bars, symbol, first, moment, live) for symbol in SYMBOLS}
+        stamps = {symbol: [bar.ts for bar in bars] for symbol, bars in series.items()}
         for row, ts_event, ts_ingested, tier in selected:
             items.append(
-                _item(row, ts_event, ts_ingested, tier, copies[int(row.id)], series, others, moment)
+                _item(
+                    row,
+                    ts_event,
+                    ts_ingested,
+                    tier,
+                    copies[int(row.id)],
+                    series,
+                    stamps,
+                    others,
+                    moment,
+                )
             )
     return {
         "as_of": moment.isoformat(),
@@ -173,11 +185,38 @@ def breaking_card(
     }
 
 
+def _series(
+    bars: BarsRepository, symbol: str, first: dt.datetime, moment: dt.datetime, live: bool
+) -> list[Bar]:
+    """Bary symbolu od hodiny před nejstarší zprávou do `moment`.
+
+    Základ dopadu je poslední bar před zprávou až 5 dní zpět (jako `ReactionJob`).
+    Hlubší historii je potřeba dočíst jen tehdy, když řada nemá bar před nejstarší
+    zprávou (zpráva těsně po zavření). Pětidenní řada pokaždé by odpověď
+    zpomalila ~3× (měřeno 10. 10.).
+    """
+    series = _visible(bars.load_range(symbol, first - _SIGMA_BEFORE, moment), moment, live)
+    if not series or series[0].ts >= first:
+        series = _visible(bars.load_range(symbol, first - _BASE_LOOKBACK, moment), moment, live)
+    return series
+
+
 def _visible(series: Sequence[Bar], moment: dt.datetime, live: bool) -> list[Bar]:
     """Bary existující v `moment`: živě i rozpracovaná minuta, v replayi jen uzavřené."""
     if live:
         return [bar for bar in series if bar.ts <= moment]
     return [bar for bar in series if bar.ts + _MINUTE <= moment]
+
+
+def _around(
+    series: Sequence[Bar], stamps: Sequence[dt.datetime], ts_event: dt.datetime
+) -> list[Bar]:
+    """Bary pro dopad jedné zprávy: hodina před ní (σ), poslední bar před ní (základ,
+    i přes zavření) a okno karty. Celá řada by výpočet zpomalila ~10× (měřeno 10. 10.)."""
+    before = bisect.bisect_left(stamps, ts_event)
+    start = min(bisect.bisect_left(stamps, ts_event - _SIGMA_BEFORE), max(0, before - 1))
+    end = bisect.bisect_left(stamps, ts_event + _BARS_AFTER)
+    return list(series[start:end])
 
 
 def _contaminating(
@@ -203,6 +242,7 @@ def _item(
     tier: int | None,
     copies: Sequence[Any],
     series: dict[str, list[Bar]],
+    stamps: dict[str, list[dt.datetime]],
     others: Sequence[tuple[dt.datetime, str | None]],
     moment: dt.datetime,
 ) -> dict[str, Any]:
@@ -236,7 +276,7 @@ def _item(
         symbol: asdict(
             breaking.card_impact(
                 ts_event,
-                bars,
+                _around(bars, stamps[symbol], ts_event),
                 at=moment,
                 other_event_ts=contaminating,
                 market_closed=closed,
