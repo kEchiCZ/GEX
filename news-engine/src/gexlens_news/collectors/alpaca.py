@@ -18,7 +18,7 @@ import time
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-from gexlens_engine.compute.newstext import clip_body, strip_html
+from gexlens_engine.compute.newstext import clip_body, strip_html, unescape_entities
 from gexlens_news.model import NewsEvent
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,10 @@ def normalize_message(payload: dict[str, Any], now: dt.datetime) -> NewsEvent | 
     """Zpráva `{"T": "n", ...}` → NewsEvent; jiné typy (success, error) → None."""
     if payload.get("T") != "n":
         return None
-    headline = str(payload.get("headline") or "").strip()
+    # Benzinga posílá titulek a perex HTML-kódované (`Fed&#39;s`, `S&amp;P`,
+    # 22 % titulků). Dekóduje se tady u zdroje, ne až v UI: do DB, feedu
+    # i na kartu patří text; klíč dedupu entity dekóduje i sám (#1500)
+    headline = unescape_entities(str(payload.get("headline") or "")).strip()
     if not headline:
         return None
     created = payload.get("created_at")
@@ -57,7 +60,7 @@ def normalize_message(payload: dict[str, Any], now: dt.datetime) -> NewsEvent | 
         ts_event = now
     if ts_event.tzinfo is None:
         ts_event = ts_event.replace(tzinfo=dt.UTC)
-    summary = str(payload.get("summary") or "").strip() or None
+    summary = unescape_entities(str(payload.get("summary") or "")).strip() or None
     # Plné znění (#743): Alpaca ho posílá v `content` jako HTML a dosud se
     # zahazovalo — model tak měl k dispozici jen ~50 znaků titulku. Značky se
     # odstraňují hned, do DB nepatří (a do promptu ani do rysů už vůbec).

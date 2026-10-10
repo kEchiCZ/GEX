@@ -32,7 +32,7 @@ a test kandidátů (E-6.22) daly tato tvrdá data:
    každý collector ale zapisuje vlastní dávku (`runner.py:78`). Čítače `merged_total`
    a `duplicates_total` (`pipeline.py:32-33`) nikdo nečte. IBKR pásky zapisuje engine mimo
    deduplikaci, jen přes unikátní `dedup_hash` (`engine/src/gexlens_engine/ibkr/newsticks.py:344-353`).
-   `dedup_hash` = normalizovaný titulek + den `ts_event` (`compute/newstext.py:122-134`). Bod 2
+   `dedup_hash` = normalizovaný titulek + den `ts_event` (`compute/newstext.py:142-155`). Bod 2
    ADR-0016 a sentiment SPEC 3.3 tedy slibují něco, co se neděje. Kdo byl první, se z DB určit
    nedá (audit 3.1).
 3. **„Tier“ už v projektu znamená čtyři věci:**

@@ -26,6 +26,7 @@ import re
 from collections.abc import Iterable, Sequence
 from typing import Any, Protocol
 
+from gexlens_engine.compute.newstext import unescape_entities
 from gexlens_news.model import NewsEvent
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,10 @@ def normalize_post(message: dict[str, Any], now: dt.datetime) -> NewsEvent | Non
     if commit.get("operation") != "create" or commit.get("collection") != "app.bsky.feed.post":
         return None
     record = commit.get("record") or {}
-    text = str(record.get("text") or "").strip()
+    # Post je prostý text, ale boti přeposílající RSS píšou entity doslova
+    # (`S&amp;P 500`); dekóduje se před ořezem titulku, ať se nepřeřízne.
+    # Odkazy s `&region=US` zůstanou, viz `unescape_entities` (#1500)
+    text = unescape_entities(str(record.get("text") or "")).strip()
     if not text:
         return None
     langs = record.get("langs") or []
