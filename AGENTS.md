@@ -103,6 +103,9 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
 - **SOLID v praxi:** výpočty v `engine/compute/` jsou **čisté funkce** nad daty (testovatelné bez IO,
   vyměnitelný model — např. znaménkový model GEX jako strategie); IO (IBKR, tasty, PG, Parquet) žije
   v adaptérech a `storage/`; API jen čte storage a přeposílá push, nepočítá.
+  Výjimka jen s ADR: hodnota, která by uložená zastarala nebo přišla pozdě, se počítá při čtení
+  voláním **téže čisté funkce** jako zapisující job, bez kopie vzorce — významnost zpráv
+  (ADR-0045 bod 5), dopad na kartě Breaking news (ADR-0059 bod 8).
 - **Žádné workaroundy** — opravuj příčinu, ne symptom. Workaround je přípustný jen jako dočasný
   s issue na skutečnou opravu, označený v kódu odkazem na issue.
 - **Fail fast, viditelně**: chybějící data = viditelná mezera se stářím, ne zmrzlá čísla (SPEC 3.7, #306).
@@ -136,7 +139,7 @@ tastytrade DXLink ┘   ├─ ibkr/ connection, discovery, scheduler, underlyin
 news-engine (python -m gexlens_news) ─► sentiment, klasifikace zpráv, signály, SentIndex
         │ Parquet (data/snapshots, derived, tasty_trades) + PostgreSQL
         ▼ HTTP push /internal/*
-api (FastAPI, host :8010 → kontejner :8000) — REST + WS /ws/live; jen čte storage, nepočítá
+api (FastAPI, host :8010 → kontejner :8000) — REST + WS /ws/live; jen čte storage, nepočítá (výjimky ADR-0045/5, ADR-0059/8)
         ▼
 frontend (nginx :8080, React SPA) — heatmapa, profil, panely, playback, briefing, deník, stats
 ```
