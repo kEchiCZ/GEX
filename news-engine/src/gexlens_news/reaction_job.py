@@ -4,15 +4,26 @@ Reakce se počítají až po uzavření nejdelšího okna — dřív by měřen�
 useknuté. Job proto bere eventy starší než `max(windows)` minut, které ještě
 reakce nemají, a dopočítá je. Běží periodicky i jako noční sanity průchod,
 takže výpadek nic neztratí (archiv barů je věčný, S4).
+
+Minutová fáze se doměřuje dvěma spouštěči jedné metody (`complete_minute`,
+#1494, rozhodnutí vlastníka 10. 10.: A + D):
+
+* **D** — denní fáze doměří minutovou zprávám, které zapisuje. Bez toho denní
+  fronta (eventy starší 16 dní) zapsala řádek eventu, který minutová fronta
+  ještě neměřila, a ten z ní navždy vypadl (backfill 17. 8., 27 968 párů);
+* **A** — jednou za hodinu eventy posledních 3 dní, kterým symbol chybí
+  (výpadek barů jednoho symbolu v T+60, který `ibkr_hist` později doplní).
+  Hodinová brána brání pasti #655: pár bez barů se zkusí nejvýš ~72×, pak ho
+  převezme D.
 """
 
 import datetime as dt
 import logging
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import and_, exists, insert, not_, select, update
+from sqlalchemy import and_, exists, func, insert, not_, select, update
 from sqlalchemy.engine import Connection, Engine
 
 from gexlens_engine.compute.settle import settle_ts, trading_session_date
@@ -55,6 +66,13 @@ CLOSURE_LOOKAHEAD_DAYS = 5
 # denní okna se zapisují najednou (parciální zápis by rozbil pending dotaz).
 # 10 obchodních dní ≈ 14 kalendářních + rezerva na svátky.
 DAILY_READY_CALENDAR_DAYS = 16
+# Doměření minutové fáze po výpadku symbolu (A, #1494): jak často, jak daleko
+# zpět a kolik eventů naráz. Hodina = pár bez barů se za 3 dny zkusí nejvýš ~72×
+MINUTE_RETRY_EVERY = dt.timedelta(hours=1)
+MINUTE_RETRY_LOOKBACK = dt.timedelta(days=3)
+MINUTE_RETRY_LIMIT = 200
+# Dávka dotazu na dokončené páry (IN seznam)
+MINUTE_GAP_BATCH = 500
 
 
 class LevelsRegimeReader:
@@ -133,6 +151,81 @@ class MinuteMeasurement:
     closed_flags: list[bool]
 
 
+@dataclass(frozen=True)
+class MinuteGap:
+    """Event s aspoň jedním řádkem reakcí, kterému chybí minutová fáze symbolu (#1494)."""
+
+    event_id: int
+    ts_event: dt.datetime
+    category: str | None
+    missing: frozenset[str]
+
+
+@dataclass(frozen=True)
+class MinuteFill:
+    """Výsledek doměření: které chybějící symboly šly změřit a kolik oken (zapsaných)."""
+
+    gap: MinuteGap
+    filled: frozenset[str]
+    windows: int
+
+
+def minute_gaps(
+    engine: Engine,
+    *,
+    symbols: Sequence[str],
+    ready_before: dt.datetime,
+    since: dt.datetime | None = None,
+    event_ids: Collection[int] | None = None,
+    limit: int | None = None,
+    batch: int = MINUTE_GAP_BATCH,
+) -> Iterator[MinuteGap]:
+    """Eventy s aspoň jedním řádkem reakcí a neúplnou minutovou fází, podle času.
+
+    Event bez řádku vůbec patří běžné frontě (`_pending_events`); tombstone
+    `daily_uncomputable` (#655) řádek nemá, takže sem nepatří. Jen eventy
+    s uzavřeným nejdelším minutovým oknem (`ready_before`).
+    """
+    incomplete = (
+        select(news_reactions.c.event_id)
+        .where(news_reactions.c.symbol.in_(symbols))
+        .group_by(news_reactions.c.event_id)
+        .having(func.count(news_reactions.c.computed_at_min) < len(symbols))
+        .subquery()
+    )
+    stmt = (
+        select(news_events.c.id, news_events.c.ts_event, news_events.c.category)
+        .join(incomplete, incomplete.c.event_id == news_events.c.id)
+        .where(news_events.c.ts_event <= ready_before)
+        .order_by(news_events.c.ts_event, news_events.c.id)
+    )
+    if since is not None:
+        stmt = stmt.where(news_events.c.ts_event >= since)
+    if event_ids is not None:
+        stmt = stmt.where(news_events.c.id.in_(list(event_ids)))
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    with engine.connect() as conn:
+        events = conn.execute(stmt).fetchall()
+    for start in range(0, len(events), batch):
+        chunk = events[start : start + batch]
+        ids = [int(row.id) for row in chunk]
+        with engine.connect() as conn:
+            complete = conn.execute(
+                select(news_reactions.c.event_id, news_reactions.c.symbol).where(
+                    news_reactions.c.event_id.in_(ids),
+                    news_reactions.c.computed_at_min.is_not(None),
+                )
+            ).fetchall()
+        done: dict[int, set[str]] = {}
+        for row in complete:
+            done.setdefault(int(row.event_id), set()).add(row.symbol)
+        for row in chunk:
+            missing = frozenset(set(symbols) - done.get(int(row.id), set()))
+            if missing:
+                yield MinuteGap(int(row.id), _as_utc(row.ts_event), row.category, missing)
+
+
 class ReactionJob:
     """Dopočítá chybějící reakce pro symboly, které měříme (SPEC 6.5: ES i NQ)."""
 
@@ -164,6 +257,8 @@ class ReactionJob:
         self._daily_series_cache: dict[str, tuple[int, list[SessionDaily]]] = {}
         # GEX režim reakce (#402) — levels čteme ze stejného data_dir jako bary
         self._regime_reader = LevelsRegimeReader(bars.data_dir)
+        # Poslední doměření po výpadku symbolu (A, #1494); None = ještě nebylo
+        self._minute_retry_at: dt.datetime | None = None
 
     def _pending_events(
         self, now: dt.datetime, limit: int
@@ -288,6 +383,7 @@ class ReactionJob:
         series = {symbol: self._daily_sessions(symbol) for symbol in self._symbols}
         written = 0
         measured_events = 0
+        measured_ids: list[int] = []
         uncomputable: list[int] = []
         for event_id, ts_event in pending:
             rows: list[tuple[str, dict[str, object], int]] = []
@@ -333,6 +429,7 @@ class ReactionJob:
                     _write_phase(conn, event_id, symbol, values)
                     written += count
             measured_events += 1
+            measured_ids.append(event_id)
         if uncomputable:
             with self._engine.begin() as conn:
                 conn.execute(
@@ -349,22 +446,96 @@ class ReactionJob:
             logger.info(
                 "Denní okna (#564): zapsáno %d oken pro %d eventů", written, measured_events
             )
+        if measured_ids:
+            # D (#1494): event, kterému denní fáze právě zapsala řádek, by
+            # z minutové fronty („bez jakéhokoli řádku“) vypadl — doměří se teď
+            gaps = minute_gaps(
+                self._engine,
+                symbols=self._symbols,
+                ready_before=now - dt.timedelta(minutes=max(self._windows)),
+                event_ids=measured_ids,
+            )
+            completed = self._complete_logged(gaps, now, "denní fáze")
+            written += completed
         return written
 
     def run(self, now: dt.datetime, *, limit: int = 200) -> int:
-        """Dopočítá reakce; vrací počet zapsaných řádků (minutová + denní okna)."""
+        """Dopočítá reakce; vrací počet zapsaných oken (minutová + denní fáze)."""
         pending = self._pending_events(now, limit)
-        if not pending:
-            return self._run_daily(now, limit=limit)
         written = 0
-        baselines = {symbol: self.baseline_for(symbol, now.date()) for symbol in self._symbols}
-        for event_id, ts_event, category in pending:
-            measurement = self.measure_minute(ts_event, category, baselines, now)
-            if measurement.rows:
-                written += self.write_minute(event_id, measurement)
-        if written:
-            logger.info("Reakce: zapsáno %d oken pro %d eventů", written, len(pending))
+        if pending:
+            baselines = {symbol: self.baseline_for(symbol, now.date()) for symbol in self._symbols}
+            for event_id, ts_event, category in pending:
+                measurement = self.measure_minute(ts_event, category, baselines, now)
+                if measurement.rows:
+                    written += self.write_minute(event_id, measurement)
+            if written:
+                logger.info("Reakce: zapsáno %d oken pro %d eventů", written, len(pending))
+        # Až po nových eventech, aby je doměřování nezdrželo
+        written += self._retry_minute(now)
         return written + self._run_daily(now, limit=limit)
+
+    def _retry_minute(self, now: dt.datetime) -> int:
+        """A (#1494): jednou za hodinu doměří minutovou fázi eventům posledních 3 dní.
+
+        Symbol, který v T+60 neměl bary (výpadek, restart), dostal jen druhý
+        symbol; event pak z minutové fronty vypadl. Bary později doplní
+        `ibkr_hist` — tady se reakce dopočítá do hodiny. Pár bez barů se zkouší
+        jen jednou za hodinu (past #655), po 3 dnech ho převezme denní fáze (D).
+        """
+        if self._minute_retry_at is not None and now - self._minute_retry_at < MINUTE_RETRY_EVERY:
+            return 0
+        self._minute_retry_at = now
+        gaps = minute_gaps(
+            self._engine,
+            symbols=self._symbols,
+            ready_before=now - dt.timedelta(minutes=max(self._windows)),
+            since=now - MINUTE_RETRY_LOOKBACK,
+            limit=MINUTE_RETRY_LIMIT,
+        )
+        return self._complete_logged(gaps, now, "výpadek symbolu")
+
+    def _complete_logged(self, gaps: Iterable[MinuteGap], now: dt.datetime, reason: str) -> int:
+        fills = [fill for fill in self.complete_minute(gaps, now) if fill.filled]
+        windows = sum(fill.windows for fill in fills)
+        if fills:
+            logger.info(
+                "Minutová fáze doměřena (#1494, %s): %d oken pro %d eventů",
+                reason,
+                windows,
+                len(fills),
+            )
+        return windows
+
+    def complete_minute(
+        self, gaps: Iterable[MinuteGap], now: dt.datetime, *, write: bool = True
+    ) -> Iterator[MinuteFill]:
+        """Doměří minutovou fázi symbolům, které ji nemají (#1494); nic nepřepisuje.
+
+        Měří všechny symboly (`market_closed` se opraví ze všech, #339), zapíše
+        jen chybějící. Baseline objemu (`vol_z`) k obchodnímu dni eventu
+        (point-in-time); eventy jdou podle času, takže se drží jen poslední den
+        (všechny dny by držely ~270 MB). `write=False` = dry-run skriptu.
+        Sdílí ho denní fáze (D), hodinové doměření (A) a
+        `scripts/backfill_minute_reactions.py`.
+        """
+        baseline_day: dt.date | None = None
+        baselines: dict[str, dict[dt.time, VolumeBaseline] | None] = {}
+        for gap in gaps:
+            day = trading_session_date(gap.ts_event)
+            if day != baseline_day:
+                baseline_day = day
+                baselines = {symbol: self.baseline_for(symbol, day) for symbol in self._symbols}
+            measurement = self.measure_minute(gap.ts_event, gap.category, baselines, now)
+            filled = frozenset(row.symbol for row in measurement.rows) & gap.missing
+            if not filled:
+                yield MinuteFill(gap, filled, 0)
+                continue
+            if write:
+                windows = self.write_minute(gap.event_id, measurement, only_symbols=gap.missing)
+            else:
+                windows = sum(row.windows for row in measurement.rows if row.symbol in filled)
+            yield MinuteFill(gap, filled, windows)
 
     def measure_minute(
         self,
