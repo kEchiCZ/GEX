@@ -80,6 +80,12 @@ from gexlens_news.waves_job import WavesJob
 
 logger = logging.getLogger("gexlens.news")
 
+#: Kadence rychlé pravidlové klasifikace (#1496): dotaz přes PK nad watermarkem
+#: je levný, cíl je kategorie a importance do 2 s od příjmu zprávy
+FAST_CLASSIFICATION_INTERVAL_S = 1.0
+#: Pauza po chybě rychlé klasifikace (výpadek DB nesmí zahltit log)
+FAST_CLASSIFICATION_RETRY_S = 30.0
+
 
 def build_collectors(
     settings: NewsSettings,
@@ -292,6 +298,29 @@ async def run(settings: NewsSettings) -> None:
     )
     last_stats_day: dt.date | None = None
 
+    async def classification_loop() -> None:
+        """Rychlá pravidlová klasifikace nových zpráv à 1 s (#1496, E-6.28a).
+
+        Karta Breaking news vybírá podle importance — v `reaction_loop` à 300 s
+        by zpráva přišla až po zafixování 5min dopadu (medián 203 s od příjmu).
+        Pojistka (anti-join) zůstává v `reaction_loop`.
+        """
+        while not stop.is_set():
+            wait_s = FAST_CLASSIFICATION_INTERVAL_S
+            try:
+                batch = await asyncio.to_thread(classification.run_new, dt.datetime.now(dt.UTC))
+                if publisher is not None and batch:
+                    await publisher.publish_news(batch)
+            except Exception:
+                # Výpadek DB by à 1 s zahltil log — další pokus až po pauze
+                logger.exception(
+                    "Rychlá klasifikace selhala — další pokus za %.0f s",
+                    FAST_CLASSIFICATION_RETRY_S,
+                )
+                wait_s = FAST_CLASSIFICATION_RETRY_S
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=wait_s)
+
     async def reaction_loop() -> None:
         """Klasifikace, dopočet reakcí a denní přepočet modelu.
 
@@ -302,7 +331,9 @@ async def run(settings: NewsSettings) -> None:
             now = dt.datetime.now(dt.UTC)
             memory_watch.sample()  # #1105: RSS do logu à 10 min, tracemalloc za flagem
             # Pravidlová klasifikace první — bez kategorie a importance by
-            # event do empirického modelu vůbec nevstoupil (SPEC 2.4)
+            # event do empirického modelu vůbec nevstoupil (SPEC 2.4). Nové
+            # zprávy klasifikuje `classification_loop` do ~1 s; tohle je
+            # pojistka pro řádky, které rychlá cesta minula (#1496)
             try:
                 await asyncio.to_thread(classification.run, now)
                 # Push klasifikovaných řádků (#335): engine už syrový titulek
@@ -597,6 +628,7 @@ async def run(settings: NewsSettings) -> None:
     )
     await asyncio.gather(
         runner.run(stop=stop),
+        classification_loop(),
         reaction_loop(),
         llm_loop(),
         ngram_loop(),

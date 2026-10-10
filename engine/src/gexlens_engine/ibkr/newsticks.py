@@ -217,18 +217,20 @@ class StoredHeadline:
 
     id: int
     headline: BrokerHeadline
+    #: Čas zápisu (`news_events.ts_ingested`) — karta z něj počítá zpoždění zdroje
+    ingested_at: dt.datetime
 
     def as_news_row(self) -> dict[str, Any]:
         """Payload kanálu `news` ve tvaru `NewsRow` frontendu.
 
         Kategorie je `None` schválně: klasifikátor běží až v news-engine
-        a čekat na něj by zprávu zdrželo o minuty. UI ji zobrazí jako
-        „Nezařazeno" a doplní se, až dorazí klasifikovaná verze téhož `id`.
+        (rychlá smyčka à 1 s, #1496) a push nečeká ani na ni. UI ji zobrazí
+        jako „Nezařazeno" a doplní se, až dorazí klasifikovaná verze téhož `id`.
         """
         return {
             "id": self.id,
             "ts_event": self.headline.ts_event.isoformat(),
-            "ts_ingested": self.headline.ts_event.isoformat(),
+            "ts_ingested": self.ingested_at.isoformat(),
             "source": self.headline.source,
             "kind": "broker",
             "category": None,
@@ -360,7 +362,11 @@ class NewsTickCollector:
                 )
                 inserted = conn.execute(stmt).first()
                 if inserted is not None:
-                    written.append(StoredHeadline(id=int(inserted.id), headline=headline))
+                    written.append(
+                        StoredHeadline(
+                            id=int(inserted.id), headline=headline, ingested_at=row["ts_ingested"]
+                        )
+                    )
                     continue
                 # Tatáž zpráva už v DB je (news-engine nebo dřívější páska): kopie
                 # z jiného zdroje do `news_event_sources` (ADR-0059 bod 3)
