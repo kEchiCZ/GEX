@@ -299,7 +299,8 @@ class RssCollector:
             and published.year >= MIN_PLAUSIBLE_YEAR
             and published <= item.fetched_at
         ):
-            return published, TS_SOURCE_ITEM
+            # V UTC: ECB posílá `+0200` a `dedup_hash` bere den z času, jak přišel
+            return published.astimezone(dt.UTC), TS_SOURCE_ITEM
         if uid is None or uid in self._startup_uids:
             key = uid or str(item.payload.get("title"))
             if key not in self._undatable:

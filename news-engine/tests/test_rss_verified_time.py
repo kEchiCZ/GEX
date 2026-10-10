@@ -91,6 +91,16 @@ async def test_verohodny_cas_polozky_je_item() -> None:
     assert event.raw["ts_source"] == "item"
 
 
+async def test_cas_s_posunem_se_prevede_na_utc() -> None:
+    """ECB posílá `+0200`: 1:30 SELČ je ještě předchozí den v UTC (den v `dedup_hash`)."""
+    ecb = _item("e-1", "Monetary policy decisions", "Fri, 09 Oct 2026 01:30:00 +0200")
+    collector = _collector(SequenceFetcher(_feed(ecb)), Clock(START))
+    (event,) = await _cycle(collector)
+    assert event.ts_event == dt.datetime(2026, 10, 8, 23, 30, tzinfo=dt.UTC)
+    assert event.ts_event.utcoffset() == dt.timedelta(0)
+    assert event.ts_event.date() == dt.date(2026, 10, 8)
+
+
 async def test_nova_polozka_bez_casu_dostane_cas_prvniho_stazeni() -> None:
     clock = Clock(START)
     fetcher = SequenceFetcher(_feed(DATED), _feed(UNDATED, FUTURE, DATED))
