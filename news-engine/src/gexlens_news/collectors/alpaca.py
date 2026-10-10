@@ -49,8 +49,8 @@ def normalize_message(payload: dict[str, Any], now: dt.datetime) -> NewsEvent | 
     if payload.get("T") != "n":
         return None
     # Benzinga posílá titulek a perex HTML-kódované (`Fed&#39;s`, `S&amp;P`,
-    # 22 % titulků). Dekóduje se tady u zdroje, ne až v UI: entita dělá
-    # z apostrofu samostatný token a táž zpráva z RSS pak není kopie (#1500)
+    # 22 % titulků). Dekóduje se tady u zdroje, ne až v UI: do DB, feedu
+    # i na kartu patří text; klíč dedupu entity dekóduje i sám (#1500)
     headline = html.unescape(str(payload.get("headline") or "")).strip()
     if not headline:
         return None

@@ -8,6 +8,7 @@ v databázi dvakrát.
 
 import datetime as dt
 import hashlib
+import html
 import re
 import unicodedata
 
@@ -107,12 +108,17 @@ def lead_paragraph(body: str | None, *, limit: int = LEAD_CHARS) -> str:
 
 
 def normalize_title(title: str) -> str:
-    """Titulek na kanonický tvar: bez diakritiky, interpunkce a stopslov.
+    """Titulek na kanonický tvar: bez HTML entit, diakritiky, interpunkce a stopslov.
+
+    Entity se dekódují i tady, nejen v collectorech (#1500, rozhodnutí
+    vlastníka 10. 10.): `Fed&#39;s` by jinak dal samostatný token `39`
+    a táž zpráva z jiného zdroje by nebyla kopie — ani u budoucího zdroje,
+    který entity posílá a collector je zapomene dekódovat.
 
     Titulek složený jen ze stopslov se **nesmí** zredukovat na prázdný řetězec —
     kolidoval by se všemi ostatními.
     """
-    folded = unicodedata.normalize("NFKD", title.casefold())
+    folded = unicodedata.normalize("NFKD", html.unescape(title).casefold())
     ascii_only = "".join(ch for ch in folded if not unicodedata.combining(ch))
     words = _SPACES.sub(" ", _NON_WORD.sub(" ", ascii_only)).strip().split(" ")
     kept = [w for w in words if w and w not in _STOPWORDS]

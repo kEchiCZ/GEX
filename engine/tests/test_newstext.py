@@ -99,3 +99,21 @@ def test_clip_body_kratky_clanek_nechava_byt() -> None:
     assert clip_body("Krátká zpráva o dvou větách. A konec.") == (
         "Krátká zpráva o dvou větách. A konec."
     )
+
+
+# ── HTML entity v titulku (#1500) ──────────────────────────────────
+
+
+def test_normalize_title_dekoduje_html_entity() -> None:
+    """`Fed&#39;s` nesmí dát token `39` — táž zpráva z jiného zdroje je kopie."""
+    import datetime as dt
+
+    from gexlens_engine.compute.newstext import dedup_hash, normalize_title
+
+    assert normalize_title("Fed&#39;s Waller Says") == normalize_title("Fed's Waller Says")
+    assert normalize_title("Johnson &amp; Johnson") == normalize_title("Johnson & Johnson")
+    assert normalize_title("&quot;Data&quot; &#34;Dependent&#34;") == "data dependent"
+    # Středník chybí, když zdroj titulek ořízne uprostřed entity
+    assert normalize_title("Says &#39;Smarter&#39") == "says smarter"
+    ts = dt.datetime(2026, 10, 9, 11, 47, tzinfo=dt.UTC)
+    assert dedup_hash("What&#39;s Going On", ts) == dedup_hash("What's Going On", ts)
