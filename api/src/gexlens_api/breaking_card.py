@@ -108,16 +108,22 @@ class CardCache:
         at: dt.datetime,
         other_event_ts: Sequence[dt.datetime],
         market_closed: bool,
+        window_closed: bool,
     ) -> breaking.CardImpact:
-        window_end = ts_event + dt.timedelta(minutes=breaking.CARD_WINDOW_MIN)
-        if not market_closed and at < window_end:
+        if not market_closed and at < breaking.fixed_at(ts_event):
             # Běžící okno se mění s každou minutou — nepamatuje se
             return breaking.card_impact(
-                ts_event, bars, at=at, other_event_ts=other_event_ts, market_closed=False
+                ts_event,
+                bars,
+                at=at,
+                other_event_ts=other_event_ts,
+                market_closed=False,
+                window_closed=window_closed,
             )
         key = (
             ts_event,
             market_closed,
+            window_closed,
             tuple(other_event_ts),
             tuple((bar.ts, bar.high, bar.low, bar.close) for bar in bars),
         )
@@ -127,7 +133,12 @@ class CardCache:
         if cached is not None:
             return replace(cached, elapsed_min=elapsed)
         result = breaking.card_impact(
-            ts_event, bars, at=at, other_event_ts=other_event_ts, market_closed=market_closed
+            ts_event,
+            bars,
+            at=at,
+            other_event_ts=other_event_ts,
+            market_closed=market_closed,
+            window_closed=window_closed,
         )
         with self._lock:
             if len(self._impacts) >= IMPACT_MEMO_SIZE:
@@ -328,6 +339,7 @@ def _item(
         if ts_event < ts < window_end and contaminates(row.category, category)
     ]
     closed = is_market_closed(ts_event)
+    window_closed = is_market_closed(window_end)
     impact = {
         symbol: asdict(
             cache.impact(
@@ -336,6 +348,7 @@ def _item(
                 at=moment,
                 other_event_ts=contaminating,
                 market_closed=closed,
+                window_closed=window_closed,
             )
         )
         for symbol, bars in series.items()
@@ -343,16 +356,10 @@ def _item(
     return {
         "id": int(row.id),
         "ts_event": ts_event.isoformat(),
-        "ts_ingested": ts_ingested.isoformat(),
         "title": row.title,
-        "source": row.source,
-        "kind": row.kind,
-        "category": row.category,
-        "importance": row.importance,
         "is_key": is_key(row.kind, row.importance, row.category),
         "group": breaking.card_group(row.category, row.source),
         "theme": breaking.theme(str(row.title or "")),
-        "effective_tier": tier,
         "confirmed": breaking.is_confirmed(tier),
         "sources": sources,
         "impact": impact,

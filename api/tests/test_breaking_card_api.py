@@ -24,6 +24,9 @@ FED_TS = dt.datetime(2026, 10, 8, 14, 30, 20, tzinfo=dt.UTC)
 ARTICLE_TS = dt.datetime(2026, 10, 8, 14, 33, 0, tzinfo=dt.UTC)
 AT = dt.datetime(2026, 10, 8, 14, 37, 30, tzinfo=dt.UTC)
 SATURDAY_TS = dt.datetime(2026, 10, 10, 12, 0, tzinfo=dt.UTC)
+#: Denní pauza 16:00–17:00 CT a neděle před otevřením (16:30 CDT)
+PAUSE_TS = dt.datetime(2026, 10, 8, 21, 30, tzinfo=dt.UTC)
+SUNDAY_BEFORE_OPEN_TS = dt.datetime(2026, 10, 11, 21, 30, tzinfo=dt.UTC)
 
 
 def _bars(first: dt.datetime, last: dt.datetime, *, jump_from: dt.datetime) -> list[Bar]:
@@ -124,6 +127,12 @@ def client(tmp_path: Path) -> TestClient:
                 _event(6, SATURDAY_TS, SATURDAY_TS + second, source="alpaca", tier=2,
                        category="GEOPOLITICS", importance=3,
                        title="Israel strikes targets in Iran"),
+                _event(7, PAUSE_TS, PAUSE_TS + second, source="alpaca", tier=2,
+                       category="GEOPOLITICS", importance=3,
+                       title="Israel strikes targets in Lebanon"),
+                _event(8, SUNDAY_BEFORE_OPEN_TS, SUNDAY_BEFORE_OPEN_TS + second, source="alpaca",
+                       tier=2, category="GEOPOLITICS", importance=3,
+                       title="Iran fires missiles at Israel"),
             ],
         )  # fmt: skip
         # Kopie článku 3 z headline feedu, viditelná až po AT
@@ -146,7 +155,7 @@ def test_card_selects_breaking_news_point_in_time(client: TestClient) -> None:
     assert [item["id"] for item in body["items"]] == [3, 1]
 
     article, fed = body["items"]
-    assert article["confirmed"] is False and article["effective_tier"] == 3
+    assert article["confirmed"] is False  # článek, kopie tier 2 ještě není viditelná
     assert article["group"] == "geopolitics" and article["theme"] == "iran"
     assert [s["source"] for s in article["sources"]] == ["rss_news"]  # kopie ještě není
     assert article["impact"]["ES"]["state"] == "running"
@@ -169,19 +178,26 @@ def test_copy_confirms_article_once_visible(client: TestClient) -> None:
     later = AT + dt.timedelta(minutes=3)
     body = client.get("/news/breaking", params={"at": later.isoformat()}).json()
     article = next(item for item in body["items"] if item["id"] == 3)
-    assert article["confirmed"] is True and article["effective_tier"] == 2
+    assert article["confirmed"] is True
     assert [s["source"] for s in article["sources"]] == ["rss_news", "alpaca"]
     assert article["sources"][1]["delay_s"] == 390.0  # 14:39:30 − 14:33:00
     assert article["impact"]["ES"]["state"] == "fixed"
     assert 4 in {item["id"] for item in body["items"]}  # mezitím přijatá
 
 
-def test_news_during_closed_market_has_no_impact(client: TestClient) -> None:
-    at = SATURDAY_TS + dt.timedelta(minutes=10)
+@pytest.mark.parametrize(
+    ("event_id", "ts_event"),
+    [(6, SATURDAY_TS), (7, PAUSE_TS), (8, SUNDAY_BEFORE_OPEN_TS)],
+    ids=["sobota", "denni-pauza", "nedele-pred-otevrenim"],
+)
+def test_news_during_closed_market_has_no_impact(
+    client: TestClient, event_id: int, ts_event: dt.datetime
+) -> None:
+    at = ts_event + dt.timedelta(minutes=10)
     body = client.get("/news/breaking", params={"at": at.isoformat(), "hours": 1}).json()
     assert body["market_closed"] is True
     (item,) = body["items"]
-    assert item["id"] == 6
+    assert item["id"] == event_id
     assert item["impact"]["ES"] == {
         "state": "closed",
         "elapsed_min": 10,
@@ -279,3 +295,23 @@ def test_rewritten_bars_recompute_fixed_impact(client: TestClient, tmp_path: Pat
     changed = next(item for item in after["items"] if item["id"] == 1)["impact"]
     assert changed["ES"]["ret_bp"] != fed["impact"]["ES"]["ret_bp"]
     assert changed["NQ"] == fed["impact"]["NQ"]  # NQ partice se nezměnila
+
+
+def test_live_mode_includes_minute_in_progress(client: TestClient, tmp_path: Path) -> None:
+    """Živě (bez `at`) se bere i rozpracovaná minuta, kterou engine přepisuje
+    každý cyklus; replay v témže okamžiku jen uzavřené minuty."""
+    from sqlalchemy import create_engine
+
+    from gexlens_api.breaking_card import CardCache, breaking_card
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}")
+    cache = CardCache(tmp_path / "data")
+    live = breaking_card(engine, cache, at=None, now=AT, hours=12, limit=50)
+    replay = breaking_card(engine, cache, at=AT, now=AT, hours=12, limit=50)
+    assert live["live"] is True and replay["live"] is False
+    live_article = next(item for item in live["items"] if item["id"] == 3)["impact"]["ES"]
+    replay_article = next(item for item in replay["items"] if item["id"] == 3)["impact"]["ES"]
+    with_minute = [bar for bar in BARS if bar.ts <= AT]  # bar 14:37 je rozpracovaný
+    (expected,) = compute_reactions(ARTICLE_TS, with_minute, windows=(5,))
+    assert live_article["ret_bp"] == pytest.approx(expected.ret_bp)
+    assert replay_article["ret_bp"] < live_article["ret_bp"]  # cena v okně roste

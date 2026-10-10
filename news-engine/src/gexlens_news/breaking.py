@@ -149,6 +149,17 @@ def theme(title: str) -> str | None:
     return _first_theme(classifier.split_head(text)) or _first_theme(text)
 
 
+def fixed_at(ts_event: dt.datetime) -> dt.datetime:
+    """Kdy je 5min dopad konečný: uzávěr posledního baru okna `[ts, ts + 5 min)`.
+
+    Zpráva v 14:30:20 má v okně bar 14:35, který se uzavře v 14:36:00; zpráva
+    v celou minutu 14:30:00 končí barem 14:34, tedy v 14:35:00.
+    """
+    end = ts_event + dt.timedelta(minutes=CARD_WINDOW_MIN)
+    floor = end.replace(second=0, microsecond=0)
+    return end if end == floor else floor + _MINUTE
+
+
 @dataclass(frozen=True)
 class CardImpact:
     """Dopad zprávy na jeden symbol v čase čtení.
@@ -175,24 +186,32 @@ def card_impact(
     at: dt.datetime,
     other_event_ts: Sequence[dt.datetime] = (),
     market_closed: bool,
+    window_closed: bool = False,
 ) -> CardImpact:
     """Dopad zprávy v čase `at` z minutových barů viditelných v `at`.
 
     Volající předá jen bary, které v `at` existovaly (point-in-time), a
     kontaminující eventy podle K1 (`reactions.contaminates`). Zpráva při
-    zavřeném trhu (`market_closed`) dopad nemá. Do 5. minuty se hodnota
-    počítá z barů, které už jsou, potom je zafixovaná na okně 5 min.
+    zavřeném trhu (`market_closed`) dopad nemá. `window_closed` = trh je
+    zavřený na konci okna (zpráva v poslední minutě před pauzou nebo
+    víkendem): bez barů po zprávě nebo s odloženou reakcí je to zavřený trh,
+    ne mezera v datech (odložená reakce zůstává v `news_reactions`).
+
+    Do uzávěru posledního baru okna se hodnota počítá z barů, které už jsou,
+    potom je zafixovaná na okně 5 min (jako `news_reactions`).
     """
     elapsed = max(0, int((at - ts_event) / _MINUTE))
     if market_closed:
         return CardImpact(IMPACT_CLOSED, elapsed)
-    fixed = at >= ts_event + dt.timedelta(minutes=CARD_WINDOW_MIN)
+    fixed = at >= fixed_at(ts_event)
     state = IMPACT_FIXED if fixed else IMPACT_RUNNING
     reactions = compute_reactions(
         ts_event, bars, windows=(CARD_WINDOW_MIN,), other_event_ts=other_event_ts
     )
     if not reactions or reactions[0].deferred:
-        # Bez barů po zprávě: do 5. minuty se čeká, potom je to mezera v datech
+        if window_closed:
+            return CardImpact(IMPACT_CLOSED, elapsed)
+        # Bez barů po zprávě: do konce okna se čeká, potom je to mezera v datech
         # (trh podle rozvrhu otevřený, ale bary chybí) — ne zmrzlé číslo
         return CardImpact(state if not fixed else IMPACT_NO_DATA, elapsed)
     reaction = reactions[0]

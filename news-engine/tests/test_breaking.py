@@ -248,3 +248,51 @@ def test_card_impact_contamination_k1() -> None:
         EVENT, bars, at=EVENT + dt.timedelta(minutes=8), other_event_ts=[other], market_closed=False
     )
     assert impact.contaminated
+
+
+@pytest.mark.parametrize(
+    ("ts_event", "expected"),
+    [
+        (EVENT, dt.datetime(2026, 10, 8, 14, 36, tzinfo=dt.UTC)),  # bar 14:35 se uzavře v 14:36
+        (MINUTE_START, dt.datetime(2026, 10, 8, 14, 35, tzinfo=dt.UTC)),  # poslední bar 14:34
+    ],
+)
+def test_impact_fixes_when_last_window_bar_closes(
+    ts_event: dt.datetime, expected: dt.datetime
+) -> None:
+    assert breaking.fixed_at(ts_event) == expected
+
+
+def test_card_impact_runs_until_last_window_bar_closes() -> None:
+    bars = minute_bars(BEFORE, MINUTE_START + dt.timedelta(minutes=5))
+    at = EVENT + dt.timedelta(minutes=5, seconds=10)  # 14:35:30, bar 14:35 ještě běží
+    impact = breaking.card_impact(EVENT, bars, at=at, market_closed=False)
+    assert impact.state == breaking.IMPACT_RUNNING
+    later = breaking.card_impact(
+        EVENT, bars, at=dt.datetime(2026, 10, 8, 14, 36, tzinfo=dt.UTC), market_closed=False
+    )
+    assert later.state == breaking.IMPACT_FIXED
+
+
+def test_news_just_before_closure_is_closed_not_missing_data() -> None:
+    """Zpráva v poslední minutě před pauzou nebo víkendem: bez barů po zprávě
+    nebo s odloženou reakcí je to zavřený trh, ne mezera (žádné „bez dat“ přes
+    víkend)."""
+    ts = dt.datetime(2026, 10, 9, 20, 59, 30, tzinfo=dt.UTC)  # pátek 15:59:30 CT
+    friday = [
+        Bar(ts.replace(second=0) - dt.timedelta(minutes=n), 5000.0, 5000.5, 4999.5, 5000.0, 1.0)
+        for n in range(70, -1, -1)
+    ]
+    saturday = ts + dt.timedelta(hours=10)
+    impact = breaking.card_impact(ts, friday, at=saturday, market_closed=False, window_closed=True)
+    assert impact.state == breaking.IMPACT_CLOSED
+    sunday_open = dt.datetime(2026, 10, 11, 22, 0, tzinfo=dt.UTC)
+    resumed = [*friday, Bar(sunday_open, 5010.0, 5010.5, 5009.5, 5010.0, 1.0)]
+    deferred = breaking.card_impact(
+        ts, resumed, at=sunday_open + dt.timedelta(minutes=10), market_closed=False,
+        window_closed=True,
+    )  # fmt: skip
+    assert deferred.state == breaking.IMPACT_CLOSED
+    # Tatáž mezera při otevřeném trhu je výpadek dat
+    gap = breaking.card_impact(ts, friday, at=saturday, market_closed=False)
+    assert gap.state == breaking.IMPACT_NO_DATA
