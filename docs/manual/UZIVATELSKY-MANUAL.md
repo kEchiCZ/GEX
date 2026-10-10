@@ -757,7 +757,7 @@ Obrazovka **Řetěz** v sidebaru ukazuje klasickou opční tabulku vybrané expi
 
 ## 11c. News a sentiment (SentimentLens)
 
-Vlastní **news-engine** běží vedle datového enginu: sbírá zprávy a makro kalendář (ForexFactory, Fed RSS, zpravodajské feedy, Alpaca, broker pásku z IBKR), klasifikuje **kategorii, důležitost (1–3) a směr dopadu**, a počítá z nich **SentIndex** — souhrnný sentiment s rozpadem po tématech. Nic z toho nechodí ven; vše se počítá lokálně.
+Vlastní **news-engine** běží vedle datového enginu: sbírá zprávy a makro kalendář (ForexFactory, oficiální feedy Fedu, ECB a Bílého domu, zpravodajské feedy, Alpaca, broker pásku z IBKR), klasifikuje **kategorii, důležitost (1–3) a směr dopadu**, a počítá z nich **SentIndex** — souhrnný sentiment s rozpadem po tématech. Nic z toho nechodí ven; vše se počítá lokálně.
 
 **Důležitost 1–3 se čte z předmětu titulku a ze zdroje** (v1.22, #1293). Dřív
 stačilo klíčové slovo kdekoli v titulku nebo shrnutí, takže článek o osobních
