@@ -255,3 +255,27 @@ def test_news_at_globex_open_takes_base_from_friday_close(weekend_client: TestCl
     es = item["impact"]["ES"]
     assert es["state"] == "fixed"
     assert es["ret_bp"] == pytest.approx((5010.0 - 5000.0) / 5000.0 * 10_000)
+
+
+def test_rewritten_bars_recompute_fixed_impact(client: TestClient, tmp_path: Path) -> None:
+    """Zafixovaný dopad se pamatuje podle obsahu barů — doplní-li engine nebo
+    backfill jiné bary, karta nesmí ukázat zmrzlé číslo."""
+    params = {"at": AT.isoformat()}
+    before = client.get("/news/breaking", params=params).json()
+    again = client.get("/news/breaking", params=params).json()
+    fed = next(item for item in before["items"] if item["id"] == 1)
+    assert next(item for item in again["items"] if item["id"] == 1)["impact"] == fed["impact"]
+
+    path = tmp_path / "data" / "derived" / "ES" / "bars" / "2026-10-08.parquet"
+    table = pq.read_table(path)
+    doubled = [
+        value * 2 - 5000.0 if ts >= FED_TS.replace(second=0) else value
+        for ts, value in zip(
+            table.column("ts_min").to_pylist(), table.column("close").to_pylist(), strict=True
+        )
+    ]
+    pq.write_table(table.set_column(4, "close", pa.array(doubled)), path)
+    after = client.get("/news/breaking", params=params).json()
+    changed = next(item for item in after["items"] if item["id"] == 1)["impact"]
+    assert changed["ES"]["ret_bp"] != fed["impact"]["ES"]["ret_bp"]
+    assert changed["NQ"] == fed["impact"]["NQ"]  # NQ partice se nezměnila

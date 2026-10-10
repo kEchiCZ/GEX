@@ -547,11 +547,11 @@ def build_sentiment_router(
         return {"upcoming": rows}
 
     @functools.cache
-    def card_bars() -> Any:
-        """Partice barů karty s cache podle mtime; vznikne při prvním dotazu."""
-        from gexlens_api.breaking_card import FreshBars
+    def card_cache() -> Any:
+        """Stav karty (partice barů, zafixované dopady); vznikne při prvním dotazu."""
+        from gexlens_api.breaking_card import CardCache
 
-        return FreshBars(data_dir)
+        return CardCache(data_dir)
 
     @router.get("/news/breaking")
     def news_breaking(
@@ -572,7 +572,7 @@ def build_sentiment_router(
             raise HTTPException(422, "at musí nést časové pásmo (např. +00:00)")
         return breaking_card(
             engine_factory(),
-            card_bars(),
+            card_cache(),
             at=at,
             now=dt.datetime.now(dt.UTC),
             hours=hours,

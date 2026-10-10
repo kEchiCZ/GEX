@@ -22,7 +22,7 @@ import datetime as dt
 import threading
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +82,60 @@ class FreshBars(BarsRepository):
         return bars
 
 
+#: Zafixovaných dopadů v paměti (položka × symbol); karta jich má nejvýš stovky
+IMPACT_MEMO_SIZE = 4096
+
+
+class CardCache:
+    """Stav karty mezi dotazy: partice barů podle mtime a zafixované dopady.
+
+    Zafixovaný dopad (po 5. minutě nebo při zavřeném trhu) závisí jen na barech
+    kolem zprávy a na kontaminujících eventech. Klíčem je proto jejich obsah:
+    přepíše-li engine bar nebo doplní-li díru, klíč se změní a dopad se spočítá
+    znovu. Výpočet dopadu tvořil ~2/3 odpovědi (měřeno 10. 10., 50 položek).
+    """
+
+    def __init__(self, data_dir: Path) -> None:
+        self.bars = FreshBars(data_dir)
+        self._impacts: dict[tuple[object, ...], breaking.CardImpact] = {}
+        self._lock = threading.Lock()
+
+    def impact(
+        self,
+        ts_event: dt.datetime,
+        bars: Sequence[Bar],
+        *,
+        at: dt.datetime,
+        other_event_ts: Sequence[dt.datetime],
+        market_closed: bool,
+    ) -> breaking.CardImpact:
+        window_end = ts_event + dt.timedelta(minutes=breaking.CARD_WINDOW_MIN)
+        if not market_closed and at < window_end:
+            # Běžící okno se mění s každou minutou — nepamatuje se
+            return breaking.card_impact(
+                ts_event, bars, at=at, other_event_ts=other_event_ts, market_closed=False
+            )
+        key = (
+            ts_event,
+            market_closed,
+            tuple(other_event_ts),
+            tuple((bar.ts, bar.high, bar.low, bar.close) for bar in bars),
+        )
+        elapsed = max(0, int((at - ts_event) / _MINUTE))
+        with self._lock:
+            cached = self._impacts.get(key)
+        if cached is not None:
+            return replace(cached, elapsed_min=elapsed)
+        result = breaking.card_impact(
+            ts_event, bars, at=at, other_event_ts=other_event_ts, market_closed=market_closed
+        )
+        with self._lock:
+            if len(self._impacts) >= IMPACT_MEMO_SIZE:
+                self._impacts.pop(next(iter(self._impacts)))
+            self._impacts[key] = result
+        return result
+
+
 def _utc(value: dt.datetime) -> dt.datetime:
     return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
 
@@ -92,7 +146,7 @@ def _iso(value: dt.datetime) -> str:
 
 def breaking_card(
     engine: Engine,
-    bars: BarsRepository,
+    cache: CardCache,
     *,
     at: dt.datetime | None,
     now: dt.datetime,
@@ -161,7 +215,7 @@ def breaking_card(
         first = min(item[1] for item in selected)
         last = max(item[1] for item in selected)
         others = _contaminating(engine, first, last + _BARS_AFTER, moment)
-        series = {symbol: _series(bars, symbol, first, moment, live) for symbol in SYMBOLS}
+        series = {symbol: _series(cache.bars, symbol, first, moment, live) for symbol in SYMBOLS}
         stamps = {symbol: [bar.ts for bar in bars] for symbol, bars in series.items()}
         for row, ts_event, ts_ingested, tier in selected:
             items.append(
@@ -175,6 +229,7 @@ def breaking_card(
                     stamps,
                     others,
                     moment,
+                    cache,
                 )
             )
     return {
@@ -245,6 +300,7 @@ def _item(
     stamps: dict[str, list[dt.datetime]],
     others: Sequence[tuple[dt.datetime, str | None]],
     moment: dt.datetime,
+    cache: CardCache,
 ) -> dict[str, Any]:
     sources = [
         {
@@ -274,7 +330,7 @@ def _item(
     closed = is_market_closed(ts_event)
     impact = {
         symbol: asdict(
-            breaking.card_impact(
+            cache.impact(
                 ts_event,
                 _around(bars, stamps[symbol], ts_event),
                 at=moment,
