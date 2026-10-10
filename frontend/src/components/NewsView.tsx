@@ -18,6 +18,7 @@ import {
 } from '../api/news'
 import type { CrowdRow, NewsRow, ReviewRow } from '../api/news'
 import { useNews } from '../hooks/useNews'
+import { BreakingNewsSection } from './BreakingNewsCard'
 import { NewsExplain } from './NewsExplain'
 import { NewsSourcesSection } from './NewsSourcesSection'
 import { TopicsPanel } from './TopicsPanel'
@@ -345,6 +346,9 @@ export function NewsView() {
           ))}
         </div>
       )}
+
+      {/* Breaking news (E-6.28c): významné zprávy s naměřeným dopadem ES/NQ */}
+      <BreakingNewsSection />
 
       {/* Témata v čase (#566): rozpad období + průběh tématu + zdrojové zprávy */}
       <TopicsPanel focus={topicFocus} />
