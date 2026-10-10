@@ -42,6 +42,11 @@ _SPACES = re.compile(r"\s+")
 _HTML_BLOCK = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.I | re.S)
 _HTML_TAG = re.compile(r"<[^>]+>")
 _HTML_ENTITY = re.compile(r"&(#\d+|#x[0-9a-f]+|[a-z]+);", re.I)
+# Entita v textu zdroje (#1500): pojmenovaná jen se středníkem, číselná i bez
+# něj (Benzinga uřízne titulek uprostřed `&#39;`). `html.unescape` sám by
+# dekódoval i HTML5 entity bez středníku — z odkazu `&region=US` v postu
+# Bluesky by udělal `®ion=US`, z `BTC&ETH` `BTCÐ`
+_TEXT_ENTITY = re.compile(r"&(?:#\d+;?|#x[0-9a-f]+;?|[a-z][a-z0-9]*;)", re.I)
 
 #: Kolik znaků plného textu se posílá modelu jako „první odstavec". Lead nese
 #: většinu signálu; celý článek (~350 slov) by při dnešní velikosti korpusu
@@ -82,6 +87,15 @@ def strip_html(raw: str) -> str:
     return _SPACES.sub(" ", text).strip()
 
 
+def unescape_entities(text: str) -> str:
+    """HTML entity v prostém textu zdroje → znaky (`Fed&#39;s` → `Fed's`, #1500).
+
+    Jediná cesta pro collectory i klíč dedupu (`normalize_title`). Holý `&`
+    (`S&P`, `AT&T`, parametry odkazu) zůstává beze změny.
+    """
+    return _TEXT_ENTITY.sub(lambda match: html.unescape(match.group(0)), text)
+
+
 def clip_body(text: str, *, limit: int = BODY_MAX_CHARS) -> str:
     """Ořez článku na ukládanou délku (#744) — na hranici věty, ne slova.
 
@@ -118,7 +132,7 @@ def normalize_title(title: str) -> str:
     Titulek složený jen ze stopslov se **nesmí** zredukovat na prázdný řetězec —
     kolidoval by se všemi ostatními.
     """
-    folded = unicodedata.normalize("NFKD", html.unescape(title).casefold())
+    folded = unicodedata.normalize("NFKD", unescape_entities(title).casefold())
     ascii_only = "".join(ch for ch in folded if not unicodedata.combining(ch))
     words = _SPACES.sub(" ", _NON_WORD.sub(" ", ascii_only)).strip().split(" ")
     kept = [w for w in words if w and w not in _STOPWORDS]

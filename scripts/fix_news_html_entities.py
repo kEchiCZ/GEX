@@ -6,7 +6,8 @@ entity doslova. Nové řádky dekóduje collector a klíč dedupu dekóduje
 `normalize_title` (rozhodnutí vlastníka 10. 10., varianty B + H2 v #1500).
 Tenhle skript srovná historii:
 
-- `title` a `summary` → `html.unescape`, tedy totéž, co dnes dělá collector;
+- `title` a `summary`, u Bluesky i `body` (collector ho plní týmž textem)
+  → `unescape_entities`, tedy totéž, co dnes dělá collector;
 - `dedup_hash` → přepočet z čistého titulku, jinak by nesedělo okno dedupu
   po restartu (`NewsWriter.recent` hash přepočítává) a opakovaný
   `alpaca_news_backfill` by zapsal duplicitu;
@@ -30,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import html
 import sys
 from collections import Counter
 from collections.abc import Iterator
@@ -45,11 +45,14 @@ from reclassify_news_rules import database_url, make_engine  # noqa: E402
 from sqlalchemy import bindparam, or_, select, update  # noqa: E402
 from sqlalchemy.engine import Engine  # noqa: E402
 
-from gexlens_engine.compute.newstext import dedup_hash  # noqa: E402
+from gexlens_engine.compute.newstext import dedup_hash, unescape_entities  # noqa: E402
 from gexlens_engine.storage.sentiment import news_events  # noqa: E402
 
 DEFAULT_BATCH = 5000
 SOURCES = ("alpaca", "bluesky")
+#: Zdroj, u kterého collector dekóduje i `body` (= celý text postu)
+BODY_SOURCE = "bluesky"
+#: Příkladů změněného titulku na zdroj v reportu
 EXAMPLES = 5
 
 
@@ -59,9 +62,10 @@ class Report:
 
     titles: Counter[str] = field(default_factory=Counter)
     summaries: Counter[str] = field(default_factory=Counter)
+    bodies: Counter[str] = field(default_factory=Counter)
     rehashed: Counter[str] = field(default_factory=Counter)
     collisions: list[tuple[int, str]] = field(default_factory=list)
-    examples: list[tuple[str, str]] = field(default_factory=list)
+    examples: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
     changed: int = 0
 
 
@@ -71,7 +75,7 @@ def _utc(value: dt.datetime) -> dt.datetime:
 
 
 def _batches(engine: Engine, batch: int) -> Iterator[list[Any]]:
-    """Kandidáti (`&` v titulku nebo perexu) po dávkách podle id (keyset)."""
+    """Kandidáti (`&` v titulku, perexu nebo těle postu) po dávkách podle id (keyset)."""
     last_id = 0
     while True:
         with engine.connect() as conn:
@@ -82,12 +86,17 @@ def _batches(engine: Engine, batch: int) -> Iterator[list[Any]]:
                     news_events.c.ts_event,
                     news_events.c.title,
                     news_events.c.summary,
+                    news_events.c.body,
                     news_events.c.dedup_hash,
                 )
                 .where(
                     news_events.c.id > last_id,
                     news_events.c.source.in_(SOURCES),
-                    or_(news_events.c.title.contains("&"), news_events.c.summary.contains("&")),
+                    or_(
+                        news_events.c.title.contains("&"),
+                        news_events.c.summary.contains("&"),
+                        (news_events.c.source == BODY_SOURCE) & news_events.c.body.contains("&"),
+                    ),
                 )
                 .order_by(news_events.c.id)
                 .limit(batch)
@@ -110,7 +119,7 @@ def _taken(engine: Engine, hashes: set[str]) -> set[str]:
 
 
 def fix(engine: Engine, *, apply: bool, batch: int = DEFAULT_BATCH) -> Report:
-    """Dekóduje titulky a perexy; s `apply` zapíše jen změněné řádky."""
+    """Dekóduje titulky, perexy a těla postů; s `apply` zapíše jen změněné řádky."""
     report = Report()
     stmt = (
         update(news_events)
@@ -118,6 +127,7 @@ def fix(engine: Engine, *, apply: bool, batch: int = DEFAULT_BATCH) -> Report:
         .values(
             title=bindparam("b_title"),
             summary=bindparam("b_summary"),
+            body=bindparam("b_body"),
             dedup_hash=bindparam("b_hash"),
         )
     )
@@ -126,23 +136,29 @@ def fix(engine: Engine, *, apply: bool, batch: int = DEFAULT_BATCH) -> Report:
     for rows in _batches(engine, batch):
         planned = []
         for row in rows:
-            title = html.unescape(row.title)
-            summary = html.unescape(row.summary) if row.summary is not None else None
-            if title == row.title and summary == row.summary:
+            title = unescape_entities(row.title)
+            summary = unescape_entities(row.summary) if row.summary is not None else None
+            body = row.body
+            if body is not None and row.source == BODY_SOURCE:
+                body = unescape_entities(body)
+            if (title, summary, body) == (row.title, row.summary, row.body):
                 continue
             new_hash = row.dedup_hash
             if title != row.title:
                 report.titles[row.source] += 1
-                if len(report.examples) < EXAMPLES:
-                    report.examples.append((row.title, title))
+                examples = report.examples.setdefault(row.source, [])
+                if len(examples) < EXAMPLES:
+                    examples.append((row.title, title))
                 new_hash = dedup_hash(title, _utc(row.ts_event))
             if summary != row.summary:
                 report.summaries[row.source] += 1
-            planned.append((row, title, summary, new_hash))
+            if body != row.body:
+                report.bodies[row.source] += 1
+            planned.append((row, title, summary, body, new_hash))
 
-        taken = _taken(engine, {new for row, _, _, new in planned if new != row.dedup_hash})
+        taken = _taken(engine, {new for row, *_, new in planned if new != row.dedup_hash})
         changes = []
-        for row, title, summary, new_hash in planned:
+        for row, title, summary, body, new_hash in planned:
             if new_hash != row.dedup_hash:
                 if new_hash in taken or new_hash in assigned:
                     report.collisions.append((int(row.id), row.source))
@@ -151,7 +167,13 @@ def fix(engine: Engine, *, apply: bool, batch: int = DEFAULT_BATCH) -> Report:
                     report.rehashed[row.source] += 1
                     assigned.add(new_hash)
             changes.append(
-                {"b_id": row.id, "b_title": title, "b_summary": summary, "b_hash": new_hash}
+                {
+                    "b_id": row.id,
+                    "b_title": title,
+                    "b_summary": summary,
+                    "b_body": body,
+                    "b_hash": new_hash,
+                }
             )
         report.changed += len(changes)
         if apply and changes:
@@ -161,11 +183,11 @@ def fix(engine: Engine, *, apply: bool, batch: int = DEFAULT_BATCH) -> Report:
 
 
 def format_report(report: Report, *, apply: bool) -> str:
-    lines = ["| zdroj | titulků | perexů | hash přepočten |", "|---|---|---|---|"]
+    lines = ["| zdroj | titulků | perexů | těl | hash přepočten |", "|---|---|---|---|---|"]
     for source in SOURCES:
         lines.append(
             f"| {source} | {report.titles[source]} | {report.summaries[source]} "
-            f"| {report.rehashed[source]} |"
+            f"| {report.bodies[source]} | {report.rehashed[source]} |"
         )
     verb = "zapsáno" if apply else "ke změně (dry-run)"
     lines.append("")
@@ -175,8 +197,10 @@ def format_report(report: Report, *, apply: bool) -> str:
         f"Kolize hashe (starý hash ponechán, kopie zůstává řádkem): {len(report.collisions)}"
         + (f" — id {ids}{' …' if len(report.collisions) > 20 else ''}" if ids else "")
     )
-    for before, after in report.examples:
-        lines.append(f"  {before[:90]!r}\n→ {after[:90]!r}")
+    for source, examples in report.examples.items():
+        lines.append(f"Příklady {source}:")
+        for before, after in examples:
+            lines.append(f"  {before[:90]!r}\n→ {after[:90]!r}")
     return "\n".join(lines)
 
 

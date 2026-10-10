@@ -20,17 +20,26 @@ from gexlens_engine.storage.sentiment import ensure_sentiment_schema, news_event
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "fix_news_html_entities.py"
 TS = dt.datetime(2026, 10, 9, 11, 47, tzinfo=dt.UTC)
 
-#: (zdroj, titulek, perex, uložený hash) — `old-*` = hash z doby před opravou
-ROWS: list[tuple[str, str, str | None, str]] = [
-    ("alpaca", "What&#39;s Going On With Vistra Stock?", None, "old-0"),
-    ("alpaca", "Fed holds rates", "S&amp;P 500 flat", "keep-1"),
-    ("bluesky", "MOC IMBALANCE S&amp;P 500: 1904 MLN", None, "old-2"),
-    ("alpaca", "S&P 500 hits record", None, "keep-3"),
+LINK = "https://x.com/p?date=2026-09-23&region=US&utm_source=social"
+#: (zdroj, titulek, perex, tělo, uložený hash) — `old-*` = hash z doby před opravou
+ROWS: list[tuple[str, str, str | None, str | None, str]] = [
+    ("alpaca", "What&#39;s Going On With Vistra Stock?", None, None, "old-0"),
+    ("alpaca", "Fed holds rates", "S&amp;P 500 flat", None, "keep-1"),
+    ("bluesky", "MOC IMBALANCE S&amp;P 500: 1904 MLN", None, "MOC S&amp;P full", "old-2"),
+    ("alpaca", "S&P 500 hits record", None, "Alpaca &amp; tělo: #1511", "keep-3"),
     # Kopie, kterou dedup kvůli entitě minul: čistý titulek už má rss_news
-    ("alpaca", "Johnson &amp; Johnson Slides", None, "old-4"),
-    ("rss_news", "Johnson & Johnson Slides", None, dedup_hash("Johnson & Johnson Slides", TS)),
+    ("alpaca", "Johnson &amp; Johnson Slides", None, None, "old-4"),
+    (
+        "rss_news",
+        "Johnson & Johnson Slides",
+        None,
+        None,
+        dedup_hash("Johnson & Johnson Slides", TS),
+    ),
     # Zdroj bez opraveného collectoru se nemění
-    ("finnhub", "Fed&#39;s Waller", None, "keep-6"),
+    ("finnhub", "Fed&#39;s Waller", None, None, "keep-6"),
+    # Holý `&` v odkazu není entita (`&region` ≠ `®ion`)
+    ("bluesky", f"CPI preview {LINK}", None, f"CPI preview {LINK} …", "keep-7"),
 ]
 
 
@@ -48,7 +57,7 @@ def make_engine(tmp_path: Path) -> Engine:
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
     ensure_sentiment_schema(engine)
     with engine.begin() as conn:
-        for source, title, summary, stored_hash in ROWS:
+        for source, title, summary, body, stored_hash in ROWS:
             conn.execute(
                 insert(news_events).values(
                     ts_event=TS,
@@ -57,6 +66,7 @@ def make_engine(tmp_path: Path) -> Engine:
                     kind="headline",
                     title=title,
                     summary=summary,
+                    body=body,
                     symbols=[],
                     market_closed=False,
                     dedup_hash=stored_hash,
@@ -66,14 +76,17 @@ def make_engine(tmp_path: Path) -> Engine:
     return engine
 
 
-def stored(engine: Engine) -> list[tuple[str, str | None, str]]:
+def stored(engine: Engine) -> list[tuple[str, str | None, str | None, str]]:
     with engine.connect() as conn:
         rows = conn.execute(
-            select(news_events.c.title, news_events.c.summary, news_events.c.dedup_hash).order_by(
-                news_events.c.id
-            )
+            select(
+                news_events.c.title,
+                news_events.c.summary,
+                news_events.c.body,
+                news_events.c.dedup_hash,
+            ).order_by(news_events.c.id)
         ).fetchall()
-    return [(row.title, row.summary, row.dedup_hash) for row in rows]
+    return [(row.title, row.summary, row.body, row.dedup_hash) for row in rows]
 
 
 def test_apply_dekoduje_prepocte_hash_a_je_idempotentni(tmp_path: Path) -> None:
@@ -84,20 +97,22 @@ def test_apply_dekoduje_prepocte_hash_a_je_idempotentni(tmp_path: Path) -> None:
 
     after = stored(engine)
     vistra = "What's Going On With Vistra Stock?"
-    assert after[0] == (vistra, None, dedup_hash(vistra, TS))
+    assert after[0] == (vistra, None, None, dedup_hash(vistra, TS))
     # Jen perex: titulek a hash beze změny
-    assert after[1] == ("Fed holds rates", "S&P 500 flat", "keep-1")
+    assert after[1] == ("Fed holds rates", "S&P 500 flat", None, "keep-1")
+    # Bluesky: tělo je týž text postu, dekóduje se taky
     moc = "MOC IMBALANCE S&P 500: 1904 MLN"
-    assert after[2] == (moc, None, dedup_hash(moc, TS))
-    assert after[3] == ("S&P 500 hits record", None, "keep-3")
+    assert after[2] == (moc, None, "MOC S&P full", dedup_hash(moc, TS))
+    # Tělo Alpaca jde přes `strip_html` (#1511), tady se nemění
+    assert after[3] == ROWS[3][1:]
     # Kolize: titulek dekódovaný, starý hash zůstává, řádek se nemaže
-    assert after[4] == ("Johnson & Johnson Slides", None, "old-4")
-    assert after[5] == ROWS[5][1:]
-    assert after[6] == ROWS[6][1:]
+    assert after[4] == ("Johnson & Johnson Slides", None, None, "old-4")
+    assert after[5:] == [row[1:] for row in ROWS[5:]]
 
     assert report.changed == 4
     assert report.titles == {"alpaca": 2, "bluesky": 1}
     assert report.summaries == {"alpaca": 1}
+    assert report.bodies == {"bluesky": 1}
     assert report.rehashed == {"alpaca": 1, "bluesky": 1}
     assert report.collisions == [(5, "alpaca")]
     # Druhý běh nic nemění
@@ -143,5 +158,5 @@ def test_dva_radky_nedostanou_tyz_hash(tmp_path: Path) -> None:
 
     assert report.rehashed == {"alpaca": 1}
     assert report.collisions == [(2, "bluesky")]
-    hashes = [row[2] for row in stored(engine)]
+    hashes = [row[3] for row in stored(engine)]
     assert hashes == [dedup_hash("AT&T beats", TS), "old-1"]

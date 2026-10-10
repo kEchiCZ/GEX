@@ -103,3 +103,9 @@ def test_entity_v_postu_se_dekoduje_pred_orezem_titulku() -> None:
     assert event2 is not None
     assert event2.title.startswith("S&P x")
     assert event2.body == "S&P " + "x" * TITLE_MAX_CHARS
+
+    # Holý `&` v odkazu není entita — `&region=US` nesmí být `®ion=US`
+    link = "CPI preview $SPY https://x.com/p?date=2026-09-23&region=US&utm_source=social"
+    event3 = normalize_post(commit(link), NOW)
+    assert event3 is not None
+    assert event3.title == link

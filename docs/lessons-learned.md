@@ -257,6 +257,8 @@ chyb**, hlavně diagnostických a provozních.
   vzorek skutečného payloadu, včetně entit a ořezaného titulku. Když se změní normalizace uloženého klíče
   (`dedup_hash`), přepočítat ho i v historii (`scripts/fix_news_html_entities.py`). Jinak nesedí okno dedupu
   po restartu a backfill přestane být idempotentní.
+  Pozor na `html.unescape` nad prostým textem: dekóduje i HTML5 entity bez středníku, z odkazu `&region=US`
+  udělá `®ion=US` (7 titulků Bluesky). Nad textem zdroje jen `newstext.unescape_entities`.
 - **2026-10-09 — tisíce reakcí bez minutové fáze, i když bary existují (#1494).** Backfill zpráv
   (17. 8.) proběhl dřív než backfill barů (3. 9.): `ReactionJob` spočítal jen denní fázi a event
   už nikdy nevybral, protože pending dotaz bere jen eventy bez jakéhokoli řádku (ochrana #655).
