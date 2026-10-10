@@ -38,6 +38,7 @@ import { InstrumentHeader } from './components/InstrumentHeader'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
 import { BottomPanels, PANEL_HEIGHT_MAX, PANEL_HEIGHT_MIN } from './components/BottomPanels'
+import { BreakingNewsOverlay } from './components/BreakingNewsCard'
 import type { PanelKey } from './components/BottomPanels'
 import { PlaybackBar } from './components/PlaybackBar'
 import { PaperTicketDialog } from './components/PaperTicketDialog'
@@ -2253,6 +2254,8 @@ function MainContent() {
                         : '')}
               </div>
             )}
+            {/* Karta Breaking news (E-6.28c): sbalená je jen štítek, graf nezmenšuje */}
+            <BreakingNewsOverlay />
           </main>
           {(toggles.vol || toggles.optVol || toggles.delta || toggles.deltaFlow) && (
             <div

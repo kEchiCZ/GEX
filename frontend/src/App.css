@@ -4037,3 +4037,136 @@ tr.setup-after-settle td {
   stroke-width: 1;
   stroke-dasharray: 3 2;
 }
+
+/* ── Karta Breaking news (E-6.28c, ADR-0059 bod 8) ─────────────── */
+.breaking-section {
+  margin: 8px 0 16px;
+}
+
+.breaking-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.breaking-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--bg-panel);
+}
+
+.breaking-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.breaking-badge {
+  background: var(--bg-chip);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+  font-size: 11px;
+}
+
+.breaking-badge.key {
+  border-color: #d4a017;
+  color: #d4a017;
+}
+
+.breaking-badge.unconfirmed {
+  border-style: dashed;
+  color: var(--text-muted);
+}
+
+.breaking-title {
+  margin: 3px 0;
+  font-weight: 600;
+}
+
+.breaking-impacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.breaking-impact.positive strong {
+  color: #14c8aa;
+}
+
+.breaking-impact.negative strong {
+  color: #e05260;
+}
+
+.breaking-symbol {
+  color: var(--text-muted);
+}
+
+.breaking-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.breaking-error {
+  color: #e0a040;
+}
+
+/* Sbalitelný panel v levém dolním rohu heatmapy (nad časovou osou, popiskem
+   projekce a za popisky strik) — vpravo
+   nahoře sedí ⟲ reset a karta setupu, vlevo nahoře tooltip, nahoře uprostřed
+   bannery. Sbalený je jen štítek, graf nezmenšuje */
+.breaking-overlay-chip {
+  position: absolute;
+  bottom: 46px;
+  left: 52px;
+  z-index: 5;
+  background: var(--bg-chip);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.breaking-overlay {
+  position: absolute;
+  bottom: 46px;
+  left: 52px;
+  z-index: 5;
+  width: min(380px, 45%);
+  max-height: 60%;
+  overflow-y: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.breaking-overlay header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.breaking-overlay header .chip {
+  margin-left: auto;
+}
+
+.breaking-footer {
+  font-size: 11px;
+  margin: 4px 0 0;
+}
