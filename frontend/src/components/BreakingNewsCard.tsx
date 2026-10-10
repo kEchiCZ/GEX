@@ -10,6 +10,8 @@ Skóre z textu se nezobrazuje (#740).
 */
 import { useEffect, useState } from 'react'
 import {
+  BREAKING_HOURS,
+  BREAKING_LIMIT,
   BREAKING_SYMBOLS,
   UNCONFIRMED_TOOLTIP,
   delayLabel,
@@ -110,23 +112,45 @@ export function BreakingNewsList({
     )
   }
   if (!card) return <p className="muted">Načítám…</p>
+  const asOf = new Date(card.as_of).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+  // Stáří dat musí být vidět — visící dotaz jinak nechá čísla zmrzlá (SPEC 3.7)
+  const footer = (
+    <p className="muted breaking-footer" data-testid="breaking-as-of">
+      stav k {asOf}
+      {card.items.length >= BREAKING_LIMIT && ` · ${BREAKING_LIMIT} nejnovějších`}
+    </p>
+  )
   if (card.items.length === 0) {
-    return <p className="muted">Za posledních 12 h žádná zpráva, která by na kartu patřila.</p>
+    return (
+      <>
+        <p className="muted">
+          Za posledních {BREAKING_HOURS} h žádná zpráva, která by na kartu patřila.
+        </p>
+        {footer}
+      </>
+    )
   }
   return (
-    <ul className="breaking-list" aria-label="Breaking news">
-      {card.items.map((item) => (
-        <BreakingRow key={item.id} item={item} nowMs={nowMs} />
-      ))}
-    </ul>
+    <>
+      <ul className="breaking-list" aria-label="Breaking news">
+        {card.items.map((item) => (
+          <BreakingRow key={item.id} item={item} nowMs={nowMs} />
+        ))}
+      </ul>
+      {footer}
+    </>
   )
 }
 
-/** „Před X min“ tiká po minutě; render zůstává čistý (#1123). */
+/** „Před X s/min“ tiká s obnovou karty; render zůstává čistý (#1123). */
 function useNow(): number {
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000)
+    const timer = window.setInterval(() => setNowMs(Date.now()), 15_000)
     return () => window.clearInterval(timer)
   }, [])
   return nowMs

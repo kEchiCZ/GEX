@@ -25,6 +25,16 @@ export function useBreakingNews(enabled: boolean): BreakingState {
   const [error, setError] = useState<string | null>(null)
   const [version, setVersion] = useState(0)
 
+  // Po sbalení nic nedržet — po rozbalení by se na chvíli ukázal starý
+  // „běží 2 min“, jako by byl aktuální
+  useEffect(() => {
+    if (!enabled) return
+    return () => {
+      setCard(null)
+      setError(null)
+    }
+  }, [enabled])
+
   useEffect(() => {
     if (!enabled) return
     let cancelled = false

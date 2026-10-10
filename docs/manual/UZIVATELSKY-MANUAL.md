@@ -788,7 +788,7 @@ nazpaměť místo zobecnění.
 Karta ukazuje **významné zprávy posledních 12 h s naměřeným dopadem na ES i NQ**.
 Najdete ji na dvou místech:
 
-- **v hlavním pohledu (Graf)** jako štítek **⚡ Breaking news** v pravém horním rohu heatmapy.
+- **v hlavním pohledu (Graf)** jako štítek **⚡ Breaking news** v levém dolním rohu heatmapy.
   Kliknutím se rozbalí panel, ✕ ho sbalí. Volba se pamatuje. Sbalený panel graf nezmenšuje
   a na server se neptá;
 - **na stránce News** jako sekce nad tématy a feedem.
@@ -800,22 +800,24 @@ Každá položka nese:
   (Fed, Cla, Írán, Energie…), **zásadní** u zpráv s nejvyšší důležitostí;
 - **„článek, zatím nepotvrzeno“**, když zprávu zatím přinesl jen článek (CNBC, Yahoo,
   Finnhub…) a ne oficiální zdroj nebo headline feed (Benzinga, kurátoři Bluesky). Štítek
-  zmizí, jakmile stejnou zprávu přinese tier 1–2. Článek jde na kartu jen do **60 min od
-  publikace**: staré články doručené se zpožděním kartu nezahlcují;
+  zmizí, jakmile stejnou zprávu přinese tier 1–2. Článek jde na kartu, jen když dorazil do
+  **60 min od publikace**: staré články doručené se zpožděním kartu nezahlcují;
 - **dopad ES a NQ v bp:** hlavní číslo je změna ceny od posledního close před zprávou
   (zelená nahoru, červená dolů). Vedle je **výchylka** (↑/↓ bp, high/low od minuty zprávy),
   aby se neztratil whipsaw. Prvních 5 minut je u čísla **„běží X min“** a číslo se mění.
-  Pak je **zafixované** („5 min“) a odpovídá tomu, co později uvidíte v historii reakcí;
+  Pak je **zafixované** („5 min“) a odpovídá Δ5m, které později ukáže feed zpráv;
 - **⚠** u dopadu = do okna spadla jiná významná zpráva jiného typu, pohyb tedy nejde přičíst
   jen téhle;
 - **„trh zavřený“** místo čísla, když zpráva přišla mimo obchodní dobu (nebo těsně před
-  pauzou či víkendem). Reakci na otevření najdete ve feedu. **„bez dat“** znamená, že trh byl
+  pauzou či víkendem). Reakci na otevření ukáže feed zpráv. **„bez dat“** znamená, že trh byl
   podle rozvrhu otevřený, ale cenová data po zprávě chybí (výpadek), tedy mezera, ne nula;
 - **zdroje se zpožděním:** kdo zprávu přinesl a za jak dlouho od publikace (`alpaca +1 s`,
   `rss_news +6 min`).
 
 Karta se obnovuje à 15 s a hned po příchodu nové významné zprávy. Nová zpráva má kategorii
-a důležitost do ~1 s od příjmu. Skóre z textu se na kartě neukazuje (#740), rozhoduje
+a důležitost do ~1 s od příjmu. Pod seznamem je čas stavu („stav k 14:37:30“) a při plném
+počtu i „50 nejnovějších“. Karta je **vždy živá**: i při prohlížení historického dne nebo
+v playbacku ukazuje zprávy posledních 12 h, ne zprávy zobrazeného okamžiku. Skóre z textu se na kartě neukazuje (#740), rozhoduje
 naměřená reakce trhu.
 
 ### Obrazovka News

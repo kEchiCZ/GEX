@@ -146,3 +146,39 @@ test('sbalený panel u heatmapy se na API neptá, rozbalený ano a pamatuje si t
   fireEvent.click(screen.getByTestId('breaking-close'))
   expect(screen.getByTestId('breaking-open')).toBeTruthy()
 })
+
+test('významná zpráva z WS spustí refetch, syrová páska z enginu ne', async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(CARD) })
+  vi.stubGlobal('fetch', fetchMock)
+  window.localStorage.setItem('gexlens.breakingOpen', 'true')
+  render(<BreakingNewsOverlay />)
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+  const handler = subscribe.mock.calls[0][1] as (data: Record<string, unknown>) => void
+  handler({ id: 7, title: 'syrová páska', importance: null }) // bez klasifikace
+  handler({ kind: 'retro_pass', message: 'hotovo' }) // provozní hláška bez id
+  await new Promise((resolve) => setTimeout(resolve, 700))
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  handler({ id: 8, title: 'Fed cuts rates', significance: 1 })
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+})
+
+test('po sbalení polling skončí a stav karty se zahodí', async () => {
+  vi.useFakeTimers()
+  try {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(CARD) })
+    vi.stubGlobal('fetch', fetchMock)
+    window.localStorage.setItem('gexlens.breakingOpen', 'true')
+    render(<BreakingNewsOverlay />)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(fetchMock).toHaveBeenCalledTimes(2) // hned + po 15 s
+    expect(screen.getByTestId('breaking-as-of').textContent).toContain('stav k')
+    fireEvent.click(screen.getByTestId('breaking-close'))
+    expect(unsubscribe).toHaveBeenCalledWith('news', expect.any(Function))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    fireEvent.click(screen.getByTestId('breaking-open'))
+    expect(screen.getByText('Načítám…')).toBeTruthy() // žádná stará čísla
+  } finally {
+    vi.useRealTimers()
+  }
+})

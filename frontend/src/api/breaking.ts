@@ -88,7 +88,14 @@ export function themeLabel(theme: string | null): string | null {
 }
 
 /** Karta pro okamžik teď; chyba se vyhazuje — tiché prázdno by vypadalo jako klid. */
-export async function fetchBreaking(hours = 12, limit = 50): Promise<BreakingCard> {
+/** Okno a strop karty; při plném stropu UI řekne, že ukazuje jen nejnovější. */
+export const BREAKING_HOURS = 12
+export const BREAKING_LIMIT = 50
+
+export async function fetchBreaking(
+  hours = BREAKING_HOURS,
+  limit = BREAKING_LIMIT,
+): Promise<BreakingCard> {
   const response = await fetch(`${API_BASE}/news/breaking?hours=${hours}&limit=${limit}`)
   if (!response.ok) throw new Error(`news/breaking: HTTP ${response.status}`)
   const payload = (await response.json()) as BreakingCard
@@ -116,7 +123,7 @@ export function impactStateLabel(impact: BreakingImpact): string {
   }
 }
 
-/** Výchylka se směrem: „↑ 8,1 bp“; null = zatím nejde změřit. */
+/** Výchylka se směrem: „↑ 8.1 bp“; null = zatím nejde změřit. */
 export function excursionLabel(impact: BreakingImpact): string | null {
   if (impact.excursion_bp === null) return null
   const arrow = impact.excursion_direction === -1 ? '↓' : '↑'
@@ -140,7 +147,7 @@ export function impactTooltip(symbol: string, impact: BreakingImpact): string {
       : '• zafixováno po 5 minutách',
   ]
   if (impact.state === 'closed') {
-    lines[1] = '• zpráva přišla při zavřeném trhu; reakce na otevření je v historii zpráv'
+    lines[1] = '• zpráva přišla při zavřeném trhu; reakci na otevření ukáže feed zpráv'
   }
   if (impact.state === 'no_data') lines[1] = '• trh otevřený, ale bary po zprávě chybí'
   const excursion = excursionLabel(impact)
@@ -155,5 +162,5 @@ export function impactTooltip(symbol: string, impact: BreakingImpact): string {
 export const UNCONFIRMED_TOOLTIP = [
   'Článek (tier 3), zatím bez doručení z oficiálního zdroje nebo headline feedu',
   '• štítek zmizí, až stejnou zprávu přinese tier 1–2',
-  '• článek jde na kartu jen do 60 min od publikace',
+  '• článek jde na kartu, jen když dorazil do 60 min od publikace',
 ].join('\n')
