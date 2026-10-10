@@ -20,8 +20,10 @@ se váží přes `event_id`, přepočet hashe je neodpojí.
 Režimy: výchozí dry-run jen čtením (PG `default_transaction_read_only`)
 s počty a příklady; `--apply` zapíše jen řádky, kde se text změní
 (idempotentní, druhý běh 0 změn). Před `--apply` na produkci záloha
-`pwsh scripts/backup-postgres.ps1`, po něm restart news-enginu (okno dedupu
-v paměti drží staré hashe 6 h).
+`pwsh scripts/backup-postgres.ps1`. Spouštět až po nasazení news-enginu
+s #1500: jeho okno dedupu (6 h v paměti) počítá hash už z dekódovaného
+titulku, takže po skriptu sedí s DB bez restartu. Se starší verzí by okno
+drželo staré hashe a news-engine by se po skriptu musel restartovat.
 """
 
 from __future__ import annotations
