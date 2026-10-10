@@ -10,6 +10,7 @@ stabilní kontrakt a N7/N8 mění jen data, ne tvar API.
 """
 
 import datetime as dt
+import functools
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
@@ -544,6 +545,39 @@ def build_sentiment_router(
         _attach_series_conventions(rows)
         _attach_significance(rows)
         return {"upcoming": rows}
+
+    @functools.cache
+    def card_bars() -> Any:
+        """Partice barů karty s cache podle mtime; vznikne při prvním dotazu."""
+        from gexlens_api.breaking_card import FreshBars
+
+        return FreshBars(data_dir)
+
+    @router.get("/news/breaking")
+    def news_breaking(
+        at: dt.datetime | None = None,
+        hours: int = Query(12, ge=1, le=72),
+        limit: int = Query(50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        """Karta Breaking news (E-6.28b, ADR-0059 bod 4 a 8), nejnovější první.
+
+        Výběr (`is_breaking` s čerstvostí tier 3), potvrzení, skupina, téma,
+        zdroje se zpožděním a dopad ES/NQ z barů — vše při čtení tímiž čistými
+        funkcemi jako `news_reactions`. Bez `at` živě; `at` (ISO s pásmem) =
+        stav karty v tom okamžiku, jen z dat dostupných v `at`.
+        """
+        from gexlens_api.breaking_card import breaking_card
+
+        if at is not None and at.tzinfo is None:
+            raise HTTPException(422, "at musí nést časové pásmo (např. +00:00)")
+        return breaking_card(
+            engine_factory(),
+            card_bars(),
+            at=at,
+            now=dt.datetime.now(dt.UTC),
+            hours=hours,
+            limit=limit,
+        )
 
     @router.get("/news/reactions/typical")
     def news_reactions_typical(symbol: str = "ES") -> dict[str, object]:
