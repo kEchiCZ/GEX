@@ -198,6 +198,12 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
        [−1,52; 0,60]. Celá historie by kritérium splnila, ale srovnává mega caps z backfillu
        s ostatními ze živého sběru, tedy dvě období s různou volatilitou; uvnitř backfillu má CI
        nulu uvnitř. Skupinu „firmy“ tvoří jen `TECH`.
+     - **Přeměření 10. 10. (#1494):** vzorek z 9. 10. neměl minutovou fázi reakcí u 43 ze 44
+       titulků o výsledcích mega caps z týdne 28. 7. (MSFT, META, AAPL, AMZN), protože bary
+       přibyly až po výpočtu reakcí. Po doplnění je mega caps n = 94 (+13; zbylé titulky vyřadila
+       kontaminace K1 nebo odložená reakce), ostatní n = 2 897. Rozdíl `range_5` je −0,77 bp, CI
+       [−1,73; 0,66], po minutách −0,40 bp [−1,31; 0,99]. **Verdikt beze změny: nesplněno.**
+       Celá historie už kritérium nesplní ani v jednotce titulků (+0,37 bp [−0,01; 0,84]).
    - Odznak zásadní zprávy je stávající `is_key`.
    - **Skupina na kartě** je zobrazovací mapování stávající `category`. Slovník kategorií se
      nemění, protože je klíčem modelu a K1.

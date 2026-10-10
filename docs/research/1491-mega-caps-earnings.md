@@ -8,6 +8,13 @@ sub-issue #1491, Fáze 6 #1406.
 **Verdikt: kritérium nesplněno.** Výjimka mega caps se nezavádí, SEC se nepoužije (ADR-0059
 varianta A) a E-6.25b se ruší jako nepotřebný.
 
+> **Přeměření 10. 10. 2026 (#1494): verdikt beze změny.** Vzorek z 9. 10. neměl minutovou fázi
+> reakcí u 43 ze 44 titulků o výsledcích mega caps z týdne 28. 7. (hlavní výsledky Q2: MSFT, META,
+> AAPL, AMZN). Bary pro ty dny vznikly až po výpočtu reakcí a job minutovou fázi znovu
+> nepočítal. Po doplnění (`scripts/backfill_minute_reactions.py --apply`, 27 968 párů) je
+> v primárním vzorku 94 titulků mega caps místo 81. Rozdíl mediánů `range_5` je −0,77 bp,
+> CI [−1,73; 0,66], tedy pořád nesplněno. Tabulky jsou v oddílu „Přeměření 10. 10.“ na konci.
+
 ## Jak se měřilo
 
 Skript `scripts/measure_megacap_earnings.py` jen čte PG. Testy čistých funkcí jsou
@@ -103,3 +110,36 @@ Kde jsou obě skupiny z téhož období a bez filtru (primární tabulka), rozd�
 - **Přeměření** má smysl až po další sezóně výsledků s živým sběrem (Q3 2026 začíná v polovině
   října). Primární vzorek mega caps dnes pokrývá jen jednu sezónu (Q2 2026, od 28. 7.). Návrat
   výjimky na stůl by potřeboval nové rozhodnutí vlastníka; předregistrace platí, jak je.
+
+## Přeměření 10. 10. 2026 po doplnění minutové fáze (#1494)
+
+`as_of` **2026-10-10T09:17:24Z**, týž skript, seed a postup jako předregistrovaný běh.
+
+Co se změnilo v datech: ze 44 titulků `EARNINGS` o mega caps z týdne 28. 7.–1. 8. 2026 mělo
+minutovou fázi reakcí NQ jen 1. Po doplnění ji mají všechny. Do primárního vzorku jich přibylo 13,
+protože filtry předregistrace zbytek vyřadí: 28 oken je kontaminovaných jinou kategorií (K1, týden
+s FOMC 29. 7. a NFP 1. 8.) a 4 reakce jsou odložené.
+
+### Primárně: živý sběr od 2026-07-28
+
+| jednotka | metrika | n mega | n ostatní | medián mega (bp) | medián ostatní (bp) | rozdíl (bp) | 95% CI | kritérium |
+|---|---|---|---|---|---|---|---|---|
+| titulek | `range_5` | 94 | 2 897 | 7,70 | 8,47 | −0,77 | [−1,73; 0,66] | ✗ |
+| titulek | \|`ret_5`\| | 94 | 2 897 | 3,38 | 3,59 | −0,21 | [−1,18; 0,75] | (sekundární) |
+| minuta okna | `range_5` | 93 | 2 313 | 7,59 | 7,98 | −0,40 | [−1,31; 0,99] | ✗ |
+| minuta okna | \|`ret_5`\| | 93 | 2 313 | 3,35 | 3,41 | −0,06 | [−1,05; 0,63] | (sekundární) |
+
+### Sekundárně: celá historie a jen backfill
+
+| výběr | jednotka | n mega | n ostatní | rozdíl `range_5` (bp) | 95% CI |
+|---|---|---|---|---|---|
+| celá historie | titulek | 1 742 | 3 139 | +0,37 | [−0,01; 0,84] |
+| celá historie | minuta okna | 1 721 | 2 532 | +0,83 | [0,37; 1,33] |
+| jen backfill | titulek | 1 648 | 242 | +0,72 | [−0,85; 1,56] |
+| jen backfill | minuta okna | 1 628 | 219 | +0,65 | [−0,89; 1,54] |
+
+Celá historie po doplnění kritérium nesplní v jednotce titulků (dolní mez CI −0,01). Jednotky se
+neshodují, takže by o ní stejně rozhodoval vlastník. Platí ale i výhrada výše: celá historie míchá
+dvě éry s různou volatilitou.
+
+**Verdikt beze změny: nesplněno.** Výjimka mega caps se nezavádí a SEC se nepoužije.
