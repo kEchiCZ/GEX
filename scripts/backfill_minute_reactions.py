@@ -1,38 +1,36 @@
 """Doplnění minutové fáze reakcí, když bary přibyly až po výpočtu (#1494).
 
-`ReactionJob` měří event jednou: vybírá jen eventy **bez jakéhokoli řádku**
-reakcí (ochrana #655). Když v době výpočtu minutové bary ještě nebyly (backfill
-zpráv před backfillem barů), zapíše se jen denní fáze. Minutová fáze
-(`computed_at_min` NULL) se pak už nikdy nepřepočítá, i když bary později
-přibudou. Tenhle skript ji doplní touž cestou jako job
-(`ReactionJob.measure_minute` a `write_minute`).
+`ReactionJob` měří minutovou fázi eventu v běžné frontě jen jednou: vybírá
+eventy **bez jakéhokoli řádku** reakcí (ochrana #655). Díra vznikala dvěma
+cestami:
+
+* **souběh front:** denní fronta (eventy starší 16 dní) zapsala řádek eventu,
+  který minutová fronta ještě neměřila, a event z ní vypadl (backfill zpráv
+  17. 8., 27 968 párů doplněno 10. 10.);
+* **výpadek symbolu:** symbol bez barů v T+60 min (výpadek feedu, restart
+  enginu) dostal jen druhý symbol. Díru v barech pak doplní `ibkr_hist`.
+
+Od #1494 (A + D) obě cesty v provozu zavírá job sám jednou metodou
+`ReactionJob.complete_minute`: denní fáze doměří minutovou zprávám, které
+zapisuje (D), a jednou za hodinu se doměří eventy posledních 3 dní (A). Skript
+je tatáž metoda pro historii — potřeba je jen tam, kde denní fáze už proběhla
+dřív, než bary existovaly (bary dodané později než 16 dní po zprávě, nebo
+události z doby před #1494).
 
 * Kandidát je pár (event, symbol), kde event už nějaký řádek reakcí má
-  a symbol nemá minutovou fázi.
+  a symbol nemá minutovou fázi (`reaction_job.minute_gaps`).
 * Měří se všechny symboly, ale zapisují se jen ty bez minutové fáze.
   Existující měření se nepřepisuje a nic se nemaže. `market_closed` se opraví
   ze všech změřených symbolů jako v jobu (#339). Výjimka: deferred minutová
   fáze zapíše i `closure_open_ts`, který mohla nastavit denní fáze. Na týchž
   barech je to tatáž hodnota.
-* Baseline objemu (`vol_z`) se bere k obchodnímu dni eventu (point-in-time),
-  stejně jako u jobu, který měří hned po zprávě.
+* Baseline objemu (`vol_z`) se bere k obchodnímu dni eventu (point-in-time).
 * Pár bez barů zůstane bez minutové fáze a report ho započte (zavřený trh
   nebo díra v archivu).
 * Idempotentní: druhý běh najde jen páry, které bary pořád nemají.
 
-Díra vzniká dvěma cestami:
-
-* backfill zpráv proběhne před backfillem barů;
-* v běžném provozu symbol, který v T+60 min nemá bary (výpadek feedu, restart
-  enginu), dostane jen denní fázi. `run` zapíše jen změřené symboly a event
-  z pending dotazu vypadne. Díru v barech pak doplní automatický backfill
-  `ibkr_hist`, reakci ale ne.
-
-Od #1494 (A + D) obě cesty v provozu zavírá sám job: denní fáze doměří minutovou
-zprávám, které zapisuje, a jednou za hodinu se doměří eventy posledních 3 dní
-(`ReactionJob.complete_minute`). Skript je tatáž metoda pro historii, typicky
-po backfillu barů starších než 3 dny. Jeden event trvá ~0,15 s, takže
-~15 tis. kandidátů znamená ~35 min na průchod; dry-run měří stejně jako `--apply`.
+Jeden event trvá ~0,15 s, takže ~15 tis. kandidátů znamená ~35 min na průchod;
+dry-run měří stejně jako `--apply`.
 
 Režimy: výchozí dry-run jen čtením (PG `default_transaction_read_only`), `--apply`
 zapíše. Před `--apply` na produkci záloha `pwsh scripts/backup-postgres.ps1`.
@@ -58,35 +56,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from reclassify_news_rules import database_url, make_engine  # noqa: E402
 from sqlalchemy.engine import Engine  # noqa: E402
 
-from gexlens_news.bars import BarsRepository  # noqa: E402
+from gexlens_news.bars import CachedBars  # noqa: E402
 from gexlens_news.reaction_job import MinuteGap, ReactionJob, minute_gaps  # noqa: E402
-from gexlens_news.reactions import DEFAULT_WINDOWS, Bar  # noqa: E402
+from gexlens_news.reactions import DEFAULT_WINDOWS  # noqa: E402
 
 SYMBOLS = ("ES", "NQ")
 DEFAULT_BATCH = 500
-#: Partic v paměti: baseline čte ~57 partic na symbol (`recent_sessions`: 2 × 20
-#: seancí + 14 dní + kraje) a okno eventu ~13; dva symboly ≈ 140, s rezervou 160.
-#: Méně než 140 čte partice dokola (měřeno 64 → 5,5× víc čtení).
-CACHE_DAYS = 160
-
-
-class CachedBars(BarsRepository):
-    """Partice barů s omezenou cache; eventy podle času čtou tytéž dny dokola."""
-
-    def __init__(self, data_dir: Path, capacity: int = CACHE_DAYS) -> None:
-        super().__init__(data_dir)
-        self._capacity = capacity
-        self._cache: dict[tuple[str, dt.date], list[Bar]] = {}
-
-    def load_day(self, symbol: str, day: dt.date) -> list[Bar]:
-        key = (symbol, day)
-        cached = self._cache.get(key)
-        if cached is None:
-            cached = super().load_day(symbol, day)
-            if len(self._cache) >= self._capacity:
-                self._cache.pop(next(iter(self._cache)))
-            self._cache[key] = cached
-        return cached
 
 
 @dataclass

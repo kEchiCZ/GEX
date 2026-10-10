@@ -264,7 +264,9 @@ chyb**, hlavně diagnostických a provozních.
   dávky po 193–200 řádcích se stejným `computed_at_daily` à ~10 min. Partice barů přitom
   existovaly už 29. 7.
   → Dvě fronty nad týmiž eventy, z nichž jedna vybírá podle existence řádku, nesmí na sobě
-  záviset pořadím. Druhá fáze musí doměřit, co první nestihla (trvalá oprava v #1494).
+  záviset pořadím. Druhá fáze musí doměřit, co první nestihla. Trvalá oprava #1494 (A + D):
+  denní fáze doměří minutovou a hodinový průchod 3 dnů dožene výpadek symbolu. Skript zůstává
+  jen pro bary dodané víc než 16 dní po zprávě.
 
 - **2026-10-08 — walk-forward spadl po změně signatury `replay` a replay měřil setupy, které živý engine nedetekuje (#1081, #1464).**
   #1366 přidal do `scripts/backtest_setups.py` `replay` povinný `symbol`; testy a jediný volající

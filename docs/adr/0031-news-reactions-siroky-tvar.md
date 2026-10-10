@@ -45,6 +45,11 @@ Varianta **B1**: jeden řádek per `(event_id, symbol)`, `float8` zachován
   (HOT update — žádný indexovaný sloupec se nemění); řádek jen s denní fází
   vzniká u historických eventů před pokrytím minutových barů (~27 k dvojic),
   proto obě fáze jdou jednou upsert cestou (`_write_phase`).
+  **Upřesnění 10. 10. 2026 (#1494):** dry-run ukázal, že bary pro všech
+  27 968 jen-denních párů existovaly. Příčinou byl souběh denní a minutové
+  fronty, ne chybějící bary; páry jsou doplněné. Minutovou fázi od té doby
+  doměřuje `ReactionJob.complete_minute`: denní fáze u eventů, které zapisuje,
+  a hodinový průchod u eventů posledních 3 dní (výpadek barů jednoho symbolu).
 - Pending dotazy: minutová fáze = event bez jakéhokoli řádku (stejně jako
   dřív — jinak by se historické jen-denní dvojice vybíraly donekonečna, past
   #655); denní fáze = žádný řádek eventu s `computed_at_daily IS NOT NULL`.

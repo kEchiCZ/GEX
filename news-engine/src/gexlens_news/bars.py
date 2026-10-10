@@ -111,3 +111,33 @@ class BarsRepository:
         for bar in self.load_range(symbol, start, end):
             by_session.setdefault(trading_session_date(bar.ts), []).append(bar)
         return [by_session[day] for day in sorted(by_session)[-count:]]
+
+
+#: Partic v paměti: baseline čte ~57 partic na symbol (`recent_sessions`: 2 × 20
+#: seancí + 14 dní + kraje) a okno eventu ~13; dva symboly ≈ 140, s rezervou 160.
+#: Méně než 140 čte partice dokola (měřeno 64 → 5,5× víc čtení).
+CACHED_BARS_CAPACITY = 160
+
+
+class CachedBars(BarsRepository):
+    """Partice barů s omezenou cache pro průchod přes mnoho eventů (#1494).
+
+    Eventy podle času čtou tytéž dny dokola (okno ±5 dní, baseline 57 partic).
+    Bez kontroly mtime — patří jen do jednoho průchodu (doměření minutové fáze,
+    skript), ne do dlouho žijícího jobu, kterému engine dnešní partici přepisuje.
+    """
+
+    def __init__(self, data_dir: Path, capacity: int = CACHED_BARS_CAPACITY) -> None:
+        super().__init__(data_dir)
+        self._capacity = capacity
+        self._cache: dict[tuple[str, dt.date], list[Bar]] = {}
+
+    def load_day(self, symbol: str, day: dt.date) -> list[Bar]:
+        key = (symbol, day)
+        cached = self._cache.get(key)
+        if cached is None:
+            cached = super().load_day(symbol, day)
+            if len(self._cache) >= self._capacity:
+                self._cache.pop(next(iter(self._cache)))
+            self._cache[key] = cached
+        return cached

@@ -234,7 +234,7 @@ def test_baseline_is_taken_for_event_trading_day(tmp_path: Path, monkeypatch: An
     monkeypatch.setattr(
         script.ReactionJob,
         "baseline_for",
-        lambda self, symbol, day: days.append((symbol, day)),
+        lambda self, symbol, day, **kwargs: days.append((symbol, day)),
     )
     script.run(engine, data, apply=False, now=NOW)
     assert days == [

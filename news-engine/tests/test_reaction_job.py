@@ -395,9 +395,9 @@ def test_vypadek_symbolu_se_domeri_do_hodiny(
     measured: list[dt.datetime] = []
     original = job.measure_minute
 
-    def counting(ts_event: dt.datetime, *args: Any) -> Any:
+    def counting(ts_event: dt.datetime, *args: Any, **kwargs: Any) -> Any:
         measured.append(ts_event)
-        return original(ts_event, *args)
+        return original(ts_event, *args, **kwargs)
 
     monkeypatch.setattr(job, "measure_minute", counting)
 
@@ -414,6 +414,8 @@ def test_vypadek_symbolu_se_domeri_do_hodiny(
     windows = {(symbol, w.window_min): w.ret_bp for symbol, w in reaction_windows(engine, event_id)}
     assert windows[("NQ", 5)] == pytest.approx(0.0, abs=0.01)
     assert windows[("ES", 5)] > 19
+    # Idempotence: další hodinový průchod už nic nedoměřuje
+    assert job.run(NOW + dt.timedelta(minutes=122)) == 0
 
 
 def test_hodinovy_pruchod_nebere_eventy_starsi_tri_dnu(
@@ -427,9 +429,62 @@ def test_hodinovy_pruchod_nebere_eventy_starsi_tri_dnu(
     add_event(engine, EVENT_TS, importance=1, title="Old headline")
     job.run(NOW)
     calls: list[object] = []
-    monkeypatch.setattr(job, "measure_minute", lambda *args: calls.append(args))
+    monkeypatch.setattr(job, "measure_minute", lambda *args, **kwargs: calls.append(args))
     job.run(EVENT_TS + dt.timedelta(days=3, hours=2))
     assert calls == []
+
+
+def test_hodinovy_pruchod_bere_eventy_tesne_pod_tremi_dny(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    write_bars(tmp_path / "data", "ES", DAY, drift_bp=20.0)
+    job = ReactionJob(engine, BarsRepository(tmp_path / "data"), daily_window_days=())
+    event_id = add_event(engine, EVENT_TS, importance=1, title="Late NQ bars")
+    job.run(NOW)
+    write_bars(tmp_path / "data", "NQ", DAY)
+    assert job.run(EVENT_TS + dt.timedelta(days=2, hours=23)) == 4
+    assert {symbol for symbol, _ in reaction_windows(engine, event_id)} == {"ES", "NQ"}
+
+
+def test_soubeh_front_v_plnem_behu_jobu(tmp_path: Path) -> None:
+    """Minutová fronta (limit 1) je obsazená čerstvým eventem bez barů, denní
+    fronta mezitím vezme starší event — ten musí dostat i minutovou fázi (D)."""
+    engine, job = make_daily_env(tmp_path)
+    old = add_event(engine, EVENT_TS, importance=2, title="Old CPI")
+    now = EVENT_TS + dt.timedelta(days=20)
+    add_event(engine, now - dt.timedelta(hours=2), importance=2, title="Fresh, no bars")
+    job.run(now, limit=1)
+    with engine.connect() as conn:
+        rows = (
+            conn.execute(select(news_reactions).where(news_reactions.c.event_id == old))
+            .mappings()
+            .all()
+        )
+    assert sorted(row["symbol"] for row in rows) == ["ES", "NQ"]
+    assert all(row["computed_at_min"] is not None for row in rows)
+    assert all(row["computed_at_daily"] is not None for row in rows)
+
+
+def test_chyba_jednoho_paru_nezastavi_doplneni_ostatnich(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, job = make_daily_env(tmp_path)
+    first = add_event(engine, EVENT_TS, importance=2, title="CPI")
+    second = add_event(engine, EVENT_TS + dt.timedelta(hours=1), importance=2, title="PPI")
+    original = job.measure_minute
+
+    def flaky(ts_event: dt.datetime, *args: Any, **kwargs: Any) -> Any:
+        if ts_event == EVENT_TS:
+            raise OSError("nečitelná partice")
+        return original(ts_event, *args, **kwargs)
+
+    monkeypatch.setattr(job, "measure_minute", flaky)
+    job._run_daily(EVENT_TS + dt.timedelta(days=20), limit=10)
+    minute = {
+        event_id: {s for s, window in reaction_windows(engine, event_id) if window.window_min == 5}
+        for event_id in (first, second)
+    }
+    assert minute == {first: set(), second: {"ES", "NQ"}}
 
 
 def test_job_ceka_na_uzavreni_nejdelsiho_denniho_okna(tmp_path: Path) -> None:
