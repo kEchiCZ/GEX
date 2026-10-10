@@ -20,7 +20,7 @@ from gexlens_engine.compute.newstext import normalize_source_uid
 from gexlens_engine.storage.sentiment import CopyOutcome, news_events, record_news_copy
 from gexlens_news.dedup import DedupCopy
 from gexlens_news.http import sanitize_raw
-from gexlens_news.model import NewsEvent
+from gexlens_news.model import TS_SOURCE_FETCH, NewsEvent
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,16 @@ def _record_copy(conn: Connection, event: NewsEvent, *, first_hash: str) -> Copy
         published_at=event.ts_event,
         fetched_at=event.ts_ingested,
     )
+
+
+def _source_uid_known(conn: Connection, source: str, source_uid: str) -> bool:
+    """Zapsal už zdroj položku s tímto `source_uid`? (`ix_news_events_source_uid`)."""
+    stmt = (
+        select(news_events.c.id)
+        .where(news_events.c.source == source, news_events.c.source_uid == source_uid)
+        .limit(1)
+    )
+    return conn.execute(stmt).first() is not None
 
 
 class NewsWriter:
@@ -92,6 +102,14 @@ class NewsWriter:
         copies = 0
         with self._engine.begin() as conn:
             for event, row in zip(events, rows, strict=True):
+                if (
+                    event.raw.get("ts_source") == TS_SOURCE_FETCH
+                    and row["source_uid"] is not None
+                    and _source_uid_known(conn, event.source, row["source_uid"])
+                ):
+                    # ADR-0059 bod 5: čas stažení se mezi běhy procesu mění, takže
+                    # `dedup_hash` položku znovu nepozná — rozhoduje identita u zdroje
+                    continue
                 # RETURNING, ne rowcount: PostgreSQL u ON CONFLICT DO NOTHING
                 # vrací -1 (= „nevím") a počítadlo by lhalo (#367)
                 stmt = (
