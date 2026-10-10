@@ -248,6 +248,15 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-10 — titulky Alpaca s HTML entitami 26 měsíců v DB, ve feedu i na kartě (#1500).** Collector bral
+  `headline` doslova a Benzinga posílá `&#39;`, `&amp;` a `&#34;` (22 % titulků, 7 297 řádků od 7/2024). Klasifikátor
+  a shluky si entity dekódovaly samy (`classifier.clean`, `clusters.clean_title`), takže v metrikách chyba vidět nebyla.
+  Projevila se v UI a v dedupu: entita dělala z apostrofu token `39`, dedup minul 71 kopií a karta ukázala
+  tutéž zprávu víckrát.
+  → Text dekódovat jednou u zdroje (collector), ne v každém konzumentovi. Test nového collectoru má obsahovat
+  vzorek skutečného payloadu, včetně entit a ořezaného titulku. Když se změní normalizace uloženého klíče
+  (`dedup_hash`), přepočítat ho i v historii (`scripts/fix_news_html_entities.py`). Jinak nesedí okno dedupu
+  po restartu a backfill přestane být idempotentní.
 - **2026-10-09 — tisíce reakcí bez minutové fáze, i když bary existují (#1494).** Backfill zpráv
   (17. 8.) proběhl dřív než backfill barů (3. 9.): `ReactionJob` spočítal jen denní fázi a event
   už nikdy nevybral, protože pending dotaz bere jen eventy bez jakéhokoli řádku (ochrana #655).
