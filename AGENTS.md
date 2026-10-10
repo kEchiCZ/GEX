@@ -19,7 +19,7 @@ Rozpor mezi zdroji = nález, ne volba: nahlas ho a navrhni opravu (ADR nebo úpr
 
 ## Stack
 Python 3.12 (uv workspace: `engine/`, `api/`, `news-engine/`) · ib_async · FastAPI + WebSocket ·
-PostgreSQL 17 · Parquet (pyarrow) · React 19 + TypeScript + Vite · canvas/WebGL heatmapa ·
+PostgreSQL 16 · Parquet (pyarrow) · React 19 + TypeScript + Vite · canvas/WebGL heatmapa ·
 Docker Compose. Vývoj na Windows (PowerShell), běh v Linux kontejnerech (mypy `platform = "linux"`).
 
 ## Build & validace
