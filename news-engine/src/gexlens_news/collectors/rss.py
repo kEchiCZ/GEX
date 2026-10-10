@@ -288,14 +288,18 @@ class RssCollector:
         jinak čas prvního stažení. Položku bez věrohodného času z prvního
         stažení po startu nejde datovat — tvářila by se jako čerstvá zpráva
         (testimony s rokem 1899) a vstoupila do SentIndexu i shluků.
+        Jednou přidělený čas stažení platí do konce běhu, i když budoucí čas
+        položky mezitím zestárne — jinak by se položka zapsala znovu jiným dnem.
         """
+        uid = _item_uid(item.payload)
+        if uid is not None and uid in self._first_fetched:
+            return self._first_fetched[uid], TS_SOURCE_FETCH
         if (
             published is not None
             and published.year >= MIN_PLAUSIBLE_YEAR
             and published <= item.fetched_at
         ):
             return published, TS_SOURCE_ITEM
-        uid = _item_uid(item.payload)
         if uid is None or uid in self._startup_uids:
             key = uid or str(item.payload.get("title"))
             if key not in self._undatable:

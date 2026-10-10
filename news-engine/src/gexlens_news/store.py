@@ -20,7 +20,7 @@ from gexlens_engine.compute.newstext import normalize_source_uid
 from gexlens_engine.storage.sentiment import CopyOutcome, news_events, record_news_copy
 from gexlens_news.dedup import DedupCopy
 from gexlens_news.http import sanitize_raw
-from gexlens_news.model import TS_SOURCE_FETCH, NewsEvent
+from gexlens_news.model import NewsEvent
 
 logger = logging.getLogger(__name__)
 
@@ -100,15 +100,18 @@ class NewsWriter:
         insert = pg_insert if dialect == "postgresql" else sqlite_insert
         written = 0
         copies = 0
+        known = 0
         with self._engine.begin() as conn:
             for event, row in zip(events, rows, strict=True):
                 if (
-                    event.raw.get("ts_source") == TS_SOURCE_FETCH
+                    event.raw.get("ts_source") is not None
                     and row["source_uid"] is not None
                     and _source_uid_known(conn, event.source, row["source_uid"])
                 ):
-                    # ADR-0059 bod 5: čas stažení se mezi běhy procesu mění, takže
+                    # ADR-0059 bod 5: čas zdroje tier 1 se mezi běhy procesu může
+                    # změnit (čas stažení, zestárlý budoucí čas položky), takže
                     # `dedup_hash` položku znovu nepozná — rozhoduje identita u zdroje
+                    known += 1
                     continue
                 # RETURNING, ne rowcount: PostgreSQL u ON CONFLICT DO NOTHING
                 # vrací -1 (= „nevím") a počítadlo by lhalo (#367)
@@ -124,12 +127,14 @@ class NewsWriter:
                     # Týž titulek téhož dne už v DB je (mimo okno rolling dedupu,
                     # IBKR páska z enginu, zápis mimo DedupingWriter)
                     copies += 1
-        skipped = len(rows) - written
-        if skipped:
+        skipped = len(rows) - written - known
+        if skipped or known:
             logger.debug(
-                "Zahozeno %d duplicit dle dedup_hash, z toho %d kopií z jiného zdroje",
+                "Zahozeno %d duplicit dle dedup_hash (z toho %d kopií z jiného zdroje) "
+                "a %d položek zdroje tier 1 známých podle source_uid",
                 skipped,
                 copies,
+                known,
             )
         return written
 

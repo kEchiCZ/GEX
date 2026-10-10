@@ -229,8 +229,8 @@ NEWS_SOURCE_SEED: tuple[tuple[str, str, int | None, str], ...] = (
     ("fed_rss", "core", 5, "oficiální Fed feedy — statements, projevy"),
     # Tier 1 z E-6.25a (ADR-0059 bod 5); objem orientačně ze snímku E-6.22,
     # přeměří E-6.29
-    ("ecb_rss", "core", 2, "ECB tiskové zprávy — rozhodnutí o sazbách, projevy (tier 1)"),
-    ("whitehouse_rss", "core", 10, "Bílý dům — fact sheety, výnosy a proklamace (tier 1)"),
+    ("ecb", "core", 2, "ECB tiskové zprávy — rozhodnutí o sazbách, projevy (tier 1)"),
+    ("whitehouse", "core", 10, "Bílý dům — fact sheety, výnosy a proklamace (tier 1)"),
     ("rss_news", "core", 300, "agenturní headline redundance (CNBC/MarketWatch/Yahoo)"),
     # Názvy dle reality (#922): engine zapisuje `ibkr_{provider}`, ne „ibkr"
     ("ibkr_brfg", "extra", 50, "broker páska Briefing.com (tick 292)"),

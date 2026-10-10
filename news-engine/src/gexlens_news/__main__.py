@@ -130,8 +130,8 @@ def build_collectors(
     # Zdroje tier 1 (ADR-0059 bod 5): kategorii a importance určí klasifikace
     # podle feedu (ECB) nebo pravidla v2 nad titulkem (White House)
     for source, official_urls in (
-        ("ecb_rss", ECB_RSS_URLS),
-        ("whitehouse_rss", WHITEHOUSE_RSS_URLS),
+        ("ecb", ECB_RSS_URLS),
+        ("whitehouse", WHITEHOUSE_RSS_URLS),
     ):
         if on(source):
             collectors.append(

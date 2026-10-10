@@ -37,9 +37,11 @@ Powell, `icc-cpi.int` v odkazu). Analýza #1293 (400 zpráv, dva hodnotitelé,
    rozhodnutí ECB/BoE/BoJ s High 2; ostatní 1. Regex nad titulkem kalendáře
    se nepoužívá (dával „USD PPI m/m“ High importance 1).
 7. **fed_rss**: FED/3 pro statement, projekce a minutes FOMC, jinak FED/2.
-8. **ecb_rss** (ADR-0059 bod 5): rozhodnutí o sazbách 2, ostatní 1 — tisková
-   zpráva ECB nese titulek „Monetary policy decisions“ bez slova ECB, takže
-   pravidla v2 by jí dala 1. Kategorie z titulku jako u zpráv o ECB odjinud.
+8. **ecb** (ADR-0059 bod 5): rozhodnutí o sazbách 2 (tisková zpráva
+   „Monetary policy decisions“, statement a tisková konference jako v kalendáři
+   FF, ADR-0045 bod 3), ostatní 1 — titulky ECB slovo ECB nenesou, takže
+   pravidla v2 by rozhodnutí daly 1. Kategorie z titulku jako u zpráv o ECB
+   odjinud; FED (sazby bez cizího kontextu) patří americkému Fedu → OTHER.
 
 Kategorie se bere z předmětu titulku, pak z celého titulku; ENERGY má
 přednost před GEOPOLITICS (pohyb ropy způsobený válkou je ENERGY).
@@ -96,7 +98,7 @@ FEED_CNBC = "rss:cnbc"
 FEED_RSS_OTHER = "rss:other"
 FEED_RSS_USER = "rss_user"
 FEED_FED_RSS = "fed_rss"
-FEED_ECB_RSS = "ecb_rss"
+FEED_ECB = "ecb"
 
 #: Sociální sítě bez kurátora (#578): importance ≥ 2 → relevantní 0/29 (Reddit),
 #: importance 3 → zásadní 0/42 (Bluesky) — nejvýš 1
@@ -733,12 +735,15 @@ def fed_rss_importance(title: str) -> int:
     return 3 if FED_EVENT.search(clean(title)) else 2
 
 
-#: Tisková zpráva ECB s rozhodnutím o sazbách — ne „Decisions taken by the
+#: Rozhodnutí ECB o sazbách: tisková zpráva, statement a tisková konference
+#: (shodně s `FF_CB_DECISION`, ADR-0045 bod 3) — ne „Decisions taken by the
 #: Governing Council … (in addition to decisions setting interest rates)“
-ECB_RATE_DECISION = _rx(r"^monetary\ policy\ decisions?$")
+ECB_RATE_DECISION = _rx(
+    r"^monetary\ policy\ decisions?$|\bmonetary\ policy\ statement\b|\bpress\ conference\b"
+)
 
 
-def ecb_rss_importance(title: str) -> int:
+def ecb_importance(title: str) -> int:
     """ECB RSS: rozhodnutí o sazbách 2, ostatní (projevy, rozhovory, zápisy) 1."""
     return 2 if ECB_RATE_DECISION.search(clean(title)) else 1
 
@@ -826,10 +831,10 @@ def classify(
         )
     if feed == FEED_FED_RSS:
         return RuleClassification("FED", fed_rss_importance(title), direction, strength, "fed_rss")
-    if feed == FEED_ECB_RSS:
-        return RuleClassification(
-            category, ecb_rss_importance(title), direction, strength, "ecb_rss"
-        )
+    if feed == FEED_ECB:
+        # Titulek ECB bez slova ECB („… rate cuts“) by dal FED — ten je americký
+        ecb_category = "OTHER" if category == "FED" else category
+        return RuleClassification(ecb_category, ecb_importance(title), direction, strength, "ecb")
     importance, reason = headline_importance(title)
     capped = feed_capped(importance, feed)
     if capped != importance:

@@ -25,10 +25,10 @@ from gexlens_engine.storage.sentiment import NEWS_SOURCE_SEED
         # Tier 1: úřad sám
         ("fed_rss", {"feed": "https://www.federalreserve.gov/feeds/speeches.xml"}, OFFICIAL),
         ("fed_rss", {"feed": "https://www.federalreserve.gov/feeds/testimony.xml"}, OFFICIAL),
-        ("ecb_rss", {"feed": "https://www.ecb.europa.eu/rss/press.html"}, OFFICIAL),
-        ("whitehouse_rss", {"feed": "https://www.whitehouse.gov/news/feed/"}, OFFICIAL),
+        ("ecb", {"feed": "https://www.ecb.europa.eu/rss/press.html"}, OFFICIAL),
+        ("whitehouse", {"feed": "https://www.whitehouse.gov/news/feed/"}, OFFICIAL),
         (
-            "whitehouse_rss",
+            "whitehouse",
             {"feed": "https://www.whitehouse.gov/presidential-actions/feed/"},
             OFFICIAL,
         ),

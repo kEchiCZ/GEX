@@ -112,6 +112,37 @@ async def test_nova_polozka_bez_casu_dostane_cas_prvniho_stazeni() -> None:
     assert later["t-new"].dedup_hash == events["t-new"].dedup_hash
 
 
+async def test_zestarly_budouci_cas_nezmeni_cas_stazeni_ani_po_restartu(tmp_path: Path) -> None:
+    """Položka s budoucím časem dostane čas stažení; když čas zestárne, nezapíše se znovu."""
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
+    ensure_sentiment_schema(engine)
+    writer = NewsWriter(engine)
+    soon = _item(
+        "t-soon", "Lagarde, Hearing at the European Parliament", "Tue, 13 Oct 2026 00:30:00 GMT"
+    )
+
+    clock = Clock(START)
+    first = _collector(SequenceFetcher(_feed(DATED), _feed(soon, DATED)), clock)
+    writer.write(await _cycle(first))
+    clock.now = START + dt.timedelta(minutes=1)  # 12. 10. 14:01, položka hlásí 13. 10.
+    (fetched,) = [e for e in await _cycle(first) if e.source_uid == "t-soon"]
+    assert fetched.raw["ts_source"] == "fetch"
+    assert writer.write([fetched]) == 1
+
+    # Týž proces o den později: čas položky už je minulý, platí ale čas stažení
+    clock.now = START + dt.timedelta(days=1)
+    (again,) = [e for e in await _cycle(first) if e.source_uid == "t-soon"]
+    assert (again.ts_event, again.raw["ts_source"]) == (fetched.ts_event, "fetch")
+
+    # Nový proces: položka chyběla v prvním stažení, pak přišla s věrohodným časem
+    second = _collector(SequenceFetcher(_feed(DATED), _feed(soon, DATED)), clock)
+    await _cycle(second)
+    (item_time,) = [e for e in await _cycle(second) if e.source_uid == "t-soon"]
+    assert item_time.raw["ts_source"] == "item"
+    assert item_time.dedup_hash != fetched.dedup_hash  # jiný den v `ts_event`
+    assert writer.write([item_time]) == 0
+
+
 async def test_budouci_cas_v_prvnim_stazeni_se_nezapise() -> None:
     collector = _collector(SequenceFetcher(_feed(FUTURE, DATED)), Clock(START))
     assert [e.source_uid for e in await _cycle(collector)] == ["t-warsh"]
@@ -185,8 +216,8 @@ async def test_build_collectors_zapina_cas_zverejneni_u_zdroju_tier_1() -> None:
         for c in build_collectors(settings, SequenceFetcher(feed), reddit_subreddits=[])
         if isinstance(c, RssCollector)
     }
-    assert {"fed_rss", "ecb_rss", "whitehouse_rss"} <= collectors.keys()
-    for name in ("fed_rss", "ecb_rss", "whitehouse_rss"):
+    assert {"fed_rss", "ecb", "whitehouse"} <= collectors.keys()
+    for name in ("fed_rss", "ecb", "whitehouse"):
         events = await _cycle(collectors[name])
         # Každý feed zdroje vrací týž výřez: rok 1899 se nezapíše, čas položky ano
         assert {e.source_uid for e in events} == {"t-warsh"}, name
@@ -196,6 +227,6 @@ async def test_build_collectors_zapina_cas_zverejneni_u_zdroju_tier_1() -> None:
     assert {e.source_uid for e in rss_news} == {"t-warsh", "t-barr"}
 
     disabled = build_collectors(
-        settings, SequenceFetcher(feed), enabled={"ecb_rss": False, "whitehouse_rss": False}
+        settings, SequenceFetcher(feed), enabled={"ecb": False, "whitehouse": False}
     )
-    assert not {"ecb_rss", "whitehouse_rss"} & {c.name for c in disabled}
+    assert not {"ecb", "whitehouse"} & {c.name for c in disabled}

@@ -20,7 +20,7 @@ from gexlens_news.classifier import (
     FEED_BLUESKY,
     FEED_BLUESKY_CURATED,
     FEED_CNBC,
-    FEED_ECB_RSS,
+    FEED_ECB,
     FEED_FED_RSS,
     FEED_MARKETWATCH,
     FEED_REDDIT,
@@ -432,22 +432,34 @@ def test_fed_rss_statement_3_projevy_2() -> None:
         ("Christine Lagarde: Interview with La Croix", 1),
         ("Philip R. Lane: Diagnostic Challenges for ECB Monetary Policy", 1),
         ("Results of the September 2026 survey on credit terms and conditions", 1),
+        # Statement a tisková konference jsou rozhodnutí jako v kalendáři FF (ADR-0045 bod 3)
+        ("Monetary policy statement", 2),
+        ("Christine Lagarde, Luis de Guindos: Press conference", 2),
     ],
 )
-def test_ecb_rss_rozhodnuti_2_ostatni_1(title: str, importance: int) -> None:
-    result = classify(title, feed=FEED_ECB_RSS, kind="headline")
+def test_ecb_rozhodnuti_2_ostatni_1(title: str, importance: int) -> None:
+    result = classify(title, feed=FEED_ECB, kind="headline")
     assert result.importance == importance
     # Kategorie z titulku jako u zpráv o ECB odjinud, ne pevná FED
     assert result.category == classify_category(title)
 
 
+def test_ecb_sazby_bez_slova_ecb_nejsou_americky_fed() -> None:
+    """Titulek ECB bez cizího kontextu by v2 zařadil k Fedu — FED je americký."""
+    title = "Philip R. Lane: The case for further rate cuts"
+    assert classify_category(title) == "FED"
+    assert classify(title, feed=FEED_ECB, kind="headline").category == "OTHER"
+    # Zpráva o ECB z jiného feedu má taky OTHER
+    assert classify_category("ECB cuts rates by 25bp") == "OTHER"
+
+
 def test_white_house_ma_pravidla_v2_bez_stropu() -> None:
     """White House nemá pravidlo feedu: titulek ve tvaru headline rozhodne v2."""
     title = "Fact Sheet: President Donald J. Trump Adjusts Tariffs on Imports from Canada"
-    tariffs = classify(title, feed="whitehouse_rss", kind="headline")
+    tariffs = classify(title, feed="whitehouse", kind="headline")
     assert tariffs == classify(title, feed=WIRE, kind="headline")
     assert (tariffs.category, tariffs.importance) == ("GEOPOLITICS", 2)
-    proclamation = classify("Columbus Day, 2026", feed="whitehouse_rss", kind="headline")
+    proclamation = classify("Columbus Day, 2026", feed="whitehouse", kind="headline")
     assert proclamation.importance == 1
 
 
