@@ -140,3 +140,7 @@ na relevanci dat (point-in-time) a nepotřebuje slovník ani kritérium délky t
 60 min odpovídá tabulce zdrojů: tier 2 i rychlé články mají medián zpoždění do 5 min. Než se
 rozhodne o B, má smysl počkat na přeměření (#1492), protože potvrzení kopií může počet
 nepotvrzených změnit. Do rozhodnutí platí A.
+
+**Rozhodnuto 9. 10. večer: C** (vlastník v chatu, #1385 Rozhodnuto). Pravidlo je
+`breaking.ARTICLE_MAX_INGEST_DELAY` v `breaking.is_breaking` od E-6.28b (#1497), revize
+ADR-0059 bod 4 z 10. 10.
