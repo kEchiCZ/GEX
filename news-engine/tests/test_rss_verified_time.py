@@ -172,3 +172,30 @@ async def test_restart_v_jiny_den_polozku_s_casem_stazeni_nezapise_znovu(tmp_pat
             select(news_events.c.ts_event).where(news_events.c.source_uid == "t-new")
         ).all()
     assert len(rows) == 1
+
+
+async def test_build_collectors_zapina_cas_zverejneni_u_zdroju_tier_1() -> None:
+    from gexlens_news.__main__ import build_collectors
+    from gexlens_news.config import NewsSettings
+
+    settings = NewsSettings(_env_file=None, finnhub_api_key="")  # type: ignore[call-arg]
+    feed = _feed(DATED, Y1899)
+    collectors = {
+        c.name: c
+        for c in build_collectors(settings, SequenceFetcher(feed), reddit_subreddits=[])
+        if isinstance(c, RssCollector)
+    }
+    assert {"fed_rss", "ecb_rss", "whitehouse_rss"} <= collectors.keys()
+    for name in ("fed_rss", "ecb_rss", "whitehouse_rss"):
+        events = await _cycle(collectors[name])
+        # Každý feed zdroje vrací týž výřez: rok 1899 se nezapíše, čas položky ano
+        assert {e.source_uid for e in events} == {"t-warsh"}, name
+        assert all(e.raw["ts_source"] == "item" for e in events), name
+    # Ostatní RSS beze změny
+    rss_news = await _cycle(collectors["rss_news"])
+    assert {e.source_uid for e in rss_news} == {"t-warsh", "t-barr"}
+
+    disabled = build_collectors(
+        settings, SequenceFetcher(feed), enabled={"ecb_rss": False, "whitehouse_rss": False}
+    )
+    assert not {"ecb_rss", "whitehouse_rss"} & {c.name for c in disabled}

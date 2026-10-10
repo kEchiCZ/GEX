@@ -10,10 +10,21 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Oficiální feedy Fedu (Tier A) — statements, projevy, minutes
+# Oficiální feedy Fedu (Tier A) — statements, projevy, minutes; svědectví
+# v Kongresu (pololetní zpráva předsedy) od E-6.25a, ADR-0059 bod 5
 FED_RSS_URLS = (
     "https://www.federalreserve.gov/feeds/press_monetary.xml",
     "https://www.federalreserve.gov/feeds/speeches.xml",
+    "https://www.federalreserve.gov/feeds/testimony.xml",
+)
+
+# Zdroje tier 1 (ADR-0059 bod 5, test kandidátů E-6.22): robots.txt povoluje,
+# zdarma, bez klíče. Každá instituce má vlastní `source` kvůli měření zpoždění.
+ECB_RSS_URLS = ("https://www.ecb.europa.eu/rss/press.html",)
+# Fact sheety ohlašují cla a dohody, prezidentské akty nesou výnosy a proklamace
+WHITEHOUSE_RSS_URLS = (
+    "https://www.whitehouse.gov/news/feed/",
+    "https://www.whitehouse.gov/presidential-actions/feed/",
 )
 
 # Tier B redundance k Finnhubu (SPEC kap. 1) — širší pokrytí, dedup je řeší.

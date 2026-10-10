@@ -31,9 +31,11 @@ from gexlens_news.collectors.finnhub import FinnhubCollector
 from gexlens_news.collectors.forexfactory import ForexFactoryCollector
 from gexlens_news.collectors.rss import RssCollector
 from gexlens_news.config import (
+    ECB_RSS_URLS,
     FED_RSS_URLS,
     NEWS_RSS_URLS,
     REDDIT_RSS_URLS,
+    WHITEHOUSE_RSS_URLS,
     NewsSettings,
     load_news_settings,
 )
@@ -121,8 +123,26 @@ def build_collectors(
                 category="FED",
                 importance=3,
                 symbols=["ES", "NQ"],
+                # Testimony nese u části položek rok 1899 (ADR-0059 bod 5)
+                verified_time=True,
             )
         )
+    # Zdroje tier 1 (ADR-0059 bod 5): kategorii a importance určí klasifikace
+    # podle feedu (ECB) nebo pravidla v2 nad titulkem (White House)
+    for source, official_urls in (
+        ("ecb_rss", ECB_RSS_URLS),
+        ("whitehouse_rss", WHITEHOUSE_RSS_URLS),
+    ):
+        if on(source):
+            collectors.append(
+                RssCollector(
+                    source,
+                    official_urls,
+                    fetcher,
+                    interval_s=settings.rss_interval_s,
+                    verified_time=True,
+                )
+            )
     if on("rss_news"):
         # Tier B (#272): redundantní headline zdroje; dedup je slučuje (#273)
         collectors.append(
@@ -620,11 +640,12 @@ async def run(settings: NewsSettings) -> None:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=60.0)
 
-    enabled = [name for name, on in settings.enabled_sources.items() if on]
+    # Skutečně založené collectory, ne klíče v konfiguraci: klíč bez collectoru
+    # (BLS, BEA) tvrdil, že zdroj běží (audit #1473, oddíl 4)
     logger.info(
-        "news-engine běží: %d collectorů, zdroje s konfigurací: %s",
+        "news-engine běží: %d collectorů: %s",
         len(collectors),
-        ", ".join(sorted(enabled)) or "žádné",
+        ", ".join(sorted(collector.name for collector in collectors)) or "žádné",
     )
     await asyncio.gather(
         runner.run(stop=stop),

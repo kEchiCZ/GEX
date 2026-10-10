@@ -42,6 +42,9 @@ IBKR_PREFIX = "ibkr_"
 #: Zdroje, jejichž tier nezávisí na payloadu (None = výslovně mimo tiery)
 FIXED_TIERS: Mapping[str, int | None] = {
     "fed_rss": OFFICIAL,
+    # Zdroje tier 1 z E-6.25a (ADR-0059 bod 5)
+    "ecb_rss": OFFICIAL,
+    "whitehouse_rss": OFFICIAL,
     "rss_news": ARTICLE,
     "finnhub": ARTICLE,
     "rss_user": ARTICLE,
