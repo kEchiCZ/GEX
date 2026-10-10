@@ -257,6 +257,14 @@ chyb**, hlavně diagnostických a provozních.
   → Kdo ukládá „spočítáno“ podle existence řádku, musí mít cestu, jak přepočítat, když vstup
   přibude později (`scripts/backfill_minute_reactions.py` po každém backfillu barů). Před měřením
   nad historií zkontrolovat pokrytí: podíl NULL po měsících a u největších událostí vzorku.
+  **Upřesnění 10. 10.:** většinu díry (27 968 párů, všechny šly doplnit) nezpůsobilo pořadí
+  backfillů, ale **souběh dvou front v jednom cyklu jobu**. Denní fronta (eventy starší 16 dní
+  bez denní fáze) zapsala řádek i eventu, který minutová fronta ještě neměřila, a ten pak
+  z minutové fronty („bez jakéhokoli řádku“) vypadl. Při backfillu Alpaca po dávkách to dalo
+  dávky po 193–200 řádcích se stejným `computed_at_daily` à ~10 min. Partice barů přitom
+  existovaly už 29. 7.
+  → Dvě fronty nad týmiž eventy, z nichž jedna vybírá podle existence řádku, nesmí na sobě
+  záviset pořadím. Druhá fáze musí doměřit, co první nestihla (trvalá oprava v #1494).
 
 - **2026-10-08 — walk-forward spadl po změně signatury `replay` a replay měřil setupy, které živý engine nedetekuje (#1081, #1464).**
   #1366 přidal do `scripts/backtest_setups.py` `replay` povinný `symbol`; testy a jediný volající
