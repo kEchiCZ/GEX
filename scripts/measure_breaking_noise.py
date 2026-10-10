@@ -58,13 +58,18 @@ from gexlens_engine.compute.settle import (  # noqa: E402
     trading_session_date,
 )
 from gexlens_engine.storage.sentiment import news_event_sources, news_events  # noqa: E402
-from gexlens_news.breaking import card_group, is_breaking, is_confirmed  # noqa: E402
+from gexlens_news.breaking import (  # noqa: E402
+    ARTICLE_MAX_INGEST_DELAY,
+    card_group,
+    is_breaking,
+    is_confirmed,
+)
 
 #: Nasazení E-6.24b — od té chvíle se kopie z jiných zdrojů zaznamenávají
 COPIES_FROM = dt.datetime(2026, 10, 9, 12, 1, 22, tzinfo=dt.UTC)
 DEFAULT_DAYS = 30
-#: Zpoždění příjmu za publikací, nad kterým zpráva není čerstvá (varianta C)
-STALE_MIN = 60
+#: Zpoždění příjmu za publikací, nad kterým zpráva není čerstvá (varianta C, pravidlo karty)
+STALE_MIN = int(ARTICLE_MAX_INGEST_DELAY / dt.timedelta(minutes=1))
 WEEKDAYS = ("po", "út", "st", "čt", "pá", "so", "ne")
 
 
@@ -126,7 +131,11 @@ def timeline(event: Event, copies: Sequence[Copy], *, until: dt.datetime) -> Tim
     for moment in moments:
         tier = effective_tier(event.content_tier, plain, at=moment)
         if entered is None:
-            if not is_breaking(tier, event.kind, event.importance, event.category):
+            # Základ variant je karta bez pravidla čerstvosti (varianta A), variantu C
+            # aplikuje `variant_counts` sama; proto zpoždění příjmu 0
+            if not is_breaking(
+                tier, event.kind, event.importance, event.category, ingest_delay=dt.timedelta(0)
+            ):
                 continue
             entered = moment
         if is_confirmed(tier):
@@ -330,7 +339,7 @@ def full_sessions(start: dt.datetime, end: dt.datetime) -> set[dt.date]:
 
 
 def is_stale(event: Event) -> bool:
-    return event.ts_ingested - event.ts_event > dt.timedelta(minutes=STALE_MIN)
+    return event.ts_ingested - event.ts_event > ARTICLE_MAX_INGEST_DELAY
 
 
 def variant_counts(
