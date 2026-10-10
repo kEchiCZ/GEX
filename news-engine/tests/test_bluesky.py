@@ -5,6 +5,7 @@ from collections.abc import Sequence
 
 from gexlens_news.collectors.bluesky import (
     MAX_PER_MINUTE,
+    TITLE_MAX_CHARS,
     BlueskyStream,
     matches,
     normalize_post,
@@ -88,3 +89,17 @@ def test_kurator_dostane_priznak_curated_ostatni_ne() -> None:
     curated, crowd = writer.events
     assert curated.raw == {"did": "did:vip", "langs": ["en"], "curated": True}
     assert "curated" not in crowd.raw
+
+
+def test_entity_v_postu_se_dekoduje_pred_orezem_titulku() -> None:
+    """Boti přeposílající RSS píšou `S&amp;P` doslova (#1500)."""
+    event = normalize_post(commit("MOC IMBALANCE S&amp;P 500: 1904.3 MLN $MACRO"), NOW)
+    assert event is not None
+    assert event.title == "MOC IMBALANCE S&P 500: 1904.3 MLN $MACRO"
+
+    # Ořez titulku počítá znaky po dekódování — entita se nepřeřízne
+    long_text = "S&amp;P " + "x" * TITLE_MAX_CHARS
+    event2 = normalize_post(commit(long_text), NOW)
+    assert event2 is not None
+    assert event2.title.startswith("S&P x")
+    assert event2.body == "S&P " + "x" * TITLE_MAX_CHARS

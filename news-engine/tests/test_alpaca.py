@@ -8,6 +8,7 @@ from collections.abc import Sequence
 import pytest
 
 from gexlens_news.collectors.alpaca import AlpacaNewsStream, normalize_message
+from gexlens_news.dedup import RollingDeduplicator
 from gexlens_news.model import NewsEvent
 
 NOW = dt.datetime(2026, 7, 30, 14, 0, tzinfo=dt.UTC)
@@ -152,3 +153,50 @@ async def test_ticho_na_pasce_se_overi_pingem_a_neshodi_session(
     dead = _DeadWs()
     with pytest.raises(TimeoutError):
         await stream._receive(dead)
+
+
+# ── HTML entity v titulku a perexu (#1500) ─────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        ("Fed&#39;s Waller Says Cuts Can Wait", "Fed's Waller Says Cuts Can Wait"),
+        ("Johnson &amp; Johnson Slides", "Johnson & Johnson Slides"),
+        ("Powell: &#34;Data Dependent&#34;", 'Powell: "Data Dependent"'),
+        ("Musk: &quot;Not Selling&quot;", 'Musk: "Not Selling"'),
+        # Benzinga titulek ořízne i uprostřed entity — středník chybí
+        ("Says &#39;It Makes You Smarter...&#39", "Says 'It Makes You Smarter...'"),
+    ],
+)
+def test_entity_v_titulku_se_dekoduje(raw: str, clean: str) -> None:
+    event = normalize_message(news_payload(headline=raw), NOW)
+    assert event is not None
+    assert event.title == clean
+
+
+def test_entity_v_perexu_se_dekoduje() -> None:
+    event = normalize_message(news_payload(summary="S&amp;P 500 rises; Fed&#39;s view"), NOW)
+    assert event is not None
+    assert event.summary == "S&P 500 rises; Fed's view"
+
+
+def test_kopie_z_rss_se_uzna_i_s_entitou_u_alpacy() -> None:
+    """Táž zpráva z Benzinga RSS přijde ~1 s po Alpace — musí to být kopie, ne nová zpráva."""
+    alpaca = normalize_message(
+        news_payload(headline="What&#39;s Going On With Vistra Stock Friday?"), NOW
+    )
+    assert alpaca is not None
+    rss = NewsEvent(
+        ts_event=alpaca.ts_event + dt.timedelta(seconds=1),
+        ts_ingested=NOW + dt.timedelta(seconds=1),
+        source="rss_news",
+        kind="headline",
+        title="What's Going On With Vistra Stock Friday?",
+    )
+
+    result = RollingDeduplicator().process([alpaca, rss])
+
+    assert result.events == [alpaca]
+    assert [copy.event for copy in result.copies] == [rss]
+    assert rss.dedup_hash == alpaca.dedup_hash

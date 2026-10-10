@@ -12,6 +12,7 @@ a reconnect; překryv s RSS řeší stávající dedup (`dedup_hash` titulek + �
 import asyncio
 import contextlib
 import datetime as dt
+import html
 import json
 import logging
 import time
@@ -47,7 +48,10 @@ def normalize_message(payload: dict[str, Any], now: dt.datetime) -> NewsEvent | 
     """Zpráva `{"T": "n", ...}` → NewsEvent; jiné typy (success, error) → None."""
     if payload.get("T") != "n":
         return None
-    headline = str(payload.get("headline") or "").strip()
+    # Benzinga posílá titulek a perex HTML-kódované (`Fed&#39;s`, `S&amp;P`,
+    # 22 % titulků). Dekóduje se tady u zdroje, ne až v UI: entita dělá
+    # z apostrofu samostatný token a táž zpráva z RSS pak není kopie (#1500)
+    headline = html.unescape(str(payload.get("headline") or "")).strip()
     if not headline:
         return None
     created = payload.get("created_at")
@@ -57,7 +61,7 @@ def normalize_message(payload: dict[str, Any], now: dt.datetime) -> NewsEvent | 
         ts_event = now
     if ts_event.tzinfo is None:
         ts_event = ts_event.replace(tzinfo=dt.UTC)
-    summary = str(payload.get("summary") or "").strip() or None
+    summary = html.unescape(str(payload.get("summary") or "")).strip() or None
     # Plné znění (#743): Alpaca ho posílá v `content` jako HTML a dosud se
     # zahazovalo — model tak měl k dispozici jen ~50 znaků titulku. Značky se
     # odstraňují hned, do DB nepatří (a do promptu ani do rysů už vůbec).
