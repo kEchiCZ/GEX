@@ -196,3 +196,62 @@ def test_news_during_closed_market_has_no_impact(client: TestClient) -> None:
 def test_at_without_timezone_is_rejected(client: TestClient) -> None:
     response = client.get("/news/breaking", params={"at": "2026-10-08T14:37:30"})
     assert response.status_code == 422
+
+
+SUNDAY_OPEN = dt.datetime(2026, 10, 11, 22, 0, tzinfo=dt.UTC)  # 17:00 CT, otevření Globexu
+
+
+@pytest.fixture
+def weekend_client(tmp_path: Path) -> TestClient:
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.sqlite'}",
+    )
+    friday = [
+        Bar(dt.datetime(2026, 10, 9, 19, 0, tzinfo=dt.UTC) + i * dt.timedelta(minutes=1),
+            5000.0, 5000.5, 4999.5, 5000.0, 10.0)
+        for i in range(120)
+    ]  # fmt: skip
+    sunday = [
+        Bar(SUNDAY_OPEN + i * dt.timedelta(minutes=1), 5010.0, 5010.5, 5009.5, 5010.0, 10.0)
+        for i in range(30)
+    ]
+    for symbol in ("ES", "NQ"):
+        folder = settings.data_dir / "derived" / symbol / "bars"
+        folder.mkdir(parents=True)
+        for day, bars in (("2026-10-09", friday), ("2026-10-11", sunday)):
+            table = pa.table(
+                {
+                    "ts_min": pa.array([b.ts for b in bars], pa.timestamp("us", tz="UTC")),
+                    "open": [b.open for b in bars],
+                    "high": [b.high for b in bars],
+                    "low": [b.low for b in bars],
+                    "close": [b.close for b in bars],
+                    "volume": [b.volume for b in bars],
+                }
+            )
+            pq.write_table(table, folder / f"{day}.parquet")
+    app = create_app(settings)
+    engine = MetaRepository(settings).engine()
+    ensure_sentiment_schema(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            insert(news_events),
+            [
+                _event(1, SUNDAY_OPEN, SUNDAY_OPEN + dt.timedelta(seconds=2), source="alpaca",
+                       tier=2, category="GEOPOLITICS", importance=3,
+                       title="Israel strikes targets in Iran"),
+            ],
+        )  # fmt: skip
+    return TestClient(app)
+
+
+def test_news_at_globex_open_takes_base_from_friday_close(weekend_client: TestClient) -> None:
+    """Zpráva přesně v otevření: základ je páteční close jako v `ReactionJob`
+    (poslední bar před zprávou až 5 dní zpět), dopad tedy nese gap přes víkend."""
+    at = SUNDAY_OPEN + dt.timedelta(minutes=10)
+    body = weekend_client.get("/news/breaking", params={"at": at.isoformat()}).json()
+    (item,) = body["items"]
+    es = item["impact"]["ES"]
+    assert es["state"] == "fixed"
+    assert es["ret_bp"] == pytest.approx((5010.0 - 5000.0) / 5000.0 * 10_000)
