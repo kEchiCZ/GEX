@@ -17,6 +17,7 @@ import datetime as dt
 import logging
 import statistics
 import threading
+import time
 from typing import Any
 
 from sqlalchemy import exists, func, insert, select, update
@@ -187,10 +188,14 @@ class RuleClassificationJob:
         batch: list[dict[str, object]] = []
         if rows:
             self._watermark = max(int(row.id) for row in rows)
+            started = time.monotonic()
             batch = self._classify(rows, now)
+            # Latence do zápisu včetně čekání na zámek (pojistka může zapisovat
+            # stovky řádků) — `now` je jen začátek tiku
+            done = now + dt.timedelta(seconds=time.monotonic() - started)
             classified = {item["id"] for item in batch}
             self._latencies.extend(
-                (now - _as_utc(row.ts_ingested)).total_seconds()
+                (done - _as_utc(row.ts_ingested)).total_seconds()
                 for row in rows
                 if int(row.id) in classified
             )

@@ -308,7 +308,8 @@ def test_written_headline_carries_id_and_ws_payload(tmp_path: Path) -> None:
     """Push do WS smí jít jen z toho, co v DB opravdu přibylo (#335)."""
     collector, _ = make(tmp_path)
 
-    written = collector.write([FakeTick("!DJ-RTG Fed holds rates", articleId="x1")], now=NOW)
+    later = NOW + dt.timedelta(seconds=40)
+    written = collector.write([FakeTick("!DJ-RTG Fed holds rates", articleId="x1")], now=later)
 
     assert len(written) == 1
     payload = written[0].as_news_row()
@@ -318,6 +319,8 @@ def test_written_headline_carries_id_and_ws_payload(tmp_path: Path) -> None:
     # Kategorii doplní až news-engine; UI ji zobrazí jako „Nezařazeno"
     assert payload["category"] is None
     assert payload["ts_event"] == NOW.isoformat()
+    # Skutečný čas zápisu, ne čas zprávy — karta z něj počítá zpoždění (#1496)
+    assert payload["ts_ingested"] == later.isoformat()
 
 
 def test_market_closed_odpovida_case_zpravy(tmp_path: Path) -> None:
