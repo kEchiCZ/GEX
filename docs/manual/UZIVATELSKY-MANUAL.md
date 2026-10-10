@@ -1,6 +1,6 @@
 ﻿# GEXLens — Uživatelský manuál
 
-*Verze 1.31 · říjen 2026 · pro aplikaci GEXLens v0.1*
+*Verze 1.32 · říjen 2026 · pro aplikaci GEXLens v0.1*
 
 GEXLens je aplikace pro intradenní tradery futures opcí (ES, NQ a další CME podklady). Vizualizuje **opční positioning** — kde sedí koncentrace open interestu a volume, kde je zero-gamma flip, kde jsou call/put walls a Max Pain — a jak se to všechno vyvíjí v čase. Hlavním zdrojem dat je tvůj účet u **Interactive Brokers** (TWS/IB Gateway API); od verze 1.9 slouží **tastytrade** jako záloha, která převezme data, když IBKR přestane posílat (kap. 17). Žádná data neodcházejí mimo tvůj počítač.
 
@@ -782,6 +782,41 @@ prvních pár desítek znaků, takže se rozhodovalo prakticky jen podle titulku
 nově se ukládá plné znění a modelu jde titulek + úvodní odstavec. Celý článek
 záměrně ne — stovky slov na zprávu by se při dnešní velikosti vzorku naučily
 nazpaměť místo zobecnění.
+
+### Karta Breaking news (v1.32, E-6.28)
+
+Karta ukazuje **významné zprávy posledních 12 h s naměřeným dopadem na ES i NQ**.
+Najdete ji na dvou místech:
+
+- **v hlavním pohledu (Graf)** jako štítek **⚡ Breaking news** v pravém horním rohu heatmapy.
+  Kliknutím se rozbalí panel, ✕ ho sbalí. Volba se pamatuje. Sbalený panel graf nezmenšuje
+  a na server se neptá;
+- **na stránce News** jako sekce nad tématy a feedem.
+
+Každá položka nese:
+
+- **čas zprávy** a stáří („před 3 min“), titulek;
+- **štítky:** skupina (Makro data, Centrální banky, Geopolitika, Firmy, Ostatní), téma
+  (Fed, Cla, Írán, Energie…), **zásadní** u zpráv s nejvyšší důležitostí;
+- **„článek, zatím nepotvrzeno“**, když zprávu zatím přinesl jen článek (CNBC, Yahoo,
+  Finnhub…) a ne oficiální zdroj nebo headline feed (Benzinga, kurátoři Bluesky). Štítek
+  zmizí, jakmile stejnou zprávu přinese tier 1–2. Článek jde na kartu jen do **60 min od
+  publikace**: staré články doručené se zpožděním kartu nezahlcují;
+- **dopad ES a NQ v bp:** hlavní číslo je změna ceny od posledního close před zprávou
+  (zelená nahoru, červená dolů). Vedle je **výchylka** (↑/↓ bp, high/low od minuty zprávy),
+  aby se neztratil whipsaw. Prvních 5 minut je u čísla **„běží X min“** a číslo se mění.
+  Pak je **zafixované** („5 min“) a odpovídá tomu, co později uvidíte v historii reakcí;
+- **⚠** u dopadu = do okna spadla jiná významná zpráva jiného typu, pohyb tedy nejde přičíst
+  jen téhle;
+- **„trh zavřený“** místo čísla, když zpráva přišla mimo obchodní dobu (nebo těsně před
+  pauzou či víkendem). Reakci na otevření najdete ve feedu. **„bez dat“** znamená, že trh byl
+  podle rozvrhu otevřený, ale cenová data po zprávě chybí (výpadek), tedy mezera, ne nula;
+- **zdroje se zpožděním:** kdo zprávu přinesl a za jak dlouho od publikace (`alpaca +1 s`,
+  `rss_news +6 min`).
+
+Karta se obnovuje à 15 s a hned po příchodu nové významné zprávy. Nová zpráva má kategorii
+a důležitost do ~1 s od příjmu. Skóre z textu se na kartě neukazuje (#740), rozhoduje
+naměřená reakce trhu.
 
 ### Obrazovka News
 
