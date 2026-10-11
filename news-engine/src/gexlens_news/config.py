@@ -28,6 +28,9 @@ WHITEHOUSE_RSS_URLS = (
     "https://www.whitehouse.gov/news/feed/",
     "https://www.whitehouse.gov/presidential-actions/feed/",
 )
+# Feed drží jen nejnovější vydání každé řady (#1517) — historie z prvního stažení
+# je neúplná, nové vydání přijde v čase releasu; `apps.bea.gov` zakazuje robots.txt
+BEA_RSS_URLS = ("https://www.bea.gov/news/rss",)
 
 # Tier B redundance k Finnhubu (SPEC kap. 1) — širší pokrytí, dedup je řeší.
 # Yahoo zrušil souhrnný `rssindex` (HTTP 404 od 23. 9. 2026, #1451); místo něj
