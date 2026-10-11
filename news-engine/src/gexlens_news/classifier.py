@@ -462,13 +462,16 @@ TARIFF_EVENT = _rx(r"""
  | \btariffs?\b.{0,15}\b(?:on|of)\b.{0,20}\d+\s?%
 """)
 #: Téma cel včetně úředních formulací prezidentských aktů, které slovo „tariff“
-#: nenesou (#1518): „Additional Duties“, vyloučení z „Importation into the United
-#: States“, proklamace Section 232 „Adjusting Imports of …“. Jen téma (2) — na
-#: událost (3) je nezvedá měření reakce (n = 2 čisté shluky, reakce ≤ mediánu hodiny)
+#: nenesou (#1518): uložená „Additional Duties“, vyloučení „from Importation into
+#: the United States“, proklamace Section 232 „Adjusting Imports of …“. Formulace
+#: jsou úzké — „assume additional duties“ (personální zpráva) ani „FDA bars
+#: importation into …“ clo nejsou. Jen téma (2): na událost (3) je měření reakce
+#: nezvedá (n = 2 čisté shluky, `range_5` ES 0,75–1,26× a NQ 0,54–1,03× mediánu hodiny)
 TARIFF_TOPIC = _rx(r"""
   \btariffs?\b
- | \badditional\s+duties\b
- | \bimportation\s+into\s+the\s+united\s+states\b
+ | \b(?:impos\w*|subject\s+to(?:\s+the)?)\s+additional\s+duties\b
+ | \badditional\s+duties\s+(?:on|imposed)\b
+ | \bfrom\s+importation\s+into\s+the\s+united\s+states\b
  | \badjusting\s+imports\s+of\b
 """)
 

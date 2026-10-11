@@ -550,6 +550,21 @@ def test_ostatni_akty_bileho_domu_zustavaji_1(title: str) -> None:
     assert (result.category, result.importance) == ("OTHER", 1), result.reason
 
 
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Úřední formulace cel jsou úzké: personální zpráva ani zákaz dovozu
+        # z hygienických důvodů clo nejsou (#1518)
+        "Acme Corp names new CFO; CEO to assume additional duties",
+        "FDA bars importation into the United States of contaminated spinach",
+    ],
+)
+def test_podobne_formulace_bez_cla_zustavaji_1(title: str) -> None:
+    result = classify(title, feed=WIRE, kind="headline")
+    assert result.importance == 1, result.reason
+    assert result.category != "GEOPOLITICS"
+
+
 # ── Kategorie, čištění, směr ───────────────────────────────────────
 
 
