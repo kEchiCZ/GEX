@@ -19,7 +19,8 @@
 - **Revize 11. 10. 2026 (E-6.25d, #1517):** bod 5 — feed BEA drží jen nejnovější vydání každé
   řady (`docs/research/1517-bea-uplnost-feedu.md`), vlastník zvolil adaptér hned s ověřením
   živého proudu u GDP 29. 10. (varianta A); řada se pozná z titulku, roční vydání mají
-  importance 1 (vlastník 11. 10.), směr 0 jako u BLS (Rozhodnuto v #1385)
+  importance 1 (vlastník 11. 10., Rozhodnuto v #1385); směr 0 analogicky k BLS — titulky BEA
+  směrová slova nenesou a směr releasu nese řádek kalendáře
 - **Datum:** 2026-10-09
 - **Souvisí:** #1482 (E-6.23), #1406 (Fáze 6), #1385 (Rozhodnuto 8. 10. — breaking news), audit
   zdrojů #1473 (`docs/research/1473-audit-zdroju-zprav.md`), test kandidátů #1474
@@ -256,7 +257,7 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
        směr releasu nese řádek kalendáře konvencí řady × překvapení, regex nad titulkem
        polaritu řady nezná a „CPI … falls“ by dal −1, ač je risk-on); BEA GDP → `MACRO_GROWTH` 3,
        PCE → `MACRO_INFLATION` 3, ostatní 2 (**revize 11. 10.:** řada podle titulku, feed je jeden;
-       obchodní bilance a běžný účet 2, roční vydání 1, směr 0 jako u BLS); ECB rozhodnutí o sazbách 2, ostatní 1
+       obchodní bilance a běžný účet 2, roční vydání 1, směr 0 analogicky k BLS); ECB rozhodnutí o sazbách 2, ostatní 1
        (shodně s ADR-0045 bod 3); SEC 8-K Item 2.02 → `EARNINGS` 2, ostatní Items 1.
        JSON `data.sec.gov` titulek nemá a regex `EARNINGS` (`classifier.py:466-467`) by
        sestavený titulek formuláře nechytil;
