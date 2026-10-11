@@ -24,7 +24,7 @@ Rozhodnutí se tedy neopírá o „riziko je nízké", ale o tři konkrétní z�
 import asyncio
 import datetime as dt
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -34,9 +34,18 @@ from httpx import HTTPStatusError
 
 from gexlens_news.collectors import CollectorClock, utc_now
 from gexlens_news.http import Fetcher, Response
-from gexlens_news.model import TS_SOURCE_FETCH, TS_SOURCE_ITEM, NewsEvent, RawItem
+from gexlens_news.model import (
+    TS_SOURCE_CALENDAR,
+    TS_SOURCE_FETCH,
+    TS_SOURCE_ITEM,
+    NewsEvent,
+    RawItem,
+)
 
 logger = logging.getLogger(__name__)
+
+#: Čas releasu položky z kalendáře (UTC), None = kalendář shodu nemá
+ReleaseTime = Callable[[RawItem], dt.datetime | None]
 
 _ATOM = "{http://www.w3.org/2005/Atom}"
 # Maximální délka `summary` (SPEC 2.1) — do DB jde stručný text, ne celý článek
@@ -67,6 +76,15 @@ def parse_feed_time(raw: str | None) -> dt.datetime | None:
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.UTC)
     logger.debug("Nečitelný čas položky %r", raw)
     return None
+
+
+def plausible_item_time(
+    published: dt.datetime | None, fetched_at: dt.datetime
+) -> dt.datetime | None:
+    """Čas položky, je-li věrohodný (ADR-0059 bod 5): rok ≥ 2000 a ne po stažení."""
+    if published is None or published.year < MIN_PLAUSIBLE_YEAR or published > fetched_at:
+        return None
+    return published
 
 
 def _text(element: ElementTree.Element, *names: str) -> str | None:
@@ -152,6 +170,8 @@ class RssCollector:
         inter_fetch_delay_s: float = 0.0,
         round_robin: bool = False,
         verified_time: bool = False,
+        release_time: ReleaseTime | None = None,
+        headers: Mapping[str, str] | None = None,
         clock: CollectorClock = utc_now,
     ) -> None:
         self._name = name
@@ -174,15 +194,21 @@ class RssCollector:
         #: Čas zveřejnění zdroje tier 1 (ADR-0059 bod 5): čas položky jen
         #: věrohodný, jinak čas prvního stažení s původem v `raw.ts_source`.
         #: Ostatní RSS beze změny — budoucí čas tam nese informaci (#552 L2)
-        self._verified_time = verified_time
+        self._verified_time = verified_time or release_time is not None
+        #: Čas releasu z kalendáře místo času položky (BLS, ADR-0059 bod 5):
+        #: čas položky se pak nepoužije nikdy, bez shody platí čas stažení
+        self._release_time = release_time
+        #: Hlavičky každého požadavku zdroje — kontakt v User-Agent (ADR-0059 bod 7)
+        self._headers = dict(headers) if headers else None
         #: Feedy, které od startu procesu aspoň jednou úspěšně odpověděly
         self._fetched_urls: set[str] = set()
         #: Položky z prvního úspěšného stažení feedu po startu: bez věrohodného
         #: času u nich nejde doložit, kdy vyšly (historie feedu, výpadek procesu)
         self._startup_uids: set[str] = set()
-        #: Čas prvního stažení položky bez věrohodného času — drží `ts_event`
-        #: (a s ním `dedup_hash`) stabilní, když se feed znovu změní
-        self._first_fetched: dict[str, dt.datetime] = {}
+        #: Přidělený čas z kalendáře nebo čas prvního stažení s původem — drží
+        #: `ts_event` (a s ním `dedup_hash`) stabilní, když se feed nebo
+        #: kalendář během běhu změní
+        self._assigned: dict[str, tuple[dt.datetime, str]] = {}
         #: Přeskočené položky — log jednou za běh procesu, ne každý cyklus
         self._undatable: set[str] = set()
         self._clock = clock
@@ -211,7 +237,7 @@ class RssCollector:
         cyklus místo toho, aby zdroj hlásil degradaci.
         """
         try:
-            return await self._fetcher.get(url)
+            return await self._fetcher.get(url, headers=self._headers)
         except HTTPStatusError as error:
             if error.response.status_code != 429 or self._inter_fetch_delay_s <= 0:
                 raise
@@ -219,7 +245,7 @@ class RssCollector:
                 "Feed %s vrátil 429 — opakuji za %.0f s (#941)", url, self._inter_fetch_delay_s
             )
             await asyncio.sleep(self._inter_fetch_delay_s)
-            return await self._fetcher.get(url)
+            return await self._fetcher.get(url, headers=self._headers)
 
     def _due_urls(self) -> list[str]:
         """Feedy k stažení v tomto cyklu (round robin → právě jeden)."""
@@ -285,22 +311,27 @@ class RssCollector:
         """Čas zveřejnění zdroje tier 1 a jeho původ; None = položku nezapsat.
 
         ADR-0059 bod 5: čas položky jen věrohodný (rok ≥ 2000, ne po stažení),
-        jinak čas prvního stažení. Položku bez věrohodného času z prvního
-        stažení po startu nejde datovat — tvářila by se jako čerstvá zpráva
-        (testimony s rokem 1899) a vstoupila do SentIndexu i shluků.
-        Jednou přidělený čas stažení platí do konce běhu, i když budoucí čas
-        položky mezitím zestárne — jinak by se položka zapsala znovu jiným dnem.
+        u zdroje s kalendářem (BLS) místo něj čas releasu, jinak čas prvního
+        stažení. Položku bez věrohodného času z prvního stažení po startu nejde
+        datovat — tvářila by se jako čerstvá zpráva (testimony s rokem 1899)
+        a vstoupila do SentIndexu i shluků. Jednou přidělený čas z kalendáře
+        nebo stažení platí do konce běhu, i když budoucí čas položky mezitím
+        zestárne nebo se kalendář změní — jinak by se položka zapsala znovu.
         """
         uid = _item_uid(item.payload)
-        if uid is not None and uid in self._first_fetched:
-            return self._first_fetched[uid], TS_SOURCE_FETCH
-        if (
-            published is not None
-            and published.year >= MIN_PLAUSIBLE_YEAR
-            and published <= item.fetched_at
-        ):
+        if uid is not None and (assigned := self._assigned.get(uid)) is not None:
+            return assigned
+        if self._release_time is not None:
+            # BLS: čas položky předbíhá release o 39 min (E-6.22, 2.2) — nikdy
+            released = self._release_time(item)
+            if released is not None:
+                verified = released.astimezone(dt.UTC), TS_SOURCE_CALENDAR
+                if uid is not None:
+                    self._assigned[uid] = verified
+                return verified
+        elif (plausible := plausible_item_time(published, item.fetched_at)) is not None:
             # V UTC: ECB posílá `+0200` a `dedup_hash` bere den z času, jak přišel
-            return published.astimezone(dt.UTC), TS_SOURCE_ITEM
+            return plausible.astimezone(dt.UTC), TS_SOURCE_ITEM
         if uid is None or uid in self._startup_uids:
             key = uid or str(item.payload.get("title"))
             if key not in self._undatable:
@@ -312,7 +343,7 @@ class RssCollector:
                     item.payload.get("title"),
                 )
             return None
-        return self._first_fetched.setdefault(uid, item.fetched_at), TS_SOURCE_FETCH
+        return self._assigned.setdefault(uid, (item.fetched_at, TS_SOURCE_FETCH))
 
     def normalize(self, item: RawItem) -> NewsEvent | None:
         title = item.payload.get("title")

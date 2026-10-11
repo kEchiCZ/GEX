@@ -9,6 +9,7 @@ Bez toho by latenční požadavek „headline → DB < 60 s" (kap. 10) nešlo sp
 import ipaddress
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -24,6 +25,20 @@ BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 DEFAULT_TIMEOUT_S = 20.0
+
+
+def contact_user_agent(contact: str) -> str | None:
+    """User-Agent s kontaktem pro zdroje, které identifikaci vyžadují (ADR-0059 bod 7).
+
+    BLS (a SEC) bez kontaktu vrací 403. Hlavička HTTP je ASCII — jméno
+    s diakritikou by httpx odmítl (UnicodeEncodeError), proto NFKD bez
+    nepřevoditelných znaků; bílé znaky (i konec řádku) se slévají do mezery.
+    None = kontakt chybí, zdroj je „nenakonfigurován“, ne porucha (#1457).
+    """
+    ascii_text = unicodedata.normalize("NFKD", contact).encode("ascii", "ignore").decode()
+    cleaned = " ".join(ascii_text.split())
+    return f"GEXLens research {cleaned}" if cleaned else None
+
 
 # M4 (#552): strop těla odpovědi. Feed je nedůvěryhodný vstup — kompromitovaný
 # server vrátí gigabajtové tělo a `response.text` ho celé natáhne do paměti.

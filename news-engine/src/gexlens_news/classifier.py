@@ -42,6 +42,10 @@ Powell, `icc-cpi.int` v odkazu). Analýza #1293 (400 zpráv, dva hodnotitelé,
    FF, ADR-0045 bod 3), ostatní 1 — titulky ECB slovo ECB nenesou, takže
    pravidla v2 by rozhodnutí daly 1. Kategorie z titulku jako u zpráv o ECB
    odjinud; FED (sazby bez cizího kontextu) patří americkému Fedu → OTHER.
+9. **bls** (ADR-0059 bod 5, #1516): kategorie a importance podle feedu releasu
+   (`BLS_RELEASE_CLASSES`: CPI a PPI MACRO_INFLATION/3, zaměstnanost
+   MACRO_LABOR/3, JOLTS a ECI MACRO_LABOR/2), směr 0 — nese ho řádek kalendáře
+   konvencí řady, titulek polaritu řady nezná.
 
 Kategorie se bere z předmětu titulku, pak z celého titulku; ENERGY má
 přednost před GEOPOLITICS (pohyb ropy způsobený válkou je ENERGY).
@@ -99,6 +103,18 @@ FEED_RSS_OTHER = "rss:other"
 FEED_RSS_USER = "rss_user"
 FEED_FED_RSS = "fed_rss"
 FEED_ECB = "ecb"
+#: Feedy BLS po releasech: `bls:{release}` podle URL (`raw.feed`)
+FEED_BLS_PREFIX = "bls:"
+_BLS_FEED_URL = re.compile(r"bls\.gov/feed/([a-z_]+)\.rss", re.I)
+#: Kategorie a importance releasů BLS (ADR-0059 bod 5) — klíč je `{release}`
+#: z URL feedu `https://www.bls.gov/feed/{release}.rss`
+BLS_RELEASE_CLASSES: dict[str, tuple[str, int]] = {
+    "cpi": ("MACRO_INFLATION", 3),
+    "ppi": ("MACRO_INFLATION", 3),
+    "empsit": ("MACRO_LABOR", 3),
+    "jolts": ("MACRO_LABOR", 2),
+    "eci": ("MACRO_LABOR", 2),
+}
 
 #: Sociální sítě bez kurátora (#578): importance ≥ 2 → relevantní 0/29 (Reddit),
 #: importance 3 → zásadní 0/42 (Bluesky) — nejvýš 1
@@ -125,6 +141,12 @@ def _rss_feed(url: str) -> str:
     return FEED_RSS_OTHER
 
 
+def bls_release(url: str) -> str | None:
+    """Release BLS (`cpi`, `empsit`…) z URL feedu `…/feed/{release}.rss`."""
+    match = _BLS_FEED_URL.search(url)
+    return match.group(1).lower() if match else None
+
+
 def feed_of(source: str, raw: Mapping[str, object] | None) -> str:
     """Feed zprávy ze zdroje a surového payloadu — klíč stropu importance.
 
@@ -139,6 +161,9 @@ def feed_of(source: str, raw: Mapping[str, object] | None) -> str:
         return FEED_REDDIT
     if source == "rss_news":
         return _rss_feed(str(payload.get("feed") or payload.get("link") or ""))
+    if source == "bls":
+        release = bls_release(str(payload.get("feed") or ""))
+        return f"{FEED_BLS_PREFIX}{release}" if release else source
     return source
 
 
@@ -835,6 +860,13 @@ def classify(
         # Titulek ECB bez slova ECB („… rate cuts“) by dal FED — ten je americký
         ecb_category = "OTHER" if category == "FED" else category
         return RuleClassification(ecb_category, ecb_importance(title), direction, strength, "ecb")
+    if feed.startswith(FEED_BLS_PREFIX) and (
+        bls := BLS_RELEASE_CLASSES.get(feed.removeprefix(FEED_BLS_PREFIX))
+    ):
+        # Směr nese řádek kalendáře (konvence řady × překvapení); regex nad
+        # titulkem polaritu řady nezná — „CPI … falls“ by dal −1, ač je risk-on
+        bls_category, bls_importance = bls
+        return RuleClassification(bls_category, bls_importance, 0, 0.0, feed)
     importance, reason = headline_importance(title)
     capped = feed_capped(importance, feed)
     if capped != importance:

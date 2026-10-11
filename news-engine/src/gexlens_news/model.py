@@ -15,8 +15,10 @@ from gexlens_engine.compute.newstext import dedup_hash as _dedup_hash
 from gexlens_engine.compute.newstext import normalize_title
 
 #: Původ `ts_event` zdroje tier 1 v `raw.ts_source` (ADR-0059 bod 5): čas položky
-#: ve feedu, nebo čas prvního stažení, když položka věrohodný čas nemá
+#: ve feedu, čas releasu z kalendáře (BLS), nebo čas prvního stažení, když
+#: položka věrohodný čas nemá
 TS_SOURCE_ITEM = "item"
+TS_SOURCE_CALENDAR = "calendar"
 TS_SOURCE_FETCH = "fetch"
 
 
