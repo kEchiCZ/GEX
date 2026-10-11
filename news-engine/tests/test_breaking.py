@@ -100,6 +100,8 @@ def test_every_category_has_explicit_group() -> None:
         ("Fed's Waller says Iran war raises inflation risk", "fed"),
         ("Trump announces 50% tariffs on Chinese goods", "tariffs"),
         ("US, Japan reach trade deal", "tariffs"),
+        # Úřední akt bez slova tariff (#1518)
+        ("Excluding Certain Canadian Products from Importation into the United States", "tariffs"),
         ("Iran threatens to close Strait of Hormuz", "iran"),
         ("Israeli strikes hit targets near the border", "israel"),
         ("Tankers turn away from Hormuz", "hormuz"),
