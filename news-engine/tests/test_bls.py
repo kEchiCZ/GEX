@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import Engine
 
+from gexlens_engine.compute.settle import ET_TZ
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema, news_events
 from gexlens_news.classifier import BLS_RELEASE_CLASSES, bls_release
 from gexlens_news.collectors.bls import (
@@ -150,6 +151,9 @@ async def test_cpi_v_8_30_et_je_12_30_utc_v_lete_a_13_30_utc_v_zime(engine: Engi
     assert sep.ts_event == dt.datetime(2026, 9, 11, 12, 30, tzinfo=dt.UTC)
     assert jan.ts_event == dt.datetime(2026, 1, 13, 13, 30, tzinfo=dt.UTC)
     assert sep.raw["ts_source"] == jan.raw["ts_source"] == "calendar"
+    # Oba releasy jsou v 8:30 ET — převod ET → UTC dělá collector kalendáře
+    assert sep.ts_event.astimezone(ET_TZ).time() == jan.ts_event.astimezone(ET_TZ).time()
+    assert sep.ts_event.astimezone(ET_TZ).time() == dt.time(8, 30)
 
 
 async def test_kolize_bere_jen_mapovany_titulek_teho_dne_v_et(engine: Engine) -> None:
@@ -248,7 +252,7 @@ async def test_kalendar_se_pta_jednou_a_cas_plati_do_konce_behu(engine: Engine) 
     assert (second.ts_event, second.raw["ts_source"]) == (first.ts_event, "calendar")
 
 
-def test_den_releasu_v_et_z_casu_polozky_zalozne_ze_stazeni() -> None:
+def test_den_releasu_v_et_z_casu_polozky() -> None:
     # 23:50 ET je v UTC už další den — rozhoduje den v ET
     late = RawItem(
         source="bls",
@@ -256,13 +260,33 @@ def test_den_releasu_v_et_z_casu_polozky_zalozne_ze_stazeni() -> None:
         fetched_at=dt.datetime(2026, 9, 11, 4, 0, tzinfo=dt.UTC),
     )
     assert release_day(late) == dt.date(2026, 9, 10)
-    # Bez věrohodného času (rok 1899) den stažení v ET
+    # Bez věrohodného času (rok 1899) den nejde určit — den stažení zálohou není
     undated = RawItem(
         source="bls",
         payload={"feed": CPI, "published": "1899-12-30T00:00:00Z"},
         fetched_at=dt.datetime(2026, 10, 2, 3, 0, tzinfo=dt.UTC),
     )
-    assert release_day(undated) == dt.date(2026, 10, 1)
+    assert release_day(undated) is None
+
+
+async def test_polozka_bez_casu_v_den_releasu_neobejde_pojistku(engine: Engine) -> None:
+    """Stará položka bez času z prvního stažení nedostane dnešní čas z kalendáře."""
+    _ff(engine, "USD Non-Farm Employment Change", dt.datetime(2026, 10, 2, 12, 30, tzinfo=dt.UTC))
+    old = _entry("empsit-old", "Payroll employment rises in 1999", "1899-12-30T00:00:00Z")
+    new = _entry("empsit-new", "Payroll employment, revised", "1899-12-30T00:00:00Z")
+    clock = Clock(RELEASED)
+    fetcher = FeedFetcher({EMPSIT: [_atom(old), _atom(new, old)]})
+    collector = _bls(engine, fetcher, clock, [EMPSIT])
+    assert await _cycle(collector) == []
+
+    clock.now = RELEASED + dt.timedelta(minutes=1)
+    (event,) = await _cycle(collector)
+    # Nová položka bez času: čas stažení, ne čas releasu z kalendáře
+    assert (event.source_uid, event.ts_event, event.raw["ts_source"]) == (
+        "empsit-new",
+        clock.now,
+        "fetch",
+    )
 
 
 def test_mapovani_feedu_pokryva_klasifikaci() -> None:

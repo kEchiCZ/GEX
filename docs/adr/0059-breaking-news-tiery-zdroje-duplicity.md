@@ -12,6 +12,9 @@
 - **Revize 11. 10. 2026 (E-6.25a, #1515):** bod 5 — přeskočená položka bez věrohodného času se
   jen zaloguje, čítač ve zdraví zdroje se nezavádí (vlastník 11. 10., varianta A, Rozhodnuto
   v #1385); čas položky se ukládá v UTC a pojistka `(source, source_uid)` platí pro celý tier 1
+- **Revize 11. 10. 2026 (E-6.25c, #1516):** bod 5 — přesné titulky kalendáře FF pro BLS ověřené
+  v produkční DB (s prefixem `USD`); den releasu se bere z času položky v ET, položka bez
+  věrohodného času jde cestou času stažení s pojistkami (den stažení zálohou není)
 - **Datum:** 2026-10-09
 - **Souvisí:** #1482 (E-6.23), #1406 (Fáze 6), #1385 (Rozhodnuto 8. 10. — breaking news), audit
   zdrojů #1473 (`docs/research/1473-audit-zdroju-zprav.md`), test kandidátů #1474
@@ -256,8 +259,13 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
          feed → titulek releasu**, ne libovolný řádek USD.
        - Mapování: `cpi` → „CPI m/m“, `ppi` → „PPI m/m“, `empsit` → „Non-Farm Employment
          Change“, `jolts` → „JOLTS Job Openings“, `eci` → „Employment Cost Index q/q“.
-         Přesné titulky FF ověří E-6.25.
-       - Bez shody se vezme čas prvního stažení.
+         **Revize 11. 10.:** v DB mají titulky prefix měny (`USD CPI m/m` …) a shoda je
+         přesná — kalendář nese i `USD ADP Non-Farm Employment Change` a `USD Core CPI m/m`
+         (`collectors/bls.py`).
+       - Den releasu je den času položky v ET (položka předbíhá release o 39 min, den sedí).
+       - Bez shody se vezme čas prvního stažení. **Revize 11. 10.:** stejně u položky bez
+         věrohodného času — den stažení zálohou není, stará položka bez času z prvního stažení
+         po startu by jinak v den releasu dostala dnešní čas z kalendáře a obešla pojistku níže.
      - **Ostatní zdroje:** čas položky, je-li věrohodný (rok ≥ 2000, ne v budoucnosti). Jinak
        čas prvního stažení.
    - **Pojistky (požadavky na E-6.25 s testy):**
