@@ -226,8 +226,8 @@ async def test_build_collectors_zapina_cas_zverejneni_u_zdroju_tier_1() -> None:
         for c in build_collectors(settings, SequenceFetcher(feed), reddit_subreddits=[])
         if isinstance(c, RssCollector)
     }
-    assert {"fed_rss", "ecb", "whitehouse"} <= collectors.keys()
-    for name in ("fed_rss", "ecb", "whitehouse"):
+    assert {"fed_rss", "ecb", "whitehouse", "bea"} <= collectors.keys()
+    for name in ("fed_rss", "ecb", "whitehouse", "bea"):
         events = await _cycle(collectors[name])
         # Každý feed zdroje vrací týž výřez: rok 1899 se nezapíše, čas položky ano
         assert {e.source_uid for e in events} == {"t-warsh"}, name
@@ -237,6 +237,8 @@ async def test_build_collectors_zapina_cas_zverejneni_u_zdroju_tier_1() -> None:
     assert {e.source_uid for e in rss_news} == {"t-warsh", "t-barr"}
 
     disabled = build_collectors(
-        settings, SequenceFetcher(feed), enabled={"ecb": False, "whitehouse": False}
+        settings,
+        SequenceFetcher(feed),
+        enabled={"ecb": False, "whitehouse": False, "bea": False},
     )
-    assert not {"ecb", "whitehouse"} & {c.name for c in disabled}
+    assert not {"ecb", "whitehouse", "bea"} & {c.name for c in disabled}

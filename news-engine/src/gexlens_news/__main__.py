@@ -32,6 +32,7 @@ from gexlens_news.collectors.finnhub import FinnhubCollector
 from gexlens_news.collectors.forexfactory import ForexFactoryCollector
 from gexlens_news.collectors.rss import RssCollector
 from gexlens_news.config import (
+    BEA_RSS_URLS,
     ECB_RSS_URLS,
     FED_RSS_URLS,
     NEWS_RSS_URLS,
@@ -131,10 +132,12 @@ def build_collectors(
             )
         )
     # Zdroje tier 1 (ADR-0059 bod 5): kategorii a importance určí klasifikace
-    # podle feedu (ECB) nebo pravidla v2 nad titulkem (White House)
+    # podle feedu (ECB), podle řady releasu (BEA) nebo pravidla v2 nad titulkem
+    # (White House)
     for source, official_urls in (
         ("ecb", ECB_RSS_URLS),
         ("whitehouse", WHITEHOUSE_RSS_URLS),
+        ("bea", BEA_RSS_URLS),
     ):
         if on(source):
             collectors.append(

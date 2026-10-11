@@ -47,6 +47,8 @@ FIXED_TIERS: Mapping[str, int | None] = {
     "whitehouse": OFFICIAL,
     # BLS releasy z E-6.25c (ADR-0059 bod 5)
     "bls": OFFICIAL,
+    # BEA releasy z E-6.25d (ADR-0059 bod 5)
+    "bea": OFFICIAL,
     "rss_news": ARTICLE,
     "finnhub": ARTICLE,
     "rss_user": ARTICLE,

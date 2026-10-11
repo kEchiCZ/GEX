@@ -46,6 +46,9 @@ Powell, `icc-cpi.int` v odkazu). Analýza #1293 (400 zpráv, dva hodnotitelé,
    (`BLS_RELEASE_CLASSES`: CPI a PPI MACRO_INFLATION/3, zaměstnanost
    MACRO_LABOR/3, JOLTS a ECI MACRO_LABOR/2), směr 0 — nese ho řádek kalendáře
    konvencí řady, titulek polaritu řady nezná.
+10. **bea** (ADR-0059 bod 5, #1517): podle řady v titulku (`BEA_RELEASE_CLASSES`:
+    GDP MACRO_GROWTH/3, Personal Income and Outlays MACRO_INFLATION/3, obchod
+    a běžný účet 2), roční vydání 1 s kategorií z titulku, směr 0 jako u BLS.
 
 Kategorie se bere z předmětu titulku, pak z celého titulku; ENERGY má
 přednost před GEOPOLITICS (pohyb ropy způsobený válkou je ENERGY).
@@ -116,6 +119,25 @@ BLS_RELEASE_CLASSES: dict[str, tuple[str, int]] = {
     "jolts": ("MACRO_LABOR", 2),
     "eci": ("MACRO_LABOR", 2),
 }
+FEED_BEA = "bea"
+#: Řady releasů BEA podle začátku titulku (ADR-0059 bod 5, #1517): feed je jeden,
+#: řadu nese titulek. Kategorie None = z titulku pravidly v2.
+BEA_RELEASE_CLASSES: tuple[tuple[re.Pattern[str], str | None, int], ...] = (
+    # „GDP (Advance Estimate), …“; „Gross Domestic Product by County …“ je roční
+    (re.compile(r"^GDP\s*\(", re.I), "MACRO_GROWTH", 3),
+    # Personal Income and Outlays nese PCE
+    (re.compile(r"^Personal\s+Income\s+and\s+Outlays\b", re.I), "MACRO_INFLATION", 3),
+    (
+        re.compile(
+            r"^U\.S\.\s+International\s+(?:Trade\s+in\s+Goods\s+and\s+Services|Transactions)\b",
+            re.I,
+        ),
+        None,
+        2,
+    ),
+)
+#: Roční vydání (přímé investice, outdoor, GDP po okresech…) — vlastník 11. 10.
+BEA_OTHER_IMPORTANCE = 1
 
 #: Sociální sítě bez kurátora (#578): importance ≥ 2 → relevantní 0/29 (Reddit),
 #: importance 3 → zásadní 0/42 (Bluesky) — nejvýš 1
@@ -146,6 +168,15 @@ def bls_release(url: str) -> str | None:
     """Release BLS (`cpi`, `empsit`…) z URL feedu `…/feed/{release}.rss`."""
     match = _BLS_FEED_URL.search(url)
     return match.group(1).lower() if match else None
+
+
+def bea_release_class(title: str) -> tuple[str | None, int]:
+    """Kategorie (None = z titulku) a importance releasu BEA podle řady v titulku."""
+    text = clean(title)
+    for pattern, category, importance in BEA_RELEASE_CLASSES:
+        if pattern.search(text):
+            return category, importance
+    return None, BEA_OTHER_IMPORTANCE
 
 
 def feed_of(source: str, raw: Mapping[str, object] | None) -> str:
@@ -880,6 +911,10 @@ def classify(
         # titulkem polaritu řady nezná — „CPI … falls“ by dal −1, ač je risk-on
         bls_category, bls_importance = bls
         return RuleClassification(bls_category, bls_importance, 0, 0.0, feed)
+    if feed == FEED_BEA:
+        # Směr nese řádek kalendáře stejně jako u BLS
+        bea_category, bea_importance = bea_release_class(title)
+        return RuleClassification(bea_category or category, bea_importance, 0, 0.0, feed)
     importance, reason = headline_importance(title)
     capped = feed_capped(importance, feed)
     if capped != importance:
