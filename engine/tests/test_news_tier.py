@@ -26,6 +26,7 @@ from gexlens_engine.storage.sentiment import NEWS_SOURCE_SEED
         ("fed_rss", {"feed": "https://www.federalreserve.gov/feeds/speeches.xml"}, OFFICIAL),
         ("fed_rss", {"feed": "https://www.federalreserve.gov/feeds/testimony.xml"}, OFFICIAL),
         ("ecb", {"feed": "https://www.ecb.europa.eu/rss/press.html"}, OFFICIAL),
+        ("bls", {"feed": "https://www.bls.gov/feed/cpi.rss"}, OFFICIAL),
         ("whitehouse", {"feed": "https://www.whitehouse.gov/news/feed/"}, OFFICIAL),
         (
             "whitehouse",

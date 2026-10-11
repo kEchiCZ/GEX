@@ -362,6 +362,8 @@ def test_feed_ze_zdroje_a_surového_payloadu() -> None:
     assert feed_of("rss_news", {"link": "https://www.cnbc.com/2026/09/x.html"}) == FEED_CNBC
     assert feed_of("rss_user", {"feed": "https://example.org/rss"}) == FEED_RSS_USER
     assert feed_of("alpaca", None) == "alpaca"
+    assert feed_of("bls", {"feed": "https://www.bls.gov/feed/cpi.rss"}) == "bls:cpi"
+    assert feed_of("bls", {}) == "bls"
 
 
 # ── Kalendář FF a Fed RSS ──────────────────────────────────────────
@@ -442,6 +444,37 @@ def test_ecb_rozhodnuti_2_ostatni_1(title: str, importance: int) -> None:
     assert result.importance == importance
     # Kategorie z titulku jako u zpráv o ECB odjinud, ne pevná FED
     assert result.category == classify_category(title)
+
+
+@pytest.mark.parametrize(
+    ("release", "title", "category", "importance"),
+    [
+        # Titulky z živých feedů BLS 11. 10. 2026
+        ("cpi", "CPI for all items falls 0.4% in June; gasoline down", "MACRO_INFLATION", 3),
+        ("ppi", "PPI for final demand advances 0.2% in August", "MACRO_INFLATION", 3),
+        (
+            "empsit",
+            "Payroll employment edges down 92,000 in February; unemployment rate changes little",
+            "MACRO_LABOR",
+            3,
+        ),
+        (
+            "jolts",
+            "April job openings increase; hires and total separations decrease",
+            "MACRO_LABOR",
+            2,
+        ),
+        ("eci", "Employment Cost Index for June 2026", "MACRO_LABOR", 2),
+    ],
+)
+def test_bls_kategorie_a_importance_podle_feedu(
+    release: str, title: str, category: str, importance: int
+) -> None:
+    feed = feed_of("bls", {"feed": f"https://www.bls.gov/feed/{release}.rss"})
+    result = classify(title, feed=feed, kind="headline")
+    assert (result.category, result.importance) == (category, importance)
+    # Směr nese řádek kalendáře; „CPI … falls“ by regex dal −1, ač je risk-on
+    assert (result.direction, result.strength) == (0, 0.0)
 
 
 def test_ecb_sazby_bez_slova_ecb_nejsou_americky_fed() -> None:
