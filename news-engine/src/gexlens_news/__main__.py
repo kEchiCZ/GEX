@@ -41,6 +41,7 @@ from gexlens_news.config import (
     NewsSettings,
     load_news_settings,
 )
+from gexlens_news.contamination import ContaminationJob
 from gexlens_news.crowd import (
     CnnFearGreedCollector,
     CrowdRunner,
@@ -279,6 +280,8 @@ async def run(settings: NewsSettings) -> None:
         logger.info("Gemini bez klíče — LLM klasifikace se nespouští (není to porucha)")
     bars_repo = BarsRepository(settings.data_dir)
     reactions = ReactionJob(engine, bars_repo)
+    # Kontaminace K1 pozdě zapsaných eventů (#1522): hodinový přepočet 7 dní
+    contamination = ContaminationJob(engine, settings.data_dir)
     # Mimořádná reakce trhu na shluk zpráv (#1291, ADR-0043) → zvonek a Telegram
     anomaly = AnomalyJob(engine, bars_repo)
     # Zprávy za víkend 4 h a 15 min před otevřením Globexu (#1291 Q2, ADR-0043)
@@ -397,6 +400,11 @@ async def run(settings: NewsSettings) -> None:
                 logger.exception(
                     "Dopočet reakcí selhal — zkusí se za %.0f s", settings.reaction_interval_s
                 )
+            # Po reakcích a před model stats, které příznaky čtou (#1522)
+            try:
+                await asyncio.to_thread(contamination.run, now)
+            except Exception:
+                logger.exception("Přepočet kontaminace K1 selhal — zkusí se za hodinu")
             # Reakce na shluky zpráv (#1291) po klasifikaci — významnost stojí na
             # importance; bary čte sám, na news_reactions nezávisí
             try:

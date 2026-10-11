@@ -101,6 +101,11 @@ týdne hodnocený naslepo):
    s importance ≥ 2 a **jinou kategorií** (neznámá kategorie kontaminuje). Pokrytí téže události
    (řádek Benzinga „USA CPI … Vs Est“ minutu po kalendáři CPI) by jinak vyřadilo 92 % reakcí na
    USD High releasy z modelu.
+   *Revize 12. 10. 2026 (#1522, vlastník: varianta D):* příznak se při měření reakce zapisuje
+   z eventů, které už jsou v DB, takže pozdě zapsaný event v okně by ho minul (drift 3 444 řádků
+   za historii). Proto news-engine jednou za hodinu přepočítá kontaminaci reakcí posledních 7 dní
+   týmiž funkcemi jako skript reklasifikace (`gexlens_news/contamination.py`); starší historii
+   přepočte skript.
 8. **Reklasifikace historie hned** (`scripts/reclassify_news_rules.py`, ADMIN kap. 12): jen
    eventy s `sentiment_source = rule` (LLM, ruční korekce ani stín ngram se nemění); nová verze
    v `news_classifications` (max+1 přes všechny zdroje, směr a síla z poslední pravidlové verze)

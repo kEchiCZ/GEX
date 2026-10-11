@@ -19,6 +19,7 @@ from gexlens_engine.storage.sentiment import (
     unpivot_reaction,
 )
 from gexlens_news.bars import BarsRepository
+from gexlens_news.contamination import CONTAMINATION_REFRESH_LOOKBACK, ContaminationJob
 from gexlens_news.reaction_job import ReactionJob
 
 DAY = dt.date(2026, 7, 28)
@@ -543,3 +544,80 @@ def test_cekajici_event_tombstone_nedostane(tmp_path: Path) -> None:
     assert (event_id, EVENT_TS) in [
         (eid, ts) for eid, ts in job._pending_daily_events(now, limit=200)
     ]
+
+
+# ── Kontaminace pozdě zapsaných eventů (#1522) ─────────────────────
+
+
+def es_contamination(engine: Engine, event_id: int) -> dict[int, bool]:
+    return {
+        window.window_min: window.contaminated
+        for symbol, window in reaction_windows(engine, event_id)
+        if symbol == "ES"
+    }
+
+
+def test_pozde_zapsany_event_nastavi_kontaminaci(tmp_path: Path) -> None:
+    """Event zapsaný po výpočtu reakce s `ts_event` v okně nastaví `cont_*` (AC #1522)."""
+    engine, job = make_env(tmp_path)
+    event_id = add_event(engine, EVENT_TS, importance=1, title="Zpráva", category="TECH")
+    job.run(NOW)
+    assert es_contamination(engine, event_id) == {1: False, 5: False, 15: False, 60: False}
+
+    # Finnhub doručí FOMC z 12. minuty až po změření reakce
+    add_event(
+        engine, EVENT_TS + dt.timedelta(minutes=12), importance=3, title="FOMC", category="FED"
+    )
+    refresh = ContaminationJob(engine, tmp_path / "data")
+
+    assert refresh.run(NOW + dt.timedelta(minutes=5)) == 2  # ES i NQ
+    # Totéž, co by job naměřil s eventem v DB (test_job_flags_contaminated_windows_only)
+    assert es_contamination(engine, event_id) == {1: False, 5: False, 15: True, 60: True}
+
+
+def test_prepocet_kontaminace_hodinovy_a_idempotentni(tmp_path: Path) -> None:
+    engine, job = make_env(tmp_path)
+    event_id = add_event(engine, EVENT_TS, importance=1, title="Zpráva", category="TECH")
+    job.run(NOW)
+    refresh = ContaminationJob(engine, tmp_path / "data")
+    assert refresh.run(NOW) == 0
+
+    add_event(
+        engine, EVENT_TS + dt.timedelta(minutes=12), importance=3, title="FOMC", category="FED"
+    )
+    # Do hodiny od posledního přepočtu se nic nečte
+    assert refresh.run(NOW + dt.timedelta(minutes=59)) == 0
+    assert es_contamination(engine, event_id)[60] is False
+    assert refresh.run(NOW + dt.timedelta(hours=1)) == 2
+    # Druhý přepočet nad týmiž daty nic nemění
+    assert refresh.run(NOW + dt.timedelta(hours=2)) == 0
+
+
+def test_zmena_kategorie_kontaminaci_zrusi(tmp_path: Path) -> None:
+    """Přepočet je úplný: event, který dostal stejnou kategorii, už okno nekazí (K1)."""
+    engine, job = make_env(tmp_path)
+    event_id = add_event(engine, EVENT_TS, importance=1, title="Zpráva", category="TECH")
+    other = add_event(
+        engine, EVENT_TS + dt.timedelta(minutes=12), importance=3, title="FOMC", category="FED"
+    )
+    job.run(NOW)
+    assert es_contamination(engine, event_id)[60] is True
+
+    with engine.begin() as conn:
+        conn.execute(news_events.update().where(news_events.c.id == other).values(category="TECH"))
+    assert ContaminationJob(engine, tmp_path / "data").run(NOW) == 2
+    assert es_contamination(engine, event_id) == {1: False, 5: False, 15: False, 60: False}
+
+
+def test_prepocet_kontaminace_nebere_reakce_starsi_sedmi_dnu(tmp_path: Path) -> None:
+    """Starší historii (backfill, první stažení zdroje) pokryje skript reklasifikace."""
+    engine, job = make_env(tmp_path)
+    event_id = add_event(engine, EVENT_TS, importance=1, title="Zpráva", category="TECH")
+    job.run(NOW)
+    add_event(
+        engine, EVENT_TS + dt.timedelta(minutes=12), importance=3, title="FOMC", category="FED"
+    )
+
+    later = EVENT_TS + CONTAMINATION_REFRESH_LOOKBACK + dt.timedelta(minutes=1)
+    assert ContaminationJob(engine, tmp_path / "data").run(later) == 0
+    assert es_contamination(engine, event_id)[60] is False
