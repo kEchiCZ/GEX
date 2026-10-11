@@ -14,7 +14,8 @@
   v #1385); čas položky se ukládá v UTC a pojistka `(source, source_uid)` platí pro celý tier 1
 - **Revize 11. 10. 2026 (E-6.25c, #1516):** bod 5 — přesné titulky kalendáře FF pro BLS ověřené
   v produkční DB (s prefixem `USD`); den releasu se bere z času položky v ET, položka bez
-  věrohodného času jde cestou času stažení s pojistkami (den stažení zálohou není)
+  věrohodného času jde cestou času stažení s pojistkami (den stažení zálohou není); položky BLS
+  mají směr 0 (vlastník 11. 10., varianta A, Rozhodnuto v #1385)
 - **Datum:** 2026-10-09
 - **Souvisí:** #1482 (E-6.23), #1406 (Fáze 6), #1385 (Rozhodnuto 8. 10. — breaking news), audit
   zdrojů #1473 (`docs/research/1473-audit-zdroju-zprav.md`), test kandidátů #1474
@@ -246,7 +247,9 @@ předregistrovaného kritéria. Měření ho nesplnilo (revize bodu 4).
      - **feedy s pevným obsahem** (Fed, BLS, BEA, ECB, SEC) je určují podle feedu a typu releasu,
        vzorem je `fed_rss` (`news-engine/src/gexlens_news/__main__.py:108-118`,
        `fed_rss_importance` v `classifier.py:727-729`): BLS `cpi`/`ppi` → `MACRO_INFLATION` 3,
-       `empsit` → `MACRO_LABOR` 3, `jolts`/`eci` → `MACRO_LABOR` 2; BEA GDP → `MACRO_GROWTH` 3,
+       `empsit` → `MACRO_LABOR` 3, `jolts`/`eci` → `MACRO_LABOR` 2 (**revize 11. 10.:** směr 0 —
+       směr releasu nese řádek kalendáře konvencí řady × překvapení, regex nad titulkem
+       polaritu řady nezná a „CPI … falls“ by dal −1, ač je risk-on); BEA GDP → `MACRO_GROWTH` 3,
        PCE → `MACRO_INFLATION` 3, ostatní 2; ECB rozhodnutí o sazbách 2, ostatní 1
        (shodně s ADR-0045 bod 3); SEC 8-K Item 2.02 → `EARNINGS` 2, ostatní Items 1.
        JSON `data.sec.gov` titulek nemá a regex `EARNINGS` (`classifier.py:466-467`) by
