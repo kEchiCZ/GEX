@@ -2,7 +2,8 @@
 
 Feed drží jen nejnovější vydání každé řady; `pubDate` je čas releasu, takže
 `ts_event` = čas položky (`raw.ts_source = item`). Kategorie a importance
-podle řady v titulku, roční vydání 1 (vlastník 11. 10. 2026), směr 0.
+podle řady v titulku (GDP a PCE 3), ostatní vydání 1 (vlastník 11. 10. 2026),
+směr 0.
 """
 
 import datetime as dt
@@ -101,13 +102,14 @@ async def test_prvni_stazeni_zapise_snimek_feedu() -> None:
             3,
         ),
         ("Personal Income and Outlays, August 2026", "MACRO_INFLATION", 3),
-        ("U.S. International Trade in Goods and Services, August 2026", "OTHER", 2),
+        # Ostatní vydání: importance 1 (vlastník 11. 10.), kategorie z titulku —
+        # obchod a běžný účet hodnotí kalendář FF Low impact
+        ("U.S. International Trade in Goods and Services, August 2026", "OTHER", 1),
         (
             "U.S. International Transactions and Investment Position, 2nd Quarter 2026",
             "OTHER",
-            2,
+            1,
         ),
-        # Roční vydání: importance 1 (vlastník 11. 10.), kategorie z titulku
         ("Gross Domestic Product by County and Personal Income by County, 2024", "OTHER", 1),
         (
             "Real Personal Consumption Expenditures by State and Real Personal Income by "

@@ -41,4 +41,5 @@ firem, outdoor, PCE po státech a GDP po okresech. Mají data 5. 2. – 21. 7.
   nevznikne.
 - `pubDate` je čas releasu, `ts_event` je čas položky (`raw.ts_source = item`, ADR-0059 bod 5).
 - Kalendář FF hodnotí obchodní bilanci a běžný účet jako Low impact (importance 1), GDP ve
-  všech odhadech a Core PCE jako High (3).
+  všech odhadech a Core PCE jako High (3). Klasifikace BEA se tím řídí (vlastník 11. 10.):
+  GDP a PCE 3, obchod, běžný účet i roční vydání 1.

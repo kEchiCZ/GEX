@@ -47,8 +47,9 @@ Powell, `icc-cpi.int` v odkazu). Analýza #1293 (400 zpráv, dva hodnotitelé,
    MACRO_LABOR/3, JOLTS a ECI MACRO_LABOR/2), směr 0 — nese ho řádek kalendáře
    konvencí řady, titulek polaritu řady nezná.
 10. **bea** (ADR-0059 bod 5, #1517): podle řady v titulku (`BEA_RELEASE_CLASSES`:
-    GDP MACRO_GROWTH/3, Personal Income and Outlays MACRO_INFLATION/3, obchod
-    a běžný účet 2), roční vydání 1 s kategorií z titulku, směr 0 jako u BLS.
+    GDP MACRO_GROWTH/3, Personal Income and Outlays MACRO_INFLATION/3), ostatní
+    vydání 1 s kategorií z titulku — roční i obchod a běžný účet (FF je hodnotí
+    Low impact), směr 0 jako u BLS.
 
 Kategorie se bere z předmětu titulku, pak z celého titulku; ENERGY má
 přednost před GEOPOLITICS (pohyb ropy způsobený válkou je ENERGY).
@@ -121,22 +122,16 @@ BLS_RELEASE_CLASSES: dict[str, tuple[str, int]] = {
 }
 FEED_BEA = "bea"
 #: Řady releasů BEA podle začátku titulku (ADR-0059 bod 5, #1517): feed je jeden,
-#: řadu nese titulek. Kategorie None = z titulku pravidly v2.
-BEA_RELEASE_CLASSES: tuple[tuple[re.Pattern[str], str | None, int], ...] = (
+#: řadu nese titulek
+BEA_RELEASE_CLASSES: tuple[tuple[re.Pattern[str], str, int], ...] = (
     # „GDP (Advance Estimate), …“; „Gross Domestic Product by County …“ je roční
     (re.compile(r"^GDP\s*\(", re.I), "MACRO_GROWTH", 3),
     # Personal Income and Outlays nese PCE
     (re.compile(r"^Personal\s+Income\s+and\s+Outlays\b", re.I), "MACRO_INFLATION", 3),
-    (
-        re.compile(
-            r"^U\.S\.\s+International\s+(?:Trade\s+in\s+Goods\s+and\s+Services|Transactions)\b",
-            re.I,
-        ),
-        None,
-        2,
-    ),
 )
-#: Roční vydání (přímé investice, outdoor, GDP po okresech…) — vlastník 11. 10.
+#: Ostatní vydání s kategorií z titulku (vlastník 11. 10.): roční (přímé
+#: investice, outdoor, GDP po okresech…) i obchodní bilance a běžný účet —
+#: kalendář FF je hodnotí Low impact
 BEA_OTHER_IMPORTANCE = 1
 
 #: Sociální sítě bez kurátora (#578): importance ≥ 2 → relevantní 0/29 (Reddit),
