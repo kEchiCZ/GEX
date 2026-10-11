@@ -53,8 +53,9 @@ Směr (`classify_direction`) se proti verzi 1 nemění.
 
 **Údržba:** slovník současného režimu (aktéři `REGIME_ACTORS`, předseda Fedu
 v `FED_TOPIC`) stárne. Po změně režimu (nová válka, nová cla, nový předseda
-Fedu) dostanou nové zprávy nejvýš 2, dokud se konstanta neupraví. Změnu
-ověř golden testem `test_classifier.py`.
+Fedu) dostanou nové zprávy nejvýš 2, dokud se konstanta neupraví. Totéž platí
+pro úřední formulace cel v `TARIFF_TOPIC` (#1518): nová formulace bez slova
+„tariff“ dá 1. Změnu ověř golden testem `test_classifier.py`.
 """
 
 import html
@@ -460,7 +461,19 @@ TARIFF_EVENT = _rx(r"""
   .{0,30}\btariffs?\b
  | \btariffs?\b.{0,15}\b(?:on|of)\b.{0,20}\d+\s?%
 """)
-TARIFF_TOPIC = _rx(r"\btariffs?\b")
+#: Téma cel včetně úředních formulací prezidentských aktů, které slovo „tariff“
+#: nenesou (#1518): uložená „Additional Duties“, vyloučení „from Importation into
+#: the United States“, proklamace Section 232 „Adjusting Imports of …“. Formulace
+#: jsou úzké — „assume additional duties“ (personální zpráva) ani „FDA bars
+#: importation into …“ clo nejsou. Jen téma (2): na událost (3) je měření reakce
+#: nezvedá (n = 2 čisté shluky, `range_5` ES 0,75–1,26× a NQ 0,54–1,03× mediánu hodiny)
+TARIFF_TOPIC = _rx(r"""
+  \btariffs?\b
+ | \b(?:impos\w*|subject\s+to(?:\s+the)?)\s+additional\s+duties\b
+ | \badditional\s+duties\s+(?:on|imposed)\b
+ | \bfrom\s+importation\s+into\s+the\s+united\s+states\b
+ | \badjusting\s+imports\s+of\b
+""")
 
 # ── Ostatní střední témata ────────────────────────────────────────
 

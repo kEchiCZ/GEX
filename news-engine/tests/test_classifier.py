@@ -496,6 +496,75 @@ def test_white_house_ma_pravidla_v2_bez_stropu() -> None:
     assert proclamation.importance == 1
 
 
+@pytest.mark.parametrize(
+    ("title", "feed"),
+    [
+        # Akty Bílého domu z 8. 9. 2026 — první zdroj eskalace s Kanadou (#1518)
+        (
+            "Modifying the Scope of Products of Canada Subject to the Additional Duties Imposed "
+            "to Offset Canadian Discrimination Against the Commerce of the United States with "
+            "Respect to Alcoholic Beverages",
+            "whitehouse",
+        ),
+        (
+            "Excluding Certain Canadian Products from Importation into the United States in "
+            "Response to Continued Discrimination Against the Commerce of the United States "
+            "with Respect to Dairy",
+            "whitehouse",
+        ),
+        # Tytéž akty v headlinech Alpaca; „Imposing“ bez slova tariff událost (3) nedává
+        (
+            "White House Says Imposing Additional Duties To Offset Canadian Discrimination "
+            "Against The Commerce Of the United States With Respect To Motor Vehicles",
+            "alpaca",
+        ),
+        (
+            "White House Says Adjusting Imports Of Commercial Aircraft, Jet Engines, And "
+            "Aircraft And Engine Parts Into United States; Secretary Of Commerce Found U.S. "
+            "Aircraft Industry Is Facing Challenges",
+            "alpaca",
+        ),
+    ],
+)
+def test_uredni_akty_o_clech_bez_slova_tariff_jsou_tema(title: str, feed: str) -> None:
+    result = classify(title, feed=feed, kind="headline")
+    assert (result.category, result.importance, result.reason) == (
+        "GEOPOLITICS",
+        2,
+        "tariff_topic",
+    )
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Columbus Day, 2026",
+        "Adjusting Certain Delegations Under the Defense Production Act",
+        "Restoring Reciprocity in Government Procurement",
+        "Restriction on Entry of Certain Nonimmigrant Workers",
+        "Presidential Message on German American Day",
+    ],
+)
+def test_ostatni_akty_bileho_domu_zustavaji_1(title: str) -> None:
+    result = classify(title, feed="whitehouse", kind="headline")
+    assert (result.category, result.importance) == ("OTHER", 1), result.reason
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Úřední formulace cel jsou úzké: personální zpráva ani zákaz dovozu
+        # z hygienických důvodů clo nejsou (#1518)
+        "Acme Corp names new CFO; CEO to assume additional duties",
+        "FDA bars importation into the United States of contaminated spinach",
+    ],
+)
+def test_podobne_formulace_bez_cla_zustavaji_1(title: str) -> None:
+    result = classify(title, feed=WIRE, kind="headline")
+    assert result.importance == 1, result.reason
+    assert result.category != "GEOPOLITICS"
+
+
 # ── Kategorie, čištění, směr ───────────────────────────────────────
 
 
