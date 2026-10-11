@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from './App'
 import { LiveSocket } from './api/ws'
@@ -48,9 +48,11 @@ test('vykreslí kompletní layout (SPEC 7.1)', async () => {
   expect(screen.getAllByText('Vol + OI Δ').length).toBeGreaterThan(0)
   expect(screen.getByLabelText('Strike profil')).toBeDefined()
 
-  // Expirace načtené z REST — trigger kalendáře (#513) nese vybranou
-  const trigger = await screen.findByTestId('expiry-trigger')
-  expect(trigger.textContent).toContain('20260717')
+  // Expirace načtené z REST — trigger kalendáře (#513) nese vybranou.
+  // Tlačítko existuje dřív než expirace, čeká se na text, ne na prvek (#1524)
+  await waitFor(() =>
+    expect(screen.getByTestId('expiry-trigger').textContent).toContain('20260717'),
+  )
 })
 
 test('Ctrl+kolečko (pinch) nezoomuje stránku NAD grafem; jinde zůstává (#179, #181)', () => {
@@ -213,9 +215,11 @@ test('demo den neprosakuje do hlavičky: bez ceny, změny, gamma režimu a settl
 
 test('extended expirace nese badge zdroje tastytrade (#616 4b)', async () => {
   makeApp()
-  // Expirace z REST; poslední (20260717) se vybere automaticky
-  const trigger = await screen.findByTestId('expiry-trigger')
-  expect(trigger.textContent).toContain('20260717')
+  // Expirace z REST; poslední (20260717) se vybere automaticky. Tlačítko
+  // existuje dřív než expirace, čeká se na text, ne na prvek (#1524)
+  await waitFor(() =>
+    expect(screen.getByTestId('expiry-trigger').textContent).toContain('20260717'),
+  )
 
   const ws = FakeWebSocket.latest()
   act(() => {
