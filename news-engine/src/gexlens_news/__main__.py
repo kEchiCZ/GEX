@@ -26,6 +26,7 @@ from gexlens_news.bars import BarsRepository
 from gexlens_news.classification_job import RuleClassificationJob
 from gexlens_news.collectors import Collector
 from gexlens_news.collectors.alpaca import AlpacaNewsStream
+from gexlens_news.collectors.bls import BLS_RSS_URLS, CalendarLookup, bls_release_time
 from gexlens_news.collectors.bluesky import BlueskyStream
 from gexlens_news.collectors.finnhub import FinnhubCollector
 from gexlens_news.collectors.forexfactory import ForexFactoryCollector
@@ -49,7 +50,7 @@ from gexlens_news.crowd import (
 from gexlens_news.drift import DriftJob
 from gexlens_news.feed_watch import FeedWatch
 from gexlens_news.ffhistory import FfActualRefreshJob, run_backfill
-from gexlens_news.http import Fetcher, make_fetcher
+from gexlens_news.http import Fetcher, contact_user_agent, make_fetcher
 from gexlens_news.llm_classifier import GeminiClient, LlmClassificationJob
 from gexlens_news.model_stats_job import ModelStatsJob
 from gexlens_news.ngram_job import NgramShadowJob
@@ -66,7 +67,7 @@ from gexlens_news.runner import CollectorRunner
 from gexlens_news.sentiment_backfill import backfill_sentiment_daily, recompute_sentindex
 from gexlens_news.sentindex_job import SentIndexJob
 from gexlens_news.signal_job import SignalJob
-from gexlens_news.store import NewsWriter
+from gexlens_news.store import NewsWriter, calendar_release_time
 from gexlens_news.track_record import TrackRecordJob
 from gexlens_news.user_sources import (
     SETTING_BLUESKY_AUTHORS,
@@ -96,6 +97,7 @@ def build_collectors(
     enabled: dict[str, bool] | None = None,
     reddit_subreddits: Sequence[str] | None = None,
     extra_rss_urls: Sequence[str] = (),
+    calendar: CalendarLookup | None = None,
 ) -> list[Collector]:
     """Sada aktivních collectorů dle konfigurace.
 
@@ -103,6 +105,7 @@ def build_collectors(
     s prázdným klíčem se nezakládají vůbec (S10): vypnutý zdroj není porucha.
     Registr `news_sources.enabled` (#578) zdroj vypne úplně — `enabled` mapa
     se čte při startu, zdroj mimo registr je implicitně zapnutý.
+    `calendar` = čas releasu z kalendáře FF v DB; potřebuje ho BLS.
     """
 
     def on(source: str) -> bool:
@@ -141,6 +144,28 @@ def build_collectors(
                     fetcher,
                     interval_s=settings.rss_interval_s,
                     verified_time=True,
+                )
+            )
+    if on("bls"):
+        user_agent = contact_user_agent(settings.ua_contact)
+        if user_agent is None:
+            logger.info(
+                "BLS nenakonfigurován — chybí GEXLENS_NEWS_UA_CONTACT "
+                "(ADR-0059 bod 7, není to porucha)"
+            )
+        elif calendar is None:
+            raise ValueError("BLS potřebuje kalendář FF pro čas releasu (ADR-0059 bod 5)")
+        else:
+            collectors.append(
+                RssCollector(
+                    "bls",
+                    BLS_RSS_URLS,
+                    fetcher,
+                    interval_s=settings.rss_interval_s,
+                    # Čas položky předbíhá release o 39 min — jen kalendář
+                    release_time=bls_release_time(calendar),
+                    # Bez kontaktu vrací BLS 403; kontakt nedostane nikdo jiný
+                    headers={"User-Agent": user_agent},
                 )
             )
     if on("rss_news"):
@@ -213,6 +238,7 @@ async def run(settings: NewsSettings) -> None:
         enabled=source_on,
         reddit_subreddits=reddit_subreddits,
         extra_rss_urls=tuple(extra_rss),
+        calendar=functools.partial(calendar_release_time, engine),
     )
     runner = CollectorRunner(collectors, writer.write)
     # Hlídka jednotlivých RSS feedů (#1451) — zdraví zdroje vidí jen celek
@@ -674,7 +700,9 @@ def status(settings: NewsSettings) -> int:
         total = 0
         db_state = f"nedostupná ({type(error).__name__})"
 
-    collectors = build_collectors(settings, make_fetcher())
+    collectors = build_collectors(
+        settings, make_fetcher(), calendar=functools.partial(calendar_release_time, engine)
+    )
     runner = CollectorRunner(collectors, lambda _events: 0)
     print(f"DB: {db_state}")
     print(f"Eventů v news_events: {total}")
@@ -682,7 +710,7 @@ def status(settings: NewsSettings) -> int:
     missing = [name for name, on in settings.enabled_sources.items() if not on]
     print(f"Zdroje s konfigurací: {', '.join(sorted(configured)) or '—'}")
     if missing:
-        print(f"Bez klíče (vypnuté): {', '.join(sorted(missing))}")
+        print(f"Nenakonfigurované (vypnuté): {', '.join(sorted(missing))}")
     print(f"Collectory: {len(collectors)} aktivních")
     degraded = 0
     for health in runner.status():

@@ -231,6 +231,8 @@ NEWS_SOURCE_SEED: tuple[tuple[str, str, int | None, str], ...] = (
     # přeměří E-6.29
     ("ecb", "core", 2, "ECB tiskové zprávy — rozhodnutí o sazbách, projevy (tier 1)"),
     ("whitehouse", "core", 10, "Bílý dům — fact sheety, výnosy a proklamace (tier 1)"),
+    # E-6.25c: ~4 releasy měsíčně (CPI, PPI, zaměstnanost, JOLTS; ECI čtvrtletně)
+    ("bls", "core", 4, "BLS releasy — CPI, PPI, zaměstnanost, JOLTS, ECI (tier 1)"),
     ("rss_news", "core", 300, "agenturní headline redundance (CNBC/MarketWatch/Yahoo)"),
     # Názvy dle reality (#922): engine zapisuje `ibkr_{provider}`, ne „ibkr"
     ("ibkr_brfg", "extra", 50, "broker páska Briefing.com (tick 292)"),
