@@ -17,12 +17,17 @@ from sqlalchemy.engine import Connection, Engine
 
 from gexlens_engine.compute.news_tier import content_tier
 from gexlens_engine.compute.newstext import normalize_source_uid
+from gexlens_engine.compute.settle import ET_TZ
 from gexlens_engine.storage.sentiment import CopyOutcome, news_events, record_news_copy
 from gexlens_news.dedup import DedupCopy
 from gexlens_news.http import sanitize_raw
 from gexlens_news.model import NewsEvent
 
 logger = logging.getLogger(__name__)
+
+#: Řádky kalendáře FF v `news_events` (`ForexFactoryCollector`)
+FF_SOURCE = "forexfactory"
+SCHEDULED_KIND = "scheduled"
 
 
 def _as_utc(value: dt.datetime) -> dt.datetime:
@@ -193,3 +198,31 @@ class NewsWriter:
         with self._engine.connect() as conn:
             total = conn.execute(select(func.count()).select_from(news_events)).scalar()
         return int(total or 0)
+
+
+def calendar_release_time(engine: Engine, title: str, day: dt.date) -> dt.datetime | None:
+    """Čas releasu z kalendáře FF: řádek s přesným titulkem téhož dne v ET (ADR-0059 bod 5).
+
+    Hranice dne se počítají v ET, ne posunem o 24 h — den přechodu letního času
+    má 23 nebo 25 h. Víc řádků téhož titulku (přeplánovaný release) → naposledy
+    zapsaný, ten nese aktuální rozvrh kalendáře.
+    """
+    start = dt.datetime.combine(day, dt.time(), tzinfo=ET_TZ).astimezone(dt.UTC)
+    end = dt.datetime.combine(day + dt.timedelta(days=1), dt.time(), tzinfo=ET_TZ).astimezone(
+        dt.UTC
+    )
+    stmt = (
+        select(news_events.c.ts_event)
+        .where(
+            news_events.c.source == FF_SOURCE,
+            news_events.c.kind == SCHEDULED_KIND,
+            news_events.c.title == title,
+            news_events.c.ts_event >= start,
+            news_events.c.ts_event < end,
+        )
+        .order_by(news_events.c.ts_ingested.desc(), news_events.c.id.desc())
+        .limit(1)
+    )
+    with engine.connect() as conn:
+        found = conn.execute(stmt).scalar()
+    return _as_utc(found) if found is not None else None

@@ -219,7 +219,7 @@ async def test_build_collectors_zapina_cas_zverejneni_u_zdroju_tier_1() -> None:
     from gexlens_news.__main__ import build_collectors
     from gexlens_news.config import NewsSettings
 
-    settings = NewsSettings(_env_file=None, finnhub_api_key="")  # type: ignore[call-arg]
+    settings = NewsSettings(_env_file=None, finnhub_api_key="", ua_contact="")  # type: ignore[call-arg]
     feed = _feed(DATED, Y1899)
     collectors = {
         c.name: c

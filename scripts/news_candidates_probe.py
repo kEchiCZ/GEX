@@ -14,7 +14,7 @@ položek popisují, co feed drží teď. Zpoždění proti skutečné publikaci 
 až provoz (E-6.29).
 
 Prostředí (hodnoty se nevypisují, jen jméno proměnné):
-    GEXLENS_NEWS_SEC_CONTACT     kontakt do User-Agent pro SEC a BLS (#1457)
+    GEXLENS_NEWS_UA_CONTACT      kontakt do User-Agent pro SEC a BLS (ADR-0059 bod 7)
     GEXLENS_NEWS_FINNHUB_API_KEY klíč Finnhubu (collector ho už používá)
 Bez proměnné se kandidát přeskočí s důvodem.
 
@@ -28,7 +28,6 @@ import os
 import re
 import statistics
 import sys
-import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -37,10 +36,10 @@ from xml.etree import ElementTree
 import httpx
 
 from gexlens_news.collectors.rss import parse_feed_time, parse_items
-from gexlens_news.http import BROWSER_UA, strip_secrets
+from gexlens_news.http import BROWSER_UA, contact_user_agent, strip_secrets
 
 TIMEOUT_S = 20.0
-CONTACT_ENV = "GEXLENS_NEWS_SEC_CONTACT"
+CONTACT_ENV = "GEXLENS_NEWS_UA_CONTACT"
 FINNHUB_ENV = "GEXLENS_NEWS_FINNHUB_API_KEY"
 #: Hlavičky, ze kterých jde vyčíst rate limit (názvy se mezi poskytovateli liší)
 RATE_HEADERS = ("retry-after", "x-ratelimit-limit", "x-ratelimit-remaining", "ratelimit-limit")
@@ -147,12 +146,8 @@ class Probe:
 def _user_agent(kind: str) -> str | None:
     if kind == "browser":
         return BROWSER_UA
-    contact = os.environ.get(CONTACT_ENV, "").strip()
-    if not contact:
-        return None
-    # Hlavička HTTP je ASCII; jméno s diakritikou by httpx odmítl (UnicodeEncodeError)
-    ascii_contact = unicodedata.normalize("NFKD", contact).encode("ascii", "ignore").decode()
-    return f"GEXLens research {ascii_contact}"
+    # Tatáž hlavička jako adaptér BLS (ASCII, ADR-0059 bod 7)
+    return contact_user_agent(os.environ.get(CONTACT_ENV, ""))
 
 
 def _json_times(payload: object) -> tuple[int, list[dt.datetime]]:

@@ -10,6 +10,8 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from gexlens_news.http import contact_user_agent
+
 # Oficiální feedy Fedu (Tier A) — statements, projevy, minutes; svědectví
 # v Kongresu (pololetní zpráva předsedy) od E-6.25a, ADR-0059 bod 5
 FED_RSS_URLS = (
@@ -133,11 +135,13 @@ class NewsSettings(BaseSettings):
     # Klíče a přihlašovací údaje — prázdné = zdroj vypnutý (S10)
     finnhub_api_key: str = ""
     fred_api_key: str = ""
-    bls_api_key: str = ""
-    bea_api_key: str = ""
     gemini_api_key: str = ""
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
+    # Kontakt do User-Agent pro zdroje, které identifikaci vyžadují (ADR-0059
+    # bod 7): jen BLS, ostatní dostávají prohlížečovou hlavičku. Prázdné = BLS
+    # „nenakonfigurován“ (není to porucha)
+    ua_contact: str = ""
 
     @property
     def enabled_sources(self) -> dict[str, bool]:
@@ -145,8 +149,7 @@ class NewsSettings(BaseSettings):
         return {
             "finnhub": bool(self.finnhub_api_key),
             "fred": bool(self.fred_api_key),
-            "bls": bool(self.bls_api_key),
-            "bea": bool(self.bea_api_key),
+            "bls": contact_user_agent(self.ua_contact) is not None,
             "gemini": bool(self.gemini_api_key),
             "reddit": bool(self.reddit_client_id and self.reddit_client_secret),
             # Bez klíče: veřejný feed / RSS
