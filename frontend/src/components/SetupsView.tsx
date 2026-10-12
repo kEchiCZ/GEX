@@ -646,8 +646,9 @@ function SetupsOverview() {
             </thead>
             <tbody>
               {visible.map((row) => {
-                const pnl = setupPnlUsd(row, pointUsd)
-                const pct = setupPnlPct(row, pointUsd)
+                // Neznámá hodnota bodu (#1400) = P/L bez čísla, ne odhad
+                const pnl = pointUsd === null ? null : setupPnlUsd(row, pointUsd)
+                const pct = pointUsd === null ? null : setupPnlPct(row, pointUsd)
                 const risk = riskInfo(row)
                 const accountPnl = accountPnlUsd(row)
                 return (

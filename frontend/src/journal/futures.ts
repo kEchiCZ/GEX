@@ -8,7 +8,7 @@ Basis tu ZÁMĚRNĚ není: GEXLens počítá z opcí na ES futures (FOP), takže
 podkladem je přímo obchodovaný kontrakt a všechny úrovně jsou nativně v ES
 — není co převádět (viz ADR-0028 dodatek a kap. 18 manuálu).
 */
-import { pointValue, priceTick } from '../instrument/tick'
+import { priceTick } from '../instrument/tick'
 import type { JournalTrade } from '../api/journal'
 
 /** Volatilitní režim seance (ADR-0028) — zrcadlo `VOL_BUCKETS` v enginu. */
@@ -103,10 +103,12 @@ export function ticksCaptured(trade: JournalTrade, symbol: string): number | nul
  * skutečnou velikost pozice, takže by dvojnásobná size vypadala jako
  * dvojnásobný skill.
  */
-export function pnlPerContract(trade: JournalTrade, symbol: string): number | null {
+export function pnlPerContract(trade: JournalTrade, multiplier: number | null): number | null {
+  // Multiplikátor z API (#1400): futures = hodnota bodu, akcie/ETF/index ×100;
+  // neznámý = null, ne odhad
   const points = resultPoints(trade)
-  if (points === null) return null
-  return points * pointValue(symbol)
+  if (points === null || multiplier === null) return null
+  return points * multiplier
 }
 
 /** Komisní drag jako podíl hrubého zisku — u scalpů 10–40 %. */

@@ -32,20 +32,24 @@ export function positionSize(input: {
   const { symbol, entry, stop, accountUsd, riskPct } = input
   const stopPoints = Math.abs(entry - stop)
   if (stopPoints <= 0 || accountUsd <= 0 || riskPct <= 0) return null
+  // Neznámá hodnota bodu (#1400) = žádný návrh velikosti, ne odhad
+  const pv = pointValue(symbol)
+  if (pv === null) return null
   const riskUsd = (accountUsd * riskPct) / 100
-  const contracts = Math.floor(riskUsd / (stopPoints * pointValue(symbol)))
+  const contracts = Math.floor(riskUsd / (stopPoints * pv))
   const microSymbol = MICRO_SYMBOLS[symbol]
+  const microPv = microSymbol === undefined ? null : pointValue(microSymbol)
   return {
     riskUsd,
     stopPoints,
     contracts,
     symbol,
     micro:
-      microSymbol === undefined
+      microSymbol === undefined || microPv === null
         ? null
         : {
             symbol: microSymbol,
-            contracts: Math.floor(riskUsd / (stopPoints * pointValue(microSymbol))),
+            contracts: Math.floor(riskUsd / (stopPoints * microPv)),
           },
   }
 }

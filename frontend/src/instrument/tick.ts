@@ -19,7 +19,9 @@ export function priceTick(symbol: string): number {
   return PRICE_TICKS[symbol] ?? 0.25
 }
 
-/** Dolarová hodnota 1 bodu na 1 kontrakt (CME multiplikátory, #185). */
+/** Dolarová hodnota 1 bodu na 1 kontrakt (CME multiplikátory, #185) — jen futures
+sizing (setupy, paper ticket, velikost pozice). Prémie opcí berou multiplikátor
+z API (`contractMultiplier`, #1400), jediný zdroj hodnot je engine `ticker.py`. */
 const POINT_VALUES: Record<string, number> = {
   ES: 50,
   MES: 5,
@@ -33,9 +35,9 @@ const POINT_VALUES: Record<string, number> = {
   GC: 100,
 }
 
-/** Hodnota bodu daného symbolu v USD (default 50 — indexové E-mini). */
-export function pointValue(symbol: string): number {
-  return POINT_VALUES[symbol] ?? 50
+/** Hodnota bodu daného symbolu v USD; null = neznámý symbol (#1400: žádný tichý fallback 50). */
+export function pointValue(symbol: string): number | null {
+  return POINT_VALUES[symbol] ?? null
 }
 
 /** Zaokrouhlení ceny na nejbližší tick (crosshair na ose Y nemá jemnější rozlišení). */

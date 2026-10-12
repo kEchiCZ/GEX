@@ -321,7 +321,12 @@ function MainContent() {
   const isHistoricalExpiry = viewDate !== today
   // Ad-hoc pohled (#206): symbol bez expirací = engine ho teprve zakládá
   // (přes tastytrade, do ~10 s) — banner nesmí tvrdit „Demo data"
-  const { expiries: knownExpiries, status: pipelineStatus, expiriesState } = useAppState()
+  const {
+    expiries: knownExpiries,
+    status: pipelineStatus,
+    expiriesState,
+    contractMultiplier,
+  } = useAppState()
   const adhocLoading =
     knownExpiries.length === 0 && (pipelineStatus.tasty_adhoc?.includes(symbol) ?? false)
   // Sentiment per zobrazený den (#976) — proto až za `viewDate`. Feed posledních
@@ -2366,6 +2371,7 @@ function MainContent() {
           gexUnits={gexUnits}
           axisStrikes={day.grid.strikes}
           symbol={symbol}
+          multiplier={contractMultiplier}
           expiry={selectedExpiry}
           windowLabel={
             activeWindowRows && range
