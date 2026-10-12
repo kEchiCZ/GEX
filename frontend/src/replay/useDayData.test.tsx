@@ -797,3 +797,44 @@ test('měřič výkonu: flush minuty a sestavení dne se počítají determinist
     resetPerf()
   }
 })
+
+test('dataSymbol: první render po přepnutí nese data předchozího symbolu (#1409)', async () => {
+  // Měřič výkonu ukončí span přepnutí symbolu až nad daty nového symbolu;
+  // App.tsx porovná dataSymbol se symbolem, tady je důvod, proč musí
+  const nq = { ...makeInputs(), symbol: 'NQ' }
+  let resolveNq: (inputs: ReplayInputs) => void = () => {}
+  vi.mocked(fetchReplayInputs).mockImplementation((symbol) =>
+    symbol === 'NQ'
+      ? new Promise<ReplayInputs>((resolve) => {
+          resolveNq = resolve
+        })
+      : Promise.resolve(makeInputs()),
+  )
+  const seen: Array<[string, string | null]> = []
+  const { rerender } = renderHook(
+    ({ symbol }: { symbol: string }) => {
+      const result = useDayData(symbol, '20260716', '2026-07-16', 'intraday', makeSocket())
+      seen.push([symbol, result.dataSymbol])
+      return result
+    },
+    { initialProps: { symbol: 'ES' } },
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(seen.at(-1)).toEqual(['ES', 'ES'])
+
+  seen.length = 0
+  rerender({ symbol: 'NQ' })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(seen[0]).toEqual(['NQ', 'ES']) // stará data ještě jeden render
+  expect(seen.at(-1)).toEqual(['NQ', null]) // placeholder, než dorazí fetch
+
+  await act(async () => {
+    resolveNq(nq)
+    await vi.advanceTimersByTimeAsync(0)
+  })
+  expect(seen.at(-1)).toEqual(['NQ', 'NQ'])
+})

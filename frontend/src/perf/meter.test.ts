@@ -175,3 +175,27 @@ test('export JSON nese čas, pohled, verzi buildu a počítadla', () => {
   expect(brief.records).toEqual([])
   expect(brief.summary.spans.symbolSwitch.count).toBe(1)
 })
+
+test('skrytá záložka: pauza rAF se nezapočítá jako dlouhý snímek', () => {
+  setPerfEnabled(true)
+  perfRecordFrame(now)
+  advance(16)
+  perfRecordFrame(now)
+  const visibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+  try {
+    document.dispatchEvent(new Event('visibilitychange'))
+  } finally {
+    if (visibility) Object.defineProperty(document, 'visibilityState', visibility)
+    else Reflect.deleteProperty(document, 'visibilityState')
+  }
+  advance(5_000) // záložka byla skrytá
+  perfRecordFrame(now)
+  advance(16)
+  perfRecordFrame(now)
+
+  const frames = perfSummary(now).frames
+  expect(frames.count).toBe(2)
+  expect(frames.max).toBe(16)
+  expect(frames.fps).toBeCloseTo(62.5, 1)
+})

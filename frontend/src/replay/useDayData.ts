@@ -314,6 +314,10 @@ export interface DayFeed {
   dailyProgress: { done: number; total: number } | null
   /** Stav načtení intradenního dne (#1355); Daily = `ready` (vlastní progres). */
   availability: DayAvailability
+  /** Symbol, kterému patří zobrazená data; null = placeholder (načítání, demo).
+  Po přepnutí symbolu drží ještě jeden render data předchozího — měřič výkonu
+  (#1409) podle toho nepovažuje vykreslení starých dat za konec přepnutí. */
+  dataSymbol: string | null
 }
 
 export function useDayData(
@@ -337,6 +341,7 @@ export function useDayData(
     inputsRef.current = inputs
   }, [inputs])
   const [daily, setDaily] = useState<DayData | null>(null)
+  const [dailySymbol, setDailySymbol] = useState<string | null>(null)
   const [dailyProgress, setDailyProgress] = useState<{ done: number; total: number } | null>(null)
   // Selhané obnovy po sobě (#516) — banner „zobrazen stav z HH:MM" po prahu;
   // `atMs` = čas posledního selhání, ze kterého banner počítá stáří dat
@@ -463,7 +468,9 @@ export function useDayData(
           }
         }
         if (applied.length === 0) return
-        // Minutový update končí vykreslením mřížky s novou minutou (Heatmap)
+        // `minuteFlush` = výběr minut; append (updater) React spočte buď hned,
+        // nebo až v renderu — celý update do vykreslení měří span `minuteUpdate`
+        perfEnd('minuteFlush', flushStart)
         perfBegin('minuteUpdate', flushStart)
         setInputs((prev) => {
           if (!prev) return prev
@@ -471,7 +478,6 @@ export function useDayData(
           for (const minute of applied) next = appendMinute(next, minute)
           return next
         })
-        perfEnd('minuteFlush', flushStart)
       }, APPEND_DEBOUNCE_MS)
     }
     const part = (ts: string): Partial<LiveMinute> => {
@@ -744,7 +750,10 @@ export function useDayData(
           }
           if (cancelled) return
           setDailyProgress({ done: index + 1, total: recent.length })
-          if (days.length > 0) setDaily(buildDailyDay(days, missingDates))
+          if (days.length > 0) {
+            setDaily(buildDailyDay(days, missingDates))
+            setDailySymbol(symbol)
+          }
           await new Promise<void>((resolve) => setTimeout(resolve, 0))
           if (cancelled) return
         }
@@ -782,6 +791,7 @@ export function useDayData(
       staleData: null,
       dailyProgress,
       availability: 'ready',
+      dataSymbol: daily ? dailySymbol : null,
     }
   }
   const availability: DayAvailability = replayDay
@@ -797,5 +807,6 @@ export function useDayData(
     staleData,
     dailyProgress: null,
     availability,
+    dataSymbol: replayDay && inputs ? inputs.symbol : null,
   }
 }

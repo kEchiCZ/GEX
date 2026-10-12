@@ -333,6 +333,7 @@ function MainContent() {
     staleData,
     dailyProgress,
     availability,
+    dataSymbol,
   } = useDayData(
     symbol,
     selectedExpiry,
@@ -776,13 +777,15 @@ function MainContent() {
   }, [grid, toggles.projection, timeframe, selectedExpiry, symbol, day.lastMinuteIso, bucketMinutes, playback.isLive, dailyForward]) // prettier-ignore
   // Měřič výkonu (#1409): efekt Heatmap s rastrem běží dřív než efekt rodiče,
   // takže tady je mřížka skutečných dat vykreslená — konec spanů načtení dne,
-  // přepnutí symbolu a minutového updatu. Placeholder (načítání, demo) je neukončí.
+  // přepnutí symbolu a minutového updatu. Placeholder (načítání, demo) ani data
+  // předchozího symbolu (první render po přepnutí, `projectedGrid` závisí na
+  // symbolu) je neukončí.
   useEffect(() => {
-    if (!realDay) return
+    if (!realDay || dataSymbol !== symbol) return
     perfFinish('dayLoad')
     perfFinish('symbolSwitch')
     perfFinish('minuteUpdate')
-  }, [projectedGrid, realDay])
+  }, [projectedGrid, realDay, dataSymbol, symbol])
   // Dyn GEX podklad (#242): stejný slice + projekce jako hlavní grid — projekční
   // zóna nese modelované budoucí sloupce (ADR-0009 fáze 2)
   const gexUnderGrid = useMemo(() => {

@@ -112,6 +112,10 @@ const longtaskMinutes = new Map<number, { count: number; maxMs: number }>()
 let rafId: number | null = null
 let lastFrame: number | null = null
 let observer: PerformanceObserver | null = null
+// Skrytá záložka zastaví rAF; snímek přes pauzu by byl sekundy dlouhý
+const onVisibility = () => {
+  if (document.visibilityState === 'hidden') lastFrame = null
+}
 
 export function perfEnabled(): boolean {
   return enabled
@@ -124,11 +128,15 @@ export function setPerfEnabled(on: boolean): void {
   if (on) {
     startFrameLoop()
     startLongtaskObserver()
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility)
   } else {
     stopFrameLoop()
     observer?.disconnect()
     observer = null
     pendingSpans.clear()
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }
 }
 
@@ -220,13 +228,13 @@ export function perfSummary(now: number = clock()): PerfSummary {
   const window = perfRecords(now)
   const frames = window.filter((record) => record.kind === 'frame')
   const longtasks = window.filter((record) => record.kind === 'longtask')
-  const covered = frames.length > 0 ? Math.min(PERF_WINDOW_MS, now - frames[0].t) : 0
+  const frameMs = frames.reduce((sum, record) => sum + record.ms, 0)
   return {
     windowMs: PERF_WINDOW_MS,
     frames: {
       ...stats(frames.map((record) => record.ms)),
-      // Snímky za pokrytou dobu; první snímek bufferu je začátek měření
-      fps: covered > 0 ? round((frames.length - 1) / (covered / 1000)) : null,
+      // Z délek snímků, ne z hodin: pauza skryté záložky se nezapočítá
+      fps: frameMs > 0 ? round((frames.length * 1000) / frameMs) : null,
     },
     longtasks: {
       count: longtasks.length,

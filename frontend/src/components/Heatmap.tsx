@@ -1426,8 +1426,9 @@ export function Heatmap({
   }, [drawStatic])
 
   // Měřič výkonu (#1409): Mode/Scale končí, až jsou kontury nové mřížky
-  // spočtené a vykreslené (drawStatic výš běží ve stejném commitu)
-  useLayoutEffect(() => {
+  // spočtené a vykreslené. Pasivní efekt běží po drawStatic (layout) i po
+  // efektu rastru výš (renderGrid + putImageData), takže span vždy zahrnuje oba
+  useEffect(() => {
     if (!perfEnabled()) return
     if (
       contoursSettled(grid, underGrid, contoursSplit.levels) &&
