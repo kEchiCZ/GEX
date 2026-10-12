@@ -100,6 +100,15 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 2. Diagnostika (zastavil jsem se u první hypotézy)
 
+- **2026-10-12 — měření snímků v zakrytém okně Chrome: rAF stojí a čísla nic neznamenají (#1412).**
+  Na Windows hlásí Chrome celé zakryté okno jako `visibilityState: hidden` a rAF zastaví. Částečně
+  zakryté okno kreslí normálně. Pan v okně zakrytém terminálem trval 155 s místo 9 s, s pokrytím
+  snímky ~6 %. Měření z 24. 9. ve skryté záložce (#1274) bylo proto prohlášené za „dolní mez“, ale
+  vyšlo 2–7× vyšší než baseline. Odhalila to brána klidové frekvence před segmentem a pokrytí =
+  součet snímků / délka segmentu. → Měřit v maximalizovaném okně, které je aspoň zčásti vidět.
+  Segment bez viditelnosti nebo s pokrytím < 90 % zahodit. Čísla ze skryté záložky nebrat ani jako
+  mez.
+
 - **2026-10-08 — `urllib.robotparser` hlásil SEC `/cgi-bin` jako povolené (#1474).**
   Robots.txt SEC má jedinou skupinu `User-agent: *`, kterou přerušují prázdné řádky a komentáře.
   Standardní knihovna skupinu ukončí prázdným řádkem, takže `Disallow: /cgi-bin` tiše zahodila a sonda
@@ -247,6 +256,15 @@ chyb**, hlavně diagnostických a provozních.
   → Po implementaci změřit dopad na **cílovou metriku**, ne jen že kód běží.
 
 ## 3. Práce s daty uživatele a obchodní logika
+
+- **2026-10-12 — konzolový sběrač (#1412) smazal vlastníkovi uložený zoom grafu.** Po každém gestu
+  resetoval pohled dvojklikem. Ten v aplikaci volá `clearSavedView` (`App.tsx:631`) a maže
+  `gexlens.chartZoomX` daného timeframe a `gexlens.chartYRange` symbolu. Tak zmizel uložený zoom
+  1m, 5m a 15m a pásmo Y pro ES a NQ. Sběrač přitom „aplikaci neměnil“, jen klikal jako uživatel.
+  Odhalil to nezávislý ověřovatel z kódu, ne vlastník. → Opakuje se poučení z 2026-08-10: před
+  skriptovaným gestem dohledat, co gesto ukládá nebo maže (`usePersistentState`). Dotčené klíče
+  localStorage zálohovat při startu, na konci je vrátit a stránku znovu načíst (aplikace čte
+  localStorage jen při startu).
 
 - **2026-10-10 — titulky Alpaca s HTML entitami 26 měsíců v DB, ve feedu i na kartě (#1500).** Collector bral
   `headline` doslova a Benzinga posílá `&#39;`, `&amp;` a `&#34;` (22 % titulků, 7 297 řádků od 7/2024). Klasifikátor
