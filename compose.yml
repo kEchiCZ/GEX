@@ -50,7 +50,8 @@ services:
     restart: unless-stopped
     # Image z CI (#1139): `docker compose pull` stáhne ghcr.io; `build:` je jen
     # lokální fallback (`--build` / deploy -Build). Jeden python image pro tři služby.
-    image: ghcr.io/kechicz/gex-python:latest
+    # Pin revize (#1393): GEXLENS_IMAGE_TAG pro všechny služby, GEXLENS_API_TAG jen pro tuto
+    image: ghcr.io/kechicz/gex-python:${GEXLENS_API_TAG:-${GEXLENS_IMAGE_TAG:-latest}}
     build:
       context: .
       dockerfile: docker/python.Dockerfile
@@ -76,7 +77,8 @@ services:
   engine:
     # Image z CI (#1139): `docker compose pull` stáhne ghcr.io; `build:` je jen
     # lokální fallback (`--build` / deploy -Build). Jeden python image pro tři služby.
-    image: ghcr.io/kechicz/gex-python:latest
+    # Pin revize (#1393): GEXLENS_IMAGE_TAG pro všechny služby, GEXLENS_ENGINE_TAG jen pro tuto
+    image: ghcr.io/kechicz/gex-python:${GEXLENS_ENGINE_TAG:-${GEXLENS_IMAGE_TAG:-latest}}
     build:
       context: .
       dockerfile: docker/python.Dockerfile
@@ -115,7 +117,8 @@ services:
   news-engine:
     # Image z CI (#1139): `docker compose pull` stáhne ghcr.io; `build:` je jen
     # lokální fallback (`--build` / deploy -Build). Jeden python image pro tři služby.
-    image: ghcr.io/kechicz/gex-python:latest
+    # Pin revize (#1393): GEXLENS_IMAGE_TAG pro všechny služby, GEXLENS_NEWS_TAG jen pro tuto
+    image: ghcr.io/kechicz/gex-python:${GEXLENS_NEWS_TAG:-${GEXLENS_IMAGE_TAG:-latest}}
     build:
       context: .
       dockerfile: docker/python.Dockerfile
@@ -149,7 +152,8 @@ services:
 
   frontend:
     restart: unless-stopped
-    image: ghcr.io/kechicz/gex-frontend:latest
+    # Pin revize (#1393): GEXLENS_IMAGE_TAG pro všechny služby, GEXLENS_FRONTEND_TAG jen pro tuto
+    image: ghcr.io/kechicz/gex-frontend:${GEXLENS_FRONTEND_TAG:-${GEXLENS_IMAGE_TAG:-latest}}
     build:
       context: .
       dockerfile: docker/frontend.Dockerfile

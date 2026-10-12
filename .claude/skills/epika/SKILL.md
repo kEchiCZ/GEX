@@ -52,7 +52,7 @@ se do repa nezakládají (jediný zdroj, žádný další dokument, který by se
 ## Krok 3 — Rozpad na sub-issues
 - **Velikost (odhad předem):** jedna vrstva (engine | API | frontend) + testy; ≤ ~8 měněných
   souborů a ≤ ~600 řádků diffu bez golden dat; nejvýš 2 soubory nad 1 500 řádků ke čtení
-  (`__main__.py`, `App.tsx`, `Heatmap.tsx`, `setups.py`…); nasazení a ověření na devu = půl session.
+  (`__main__.py`, `App.tsx`, `Heatmap.tsx`, `setups.py`…); nasazení na produkci a ověření naživo = půl session.
   ADR je vlastní sub-issue **před** implementací, kterou rozhoduje.
 - Šablona [sablona-sub-issue.md](sablona-sub-issue.md); každý sub-issue má právě jeden `prio:*`
   a jeden `epic:*`. Navázání jako GitHub sub-issue (`id` není číslo issue):
@@ -90,7 +90,8 @@ který se nevejde, přesuň do nového sub-issue.
 
 ## Krok 5 — Kontrola před PR (nezávislý ověřovatel)
 Pořadí: implementace + testy + dokumentace (DoD 1–3 z AGENTS.md) → commit + push → **ověřovatel**
-→ opravy → PR → DoD 4 (nasazení na dev a ověření naživo u engine/API) → merge-when-green.
+→ opravy → PR → merge-when-green → DoD 4 (po dotazu vlastníka nasazení na produkci v pauze Globexu
+a ověření naživo u engine/API/frontendu).
 - Ověřovatel = subagent (nástroj Agent) **bez kontextu implementace**, prompt z [kontrola.md](kontrola.md)
   s čísly sub-issue a epiky. Nezná tvoje úvahy, jen zadání, diff a repo.
 - Každý nález oprav, nebo v PR věcně zdůvodni, proč ne; PR podle šablony v

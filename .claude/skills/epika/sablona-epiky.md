@@ -40,7 +40,7 @@ Každá fáze se vejde do jedné session (jinak ji rozděl); pořadí = závislo
 - [ ] <ověřitelné: identifikátory, čísla, meze, chování při zavřeném trhu>
 - [ ] Data: bez look-ahead (test bodu v minulosti), stáří viditelné, výpadek = viditelná mezera
 - [ ] Testy (unit / golden s odůvodněním / vitest / Playwright), ruff, mypy, pytest, `npm run build`
-- [ ] Dokumentace (ADR, manuál #628, SPEC kap. 11 u nového modulu, roadmapa #629) + u engine/API nasazení na dev a ověření naživo
+- [ ] Dokumentace (ADR, manuál #628, SPEC kap. 11 u nového modulu, roadmapa #629) + u engine/API/frontendu nasazení na produkci v pauze Globexu **po dotazu vlastníka** a ověření naživo
 
 ## Otevřené otázky k rozhodnutí
 1. **<téma>**

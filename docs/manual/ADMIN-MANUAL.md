@@ -101,6 +101,27 @@ docker compose down              # odstranění kontejnerů (volume pgdata zůst
 | postgres | **55432** | ⚠️ záměrně ne 5432/5433 — na vývojovém PC běží nativní PostgreSQL na obou |
 | engine | — | bez portu; TWS přes `host.docker.internal:7496` |
 
+### Nasazení, pin revize image a návrat (#1393, ADR-0047 bod 1)
+
+- **Kdy:** po merge do `main` jen v pauze Globexu (16:00–17:00 CT = 23:00–24:00 SELČ i SEČ;
+  v týdnu mezi koncem letního času v Evropě a v USA 22:00–23:00 SEČ), mimo ni jen s výslovným
+  svolením vlastníka a vždy po dotazu (AGENTS.md, rozhodnutí 3b v #1385). Na produkčním daemonu
+  se nebuildí; image staví CI (kap. 9).
+- **Revize image:** compose bere `ghcr.io/kechicz/gex-python` a `gex-frontend` s tagem
+  `${GEXLENS_<SLUŽBA>_TAG:-${GEXLENS_IMAGE_TAG:-latest}}`. Bez proměnných běží `latest`
+  (aktuální main). Tagy `sha-<7>` staví workflow *Images* pro každý merge, který mění kód.
+  Služby: `GEXLENS_ENGINE_TAG`, `GEXLENS_API_TAG`, `GEXLENS_NEWS_TAG`, `GEXLENS_FRONTEND_TAG`.
+- **Návrat celé aplikace jedním krokem:** do `.env` (končí-li newline) `GEXLENS_IMAGE_TAG=sha-<rev>`,
+  pak `docker compose pull; docker compose up -d`. Jen jedna služba: `GEXLENS_ENGINE_TAG=sha-<rev>`
+  a `docker compose up -d --no-deps engine`. Zpět na aktuální main = řádek z `.env` odebrat a znovu
+  `pull` + `up -d`.
+- **`deploy-engine-offhours.ps1`** nasazuje HEAD main; při nastaveném pinu (`GEXLENS_IMAGE_TAG`,
+  `_ENGINE_`, `_API_`, `_FRONTEND_TAG`) skončí chybou, než cokoli restartuje — jinak by compose
+  spustil pinovanou revizi a skript by čekal na `latest` marně.
+- **Ověření po nasazení nebo návratu** (ne HTTP 200):
+  `docker inspect --format '{{.Name}} {{.Config.Image}} {{index .Config.Labels "org.opencontainers.image.revision"}} {{.State.StartedAt}}' gex-engine-1 gex-api-1 gex-news-engine-1 gex-frontend-1`
+  — revize musí odpovídat zamýšlenému commitu a čas startu nasazení.
+
 Data: Parquet v `./data` (bind mount, sdílené engine↔API), PostgreSQL ve volume `pgdata`. Zálohovat stačí `./data` + `pg_dump` (hlavně tabulku `oi_eod`, která se nikdy nemaže).
 
 ### Provozní detaily kontejnerů

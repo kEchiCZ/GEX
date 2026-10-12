@@ -31,6 +31,20 @@ Set-Location $repo
 $composeArgs = @('-f', 'compose.yml')
 if ($Server) { $composeArgs += @('-f', 'compose.server.yml') }
 
+# Pin revize image (#1393): deploy nasazuje HEAD main (`latest`). S pinem by compose
+# spustil pinovanou revizi a kontrola revize by na `latest` čekala marně — proto stop.
+$pinVars = 'GEXLENS_IMAGE_TAG', 'GEXLENS_ENGINE_TAG', 'GEXLENS_API_TAG', 'GEXLENS_FRONTEND_TAG'
+$pinned = @($pinVars | Where-Object { [Environment]::GetEnvironmentVariable($_) })
+$envFile = Join-Path $repo '.env'
+if (Test-Path $envFile) {
+    # Jen jména proměnných — hodnoty z .env se nevypisují
+    $pinned += @(Select-String -Path $envFile -Pattern '^\s*(GEXLENS_(?:IMAGE|ENGINE|API|FRONTEND)_TAG)\s*=\s*\S' |
+        ForEach-Object { $_.Matches[0].Groups[1].Value })
+}
+if ($pinned.Count -gt 0) {
+    throw "Nastavený pin image ($(($pinned | Sort-Object -Unique) -join ', ')) — deploy HEAD main by ho obešel. Zruš pin v .env (ADMIN manuál kap. 3), pak spusť znovu."
+}
+
 function Write-Step($text) { Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $text" }
 
 # Image se staví v CI (#1139) — doma se jen stahují. `latest` v GHCR může
