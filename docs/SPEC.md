@@ -298,4 +298,4 @@ nový řádek v této tabulce ve stejném PR (viz `AGENTS.md`, Definition of don
 | Persistence UI voleb, provizorní bar, deep-linky | 0005, 0007 | — | USER kap. 13, 16 |
 | Autopilot M8 (exekuce strategií) — **zatím jen zadání** | *ADR čeká (#925)* | #924–#934 | — |
 | Provoz: dev/prod stack, zálohy PG, bezpečnostní CI, hosting | — | #696, #542, #1094 | ADMIN kap. 3, 9, 10, 14 |
-| Měřič výkonu grafu (snímky, dlouhé úlohy, počítadla vykreslení, export) | *0047 čeká (#1391)* | #1385, #1386, #1274 | ADMIN kap. 8 |
+| Měřič výkonu grafu (snímky, dlouhé úlohy, počítadla vykreslení, export) | 0047 (navrženo, #1391) | #1385, #1386, #1274 | ADMIN kap. 8 |
