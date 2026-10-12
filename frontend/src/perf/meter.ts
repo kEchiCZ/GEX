@@ -78,7 +78,18 @@ export interface PerfExport {
   summary: PerfSummary
   /** Počty operací a spanů od zapnutí nebo resetu (deterministické). */
   counters: Record<string, number>
-  records: Array<Omit<PerfRecord, 't'> & { at: string }>
+  /** Pohledy, na které odkazují záznamy (`view` = index). */
+  views: PerfView[]
+  /** Záznamy bufferu; `t` = ms před `exportedAt` (záporné). Bez nich jen souhrn. */
+  records: PerfExportRecord[]
+}
+
+export interface PerfExportRecord {
+  t: number
+  kind: PerfKind
+  name: string
+  ms: number
+  view: number
 }
 
 /** Délka kruhového bufferu. */
@@ -133,11 +144,7 @@ export function resetPerf(): void {
 
 /** Aktuální pohled grafu; záznamy drží odkaz, takže objekt se nemění na místě. */
 export function setPerfView(next: PerfView): void {
-  if (
-    next.symbol === view.symbol &&
-    next.timeframe === view.timeframe &&
-    next.mode === view.mode
-  ) {
+  if (next.symbol === view.symbol && next.timeframe === view.timeframe && next.mode === view.mode) {
     return
   }
   view = { ...next }
@@ -237,8 +244,32 @@ export function perfSummary(now: number = clock()): PerfSummary {
   }
 }
 
-/** Export pro komentáře v #1274 a protokoly v `docs/research/`. */
-export function perfExport(now: number = clock()): PerfExport {
+/** Export pro protokoly v `docs/research/` a komentáře v #1274.
+
+Pohled se v záznamech neopakuje (index do `views`), čas je relativní — 30 s
+při 60 fps a pěti operacích na snímek tak má stovky kB místo MB. Do komentáře
+GitHubu (strop 65 536 znaků) se vejde jen souhrn: `{ records: false }`. */
+export function perfExport(now: number = clock(), options: { records?: boolean } = {}): PerfExport {
+  const views: PerfView[] = []
+  const viewIndex = new Map<PerfView, number>()
+  const records =
+    options.records === false
+      ? []
+      : perfRecords(now).map((record) => {
+          let index = viewIndex.get(record.view)
+          if (index === undefined) {
+            index = views.length
+            views.push(record.view)
+            viewIndex.set(record.view, index)
+          }
+          return {
+            t: Math.round((record.t - now) * 10) / 10,
+            kind: record.kind,
+            name: record.name,
+            ms: round(record.ms),
+            view: index,
+          }
+        })
   return {
     schema: 1,
     build: BUILD_SHA,
@@ -247,13 +278,8 @@ export function perfExport(now: number = clock()): PerfExport {
     view: { ...view },
     summary: perfSummary(now),
     counters: perfCounters(),
-    records: perfRecords(now).map((record) => ({
-      at: new Date(wallClockMs(record.t)).toISOString(),
-      kind: record.kind,
-      name: record.name,
-      ms: round(record.ms),
-      view: record.view,
-    })),
+    views,
+    records,
   }
 }
 

@@ -164,9 +164,14 @@ test('export JSON nese čas, pohled, verzi buildu a počítadla', () => {
   expect(exported.view).toEqual({ symbol: 'NQ', timeframe: '5m', mode: 'gex' })
   expect(exported.counters).toEqual({ drawDynamic: 1, symbolSwitch: 1 })
   expect(Number.isNaN(Date.parse(exported.exportedAt))).toBe(false)
-  expect(exported.records.map((record) => [record.name, record.view.symbol])).toEqual([
-    ['drawDynamic', 'ES'],
-    ['symbolSwitch', 'NQ'],
+  expect(
+    exported.records.map((record) => [record.name, exported.views[record.view].symbol, record.t]),
+  ).toEqual([
+    ['drawDynamic', 'ES', -7],
+    ['symbolSwitch', 'NQ', 0],
   ])
-  expect(Number.isNaN(Date.parse(exported.records[0].at))).toBe(false)
+  // Souhrn bez záznamů pro komentář na GitHubu
+  const brief = perfExport(now, { records: false })
+  expect(brief.records).toEqual([])
+  expect(brief.summary.spans.symbolSwitch.count).toBe(1)
 })

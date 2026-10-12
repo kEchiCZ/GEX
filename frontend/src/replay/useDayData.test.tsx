@@ -8,6 +8,7 @@ import { assembleReplayDay, fetchDays, fetchReplay, fetchReplayInputs } from './
 import { clearBundleCache } from './bundleCache'
 import { sessionDateIso } from '../instrument/tz'
 import type { ReplayInputs } from './loader'
+import { perfCounters, resetPerf, setPerfEnabled } from '../perf/meter'
 
 vi.mock('./loader', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./loader')>()
@@ -765,4 +766,34 @@ test('flush předá ladder a printvol; pozdější flush téže minuty přírůs
   })
   expect(callPrinted()).toBe(12)
   expect(result.current.day.ladder?.[1]?.callStrikes).toEqual([7600])
+})
+
+test('měřič výkonu: flush minuty a sestavení dne se počítají deterministicky (#1409)', async () => {
+  resetPerf()
+  setPerfEnabled(true)
+  try {
+    vi.mocked(fetchReplayInputs).mockResolvedValue(makeInputs())
+    const socket = makeSocket()
+    renderHook(() => useDayData('ES', '20260716', '2026-07-16', 'intraday', socket))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0) // úvodní fetch
+    })
+    const loaded = perfCounters()
+    expect(loaded.minuteFlush).toBeUndefined()
+
+    await act(async () => {
+      socket.emit('snapshot.ES.20260716', {
+        ts_min: '2026-07-16T15:01:00Z',
+        rows: [{ strike: 7600, right: 'C', oi: 100, volume: 30, delta: 0.5 }],
+      })
+      await vi.advanceTimersByTimeAsync(500) // debounce flush
+    })
+    const after = perfCounters()
+    expect(after.minuteFlush).toBe(1)
+    // Nová minuta = jedno nové sestavení dne
+    expect(after.dayBuild).toBe((loaded.dayBuild ?? 0) + 1)
+  } finally {
+    setPerfEnabled(false)
+    resetPerf()
+  }
 })
