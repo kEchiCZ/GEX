@@ -1,7 +1,7 @@
 # ADR-0047: Architektura rozšíření — evoluce repa, PWA bez service workeru, launcher, bod návratu, aditivní schéma, clean-room a výkonové cíle grafu
 
-- **Stav:** navrženo (E-1.5 #1391). Body 1–6 zapisují rozhodnutí vlastníka ze 7. a 12. 10. 2026
-  v epice #1385. Bod 7 (načtení dne a přepnutí symbolu) čeká na rozhodnutí vlastníka.
+- **Stav:** přijato (E-1.5 #1391). Body 1–6 zapisují rozhodnutí vlastníka ze 7. a 12. 10. 2026
+  v epice #1385, bod 7 rozhodl vlastník 13. 10. 2026 (varianta A).
 - **Datum:** 2026-10-12
 - **Souvisí:** #1385 (epika), #1381 (syrové zadání), #1274 a #1386 (Fáze 2a), #1412 (baseline
   `docs/research/1381-vykon-baseline.md`), #1409 (měřič), #1393 (pin image, E-1.6), #1396 (bod
@@ -84,8 +84,8 @@ Tvrdá data:
    trace na syntetickém dni (E-2a.13 #1426): `drawStatic` na tick a po Mode/Scale, re-render
    panelů při panu a úlohy za minutový update.
    Nesplněný cíl po přeměření E-2a.18 otevře jen odpovídající řádek Fáze 2b (#1386).
-7. **Načtení dne a přepnutí symbolu (navrženo, k rozhodnutí vlastníka).** Předběžná hranice
-   „< 1 s“ z #1391 platí podle baseline jen pro vykreslení z cache. Návrh (varianta A):
+7. **Načtení dne a přepnutí symbolu (varianta A, vlastník 13. 10.).** Předběžná hranice
+   „< 1 s“ z #1391 platí podle baseline jen pro vykreslení z cache. Platí:
 
    | | Cíl | Dnes (#1412) | Čím se měří |
    |---|---|---|---|
@@ -98,9 +98,9 @@ Tvrdá data:
      načtení (#1548).
    - Rychlé přepnutí tam a zpět nesmí dekódovat fetch, který už nikdo nečte
      (`replay/loader.ts:477–482`, kontrola zrušení před `decodeBundle`; #1548).
-   - Varianty, které vlastník zvažuje: **A** (tabulka výše); **B** jedna hranice < 1 s pro
-     studené i teplé načtení (vyžaduje přestavbu formátu a serveru replaye, mimo Fázi 2a);
-     **C** bez hranice, jen měřit (12 s TTFB by zůstalo bez cíle).
+   - Zamítnuto: **B** jedna hranice < 1 s pro studené i teplé načtení (vyžaduje přestavbu
+     formátu a serveru replaye, mimo Fázi 2a); **C** bez hranice, jen měřit (12 s TTFB by
+     zůstalo bez cíle).
 8. **Vztah ke SPEC.** ADR má přednost před textem SPEC, na který se odkazuje:
    - SPEC 7.2 „60 fps pan/zoom“ nahrazuje bod 6 (16,7 ms zůstává cílem na 5m, tvrdá hranice
      na 1m je 33 ms);
