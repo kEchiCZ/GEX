@@ -119,6 +119,7 @@ def test_e2e_engine_storage_api_golden(reference_day: Settings) -> None:
     assert client.get("/instruments/ES/expiries").json() == {
         "expiries": ["20260716"],
         "detail": [{"date": "20260716", "trading_classes": []}],
+        "multiplier": 50.0,  # multiplikátor kontraktu z jediného zdroje (#1400)
     }
 
     # Snapshoty (raw Arrow): kompletní matice dne
