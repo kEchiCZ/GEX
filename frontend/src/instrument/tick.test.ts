@@ -29,6 +29,8 @@ test('pointValue: futures z tabulky, neznámý symbol null — žádný tichý f
   expect(pointValue('ES')).toBe(50)
   expect(pointValue('NQ')).toBe(20)
   expect(pointValue('MES')).toBe(5)
+  expect(pointValue('ESZ6')).toBe(50) // pinovaný kontrakt = kořen (ADR-0041)
+  expect(pointValue('NQZ6')).toBe(20)
   expect(pointValue('SPY')).toBeNull() // equity multiplikátor nese API, ne tabulka
   expect(pointValue('XYZ')).toBeNull()
 })

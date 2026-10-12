@@ -350,8 +350,8 @@ function StrikeProfileBase({
             className="profile-flag"
             data-testid="premium-no-multiplier"
             title={
-              `Prémie $ nejdou spočítat — multiplikátor kontraktu ${symbol} API nezná ` +
-              '(nebo se ještě načítá). Pruhy a čísla jsou v Δ-vážených kontraktech.'
+              `Prémie $ nejdou spočítat:\n• multiplikátor kontraktu ${symbol} API nezná,\n` +
+              '  nebo se ještě načítá\n• pruhy a čísla jsou v Δ-vážených kontraktech'
             }
           >
             Multiplikátor neznámý → kontrakty

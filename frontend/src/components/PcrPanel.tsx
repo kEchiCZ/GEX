@@ -182,7 +182,7 @@ export function PcrPanel({
       )}
       {moneyUnknown && (
         <div className="muted" data-testid="pcr-no-multiplier">
-          Multiplikátor kontraktu {symbol} neznámý — poměr platí, částky v $ ne
+          Multiplikátor kontraktu {symbol} neznámý (nebo se načítá) — poměr platí, částky v $ ne
         </div>
       )}
       {/* Sekundární kusový poměr okna (#486) — premium hlavní, kusy vedle */}
