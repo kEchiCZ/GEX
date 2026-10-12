@@ -160,6 +160,8 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
         type: s.invokerType,
         ms: s.duration,
         forcedLayout: s.forcedStyleAndLayoutDuration,
+        // Místo v minifikovaném bundlu: produkce nemá sourcemapy, funkce se dohledá v dist/
+        source: `${(s.sourceURL || '').split('/').pop()}:${s.sourceCharPosition} ${s.sourceFunctionName || '?'}`,
       })),
     }
   }
@@ -505,6 +507,14 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
       .sort((a, b) => b[1] - a[1])
       .slice(0, 6)
       .map(([invoker, ms]) => ({ invoker, ms: round(ms) }))
+    const bySource = {}
+    for (const e of entries) {
+      for (const script of e.scripts) bySource[script.source] = (bySource[script.source] ?? 0) + script.ms
+    }
+    const topSources = Object.entries(bySource)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([source, ms]) => ({ source, ms: round(ms) }))
     const sum = (key) => round(entries.reduce((acc, e) => acc + e[key], 0))
     return {
       n: entries.length,
@@ -514,6 +524,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
       sumLayout: sum('layout'),
       sumScripts: round(entries.reduce((acc, e) => acc + e.scripts.reduce((a, s) => a + s.ms, 0), 0)),
       top,
+      topSources,
     }
   }
 
