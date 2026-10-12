@@ -41,9 +41,11 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
   const segments = [] // {name, tf, clean, t0, t1, samples, …}
   const histogram = FRAME_BUCKETS.map(() => 0)
   const visibility = [] // {t, state}: zakryté okno Windows hlásí jako `hidden`
+  const resources = [] // /api/replay a /news/stats: buffer resource timing (250) je po načtení plný
   let frameMsTotal = 0
   let harvestTimer = null
   let loafObserver = null
+  let resourceObserver = null
   let startedAt = null
   let initial = null
 
@@ -100,6 +102,10 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     saveInitial(initial)
     harvestTimer = setInterval(harvest, HARVEST_MS)
     document.addEventListener('visibilitychange', onVisibility)
+    resourceObserver = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) if (/\/api\/(replay|news\/stats)/.test(e.name)) resources.push(resourceRecord(e))
+    })
+    resourceObserver.observe({ type: 'resource', buffered: false })
     if (PerformanceObserver.supportedEntryTypes?.includes('long-animation-frame')) {
       loafObserver = new PerformanceObserver((list) => {
         for (const e of list.getEntries()) loaf.push(loafRecord(e))
@@ -141,7 +147,21 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     loafObserver?.disconnect()
     loafObserver = null
     document.removeEventListener('visibilitychange', onVisibility)
+    resourceObserver?.disconnect()
+    resourceObserver = null
     P.setPerfEnabled(false)
+  }
+
+  function resourceRecord(e) {
+    return {
+      url: e.name.replace(location.origin, ''),
+      at: new Date(performance.timeOrigin + e.startTime).toISOString(),
+      queue: round(e.requestStart - e.startTime),
+      ttfb: round(e.responseStart - e.requestStart),
+      download: round(e.responseEnd - e.responseStart),
+      kB: Math.round((e.encodedBodySize || 0) / 1024),
+      decodedKB: Math.round((e.decodedBodySize || 0) / 1024),
+    }
   }
 
   function loafRecord(e) {
@@ -636,6 +656,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
       logSize: log.length,
       segments: segments.filter((s) => s.t1 !== null).map(summarizeSegment),
       passive: startedAt === null ? null : passive(),
+      resources,
     }
   }
 
@@ -673,7 +694,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     })
   }
 
-  const pb = { start, stop, gate, run, restore, report, coldLoad, harvest, readControls, segments, log, loaf, visibility, quiet: [40, 58] }
+  const pb = { start, stop, gate, run, restore, report, coldLoad, harvest, readControls, segments, log, loaf, visibility, resources, quiet: [40, 58] }
   window.pb = pb
   console.info('[pb] sběrač #1412 připraven: pb.start(), await pb.gate(), await pb.run("1m", false)')
 })()
