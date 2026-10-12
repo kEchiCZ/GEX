@@ -93,7 +93,10 @@ jobs:
           context: .
           file: docker/frontend.Dockerfile
           push: true
-          # Produkční hodnoty = výchozí ARG v Dockerfile (VITE_API_BASE=/api, bez VITE_GEXLENS_ENV)
+          # Produkční hodnoty = výchozí ARG v Dockerfile (VITE_API_BASE=/api, bez VITE_GEXLENS_ENV);
+          # commit jde do exportu měřiče výkonu (#1409)
+          build-args: |
+            VITE_BUILD_SHA=${{ github.sha }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=frontend
