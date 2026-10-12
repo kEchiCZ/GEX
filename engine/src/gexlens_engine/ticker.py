@@ -72,6 +72,25 @@ def is_futures(symbol: str) -> bool:
     return symbol_root(symbol) in CME_FUTURES_ROOTS
 
 
+#: Multiplikátor opce na futures = hodnota bodu podkladu v USD (CME, #185). Jediný
+#: zdroj hodnot: paper (`compute/paper.POINT_VALUES`) i frontend přes API (#1400).
+#: Futures kořen mimo tabulku multiplikátor nemá — přiznaná díra, ne odhad.
+FUTURES_MULTIPLIERS: dict[str, float] = {
+    "ES": 50.0, "MES": 5.0, "NQ": 20.0, "MNQ": 2.0, "RTY": 50.0, "M2K": 5.0,
+    "YM": 5.0, "MYM": 0.5, "CL": 1000.0, "GC": 100.0,
+}  # fmt: skip
+#: Akciová, ETF a indexová opce (OPRA přes tastytrade, #206) = 100 kusů / ×100 indexu
+EQUITY_OPTION_MULTIPLIER = 100.0
+
+
+def contract_multiplier(symbol: str) -> float | None:
+    """Multiplikátor opčního kontraktu tickeru (#1400); None = neznámý futures kořen."""
+    root = symbol_root(symbol)
+    if root in CME_FUTURES_ROOTS:
+        return FUTURES_MULTIPLIERS.get(root)
+    return EQUITY_OPTION_MULTIPLIER
+
+
 def symbol_root(symbol: str) -> str:
     """Kořen produktu z tickeru; nečitelný ticker vrací beze změny (uppercase)."""
     try:

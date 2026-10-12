@@ -105,7 +105,7 @@ from gexlens_engine.storage.setup_params_store import SetupParamsRepository
 from gexlens_engine.storage.setups_store import SetupsRepository
 from gexlens_engine.storage.tendency_store import TendencyRepository
 from gexlens_engine.storage.volregime_store import VolRegimeRepository
-from gexlens_engine.ticker import is_futures, parse_ticker
+from gexlens_engine.ticker import contract_multiplier, is_futures, parse_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -544,7 +544,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             classes = {}
         detail = [{"date": expiry, "trading_classes": classes.get(expiry, [])} for expiry in found]
-        return {"expiries": found, "detail": detail}
+        # Multiplikátor opčního kontraktu (#1400): frontend z něj počítá prémie
+        # v $ (P/C, profil Prémie, deník); null = neznámý futures kořen, ne odhad
+        return {"expiries": found, "detail": detail, "multiplier": contract_multiplier(symbol)}
 
     @app.get("/instruments/{symbol}/days")
     def days(symbol: str) -> dict[str, list[dict[str, str]]]:
