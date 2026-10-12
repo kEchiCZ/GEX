@@ -2277,6 +2277,12 @@ dotáhnou do minulosti (dxFeed Candle, s objemem), první heatmapa naskočí do
 zapnutí** — historie opčního řetězu se zpětně nedá dopočítat. Pohled žije,
 dokud ho máš otevřený (3 min po zavření se uklidí); setupy pro tyto tickery
 nevznikají (jen ES/NQ), kouč ale vyhodnotí i ruční obchody na akciích z deníku.
+Prémie v $ (panel PUT / CALL, profil v jednotce **Prémie $**, P/L na kontrakt
+v deníku) počítají s **multiplikátorem 100** (jeden opční kontrakt = 100 akcií,
+u indexu ×100). Dřív aplikace u akcií brala 50 jako u ES a ukazovala poloviční
+částky (#1400). Produkt, jehož multiplikátor aplikace nezná (např. NG), ukáže
+P/C jen jako poměr bez částek v $ a profil v kontraktech se štítkem
+**Multiplikátor neznámý → kontrakty**.
 
 **Roll týden a denní 0DTE.** Po roll date (8 dnů před kvartální expirací) sleduje
 `ES` už nový kontrakt (Z6) a IBKR řetěz začíná až kvartální expirací. Denní 0DTE

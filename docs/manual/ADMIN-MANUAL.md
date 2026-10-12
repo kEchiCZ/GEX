@@ -464,7 +464,7 @@ Interaktivní dokumentace: `http://127.0.0.1:8010/docs` (OpenAPI; dev stack `:80
 | `GET /gexplane/{...}` | Dyn Charm/Vanna plochy (#204) |
 | `GET /sentiment/*?symbol=` | Sentiment per symbol (ADR-0026): index/daily/state/waves |
 | `GET /stats/releases/hypotheses` | Předem registrované hypotézy o reakci na releasy (#1296, ADR-0044): `registered_at`, `criteria` (kontrolní body, hranice) a `hypotheses[]` {`id`, `label`, `rule`, `in_preview` testing/verified/never, `symbols{ES,NQ}` {`historical` {hits, n}, `hits`, `n`, `wilson_lb`, `wilson_ub`, `status`, `decided_at_n`, `next_checkpoint`, `outcomes[]`, `computed_at`}}. Jen čte `release_hypotheses` a registr v kódu; bez řádku = `testing` s n = 0 (čerstvá DB není chyba). Čte ho Stats → Releasy |
-| `GET /instruments`, `GET /instruments/{sym}/expiries` | Dostupné symboly/expirace (ze storage) |
+| `GET /instruments`, `GET /instruments/{sym}/expiries` | Dostupné symboly/expirace (ze storage); expirace nesou `detail` (trading classes) a `multiplier` opčního kontraktu (#1400): futures z `ticker.FUTURES_MULTIPLIERS` (ES 50, NQ 20, …), akcie/ETF/index 100, neznámý futures kořen `null`. Jediný zdroj hodnot pro prémie v $ ve frontendu i pro `paper.POINT_VALUES` |
 | `GET /instruments/{sym}/days` | Uložené dny s expirací per den (Daily pohled) |
 | `GET /profile/{sym}/aggregate?date` | Σ profil: OI/volume sečtené přes všechny expirace dne per strike (registrováno PŘED /profile/{sym}/{expiry}) |
 | `GET /snapshots/{sym}/{expiry}?date&mode&scale&norm&from&to&raw` | Heatmap matice jako **Arrow IPC stream**; `raw=true` = surová partice |
