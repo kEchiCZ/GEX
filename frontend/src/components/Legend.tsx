@@ -403,7 +403,7 @@ export const LEGEND_SECTIONS: LegendSection[] = [
         swatch: { kind: 'gex' },
         where:
           'POZOR — není v hlavním grafu. Je to křivka v pravém profilu, zapíná se chipem „GEX“ v jeho hlavičce.',
-        what: 'Modelovaný NetGEX přes cenové pásmo. Zelená vyčnívá doprava = kladná gamma, dealeři tlumí. Červená doleva = záporná gamma, dealeři zesilují. Žlutá značka je průchod nulou, tedy dynamický gamma flip. Jednotka dle přepínače u Dyn plochy (#569): $/1 % (výchozí, váha P²/100 per hladina) nebo $/bod.',
+        what: 'Modelovaný NetGEX přes cenové pásmo. Zelená vyčnívá doprava = kladná gamma, dealeři tlumí. Červená doleva = záporná gamma, dealeři zesilují. Žlutá značka je průchod nulou, tedy dynamický gamma flip. Jednotka dle přepínače u plochy Dyn GEX (#569): $/1 % (výchozí, váha P²/100 per hladina) nebo $/bod.',
         up: 'Cena v zeleném pásmu → pohyby se tlumí, čekej menší rozsah a návraty k průměru; růst bude pozvolný.',
         down: 'Cena v červeném pásmu → pohyby se zesilují, propady zrychlují a nevykupují se.',
         how: 'Není to Max Pain a nemá s ním nic společného. Max Pain je jedno číslo a v hlavním grafu je to plná vodorovná čára; GEX křivka je průběh přes celé cenové pásmo v pravém profilu.',

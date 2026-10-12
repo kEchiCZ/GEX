@@ -74,17 +74,19 @@ const greekFixturePath =
     .map((candidate) => resolve(process.cwd(), candidate))
     .find((candidate) => existsSync(candidate))!
 const greekFixture = JSON.parse(readFileSync(greekFixturePath, 'utf-8')) as {
-  levels: {
-    price: number
-    charm_per_point: number
-    vanna_per_point: number
-    charm_dollar_delta: number
-    vanna_dollar_delta: number
+  scenarios: {
+    levels: {
+      price: number
+      charm_per_point: number
+      vanna_per_point: number
+      charm_dollar_delta: number
+      vanna_dollar_delta: number
+    }[]
   }[]
 }
 
 test('dolarová delta Charm a Vanna: golden #1401 — hodnota × cena hladiny', () => {
-  for (const level of greekFixture.levels) {
+  for (const level of greekFixture.scenarios.flatMap((scenario) => scenario.levels)) {
     const weight = priceWeight(level.price, 'dollar_delta')
     expect(level.charm_per_point * weight).toBe(level.charm_dollar_delta)
     expect(level.vanna_per_point * weight).toBe(level.vanna_dollar_delta)

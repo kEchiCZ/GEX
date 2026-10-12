@@ -48,5 +48,7 @@ test('Dyn Charm a Dyn Vanna: pevná dolarová delta, bez přepínače (#1401)', 
 
 test('Dyn Vanna: $ delty na 1 bod IV (#1401)', () => {
   renderRow('vanna')
-  expect(screen.getByTestId('greek-plane-unit').textContent).toContain('$ delty / 1 bod IV')
+  const vanna = screen.getByTestId('greek-plane-unit')
+  expect(vanna.textContent).toContain('$ delty / 1 bod IV')
+  expect(vanna.getAttribute('title')).toContain('\n• ')
 })

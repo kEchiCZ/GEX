@@ -1,4 +1,4 @@
-/** Jednotky modelovaných Dyn ploch (#569): $/bod vs. $/1 %.
+/** Jednotky modelovaných Dyn ploch: Dyn GEX $/bod vs. $/1 % (#569), Charm a Vanna dolarová delta (#1401).
 
 Engine počítá a ukládá pole výhradně v $/bod (Γ·OI·M) — historie zůstává
 bitově shodná a porovnatelná. Váha P²/100 (P = cena hladiny mřížky, ne spot)
@@ -12,6 +12,7 @@ přesně známé. Paritu s enginovým vzorcem (`price_weight_per_percent`
 v compute/gexfield.py, pro band_regime #575) fixuje golden fixture
 `engine/tests/golden/p2_weight_569.json`.
 */
+import type { UnderlayPlane } from '../hooks/useGreekPlane'
 
 export type GexUnits = 'per_point' | 'per_percent'
 export const GEX_UNITS: readonly GexUnits[] = ['per_point', 'per_percent']
@@ -29,11 +30,11 @@ o pohyb ceny, takže váha P²/100 ($/1 %) by dala jednotku bez smyslu (na ES
 jen pro Dyn GEX. Golden `engine/tests/golden/greek_dollar_delta_1401.json`. */
 export type PlaneUnits = GexUnits | 'dollar_delta'
 
-/** Dyn plocha pod heatmapou (shodné s `UnderlayPlane` bez `off`). */
-export type GreekPlane = 'gex' | 'charm' | 'vanna'
+/** Zapnutá Dyn plocha pod heatmapou. */
+export type ActivePlane = Exclude<UnderlayPlane, 'off'>
 
 /** Jednotka plochy: gex bere přepínač, charm a vanna vždy dolarovou deltu. */
-export function planeUnits(plane: GreekPlane, gexUnits: GexUnits): PlaneUnits {
+export function planeUnits(plane: ActivePlane, gexUnits: GexUnits): PlaneUnits {
   return plane === 'gex' ? gexUnits : 'dollar_delta'
 }
 

@@ -403,7 +403,7 @@ function StrikeProfileBase({
               className={gexOn ? 'chip active' : 'chip'}
               onClick={() => setGexOn((value) => !value)}
               aria-label="Dyn GEX profil"
-              title={`Modelovaný NetGEX přes cenové pásmo (ADR-0009): zelená doprava = dealeři tlumí, červená doleva = zesilují; žlutá = dynamický flip. Jednotka ${GEX_UNIT_LABELS[gexUnits]} (přepínač u Dyn plochy).`}
+              title={`Modelovaný NetGEX přes cenové pásmo (ADR-0009): zelená doprava = dealeři tlumí, červená doleva = zesilují; žlutá = dynamický flip. Jednotka ${GEX_UNIT_LABELS[gexUnits]} (přepínač u plochy Dyn GEX).`}
             >
               GEX
             </button>

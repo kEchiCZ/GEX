@@ -1923,8 +1923,8 @@ Obě varianty ukazují **tutéž strukturu**, liší se jen důrazem — **znam�
 ani poloha flipu se přepnutím nemění**.
 
 > **Co přepínač NEovlivňuje:** zdi, GEX levels, flip a setupy. Ty se počítají
-> z měřeného pole a zůstávají v původních jednotkách. Přepínač působí na Dyn
-> plochu (GEX / Charm / Vanna) a na GEX křivku ve strike profilu.
+> z měřeného pole a zůstávají v původních jednotkách. Přepínač působí na plochu
+> Dyn GEX a na GEX křivku ve strike profilu; Dyn Charm a Vanna mají pevnou dolarovou deltu.
 
 > **Nezaměň s druhým „Jednotkou".** Pod strike profilem dole je vlastní
 > přepínač **Jednotka P/C poměru** (kontrakty / prémie / notional, kap. 7) —

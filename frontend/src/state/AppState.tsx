@@ -274,7 +274,8 @@ interface AppState {
   /** Filtr news markerů Vše/Významné vedle News checkboxu (#408). */
   newsMarkerFilter: NewsMarkerFilter
   setNewsMarkerFilter: (filter: NewsMarkerFilter) => void
-  /** Jednotka Dyn ploch a GEX křivky (#569): $/1 % (výchozí) váží P²/100, $/bod je surové pole enginu. */
+  /** Jednotka Dyn GEX a GEX křivky (#569): $/1 % (výchozí) váží P²/100, $/bod je surové pole enginu.
+  Charm a Vanna mají pevnou dolarovou deltu (#1401, `planeUnits`). */
   gexUnits: GexUnits
   setGexUnits: (units: GexUnits) => void
   /** Zdroj OI aktivního symbolu (#232): měřené / FA odhad; persist per symbol. */
@@ -649,7 +650,7 @@ export function AppStateProvider({
     'week',
     oneOf(FORWARD_RANGES),
   )
-  // Jednotka Dyn ploch (#569): default $/1 % (referenční čtení); engine ukládá $/bod
+  // Jednotka Dyn GEX (#569): default $/1 % (referenční čtení); engine ukládá $/bod
   const [gexUnits, setGexUnits] = usePersistentState<GexUnits>(
     'gexUnits',
     'per_percent',

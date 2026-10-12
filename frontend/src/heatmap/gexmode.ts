@@ -90,7 +90,8 @@ export function gexDenominator(
 
 /** Sestaví naměřenou část dyn módu (signed vrstva −1..1) — čistá funkce.
 
-`units` (#569): váha P²/100 se aplikuje před transformací škály i p99, takže
+`units` (#569, #1401): váha jednotky (P²/100, nebo × P u dolarové delty) se aplikuje
+před transformací škály i p99, takže
 barvy, kontury i computedWalls čtou konzistentně zvážené pole; `per_point`
 (default) je bitově shodný s chováním před #569. */
 export function buildGexGrid(

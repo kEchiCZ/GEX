@@ -255,7 +255,7 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
             value={gexUnits}
             onChange={(event) => setGexUnits(event.target.value as GexUnits)}
             aria-label="Jednotka Dyn plochy"
-            title="$/1 % (výchozí) = Γ·OI·M·P²/100 s cenou hladiny — kolik dolarů podkladu dealeři přeobchodují při pohybu o 1 %; vyšší hladiny mají přirozeně větší váhu. $/bod = surové pole bez váhy (jednotka enginu). Týká se Dyn ploch a GEX křivky profilu; zdi, levels, flip a setupy se nemění."
+            title="$/1 % (výchozí) = Γ·OI·M·P²/100 s cenou hladiny — kolik dolarů podkladu dealeři přeobchodují při pohybu o 1 %; vyšší hladiny mají přirozeně větší váhu. $/bod = surové pole bez váhy (jednotka enginu). Týká se plochy Dyn GEX a GEX křivky profilu (Charm a Vanna mají pevnou dolarovou deltu); zdi, levels, flip a setupy se nemění."
           >
             {GEX_UNITS.map((value) => (
               <option key={value} value={value}>

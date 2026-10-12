@@ -1,27 +1,71 @@
 {
-  "description": "Golden #1401: Dyn Charm a Dyn Vanna v dolarové deltě. Engine ukládá charm jako Δ·OI·M za den a vannu jako Δ·OI·M na 1 bod IV (compute/gexfield.greek_profiles); zobrazení násobí cenou HLADINY P (frontend heatmap/units.ts, jednotka dollar_delta). Hodnoty na bod jsou ručně spočtené uzavřeným vzorcem Black-Scholes (r = 0) pro jeden call: d1 = (ln(P/K) + σ²τ/2)/(σ√τ), d2 = d1 − σ√τ, charm/den = φ(d1)·d2/(2τ)/365, vanna/1 bod IV = −φ(d1)·d2/σ·0,01; dolary = hodnota na bod × P.",
-  "contract": { "strike": 7900.0, "right": "C", "iv": 0.2, "oi": 1000.0, "multiplier": 50.0, "tau_days": 1.0 },
-  "levels": [
+  "description": "Golden #1401: Dyn Charm a Dyn Vanna v dolarové deltě. Engine ukládá charm jako Δ·OI·M za den a vannu jako Δ·OI·M na 1 bod IV (compute/gexfield.greek_profiles, dealer konvence: call +OI, put −OI); zobrazení násobí cenou HLADINY P (frontend heatmap/units.ts, jednotka dollar_delta). Hodnoty na bod jsou ručně spočtené uzavřeným vzorcem Black-Scholes (r = 0) pro jeden kontrakt na scénář: d1 = (ln(P/K) + σ²τ/2)/(σ√τ), d2 = d1 − σ√τ, charm/den = ±φ(d1)·d2/(2τ)/365, vanna/1 bod IV = ∓φ(d1)·d2/σ·0,01; dolary = hodnota na bod × P. Dva scénáře (call ES 1 den, put NQ 2 dny), aby poměr charm/vanna nebyl konstantní.",
+  "scenarios": [
     {
-      "price": 7850.0,
-      "charm_per_point": -5092.297586356856,
-      "vanna_per_point": 509.2297586356856,
-      "charm_dollar_delta": -39974536.05290132,
-      "vanna_dollar_delta": 3997453.6052901316
+      "contract": {
+        "strike": 7900.0,
+        "right": "C",
+        "iv": 0.2,
+        "oi": 1000.0,
+        "multiplier": 50.0,
+        "tau_days": 1.0
+      },
+      "levels": [
+        {
+          "price": 7850.0,
+          "charm_per_point": -5092.297586356856,
+          "vanna_per_point": 509.2297586356856,
+          "charm_dollar_delta": -39974536.05290132,
+          "vanna_dollar_delta": 3997453.6052901316
+        },
+        {
+          "price": 7900.0,
+          "charm_per_point": -52.20326820553956,
+          "vanna_per_point": 5.220326820553956,
+          "charm_dollar_delta": -412405.8188237625,
+          "vanna_dollar_delta": 41240.58188237625
+        },
+        {
+          "price": 7950.0,
+          "charm_per_point": 4953.37103828214,
+          "vanna_per_point": -495.33710382821397,
+          "charm_dollar_delta": 39379299.75434301,
+          "vanna_dollar_delta": -3937929.975434301
+        }
+      ]
     },
     {
-      "price": 7900.0,
-      "charm_per_point": -52.20326820553956,
-      "vanna_per_point": 5.220326820553956,
-      "charm_dollar_delta": -412405.8188237625,
-      "vanna_dollar_delta": 41240.58188237625
-    },
-    {
-      "price": 7950.0,
-      "charm_per_point": 4953.37103828214,
-      "vanna_per_point": -495.33710382821397,
-      "charm_dollar_delta": 39379299.75434301,
-      "vanna_dollar_delta": -3937929.975434301
+      "contract": {
+        "strike": 30500.0,
+        "right": "P",
+        "iv": 0.25,
+        "oi": 400.0,
+        "multiplier": 20.0,
+        "tau_days": 2.0
+      },
+      "levels": [
+        {
+          "price": 30300.0,
+          "charm_per_point": 274.1031563571459,
+          "vanna_per_point": -43.85650501714335,
+          "charm_dollar_delta": 8305325.637621521,
+          "vanna_dollar_delta": -1328852.1020194434
+        },
+        {
+          "price": 30500.0,
+          "charm_per_point": 7.382442086664307,
+          "vanna_per_point": -1.181190733866289,
+          "charm_dollar_delta": 225164.48364326137,
+          "vanna_dollar_delta": -36026.317382921814
+        },
+        {
+          "price": 30700.0,
+          "charm_per_point": -256.9729349109376,
+          "vanna_per_point": 41.115669585750034,
+          "charm_dollar_delta": -7889069.101765785,
+          "vanna_dollar_delta": 1262251.056282526
+        }
+      ]
     }
   ]
 }

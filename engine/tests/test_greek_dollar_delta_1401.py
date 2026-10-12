@@ -18,26 +18,33 @@ FIXTURE = Path(__file__).parent / "golden" / "greek_dollar_delta_1401.json"
 
 
 def test_greek_profiles_odpovidaji_rucnimu_vypoctu() -> None:
-    data = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    contract = data["contract"]
-    levels = data["levels"]
-    ts_min = dt.datetime(2026, 10, 12, 20, 0, tzinfo=dt.UTC)
-    profiles = greek_profiles(
-        [ProfileContract(contract["strike"], contract["right"], contract["iv"], contract["oi"])],
-        ts_min=ts_min,
-        settle=ts_min + dt.timedelta(days=contract["tau_days"]),
-        grid_start=levels[0]["price"],
-        grid_stop=levels[-1]["price"],
-        grid_step=levels[1]["price"] - levels[0]["price"],
-        multiplier=contract["multiplier"],
-    )
-    for index, level in enumerate(levels):
-        assert profiles["charm"].values[index] == pytest.approx(level["charm_per_point"], rel=1e-12)
-        assert profiles["vanna"].values[index] == pytest.approx(level["vanna_per_point"], rel=1e-12)
+    for scenario in json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]:
+        contract = scenario["contract"]
+        levels = scenario["levels"]
+        ts_min = dt.datetime(2026, 10, 12, 20, 0, tzinfo=dt.UTC)
+        profiles = greek_profiles(
+            [
+                ProfileContract(
+                    contract["strike"], contract["right"], contract["iv"], contract["oi"]
+                )
+            ],
+            ts_min=ts_min,
+            settle=ts_min + dt.timedelta(days=contract["tau_days"]),
+            grid_start=levels[0]["price"],
+            grid_stop=levels[-1]["price"],
+            grid_step=levels[1]["price"] - levels[0]["price"],
+            multiplier=contract["multiplier"],
+        )
+        for index, level in enumerate(levels):
+            charm = profiles["charm"].values[index]
+            vanna = profiles["vanna"].values[index]
+            assert charm == pytest.approx(level["charm_per_point"], rel=1e-12)
+            assert vanna == pytest.approx(level["vanna_per_point"], rel=1e-12)
 
 
 def test_dolarova_delta_je_hodnota_krat_cena_hladiny() -> None:
-    for level in json.loads(FIXTURE.read_text(encoding="utf-8"))["levels"]:
-        # Přesně: fixture je spočtená týmž násobením ve float64
-        assert level["charm_per_point"] * level["price"] == level["charm_dollar_delta"]
-        assert level["vanna_per_point"] * level["price"] == level["vanna_dollar_delta"]
+    for scenario in json.loads(FIXTURE.read_text(encoding="utf-8"))["scenarios"]:
+        for level in scenario["levels"]:
+            # Přesně: fixture je spočtená týmž násobením ve float64
+            assert level["charm_per_point"] * level["price"] == level["charm_dollar_delta"]
+            assert level["vanna_per_point"] * level["price"] == level["vanna_dollar_delta"]
