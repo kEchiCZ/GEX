@@ -242,7 +242,8 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     return false
   }
 
-  // Segmenty mimo hranici minuty: minutový flush by zkreslil snímky gesta
+  // Segmenty mimo minutový update: v RTH 12. 10. přicházel ve 33.–36. sekundě minuty
+  // (2–4 pushe po sobě), ne na hranici minuty. Okno 40.–58. s nechá segmentu ≥ 35 s.
   async function quietWindow() {
     for (;;) {
       const second = new Date().getSeconds()
@@ -661,7 +662,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     })
   }
 
-  const pb = { start, stop, gate, run, restore, report, coldLoad, harvest, readControls, segments, log, loaf, visibility, quiet: [15, 40] }
+  const pb = { start, stop, gate, run, restore, report, coldLoad, harvest, readControls, segments, log, loaf, visibility, quiet: [40, 58] }
   window.pb = pb
   console.info('[pb] sběrač #1412 připraven: pb.start(), await pb.gate(), await pb.run("1m", false)')
 })()
