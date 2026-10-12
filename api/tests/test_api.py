@@ -134,7 +134,16 @@ def test_instruments_and_expiries(client: TestClient) -> None:
     assert payload["expiries"] == ["20260716"]
     # Bez OI archivu detail nese prázdné třídy — kalendář se obejde (#513)
     assert payload["detail"] == [{"date": "20260716", "trading_classes": []}]
+    assert payload["multiplier"] == 50.0  # #1400: z jediného zdroje v enginu, ne fallback
     assert client.get("/instruments/SPY/expiries").status_code == 404
+
+
+@pytest.mark.parametrize(("symbol", "multiplier"), [("NQ", 20.0), ("SPY", 100.0), ("NG", None)])
+def test_expiries_multiplier(settings: Settings, symbol: str, multiplier: float | None) -> None:
+    """#1400: equity ×100, NQ ×20, neznámý futures kořen null (ne tiché 50)."""
+    SnapshotWriter(settings).write_minute(symbol, "20260716", DAY, snapshot_rows(0))
+    client = TestClient(create_app(settings))
+    assert client.get(f"/instruments/{symbol}/expiries").json()["multiplier"] == multiplier
 
 
 def test_expiries_detail_trading_classes(settings: Settings) -> None:

@@ -21,19 +21,12 @@ from typing import Literal
 
 from gexlens_engine.compute.setups import Direction, Outcome, evaluate_bar
 from gexlens_engine.ibkr.underlying import Bar
-from gexlens_engine.ticker import symbol_root
+from gexlens_engine.ticker import FUTURES_MULTIPLIERS, symbol_root
 
-#: Hodnota bodu plného kontraktu (CME) — sizing a P/L; neznámý symbol = order se odmítne
-POINT_VALUES: dict[str, float] = {
-    "ES": 50.0,
-    "NQ": 20.0,
-    "RTY": 50.0,
-    "YM": 5.0,
-    "MES": 5.0,
-    "MNQ": 2.0,
-    "M2K": 5.0,
-    "MYM": 0.5,
-}
+#: Hodnota bodu plného kontraktu (CME) — sizing a P/L; neznámý symbol = order se odmítne.
+#: Paper obchoduje jen indexové futures; hodnoty z jediného zdroje `ticker` (#1400).
+PAPER_ROOTS = ("ES", "NQ", "RTY", "YM", "MES", "MNQ", "M2K", "MYM")
+POINT_VALUES: dict[str, float] = {root: FUTURES_MULTIPLIERS[root] for root in PAPER_ROOTS}
 #: Minimální krok ceny — slippage 1 tick u market/stop filů
 TICK_SIZES: dict[str, float] = {
     "ES": 0.25,

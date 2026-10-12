@@ -4,7 +4,6 @@ import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
 import { CURRENT_MECHANICS_VERSION, bandInfo, bandLabel, formatGateBucket, formatPct, formatPnlUsd, setupPnlPct, setupPnlUsd, setupRrr, templateLabel } from '../api/setups' // prettier-ignore
 import type { SetupRow, SummaryGroup } from '../api/setups'
-import { pointValue } from '../instrument/tick'
 import { sessionDateIso } from '../instrument/tz'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
@@ -181,13 +180,9 @@ test('T7 trend_continuation má český popisek, ne syrový kód šablony (#506)
 
 test('P/L setupu v USD na 1 kontrakt (#185)', () => {
   // riziko 29 bodů, outcome +0.48 R → 13.92 bodu × 50 $ (ES) = 696 $
-  expect(setupPnlUsd({ entry: 7501, stop: 7472, outcome_r: 0.48 }, pointValue('ES'))).toBeCloseTo(
-    696,
-  )
+  expect(setupPnlUsd({ entry: 7501, stop: 7472, outcome_r: 0.48 }, 50)).toBeCloseTo(696)
   // plný stop = −1 R → −29 bodů × 20 $ (NQ) = −580 $
-  expect(setupPnlUsd({ entry: 7501, stop: 7472, outcome_r: -1 }, pointValue('NQ'))).toBeCloseTo(
-    -580,
-  )
+  expect(setupPnlUsd({ entry: 7501, stop: 7472, outcome_r: -1 }, 20)).toBeCloseTo(-580)
   expect(setupPnlUsd({ entry: 7501, stop: 7472, outcome_r: null }, 50)).toBeNull()
   expect(formatPnlUsd(696)).toBe('+696 $')
   expect(formatPnlUsd(-580.125)).toBe('-580.12 $') // Math.round půlí k +∞
@@ -195,9 +190,7 @@ test('P/L setupu v USD na 1 kontrakt (#185)', () => {
 
 test('P/L v % startovního účtu 50 000 $ v jednotkách aplikace (#191, #1185)', () => {
   // 0.48 R × 29 b × 50 $ = 696 $ na účtu 50 000 $ → +1.392 %
-  expect(setupPnlPct({ entry: 7501, stop: 7472, outcome_r: 0.48 }, pointValue('ES'))).toBeCloseTo(
-    1.392,
-  )
+  expect(setupPnlPct({ entry: 7501, stop: 7472, outcome_r: 0.48 }, 50)).toBeCloseTo(1.392)
   expect(setupPnlPct({ entry: 7501, stop: 7472, outcome_r: null }, 50)).toBeNull()
   expect(formatPct(13.92)).toBe('+13.92 %')
   expect(formatPct(-1.5)).toBe('-1.50 %')

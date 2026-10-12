@@ -25,7 +25,6 @@ import type { DiffRow } from '../profile/diff'
 import { PCR_MISSING_LIMIT, formatMoney } from '../profile/pcr'
 import { PROFILE_UNITS, PROFILE_UNIT_LABELS, premiumRows } from '../profile/premium'
 import type { ProfileUnit } from '../profile/premium'
-import { pointValue } from '../instrument/tick'
 import type { GexUnits } from '../heatmap/units'
 import type { GexProfileRow } from '../replay/loader'
 import { oneOf, usePersistentState } from '../state/persist'
@@ -86,6 +85,7 @@ function StrikeProfileBase({
   gexUnits = 'per_point',
   axisStrikes = null,
   symbol = 'ES',
+  multiplier,
   expiry = null,
   windowLabel = null,
   diffRows = null,
@@ -107,8 +107,10 @@ function StrikeProfileBase({
   gexProfile?: GexProfileRow | null
   /** Jednotka GEX křivky (#569): $/1 % váží hladiny P²/100, $/bod = surová řada. */
   gexUnits?: GexUnits
-  /** Symbol a expirace pro P/C panel (#469) — multiplikátor a popiska původu. */
+  /** Symbol a expirace pro P/C panel (#469) — popiska původu. */
   symbol?: string
+  /** Multiplikátor kontraktu z API (#1400); null = neznámý — prémie v $ se nepočítají. */
+  multiplier: number | null
   expiry?: string | null
   /** Okenní režim P/C panelu (#486): popisek aktivního range; `rows` jsou pak
       okenní řádky (#484). */
@@ -154,9 +156,13 @@ function StrikeProfileBase({
     oneOf(PROFILE_UNITS),
   )
   const premium = useMemo(
-    () => (unit === 'premium' && !diffRows ? premiumRows(rows, pointValue(symbol)) : null),
-    [unit, diffRows, rows, symbol],
+    () =>
+      unit === 'premium' && !diffRows && multiplier !== null ? premiumRows(rows, multiplier) : null,
+    [unit, diffRows, rows, multiplier],
   )
+  // Bez multiplikátoru (#1400) prémie v $ nejdou — pruhy v kontraktech a štítek,
+  // ne tichý odhad (dřív fallback 50 = equity ×100 ukazovala poloviční částky)
+  const premiumNoMultiplier = unit === 'premium' && !diffRows && multiplier === null
   // Bez jediného použitelného midu (Σ souhrn z API mid nenese, replay bez
   // kotací, načítání) profil spadne na kontrakty a řekne to štítkem — tichý
   // přepad by vypadal jako měření v $
@@ -337,6 +343,18 @@ function StrikeProfileBase({
             }
           >
             Vol nedostupný
+          </span>
+        )}
+        {premiumNoMultiplier && (
+          <span
+            className="profile-flag"
+            data-testid="premium-no-multiplier"
+            title={
+              `Prémie $ nejdou spočítat:\n• multiplikátor kontraktu ${symbol} API nezná,\n` +
+              '  nebo se ještě načítá\n• pruhy a čísla jsou v Δ-vážených kontraktech'
+            }
+          >
+            Multiplikátor neznámý → kontrakty
           </span>
         )}
         {premiumFallback && (
@@ -825,6 +843,7 @@ function StrikeProfileBase({
       <PcrPanel
         rows={ordered}
         symbol={symbol}
+        multiplier={multiplier}
         expiry={expiry}
         spot={spot}
         windowLabel={windowLabel}

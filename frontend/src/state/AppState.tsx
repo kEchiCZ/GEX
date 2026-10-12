@@ -244,6 +244,9 @@ interface AppState {
   expiries: string[]
   /** Trading classes per expirace z OI archivu (#513, SPEC 3.2); prázdné pole = neznámé. */
   expiryClasses: Record<string, string[]>
+  /** Multiplikátor opčního kontraktu z API (#1400): ES 50, NQ 20, akcie/ETF/index 100.
+  Null = API ho ještě nevrátilo nebo kořen nezná — prémie v $ se pak nepočítají. */
+  contractMultiplier: number | null
   selectedExpiry: string | null
   setSelectedExpiry: (expiry: string) => void
   /** Doskok na starší seanci, protože pro vybranou expiraci nejsou data (#946).
@@ -499,6 +502,13 @@ export function AppStateProvider({
   const [expiries, setExpiries] = useState<string[]>([])
   const [expiriesState, setExpiriesState] = useState<'loading' | 'unavailable' | 'ready'>('loading')
   const [expiryClasses, setExpiryClasses] = useState<Record<string, string[]>>({})
+  // Multiplikátor s jeho symbolem (#1400): po přepnutí symbolu do odpovědi API
+  // nesmí prémie nového symbolu počítat s multiplikátorem starého
+  const [multiplierOf, setMultiplierOf] = useState<{ symbol: string; value: number | null }>({
+    symbol: '',
+    value: null,
+  })
+  const contractMultiplier = multiplierOf.symbol === symbol ? multiplierOf.value : null
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null)
   const [expiryFallback, setExpiryFallback] = useState<{
     requested: string
@@ -767,10 +777,12 @@ export function AppStateProvider({
         (payload: {
           expiries: string[]
           detail?: { date: string; trading_classes: string[] }[]
+          multiplier?: number | null
         }) => {
           if (cancelled) return
           setExpiriesState('ready')
           setExpiries(payload.expiries)
+          setMultiplierOf({ symbol, value: payload.multiplier ?? null })
           // Trading classes do mapy (#513); starší API bez `detail` = prázdno
           setExpiryClasses(
             Object.fromEntries(
@@ -832,6 +844,7 @@ export function AppStateProvider({
       forgetRecentSymbol,
       expiries,
       expiryClasses,
+      contractMultiplier,
       selectedExpiry,
       // Ruční volba expirace doskok ruší — od té chvíle uživatel ví, na co kouká
       setSelectedExpiry: (expiry: string) => {
@@ -919,6 +932,7 @@ export function AppStateProvider({
       forgetRecentSymbol,
       expiries,
       expiryClasses,
+      contractMultiplier,
       selectedExpiry,
       expiryFallback,
       expiriesState,

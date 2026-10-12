@@ -49,7 +49,7 @@ test('volLeaders: top strany podle volume, nuly se vynechávají (#208)', () => 
 test('Vol leadeři readout se vykreslí v hlavičce profilu (#208)', () => {
   render(
     <CrosshairProvider>
-      <StrikeProfile rows={rows()} spot={7600} />
+      <StrikeProfile multiplier={50} rows={rows()} spot={7600} />
     </CrosshairProvider>,
   )
   const readout = screen.getByTestId('vol-leaders')
@@ -60,7 +60,7 @@ test('Vol leadeři readout se vykreslí v hlavičce profilu (#208)', () => {
 test('hlavička profilu nese odkaz Metodika na manuál s vysvětlením zdrojů (#1126 3f)', () => {
   render(
     <CrosshairProvider>
-      <StrikeProfile rows={rows()} spot={7600} />
+      <StrikeProfile multiplier={50} rows={rows()} spot={7600} />
     </CrosshairProvider>,
   )
   const link = screen.getByTestId('profile-method') as HTMLAnchorElement
@@ -103,6 +103,7 @@ test('Dyn GEX křivka v profilu: chip přepíná vrstvu (ADR-0009)', () => {
   render(
     <CrosshairProvider>
       <StrikeProfile
+        multiplier={50}
         rows={rows()}
         spot={7595}
         height={200}
@@ -152,7 +153,7 @@ test('strike bez OI dostane šrafuru, změřená nula zůstane prázdná (#465)'
   // 7600 má OI změřené (nenulové) a 7590 put stranu taky — šrafovat se nesmí
   const { container } = render(
     <CrosshairProvider>
-      <StrikeProfile rows={withMissing} spot={7595} height={200} />
+      <StrikeProfile multiplier={50} rows={withMissing} spot={7595} height={200} />
     </CrosshairProvider>,
   )
 
@@ -166,7 +167,7 @@ test('strike bez OI dostane šrafuru, změřená nula zůstane prázdná (#465)'
 test('bez příznaku se nešrafuje nic (#465)', () => {
   const { container } = render(
     <CrosshairProvider>
-      <StrikeProfile rows={rows()} spot={7595} height={200} />
+      <StrikeProfile multiplier={50} rows={rows()} spot={7595} height={200} />
     </CrosshairProvider>,
   )
 
@@ -179,7 +180,7 @@ test('bez příznaku se nešrafuje nic (#465)', () => {
 function renderPanel() {
   return render(
     <CrosshairProvider>
-      <StrikeProfile rows={rows()} spot={7595} height={200} />
+      <StrikeProfile multiplier={50} rows={rows()} spot={7595} height={200} />
     </CrosshairProvider>,
   )
 }
@@ -227,6 +228,7 @@ test('yView: pruhy i cenová linka sledují Y transformaci hlavního grafu', () 
   render(
     <CrosshairProvider>
       <StrikeProfile
+        multiplier={50}
         rows={rows()}
         spot={7595}
         height={200}
@@ -247,6 +249,7 @@ test('sdílená osa (#213): řádky se kotví k strikes heatmapy, ne k vlastním
   render(
     <CrosshairProvider>
       <StrikeProfile
+        multiplier={50}
         rows={rows()}
         spot={7595}
         height={200}
@@ -268,6 +271,7 @@ test('sdílená osa (#213): řádek mimo obálku osy se nekreslí (nevrší se n
   render(
     <CrosshairProvider>
       <StrikeProfile
+        multiplier={50}
         rows={rows()}
         spot={null}
         height={200}
@@ -312,6 +316,7 @@ test('Y osa profilu se roztahuje jen nad pruhem s hodnotami strikes (#181)', () 
   render(
     <CrosshairProvider>
       <StrikeProfile
+        multiplier={50}
         rows={rows()}
         spot={7595}
         height={200}
@@ -341,6 +346,7 @@ test('drag i kolečko na profilu upravují Y osu grafu (issue #116)', () => {
   render(
     <CrosshairProvider>
       <StrikeProfile
+        multiplier={50}
         rows={rows()}
         spot={7595}
         height={200}
@@ -369,6 +375,7 @@ test('bez onYViewChange profil Y osu neupravuje (legacy)', () => {
   render(
     <CrosshairProvider>
       <StrikeProfile
+        multiplier={50}
         rows={rows()}
         spot={7595}
         height={200}
@@ -435,6 +442,7 @@ test('Σ přepínač: viditelný jen s aggregate prop, mění hlavičku a volá 
   const { rerender } = render(
     <CrosshairProvider>
       <StrikeProfile
+        multiplier={50}
         rows={rows()}
         spot={7595}
         height={200}
@@ -449,6 +457,7 @@ test('Σ přepínač: viditelný jen s aggregate prop, mění hlavičku a volá 
   rerender(
     <CrosshairProvider>
       <StrikeProfile
+        multiplier={50}
         rows={rows()}
         spot={7595}
         height={200}
@@ -463,7 +472,7 @@ test('Σ přepínač: viditelný jen s aggregate prop, mění hlavičku a volá 
 
   rerender(
     <CrosshairProvider>
-      <StrikeProfile rows={rows()} spot={7595} height={200} aggregate={null} />
+      <StrikeProfile multiplier={50} rows={rows()} spot={7595} height={200} aggregate={null} />
     </CrosshairProvider>,
   )
   expect(screen.queryByLabelText('Souhrn přes expirace')).toBeNull() // demo data — bez Σ
@@ -491,6 +500,7 @@ test('děravá osa: pruh u díry se capne na medián rozestupů, ostatní plné 
   render(
     <CrosshairProvider>
       <StrikeProfile
+        multiplier={50}
         rows={gapRows()}
         spot={null}
         yView={{ offsetY: 0, zoomY: 1, baseHeight: 400 }}
@@ -525,6 +535,7 @@ test('děravá osa: GEX křivka se přes díru přeruší na dva segmenty (#548)
   render(
     <CrosshairProvider>
       <StrikeProfile
+        multiplier={50}
         rows={gapRows()}
         spot={null}
         yView={{ offsetY: 0, zoomY: 1, baseHeight: 400 }}
@@ -556,7 +567,7 @@ function CrosshairReader() {
 test('hover řádku nastaví crosshair a ukáže tooltip; crosshair zvenku zvýrazní řádek', () => {
   render(
     <CrosshairProvider>
-      <StrikeProfile rows={rows()} spot={7595} height={200} />
+      <StrikeProfile multiplier={50} rows={rows()} spot={7595} height={200} />
       <CrosshairReader />
     </CrosshairProvider>,
   )
@@ -583,7 +594,7 @@ test('zmrzlá kotace se ztlumí a tooltip ji pojmenuje, čerstvá zůstává pln
   )
   render(
     <CrosshairProvider>
-      <StrikeProfile rows={withStale} spot={7595} height={200} />
+      <StrikeProfile multiplier={50} rows={withStale} spot={7595} height={200} />
     </CrosshairProvider>,
   )
 
@@ -602,7 +613,7 @@ test('stáří pod prahem se netváří jako zmrzlé (běžný sweep křídel)',
   const fresh = rows().map((row) => ({ ...row, staleAge: 120 }))
   render(
     <CrosshairProvider>
-      <StrikeProfile rows={fresh} spot={7595} height={200} />
+      <StrikeProfile multiplier={50} rows={fresh} spot={7595} height={200} />
     </CrosshairProvider>,
   )
   expect(screen.getByTestId('profile-row-7590').getAttribute('data-stale')).toBeNull()
@@ -615,7 +626,7 @@ test('stáří pod prahem se netváří jako zmrzlé (běžný sweep křídel)',
 test('range mód: default „jen Vol" — OI složky mají nulovou šířku (#485)', () => {
   const { container } = render(
     <CrosshairProvider>
-      <StrikeProfile rows={rows()} spot={7600} windowLabel="10:00–11:00" />
+      <StrikeProfile multiplier={50} rows={rows()} spot={7600} windowLabel="10:00–11:00" />
     </CrosshairProvider>,
   )
   const toggle = screen.getByTestId('window-oi-toggle')
@@ -633,7 +644,7 @@ test('range mód: default „jen Vol" — OI složky mají nulovou šířku (#48
 test('mimo range mód se přepínač nekreslí a OI jede plně (#485)', () => {
   const { container } = render(
     <CrosshairProvider>
-      <StrikeProfile rows={rows()} spot={7600} />
+      <StrikeProfile multiplier={50} rows={rows()} spot={7600} />
     </CrosshairProvider>,
   )
   expect(screen.queryByTestId('window-oi-toggle')).toBeNull()
@@ -653,7 +664,7 @@ test('podíl objemu mimo tisk (#1007): sloupec objemu se dělí dvěma tóny, be
   }
   render(
     <CrosshairProvider>
-      <StrikeProfile rows={[split, ...rest]} spot={7600} />
+      <StrikeProfile multiplier={50} rows={[split, ...rest]} spot={7600} />
     </CrosshairProvider>,
   )
   const panel = screen.getByLabelText('Skládané pruhy strike profilu')
@@ -697,7 +708,7 @@ test('minuta bez objemu: štítek v hlavičce, tooltip s pomlčkou, bez Vol lead
 
   render(
     <CrosshairProvider>
-      <StrikeProfile rows={missing} spot={7600} />
+      <StrikeProfile multiplier={50} rows={missing} spot={7600} />
     </CrosshairProvider>,
   )
   const flag = screen.getByTestId('volume-missing')
@@ -709,7 +720,7 @@ test('minuta bez objemu: štítek v hlavičce, tooltip s pomlčkou, bez Vol lead
 test('minuta s objemem štítek nenese (#1067)', () => {
   render(
     <CrosshairProvider>
-      <StrikeProfile rows={rows()} spot={7600} />
+      <StrikeProfile multiplier={50} rows={rows()} spot={7600} />
     </CrosshairProvider>,
   )
   expect(screen.queryByTestId('volume-missing')).toBeNull()
@@ -722,7 +733,7 @@ test('přepínač Kontrakty / Prémie $: popisky, osa a leadeři přejdou na $ (
   const priced = rows().map((row) => ({ ...row, staleAge: 4, callMid: 2, putMid: 4 }))
   render(
     <CrosshairProvider>
-      <StrikeProfile rows={priced} spot={7595} height={200} symbol="ES" />
+      <StrikeProfile multiplier={50} rows={priced} spot={7595} height={200} symbol="ES" />
     </CrosshairProvider>,
   )
   const panel = () => screen.getByLabelText('Skládané pruhy strike profilu')
@@ -754,7 +765,7 @@ test('Prémie $ bez jediného midu spadne na kontrakty se štítkem (#1126 bod 3
   // Σ souhrn / replay bez kotací: řádky bez callMid/putMid
   render(
     <CrosshairProvider>
-      <StrikeProfile rows={rows()} spot={7595} height={200} />
+      <StrikeProfile multiplier={50} rows={rows()} spot={7595} height={200} />
     </CrosshairProvider>,
   )
   fireEvent.click(screen.getByTestId('profile-unit-toggle'))
@@ -775,7 +786,7 @@ test('Prémie $: zmrzlá strana má nulový pruh a štítek podílu bez midu (#1
   }))
   render(
     <CrosshairProvider>
-      <StrikeProfile rows={priced} spot={7595} height={200} />
+      <StrikeProfile multiplier={50} rows={priced} spot={7595} height={200} />
     </CrosshairProvider>,
   )
   fireEvent.click(screen.getByTestId('profile-unit-toggle'))
@@ -785,4 +796,40 @@ test('Prémie $: zmrzlá strana má nulový pruh a štítek podílu bez midu (#1
   expect(row7590.querySelector('[data-part="value-put"]')).toBeNull()
   fireEvent.pointerEnter(row7590)
   expect(screen.getByTestId('premium-values').textContent).toContain('C: — (bez midu)')
+})
+
+// ── Multiplikátor kontraktu z API (#1400) ──────────────────────────
+
+test('Prémie $ a P/C s multiplikátorem z API: equity ×100 dvojnásobek ES ×50 (#1400)', () => {
+  const priced = rows().map((row) => ({ ...row, staleAge: 4, callMid: 2, putMid: 4 }))
+  render(
+    <CrosshairProvider>
+      <StrikeProfile multiplier={100} rows={priced} spot={7595} height={200} symbol="SPY" />
+    </CrosshairProvider>,
+  )
+  fireEvent.click(screen.getByTestId('profile-unit-toggle'))
+  const panel = screen.getByLabelText('Skládané pruhy strike profilu')
+  const putVals = [...panel.querySelectorAll('[data-part="value-put"]')].map((n) => n.textContent)
+  // 7590 put: Vol 400×4×100 = $160k + OI 2000×4×100 = $800k → $960k (ES ×50 dává $480k)
+  expect(putVals).toContain('$960.0k')
+  expect(screen.queryByTestId('premium-no-multiplier')).toBeNull()
+  expect(screen.queryByTestId('pcr-no-multiplier')).toBeNull()
+})
+
+test('neznámý multiplikátor: profil v kontraktech se štítkem, P/C bez částek v $ (#1400)', () => {
+  const priced = rows().map((row) => ({ ...row, staleAge: 4, callMid: 2, putMid: 4 }))
+  render(
+    <CrosshairProvider>
+      <StrikeProfile multiplier={null} rows={priced} spot={7595} height={200} symbol="NG" />
+    </CrosshairProvider>,
+  )
+  fireEvent.click(screen.getByTestId('profile-unit-toggle'))
+  const panel = screen.getByLabelText('Skládané pruhy strike profilu')
+  const putVals = [...panel.querySelectorAll('[data-part="value-put"]')].map((n) => n.textContent)
+  expect(putVals).toContain('60') // kontrakty, žádný tichý fallback 50
+  expect(screen.getByTestId('premium-no-multiplier').textContent).toContain('Multiplikátor neznámý')
+  // P/C (výchozí jednotka Prémie): poměr ano, částky v $ ne
+  expect(screen.getByTestId('pcr-no-multiplier').textContent).toContain('NG')
+  expect(screen.getByTestId('pcr-ratio').textContent).not.toContain('—')
+  expect(screen.getByTestId('pcr-panel').textContent).toContain('PUT —')
 })

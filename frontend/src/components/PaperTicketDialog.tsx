@@ -57,14 +57,17 @@ export function PaperTicketDialog({
   const entryValue = num(entry)
   const stopValue = num(stop)
   const targetValue = target.trim() === '' ? null : num(target)
+  // Neznámá hodnota bodu (#1400): velikost ani riziko nejdou spočítat — řekne to hláška
   const allowed =
-    entryValue !== null && stopValue !== null
+    entryValue !== null && stopValue !== null && pv !== null
       ? maxContracts(account.risk_budget_usd, entryValue, stopValue, pv)
       : 0
   const qty =
     qtyText.trim() === '' ? Math.max(1, allowed) : Math.max(1, Math.floor(Number(qtyText) || 1))
   const risk =
-    entryValue !== null && stopValue !== null ? riskUsd(qty, entryValue, stopValue, pv) : null
+    entryValue !== null && stopValue !== null && pv !== null
+      ? riskUsd(qty, entryValue, stopValue, pv)
+      : null
   const rrr =
     entryValue !== null && stopValue !== null
       ? rewardRisk(entryValue, stopValue, targetValue)
@@ -200,9 +203,11 @@ export function PaperTicketDialog({
       )}
       {levelsOk && overBudget && (
         <p className="journal-error">
-          {allowed === 0
-            ? `Stop ${Math.abs(entryValue - stopValue).toFixed(2)} b je nad rozpočtem ${Math.round(account.risk_budget_usd)} $ — zkrať stop.`
-            : `Rozpočet dovolí max ${allowed} ks.`}
+          {pv === null
+            ? `Hodnota bodu ${symbol} není známá — velikost ani riziko nejdou spočítat.`
+            : allowed === 0
+              ? `Stop ${Math.abs(entryValue - stopValue).toFixed(2)} b je nad rozpočtem ${Math.round(account.risk_budget_usd)} $ — zkrať stop.`
+              : `Rozpočet dovolí max ${allowed} ks.`}
         </p>
       )}
       {error && <p className="journal-error">{error}</p>}

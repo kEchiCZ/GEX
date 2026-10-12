@@ -1,4 +1,5 @@
 /** Minimální cenový tick futures podkladů (IBKR nedodává → tabulka + default). */
+import { symbolRoot } from './ticker'
 
 /** Min tick per symbol; default 0,25 (index futures). Rozšiřuj dle potřeby. */
 const PRICE_TICKS: Record<string, number> = {
@@ -19,7 +20,10 @@ export function priceTick(symbol: string): number {
   return PRICE_TICKS[symbol] ?? 0.25
 }
 
-/** Dolarová hodnota 1 bodu na 1 kontrakt (CME multiplikátory, #185). */
+/** Dolarová hodnota 1 bodu na 1 kontrakt (CME multiplikátory, #185) — jen futures
+sizing (setupy, paper ticket, velikost pozice). Kopie hodnot `ticker.FUTURES_MULTIPLIERS`
+v enginu; prémie opcí berou multiplikátor z API (`contractMultiplier`, #1400),
+převod sizingu na API je #1545. */
 const POINT_VALUES: Record<string, number> = {
   ES: 50,
   MES: 5,
@@ -33,9 +37,10 @@ const POINT_VALUES: Record<string, number> = {
   GC: 100,
 }
 
-/** Hodnota bodu daného symbolu v USD (default 50 — indexové E-mini). */
-export function pointValue(symbol: string): number {
-  return POINT_VALUES[symbol] ?? 50
+/** Hodnota bodu daného symbolu v USD; null = neznámý symbol (#1400: žádný tichý fallback 50). */
+export function pointValue(symbol: string): number | null {
+  // Pinovaný kontrakt (ESZ6, ADR-0041) má hodnotu bodu svého kořene
+  return POINT_VALUES[symbolRoot(symbol)] ?? null
 }
 
 /** Zaokrouhlení ceny na nejbližší tick (crosshair na ose Y nemá jemnější rozlišení). */

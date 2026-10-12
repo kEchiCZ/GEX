@@ -24,12 +24,12 @@ import {
   topPremiumStrikes,
 } from '../profile/pcr'
 import type { PcrBasis, PcrScope, PcrUnit } from '../profile/pcr'
-import { pointValue } from '../instrument/tick'
 import { oneOf, usePersistentState } from '../state/persist'
 
 export function PcrPanel({
   rows,
   symbol,
+  multiplier,
   expiry,
   spot,
   windowLabel = null,
@@ -37,6 +37,8 @@ export function PcrPanel({
 }: {
   rows: ProfileRow[]
   symbol: string
+  /** Multiplikátor kontraktu z API (#1400); null = neznámý — poměr platí, částky v $ ne. */
+  multiplier: number | null
   expiry: string | null
   spot: number | null
   /** Okenní režim (#486): popisek aktivního range — `rows` jsou pak OKENNÍ
@@ -56,48 +58,33 @@ export function PcrPanel({
   // Okno (#486): premium hlavní bar, kusový poměr sekundárně — oba najednou
   const effectiveBasis: PcrBasis = windowed ? 'vol' : basis
   const effectiveUnit: PcrUnit = windowed ? 'premium' : unit
+  // Neznámý multiplikátor (#1400): poměr P/C na něm nezávisí (krátí se), částky
+  // v $ ano — počítá se s 1 a částky se nezobrazí, místo tichého odhadu
+  const moneyUnknown = multiplier === null && effectiveUnit !== 'contracts'
+  const factor = multiplier ?? 1
   const result = useMemo(
-    () =>
-      computePcr(rows, effectiveBasis, effectiveUnit, pointValue(symbol), spot, undefined, scope),
-    [rows, effectiveBasis, effectiveUnit, symbol, spot, scope],
+    () => computePcr(rows, effectiveBasis, effectiveUnit, factor, spot, undefined, scope),
+    [rows, effectiveBasis, effectiveUnit, factor, spot, scope],
   )
   const contractsResult = useMemo(
-    () =>
-      windowed
-        ? computePcr(rows, 'vol', 'contracts', pointValue(symbol), spot, undefined, scope)
-        : null,
-    [windowed, rows, symbol, spot, scope],
+    () => (windowed ? computePcr(rows, 'vol', 'contracts', factor, spot, undefined, scope) : null),
+    [windowed, rows, factor, spot, scope],
   )
   const compare = useMemo(() => {
     if (!compareRows) return null
-    const a = computePcr(
-      compareRows.a,
-      'vol',
-      'premium',
-      pointValue(symbol),
-      spot,
-      undefined,
-      scope,
-    )
-    const b = computePcr(
-      compareRows.b,
-      'vol',
-      'premium',
-      pointValue(symbol),
-      spot,
-      undefined,
-      scope,
-    )
+    const a = computePcr(compareRows.a, 'vol', 'premium', factor, spot, undefined, scope)
+    const b = computePcr(compareRows.b, 'vol', 'premium', factor, spot, undefined, scope)
     if (a.ratio === null || b.ratio === null) return { a: a.ratio, b: b.ratio, delta: null }
     return { a: a.ratio, b: b.ratio, delta: b.ratio - a.ratio }
-  }, [compareRows, symbol, spot, scope])
+  }, [compareRows, factor, spot, scope])
   const topStrikes = useMemo(
-    () => (windowed ? topPremiumStrikes(rows, pointValue(symbol), 5, undefined, scope, spot) : []),
-    [windowed, rows, symbol, scope, spot],
+    () => (windowed ? topPremiumStrikes(rows, factor, 5, undefined, scope, spot) : []),
+    [windowed, rows, factor, scope, spot],
   )
   if (rows.length === 0) return null
 
-  const format = effectiveUnit === 'contracts' ? formatAmount : formatMoney
+  const format =
+    effectiveUnit === 'contracts' ? formatAmount : moneyUnknown ? () => '—' : formatMoney
   const total = result.put + result.call
   const putShare = total > 0 ? result.put / total : 0.5
   const unreliable = result.missingShare > PCR_MISSING_LIMIT
@@ -112,7 +99,7 @@ export function PcrPanel({
           topStrikes
             .map(
               (item) =>
-                `${item.strike} ${item.side} ${formatMoney(item.premium)} (${Math.round(item.share * 100)} %)`,
+                `${item.strike} ${item.side} ${format(item.premium)} (${Math.round(item.share * 100)} %)`,
             )
             .join('\n')
         : '')
@@ -191,6 +178,11 @@ export function PcrPanel({
             P/C {result.ratio === null ? '—' : result.ratio.toFixed(2)}
           </span>
           <span className="pcr-call">CALL {format(result.call)}</span>
+        </div>
+      )}
+      {moneyUnknown && (
+        <div className="muted" data-testid="pcr-no-multiplier">
+          Multiplikátor kontraktu {symbol} neznámý (nebo se načítá) — poměr platí, částky v $ ne
         </div>
       )}
       {/* Sekundární kusový poměr okna (#486) — premium hlavní, kusy vedle */}

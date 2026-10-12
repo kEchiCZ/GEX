@@ -65,13 +65,20 @@ describe('R v bodech', () => {
   it('P/L per kontrakt odděluje skill od size', () => {
     const t = trade({ actual_entry: 6810, actual_exit: 6813 })
     // Stejný pohyb: ES 3×50, MES 3×5 — poměr skillu je ale týž
-    expect(pnlPerContract(t, 'ES')).toBe(150)
-    expect(pnlPerContract(t, 'MES')).toBe(15)
+    expect(pnlPerContract(t, 50)).toBe(150)
+    expect(pnlPerContract(t, 5)).toBe(15)
+  })
+
+  it('P/L per kontrakt bere multiplikátor z API — NQ ×20, equity ×100, neznámý null (#1400)', () => {
+    const t = trade({ actual_entry: 6810, actual_exit: 6813 })
+    expect(pnlPerContract(t, 20)).toBe(60)
+    expect(pnlPerContract(t, 100)).toBe(300) // SPY/QQQ/KO: 100 kusů na kontrakt
+    expect(pnlPerContract(t, null)).toBeNull() // žádný tichý fallback 50
   })
 
   it('nedokončený obchod nemá výsledek', () => {
     expect(resultPoints(trade({ actual_entry: 6810 }))).toBeNull()
-    expect(pnlPerContract(trade({ actual_entry: 6810 }), 'ES')).toBeNull()
+    expect(pnlPerContract(trade({ actual_entry: 6810 }), 50)).toBeNull()
   })
 })
 
