@@ -13,7 +13,8 @@ closure). Zapnutý drží:
 - **kruhový buffer 30 s**: záznam nese čas a pohled (symbol, timeframe, Mode),
   starší se zahazuje.
 
-Overlay, Nastavení → Diagnostika a „Seklo to“ staví nad tímto API E-2a.1b #1411. */
+UI měřič nemá: overlay, Diagnostika ani „Seklo to“ nevznikají (vlastník 12. 10.,
+#1411). Ovládá se z konzole (`window.gexlensPerf`) a z Playwrightu (E-2a.13). */
 import { APP_ENV, BUILD_SHA } from '../config'
 
 /** Měřené operace grafu; jméno = počítadlo v exportu. */
