@@ -119,6 +119,7 @@ import { magnetLevel } from './instrument/magnet'
 import type { ContoursMode } from './heatmap/contours'
 import type { HeatmapStyle } from './heatmap/render'
 import type { LiveSocket } from './api/ws'
+import { perfBegin, perfFinish, setPerfView } from './perf/meter'
 
 const ANNOTATION_TOOLS: Array<{ tool: ActiveTool; label: string }> = [
   { tool: null, label: 'Kurzor' },
@@ -213,6 +214,10 @@ function MainContent() {
     'linear',
     oneOf(HEATMAP_SCALES.map((item) => item.value)),
   )
+  // Pohled v záznamech měřiče výkonu (#1409): symbol, timeframe a Mode
+  useEffect(() => {
+    setPerfView({ symbol, timeframe: timeframe === 'daily' ? 'daily' : interval, mode })
+  }, [symbol, timeframe, interval, mode])
   // Hint na škálu (#580): trvale zavíratelný (ADR-0007) — škála je uživatelova
   // volba, hint se nesmí vnucovat ani škálu tiše přepínat
   const [scaleHintState, setScaleHintState] = usePersistentState<'on' | 'dismissed'>(
@@ -328,6 +333,7 @@ function MainContent() {
     staleData,
     dailyProgress,
     availability,
+    dataSymbol,
   } = useDayData(
     symbol,
     selectedExpiry,
@@ -769,6 +775,17 @@ function MainContent() {
     )
     return projectGrid(grid, extra)
   }, [grid, toggles.projection, timeframe, selectedExpiry, symbol, day.lastMinuteIso, bucketMinutes, playback.isLive, dailyForward]) // prettier-ignore
+  // Měřič výkonu (#1409): efekt Heatmap s rastrem běží dřív než efekt rodiče,
+  // takže tady je mřížka skutečných dat vykreslená — konec spanů načtení dne,
+  // přepnutí symbolu a minutového updatu. Placeholder (načítání, demo) ani data
+  // předchozího symbolu (první render po přepnutí, `projectedGrid` závisí na
+  // symbolu) je neukončí.
+  useEffect(() => {
+    if (!realDay || dataSymbol !== symbol) return
+    perfFinish('dayLoad')
+    perfFinish('symbolSwitch')
+    perfFinish('minuteUpdate')
+  }, [projectedGrid, realDay, dataSymbol, symbol])
   // Dyn GEX podklad (#242): stejný slice + projekce jako hlavní grid — projekční
   // zóna nese modelované budoucí sloupce (ADR-0009 fáze 2)
   const gexUnderGrid = useMemo(() => {
@@ -1684,7 +1701,10 @@ function MainContent() {
           Mode
           <select
             value={mode}
-            onChange={(event) => setMode(event.target.value as MeasuredHeatmapMode)}
+            onChange={(event) => {
+              perfBegin('modeScale') // měřič výkonu (#1409): do vykreslení kontur
+              setMode(event.target.value as MeasuredHeatmapMode)
+            }}
             disabled={!rawDay.raw}
             title={rawDay.raw ? undefined : 'Módy jsou dostupné jen nad intraday replay daty'}
             aria-label="Heatmap mód"
@@ -1700,7 +1720,10 @@ function MainContent() {
           Scale
           <select
             value={heatScale}
-            onChange={(event) => setHeatScale(event.target.value as HeatmapScale)}
+            onChange={(event) => {
+              perfBegin('modeScale')
+              setHeatScale(event.target.value as HeatmapScale)
+            }}
             disabled={!rawDay.raw}
             aria-label="Škála heatmapy"
           >

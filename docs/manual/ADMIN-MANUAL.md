@@ -232,7 +232,7 @@ Zdroj: proměnné prostředí `GEXLENS_*` a `.env` (viz `.env.example`). Validuj
 
 **Od #696 jde do kontejnerů celý `.env`** (`env_file`), ne ruční výčet — každý klíč z `.env.example` po `docker compose up -d <služba>` skutečně platí. `environment:` v compose nese jen odvozené hodnoty (DATABASE_URL, adresy služeb, /app/data) a ty mají přednost. **Dev stack navíc čte volitelný `.env.dev`** (přepisy jen pro dev: vlastní tasty grant, symboly…; viz `.env.dev.example`). Pozn.: změna PG hesla v `.env.dev` vyžaduje reseed dev volume.
 
-Frontend build-time: `VITE_API_BASE` (nginx build arg, default `http://127.0.0.1:8000`).
+Frontend build-time (build arg `docker/frontend.Dockerfile`): `VITE_API_BASE` (výchozí `/api`), `VITE_GEXLENS_ENV` (`dev` = badge DEV, prod nic) a `VITE_BUILD_SHA` (commit z CI workflow *Images* do exportu měřiče výkonu #1409; lokální build `dev`). Kvůli `VITE_BUILD_SHA` se bundle přestaví při každém běhu *Images*, i u commitu jen do backendu. Frontend se ale nasazuje jen výslovným pull, takže cache prohlížeče se zneplatní jen při nasazení frontendu.
 
 ## 5. Engine — datová pipeline
 
@@ -490,6 +490,7 @@ Handshake kontroluje hlavičku `Origin` (#542): CORS se na WebSocket nevztahuje,
 - **Replay**: `/replay` se stáhne jednou, `apache-arrow` dekóduje snapshoty, celý den se předpočítá v paměti (vč. profilu per minuta) — přetáčení je čisté krájení typed arrays. Timestampy se normalizují (`canonicalTs` — Arrow epoch vs. JSON ISO).
 - **Stav**: React kontexty `AppState` (status z WS + REST initial fetch, view, téma, alerty) a `Crosshair` (sdílený všemi panely).
 - **OI fallback**: při nulovém OI staví heatmapu z volume (engine mezitím posílá alert `oi_missing`).
+- **Měřič výkonu grafu** (`frontend/src/perf/meter.ts`, #1409, E-2a.1a): ve výchozím stavu vypnutý a vypnutý nic nealokuje (neběží rAF ani `PerformanceObserver`; instrumentovaná místa jen větví, ~35 ns na operaci). Zapnutý sbírá délku snímku (fps, p50, p95), dlouhé úlohy ≥ 50 ms (počet a maximum za minutu), operace `drawStatic`, `drawDynamic`, `buildModeGrid`, `renderGrid`, flush minuty (`minuteFlush` = výběr minut v timeru, bez appendu) a fáze dne (`dayFetch`, `dayDecode`, `dayBuild`) a spany do vykreslení: `dayLoad` (fetch → mřížka dne), `symbolSwitch` (klik → mřížka nového symbolu se skutečnými daty; `useDayData.dataSymbol` musí sedět na symbol, první render po přepnutí nese ještě stará data), `modeScale` (přepnutí → rastr i hotové kontury nové mřížky) a `minuteUpdate` (flush → mřížka s novou minutou, včetně appendu a sestavení dne). fps se počítá z délek snímků; pauza rAF ve skryté záložce se do snímků nezapočítá. Drží kruhový buffer 30 s se záznamy s pohledem (symbol, timeframe, Mode). Počty od zapnutí jsou deterministické (výkonový rozpočet v CI, E-2a.13). Do UI ho přidá E-2a.1b #1411, do té doby z konzole prohlížeče: `gexlensPerf.setPerfEnabled(true)`, po měření `copy(JSON.stringify(gexlensPerf.perfExport()))`, jen souhrn pro komentář na GitHubu `gexlensPerf.perfExport(undefined, { records: false })`. Export nese verzi buildu `build` = commit z CI image (build arg `VITE_BUILD_SHA`), lokální build `dev`. Režie zapnutého: ~0,3 µs na operaci a ~0,1 µs na snímek; export 30 s je ~17 ms.
 - Wiki/manuál: statické HTML v `frontend/public/manual/` (generované z MD, viz níže) — servíruje ho vite dev i nginx.
 
 ## 9. Vývojové prostředí

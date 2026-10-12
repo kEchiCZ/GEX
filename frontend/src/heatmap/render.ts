@@ -7,6 +7,7 @@ snapshotu/módu, takže 60 fps pan/zoom není limitované touto funkcí.
 PixelBuffer je vlastní typ (ne ImageData), aby šel testovat v Node bez canvasu.
 */
 
+import { perfEnd, perfStart } from '../perf/meter'
 import { STALE_THRESHOLD_S } from './color'
 import { dataMinutesOf } from './grid'
 import type { HeatmapGrid } from './grid'
@@ -142,6 +143,13 @@ export function renderGrid(
   style: HeatmapStyle,
   palette: SignedPalette = DEFAULT_SIGNED_PALETTE,
 ): PixelBuffer {
+  const t0 = perfStart()
+  const buffer = rasterize(grid, style, palette)
+  perfEnd('renderGrid', t0) // měřič výkonu (#1409)
+  return buffer
+}
+
+function rasterize(grid: HeatmapGrid, style: HeatmapStyle, palette: SignedPalette): PixelBuffer {
   const width = grid.minutes
   const height = grid.strikes.length
   const dataMinutes = dataMinutesOf(grid)

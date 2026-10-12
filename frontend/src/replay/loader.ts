@@ -11,6 +11,7 @@ složení obou (drží zpětně kompatibilní API i testy).
 */
 import { tableFromIPC } from 'apache-arrow'
 import { API_BASE } from '../config'
+import { perfEnd, perfStart } from '../perf/meter'
 import type { PanelSeries } from '../components/BottomPanels'
 import type { HeatmapGrid } from '../heatmap/grid'
 import { buildModeGrid } from '../heatmap/modes'
@@ -472,7 +473,14 @@ export async function fetchReplayInputs(
   expiry: string,
   date: string,
 ): Promise<ReplayInputs> {
-  return decodeBundle(await fetchBundle(symbol, expiry, date))
+  // Fáze načtení dne pro měřič výkonu (#1409): fetch → dekódování
+  const fetchStart = perfStart()
+  const bundle = await fetchBundle(symbol, expiry, date)
+  perfEnd('dayFetch', fetchStart)
+  const decodeStart = perfStart()
+  const inputs = decodeBundle(bundle)
+  perfEnd('dayDecode', decodeStart)
+  return inputs
 }
 
 /** Kanonický klíč minuty: Arrow vrací timestamp jako epoch (ms), JSON jako ISO string. */
@@ -1184,6 +1192,13 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
 
 /** Poskládá `ReplayDay` (grid/overlays/panels/profil) z rozloženého vstupu. */
 export function assembleReplayDay(inputs: ReplayInputs): ReplayDay {
+  const t0 = perfStart()
+  const day = assembleDay(inputs)
+  perfEnd('dayBuild', t0) // měřič výkonu (#1409): sestavení dne
+  return day
+}
+
+function assembleDay(inputs: ReplayInputs): ReplayDay {
   const { strikes } = inputs
   const minuteKeys = inputs.minutes
   const minutes = minuteKeys.length

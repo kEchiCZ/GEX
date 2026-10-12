@@ -22,6 +22,7 @@ import {
 } from './loader'
 import { bundleCacheKey, getCachedBundle, storeCachedBundle } from './bundleCache'
 import { sessionDateIso } from '../instrument/tz'
+import { perfBegin, perfEnd, perfStart } from '../perf/meter'
 import type { GexFieldRow, GexProfileRow, LadderMinuteRow, LiveMinute, LiveMinuteRow, ProfileSource, ReplayDay, ReplayInputs } from './loader' // prettier-ignore
 
 /** Daily pohled: strop stažených dnů (retence snapshotů je 14 dní, R4). */
@@ -313,6 +314,10 @@ export interface DayFeed {
   dailyProgress: { done: number; total: number } | null
   /** Stav načtení intradenního dne (#1355); Daily = `ready` (vlastní progres). */
   availability: DayAvailability
+  /** Symbol, kterému patří zobrazená data; null = placeholder (načítání, demo).
+  Po přepnutí symbolu drží ještě jeden render data předchozího — měřič výkonu
+  (#1409) podle toho nepovažuje vykreslení starých dat za konec přepnutí. */
+  dataSymbol: string | null
 }
 
 export function useDayData(
@@ -336,6 +341,7 @@ export function useDayData(
     inputsRef.current = inputs
   }, [inputs])
   const [daily, setDaily] = useState<DayData | null>(null)
+  const [dailySymbol, setDailySymbol] = useState<string | null>(null)
   const [dailyProgress, setDailyProgress] = useState<{ done: number; total: number } | null>(null)
   // Selhané obnovy po sobě (#516) — banner „zobrazen stav z HH:MM" po prahu;
   // `atMs` = čas posledního selhání, ze kterého banner počítá stáří dat
@@ -393,11 +399,13 @@ export function useDayData(
     if (immutable && getCachedBundle(bundleCacheKey(symbol, expiry, date))) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
+    const loadStart = perfStart() // měřič výkonu (#1409): načtení dne → vykreslení
     fetchReplayInputs(symbol, expiry, date)
       .then((loaded) => {
         if (cancelled) return
         // Prázdný den (0 minut) nesmí přepsat poslední živý stav při přechodném výpadku
         if (loaded.minutes.length > 0) {
+          perfBegin('dayLoad', loadStart)
           setInputs(loaded)
           setRefreshFailures({ count: 0, atMs: 0 })
         } else {
@@ -438,6 +446,7 @@ export function useDayData(
         if (pending.size === 0) return
         const current = inputsRef.current
         if (!current) return // balík ještě nedorazil — minuty počkají na další flush
+        const flushStart = perfStart() // měřič výkonu (#1409)
         // Výběr minut i úklid `pending` MUSÍ být mimo setState updater: ten React
         // ve StrictMode volá dvakrát a druhý průběh by už minutu v `pending` nenašel,
         // takže by ji zahodil (chybějící svíčka i sloupec gridu, #143).
@@ -459,6 +468,10 @@ export function useDayData(
           }
         }
         if (applied.length === 0) return
+        // `minuteFlush` = výběr minut; append (updater) React spočte buď hned,
+        // nebo až v renderu — celý update do vykreslení měří span `minuteUpdate`
+        perfEnd('minuteFlush', flushStart)
+        perfBegin('minuteUpdate', flushStart)
         setInputs((prev) => {
           if (!prev) return prev
           let next = prev
@@ -737,7 +750,10 @@ export function useDayData(
           }
           if (cancelled) return
           setDailyProgress({ done: index + 1, total: recent.length })
-          if (days.length > 0) setDaily(buildDailyDay(days, missingDates))
+          if (days.length > 0) {
+            setDaily(buildDailyDay(days, missingDates))
+            setDailySymbol(symbol)
+          }
           await new Promise<void>((resolve) => setTimeout(resolve, 0))
           if (cancelled) return
         }
@@ -775,6 +791,7 @@ export function useDayData(
       staleData: null,
       dailyProgress,
       availability: 'ready',
+      dataSymbol: daily ? dailySymbol : null,
     }
   }
   const availability: DayAvailability = replayDay
@@ -790,5 +807,6 @@ export function useDayData(
     staleData,
     dailyProgress: null,
     availability,
+    dataSymbol: replayDay && inputs ? inputs.symbol : null,
   }
 }

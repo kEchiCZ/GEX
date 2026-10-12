@@ -13,7 +13,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useElementSize } from '../hooks/useElementSize'
 import { splitContoursMode } from '../heatmap/contours'
 import type { ContoursMode } from '../heatmap/contours'
-import { useContours } from '../heatmap/useContours'
+import { contoursSettled, useContours } from '../heatmap/useContours'
+import { perfEnabled, perfEnd, perfFinish, perfStart } from '../perf/meter'
 import { renderGrid } from '../heatmap/render'
 import type { SignedPalette } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
@@ -448,8 +449,9 @@ export function Heatmap({
   // datový update nedropne frame, přepínání módů je cache hit
   // Hladiny a flip zvlášť (#1174): jiný styl čáry, vlastní cache per mód
   const contoursSplit = splitContoursMode(contours)
+  const flipMode: ContoursMode = contoursSplit.flip ? 'flip' : 'off'
   const contourSegments = useContours(grid, underGrid, contoursSplit.levels)
-  const flipContourSegments = useContours(grid, underGrid, contoursSplit.flip ? 'flip' : 'off')
+  const flipContourSegments = useContours(grid, underGrid, flipMode)
 
   // Mapa 1m osy pro anotace (#502) — null = identita index == minuta
   const axisOffsets = useMemo(
@@ -563,7 +565,7 @@ export function Heatmap({
   // 3) STATICKÁ overlay vrstva: kontury, uzavřené svíčky, sessions, levels/walls,
   // anotace, popisky os, timestamp. Překresluje se jen při změně dat/pohledu — NE
   // při spot ticku ani pohybu crosshairu (#141).
-  const drawStatic = useCallback(() => {
+  const drawStaticLayer = useCallback(() => {
     const canvas = overlayRef.current
     if (!canvas) return
     const context = canvas.getContext('2d')
@@ -1213,6 +1215,12 @@ export function Heatmap({
     rangeB,
     history,
   ])
+  // Měřič výkonu (#1409): čas a počet překreslení statické vrstvy
+  const drawStatic = useCallback(() => {
+    const t0 = perfStart()
+    drawStaticLayer()
+    perfEnd('drawStatic', t0)
+  }, [drawStaticLayer])
 
   // Dotažení další historické seance (#788): jakmile se levý okraj viewportu
   // přiblíží k nejlevějšímu načtenému koši, řekne si o další den. Rodič drží
@@ -1227,7 +1235,7 @@ export function Heatmap({
 
   // 4) DYNAMICKÁ overlay vrstva (#141): živé svíčky ze spotu, značka aktuální ceny
   // a crosshair. Jen pár čar a jedna svíčka — překreslení 5×/s hlavní vlákno neblokuje.
-  const drawDynamic = useCallback(() => {
+  const drawDynamicLayer = useCallback(() => {
     const canvas = dynamicRef.current
     if (!canvas) return
     const context = canvas.getContext('2d')
@@ -1400,6 +1408,12 @@ export function Heatmap({
     logicalH,
     dpr,
   ])
+  // Měřič výkonu (#1409): dynamická vrstva (spot tick, crosshair přes bus)
+  const drawDynamic = useCallback(() => {
+    const t0 = perfStart()
+    drawDynamicLayer()
+    perfEnd('drawDynamic', t0)
+  }, [drawDynamicLayer])
 
   // useLayoutEffect: změna width/height atributu canvas vyčistí — překreslení
   // musí proběhnout před paintem, jinak při tažení předělů problikává (#173)
@@ -1410,6 +1424,19 @@ export function Heatmap({
   useLayoutEffect(() => {
     drawStatic()
   }, [drawStatic])
+
+  // Měřič výkonu (#1409): Mode/Scale končí, až jsou kontury nové mřížky
+  // spočtené a vykreslené. Pasivní efekt běží po drawStatic (layout) i po
+  // efektu rastru výš (renderGrid + putImageData), takže span vždy zahrnuje oba
+  useEffect(() => {
+    if (!perfEnabled()) return
+    if (
+      contoursSettled(grid, underGrid, contoursSplit.levels) &&
+      contoursSettled(grid, underGrid, flipMode)
+    ) {
+      perfFinish('modeScale')
+    }
+  }, [grid, underGrid, contoursSplit.levels, flipMode, contourSegments, flipContourSegments])
 
   useLayoutEffect(() => {
     drawDynamic()

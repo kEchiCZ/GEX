@@ -15,6 +15,7 @@ import { FORWARD_RANGES } from '../heatmap/dailyforward'
 import type { ForwardRange } from '../heatmap/dailyforward'
 import { clampedNumber, enumMap, mergedBooleans, oneOf, shortString, usePersistentState } from './persist' // prettier-ignore
 import type { Revive } from './persist'
+import { perfBegin } from '../perf/meter'
 
 export interface PipelineStatus {
   engine: string
@@ -465,7 +466,16 @@ export function AppStateProvider({
   // Jediná stabilní instance WS klienta — sdílená přes context (useDayData ji odebírá)
   const [live] = useState(() => socket ?? new LiveSocket(WS_URL))
   // Poslední volby uživatele přežívají refresh (ADR-0007, #167); URL má přednost
-  const [symbol, setSymbol] = usePersistentState('symbol', initialSymbol, shortString())
+  const [symbol, storeSymbol] = usePersistentState('symbol', initialSymbol, shortString())
+  // Přepnutí symbolu měří měřič výkonu od kliknutí do vykreslení (#1409);
+  // jediné místo, kudy symbol mění sidebar, hledání, alerty i deeplinky
+  const setSymbol = useCallback(
+    (next: string) => {
+      if (next !== symbol) perfBegin('symbolSwitch')
+      storeSymbol(next)
+    },
+    [symbol, storeSymbol],
+  )
   // Nedávné (#521): posledních 8 zobrazených symbolů, aktivní první
   const [recentSymbols, setRecentSymbols] = usePersistentState<string[]>(
     'recentSymbols',

@@ -5,6 +5,7 @@ Přepnutí módu/škály je čistý přepočet v paměti nad surovou snapshot ma
 OTM: call K > S, put K < S; ITM je doplněk (ATM buňka patří do ITM vrstvy).
 Škály zachovávají znaménko (copysign), normalizace p99 celého dne.
 */
+import { perfEnd, perfStart } from '../perf/meter'
 import type { HeatmapGrid } from './grid'
 
 export const HEATMAP_MODES = [
@@ -165,6 +166,13 @@ export function buildModeGrid(
   mode: MeasuredHeatmapMode,
   scale: HeatmapScale,
 ): HeatmapGrid {
+  const t0 = perfStart()
+  const grid = composeModeGrid(raw, mode, scale)
+  perfEnd('buildModeGrid', t0) // měřič výkonu (#1409)
+  return grid
+}
+
+function composeModeGrid(raw: RawDay, mode: MeasuredHeatmapMode, scale: HeatmapScale): HeatmapGrid {
   const { minutes, strikes } = raw
   // Kapacitní stride (#515): čte se přes něj, výstupní vrstvy jsou kompaktní
   const stride = raw.stride ?? minutes
