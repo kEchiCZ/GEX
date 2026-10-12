@@ -222,7 +222,7 @@ Kanály: `price.{sym}` (tick), `snapshot.{sym}.{expiry}` (1min delta update heat
 Levý sbalitelný sidebar (Dashboard, Watchlist s % změnami, IBKR Console, Theme, Settings, Sign out, verze) · hlavička instrumentu (ticker, název, last + změna, selektor expirace, datum, Live indikátor, notifikační zvonek s badge) · řádek timeframe (Intraday/Daily, 1m/5m/15m) · řádek přepínačů (Dyn GEX, GEX Levels, Sessions, Vol/Opt Vol/Delta, Vol+OI Δ, News) · hlavní plocha.
 
 ### 7.2 Heatmapa (canvas/WebGL)
-- Render ~180 strikes × 1440 min při 60 fps pan/zoom; barevné vrstvy call (zelená) / put (červená), styl **Gradient** (bilineární interpolace) / **Blobs** (gaussovský kernel kolem koncentrací).
+- Render ~180 strikes × 1440 min při 60 fps pan/zoom; barevné vrstvy call (zelená) / put (červená), styl **Gradient** (bilineární interpolace) / **Blobs** (gaussovský kernel kolem koncentrací). *(Rev. 2026-10, ADR-0047 bod 6: „60 fps“ nahrazují měřitelné cíle — p95 snímku ≤ 33 ms při pan/zoom na 1m, medián ≤ 16,7 ms na 5m jako cíl; měří měřič #1409.)*
 - **Contours Off/Major/All:** marching squares nad vyhlazeným polem, **obě strany zvlášť** (kladná i záporná struktura, #570). Prahy jsou **podíl síly, ne kvantily**: Major = 2 izolinie na 65 % a 95 % z p99 absolutní hodnoty strany, All = 40 % a 70 %; jmenovatel p99 se počítá **per strana** (při dominanci jedné strany by slabší jinak neměla čáru) a **nad transformovaným polem** (po aplikaci škály), takže kontury sedí na barvy. Konstanty `CONTOUR_MAJOR`/`CONTOUR_ALL`; bílé přerušované, záporná strana stejným stylem. *(Rev. 2026-08-12, #571 + #570: původní kvantilové prahy p75/p90 + 5 úrovní odpovídaly na „kolik buněk je slabších", ne „jak silná je brzda" — práh plaval mezi dny a All kreslilo 5 čar, viz #238.)*
 - Overlay: 1m cenová křivka (up/down tick barevně), sessions markery (konfig. seznam světových seancí s popisky), GEX Levels linie, Walls linie dle módu, značka aktuální ceny na pravé ose, timestamp dat.
 - Crosshair synchronizovaný se spodními panely a strike profilem; tooltip buňky (čas, strike, hodnoty metrik).
@@ -246,7 +246,7 @@ Nástroje šipka / linie / freehand, výběr barvy, mazání; persistence per in
 
 | Oblast | Požadavek |
 |---|---|
-| Latence | Změna módu/škály < 100 ms (data v paměti klienta); live tick < 250 ms end-to-end |
+| Latence | Změna módu/škály < 100 ms včetně kontur (data v paměti klienta); minutový update jako jedna úloha < 250 ms; live tick < 250 ms end-to-end; načtení dne a přepnutí symbolu podle ADR-0047 bod 7 *(Rev. 2026-10, ADR-0047)* |
 | Sweep | Kompletní řetězec ≤ 90 s; trade printy celého řetězu real-time (dxFeed) |
 | Integrita | Každá buňka heatmapy nese stáří dat; stale > 5 min vizuálně odlišeno |
 | Odolnost | Reconnect bez ztráty intraday dat; pacing chyby nikdy neshodí engine |
