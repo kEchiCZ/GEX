@@ -38,7 +38,7 @@ $pinned = @($pinVars | Where-Object { [Environment]::GetEnvironmentVariable($_) 
 $envFile = Join-Path $repo '.env'
 if (Test-Path $envFile) {
     # Jen jména proměnných — hodnoty z .env se nevypisují
-    $pinned += @(Select-String -Path $envFile -Pattern '^\s*(GEXLENS_(?:IMAGE|ENGINE|API|FRONTEND)_TAG)\s*=\s*\S' |
+    $pinned += @(Select-String -Path $envFile -Pattern '^\s*(?:export\s+)?(GEXLENS_(?:IMAGE|ENGINE|API|FRONTEND)_TAG)\s*=\s*\S' |
         ForEach-Object { $_.Matches[0].Groups[1].Value })
 }
 if ($pinned.Count -gt 0) {

@@ -91,7 +91,8 @@ který se nevejde, přesuň do nového sub-issue.
 ## Krok 5 — Kontrola před PR (nezávislý ověřovatel)
 Pořadí: implementace + testy + dokumentace (DoD 1–3 z AGENTS.md) → commit + push → **ověřovatel**
 → opravy → PR → merge-when-green → DoD 4 (po dotazu vlastníka nasazení na produkci v pauze Globexu
-a ověření naživo u engine/API/frontendu).
+a ověření naživo u engine/API/frontendu). Merge sub-issue zavře (`Closes`) — výsledek ověření naživo
+proto jde do něj komentářem a při selhání se issue znovu otevře.
 - Ověřovatel = subagent (nástroj Agent) **bez kontextu implementace**, prompt z [kontrola.md](kontrola.md)
   s čísly sub-issue a epiky. Nezná tvoje úvahy, jen zadání, diff a repo.
 - Každý nález oprav, nebo v PR věcně zdůvodni, proč ne; PR podle šablony v
