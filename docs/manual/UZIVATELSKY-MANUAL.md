@@ -793,6 +793,10 @@ Najdete ji na dvou místech:
   a na server se neptá;
 - **na stránce News** jako sekce nad tématy a feedem.
 
+![Sbalená karta: štítek ⚡ Breaking news v levém dolním rohu heatmapy (ES 1m, 12. 10. 2026)](img/graf-breaking-news-stitek.png)
+
+![Rozbalený panel: dvě zprávy z 12:26 SELČ s dopadem „běží 1 min“, štítkem „článek, zatím nepotvrzeno“, ⚠ u dopadu a zdroji se zpožděním (ES 1m, 12. 10. 2026)](img/graf-breaking-news-panel.png)
+
 Každá položka nese:
 
 - **čas zprávy** a stáří („před 3 min“), titulek;
