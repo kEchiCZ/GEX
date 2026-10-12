@@ -5,13 +5,16 @@ Zakryté okno škrtí rAF až na ~1 fps a snímky pak nejsou reprezentativní.
 
   pb.start()               // zapne měřič a LoAF a začne skládat záznamy
   await pb.gate()          // brána: viditelná záložka, klidová frekvence snímků
-  await pb.run('1m', false) // aktivní scénáře: timeframe × Čistý pohled (true/false)
+  await pb.run('1m', false) // aktivní scénáře na ES: timeframe × Čistý pohled (true/false)
   pb.report()              // souhrn po segmentech a pasivní okno (JSON)
   await pb.restore()       // vrátí původní volby (symbol, timeframe, pohled, Mode…)
   pb.stop()
 
 Po reloadu stránky (studené načtení dne) se soubor vloží znovu a zavolá
 `pb.coldLoad()`. Ta čte bufferované LoAF, resource timing `/api/replay` a navigaci.
+
+Výchozí volby si sběrač uloží do sessionStorage záložky při prvním `start()`, takže
+přežijí i opětovné vložení souboru. `restore()` je vrátí a záznam smaže.
 
 Aplikaci sběrač nemění, jen přepíná ovládací prvky jako uživatel. Měřič drží
 30 s (PERF_WINDOW_MS), proto sběrač každých 5 s vybere nové záznamy a skládá je.
@@ -30,6 +33,8 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
   const PASSIVE_FRAME_MIN_MS = 20
   const FRAME_BUCKETS = [8.4, 16.7, 25, 33.4, 50, 100, 250, Infinity]
   const HARVEST_MS = 5_000
+  // Přepnutí na ES trvalo 12. 10. před RTH 20,5 s (fetch /api/replay 18,3 s)
+  const SYMBOL_TIMEOUT_MS = 60_000
   const seen = new WeakSet()
   const log = [] // {t, kind, name, ms, view}
   const loaf = [] // long-animation-frame (≥ 50 ms)
@@ -81,12 +86,15 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     }
   }
 
+  const INITIAL_KEY = 'gexlens-perf-baseline-initial'
+
   function start() {
     if (document.visibilityState !== 'visible') throw new Error('záložka není viditelná')
     P.setPerfEnabled(true)
     P.resetPerf()
     startedAt = now()
-    initial = readControls()
+    initial = loadInitial() ?? readControls()
+    saveInitial(initial)
     harvestTimer = setInterval(harvest, HARVEST_MS)
     if (PerformanceObserver.supportedEntryTypes?.includes('long-animation-frame')) {
       loafObserver = new PerformanceObserver((list) => {
@@ -98,6 +106,24 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     }
     console.info('[pb] start', initial)
     return initial
+  }
+
+  function loadInitial() {
+    try {
+      return JSON.parse(sessionStorage.getItem(INITIAL_KEY) ?? 'null')
+    } catch (error) {
+      console.warn('[pb] výchozí volby ze sessionStorage nejdou přečíst', error)
+      return null
+    }
+  }
+
+  function saveInitial(value) {
+    try {
+      if (value === null) sessionStorage.removeItem(INITIAL_KEY)
+      else sessionStorage.setItem(INITIAL_KEY, JSON.stringify(value))
+    } catch (error) {
+      console.warn('[pb] výchozí volby do sessionStorage nejdou uložit', error)
+    }
   }
 
   function stop() {
@@ -337,7 +363,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
       const before = P.perfCounters().symbolSwitch ?? 0
       const t0 = now()
       await setSymbol(target)
-      const settled = await waitCounter('symbolSwitch', before, 20_000)
+      const settled = await waitCounter('symbolSwitch', before, SYMBOL_TIMEOUT_MS)
       s.samples.push({ target, ms: round(now() - t0), settled })
       await waitIdle()
       await sleep(1_000)
@@ -362,19 +388,48 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     return result
   }
 
-  async function run(interval, clean, { symbolOther = 'NQ', only = null } = {}) {
+  // Měřený symbol: přepnout a počkat, až jsou jeho data vykreslená
+  async function ensureSymbol(symbol) {
+    if (activeSymbol() === symbol) return
+    const before = P.perfCounters().symbolSwitch ?? 0
+    await setSymbol(symbol)
+    if (!(await waitCounter('symbolSwitch', before, SYMBOL_TIMEOUT_MS))) {
+      throw new Error(`data ${symbol} se do ${SYMBOL_TIMEOUT_MS / 1000} s nevykreslila`)
+    }
+    await waitIdle()
+    await sleep(2_000)
+  }
+
+  async function setContours(value) {
+    const el = contoursSelect()
+    if (el.value !== value) setSelect(el, value)
+    await waitIdle()
+  }
+
+  // Mode a Scale se měří s každým nastavením kontur v `contours` (cíl je „vč. kontur“)
+  async function run(interval, clean, { symbol = 'ES', contours = ['off', 'major'], only = null } = {}) {
     const g = await gate()
+    await ensureSymbol(symbol)
     await selectInterval(interval)
     await setClean(clean)
-    const meta = { tf: interval, clean, gateHz: g.hz, controls: readControls() }
+    const meta = { tf: interval, clean, symbol, gateHz: g.hz, controls: readControls() }
     const want = (name) => only === null || only.includes(name)
     const done = []
     if (want('pan')) done.push(await segment('pan', meta, (s) => pan(s)))
     if (want('wheel')) done.push(await segment('wheel', meta, (s) => wheel(s)))
-    if (want('mode')) done.push(await segment('mode', meta, (s) => cycleSelect(s, modeSelect(), 'modeScale', 1)))
-    if (want('scale')) done.push(await segment('scale', meta, (s) => cycleSelect(s, scaleSelect(), 'modeScale', 2)))
+    for (const value of contours) {
+      if (!want('mode') && !want('scale')) break
+      await setContours(value)
+      const withContours = { ...meta, contours: value }
+      if (want('mode')) done.push(await segment('mode', withContours, (s) => cycleSelect(s, modeSelect(), 'modeScale', 1)))
+      if (want('scale')) done.push(await segment('scale', withContours, (s) => cycleSelect(s, scaleSelect(), 'modeScale', 2)))
+    }
+    if (initial?.contours) await setContours(initial.contours)
     if (want('style')) done.push(await segment('style', meta, (s) => cycleSelect(s, styleSelect(), null, 3)))
-    if (want('symbol')) done.push(await segment('symbol', meta, (s) => symbolSwitch(s, symbolOther)))
+    if (want('symbol')) {
+      const other = symbol === 'ES' ? 'NQ' : 'ES'
+      done.push(await segment('symbol', meta, (s) => symbolSwitch(s, other)))
+    }
     harvest()
     return done.map((s) => summarizeSegment(s))
   }
@@ -390,11 +445,13 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     if (initial.mode && modeSelect().value !== initial.mode) setSelect(modeSelect(), initial.mode)
     if (initial.scale && scaleSelect().value !== initial.scale) setSelect(scaleSelect(), initial.scale)
     if (initial.style && styleSelect().value !== initial.style) setSelect(styleSelect(), initial.style)
+    if (initial.contours) await setContours(initial.contours)
     await waitIdle()
     await resetView()
     const after = readControls()
     const same = JSON.stringify(after) === JSON.stringify(initial)
-    if (!same) console.warn('[pb] volby se neshodují s výchozími', { initial, after })
+    if (same) saveInitial(null)
+    else console.warn('[pb] volby se neshodují s výchozími', { initial, after })
     return { same, initial, after }
   }
 
@@ -454,8 +511,10 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     const samples = s.samples.filter((x) => typeof x === 'object')
     return {
       name: s.name,
+      symbol: s.symbol,
       tf: s.tf,
       clean: s.clean,
+      contours: s.contours ?? null,
       at: new Date(performance.timeOrigin + s.t0).toISOString(),
       seconds: round((s.t1 - s.t0) / 1000),
       gateHz: s.gateHz,

@@ -25,7 +25,7 @@ dolní mez.
 | data | — (symbol, expirace, obchodní den) |
 | prohlížeč | — |
 | okno | — (viewport, DPR, velikost canvasu) |
-| obnovovací frekvence (brána) | — |
+| obnovovací frekvence (brána) | ~240 Hz (klidový snímek 4,2 ms při zkoušce 12. 10.) |
 | CPU | i5-10300H, 16 GB; takty jader fixně 2 396 MHz (turbo vypnuté v plánu napájení) |
 | teplota a příkon CPU | — (před a po, LibreHardwareMonitor) |
 | kontejnery (`docker stats`) | — |
@@ -63,7 +63,8 @@ Buffer drží 30 s.
 | Mode | všechny módy a zpět na výchozí | span `modeScale` (do vykreslení kontur) |
 | Scale | 2× všechny škály a zpět | span `modeScale` |
 | Gradient / Blobs | 3× tam a zpět | změna → po vykreslení (rAF + úloha) |
-| přepnutí symbolu | ES → NQ → ES → NQ → ES (první NQ studené) | span `symbolSwitch`, fáze `dayFetch`/`dayDecode`/`dayBuild` |
+| přepnutí symbolu, studené | po reloadu na NQ první přepnutí na ES (`pb.run` začíná přepnutím na ES) | span `symbolSwitch`, fáze `dayFetch`/`dayDecode`/`dayBuild` (v pasivním okně) |
+| přepnutí symbolu, teplé | ES → NQ → ES → NQ → ES, balíky dne už v paměti | span `symbolSwitch` |
 | načtení dne, studené | reload stránky | navigace, resource timing `/api/replay`, bufferované LoAF |
 | minutový update | pasivně, ≥ 60 min | span `minuteUpdate`, dlouhé úlohy za minutu |
 | živý tick | pasivně | LoAF s invokerem WebSocket, `drawStatic` a `drawDynamic` za minutu |
@@ -89,6 +90,9 @@ hodnoty je n. Malé n se neextrapoluje.
 - React Profiler v produkčním buildu nefunguje. Rozpad nepřiřazeného času je z LoAF, viz
   oddíl Rozpad.
 - Jeden notebook a jeden den. Exporty jsou ze dne měření.
+- Při 240 Hz posílá skriptovaný pan 240 `pointermove` za sekundu. Myš dává totéž, protože
+  Chrome zarovnává události na snímek. Na 60Hz displeji by gesto stejné délky mělo 4× méně
+  kroků.
 
 **Postup:**
 ```text
@@ -147,6 +151,25 @@ bash scripts/perf_baseline_load.sh "před 1m výchozí"   # docker stats + LHM, 
 —
 
 ## Pozorování
+
+**Zkouška sběrače nanečisto** (12. 10., 11:39–11:41 UTC, před RTH, ES 1m, výchozí pohled,
+kontury Off). Ověřila jen sběrač, čísla nejsou baseline:
+- přepnutí NQ → ES studené: 20,5 s;
+  - `dayFetch` 18,3 s: `/api/replay/ES`, TTFB 17,6 s, 4,5 MB, rozbaleně 23 MB;
+  - `dayDecode` 2,0 s jako jedna dlouhá úloha;
+- přepnutí ES ↔ NQ teplé: 268–315 ms (n = 4);
+- pan: snímek p50 29 ms, p95 42 ms (n = 381), 1 `drawStatic` na krok;
+- zoom: snímek p95 83 ms. LoAF ukazuje 1,2 s skriptu ve zprávách Scheduleru Reactu
+  (`MessagePort.onmessage`) za 4,5 s;
+- Mode: `modeScale` p50 53 ms, p95 80 ms (n = 9).
+
+Souběžně běžely dva cargo buildy jiného projektu v Dockeru (207–213 % CPU). Během RTH měření
+nesmí běžet.
+
+**Nález #1536:** hlavní pohled stahuje každou minutu celé `/news/stats` (3,8 MB, 10 623 řádků,
+TTFB 1,6–2,2 s), ale potřebuje z něj 138 řádků. Ostatní minutové polly čekají v prohlížeči
+ve frontě HTTP/1.1. Například `/paper/account` má TTFB 1,9–3,0 s v prohlížeči a 0,31 s
+z hostitele.
 
 - Při nasazení #1409 (12. 10. 09:52 UTC) měl `dayDecode` jeden vzorek 1 132 ms jako jednu
   dlouhou úlohu. Je to n = 1, proto se z něj nevyvozuje nic.
