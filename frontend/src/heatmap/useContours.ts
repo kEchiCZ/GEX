@@ -139,3 +139,15 @@ export function useContours(
   // Výpočet běží — držet předchozí doručené segmenty
   return cached ?? delivered
 }
+
+/** Jsou kontury módu pro aktuální pole spočtené? Měřič výkonu (#1409) podle
+toho ukončí span Mode/Scale až vykreslením kontur nové mřížky; do té doby
+`useContours` drží předchozí segmenty. */
+export function contoursSettled(
+  grid: HeatmapGrid,
+  underGrid: HeatmapGrid | null | undefined,
+  mode: ContoursMode,
+): boolean {
+  const { field } = sourceField(grid, underGrid)
+  return mode === 'off' || field === null || (cache.get(field)?.has(mode) ?? false)
+}

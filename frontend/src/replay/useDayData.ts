@@ -22,6 +22,7 @@ import {
 } from './loader'
 import { bundleCacheKey, getCachedBundle, storeCachedBundle } from './bundleCache'
 import { sessionDateIso } from '../instrument/tz'
+import { perfBegin, perfEnd, perfStart } from '../perf/meter'
 import type { GexFieldRow, GexProfileRow, LadderMinuteRow, LiveMinute, LiveMinuteRow, ProfileSource, ReplayDay, ReplayInputs } from './loader' // prettier-ignore
 
 /** Daily pohled: strop stažených dnů (retence snapshotů je 14 dní, R4). */
@@ -393,11 +394,13 @@ export function useDayData(
     if (immutable && getCachedBundle(bundleCacheKey(symbol, expiry, date))) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
+    const loadStart = perfStart() // měřič výkonu (#1409): načtení dne → vykreslení
     fetchReplayInputs(symbol, expiry, date)
       .then((loaded) => {
         if (cancelled) return
         // Prázdný den (0 minut) nesmí přepsat poslední živý stav při přechodném výpadku
         if (loaded.minutes.length > 0) {
+          perfBegin('dayLoad', loadStart)
           setInputs(loaded)
           setRefreshFailures({ count: 0, atMs: 0 })
         } else {
@@ -438,6 +441,7 @@ export function useDayData(
         if (pending.size === 0) return
         const current = inputsRef.current
         if (!current) return // balík ještě nedorazil — minuty počkají na další flush
+        const flushStart = perfStart() // měřič výkonu (#1409)
         // Výběr minut i úklid `pending` MUSÍ být mimo setState updater: ten React
         // ve StrictMode volá dvakrát a druhý průběh by už minutu v `pending` nenašel,
         // takže by ji zahodil (chybějící svíčka i sloupec gridu, #143).
@@ -459,12 +463,15 @@ export function useDayData(
           }
         }
         if (applied.length === 0) return
+        // Minutový update končí vykreslením mřížky s novou minutou (Heatmap)
+        perfBegin('minuteUpdate', flushStart)
         setInputs((prev) => {
           if (!prev) return prev
           let next = prev
           for (const minute of applied) next = appendMinute(next, minute)
           return next
         })
+        perfEnd('minuteFlush', flushStart)
       }, APPEND_DEBOUNCE_MS)
     }
     const part = (ts: string): Partial<LiveMinute> => {

@@ -155,10 +155,13 @@ export function perfEnd(op: PerfOp, t0: number): void {
   push('op', op, now - t0, now)
 }
 
-/** Začátek spanu „do vykreslení“; opakovaný začátek přepíše dřívější. */
-export function perfBegin(span: PerfSpan): void {
-  if (!enabled) return
-  pendingSpans.set(span, clock())
+/** Začátek spanu „do vykreslení“; opakovaný začátek přepíše dřívější.
+
+`startedAt` = dřívější `perfStart()` (span začal před tím, než bylo jasné, že
+skončí vykreslením — např. fetch dne, který může selhat). */
+export function perfBegin(span: PerfSpan, startedAt?: number): void {
+  if (!enabled || startedAt === DISABLED) return
+  pendingSpans.set(span, startedAt ?? clock())
 }
 
 /** Konec spanu; bez rozpracovaného začátku nic. */
