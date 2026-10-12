@@ -2,7 +2,13 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { expect, test } from 'vitest'
-import { GEX_UNIT_LABELS, priceWeight, weightProfileRow } from './units'
+import {
+  GEX_UNIT_LABELS,
+  GREEK_DOLLAR_DELTA_LABELS,
+  planeUnits,
+  priceWeight,
+  weightProfileRow,
+} from './units'
 
 // Fixture sdílená s enginem (tests/golden/, čte ho test_p2_weight_569.py) —
 // obě implementace váhy musí dát tatáž čísla. Cwd je frontend/ (vitest)
@@ -59,4 +65,39 @@ test('weightProfileRow: znaménkový vzor je invariantní — nuly se nehýbou (
 test('popisky jednotek', () => {
   expect(GEX_UNIT_LABELS.per_point).toBe('$/bod')
   expect(GEX_UNIT_LABELS.per_percent).toBe('$/1 %')
+})
+
+// Golden #1401 sdílený s enginem (test_greek_dollar_delta_1401.py): Charm a Vanna
+// v dolarové deltě = hodnota enginu × cena hladiny, ne váha P²/100
+const greekFixturePath =
+  ['../engine/tests/golden/greek_dollar_delta_1401.json', 'engine/tests/golden/greek_dollar_delta_1401.json'] // prettier-ignore
+    .map((candidate) => resolve(process.cwd(), candidate))
+    .find((candidate) => existsSync(candidate))!
+const greekFixture = JSON.parse(readFileSync(greekFixturePath, 'utf-8')) as {
+  levels: {
+    price: number
+    charm_per_point: number
+    vanna_per_point: number
+    charm_dollar_delta: number
+    vanna_dollar_delta: number
+  }[]
+}
+
+test('dolarová delta Charm a Vanna: golden #1401 — hodnota × cena hladiny', () => {
+  for (const level of greekFixture.levels) {
+    const weight = priceWeight(level.price, 'dollar_delta')
+    expect(level.charm_per_point * weight).toBe(level.charm_dollar_delta)
+    expect(level.vanna_per_point * weight).toBe(level.vanna_dollar_delta)
+    // $/1 % (P²/100) by dalo P/100× víc — na ES ~79×
+    expect(priceWeight(level.price, 'per_percent') / weight).toBeCloseTo(level.price / 100, 9)
+  }
+})
+
+test('planeUnits: přepínač jen pro Dyn GEX, Charm a Vanna vždy dolarová delta (#1401)', () => {
+  expect(planeUnits('gex', 'per_percent')).toBe('per_percent')
+  expect(planeUnits('gex', 'per_point')).toBe('per_point')
+  expect(planeUnits('charm', 'per_percent')).toBe('dollar_delta')
+  expect(planeUnits('vanna', 'per_point')).toBe('dollar_delta')
+  expect(GREEK_DOLLAR_DELTA_LABELS.charm).toBe('$ delty / den')
+  expect(GREEK_DOLLAR_DELTA_LABELS.vanna).toBe('$ delty / 1 bod IV')
 })

@@ -62,6 +62,7 @@ import { StatsView } from './components/StatsView'
 import { StrikeProfile } from './components/StrikeProfile'
 import { useSetups } from './hooks/useSetups'
 import { buildGexGrid, projectGexField } from './heatmap/gexmode'
+import { planeUnits } from './heatmap/units'
 import { extendDailyGrid, forwardBoundaries, forwardLabels, futureBlocks, projectDailyForward } from './heatmap/dailyforward' // prettier-ignore
 import { useGexForward } from './hooks/useGexForward'
 import { HEATMAP_MODES, HEATMAP_SCALES, buildModeGrid, scaleHintFor } from './heatmap/modes'
@@ -422,14 +423,16 @@ function MainContent() {
   // Modelované pole POD měřeným módem — průhledné buňky měřené vrstvy ukážou
   // pole, koncentrace ho překryjí. Stejná pipeline jako hlavní grid (agregace
   // košů, slice, projekce), aby rozměry seděly 1:1.
+  // Jednotka plochy (#1401): GEX podle přepínače, Charm a Vanna v dolarové deltě
+  const underlayUnits = underlayPlane === 'off' ? gexUnits : planeUnits(underlayPlane, gexUnits)
   const gexUnderDay = useMemo(() => {
     if (underlayPlane === 'off') return null
     // Daily umí zatím jen Dyn GEX (#572) — charm/vanna forward až po ověření čtení
     if (timeframe !== 'intraday' && underlayPlane !== 'gex') return null
     if (!planeProfiles || planeProfiles.every((row) => row === null)) return null
-    const built = buildGexGrid(planeProfiles, rawDay.grid.strikes, rawDay.grid.minutes, heatScale, gexUnits) // prettier-ignore
+    const built = buildGexGrid(planeProfiles, rawDay.grid.strikes, rawDay.grid.minutes, heatScale, underlayUnits) // prettier-ignore
     return aggregateDay({ ...rawDay, grid: built }, bucketMinutes)
-  }, [underlayPlane, timeframe, planeProfiles, rawDay, heatScale, gexUnits, bucketMinutes])
+  }, [underlayPlane, timeframe, planeProfiles, rawDay, heatScale, underlayUnits, bucketMinutes])
 
   const playback = usePlayback(day.grid.minutes)
   // Pozice playbacku je v KOŠÍCH aktuálního TF — na index 1m osy se mapuje
@@ -822,9 +825,9 @@ function MainContent() {
       lastMinuteIso: day.lastMinuteIso,
       bucketMinutes,
       scale: heatScale,
-      units: gexUnits,
+      units: underlayUnits,
     })
-  }, [gexUnderDay, planeProfiles, planeField, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, symbol, day.lastMinuteIso, bucketMinutes, heatScale, gexUnits, dailyForward]) // prettier-ignore
+  }, [gexUnderDay, planeProfiles, planeField, playback.isLive, playback.position, toggles.projection, timeframe, selectedExpiry, symbol, day.lastMinuteIso, bucketMinutes, heatScale, gexUnits, underlayUnits, dailyForward]) // prettier-ignore
   const projectionExtra = projectedGrid.minutes - (projectedGrid.dataMinutes ?? projectedGrid.minutes) // prettier-ignore
   const chartLabels = useMemo(() => {
     if (projectionExtra <= 0) return day.minuteLabels

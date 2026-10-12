@@ -21,9 +21,34 @@ export const GEX_UNIT_LABELS: Record<GexUnits, string> = {
   per_percent: '$/1 %',
 }
 
-/** Váha hodnoty na cenové hladině `price`; pro $/bod identita (1). */
-export function priceWeight(price: number, units: GexUnits): number {
-  return units === 'per_percent' ? (price * price) / 100 : 1
+/** Jednotka Dyn plochy (#1401): GEX podle přepínače, Charm a Vanna v dolarové deltě.
+
+Engine ukládá charm jako Δ·OI·M za den a vannu jako Δ·OI·M na 1 bod IV — nejde
+o pohyb ceny, takže váha P²/100 ($/1 %) by dala jednotku bez smyslu (na ES
+~79× víc). Dolarová delta = hodnota × P hladiny; přepínač $/bod × $/1 % platí
+jen pro Dyn GEX. Golden `engine/tests/golden/greek_dollar_delta_1401.json`. */
+export type PlaneUnits = GexUnits | 'dollar_delta'
+
+/** Dyn plocha pod heatmapou (shodné s `UnderlayPlane` bez `off`). */
+export type GreekPlane = 'gex' | 'charm' | 'vanna'
+
+/** Jednotka plochy: gex bere přepínač, charm a vanna vždy dolarovou deltu. */
+export function planeUnits(plane: GreekPlane, gexUnits: GexUnits): PlaneUnits {
+  return plane === 'gex' ? gexUnits : 'dollar_delta'
+}
+
+/** Popisek jednotky Charm a Vanna (#1401) — přepínač u nich není. */
+export const GREEK_DOLLAR_DELTA_LABELS: Record<'charm' | 'vanna', string> = {
+  charm: '$ delty / den',
+  vanna: '$ delty / 1 bod IV',
+}
+
+/** Váha hodnoty na cenové hladině `price`: $/bod identita (1), $/1 % P²/100,
+dolarová delta P (#1401). */
+export function priceWeight(price: number, units: PlaneUnits): number {
+  if (units === 'per_percent') return (price * price) / 100
+  if (units === 'dollar_delta') return price
+  return 1
 }
 
 /** Zváží profilový řádek per hladina mřížky.

@@ -1901,7 +1901,12 @@ kalendářem; přesná síla pásma je odhad.
 
 **Jednotka ($/bod vs. $/1 %).** Engine počítá a ukládá vždycky jen surové
 **$/bod**; přepínač **Jednotka** v řádku přepínačů je čistě zobrazovací a
-objeví se jen se zapnutou Dyn plochou.
+objeví se jen s plochou **Dyn GEX**. **Dyn Charm** a **Dyn Vanna** mají pevnou
+jednotku **dolarové delty** (#1401): charm = kolik $ delty dealerům přibude
+nebo ubude **za den** jen plynutím času, vanna = kolik $ delty přibude nebo ubude
+při změně IV o **1 bod**. Obojí je hodnota enginu × cena hladiny P. Váha P²/100
+z $/1 % by u nich nedávala smysl, protože nejde o pohyb ceny (dřív ukazovala
+na ES ~79× víc).
 
 | Jednotka | Jak ji číst |
 |---|---|
@@ -2434,7 +2439,7 @@ podkladu**, ne absolutní čísla.
 | **ΔOI vs. včera** | Změna OI proti předchozímu **obchodnímu** dni (v pondělí proti pátku) — kde přes noc vznikly/zanikly pozice. |
 | **Evo OI** | *Evolution* = vývoj. Spodní panel s celkovým OI (call/put) minutu po minutě. Spolu s objemem rozliší, jestli se pozice **budují** (objem ↑, OI ↑), nebo **zavírají** (objem ↑, OI ↓). Tlačítko Δ přepíná změnu od začátku osy vs. absolutní úroveň. |
 | **Contours (kontury)** | Bílé izolinie nad zobrazeným polem na prazích % síly z p99 (Major 65/95, All 40/70, vždy dvě na stranu). Říkají, **jak ostrá** je hranice tlumící zóny — zdi říkají *kde*, kontury *jak ostře*. |
-| **$/bod vs. $/1 %** | Jednotka Dyn ploch a GEX křivky. $/bod = surové pole (gamma expozice na 1 bod pohybu). $/1 % = totéž vážené P²/100 — kolik dolarů dealeři přeobchodují při 1% pohybu; srovnatelné napříč cenovými hladinami, proto výchozí. Zdi, levels ani flip přepínač nemění. |
+| **$/bod vs. $/1 %** | Jednotka Dyn GEX a GEX křivky (Charm a Vanna mají dolarovou deltu, #1401). $/bod = surové pole (gamma expozice na 1 bod pohybu). $/1 % = totéž vážené P²/100 — kolik dolarů dealeři přeobchodují při 1% pohybu; srovnatelné napříč cenovými hladinami, proto výchozí. Zdi, levels ani flip přepínač nemění. |
 | **Δ Flow C/P** | Delta-vážený opční tok zvlášť za call/put stranu — na které straně se právě obchoduje. |
 | **Cum Δ** | Kumulativní delta flow — součet (směr obchodu × velikost × delta × multiplikátor) přes den. |
 | **Hot zóna** | Historický termín z původního návrhu (IBKR tick-by-tick pásmo ATM ±15) — nikdy nebyl v provozu a od v1.14 je nahrazen: stranu agresora pro celý sbíraný řetěz dodá dxFeed `TimeAndSale` (#615, ADR-0032). V textech o řetězu snapshotů znamená „hot zóna“ jen pásmo ATM ±15 strikes, které se sbírá každý cyklus. |

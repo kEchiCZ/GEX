@@ -14,7 +14,7 @@ import { copysignTransform, p99Denominator } from './modes'
 import type { HeatmapScale } from './modes'
 import { projectGrid } from './projection'
 import { priceWeight } from './units'
-import type { GexUnits } from './units'
+import type { PlaneUnits } from './units'
 
 /** Lineární interpolace hodnoty na ceně `price`; mimo mřížku hodnota kraje.
 
@@ -44,7 +44,7 @@ function measuredLayer(
   profiles: (GexProfileRow | null)[],
   strikes: number[],
   minutes: number,
-  units: GexUnits,
+  units: PlaneUnits,
 ): Float32Array {
   const layer = new Float32Array(minutes * strikes.length)
   let last: GexProfileRow | null = null
@@ -82,7 +82,7 @@ export function gexDenominator(
   profiles: (GexProfileRow | null)[],
   strikes: number[],
   scale: HeatmapScale,
-  units: GexUnits = 'per_point',
+  units: PlaneUnits = 'per_point',
 ): number {
   const layer = transformInPlace(measuredLayer(profiles, strikes, profiles.length, units), scale)
   return Math.max(p99Denominator(layer), 1e-9)
@@ -98,7 +98,7 @@ export function buildGexGrid(
   strikes: number[],
   minutes: number,
   scale: HeatmapScale,
-  units: GexUnits = 'per_point',
+  units: PlaneUnits = 'per_point',
 ): HeatmapGrid {
   const layer = transformInPlace(measuredLayer(profiles, strikes, minutes, units), scale)
   const denominator = Math.max(p99Denominator(layer), 1e-9)
@@ -124,7 +124,7 @@ export function projectGexField(
     bucketMinutes: number
     scale: HeatmapScale
     /** Jednotka zobrazení (#569); default per_point = uložená jednotka enginu. */
-    units?: GexUnits
+    units?: PlaneUnits
   },
 ): HeatmapGrid {
   const dataMinutes = dataMinutesOf(grid)

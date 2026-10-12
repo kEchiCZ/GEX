@@ -1,6 +1,6 @@
 /** Řádky timeframe a přepínačů vizualizace (SPEC 7.1). */
 import { useEffect, useRef, useState } from 'react'
-import { GEX_UNITS, GEX_UNIT_LABELS } from '../heatmap/units'
+import { GEX_UNITS, GEX_UNIT_LABELS, GREEK_DOLLAR_DELTA_LABELS } from '../heatmap/units'
 import type { GexUnits } from '../heatmap/units'
 import { FORWARD_RANGES, FORWARD_RANGE_LABELS } from '../heatmap/dailyforward'
 import type { ForwardRange } from '../heatmap/dailyforward'
@@ -233,8 +233,22 @@ export function TogglesRow({ signalGate }: { signalGate?: SignalGateInfo | null 
           </select>
         </label>
       )}
-      {/* Jednotka Dyn ploch (#569) — jen zobrazovací přepočet, engine posílá $/bod */}
-      {underlayPlane !== 'off' && (
+      {/* Jednotka Dyn GEX (#569) — jen zobrazovací přepočet, engine posílá $/bod.
+          Charm a Vanna mají pevnou dolarovou deltu (#1401), přepínač u nich není. */}
+      {(underlayPlane === 'charm' || underlayPlane === 'vanna') && (
+        <span
+          className="toggle muted"
+          data-testid="greek-plane-unit"
+          title={
+            underlayPlane === 'charm'
+              ? 'Dyn Charm v dolarové deltě:\n• kolik $ delty dealerům přibude nebo ubude za den jen plynutím času\n• hodnota enginu (Δ·OI·M za den) × cena hladiny\n• přepínač $/bod a $/1 % platí jen pro Dyn GEX'
+              : 'Dyn Vanna v dolarové deltě:\n• kolik $ delty dealerům přibude nebo ubude při změně IV o 1 bod\n• hodnota enginu (Δ·OI·M na 1 bod IV) × cena hladiny\n• přepínač $/bod a $/1 % platí jen pro Dyn GEX'
+          }
+        >
+          Jednotka {GREEK_DOLLAR_DELTA_LABELS[underlayPlane]}
+        </span>
+      )}
+      {underlayPlane === 'gex' && (
         <label className="toggle">
           Jednotka
           <select
