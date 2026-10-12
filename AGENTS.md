@@ -45,8 +45,14 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
 | PostgreSQL | :55432 | :55433 |
 | Data | `data/` | `data-dev/` |
 
-- **Výchozí práce je na devu.** Na produkci se sahá jen na výslovnou výzvu; změna enginu na produkci
-  = upozornit předem (engine drží živá IBKR data a stav dne).
+- **Ověřuje se na produkci** (rozhodnutí 3b v #1385, ADR-0047): po merge se nasazuje v pauze Globexu
+  (16:00–17:00 CT = 23:00–24:00 SELČ i SEČ; když mají USA letní čas a Evropa ne — od 2. neděle
+  v březnu do poslední neděle v březnu a od poslední neděle v říjnu do 1. neděle v listopadu —
+  22:00–23:00 SEČ; deploy skript hlídá `Get-GlobexClock`), mimo ni jen s výslovným svolením.
+  **Před každým nasazením se zeptej vlastníka** (engine drží živá IBKR data a stav dne). Návrat
+  přes pin tagu image (`GEXLENS_IMAGE_TAG`, ADMIN-MANUAL kap. 3). Dev stack je volitelný — pro testy,
+  které by na produkci zapisovaly. Mimo nasazení (zápisy do PG, restarty, skripty nad daty) se na
+  produkci sahá jen na výslovnou výzvu.
 - Dev stack po testu **vždy** `docker compose -f compose.dev.yml down` (paměťový strop Dockeru).
 - Před změnou schématu / migrací PG: `pwsh scripts/backup-postgres.ps1` — data v PG nejdou znovu pořídit.
 - Konfigurace přes `.env` (viz `.env.example`, dev odchylky `.env.dev`). **Obsah `.env` se nikdy
@@ -80,7 +86,7 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
 - Skripty: před založením nového fix/probe/measure skriptu prohledej `scripts/`; nový ulož tam.
 - **`docs/lessons-learned.md`**: před laděním problému ho projít (vzorce chyb se opakují); po opravě
   s netriviální příčinou přidat záznam; opakující se poučení povýšit na pravidlo sem nebo na kontrolu.
-- Na produkčním Docker daemonu se **nebuildí mimo pauzu Globexu** (23:00–24:00 CEST) — build shazuje
+- Na produkčním Docker daemonu se **nebuildí mimo pauzu Globexu** (viz Prostředí a porty) — build shazuje
   daemon; přes den jen mergovat. Po každém deployi ověřit čerstvost image/kontejneru, ne HTTP 200.
 
 ## Principy návrhu a vývoje
@@ -164,6 +170,7 @@ frontend (nginx :8080, React SPA) — heatmapa, profil, panely, playback, briefi
   2. dokumentace ve stejném PR: ADR při rozhodnutí; manuál (#628) při změně chování UI/konfigurace;
      SPEC kap. 11 (index rozšíření) při novém modulu;
   3. roadmapa #629 odškrtnuta / doplněna;
-  4. nasazení na dev a ověření na živých datech, pokud se mění engine nebo API.
+  4. u změny enginu, API nebo frontendu po dotazu vlastníka nasazení na produkci v pauze Globexu
+     a ověření naživo (čerstvost image a kontejneru, ne HTTP 200).
 - Repo je **veřejné**: žádná tajemství, osobní údaje ani interní zdroje inspirace v kódu, docs, issues
   a commitech.

@@ -19,7 +19,7 @@ Postup: skill epika (`.claude/skills/epika/SKILL.md`, kroky 4–5). Blokováno: 
 - [ ] <ověřitelné testem nebo na živých datech: identifikátory, čísla, meze>
 - [ ] <u hlídačů a dnů: test na víkend, denní pauzu, svátek, nedělní otevření; obchodní, ne kalendářní den>
 - [ ] Testy (unit / golden s odůvodněním / vitest / Playwright), ruff, mypy, pytest, `npm run build`
-- [ ] Dokumentace (ADR / manuál #628 / SPEC kap. 11 / roadmapa #629) + u engine/API nasazení na dev a ověření naživo
+- [ ] Dokumentace (ADR / manuál #628 / SPEC kap. 11 / roadmapa #629) + u engine/API/frontendu nasazení na produkci v pauze Globexu **po dotazu vlastníka** a ověření naživo
 
 ## Velikost a navázání
 - Odhad: vrstva <engine | API | frontend> · soubory ke čtení <…> · živé ověření <ano/ne> → 1 session.
