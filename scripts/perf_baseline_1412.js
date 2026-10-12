@@ -1,7 +1,8 @@
 /* Baseline výkonu grafu (#1412, E-2a.2): konzolový sběrač nad měřičem #1409.
 
-Celý soubor se vloží do konzole produkce (:8080) ve VIDITELNÉM okně Chrome.
-Zakryté okno škrtí rAF až na ~1 fps a snímky pak nejsou reprezentativní.
+Celý soubor se vloží do konzole produkce (:8080) v maximalizovaném okně Chrome.
+Celé zakryté okno Chrome na Windows hlásí jako `hidden` a rAF zastaví, takže okno
+musí být aspoň zčásti vidět.
 
   pb.start()               // zapne měřič a LoAF a začne skládat záznamy
   await pb.gate()          // brána: viditelná záložka, klidová frekvence snímků
@@ -14,7 +15,10 @@ Po reloadu stránky (studené načtení dne) se soubor vloží znovu a zavolá
 `pb.coldLoad()`. Ta čte bufferované LoAF, resource timing `/api/replay` a navigaci.
 
 Výchozí volby si sběrač uloží do sessionStorage záložky při prvním `start()`, takže
-přežijí i opětovné vložení souboru. `restore()` je vrátí a záznam smaže.
+přežijí i opětovné vložení souboru. Uloží i zoom X a pásmo Y z localStorage
+(`gexlens.chartZoomX`, `gexlens.chartYRange`): reset pohledu dvojklikem je aplikace
+maže (`clearSavedView`). `restore()` vrátí volby, zapíše oba klíče zpět a stránku
+znovu načte, protože aplikace čte localStorage jen při startu.
 
 Aplikaci sběrač nemění, jen přepíná ovládací prvky jako uživatel. Měřič drží
 30 s (PERF_WINDOW_MS), proto sběrač každých 5 s vybere nové záznamy a skládá je.
@@ -98,7 +102,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     P.setPerfEnabled(true)
     P.resetPerf()
     startedAt = now()
-    initial = loadInitial() ?? readControls()
+    initial = loadInitial() ?? { controls: readControls(), storage: readSavedView() }
     saveInitial(initial)
     harvestTimer = setInterval(harvest, HARVEST_MS)
     document.addEventListener('visibilitychange', onVisibility)
@@ -120,6 +124,20 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
 
   function onVisibility() {
     visibility.push({ t: now(), state: document.visibilityState })
+  }
+
+  // Uložený pohled vlastníka; reset dvojklikem ho maže (App.tsx clearSavedView)
+  const SAVED_VIEW_KEYS = ['gexlens.chartZoomX', 'gexlens.chartYRange']
+
+  function readSavedView() {
+    return Object.fromEntries(SAVED_VIEW_KEYS.map((key) => [key, localStorage.getItem(key)]))
+  }
+
+  function writeSavedView(saved) {
+    for (const key of SAVED_VIEW_KEYS) {
+      if (saved[key] === null) localStorage.removeItem(key)
+      else localStorage.setItem(key, saved[key])
+    }
   }
 
   function loadInitial() {
@@ -275,10 +293,15 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
   }
 
   async function segment(name, meta, body) {
-    await waitVisible()
-    await quietWindow()
+    let g = null
+    for (;;) {
+      await quietWindow()
+      g = await waitVisible()
+      const second = new Date().getSeconds()
+      if (second >= pb.quiet[0] && second <= pb.quiet[1]) break
+    }
     await waitIdle()
-    const s = { name, ...meta, t0: now(), t1: null, samples: [], counters0: P.perfCounters() }
+    const s = { name, ...meta, gateMs: g.medianFrameMs, t0: now(), t1: null, samples: [], gestureFrames: [], counters0: P.perfCounters() }
     segments.push(s)
     try {
       await body(s)
@@ -344,9 +367,12 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     for (let rep = 0; rep < reps; rep += 1) {
       const p = await freePoint()
       pointer('pointerdown', p.x, p.y, 1)
+      let last = await frame()
       for (const dir of [-1, 1]) {
         for (let i = 1; i <= steps; i += 1) {
-          await frame()
+          const t = await frame()
+          s.gestureFrames.push(t - last)
+          last = t
           const offset = dir < 0 ? (dx * i) / steps : dx - (dx * i) / steps
           pointer('pointermove', p.x - offset, p.y, 1)
           s.samples.push(now())
@@ -361,9 +387,12 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
   async function wheel(s, { reps = 3, steps = 12 } = {}) {
     for (let rep = 0; rep < reps; rep += 1) {
       const p = await freePoint()
+      let last = await frame()
       for (const deltaY of [-100, 100]) {
         for (let i = 0; i < steps; i += 1) {
-          await frame()
+          const t = await frame()
+          s.gestureFrames.push(t - last)
+          last = t
           overlay().dispatchEvent(
             new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y, deltaY, deltaMode: 0 }),
           )
@@ -402,14 +431,27 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     }
   }
 
+  // Živý den se z cache vykreslí hned, ale useDayData ho po každém přepnutí dorovná
+  // plným /api/replay a dekódováním na hlavním vlákně: čeká se i na ně
   async function symbolSwitch(s, other) {
     const home = activeSymbol()
-    for (const target of [other, home, other, home]) {
-      const before = P.perfCounters().symbolSwitch ?? 0
+    for (const target of [other, home]) {
+      const before = P.perfCounters()
       const t0 = now()
       await setSymbol(target)
-      const settled = await waitCounter('symbolSwitch', before, SYMBOL_TIMEOUT_MS)
-      s.samples.push({ target, ms: round(now() - t0), settled })
+      const settled = await waitCounter('symbolSwitch', before.symbolSwitch ?? 0, SYMBOL_TIMEOUT_MS)
+      const paint = now() - t0
+      const decoded = await waitCounter('dayDecode', before.dayDecode ?? 0, SYMBOL_TIMEOUT_MS)
+      harvest()
+      const op = (name) => log.findLast((r) => r.kind === 'op' && r.name === name && r.t >= t0)?.ms ?? null
+      s.samples.push({
+        target,
+        ms: round(paint),
+        settled,
+        trailingMs: decoded ? round(now() - t0) : null,
+        fetchMs: round(op('dayFetch')),
+        decodeMs: round(op('dayDecode')),
+      })
       await waitIdle()
       await sleep(1_000)
     }
@@ -469,7 +511,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
       if (want('mode')) done.push(await segment('mode', withContours, (s) => cycleSelect(s, modeSelect(), 'modeScale', 1)))
       if (want('scale')) done.push(await segment('scale', withContours, (s) => cycleSelect(s, scaleSelect(), 'modeScale', 2)))
     }
-    if (initial?.contours) await setContours(initial.contours)
+    if (initial?.controls?.contours) await setContours(initial.controls.contours)
     if (want('style')) done.push(await segment('style', meta, (s) => cycleSelect(s, styleSelect(), null, 3)))
     if (want('symbol')) {
       const other = symbol === 'ES' ? 'NQ' : 'ES'
@@ -481,23 +523,30 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
 
   async function restore() {
     if (!initial) return null
-    if (initial.symbol && activeSymbol() !== initial.symbol) {
-      await setSymbol(initial.symbol)
+    const want = initial.controls
+    if (want.symbol && activeSymbol() !== want.symbol) {
+      await setSymbol(want.symbol)
       await sleep(3_000)
     }
-    if (initial.interval) await selectInterval(initial.interval)
-    await setClean(initial.clean)
-    if (initial.mode && modeSelect().value !== initial.mode) setSelect(modeSelect(), initial.mode)
-    if (initial.scale && scaleSelect().value !== initial.scale) setSelect(scaleSelect(), initial.scale)
-    if (initial.style && styleSelect().value !== initial.style) setSelect(styleSelect(), initial.style)
-    if (initial.contours) await setContours(initial.contours)
+    if (want.interval) await selectInterval(want.interval)
+    await setClean(want.clean)
+    if (want.mode && modeSelect().value !== want.mode) setSelect(modeSelect(), want.mode)
+    if (want.scale && scaleSelect().value !== want.scale) setSelect(scaleSelect(), want.scale)
+    if (want.style && styleSelect().value !== want.style) setSelect(styleSelect(), want.style)
+    if (want.contours) await setContours(want.contours)
     await waitIdle()
     await resetView()
     const after = readControls()
-    const same = JSON.stringify(after) === JSON.stringify(initial)
-    if (same) saveInitial(null)
-    else console.warn('[pb] volby se neshodují s výchozími', { initial, after })
-    return { same, initial, after }
+    const same = JSON.stringify(after) === JSON.stringify(want)
+    if (!same) console.warn('[pb] volby se neshodují s výchozími', { want, after })
+    // Reset výše uložený pohled smazal: vrátit ho a načíst stránku, ať ho aplikace přečte
+    stop()
+    await sleep(500)
+    writeSavedView(initial.storage)
+    const restoredView = JSON.stringify(readSavedView()) === JSON.stringify(initial.storage)
+    if (same && restoredView) saveInitial(null)
+    setTimeout(() => location.reload(), 300)
+    return { same, restoredView, initial, after }
   }
 
   // --- Souhrny ---------------------------------------------------------------
@@ -560,6 +609,8 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
   function summarizeSegment(s) {
     const records = within(log, s.t0, s.t1)
     const frameMs = records.filter((r) => r.kind === 'frame').map((r) => r.ms)
+    // U gesta jen snímky během tažení a kolečka, bez najetí, klidu a resetu pohledu
+    const gesture = s.gestureFrames ?? []
     const longtasks = records.filter((r) => r.kind === 'longtask').map((r) => r.ms)
     const counters = delta(s.counters0, s.counters1 ?? P.perfCounters())
     const samples = s.samples.filter((x) => typeof x === 'object')
@@ -575,16 +626,22 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
       at: new Date(performance.timeOrigin + s.t0).toISOString(),
       seconds: round((s.t1 - s.t0) / 1000),
       gateHz: s.gateHz,
+      gateMs: s.gateMs ?? null,
       frames: { ...stats(frameMs), fps: frameMs.length ? round((frameMs.length * 1000) / frameMs.reduce((a, b) => a + b, 0)) : null },
+      gestureFrames: gesture.length ? stats(gesture) : null,
       events: s.samples.filter((x) => typeof x === 'number').length,
       longtasks: stats(longtasks),
       ops: opsStats(records, 'op'),
       spans: opsStats(records, 'span'),
       paint: samples.length ? stats(samples.map((x) => x.paintMs ?? x.ms)) : null,
+      trailing: samples.some((x) => 'trailingMs' in x)
+        ? samples.map(({ target, ms, trailingMs, fetchMs, decodeMs }) => ({ target, ms, trailingMs, fetchMs, decodeMs }))
+        : null,
       unsettled: samples.filter((x) => x.settled === false).length,
       counters,
       // Minutový update nebo načtení dne uvnitř segmentu = snímky zkreslené
-      contaminated: Boolean(counters.minuteUpdate || counters.dayLoad),
+      // U přepnutí symbolu je dorovnání dne součást měření, ne zkreslení
+      contaminated: Boolean(counters.minuteUpdate || (s.name !== 'symbol' && (counters.dayLoad || counters.dayDecode))),
       coverage,
       hidden,
       // Segment ze zakrytého okna neplatí: gesto i spany čekaly na rAF
@@ -669,7 +726,8 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
       .map((e) => ({
         url: e.name.replace(location.origin, ''),
         start: round(e.startTime),
-        ttfb: round(e.responseStart - e.startTime),
+        queue: round(e.requestStart - e.startTime),
+        ttfb: round(e.responseStart - e.requestStart),
         download: round(e.responseEnd - e.responseStart),
         end: round(e.responseEnd),
         kB: Math.round((e.encodedBodySize || 0) / 1024),
