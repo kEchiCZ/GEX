@@ -40,6 +40,8 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
   const loaf = [] // long-animation-frame (≥ 50 ms)
   const segments = [] // {name, tf, clean, t0, t1, samples, …}
   const histogram = FRAME_BUCKETS.map(() => 0)
+  const visibility = [] // {t, state}: zakryté okno Windows hlásí jako `hidden`
+  let frameMsTotal = 0
   let harvestTimer = null
   let loafObserver = null
   let startedAt = null
@@ -79,6 +81,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
       if (startedAt !== null && r.t < startedAt) continue
       if (r.kind === 'frame') {
         histogram[FRAME_BUCKETS.findIndex((limit) => r.ms <= limit)] += 1
+        frameMsTotal += r.ms
         if (r.ms < PASSIVE_FRAME_MIN_MS && !inSegment(r.t)) continue
       }
       const v = r.view
@@ -96,6 +99,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     initial = loadInitial() ?? readControls()
     saveInitial(initial)
     harvestTimer = setInterval(harvest, HARVEST_MS)
+    document.addEventListener('visibilitychange', onVisibility)
     if (PerformanceObserver.supportedEntryTypes?.includes('long-animation-frame')) {
       loafObserver = new PerformanceObserver((list) => {
         for (const e of list.getEntries()) loaf.push(loafRecord(e))
@@ -106,6 +110,10 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     }
     console.info('[pb] start', initial)
     return initial
+  }
+
+  function onVisibility() {
+    visibility.push({ t: now(), state: document.visibilityState })
   }
 
   function loadInitial() {
@@ -132,6 +140,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     harvestTimer = null
     loafObserver?.disconnect()
     loafObserver = null
+    document.removeEventListener('visibilitychange', onVisibility)
     P.setPerfEnabled(false)
   }
 
@@ -243,6 +252,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
   }
 
   async function segment(name, meta, body) {
+    await waitVisible()
     await quietWindow()
     await waitIdle()
     const s = { name, ...meta, t0: now(), t1: null, samples: [], counters0: P.perfCounters() }
@@ -256,6 +266,18 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
       harvest()
     }
     return s
+  }
+
+  // Brána před každým segmentem: zakryté okno nezastaví běh, segment počká
+  async function waitVisible() {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await gate()
+      } catch (error) {
+        if (attempt === 0) console.warn(`[pb] čekám na viditelné okno: ${error.message}`)
+        await sleep(2_000)
+      }
+    }
   }
 
   // --- Gesta -----------------------------------------------------------------
@@ -509,6 +531,9 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     const longtasks = records.filter((r) => r.kind === 'longtask').map((r) => r.ms)
     const counters = delta(s.counters0, s.counters1 ?? P.perfCounters())
     const samples = s.samples.filter((x) => typeof x === 'object')
+    // Pokrytí snímky: skrytá záložka snímky nemá (měřič je nezapočítá), čas segmentu ano
+    const coverage = round((100 * frameMs.reduce((a, b) => a + b, 0)) / (s.t1 - s.t0))
+    const hidden = within(visibility, s.t0, s.t1).filter((v) => v.state === 'hidden').length
     return {
       name: s.name,
       symbol: s.symbol,
@@ -528,6 +553,10 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
       counters,
       // Minutový update nebo načtení dne uvnitř segmentu = snímky zkreslené
       contaminated: Boolean(counters.minuteUpdate || counters.dayLoad),
+      coverage,
+      hidden,
+      // Segment ze zakrytého okna neplatí: gesto i spany čekaly na rAF
+      occluded: hidden > 0 || coverage < 90,
       loaf: loafStats(within(loaf, s.t0, s.t1)),
     }
   }
@@ -551,6 +580,9 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     const opCount = (name) => records.filter((r) => r.kind === 'op' && r.name === name).length
     return {
       minutes: round(minutes),
+      // Podíl času s vykreslováním; minutový update ze skryté záložky čeká na rAF
+      coverage: round((100 * frameMsTotal) / (now() - startedAt)),
+      hidden: visibility.filter((v) => v.state === 'hidden').map((v) => new Date(performance.timeOrigin + v.t).toISOString()),
       histogram: Object.fromEntries(FRAME_BUCKETS.map((limit, i) => [`≤${limit}`, histogram[i]])),
       slowFrames: stats(records.filter((r) => r.kind === 'frame').map((r) => r.ms)),
       longtasks: stats(records.filter((r) => r.kind === 'longtask').map((r) => r.ms)),
@@ -629,7 +661,7 @@ najetí neukazuje jiný kurzor než výchozí (anotace, range ani osa). */
     })
   }
 
-  const pb = { start, stop, gate, run, restore, report, coldLoad, harvest, readControls, segments, log, loaf, quiet: [15, 40] }
+  const pb = { start, stop, gate, run, restore, report, coldLoad, harvest, readControls, segments, log, loaf, visibility, quiet: [15, 40] }
   window.pb = pb
   console.info('[pb] sběrač #1412 připraven: pb.start(), await pb.gate(), await pb.run("1m", false)')
 })()
