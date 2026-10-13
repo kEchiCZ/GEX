@@ -11,8 +11,9 @@ pravděpodobná příčina. Příčiny v pořadí přednosti:
 2. **díra v datech** — mezi bary chybí víc než 20 min otevřeného trhu (okno
    zprávy); kdy pohyb nastal, nejde říct (díra 14.–16. 7. 2026, #1300),
 3. **roll** — kladný skok přes hranici seance v týdnu rollu (`_roll_window`):
-   pipeline přepíná kontrakt se začátkem seance a další kontrakt je v contangu
-   výš; záporný skok v týdnu rollu je pohyb trhu,
+   pipeline přepíná kontrakt novým discovery (nová seance, restart enginu) a další
+   kontrakt je v contangu výš; záporný skok v týdnu rollu je pohyb trhu. Přepnutí
+   při restartu uvnitř seance se jako roll nepozná (vyjde jako skutečný pohyb),
 4. **zpráva** — významná zpráva (`compute.news_significance`) v okně
    −20/+2 min kolem skoku; po mezeře delší než 20 min od posledního baru před ní
    (víkend, pauza — pohyb mohl nastat kdykoli v mezeře),
@@ -26,8 +27,11 @@ den bez US seance (`settle.is_trading_session`) nese poznámku. Práh skoku
 
 Zprávy se čtou v transakci `SET TRANSACTION READ ONLY`. Spuštění z hostitele
 (PG publikované na 55432; URL se nikdy nevypisuje):
-    uv run python scripts/scan_bar_jumps.py --db "$GEXLENS_HOST_DATABASE_URL" --data data
-Výstup je Markdown na stdout. Skript znovu použije E-6.15.
+    uv run python scripts/scan_bar_jumps.py --data data --db "<URL>"
+s URL `postgresql+psycopg://gexlens:<heslo>@127.0.0.1:55432/gexlens` (heslo =
+`GEXLENS_PG_PASSWORD`; bez `--db` se bere `GEXLENS_HOST_DATABASE_URL`).
+Na Windows s `PYTHONUTF8=1` (výstup obsahuje ≤ a české znaky). Výstup je
+Markdown na stdout. Skript převezme E-6.15 (#1406).
 """
 
 import argparse
@@ -53,13 +57,15 @@ from gexlens_engine.storage.sentiment import news_events
 #: Opačný skok vrací blok jiného kontraktu, když se zbytek |a + b| vejde do
 #: tohoto podílu většího z obou skoků — zbytek je jen pohyb trhu v minutách hran
 #: bloku. Záloha kontaminace 8.–18. 9. 2026 (data/backup/bars-1232): 52 párů,
-#: zbytek ≤ 8 %. Odůvodnění prahů z dat v PR (#1390).
+#: zbytek ≤ 8 %. Přeměření: soubory `{SYM}-{den}.parquet` zálohy zkopírovat do
+#: `<dir>/derived/{SYM}/bars/{den}.parquet` a spustit s `--data <dir>`
+#: (odůvodnění prahů v PR #1390).
 REVERT_TOLERANCE = 0.10
 #: …a trh kolem bloku stojí: medián |minutového pohybu| před blokem i uvnitř
 #: něj nejvýš tolik bp. Kontaminace září 2026 ≤ 3,5 bp; skutečné vrácené pohyby
 #: (cla 2.–9. 4. 2025) mají zbytek i pod 10 %, ale medián 7–137 bp.
 CALM_BP = 5.0
-#: Kolik minut před vstupem do bloku se měří klid trhu
+#: Kolik barů (minut obchodu) před vstupem do bloku se měří klid trhu
 CALM_LOOKBACK = 30
 MINUTE = dt.timedelta(minutes=1)
 #: Okno hledání zprávy kolem skoku (před, po); díra delší než NEWS_BEFORE = čas pohybu neurčitelný
@@ -251,8 +257,8 @@ def report(jumps: Sequence[Jump], threshold_bp: float) -> str:
         "bp",
         "mezera min",
         "zdroj před → po",
-        "příčina",
-        "zpráva (−20/+2 min)",
+        "pravděpodobná příčina",
+        "zpráva (−20/+2 min, po mezeře celá mezera)",
     ]
     rows: list[list[object]] = []
     for j in sorted(jumps, key=lambda j: (j.session, j.symbol, j.bar.ts)):
@@ -281,7 +287,7 @@ def report(jumps: Sequence[Jump], threshold_bp: float) -> str:
         f"### Skoky ≥ {threshold_bp:.0f} bp mezi po sobě jdoucími minutovými bary\n\n"
         + _table(header, rows)
         + "\n\n### Souhrn podle příčiny\n\n"
-        + _table(["příčina", *symbols], summary)
+        + _table(["pravděpodobná příčina", *symbols], summary)
     )
 
 

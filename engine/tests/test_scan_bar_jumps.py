@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from sqlalchemy import create_engine, insert
+from sqlalchemy.engine import Connection
 
 from gexlens_engine.storage.sentiment import ensure_sentiment_schema, news_events
 
@@ -104,7 +106,7 @@ def test_vraceny_skok_jine_velikosti_neni_par(scan: Any) -> None:
     assert [j.partner for j in jumps] == [None, None]
 
 
-def test_roll_na_hranici_seance_v_tydnu_rollu(scan: Any, tmp_path: Path) -> None:
+def test_roll_na_hranici_seance_v_tydnu_rollu(scan: Any, news_db: NewsDb) -> None:
     # 16. 9. 2026 20:59 UTC konec seance 16. 9.; 22:00 UTC otevření seance 17. 9.
     # (týden rollu září 2026) — engine přešel z U6 na Z6 o +89 bp
     close = dt.datetime(2026, 9, 16, 20, 30, tzinfo=dt.UTC)
@@ -116,18 +118,18 @@ def test_roll_na_hranici_seance_v_tydnu_rollu(scan: Any, tmp_path: Path) -> None
     (jump,) = jumps
     assert jump.boundary and jump.session == dt.date(2026, 9, 17)
     assert jump.gap_minutes == 61 and jump.missing_open_minutes == 0
-    scan.classify(jumps, _news_db(tmp_path, []))
+    scan.classify(jumps, news_db([]))
     assert jump.cause == scan.CAUSE_ROLL
 
 
-def test_zaporny_skok_v_tydnu_rollu_neni_roll(scan: Any, tmp_path: Path) -> None:
+def test_zaporny_skok_v_tydnu_rollu_neni_roll(scan: Any, news_db: NewsDb) -> None:
     # Další kontrakt je v contangu výš — pokles o 102 bp při nedělním otevření
     # v týdnu rollu je pohyb trhu, ne přechod na další kontrakt
     friday = dt.datetime(2026, 9, 11, 20, 30, tzinfo=dt.UTC)
     sunday_open = dt.datetime(2026, 9, 13, 22, 0, tzinfo=dt.UTC)
     bars = _calm(scan, friday, 30, 24000.0) + _calm(scan, sunday_open, 10, 23755.0)
     jumps = scan.find_jumps("NQ", bars)
-    scan.classify(jumps, _news_db(tmp_path, []))
+    scan.classify(jumps, news_db([]))
     assert [(j.session, j.boundary, j.cause) for j in jumps] == [
         (dt.date(2026, 9, 14), True, scan.CAUSE_REAL)
     ]
@@ -144,11 +146,11 @@ def test_vikend_neni_dira_a_obchodni_den_je_pondeli(scan: Any) -> None:
     assert scan._gap(jump) == "2941 (zavřeno)"
 
 
-def test_dlouha_dira_za_otevreneho_trhu_je_pricina(scan: Any, tmp_path: Path) -> None:
+def test_dlouha_dira_za_otevreneho_trhu_je_pricina(scan: Any, news_db: NewsDb) -> None:
     # 14.–16. 7. 2026 (#1300): pohyb přes díru nejde časově určit ani přiřadit zprávě
     bars = _calm(scan, TUESDAY, 10, 7000.0) + _calm(scan, TUESDAY + 40 * MINUTE, 10, 7049.0)
     jumps = scan.find_jumps("ES", bars)
-    conn = _news_db(tmp_path, [(TUESDAY + 30 * MINUTE, "scheduled", 3, "CPI m/m")])
+    conn = news_db([(TUESDAY + 30 * MINUTE, "scheduled", 3, "CPI m/m")])
     scan.classify(jumps, conn)
     (jump,) = jumps
     assert not jump.boundary and jump.missing_open_minutes == 30
@@ -156,42 +158,80 @@ def test_dlouha_dira_za_otevreneho_trhu_je_pricina(scan: Any, tmp_path: Path) ->
     assert jump.cause == scan.CAUSE_HOLE and jump.news == "10:30 st. 0: CPI m/m"
 
 
-def test_kratka_dira_nezakryje_pricinu(scan: Any, tmp_path: Path) -> None:
+def test_kratka_dira_nezakryje_pricinu(scan: Any, news_db: NewsDb) -> None:
     bars = _calm(scan, TUESDAY, 10, 7000.0) + _calm(scan, TUESDAY + 20 * MINUTE, 10, 7049.0)
     jumps = scan.find_jumps("ES", bars)
-    scan.classify(jumps, _news_db(tmp_path, []))
+    scan.classify(jumps, news_db([]))
     assert scan._gap(jumps[0]) == "11 (díra 10 min)"
     assert jumps[0].cause == scan.CAUSE_REAL
 
 
-def _news_db(tmp_path: Path, events: list[tuple[dt.datetime, str, int, str]]) -> Any:
+def test_svatek_bez_us_seance_a_prestavka_v_poledne(scan: Any, news_db: NewsDb) -> None:
+    # Díkůvzdání 26. 11. 2026: Globex do 12:00 CT (18:00 UTC), pak zavřeno do
+    # 17:00 CT (23:00 UTC) — otevření seance 27. 11.; den 26. 11. US seanci nemá
+    start = dt.datetime(2026, 11, 26, 17, 0, tzinfo=dt.UTC)
+    bars = _calm(scan, start, 40, 7000.0) + _calm(scan, start + 40 * MINUTE, 20, 7049.0)
+    bars += _calm(scan, dt.datetime(2026, 11, 26, 23, 0, tzinfo=dt.UTC), 10, 7100.0)
+    jumps = scan.find_jumps("ES", bars)
+    scan.classify(jumps, news_db([]))
+    text = scan.report(jumps, scan.JUMP_BP)
+    assert "| 2026-11-26 (bez US seance) | ES | 2026-11-26 17:40 | +70 | 1 |" in text
+    assert "| 2026-11-27 | ES | 2026-11-26 23:00 | +72 | 301 (zavřeno) |" in text
+
+
+def test_vikendova_zprava_mimo_20_min_nese_datum(scan: Any, news_db: NewsDb) -> None:
+    # Pohyb přes víkend mohl nastat kdykoli v mezeře — okno zprávy ji pokryje celou
+    friday = dt.datetime(2026, 10, 9, 20, 30, tzinfo=dt.UTC)
+    sunday_open = dt.datetime(2026, 10, 11, 22, 0, tzinfo=dt.UTC)
+    bars = _calm(scan, friday, 30, 7000.0) + _calm(scan, sunday_open, 10, 6944.0)
+    jumps = scan.find_jumps("ES", bars)
+    saturday = dt.datetime(2026, 10, 10, 12, 0, tzinfo=dt.UTC)
+    scan.classify(jumps, news_db([(saturday, "headline", 3, "Cla na dovoz")]))
+    assert jumps[0].cause == scan.CAUSE_NEWS
+    assert jumps[0].news == "2026-10-10 12:00 st. 2: Cla na dovoz"
+
+
+NewsDb = Callable[[list[tuple[dt.datetime, str, int, str]]], Connection]
+
+
+@pytest.fixture
+def news_db(tmp_path: Path) -> Iterator[NewsDb]:
+    """SQLite se schématem zpráv; spojení i engine se po testu zavřou."""
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}")
     ensure_sentiment_schema(engine)
-    with engine.begin() as conn:
-        for index, (ts, kind, importance, title) in enumerate(events):
-            conn.execute(
-                insert(news_events).values(
-                    ts_event=ts,
-                    ts_ingested=ts,
-                    source="test",
-                    kind=kind,
-                    importance=importance,
-                    title=title,
-                    symbols=[],
-                    market_closed=False,
-                    dedup_hash=f"scan-{index}",
-                    raw={},
+    opened: list[Connection] = []
+
+    def make(events: list[tuple[dt.datetime, str, int, str]]) -> Connection:
+        with engine.begin() as conn:
+            for index, (ts, kind, importance, title) in enumerate(events):
+                conn.execute(
+                    insert(news_events).values(
+                        ts_event=ts,
+                        ts_ingested=ts,
+                        source="test",
+                        kind=kind,
+                        importance=importance,
+                        title=title,
+                        symbols=[],
+                        market_closed=False,
+                        dedup_hash=f"scan-{len(opened)}-{index}",
+                        raw={},
+                    )
                 )
-            )
-    return engine.connect()
+        opened.append(engine.connect())
+        return opened[-1]
+
+    yield make
+    for conn in opened:
+        conn.close()
+    engine.dispose()
 
 
-def test_vyznamna_zprava_v_okne_je_pricina(scan: Any, tmp_path: Path) -> None:
+def test_vyznamna_zprava_v_okne_je_pricina(scan: Any, news_db: NewsDb) -> None:
     jump_ts = TUESDAY + 40 * MINUTE
     bars = _calm(scan, TUESDAY, 40, 7000.0) + _calm(scan, jump_ts, 10, 6944.0)  # −80 bp
     jumps = scan.find_jumps("ES", bars)
-    conn = _news_db(
-        tmp_path,
+    conn = news_db(
         [
             (jump_ts - 25 * MINUTE, "scheduled", 3, "mimo okno"),
             (jump_ts - 5 * MINUTE, "scheduled", 3, "CPI m/m"),
@@ -203,11 +243,11 @@ def test_vyznamna_zprava_v_okne_je_pricina(scan: Any, tmp_path: Path) -> None:
     assert jumps[0].news == "10:35 st. 0: CPI m/m"
 
 
-def test_bez_vyznamne_zpravy_je_skutecny_pohyb(scan: Any, tmp_path: Path) -> None:
+def test_bez_vyznamne_zpravy_je_skutecny_pohyb(scan: Any, news_db: NewsDb) -> None:
     jump_ts = TUESDAY + 40 * MINUTE
     bars = _calm(scan, TUESDAY, 40, 7000.0) + _calm(scan, jump_ts, 10, 6944.0)
     jumps = scan.find_jumps("ES", bars)
-    scan.classify(jumps, _news_db(tmp_path, [(jump_ts, "headline", 1, "šum")]))
+    scan.classify(jumps, news_db([(jump_ts, "headline", 1, "šum")]))
     assert jumps[0].cause == scan.CAUSE_REAL and jumps[0].news == ""
 
 
@@ -228,7 +268,7 @@ def _partition(data: Path, symbol: str, bars: list[tuple[dt.datetime, float, str
 
 
 def test_cli_cte_partice_a_vypise_report(
-    scan: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    scan: Any, tmp_path: Path, news_db: NewsDb, capsys: pytest.CaptureFixture[str]
 ) -> None:
     data = tmp_path / "data"
     # Starší partice bez sloupce source (NULL = živá cesta), 12. 10. klidný den
@@ -242,7 +282,7 @@ def test_cli_cte_partice_a_vypise_report(
     rows += [(TUESDAY + k * MINUTE, 7000.5, "ibkr") for k in range(50, 60)]
     _partition(data, "ES", rows)
     url = f"sqlite+pysqlite:///{tmp_path / 'news.sqlite'}"
-    _news_db(tmp_path, []).close()
+    news_db([])  # schéma zpráv v témže souboru SQLite
 
     assert scan.main(["--db", url, "--data", str(data), "--symbols", "ES"]) == 0
     out = capsys.readouterr().out
