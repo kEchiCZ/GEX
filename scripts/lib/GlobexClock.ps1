@@ -7,6 +7,8 @@
 #           if (-not $clock.Closed) { throw "Trh je otevřený (CT $($clock.Label))" }
 
 function Get-GlobexClock {
+    # -UtcNow jen pro testy (víkend, denní pauza, nedělní otevření — #1552)
+    param([DateTime]$UtcNow = [DateTime]::UtcNow)
     # Id zóny: Windows zná 'Central Standard Time', Linux (pwsh bez ICU konverze)
     # jen IANA 'America/Chicago' — zkusí se obojí (#1094)
     $tz = $null
@@ -14,7 +16,7 @@ function Get-GlobexClock {
         try { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById($id); break } catch { }
     }
     if (-not $tz) { throw 'Časová zóna Chicago není v systému (zkoušeno America/Chicago, Central Standard Time) — bez ní nejde určit pauzu Globexu.' }
-    $ct = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tz)
+    $ct = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::SpecifyKind($UtcNow, 'Utc'), $tz)
     $closed = $ct.DayOfWeek -eq 'Saturday' `
         -or ($ct.DayOfWeek -eq 'Sunday' -and $ct.Hour -lt 17) `
         -or ($ct.DayOfWeek -eq 'Friday' -and $ct.Hour -ge 16) `

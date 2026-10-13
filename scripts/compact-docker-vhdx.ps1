@@ -37,7 +37,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\GlobexClock.ps1')
 . (Join-Path $PSScriptRoot 'lib\OpsAlert.ps1')
-function Write-Step($text) { Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $text" }
+. (Join-Path $PSScriptRoot 'lib\DockerHost.ps1')
 
 $vhdx = $Vhdx
 if (-not (Test-Path $vhdx)) { throw "VHDX nenalezen: $vhdx" }
@@ -69,20 +69,17 @@ if ($IfNeeded) {
     }
 }
 
-# Souběžné úlohy, které Docker potřebují (#1277): deploy recreatuje engine
+# Souběžné úlohy, které Docker potřebují (#1277, #1552): deploy recreatuje engine
 # (zastavení Dockeru uprostřed = rozjeté verze nebo engine bez startu přes
-# otevření trhu), walk-forward a záloha PG čtou Postgres
-function Get-BusyJobs {
-    @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='powershell.exe'" -ErrorAction SilentlyContinue |
-        ForEach-Object { if ($_.ProcessId -ne $PID -and $_.CommandLine -match 'deploy-engine-offhours|walkforward-nightly|backup-postgres') { $matches[0] } } |
-        Sort-Object -Unique)
-}
+# otevření trhu), walk-forward a záloha PG čtou Postgres, aktualizace WSL a Docker
+# Desktopu Docker sama restartuje
+$busyPattern = 'deploy-engine-offhours|walkforward-nightly|backup-postgres|update-wsl-docker-offhours'
 if ($DryRun) {
-    $busy = Get-BusyJobs
+    $busy = Get-BusyJobs $busyPattern
     if ($busy.Count -gt 0) { Write-Step "DryRun: běží $($busy -join ', ') — kompaktace by počkala." }
 } else {
     $busyDeadline = (Get-Date).AddMinutes($BusyWaitMinutes)
-    while (($busy = Get-BusyJobs).Count -gt 0) {
+    while (($busy = Get-BusyJobs $busyPattern).Count -gt 0) {
         if ((Get-Date) -gt $busyDeadline) {
             Write-Step "Pořád běží $($busy -join ', ') ani po $BusyWaitMinutes min — kompaktaci vzdávám, zkusí se příště."
             exit 0
@@ -115,42 +112,6 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     throw 'Spusť jako správce (diskpart vyžaduje elevaci) — nebo přes úlohu „GEXLens compact-vhdx" (register-compact-vhdx-task.ps1).'
 }
 
-# Docker CLI s časovým limitem (#1279): při napůl živém daemonu `docker info`
-# visí (lessons-learned: docker CLI při pádu lže/visí) a termín čekání by se
-# nikdy nezkontroloval — úlohu by ve 60. minutě zabil Task Scheduler bez
-# upozornění. Vypršení = daemon nereaguje.
-function Invoke-Docker([string[]]$DockerArgs, [int]$TimeoutSec = 20) {
-    $psi = [System.Diagnostics.ProcessStartInfo]::new('docker')
-    foreach ($arg in $DockerArgs) { $psi.ArgumentList.Add($arg) }
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.UseShellExecute = $false
-    try { $proc = [System.Diagnostics.Process]::Start($psi) }
-    catch { return [pscustomobject]@{ ExitCode = -1; Out = ''; Err = $_.Exception.Message } }
-    $out = $proc.StandardOutput.ReadToEndAsync()
-    $err = $proc.StandardError.ReadToEndAsync()
-    if (-not $proc.WaitForExit($TimeoutSec * 1000)) {
-        try { $proc.Kill($true) } catch { }
-        return [pscustomobject]@{ ExitCode = -1; Out = ''; Err = "docker $($DockerArgs[0]): bez odpovědi do $TimeoutSec s" }
-    }
-    [pscustomobject]@{ ExitCode = $proc.ExitCode; Out = $out.Result; Err = $err.Result }
-}
-# Běžící služby produkčního projektu (bez one-off kontejnerů typu gex-greeks-probe
-# a bez crash loopu — status=running); prázdné i při nereagujícím daemonu
-function Get-GexRunning {
-    $result = Invoke-Docker @('ps', '--filter', 'label=com.docker.compose.project=gex',
-        '--filter', 'label=com.docker.compose.oneoff=False', '--filter', 'status=running', '--format', '{{.Names}}')
-    if ($result.ExitCode -ne 0) { return }  # nic = daemon nereaguje; @($null) by mělo Count 1
-    @($result.Out -split "`r?`n" | Where-Object { $_ } | Sort-Object)
-}
-function Wait-DockerReady([int]$Minutes) {
-    $deadline = (Get-Date).AddMinutes($Minutes)
-    while ((Get-Date) -lt $deadline) {
-        Start-Sleep -Seconds 10
-        if ((Invoke-Docker @('info') 20).ExitCode -eq 0) { return $true }
-    }
-    return $false
-}
 function Stop-DockerDesktop {
     Get-Process 'Docker Desktop', com.docker.backend -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 5
@@ -222,20 +183,8 @@ try {
     }
     $missing = @()
     if ($ready) {
-        Start-Sleep -Seconds 20
+        $missing = @(Restore-GexRunning $expectedRunning)
         $running = @(Get-GexRunning)
-        $missing = @($expectedRunning | Where-Object { $_ -notin $running })
-        if ($missing.Count -gt 0) {
-            # `docker start`, ne `compose up`: up by kontejner mohl recreatovat na
-            # novější image z GHCR, než ho nasadí deploy. Postgres první.
-            $order = @($missing | Sort-Object { $_ -notlike '*postgres*' }, { $_ })
-            Write-Warning "Neběží $($order -join ', ') — zkouším docker start."
-            $result = Invoke-Docker (@('start') + $order) 120
-            if ($result.ExitCode -ne 0) { Write-Warning "docker start skončil kódem $($result.ExitCode): $($result.Err.Trim())" }
-            Start-Sleep -Seconds 20
-            $running = @(Get-GexRunning)
-            $missing = @($expectedRunning | Where-Object { $_ -notin $running })
-        }
         Write-Step "Docker běží; kontejnery gex-*: $($running.Count) ($($running -join ', '))"
     }
     $problem = if (-not $ready) {
