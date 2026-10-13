@@ -257,6 +257,20 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-13 — blok jiného kontraktu nejde poznat jen podle vráceného skoku stejné velikosti (#1390).**
+  Kontaminace 8.–18. 9. 2026 (záloha `data/backup/bars-1232`) tvoří 52 párů skok/návrat se zbytkem ≤ 8 %.
+  Stejně těsné páry ale dávají i skutečné pohyby z 2.–9. 4. 2025 (cla, falešná zpráva o pauze 7. 4.:
+  +108 bp a za 9 min −97 bp). Rozliší je klid trhu: kolem bloku jiného kontraktu je medián minutového
+  pohybu ≤ 3,5 bp, kolem skutečného vrácení 7–137 bp. Odhalilo to přeměření prahu na záloze i na celém
+  archivu, ne na vzorku. → Práh detektoru kalibrovat na známých kladných **i** záporných případech
+  z archivu (`scripts/scan_bar_jumps.py`: zbytek ≤ 10 % a klid ≤ 5 bp).
+
+- **2026-10-13 — oprava partic 9. 9. byla hotová od 1. 10., issue o ní nevědělo (#1299).** Běh
+  `backfill_bars.py --replace-wrong-contract` při vývoji #1350 přepsal partice ES a NQ z 9. 9. Výsledek
+  skončil jen ve zprávě commitu `c2c1a7d`; #1299 zůstalo otevřené a #1390 plánovalo opravu znovu do pauzy.
+  Odhalilo to `ls` času změny partice před plánovaným dry-runem. → Po každém `--apply` nad produkčními
+  daty napsat do dotčeného issue komentář (příkaz, počty před a po, záloha), i když běh byl součástí vývoje.
+
 - **2026-10-12 — konzolový sběrač (#1412) smazal vlastníkovi uložený zoom grafu.** Po každém gestu
   resetoval pohled dvojklikem. Ten v aplikaci volá `clearSavedView` (`App.tsx:631`) a maže
   `gexlens.chartZoomX` daného timeframe a `gexlens.chartYRange` symbolu. Tak zmizel uložený zoom
