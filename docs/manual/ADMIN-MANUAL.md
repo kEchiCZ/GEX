@@ -832,6 +832,7 @@ Pipeline se založí sama, jakmile se spojení objeví. Restart enginu není pot
 | Díra ve snapshotech, ale bary v okně jsou | Podívej se na `source` barů v `derived/{sym}/bars/`: `ibkr_hist` = doplněno z IBKR historical při dalším startu → **engine v tu dobu neběžel** (vypnuté PC, zastavený kontejner), ne stall řetězu. Stall vypadá obráceně: bary `ibkr` tečou, snapshoty chybí. Do #1055 (8. 9. 2026) se backfill tvářil jako `ibkr` a 2,5 dne vypnutého PC vyvolalo falešný poplach (#1054). |
 | Změna portu TWS | Settings v aplikaci (platí do sekund i bez spojení, #992), **a zároveň** `.env` + `docker compose up -d engine` — hodnota v DB přebíjí `.env`, takže samotná změna `.env` skončí skokem zpět na starý port (engine to hlásí `WARNING: Nastavení připojení ze Settings UI (DB) přebíjí .env`). |
 | Zaseknuté spojení, restart kontejneru nechci | Settings → Stav enginu → **Přepojit IBKR** / **Přepojit tastytrade** (#950) — 1–2 min díra, mimo US RTH. Uložení nastavení beze změny hodnot nepřepojuje. |
+| Docker po samovolné aktualizaci WSL neběží / hlídač Dockeru (#1552) | Windows Update nainstaloval 13. 10. 2026 v 03:10 UTC WSL 3.0.3.0 mimo pauzu, VM WSL se restartovala a Docker Desktop zůstal zastavený 4 h 49 min. Prevence a náprava jsou dvě úlohy Task Scheduleru (kap. 13.4): **„GEXLens update-offhours“** aktualizuje WSL a Docker Desktop jen v pauze Globexu, **„GEXLens docker-watchdog“** každých 5 min restartuje zastavený Docker Desktop. Ručně: `docker desktop status`, `docker desktop restart`, pak `docker ps` (5 kontejnerů gex-*) a `/status` (engine online, connected). **Před záměrným ručním zastavením Dockeru** hlídače vypnout: `Disable-ScheduledTask -TaskName 'GEXLens docker-watchdog'` (potom `Enable-ScheduledTask`); deploy, kompaktaci a aktualizaci pozná sám. Logy obou úloh: `%LOCALAPPDATA%\GEXLens\logs`. |
 | Po restartu Docker Desktop frontend vrací 502 (Settings nejde uložit, watchlist prázdný) | Do #993 nginx držel starou IP služby api; nově se resolvuje za běhu (do ~10 s). U staršího image `docker compose restart frontend`, trvale rebuild frontendu. |
 | Upozornění o výpadku dat o víkendu nebo v denní pauze (`oi_refresh_failed` à 30 min, `spot_fallback`, `strikes_stalled`, `connection_stall`, `disconnect`, `competing_session`, `degraded_start`) | Do #1307 hlídače zavřený trh nerozlišovaly. Od #1307 se při zavřeném trhu podle rozvrhu CME jen loguje (kap. 5 „Provozní upozornění při zavřeném trhu“). Chodí-li i tak, ověř čas v CT (DST) a jestli není svátek. Ten rozvrh nezná: OI, Greeks a striky se ohlásí nejvýš jednou, `feed_crosscheck` „Oba zdroje mlčí … uvnitř US RTH" ale à 15 min. |
 | Alert `greeks_stalled` každý den po settle | Do #959 hlídka běžela i nad expirující řadou, která se po settle přestane kotovat (93 % chybějících Greeks, sekundární řada plná). Nově se po settle dané expirace nehlásí. |
@@ -1058,6 +1059,38 @@ je uvnitř VHDX). Proto:
 - Lokální build image jen nouzově a **po jedné službě** (`docker compose build engine`,
   pak `frontend`), nikdy všechny naráz, a před buildem zkontrolovat volné místo;
   standardně image dodává CI (#1139, kap. 3).
+
+**Aktualizace WSL a Docker Desktopu, hlídač Dockeru (#1552).** Balík WSL (MSI) instaluje automatický
+sken Windows Update (klient `MoUpdateOrchestrator`, služba DCat Flighting Prod — stejnou cestou jako
+ovladače), ne Microsoft Store; zásada Store „Turn off Automatic Download and Install of updates“ ho proto
+nezastaví. Instalace restartuje VM WSL a Docker Desktop se sám nerozjede (13. 10. 2026: výpadek
+03:11–08:00 UTC). Vlastník rozhodl (13. 10., varianta V3) instalaci mimo pauzu neblokovat; místo toho:
+- **„GEXLens update-offhours“** — elevovaná úloha denně 23:10 místního času (registrace jako správce
+  `pwsh scripts/register-update-offhours-task.ps1`), skript `scripts/update-wsl-docker-offhours.ps1`.
+  Běží jen při zavřeném trhu s ≥ 30 min do otevření (`Get-GlobexClock`) a nejvýš 20 min počká na deploy,
+  walk-forward, zálohu PG a kompaktaci. `wsl --update`; když se verze WSL změní, `docker desktop restart`
+  a kontrola stacku (daemon, `docker start` chybějících služeb, engine online a connected). Docker
+  Desktop: `docker desktop update --check-only`; je-li novější verze, nejdřív záloha PG
+  (`backup-postgres.ps1`) a `pg_restore --list` nad dumpem, přesné počty řádků všech tabulek (read-only),
+  `docker desktop update --quiet`, čekání na novou verzi, kontrola stacku a znovu počty řádků — žádné
+  tabulce nesmí ubýt. Bez úspěšné zálohy se Docker Desktop neaktualizuje. Problém = upozornění
+  **Noční údržba selhala** (`maintenance`, stejně jako kompaktace) a exit 1. Log
+  `%LOCALAPPDATA%\GEXLens\logs\update-offhours.log` (mimo repo kvůli Řízenému přístupu ke složkám).
+  Nanečisto `-DryRun`; přepínače `-SkipWsl` a `-SkipDockerDesktop`. Ručně bez UAC:
+  `Start-ScheduledTask -TaskName 'GEXLens update-offhours'`.
+- **„GEXLens docker-watchdog“** — úloha každých 5 min bez elevace a bez okna (registrace
+  `pwsh -File scripts/register-docker-watchdog-task.ps1`), skript `scripts/docker-watchdog.ps1`.
+  Když `docker info` do 20 s neodpoví a neběží deploy, kompaktace ani aktualizace: Docker Desktop
+  `stopped` nebo CLI bez odpovědi → `docker desktop restart`, čekání na daemon (≤ 5 min), `docker start`
+  chybějících služeb gex a spojení enginu (≤ 5 min), pak upozornění s výsledkem; přechodový stav
+  (`starting`…) čeká do 10 min, pak restart; `running` s nereagujícím daemonem jen upozorní (restart
+  jen při stavu ≠ running). Upozornění jde jen při otevřeném trhu, při zavřeném se jen loguje
+  (AGENTS.md „Zavřený trh = žádná upozornění“), jedno na výpadek; když API s Dockerem neodpovídá,
+  Telegram se pošle (fail-open). Stav výpadku `%LOCALAPPDATA%\GEXLens\docker-watchdog.json`, log
+  `%LOCALAPPDATA%\GEXLens\logs\docker-watchdog.log` (zapisuje jen při výpadku). Nanečisto `-DryRun`.
+  Před ručním zastavením Dockeru: `Disable-ScheduledTask -TaskName 'GEXLens docker-watchdog'`.
+- Zbývající riziko V3: vydání WSL, které Windows Update nainstaluje dřív než úloha v pauze, shodí
+  Docker kdykoli; hlídač výpadek zkrátí na ~5–10 min, mezeře v datech nezabrání.
 
 ### 13.5 Ověření a denní provoz
 

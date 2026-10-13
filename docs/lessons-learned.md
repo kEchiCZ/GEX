@@ -16,6 +16,16 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-10-13 — Docker stál 4 h 49 min po samovolné aktualizaci WSL (#1552).** Engine offline od
+  03:11 UTC, Docker Desktop ve stavu `stopped`; kontejnery s `restart: unless-stopped` nepomohou, když
+  neběží daemon. Příčina: Windows Update nainstaloval v 03:10 UTC WSL 3.0.3.0 a MSI restartovalo VM WSL.
+  Instalaci spustil automatický sken Windows Update (`ClientApplicationID = MoUpdateOrchestrator`,
+  služba DCat Flighting Prod), ne Microsoft Store — zásada Store, první kandidát na blokaci, by nic
+  nezastavila. Odhalil to System log `WindowsUpdateClient` (události 43/19) a historie Windows Update
+  s klientem a službou. → Komponentu pod Dockerem aktualizovat jen v pauze (úloha „GEXLens
+  update-offhours“) a hlídat daemon (úloha „GEXLens docker-watchdog“). Před volbou páky ověřit
+  v historii WU, kudy aktualizace skutečně přišla.
+
 - **2026-10-09 — `uv run --env-file .env` vypsal řádek `.env` do konzole (#1486).**
   Při ručním backfillu proti produkční PG uv narazil na hodnotu s mezerami bez uvozovek a varování
   „Failed to parse environment file `.env` at position N: …“ obsahovalo **celou hodnotu řádku** (osobní
