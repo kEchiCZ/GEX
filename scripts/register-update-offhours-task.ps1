@@ -36,8 +36,8 @@ $argument = "--headless `"$pwsh`" -NoProfile -ExecutionPolicy Bypass -Command `"
 $action = New-ScheduledTaskAction -Execute (Join-Path $env:windir 'System32\conhost.exe') -Argument $argument -WorkingDirectory $repo
 # Místní čas, ne UTC (#1277/#1278)
 $trigger = New-LocalWeeklyTrigger -DaysOfWeek Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday -At $At
-# 60 min: čekání na deploy a kompaktaci (≤ 20) + WSL (≤ 15) + Docker Desktop se zálohou (≤ 25)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 60) `
+# 120 min: čekání na deploy a kompaktaci (≤ 20) + WSL s kontrolou stacku (≤ 15 + 25) + Docker Desktop se zálohou a kontrolou (≤ 55)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 120) `
     -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
 # Interactive: Docker Desktop (GUI) se po aktualizaci startuje v přihlášené relaci
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Highest

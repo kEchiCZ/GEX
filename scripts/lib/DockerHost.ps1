@@ -2,7 +2,8 @@
 # zastavují, restartují nebo aktualizují (kompaktace VHDX #1127, aktualizace WSL
 # a Docker Desktop v pauze a hlídač Dockeru #1552). Jedna definice místo kopií.
 #
-# Použití:  . (Join-Path $PSScriptRoot 'lib\DockerHost.ps1')
+# Použití:  . (Join-Path $PSScriptRoot 'lib\GlobexClock.ps1')
+#           . (Join-Path $PSScriptRoot 'lib\DockerHost.ps1')
 
 function Write-Step($text) { Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $text" }
 
@@ -64,14 +65,16 @@ function Get-GexServices {
 # první. Vrací kontejnery, které ani pak neběží (prázdné = vše běží).
 function Restore-GexRunning([string[]]$Expected) {
     Start-Sleep -Seconds 20
-    $missing = @($Expected | Where-Object { $_ -notin @(Get-GexRunning) })
+    $running = @(Get-GexRunning)
+    $missing = @($Expected | Where-Object { $_ -notin $running })
     if ($missing.Count -eq 0) { return @() }
     $order = @($missing | Sort-Object { $_ -notlike '*postgres*' }, { $_ })
     Write-Warning "Neběží $($order -join ', ') — zkouším docker start."
     $result = Invoke-Docker (@('start') + $order) 120
     if ($result.ExitCode -ne 0) { Write-Warning "docker start skončil kódem $($result.ExitCode): $($result.Err.Trim())" }
     Start-Sleep -Seconds 20
-    @($Expected | Where-Object { $_ -notin @(Get-GexRunning) })
+    $running = @(Get-GexRunning)
+    @($Expected | Where-Object { $_ -notin $running })
 }
 
 function Wait-DockerReady([int]$Minutes) {
@@ -84,12 +87,91 @@ function Wait-DockerReady([int]$Minutes) {
 }
 
 # Souběžné provozní úlohy, které Docker zastavují nebo potřebují (#1277):
-# deploy recreatuje engine, kompaktace a aktualizace Docker zastavují,
-# walk-forward a záloha PG čtou Postgres. Vlastní proces se nepočítá.
+# deploy recreatuje engine, walk-forward a záloha PG čtou Postgres. Vlastní
+# proces se nepočítá. Elevované úlohy (kompaktace, aktualizace) tudy NEJDOU
+# vidět: neelevovaný proces jejich příkazový řádek nepřečte (Win32_Process
+# vrátí prázdný, ověřeno 13. 10. 2026) — ty drží zámek údržby níže.
 function Get-BusyJobs([string]$Pattern) {
     @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='powershell.exe'" -ErrorAction SilentlyContinue |
         ForEach-Object { if ($_.ProcessId -ne $PID -and $_.CommandLine -match $Pattern) { $matches[0] } } |
         Sort-Object -Unique)
+}
+
+# Zámek údržby Dockeru (#1552): kompaktace VHDX a aktualizace WSL / Docker
+# Desktopu se nesmí potkat (diskpart drží datový VHDX, instalátor restartuje VM)
+# a hlídač je musí poznat i jako neelevovaný proces. Soubor nese jméno úlohy
+# a PID; bere se až po čekání na ostatní úlohy (dvě čekající úlohy se tak
+# navzájem neblokují) a jen jednou (CreateNew). Zámek mrtvého procesu (úlohu
+# zabil Task Scheduler) nebo starší než MaxHours se při čtení smaže.
+function Get-MaintenanceLockPath { Join-Path (Split-Path -Parent (Get-OpsLogDir)) 'docker-maintenance.lock' }
+
+# Jméno úlohy, která zámek drží; $null = volno
+function Get-MaintenanceLockHolder([double]$MaxHours = 3) {
+    $path = Get-MaintenanceLockPath
+    if (-not (Test-Path $path)) { return $null }
+    try { $lock = Get-Content $path -Raw | ConvertFrom-Json } catch { $lock = $null }
+    $alive = $lock -and $lock.pid -and (Get-Process -Id ([int]$lock.pid) -ErrorAction SilentlyContinue) -and
+        ((Get-Date) - [datetime]$lock.since).TotalHours -lt $MaxHours
+    if ($alive) { return [string]$lock.name }
+    $who = if ($lock) { "$($lock.name), PID $($lock.pid), od $($lock.since)" } else { 'nečitelný' }
+    Write-Step "Zámek údržby bez živého držitele ($who) — odstraňuji."
+    Remove-Item $path -Force -ErrorAction SilentlyContinue
+    $null
+}
+
+# $true = zámek získán; $false = drží ho jiná úloha
+function Enter-MaintenanceLock([string]$Name) {
+    $path = Get-MaintenanceLockPath
+    [void](Get-MaintenanceLockHolder)  # uklidí zámek mrtvého držitele
+    try { $stream = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read) }
+    catch [IO.IOException] { if (Test-Path $path) { return $false } else { throw } }
+    try {
+        $json = @{ name = $Name; pid = $PID; since = (Get-Date).ToString('s') } | ConvertTo-Json -Compress
+        $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+        $stream.Write($bytes, 0, $bytes.Length)
+    } finally { $stream.Dispose() }
+    $true
+}
+
+function Exit-MaintenanceLock {
+    $path = Get-MaintenanceLockPath
+    try { $lock = Get-Content $path -Raw -ErrorAction Stop | ConvertFrom-Json } catch { return }
+    if ([int]$lock.pid -eq $PID) { Remove-Item $path -Force -ErrorAction SilentlyContinue }
+}
+
+# Čeká, až neběží úlohy z $Pattern ani jiná údržba, a vezme zámek; $false = po
+# $Minutes pořád obsazeno (úloha to zkusí příště). Volající zámek uvolní ve finally.
+function Wait-MaintenanceSlot([string]$Name, [string]$Pattern, [int]$Minutes) {
+    $deadline = (Get-Date).AddMinutes($Minutes)
+    while ($true) {
+        $busy = @(Get-BusyJobs $Pattern) + @(Get-MaintenanceLockHolder | Where-Object { $_ })
+        if ($busy.Count -eq 0 -and (Enter-MaintenanceLock $Name)) { return $true }
+        if ((Get-Date) -gt $deadline) { Write-Step "Pořád běží $($busy -join ', ') ani po $Minutes min."; return $false }
+        Write-Step "Běží $($busy -join ', ') — čekám..."
+        Start-Sleep -Seconds 15
+    }
+}
+
+# Je trh zavřený? Zdroj pravdy je compute/marketclock.is_market_closed (AGENTS.md):
+# zná svátky CME — Velký pátek, Vánoce, Nový rok, polední zastavení o US svátku —
+# které Get-GlobexClock nezná. Volá se přes Python z .venv repa; když chybí nebo
+# selže, náhradou Get-GlobexClock (svátek pak vyjde jako otevřený trh) s varováním.
+function Test-MarketClosed([DateTime]$UtcNow = [DateTime]::UtcNow) {
+    $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $python = @('.venv\Scripts\python.exe', '.venv/bin/python') | ForEach-Object { Join-Path $repo $_ } |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+    $iso = [DateTime]::SpecifyKind($UtcNow, 'Utc').ToString("yyyy-MM-dd'T'HH:mm:ss'+00:00'")
+    if ($python) {
+        $code = 'import datetime as dt, sys; from gexlens_engine.compute.marketclock import is_market_closed; ' +
+            'print(int(is_market_closed(dt.datetime.fromisoformat(sys.argv[1]))))'
+        $result = Invoke-Native $python @('-c', $code, $iso) 60
+        $out = "$($result.Out)".Trim()
+        if ($result.ExitCode -eq 0 -and $out -in '0', '1') { return $out -eq '1' }
+        Write-Warning "is_market_closed přes $python selhal ($($result.ExitCode)): $("$($result.Err)".Trim()) — náhradou Get-GlobexClock bez svátků."
+    } else {
+        Write-Warning "Python v .venv repa ($repo) nenalezen — náhradou Get-GlobexClock bez svátků."
+    }
+    (Get-GlobexClock -UtcNow $UtcNow).Closed
 }
 
 # Verze z registru odinstalace (MSI) — nezávisí na běžícím daemonu ani na jazyku
@@ -169,11 +251,16 @@ function Resolve-WatchdogAction {
     'wait'
 }
 
-# Tabulky, kterým po zásahu ubyly řádky nebo zmizely (nové tabulky a přírůstky
-# z běžícího enginu a news-enginu jsou v pořádku) — prázdné pole = beze ztráty
-function Compare-PgRowCounts([hashtable]$Before, [hashtable]$After) {
+# Tabulky, které po zásahu zmizely nebo jim ubylo víc než MaxDropShare řádků —
+# prázdné pole = beze ztráty. Smazaný datový disk WSL = prázdné nebo chybějící
+# tabulky; malý pokles je běžný (přepočty DELETE+INSERT: news_model_stats,
+# track_record, sentiment_waves…), proto výchozí práh polovina. -MaxDropShare 0
+# vrátí každý pokles (jen do logu). Nové tabulky a přírůstky jsou v pořádku.
+function Compare-PgRowCounts([hashtable]$Before, [hashtable]$After, [double]$MaxDropShare = 0.5) {
     @(foreach ($table in ($Before.Keys | Sort-Object)) {
         if (-not $After.ContainsKey($table)) { "$table (chybí)" }
-        elseif ($After[$table] -lt $Before[$table]) { "$table ($($Before[$table]) → $($After[$table]))" }
+        elseif ($After[$table] -lt $Before[$table] -and $After[$table] -le $Before[$table] * (1 - $MaxDropShare)) {
+            "$table ($($Before[$table]) → $($After[$table]))"
+        }
     })
 }

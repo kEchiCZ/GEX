@@ -16,6 +16,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-10-13 — neelevovaný hlídač nevidí elevované úlohy přes příkazový řádek (#1552).** Hlídač
+  Dockeru (Task Scheduler, RunLevel Limited) měl poznat kompaktaci VHDX a aktualizaci v pauze podle
+  `Win32_Process.CommandLine`. Obě běží elevovaně a neelevovanému procesu Windows vrátí jejich
+  příkazový řádek prázdný (ověřeno: svchost i další procesy s vyšší úrovní bez řádku). Hlídač by
+  uprostřed kompaktace spustil Docker Desktop nad připojeným VHDX s pgdata. Odhalil to nezávislý
+  ověřovatel z kódu před registrací úloh. → Souběh úloh na hostiteli řešit souborem se jménem a PID
+  (`scripts/lib/DockerHost.ps1`: zámek údržby), ne čtením cizích příkazových řádků přes hranici elevace.
+
 - **2026-10-13 — Docker stál 4 h 49 min po samovolné aktualizaci WSL (#1552).** Engine offline od
   03:11 UTC, Docker Desktop ve stavu `stopped`; kontejnery s `restart: unless-stopped` nepomohou, když
   neběží daemon. Příčina: Windows Update nainstaloval v 03:10 UTC WSL 3.0.3.0 a MSI restartovalo VM WSL.

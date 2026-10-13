@@ -30,8 +30,8 @@ $argument = "--headless `"$pwsh`" -NoProfile -ExecutionPolicy Bypass -Command `"
 $action = New-ScheduledTaskAction -Execute (Join-Path $env:windir 'System32\conhost.exe') -Argument $argument -WorkingDirectory $repo
 # Opakování bez konce od dnešní půlnoci; interval je relativní, posun DST nevadí
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes $EveryMinutes)
-# 20 min: restart (≤ 5,5) + daemon (≤ 5) + engine (≤ 5) + rezerva
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 20) `
+# 30 min: restart (≤ 5,5) + start (≤ 5,5) + daemon (≤ 5) + engine (≤ 5) + rezerva
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
     -MultipleInstances IgnoreNew -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 

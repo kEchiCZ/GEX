@@ -1,9 +1,10 @@
 """Rozhodovací logika provozních skriptů na hostiteli (#1552) — `scripts/lib/*.ps1`.
 
 Pester v repu není (viz test_push_telegram), proto pytest volá pwsh nad čistými
-funkcemi: rozhodnutí hlídače Dockeru, brána trhu `Get-GlobexClock` (víkend,
-denní pauza, nedělní otevření — AGENTS.md: hlídač při zavřeném trhu jen loguje)
-a porovnání počtů řádků PG před a po aktualizaci Docker Desktopu.
+funkcemi: rozhodnutí hlídače Dockeru, brána trhu `Get-GlobexClock` a
+`Test-MarketClosed` (víkend, denní pauza, nedělní otevření, svátky CME —
+AGENTS.md: hlídač při zavřeném trhu jen loguje), zámek údržby a porovnání
+počtů řádků PG před a po aktualizaci Docker Desktopu.
 Bez pwsh (lokální Linux bez PowerShellu) se přeskočí; runner CI ho má.
 """
 
@@ -107,12 +108,22 @@ def test_brana_trhu_minuty_do_otevreni_v_pauze() -> None:
     assert clock["MinutesToOpen"] == pytest.approx(30)
 
 
-def test_pocty_radku_pg_ubytek_a_chybejici_tabulka() -> None:
+def test_pocty_radku_pg_chybejici_tabulka_a_ztrata_poloviny() -> None:
+    # Smazaný datový disk WSL = chybějící nebo vyprázdněné tabulky; malý pokles
+    # přepočítávané tabulky (DELETE+INSERT) ztráta není
     lost = _pwsh(
-        "Compare-PgRowCounts @{ setups = 1666; journal_entries = 25; annotations = 18 } "
-        "@{ setups = 1660; journal_entries = 25 }"
+        "Compare-PgRowCounts @{ setups = 1666; track_record = 500; annotations = 18 } "
+        "@{ setups = 1660; track_record = 250 }"
     )
-    assert lost == ["annotations (chybí)", "setups (1666 → 1660)"]
+    assert lost == ["annotations (chybí)", "track_record (500 → 250)"]
+
+
+def test_pocty_radku_pg_kazdy_pokles_do_logu() -> None:
+    decreased = _pwsh(
+        "Compare-PgRowCounts @{ setups = 1666; journal_entries = 25 } "
+        "@{ setups = 1660; journal_entries = 25 } -MaxDropShare 0"
+    )
+    assert decreased == "setups (1666 → 1660)"
 
 
 def test_pocty_radku_pg_prirustek_a_nova_tabulka_v_poradku() -> None:
@@ -121,3 +132,62 @@ def test_pocty_radku_pg_prirustek_a_nova_tabulka_v_poradku() -> None:
         "@(Compare-PgRowCounts @{ news_events = 100 } @{ news_events = 140; nova = 0 }).Count"
     )
     assert lost == 0
+
+
+@pytest.mark.parametrize(
+    ("utc", "closed"),
+    [
+        ("2026-10-17 15:00", True),  # sobota
+        ("2026-10-13 21:30", True),  # úterý, denní pauza
+        ("2026-10-13 20:59", False),  # úterý, otevřeno
+        ("2026-10-18 21:59", True),  # neděle před otevřením
+        ("2026-10-18 22:00", False),  # nedělní otevření
+        # Svátky CME, které Get-GlobexClock nezná (ověřovatel #1552)
+        ("2027-03-26 15:00", True),  # Velký pátek — Globex zavřený celý den
+        ("2026-12-25 15:00", True),  # Vánoce
+        ("2026-11-26 19:00", True),  # Díkůvzdání po 12:00 CT
+        ("2026-11-26 17:00", False),  # Díkůvzdání dopoledne CT — obchoduje se
+    ],
+)
+def test_trh_zavreny_podle_marketclock(utc: str, closed: bool) -> None:
+    assert _pwsh(f"Test-MarketClosed -UtcNow ([datetime]'{utc}')") is closed
+
+
+def _lock_body(tmp_path: Path, body: str) -> str:
+    # Zámek leží v %LOCALAPPDATA%\GEXLens — v testu dočasný adresář
+    return f"$env:LOCALAPPDATA = '{tmp_path}'\n{body}"
+
+
+def test_zamek_udrzby_jen_jeden_drzitel(tmp_path: Path) -> None:
+    result = _pwsh(
+        _lock_body(
+            tmp_path,
+            "@{ first = Enter-MaintenanceLock 'compact-docker-vhdx'; "
+            "second = Enter-MaintenanceLock 'update-wsl-docker-offhours'; "
+            "holder = Get-MaintenanceLockHolder; "
+            "after = $(Exit-MaintenanceLock; Get-MaintenanceLockHolder) }",
+        )
+    )
+    assert result == {
+        "first": True,
+        "second": False,
+        "holder": "compact-docker-vhdx",
+        "after": None,
+    }
+
+
+def test_zamek_mrtveho_drzitele_se_uklidi(tmp_path: Path) -> None:
+    # Úlohu zabil Task Scheduler: soubor zůstal, proces ne (PID mimo rozsah)
+    result = _pwsh(
+        _lock_body(
+            tmp_path,
+            "$dir = Join-Path $env:LOCALAPPDATA 'GEXLens'\n"
+            "New-Item -ItemType Directory -Force $dir | Out-Null\n"
+            "$path = Join-Path $dir 'docker-maintenance.lock'\n"
+            "@{ name = 'compact-docker-vhdx'; pid = 2147483000; since = (Get-Date).ToString('s') } "
+            "| ConvertTo-Json | Set-Content $path\n"
+            "@{ holder = (Get-MaintenanceLockHolder 6>$null); exists = (Test-Path $path); "
+            "taken = (Enter-MaintenanceLock 'update-wsl-docker-offhours') }",
+        )
+    )
+    assert result == {"holder": None, "exists": False, "taken": True}

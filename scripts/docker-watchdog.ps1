@@ -9,11 +9,13 @@
 #   - neodpovídá a `docker desktop status` ≠ running → `docker desktop restart`,
 #     čekání na daemon, výpis kontejnerů gex-*, spojení enginu s IBKR (/status);
 #   - running, ale daemon neodpovídá → jen upozornění (restart jen při ≠ running);
-#   - běží deploy / kompaktace / aktualizace v pauze → bez zásahu, Docker
-#     restartují záměrně a samy ho hlídají.
+#   - běží deploy (příkazový řádek) nebo kompaktace / aktualizace v pauze (zámek
+#     údržby — elevované procesy neelevovaný hlídač jinak nevidí) → bez zásahu,
+#     Docker restartují záměrně a samy ho hlídají.
 # Restart proběhne kdykoli (díra v datech minuty místo hodin); upozornění na
-# Telegram (přepínač „maintenance") jen při otevřeném trhu — při zavřeném trhu
-# jen log (AGENTS.md: zavřený trh = žádná upozornění na chybějící data).
+# Telegram (přepínač „maintenance") jen při otevřeném trhu podle
+# compute/marketclock.is_market_closed (Test-MarketClosed, zná svátky CME) —
+# při zavřeném trhu jen log (AGENTS.md: zavřený trh = žádná upozornění).
 # Jedno upozornění na incident; stav incidentu v %LOCALAPPDATA%\GEXLens.
 #
 # Záměrné zastavení Docker Desktopu: nejdřív
@@ -48,7 +50,7 @@ if ($infoOk) {
         Write-Step "Docker zase odpovídá (incident od $($incident.since))."
         if (-not $DryRun) {
             # Kdo dostal upozornění na výpadek, dostane i konec (jen při otevřeném trhu)
-            if ($incident.alerted -and -not (Get-GlobexClock).Closed) {
+            if ($incident.alerted -and -not (Test-MarketClosed)) {
                 Send-OpsAlert "Docker zase odpovídá (výpadek od $($incident.since))." -Topic 'maintenance'
             }
             Remove-Item $statePath -Force
@@ -57,25 +59,28 @@ if ($infoOk) {
     exit 0
 }
 
-# Úlohy, které Docker zastavují záměrně a samy ho po sobě obnovují
-$busy = Get-BusyJobs 'deploy-engine-offhours|compact-docker-vhdx|update-wsl-docker-offhours'
+# Úlohy, které Docker zastavují záměrně a samy ho po sobě obnovují: deploy
+# (neelevovaný, příkazový řádek) a kompaktace / aktualizace (zámek údržby)
+$busy = @(Get-BusyJobs 'deploy-engine-offhours') + @(Get-MaintenanceLockHolder | Where-Object { $_ })
 $status = Get-DockerDesktopStatus
 $now = Get-Date
 if (-not $incident) { $incident = [pscustomobject]@{ since = $now.ToString('s'); alerted = $false } }
 $minutes = ($now - [datetime]$incident.since).TotalMinutes
 $action = Resolve-WatchdogAction -InfoOk $false -Status $status -Busy $busy -IncidentMinutes $minutes
 $clock = Get-GlobexClock
-$market = if ($clock.Closed) { 'trh zavřený' } else { 'trh otevřený' }
+$closed = Test-MarketClosed
+$market = if ($closed) { 'trh zavřený' } else { 'trh otevřený' }
 Write-Step "Docker neodpovídá: stav Docker Desktopu '$status', incident od $($incident.since) ($([math]::Round($minutes)) min), $market (CT $($clock.Label)) → $action"
 if ($DryRun) { exit 0 }
 if ($action -eq 'skip-busy') { Write-Step "Běží $($busy -join ', ') — bez zásahu."; exit 0 }
 
-# API v Dockeru neběží → nastavení Telegramu neznámé → posílá se (fail-open, OpsAlert)
-# -Always: zpráva o konci incidentu (restart proběhl) jde i po dřívějším upozornění
+# Nastavení Telegramu čte Send-OpsAlert z API; když API s Dockerem neodpovídá,
+# posílá se (fail-open, OpsAlert). -Always: zpráva o konci incidentu (restart
+# proběhl) jde i po dřívějším upozornění
 function Send-IncidentAlert([string]$Message, [switch]$Always) {
-    if ($clock.Closed) { Write-Step "Trh zavřený — bez upozornění: $Message"; return }
+    if ($closed) { Write-Step "Trh zavřený — bez upozornění: $Message"; return }
     if ($incident.alerted -and -not $Always) { Write-Step "Už upozorněno v tomto incidentu: $Message"; return }
-    Send-OpsAlert $Message -Topic 'maintenance' -Policy $null
+    Send-OpsAlert $Message -Topic 'maintenance'
     $incident.alerted = $true
 }
 
@@ -88,7 +93,9 @@ switch ($action) {
     }
 }
 
-# restart
+# restart — incident uložit předem: restart a čekání trvají až ~23 min a úlohu by
+# při překročení limitu zabil Task Scheduler bez zápisu
+Save-Incident $incident
 Write-Step 'docker desktop restart...'
 $result = Invoke-Docker @('desktop', 'restart', '--timeout', '300') 330
 if ($result.ExitCode -ne 0) {
