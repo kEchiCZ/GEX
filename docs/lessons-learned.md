@@ -16,6 +16,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 1. Provoz (Docker, deploy, git)
 
+- **2026-10-14 — epika se rozjela do bočních issues (#1385).** Za týden od schválení: 44 PR, z nich
+  18 (41 %) v pořadí plánu, 13 na Fázi 6 před její bránou, 13 bočních; 44 nových bočních issues
+  (~7 denně), 13 ze 14 zavřených hotovo do 24 h. Datová oprava E-0.2, na které visí brána F6 a bod
+  návratu, mezitím propadla 5 pauz Globexu a víkend se zavřeným trhem. Příčiny: „další krok" se počítal
+  uvnitř bloku práce, ne z pořadí epiky; brána fáze nebyla tvrdá; nález = okamžitá práce; nová zadání
+  bez příjmu. Odhalil to dotaz vlastníka a rozbor issues proti plánu. → Pravidlo AGENTS.md
+  „Pořadí práce" (blok Teď, tvrdá brána, `nalez` / `zadani`, nedělní triáž).
+
 - **2026-10-13 — neelevovaný hlídač nevidí elevované úlohy přes příkazový řádek (#1552).** Hlídač
   Dockeru (Task Scheduler, RunLevel Limited) měl poznat kompaktaci VHDX a aktualizaci v pauze podle
   `Win32_Process.CommandLine`. Obě běží elevovaně a neelevovanému procesu Windows vrátí jejich
