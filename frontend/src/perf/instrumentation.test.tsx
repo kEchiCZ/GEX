@@ -74,7 +74,7 @@ test('Heatmap: rastr a obě vrstvy overlay se počítají deterministicky', () =
       <Heatmap grid={grid} style="gradient" contours="off" />
     </CrosshairProvider>,
   )
-  expect(perfCounters()).toEqual({ renderGrid: 1, drawStatic: 1, drawDynamic: 1 })
+  expect(perfCounters()).toEqual({ renderHeatmap: 1, renderGrid: 1, drawStatic: 1, drawDynamic: 1 })
 
   // Týž grid: rastr se nepřepočítá. Overlay se dnes překreslí znovu (výchozí
   // props bez memo dávají nové identity) — přesně tohle má měřič ukazovat
@@ -84,7 +84,7 @@ test('Heatmap: rastr a obě vrstvy overlay se počítají deterministicky', () =
       <Heatmap grid={grid} style="gradient" contours="off" />
     </CrosshairProvider>,
   )
-  expect(perfCounters()).toEqual({ renderGrid: 1, drawStatic: 2, drawDynamic: 2 })
+  expect(perfCounters()).toEqual({ renderHeatmap: 2, renderGrid: 1, drawStatic: 2, drawDynamic: 2 })
 })
 
 test('Mode/Scale span končí vykreslením mřížky s hotovými konturami', () => {

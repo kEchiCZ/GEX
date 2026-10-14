@@ -14,7 +14,7 @@ import { useElementSize } from '../hooks/useElementSize'
 import { splitContoursMode } from '../heatmap/contours'
 import type { ContoursMode } from '../heatmap/contours'
 import { contoursSettled, useContours } from '../heatmap/useContours'
-import { perfEnabled, perfEnd, perfFinish, perfStart } from '../perf/meter'
+import { perfBegin, perfEnabled, perfEnd, perfFinish, perfStart, useRenderTimer } from '../perf/meter'
 import { renderGrid } from '../heatmap/render'
 import type { SignedPalette } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
@@ -88,6 +88,10 @@ const LABEL_ROW_GAP_PX = 12
 
 /** Tolerance úchopu okraje range (#484) v px — musí jít trefit i při hustší ose. */
 const RANGE_EDGE_TOL_PX = 6
+
+/** Klid kolečka, po kterém gesto zoomu končí a persistuje (#1419) — kolečko
+nemá událost konce; kroky jednoho otočení chodí po desítkách ms. */
+export const WHEEL_IDLE_MS = 200
 
 /** Rezerva košů před levým okrajem historie (#788) — další den se dotahuje
 dřív, než uživatel doscrolluje na prázdno; při defaultním pohledu to eagerly
@@ -270,6 +274,7 @@ export function Heatmap({
       návratu na graf (nový mount) nepřehrál znovu (#1290). */
   onFocusApplied?: (nonce: number) => void
 }) {
+  const endRenderTimer = useRenderTimer('renderHeatmap') // měřič výkonu (#1419)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
   // Dynamická vrstva (#141): crosshair + živé svíčky — překresluje se 5×/s, ale je levná
@@ -1442,6 +1447,12 @@ export function Heatmap({
     drawDynamic()
   }, [drawDynamic])
 
+  // Měřič výkonu (#1419): krok gesta končí po vykreslení obou vrstev overlay
+  // v commitu s novým pohledem (render Reactu, commit, drawStatic, drawDynamic)
+  useLayoutEffect(() => {
+    perfFinish('gestureFrame')
+  }, [view])
+
   /** Souřadnice události v logických CSS px (raster i mapping sdílí stejný prostor). */
   const canvasPoint = (event: {
     clientX: number
@@ -1453,22 +1464,92 @@ export function Heatmap({
     return { x: event.clientX - rect.left, y: event.clientY - rect.top }
   }
 
-  // Uživatelské gesto měnící pohled: změny zoomX a pásma Y hlásí rodiči
-  // k persistenci (#419, #426) — jediné místo, odkud se persistence plní
+  // Uživatelské gesto měnící pohled (#1419): kroky panu, tažení os a kolečka
+  // se skládají do jednoho zápisu pohledu na snímek (rAF) a změny zoomX
+  // a pásma Y se hlásí rodiči k persistenci (#419, #426) jednou na konci gesta
+  // — jediné místo, odkud se persistence plní. Dřív každý pointermove i krok
+  // kolečka přerenderoval App a zapsal localStorage (baseline #1412).
+  // Základem dalšího kroku je během gesta poslední krok gesta, ne render.
+  const gestureRef = useRef<{
+    start: ViewTransform
+    latest: ViewTransform
+    range: { top: number; bottom: number } | null
+    unflushed: boolean
+  } | null>(null)
+  const gestureFrameRef = useRef<number | null>(null)
+  const wheelIdleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Latest-ref v layout efektu (#1123): konec kolečka přichází z časovače
+  const committedViewRef = useRef(view)
+  const gestureSinkRef = useRef({ onUserZoomX, onUserYRange })
+  useLayoutEffect(() => {
+    committedViewRef.current = view
+    gestureSinkRef.current = { onUserZoomX, onUserYRange }
+  })
+
+  const flushGestureFrame = useCallback(() => {
+    if (gestureFrameRef.current !== null) {
+      cancelAnimationFrame(gestureFrameRef.current)
+      gestureFrameRef.current = null
+    }
+    const gesture = gestureRef.current
+    if (!gesture?.unflushed) return
+    gesture.unflushed = false
+    const next = gesture.latest
+    perfBegin('gestureFrame') // měřič výkonu: krok gesta → vykreslení
+    setView(() => next)
+  }, [setView])
+
   const setGestureView = useCallback(
     (updater: (previous: ViewTransform) => ViewTransform) => {
-      setView((previous) => {
-        const next = updater(previous)
-        if (next.zoomX !== previous.zoomX) onUserZoomX?.(next.zoomX)
-        if (next.zoomY !== previous.zoomY || next.offsetY !== previous.offsetY) {
-          const range = visiblePriceRange(grid.strikes, next, logicalH)
-          if (range) onUserYRange?.(range)
-        }
-        return next
-      })
+      const gesture = gestureRef.current
+      const base = gesture ? gesture.latest : (pendingViewRef.current ?? committedViewRef.current)
+      const next = updater(base)
+      gestureRef.current = {
+        start: gesture ? gesture.start : base,
+        latest: next,
+        range: visiblePriceRange(grid.strikes, next, logicalH),
+        unflushed: true,
+      }
+      if (gestureFrameRef.current === null) {
+        gestureFrameRef.current = requestAnimationFrame(() => {
+          gestureFrameRef.current = null
+          flushGestureFrame()
+        })
+      }
     },
-    [setView, onUserZoomX, onUserYRange, grid.strikes, logicalH],
+    [flushGestureFrame, grid.strikes, logicalH],
   )
+
+  // Konec gesta: dorovnat poslední krok a persistovat jen to, co se proti
+  // začátku gesta změnilo. Časovač kolečka volá uzávěru z dřívějšího renderu
+  // — stav gesta i callbacky rodiče proto čte z refů.
+  const endGesture = useCallback(() => {
+    if (wheelIdleRef.current !== null) {
+      clearTimeout(wheelIdleRef.current)
+      wheelIdleRef.current = null
+    }
+    const gesture = gestureRef.current
+    if (!gesture) return
+    flushGestureFrame()
+    gestureRef.current = null
+    const { start, latest, range } = gesture
+    const sink = gestureSinkRef.current
+    if (latest.zoomX !== start.zoomX) sink.onUserZoomX?.(latest.zoomX)
+    if ((latest.zoomY !== start.zoomY || latest.offsetY !== start.offsetY) && range) {
+      sink.onUserYRange?.(range)
+    }
+  }, [flushGestureFrame])
+
+  // Zahození rozběhnutého gesta bez persistence: reset pohledu a změna datasetu
+  // (pásmo Y starého symbolu by se zapsalo pod klíč nového)
+  const cancelGesture = useCallback(() => {
+    if (gestureFrameRef.current !== null) cancelAnimationFrame(gestureFrameRef.current)
+    if (wheelIdleRef.current !== null) clearTimeout(wheelIdleRef.current)
+    gestureFrameRef.current = null
+    wheelIdleRef.current = null
+    gestureRef.current = null
+  }, [])
+  useLayoutEffect(() => cancelGesture, [resetKey, cancelGesture])
 
   // Kolečko: zoom ukotvený ke kurzoru; nad pruhem osy jen daná osa (TradingView styl)
   const onWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
@@ -1483,9 +1564,13 @@ export function Heatmap({
           ? zoomAxis(previous, 'y', factor, point.y)
           : zoomBoth(previous, factor, point.x, point.y),
     )
+    // Gesto kolečka nemá událost konce — končí klidem
+    if (wheelIdleRef.current !== null) clearTimeout(wheelIdleRef.current)
+    wheelIdleRef.current = setTimeout(endGesture, WHEEL_IDLE_MS)
   }
 
   const resetView = () => {
+    cancelGesture()
     // Reset je programová změna pohledu — bez aktualizace applied ref by ho
     // auto-follow vyhodnotil jako uživatelské gesto a trvale se vypnul (#501)
     appliedViewRef.current = homeView
@@ -1587,7 +1672,9 @@ export function Heatmap({
         }
       }
     }
-    // Tažení za pruh osy = roztahování/stahování dané osy; jinde pan plochy
+    // Tažení za pruh osy = roztahování/stahování dané osy; jinde pan plochy.
+    // Rozběhnuté gesto kolečka nejdřív skončí (a persistuje) samo za sebe
+    endGesture()
     const point = canvasPoint(event)
     const zone = point ? axisZoneAt(point.x, point.y, logicalH) : null
     clickRef.current = point
@@ -1737,6 +1824,7 @@ export function Heatmap({
       return
     }
     dragRef.current = null
+    endGesture()
     // Klik (bez tažení) do pásu markerů u spodní hrany → dialog zpráv (#408).
     // Pan se pozná podle uražené vzdálenosti — kapture drží tentýž pointer.
     const start = clickRef.current
@@ -1881,6 +1969,7 @@ export function Heatmap({
     [crosshairBus],
   )
 
+  endRenderTimer()
   return (
     <div className="heatmap-stack" ref={stackRef}>
       {/* Explicitní px rozměry (ne CSS 100 %): při tažení předělů se starý
@@ -1925,6 +2014,13 @@ export function Heatmap({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        // Zrušený pointer (ztráta capture, systémové gesto) ukončí tažení
+        // pohledu — jinak by pohyb bez tlačítka dál posouval graf
+        onPointerCancel={() => {
+          dragRef.current = null
+          clickRef.current = null
+          endGesture()
+        }}
         onPointerLeave={() => {
           crosshairBus.set(null, null)
           setAxisHover(null)
