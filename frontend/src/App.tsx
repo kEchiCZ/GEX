@@ -120,7 +120,7 @@ import { magnetLevel } from './instrument/magnet'
 import type { ContoursMode } from './heatmap/contours'
 import type { HeatmapStyle } from './heatmap/render'
 import type { LiveSocket } from './api/ws'
-import { perfBegin, perfFinish, setPerfView } from './perf/meter'
+import { perfBegin, perfFinish, setPerfView, useRenderTimer } from './perf/meter'
 
 const ANNOTATION_TOOLS: Array<{ tool: ActiveTool; label: string }> = [
   { tool: null, label: 'Kurzor' },
@@ -160,6 +160,7 @@ function lastValue(series: (number | null)[] | undefined, position: number): num
 const NEWS_FOCUS_ERROR_MS = 8000
 
 function MainContent() {
+  const endRenderTimer = useRenderTimer('renderApp') // měřič výkonu (#1419)
   const {
     toggles,
     symbol,
@@ -1700,6 +1701,7 @@ function MainContent() {
   if (view === 'stats') return <StatsView />
   if (view === 'settings') return <SettingsView />
 
+  endRenderTimer()
   return (
     <>
       <TimeframeRow />

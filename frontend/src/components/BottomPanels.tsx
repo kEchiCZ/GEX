@@ -26,6 +26,7 @@ import {
 import type { SentimentCandle } from '../panels/geometry'
 import { useCrosshair } from '../state/Crosshair'
 import { oneOf, usePersistentState } from '../state/persist'
+import { useRenderTimer } from '../perf/meter'
 
 export interface PanelSeries {
   vol: number[]
@@ -196,6 +197,7 @@ function BottomPanelsBase({
   /** Druhé okno B (#489) — dim je komplement sjednocení obou. */
   rangeB?: { startBucket: number; endBucket: number } | null
 }) {
+  const endRenderTimer = useRenderTimer('renderPanels') // měřič výkonu (#1419)
   const minutes = data.vol.length
   const axisMinutes = Math.max(minutes, totalMinutes ?? minutes)
   const pointer = usePanelPointer(axisMinutes, width, time)
@@ -973,6 +975,7 @@ function BottomPanelsBase({
     )
   }
 
+  endRenderTimer()
   if (panels.length === 0) return null
   return (
     <div className="bottom-panels" aria-label="Spodní panely">

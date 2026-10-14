@@ -9,7 +9,7 @@ closure). Zapnutý drží:
 - **operace** grafu (`perfStart` / `perfEnd`) s počítadly od zapnutí nebo resetu;
   počty jsou deterministické, časy ne (výkonový rozpočet v CI, E-2a.13),
 - **spany „do vykreslení“** (`perfBegin` → `perfFinish`): načtení dne, přepnutí
-  symbolu, Mode/Scale včetně kontur, minutový update,
+  symbolu, Mode/Scale včetně kontur, minutový update, krok gesta pan/zoom,
 - **kruhový buffer 30 s**: záznam nese čas a pohled (symbol, timeframe, Mode),
   starší se zahazuje.
 
@@ -17,8 +17,15 @@ UI měřič nemá: overlay, Diagnostika ani „Seklo to“ nevznikají (vlastní
 #1411). Ovládá se z konzole (`window.gexlensPerf`) a z Playwrightu (E-2a.13). */
 import { APP_ENV, BUILD_SHA } from '../config'
 
-/** Měřené operace grafu; jméno = počítadlo v exportu. */
+/** Měřené operace grafu; jméno = počítadlo v exportu.
+
+`render*` = vlastní čas těla komponenty (hooky a memo výpočty, bez potomků):
+rozpad renderu Reactu bez profiling buildu (rozhodnutí 2 v #1385, 12. 10.). */
 export type PerfOp =
+  | 'renderApp'
+  | 'renderHeatmap'
+  | 'renderPanels'
+  | 'renderProfile'
   | 'drawStatic'
   | 'drawDynamic'
   | 'buildModeGrid'
@@ -28,8 +35,8 @@ export type PerfOp =
   | 'dayDecode'
   | 'dayBuild'
 
-/** Spany od akce do vykreslení. */
-export type PerfSpan = 'dayLoad' | 'symbolSwitch' | 'modeScale' | 'minuteUpdate'
+/** Spany od akce do vykreslení; `gestureFrame` = krok panu nebo zoomu (#1419). */
+export type PerfSpan = 'dayLoad' | 'symbolSwitch' | 'modeScale' | 'minuteUpdate' | 'gestureFrame'
 
 export type PerfKind = 'frame' | 'longtask' | 'op' | 'span'
 
@@ -169,6 +176,16 @@ export function perfEnd(op: PerfOp, t0: number): void {
   const now = clock()
   bump(op)
   push('op', op, now - t0, now)
+}
+
+/** Vlastní čas těla komponenty (`render*`, #1419): volá se jako první hook
+komponenty, vrácená funkce těsně před `return` — změří hooky a memo výpočty
+bez renderu potomků (ten React pustí až po návratu těla). Hook, ne volání
+`perfStart` přímo v těle: pravidla React Compileru v lintu jinak u komponenty
+vzdají kontrolu ručních memo. */
+export function useRenderTimer(op: PerfOp): () => void {
+  const t0 = perfStart()
+  return () => perfEnd(op, t0)
 }
 
 /** Začátek spanu „do vykreslení“; opakovaný začátek přepíše dřívější.

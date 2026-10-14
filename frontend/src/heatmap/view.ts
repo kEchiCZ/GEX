@@ -9,6 +9,10 @@ export interface ViewTransform {
 
 export const DEFAULT_VIEW: ViewTransform = { offsetX: 0, offsetY: 0, zoomX: 1, zoomY: 1 }
 
+/** Klid kolečka, po kterém gesto zoomu končí a persistuje (#1419) — kolečko
+nemá událost konce; kroky jednoho otočení chodí po desítkách ms. */
+export const WHEEL_IDLE_MS = 200
+
 /** Meze zoomu: <1 = smrštění (více kontextu), >1 = roztažení (větší svíčky). */
 export const ZOOM_MIN = 0.2
 export const ZOOM_MAX = 32

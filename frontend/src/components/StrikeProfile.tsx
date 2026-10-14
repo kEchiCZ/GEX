@@ -29,6 +29,7 @@ import type { GexUnits } from '../heatmap/units'
 import type { GexProfileRow } from '../replay/loader'
 import { oneOf, usePersistentState } from '../state/persist'
 import { useCrosshair } from '../state/Crosshair'
+import { useRenderTimer } from '../perf/meter'
 
 /** Y transformace hlavního grafu: strike → obrazovková výška (sdílená osa). */
 export interface ProfileYView {
@@ -125,6 +126,7 @@ function StrikeProfileBase({
   by se cenové osy obou panelů rozjely. Null = osa z vlastních řádků (legacy). */
   axisStrikes?: number[] | null
 }) {
+  const endRenderTimer = useRenderTimer('renderProfile') // měřič výkonu (#1419)
   const [zoom, setZoom] = useState<1 | 2 | 4>(1)
   const [scaleMode, setScaleMode] = useState<'rel' | 'abs'>('rel')
   // Dyn GEX křivka (ADR-0009) — přepínatelná, volba přežívá refresh (ADR-0007)
@@ -302,6 +304,7 @@ function StrikeProfileBase({
   // Minuta bez objemu (#1067) — příznak nese každý řádek minuty, stačí jeden
   const volumeMissing = rows.some((row) => row.volumeMissing === true)
 
+  endRenderTimer()
   return (
     <aside className="strike-profile" aria-label="Strike profil" style={{ width }}>
       <div className="profile-header">
