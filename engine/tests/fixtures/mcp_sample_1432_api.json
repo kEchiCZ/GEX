@@ -1,0 +1,626 @@
+{
+ "recorded_at": "2026-10-14T13:23:07+00:00",
+ "responses": {
+  "/bars/ES?date=2026-10-14": {
+   "symbol": "ES",
+   "date": "2026-10-14",
+   "bars": [
+    {
+     "ts_min": "2026-10-14T13:21:00+00:00",
+     "open": 7821.75,
+     "high": 7824.0,
+     "low": 7821.75,
+     "close": 7823.0,
+     "volume": 1896.0,
+     "source": "ibkr"
+    },
+    {
+     "ts_min": "2026-10-14T13:22:00+00:00",
+     "open": 7823.0,
+     "high": 7823.75,
+     "low": 7822.5,
+     "close": 7823.0,
+     "volume": 1082.0,
+     "source": "ibkr"
+    }
+   ]
+  },
+  "/bars/NQ?date=2026-10-14": {
+   "symbol": "NQ",
+   "date": "2026-10-14",
+   "bars": [
+    {
+     "ts_min": "2026-10-14T13:20:00+00:00",
+     "open": 30546.75,
+     "high": 30549.0,
+     "low": 30537.0,
+     "close": 30541.25,
+     "volume": 504.0,
+     "source": "ibkr"
+    },
+    {
+     "ts_min": "2026-10-14T13:21:00+00:00",
+     "open": 30540.75,
+     "high": 30555.25,
+     "low": 30540.25,
+     "close": 30548.0,
+     "volume": 539.0,
+     "source": "ibkr"
+    }
+   ]
+  },
+  "/candles/ES?tf=D&limit=2": {
+   "symbol": "ES",
+   "tf": "D",
+   "candles": [
+    {
+     "ts": "2026-10-12T22:00:00+00:00",
+     "open": 7855.5,
+     "high": 7864.0,
+     "low": 7834.5,
+     "close": 7855.5,
+     "volume": 1793299.0,
+     "partial": false
+    },
+    {
+     "ts": "2026-10-13T22:00:00+00:00",
+     "open": 7856.25,
+     "high": 7879.75,
+     "low": 7821.25,
+     "close": 7823.0,
+     "volume": 310411.0,
+     "partial": true
+    }
+   ]
+  },
+  "/candles/NQ?tf=D&limit=2": {
+   "symbol": "NQ",
+   "tf": "D",
+   "candles": [
+    {
+     "ts": "2026-10-12T22:00:00+00:00",
+     "open": 30876.0,
+     "high": 30906.0,
+     "low": 30591.25,
+     "close": 30782.0,
+     "volume": 770399.0,
+     "partial": false
+    },
+    {
+     "ts": "2026-10-13T22:00:00+00:00",
+     "open": 30791.5,
+     "high": 30891.5,
+     "low": 30535.0,
+     "close": 30548.0,
+     "volume": 163659.0,
+     "partial": true
+    }
+   ]
+  },
+  "/emrespect/ES?limit=1": {
+   "symbol": "ES",
+   "summary": {
+    "window_days": 90,
+    "n": 61,
+    "close_in_band_share": 0.6721311475409836,
+    "touch_upper_share": 0.5573770491803278,
+    "touch_lower_share": 0.6229508196721312
+   },
+   "rows": [
+    {
+     "session_date": "2026-10-13",
+     "symbol": "ES",
+     "ref_ts": "2026-10-13T13:30:00+00:00",
+     "em_source": "straddle",
+     "anchor": 7852.75,
+     "atm_strike": 7855.0,
+     "em_points": 21.6,
+     "high": 7864.0,
+     "low": 7834.5,
+     "close": 7854.75,
+     "close_in_band": true,
+     "touch_upper": false,
+     "touch_lower": false,
+     "range_vs_em": 1.3657407407407407,
+     "negative_gamma_share": 0.6186708860759493,
+     "version": 1,
+     "computed_at": "2026-10-13T20:05:00+00:00"
+    }
+   ]
+  },
+  "/emrespect/NQ?limit=1": {
+   "symbol": "NQ",
+   "summary": {
+    "window_days": 90,
+    "n": 61,
+    "close_in_band_share": 0.7049180327868853,
+    "touch_upper_share": 0.4918032786885246,
+    "touch_lower_share": 0.639344262295082
+   },
+   "rows": [
+    {
+     "session_date": "2026-10-13",
+     "symbol": "NQ",
+     "ref_ts": "2026-10-13T13:30:00+00:00",
+     "em_source": "straddle",
+     "anchor": 30648.75,
+     "atm_strike": 30650.0,
+     "em_points": 153.25,
+     "high": 30906.0,
+     "low": 30591.25,
+     "close": 30785.75,
+     "close_in_band": true,
+     "touch_upper": true,
+     "touch_lower": false,
+     "range_vs_em": 2.053833605220228,
+     "negative_gamma_share": null,
+     "version": 1,
+     "computed_at": "2026-10-13T20:05:00+00:00"
+    }
+   ]
+  },
+  "/instruments/ES/expiries": {
+   "expiries": [
+    "20261009",
+    "20261013",
+    "20261014",
+    "20261015"
+   ],
+   "detail": [
+    {
+     "date": "20261013",
+     "trading_classes": [
+      "E2B"
+     ]
+    },
+    {
+     "date": "20261014",
+     "trading_classes": [
+      "E2C"
+     ]
+    },
+    {
+     "date": "20261015",
+     "trading_classes": [
+      "E3D"
+     ]
+    }
+   ],
+   "multiplier": 50.0
+  },
+  "/instruments/NQ/expiries": {
+   "expiries": [
+    "20261009",
+    "20261013",
+    "20261014",
+    "20261015"
+   ],
+   "detail": [
+    {
+     "date": "20261013",
+     "trading_classes": [
+      "Q2B"
+     ]
+    },
+    {
+     "date": "20261014",
+     "trading_classes": [
+      "Q2C"
+     ]
+    },
+    {
+     "date": "20261015",
+     "trading_classes": [
+      "Q3D"
+     ]
+    }
+   ],
+   "multiplier": 20.0
+  },
+  "/ivrank/ES?limit=1": {
+   "symbol": "ES",
+   "latest": [
+    {
+     "session_date": "2026-10-13",
+     "symbol": "ES",
+     "source": "ibkr",
+     "iv": 0.11905881,
+     "iv_rank": 0.008615255754665605,
+     "iv_percentile": 0.07936507936507936,
+     "sample": 252,
+     "version": 1,
+     "computed_at": "2026-10-13T20:10:00+00:00"
+    },
+    {
+     "session_date": "2026-10-13",
+     "symbol": "ES",
+     "source": "tasty",
+     "iv": 0.150533355,
+     "iv_rank": 0.288229376,
+     "iv_percentile": 0.323289252,
+     "sample": 0,
+     "version": 1,
+     "computed_at": "2026-10-13T20:10:00+00:00"
+    },
+    {
+     "session_date": "2026-10-13",
+     "symbol": "ES",
+     "source": "own_atm",
+     "iv": 0.0930154046125101,
+     "iv_rank": null,
+     "iv_percentile": null,
+     "sample": 33,
+     "version": 1,
+     "computed_at": "2026-10-13T20:10:00+00:00"
+    }
+   ],
+   "rows": []
+  },
+  "/ivrank/NQ?limit=1": {
+   "symbol": "NQ",
+   "latest": [
+    {
+     "session_date": "2026-10-13",
+     "symbol": "NQ",
+     "source": "ibkr",
+     "iv": 0.19843135,
+     "iv_rank": 0.040000000403162095,
+     "iv_percentile": 0.24404761904761904,
+     "sample": 252,
+     "version": 1,
+     "computed_at": "2026-10-13T20:10:00+00:00"
+    },
+    {
+     "session_date": "2026-10-13",
+     "symbol": "NQ",
+     "source": "tasty",
+     "iv": 0.206656934,
+     "iv_rank": 0.410022779,
+     "iv_percentile": 0.262925942,
+     "sample": 0,
+     "version": 1,
+     "computed_at": "2026-10-13T20:10:00+00:00"
+    },
+    {
+     "session_date": "2026-10-13",
+     "symbol": "NQ",
+     "source": "own_atm",
+     "iv": 0.1572611494013005,
+     "iv_rank": null,
+     "iv_percentile": null,
+     "sample": 33,
+     "version": 1,
+     "computed_at": "2026-10-13T20:10:00+00:00"
+    }
+   ],
+   "rows": []
+  },
+  "/levels/ES/20261014?date=2026-10-14": {
+   "levels": [
+    {
+     "ts_min": "2026-10-14T13:21:00+00:00",
+     "flip": null,
+     "call_wall": 7870.0,
+     "put_wall": 7790.0,
+     "centroid": 7796.953726467617,
+     "total_gex": -10748.882544166647,
+     "call_wall_dom": 0.17564151953156867,
+     "put_wall_dom": 0.27196275601381104
+    },
+    {
+     "ts_min": "2026-10-14T13:22:00+00:00",
+     "flip": null,
+     "call_wall": 7870.0,
+     "put_wall": 7790.0,
+     "centroid": 7797.910926402372,
+     "total_gex": -10397.956663133642,
+     "call_wall_dom": 0.17569142873886875,
+     "put_wall_dom": 0.2702623759404746
+    }
+   ]
+  },
+  "/levels/NQ/20261014?date=2026-10-14": {
+   "levels": [
+    {
+     "ts_min": "2026-10-14T13:21:00+00:00",
+     "flip": null,
+     "call_wall": 30900.0,
+     "put_wall": 30350.0,
+     "centroid": 30495.787160212836,
+     "total_gex": -92.41661464167937,
+     "call_wall_dom": 0.23173376443490235,
+     "put_wall_dom": 0.6702853693786912
+    },
+    {
+     "ts_min": "2026-10-14T13:22:00+00:00",
+     "flip": null,
+     "call_wall": 30900.0,
+     "put_wall": 30350.0,
+     "centroid": 30497.52067964822,
+     "total_gex": -90.92530046747702,
+     "call_wall_dom": 0.23046441264636547,
+     "put_wall_dom": 0.6674849435894952
+    }
+   ]
+  },
+  "/setups/summary?symbols=ES,NQ": {
+   "symbols": [
+    "ES",
+    "NQ"
+   ],
+   "mechanics_version": 5,
+   "cells": [
+    {
+     "cell": "ES:trend_continuation",
+     "ticker": "ES",
+     "template": "trend_continuation",
+     "template_number": 7,
+     "stage": "auto",
+     "effective_stage": "auto",
+     "trial": null,
+     "gate_verdict": "block",
+     "gate_n": 286,
+     "gate_lb": -0.08245869274443778,
+     "avg_r": 0.08494033245681169,
+     "avg_net_r": -0.1493410058125568,
+     "n_needed": 458,
+     "sessions": 36,
+     "per_session": 7.944444444444445,
+     "window_capacity": 476,
+     "sessions_to_decision": 22
+    },
+    {
+     "cell": "NQ:trend_continuation",
+     "ticker": "NQ",
+     "template": "trend_continuation",
+     "template_number": 7,
+     "stage": "auto",
+     "effective_stage": "auto",
+     "trial": null,
+     "gate_verdict": "block",
+     "gate_n": 198,
+     "gate_lb": -0.15404370139013693,
+     "avg_r": 0.04703021609294921,
+     "avg_net_r": -0.015289730824356624,
+     "n_needed": 457,
+     "sessions": 37,
+     "per_session": 5.351351351351352,
+     "window_capacity": 321,
+     "sessions_to_decision": null
+    },
+    {
+     "cell": "ES:wall_bounce",
+     "ticker": "ES",
+     "template": "wall_bounce",
+     "template_number": 1,
+     "stage": "auto",
+     "effective_stage": "auto",
+     "trial": null,
+     "gate_verdict": "block",
+     "gate_n": 36,
+     "gate_lb": -0.07053836353045412,
+     "avg_r": 0.33041856863411795,
+     "avg_net_r": 0.2578224612915905,
+     "n_needed": 331,
+     "sessions": 36,
+     "per_session": 1.0,
+     "window_capacity": 60,
+     "sessions_to_decision": null
+    },
+    {
+     "cell": "NQ:failed_break",
+     "ticker": "NQ",
+     "template": "failed_break",
+     "template_number": 2,
+     "stage": "auto",
+     "effective_stage": "auto",
+     "trial": null,
+     "gate_verdict": "block",
+     "gate_n": 32,
+     "gate_lb": -0.4575761628974333,
+     "avg_r": 0.01068264197617562,
+     "avg_net_r": -0.03620443602151303,
+     "n_needed": 401,
+     "sessions": 37,
+     "per_session": 0.8648648648648649,
+     "window_capacity": 51,
+     "sessions_to_decision": null
+    },
+    {
+     "cell": "NQ:wall_bounce",
+     "ticker": "NQ",
+     "template": "wall_bounce",
+     "template_number": 1,
+     "stage": "auto",
+     "effective_stage": "auto",
+     "trial": null,
+     "gate_verdict": "insufficient",
+     "gate_n": 18,
+     "gate_lb": -0.7988262973819182,
+     "avg_r": -0.2597257544766008,
+     "avg_net_r": -0.30930608727535736,
+     "n_needed": 299,
+     "sessions": 37,
+     "per_session": 0.4864864864864865,
+     "window_capacity": 29,
+     "sessions_to_decision": null
+    },
+    {
+     "cell": "NQ:gamma_momentum",
+     "ticker": "NQ",
+     "template": "gamma_momentum",
+     "template_number": 4,
+     "stage": "auto",
+     "effective_stage": "auto",
+     "trial": null,
+     "gate_verdict": "insufficient",
+     "gate_n": 3,
+     "gate_lb": -1.2100736497545004,
+     "avg_r": -0.6743044189852704,
+     "avg_net_r": -0.7362124995555832,
+     "n_needed": 50,
+     "sessions": 37,
+     "per_session": 0.08108108108108109,
+     "window_capacity": 4,
+     "sessions_to_decision": null
+    },
+    {
+     "cell": "ES:max_pain_pin",
+     "ticker": "ES",
+     "template": "max_pain_pin",
+     "template_number": 3,
+     "stage": "auto",
+     "effective_stage": "auto",
+     "trial": null,
+     "gate_verdict": "insufficient",
+     "gate_n": 8,
+     "gate_lb": -0.17714960766719257,
+     "avg_r": 0.43351715686274506,
+     "avg_net_r": 0.35815803921568623,
+     "n_needed": 171,
+     "sessions": 36,
+     "per_session": 0.2222222222222222,
+     "window_capacity": 13,
+     "sessions_to_decision": null
+    },
+    {
+     "cell": "ES:failed_break",
+     "ticker": "ES",
+     "template": "failed_break",
+     "template_number": 2,
+     "stage": "auto",
+     "effective_stage": "auto",
+     "trial": null,
+     "gate_verdict": "insufficient",
+     "gate_n": 17,
+     "gate_lb": -0.36851568922879335,
+     "avg_r": 0.2528790102319514,
+     "avg_net_r": 0.18624109310897288,
+     "n_needed": 375,
+     "sessions": 36,
+     "per_session": 0.4722222222222222,
+     "window_capacity": 28,
+     "sessions_to_decision": null
+    },
+    {
+     "cell": "NQ:max_pain_pin",
+     "ticker": "NQ",
+     "template": "max_pain_pin",
+     "template_number": 3,
+     "stage": "auto",
+     "effective_stage": "auto",
+     "trial": null,
+     "gate_verdict": "insufficient",
+     "gate_n": 4,
+     "gate_lb": -1.374516129032258,
+     "avg_r": -0.41935483870967744,
+     "avg_net_r": -0.4738444236186176,
+     "n_needed": 209,
+     "sessions": 37,
+     "per_session": 0.10810810810810811,
+     "window_capacity": 6,
+     "sessions_to_decision": null
+    },
+    {
+     "cell": "ES:gamma_momentum",
+     "ticker": "ES",
+     "template": "gamma_momentum",
+     "template_number": 4,
+     "stage": "auto",
+     "effective_stage": "auto",
+     "trial": null,
+     "gate_verdict": "insufficient",
+     "gate_n": 10,
+     "gate_lb": -0.8051116024269809,
+     "avg_r": 0.2,
+     "avg_net_r": 0.09618892954420974,
+     "n_needed": 577,
+     "sessions": 36,
+     "per_session": 0.2777777777777778,
+     "window_capacity": 16,
+     "sessions_to_decision": null
+    }
+   ],
+   "brakes": {
+    "session": "2026-10-14",
+    "day_r": 0.0,
+    "week_r": 0.0,
+    "daily_brake_r": 3.0,
+    "weekly_brake_r": 6.0,
+    "max_template_stops_per_day": 2,
+    "block": null,
+    "template_stops": {}
+   }
+  },
+  "/tendency/ES?date=2026-10-14": {
+   "symbol": "ES",
+   "date": "2026-10-14",
+   "tendency": [
+    {
+     "ts_min": "2026-10-14T13:21:00+00:00",
+     "symbol": "ES",
+     "score": -0.15055119792631244,
+     "band": "short",
+     "weights_version": 4
+    },
+    {
+     "ts_min": "2026-10-14T13:22:00+00:00",
+     "symbol": "ES",
+     "score": 0.11261163376864528,
+     "band": "short",
+     "weights_version": 4
+    }
+   ]
+  },
+  "/tendency/NQ?date=2026-10-14": {
+   "symbol": "NQ",
+   "date": "2026-10-14",
+   "tendency": [
+    {
+     "ts_min": "2026-10-14T13:20:00+00:00",
+     "symbol": "NQ",
+     "score": -0.353291456582645,
+     "band": "neutral",
+     "weights_version": 4
+    },
+    {
+     "ts_min": "2026-10-14T13:21:00+00:00",
+     "symbol": "NQ",
+     "score": -0.044805570875672884,
+     "band": "neutral",
+     "weights_version": 4
+    }
+   ]
+  },
+  "/volregime/ES?limit=1": {
+   "symbol": "ES",
+   "rows": [
+    {
+     "session_date": "2026-10-13",
+     "symbol": "ES",
+     "session_range": 29.5,
+     "percentile": 0.027777777777777776,
+     "bucket": "low",
+     "sample": 252,
+     "version": 1,
+     "computed_at": "2026-10-13T20:05:00+00:00"
+    }
+   ]
+  },
+  "/volregime/NQ?limit=1": {
+   "symbol": "NQ",
+   "rows": [
+    {
+     "session_date": "2026-10-13",
+     "symbol": "NQ",
+     "session_range": 314.75,
+     "percentile": 0.24404761904761904,
+     "bucket": "low",
+     "sample": 252,
+     "version": 1,
+     "computed_at": "2026-10-13T20:05:00+00:00"
+    }
+   ]
+  }
+ }
+}
