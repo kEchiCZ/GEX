@@ -44,7 +44,7 @@ from gexlens_engine.compute.settle import (
 #: Minutová řada (levels, bary, tendence) smí být při otevřeném trhu stará
 #: nejvýš tři cykly enginu — starší hodnota je výpadek, ne „poslední známá"
 MINUTE_LIMIT_S = 180
-#: Denní řady počítá engine po settle (vol režim 20:05, IV rank 20:10 UTC);
+#: Denní řady počítá engine ~5–10 min po settle (vol režim, IV rank, EM respect);
 #: rezerva, než se chybějící řádek seance hlásí jako zastaralý
 DAILY_LAG = dt.timedelta(minutes=30)
 #: Zavřený trh (víkend, svátek, neděle před otevřením): o kolik dní zpět hledat
@@ -54,6 +54,28 @@ MAX_BACK_DAYS = 7
 LOWER_BOUND_DEF = "dolní mez jednostranného 95% intervalu Ø R v okně brány"
 #: Štítek hodnot, které spočítal tento skript a převezme server (E-3.7)
 PROTOTYPE = "E-3.7 (výpočet převezme MCP server)"
+#: Jednotky vedlejších čísel obálky (zkreslení 6: podíl 0–1 × %, body × násobky EM).
+#: Číselné vedlejší pole bez jednotky `measured` odmítne.
+FIELD_UNITS: Mapping[str, str] = {
+    "distance_pt": "bod (kladná = úroveň nad cenou)",
+    "distance_em": "násobek EM",
+    "percentile": "podíl 0–1",
+    "session_range_pt": "bod",
+    "iv_rank": "podíl 0–1",
+    "iv_percentile": "podíl 0–1",
+    "anchor": "bod (cena kotvy EM)",
+    "range_vs_em": "násobek EM (rozsah seance / EM)",
+    "n_sessions": "počet seancí",
+    "touch_upper_share": "podíl 0–1 seancí",
+    "touch_lower_share": "podíl 0–1 seancí",
+    "weights_version": "verze vah",
+    "n_setups": "počet uzavřených setupů v okně brány",
+    "n_setups_needed": "počet setupů",
+    "sessions_to_decision": "počet seancí",
+    "avg_r_gross": "R hrubě",
+    "avg_r_net": "R čistě po poplatcích",
+    "lower_bound_r": "R",
+}
 
 #: Pole nástrojů, která dnešní REST nevrací — ID úkolu, který je doplní
 OMITTED: Mapping[str, Sequence[tuple[str, str]]] = {
@@ -172,8 +194,8 @@ def measured(
         "market_open": clock.market_open,
         "source": source,
         "scope": scope,
-        **extra,
     }
+    _attach(out, extra)
     if value is None and "reason" not in extra:
         raise ValueError(f"{source}: hodnota None bez důvodu")
     if limit_s is not None and clock.market_open and age_s > limit_s:
@@ -183,6 +205,18 @@ def measured(
             "detail": f"stáří {age_s} s > limit {limit_s} s při otevřeném trhu",
         }
     return out
+
+
+def _attach(out: dict[str, object], extra: Mapping[str, object]) -> None:
+    """Vedlejší pole do obálky a jejich jednotky do `units`."""
+    units = {key: FIELD_UNITS[key] for key in extra if key in FIELD_UNITS}
+    for key, item in extra.items():
+        numeric = isinstance(item, int | float) and not isinstance(item, bool)
+        if numeric and key not in FIELD_UNITS:
+            raise ValueError(f"vedlejší číslo {key!r} bez jednotky (FIELD_UNITS)")
+    out.update(extra)
+    if units:
+        out["units"] = units
 
 
 def missing(reason: str, *, clock: Clock, unit: str, source: str, scope: str) -> dict[str, object]:
@@ -356,18 +390,29 @@ def levels_now(fetch: Fetch, symbol: str, clock: Clock, session: dt.date) -> dic
 
 
 def tendency_now(fetch: Fetch, symbol: str, clock: Clock, session: dt.date) -> dict[str, object]:
-    """Poslední bod tendence (#350) — nekalibrovaná metrika (#1113)."""
-    path = f"/tendency/{symbol}?date={session.isoformat()}"
+    """Poslední bod tendence (#350) — nekalibrovaná metrika (#1113).
+
+    `/tendency?date=` filtruje UTC den, ne Globex seanci (`tendency_store.series_for`):
+    seance leží ve dvou UTC dnech, takže se čtou oba a ořežou `session_bounds`.
+    """
+    start, end = session_bounds(session)
+    days = sorted({start.date(), (end - dt.timedelta(minutes=1)).date()})
+    paths = [f"/tendency/{symbol}?date={day.isoformat()}" for day in days]
+    path = " + ".join(paths)
     scope = f"{symbol}, seance {session.isoformat()}"
-    payload, error = _get(fetch, path)
-    rows = payload["tendency"] if payload else []
+    rows: list[Mapping[str, Any]] = []
+    for day_path in paths:
+        payload, error = _get(fetch, day_path)
+        if payload is None:
+            return missing(str(error), clock=clock, unit="skóre −1…+1", source=path, scope=scope)
+        rows += [r for r in payload["tendency"] if start <= _parse_ts(r["ts_min"]) < end]
     if not rows:
-        reason = error or (
+        reason = (
             "REST vrátil prázdnou řadu — /tendency vrací [] i při chybě DB "
             "(main.py tendency_series), rozdíl nejde poznat → E-3.5"
         )
         return missing(reason, clock=clock, unit="skóre −1…+1", source=path, scope=scope)
-    row = rows[-1]
+    row = max(rows, key=lambda r: _parse_ts(r["ts_min"]))
     return measured(
         round(row["score"], 3),
         clock=clock,
@@ -380,6 +425,16 @@ def tendency_now(fetch: Fetch, symbol: str, clock: Clock, session: dt.date) -> d
         weights_version=row.get("weights_version"),
         calibrated=False,
     )
+
+
+def session_close(day: dt.date) -> dt.datetime:
+    """Konec obchodování seance: konec poslední minuty otevřeného trhu před
+    otevřením další seance (16:00 CT, zkrácená seance dřív) — z `is_market_closed`."""
+    close = session_bounds(day)[1]
+    floor = close - dt.timedelta(days=1)
+    while close > floor and is_market_closed(close - dt.timedelta(minutes=1)):
+        close -= dt.timedelta(minutes=1)
+    return close
 
 
 def _session_of_candle(candle: Mapping[str, Any]) -> dt.date:
@@ -416,7 +471,12 @@ def session_context(fetch: Fetch, symbol: str, clock: Clock, session: dt.date) -
             )
     else:
         values["session"] = missing(
-            error or "svíčka dnešní seance chybí",
+            error
+            or (
+                "svíčka dnešní seance chybí"
+                if not today
+                else "bez poslední ceny (/bars) nejde určit as_of rozdělané svíčky"
+            ),
             clock=clock,
             unit="bod",
             source=path,
@@ -425,8 +485,8 @@ def session_context(fetch: Fetch, symbol: str, clock: Clock, session: dt.date) -
     if before:
         candle = before[-1]
         day = _session_of_candle(candle)
-        # Dokončená svíčka se nemění: as_of = konec seance, bez limitu stáří
-        as_of = session_bounds(day)[1]
+        # Dokončená svíčka se nemění: as_of = konec obchodování seance, bez limitu stáří
+        as_of = session_close(day)
         scope_prev = f"{symbol} předchozí Globex seance {day.isoformat()} (17:00–16:00 CT)"
         for name in ("high", "low", "close"):
             points, _ = level_distance(candle[name], spot_value, None)
@@ -477,7 +537,7 @@ def _daily(
         source=source,
         scope=f"{scope}, seance {session.isoformat()}",
     )
-    out.update(extra)
+    _attach(out, extra)
     if clock.market_open and session < expected:
         out["value"] = None
         out["error"] = {
@@ -575,7 +635,7 @@ def vol_context(fetch: Fetch, symbol: str, clock: Clock) -> dict[str, object]:
             unit="podíl seancí s close v pásmu EM",
             source=f"GET {path} → summary",
             scope=f"{symbol}, okno {summary['window_days']} dní",
-            n=summary["n"],
+            n_sessions=summary["n"],
             touch_upper_share=round(summary["touch_upper_share"], 4),
             touch_lower_share=round(summary["touch_lower_share"], 4),
             note="naměřená četnost bez CI — REST interval nevrací → E-3.5",
@@ -614,8 +674,8 @@ def setup_library(fetch: Fetch, symbols: Sequence[str], clock: Clock) -> dict[st
             f"mechanika v{mechanics}, okno brány",
             stage=cell["stage"],
             effective_stage=cell["effective_stage"],
-            n=cell["gate_n"],
-            n_needed=cell["n_needed"],
+            n_setups=cell["gate_n"],
+            n_setups_needed=cell["n_needed"],
             sessions_to_decision=cell["sessions_to_decision"],
             avg_r_gross=_round(cell["avg_r"]),
             avg_r_net=_round(cell["avg_net_r"]),

@@ -46,13 +46,15 @@ def responses() -> dict[str, Any]:
 
 
 def _fetch(mcp: Any, responses: dict[str, Any]) -> Any:
-    """Fetch nad záznamem: bary neuložené seance = prázdná seance, jinak 404."""
+    """Fetch nad záznamem: bary a tendence neuloženého dne = prázdný den, jinak 404."""
 
     def fetch(path: str) -> Any:
         if path in responses:
             return responses[path]
         if path.startswith("/bars/"):
             return {"bars": []}
+        if path.startswith("/tendency/"):
+            return {"tendency": []}
         raise mcp.ApiError(path, "HTTP 404")
 
     return fetch
@@ -255,4 +257,96 @@ def test_knihovna_bez_udaju_uctu(mcp: Any, responses: dict[str, Any]) -> None:
     assert "brakes" not in result["values"]
     assert {item["field"] for item in result["omitted"]} == {"brakes"}
     cell = result["values"]["ES:trend_continuation"]
-    assert cell["value"] == "block" and cell["n"] == 286 and cell["n_needed"] == 458
+    assert cell["value"] == "block" and cell["n_setups"] == 286
+    assert cell["n_setups_needed"] == 458
+
+
+def test_kazde_vedlejsi_cislo_ma_jednotku(mcp: Any, responses: dict[str, Any]) -> None:
+    """Zkreslení 6: podíl 0–1 × %, body × násobky EM — jednotka u každého čísla."""
+    result = mcp.sample(_fetch(mcp, responses), ["ES", "NQ"], mcp.make_clock(RECORDED))
+    for name, value in _values(result):
+        units = value.get("units", {})
+        for key, item in value.items():
+            if key in ENVELOPE or key == "age_s" or isinstance(item, bool):
+                continue
+            if isinstance(item, int | float) or key in mcp.FIELD_UNITS:
+                assert key in units, (name, key)
+    with pytest.raises(ValueError, match="bez jednotky"):
+        mcp.measured(
+            1.0,
+            clock=mcp.make_clock(RECORDED),
+            unit="bod",
+            as_of=RECORDED,
+            source="test",
+            scope="test",
+            unknown_share=0.5,
+        )
+
+
+def test_tendence_ve_vecerni_seanci_cte_oba_utc_dny(mcp: Any) -> None:
+    """17:11 CT 14. 10.: seance 15. 10. začala ve 22:00 UTC dne 14. 10. — `/tendency?date=`
+    filtruje UTC den, řádek seance je tedy v odpovědi na 14. 10., ne 15. 10."""
+    row = {
+        "ts_min": "2026-10-14T22:10:00+00:00",
+        "score": 0.21,
+        "band": "long",
+        "weights_version": 4,
+    }
+    old = {
+        "ts_min": "2026-10-14T13:21:00+00:00",
+        "score": -0.5,
+        "band": "short",
+        "weights_version": 4,
+    }
+    responses = {
+        "/tendency/ES?date=2026-10-14": {"tendency": [old, row]},
+        "/tendency/ES?date=2026-10-15": {"tendency": []},
+    }
+    clock = mcp.make_clock(dt.datetime(2026, 10, 14, 22, 11, 30, tzinfo=dt.UTC))
+    assert clock.market_open is True and clock.trading_session == dt.date(2026, 10, 15)
+    tendency = mcp.tendency_now(_fetch(mcp, responses), "ES", clock, clock.trading_session)
+    assert tendency["value"] == 0.21 and tendency["age_s"] == 90
+    assert "date=2026-10-14" in tendency["source"] and "date=2026-10-15" in tendency["source"]
+
+
+def test_session_context_hodnoty_a_konec_predchozi_seance(
+    mcp: Any, responses: dict[str, Any]
+) -> None:
+    values = mcp.session_context(
+        _fetch(mcp, responses), "ES", mcp.make_clock(RECORDED), dt.date(2026, 10, 14)
+    )["values"]
+    spot = values["spot"]["value"]
+    assert values["session_high"]["distance_pt"] == round(values["session_high"]["value"] - spot, 2)
+    prev = values["prev_session_close"]
+    # Seance 13. 10. končí obchodováním v 16:00 CT = 21:00 UTC, ne otevřením další seance
+    assert prev["as_of"] == "2026-10-13T21:00:00+00:00"
+    assert "ne settlement" in prev["note"] and "error" not in prev
+
+
+def test_candles_http_500_je_null_s_duvodem(mcp: Any, responses: dict[str, Any]) -> None:
+    """Živé selhání 14. 10. 13:45 UTC (#1562): 500 na /candles není prázdná seance."""
+    base = _fetch(mcp, responses)
+
+    def fetch(path: str) -> Any:
+        if path.startswith("/candles/"):
+            raise mcp.ApiError(path, "HTTP 500")
+        return base(path)
+
+    values = mcp.session_context(fetch, "ES", mcp.make_clock(RECORDED), dt.date(2026, 10, 14))[
+        "values"
+    ]
+    assert values["session"]["value"] is None and "HTTP 500" in values["session"]["reason"]
+    assert values["prev_session"]["value"] is None
+    assert values["spot"]["value"] is not None
+
+
+def test_denni_pauza_vrati_dnesni_seanci_bez_chyby(mcp: Any, responses: dict[str, Any]) -> None:
+    """16:30 CT: trh zavřený, obchodní den stále 14. 10. — poslední hodnoty, stáří bez chyby."""
+    clock = mcp.make_clock(dt.datetime(2026, 10, 14, 21, 30, tzinfo=dt.UTC))
+    assert clock.market_open is False
+    result = mcp.sample(_fetch(mcp, responses), ["ES"], clock)
+    for tool in result["symbols"]["ES"].values():
+        assert tool["errors"] == [], tool["tool"]
+    levels = result["symbols"]["ES"]["levels_now"]
+    assert levels["data_session"] == "2026-10-14"
+    assert levels["values"]["call_wall"]["age_s"] > mcp.MINUTE_LIMIT_S
