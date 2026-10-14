@@ -14,7 +14,14 @@ import { useElementSize } from '../hooks/useElementSize'
 import { splitContoursMode } from '../heatmap/contours'
 import type { ContoursMode } from '../heatmap/contours'
 import { contoursSettled, useContours } from '../heatmap/useContours'
-import { perfBegin, perfEnabled, perfEnd, perfFinish, perfStart, useRenderTimer } from '../perf/meter'
+import {
+  perfBegin,
+  perfEnabled,
+  perfEnd,
+  perfFinish,
+  perfStart,
+  useRenderTimer,
+} from '../perf/meter'
 import { renderGrid } from '../heatmap/render'
 import type { SignedPalette } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
@@ -51,6 +58,7 @@ import { bucketPhaseMinutes } from '../heatmap/buckets'
 import { gapBands } from '../heatmap/spacing'
 import {
   DEFAULT_VIEW,
+  WHEEL_IDLE_MS,
   axisZoneAt,
   anchoredOffsetX,
   baseBucketPx,
@@ -88,10 +96,6 @@ const LABEL_ROW_GAP_PX = 12
 
 /** Tolerance úchopu okraje range (#484) v px — musí jít trefit i při hustší ose. */
 const RANGE_EDGE_TOL_PX = 6
-
-/** Klid kolečka, po kterém gesto zoomu končí a persistuje (#1419) — kolečko
-nemá událost konce; kroky jednoho otočení chodí po desítkách ms. */
-export const WHEEL_IDLE_MS = 200
 
 /** Rezerva košů před levým okrajem historie (#788) — další den se dotahuje
 dřív, než uživatel doscrolluje na prázdno; při defaultním pohledu to eagerly

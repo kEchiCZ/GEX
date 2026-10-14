@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import App from '../App'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
-import { WHEEL_IDLE_MS } from './Heatmap'
+import { WHEEL_IDLE_MS } from '../heatmap/view'
 
 const CENTER = { clientX: 600, clientY: 300 }
 

@@ -4,9 +4,9 @@ k persistenci jednou na konci gesta (pointerup, klid kolečka). */
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { Heatmap, WHEEL_IDLE_MS } from './Heatmap'
+import { Heatmap } from './Heatmap'
 import { demoGrid } from '../heatmap/demo'
-import { DEFAULT_VIEW } from '../heatmap/view'
+import { DEFAULT_VIEW, WHEEL_IDLE_MS } from '../heatmap/view'
 import type { ViewTransform } from '../heatmap/view'
 import { CrosshairProvider } from '../state/Crosshair'
 
