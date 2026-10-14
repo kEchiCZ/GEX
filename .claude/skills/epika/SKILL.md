@@ -15,6 +15,8 @@ se do repa nezakládají (jediný zdroj, žádný další dokument, který by se
 - **Ano:** funkce na víc PR, nové architektonické rozhodnutí, nejasné nebo „syrové" zadání
   (screenshot, odkaz, pár vět), převzetí funkce odjinud.
 - **Ne:** oprava chyby nebo malá změna na jeden PR s jasnou příčinou → běžný tok z AGENTS.md.
+- **Během běžící epiky** je nové syrové zadání jen issue `zadani` (AGENTS.md „Pořadí práce");
+  krok 1 začne až po zařazení v nedělní triáži nebo na výslovné „hned" vlastníka.
 
 ## Clean-room a veřejné repo
 - Jména referenčních aplikací, jejich screenshoty a srovnání nepatří do kódu, docs, commitů ani
@@ -62,6 +64,8 @@ se do repa nezakládají (jediný zdroj, žádný další dokument, který by se
 
 ## Krok 4 — Session nad sub-issue
 **Start:**
+0. ověř, že sub-issue je v bloku **„Teď"** epiky a že platí brána jeho fáze („Začíná po"); jinak
+   se vlastníka zeptej, zda jde mimo pořadí (AGENTS.md „Pořadí práce");
 1. přečti sub-issue, epiku, poslední „Stav" **a všechny komentáře po něm** (odpovědi vlastníka
    přenes do Rozhodnuto); ověř skutečný stav (`git fetch`, `git log origin/main..HEAD`,
    `git status`, `git stash list`) — ne ze souhrnu;
@@ -70,7 +74,7 @@ se do repa nezakládají (jediný zdroj, žádný další dokument, který by se
 
 **Během:** po každém dokončeném kroku commit + push (`wip(scope): <krok> — další: <krok>`; zprávy
 WIP commitů skončí v těle squash commitu, piš je srozumitelně). Rozsah = rozsah sub-issue; nález
-mimo rozsah → nové issue s `prio:*`. Testy podle AGENTS.md (Build & validace, Kritická pravidla).
+mimo rozsah → issue `nalez` podle AGENTS.md „Pořadí práce" (práce na něm až po triáži). Testy podle AGENTS.md (Build & validace, Kritická pravidla).
 
 **Konec session** (hotovo, nebo ~60 % kontextu — co nastane dřív; při ~70 % nabídni novou session):
 commit + push a komentář přes `--body-file` (nikdy `--edit-last` — vlastník píše pod stejným účtem):
@@ -78,10 +82,11 @@ commit + push a komentář přes `--body-file` (nikdy `--edit-last` — vlastní
 ### Stav (D. M.)
 - Hotovo: …
 - Zbývá: …
-- Další krok: … (soubor, funkce, příkaz)
+- Další krok: … (soubor, funkce, příkaz; položka bloku Teď, jinak „mimo pořadí — důvod")
 - Rozhodnutí / otevřené otázky: …
 - Jak ověřit: …
 ```
+Na konci session aktualizuj blok **Teď** v těle epiky (hotové pryč, další položka podle pořadí).
 Když session skončí náhle bez „Stavu", další session ho zrekonstruuje z posledního „Plánu session"
 a git logu.
 
@@ -99,6 +104,10 @@ proto jde do něj komentářem a při selhání se issue znovu otevře.
   [sablona-sub-issue.md](sablona-sub-issue.md) má sekci **Kontrola zadání**. `Closes #<sub-issue>`,
   nikdy `Closes #<epika>` — epiku zavírá jen krok 6.
 - PR s labelem `needs-decision` (ADR) se merguje až po rozhodnutí vlastníka v PR nebo issue.
+
+## Týdenní triáž (neděle)
+Podle AGENTS.md „Pořadí práce": `gh issue list --label nalez`, `--label zadani` a issues založené
+za týden; výsledek jako komentář `### Triáž (D. M.)` v epice a nový blok **Teď** v jejím těle.
 
 ## Krok 6 — Uzavření epiky
 - Po posledním sub-issue spusť ověřovatele nad **celou epikou** (zadání × zavřené sub-issues ×

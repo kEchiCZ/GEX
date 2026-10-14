@@ -78,8 +78,8 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
   `instrument/tz.isTradingSessionIso`; svátky NYSE z pravidel, #1308, ADR-0046), žádné lokální `weekday() < 5`
   ani `getUTCDay()` jako test obchodního dne; test na sobotu, neděli a pondělí proti pátku
   (#1241, #1307, #1309).
-- **Podezřelá hodnota na produkci se řeší hned** (issue + příčina), neodkládá se „až se to bude opakovat".
-  Demo/mock data nesmí prosáknout do UI.
+- **Podezřelá hodnota na produkci**: issue a příčina hned, neodkládá se „až se to bude opakovat";
+  oprava podle „Pořadí práce" (hned jen tamní výjimky). Demo/mock data nesmí prosáknout do UI.
 - **Ověřuj na tvrdých datech**: metriku dohledej v kódu, stav issue z `gh issue view`, ne z paměti;
   cenzurovaná/neúplná data neextrapoluj.
 - Explicitní chyby, ne tiché selhání; pacing chyby IBKR nikdy neshodí engine (SPEC kap. 8).
@@ -116,7 +116,7 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
   s issue na skutečnou opravu, označený v kódu odkazem na issue.
 - **Fail fast, viditelně**: chybějící data = viditelná mezera se stářím, ne zmrzlá čísla (SPEC 3.7, #306).
 - **Idempotence** jobů a zápisů (retro přepočty, archiv OI, verdikty) — opakované spuštění nesmí duplikovat.
-- Rozsah změny = rozsah issue. Žádné drive-by refaktory; nález mimo rozsah → nové issue s `prio:*`.
+- Rozsah změny = rozsah issue. Žádné drive-by refaktory; nález mimo rozsah → issue `nalez` podle „Pořadí práce".
 - Stop loss v setupech se **nezvětšuje**; poučení z nevyšlé teze = přísnější podmínky vstupu.
 
 ## Rozhodování
@@ -129,6 +129,23 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
 - Nejasné zadání → zeptej se, nehádej. Rozpor stávající funkce × funkce převzaté odjinud (referenční
   aplikace, článek, screenshot) → zeptej se; chování, na které je vlastník zvyklý, nepřepisuj mlčky.
 - Odložená práce = **issue s `prio:P0–P3`** a `epic:*` labelem, ne poznámka v kódu nebo dokumentu.
+
+## Pořadí práce (vlastník 14. 10. 2026, #1385)
+- **Co je na řadě**, určuje blok **„Teď"** nahoře v těle běžící epiky (1–3 issues a termíny dne:
+  pauza Globexu, releasy, připomínky). „Další krok" ve Stavu cituje položku z bloku, jinak
+  „mimo pořadí — důvod".
+- **Brána fáze je tvrdá:** sub-issue fáze se neimplementuje, dokud neplatí její „Začíná po".
+  Výjimku dává jen vlastník výslovně; zapíše se do Rozhodnuto spolu s revizí pořadí týž den.
+- **Nález mimo rozsah** = issue s labelem `nalez`, odkazem na zdroj a `prio:P3` (`prio:P2`,
+  zkresluje-li čísla pro obchodní rozhodnutí); práce na něm až po triáži. **Hned** jen: výpadek
+  nebo stojící sběr dat, data se kazí nebo ztrácejí, demo data v UI. Drobnost ve stejném souboru
+  a vrstvě (≤ ~30 min) jde do téhož PR.
+- **Nové zadání** během epiky = issue s labelem `zadani` bez `prio` a jednovětým potvrzením;
+  rozbor a zařazení až v triáži, výjimka na výslovné „hned".
+- **Triáž každou neděli** (trh zavřený), komentář `### Triáž (D. M.)` v epice: zavřít hotové
+  a duplicity, nálezy sloučit do položek plánu nebo jim dát `prio`, zadání zařadit, termíny
+  připomínek do bloku Teď, přepočítat pořadí a odhady; metrika týdne — PR v pořadí × mimo
+  pořadí × boční, nálezy založené × zavřené.
 
 ## Jazyk
 Komentáře, docstringy, dokumentace, commit zprávy, UI texty, issues: **česky**.

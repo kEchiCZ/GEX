@@ -9,6 +9,10 @@ Revize: nahoru krátká poznámka `> Revize D. M.: co se změnilo a proč`; pře
 tělo drží jen aktuální stav (≤ ~25 000 znaků).
 
 ```markdown
+## Teď (D. M.)
+- <1–3 issues, na kterých se právě pracuje, v pořadí plánu (AGENTS.md „Pořadí práce")>
+- <termíny dne: pauza Globexu, release, připomínka; další triáž (neděle)>
+
 ## Zadání (uživatel D. M. RRRR)
 > <věrné shrnutí slov vlastníka; jméno referenční aplikace nahradit „referenční aplikace" (#482),
 > cizí screenshoty nepřenášet — popsat slovy, co ukazují>
