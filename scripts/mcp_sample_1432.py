@@ -34,7 +34,12 @@ from typing import Any
 import httpx
 
 from gexlens_engine.compute.marketclock import is_market_closed
-from gexlens_engine.compute.settle import is_trading_session, settle_ts, trading_session_date
+from gexlens_engine.compute.settle import (
+    is_trading_session,
+    session_bounds,
+    settle_ts,
+    trading_session_date,
+)
 
 #: Minutová řada (levels, bary, tendence) smí být při otevřeném trhu stará
 #: nejvýš tři cykly enginu — starší hodnota je výpadek, ne „poslední známá"
@@ -420,8 +425,8 @@ def session_context(fetch: Fetch, symbol: str, clock: Clock, session: dt.date) -
     if before:
         candle = before[-1]
         day = _session_of_candle(candle)
-        # Dokončená svíčka se nemění: as_of = konec seance (settle), bez limitu stáří
-        as_of = settle_ts(day)
+        # Dokončená svíčka se nemění: as_of = konec seance, bez limitu stáří
+        as_of = session_bounds(day)[1]
         scope_prev = f"{symbol} předchozí Globex seance {day.isoformat()} (17:00–16:00 CT)"
         for name in ("high", "low", "close"):
             points, _ = level_distance(candle[name], spot_value, None)
