@@ -7,6 +7,7 @@ import App from '../App'
 import { LiveSocket } from '../api/ws'
 import { FakeWebSocket } from '../test/fakeWs'
 import { WHEEL_IDLE_MS } from '../heatmap/view'
+import { perfCounters, resetPerf, setPerfEnabled } from '../perf/meter'
 
 const CENTER = { clientX: 600, clientY: 300 }
 
@@ -53,6 +54,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  setPerfEnabled(false)
+  resetPerf()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -64,6 +67,8 @@ test('jedno gesto = jeden zápis zoomu X a pásma Y do localStorage', async () =
   render(<App socket={socket} />)
   const overlay = await screen.findByRole('img', { name: 'GEX heatmapa' })
   runFrame()
+  resetPerf()
+  setPerfEnabled(true)
   const setItem = vi.spyOn(Storage.prototype, 'setItem')
   const writes = (name: string) =>
     setItem.mock.calls.filter(([key]) => key === `gexlens.${name}`).length
@@ -80,6 +85,9 @@ test('jedno gesto = jeden zápis zoomu X a pásma Y do localStorage', async () =
   })
   expect(writes('chartZoomX')).toBe(1)
   expect(writes('chartYRange')).toBe(1)
+  // Měřič: každý snímek gesta = jeden span a vlastní čas renderu App (#1419)
+  expect(perfCounters().gestureFrame).toBe(5)
+  expect(perfCounters().renderApp).toBeGreaterThanOrEqual(5)
 
   // Pan: 6 pohybů, zápis pásma Y až na pointerup; zoom X se nemění
   setItem.mockClear()

@@ -5,7 +5,9 @@ Počty jsou deterministické — výkonový rozpočet v CI (E-2a.13) na ně spol
 import { render } from '@testing-library/react'
 import { tableFromArrays, tableToIPC } from 'apache-arrow'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { BottomPanels } from '../components/BottomPanels'
 import { Heatmap } from '../components/Heatmap'
+import { StrikeProfile } from '../components/StrikeProfile'
 import { demoGrid } from '../heatmap/demo'
 import { CrosshairProvider } from '../state/Crosshair'
 import { assembleReplayDay, fetchReplayInputs } from '../replay/loader'
@@ -102,4 +104,42 @@ test('Mode/Scale span končí vykreslením mřížky s hotovými konturami', () 
   )
   expect(perfCounters().modeScale).toBe(1)
   expect(perfCounters().renderGrid).toBe(2)
+})
+
+test('vlastní čas renderu panelů a profilu: jeden záznam na render (#1419)', () => {
+  render(
+    <CrosshairProvider>
+      <BottomPanels
+        data={{
+          vol: [100, 200],
+          optVolCall: [10, 20],
+          optVolPut: [15, 5],
+          cumDelta: [50, -100],
+          deltaFlowCall: [5, 10],
+          deltaFlowPut: [7, 2],
+        }}
+        visible={{ vol: true, optVol: false, delta: false, deltaFlow: false, evoOi: false, sentiment: false }} // prettier-ignore
+        width={400}
+      />
+      <StrikeProfile
+        multiplier={50}
+        rows={[
+          {
+            strike: 7600,
+            callVolComponent: 30,
+            callOiComponent: 15,
+            putVolComponent: 10,
+            putOiComponent: 5,
+            callVolume: 300,
+            putVolume: 100,
+            callOi: 1500,
+            putOi: 500,
+            distanceFromSpot: 0,
+          },
+        ]}
+        spot={7600}
+      />
+    </CrosshairProvider>,
+  )
+  expect(perfCounters()).toMatchObject({ renderPanels: 1, renderProfile: 1 })
 })

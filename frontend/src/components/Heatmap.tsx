@@ -1500,13 +1500,21 @@ export function Heatmap({
     gesture.unflushed = false
     const next = gesture.latest
     perfBegin('gestureFrame') // měřič výkonu: krok gesta → vykreslení
+    // Do commitu drží zapsaný krok `pendingViewRef` (řízený pohled ho plní
+    // v setView sám); po commitu `committedViewRef`
+    pendingViewRef.current = next
     setView(() => next)
   }, [setView])
 
   const setGestureView = useCallback(
     (updater: (previous: ViewTransform) => ViewTransform) => {
       const gesture = gestureRef.current
-      const base = gesture ? gesture.latest : (pendingViewRef.current ?? committedViewRef.current)
+      // Nezapsaný krok je základem dalšího; po zápisu platí pohled z renderu,
+      // aby změnu zvenku v průběhu gesta (kompenzace resize #171, osa profilu,
+      // pan v panelech) další krok nepřepsal
+      const base = gesture?.unflushed
+        ? gesture.latest
+        : (pendingViewRef.current ?? committedViewRef.current)
       const next = updater(base)
       gestureRef.current = {
         start: gesture ? gesture.start : base,
@@ -1524,36 +1532,51 @@ export function Heatmap({
     [flushGestureFrame, grid.strikes, logicalH],
   )
 
-  // Konec gesta: dorovnat poslední krok a persistovat jen to, co se proti
-  // začátku gesta změnilo. Časovač kolečka volá uzávěru z dřívějšího renderu
-  // — stav gesta i callbacky rodiče proto čte z refů.
-  const endGesture = useCallback(() => {
-    if (wheelIdleRef.current !== null) {
-      clearTimeout(wheelIdleRef.current)
-      wheelIdleRef.current = null
-    }
-    const gesture = gestureRef.current
-    if (!gesture) return
-    flushGestureFrame()
-    gestureRef.current = null
+  // Persistence gesta: jen to, co se proti začátku gesta změnilo. Callbacky
+  // rodiče z refu — časovač kolečka i cleanup volají uzávěru z dřívějška.
+  const persistGesture = useCallback((gesture: NonNullable<typeof gestureRef.current>) => {
     const { start, latest, range } = gesture
     const sink = gestureSinkRef.current
     if (latest.zoomX !== start.zoomX) sink.onUserZoomX?.(latest.zoomX)
     if ((latest.zoomY !== start.zoomY || latest.offsetY !== start.offsetY) && range) {
       sink.onUserYRange?.(range)
     }
-  }, [flushGestureFrame])
+  }, [])
 
-  // Zahození rozběhnutého gesta bez persistence: reset pohledu a změna datasetu
-  // (pásmo Y starého symbolu by se zapsalo pod klíč nového)
-  const cancelGesture = useCallback(() => {
+  // Zastaví snímek i časovač kolečka a vrátí rozběhnuté gesto (nebo null)
+  const detachGesture = useCallback(() => {
     if (gestureFrameRef.current !== null) cancelAnimationFrame(gestureFrameRef.current)
     if (wheelIdleRef.current !== null) clearTimeout(wheelIdleRef.current)
     gestureFrameRef.current = null
     wheelIdleRef.current = null
+    const gesture = gestureRef.current
     gestureRef.current = null
+    return gesture
   }, [])
-  useLayoutEffect(() => cancelGesture, [resetKey, cancelGesture])
+
+  // Konec gesta: dorovnat poslední krok a persistovat
+  const endGesture = useCallback(() => {
+    if (wheelIdleRef.current !== null) {
+      clearTimeout(wheelIdleRef.current)
+      wheelIdleRef.current = null
+    }
+    if (!gestureRef.current) return
+    flushGestureFrame()
+    const gesture = detachGesture()
+    if (gesture) persistGesture(gesture)
+  }, [flushGestureFrame, detachGesture, persistGesture])
+
+  // Změna datasetu (symbol, expirace, timeframe, den) a odmountování: gesto
+  // skončí bez vykreslení, ale persistuje — cleanup běží v commitu PŘED
+  // aktualizací gestureSinkRef, takže zapisuje callbacky předchozího commitu,
+  // tedy pod klíč datasetu, ve kterém gesto proběhlo
+  useLayoutEffect(
+    () => () => {
+      const gesture = detachGesture()
+      if (gesture) persistGesture(gesture)
+    },
+    [resetKey, detachGesture, persistGesture],
+  )
 
   // Kolečko: zoom ukotvený ke kurzoru; nad pruhem osy jen daná osa (TradingView styl)
   const onWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
@@ -1574,7 +1597,8 @@ export function Heatmap({
   }
 
   const resetView = () => {
-    cancelGesture()
+    // Reset maže uložený pohled — rozběhnuté gesto se zahodí bez persistence
+    detachGesture()
     // Reset je programová změna pohledu — bez aktualizace applied ref by ho
     // auto-follow vyhodnotil jako uživatelské gesto a trvale se vypnul (#501)
     appliedViewRef.current = homeView
