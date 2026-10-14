@@ -247,3 +247,12 @@ def test_hodnota_bez_duvodu_se_nevyda(mcp: Any) -> None:
             source="test",
             scope="test",
         )
+
+
+def test_knihovna_bez_udaju_uctu(mcp: Any, responses: dict[str, Any]) -> None:
+    """Buňky šablon ano, brzdy účtu jen opt-in (ot. 10, E-3.17)."""
+    result = mcp.setup_library(_fetch(mcp, responses), ["ES", "NQ"], mcp.make_clock(RECORDED))
+    assert "brakes" not in result["values"]
+    assert {item["field"] for item in result["omitted"]} == {"brakes"}
+    cell = result["values"]["ES:trend_continuation"]
+    assert cell["value"] == "block" and cell["n"] == 286 and cell["n_needed"] == 458

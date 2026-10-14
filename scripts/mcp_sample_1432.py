@@ -65,7 +65,8 @@ OMITTED: Mapping[str, Sequence[tuple[str, str]]] = {
         ("settle_prev", "E-3.14 #1445 (settlement, ne poslední cena)"),
     ),
     "vol_context": (),
-    "setup_library": (),
+    # Brzdy účtu (R dne a týdne) jsou výsledky účtu — opt-in jako deník (ot. 10)
+    "setup_library": (("brakes", "E-3.17 #1446 (opt-in údajů účtu, ot. 10)"),),
 }
 
 Fetch = Callable[[str], Any]
@@ -616,19 +617,6 @@ def setup_library(fetch: Fetch, symbols: Sequence[str], clock: Clock) -> dict[st
             lower_bound_r=_round(cell["gate_lb"]),
             lower_bound_def=LOWER_BOUND_DEF,
         )
-    brakes = payload["brakes"]
-    values["brakes"] = measured(
-        brakes["block"] or "none",
-        clock=clock,
-        unit="aktivní brzda účtu (none = žádná)",
-        as_of=as_of,
-        source=f"GET {path} → brakes",
-        scope=f"účet, seance {brakes['session']}, napříč symboly",
-        day_r=brakes["day_r"],
-        week_r=brakes["week_r"],
-        daily_brake_r=brakes["daily_brake_r"],
-        weekly_brake_r=brakes["weekly_brake_r"],
-    )
     return _tool("setup_library", None, clock, values)
 
 

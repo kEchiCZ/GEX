@@ -540,17 +540,7 @@
      "window_capacity": 16,
      "sessions_to_decision": null
     }
-   ],
-   "brakes": {
-    "session": "2026-10-14",
-    "day_r": 0.0,
-    "week_r": 0.0,
-    "daily_brake_r": 3.0,
-    "weekly_brake_r": 6.0,
-    "max_template_stops_per_day": 2,
-    "block": null,
-    "template_stops": {}
-   }
+   ]
   },
   "/tendency/ES?date=2026-10-14": {
    "symbol": "ES",
