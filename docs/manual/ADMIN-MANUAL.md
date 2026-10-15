@@ -1120,6 +1120,51 @@ Restart nebo nasazení enginu: vždy `pwsh scripts/deploy-engine-offhours.ps1`
 `docker compose up -d engine` jen s předchozím `docker logs gex-engine-1 >
 data/logs/engine-<YYYYMMDD-HHMM>.log 2>&1`; jinak důkazy o předchozím běhu zmizí.
 
+### 13.6 Úlohy hostitele — při přenosu na jiný PC nebo server
+
+Úlohy Task Scheduleru nejsou v Dockeru ani v gitu. Jsou zaregistrované ve Windows tohoto PC a jejich akce
+mají absolutní cesty ke složce repa, k `pwsh.exe` a k logům. Proto se musí **znovu zaregistrovat**,
+když se aplikace přenese na jiný PC, když se přesune složka repa nebo po reinstalaci Windows. Na Linux
+serveru (#1094) se nahrazují jinak (poslední sloupec tabulky). Stav k 15. 10. 2026
+(`Get-ScheduledTask -TaskName 'GEXLens*'`):
+
+| Úloha | K čemu | Rozvrh (místní čas) | Registrace | Log | Linux server (#1094) |
+|---|---|---|---|---|---|
+| GEXLens docker-watchdog | restart zastaveného Docker Desktopu, upozornění na výpadek (#1552, kap. 13.4) | každých 5 min | `pwsh -File scripts/register-docker-watchdog-task.ps1` | `%LOCALAPPDATA%\GEXLens\logs\docker-watchdog.log` | jinak: Docker Engine je služba systemd a po pádu ho restartuje systemd; upozornění na výpadek Dockeru zvenku zatím chybí → doplnit v #1094 |
+| GEXLens update-offhours | WSL a Docker Desktop aktualizovat jen v pauze Globexu, před aktualizací Docker Desktopu záloha PG (#1552, kap. 13.4) | denně 23:10 | **jako správce** `pwsh -File scripts/register-update-offhours-task.ps1` | `%LOCALAPPDATA%\GEXLens\logs\update-offhours.log` | ne (WSL ani Docker Desktop tam nejsou); automatické aktualizace systému nastavit tak, aby Docker nerestartovaly mimo pauzu |
+| GEXLens compact-vhdx | kompaktace VHDX Docker Desktopu nad prahem (VHDX ≥ 40 GB a ≥ 10 GB k vrácení; #1127, #1277, kap. 13.4) | po, st, pá 23:05 a so 10:00 | **jako správce** `pwsh -File scripts/register-compact-vhdx-task.ps1` | `data\logs\compact-vhdx.log` | ne (VHDX má jen Docker Desktop) |
+| GEXLens docker úklid | rollback tagy (3 na službu), build cache starší 7 dnů, osiřelé image; alert `disk_low` (#1127, kap. 13.4) | so 08:00 | `pwsh -File scripts/register-docker-cleanup-task.ps1` | `data\logs\docker-cleanup.log` | ano, jednotka systemd zatím není (skript potřebuje `pwsh`) |
+| GEXLens walk-forward | noční walk-forward parametrů setupů, jen report (ADR-0034, kap. 12) | po–pá 23:30 | `pwsh -File scripts/register-walkforward-task.ps1` (účet s `docker` a `uv`) | `data\reports\walkforward-nightly.log` | `scripts/systemd/gexlens-walkforward.{service,timer}` |
+
+Nepřenáší se `GEXLens-deploy-engine` a `GEXLens-deploy-engine-600`. Jsou to jednorázové úlohy ze srpna
+2026 (odložený deploy přes `scripts/deploy-engine-offhours.cmd`), které už proběhly. Pravidelnou zálohu PG
+zatím žádná úloha nedělá (#1566), proto před přenosem vždy spusť `pwsh scripts/backup-postgres.ps1`.
+
+**Postup na novém Windows PC** (Docker a stack podle kap. 13.4, ověření podle kap. 13.5):
+1. Repo dej na konečné místo. Registrační skripty berou cesty ze svého umístění (`$PSScriptRoot`)
+   a úloha si je uloží natvrdo. Po každém přesunu složky registraci zopakuj (`-Force` úlohu přepíše).
+2. PowerShell 7: úloha volá `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe` (alias instalace
+   z Microsoft Store, přežije aktualizaci verze); když chybí, použije `pwsh` z PATH v okamžiku registrace.
+   Task Scheduler PATH uživatele nečte.
+3. `uv sync --all-packages`: hlídač Dockeru bere rozvrh trhu se svátky z Pythonu v `.venv` repa
+   (bez něj náhradou `Get-GlobexClock` bez svátků, s varováním v logu). Walk-forward potřebuje `uv`.
+4. Do `.env` dej `GEXLENS_PUSH_TELEGRAM_TOKEN` a `GEXLENS_PUSH_TELEGRAM_CHAT_ID`. Úlohy posílají
+   upozornění na Telegram mimo Docker (`scripts/lib/OpsAlert.ps1`); bez těchto proměnných jen zapíšou do logu.
+5. Bez správce zaregistruj docker-watchdog, docker úklid a walk-forward. V terminálu **jako správce**
+   (Win+X → Terminál (správce)) update-offhours a compact-vhdx.
+6. Úlohy běží pod účtem, který je zaregistroval, a jen když je ten účet přihlášený
+   (`LogonType Interactive`). Po restartu se tedy PC musí přihlásit.
+7. Rozvrh je v místním čase (`scripts/lib/LocalTrigger.ps1`, #1278) a počítá s pásmem Praha
+   (pauza Globexu 23:00–24:00). Skripty si zavřený trh ověřují samy, v jiném pásmu by běh jen přeskočily.
+   Čas se dá změnit parametrem `-At` (compact-vhdx `-WeekdayAt`, hlídač `-EveryMinutes`).
+8. Kontrola: `Get-ScheduledTask -TaskName 'GEXLens*' | Get-ScheduledTaskInfo` (vyplněný `NextRunTime`,
+   po prvním běhu `LastTaskResult` 0). Nanečisto: `docker-watchdog.ps1 -DryRun`,
+   `update-wsl-docker-offhours.ps1 -DryRun`, `compact-docker-vhdx.ps1 -IfNeeded -DryRun`,
+   `docker-cleanup.ps1 -WhatIf`.
+9. **Starý PC:** jakmile produkce běží jinde, nejdřív vypni úlohy
+   (`Get-ScheduledTask -TaskName 'GEXLens*' | Disable-ScheduledTask`) a teprve potom zastav Docker Desktop.
+   Jinak ho hlídač do 5 min znovu spustí a s ním i druhý engine na témž IBKR účtu.
+
 ---
 
 ## 14. Bezpečnost a nasazení na server
@@ -1188,6 +1233,7 @@ přepnutí v pauze Globexu) je v issue #1094. Co k tomu má repo:
 | Název projektu | `compose.yml` → `name: gex` | kontejnery `gex-*` a image `gex-engine` nezávisle na názvu adresáře (`/srv/gexlens`) — deploy skript a rollback tag s nimi počítají |
 | Deploy | `pwsh scripts/deploy-engine-offhours.ps1 -Server` | `-Server` přidá override; zóna Chicago se hledá jako `America/Chicago` i `Central Standard Time` |
 | Walk-forward | `scripts/systemd/gexlens-walkforward.{service,timer}` | náhrada Task Scheduleru; po–pá 23:30, `Persistent=true` |
+| Ostatní úlohy hostitele | kap. 13.6 | co z Task Scheduleru PC na serveru odpadá a co chybí (úklid Dockeru, upozornění na výpadek Dockeru, záloha PG #1566) |
 | Přístup k UI | `tailscale serve --bg --https=443 localhost:8080` | `GEXLENS_BIND_ADDR` zůstává loopback, `GEXLENS_ALLOWED_ORIGINS=https://<host>.<tailnet>.ts.net`; UFW nepouští nic, SSH přes Tailscale |
 | Docker × UFW | řetězec `DOCKER-USER` v `/etc/ufw/after.rules` zahazuje vše z veřejného rozhraní do kontejnerů | druhá pojistka vedle loopback bindu; kontrola vždy `nmap` zvenčí |
 | Swap na 8 GB | `zram-tools`, `PERCENT=25` | naměřeno 5,3 GB (kap. 13.2 + `docker stats` 9. 9. 2026); zram kryje špičky RTH, práh pro větší plán je 85 % |
