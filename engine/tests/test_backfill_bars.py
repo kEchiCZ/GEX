@@ -341,37 +341,61 @@ async def test_replace_wrong_contract_keeps_session_after_daily_pause(
     assert "žádná měřená minuta téže seance" in caplog.text
 
 
+PRIOR_EVENING = list(range(-850, -840))  # 9. 9. 23:50–23:59, měřeno
+PRIOR_UNMEASURED = list(range(-860, -850))  # 9. 9. 23:40–23:49, v partici chybí
+HOLE_AT_MIDNIGHT = list(range(-840, -830))  # 10. 9. 00:00–00:09
+EVENING = list(range(530, 540))  # 10. 9. 22:50–22:59 = seance 11. 9.
+
+
+@pytest.mark.parametrize(
+    ("offsets", "expected_requests"),
+    [
+        ({"202609": 0.0}, ["202609", "202609"]),
+        # Front podle expirace nesedí, ověří se další kvartál — i večer se stáhne z něj
+        ({"202609": 77.0, "202612": 0.0}, ["202609", "202612", "202612"]),
+    ],
+)
 async def test_session_start_is_verified_from_prior_partition(
-    mod: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    mod: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    offsets: dict[str, float],
+    expected_requests: list[str],
 ) -> None:
     """Díra od půlnoci se doplní podle měřeného večera předchozí partice (#1390).
 
     Jako ES 14. 7. 2026: engine měřil jen 22:50–22:59 UTC (seance dalšího dne)
-    a večer předtím. Seance dne začala 9. 9. ve 22:00 UTC, takže kontrakt bloku
-    00:00–00:09 ověří až partice 9. 9. Skript pro ni stáhne i předchozí den
-    z ověřeného kontraktu a do předchozí partice nic nezapíše.
+    a večer předtím. Seance dne začala 9. 9. v 17:00 CT, takže stranu před
+    blokem 00:00–00:09 ověří až partice 9. 9. Skript pro ni stáhne předchozí
+    den z ověřeného kontraktu (ne z prvního kandidáta) a do předchozí partice
+    nic nezapíše — ani minuty, které v ní chybějí.
     """
     caplog.set_level(logging.INFO, logger="backfill_bars")
-    prior_evening = list(range(-850, -840))  # 9. 9. 23:50–23:59
-    hole = list(range(-840, -830))  # 10. 9. 00:00–00:09
-    evening = list(range(530, 540))  # 10. 9. 22:50–22:59
     writer = SnapshotWriter(Settings(data_dir=tmp_path))
     prior_path = writer.write_bars(
-        "ES", DAY - dt.timedelta(days=1), [bar(i, price(i), None) for i in prior_evening]
+        "ES", DAY - dt.timedelta(days=1), [bar(i, price(i), None) for i in PRIOR_EVENING]
     )
     prior_content = prior_path.read_bytes()
-    path = writer.write_bars("ES", DAY, [bar(i, price(i), None) for i in evening])
+    path = writer.write_bars("ES", DAY, [bar(i, price(i), None) for i in EVENING])
+    minutes = [*PRIOR_UNMEASURED, *PRIOR_EVENING, *HOLE_AT_MIDNIGHT, *EVENING]
     requested = install_fakes(
         mod,
         monkeypatch,
-        {"202609": [bar(i, price(i), None) for i in [*prior_evening, *hole, *evening]]},
+        {
+            month: [bar(i, price(i) + offset, None) for i in minutes]
+            for month, offset in offsets.items()
+        },
     )
 
     assert await run(mod, tmp_path, replace_tasty=False) == 0
-    assert requested == ["202609", "202609"]  # den a večer před ním z téhož kontraktu
+    assert requested == expected_requests
     assert prior_path.read_bytes() == prior_content
     rows = read(path)
-    assert sorted(rows) == [*hole, *evening]
-    assert all(rows[i] == (price(i), BAR_SOURCE_HISTORICAL) for i in hole)
-    assert all(rows[i] == (price(i), BAR_SOURCE_LIVE) for i in evening)
-    assert "večer předchozí partice — 10 měřených minut seance, 10 barů z 202609" in caplog.text
+    assert sorted(rows) == [*HOLE_AT_MIDNIGHT, *EVENING]
+    assert all(rows[i] == (price(i), BAR_SOURCE_HISTORICAL) for i in HOLE_AT_MIDNIGHT)
+    assert all(rows[i] == (price(i), BAR_SOURCE_LIVE) for i in EVENING)
+    verified = expected_requests[-1]
+    assert (
+        f"večer předchozí partice — 10 měřených minut seance, 20 barů z {verified}" in caplog.text
+    )

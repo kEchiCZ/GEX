@@ -265,9 +265,9 @@ def _edge_deviations(
     strany, sedí i blok mezi nimi.
     Strana bez měřené minuty téže seance (začátek dne, denní pauza) do výsledku
     nepřispěje — výsledek má 0–2 prvky, po jednom za stranu. Seance začíná
-    22:00 UTC předchozího dne, takže `pairs` mohou nést i minuty z večera
-    předchozí partice — jinak by blok od půlnoci neměl měřenou minutu téže
-    seance nikdy, když engine měřil jen její začátek (#1390).
+    17:00 CT předchozího dne (22:00 UTC v letním čase, 23:00 v zimním), takže
+    `pairs` mohou nést i minuty z večera předchozí partice — jinak by strana
+    před blokem od půlnoci neměla měřenou minutu téže seance nikdy (#1390).
     """
     deviations: list[float] = []
     before = bisect_left(pairs, block[0].ts) - 1
@@ -346,9 +346,10 @@ def plan_day_refill(
     s přepisem `ibkr_hist`, který má měřenou minutu téže seance jen po jedné
     straně (`_reject_reason`), se nezapíše a vrátí se v `rejected`.
     `prior_measured` a `prior_incoming` = měřené close a bary téhož kontraktu
-    z předchozí partice: seance dne začíná 22:00 UTC předchozího dne, takže
-    jen tam může mít blok od půlnoci měřenou minutu téže seance (#1390). Slouží
-    jen k ověření, do plánu se nedostanou. Plán je
+    z předchozí partice: seance dne začíná 17:00 CT předchozího dne, takže
+    strana před blokem od půlnoci (do první měřené minuty dne) má měřenou minutu
+    téže seance jen tam (#1390). Slouží jen k ověření, do plánu se nedostanou.
+    Plán je
     idempotentní: po zápisu nesou přepsané minuty close staženého baru
     a podruhé už kandidáty nejsou.
     """

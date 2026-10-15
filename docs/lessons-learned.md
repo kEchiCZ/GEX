@@ -286,9 +286,11 @@ chyb**, hlavně diagnostických a provozních.
 - **2026-10-15 — stráž bloků hledala začátek seance jen v téže partici (#1390), podruhé po #1002.**
   Oprava barů 14.–16. 7. odmítla 5 bloků 00:00–20:59 UTC jako „bez měřené minuty téže seance“, přestože
   bary IBKR U6 seděly na měřené minuty dne s odchylkou 0,000 %. Partice jsou podle UTC dne, seance ale
-  začíná 22:00 UTC předchozího dne. Engine ty dny měřil jen 22:00–23:59, a to už je v partici dne seance
-  dalšího dne. Měřené minuty seance bloku ležely v předchozí partici, kterou `_edge_deviations` nečetl.
-  Stejnou chybu měla kontrola večerních minut `bar_minutes_for_days` (#1002).
+  začíná 17:00 CT předchozího dne (v červenci 22:00 UTC). Engine ty dny měřil jen 22:00–23:59 UTC, tedy
+  začátek seance dalšího dne. Měřené minuty seance bloku ležely v předchozí partici a stráž
+  (`plan_day_refill` → `_edge_deviations`) dostávala jen minuty partice dne.
+  Stejnou chybu měla rekonstrukce minut #617: „co už máme“ četla jen partici dne seance (`bar_minutes`)
+  a večerní blok doplnila podruhé; opraveno přes `bar_minutes_for_days` (#1002).
   → Kdo v datech dělených podle UTC dne hledá „tutéž seanci“, čte i předchozí partici (doplněno do
   pravidla „Obchodní den, ne kalendářní“ v AGENTS.md). Test na blok od půlnoci, jehož seance má měřené
   minuty jen ve večeru předchozí partice.

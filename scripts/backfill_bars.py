@@ -278,8 +278,9 @@ async def fetch_prior_evening(
     """Měřené minuty seance `day` z předchozí partice a bary téhož kontraktu k nim (#1390).
 
     Seance začíná 17:00 CT předchozího dne (22:00 UTC v letním čase, jinak 23:00),
-    takže blok od půlnoci má měřenou minutu téže seance jen v předchozí partici.
-    Request se pošle, jen když tam nějaká je; bez barů se blok neověří.
+    takže strana před blokem od půlnoci (do první měřené minuty dne) má měřenou
+    minutu téže seance jen v předchozí partici. Request se pošle, kdykoli tam
+    nějaká je (jeden navíc na den a symbol); bez barů ta strana nic neověří.
     """
     prior_day = day - dt.timedelta(days=1)
     measured = {
