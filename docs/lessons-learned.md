@@ -283,6 +283,15 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-15 — čtení partice s výběrem sloupců bez `schema=` spadlo na starých particích (#1390).**
+  `measured_bar_closes` četl `columns=[…, "source"]` bez schématu. Partice barů z doby před #1055
+  (14.–16. 7. 2026) sloupec `source` nemají, takže oprava barů #1300 skončila `ArrowInvalid: No match
+  for FieldRef.Name(source)` ještě v dry-runu. Docstring přitom sliboval „i NULL ze starých partic“.
+  Ostatní čtenáři barů (`read_bars`, zápisový buffer) schéma předávají. Testy psaly partice současným
+  zapisovačem, takže starý tvar nikdy neviděly.
+  → Partici s rozšiřovaným schématem číst vždy s `schema=<SCHEMA>` (chybějící sloupec = NULL). Test
+  čtenáře založit i nad particí ve starém tvaru, zapsanou přímo přes `pq.write_table`.
+
 - **2026-10-13 — blok jiného kontraktu nejde poznat jen podle vráceného skoku stejné velikosti (#1390).**
   Kontaminace 8.–18. 9. 2026 (záloha `data/backup/bars-1232`) tvoří 52 párů skok/návrat se zbytkem ≤ 8 %.
   Stejně těsné páry ale dávají i skutečné pohyby z 2.–9. 4. 2025 (cla, falešná zpráva o pauze 7. 4.:
