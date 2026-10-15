@@ -1290,7 +1290,8 @@ class SnapshotWriter:
         path = self._settings.derived_dir / symbol / "bars" / f"{day.isoformat()}.parquet"
         if not path.exists():
             return {}
-        table = pq.read_table(path, columns=["ts_min", "close", "source"])
+        # Schéma: partice před #1055 sloupec `source` nemají → NULL = živá cesta (#1390)
+        table = pq.read_table(path, columns=["ts_min", "close", "source"], schema=BARS_SCHEMA)
         closes: dict[dt.datetime, float] = {}
         for ts, close, source in zip(
             table.column("ts_min").to_pylist(),

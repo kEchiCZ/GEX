@@ -280,6 +280,34 @@ def test_measured_bar_closes_vynechava_doplnene(tmp_path: Path) -> None:
     assert writer.measured_bar_closes("NQ", dt.date(2026, 9, 16)) == {}
 
 
+def test_measured_bar_closes_partice_bez_sloupce_source(tmp_path: Path) -> None:
+    """#1390: partice z doby před #1055 sloupec `source` nemají (14.–16. 7. 2026).
+
+    Čtení bez schématu spadlo na ArrowInvalid a oprava barů #1300 se nespustila;
+    chybějící původ = NULL = živá cesta, tedy měřená minuta.
+    """
+    writer = SnapshotWriter(Settings(data_dir=tmp_path))
+    day = dt.date(2026, 7, 14)
+    t0 = dt.datetime(2026, 7, 14, 13, 30, tzinfo=dt.UTC)
+    path = tmp_path / "derived" / "ES" / "bars" / f"{day.isoformat()}.parquet"
+    path.parent.mkdir(parents=True)
+    legacy = pa.table(
+        {
+            "ts_min": pa.array([t0, t0 + dt.timedelta(minutes=1)], pa.timestamp("us", tz="UTC")),
+            "open": [1.0, 1.0],
+            "high": [1.0, 1.0],
+            "low": [1.0, 1.0],
+            "close": [6300.0, 6301.25],
+            "volume": [1.0, 1.0],
+        }
+    )
+    pq.write_table(legacy, path)
+    assert writer.measured_bar_closes("ES", day) == {
+        t0: 6300.0,
+        t0 + dt.timedelta(minutes=1): 6301.25,
+    }
+
+
 def test_doplneni_jen_existujicich_minut_nespadne_a_partici_nezmeni(tmp_path: Path) -> None:
     """#1343: všechny doplňované minuty už partice nese jako změřené — `keep_existing`
     je vyřadí a prázdný `value_set` typu null shodil rekonstrukci (ArrowTypeError)."""
