@@ -264,7 +264,10 @@ def _edge_deviations(
     dopředu (pinovaný kontrakt má vlastní ticker, ADR-0041), takže sedí-li obě
     strany, sedí i blok mezi nimi.
     Strana bez měřené minuty téže seance (začátek dne, denní pauza) do výsledku
-    nepřispěje — výsledek má 0–2 prvky, po jednom za stranu.
+    nepřispěje — výsledek má 0–2 prvky, po jednom za stranu. Seance začíná
+    17:00 CT předchozího dne (22:00 UTC v letním čase, 23:00 v zimním), takže
+    `pairs` mohou nést i minuty z večera předchozí partice — jinak by strana
+    před blokem od půlnoci neměla měřenou minutu téže seance nikdy (#1390).
     """
     deviations: list[float] = []
     before = bisect_left(pairs, block[0].ts) - 1
@@ -318,6 +321,8 @@ def plan_day_refill(
     replace_tasty: bool,
     replace_wrong_contract: bool = False,
     tolerance: float = BACKFILL_CONTRACT_TOLERANCE,
+    prior_measured: Mapping[dt.datetime, float] | None = None,
+    prior_incoming: Iterable[Bar] = (),
 ) -> DayRefill:
     """Které bary IBKR historical zapsat do partice, která už existuje (#1320).
 
@@ -339,12 +344,20 @@ def plan_day_refill(
     minuty téže seance po stranách v toleranci `tolerance` (`_edge_deviations`).
     Blok bez měřené minuty téže seance, blok vedle jiného kontraktu a blok
     s přepisem `ibkr_hist`, který má měřenou minutu téže seance jen po jedné
-    straně (`_reject_reason`), se nezapíše a vrátí se v `rejected`. Plán je
+    straně (`_reject_reason`), se nezapíše a vrátí se v `rejected`.
+    `prior_measured` a `prior_incoming` = měřené close a bary téhož kontraktu
+    z předchozí partice: seance dne začíná 17:00 CT předchozího dne, takže
+    strana před blokem od půlnoci (do první měřené minuty dne) má měřenou minutu
+    téže seance jen tam (#1390). Slouží jen k ověření, do plánu se nedostanou.
+    Plán je
     idempotentní: po zápisu nesou přepsané minuty close staženého baru
     a podruhé už kandidáty nejsou.
     """
     by_ts = {bar.ts: bar for bar in incoming}
-    pairs = sorted(ts for ts, close in measured.items() if close > 0 and ts in by_ts)
+    # Předchozí partice jen ověřuje kontrakt, kandidáti jsou výhradně z `incoming`
+    edge_bars = {bar.ts: bar for bar in prior_incoming} | by_ts
+    edge_measured = dict(prior_measured or {}) | dict(measured)
+    pairs = sorted(ts for ts, close in edge_measured.items() if close > 0 and ts in edge_bars)
     wrong: dict[dt.datetime, float] = {}
     candidates: list[Bar] = []
     for ts, bar in sorted(by_ts.items()):
@@ -359,7 +372,7 @@ def plan_day_refill(
     bars: list[Bar] = []
     rejected: list[RejectedBlock] = []
     for block in _blocks(candidates):
-        deviations = _edge_deviations(block, pairs, measured, by_ts)
+        deviations = _edge_deviations(block, pairs, edge_measured, edge_bars)
         reason = _reject_reason(
             deviations, rewrite=any(bar.ts in wrong for bar in block), tolerance=tolerance
         )

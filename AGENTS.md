@@ -77,7 +77,8 @@ POSIX: `make test`. CI (GitHub Actions) vyžaduje zelené joby `python`, `fronte
   dni", ptá se jediného predikátu `compute/settle.is_trading_session` (frontend: protějšek
   `instrument/tz.isTradingSessionIso`; svátky NYSE z pravidel, #1308, ADR-0046), žádné lokální `weekday() < 5`
   ani `getUTCDay()` jako test obchodního dne; test na sobotu, neděli a pondělí proti pátku
-  (#1241, #1307, #1309).
+  (#1241, #1307, #1309). Seance začíná 17:00 CT předchozího dne, takže leží ve dvou UTC particích:
+  kdo hledá minuty téže seance, čte i předchozí partici (#1002, #1390).
 - **Podezřelá hodnota na produkci**: issue a příčina hned, neodkládá se „až se to bude opakovat";
   oprava podle „Pořadí práce" (hned jen tamní výjimky). Demo/mock data nesmí prosáknout do UI.
 - **Ověřuj na tvrdých datech**: metriku dohledej v kódu, stav issue z `gh issue view`, ne z paměti;
