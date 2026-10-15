@@ -20,7 +20,7 @@ if (-not (Test-Path $script)) { throw "Nenalezen $script" }
 New-Item -ItemType Directory -Force (Split-Path -Parent $log) | Out-Null
 
 # Plná cesta k pwsh: Task Scheduler pod Řízeným přístupem ke složkám (Defender)
-# spouští jen známé binárky s plnou cestou (ADMIN manuál kap. 12)
+# spouští jen známé binárky s plnou cestou (ADMIN manuál kap. 13.6)
 # Stabilní alias pwsh (App Execution Alias), ne cesta do WindowsApps s číslem
 # verze: po aktualizaci Store balíčku (7.6.5 → 7.6.6, 9. 9. 2026) stará cesta
 # zmizela a úlohy končily 0x80070002, aniž si toho kdo všiml (walk-forward
