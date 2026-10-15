@@ -357,3 +357,114 @@ def test_plan_day_refill_does_not_rewrite_next_to_other_contract() -> None:
     assert (plan.bars, plan.rewritten) == ([], [])
     assert [(b.start.minute, b.end.minute, b.reason) for b in plan.rejected] == [(5, 9, "mismatch")]
     assert plan.rejected[0].deviation == pytest.approx(1 / 101)
+
+
+def _on(
+    day: dt.date, hour: int, minute: int, close: float, source: str | None = BAR_SOURCE_HISTORICAL
+) -> Bar:
+    ts = dt.datetime.combine(day, dt.time(hour, minute), tzinfo=dt.UTC)
+    return Bar(ts=ts, open=close, high=close, low=close, close=close, volume=1, source=source)
+
+
+def test_plan_day_refill_verifies_session_start_in_prior_partition() -> None:
+    """Blok od půlnoci ověří měřená minuta z večera předchozí partice (#1390).
+
+    14. 7. 2026: engine měřil U6 jen ve 22:00–23:59 UTC, přes den nic. Seance
+    14. 7. začala 13. 7. ve 22:00 UTC, takže její měřené minuty leží v partici
+    13. 7.; měřené minuty 14. 7. po 22:00 patří už seanci 15. 7. Bez předchozí
+    partice se díra 00:00–00:09 neověří, s ní se doplní a bary předchozího dne
+    se do plánu nedostanou. Večer jiného kontraktu blok odmítne a minuta
+    předchozí partice z dřívější seance ho neověří.
+    """
+    day, prior = dt.date(2026, 7, 14), dt.date(2026, 7, 13)
+    evening = [_on(day, 22, m, 100.0, BAR_SOURCE_LIVE) for m in range(50, 60)]
+    live = {bar.ts: _stored(bar) for bar in evening}
+    measured = {ts: 100.0 for ts in live}
+    incoming = [_on(day, 0, m, 100.0) for m in range(10)] + [
+        _on(day, 22, m, 100.0) for m in range(50, 60)
+    ]
+
+    def prior_evening(hour: int, close: float) -> tuple[dict[dt.datetime, float], list[Bar]]:
+        bars = [_on(prior, hour, m, close) for m in range(50, 60)]
+        return {bar.ts: 100.0 for bar in bars}, bars
+
+    blind = plan_day_refill(live, incoming, measured=measured, replace_tasty=False)
+    assert blind.bars == []
+    assert [
+        (b.start.strftime("%H:%M"), b.end.strftime("%H:%M"), b.reason) for b in blind.rejected
+    ] == [("00:00", "00:09", "no_edge")]
+
+    prior_measured, prior_bars = prior_evening(23, 100.0)
+    plan = plan_day_refill(
+        live,
+        incoming,
+        measured=measured,
+        replace_tasty=False,
+        prior_measured=prior_measured,
+        prior_incoming=prior_bars,
+    )
+    assert [bar.ts for bar in plan.bars] == [_on(day, 0, m, 0).ts for m in range(10)]
+    assert (plan.filled, plan.rejected) == (10, [])
+
+    other_measured, other_bars = prior_evening(23, 101.0)  # stažený kontrakt nesedí na večer
+    other = plan_day_refill(
+        live,
+        incoming,
+        measured=measured,
+        replace_tasty=False,
+        prior_measured=other_measured,
+        prior_incoming=other_bars,
+    )
+    assert other.bars == []
+    assert [b.reason for b in other.rejected] == ["mismatch"]
+    assert other.rejected[0].deviation == pytest.approx(0.01)
+
+    # 13. 7. 20:50–20:59 je seance 13. 7. — za denní pauzou o kontraktu bloku nic neříká
+    earlier_measured, earlier_bars = prior_evening(20, 100.0)
+    earlier = plan_day_refill(
+        live,
+        incoming,
+        measured=measured,
+        replace_tasty=False,
+        prior_measured=earlier_measured,
+        prior_incoming=earlier_bars,
+    )
+    assert earlier.bars == []
+    assert [b.reason for b in earlier.rejected] == ["no_edge"]
+
+
+def test_plan_day_refill_rewrite_counts_prior_partition_as_a_side() -> None:
+    """Přepis `ibkr_hist` od půlnoci má s večerem předchozí partice obě strany (#1390).
+
+    Měřeno 05:00–05:09 téže seance a 13. 7. 23:50–23:59; mezi nimi `ibkr_hist`
+    jiného kontraktu (close 101). Bez předchozí partice zbývá jedna strana
+    (`one_edge`), s ní se blok přepíše.
+    """
+    day, prior = dt.date(2026, 7, 14), dt.date(2026, 7, 13)
+    morning = [_on(day, 5, m, 100.0, BAR_SOURCE_LIVE) for m in range(10)]
+    hist = [_on(day, 0, m, 101.0) for m in range(10)]
+    existing = {bar.ts: _stored(bar) for bar in [*morning, *hist]}
+    measured = {bar.ts: 100.0 for bar in morning}
+    incoming = [_on(day, 0, m, 100.0) for m in range(10)] + [
+        _on(day, 5, m, 100.0) for m in range(10)
+    ]
+    prior_bars = [_on(prior, 23, m, 100.0) for m in range(50, 60)]
+
+    one_side = plan_day_refill(
+        existing, incoming, measured=measured, replace_tasty=False, replace_wrong_contract=True
+    )
+    assert [b.reason for b in one_side.rejected] == ["one_edge"]
+
+    plan = plan_day_refill(
+        existing,
+        incoming,
+        measured=measured,
+        replace_tasty=False,
+        replace_wrong_contract=True,
+        prior_measured={bar.ts: 100.0 for bar in prior_bars},
+        prior_incoming=prior_bars,
+    )
+    assert [(b.start.strftime("%H:%M"), b.end.strftime("%H:%M")) for b in plan.rewritten] == [
+        ("00:00", "00:09")
+    ]
+    assert (len(plan.bars), plan.filled, plan.rejected) == (10, 0, [])

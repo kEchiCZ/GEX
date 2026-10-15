@@ -18,7 +18,9 @@ zůstává. Měřené minuty (`ibkr`) nepřepíše nikdy. Kontrakt
 dne se vybírá podle měřených barů partice (stráž #1232), ne podle kalendáře,
 a každý zapisovaný souvislý blok minut musí sedět i na nejbližší měřené minuty
 téže seance po stranách (engine mohl během dne přepnout kontrakt; minuta za
-denní pauzou je jiná seance). Doplnění díry stačí jedna strana, přepis
+denní pauzou je jiná seance). Seance dne začíná večer předchozího dne, proto se
+její měřené minuty hledají i v předchozí partici a z ověřeného kontraktu se pro
+ně stáhne i předchozí den (#1390). Doplnění díry stačí jedna strana, přepis
 `ibkr_hist` potřebuje obě. Dnešek a včerejšek skript odmítne: jejich partice
 drží engine v paměti a pozdním zápisem by opravu přepsal.
 
@@ -39,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "engine" / "src"
 from ib_async import IB, Contract, Future  # noqa: E402
 
 from gexlens_engine.adapters import IbHistoricalClient  # noqa: E402
+from gexlens_engine.compute.settle import trading_session_date  # noqa: E402
 from gexlens_engine.config import Settings, load_settings  # noqa: E402
 from gexlens_engine.ibkr.deepbars import (  # noqa: E402
     RejectedBlock,
@@ -269,6 +272,32 @@ async def fetch_verified_day(
     return None
 
 
+async def fetch_prior_evening(
+    backfiller: UnderlyingBackfiller, writer: SnapshotWriter, symbol: str, day: dt.date
+) -> tuple[dict[dt.datetime, float], list[Bar]]:
+    """Měřené minuty seance `day` z předchozí partice a bary téhož kontraktu k nim (#1390).
+
+    Seance začíná 17:00 CT předchozího dne (22:00 UTC v letním čase, jinak 23:00),
+    takže blok od půlnoci má měřenou minutu téže seance jen v předchozí partici.
+    Request se pošle, jen když tam nějaká je; bez barů se blok neověří.
+    """
+    prior_day = day - dt.timedelta(days=1)
+    measured = {
+        ts: close
+        for ts, close in writer.measured_bar_closes(symbol, prior_day).items()
+        if trading_session_date(ts) == day
+    }
+    if not measured:
+        return {}, []
+    try:
+        bars = await backfiller.backfill_day(symbol, prior_day)
+    except Exception:
+        logger.exception("%s %s (večer před %s): request selhal", symbol, prior_day, day)
+        bars = []
+    await asyncio.sleep(THROTTLE_S)
+    return measured, bars
+
+
 def reject_message(block: RejectedBlock, contract_month: str) -> str:
     """Důvod odmítnutí bloku pro výpis (`RejectReason`)."""
     if block.reason == "no_edge" or block.deviation is None:
@@ -311,12 +340,26 @@ async def run_days(
                     failed += 1
                     continue
                 contract_month, bars, deviation = fetched
+                prior_measured, prior_bars = await fetch_prior_evening(
+                    backfillers[f"{symbol}{contract_month}"], writer, symbol, day
+                )
+                if prior_measured:
+                    logger.info(
+                        "%s %s: večer předchozí partice — %d měřených minut seance, %d barů z %s",
+                        symbol,
+                        day,
+                        len(prior_measured),
+                        len(prior_bars),
+                        contract_month,
+                    )
                 plan = plan_day_refill(
                     day_bars(settings, symbol, day),
                     bars,
                     measured=measured,
                     replace_tasty=replace_tasty,
                     replace_wrong_contract=replace_wrong_contract,
+                    prior_measured=prior_measured,
+                    prior_incoming=prior_bars,
                 )
                 for block in plan.rejected:
                     logger.error(
