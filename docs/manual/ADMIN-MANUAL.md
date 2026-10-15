@@ -1136,8 +1136,8 @@ když se přesune složka repa nebo po reinstalaci Windows. Na Linux serveru (#1
 | GEXLens docker úklid | rollback tagy (3 na službu), build cache starší 7 dnů, osiřelé image; alert `disk_low` do zvonku (#1127, kap. 13.4) | so 08:00 | `pwsh -File scripts/register-docker-cleanup-task.ps1` | `data\logs\docker-cleanup.log` | potřeba, ale skript je jen pro Windows (APPDATA, VHDX, Task Scheduler) → úklid a hlídka místa na serveru #1567 |
 | GEXLens walk-forward | noční walk-forward parametrů setupů, jen report (ADR-0034, kap. 12) | po–pá 23:30 | `pwsh -File scripts/register-walkforward-task.ps1` (účet s `docker` a `uv`) | `data\reports\walkforward-nightly.log` | `scripts/systemd/gexlens-walkforward.{service,timer}`; předpoklady: pásmo Europe/Prague (timer je v místním čase serveru), `uv` v PATH služby, `pwsh` v `/usr/bin`, uživatel `gex` ve skupině `docker` (#1567) |
 
-Nepřenáší se `GEXLens-deploy-engine` a `GEXLens-deploy-engine-600`. Jsou to jednorázové úlohy ze srpna
-2026 (odložený deploy přes `scripts/deploy-engine-offhours.cmd`), které už proběhly. Pravidelnou zálohu PG
+Jednorázové úlohy `GEXLens-deploy-engine` a `GEXLens-deploy-engine-600` ze srpna 2026 (odložený deploy
+přes `scripts/deploy-engine-offhours.cmd`) už proběhly a vlastník je 15. 10. 2026 smazal; nepřenášejí se. Pravidelnou zálohu PG
 zatím žádná úloha nedělá (#1566), proto před přenosem vždy spusť `pwsh scripts/backup-postgres.ps1`.
 
 **Postup na novém Windows PC** (Docker a stack podle kap. 13.4, ověření podle kap. 13.5):
