@@ -65,7 +65,9 @@ export function computeContourSegments(
     marchingSquares(smoothed, width, height, level),
   )
   if (levels.negative.length > 0) {
-    const negated = Float32Array.from(smoothed, (value) => -value)
+    // Prostá smyčka: `Float32Array.from` s callbackem je řádově pomalejší (#142)
+    const negated = new Float32Array(smoothed.length)
+    for (let index = 0; index < smoothed.length; index += 1) negated[index] = -smoothed[index]
     for (const level of levels.negative) {
       segments.push(...marchingSquares(negated, width, height, level))
     }

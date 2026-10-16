@@ -7,6 +7,7 @@ neříká nic a práh plave mezi dny. p99 místo maxima, aby jedna odlehlá buň
 nestlačila prahy k nule — a protože p99 je i jmenovatel barev (modes.ts),
 kontury sedí na barvu. Jmenovatel se počítá ZVLÁŠŤ per strana (#570): při
 dominanci jedné strany by slabší jinak neměla ani jednu čáru. */
+import { selectKth } from './select'
 
 /** Módy: hladiny (Major/All, #571), kontura flipu (#1174: nulová izolinie
 znaménkového pole — kde model přechází z tlumení do zesilování, v čase i přes
@@ -49,11 +50,15 @@ začíná, horní = tady už je silné. Vždy dvě úrovně; ladí se tady. */
 export const CONTOUR_MAJOR: readonly number[] = [0.65, 0.95]
 export const CONTOUR_ALL: readonly number[] = [0.4, 0.7]
 
+/** Kvantil (nearest-rank) výběrem nad kopií, ne řazením (#1420, vzor #142). */
 export function quantile(values: ArrayLike<number>, q: number): number {
-  const sorted = Array.from(values).sort((a, b) => a - b)
-  if (sorted.length === 0) return 0
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))
-  return sorted[index]
+  return quantileInPlace(Float64Array.from(values), q)
+}
+
+/** Kvantil nad vlastním polem, které se výběrem přeuspořádá. */
+function quantileInPlace(values: Float64Array, q: number): number {
+  if (values.length === 0) return 0
+  return selectKth(values, Math.min(values.length - 1, Math.max(0, Math.ceil(q * values.length) - 1))) // prettier-ignore
 }
 
 /** Úrovně izolinií per strana pole — obě sady jsou kladné hodnoty.
@@ -70,15 +75,31 @@ export function contourLevels(field: ArrayLike<number>, mode: ContoursMode): Con
   const { levels: base } = splitContoursMode(mode)
   if (base === 'off') return { positive: [], negative: [] }
   const shares = base === 'major' ? CONTOUR_MAJOR : CONTOUR_ALL
-  const positives: number[] = []
-  const negatives: number[] = []
+  // Strany do typed polí a p99 výběrem (#1420): JS pole a řazení s komparátorem
+  // stály na 1m dni 22–34 ms z výpočtu kontur. Float64 drží hodnoty přesně.
+  let positiveCount = 0
+  let negativeCount = 0
   for (let index = 0; index < field.length; index += 1) {
     const value = field[index]
-    if (value > 0) positives.push(value)
-    else if (value < 0) negatives.push(-value)
+    if (value > 0) positiveCount += 1
+    else if (value < 0) negativeCount += 1
   }
-  const positiveP99 = quantile(positives, 0.99)
-  const negativeP99 = quantile(negatives, 0.99)
+  const positives = new Float64Array(positiveCount)
+  const negatives = new Float64Array(negativeCount)
+  positiveCount = 0
+  negativeCount = 0
+  for (let index = 0; index < field.length; index += 1) {
+    const value = field[index]
+    if (value > 0) {
+      positives[positiveCount] = value
+      positiveCount += 1
+    } else if (value < 0) {
+      negatives[negativeCount] = -value
+      negativeCount += 1
+    }
+  }
+  const positiveP99 = quantileInPlace(positives, 0.99)
+  const negativeP99 = quantileInPlace(negatives, 0.99)
   return {
     positive: positiveP99 > 0 ? shares.map((share) => share * positiveP99) : [],
     negative: negativeP99 > 0 ? shares.map((share) => share * negativeP99) : [],
@@ -96,12 +117,17 @@ gammy) se přeskočí, jinak by kolem každé prázdné oblasti vznikla falešn�
 čára. Interpolace k nule je táž jako u hladin. */
 export function flipSegments(field: Float32Array, width: number, height: number): Segment[] {
   const segments: Segment[] = []
-  const at = (x: number, y: number) => field[y * width + x]
   for (let y = 0; y < height - 1; y += 1) {
     for (let x = 0; x < width - 1; x += 1) {
-      const corners = [at(x, y), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1)]
-      if (!corners.some((value) => value > 0) || !corners.some((value) => value < 0)) continue
-      segments.push(...marchingSquaresCell(field, width, x, y, 0))
+      const index = y * width + x
+      const topLeft = field[index]
+      const topRight = field[index + 1]
+      const bottomRight = field[index + width + 1]
+      const bottomLeft = field[index + width]
+      const positive = topLeft > 0 || topRight > 0 || bottomRight > 0 || bottomLeft > 0
+      const negative = topLeft < 0 || topRight < 0 || bottomRight < 0 || bottomLeft < 0
+      if (!positive || !negative) continue
+      cellSegments(segments, field, width, x, y, 0)
     }
   }
   return segments
@@ -116,75 +142,71 @@ export function marchingSquares(
 ): Segment[] {
   const segments: Segment[] = []
   for (let y = 0; y < height - 1; y += 1) {
-    for (let x = 0; x < width - 1; x += 1) {
-      segments.push(...marchingSquaresCell(field, width, x, y, level))
-    }
+    for (let x = 0; x < width - 1; x += 1) cellSegments(segments, field, width, x, y, level)
   }
   return segments
 }
 
-/** Jeden čtverec marching squares — sdílí ho hladinová i flip kontura. */
-function marchingSquaresCell(
+/** Jeden čtverec marching squares — sdílí ho hladinová i flip kontura.
+
+Úsečky připisuje do `out`, bez alokace pro prázdný čtverec a bez closures
+(#1420): dřív vznikalo pole a dvě funkce na každou buňku, ~100 tisíc na úroveň.
+Body na hranách se počítají jen ty, které případ potřebuje, stejnou
+aritmetikou jako dřív, takže úsečky jsou bit po bitu stejné. */
+function cellSegments(
+  out: Segment[],
   field: Float32Array,
   width: number,
   x: number,
   y: number,
   level: number,
-): Segment[] {
-  const at = (px: number, py: number) => field[py * width + px]
-  const topLeft = at(x, y)
-  const topRight = at(x + 1, y)
-  const bottomRight = at(x + 1, y + 1)
-  const bottomLeft = at(x, y + 1)
+): void {
+  const index = y * width + x
+  const topLeft = field[index]
+  const topRight = field[index + 1]
+  const bottomRight = field[index + width + 1]
+  const bottomLeft = field[index + width]
   let caseIndex = 0
   if (topLeft >= level) caseIndex |= 8
   if (topRight >= level) caseIndex |= 4
   if (bottomRight >= level) caseIndex |= 2
   if (bottomLeft >= level) caseIndex |= 1
-  if (caseIndex === 0 || caseIndex === 15) return []
+  if (caseIndex === 0 || caseIndex === 15) return
 
-  // Body na hranách buňky (parametricky interpolované)
-  const top: [number, number] = [x + interpolate(level, topLeft, topRight), y]
-  const right: [number, number] = [x + 1, y + interpolate(level, topRight, bottomRight)]
-  const bottom: [number, number] = [x + interpolate(level, bottomLeft, bottomRight), y + 1]
-  const left: [number, number] = [x, y + interpolate(level, topLeft, bottomLeft)]
-
-  const segments: Segment[] = []
-  const add = (a: [number, number], b: [number, number]) => segments.push([a[0], a[1], b[0], b[1]])
-
+  // Body na hranách buňky (parametricky interpolované): top a bottom leží na
+  // vodorovné hraně (y celé), left a right na svislé (x celé)
   switch (caseIndex) {
     case 1:
-    case 14:
-      add(left, bottom)
+    case 14: // left → bottom
+      out.push([x, y + interpolate(level, topLeft, bottomLeft), x + interpolate(level, bottomLeft, bottomRight), y + 1]) // prettier-ignore
       break
     case 2:
-    case 13:
-      add(bottom, right)
+    case 13: // bottom → right
+      out.push([x + interpolate(level, bottomLeft, bottomRight), y + 1, x + 1, y + interpolate(level, topRight, bottomRight)]) // prettier-ignore
       break
     case 3:
-    case 12:
-      add(left, right)
+    case 12: // left → right
+      out.push([x, y + interpolate(level, topLeft, bottomLeft), x + 1, y + interpolate(level, topRight, bottomRight)]) // prettier-ignore
       break
     case 4:
-    case 11:
-      add(top, right)
+    case 11: // top → right
+      out.push([x + interpolate(level, topLeft, topRight), y, x + 1, y + interpolate(level, topRight, bottomRight)]) // prettier-ignore
       break
-    case 5:
-      add(left, top)
-      add(bottom, right)
+    case 5: // left → top, bottom → right
+      out.push([x, y + interpolate(level, topLeft, bottomLeft), x + interpolate(level, topLeft, topRight), y]) // prettier-ignore
+      out.push([x + interpolate(level, bottomLeft, bottomRight), y + 1, x + 1, y + interpolate(level, topRight, bottomRight)]) // prettier-ignore
       break
     case 6:
-    case 9:
-      add(top, bottom)
+    case 9: // top → bottom
+      out.push([x + interpolate(level, topLeft, topRight), y, x + interpolate(level, bottomLeft, bottomRight), y + 1]) // prettier-ignore
       break
     case 7:
-    case 8:
-      add(left, top)
+    case 8: // left → top
+      out.push([x, y + interpolate(level, topLeft, bottomLeft), x + interpolate(level, topLeft, topRight), y]) // prettier-ignore
       break
-    case 10:
-      add(top, right)
-      add(left, bottom)
+    case 10: // top → right, left → bottom
+      out.push([x + interpolate(level, topLeft, topRight), y, x + 1, y + interpolate(level, topRight, bottomRight)]) // prettier-ignore
+      out.push([x, y + interpolate(level, topLeft, bottomLeft), x + interpolate(level, bottomLeft, bottomRight), y + 1]) // prettier-ignore
       break
   }
-  return segments
 }
