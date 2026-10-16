@@ -253,6 +253,20 @@ def settle_ts(day: dt.date) -> dt.datetime:
     return session_time_utc(day, local.hour, local.minute, ET_TZ)
 
 
+# Otevření US RTH (cash open NYSE) — i ve zkrácené seanci
+US_OPEN_LOCAL = dt.time(9, 30)
+
+
+def us_open_ts(day: dt.date) -> dt.datetime:
+    """Okamžik US openu (9:30 ET) daného kalendářního dne (UTC).
+
+    13:30 UTC v létě, 14:30 UTC v zimě (protějšek frontend `usOpenMs`,
+    api/briefing.ts). Od něj se měří pohyb verdiktu dne a od něj se verdikt
+    nesmí zapsat (#1585); automatický scénář se skládá před ním (#1173).
+    """
+    return session_time_utc(day, US_OPEN_LOCAL.hour, US_OPEN_LOCAL.minute, ET_TZ)
+
+
 # Otevření Globex — hranice obchodního dne (ADR-0023 bod 3, #512/#638)
 GLOBEX_OPEN_LOCAL = dt.time(17, 0)
 

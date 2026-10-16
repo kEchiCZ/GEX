@@ -4,16 +4,22 @@ Frontend spočítá verdikt (spíše long / spíše short / bez převahy / počk
 tisk) z pravidel s pevnými vahami a uloží ho sem — jeden řádek per seance
 a symbol, aby šla heuristika vyhodnotit proti průběhu seance (#1091).
 Bez uloženého verdiktu by šlo o názor bez zpětné vazby.
+
+Verdikt je předpověď před seancí: od US openu (9:30 ET) se hodnotí pohyb
+open → settle, takže pozdější zápis by do předpovědi pustil hodnocený pohyb
+(hlas overnight nese aktuální cenu). API proto od openu zápis odmítne —
+založení i přepis, i po settle (#1585). Uložený verdikt je nenahraditelný.
 """
 
 import datetime as dt
+from collections.abc import Callable
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from gexlens_api.meta_repo import MetaRepository
-from gexlens_engine.compute.settle import is_trading_session
+from gexlens_engine.compute.settle import is_trading_session, us_open_ts
 from gexlens_engine.storage.briefing_verdicts_store import BriefingVerdictRepository, verdict_stats
 
 VerdictKind = Literal["long", "short", "none", "wait_news"]
@@ -36,18 +42,32 @@ class VerdictIn(BaseModel):
     rules_version: int = Field(ge=1)
 
 
-def build_briefing_router(repository: MetaRepository) -> APIRouter:
+def build_briefing_router(
+    repository: MetaRepository,
+    *,
+    now: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
+) -> APIRouter:
     router = APIRouter(tags=["briefing"])
 
     @router.post("/briefing/verdicts", status_code=201)
     def verdict_put(payload: VerdictIn) -> dict[str, Any]:
-        """Uloží (nebo přepíše) verdikt seance pro symbol."""
+        """Uloží (nebo před US openem přepíše) verdikt seance pro symbol."""
         if not is_trading_session(payload.session_date):
             # Víkend nemá US open ani settle — verdikt by se nikdy nevyhodnotil (#1309)
             raise HTTPException(422, "Verdikt dne jen pro obchodní den (po–pá)")
+        current = now()
+        frozen_from = us_open_ts(payload.session_date)
+        if current >= frozen_from:
+            # Táž hranice jako základ pohybu ve vyhodnocení (briefing_verdicts.session_ohlc)
+            raise HTTPException(
+                409,
+                f"Verdikt seance {payload.session_date.isoformat()} je od US openu "
+                f"({frozen_from:%H:%M} UTC) zmrazený — hodnotí se pohyb od openu (#1585)",
+            )
         values = payload.model_dump()
         values["votes"] = [vote.model_dump() for vote in payload.votes]
-        return repository.briefing_verdict_upsert(values)
+        # Tentýž okamžik jako stráž: uložený `updated_at` je vždy před openem seance
+        return repository.briefing_verdict_upsert(values, now=current)
 
     @router.get("/briefing/verdicts/stats")
     def verdicts_stats(
