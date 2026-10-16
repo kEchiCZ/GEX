@@ -4,9 +4,9 @@ přepnutí Mode/Scale (#1420) a pozdě doručené kontury flipu (#1530).
 Kontury jdou přes podvržený Worker, aby šlo řídit pořadí doručení. Výsledek
 počítá týž kód jako skutečný worker (`computeContourPolylines`). Počty
 překreslení čte měřič výkonu #1409 a jsou deterministické. */
-import { act, render } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { AnnotationPayload, StoredAnnotation } from '../annotations/model'
+import type { ActiveTool, AnnotationPayload, StoredAnnotation } from '../annotations/model'
 import { computeContourPolylines } from '../heatmap/contourCompute'
 import type { ContoursMode } from '../heatmap/contours'
 import type { ForwardBoundary } from '../heatmap/dailyforward'
@@ -84,7 +84,11 @@ function otherMode(grid: HeatmapGrid, factor: number): HeatmapGrid {
 function chart(
   grid: HeatmapGrid,
   contours: ContoursMode,
-  extra: { view?: ViewTransform; ghostAnnotations?: AnnotationPayload[] } = {},
+  extra: {
+    view?: ViewTransform
+    ghostAnnotations?: AnnotationPayload[]
+    annotationTool?: ActiveTool
+  } = {},
 ) {
   return (
     <CrosshairProvider>
@@ -99,6 +103,7 @@ function chart(
         view={extra.view ?? VIEW}
         onViewChange={() => {}}
         ghostAnnotations={extra.ghostAnnotations}
+        annotationTool={extra.annotationTool ?? null}
       />
     </CrosshairProvider>
   )
@@ -177,4 +182,20 @@ test('bez změny scénářů se statická vrstva nepřekresluje, nové scénář
   expect(perfCounters().drawStatic).toBe(1)
   rerender(chart(grid, 'off', { ghostAnnotations: ghosts }))
   expect(perfCounters().drawStatic).toBe(1)
+})
+
+test('kreslení anotace během výpočtu kontur se kreslí hned', () => {
+  const first = demoGrid(120, 40)
+  const { rerender } = render(chart(first, 'major', { annotationTool: 'line' }))
+  worker().deliver('major')
+
+  resetPerf()
+  const second = otherMode(first, 1.6)
+  rerender(chart(second, 'major', { annotationTool: 'line' }))
+  expect(perfCounters().drawStatic ?? 0).toBe(0)
+  // Přímá manipulace nečeká na worker (minutový update během kreslení)
+  fireEvent.pointerDown(screen.getByRole('img', { name: 'GEX heatmapa' }), { clientX: 200, clientY: 100 }) // prettier-ignore
+  expect(perfCounters().drawStatic).toBe(1)
+  worker().deliver('major')
+  expect(perfCounters().drawStatic).toBe(2)
 })

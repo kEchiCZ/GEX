@@ -1472,15 +1472,36 @@ export function Heatmap({
 
   // Jediné kolo statické vrstvy po přepnutí Mode/Scale (#1420): dokud worker
   // nedoručí kontury nové mřížky (hladiny i flip), drží overlay poslední kresbu
-  // a kreslí se jednou, až jsou hotové. Změna transformace (pan, zoom, velikost,
-  // DPR) se kreslí hned: overlay by jinak ujel rastru a nová velikost plátno maže.
-  const staticDrawnRef = useRef<{ mapping: typeof mapping; dpr: number } | null>(null)
+  // a kreslí se jednou, až jsou hotové. Hned se kreslí jen to, co čekat nesmí:
+  // transformace (pan, zoom, velikost, DPR — overlay by ujel rastru a nová
+  // velikost plátno maže) a přímá manipulace (kreslení a přesun anotace,
+  // zvýraznění pod kurzorem, okraje range).
+  const rangeKey = [range, rangeB]
+    .map((target) => (target ? `${target.startBucket}-${target.endBucket}` : ''))
+    .join('|')
+  const staticDrawnRef = useRef<{
+    mapping: typeof mapping
+    dpr: number
+    draft: typeof draft
+    moving: typeof moving
+    hover: number | null
+    rangeKey: string
+  } | null>(null)
   useLayoutEffect(() => {
     const drawn = staticDrawnRef.current
-    if (!contoursReady && drawn?.mapping === mapping && drawn.dpr === dpr) return
-    staticDrawnRef.current = { mapping, dpr }
+    const waitForContours =
+      !contoursReady &&
+      drawn !== null &&
+      drawn.mapping === mapping &&
+      drawn.dpr === dpr &&
+      drawn.draft === draft &&
+      drawn.moving === moving &&
+      drawn.hover === hoverAnnotationId &&
+      drawn.rangeKey === rangeKey
+    if (waitForContours) return
+    staticDrawnRef.current = { mapping, dpr, draft, moving, hover: hoverAnnotationId, rangeKey }
     drawStatic()
-  }, [drawStatic, contoursReady, mapping, dpr])
+  }, [drawStatic, contoursReady, mapping, dpr, draft, moving, hoverAnnotationId, rangeKey])
 
   // Měřič výkonu (#1409): Mode/Scale končí, až jsou kontury nové mřížky
   // spočtené a vykreslené. Pasivní efekt běží po drawStatic (layout) i po
