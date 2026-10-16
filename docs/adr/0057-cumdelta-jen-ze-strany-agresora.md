@@ -203,9 +203,10 @@ backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod
   brána epiky „MCP nástroje toku na tiskové řadě (#1018)" platí i pro FA.
 - **Historie se nemaže:** `derived/` (midpoint `flow`, `netflow`, FA řady) i `fa_alpha_history`
   zůstávají jako audit; čtenáři je rozliší podle zdroje.
-- **Implementace E-1.14d #1460** zasahuje engine, API, frontend, news-engine a skripty, rozdělí
-  se proto podle velikosti sub-issue (engine a datový kontrakt; API a frontend; news-engine;
-  replay a přehrání v5 × v6). Podrobný seznam míst je v #1460.
+- **Implementace** zasahuje engine, API, frontend, news-engine a skripty, je proto rozdělená
+  podle velikosti (vlastník 16. 10.): E-1.14d #1460 engine a datový kontrakt, E-1.14e #1588
+  API a frontend, E-1.14f #1589 news-engine, E-1.14g #1590 replay, walk-forward a přehrání
+  v5 × v6. Podrobný seznam míst je v #1460.
 - **Otevřené otázky** (neblokují ADR): stáří delty tisku z tasty greeks, na které ADR-0015
   nedosahuje; zda DXLink umí historii `TimeAndSale` (`fromTime`) pro doplnění výpadku — nejdřív
   rešerše.
