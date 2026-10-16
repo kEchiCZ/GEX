@@ -205,7 +205,7 @@ Tabulky: `instruments`, `expiries`, `oi_eod`, `watchlist`, `alerts`, `annotation
 - `GET /replay/{sym}/{expiry}/{date}` — kompletní denní balík pro playback
 - `GET /candles/{sym}?tf=W|D|240|60|15&limit=` — svíčky vyšších timeframů z 1min barů (D = Globex seance, W z denních, intradenní koše od otevření seance; ADR-0035, #1089)
 - `GET /news/reactions/typical?symbol=` — medián |ret_bp| naměřených reakcí per kategorie scheduled eventů (okna 5/15/60 min, n ≥ 10; #1090)
-- `POST/GET /briefing/verdicts` — verdikt dne z Briefingu per seance × symbol (idempotentní přepis; podklad vyhodnocení #1091; ADR-0035)
+- `POST/GET /briefing/verdicts` — verdikt dne z Briefingu per seance × symbol (idempotentní přepis jen před US openem, od openu 409 — #1585; podklad vyhodnocení #1091; ADR-0035)
 - `GET /briefing/verdicts/stats?symbol=&days=` — track record verdiktů: zásah per verdikt a souhlas per složka hlasování, Wilson LB, brána n ≥ 30 (#1091)
 - `GET /status` — stav pipeline (greeks progress, repair, lines, disk)
 - CRUD `/watchlist`, `/alerts`, `/annotations`, `/settings`

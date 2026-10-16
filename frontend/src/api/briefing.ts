@@ -107,7 +107,8 @@ export async function fetchTypicalReactions(symbol: string): Promise<TypicalReac
 
 /** Uloží verdikt dne (#1090) — jeden řádek per seance a symbol, přepis idempotentní.
 Od US openu API zápis odmítne (409, #1585), proto se volá jen při `verdictWritable`.
-Chyba se polyká: karta má žít i bez DB, vyhodnocení (#1091) pak den prostě nemá. */
+Chyba se polyká: karta má žít i bez DB, vyhodnocení (#1091) pak den prostě nemá.
+Odmítnutí po openu (409) se jen zaloguje — hodiny klienta mohou jít napřed proti serveru. */
 export async function postVerdict(payload: {
   session_date: string
   symbol: string
@@ -122,6 +123,9 @@ export async function postVerdict(payload: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
+    if (response.status === 409) {
+      console.warn('Verdikt dne po US openu nelze zapsat (409, #1585)', payload.session_date)
+    }
     return response.ok
   } catch {
     return false

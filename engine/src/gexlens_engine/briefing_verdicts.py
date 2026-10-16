@@ -2,7 +2,8 @@
 
 Verdikt (spíše long / spíše short / bez převahy / počkat na tisk) ukládá
 frontend před seancí — API zápis od US openu odmítne (#1585), takže hodnocený
-pohyb do verdiktu nikdy neprosákne. Tady se po settle doplní, jak seance dopadla:
+pohyb do nových verdiktů neprosákne (starší řádky zapsané po openu zůstávají).
+Tady se po settle doplní, jak seance dopadla:
 pohyb od US openu (9:30 ET) do settle v bodech i v násobcích expected move
 (EM z `em_respect`, #872) a zásah verdiktu. Bez US openu (svátek, díra
 v barech) se bere otevření Globex seance. „Počkat na tisk" se nehodnotí,
