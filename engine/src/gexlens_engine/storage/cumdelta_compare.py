@@ -43,6 +43,10 @@ Metriky (vše jen nad minutami, které mají OBĚ řady):
 - Shoda s cenou (`align_session`, verdikt #1018): korelace přírůstků obou
   řad s pohybem ceny futures a s CVD futures (agresor od burzy) v oknech
   1/5/15 min — která řada čte stranu agresora ve směru trhu.
+- Hybrid dnešního režimu `dxfeed` (`load_hybrid_parts`, #1459): stín tisků +
+  midpoint tok kontrakt-minut bez jediného tisku, složený z `printvol`,
+  přírůstků `netflow` a delty ze `snapshots`; metoda se ověřuje rekonstrukcí
+  celé živé midpoint řady proti uložené `flow_delta` (`HybridCheck`).
 
 Zóny: partice stínu před 4. 9. 2026 (#1013) mají tok dělený na prstenec
 (``cum_ring``) a hot zónu ATM±1 (``cum_hot``); od #1013 je ``cum_ring`` celý
@@ -63,7 +67,13 @@ import pyarrow.parquet as pq
 
 from gexlens_engine.compute.marketclock import outside_us_rth
 from gexlens_engine.compute.settle import is_trading_session, session_bounds
-from gexlens_engine.storage.parquet_store import BARS_SCHEMA, DX_FLOW_SCHEMA, FLOW_SCHEMA
+from gexlens_engine.storage.parquet_store import (
+    BARS_SCHEMA,
+    DX_FLOW_SCHEMA,
+    FLOW_SCHEMA,
+    NETFLOW_SCHEMA,
+    PRINTVOL_SCHEMA,
+)
 
 #: Seance, které se do souhrnu NEPOČÍTAJÍ (uživatel je označil za neúplné);
 #: `--include-unusable` je do souhrnu vrátí, v tabulce jsou vidět vždy. Svátky
@@ -551,6 +561,11 @@ class PriceAlignment:
     cvd_vs_price: float | None
     dx_vs_cvd: float | None
     live_vs_cvd: float | None
+    #: Hybrid režimu `dxfeed` (#1459): stín + midpoint fallback; samotný
+    #: fallback (kontrakt-minuty bez tisku). None = hybrid se nesložil.
+    hybrid_vs_price: float | None = None
+    hybrid_vs_cvd: float | None = None
+    fallback_vs_price: float | None = None
 
 
 def minute_returns(closes: Mapping[dt.datetime, float]) -> dict[dt.datetime, float]:
@@ -588,9 +603,21 @@ def price_alignment(
     returns: Mapping[dt.datetime, float],
     cvd: Mapping[dt.datetime, float],
     window: int,
+    *,
+    fallback_flow: Mapping[dt.datetime, float] | None = None,
 ) -> PriceAlignment:
-    """Korelace minutových přírůstků (sečtených do oken) obou řad s cenou a CVD."""
+    """Korelace minutových přírůstků (sečtených do oken) obou řad s cenou a CVD.
+
+    S `fallback_flow` (#1459) navíc hybrid režimu `dxfeed` = stín + fallback
+    a samotný fallback."""
     dx, live, price, flow = (window_sums(s, window) for s in (dx_flow, live_flow, returns, cvd))
+    hybrid_vs_price = hybrid_vs_cvd = fallback_vs_price = None
+    if fallback_flow is not None:
+        hybrid = window_sums(hybrid_flow(dx_flow, fallback_flow), window)
+        fallback = window_sums(fallback_flow, window)
+        hybrid_vs_price = _corr_common(hybrid, price)
+        hybrid_vs_cvd = _corr_common(hybrid, flow)
+        fallback_vs_price = _corr_common(fallback, price)
     return PriceAlignment(
         window=window,
         dx_vs_price=_corr_common(dx, price),
@@ -598,6 +625,9 @@ def price_alignment(
         cvd_vs_price=_corr_common(flow, price),
         dx_vs_cvd=_corr_common(dx, flow),
         live_vs_cvd=_corr_common(live, flow),
+        hybrid_vs_price=hybrid_vs_price,
+        hybrid_vs_cvd=hybrid_vs_cvd,
+        fallback_vs_price=fallback_vs_price,
     )
 
 
@@ -628,17 +658,335 @@ def load_futures_cvd(derived_dir: Path, symbol: str, session: dt.date) -> dict[d
     return cvd
 
 
-def align_session(derived_dir: Path, symbol: str, session: dt.date) -> tuple[PriceAlignment, ...]:
-    """Shoda s cenou pro všechna okna `ALIGNMENT_WINDOWS` jedné seance."""
+def align_session(
+    derived_dir: Path,
+    symbol: str,
+    session: dt.date,
+    *,
+    hybrid: HybridParts | None = None,
+) -> tuple[PriceAlignment, ...]:
+    """Shoda s cenou pro všechna okna `ALIGNMENT_WINDOWS` jedné seance.
+
+    S `hybrid` (#1459) i hybrid režimu `dxfeed` a jeho fallback."""
     dx, _, _ = load_dx_series(derived_dir, symbol, session)
     live, _ = load_live_series(derived_dir, symbol, session)
     returns = minute_returns(load_closes(derived_dir, symbol, session))
     cvd = load_futures_cvd(derived_dir, symbol, session)
     dx_flow = {ts: flow for ts, (_, flow) in dx.items()}
     live_flow = {ts: flow for ts, (_, flow) in live.items()}
+    fallback = hybrid.fallback_flow if hybrid is not None else None
     return tuple(
-        price_alignment(dx_flow, live_flow, returns, cvd, window) for window in ALIGNMENT_WINDOWS
+        price_alignment(dx_flow, live_flow, returns, cvd, window, fallback_flow=fallback)
+        for window in ALIGNMENT_WINDOWS
     )
+
+
+# ── Hybrid dnešního režimu `dxfeed` (#1459) ───────────────────────────────
+
+#: Kontrakt-minuta aktivního řetězu: (expirace, ts_min, strike, right)
+ContractMinute = tuple[str, dt.datetime, float, str]
+#: Řádek printvol: kontrakt-minuta, přírůstek objemu, objem tisků (None = trade
+#: větev neběžela)
+PrintVolRecord = tuple[ContractMinute, float, float | None]
+
+#: Nad tolik relativní chyby (Σ|rekonstrukce − flow_delta| / Σ|flow_delta|)
+#: rekonstrukce živé řady neplatí a hybrid seance nejde do souhrnu
+MAX_RECON_REL_ERROR = 1e-6
+
+
+@dataclass(frozen=True)
+class HybridParts:
+    """Midpoint složky dnešního režimu `dxfeed` z uložených partic (#1459).
+
+    Režim `dxfeed` (`compute/cumdelta.add_bar`) dá midpoint znaménko celému
+    přírůstku objemu kontrakt-minuty bez jediného tisku — `printvol.printed`
+    0, nebo NULL, když trade větev neběžela (výpadek tasty). To je
+    ``fallback_flow``; tisky se stranou nese stín `cumdelta_dx`, hybrid je
+    jejich součet. ``midpoint_flow`` je midpoint tok VŠECH kontrakt-minut =
+    rekonstrukce živé řady v režimu `midpoint`, kterou se metoda ověřuje proti
+    uložené `flow_delta`.
+
+    Mimo: midpoint pro tisky bez strany u kontraktu, který měl i tisk se
+    stranou (`printvol` je nerozliší; v živé partici `unknown_volume`, #1018
+    ~0,1 % tisků) — v hybridu chybí, takže ho nepatrně zlepšuje.
+    """
+
+    fallback_flow: dict[dt.datetime, float]
+    midpoint_flow: dict[dt.datetime, float]
+    #: Přírůstek objemu kontrakt-minut bez tisku / všech kontrakt-minut
+    fallback_volume: float
+    total_volume: float
+    #: Kontrakt-minuty s přírůstkem netflow, ke kterým snímek nemá deltu
+    missing_delta: int
+
+
+def net_increments(
+    rows: Iterable[tuple[ContractMinute, float]],
+    windows: Mapping[str, tuple[dt.datetime, dt.datetime]],
+) -> dict[ContractMinute, float]:
+    """Minutové přírůstky kumulativního čistého objemu (`netflow`) per kontrakt.
+
+    `netflow` drží kumulativ seance per kontrakt a píše jen nenulové strany —
+    chybějící kontrakt v minutě, která v partici je, má nulu. `rows` jsou
+    řádky jedné seance (kumulativ začíná od nuly, `roll_session`). Partici
+    jedné expirace plní v téže seanci jako sekundární řetěz do settle a jako
+    aktivní po něm (#1182, `runtime.py`) — týž kumulativ pokračuje, proto
+    se přírůstky počítají přes všechny řádky expirace v seanci, ale vrací jen
+    v okně aktivního řetězu (`windows`: první a poslední minuta `printvol` té
+    expirace; printvol píše jen aktivní řetěz). Platnost předpokladů ověřuje
+    rekonstrukce živé řady (`hybrid_check`).
+    """
+    by_exp: dict[str, dict[dt.datetime, dict[tuple[float, str], float]]] = {}
+    for (exp, ts, strike, right), net in rows:
+        if exp in windows:
+            by_exp.setdefault(exp, {}).setdefault(ts, {})[(strike, right)] = net
+    increments: dict[ContractMinute, float] = {}
+    for exp, minutes in by_exp.items():
+        lo, hi = windows[exp]
+        previous: dict[tuple[float, str], float] = {}
+        for ts in sorted(minutes):
+            current = minutes[ts]
+            if lo <= ts <= hi:
+                for contract in set(previous) | set(current):
+                    change = current.get(contract, 0.0) - previous.get(contract, 0.0)
+                    if change != 0.0:
+                        increments[(exp, ts, *contract)] = change
+            previous = current
+    return increments
+
+
+def hybrid_parts(
+    printvol: Iterable[PrintVolRecord],
+    increments: Mapping[ContractMinute, float],
+    deltas: Mapping[ContractMinute, float | None],
+    multiplier: float,
+) -> HybridParts:
+    """Midpoint tok kontrakt-minut: přírůstek netflow (= znaménko midpoint testu
+    × přírůstek objemu, režim `midpoint`) × delta snímku × multiplikátor."""
+    fallback_flow: dict[dt.datetime, float] = {}
+    midpoint_flow: dict[dt.datetime, float] = {}
+    fallback_volume = total_volume = 0.0
+    missing_delta = 0
+    for key, volume_delta, printed in printvol:
+        ts = key[1]
+        is_fallback = printed is None or printed <= 0.0
+        total_volume += volume_delta
+        if is_fallback:
+            fallback_volume += volume_delta
+        net = increments.get(key, 0.0)
+        if net == 0.0:
+            continue
+        delta = deltas.get(key)
+        if delta is None:
+            missing_delta += 1
+            continue
+        flow = net * delta * multiplier
+        midpoint_flow[ts] = midpoint_flow.get(ts, 0.0) + flow
+        if is_fallback:
+            fallback_flow[ts] = fallback_flow.get(ts, 0.0) + flow
+    return HybridParts(fallback_flow, midpoint_flow, fallback_volume, total_volume, missing_delta)
+
+
+def hybrid_flow(
+    dx_flow: Mapping[dt.datetime, float], fallback_flow: Mapping[dt.datetime, float]
+) -> dict[dt.datetime, float]:
+    """Minutový tok režimu `dxfeed`: tisky se stranou + midpoint fallback.
+
+    Minuta bez stínu (tasty neběželo) nese jen fallback — v režimu `dxfeed`
+    tehdy midpoint klasifikuje celý přírůstek (`printvol.printed` NULL)."""
+    return {
+        ts: dx_flow.get(ts, 0.0) + fallback_flow.get(ts, 0.0)
+        for ts in set(dx_flow) | set(fallback_flow)
+    }
+
+
+def _expiry_dirs(base: Path) -> list[Path]:
+    if not base.exists():
+        return []
+    return sorted(p for p in base.iterdir() if p.is_dir() and len(p.name) == 8 and p.name.isdigit())
+
+
+def load_hybrid_parts(
+    derived_dir: Path, snapshots_dir: Path, symbol: str, session: dt.date, multiplier: float
+) -> HybridParts | None:
+    """Složí midpoint složky seance z partic aktivního řetězu (D−1 + D UTC).
+
+    None = seance nemá `printvol` (před #1007 nebo engine neběžel)."""
+    bounds = session_bounds(session)
+    days = (session - dt.timedelta(days=1), session)
+    printvol: list[PrintVolRecord] = []
+    windows: dict[str, tuple[dt.datetime, dt.datetime]] = {}
+    for exp_dir in _expiry_dirs(derived_dir / symbol):
+        for day in days:
+            for row in _read_rows(exp_dir / "printvol" / f"{day}.parquet", PRINTVOL_SCHEMA):
+                ts = _as_utc(row["ts_min"])  # type: ignore[arg-type]
+                if not _in_session(ts, bounds):
+                    continue
+                key = (exp_dir.name, ts, float(row["strike"]), str(row["right"]))  # type: ignore[arg-type]
+                printed = row.get("printed")
+                printvol.append(
+                    (
+                        key,
+                        float(row.get("volume_delta") or 0.0),  # type: ignore[arg-type]
+                        None if printed is None else float(printed),  # type: ignore[arg-type]
+                    )
+                )
+                lo, hi = windows.get(exp_dir.name, (ts, ts))
+                windows[exp_dir.name] = (min(lo, ts), max(hi, ts))
+    if not printvol:
+        return None
+    net_rows: list[tuple[ContractMinute, float]] = []
+    for exp in windows:
+        for day in days:
+            path = derived_dir / symbol / exp / "netflow" / f"{day}.parquet"
+            for row in _read_rows(path, NETFLOW_SCHEMA):
+                ts = _as_utc(row["ts_min"])  # type: ignore[arg-type]
+                if not _in_session(ts, bounds):
+                    continue  # předchozí seance — jiný kumulativ
+                key = (exp, ts, float(row["strike"]), str(row["right"]))  # type: ignore[arg-type]
+                net_rows.append((key, float(row.get("net_volume") or 0.0)))  # type: ignore[arg-type]
+    increments = net_increments(net_rows, windows)
+    deltas = load_snapshot_deltas(snapshots_dir, symbol, windows, days, set(increments))
+    return hybrid_parts(printvol, increments, deltas, multiplier)
+
+
+def load_snapshot_deltas(
+    snapshots_dir: Path,
+    symbol: str,
+    windows: Mapping[str, tuple[dt.datetime, dt.datetime]],
+    days: Sequence[dt.date],
+    needed: set[ContractMinute],
+) -> dict[ContractMinute, float | None]:
+    """Delta ze snímku pro potřebné kontrakt-minuty (snímek je tentýž, ze
+    kterého bar větev enginu brala deltu, `runtime.py` → `add_bar`).
+
+    Čte jen sloupce klíče a delty v okně aktivního řetězu — plná partice
+    snímků má ~0,9 mil. řádků za seanci."""
+    deltas: dict[ContractMinute, float | None] = {}
+    columns = ["ts_min", "strike", "right", "delta"]
+    for exp, (lo, hi) in windows.items():
+        for day in days:
+            path = snapshots_dir / symbol / exp / f"{day}.parquet"
+            if not path.exists():
+                continue
+            table = pq.read_table(
+                path, columns=columns, filters=[("ts_min", ">=", lo), ("ts_min", "<=", hi)]
+            )
+            values = zip(*(table.column(name).to_pylist() for name in columns), strict=True)
+            for ts, strike, right, delta in values:
+                key = (exp, _as_utc(ts), float(strike), str(right))
+                if key in needed:
+                    deltas[key] = None if delta is None else float(delta)
+    return deltas
+
+
+@dataclass(frozen=True)
+class HybridCheck:
+    """Hybrid režimu `dxfeed` za seanci (#1459): kontrola rekonstrukce a měřítko."""
+
+    symbol: str
+    session: dt.date
+    #: Rekonstrukce živé midpoint řady z printvol × netflow × delta proti
+    #: uložené `flow_delta`: Pearson a Σ|chyba| / Σ|flow_delta|
+    recon_corr: float | None
+    recon_rel_error: float | None
+    #: Objem kontrakt-minut bez tisku / všech kontrakt-minut s přírůstkem
+    fallback_volume_share: float | None
+    #: Σ|fallback| / (Σ|tisky| + Σ|fallback|) po minutách — kolik toku hybridu
+    #: nese midpoint
+    fallback_flow_share: float | None
+    #: Pearson minutových přírůstků hybridu s tisky a s živou řadou
+    hybrid_vs_dx: float | None
+    hybrid_vs_live: float | None
+    #: Rozsah kumulativu hybridu / rozsah tiskové řady
+    range_ratio_hybrid_dx: float | None
+    close_hybrid: float | None
+    close_dx: float | None
+    sign_agree_close: bool | None
+    missing_delta: int
+    #: Proč hybrid seance nejde do souhrnu (rekonstrukce nesedí); None = jde
+    unusable_reason: str | None
+
+
+def _cumulate(flows: Mapping[dt.datetime, float]) -> list[float]:
+    total = 0.0
+    out: list[float] = []
+    for ts in sorted(flows):
+        total += flows[ts]
+        out.append(total)
+    return out
+
+
+def hybrid_check(
+    symbol: str,
+    session: dt.date,
+    parts: HybridParts,
+    dx_flow: Mapping[dt.datetime, float],
+    live_flow: Mapping[dt.datetime, float],
+) -> HybridCheck:
+    """Kontrola rekonstrukce a srovnání hybridu s tisky a živou řadou."""
+    recon_minutes = sorted(set(parts.midpoint_flow) | set(live_flow))
+    recon = [parts.midpoint_flow.get(ts, 0.0) for ts in recon_minutes]
+    stored = [live_flow.get(ts, 0.0) for ts in recon_minutes]
+    stored_abs = sum(abs(v) for v in stored)
+    recon_rel_error = (
+        sum(abs(a - b) for a, b in zip(recon, stored, strict=True)) / stored_abs
+        if stored_abs > 0.0
+        else None
+    )
+    hybrid = hybrid_flow(dx_flow, parts.fallback_flow)
+    fallback_abs = sum(abs(v) for v in parts.fallback_flow.values())
+    dx_abs = sum(abs(v) for v in dx_flow.values())
+    common_dx = sorted(set(hybrid) & set(dx_flow))
+    common_live = sorted(set(hybrid) & set(live_flow))
+    hybrid_cum = _cumulate(hybrid)
+    dx_cum = _cumulate(dx_flow)
+    dx_range = _range(dx_cum)
+    close_hybrid = hybrid_cum[-1] if hybrid_cum else None
+    close_dx = dx_cum[-1] if dx_cum else None
+    unusable = None
+    if recon_rel_error is None or recon_rel_error > MAX_RECON_REL_ERROR:
+        unusable = f"rekonstrukce živé řady nesedí (chyba {recon_rel_error})"
+    return HybridCheck(
+        symbol=symbol,
+        session=session,
+        recon_corr=pearson(recon, stored),
+        recon_rel_error=recon_rel_error,
+        fallback_volume_share=(
+            parts.fallback_volume / parts.total_volume if parts.total_volume > 0.0 else None
+        ),
+        fallback_flow_share=(
+            fallback_abs / (fallback_abs + dx_abs) if fallback_abs + dx_abs > 0.0 else None
+        ),
+        hybrid_vs_dx=pearson([hybrid[t] for t in common_dx], [dx_flow[t] for t in common_dx]),
+        hybrid_vs_live=pearson(
+            [hybrid[t] for t in common_live], [live_flow[t] for t in common_live]
+        ),
+        range_ratio_hybrid_dx=_range(hybrid_cum) / dx_range if dx_range > 0.0 else None,
+        close_hybrid=close_hybrid,
+        close_dx=close_dx,
+        sign_agree_close=(
+            _sign(close_hybrid) == _sign(close_dx)
+            if close_hybrid is not None and close_dx is not None
+            else None
+        ),
+        missing_delta=parts.missing_delta,
+        unusable_reason=unusable,
+    )
+
+
+def check_hybrid_session(
+    derived_dir: Path, snapshots_dir: Path, symbol: str, session: dt.date, multiplier: float
+) -> tuple[HybridParts | None, HybridCheck | None]:
+    """Složí hybrid seance a zkontroluje ho; (None, None) = seance bez printvol."""
+    parts = load_hybrid_parts(derived_dir, snapshots_dir, symbol, session, multiplier)
+    if parts is None:
+        return None, None
+    dx, _, _ = load_dx_series(derived_dir, symbol, session)
+    live, _ = load_live_series(derived_dir, symbol, session)
+    dx_flow = {ts: flow for ts, (_, flow) in dx.items()}
+    live_flow = {ts: flow for ts, (_, flow) in live.items()}
+    return parts, hybrid_check(symbol, session, parts, dx_flow, live_flow)
 
 
 @dataclass(frozen=True)

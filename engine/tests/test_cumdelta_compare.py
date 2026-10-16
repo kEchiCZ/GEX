@@ -472,3 +472,227 @@ def test_align_session_reads_bars_and_futures_cvd(tmp_path: Path, session: dt.da
     assert one.dx_vs_price is not None and one.dx_vs_price > 0.999
     assert one.live_vs_price is not None and one.live_vs_price < -0.999
     assert one.cvd_vs_price is not None and one.cvd_vs_price > 0.999
+
+
+# ── Hybrid režimu dxfeed (#1459) ──────────────────────────────────────────
+
+ContractKey = tuple[str, dt.datetime, float, str]
+
+
+def _key(exp: str, ts: dt.datetime, strike: float = 5000.0, right: str = "C") -> ContractKey:
+    return (exp, ts, strike, right)
+
+
+def test_net_increments_carry_secondary_cumulative_into_active_window() -> None:
+    """Expirace je do settle sekundární řetěz a po něm aktivní — týž kumulativ
+    pokračuje, přírůstky se vrací jen v okně aktivního řetězu; kontrakt, který
+    v přítomné minutě chybí, má nulu (kumulativ se vrátil na 0)."""
+    from gexlens_engine.storage.cumdelta_compare import net_increments
+
+    t0, t1, t2, t3 = _minutes(4)
+    exp = "20260911"
+    rows = [
+        (_key(exp, t0), 4.0),  # sekundární role, mimo okno
+        (_key(exp, t1), 6.0),  # sekundární role, mimo okno
+        (_key(exp, t2), 9.0),  # první minuta aktivního okna: +3, ne +9
+        (_key(exp, t2, right="P"), -2.0),
+        (_key(exp, t3, right="P"), -2.0),  # call chybí → kumulativ 0 → −9
+        (_key("20260912", t2), 5.0),  # expirace bez okna se ignoruje
+    ]
+    increments = net_increments(rows, {exp: (t2, t3)})
+    assert increments == {
+        _key(exp, t2): 3.0,
+        _key(exp, t2, right="P"): -2.0,
+        _key(exp, t3): -9.0,
+    }
+
+
+def test_hybrid_parts_split_fallback_from_printed_contract_minutes() -> None:
+    """Fallback = kontrakt-minuty bez tisku (printed 0 nebo NULL); midpoint tok
+    všech kontrakt-minut je rekonstrukce živé řady; chybějící delta se počítá."""
+    from gexlens_engine.storage.cumdelta_compare import hybrid_parts
+
+    t0, t1 = _minutes(2)
+    exp = "20260911"
+    printed = _key(exp, t0, 5000.0)
+    no_print = _key(exp, t0, 5010.0)
+    tasty_down = _key(exp, t1, 5000.0)
+    no_delta = _key(exp, t1, 5010.0)
+    printvol: list[tuple[ContractKey, float, float | None]] = [
+        (printed, 10.0, 4.0),
+        (no_print, 5.0, 0.0),
+        (tasty_down, 2.0, None),
+        (no_delta, 1.0, 0.0),
+    ]
+    increments = {printed: 10.0, no_print: -5.0, tasty_down: 2.0, no_delta: 1.0}
+    deltas: dict[ContractKey, float | None] = {
+        printed: 0.5,
+        no_print: 0.4,
+        tasty_down: -0.3,
+        no_delta: None,
+    }
+    parts = hybrid_parts(printvol, increments, deltas, multiplier=50.0)
+    assert parts.midpoint_flow == pytest.approx({t0: 250.0 - 100.0, t1: -30.0})
+    assert parts.fallback_flow == pytest.approx({t0: -100.0, t1: -30.0})
+    assert parts.fallback_volume == 8.0 and parts.total_volume == 18.0
+    assert parts.missing_delta == 1
+
+
+def test_hybrid_flow_sums_prints_and_fallback_over_union_of_minutes() -> None:
+    from gexlens_engine.storage.cumdelta_compare import hybrid_flow
+
+    t0, t1, t2 = _minutes(3)
+    assert hybrid_flow({t0: 1.0, t1: 2.0}, {t1: 10.0, t2: -4.0}) == {
+        t0: 1.0,
+        t1: 12.0,
+        t2: -4.0,
+    }
+
+
+def _write_rows(path: Path, rows: list[dict[str, object]], schema: pa.Schema) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.Table.from_pylist(rows, schema=schema), path)
+
+
+def write_hybrid_inputs(
+    root: Path, ts: list[dt.datetime], *, exp: str = "20260910"
+) -> tuple[list[float], list[float]]:
+    """Syntetický aktivní řetěz: dva kontrakty, call má tisk jen v sudých minutách.
+
+    Vrací (živý midpoint tok, fallback tok) po minutách. Partice po UTC dnech —
+    seance leží v D−1 (večer) i D."""
+    from gexlens_engine.storage.parquet_store import (
+        NETFLOW_SCHEMA,
+        PRINTVOL_SCHEMA,
+        SNAPSHOT_SCHEMA,
+    )
+
+    derived, snapshots = root / "derived", root / "snapshots"
+    multiplier = 50.0
+    contracts = ((5000.0, "C", 0.5), (4990.0, "P", -0.4))
+    cumulative = {(strike, right): 0.0 for strike, right, _ in contracts}
+    printvol: dict[dt.date, list[dict[str, object]]] = {}
+    netflow: dict[dt.date, list[dict[str, object]]] = {}
+    snaps: dict[dt.date, list[dict[str, object]]] = {}
+    live: list[float] = []
+    fallback: list[float] = []
+    for i, t in enumerate(ts):
+        minute_live = minute_fallback = 0.0
+        for strike, right, delta in contracts:
+            volume = float(1 + (i * 7 + int(strike)) % 5)
+            sign = 1.0 if (i + (right == "P")) % 3 else -1.0
+            cumulative[(strike, right)] += sign * volume
+            has_print = right == "C" and i % 2 == 0
+            day = t.date()
+            printvol.setdefault(day, []).append(
+                {
+                    "ts_min": t,
+                    "strike": strike,
+                    "right": right,
+                    "volume_delta": volume,
+                    "printed": volume / 2 if has_print else 0.0,
+                    "structured": volume / 2 if has_print else 0.0,
+                }
+            )
+            netflow.setdefault(day, []).append(
+                {
+                    "ts_min": t,
+                    "strike": strike,
+                    "right": right,
+                    "net_volume": cumulative[(strike, right)],
+                }
+            )
+            snaps.setdefault(day, []).append(
+                {"ts_min": t, "strike": strike, "right": right, "delta": delta}
+            )
+            flow = sign * volume * delta * multiplier
+            minute_live += flow
+            if not has_print:
+                minute_fallback += flow
+        live.append(minute_live)
+        fallback.append(minute_fallback)
+    for day in printvol:
+        name = f"{day.isoformat()}.parquet"
+        _write_rows(derived / "ES" / exp / "printvol" / name, printvol[day], PRINTVOL_SCHEMA)
+        _write_rows(derived / "ES" / exp / "netflow" / name, netflow[day], NETFLOW_SCHEMA)
+        _write_rows(snapshots / "ES" / exp / name, snaps[day], SNAPSHOT_SCHEMA)
+    return live, fallback
+
+
+def test_check_hybrid_session_reconstructs_live_series(tmp_path: Path) -> None:
+    """Rekonstrukce midpoint řady z printvol × netflow × delta sedí na uloženou
+    `flow_delta` přesně; fallback = midpoint tok kontrakt-minut bez tisku."""
+    from gexlens_engine.storage.cumdelta_compare import check_hybrid_session
+
+    ts = _minutes(200)  # přes půlnoc UTC → partice D−1 i D
+    live, fallback = write_hybrid_inputs(tmp_path, ts)
+    derived = tmp_path / "derived"
+    write_live(derived, "ES", ts, live)
+    write_dx(derived, "ES", ts, _flows(200))
+
+    parts, check = check_hybrid_session(derived, tmp_path / "snapshots", "ES", SESSION, 50.0)
+    assert parts is not None and check is not None
+    assert check.recon_rel_error == 0.0
+    assert check.recon_corr == pytest.approx(1.0)
+    assert check.unusable_reason is None
+    assert check.missing_delta == 0
+    assert [parts.fallback_flow.get(t, 0.0) for t in ts] == pytest.approx(fallback)
+    assert check.fallback_volume_share is not None and 0.0 < check.fallback_volume_share < 1.0
+
+    # Jiná uložená řada (rekonstrukce nesedí) → hybrid mimo souhrn
+    broken = tmp_path / "broken"
+    write_hybrid_inputs(broken, ts)
+    write_live(broken / "derived", "ES", ts, [2.0 * v for v in live])
+    write_dx(broken / "derived", "ES", ts, _flows(200))
+    _, bad = check_hybrid_session(broken / "derived", broken / "snapshots", "ES", SESSION, 50.0)
+    assert bad is not None and bad.unusable_reason is not None
+
+    # Seance bez printvol (před #1007) hybrid nemá
+    other = dt.date(2026, 9, 11)
+    assert check_hybrid_session(derived, tmp_path / "snapshots", "ES", other, 50.0) == (
+        None,
+        None,
+    )
+
+
+def test_price_alignment_with_fallback_adds_hybrid_columns() -> None:
+    from gexlens_engine.storage.cumdelta_compare import price_alignment
+
+    ts = _minutes(60)
+    returns = dict(zip(ts, _flows(60), strict=True))
+    dx = dict(returns)
+    fallback = {t: -10.0 * r for t, r in returns.items()}  # proti ceně a převažuje
+    a = price_alignment(dx, fallback, returns, returns, 1, fallback_flow=fallback)
+    assert a.dx_vs_price == pytest.approx(1.0)
+    assert a.fallback_vs_price == pytest.approx(-1.0)
+    assert a.hybrid_vs_price == pytest.approx(-1.0)  # 1 − 10 = −9 × cena
+    assert a.hybrid_vs_cvd == pytest.approx(-1.0)
+    assert price_alignment(dx, dx, returns, returns, 1).hybrid_vs_price is None
+
+
+def test_script_hybrid_section(tmp_path: Path) -> None:
+    ts = _minutes(1200)
+    live, _ = write_hybrid_inputs(tmp_path, ts)
+    derived = tmp_path / "derived"
+    write_live(derived, "ES", ts, live)
+    write_dx(derived, "ES", ts, _flows(1200))
+
+    common = [sys.executable, str(SCRIPT), "--derived", str(derived), "--symbols", "ES"]
+    md = subprocess.run(
+        [*common, "--hybrid"], capture_output=True, text=True, encoding="utf-8", check=False
+    )
+    assert md.returncode == 0, md.stderr
+    assert "## Hybrid režimu dxfeed — souhrn (#1459)" in md.stdout
+    assert "| hybrid ~ cena | hybrid ~ CVD | jen fallback ~ cena |" in md.stdout
+    assert f"| {SESSION.isoformat()} | ES | 1.0000 / 0.0e+00 |" in md.stdout
+    assert "| ES | 1 | 0.0e+00 |" in md.stdout
+
+    missing = subprocess.run(
+        [*common, "--hybrid", "--snapshots", str(tmp_path / "nic")],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert missing.returncode == 2
+    assert "neexistuje" in missing.stderr
