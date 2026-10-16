@@ -1,10 +1,9 @@
 # ADR-0057: CumΔ a čistý objem jen ze strany agresora od burzy — midpoint test se ruší
 
-- **Stav:** navrženo (E-1.14c #1459, PR s labelem `needs-decision`). Body 1, 2 a 11 zapisují
-  rozhodnutí vlastníka z 8. 10. 2026 (1A, 2A), body 6–9 jeho volby ze 16. 10. 2026 (doporučené
-  varianty, Rozhodnuto v epice #1385). Body 3, 4 a 10 a věty označené „odvozeno" v bodech 6–8
-  vyplývají z 1A a z pravidel AGENTS.md; varianty k nim jsou v Zvažovaných variantách a čekají
-  na potvrzení vlastníka v PR.
+- **Stav:** přijato 16. 10. 2026 (E-1.14c #1459, PR #1587). Body 1, 2 a 11 zapisují rozhodnutí
+  vlastníka z 8. 10. 2026 (1A, 2A), body 6–9 jeho volby ze 16. 10. 2026 (doporučené varianty,
+  Rozhodnuto v epice #1385). Body 3, 4 a 10 a věty označené „odvozeno" v bodech 6–8 vyplývají
+  z 1A a z pravidel AGENTS.md; vlastník je potvrdil 16. 10. (varianty ve Zvažovaných variantách).
 - **Datum:** 2026-10-16
 - **Mění:** SPEC kap. 0 R2, 3.4, 4.5 · ADR-0032 bod 1, věta bodu 2 o typech trade větve, bod 3
   a Důsledky · ADR-0011 (zdroj znaménka čistého objemu, kalibrace α) · ADR-0034 bod 6 (výjimka
