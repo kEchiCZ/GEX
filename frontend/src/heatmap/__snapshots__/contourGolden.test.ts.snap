@@ -1,0 +1,11 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`golden kontur: kladné pole, All 1`] = `"11 polylinií, 11956 bodů, 1 uzavřených, 6e0cee3"`;
+
+exports[`golden kontur: kladné pole, Major 1`] = `"9 polylinií, 9972 bodů, 1 uzavřených, dc08a776"`;
+
+exports[`golden kontur: znaménkové pole, All 1`] = `"26 polylinií, 13984 bodů, 4 uzavřených, 96d8c9c4"`;
+
+exports[`golden kontur: znaménkové pole, Major 1`] = `"18 polylinií, 9008 bodů, 3 uzavřených, 1aaa36b5"`;
+
+exports[`golden kontur: znaménkové pole, flip 1`] = `"5 polylinií, 3368 bodů, 0 uzavřených, e4190dab"`;
