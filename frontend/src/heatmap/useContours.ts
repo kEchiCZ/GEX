@@ -158,7 +158,6 @@ export function useContours(
       // synchronně, další rendery už jdou sync fallbackem výše
       computeIntoCache(field, width, height, missing)
       settle() // jediná cesta k překreslení po selhání workeru
-
       return
     }
     let cancelled = false
