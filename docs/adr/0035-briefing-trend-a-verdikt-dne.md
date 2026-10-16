@@ -2,7 +2,7 @@
 
 **Stav:** navrženo (2026-09-09, issues #1089, #1090, #1091 — zadal uživatel; pravidla
 a váhy níže jsou volba implementace, čeká na potvrzení, PR nesou `needs-decision`).
-Implementováno: §1–2 v PR #1092 (#1089), §3–4 v PR #1093 (#1090); vyhodnocení §3 = #1091 (engine doplní po settle výsledek US open → settle v bodech i EM, `GET /briefing/verdicts/stats`, karta ve Stats; brána n ≥ 30, pak návrh vah).
+Implementováno: §1–2 v PR #1092 (#1089), §3–4 v PR #1093 (#1090); vyhodnocení §3 = #1091 (engine doplní po settle výsledek US open → settle v bodech i EM, `GET /briefing/verdicts/stats`, karta ve Stats; brána n ≥ 30, pak návrh vah); zmrazení verdiktu od US openu = #1585.
 **Kontext:** Briefing (#674) říká TYP dne (gamma režim, volatilita), ale ne **v jakém
 trendu trh je**, a nenabízí odpověď na „čekat spíš long, nebo short den". SPEC v2.0
 pojem trendu podkladu nezná — jediné směrové čtení je indikátor tendence (#350),
@@ -54,7 +54,9 @@ dat zatím není z čeho; (c) žádný verdikt, jen složky — nesplní zadán�
 Skóre ≥ +3 = spíše long den, ≤ −3 = spíše short den, jinak bez převahy. Verdikt
 se **ukládá** (`briefing_verdicts`: seance, symbol, skóre, hlasy, verze pravidel),
 aby šel vyhodnotit proti průběhu seance (#1091). Bez uložení by šlo o názor bez
-zpětné vazby — to projekt nedělá (srov. ADR-0033, ADR-0034).
+zpětné vazby — to projekt nedělá (srov. ADR-0033, ADR-0034). *Od US openu je verdikt
+zmrazený: API zápis i založení odmítne (409), frontend po openu neposílá (#1585, vlastník
+16. 10.); zápis z enginu v open − N (varianta D) je otázka triáže.*
 
 ### 4. Úrovně obratu a zprávy dne
 Jeden seznam úrovní seřazený podle vzdálenosti od ceny: gamma (flip, zdi,

@@ -291,6 +291,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-16 — verdikt dne šel zapsat i po US openu a po settle (#1585): „před openem“ jen v docstringu.**
+  Vyhodnocení měří pohyb od US openu do settle, docstring upsertu počítal se změnou „před openem“,
+  ale API hlídalo jen obchodní den. Otevřený Briefing posílal POST při každé změně hlasů a hlas
+  overnight nese aktuální cenu. Pět z 13 řádků na produkci tak vzniklo nebo se přepsalo po openu,
+  u id 2 se předpověď z doby před openem ztratila. Odhalila to inventura spotřebitelů midpointu (#1459).
+  → Uložená předpověď má časovou bránu v zapisující vrstvě, ne v komentáři. Brána a vyhodnocení čtou
+  tutéž hranici (`settle.us_open_ts`) a uložený čas je okamžik, který brána ověřila (jeden zdroj
+  času, viz #1323). Test hranice v létě i v zimě, po settle a po doplnění výsledku.
 - **2026-10-16 — živá linka CVD futures stála až hodinu, v agregaci a playbacku zmizela (#1578), podruhé po #1273.**
   Engine `futures_cvd` posílal a handler WS ho přijal. Ruční výčty polí ho ale cestou ztratily na třech
   místech: v `appendMinute` (řádek flow jen s `cum_delta`), v `aggregateDay` a v `slicePanels`.

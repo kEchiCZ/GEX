@@ -35,9 +35,9 @@ from gexlens_engine.compute.dayverdict import (
 from gexlens_engine.compute.settle import (
     ET_TZ,
     is_trading_session,
-    session_time_utc,
     settle_ts,
     trading_session_date,
+    us_open_ts,
 )
 from gexlens_engine.compute.trend import TIMEFRAMES, Candle, TrendReport, assess_trends
 from gexlens_engine.runtime import EngineRuntime
@@ -45,12 +45,7 @@ from gexlens_engine.storage.scenarios_store import ScenariosRepository
 
 logger = logging.getLogger(__name__)
 
-US_OPEN_LOCAL = dt.time(9, 30)
 CANDLE_LIMITS: dict[str, int] = {"W": 60, "D": 120, "240": 120, "60": 120, "15": 120}
-
-
-def us_open_ts(day: dt.date) -> dt.datetime:
-    return session_time_utc(day, US_OPEN_LOCAL.hour, US_OPEN_LOCAL.minute, ET_TZ)
 
 
 @dataclass

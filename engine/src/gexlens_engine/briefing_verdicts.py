@@ -1,7 +1,9 @@
 """Vyhodnocení verdiktů dne po settle (#1091, ADR-0035 §3) — po vzoru `volregime`.
 
 Verdikt (spíše long / spíše short / bez převahy / počkat na tisk) ukládá
-frontend před seancí. Tady se po settle doplní, jak seance dopadla:
+frontend před seancí — API zápis od US openu odmítne (#1585), takže hodnocený
+pohyb do nových verdiktů neprosákne (starší řádky zapsané po openu zůstávají).
+Tady se po settle doplní, jak seance dopadla:
 pohyb od US openu (9:30 ET) do settle v bodech i v násobcích expected move
 (EM z `em_respect`, #872) a zásah verdiktu. Bez US openu (svátek, díra
 v barech) se bere otevření Globex seance. „Počkat na tisk" se nehodnotí,
@@ -22,12 +24,11 @@ from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
 from gexlens_engine.compute.settle import (
-    ET_TZ,
     is_trading_session,
     session_bounds,
-    session_time_utc,
     settle_ts,
     trading_session_date,
+    us_open_ts,
 )
 from gexlens_engine.storage.briefing_verdicts_store import (
     BriefingVerdictRepository,
@@ -41,7 +42,6 @@ logger = logging.getLogger(__name__)
 SETTLE_GRACE_MINUTES = 15
 #: „Bez převahy" trefil range den: close do ±tolik EM od US openu
 RANGE_DAY_EM = 0.5
-US_OPEN_LOCAL = dt.time(9, 30)
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,8 @@ def session_ohlc(data_dir: Path, symbol: str, session: dt.date) -> SessionOhlc |
     bars_dir = data_dir / "derived" / symbol / "bars"
     start, _end = session_bounds(session)
     settle = settle_ts(session)
-    us_open_ts = session_time_utc(session, US_OPEN_LOCAL.hour, US_OPEN_LOCAL.minute, ET_TZ)
+    # Táž hranice jako stráž zápisu v API (#1585): verdikt je zmrazený od tohoto okamžiku
+    open_ts = us_open_ts(session)
     rows: list[tuple[dt.datetime, float, float]] = []
     for day in (session - dt.timedelta(days=1), session):
         path = bars_dir / f"{day.isoformat()}.parquet"
@@ -75,7 +76,7 @@ def session_ohlc(data_dir: Path, symbol: str, session: dt.date) -> SessionOhlc |
     if not rows:
         return None
     rows.sort(key=lambda row: row[0])
-    us_open = next((open_ for ts, open_, _ in rows if ts >= us_open_ts), None)
+    us_open = next((open_ for ts, open_, _ in rows if ts >= open_ts), None)
     return SessionOhlc(open=rows[0][1], us_open=us_open, close=rows[-1][2])
 
 

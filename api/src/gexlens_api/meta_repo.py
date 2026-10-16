@@ -107,14 +107,17 @@ class MetaRepository:
             _notify_watchlist(conn, payload)
 
     # ── verdikt dne z Briefingu (#1090) ────────────────────────────
-    def briefing_verdict_upsert(self, values: dict[str, Any]) -> dict[str, Any]:
+    def briefing_verdict_upsert(
+        self, values: dict[str, Any], *, now: dt.datetime
+    ) -> dict[str, Any]:
         """Uloží verdikt seance; opakovaný zápis téže seance a symbolu přepíše.
 
         Idempotence přes unikátní (session_date, symbol): Briefing se
         obnovuje každou minutu a verdikt se před openem může měnit — platí
         poslední stav, historie změn se nevede (vyhodnocení #1091 čte finální).
+        Zápis od US openu odmítá volající (stráž v `briefing_routes`, #1585);
+        `now` je okamžik, který stráž ověřila, a uloží se jako `updated_at`.
         """
-        now = dt.datetime.now(dt.UTC)
         with self._db().begin() as conn:
             existing = conn.execute(
                 select(briefing_verdicts_table.c.id).where(

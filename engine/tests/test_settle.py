@@ -17,6 +17,7 @@ from gexlens_engine.compute.settle import (
     settle_ts,
     trading_session_date,
     us_market_holidays,
+    us_open_ts,
 )
 
 
@@ -53,6 +54,15 @@ def test_session_time_utc_chicago_i_new_york() -> None:
     assert session_time_utc(day_winter, 9, 30, ET_TZ) == dt.datetime(
         2026, 1, 15, 14, 30, tzinfo=dt.UTC
     )
+
+
+def test_us_open_ts_dst_i_zkracena_seance() -> None:
+    """#1585: US open 9:30 ET — léto 13:30, zima 14:30 UTC; zkrácená seance otevírá stejně."""
+    assert us_open_ts(dt.date(2026, 10, 30)) == dt.datetime(2026, 10, 30, 13, 30, tzinfo=dt.UTC)
+    assert us_open_ts(dt.date(2026, 11, 2)) == dt.datetime(2026, 11, 2, 14, 30, tzinfo=dt.UTC)
+    # Den po Thanksgiving: settle 13:00 ET, open beze změny
+    assert is_early_close(dt.date(2026, 11, 27))
+    assert us_open_ts(dt.date(2026, 11, 27)) == dt.datetime(2026, 11, 27, 14, 30, tzinfo=dt.UTC)
 
 
 def test_session_bounds_a_trading_session_date() -> None:

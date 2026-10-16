@@ -15,10 +15,10 @@ from gexlens_engine.compute.dayverdict import (
     day_verdict,
     turn_levels,
 )
-from gexlens_engine.compute.settle import settle_ts
+from gexlens_engine.compute.settle import settle_ts, us_open_ts
 from gexlens_engine.compute.trend import Candle, assess_trends, ema, find_pivots
 from gexlens_engine.runtime import EngineRuntime
-from gexlens_engine.scenario_auto import ScenarioGenerator, gather_context, us_open_ts
+from gexlens_engine.scenario_auto import ScenarioGenerator, gather_context
 from gexlens_engine.storage.parquet_store import LevelsRow
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
 
