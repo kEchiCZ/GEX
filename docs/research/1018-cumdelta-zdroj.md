@@ -229,7 +229,8 @@
   přírůstku objemu a 49 % / 68 % absolutního minutového toku hybridu; rozsah kumulativu hybridu je
   1,7× (ES) a 4,8× (NQ) rozsahu tiskové řady. Znaménko hybridu na close se s tisky shoduje jen
   v 9 / 13 (ES) a 7 / 13 (NQ) seancích.
-- **Rozšíření o 8.–15. 10.** (18 seancí) pořadí nemění: tisky ES +0,09 / +0,21 / +0,16, NQ +0,11 /
+- **Rozšíření o 8.–15. 10.** (18 seancí v souhrnu z 19; 9. 10. má jen 952 společných minut a jde
+  mimo souhrn jako neúplná) pořadí nemění: tisky ES +0,09 / +0,21 / +0,16, NQ +0,11 /
   +0,30 / +0,45; hybrid ES +0,02 / −0,06 / −0,12, NQ −0,04 / −0,19 / −0,36; fallback kladně 0 z
   17–18. ES 14. 10. jdou na 5 a 15 min proti ceně i tisky (−0,31 / −0,35; hybrid −0,30 / −0,58).
 - **Pořadí A > B z #1018 platí čísly:** CumΔ jen z tisků je jediná varianta, která jde s cenou
@@ -248,7 +249,7 @@
   s pokračujícím kumulativem — přírůstky se počítají přes celou seanci, započtou se jen v okně
   aktivního řetězu (první až poslední minuta `printvol` té expirace).
 - **Kontrola metody:** táž skladba přes všechny kontrakt-minuty je rekonstrukce živé midpoint řady.
-  Proti uložené `flow_delta` sedí přesně (relativní chyba 0) ve 34 z 36 seancí; ES 21. 9. a 1. 10.
+  Proti uložené `flow_delta` sedí přesně (relativní chyba 0) ve 36 z 38 seancí (19 na symbol); ES 21. 9. a 1. 10.
   (restart enginu, přerušený řetěz živé řady) 2e-5 a 9e-5. Seance s chybou nad 0,1 % by do souhrnu
   hybridu nešla.
 - Mimo: midpoint pro tisky bez strany. `printvol.printed` je zahrnuje, takže kontrakt-minuta jen
@@ -256,8 +257,9 @@
   přírůstku; u kontraktu s tisky se stranou chybí midpoint jejich objemu. Počtem jde o ~0,05 %
   tisků (sloupec „tisky (bez strany …)" výše), **objemem** ES o 1–15 % objemu tisků za den
   (medián ~6 %; téměř vše bloky ≥ 100 lotů daleko OTM), NQ < 1 % (ověření nálezů #1459,
-  partice `flow` 21. 9.–16. 10.). Změřený hybrid tak nese méně midpointu než skutečný režim
-  `dxfeed` a vychází lépe, ne hůř — závěr platí tím spíš.
+  partice `flow` 21. 9.–16. 10.). Podíl midpointu ve změřeném hybridu je tak dolní mez: skutečný režim
+  `dxfeed` nese midpointu víc, a protože fallback jde proti ceně v každé seanci, nejspíš by
+  vyšel ještě hůř — závěr to neoslabuje (úsudek z mechanismu, ne měření).
 - Shoda s cenou a CVD stejně jako v #1018: přírůstky sečtené v oknech 1 / 5 / 15 min zarovnaných
   na hodinu, Pearson, medián přes seance a počet seancí s r > 0.
 

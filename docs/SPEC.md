@@ -166,7 +166,7 @@ Objem bez tisku se stranou (1min, ΔVol(t,K,s) = vol(t) − vol(t−1)):
 
 CumΔ(t) = Σ_{τ≤t} flowΔ(τ)     (reset na začátku obchodního dne, konfig. session start)
 ```
-Δ(K,s) se bere z posledního platného Greeks snapshotu daného kontraktu (u tisku z tasty greeks). Minuta bez tisků za běžící trade větve má flowΔ = 0. Minuta, ve které trade větev celou dobu neběžela (výpadek tastytrade), má flowΔ i CumΔ prázdné (mezera, ne nula ani poslední hodnota); po mezeře CumΔ pokračuje od poslední měřené úrovně a mezera zůstává vidět (ADR-0057 bod 3). Panel Cum Δ vykresluje řadu jako plochu nad/pod nulou.
+Δ(K,s) se bere z posledního platného Greeks snapshotu daného kontraktu (u tisku z tasty greeks). Minuta bez tisků za běžící trade větve má flowΔ = 0. Minuta, ve které trade větev neběžela po celou minutu (výpadek tastytrade; i částečná minuta je prázdná celá), má flowΔ i CumΔ prázdné (mezera, ne nula ani poslední hodnota); po mezeře CumΔ pokračuje od poslední měřené úrovně a mezera zůstává vidět (ADR-0057 bod 3). Panel Cum Δ vykresluje řadu jako plochu nad/pod nulou.
 
 ### 4.6 Strike profil (pravý panel)
 ```

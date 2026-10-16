@@ -557,7 +557,8 @@ def _write_rows(path: Path, rows: list[dict[str, object]], schema: pa.Schema) ->
 def write_hybrid_inputs(
     root: Path, ts: list[dt.datetime], *, exp: str = "20260910"
 ) -> tuple[list[float], list[float]]:
-    """Syntetický aktivní řetěz: dva kontrakty, call má tisk jen v sudých minutách.
+    """Syntetický aktivní řetěz: dva kontrakty, call má tisk jen v sudých minutách
+    a v každé 7. minutě (i % 7 == 3) trade větev neběží (`printed` NULL).
 
     Vrací (živý midpoint tok, fallback tok) po minutách. Partice po UTC dnech —
     seance leží v D−1 (večer) i D."""
@@ -582,7 +583,9 @@ def write_hybrid_inputs(
             volume = float(1 + (i * 7 + int(strike)) % 5)
             sign = 1.0 if (i + (right == "P")) % 3 else -1.0
             cumulative[(strike, right)] += sign * volume
-            has_print = right == "C" and i % 2 == 0
+            # Trade větev neběžela (tasty odpojené) → printed/structured NULL = fallback
+            tasty_down = right == "C" and i % 7 == 3
+            has_print = right == "C" and i % 2 == 0 and not tasty_down
             day = t.date()
             printvol.setdefault(day, []).append(
                 {
@@ -590,8 +593,8 @@ def write_hybrid_inputs(
                     "strike": strike,
                     "right": right,
                     "volume_delta": volume,
-                    "printed": volume / 2 if has_print else 0.0,
-                    "structured": volume / 2 if has_print else 0.0,
+                    "printed": None if tasty_down else (volume / 2 if has_print else 0.0),
+                    "structured": None if tasty_down else (volume / 2 if has_print else 0.0),
                 }
             )
             netflow.setdefault(day, []).append(

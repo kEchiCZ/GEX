@@ -713,8 +713,8 @@ class HybridParts:
     jí režim `dxfeed` dá midpoint celému přírůstku; u kontraktu s tisky se
     stranou chybí midpoint jejich objemu. Počtem je to ~0,05 % tisků,
     objemem ES 1–15 % objemu tisků za den (medián ~6 %, bloky ≥ 100 lotů),
-    NQ < 1 % (#1459). Hybrid tu proto vychází lépe než skutečný režim
-    `dxfeed`, ne hůř.
+    NQ < 1 % (#1459). Podíl midpointu v hybridu je proto dolní mez proti
+    skutečnému režimu `dxfeed`.
     """
 
     fallback_flow: dict[dt.datetime, float]
