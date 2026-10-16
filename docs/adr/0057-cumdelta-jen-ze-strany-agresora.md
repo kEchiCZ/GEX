@@ -173,6 +173,9 @@ backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod
   s implementací (#1460), stejně jako docstringy `compute/cumdelta.py` a `runtime.py`.
 - **Zdroje dat se nemění:** počet IBKR market data lines ani rozpočet tasty (TimeAndSale obou
   řetězců už odebírá účel `chain`); R5 platí.
+- **Plánovaní spotřebitelé (MCP, Fáze 3 epiky #1385):** nástroje toku (E-3.9 #1439, E-3.22
+  #1450) a FA varianta znaménka dealerů (E-3.8 #1438) čtou jen tiskovou řadu a FA až po #1460 —
+  brána epiky „MCP nástroje toku na tiskové řadě (#1018)" platí i pro FA.
 - **Historie se nemaže:** `derived/` (midpoint `flow`, `netflow`, FA řady) i `fa_alpha_history`
   zůstávají jako audit; čtenáři je rozliší podle zdroje.
 - **Implementace E-1.14d #1460** zasahuje engine, API, frontend, news-engine a skripty, rozdělí
@@ -180,5 +183,9 @@ backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod
   replay a přehrání v5 × v6). Podrobný seznam míst je v #1460.
 - **Otevřené otázky** (neblokují ADR): stáří delty tisku z tasty greeks, na které ADR-0015
   nedosahuje; zda DXLink umí historii `TimeAndSale` (`fromTime`) pro doplnění výpadku — nejdřív
-  rešerše; podíl tisků bez strany přes víc seancí (docstring „~0,05 %" proti ~1,8 % od startu
-  enginu 16. 10.).
+  rešerše.
+- **Tisky bez strany** jdou mimo tok (bod 2). Počtem jsou ~0,05 % tisků, objemem ale ES 1–15 %
+  objemu tisků za den (medián ~6 %, 21. 9.–16. 10.), NQ < 1 %: téměř vše bloky ≥ 100 lotů daleko
+  OTM s malou deltou. Tok tím téměř nezmění, z čistého objemu per strike (FA odhad OI) ale
+  vypadnou celé bloky po 2 000–3 500 lotech. Docstring `compute/cumdelta.py` („~0,05 %") opraví
+  #1460.

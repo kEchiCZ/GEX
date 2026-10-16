@@ -251,9 +251,13 @@
   Proti uložené `flow_delta` sedí přesně (relativní chyba 0) ve 34 z 36 seancí; ES 21. 9. a 1. 10.
   (restart enginu, přerušený řetěz živé řady) 2e-5 a 9e-5. Seance s chybou nad 0,1 % by do souhrnu
   hybridu nešla.
-- Mimo: midpoint pro tisky bez strany u kontraktu, který v minutě měl i tisk se stranou (`printvol`
-  je nerozliší; ~0,1 % tisků, sloupec „tisky (bez strany …)" výše). Hybrid se tím nepatrně
-  zlepšuje, ne zhoršuje.
+- Mimo: midpoint pro tisky bez strany. `printvol.printed` je zahrnuje, takže kontrakt-minuta jen
+  s tisky bez strany se nepočítá jako fallback, přestože jí režim `dxfeed` dá midpoint celému
+  přírůstku; u kontraktu s tisky se stranou chybí midpoint jejich objemu. Počtem jde o ~0,05 %
+  tisků (sloupec „tisky (bez strany …)" výše), **objemem** ES o 1–15 % objemu tisků za den
+  (medián ~6 %; téměř vše bloky ≥ 100 lotů daleko OTM), NQ < 1 % (ověření nálezů #1459,
+  partice `flow` 21. 9.–16. 10.). Změřený hybrid tak nese méně midpointu než skutečný režim
+  `dxfeed` a vychází lépe, ne hůř — závěr platí tím spíš.
 - Shoda s cenou a CVD stejně jako v #1018: přírůstky sečtené v oknech 1 / 5 / 15 min zarovnaných
   na hodinu, Pearson, medián přes seance a počet seancí s r > 0.
 

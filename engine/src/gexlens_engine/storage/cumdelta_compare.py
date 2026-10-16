@@ -708,9 +708,13 @@ class HybridParts:
     rekonstrukce živé řady v režimu `midpoint`, kterou se metoda ověřuje proti
     uložené `flow_delta`.
 
-    Mimo: midpoint pro tisky bez strany u kontraktu, který měl i tisk se
-    stranou (`printvol` je nerozliší; v živé partici `unknown_volume`, #1018
-    ~0,1 % tisků) — v hybridu chybí, takže ho nepatrně zlepšuje.
+    Mimo: midpoint pro tisky bez strany. `printvol.printed` je zahrnuje,
+    takže kontrakt-minuta jen s tisky bez strany tu není fallback, přestože
+    jí režim `dxfeed` dá midpoint celému přírůstku; u kontraktu s tisky se
+    stranou chybí midpoint jejich objemu. Počtem je to ~0,05 % tisků,
+    objemem ES 1–15 % objemu tisků za den (medián ~6 %, bloky ≥ 100 lotů),
+    NQ < 1 % (#1459). Hybrid tu proto vychází lépe než skutečný režim
+    `dxfeed`, ne hůř.
     """
 
     fallback_flow: dict[dt.datetime, float]
