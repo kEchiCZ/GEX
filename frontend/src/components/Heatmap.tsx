@@ -22,8 +22,8 @@ import {
   perfStart,
   useRenderTimer,
 } from '../perf/meter'
-import { renderGrid } from '../heatmap/render'
-import type { SignedPalette } from '../heatmap/render'
+import { DEFAULT_SIGNED_PALETTE, renderGrid } from '../heatmap/render'
+import type { PixelBuffer, SignedPalette } from '../heatmap/render'
 import type { HeatmapStyle } from '../heatmap/render'
 import type { HeatmapGrid } from '../heatmap/grid'
 import type { ForwardBoundary } from '../heatmap/dailyforward'
@@ -119,6 +119,33 @@ function measuredWidth(context: CanvasRenderingContext2D, text: string): number 
 }
 // Sentinel: pohled ještě nebyl fitnut (liší se od každého resetKey včetně undefined)
 const UNFITTED = Symbol('unfitted')
+// Výchozí bez scénářů se stabilní identitou (#1530): `= []` v props by dával
+// nové pole každý render a statická vrstva by se překreslovala pořád
+const NO_GHOSTS: AnnotationPayload[] = []
+
+/** Rastr jedné vrstvy (#1420) a vstupy, ze kterých vznikl. */
+interface LayerRaster {
+  grid: HeatmapGrid
+  style: HeatmapStyle
+  palette: SignedPalette
+  buffer: PixelBuffer
+}
+
+/** Rastr vrstvy z cache, nebo nově spočtený (#1420). Cache drží jen poslední
+rastr vrstvy, takže přepnutí Mode s Dyn podkladem přepočítá jen měřenou vrstvu.
+Klíčem je identita gridu: nová data dne dávají nový grid, a tedy nový rastr. */
+function layerRaster(
+  cache: { current: LayerRaster | null },
+  grid: HeatmapGrid,
+  style: HeatmapStyle,
+  palette: SignedPalette,
+): PixelBuffer {
+  const hit = cache.current
+  if (hit && hit.grid === grid && hit.style === style && hit.palette === palette) return hit.buffer
+  const buffer = renderGrid(grid, style, palette)
+  cache.current = { grid, style, palette, buffer }
+  return buffer
+}
 // Osové labely crosshairu (TradingView styl): tmavý box, světlý text
 const AXIS_LABEL_BG = '#363c4a'
 const AXIS_LABEL_FG = '#e6e9ef'
@@ -136,7 +163,7 @@ export function Heatmap({
   priceStyle = 'line',
   priceOpacity = 1,
   annotations = [],
-  ghostAnnotations = [],
+  ghostAnnotations = NO_GHOSTS,
   annotationTool = null,
   annotationColor = '#e8c14b',
   bucketMinutes = 1,
@@ -461,6 +488,11 @@ export function Heatmap({
   const flipMode: ContoursMode = contoursSplit.flip ? 'flip' : 'off'
   const contourSegments = useContours(grid, underGrid, contoursSplit.levels)
   const flipContourSegments = useContours(grid, underGrid, flipMode)
+  // Kontury aktuální mřížky jsou spočtené, hladiny i flip (#1420): do té doby
+  // `useContours` drží předchozí a statická vrstva na nové čeká (viz níže)
+  const contoursReady =
+    contoursSettled(grid, underGrid, contoursSplit.levels) &&
+    contoursSettled(grid, underGrid, flipMode)
 
   // Mapa 1m osy pro anotace (#502) — null = identita index == minuta
   const axisOffsets = useMemo(
@@ -537,19 +569,25 @@ export function Heatmap({
   // 1) Data → offscreen bitmapa (jen při změně dat/stylu). S Dyn GEX podkladem
   // (#242) se pole kreslí PRVNÍ a měřený grid přes něj — putImageData by podklad
   // přepsala, měřená vrstva proto jde přes drawImage (alfa kompozice).
+  // Rastr per vrstva (#1420): každá vrstva má vlastní cache s posledním
+  // rastrem, celkem nejvýš 2 rastry (≈ 2 × šířka × výška × 4 B).
+  const topRasterRef = useRef<LayerRaster | null>(null)
+  const underRasterRef = useRef<LayerRaster | null>(null)
   useEffect(() => {
-    const buffer = renderGrid(grid, style)
+    const buffer = layerRaster(topRasterRef, grid, style, DEFAULT_SIGNED_PALETTE)
+    const underMatches =
+      underGrid !== null &&
+      underGrid.minutes === grid.minutes &&
+      underGrid.strikes.length === grid.strikes.length
+    const underBuffer = underMatches
+      ? layerRaster(underRasterRef, underGrid, style, underPalette ?? DEFAULT_SIGNED_PALETTE)
+      : null
     const offscreen = document.createElement('canvas')
     offscreen.width = buffer.width
     offscreen.height = buffer.height
     const context = offscreen.getContext('2d')
     if (!context) return // jsdom v testech
-    const underMatches =
-      underGrid !== null &&
-      underGrid.minutes === grid.minutes &&
-      underGrid.strikes.length === grid.strikes.length
-    if (underMatches) {
-      const underBuffer = renderGrid(underGrid, style, underPalette)
+    if (underBuffer) {
       context.putImageData(
         new ImageData(underBuffer.data, underBuffer.width, underBuffer.height),
         0,
@@ -1201,11 +1239,13 @@ export function Heatmap({
     bucketPhase,
     axisOffsets,
     contourSegments,
+    flipContourSegments,
     overlays,
     grid.strikes,
     grid.minutes,
     grid.missingMinutes,
     annotations,
+    ghostAnnotations,
     draft,
     moving,
     hoverAnnotationId,
@@ -1430,22 +1470,24 @@ export function Heatmap({
     drawData()
   }, [drawData])
 
+  // Jediné kolo statické vrstvy po přepnutí Mode/Scale (#1420): dokud worker
+  // nedoručí kontury nové mřížky (hladiny i flip), drží overlay poslední kresbu
+  // a kreslí se jednou, až jsou hotové. Změna transformace (pan, zoom, velikost,
+  // DPR) se kreslí hned: overlay by jinak ujel rastru a nová velikost plátno maže.
+  const staticDrawnRef = useRef<{ mapping: typeof mapping; dpr: number } | null>(null)
   useLayoutEffect(() => {
+    const drawn = staticDrawnRef.current
+    if (!contoursReady && drawn?.mapping === mapping && drawn.dpr === dpr) return
+    staticDrawnRef.current = { mapping, dpr }
     drawStatic()
-  }, [drawStatic])
+  }, [drawStatic, contoursReady, mapping, dpr])
 
   // Měřič výkonu (#1409): Mode/Scale končí, až jsou kontury nové mřížky
   // spočtené a vykreslené. Pasivní efekt běží po drawStatic (layout) i po
   // efektu rastru výš (renderGrid + putImageData), takže span vždy zahrnuje oba
   useEffect(() => {
-    if (!perfEnabled()) return
-    if (
-      contoursSettled(grid, underGrid, contoursSplit.levels) &&
-      contoursSettled(grid, underGrid, flipMode)
-    ) {
-      perfFinish('modeScale')
-    }
-  }, [grid, underGrid, contoursSplit.levels, flipMode, contourSegments, flipContourSegments])
+    if (perfEnabled() && contoursReady) perfFinish('modeScale')
+  }, [contoursReady, grid, underGrid])
 
   useLayoutEffect(() => {
     drawDynamic()
