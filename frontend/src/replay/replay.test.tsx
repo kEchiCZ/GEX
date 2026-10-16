@@ -6,6 +6,7 @@ import { BottomPanels } from '../components/BottomPanels'
 import type { PanelSeries } from '../components/BottomPanels'
 import { PlaybackBar } from '../components/PlaybackBar'
 import { demoGrid } from '../heatmap/demo'
+import { cvdLinePoints } from '../panels/geometry'
 import { CrosshairProvider } from '../state/Crosshair'
 import {
   appendMinute,
@@ -49,6 +50,36 @@ test('sliceSeries a slicePanels drží délku (stabilní osa X)', () => {
   )
   expect(panels.vol).toEqual([1, 0, 0])
   expect(panels.cumDelta).toEqual([5, 0, 0])
+})
+
+test('slicePanels nese CVD podkladu (po pozici null) a Evo OI — žádná řada nevypadne (#1578)', () => {
+  // Required: nové volitelné pole PanelSeries bez doplnění sem neprojde tsc -b,
+  // a když ho slicePanels vynechá, spadne porovnání klíčů. Sentiment se k řadám
+  // přidává až v App.tsx po krájení, proto tu není.
+  const full: Required<Omit<PanelSeries, 'sentiment' | 'sentimentCandles'>> = {
+    vol: [1, 2, 3, 4],
+    optVolCall: [1, 1, 1, 1],
+    optVolPut: [2, 2, 2, 2],
+    cumDelta: [5, -5, 9, 12],
+    futuresCvd: [null, 100, -20, -50],
+    deltaFlowCall: [1, 2, 3, 4],
+    deltaFlowPut: [4, 3, 2, 1],
+    evoOiCall: [10, 11, 12, 13],
+    evoOiPut: [20, 21, 22, 23],
+    cumDeltaFromIso: '2026-07-16T15:00:00.000Z',
+  }
+  const sliced = slicePanels(full, 2)
+
+  expect(Object.keys(sliced).sort()).toEqual(Object.keys(full).sort())
+  // Po pozici null, ne 0: linka CVD končí na pozici, nepropadne k nule;
+  // díra před první hodnotou zůstává díra
+  expect(sliced.futuresCvd).toEqual([null, 100, -20, null])
+  expect(cvdLinePoints(sliced.futuresCvd ?? [], 400, 80).split(' ')).toHaveLength(2)
+  // Evo OI se v playbacku kreslí jen s neprázdnou řadou — dřív zmizel celý panel
+  expect(sliced.evoOiCall).toEqual([10, 11, 12, 0])
+  expect(sliced.evoOiPut).toEqual([20, 21, 22, 0])
+  expect(sliced.cumDeltaFromIso).toBe('2026-07-16T15:00:00.000Z')
+  expect(full.futuresCvd).toEqual([null, 100, -20, -50]) // původní data netknutá
 })
 
 test('sliceOverlays usekne cenu a levels po pozici', () => {
@@ -501,6 +532,46 @@ test('appendMinute dá identický výsledek jako plný build (#127)', () => {
   }
   const incremental = assembleReplayDay(appendMinute(firstMinute, secondMinute))
 
+  expect(normalize(incremental)).toEqual(normalize(full))
+})
+
+test('appendMinute nese CVD podkladu z WS, ne hodnotu z posledního fetche (#1578)', () => {
+  const flowWithCvd = [
+    { ts_min: M0, flow_delta: 50, cum_delta: 50, futures_cvd: 1200 },
+    { ts_min: M1, flow_delta: -20, cum_delta: 30, futures_cvd: -340 },
+  ]
+  const full = buildReplayDay(bundleFor(CELLS, BARS, LEVELS, flowWithCvd))
+  const firstMinute = decodeBundle(
+    bundleFor(
+      CELLS.filter((c) => c.ts === M0),
+      [BARS[0]],
+      [LEVELS[0]],
+      [flowWithCvd[0]],
+    ),
+  )
+  // Kanál flow.{sym} chodí ve vlastním flushi, bez řezu snapshotu (vzor #1273)
+  const withRows = appendMinute(firstMinute, {
+    tsIso: M1,
+    rows: CELLS.filter((c) => c.ts === M1).map((c) => ({
+      strike: c.strike,
+      right: c.right,
+      oi: c.oi,
+      volume: c.volume,
+      delta: c.delta,
+    })),
+    bar: { open: 7600.5, high: 7603, low: 7600, close: 7602, volume: 1300 },
+    levels: { flip: 7596, centroid: 7599, call_wall: 7655, put_wall: 7505 },
+  })
+  const withFlow = appendMinute(withRows, {
+    tsIso: M1,
+    rows: [],
+    flow: { cum_delta: 30, futures_cvd: -340 },
+  })
+  const incremental = assembleReplayDay(withFlow)
+
+  // Dřív se futures_cvd při appendu zahodilo a díra se držela hodnotou 1200
+  // z fetche — linka CVD živě stála až do hodinového refetche
+  expect(incremental.panels.futuresCvd).toEqual([1200, -340])
   expect(normalize(incremental)).toEqual(normalize(full))
 })
 

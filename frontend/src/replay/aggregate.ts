@@ -264,11 +264,16 @@ export function aggregateDay(day: DayData, bucketMinutes: number): DayData {
       optVolCall: sumSeries(day.panels.optVolCall, plan),
       optVolPut: sumSeries(day.panels.optVolPut, plan),
       cumDelta: lastSeries(day.panels.cumDelta, plan),
+      // CVD podkladu (#829) je kumulativ s dírami — poslední ne-null hodnota
+      // koše; koš bez dat zůstane null, ne nula (#1578)
+      futuresCvd: day.panels.futuresCvd && lastNonNull(day.panels.futuresCvd, plan),
       deltaFlowCall: sumSeries(day.panels.deltaFlowCall, plan),
       deltaFlowPut: sumSeries(day.panels.deltaFlowPut, plan),
       // Evo OI (#573) je úroveň, ne tok — koš přebírá poslední hodnotu
       evoOiCall: lastSeries(day.panels.evoOiCall ?? [], plan),
       evoOiPut: lastSeries(day.panels.evoOiPut ?? [], plan),
+      // Popisek „od HH:MM" (#518) je vlastnost dne, ne koše
+      cumDeltaFromIso: day.panels.cumDeltaFromIso,
     },
     profileByMinute,
     demoProfileRows: day.demoProfileRows,
