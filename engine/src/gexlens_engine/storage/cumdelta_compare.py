@@ -690,8 +690,10 @@ ContractMinute = tuple[str, dt.datetime, float, str]
 PrintVolRecord = tuple[ContractMinute, float, float | None]
 
 #: Nad tolik relativní chyby (Σ|rekonstrukce − flow_delta| / Σ|flow_delta|)
-#: rekonstrukce živé řady neplatí a hybrid seance nejde do souhrnu
-MAX_RECON_REL_ERROR = 1e-6
+#: rekonstrukce živé řady neplatí a hybrid seance nejde do souhrnu. Čistá
+#: seance sedí přesně (0); restart enginu uprostřed seance rozhodí pár minut
+#: navázání (21. 9. a 1. 10. 2026: 2e-5 a 9e-5), to hybrid nezkreslí.
+MAX_RECON_REL_ERROR = 1e-3
 
 
 @dataclass(frozen=True)
