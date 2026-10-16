@@ -1,6 +1,10 @@
 # ADR-0011: Flow-adjusted GEX — odhad intradenního positioningu z klasifikovaného toku
 
 **Stav:** přijato, fáze 1 (2026-07-23, #222) + fáze 2 (2026-08-06, #232)
+**Částečně revidováno ADR-0057** (16. 10. 2026): čistý objem nese jen tisky se stranou agresora
+od burzy (midpoint test zrušen, #1018); tisky dostává i sekundární řetěz, kalibrace α bere
+expiraci, která byla celou seanci sekundárem, a při bumpu v6 se α resetuje (FA vypnutá do ≥ 5
+platných dnů, výchozí α 0). Vzorec odhadu a FA validace platí dál.
 **Kontext:** OI se aktualizuje 1× denně (SPEC 3.5) — všechny GEX výpočty stojí
 na ranním snapshotu a dnešní nově postavený positioning nevidí. U 0DTE, které
 tvoří většinu objemu, je to díra přesně tam, kde se odehrává většina gammy.
@@ -30,6 +34,9 @@ dnech (skript ve scratchpadu, výsledky v issue #222).
 1. **Per-kontrakt čistý klasifikovaný objem** (buy − sell, v kontraktech)
    akumuluje `CumDeltaTracker` vedle CumΔ — obě větve klasifikace (tick i bar),
    denní reset. Nová data se NEpersistují (odvozená veličina, levels ano).
+   *(ADR-0057: jen tisky dxFeed se stranou od burzy; bar větev znaménko nedává.
+   Net tím nese jen outright agresi — strukturovaný objem, ES ~21 %, mění OI bez
+   znaménka a α ho jen globálně rozpustí.)*
 2. **OI odhad:** `OI_est(K,s) = max(0, OI_ranní + α·net_klasifikovaný_objem)`.
    α = `GEXLENS_FLOW_OI_ALPHA` (default **0,4** z validace open-ratio; 0 =
    vrstva vypnutá). Podlaha 0 — pozice nemůže být záporná.
@@ -98,6 +105,10 @@ z ranních potvrzení proti skutečnému ΔOI z věčného archivu.
    pokud ji data jasně ukážou; zatím jedna společná), aktuální stav
    v `fa_alpha`. Engine ji propisuje do `runtime.flow_alpha`; bez
    kalibrovaného bodu platí default `GEXLENS_FLOW_OI_ALPHA` (0,4).
+   *(ADR-0057 bod 6: vstupem je tiskový net sekundárního řetězu; kalibruje se
+   expirace, která byla celou seanci D sekundárem, den s mezerou trade větve bod
+   nedá; při bumpu v6 reset α, FA vypnutá se stavem „nekalibrováno n/5" do ≥ 5
+   platných dnů, výchozí α 0.)*
    API `GET /fa/alpha`, frontend badge „FA α=0.34 · 5 dní" ve stavové liště.
 6. **UI zdroj OI** (přepínač „OI: Měřené / FA odhad", persist per symbol,
    default měřené): při FA čtou OI módy heatmapy, Dyn GEX podklad i GEX

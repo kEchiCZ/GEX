@@ -17,7 +17,7 @@
 | # | Rozhodnutí |
 |---|---|
 | R1 | Žádná MVP zjednodušení — všechny moduly ve finální podobě |
-| R2 | Cum Δ s **plnou klasifikací agresora**: strana agresora od burzy (dxFeed `TimeAndSale`) pro **celý sbíraný řetěz**, midpoint test jen jako fallback per kontrakt a minutu a bez tastytrade — *revize ADR-0032 (3.–4. 9. 2026), původně IBKR tick-by-tick hot zóna ATM ±15* |
+| R2 | Cum Δ s **plnou klasifikací agresora**: tok i čistý objem **jen ze strany agresora od burzy** (dxFeed `TimeAndSale`) pro aktivní i sekundární řetěz; objem bez tisku se stranou jde mimo tok, výpadek tastytrade větve = viditelná mezera, ne odhad — *revize ADR-0057 (16. 10. 2026; midpoint test zrušen, verdikt #1018); předtím ADR-0032 (3.–4. 9. 2026) s midpoint fallbackem, původně IBKR tick-by-tick hot zóna ATM ±15* |
 | R3 | Retence intraday dat a tick dat: **14 dní** (denní Parquet partice, noční purge job) — *okno prodlouženo na 90 dní, viz ADR-0022* |
 | R4 | **Výjimka: EOD snapshot Open Interest se archivuje bez časového limitu** (řádově KB/den, nenahraditelná data) |
 | R5 | Datový zdroj výhradně IBKR (účet existuje); žádné placené externí feedy — *rozšířeno na brokerské účty s daty zdarma, primární zdroj zůstává IBKR, viz ADR-0025* |
@@ -93,11 +93,11 @@ Engine a API server běží jako dva procesy (nebo jeden proces se dvěma asynci
 - Priorita: ATM ± 30 strikes se sweepují každý cyklus, křídla každý k-tý cyklus (konfig.). Cíl: kompletní sweep řetězce ≤ 90 s.
 - Vytížení lines zobrazováno ve stavové liště (`Greeks NN %`).
 
-### 3.4 Klasifikace agresora per trade — dxFeed TimeAndSale (R2, ADR-0032)
-- Rozsah: **celý sbíraný řetěz** (obálka strikes podle `strike_range_points`, všechny sbírané expirace) — žádná zóna; počet striků by byl mezi symboly nesymetrický (ES krok 5 b, NQ 10/5 b) a dxFeed nemá limit streamů (ADR-0032 doplněk 4. 9.).
+### 3.4 Klasifikace agresora per trade — dxFeed TimeAndSale (R2, ADR-0032, ADR-0057)
+- Rozsah: **celý sbíraný řetěz** aktivní i sekundární expirace (obálka strikes podle `strike_range_points`) — žádná zóna; počet striků by byl mezi symboly nesymetrický (ES krok 5 b, NQ 10/5 b) a dxFeed nemá limit streamů (ADR-0032 doplněk 4. 9., ADR-0057 bod 6).
 - Zdroj: dxFeed `TimeAndSale` přes tastytrade DXLink (ADR-0025/0027) — každý outright trade nese `aggressorSide` **od burzy** (CME tag 5797), `size`, `price`; bez limitu počtu streamů, pokrytí strany 99,95 % (měřeno #615).
-- Midpoint test (4.5) jen jako fallback per kontrakt a minutu: trade bez určené strany, kontrakt bez tisků v minutě s přírůstkem objemu, celý řetěz při výpadku tastytrade větve.
-- Nohy spreadů v `TimeAndSale` nejsou: CME pro legy spread tradů nevysílá Trade Summary, jen objem. CumΔ z trade větve je tedy čistě outright agrese; strukturovaný objem se měří zvlášť (#1007).
+- **Midpoint test se nepoužívá** (ADR-0057, verdikt #1018: jde proti ceně). Mimo tok jde tisk bez určené strany, tisk bez delty a objem bez tisku (kontrakt bez tisků v minutě s přírůstkem objemu, nohy spreadů, bloky); objem se dál měří jako rozklad (`printvol`, pokrytí). Výpadek tastytrade větve = viditelná mezera (4.5), ne odhad.
+- Nohy spreadů v `TimeAndSale` nejsou: CME pro legy spread tradů nevysílá Trade Summary, jen objem. CumΔ je tedy čistě outright agrese; strukturovaný objem se měří zvlášť (#1007). Rozsah řady je proto 0,2–0,4× dřívější midpoint řady (#1018).
 - Původní návrh (IBKR `reqTickByTickData` hot zóna, limit 5 streamů dle ADR-0001) se nikdy nenapojil a byl 3. 9. 2026 nahrazen — ADR-0032.
 
 ### 3.5 Open Interest
@@ -154,20 +154,19 @@ Per snapshot t, strike K (vol = kumulativní denní volume do času t; ΔVol = p
 - **Flip:** zero-gamma řada z 4.2.
 - **Ridge:** lokální maxima profilu per t (prominence filtr), spojená mezi sousedními t nejbližším strikem → více souběžných hřebenů.
 
-### 4.5 Cum Δ — plná klasifikace agresora (R2)
+### 4.5 Cum Δ — plná klasifikace agresora (R2, ADR-0057)
 ```
-Celý sbíraný řetěz (dxFeed TimeAndSale, ADR-0032):
-  za každý trade: sign = aggressorSide (BUY → +1, SELL → −1, jinak midpoint fallback)
+Celý sbíraný řetěz (dxFeed TimeAndSale, ADR-0032, ADR-0057):
+  za každý trade: sign = aggressorSide (BUY → +1, SELL → −1, jinak mimo tok)
   flowΔ += sign · size · Δ(K,s) · M
+  net(K,s) += sign · size              (čistý objem, vstup FA odhadu OI — ADR-0011)
 
-Zbytek řetězce (1min):
-  ΔVol(t,K,s) = vol(t) − vol(t−1)
-  sign = midpoint test posledního last vs. aktuální bid/ask v okně
-  flowΔ += sign · ΔVol · Δ(K,s) · M
+Objem bez tisku se stranou (1min, ΔVol(t,K,s) = vol(t) − vol(t−1)):
+  jen rozklad objemu (printvol, pokrytí), do flowΔ ani net nevstupuje
 
 CumΔ(t) = Σ_{τ≤t} flowΔ(τ)     (reset na začátku obchodního dne, konfig. session start)
 ```
-Δ(K,s) se bere z posledního platného Greeks snapshotu daného kontraktu. Panel Cum Δ vykresluje řadu jako plochu nad/pod nulou.
+Δ(K,s) se bere z posledního platného Greeks snapshotu daného kontraktu (u tisku z tasty greeks). Minuta bez tisků za běžící trade větve má flowΔ = 0. Minuta, ve které trade větev celou dobu neběžela (výpadek tastytrade), má flowΔ i CumΔ prázdné (mezera, ne nula ani poslední hodnota); po mezeře CumΔ pokračuje od poslední měřené úrovně a mezera zůstává vidět (ADR-0057 bod 3). Panel Cum Δ vykresluje řadu jako plochu nad/pod nulou.
 
 ### 4.6 Strike profil (pravý panel)
 ```
@@ -282,7 +281,7 @@ nový řádek v této tabulce ve stejném PR (viz `AGENTS.md`, Definition of don
 | Modul | Rozhodnutí (ADR) | Zadání / epic | Aktuální popis |
 |---|---|---|---|
 | Multi-instrument (ES, NQ, …), pásmo strikes, ticker vs. kontrakt | 0002, 0003, 0041 | #629 | ADMIN kap. 4–5 |
-| tastytrade / dxFeed jako sekundární zdroj; klasifikace agresora celého řetězu (R2) | 0025, 0027, 0032 | #610, #615 | ADMIN kap. 5, 11 |
+| tastytrade / dxFeed jako sekundární zdroj; klasifikace agresora celého řetězu (R2) | 0025, 0027, 0032, 0057 | #610, #615, #1459 | ADMIN kap. 5, 11 |
 | Equity ad-hoc pohled (SPY, QQQ, akcie) přes tastytrade | 0025 | #206 | ADMIN kap. 5 |
 | Konvence obchodního dne a settle; kvartální roll a SOQ; pozdní start | 0023, 0024, 0039 | — | USER kap. 6, 8b |
 | Retence 90 dní; věčný archiv učicích dat | 0022, 0029 | #437 | ADMIN kap. 6 |

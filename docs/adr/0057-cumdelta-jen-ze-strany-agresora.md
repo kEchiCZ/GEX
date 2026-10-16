@@ -1,0 +1,184 @@
+# ADR-0057: CumΔ a čistý objem jen ze strany agresora od burzy — midpoint test se ruší
+
+- **Stav:** navrženo (E-1.14c #1459, PR s labelem `needs-decision`). Body 1, 2 a 11 zapisují
+  rozhodnutí vlastníka z 8. 10. 2026 (1A, 2A), body 6–9 jeho volby ze 16. 10. 2026 (doporučené
+  varianty, Rozhodnuto v epice #1385). Body 3–5 a 10 jsou odvozené z 1A a z pravidel AGENTS.md
+  a čekají na potvrzení vlastníka v PR.
+- **Datum:** 2026-10-16
+- **Mění:** SPEC kap. 0 R2, 3.4, 4.5 · ADR-0032 bod 1, věta bodu 2 o typech trade větve, bod 3
+  a Důsledky · ADR-0011 (zdroj znaménka čistého objemu, kalibrace α) · ADR-0034 bod 6 (výjimka
+  pro stínovou řadu)
+- **Implementace:** E-1.14d #1460 (rozdělená podle velikosti, viz Důsledky); nasazení s dávkovým
+  bumpem v6 E-1.14b #1403.
+
+## Kontext
+
+**Verdikt #1018 (8. 10. 2026, `docs/research/1018-cumdelta-zdroj.md`).** Živá CumΔ z midpoint
+testu (SPEC 4.5: znaménko `snapshot.last` proti aktuálnímu bid/ask × přírůstek objemu × delta ×
+multiplikátor) jde proti pohybu ceny futures ve všech 26 seancích (13 na ES i NQ, okna 1 a 5 min)
+a proti CVD futures. Tisková řada dxFeed `TimeAndSale` se stranou agresora od burzy jde s cenou.
+Mechanismus: `last` je poslední obchod kontraktu, starší než snímek o libovolnou mezeru; když
+futures rostou, mid callu vyjede nad starý `last` („prodej", −1 × kladná delta) a mid putu pod
+něj („nákup", +1 × záporná delta) — záporný tok právě při růstu ceny. Test neměří agresora, ale
+obráceně pohyb ceny od posledního obchodu.
+
+**ADR-0032 ponechal midpoint jako fallback** per kontrakt a minutu (tisk bez strany, kontrakt bez
+tisku v minutě s přírůstkem objemu) a pro celý řetěz bez tastytrade. Režim `dxfeed`, jak ho
+napsal #615 fáze 3, je proto hybrid. Měření 16. 10. (doplněk protokolu #1018, skript
+`scripts/compare_cumdelta_sources.py --hybrid`, rekonstrukce živé řady z uložených partic sedí
+přesně) ve stejných 13 seancích na symbol:
+
+| Medián r s cenou futures (1 / 5 / 15 min) | ES | NQ |
+|---|---|---|
+| tisky se stranou | +0,10 / +0,27 / +0,16 | +0,11 / +0,30 / +0,42 |
+| hybrid (tisky + midpoint fallback) | +0,04 / −0,06 / −0,08 | −0,04 / −0,16 / −0,34 |
+| jen fallback (kontrakt-minuty bez tisku) | −0,09 / −0,28 / −0,40 | −0,13 / −0,34 / −0,45 |
+| midpoint (dnešní živá řada) | −0,16 / −0,24 / −0,33 | −0,21 / −0,36 / −0,46 |
+
+Fallback jde proti ceně v každé seanci a v hybridu převáží: kontrakt-minuty bez tisku nesou medián
+46 % (ES) a 63 % (NQ) přírůstku objemu a 49 % / 68 % absolutního toku hybridu. Pořadí A (jen
+tisky) > B (hybrid) z #1018 tím platí čísly.
+
+**Rozhodnutí vlastníka 8. 10.:** 1A — CumΔ jen z tisků od burzy, midpoint nikde, objem bez tisku
+mimo tok, výpadek tasty = viditelná mezera, ne odhad; 2A — nasazení s bumpem v6. Midpoint
+znaménko ale nečte jen CumΔ: inventura #1459 našla čistý objem (`_net_volume`) a z něj FA odhad
+OI a kalibraci α, tendenci, verdikt dne, setupy, potvrzení zpráv v news-engine, replay
+backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod 5.
+
+## Rozhodnutí
+
+1. **Znaménko toku jen ze strany agresora od burzy.** flowΔ, CumΔ i čistý objem kontraktu
+   (`_net_volume`, buy − sell v kontraktech, vstup FA odhadu OI) se plní jen z tisků dxFeed
+   `TimeAndSale` se stranou (`aggressorSide` BUY → +1, SELL → −1):
+   `flowΔ += sign · size · Δ(K,s) · M`, `net(K,s) += sign · size`. Midpoint test se ruší všude —
+   v aktivním i sekundárním řetězu a v replayi. Bar větev (přírůstek kumulativního objemu ze
+   snímku) dál rozkládá objem na tisky a zbytek (`printvol`, pokrytí), znaménko nedává.
+2. **Mimo tok:** tisk bez strany, objem bez tisku (nohy spreadů a bloky — CME je jako trade
+   nevysílá, ADR-0032 bod 4 — i kontrakt-minuta bez jediného tisku). Minuta bez tisků za běžící
+   trade větve je tok 0 (měřený klid), ne mezera. Objem mimo tok se dál měří (`printvol`,
+   pokrytí v `flow` a `/status`).
+3. **Výpadek trade větve = viditelná mezera** (odvozeno z 1A a „Fail fast, viditelně"):
+   - Minuta, ve které trade větev celou dobu neběžela, má `flow_delta` i `cum_delta` NULL — ne 0,
+     ne poslední hodnotu, ne odhad; sloupce pokrytí také NULL. Částečná minuta je NULL celá
+     (cenzurovaná data se neextrapolují). Mezera cestuje s hodnotou do WS, `/replay`, feature
+     logu i news-engine; všichni čtenáři jsou na NULL připravení v tomtéž nasazení.
+   - Po mezeře CumΔ pokračuje od poslední měřené úrovně (kotva seance #638, precedens ADR-0024
+     bod 3); UI ukazuje mezeru, ne spojnici. Tisky z doby výpadku se nedoplňují.
+   - Trade větev „běží" = připojený stream ∧ čerstvé eventy symbolů aktivního řetězu (prahy
+     stávajícího hlídače 180 s RTH / 600 s Globex, bez nové konstanty) ∧ univerzum patří aktuální
+     pipeline (po rollu v settle až po obnově plánu). Při zavřeném trhu
+     (`marketclock.is_market_closed`) se mezera nezapisuje a nic se neupozorňuje. Upozornění
+     zůstávají stávající (výpadek tasty, mlčící feed) s upraveným textem, nový druh nevzniká.
+   - Výpadek IBKR řetězu tok z tisků nezastaví (delta je z tasty greeks) — otevřený trh = vidět
+     vše.
+4. **Spotřebitelé při mezeře** (odvozeno): chybějící vstup není filtr podle stavu trhu, jen
+   nepotvrzená podmínka.
+   - Setup, jehož podmínka čte CumΔ (T1 divergence, T4 kvantilová brána, kontra-režim T1/T2),
+     nevznikne, je-li mezera v aktuální minutě nebo kdekoli v okně podmínky (T1 10 min, T4
+     a kontra-režim 30 min) — rozdíl přes mezeru je neúplný. T2 mimo kontra-režim, T3 a T7 běží.
+   - Tendence: hlasy sklon CumΔ a divergence při neúplném okně nehlasují. Sklon počítá jedna
+     čistá funkce „Σ flowΔ za 10 min v seanci" v `compute/`; volá ji tendence i news-engine
+     (DRY; precedens ADR-0045 bod 5).
+   - news-engine: chybějící sklon = noha COMBINED nepodporuje (flip může), cyklus nespadne.
+   - FA vrstva (oiest, levelsfa, gexprofilefa, gexfieldfa) se v mezeře nepíše; frontend
+     poslední FA profil nedrží a OI matici nepřepíná potichu na měřené.
+5. **Co spotřebitelé dostanou po přepnutí:**
+
+   | Spotřebitel | Po přepnutí | Při mezeře |
+   |---|---|---|
+   | Panel Cum Δ (plocha, TF, Daily, chip okna) | tisky | mezera (bod 3) |
+   | Čistý objem → FA odhad OI | tisky (outright agrese) | FA se nepíše |
+   | Kalibrace α (sekundární řetěz) | tisky (bod 6) | den bez bodu |
+   | Tendence: sklon CumΔ a divergence | tisky | nehlasují |
+   | Verdikt dne, automatický scénář (přes tendenci) | tisky | jako tendence |
+   | Setupy T1, T4, kontra-režim; feature log | tisky | setup nevznikne |
+   | Setupy T2 mimo kontra-režim, T3, T7; Δ Flow C/P, CVD futures, FA validace, paper, kouč | beze změny | — |
+   | news-engine: potvrzení COMBINED sklonem | tisky | noha nepodporuje |
+   | Replay backtestu, walk-forward, parita | tisky (bod 7) | mezera |
+
+   Měřítko tiskové řady je 0,2–0,4× midpointové. Prahy čtenářů jsou směrová a kvantilová
+   srovnání, na měřítko necitlivá — mění se obsah (směr), takže se přeměřuje: parametry setupů
+   čtoucí CumΔ (`momentum_cum_quantile`, `counter_flow_lookback`, `divergence_lookback`),
+   všechny vzorky v6 (vzorky v5 se nepřenášejí), váhy tendence (sklon a divergence společně,
+   bod 9), verdikt dne (nová verze), vzorek COMBINED v news-engine a prahy kalibrace α
+   (`MIN_ABS_NET`, `MIN_SAMPLES`, `ALPHA_MAX`, výchozí α). Absolutní čísla (Daily, detail
+   tendence) se mezi dny před a po v6 nesrovnávají.
+6. **FA odhad OI a α (vlastník 16. 10., varianta A).** Tisky dostává i tracker sekundárního
+   řetězu — jeho `TimeAndSale` už odebírá účel `chain`, takže 0 položek tasty navíc a 0 ze 100
+   IBKR lines. Kalibrace bere expiraci, která byla celou seanci D sekundárem (oprava pasti D+2,
+   nález NALEZ_D2), a den s mezerou trade větve za otevřeného trhu bod nedá. Při bumpu se α
+   resetuje (jiná veličina; historie zůstává a nese zdroj), FA je vypnutá se stavem
+   „nekalibrováno n/5", dokud nemá ≥ 5 platných dnů; výchozí α 0 místo 0,4. Zpětná kalibrace
+   z recorderu `data/trades` běží jen na sucho jako podklad prahů. Vědomý limit: net nese jen
+   outright agresi, strukturovaný objem (ES ~21 %, NQ ~10 %) mění OI bez znaménka a α ho jen
+   globálně rozpustí.
+7. **Replay a walk-forward pod v6 (vlastník 16. 10., varianta A).** Replay backtestu čte pro
+   seance od 21. 9. 2026 do nasazení stín `derived/{sym}/cumdelta_dx` — tentýž model jako 1A
+   (univerzum aktivního řetězu, delta z tasty greeks, strana od burzy), přeskočená značka minuty
+   = poslední kumulativ, posun značek ~1 min. Od nasazení čte řadu `flow` se zdrojem 1A; starší
+   seance jsou mezera a walk-forward v6 je nepoužije. **Výjimka z ADR-0034 bod 6** (učení přes
+   změnu zdroje): stín a 1A jsou táž mechanika. Brána: parita stín ↔ živá 1A ≥ 5 seancí po
+   bumpu s číselným prahem (stanoví #1460); když neprojde, walk-forward v6 jede jen nad živou 1A
+   (první návrh koncem prosince místo poloviny listopadu). Před bumpem se přehraje v5 × v6
+   nad 21. 9.–15. 10. pro všechny šablony.
+8. **Zlom midpoint → tisky v datech a v UI (vlastník 16. 10., varianta A).** Zlom nesou řádky,
+   ne datum (přežije návrat pinem image): nová hodnota `flow.source` (ne `dxfeed`, ten značil
+   hybrid), `source` v řadě `netflow`, `TENDENCY_WEIGHTS_VERSION` 5, `VERDICT_RULES_VERSION` 4
+   (statistiky podle verze), zdroj CumΔ ve vstupech signálu COMBINED a v `fa_alpha_history`;
+   zdroj CumΔ je dohledatelný i z feature logu. Panel Cum Δ dny před v6 nekreslí — mezera
+   s důvodem „midpoint, obrácené znaménko (#1018)", linka CVD futures zůstává. Data v `derived/`
+   se nemažou ani nepřepisují. Engine a frontend se nasazují a vracejí společně.
+9. **Tendence v E-0.12 (vlastník 16. 10., varianta A).** Sklon CumΔ a divergence se z revize vah
+   nad midpointem (#1113) vyřazují a měří se offline ze stínu (21. 9.–dnes, RTH, bootstrap po
+   dnech). „Signál" NQ RTH z #394 (sklon +0,108, divergence +0,096) stál na midpointu, tedy na
+   obráceném pohybu ceny; jeho ztráta se přijímá a nový hlas by šel jen samostatným návrhem.
+10. **Konfigurace a kód** (odvozeno): přepínač `GEXLENS_CUMDELTA_SOURCE` a režim midpoint končí,
+    návrat jen pinem image. Mrtvá tick větev (`add_trade`, `ClassifiedTrade`, `TradeSide`)
+    se maže — strana z Lee–Ready nad bid/ask není strana od burzy. `/status` hlásí zdroj a stav
+    mezery per symbol (jen API, bez diagnostického UI).
+11. **Nasazení (2A):** s bumpem v6 (E-1.14b #1403). Čtenáři NULL (API, frontend, news-engine)
+    se nasazují nejpozději s enginem; do `main` smí dřív jen kód, který je pod režimem midpoint
+    netečný.
+
+## Zvažované varianty
+
+- **Opravit midpoint** (kotace v čase obchodu, tick test) — zamítnuto 8. 10.: snímek kotaci
+  z doby obchodu nedá (rotační sweep, `last` starší o libovolnou mezeru) a strukturovaný přírůstek
+  obchod nemá vůbec; tick test by byl tentýž artefakt s opačným znaménkem (klasifikuje pohyb ceny,
+  ne agresora).
+- **Hybrid = dnešní režim `dxfeed`** (ADR-0032 bod 1) — zamítnuto měřením 16. 10. (tabulka
+  v Kontextu): horší než čisté tisky ve všech oknech, u NQ proti ceně.
+- **Midpoint jen pro čistý objem, FA nebo sekundární řetěz** — odporuje 1A a dává dvě definice
+  téže veličiny (α kalibrovaná na jiném netu, než který násobí).
+- **Mezera jako držená úroveň s příznakem, nebo řádek vůbec nepsat** — zmrzlé číslo pro každého,
+  kdo příznak nečte, resp. výpadek tasty k nerozeznání od výpadku enginu.
+- **Doplnit výpadek odhadem** (např. přeškálovanou CVD futures) — odhad místo měření.
+- **FA:** α zmrazit (tiše chybná čísla), α z open-ratio validace (jiná veličina), α neresetovat
+  (1–2 týdny špatně škálovaná FA), FA vrstvu odložit (vlastník ji chce, varianta A).
+- **Walk-forward jen nad živou 1A** — návrh až koncem prosince; zůstává jako záloha, když brána
+  parity neprojde.
+- **Midpointová historie v panelu s popiskem** „midpoint (před v6)" — kreslila by obrácenou řadu
+  vedle správné.
+- **Tendence: čekat 4–5 týdnů** na živá data po v6 — E-0.12 by kalibrovalo obrácenou řadu.
+
+## Důsledky
+
+- **ADR-0032:** bod 1 (midpoint fallback per kontrakt a minutu a bez tasty), bod 3 (znění R2)
+  a Důsledky 1–3 nahrazuje tento ADR; věta bodu 2 o typech `ClassifiedTrade`/`TradeSide`
+  neplatí (bod 10); bod 4 a doplněk 4. 9. platí dál. Bod 1 tvrdil „všechny sbírané expirace",
+  kód ale tisky vedl jen do aktivního řetězu; po bodu 6 je dostává aktivní i sekundární řetěz.
+- **ADR-0011:** čistý objem = jen outright tisky se stranou; kalibrace α podle bodu 6.
+- **ADR-0034 bod 6:** výjimka pro stínovou řadu podle bodu 7.
+- **SPEC** kap. 0 R2, 3.4 a 4.5 přepisuje tento PR. Manuály, texty v UI a `.env.example` se mění
+  s implementací (#1460), stejně jako docstringy `compute/cumdelta.py` a `runtime.py`.
+- **Zdroje dat se nemění:** počet IBKR market data lines ani rozpočet tasty (TimeAndSale obou
+  řetězců už odebírá účel `chain`); R5 platí.
+- **Historie se nemaže:** `derived/` (midpoint `flow`, `netflow`, FA řady) i `fa_alpha_history`
+  zůstávají jako audit; čtenáři je rozliší podle zdroje.
+- **Implementace E-1.14d #1460** zasahuje engine, API, frontend, news-engine a skripty, rozdělí
+  se proto podle velikosti sub-issue (engine a datový kontrakt; API a frontend; news-engine;
+  replay a přehrání v5 × v6). Podrobný seznam míst je v #1460.
+- **Otevřené otázky** (neblokují ADR): stáří delty tisku z tasty greeks, na které ADR-0015
+  nedosahuje; zda DXLink umí historii `TimeAndSale` (`fromTime`) pro doplnění výpadku — nejdřív
+  rešerše; podíl tisků bez strany přes víc seancí (docstring „~0,05 %" proti ~1,8 % od startu
+  enginu 16. 10.).

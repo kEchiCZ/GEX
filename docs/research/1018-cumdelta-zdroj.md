@@ -34,14 +34,17 @@
   tisku (dnešní fallback režimu `dxfeed`) tvoří v RTH ES 34 % (17–42 %), NQ 45 % (25–72 %)
   klasifikovaného objemu. Rozsah tiskové řady je 0,2–0,4× midpointové (nese jen outright agresi).
 - **Důsledek pro obchodování:** obráceně dnes čte vše, co stojí na midpoint znaménku — setupy
-  (potvrzení protitoku, divergence „nákupy do slabosti / prodeje do síly", kvantilová brána, podíl
-  toku u gamma momentum), sklon CumΔ v tendenci (#394), plocha CumΔ v panelu, a přes čistý objem
-  i FA odhad OI (ADR-0011), kalibrace α ze sekundárního řetězu (#1182) a potvrzení zpráv
-  `cum_delta_slope` / alert `cum_delta_jump` v news-engine. Do přepnutí je spolehlivé čtení toku
-  linka **CVD futures** v panelu CumΔ.
+  (potvrzení protitoku, divergence „nákupy do slabosti / prodeje do síly", kvantilová brána),
+  sklon CumΔ a divergence v tendenci (#394) a přes ni verdikt dne, plocha CumΔ v panelu, a přes
+  čistý objem i FA odhad OI (ADR-0011), kalibrace α ze sekundárního řetězu (#1182) a potvrzení
+  zpráv `cum_delta_slope` v news-engine. Do přepnutí je spolehlivé čtení toku linka **CVD
+  futures** v panelu CumΔ. *(Oprava 16. 10. podle inventury #1459: podíl toku u gamma momentum
+  je delta-vážený objem bez znaménka a alert `cum_delta_jump` byl odstraněn v #949 — ani jeden
+  midpoint znaménko nečte; přibyla divergence tendence. Úplná inventura je v ADR-0057.)*
 - **Kalibrace (#394 / #434):** prahy setupů jsou směrová a kvantilová srovnání (`setups.py:714,
   839, 1108-1113, 1206`), na měřítko řady necitlivá — po přepnutí se mění jejich obsah (směr),
-  ne škála. Přeměřit se musí váha `cum_delta_slope` tendence (#394) a všechny vzorky v6.
+  ne škála. Přeměřit se musí váha `cum_delta_slope` a divergence tendence (#394) a všechny
+  vzorky v6.
 
 ## Rozhodnutí vlastníka 8. 10. 2026
 
