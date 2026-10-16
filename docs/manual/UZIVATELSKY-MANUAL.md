@@ -538,7 +538,7 @@ Panely se **sdílenou časovou osou** s heatmapou. Každý zvlášť vypneš che
 
 **Linka CVD podkladu v panelu Cum Δ** (agresivní nákupy − prodeje ve futures,
 #829) se živě posouvá **každou minutu**. Zůstává i v timeframu **5m a víc**
-(koš ukazuje poslední hodnotu, popisek „od HH:MM“ zůstává také) a v playbacku
+(koš ukazuje poslední hodnotu; popisek panelu „od HH:MM“ zůstává také) a v playbacku
 končí na pozici přetáčení. Do opravy #1578 stála živě až hodinu na hodnotě
 z posledního načtení dne. V agregaci a v playbacku zmizela úplně, v playbacku
 i s panelem Evo OI.

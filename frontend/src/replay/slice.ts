@@ -27,12 +27,12 @@ export function sliceGrid(full: HeatmapGrid, position: number): HeatmapGrid {
   }
 }
 
-/** Řada do pozice t s zachovanou délkou (stabilní osa X): po t nuly. */
+/** Řada do pozice t se zachovanou délkou (stabilní osa X): po t nuly. */
 export function sliceSeries(values: number[], position: number): number[] {
   return values.map((value, index) => (index <= position ? value : 0))
 }
 
-/** Řada s dírami do pozice t s zachovanou délkou: po t null (linie končí, nepropadne k nule). */
+/** Řada s dírami do pozice t se zachovanou délkou: po t null (linie končí, nepropadne k nule). */
 function sliceLine(series: (number | null)[], position: number): (number | null)[] {
   return series.map((value, index) => (index <= position ? value : null))
 }
