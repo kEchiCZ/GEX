@@ -27,20 +27,23 @@ export function sliceGrid(full: HeatmapGrid, position: number): HeatmapGrid {
   }
 }
 
-/** Řada do pozice t s zachovanou délkou (stabilní osa X): po t nuly. */
+/** Řada do pozice t se zachovanou délkou (stabilní osa X): po t nuly. */
 export function sliceSeries(values: number[], position: number): number[] {
   return values.map((value, index) => (index <= position ? value : 0))
 }
 
+/** Řada s dírami do pozice t se zachovanou délkou: po t null (linie končí, nepropadne k nule). */
+function sliceLine(series: (number | null)[], position: number): (number | null)[] {
+  return series.map((value, index) => (index <= position ? value : null))
+}
+
 /** Overlaye do pozice t: cena useknutá, levels/walls po t = null (linie končí). */
 export function sliceOverlays(full: OverlayData, position: number): OverlayData {
-  const cutLine = (series: (number | null)[]): (number | null)[] =>
-    series.map((value, index) => (index <= position ? value : null))
   return {
     ...full,
     price: full.price?.filter((bar) => bar.minuteIdx <= position),
-    levels: full.levels?.map((line) => ({ ...line, series: cutLine(line.series) })),
-    walls: full.walls?.map((line) => ({ ...line, series: cutLine(line.series) })),
+    levels: full.levels?.map((line) => ({ ...line, series: sliceLine(line.series, position) })),
+    walls: full.walls?.map((line) => ({ ...line, series: sliceLine(line.series, position) })),
     sessions: full.sessions?.filter((session) => session.minuteIdx <= position),
     // Signály vzniklé po pozici jsou v přetáčeném čase budoucnost (#295);
     // stopa platnosti se nechává celá — expirace byla známá už při vzniku
@@ -54,8 +57,13 @@ export function slicePanels(full: PanelSeries, position: number): PanelSeries {
     optVolCall: sliceSeries(full.optVolCall, position),
     optVolPut: sliceSeries(full.optVolPut, position),
     cumDelta: sliceSeries(full.cumDelta, position),
+    // Ruční výčet tu dřív vynechal CVD podkladu i Evo OI — v playbacku obojí
+    // zmizelo (#1578); úplnost hlídá test se sadou klíčů PanelSeries
+    futuresCvd: full.futuresCvd && sliceLine(full.futuresCvd, position),
     deltaFlowCall: sliceSeries(full.deltaFlowCall, position),
     deltaFlowPut: sliceSeries(full.deltaFlowPut, position),
+    evoOiCall: full.evoOiCall && sliceSeries(full.evoOiCall, position),
+    evoOiPut: full.evoOiPut && sliceSeries(full.evoOiPut, position),
     // Popisek „od HH:MM" (#518) je vlastnost dne, ne pozice — přetáčením nemizí
     cumDeltaFromIso: full.cumDeltaFromIso,
   }

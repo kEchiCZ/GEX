@@ -65,9 +65,16 @@ walk-forward nesmí učit přes takovou hranici. Do zavedení „epochy" ve stor
 platí: po takové změně se report čte jen od data změny (`--from` v příštím
 kroku) a kandidáti závislí na CumΔ se přeměří.
 
+*Výjimka ADR-0057 bod 7 (16. 10. 2026):* pro přepnutí CumΔ na tisky (#1018) se
+historie od 21. 9. 2026 do nasazení v6 bere ze stínové řady `cumdelta_dx` — je
+to tatáž mechanika jako 1A (univerzum aktivního řetězu, strana od burzy, delta
+z tasty greeks). Platí s branou parity stín ↔ živá řada ≥ 5 seancí po bumpu;
+když neprojde, walk-forward v6 učí jen nad živou řadou.
+
 **Doplněk 11. 9. 2026 (#1112 bod A) — změny mechaniky se dávkují.** Oddělená
 „epocha vstupů" vedle `mechanics_version` se **nezavádí**: CumΔ vstupuje do
-všech šablon (potvrzení odrazu T1, divergence T2/T7, kvantilová brána T4),
+všech šablon (potvrzení odrazu T1, divergence T2/T7, kvantilová brána T4 — *oprava
+16. 10. podle inventury ADR-0057: T2 čte CumΔ jen v kontra-režimu, T7 vůbec; čte ho i T5*),
 takže by šlo jen o další verzi mechaniky pod jiným jménem. Místo toho platí
 pravidlo o pořadí:
 

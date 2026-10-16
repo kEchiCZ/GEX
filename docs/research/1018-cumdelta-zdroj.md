@@ -3,7 +3,8 @@
 > E-0.6 Fáze 0 (#1387) epiky #1385 · #615 krok 6 · seance 21. 9.–7. 10. 2026 (13 obchodních
 > seancí na symbol, po opravě front kontraktu #1189) · skript `scripts/compare_cumdelta_sources.py`
 > (čte jen partice `data/derived`) · vstup dávkového bumpu v6 E-1.14b (#1403) a brány nástrojů toku
-> E-3.9 (#1439).
+> E-3.9 (#1439) · **doplněk 16. 10.: hybrid režimu `dxfeed` (E-1.14c #1459)** na konci dokumentu,
+> rozhodnutí v ADR-0057.
 
 ## Verdikt
 
@@ -33,14 +34,17 @@
   tisku (dnešní fallback režimu `dxfeed`) tvoří v RTH ES 34 % (17–42 %), NQ 45 % (25–72 %)
   klasifikovaného objemu. Rozsah tiskové řady je 0,2–0,4× midpointové (nese jen outright agresi).
 - **Důsledek pro obchodování:** obráceně dnes čte vše, co stojí na midpoint znaménku — setupy
-  (potvrzení protitoku, divergence „nákupy do slabosti / prodeje do síly", kvantilová brána, podíl
-  toku u gamma momentum), sklon CumΔ v tendenci (#394), plocha CumΔ v panelu, a přes čistý objem
-  i FA odhad OI (ADR-0011), kalibrace α ze sekundárního řetězu (#1182) a potvrzení zpráv
-  `cum_delta_slope` / alert `cum_delta_jump` v news-engine. Do přepnutí je spolehlivé čtení toku
-  linka **CVD futures** v panelu CumΔ.
+  (potvrzení protitoku, divergence „nákupy do slabosti / prodeje do síly", kvantilová brána),
+  sklon CumΔ a divergence v tendenci (#394) a přes ni verdikt dne, plocha CumΔ v panelu, a přes
+  čistý objem i FA odhad OI (ADR-0011), kalibrace α ze sekundárního řetězu (#1182) a potvrzení
+  zpráv `cum_delta_slope` v news-engine. Do přepnutí je spolehlivé čtení toku linka **CVD
+  futures** v panelu CumΔ. *(Oprava 16. 10. podle inventury #1459: podíl toku u gamma momentum
+  je delta-vážený objem bez znaménka a alert `cum_delta_jump` byl odstraněn v #949 — ani jeden
+  midpoint znaménko nečte; přibyla divergence tendence. Úplná inventura je v ADR-0057.)*
 - **Kalibrace (#394 / #434):** prahy setupů jsou směrová a kvantilová srovnání (`setups.py:714,
   839, 1108-1113, 1206`), na měřítko řady necitlivá — po přepnutí se mění jejich obsah (směr),
-  ne škála. Přeměřit se musí váha `cum_delta_slope` tendence (#394) a všechny vzorky v6.
+  ne škála. Přeměřit se musí váha `cum_delta_slope` a divergence tendence (#394) a všechny
+  vzorky v6.
 
 ## Rozhodnutí vlastníka 8. 10. 2026
 
@@ -66,8 +70,9 @@
 - Seance 21. 9.–7. 10. bez víkendů a svátků (dřívější výstup nástroje počítal i ploché víkendové
   partice jako seance — opraveno v tomto PR); 8. 10. běžela a leží mimo `--to`. Partice před #1189
   (14.–18. 9.) sledovaly dobíhající kontrakt a do souhrnu nepatří.
-- Hybridní režim `dxfeed` (tisky + midpoint fallback) se jako řada neukládá; složit se dá
-  z `printvol`, `netflow` a delty snímků — měření je první krok E-1.14c (#1459).
+- Hybridní režim `dxfeed` (tisky + midpoint fallback) se jako řada neukládá; skládá se
+  z `printvol`, `netflow` a delty snímků — změřeno v doplňku 16. 10. (E-1.14c #1459): hybrid je
+  horší než čisté tisky, u NQ jde proti ceně.
 
 ## Výstup skriptu
 
@@ -202,3 +207,137 @@
 | 2026-10-07 | NQ | 1 min | 0.122 | -0.151 | 0.452 | 0.100 | -0.123 |
 | 2026-10-07 | NQ | 5 min | 0.351 | -0.347 | 0.711 | 0.284 | -0.244 |
 | 2026-10-07 | NQ | 15 min | 0.419 | -0.567 | 0.579 | 0.213 | -0.183 |
+
+## Doplněk 16. 10. 2026 — hybrid režimu `dxfeed` (E-1.14c #1459)
+
+> Měření, které ověřovatel #1018 požadoval před ADR: řada režimu `dxfeed`, jak je napsaný dnes
+> (`compute/cumdelta.add_bar`) — tisky se stranou od burzy + midpoint test pro kontrakt-minuty bez
+> jediného tisku. Okno verdiktu 21. 9.–7. 10. (13 seancí na symbol) a rozšíření do 15. 10. (18).
+> `scripts/compare_cumdelta_sources.py --hybrid` (čte `derived/` a `snapshots/`, nic nezapisuje).
+
+### Verdikt hybridu
+
+- **Hybrid je horší než čisté tisky ve všech oknech u obou symbolů** a u NQ jde proti ceně:
+  medián r s cenou futures NQ −0,04 / −0,16 / −0,34 (1 / 5 / 15 min; kladně 5 / 0 / 1 z 13 seancí),
+  ES +0,04 / −0,06 / −0,08 (kladně 10 / 6 / 5 z 13). Čisté tisky ve stejných seancích: ES +0,10 /
+  +0,27 / +0,16, NQ +0,11 / +0,30 / +0,42. S CVD futures hybrid ES ≈ 0 (+0,04 / +0,01 / +0,04),
+  NQ záporně (−0,05 / −0,10 / −0,16).
+- **Samotný fallback jde proti ceně v každé seanci** (kladně 0 z 12–13 ve všech oknech): ES −0,09 /
+  −0,28 / −0,40, NQ −0,13 / −0,34 / −0,45 — stejně nebo zápornější než celá midpoint řada. Kontrakt
+  bez tisku v minutě má `last` z ještě staršího obchodu, artefakt #1018 je u něj nejsilnější.
+- **Midpoint v hybridu převáží:** kontrakt-minuty bez tisku nesou medián 46 % (ES) a 63 % (NQ)
+  přírůstku objemu a 49 % / 68 % absolutního minutového toku hybridu; rozsah kumulativu hybridu je
+  1,7× (ES) a 4,8× (NQ) rozsahu tiskové řady. Znaménko hybridu na close se s tisky shoduje jen
+  v 9 / 13 (ES) a 7 / 13 (NQ) seancích.
+- **Rozšíření o 8.–15. 10.** (18 seancí v souhrnu z 19; 9. 10. má jen 952 společných minut a jde
+  mimo souhrn jako neúplná) pořadí nemění: tisky ES +0,09 / +0,21 / +0,16, NQ +0,11 /
+  +0,30 / +0,45; hybrid ES +0,02 / −0,06 / −0,12, NQ −0,04 / −0,19 / −0,36; fallback kladně 0 z
+  17–18. ES 14. 10. jdou na 5 a 15 min proti ceně i tisky (−0,31 / −0,35; hybrid −0,30 / −0,58).
+- **Pořadí A > B z #1018 platí čísly:** CumΔ jen z tisků je jediná varianta, která jde s cenou
+  i s CVD futures. Rozhodnutí 1A stojí, k vlastníkovi se nevrací.
+
+### Metoda
+
+- Hybrid(t) = stín `cumdelta_dx` `flow_ring`(t) (tisky se stranou, aktivní řetěz) + Σ midpoint toku
+  kontrakt-minut bez tisku v minutě t. Minuta bez stínu (tasty neběželo) nese jen fallback —
+  v režimu `dxfeed` tehdy midpoint klasifikuje celý přírůstek.
+- Kontrakt-minuta bez tisku = řádek `derived/{sym}/{exp}/printvol` s `printed` 0, nebo NULL
+  (trade větev neběžela). `printvol` píše jen aktivní řetěz a jen minuty s přírůstkem objemu.
+- Midpoint tok kontrakt-minuty = přírůstek `netflow` (v režimu `midpoint` = znaménko midpoint testu
+  × přírůstek objemu) × delta ze `snapshots` × multiplikátor (`ticker.FUTURES_MULTIPLIERS`).
+  Partici `netflow` jedné expirace plní v seanci sekundární řetěz do settle a aktivní řetěz po něm
+  s pokračujícím kumulativem — přírůstky se počítají přes celou seanci, započtou se jen v okně
+  aktivního řetězu (první až poslední minuta `printvol` té expirace).
+- **Kontrola metody:** táž skladba přes všechny kontrakt-minuty je rekonstrukce živé midpoint řady.
+  Proti uložené `flow_delta` sedí přesně (relativní chyba 0) ve 36 z 38 seancí (19 na symbol); ES 21. 9. a 1. 10.
+  (restart enginu, přerušený řetěz živé řady) 2e-5 a 9e-5. Seance s chybou nad 0,1 % by do souhrnu
+  hybridu nešla.
+- Mimo: midpoint pro tisky bez strany. `printvol.printed` je zahrnuje, takže kontrakt-minuta jen
+  s tisky bez strany se nepočítá jako fallback, přestože jí režim `dxfeed` dá midpoint celému
+  přírůstku; u kontraktu s tisky se stranou chybí midpoint jejich objemu. Počtem jde o ~0,05 %
+  tisků (sloupec „tisky (bez strany …)" výše), **objemem** ES o 1–15 % objemu tisků za den
+  (medián ~6 %; téměř vše bloky ≥ 100 lotů daleko OTM), NQ < 1 % (ověření nálezů #1459,
+  partice `flow` 21. 9.–16. 10.). Podíl midpointu ve změřeném hybridu je tak dolní mez: skutečný režim
+  `dxfeed` nese midpointu víc, a protože fallback jde proti ceně v každé seanci, nejspíš by
+  vyšel ještě hůř — závěr to neoslabuje (úsudek z mechanismu, ne měření).
+- Shoda s cenou a CVD stejně jako v #1018: přírůstky sečtené v oknech 1 / 5 / 15 min zarovnaných
+  na hodinu, Pearson, medián přes seance a počet seancí s r > 0.
+
+### Výstup skriptu — hybrid
+
+#### Shoda s cenou futures, okno verdiktu 21. 9.–7. 10. (medián r, + seancí s r > 0)
+
+| Sym | okno | dx ~ cena | midpoint ~ cena | CVD fut. ~ cena | dx ~ CVD | midpoint ~ CVD | hybrid ~ cena | hybrid ~ CVD | jen fallback ~ cena |
+|---|---|---|---|---|---|---|---|---|---|
+| ES | 1 min | 0.104 (+ 13/13) | -0.159 (+ 0/13) | 0.343 (+ 13/13) | 0.136 (+ 13/13) | -0.084 (+ 0/13) | 0.037 (+ 10/13) | 0.044 (+ 11/13) | -0.092 (+ 0/13) |
+| ES | 5 min | 0.268 (+ 12/13) | -0.236 (+ 0/13) | 0.498 (+ 13/13) | 0.154 (+ 13/13) | -0.139 (+ 1/13) | -0.060 (+ 6/13) | 0.011 (+ 8/13) | -0.278 (+ 0/13) |
+| ES | 15 min | 0.163 (+ 10/13) | -0.326 (+ 1/13) | 0.457 (+ 13/13) | 0.189 (+ 12/13) | -0.245 (+ 2/13) | -0.081 (+ 5/13) | 0.038 (+ 10/13) | -0.398 (+ 0/12) |
+| NQ | 1 min | 0.111 (+ 13/13) | -0.205 (+ 0/13) | 0.518 (+ 13/13) | 0.137 (+ 13/13) | -0.173 (+ 0/13) | -0.041 (+ 5/13) | -0.052 (+ 3/13) | -0.133 (+ 0/13) |
+| NQ | 5 min | 0.299 (+ 12/13) | -0.362 (+ 0/13) | 0.672 (+ 13/13) | 0.284 (+ 13/13) | -0.298 (+ 0/13) | -0.156 (+ 0/13) | -0.097 (+ 1/13) | -0.344 (+ 0/13) |
+| NQ | 15 min | 0.419 (+ 12/13) | -0.460 (+ 0/13) | 0.644 (+ 13/13) | 0.335 (+ 13/13) | -0.277 (+ 0/13) | -0.343 (+ 1/13) | -0.157 (+ 1/13) | -0.446 (+ 0/12) |
+
+#### Shoda s cenou futures, 21. 9.–15. 10.
+
+| Sym | okno | dx ~ cena | midpoint ~ cena | CVD fut. ~ cena | dx ~ CVD | midpoint ~ CVD | hybrid ~ cena | hybrid ~ CVD | jen fallback ~ cena |
+|---|---|---|---|---|---|---|---|---|---|
+| ES | 1 min | 0.093 (+ 18/18) | -0.144 (+ 0/18) | 0.349 (+ 18/18) | 0.122 (+ 17/18) | -0.081 (+ 0/18) | 0.020 (+ 12/18) | 0.038 (+ 14/18) | -0.066 (+ 0/18) |
+| ES | 5 min | 0.211 (+ 16/18) | -0.263 (+ 0/18) | 0.475 (+ 18/18) | 0.120 (+ 17/18) | -0.165 (+ 1/18) | -0.061 (+ 7/18) | -0.000 (+ 9/18) | -0.268 (+ 0/18) |
+| ES | 15 min | 0.157 (+ 14/18) | -0.323 (+ 1/18) | 0.473 (+ 18/18) | 0.105 (+ 14/18) | -0.196 (+ 3/18) | -0.116 (+ 6/18) | 0.013 (+ 11/18) | -0.353 (+ 0/17) |
+| NQ | 1 min | 0.111 (+ 18/18) | -0.188 (+ 0/18) | 0.519 (+ 18/18) | 0.140 (+ 18/18) | -0.173 (+ 0/18) | -0.044 (+ 5/18) | -0.048 (+ 4/18) | -0.137 (+ 0/18) |
+| NQ | 5 min | 0.304 (+ 17/18) | -0.371 (+ 0/18) | 0.640 (+ 18/18) | 0.261 (+ 18/18) | -0.309 (+ 0/18) | -0.194 (+ 0/18) | -0.138 (+ 1/18) | -0.342 (+ 0/18) |
+| NQ | 15 min | 0.451 (+ 17/18) | -0.513 (+ 0/18) | 0.642 (+ 18/18) | 0.355 (+ 17/18) | -0.281 (+ 0/18) | -0.363 (+ 1/18) | -0.159 (+ 1/18) | -0.495 (+ 0/17) |
+
+#### Hybrid — souhrn (21. 9.–7. 10. / 21. 9.–15. 10.)
+
+| Sym | seancí | max chyba rekonstrukce | med. fallback z objemu | med. fallback z \|toku\| | med. r hybrid ~ dx | med. r hybrid ~ midpoint | med. rozsah hybrid/dx | zn. close hybrid = dx |
+|---|---|---|---|---|---|---|---|---|
+| ES | 13 | 9.4e-05 | 46.3 % | 49.3 % | 0.754 | 0.267 | 1.73 | 9/13 |
+| NQ | 13 | 0.0e+00 | 63.0 % | 67.9 % | 0.502 | 0.562 | 4.79 | 7/13 |
+
+| Sym | seancí | max chyba rekonstrukce | med. fallback z objemu | med. fallback z \|toku\| | med. r hybrid ~ dx | med. r hybrid ~ midpoint | med. rozsah hybrid/dx | zn. close hybrid = dx |
+|---|---|---|---|---|---|---|---|---|
+| ES | 18 | 9.4e-05 | 46.9 % | 50.9 % | 0.577 | 0.324 | 2.27 | 12/18 |
+| NQ | 18 | 0.0e+00 | 63.3 % | 68.4 % | 0.471 | 0.605 | 4.89 | 10/18 |
+
+#### Hybrid — per seance (21. 9.–15. 10.)
+
+| Seance | Sym | rekonstrukce r / chyba | fallback z objemu | fallback z \|toku\| | r přír. hybrid ~ dx | r přír. hybrid ~ midpoint | rozsah hybrid/dx | close hybrid / dx | zn. close | bez delty | poznámka |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-21 | ES | 1.0000 / 2.1e-05 | 53.8 % | 50.7 % | 0.743 | 0.228 | 3.66 | -424,610 / 12,411 | NE | 0 |  |
+| 2026-09-22 | ES | 1.0000 / 0.0e+00 | 25.4 % | 25.7 % | 0.882 | 0.035 | 0.83 | 15,840 / 37,363 | ano | 0 |  |
+| 2026-09-23 | ES | 1.0000 / 0.0e+00 | 45.6 % | 51.1 % | 0.129 | 0.962 | 3.02 | -112,786 / 43,949 | NE | 0 |  |
+| 2026-09-24 | ES | 1.0000 / 0.0e+00 | 31.1 % | 33.0 % | 0.902 | 0.343 | 1.73 | -116,231 / -68,183 | ano | 0 |  |
+| 2026-09-25 | ES | 1.0000 / 0.0e+00 | 41.3 % | 32.4 % | 0.933 | 0.018 | 1.42 | -166,787 / -50,175 | ano | 0 |  |
+| 2026-09-28 | ES | 1.0000 / 0.0e+00 | 46.3 % | 17.9 % | 0.938 | 0.127 | 0.98 | 22,758 / -30,399 | NE | 0 |  |
+| 2026-09-29 | ES | 1.0000 / 0.0e+00 | 58.8 % | 51.1 % | 0.411 | 0.683 | 4.09 | 251,191 / 21,352 | ano | 0 |  |
+| 2026-09-30 | ES | 1.0000 / 0.0e+00 | 45.2 % | 49.3 % | 0.754 | 0.123 | 1.18 | -55,350 / -86,695 | ano | 0 |  |
+| 2026-10-01 | ES | 1.0000 / 9.4e-05 | 48.6 % | 59.5 % | 0.369 | 0.306 | 3.37 | 82,794 / 30,569 | ano | 0 |  |
+| 2026-10-02 | ES | 1.0000 / 0.0e+00 | 27.4 % | 32.8 % | 0.925 | 0.005 | 0.85 | -22,314 / -12,412 | ano | 0 |  |
+| 2026-10-05 | ES | 1.0000 / 0.0e+00 | 49.7 % | 44.4 % | 0.865 | 0.267 | 0.95 | 38,369 / 57,800 | ano | 0 |  |
+| 2026-10-06 | ES | 1.0000 / 0.0e+00 | 50.0 % | 51.6 % | 0.317 | 0.679 | 4.38 | -377,831 / 42,320 | NE | 0 |  |
+| 2026-10-07 | ES | 1.0000 / 0.0e+00 | 47.4 % | 51.8 % | 0.248 | 0.751 | 2.62 | 418,389 / 117,836 | ano | 0 |  |
+| 2026-10-08 | ES | 1.0000 / 0.0e+00 | 41.2 % | 43.4 % | 0.783 | 0.083 | 1.71 | 139,524 / -10,359 | NE | 0 |  |
+| 2026-10-09 | ES | 1.0000 / 0.0e+00 | 59.5 % | 57.7 % | 0.703 | 0.381 | 2.67 | -176,565 / -50,181 | ano | 0 |  |
+| 2026-10-12 | ES | 1.0000 / 0.0e+00 | 68.7 % | 61.9 % | 0.180 | 0.930 | 3.78 | 19,948 / 72,914 | ano | 0 |  |
+| 2026-10-13 | ES | 1.0000 / 0.0e+00 | 54.4 % | 54.9 % | 0.259 | 0.710 | 1.92 | 33,807 / 3,552 | ano | 0 |  |
+| 2026-10-14 | ES | 1.0000 / 0.0e+00 | 42.1 % | 56.4 % | 0.353 | 0.648 | 3.54 | 163,837 / 84,697 | ano | 0 |  |
+| 2026-10-15 | ES | 1.0000 / 0.0e+00 | 58.2 % | 69.1 % | 0.143 | 0.891 | 8.44 | 117,117 / -16,612 | NE | 0 |  |
+| 2026-09-21 | NQ | 1.0000 / 0.0e+00 | 83.6 % | 85.8 % | 0.260 | 0.883 | 29.37 | -204,634 / 5,709 | NE | 0 |  |
+| 2026-09-22 | NQ | 1.0000 / 0.0e+00 | 61.6 % | 64.0 % | 0.595 | 0.527 | 2.35 | -27,722 / 19,038 | NE | 0 |  |
+| 2026-09-23 | NQ | 1.0000 / 0.0e+00 | 62.7 % | 68.6 % | 0.498 | 0.562 | 4.75 | 33,878 / 3,568 | ano | 0 |  |
+| 2026-09-24 | NQ | 1.0000 / 0.0e+00 | 60.8 % | 67.3 % | 0.554 | 0.588 | 4.79 | 25,792 / 2,275 | ano | 0 |  |
+| 2026-09-25 | NQ | 1.0000 / 0.0e+00 | 68.4 % | 71.3 % | 0.478 | 0.641 | 4.99 | -38,969 / 11,757 | NE | 0 |  |
+| 2026-09-28 | NQ | 1.0000 / 0.0e+00 | 67.0 % | 44.8 % | 0.677 | 0.572 | 2.26 | 12,163 / -4,085 | NE | 0 |  |
+| 2026-09-29 | NQ | 1.0000 / 0.0e+00 | 63.0 % | 67.9 % | 0.521 | 0.456 | 5.94 | -22,165 / -7,224 | ano | 0 |  |
+| 2026-09-30 | NQ | 1.0000 / 0.0e+00 | 65.6 % | 69.4 % | 0.364 | 0.708 | 3.21 | 7,429 / 6,897 | ano | 0 |  |
+| 2026-10-01 | NQ | 1.0000 / 0.0e+00 | 63.0 % | 72.0 % | 0.502 | 0.330 | 11.64 | -67,044 / 1,806 | NE | 0 |  |
+| 2026-10-02 | NQ | 1.0000 / 0.0e+00 | 48.1 % | 61.3 % | 0.601 | 0.183 | 3.99 | -42,465 / -2,336 | ano | 0 |  |
+| 2026-10-05 | NQ | 1.0000 / 0.0e+00 | 68.3 % | 71.3 % | 0.426 | 0.639 | 5.73 | -6,811 / -7,920 | ano | 0 |  |
+| 2026-10-06 | NQ | 1.0000 / 0.0e+00 | 66.8 % | 67.2 % | 0.392 | 0.559 | 9.93 | -57,582 / -1,759 | ano | 0 |  |
+| 2026-10-07 | NQ | 1.0000 / 0.0e+00 | 54.2 % | 59.9 % | 0.530 | 0.521 | 3.79 | 9,234 / -1,180 | NE | 0 |  |
+| 2026-10-08 | NQ | 1.0000 / 0.0e+00 | 58.9 % | 66.4 % | 0.298 | 0.623 | 2.37 | 31,445 / 7,582 | ano | 0 |  |
+| 2026-10-09 | NQ | 1.0000 / 0.0e+00 | 71.7 % | 74.4 % | 0.420 | 0.664 | 10.98 | -54,023 / 54 | NE | 0 |  |
+| 2026-10-12 | NQ | 1.0000 / 0.0e+00 | 71.3 % | 72.6 % | 0.314 | 0.821 | 11.41 | 87,212 / -6,062 | NE | 0 |  |
+| 2026-10-13 | NQ | 1.0000 / 0.0e+00 | 63.0 % | 68.1 % | 0.427 | 0.630 | 3.37 | 4,995 / -335 | NE | 0 |  |
+| 2026-10-14 | NQ | 1.0000 / 0.0e+00 | 63.5 % | 70.1 % | 0.465 | 0.678 | 5.87 | 86,900 / 13,373 | ano | 0 |  |
+| 2026-10-15 | NQ | 1.0000 / 0.0e+00 | 74.0 % | 77.7 % | 0.231 | 0.885 | 6.92 | 12,764 / 5,564 | ano | 0 |  |

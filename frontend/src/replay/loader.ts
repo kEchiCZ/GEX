@@ -1088,9 +1088,9 @@ export function appendMinute(inputs: ReplayInputs, minute: LiveMinute): ReplayIn
         values: Object.fromEntries(LEVEL_KEYS.map((key) => [key, minute.levels?.[key] ?? null])),
       })
     : inputs.levels
-  const flow = minute.flow
-    ? upsertRow(inputs.flow, { tsIso, cum_delta: minute.flow.cum_delta })
-    : inputs.flow
+  // Rozprostřením, ne výčtem: výčet zahazoval futures_cvd a linka CVD podkladu
+  // živě stála na hodnotě z posledního fetche až do hodinového refetche (#1578)
+  const flow = minute.flow ? upsertRow(inputs.flow, { ...minute.flow, tsIso }) : inputs.flow
   const gexProfile = minute.gexProfile
     ? upsertRow(inputs.gexProfile, {
         tsIso,
