@@ -2,6 +2,11 @@
 
 **Stav:** accepted · **Datum:** 2026-09-03, doplněk 4. 9. (rozsah zóny) · **Rozhodl:** uživatel (issue #1006, #615) · **Mění:** SPEC kap. 0 R2, kap. 3.4, 4.5, 5.1
 
+**Částečně nahrazeno ADR-0057** (16. 10. 2026, verdikt #1018): midpoint fallback v bodu 1, věta
+bodu 2 o typech `ClassifiedTrade`/`TradeSide`, znění R2 v bodu 3 a Důsledky 1–3 neplatí — tok
+i čistý objem jen ze strany agresora od burzy, objem bez tisku mimo tok, výpadek tastytrade =
+viditelná mezera. Zbytek bodu 2, bod 4 a doplněk 4. 9. platí dál.
+
 ## Kontext
 
 SPEC R2 požadoval CumΔ s plnou klasifikací agresora: tick-by-tick pro „hot zónu"
@@ -42,6 +47,12 @@ Dvě fakta o CME datech, ověřená 3. 9. (#615):
    kontrakt bez tisků v minutě s přírůstkem objemu, a celý řetěz při výpadku
    tastytrade větve. Realizace = #615 fáze 3.
 
+   *Revize ADR-0057 (16. 10. 2026):* midpoint fallback se ruší — měřený hybrid (tisky +
+   midpoint) jde u NQ proti ceně a samotný fallback proti ceně v každé seanci (#1018, doplněk
+   16. 10.). Tisk bez strany a objem bez tisku jdou mimo tok, výpadek tastytrade větve je
+   viditelná mezera. „Všechny sbírané expirace" neodpovídalo kódu (tisky vedly jen do aktivního
+   řetězu); sekundární řetěz je dostane podle ADR-0057 bod 6.
+
    *Doplněk 4. 9. 2026:* původní znění „ATM ±15 strikes" bylo dědictví
    IBKR limitu 5 streamů. U dxFeed žádný limit není a počet striků je
    nesymetrický mezi symboly (ES krok 5 b → ±1 % spotu; NQ krok 10 b, u ATM
@@ -54,16 +65,24 @@ Dvě fakta o CME datech, ověřená 3. 9. (#615):
    `MockHotZoneClient`, `TICKS_SCHEMA`/`write_ticks`/`data/ticks/`,
    `GEXLENS_HOT_ZONE_WIDTH`, `GEXLENS_TICK_BY_TICK_MAX_STREAMS`, runtime setting
    `hot_zone_width` a jeho pole v Settings UI. Typy `ClassifiedTrade`/`TradeSide`
-   zůstávají v `compute/cumdelta.py` jako vstup trade větve.
+   zůstávají v `compute/cumdelta.py` jako vstup trade větve. *(ADR-0057 bod 10: typy
+   a `add_trade` se mažou — nemají volajícího a Lee–Ready strana není strana od burzy.)*
 3. **Znění R2 ve SPEC:** „strana agresora od burzy (dxFeed TimeAndSale) pro
    celý sbíraný řetěz, midpoint test jako fallback per kontrakt a minutu
-   a bez tastytrade". Kap. 3.4 přepsána, 4.5 a 5.1 upraveny.
+   a bez tastytrade". Kap. 3.4 přepsána, 4.5 a 5.1 upraveny. *(Nahrazeno ADR-0057: „tok i čistý
+   objem jen ze strany agresora od burzy …; objem bez tisku se stranou jde mimo tok, výpadek
+   tastytrade větve = viditelná mezera".)*
 4. **Spread legy se nerozlišují** (doplněk ADR-0027, 3. 9.): CumΔ z trade větve
    je čistě outright agrese, což je pro účel CumΔ (směrový tok) žádoucí.
    Strukturovaný objem (spready, bloky) se měří zvlášť jako rozdíl snapshot
    objemu a Σ tisků — #1007.
 
 ## Důsledky
+
+*Body 1–3 nahrazuje ADR-0057: CumΔ zůstává 100 % midpoint jen do bumpu v6 (rozhodnutí vlastníka
+8. 10., 2A), do té doby se tok čte z linky CVD futures; přepnutí na tisky je E-1.14d #1460 bez
+paralelního režimu a bez přepínače; provoz bez tastytrade větve není midpoint, ale viditelná
+mezera.*
 
 - Do dokončení #615 fáze 3 je CumΔ **100 % midpoint** — manuál a `/status`
   to říkají výslovně, místo aby tvrdily existenci tick-by-tick zóny.
