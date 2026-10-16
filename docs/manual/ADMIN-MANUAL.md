@@ -511,7 +511,7 @@ Handshake kontroluje hlavičku `Origin` (#542): CORS se na WebSocket nevztahuje,
 
 ## 8. Frontend
 
-- **Heatmapa**: data → offscreen bitmapa (překreslení jen při změně dat/módu), pan/zoom = GPU `drawImage`; výkonové cíle a jejich měření měřičem #1409 jsou v ADR-0047 bod 6 (baseline `docs/research/1381-vykon-baseline.md`); overlay canvas kreslí vektory (cena/svíčky, levels, walls, sessions, crosshair, anotace).
+- **Heatmapa**: data → offscreen bitmapa (překreslení jen při změně dat/módu), pan/zoom = GPU `drawImage`; výkonové cíle a jejich měření měřičem #1409 jsou v ADR-0047 bod 6 (baseline `docs/research/1381-vykon-baseline.md`); overlay canvas kreslí vektory (cena/svíčky, levels, walls, sessions, crosshair, anotace). Měřená vrstva a Dyn podklad mají každá vlastní rastr, přepočítá se jen ta, které se změnily vstupy: Mode s podkladem přepočítá jen měřenou (#1420). Kontury počítá web worker, hladiny i flip jednou úlohou nad sdíleným blurem; úloha odchází před kresbou overlay, overlay se kreslí hned s daty a po doručení kontur jednou znovu (#1420).
 - **Replay**: `/replay` se stáhne jednou, `apache-arrow` dekóduje snapshoty, celý den se předpočítá v paměti (vč. profilu per minuta) — přetáčení je čisté krájení typed arrays. Timestampy se normalizují (`canonicalTs` — Arrow epoch vs. JSON ISO).
 - **Stav**: React kontexty `AppState` (status z WS + REST initial fetch, view, téma, alerty) a `Crosshair` (sdílený všemi panely).
 - **OI fallback**: při nulovém OI staví heatmapu z volume (engine mezitím posílá alert `oi_missing`).

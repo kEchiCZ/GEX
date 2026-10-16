@@ -47,6 +47,11 @@ export function blurAlongTime(
   return out
 }
 
+/** Vyhlazené pole, ze kterého se kreslí hladiny i flip: blur podél času, pak 2D. */
+function smoothField(field: Float32Array, width: number, height: number): Float32Array {
+  return gaussianBlur(blurAlongTime(field, width, height), width, height)
+}
+
 export function computeContourSegments(
   field: Float32Array,
   width: number,
@@ -54,7 +59,16 @@ export function computeContourSegments(
   mode: ContoursMode,
 ): Segment[] {
   if (mode === 'off') return []
-  const smoothed = gaussianBlur(blurAlongTime(field, width, height), width, height)
+  return smoothedSegments(smoothField(field, width, height), width, height, mode)
+}
+
+/** Úsečky jednoho módu nad už vyhlazeným polem. */
+function smoothedSegments(
+  smoothed: Float32Array,
+  width: number,
+  height: number,
+  mode: ContoursMode,
+): Segment[] {
   // Kontura flipu (#1174) jde vždy samostatným výpočtem (jiný styl čáry) —
   // kombinované módy sem posílá hook rozložené na hladiny + 'flip'
   if (mode === 'flip') return flipSegments(smoothed, width, height)
@@ -82,7 +96,23 @@ export function computeContourPolylines(
   height: number,
   mode: ContoursMode,
 ): Polyline[] {
-  return smoothPolylines(joinSegments(computeContourSegments(field, width, height, mode)))
+  return computeContourPolylinesForModes(field, width, height, [mode])[0]
+}
+
+/** Kontury několika módů nad jedním polem (#1420): hladiny i flip sdílí blur
+a jdou jednou úlohou workeru. Výstup každého módu je týž jako samostatný výpočet. */
+export function computeContourPolylinesForModes(
+  field: Float32Array,
+  width: number,
+  height: number,
+  modes: readonly ContoursMode[],
+): Polyline[][] {
+  const smoothed = modes.some((mode) => mode !== 'off') ? smoothField(field, width, height) : null
+  return modes.map((mode) =>
+    mode === 'off' || smoothed === null
+      ? []
+      : smoothPolylines(joinSegments(smoothedSegments(smoothed, width, height, mode))),
+  )
 }
 
 /** Segmenty ↔ plochý buffer (transferable přes worker boundary). */

@@ -31,9 +31,20 @@ describe('useContours (jsdom = sync fallback, Worker není)', () => {
       grid.strikes.length,
       'all',
     )
-    expect(result.current.length).toBe(direct.length)
-    expect(result.current.slice(0, 3)).toEqual(direct.slice(0, 3))
-    expect(result.current.length).toBeGreaterThan(0)
+    expect(result.current.levels.length).toBe(direct.length)
+    expect(result.current.levels.slice(0, 3)).toEqual(direct.slice(0, 3))
+    expect(result.current.levels.length).toBeGreaterThan(0)
+    expect(result.current.flip).toEqual([]) // 'all' bez flipu
+  })
+
+  it('hladiny i flip (#1420): týž výsledek jako samostatné výpočty', () => {
+    const grid = makeGrid(4)
+    const { result } = renderHook(() => useContours(grid, null, 'major+flip'))
+    const field = grid.layers.signed as Float32Array
+    const size = [field, grid.minutes, grid.strikes.length] as const
+    expect(result.current.levels).toEqual(computeContourPolylines(...size, 'major'))
+    expect(result.current.flip).toEqual(computeContourPolylines(...size, 'flip'))
+    expect(result.current.flip.length).toBeGreaterThan(0)
   })
 
   it('cache: přepnutí módu tam a zpět vrátí IDENTICKÉ pole (žádný nový výpočet)', () => {
@@ -41,16 +52,16 @@ describe('useContours (jsdom = sync fallback, Worker není)', () => {
     const { result, rerender } = renderHook(({ mode }) => useContours(grid, null, mode), {
       initialProps: { mode: 'all' as const },
     })
-    const first = result.current
+    const first = result.current.levels
     rerender({ mode: 'major' as never })
     rerender({ mode: 'all' as never })
-    expect(result.current).toBe(first) // stejná reference = cache hit (AC 2)
+    expect(result.current.levels).toBe(first) // stejná reference = cache hit (AC 2)
   })
 
   it('off → prázdno; flat kódování je bezeztrátové', () => {
     const grid = makeGrid(3)
     const { result } = renderHook(() => useContours(grid, null, 'off'))
-    expect(result.current).toEqual([])
+    expect(result.current).toEqual({ levels: [], flip: [] })
     const direct = computeContourSegments(
       grid.layers.signed as Float32Array,
       grid.minutes,

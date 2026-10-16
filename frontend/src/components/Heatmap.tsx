@@ -11,7 +11,6 @@ jsou ostré i na velkých monitorech. Souřadnice událostí = CSS pixely.
 */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useElementSize } from '../hooks/useElementSize'
-import { splitContoursMode } from '../heatmap/contours'
 import type { ContoursMode } from '../heatmap/contours'
 import { contoursSettled, useContours } from '../heatmap/useContours'
 import {
@@ -482,17 +481,14 @@ export function Heatmap({
   const strikeCount = grid.strikes.length
 
   // Kontury (#493): výpočet ve web workeru + cache per (pole, mód) —
-  // datový update nedropne frame, přepínání módů je cache hit
-  // Hladiny a flip zvlášť (#1174): jiný styl čáry, vlastní cache per mód
-  const contoursSplit = splitContoursMode(contours)
-  const flipMode: ContoursMode = contoursSplit.flip ? 'flip' : 'off'
-  const contourSegments = useContours(grid, underGrid, contoursSplit.levels)
-  const flipContourSegments = useContours(grid, underGrid, flipMode)
-  // Kontury aktuální mřížky jsou spočtené, hladiny i flip (#1420): do té doby
-  // `useContours` drží předchozí a statická vrstva na nové čeká (viz níže)
-  const contoursReady =
-    contoursSettled(grid, underGrid, contoursSplit.levels) &&
-    contoursSettled(grid, underGrid, flipMode)
+  // datový update nedropne frame, přepínání módů je cache hit.
+  // Hladiny a flip (#1174) mají jiný styl čáry, počítají se ale jednou úlohou
+  // nad sdíleným blurem a přijdou jedním doručením (#1420)
+  const { levels: contourSegments, flip: flipContourSegments } = useContours(
+    grid,
+    underGrid,
+    contours,
+  )
 
   // Mapa 1m osy pro anotace (#502) — null = identita index == minuta
   const axisOffsets = useMemo(
@@ -579,6 +575,8 @@ export function Heatmap({
       underGrid !== null &&
       underGrid.minutes === grid.minutes &&
       underGrid.strikes.length === grid.strikes.length
+    // Bez podkladu se jeho rastr uvolní (≈ šířka × výška × 4 B)
+    if (!underMatches) underRasterRef.current = null
     const underBuffer = underMatches
       ? layerRaster(underRasterRef, underGrid, style, underPalette ?? DEFAULT_SIGNED_PALETTE)
       : null
@@ -1470,45 +1468,20 @@ export function Heatmap({
     drawData()
   }, [drawData])
 
-  // Jediné kolo statické vrstvy po přepnutí Mode/Scale (#1420): dokud worker
-  // nedoručí kontury nové mřížky (hladiny i flip), drží overlay poslední kresbu
-  // a kreslí se jednou, až jsou hotové. Hned se kreslí jen to, co čekat nesmí:
-  // transformace (pan, zoom, velikost, DPR — overlay by ujel rastru a nová
-  // velikost plátno maže) a přímá manipulace (kreslení a přesun anotace,
-  // zvýraznění pod kurzorem, okraje range).
-  const rangeKey = [range, rangeB]
-    .map((target) => (target ? `${target.startBucket}-${target.endBucket}` : ''))
-    .join('|')
-  const staticDrawnRef = useRef<{
-    mapping: typeof mapping
-    dpr: number
-    draft: typeof draft
-    moving: typeof moving
-    hover: number | null
-    rangeKey: string
-  } | null>(null)
+  // Statická vrstva se kreslí hned s daty (svíčky, úrovně, anotace) a s
+  // předchozími konturami; kontury nové mřížky ji překreslí jednou, po jediném
+  // doručení hladin i flipu (#1420). Úloha workeru odešla už v layout efektu
+  // `useContours`, takže tahle kresba běží souběžně s výpočtem kontur.
   useLayoutEffect(() => {
-    const drawn = staticDrawnRef.current
-    const waitForContours =
-      !contoursReady &&
-      drawn !== null &&
-      drawn.mapping === mapping &&
-      drawn.dpr === dpr &&
-      drawn.draft === draft &&
-      drawn.moving === moving &&
-      drawn.hover === hoverAnnotationId &&
-      drawn.rangeKey === rangeKey
-    if (waitForContours) return
-    staticDrawnRef.current = { mapping, dpr, draft, moving, hover: hoverAnnotationId, rangeKey }
     drawStatic()
-  }, [drawStatic, contoursReady, mapping, dpr, draft, moving, hoverAnnotationId, rangeKey])
+  }, [drawStatic])
 
   // Měřič výkonu (#1409): Mode/Scale končí, až jsou kontury nové mřížky
   // spočtené a vykreslené. Pasivní efekt běží po drawStatic (layout) i po
   // efektu rastru výš (renderGrid + putImageData), takže span vždy zahrnuje oba
   useEffect(() => {
-    if (perfEnabled() && contoursReady) perfFinish('modeScale')
-  }, [contoursReady, grid, underGrid])
+    if (perfEnabled() && contoursSettled(grid, underGrid, contours)) perfFinish('modeScale')
+  }, [grid, underGrid, contours, contourSegments, flipContourSegments])
 
   useLayoutEffect(() => {
     drawDynamic()

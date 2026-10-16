@@ -1,13 +1,13 @@
 /** Statická vrstva grafu a kontury z workeru: jediné kolo `drawStatic` po
-přepnutí Mode/Scale (#1420) a pozdě doručené kontury flipu (#1530).
+doručení kontur (#1420) a pozdě doručené kontury flipu (#1530).
 
-Kontury jdou přes podvržený Worker, aby šlo řídit pořadí doručení. Výsledek
-počítá týž kód jako skutečný worker (`computeContourPolylines`). Počty
+Kontury jdou přes podvržený Worker, aby šlo řídit doručení. Výsledek počítá
+týž kód jako skutečný worker (`computeContourPolylinesForModes`). Počty
 překreslení čte měřič výkonu #1409 a jsou deterministické. */
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, render } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { ActiveTool, AnnotationPayload, StoredAnnotation } from '../annotations/model'
-import { computeContourPolylines } from '../heatmap/contourCompute'
+import type { AnnotationPayload, StoredAnnotation } from '../annotations/model'
+import { computeContourPolylinesForModes } from '../heatmap/contourCompute'
 import type { ContoursMode } from '../heatmap/contours'
 import type { ForwardBoundary } from '../heatmap/dailyforward'
 import { demoGrid } from '../heatmap/demo'
@@ -24,40 +24,40 @@ interface ContourRequest {
   buffer: ArrayBuffer
   width: number
   height: number
-  mode: ContoursMode
+  modes: ContoursMode[]
+  /** Počet kreseb statické vrstvy v okamžiku odeslání úlohy. */
+  drawsAtPost: number
 }
+
+type Listener = (event: { data: { id: number; buffers: ArrayBuffer[] } }) => void
 
 /** Worker kontur pod kontrolou testu: požadavky čekají na `deliver`. */
 class FakeWorker {
   static instance: FakeWorker | null = null
   requests: ContourRequest[] = []
-  private listeners: ((event: { data: { id: number; buffer: ArrayBuffer } }) => void)[] = []
+  private listeners: Listener[] = []
 
   constructor() {
     FakeWorker.instance = this
   }
 
-  addEventListener(
-    type: string,
-    listener: (event: { data: { id: number; buffer: ArrayBuffer } }) => void,
-  ) {
-    // prettier-ignore
+  addEventListener(type: string, listener: Listener) {
     if (type === 'message') this.listeners.push(listener)
   }
 
-  postMessage(request: ContourRequest) {
-    this.requests.push(request)
+  postMessage(request: Omit<ContourRequest, 'drawsAtPost'>) {
+    this.requests.push({ ...request, drawsAtPost: perfCounters().drawStatic ?? 0 })
   }
 
-  /** Doručí nejstarší požadavek daného módu jako skutečný worker. */
-  deliver(mode: ContoursMode) {
-    const index = this.requests.findIndex((request) => request.mode === mode)
-    expect(index).toBeGreaterThanOrEqual(0)
-    const [request] = this.requests.splice(index, 1)
+  /** Doručí nejstarší požadavek (všechny jeho módy) jako skutečný worker. */
+  deliver() {
+    const request = this.requests.shift()
+    if (!request) throw new Error('žádný požadavek kontur nečeká')
     const field = new Float32Array(request.buffer)
-    const flat = encodePolylines(computeContourPolylines(field, request.width, request.height, mode)) // prettier-ignore
+    const sets = computeContourPolylinesForModes(field, request.width, request.height, request.modes) // prettier-ignore
+    const buffers = sets.map((polylines) => encodePolylines(polylines).buffer)
     act(() => {
-      for (const listener of this.listeners) listener({ data: { id: request.id, buffer: flat.buffer } }) // prettier-ignore
+      for (const listener of this.listeners) listener({ data: { id: request.id, buffers } })
     })
   }
 }
@@ -84,11 +84,7 @@ function otherMode(grid: HeatmapGrid, factor: number): HeatmapGrid {
 function chart(
   grid: HeatmapGrid,
   contours: ContoursMode,
-  extra: {
-    view?: ViewTransform
-    ghostAnnotations?: AnnotationPayload[]
-    annotationTool?: ActiveTool
-  } = {},
+  extra: { overlays?: OverlayData; ghostAnnotations?: AnnotationPayload[] } = {},
 ) {
   return (
     <CrosshairProvider>
@@ -96,14 +92,13 @@ function chart(
         grid={grid}
         style="gradient"
         contours={contours}
-        overlays={OVERLAYS}
+        overlays={extra.overlays ?? OVERLAYS}
         annotations={ANNOTATIONS}
         minuteLabels={LABELS}
         forwardMarkers={NO_MARKERS}
-        view={extra.view ?? VIEW}
+        view={VIEW}
         onViewChange={() => {}}
         ghostAnnotations={extra.ghostAnnotations}
-        annotationTool={extra.annotationTool ?? null}
       />
     </CrosshairProvider>
   )
@@ -122,50 +117,62 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-test('Mode s konturami Major+flip: statická vrstva se kreslí jednou, až po hladinách i flipu', () => {
+test('Mode s konturami Major+flip: jedna úloha a po jejím doručení jedno kolo drawStatic', () => {
   const first = demoGrid(120, 40)
   const { rerender } = render(chart(first, 'major+flip'))
-  worker().deliver('major')
-  worker().deliver('flip')
+  expect(worker().requests.map((request) => request.modes)).toEqual([['major', 'flip']])
+  worker().deliver()
 
   resetPerf()
   perfBegin('modeScale')
   rerender(chart(otherMode(first, 1.6), 'major+flip'))
-  // Kontury nové mřížky počítá worker: overlay drží poslední kresbu
+  // Hladiny i flip nové mřížky jednou úlohou nad sdíleným blurem
+  expect(worker().requests.map((request) => request.modes)).toEqual([['major', 'flip']])
+  // Data overlay se nezměnila, takže do doručení se statická vrstva nekreslí
   expect(perfCounters().drawStatic ?? 0).toBe(0)
-  worker().deliver('major')
-  expect(perfCounters().drawStatic ?? 0).toBe(0) // flip ještě chybí
   expect(perfCounters().modeScale ?? 0).toBe(0)
-  worker().deliver('flip')
+  worker().deliver()
   expect(perfCounters()).toMatchObject({ drawStatic: 1, modeScale: 1 })
+})
+
+test('úloha kontur odchází před kresbou statické vrstvy (souběžně s ní)', () => {
+  const first = demoGrid(120, 40)
+  const { rerender } = render(chart(first, 'major'))
+  worker().deliver()
+
+  resetPerf()
+  // Nová mřížka s novými daty overlay (jako minutový update): kreslí se hned
+  rerender(chart(otherMode(first, 0.7), 'major', { overlays: {} }))
+  expect(perfCounters().drawStatic).toBe(1)
+  expect(worker().requests).toHaveLength(1)
+  expect(worker().requests[0].drawsAtPost).toBe(0) // úloha odešla dřív než kresba
+  worker().deliver()
+  expect(perfCounters().drawStatic).toBe(2) // po konturách nejvýš jedno kolo
+})
+
+test('nové mřížky s daty se kreslí hned, bez čekání na kontury (přehrávání)', () => {
+  const first = demoGrid(120, 40)
+  const { rerender } = render(chart(first, 'major+flip'))
+  worker().deliver()
+
+  resetPerf()
+  // Tažení pozice přehrávání: každá pozice = nová mřížka a nová data overlay
+  for (const factor of [0.9, 0.8, 0.7]) {
+    rerender(chart(otherMode(first, factor), 'major+flip', { overlays: {} }))
+  }
+  expect(perfCounters().drawStatic).toBe(3)
 })
 
 test('kontury flipu doručené po mřížce překreslí statickou vrstvu (#1530)', () => {
   const first = demoGrid(120, 40)
   const { rerender } = render(chart(first, 'flip'))
-  worker().deliver('flip')
+  worker().deliver()
 
   resetPerf()
   rerender(chart(otherMode(first, 0.5), 'flip'))
   expect(perfCounters().drawStatic ?? 0).toBe(0)
-  worker().deliver('flip')
+  worker().deliver()
   expect(perfCounters().drawStatic).toBe(1)
-})
-
-test('pan během výpočtu kontur kreslí hned, doručení kontur ještě jednou', () => {
-  const first = demoGrid(120, 40)
-  const { rerender } = render(chart(first, 'major'))
-  worker().deliver('major')
-
-  resetPerf()
-  const second = otherMode(first, 1.6)
-  rerender(chart(second, 'major'))
-  expect(perfCounters().drawStatic ?? 0).toBe(0)
-  // Posun pohledu: overlay musí sledovat rastr, i když kontury ještě nejsou
-  rerender(chart(second, 'major', { view: { ...VIEW, offsetX: -40 } }))
-  expect(perfCounters().drawStatic).toBe(1)
-  worker().deliver('major')
-  expect(perfCounters().drawStatic).toBe(2)
 })
 
 test('bez změny scénářů se statická vrstva nepřekresluje, nové scénáře ano (#1530)', () => {
@@ -176,26 +183,17 @@ test('bez změny scénářů se statická vrstva nepřekresluje, nové scénář
   expect(perfCounters().drawStatic ?? 0).toBe(0)
 
   const ghosts: AnnotationPayload[] = [
-    { tool: 'line', color: '#4da3ff', points: [{ minute: 10, strike: 7450 }, { minute: 60, strike: 7470 }] }, // prettier-ignore
+    {
+      tool: 'line',
+      color: '#4da3ff',
+      points: [
+        { minute: 10, strike: 7450 },
+        { minute: 60, strike: 7470 },
+      ],
+    },
   ]
   rerender(chart(grid, 'off', { ghostAnnotations: ghosts }))
   expect(perfCounters().drawStatic).toBe(1)
   rerender(chart(grid, 'off', { ghostAnnotations: ghosts }))
   expect(perfCounters().drawStatic).toBe(1)
-})
-
-test('kreslení anotace během výpočtu kontur se kreslí hned', () => {
-  const first = demoGrid(120, 40)
-  const { rerender } = render(chart(first, 'major', { annotationTool: 'line' }))
-  worker().deliver('major')
-
-  resetPerf()
-  const second = otherMode(first, 1.6)
-  rerender(chart(second, 'major', { annotationTool: 'line' }))
-  expect(perfCounters().drawStatic ?? 0).toBe(0)
-  // Přímá manipulace nečeká na worker (minutový update během kreslení)
-  fireEvent.pointerDown(screen.getByRole('img', { name: 'GEX heatmapa' }), { clientX: 200, clientY: 100 }) // prettier-ignore
-  expect(perfCounters().drawStatic).toBe(1)
-  worker().deliver('major')
-  expect(perfCounters().drawStatic).toBe(2)
 })

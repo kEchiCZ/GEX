@@ -116,6 +116,16 @@ test('rastr per vrstva: Mode s Dyn podkladem přepočítá jen měřenou vrstvu 
   // Styl patří oběma vrstvám
   rerender(view(nextGrid, nextUnder, 'blobs'))
   expect(perfCounters().renderGrid).toBe(7)
+
+  // Vypnutý podklad svůj rastr uvolní: po zapnutí se spočte znovu
+  rerender(
+    <CrosshairProvider>
+      <Heatmap grid={nextGrid} underGrid={null} style="blobs" contours="off" />
+    </CrosshairProvider>,
+  )
+  expect(perfCounters().renderGrid).toBe(7)
+  rerender(view(nextGrid, nextUnder, 'blobs'))
+  expect(perfCounters().renderGrid).toBe(8)
 })
 
 test('Mode/Scale span končí vykreslením mřížky s hotovými konturami', () => {
