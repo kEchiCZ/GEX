@@ -5,6 +5,7 @@ import { buildDailyDay, dayLabel } from './daily'
 import { profileSourceOf } from './loader'
 import { minuteLabel } from './useDayData'
 import { buildBucketPlan } from '../heatmap/buckets'
+import type { PanelSeries } from '../components/BottomPanels'
 import type { DayData } from './useDayData'
 import type { ReplayDay } from './loader'
 import type { PriceBar } from '../heatmap/overlays'
@@ -157,6 +158,29 @@ test('aggregateDay: koš končící v díře přebírá profil poslední minuty 
   const empty = sampleDay()
   empty.profileByMinute = profileSourceOf([[measuredRow], [measuredRow], [], []])
   expect(aggregateDay(empty, 2).profileByMinute!.rowsAt(1)).toEqual([])
+})
+
+test('aggregateDay nese CVD podkladu a popisek „od HH:MM" — žádná řada nevypadne (#1578)', () => {
+  const base = sampleDay()
+  // Required: nové volitelné pole PanelSeries bez doplnění sem neprojde tsc -b,
+  // a když ho aggregateDay vynechá, spadne porovnání klíčů. Sentiment se k řadám
+  // přidává až v App.tsx po agregaci, proto tu není.
+  const panels: Required<Omit<PanelSeries, 'sentiment' | 'sentimentCandles'>> = {
+    ...base.panels,
+    futuresCvd: [null, null, 300, null],
+    evoOiCall: [10, 11, 12, 13],
+    evoOiPut: [20, 21, 22, 23],
+    cumDeltaFromIso: '2026-07-16T15:01:00.000Z',
+  }
+  const day = aggregateDay({ ...base, panels }, 2)
+
+  expect(Object.keys(day.panels).sort()).toEqual(Object.keys(panels).sort())
+  // Koš bez CVD zůstane null (mezera, ne nula); jinak poslední ne-null minuta
+  // koše — kumulativ jako u spotSeries
+  expect(day.panels.futuresCvd).toEqual([null, 300])
+  // Engine startoval uprostřed seance: vlastnost dne, ne koše
+  expect(day.panels.cumDeltaFromIso).toBe('2026-07-16T15:01:00.000Z')
+  expect(day.panels.evoOiCall).toEqual([11, 13])
 })
 
 test('aggregateDay: bucketMinutes 1 vrací originál, neúplný poslední koš se ořeže', () => {

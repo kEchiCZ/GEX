@@ -291,6 +291,16 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-16 — živá linka CVD futures stála až hodinu, v agregaci a playbacku zmizela (#1578), podruhé po #1273.**
+  Engine `futures_cvd` posílal a handler WS ho přijal. Ruční výčty polí ho ale cestou ztratily na třech
+  místech: v `appendMinute` (řádek flow jen s `cum_delta`), v `aggregateDay` a v `slicePanels`.
+  `slicePanels` vynechal i Evo OI. `assembleReplayDay` drží díru poslední hodnotou, proto linka
+  nespadla, jen zamrzla na hodnotě z fetche. Chybu nehlásila konzole ani TypeScript, protože volitelná
+  pole `PanelSeries` výčet tiše vynechá. Na chybu se přišlo inventurou spotřebitelů pro ADR-0057 (#1459).
+  → Přenos řádku kanálu se skládá rozprostřením (`{ ...minute.flow, tsIso }`). Funkce, která
+  přestavuje `PanelSeries` výčtem, potřebuje test se sadou klíčů nad fixture typovaným `Required<…>`.
+  Nové volitelné pole pak bez doplnění do testu neprojde `tsc -b`, je to automatická kontrola místo
+  pravidla. Dnes ho mají `aggregateDay` a `slicePanels`.
 - **2026-10-15 — stráž bloků hledala začátek seance jen v téže partici (#1390), podruhé po #1002.**
   Oprava barů 14.–16. 7. odmítla 5 bloků 00:00–20:59 UTC jako „bez měřené minuty téže seance“, přestože
   bary IBKR U6 seděly na měřené minuty dne s odchylkou 0,000 %. Partice jsou podle UTC dne, seance ale
