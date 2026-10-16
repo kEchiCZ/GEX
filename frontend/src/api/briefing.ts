@@ -10,7 +10,7 @@ import { API_BASE } from '../config'
 import type { DayVerdict, NewsExpectation, TurnLevel, TypicalReaction, VerdictKind, VerdictVote } from '../instrument/daysummary' // prettier-ignore
 import { TIMEFRAMES } from '../instrument/trend'
 import type { Candle, TimeframeKey, TrendReport } from '../instrument/trend'
-import { zonedTimeUtc } from '../instrument/tz'
+import { isTradingSessionIso, zonedTimeUtc } from '../instrument/tz'
 
 export interface BarRow {
   ts_min: string
@@ -106,6 +106,7 @@ export async function fetchTypicalReactions(symbol: string): Promise<TypicalReac
 }
 
 /** Uloží verdikt dne (#1090) — jeden řádek per seance a symbol, přepis idempotentní.
+Od US openu API zápis odmítne (409, #1585), proto se volá jen při `verdictWritable`.
 Chyba se polyká: karta má žít i bez DB, vyhodnocení (#1091) pak den prostě nemá. */
 export async function postVerdict(payload: {
   session_date: string
@@ -377,6 +378,14 @@ export async function fetchEmRespectSummary(symbol: string): Promise<EmRespectSu
 export function usOpenMs(dateIso: string): number {
   const [year, month, day] = dateIso.split('-').map(Number)
   return zonedTimeUtc('America/New_York', year, month, day, 9, 30)
+}
+
+/** Smí Briefing uložit verdikt seance? Jen obchodní den (víkend a svátek nemají
+US open ani settle, #1309) a jen před US openem: od openu se hodnotí pohyb
+open → settle a API zápis odmítne (409, #1585). Rozhoduje server, tohle jen
+šetří POST, který by neprošel. */
+export function verdictWritable(dateIso: string, nowMs: number): boolean {
+  return isTradingSessionIso(dateIso) && nowMs < usOpenMs(dateIso)
 }
 
 export interface RangeSummary {

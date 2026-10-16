@@ -105,7 +105,7 @@ test('karta Trend (#1089): směr per timeframe a čtení shora dolů', async () 
 })
 
 test('Shrnutí dne (#1090): verdikt z hlasování, úrovně obratu, zprávy s reakcí, uložení', async () => {
-  freezeDate('2026-09-24T15:00:00Z') // čtvrtek v seanci
+  freezeDate('2026-09-24T12:00:00Z') // čtvrtek v seanci před US openem (13:30 UTC)
   const rising = risingCandles(60)
   mockApis({
     candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising },
@@ -139,7 +139,7 @@ test('Shrnutí dne (#1090): verdikt z hlasování, úrovně obratu, zprávy s re
 })
 
 test('verdikt se přepíše, když se změní hlasy i při stejném skóre (#1090)', async () => {
-  freezeDate('2026-09-24T15:00:00Z') // čtvrtek v seanci
+  freezeDate('2026-09-24T12:00:00Z') // čtvrtek v seanci před US openem (13:30 UTC)
   const rising = risingCandles(60)
   // 1. render: bez levels → gamma „bez dat"; skóre = trend 3 + tendence 0 = 3
   mockApis({
@@ -185,6 +185,22 @@ test('verdikt se přepíše, když se změní hlasy i při stejném skóre (#109
     },
     { timeout: 6_000 },
   )
+})
+
+test('po US openu se verdikt dne neukládá — hodnotí se pohyb od openu (#1585)', async () => {
+  freezeDate('2026-09-24T15:00:00Z') // čtvrtek, 1,5 h po US openu
+  const rising = risingCandles(60)
+  mockApis({ candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising } })
+  render(<BriefingView />)
+  // Verdikt se dál zobrazuje, jen se neposílá (API by zápis odmítlo 409)
+  await waitFor(() => {
+    expect(screen.getByTestId('summary-verdict').textContent).toBe('Spíše LONG den')
+  })
+  await new Promise((resolve) => setTimeout(resolve, 2_500))
+  const posts = fetchMock.mock.calls.filter(
+    (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
+  )
+  expect(posts).toHaveLength(0)
 })
 
 test('o víkendu se verdikt dne neukládá — sobota nemá US open ani settle (#1309)', async () => {

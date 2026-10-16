@@ -7,6 +7,7 @@ import {
   latestLevels,
   previousStoredDay,
   usOpenMs,
+  verdictWritable,
 } from './briefing'
 import type { BarRow, LevelsRow } from './briefing'
 
@@ -48,6 +49,34 @@ describe('usOpenMs', () => {
 
   it('9:30 New York = 14:30 UTC v zimě (EST)', () => {
     expect(new Date(usOpenMs('2026-01-15')).toISOString()).toBe('2026-01-15T14:30:00.000Z')
+  })
+})
+
+describe('verdictWritable (#1585)', () => {
+  const at = (iso: string) => new Date(iso).getTime()
+
+  it('obchodní den jen před US openem — od openu se verdikt hodnotí, API vrací 409', () => {
+    expect(verdictWritable('2026-09-24', at('2026-09-24T13:29:59Z'))).toBe(true)
+    expect(verdictWritable('2026-09-24', at('2026-09-24T13:30:00Z'))).toBe(false)
+    expect(verdictWritable('2026-09-24', at('2026-09-24T20:25:00Z'))).toBe(false) // po settle
+  })
+
+  it('v zimě je open 14:30 UTC — pevná 13:30 by zápis uťala o hodinu dřív', () => {
+    expect(verdictWritable('2026-11-02', at('2026-11-02T14:29:00Z'))).toBe(true)
+    expect(verdictWritable('2026-11-02', at('2026-11-02T14:30:00Z'))).toBe(false)
+  })
+
+  it('víkend a svátek NYSE ne (#1309); nedělní večer po otevření Globexu pondělí ano', () => {
+    expect(verdictWritable('2026-09-26', at('2026-09-26T08:00:00Z'))).toBe(false)
+    expect(verdictWritable('2026-09-27', at('2026-09-27T08:00:00Z'))).toBe(false)
+    expect(verdictWritable('2026-11-26', at('2026-11-26T08:00:00Z'))).toBe(false) // Thanksgiving
+    expect(verdictWritable('2026-09-28', at('2026-09-27T22:05:00Z'))).toBe(true)
+  })
+
+  it('pondělí ráno: páteční seance je zmrazená, pondělní ne', () => {
+    const mondayMorning = at('2026-10-05T13:00:00Z')
+    expect(verdictWritable('2026-10-02', mondayMorning)).toBe(false)
+    expect(verdictWritable('2026-10-05', mondayMorning)).toBe(true)
   })
 })
 
