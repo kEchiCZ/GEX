@@ -78,7 +78,8 @@ backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod
      a kontra-režim 30 min) — rozdíl přes mezeru je neúplný. T2 mimo kontra-režim, T3 a T7 běží.
    - Tendence: hlasy sklon CumΔ a divergence při neúplném okně nehlasují. Sklon počítá jedna
      čistá funkce „Σ flowΔ za 10 min v seanci" v `compute/`; volá ji tendence i news-engine
-     (DRY; precedens ADR-0045 bod 5).
+     (DRY; precedens ADR-0045 bod 5). Okno nepřekročí začátek seance — dnešní sklon přes reset
+     v 17:00 CT je nález #1581.
    - news-engine: chybějící sklon = noha COMBINED nepodporuje (flip může), cyklus nespadne.
    - FA vrstva (oiest, levelsfa, gexprofilefa, gexfieldfa) se v mezeře nepíše; frontend
      poslední FA profil nedrží a OI matici nepřepíná potichu na měřené.
@@ -106,7 +107,7 @@ backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod
 6. **FA odhad OI a α (vlastník 16. 10., varianta A).** Tisky dostává i tracker sekundárního
    řetězu — jeho `TimeAndSale` už odebírá účel `chain`, takže 0 položek tasty navíc a 0 ze 100
    IBKR lines. Kalibrace bere expiraci, která byla celou seanci D sekundárem (oprava pasti D+2,
-   nález NALEZ_D2), a den s mezerou trade větve za otevřeného trhu bod nedá. Při bumpu se α
+   nález #1580), a den s mezerou trade větve za otevřeného trhu bod nedá. Při bumpu se α
    resetuje (jiná veličina; historie zůstává a nese zdroj), FA je vypnutá se stavem
    „nekalibrováno n/5", dokud nemá ≥ 5 platných dnů; výchozí α 0 místo 0,4. Zpětná kalibrace
    z recorderu `data/trades` běží jen na sucho jako podklad prahů. Vědomý limit: net nese jen
