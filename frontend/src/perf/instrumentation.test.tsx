@@ -9,6 +9,7 @@ import { BottomPanels } from '../components/BottomPanels'
 import { Heatmap } from '../components/Heatmap'
 import { StrikeProfile } from '../components/StrikeProfile'
 import { demoGrid } from '../heatmap/demo'
+import type { HeatmapGrid } from '../heatmap/grid'
 import { CrosshairProvider } from '../state/Crosshair'
 import { assembleReplayDay, fetchReplayInputs } from '../replay/loader'
 import { perfBegin, perfCounters, resetPerf, setPerfEnabled } from './meter'
@@ -87,6 +88,44 @@ test('Heatmap: rastr a obě vrstvy overlay se počítají deterministicky', () =
     </CrosshairProvider>,
   )
   expect(perfCounters()).toEqual({ renderHeatmap: 2, renderGrid: 1, drawStatic: 2, drawDynamic: 2 })
+})
+
+test('rastr per vrstva: Mode s Dyn podkladem přepočítá jen měřenou vrstvu (#1420)', () => {
+  const grid = demoGrid(100, 10)
+  const signedOf = (seed: number) =>
+    Float32Array.from({ length: grid.minutes * grid.strikes.length }, (_, i) => Math.sin(i / seed))
+  const under: HeatmapGrid = { ...grid, layers: { signed: signedOf(7) }, staleAge: null }
+  const view = (measured: HeatmapGrid, underlay: HeatmapGrid, style: 'gradient' | 'blobs') => (
+    <CrosshairProvider>
+      <Heatmap grid={measured} underGrid={underlay} style={style} contours="off" />
+    </CrosshairProvider>
+  )
+  const { rerender } = render(view(grid, under, 'gradient'))
+  expect(perfCounters().renderGrid).toBe(2)
+
+  // Mode: nová měřená mřížka, podklad se nemění
+  rerender(view({ ...grid, layers: { call: grid.layers.put, put: grid.layers.call } }, under, 'gradient')) // prettier-ignore
+  expect(perfCounters().renderGrid).toBe(3)
+
+  // Nová data dne: nové obě mřížky, tedy oba rastry (invalidace cache)
+  const nextGrid = demoGrid(100, 10)
+  const nextUnder: HeatmapGrid = { ...nextGrid, layers: { signed: signedOf(9) }, staleAge: null }
+  rerender(view(nextGrid, nextUnder, 'gradient'))
+  expect(perfCounters().renderGrid).toBe(5)
+
+  // Styl patří oběma vrstvám
+  rerender(view(nextGrid, nextUnder, 'blobs'))
+  expect(perfCounters().renderGrid).toBe(7)
+
+  // Vypnutý podklad svůj rastr uvolní: po zapnutí se spočte znovu
+  rerender(
+    <CrosshairProvider>
+      <Heatmap grid={nextGrid} underGrid={null} style="blobs" contours="off" />
+    </CrosshairProvider>,
+  )
+  expect(perfCounters().renderGrid).toBe(7)
+  rerender(view(nextGrid, nextUnder, 'blobs'))
+  expect(perfCounters().renderGrid).toBe(8)
 })
 
 test('Mode/Scale span končí vykreslením mřížky s hotovými konturami', () => {

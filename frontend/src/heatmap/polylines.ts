@@ -17,58 +17,106 @@ export interface Polyline {
 
 const QUANT = 1000
 
-function keyOf(x: number, y: number): string {
-  return `${Math.round(x * QUANT)}|${Math.round(y * QUANT)}`
-}
+/** Spojí úsečky do polylinií podle sdílených koncových bodů.
 
-/** Spojí úsečky do polylinií podle sdílených koncových bodů. */
+Klíč kvantovaného bodu je jedno číslo (#1420). Dřív to byl řetězec `x|y`
+a jeho stavba, hashování a zpětné parsování stály u 10 tisíc úseček desítky
+ms. Kódování je prosté: složka se posune o minimum v datech a y se vejde pod
+násobitel řádku, takže se spojí přesně tytéž body jako s řetězci. Složka NaN
+(pole s NaN) má vlastní hodnotu jako dřív „NaN“ v řetězci. */
 export function joinSegments(segments: Segment[]): Polyline[] {
   if (segments.length === 0) return []
-  // Graf: klíč bodu → indexy úseček, které v něm končí
-  const adjacency = new Map<string, number[]>()
-  const endpoints: [string, string][] = []
-  segments.forEach(([x1, y1, x2, y2], index) => {
-    const a = keyOf(x1, y1)
-    const b = keyOf(x2, y2)
-    endpoints.push([a, b])
-    for (const key of [a, b]) {
-      const list = adjacency.get(key)
-      if (list) list.push(index)
-      else adjacency.set(key, [index])
+  // Kvantované složky koncových bodů [x1, y1, x2, y2] a jejich rozsah
+  const quantized = new Float64Array(segments.length * 4)
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index]
+    for (let part = 0; part < 4; part += 1) {
+      const value = Math.round(segment[part] * QUANT)
+      quantized[index * 4 + part] = value
+      if (Number.isNaN(value)) continue
+      // Marching squares nekonečnou souřadnici nevyrobí (interpolace dá nejvýš NaN)
+      if (!Number.isFinite(value)) throw new Error(`joinSegments: nekonečná souřadnice úsečky ${index}`) // prettier-ignore
+      if (part % 2 === 0) {
+        minX = Math.min(minX, value)
+        maxX = Math.max(maxX, value)
+      } else {
+        minY = Math.min(minY, value)
+        maxY = Math.max(maxY, value)
+      }
     }
-  })
+  }
+  // Složka jen s NaN: prázdný rozsah, NaN dostane hodnotu 0
+  if (minX > maxX) [minX, maxX] = [0, -1]
+  if (minY > maxY) [minY, maxY] = [0, -1]
+  const nanColumn = maxX - minX + 1
+  const nanRow = maxY - minY + 1
+  const rowStride = nanRow + 1
+  if ((nanColumn + 1) * rowStride > Number.MAX_SAFE_INTEGER) {
+    throw new Error('joinSegments: rozsah souřadnic přesahuje přesná celá čísla')
+  }
+  const keyOf = (x: number, y: number): number =>
+    (Number.isNaN(x) ? nanColumn : x - minX) * rowStride + (Number.isNaN(y) ? nanRow : y - minY)
+
+  // Graf: klíč bodu → indexy úseček, které v něm končí
+  const adjacency = new Map<number, number[]>()
+  const endpoints = new Float64Array(segments.length * 2)
+  const link = (key: number, index: number) => {
+    const list = adjacency.get(key)
+    if (list) list.push(index)
+    else adjacency.set(key, [index])
+  }
+  for (let index = 0; index < segments.length; index += 1) {
+    const base = index * 4
+    const a = keyOf(quantized[base], quantized[base + 1])
+    const b = keyOf(quantized[base + 2], quantized[base + 3])
+    endpoints[index * 2] = a
+    endpoints[index * 2 + 1] = b
+    link(a, index)
+    link(b, index)
+  }
   const used = new Uint8Array(segments.length)
   const polylines: Polyline[] = []
 
-  const walk = (startIndex: number, startKey: string): { keys: string[]; closed: boolean } => {
+  const walk = (startIndex: number, startKey: number): { keys: number[]; closed: boolean } => {
     const keys = [startKey]
     let index = startIndex
     let key = startKey
     for (;;) {
       used[index] = 1
-      const [a, b] = endpoints[index]
-      const next = a === key ? b : a
+      const a = endpoints[index * 2]
+      const next = a === key ? endpoints[index * 2 + 1] : a
       keys.push(next)
-      const candidates = adjacency.get(next) ?? []
-      const following = candidates.find((candidate) => !used[candidate])
-      if (following === undefined) {
-        return { keys, closed: next === startKey }
+      let following = -1
+      for (const candidate of adjacency.get(next) ?? []) {
+        if (!used[candidate]) {
+          following = candidate
+          break
+        }
       }
+      if (following < 0) return { keys, closed: next === startKey }
       index = following
       key = next
     }
   }
 
-  const coordsOf = (key: string): [number, number] => {
-    const [x, y] = key.split('|').map(Number)
-    return [x / QUANT, y / QUANT]
-  }
-  const emit = (keys: string[], closed: boolean) => {
+  const emit = (keys: number[], closed: boolean) => {
     const points: number[] = []
     const last = closed ? keys.length - 1 : keys.length
     for (let index = 0; index < last; index += 1) {
-      const [x, y] = coordsOf(keys[index])
-      points.push(x, y)
+      const key = keys[index]
+      // Celočíselné dělení klíče, s korekcí zaokrouhlení podílu u velkých klíčů
+      let column = Math.floor(key / rowStride)
+      let row = key - column * rowStride
+      if (row < 0) [column, row] = [column - 1, row + rowStride]
+      else if (row >= rowStride) [column, row] = [column + 1, row - rowStride]
+      points.push(
+        column === nanColumn ? NaN : (column + minX) / QUANT,
+        row === nanRow ? NaN : (row + minY) / QUANT,
+      )
     }
     if (points.length >= 4) polylines.push({ points, closed })
   }
@@ -83,7 +131,7 @@ export function joinSegments(segments: Segment[]): Polyline[] {
   }
   for (let index = 0; index < segments.length; index += 1) {
     if (used[index]) continue
-    const { keys, closed } = walk(index, endpoints[index][0])
+    const { keys, closed } = walk(index, endpoints[index * 2])
     emit(keys, closed)
   }
   return polylines

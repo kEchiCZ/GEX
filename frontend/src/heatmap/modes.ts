@@ -7,6 +7,7 @@ OTM: call K > S, put K < S; ITM je doplněk (ATM buňka patří do ITM vrstvy).
 */
 import { perfEnd, perfStart } from '../perf/meter'
 import type { HeatmapGrid } from './grid'
+import { selectKth } from './select'
 
 export const HEATMAP_MODES = [
   { value: 'oi', label: 'OI' },
@@ -122,29 +123,7 @@ export function p99Denominator(values: Float32Array): number {
     const value = Math.abs(values[index])
     magnitudes[index] = Number.isFinite(value) ? value : 0
   }
-  const target = Math.max(0, Math.ceil(0.99 * count) - 1)
-  let low = 0
-  let high = count - 1
-  while (low < high) {
-    const pivot = magnitudes[(low + high) >> 1]
-    let left = low
-    let right = high
-    while (left <= right) {
-      while (magnitudes[left] < pivot) left += 1
-      while (magnitudes[right] > pivot) right -= 1
-      if (left <= right) {
-        const swap = magnitudes[left]
-        magnitudes[left] = magnitudes[right]
-        magnitudes[right] = swap
-        left += 1
-        right -= 1
-      }
-    }
-    if (target <= right) high = right
-    else if (target >= left) low = left
-    else break // cíl padl mezi oddíly — na své pozici už je hledaná hodnota
-  }
-  return magnitudes[target]
+  return selectKth(magnitudes, Math.max(0, Math.ceil(0.99 * count) - 1))
 }
 
 /** Forward-fill spotů; minuty před první hodnotou dostanou první známý spot. */

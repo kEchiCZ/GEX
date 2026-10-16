@@ -126,6 +126,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 2. Diagnostika (zastavil jsem se u první hypotézy)
 
+- **2026-10-16 — zadání opravy výkonu mířilo na neměřenou část (#1420).** Přepnutí Mode/Scale
+  s konturami trvalo na 1m 155–165 ms (p95) a zadání předepsalo cache rastrů a jediné kolo
+  `drawStatic`, dohromady úspora ~15 ms. Rozpad po fázích (Node, pole 80 × 1 320) ukázal, že kontury
+  ve workeru trvají 61–131 ms: p99 prahu přes plné řazení JS pole 22–34 ms (tentýž vzorec jako #142
+  v `modes.ts`) a řetězcové klíče napojení úseček 5–22 ms. Měřič čas workeru nevidí. → Před opravou
+  výkonu rozložit čas cílové operace po fázích, i mimo měřič; kvantil přes `selectKth`
+  (`heatmap/select.ts`), ne `.sort()`.
+
 - **2026-10-12 — měření snímků v zakrytém okně Chrome: rAF stojí a čísla nic neznamenají (#1412).**
   Na Windows hlásí Chrome celé zakryté okno jako `visibilityState: hidden` a rAF zastaví. Částečně
   zakryté okno kreslí normálně. Pan v okně zakrytém terminálem trval 155 s místo 9 s, s pokrytím

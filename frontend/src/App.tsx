@@ -695,7 +695,13 @@ function MainContent() {
     const load = () => {
       void fetchScenarios(symbol, 20).then((rows) => {
         if (cancelled) return
-        setOpenScenarios(rows.filter((row) => row.evaluated_at === null && row.day === today))
+        const open = rows.filter((row) => row.evaluated_at === null && row.day === today)
+        // Beze změny obsahu zůstává předchozí pole (#1530): duchové scénářů jsou
+        // v závislostech statické vrstvy grafu a nová identita každou minutu
+        // by ji zbytečně překreslovala
+        setOpenScenarios((previous) =>
+          JSON.stringify(previous) === JSON.stringify(open) ? previous : open,
+        )
       })
     }
     load()
