@@ -18,7 +18,12 @@ from gexlens_engine.compute.dayverdict import (
 from gexlens_engine.compute.settle import settle_ts, us_open_ts
 from gexlens_engine.compute.trend import Candle, assess_trends, ema, find_pivots
 from gexlens_engine.runtime import EngineRuntime
-from gexlens_engine.scenario_auto import ScenarioGenerator, gather_context
+from gexlens_engine.scenario_auto import (
+    PreOpenVerdict,
+    ScenarioGenerator,
+    gather_context,
+    verdict_input,
+)
 from gexlens_engine.storage.parquet_store import LevelsRow
 from gexlens_engine.storage.scenarios_store import ScenariosRepository
 
@@ -268,6 +273,16 @@ def _runtime(session: dt.date) -> EngineRuntime:
     return runtime
 
 
+def _pre_open(
+    api: "FakeApi", session: dt.date, now: dt.datetime, spot: float, *, complete: bool = True
+) -> PreOpenVerdict:
+    """Verdikt minuty, jak ho scénáři předá zapisovač (#1595 d1)."""
+    runtime = _runtime(session)
+    ctx = asyncio.run(gather_context(api, "ES", runtime.expiry, session, now))  # type: ignore[arg-type]
+    verdict = day_verdict(verdict_input(ctx, spot, runtime))
+    return PreOpenVerdict(verdict=verdict, context=ctx, spot=spot, complete=complete)
+
+
 class _Publisher:
     def __init__(self) -> None:
         self.alerts: list[dict[str, Any]] = []
@@ -283,11 +298,13 @@ def test_generator_zalozi_auto_scenar_jednou_pred_openem(tmp_path: Path) -> None
     api = _verdict_api(SESSION, dt.date(2026, 9, 14))
     runtime = _runtime(SESSION)
     publisher = _Publisher()
-    generator = ScenarioGenerator("ES", repo, api, publisher, minutes_before_open=15)  # type: ignore[arg-type]
-    # Před oknem nic; v okně jeden scénář; po openu už ne (a ne podruhé po restartu)
-    asyncio.run(generator.on_minute(OPEN - dt.timedelta(minutes=30), 7590.0, runtime))
+    generator = ScenarioGenerator("ES", repo, publisher, minutes_before_open=15)
+    # Před oknem nic (ani s verdiktem zapisovače); v okně jeden scénář; ne podruhé po restartu
+    early = OPEN - dt.timedelta(minutes=30)
+    asyncio.run(generator.on_minute(early, _pre_open(api, SESSION, early, 7590.0), runtime))
     assert repo.list_for("ES") == []
-    asyncio.run(generator.on_minute(OPEN - dt.timedelta(minutes=10), 7590.0, runtime))
+    now = OPEN - dt.timedelta(minutes=10)
+    asyncio.run(generator.on_minute(now, _pre_open(api, SESSION, now, 7590.0), runtime))
     rows = repo.list_for("ES")
     assert len(rows) == 1
     row = rows[0]
@@ -299,9 +316,44 @@ def test_generator_zalozi_auto_scenar_jednou_pred_openem(tmp_path: Path) -> None
     assert alerts and alerts[0]["kind"] == "scenario_created" and "SHORT" in alerts[0]["message"]
     # ONH/ONL jen z barů před openem (bar po openu s low 7500 se nepočítá)
     assert row.targets[0] == 7576.75
-    fresh = ScenarioGenerator("ES", repo, api, _Publisher(), minutes_before_open=15)  # type: ignore[arg-type]
-    asyncio.run(fresh.on_minute(OPEN - dt.timedelta(minutes=5), 7590.0, runtime))
+    fresh = ScenarioGenerator("ES", repo, _Publisher(), minutes_before_open=15)
+    later = OPEN - dt.timedelta(minutes=5)
+    asyncio.run(fresh.on_minute(later, _pre_open(api, SESSION, later, 7590.0), runtime))
     assert len(repo.list_for("ES")) == 1
+
+
+def test_generator_ceka_na_uplny_verdikt_zapisovace(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1595 d1: minuta bez verdiktu nebo s neúplným (výpadek API) scénář jen odloží;
+    vznikne v první minutě okna s úplným verdiktem. Neúplný až do openu = bez scénáře."""
+    db = create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}")
+    repo = ScenariosRepository(db)
+    repo.ensure_schema()
+    api = _verdict_api(SESSION, dt.date(2026, 9, 14))
+    runtime = _runtime(SESSION)
+    generator = ScenarioGenerator("ES", repo, _Publisher(), minutes_before_open=15)
+    first = OPEN - dt.timedelta(minutes=15)
+    asyncio.run(generator.on_minute(first, None, runtime))
+    incomplete = _pre_open(api, SESSION, first, 7590.0, complete=False)
+    asyncio.run(generator.on_minute(first, incomplete, runtime))
+    assert repo.list_for("ES") == []
+    second = first + dt.timedelta(minutes=1)
+    asyncio.run(generator.on_minute(second, _pre_open(api, SESSION, second, 7590.0), runtime))
+    (row,) = repo.list_for("ES")
+    assert row.rationale is not None and row.rationale["verdict"] == "short"
+    # Jiný symbol: neúplný verdikt i v poslední minutě před openem → varování, bez scénáře
+    other = ScenarioGenerator("NQ", repo, _Publisher(), minutes_before_open=15)
+    last = OPEN - dt.timedelta(minutes=1)
+    with caplog.at_level("INFO", logger="gexlens_engine.scenario_auto"):
+        asyncio.run(
+            other.on_minute(last, _pre_open(api, SESSION, last, 7590.0, complete=False), runtime)
+        )
+    assert repo.list_for("NQ") == []
+    assert any(
+        record.levelname == "WARNING" and "dnes nevznikne" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_generator_o_vikendu_scenar_nezalozi_v_pondeli_ano(tmp_path: Path) -> None:
@@ -313,22 +365,23 @@ def test_generator_o_vikendu_scenar_nezalozi_v_pondeli_ano(tmp_path: Path) -> No
     friday = dt.date(2026, 9, 25)
     saturday, sunday, monday = (friday + dt.timedelta(days=offset) for offset in (1, 2, 3))
     publisher = _Publisher()
-    weekend_api = _verdict_api(sunday, friday)
-    generator = ScenarioGenerator("ES", repo, weekend_api, publisher, minutes_before_open=15)  # type: ignore[arg-type]
-    # Sobota i neděle v okně [open − 15 min, open): bez scénáře, bez alertu, bez dotazu na API
+    generator = ScenarioGenerator("ES", repo, publisher, minutes_before_open=15)
+
+    def minute(day: dt.date, now: dt.datetime) -> None:
+        pre_open = _pre_open(_verdict_api(day, friday), day, now, 7590.0)
+        asyncio.run(generator.on_minute(now, pre_open, _runtime(day)))
+
+    # Sobota i neděle v okně [open − 15 min, open): ani s úplným verdiktem scénář ani alert
+    # (zapisovač o víkendu verdikt nepočítá — test_verdict_writer)
     for day in (saturday, sunday):
         fire_at = us_open_ts(day) - dt.timedelta(minutes=15)
         for offset in (0, 10):
-            now = fire_at + dt.timedelta(minutes=offset)
-            asyncio.run(generator.on_minute(now, 7590.0, _runtime(day)))
-    sunday_1515_cest = dt.datetime(2026, 9, 27, 13, 15, tzinfo=dt.UTC)
-    asyncio.run(generator.on_minute(sunday_1515_cest, 7590.0, _runtime(sunday)))
+            minute(day, fire_at + dt.timedelta(minutes=offset))
+    minute(sunday, dt.datetime(2026, 9, 27, 13, 15, tzinfo=dt.UTC))  # 15:15 CEST
     assert repo.list_for("ES") == []
-    assert publisher.alerts == [] and weekend_api.calls == []
+    assert publisher.alerts == []
     # Pondělí 28. 9. 15:15 CEST: týž generátor scénář založí, termín = settle pondělí
-    generator.api = _verdict_api(monday, friday)  # type: ignore[assignment]
-    monday_1515_cest = dt.datetime(2026, 9, 28, 13, 15, tzinfo=dt.UTC)
-    asyncio.run(generator.on_minute(monday_1515_cest, 7590.0, _runtime(monday)))
+    minute(monday, dt.datetime(2026, 9, 28, 13, 15, tzinfo=dt.UTC))
     rows = repo.list_for("ES")
     assert len(rows) == 1
     assert rows[0].day == monday and rows[0].deadline == monday

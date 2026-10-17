@@ -137,7 +137,9 @@ backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod
    zdroj CumΔ je dohledatelný i z feature logu. Panel Cum Δ dny před v6 nekreslí — mezera
    s důvodem „midpoint, obrácené znaménko (#1018)", linka CVD futures zůstává. Data v `derived/`
    se nemažou ani nepřepisují. (*odvozeno:* engine a frontend se nasazují a vracejí pinem
-   společně — verze verdiktu a skrytí historie stojí na obou.)
+   společně — verze verdiktu a skrytí historie stojí na obou.) Od #1595 verdikt počítá
+   a zapisuje jen engine (ADR-0035 dodatek 2026-10-17): `VERDICT_RULES_VERSION` 4 se bumpuje
+   v enginu, frontend verzi verdiktu nenese.
 9. **Tendence v E-0.12 (vlastník 16. 10., varianta A).** Sklon CumΔ a divergence se z revize vah
    nad midpointem (#1113) vyřazují a měří se offline ze stínu (21. 9.–dnes, RTH, bootstrap po
    dnech). „Signál" NQ RTH z #394 (sklon +0,108, divergence +0,096) stál na midpointu, tedy na

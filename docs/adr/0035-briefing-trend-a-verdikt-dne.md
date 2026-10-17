@@ -2,7 +2,7 @@
 
 **Stav:** navrženo (2026-09-09, issues #1089, #1090, #1091 — zadal uživatel; pravidla
 a váhy níže jsou volba implementace, čeká na potvrzení, PR nesou `needs-decision`).
-Implementováno: §1–2 v PR #1092 (#1089), §3–4 v PR #1093 (#1090); vyhodnocení §3 = #1091 (engine doplní po settle výsledek US open → settle v bodech i EM, `GET /briefing/verdicts/stats`, karta ve Stats; brána n ≥ 30, pak návrh vah); zmrazení verdiktu od US openu = #1585.
+Implementováno: §1–2 v PR #1092 (#1089), §3–4 v PR #1093 (#1090); vyhodnocení §3 = #1091 (engine doplní po settle výsledek US open → settle v bodech i EM, `GET /briefing/verdicts/stats`, karta ve Stats; brána n ≥ 30, pak návrh vah); zmrazení verdiktu od US openu = #1585; verdikt počítá a zapisuje jen engine = #1595 (dodatek 2026-10-17).
 **Kontext:** Briefing (#674) říká TYP dne (gamma režim, volatilita), ale ne **v jakém
 trendu trh je**, a nenabízí odpověď na „čekat spíš long, nebo short den". SPEC v2.0
 pojem trendu podkladu nezná — jediné směrové čtení je indikátor tendence (#350),
@@ -56,7 +56,8 @@ se **ukládá** (`briefing_verdicts`: seance, symbol, skóre, hlasy, verze pravi
 aby šel vyhodnotit proti průběhu seance (#1091). Bez uložení by šlo o názor bez
 zpětné vazby — to projekt nedělá (srov. ADR-0033, ADR-0034). *Od US openu je verdikt
 zmrazený: API zápis i založení odmítne (409), frontend po openu neposílá (#1585, vlastník
-16. 10.); zápis z enginu v open − N (varianta D) je otázka triáže.*
+16. 10.); zápis z enginu v open − N (varianta D) je otázka triáže.* → Rozhodnuto 17. 10.:
+zapisuje jen engine, POST odstraněn (dodatek 2026-10-17, #1595).
 
 ### 4. Úrovně obratu a zprávy dne
 Jeden seznam úrovní seřazený podle vzdálenosti od ceny: gamma (flip, zdi,
@@ -67,7 +68,61 @@ naměřených reakcí téže kategorie (ADR-0031); pod 10 měření „bez měř
 
 ## Důsledky
 - Nový endpoint `/candles` (SPEC kap. 6); frontend `instrument/trend.ts`
-  a `instrument/daysummary.ts` jsou čisté funkce s testy.
+  a `instrument/daysummary.ts` jsou čisté funkce s testy (hlasování verdiktu z `daysummary.ts`
+  od #1595 zaniklo — verdikt počítá jen engine, viz dodatek 2026-10-17).
 - Karta Trend a karta Shrnutí dne v Briefingu; plán do deníku nese tytéž řádky.
 - Verdikt je heuristika. Manuál to říká výslovně a odkazuje na vyhodnocení (#1091);
   do té doby se váhy nemění bez ADR dodatku.
+
+## Dodatek 2026-10-17: verdikt dne počítá a zapisuje jen engine (#1595)
+
+**Stav:** přijato (vlastník 17. 10. 2026, #1595; #1385 Rozhodnuto).
+
+Do #1595 verdikt §3 počítal a přes `POST /briefing/verdicts` ukládal frontend, a to jen při
+otevřeném Briefingu — řádek seance vznikl, jen když ho někdo před openem otevřel. Engine měl
+pro automatický scénář (#1173) vlastní port pravidel (`compute/dayverdict`) s jinými vstupy:
+PDC, cena, expirace i počty svíček se lišily. PDC frontendu (poslední Globex bar 16:59 ET) se
+12.–16. 10. lišilo od RTH close až o 6,25 b. (ES) a 62,75 b. (NQ) a ve 2 z 10 seancí dalo
+opačný hlas overnight; v pondělí PDC nemělo vůbec (nedělní partice, #1596).
+
+1. **Kdo zapisuje:** jen engine — `DayVerdictWriter` (`verdict_writer.py`) v minutovém cyklu
+   každého symbolu s pipeline (`GET /status` → `symbols`). `POST /briefing/verdicts` je
+   odstraněn (405); API verdikt jen čte (`GET /briefing/verdicts`, `/stats`). Briefing ukazuje
+   uložený řádek a nic nepočítá; bez řádku ukáže stav (mezeru), žádný náhradní výpočet.
+   Symbol bez pipeline (ad-hoc pohled, symbol nad limitem instrumentů) verdikt nemá.
+2. **Kadence (a1):** v obchodní seanci od jejího začátku (17:00 CT předchozího dne) do US openu
+   9:30 ET — do open − 15 min každých 5 min (minuty :00, :05, …), v [open − 15 min, open)
+   každou minutu. Upsert jednoho řádku (`session_date`, `symbol`): `created_at` = první zápis,
+   `updated_at` = poslední; **platí poslední stav před openem**.
+3. **Stráž:** `settle.verdict_writable(session, now)` = `is_trading_session(session)` ∧
+   now < `us_open_ts(session)` — jediná stráž zápisu verdiktu. Ověřuje ji úložiště
+   (`BriefingVerdictRepository.upsert_verdict`) skutečným časem zápisu, ne minutou cyklu
+   (cyklus 9:29 může doběhnout po openu). Od openu se řádek nemění; `outcome_*` doplní
+   `BriefingVerdictCollector` po settle + 15 min. Víkend a svátek NYSE: žádný řádek.
+4. **Neúplný výpočet** (selhalo čtení API, runtime nemá levels nebo tendenci — třeba první
+   minuta po restartu) uloží řádek jen tehdy, když žádný není; úplný řádek nepřepíše. Bez
+   platné ceny (≤ 0, NaN) se minuta nezapíše. Čtení vstupů z API má strop 20 s (běžně ~2,4 s
+   na symbol); po něm se minuta nezapíše — visící API nesmí zdržet minutový cyklus sběru dat.
+5. **Vstupy (b)** — definice, kterou tabulka §3 nedávala:
+   - PDC („včerejší close") = RTH close předchozí obchodní seance: close posledního 1m baru
+     před settle 16:00 ET, při zkrácené seanci 13:00 ET (#1241 bod 5);
+   - cena = živý spot enginu (IBKR last, fallback tasty);
+   - gamma a ΔOI z aktivní expirace enginu (`runtime.expiry`), ne z volby v hlavičce Briefingu;
+   - svíčky trendu **W 80 / D 120 / 240 120 / 60 120 / 15 120** — jedna tabulka pro engine
+     (`scenario_auto.CANDLE_LIMITS`) i kartu Trend (`frontend/src/api/briefing.ts`); délka okna
+     mění start EMA (průměr prvních svíček), proto patří k definici pravidel.
+6. **Verze pravidel:** `VERDICT_RULES_VERSION` zůstává **3**, původ řádku rozlišuje datum
+   seance. Řádky do seance 16. 10. 2026 včetně psal frontend se svými vstupy (PDC = poslední
+   Globex bar, cena = close 1m baru, expirace z hlavičky, svíčky W 80 / 240 90, jen při
+   otevřeném Briefingu); od seance 19. 10. 2026 engine. Verze 4 přijde s bumpem v6 (#1403,
+   ADR-0057 bod 8). Paritu pravidel s dosavadní TS implementací drží golden
+   `engine/tests/golden/dayverdict_1595.json`; texty důvodů zůstávají (plná cena, „83 %",
+   ΔOI zaokrouhlené jako JS `Math.round`).
+7. **Automatický scénář (d1)** převezme verdikt zapisovače z téže minuty (API se čte jednou).
+   Zůstává jeden na seanci, ale vznikne v **první minutě svého okna s úplným verdiktem**
+   (`GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN`, výchozí 15) — dřív jeden pokus v první minutě
+   okna i při výpadku API. Při okně delším než 15 min vzniká před open − 15 min jen na
+   pětiminutových značkách (zapisovač tam počítá každých 5 min). Hodnota 0 vypne scénář, ne
+   zápis verdiktu. Směr scénáře je verdikt
+   minuty jeho vzniku; uložený verdikt (poslední před openem) se od něj může lišit.
+8. **Bez zpětného dopočtu:** seance 29. 9.–16. 10. se nedopočítávají.

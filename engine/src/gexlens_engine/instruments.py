@@ -1137,15 +1137,16 @@ class InstrumentPipeline:
                 logger.exception("Gamma útes %s selhal — pokračuji", self.symbol)
         # Verdikt dne (#1595) — PO tendenci a stavu mapy (hlasují hodnotou téže
         # minuty), PŘED scénářem; pád nesmí shodit sběr dat
+        pre_open = None
         if self.verdict_writer is not None:
             try:
-                await self.verdict_writer.on_minute(now, spot, self.runtime)
+                pre_open = await self.verdict_writer.on_minute(now, spot, self.runtime)
             except Exception:
                 logger.exception("Verdikt dne %s selhal — pokračuji", self.symbol)
-        # Automatický scénář dne (#1173 A) — jednou před US openem
+        # Automatický scénář dne (#1173 A) — jednou před US openem z verdiktu téže minuty
         if self.scenario_generator is not None:
             try:
-                await self.scenario_generator.on_minute(now, spot, self.runtime)
+                await self.scenario_generator.on_minute(now, pre_open, self.runtime)
             except Exception:
                 logger.exception("Automatický scénář %s selhal — pokračuji", self.symbol)
         # Scénáře dne (#1173) — jednou po settle, jen scénáře po termínu

@@ -1509,11 +1509,12 @@ async def create_pipeline(
             ScenarioGenerator(
                 symbol=symbol,
                 repository=scenarios_repository,
-                api=scenario_api,
                 publisher=publisher,
                 minutes_before_open=scenario_auto_minutes,
             )
+            # Verdikt dodá zapisovač (#1595 d1) — bez něj scénář nevzniká
             if scenarios_repository is not None
+            and briefing_verdict_repository is not None
             and scenario_api is not None
             and scenario_auto_minutes > 0
             else None

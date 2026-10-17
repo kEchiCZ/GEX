@@ -291,6 +291,19 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-17 — track record verdiktu dne vznikal jen při otevřeném Briefingu a ze dvou implementací s různými vstupy (#1595).**
+  Verdikt počítal a přes POST ukládal frontend, jen když byl Briefing před openem otevřený: v3
+  (24. 9.–16. 10.) má 5 řádků, všechny NQ, ES žádný. Engine měl pro automatický scénář vlastní port
+  pravidel s jinými vstupy. PDC bral jako RTH close (oprava #1241 šla jen do enginu), frontend
+  poslední Globex bar. Dále živý spot proti close 1m baru, aktivní expirace proti volbě v hlavičce
+  a svíčky W 60 / 240 120 proti W 80 / 240 90. PDC se 12.–16. 10. lišilo u ES až o 6,25 b.,
+  u NQ až o 62,75 b. a ve 2 z 10 seancí dalo opačný hlas overnight (u ES 12. 10. by rozhodl mezi long
+  a bez převahy). V pondělí frontend PDC neměl vůbec (nedělní partice, #1596). Odhalil to rozbor
+  tvrdých dat při návrhu zápisu z enginu: partice barů proti uloženým `votes`.
+  → Data pro vyhodnocení zapisuje server bez ohledu na otevřené UI. Pravidla mají jednu implementaci
+  (engine `compute/`), UI ukazuje uložený výsledek. Vstupy (PDC, cena, expirace, počty svíček) se
+  berou z jednoho místa. Port do druhého jazyka se bez společného golden testu nedělá
+  (`engine/tests/golden/dayverdict_1595.json`).
 - **2026-10-16 — verdikt dne šel zapsat i po US openu a po settle (#1585): „před openem“ jen v docstringu.**
   Vyhodnocení měří pohyb od US openu do settle, docstring upsertu počítal se změnou „před openem“,
   ale API hlídalo jen obchodní den. Otevřený Briefing posílal POST při každé změně hlasů a hlas

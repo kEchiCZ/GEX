@@ -1,19 +1,21 @@
 """Automatický scénář dne (#1173, varianta A — rozhodnutí uživatele 15. 9. 2026).
 
 Jednou za obchodní seanci (po–pá, `settle.is_trading_session`; víkend nemá US open
-ani settle — #1309), 15 minut před US openem (`GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN`),
-engine sám sestaví scénář z **verdiktu dne** — stejné hlasování jako Shrnutí
-dne v Briefingu (`compute/dayverdict`, port frontendu, týž `rules_version`):
-trend TF, tendence, sentiment, cena vs. včerejší close, ΔOI přes noc, gamma
-režim. Při verdiktu long/short jsou cíle nejbližší úrovně obratu ve směru
-(zdi, flip, těžiště, PDH/PDL/PDC, ONH/ONL, ±EM), cesta vstup → cíl 1 → cíl 2,
-termín settle dne. Při `none` / `wait_news` scénář nevznikne a log řekne proč.
+ani settle — #1309), v okně před US openem (`GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN`),
+engine sám sestaví scénář z **verdiktu dne**, který v téže minutě spočítal a uložil
+zapisovač (`verdict_writer`, #1595 d1 — API se čte jednou): trend TF, tendence,
+sentiment, cena vs. včerejší close, ΔOI přes noc, gamma režim (`compute/dayverdict`).
+Scénář vznikne v první minutě okna s **úplným** verdiktem — výpadek čtení API nebo
+restart bez tendence ho jen odloží na další minutu okna. Při verdiktu long/short
+jsou cíle nejbližší úrovně obratu ve směru (zdi, flip, těžiště, PDH/PDL/PDC,
+ONH/ONL, ±EM), cesta vstup → cíl 1 → cíl 2, termín settle dne. Při `none` /
+`wait_news` scénář nevznikne a log řekne proč.
 
-Vstupy, které engine nemá v paměti, čte z API (tytéž endpointy jako Briefing):
-svíčky per TF, bary dneška a včerejška, ΔOI, stav sentimentu, kalendář —
-žádná nová logika, jen stejný výpočet na serveru. Snímek PNG dodá frontend,
-jakmile má graf otevřený (`PUT /scenarios/{id}/image`); cesta se kreslí živě
-do heatmapy z uložených bodů. Jen dopředu — nic se nedopočítává zpětně.
+Vstupy, které engine nemá v paměti, čte `gather_context` z API (tytéž endpointy
+jako Briefing): svíčky per TF, bary dneška a včerejška, ΔOI, stav sentimentu,
+kalendář. Snímek PNG dodá frontend, jakmile má graf otevřený
+(`PUT /scenarios/{id}/image`); cesta se kreslí živě do heatmapy z uložených bodů.
+Jen dopředu — nic se nedopočítává zpětně.
 """
 
 import asyncio
@@ -30,7 +32,6 @@ from gexlens_engine.compute.dayverdict import (
     LevelInputs,
     VerdictInput,
     build_auto_scenario,
-    day_verdict,
 )
 from gexlens_engine.compute.settle import (
     ET_TZ,
@@ -45,7 +46,9 @@ from gexlens_engine.storage.scenarios_store import ScenariosRepository
 
 logger = logging.getLogger(__name__)
 
-CANDLE_LIMITS: dict[str, int] = {"W": 60, "D": 120, "240": 120, "60": 120, "15": 120}
+#: Počty svíček per TF — táž tabulka jako karta Trend v Briefingu (`frontend/src/api/
+#: briefing.ts`, #1595 b): EMA50 startuje z průměru prvních 50, počet svíček ji posouvá
+CANDLE_LIMITS: dict[str, int] = {"W": 80, "D": 120, "240": 120, "60": 120, "15": 120}
 
 
 @dataclass
@@ -82,6 +85,8 @@ class PreOpenVerdict:
 
     verdict: DayVerdict
     context: VerdictContext
+    #: Cena, se kterou verdikt hlasoval (overnight) — vstup scénáře
+    spot: float
     #: Všechny vstupy přečtené (žádný výpadek API) a runtime má levels i tendenci
     complete: bool
 
@@ -279,28 +284,39 @@ class ScenarioGenerator:
 
     symbol: str
     repository: ScenariosRepository
-    api: ApiReader
     publisher: Any = None
     minutes_before_open: int = 15
 
     _done_for: dt.date | None = field(default=None, init=False)
 
-    async def on_minute(self, now: dt.datetime, spot: float | None, runtime: EngineRuntime) -> None:
+    async def on_minute(
+        self, now: dt.datetime, pre_open: PreOpenVerdict | None, runtime: EngineRuntime
+    ) -> None:
+        """`pre_open` = verdikt téže minuty od zapisovače (None: minuta bez výpočtu)."""
         session = trading_session_date(now)
         if self._done_for == session or not is_trading_session(session):
             return  # víkend: den bez US openu i settle — scénář nevzniká (#1309)
-        fire_at = us_open_ts(session) - dt.timedelta(minutes=self.minutes_before_open)
-        if now < fire_at or now >= us_open_ts(session):
+        open_ts = us_open_ts(session)
+        if now < open_ts - dt.timedelta(minutes=self.minutes_before_open) or now >= open_ts:
             return  # okno: [open − N min, open) — po openu už dnes ne
-        self._done_for = session  # jeden pokus per seance i při chybě
-        if spot is None:
-            logger.warning("%s: automatický scénář — bez spotu, přeskočeno", self.symbol)
+        if pre_open is None:
+            return  # zapisovač tuto minutu nepočítal (bez ceny, cyklus až po openu)
+        verdict, ctx, spot = pre_open.verdict, pre_open.context, pre_open.spot
+        if not pre_open.complete:
+            # Výpadek čtení API nebo restart bez tendence: scénář počká na úplný verdikt
+            last_minute = now >= open_ts - dt.timedelta(minutes=1)
+            logger.log(
+                logging.WARNING if last_minute else logging.INFO,
+                "%s: automatický scénář %s — verdikt neúplný (chybí: %s)",
+                self.symbol,
+                "dnes nevznikne" if last_minute else "čeká na další minutu",
+                ", ".join(ctx.missing) or "levels nebo tendence",
+            )
             return
+        self._done_for = session  # jeden pokus per seance s úplným verdiktem
         if await asyncio.to_thread(self.repository.exists_auto, self.symbol, session):
             return  # restart enginu uprostřed okna
-        ctx = await gather_context(self.api, self.symbol, runtime.expiry, session, now)
         levels = runtime.last_levels
-        verdict = day_verdict(verdict_input(ctx, spot, runtime))
         rationale = _rationale(verdict, ctx)
         if verdict.verdict not in ("long", "short"):
             logger.info(

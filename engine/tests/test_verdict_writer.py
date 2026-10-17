@@ -6,12 +6,15 @@ import math
 from pathlib import Path
 from typing import Any
 
+import pytest
 from sqlalchemy import create_engine, select
 from test_scenario_auto import OPEN, SESSION, FakeApi, _runtime, _verdict_api
 
-from gexlens_engine.compute.settle import us_open_ts
+from gexlens_engine.compute.settle import session_bounds, us_open_ts
+from gexlens_engine.scenario_auto import ScenarioGenerator
 from gexlens_engine.storage.briefing_verdicts_store import BriefingVerdictRepository
 from gexlens_engine.storage.meta import briefing_verdicts_table
+from gexlens_engine.storage.scenarios_store import ScenariosRepository
 from gexlens_engine.verdict_writer import VERDICT_WINDOW_MINUTES, DayVerdictWriter
 
 PREV_DAY = dt.date(2026, 9, 14)
@@ -55,7 +58,7 @@ def test_kazdou_minutu_okna_prepise_radek_plati_posledni_pred_openem(tmp_path: P
     clock = _Clock(OPEN)
     api = _full_api()
     writer = _writer(tmp_path, api, clock)
-    # Před oknem nic a API se nečte
+    # Minuta před oknem mimo pětiminutový rytmus: nic a API se nečte
     assert _minute(writer, clock, OPEN - dt.timedelta(minutes=16), 7590.0) is None
     assert _rows(writer) == [] and api.calls == []
     # První minuta okna: SHORT (cena 7590 pod PDC 7632 = RTH close předchozího dne)
@@ -83,6 +86,60 @@ def test_kazdou_minutu_okna_prepise_radek_plati_posledni_pred_openem(tmp_path: P
     assert len(api.calls) == calls
     (after,) = _rows(writer)
     assert after["score"] == row["score"] and after["updated_at"] == row["updated_at"]
+
+
+def test_od_zacatku_seance_kazdych_5_min_pak_kazdou_minutu(tmp_path: Path) -> None:
+    """Rozhodnutí a1: od 17:00 CT předchozího dne každých 5 min, od open − 15 min každou minutu."""
+    clock = _Clock(OPEN)
+    api = _full_api()
+    writer = _writer(tmp_path, api, clock)
+    start, _ = session_bounds(SESSION)
+    assert start == dt.datetime(2026, 9, 14, 22, 0, tzinfo=dt.UTC)  # 17:00 CDT
+    # Minuta před začátkem patří předchozí seanci, ta je už po openu
+    assert _minute(writer, clock, start - dt.timedelta(minutes=5), 7590.0) is None
+    assert _rows(writer) == [] and api.calls == []
+    written = []
+    for now in (
+        start,
+        start + dt.timedelta(minutes=1),
+        dt.datetime(2026, 9, 15, 3, 0, tzinfo=dt.UTC),
+        dt.datetime(2026, 9, 15, 3, 4, tzinfo=dt.UTC),
+        OPEN - dt.timedelta(minutes=20),
+        OPEN - dt.timedelta(minutes=19),
+        OPEN - dt.timedelta(minutes=15),
+        OPEN - dt.timedelta(minutes=14),
+    ):
+        calls = len(api.calls)
+        if _minute(writer, clock, now, 7590.0) is not None:
+            written.append(f"{now:%H:%M}")
+        else:
+            assert len(api.calls) == calls  # minuta bez výpočtu API nečte
+    assert written == ["22:00", "03:00", "13:10", "13:15", "13:16"]
+    (row,) = _rows(writer)
+    # SQLite vrací čas bez pásma (uložené UTC); zápis 5 s po začátku minuty
+    assert row["created_at"] == (start + dt.timedelta(seconds=5)).replace(tzinfo=None)
+    last = OPEN - dt.timedelta(minutes=14) + dt.timedelta(seconds=5)
+    assert row["updated_at"] == last.replace(tzinfo=None)
+
+
+def test_scenar_prevezme_verdikt_zapisovace_api_se_cte_jednou(tmp_path: Path) -> None:
+    """Rozhodnutí d1: scénář téže minuty vznikne z uloženého verdiktu bez druhého čtení API."""
+    clock = _Clock(OPEN)
+    api = _full_api()
+    writer = _writer(tmp_path, api, clock)
+    scenarios = ScenariosRepository(writer.repository._engine)
+    scenarios.ensure_schema()
+    generator = ScenarioGenerator("ES", scenarios, minutes_before_open=15)
+    now = OPEN - dt.timedelta(minutes=VERDICT_WINDOW_MINUTES)
+    pre_open = _minute(writer, clock, now, 7590.0)
+    calls = len(api.calls)
+    asyncio.run(generator.on_minute(now, pre_open, _runtime(SESSION)))
+    assert len(api.calls) == calls
+    (scenario,) = scenarios.list_for("ES")
+    (row,) = _rows(writer)
+    assert scenario.rationale is not None
+    assert scenario.rationale["verdict"] == row["verdict"] == "short"
+    assert scenario.rationale["score"] == row["score"] and scenario.entry == 7590.0
 
 
 def test_straz_skutecnym_casem_zapisu_cyklus_dobehl_po_openu(tmp_path: Path) -> None:
@@ -147,6 +204,28 @@ def test_bez_platne_ceny_se_minuta_nezapise(tmp_path: Path) -> None:
     assert _rows(writer) == [] and api.calls == []
 
 
+class _HangingApi(FakeApi):
+    """API, které neodpovídá (visící spojení) — čtení se nikdy nedokončí samo."""
+
+    async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        await asyncio.sleep(3600)
+
+
+def test_visici_api_nezdrzi_minutovy_cyklus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Strop čtení: minuta se nezapíše a cyklus pokračuje; uložený řádek zůstane."""
+    monkeypatch.setattr("gexlens_engine.verdict_writer.VERDICT_READ_TIMEOUT_S", 0.05)
+    clock = _Clock(OPEN)
+    writer = _writer(tmp_path, _full_api(), clock)
+    assert _minute(writer, clock, OPEN - dt.timedelta(minutes=3), 7590.0).complete
+    (before,) = _rows(writer)
+    writer.api = _HangingApi({})  # type: ignore[assignment]
+    assert _minute(writer, clock, OPEN - dt.timedelta(minutes=2), 7640.0) is None
+    (after,) = _rows(writer)
+    assert after["updated_at"] == before["updated_at"]
+
+
 def test_vikend_a_svatek_bez_zapisu_a_bez_cteni_api(tmp_path: Path) -> None:
     """#1309: sobota, neděle a svátek NYSE nemají US open — žádný řádek, žádný dotaz."""
     clock = _Clock(OPEN)
@@ -167,10 +246,11 @@ def test_zimni_cas_okno_podle_us_openu(tmp_path: Path) -> None:
     clock = _Clock(us_open_ts(monday))
     writer = _writer(tmp_path, _full_api(monday, friday), clock)
     assert us_open_ts(monday) == dt.datetime(2026, 11, 2, 14, 30, tzinfo=dt.UTC)
-    early = dt.datetime(2026, 11, 2, 13, 20, tzinfo=dt.UTC)  # letní okno — v zimě mimo
+    # 13:21 UTC: v létě by byla v minutovém okně, v zimě je před ním a mimo pětiminutový rytmus
+    early = dt.datetime(2026, 11, 2, 13, 21, tzinfo=dt.UTC)
     clock.now = early
     assert asyncio.run(writer.on_minute(early, 7590.0, _runtime(monday))) is None
-    inside = dt.datetime(2026, 11, 2, 14, 20, tzinfo=dt.UTC)
+    inside = dt.datetime(2026, 11, 2, 14, 16, tzinfo=dt.UTC)  # mimo rytmus, ale v okně
     clock.now = inside
     result = asyncio.run(writer.on_minute(inside, 7590.0, _runtime(monday)))
     assert result is not None

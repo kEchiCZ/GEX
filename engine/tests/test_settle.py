@@ -73,6 +73,9 @@ def test_verdict_writable_jen_obchodni_den_pred_openem() -> None:
     assert verdict_writable(dt.date(2026, 10, 19), at(2026, 10, 19, 13, 29, 59, tzinfo=dt.UTC))
     assert not verdict_writable(dt.date(2026, 10, 19), at(2026, 10, 19, 13, 30, tzinfo=dt.UTC))
     assert not verdict_writable(dt.date(2026, 10, 19), at(2026, 10, 19, 20, 25, tzinfo=dt.UTC))
+    # Evropa už v zimním čase (od 25. 10.), USA ještě v letním: open dál 13:30 UTC
+    assert verdict_writable(dt.date(2026, 10, 30), at(2026, 10, 30, 13, 29, tzinfo=dt.UTC))
+    assert not verdict_writable(dt.date(2026, 10, 30), at(2026, 10, 30, 13, 30, tzinfo=dt.UTC))
     # Zima (USA už bez letního času, Evropa taky): open 14:30 UTC
     assert verdict_writable(dt.date(2026, 11, 2), at(2026, 11, 2, 14, 29, tzinfo=dt.UTC))
     assert not verdict_writable(dt.date(2026, 11, 2), at(2026, 11, 2, 14, 30, tzinfo=dt.UTC))
