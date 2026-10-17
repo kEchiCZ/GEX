@@ -12,36 +12,59 @@ const fetchMock = vi.fn()
 const setJournalDraft = vi.fn()
 const setView = vi.fn()
 
-beforeEach(() => {
-  vi.stubGlobal('fetch', fetchMock)
-  fetchMock.mockReset()
-  setJournalDraft.mockReset()
-  setView.mockReset()
-  useAppStateMock.mockReturnValue({
+function appState(overrides: Record<string, unknown> = {}) {
+  return {
     regimeInfo: { state: null, measuredFlip: null, dynamicFlip: null },
     symbol: 'ES',
     selectedExpiry: '20260813',
     setJournalDraft,
     setView,
     status: { engine: 'online' },
-  })
+    ...overrides,
+  }
+}
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', fetchMock)
+  fetchMock.mockReset()
+  setJournalDraft.mockReset()
+  setView.mockReset()
+  useAppStateMock.mockReturnValue(appState())
 })
 
 afterEach(() => {
   vi.useRealTimers()
 })
 
-/** Pevné „teď" pro testy ukládání verdiktu: o víkendu se verdikt neposílá (#1309),
-takže test nesmí záviset na dni běhu. Falšuje se jen Date — debounce běží reálně. */
+/** Pevné „teď" pro testy verdiktu dne: stav karty závisí na obchodním dni a US openu,
+takže test nesmí záviset na dni běhu. Falšuje se jen Date — časovače běží reálně. */
 function freezeDate(iso: string) {
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(new Date(iso))
 }
 
+/** Uložený verdikt enginu (#1595): čtvrtek 24. 9. 2026, US open 13:30 UTC = 15:30 SELČ. */
+const STORED_ROW = {
+  id: 7,
+  session_date: '2026-09-24',
+  symbol: 'ES',
+  verdict: 'long',
+  score: 5,
+  votes: [
+    { name: 'trend_higher', vote: 2, reason: 'vyšší TF (týden, den) rostoucí' },
+    { name: 'overnight', vote: -1, reason: 'cena 6446 pod včerejším close 6450' },
+    { name: 'gamma', vote: 0, reason: 'pozitivní gamma, ale po útesu 83 % gammy — tlumení tenké, nehlasuje' }, // prettier-ignore
+  ],
+  rules_version: 3,
+  created_at: '2026-09-23T22:05:00+00:00',
+  updated_at: '2026-09-24T13:25:00+00:00',
+}
+
 function mockApis(overrides: Record<string, unknown> = {}) {
   fetchMock.mockImplementation((url: string) => {
     const path = String(url)
-    const body = (data: unknown) => Promise.resolve({ ok: true, json: () => Promise.resolve(data) })
+    const body = (data: unknown, status = 200) =>
+      Promise.resolve({ ok: status < 300, status, json: () => Promise.resolve(data) })
     if (path.includes('/bars/')) return body(overrides['bars'] ?? { bars: [] })
     if (path.includes('/instruments/')) return body(overrides['days'] ?? { days: [] })
     if (path.includes('/levels/')) return body(overrides['levels'] ?? { levels: [] })
@@ -56,7 +79,8 @@ function mockApis(overrides: Record<string, unknown> = {}) {
     if (path.includes('/ivrank/')) return body(overrides['ivrank'] ?? { latest: [] })
     if (path.includes('/tendency/')) return body(overrides['tendency'] ?? { tendency: [] })
     if (path.includes('/news/reactions/typical')) return body(overrides['typical'] ?? { typical: [] }) // prettier-ignore
-    if (path.includes('/briefing/verdicts')) return body({ id: 1 })
+    if (path.includes('/briefing/verdicts'))
+      return body(overrides['verdicts'] ?? { verdicts: [] }, (overrides['verdictsStatus'] as number) ?? 200) // prettier-ignore
     if (path.includes('/candles/')) {
       const tf = new URL(path, 'http://x').searchParams.get('tf') ?? 'D'
       const byTf = (overrides['candles'] ?? {}) as Record<string, unknown[]>
@@ -64,6 +88,11 @@ function mockApis(overrides: Record<string, unknown> = {}) {
     }
     return body({})
   })
+}
+
+/** Briefing verdikt nikdy nepočítá ani neposílá (#1595) — zapisuje jen engine. */
+function postCalls() {
+  return fetchMock.mock.calls.filter((call) => (call[1] as RequestInit | undefined)?.method === 'POST') // prettier-ignore
 }
 
 /** Rostoucí zigzag: swingy > trend, ať struktura HH/HL vyjde (viz trend.test.ts). */
@@ -104,119 +133,96 @@ test('karta Trend (#1089): směr per timeframe a čtení shora dolů', async () 
   expect(screen.getByTestId('trend-row-15').textContent).toContain('málo dat (5/20 svíček)')
 })
 
-test('Shrnutí dne (#1090): verdikt z hlasování, úrovně obratu, zprávy s reakcí, uložení', async () => {
-  freezeDate('2026-09-24T12:00:00Z') // čtvrtek v seanci před US openem (13:30 UTC)
+test('Shrnutí dne (#1595): uložený verdikt enginu před openem — předběžný se stářím, hlasy z řádku, úrovně obratu', async () => {
+  freezeDate('2026-09-24T13:28:00Z') // čtvrtek, 2 min před US openem (13:30 UTC)
   const rising = risingCandles(60)
   mockApis({
     candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising },
     bars: { bars: [{ ts_min: '2026-08-13T13:00:00Z', open: 6440, high: 6450, low: 6430, close: 6446, volume: 10 }] }, // prettier-ignore
     levels: { levels: [{ ts_min: '2026-08-13T14:00:00Z', flip: 6430, call_wall: 6500, put_wall: 6400, centroid: 6445, total_gex: -900 }] }, // prettier-ignore
-    tendency: { tendency: [{ ts_min: '', symbol: 'ES', score: 0.6, band: 'long', votes: [], weights_version: 1 }] }, // prettier-ignore
-    typical: { typical: [{ category: 'MACRO_INFLATION', windows: { '5': { median_abs_bp: 15, n: 12 } } }] }, // prettier-ignore
+    verdicts: { verdicts: [{ ...STORED_ROW, session_date: '2026-09-23', verdict: 'short' }, STORED_ROW] }, // prettier-ignore
   })
   render(<BriefingView />)
   await waitFor(() => {
     expect(screen.getByTestId('summary-verdict').textContent).toBe('Spíše LONG den')
   })
-  // trend 2+1, tendence 1, gamma negativní +1 = 5 (sentiment/overnight/ΔOI bez dat)
   expect(screen.getByTestId('summary-verdict-text').textContent).toContain('skóre +5')
+  expect(screen.getByTestId('summary-verdict-state').textContent).toBe(
+    'předběžný: engine ho přepočítává každých 5 min, od 15:15 každou minutu; platí poslední stav před openem 15:30. Uloženo 15:25, před 3 min.',
+  )
+  // Hlasy a důvody z uloženého řádku — Briefing nic nepřepočítává
+  expect(screen.getByText(/cena 6446 pod včerejším close 6450/)).toBeTruthy()
+  expect(screen.getByText(/tlumení tenké, nehlasuje/)).toBeTruthy()
+  // Tooltip v odrážkách s odřádkováním (vzor ivRankTooltip)
+  const title = screen.getByTestId('summary-verdict').getAttribute('title') ?? ''
+  expect(title).toContain('\n• ')
+  expect(title).toContain('engine')
+  const verdictGet = fetchMock.mock.calls.find((call) => String(call[0]).includes('/briefing/verdicts')) // prettier-ignore
+  expect(String(verdictGet?.[0])).toContain('/briefing/verdicts?symbol=ES&days=1')
   const levelsText = screen.getByTestId('summary-levels').textContent ?? ''
   expect(levelsText).toContain('Těžiště GEX · podpora')
   expect(levelsText).toContain('Call wall · odpor')
-  // Verdikt se uložil přes POST /briefing/verdicts — až po ustálení (2 s debounce)
-  await waitFor(
-    () => {
-      const post = fetchMock.mock.calls.find(
-        (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
-      )
-      expect(post).toBeDefined()
-      const payload = JSON.parse(String(post![1].body)) as { verdict: string; rules_version: number } // prettier-ignore
-      expect(payload.verdict).toBe('long')
-      expect(payload.rules_version).toBe(3)
-    },
-    { timeout: 5_000 },
-  )
+  expect(postCalls()).toHaveLength(0)
 })
 
-test('verdikt se přepíše, když se změní hlasy i při stejném skóre (#1090)', async () => {
-  freezeDate('2026-09-24T12:00:00Z') // čtvrtek v seanci před US openem (13:30 UTC)
-  const rising = risingCandles(60)
-  // 1. render: bez levels → gamma „bez dat"; skóre = trend 3 + tendence 0 = 3
-  mockApis({
-    candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising },
-    bars: { bars: [{ ts_min: '2026-08-13T13:00:00Z', open: 6440, high: 6450, low: 6430, close: 6446, volume: 10 }] }, // prettier-ignore
-  })
-  const { rerender } = render(<BriefingView />)
-  await waitFor(
-    () => {
-      expect(
-        fetchMock.mock.calls.filter(
-          (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
-        ),
-      ).toHaveLength(1)
-    },
-    { timeout: 5_000 },
-  )
-  const first = JSON.parse(String(fetchMock.mock.calls.find((c) => c[1]?.method === 'POST')![1].body)) as { score: number; votes: Array<{ name: string; reason: string }> } // prettier-ignore
-  expect(first.votes.find((vote) => vote.name === 'gamma')?.reason).toBe('gamma režim bez dat')
-
-  // 2. levels dorazí (pozitivní gamma −1, tendence long +1) → skóre pořád 3,
-  // ale hlasy jiné → musí se uložit znovu
-  mockApis({
-    candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising },
-    bars: { bars: [{ ts_min: '2026-08-13T13:00:00Z', open: 6440, high: 6450, low: 6430, close: 6446, volume: 10 }] }, // prettier-ignore
-    levels: { levels: [{ ts_min: '2026-08-13T14:00:00Z', flip: 6430, call_wall: 6500, put_wall: 6400, centroid: 6445, total_gex: 900 }] }, // prettier-ignore
-    tendency: { tendency: [{ ts_min: '', symbol: 'ES', score: 0.6, band: 'long', votes: [], weights_version: 1 }] }, // prettier-ignore
-  })
-  useAppStateMock.mockReturnValue({
-    regimeInfo: { state: null, measuredFlip: null, dynamicFlip: null }, symbol: 'ES', selectedExpiry: '20260814', setJournalDraft, setView, status: { engine: 'online' } }) // prettier-ignore
-  rerender(<BriefingView />)
-  await waitFor(
-    () => {
-      const posts = fetchMock.mock.calls.filter(
-        (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
-      )
-      expect(posts).toHaveLength(2)
-      const second = JSON.parse(String(posts[1][1].body)) as { score: number; votes: Array<{ name: string; reason: string }> } // prettier-ignore
-      expect(second.score).toBe(first.score)
-      expect(second.votes.find((vote) => vote.name === 'gamma')?.reason).toContain(
-        'pozitivní gamma',
-      )
-    },
-    { timeout: 6_000 },
-  )
-})
-
-test('po US openu se verdikt dne neukládá — hodnotí se pohyb od openu (#1585)', async () => {
+test('po US openu je uložený verdikt zmrazený — poslední zápis (#1585, #1595)', async () => {
   freezeDate('2026-09-24T15:00:00Z') // čtvrtek, 1,5 h po US openu
-  const rising = risingCandles(60)
-  mockApis({ candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising } })
+  mockApis({ verdicts: { verdicts: [{ ...STORED_ROW, updated_at: '2026-09-24T13:29:05Z' }] } })
   render(<BriefingView />)
-  // Verdikt se dál zobrazuje, jen se neposílá (API by zápis odmítlo 409)
   await waitFor(() => {
     expect(screen.getByTestId('summary-verdict').textContent).toBe('Spíše LONG den')
   })
-  await new Promise((resolve) => setTimeout(resolve, 2_500))
-  const posts = fetchMock.mock.calls.filter(
-    (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
+  expect(screen.getByTestId('summary-verdict-state').textContent).toBe(
+    'zmrazený — poslední zápis 15:29',
   )
-  expect(posts).toHaveLength(0)
+  expect(postCalls()).toHaveLength(0)
 })
 
-test('o víkendu se verdikt dne neukládá — sobota nemá US open ani settle (#1309)', async () => {
-  freezeDate('2026-09-26T15:00:00Z') // sobota
+test('bez uloženého řádku po openu je vidět mezera, žádný náhradní výpočet (#1595)', async () => {
+  freezeDate('2026-09-24T15:00:00Z')
   const rising = risingCandles(60)
   mockApis({ candles: { W: rising, D: rising, '240': rising, '60': rising, '15': rising } })
   render(<BriefingView />)
   await waitFor(() => {
-    expect(screen.getByTestId('summary-verdict').textContent).toBe('Spíše LONG den')
+    expect(screen.getByTestId('summary-verdict').textContent).toBe(
+      'Verdikt pro tuto seanci nevznikl.',
+    )
   })
-  // Debounce ukládání je 2 s — po 2,5 s by POST už odešel
-  await new Promise((resolve) => setTimeout(resolve, 2_500))
-  const posts = fetchMock.mock.calls.filter(
-    (call) => String(call[0]).includes('/briefing/verdicts') && call[1]?.method === 'POST',
-  )
-  expect(posts).toHaveLength(0)
+  expect(screen.queryByTestId('summary-verdict-text')).toBeNull()
+  expect(postCalls()).toHaveLength(0)
+})
+
+test('o víkendu se verdikt nevydává — sobota nemá US open ani settle (#1309)', async () => {
+  freezeDate('2026-09-26T15:00:00Z') // sobota
+  mockApis()
+  render(<BriefingView />)
+  await waitFor(() => {
+    expect(screen.getByTestId('summary-verdict').textContent).toBe(
+      'Verdikt se nevydává — sobota 26. 9. není obchodní seance.',
+    )
+  })
+  expect(postCalls()).toHaveLength(0)
+})
+
+test('symbol bez pipeline enginu: verdikt nikdo nepočítá (#1595)', async () => {
+  freezeDate('2026-09-24T12:00:00Z')
+  useAppStateMock.mockReturnValue(appState({ symbol: 'AAPL', status: { engine: 'online', symbols: 'ES,NQ' } })) // prettier-ignore
+  mockApis()
+  render(<BriefingView />)
+  await waitFor(() => {
+    expect(screen.getByTestId('summary-verdict').textContent).toBe(
+      'Engine pro tento symbol verdikt nepočítá.',
+    )
+  })
+})
+
+test('chyba čtení verdiktu je výslovná s kódem, ne „bez verdiktu" (#1595)', async () => {
+  freezeDate('2026-09-24T12:00:00Z')
+  mockApis({ verdicts: { detail: 'db down' }, verdictsStatus: 503 })
+  render(<BriefingView />)
+  const alert = await screen.findByRole('alert')
+  expect(alert.textContent).toBe('Verdikt se nepodařilo načíst (HTTP 503)')
+  expect(alert.getAttribute('data-testid')).toBe('summary-verdict')
 })
 
 test('karta Trend bez svíček říká, že se načítají / chybí', async () => {
@@ -340,7 +346,23 @@ test('☀ založí ranní plán s kostrou textu a přepne na Deník', async () =
   expect(draft.text).toContain('- [ ] riziko přizpůsobeno režimu')
 })
 
-test('Ranní checklist (#1241): útes minulé seance, slabá zeď, gap-and-hold; gamma hlas po útesu nehlasuje', async () => {
+test('☀ plán bere verdikt z uloženého řádku enginu (#1595)', async () => {
+  freezeDate('2026-09-24T13:28:00Z')
+  mockApis({ verdicts: { verdicts: [STORED_ROW] } })
+  render(<BriefingView />)
+  await waitFor(() => {
+    expect(screen.getByTestId('summary-verdict').textContent).toBe('Spíše LONG den')
+  })
+
+  fireEvent.click(screen.getByText('☀ Založit ranní plán do deníku'))
+
+  const draft = setJournalDraft.mock.calls[0][0] as { text: string }
+  expect(draft.text).toContain('- Verdikt dne: Spíše long den (skóre +5)')
+  expect(draft.text).toContain('(předběžný, uloženo 15:25)')
+  expect(postCalls()).toHaveLength(0)
+})
+
+test('Ranní checklist (#1241): útes minulé seance, slabá zeď, gap-and-hold', async () => {
   mockApis({
     candles: { W: risingCandles(60), D: risingCandles(60), '4h': risingCandles(60), '1h': risingCandles(60), '15m': risingCandles(60) }, // prettier-ignore
     bars: { bars: [{ ts_min: '2026-09-21T13:15:00Z', open: 30240, high: 30245, low: 30235, close: 30240, volume: 1 }] }, // prettier-ignore
@@ -358,6 +380,4 @@ test('Ranní checklist (#1241): útes minulé seance, slabá zeď, gap-and-hold;
   expect(screen.getByTestId('check-map').className).toContain('checklist-na')
   expect(wall.textContent).toContain('průraz')
   expect(screen.getByTestId('check-rules').textContent).toContain('50 $')
-  // Brána gamma hlasu: pozitivní gamma po útesu 83 % nehlasuje proti trendu
-  await waitFor(() => expect(screen.getByText(/tlumení tenké, nehlasuje/)).toBeTruthy())
 })

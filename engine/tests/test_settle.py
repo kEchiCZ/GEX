@@ -18,6 +18,7 @@ from gexlens_engine.compute.settle import (
     trading_session_date,
     us_market_holidays,
     us_open_ts,
+    verdict_writable,
 )
 
 
@@ -63,6 +64,33 @@ def test_us_open_ts_dst_i_zkracena_seance() -> None:
     # Den po Thanksgiving: settle 13:00 ET, open beze změny
     assert is_early_close(dt.date(2026, 11, 27))
     assert us_open_ts(dt.date(2026, 11, 27)) == dt.datetime(2026, 11, 27, 14, 30, tzinfo=dt.UTC)
+
+
+def test_verdict_writable_jen_obchodni_den_pred_openem() -> None:
+    """#1585, #1595: jediná stráž zápisu verdiktu — US open v létě i v zimě, víkend, svátek."""
+    at = dt.datetime
+    # Léto: open 13:30 UTC — minuta před ano, od openu ne (ani po settle)
+    assert verdict_writable(dt.date(2026, 10, 19), at(2026, 10, 19, 13, 29, 59, tzinfo=dt.UTC))
+    assert not verdict_writable(dt.date(2026, 10, 19), at(2026, 10, 19, 13, 30, tzinfo=dt.UTC))
+    assert not verdict_writable(dt.date(2026, 10, 19), at(2026, 10, 19, 20, 25, tzinfo=dt.UTC))
+    # Evropa už v zimním čase (od 25. 10.), USA ještě v letním: open dál 13:30 UTC
+    assert verdict_writable(dt.date(2026, 10, 30), at(2026, 10, 30, 13, 29, tzinfo=dt.UTC))
+    assert not verdict_writable(dt.date(2026, 10, 30), at(2026, 10, 30, 13, 30, tzinfo=dt.UTC))
+    # Zima (USA už bez letního času, Evropa taky): open 14:30 UTC
+    assert verdict_writable(dt.date(2026, 11, 2), at(2026, 11, 2, 14, 29, tzinfo=dt.UTC))
+    assert not verdict_writable(dt.date(2026, 11, 2), at(2026, 11, 2, 14, 30, tzinfo=dt.UTC))
+    # Zkrácená seance je obchodní den s openem 9:30 ET
+    assert verdict_writable(dt.date(2026, 11, 27), at(2026, 11, 27, 14, 15, tzinfo=dt.UTC))
+    # Sobota, neděle a svátek NYSE (Thanksgiving) seanci nemají
+    assert not verdict_writable(dt.date(2026, 10, 17), at(2026, 10, 17, 8, 0, tzinfo=dt.UTC))
+    assert not verdict_writable(dt.date(2026, 10, 18), at(2026, 10, 18, 8, 0, tzinfo=dt.UTC))
+    assert not verdict_writable(dt.date(2026, 11, 26), at(2026, 11, 26, 8, 0, tzinfo=dt.UTC))
+    # Nedělní večer (Globex otevřený) patří pondělní seanci — zapisovat jde;
+    # páteční verdikt v pondělí ráno už ne
+    sunday_evening = at(2026, 10, 18, 22, 5, tzinfo=dt.UTC)
+    assert trading_session_date(sunday_evening) == dt.date(2026, 10, 19)
+    assert verdict_writable(dt.date(2026, 10, 19), sunday_evening)
+    assert not verdict_writable(dt.date(2026, 10, 16), at(2026, 10, 19, 8, 0, tzinfo=dt.UTC))
 
 
 def test_session_bounds_a_trading_session_date() -> None:

@@ -903,13 +903,15 @@ export function StatsView() {
 
       <JournalStats symbol={symbol} />
 
-      {/* Verdikt dne (#1091): track record heuristiky z Briefingu — per verdikt
-          i per složka hlasování; pod branou n ≥ 30 jen počty, žádné závěry */}
+      {/* Verdikt dne (#1091): track record heuristiky, kterou ukládá engine (#1595) —
+          per verdikt i per složka hlasování; pod branou n ≥ 30 jen počty, žádné závěry */}
       <section className="stats-section" aria-label="Verdikt dne">
         <h2>Verdikt dne — track record (#1091)</h2>
         <p className="muted">
-          Zásah verdiktu z Briefingu proti pohybu US open → settle (bez převahy = close do ±0,5 EM).
-          Složka „nese informaci", když její hlas souhlasí se směrem seance. Brána n ≥{' '}
+          Zásah verdiktu dne proti pohybu US open → settle (bez převahy = close do ±0,5 EM). Verdikt
+          ukládá engine pro každou obchodní seanci a symbol, platí poslední stav před US openem
+          (#1595); do seance 16. 10. 2026 ho ukládal Briefing, jen když byl otevřený. Složka „nese
+          informaci", když její hlas souhlasí se směrem seance. Brána n ≥{' '}
           {verdictStats?.min_samples ?? 30} jako u signálů; do té doby jen sběr.
         </p>
         <VerdictStatsSection stats={verdictStats} />

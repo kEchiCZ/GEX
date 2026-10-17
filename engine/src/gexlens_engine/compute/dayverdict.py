@@ -1,8 +1,9 @@
-"""Verdikt dne a úrovně obratu — port `frontend/src/instrument/daysummary.ts` (#1090)
-pro automatický scénář dne (#1173, varianta A, rozhodnutí uživatele 15. 9. 2026).
+"""Verdikt dne a úrovně obratu — jediná implementace pravidel ADR-0035 §3 (#1090, #1595).
 
-Stejné hlasování jako Shrnutí dne v Briefingu (`VERDICT_RULES_VERSION` musí
-sedět s frontendem): trend vyšších TF ×2, nižších ×1, tendence −2…+2,
+Původně port `frontend/src/instrument/daysummary.ts` pro automatický scénář dne
+(#1173 A); od #1595 verdikt ukládá jen engine a Briefing ukazuje uložený řádek,
+paritu s dřívějším frontendem drží golden `engine/tests/golden/dayverdict_1595.json`.
+Hlasování: trend vyšších TF ×2, nižších ×1, tendence −2…+2,
 sentiment ±1 (nepotvrzený nehlasuje), cena vs. včerejší close ±1, ΔOI přes
 noc ±1 (převaha ≥ 10 % většího totálu), gamma režim (negativní = momentum ve
 směru trendu, pozitivní táhne skóre k nule). |skóre| ≥ 3 = long/short; High-
@@ -11,6 +12,7 @@ obratu ve směru (zdi, flip, těžiště, PDH/PDL/PDC, ONH/ONL, ±EM), max 2.
 """
 
 import datetime as dt
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -70,6 +72,17 @@ class DayVerdict:
     votes: tuple[Vote, ...]
 
 
+def _round_half_up(value: float) -> int:
+    """Zaokrouhlení jako JS `Math.round` (½ nahoru) — `round` zaokrouhluje na sudou."""
+    return math.floor(value + 0.5)
+
+
+def _price(value: float) -> str:
+    """Cena v důvodu hlasu celá jako ve frontendu — `:g` by NQ 25012.25 ořízl na 25012.2."""
+    number = float(value)
+    return str(int(number)) if number.is_integer() else repr(number)
+
+
 def _direction_vote(direction: Direction | None, weight: int) -> int:
     if direction == "up":
         return weight
@@ -127,10 +140,14 @@ def day_verdict(inp: VerdictInput) -> DayVerdict:
     if inp.price is not None and inp.prev_close is not None:
         if inp.price > inp.prev_close:
             overnight_vote = 1
-            overnight_reason = f"cena {inp.price:g} nad včerejším close {inp.prev_close:g}"
+            overnight_reason = (
+                f"cena {_price(inp.price)} nad včerejším close {_price(inp.prev_close)}"
+            )
         elif inp.price < inp.prev_close:
             overnight_vote = -1
-            overnight_reason = f"cena {inp.price:g} pod včerejším close {inp.prev_close:g}"
+            overnight_reason = (
+                f"cena {_price(inp.price)} pod včerejším close {_price(inp.prev_close)}"
+            )
         else:
             overnight_reason = "cena na včerejším close"
     votes.append(Vote("overnight", overnight_vote, overnight_reason))
@@ -164,8 +181,8 @@ def _oi_delta_vote(inp: VerdictInput) -> Vote:
     if scale <= 0 or abs(diff) < scale * OI_DELTA_MIN_SHARE:
         return Vote("oi_delta", 0, "ΔOI bez výrazné převahy call/put")
     if diff > 0:
-        return Vote("oi_delta", 1, f"ΔOI převaha call (+{round(diff)})")
-    return Vote("oi_delta", -1, f"ΔOI převaha put ({round(diff)})")
+        return Vote("oi_delta", 1, f"ΔOI převaha call (+{_round_half_up(diff)})")
+    return Vote("oi_delta", -1, f"ΔOI převaha put ({_round_half_up(diff)})")
 
 
 def _gamma_vote(
@@ -185,7 +202,7 @@ def _gamma_vote(
         # ne dva — jinak by se tatáž skutečnost počítala dvakrát.
         causes: list[str] = []
         if cliff_share is not None and cliff_share >= CLIFF_DAMPING_OFF:
-            causes.append(f"po útesu {cliff_share:.0%} gammy")
+            causes.append(f"po útesu {_round_half_up(cliff_share * 100)} % gammy")
         if thin_map:
             causes.append("mapa je tenká (#1245)")
         if causes:

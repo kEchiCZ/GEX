@@ -1,8 +1,9 @@
 """Vyhodnocení verdiktů dne po settle (#1091, ADR-0035 §3) — po vzoru `volregime`.
 
 Verdikt (spíše long / spíše short / bez převahy / počkat na tisk) ukládá
-frontend před seancí — API zápis od US openu odmítne (#1585), takže hodnocený
-pohyb do nových verdiktů neprosákne (starší řádky zapsané po openu zůstávají).
+engine před seancí (`verdict_writer`, #1595) — od US openu se nezapíše (#1585),
+takže hodnocený pohyb do verdiktů neprosákne (starší řádky, které Briefing
+zapsal po openu, zůstávají).
 Tady se po settle doplní, jak seance dopadla:
 pohyb od US openu (9:30 ET) do settle v bodech i v násobcích expected move
 (EM z `em_respect`, #872) a zásah verdiktu. Bez US openu (svátek, díra

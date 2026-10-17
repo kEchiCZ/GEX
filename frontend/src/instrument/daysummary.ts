@@ -1,25 +1,17 @@
 /** Shrnutí dne v Briefingu (#1090, ADR-0035 §3–4): úrovně obratu, zprávy dne
-s očekávanou reakcí a verdikt dne jako průhledné hlasování.
+s očekávanou reakcí a popisky verdiktu dne.
 
 Čisté funkce nad daty, která Briefing už má (levels, referenční úrovně, EM,
-trend, tendence, sentiment, ΔOI, kalendář). Nic se nedosazuje: chybějící
-vstup = chybějící hlas s důvodem, ne tichá nula. Verdikt je heuristika
-s pevnými vahami (varianta a v ADR-0035) — proto se ukládá a vyhodnocuje (#1091). */
-import type { LevelsRow, OiDeltaSummary } from '../api/briefing'
-import type { NewsRow, SentimentStateInfo } from '../api/news'
+kalendář). Nic se nedosazuje: chybějící vstup = chybějící úroveň, ne tichá nula.
+Verdikt dne (hlasování s pevnými vahami) počítá a ukládá jen engine
+(`compute/dayverdict.py`, #1595); tady jsou jen jeho popisky pro kartu a plán. */
+import type { LevelsRow } from '../api/briefing'
+import type { NewsRow } from '../api/news'
 import { isHighImpact } from '../api/news'
 import type { ReferenceLevels } from './referencelevels'
-import type { TrendDirection, TrendReport } from './trend'
-import { directionLabel } from './trend'
 
-/** Verze pravidel hlasování — ukládá se s verdiktem, ať jde historie číst správně. */
-export const VERDICT_RULES_VERSION = 3
-/** Skóre ≥ +3 = spíše long, ≤ −3 = spíše short (ADR-0035 §3). */
-export const VERDICT_THRESHOLD = 3
 /** Konfluence: dvě úrovně do 0,1 % ceny od sebe (NQ ≈ 30 b, ES ≈ 8 b). */
 export const CONFLUENCE_SHARE = 0.001
-/** ΔOI hlasuje jen při rozdílu ≥ 10 % většího z totálů. */
-export const OI_DELTA_MIN_SHARE = 0.1
 
 // ── Úrovně obratu ────────────────────────────────────────────────
 
@@ -176,54 +168,11 @@ export function newsExpectations(
 
 export type VerdictKind = 'long' | 'short' | 'none' | 'wait_news'
 
+/** Hlas jedné složky uloženého verdiktu (`briefing_verdicts.votes`, engine `Vote.as_dict`). */
 export interface VerdictVote {
   name: string
   vote: number
   reason: string
-}
-
-export interface DayVerdict {
-  verdict: VerdictKind
-  score: number
-  votes: VerdictVote[]
-  label: string
-  /** Věta pro kartu a plán. */
-  summary: string
-}
-
-export interface VerdictInput {
-  trend: TrendReport | null
-  /** Znaménko total GEX: true = pozitivní gamma; null bez levels. */
-  positiveGamma: boolean | null
-  /** Poslední pásmo tendence (#350): strong_short … strong_long; null bez dat. */
-  tendencyBand: string | null
-  sentiment: SentimentStateInfo | null
-  price: number | null
-  prevClose: number | null
-  oiDelta: OiDeltaSummary | null
-  /** High-impact zpráva mezi teď a US openem. */
-  newsBeforeOpen: boolean
-  /** Útes gammy minulé seance (0–1, #1241); null bez dat. */
-  cliffShare?: number | null
-  /** Stav „tenká mapa" (#1245): true = mapa teď nemá čím tlumit; null bez dat. */
-  thinMap?: boolean | null
-}
-
-/** Po útesu ≥ 50 % je tlumení tenké — zrcadlo enginu `dayverdict.CLIFF_DAMPING_OFF`. */
-export const CLIFF_DAMPING_OFF = 0.5
-
-const TENDENCY_VOTES: Record<string, number> = {
-  strong_short: -2,
-  short: -1,
-  neutral: 0,
-  long: 1,
-  strong_long: 2,
-}
-
-function directionVote(direction: TrendDirection | null, weight: number): number {
-  if (direction === 'up') return weight
-  if (direction === 'down') return -weight
-  return 0
 }
 
 export const VERDICT_LABELS: Record<VerdictKind, string> = {
@@ -233,122 +182,8 @@ export const VERDICT_LABELS: Record<VerdictKind, string> = {
   wait_news: 'Počkat na tisk',
 }
 
-/** Hlasování s pevnými vahami (ADR-0035 §3); každý hlas nese důvod. */
-export function dayVerdict(input: VerdictInput): DayVerdict {
-  const votes: VerdictVote[] = []
-  const { trend } = input
-  const higher = trend?.higher ?? null
-  const lower = trend?.lower ?? null
-  votes.push({
-    name: 'trend_higher',
-    vote: directionVote(higher, 2),
-    reason:
-      higher === null ? 'vyšší TF bez dat' : `vyšší TF (týden, den) ${directionLabel(higher)}`,
-  })
-  votes.push({
-    name: 'trend_lower',
-    vote: directionVote(lower, 1),
-    reason: lower === null ? 'nižší TF bez dat' : `nižší TF (4h, 1h, 15m) ${directionLabel(lower)}`,
-  })
-  const band = input.tendencyBand
-  votes.push({
-    name: 'tendency',
-    vote: band !== null && band in TENDENCY_VOTES ? TENDENCY_VOTES[band] : 0,
-    reason: band === null ? 'tendence bez dat' : `tendence ${band.replace('_', ' ')}`,
-  })
-  const sentiment = input.sentiment
-  let sentimentVote = 0
-  let sentimentReason = 'sentiment bez dat'
-  if (sentiment) {
-    if (sentiment.unconfirmed)
-      sentimentReason = `sentiment ${sentiment.state} nepotvrzený — nehlasuje`
-    else if (sentiment.state === 'RiskOn') {
-      sentimentVote = 1
-      sentimentReason = 'sentiment RiskOn'
-    } else if (sentiment.state === 'RiskOff') {
-      sentimentVote = -1
-      sentimentReason = 'sentiment RiskOff'
-    } else sentimentReason = 'sentiment Neutral'
-  }
-  votes.push({ name: 'sentiment', vote: sentimentVote, reason: sentimentReason })
-  let overnightVote = 0
-  let overnightReason = 'overnight vs. včerejší close bez dat'
-  if (input.price !== null && input.prevClose !== null) {
-    if (input.price > input.prevClose) {
-      overnightVote = 1
-      overnightReason = `cena ${input.price} nad včerejším close ${input.prevClose}`
-    } else if (input.price < input.prevClose) {
-      overnightVote = -1
-      overnightReason = `cena ${input.price} pod včerejším close ${input.prevClose}`
-    } else overnightReason = 'cena na včerejším close'
-  }
-  votes.push({ name: 'overnight', vote: overnightVote, reason: overnightReason })
-  votes.push(oiDeltaVote(input.oiDelta))
-  const partial = votes.reduce((sum, vote) => sum + vote.vote, 0)
-  votes.push(gammaVote(input.positiveGamma, trend?.expected ?? null, partial, input.cliffShare ?? null, input.thinMap ?? null)) // prettier-ignore
-  const score = votes.reduce((sum, vote) => sum + vote.vote, 0)
-  let verdict: VerdictKind = 'none'
-  if (score >= VERDICT_THRESHOLD) verdict = 'long'
-  else if (score <= -VERDICT_THRESHOLD) verdict = 'short'
-  if (input.newsBeforeOpen) verdict = 'wait_news'
-  return {
-    verdict,
-    score,
-    votes,
-    label: VERDICT_LABELS[verdict],
-    summary: verdictSummary(verdict, score),
-  }
-}
-
-function oiDeltaVote(oiDelta: OiDeltaSummary | null): VerdictVote {
-  const callDelta = oiDelta?.call_delta
-  const putDelta = oiDelta?.put_delta
-  if (!oiDelta?.days?.previous || callDelta === undefined || putDelta === undefined) {
-    return { name: 'oi_delta', vote: 0, reason: 'ΔOI přes noc bez dat' }
-  }
-  const scale = Math.max(oiDelta.call_total ?? 0, oiDelta.put_total ?? 0)
-  const diff = callDelta - putDelta
-  if (scale <= 0 || Math.abs(diff) < scale * OI_DELTA_MIN_SHARE) {
-    return { name: 'oi_delta', vote: 0, reason: 'ΔOI bez výrazné převahy call/put' }
-  }
-  return diff > 0
-    ? { name: 'oi_delta', vote: 1, reason: `ΔOI převaha call (+${Math.round(diff)})` }
-    : { name: 'oi_delta', vote: -1, reason: `ΔOI převaha put (${Math.round(diff)})` }
-}
-
-/** Negativní gamma přidává momentum ve směru trendu; pozitivní táhne skóre k nule. */
-function gammaVote(
-  positiveGamma: boolean | null,
-  expected: TrendDirection | null,
-  partial: number,
-  cliffShare: number | null = null,
-  thinMap: boolean | null = null,
-): VerdictVote {
-  if (positiveGamma === null) return { name: 'gamma', vote: 0, reason: 'gamma režim bez dat' }
-  if (positiveGamma) {
-    // 21. 9. 2026: po kvartálním OPEX (útes ES 83 %) hlas −1 vyrušil trend +3 a
-    // verdikt byl none při +580 b — tenká gamma netlumí. Útes (co odpadlo) a
-    // tenká mapa (co zbylo, #1245) jsou JEDEN nulový hlas s oběma důvody, ne dva.
-    const causes: string[] = []
-    if (cliffShare !== null && cliffShare >= CLIFF_DAMPING_OFF) {
-      causes.push(`po útesu ${Math.round(cliffShare * 100)} % gammy`)
-    }
-    if (thinMap) causes.push('mapa je tenká (#1245)')
-    if (causes.length > 0) {
-      return { name: 'gamma', vote: 0, reason: `pozitivní gamma, ale ${causes.join(' a ')} — tlumení tenké, nehlasuje` } // prettier-ignore
-    }
-  }
-  if (!positiveGamma) {
-    if (expected === 'up') return { name: 'gamma', vote: 1, reason: 'negativní gamma = momentum ve směru trendu (long)' } // prettier-ignore
-    if (expected === 'down') return { name: 'gamma', vote: -1, reason: 'negativní gamma = momentum ve směru trendu (short)' } // prettier-ignore
-    return { name: 'gamma', vote: 0, reason: 'negativní gamma, ale trend bez směru' }
-  }
-  if (partial > 0) return { name: 'gamma', vote: -1, reason: 'pozitivní gamma tlumí pohyb — převaha slabší' } // prettier-ignore
-  if (partial < 0) return { name: 'gamma', vote: 1, reason: 'pozitivní gamma tlumí pohyb — převaha slabší' } // prettier-ignore
-  return { name: 'gamma', vote: 0, reason: 'pozitivní gamma tlumí pohyb' }
-}
-
-function verdictSummary(verdict: VerdictKind, score: number): string {
+/** Věta pro kartu a plán z uloženého verdiktu a skóre. */
+export function verdictSummary(verdict: VerdictKind, score: number): string {
   const signed = `${score >= 0 ? '+' : ''}${score}`
   switch (verdict) {
     case 'long':

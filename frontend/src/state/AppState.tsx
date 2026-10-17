@@ -94,6 +94,9 @@ export interface PipelineStatus {
   tasty_adhoc?: string[]
   /** Stav „tenká mapa" per symbol (#1245). Klíč CHYBÍ, když kolektor neběží. */
   map_state?: Record<string, MapStateInfo>
+  /** Instrumenty s pipeline enginu, čárkami („ES,NQ"; `aggregate_status`). Klíč CHYBÍ
+      do prvního plného cyklu — „nevíme" není „žádná pipeline" (verdikt dne, #1595). */
+  symbols?: string
   updated_at?: number | null
 }
 

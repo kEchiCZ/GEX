@@ -106,46 +106,7 @@ class MetaRepository:
         with self._db().begin() as conn:
             _notify_watchlist(conn, payload)
 
-    # ── verdikt dne z Briefingu (#1090) ────────────────────────────
-    def briefing_verdict_upsert(
-        self, values: dict[str, Any], *, now: dt.datetime
-    ) -> dict[str, Any]:
-        """Uloží verdikt seance; opakovaný zápis téže seance a symbolu přepíše.
-
-        Idempotence přes unikátní (session_date, symbol): Briefing se
-        obnovuje každou minutu a verdikt se před openem může měnit — platí
-        poslední stav, historie změn se nevede (vyhodnocení #1091 čte finální).
-        Zápis od US openu odmítá volající (stráž v `briefing_routes`, #1585);
-        `now` je okamžik, který stráž ověřila, a uloží se jako `updated_at`.
-        """
-        with self._db().begin() as conn:
-            existing = conn.execute(
-                select(briefing_verdicts_table.c.id).where(
-                    briefing_verdicts_table.c.session_date == values["session_date"],
-                    briefing_verdicts_table.c.symbol == values["symbol"],
-                )
-            ).scalar_one_or_none()
-            if existing is None:
-                result = conn.execute(
-                    insert(briefing_verdicts_table).values(**values, created_at=now, updated_at=now)
-                )
-                entry_id = _inserted_id(result)
-            else:
-                conn.execute(
-                    update(briefing_verdicts_table)
-                    .where(briefing_verdicts_table.c.id == existing)
-                    .values(**values, updated_at=now)
-                )
-                entry_id = int(existing)
-            row = (
-                conn.execute(
-                    select(briefing_verdicts_table).where(briefing_verdicts_table.c.id == entry_id)
-                )
-                .mappings()
-                .one()
-            )
-            return _serialize(dict(row))
-
+    # ── verdikt dne (#1090; zapisuje engine, #1595) ───────────────
     def briefing_verdicts(self, symbol: str | None, days: int) -> list[dict[str, Any]]:
         """Verdikty posledních `days` seancí (nejnovější první)."""
         since = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=days)

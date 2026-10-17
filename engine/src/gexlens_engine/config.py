@@ -181,8 +181,9 @@ class Settings(BaseSettings):
     # Push na Telegram (#1175, API): přihlašovací údaje bota a chat id jen
     # z .env; tiché hodiny lokálně (Europe/Prague), provozní alerty jdou
     # i v nich; denní strop zpráv a minimální confidence setupu (0 = všechny)
-    # Automatický scénář dne (#1173 A): kolik minut před US openem engine
-    # sestaví scénář z verdiktu dne; 0 = vypnuto
+    # Automatický scénář dne (#1173 A): okno N minut před US openem, ve kterém
+    # engine sestaví scénář z verdiktu dne (první minuta s úplným verdiktem,
+    # #1595); 0 = scénář vypnutý — zápis verdiktu dne běží dál
     scenario_auto_minutes_before_open: int = Field(default=15, ge=0, le=180)
     push_telegram_token: str = ""
     push_telegram_chat_id: str = ""

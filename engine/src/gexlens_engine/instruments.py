@@ -67,6 +67,7 @@ from gexlens_engine.storage.meta import ensure_meta_schema, settings_table, watc
 from gexlens_engine.storage.oi_archive import OIArchiver, OIEodRepository
 from gexlens_engine.t6 import T6Collector
 from gexlens_engine.tendency import TendencyEngine
+from gexlens_engine.verdict_writer import DayVerdictWriter
 from gexlens_engine.volregime import VolRegimeCollector
 
 logger = logging.getLogger(__name__)
@@ -353,6 +354,8 @@ class InstrumentPipeline:
     scenario_collector: ScenarioCollector | None = None
     # Paper účet (#1187 fáze 1): fily orderů proti barům minuty — None = vypnuto
     paper_broker: PaperBroker | None = None
+    # Verdikt dne (#1595) — engine jediný zapisovatel, okno před US openem
+    verdict_writer: DayVerdictWriter | None = None
     # Automatický scénář z verdiktu dne (#1173 A) — jednou před US openem
     scenario_generator: ScenarioGenerator | None = None
     # Volatilitní režim z barů (ADR-0028, #713) — None = vypnuto
@@ -1132,10 +1135,18 @@ class InstrumentPipeline:
                 await self.gamma_cliff.on_minute(now)
             except Exception:
                 logger.exception("Gamma útes %s selhal — pokračuji", self.symbol)
-        # Automatický scénář dne (#1173 A) — jednou před US openem
+        # Verdikt dne (#1595) — PO tendenci a stavu mapy (hlasují hodnotou téže
+        # minuty), PŘED scénářem; pád nesmí shodit sběr dat
+        pre_open = None
+        if self.verdict_writer is not None:
+            try:
+                pre_open = await self.verdict_writer.on_minute(now, spot, self.runtime)
+            except Exception:
+                logger.exception("Verdikt dne %s selhal — pokračuji", self.symbol)
+        # Automatický scénář dne (#1173 A) — jednou před US openem z verdiktu téže minuty
         if self.scenario_generator is not None:
             try:
-                await self.scenario_generator.on_minute(now, spot, self.runtime)
+                await self.scenario_generator.on_minute(now, pre_open, self.runtime)
             except Exception:
                 logger.exception("Automatický scénář %s selhal — pokračuji", self.symbol)
         # Scénáře dne (#1173) — jednou po settle, jen scénáře po termínu

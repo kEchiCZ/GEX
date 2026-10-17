@@ -1,13 +1,16 @@
 /** Ranní briefing (#674): REST klient + čisté skládací helpery.
 
-Obrazovka je ČISTÁ KOMPOZICE existujících dat — žádný nový výpočet v enginu.
+Obrazovka je ČISTÁ KOMPOZICE existujících dat — nic neukládá ani nepočítá za server.
 Fetchery čtou lehké endpointy (/bars, /oidelta, /levels, /gexforward,
-/gammacliff, /news/upcoming, /sentiment/state); helpery z barů skládají
+/gammacliff, /news/upcoming, /sentiment/state, /briefing/verdicts — verdikt dne
+počítá a ukládá engine, #1595); helpery z barů skládají
 overnight rozsah a včerejší settle. US open se počítá DST-korektně přes
 zonedTimeUtc (#511).
 */
 import { API_BASE } from '../config'
-import type { DayVerdict, NewsExpectation, TurnLevel, TypicalReaction, VerdictKind, VerdictVote } from '../instrument/daysummary' // prettier-ignore
+import type { NewsExpectation, TurnLevel, TypicalReaction, VerdictKind, VerdictVote } from '../instrument/daysummary' // prettier-ignore
+import { VERDICT_LABELS, pragueTime, verdictSummary } from '../instrument/daysummary'
+import { isUsMarketHoliday } from '../instrument/holidays'
 import { TIMEFRAMES } from '../instrument/trend'
 import type { Candle, TimeframeKey, TrendReport } from '../instrument/trend'
 import { isTradingSessionIso, zonedTimeUtc } from '../instrument/tz'
@@ -75,11 +78,14 @@ export async function fetchCandles(
 }
 
 /** Kolik svíček per timeframe stáhnout: EMA50 + rezerva na pivoty; týden má
-z 2 let barů ~100 svíček, intradenní koše jen pár seancí (limit endpointu 600). */
+z 2 let barů ~100 svíček, intradenní koše jen pár seancí (limit endpointu 600).
+Délka okna mění EMA (start z průměru prvních svíček) — tabulka je táž jako
+v enginu `scenario_auto.CANDLE_LIMITS`, ať karta Trend a hlasy trendu v uloženém
+verdiktu čtou stejné svíčky (#1595); mění se spolu. */
 export const CANDLE_LIMITS: Record<TimeframeKey, number> = {
   W: 80,
   D: 120,
-  '240': 90,
+  '240': 120,
   '60': 120,
   '15': 120,
 }
@@ -105,31 +111,81 @@ export async function fetchTypicalReactions(symbol: string): Promise<TypicalReac
   return data.typical
 }
 
-/** Uloží verdikt dne (#1090) — jeden řádek per seance a symbol, přepis idempotentní.
-Od US openu API zápis odmítne (409, #1585), proto se volá jen při `verdictWritable`.
-Chyba se polyká: karta má žít i bez DB, vyhodnocení (#1091) pak den prostě nemá.
-Odmítnutí po openu (409) se jen zaloguje — hodiny klienta mohou jít napřed proti serveru. */
-export async function postVerdict(payload: {
+/** Uložený verdikt dne (#1595) — řádek `briefing_verdicts`, zapisuje ho jen engine.
+Jen sloupce, které Briefing čte; `outcome_*` patří do Stats (#1091). */
+export interface StoredVerdict {
   session_date: string
-  symbol: string
   verdict: VerdictKind
   score: number
   votes: VerdictVote[]
-  rules_version: number
-}): Promise<boolean> {
+  /** Poslední zápis enginu (ISO UTC) — stáří předběžného verdiktu. */
+  updated_at: string
+  /** Chybějící vstupy výpočtu (#1595 e1): [] úplný, null = řádek z Briefingu před #1595. */
+  missing?: string[] | null
+}
+
+/** Výsledek čtení uloženého verdiktu: řádek seance (null = engine ho nezapsal), nebo chyba. */
+export type StoredVerdictResult = { ok: true; row: StoredVerdict | null } | { ok: false; error: string } // prettier-ignore
+
+const DAY_MS = 86_400_000
+/** Strop `days` endpointu `GET /briefing/verdicts`. */
+const VERDICTS_MAX_DAYS = 400
+
+function verdictLoadError(detail: string): StoredVerdictResult {
+  return { ok: false, error: `Verdikt se nepodařilo načíst (${detail})` }
+}
+
+function isStoredVerdict(row: Partial<StoredVerdict>): row is StoredVerdict {
+  return (
+    typeof row.verdict === 'string' &&
+    Object.keys(VERDICT_LABELS).includes(row.verdict) &&
+    typeof row.score === 'number' &&
+    Array.isArray(row.votes) &&
+    typeof row.updated_at === 'string' &&
+    Number.isFinite(Date.parse(row.updated_at)) &&
+    (row.missing == null || Array.isArray(row.missing))
+  )
+}
+
+/** „, neúplný (chybí: …)" u řádku s chybějícími vstupy, jinak prázdné (#1595 e1). */
+function incompleteText(row: StoredVerdict): string {
+  return row.missing && row.missing.length > 0 ? `, neúplný (chybí: ${row.missing.join('; ')})` : ''
+}
+
+/** Uložený verdikt seance `dateIso` (#1595): `GET /briefing/verdicts?symbol=&days=`.
+
+Na rozdíl od `getJson` chyby NEpolyká: výpadek API nebo DB není „verdikt
+nevznikl" — karta ukáže chybu s kódem. API filtruje od dnešního UTC data − `days`,
+proto `days` pokryje i starší prohlížené datum (strop 400). */
+export async function fetchStoredVerdict(
+  symbol: string,
+  dateIso: string,
+  nowMs: number = Date.now(),
+): Promise<StoredVerdictResult> {
+  const todayUtc = Date.parse(new Date(nowMs).toISOString().slice(0, 10))
+  const back = Math.ceil((todayUtc - Date.parse(dateIso)) / DAY_MS) + 1
+  const days = Math.min(VERDICTS_MAX_DAYS, Math.max(1, back))
+  const query = new URLSearchParams({ symbol, days: String(days) })
+  let response: Response
   try {
-    const response = await fetch(`${API_BASE}/briefing/verdicts`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    if (response.status === 409) {
-      console.warn('Verdikt dne po US openu nelze zapsat (409, #1585)', payload.session_date)
-    }
-    return response.ok
-  } catch {
-    return false
+    response = await fetch(`${API_BASE}/briefing/verdicts?${query.toString()}`)
+  } catch (error) {
+    return verdictLoadError(`síť: ${error instanceof Error ? error.message : String(error)}`)
   }
+  if (!response.ok) return verdictLoadError(`HTTP ${response.status}`)
+  let data: { verdicts?: unknown }
+  try {
+    data = (await response.json()) as { verdicts?: unknown }
+  } catch {
+    return verdictLoadError('odpověď není JSON')
+  }
+  if (!Array.isArray(data.verdicts)) return verdictLoadError('odpověď bez seznamu verdiktů')
+  const rows = data.verdicts as Array<Partial<StoredVerdict>>
+  const row = rows.find((item) => item.session_date === dateIso)
+  if (row === undefined) return { ok: true, row: null }
+  return isStoredVerdict(row)
+    ? { ok: true, row }
+    : verdictLoadError(`neplatný řádek seance ${dateIso}`)
 }
 
 /** Track record verdiktů dne (#1091): hit-rate per verdikt a per složka, Wilson LB, brána n ≥ 30. */
@@ -384,12 +440,84 @@ export function usOpenMs(dateIso: string): number {
   return zonedTimeUtc('America/New_York', year, month, day, 9, 30)
 }
 
-/** Smí Briefing uložit verdikt seance? Jen obchodní den (víkend a svátek nemají
-US open ani settle, #1309) a jen před US openem: od openu se hodnotí pohyb
-open → settle a API zápis odmítne (409, #1585). Rozhoduje server, tohle jen
-šetří POST, který by neprošel. */
-export function verdictWritable(dateIso: string, nowMs: number): boolean {
-  return isTradingSessionIso(dateIso) && nowMs < usOpenMs(dateIso)
+/** Od kolika minut před US openem engine přepočítává verdikt každou minutu —
+zrcadlo enginu `verdict_writer.VERDICT_WINDOW_MINUTES` (#1595), mění se spolu. */
+export const VERDICT_EVERY_MINUTE_BEFORE_OPEN = 15
+
+/** Stav karty Verdikt dne (#1595) — Briefing jen ukazuje, co uložil engine. */
+export interface VerdictCard {
+  kind:
+    | 'no_session' // víkend nebo svátek NYSE — verdikt se nevydává
+    | 'no_pipeline' // symbol bez pipeline enginu — verdikt nikdo nepočítá
+    | 'error' // čtení selhalo — výslovná chyba, ne „bez verdiktu"
+    | 'loading' // první odpověď ještě nedorazila
+    | 'preliminary' // uložený řádek před US openem — engine ho ještě přepisuje
+    | 'frozen' // uložený řádek od US openu — už se nemění
+    | 'pending' // bez řádku před openem — vznikne
+    | 'missing' // bez řádku po openu — viditelná mezera, nic se nedopočítává
+  /** Stavová věta karty; u uloženého řádku jeho platnost a stáří. */
+  message: string
+  row: StoredVerdict | null
+}
+
+const SESSION_DAY = new Intl.DateTimeFormat('cs-CZ', {
+  timeZone: 'UTC',
+  weekday: 'long',
+  day: 'numeric',
+  month: 'numeric',
+})
+
+/** Stáří zápisu: „před 3 min", „před 2 h 5 min". */
+function ageText(ms: number): string {
+  const minutes = Math.floor(Math.max(0, ms) / 60_000)
+  if (minutes < 1) return 'před chvílí'
+  if (minutes < 60) return `před ${minutes} min`
+  return `před ${Math.floor(minutes / 60)} h ${minutes % 60} min`
+}
+
+/** Čistý stav karty verdiktu z uloženého řádku, obchodního dne a pipeline (#1595).
+
+`pipelineSymbols` je `status.symbols` enginu (čárkami); bez něj (engine status
+zatím nedorazil) se o pipeline nic netvrdí. `stored` null = načítá se. Časy
+v pražském čase jako zbytek Briefingu. */
+export function verdictCard(input: {
+  dateIso: string
+  symbol: string
+  pipelineSymbols: string | undefined
+  stored: StoredVerdictResult | null
+  nowMs: number
+}): VerdictCard {
+  const { dateIso, symbol, pipelineSymbols, stored, nowMs } = input
+  if (!isTradingSessionIso(dateIso)) {
+    const day = `${SESSION_DAY.format(new Date(`${dateIso}T12:00:00Z`))}${isUsMarketHoliday(dateIso) ? ' (svátek NYSE)' : ''}` // prettier-ignore
+    return { kind: 'no_session', message: `Verdikt se nevydává — ${day} není obchodní seance.`, row: null } // prettier-ignore
+  }
+  // Uložený řádek má přednost: symbol mohl pipeline ztratit až po zápisu (watchlist).
+  // Prázdné `symbols` = engine bez pipeline (IBKR nepřipojené) — nic se netvrdí
+  const hasRow = stored !== null && stored.ok && stored.row !== null
+  if (!hasRow && pipelineSymbols && !pipelineSymbols.split(',').includes(symbol)) {
+    return { kind: 'no_pipeline', message: 'Engine pro tento symbol verdikt nepočítá.', row: null }
+  }
+  if (stored === null) return { kind: 'loading', message: 'Verdikt se načítá.', row: null }
+  if (!stored.ok) return { kind: 'error', message: stored.error, row: null }
+  const openMs = usOpenMs(dateIso)
+  const beforeOpen = nowMs < openMs
+  const { row } = stored
+  if (row === null) {
+    return beforeOpen
+      ? { kind: 'pending', message: 'Verdikt zatím nevznikl — engine ho ukládá od začátku seance každých 5 min.', row: null } // prettier-ignore
+      : { kind: 'missing', message: 'Verdikt pro tuto seanci nevznikl.', row: null }
+  }
+  const savedAt = pragueTime(row.updated_at)
+  const incomplete = incompleteText(row)
+  if (!beforeOpen) return { kind: 'frozen', message: `zmrazený${incomplete} — poslední zápis ${savedAt}`, row } // prettier-ignore
+  const everyMinuteFrom = pragueTime(new Date(openMs - VERDICT_EVERY_MINUTE_BEFORE_OPEN * 60_000).toISOString()) // prettier-ignore
+  const open = pragueTime(new Date(openMs).toISOString())
+  return {
+    kind: 'preliminary',
+    message: `předběžný${incomplete}: engine ho přepočítává každých 5 min, od ${everyMinuteFrom} každou minutu; platí poslední stav před openem ${open}. Uloženo ${savedAt}, ${ageText(nowMs - Date.parse(row.updated_at))}.`, // prettier-ignore
+    row,
+  }
 }
 
 export interface RangeSummary {
@@ -468,9 +596,10 @@ export function briefingToPlanText(input: {
   /** Volatility box (#873): vol režim + EM; undefined = data zatím nedorazila. */
   vol?: VolRegimeRow | null
   em?: PlanEm | null
-  /** Shrnutí dne (#1090): trend, verdikt, úrovně obratu, zprávy — jen když jsou. */
+  /** Shrnutí dne (#1090): trend, verdikt, úrovně obratu, zprávy — jen když jsou.
+  Verdikt jen z uloženého řádku enginu (#1595); bez řádku plán verdikt vynechá. */
   trend?: TrendReport | null
-  verdict?: DayVerdict | null
+  verdict?: VerdictCard | null
   turnLevels?: TurnLevel[]
   news?: NewsExpectation[]
 }): string {
@@ -506,7 +635,14 @@ export function briefingToPlanText(input: {
       `- Zprávy: ${news.map((item) => `${item.timeLabel} ${item.row.title} — ${item.magnitude}`).join('; ')}`,
     )
   }
-  if (input.verdict) lines.push(`- Verdikt dne: ${input.verdict.summary}`)
+  const stored = input.verdict?.row
+  if (stored) {
+    // Plán je záznam okamžiku: předběžný verdikt se do openu ještě může změnit
+    const savedAt = pragueTime(stored.updated_at)
+    const incomplete = incompleteText(stored)
+    const validity = input.verdict?.kind === 'frozen' ? `zmrazený${incomplete}, poslední zápis ${savedAt}` : `předběžný${incomplete}, uloženo ${savedAt}` // prettier-ignore
+    lines.push(`- Verdikt dne: ${verdictSummary(stored.verdict, stored.score)} (${validity})`)
+  }
   lines.push('- Teze dne: ')
   return lines.join('\n')
 }

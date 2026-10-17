@@ -1,19 +1,21 @@
 """Automatický scénář dne (#1173, varianta A — rozhodnutí uživatele 15. 9. 2026).
 
 Jednou za obchodní seanci (po–pá, `settle.is_trading_session`; víkend nemá US open
-ani settle — #1309), 15 minut před US openem (`GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN`),
-engine sám sestaví scénář z **verdiktu dne** — stejné hlasování jako Shrnutí
-dne v Briefingu (`compute/dayverdict`, port frontendu, týž `rules_version`):
-trend TF, tendence, sentiment, cena vs. včerejší close, ΔOI přes noc, gamma
-režim. Při verdiktu long/short jsou cíle nejbližší úrovně obratu ve směru
-(zdi, flip, těžiště, PDH/PDL/PDC, ONH/ONL, ±EM), cesta vstup → cíl 1 → cíl 2,
-termín settle dne. Při `none` / `wait_news` scénář nevznikne a log řekne proč.
+ani settle — #1309), v okně před US openem (`GEXLENS_SCENARIO_AUTO_MINUTES_BEFORE_OPEN`),
+engine sám sestaví scénář z **verdiktu dne**, který v téže minutě spočítal a uložil
+zapisovač (`verdict_writer`, #1595 d1 — API se čte jednou): trend TF, tendence,
+sentiment, cena vs. včerejší close, ΔOI přes noc, gamma režim (`compute/dayverdict`).
+Scénář vznikne v první minutě okna s **úplným** verdiktem — výpadek čtení API nebo
+restart bez tendence ho jen odloží na další minutu okna. Při verdiktu long/short
+jsou cíle nejbližší úrovně obratu ve směru (zdi, flip, těžiště, PDH/PDL/PDC,
+ONH/ONL, ±EM), cesta vstup → cíl 1 → cíl 2, termín settle dne. Při `none` /
+`wait_news` scénář nevznikne a log řekne proč.
 
-Vstupy, které engine nemá v paměti, čte z API (tytéž endpointy jako Briefing):
-svíčky per TF, bary dneška a včerejška, ΔOI, stav sentimentu, kalendář —
-žádná nová logika, jen stejný výpočet na serveru. Snímek PNG dodá frontend,
-jakmile má graf otevřený (`PUT /scenarios/{id}/image`); cesta se kreslí živě
-do heatmapy z uložených bodů. Jen dopředu — nic se nedopočítává zpětně.
+Vstupy, které engine nemá v paměti, čte `gather_context` z API (tytéž endpointy
+jako Briefing): svíčky per TF, bary dneška a včerejška, ΔOI, stav sentimentu,
+kalendář. Snímek PNG dodá frontend, jakmile má graf otevřený
+(`PUT /scenarios/{id}/image`); cesta se kreslí živě do heatmapy z uložených bodů.
+Jen dopředu — nic se nedopočítává zpětně.
 """
 
 import asyncio
@@ -30,7 +32,6 @@ from gexlens_engine.compute.dayverdict import (
     LevelInputs,
     VerdictInput,
     build_auto_scenario,
-    day_verdict,
 )
 from gexlens_engine.compute.settle import (
     ET_TZ,
@@ -45,7 +46,9 @@ from gexlens_engine.storage.scenarios_store import ScenariosRepository
 
 logger = logging.getLogger(__name__)
 
-CANDLE_LIMITS: dict[str, int] = {"W": 60, "D": 120, "240": 120, "60": 120, "15": 120}
+#: Počty svíček per TF — táž tabulka jako karta Trend v Briefingu (`frontend/src/api/
+#: briefing.ts`, #1595 b): EMA50 startuje z průměru prvních 50, počet svíček ji posouvá
+CANDLE_LIMITS: dict[str, int] = {"W": 80, "D": 120, "240": 120, "60": 120, "15": 120}
 
 
 @dataclass
@@ -68,6 +71,34 @@ class VerdictContext:
     sentiment_unconfirmed: bool = False
     news_before_open: bool = False
     missing: list[str] = field(default_factory=list)
+    #: Čtení vstupů z API, která selhala (výpadek) — jiné než „data nejsou"
+    failures: list[str] = field(default_factory=list)
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.failures)
+
+    def fail(self, what: str, exc: Exception) -> None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        reason = f"{what}: {f'HTTP {status}' if status else type(exc).__name__}"
+        self.missing.append(reason)
+        self.failures.append(reason)
+
+
+@dataclass(frozen=True)
+class PreOpenVerdict:
+    """Verdikt minuty před openem od zapisovače (#1595) — scénář ho přebírá."""
+
+    verdict: DayVerdict
+    context: VerdictContext
+    #: Cena, se kterou verdikt hlasoval (overnight) — vstup scénáře
+    spot: float
+    #: Chybějící vstupy (#1595 e1): selhaná čtení API, levels a tendence z runtime
+    missing: tuple[str, ...]
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing
 
 
 class ApiReader:
@@ -103,15 +134,19 @@ def _candles(rows: list[dict[str, Any]]) -> list[Candle]:
 
 
 def _settle_close(bars: list[dict[str, Any]]) -> float | None:
-    """Close posledního baru v US RTH (≤ 16:00 New York) — PDC, ne poslední Globex minuta."""
+    """Close posledního baru v US RTH (před settle New York) — PDC, ne poslední Globex minuta.
+
+    Hranice `settle_ts`, ne 16:00 natvrdo: po zkrácené seanci (13:00 ET, ADR-0046)
+    by PDC vzalo bar 13:14 ET, který už do seance nepatří (#1595).
+    """
     settle: float | None = None
     for bar in bars:
         ts = dt.datetime.fromisoformat(str(bar["ts_min"]))
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=dt.UTC)
-        local = ts.astimezone(ET_TZ)
+        day = ts.astimezone(ET_TZ).date()
         # Obchodní den z jediného predikátu (#1309) — víkendový bar PDC není
-        if is_trading_session(local.date()) and dt.time(9, 30) <= local.time() < dt.time(16, 0):
+        if is_trading_session(day) and us_open_ts(day) <= ts < settle_ts(day):
             settle = float(bar["close"])
     return settle
 
@@ -131,7 +166,7 @@ async def gather_context(
             payload = await api.get(f"/candles/{symbol}", {"tf": tf, "limit": CANDLE_LIMITS[tf]})
             by_tf[tf] = _candles(payload.get("candles", []))
         except Exception as exc:  # noqa: BLE001 — chybějící TF = „málo dat", ne pád
-            ctx.missing.append(f"candles {tf}: {type(exc).__name__}")
+            ctx.fail(f"candles {tf}", exc)
     ctx.trend = assess_trends(by_tf) if by_tf else None
     # Bary: dnešní (ONH/ONL do openu) a poslední uložený den před dneškem (PDH/PDL/PDC)
     try:
@@ -147,7 +182,7 @@ async def gather_context(
             ctx.on_high = high if ctx.on_high is None else max(ctx.on_high, high)
             ctx.on_low = low if ctx.on_low is None else min(ctx.on_low, low)
     except Exception as exc:  # noqa: BLE001
-        ctx.missing.append(f"bars dnes: {type(exc).__name__}")
+        ctx.fail("bars dnes", exc)
     try:
         days_payload = await api.get(f"/instruments/{symbol}/days")
         days = sorted(
@@ -176,7 +211,7 @@ async def gather_context(
         if not before:
             ctx.missing.append("bary včerejška: žádný uložený den")
     except Exception as exc:  # noqa: BLE001
-        ctx.missing.append(f"bars včera: {type(exc).__name__}")
+        ctx.fail("bars včera", exc)
     try:
         cliff = await api.get(f"/gammacliff/{symbol}", {"limit": 1})
         rows = cliff.get("rows") or cliff.get("history") or []
@@ -184,7 +219,7 @@ async def gather_context(
             share = rows[0].get("cliff_share")
             ctx.cliff_share = float(share) if share is not None else None
     except Exception as exc:  # noqa: BLE001
-        ctx.missing.append(f"gamma útes: {type(exc).__name__}")
+        ctx.fail("gamma útes", exc)
     if expiry:
         try:
             oi = await api.get(f"/oidelta/{symbol}/{expiry}")
@@ -195,14 +230,14 @@ async def gather_context(
                 ctx.oi_call_total = _number(oi.get("call_total"))
                 ctx.oi_put_total = _number(oi.get("put_total"))
         except Exception as exc:  # noqa: BLE001
-            ctx.missing.append(f"oidelta: {type(exc).__name__}")
+            ctx.fail("oidelta", exc)
     try:
         state = await api.get("/sentiment/state", {"symbol": symbol})
         if isinstance(state, dict) and state.get("state"):
             ctx.sentiment_state = str(state["state"])
             ctx.sentiment_unconfirmed = bool(state.get("unconfirmed", False))
     except Exception as exc:  # noqa: BLE001
-        ctx.missing.append(f"sentiment: {type(exc).__name__}")
+        ctx.fail("sentiment", exc)
     try:
         upcoming = await api.get("/news/upcoming", {"hours": 24})
         open_ts = us_open_ts(session)
@@ -221,7 +256,7 @@ async def gather_context(
                 ctx.news_before_open = True
                 break
     except Exception as exc:  # noqa: BLE001
-        ctx.missing.append(f"kalendář: {type(exc).__name__}")
+        ctx.fail("kalendář", exc)
     return ctx
 
 
@@ -232,51 +267,66 @@ def _number(value: Any) -> float | None:
         return None
 
 
+def verdict_input(ctx: VerdictContext, spot: float, runtime: EngineRuntime) -> VerdictInput:
+    """Vstup hlasování z kontextu API a stavu runtime téže minuty (#1173 A, #1595)."""
+    levels = runtime.last_levels
+    return VerdictInput(
+        trend=ctx.trend,
+        positive_gamma=(levels.total_gex >= 0) if levels else None,
+        tendency_band=runtime.tendency_band,
+        sentiment_state=ctx.sentiment_state,
+        sentiment_unconfirmed=ctx.sentiment_unconfirmed,
+        price=spot,
+        prev_close=ctx.prev_close,
+        oi_call_delta=ctx.oi_call_delta,
+        oi_put_delta=ctx.oi_put_delta,
+        oi_call_total=ctx.oi_call_total,
+        oi_put_total=ctx.oi_put_total,
+        news_before_open=ctx.news_before_open,
+        cliff_share=ctx.cliff_share,
+        thin_map=runtime.thin_map,
+    )
+
+
 @dataclass
 class ScenarioGenerator:
     """Jednou za seanci před US openem založí automatický scénář symbolu."""
 
     symbol: str
     repository: ScenariosRepository
-    api: ApiReader
     publisher: Any = None
     minutes_before_open: int = 15
 
     _done_for: dt.date | None = field(default=None, init=False)
 
-    async def on_minute(self, now: dt.datetime, spot: float | None, runtime: EngineRuntime) -> None:
+    async def on_minute(
+        self, now: dt.datetime, pre_open: PreOpenVerdict | None, runtime: EngineRuntime
+    ) -> None:
+        """`pre_open` = verdikt téže minuty od zapisovače (None: minuta bez výpočtu)."""
         session = trading_session_date(now)
         if self._done_for == session or not is_trading_session(session):
             return  # víkend: den bez US openu i settle — scénář nevzniká (#1309)
-        fire_at = us_open_ts(session) - dt.timedelta(minutes=self.minutes_before_open)
-        if now < fire_at or now >= us_open_ts(session):
+        open_ts = us_open_ts(session)
+        if now < open_ts - dt.timedelta(minutes=self.minutes_before_open) or now >= open_ts:
             return  # okno: [open − N min, open) — po openu už dnes ne
-        self._done_for = session  # jeden pokus per seance i při chybě
-        if spot is None:
-            logger.warning("%s: automatický scénář — bez spotu, přeskočeno", self.symbol)
+        if pre_open is None:
+            return  # zapisovač tuto minutu nepočítal (bez ceny, cyklus až po openu)
+        verdict, ctx, spot = pre_open.verdict, pre_open.context, pre_open.spot
+        if not pre_open.complete:
+            # Výpadek čtení API nebo restart bez tendence: scénář počká na úplný verdikt
+            last_minute = now >= open_ts - dt.timedelta(minutes=1)
+            logger.log(
+                logging.WARNING if last_minute else logging.INFO,
+                "%s: automatický scénář %s — verdikt neúplný (chybí: %s)",
+                self.symbol,
+                "dnes nevznikne" if last_minute else "čeká na další minutu",
+                ", ".join(pre_open.missing),
+            )
             return
+        self._done_for = session  # jeden pokus per seance s úplným verdiktem
         if await asyncio.to_thread(self.repository.exists_auto, self.symbol, session):
             return  # restart enginu uprostřed okna
-        ctx = await gather_context(self.api, self.symbol, runtime.expiry, session, now)
         levels = runtime.last_levels
-        verdict = day_verdict(
-            VerdictInput(
-                trend=ctx.trend,
-                positive_gamma=(levels.total_gex >= 0) if levels else None,
-                tendency_band=runtime.tendency_band,
-                sentiment_state=ctx.sentiment_state,
-                sentiment_unconfirmed=ctx.sentiment_unconfirmed,
-                price=spot,
-                prev_close=ctx.prev_close,
-                oi_call_delta=ctx.oi_call_delta,
-                oi_put_delta=ctx.oi_put_delta,
-                oi_call_total=ctx.oi_call_total,
-                oi_put_total=ctx.oi_put_total,
-                news_before_open=ctx.news_before_open,
-                cliff_share=ctx.cliff_share,
-                thin_map=runtime.thin_map,
-            )
-        )
         rationale = _rationale(verdict, ctx)
         if verdict.verdict not in ("long", "short"):
             logger.info(

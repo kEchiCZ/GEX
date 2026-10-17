@@ -5,7 +5,7 @@ včerejší settle + overnight rozsah, dnešní odpad gammy (#576), Forward GEX
 útesy týdne (#519), makro kalendář dne, ΔOI přes noc, stav sentimentu per
 instrument. Tlačítko ☀ předvyplní ranní plán deníku (#673).
 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   VOL_BUCKET_LABELS,
@@ -20,9 +20,9 @@ import {
   fetchLevelsSeries,
   fetchOiDelta,
   fetchStoredDays,
+  fetchStoredVerdict,
   fetchTypicalReactions,
   fetchVolRegimeLatest,
-  postVerdict,
   gammaRegimeLabel,
   ivRankPrimary,
   ivRankTooltip,
@@ -32,11 +32,11 @@ import {
   latestLevels,
   previousStoredDay,
   usOpenMs,
-  verdictWritable,
+  verdictCard,
 } from '../api/briefing'
-import type { BarRow, CliffPrevious, CliffToday, EmRespectSummary, IvRankRow, LevelsRow, OiDeltaSummary, RangeSummary, VolRegimeRow } from '../api/briefing' // prettier-ignore
+import type { BarRow, CliffPrevious, CliffToday, EmRespectSummary, IvRankRow, LevelsRow, OiDeltaSummary, RangeSummary, StoredVerdictResult, VolRegimeRow } from '../api/briefing' // prettier-ignore
 import { fetchTendency } from '../api/tendency'
-import { VERDICT_RULES_VERSION, dayVerdict, newsExpectations, turnLevels } from '../instrument/daysummary' // prettier-ignore
+import { VERDICT_LABELS, newsExpectations, turnLevels, verdictSummary } from '../instrument/daysummary' // prettier-ignore
 import type { TypicalReaction } from '../instrument/daysummary'
 import { computeReferenceLevels } from '../instrument/referencelevels'
 import type { ExpectedMove } from '../instrument/expectedmove'
@@ -62,10 +62,16 @@ import { sessionDateIso } from '../instrument/tz'
 import { useAppState } from '../state/AppState'
 
 const REFRESH_MS = 60_000
-/** Verdikt se ukládá až po ustálení vstupů (#1090) — viz useEffect níže. */
-const VERDICT_POST_DELAY_MS = 2_000
 /** Instrumenty se stavem sentimentu — per symbol od ADR-0026. */
 const SENTIMENT_SYMBOLS = ['ES', 'NQ'] as const
+/** Tooltip verdiktu dne — odrážky a odřádkování (vzor `ivRankTooltip`). */
+const VERDICT_TOOLTIP = [
+  'Verdikt dne = hlasování s pevnými vahami (ADR-0035 §3), heuristika:',
+  '• počítá a ukládá ho engine pro každou obchodní seanci a symbol (#1595)',
+  '• Briefing ukazuje uložený řádek — nic nepočítá ani neposílá',
+  '• od US openu je zmrazený; vyhodnotí se proti pohybu open → settle (Stats, #1091)',
+  '• každý hlas níže nese důvod; „bez dat" = složka nehlasovala',
+].join('\n')
 
 function formatCountdown(msLeft: number): string {
   if (msLeft <= 0) return 'US seance běží'
@@ -235,7 +241,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   const [prevDate, setPrevDate] = useState<string | null>(null)
   const [levels, setLevels] = useState<LevelsRow | null>(null)
   const [cliff, setCliff] = useState<CliffToday | null>(null)
-  // Útes minulé seance (#1241): brána gamma hlasu + ranní checklist
+  // Útes minulé seance (#1241): ranní checklist
   const [prevCliff, setPrevCliff] = useState<CliffPrevious | null>(null)
   const [oiDelta, setOiDelta] = useState<OiDeltaSummary | null>(null)
   const [upcoming, setUpcoming] = useState<NewsRow[]>([])
@@ -246,6 +252,10 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   const [ivRank, setIvRank] = useState<IvRankRow[]>([])
   // Trend napříč timeframy (#1089): svíčky W/D/4h/1h/15m z /candles
   const [candles, setCandles] = useState<Partial<Record<TimeframeKey, Candle[]>> | null>(null)
+  // Uložený verdikt dne (#1595) s klíčem symbol|seance — odpověď jiného symbolu se neukáže
+  const [storedVerdict, setStoredVerdict] = useState<{ key: string; result: StoredVerdictResult } | null>(null) // prettier-ignore
+  // Klíč posledního dotazu: pozdní odpověď předchozího symbolu nebo seance se zahodí
+  const verdictKeyRef = useRef('')
   const [now, setNow] = useState(() => Date.now())
   const forward = useGexForward(symbol, true)
 
@@ -263,7 +273,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
       setPrevDay(previous ? barsRange(previousBars) : null)
       setPrevBars(previousBars)
     })
-    // Tendence (#350) a typická reakce zpráv (#1090) pro verdikt a zprávy dne
+    // Tendence (#350) a typická reakce zpráv (#1090) pro ranní checklist a zprávy dne
     void fetchTendency(symbol).then((rows) =>
       setTendencyBand(rows.length > 0 ? rows[rows.length - 1].band : null),
     )
@@ -280,6 +290,12 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     void fetchEmRespectSummary(symbol).then(setEmRespect)
     void fetchIvRankLatest(symbol).then(setIvRank)
     void fetchCandlesByTimeframe(symbol).then(setCandles)
+    // Verdikt dne počítá a ukládá engine (#1595) — Briefing čte uložený řádek seance
+    const verdictKey = `${symbol}|${dateIso}`
+    verdictKeyRef.current = verdictKey
+    void fetchStoredVerdict(symbol, dateIso).then((result) => {
+      if (verdictKeyRef.current === verdictKey) setStoredVerdict({ key: verdictKey, result })
+    })
     // Týdenní horizont (#830): bez něj nejde poznat, jestli je dnešek
     // klidný den, nebo den před velkým tiskem — a to mění čtení positioningu
     void fetchUpcoming(24 * 7).then(setUpcoming)
@@ -299,6 +315,17 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     const timer = window.setInterval(() => setNow(Date.now()), REFRESH_MS)
     return () => window.clearInterval(timer)
   }, [])
+  // US open (#1595): karta i plán přepnou na zmrazený verdikt hned, ne až dalším
+  // tikem à 60 s; +5 s — stráž enginu pustí poslední zápis jen před 9:30:00 ET
+  useEffect(() => {
+    const msToOpen = usOpenMs(dateIso) + 5_000 - Date.now()
+    if (msToOpen <= 0 || msToOpen > 86_400_000) return
+    const timer = window.setTimeout(() => {
+      setNow(Date.now())
+      reload()
+    }, msToOpen)
+    return () => window.clearTimeout(timer)
+  }, [dateIso, reload])
 
   const regime = useMemo(() => gammaRegimeLabel(levels, bars?.last ?? null), [levels, bars])
   // Čtení trendu shora dolů (#1089): null, dokud svíčky nedorazí
@@ -346,7 +373,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
       centroid: levels?.centroid ?? null,
     })
   }, [todayBars, regimeInfo.state, regimeInfo.measuredFlip, levels])
-  // Shrnutí dne (#1090, ADR-0035): úrovně obratu, zprávy s reakcí, verdikt hlasováním
+  // Shrnutí dne (#1090, ADR-0035): úrovně obratu, zprávy s reakcí, uložený verdikt enginu
   const reference = useMemo(
     () =>
       todayBars.length > 0 || prevBars.length > 0
@@ -363,53 +390,13 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     () => newsExpectations(todayEvents, typical, usOpenMs(dateIso), now),
     [todayEvents, typical, dateIso, now],
   )
-  const symbolSentiment = sentiments.find(([sym]) => sym === symbol)?.[1] ?? null
-  const verdict = useMemo(
-    () =>
-      dayVerdict({
-        trend,
-        positiveGamma: levels ? levels.total_gex >= 0 : null,
-        tendencyBand,
-        sentiment: symbolSentiment,
-        price: bars?.last ?? null,
-        prevClose: prevDay?.last ?? null,
-        oiDelta,
-        newsBeforeOpen: newsToday.some((item) => item.highImpact && item.beforeOpen),
-        cliffShare: prevCliff?.cliff_share ?? null,
-        thinMap: status.map_state?.[symbol]?.thin ?? null,
-      }),
-    [trend, levels, tendencyBand, symbolSentiment, bars, prevDay, oiDelta, newsToday, prevCliff, status.map_state, symbol], // prettier-ignore
-  )
-  // Uložení verdiktu (#1090): až když dorazily svíčky trendu a stav se ustálí
-  // (VERDICT_POST_DELAY_MS) — při načítání se vstupy sypou po jednom a dva
-  // POSTy v letu by mohly dorazit v opačném pořadí; server přepisuje per
-  // seance × symbol, takže platí poslední
-  // Klíč nese i hlasy (9. 9. na produkci: skóre zůstalo 0 — tendence +1,
-  // sentiment −1 — i po doplnění overnight/ΔOI/gamma, takže se nový POST
-  // neposlal a v DB zůstaly důvody „bez dat" z mezistavu načítání)
-  const verdictKey =
-    trend === null
-      ? null
-      : `${dateIso}|${symbol}|${verdict.verdict}|${verdict.score}|${verdict.votes.map((vote) => `${vote.name}=${vote.vote}:${vote.reason}`).join(';')}`
-  useEffect(() => {
-    // Víkend nemá US open ani settle (#1309, API 422); od US openu je verdikt
-    // zmrazený — hodnotí se pohyb od openu (#1585, API 409)
-    if (verdictKey === null || !verdictWritable(dateIso, Date.now())) return
-    const timer = window.setTimeout(() => {
-      if (!verdictWritable(dateIso, Date.now())) return // open padl do debounce
-      void postVerdict({
-        session_date: dateIso,
-        symbol,
-        verdict: verdict.verdict,
-        score: verdict.score,
-        votes: verdict.votes,
-        rules_version: VERDICT_RULES_VERSION,
-      })
-    }, VERDICT_POST_DELAY_MS)
-    return () => window.clearTimeout(timer)
-    // Klíč nese vše, co zápis mění — ostatní závislosti by jen opakovaly týž POST
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [verdictKey])
+  const verdict = verdictCard({
+    dateIso,
+    symbol,
+    pipelineSymbols: status.symbols,
+    stored: storedVerdict?.key === `${symbol}|${dateIso}` ? storedVerdict.result : null,
+    nowMs: now,
+  })
 
   const createPlan = () => {
     setJournalDraft({
@@ -424,7 +411,7 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
         vol: volRegime,
         em: planEm,
         trend,
-        verdict: trend === null ? null : verdict,
+        verdict,
         turnLevels: levelsForTurn,
         news: newsToday,
       }),
@@ -468,8 +455,8 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
 
       <div className="briefing-grid">
         {/* Shrnutí dne (#1090, ADR-0035): trend a směr, úrovně obratu, zprávy dne
-        s očekávanou reakcí, verdikt hlasováním s vypsanými důvody. Heuristika —
-        proto se verdikt ukládá a vyhodnocuje (#1091). */}
+        s očekávanou reakcí, verdikt dne s vypsanými důvody. Verdikt počítá
+        a ukládá engine (#1595), Briefing ukazuje uložený řádek; vyhodnocuje se (#1091). */}
         {/* Kouč (#1201): pravidla a okna dne před openem */}
         {/* Ranní checklist (#1241): útes, trend, zeď + dominance, gap, tendence, riziko */}
         <MorningChecklistCard items={checklist} />
@@ -498,30 +485,46 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
                 </p>
               )}
               <h4>Verdikt dne</h4>
-              <p
-                className={`briefing-verdict verdict-${verdict.verdict}`}
-                data-testid="summary-verdict"
-                title="Hlasování s pevnými vahami (ADR-0035 §3) — heuristika, verdikt se ukládá a vyhodnocuje (#1091)"
-              >
-                {trend === null ? 'čeká na trend' : verdict.label}
-              </p>
-              <p className="muted" data-testid="summary-verdict-text">
-                {trend === null ? '' : verdict.summary}
-              </p>
-              <ul className="briefing-list briefing-votes">
-                {verdict.votes.map((vote) => (
-                  <li key={vote.name}>
-                    <span
-                      className={
-                        vote.vote > 0 ? 'trend-up' : vote.vote < 0 ? 'trend-down' : 'muted'
-                      }
-                    >
-                      {vote.vote > 0 ? `+${vote.vote}` : vote.vote}
-                    </span>{' '}
-                    {vote.reason}
-                  </li>
-                ))}
-              </ul>
+              {verdict.row === null ? (
+                <p
+                  className="muted"
+                  data-testid="summary-verdict"
+                  role={verdict.kind === 'error' ? 'alert' : undefined}
+                  title={VERDICT_TOOLTIP}
+                >
+                  {verdict.message}
+                </p>
+              ) : (
+                <>
+                  <p
+                    className={`briefing-verdict verdict-${verdict.row.verdict}`}
+                    data-testid="summary-verdict"
+                    title={VERDICT_TOOLTIP}
+                  >
+                    {VERDICT_LABELS[verdict.row.verdict]}
+                  </p>
+                  <p className="muted" data-testid="summary-verdict-text">
+                    {verdictSummary(verdict.row.verdict, verdict.row.score)}
+                  </p>
+                  <p className="muted" data-testid="summary-verdict-state">
+                    {verdict.message}
+                  </p>
+                  <ul className="briefing-list briefing-votes">
+                    {verdict.row.votes.map((vote) => (
+                      <li key={vote.name}>
+                        <span
+                          className={
+                            vote.vote > 0 ? 'trend-up' : vote.vote < 0 ? 'trend-down' : 'muted'
+                          }
+                        >
+                          {vote.vote > 0 ? `+${vote.vote}` : vote.vote}
+                        </span>{' '}
+                        {vote.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
             </div>
             <div>
               <h4>Úrovně obratu</h4>
