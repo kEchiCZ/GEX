@@ -71,12 +71,18 @@ class VerdictContext:
     sentiment_unconfirmed: bool = False
     news_before_open: bool = False
     missing: list[str] = field(default_factory=list)
-    #: Čtení některého vstupu z API selhalo (výpadek) — jiné než „data nejsou"
-    failed: bool = False
+    #: Čtení vstupů z API, která selhala (výpadek) — jiné než „data nejsou"
+    failures: list[str] = field(default_factory=list)
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.failures)
 
     def fail(self, what: str, exc: Exception) -> None:
-        self.missing.append(f"{what}: {type(exc).__name__}")
-        self.failed = True
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        reason = f"{what}: {f'HTTP {status}' if status else type(exc).__name__}"
+        self.missing.append(reason)
+        self.failures.append(reason)
 
 
 @dataclass(frozen=True)
@@ -87,8 +93,12 @@ class PreOpenVerdict:
     context: VerdictContext
     #: Cena, se kterou verdikt hlasoval (overnight) — vstup scénáře
     spot: float
-    #: Všechny vstupy přečtené (žádný výpadek API) a runtime má levels i tendenci
-    complete: bool
+    #: Chybějící vstupy (#1595 e1): selhaná čtení API, levels a tendence z runtime
+    missing: tuple[str, ...]
+
+    @property
+    def complete(self) -> bool:
+        return not self.missing
 
 
 class ApiReader:
@@ -310,7 +320,7 @@ class ScenarioGenerator:
                 "%s: automatický scénář %s — verdikt neúplný (chybí: %s)",
                 self.symbol,
                 "dnes nevznikne" if last_minute else "čeká na další minutu",
-                ", ".join(ctx.missing) or "levels nebo tendence",
+                ", ".join(pre_open.missing),
             )
             return
         self._done_for = session  # jeden pokus per seance s úplným verdiktem

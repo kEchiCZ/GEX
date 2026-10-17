@@ -274,13 +274,18 @@ def _runtime(session: dt.date) -> EngineRuntime:
 
 
 def _pre_open(
-    api: "FakeApi", session: dt.date, now: dt.datetime, spot: float, *, complete: bool = True
+    api: "FakeApi",
+    session: dt.date,
+    now: dt.datetime,
+    spot: float,
+    *,
+    missing: tuple[str, ...] = (),
 ) -> PreOpenVerdict:
     """Verdikt minuty, jak ho scénáři předá zapisovač (#1595 d1)."""
     runtime = _runtime(session)
     ctx = asyncio.run(gather_context(api, "ES", runtime.expiry, session, now))  # type: ignore[arg-type]
     verdict = day_verdict(verdict_input(ctx, spot, runtime))
-    return PreOpenVerdict(verdict=verdict, context=ctx, spot=spot, complete=complete)
+    return PreOpenVerdict(verdict=verdict, context=ctx, spot=spot, missing=missing)
 
 
 class _Publisher:
@@ -335,7 +340,7 @@ def test_generator_ceka_na_uplny_verdikt_zapisovace(
     generator = ScenarioGenerator("ES", repo, _Publisher(), minutes_before_open=15)
     first = OPEN - dt.timedelta(minutes=15)
     asyncio.run(generator.on_minute(first, None, runtime))
-    incomplete = _pre_open(api, SESSION, first, 7590.0, complete=False)
+    incomplete = _pre_open(api, SESSION, first, 7590.0, missing=("gammacliff: HTTP 500",))
     asyncio.run(generator.on_minute(first, incomplete, runtime))
     assert repo.list_for("ES") == []
     second = first + dt.timedelta(minutes=1)
@@ -347,7 +352,9 @@ def test_generator_ceka_na_uplny_verdikt_zapisovace(
     last = OPEN - dt.timedelta(minutes=1)
     with caplog.at_level("INFO", logger="gexlens_engine.scenario_auto"):
         asyncio.run(
-            other.on_minute(last, _pre_open(api, SESSION, last, 7590.0, complete=False), runtime)
+            other.on_minute(
+                last, _pre_open(api, SESSION, last, 7590.0, missing=("levels",)), runtime
+            )
         )
     assert repo.list_for("NQ") == []
     assert any(

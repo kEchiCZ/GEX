@@ -5,7 +5,7 @@ včerejší settle + overnight rozsah, dnešní odpad gammy (#576), Forward GEX
 útesy týdne (#519), makro kalendář dne, ΔOI přes noc, stav sentimentu per
 instrument. Tlačítko ☀ předvyplní ranní plán deníku (#673).
 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   VOL_BUCKET_LABELS,
@@ -254,6 +254,8 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
   const [candles, setCandles] = useState<Partial<Record<TimeframeKey, Candle[]>> | null>(null)
   // Uložený verdikt dne (#1595) s klíčem symbol|seance — odpověď jiného symbolu se neukáže
   const [storedVerdict, setStoredVerdict] = useState<{ key: string; result: StoredVerdictResult } | null>(null) // prettier-ignore
+  // Klíč posledního dotazu: pozdní odpověď předchozího symbolu nebo seance se zahodí
+  const verdictKeyRef = useRef('')
   const [now, setNow] = useState(() => Date.now())
   const forward = useGexForward(symbol, true)
 
@@ -290,9 +292,10 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     void fetchCandlesByTimeframe(symbol).then(setCandles)
     // Verdikt dne počítá a ukládá engine (#1595) — Briefing čte uložený řádek seance
     const verdictKey = `${symbol}|${dateIso}`
-    void fetchStoredVerdict(symbol, dateIso).then((result) =>
-      setStoredVerdict({ key: verdictKey, result }),
-    )
+    verdictKeyRef.current = verdictKey
+    void fetchStoredVerdict(symbol, dateIso).then((result) => {
+      if (verdictKeyRef.current === verdictKey) setStoredVerdict({ key: verdictKey, result })
+    })
     // Týdenní horizont (#830): bez něj nejde poznat, jestli je dnešek
     // klidný den, nebo den před velkým tiskem — a to mění čtení positioningu
     void fetchUpcoming(24 * 7).then(setUpcoming)
@@ -312,6 +315,17 @@ export function BriefingView({ expectedMove = null }: { expectedMove?: ExpectedM
     const timer = window.setInterval(() => setNow(Date.now()), REFRESH_MS)
     return () => window.clearInterval(timer)
   }, [])
+  // US open (#1595): karta i plán přepnou na zmrazený verdikt hned, ne až dalším
+  // tikem à 60 s; +5 s — stráž enginu pustí poslední zápis jen před 9:30:00 ET
+  useEffect(() => {
+    const msToOpen = usOpenMs(dateIso) + 5_000 - Date.now()
+    if (msToOpen <= 0 || msToOpen > 86_400_000) return
+    const timer = window.setTimeout(() => {
+      setNow(Date.now())
+      reload()
+    }, msToOpen)
+    return () => window.clearTimeout(timer)
+  }, [dateIso, reload])
 
   const regime = useMemo(() => gammaRegimeLabel(levels, bars?.last ?? null), [levels, bars])
   // Čtení trendu shora dolů (#1089): null, dokud svíčky nedorazí

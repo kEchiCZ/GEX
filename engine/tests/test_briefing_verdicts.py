@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine, insert, select
+from sqlalchemy import create_engine, insert, inspect, select, text, update
 
 from gexlens_engine.briefing_verdicts import (
     BriefingVerdictCollector,
@@ -235,7 +235,9 @@ class _Clock:
         return self.now
 
 
-def _upsert(repository: BriefingVerdictRepository, *, score: int, replace: bool = True) -> bool:
+def _upsert(
+    repository: BriefingVerdictRepository, *, score: int, missing: tuple[str, ...] = ()
+) -> bool:
     return repository.upsert_verdict(
         session_date=SESSION,
         symbol="ES",
@@ -243,7 +245,7 @@ def _upsert(repository: BriefingVerdictRepository, *, score: int, replace: bool 
         score=score,
         votes=[{"name": "overnight", "vote": 1, "reason": f"skóre {score}"}],
         rules_version=3,
-        replace=replace,
+        missing=missing,
     )
 
 
@@ -270,17 +272,57 @@ def test_upsert_verdiktu_jeden_radek_created_at_drzi(settings: Settings) -> None
     assert row["updated_at"].replace(tzinfo=dt.UTC) == clock.now
 
 
-def test_upsert_bez_prepisu_jen_zalozi_chybejici(settings: Settings) -> None:
-    """Neúplný výpočet (`replace=False`) úplný řádek nepřepíše, chybějící založí."""
+def test_upsert_neuplny_prepise_jen_neuplny_radek(settings: Settings) -> None:
+    """#1595 e1: neúplný výpočet založí řádek a přepíše neúplný (platí poslední stav),
+    úplný řádek nepřepíše nikdy; úplný výpočet přepíše vše."""
+    engine = create_engine(settings.database_url)
+    clock = _Clock(us_open_ts(SESSION) - dt.timedelta(hours=12))
+    repository = BriefingVerdictRepository(engine, clock=clock)
+    repository.ensure_schema()
+    gap = ("gammacliff: HTTP 500",)
+    assert _upsert(repository, score=0, missing=gap)
+    clock.now += dt.timedelta(hours=5)
+    assert _upsert(repository, score=-1, missing=gap)  # soustavný výpadek: řádek se obnovuje
+    row = _only_row(engine)
+    assert row["score"] == -1 and row["missing"] == ["gammacliff: HTTP 500"]
+    assert row["updated_at"].replace(tzinfo=dt.UTC) == clock.now
+    clock.now += dt.timedelta(hours=6)
+    assert _upsert(repository, score=4)
+    assert _only_row(engine)["missing"] == []
+    clock.now += dt.timedelta(minutes=1)
+    assert not _upsert(repository, score=-1, missing=("levels: engine je ještě nespočítal",))
+    row = _only_row(engine)
+    assert row["score"] == 4 and row["missing"] == []
+
+
+def test_upsert_neuplny_neprepise_radek_pred_1595(settings: Settings) -> None:
+    """Řádek z Briefingu (před #1595) nemá `missing` (NULL) — neúplný výpočet ho nepřepíše."""
     engine = create_engine(settings.database_url)
     clock = _Clock(us_open_ts(SESSION) - dt.timedelta(minutes=10))
     repository = BriefingVerdictRepository(engine, clock=clock)
     repository.ensure_schema()
-    assert _upsert(repository, score=0, replace=False)
     assert _upsert(repository, score=4)
-    clock.now += dt.timedelta(minutes=1)
-    assert not _upsert(repository, score=-1, replace=False)
-    assert _only_row(engine)["score"] == 4
+    with engine.begin() as conn:
+        conn.execute(update(briefing_verdicts_table).values(missing=None))
+    assert not _upsert(repository, score=0, missing=("bars dnes: HTTP 503",))
+    assert _upsert(repository, score=-4)
+    assert _only_row(engine)["score"] == -4
+
+
+def test_ensure_schema_doplni_sloupec_missing(settings: Settings) -> None:
+    """Tabulka založená před #1595 dostane aditivní sloupec `missing` (NULL u starých řádků)."""
+    engine = create_engine(settings.database_url)
+    repository = BriefingVerdictRepository(engine)
+    repository.ensure_schema()
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE briefing_verdicts DROP COLUMN missing"))
+
+    def columns() -> set[str]:
+        return {col["name"] for col in inspect(engine).get_columns("briefing_verdicts")}
+
+    assert "missing" not in columns()
+    repository.ensure_schema()
+    assert "missing" in columns()
 
 
 def test_upsert_nesaha_na_radek_s_vysledkem(settings: Settings) -> None:

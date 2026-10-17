@@ -104,6 +104,19 @@ describe('verdictCard (#1595): stav karty z uloženého verdiktu enginu', () => 
     // Uložený řádek má přednost: pipeline zmizela až po zápisu (symbol odebraný z watchlistu)
     const removed = card('2026-09-24', { ok: true, row: { ...ROW, updated_at: '2026-09-24T13:29:05Z' } }, '2026-09-24T14:00:00Z', { symbol: 'AAPL' }) // prettier-ignore
     expect(removed.kind).toBe('frozen')
+    // Prázdné symbols = engine bez pipeline (IBKR nepřipojené) — výpadek, ne trvalý stav
+    expect(card('2026-09-24', { ok: true, row: null }, '2026-09-24T12:00:00Z', { pipelineSymbols: '' }).kind).toBe('pending') // prettier-ignore
+  })
+
+  it('neúplný řádek (#1595 e1) nese chybějící vstupy — předběžný, zmrazený i plán', () => {
+    const row = { ...ROW, updated_at: '2026-09-24T13:29:05Z', missing: ['gamma útes: HTTP 500', 'levels: engine je ještě nespočítal'] } // prettier-ignore
+    const frozen = card('2026-09-24', { ok: true, row }, '2026-09-24T13:30:00Z')
+    expect(frozen.message).toBe('zmrazený, neúplný (chybí: gamma útes: HTTP 500; levels: engine je ještě nespočítal) — poslední zápis 15:29') // prettier-ignore
+    const early = card('2026-09-24', { ok: true, row }, '2026-09-24T13:29:30Z')
+    expect(early.message).toMatch(/^předběžný, neúplný \(chybí: gamma útes: HTTP 500; /)
+    // Úplný ([]) i řádek z Briefingu před #1595 (null) bez dovětku
+    expect(card('2026-09-24', { ok: true, row: { ...row, missing: [] } }, '2026-09-24T13:30:00Z').message).toBe('zmrazený — poslední zápis 15:29') // prettier-ignore
+    expect(card('2026-09-24', { ok: true, row: { ...row, missing: null } }, '2026-09-24T13:30:00Z').message).toBe('zmrazený — poslední zápis 15:29') // prettier-ignore
   })
 
   it('chyba čtení je výslovná, ne „bez verdiktu"; bez odpovědi se načítá', () => {

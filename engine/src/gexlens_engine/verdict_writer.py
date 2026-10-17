@@ -9,9 +9,10 @@ i se stářím, nepočítá. Stráž od openu (#1585) ověřuje úložiště sku
 zápisu. Automatický scénář přebírá verdikt téže minuty (rozhodnutí d1).
 
 Neúplný výpočet (výpadek čtení API, chybí levels nebo tendence — třeba první
-minuta po restartu) uloží řádek jen tehdy, když ještě žádný není: úplný verdikt
-z předchozí minuty nepřepíše. Bez platné ceny se minuta nezapíše vůbec —
-hlas overnight by srovnával mrtvou cenu. Jen dopředu, nic se nedopočítává zpětně.
+minuta po restartu) uloží seznam chybějících vstupů do sloupce `missing`
+(rozhodnutí e1) a přepíše jen neúplný řádek: úplný verdikt z předchozí minuty
+zůstane. Bez platné ceny se minuta nezapíše vůbec — hlas overnight by srovnával
+mrtvou cenu. Jen dopředu, nic se nedopočítává zpětně.
 """
 
 import asyncio
@@ -48,6 +49,9 @@ class DayVerdictWriter:
     symbol: str
     repository: BriefingVerdictRepository
     api: ApiReader
+    #: Pipeline počítá tendenci (`GEXLENS_TENDENCY_ENABLED`) — bez ní by výpočet
+    #: nikdy nebyl úplný a řádek by zůstal ve stavu prvního zápisu
+    tendency_required: bool = True
 
     async def on_minute(
         self, now: dt.datetime, spot: float, runtime: EngineRuntime
@@ -81,9 +85,12 @@ class DayVerdictWriter:
             )
             return None
         verdict = day_verdict(verdict_input(ctx, spot, runtime))
-        complete = (
-            not ctx.failed and runtime.last_levels is not None and runtime.tendency_band is not None
-        )
+        missing = list(ctx.failures)
+        if runtime.last_levels is None:
+            missing.append("levels: engine je ještě nespočítal")
+        if self.tendency_required and runtime.tendency_band is None:
+            missing.append("tendence: engine ji ještě nespočítal")
+        complete = not missing
         try:
             written = await asyncio.to_thread(
                 self.repository.upsert_verdict,
@@ -93,16 +100,16 @@ class DayVerdictWriter:
                 score=verdict.score,
                 votes=[vote.as_dict() for vote in verdict.votes],
                 rules_version=VERDICT_RULES_VERSION,
-                replace=complete,
+                missing=missing,
             )
         except VerdictFrozenError as exc:
             # Cyklus minuty před openem doběhl až po něm — očekávaný stav, ne chyba
             logger.info("%s: %s", self.symbol, exc)
             return None
         if written:
-            state = "uložen" if complete else "neúplný, uložen (dřívější řádek nebyl)"
+            state = "uložen" if complete else "neúplný, uložen (úplný řádek nebyl)"
         else:
-            state = "neúplný, nepřepsal uložený řádek"
+            state = "neúplný, nepřepsal úplný řádek"
         logger.info(
             "%s: verdikt dne %s %s (skóre %+d) %s%s",
             self.symbol,
@@ -112,4 +119,4 @@ class DayVerdictWriter:
             state,
             f"; chybí: {', '.join(ctx.missing)}" if ctx.missing else "",
         )
-        return PreOpenVerdict(verdict=verdict, context=ctx, spot=spot, complete=complete)
+        return PreOpenVerdict(verdict=verdict, context=ctx, spot=spot, missing=tuple(missing))

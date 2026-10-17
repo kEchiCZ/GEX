@@ -10,7 +10,7 @@ predikce zůstává neměnná (stejná zásada jako u setupů).
 """
 
 import datetime as dt
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,8 +24,9 @@ from gexlens_engine.compute.settle import us_open_ts, verdict_writable
 from gexlens_engine.compute.setupstats import wilson_lower_bound
 from gexlens_engine.storage.meta import briefing_verdicts_table, ensure_meta_schema
 
-#: Aditivní sloupce výsledku seance (#1091) — název → SQL typ
-OUTCOME_COLUMNS: dict[str, str] = {
+#: Aditivní sloupce (výsledek seance #1091, úplnost výpočtu #1595) — název → SQL typ
+ADDED_COLUMNS: dict[str, str] = {
+    "missing": "JSON",
     "outcome_open": "FLOAT",
     "outcome_us_open": "FLOAT",
     "outcome_close": "FLOAT",
@@ -52,7 +53,7 @@ class VerdictOutcome:
 
 
 #: Sloupce, které přepis verdiktu mění — `created_at` a `outcome_*` nikdy (#1595)
-VERDICT_COLUMNS = ("verdict", "score", "votes", "rules_version", "updated_at")
+VERDICT_COLUMNS = ("verdict", "score", "votes", "rules_version", "missing", "updated_at")
 
 
 class VerdictFrozenError(RuntimeError):
@@ -77,11 +78,11 @@ class BriefingVerdictRepository:
         if not inspector.has_table(table):
             return
         columns = {col["name"] for col in inspector.get_columns(table)}
-        missing = {name: sql for name, sql in OUTCOME_COLUMNS.items() if name not in columns}
-        if not missing:
+        added = {name: sql for name, sql in ADDED_COLUMNS.items() if name not in columns}
+        if not added:
             return
         with self._engine.begin() as conn:
-            for name, sql_type in missing.items():
+            for name, sql_type in added.items():
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
 
     def upsert_verdict(
@@ -93,7 +94,7 @@ class BriefingVerdictRepository:
         score: int,
         votes: list[dict[str, Any]],
         rules_version: int,
-        replace: bool = True,
+        missing: Sequence[str] = (),
     ) -> bool:
         """Uloží verdikt seance × symbolu; False = řádek zůstal beze změny.
 
@@ -101,9 +102,10 @@ class BriefingVerdictRepository:
         cyklu: cyklus 9:29 může doběhnout po openu (pipeline běží za sebou)
         a do předpovědi by se dostal hodnocený pohyb. Týž okamžik se uloží
         jako `updated_at`, takže uložený řádek je vždy před openem seance.
-        `replace=False` jen založí chybějící řádek, existující nepřepíše
-        (neúplný výpočet nesmí přepsat úplný). Přepis mění jen `VERDICT_COLUMNS`;
-        řádek s výsledkem seance se nepřepíše nikdy.
+        `missing` = chybějící vstupy výpočtu (#1595 e1). Neúplný výpočet přepíše
+        jen neúplný řádek — úplný (i starší řádek bez sloupce, NULL) ne; úplný
+        výpočet přepíše vše. Přepis mění jen `VERDICT_COLUMNS`; řádek s výsledkem
+        seance se nepřepíše nikdy.
         """
         written_at = self._clock()
         if not verdict_writable(session_date, written_at):
@@ -119,6 +121,7 @@ class BriefingVerdictRepository:
             "score": score,
             "votes": votes,
             "rules_version": rules_version,
+            "missing": list(missing),
             "created_at": written_at,
             "updated_at": written_at,
         }
@@ -127,29 +130,32 @@ class BriefingVerdictRepository:
         stmt: Executable
         if dialect == "postgresql":
             pg_stmt = pg_insert(briefing_verdicts_table).values([row])
-            stmt = (
-                pg_stmt.on_conflict_do_update(
-                    index_elements=key,
-                    set_={col: pg_stmt.excluded[col] for col in VERDICT_COLUMNS},
-                    where=briefing_verdicts_table.c.outcome_computed_at.is_(None),
-                )
-                if replace
-                else pg_stmt.on_conflict_do_nothing(index_elements=key)
+            stmt = pg_stmt.on_conflict_do_update(
+                index_elements=key,
+                set_={col: pg_stmt.excluded[col] for col in VERDICT_COLUMNS},
+                where=briefing_verdicts_table.c.outcome_computed_at.is_(None),
             )
         elif dialect == "sqlite":
             sqlite_stmt = sqlite_insert(briefing_verdicts_table).values([row])
-            stmt = (
-                sqlite_stmt.on_conflict_do_update(
-                    index_elements=key,
-                    set_={col: sqlite_stmt.excluded[col] for col in VERDICT_COLUMNS},
-                    where=briefing_verdicts_table.c.outcome_computed_at.is_(None),
-                )
-                if replace
-                else sqlite_stmt.on_conflict_do_nothing(index_elements=key)
+            stmt = sqlite_stmt.on_conflict_do_update(
+                index_elements=key,
+                set_={col: sqlite_stmt.excluded[col] for col in VERDICT_COLUMNS},
+                where=briefing_verdicts_table.c.outcome_computed_at.is_(None),
             )
         else:
             raise ValueError(f"Nepodporovaný databázový dialekt pro upsert: {dialect!r}")
+        table = briefing_verdicts_table
         with self._engine.begin() as conn:
+            if missing:
+                # Jediný zapisovatel per symbol (pipeline běží za sebou) — čtení a zápis
+                # v jedné transakci stačí; JSON prázdnost se mezi dialekty v SQL liší
+                stored = conn.execute(
+                    select(table.c.missing).where(
+                        table.c.session_date == session_date, table.c.symbol == symbol
+                    )
+                ).first()
+                if stored is not None and not stored.missing:
+                    return False  # úplný řádek nepřepíše neúplný výpočet
             return conn.execute(stmt).rowcount > 0
 
     def pending(self, symbol: str, *, before: dt.date) -> list[dict[str, Any]]:

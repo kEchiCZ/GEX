@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from gexlens_api.briefing_routes import build_briefing_router
 from gexlens_api.main import create_app
@@ -87,9 +88,21 @@ def test_verdicts_per_symbol_a_okno_dnu(client: TestClient, meta: MetaRepository
     assert [row["verdict"] for row in nq] == ["short"]
     (es,) = client.get("/briefing/verdicts", params={"symbol": "ES"}).json()["verdicts"]
     assert es["session_date"] == TODAY.isoformat() and es["votes"] == VOTES
+    assert es["missing"] == []
     assert es["created_at"] and es["updated_at"]
     older = client.get("/briefing/verdicts", params={"days": 90}).json()["verdicts"]
     assert len(older) == 3
+
+
+def test_vypis_doplni_sloupec_missing_kdyz_api_nabehne_pred_enginem(
+    client: TestClient, meta: MetaRepository
+) -> None:
+    """Tabulka bez `missing` (engine ještě nenaběhl): výpis sloupec doplní, starý řádek = null."""
+    _write(meta)
+    with meta.engine().begin() as conn:
+        conn.execute(text("ALTER TABLE briefing_verdicts DROP COLUMN missing"))
+    (row,) = client.get("/briefing/verdicts", params={"symbol": "ES"}).json()["verdicts"]
+    assert row["missing"] is None and row["verdict"] == "long"
 
 
 @pytest.mark.parametrize("factory", ["router", "create_app"])

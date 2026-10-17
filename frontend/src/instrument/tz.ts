@@ -78,8 +78,8 @@ export function sessionDateIso(ts: number = Date.now()): string {
 Jediný predikát obchodního dne ve frontendu, protějšek engine
 `settle.is_trading_session` (#1309, AGENTS.md) — mění se spolu; žádné lokální
 `getUTCDay()` jako test obchodního dne. `sessionDateIso` vrací v sobotu
-a v neděli před 17:00 CT den bez seance — scénář ani verdikt na něj navázat
-nejde (API vrací 422). Svátky NYSE z pravidel (#1308, `holidays.ts`). */
+a v neděli před 17:00 CT den bez seance — scénář na něj navázat nejde
+(API vrací 422) a verdikt dne pro něj engine nezapíše (#1595). Svátky NYSE z pravidel (#1308, `holidays.ts`). */
 export function isTradingSessionIso(dateIso: string): boolean {
   const weekday = new Date(`${dateIso}T00:00:00Z`).getUTCDay()
   return weekday >= 1 && weekday <= 5 && !isUsMarketHoliday(dateIso)

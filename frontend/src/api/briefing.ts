@@ -1,6 +1,6 @@
 /** Ranní briefing (#674): REST klient + čisté skládací helpery.
 
-Obrazovka je ČISTÁ KOMPOZICE existujících dat — žádný nový výpočet v enginu.
+Obrazovka je ČISTÁ KOMPOZICE existujících dat — nic neukládá ani nepočítá za server.
 Fetchery čtou lehké endpointy (/bars, /oidelta, /levels, /gexforward,
 /gammacliff, /news/upcoming, /sentiment/state, /briefing/verdicts — verdikt dne
 počítá a ukládá engine, #1595); helpery z barů skládají
@@ -120,6 +120,8 @@ export interface StoredVerdict {
   votes: VerdictVote[]
   /** Poslední zápis enginu (ISO UTC) — stáří předběžného verdiktu. */
   updated_at: string
+  /** Chybějící vstupy výpočtu (#1595 e1): [] úplný, null = řádek z Briefingu před #1595. */
+  missing?: string[] | null
 }
 
 /** Výsledek čtení uloženého verdiktu: řádek seance (null = engine ho nezapsal), nebo chyba. */
@@ -140,8 +142,14 @@ function isStoredVerdict(row: Partial<StoredVerdict>): row is StoredVerdict {
     typeof row.score === 'number' &&
     Array.isArray(row.votes) &&
     typeof row.updated_at === 'string' &&
-    Number.isFinite(Date.parse(row.updated_at))
+    Number.isFinite(Date.parse(row.updated_at)) &&
+    (row.missing == null || Array.isArray(row.missing))
   )
+}
+
+/** „, neúplný (chybí: …)" u řádku s chybějícími vstupy, jinak prázdné (#1595 e1). */
+function incompleteText(row: StoredVerdict): string {
+  return row.missing && row.missing.length > 0 ? `, neúplný (chybí: ${row.missing.join('; ')})` : ''
 }
 
 /** Uložený verdikt seance `dateIso` (#1595): `GET /briefing/verdicts?symbol=&days=`.
@@ -484,9 +492,10 @@ export function verdictCard(input: {
     const day = `${SESSION_DAY.format(new Date(`${dateIso}T12:00:00Z`))}${isUsMarketHoliday(dateIso) ? ' (svátek NYSE)' : ''}` // prettier-ignore
     return { kind: 'no_session', message: `Verdikt se nevydává — ${day} není obchodní seance.`, row: null } // prettier-ignore
   }
-  // Uložený řádek má přednost: symbol mohl pipeline ztratit až po zápisu (watchlist)
+  // Uložený řádek má přednost: symbol mohl pipeline ztratit až po zápisu (watchlist).
+  // Prázdné `symbols` = engine bez pipeline (IBKR nepřipojené) — nic se netvrdí
   const hasRow = stored !== null && stored.ok && stored.row !== null
-  if (!hasRow && pipelineSymbols !== undefined && !pipelineSymbols.split(',').includes(symbol)) {
+  if (!hasRow && pipelineSymbols && !pipelineSymbols.split(',').includes(symbol)) {
     return { kind: 'no_pipeline', message: 'Engine pro tento symbol verdikt nepočítá.', row: null }
   }
   if (stored === null) return { kind: 'loading', message: 'Verdikt se načítá.', row: null }
@@ -500,12 +509,13 @@ export function verdictCard(input: {
       : { kind: 'missing', message: 'Verdikt pro tuto seanci nevznikl.', row: null }
   }
   const savedAt = pragueTime(row.updated_at)
-  if (!beforeOpen) return { kind: 'frozen', message: `zmrazený — poslední zápis ${savedAt}`, row }
+  const incomplete = incompleteText(row)
+  if (!beforeOpen) return { kind: 'frozen', message: `zmrazený${incomplete} — poslední zápis ${savedAt}`, row } // prettier-ignore
   const everyMinuteFrom = pragueTime(new Date(openMs - VERDICT_EVERY_MINUTE_BEFORE_OPEN * 60_000).toISOString()) // prettier-ignore
   const open = pragueTime(new Date(openMs).toISOString())
   return {
     kind: 'preliminary',
-    message: `předběžný: engine ho přepočítává každých 5 min, od ${everyMinuteFrom} každou minutu; platí poslední stav před openem ${open}. Uloženo ${savedAt}, ${ageText(nowMs - Date.parse(row.updated_at))}.`, // prettier-ignore
+    message: `předběžný${incomplete}: engine ho přepočítává každých 5 min, od ${everyMinuteFrom} každou minutu; platí poslední stav před openem ${open}. Uloženo ${savedAt}, ${ageText(nowMs - Date.parse(row.updated_at))}.`, // prettier-ignore
     row,
   }
 }
@@ -629,7 +639,8 @@ export function briefingToPlanText(input: {
   if (stored) {
     // Plán je záznam okamžiku: předběžný verdikt se do openu ještě může změnit
     const savedAt = pragueTime(stored.updated_at)
-    const validity = input.verdict?.kind === 'frozen' ? `zmrazený, poslední zápis ${savedAt}` : `předběžný, uloženo ${savedAt}` // prettier-ignore
+    const incomplete = incompleteText(stored)
+    const validity = input.verdict?.kind === 'frozen' ? `zmrazený${incomplete}, poslední zápis ${savedAt}` : `předběžný${incomplete}, uloženo ${savedAt}` // prettier-ignore
     lines.push(`- Verdikt dne: ${verdictSummary(stored.verdict, stored.score)} (${validity})`)
   }
   lines.push('- Teze dne: ')

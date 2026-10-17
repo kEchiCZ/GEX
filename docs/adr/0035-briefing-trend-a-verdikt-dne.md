@@ -100,7 +100,12 @@ opačný hlas overnight; v pondělí PDC nemělo vůbec (nedělní partice, #159
    (cyklus 9:29 může doběhnout po openu). Od openu se řádek nemění; `outcome_*` doplní
    `BriefingVerdictCollector` po settle + 15 min. Víkend a svátek NYSE: žádný řádek.
 4. **Neúplný výpočet** (selhalo čtení API, runtime nemá levels nebo tendenci — třeba první
-   minuta po restartu) uloží řádek jen tehdy, když žádný není; úplný řádek nepřepíše. Bez
+   minuta po restartu; tendence se vyžaduje jen u pipeline, která ji počítá —
+   `GEXLENS_TENDENCY_ENABLED`) uloží seznam chybějících vstupů do sloupce `missing` (`[]` =
+   úplný, NULL = řádek z Briefingu před #1595) a přepíše jen neúplný řádek — úplný nikdy
+   (rozhodnutí e1, upřesňuje d1: soustavný výpadek jednoho vstupu by jinak do openu nechal
+   řádek z 0:00 SELČ s tehdejší cenou). Briefing ukáže „neúplný (chybí: …)“ a track record
+   (#1091) může neúplné řádky vyřadit. Bez
    platné ceny (≤ 0, NaN) se minuta nezapíše. Čtení vstupů z API má strop 20 s (běžně ~2,4 s
    na symbol); po něm se minuta nezapíše — visící API nesmí zdržet minutový cyklus sběru dat.
 5. **Vstupy (b)** — definice, kterou tabulka §3 nedávala:
@@ -126,3 +131,8 @@ opačný hlas overnight; v pondělí PDC nemělo vůbec (nedělní partice, #159
    zápis verdiktu. Směr scénáře je verdikt
    minuty jeho vzniku; uložený verdikt (poslední před openem) se od něj může lišit.
 8. **Bez zpětného dopočtu:** seance 29. 9.–16. 10. se nedopočítávají.
+9. **Nasazení a návrat:** engine, API a frontend se nasazují i vracejí **společně**. Staré API
+   se starým frontendem by verdikt přepisovaly jako druhý zapisovatel (update cesta POSTu),
+   samotný starý engine by nezapisoval vůbec. Řez v bodě 6 předpokládá nasazení před
+   otevřením Globexu v ne 18. 10. 2026 22:00 UTC; při posunu se data v bodě 6, v manuálu 11f
+   a v textu track recordu ve Stats opraví.

@@ -18,23 +18,33 @@ from gexlens_engine.storage.briefing_verdicts_store import BriefingVerdictReposi
 
 def build_briefing_router(repository: MetaRepository) -> APIRouter:
     router = APIRouter(tags=["briefing"])
+    ensured: list[BriefingVerdictRepository] = []
+
+    def verdicts_repository() -> BriefingVerdictRepository:
+        """Úložiště s aditivními sloupci (výsledek #1091, `missing` #1595) — API může
+        naběhnout dřív než engine, výpis by bez nich spadl. Jednou za proces."""
+        if not ensured:
+            repository_ = BriefingVerdictRepository(repository.engine())
+            repository_.ensure_schema()
+            ensured.append(repository_)
+        return ensured[0]
 
     @router.get("/briefing/verdicts/stats")
     def verdicts_stats(
         symbol: str | None = None, days: int = Query(120, ge=1, le=400)
     ) -> dict[str, object]:
         """Track record verdiktů (#1091): hit-rate per verdikt a per složka hlasování."""
-        repository_ = BriefingVerdictRepository(repository.engine())
-        repository_.ensure_schema()
         since = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=days)
-        rows = repository_.evaluated(symbol, since=since)
+        rows = verdicts_repository().evaluated(symbol, since=since)
         return {"symbol": symbol, "days": days, **verdict_stats(rows)}
 
     @router.get("/briefing/verdicts")
     def verdicts_list(
         symbol: str | None = None, days: int = Query(30, ge=1, le=400)
     ) -> dict[str, object]:
-        """Verdikty posledních `days` seancí — podklad vyhodnocení (#1091)."""
+        """Verdikty posledních `days` seancí — podklad vyhodnocení (#1091); `missing` =
+        chybějící vstupy výpočtu ([] úplný, null řádek z Briefingu před #1595)."""
+        verdicts_repository()
         return {"verdicts": repository.briefing_verdicts(symbol, days)}
 
     return router

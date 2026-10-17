@@ -183,6 +183,22 @@ def test_neuplny_vypocet_neprepise_uplny_radek(tmp_path: Path) -> None:
     assert row["updated_at"] == complete["updated_at"]
 
 
+def test_bez_tendence_v_pipeline_je_vypocet_uplny(tmp_path: Path) -> None:
+    """GEXLENS_TENDENCY_ENABLED=false: tendence nehlasuje, ale výpočet je úplný a přepisuje."""
+    clock = _Clock(OPEN)
+    writer = _writer(tmp_path, _full_api(), clock)
+    writer.tendency_required = False
+    runtime = _runtime(SESSION)
+    runtime.tendency_band = None
+    for minutes, spot in ((3, 7590.0), (2, 7640.25)):
+        now = OPEN - dt.timedelta(minutes=minutes)
+        clock.now = now + dt.timedelta(seconds=5)
+        result = asyncio.run(writer.on_minute(now, spot, runtime))
+        assert result is not None and result.complete
+    (row,) = _rows(writer)
+    assert "cena 7640.25 nad včerejším close 7632" in [vote["reason"] for vote in row["votes"]]
+
+
 def test_neuplny_vypocet_zalozi_radek_kdyz_zadny_neni(tmp_path: Path) -> None:
     """Mezera má být vidět: bez úplného výpočtu se uloží, co engine spočítal, s důvody."""
     clock = _Clock(OPEN)
@@ -193,6 +209,25 @@ def test_neuplny_vypocet_zalozi_radek_kdyz_zadny_neni(tmp_path: Path) -> None:
     assert row["verdict"] == "none"
     reasons = [vote["reason"] for vote in row["votes"]]
     assert "vyšší TF bez dat" in reasons and "overnight vs. včerejší close bez dat" in reasons
+    # Neúplnost je v řádku vidět (#1595 e1): selhaná čtení s důvodem
+    assert {"candles W: RuntimeError", "bars dnes: RuntimeError"} <= set(row["missing"])
+
+
+def test_soustavny_vypadek_vstupu_obnovuje_neuplny_radek(tmp_path: Path) -> None:
+    """#1595 e1: jeden vstup selhává celou noc — řádek se dál obnovuje (platí poslední
+    stav), nese seznam chybějících vstupů; úplný výpočet ho pak přepíše."""
+    clock = _Clock(OPEN)
+    api = _full_api()
+    del api.routes["/gammacliff/ES"]
+    writer = _writer(tmp_path, api, clock)
+    start = dt.datetime(2026, 9, 14, 22, 0, tzinfo=dt.UTC)  # začátek seance
+    assert not _minute(writer, clock, start, 7590.0).complete
+    last = _minute(writer, clock, OPEN - dt.timedelta(minutes=1), 7640.25)
+    assert last is not None and last.missing == ("gamma útes: RuntimeError",)
+    (row,) = _rows(writer)
+    assert row["missing"] == ["gamma útes: RuntimeError"]
+    assert "cena 7640.25 nad včerejším close 7632" in [vote["reason"] for vote in row["votes"]]
+    assert row["updated_at"] > row["created_at"]
 
 
 def test_bez_platne_ceny_se_minuta_nezapise(tmp_path: Path) -> None:

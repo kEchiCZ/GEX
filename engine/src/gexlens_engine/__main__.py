@@ -1501,6 +1501,7 @@ async def create_pipeline(
                 symbol=symbol,
                 repository=briefing_verdict_repository,
                 api=scenario_api,
+                tendency_required=tendency_repository is not None,
             )
             if briefing_verdict_repository is not None and scenario_api is not None
             else None

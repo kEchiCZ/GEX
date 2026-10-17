@@ -306,6 +306,9 @@ briefing_verdicts_table = Table(
     Column("rules_version", Integer, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    # Chybějící vstupy výpočtu (#1595 e1): [] = úplný, NULL = řádek před #1595
+    # (psal ho Briefing); aditivní sloupec — přidá ho BriefingVerdictRepository.ensure_schema
+    Column("missing", JSON, nullable=True),
     # Výsledek seance (#1091) — doplňuje engine po settle; aditivní sloupce,
     # do tabulek založených před #1091 je přidá BriefingVerdictRepository.ensure_schema
     Column("outcome_open", Float, nullable=True),
