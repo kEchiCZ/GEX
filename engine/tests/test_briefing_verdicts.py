@@ -13,11 +13,19 @@ from gexlens_engine.briefing_verdicts import (
     evaluate_verdict,
     session_ohlc,
 )
-from gexlens_engine.compute.settle import ET_TZ, session_bounds, session_time_utc, settle_ts
+from gexlens_engine.compute.settle import (
+    ET_TZ,
+    session_bounds,
+    session_time_utc,
+    settle_ts,
+    us_open_ts,
+)
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.storage.briefing_verdicts_store import (
     BriefingVerdictRepository,
+    VerdictFrozenError,
+    VerdictOutcome,
     verdict_stats,
 )
 from gexlens_engine.storage.emrespect_store import EmRespectRepository, em_respect_table
@@ -214,3 +222,115 @@ def test_verdict_stats_per_verdikt_a_slozku() -> None:
     assert stats["by_vote"]["trend_higher"]["hits"] == 1 and stats["by_vote"]["trend_higher"]["n"] == 2  # fmt: skip  # noqa: E501
     assert stats["by_vote"]["sentiment"]["hits"] == 1 and stats["by_vote"]["sentiment"]["n"] == 2
     assert "gamma" not in stats["by_vote"]  # nulový hlas a nulový pohyb se nehodnotí
+
+
+# ── Zápis verdiktu z enginu (#1595) ─────────────────────────────
+
+
+class _Clock:
+    def __init__(self, now: dt.datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> dt.datetime:
+        return self.now
+
+
+def _upsert(repository: BriefingVerdictRepository, *, score: int, replace: bool = True) -> bool:
+    return repository.upsert_verdict(
+        session_date=SESSION,
+        symbol="ES",
+        verdict="long" if score >= 3 else "none",
+        score=score,
+        votes=[{"name": "overnight", "vote": 1, "reason": f"skóre {score}"}],
+        rules_version=3,
+        replace=replace,
+    )
+
+
+def _only_row(engine: Any) -> dict[str, Any]:
+    with engine.connect() as conn:
+        rows = [dict(row._mapping) for row in conn.execute(select(briefing_verdicts_table))]
+    assert len(rows) == 1
+    return rows[0]
+
+
+def test_upsert_verdiktu_jeden_radek_created_at_drzi(settings: Settings) -> None:
+    engine = create_engine(settings.database_url)
+    clock = _Clock(us_open_ts(SESSION) - dt.timedelta(minutes=15))
+    repository = BriefingVerdictRepository(engine, clock=clock)
+    repository.ensure_schema()
+    assert _upsert(repository, score=4)
+    first = _only_row(engine)
+    clock.now = us_open_ts(SESSION) - dt.timedelta(minutes=1)
+    assert _upsert(repository, score=1)
+    row = _only_row(engine)
+    assert row["id"] == first["id"] and row["created_at"] == first["created_at"]
+    assert row["verdict"] == "none" and row["score"] == 1 and row["votes"][0]["reason"] == "skóre 1"
+    # updated_at = okamžik, který stráž ověřila (SQLite vrací čas bez pásma)
+    assert row["updated_at"].replace(tzinfo=dt.UTC) == clock.now
+
+
+def test_upsert_bez_prepisu_jen_zalozi_chybejici(settings: Settings) -> None:
+    """Neúplný výpočet (`replace=False`) úplný řádek nepřepíše, chybějící založí."""
+    engine = create_engine(settings.database_url)
+    clock = _Clock(us_open_ts(SESSION) - dt.timedelta(minutes=10))
+    repository = BriefingVerdictRepository(engine, clock=clock)
+    repository.ensure_schema()
+    assert _upsert(repository, score=0, replace=False)
+    assert _upsert(repository, score=4)
+    clock.now += dt.timedelta(minutes=1)
+    assert not _upsert(repository, score=-1, replace=False)
+    assert _only_row(engine)["score"] == 4
+
+
+def test_upsert_nesaha_na_radek_s_vysledkem(settings: Settings) -> None:
+    """Pojistka v DB: řádek s doplněným výsledkem seance se nepřepíše nikdy."""
+    engine = create_engine(settings.database_url)
+    clock = _Clock(us_open_ts(SESSION) - dt.timedelta(minutes=5))
+    repository = BriefingVerdictRepository(engine, clock=clock)
+    repository.ensure_schema()
+    _upsert(repository, score=4)
+    outcome = VerdictOutcome(
+        open=7000.0, us_open=7010.0, close=7040.0, move_pts=30.0, move_em=0.75, hit=True
+    )  # noqa: E501
+    repository.update_outcome(_only_row(engine)["id"], outcome, clock.now)
+    assert not _upsert(repository, score=-4)
+    row = _only_row(engine)
+    assert row["score"] == 4 and row["outcome_hit"] is True and row["outcome_close"] == 7040.0
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        dt.datetime(2026, 7, 14, 13, 30, tzinfo=dt.UTC),  # US open (léto)
+        dt.datetime(2026, 7, 14, 20, 30, tzinfo=dt.UTC),  # po settle
+        dt.datetime(2026, 7, 15, 8, 0, tzinfo=dt.UTC),  # druhý den
+    ],
+)
+def test_upsert_od_openu_odmitne(settings: Settings, now: dt.datetime) -> None:
+    engine = create_engine(settings.database_url)
+    repository = BriefingVerdictRepository(engine, clock=_Clock(now))
+    repository.ensure_schema()
+    with pytest.raises(VerdictFrozenError):
+        _upsert(repository, score=4)
+    with engine.connect() as conn:
+        assert list(conn.execute(select(briefing_verdicts_table))) == []
+
+
+def test_upsert_o_vikendu_a_svatku_odmitne(settings: Settings) -> None:
+    engine = create_engine(settings.database_url)
+    repository = BriefingVerdictRepository(
+        engine, clock=_Clock(dt.datetime(2026, 9, 26, 8, 0, tzinfo=dt.UTC))
+    )  # noqa: E501
+    repository.ensure_schema()
+    for day in (dt.date(2026, 9, 26), dt.date(2026, 9, 27), dt.date(2026, 11, 26)):
+        repository._clock = _Clock(us_open_ts(day) - dt.timedelta(minutes=5))
+        with pytest.raises(VerdictFrozenError):
+            repository.upsert_verdict(
+                session_date=day,
+                symbol="ES",
+                verdict="none",
+                score=0,
+                votes=[],
+                rules_version=3,
+            )

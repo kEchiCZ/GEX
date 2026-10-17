@@ -1,19 +1,26 @@
-"""Úložiště výsledků verdiktů dne (#1091, ADR-0035 §3).
+"""Úložiště verdiktů dne a jejich výsledků (#1091, #1595, ADR-0035 §3).
 
-Verdikt zapisuje frontend přes API (`briefing_verdicts`, meta schéma); engine
-sem po settle doplní, jak seance skutečně dopadla, a API z toho počítá
-track record. Sloupce výsledku jsou aditivní (`ensure_schema` je doplní
-ALTERem do tabulky založené před #1091), nikdy se nemažou ani nepřepisují
-verdikt samotný — predikce zůstává neměnná (stejná zásada jako u setupů).
+Verdikt zapisuje jen engine (`DayVerdictWriter`, #1595) upsertem per seance
+× symbol (`briefing_verdicts`, meta schéma) — jen před US openem, stráž
+`settle.verdict_writable` ověřuje tady, skutečným časem zápisu. Po settle sem
+engine doplní, jak seance skutečně dopadla, a API z toho počítá track record.
+Sloupce výsledku jsou aditivní (`ensure_schema` je doplní ALTERem do tabulky
+založené před #1091), nikdy se nemažou ani nepřepisují verdikt samotný —
+predikce zůstává neměnná (stejná zásada jako u setupů).
 """
 
 import datetime as dt
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import inspect, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
+from sqlalchemy.sql import Executable
 
+from gexlens_engine.compute.settle import us_open_ts, verdict_writable
 from gexlens_engine.compute.setupstats import wilson_lower_bound
 from gexlens_engine.storage.meta import briefing_verdicts_table, ensure_meta_schema
 
@@ -44,9 +51,23 @@ class VerdictOutcome:
     hit: bool | None
 
 
+#: Sloupce, které přepis verdiktu mění — `created_at` a `outcome_*` nikdy (#1595)
+VERDICT_COLUMNS = ("verdict", "score", "votes", "rules_version", "updated_at")
+
+
+class VerdictFrozenError(RuntimeError):
+    """Zápis verdiktu mimo obchodní den nebo od US openu (#1585) — zápis neproběhl."""
+
+
 class BriefingVerdictRepository:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        *,
+        clock: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
+    ) -> None:
         self._engine = engine
+        self._clock = clock
 
     def ensure_schema(self) -> None:
         """Meta schéma + aditivní sloupce výsledku (vzor journal, ADR bez alembicu)."""
@@ -62,6 +83,74 @@ class BriefingVerdictRepository:
         with self._engine.begin() as conn:
             for name, sql_type in missing.items():
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
+
+    def upsert_verdict(
+        self,
+        *,
+        session_date: dt.date,
+        symbol: str,
+        verdict: str,
+        score: int,
+        votes: list[dict[str, Any]],
+        rules_version: int,
+        replace: bool = True,
+    ) -> bool:
+        """Uloží verdikt seance × symbolu; False = řádek zůstal beze změny.
+
+        Stráž `verdict_writable` se ověřuje skutečným časem zápisu, ne minutou
+        cyklu: cyklus 9:29 může doběhnout po openu (pipeline běží za sebou)
+        a do předpovědi by se dostal hodnocený pohyb. Týž okamžik se uloží
+        jako `updated_at`, takže uložený řádek je vždy před openem seance.
+        `replace=False` jen založí chybějící řádek, existující nepřepíše
+        (neúplný výpočet nesmí přepsat úplný). Přepis mění jen `VERDICT_COLUMNS`;
+        řádek s výsledkem seance se nepřepíše nikdy.
+        """
+        written_at = self._clock()
+        if not verdict_writable(session_date, written_at):
+            raise VerdictFrozenError(
+                f"Verdikt {symbol} {session_date.isoformat()}: zápis jen v obchodní den "
+                f"před US openem ({us_open_ts(session_date):%H:%M} UTC), "
+                f"teď {written_at:%Y-%m-%d %H:%M:%S} UTC (#1585)"
+            )
+        row = {
+            "session_date": session_date,
+            "symbol": symbol,
+            "verdict": verdict,
+            "score": score,
+            "votes": votes,
+            "rules_version": rules_version,
+            "created_at": written_at,
+            "updated_at": written_at,
+        }
+        key = ["session_date", "symbol"]
+        dialect = self._engine.dialect.name
+        stmt: Executable
+        if dialect == "postgresql":
+            pg_stmt = pg_insert(briefing_verdicts_table).values([row])
+            stmt = (
+                pg_stmt.on_conflict_do_update(
+                    index_elements=key,
+                    set_={col: pg_stmt.excluded[col] for col in VERDICT_COLUMNS},
+                    where=briefing_verdicts_table.c.outcome_computed_at.is_(None),
+                )
+                if replace
+                else pg_stmt.on_conflict_do_nothing(index_elements=key)
+            )
+        elif dialect == "sqlite":
+            sqlite_stmt = sqlite_insert(briefing_verdicts_table).values([row])
+            stmt = (
+                sqlite_stmt.on_conflict_do_update(
+                    index_elements=key,
+                    set_={col: sqlite_stmt.excluded[col] for col in VERDICT_COLUMNS},
+                    where=briefing_verdicts_table.c.outcome_computed_at.is_(None),
+                )
+                if replace
+                else sqlite_stmt.on_conflict_do_nothing(index_elements=key)
+            )
+        else:
+            raise ValueError(f"Nepodporovaný databázový dialekt pro upsert: {dialect!r}")
+        with self._engine.begin() as conn:
+            return conn.execute(stmt).rowcount > 0
 
     def pending(self, symbol: str, *, before: dt.date) -> list[dict[str, Any]]:
         """Verdikty seancí před `before` bez doplněného výsledku (nejstarší první)."""

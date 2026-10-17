@@ -350,6 +350,8 @@ def test_gather_context_pri_vypadku_api_hlasi_chybejici_vstupy() -> None:
     assert ctx.trend is None and ctx.prev_close is None and ctx.sentiment_state is None
     assert any(item.startswith("candles W") for item in ctx.missing)
     assert any(item.startswith("oidelta") for item in ctx.missing)
+    # Výpadek čtení ≠ „data nejsou" — zapisovač verdiktu (#1595) podle toho nepřepíše úplný řádek
+    assert ctx.failed
 
 
 def test_settle_close_bere_posledni_rth_bar_ne_globex() -> None:
@@ -367,6 +369,20 @@ def test_settle_close_bere_posledni_rth_bar_ne_globex() -> None:
     # Bar v čase RTH o víkendu (den bez seance, #1309) PDC není
     saturday = [{"ts_min": "2026-09-19T14:00:00+00:00", "close": 7750.0}]
     assert _settle_close(saturday) is None
+    # Zkrácená seance 27. 11. (settle 13:00 ET = 18:00 UTC, ADR-0046): bar 13:14 ET
+    # už do seance nepatří, PDC = close baru 12:59 ET (#1595)
+    early = [
+        {"ts_min": "2026-11-27T17:59:00+00:00", "close": 7800.0},
+        {"ts_min": "2026-11-27T18:00:00+00:00", "close": 7810.0},
+        {"ts_min": "2026-11-27T18:14:00+00:00", "close": 7820.0},
+    ]
+    assert _settle_close(early) == 7800.0
+    # Zimní čas: RTH 14:30–21:00 UTC — bar 20:59 UTC je poslední, 21:00 už ne
+    winter = [
+        {"ts_min": "2026-11-30T20:59:00+00:00", "close": 7900.0},
+        {"ts_min": "2026-11-30T21:00:00+00:00", "close": 7905.0},
+    ]
+    assert _settle_close(winter) == 7900.0
 
 
 def test_verdikt_po_utesu_gamma_nehlasuje() -> None:

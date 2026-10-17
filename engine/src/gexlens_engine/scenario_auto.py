@@ -68,6 +68,22 @@ class VerdictContext:
     sentiment_unconfirmed: bool = False
     news_before_open: bool = False
     missing: list[str] = field(default_factory=list)
+    #: Čtení některého vstupu z API selhalo (výpadek) — jiné než „data nejsou"
+    failed: bool = False
+
+    def fail(self, what: str, exc: Exception) -> None:
+        self.missing.append(f"{what}: {type(exc).__name__}")
+        self.failed = True
+
+
+@dataclass(frozen=True)
+class PreOpenVerdict:
+    """Verdikt minuty před openem od zapisovače (#1595) — scénář ho přebírá."""
+
+    verdict: DayVerdict
+    context: VerdictContext
+    #: Všechny vstupy přečtené (žádný výpadek API) a runtime má levels i tendenci
+    complete: bool
 
 
 class ApiReader:
@@ -103,15 +119,19 @@ def _candles(rows: list[dict[str, Any]]) -> list[Candle]:
 
 
 def _settle_close(bars: list[dict[str, Any]]) -> float | None:
-    """Close posledního baru v US RTH (≤ 16:00 New York) — PDC, ne poslední Globex minuta."""
+    """Close posledního baru v US RTH (před settle New York) — PDC, ne poslední Globex minuta.
+
+    Hranice `settle_ts`, ne 16:00 natvrdo: po zkrácené seanci (13:00 ET, ADR-0046)
+    by PDC vzalo bar 13:14 ET, který už do seance nepatří (#1595).
+    """
     settle: float | None = None
     for bar in bars:
         ts = dt.datetime.fromisoformat(str(bar["ts_min"]))
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=dt.UTC)
-        local = ts.astimezone(ET_TZ)
+        day = ts.astimezone(ET_TZ).date()
         # Obchodní den z jediného predikátu (#1309) — víkendový bar PDC není
-        if is_trading_session(local.date()) and dt.time(9, 30) <= local.time() < dt.time(16, 0):
+        if is_trading_session(day) and us_open_ts(day) <= ts < settle_ts(day):
             settle = float(bar["close"])
     return settle
 
@@ -131,7 +151,7 @@ async def gather_context(
             payload = await api.get(f"/candles/{symbol}", {"tf": tf, "limit": CANDLE_LIMITS[tf]})
             by_tf[tf] = _candles(payload.get("candles", []))
         except Exception as exc:  # noqa: BLE001 — chybějící TF = „málo dat", ne pád
-            ctx.missing.append(f"candles {tf}: {type(exc).__name__}")
+            ctx.fail(f"candles {tf}", exc)
     ctx.trend = assess_trends(by_tf) if by_tf else None
     # Bary: dnešní (ONH/ONL do openu) a poslední uložený den před dneškem (PDH/PDL/PDC)
     try:
@@ -147,7 +167,7 @@ async def gather_context(
             ctx.on_high = high if ctx.on_high is None else max(ctx.on_high, high)
             ctx.on_low = low if ctx.on_low is None else min(ctx.on_low, low)
     except Exception as exc:  # noqa: BLE001
-        ctx.missing.append(f"bars dnes: {type(exc).__name__}")
+        ctx.fail("bars dnes", exc)
     try:
         days_payload = await api.get(f"/instruments/{symbol}/days")
         days = sorted(
@@ -176,7 +196,7 @@ async def gather_context(
         if not before:
             ctx.missing.append("bary včerejška: žádný uložený den")
     except Exception as exc:  # noqa: BLE001
-        ctx.missing.append(f"bars včera: {type(exc).__name__}")
+        ctx.fail("bars včera", exc)
     try:
         cliff = await api.get(f"/gammacliff/{symbol}", {"limit": 1})
         rows = cliff.get("rows") or cliff.get("history") or []
@@ -184,7 +204,7 @@ async def gather_context(
             share = rows[0].get("cliff_share")
             ctx.cliff_share = float(share) if share is not None else None
     except Exception as exc:  # noqa: BLE001
-        ctx.missing.append(f"gamma útes: {type(exc).__name__}")
+        ctx.fail("gamma útes", exc)
     if expiry:
         try:
             oi = await api.get(f"/oidelta/{symbol}/{expiry}")
@@ -195,14 +215,14 @@ async def gather_context(
                 ctx.oi_call_total = _number(oi.get("call_total"))
                 ctx.oi_put_total = _number(oi.get("put_total"))
         except Exception as exc:  # noqa: BLE001
-            ctx.missing.append(f"oidelta: {type(exc).__name__}")
+            ctx.fail("oidelta", exc)
     try:
         state = await api.get("/sentiment/state", {"symbol": symbol})
         if isinstance(state, dict) and state.get("state"):
             ctx.sentiment_state = str(state["state"])
             ctx.sentiment_unconfirmed = bool(state.get("unconfirmed", False))
     except Exception as exc:  # noqa: BLE001
-        ctx.missing.append(f"sentiment: {type(exc).__name__}")
+        ctx.fail("sentiment", exc)
     try:
         upcoming = await api.get("/news/upcoming", {"hours": 24})
         open_ts = us_open_ts(session)
@@ -221,7 +241,7 @@ async def gather_context(
                 ctx.news_before_open = True
                 break
     except Exception as exc:  # noqa: BLE001
-        ctx.missing.append(f"kalendář: {type(exc).__name__}")
+        ctx.fail("kalendář", exc)
     return ctx
 
 
@@ -230,6 +250,27 @@ def _number(value: Any) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def verdict_input(ctx: VerdictContext, spot: float, runtime: EngineRuntime) -> VerdictInput:
+    """Vstup hlasování z kontextu API a stavu runtime téže minuty (#1173 A, #1595)."""
+    levels = runtime.last_levels
+    return VerdictInput(
+        trend=ctx.trend,
+        positive_gamma=(levels.total_gex >= 0) if levels else None,
+        tendency_band=runtime.tendency_band,
+        sentiment_state=ctx.sentiment_state,
+        sentiment_unconfirmed=ctx.sentiment_unconfirmed,
+        price=spot,
+        prev_close=ctx.prev_close,
+        oi_call_delta=ctx.oi_call_delta,
+        oi_put_delta=ctx.oi_put_delta,
+        oi_call_total=ctx.oi_call_total,
+        oi_put_total=ctx.oi_put_total,
+        news_before_open=ctx.news_before_open,
+        cliff_share=ctx.cliff_share,
+        thin_map=runtime.thin_map,
+    )
 
 
 @dataclass
@@ -259,24 +300,7 @@ class ScenarioGenerator:
             return  # restart enginu uprostřed okna
         ctx = await gather_context(self.api, self.symbol, runtime.expiry, session, now)
         levels = runtime.last_levels
-        verdict = day_verdict(
-            VerdictInput(
-                trend=ctx.trend,
-                positive_gamma=(levels.total_gex >= 0) if levels else None,
-                tendency_band=runtime.tendency_band,
-                sentiment_state=ctx.sentiment_state,
-                sentiment_unconfirmed=ctx.sentiment_unconfirmed,
-                price=spot,
-                prev_close=ctx.prev_close,
-                oi_call_delta=ctx.oi_call_delta,
-                oi_put_delta=ctx.oi_put_delta,
-                oi_call_total=ctx.oi_call_total,
-                oi_put_total=ctx.oi_put_total,
-                news_before_open=ctx.news_before_open,
-                cliff_share=ctx.cliff_share,
-                thin_map=runtime.thin_map,
-            )
-        )
+        verdict = day_verdict(verdict_input(ctx, spot, runtime))
         rationale = _rationale(verdict, ctx)
         if verdict.verdict not in ("long", "short"):
             logger.info(

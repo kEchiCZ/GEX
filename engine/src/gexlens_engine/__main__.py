@@ -172,6 +172,7 @@ from gexlens_engine.tasty.watchdog import SilentStreamWatchdog
 from gexlens_engine.tasty.wideoi import wide_contracts, wide_records, wide_streamers
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.ticker import parse_ticker
+from gexlens_engine.verdict_writer import DayVerdictWriter
 from gexlens_engine.volregime import VolRegimeCollector
 
 logger = logging.getLogger("gexlens.engine")
@@ -1493,6 +1494,15 @@ async def create_pipeline(
                 ),
             )
             if paper_repository is not None
+            else None
+        ),
+        verdict_writer=(
+            DayVerdictWriter(
+                symbol=symbol,
+                repository=briefing_verdict_repository,
+                api=scenario_api,
+            )
+            if briefing_verdict_repository is not None and scenario_api is not None
             else None
         ),
         scenario_generator=(

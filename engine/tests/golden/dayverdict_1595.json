@@ -1,0 +1,1026 @@
+{
+ "_comment": "Golden verdiktu dne (#1595): vstupy ploše jako engine VerdictInput (trend = higher/lower/expected). Očekávané hodnoty spočítala dosavadní frontendová implementace instrument/daysummary.ts (dayVerdict, rules v3) 17. 10. 2026 před jejím odstraněním — engine je od #1595 jediný zapisovatel a musí uložit totéž, co Briefing ukazoval (včetně textu důvodů). Případy z daysummary.test.ts + hrany (útes 50 %, zaokrouhlení útesu a ΔOI jako Math.round, cena NQ ve čtvrtkách).",
+ "rules_version": 3,
+ "cases": [
+  {
+   "name": "vse_souhlasi_long",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "up",
+     "expected": "up"
+    },
+    "positive_gamma": false,
+    "tendency_band": "long",
+    "sentiment_state": "RiskOn",
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": 300,
+    "oi_put_delta": 50,
+    "oi_call_total": 1000,
+    "oi_put_total": 800,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "long",
+    "score": 8,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 1,
+      "reason": "nižší TF (4h, 1h, 15m) rostoucí"
+     },
+     {
+      "name": "tendency",
+      "vote": 1,
+      "reason": "tendence long"
+     },
+     {
+      "name": "sentiment",
+      "vote": 1,
+      "reason": "sentiment RiskOn"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 1,
+      "reason": "ΔOI převaha call (+250)"
+     },
+     {
+      "name": "gamma",
+      "vote": 1,
+      "reason": "negativní gamma = momentum ve směru trendu (long)"
+     }
+    ]
+   }
+  },
+  {
+   "name": "pozitivni_gamma_hrana_prahu_3_long",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "up",
+     "expected": "up"
+    },
+    "positive_gamma": true,
+    "tendency_band": "neutral",
+    "sentiment_state": null,
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": null,
+    "oi_put_delta": null,
+    "oi_call_total": null,
+    "oi_put_total": null,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "long",
+    "score": 3,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 1,
+      "reason": "nižší TF (4h, 1h, 15m) rostoucí"
+     },
+     {
+      "name": "tendency",
+      "vote": 0,
+      "reason": "tendence neutral"
+     },
+     {
+      "name": "sentiment",
+      "vote": 0,
+      "reason": "sentiment bez dat"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 0,
+      "reason": "ΔOI přes noc bez dat"
+     },
+     {
+      "name": "gamma",
+      "vote": -1,
+      "reason": "pozitivní gamma tlumí pohyb — převaha slabší"
+     }
+    ]
+   }
+  },
+  {
+   "name": "pozitivni_gamma_bez_prevahy",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "range",
+     "expected": "up"
+    },
+    "positive_gamma": true,
+    "tendency_band": "neutral",
+    "sentiment_state": null,
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": null,
+    "oi_put_delta": null,
+    "oi_call_total": null,
+    "oi_put_total": null,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "none",
+    "score": 2,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 0,
+      "reason": "nižší TF (4h, 1h, 15m) bez trendu"
+     },
+     {
+      "name": "tendency",
+      "vote": 0,
+      "reason": "tendence neutral"
+     },
+     {
+      "name": "sentiment",
+      "vote": 0,
+      "reason": "sentiment bez dat"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 0,
+      "reason": "ΔOI přes noc bez dat"
+     },
+     {
+      "name": "gamma",
+      "vote": -1,
+      "reason": "pozitivní gamma tlumí pohyb — převaha slabší"
+     }
+    ]
+   }
+  },
+  {
+   "name": "tenka_mapa_nuluje_gamma",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "up",
+     "expected": "up"
+    },
+    "positive_gamma": true,
+    "tendency_band": "neutral",
+    "sentiment_state": null,
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": null,
+    "oi_put_delta": null,
+    "oi_call_total": null,
+    "oi_put_total": null,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": true
+   },
+   "expected": {
+    "verdict": "long",
+    "score": 4,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 1,
+      "reason": "nižší TF (4h, 1h, 15m) rostoucí"
+     },
+     {
+      "name": "tendency",
+      "vote": 0,
+      "reason": "tendence neutral"
+     },
+     {
+      "name": "sentiment",
+      "vote": 0,
+      "reason": "sentiment bez dat"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 0,
+      "reason": "ΔOI přes noc bez dat"
+     },
+     {
+      "name": "gamma",
+      "vote": 0,
+      "reason": "pozitivní gamma, ale mapa je tenká (#1245) — tlumení tenké, nehlasuje"
+     }
+    ]
+   }
+  },
+  {
+   "name": "utes_a_tenka_mapa_jeden_hlas",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "up",
+     "expected": "up"
+    },
+    "positive_gamma": true,
+    "tendency_band": "neutral",
+    "sentiment_state": null,
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": null,
+    "oi_put_delta": null,
+    "oi_call_total": null,
+    "oi_put_total": null,
+    "news_before_open": false,
+    "cliff_share": 0.83,
+    "thin_map": true
+   },
+   "expected": {
+    "verdict": "long",
+    "score": 4,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 1,
+      "reason": "nižší TF (4h, 1h, 15m) rostoucí"
+     },
+     {
+      "name": "tendency",
+      "vote": 0,
+      "reason": "tendence neutral"
+     },
+     {
+      "name": "sentiment",
+      "vote": 0,
+      "reason": "sentiment bez dat"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 0,
+      "reason": "ΔOI přes noc bez dat"
+     },
+     {
+      "name": "gamma",
+      "vote": 0,
+      "reason": "pozitivní gamma, ale po útesu 83 % gammy a mapa je tenká (#1245) — tlumení tenké, nehlasuje"
+     }
+    ]
+   }
+  },
+  {
+   "name": "utes_na_hrane_50_procent",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "up",
+     "expected": "up"
+    },
+    "positive_gamma": true,
+    "tendency_band": "neutral",
+    "sentiment_state": null,
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": null,
+    "oi_put_delta": null,
+    "oi_call_total": null,
+    "oi_put_total": null,
+    "news_before_open": false,
+    "cliff_share": 0.5,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "long",
+    "score": 4,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 1,
+      "reason": "nižší TF (4h, 1h, 15m) rostoucí"
+     },
+     {
+      "name": "tendency",
+      "vote": 0,
+      "reason": "tendence neutral"
+     },
+     {
+      "name": "sentiment",
+      "vote": 0,
+      "reason": "sentiment bez dat"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 0,
+      "reason": "ΔOI přes noc bez dat"
+     },
+     {
+      "name": "gamma",
+      "vote": 0,
+      "reason": "pozitivní gamma, ale po útesu 50 % gammy — tlumení tenké, nehlasuje"
+     }
+    ]
+   }
+  },
+  {
+   "name": "utes_zaokrouhleni",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "up",
+     "expected": "up"
+    },
+    "positive_gamma": true,
+    "tendency_band": "neutral",
+    "sentiment_state": null,
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": null,
+    "oi_put_delta": null,
+    "oi_call_total": null,
+    "oi_put_total": null,
+    "news_before_open": false,
+    "cliff_share": 0.825,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "long",
+    "score": 4,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 1,
+      "reason": "nižší TF (4h, 1h, 15m) rostoucí"
+     },
+     {
+      "name": "tendency",
+      "vote": 0,
+      "reason": "tendence neutral"
+     },
+     {
+      "name": "sentiment",
+      "vote": 0,
+      "reason": "sentiment bez dat"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 0,
+      "reason": "ΔOI přes noc bez dat"
+     },
+     {
+      "name": "gamma",
+      "vote": 0,
+      "reason": "pozitivní gamma, ale po útesu 83 % gammy — tlumení tenké, nehlasuje"
+     }
+    ]
+   }
+  },
+  {
+   "name": "short_nepotvrzeny_sentiment",
+   "input": {
+    "trend": {
+     "higher": "down",
+     "lower": "down",
+     "expected": "down"
+    },
+    "positive_gamma": false,
+    "tendency_band": "strong_short",
+    "sentiment_state": "RiskOff",
+    "sentiment_unconfirmed": true,
+    "price": 7590,
+    "prev_close": 7600,
+    "oi_call_delta": 20,
+    "oi_put_delta": 400,
+    "oi_call_total": 1000,
+    "oi_put_total": 800,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "short",
+    "score": -8,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": -2,
+      "reason": "vyšší TF (týden, den) klesající"
+     },
+     {
+      "name": "trend_lower",
+      "vote": -1,
+      "reason": "nižší TF (4h, 1h, 15m) klesající"
+     },
+     {
+      "name": "tendency",
+      "vote": -2,
+      "reason": "tendence strong short"
+     },
+     {
+      "name": "sentiment",
+      "vote": 0,
+      "reason": "sentiment RiskOff nepotvrzený — nehlasuje"
+     },
+     {
+      "name": "overnight",
+      "vote": -1,
+      "reason": "cena 7590 pod včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": -1,
+      "reason": "ΔOI převaha put (-380)"
+     },
+     {
+      "name": "gamma",
+      "vote": -1,
+      "reason": "negativní gamma = momentum ve směru trendu (short)"
+     }
+    ]
+   }
+  },
+  {
+   "name": "high_impact_pred_openem",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "up",
+     "expected": "up"
+    },
+    "positive_gamma": false,
+    "tendency_band": "long",
+    "sentiment_state": "RiskOn",
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": 300,
+    "oi_put_delta": 50,
+    "oi_call_total": 1000,
+    "oi_put_total": 800,
+    "news_before_open": true,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "wait_news",
+    "score": 8,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 1,
+      "reason": "nižší TF (4h, 1h, 15m) rostoucí"
+     },
+     {
+      "name": "tendency",
+      "vote": 1,
+      "reason": "tendence long"
+     },
+     {
+      "name": "sentiment",
+      "vote": 1,
+      "reason": "sentiment RiskOn"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 1,
+      "reason": "ΔOI převaha call (+250)"
+     },
+     {
+      "name": "gamma",
+      "vote": 1,
+      "reason": "negativní gamma = momentum ve směru trendu (long)"
+     }
+    ]
+   }
+  },
+  {
+   "name": "bez_dat",
+   "input": {
+    "trend": null,
+    "positive_gamma": null,
+    "tendency_band": null,
+    "sentiment_state": null,
+    "sentiment_unconfirmed": false,
+    "price": null,
+    "prev_close": null,
+    "oi_call_delta": null,
+    "oi_put_delta": null,
+    "oi_call_total": null,
+    "oi_put_total": null,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "none",
+    "score": 0,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 0,
+      "reason": "vyšší TF bez dat"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 0,
+      "reason": "nižší TF bez dat"
+     },
+     {
+      "name": "tendency",
+      "vote": 0,
+      "reason": "tendence bez dat"
+     },
+     {
+      "name": "sentiment",
+      "vote": 0,
+      "reason": "sentiment bez dat"
+     },
+     {
+      "name": "overnight",
+      "vote": 0,
+      "reason": "overnight vs. včerejší close bez dat"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 0,
+      "reason": "ΔOI přes noc bez dat"
+     },
+     {
+      "name": "gamma",
+      "vote": 0,
+      "reason": "gamma režim bez dat"
+     }
+    ]
+   }
+  },
+  {
+   "name": "oi_pod_10_procent_nehlasuje",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "up",
+     "expected": "up"
+    },
+    "positive_gamma": false,
+    "tendency_band": "long",
+    "sentiment_state": "RiskOn",
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": 60,
+    "oi_put_delta": 20,
+    "oi_call_total": 1000,
+    "oi_put_total": 800,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "long",
+    "score": 7,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 1,
+      "reason": "nižší TF (4h, 1h, 15m) rostoucí"
+     },
+     {
+      "name": "tendency",
+      "vote": 1,
+      "reason": "tendence long"
+     },
+     {
+      "name": "sentiment",
+      "vote": 1,
+      "reason": "sentiment RiskOn"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 0,
+      "reason": "ΔOI bez výrazné převahy call/put"
+     },
+     {
+      "name": "gamma",
+      "vote": 1,
+      "reason": "negativní gamma = momentum ve směru trendu (long)"
+     }
+    ]
+   }
+  },
+  {
+   "name": "oi_zaokrouhleni_call",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "up",
+     "expected": "up"
+    },
+    "positive_gamma": false,
+    "tendency_band": "long",
+    "sentiment_state": "RiskOn",
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": 300.5,
+    "oi_put_delta": 50,
+    "oi_call_total": 1000,
+    "oi_put_total": 800,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "long",
+    "score": 8,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 1,
+      "reason": "nižší TF (4h, 1h, 15m) rostoucí"
+     },
+     {
+      "name": "tendency",
+      "vote": 1,
+      "reason": "tendence long"
+     },
+     {
+      "name": "sentiment",
+      "vote": 1,
+      "reason": "sentiment RiskOn"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 1,
+      "reason": "ΔOI převaha call (+251)"
+     },
+     {
+      "name": "gamma",
+      "vote": 1,
+      "reason": "negativní gamma = momentum ve směru trendu (long)"
+     }
+    ]
+   }
+  },
+  {
+   "name": "oi_zaokrouhleni_put",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "up",
+     "expected": "up"
+    },
+    "positive_gamma": false,
+    "tendency_band": "long",
+    "sentiment_state": "RiskOn",
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": 50,
+    "oi_put_delta": 300.5,
+    "oi_call_total": 1000,
+    "oi_put_total": 800,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "long",
+    "score": 6,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 1,
+      "reason": "nižší TF (4h, 1h, 15m) rostoucí"
+     },
+     {
+      "name": "tendency",
+      "vote": 1,
+      "reason": "tendence long"
+     },
+     {
+      "name": "sentiment",
+      "vote": 1,
+      "reason": "sentiment RiskOn"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": -1,
+      "reason": "ΔOI převaha put (-250)"
+     },
+     {
+      "name": "gamma",
+      "vote": 1,
+      "reason": "negativní gamma = momentum ve směru trendu (long)"
+     }
+    ]
+   }
+  },
+  {
+   "name": "nq_cena_ve_ctvrtkach",
+   "input": {
+    "trend": {
+     "higher": "down",
+     "lower": "down",
+     "expected": "down"
+    },
+    "positive_gamma": false,
+    "tendency_band": "neutral",
+    "sentiment_state": "Neutral",
+    "sentiment_unconfirmed": false,
+    "price": 30044.25,
+    "prev_close": 30141,
+    "oi_call_delta": null,
+    "oi_put_delta": null,
+    "oi_call_total": null,
+    "oi_put_total": null,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "short",
+    "score": -5,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": -2,
+      "reason": "vyšší TF (týden, den) klesající"
+     },
+     {
+      "name": "trend_lower",
+      "vote": -1,
+      "reason": "nižší TF (4h, 1h, 15m) klesající"
+     },
+     {
+      "name": "tendency",
+      "vote": 0,
+      "reason": "tendence neutral"
+     },
+     {
+      "name": "sentiment",
+      "vote": 0,
+      "reason": "sentiment Neutral"
+     },
+     {
+      "name": "overnight",
+      "vote": -1,
+      "reason": "cena 30044.25 pod včerejším close 30141"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 0,
+      "reason": "ΔOI přes noc bez dat"
+     },
+     {
+      "name": "gamma",
+      "vote": -1,
+      "reason": "negativní gamma = momentum ve směru trendu (short)"
+     }
+    ]
+   }
+  },
+  {
+   "name": "negativni_gamma_trend_bez_smeru",
+   "input": {
+    "trend": {
+     "higher": "range",
+     "lower": "range",
+     "expected": null
+    },
+    "positive_gamma": false,
+    "tendency_band": "long",
+    "sentiment_state": "RiskOn",
+    "sentiment_unconfirmed": false,
+    "price": 7610,
+    "prev_close": 7600,
+    "oi_call_delta": 300,
+    "oi_put_delta": 50,
+    "oi_call_total": 1000,
+    "oi_put_total": 800,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "long",
+    "score": 4,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 0,
+      "reason": "vyšší TF (týden, den) bez trendu"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 0,
+      "reason": "nižší TF (4h, 1h, 15m) bez trendu"
+     },
+     {
+      "name": "tendency",
+      "vote": 1,
+      "reason": "tendence long"
+     },
+     {
+      "name": "sentiment",
+      "vote": 1,
+      "reason": "sentiment RiskOn"
+     },
+     {
+      "name": "overnight",
+      "vote": 1,
+      "reason": "cena 7610 nad včerejším close 7600"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 1,
+      "reason": "ΔOI převaha call (+250)"
+     },
+     {
+      "name": "gamma",
+      "vote": 0,
+      "reason": "negativní gamma, ale trend bez směru"
+     }
+    ]
+   }
+  },
+  {
+   "name": "cena_na_vcerejsim_close",
+   "input": {
+    "trend": {
+     "higher": "up",
+     "lower": "up",
+     "expected": "up"
+    },
+    "positive_gamma": false,
+    "tendency_band": "long",
+    "sentiment_state": "RiskOn",
+    "sentiment_unconfirmed": false,
+    "price": 7600,
+    "prev_close": 7600,
+    "oi_call_delta": 300,
+    "oi_put_delta": 50,
+    "oi_call_total": 1000,
+    "oi_put_total": 800,
+    "news_before_open": false,
+    "cliff_share": null,
+    "thin_map": null
+   },
+   "expected": {
+    "verdict": "long",
+    "score": 7,
+    "votes": [
+     {
+      "name": "trend_higher",
+      "vote": 2,
+      "reason": "vyšší TF (týden, den) rostoucí"
+     },
+     {
+      "name": "trend_lower",
+      "vote": 1,
+      "reason": "nižší TF (4h, 1h, 15m) rostoucí"
+     },
+     {
+      "name": "tendency",
+      "vote": 1,
+      "reason": "tendence long"
+     },
+     {
+      "name": "sentiment",
+      "vote": 1,
+      "reason": "sentiment RiskOn"
+     },
+     {
+      "name": "overnight",
+      "vote": 0,
+      "reason": "cena na včerejším close"
+     },
+     {
+      "name": "oi_delta",
+      "vote": 1,
+      "reason": "ΔOI převaha call (+250)"
+     },
+     {
+      "name": "gamma",
+      "vote": 1,
+      "reason": "negativní gamma = momentum ve směru trendu (long)"
+     }
+    ]
+   }
+  }
+ ]
+}

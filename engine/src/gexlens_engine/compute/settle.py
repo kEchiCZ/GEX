@@ -302,6 +302,18 @@ def is_trading_session(day: dt.date) -> bool:
     return day.weekday() < 5 and not is_us_market_holiday(day)
 
 
+def verdict_writable(session: dt.date, now: dt.datetime) -> bool:
+    """Smí se verdikt dne seance `session` v okamžiku `now` zapsat (#1585, #1595)?
+
+    Jen obchodní den — víkend ani svátek nemá US open ani settle, verdikt by se
+    nikdy nevyhodnotil (#1309) — a jen před US openem: od openu se hodnotí pohyb
+    open → settle, pozdější zápis by do předpovědi pustil hodnocený pohyb (hlas
+    overnight nese aktuální cenu). **Jediná stráž zápisu verdiktu** — ověřuje ji
+    úložiště (`BriefingVerdictRepository.upsert_verdict`) skutečným časem zápisu.
+    """
+    return is_trading_session(session) and now < us_open_ts(session)
+
+
 def trading_session_date(ts: dt.datetime) -> dt.date:
     """Obchodní den, do kterého okamžik `ts` patří (ADR-0023, #638).
 
