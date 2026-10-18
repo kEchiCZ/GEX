@@ -1111,6 +1111,77 @@ async def test_fallback_retezu_prebira_kotace_cumdelta_podle_mechaniky(
         assert not netflow_path.exists()
 
 
+class DyingVolumeStreamer(RisingVolumeStreamer):
+    """`RisingVolumeStreamer` se „zabitými" striky: objem burzy roste dál, kotace nepřijde."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dead: set[float] = set()
+
+    async def fetch_quote(
+        self, spec: OptionContractSpec, timeout_s: float
+    ) -> QuoteSnapshot | PartialQuote | None:
+        quote = await super().fetch_quote(spec, timeout_s)
+        return None if spec.strike in self.dead else quote
+
+
+@pytest.mark.parametrize("cause", ["fallback", "stara-kotace"])
+async def test_v6_bar_po_mezere_v_baru_jen_zalozi_stav(tmp_path: Path, cause: str) -> None:
+    """#1460 AC: cyklus bez baru (fallback řetězu `volume=None`, kotace nad
+    `quote_max_age_s`) za běžící trade větve. Tok za mezeru nesou tisky, návratový
+    bar s objemem celé mezery do printvol ani pokrytí nejde — jen založí stav.
+    """
+    streamer = DyingVolumeStreamer()
+    engine_runtime, _publisher, settings = build_runtime(tmp_path, streamer)
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    engine_runtime.cum_delta = tracker
+    tracker.observe(running=False, market_closed=True)  # start v pauze: hranice známá
+    c = _spec(7600.0, "C")
+    for minute in range(2):  # založení stavu, pak běžný přírůstek +100
+        _sample(tracker, running=True)
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    if cause == "fallback":
+        tasty = QuoteSnapshot(bid=10.0, ask=10.5, last=None, volume=None, iv=0.15,
+                              delta=0.5, gamma=0.01, theta=-0.5, vega=1.2)  # fmt: skip
+        engine_runtime.chain_fallback = lambda specs: {
+            spec: CachedQuote(snapshot=tasty, updated_at=time.monotonic(), feed=FEED_TASTY)
+            for spec in specs
+        }
+    else:
+        streamer.dead = {7600.0}  # TWS strike nedodává, cache stárne nad práh
+        for dead in (s for s in engine_runtime.contracts if s.strike == 7600.0):
+            cached = engine_runtime.scheduler.quote(dead)
+            assert cached is not None
+            cached.updated_at -= 3600.0
+    tracker.add_dx_trade(c, 3.0, "BUY", 0.5)  # tisk v mezeře baru: +75
+    _sample(tracker, running=True)
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=2), SPOT, [])
+
+    engine_runtime.chain_fallback = None
+    streamer.dead = set()
+    engine_runtime.scheduler.reset_repair_state()  # návrat strike bez backoffu
+    for minute in (3, 4):  # návrat s přírůstkem celé mezery, pak zase běžný +100
+        _sample(tracker, running=True)
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    day = TS.date().isoformat()
+    printvol = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "printvol" / f"{day}.parquet"
+    )
+    side = printvol[(printvol["strike"] == 7600.0) & (printvol["right"] == "C")]
+    assert side["ts_min"].tolist() == [TS + dt.timedelta(minutes=m) for m in (1, 4)]
+    assert side["volume_delta"].tolist() == [100.0, 100.0]
+    flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{day}.parquet")
+    flow = flow.set_index("ts_min")
+    assert flow.loc[TS + dt.timedelta(minutes=2), "flow_delta"] == 75.0
+    back = flow.loc[TS + dt.timedelta(minutes=3)]
+    assert back["structured_volume"] == 0.0
+    # Jen strany krmené i v mezeře (stará kotace jen u 7600) mají běžný bar bez tisku
+    assert back["fallback_volume"] == (0.0 if cause == "fallback" else 400.0)
+    assert tracker.net_volumes() == {c: 3.0}
+
+
 async def test_po_navratu_na_ibkr_cyklus_zase_cte_sweep(
     runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
 ) -> None:

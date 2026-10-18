@@ -18,7 +18,8 @@ trade větve (`observe`) a v témž okamžiku řeže tisky (`seal`), takže inte
 řádku M je (vzorek M−1, vzorek M] a oba jeho konce pokrývá vzorek. `begin_cycle`
 ze vzorků zafixuje verdikt minuty. Minuta s mezerou má v řadě flowΔ i CumΔ NULL,
 její tisky se zahodí (i z čistého objemu) a CumΔ pokračuje od poslední měřené
-úrovně; při zavřeném trhu mezera nevzniká.
+úrovně; při zavřeném trhu mezera nevzniká. Kontrakt bez baru v cyklu (fallback
+řetězu, stará kotace) má po mezeře jen znovu založený stav objemu (#1460).
 """
 
 import datetime as dt
@@ -215,9 +216,12 @@ class CumDeltaTracker:
         # `_next_session_sealed` = kolik z nich přišlo před posledním řezem.
         self._next_session: list[_PendingPrint] = []
         self._next_session_sealed = 0
-        # Kontrakty, jejichž tisky od posledního baru zasáhla mezera — rozklad
-        # dalšího přírůstku by z nich tisky podhodnotil
-        self._tainted: set[OptionContractSpec] = set()
+        # Kontrakty s barem od posledního `begin_cycle` (jen zdroj `aggressor`):
+        # kontrakt bez baru v cyklu (fallback řetězu s `volume=None`, kotace nad
+        # `quote_max_age_s`, pád cyklu) v dalším `begin_cycle` ztratí stav
+        # objemu — jeho další bar nese přírůstek celé mezery a jen znovu založí
+        # stav jako po restartu (#1460). Bar s přírůstkem 0 (zamrzlá kotace) je krmený.
+        self._fed: set[OptionContractSpec] = set()
         # Vzorky `observe`: AND otevřeného okna včetně hraničního vzorku (None =
         # okno bez vzorku), poslední vzorek (None = žádný od startu procesu)
         # a verdikt zafixovaný `begin_cycle`. Reset seance je nemaže — hranice
@@ -276,17 +280,23 @@ class CumDeltaTracker:
         Rozklad barů, netflow, FA i `close_minute` čtou týž verdikt, i když tisky
         chodí mezi awaity cyklu. Bez vzorku a řezu od minulého cyklu není nic
         doloženo → mezera. Minutu, kterou spadlý cyklus neuzavřel, nese i tento —
-        měřená je jen tehdy, byl-li měřený i ten. Při mezeře se kontrakty se
-        stavem objemu označí: tisky od jejich posledního baru jsou neúplné, i když
-        bar přijde až v měřené minutě.
+        měřená je jen tehdy, byl-li měřený i ten.
+
+        Pod tisky kontrakt, který v minulém cyklu nedostal bar, ztratí stav
+        objemu (#1460): přírůstek jeho dalšího baru pokrývá celou mezeru, ne
+        jednu minutu, a tisky od posledního baru nesou celou mezeru — bar jen
+        znovu založí stav a vynuluje počítadla tisků, do rozkladu ani pokrytí
+        nejde. Tok za mezeru nesou tisky započtené v okamžiku tisku.
         """
         carried = self._verdict if self._cycle_open else True
         cut = self._sealed or not self.prints
         self._verdict = bool(self._window_ok) and carried and cut
         self._window_ok = None
         self._cycle_open = True
-        if self.prints and not self._verdict:
-            self._tainted.update(self._last_volume)
+        if self.prints:
+            for spec in self._last_volume.keys() - self._fed:
+                del self._last_volume[spec]
+            self._fed.clear()
 
     def seal(self) -> None:
         """Řez tisků v okamžiku vzorku; orchestrátor ho volá hned po `observe` (#1460).
@@ -369,7 +379,7 @@ class CumDeltaTracker:
         self._breakdowns.clear()
         self._minute_net.clear()
         self._sealed_net.clear()
-        self._tainted.clear()
+        self._fed.clear()
         self._cycle_open = False  # otevřená minuta zahozena, verdikt se nepřenáší
 
     def roll_session(self, session_date: dt.date) -> bool:
@@ -491,16 +501,18 @@ class CumDeltaTracker:
 
         Tisky od minulého baru jsou úplné, jen když trade větev celou dobu běžela:
         pod `midpoint` rozhoduje okamžitý `dx_active` (v5), pod tisky verdikt
-        minuty a žádná mezera od minulého baru kontraktu (#1460). Jinak se
-        přírůstek rozloží jako neznámý (NULL) a do pokrytí nejde.
+        minuty (#1460). Jinak se přírůstek rozloží jako neznámý (NULL) a do
+        pokrytí nejde. Pod tisky má minulý bar kontrakt vždy z minulého cyklu:
+        po cyklu bez baru (fallback, stará kotace) stav objemu zahodí
+        `begin_cycle` a bar jen znovu založí stav jako po restartu.
         """
         previous = self._last_volume.get(spec)
         self._last_volume[spec] = cumulative_volume
         printed = self._printed_since_bar.pop(spec, 0.0)
         unknown = self._unknown_since_bar.pop(spec, 0.0)
         if self.prints:
-            branch_ran = self._verdict and spec not in self._tainted
-            self._tainted.discard(spec)
+            self._fed.add(spec)
+            branch_ran = self._verdict
         else:
             branch_ran = self.dx_active
         if previous is None:

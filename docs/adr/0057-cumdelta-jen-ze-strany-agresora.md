@@ -216,3 +216,30 @@ backtestu a walk-forwardu a panel Cum Δ. Co dostanou po přepnutí, shrnuje bod
   OTM s malou deltou. Tok tím téměř nezmění, z čistého objemu per strike (FA odhad OI) ale
   vypadnou celé bloky po 2 000–3 500 lotech. Docstring `compute/cumdelta.py` („~0,05 %") opraví
   #1460.
+
+## Doplněk (18. 10. 2026, #1460 část 1a)
+
+Zpřesnění, která zavádí implementace části 1a a body 3–4 je výslovně nejmenují. Nové rozhodnutí
+nepřinášejí, jen popisují, jak kód mezeru měří.
+
+- **Netflow v minutě s mezerou se nepíše** — vedle FA vrstvy (bod 4) ani řada `netflow`: net
+  v té chvíli nese tisky částečné minuty, které vrátí až uzávěrka minuty. Chybějící řádek znamená
+  „nesleduje se", čtenáři berou poslední měřený řádek strany (`runtime.py`, zápis netflow pod
+  `tracker.minute_measured`).
+- **Sekundární řetěz měří vlastní univerzum:** verdikt jeho minuty plyne z eventů jeho části tras
+  (expirace musí sedět na běžící řetěz), ne z aktivního řetězu; s cyklem po N minutách drží AND
+  přes vzorky celého okna (`tasty/trade_branch.py`, `TradeBranchMonitor.sample`;
+  `compute/cumdelta.py`, `observe`).
+- **Reconnect mezi vzorky je mezera:** vzrostlo-li od minulého vzorku počítadlo reconnectů
+  streamu, okno dostane vzorek „neběží", i když stream v okamžiku vzorku zase běží — tisky z doby
+  pádu chybí (`TradeBranchMonitor.sample`, `dropped`).
+- **Ticho univerza se počítá nejdřív od openu seance:** poslední event z pauzy, víkendu nebo
+  svátku nedá mezeru hned v první minutě seance (`trade_branch_running`, `session_open`).
+- **První minuta po startu procesu za otevřeného trhu je mezera:** hranice prvního okna známá
+  není, tracker neviděl tisky před svým vznikem; za zavřeného trhu nic nechybí a minuta je měřená
+  (`compute/cumdelta.py`, `observe`).
+- **Bar po nekrmeném cyklu jen založí stav:** kontrakt, který v cyklu nedostal bar (fallback
+  řetězu s `volume=None`, kotace nad `quote_max_age_s`, pád cyklu), ztratí stav objemu. Jeho další
+  bar nese přírůstek celé mezery, proto do `printvol` ani pokrytí nejde a jen znovu založí stav
+  jako po restartu; tok i čistý objem za mezeru nesou tisky (`compute/cumdelta.py`,
+  `begin_cycle`; doplněk AC v #1460 ze 16. 10.).

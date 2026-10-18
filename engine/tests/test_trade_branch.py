@@ -464,22 +464,29 @@ def test_route_trade_v6_zastarale_trasy_po_rollu_zahodi() -> None:
     assert route_trade(stale, rolled, streamer_of(spec(NEXT, "C")) or "") is None
 
 
-def test_route_trade_v5_doruci_jako_driv_a_sekundar_je_netecny() -> None:
-    """Mechanika v5: aktivní část jde do aktivního trackeru i nad zastaralými trasami."""
+def test_route_trade_v5_doruci_jako_pred_1460() -> None:
+    """Mechanika v5: jen aktivní část do aktivního trackeru, i nad zastaralými trasami.
+
+    Sekundární část nedoručuje nikam — ani po rollu tisky D+1 do nového
+    sekundárního trackeru D+2 se specem jiné expirace (review 1a).
+    """
     stale = build_routes(pipeline(active=ACTIVE, nxt=NEXT, source=SOURCE_MIDPOINT), streamer_of)
     rolled = pipeline(active=NEXT, nxt=AFTER_NEXT, source=SOURCE_MIDPOINT)
     target = route_trade(stale, rolled, streamer_of(spec(ACTIVE, "C")) or "")
     assert target == (tracker_of(rolled.runtime), spec(ACTIVE, "C"))
+    assert route_trade(stale, rolled, streamer_of(spec(NEXT, "C")) or "") is None
 
     pipe = pipeline(source=SOURCE_MIDPOINT)
     routes = build_routes(pipe, streamer_of)
-    target = route_trade(routes, pipe, streamer_of(spec(NEXT, "C")) or "")
-    assert target is not None and target[0] is tracker_of(pipe.next_runtime)
+    assert route_trade(routes, pipe, streamer_of(spec(NEXT, "C")) or "") is None
+    target = route_trade(routes, pipe, streamer_of(spec(ACTIVE, "P")) or "")
+    assert target == (tracker_of(pipe.runtime), spec(ACTIVE, "P"))
     tracker, contract = target
-    tracker.add_dx_trade(contract, size=5.0, aggressor="BUY", delta=0.4)
+    tracker.add_dx_trade(contract, size=5.0, aggressor="BUY", delta=-0.4)
     # Midpoint: tisk jen měří pokrytí, čistý objem dává bar větev
     assert tracker.net_volumes() == {}
     assert tracker.cum_delta == 0.0
+    assert tracker.day_stats()["printed_volume"] == 5.0
 
 
 def test_route_trade_neznamy_streamer_a_bez_sekundaru() -> None:

@@ -13,8 +13,8 @@ takže oba jeho konce pokrývá vzorek. Verdikt minuty ze vzorků zafixuje
 `begin_cycle` v `run_cycle` (`compute/cumdelta.py`).
 
 Zdroj `midpoint` (mechanika v5) verdikt nečte a tisky jen měří pokrytí:
-trasy aktivní části doručují jako dřív i po rollu, sekundární tisky jsou pod
-ním netečné (pokrytí sekundáru nikam nejde, net dává bar větev).
+trasy aktivní části doručují jako dřív i po rollu, sekundární část tisky
+nedoručuje (jako před #1460 — net sekundáru dává bar větev).
 """
 
 import datetime as dt
@@ -102,12 +102,16 @@ def route_trade(
 
     Řetěz se určuje podle části tras, nikdy podle expirace kontraktu v okamžiku
     tisku. Zdroj tisků bere jen trasy, které patří běžícímu řetězu: po rollu by
-    tisky D+1 ze staré sekundární části padly do nového aktivního trackeru
-    a změnily jeho pokrytí. Ten minutu stejně nepotvrdí (`owned` v
-    `TradeBranchMonitor`), dokud se trasy nepřestaví. Midpoint doručuje jako
-    dřív — aktivní část i nad zastaralými trasami.
+    zastaralá část doručila tisky do trackeru jiné expirace (tisky D z aktivní
+    části do nového aktivního D+1, tisky D+1 ze sekundární do nového
+    sekundárního D+2) a změnila jeho pokrytí. Ten minutu stejně nepotvrdí
+    (`owned` v `TradeBranchMonitor`), dokud se trasy nepřestaví.
+
+    Midpoint (v5) doručuje jako před #1460: jen aktivní část do aktivního
+    trackeru, i nad zastaralými trasami; sekundární část nedoručuje nikam.
     """
     spec = routes.active.get(streamer)
+    secondary = spec is None
     runtime: RuntimeLike | None
     expiry: str | None
     if spec is not None:
@@ -120,7 +124,10 @@ def route_trade(
     if runtime is None or runtime.cum_delta is None:
         return None
     tracker = runtime.cum_delta
-    if tracker.prints and runtime.expiry != expiry:
+    if tracker.prints:
+        if runtime.expiry != expiry:
+            return None
+    elif secondary:
         return None
     return tracker, spec
 

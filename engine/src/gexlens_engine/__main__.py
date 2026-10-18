@@ -2087,7 +2087,8 @@ async def main() -> None:
                         streamer, size=trade_size, aggressor=trade_side, delta=trade_delta
                     )
                 # Živé CumΔ (ADR-0057 bod 6): tisk patří kontraktu jednoho řetězu
-                # jednoho instrumentu — aktivního, nebo sekundárního (vstup α).
+                # jednoho instrumentu — aktivního, nebo pod tisky sekundárního (vstup α);
+                # midpoint (v5) jen aktivní část jako dřív, pravidla v `route_trade`.
                 # Seance podle času příjmu (jako vzorek trade větve): roll trackeru
                 # v `run_cycle` přijde až po sweepu a tisky od openu do té doby
                 # čekají stranou, místo aby je reset smazal (#1460)
