@@ -102,20 +102,32 @@ class CumDeltaCoverage:
     fallback_volume: float = 0.0
     dropped_no_delta: int = 0
 
-    def as_dict(self) -> dict[str, float]:
+    def shares(self) -> tuple[float | None, float | None]:
+        """Podíl tisků se stranou z klasifikovaného a z CELÉHO přírůstku objemu.
+
+        Celý přírůstek zahrnuje i strukturu (#1460) — pod tisky jediný objem
+        s tokem; vzor `cumdelta_compare`. None = nulový jmenovatel, nic se
+        neměřilo („nevíme ≠ nula", #1172).
+        """
         classified = self.printed_volume + self.unknown_volume + self.fallback_volume
         total = classified + self.structured_volume
+        return (
+            self.printed_volume / classified if classified > 0 else None,
+            self.printed_volume / total if total > 0 else None,
+        )
+
+    def as_dict(self) -> dict[str, float]:
+        share, share_total = self.shares()
         return {
             "printed_volume": self.printed_volume,
             "unknown_volume": self.unknown_volume,
             "structured_volume": self.structured_volume,
             "fallback_volume": self.fallback_volume,
             "dropped_no_delta": float(self.dropped_no_delta),
-            # podíl klasifikovaného objemu se stranou od burzy
-            "printed_share": self.printed_volume / classified if classified > 0 else 0.0,
-            # podíl tisků se stranou z CELÉHO přírůstku objemu včetně struktury
-            # (#1460) — pod tisky jediný objem s tokem; vzor `cumdelta_compare`
-            "printed_share_total": self.printed_volume / total if total > 0 else 0.0,
+            # Podíly bez měření 0.0 jako před #1460 (midpoint, v5 beze změny);
+            # pod zdrojem `aggressor` je `day_stats` přepíše spárovanými (i None)
+            "printed_share": share if share is not None else 0.0,
+            "printed_share_total": share_total if share_total is not None else 0.0,
         }
 
 
@@ -339,23 +351,28 @@ class CumDeltaTracker:
         self._minute_net.clear()
         self._coverage_at_seal = CumDeltaCoverage(**vars(self._coverage))
 
-    def day_stats(self) -> dict[str, float | str]:
+    def day_stats(self) -> dict[str, float | str | None]:
         """Denní pokrytí toku podle zdroje — /status a Settings (#615 krok 5).
 
         Pod tisky jsou podíly jen z tisků spárovaných s měřeným přírůstkem
         objemu (#1460): tisky z minut bez baru kontraktu (fallback řetězu, stará
         kotace, první bar po startu) `printed_volume` nese (= Σ řádků flow),
-        objem k nim ale chybí a podíl by nadsadily. Pod midpointem beze změny.
+        objem k nim ale chybí a podíl by nadsadily. Bez spárovaného objemu
+        (start do fallbacku řetězu) je podíl None, ne 0 — nic se neměřilo
+        (#1172). Pod midpointem beze změny (bez měření 0.0).
         """
-        stats: dict[str, float | str] = {"source": self._source, **self._coverage.as_dict()}
+        stats: dict[str, float | str | None] = {
+            "source": self._source,
+            **self._coverage.as_dict(),
+        }
         if self.prints:
-            paired = replace(
+            share, share_total = replace(
                 self._coverage,
                 printed_volume=self._paired_printed,
                 unknown_volume=self._paired_unknown,
-            ).as_dict()
-            stats["printed_share"] = paired["printed_share"]
-            stats["printed_share_total"] = paired["printed_share_total"]
+            ).shares()
+            stats["printed_share"] = share
+            stats["printed_share_total"] = share_total
         return stats
 
     def take_breakdowns(self) -> dict[OptionContractSpec, BarBreakdown]:
@@ -540,8 +557,14 @@ class CumDeltaTracker:
         Pod tisky bar bez přírůstku (kotace z cache mezi sweepy křídel, zamrzlá
         kotace, objem IBKR pozadu za tisky) počítadla tisků nevyprázdní — objem
         k nim přinese až bar s přírůstkem, jinak by jeho rozklad tisky ztratil
-        a zbytek připsal struktuře (#1460). Padne-li mezi tím minuta s mezerou,
-        rozklad toho baru je NULL a do pokrytí nejde.
+        a zbytek připsal struktuře (#1460). Vyprázdní je každý jiný bar: bar
+        s přírůstkem (rozklad), bar s poklesem kumulativu i bar, který stav
+        objemu zakládá (oba bez rozkladu). Rozklad baru s přírůstkem je NULL
+        a do pokrytí nejde, je-li mezerou minuta toho baru nebo baru bez
+        přírůstku od posledního vyprázdnění (`_gapped`). Verdikt ale končí
+        řezem ve vzorku, kdežto bar po sweepu vyprázdní i tisky po řezu:
+        výpadek mezi vzorkem a barem rozklad nezneplatní (limit metriky,
+        ADR-0057 doplněk).
         """
         previous = self._last_volume.get(spec)
         self._last_volume[spec] = cumulative_volume

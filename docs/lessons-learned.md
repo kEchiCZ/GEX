@@ -332,10 +332,14 @@ chyb**, hlavně diagnostických a provozních.
   16. 10.). Opačná strana téhož vzorce: bar s přírůstkem 0 z kotace v cache (křídla po 3
   cyklech) vyprázdnil počítadla tisků a další bar připsal tisky dřívějších minut struktuře.
   → Přírůstek kumulativu platí jen mezi dvěma pozorováními, mezi nimiž nic nechybí: stav pod
-  tisky drží jen z minulého cyklu (`_fed`, `begin_cycle`) a interval tisků uzavírá jen bar,
-  který objem přinesl (mezera mezi tím = NULL). Podíl počítat jen z čitatele a jmenovatele
-  téhož intervalu. Test: 30 cyklů bez baru a návrat +3000; fallback a stará kotace přes
-  `run_cycle`; 2 bary s přírůstkem 0 a pak +30 → rozklad (30, 30, 0).
+  tisky drží jen z minulého cyklu (`_fed`, `begin_cycle`) a bar bez přírůstku interval tisků
+  neuzavírá. Počítadla vyprázdní bar s přírůstkem (rozklad), bar s poklesem kumulativu a bar,
+  který stav objemu zakládá (oba bez rozkladu); mezera v minutě baru nebo baru bez přírůstku
+  mezi tím = NULL. Výpadek mezi vzorkem a barem téže minuty to nepozná — bar po sweepu bere
+  i tisky po řezu vzorku, rozklad a pokrytí jsou proto jen metrika (ADR-0057 doplněk). Podíl
+  počítat jen z čitatele a jmenovatele téhož intervalu, bez jmenovatele `null`, ne 0.
+  Test: 30 cyklů bez baru a návrat +3000; fallback a stará kotace přes `run_cycle`; 2 bary
+  s přírůstkem 0 a pak +30 → rozklad (30, 30, 0), pod midpointem (v5) beze změny (30, 10, 20).
 
 - **2026-10-18 — Bluesky za 6 dní tiše ztratil ~2,5 h postů, v oknech CPI a PPI nic (#1509).**
   Za 12.–17. 10. 161 reconnectů Jetstreamu (`keepalive ping timeout` na pomalé lince); v oknech

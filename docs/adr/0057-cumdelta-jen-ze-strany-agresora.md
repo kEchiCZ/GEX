@@ -248,12 +248,29 @@ nepřinášejí, jen popisují, jak kód mezeru měří.
 - **Bar bez přírůstku tisky nespotřebuje:** bar s přírůstkem 0 (kotace z cache mezi sweepy
   křídel po `wings_sweep_every` cyklech, zamrzlá kotace pod `quote_max_age_s`, objem IBKR pozadu
   za tisky) je krmený, počítadla tisků ale nevyprázdní — rozloží je až bar, který objem přinese.
-  Jinak by jeho rozklad tisky dřívějších minut ztratil a připsal je struktuře. Padne-li mezi tím
-  minuta s mezerou, je rozklad toho baru NULL a do pokrytí nejde: kotace z cache nemusí být
-  čerstvá, interval tisků tak sahá přes mezeru (`add_volume`, kontrola části 1a 19. 10.).
+  Jinak by jeho rozklad tisky dřívějších minut ztratil a připsal je struktuře. Počítadla vyprázdní
+  každý jiný bar: bar s přírůstkem (rozklad), bar s poklesem kumulativu (nekonzistence feedu)
+  a bar, který stav objemu zakládá (první bar dne, po restartu, po nekrmeném cyklu) — poslední dva
+  bez rozkladu i pokrytí. Rozklad baru s přírůstkem je NULL a do pokrytí nejde, když je mezerou
+  minuta toho baru nebo minuta některého baru bez přírůstku od posledního vyprázdnění: kotace
+  z cache nemusí být čerstvá, interval tisků tak sahá přes mezeru (`add_volume`, `_gapped`,
+  kontrola části 1a 19. 10.).
+- **Limit: rozklad baru sahá za řez vzorku.** Verdikt minuty M pokrývá tisky do řezu ve vzorku M
+  (`seal`), bar minuty M ale přichází až po sweepu (`__main__.py` vzorek → `runtime.run_cycle`:
+  sweep → `begin_cycle` → bary) a vyprázdní i tisky, které přišly mezi řezem a barem — `seal`
+  počítadel tisků od baru nesahá. Rozklad baru M tak čte verdikt M nad intervalem, jehož konec
+  pokrývá až vzorek M+1. Spadne-li stream mezi vzorkem M a barem M, zapíše se rozklad baru M jako
+  měřený, i když mu tisky z výpadku chybí (`printed` nižší, `structured` vyšší), a pokrytí z něj
+  započte strukturu i spárované tisky. Řádek M+1 je pak mezera a jeho tisky se z `printed_volume`
+  vrátí, spárované tisky (`_paired_printed`) je ale nesou dál — nejsou podmnožinou tisků
+  v řádcích `flow`. Tok, CumΔ ani čistý objem se to netýká (ty řeže `seal` přesně na verdikt).
+  Rozklad (`printvol`) a pokrytí (řádky `flow`, podíly ve `/status`) jsou proto metrika kvality
+  dat, ne vstup obchodního rozhodnutí; kód limit nehlídá (kontrola 85bb08b, 19. 10.).
 - **Podíly pokrytí ve `/status` jen ze spárovaných tisků:** `printed_share` a
   `printed_share_total` počítá `day_stats` z tisků, které rozložil měřený přírůstek objemu.
   Tisky z minut bez baru kontraktu (fallback řetězu, stará kotace, první bar po startu) nese
   `printed_volume` i řádek `flow` na intervalu toku, objem k nim ale chybí a podíl by nadsadily
-  (fallback 2. 10. pokryl většinu RTH). Součet řádků `flow` za den s fallbackem řetězu
-  (`storage/cumdelta_compare.py`) je proto pro podíl tisků jen horní odhad.
+  (fallback 2. 10. pokryl většinu RTH). Bez spárovaného objemu (start do fallbacku řetězu) je
+  podíl `null`, ne 0 — nic se neměřilo (#1172); pod midpointem zůstává 0 jako dřív. Součet řádků
+  `flow` za den s fallbackem řetězu (`storage/cumdelta_compare.py`) je proto pro podíl tisků jen
+  horní odhad.
