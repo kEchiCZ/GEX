@@ -1182,6 +1182,41 @@ async def test_v6_bar_po_mezere_v_baru_jen_zalozi_stav(tmp_path: Path, cause: st
     assert tracker.net_volumes() == {c: 3.0}
 
 
+async def test_v6_kridlo_z_cache_rozlozi_tisky_vsech_minut(tmp_path: Path) -> None:
+    """#1460: křídlo sweepované každý 3. cyklus dostává mezi sweepy bar z cache
+    s přírůstkem 0 — tisky těch minut rozloží až čerstvý bar s objemem všech tří
+    minut (dřív printed 10, structured 90: tisky dřívějších minut připsané struktuře).
+    """
+    engine_runtime, _publisher, settings = build_runtime(
+        tmp_path, RisingVolumeStreamer(), wings_sweep_every=3, atm_sweep_width=1
+    )
+    engine_runtime.contracts = [
+        _spec(strike, right)
+        for strike in (7580.0, 7590.0, 7600.0, 7610.0, 7620.0)
+        for right in ("C", "P")
+    ]
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    engine_runtime.cum_delta = tracker
+    tracker.observe(running=False, market_closed=True)  # start v pauze: hranice známá
+    wing = _spec(7620.0, "C")
+    for minute in range(7):
+        if minute:
+            tracker.add_dx_trade(wing, 10.0, "BUY", 0.05)  # tisk každou minutu
+        _sample(tracker, running=True)
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    day = TS.date().isoformat()
+    printvol = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "printvol" / f"{day}.parquet"
+    )
+    side = printvol[(printvol["strike"] == 7620.0) & (printvol["right"] == "C")]
+    assert side["ts_min"].tolist() == [TS + dt.timedelta(minutes=m) for m in (3, 6)]
+    assert side[["volume_delta", "printed", "structured"]].values.tolist() == [
+        [100.0, 30.0, 70.0],
+        [100.0, 30.0, 70.0],
+    ]
+
+
 async def test_po_navratu_na_ibkr_cyklus_zase_cte_sweep(
     runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
 ) -> None:

@@ -457,7 +457,11 @@ def test_route_trade_v6_aktivni_i_sekundarni_retez() -> None:
 
 
 def test_route_trade_v6_zastarale_trasy_po_rollu_zahodi() -> None:
-    """Po rollu nesmí tisky D+1 ze staré sekundární části padnout do nového aktivního."""
+    """Po rollu nesmí zastaralé trasy doručit tisky do trackeru jiné expirace.
+
+    Tisky D z aktivní části by šly do nového aktivního D+1, tisky D+1 ze
+    sekundární části do nového sekundárního D+2 (`route_trade`).
+    """
     stale = build_routes(pipeline(active=ACTIVE, nxt=NEXT), streamer_of)
     rolled = pipeline(active=NEXT, nxt=AFTER_NEXT)
     assert route_trade(stale, rolled, streamer_of(spec(ACTIVE, "C")) or "") is None

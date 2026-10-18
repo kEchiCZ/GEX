@@ -19,13 +19,14 @@ trade větve (`observe`) a v témž okamžiku řeže tisky (`seal`), takže inte
 ze vzorků zafixuje verdikt minuty. Minuta s mezerou má v řadě flowΔ i CumΔ NULL,
 její tisky se zahodí (i z čistého objemu) a CumΔ pokračuje od poslední měřené
 úrovně; při zavřeném trhu mezera nevzniká. Kontrakt bez baru v cyklu (fallback
-řetězu, stará kotace) má po mezeře jen znovu založený stav objemu (#1460).
+řetězu, stará kotace) má po mezeře jen znovu založený stav objemu; bar bez
+přírůstku (kotace z cache) počítadla tisků nevyprázdní (#1460).
 """
 
 import datetime as dt
 import logging
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import NamedTuple
 
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
@@ -218,10 +219,22 @@ class CumDeltaTracker:
         self._next_session_sealed = 0
         # Kontrakty s barem od posledního `begin_cycle` (jen zdroj `aggressor`):
         # kontrakt bez baru v cyklu (fallback řetězu s `volume=None`, kotace nad
-        # `quote_max_age_s`, pád cyklu) v dalším `begin_cycle` ztratí stav
-        # objemu — jeho další bar nese přírůstek celé mezery a jen znovu založí
-        # stav jako po restartu (#1460). Bar s přírůstkem 0 (zamrzlá kotace) je krmený.
+        # `quote_max_age_s`, pád cyklu po `begin_cycle` mezi verdiktem a bary)
+        # v dalším `begin_cycle` ztratí stav objemu — jeho další bar nese
+        # přírůstek celé mezery a jen znovu založí stav jako po restartu (#1460).
+        # Bar s přírůstkem 0 (zamrzlá kotace, kotace z cache) je krmený. Cyklus,
+        # který spadl před `begin_cycle` (sweep), množinu nemaže ani řádek
+        # nezapíše: další řádek i bar nesou tentýž delší interval.
         self._fed: set[OptionContractSpec] = set()
+        # Kontrakty, jejichž tisky čekající na bar s přírůstkem zasáhla mezera
+        # trade větve (bar s přírůstkem 0 v minutě s mezerou): rozklad dalšího
+        # přírůstku je NULL a do pokrytí nejde (#1460, jen zdroj `aggressor`)
+        self._gapped: set[OptionContractSpec] = set()
+        # Tisky spárované s měřeným přírůstkem objemu (jen zdroj `aggressor`):
+        # z nich jsou podíly v `day_stats`. Tisk z minuty bez baru kontraktu je
+        # v pokrytí (řádek ho nese na intervalu toku), objem k němu ale chybí.
+        self._paired_printed = 0.0
+        self._paired_unknown = 0.0
         # Vzorky `observe`: AND otevřeného okna včetně hraničního vzorku (None =
         # okno bez vzorku), poslední vzorek (None = žádný od startu procesu)
         # a verdikt zafixovaný `begin_cycle`. Reset seance je nemaže — hranice
@@ -327,8 +340,23 @@ class CumDeltaTracker:
         self._coverage_at_seal = CumDeltaCoverage(**vars(self._coverage))
 
     def day_stats(self) -> dict[str, float | str]:
-        """Denní pokrytí toku podle zdroje — /status a Settings (#615 krok 5)."""
-        return {"source": self._source, **self._coverage.as_dict()}
+        """Denní pokrytí toku podle zdroje — /status a Settings (#615 krok 5).
+
+        Pod tisky jsou podíly jen z tisků spárovaných s měřeným přírůstkem
+        objemu (#1460): tisky z minut bez baru kontraktu (fallback řetězu, stará
+        kotace, první bar po startu) `printed_volume` nese (= Σ řádků flow),
+        objem k nim ale chybí a podíl by nadsadily. Pod midpointem beze změny.
+        """
+        stats: dict[str, float | str] = {"source": self._source, **self._coverage.as_dict()}
+        if self.prints:
+            paired = replace(
+                self._coverage,
+                printed_volume=self._paired_printed,
+                unknown_volume=self._paired_unknown,
+            ).as_dict()
+            stats["printed_share"] = paired["printed_share"]
+            stats["printed_share_total"] = paired["printed_share_total"]
+        return stats
 
     def take_breakdowns(self) -> dict[OptionContractSpec, BarBreakdown]:
         """Rozklady přírůstků od posledního odběru (řada printvol, #1007) — a vyprázdní je."""
@@ -380,6 +408,9 @@ class CumDeltaTracker:
         self._minute_net.clear()
         self._sealed_net.clear()
         self._fed.clear()
+        self._gapped.clear()
+        self._paired_printed = 0.0
+        self._paired_unknown = 0.0
         self._cycle_open = False  # otevřená minuta zahozena, verdikt se nepřenáší
 
     def roll_session(self, session_date: dt.date) -> bool:
@@ -505,16 +536,27 @@ class CumDeltaTracker:
         pokrytí nejde. Pod tisky má minulý bar kontrakt vždy z minulého cyklu:
         po cyklu bez baru (fallback, stará kotace) stav objemu zahodí
         `begin_cycle` a bar jen znovu založí stav jako po restartu.
+
+        Pod tisky bar bez přírůstku (kotace z cache mezi sweepy křídel, zamrzlá
+        kotace, objem IBKR pozadu za tisky) počítadla tisků nevyprázdní — objem
+        k nim přinese až bar s přírůstkem, jinak by jeho rozklad tisky ztratil
+        a zbytek připsal struktuře (#1460). Padne-li mezi tím minuta s mezerou,
+        rozklad toho baru je NULL a do pokrytí nejde.
         """
         previous = self._last_volume.get(spec)
         self._last_volume[spec] = cumulative_volume
-        printed = self._printed_since_bar.pop(spec, 0.0)
-        unknown = self._unknown_since_bar.pop(spec, 0.0)
         if self.prints:
             self._fed.add(spec)
-            branch_ran = self._verdict
+            if previous is not None and cumulative_volume == previous:
+                if not self._verdict:
+                    self._gapped.add(spec)
+                return 0.0
+            branch_ran = self._verdict and spec not in self._gapped
+            self._gapped.discard(spec)
         else:
             branch_ran = self.dx_active
+        printed = self._printed_since_bar.pop(spec, 0.0)
+        unknown = self._unknown_since_bar.pop(spec, 0.0)
         if previous is None:
             return 0.0
         delta_volume = cumulative_volume - previous
@@ -543,6 +585,9 @@ class CumDeltaTracker:
             self._coverage.structured_volume += max(delta_volume - printed - unknown, 0.0)
         elif branch_ran:
             self._coverage.fallback_volume += delta_volume
+        if self.prints:
+            self._paired_printed += printed
+            self._paired_unknown += unknown
         return delta_volume
 
     def add_bar(

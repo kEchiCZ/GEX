@@ -239,7 +239,21 @@ nepřinášejí, jen popisují, jak kód mezeru měří.
   není, tracker neviděl tisky před svým vznikem; za zavřeného trhu nic nechybí a minuta je měřená
   (`compute/cumdelta.py`, `observe`).
 - **Bar po nekrmeném cyklu jen založí stav:** kontrakt, který v cyklu nedostal bar (fallback
-  řetězu s `volume=None`, kotace nad `quote_max_age_s`, pád cyklu), ztratí stav objemu. Jeho další
-  bar nese přírůstek celé mezery, proto do `printvol` ani pokrytí nejde a jen znovu založí stav
-  jako po restartu; tok i čistý objem za mezeru nesou tisky (`compute/cumdelta.py`,
-  `begin_cycle`; doplněk AC v #1460 ze 16. 10.).
+  řetězu s `volume=None`, kotace nad `quote_max_age_s`, pád cyklu po `begin_cycle` mezi verdiktem
+  a bary), ztratí stav objemu. Jeho další bar nese přírůstek celé mezery, proto do `printvol` ani
+  pokrytí nejde a jen znovu založí stav jako po restartu; tok i čistý objem za mezeru nesou tisky
+  (`compute/cumdelta.py`, `begin_cycle`; doplněk AC v #1460 ze 16. 10.). Cyklus, který spadl
+  před `begin_cycle` (sweep), řádek nezapíše a stav nemaže: další řádek i jeho bar nesou tentýž
+  delší interval.
+- **Bar bez přírůstku tisky nespotřebuje:** bar s přírůstkem 0 (kotace z cache mezi sweepy
+  křídel po `wings_sweep_every` cyklech, zamrzlá kotace pod `quote_max_age_s`, objem IBKR pozadu
+  za tisky) je krmený, počítadla tisků ale nevyprázdní — rozloží je až bar, který objem přinese.
+  Jinak by jeho rozklad tisky dřívějších minut ztratil a připsal je struktuře. Padne-li mezi tím
+  minuta s mezerou, je rozklad toho baru NULL a do pokrytí nejde: kotace z cache nemusí být
+  čerstvá, interval tisků tak sahá přes mezeru (`add_volume`, kontrola části 1a 19. 10.).
+- **Podíly pokrytí ve `/status` jen ze spárovaných tisků:** `printed_share` a
+  `printed_share_total` počítá `day_stats` z tisků, které rozložil měřený přírůstek objemu.
+  Tisky z minut bez baru kontraktu (fallback řetězu, stará kotace, první bar po startu) nese
+  `printed_volume` i řádek `flow` na intervalu toku, objem k nim ale chybí a podíl by nadsadily
+  (fallback 2. 10. pokryl většinu RTH). Součet řádků `flow` za den s fallbackem řetězu
+  (`storage/cumdelta_compare.py`) je proto pro podíl tisků jen horní odhad.

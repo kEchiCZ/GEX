@@ -549,13 +549,13 @@ def test_pokryti_a_rozklad_jen_z_merenych_minut() -> None:
     assert tracker.take_breakdowns()[c] == BarBreakdown(10.0, None, None)
     tracker.close_minute(GAP_TS + dt.timedelta(minutes=1))
 
-    next_cycle(tracker, True)  # druhá minuta mezery: C dostane bar i v ní
-    tracker.add_volume(c, 110.0)
+    next_cycle(tracker, True)  # druhá minuta mezery: C dostane bar s přírůstkem i v ní
+    tracker.add_volume(c, 111.0)
     tracker.close_minute(GAP_TS + dt.timedelta(minutes=2))
     tracker.add_dx_trade(c, size=2.0, aggressor="BUY", delta=0.5)
     tracker.add_dx_trade(p, size=1.0, aggressor="SELL", delta=-0.5)
     next_cycle(tracker, True)
-    tracker.add_volume(c, 115.0)  # od baru v mezeře jen měřené tisky
+    tracker.add_volume(c, 116.0)  # od baru v mezeře jen měřené tisky
     tracker.add_volume(p, 60.0)  # bez baru v minulém cyklu: jen založí stav
     breakdowns = tracker.take_breakdowns()
     assert breakdowns[c] == BarBreakdown(5.0, 2.0, 3.0)
@@ -608,6 +608,85 @@ def test_bar_po_nekrmenem_cyklu_jen_zalozi_stav() -> None:
     next_cycle(tracker, True)
     tracker.add_volume(c, 4008.0)  # další bar už rozkládá jen tisky od návratu
     assert tracker.take_breakdowns()[c] == BarBreakdown(8.0, 5.0, 3.0)
+
+
+def test_bar_bez_prirustku_nevyprazdni_pocitadla_tisku() -> None:
+    """#1460: bar s přírůstkem 0 (kotace z cache mezi sweepy křídel po 3 cyklech,
+    zamrzlá kotace) tisky nespotřebuje — rozloží je až bar, který objem přinese.
+    Dřív: rozklad (30, 10, 20) a pokrytí struktura 20 navíc (kontrola 1a).
+    """
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    wing = spec("C", strike=7800.0)
+    start_measured(tracker)
+    tracker.add_volume(wing, 1000.0)
+    tracker.close_minute(GAP_TS)
+    for minute in (1, 2, 3):
+        tracker.add_dx_trade(wing, size=10.0, aggressor="BUY", delta=0.2)
+        next_cycle(tracker, True)
+        tracker.add_volume(wing, 1030.0 if minute == 3 else 1000.0)
+        tracker.close_minute(GAP_TS + dt.timedelta(minutes=minute))
+
+    assert tracker.take_breakdowns() == {wing: BarBreakdown(30.0, 30.0, 0.0)}
+    stats = tracker.day_stats()
+    assert (stats["printed_volume"], stats["structured_volume"]) == (30.0, 0.0)
+    assert stats["fallback_volume"] == 0.0
+    assert stats["printed_share_total"] == 1.0
+
+
+def test_bar_bez_prirustku_v_mezere_zneplatni_dalsi_rozklad() -> None:
+    """Čekající tisky zasáhla mezera trade větve → rozklad baru, který objem přinese, je NULL.
+
+    Bar s přírůstkem 0 v minutě s mezerou nemusí být čerstvý (kotace z cache),
+    interval jeho tisků tak sahá přes mezeru, kde tisky mohly chybět.
+    """
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    wing = spec("C", strike=7800.0)
+    start_measured(tracker)
+    tracker.add_volume(wing, 1000.0)
+    tracker.close_minute(GAP_TS)
+    for minute, running in ((1, True), (2, False), (3, True)):  # 3: hraniční vzorek
+        tracker.add_dx_trade(wing, size=10.0, aggressor="BUY", delta=0.2)
+        next_cycle(tracker, running)
+        tracker.add_volume(wing, 1000.0)
+        tracker.close_minute(GAP_TS + dt.timedelta(minutes=minute))
+
+    next_cycle(tracker, True)
+    assert tracker.minute_measured
+    tracker.add_volume(wing, 1040.0)
+    assert tracker.take_breakdowns() == {wing: BarBreakdown(40.0, None, None)}
+    row = tracker.close_minute(GAP_TS + dt.timedelta(minutes=4))
+    assert (row.structured_volume, row.fallback_volume) == (0.0, 0.0)
+
+    tracker.add_dx_trade(wing, size=5.0, aggressor="BUY", delta=0.2)
+    next_cycle(tracker, True)
+    tracker.add_volume(wing, 1050.0)  # další bar už je čistý
+    assert tracker.take_breakdowns() == {wing: BarBreakdown(10.0, 5.0, 5.0)}
+
+
+def test_podily_ve_status_jen_z_tisku_sparovanych_s_objemem() -> None:
+    """#1460: tisky z minut bez baru (fallback řetězu) nesou řádky flow i `printed_volume`,
+    podíly ve /status je ale nečtou — objem k nim chybí (kontrola 1a: 0,604 místo 0,5).
+    """
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    c = spec("C")
+    start_measured(tracker)
+    tracker.add_volume(c, 0.0)
+    tracker.close_minute(GAP_TS)
+    volume, row_printed = 0.0, 0.0
+    for minute in range(1, 10):  # minuty 4–6 bez baru (fallback řetězu), tisky běží
+        tracker.add_dx_trade(c, size=50.0, aggressor="BUY", delta=0.5)
+        next_cycle(tracker, True)
+        volume += 100.0
+        if minute not in (4, 5, 6):
+            tracker.add_volume(c, volume)
+        row = tracker.close_minute(GAP_TS + dt.timedelta(minutes=minute))
+        row_printed += row.printed_volume or 0.0
+
+    stats = tracker.day_stats()
+    assert stats["printed_volume"] == row_printed == 450.0  # Σ řádků flow
+    assert stats["structured_volume"] == 250.0  # minuty 1–3 a 8–9; návrat (7) jen založí stav
+    assert stats["printed_share_total"] == pytest.approx(250.0 / 500.0)
+    assert stats["printed_share"] == 1.0
 
 
 def test_restart_bar_jen_zalozi_stav() -> None:

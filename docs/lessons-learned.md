@@ -324,6 +324,19 @@ chyb**, hlavně diagnostických a provozních.
   periody, než ve které je stav, čekají stranou na její začátek, místo aby je reset smazal.
   Test: pád streamu po vzorku a před uzávěrkou; tisk nové seance před rollem.
 
+- **2026-10-18 — přírůstek kumulativu přes mezeru v krmení připsán jedné minutě (#1460).**
+  `_last_volume` mazal jen roll seance, takže stav objemu kontraktu přežil cykly bez baru
+  (fallback řetězu s `volume=None`, kotace nad `quote_max_age_s`) a návratový bar připsal
+  přírůstek celé mezery jedné minutě. 2. 10. tak pod midpointem daly dvě minuty −948 455 CumΔ
+  a `printvol` 41 468 v jedné minutě (medián 81); příčinu našla až analýza dat (#1460, nález
+  16. 10.). Opačná strana téhož vzorce: bar s přírůstkem 0 z kotace v cache (křídla po 3
+  cyklech) vyprázdnil počítadla tisků a další bar připsal tisky dřívějších minut struktuře.
+  → Přírůstek kumulativu platí jen mezi dvěma pozorováními, mezi nimiž nic nechybí: stav pod
+  tisky drží jen z minulého cyklu (`_fed`, `begin_cycle`) a interval tisků uzavírá jen bar,
+  který objem přinesl (mezera mezi tím = NULL). Podíl počítat jen z čitatele a jmenovatele
+  téhož intervalu. Test: 30 cyklů bez baru a návrat +3000; fallback a stará kotace přes
+  `run_cycle`; 2 bary s přírůstkem 0 a pak +30 → rozklad (30, 30, 0).
+
 - **2026-10-18 — Bluesky za 6 dní tiše ztratil ~2,5 h postů, v oknech CPI a PPI nic (#1509).**
   Za 12.–17. 10. 161 reconnectů Jetstreamu (`keepalive ping timeout` na pomalé lince); v oknech
   CPI 14. 10. 12:30–12:40 UTC a PPI 15. 10. 12:25–12:40 UTC 0 eventů. Příčiny: reconnect bez
