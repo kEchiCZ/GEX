@@ -1,4 +1,4 @@
-"""Testy CumΔ (issue #17): golden tick stream, bar větev zvlášť, reset, persistence."""
+"""Testy CumΔ (issue #17): golden bar větve a tisků dxFeed, reset, persistence."""
 
 import datetime as dt
 import json
@@ -9,10 +9,8 @@ import pandas as pd
 import pytest
 
 from gexlens_engine.compute.cumdelta import (
-    ClassifiedTrade,
     CumDeltaTracker,
     FlowRow,
-    TradeSide,
     midpoint_sign,
 )
 from gexlens_engine.config import Settings
@@ -40,36 +38,17 @@ def spec(right: str, strike: float = 7600.0) -> OptionContractSpec:
     )
 
 
-def trade(right: str, size: float, side: str, ts: float = 1.0) -> ClassifiedTrade:
-    return ClassifiedTrade(spec=spec(right), price=10.0, size=size, ts=ts, side=TradeSide(side))
-
-
 def test_restore_net_volume_nechava_prednost_zivemu_mereni() -> None:
     """#232: navázání z partice netflow nesmí přepsat tok naměřený po restartu."""
     tracker = CumDeltaTracker(multiplier=50.0)
-    tracker.add_trade(trade("C", size=10.0, side="buy"), delta=0.5)
+    tracker.add_bar(spec("C"), 100.0, 10.3, 10.0, 10.4, delta=0.5)  # první bar jen zakládá stav
+    tracker.add_bar(spec("C"), 110.0, 10.3, 10.0, 10.4, delta=0.5)  # last nad midem → +10
 
     tracker.restore_net_volume({spec("C"): 999.0, spec("P"): -40.0})
 
     assert tracker.net_volume(spec("C")) == 10.0  # živé měření má přednost
     assert tracker.net_volume(spec("P")) == -40.0  # chybějící klíč se doplní
     assert tracker.net_volumes() == {spec("C"): 10.0, spec("P"): -40.0}
-
-
-def test_golden_tick_stream_reproduces_cum_delta() -> None:
-    """AC: syntetický tick stream se známým buy/sell rozdělením → očekávaná CumΔ."""
-    golden = load_golden()
-    branch = golden["tick_branch"]
-    assert isinstance(branch, dict)
-    tracker = CumDeltaTracker(multiplier=float(golden["multiplier"]))  # type: ignore[arg-type]
-
-    for item in branch["trades"]:
-        flow = tracker.add_trade(
-            trade(item["right"], item["size"], item["side"]), delta=item["delta"]
-        )
-        assert flow == pytest.approx(item["expected_flow"])
-
-    assert tracker.cum_delta == pytest.approx(branch["expected_cum_delta"])
 
 
 def test_golden_bar_branch_midpoint_test() -> None:
@@ -95,12 +74,13 @@ def test_golden_bar_branch_midpoint_test() -> None:
 
 
 def test_both_branches_accumulate_together() -> None:
-    tracker = CumDeltaTracker(multiplier=50.0)
-    tracker.add_trade(trade("C", size=2.0, side="buy"), delta=0.5)  # +50
+    tracker = CumDeltaTracker(multiplier=50.0, source="dxfeed")
+    tracker.add_dx_trade(spec("C"), size=2.0, aggressor="BUY", delta=0.5)  # +50
     contract = spec("P")
     tracker.add_bar(contract, 100.0, last=10.0, bid=10.0, ask=10.4, delta=-0.3)
     tracker.add_bar(contract, 120.0, last=10.0, bid=10.0, ask=10.4, delta=-0.3)
-    # mid 10.2, last 10.0 < mid → -1: flow = -1*20*(-0.3)*50 = +300
+    # put bez tisku → fallback midpointem: mid 10.2, last 10.0 < mid → -1:
+    # flow = -1*20*(-0.3)*50 = +300
     assert tracker.cum_delta == pytest.approx(350.0)
 
 
@@ -126,25 +106,27 @@ def test_daily_reset_clears_state() -> None:
 
 
 def test_net_volume_per_contract() -> None:  # ADR-0011, #222
-    """Čistý klasifikovaný objem (buy − sell, kontrakty) per spec, obě větve."""
+    """Čistý klasifikovaný objem (buy − sell, kontrakty) per spec, bar větev i tisky."""
     tracker = CumDeltaTracker(multiplier=50.0)
     call = spec("C")
-    put = spec("P")
     # Bar větev: last nad midem (+30), pod midem (−20); první bar jen zakládá stav
     tracker.add_bar(call, 100.0, 10.3, 10.0, 10.4, delta=0.5)
     tracker.add_bar(call, 130.0, 10.3, 10.0, 10.4, delta=0.5)  # +30
     tracker.add_bar(call, 150.0, 10.0, 10.0, 10.4, delta=0.5)  # last pod midem → −20
     assert tracker.net_volume(call) == 10.0
-    # Tick větev: buy 5, sell 2, unknown nepřispívá
-    tracker.add_trade(trade("P", size=5.0, side="buy", ts=1.0), delta=-0.4)
-    tracker.add_trade(trade("P", size=2.0, side="sell", ts=2.0), delta=-0.4)
-    tracker.add_trade(trade("P", size=9.0, side="unknown", ts=3.0), delta=-0.4)
-    assert tracker.net_volume(put) == 3.0
     assert tracker.net_volume(spec("C", strike=9999.0)) == 0.0  # neznámý kontrakt
-
     tracker.reset()
     assert tracker.net_volume(call) == 0.0
-    assert tracker.net_volume(put) == 0.0
+
+    # Tisky dxFeed (režim dxfeed): buy 5, sell 2, tisk bez strany nepřispívá
+    prints = CumDeltaTracker(multiplier=50.0, source="dxfeed")
+    put = spec("P")
+    prints.add_dx_trade(put, size=5.0, aggressor="BUY", delta=-0.4)
+    prints.add_dx_trade(put, size=2.0, aggressor="SELL", delta=-0.4)
+    prints.add_dx_trade(put, size=9.0, aggressor="UNDEFINED", delta=-0.4)
+    assert prints.net_volume(put) == 3.0
+    prints.reset()
+    assert prints.net_volume(put) == 0.0
 
 
 def test_volume_decrease_is_ignored_not_negative() -> None:
@@ -159,9 +141,10 @@ def test_volume_decrease_is_ignored_not_negative() -> None:
 def test_close_minute_series_and_persistence(tmp_path: Path) -> None:
     """SPEC 4.5/5.1: minutová řada flowΔ/CumΔ se ukládá do derived/{sym}/flow/."""
     tracker = CumDeltaTracker(multiplier=50.0)
-    tracker.add_trade(trade("C", size=2.0, side="buy"), delta=0.5)  # +50
+    tracker.add_bar(spec("C"), 100.0, 10.3, 10.0, 10.4, delta=0.5)  # první bar jen zakládá stav
+    tracker.add_bar(spec("C"), 102.0, 10.3, 10.0, 10.4, delta=0.5)  # +50
     row_1 = tracker.close_minute(dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC))
-    tracker.add_trade(trade("C", size=1.0, side="sell"), delta=0.5)  # -25
+    tracker.add_bar(spec("C"), 103.0, 10.0, 10.0, 10.4, delta=0.5)  # last pod midem → -25
     row_2 = tracker.close_minute(dt.datetime(2026, 7, 16, 15, 1, tzinfo=dt.UTC))
 
     assert row_1 == FlowRow(
@@ -198,7 +181,8 @@ def test_close_minute_series_and_persistence(tmp_path: Path) -> None:
 def test_roll_session_resets_only_on_boundary() -> None:
     """#638: první volání jen fixuje seanci; reset až při přechodu na nový den."""
     tracker = CumDeltaTracker(multiplier=50.0)
-    tracker.add_trade(trade("C", size=2.0, side="buy"), delta=0.5)  # +50
+    tracker.add_bar(spec("C"), 100.0, 10.3, 10.0, 10.4, delta=0.5)  # první bar jen zakládá stav
+    tracker.add_bar(spec("C"), 102.0, 10.3, 10.0, 10.4, delta=0.5)  # +50
     assert tracker.roll_session(dt.date(2026, 7, 20)) is False  # start procesu, bez resetu
     assert tracker.cum_delta == pytest.approx(50.0)
     assert tracker.roll_session(dt.date(2026, 7, 20)) is False  # táž seance
@@ -211,7 +195,8 @@ def test_roll_session_resets_only_on_boundary() -> None:
 def test_restore_cum_navazuje_zaklad_po_restartu() -> None:
     """#638: seed z flow partice přičítá základ, tok po restartu se neztrácí."""
     tracker = CumDeltaTracker(multiplier=50.0)
-    tracker.add_trade(trade("C", size=1.0, side="buy"), delta=0.5)  # +25 po restartu
+    tracker.add_bar(spec("C"), 100.0, 10.3, 10.0, 10.4, delta=0.5)  # první bar jen zakládá stav
+    tracker.add_bar(spec("C"), 101.0, 10.3, 10.0, 10.4, delta=0.5)  # +25 po restartu
     tracker.restore_cum(1000.0)
     assert tracker.cum_delta == pytest.approx(1025.0)
 

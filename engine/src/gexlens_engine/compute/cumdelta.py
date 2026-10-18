@@ -16,7 +16,6 @@ CumΔ se resetuje na začátku obchodního dne (session start řídí engine).
 """
 
 import datetime as dt
-import enum
 import logging
 from dataclasses import dataclass
 
@@ -25,24 +24,6 @@ from gexlens_engine.ibkr.discovery import OptionContractSpec
 logger = logging.getLogger(__name__)
 
 
-class TradeSide(enum.Enum):
-    BUY = "buy"
-    SELL = "sell"
-    UNKNOWN = "unknown"
-
-
-@dataclass(frozen=True)
-class ClassifiedTrade:
-    """Trade s určenou stranou agresora (vstup trade větve CumΔ)."""
-
-    spec: OptionContractSpec
-    price: float
-    size: float
-    ts: float
-    side: TradeSide
-
-
-_TRADE_SIGN = {TradeSide.BUY: 1, TradeSide.SELL: -1, TradeSide.UNKNOWN: 0}
 #: dxFeed `aggressorSide` (CME tag 5797) → znaménko; cokoli jiného = bez strany
 _AGGRESSOR_SIGN = {"BUY": 1, "SELL": -1}
 #: Zdroje znaménka toku (ADR-0032): `midpoint` = dnešní minutový test pro celý
@@ -234,14 +215,6 @@ class CumDeltaTracker:
         runtime (pending flag), ne tracker.
         """
         self._cum += base
-
-    def add_trade(self, trade: ClassifiedTrade, delta: float) -> float:
-        """Hot zóna: flowΔ = sign · size · Δ · M; unknown klasifikace nepřispívá."""
-        sign = _TRADE_SIGN[trade.side]
-        flow = sign * trade.size * delta * self._multiplier
-        self._net_volume[trade.spec] = self._net_volume.get(trade.spec, 0.0) + sign * trade.size
-        self._apply(flow)
-        return flow
 
     def add_dx_trade(
         self,

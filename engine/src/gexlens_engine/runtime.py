@@ -459,7 +459,7 @@ class EngineRuntime:
                     oi=oi,
                 )
             )
-            # CumΔ bar větev (hot zóna má vlastní tick větev přes on_trade).
+            # CumΔ bar větev (tisky dxFeed jdou do trackeru zvlášť přes add_dx_trade).
             # Bez kumulativního objemu se tracker NEKRMÍ (#614 fáze 2b): tasty
             # ho v sémantice IBKR nedodá a dosadit nulu by znamenalo skokový
             # záporný přírůstek přes celý řetěz. Řady CumΔ a net objem během
