@@ -26,8 +26,9 @@ Konfigurace se čte z běžícího enginu a z `/status`, ne z `.env`.
 ```bash
 uv run python scripts/measure_hard_data_1381.py --db "$GEXLENS_HOST_DATABASE_URL" \
     --data data --reclass-at 2026-09-26T22:14:46+00:00
-# bod 5: efektivní konfigurace, jen dva klíče (žádný výpis .env)
-docker exec gex-engine-1 python -c "from gexlens_engine.config import Settings; s = Settings(); print(s.disk_limit_gb, s.cumdelta_source)"
+# bod 5: efektivní konfigurace bez výpisu .env; klíč cumdelta_source zrušil
+# ADR-0057 (#1460), zdroj CumΔ hlásí /status
+docker exec gex-engine-1 python -c "from gexlens_engine.config import Settings; s = Settings(); print(s.disk_limit_gb)"
 docker exec gex-engine-1 sh -c 'printenv GEXLENS_DISK_LIMIT_GB >/dev/null && echo nastaveno'
 curl -s http://127.0.0.1:8010/status   # cumdelta_source, disk_usage_bytes, disk_limit_bytes, disk_free_bytes
 # bod 7: logy v bajtech

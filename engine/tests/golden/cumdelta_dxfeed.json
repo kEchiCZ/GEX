@@ -1,5 +1,5 @@
 {
- "description": "Ručně spočtený golden dataset trade větve (ADR-0032, #615 fáze 3). M=50, jeden call kontrakt Δ=0.4. Režim dxfeed: minuta 1 — bar vol=100 (první, jen založí stav). Minuta 2 — tisky BUY 6 + SELL 2 (se stranou od burzy) + UNDEFINED 1 (bez strany); bar vol=115 last=10.3 bid=10.0 ask=10.4 (mid 10.2 → +1). Tisky: +1*6*0.4*50 = +120, -1*2*0.4*50 = -40. Bar: přírůstek 15, tisky se stranou 8 už v toku, bez strany 1 → midpoint +1*1*0.4*50 = +20, zbytek 15-8-1 = 6 = strukturovaný objem mimo tok. Minuta 3 — žádný tisk, bar vol=125 last=10.0 (mid 10.2 → -1): fallback celý přírůstek 10 → -1*10*0.4*50 = -200. CumΔ = 120-40+20-200 = -100. Pokrytí: printed 8, unknown 1, structured 6, fallback 10. Režim midpoint nad TÝMIŽ vstupy: tisky nic (jen pokrytí), bar2 +1*15*0.4*50 = +300, bar3 -200 → CumΔ = +100.",
+ "description": "Ručně spočtený golden dataset trade větve (ADR-0032, ADR-0057). M=50, jeden call kontrakt Δ=0.4. Minuta 1 — bar vol=100 (první, jen založí stav). Minuta 2 — tisky BUY 6 + SELL 2 (se stranou od burzy) + UNDEFINED 1 (bez strany); bar vol=115 last=10.3 bid=10.0 ask=10.4 (mid 10.2 → +1). Minuta 3 — žádný tisk, bar vol=125 last=10.0 (mid 10.2 → -1). Zdroj aggressor (mechanika v6, trade větev běží): tisky +1*6*0.4*50 = +120, -1*2*0.4*50 = -40, bez strany 0; bary znaménko nedávají (0, 0, 0) → CumΔ = +80, net = 6-2 = +4. Pokrytí: printed 8, unknown 1, structured 15-8-1 = 6, fallback 10 (minuta 3 bez tisku, mimo tok). Zdroj midpoint (v5) nad TÝMIŽ vstupy: tisky nic (jen pokrytí), bar2 +1*15*0.4*50 = +300, bar3 -1*10*0.4*50 = -200 → CumΔ = +100, net = 15-10 = +5; trade větev neběží → fallback 0.",
  "multiplier": 50.0,
  "delta": 0.4,
  "bars": [
@@ -30,28 +30,30 @@
    "minute": 2,
    "size": 6.0,
    "aggressor": "BUY",
-   "expected_flow_dxfeed": 120.0
+   "expected_flow_aggressor": 120.0
   },
   {
    "minute": 2,
    "size": 2.0,
    "aggressor": "SELL",
-   "expected_flow_dxfeed": -40.0
+   "expected_flow_aggressor": -40.0
   },
   {
    "minute": 2,
    "size": 1.0,
    "aggressor": "UNDEFINED",
-   "expected_flow_dxfeed": 0.0
+   "expected_flow_aggressor": 0.0
   }
  ],
- "dxfeed": {
+ "aggressor": {
+  "dx_active": true,
   "expected_bar_flows": [
    0.0,
-   20.0,
-   -200.0
+   0.0,
+   0.0
   ],
-  "expected_cum_delta": -100.0,
+  "expected_cum_delta": 80.0,
+  "expected_net_volume": 4.0,
   "expected_coverage": {
    "printed_volume": 8.0,
    "unknown_volume": 1.0,
@@ -60,12 +62,14 @@
   }
  },
  "midpoint": {
+  "dx_active": false,
   "expected_bar_flows": [
    0.0,
    300.0,
    -200.0
   ],
   "expected_cum_delta": 100.0,
+  "expected_net_volume": 5.0,
   "expected_coverage": {
    "printed_volume": 8.0,
    "unknown_volume": 1.0,
@@ -74,6 +78,7 @@
   }
  },
  "_notes": [
-  "#1071: pokrytí se měří nezávisle na zdroji znaménka — struktura i v režimu midpoint; fallback jen s běžící trade větví (dx_active) nebo v režimu dxfeed."
+  "#1071: pokrytí se měří nezávisle na zdroji znaménka — struktura i v režimu midpoint; fallback jen s běžící trade větví (dx_active).",
+  "ADR-0057 (#1460): blok aggressor nahradil hybrid dxfeed (tisky + midpoint fallback, CumΔ -100); expected_net_volume pinuje čistý objem obou zdrojů (vstup FA odhadu OI)."
  ]
 }

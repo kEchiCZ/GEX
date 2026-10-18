@@ -93,6 +93,10 @@ from gexlens_engine.ticker import parse_ticker
 # `context.trading_class` a historické výsledky srovná
 # `scripts/recompute_setup_outcomes.py` (jen se souhlasem).
 SETUP_MECHANICS_VERSION = 5
+# CumΔ a čistý objem jen z tisků se stranou od burzy (ADR-0057, #1460); zapne
+# ho bump v6 (#1403). Živé trackery z něj berou zdroj (`cumdelta.LIVE_SOURCE`),
+# runtime se pak ptá instance (`tracker.prints`), ne globálu.
+CUMDELTA_PRINTS = SETUP_MECHANICS_VERSION >= 6
 
 
 class SetupTemplate(enum.Enum):

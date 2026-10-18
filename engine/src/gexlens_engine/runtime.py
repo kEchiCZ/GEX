@@ -17,7 +17,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 
 from gexlens_engine.compute.bsfallback import BsFallbackWatcher
-from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.cumdelta import LIVE_SOURCE, CumDeltaTracker
 from gexlens_engine.compute.flowoi import oi_estimate
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.gex import GexEngine, GexInput
@@ -215,9 +215,7 @@ class EngineRuntime:
 
     def __post_init__(self) -> None:
         if self.cum_delta is None:
-            self.cum_delta = CumDeltaTracker(
-                multiplier=self.multiplier, source=self.settings.cumdelta_source
-            )
+            self.cum_delta = CumDeltaTracker(multiplier=self.multiplier, source=LIVE_SOURCE)
 
     async def _oi_walls(self, day: dt.date, spot: float) -> OiWalls | None:
         """OI zdi z denního archivu; None = archiv pro den nic nemá (#851).
@@ -467,7 +465,10 @@ class EngineRuntime:
             # Sekundární řetěz krmí tracker taky (#1182): jeho net objem je
             # jediný vstup kalibrace α, který má ΔOI do dalšího dne — aktivní
             # řetěz ES/NQ je každý den 0DTE (#1172). CumΔ/flow z něj se nepíší.
-            if snapshot.volume is not None and snapshot.last is not None:
+            # Pod zdrojem tisků (ADR-0057) bar znaménko nedává, `last` nepotřebuje.
+            if snapshot.volume is not None and tracker.prints:
+                tracker.add_volume(spec, cumulative_volume=snapshot.volume)
+            elif snapshot.volume is not None and snapshot.last is not None:
                 tracker.add_bar(
                     spec,
                     cumulative_volume=snapshot.volume,
@@ -1090,6 +1091,8 @@ class EngineRuntime:
                 # CVD podkladu (#829) — aditivní pole, starší klienti ignorují
                 "futures_cvd_delta": flow_row.futures_cvd_delta,
                 "futures_cvd": flow_row.futures_cvd,
+                # Zdroj znaménka (ADR-0057 bod 8) — aditivní pole, zlom nesou řádky
+                "source": flow_row.source,
             },
         )
 

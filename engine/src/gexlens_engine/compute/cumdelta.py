@@ -1,15 +1,14 @@
-"""Cum Δ — kumulativní delta flow s plnou klasifikací agresora (SPEC 4.5 + R2).
+"""Cum Δ — kumulativní delta flow s klasifikací agresora (SPEC 4.5 + R2, ADR-0057).
 
-Dvě větve:
-- **trade větev**: každý trade nese stranu agresora → flowΔ = sign · size ·
-  Δ(K,s) · M; trades bez určené strany (unknown) se nezapočítávají. Zdrojem
-  je dxFeed `TimeAndSale` pro celý sbíraný řetěz (ADR-0032, #615 fáze 3); IBKR
-  tick-by-tick zóna z původního návrhu SPEC 3.4 se nikdy nenapojila a byla
-  rozhodnutím 3. 9. 2026 nahrazena (#1006).
-- **zbytek řetězce (1min)**: ΔVol = přírůstek kumulativního volume za minutu,
-  znaménko z midpoint testu posledního last vs. aktuální bid/ask
-  → flowΔ = sign · ΔVol · Δ(K,s) · M. Zároveň fallback pro provoz bez
-  tastytrade větve.
+Zdroj znaménka toku a čistého objemu určuje mechanika setupů (#1460):
+- **`aggressor`** (od mechaniky v6, ADR-0057): jen tisky dxFeed `TimeAndSale`
+  se stranou od burzy → flowΔ = sign · size · Δ(K,s) · M, net += sign · size.
+  Bar větev (přírůstek kumulativního volume ze snímku) znaménko nedává, jen
+  rozkládá objem na tisky a zbytek (`printvol`, pokrytí); objem bez tisku,
+  tisk bez strany a tisk bez delty jdou mimo tok.
+- **`midpoint`** (mechanika v5): ΔVol = přírůstek kumulativního volume za
+  minutu, znaménko z midpoint testu posledního last vs. aktuální bid/ask
+  → flowΔ = sign · ΔVol · Δ(K,s) · M. Tisky jen měří pokrytí (#1071).
 
 Δ(K,s) se bere z posledního platného Greeks snapshotu kontraktu (dodává volající).
 CumΔ se resetuje na začátku obchodního dne (session start řídí engine).
@@ -19,6 +18,7 @@ import datetime as dt
 import logging
 from dataclasses import dataclass
 
+from gexlens_engine.compute.setups import CUMDELTA_PRINTS
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 
 logger = logging.getLogger(__name__)
@@ -26,9 +26,15 @@ logger = logging.getLogger(__name__)
 
 #: dxFeed `aggressorSide` (CME tag 5797) → znaménko; cokoli jiného = bez strany
 _AGGRESSOR_SIGN = {"BUY": 1, "SELL": -1}
-#: Zdroje znaménka toku (ADR-0032): `midpoint` = dnešní minutový test pro celý
-#: řetěz, `dxfeed` = tisky TimeAndSale se stranou od burzy, midpoint jen fallback
-CUMDELTA_SOURCES = ("midpoint", "dxfeed")
+#: Zdroje znaménka toku: `midpoint` = minutový test pro celý řetěz (v5),
+#: `aggressor` = jen tisky se stranou od burzy (v6, ADR-0057). Hodnota jde do
+#: sloupce `flow.source` — zlom midpoint → tisky nesou řádky, ne datum.
+SOURCE_MIDPOINT = "midpoint"
+SOURCE_AGGRESSOR = "aggressor"
+CUMDELTA_SOURCES = (SOURCE_MIDPOINT, SOURCE_AGGRESSOR)
+#: Zdroj živých trackerů enginu; přepíná ho jen bump mechaniky (#1403), návrat
+#: pinem image (ADR-0057 bod 10). Testy volí zdroj explicitním parametrem.
+LIVE_SOURCE = SOURCE_AGGRESSOR if CUMDELTA_PRINTS else SOURCE_MIDPOINT
 
 
 @dataclass(frozen=True)
@@ -52,9 +58,11 @@ class CumDeltaCoverage:
     """Denní pokrytí toku podle zdroje (#615 fáze 3) — do /status a pro srovnání.
 
     Objemy v kontraktech: `printed` = tisky se stranou od burzy, `unknown` =
-    tisky bez strany (znaménko dodá midpoint), `structured` = přírůstek objemu
-    bez tisku (nohy spreadů, bloky — CME je jako trade nevysílá, ADR-0027),
-    `fallback` = kontrakt-minuty bez jediného tisku, klasifikované midpointem.
+    tisky bez strany, `structured` = přírůstek objemu bez tisku (nohy spreadů,
+    bloky — CME je jako trade nevysílá, ADR-0027), `fallback` = kontrakt-minuty
+    bez jediného tisku. Měří se v obou zdrojích stejně (#1071); pod `midpoint`
+    dává unknown i fallback znaménko midpoint test, pod `aggressor` jdou mimo
+    tok (ADR-0057 bod 2).
     """
 
     printed_volume: float = 0.0
@@ -87,11 +95,12 @@ class FlowRow:
     # None = bez tasty větve nebo instrument nemá registrovaný front future.
     futures_cvd_delta: float | None = None
     futures_cvd: float | None = None
-    # Zdroj znaménka (ADR-0032): partice před fází 3 mají NULL = midpoint.
-    # Srovnání řad před/po přepnutí stojí na tomhle sloupci, ne na datu.
+    # Zdroj znaménka (`CUMDELTA_SOURCES`, ADR-0057 bod 8): partice před fází 3
+    # mají NULL = midpoint. Srovnání řad před/po přepnutí stojí na tomhle
+    # sloupci, ne na datu.
     source: str | None = None
     # Pokrytí trade větví ZA TUTO MINUTU (#1071): kontrakty s tiskem se stranou,
-    # bez strany, bez tisku (struktura) a bez jediného tisku (fallback midpointem),
+    # bez strany, bez tisku (struktura) a bez jediného tisku (fallback),
     # plus tisky zahozené pro chybějící deltu. None = trade větev neběžela
     # (tasty odpojené) — nula by tvrdila „nic nepokryto", což není měření.
     printed_volume: float | None = None
@@ -112,9 +121,9 @@ def midpoint_sign(last: float, bid: float, ask: float) -> int:
 
 
 class CumDeltaTracker:
-    """Denní agregátor flowΔ/CumΔ přes obě větve klasifikace."""
+    """Denní agregátor flowΔ/CumΔ a čistého objemu; zdroj znaménka viz modul."""
 
-    def __init__(self, multiplier: float, source: str = "midpoint") -> None:
+    def __init__(self, multiplier: float, source: str = LIVE_SOURCE) -> None:
         if source not in CUMDELTA_SOURCES:
             raise ValueError(f"Neznámý zdroj CumΔ {source!r} (povolené: {CUMDELTA_SOURCES})")
         self._multiplier = multiplier
@@ -123,7 +132,7 @@ class CumDeltaTracker:
         self._minute_flow = 0.0
         self._last_volume: dict[OptionContractSpec, float] = {}
         # Tisky od posledního baru kontraktu (#615 fáze 3): bar větev z nich
-        # pozná, kolik přírůstku objemu už má znaménko od burzy
+        # pozná, kolik přírůstku objemu přišlo jako tisk (rozklad, pokrytí)
         self._printed_since_bar: dict[OptionContractSpec, float] = {}
         self._unknown_since_bar: dict[OptionContractSpec, float] = {}
         self._coverage = CumDeltaCoverage()
@@ -146,6 +155,11 @@ class CumDeltaTracker:
     @property
     def source(self) -> str:
         return self._source
+
+    @property
+    def prints(self) -> bool:
+        """Dává znaménko jen tisk se stranou od burzy (zdroj `aggressor`, ADR-0057)?"""
+        return self._source == SOURCE_AGGRESSOR
 
     def day_stats(self) -> dict[str, float | str]:
         """Denní pokrytí toku podle zdroje — /status a Settings (#615 krok 5)."""
@@ -223,53 +237,47 @@ class CumDeltaTracker:
         aggressor: str | None,
         delta: float | None,
     ) -> float:
-        """Jeden tisk dxFeed `TimeAndSale` (ADR-0032, #615 fáze 3).
+        """Jeden tisk dxFeed `TimeAndSale` (ADR-0032, ADR-0057).
 
-        V režimu `dxfeed` přispívá do toku hned: flowΔ = sign · size · Δ · M.
-        V režimu `midpoint` se jen měří pokrytí (paralelní běh před přepnutím).
-        Tisk bez delty se nepočítá vůbec — jeho objem doklasifikuje bar větev
-        midpointem, jako by tisk nepřišel. Tisk bez strany (`UNDEFINED`,
-        ~0,05 %) se eviduje zvlášť: znaménko mu dá až midpoint v bar větvi.
+        Pokrytí (se stranou, bez strany, bez delty) se měří v obou zdrojích
+        stejně (#1071). Tisk bez delty se do pokrytí stran nepočítá, jen do
+        `dropped_no_delta`; tisk bez strany (`UNDEFINED` — počtem ~0,05 %,
+        objemem ES 1–15 % tisků za den, téměř vše bloky daleko OTM) do `unknown`.
+
+        Zdroj `aggressor` (ADR-0057 bod 1–2): tisk se stranou dává
+        net += sign · size, s deltou i flowΔ = sign · size · Δ · M; tisk bez
+        delty jde mimo tok, čistý objem ale nese; tisk bez strany jde mimo obojí.
+        Zdroj `midpoint`: tisky jen měří pokrytí, znaménko dává bar větev.
         """
         if size is None or size <= 0:
             return 0.0
+        sign = _AGGRESSOR_SIGN.get(aggressor.upper() if isinstance(aggressor, str) else "", 0)
         if delta is None:
             self._coverage.dropped_no_delta += 1
+            if self.prints and sign != 0:
+                self._net_volume[spec] = self._net_volume.get(spec, 0.0) + sign * size
             return 0.0
-        sign = _AGGRESSOR_SIGN.get(aggressor.upper() if isinstance(aggressor, str) else "", 0)
         if sign == 0:
             self._unknown_since_bar[spec] = self._unknown_since_bar.get(spec, 0.0) + size
             self._coverage.unknown_volume += size
             return 0.0
         self._printed_since_bar[spec] = self._printed_since_bar.get(spec, 0.0) + size
         self._coverage.printed_volume += size
-        if self._source != "dxfeed":
+        if not self.prints:
             return 0.0
         flow = sign * size * delta * self._multiplier
         self._net_volume[spec] = self._net_volume.get(spec, 0.0) + sign * size
         self._apply(flow)
         return flow
 
-    def add_bar(
-        self,
-        spec: OptionContractSpec,
-        cumulative_volume: float,
-        last: float,
-        bid: float,
-        ask: float,
-        delta: float,
-    ) -> float:
-        """Bar větev: přírůstek kumulativního volume × midpoint test × Δ × M.
+    def add_volume(self, spec: OptionContractSpec, cumulative_volume: float) -> float:
+        """Bar větev bez znaménka: přírůstek kumulativního volume, rozklad a pokrytí.
 
-        První bar dne přírůstek nemá (jen založí stav); pokles kumulativního
-        volume je nekonzistence feedu → přírůstek 0 s varováním, nikdy záporný.
-
-        V režimu `dxfeed` (ADR-0032) je bar větev jen fallback per kontrakt:
-        - přišly tisky se stranou → ty už jsou v toku; midpoint dostane jen
-          tisky bez strany a zbytek přírůstku (nohy spreadů, bloky — CME je
-          jako trade nevysílá) zůstává **mimo tok** jako strukturovaný objem;
-        - tisk nepřišel žádný → celý přírůstek midpointem (výpadek tasty,
-          kontrakt mimo tasty řetěz) a počítá se jako fallback.
+        Vrací přírůstek objemu za bar. První bar dne přírůstek nemá (jen založí
+        stav); pokles kumulativního volume je nekonzistence feedu → přírůstek 0
+        s varováním, nikdy záporný. Zdroj `aggressor` volá jen tuhle část —
+        objem bez tisku jde mimo tok a jen se měří (ADR-0057 bod 1); `midpoint`
+        ji volá z `add_bar`.
         """
         previous = self._last_volume.get(spec)
         self._last_volume[spec] = cumulative_volume
@@ -294,23 +302,35 @@ class CumDeltaTracker:
                 structured=max(delta_volume - printed_total, 0.0) if self.dx_active else None,
             )
         # Pokrytí (#1071) se měří NEZÁVISLE na zdroji znaménka: v režimu midpoint
-        # říká, co by trade větev pokryla, kdyby se přepnula — jinak by verdikt
-        # #1018 stál na číslech, která se začnou počítat až po přepnutí.
-        # Fallback se počítá jen s běžící trade větví (nebo v režimu dxfeed):
-        # bez tasty je „bez tisku" každý kontrakt a číslo by nic neměřilo.
+        # říká, co trade větev pokrývá — verdikt #1018 i srovnání před a po
+        # přepnutí stojí na týchž číslech. Fallback se počítá jen s běžící trade
+        # větví: bez tasty je „bez tisku" každý kontrakt a číslo by nic neměřilo.
         if printed > 0.0:
             self._coverage.structured_volume += max(delta_volume - printed - unknown, 0.0)
-        elif self.dx_active or self._source == "dxfeed":
+        elif self.dx_active:
             self._coverage.fallback_volume += delta_volume
-        if self._source == "dxfeed" and printed > 0.0:
-            volume_to_sign = min(unknown, delta_volume)
-        else:
-            volume_to_sign = delta_volume
-        if volume_to_sign <= 0.0:
+        return delta_volume
+
+    def add_bar(
+        self,
+        spec: OptionContractSpec,
+        cumulative_volume: float,
+        last: float,
+        bid: float,
+        ask: float,
+        delta: float,
+    ) -> float:
+        """Bar větev zdroje `midpoint`: přírůstek volume × midpoint test × Δ × M.
+
+        Rozklad a pokrytí dělá `add_volume`. Pod zdrojem `aggressor` bar
+        znaménko nedává (ADR-0057 bod 1): proběhne jen `add_volume` a tok je 0.
+        """
+        delta_volume = self.add_volume(spec, cumulative_volume)
+        if self.prints or delta_volume <= 0.0:
             return 0.0
         sign = midpoint_sign(last, bid, ask)
-        flow = sign * volume_to_sign * delta * self._multiplier
-        self._net_volume[spec] = self._net_volume.get(spec, 0.0) + sign * volume_to_sign
+        flow = sign * delta_volume * delta * self._multiplier
+        self._net_volume[spec] = self._net_volume.get(spec, 0.0) + sign * delta_volume
         self._apply(flow)
         return flow
 
@@ -318,9 +338,9 @@ class CumDeltaTracker:
         """Uzavře minutu: vrátí bod řady (flowΔ minuty, průběžná CumΔ) a vynuluje minutu.
 
         Pokrytí za minutu (#1071) = rozdíl denních čítačů od poslední uzávěrky;
-        bez trade větve (a mimo režim dxfeed) zůstává NULL.
+        bez trade větve zůstává NULL.
         """
-        measured = self.dx_active or self._source == "dxfeed"
+        measured = self.dx_active
         now, last = self._coverage, self._coverage_at_close
         row = FlowRow(
             ts_min=ts_min,

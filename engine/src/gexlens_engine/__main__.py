@@ -28,7 +28,7 @@ from gexlens_engine.adapters import (
 )
 from gexlens_engine.background import BackgroundJob
 from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
-from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.cumdelta import LIVE_SOURCE, CumDeltaTracker
 from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
@@ -1215,7 +1215,7 @@ async def create_pipeline(
             contracts=next_contracts,
             # Stejná klasifikace toku jako aktivní řetěz (#1182) — netflow sekundáru
             # je vstup kalibrace α
-            cum_delta=CumDeltaTracker(multiplier=multiplier, source=settings.cumdelta_source),
+            cum_delta=CumDeltaTracker(multiplier=multiplier, source=LIVE_SOURCE),
             push_status=False,
             secondary=True,
             oi_fallback=oi_fallback,
@@ -1240,7 +1240,7 @@ async def create_pipeline(
         expiry=info.expiry,
         multiplier=multiplier,
         contracts=contracts,
-        cum_delta=CumDeltaTracker(multiplier=multiplier, source=settings.cumdelta_source),
+        cum_delta=CumDeltaTracker(multiplier=multiplier, source=LIVE_SOURCE),
         futures_cvd=futures_cvd,  # CVD podkladu (#829) — jen primární runtime
         push_status=False,  # agregovaný status pushuje orchestrátor
         oi_fallback=oi_fallback,
@@ -3298,8 +3298,8 @@ async def main() -> None:
                 partition_buffer_mb=round(writer.buffer_stats()["bytes"] / 1e6, 1),
                 # Zdroj znaménka CumΔ a denní pokrytí tisky (ADR-0032, #615
                 # krok 5) — UI ukazuje podíl objemu se stranou od burzy,
-                # ne smyšlenou šířku zóny
-                cumdelta_source=settings.cumdelta_source,
+                # ne smyšlenou šířku zóny; zdroj určuje mechanika (ADR-0057)
+                cumdelta_source=LIVE_SOURCE,
                 cumdelta_coverage={
                     pipe_symbol: pipe.runtime.cum_delta.day_stats()
                     for pipe_symbol, pipe in sorted(pipelines.items())

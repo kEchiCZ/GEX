@@ -265,7 +265,7 @@ FLOW_SCHEMA = pa.schema(
         # podkladu (běh bez tasty větve) nebo partice vznikla před #829.
         ("futures_cvd_delta", pa.float64()),
         ("futures_cvd", pa.float64()),
-        # Zdroj znaménka toku (ADR-0032): "midpoint" / "dxfeed"; NULL = partice
+        # Zdroj znaménka toku (ADR-0057): "midpoint" / "aggressor"; NULL = partice
         # před #615 fází 3 (= midpoint). Srovnání řad před/po stojí na něm.
         ("source", pa.string()),
         # Pokrytí trade větví za minutu (#1071): do teď jen v živém /status

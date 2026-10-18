@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 
+from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT, CumDeltaTracker
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockQuoteStreamer
@@ -67,6 +68,8 @@ def runtime(tmp_path: Path) -> tuple[EngineRuntime, RecordingPublisher, Settings
         expiry="20260716",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
     return engine_runtime, publisher, settings
 
@@ -182,6 +185,8 @@ async def test_dopoctene_greeks_jdou_do_vlastni_rady(tmp_path: Path) -> None:
         expiry="20260716",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
 
     await engine_runtime.run_cycle(TS, SPOT, [])
@@ -353,6 +358,9 @@ async def test_one_cycle_produces_full_day_artifacts(
     )
     assert "call_wall_dom" in levels_data and "put_wall_dom" in levels_data
     assert "flow.ES" in channels
+    # Zdroj znaménka i ve WS (ADR-0057 bod 8) — aditivní pole
+    flow_data = next(data for channel, data in publisher.messages if channel == "flow.ES")
+    assert flow_data["source"] == "midpoint"
     assert "levelsfa.ES.20260716" in channels  # ADR-0011, #222
     assert "ladder.ES.20260716" in channels  # #244
     assert "price.ES" in channels
@@ -475,6 +483,8 @@ def build_runtime(
         expiry="20260716",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
     return engine_runtime, publisher, settings
 
@@ -565,6 +575,8 @@ async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path) -> None:
         expiry="20260716",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
 
     await engine_runtime.run_cycle(TS, SPOT, [])
@@ -709,6 +721,8 @@ async def test_expired_quote_stays_in_snapshot_but_leaves_computations(tmp_path:
         expiry="20260716",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
     await engine_runtime.run_cycle(TS, SPOT, [])
 
@@ -839,6 +853,8 @@ async def test_bs_fallback_hlidka_jen_pri_otevrenem_trhu(
         expiry="20260930",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
     # Epizoda běží už dvakrát déle, než je práh alertu (např. od pátku)
     watcher = BsFallbackWatcher(symbol="ES")

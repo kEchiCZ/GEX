@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import create_engine, insert
 
-from gexlens_engine.compute.cumdelta import CumDeltaTracker
+from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT, CumDeltaTracker
 from gexlens_engine.compute.marketclock import is_market_closed
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import (
@@ -341,7 +341,7 @@ def make_pipeline(
         expiry=info.expiry,
         multiplier=50.0,
         contracts=contracts,
-        cum_delta=CumDeltaTracker(multiplier=50.0),
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
         push_status=False,
     )
     return InstrumentPipeline(
@@ -548,7 +548,7 @@ async def test_expanze_sekundaru_doarchivuje_nove_striky(
         expiry=next_info.expiry,
         multiplier=50.0,
         contracts=build_contracts(underlying, next_info, next_band),
-        cum_delta=CumDeltaTracker(multiplier=50.0),
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
         push_status=False,
         secondary=True,
     )
@@ -709,6 +709,7 @@ async def test_next_expiry_secondary_runtime(
         expiry=next_info.expiry,
         multiplier=50.0,
         contracts=build_contracts(underlying, next_info, next_band),
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
         push_status=False,
         secondary=True,
     )
@@ -1269,7 +1270,7 @@ async def test_secondary_expiry_band_expands_with_price(
         expiry=next_info.expiry,
         multiplier=50.0,
         contracts=build_contracts(underlying, next_info, next_band),
-        cum_delta=CumDeltaTracker(multiplier=50.0),
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
         push_status=False,
         secondary=True,
     )

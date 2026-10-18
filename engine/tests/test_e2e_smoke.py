@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
 from gexlens_api.main import create_app
+from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT, CumDeltaTracker
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import QuoteSnapshot, SubscriptionScheduler
@@ -91,6 +92,8 @@ def reference_day(tmp_path: Path) -> Settings:
         expiry="20260716",
         multiplier=50.0,
         contracts=specs,
+        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, golden je v5
+        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
     )
     import asyncio
 
