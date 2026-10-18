@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import io
 import sys
 from pathlib import Path
 from typing import Any
@@ -110,6 +111,20 @@ def test_dry_run_nic_nezapise_apply_opravi_alfu_i_validaci(tmp_path: Path) -> No
     old_doi, new_doi, _, new_ratio = results.validation[(EXPIRY, PREV)]
     assert old_doi == pytest.approx(480.0)  # přepsáno z 0 na finální Σ|ΔOI|
     assert new_doi == pytest.approx(480.0) and new_ratio == pytest.approx(0.4)
+
+
+def test_vystup_v_cp1250_neshodi_apply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Přesměrovaný výstup na Windows (cp1250) nesmí shodit print „α … → …“ před zápisem."""
+    module = _load()
+    url, settings = _seed(tmp_path)
+    buffer = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(buffer, encoding="cp1250"))
+    args = ["--db", url, "--data", str(settings.data_dir), "--symbols", "ES"]
+    assert module.main([*args, "--apply", "--yes"]) == 0
+    sys.stdout.flush()
+    assert "ES: α 0.000 → 0.400" in buffer.getvalue().decode("utf-8")
+    state = FaAlphaRepository(create_engine(url)).get("ES")
+    assert state is not None and state.alpha == pytest.approx(0.4)
 
 
 def test_predpublikacni_snimek_je_neoveritelny(tmp_path: Path) -> None:

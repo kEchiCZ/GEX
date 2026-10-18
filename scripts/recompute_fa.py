@@ -353,6 +353,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Logy přehrávaných funkcí: počty vyřazených stran bez IBKR měření (#1605)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
+    # Přesměrovaný výstup má na Windows kódování cp1250: „α“ a „→“ by print
+    # shodily po reportu, ještě před --apply (dry-run 18. 10.)
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
     settings = Settings(data_dir=Path(args.data))
     prod = create_engine(args.db)
     oi_repo = OIEodRepository(prod)
