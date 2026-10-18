@@ -761,7 +761,11 @@ async def test_setup_engine_end_to_end(tmp_path: Path) -> None:
     assert reviewed["user_note"] == "vyšlo přesně podle predikce"
 
 
-def _bare_engine(tmp_path: Path) -> tuple[SetupEngine, SetupsRepository, FakeRuntime]:
+def _bare_engine(
+    tmp_path: Path, *, cumdelta_prints: bool | None = None
+) -> tuple[SetupEngine, SetupsRepository, FakeRuntime]:
+    """Holý SetupEngine; `cumdelta_prints` přepne mechaniku CumΔ explicitně
+    (ADR-0057), None = výchozí podle `SETUP_MECHANICS_VERSION`."""
     repository = SetupsRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 's.sqlite'}"))
     repository.ensure_schema()
     oi_repo = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'oi.sqlite'}"))
@@ -769,6 +773,8 @@ def _bare_engine(tmp_path: Path) -> tuple[SetupEngine, SetupsRepository, FakeRun
     engine = SetupEngine(
         symbol="ES", repository=repository, oi_repository=oi_repo, publisher=RecordingPublisher()
     )
+    if cumdelta_prints is not None:
+        engine.cumdelta_prints = cumdelta_prints
     return engine, repository, FakeRuntime()
 
 
@@ -835,6 +841,121 @@ async def test_setup_engine_mezera_cumdelta_kontra_rezim_nepotvrdi(
     await engine.on_minute(TS + dt.timedelta(minutes=31), 7501, [reclaim], runtime)
 
     assert engine._history[-1].cum_delta == cum
+    assert len(repository.active_for("ES")) == created
+
+
+@pytest.mark.parametrize("prints", [False, True])
+@pytest.mark.parametrize(("gap_cum", "created"), [(320.0, 1), (None, 0)])
+async def test_setup_engine_mezera_v_minute_bez_baru_nese_dalsi_radek(
+    tmp_path: Path, prints: bool, gap_cum: float | None, created: int
+) -> None:
+    """ADR-0057 bod 3 (#1460): minuta bez baru do historie nevstoupí (#1346), její
+    NULL CumΔ se ale neztratí — `cum_gap_before` dostane další přidaný řádek.
+
+    Rozdíl CumΔ reclaimu proti oknu kontra-režimu by bez příznaku vynechal tok
+    z mezery. Na mechanice nezávisí (NULL dává jen zdroj z tisků, midpoint ne).
+    Kontrola: měřená minuta bez baru příznak nenastaví a setup vznikne.
+    """
+    engine, repository, fake = _bare_engine(tmp_path, cumdelta_prints=prints)
+    runtime = cast(EngineRuntime, fake)
+    await _warmup_and_break(engine, fake)
+
+    fake.last_flow = FakeFlow(gap_cum)
+    await engine.on_minute(TS + dt.timedelta(minutes=31), 7499, [], runtime)
+    fake.last_flow = FakeFlow(330.0)
+    reclaim = Bar(
+        ts=TS + dt.timedelta(minutes=31), open=7496, high=7502, low=7495, close=7501, volume=1.0
+    )
+    await engine.on_minute(TS + dt.timedelta(minutes=32), 7501, [reclaim], runtime)
+
+    assert engine._history[-1].cum_gap_before is (gap_cum is None)
+    assert len(repository.active_for("ES")) == created
+
+    # Příznak nese jen první řádek po mezeře
+    after = Bar(
+        ts=TS + dt.timedelta(minutes=32), open=7501, high=7502, low=7500, close=7501, volume=1.0
+    )
+    await engine.on_minute(TS + dt.timedelta(minutes=33), 7501, [after], runtime)
+    assert engine._history[-1].cum_gap_before is False
+
+
+def _utc(year: int, month: int, day: int, hour: int, minute: int) -> dt.datetime:
+    return dt.datetime(year, month, day, hour, minute, tzinfo=dt.UTC)
+
+
+@pytest.mark.parametrize("prints", [False, True])
+@pytest.mark.parametrize(
+    ("before", "after", "boundary"),
+    [
+        # Všední open (CDT): poslední bar 20:59 v cyklu 21:00, první 22:00 v cyklu 22:01
+        (_utc(2026, 10, 14, 21, 0), _utc(2026, 10, 14, 22, 1), True),
+        # Zimní čas (CST): open 23:00 UTC
+        (_utc(2026, 11, 4, 22, 0), _utc(2026, 11, 4, 23, 1), True),
+        # Nedělní open s pátečními bary v historii (engine o víkendu nerestartoval)
+        (_utc(2026, 10, 16, 21, 0), _utc(2026, 10, 18, 22, 1), True),
+        # Bez resetu: půlnoc UTC uvnitř seance; v zimě 22:00 UTC ještě stará seance
+        (_utc(2026, 10, 14, 23, 59), _utc(2026, 10, 15, 0, 0), False),
+        (_utc(2026, 11, 4, 21, 59), _utc(2026, 11, 4, 22, 0), False),
+    ],
+    ids=["vsedni-open", "zimni-cas", "nedelni-open", "pulnoc-utc", "zima-22utc"],
+)
+async def test_setup_engine_hranice_seance_cum_gap_before(
+    tmp_path: Path, prints: bool, before: dt.datetime, after: dt.datetime, boundary: bool
+) -> None:
+    """#1581: první řádek nové seance nese `cum_gap_before` jen pod CumΔ z tisků.
+
+    Reset CumΔ v 17:00 CT (#638) určuje `trading_session_date` minuty cyklu —
+    tentýž predikát, kterým roluje tracker v run_cycle. Pod v5 zůstává srovnání
+    přes reset jako dosud (změna vzniku setupů patří do bumpu, ADR-0034 §6).
+    """
+    engine, _, fake = _bare_engine(tmp_path, cumdelta_prints=prints)
+    runtime = cast(EngineRuntime, fake)
+    for now, cum in ((before, -50_000.0), (after, 10.0)):
+        fake.last_flow = FakeFlow(cum)
+        bar = Bar(
+            ts=now - dt.timedelta(minutes=1), open=7505, high=7506, low=7504, close=7505, volume=1.0
+        )
+        await engine.on_minute(now, 7505, [bar], runtime)
+
+    assert [m.cum_gap_before for m in engine._history] == [False, prints and boundary]
+
+
+@pytest.mark.parametrize(
+    ("prints", "warmup_end", "scene", "created"),
+    [
+        # Okno 20:31–21:00 minulé seance, průraz v prvním cyklu seance 15. 10. (bar 22:00)
+        (False, _utc(2026, 10, 14, 21, 0), _utc(2026, 10, 14, 22, 1), 1),  # v5: artefakt
+        (True, _utc(2026, 10, 14, 21, 0), _utc(2026, 10, 14, 22, 1), 0),  # v6: nepotvrdí
+        # Kontrola v6: celé okno v nové seanci (22:01–22:30)
+        (True, _utc(2026, 10, 14, 22, 30), _utc(2026, 10, 14, 22, 31), 1),
+    ],
+    ids=["v5-pres-reset", "v6-pres-reset", "v6-v-seanci"],
+)
+async def test_setup_engine_kontra_rezim_pres_reset_seance(
+    tmp_path: Path, prints: bool, warmup_end: dt.datetime, scene: dt.datetime, created: int
+) -> None:
+    """#1581: reclaim long v negativní gammě hned po openu (kontra-režim jako NQ 1087).
+
+    Okno kontra-režimu sahá do minulé seance s CumΔ −50 000; nová seance začíná
+    od nuly, takže „≈0 − CumΔ minulé seance" vypadá jako nákupní tok. Pod v6
+    se konfluence přes hranici nepotvrdí; s oknem v jedné seanci setup vzniká.
+    """
+    engine, repository, fake = _bare_engine(tmp_path, cumdelta_prints=prints)
+    runtime = cast(EngineRuntime, fake)
+
+    def bar(now: dt.datetime, o: float, h: float, low: float, c: float) -> Bar:
+        return Bar(ts=now - dt.timedelta(minutes=1), open=o, high=h, low=low, close=c, volume=1.0)
+
+    for i in range(30):
+        now = warmup_end - dt.timedelta(minutes=29 - i)
+        fake.last_flow = FakeFlow(-50_000.0 + i * 10)
+        await engine.on_minute(now, 7505, [bar(now, 7505, 7506, 7504, 7505)], runtime)
+    fake.last_flow = FakeFlow(10.0)
+    await engine.on_minute(scene, 7496, [bar(scene, 7500, 7500, 7494, 7496)], runtime)
+    reclaim = scene + dt.timedelta(minutes=1)
+    fake.last_flow = FakeFlow(20.0)
+    await engine.on_minute(reclaim, 7501, [bar(reclaim, 7496, 7502, 7495, 7501)], runtime)
+
     assert len(repository.active_for("ES")) == created
 
 
@@ -1640,12 +1761,20 @@ def test_settle_ts_expirace_v_burzovni_zone() -> None:
 # Podmínka, která CumΔ čte, se přes mezeru (None) nepotvrdí. Pády na None by
 # byly podmíněné stavem trhu (dotyk zdi, průraz, nové low), proto každý test
 # stojí ve spouštěcím stavu: bez mezery kandidát vzniká, None těsně před
-# oknem nevadí, na okraji okna a v aktuální minutě blokuje.
+# oknem nevadí, na okraji okna a v aktuální minutě blokuje. Příznak
+# `cum_gap_before` (mezera v minutě bez baru, reset seance #1581) leží PŘED
+# řádkem: na prvním řádku okna je mezera ještě mimo okno, o řádek dál uvnitř.
 
 
 def _with_gap(history: list[MinuteInputs], index: int) -> list[MinuteInputs]:
     rows = list(history)
     rows[index] = replace(rows[index], cum_delta=None)
+    return rows
+
+
+def _with_gap_before(history: list[MinuteInputs], index: int) -> list[MinuteInputs]:
+    rows = list(history)
+    rows[index] = replace(rows[index], cum_gap_before=True)
     return rows
 
 
@@ -1662,6 +1791,9 @@ def test_wall_bounce_mezera_cumdelta_v_okne_divergence() -> None:
     assert detect_wall_bounce(_with_gap(history, -2 - lookback), PARAMS) is not None
     for index in (-1 - lookback, -5, -1):  # okraj okna, uvnitř, aktuální minuta
         assert detect_wall_bounce(_with_gap(history, index), PARAMS) is None
+    assert detect_wall_bounce(_with_gap_before(history, -1 - lookback), PARAMS) is not None
+    for index in (-lookback, -1):
+        assert detect_wall_bounce(_with_gap_before(history, index), PARAMS) is None
 
 
 def test_counter_flow_mezera_cumdelta_v_dlouhem_okne() -> None:
@@ -1685,6 +1817,8 @@ def test_counter_flow_mezera_cumdelta_v_dlouhem_okne() -> None:
         assert confirmed.context["counter_regime"] is True
         assert detector(_with_gap(history, -2 - lookback), PARAMS) is not None
         assert detector(_with_gap(history, -1 - lookback), PARAMS) is None
+        assert detector(_with_gap_before(history, -1 - lookback), PARAMS) is not None
+        assert detector(_with_gap_before(history, -lookback), PARAMS) is None
 
 
 def test_gamma_momentum_mezera_cumdelta_v_okne_kvantilu() -> None:
@@ -1710,6 +1844,9 @@ def test_gamma_momentum_mezera_cumdelta_v_okne_kvantilu() -> None:
     assert detect_gamma_momentum(_with_gap(history, -31), PARAMS) is not None
     for index in (-30, -1):
         assert detect_gamma_momentum(_with_gap(history, index), PARAMS) is None
+    assert detect_gamma_momentum(_with_gap_before(history, -30), PARAMS) is not None
+    for index in (-29, -1):
+        assert detect_gamma_momentum(_with_gap_before(history, index), PARAMS) is None
 
 
 def test_divergence_spring_mezera_cumdelta_v_okne() -> None:
@@ -1722,6 +1859,9 @@ def test_divergence_spring_mezera_cumdelta_v_okne() -> None:
     assert detect_divergence_spring(_with_gap(history, -2 - lookback), PARAMS) is not None
     for index in (-1 - lookback, -1):
         assert detect_divergence_spring(_with_gap(history, index), PARAMS) is None
+    assert detect_divergence_spring(_with_gap_before(history, -1 - lookback), PARAMS) is not None
+    for index in (-lookback, -1):
+        assert detect_divergence_spring(_with_gap_before(history, index), PARAMS) is None
 
 
 def test_detect_all_mezera_cumdelta_nespadne_a_sablony_bez_cumdelta_bezi() -> None:

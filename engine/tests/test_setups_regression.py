@@ -18,6 +18,7 @@ import math
 import random
 from pathlib import Path
 
+from gexlens_engine.compute.settle import trading_session_date
 from gexlens_engine.compute.setups import (
     DETECTORS,
     SETUP_MECHANICS_VERSION,
@@ -108,6 +109,16 @@ def test_production_detectors_match_golden() -> None:
 
     assert expected["mechanics_version"] == SETUP_MECHANICS_VERSION
     assert replay_all(SetupParams()) == expected["candidates"]
+
+
+def test_golden_plati_i_pod_cumdelta_z_tisku() -> None:
+    """Otisk se s mechanikou CumΔ z tisků nemění (ADR-0057, #1581): historie
+    leží v jedné seanci a bez mezery, SetupEngine by v ní `cum_gap_before`
+    nenastavil a pravidla mezery ani hranice seance kandidáty neovlivní."""
+    history = synthetic_history()
+
+    assert len({trading_session_date(m.ts) for m in history}) == 1
+    assert all(m.cum_delta is not None and not m.cum_gap_before for m in history)
 
 
 def test_golden_covers_more_than_one_template() -> None:

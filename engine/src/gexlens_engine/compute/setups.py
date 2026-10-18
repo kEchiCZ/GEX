@@ -213,6 +213,12 @@ class MinuteInputs:
     # tlumit. None = profil minuty chybí (starší data, minuta bez snapshotu).
     gamma_edge_up: float | None = field(default=None, kw_only=True)
     gamma_edge_dn: float | None = field(default=None, kw_only=True)
+    # Rozdíl CumΔ mezi předchozím řádkem historie a tímto není úplný
+    # (ADR-0057 bod 4): mezi nimi ležela minuta bez baru s mezerou měření
+    # (do historie se nedostane, #1346), nebo reset CumΔ v 17:00 CT (#1581,
+    # jen pod CumΔ z tisků). Nastavuje SetupEngine; podmínka, jejíž okno má
+    # příznak jinde než na prvním řádku, se nepotvrdí (`_cum_levels`).
+    cum_gap_before: bool = field(default=False, kw_only=True)
 
 
 #: Stádium buňky ticker × šablona (#1323, Knihovna setupů). Auto = sizing →
@@ -709,12 +715,14 @@ def _cum_levels(window: Sequence[MinuteInputs]) -> list[float] | None:
     Rozdíl ani extrém přes mezeru nejsou úplné: po mezeře CumΔ pokračuje od
     poslední měřené úrovně a tok z doby výpadku v ní chybí. Podmínka, která
     CumΔ čte, se proto nad takovým oknem nepotvrdí a kandidát nevznikne —
-    není to filtr podle stavu trhu, jen chybějící vstup. Délku okna nehlídá;
-    ta zůstává na detektoru (po restartu je historie kratší než okno).
+    není to filtr podle stavu trhu, jen chybějící vstup. Mezera je None
+    v řádku, nebo `cum_gap_before` u kteréhokoli řádku kromě prvního (u prvního
+    leží mezera před oknem). Délku okna nehlídá; ta zůstává na detektoru (po
+    restartu je historie kratší než okno).
     """
     levels: list[float] = []
-    for item in window:
-        if item.cum_delta is None:
+    for index, item in enumerate(window):
+        if item.cum_delta is None or (index > 0 and item.cum_gap_before):
             return None
         levels.append(item.cum_delta)
     return levels
