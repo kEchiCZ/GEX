@@ -5,10 +5,17 @@ import time
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from sqlalchemy import create_engine
 
-from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT, CumDeltaTracker
+from gexlens_engine.compute.cumdelta import (
+    SOURCE_AGGRESSOR,
+    SOURCE_MIDPOINT,
+    CumDeltaTracker,
+    FlowRow,
+)
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.mock import MockQuoteStreamer
@@ -22,7 +29,7 @@ from gexlens_engine.ibkr.scheduler import (
 from gexlens_engine.ibkr.underlying import Bar
 from gexlens_engine.runtime import EngineRuntime, PublisherLike
 from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
-from gexlens_engine.storage.parquet_store import SnapshotWriter
+from gexlens_engine.storage.parquet_store import NetFlowRow, SnapshotWriter
 
 TS = dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
 SPOT = 7600.0
@@ -498,7 +505,8 @@ async def test_klasifikovany_tok_zapisuje_netflow_oiest_a_fa_vrstvy(tmp_path: Pa
     day = TS.date().isoformat()
     base = settings.derived_dir / "ES" / "20260716"
     netflow = pd.read_parquet(base / "netflow" / f"{day}.parquet")
-    assert list(netflow.columns) == ["ts_min", "strike", "right", "net_volume"]
+    assert list(netflow.columns) == ["ts_min", "strike", "right", "net_volume", "source"]
+    assert set(netflow["source"]) == {SOURCE_MIDPOINT}  # zdroj trackeru (#1460)
     # Jen druhá minuta má klasifikovaný přírůstek a jen call strany: 3 × +100
     assert len(netflow) == 3
     assert set(netflow["right"]) == {"C"}
@@ -553,6 +561,131 @@ async def test_netflow_seed_navaze_kumulativ_po_restartu(tmp_path: Path) -> None
     assert len(third) == 3
     assert set(third["right"]) == {"C"}
     assert set(third["oi_est"]) == {1040.0}
+
+
+def _seed_runtime(
+    tmp_path: Path, source: str, streamer: MockQuoteStreamer | None = None
+) -> tuple[EngineRuntime, Settings]:
+    """Runtime nad čerstvým data adresářem se zvoleným zdrojem trackeru (v5 / v6 explicitně)."""
+    engine_runtime, _publisher, settings = build_runtime(tmp_path, streamer or MockQuoteStreamer())
+    engine_runtime.cum_delta = CumDeltaTracker(multiplier=50.0, source=source)
+    return engine_runtime, settings
+
+
+def _spec(strike: float, right: str) -> OptionContractSpec:
+    return OptionContractSpec("ES", "FOP", "20260716", strike, right, "CME", "E3D", "50")
+
+
+# Pauza Globexu 16:30 CT (CDT) — ještě seance 16. 7., ve které engine do 16:00 CT psal midpoint
+PAUSE = dt.datetime(2026, 7, 16, 21, 30, tzinfo=dt.UTC)
+
+
+def _write_session_history(settings: Settings) -> None:
+    """Flow a netflow seance 16. 7.: midpoint do 15:59 CT, pak řádky v6 včetně mezery."""
+    writer = SnapshotWriter(settings)
+    before = PAUSE - dt.timedelta(minutes=40)  # 20:50 UTC, midpoint
+    writer.write_flow(
+        "ES",
+        TS.date(),
+        [
+            FlowRow(before, 2.0, 500.0, source=SOURCE_MIDPOINT),
+            FlowRow(before + dt.timedelta(minutes=1), 1.0, 30.0, source=SOURCE_AGGRESSOR),
+            FlowRow(before + dt.timedelta(minutes=2), None, None, source=SOURCE_AGGRESSOR),
+        ],
+    )
+    writer.write_netflow(
+        "ES",
+        "20260716",
+        TS.date(),
+        [
+            NetFlowRow(before, 7600.0, "C", 120.0, source=SOURCE_MIDPOINT),
+            NetFlowRow(before + dt.timedelta(minutes=1), 7600.0, "C", 9.0, source=SOURCE_AGGRESSOR),
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "cum", "net"),
+    [(SOURCE_MIDPOINT, 500.0, 120.0), (SOURCE_AGGRESSOR, 30.0, 9.0)],
+)
+async def test_seed_navaze_posledni_mereny_radek_zdroje_trackeru(
+    tmp_path: Path, source: str, cum: float, net: float
+) -> None:
+    """#1460: restart naváže CumΔ i net z posledního ne-NULL řádku TÉHOŽ zdroje."""
+    engine_runtime, settings = _seed_runtime(tmp_path, source)
+    _write_session_history(settings)
+
+    await engine_runtime.run_cycle(PAUSE, SPOT, [])
+
+    tracker = engine_runtime.cum_delta
+    assert tracker is not None
+    assert tracker.cum_delta == cum  # mezera (NULL) se přeskočí, jiný zdroj taky
+    assert tracker.net_volumes() == {_spec(7600.0, "C"): net}
+
+
+async def test_nasazeni_v6_v_pauze_nenavaze_midpoint_uroven(tmp_path: Path) -> None:
+    """#1460: v6 nasazená v pauze (seance D trvá do 17:00 CT) začne od nuly, ne od midpointu."""
+    engine_runtime, settings = _seed_runtime(tmp_path, SOURCE_AGGRESSOR)
+    before = PAUSE - dt.timedelta(minutes=40)
+    SnapshotWriter(settings).write_flow(
+        "ES", TS.date(), [FlowRow(before, 2.0, 500.0, source=SOURCE_MIDPOINT)]
+    )
+    # Partice netflow ze starého image: bez sloupce `source` (NULL = midpoint)
+    netflow_dir = settings.derived_dir / "ES" / "20260716" / "netflow"
+    netflow_dir.mkdir(parents=True)
+    pq.write_table(
+        pa.table(
+            {
+                "ts_min": pa.array([before], pa.timestamp("us", tz="UTC")),
+                "strike": [7600.0],
+                "right": ["C"],
+                "net_volume": [120.0],
+            }
+        ),
+        netflow_dir / f"{TS.date().isoformat()}.parquet",
+    )
+
+    await engine_runtime.run_cycle(PAUSE, SPOT, [])
+
+    tracker = engine_runtime.cum_delta
+    assert tracker is not None
+    assert tracker.cum_delta == 0.0
+    assert tracker.net_volumes() == {}
+
+
+async def test_netflow_seed_obnovi_i_stranu_mimo_pasmo(tmp_path: Path) -> None:
+    """#1460: po rollu má nový aktivní runtime užší pásmo — základ strany mimo něj se neztratí.
+
+    Strana 7620 C se po rozšíření pásma vrátí se základem 30 a tok k němu
+    přibývá; dřív by začala od nuly a řádek netflow by kumulativ přepsal.
+    """
+    engine_runtime, settings = _seed_runtime(tmp_path, SOURCE_MIDPOINT, RisingVolumeStreamer())
+    SnapshotWriter(settings).write_netflow(
+        "ES",
+        "20260716",
+        TS.date(),
+        [
+            NetFlowRow(TS - dt.timedelta(minutes=5), 7600.0, "C", 100.0, SOURCE_MIDPOINT),
+            NetFlowRow(TS - dt.timedelta(minutes=5), 7620.0, "C", 30.0, SOURCE_MIDPOINT),
+        ],
+    )
+
+    await engine_runtime.run_cycle(TS, SPOT, [])
+    tracker = engine_runtime.cum_delta
+    assert tracker is not None
+    assert tracker.net_volume(_spec(7620.0, "C")) == 30.0
+
+    # Rozšíření pásma o 7620: kontrakt postavený jako z build_contracts je tentýž klíč
+    engine_runtime.contracts = [*engine_runtime.contracts, _spec(7620.0, "C"), _spec(7620.0, "P")]
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=1), SPOT, [])  # první bar 7620
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=2), SPOT, [])  # +100 buy
+
+    netflow = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "netflow" / f"{TS.date().isoformat()}.parquet"
+    )
+    last = netflow[netflow["ts_min"] == TS + dt.timedelta(minutes=2)]
+    side = last[(last["strike"] == 7620.0) & (last["right"] == "C")]
+    assert list(side["net_volume"]) == [130.0]
 
 
 async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path) -> None:

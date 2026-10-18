@@ -291,6 +291,18 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-18 — navázání kumulativů po restartu nerozlišovalo zdroj ani mezeru (#1460).**
+  Seed CumΔ a netu bral poslední řádek seance bez ohledu na `source` a NULL četl jako 0.
+  `restore_net_volume` (`setdefault`) zahodil uložený základ strany, kterou tracker už měl.
+  Seed netu vynechal strany mimo pásmo a po rollu je dostane nový aktivní řetěz užší.
+  Pod v5 se nic z toho neprojevilo (jeden zdroj, žádné NULL, mapa při seedu prázdná).
+  Pod v6 by ale engine nasazený v pauze 16:00–17:00 CT, která ještě patří seanci D, navázal
+  na midpointovou úroveň. Mezera by vynulovala CumΔ a tisky před prvním cyklem by se ztratily.
+  Odhalila to mapa čtenářů a zapisovačů pro ADR-0057. → Kumulativ navazovaný z partic se filtruje
+  podle zdroje, který ho vyrobil (`cumdelta.stored_sources`, NULL = starší konvence), a NULL
+  přeskakuje. Uložený základ se přičítá jako `restore_cum`. Test: restart v pauze po změně zdroje
+  nad particí ze starého image (`pq.write_table` bez nového sloupce).
+
 - **2026-10-18 — Bluesky za 6 dní tiše ztratil ~2,5 h postů, v oknech CPI a PPI nic (#1509).**
   Za 12.–17. 10. 161 reconnectů Jetstreamu (`keepalive ping timeout` na pomalé lince); v oknech
   CPI 14. 10. 12:30–12:40 UTC a PPI 15. 10. 12:25–12:40 UTC 0 eventů. Příčiny: reconnect bez

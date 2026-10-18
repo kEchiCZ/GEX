@@ -17,7 +17,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 
 from gexlens_engine.compute.bsfallback import BsFallbackWatcher
-from gexlens_engine.compute.cumdelta import LIVE_SOURCE, CumDeltaTracker
+from gexlens_engine.compute.cumdelta import LIVE_SOURCE, CumDeltaTracker, stored_sources
 from gexlens_engine.compute.flowoi import oi_estimate
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.gex import GexEngine, GexInput
@@ -252,22 +252,30 @@ class EngineRuntime:
         teď se základ přečte z posledního zapsaného řádku AKTUÁLNÍ seance
         (večer D−1 + D, okno session_bounds). Bez řádku v okně (start nové
         seance) se nenavazuje nic — nula je správný základ.
+        Od #1460 jen poslední měřený řádek (ne NULL) zdroje běžícího trackeru:
+        řádky jiného zdroje nesou jinou veličinu (ADR-0057 bod 8).
         """
         if not self._flow_seed_pending:
             return
         self._flow_seed_pending = False
+        tracker = self.cum_delta
+        assert tracker is not None  # nastaven v __post_init__
         start, end = session_bounds(session_day)
         paths = [
             self.settings.derived_dir / self.symbol / "flow" / f"{day.isoformat()}.parquet"
             for day in self._session_partition_days(session_day)
         ]
         base = await asyncio.to_thread(
-            functools.partial(read_last_cum_delta, paths, start=start, end=end)
+            functools.partial(
+                read_last_cum_delta,
+                paths,
+                start=start,
+                end=end,
+                sources=stored_sources(tracker.source),
+            )
         )
         if base is None or base == 0.0:
             return
-        tracker = self.cum_delta
-        assert tracker is not None  # nastaven v __post_init__
         tracker.restore_cum(base)
         logger.info(
             "%s %s: CumΔ navázán z flow partice (%.0f) — restart uprostřed seance %s",
@@ -282,14 +290,26 @@ class EngineRuntime:
 
         Restart enginu uprostřed dne dřív vynuloval FA odhad — tok naměřený
         dopoledne existoval jen v paměti. Partice netflow ho drží, takže se
-        odhad po startu naváže tam, kde předchozí proces skončil. Klíče už
-        naměřené po restartu mají přednost (restore_net_volume je setdefault).
+        odhad po startu naváže tam, kde předchozí proces skončil. Uložený
+        základ se přičítá k toku naměřenému po restartu (#1460).
         Od #638 jen řádky AKTUÁLNÍ seance — kumulativ předchozí seance ležící
-        v téže UTC partici se přenést nesmí.
+        v téže UTC partici se přenést nesmí; od #1460 jen řádky zdroje
+        běžícího trackeru (`stored_sources`).
+
+        Obnovují se všechny uložené strany, i mimo dnešní pásmo (#1460): po
+        rollu expirace dostane nový aktivní runtime užší počáteční pásmo než
+        sekundár, který stranu přes den měřil. Zahozený základ by po
+        rozšíření pásma začal znovu od nuly a další řádek netflow by uložený
+        kumulativ strany přepsal. Spec mimo pásmo vzniká z šablony řetězu
+        (`OptionContractSpec` je čistě hodnotový, conId nenese) — rovná se
+        tomu, co pásmo postaví při rozšíření.
         """
         if not self._netflow_seed_pending:
             return
         self._netflow_seed_pending = False
+        tracker = self.cum_delta
+        assert tracker is not None  # nastaven v __post_init__
+        sources = stored_sources(tracker.source)
         start, end = session_bounds(session_day)
         stored: dict[tuple[float, str], float] = {}
         for day in self._session_partition_days(session_day):
@@ -301,16 +321,18 @@ class EngineRuntime:
                 / f"{day.isoformat()}.parquet"
             )
             partial = await asyncio.to_thread(
-                functools.partial(read_netflow_latest, path, start=start, end=end)
+                functools.partial(read_netflow_latest, path, start=start, end=end, sources=sources)
             )
             # Pozdější partice (vyšší UTC den) přepíše starší stav téhož klíče
             stored.update(partial)
-        if not stored:
+        if not stored or not self.contracts:
             return
-        tracker = self.cum_delta
-        assert tracker is not None  # nastaven v __post_init__
         by_key = {(spec.strike, spec.right): spec for spec in self.contracts}
-        restored = {by_key[key]: net for key, net in stored.items() if key in by_key}
+        template = self.contracts[0]
+        restored = {
+            by_key[key] if key in by_key else replace(template, strike=key[0], right=key[1]): net
+            for key, net in stored.items()
+        }
         tracker.restore_net_volume(restored)
         logger.info(
             "%s %s: kumulativní net objem obnoven z partice netflow (%d stran)",
@@ -746,7 +768,13 @@ class EngineRuntime:
         # kalibrace α a zpětné validace směru (znaménko net vs. ΔOI). Píše
         # i sekundární řetěz (#1182) — teprve jeho netflow má ΔOI do D+1.
         netflow_rows = [
-            NetFlowRow(ts_min=ts_min, strike=spec.strike, right=spec.right, net_volume=net)
+            NetFlowRow(
+                ts_min=ts_min,
+                strike=spec.strike,
+                right=spec.right,
+                net_volume=net,
+                source=tracker.source,
+            )
             for spec, net in sorted(
                 tracker.net_volumes().items(),
                 key=lambda item: (item[0].strike, item[0].right),

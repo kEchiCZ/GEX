@@ -16,6 +16,7 @@ from gexlens_engine.compute.cumdelta import (
     FlowRow,
     flow_window_sum,
     midpoint_sign,
+    stored_sources,
 )
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
@@ -42,17 +43,37 @@ def spec(right: str, strike: float = 7600.0) -> OptionContractSpec:
     )
 
 
-def test_restore_net_volume_nechava_prednost_zivemu_mereni() -> None:
-    """#232: navázání z partice netflow nesmí přepsat tok naměřený po restartu."""
+def test_restore_net_volume_pricita_k_zivemu_mereni() -> None:
+    """#232, #1460: uložený základ se přičte k toku naměřenému po restartu, nic se nezahodí."""
     tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT)
     tracker.add_bar(spec("C"), 100.0, 10.3, 10.0, 10.4, delta=0.5)  # první bar jen zakládá stav
     tracker.add_bar(spec("C"), 110.0, 10.3, 10.0, 10.4, delta=0.5)  # last nad midem → +10
 
     tracker.restore_net_volume({spec("C"): 999.0, spec("P"): -40.0})
 
-    assert tracker.net_volume(spec("C")) == 10.0  # živé měření má přednost
+    assert tracker.net_volume(spec("C")) == 1009.0  # základ + tok po restartu
     assert tracker.net_volume(spec("P")) == -40.0  # chybějící klíč se doplní
-    assert tracker.net_volumes() == {spec("C"): 10.0, spec("P"): -40.0}
+    assert tracker.net_volumes() == {spec("C"): 1009.0, spec("P"): -40.0}
+
+
+def test_restore_net_volume_zachova_tisky_pred_prvnim_cyklem() -> None:
+    """#1460: tisky zdroje aggressor přijdou dřív než seed v prvním cyklu — základ je doplní."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    tracker.add_dx_trade(spec("C"), 3.0, "BUY", 0.5)
+    tracker.add_dx_trade(spec("P"), 2.0, "SELL", -0.5)
+
+    tracker.restore_net_volume({spec("C"): 20.0, spec("P"): 5.0})
+
+    assert tracker.net_volumes() == {spec("C"): 23.0, spec("P"): 3.0}
+
+
+def test_stored_sources_rozlisi_zdroj_radku() -> None:
+    """#1460: NULL (partice před sloupcem) = midpoint; hybrid `dxfeed` nepatří nikomu."""
+    assert stored_sources(SOURCE_MIDPOINT) == frozenset({None, SOURCE_MIDPOINT})
+    assert stored_sources(SOURCE_AGGRESSOR) == frozenset({SOURCE_AGGRESSOR})
+    assert "dxfeed" not in stored_sources(SOURCE_MIDPOINT) | stored_sources(SOURCE_AGGRESSOR)
+    with pytest.raises(ValueError, match="Neznámý zdroj"):
+        stored_sources("dxfeed")
 
 
 def test_golden_bar_branch_midpoint_test() -> None:

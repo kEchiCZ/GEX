@@ -87,6 +87,12 @@ z ranních potvrzení proti skutečnému ΔOI z věčného archivu.
    jen aktivní řetěz. Umožňuje zpětnou validaci směru (znaménko net vs. ΔOI),
    kalibraci α a navázání kumulativu po restartu enginu uprostřed dne
    (`CumDeltaTracker.restore_net_volume`, živé měření má přednost).
+   *(Opraveno: netflow píše i sekundární řetěz (#1182). Od #1460 (ADR-0057 bod 8)
+   nese řádek sloupec `source` se zdrojem znaménka (NULL = partice před #1460
+   = midpoint) a navázání bere jen řádky zdroje běžícího trackeru. Uložený
+   kumulativ se k toku naměřenému od startu procesu přičítá, místo aby mu
+   ustoupil: tisky chodí i před prvním cyklem. Obnovují se i strany mimo
+   pásmo, které má nový aktivní řetěz po rollu užší.)*
 2. **Jediná definice odhadu** `compute/flowoi.oi_estimate`:
    `OI_est = max(0, OI_ráno + α·net)`. FA levels (fáze 1), FA Dyn GEX
    profil/pole i řada oiest počítají z TÉHOŽ čísla — UI nikdy neukazuje dvě

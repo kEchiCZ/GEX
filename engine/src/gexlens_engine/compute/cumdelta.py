@@ -42,6 +42,22 @@ LIVE_SOURCE = SOURCE_AGGRESSOR if CUMDELTA_PRINTS else SOURCE_MIDPOINT
 FLOW_WINDOW_MIN = 10
 
 
+def stored_sources(source: str) -> frozenset[str | None]:
+    """Hodnoty sloupce `source` uložených řádků (flow, netflow), které patří zdroji (#1460).
+
+    NULL = řádek z doby před zavedením sloupce (flow před #615 fází 3, netflow
+    před #1460), tedy midpoint. Hybrid `dxfeed` (do #1460) nepatří žádnému
+    zdroji. Navázání kumulativu po restartu bere jen řádky zdroje běžícího
+    trackeru: engine nasazený s v6 v pauze 16:00–17:00 CT, která ještě patří
+    seanci D, by jinak převzal midpointovou úroveň (ADR-0057 bod 8).
+    """
+    if source not in CUMDELTA_SOURCES:
+        raise ValueError(f"Neznámý zdroj CumΔ {source!r} (povolené: {CUMDELTA_SOURCES})")
+    if source == SOURCE_MIDPOINT:
+        return frozenset({None, SOURCE_MIDPOINT})
+    return frozenset({source})
+
+
 @dataclass(frozen=True)
 class BarBreakdown:
     """Rozklad přírůstku objemu kontraktu za jeden bar (#1007 krok 2).
@@ -189,11 +205,14 @@ class CumDeltaTracker:
     def restore_net_volume(self, values: dict[OptionContractSpec, float]) -> None:
         """Naváže kumulativ z partice netflow po restartu uprostřed dne (#232).
 
-        Jen chybějící klíče (setdefault): tok naměřený PO restartu má přednost
-        a uložený kumulativ ho nesmí přepsat.
+        Přičítá uložený základ k toku naměřenému od startu procesu, stejně jako
+        `restore_cum` (#1460): tisky zdroje `aggressor` chodí i před prvním
+        cyklem a cyklus spadlý mezi barem a seedem nechá v mapě přírůstky —
+        přepsání ani `setdefault` by jeden z obou dílů zahodily. Volat nejvýš
+        jednou; hlídá runtime (pending flag), ne tracker.
         """
         for spec, net in values.items():
-            self._net_volume.setdefault(spec, net)
+            self._net_volume[spec] = self._net_volume.get(spec, 0.0) + net
 
     def reset(self) -> None:
         """Reset na začátku obchodního dne (SPEC 4.5; volá `roll_session`, #638)."""

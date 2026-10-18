@@ -1324,7 +1324,13 @@ async def test_kalibrace_alfa_po_oi_archivu_nastavi_runtime(
         "20260717",
         prev,
         [
-            NetFlowRow(ts_min=ts, strike=c.strike, right=c.right, net_volume=100.0)
+            NetFlowRow(
+                ts_min=ts,
+                strike=c.strike,
+                right=c.right,
+                net_volume=100.0,
+                source=SOURCE_MIDPOINT,
+            )
             for c in contracts
         ],
     )
@@ -1383,7 +1389,13 @@ async def test_kalibrace_alfa_az_nad_finalnim_snimkem(
         "20260717",
         prev,
         [
-            NetFlowRow(ts_min=ts, strike=c.strike, right=c.right, net_volume=100.0)
+            NetFlowRow(
+                ts_min=ts,
+                strike=c.strike,
+                right=c.right,
+                net_volume=100.0,
+                source=SOURCE_MIDPOINT,
+            )
             for c in contracts
         ],
     )
