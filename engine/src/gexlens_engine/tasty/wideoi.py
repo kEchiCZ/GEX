@@ -9,17 +9,23 @@ Tasty tenhle problém nemá: `Summary.openInterest` je pro FOP prokazatelně
 shodný s IBKR tickem 101 (ADR-0027, 50/50 kontraktů), jede přes vlastní
 subskripci mimo IBKR účet a teče **průběžně**, bez snapshot průchodu.
 
-Archivují se JEN striky mimo IBKR obálku: každý kontrakt má tak právě jeden
-zdroj, klíče nekolidují a původ hodnoty jde poznat podle toho, který sloupec
-času je vyplněný (`captured_ts` = IBKR, `tasty_captured_ts` = tasty).
+Archivují se JEN striky bez IBKR řádku dne: IBKR vlastní, co změřilo, tasty
+zbytek řetězu. Původ hodnoty určuje vyplněný `captured_ts` (IBKR); tasty
+řádek má jen `tasty_captured_ts`. Když IBKR strike doarchivuje (rozšíření
+obálky), řádek přepíše a nese pak oba časy — tasty ho od té chvíle nemění
+(stráž v `OIEodRepository.upsert_many`, #1605). Tasty řádky se během dne
+obnovují: publikace CME (~12:00 UTC) přijde do Summary a zapíše se, jen když
+se hodnota změnila.
 """
 
+import asyncio
 import datetime as dt
 import logging
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 
 from gexlens_engine.ibkr.discovery import OptionContractSpec
-from gexlens_engine.storage.oi_archive import OIRecord
+from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
 from gexlens_engine.tasty.symbols import ChainSymbols
 
 logger = logging.getLogger(__name__)
@@ -38,10 +44,10 @@ def wide_contracts(
     multiplier: str,
     trading_class: str,
 ) -> list[tuple[OptionContractSpec, str]]:
-    """Kontrakty expirace, které IBKR obálka NEpokrývá, + jejich streamer symbol.
+    """Kontrakty expirace, které IBKR NEpokrývá, + jejich streamer symbol.
 
-    `covered` jsou kontrakty, které už archivuje IBKR — ty se vynechají, aby
-    se dva zdroje nikdy nepraly o týž řádek.
+    `covered` jsou kontrakty s IBKR řádkem dne — ty se vynechají, IBKR
+    hodnotu tasty nepřepisuje (pokrytí po striku a straně přes všechny série).
     """
     covered_keys = {(c.expiry, c.strike, c.right) for c in covered}
     out: list[tuple[OptionContractSpec, str]] = []
@@ -96,6 +102,55 @@ def wide_records(
             )
         )
     return records
+
+
+async def wide_oi_pass(
+    repository: OIEodRepository,
+    chain: ChainSymbols,
+    *,
+    symbol: str,
+    expiry: str,
+    sample: OptionContractSpec,
+    oi_lookup: OiLookup,
+    now: dt.datetime,
+) -> int:
+    """Jeden průchod širokého OI aktivní expirace → počet skutečně zapsaných řádků.
+
+    Pokryté jsou jen striky s IBKR řádkem dne (#1605). Do #1605 se pokrytí
+    bralo z `values_for`, které vracelo i vlastní tasty zápisy: první běh
+    v 00:00 UTC zapsal řetěz s předchozí publikací CME a od dalšího běhu byl
+    každý strike „pokrytý" — tasty řádek se do konce dne neobnovil (~55 % Σ OI
+    0DTE řetězu na den starých číslech, den expirace mimo obálku se do archivu
+    nezapsal). Teď se tasty řádky během dne obnovují: zapíše se jen hodnota,
+    která se proti tasty řádku téže série liší (porovnání per PK), takže
+    minutový běh obvykle nezapíše nic. IBKR řádek nepřepíše ani souběžný
+    zápis — stráž v `upsert_many`.
+
+    `sample` nese exchange/trading_class/multiplier aktivní expirace.
+    """
+    day = now.date()
+    rows = await asyncio.to_thread(repository.sourced_rows, symbol, expiry, day)
+    covered = [replace(sample, strike=row.strike, right=row.right) for row in rows if row.ibkr]
+    contracts = wide_contracts(
+        chain,
+        expiry,
+        covered,
+        symbol=symbol,
+        exchange=sample.exchange,
+        multiplier=sample.multiplier,
+        trading_class=sample.trading_class,
+    )
+    if not contracts:
+        return 0
+    stored = {(row.trading_class, row.strike, row.right): row.oi for row in rows if not row.ibkr}
+    records = [
+        record
+        for record in wide_records(contracts, oi_lookup, day)
+        if stored.get((record.trading_class, record.strike, record.right)) != record.oi
+    ]
+    if not records:
+        return 0
+    return await asyncio.to_thread(repository.upsert_many, records, tasty_captured_ts=now)
 
 
 def wide_streamers(

@@ -9,8 +9,10 @@ hodnotu z prvního načtení.
 import datetime as dt
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
 
+from gexlens_engine.setups import SetupEngine
 from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
 from gexlens_engine.tendency import TendencyEngine
 
@@ -81,4 +83,37 @@ def test_beze_zmeny_snimku_se_nepocita_znovu(tmp_path: Path) -> None:
     engine._refresh_max_pain(EXPIRY, DAY)
 
     assert engine._max_pain_loaded_for == key_after_first
-    assert key_after_first == (EXPIRY, DAY, at)  # klíč nese čas pořízení snímku
+    # Klíč nese verzi archivu expirace: (poslední IBKR zápis, poslední tasty zápis)
+    assert key_after_first == (EXPIRY, DAY, (at, None))
+
+
+@pytest.mark.parametrize("engine_cls", [TendencyEngine, SetupEngine])
+def test_obnova_tasty_kridla_posune_max_pain(
+    tmp_path: Path, engine_cls: type[TendencyEngine] | type[SetupEngine]
+) -> None:
+    """#1605: tasty křídla se po publikaci CME obnovují bez změny `captured_ts`
+    (IBKR čtení se nehne). Klíč jen na `captured_ts` by Max Pain držel na
+    předchozí publikaci — tasty křídla dělají ~55 % Σ OI 0DTE řetězu."""
+    repository = repo(tmp_path)
+    write(repository, {(29000.0, "C"): 100.0}, dt.datetime(2026, 8, 24, 13, 1, tzinfo=dt.UTC))
+    repository.upsert_many(
+        [OIRecord("NQ", EXPIRY, 29400.0, "P", DAY, 300.0)],
+        tasty_captured_ts=dt.datetime(2026, 8, 24, 0, 0, tzinfo=dt.UTC),
+    )
+    engine = engine_cls.__new__(engine_cls)  # bez plné konstrukce
+    engine.symbol = "NQ"
+    engine.oi_repository = repository
+    engine._max_pain = None
+    engine._max_pain_loaded_for = None
+
+    engine._refresh_max_pain(EXPIRY, DAY)
+    assert engine._max_pain == 29400.0
+
+    # Publikace dorazila do tasty Summary: put masa nahoře se rozpustila
+    repository.upsert_many(
+        [OIRecord("NQ", EXPIRY, 29400.0, "P", DAY, 50.0)],
+        tasty_captured_ts=dt.datetime(2026, 8, 24, 12, 5, tzinfo=dt.UTC),
+    )
+    engine._refresh_max_pain(EXPIRY, DAY)
+
+    assert engine._max_pain == 29000.0

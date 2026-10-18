@@ -21,12 +21,15 @@ from typing import Protocol
 
 from sqlalchemy import (
     Column,
+    ColumnElement,
     Date,
     DateTime,
     Float,
     MetaData,
     String,
     Table,
+    and_,
+    case,
     func,
     inspect,
     select,
@@ -74,17 +77,25 @@ oi_eod_table = Table(
     Column("close_prem", Float, nullable=True),
     # Spot podkladu, ke kterému se IV/greeks vztahují (undPrice z modelu)
     Column("und_price", Float, nullable=True),
-    # Kdy vznikl TASTY snímek řádku (#828, varianta A). Oddělený od
-    # `captured_ts` schválně: tasty OI teče průběžně, kdežto IBKR chodí
-    # ranním snapshot průchodem — jeden společný čas by rozbil detektor
-    # finality (#463) i invalidaci Max Pain cache (#826), která na
-    # `captured_ts` stojí. NULL = řádek pochází z IBKR archivace, což
-    # zároveň slouží jako rozlišení původu hodnoty.
+    # Kdy tasty naposledy změnil hodnotu řádku (#828, varianta A; #1605).
+    # Oddělený od `captured_ts` schválně: tasty OI teče průběžně, kdežto IBKR
+    # chodí snapshot průchodem — jeden společný čas by rozbil detektor
+    # finality (#463), který na `captured_ts` stojí. Původ hodnoty určuje
+    # JEN `captured_ts`: vyplněný = hodnotu naposledy zapsalo IBKR (i když
+    # řádek předtím zapsal tasty — IBKR zápis tenhle sloupec nemaže, takže
+    # řádek nese oba časy); NULL = tasty řádek. Tasty nikdy nepřepíše řádek
+    # s `captured_ts` (stráž v `upsert_many`). Čas nezměněné hodnoty se
+    # neposouvá — sloupec nedokazuje čerstvost, jen poslední změnu.
     Column("tasty_captured_ts", DateTime(timezone=True), nullable=True),
 )
 
 #: Sloupce denního snímku řetězce (#519) — sdílené migrací i upsertem
 SNAPSHOT_COLUMNS = ("iv", "delta", "gamma", "theta", "vega", "close_prem", "und_price")
+#: Řádek s IBKR měřením (#1605): původ hodnoty určuje jen vyplněný `captured_ts`
+_IBKR_ROW = oi_eod_table.c.captured_ts.is_not(None)
+
+#: Verze archivu expirace dne (#1605): (max `captured_ts`, max `tasty_captured_ts`)
+ArchiveVersion = tuple[dt.datetime | None, dt.datetime | None]
 
 
 @dataclass(frozen=True)
@@ -105,6 +116,28 @@ class OIRecord:
     und_price: float | None = None
     # Série (#736); "" = souhrn/legacy. Na konci kvůli pozičním konstruktorům.
     trading_class: str = ""
+
+
+def _tasty_guard(excluded_oi: ColumnElement[float]) -> ColumnElement[bool]:
+    """Stráž tasty upsertu (#1605): jen tasty řádek a jen změněná hodnota.
+
+    Vyhodnotí se nad zamčenou aktuální verzí řádku, takže IBKR zápis
+    commitnutý mezi čtením pokrytí a tasty upsertem ji neobejde.
+    `oi` je NOT NULL, prosté `!=` stačí.
+    """
+    return and_(oi_eod_table.c.captured_ts.is_(None), oi_eod_table.c.oi != excluded_oi)
+
+
+@dataclass(frozen=True)
+class SourcedRow:
+    """Řádek archivu dne s původem hodnoty (#1605) — pokrytí širokého OI z tasty."""
+
+    trading_class: str
+    strike: float
+    right: str
+    oi: float
+    #: Vyplněný `captured_ts` = hodnotu naposledy zapsalo IBKR
+    ibkr: bool
 
 
 @dataclass(frozen=True)
@@ -236,17 +269,29 @@ class OIEodRepository:
         captured_ts: dt.datetime | None = None,
         *,
         tasty_captured_ts: dt.datetime | None = None,
-    ) -> None:
-        """Idempotentní zápis: opakovaný běh týž den aktualizuje hodnoty (upsert).
+    ) -> int:
+        """Idempotentní zápis (upsert); vrací počet skutečně vložených/změněných řádků.
 
-        `tasty_captured_ts` značí řádky pořízené z tasty Summary (#828) —
-        píše se MÍSTO `captured_ts`, aby průběžný tasty zápis nepřepisoval
-        čas ranního IBKR snímku (na něm stojí finalita #463 i Max Pain #826).
+        IBKR zápis (`captured_ts`) přepíše OI, čas i snímkové sloupce;
+        `tasty_captured_ts` nechá, takže řádek přepsaný z IBKR nese oba časy
+        a jeho původ je IBKR (vyplněný `captured_ts`).
+
+        `tasty_captured_ts` značí řádky z tasty Summary (#828) — píše se MÍSTO
+        `captured_ts`, aby průběžný tasty zápis neposouval čas IBKR snímku
+        (na něm stojí finalita #463). Tasty zápis mění jen `oi` a svůj čas
+        (snímkové sloupce nemá — vynuloval by greeks IBKR řádku) a stráž v SQL
+        ho pustí jen na tasty řádek se změněnou hodnotou (#1605): řádek
+        s `captured_ts` je pro tasty nedotknutelný i při souběhu s IBKR
+        archivací a nezměněná hodnota se nepřepisuje (`rowcount` ji nepočítá).
+
+        Řádky jdou do DB seřazené podle PK: souběžné dávky IBKR a tasty se
+        společnými klíči tak zamykají ve stejném pořadí a neuváznou (PG).
         """
         if not records:
-            return
-        stamped = "tasty_captured_ts" if tasty_captured_ts is not None else "captured_ts"
-        updatable = ("oi", stamped, *SNAPSHOT_COLUMNS)
+            return 0
+        tasty = tasty_captured_ts is not None
+        stamped = "tasty_captured_ts" if tasty else "captured_ts"
+        updatable = ("oi", stamped) if tasty else ("oi", stamped, *SNAPSHOT_COLUMNS)
         rows = [
             {
                 "symbol": r.symbol,
@@ -260,7 +305,10 @@ class OIEodRepository:
                 "tasty_captured_ts": tasty_captured_ts,
                 **{name: getattr(r, name) for name in SNAPSHOT_COLUMNS},
             }
-            for r in records
+            for r in sorted(
+                records,
+                key=lambda r: (r.symbol, r.expiry, r.trading_class, r.strike, r.right, r.day),
+            )
         ]
         dialect = self._engine.dialect.name
         primary_key = ["symbol", "expiry", "trading_class", "strike", "right", "date"]
@@ -270,17 +318,19 @@ class OIEodRepository:
             stmt = pg_stmt.on_conflict_do_update(
                 index_elements=primary_key,
                 set_={name: getattr(pg_stmt.excluded, name) for name in updatable},
+                where=_tasty_guard(pg_stmt.excluded.oi) if tasty else None,
             )
         elif dialect == "sqlite":
             sqlite_stmt = sqlite_insert(oi_eod_table).values(rows)
             stmt = sqlite_stmt.on_conflict_do_update(
                 index_elements=primary_key,
                 set_={name: getattr(sqlite_stmt.excluded, name) for name in updatable},
+                where=_tasty_guard(sqlite_stmt.excluded.oi) if tasty else None,
             )
         else:
             raise ValueError(f"Nepodporovaný databázový dialekt pro upsert: {dialect!r}")
         with self._engine.begin() as conn:
-            conn.execute(stmt)
+            return int(conn.execute(stmt).rowcount)
 
     def supersede_legacy(self, keys: Iterable[tuple[str, str, float, str, dt.date]]) -> None:
         """Nahrazení legacy souhrnu ('' z doby před #736) per-class čtením.
@@ -353,16 +403,39 @@ class OIEodRepository:
         )
         with self._engine.connect() as conn:
             captured: dt.datetime | None = conn.execute(stmt).scalar_one_or_none()
-        if captured is None:
-            return None
-        # sqlite vrací naivní datetime — archiv je vždy v UTC
-        return captured if captured.tzinfo is not None else captured.replace(tzinfo=dt.UTC)
+        return _as_utc(captured)
 
-    def snapshot(self, symbol: str, day: dt.date) -> dict[tuple[str, float, str], float]:
+    def archive_version(self, symbol: str, expiry: str, day: dt.date) -> ArchiveVersion:
+        """Verze archivu expirace dne (#1605) — klíč cache čtenářů `values_for`.
+
+        (max `captured_ts`, max `tasty_captured_ts`): IBKR doarchivace posouvá
+        první, obnova tasty řádku druhé (tasty zapisuje jen změněné hodnoty,
+        takže maximum se hne právě tehdy, když je co přepočítat). Samotný
+        `captured_at` obnovu tasty křídel nepoznal a OI zdi i Max Pain zůstaly
+        na hodnotě z prvního načtení. Omezení na expiraci: zápisy jiných
+        expirací (sekundár) cache zbytečně nezneplatní.
+        """
+        stmt = select(
+            func.max(oi_eod_table.c.captured_ts),
+            func.max(oi_eod_table.c.tasty_captured_ts),
+        ).where(
+            oi_eod_table.c.symbol == symbol,
+            oi_eod_table.c.expiry == expiry,
+            oi_eod_table.c.date == day,
+        )
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).one()
+        return _as_utc(row[0]), _as_utc(row[1])
+
+    def snapshot(
+        self, symbol: str, day: dt.date, *, ibkr_only: bool = False
+    ) -> dict[tuple[str, float, str], float]:
         """Archivované OI dne podle klíče (expirace, strike, strana) — pro porovnání.
 
         Σ přes trading_class (#736): konzument chce celkový OI striku, přesně
-        to, co archiv ukládal před rozlišením sérií.
+        to, co archiv ukládal před rozlišením sérií. `ibkr_only` vynechá tasty
+        řádky (#1605) — srovnání OI IBKR × tasty (#664) by jinak u striků
+        nesených tasty srovnávalo tasty sám se sebou.
         """
         stmt = (
             select(
@@ -374,6 +447,8 @@ class OIEodRepository:
             .where(oi_eod_table.c.symbol == symbol, oi_eod_table.c.date == day)
             .group_by(oi_eod_table.c.expiry, oi_eod_table.c.strike, oi_eod_table.c["right"])
         )
+        if ibkr_only:
+            stmt = stmt.where(_IBKR_ROW)
         with self._engine.connect() as conn:
             return {
                 (row.expiry, float(row.strike), row.right): float(row.oi)
@@ -383,10 +458,15 @@ class OIEodRepository:
     def snapshot_by_class(
         self, symbol: str, day: dt.date
     ) -> dict[tuple[str, str, float, str], float]:
-        """OI dne per (expirace, trading_class, strike, strana) — finalita #463.
+        """IBKR OI dne per (expirace, trading_class, strike, strana) — finalita #463.
 
         Bez agregace: porovnání „změnilo se čtení?" musí srovnávat sérii se
         sérií; proti Σ přes série by po #736 nikdy nevyšlo shodně.
+
+        Jen řádky s IBKR měřením (#1605): tasty řádek není „předchozí čtení"
+        IBKR — první IBKR čtení klíče neseného tasty je změna a kontrakt, který
+        IBKR nikdy nezměřilo, finalitu neblokuje (jinak by ji tasty křídlo
+        mimo IBKR čtení drželo celý den a FA joby by neběžely).
         """
         stmt = select(
             oi_eod_table.c.expiry,
@@ -394,7 +474,7 @@ class OIEodRepository:
             oi_eod_table.c.strike,
             oi_eod_table.c["right"],
             oi_eod_table.c.oi,
-        ).where(oi_eod_table.c.symbol == symbol, oi_eod_table.c.date == day)
+        ).where(oi_eod_table.c.symbol == symbol, oi_eod_table.c.date == day, _IBKR_ROW)
         with self._engine.connect() as conn:
             return {
                 (row.expiry, row.trading_class, float(row.strike), row.right): float(row.oi)
@@ -451,6 +531,79 @@ class OIEodRepository:
         )
         if trading_class is not None:
             stmt = stmt.where(oi_eod_table.c.trading_class == trading_class)
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            OIRecord(symbol, expiry, float(row.strike), str(row.right), day, float(row.oi))
+            for row in rows
+        ]
+
+    def sourced_rows(self, symbol: str, expiry: str, day: dt.date) -> list[SourcedRow]:
+        """Řádky expirace dne s původem hodnoty, bez agregace (#1605).
+
+        Vstup širokého OI z tasty: pokryté jsou jen striky s IBKR řádkem
+        a „nezměněno" se porovnává per PK proti tasty řádku, ne proti Σ přes
+        série. `values_for` původ nerozlišuje — vracel i vlastní tasty zápisy,
+        takže po prvním zápisu dne byl každý strike „pokrytý" a tasty řádek
+        se do konce dne neobnovil.
+        """
+        stmt = select(
+            oi_eod_table.c.trading_class,
+            oi_eod_table.c.strike,
+            oi_eod_table.c["right"],
+            oi_eod_table.c.oi,
+            oi_eod_table.c.captured_ts,
+        ).where(
+            oi_eod_table.c.symbol == symbol,
+            oi_eod_table.c.expiry == expiry,
+            oi_eod_table.c.date == day,
+        )
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).fetchall()
+        return [
+            SourcedRow(
+                trading_class=str(row.trading_class),
+                strike=float(row.strike),
+                right=str(row.right),
+                oi=float(row.oi),
+                ibkr=row.captured_ts is not None,
+            )
+            for row in rows
+        ]
+
+    def measured_values_for(
+        self, symbol: str, expiry: str, day: dt.date, *, since: dt.datetime
+    ) -> list[OIRecord]:
+        """Σ OI expirace dne jen pro strany změřené IBKR od `since` (#1605).
+
+        Strana (strike, right) se vrátí, jen když VŠECHNY její řádky přes série
+        nesou IBKR měření s `captured_ts >= since` (typicky publikace CME dne).
+        Strana nesená tasty nebo IBKR čtením před `since` chybí — „nevíme",
+        ne hodnota (#1172); stejně strana se smíšenými sériemi. Podmínka na
+        `tasty_captured_ts` tu záměrně není: řádek tasty → IBKR nese oba časy
+        a IBKR razítkuje začátkem cyklu, ne časem zápisu, takže časy dvou
+        zdrojů porovnat nejde; ochranu IBKR řádku dává stráž v `upsert_many`.
+        """
+        if since.tzinfo is None:
+            raise ValueError(f"measured_values_for: `since` bez časového pásma ({since!r})")
+        # sqlite porovnává uložený UTC čas jako text — práh musí být taky v UTC
+        threshold = since.astimezone(dt.UTC)
+        measured = oi_eod_table.c.captured_ts >= threshold
+        stmt = (
+            select(
+                oi_eod_table.c.strike,
+                oi_eod_table.c["right"],
+                func.sum(oi_eod_table.c.oi).label("oi"),
+            )
+            .where(
+                oi_eod_table.c.symbol == symbol,
+                oi_eod_table.c.expiry == expiry,
+                oi_eod_table.c.date == day,
+            )
+            .group_by(oi_eod_table.c.strike, oi_eod_table.c["right"])
+            # NULL `captured_ts` (tasty řádek) spadne do else → strana vypadne
+            .having(func.sum(case((measured, 0), else_=1)) == 0)
+        )
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).fetchall()
         return [
@@ -543,6 +696,13 @@ class OIEodRepository:
         with self._engine.connect() as conn:
             row = conn.execute(stmt).first()
             return float(row.oi) if row is not None else None
+
+
+def _as_utc(value: dt.datetime | None) -> dt.datetime | None:
+    """sqlite vrací naivní datetime — archiv je vždy v UTC."""
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=dt.UTC)
 
 
 class OIArchiver:

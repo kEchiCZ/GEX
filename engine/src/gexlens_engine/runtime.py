@@ -48,7 +48,7 @@ from gexlens_engine.ibkr.scheduler import (
     SweepMetrics,
 )
 from gexlens_engine.ibkr.underlying import Bar
-from gexlens_engine.storage.oi_archive import OIEodRepository
+from gexlens_engine.storage.oi_archive import ArchiveVersion, OIEodRepository
 from gexlens_engine.storage.parquet_store import (
     CatchUpRow,
     FlowRowLike,
@@ -207,9 +207,10 @@ class EngineRuntime:
     _computed_greeks_logged: int = field(default=0, init=False)
     # Throttle logu OI fillu (#664): loguje se jen změna počtu doplněných
     _oi_filled_logged: int = field(default=0, init=False)
-    # OI zdi (#851): archiv se přes dopoledne dopisuje, takže cache nese
-    # `captured_ts` snímku — klíč jen na den by zamrzl jako Max Pain (#826)
-    _oi_walls_cache: tuple[dt.date, dt.datetime | None, OiWalls | None] | None = field(
+    # OI zdi (#851): archiv se přes den dopisuje (IBKR doarchivace, obnova
+    # tasty křídel #1605), takže cache nese verzi archivu expirace — klíč jen
+    # na den by zamrzl jako Max Pain (#826)
+    _oi_walls_cache: tuple[dt.date, ArchiveVersion, OiWalls | None] | None = field(
         default=None, init=False
     )
 
@@ -224,21 +225,25 @@ class EngineRuntime:
 
         Čte se `values_for`, ne OI ze snapshotů: snapshoty pokrývají jen IBKR
         obálku, kdežto archiv díky #828 i křídla, kvůli kterým hladina vzniká.
-        Cache drží `captured_ts` snímku — archiv se přes dopoledne dopisuje,
-        jak dobíhá publikace CME, takže klíč jen na den by zamrzl (#826).
+        Cache drží verzi archivu expirace (`archive_version`: poslední IBKR
+        i tasty zápis) — archiv se přes den dopisuje, jak dobíhá publikace CME
+        a obnovují se tasty křídla (#1605), takže klíč jen na den (#826) nebo
+        jen na `captured_ts` by zamrzl.
         """
-        captured = await asyncio.to_thread(self.oi_repository.captured_at, self.symbol, day)
+        version = await asyncio.to_thread(
+            self.oi_repository.archive_version, self.symbol, self.expiry, day
+        )
         cached = self._oi_walls_cache
-        if cached is not None and cached[0] == day and cached[1] == captured:
+        if cached is not None and cached[0] == day and cached[1] == version:
             return cached[2]
         records = await asyncio.to_thread(
             self.oi_repository.values_for, self.symbol, self.expiry, day
         )
         if not records:
-            self._oi_walls_cache = (day, captured, None)
+            self._oi_walls_cache = (day, version, None)
             return None
         walls = compute_oi_walls({(r.strike, r.right): r.oi for r in records}, spot)
-        self._oi_walls_cache = (day, captured, walls)
+        self._oi_walls_cache = (day, version, walls)
         return walls
 
     def _session_partition_days(self, session_day: dt.date) -> list[dt.date]:
