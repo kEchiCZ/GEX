@@ -1,6 +1,7 @@
 """Testy denní FA validace (#232): metriky, úložiště a sběrný job."""
 
 import datetime as dt
+import logging
 from pathlib import Path
 
 import pyarrow as pa
@@ -23,6 +24,24 @@ from gexlens_engine.storage.oi_archive import OIEodRepository, OIRecord
 DAY = dt.date(2026, 7, 23)
 NEXT = dt.date(2026, 7, 24)
 EXPIRY = "20260724"
+
+
+def _publication(day: dt.date) -> dt.datetime:
+    """Publikace OI CME (letní čas 12:00 UTC) — `Settings.oi_publication_utc` v malém."""
+    return dt.datetime.combine(day, dt.time(12, 0), tzinfo=dt.UTC)
+
+
+def _after_pub(day: dt.date) -> dt.datetime:
+    """IBKR čtení po publikaci (#1605)."""
+    return _publication(day) + dt.timedelta(hours=1)
+
+
+def _collect(
+    tmp_path: Path, oi_repo: OIEodRepository, fa_repo: FaValidationRepository, today: dt.date
+) -> list[FaValidationRecord]:
+    return collect_fa_validation(
+        "ES", tmp_path, oi_repo, fa_repo, today, publication_utc=_publication
+    )
 
 
 def _sample_maps(
@@ -140,9 +159,15 @@ def test_collect_spocita_ulozi_a_dedupuje(tmp_path: Path) -> None:
         DAY,
         [(20, s, "C", 10.0 * (i + 1)) for i, s in enumerate(strikes)],
     )
-    oi_repo.upsert_many([OIRecord("ES", EXPIRY, s, "C", DAY, 100.0) for s in strikes])
     oi_repo.upsert_many(
-        [OIRecord("ES", EXPIRY, s, "C", NEXT, 100.0 + 4.0 * (i + 1)) for i, s in enumerate(strikes)]
+        [OIRecord("ES", EXPIRY, s, "C", DAY, 100.0) for s in strikes], _after_pub(DAY)
+    )
+    oi_repo.upsert_many(
+        [
+            OIRecord("ES", EXPIRY, s, "C", NEXT, 100.0 + 4.0 * (i + 1))
+            for i, s in enumerate(strikes)
+        ],
+        _after_pub(NEXT),
     )
     # Mrtvá expirace: snapshot i včerejší OI, ale dnešní OI chybí → přeskočit
     dead = "20260723"
@@ -151,16 +176,16 @@ def test_collect_spocita_ulozi_a_dedupuje(tmp_path: Path) -> None:
         DAY,
         [(20, s, "P", 20.0) for s in strikes],
     )
-    oi_repo.upsert_many([OIRecord("ES", dead, s, "P", DAY, 50.0) for s in strikes])
+    oi_repo.upsert_many([OIRecord("ES", dead, s, "P", DAY, 50.0) for s in strikes], _after_pub(DAY))
 
-    records = collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, NEXT)
+    records = _collect(tmp_path, oi_repo, fa_repo, NEXT)
     assert [(r.expiry, r.day, r.next_day) for r in records] == [(EXPIRY, DAY, NEXT)]
     point = records[0].point
     assert point.open_ratio == pytest.approx(0.4)
     assert point.spearman == pytest.approx(1.0)
     assert fa_repo.exists("ES", EXPIRY, DAY)
     # Druhý běh (restart pipeline) už bod nepřepočítává
-    assert collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, NEXT) == []
+    assert _collect(tmp_path, oi_repo, fa_repo, NEXT) == []
 
 
 def test_collect_vikend_nic_pondeli_proti_patku(tmp_path: Path) -> None:
@@ -184,19 +209,22 @@ def test_collect_vikend_nic_pondeli_proti_patku(tmp_path: Path) -> None:
             [(20, s, "C", 10.0 * (i + 1)) for i, s in enumerate(strikes)],
         )
     for day in (friday, saturday, sunday):  # víkendové klíče = kopie pátku
-        oi_repo.upsert_many([OIRecord("ES", expiry, s, "C", day, 100.0) for s in strikes])
+        oi_repo.upsert_many(
+            [OIRecord("ES", expiry, s, "C", day, 100.0) for s in strikes], _after_pub(day)
+        )
     oi_repo.upsert_many(
         [
             OIRecord("ES", expiry, s, "C", monday, 100.0 + 4.0 * (i + 1))
             for i, s in enumerate(strikes)
-        ]
+        ],
+        _after_pub(monday),
     )
 
-    assert collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, saturday) == []
-    assert collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, sunday) == []
+    assert _collect(tmp_path, oi_repo, fa_repo, saturday) == []
+    assert _collect(tmp_path, oi_repo, fa_repo, sunday) == []
     assert not fa_repo.exists("ES", expiry, friday)
 
-    records = collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, monday)
+    records = _collect(tmp_path, oi_repo, fa_repo, monday)
     assert [(r.expiry, r.day, r.next_day) for r in records] == [(expiry, friday, monday)]
     assert records[0].point.open_ratio == pytest.approx(0.4)
 
@@ -219,12 +247,15 @@ def test_vikendovy_radek_neblokuje_pondelni_bod(tmp_path: Path) -> None:
         friday,
         [(20, s, "C", 10.0 * (i + 1)) for i, s in enumerate(strikes)],
     )
-    oi_repo.upsert_many([OIRecord("ES", expiry, s, "C", friday, 100.0) for s in strikes])
+    oi_repo.upsert_many(
+        [OIRecord("ES", expiry, s, "C", friday, 100.0) for s in strikes], _after_pub(friday)
+    )
     oi_repo.upsert_many(
         [
             OIRecord("ES", expiry, s, "C", monday, 100.0 + 4.0 * (i + 1))
             for i, s in enumerate(strikes)
-        ]
+        ],
+        _after_pub(monday),
     )
     stale = FaValidationPoint(
         contracts=462,
@@ -238,9 +269,93 @@ def test_vikendovy_radek_neblokuje_pondelni_bod(tmp_path: Path) -> None:
     fa_repo.upsert(FaValidationRecord("ES", expiry, friday, saturday, stale))
     assert not fa_repo.exists("ES", expiry, friday)
 
-    records = collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, monday)
+    records = _collect(tmp_path, oi_repo, fa_repo, monday)
     assert [(r.expiry, r.day, r.next_day) for r in records] == [(expiry, friday, monday)]
     assert records[0].point.open_ratio == pytest.approx(0.4)
     assert fa_repo.exists("ES", expiry, friday)
     # Restart pipeline v pondělí: bod už je poctivý a dedup ho drží
-    assert collect_fa_validation("ES", tmp_path, oi_repo, fa_repo, monday) == []
+    assert _collect(tmp_path, oi_repo, fa_repo, monday) == []
+
+
+def test_collect_bere_jen_strany_s_ibkr_merenim_po_publikaci(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1605: obchodovaná strana, kterou archiv D+1 nese z tasty (předchozí
+    publikace, ΔOI 0), nebo kterou IBKR v D po publikaci nezměřilo, je „nevíme":
+    vypadne z volume i z OI před/po. Jinak by ΔOI 0 (nebo −oi_before) srazilo
+    open-ratio a korelaci."""
+    db = create_engine("sqlite://")
+    oi_repo = OIEodRepository(db)
+    oi_repo.ensure_schema()
+    fa_repo = FaValidationRepository(db)
+    fa_repo.ensure_schema()
+    measured = [7000.0 + 5 * i for i in range(12)]
+    tasty_d1 = [7100.0, 7105.0, 7110.0]  # D změřeno, D+1 jen tasty z 00:00
+    tasty_d = [7200.0]  # D jen tasty, D+1 změřeno
+    _write_snapshot(
+        tmp_path / "ES" / EXPIRY / f"{DAY.isoformat()}.parquet",
+        DAY,
+        [(20, s, "C", 10.0 * (i + 1)) for i, s in enumerate(measured)]
+        + [(20, s, "C", 100.0) for s in tasty_d1 + tasty_d],
+    )
+    oi_repo.upsert_many(
+        [OIRecord("ES", EXPIRY, s, "C", DAY, 100.0) for s in measured + tasty_d1], _after_pub(DAY)
+    )
+    oi_repo.upsert_many(
+        [OIRecord("ES", EXPIRY, s, "C", DAY, 100.0) for s in tasty_d],
+        tasty_captured_ts=dt.datetime.combine(DAY, dt.time(0, 0), tzinfo=dt.UTC),
+    )
+    oi_repo.upsert_many(
+        [OIRecord("ES", EXPIRY, s, "C", NEXT, 100.0) for s in tasty_d1],
+        tasty_captured_ts=dt.datetime.combine(NEXT, dt.time(0, 0), tzinfo=dt.UTC),
+    )
+    oi_repo.upsert_many(
+        [
+            OIRecord("ES", EXPIRY, s, "C", NEXT, 100.0 + 4.0 * (i + 1))
+            for i, s in enumerate(measured)
+        ]
+        + [OIRecord("ES", EXPIRY, s, "C", NEXT, 160.0) for s in tasty_d],
+        _after_pub(NEXT),
+    )
+
+    with caplog.at_level(logging.INFO, logger="gexlens_engine.storage.fa_validation"):
+        records = _collect(tmp_path, oi_repo, fa_repo, NEXT)
+
+    assert [(r.expiry, r.day) for r in records] == [(EXPIRY, DAY)]
+    point = records[0].point
+    assert point.contracts == 12  # jen strany změřené v obou dnech
+    assert point.open_ratio == pytest.approx(0.4)
+    assert point.spearman == pytest.approx(1.0)
+    assert "16 obchodovaných stran, 4 mimo strany s IBKR měřením po publikaci (D+1 3, D 1)" in (
+        caplog.text
+    )
+
+
+def test_collect_bez_ibkr_mereni_po_publikaci_bod_neulozi(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#1605: D+1 zatím jen tasty → žádný bod (ani zámek dne), log zvlášť."""
+    db = create_engine("sqlite://")
+    oi_repo = OIEodRepository(db)
+    oi_repo.ensure_schema()
+    fa_repo = FaValidationRepository(db)
+    fa_repo.ensure_schema()
+    strikes = [7000.0 + 5 * i for i in range(12)]
+    _write_snapshot(
+        tmp_path / "ES" / EXPIRY / f"{DAY.isoformat()}.parquet",
+        DAY,
+        [(20, s, "C", 10.0 * (i + 1)) for i, s in enumerate(strikes)],
+    )
+    oi_repo.upsert_many(
+        [OIRecord("ES", EXPIRY, s, "C", DAY, 100.0) for s in strikes], _after_pub(DAY)
+    )
+    oi_repo.upsert_many(
+        [OIRecord("ES", EXPIRY, s, "C", NEXT, 100.0) for s in strikes],
+        tasty_captured_ts=dt.datetime.combine(NEXT, dt.time(0, 0), tzinfo=dt.UTC),
+    )
+
+    with caplog.at_level(logging.INFO, logger="gexlens_engine.storage.fa_validation"):
+        assert _collect(tmp_path, oi_repo, fa_repo, NEXT) == []
+
+    assert "bez stran s IBKR měřením po publikaci" in caplog.text
+    assert not fa_repo.exists("ES", EXPIRY, DAY)

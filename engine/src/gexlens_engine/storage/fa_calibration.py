@@ -1,8 +1,9 @@
-"""Úložiště a ranní job kalibrace α (#232, ADR-0011 fáze 2).
+"""Úložiště a job kalibrace α (#232, ADR-0011 fáze 2).
 
-Job běží v pipeline po úspěšném ranním OI archivu (hned za FA validací):
+Job běží v pipeline po finálním OI archivu dne (#1314, hned za FA validací):
 včerejší konec dne řady netflow (řez 21:00 UTC — konec trade date) se
-porovná s ΔOI mezi archivy, medián poměrů dá denní bod a EMA přes dny
+porovná s ΔOI mezi archivy na stranách s IBKR měřením po publikaci CME
+(#1605), medián poměrů dá denní bod a EMA přes dny
 aktualizuje α symbolu. Historie bodů zůstává v `fa_alpha_history` pro audit
 (vč. buy/sell mediánů — případná asymetrie se rozhodne až nad daty).
 Aktuální α per symbol drží `fa_alpha`; čte ji engine (runtime.flow_alpha)
@@ -22,13 +23,14 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.sql import Executable
 
 from gexlens_engine.compute.facalibration import (
+    MIN_ABS_NET,
     AlphaCalibrationPoint,
     Key,
     calibrate_alpha,
     update_alpha,
 )
 from gexlens_engine.compute.settle import is_trading_session
-from gexlens_engine.storage.fa_validation import CUTOFF_HOUR_UTC
+from gexlens_engine.storage.fa_validation import CUTOFF_HOUR_UTC, PublicationUtc, measured_oi_pair
 from gexlens_engine.storage.oi_archive import OIEodRepository
 
 logger = logging.getLogger(__name__)
@@ -216,6 +218,8 @@ def collect_alpha_calibration(
     oi_repository: OIEodRepository,
     alpha_repository: FaAlphaRepository,
     today: dt.date,
+    *,
+    publication_utc: PublicationUtc,
 ) -> AlphaCalibrationResult | None:
     """Spočítá a uloží chybějící kalibrační bod symbolu k dnešnímu OI archivu.
 
@@ -226,7 +230,10 @@ def collect_alpha_calibration(
     Víkendový `today` se nekalibruje (#1309): archiv soboty je kopie pátku,
     bod „pátek → sobota" vyšel s mediánem 0 (fa_alpha_history 18. a 25. 9.
     2026) a dedup dne pak zablokoval poctivý bod „pátek → pondělí".
-    Blokující (parquet + DB) — volat přes to_thread.
+    ΔOI jen na stranách s IBKR měřením po publikaci v obou dnech
+    (`measured_oi_pair`, #1605); bez nich se bod neukládá a zkusí se znovu
+    (i po rollu nad večerním archivem). Blokující (parquet + DB) — volat
+    přes to_thread.
     """
     base = derived_dir / symbol
     if not is_trading_session(today) or not base.is_dir():
@@ -255,21 +262,42 @@ def collect_alpha_calibration(
         netflow_path = netflow_dir / f"{previous.isoformat()}.parquet"
         if not netflow_path.exists():
             continue
-        oi_after = {
-            (r.strike, r.right): r.oi for r in oi_repository.values_for(symbol, expiry, today)
-        }
-        if not oi_after:
+        oi_before, oi_after = measured_oi_pair(
+            oi_repository, symbol, expiry, today, previous, publication_utc
+        )
+        if not oi_after and not oi_repository.values_for(symbol, expiry, today):
             continue  # mrtvá expirace — dnešní archiv ji nenese
-        oi_before = {
-            (r.strike, r.right): r.oi for r in oi_repository.values_for(symbol, expiry, previous)
-        }
         netflow = netflow_at_cutoff(netflow_path, previous)
-        # ΔOI jen pro strany, které aspoň jeden archiv nese; strany jen
-        # z netflow zůstávají bez klíče a kalibrace je přeskočí (#1172)
-        doi = {
-            key: float(oi_after.get(key, 0.0)) - float(oi_before.get(key, 0.0))
-            for key in set(oi_before) | set(oi_after)
-        }
+        # ΔOI jen pro strany změřené IBKR po publikaci v OBOU dnech (#1605);
+        # ostatní zůstávají bez klíče a kalibrace je přeskočí (#1172) — nula
+        # za chybějící hodnotu by dala ΔOI = −oi_before nebo přesně 0
+        doi = {key: oi_after[key] - oi_before[key] for key in oi_after.keys() & oi_before.keys()}
+        qualifying = [key for key, net in netflow.items() if abs(net) >= MIN_ABS_NET]
+        no_after = sum(1 for key in qualifying if key not in oi_after)
+        no_before = sum(1 for key in qualifying if key in oi_after and key not in oi_before)
+        logger.info(
+            "Kalibrace α %s %s %s: %d stran s |net| ≥ %.0f, vyřazeno %d bez IBKR měření "
+            "po publikaci (D+1 %d, D %d)",
+            symbol,
+            expiry,
+            previous,
+            len(qualifying),
+            MIN_ABS_NET,
+            no_after + no_before,
+            no_after,
+            no_before,
+        )
+        if not doi:
+            logger.info(
+                "Kalibrace α %s %s %s: bez stran s IBKR měřením po publikaci v obou dnech "
+                "(D+1 %d, D %d stran) — bod se neukládá, zkusí se znovu",
+                symbol,
+                expiry,
+                previous,
+                len(oi_after),
+                len(oi_before),
+            )
+            continue
         if all(value == 0.0 for value in doi.values()):
             logger.info(
                 "Kalibrace α %s %s %s: archivy %s a %s jsou shodné (ΔOI všude 0) — bod se neukládá",

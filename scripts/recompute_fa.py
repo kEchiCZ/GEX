@@ -15,6 +15,9 @@ den po dni nad čistou paměťovou DB a porovná výsledek s produkcí:
 - den archivu, jehož snímek (nebo snímek předchozího obchodního dne) vznikl
   před publikačním oknem, se nepřehrává — **neověřitelný** (obnova po
   publikaci neproběhla, finální čísla v DB nejsou);
+- strany bez IBKR měření po publikaci (tasty křídla, předpublikační IBKR
+  čtení) vyřadí už samy přehrávané funkce (#1605) — kontrola dne podle max
+  `captured_ts` je nepozná; počty vyřazených stran jdou do logu (INFO);
 - α se počítá od nuly v pořadí dnů (EMA); dny bez netflow partice (retence)
   bod nemají, report ukáže starou i novou α a počet dnů.
 
@@ -23,13 +26,16 @@ Režimy:
   `--out`), do DB nic nepíše;
 - `--apply` po výslovném potvrzení (napsat `ano`, nebo `--yes`) přepíše body
   FA validace (upsert) a historii i stav α. Nic se nemaže: řádky, které
-  přehrání nevytvořilo (neověřitelný den), zůstávají a report je vypíše.
+  přehrání nevytvořilo (neověřitelný den, nově malý vzorek po vyřazení stran
+  #1605), zůstávají beze změny a report je vypíše v sekci „Body v produkci
+  bez nového přepočtu".
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import logging
 import os
 import sys
 from collections.abc import Sequence
@@ -68,8 +74,14 @@ class SymbolReplay:
     validation: dict[tuple[str, dt.date], tuple[float | None, float, float | None, float]] = field(
         default_factory=dict
     )
-    #: day → (starý medián, nový medián, nová α po bodu)
-    alpha_points: dict[dt.date, tuple[float | None, float, float]] = field(default_factory=dict)
+    #: day → (starý medián, starý počet stran, nový medián, nový počet stran, nová α po bodu)
+    alpha_points: dict[dt.date, tuple[float | None, int | None, float, int, float]] = field(
+        default_factory=dict
+    )
+    #: Body α v produkci, které přehrání nevytvořilo: (den, medián, počet stran)
+    stale_alpha: list[tuple[dt.date, float, int]] = field(default_factory=list)
+    #: Body FA validace v produkci, které přehrání nevytvořilo: (expirace, den, open-ratio)
+    stale_validation: list[tuple[str, dt.date, float]] = field(default_factory=list)
     old_alpha: float | None = None
     new_alpha: float | None = None
     new_days: int = 0
@@ -110,8 +122,22 @@ def replay_symbol(
         if reason is not None:
             result.unverifiable.append((day, reason))
             continue
-        collect_fa_validation(symbol, settings.snapshots_dir, oi_repo, fa_memory, day)
-        collect_alpha_calibration(symbol, settings.derived_dir, oi_repo, alpha_memory, day)
+        collect_fa_validation(
+            symbol,
+            settings.snapshots_dir,
+            oi_repo,
+            fa_memory,
+            day,
+            publication_utc=settings.oi_publication_utc,
+        )
+        collect_alpha_calibration(
+            symbol,
+            settings.derived_dir,
+            oi_repo,
+            alpha_memory,
+            day,
+            publication_utc=settings.oi_publication_utc,
+        )
         result.replayed.append(day)
 
     with prod.connect() as conn:
@@ -122,7 +148,7 @@ def replay_symbol(
             )
         }
         old_history = {
-            row.day: row.ratio_median
+            row.day: (row.ratio_median, row.samples)
             for row in conn.execute(
                 select(fa_alpha_history_table).where(fa_alpha_history_table.c.symbol == symbol)
             )
@@ -139,11 +165,26 @@ def replay_symbol(
         for row in conn.execute(
             select(fa_alpha_history_table).order_by(fa_alpha_history_table.c.day)
         ):
+            old_point = old_history.get(row.day)
             result.alpha_points[row.day] = (
-                old_history.get(row.day),
+                old_point[0] if old_point else None,
+                old_point[1] if old_point else None,
                 row.ratio_median,
+                row.samples,
                 row.alpha_after,
             )
+    # Co přehrání nevytvořilo, `--apply` nechá beze změny — report to musí ukázat,
+    # jinak by starý bod (např. nulový medián z tasty stran) tiše zůstal (#1605)
+    result.stale_alpha = sorted(
+        (day, median, samples)
+        for day, (median, samples) in old_history.items()
+        if day not in result.alpha_points
+    )
+    result.stale_validation = sorted(
+        (expiry, day, ratio)
+        for (expiry, day), (_, ratio) in old_validation.items()
+        if (expiry, day) not in result.validation
+    )
     old_state = FaAlphaRepository(prod).get(symbol)
     new_state = alpha_memory.get(symbol)
     result.old_alpha = old_state.alpha if old_state else None
@@ -188,12 +229,48 @@ def report_markdown(results: Sequence[SymbolReplay], generated: dt.datetime) -> 
             "",
             "### Kalibrace α",
             "",
-            "| den | medián starý | nový | α po bodu |",
-            "|---|---|---|---|",
+            "| den | medián starý | nový | stran staré | nové | α po bodu |",
+            "|---|---|---|---|---|---|",
         ]
-        for day, (old_median, new_median, alpha_after) in sorted(item.alpha_points.items()):
-            lines.append(f"| {day} | {_fmt(old_median)} | {new_median:.3f} | {alpha_after:.3f} |")
+        for day, (old_median, old_samples, new_median, new_samples, alpha_after) in sorted(
+            item.alpha_points.items()
+        ):
+            lines.append(
+                f"| {day} | {_fmt(old_median)} | {new_median:.3f} | "
+                f"{'—' if old_samples is None else old_samples} | {new_samples} | "
+                f"{alpha_after:.3f} |"
+            )
+        lines += [
+            "",
+            "### Body v produkci bez nového přepočtu",
+            "",
+            "Přehrání je nevytvořilo (neověřitelný den, málo stran po vyřazení stran bez "
+            "IBKR měření po publikaci #1605, chybějící partice). `--apply` je nechá beze "
+            "změny — nic nemaže.",
+            "",
+        ]
+        if not item.stale_alpha and not item.stale_validation:
+            lines.append("- žádné")
+        lines += [
+            f"- α {day}: medián {median:.3f} ({samples} stran)"
+            for day, median, samples in item.stale_alpha
+        ]
+        lines += [
+            f"- FA validace {expiry} {day}: open-ratio {ratio:.3f}"
+            for expiry, day, ratio in item.stale_validation
+        ]
         lines.append("")
+    lines += [
+        "## Co udělá `--apply`",
+        "",
+        "- `fa_validation`: upsert přehraných bodů (klíč symbol, expirace, den).",
+        "- `fa_alpha_history`: upsert přehraných bodů v pořadí dnů (klíč symbol, den) "
+        "včetně expirace, počtu stran, mediánů a α po bodu.",
+        "- `fa_alpha`: α a počet dnů z přehrání, jen když přehrání nějakou α spočítalo; "
+        "jinak zůstává stávající stav.",
+        "- Nic se nemaže: body v sekci „Body v produkci bez nového přepočtu“ zůstanou, jak jsou.",
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -267,6 +344,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.db:
         parser.error("chybí --db, GEXLENS_HOST_DATABASE_URL nebo GEXLENS_DATABASE_URL")
+    # Logy přehrávaných funkcí: počty vyřazených stran bez IBKR měření (#1605)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     settings = Settings(data_dir=Path(args.data))
     prod = create_engine(args.db)

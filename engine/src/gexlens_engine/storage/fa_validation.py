@@ -1,13 +1,14 @@
-"""Úložiště a noční job denní FA validace (#232, ADR-0011).
+"""Úložiště a job denní FA validace (#232, ADR-0011).
 
-Job běží v pipeline po úspěšném ranním OI archivu: pro každou expiraci se
+Job běží v pipeline po finálním OI archivu dne (#1314): pro každou expiraci se
 snapshotem z předchozího archivního dne spočítá open-ratio a rank korelaci
-(`compute.favalidation`) a bod uloží do tabulky `fa_validation`. Kalibrace α
-pak čte hotové body přímo z PG — žádné ruční spouštění validačních skriptů.
+(`compute.favalidation`) a bod uloží do tabulky `fa_validation`. ΔOI bere jen
+ze stran s IBKR měřením po publikaci CME (#1605, `measured_oi_pair`).
 """
 
 import datetime as dt
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,6 +50,40 @@ fa_validation_table = Table(
 # Řez trade date: volume counter IBKR se resetuje ve 22:00 UTC (start nové
 # seance), poslední poctivá kumulativní hodnota dne je před 21:00 UTC (#232)
 CUTOFF_HOUR_UTC = 21
+
+#: Čas publikace OI CME pro UTC den archivu (`Settings.oi_publication_utc`)
+PublicationUtc = Callable[[dt.date], dt.datetime]
+
+
+def measured_oi_pair(
+    oi_repository: OIEodRepository,
+    symbol: str,
+    expiry: str,
+    today: dt.date,
+    previous: dt.date,
+    publication_utc: PublicationUtc,
+) -> tuple[dict[Key, float], dict[Key, float]]:
+    """(oi_before, oi_after) jen ze stran s IBKR měřením po publikaci (#1605).
+
+    Finalita potvrzuje jen univerzum IBKR čtení; stranu, kterou archiv nese
+    z tasty nebo z IBKR čtení před publikací, nese předchozí publikace — ΔOI
+    by vyšlo přesně 0 (NQ od 5. 10. 2026 medián α 0 v 7 z 8 bodů). Taková
+    strana je „nevíme", ne nula (#1172): volající bere jen klíče obou map.
+
+    Varianta B (prozatím, čeká na potvrzení vlastníka): obě strany proti své
+    publikaci. Varianta A (filtr jen na straně D+1) = strana D tady
+    z `oi_repository.values_for(symbol, expiry, previous)`.
+    """
+
+    def measured(day: dt.date) -> dict[Key, float]:
+        return {
+            (r.strike, r.right): r.oi
+            for r in oi_repository.measured_values_for(
+                symbol, expiry, day, since=publication_utc(day)
+            )
+        }
+
+    return measured(previous), measured(today)
 
 
 @dataclass(frozen=True)
@@ -145,6 +180,8 @@ def collect_fa_validation(
     oi_repository: OIEodRepository,
     fa_repository: FaValidationRepository,
     today: dt.date,
+    *,
+    publication_utc: PublicationUtc,
 ) -> list[FaValidationRecord]:
     """Spočítá a uloží chybějící validační body symbolu k dnešnímu OI archivu.
 
@@ -152,6 +189,11 @@ def collect_fa_validation(
     < today, která má OI v obou dnech (mrtvé expirace dnešní OI nemají
     a přeskočí se), vrátí nově uložené záznamy. Blokující (parquet + DB) —
     volat přes to_thread.
+
+    Porovnávají se jen strany s IBKR měřením po publikaci v obou dnech
+    (`measured_oi_pair`, #1605): volume, OI před i po se omezí na ně, jinak
+    by chybějící hodnota platila jako 0 a dala ΔOI = −oi_before. Expirace
+    bez takových stran se neukládá a zkusí se při dalším běhu.
 
     Jen obchodní den na obou koncích (#1309): víkendový archiv je kopie pátku
     (nebo už pondělí), takže sobotní běh ukládal bod „pátek → sobota" s ΔOI
@@ -170,16 +212,43 @@ def collect_fa_validation(
         snapshot_path = exp_dir / f"{previous.isoformat()}.parquet"
         if not snapshot_path.exists():
             continue
-        oi_after = {
-            (r.strike, r.right): r.oi for r in oi_repository.values_for(symbol, expiry, today)
-        }
-        if not oi_after:
+        oi_before, oi_after = measured_oi_pair(
+            oi_repository, symbol, expiry, today, previous, publication_utc
+        )
+        known = oi_after.keys() & oi_before.keys()
+        if not known:
+            # Mrtvá expirace (dnešní archiv ji nenese) se přeskakuje mlčky
+            if oi_repository.values_for(symbol, expiry, today):
+                logger.info(
+                    "FA validace %s %s %s: bez stran s IBKR měřením po publikaci "
+                    "(D+1 %d, D %d stran) — bod se neukládá, zkusí se znovu",
+                    symbol,
+                    expiry,
+                    previous,
+                    len(oi_after),
+                    len(oi_before),
+                )
             continue
-        oi_before = {
-            (r.strike, r.right): r.oi for r in oi_repository.values_for(symbol, expiry, previous)
-        }
         volumes = volumes_at_cutoff(snapshot_path, previous)
-        point = compute_fa_validation(volumes, oi_before, oi_after)
+        traded = [key for key, volume in volumes.items() if volume > 0]
+        no_after = sum(1 for key in traded if key not in oi_after)
+        no_before = sum(1 for key in traded if key in oi_after and key not in oi_before)
+        logger.info(
+            "FA validace %s %s %s: %d obchodovaných stran, %d mimo strany s IBKR měřením "
+            "po publikaci (D+1 %d, D %d)",
+            symbol,
+            expiry,
+            previous,
+            len(traded),
+            no_after + no_before,
+            no_after,
+            no_before,
+        )
+        point = compute_fa_validation(
+            {key: volume for key, volume in volumes.items() if key in known},
+            {key: oi_before[key] for key in known},
+            {key: oi_after[key] for key in known},
+        )
         if point is None:
             logger.info(
                 "FA validace %s %s %s: nedostatečný vzorek — bod se neukládá",
