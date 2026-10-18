@@ -192,7 +192,9 @@ class MinuteInputs:
     call_wall: float | None
     put_wall: float | None
     max_pain: float | None
-    cum_delta: float
+    # None = mezera měření CumΔ (ADR-0057 bod 3): podmínka, která CumΔ čte,
+    # se přes ni nepotvrdí (`_cum_levels`). Midpoint zdroj (v5) None nedává.
+    cum_delta: float | None
     # Delta-vážené přírůstky opčního volume za minutu, per strana
     call_flow: float
     put_flow: float
@@ -701,6 +703,23 @@ def is_counter_regime(direction: Direction, regime: str | None) -> bool:
     )
 
 
+def _cum_levels(window: Sequence[MinuteInputs]) -> list[float] | None:
+    """CumΔ okna podmínky; None, je-li v okně mezera měření (ADR-0057 bod 4).
+
+    Rozdíl ani extrém přes mezeru nejsou úplné: po mezeře CumΔ pokračuje od
+    poslední měřené úrovně a tok z doby výpadku v ní chybí. Podmínka, která
+    CumΔ čte, se proto nad takovým oknem nepotvrdí a kandidát nevznikne —
+    není to filtr podle stavu trhu, jen chybějící vstup. Délku okna nehlídá;
+    ta zůstává na detektoru (po restartu je historie kratší než okno).
+    """
+    levels: list[float] = []
+    for item in window:
+        if item.cum_delta is None:
+            return None
+        levels.append(item.cum_delta)
+    return levels
+
+
 def _counter_flow_confirmed(
     history: Sequence[MinuteInputs], direction: Direction, params: SetupParams
 ) -> bool:
@@ -708,15 +727,17 @@ def _counter_flow_confirmed(
 
     Fade proti negativní gammě je legitimní jen s důkazem, že tok se otáčí
     i na delším horizontu (24. 7.: 11 kontra longů NQ bez této konfluence,
-    9 stopů). Krátká historie = konfluenci nelze ověřit → False.
+    9 stopů). Krátká historie nebo mezera CumΔ v okně = konfluenci nelze
+    ověřit → False.
     """
     if len(history) < params.counter_flow_lookback + 1:
         return False
-    now = history[-1]
-    then = history[-1 - params.counter_flow_lookback]
+    cums = _cum_levels(history[-1 - params.counter_flow_lookback :])
+    if cums is None:
+        return False
     if direction is Direction.LONG:
-        return now.cum_delta > then.cum_delta
-    return now.cum_delta < then.cum_delta
+        return cums[-1] > cums[0]
+    return cums[-1] < cums[0]
 
 
 def max_pain_strike(oi_by_strike_right: Mapping[tuple[float, str], float]) -> float | None:
@@ -819,6 +840,11 @@ def detect_wall_bounce(
         return None
     now = history[-1]
     then = history[-1 - params.divergence_lookback]
+    # Každý kandidát T1 stojí na divergenci → mezera v okně = žádný T1
+    cums = _cum_levels(history[-1 - params.divergence_lookback :])
+    if cums is None:
+        return None
+    cum_then, cum_now = cums[0], cums[-1]
 
     for wall, dominance, direction in (
         (now.put_wall, now.put_wall_dom, Direction.LONG),
@@ -840,12 +866,12 @@ def detect_wall_bounce(
         if direction is Direction.LONG:
             rejected = now.close >= wall + params.rejection_min
             price_into_wall = now.close < then.close
-            divergence = now.cum_delta > then.cum_delta
+            divergence = cum_now > cum_then
             right_gamma_side = now.flip is None or now.close >= now.flip
         else:
             rejected = now.close <= wall - params.rejection_min
             price_into_wall = now.close > then.close
-            divergence = now.cum_delta < then.cum_delta
+            divergence = cum_now < cum_then
             right_gamma_side = now.flip is None or now.close <= now.flip
         if not (rejected and price_into_wall and divergence):
             continue
@@ -874,7 +900,7 @@ def detect_wall_bounce(
             reason=(
                 f"Odraz od {'put' if direction is Direction.LONG else 'call'} zdi {wall:g}: "
                 f"Cum Δ divergence za {params.divergence_lookback} min "
-                f"({then.cum_delta:.0f} → {now.cum_delta:.0f}) a odmítnutí zdi "
+                f"({cum_then:.0f} → {cum_now:.0f}) a odmítnutí zdi "
                 f"(close {now.close:g})."
                 + ("" if right_gamma_side else " Pozor: cena na špatné straně flipu.")
                 + (
@@ -888,7 +914,7 @@ def detect_wall_bounce(
                 "wall_dom": dominance,
                 "flip": now.flip,
                 "max_pain": now.max_pain,
-                "cum_delta": now.cum_delta,
+                "cum_delta": cum_now,
                 "right_gamma_side": right_gamma_side,
                 "gex_regime": now.gex_regime,
                 "counter_regime": counter,
@@ -1096,7 +1122,11 @@ def detect_gamma_momentum(
     total_flow = call_flow + put_flow
     if total_flow <= 0:
         return None
-    cum_window = [m.cum_delta for m in history[-30:]]
+    # Obě větve stojí na kvantilové bráně CumΔ → mezera v okně = žádný T4
+    cum_window = _cum_levels(history[-30:])
+    if cum_window is None:
+        return None
+    cum_now = cum_window[-1]
 
     def cum_confirms(down: bool) -> bool:
         """Potvrzuje CumΔ směr průrazu? (#443)
@@ -1112,9 +1142,9 @@ def detect_gamma_momentum(
         share = min(max(params.momentum_cum_quantile, 0.0), 1.0)
         if down:
             index = max(0, int(share * (len(ordered) - 1)))
-            return now.cum_delta <= ordered[index]
+            return cum_now <= ordered[index]
         index = min(len(ordered) - 1, int((1.0 - share) * (len(ordered) - 1)))
-        return now.cum_delta >= ordered[index]
+        return cum_now >= ordered[index]
 
     # Průraz stačí v posledních `momentum_cross_window` minutách, když DRŽÍ (#443).
     # Původně musel nastat přesně v aktuální minutě zároveň s převahou toku a
@@ -1200,6 +1230,11 @@ def detect_divergence_spring(
         return None
     now = history[-1]
     window = history[-(params.spring_lookback + 1) : -1]
+    # Obě větve stojí na extrému CumΔ okna → mezera v okně = žádný T5
+    cums = _cum_levels(history[-(params.spring_lookback + 1) :])
+    if cums is None:
+        return None
+    cum_now, cum_window = cums[-1], cums[:-1]
 
     def near_wall(wall: float | None) -> bool:
         return wall is not None and abs(now.close - wall) <= params.wall_zone
@@ -1207,7 +1242,7 @@ def detect_divergence_spring(
     # LONG: nové low okna + CumΔ na maximu okna + odmítnutí (close zpět nad low)
     if (
         now.low <= min(m.low for m in window)
-        and now.cum_delta >= max(m.cum_delta for m in window)
+        and cum_now >= max(cum_window)
         and now.close >= now.low + params.spring_rejection
         and not near_wall(now.put_wall)
     ):
@@ -1223,12 +1258,12 @@ def detect_divergence_spring(
                 confidence=50,
                 reason=(
                     f"Divergenční spring: nové low okna {now.low:g} mimo zónu zdi, "
-                    f"CumΔ přitom na maximu ({now.cum_delta:.0f}) — nákupy do slabosti, "
+                    f"CumΔ přitom na maximu ({cum_now:.0f}) — nákupy do slabosti, "
                     f"close {now.close:g} low odmítl."
                 ),
                 context={
                     "extreme": now.low,
-                    "cum_delta": now.cum_delta,
+                    "cum_delta": cum_now,
                     "put_wall": now.put_wall,
                     "gex_regime": now.gex_regime,
                 },
@@ -1237,7 +1272,7 @@ def detect_divergence_spring(
     # SHORT zrcadlově: nové high okna + CumΔ na minimu okna + odmítnutí dolů
     if (
         now.high >= max(m.high for m in window)
-        and now.cum_delta <= min(m.cum_delta for m in window)
+        and cum_now <= min(cum_window)
         and now.close <= now.high - params.spring_rejection
         and not near_wall(now.call_wall)
     ):
@@ -1253,12 +1288,12 @@ def detect_divergence_spring(
                 confidence=50,
                 reason=(
                     f"Divergenční spring: nové high okna {now.high:g} mimo zónu zdi, "
-                    f"CumΔ přitom na minimu ({now.cum_delta:.0f}) — prodeje do síly, "
+                    f"CumΔ přitom na minimu ({cum_now:.0f}) — prodeje do síly, "
                     f"close {now.close:g} high odmítl."
                 ),
                 context={
                     "extreme": now.high,
-                    "cum_delta": now.cum_delta,
+                    "cum_delta": cum_now,
                     "call_wall": now.call_wall,
                     "gex_regime": now.gex_regime,
                 },

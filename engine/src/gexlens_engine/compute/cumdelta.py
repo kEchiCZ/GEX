@@ -94,8 +94,10 @@ class FlowRow:
     """Minutový bod řady pro panel Cum Δ a persistenci do derived/."""
 
     ts_min: dt.datetime
-    flow_delta: float
-    cum_delta: float
+    # None = mezera: trade větev v minutě neběžela (ADR-0057 bod 3), ne 0 ani
+    # poslední hodnota. Midpoint zdroj (mechanika v5) píše vždy číslo.
+    flow_delta: float | None
+    cum_delta: float | None
     # CVD podkladu (#829) — druhá řada panelu, plní ji FuturesCvdTracker.
     # None = bez tasty větve nebo instrument nemá registrovaný front future.
     futures_cvd_delta: float | None = None

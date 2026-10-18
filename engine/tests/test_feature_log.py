@@ -6,7 +6,7 @@ from typing import cast
 
 import pyarrow.parquet as pq
 from sqlalchemy import create_engine
-from test_setups import TS, FakeRuntime, RecordingPublisher
+from test_setups import TS, FakeFlow, FakeRuntime, RecordingPublisher
 
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.underlying import Bar
@@ -77,6 +77,32 @@ async def test_feature_log_atr_po_plne_historii(tmp_path: Path) -> None:
     rows = pq.read_table(path).to_pylist()
     assert len(rows) == 16  # žádná minuta nespadla
     assert rows[-1]["atr"] is not None and rows[-1]["atr"] > 0  # plná historie → ATR
+
+
+async def test_feature_log_mezera_cumdelta_je_null(tmp_path: Path) -> None:
+    """ADR-0057 bod 3 (#1460): mezera CumΔ jde do feature logu jako NULL, ne 0.
+
+    Totéž bez řádku toku (runtime ještě neproběhl cyklus) — 0,0 by byla
+    vymyšlená hodnota, kterou by T4 brala jako potvrzení.
+    """
+    engine, settings = make_engine(tmp_path)
+    fake = FakeRuntime()
+    runtime = cast(EngineRuntime, fake)
+
+    fake.last_flow = FakeFlow(None)
+    await engine.on_minute(TS, 7505, [bar(7505, 7506, 7504, 7505)], runtime)
+    fake.last_flow = None
+    await engine.on_minute(
+        TS + dt.timedelta(minutes=1), 7505, [bar(7505, 7506, 7504, 7505)], runtime
+    )
+    fake.last_flow = FakeFlow(42.0)
+    await engine.on_minute(
+        TS + dt.timedelta(minutes=2), 7505, [bar(7505, 7506, 7504, 7505)], runtime
+    )
+
+    path = settings.derived_dir / "ES" / "features" / f"{TS.date().isoformat()}.parquet"
+    rows = pq.read_table(path).to_pylist()
+    assert [row["cum_delta"] for row in rows] == [None, None, 42.0]
 
 
 async def test_feature_log_upserts_same_minute(tmp_path: Path) -> None:

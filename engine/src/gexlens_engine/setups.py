@@ -366,7 +366,10 @@ class SetupEngine:
             call_wall=levels.call_wall if levels else None,
             put_wall=levels.put_wall if levels else None,
             max_pain=self._max_pain,
-            cum_delta=flow.cum_delta if flow else 0.0,
+            # Bez řádku toku (před prvním cyklem) CumΔ neznáme: 0,0 by byla
+            # vymyšlená hodnota, kterou by T4 brala jako potvrzení. NULL řádek
+            # (mezera, ADR-0057 bod 3) jde dál jako None.
+            cum_delta=flow.cum_delta if flow is not None else None,
             call_flow=call_flow,
             put_flow=put_flow,
             opt_vol=raw_flow,

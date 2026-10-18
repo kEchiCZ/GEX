@@ -505,10 +505,10 @@ class FlowRowLike(Protocol):
     def ts_min(self) -> dt.datetime: ...
 
     @property
-    def flow_delta(self) -> float: ...
+    def flow_delta(self) -> float | None: ...
 
     @property
-    def cum_delta(self) -> float: ...
+    def cum_delta(self) -> float | None: ...
 
     @property
     def futures_cvd_delta(self) -> float | None: ...
@@ -715,7 +715,7 @@ class FeatureRow:
     call_wall: float | None
     put_wall: float | None
     max_pain: float | None
-    cum_delta: float
+    cum_delta: float | None  # None = mezera měření CumΔ (ADR-0057 bod 3)
     call_flow: float
     put_flow: float
     opt_vol: float

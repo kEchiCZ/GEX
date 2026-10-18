@@ -62,7 +62,7 @@ def minute(
     call_wall: float | None = 7530.0,
     put_wall: float | None = 7500.0,
     max_pain: float | None = None,
-    cum_delta: float = 0.0,
+    cum_delta: float | None = 0.0,
     call_flow: float = 0.0,
     put_flow: float = 0.0,
     opt_vol: float = 10.0,
@@ -603,7 +603,7 @@ class FakeScheduler:
 
 
 class FakeFlow:
-    def __init__(self, cum_delta: float) -> None:
+    def __init__(self, cum_delta: float | None) -> None:
         self.ts_min = TS
         self.flow_delta = 0.0
         self.cum_delta = cum_delta
@@ -615,7 +615,7 @@ class FakeRuntime:
         self.multiplier = 50.0  # hodnota bodu ES — sizing (#1185)
         self.scheduler = FakeScheduler()
         self.last_levels = LevelsRow(TS, 7515.0, 7530.0, 7500.0, 7512.0, 100.0)
-        self.last_flow = FakeFlow(0.0)
+        self.last_flow: FakeFlow | None = FakeFlow(0.0)
         # Dominance zdí (ADR-0010, #223) — SetupEngine je čte z plných levels.
         # Nízké hodnoty potlačují T1: orchestrační testy cílí na T2 (failed_break)
         self.last_gex_levels = GexLevels(
@@ -812,6 +812,30 @@ async def test_setup_engine_minuta_bez_baru_setup_nevytvori(tmp_path: Path) -> N
 
     assert repository.active_for("ES") == []
     assert len(engine._history) == history
+
+
+@pytest.mark.parametrize(("cum", "created"), [(320.0, 1), (None, 0)])
+async def test_setup_engine_mezera_cumdelta_kontra_rezim_nepotvrdi(
+    tmp_path: Path, cum: float | None, created: int
+) -> None:
+    """ADR-0057 bod 4 (#1460): NULL CumΔ minuty jde do historie jako None.
+
+    Reclaim long pod flipem je kontra-režim (#252 B) a ten CumΔ čte: s mezerou
+    v aktuální minutě konfluenci nepotvrdí a setup nevznikne. Kontrola:
+    tentýž reclaim s měřenou CumΔ setup vytvoří.
+    """
+    engine, repository, fake = _bare_engine(tmp_path)
+    runtime = cast(EngineRuntime, fake)
+    await _warmup_and_break(engine, fake)
+
+    fake.last_flow = FakeFlow(cum)
+    reclaim = Bar(
+        ts=TS + dt.timedelta(minutes=30), open=7496, high=7502, low=7495, close=7501, volume=1.0
+    )
+    await engine.on_minute(TS + dt.timedelta(minutes=31), 7501, [reclaim], runtime)
+
+    assert engine._history[-1].cum_delta == cum
+    assert len(repository.active_for("ES")) == created
 
 
 async def test_setup_engine_opozdeny_bar_detekuje_dalsi_minuta(tmp_path: Path) -> None:
@@ -1609,3 +1633,121 @@ def test_settle_ts_expirace_v_burzovni_zone() -> None:
     winter = FakeRuntime()
     winter.expiry = "20260115"
     assert SetupEngine._minutes_to_expiry(cast(EngineRuntime, winter), now) == 30.0
+
+
+# ── Mezera CumΔ (ADR-0057 bod 4, #1460) ───────────────────────────
+#
+# Podmínka, která CumΔ čte, se přes mezeru (None) nepotvrdí. Pády na None by
+# byly podmíněné stavem trhu (dotyk zdi, průraz, nové low), proto každý test
+# stojí ve spouštěcím stavu: bez mezery kandidát vzniká, None těsně před
+# oknem nevadí, na okraji okna a v aktuální minutě blokuje.
+
+
+def _with_gap(history: list[MinuteInputs], index: int) -> list[MinuteInputs]:
+    rows = list(history)
+    rows[index] = replace(rows[index], cum_delta=None)
+    return rows
+
+
+def test_wall_bounce_mezera_cumdelta_v_okne_divergence() -> None:
+    # Scéna test_wall_bounce_right_gamma_side_full_confidence + minuta před oknem
+    history = [minute(7513, flip=7495.0, idx=0)]
+    history += [
+        minute(7512 - i, flip=7495.0, cum_delta=float(i * 10), idx=1 + i) for i in range(10)
+    ]
+    history.append(minute(7502, low=7501, flip=7495.0, cum_delta=110.0, idx=11))
+    lookback = PARAMS.divergence_lookback
+
+    assert detect_wall_bounce(history, PARAMS) is not None
+    assert detect_wall_bounce(_with_gap(history, -2 - lookback), PARAMS) is not None
+    for index in (-1 - lookback, -5, -1):  # okraj okna, uvnitř, aktuální minuta
+        assert detect_wall_bounce(_with_gap(history, index), PARAMS) is None
+
+
+def test_counter_flow_mezera_cumdelta_v_dlouhem_okne() -> None:
+    """Kontra-režim T1 i T2: mezera na okraji okna konfluenci nepotvrdí."""
+    lookback = PARAMS.counter_flow_lookback
+    # T1 long v negativní gammě (test_detectors_carry_gex_regime_in_context) + minuta navíc
+    wall = [minute(7513, gex_regime="negative", idx=i) for i in range(22)]
+    wall += [
+        minute(7512 - i, cum_delta=float(i * 10), gex_regime="negative", idx=22 + i)
+        for i in range(10)
+    ]
+    wall.append(minute(7502, low=7501, cum_delta=110.0, gex_regime="negative", idx=32))
+    # T2 reclaim v negativní gammě (test_failed_break_counter_regime_needs_flow_confluence)
+    reclaim = [minute(7505, gex_regime="negative", idx=i) for i in range(31)]
+    reclaim.append(minute(7496, low=7473, cum_delta=50.0, gex_regime="negative", idx=31))
+    reclaim.append(minute(7501, low=7495, cum_delta=100.0, gex_regime="negative", idx=32))
+
+    for detector, history in ((detect_wall_bounce, wall), (detect_failed_break, reclaim)):
+        confirmed = detector(history, PARAMS)
+        assert confirmed is not None
+        assert confirmed.context["counter_regime"] is True
+        assert detector(_with_gap(history, -2 - lookback), PARAMS) is not None
+        assert detector(_with_gap(history, -1 - lookback), PARAMS) is None
+
+
+def test_gamma_momentum_mezera_cumdelta_v_okne_kvantilu() -> None:
+    """T4: kvantil nad posledními 30 bary — mezera na jeho okraji kandidáta zablokuje."""
+
+    def bar(close: float, cum: float, idx: int) -> MinuteInputs:
+        return minute(
+            close,
+            flip=7500.0,
+            put_wall=7400.0,
+            call_wall=7600.0,
+            cum_delta=cum,
+            put_flow=10.0,
+            idx=idx,
+        )
+
+    history = [bar(7510.0, 100.0 - i, i) for i in range(31)]
+    history.append(bar(7490.0, 60.0, 31))  # průraz flipu dolů, CumΔ na minimu okna
+
+    setup = detect_gamma_momentum(history, PARAMS)
+    assert setup is not None
+    assert setup.direction is Direction.SHORT
+    assert detect_gamma_momentum(_with_gap(history, -31), PARAMS) is not None
+    for index in (-30, -1):
+        assert detect_gamma_momentum(_with_gap(history, index), PARAMS) is None
+
+
+def test_divergence_spring_mezera_cumdelta_v_okne() -> None:
+    """T5 (default vypnutá, ve store jde zapnout): extrém CumΔ přes mezeru nic nepotvrdí."""
+    lookback = PARAMS.spring_lookback
+    before = minute(7450.0, low=7445.0, high=7460.0, put_wall=7400.0, call_wall=7485.0, idx=-1)
+    history = [before, *spring_history()]
+
+    assert detect_divergence_spring(history, PARAMS) is not None
+    assert detect_divergence_spring(_with_gap(history, -2 - lookback), PARAMS) is not None
+    for index in (-1 - lookback, -1):
+        assert detect_divergence_spring(_with_gap(history, index), PARAMS) is None
+
+
+def test_detect_all_mezera_cumdelta_nespadne_a_sablony_bez_cumdelta_bezi() -> None:
+    """Mezera nesmí shodit detect_all — volá i vypnutou T5, takže TypeError
+    z jejího max() by vzal s sebou T2, T3 i T7 té minuty."""
+    # Nové low okna (spouštěcí stav T5) s mezerou uvnitř okna
+    history = _with_gap(spring_history(), 10)
+    assert SetupTemplate.DIVERGENCE_SPRING.value in PARAMS.disabled_templates
+    assert detect_all(history, PARAMS) == []
+    enabled = replace(PARAMS, disabled_templates=frozenset())
+    assert detect_all(history, enabled) == []
+
+    # T7 CumΔ nečte: trendová scéna s mezerou v každé minutě dál dává kandidáta
+    params = SetupParams()
+    levels = {"flip": 7400.0, "put_wall": 7420.0, "call_wall": 7600.0}
+    trend = [trend_minute(i, 7480.0 + i, 7479.0 + i, 7482.0 + i, **levels) for i in range(40)]
+    atr = average_true_range(trend, params.atr_lookback) or 1.0
+    ema = _ema([m.close for m in trend], params.trend_ema_span)
+    assert ema is not None
+    trend.append(trend_minute(40, ema + 0.5 * atr, ema - 0.1 * atr, ema + 0.6 * atr, **levels))
+    gaps = [replace(m, cum_delta=None) for m in trend]
+    templates = {c.template for c in detect_all(gaps, params)}
+    assert SetupTemplate.TREND_CONTINUATION in templates
+
+    # T2 mimo kontra-režim a T3 CumΔ nečtou
+    no_cum = [replace(m, cum_delta=None) for m in failed_break_history()]
+    assert detect_failed_break(no_cum, PARAMS) is not None
+    pin = [minute(7530, max_pain=7510.0, minutes_to_expiry=100.0, cum_delta=None)]
+    assert detect_max_pain_pin(pin, PARAMS) is not None
