@@ -291,6 +291,23 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-18 — široký OI z tasty se po prvním zápisu dne neobnovil, α NQ dostávala ΔOI = 0 (#1605), podruhé po #1314.**
+  `wide_oi_once` měl psát jen striky mimo IBKR obálku a „co je pokryté" zjišťoval dotazem
+  `values_for` na archiv dne. Ten vracel všechny řádky, i ty, které zapsal tasty sám: první běh
+  v 00:00 UTC zapsal řetěz s předchozí publikací CME a od dalšího běhu byl každý strike „pokrytý",
+  do konce dne se nepřepsal. Mimo obálku jelo ~55 % Σ OI 0DTE řetězu na den starých číslech,
+  publikace dne expirace se do archivu (R4) nezapsala a kalibrace α, která sčítala strany bez
+  ohledu na zdroj a čas, na nich dostala ΔOI přesně 0 (NQ od 5. 10. medián 0 v 7 z 8 bodů).
+  Finalita #1314 tomu nezabránila: potvrzuje jen univerzum IBKR čtení. Druhá past při opravě:
+  IBKR razítkuje `captured_ts` začátkem cyklu, ne časem zápisu, takže 169 platných IBKR řádků má
+  `tasty_captured_ts > captured_ts` — porovnávat časy dvou zdrojů nejde. Odhalil to rozpad stran
+  bodu podle zdroje hodnoty v archivu D+1 při triáži podezřelých nul ve `fa_alpha_history`.
+  → Dotaz „je to už pokryté?" se ptá jen na zápisy **jiného** zdroje (původ = vyplněný
+  `captured_ts`), nikdy na vlastní. Ochranu cizího řádku dává stráž v SQL (`ON CONFLICT … WHERE`),
+  ne srovnání časů. Výpočet nad archivem se dvěma zdroji bere jen hodnoty, jejichž původ a čas
+  dokazují měření po publikaci; ostatní jsou „nevíme" (#1172) a zužují klíče, ne nulu. Klíč cache
+  nad takovým archivem nese poslední zápis obou zdrojů. Test: druhý běh téhož dne po změně zdroje
+  vlastní řádek přepíše, cizí ne.
 - **2026-10-17 — track record verdiktu dne vznikal jen při otevřeném Briefingu a ze dvou implementací s různými vstupy (#1595).**
   Verdikt počítal a přes POST ukládal frontend, jen když byl Briefing před openem otevřený: v3
   (24. 9.–16. 10.) má 5 řádků, všechny NQ, ES žádný. Engine měl pro automatický scénář vlastní port
