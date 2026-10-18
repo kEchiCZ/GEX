@@ -308,6 +308,18 @@ chyb**, hlavně diagnostických a provozních.
   dokazují měření po publikaci; ostatní jsou „nevíme" (#1172) a zužují klíče, ne nulu. Klíč cache
   nad takovým archivem nese poslední zápis obou zdrojů. Test: druhý běh téhož dne po změně zdroje
   vlastní řádek přepíše, cizí ne.
+
+- **2026-10-18 — Bluesky za 6 dní tiše ztratil ~2,5 h postů, v oknech CPI a PPI nic (#1509).**
+  Za 12.–17. 10. 161 reconnectů Jetstreamu (`keepalive ping timeout` na pomalé lince); v oknech
+  CPI 14. 10. 12:30–12:40 UTC a PPI 15. 10. 12:25–12:40 UTC 0 eventů. Příčiny: reconnect bez
+  `cursor` začínal živým proudem, takže posty z výpadku i backoffu se ztratily bez chyby v logu.
+  Backoff se po úspěšném připojení nevracel: reset stál za `await` session, která končí jen výjimkou,
+  a po pár pádech zůstal natrvalo na 60 s. Odhalil to log reconnectů po nasazení 10. 10. a propad
+  Bluesky eventů po hodinách proti minulé sobotě, rozsah pak triáž. → Kde zdroj nabízí cursor nebo
+  replay, reconnect ho používá. Do logu jde délka výpadku a počet dohnaných zpráv. Hranici přehrání
+  deduplikuje stream sám. Backoff resetovat tam, kde se úspěch skutečně pozná (první doručený rámec),
+  ne za voláním, které končí jen výjimkou.
+
 - **2026-10-17 — track record verdiktu dne vznikal jen při otevřeném Briefingu a ze dvou implementací s různými vstupy (#1595).**
   Verdikt počítal a přes POST ukládal frontend, jen když byl Briefing před openem otevřený: v3
   (24. 9.–16. 10.) má 5 řádků, všechny NQ, ES žádný. Engine měl pro automatický scénář vlastní port
