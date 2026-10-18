@@ -1334,9 +1334,10 @@ class SnapshotWriter:
     def write_dx_flow(self, symbol: str, day: dt.date, rows: Sequence[object]) -> Path:
         """Stínové CumΔ minuty (#615) do derived/{sym}/cumdelta_dx/{date}.parquet.
 
-        Retence derived/ (14 dní) tu stačí: řada slouží ~10sekčnímu měření
-        pro spread_leg ADR a vyčíslení rozdílu vs. živé CumΔ. Upsert podle
-        `ts_min` (#1070): restart uprostřed minuty by jinak zapsal minutu dvakrát.
+        `derived/` je věčný archiv (ADR-0029): řada je vstup replaye
+        a walk-forwardu v6 pro seance před nasazením (ADR-0057 bod 7). Upsert
+        podle `ts_min` (#1070): restart uprostřed minuty by jinak zapsal minutu
+        dvakrát. Konvence štítku viz `DxFlowRow` (#1586).
         """
         buffer = self._buffer(self.dx_flow_path(symbol, day), DX_FLOW_SCHEMA)
         return buffer.append_and_write(

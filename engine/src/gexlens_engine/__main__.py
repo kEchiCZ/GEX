@@ -28,7 +28,7 @@ from gexlens_engine.adapters import (
 )
 from gexlens_engine.background import BackgroundJob
 from gexlens_engine.briefing_verdicts import BriefingVerdictCollector
-from gexlens_engine.compute.cumdelta import LIVE_SOURCE, CumDeltaTracker
+from gexlens_engine.compute.cumdelta import LIVE_SOURCE, SOURCE_AGGRESSOR, CumDeltaTracker
 from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
@@ -150,7 +150,7 @@ from gexlens_engine.tasty.budget import DistanceGroup, order_by_distance, plan_s
 from gexlens_engine.tasty.candles import CandleBar, CandleFetcher, backfill_gaps, partition_days
 from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
-from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow
+from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow, plan_dx_flush
 from gexlens_engine.tasty.devrun import run_tasty_only
 from gexlens_engine.tasty.extended import (
     build_snapshot_rows,
@@ -2879,17 +2879,38 @@ async def main() -> None:
             Spot se obnovuje každou minutu (zóny sledují ATM); roll seance
             resetuje kumulativy stejně jako živé CumΔ. Poslední uzávěrka
             proběhne i po stopu, ať se rozdělaná minuta neztratí.
+
+            Pod tisky (v6, #1586) se uzavírá na hranici minuty podle nástěnných
+            hodin a štítkem je cílová hranice (`plan_dx_flush`, „stav k N“).
+            Pod v5 zůstává perioda 60 s po práci a štítek z času po čekání:
+            stín je vstup replaye (ADR-0057 bod 7), konvence se mění až s bumpem.
             """
+            aligned = LIVE_SOURCE == SOURCE_AGGRESSOR
+            last_minute: dt.datetime | None = None
             while True:
                 stopped = shadow_stop.is_set()
+                plan = plan_dx_flush(dt.datetime.now(dt.UTC), last_minute) if aligned else None
+                if plan is not None and plan.skipped:
+                    logger.warning(
+                        "Stín CumΔ: %d min bez řádku (%s až %s) — uzávěrka nestihla hranici"
+                        " minuty; tok nesou sousední řádky",
+                        plan.skipped,
+                        (plan.minute - dt.timedelta(minutes=plan.skipped)).isoformat(),
+                        (plan.minute - dt.timedelta(minutes=1)).isoformat(),
+                    )
                 if not stopped:
                     with contextlib.suppress(TimeoutError):
-                        await asyncio.wait_for(shadow_stop.wait(), timeout=60.0)
+                        await asyncio.wait_for(
+                            shadow_stop.wait(), timeout=60.0 if plan is None else plan.wait_s
+                        )
                         stopped = True
                 try:
                     now = dt.datetime.now(dt.UTC)
-                    session = trading_session_date(now)
-                    minute = now.replace(second=0, microsecond=0)
+                    minute = now.replace(second=0, microsecond=0) if plan is None else plan.minute
+                    last_minute = minute
+                    # Hranice seance leží na celé minutě, takže pod v5 je to totéž
+                    # jako seance `now`; pod v6 rozhoduje štítek, ne zpoždění probuzení
+                    session = trading_session_date(minute)
                     for dx_symbol, dx_shadow in list(dx_shadows.items()):
                         spot_price, spot_fresh = _tasty_spot(dx_symbol)
                         dx_shadow.set_spot(spot_price if spot_fresh else None)
@@ -2898,7 +2919,7 @@ async def main() -> None:
                             # stínu je per seance, takže její poslední řádek je
                             # přesně stav, ve kterém předchozí běh skončil
                             seed = await asyncio.to_thread(writer.dx_flow_seed, dx_symbol, session)
-                            if seed is not None and seed.ts_min < minute:
+                            if seed is not None and (aligned or seed.ts_min < minute):
                                 dx_shadow.seed(seed)
                                 logger.info(
                                     "Stín CumΔ %s navázán z partice %s (cum_ring %.0f, %d tradů)"
@@ -2908,6 +2929,12 @@ async def main() -> None:
                                     seed.cum_ring,
                                     seed.trades,
                                 )
+                                if seed.ts_min >= minute:
+                                    # Jen v6: restart v téže minutě, ve které stop zapsal
+                                    # řádek N s obsahem [N−1, stop). Uzávěrka N by ho
+                                    # upsertem přepsala jen novou částí minuty, proto
+                                    # minuta pokračuje do příští hranice (#1586)
+                                    continue
                         row = dx_shadow.close_minute(minute)
                         await asyncio.to_thread(writer.write_dx_flow, dx_symbol, session, [row])
                 except Exception:

@@ -38,7 +38,15 @@ _AGGRESSOR_SIGN = {"BUY": 1, "SELL": -1}
 
 @dataclass(frozen=True)
 class DxFlowRow:
-    """Minutový bod stínové řady — podklad pro srovnání dxFeed vs. IBKR."""
+    """Minutový bod stínové řady — podklad pro srovnání dxFeed vs. IBKR.
+
+    Štítek `ts_min` = N je „stav k N“: řádek nese tisky od minulé uzávěrky
+    do uzávěrky N. Pod tisky (v6, #1586) se uzavírá na hranici minuty
+    (`plan_dx_flush`), obsah je [N−1, N) jako u štítku živého flow. Pod v5
+    perioda driftuje: obsah je [N−1+φ, N+φ) s fází φ 0–60 s a co 2–5 h jeden
+    štítek chybí — tok se neztrácí, nesou ho sousední řádky, takže chybějící
+    štítek = poslední kumulativ (ADR-0057 bod 7).
+    """
 
     ts_min: dt.datetime
     #: Prstenec ATM±15 mimo hot zónu — tok, který by fáze 3 převzala
@@ -201,3 +209,45 @@ class DxCumDeltaShadow:
         self._volume = 0.0
         self._dropped = 0
         return row
+
+
+_MINUTE = dt.timedelta(minutes=1)
+
+
+@dataclass(frozen=True)
+class DxFlushPlan:
+    """Příští uzávěrka stínu pod tisky (#1586)."""
+
+    #: Štítek řádku = cílová hranice minuty, spočtená PŘED čekáním
+    minute: dt.datetime
+    #: Kolik sekund čekat na hranici podle nástěnných hodin (≥ 0)
+    wait_s: float
+    #: Hranice mezi minulou uzávěrkou a touto, které zůstanou bez řádku
+    skipped: int
+
+
+def plan_dx_flush(now: dt.datetime, last: dt.datetime | None) -> DxFlushPlan:
+    """Rozvrh uzávěrky stínu pod tisky (#1586): nejbližší celá minuta ≥ `now`, vždy po `last`.
+
+    Smyčka pod v5 čeká 60 s po práci, takže perioda je 60 s + doba zápisu:
+    obsah řádku driftuje proti štítku o 0–60 s a co 2–5 h štítek přeskočí.
+    Tady se čeká do hranice podle nástěnných hodin a štítkem je ta hranice,
+    ne `floor(now)` po probuzení — probuzení o pár ms dřív by dalo předchozí
+    minutu a upsert podle `ts_min` by její řádek přepsal. Proto i cíl leží
+    vždy po `last` (štítek minulé uzávěrky). Probuzení pozdě (zmrazený
+    kontejner, přetížená smyčka) štítek neposune: řádek nese, co engine
+    do té chvíle přijal, a hranice, na které nedošlo, vrátí příští rozvrh
+    jako `skipped`. Přetečení práce přes hranici dá tutéž stopu.
+    """
+    if now.tzinfo is None:
+        raise ValueError(f"now musí nést časovou zónu: {now!r}")
+    floor = now.replace(second=0, microsecond=0)
+    target = floor if floor == now else floor + _MINUTE
+    if last is not None and target <= last:
+        target = last + _MINUTE
+    skipped = 0 if last is None else max(0, (target - last) // _MINUTE - 1)
+    return DxFlushPlan(
+        minute=target,
+        wait_s=max(0.0, (target - now).total_seconds()),
+        skipped=skipped,
+    )
