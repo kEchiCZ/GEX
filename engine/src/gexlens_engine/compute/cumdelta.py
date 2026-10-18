@@ -16,8 +16,10 @@ CumΔ se resetuje na začátku obchodního dne (session start řídí engine).
 
 import datetime as dt
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 
+from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 
@@ -35,6 +37,9 @@ CUMDELTA_SOURCES = (SOURCE_MIDPOINT, SOURCE_AGGRESSOR)
 #: Zdroj živých trackerů enginu; přepíná ho jen bump mechaniky (#1403), návrat
 #: pinem image (ADR-0057 bod 10). Testy volí zdroj explicitním parametrem.
 LIVE_SOURCE = SOURCE_AGGRESSOR if CUMDELTA_PRINTS else SOURCE_MIDPOINT
+#: Okno sklonu CumΔ v minutách (ADR-0057 bod 4) — jediná délka pro tendenci
+#: i potvrzení COMBINED v news-engine (#1460, #1589), viz `flow_window_sum`.
+FLOW_WINDOW_MIN = 10
 
 
 @dataclass(frozen=True)
@@ -362,3 +367,64 @@ class CumDeltaTracker:
     def _apply(self, flow: float) -> None:
         self._cum += flow
         self._minute_flow += flow
+
+
+def flow_window_sum(
+    rows: Iterable[tuple[dt.datetime, float | None]],
+    end: dt.datetime,
+    minutes: int = FLOW_WINDOW_MIN,
+) -> float | None:
+    """Σ flowΔ řádků s ts ∈ (end − minutes, end] v seanci minuty `end`; neúplné okno → None.
+
+    Sklon CumΔ pro tendenci i news-engine (ADR-0057 bod 4, #1460, #1589) —
+    jedna čistá funkce místo rozdílu CumΔ dvou řádků. `rows` = (ts_min,
+    flow_delta) z partic flow, klidně ze dvou UTC dnů, v libovolném pořadí
+    a s řádky mimo okno (i po `end`); NULL flow_delta = minuta s mezerou.
+
+    Řádek nese tok od předchozí uzávěrky minuty, takže chybějící řádek uvnitř
+    okna tok neztratí (přejde do dalšího řádku). Součet je úplný, když:
+    - řádek `end` existuje (tok poslední minuty je uzavřený);
+    - žádný řádek v okně nemá NULL (tok mezery chybí);
+    - před oknem je doložená uzávěrka: hraniční řádek `end − minutes`
+      s libovolnou hodnotou, i NULL — bez něj by první řádek okna nesl i tok
+      zpoza okna. Začíná-li okno přesně začátkem seance, je uzávěrkou roll
+      trackeru, a ten dokládá jen řádek té minuty (pozdější roll by tok
+      prvních minut zahodil);
+    - okno nezačíná před začátkem seance (#1581: CumΔ se v 17:00 CT nuluje);
+    - v okně není duplicitní ts (dvojí zápis nejde odlišit od dvou uzávěrek).
+
+    Za zavřeného trhu nese řada nuly, takže pauza dá 0.0, ne None. `end` je
+    ts_min řádku: celá minuta s časovou zónou — naivní čas by
+    `trading_session_date` vyložil v zóně stroje.
+    """
+    if end.tzinfo is None or end.utcoffset() is None:
+        raise ValueError(f"flow_window_sum: end {end!r} nemá časovou zónu")
+    if end.second or end.microsecond:
+        raise ValueError(f"flow_window_sum: end {end!r} není celá minuta (ts_min)")
+    if minutes < 1:
+        raise ValueError(f"flow_window_sum: okno {minutes} min, musí být ≥ 1")
+    step = dt.timedelta(minutes=1)
+    boundary = end - minutes * step
+    first = boundary + step
+    session_start = session_bounds(trading_session_date(end))[0]
+    if first < session_start:
+        return None
+    anchor = first if first == session_start else boundary
+    anchored = False
+    window: dict[dt.datetime, float | None] = {}
+    for ts, flow in rows:
+        if ts == anchor:
+            anchored = True
+        if boundary < ts <= end:
+            if ts in window:
+                return None
+            window[ts] = flow
+    if not anchored or end not in window:
+        return None
+    total = 0.0
+    for ts in sorted(window):
+        flow = window[ts]
+        if flow is None:
+            return None
+        total += flow
+    return total
