@@ -767,6 +767,11 @@ class EngineRuntime:
         # Persistence netflow (#232): kumulativ dne per strana — vstup ranní
         # kalibrace α a zpětné validace směru (znaménko net vs. ΔOI). Píše
         # i sekundární řetěz (#1182) — teprve jeho netflow má ΔOI do D+1.
+        # Píše se každá sledovaná strana, i s netem 0 (#1582): explicitní 0 je
+        # naměřená nula, chybějící řádek strana, která se nesleduje (restart,
+        # jiný řetěz, posun pásma). Dřív strana s návratem na 0 z partice
+        # zmizela a kalibrace α i navázání v rollu a po restartu vzaly její
+        # poslední nenulovou hodnotu.
         netflow_rows = [
             NetFlowRow(
                 ts_min=ts_min,
@@ -779,7 +784,6 @@ class EngineRuntime:
                 tracker.net_volumes().items(),
                 key=lambda item: (item[0].strike, item[0].right),
             )
-            if net != 0.0
         ]
         if netflow_rows:
             await asyncio.to_thread(

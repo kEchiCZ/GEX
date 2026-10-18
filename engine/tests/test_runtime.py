@@ -2,6 +2,7 @@
 
 import datetime as dt
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -507,10 +508,11 @@ async def test_klasifikovany_tok_zapisuje_netflow_oiest_a_fa_vrstvy(tmp_path: Pa
     netflow = pd.read_parquet(base / "netflow" / f"{day}.parquet")
     assert list(netflow.columns) == ["ts_min", "strike", "right", "net_volume", "source"]
     assert set(netflow["source"]) == {SOURCE_MIDPOINT}  # zdroj trackeru (#1460)
-    # Jen druhá minuta má klasifikovaný přírůstek a jen call strany: 3 × +100
-    assert len(netflow) == 3
-    assert set(netflow["right"]) == {"C"}
-    assert set(netflow["net_volume"]) == {100.0}
+    # Jen druhá minuta má klasifikovaný přírůstek: call strany 3 × +100, put
+    # strany (last na midu) mají naměřenou nulu a řádek dostanou taky (#1582)
+    assert len(netflow) == 6
+    by_right = netflow.groupby("right")["net_volume"].apply(set).to_dict()
+    assert by_right == {"C": {100.0}, "P": {0.0}}
 
     oiest = pd.read_parquet(base / "oiest" / f"{day}.parquet")
     assert list(oiest.columns) == ["ts_min", "strike", "right", "oi_est"]
@@ -561,6 +563,67 @@ async def test_netflow_seed_navaze_kumulativ_po_restartu(tmp_path: Path) -> None
     assert len(third) == 3
     assert set(third["right"]) == {"C"}
     assert set(third["oi_est"]) == {1040.0}
+
+
+class ReversingVolumeStreamer(RisingVolumeStreamer):
+    """Jako `RisingVolumeStreamer`, ale od třetího fetch jsou cally pod midem (sell).
+
+    Call strany: druhá minuta +100 buy, třetí +100 sell → net se vrátí na 0.
+    """
+
+    async def fetch_quote(
+        self, spec: OptionContractSpec, timeout_s: float
+    ) -> QuoteSnapshot | PartialQuote | None:
+        quote = await super().fetch_quote(spec, timeout_s)
+        if isinstance(quote, QuoteSnapshot) and spec.right == "C" and self._fetches[spec] >= 3:
+            return replace(quote, last=10.1)  # pod midem 10.25 = sell
+        return quote
+
+
+async def test_netflow_zapise_navrat_strany_na_nulu(tmp_path: Path) -> None:
+    """#1582: strana s návratem netu na 0 dostane řádek 0, z partice nezmizí."""
+    engine_runtime, _publisher, settings = build_runtime(tmp_path, ReversingVolumeStreamer())
+    for minute in range(3):
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    netflow = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "netflow" / f"{TS.date().isoformat()}.parquet"
+    )
+    calls = netflow[netflow["right"] == "C"]
+    by_minute = calls.groupby("ts_min")["net_volume"].apply(list).to_dict()
+    assert by_minute == {
+        TS + dt.timedelta(minutes=1): [100.0, 100.0, 100.0],
+        TS + dt.timedelta(minutes=2): [0.0, 0.0, 0.0],
+    }
+
+
+@pytest.mark.parametrize("first_secondary", [False, True], ids=["restart", "roll"])
+async def test_navazani_nevzkrisi_stranu_vracenou_na_nulu(
+    tmp_path: Path, first_secondary: bool
+) -> None:
+    """#1582: restart i roll naváží stranu vrácenou na 0 jako 0, ne s poslední nenulovou hodnotou.
+
+    Roll: partici expirace psal přes den sekundár, po settle ji jako aktivní
+    převezme nový runtime a naváže z ní (`__main__` roll v settle).
+    """
+    first_runtime, _publisher, _settings = build_runtime(tmp_path, ReversingVolumeStreamer())
+    first_runtime.secondary = first_secondary
+    for minute in range(3):
+        await first_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
+
+    second_runtime, _publisher, settings = build_runtime(tmp_path, RisingVolumeStreamer())
+    restart = TS + dt.timedelta(minutes=3)
+    await second_runtime.run_cycle(restart, SPOT, [])
+
+    tracker = second_runtime.cum_delta
+    assert tracker is not None
+    # Všech 6 stran pásma navázáno jako naměřená nula (dřív cally se 100)
+    assert len(tracker.net_volumes()) == 6
+    assert set(tracker.net_volumes().values()) == {0.0}
+    netflow = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "netflow" / f"{TS.date().isoformat()}.parquet"
+    )
+    assert set(netflow[netflow["ts_min"] == restart]["net_volume"]) == {0.0}
 
 
 def _seed_runtime(

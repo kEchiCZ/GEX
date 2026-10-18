@@ -125,6 +125,31 @@ def test_netflow_at_cutoff_rez_21_utc(tmp_path: Path) -> None:
     assert netflow_at_cutoff(path, PREV) == {(7500.0, "C"): 80.0}
 
 
+def test_netflow_at_cutoff_strana_vracena_na_nulu(tmp_path: Path) -> None:
+    """#1582: strana s návratem na 0 před řezem vstoupí do kalibrace s 0, ne s 80."""
+    settings = Settings(data_dir=tmp_path)
+    earlier = dt.datetime.combine(PREV, dt.time(20, 24), tzinfo=dt.UTC)
+    path = SnapshotWriter(settings).write_netflow(
+        "ES",
+        EXPIRY,
+        PREV,
+        [
+            NetFlowRow(
+                ts_min=earlier, strike=7500.0, right="P", net_volume=80.0, source=SOURCE_MIDPOINT
+            ),
+            NetFlowRow(
+                ts_min=earlier + dt.timedelta(minutes=3),
+                strike=7500.0,
+                right="P",
+                net_volume=0.0,
+                source=SOURCE_MIDPOINT,
+            ),
+        ],
+    )
+    assert path is not None
+    assert netflow_at_cutoff(path, PREV) == {(7500.0, "P"): 0.0}
+
+
 def test_netflow_at_cutoff_stara_partice_a_radek_presne_v_rezu(tmp_path: Path) -> None:
     """#1460: partice bez sloupce `source` se čte přes `schema=`; řádek 21:00 do řezu patří."""
     path = tmp_path / "netflow.parquet"

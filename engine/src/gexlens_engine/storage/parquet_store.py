@@ -380,9 +380,11 @@ CATCHUP_SCHEMA = pa.schema(
 
 # Čistý klasifikovaný objem per strana (#232, ADR-0011 fáze 2) — KUMULATIV dne
 # k dané minutě (buy − sell v kontraktech, znaménko z klasifikace agresora).
-# Zapisují se jen strany s nenulovým netem: řada je vstup ranní kalibrace α
-# a zpětné validace směru (znaménko net vs. znaménko ΔOI); nulové řádky by ji
-# jen nafukovaly. Vlastní řada, ne sloupec ve SNAPSHOT_SCHEMA (ADR-0005/0008).
+# Řada je vstup ranní kalibrace α, zpětné validace směru (znaménko net vs.
+# znaménko ΔOI) a navázání kumulativu po restartu a v rollu. Zapisuje se každá
+# sledovaná strana, i s netem 0 (#1582): explicitní 0 = naměřená nula, chybějící
+# řádek = strana se nesleduje. Vlastní řada, ne sloupec ve SNAPSHOT_SCHEMA
+# (ADR-0005/0008).
 NETFLOW_SCHEMA = pa.schema(
     [
         ("ts_min", pa.timestamp("us", tz="UTC")),

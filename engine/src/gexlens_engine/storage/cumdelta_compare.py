@@ -732,8 +732,9 @@ def net_increments(
 ) -> dict[ContractMinute, float]:
     """Minutové přírůstky kumulativního čistého objemu (`netflow`) per kontrakt.
 
-    `netflow` drží kumulativ seance per kontrakt a píše jen nenulové strany —
-    chybějící kontrakt v minutě, která v partici je, má nulu. `rows` jsou
+    `netflow` drží kumulativ seance per kontrakt; do #1582 psal jen nenulové
+    strany, od #1582 píše i 0 — chybějící kontrakt v minutě, která v partici
+    je, se proto čte jako nula (stará partice: návrat na 0). `rows` jsou
     řádky jedné seance (kumulativ začíná od nuly, `roll_session`). Partici
     jedné expirace plní v téže seanci jako sekundární řetěz do settle a jako
     aktivní po něm (#1182, `runtime.py`) — týž kumulativ pokračuje, proto

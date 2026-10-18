@@ -92,7 +92,10 @@ z ranních potvrzení proti skutečnému ΔOI z věčného archivu.
    = midpoint) a navázání bere jen řádky zdroje běžícího trackeru. Uložený
    kumulativ se k toku naměřenému od startu procesu přičítá, místo aby mu
    ustoupil: tisky chodí i před prvním cyklem. Obnovují se i strany mimo
-   pásmo, které má nový aktivní řetěz po rollu užší.)*
+   pásmo, které má nový aktivní řetěz po rollu užší. Od #1582 se zapisují
+   i strany s netem 0: explicitní 0 = naměřená nula, chybějící řádek = strana
+   se nesleduje; dřív strana s návratem na 0 zmizela a kalibrace α i navázání
+   vzaly její poslední nenulovou hodnotu.)*
 2. **Jediná definice odhadu** `compute/flowoi.oi_estimate`:
    `OI_est = max(0, OI_ráno + α·net)`. FA levels (fáze 1), FA Dyn GEX
    profil/pole i řada oiest počítají z TÉHOŽ čísla — UI nikdy neukazuje dvě

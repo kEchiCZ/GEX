@@ -291,6 +291,14 @@ chyb**, hlavně diagnostických a provozních.
 
 ## 3. Práce s daty uživatele a obchodní logika
 
+- **2026-10-18 — netflow vynechával strany s netem 0, α ES vyšla o ~9 % nižší (#1582).**
+  Filtr `if net != 0.0` (od #232, bez ADR) slil „naměřená nula“ a „strana se nesleduje“ do
+  chybějícího řádku. Strana s návratem na 0 z partice zmizela a čtenáři „poslední řádek ≤ T“
+  (kalibrace α v řezu 21:00, navázání po restartu i v denním rollu) vzali její starou
+  nenulovou hodnotu. ES 7. 10. tím změnil znaménko mediánu bodu α. → Kumulativní řada, kterou
+  se čte „poslední hodnota“, zapisuje i nulu; chybějící řádek smí znamenat jen „neměří se“.
+  Test: návrat strany na 0 a navázání nového runtime (restart i roll ze sekundáru).
+
 - **2026-10-18 — navázání kumulativů po restartu nerozlišovalo zdroj ani mezeru (#1460).**
   Seed CumΔ a netu bral poslední řádek seance bez ohledu na `source` a NULL četl jako 0.
   `restore_net_volume` (`setdefault`) zahodil uložený základ strany, kterou tracker už měl.
