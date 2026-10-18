@@ -83,8 +83,10 @@ oi_eod_table = Table(
     # finality (#463), který na `captured_ts` stojí. Původ hodnoty určuje
     # JEN `captured_ts`: vyplněný = hodnotu naposledy zapsalo IBKR (i když
     # řádek předtím zapsal tasty — IBKR zápis tenhle sloupec nemaže, takže
-    # řádek nese oba časy); NULL = tasty řádek. Tasty nikdy nepřepíše řádek
-    # s `captured_ts` (stráž v `upsert_many`). Čas nezměněné hodnoty se
+    # řádek nese oba časy); NULL a vyplněný `tasty_captured_ts` = tasty řádek;
+    # oba časy NULL = IBKR řádek z doby před #463 (bez času čtení, věčný archiv
+    # je nese dál). Tasty nikdy nepřepíše řádek s `captured_ts` (stráž
+    # v `upsert_many`). Čas nezměněné hodnoty se
     # neposouvá — sloupec nedokazuje čerstvost, jen poslední změnu.
     Column("tasty_captured_ts", DateTime(timezone=True), nullable=True),
 )

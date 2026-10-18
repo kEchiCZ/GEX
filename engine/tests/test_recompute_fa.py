@@ -156,3 +156,14 @@ def test_report_pocty_stran_a_body_bez_noveho_prepoctu(tmp_path: Path) -> None:
 
     assert module.main([*args, "--apply", "--yes"]) == 0
     assert FaAlphaRepository(db).history_exists("ES", stale_day)  # nic se nemaže
+
+
+def test_report_bez_nove_alfy_necha_stavajici_fa_alpha() -> None:
+    """#1605: přehrání bez α (body ≤ 0 nebo bez vzorku) `fa_alpha` nepřepíše —
+    hlavička reportu nesmí tvrdit „platí konfigurace", když `--apply` nechá
+    stávající α produkce."""
+    module = _load()
+    item = module.SymbolReplay(symbol="ES", old_alpha=0.4, new_alpha=None)
+    report = module.report_markdown([item], dt.datetime(2026, 10, 18, 12, 0, tzinfo=dt.UTC))
+    assert "nechá `fa_alpha` 0.400" in report
+    assert "platí konfigurace" not in report

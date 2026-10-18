@@ -200,7 +200,12 @@ def _fmt(value: float | None, digits: int = 3) -> str:
 def report_markdown(results: Sequence[SymbolReplay], generated: dt.datetime) -> str:
     lines = [f"# Přepočet FA validace a α (#1314) — {generated:%Y-%m-%d %H:%M} UTC", ""]
     for item in results:
-        note = "" if item.new_alpha is not None else " — bez kalibrace platí konfigurace"
+        if item.new_alpha is not None:
+            note = ""
+        elif item.old_alpha is not None:
+            note = f" — přehrání α nespočítalo, `--apply` nechá `fa_alpha` {item.old_alpha:.3f}"
+        else:
+            note = " — bez kalibrace platí konfigurace"
         lines += [
             f"## {item.symbol}",
             "",
@@ -306,7 +311,8 @@ def apply(results: Sequence[SymbolReplay], prod: Engine) -> int:
             )
             written += 1
         # Historie α v pořadí dnů; stav symbolu jen s posledním bodem a jen
-        # když přehrání nějakou α spočítalo (jinak platí konfigurace, #1314)
+        # když přehrání nějakou α spočítalo (jinak zůstává stávající `fa_alpha`,
+        # bez něj platí konfigurace; #1314)
         for index, row in enumerate(history_rows):
             last = index == len(history_rows) - 1
             alpha_prod.record(
