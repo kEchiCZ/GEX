@@ -395,7 +395,7 @@ def test_tasty_zapis_neprepise_ibkr_radek_a_nezmenenou_hodnotu(tmp_path: Path) -
     reason="GEXLENS_TEST_PG_DSN nenastaveno (integrace s reálným PostgreSQL)",
 )
 def test_tasty_straz_a_mereni_na_real_postgres() -> None:
-    """Totéž na PG: `rowcount` ON CONFLICT DO UPDATE … WHERE nepočítá řádky,
+    """Totéž na PG: počet zapsaných (RETURNING) nepočítá řádky,
     které stráž nepustila, a HAVING měřených stran projde i s timestamptz.
     Vlastní symboly, úklid jen vlastních řádků podle klíče."""
     engine = create_engine(os.environ["GEXLENS_TEST_PG_DSN"])

@@ -284,7 +284,7 @@ class OIEodRepository:
         (snímkové sloupce nemá — vynuloval by greeks IBKR řádku) a stráž v SQL
         ho pustí jen na tasty řádek se změněnou hodnotou (#1605): řádek
         s `captured_ts` je pro tasty nedotknutelný i při souběhu s IBKR
-        archivací a nezměněná hodnota se nepřepisuje (`rowcount` ji nepočítá).
+        archivací a nezměněná hodnota se nepřepisuje (do počtu se nezapočte).
 
         Řádky jdou do DB seřazené podle PK: souběžné dávky IBKR a tasty se
         společnými klíči tak zamykají ve stejném pořadí a neuváznou (PG).
@@ -321,18 +321,21 @@ class OIEodRepository:
                 index_elements=primary_key,
                 set_={name: getattr(pg_stmt.excluded, name) for name in updatable},
                 where=_tasty_guard(pg_stmt.excluded.oi) if tasty else None,
-            )
+            ).returning(oi_eod_table.c.symbol)
         elif dialect == "sqlite":
             sqlite_stmt = sqlite_insert(oi_eod_table).values(rows)
             stmt = sqlite_stmt.on_conflict_do_update(
                 index_elements=primary_key,
                 set_={name: getattr(sqlite_stmt.excluded, name) for name in updatable},
                 where=_tasty_guard(sqlite_stmt.excluded.oi) if tasty else None,
-            )
+            ).returning(oi_eod_table.c.symbol)
         else:
             raise ValueError(f"Nepodporovaný databázový dialekt pro upsert: {dialect!r}")
+        # Počet z RETURNING, ne `rowcount`: psycopg u vícehodnotového INSERT …
+        # ON CONFLICT vrací −1. RETURNING vrátí vložené i změněné řádky, řádek
+        # odmítnutý stráží ne.
         with self._engine.begin() as conn:
-            return int(conn.execute(stmt).rowcount)
+            return len(conn.execute(stmt).fetchall())
 
     def supersede_legacy(self, keys: Iterable[tuple[str, str, float, str, dt.date]]) -> None:
         """Nahrazení legacy souhrnu ('' z doby před #736) per-class čtením.
