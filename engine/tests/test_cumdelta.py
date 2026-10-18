@@ -445,6 +445,11 @@ def test_pokryti_se_meri_v_rezimu_midpoint_a_jde_do_flow_row_po_minutach() -> No
     # denní součet ve /status zůstává kumulativní
     stats = tracker.day_stats()
     assert stats["structured_volume"] == 8.0 and stats["fallback_volume"] == 5.0
+    # podíl tisků se stranou: z klasifikovaného objemu 6 / (6+1+5), z celého
+    # přírůstku včetně struktury 6 / (6+1+5+8) — #1460, /status
+    assert stats["printed_share"] == pytest.approx(0.5)
+    assert stats["printed_share_total"] == pytest.approx(0.3)
+    assert CumDeltaTracker(multiplier=50.0).day_stats()["printed_share_total"] == 0.0
 
 
 def test_pokryti_bez_trade_vetve_je_null() -> None:

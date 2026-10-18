@@ -13,7 +13,7 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -167,6 +167,13 @@ from gexlens_engine.tasty.session import TastyCredentials, TastySession
 from gexlens_engine.tasty.spot_fallback import SpotFallback
 from gexlens_engine.tasty.stream import DxLinkStream
 from gexlens_engine.tasty.symbols import ChainSymbols, SymbolMap
+from gexlens_engine.tasty.trade_branch import (
+    TradeBranchMonitor,
+    TradeRoutes,
+    build_routes,
+    observe_without_branch,
+    route_trade,
+)
 from gexlens_engine.tasty.trades_recorder import TradesRecorder
 from gexlens_engine.tasty.watchdog import SilentStreamWatchdog
 from gexlens_engine.tasty.wideoi import wide_contracts, wide_records, wide_streamers
@@ -2002,6 +2009,16 @@ async def main() -> None:
         return False
 
     dx_print_active: Callable[[str], bool] = _dx_print_inactive
+    # Vzorek trade větve pro trackery CumΔ obou řetězů (ADR-0057 bod 3, #1460)
+    # a stav do /status; bez tasty větve neběží nikdy (stav „off")
+    trade_branch_sample: Callable[
+        [dt.datetime, Mapping[str, InstrumentPipeline]], dict[str, str]
+    ] = observe_without_branch
+    # Probuzení plánu subskripcí po založení pipeline (#1460): trasy tisků nového
+    # řetězu (roll v settle, restart) se přestaví do sekund, ne až za minutu.
+    # None bez tasty větve; volá se jen pod zdrojem tisků — pod midpointem by
+    # dřívější obnova univerza změnila stín `cumdelta_dx`
+    on_pipeline_created: Callable[[], None] | None = None
     # Křížová kontrola (#517 A) — None, dokud neběží shadow větev; status ji
     # čte z hlavní smyčky, proto musí být viditelná i při vypnutém shadow
     crosscheck: CrossCheckDetector | None = None
@@ -2026,10 +2043,11 @@ async def main() -> None:
         # Stínové CumΔ z TimeAndSale (#615 fáze 3, varianta B — rozhodnutí
         # uživatele 27. 8.): měřicí řada per symbol, živé CumΔ se nemění
         dx_shadows: dict[str, DxCumDeltaShadow] = {}
-        # Živá trade větev (ADR-0032, #615 fáze 3): streamer symbol → spec
-        # aktivního řetězu per instrument; tisky jdou do CumDeltaTrackeru
-        # pipeline. V režimu midpoint tracker jen měří pokrytí.
-        dx_universe: dict[str, dict[str, OptionContractSpec]] = {}
+        # Živá trade větev (ADR-0057 body 3 a 6, #1460): trasy streamer symbol
+        # → spec aktivního i sekundárního řetězu per instrument; tisky jdou do
+        # CumDeltaTrackeru řetězu. Pod midpointem tracker tisky jen měří (pokrytí).
+        trade_routes: dict[str, TradeRoutes] = {}
+        trade_monitor = TradeBranchMonitor()
         # Ad-hoc pohled přes tasty (#521, varianta C): žádné IBKR linky
         # Probuzení reconcileru subskripce (#206): ad-hoc pohled vznikne do
         # sekund, ale jeho striky posílá do DXLinku až `shadow_symbols_loop`.
@@ -2051,7 +2069,7 @@ async def main() -> None:
             tasty_cache.on_event(event_type, values)
             if trades_recorder is not None:
                 trades_recorder.on_event(event_type, values)
-            if (dx_shadows or dx_universe) and event_type == "TimeAndSale" and values:
+            if (dx_shadows or trade_routes) and event_type == "TimeAndSale" and values:
                 streamer = str(values[0])
                 state = tasty_cache.state(streamer)
                 trade_size = _number(values[3]) if len(values) > 3 else None
@@ -2063,14 +2081,16 @@ async def main() -> None:
                     dx_shadow.on_trade(
                         streamer, size=trade_size, aggressor=trade_side, delta=trade_delta
                     )
-                # Živé CumΔ (ADR-0032): tisk patří kontraktu jednoho instrumentu
-                for dx_symbol, universe in dx_universe.items():
-                    dx_spec = universe.get(streamer)
-                    if dx_spec is None:
-                        continue
+                # Živé CumΔ (ADR-0057 bod 6): tisk patří kontraktu jednoho řetězu
+                # jednoho instrumentu — aktivního, nebo sekundárního (vstup α)
+                for dx_symbol, routes in trade_routes.items():
                     dx_pipe = pipelines.get(dx_symbol)
-                    if dx_pipe is not None and dx_pipe.runtime.cum_delta is not None:
-                        dx_pipe.runtime.cum_delta.add_dx_trade(
+                    if dx_pipe is None:
+                        continue
+                    target = route_trade(routes, dx_pipe, streamer)
+                    if target is not None:
+                        dx_tracker, dx_spec = target
+                        dx_tracker.add_dx_trade(
                             dx_spec, size=trade_size, aggressor=trade_side, delta=trade_delta
                         )
             # CVD podkladu (#829): tracker si sám vybere jen printy
@@ -2086,9 +2106,26 @@ async def main() -> None:
         )
 
         def _dx_print_active(active_symbol: str) -> bool:
-            return bool(tasty_stream.connected) and active_symbol in dx_universe
+            # Okamžitý stav pro rozklad objemu pod midpointem (#1007, v5 beze
+            # změny); zdroj tisků čte verdikt minuty z `trade_monitor`
+            return bool(tasty_stream.connected) and active_symbol in trade_routes
 
         dx_print_active = _dx_print_active
+
+        def _trade_branch_sample(
+            now: dt.datetime, pipes: Mapping[str, InstrumentPipeline]
+        ) -> dict[str, str]:
+            return trade_monitor.sample(
+                now,
+                pipes,
+                trade_routes,
+                connected=tasty_stream.connected,
+                reconnects=tasty_stream.reconnects,
+                last_event_among=tasty_cache.last_event_among,
+            )
+
+        trade_branch_sample = _trade_branch_sample
+        on_pipeline_created = plan_wakeup.set
 
         stream_kpi = StreamKpi(
             report_path=settings.derived_dir.parent / "reports" / "tasty-kpi.jsonl",
@@ -2535,18 +2572,17 @@ async def main() -> None:
                             )
                             purpose["wide"] |= wide_syms
                             symbols |= wide_syms
-                        # Univerzum trade větve (ADR-0032) = aktivní řetěz
-                        # pipeline: streamer symbol → spec. Živé CumΔ ho čte
-                        # v `_tasty_event`; stín (#615 měření) nad týmž.
+                        # Trasy trade větve (ADR-0057 bod 6) = aktivní
+                        # i sekundární řetěz pipeline: streamer symbol → spec.
+                        # Živé CumΔ je čte v `_tasty_event`; stín (#615 měření,
+                        # vstup replaye — bod 7) jen aktivní část. Trasy se
+                        # obnovují jen s neprázdnou aktivní částí, jako dřív.
                         if pipe is not None:
                             active_specs = list(pipe.runtime.contracts)
-                            universe = {}
-                            for active_spec in active_specs:
-                                streamer_sym = chain.streamer_symbol(active_spec)
-                                if streamer_sym is not None:
-                                    universe[streamer_sym] = active_spec
+                            routes = build_routes(pipe, chain.streamer_symbol)
+                            universe = routes.active
                             if universe:
-                                dx_universe[symbol] = universe
+                                trade_routes[symbol] = routes
                             if universe and settings.tasty_dx_cumdelta:
                                 dx_shadow = dx_shadows.get(symbol)
                                 if dx_shadow is None:
@@ -3134,6 +3170,15 @@ async def main() -> None:
                     discovery_cache=discovery_cache,
                 )
                 setup_cooldown.succeeded(symbol)
+                # Trasy tisků nového řetězu hned (#1460): po rollu drží trasy
+                # vypršelý řetěz a zdroj tisků do jejich obnovy píše mezeru
+                created_tracker = pipelines[symbol].runtime.cum_delta
+                if (
+                    on_pipeline_created is not None
+                    and created_tracker is not None
+                    and created_tracker.prints
+                ):
+                    on_pipeline_created()
             except ConnectionError as exc:
                 # Spojení se rozpadlo uprostřed setupu (odhlášená TWS, restart
                 # Gateway). O symbolu to nevypovídá nic — cooldown by jen držel
@@ -3165,18 +3210,20 @@ async def main() -> None:
             last_full_minute = now
         else:
             run_list = [pipelines[symbol] for symbol in plan.start if symbol in pipelines]
-        # Rozklad objemu na tisky (#1007) smí říkat „struktura" jen když trade
-        # větev pro instrument opravdu běžela — jinak NULL. Týž stav jde jako
-        # vzorek do verdiktu minuty zdroje tisků (ADR-0057 bod 3); dočasně jen
-        # připojení a univerzum, čerstvost eventů a sekundár doplní #1460.
-        market_closed_now = is_market_closed(now)
+        # Rozklad objemu na tisky (#1007) smí pod midpointem říkat „struktura"
+        # jen když trade větev pro instrument opravdu běžela — jinak NULL.
         for run_pipe in run_list:
             if run_pipe.runtime.cum_delta is not None:
-                branch_active = dx_print_active(run_pipe.runtime.symbol)
-                run_pipe.runtime.cum_delta.dx_active = branch_active
-                run_pipe.runtime.cum_delta.observe(
-                    running=branch_active, market_closed=market_closed_now
-                )
+                run_pipe.runtime.cum_delta.dx_active = dx_print_active(run_pipe.runtime.symbol)
+        # Vzorek trade větve (ADR-0057 bod 3, #1460) pro trackery aktivního
+        # i sekundárního řetězu všech pipeline, ne jen těch v cyklu: tracker
+        # drží AND přes okno do svého `begin_cycle`, další vzorek ho jen zpřesní
+        try:
+            trade_branch_states = trade_branch_sample(dt.datetime.now(dt.UTC), pipelines)
+        except Exception:
+            # Bez vzorku `begin_cycle` minutu nepotvrdí → zdroj tisků zapíše mezeru
+            logger.exception("Vzorek trade větve selhal — minuta bez vzorku je mezera (#1460)")
+            trade_branch_states = {}
         results = await gather_metrics(run_list, now)
         # Roll expirace v jejím settle (#1331, ADR-0039 bod 2): pipeline, jejíž
         # expirace v `now` vypršela, právě proběhla posledním cyklem — prvním po
@@ -3305,10 +3352,15 @@ async def main() -> None:
                 partition_buffer_mb=round(writer.buffer_stats()["bytes"] / 1e6, 1),
                 # Zdroj znaménka CumΔ a denní pokrytí tisky (ADR-0032, #615
                 # krok 5) — UI ukazuje podíl objemu se stranou od burzy,
-                # ne smyšlenou šířku zóny; zdroj určuje mechanika (ADR-0057)
+                # ne smyšlenou šířku zóny; zdroj určuje mechanika (ADR-0057).
+                # Stav trade větve aktivního řetězu per symbol (ADR-0057 bod 10,
+                # jen API): running | gap | closed | off
                 cumdelta_source=LIVE_SOURCE,
                 cumdelta_coverage={
-                    pipe_symbol: pipe.runtime.cum_delta.day_stats()
+                    pipe_symbol: {
+                        **pipe.runtime.cum_delta.day_stats(),
+                        "trade_branch": trade_branch_states.get(pipe_symbol),
+                    }
                     for pipe_symbol, pipe in sorted(pipelines.items())
                     if pipe.runtime.cum_delta is not None
                 },

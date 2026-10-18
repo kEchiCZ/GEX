@@ -100,6 +100,7 @@ class CumDeltaCoverage:
 
     def as_dict(self) -> dict[str, float]:
         classified = self.printed_volume + self.unknown_volume + self.fallback_volume
+        total = classified + self.structured_volume
         return {
             "printed_volume": self.printed_volume,
             "unknown_volume": self.unknown_volume,
@@ -108,6 +109,9 @@ class CumDeltaCoverage:
             "dropped_no_delta": float(self.dropped_no_delta),
             # podíl klasifikovaného objemu se stranou od burzy
             "printed_share": self.printed_volume / classified if classified > 0 else 0.0,
+            # podíl tisků se stranou z CELÉHO přírůstku objemu včetně struktury
+            # (#1460) — pod tisky jediný objem s tokem; vzor `cumdelta_compare`
+            "printed_share_total": self.printed_volume / total if total > 0 else 0.0,
         }
 
 
