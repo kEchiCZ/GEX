@@ -44,9 +44,18 @@ def spec(right: str, strike: float = 7600.0) -> OptionContractSpec:
     )
 
 
+def sample(tracker: CumDeltaTracker, *, running: bool, market_closed: bool = False) -> None:
+    """Vzorek orchestrátoru: stav trade větve a v témž okamžiku řez tisků (#1460)."""
+    tracker.observe(running=running, market_closed=market_closed)
+    tracker.seal()
+
+
 def start_measured(tracker: CumDeltaTracker) -> None:
-    """Start za zavřeného trhu (hranice známá) s běžící trade větví → měřená minuta."""
-    tracker.observe(running=True, market_closed=True)
+    """Start za zavřeného trhu (hranice známá) s běžící trade větví → měřená minuta.
+
+    Tisky před voláním patří řádku této minuty, tisky po něm dalšímu (řez ve vzorku).
+    """
+    sample(tracker, running=True, market_closed=True)
     tracker.begin_cycle()
     assert tracker.minute_measured
 
@@ -54,7 +63,7 @@ def start_measured(tracker: CumDeltaTracker) -> None:
 def next_cycle(tracker: CumDeltaTracker, *samples: bool) -> None:
     """Vzorky „běží trade větev" za otevřeného trhu a začátek dalšího cyklu."""
     for running in samples:
-        tracker.observe(running=running, market_closed=False)
+        sample(tracker, running=running)
     tracker.begin_cycle()
 
 
@@ -76,6 +85,7 @@ def test_restore_net_volume_zachova_tisky_pred_prvnim_cyklem() -> None:
     tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
     tracker.add_dx_trade(spec("C"), 3.0, "BUY", 0.5)
     tracker.add_dx_trade(spec("P"), 2.0, "SELL", -0.5)
+    sample(tracker, running=True)  # vzorek před cyklem přesune tisky do denního netu
 
     tracker.restore_net_volume({spec("C"): 20.0, spec("P"): 5.0})
 
@@ -119,8 +129,8 @@ def test_golden_bar_branch_midpoint_test() -> None:
 def test_aggressor_bar_neda_tok_ani_net() -> None:
     """ADR-0057 bod 1–2: pod tisky bar jen rozkládá objem; kontrakt bez tisku je mimo tok."""
     tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
-    start_measured(tracker)
     tracker.add_dx_trade(spec("C"), size=2.0, aggressor="BUY", delta=0.5)  # +50
+    start_measured(tracker)
     contract = spec("P")
     assert tracker.add_bar(contract, 100.0, last=10.0, bid=10.0, ask=10.4, delta=-0.3) == 0.0
     # put bez tisku: midpoint by dal −1 × 20 × (−0.3) × 50 = +300, pod tisky nic
@@ -172,6 +182,8 @@ def test_net_volume_per_contract() -> None:  # ADR-0011, #222
     prints.add_dx_trade(put, size=5.0, aggressor="BUY", delta=-0.4)
     prints.add_dx_trade(put, size=2.0, aggressor="SELL", delta=-0.4)
     prints.add_dx_trade(put, size=9.0, aggressor="UNDEFINED", delta=-0.4)
+    assert prints.net_volume(put) == 0.0  # do denního až řezem ve vzorku (#1460)
+    prints.seal()
     assert prints.net_volume(put) == 3.0
     prints.reset()
     assert prints.net_volume(put) == 0.0
@@ -259,7 +271,7 @@ def load_dxfeed_golden() -> dict[str, Any]:
 
 
 def run_dxfeed_golden(source: str) -> tuple[CumDeltaTracker, list[float]]:
-    """Minuty jako v runtime: tisky → vzorek → `begin_cycle` → bar → `close_minute`.
+    """Minuty jako v runtime: tisky → vzorek s řezem → `begin_cycle` → bar → `close_minute`.
 
     `dx_active` bloku = běží trade větev: pod `midpoint` okamžitý příznak (v5),
     pod tisky vzorek verdiktu minuty (#1460). Engine startuje v minutě 1 za
@@ -280,7 +292,7 @@ def run_dxfeed_golden(source: str) -> tuple[CumDeltaTracker, list[float]]:
                 )
                 expected = item["expected_flow_aggressor"] if tracker.prints else 0.0
                 assert flow == pytest.approx(expected)
-        tracker.observe(running=running, market_closed=False)
+        sample(tracker, running=running)
         tracker.begin_cycle()
         bar_flows.append(
             tracker.add_bar(
@@ -320,6 +332,7 @@ def test_tisk_bez_delty_je_mimo_tok(source: str, net: float) -> None:
     contract = spec("C")
     assert tracker.add_dx_trade(contract, size=5.0, aggressor="BUY", delta=None) == 0.0
     assert tracker.add_dx_trade(contract, size=4.0, aggressor="UNDEFINED", delta=None) == 0.0
+    tracker.seal()  # pod tisky jde net do denního až řezem; midpoint řez nezná
     assert tracker.cum_delta == 0.0
     assert tracker.net_volume(contract) == net
     stats = tracker.day_stats()
@@ -334,6 +347,7 @@ def test_aggressor_net_volume_nese_stranu_od_burzy() -> None:
     tracker.add_bar(contract, 10.0, last=5.0, bid=5.0, ask=5.4, delta=-0.3)
     tracker.add_dx_trade(contract, size=4.0, aggressor="SELL", delta=-0.3)
     tracker.add_dx_trade(contract, size=1.0, aggressor="BUY", delta=-0.3)
+    tracker.seal()
     tracker.add_bar(contract, 15.0, last=5.0, bid=5.0, ask=5.4, delta=-0.3)
     assert tracker.net_volume(contract) == pytest.approx(-3.0)
 
@@ -341,8 +355,8 @@ def test_aggressor_net_volume_nese_stranu_od_burzy() -> None:
 def test_close_minute_aggressor_nese_zdroj_a_tok_z_tisku() -> None:
     """ADR-0057 bod 8: řádek nese zdroj `aggressor`, tok minuty jen z tisků se stranou."""
     tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
-    start_measured(tracker)
     tracker.add_dx_trade(spec("C"), size=2.0, aggressor="BUY", delta=0.5)  # +50
+    start_measured(tracker)
     ts = dt.datetime(2026, 10, 19, 14, 0, tzinfo=dt.UTC)
     assert tracker.close_minute(ts) == FlowRow(
         ts,
@@ -418,8 +432,8 @@ def test_breakdown_jen_pri_prirustku() -> None:
 
 # ── Pokrytí per minuta do řady flow (#1071) ───────────────────────────
 def test_pokryti_se_meri_v_rezimu_midpoint_a_jde_do_flow_row_po_minutach() -> None:
-    """#1071: v režimu midpoint se pokrytí měří jako v dxfeed (co by trade větev
-    pokryla) a FlowRow nese přírůstek za minutu, ne denní kumulativ."""
+    """#1071: v režimu midpoint se pokrytí měří stejně jako pod aggressor (co by trade
+    větev pokryla) a FlowRow nese přírůstek za minutu, ne denní kumulativ."""
     tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT)
     tracker.dx_active = True
     c = spec("C")
@@ -472,23 +486,23 @@ def test_mezera_je_null_a_cumdelta_pokracuje_od_merene_urovne() -> None:
     """Minuta s mezerou: flowΔ, CumΔ i pokrytí NULL; její tisky se do CumΔ nikdy nepřičtou."""
     tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
     c = spec("C")
-    start_measured(tracker)
     tracker.add_dx_trade(c, size=2.0, aggressor="BUY", delta=0.5)  # +50
+    start_measured(tracker)
     assert tracker.close_minute(GAP_TS).cum_delta == 50.0
 
-    next_cycle(tracker, False)  # trade větev spadla
     tracker.add_dx_trade(c, size=4.0, aggressor="BUY", delta=0.5)  # částečná minuta
-    assert tracker.cum_delta == 150.0  # průběžně včetně otevřené minuty
+    next_cycle(tracker, False)  # trade větev spadla
+    assert tracker.cum_delta == 150.0  # průběžně včetně neuzavřených tisků
     gap = tracker.close_minute(GAP_TS + dt.timedelta(minutes=1))
     assert gap == FlowRow(GAP_TS + dt.timedelta(minutes=1), None, None, source=SOURCE_AGGRESSOR)
     assert tracker.cum_delta == 50.0
 
-    next_cycle(tracker, True)  # hraniční vzorek byl „neběží" → i tahle minuta je mezera
     tracker.add_dx_trade(c, size=1.0, aggressor="SELL", delta=0.5)
+    next_cycle(tracker, True)  # hraniční vzorek byl „neběží" → i tahle minuta je mezera
     assert tracker.close_minute(GAP_TS + dt.timedelta(minutes=2)).flow_delta is None
 
-    next_cycle(tracker, True)
     tracker.add_dx_trade(c, size=1.0, aggressor="SELL", delta=0.5)  # −25
+    next_cycle(tracker, True)
     row = tracker.close_minute(GAP_TS + dt.timedelta(minutes=3))
     assert (row.flow_delta, row.cum_delta) == (-25.0, 25.0)  # od poslední měřené úrovně 50
 
@@ -501,14 +515,15 @@ def test_mezera_vrati_net_castecne_minuty_ale_ne_seed() -> None:
     """
     tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
     c, p = spec("C"), spec("P")
-    tracker.add_dx_trade(c, size=3.0, aggressor="BUY", delta=0.5)  # tisk před prvním cyklem
+    # Tisky před prvním vzorkem po startu
+    tracker.add_dx_trade(c, size=3.0, aggressor="BUY", delta=0.5)
+    tracker.add_dx_trade(c, size=4.0, aggressor="BUY", delta=None)  # bez delty, jen net
+    tracker.add_dx_trade(p, size=2.0, aggressor="SELL", delta=-0.5)
     next_cycle(tracker, True)  # první vzorek po startu: hranice neznámá
     assert not tracker.minute_measured
     tracker.restore_cum(1000.0)
     tracker.restore_net_volume({c: 20.0})
-    tracker.add_dx_trade(c, size=4.0, aggressor="BUY", delta=None)  # bez delty, jen net
-    tracker.add_dx_trade(p, size=2.0, aggressor="SELL", delta=-0.5)
-    assert tracker.net_volumes() == {c: 27.0, p: -2.0}  # FA a netflow vidí net hned
+    assert tracker.net_volumes() == {c: 27.0, p: -2.0}  # FA a netflow vidí net do řezu
 
     assert tracker.close_minute(GAP_TS).cum_delta is None
 
@@ -527,9 +542,9 @@ def test_pokryti_a_rozklad_jen_z_merenych_minut() -> None:
     tracker.add_volume(p, 50.0)
     tracker.close_minute(GAP_TS)
 
-    next_cycle(tracker, False)  # mezera: C dostane bar, P ne (zmrzlá kotace)
     tracker.add_dx_trade(c, size=3.0, aggressor="BUY", delta=0.5)
     tracker.add_dx_trade(p, size=3.0, aggressor="BUY", delta=-0.5)
+    next_cycle(tracker, False)  # mezera: C dostane bar, P ne (zmrzlá kotace)
     tracker.add_volume(c, 110.0)
     assert tracker.take_breakdowns()[c] == BarBreakdown(10.0, None, None)
     tracker.close_minute(GAP_TS + dt.timedelta(minutes=1))
@@ -537,9 +552,9 @@ def test_pokryti_a_rozklad_jen_z_merenych_minut() -> None:
     next_cycle(tracker, True)  # druhá minuta mezery: C dostane bar i v ní
     tracker.add_volume(c, 110.0)
     tracker.close_minute(GAP_TS + dt.timedelta(minutes=2))
-    next_cycle(tracker, True)
     tracker.add_dx_trade(c, size=2.0, aggressor="BUY", delta=0.5)
     tracker.add_dx_trade(p, size=1.0, aggressor="SELL", delta=-0.5)
+    next_cycle(tracker, True)
     tracker.add_volume(c, 115.0)  # od baru v mezeře jen měřené tisky
     tracker.add_volume(p, 60.0)  # od baru před mezerou: tisky neúplné
     breakdowns = tracker.take_breakdowns()
@@ -559,12 +574,12 @@ def test_pokryti_a_rozklad_jen_z_merenych_minut() -> None:
 def test_zavreny_trh_mezeru_nedela() -> None:
     """Víkend, pauza i start enginu za zavřeného trhu: řádek je měřená nula, ne NULL."""
     tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
-    tracker.observe(running=False, market_closed=True)  # start v pauze, tasty odpojené
+    sample(tracker, running=False, market_closed=True)  # start v pauze, tasty odpojené
     tracker.begin_cycle()
     row = tracker.close_minute(GAP_TS)
     assert (row.flow_delta, row.cum_delta, row.printed_volume) == (0.0, 0.0, 0.0)
 
-    tracker.observe(running=False, market_closed=True)
+    sample(tracker, running=False, market_closed=True)
     tracker.begin_cycle()
     assert tracker.close_minute(GAP_TS + dt.timedelta(minutes=1)).flow_delta == 0.0
     # Open: hraniční vzorek z pauzy platí, rozhoduje stav trade větve v openu
@@ -574,7 +589,7 @@ def test_zavreny_trh_mezeru_nedela() -> None:
     # Zavření trhu: minuta před ním bez trade větve je mezera i se vzorkem z pauzy
     next_cycle(tracker, False)
     tracker.close_minute(GAP_TS + dt.timedelta(minutes=3))
-    tracker.observe(running=False, market_closed=True)
+    sample(tracker, running=False, market_closed=True)
     tracker.begin_cycle()
     assert not tracker.minute_measured
 
@@ -617,7 +632,7 @@ def test_reset_seance_verdikt_a_vzorky_nemaze() -> None:
     start_measured(tracker)
     tracker.close_minute(GAP_TS)
     tracker.roll_session(dt.date(2026, 10, 20))
-    tracker.observe(running=True, market_closed=False)  # vzorek openu (orchestrátor)
+    sample(tracker, running=True)  # vzorek a řez openu (orchestrátor)
     assert tracker.roll_session(dt.date(2026, 10, 21))  # reset kumulativů v run_cycle
     tracker.begin_cycle()
     assert tracker.minute_measured
@@ -632,6 +647,122 @@ def test_midpoint_mezeru_nezna() -> None:
     tracker.add_bar(spec("C"), 110.0, 10.3, 10.0, 10.4, delta=0.5)  # +250
     row = tracker.close_minute(GAP_TS)
     assert (row.flow_delta, row.cum_delta, row.printed_volume) == (250.0, 250.0, None)
+
+
+# ── Řez tisků ve vzorku (#1460, review 1a) ─────────────────────────────
+def test_tisky_po_rezu_patri_dalsimu_radku() -> None:
+    """Řádek M nese tisky (vzorek M−1, vzorek M] — tok, net i tiskové pokrytí."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    c = spec("C")
+    tracker.add_dx_trade(c, size=2.0, aggressor="BUY", delta=0.5)  # +50 před vzorkem M
+    start_measured(tracker)
+    tracker.add_dx_trade(c, size=1.0, aggressor="SELL", delta=0.5)  # −25 během cyklu M
+    assert tracker.net_volumes() == {c: 2.0}  # FA a netflow cyklu M jen do řezu
+    row = tracker.close_minute(GAP_TS)
+    assert (row.flow_delta, row.cum_delta, row.printed_volume) == (50.0, 50.0, 2.0)
+    assert tracker.cum_delta == 25.0  # průběžně i s neuzavřeným tiskem
+
+    next_cycle(tracker, True)
+    row = tracker.close_minute(GAP_TS + dt.timedelta(minutes=1))
+    assert (row.flow_delta, row.cum_delta, row.printed_volume) == (-25.0, 25.0, 1.0)
+    assert tracker.net_volumes() == {c: 1.0}
+
+
+def test_mezera_vrati_jen_usek_do_rezu_bez_rezu_i_otevreny() -> None:
+    """Mezera zahodí tisky do řezu, tisky po řezu nese další řádek. Cyklus bez
+    vzorku (a řezu) nedokládá nic ani u otevřeného úseku — zahodí se i ten."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    c = spec("C")
+    start_measured(tracker)
+    tracker.close_minute(GAP_TS)
+    tracker.add_dx_trade(c, size=4.0, aggressor="BUY", delta=0.5)  # minuta s pádem streamu
+    tracker.observe(running=False, market_closed=False)  # reconnect mezi vzorky (monitor)
+    sample(tracker, running=True)  # stream v okamžiku vzorku zase běží
+    tracker.begin_cycle()
+    assert not tracker.minute_measured
+    tracker.add_dx_trade(c, size=2.0, aggressor="BUY", delta=0.5)  # po řezu, +50
+    assert tracker.close_minute(GAP_TS + dt.timedelta(minutes=1)).cum_delta is None
+    assert tracker.net_volumes() == {c: 0.0}
+    assert tracker.day_stats()["printed_volume"] == 2.0  # otevřený úsek zůstává
+
+    next_cycle(tracker, True)  # hraniční vzorek „běží" → měřená
+    row = tracker.close_minute(GAP_TS + dt.timedelta(minutes=2))
+    assert (row.flow_delta, row.cum_delta, row.printed_volume) == (50.0, 50.0, 2.0)
+    assert tracker.net_volumes() == {c: 2.0}
+
+    tracker.add_dx_trade(c, size=1.0, aggressor="SELL", delta=0.5)
+    tracker.begin_cycle()  # vzorek selhal: žádný vzorek ani řez
+    assert not tracker.minute_measured
+    tracker.add_dx_trade(c, size=3.0, aggressor="SELL", delta=0.5)
+    assert tracker.close_minute(GAP_TS + dt.timedelta(minutes=3)).cum_delta is None
+    next_cycle(tracker, True)
+    row = tracker.close_minute(GAP_TS + dt.timedelta(minutes=4))
+    assert (row.flow_delta, row.cum_delta, row.printed_volume) == (0.0, 50.0, 0.0)
+    assert tracker.net_volumes() == {c: 2.0}
+    assert tracker.day_stats()["printed_volume"] == 2.0
+
+
+# ── Tisky nové seance před rollem trackeru (#1460, review 1a) ─────────
+#: Pondělí 19. 10. 2026 16:59 CDT (pauza, seance 19. 10.) a open 17:00 CDT (seance 20. 10.)
+PAUSE_LAST = dt.datetime(2026, 10, 19, 21, 59, tzinfo=dt.UTC)
+OPEN_TS = dt.datetime(2026, 10, 19, 22, 0, tzinfo=dt.UTC)
+SESSION_D = dt.date(2026, 10, 19)
+SESSION_NEXT = dt.date(2026, 10, 20)
+
+
+def _pause_minute_with_next_session_print(tracker: CumDeltaTracker) -> FlowRow:
+    """Cyklus 16:59 CT; tisk po 17:00:00 přijde dřív, než cyklus minutu uzavře."""
+    tracker.roll_session(SESSION_D)
+    sample(tracker, running=False, market_closed=True)
+    tracker.begin_cycle()
+    tracker.add_dx_trade(spec("C"), 2.0, "BUY", 0.5, session_date=SESSION_NEXT)  # +50
+    return tracker.close_minute(PAUSE_LAST)
+
+
+def test_tisky_nove_seance_pred_rollem_nese_prvni_radek() -> None:
+    """Roll v `run_cycle` přijde až po sweepu: tisky od openu nesmaže, nese je řádek 17:00."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    c = spec("C")
+    row = _pause_minute_with_next_session_print(tracker)
+    assert (row.flow_delta, row.printed_volume) == (0.0, 0.0)
+    assert tracker.net_volumes() == {}  # ani v netu seance D
+
+    sample(tracker, running=True)  # vzorek a řez openu 17:00
+    tracker.add_dx_trade(c, 1.0, "SELL", 0.5, session_date=SESSION_NEXT)  # po řezu, −25
+    assert tracker.roll_session(SESSION_NEXT)
+    tracker.begin_cycle()
+    assert tracker.minute_measured
+    assert tracker.net_volumes() == {c: 2.0}
+    row = tracker.close_minute(OPEN_TS)
+    assert (row.flow_delta, row.cum_delta, row.printed_volume) == (50.0, 50.0, 2.0)
+
+    next_cycle(tracker, True)
+    row = tracker.close_minute(OPEN_TS + dt.timedelta(minutes=1))
+    assert (row.flow_delta, row.cum_delta) == (-25.0, 25.0)
+    assert tracker.net_volumes() == {c: 1.0}
+
+
+def test_tisky_nove_seance_v_mezere_openu_se_vrati() -> None:
+    """Mezera v 17:00: tisky od openu se vrátí stejně jako ostatní tisky minuty."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    _pause_minute_with_next_session_print(tracker)
+    sample(tracker, running=False)  # open bez trade větve
+    assert tracker.roll_session(SESSION_NEXT)
+    tracker.begin_cycle()
+    assert not tracker.minute_measured
+    assert tracker.close_minute(OPEN_TS).cum_delta is None
+    assert tracker.net_volumes() == {spec("C"): 0.0}
+    assert tracker.day_stats()["printed_volume"] == 0.0
+
+
+def test_midpoint_seanci_tisku_necte() -> None:
+    """Mechanika v5 beze změny: tisk jde do pokrytí hned a reset seance ho smaže jako dřív."""
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT)
+    tracker.roll_session(SESSION_D)
+    tracker.add_dx_trade(spec("C"), 2.0, "BUY", 0.5, session_date=SESSION_NEXT)
+    assert tracker.day_stats()["printed_volume"] == 2.0
+    assert tracker.roll_session(SESSION_NEXT)
+    assert tracker.day_stats()["printed_volume"] == 0.0
 
 
 # --- flow_window_sum: sklon CumΔ za okno v seanci (#1460 krok 3, ADR-0057 bod 4) ---

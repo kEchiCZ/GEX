@@ -2087,7 +2087,11 @@ async def main() -> None:
                         streamer, size=trade_size, aggressor=trade_side, delta=trade_delta
                     )
                 # Živé CumΔ (ADR-0057 bod 6): tisk patří kontraktu jednoho řetězu
-                # jednoho instrumentu — aktivního, nebo sekundárního (vstup α)
+                # jednoho instrumentu — aktivního, nebo sekundárního (vstup α).
+                # Seance podle času příjmu (jako vzorek trade větve): roll trackeru
+                # v `run_cycle` přijde až po sweepu a tisky od openu do té doby
+                # čekají stranou, místo aby je reset smazal (#1460)
+                trade_session = trading_session_date(dt.datetime.now(dt.UTC))
                 for dx_symbol, routes in trade_routes.items():
                     dx_pipe = pipelines.get(dx_symbol)
                     if dx_pipe is None:
@@ -2096,7 +2100,11 @@ async def main() -> None:
                     if target is not None:
                         dx_tracker, dx_spec = target
                         dx_tracker.add_dx_trade(
-                            dx_spec, size=trade_size, aggressor=trade_side, delta=trade_delta
+                            dx_spec,
+                            size=trade_size,
+                            aggressor=trade_side,
+                            delta=trade_delta,
+                            session_date=trade_session,
                         )
             # CVD podkladu (#829): tracker si sám vybere jen printy
             # registrovaných front futures, opční projdou bez práce
@@ -3248,11 +3256,14 @@ async def main() -> None:
                 run_pipe.runtime.cum_delta.dx_active = dx_print_active(run_pipe.runtime.symbol)
         # Vzorek trade větve (ADR-0057 bod 3, #1460) pro trackery aktivního
         # i sekundárního řetězu všech pipeline, ne jen těch v cyklu: tracker
-        # drží AND přes okno do svého `begin_cycle`, další vzorek ho jen zpřesní
+        # drží AND přes okno do svého `begin_cycle`, další vzorek ho jen zpřesní.
+        # V témž okamžiku se řežou tisky (`seal`) — řádek minuty nese tisky mezi
+        # dvěma vzorky, ne do uzávěrky po sweepu, kterou žádný vzorek nepokrývá
         try:
             trade_branch_states = trade_branch_sample(dt.datetime.now(dt.UTC), pipelines)
         except Exception:
-            # Bez vzorku `begin_cycle` minutu nepotvrdí → zdroj tisků zapíše mezeru
+            # Bez vzorku a řezu `begin_cycle` minutu nepotvrdí → zdroj tisků zapíše
+            # mezeru a zahodí i tisky od posledního řezu
             logger.exception("Vzorek trade větve selhal — minuta bez vzorku je mezera (#1460)")
             trade_branch_states = {}
         results = await gather_metrics(run_list, now)

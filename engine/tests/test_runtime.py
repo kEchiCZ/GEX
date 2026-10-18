@@ -751,6 +751,12 @@ async def test_netflow_seed_obnovi_i_stranu_mimo_pasmo(tmp_path: Path) -> None:
     assert list(side["net_volume"]) == [130.0]
 
 
+def _sample(tracker: CumDeltaTracker, *, running: bool, market_closed: bool = False) -> None:
+    """Vzorek orchestrátoru před cyklem: stav trade větve a řez tisků (#1460)."""
+    tracker.observe(running=running, market_closed=market_closed)
+    tracker.seal()
+
+
 def _prints_runtime(
     tmp_path: Path, *, secondary: bool = False
 ) -> tuple[EngineRuntime, RecordingPublisher, Settings, CumDeltaTracker]:
@@ -767,10 +773,10 @@ async def test_v6_mezera_je_null_bez_netflow_a_fa(tmp_path: Path) -> None:
     engine_runtime, publisher, settings, tracker = _prints_runtime(tmp_path)
     c = _spec(7600.0, "C")
     tracker.add_dx_trade(c, 3.0, "BUY", 0.5)  # tisk před prvním cyklem: částečná minuta
-    tracker.observe(running=True, market_closed=False)
+    _sample(tracker, running=True)
     await engine_runtime.run_cycle(TS, SPOT, [])  # restart za otevřeného trhu → mezera
     tracker.add_dx_trade(c, 2.0, "BUY", 0.5)  # +50
-    tracker.observe(running=True, market_closed=False)
+    _sample(tracker, running=True)
     await engine_runtime.run_cycle(TS + dt.timedelta(minutes=1), SPOT, [])
 
     day = TS.date().isoformat()
@@ -797,7 +803,7 @@ async def test_v6_mezera_je_null_bez_netflow_a_fa(tmp_path: Path) -> None:
 async def test_v6_zavreny_trh_zapise_nulu_ne_mezeru(tmp_path: Path) -> None:
     """ADR-0057 bod 3: při zavřeném trhu mezera nevzniká, ani hned po startu enginu."""
     engine_runtime, _publisher, settings, tracker = _prints_runtime(tmp_path)
-    tracker.observe(running=False, market_closed=True)  # pauza Globexu, tasty odpojené
+    _sample(tracker, running=False, market_closed=True)  # pauza Globexu, tasty odpojené
     await engine_runtime.run_cycle(PAUSE, SPOT, [])
 
     flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{PAUSE.date()}.parquet")
@@ -808,13 +814,13 @@ async def test_v6_sekundar_uzavre_minutu_a_vrati_net_mezery(tmp_path: Path) -> N
     """#1460: sekundár (vstup kalibrace α) uzavírá minutu — net mezery se vrátí, flow nepíše."""
     engine_runtime, _publisher, settings, tracker = _prints_runtime(tmp_path, secondary=True)
     c = _spec(7600.0, "C")
-    tracker.observe(running=True, market_closed=False)
     tracker.add_dx_trade(c, 3.0, "BUY", 0.5)
+    _sample(tracker, running=True)
     await engine_runtime.run_cycle(TS, SPOT, [])  # mezera (start za otevřeného trhu)
     assert tracker.net_volumes() == {c: 0.0}
-    for _minute in range(3):  # cyklus sekundáru po 3 minutách, vzorek každou minutu
-        tracker.observe(running=True, market_closed=False)
     tracker.add_dx_trade(c, 2.0, "SELL", 0.5)
+    for _minute in range(3):  # cyklus sekundáru po 3 minutách, vzorek každou minutu
+        _sample(tracker, running=True)
     await engine_runtime.run_cycle(TS + dt.timedelta(minutes=3), SPOT, [])
 
     assert tracker.net_volumes() == {c: -2.0}
@@ -849,7 +855,7 @@ async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path, mechanics: str)
         if prints is not None:
             if minute == 1:
                 prints.add_dx_trade(_spec(7600.0, "C"), 3.0, "BUY", 0.5)
-            prints.observe(running=True, market_closed=False)
+            _sample(prints, running=True)
         await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
 
     day = TS.date().isoformat()
@@ -1053,7 +1059,7 @@ async def test_fallback_retezu_prebira_kotace_cumdelta_podle_mechaniky(
         engine_runtime.cum_delta = tracker
         tracker.observe(running=False, market_closed=True)  # start v pauze: hranice známá
         tracker.add_dx_trade(_spec(7600.0, "C"), 4.0, "BUY", 0.5)  # +4 × 0.5 × 50 = +100
-        tracker.observe(running=running, market_closed=False)
+        _sample(tracker, running=running)
     specs = list(engine_runtime.contracts)
     substitute = {
         spec: CachedQuote(

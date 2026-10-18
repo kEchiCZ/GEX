@@ -1,8 +1,9 @@
 """Stínové CumΔ z dxFeed TimeAndSale (#615 fáze 3, shadow — rozhodnutí 27. 8.).
 
-Živé CumΔ (SPEC 4.5) se NEMĚNÍ a detektory z téhle řady nečtou nic. Modul
-počítá paralelní minutovou řadu z TimeAndSale eventů (aggressorSide přímo od
-burzy) nad aktivním řetězem, rozdělenou po zónách vlastnictví (ADR-0025):
+Živé detektory z téhle řady nečtou; od v6 je vstupem replaye a brány parity
+stín ↔ živá 1A (ADR-0057 bod 7). Modul počítá paralelní minutovou řadu
+z TimeAndSale eventů (aggressorSide přímo od burzy) nad aktivním řetězem,
+původně rozdělenou po zónách vlastnictví (ADR-0025):
 
 - **hot zóna ATM±1**: vlastní IBKR tick-by-tick — tady se měří jen pro
   srovnání obou zdrojů nad týmž tokem,
@@ -10,14 +11,16 @@ burzy) nad aktivním řetězem, rozdělenou po zónách vlastnictví (ADR-0025):
   midpoint testu — hlavní řada,
 - **mimo ±15**: ignoruje se (vlastnictví se nemění).
 
+Od doplňku ADR-0032 (4. 9. 2026) zóny neplatí: prstenec je celý sbíraný
+řetěz a hot zóna zůstává ve schématu nulová (viz níže).
+
 Spread legy se NEROZLIŠUJÍ (rozhodnutí 3. 9. 2026, ADR-0027 doplněk):
 CME Market Data příznak `spreadLeg` pro futures opce nenese, dxFeed ho posílá
 konstantně false a alternativní pole neexistuje (potvrzeno podporou
 tastytrade). Řada „bez spreadů" i podíl spread legů byly proto výstupem
 mrtvého čidla a jsou pryč — nohy spreadů jsou v toku stejně jako v dnešní
-IBKR tick-by-tick řadě. Trady bez určené strany se do toku nezapočítávají
-a počítají se zvlášť — pokrytí aggressorSide rozhoduje, jestli midpoint
-fallback zůstává.
+IBKR tick-by-tick řadě. Trady bez určené strany jdou mimo tok (ADR-0057 bod 2)
+a počítají se zvlášť jako pokrytí.
 """
 
 import datetime as dt
@@ -135,7 +138,10 @@ class DxCumDeltaShadow:
         self._seeded_from = state.ts_min
 
     def day_stats(self) -> dict[str, object]:
-        """Denní souhrn pro /status: pokrytí strany rozhoduje o midpoint fallbacku."""
+        """Denní souhrn pro /status: pokrytí tisků stranou (aggressorSide).
+
+        Tisky bez strany jdou mimo tok.
+        """
         return {
             "cum_ring": self._cum_ring,
             "cum_hot": self._cum_hot,

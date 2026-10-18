@@ -1,6 +1,6 @@
 """Měření #1018: stínové CumΔ z dxFeed tisků vs. živá midpoint řada (#615 krok 3/6).
 
-Podklad pro rozhodnutí o přepnutí `GEXLENS_CUMDELTA_SOURCE=dxfeed`. Nad
+Podklad verdiktu #1018 a ADR-0057 (klíč `GEXLENS_CUMDELTA_SOURCE` zrušen v #1460). Nad
 uloženými řadami v `derived/` spočítá per obchodní seanci (Globex, #512:
 22:00 UTC D−1 → 22:00 UTC D v létě) a symbol, jak se liší:
 
@@ -35,8 +35,8 @@ jde soustavně proti ceně i proti CVD, čte stranu agresora obráceně.
 Víkendy a svátky (`settle.is_trading_session`) se nevypisují — engine píše
 ploché partice i při zavřeném trhu.
 
-Hybrid režimu `dxfeed` (`--hybrid`, #1459): řada, jak ji režim `dxfeed` píše
-dnes — tisky se stranou (stín) + midpoint tok kontrakt-minut bez jediného
+Zrušený hybrid `dxfeed` (do #1460; `--hybrid`, #1459): řada, jak ji režim `dxfeed`
+psal — tisky se stranou (stín) + midpoint tok kontrakt-minut bez jediného
 tisku (`printvol.printed` 0 nebo NULL), složený z přírůstků `netflow` × delta
 ze `snapshots` × multiplikátor. Metoda se ověřuje rekonstrukcí celé živé
 midpoint řady proti uložené `flow_delta` (sloupec „rekonstrukce"; seance, kde
@@ -377,7 +377,7 @@ def run(
 ) -> tuple[list[SessionComparison], list[Summary], list[SessionComparison], Alignments, Hybrids]:
     """(všechny seance, souhrny, použitelné seance, shoda s cenou, hybrid per seance).
 
-    `snapshots_dir` zapne hybrid režimu `dxfeed` (#1459); bez něj je slovník prázdný.
+    `snapshots_dir` zapne zrušený hybrid `dxfeed` (do #1460, #1459); bez něj je slovník prázdný.
     Shoda s cenou bez použitelného hybridu (rekonstrukce nesedí) sloupce hybridu nemá."""
     results: list[SessionComparison] = []
     for symbol in symbols:
@@ -436,7 +436,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--hybrid",
         action="store_true",
-        help="i hybrid režimu dxfeed: tisky + midpoint fallback kontrakt-minut bez tisku (#1459)",
+        help="i zrušený hybrid dxfeed (do #1460): tisky + midpoint fallback kontrakt-minut"
+        " bez tisku (#1459)",
     )
     parser.add_argument(
         "--snapshots",

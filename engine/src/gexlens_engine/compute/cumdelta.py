@@ -14,16 +14,18 @@ Zdroj znaménka toku a čistého objemu určuje mechanika setupů (#1460):
 CumΔ se resetuje na začátku obchodního dne (session start řídí engine).
 
 Mezera (ADR-0057 bod 3, jen `aggressor`): orchestrátor každou minutu hlásí stav
-trade větve (`observe`), `begin_cycle` z něj zafixuje verdikt minuty. Minuta
-s mezerou má v řadě flowΔ i CumΔ NULL, její tisky se zahodí (i z čistého
-objemu) a CumΔ pokračuje od poslední měřené úrovně; při zavřeném trhu mezera
-nevzniká.
+trade větve (`observe`) a v témž okamžiku řeže tisky (`seal`), takže interval
+řádku M je (vzorek M−1, vzorek M] a oba jeho konce pokrývá vzorek. `begin_cycle`
+ze vzorků zafixuje verdikt minuty. Minuta s mezerou má v řadě flowΔ i CumΔ NULL,
+její tisky se zahodí (i z čistého objemu) a CumΔ pokračuje od poslední měřené
+úrovně; při zavřeném trhu mezera nevzniká.
 """
 
 import datetime as dt
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
 from gexlens_engine.compute.setups import CUMDELTA_PRINTS
@@ -143,6 +145,16 @@ class FlowRow:
     dropped_no_delta: int | None = None
 
 
+class _PendingPrint(NamedTuple):
+    """Tisk další seance přijatý před rollem trackeru — čeká na reset (#1460)."""
+
+    session_date: dt.date
+    spec: OptionContractSpec
+    size: float
+    aggressor: str | None
+    delta: float | None
+
+
 def midpoint_sign(last: float, bid: float, ask: float) -> int:
     """Midpoint test (SPEC 4.5): last nad midem → +1, pod → −1, přesně na midu → 0."""
     mid = (bid + ask) / 2.0
@@ -181,12 +193,28 @@ class CumDeltaTracker:
         self._net_volume: dict[OptionContractSpec, float] = {}
         # Obchodní den (Globex seance), ke kterému kumulativ patří (#638)
         self._session_date: dt.date | None = None
-        # Model mezery (ADR-0057 bod 3), jen zdroj `aggressor`: tok tisků čeká
-        # v `_minute_flow` na verdikt minuty, čistý objem jde do `_net_volume`
-        # hned (FA a netflow ho čtou uprostřed cyklu) a `_minute_net` drží jeho
-        # přírůstek z otevřené minuty pro návrat při mezeře. Seed z partic
-        # (`restore_*`) do minuty nepatří, takže se s ní nevrací.
+        # Model mezery (ADR-0057 bod 3), jen zdroj `aggressor`. Tisky od
+        # posledního řezu (`seal` ve vzorku) leží v otevřeném úseku
+        # (`_minute_flow`, `_minute_net`), řez je přesune do uzavřeného, který
+        # čeká na verdikt v `close_minute`; tisky po řezu patří dalšímu řádku.
+        # Čistý objem jde do `_net_volume` až řezem — FA a netflow čtou uprostřed
+        # cyklu net do posledního řezu, tedy jen tisky, které verdikt pokrývá.
+        # `_sealed_net` drží přírůstek uzavřeného úseku pro návrat při mezeře;
+        # seed z partic (`restore_*`) do úseku nepatří, takže se s ním nevrací.
         self._minute_net: dict[OptionContractSpec, float] = {}
+        self._sealed_flow = 0.0
+        self._sealed_net: dict[OptionContractSpec, float] = {}
+        # Proběhl od poslední uzávěrky řez? Reset seance ho nemaže — vzorek
+        # openu přijde před resetem v `run_cycle`
+        self._sealed = False
+        # Denní čítače pokrytí v okamžiku posledního řezu: tiskové pokrytí
+        # řádku sedí na tentýž interval jako jeho tok
+        self._coverage_at_seal = CumDeltaCoverage()
+        # Tisky další seance přijaté před rollem trackeru (#1460): reset běží
+        # v `run_cycle` až po sweepu a tisky od openu 17:00 CT by jinak smazal.
+        # `_next_session_sealed` = kolik z nich přišlo před posledním řezem.
+        self._next_session: list[_PendingPrint] = []
+        self._next_session_sealed = 0
         # Kontrakty, jejichž tisky od posledního baru zasáhla mezera — rozklad
         # dalšího přírůstku by z nich tisky podhodnotil
         self._tainted: set[OptionContractSpec] = set()
@@ -203,9 +231,9 @@ class CumDeltaTracker:
 
     @property
     def cum_delta(self) -> float:
-        """Průběžná CumΔ včetně otevřené minuty; pod tisky ji potvrdí až `close_minute`."""
+        """Průběžná CumΔ včetně neuzavřených tisků; pod tisky ji potvrdí až `close_minute`."""
         if self.prints:
-            return self._cum + self._minute_flow
+            return self._cum + self._sealed_flow + self._minute_flow
         return self._cum
 
     @property
@@ -225,13 +253,14 @@ class CumDeltaTracker:
     def observe(self, *, running: bool, market_closed: bool) -> None:
         """Vzorek stavu trade větve; orchestrátor ho dává každou minutu (ADR-0057 bod 3).
 
-        Minuta je měřená, když hraniční vzorek (poslední z minulého okna) i
-        všechny vzorky do `begin_cycle` říkají „běží", nebo „trh zavřený" — při
-        zavřeném trhu mezera nevzniká a tok je 0. Sekundární řetěz s cyklem po
-        N minutách tak dostane AND přes celé své okno. Hranice prvního okna po
-        startu procesu známá není: za zavřeného trhu nic nechybí, za otevřeného
-        tracker neviděl tisky před svým vznikem → první minuta je mezera
-        a restart je v řadě vidět.
+        Hned po něm následuje řez tisků (`seal`), takže vzorky ohraničují
+        interval řádku. Minuta je měřená, když hraniční vzorek (poslední
+        z minulého okna) i všechny vzorky do `begin_cycle` říkají „běží", nebo
+        „trh zavřený" — při zavřeném trhu mezera nevzniká a tok je 0. Sekundární
+        řetěz s cyklem po N minutách tak dostane AND přes celé své okno. Hranice
+        prvního okna po startu procesu známá není: za zavřeného trhu nic
+        nechybí, za otevřeného tracker neviděl tisky před svým vznikem → první
+        minuta je mezera a restart je v řadě vidět.
         """
         ok = running or market_closed
         if self._window_ok is None:
@@ -245,18 +274,47 @@ class CumDeltaTracker:
         """Zafixuje verdikt minuty pro celý cyklus a otevře další okno vzorků.
 
         Rozklad barů, netflow, FA i `close_minute` čtou týž verdikt, i když tisky
-        chodí mezi awaity cyklu. Bez vzorku od minulého cyklu není nic doloženo
-        → mezera. Minutu, kterou spadlý cyklus neuzavřel, nese i tento — měřená
-        je jen tehdy, byl-li měřený i ten. Při mezeře se kontrakty se stavem
-        objemu označí: tisky od jejich posledního baru jsou neúplné, i když bar
-        přijde až v měřené minutě.
+        chodí mezi awaity cyklu. Bez vzorku a řezu od minulého cyklu není nic
+        doloženo → mezera. Minutu, kterou spadlý cyklus neuzavřel, nese i tento —
+        měřená je jen tehdy, byl-li měřený i ten. Při mezeře se kontrakty se
+        stavem objemu označí: tisky od jejich posledního baru jsou neúplné, i když
+        bar přijde až v měřené minutě.
         """
         carried = self._verdict if self._cycle_open else True
-        self._verdict = bool(self._window_ok) and carried
+        cut = self._sealed or not self.prints
+        self._verdict = bool(self._window_ok) and carried and cut
         self._window_ok = None
         self._cycle_open = True
         if self.prints and not self._verdict:
             self._tainted.update(self._last_volume)
+
+    def seal(self) -> None:
+        """Řez tisků v okamžiku vzorku; orchestrátor ho volá hned po `observe` (#1460).
+
+        Interval řádku M je (vzorek M−1, vzorek M], takže oba jeho konce pokrývá
+        vzorek a verdikt (hraniční vzorek ∧ vzorky okna ∧ žádný reconnect mezi
+        nimi) sedí přesně na tisky řádku. Uzávěrka minuty běží až po sweepu
+        a zápisech (u druhého instrumentu i po celém cyklu prvního): výpadek
+        mezi vzorkem a uzávěrkou by bez řezu skončil v řádku, který verdikt
+        označil za měřený (ADR-0057 bod 3: částečná minuta je NULL celá).
+        Tisky po řezu patří dalšímu řádku, čistý objem jde do denního až řezem.
+        Pod midpointem (v5) se nepoužije — minuta trvá do `close_minute` jako dřív.
+        """
+        if not self.prints:
+            return
+        self._cut()
+        self._sealed = True
+        self._next_session_sealed = len(self._next_session)
+
+    def _cut(self) -> None:
+        """Otevřený úsek tisků → uzavřený (tok, čistý objem, stav tiskového pokrytí)."""
+        self._sealed_flow += self._minute_flow
+        self._minute_flow = 0.0
+        for spec, net in self._minute_net.items():
+            self._net_volume[spec] = self._net_volume.get(spec, 0.0) + net
+            self._sealed_net[spec] = self._sealed_net.get(spec, 0.0) + net
+        self._minute_net.clear()
+        self._coverage_at_seal = CumDeltaCoverage(**vars(self._coverage))
 
     def day_stats(self) -> dict[str, float | str]:
         """Denní pokrytí toku podle zdroje — /status a Settings (#615 krok 5)."""
@@ -269,11 +327,15 @@ class CumDeltaTracker:
         return taken
 
     def net_volume(self, spec: OptionContractSpec) -> float:
-        """Denní čistý klasifikovaný objem kontraktu (buy − sell; ADR-0011)."""
+        """Denní čistý klasifikovaný objem kontraktu (buy − sell; ADR-0011).
+
+        Pod tisky do posledního řezu (`seal`): tisky otevřeného úseku patří
+        dalšímu řádku a FA ani netflow minuty je nesmí nést.
+        """
         return self._net_volume.get(spec, 0.0)
 
     def net_volumes(self) -> dict[OptionContractSpec, float]:
-        """Kopie celé mapy čistého objemu — persistence řady netflow (#232)."""
+        """Kopie celé mapy čistého objemu (pod tisky do posledního řezu) — řada netflow (#232)."""
         return dict(self._net_volume)
 
     def restore_net_volume(self, values: dict[OptionContractSpec, float]) -> None:
@@ -281,25 +343,32 @@ class CumDeltaTracker:
 
         Přičítá uložený základ k toku naměřenému od startu procesu, stejně jako
         `restore_cum` (#1460): tisky zdroje `aggressor` chodí i před prvním
-        cyklem a cyklus spadlý mezi barem a seedem nechá v mapě přírůstky —
-        přepsání ani `setdefault` by jeden z obou dílů zahodily. Volat nejvýš
-        jednou; hlídá runtime (pending flag), ne tracker.
+        cyklem (řez vzorku je přesune do denního ještě před seedem) a cyklus
+        spadlý mezi barem a seedem nechá v mapě přírůstky — přepsání ani
+        `setdefault` by jeden z obou dílů zahodily. Volat nejvýš jednou; hlídá
+        runtime (pending flag), ne tracker.
         """
         for spec, net in values.items():
             self._net_volume[spec] = self._net_volume.get(spec, 0.0) + net
 
     def reset(self) -> None:
-        """Reset na začátku obchodního dne (SPEC 4.5; volá `roll_session`, #638)."""
+        """Reset na začátku obchodního dne (SPEC 4.5; volá `roll_session`, #638).
+
+        Řez (`_sealed`) a vzorky se nemažou: vzorek openu přijde před resetem.
+        """
         self._cum = 0.0
         self._minute_flow = 0.0
+        self._sealed_flow = 0.0
         self._last_volume.clear()
         self._net_volume.clear()
         self._printed_since_bar.clear()
         self._unknown_since_bar.clear()
         self._coverage = CumDeltaCoverage()
         self._coverage_at_close = CumDeltaCoverage()
+        self._coverage_at_seal = CumDeltaCoverage()
         self._breakdowns.clear()
         self._minute_net.clear()
+        self._sealed_net.clear()
         self._tainted.clear()
         self._cycle_open = False  # otevřená minuta zahozena, verdikt se nepřenáší
 
@@ -314,6 +383,10 @@ class CumDeltaTracker:
         Kotva obou kumulativů je open seance (17:00 CT): CumΔ tím sedí na osu
         obchodního dne (#512) a net objem na ranní OI archiv, který odráží
         pozice k předchozímu settle — tok od open je přesně to, co v něm není.
+
+        Pod tisky se po resetu přehrají tisky nové seance přijaté před rollem
+        (#1460, `add_dx_trade(session_date=…)`): ty před posledním řezem do
+        uzavřeného úseku, pozdější do otevřeného — jako by reset proběhl v openu.
         """
         if self._session_date == session_date:
             return False
@@ -321,7 +394,23 @@ class CumDeltaTracker:
         self._session_date = session_date
         if first:
             return False
+        pending, sealed_count = self._next_session, self._next_session_sealed
+        self._next_session = []
+        self._next_session_sealed = 0
         self.reset()
+        before_cut = [item for item in pending[:sealed_count] if item.session_date == session_date]
+        after_cut = [item for item in pending[sealed_count:] if item.session_date == session_date]
+        dropped = len(pending) - len(before_cut) - len(after_cut)
+        if dropped:
+            logger.warning(
+                "CumΔ: %d tisků jiné seance než %s zahozeno při rollu", dropped, session_date
+            )
+        for item in before_cut:
+            self.add_dx_trade(item.spec, item.size, item.aggressor, item.delta)
+        if before_cut:
+            self._cut()
+        for item in after_cut:
+            self.add_dx_trade(item.spec, item.size, item.aggressor, item.delta)
         return True
 
     def restore_cum(self, base: float) -> None:
@@ -339,6 +428,7 @@ class CumDeltaTracker:
         size: float | None,
         aggressor: str | None,
         delta: float | None,
+        session_date: dt.date | None = None,
     ) -> float:
         """Jeden tisk dxFeed `TimeAndSale` (ADR-0032, ADR-0057).
 
@@ -350,10 +440,22 @@ class CumDeltaTracker:
         Zdroj `aggressor` (ADR-0057 bod 1–2): tisk se stranou dává
         net += sign · size, s deltou i flowΔ = sign · size · Δ · M; tisk bez
         delty jde mimo tok, čistý objem ale nese; tisk bez strany jde mimo obojí.
-        Tok čeká na verdikt minuty v `close_minute` (bod 3).
-        Zdroj `midpoint`: tisky jen měří pokrytí, znaménko dává bar větev.
+        Tok i čistý objem čekají v otevřeném úseku na řez a verdikt minuty
+        (bod 3). `session_date` = obchodní den podle času příjmu: tisk jiné
+        seance, než ve které tracker je, čeká stranou na `roll_session` (#1460)
+        — reset v `run_cycle` přijde až po sweepu a tisky od openu by smazal.
+        Zdroj `midpoint`: tisky jen měří pokrytí, znaménko dává bar větev;
+        `session_date` nečte (v5 beze změny).
         """
         if size is None or size <= 0:
+            return 0.0
+        if (
+            self.prints
+            and session_date is not None
+            and self._session_date is not None
+            and session_date != self._session_date
+        ):
+            self._next_session.append(_PendingPrint(session_date, spec, size, aggressor, delta))
             return 0.0
         sign = _AGGRESSOR_SIGN.get(aggressor.upper() if isinstance(aggressor, str) else "", 0)
         if delta is None:
@@ -375,8 +477,7 @@ class CumDeltaTracker:
         return flow
 
     def _add_print_net(self, spec: OptionContractSpec, net: float) -> None:
-        """Čistý objem z tisku: hned do denního, a do minuty pro návrat při mezeře."""
-        self._net_volume[spec] = self._net_volume.get(spec, 0.0) + net
+        """Čistý objem z tisku do otevřeného úseku; do denního ho přesune řez (`seal`)."""
         self._minute_net[spec] = self._minute_net.get(spec, 0.0) + net
 
     def add_volume(self, spec: OptionContractSpec, cumulative_volume: float) -> float:
@@ -461,21 +562,19 @@ class CumDeltaTracker:
         Pokrytí za minutu (#1071) = rozdíl denních čítačů od poslední uzávěrky;
         bez trade větve zůstává NULL.
 
-        Zdroj `aggressor` (ADR-0057 bod 3): měřená minuta potvrdí tok tisků do
-        CumΔ. Minuta s mezerou má flowΔ, CumΔ i pokrytí NULL a zahodí se celá
-        (částečná minuta se neextrapoluje): čistý objem se vrátí o její tisky,
-        denní pokrytí na stav poslední uzávěrky a CumΔ pokračuje od poslední
-        měřené úrovně.
+        Zdroj `aggressor` (ADR-0057 bod 3) uzavírá jen úsek do posledního řezu
+        (`seal`); tisky po něm patří dalšímu řádku, tiskové pokrytí řádku sedí
+        na týž úsek, pokrytí z barů na cyklus. Měřená minuta potvrdí tok úseku
+        do CumΔ. Minuta s mezerou má flowΔ, CumΔ i pokrytí NULL a úsek se zahodí
+        celý (částečná minuta se neextrapoluje): čistý objem i denní pokrytí se
+        vrátí o jeho tisky a CumΔ pokračuje od poslední měřené úrovně. Bez řezu
+        od minulé uzávěrky (vzorek selhal) nic nedokládá ani otevřený úsek —
+        zahodí se i ten.
         """
-        if self.prints and not self._verdict:
-            for spec, net in self._minute_net.items():
-                self._net_volume[spec] = self._net_volume.get(spec, 0.0) - net
-            self._coverage = CumDeltaCoverage(**vars(self._coverage_at_close))
-            row = FlowRow(ts_min=ts_min, flow_delta=None, cum_delta=None, source=self._source)
+        if self.prints:
+            row = self._close_prints(ts_min)
         else:
-            if self.prints:
-                self._cum += self._minute_flow
-            measured = self._verdict if self.prints else self.dx_active
+            measured = self.dx_active
             now, last = self._coverage, self._coverage_at_close
             row = FlowRow(
                 ts_min=ts_min,
@@ -493,9 +592,57 @@ class CumDeltaTracker:
                 ),
             )
             self._coverage_at_close = CumDeltaCoverage(**vars(now))
-        self._minute_flow = 0.0
-        self._minute_net.clear()
+            self._minute_flow = 0.0
+            self._minute_net.clear()
         self._cycle_open = False
+        return row
+
+    def _close_prints(self, ts_min: dt.datetime) -> FlowRow:
+        """Uzávěrka minuty zdroje `aggressor` nad úsekem do posledního řezu."""
+        now, last, cut = self._coverage, self._coverage_at_close, self._coverage_at_seal
+        if self._verdict:
+            self._cum += self._sealed_flow
+            row = FlowRow(
+                ts_min=ts_min,
+                flow_delta=self._sealed_flow,
+                cum_delta=self._cum,
+                source=self._source,
+                printed_volume=cut.printed_volume - last.printed_volume,
+                unknown_volume=cut.unknown_volume - last.unknown_volume,
+                structured_volume=now.structured_volume - last.structured_volume,
+                fallback_volume=now.fallback_volume - last.fallback_volume,
+                dropped_no_delta=cut.dropped_no_delta - last.dropped_no_delta,
+            )
+            self._coverage_at_close = CumDeltaCoverage(
+                printed_volume=cut.printed_volume,
+                unknown_volume=cut.unknown_volume,
+                structured_volume=now.structured_volume,
+                fallback_volume=now.fallback_volume,
+                dropped_no_delta=cut.dropped_no_delta,
+            )
+        else:
+            row = FlowRow(ts_min=ts_min, flow_delta=None, cum_delta=None, source=self._source)
+            if self._sealed:
+                # Návrat uzavřeného úseku; otevřený (po řezu) patří dalšímu řádku
+                for spec, net in self._sealed_net.items():
+                    self._net_volume[spec] = self._net_volume.get(spec, 0.0) - net
+                self._coverage = CumDeltaCoverage(
+                    printed_volume=now.printed_volume - (cut.printed_volume - last.printed_volume),
+                    unknown_volume=now.unknown_volume - (cut.unknown_volume - last.unknown_volume),
+                    structured_volume=last.structured_volume,
+                    fallback_volume=last.fallback_volume,
+                    dropped_no_delta=(
+                        now.dropped_no_delta - (cut.dropped_no_delta - last.dropped_no_delta)
+                    ),
+                )
+            else:
+                # Bez řezu: uzavřený úsek je prázdný, otevřený nepokrývá žádný vzorek
+                self._coverage = CumDeltaCoverage(**vars(last))
+                self._minute_flow = 0.0
+                self._minute_net.clear()
+        self._sealed_flow = 0.0
+        self._sealed_net.clear()
+        self._sealed = False
         return row
 
     def _apply(self, flow: float) -> None:

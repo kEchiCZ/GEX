@@ -289,6 +289,43 @@ def test_reconnect_mezi_vzorky_je_mezera_jen_jedne_minuty() -> None:
     assert not secondary.minute_measured
 
 
+def test_pad_mezi_vzorkem_a_uzaverkou_nese_dalsi_radek() -> None:
+    """Uzávěrka minuty běží až po sweepu: pád streamu po vzorku M patří řádku M+1.
+
+    Řádek M zůstane měřený jen s tisky do řezu ve vzorku M; řádek M+1 (vzorek
+    vidí změnu reconnectů) dostane NULL a vrátí net jen tisků po řezu.
+    """
+    pipe = pipeline()
+    pipes = {"ES": pipe}
+    routes = {"ES": build_routes(pipe, streamer_of)}
+    branch = Branch()
+    monitor = TradeBranchMonitor()
+    warm_up(monitor, RTH, pipes, routes, branch)
+    primary = tracker_of(pipe.runtime)
+    call = spec(ACTIVE, "C")
+
+    now = RTH + 2 * MIN
+    primary.add_dx_trade(call, size=2.0, aggressor="BUY", delta=0.5)  # +50 před vzorkem M
+    branch.touch(routes["ES"], now)
+    assert sample(monitor, now, pipes, routes, branch) == {"ES": BRANCH_RUNNING}
+    primary.begin_cycle()
+    assert primary.minute_measured
+    branch.reconnects = 1  # pád a nové připojení během sweepu cyklu M
+    primary.add_dx_trade(call, size=4.0, aggressor="BUY", delta=0.5)  # po reconnectu
+    row = primary.close_minute(now)
+    assert (row.flow_delta, row.cum_delta, row.printed_volume) == (50.0, 50.0, 2.0)
+    assert primary.net_volumes() == {call: 2.0}
+
+    now += MIN
+    branch.touch(routes["ES"], now)
+    assert sample(monitor, now, pipes, routes, branch) == {"ES": BRANCH_GAP}
+    primary.begin_cycle()
+    assert not primary.minute_measured
+    assert primary.close_minute(now).cum_delta is None
+    assert primary.net_volumes() == {call: 2.0}  # vrátily se jen tisky po řezu
+    assert primary.cum_delta == 50.0
+
+
 def test_po_rollu_zastarale_trasy_jsou_mezera_do_obnovy() -> None:
     """Trasy patří vypršelému řetězu (ADR-0057 bod 3): mezera, i když eventy chodí."""
     old = pipeline(active=ACTIVE, nxt=NEXT)
@@ -414,6 +451,7 @@ def test_route_trade_v6_aktivni_i_sekundarni_retez() -> None:
     assert target is not None and target[0] is secondary
     tracker, contract = target
     tracker.add_dx_trade(contract, size=7.0, aggressor="SELL", delta=-0.3)
+    secondary.seal()  # net jde do denního řezem ve vzorku
     assert secondary.net_volume(spec(NEXT, "P")) == -7.0
     assert primary.net_volumes() == {}
 

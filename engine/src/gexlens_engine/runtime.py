@@ -5,7 +5,8 @@ API, writer) — runtime je tak testovatelný nad mocky (CLAUDE.md pravidlo 4)
 a produkční adaptéry nad ib_async dodává `gexlens_engine.adapters`.
 
 Jeden minutový cyklus: sweep řetězce → Parquet snapshot → GEX/levels →
-CumΔ (bar větev) → flow → bary podkladu → push stavu a live kanálů do API.
+CumΔ (verdikt minuty, bar větev objemu + tisky se stranou podle zdroje) →
+flow (jen aktivní řetěz) → bary podkladu → push stavu a live kanálů do API.
 """
 
 import asyncio
@@ -298,13 +299,16 @@ class EngineRuntime:
         v téže UTC partici se přenést nesmí; od #1460 jen řádky zdroje
         běžícího trackeru (`stored_sources`).
 
-        Obnovují se všechny uložené strany, i mimo dnešní pásmo (#1460): po
-        rollu expirace dostane nový aktivní runtime užší počáteční pásmo než
-        sekundár, který stranu přes den měřil. Zahozený základ by po
+        Obnovují se všechny uložené strany, i mimo dnešní pásmo (#1460): pásmo
+        je grow-only, takže nový runtime začne užší než ten, kdo stranu přes den
+        měřil — po rollu expirace v settle (sekundár) i po restartu uprostřed
+        seance (reconnect IBKR, pád, restart kontejneru). Zahozený základ by po
         rozšíření pásma začal znovu od nuly a další řádek netflow by uložený
-        kumulativ strany přepsal. Spec mimo pásmo vzniká z šablony řetězu
-        (`OptionContractSpec` je čistě hodnotový, conId nenese) — rovná se
-        tomu, co pásmo postaví při rozšíření.
+        kumulativ strany přepsal. Platí i pod v5: strany mimo pásmo dostávají
+        konstantní řádky netflow a po rozšíření pásma pokračují net, FA vrstvy
+        i `netflow_at_cutoff` od uloženého základu. Spec mimo pásmo vzniká
+        z šablony řetězu (`OptionContractSpec` je čistě hodnotový, conId
+        nenese) — rovná se tomu, co pásmo postaví při rozšíření.
         """
         if not self._netflow_seed_pending:
             return
@@ -397,7 +401,9 @@ class EngineRuntime:
             await self._seed_cum_delta(session_day)
         # Verdikt minuty (ADR-0057 bod 3, #1460) jednou za cyklus: rozklad barů,
         # netflow, FA i uzávěrka minuty čtou týž, i když tisky chodí mezi
-        # awaity. Zdroj midpoint mezeru nezná (`minute_measured` vždy True).
+        # awaity. Tisky řeže už vzorek orchestrátoru (`seal`) — co přijde během
+        # cyklu, patří dalšímu řádku. Zdroj midpoint mezeru nezná
+        # (`minute_measured` vždy True).
         tracker.begin_cycle()
         now_mono = time.monotonic()
         max_age = self.settings.quote_max_age_s
@@ -782,9 +788,9 @@ class EngineRuntime:
         # zmizela a kalibrace α i navázání v rollu a po restartu vzaly její
         # poslední nenulovou hodnotu.
         # V minutě s mezerou trade větve (zdroj tisků, ADR-0057 bod 3) se
-        # netflow nepíše: net ještě nese tisky částečné minuty, které vrátí až
-        # `close_minute`. Čtenáři vezmou poslední měřený řádek strany a NULL
-        # číst nemusí.
+        # netflow nepíše: net ještě nese tisky částečné minuty (do řezu), které
+        # vrátí až `close_minute`. Čtenáři vezmou poslední měřený řádek strany
+        # a NULL číst nemusí.
         netflow_rows = [
             NetFlowRow(
                 ts_min=ts_min,

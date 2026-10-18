@@ -303,13 +303,26 @@ chyb**, hlavně diagnostických a provozních.
   Seed CumΔ a netu bral poslední řádek seance bez ohledu na `source` a NULL četl jako 0.
   `restore_net_volume` (`setdefault`) zahodil uložený základ strany, kterou tracker už měl.
   Seed netu vynechal strany mimo pásmo a po rollu je dostane nový aktivní řetěz užší.
-  Pod v5 se nic z toho neprojevilo (jeden zdroj, žádné NULL, mapa při seedu prázdná).
+  Pod v5 se neprojevil filtr zdroje, NULL ani přičítání (jeden zdroj, žádné NULL, mapa při
+  seedu prázdná). Vynechané strany mimo pásmo ano: pásmo je grow-only, takže nový runtime po
+  restartu uprostřed seance nebo po rollu v settle začne užší. Strana se po rozšíření pásma
+  vrátila od nuly a řádek netflow přepsal uložený kumulativ (FA, bod α).
   Pod v6 by ale engine nasazený v pauze 16:00–17:00 CT, která ještě patří seanci D, navázal
   na midpointovou úroveň. Mezera by vynulovala CumΔ a tisky před prvním cyklem by se ztratily.
   Odhalila to mapa čtenářů a zapisovačů pro ADR-0057. → Kumulativ navazovaný z partic se filtruje
   podle zdroje, který ho vyrobil (`cumdelta.stored_sources`, NULL = starší konvence), a NULL
   přeskakuje. Uložený základ se přičítá jako `restore_cum`. Test: restart v pauze po změně zdroje
-  nad particí ze starého image (`pq.write_table` bez nového sloupce).
+  nad particí ze starého image (`pq.write_table` bez nového sloupce); strana mimo pásmo po
+  restartu/rollu.
+
+- **2026-10-18 — verdikt minuty a obsah řádku pokrývaly různé intervaly (#1460, review 1a).**
+  Vzorek trade větve se bral na začátku iterace, tisky řádku se ale uzavíraly až po sweepu
+  (ES +20–35 s, NQ +40–55 s). Výpadek mezi vzorkem a uzávěrkou skončil v řádku označeném
+  za měřený a řádek po něm, úplný, dostal NULL. Roll seance po sweepu stejně tiše smazal tisky
+  od openu 17:00 CT v řádku, který vzorky označily za měřený. → Interval dat, o kterém rozhoduje
+  verdikt, se řeže v okamžiku vzorku (`CumDeltaTracker.seal`), ne v okamžiku zápisu; data jiné
+  periody, než ve které je stav, čekají stranou na její začátek, místo aby je reset smazal.
+  Test: pád streamu po vzorku a před uzávěrkou; tisk nové seance před rollem.
 
 - **2026-10-18 — Bluesky za 6 dní tiše ztratil ~2,5 h postů, v oknech CPI a PPI nic (#1509).**
   Za 12.–17. 10. 161 reconnectů Jetstreamu (`keepalive ping timeout` na pomalé lince); v oknech

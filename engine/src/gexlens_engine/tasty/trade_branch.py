@@ -7,8 +7,10 @@ subskripcí z kontraktů obou runtime; tisk jde do trackeru toho řetězu.
 Trade větev řetězu „běží" = připojený stream ∧ trasy patří běžícímu řetězu
 (expirace sedí — po rollu v settle až po obnově plánu) ∧ univerzum nemlčí déle
 než práh hlídače ticha (`SILENT_RTH_S` / `SILENT_GLOBEX_S`, bez nové konstanty).
-Orchestrátor z toho každou minutu dává trackerům vzorek (`observe`); verdikt
-minuty z něj zafixuje `begin_cycle` v `run_cycle` (`compute/cumdelta.py`).
+Orchestrátor z toho každou minutu dává trackerům vzorek (`observe`) a v témž
+okamžiku řeže jejich tisky (`seal`): interval řádku leží mezi dvěma vzorky,
+takže oba jeho konce pokrývá vzorek. Verdikt minuty ze vzorků zafixuje
+`begin_cycle` v `run_cycle` (`compute/cumdelta.py`).
 
 Zdroj `midpoint` (mechanika v5) verdikt nečte a tisky jen měří pokrytí:
 trasy aktivní části doručují jako dřív i po rollu, sekundární tisky jsou pod
@@ -152,11 +154,13 @@ class TradeBranchMonitor:
     """Minutové vzorky trade větve pro trackery aktivního i sekundárního řetězu.
 
     Vzorkuje se každý tracker každou iterací hlavní smyčky (i sekundár s cyklem
-    po N minutách — tracker drží AND přes celé své okno). Pád spojení mezi
-    vzorky pozná z počítadla reconnectů (roste s každým pádem streamu): tisky
-    z té doby chybí, i když stream teď zase běží — okno dostane vzorek
-    „neběží" a teprve pak stav v okamžiku vzorku, takže mezerou je jen minuta
-    s výpadkem, ne i ta následující.
+    po N minutách — tracker drží AND přes celé své okno) a hned po vzorku se
+    jeho tisky řežou (`seal`): řádek M nese tisky (vzorek M−1, vzorek M]. Pád
+    spojení mezi vzorky pozná z počítadla reconnectů (roste s každým pádem
+    streamu): tisky z té doby chybí, i když stream teď zase běží — okno dostane
+    vzorek „neběží" a teprve pak stav v okamžiku vzorku. Řez leží v témž
+    okamžiku jako vzorek, takže mezerou je jen řádek s výpadkem, ne i ten
+    následující. Globální počítadlo stačí: všechny trackery se řežou najednou.
     """
 
     def __init__(self) -> None:
@@ -210,6 +214,7 @@ class TradeBranchMonitor:
                 if dropped:
                     tracker.observe(running=False, market_closed=market_closed)
                 tracker.observe(running=running, market_closed=market_closed)
+                tracker.seal()
             if market_closed:
                 states[symbol] = BRANCH_CLOSED
             else:
@@ -218,10 +223,15 @@ class TradeBranchMonitor:
 
 
 def observe_without_branch(now: dt.datetime, pipes: Mapping[str, PipelineLike]) -> dict[str, str]:
-    """Bez tasty větve trade větev neběží: za otevřeného trhu mezera, za zavřeného nula."""
+    """Bez tasty větve trade větev neběží: za otevřeného trhu mezera, za zavřeného nula.
+
+    Řez (`seal`) i tady: bez něj by `begin_cycle` minutu nepotvrdil ani za
+    zavřeného trhu.
+    """
     market_closed = is_market_closed(now)
     for pipe in pipes.values():
         for runtime in (pipe.runtime, pipe.next_runtime):
             if runtime is not None and runtime.cum_delta is not None:
                 runtime.cum_delta.observe(running=False, market_closed=market_closed)
+                runtime.cum_delta.seal()
     return dict.fromkeys(pipes, BRANCH_OFF)

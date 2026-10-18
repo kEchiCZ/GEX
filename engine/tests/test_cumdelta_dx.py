@@ -61,7 +61,7 @@ def test_vsechny_trady_prstence_jdou_do_jedne_rady() -> None:
 
 
 def test_neznama_strana_se_nepocita_do_toku_ale_meri_se() -> None:
-    """Bez aggressorSide žádný tok — pokrytí rozhoduje o midpoint fallbacku."""
+    """Bez aggressorSide žádný tok — tisk se jen započte do pokrytí."""
     shadow = make_shadow()
     shadow.on_trade(".ES7610C", size=5, aggressor=None, delta=0.5)
     shadow.on_trade(".ES7610C", size=5, aggressor="UNDEFINED", delta=0.5)
@@ -279,7 +279,11 @@ def test_jedno_preteceni_vynecha_jednu_hranici_a_mrizka_pokracuje() -> None:
 def test_restart_v_minute_stopu_minuta_pokracuje_do_dalsi_hranice(tmp_path: Path) -> None:
     """#1586 bod 3 a #1070 pod v6: stop zapíše řádek N se štítkem cílové hranice
     (obsah [N−1, stop)). Restart před N nemá řádek N upsertem přepsat — engine
-    naváže a uzavře až N+1. Kumulativ i denní čítače zůstanou přesné."""
+    naváže a uzavře až N+1. Kumulativ zůstane přesný.
+
+    Pořadí jako `dx_cum_flush_loop`: tisky chodí od startu, roll a seed až na
+    první hranici. Denní čítače pro /status (`day_stats`) seed přepíše, takže
+    tisky před ním v nich chybí — vada od #1070, mimo rozsah #1460."""
     import pyarrow.parquet as pq
 
     from gexlens_engine.config import Settings
@@ -301,11 +305,12 @@ def test_restart_v_minute_stopu_minuta_pokracuje_do_dalsi_hranice(tmp_path: Path
     second.set_spot(7600.0)
     plan = plan_dx_flush(TS + dt.timedelta(seconds=40), None)
     assert plan.minute == TS + MIN
+    second.on_trade(".ES7610C", size=4, aggressor="BUY", delta=0.5)  # +100 v 14:00:50
+    # Hranice 14:01: první uzávěrka po startu roluje seanci a naváže z partice
     assert second.roll_session(TS.date())
     seed = writer.dx_flow_seed("ES", TS.date())
     assert seed is not None and seed.ts_min >= plan.minute  # engine: navázat a neuzavírat
     second.seed(seed)
-    second.on_trade(".ES7610C", size=4, aggressor="BUY", delta=0.5)  # +100 v 14:00:50
     nxt = plan_dx_flush(TS + MIN + dt.timedelta(milliseconds=3), plan.minute)
     assert (nxt.minute, nxt.skipped) == (TS + 2 * MIN, 0)
     second.on_trade(".ES7610C", size=2, aggressor="SELL", delta=0.5)  # −50 v 14:01:30
@@ -317,4 +322,5 @@ def test_restart_v_minute_stopu_minuta_pokracuje_do_dalsi_hranice(tmp_path: Path
     assert [r["cum_ring"] for r in rows] == [50.0, 25.0, 75.0]
     # Řádek za restartem nese [restart, N+1): přírůstek kumulativu = jeho tok
     assert rows[2]["cum_ring"] - rows[1]["cum_ring"] == rows[2]["flow_ring"]
-    assert second.day_stats()["trades"] == float(sum(r["trades"] for r in rows)) == 4.0
+    assert [r["trades"] for r in rows] == [1, 1, 2]
+    assert second.day_stats()["cum_ring"] == 75.0

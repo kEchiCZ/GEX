@@ -124,6 +124,7 @@ def generate_reference_day(tmp_path: Path, *, prints: bool) -> Settings:
                     for side, size in PRINTS_V6[spec.right]:
                         tracker.add_dx_trade(spec, size, side, delta)
                 tracker.observe(running=True, market_closed=False)
+                tracker.seal()  # řez ve vzorku (#1460): tisky minuty patří jejímu řádku
             bar = Bar(
                 ts=ts, open=7599.0, high=7601.0, low=7598.0, close=GOLDEN["spot"], volume=500.0
             )

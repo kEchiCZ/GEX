@@ -265,7 +265,7 @@ Minutový cyklus (`runtime.EngineRuntime.run_cycle`):
 1. **Sweep** — `SubscriptionScheduler` projede řetězec v dávkách (ATM±30 každý cyklus, křídla každý 3.), nekompletní kontrakty přes repair frontu, výsledek do in-memory cache.
 2. **Snapshot** — cache → `SnapshotRow` (OI z ranního archivu) → atomický zápis Parquet.
 3. **Výpočty** — GEX per strike (naivní dealer model, vyměnitelná strategie) → levels (flip interpolovaně, walls, centroid) → zápis do `derived/levels`.
-4. **Cum Δ** — bar větev (ΔVol × midpoint test × Δ × M) pro celý řetěz; trade větev z dxFeed `TimeAndSale` pro celý sbíraný řetěz přijde s #615 fází 3 (ADR-0032 — IBKR hot zóna z původního návrhu se nikdy nenapojila, CumΔ do té doby je 100 % midpoint). `close_minute` → `derived/flow`.
+4. **Cum Δ** — `begin_cycle` jednou za cyklus zafixuje verdikt minuty (ADR-0057 bod 3: běží trade větev, nebo mezera). Bar větev rozkládá přírůstek objemu (printvol, pokrytí). Znaménko toku pod mechanikou v5 (zdroj `midpoint`) dává minutový midpoint test, od v6 (zdroj `aggressor`) jen tisky dxFeed `TimeAndSale` se stranou (`add_dx_trade`, aktivní i sekundární řetěz přes trasy tisků). Od v6 se tisky řežou v okamžiku vzorku trade větve (`seal`), takže řádek minuty nese tisky mezi dvěma vzorky. Tisky nové seance přijaté před rollem trackeru čekají stranou a nese je první řádek seance. Minuta v mezeře má pod v6 CumΔ NULL. `close_minute` → `derived/flow` (sekundární řetěz minutu uzavře kvůli netu a řádek zahodí).
 5. **Bary podkladu** — 5s reqRealTimeBars agregované na 1min → `derived/bars`.
 6. **Push do API** — `/internal/status` + kanály `levels.*`, `flow.*`, `price.*`.
 
@@ -763,8 +763,11 @@ vrací i pro minutu nad prahem, která zatím nenaplnila sérii do alertu. Stavy
 
 **Co fallback vědomě NEdodá: kumulativní denní objem.** Tasty ho ve stejné
 sémantice nemá, a dosadit nulu by znamenalo skokový záporný přírůstek přes celý
-řetěz. Po dobu fallbacku řetězu proto **stojí CumΔ a net objem** a ve snímcích
-jsou `NULL` — díra, kterou je vidět, místo čísla, které lže. Heatmapa, GEX
+řetěz. Ve snímcích je objem `NULL` — díra, kterou je vidět, místo čísla, které
+lže. Pod mechanikou v5 (zdroj `midpoint`) proto po dobu fallbacku řetězu
+**stojí CumΔ a net objem**. Od v6 (ADR-0057, zdroj `aggressor`) jdou CumΔ i net
+objem z tisků tastytrade dál a chybí jen rozklad objemu na tisky (printvol,
+pokrytí). Text alertu `chain_fallback` se řídí stejnou podmínkou. Heatmapa, GEX
 profil, zdi i flip běží dál.
 
 Přepnutí se hlásí alertem a jantarovým chipem v hlavičce; `/status` nese

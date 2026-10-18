@@ -63,10 +63,13 @@ dnech (skript ve scratchpadu, výsledky v issue #222).
   protistrany; α je hrubý kalibrační faktor, ne účetnictví pozic.
 - Bar větev klasifikuje midpoint testem POSLEDNÍHO trade minuty — celý
   minutový přírůstek dostane jedno znaménko.
+  *(Platí jen pro mechaniku v5; od v6 bar větev znaménko nedává, ADR-0057 bod 1.)*
 - Overnight tok před startem enginu odhad nevidí (backfill barů podkladu
   opce nepokrývá) — odhad začíná od ranního OI + tok od startu sběru.
 - Hot zóna (tick větev) zatím není v produkci zapojená — net objem dnes plní
   jen bar větev; až se zapojí, tracker ji započte automaticky.
+  *(Neplatí: IBKR tick větev nahrazena tisky dxFeed 3. 9. 2026 (#1006) a kód smazán
+  (ADR-0057 bod 10, #1460). Od mechaniky v6 plní net jen tisky dxFeed se stranou od burzy.)*
 
 ## Ověření
 
@@ -92,7 +95,8 @@ z ranních potvrzení proti skutečnému ΔOI z věčného archivu.
    = midpoint) a navázání bere jen řádky zdroje běžícího trackeru. Uložený
    kumulativ se k toku naměřenému od startu procesu přičítá, místo aby mu
    ustoupil: tisky chodí i před prvním cyklem. Obnovují se i strany mimo
-   pásmo, které má nový aktivní řetěz po rollu užší. Od #1582 se zapisují
+   pásmo, které má nový runtime po rollu i po restartu uprostřed seance užší
+   (pásmo je grow-only); platí i pod v5. Od #1582 se zapisují
    i strany s netem 0: explicitní 0 = naměřená nula, chybějící řádek = strana
    se nesleduje; dřív strana s návratem na 0 zmizela a kalibrace α i navázání
    vzaly její poslední nenulovou hodnotu.)*
