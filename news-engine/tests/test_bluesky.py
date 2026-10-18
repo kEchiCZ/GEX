@@ -5,6 +5,7 @@ import contextlib
 import datetime as dt
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncIterator, Sequence
 
@@ -264,7 +265,13 @@ async def test_log_prehrani_nedokonceneho_i_dohnaneho(
     await _run(monkeypatch, BlueskyStream(writer), [[before], interrupted, caught_up])
 
     messages = [record.getMessage() for record in caplog.records]
-    assert any("s cursorem — výpadek 300 s" in message for message in messages)
+    gaps = [
+        int(found.group(1))
+        for message in messages
+        if (found := re.search(r"s cursorem — výpadek (\d+) s", message))
+    ]
+    # První reconnect ~300 s (+ režie testu a pauzy runneru), druhý ~190 s
+    assert gaps and 300 <= gaps[0] <= 305
     assert any(
         "přehrání nedokončeno" in message
         and "přehráno 2 zpráv, filtrem prošlo 1, zapsáno 1" in message
@@ -281,3 +288,49 @@ async def test_log_prehrani_nedokonceneho_i_dohnaneho(
         "$NVDA beats during outage",
         "$SPY live again",
     ]
+
+
+async def test_prehrani_nad_strop_puvodni_minuty_se_orizne_a_zaloguje(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Původní minuta s 35 posty se i při přehrání ořízne na MAX_PER_MINUTE; log to ukáže."""
+    caplog.set_level(logging.INFO, logger=module.__name__)
+    minute0 = (time.time_ns() // 1_000 // (60 * US) - 10) * 60 * US
+    before = commit("$SPY before outage", time_us=minute0 - US)
+    flood = [
+        commit(f"$SPY CPI {index}", time_us=minute0 + index) for index in range(MAX_PER_MINUTE + 5)
+    ]
+    live = commit("$SPY live again", time_us=_ago_us(-60))
+    writer = _Writer()
+
+    await _run(monkeypatch, BlueskyStream(writer), [[before], [before, *flood, live]])
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "přehrání dohnáno" in message
+        and "přehráno 35 zpráv, filtrem prošlo 30, zapsáno 30, nad strop 5" in message
+        for message in messages
+    )
+    assert len(writer.events) == 1 + MAX_PER_MINUTE + 1
+
+
+async def test_zprava_na_ktere_zpracovani_spadne_se_po_reconnectu_neprehraje(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cursor se posune před zpracováním: jedovatá zpráva neroztočí smyčku pádů."""
+    t1, t2, t3 = _ago_us(30), _ago_us(20), _ago_us(10)
+    # Záznam z PDS bez validace lexikonu: skalární `langs` shodí normalize_post
+    poison = commit("$SPY malformed", time_us=t2)
+    poison["commit"]["record"]["langs"] = 1  # type: ignore[index]
+    writer = _Writer()
+    stream = BlueskyStream(writer)
+
+    urls = await _run(
+        monkeypatch,
+        stream,
+        [[commit("$SPY before", time_us=t1), poison], [poison, commit("$SPY after", time_us=t3)]],
+    )
+
+    assert urls == [JETSTREAM_URL, f"{JETSTREAM_URL}&cursor={t2}"]
+    # Druhá session jedovatou zprávu zahodí na hranici cursoru, post t3 se zapíše
+    assert [event.title for event in writer.events] == ["$SPY before", "$SPY after"]

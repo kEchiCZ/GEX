@@ -135,6 +135,7 @@ class _Replay:
     received: int = 0
     matched: int = 0
     written: int = 0
+    flood_dropped: int = 0
 
     @property
     def gap_s(self) -> float:
@@ -144,12 +145,13 @@ class _Replay:
     def log(self, state: str) -> None:
         logger.info(
             "Bluesky: přehrání %s — výpadek %.0f s, přehráno %d zpráv, "
-            "filtrem prošlo %d, zapsáno %d",
+            "filtrem prošlo %d, zapsáno %d, nad strop %d",
             state,
             self.gap_s,
             self.received,
             self.matched,
             self.written,
+            self.flood_dropped,
         )
 
 
@@ -275,9 +277,12 @@ class BlueskyStream:
             replay.log("dohnáno")
             self._replay = replay = None
         self.seen += 1
+        dropped_before = self.flood_dropped
         written = self._ingest(message, time_us)
         if replay is not None:
             replay.received += 1
+            # Strop ořízne i přehrání, má-li původní minuta víc než MAX_PER_MINUTE
+            replay.flood_dropped += self.flood_dropped - dropped_before
             if written is not None:
                 replay.matched += 1
                 replay.written += written
