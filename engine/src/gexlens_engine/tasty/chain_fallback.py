@@ -20,10 +20,13 @@ Pravidla ADR-0025, která tu platí:
 * **5 — hystereze a viditelný stav.** Návrat vyžaduje souvislou čistou sérii;
   tiché přepnutí je zakázané, proto `switched` a zpráva pro alert i /status.
 
-Co fallback vědomě NEdodá: kumulativní denní objem. Z něj se počítá CumΔ
-a net objem, a tasty ho ve stejné sémantice nemá (viz `QuoteSnapshot`).
-Během fallbacku proto tyhle řady stojí a v snímku jsou `None` — díra, kterou
-je vidět, místo nuly, která lže (#465).
+Co fallback vědomě NEdodá: kumulativní denní objem — tasty ho ve stejné
+sémantice nemá (viz `QuoteSnapshot`), v snímku je `None` — díra, kterou je
+vidět, místo nuly, která lže (#465). Pod midpointem (v5) se z něj počítá CumΔ
+a net objem, takže tyhle řady během fallbacku stojí. Od v6 (ADR-0057) jdou
+CumΔ i net objem z tisků tastytrade a běží dál (výpadek IBKR tok nezastaví,
+bod 3); chybí jen rozklad objemu na tisky (printvol, pokrytí). Text alertu
+skládá `fallback_alert_message`.
 """
 
 import datetime as dt
@@ -123,6 +126,26 @@ class ChainFallback:
         # vypadat jako uzdravení.
         self._clean_streak = 0
         return ChainDecision(source="tasty")
+
+
+def fallback_alert_message(decision: ChainDecision, *, cumdelta_prints: bool) -> str:
+    """Text alertu `chain_fallback` k přepnutí zdroje řetězu (#614 fáze 2b).
+
+    Přepnutí na tasty doplní dopad na CumΔ a net objem podle zdroje znaménka:
+    pod midpointem (v5) řady stojí, pod tisky (`cumdelta_prints`, v6,
+    ADR-0057) běží dál a chybí jen rozklad objemu. Návrat na IBKR dopad nemá.
+    """
+    if decision.source != "tasty":
+        return decision.message + "."
+    if cumdelta_prints:
+        return (
+            decision.message + ". CumΔ a net objem běží dál z tisků tastytrade; "
+            "rozklad objemu na tisky (printvol) po dobu fallbacku chybí."
+        )
+    return (
+        decision.message + ". Řady CumΔ a net objem po dobu fallbacku stojí — "
+        "tastytrade denní objem v sémantice IBKR nedodává."
+    )
 
 
 def tasty_chain_quotes(

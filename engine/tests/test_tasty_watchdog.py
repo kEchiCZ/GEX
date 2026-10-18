@@ -6,7 +6,9 @@ to je zavřený trh, ne porucha; hlídač nesmí přepojit ani alertovat.
 
 import datetime as dt
 
-from gexlens_engine.tasty.watchdog import SilentStreamWatchdog
+import pytest
+
+from gexlens_engine.tasty.watchdog import SilentStreamWatchdog, silent_alert_message
 
 RTH = dt.datetime(2026, 9, 17, 14, 0, tzinfo=dt.UTC)  # středa 10:00 ET
 NIGHT = dt.datetime(2026, 9, 17, 3, 0, tzinfo=dt.UTC)  # úterý 22:00 CT, Globex noc
@@ -57,3 +59,18 @@ def test_bez_spojeni_a_po_startu_neprepojuje() -> None:
     assert dog.check(minutes(RTH, 1), connected=True, last_event_at=None) is None
     assert dog.check(minutes(RTH, 2), connected=True, last_event_at=None) is None
     assert dog.check(minutes(RTH, 3), connected=True, last_event_at=None) is not None
+
+
+@pytest.mark.parametrize("cumdelta_prints", [False, True], ids=["v5", "v6"])
+def test_text_alertu_podle_mechaniky(cumdelta_prints: bool) -> None:
+    """#1460: pod v5 text doslova beze změny, od v6 i mezera CumΔ z tisků (ADR-0057 bod 3)."""
+    v5_text = (
+        "Tastytrade stream mlčel 3 min při otevřeném trhu — engine ho přepojil sám. "
+        "Pokud kotace nenaběhnou do 2 min, zkontroluj stav v Settings."
+    )
+    suffix = (
+        " CumΔ z tisků má od prahu ticha mezeru, dokud tisky znovu nenaběhnou."
+        if cumdelta_prints
+        else ""
+    )
+    assert silent_alert_message(185.0, cumdelta_prints=cumdelta_prints) == v5_text + suffix

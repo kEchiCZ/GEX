@@ -33,7 +33,7 @@ from gexlens_engine.compute.expiry_calendar import front_contract_eligible
 from gexlens_engine.compute.futures_cvd import FuturesCvdTracker
 from gexlens_engine.compute.marketclock import is_market_closed, outside_us_rth
 from gexlens_engine.compute.settle import session_bounds, trading_session_date
-from gexlens_engine.compute.setups import SetupParams
+from gexlens_engine.compute.setups import CUMDELTA_PRINTS, SetupParams
 from gexlens_engine.config import ConfigError, Settings, load_settings
 from gexlens_engine.diagnostics import install_stack_dump
 from gexlens_engine.discovery_cache import (
@@ -148,7 +148,11 @@ from gexlens_engine.t6 import T6Collector, recompute_stale_candidates
 from gexlens_engine.tasty.adhoc import AdhocViewer
 from gexlens_engine.tasty.budget import DistanceGroup, order_by_distance, plan_subscriptions
 from gexlens_engine.tasty.candles import CandleBar, CandleFetcher, backfill_gaps, partition_days
-from gexlens_engine.tasty.chain_fallback import ChainFallback, tasty_chain_quotes
+from gexlens_engine.tasty.chain_fallback import (
+    ChainFallback,
+    fallback_alert_message,
+    tasty_chain_quotes,
+)
 from gexlens_engine.tasty.crosscheck import CrossCheckDetector, CrossCheckVerdict
 from gexlens_engine.tasty.cumdelta_dx import DxCumDeltaShadow, plan_dx_flush
 from gexlens_engine.tasty.devrun import run_tasty_only
@@ -175,7 +179,7 @@ from gexlens_engine.tasty.trade_branch import (
     route_trade,
 )
 from gexlens_engine.tasty.trades_recorder import TradesRecorder
-from gexlens_engine.tasty.watchdog import SilentStreamWatchdog
+from gexlens_engine.tasty.watchdog import SilentStreamWatchdog, silent_alert_message
 from gexlens_engine.tasty.wideoi import wide_contracts, wide_records, wide_streamers
 from gexlens_engine.tendency import TendencyEngine
 from gexlens_engine.ticker import parse_ticker
@@ -2041,7 +2045,8 @@ async def main() -> None:
         # nenávratně mizí. Fan-out callbacku — cache i recorder vidí tytéž eventy.
         trades_recorder = TradesRecorder() if settings.tasty_trades_record else None
         # Stínové CumΔ z TimeAndSale (#615 fáze 3, varianta B — rozhodnutí
-        # uživatele 27. 8.): měřicí řada per symbol, živé CumΔ se nemění
+        # uživatele 27. 8.): samostatná měřicí řada per symbol vedle živého
+        # CumΔ; od v6 vstup replaye a brány parity (ADR-0057 bod 7)
         dx_shadows: dict[str, DxCumDeltaShadow] = {}
         # Živá trade větev (ADR-0057 body 3 a 6, #1460): trasy streamer symbol
         # → spec aktivního i sekundárního řetězu per instrument; tisky jdou do
@@ -2153,10 +2158,9 @@ async def main() -> None:
                         {
                             "kind": "feed_silent",
                             "symbol": "*",
-                            "message": (
-                                f"Tastytrade stream mlčel {action.silence_s / 60:.0f} min "
-                                "při otevřeném trhu — engine ho přepojil sám. Pokud "
-                                "kotace nenaběhnou do 2 min, zkontroluj stav v Settings."
+                            # Dopad na CumΔ jen pod tisky (v6, ADR-0057 bod 3)
+                            "message": silent_alert_message(
+                                action.silence_s, cumdelta_prints=CUMDELTA_PRINTS
                             ),
                             "ts": dt.datetime.now(dt.UTC).timestamp(),
                         },
@@ -2200,7 +2204,7 @@ async def main() -> None:
                 # Vždy, i prázdný seznam: API status slévá jen poslané klíče, takže
                 # vynechaný klíč nechal v UI chip „ad-hoc" i po úklidu pohledu (4. 9.)
                 "tasty_adhoc": adhoc_viewer.active(),
-                # Stínové CumΔ (#615): pokrytí aggressorSide rozhoduje o midpoint fallbacku
+                # Stínové CumΔ (#615): denní pokrytí tisků stranou (aggressorSide)
                 **(
                     {
                         "tasty_dx_shadow": {
@@ -2311,6 +2315,8 @@ async def main() -> None:
                 minutes_threshold=settings.crosscheck_minutes,
                 cooldown_minutes=settings.crosscheck_cooldown_minutes,
                 change_threshold=settings.crosscheck_change_threshold,
+                # Text mrtvé zálohy nese dopad na CumΔ jen pod tisky (v6, ADR-0057)
+                cumdelta_prints=CUMDELTA_PRINTS,
             )
             probe_spawner = _setup_farm_probe(ib, manager, settings, publisher, pipelines)
 
@@ -2386,12 +2392,9 @@ async def main() -> None:
                     {
                         "kind": "chain_fallback",
                         "symbol": "*",
-                        "message": decision.message
-                        + (
-                            ". Řady CumΔ a net objem po dobu fallbacku stojí — "
-                            "tastytrade denní objem v sémantice IBKR nedodává."
-                            if decision.source == "tasty"
-                            else "."
+                        # Dopad na CumΔ a net objem podle mechaniky (v6 tisky, ADR-0057)
+                        "message": fallback_alert_message(
+                            decision, cumdelta_prints=CUMDELTA_PRINTS
                         ),
                         "ts": dt.datetime.now(dt.UTC).timestamp(),
                     },
@@ -2982,7 +2985,8 @@ async def main() -> None:
             shadow_tasks.append(asyncio.create_task(dx_cum_flush_loop()))
             logger.info(
                 "Stínové CumΔ z TimeAndSale ZAPNUTO (#615 fáze 3, shadow) → "
-                "derived/cumdelta_dx/ — živé CumΔ se nemění"
+                "derived/cumdelta_dx/ — samostatná řada, živé CumΔ jde ze zdroje %s",
+                LIVE_SOURCE,
             )
         if settings.tasty_extended_enabled:
             shadow_tasks.append(asyncio.create_task(extended_snapshot_loop()))

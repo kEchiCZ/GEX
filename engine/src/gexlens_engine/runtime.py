@@ -135,7 +135,9 @@ class EngineRuntime:
     push_status: bool = True
     # Sekundární řetěz (následující expirace): snapshots + levels + netflow
     # (#1182, vstup kalibrace α) — flow/CumΔ, printvol, FA vrstva a bary
-    # podkladu patří výhradně aktivní expiraci (per-symbol soubory)
+    # podkladu patří výhradně aktivní expiraci (per-symbol soubory). Jeho
+    # tracker dostává tisky taky; od v6 z nich jde net (ADR-0057 bod 6) a
+    # minutu uzavírá kvůli mezeře, řádek flow zahodí.
     secondary: bool = False
     # Per-symbol α flow-adjusted odhadu (#232): None = default z konfigurace
     # (flow_oi_alpha); ranní kalibrace fáze 2 ho nastavuje za běhu
@@ -486,8 +488,10 @@ class EngineRuntime:
             # CumΔ bar větev (tisky dxFeed jdou do trackeru zvlášť přes add_dx_trade).
             # Bez kumulativního objemu se tracker NEKRMÍ (#614 fáze 2b): tasty
             # ho v sémantice IBKR nedodá a dosadit nulu by znamenalo skokový
-            # záporný přírůstek přes celý řetěz. Řady CumΔ a net objem během
-            # fallbacku stojí — díra, kterou je vidět, místo vymyšleného čísla.
+            # záporný přírůstek přes celý řetěz. Pod midpointem (v5) proto řady
+            # CumΔ a net objem během fallbacku stojí — díra, kterou je vidět,
+            # místo vymyšleného čísla; od v6 jdou z tisků dál a chybí jen
+            # rozklad objemu (printvol, pokrytí).
             # Sekundární řetěz krmí tracker taky (#1182): jeho net objem je
             # jediný vstup kalibrace α, který má ΔOI do dalšího dne — aktivní
             # řetěz ES/NQ je každý den 0DTE (#1172). CumΔ/flow z něj se nepíší.
@@ -755,10 +759,11 @@ class EngineRuntime:
         )
 
         # Flow-adjusted vrstva (ADR-0011, #222/#232): OI odhad = ranní OI +
-        # α·čistý klasifikovaný objem (buy − sell z midpoint testu / Lee–Ready).
-        # Jen aktivní řetěz — tok se měří jen tam; α = 0 vrstvu vypíná. Jediný
-        # odhad (compute/flowoi.oi_estimate) sdílí FA levels, FA Dyn GEX
-        # profil/pole i řady netflow/oiest — všechno je TENTÝŽ model.
+        # α·čistý objem (buy − sell v kontraktech; v5 z midpoint testu barů, od
+        # v6 jen z tisků se stranou agresora, ADR-0057 bod 1). FA vrstva jen
+        # aktivní řetěz, net měří i sekundár (vstup kalibrace α, #1182);
+        # α = 0 odhad vypíná. Jediný odhad (compute/flowoi.oi_estimate) sdílí
+        # FA levels, FA Dyn GEX profil/pole i řadu oiest — TENTÝŽ model.
         alpha = self.flow_alpha if self.flow_alpha is not None else self.settings.flow_oi_alpha
         fa_oi: dict[OptionContractSpec, float] = {}
         # Po restartu uprostřed dne naváže kumulativ z partice netflow —

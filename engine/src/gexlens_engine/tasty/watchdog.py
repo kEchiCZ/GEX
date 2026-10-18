@@ -82,3 +82,19 @@ class SilentStreamWatchdog:
             alert=first,
             silence_s=silence,
         )
+
+
+def silent_alert_message(silence_s: float, *, cumdelta_prints: bool) -> str:
+    """Text alertu `feed_silent` po vynuceném přepojení.
+
+    Pod tisky (`cumdelta_prints`, v6, ADR-0057 bod 3) doplní dopad na CumΔ:
+    trade větev se stejnými prahy přestala „běžet", minuty jsou mezera.
+    """
+    message = (
+        f"Tastytrade stream mlčel {silence_s / 60:.0f} min "
+        "při otevřeném trhu — engine ho přepojil sám. Pokud "
+        "kotace nenaběhnou do 2 min, zkontroluj stav v Settings."
+    )
+    if cumdelta_prints:
+        message += " CumΔ z tisků má od prahu ticha mezeru, dokud tisky znovu nenaběhnou."
+    return message

@@ -8,10 +8,14 @@ nikdy nemíchají hodnoty ze dvou zdrojů (ADR-0025 pravidlo 2).
 
 import datetime as dt
 
+import pytest
+
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import FEED_TASTY
 from gexlens_engine.tasty.chain_fallback import (
+    ChainDecision,
     ChainFallback,
+    fallback_alert_message,
     tasty_chain_quotes,
 )
 from gexlens_engine.tasty.crosscheck import CrossCheckVerdict, MinuteTally
@@ -111,6 +115,25 @@ def test_ibkr_suspect_prepne_retez_na_tasty() -> None:
     assert decision.source == "tasty"
     assert decision.switched is True
     assert "tastytrade" in decision.message
+
+
+@pytest.mark.parametrize("cumdelta_prints", [False, True], ids=["v5", "v6"])
+def test_text_alertu_podle_mechaniky(cumdelta_prints: bool) -> None:
+    """#1460: pod v5 text doslova beze změny; od v6 CumΔ a net objem běží z tisků (ADR-0057)."""
+    to_tasty = ChainDecision(source="tasty", switched=True, message="Opční řetěz přebírá X")
+    back = ChainDecision(source="ibkr", switched=True, message="Opční řetěz zpět na IBKR")
+
+    expected = (
+        "Opční řetěz přebírá X. CumΔ a net objem běží dál z tisků tastytrade; "
+        "rozklad objemu na tisky (printvol) po dobu fallbacku chybí."
+        if cumdelta_prints
+        else "Opční řetěz přebírá X. Řady CumΔ a net objem po dobu fallbacku stojí — "
+        "tastytrade denní objem v sémantice IBKR nedodává."
+    )
+    assert fallback_alert_message(to_tasty, cumdelta_prints=cumdelta_prints) == expected
+    assert fallback_alert_message(back, cumdelta_prints=cumdelta_prints) == (
+        "Opční řetěz zpět na IBKR."
+    )
 
 
 def test_prepnuti_se_hlasi_jen_jednou() -> None:

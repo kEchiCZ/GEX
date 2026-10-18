@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
 from gexlens_api.main import create_app
-from gexlens_engine.compute.cumdelta import SOURCE_MIDPOINT, CumDeltaTracker
+from gexlens_engine.compute.cumdelta import SOURCE_AGGRESSOR, SOURCE_MIDPOINT, CumDeltaTracker
 from gexlens_engine.config import Settings
 from gexlens_engine.ibkr.discovery import OptionContractSpec
 from gexlens_engine.ibkr.scheduler import QuoteSnapshot, SubscriptionScheduler
@@ -31,6 +31,12 @@ GOLDEN = json.loads(
 DAY_START = dt.datetime(2026, 7, 16, 15, 0, tzinfo=dt.UTC)
 CALL_VOLUME_BASE = 20.0
 PUT_VOLUME_BASE = 10.0
+#: Tisky varianty v6 (ADR-0057) per strike a minutu: (strana, velikost); bez
+#: strany jde mimo tok. Zvolené tak, aby se tok lišil od midpointu znaménkem putu.
+PRINTS_V6: dict[str, list[tuple[str, float]]] = {
+    "C": [("BUY", 6.0), ("SELL", 2.0)],
+    "P": [("SELL", 3.0), ("UNDEFINED", 1.0)],
+}
 
 
 class DeterministicStreamer:
@@ -62,9 +68,14 @@ def reference_contracts() -> list[OptionContractSpec]:
     ]
 
 
-@pytest.fixture
-def reference_day(tmp_path: Path) -> Settings:
-    """Vygeneruje referenční den přes celou engine pipeline (mock → storage)."""
+def generate_reference_day(tmp_path: Path, *, prints: bool) -> Settings:
+    """Vygeneruje referenční den přes celou engine pipeline (mock → storage).
+
+    `prints=False` je mechanika v5 (midpoint, golden `expected`). `prints=True`
+    je v6 (#1460, zdroj tisků explicitně): engine startuje za zavřeného trhu
+    (hranice okna známá), trade větev běží každou minutu a tisky `PRINTS_V6`
+    přijdou před cyklem — žádná minuta není mezera, golden `expected_v6`.
+    """
     settings = Settings(
         data_dir=tmp_path / "data",
         database_url=f"sqlite+pysqlite:///{tmp_path / 'meta.db'}",
@@ -82,6 +93,11 @@ def reference_day(tmp_path: Path) -> Settings:
     ]
     repository.upsert_many(records)
     streamer = DeterministicStreamer()
+    tracker = CumDeltaTracker(
+        multiplier=50.0,
+        # Zdroj explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, golden nese obě mechaniky
+        source=SOURCE_AGGRESSOR if prints else SOURCE_MIDPOINT,
+    )
     runtime = EngineRuntime(
         settings=settings,
         scheduler=SubscriptionScheduler(streamer, settings),
@@ -92,15 +108,22 @@ def reference_day(tmp_path: Path) -> Settings:
         expiry="20260716",
         multiplier=50.0,
         contracts=specs,
-        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, golden je v5
-        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
+        cum_delta=tracker,
     )
     import asyncio
 
     async def generate() -> None:
+        if prints:
+            tracker.observe(running=False, market_closed=True)
         for minute in range(int(GOLDEN["minutes"])):
             streamer.minute = minute
             ts = DAY_START + dt.timedelta(minutes=minute)
+            if prints:
+                for spec in specs:
+                    delta = 0.5 if spec.right == "C" else -0.5  # delta tisku z tasty greeks
+                    for side, size in PRINTS_V6[spec.right]:
+                        tracker.add_dx_trade(spec, size, side, delta)
+                tracker.observe(running=True, market_closed=False)
             bar = Bar(
                 ts=ts, open=7599.0, high=7601.0, low=7598.0, close=GOLDEN["spot"], volume=500.0
             )
@@ -110,9 +133,16 @@ def reference_day(tmp_path: Path) -> Settings:
     return settings
 
 
-def test_e2e_engine_storage_api_golden(reference_day: Settings) -> None:
+@pytest.fixture
+def reference_day(tmp_path: Path) -> Settings:
+    """Referenční den mechaniky v5 (midpoint)."""
+    return generate_reference_day(tmp_path, prints=False)
+
+
+@pytest.mark.parametrize("prints", [False, True], ids=["v5", "v6"])
+def test_e2e_engine_storage_api_golden(tmp_path: Path, prints: bool) -> None:
     """AC: mock replay celé pipeline; API vrací golden hodnoty všech výpočtů."""
-    client = TestClient(create_app(reference_day))
+    client = TestClient(create_app(generate_reference_day(tmp_path, prints=prints)))
     expected = GOLDEN["expected"]
     day = DAY_START.date().isoformat()
 
@@ -141,12 +171,22 @@ def test_e2e_engine_storage_api_golden(reference_day: Settings) -> None:
         assert row["put_wall"] == expected["put_wall"]
         assert row["total_gex"] == pytest.approx(expected["total_gex"])
 
-    # Flow: CumΔ dle ručního výpočtu (první minuta bez přírůstku)
+    # Flow: CumΔ dle ručního výpočtu
     flow = client.get("/flow/ES", params={"date": day}).json()
     cum = [row["cum_delta"] for row in flow["flow"]]
-    assert cum[0] == pytest.approx(0.0)
-    assert cum[1] == pytest.approx(expected["flow_delta_per_minute"])
-    assert cum[-1] == pytest.approx(expected["cum_delta_final"])
+    if prints:
+        # v6: tisky už od první minuty, put SELL dává kladný tok (midpoint by dal záporný)
+        expected_v6 = GOLDEN["expected_v6"]
+        assert [row["source"] for row in flow["flow"]] == [SOURCE_AGGRESSOR] * GOLDEN["minutes"]
+        assert cum[0] == pytest.approx(expected_v6["cum_delta_first"])
+        assert cum[1] - cum[0] == pytest.approx(expected_v6["flow_delta_per_minute"])
+        assert cum[-1] == pytest.approx(expected_v6["cum_delta_final"])
+    else:
+        # v5: midpoint, první minuta bez přírůstku
+        assert [row["source"] for row in flow["flow"]] == [SOURCE_MIDPOINT] * GOLDEN["minutes"]
+        assert cum[0] == pytest.approx(0.0)
+        assert cum[1] == pytest.approx(expected["flow_delta_per_minute"])
+        assert cum[-1] == pytest.approx(expected["cum_delta_final"])
 
     # Replay balík je kompletní a dekódovatelný (vstup pro frontend playback)
     bundle = client.get(f"/replay/ES/20260716/{day}").json()

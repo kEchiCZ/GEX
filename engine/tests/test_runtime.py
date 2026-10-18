@@ -828,42 +828,48 @@ async def test_v6_sekundar_uzavre_minutu_a_vrati_net_mezery(tmp_path: Path) -> N
     assert not (settings.derived_dir / "ES" / "flow" / f"{day}.parquet").exists()
 
 
-async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path) -> None:
-    """ADR-0011: α = 0 flow-adjusted vrstvu vypíná — žádná řada, žádný kanál."""
-    settings = Settings(data_dir=tmp_path / "data", flow_oi_alpha=0.0)
-    specs = contracts()
-    repository = OIEodRepository(create_engine(f"sqlite+pysqlite:///{tmp_path / 'db.sqlite'}"))
-    repository.ensure_schema()
-    repository.upsert_many(
-        [OIRecord("ES", "20260716", s.strike, s.right, TS.date(), 1000.0) for s in specs]
-    )
-    publisher = RecordingPublisher()
-    engine_runtime = EngineRuntime(
-        settings=settings,
-        scheduler=SubscriptionScheduler(MockQuoteStreamer(), settings),
-        writer=SnapshotWriter(settings),
-        oi_repository=repository,
-        publisher=publisher,
-        symbol="ES",
-        expiry="20260716",
-        multiplier=50.0,
-        contracts=specs,
-        # Midpoint explicitně (#1460): bump v6 přepne jen `LIVE_SOURCE`, test zůstává v5
-        cum_delta=CumDeltaTracker(multiplier=50.0, source=SOURCE_MIDPOINT),
-    )
+@pytest.mark.parametrize("mechanics", ["v5", "v6"])
+async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path, mechanics: str) -> None:
+    """ADR-0011: α = 0 vypíná odhad (oiest, levelsfa, FA Dyn GEX) — žádná řada, žádný kanál.
 
-    await engine_runtime.run_cycle(TS, SPOT, [])
+    Netflow je měřené a píše se dál (#1172) — dřív visel pod `alpha > 0`
+    a kalibrace, která α srazila na 0, si zastavila vlastní vstup. Dva cykly
+    s rostoucím objemem, ať je co zapsat: v5 klasifikuje bary midpointem, v6
+    (zdroj tisků explicitně, #1460) nese net jen z tisků měřené minuty.
+    """
+    engine_runtime, publisher, settings = build_runtime(
+        tmp_path, RisingVolumeStreamer(), flow_oi_alpha=0.0
+    )
+    prints: CumDeltaTracker | None = None
+    if mechanics == "v6":
+        prints = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+        engine_runtime.cum_delta = prints
+        prints.observe(running=False, market_closed=True)  # start v pauze: hranice známá
+    for minute in range(2):
+        if prints is not None:
+            if minute == 1:
+                prints.add_dx_trade(_spec(7600.0, "C"), 3.0, "BUY", 0.5)
+            prints.observe(running=True, market_closed=False)
+        await engine_runtime.run_cycle(TS + dt.timedelta(minutes=minute), SPOT, [])
 
     day = TS.date().isoformat()
-    assert not (settings.derived_dir / "ES" / "20260716" / "levelsfa" / f"{day}.parquet").exists()
+    base = settings.derived_dir / "ES" / "20260716"
+    netflow = pd.read_parquet(base / "netflow" / f"{day}.parquet")
+    second = TS + dt.timedelta(minutes=1)
+    assert set(netflow["ts_min"]) == {second}
+    rows = netflow[["strike", "right", "net_volume"]].values.tolist()
+    if mechanics == "v5":
+        # Call strany +100 (last nad midem), put strany naměřená nula (#1582)
+        assert sorted(rows) == sorted(
+            [[k, "C", 100.0] for k in (7590.0, 7600.0, 7610.0)]
+            + [[k, "P", 0.0] for k in (7590.0, 7600.0, 7610.0)]
+        )
+    else:
+        assert rows == [[7600.0, "C", 3.0]]
     channels = [channel for channel, _ in publisher.messages]
-    assert "levelsfa.ES.20260716" not in channels
-    # #232: α = 0 vypíná CELOU flow-adjusted vrstvu — netflow, oiest i FA Dyn GEX
-    for series in ("netflow", "oiest", "gexprofilefa", "gexfieldfa"):
-        assert not (settings.derived_dir / "ES" / "20260716" / series / f"{day}.parquet").exists()
-    assert "oiest.ES.20260716" not in channels
-    assert "gexprofilefa.ES.20260716" not in channels
-    assert "gexfieldfa.ES.20260716" not in channels
+    for series in ("levelsfa", "oiest", "gexprofilefa", "gexfieldfa"):
+        assert not (base / series / f"{day}.parquet").exists(), series
+        assert f"{series}.ES.20260716" not in channels, series
 
 
 async def test_forming_bar_published_and_written_as_provisional(
@@ -1025,16 +1031,29 @@ async def test_expired_quote_stays_in_snapshot_but_leaves_computations(tmp_path:
     assert stale_gex != pytest.approx(fresh_gex)
 
 
-async def test_fallback_retezu_prebira_kotace_a_zastavuje_cumdelta(
-    runtime: tuple[EngineRuntime, RecordingPublisher, Settings],
+@pytest.mark.parametrize(
+    ("mechanics", "running"),
+    [("v5", True), ("v6", True), ("v6", False)],
+    ids=["v5", "v6-merena", "v6-mezera"],
+)
+async def test_fallback_retezu_prebira_kotace_cumdelta_podle_mechaniky(
+    runtime: tuple[EngineRuntime, RecordingPublisher, Settings], mechanics: str, running: bool
 ) -> None:
     """#614 fáze 2b: při výpadku IBKR staví cyklus profil z tasty kotací.
 
-    Zároveň se hlídá druhá polovina zadání — CumΔ a net objem se za fallbacku
-    NEKRMÍ. Tasty denní objem v sémantice IBKR nedodává, takže dosadit nulu by
-    znamenalo skokový záporný přírůstek přes celý řetěz.
+    Druhá polovina zadání podle mechaniky (#1460): pod v5 (midpoint) se CumΔ
+    a net objem za fallbacku NEKRMÍ — tasty denní objem v sémantice IBKR
+    nedodává, takže dosadit nulu by znamenalo skokový záporný přírůstek přes
+    celý řetěz. Od v6 (zdroj tisků explicitně, ADR-0057 bod 3) jdou z tisků
+    dál a chybí jen rozklad objemu (printvol); bez trade větve je minuta mezera.
     """
     engine_runtime, _publisher, settings = runtime
+    if mechanics == "v6":
+        tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+        engine_runtime.cum_delta = tracker
+        tracker.observe(running=False, market_closed=True)  # start v pauze: hranice známá
+        tracker.add_dx_trade(_spec(7600.0, "C"), 4.0, "BUY", 0.5)  # +4 × 0.5 × 50 = +100
+        tracker.observe(running=running, market_closed=False)
     specs = list(engine_runtime.contracts)
     substitute = {
         spec: CachedQuote(
@@ -1065,9 +1084,25 @@ async def test_fallback_retezu_prebira_kotace_a_zastavuje_cumdelta(
     # Objem ani poslední cena se nevymýšlejí — díra, kterou je vidět (#465)
     assert snapshots["volume"].isna().all()
     assert snapshots["last"].isna().all()
-    # A CumΔ zůstal netknutý: tracker žádný bar nedostal
-    assert engine_runtime.last_flow is not None
-    assert engine_runtime.last_flow.cum_delta == 0.0
+    flow_row = engine_runtime.last_flow
+    assert flow_row is not None
+    base = settings.derived_dir / "ES" / "20260716"
+    # Bez kumulativního objemu rozklad na tisky nevzniká v žádné mechanice
+    assert not (base / "printvol" / f"{day}.parquet").exists()
+    netflow_path = base / "netflow" / f"{day}.parquet"
+    if mechanics == "v5":
+        # A CumΔ zůstal netknutý: tracker žádný bar nedostal
+        assert flow_row.cum_delta == 0.0
+        assert not netflow_path.exists()
+    elif running:
+        # Tisky tastytrade nesou CumΔ i net objem dál (výpadek IBKR tok nezastaví)
+        assert (flow_row.flow_delta, flow_row.cum_delta) == (100.0, 100.0)
+        netflow = pd.read_parquet(netflow_path)
+        assert netflow[["strike", "right", "net_volume"]].values.tolist() == [[7600.0, "C", 4.0]]
+    else:
+        # Trade větev neběžela: mezera, ne nula ani poslední hodnota
+        assert (flow_row.flow_delta, flow_row.cum_delta) == (None, None)
+        assert not netflow_path.exists()
 
 
 async def test_po_navratu_na_ibkr_cyklus_zase_cte_sweep(
