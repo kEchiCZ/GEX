@@ -12,6 +12,12 @@ Zdroj znaménka toku a čistého objemu určuje mechanika setupů (#1460):
 
 Δ(K,s) se bere z posledního platného Greeks snapshotu kontraktu (dodává volající).
 CumΔ se resetuje na začátku obchodního dne (session start řídí engine).
+
+Mezera (ADR-0057 bod 3, jen `aggressor`): orchestrátor každou minutu hlásí stav
+trade větve (`observe`), `begin_cycle` z něj zafixuje verdikt minuty. Minuta
+s mezerou má v řadě flowΔ i CumΔ NULL, její tisky se zahodí (i z čistého
+objemu) a CumΔ pokračuje od poslední měřené úrovně; při zavřeném trhu mezera
+nevzniká.
 """
 
 import datetime as dt
@@ -163,6 +169,7 @@ class CumDeltaTracker:
         self._coverage_at_close = CumDeltaCoverage()
         #: Běží trade větev pro tento instrument? Nastavuje orchestrátor každý
         #: cyklus (tasty připojené + univerzum); bez toho je rozklad NULL.
+        #: Jen zdroj `midpoint` — pod tisky rozhoduje verdikt minuty (#1460).
         self.dx_active: bool = False
         self._breakdowns: dict[OptionContractSpec, BarBreakdown] = {}
         # Čistý klasifikovaný objem per kontrakt (buy − sell, v kontraktech) —
@@ -170,9 +177,31 @@ class CumDeltaTracker:
         self._net_volume: dict[OptionContractSpec, float] = {}
         # Obchodní den (Globex seance), ke kterému kumulativ patří (#638)
         self._session_date: dt.date | None = None
+        # Model mezery (ADR-0057 bod 3), jen zdroj `aggressor`: tok tisků čeká
+        # v `_minute_flow` na verdikt minuty, čistý objem jde do `_net_volume`
+        # hned (FA a netflow ho čtou uprostřed cyklu) a `_minute_net` drží jeho
+        # přírůstek z otevřené minuty pro návrat při mezeře. Seed z partic
+        # (`restore_*`) do minuty nepatří, takže se s ní nevrací.
+        self._minute_net: dict[OptionContractSpec, float] = {}
+        # Kontrakty, jejichž tisky od posledního baru zasáhla mezera — rozklad
+        # dalšího přírůstku by z nich tisky podhodnotil
+        self._tainted: set[OptionContractSpec] = set()
+        # Vzorky `observe`: AND otevřeného okna včetně hraničního vzorku (None =
+        # okno bez vzorku), poslední vzorek (None = žádný od startu procesu)
+        # a verdikt zafixovaný `begin_cycle`. Reset seance je nemaže — hranice
+        # 17:00 CT by jinak vyšla jako mezera.
+        self._window_ok: bool | None = None
+        self._last_ok: bool | None = None
+        self._verdict = False
+        # Cyklus začal (`begin_cycle`) a minutu ještě neuzavřel — spadl-li mezi
+        # tím, tisky zůstaly v otevřené minutě a verdikt se s ní přenáší
+        self._cycle_open = False
 
     @property
     def cum_delta(self) -> float:
+        """Průběžná CumΔ včetně otevřené minuty; pod tisky ji potvrdí až `close_minute`."""
+        if self.prints:
+            return self._cum + self._minute_flow
         return self._cum
 
     @property
@@ -183,6 +212,47 @@ class CumDeltaTracker:
     def prints(self) -> bool:
         """Dává znaménko jen tisk se stranou od burzy (zdroj `aggressor`, ADR-0057)?"""
         return self._source == SOURCE_AGGRESSOR
+
+    @property
+    def minute_measured(self) -> bool:
+        """Je minuta cyklu měřená (verdikt z `begin_cycle`)? Zdroj `midpoint` mezeru nezná."""
+        return self._verdict or not self.prints
+
+    def observe(self, *, running: bool, market_closed: bool) -> None:
+        """Vzorek stavu trade větve; orchestrátor ho dává každou minutu (ADR-0057 bod 3).
+
+        Minuta je měřená, když hraniční vzorek (poslední z minulého okna) i
+        všechny vzorky do `begin_cycle` říkají „běží", nebo „trh zavřený" — při
+        zavřeném trhu mezera nevzniká a tok je 0. Sekundární řetěz s cyklem po
+        N minutách tak dostane AND přes celé své okno. Hranice prvního okna po
+        startu procesu známá není: za zavřeného trhu nic nechybí, za otevřeného
+        tracker neviděl tisky před svým vznikem → první minuta je mezera
+        a restart je v řadě vidět.
+        """
+        ok = running or market_closed
+        if self._window_ok is None:
+            boundary = market_closed if self._last_ok is None else self._last_ok
+            self._window_ok = boundary and ok
+        else:
+            self._window_ok = self._window_ok and ok
+        self._last_ok = ok
+
+    def begin_cycle(self) -> None:
+        """Zafixuje verdikt minuty pro celý cyklus a otevře další okno vzorků.
+
+        Rozklad barů, netflow, FA i `close_minute` čtou týž verdikt, i když tisky
+        chodí mezi awaity cyklu. Bez vzorku od minulého cyklu není nic doloženo
+        → mezera. Minutu, kterou spadlý cyklus neuzavřel, nese i tento — měřená
+        je jen tehdy, byl-li měřený i ten. Při mezeře se kontrakty se stavem
+        objemu označí: tisky od jejich posledního baru jsou neúplné, i když bar
+        přijde až v měřené minutě.
+        """
+        carried = self._verdict if self._cycle_open else True
+        self._verdict = bool(self._window_ok) and carried
+        self._window_ok = None
+        self._cycle_open = True
+        if self.prints and not self._verdict:
+            self._tainted.update(self._last_volume)
 
     def day_stats(self) -> dict[str, float | str]:
         """Denní pokrytí toku podle zdroje — /status a Settings (#615 krok 5)."""
@@ -225,6 +295,9 @@ class CumDeltaTracker:
         self._coverage = CumDeltaCoverage()
         self._coverage_at_close = CumDeltaCoverage()
         self._breakdowns.clear()
+        self._minute_net.clear()
+        self._tainted.clear()
+        self._cycle_open = False  # otevřená minuta zahozena, verdikt se nepřenáší
 
     def roll_session(self, session_date: dt.date) -> bool:
         """Reset kumulativů na hranici Globex seance (#638, SPEC 4.5).
@@ -273,6 +346,7 @@ class CumDeltaTracker:
         Zdroj `aggressor` (ADR-0057 bod 1–2): tisk se stranou dává
         net += sign · size, s deltou i flowΔ = sign · size · Δ · M; tisk bez
         delty jde mimo tok, čistý objem ale nese; tisk bez strany jde mimo obojí.
+        Tok čeká na verdikt minuty v `close_minute` (bod 3).
         Zdroj `midpoint`: tisky jen měří pokrytí, znaménko dává bar větev.
         """
         if size is None or size <= 0:
@@ -281,7 +355,7 @@ class CumDeltaTracker:
         if delta is None:
             self._coverage.dropped_no_delta += 1
             if self.prints and sign != 0:
-                self._net_volume[spec] = self._net_volume.get(spec, 0.0) + sign * size
+                self._add_print_net(spec, sign * size)
             return 0.0
         if sign == 0:
             self._unknown_since_bar[spec] = self._unknown_since_bar.get(spec, 0.0) + size
@@ -292,9 +366,14 @@ class CumDeltaTracker:
         if not self.prints:
             return 0.0
         flow = sign * size * delta * self._multiplier
-        self._net_volume[spec] = self._net_volume.get(spec, 0.0) + sign * size
-        self._apply(flow)
+        self._add_print_net(spec, sign * size)
+        self._minute_flow += flow
         return flow
+
+    def _add_print_net(self, spec: OptionContractSpec, net: float) -> None:
+        """Čistý objem z tisku: hned do denního, a do minuty pro návrat při mezeře."""
+        self._net_volume[spec] = self._net_volume.get(spec, 0.0) + net
+        self._minute_net[spec] = self._minute_net.get(spec, 0.0) + net
 
     def add_volume(self, spec: OptionContractSpec, cumulative_volume: float) -> float:
         """Bar větev bez znaménka: přírůstek kumulativního volume, rozklad a pokrytí.
@@ -304,11 +383,21 @@ class CumDeltaTracker:
         s varováním, nikdy záporný. Zdroj `aggressor` volá jen tuhle část —
         objem bez tisku jde mimo tok a jen se měří (ADR-0057 bod 1); `midpoint`
         ji volá z `add_bar`.
+
+        Tisky od minulého baru jsou úplné, jen když trade větev celou dobu běžela:
+        pod `midpoint` rozhoduje okamžitý `dx_active` (v5), pod tisky verdikt
+        minuty a žádná mezera od minulého baru kontraktu (#1460). Jinak se
+        přírůstek rozloží jako neznámý (NULL) a do pokrytí nejde.
         """
         previous = self._last_volume.get(spec)
         self._last_volume[spec] = cumulative_volume
         printed = self._printed_since_bar.pop(spec, 0.0)
         unknown = self._unknown_since_bar.pop(spec, 0.0)
+        if self.prints:
+            branch_ran = self._verdict and spec not in self._tainted
+            self._tainted.discard(spec)
+        else:
+            branch_ran = self.dx_active
         if previous is None:
             return 0.0
         delta_volume = cumulative_volume - previous
@@ -324,16 +413,18 @@ class CumDeltaTracker:
             printed_total = printed + unknown
             self._breakdowns[spec] = BarBreakdown(
                 volume_delta=delta_volume,
-                printed=printed_total if self.dx_active else None,
-                structured=max(delta_volume - printed_total, 0.0) if self.dx_active else None,
+                printed=printed_total if branch_ran else None,
+                structured=max(delta_volume - printed_total, 0.0) if branch_ran else None,
             )
+        if self.prints and not branch_ran:
+            return delta_volume
         # Pokrytí (#1071) se měří NEZÁVISLE na zdroji znaménka: v režimu midpoint
         # říká, co trade větev pokrývá — verdikt #1018 i srovnání před a po
         # přepnutí stojí na týchž číslech. Fallback se počítá jen s běžící trade
         # větví: bez tasty je „bez tisku" každý kontrakt a číslo by nic neměřilo.
         if printed > 0.0:
             self._coverage.structured_volume += max(delta_volume - printed - unknown, 0.0)
-        elif self.dx_active:
+        elif branch_ran:
             self._coverage.fallback_volume += delta_volume
         return delta_volume
 
@@ -365,24 +456,42 @@ class CumDeltaTracker:
 
         Pokrytí za minutu (#1071) = rozdíl denních čítačů od poslední uzávěrky;
         bez trade větve zůstává NULL.
+
+        Zdroj `aggressor` (ADR-0057 bod 3): měřená minuta potvrdí tok tisků do
+        CumΔ. Minuta s mezerou má flowΔ, CumΔ i pokrytí NULL a zahodí se celá
+        (částečná minuta se neextrapoluje): čistý objem se vrátí o její tisky,
+        denní pokrytí na stav poslední uzávěrky a CumΔ pokračuje od poslední
+        měřené úrovně.
         """
-        measured = self.dx_active
-        now, last = self._coverage, self._coverage_at_close
-        row = FlowRow(
-            ts_min=ts_min,
-            flow_delta=self._minute_flow,
-            cum_delta=self._cum,
-            source=self._source,
-            printed_volume=now.printed_volume - last.printed_volume if measured else None,
-            unknown_volume=now.unknown_volume - last.unknown_volume if measured else None,
-            structured_volume=(
-                now.structured_volume - last.structured_volume if measured else None
-            ),
-            fallback_volume=now.fallback_volume - last.fallback_volume if measured else None,
-            dropped_no_delta=now.dropped_no_delta - last.dropped_no_delta if measured else None,
-        )
-        self._coverage_at_close = CumDeltaCoverage(**vars(now))
+        if self.prints and not self._verdict:
+            for spec, net in self._minute_net.items():
+                self._net_volume[spec] = self._net_volume.get(spec, 0.0) - net
+            self._coverage = CumDeltaCoverage(**vars(self._coverage_at_close))
+            row = FlowRow(ts_min=ts_min, flow_delta=None, cum_delta=None, source=self._source)
+        else:
+            if self.prints:
+                self._cum += self._minute_flow
+            measured = self._verdict if self.prints else self.dx_active
+            now, last = self._coverage, self._coverage_at_close
+            row = FlowRow(
+                ts_min=ts_min,
+                flow_delta=self._minute_flow,
+                cum_delta=self._cum,
+                source=self._source,
+                printed_volume=now.printed_volume - last.printed_volume if measured else None,
+                unknown_volume=now.unknown_volume - last.unknown_volume if measured else None,
+                structured_volume=(
+                    now.structured_volume - last.structured_volume if measured else None
+                ),
+                fallback_volume=now.fallback_volume - last.fallback_volume if measured else None,
+                dropped_no_delta=(
+                    now.dropped_no_delta - last.dropped_no_delta if measured else None
+                ),
+            )
+            self._coverage_at_close = CumDeltaCoverage(**vars(now))
         self._minute_flow = 0.0
+        self._minute_net.clear()
+        self._cycle_open = False
         return row
 
     def _apply(self, flow: float) -> None:

@@ -3166,10 +3166,17 @@ async def main() -> None:
         else:
             run_list = [pipelines[symbol] for symbol in plan.start if symbol in pipelines]
         # Rozklad objemu na tisky (#1007) smí říkat „struktura" jen když trade
-        # větev pro instrument opravdu běžela — jinak NULL
+        # větev pro instrument opravdu běžela — jinak NULL. Týž stav jde jako
+        # vzorek do verdiktu minuty zdroje tisků (ADR-0057 bod 3); dočasně jen
+        # připojení a univerzum, čerstvost eventů a sekundár doplní #1460.
+        market_closed_now = is_market_closed(now)
         for run_pipe in run_list:
             if run_pipe.runtime.cum_delta is not None:
-                run_pipe.runtime.cum_delta.dx_active = dx_print_active(run_pipe.runtime.symbol)
+                branch_active = dx_print_active(run_pipe.runtime.symbol)
+                run_pipe.runtime.cum_delta.dx_active = branch_active
+                run_pipe.runtime.cum_delta.observe(
+                    running=branch_active, market_closed=market_closed_now
+                )
         results = await gather_metrics(run_list, now)
         # Roll expirace v jejím settle (#1331, ADR-0039 bod 2): pipeline, jejíž
         # expirace v `now` vypršela, právě proběhla posledním cyklem — prvním po

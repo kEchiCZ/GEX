@@ -751,6 +751,83 @@ async def test_netflow_seed_obnovi_i_stranu_mimo_pasmo(tmp_path: Path) -> None:
     assert list(side["net_volume"]) == [130.0]
 
 
+def _prints_runtime(
+    tmp_path: Path, *, secondary: bool = False
+) -> tuple[EngineRuntime, RecordingPublisher, Settings, CumDeltaTracker]:
+    """Runtime se zdrojem tisků (v6 explicitním parametrem, #1460) nad konstantním objemem."""
+    engine_runtime, publisher, settings = build_runtime(tmp_path, MockQuoteStreamer())
+    tracker = CumDeltaTracker(multiplier=50.0, source=SOURCE_AGGRESSOR)
+    engine_runtime.cum_delta = tracker
+    engine_runtime.secondary = secondary
+    return engine_runtime, publisher, settings, tracker
+
+
+async def test_v6_mezera_je_null_bez_netflow_a_fa(tmp_path: Path) -> None:
+    """ADR-0057 bod 3–4: minuta s mezerou má ve flow NULL, netflow ani FA vrstvu nepíše."""
+    engine_runtime, publisher, settings, tracker = _prints_runtime(tmp_path)
+    c = _spec(7600.0, "C")
+    tracker.add_dx_trade(c, 3.0, "BUY", 0.5)  # tisk před prvním cyklem: částečná minuta
+    tracker.observe(running=True, market_closed=False)
+    await engine_runtime.run_cycle(TS, SPOT, [])  # restart za otevřeného trhu → mezera
+    tracker.add_dx_trade(c, 2.0, "BUY", 0.5)  # +50
+    tracker.observe(running=True, market_closed=False)
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=1), SPOT, [])
+
+    day = TS.date().isoformat()
+    measured = TS + dt.timedelta(minutes=1)
+    flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{day}.parquet")
+    flow = flow.sort_values("ts_min")
+    assert flow["flow_delta"].isna().tolist() == [True, False]
+    assert flow["cum_delta"].isna().tolist() == [True, False]
+    assert flow["cum_delta"].iloc[1] == 50.0  # tisky mezery do CumΔ nejdou
+    flows = [data for channel, data in publisher.messages if channel == "flow.ES"]
+    assert (flows[0]["flow_delta"], flows[0]["cum_delta"]) == (None, None)
+    base = settings.derived_dir / "ES" / "20260716"
+    netflow = pd.read_parquet(base / "netflow" / f"{day}.parquet")
+    assert netflow["ts_min"].tolist() == [measured]
+    assert netflow[["strike", "right", "net_volume"]].values.tolist() == [[7600.0, "C", 2.0]]
+    for series in ("levelsfa", "gexprofilefa", "oiest"):
+        assert pd.read_parquet(base / series / f"{day}.parquet")["ts_min"].tolist() == [measured], (
+            series
+        )
+    channels = [channel for channel, _ in publisher.messages]
+    assert channels.count("levelsfa.ES.20260716") == 1
+
+
+async def test_v6_zavreny_trh_zapise_nulu_ne_mezeru(tmp_path: Path) -> None:
+    """ADR-0057 bod 3: při zavřeném trhu mezera nevzniká, ani hned po startu enginu."""
+    engine_runtime, _publisher, settings, tracker = _prints_runtime(tmp_path)
+    tracker.observe(running=False, market_closed=True)  # pauza Globexu, tasty odpojené
+    await engine_runtime.run_cycle(PAUSE, SPOT, [])
+
+    flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{PAUSE.date()}.parquet")
+    assert flow[["flow_delta", "cum_delta"]].values.tolist() == [[0.0, 0.0]]
+
+
+async def test_v6_sekundar_uzavre_minutu_a_vrati_net_mezery(tmp_path: Path) -> None:
+    """#1460: sekundár (vstup kalibrace α) uzavírá minutu — net mezery se vrátí, flow nepíše."""
+    engine_runtime, _publisher, settings, tracker = _prints_runtime(tmp_path, secondary=True)
+    c = _spec(7600.0, "C")
+    tracker.observe(running=True, market_closed=False)
+    tracker.add_dx_trade(c, 3.0, "BUY", 0.5)
+    await engine_runtime.run_cycle(TS, SPOT, [])  # mezera (start za otevřeného trhu)
+    assert tracker.net_volumes() == {c: 0.0}
+    for _minute in range(3):  # cyklus sekundáru po 3 minutách, vzorek každou minutu
+        tracker.observe(running=True, market_closed=False)
+    tracker.add_dx_trade(c, 2.0, "SELL", 0.5)
+    await engine_runtime.run_cycle(TS + dt.timedelta(minutes=3), SPOT, [])
+
+    assert tracker.net_volumes() == {c: -2.0}
+    assert tracker.cum_delta == -50.0
+    day = TS.date().isoformat()
+    netflow = pd.read_parquet(
+        settings.derived_dir / "ES" / "20260716" / "netflow" / f"{day}.parquet"
+    )
+    assert netflow["ts_min"].tolist() == [TS + dt.timedelta(minutes=3)]
+    assert netflow["net_volume"].tolist() == [-2.0]
+    assert not (settings.derived_dir / "ES" / "flow" / f"{day}.parquet").exists()
+
+
 async def test_flow_alpha_zero_disables_levelsfa(tmp_path: Path) -> None:
     """ADR-0011: α = 0 flow-adjusted vrstvu vypíná — žádná řada, žádný kanál."""
     settings = Settings(data_dir=tmp_path / "data", flow_oi_alpha=0.0)

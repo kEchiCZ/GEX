@@ -393,6 +393,10 @@ class EngineRuntime:
             # Restart uprostřed seance: navázat CumΔ z flow partice (flow
             # zapisuje jen aktivní řetěz, sekundární kumulativ nepoužívá)
             await self._seed_cum_delta(session_day)
+        # Verdikt minuty (ADR-0057 bod 3, #1460) jednou za cyklus: rozklad barů,
+        # netflow, FA i uzávěrka minuty čtou týž, i když tisky chodí mezi
+        # awaity. Zdroj midpoint mezeru nezná (`minute_measured` vždy True).
+        tracker.begin_cycle()
         now_mono = time.monotonic()
         max_age = self.settings.quote_max_age_s
         expired = 0
@@ -772,6 +776,10 @@ class EngineRuntime:
         # jiný řetěz, posun pásma). Dřív strana s návratem na 0 z partice
         # zmizela a kalibrace α i navázání v rollu a po restartu vzaly její
         # poslední nenulovou hodnotu.
+        # V minutě s mezerou trade větve (zdroj tisků, ADR-0057 bod 3) se
+        # netflow nepíše: net ještě nese tisky částečné minuty, které vrátí až
+        # `close_minute`. Čtenáři vezmou poslední měřený řádek strany a NULL
+        # číst nemusí.
         netflow_rows = [
             NetFlowRow(
                 ts_min=ts_min,
@@ -785,7 +793,7 @@ class EngineRuntime:
                 key=lambda item: (item[0].strike, item[0].right),
             )
         ]
-        if netflow_rows:
+        if netflow_rows and tracker.minute_measured:
             await asyncio.to_thread(
                 self.writer.write_netflow, self.symbol, self.expiry, day, netflow_rows
             )
@@ -827,7 +835,9 @@ class EngineRuntime:
                         ],
                     },
                 )
-        if not self.secondary and alpha > 0.0:
+        # FA vrstva (oiest, levelsfa, gexprofilefa, gexfieldfa) se v minutě
+        # s mezerou nepíše (ADR-0057 bod 4) — net by nesl cenzurovanou minutu
+        if not self.secondary and alpha > 0.0 and tracker.minute_measured:
             fa_oi = {
                 spec: oi_estimate(inp.oi, tracker.net_volume(spec), alpha)
                 for inp, spec in zip(gex_inputs, gex_specs, strict=True)
@@ -1065,6 +1075,10 @@ class EngineRuntime:
         # 3) FlowΔ/CumΔ minuta + 4) bary podkladu — jen aktivní expirace
         # (soubory jsou per symbol; sekundární řetěz by je duplikoval)
         if self.secondary:
+            # Uzávěrka minuty i u sekundáru (#1460), řádek se zahodí: pod tisky
+            # potvrdí tok a při mezeře vrátí net částečné minuty (vstup
+            # kalibrace α); bez ní by tisky mezery v netu zůstaly
+            tracker.close_minute(ts_min)
             await self.publisher.publish(
                 f"levels.{self.symbol}.{self.expiry}", _levels_message(ts_min, levels)
             )
