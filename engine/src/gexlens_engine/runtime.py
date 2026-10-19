@@ -60,6 +60,7 @@ from gexlens_engine.storage.parquet_store import (
     Levels2Row,
     LevelsRow,
     NetFlowRow,
+    NetGapRow,
     OiEstRow,
     OiMissingRow,
     OiWallsRow,
@@ -812,6 +813,17 @@ class EngineRuntime:
         if netflow_rows and tracker.minute_measured:
             await asyncio.to_thread(
                 self.writer.write_netflow, self.symbol, self.expiry, day, netflow_rows
+            )
+        elif not tracker.minute_measured:
+            # Mezera trade větve (jen zdroj tisků): netflow se nepíše, značka
+            # minuty ano — kalibrace α podle ní vynechá den s mezerou i u
+            # sekundáru, jehož řádek flow se zahazuje (ADR-0057 bod 6, #1460)
+            await asyncio.to_thread(
+                self.writer.write_netgap,
+                self.symbol,
+                self.expiry,
+                day,
+                [NetGapRow(ts_min=ts_min)],
             )
         if not self.secondary:
             # Řada printvol (#1007): přírůstek objemu per kontrakt rozložený na

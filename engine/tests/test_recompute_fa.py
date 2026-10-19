@@ -90,7 +90,7 @@ def _seed(tmp_path: Path) -> tuple[str, Settings]:
         )
     )
     FaAlphaRepository(db).record(
-        "ES", PREV, EXPIRY, AlphaCalibrationPoint(12, 0.0, None, None), 0.0, 0
+        "ES", PREV, EXPIRY, AlphaCalibrationPoint(12, 0.0, None, None), 0.0, 0, source="midpoint"
     )
     return url, settings
 
@@ -157,7 +157,13 @@ def test_report_pocty_stran_a_body_bez_noveho_prepoctu(tmp_path: Path) -> None:
     db = create_engine(url)
     stale_day = PREV - dt.timedelta(days=1)  # bod, ke kterému přehrání nemá data
     FaAlphaRepository(db).record(
-        "ES", stale_day, EXPIRY, AlphaCalibrationPoint(35, 0.0, None, None), 0.0, 0
+        "ES",
+        stale_day,
+        EXPIRY,
+        AlphaCalibrationPoint(35, 0.0, None, None),
+        0.0,
+        0,
+        source="midpoint",
     )
     FaValidationRepository(db).upsert(
         FaValidationRecord(

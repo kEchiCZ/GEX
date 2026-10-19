@@ -792,6 +792,9 @@ async def test_v6_mezera_je_null_bez_netflow_a_fa(tmp_path: Path) -> None:
     netflow = pd.read_parquet(base / "netflow" / f"{day}.parquet")
     assert netflow["ts_min"].tolist() == [measured]
     assert netflow[["strike", "right", "net_volume"]].values.tolist() == [[7600.0, "C", 2.0]]
+    # Značka mezery pro kalibraci α (ADR-0057 bod 6): jen minuta bez měření
+    netgap = pd.read_parquet(base / "netgap" / f"{day}.parquet")
+    assert netgap["ts_min"].tolist() == [TS]
     for series in ("levelsfa", "gexprofilefa", "oiest"):
         assert pd.read_parquet(base / series / f"{day}.parquet")["ts_min"].tolist() == [measured], (
             series
@@ -808,6 +811,7 @@ async def test_v6_zavreny_trh_zapise_nulu_ne_mezeru(tmp_path: Path) -> None:
 
     flow = pd.read_parquet(settings.derived_dir / "ES" / "flow" / f"{PAUSE.date()}.parquet")
     assert flow[["flow_delta", "cum_delta"]].values.tolist() == [[0.0, 0.0]]
+    assert not (settings.derived_dir / "ES" / "20260716" / "netgap").exists()
 
 
 async def test_v6_sekundar_uzavre_minutu_a_vrati_net_mezery(tmp_path: Path) -> None:
@@ -832,6 +836,9 @@ async def test_v6_sekundar_uzavre_minutu_a_vrati_net_mezery(tmp_path: Path) -> N
     assert netflow["ts_min"].tolist() == [TS + dt.timedelta(minutes=3)]
     assert netflow["net_volume"].tolist() == [-2.0]
     assert not (settings.derived_dir / "ES" / "flow" / f"{day}.parquet").exists()
+    # Sekundár flow nepíše — mezeru pro kalibraci α nese jen značka netgap (#1460)
+    netgap = pd.read_parquet(settings.derived_dir / "ES" / "20260716" / "netgap" / f"{day}.parquet")
+    assert netgap["ts_min"].tolist() == [TS]
 
 
 @pytest.mark.parametrize("mechanics", ["v5", "v6"])
