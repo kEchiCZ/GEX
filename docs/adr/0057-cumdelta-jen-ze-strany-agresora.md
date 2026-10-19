@@ -318,5 +318,5 @@ s vahou 0 (varianta 1).
     z bodu 6 plní tato brána.
 - **Řez dne kalibrace α a FA validace** je 16:00 CT dne D (`marketclock.daily_close_utc`),
   bez přepínače. Pevných 21:00 UTC by od konce US letního času řízlo v 15:00 CT.
-- **Mimo část 1b** zůstává číselný práh parity stín ↔ 1A (bod 7) a retro α z recorderu
-  na sucho. Obojí jsou podklady z dat a půjdou samostatným sub-issue před #1590.
+- **Mimo část 1b** zůstávají dva podklady z dat: číselný práh parity stín ↔ 1A (bod 7)
+  nese #1590 a retro α z recorderu na sucho jako podklad prahů nese #1627.
