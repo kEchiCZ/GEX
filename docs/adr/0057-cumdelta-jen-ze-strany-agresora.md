@@ -310,10 +310,12 @@ s vahou 0 (varianta 1).
   - Den bez bodu je i takový, jehož řada netflow končí víc než 5 min před řezem. Engine
     spadlý přes konec dne totiž značku do seance D nezapíše.
   - **Výjimka: mezera rollu v settle.** Roll zastaví pipeline a nová nad kalibrovaným
-    řetězem měří až po obnově tras (bod 3), takže mezera vzniká každý den. Souvislá řada,
-    která začne do 5 min po settle (`ROLL_GAP_START_MIN`), bod neblokuje. V netu tak
-    chybí 2–5 min tisků (poslední zápis sekundáru → první měřená minuta). Bez výjimky
-    by kalibrace pod tisky nedala bod nikdy. Varianta čeká na potvrzení vlastníka v PR.
+    řetězem měří až po obnově tras (bod 3), takže mezera vzniká každý den. Bod neblokuje
+    souvislá řada, která celá leží do 5 min po settle (`ROLL_GAP_WINDOW_MIN`). Netflow
+    řetězu jí musí předcházet nejvýš o kadenci sekundáru + 2 min, jinak řadu předchází
+    výpadek bez značek. V netu tak chybí obvykle 2–5 min tisků (poslední zápis
+    sekundáru → první měřená minuta). Bez výjimky by kalibrace pod tisky nedala bod
+    nikdy. Varianta čeká na potvrzení vlastníka v PR.
 - **Reset α při bumpu je automatický.** `fa_alpha` i `fa_alpha_history` nesou `source`
   (aditivní sloupec, NULL = midpoint).
   - Pod tisky se stav jiného zdroje bere jako nekalibrovaný a první bod jde přímo.

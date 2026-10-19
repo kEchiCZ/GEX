@@ -976,6 +976,7 @@ class InstrumentPipeline:
                 self.alpha_repository,
                 today,
                 publication_utc=self.settings.oi_publication_utc,
+                secondary_every=self.settings.next_expiry_sweep_every,
                 cumdelta_prints=self._cum_tracker().prints,
             )
         except Exception:
