@@ -16,9 +16,13 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
+from gexlens_engine.compute.setups import CUMDELTA_PRINTS
 from gexlens_engine.compute.trend import Direction, TrendReport
 
-VERDICT_RULES_VERSION = 3
+#: v4 (ADR-0057 bod 8, #1460): pravidla beze změny, verze značí zlom vstupu —
+#: tendence v5 z CumΔ jen z tisků. Zapíná ji bump mechaniky v6 (#1403);
+#: statistiky verdiktů se čtou podle verze, ne podle data
+VERDICT_RULES_VERSION = 4 if CUMDELTA_PRINTS else 3
 #: Útes gammy předchozí seance (#576 fáze 1, #1241): nad tímto podílem je
 #: struktura, která cenu držela, pryč — „pozitivní gamma tlumí“ nehlasuje
 CLIFF_DAMPING_OFF = 0.5
